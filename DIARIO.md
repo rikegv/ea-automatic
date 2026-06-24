@@ -91,3 +91,25 @@ infra-db-1      pgvector/pgvector:pg16   Up 2 weeks (healthy)   127.0.0.1:5432->
 
 **Conclusão:** DoD da Fase 0 atendido. Núcleo (Fases 1–3) está liberado para construção; insumos
 das Fases 4–6 são pendências do diretor (§A.9), reunidos em paralelo.
+
+### Auditoria da fábrica e liberação (fluxo §A.0)
+
+Após o DoD aprovado pelo diretor, a fundação passou pelas duas frentes de auditoria:
+
+- **tester — VEREDITO: PASS.** `pnpm install --frozen-lockfile` (lockfile up to date),
+  `pnpm lint` / `pnpm typecheck` / `pnpm test` (7 testes verdes) e ai-service `ruff` + `pytest`
+  (1 passed) todos exit 0. Gate reexecutado: `git push`/`docker push`/`kubectl apply` → exit 2,
+  `git status` → exit 0. Hook confirmado em `settings.json`; estado de `.claude/state/` limpo ao
+  final. Anomalia não-bloqueante: `StarletteDeprecationWarning` no TestClient do ai-service
+  (atualizar stack de teste em fase futura).
+- **seguranca — VEREDITO: APROVADO (poder de veto, §A.6).** Postura adversarial, nenhum item a
+  corrigir. (A) `infra/.env` ignorado e não versionado; sem segredos hardcoded; sem flag `READY_*`
+  commitada. (B) hook do gate amarrado e testado (exit 2 sem flag; exit 0 com flag temporária,
+  removida). (C) isolamento total confirmado — EA com recursos próprios, `infra-db-1`/`infra-redis-1`
+  intocados (`StartedAt` 2026-06-05), sem colisão de portas/volumes/rede. (D) sem persistência de
+  documento/CPF/URL Pandapé; controles §A.6 pendentes para F2/INT-1/INT-4 (esperado).
+
+**Liberação:** com os dois avais, foi criada a flag `.claude/state/READY_fase-0` (artefato local,
+git-ignored) — a liberação deliberada que destrava o gate de push para a Fase 0. Em seguida, merge
+de `feat/fase-0-fundacao` na `main`. Push não executado nesta etapa (não solicitado); a flag
+permite o push quando o diretor decidir.
