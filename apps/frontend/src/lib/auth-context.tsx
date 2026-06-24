@@ -1,0 +1,65 @@
+"use client";
+
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
+import type { Papel } from "@ea/shared-types";
+import { apiFetch } from "./api";
+
+export interface SessionUser {
+  id: string;
+  email: string;
+  papel: Papel;
+}
+
+interface AuthState {
+  user: SessionUser | null;
+  token: string | null;
+  loading: boolean;
+}
+
+interface AuthContextValue extends AuthState {
+  isAdmin: boolean;
+  login: (email: string, password: string) => Promise<void>;
+  logout: () => Promise<void>;
+}
+
+const AuthContext = createContext<AuthContextValue | null>(null);
+
+type LoginResponse = { accessToken: string; user: SessionUser };
+
+export function AuthProvider({ children }: { children: ReactNode }) {
+  const [state, setState] = useState<AuthState>({ user: null, token: null, loading: true });
+
+  // Restaura a sessão pelo refresh token (cookie httpOnly) ao montar.
+  useEffect(() => {
+    apiFetch<LoginResponse>("/auth/refresh", { method: "POST" })
+      .then((r) => setState({ user: r.user, token: r.accessToken, loading: false }))
+      .catch(() => setState({ user: null, token: null, loading: false }));
+  }, []);
+
+  const login = useCallback(async (email: string, password: string) => {
+    const r = await apiFetch<LoginResponse>("/auth/login", {
+      method: "POST",
+      body: { email, password },
+    });
+    setState({ user: r.user, token: r.accessToken, loading: false });
+  }, []);
+
+  const logout = useCallback(async () => {
+    await apiFetch("/auth/logout", { method: "POST" }).catch(() => undefined);
+    setState({ user: null, token: null, loading: false });
+  }, []);
+
+  const isAdmin = state.user?.papel === "MASTER" || state.user?.papel === "SUPER_ADMIN";
+
+  return (
+    <AuthContext.Provider value={{ ...state, isAdmin, login, logout }}>
+      {children}
+    </AuthContext.Provider>
+  );
+}
+
+export function useAuth(): AuthContextValue {
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error("useAuth deve ser usado dentro de <AuthProvider>");
+  return ctx;
+}

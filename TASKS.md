@@ -14,11 +14,17 @@ DIARIO.md. O coordenador atualiza este arquivo a cada despacho.
 - [x] DIARIO.md e TASKS.md
 - [x] DoD verificado (ver DIARIO.md)
 
-## Fase 1 — Núcleo de dados e acesso
-- [ ] Auth/RBAC (JWT HS256 + refresh cookie, argon2, guards) reaproveitada
-- [ ] Schema Drizzle + migrations (entidades §A.3)
-- [ ] Admin de cadastros (clientes, cargos, régua documental)
-- [ ] Carga das bases (clientes: código + CNPJ + razão social — insumo §A.9)
+## Fase 1A — Núcleo (estrutura) ⏸️ aguardando validação visual + auditoria
+- [x] Auth/RBAC (JWT HS256 + refresh cookie, argon2, guards globais) — 3 papéis
+- [x] Schema Drizzle + migration aplicada no ea-db (12 entidades §A.3)
+- [x] Seed: admin (via env) + 21 TipoDocumento + status por frente
+- [x] Admin de cadastros: CRUD clientes/cargos/régua (telas vazias, restritas)
+- [x] Gate do Cadastro modelado (função pura + teste)
+- [ ] Validação visual do diretor (login + admin) — PARADO aqui
+- [ ] Auditoria tester + segurança → flag READY_fase-1a → merge
+
+## Fase 1B — Carga de dados (OST separada)
+- [ ] Carga das bases (clientes: código + CNPJ + razão social — insumo §A.9), cargos, régua
 
 ## Fase 2 — Cadastro e Gerenciador
 - [ ] Wizard (F6), F1 autopreenchimento, F3 validador CPF, F4 pendências, F5 sinalizadores

@@ -29,7 +29,11 @@ export default tseslint.config(
     },
   },
   {
+    // TS/TSX: o próprio compilador resolve identificadores; no-undef gera falso-positivo
+    // para globais de browser/node (window, fetch, console, ...). Prática do typescript-eslint.
+    files: ["**/*.ts", "**/*.tsx"],
     rules: {
+      "no-undef": "off",
       "@typescript-eslint/no-unused-vars": [
         "error",
         { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },

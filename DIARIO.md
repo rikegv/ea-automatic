@@ -5,6 +5,51 @@ feito e **por quê** (rastreabilidade para o diretor e para as próximas sessõe
 
 ---
 
+## 2026-06-24 — Fase 1A: Núcleo de dados e acesso — estrutura (OST-EA-FASE-1A)
+
+Branch: `feat/fase-1a-nucleo`. Escopo: esqueleto de acesso + schema + telas de administração
+vazias. **NÃO** inclui carga de dados (Fase 1B) nem integrações.
+
+### O que foi construído
+- **Auth/RBAC** (`apps/backend/src/auth`): JWT HS256 (access em header `Bearer` + refresh em
+  cookie httpOnly `ea_refresh`, path `/api/auth`), **argon2** para senha. Guards globais na ordem
+  throttle → origin → autenticação → papel: `ThrottlerGuard`, `OriginGuard`, `JwtAuthGuard`,
+  `RolesGuard`. Decorators `@Public`, `@Roles`, `@CurrentUser`. Endpoints: `POST /api/auth/login`,
+  `/refresh`, `/logout`, `GET /api/auth/me`.
+- **Filosofia de acesso (§A.3):** sem barreira por frente — todo consultor vê tudo. O papel separa
+  CONSULTOR (COMUM) de ADMINISTRAÇÃO (MASTER/SUPER_ADMIN). Só as rotas `/api/admin/*` exigem
+  `@Roles(MASTER, SUPER_ADMIN)`; catálogos de referência são visíveis a qualquer autenticado.
+- **Schema do domínio** (Drizzle, `apps/backend/src/db/schema`): 12 tabelas do §A.3 — usuarios,
+  clientes, cargos, tipos_documento, regua_documental (PK composta cliente+cargo+tipo), candidatos,
+  admissoes, dados_vaga_folha, documentos_admissao (só status), frentes_admissao (1 linha por
+  frente, datas independentes), frente_status_catalogo, integracao_pandape. Enums para papel,
+  farol, frente, exigência, estado de documento e sinalizador. Migration `0000_*` gerada e
+  **aplicada no ea-db**.
+- **Regras de domínio (§A.3):** documentadas e modeladas; o **gate do Cadastro** (regra 3) é função
+  pura `podeAbrirCadastro()` em `src/domain/frentes.ts`, com teste.
+- **Seed** (`db:seed`): admin inicial (papel SUPER_ADMIN, **senha via env**, nunca hardcoded) +
+  **21 TipoDocumento** + **13 status por frente** (catálogo). Seed de demo (dev, `seed-demo.ts`)
+  cria usuários COMUM e MASTER para exercitar os 3 papéis na validação.
+- **Admin de cadastros** (`apps/backend/src/admin` + `apps/frontend/src/app/admin`): CRUD de
+  Clientes, Cargos e Régua Documental (telas prontas, vazias). Restrito a MASTER/SUPER_ADMIN.
+- **Frontend** (Next 14 + Tailwind): `/login`, dashboard com visão coletiva, shell de administração
+  com guard de papel e as três telas de CRUD. Auth via contexto client + proxy same-origin.
+
+### Verificações já feitas (pré-auditoria)
+- `pnpm lint` / `typecheck` / `test` → **verdes** (11 testes: shared-types 5, backend 5, frontend 1).
+- Migração aplicada no `ea-db`: 12 tabelas; seed: 1 admin (SUPER_ADMIN), 21 tipos, 13 status.
+- Smoke da API (servidores locais, loopback): admin loga e acessa `/admin` (200); **consultor
+  recebe 403** em `/admin` mas lê catálogos (200) — visão coletiva; sem token → 401; CRUD de
+  cliente/cargo (201), **OriginGuard bloqueia origem não permitida (403)**, régua upsert (200) com
+  persistência confirmada.
+
+### ⏸️ PARADA PARA VALIDAÇÃO VISUAL (§A.0)
+Build concluído; servidores locais no ar (backend 127.0.0.1:3011, frontend 127.0.0.1:3010, ambos
+loopback). Aguardando **aprovação visual do diretor** das telas (login + administração) ANTES de
+despachar para segurança/tester. Gate fechado; nenhuma flag `READY_*`.
+
+---
+
 ## 2026-06-24 — Fase 0: Fundação (OST-EA-FASE-0)
 
 Branch: `feat/fase-0-fundacao`. Sessão: fábrica (coordenador). Sem dependência externa (§A.8).
