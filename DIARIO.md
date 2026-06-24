@@ -48,6 +48,26 @@ Build concluído; servidores locais no ar (backend 127.0.0.1:3011, frontend 127.
 loopback). Aguardando **aprovação visual do diretor** das telas (login + administração) ANTES de
 despachar para segurança/tester. Gate fechado; nenhuma flag `READY_*`.
 
+### Ponto de situação (handoff) — 2026-06-24
+
+Estado salvo para retomada em outra sessão:
+
+- **Commit de checkpoint:** `4598792` na branch `feat/fase-1a-nucleo` (working tree limpo no
+  momento do commit). Ainda **sem merge** e **sem flag `READY_*`** (gate fechado).
+- **Infra:** `ea-db`/`ea-redis` no ar (isolados, 5433/6380). Migration `0000` aplicada; seed
+  oficial + seed de demo já rodados no `ea-db`.
+- **Servidores de validação (loopback):** backend `node dist/main.js` (a partir de
+  `apps/backend`, lê `.env`) em :3011; frontend `pnpm dev` (Next) em :3010. Se caírem, reiniciar:
+  `pnpm --filter @ea/backend build && (cd apps/backend && node dist/main.js)` e, no front,
+  `cd apps/frontend && pnpm dev`. Exposição só por túnel SSH ou interface privada autorizada.
+- **Credenciais:** admin@ea.local (SUPER_ADMIN, senha do `.env` `ChangeMe!2026`);
+  master@ea.local (MASTER) e consultor@ea.local (COMUM), ambos senha demo `Demo!2026`.
+- **Dados de demonstração inseridos** (não-produção, podem ser apagados): cliente `0001`
+  "Cliente Demo LTDA", cargo "Atendente Demo", 1 item de régua (1º tipo = OBRIGATORIO).
+- **Próximos passos (na ordem):** (1) aprovação visual do diretor; (2) despachar tester +
+  segurança; (3) passando, gerar `READY_fase-1a`, registrar aqui e fazer o merge na `main`;
+  (4) abrir a OST da Fase 1B (carga de dados).
+
 ---
 
 ## 2026-06-24 — Fase 0: Fundação (OST-EA-FASE-0)
