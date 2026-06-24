@@ -1,0 +1,40 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# build output
+dist/
+.next/
+out/
+*.tsbuildinfo
+
+# test / coverage
+coverage/
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# env / secrets (keep *.example tracked)
+.env
+.env.local
+.env.*.local
+infra/.env
+
+# python (ai-service)
+__pycache__/
+*.py[cod]
+.venv/
+apps/ai-service/.venv/
+.uv/
+.pytest_cache/
+.ruff_cache/
+
+# deploy gate — READY flags are local & deliberate, never committed
+.claude/state/READY_*
+
+# os / editor
+.DS_Store
+.idea/
+*.swp

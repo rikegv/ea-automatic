@@ -1,0 +1,55 @@
+# EA AUTOMATIC — infraestrutura local (Fase 0).
+# ISOLAMENTO TOTAL do CentraAtend: nomes/volumes/rede/portas próprios.
+# Não colide com infra-db-1, infra-redis-1, infra_dbdata, rede centraatend, portas 5432/6379.
+name: ea-automatic
+
+services:
+  ea-db:
+    image: pgvector/pgvector:pg16
+    container_name: ea-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?defina POSTGRES_USER em infra/.env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD em infra/.env}
+      POSTGRES_DB: ${POSTGRES_DB:?defina POSTGRES_DB em infra/.env}
+    ports:
+      # loopback-only; porta do host isolada (5433), mapeada para a 5432 do container
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - ea-dbdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - ea-net
+
+  ea-redis:
+    image: redis:7-alpine
+    container_name: ea-redis
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6380}:6379"
+    volumes:
+      - ea-redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    networks:
+      - ea-net
+
+volumes:
+  ea-dbdata:
+    name: ea-dbdata
+  ea-redisdata:
+    name: ea-redisdata
+
+networks:
+  ea-net:
+    name: ea-automatic
