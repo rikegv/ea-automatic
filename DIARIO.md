@@ -56,11 +56,38 @@ lógica de negócio das telas operacionais (wizard real, faróis funcionais, ger
   ainda **sem upstream** (não publicada). **Push reservado para depois do `READY_`** (respeita o
   gate §A.7) — enviará todo o histórico (Fase 0 + 1A + esta fase).
 
-### ⏸️ PARADA PARA VALIDAÇÃO VISUAL (§A.0)
-Build concluído; servidores no ar. Aguardando **aprovação visual do diretor** (login, início,
-análise, toggle claro/escuro, shell/aurora) ANTES de despachar tester/segurança. Gate fechado;
-nenhuma flag `READY_*`. Próximos passos: (1) aprovação visual; (2) tester + segurança;
-(3) gerar `READY_fase-2-casca`, registrar e merge na `main`; (4) **push ao GitHub**.
+### ✅ VALIDAÇÃO VISUAL APROVADA + auditoria da fábrica (fluxo §A.0) — 2026-06-25
+A casca visual (login, início, análise, toggle claro/escuro, shell/aurora) recebeu a **aprovação
+visual do diretor**. Com o pré-requisito atendido, o conjunto da branch (`4598792` Fase 1A +
+`fe21ff8` docs + `0126845` casca) passou pelas duas frentes de auditoria, independentes e em
+paralelo:
+
+- **tester — VEREDITO: PASS.** `pnpm install --frozen-lockfile` (lockfile up to date),
+  `pnpm lint` / `pnpm typecheck` (shared-types, backend, frontend) e `pnpm test` → **11 testes
+  verdes** (shared-types 5 · backend 5 · frontend 1) todos exit 0; ai-service `ruff` "All checks
+  passed!" + `pytest` 1 passou. Gate de deploy fechado e funcional (hook amarrado; `git push` →
+  exit 2 sem flag, `git status` → exit 0; o próprio Bash do agente foi interceptado). Cobertura
+  confirmada: F3 validador de CPF (5 testes), gate do Cadastro / independência / nascimento
+  paralelo (`frentes.ts`, 4 testes), RBAC por leitura de guards, 12 entidades no schema (§A.3).
+  Não-bloqueantes: RBAC sem teste automatizado (recomendado na Fase 2), regras de domínio das
+  Fases 2–4 ainda só em docstring, `StarletteDeprecationWarning` no ai-service.
+- **seguranca — VEREDITO: APROVADO (poder de veto, §A.6).** Postura adversarial, nenhuma violação.
+  Auth/RBAC: guards globais na ordem throttle→origin→jwt→roles; controllers admin
+  (clientes/cargos/régua) com `@Roles("MASTER","SUPER_ADMIN")` → COMUM barrado; `catalogos` GET
+  autenticado por decisão documentada (esteira coletiva). JWT HS256 por `getOrThrow`, refresh em
+  cookie httpOnly/sameSite-lax/secure-por-env, token em memória no front (sem localStorage). Sem
+  segredos hardcoded; `.gitignore` cobre `.env`/`infra/.env`/`.claude/state/READY_*`; nenhuma flag
+  commitada; gate intacto. Isolamento CentraAtend intacto (EA em 5433/6380, volume `ea-dbdata`).
+  CPF como chave técnica, nunca em log; `documentos_admissao` só status; `integracao_pandape` só
+  IDs (sem coluna de URL) — já nasce em conformidade §A.5. Observação menor não-bloqueante:
+  `apps/backend/src/db/seed-demo.ts` loga senha dev — adicionar guard `NODE_ENV !== "production"`
+  antes da Fase 2 (devolvido ao backend via coordenador).
+
+**Liberação:** com os **dois avais**, criada a flag `.claude/state/READY_fase-2-casca` (artefato
+local, git-ignored) — destrava deliberadamente o gate de push. Em seguida: **merge** de
+`feat/fase-1a-nucleo` na `main` e **push de todo o histórico** (Fase 0 + 1A + casca) ao GitHub
+(`git@github.com:rikegv/ea-automatic.git`, via SSH autenticado). A flag é removida após o push
+(nunca versionada).
 
 ---
 
