@@ -5,6 +5,65 @@ feito e **por quê** (rastreabilidade para o diretor e para as próximas sessõe
 
 ---
 
+## 2026-06-25 — Design System + Fase 2 (casca visual) (OST-EA-DESIGN-SYSTEM)
+
+Branch: `feat/fase-1a-nucleo` (mesma da 1A — ainda sem merge; a casca reestiliza o login da 1A,
+audita-se o conjunto). Escopo: **casca visual** sobre a direção aprovada pelo diretor. **NÃO** inclui
+lógica de negócio das telas operacionais (wizard real, faróis funcionais, gerenciador com dados reais).
+
+### Fonte de verdade
+- Três arquivos de referência criados na raiz (conteúdo exato fornecido pelo diretor):
+  `DESIGN-SYSTEM.md` (valores fechados), `prototipo-claro.html` e `prototipo-escuro.html`
+  (referência pixel a pixel). Regra-mestre: **reproduzir, não reinterpretar**.
+
+### O que foi construído (`apps/frontend`)
+- **Tokens dos 2 temas** em `globals.css` via CSS variables. **CLARO é o padrão** (`:root`);
+  ESCURO em `:root[data-theme="dark"]`. Sombras de glass, aurora, gradientes de botão/barra,
+  inputs e ícones de KPI/quick/banner todos temáveis. Classes de componente (`.glass`, `.aurora`,
+  `.kpi`, `.qcard`, `.banner/.slide`, `.pill`, `.tab`, `.list/.row`, `.ds-input/.ds-table`)
+  portadas 1:1 do protótipo no `@layer components`.
+- **Toggle de tema com persistência** (`lib/theme-context.tsx`): aplica `data-theme` no `<html>`,
+  grava em `localStorage` (`ea-theme`) e tem **script anti-flash** injetado no `<head>` (aplica o
+  tema salvo antes da pintura). `next/font` carrega Inter + Manrope como CSS variables.
+- **Tailwind** estendido (cores/fontes/raio → tokens), `darkMode` por seletor `[data-theme="dark"]`.
+- **Componentes base reutilizáveis** (`components/ui/`): `GlassCard`, `KpiCard`, `Button`
+  (primário/secundário), `Pill` (ok/wn/dg/nt), `NavItem`, `Icon` (conjunto SVG portado),
+  `Brand`, `Aurora`, `ThemeToggle`, `PageHead`. Nada de estilo solto por tela.
+- **Shell** (`components/shell/`): `AppShell` (aurora + sidebar fixa + main rolável) e `Sidebar`
+  glass com seções Operação/Administração, rota ativa destacada, rodapé com avatar+nome+papel,
+  **Sair** e o toggle de tema. **Cadastros** só aparece para MASTER/SUPER_ADMIN.
+- **Rotas** reorganizadas em route group `(app)` com layout-shell + guard de sessão (URLs
+  inalteradas; `/admin/*` movido para dentro do shell). Telas:
+  - **Início** (`/`): eyebrow+saudação, **banner "Radar da esteira"** (carrossel 5s, setas+dots,
+    pausa no hover, insights **MOCK**) e **4 cards** de navegação. **Sem KPIs** (conforme spec).
+  - **Análise gerencial** (`/analise`): **6 KpiCards** + painel "Volume de admissões" (gráfico de
+    barras). Dados **mock**.
+  - **Esteira** (`/esteira`): casca visual dos faróis (abas, KPIs da frente, lista com pills, mock).
+  - **Login** reestilizado no novo DS (card glass + aurora + toggle), preservando a auth da 1A.
+  - Placeholders de Nova admissão e Gerenciador (texto remetendo à OST funcional).
+  - **Admin** (clientes/cargos/régua): **lógica CRUD da 1A preservada**, apenas reskinada para os
+    tokens (glass, `.ds-input`, `.ds-table`); layout aninhado só com guard de papel + sub-abas.
+
+### Verificações já feitas (pré-auditoria)
+- `pnpm lint` / `typecheck` → **verdes**. `next build` → **13 rotas** geradas (route group OK).
+- `pnpm test` → **11 testes verdes** (shared-types 5, backend 5, frontend 1).
+- Servidores no ar (loopback): backend :3011, frontend :3010. Smoke: `/`, `/login`, `/analise`,
+  `/esteira`, `/admin` → HTML 200; HTML servido confirma `data-theme="light"`, `brand-mark`,
+  `ds-input`, `aurora` e o script anti-flash.
+
+### Sincronização com o GitHub
+- Remoto `origin` já configurado: `https://github.com/rikegv/ea-automatic.git`. Branch local
+  ainda **sem upstream** (não publicada). **Push reservado para depois do `READY_`** (respeita o
+  gate §A.7) — enviará todo o histórico (Fase 0 + 1A + esta fase).
+
+### ⏸️ PARADA PARA VALIDAÇÃO VISUAL (§A.0)
+Build concluído; servidores no ar. Aguardando **aprovação visual do diretor** (login, início,
+análise, toggle claro/escuro, shell/aurora) ANTES de despachar tester/segurança. Gate fechado;
+nenhuma flag `READY_*`. Próximos passos: (1) aprovação visual; (2) tester + segurança;
+(3) gerar `READY_fase-2-casca`, registrar e merge na `main`; (4) **push ao GitHub**.
+
+---
+
 ## 2026-06-24 — Fase 1A: Núcleo de dados e acesso — estrutura (OST-EA-FASE-1A)
 
 Branch: `feat/fase-1a-nucleo`. Escopo: esqueleto de acesso + schema + telas de administração

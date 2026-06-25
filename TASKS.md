@@ -23,6 +23,20 @@ DIARIO.md. O coordenador atualiza este arquivo a cada despacho.
 - [ ] Validação visual do diretor (login + admin) — PARADO aqui
 - [ ] Auditoria tester + segurança → flag READY_fase-1a → merge
 
+## Design System + Fase 2 casca visual (OST-EA-DESIGN-SYSTEM) ⏸️ aguardando validação visual
+- [x] 3 arquivos de referência na raiz (DESIGN-SYSTEM.md, prototipo-claro/escuro.html)
+- [x] Tokens dos 2 temas (claro padrão) + toggle escuro com persistência + script anti-flash
+- [x] Componentes base (GlassCard, KpiCard, Button, Pill, NavItem, Icon, Brand, Aurora, ThemeToggle)
+- [x] Shell glass (sidebar + aurora + rodapé usuário/Sair; Cadastros só Master/Super Admin)
+- [x] Início: banner carrossel (mock) + 4 cards (sem KPIs)
+- [x] Análise gerencial: 6 KPIs + gráfico de barras (mock)
+- [x] Login reestilizado no novo DS (auth da 1A preservada)
+- [x] Admin reskinado (CRUD da 1A preservado) + esteira (casca visual dos faróis)
+- [x] lint/typecheck/test verdes; next build (13 rotas)
+- [x] Remoto origin configurado (rikegv/ea-automatic)
+- [ ] Validação visual do diretor — PARADO aqui
+- [ ] Auditoria tester + segurança → flag READY_fase-2-casca → merge → push ao GitHub
+
 ## Fase 1B — Carga de dados (OST separada)
 - [ ] Carga das bases (clientes: código + CNPJ + razão social — insumo §A.9), cargos, régua
 

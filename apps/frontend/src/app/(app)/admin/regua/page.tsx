@@ -4,6 +4,9 @@ import { useCallback, useEffect, useState } from "react";
 import { EXIGENCIA_DOCUMENTO, type ExigenciaDocumento } from "@ea/shared-types";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { PageHead } from "@/components/ui/PageHead";
+import { GlassCard } from "@/components/ui/GlassCard";
+import { Button } from "@/components/ui/Button";
 
 interface Cliente {
   codCliente: string;
@@ -109,25 +112,24 @@ export default function ReguaPage() {
   const podeEditar = Boolean(codCliente && cargoId);
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Régua documental</h1>
-        <p className="text-sm text-slate-500">
-          Exigência de cada documento por (cliente + cargo). Muda o cargo, muda o checklist.
-        </p>
-      </div>
+    <>
+      <PageHead
+        eyebrow="Cadastros"
+        title="Régua documental"
+        subtitle="Exigência de cada documento por (cliente + cargo). Muda o cargo, muda o checklist."
+      />
 
       {semBase && (
-        <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">
+        <p className="mb-5 rounded-xl border border-[var(--border)] bg-[rgba(201,138,18,0.12)] px-3 py-2 text-sm text-warn">
           Cadastre ao menos um cliente e um cargo para montar a régua.
         </p>
       )}
 
-      <div className="flex flex-wrap gap-3 rounded-lg border border-slate-200 bg-white p-4">
+      <GlassCard className="mb-5 flex flex-wrap items-center gap-3 p-4">
         <select
           value={codCliente}
           onChange={(e) => setCodCliente(e.target.value)}
-          className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+          className="ds-select w-auto"
         >
           <option value="">Selecione o cliente…</option>
           {clientes.map((c) => (
@@ -136,11 +138,7 @@ export default function ReguaPage() {
             </option>
           ))}
         </select>
-        <select
-          value={cargoId}
-          onChange={(e) => setCargoId(e.target.value)}
-          className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-        >
+        <select value={cargoId} onChange={(e) => setCargoId(e.target.value)} className="ds-select w-auto">
           <option value="">Selecione o cargo…</option>
           {cargos.map((c) => (
             <option key={c.id} value={c.id}>
@@ -148,51 +146,50 @@ export default function ReguaPage() {
             </option>
           ))}
         </select>
-        <button
-          onClick={salvar}
-          disabled={!podeEditar || saving}
-          className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
-        >
+        <Button onClick={salvar} disabled={!podeEditar || saving} className="py-2.5">
           {saving ? "Salvando…" : "Salvar régua"}
-        </button>
-      </div>
+        </Button>
+      </GlassCard>
 
       {error && (
-        <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">
+        <p
+          className="mb-5 rounded-xl border border-[var(--border)] bg-[rgba(214,69,69,0.1)] px-3 py-2 text-sm text-danger"
+          role="alert"
+        >
           {error}
         </p>
       )}
       {savedMsg && (
-        <p className="rounded-md bg-green-50 px-3 py-2 text-sm text-green-700">{savedMsg}</p>
+        <p className="mb-5 rounded-xl border border-[var(--border)] bg-[rgba(46,158,99,0.12)] px-3 py-2 text-sm text-ok">
+          {savedMsg}
+        </p>
       )}
 
-      <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
-        <table className="w-full text-sm">
-          <thead className="bg-slate-50 text-left text-slate-500">
+      <GlassCard className="overflow-hidden p-2">
+        <table className="ds-table">
+          <thead>
             <tr>
-              <th className="px-4 py-2 font-medium">Documento</th>
-              <th className="px-4 py-2 font-medium">Exigência</th>
+              <th>Documento</th>
+              <th>Exigência</th>
             </tr>
           </thead>
           <tbody>
             {tipos.length === 0 ? (
               <tr>
-                <td colSpan={2} className="px-4 py-8 text-center text-slate-400">
+                <td colSpan={2} className="py-8 text-center text-faint">
                   Carregando tipos de documento…
                 </td>
               </tr>
             ) : (
               tipos.map((t) => (
-                <tr key={t.id} className="border-t border-slate-100">
-                  <td className="px-4 py-2">{t.nome}</td>
-                  <td className="px-4 py-2">
+                <tr key={t.id}>
+                  <td>{t.nome}</td>
+                  <td>
                     <select
                       disabled={!podeEditar}
                       value={mapa[t.id] ?? "NAO_OBRIGATORIO"}
-                      onChange={(e) =>
-                        setMapa({ ...mapa, [t.id]: e.target.value as ExigenciaDocumento })
-                      }
-                      className="rounded-md border border-slate-300 px-2 py-1 text-sm disabled:bg-slate-50 disabled:text-slate-400"
+                      onChange={(e) => setMapa({ ...mapa, [t.id]: e.target.value as ExigenciaDocumento })}
+                      className="ds-select w-auto py-1.5"
                     >
                       {EXIGENCIA_DOCUMENTO.map((ex) => (
                         <option key={ex} value={ex}>
@@ -206,7 +203,7 @@ export default function ReguaPage() {
             )}
           </tbody>
         </table>
-      </div>
-    </div>
+      </GlassCard>
+    </>
   );
 }
