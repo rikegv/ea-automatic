@@ -14,16 +14,16 @@ DIARIO.md. O coordenador atualiza este arquivo a cada despacho.
 - [x] DIARIO.md e TASKS.md
 - [x] DoD verificado (ver DIARIO.md)
 
-## Fase 1A — Núcleo (estrutura) ⏸️ aguardando validação visual + auditoria
+## Fase 1A — Núcleo (estrutura) ✅ (fechada junto com a casca em READY_fase-2-casca)
 - [x] Auth/RBAC (JWT HS256 + refresh cookie, argon2, guards globais) — 3 papéis
 - [x] Schema Drizzle + migration aplicada no ea-db (12 entidades §A.3)
 - [x] Seed: admin (via env) + 21 TipoDocumento + status por frente
 - [x] Admin de cadastros: CRUD clientes/cargos/régua (telas vazias, restritas)
 - [x] Gate do Cadastro modelado (função pura + teste)
-- [ ] Validação visual do diretor (login + admin) — PARADO aqui
-- [ ] Auditoria tester + segurança → flag READY_fase-1a → merge
+- [x] Validação visual do diretor (login + admin)
+- [x] Auditoria tester + segurança → merge (consolidado com a casca, ver READY_fase-2-casca)
 
-## Design System + Fase 2 casca visual (OST-EA-DESIGN-SYSTEM) ⏸️ aguardando validação visual
+## Design System + Fase 2 casca visual (OST-EA-DESIGN-SYSTEM) ✅ READY_fase-2-casca → merge + push
 - [x] 3 arquivos de referência na raiz (DESIGN-SYSTEM.md, prototipo-claro/escuro.html)
 - [x] Tokens dos 2 temas (claro padrão) + toggle escuro com persistência + script anti-flash
 - [x] Componentes base (GlassCard, KpiCard, Button, Pill, NavItem, Icon, Brand, Aurora, ThemeToggle)
@@ -34,13 +34,16 @@ DIARIO.md. O coordenador atualiza este arquivo a cada despacho.
 - [x] Admin reskinado (CRUD da 1A preservado) + esteira (casca visual dos faróis)
 - [x] lint/typecheck/test verdes; next build (13 rotas)
 - [x] Remoto origin configurado (rikegv/ea-automatic)
-- [ ] Validação visual do diretor — PARADO aqui
-- [ ] Auditoria tester + segurança → flag READY_fase-2-casca → merge → push ao GitHub
+- [x] Validação visual do diretor — APROVADA
+- [x] Auditoria tester (PASS) + segurança (APROVADO) → flag READY_fase-2-casca → merge na main → push ao GitHub (SSH; main=8a3c26e confirmado no remoto)
 
 ## Fase 1B — Carga de dados (OST separada)
 - [ ] Carga das bases (clientes: código + CNPJ + razão social — insumo §A.9), cargos, régua
 
 ## Fase 2 — Cadastro e Gerenciador
+- [ ] **Follow-up da auditoria 1A/casca (resolver no início da fase):**
+  - [ ] Guard `NODE_ENV !== "production"` no topo de `apps/backend/src/db/seed-demo.ts` (script dev-only; hoje loga senha dev e tem default `Demo!2026`) — segurança §A.6
+  - [ ] Teste automatizado de RBAC: consultor COMUM → 403 nas rotas de administração (hoje só verificado por leitura dos guards) — tester
 - [ ] Wizard (F6), F1 autopreenchimento, F3 validador CPF, F4 pendências, F5 sinalizadores
 - [ ] F11 duplicado por CPF, F10 gerenciador, F7 filtros
 
