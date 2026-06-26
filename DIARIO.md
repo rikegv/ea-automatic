@@ -5,6 +5,62 @@ feito e **por quê** (rastreabilidade para o diretor e para as próximas sessõe
 
 ---
 
+## 2026-06-26 — Fase 1B: Carga da Régua Documental (OST-EA-FASE-1B-REGUA)
+
+Branch: `feat/fase-1b-regua`. Escopo: carregar a régua documental real por (cliente+cargo+tipo),
+garantindo os cargos reais no catálogo, e verificar o preview da régua no wizard (F1). CSV movido
+(`git mv`) para `apps/backend/src/db/data/regua-documentos-carga.csv` (4.011 linhas).
+
+### Análise do dado (parser CSV real — há vírgulas em campos com aspas)
+- **41 clientes, 167 cargos distintos, 187 pares cliente+cargo, 21 tipos de documento, 4.011 linhas**
+  (exigências: OBRIGATORIO 2.554 · NAO_OBRIGATORIO 1.456 · FACULTATIVO 1).
+- *Nota:* a OST citou "202 cargos"; o dado real tem **167** cargos distintos. Adotado o dado.
+
+### Decisões de implementação (dentro do escopo — AUTORIZAÇÃO TOTAL)
+- **Mapeamento dos 21 tipos:** os nomes do CSV são a **base de documentos real** (§A.3) e não batiam
+  1:1 com os 21 tipos *placeholder* seedados na Fase 1A. Mapa explícito CSV→TipoDocumento em
+  `seed-regua.ts`: **13 reaproveitam** o tipo existente (RG, CPF, CTPS, CNH, PIS→PIS_PASEP,
+  RESERVISTA, FOTO_3X4, TITULO_ELEITOR, COMPROVANTE_RESIDENCIA, ESCOLARIDADE→COMPROVANTE_ESCOLARIDADE,
+  CONTA BANCÁRIA→DADOS_BANCARIOS, CERTIDÃO NASC. DEPENDENTE→CERTIDAO_NASCIMENTO_FILHOS, VACINAÇÃO
+  DEPENDENTE→VACINA_FILHOS) e **8 são criados** (NASCIMENTO OU CASAMENTO, CPF DEPENDENTE, CURSO
+  COMPLEMENTAR, BANCO EXCLUSIVO, CARTÃO DE TRANSPORTE, CARTÃO SUS, FORMULÁRIO DE VT, VACINA
+  FUNCIONÁRIO). Reaproveitar evita duplicar tipos equivalentes; não destrói os tipos placeholder
+  restantes (ASO etc. seguem para o exame/usos próprios).
+- **Cargos:** upsert por `nome` de todos os 167 distintos (catálogo próprio §A.3); não duplica os 3
+  cargos de seed-demo (nomes distintos). Falha cedo se houver tipo/exigência fora do esperado.
+
+### O que foi construído
+- Loader `apps/backend/src/db/seed-regua.ts` (dep `csv-parse`, já presente), script `db:seed:regua`.
+  Garante os 21 tipos (8 novos), upserta cargos, e faz **UPSERT da régua por (cod_cliente + cargo_id
+  + tipo_documento_id)** com `excluded.exigencia`. Loga só contagens + cod_cliente (§A.6 — sem dado
+  pessoal). Régua de cliente ausente da tabela `clientes` é **pulada (FK)** e reportada.
+- **Carga:** 21 tipos garantidos (8 novos) · 167 cargos (167 novos) · **3.654 registros de régua /
+  174 pares** carregados. **Idempotente comprovado** (2ª execução: 0 inseridos, 3.654 atualizados).
+  Total no ea-db com o demo: régua 3.674 / 176 pares / cargos 170 / tipos 29.
+
+### ⚠️ Lacuna de dado a destravar pelo diretor (não bloqueia o núcleo)
+- **294 registros pulados** — 5 `cod_cliente` do CSV **não existem na tabela `clientes`** (não vieram
+  na carga dos 114): `53721` (NSK, 63), `56924` (RAIA CAGC CORIFEU, 63), `57252` (RAIA CAGC FREI
+  CANECA, 42), `54981` (ALCOOL FERREIRA, 21) e `solicitar` (GARRETT, 105 — **valor-lixo/placeholder**
+  no CSV de origem). Por isso o total real é **174 pares / 3.654 registros**, não os 187 / 4.011 do
+  DoD. **Ação do diretor:** acrescentar os 4 clientes reais à base (e revisar o `solicitar`) e
+  **re-rodar `db:seed:regua`** (idempotente) — preenche a lacuna sem retrabalho.
+
+### Verificações + smoke
+- `pnpm lint`/`typecheck`/`test` **verdes** (38 testes; sem mudança de código de API — só seed/dados).
+- Smoke do preview F1 (wizard) com par real via API autenticada: `/catalogos/cargos` → 170;
+  `/catalogos/regua?codCliente=55865&cargoId=<AJUDANTE GERAL>` → **21 documentos** com exigências
+  (10 OBRIG · 10 NAO_OBRIG · 1 FACULT) e os 8 tipos novos mapeados. Shape `{tipoDocumentoId, codigo,
+  nome, exigencia}` é o que o wizard da Fase 2A já consome — **nenhuma mudança de frontend**.
+
+### ⏸️ PARADA PARA VALIDAÇÃO VISUAL (§A.0)
+Servidores no ar (loopback): backend :3011, frontend `pnpm dev` :3010. Aguardando **aprovação visual
+do diretor** do wizard (Nova admissão) mostrando o checklist real ao selecionar cliente+cargo (ex.:
+cliente `55865`/PETZ + cargo "AJUDANTE GERAL"). **Commit na branch** (preserva o trabalho); gate
+fechado, sem flag `READY_*` — flag/merge só após auditoria tester+segurança.
+
+---
+
 ## 2026-06-26 — Fase 2C (continuação): Ajustes da Esteira + Tela de Não Conformidade
 
 Branch: `feat/fase-2c-esteira` (mesma da 2C; **working tree, sem commit** — aguardando validação

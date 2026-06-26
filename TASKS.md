@@ -43,8 +43,14 @@ DIARIO.md. O coordenador atualiza este arquivo a cada despacho.
 - [x] Carga idempotente de 114 clientes (CSV → seed-clientes.ts, upsert por cod_cliente), todos com cnpj+razão
 - [x] Wizard F1 pré-preenche região/empresa (informativos) e folha (benefícios/escala/endereço, editáveis)
 - [x] CLAUDE.md §A.3 atualizado com os novos campos
-- [ ] **Régua real** por (cliente+cargo) — hoje só pares demo têm régua; clientes reais geram admissão com 0 documentos até carregar
-- [ ] Carga de cargos reais (catálogo próprio — normalização contínua)
+### Régua documental ⏸️ (OST-EA-FASE-1B-REGUA · branch `feat/fase-1b-regua`, aguardando validação visual)
+- [x] Loader `seed-regua.ts` (script `db:seed:regua`): garante 21 tipos (8 novos), upsert cargos, UPSERT régua por (cliente+cargo+tipo) — idempotente comprovado (2ª run 0 inseridos)
+- [x] Cargos reais: 167 distintos carregados (170 total c/ demo), sem duplicar seed-demo
+- [x] Régua: 3.654 registros / 174 pares (3.674/176 total c/ demo); preview F1 verificado com par real
+- [x] lint/typecheck/test verdes (38)
+- [ ] **Validação visual do diretor** (wizard mostrando checklist real) — PARADA atual
+- [ ] Auditoria tester+segurança → `READY_fase-1b-regua` → merge
+- [ ] **GAP p/ diretor:** 294 registros pulados — 4 clientes reais ausentes da base (53721 NSK, 56924 RAIA CORIFEU, 57252 RAIA FREI CANECA, 54981 ALCOOL FERREIRA) + `solicitar`/GARRETT (lixo). Acrescentar clientes e re-rodar `db:seed:regua` (idempotente)
 - [ ] Follow-up segurança: `seed-clientes.ts` logar `err.message` no catch; teste do mapeamento CSV quando houver infra de teste de DB
 
 ## Fase 2 — Cadastro e Gerenciador
