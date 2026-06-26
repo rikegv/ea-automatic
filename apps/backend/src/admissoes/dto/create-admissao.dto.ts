@@ -1,5 +1,6 @@
 import { Transform, Type } from "class-transformer";
 import {
+  IsBoolean,
   IsDateString,
   IsOptional,
   IsString,
@@ -29,9 +30,14 @@ export class CandidatoInputDto {
   @IsString()
   @MaxLength(180)
   email?: string;
+
+  // Data de nascimento (W7) — base do aviso de menor de idade.
+  @IsOptional()
+  @IsDateString()
+  dataNascimento?: string;
 }
 
-/** Dados de vaga/folha (anexo 1:1) — todos opcionais (não bloqueiam — regra 5). */
+/** Dados de vaga/folha (anexo 1:1) — opcionais por padrão (não bloqueiam — regra 5/F4). */
 export class VagaFolhaInputDto {
   // numeric no banco: aceita string|número e normaliza para string antes da validação.
   @IsOptional()
@@ -43,9 +49,9 @@ export class VagaFolhaInputDto {
   @IsString()
   beneficios?: string;
 
+  // texto livre (escala vem do catálogo — pode ser longa).
   @IsOptional()
   @IsString()
-  @MaxLength(80)
   escala?: string;
 
   @IsOptional()
@@ -65,7 +71,7 @@ export class VagaFolhaInputDto {
 
   @IsOptional()
   @IsString()
-  @MaxLength(200)
+  @MaxLength(120)
   motivo?: string;
 
   @IsOptional()
@@ -78,6 +84,17 @@ export class VagaFolhaInputDto {
   @IsOptional()
   @IsString()
   endereco?: string;
+
+  // Substituição (W2): nome + CPF da pessoa substituída (obrigatórios quando motivo = "Substituição").
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  substituidoNome?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(14)
+  substituidoCpf?: string;
 }
 
 export class CreateAdmissaoDto {
@@ -106,4 +123,9 @@ export class CreateAdmissaoDto {
   @ValidateNested()
   @Type(() => VagaFolhaInputDto)
   vagaFolha?: VagaFolhaInputDto;
+
+  // W6 — aceite explícito ao criar com campos obrigatórios pendentes (F4: marca, não impede).
+  @IsOptional()
+  @IsBoolean()
+  aceitePendencias?: boolean;
 }

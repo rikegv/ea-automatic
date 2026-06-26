@@ -168,7 +168,8 @@ export const dadosVagaFolha = pgTable("dados_vaga_folha", {
     .references(() => admissoes.id, { onDelete: "cascade" }),
   salario: numeric("salario", { precision: 12, scale: 2 }),
   beneficios: text("beneficios"),
-  escala: varchar("escala", { length: 80 }),
+  // texto livre (escala do catálogo pode ser uma descrição longa — W4).
+  escala: text("escala"),
   centroCusto: varchar("centro_custo", { length: 80 }),
   departamento: varchar("departamento", { length: 120 }),
   gestorBp: varchar("gestor_bp", { length: 160 }),

@@ -1,0 +1,1 @@
+ALTER TABLE "dados_vaga_folha" ALTER COLUMN "escala" SET DATA TYPE text;

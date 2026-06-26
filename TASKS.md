@@ -88,7 +88,13 @@ DIARIO.md. O coordenador atualiza este arquivo a cada despacho.
 - [x] S1/G4b "Sinalizador" → "Pendências Obrigatórias" (gerenciador, modal, wizard)
 - [x] lint/typecheck/test verdes (38); smoke das frentes
 - [ ] **Validação visual do diretor (M1)** — PARADA atual
-### Marco 2 — Wizard + catálogos (a fazer): W1 doc list recolhível; W2 motivo/substituição+TTL 48h; W3/W4 benefícios/escala catálogo; W5 contrato fixo (6 valores); W6 obrigatórios+aceite; W7 menor de idade
+### Marco 2 — Wizard + catálogos (aguardando validação visual)
+- [x] Schema/migrations 0004–0006 (data_nascimento, substituição+TTL, escala→text, 3 catálogos); seed-catalogos idempotente
+- [x] Endpoints /catalogos/{motivos,beneficios,escalas} (GET auth; POST admin)
+- [x] W1 doc list recolhível + ordenada; W2 motivo + substituição (nome/CPF) + TTL 48h + ExpurgoService; W3 benefícios MultiSelect; W4 escala Select; W5 contrato 6 fixos; W6 obrigatórios + aceite (409 needsAceite); W7 aviso menor de idade
+- [x] Componentes: MultiSelect (novo); Select.onAdd (admin estende catálogo)
+- [x] lint/typecheck/test verdes (38); smoke E2E (gate de aceite, substituição+TTL, job de expurgo)
+- [ ] **Validação visual do diretor (M2)** — PARADA atual
 ### Marco 3 — Pendências + trilha (a fazer): S2 modal de pendências + "preencher"; S3 log de aceite por passagem (tabela+trilha); CLAUDE.md §A.3 (gate IA Fase 4, TTL CPF substituição, log de passagem)
 
 ## Fase 3 — Esteira e Frentes Paralelas

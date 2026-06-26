@@ -5,6 +5,55 @@ feito e **por quê** (rastreabilidade para o diretor e para as próximas sessõe
 
 ---
 
+## 2026-06-26 — Ajustes 2B/2C — Marco 2: Wizard + catálogos (OST-EA-AJUSTES-2B-2C)
+
+Branch: `feat/ajustes-2b-2c`. Marco 2 de 3 (Wizard + catálogos). Reforma completa do wizard (F6)
+com catálogos reais e validação de obrigatórios.
+
+### Backend
+- **Schema/migrations 0004–0006** (ea-db): `candidatos.data_nascimento` (W7); `dados_vaga_folha` +
+  `substituido_nome/cpf/expurgar_em` (W2); `dados_vaga_folha.escala` → `text` (catálogo é longo);
+  tabelas de catálogo `motivos_contratacao`, `beneficios_catalogo`, `escalas_catalogo`.
+- **Seed `db:seed:catalogos`** (idempotente): motivos (Substituição, Aumento de demanda); **104
+  escalas** (distintas dos clientes — texto livre); **10 benefícios** (base curada). *Decisão: a
+  extração atômica de `beneficios_padrao` é impraticável (valores monetários embutidos), então o
+  catálogo de benefícios nasce curado e o admin estende; escala usa as strings reais.*
+- **Endpoints** `/catalogos/{motivos,beneficios,escalas}` — GET autenticado; **POST só Master/Super
+  Admin** (admin estende o catálogo).
+- **W6 — gate de aceite no `POST /admissoes`**: campos obrigatórios (salário, escala, benefícios,
+  tipo de contrato, tempo de contrato, data de nascimento, telefone, e-mail; + nome/CPF do
+  substituído quando motivo=Substituição). Com pendência e sem `aceitePendencias` → **409
+  `needsAceite` + `camposPendentes`** (não impede — F4; exige aceite explícito). O **log permanente**
+  do aceite é da esteira (S3, marco 3).
+- **W2 substituição + TTL**: persiste nome/CPF do substituído e `substituicao_expurgar_em` = now+48h
+  (placeholder até a assinatura/INT-4). **`ExpurgoService`** (sweep in-process a cada 1h + no boot)
+  nula CPF/nome ao vencer o TTL (§A.6 — minimização/descarte). *Decisão: sweep in-process sem dep
+  extra; BullMQ fica reservado à fila do Pandapé (Fase 5).*
+
+### Frontend (wizard)
+- **W5** tipo de contrato — 6 valores fixos (Temporário/Terceirizado/Estágio/Interno/Fopag/Jovem
+  Aprendiz). **W4** escala — `Select` com busca do catálogo (pré-seleciona o padrão do cliente).
+  **W3** benefícios — **`MultiSelect`** (novo componente) do catálogo (chips + busca). **W2** motivo
+  — `Select` do catálogo; "Substituição" revela nome+CPF do substituído (obrigatórios). Em
+  escala/benefícios/motivo, **admin** vê "Adicionar 'X'" (cria no catálogo e seleciona).
+- **W1** checklist da régua **recolhido por padrão** (resumo "X obrigatórios, Y facultativos" +
+  "Ver documentos"/"Recolher"); documentos **ordenados** (obrigatórios primeiro, depois facultativos,
+  alfabético). **W6** campos com `*`; ao confirmar com pendência, modal de aceite. **W7** data de
+  nascimento calcula idade em tempo real; **aviso destacado de menor de idade** (não bloqueia).
+
+### Verificações + smoke E2E
+- `lint`/`typecheck`/`test` **verdes** (38). Smoke: catálogos (motivos 2/benefícios 10/escalas 104);
+  POST sem obrigatórios → **409 needsAceite** com 8 campos; POST com aceite + Substituição → criada,
+  substituição persistida com `expurgar_em` +48h; **job de expurgo** (TTL forçado ao passado +
+  restart) **descartou CPF/nome** e logou. Admissão de teste expurgada (base demo = 4).
+
+### ⏸️ PARADA PARA VALIDAÇÃO VISUAL (§A.0) — Marco 2
+Servidores no ar (backend :3011, frontend :3010). Aguardando **aprovação visual do diretor** do
+wizard (W1–W7) + os catálogos. **Commit na branch**; gate fechado, sem `READY_*`. Depois, **M3
+(Pendências + trilha + CLAUDE.md)**.
+
+---
+
 ## 2026-06-26 — Ajustes 2B/2C — Marco 1: Sistêmico + Gerenciador (OST-EA-AJUSTES-2B-2C)
 
 Branch: `feat/ajustes-2b-2c` (a partir de `feat/fase-2b-gerenciador`). **Decisão do coordenador
