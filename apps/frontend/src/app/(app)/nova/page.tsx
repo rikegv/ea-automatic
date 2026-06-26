@@ -10,6 +10,7 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import { Button } from "@/components/ui/Button";
 import { Pill, type PillTone } from "@/components/ui/Pill";
 import { Icon } from "@/components/ui/Icon";
+import { Select } from "@/components/ui/Select";
 import { Stepper, type StepDef } from "@/components/nova/Stepper";
 
 // ── Tipos do contrato de API (F6) ──────────────────────────────────────────
@@ -329,7 +330,7 @@ export default function NovaAdmissaoPage() {
 
           <div className="grid gap-3 sm:grid-cols-3">
             <GlassCard className="fk">
-              <div className="lbl">Sinalizador (F5)</div>
+              <div className="lbl">Pendências Obrigatórias (F5)</div>
               <div className="mt-2">
                 <Pill tone={sinalTone}>{result.sinalizadorPreenchimento}</Pill>
               </div>
@@ -470,14 +471,13 @@ export default function NovaAdmissaoPage() {
             )}
 
             <Field label="Cargo *">
-              <select className="ds-select" value={cargoId} onChange={(e) => setCargoId(e.target.value)}>
-                <option value="">Selecione o cargo…</option>
-                {cargos.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.nome}
-                  </option>
-                ))}
-              </select>
+              <Select
+                value={cargoId}
+                onChange={setCargoId}
+                placeholder="Selecione o cargo…"
+                ariaLabel="Cargo"
+                options={cargos.map((c) => ({ value: c.id, label: c.nome }))}
+              />
             </Field>
 
             {/* Preview do checklist da régua (cliente + cargo) */}

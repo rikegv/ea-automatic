@@ -5,6 +5,51 @@ feito e **por quê** (rastreabilidade para o diretor e para as próximas sessõe
 
 ---
 
+## 2026-06-26 — Ajustes 2B/2C — Marco 1: Sistêmico + Gerenciador (OST-EA-AJUSTES-2B-2C)
+
+Branch: `feat/ajustes-2b-2c` (a partir de `feat/fase-2b-gerenciador`). **Decisão do coordenador
+(ordem de merge):** as branches em fila merge na sequência `1b-regua → 2b-gerenciador → ajustes`,
+cada uma após sua auditoria; esta OST estende o Gerenciador (2B) e o wizard, então nasce sobre a 2B.
+Entrega em **3 marcos validados** (definido com o diretor): **M1 Sistêmico+Gerenciador** (este),
+depois M2 Wizard+catálogos, depois M3 Pendências+trilha+CLAUDE.md.
+
+### M1 — o que foi feito
+- **G1 — Select estilizado em todo o sistema + z-index.** `Select` reescrito: dropdown em **portal**
+  (`position: fixed`, `z-60`) que **sobrepõe qualquer bloco** (não é cortado por `overflow`/stacking)
+  e usa `--surface-2` (opaco). Substituídos TODOS os `<select>` nativos restantes: wizard (cargo) e
+  admin/régua (cliente, cargo, exigência por linha). Não resta `<select>` nativo no sistema.
+- **G2 — busca interna.** O `Select` abre com campo de pesquisa (auto quando >8 opções) que filtra a
+  lista em tempo real (sem acento/caixa). Atende cliente/cargo/exigência e os longos do wizard (M2).
+- **G3 — fundo dos modais no tema claro.** Novo componente `Modal` (portal, overlay + painel
+  `glass` com `--surface-2`) — superfície limpa do DS no tema claro (corrige o "cinza de sistema").
+  **6 modais migrados:** ficha (olho), ConfirmDialog, AceiteLiberacao, EditAdmissao, Liberação e
+  RegistrarNC. Selects internos (z-60) sobrepõem o modal (z-55).
+- **G4 — sidebar recolhível + congelável.** Botão de setas recolhe para ícones (label vira tooltip);
+  passar o mouse expande temporariamente; **fixar/desafixar** congela expandido. **Decisão técnica:**
+  preferência persistida em **localStorage** (`ea-sidebar-pinned`) — mesmo padrão do tema, sem
+  backend. *(A expansão por hover é in-layout — transição de largura 200ms; overlay fica como refino
+  futuro se o diretor preferir.)*
+- **G4a — 3 colunas de frente no Gerenciador.** Auditoria/Exame/Cadastro com o status real como pill
+  (Cadastro mostra "—" enquanto não nasce — gate). Backend: `GET /admissoes` enriquece cada linha
+  com os status das frentes (+ rótulo do catálogo). Tabela passou a rolar horizontalmente (11 colunas).
+- **S1 / G4b — "Sinalizador" → "Pendências Obrigatórias".** Renomeado no Gerenciador (coluna +
+  filtro), no modal de ficha e no wizard. *(O modal de pendências (S2) e o log de passagem (S3) são
+  do M3.)*
+
+### Verificações + smoke
+- `pnpm lint`/`typecheck`/`test` **verdes** (38). `next build` OK. Smoke: `GET /admissoes` traz as 3
+  frentes por linha (Ana: Análise OK / Apto / Integração; demais com Cadastro "—").
+- **Operacional:** rodar `next build` com o `next dev` no ar corrompe o cache `.next` (erro
+  "Cannot find module './NN.js'"). Mitigação: limpar `.next` e reiniciar; não buildar com o dev ativo.
+
+### ⏸️ PARADA PARA VALIDAÇÃO VISUAL (§A.0) — Marco 1
+Servidores no ar (loopback): backend :3011, frontend `pnpm dev` :3010. Aguardando **aprovação visual
+do diretor** do M1 (selects estilizados/busca em todo o sistema, modais com fundo correto no tema
+claro, sidebar recolhível/congelável, 3 colunas de frente no gerenciador, renome). **Commit na
+branch**; gate fechado, sem `READY_*`. Após o aval, sigo para **M2 (Wizard + catálogos)**.
+
+---
+
 ## 2026-06-26 — Fase 2B: Gerenciador de Admissões (OST-EA-FASE-2B)
 
 Branch: `feat/fase-2b-gerenciador` (a partir da `main`, que já tem o 2C; **independente** da branch

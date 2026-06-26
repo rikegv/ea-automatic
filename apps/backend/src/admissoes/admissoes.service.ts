@@ -1,6 +1,6 @@
 import { BadRequestException, Inject, Injectable, NotFoundException } from "@nestjs/common";
 import { isValidCpf, normalizeCpf } from "@ea/shared-types";
-import { and, count, desc, eq, gte, ilike, lte, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, gte, ilike, inArray, lte, or, sql } from "drizzle-orm";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
 import {
@@ -10,6 +10,7 @@ import {
   clientes,
   dadosVagaFolha,
   documentosAdmissao,
+  frenteStatusCatalogo,
   frentesAdmissao,
   reguaDocumental,
 } from "../db/schema";
@@ -263,6 +264,42 @@ export class AdmissoesService {
       .limit(pageSize)
       .offset((page - 1) * pageSize);
 
+    // G4a — status das 3 frentes por admissão da página (colunas Auditoria/Exame/Cadastro).
+    const ids = items.map((i) => i.admissaoId);
+    const frentesRows = ids.length
+      ? await this.db
+          .select({
+            admissaoId: frentesAdmissao.admissaoId,
+            tipo: frentesAdmissao.tipo,
+            status: frentesAdmissao.status,
+            concluida: frentesAdmissao.concluida,
+          })
+          .from(frentesAdmissao)
+          .where(inArray(frentesAdmissao.admissaoId, ids))
+      : [];
+    const catalogo = await this.db
+      .select({
+        tipo: frenteStatusCatalogo.tipo,
+        codigo: frenteStatusCatalogo.codigo,
+        rotulo: frenteStatusCatalogo.rotulo,
+      })
+      .from(frenteStatusCatalogo);
+    const rotuloDe = (tipo: string, codigo: string) =>
+      catalogo.find((c) => c.tipo === tipo && c.codigo === codigo)?.rotulo ?? codigo;
+    const frentesPorAdm = new Map<
+      string,
+      Record<string, { status: string; rotulo: string; concluida: boolean }>
+    >();
+    for (const f of frentesRows) {
+      const m = frentesPorAdm.get(f.admissaoId) ?? {};
+      m[f.tipo] = { status: f.status, rotulo: rotuloDe(f.tipo, f.status), concluida: f.concluida };
+      frentesPorAdm.set(f.admissaoId, m);
+    }
+    const itemsComFrentes = items.map((i) => ({
+      ...i,
+      frentes: frentesPorAdm.get(i.admissaoId) ?? {},
+    }));
+
     // Valores distintos de tipo de contrato (para o filtro Select).
     const tiposContratoRows = await this.db
       .selectDistinct({ tipo: admissoes.tipoContrato })
@@ -283,7 +320,7 @@ export class AdmissoesService {
       .where(base.length ? and(...base) : undefined);
 
     return {
-      items,
+      items: itemsComFrentes,
       total,
       page,
       pageSize,

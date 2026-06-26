@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { apiFetch, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
-import { GlassCard } from "@/components/ui/GlassCard";
+import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { Icon } from "@/components/ui/Icon";
 import { Select } from "@/components/ui/Select";
@@ -141,16 +141,7 @@ export function EditAdmissaoModal({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 grid place-items-center bg-[rgba(7,17,31,0.55)] p-4 backdrop-blur-sm"
-      role="dialog"
-      aria-modal="true"
-      onClick={onClose}
-    >
-      <GlassCard
-        className="panel max-h-[88vh] w-full max-w-2xl overflow-auto"
-        onClick={(e: React.MouseEvent) => e.stopPropagation()}
-      >
+    <Modal onClose={onClose} className="max-w-2xl" ariaLabel="Editar admissão">
         <div className="mb-4 flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="eyebrow !mb-1">Editar admissão</div>
@@ -238,7 +229,6 @@ export function EditAdmissaoModal({
             </div>
           </div>
         )}
-      </GlassCard>
-    </div>
+    </Modal>
   );
 }

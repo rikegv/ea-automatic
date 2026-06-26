@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { apiFetch, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
-import { GlassCard } from "@/components/ui/GlassCard";
+import { Modal } from "@/components/ui/Modal";
 import { Pill, type PillTone } from "@/components/ui/Pill";
 import { Icon } from "@/components/ui/Icon";
 
@@ -120,26 +120,8 @@ export function AdmissaoDetalheModal({
     };
   }, [admissaoId, token]);
 
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
-    }
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
   return (
-    <div
-      className="fixed inset-0 z-50 grid place-items-center bg-[rgba(7,17,31,0.55)] p-4 backdrop-blur-sm"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Ficha da admissão"
-      onClick={onClose}
-    >
-      <GlassCard
-        className="panel max-h-[88vh] w-full max-w-2xl overflow-auto"
-        onClick={(e: React.MouseEvent) => e.stopPropagation()}
-      >
+    <Modal onClose={onClose} className="max-w-2xl" ariaLabel="Ficha da admissão">
         <div className="mb-4 flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="eyebrow !mb-1">Ficha da admissão</div>
@@ -181,7 +163,7 @@ export function AdmissaoDetalheModal({
 
             {/* Sinalizador */}
             <section className="flex items-center gap-2">
-              <span className="text-[12.5px] text-dim">Preenchimento:</span>
+              <span className="text-[12.5px] text-dim">Pendências obrigatórias:</span>
               <Pill tone={SINAL_TONE[data.sinalizador] ?? "nt"}>
                 {SINAL_ROTULO[data.sinalizador] ?? data.sinalizador}
               </Pill>
@@ -241,7 +223,6 @@ export function AdmissaoDetalheModal({
             </section>
           </div>
         )}
-      </GlassCard>
-    </div>
+    </Modal>
   );
 }

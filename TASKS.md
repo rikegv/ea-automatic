@@ -78,6 +78,19 @@ DIARIO.md. O coordenador atualiza este arquivo a cada despacho.
 - [ ] **Follow-up:** edição não permite trocar cargo (mudaria a régua) — avaliar se desejável; soft delete como evolução
 - [ ] **Follow-ups técnicos (fase futura):** e2e do `POST /admissoes` com testcontainers (400/idempotência/contagem frentes-docs); migrar CPF do path do `GET /admissoes/candidato/:cpf` para o corpo (POST) — higiene de log/proxy
 
+## Ajustes 2B/2C ⏸️ (OST-EA-AJUSTES-2B-2C · branch `feat/ajustes-2b-2c`) — 3 marcos
+### Marco 1 — Sistêmico + Gerenciador (aguardando validação visual)
+- [x] G1 Select estilizado em todo o sistema (portal z-60, sobrepõe; opaco) — sem `<select>` nativo restante
+- [x] G2 busca interna no Select (auto >8 opções)
+- [x] G3 componente `Modal` (portal, surface-2) — fundo correto no tema claro; 6 modais migrados
+- [x] G4 sidebar recolhível/congelável; preferência em localStorage (decisão registrada no DIARIO)
+- [x] G4a 3 colunas de frente (Auditoria/Exame/Cadastro) no Gerenciador com status real
+- [x] S1/G4b "Sinalizador" → "Pendências Obrigatórias" (gerenciador, modal, wizard)
+- [x] lint/typecheck/test verdes (38); smoke das frentes
+- [ ] **Validação visual do diretor (M1)** — PARADA atual
+### Marco 2 — Wizard + catálogos (a fazer): W1 doc list recolhível; W2 motivo/substituição+TTL 48h; W3/W4 benefícios/escala catálogo; W5 contrato fixo (6 valores); W6 obrigatórios+aceite; W7 menor de idade
+### Marco 3 — Pendências + trilha (a fazer): S2 modal de pendências + "preencher"; S3 log de aceite por passagem (tabela+trilha); CLAUDE.md §A.3 (gate IA Fase 4, TTL CPF substituição, log de passagem)
+
 ## Fase 3 — Esteira e Frentes Paralelas
 - [ ] Faróis em abas (F8), F12 frentes independentes, avanço por aba, upload de ASO
 

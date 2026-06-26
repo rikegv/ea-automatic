@@ -25,6 +25,7 @@ interface AdmRow {
   farolGlobal: string;
   sinalizador: string;
   concluido: boolean;
+  frentes: Record<string, { status: string; rotulo: string; concluida: boolean }>;
 }
 interface ListResp {
   items: AdmRow[];
@@ -73,7 +74,19 @@ function fmtDataAdmissao(d?: string | null): string {
   return m ? `${m[3]}/${m[2]}/${m[1]}` : "—";
 }
 
-const GRID = "minmax(0,1.4fr) minmax(0,1.2fr) minmax(0,1.05fr) 104px 96px 116px 118px 100px";
+/** Tom da pill de uma frente (mesma leitura da Esteira). */
+function frenteTone(f?: { status: string; concluida: boolean }): PillTone {
+  if (!f) return "nt";
+  if (f.concluida) return "ok";
+  if (f.status === "DECLINOU" || f.status === "CANCELADO") return "dg";
+  if (f.status === "AGUARDA_REENVIO") return "or";
+  return "wn";
+}
+
+// 11 colunas (com as 3 frentes — G4a). Tabela rola horizontalmente.
+const GRID =
+  "170px 150px 140px 100px 92px 128px 104px 128px 104px 134px 96px";
+const GRID_MIN = "min-w-[1350px]";
 
 export default function GerenciadorPage() {
   const { token, isAdmin } = useAuth();
@@ -374,7 +387,7 @@ export default function GerenciadorPage() {
             <Select value={farol} onChange={reset1(setFarol)} options={FAROL_OPTS} placeholder="Todos" ariaLabel="Farol" />
           </div>
           <div>
-            <span className="ds-label">Sinalizador</span>
+            <span className="ds-label">Pendências Obrig.</span>
             <Select value={sinalizador} onChange={reset1(setSinalizador)} options={SINAL_OPTS} placeholder="Todos" ariaLabel="Sinalizador" />
           </div>
           <div>
@@ -404,14 +417,19 @@ export default function GerenciadorPage() {
 
       {/* Tabela */}
       <GlassCard className="list">
+        <div className="overflow-x-auto">
+        <div className={GRID_MIN}>
         <div className="list-head" style={{ gridTemplateColumns: GRID }}>
           <span>Candidato</span>
           <span>Cliente</span>
           <span>Cargo</span>
           <span>Contrato</span>
           <span>Data adm.</span>
+          <span>Auditoria</span>
+          <span>Exame</span>
+          <span>Cadastro</span>
           <span>Status</span>
-          <span>Sinalizador</span>
+          <span>Pendências Obrig.</span>
           <span>Ações</span>
         </div>
 
@@ -427,6 +445,9 @@ export default function GerenciadorPage() {
           items.map((r) => {
             const farolP = FAROL[r.farolGlobal] ?? { tone: "nt" as PillTone, label: r.farolGlobal };
             const sinalP = SINAL[r.sinalizador] ?? { tone: "nt" as PillTone, label: r.sinalizador };
+            const fa = r.frentes?.AUDITORIA;
+            const ex = r.frentes?.EXAME;
+            const cad = r.frentes?.CADASTRO_CONTRATO;
             return (
               <div key={r.admissaoId} className="row" style={{ gridTemplateColumns: GRID }}>
                 <div className="min-w-0">
@@ -440,6 +461,15 @@ export default function GerenciadorPage() {
                 <div className="meta truncate">{r.cargoNome}</div>
                 <div className="meta truncate">{r.tipoContrato || "—"}</div>
                 <div className="meta">{fmtDataAdmissao(r.dataAdmissao)}</div>
+                <div className="min-w-0">
+                  {fa ? <Pill tone={frenteTone(fa)}>{fa.rotulo}</Pill> : <span className="meta">—</span>}
+                </div>
+                <div className="min-w-0">
+                  {ex ? <Pill tone={frenteTone(ex)}>{ex.rotulo}</Pill> : <span className="meta">—</span>}
+                </div>
+                <div className="min-w-0">
+                  {cad ? <Pill tone={frenteTone(cad)}>{cad.rotulo}</Pill> : <span className="meta">—</span>}
+                </div>
                 <div className="min-w-0">
                   <Pill tone={farolP.tone}>{farolP.label}</Pill>
                 </div>
@@ -481,6 +511,8 @@ export default function GerenciadorPage() {
             );
           })
         )}
+        </div>
+        </div>
 
         {/* Paginação */}
         {data && data.total > 0 && (

@@ -10,16 +10,24 @@ export function NavItem({
   icon,
   label,
   active,
+  expanded = true,
 }: {
   href: string;
   icon: IconName;
   label: string;
   active: boolean;
+  /** Recolhido (false): só o ícone, centralizado; o label vira tooltip. */
+  expanded?: boolean;
 }) {
   return (
-    <Link href={href} className={cn("nav-item", active && "active")} aria-current={active ? "page" : undefined}>
+    <Link
+      href={href}
+      className={cn("nav-item", active && "active", !expanded && "justify-center")}
+      aria-current={active ? "page" : undefined}
+      title={expanded ? undefined : label}
+    >
       <Icon name={icon} />
-      <span>{label}</span>
+      {expanded && <span className="truncate">{label}</span>}
     </Link>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { GlassCard } from "./GlassCard";
+import { Modal } from "./Modal";
 import { Button } from "./Button";
 import { Icon } from "./Icon";
 import { cn } from "@/lib/cn";
@@ -33,14 +33,8 @@ export function ConfirmDialog({
   if (!open) return null;
   const danger = tone === "danger";
   return (
-    <div
-      className="fixed inset-0 z-50 grid place-items-center bg-[rgba(7,17,31,0.55)] p-4 backdrop-blur-sm"
-      role="dialog"
-      aria-modal="true"
-      onClick={onCancel}
-    >
-      <GlassCard className="panel w-full max-w-md" onClick={(e: React.MouseEvent) => e.stopPropagation()}>
-        <div className="mb-4 flex items-start gap-3">
+    <Modal onClose={onCancel} className="max-w-md" ariaLabel={title}>
+      <div className="mb-4 flex items-start gap-3">
           <span
             className={cn(
               "grid h-10 w-10 flex-none place-items-center rounded-full",
@@ -68,7 +62,6 @@ export function ConfirmDialog({
             {busy ? "Processando…" : confirmLabel}
           </Button>
         </div>
-      </GlassCard>
-    </div>
+    </Modal>
   );
 }

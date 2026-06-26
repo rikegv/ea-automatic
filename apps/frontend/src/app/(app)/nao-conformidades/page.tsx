@@ -7,6 +7,7 @@ import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/cn";
 import { PageHead } from "@/components/ui/PageHead";
 import { GlassCard } from "@/components/ui/GlassCard";
+import { Modal } from "@/components/ui/Modal";
 import { Pill, type PillTone } from "@/components/ui/Pill";
 import { Button } from "@/components/ui/Button";
 import { Icon } from "@/components/ui/Icon";
@@ -455,13 +456,7 @@ function LiberacaoModal({
 }) {
   const [motivo, setMotivo] = useState("");
   return (
-    <div
-      className="fixed inset-0 z-50 grid place-items-center bg-[rgba(7,17,31,0.55)] p-4 backdrop-blur-sm"
-      role="dialog"
-      aria-modal="true"
-      onClick={onClose}
-    >
-      <GlassCard className="panel w-full max-w-md" onClick={(e: React.MouseEvent) => e.stopPropagation()}>
+    <Modal onClose={onClose} className="max-w-md" ariaLabel="Liberação por diretoria">
         <h3 className="text-[17px] font-extrabold">Liberação por determinação da diretoria</h3>
         <p className="psub !mb-3 mt-1">
           {nc.candidatoNome} · {NC_TIPO_ROTULO[nc.tipo]}. Descreva o motivo; a supervisão aprova ou
@@ -487,8 +482,7 @@ function LiberacaoModal({
             {busy ? "Enviando…" : "Enviar à supervisão"}
           </Button>
         </div>
-      </GlassCard>
-    </div>
+    </Modal>
   );
 }
 
@@ -572,13 +566,7 @@ function RegistrarNc3Modal({
   );
 
   return (
-    <div
-      className="fixed inset-0 z-50 grid place-items-center bg-[rgba(7,17,31,0.55)] p-4 backdrop-blur-sm"
-      role="dialog"
-      aria-modal="true"
-      onClick={onClose}
-    >
-      <GlassCard className="panel w-full max-w-lg" onClick={(e: React.MouseEvent) => e.stopPropagation()}>
+    <Modal onClose={onClose} className="max-w-lg" ariaLabel="Registrar NC de Cadastro">
         <h3 className="text-[17px] font-extrabold">Registrar NC de Cadastro</h3>
         <p className="psub !mb-3 mt-1">
           Cadastro incompleto (NC-3). As flags são manuais nesta fase — kit (F9) e assinatura
@@ -706,7 +694,6 @@ function RegistrarNc3Modal({
             {busy ? "Registrando…" : diretoria ? "Enviar à supervisão" : "Registrar NC"}
           </Button>
         </div>
-      </GlassCard>
-    </div>
+    </Modal>
   );
 }
