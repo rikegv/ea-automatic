@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { apiFetch, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
-import { GlassCard } from "@/components/ui/GlassCard";
+import { Modal } from "@/components/ui/Modal";
 import { Pill, type PillTone } from "@/components/ui/Pill";
 import { Icon } from "@/components/ui/Icon";
 
@@ -32,6 +32,8 @@ interface AdmissaoDetalhe {
   cargo: string;
   frentes: FrenteDetalhe[];
   documentos: DocDetalhe[];
+  pendencias: string[];
+  passagens: { tipo: string; rotulo: string; camposPendentes: string | null; autor: string | null; criadoEm: string }[];
 }
 
 const FRENTE_ROTULO: Record<string, string> = {
@@ -120,26 +122,8 @@ export function AdmissaoDetalheModal({
     };
   }, [admissaoId, token]);
 
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
-    }
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
   return (
-    <div
-      className="fixed inset-0 z-50 grid place-items-center bg-[rgba(7,17,31,0.55)] p-4 backdrop-blur-sm"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Ficha da admissão"
-      onClick={onClose}
-    >
-      <GlassCard
-        className="panel max-h-[88vh] w-full max-w-2xl overflow-auto"
-        onClick={(e: React.MouseEvent) => e.stopPropagation()}
-      >
+    <Modal onClose={onClose} className="max-w-2xl" ariaLabel="Ficha da admissão">
         <div className="mb-4 flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="eyebrow !mb-1">Ficha da admissão</div>
@@ -179,13 +163,38 @@ export function AdmissaoDetalheModal({
               <Campo rotulo="Contrato" valor={data.tipoContrato || "—"} />
             </section>
 
-            {/* Sinalizador */}
-            <section className="flex items-center gap-2">
-              <span className="text-[12.5px] text-dim">Preenchimento:</span>
+            {/* Sinalizador + pendências obrigatórias (S2) */}
+            <section className="flex flex-wrap items-center gap-2">
+              <span className="text-[12.5px] text-dim">Pendências obrigatórias:</span>
               <Pill tone={SINAL_TONE[data.sinalizador] ?? "nt"}>
                 {SINAL_ROTULO[data.sinalizador] ?? data.sinalizador}
               </Pill>
+              {data.pendencias.length > 0 && (
+                <span className="text-[12.5px] text-warn">{data.pendencias.join(" · ")}</span>
+              )}
             </section>
+
+            {/* Trilha de passagem (S3) */}
+            {data.passagens.length > 0 && (
+              <section>
+                <div className="mb-2 text-[11px] uppercase tracking-wide text-faint">
+                  Trilha de passagem (avanços com pendência)
+                </div>
+                <div className="space-y-1.5">
+                  {data.passagens.map((p, i) => (
+                    <div key={i} className="rounded-lg border border-[var(--border)] px-3 py-2 text-[12.5px]">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-semibold text-text">{p.rotulo}</span>
+                        <span className="text-faint">
+                          {p.autor ?? "—"} · {fmtData(p.criadoEm)}
+                        </span>
+                      </div>
+                      {p.camposPendentes && <div className="mt-0.5 text-warn">{p.camposPendentes}</div>}
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
 
             {/* Frentes */}
             <section>
@@ -241,7 +250,6 @@ export function AdmissaoDetalheModal({
             </section>
           </div>
         )}
-      </GlassCard>
-    </div>
+    </Modal>
   );
 }

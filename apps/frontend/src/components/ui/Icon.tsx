@@ -25,6 +25,8 @@ export type IconName =
   | "tag"
   | "eye"
   | "x"
+  | "trash"
+  | "logout"
   | "sun"
   | "moon";
 
@@ -111,6 +113,18 @@ const PATHS: Record<IconName, JSX.Element> = {
     </>
   ),
   x: <path d="M18 6L6 18M6 6l12 12" />,
+  logout: (
+    <>
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+      <path d="M16 17l5-5-5-5M21 12H9" />
+    </>
+  ),
+  trash: (
+    <>
+      <path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+      <path d="M10 11v6M14 11v6" />
+    </>
+  ),
   sun: (
     <>
       <circle cx="12" cy="12" r="4" />

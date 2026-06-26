@@ -5,6 +5,220 @@ feito e **por quê** (rastreabilidade para o diretor e para as próximas sessõe
 
 ---
 
+## 2026-06-26 — Ajustes 2B/2C — Marco 3: Pendências + trilha + CLAUDE.md (OST-EA-AJUSTES-2B-2C)
+
+Branch: `feat/ajustes-2b-2c`. Marco 3 de 3 (final) — S1/S2/S3 e a doc.
+
+### CLAUDE.md §A.3 (regras 8/9/10)
+Regra 8 — **log de aceite por passagem** (trilha, não penalização). Regra 9 — **gate da IA** mais
+rígido que o humano (Fase 4). Regra 10 — **TTL 48h do CPF de substituição** (LGPD).
+
+### S2 — modal de Pendências Obrigatórias
+- Helper puro `pendenciasObrigatorias` (domínio, + 2 testes): conjunto fixo Salário, Data de
+  admissão, Pacote de benefícios, Cliente, Cargo, Escala. `GET /esteira/admissao/:id` passou a
+  retornar `pendencias`.
+- Frontend: a pill "Pendências Obrigatórias" do Gerenciador virou **clicável** → `PendenciasModal`
+  lista os campos vazios; **"Preencher pendências"** abre o `EditAdmissaoModal` **filtrado** apenas
+  nesses campos (prop `camposFiltro`).
+
+### S3 — log de aceite por passagem (trilha permanente)
+- Tabela `passagem_aceites` (migration `0007`): admissão, frente, de/para status, campos pendentes
+  (rótulos, sem CPF — §A.6), autor, data. Cascade.
+- Esteira `mudarStatus`: concluir AUDITORIA/EXAME com campos obrigatórios pendentes da admissão →
+  **409 `passagemComPendencia`** (+ campos) se sem `aceitePassagem`; com aceite, grava a trilha no
+  tx. Os itens da fila trazem `temPendencias` (o front roteia direto para o aceite). O aceite Via 1/
+  Via 2 (régua/ASO) envia `aceitePassagem=true` junto, então **um único aceite** limpa o gate de
+  régua/ASO **e** registra a passagem (e cria a NC quando aplicável). `GET /esteira/admissao/:id`
+  retorna `passagens` (trilha consultável); exibida no modal de ficha.
+
+### Verificações + smoke E2E
+- `lint`/`typecheck`/`test` **verdes** (40 testes: +2 de `pendenciasObrigatorias`). Smoke:
+  concluir auditoria com pendências (régua + campos) com `confirmar+aceitePassagem` → ANALISE_OK +
+  **NC-1** + **log de passagem** (campos "Salário, Pacote de benefícios, Escala", autor); detalhe
+  retorna `pendencias` e `passagens`. Base demo restaurada (4 admissões, nc=0, passagens=0).
+
+### ✅ VALIDAÇÃO VISUAL APROVADA + auditoria da OST inteira (fluxo §A.0)
+- **Validação visual do diretor: APROVADA integralmente** — M1, M2 e M3.
+- **tester — VEREDITO: PASS.** `install --frozen-lockfile`/`lint`/`typecheck`/`test` exit 0
+  (**40 testes**); `nest build` OK; **`next build` limpo OK** (rotas /esteira /gerenciador /nova
+  /nao-conformidades compilam — gap fechado após parar o dev). Gate §A.7 ativo (push bloqueado exit
+  2). Migrations 0004–0007 aplicadas no ea-db. Regras de domínio cobertas (gate, sinalizador,
+  pendênciasObrigatorias, CPF, trilha). Não-bloqueantes: sem e2e das rotas novas (lógica decidível em
+  domínio puro testado).
+- **seguranca — VEREDITO: APROVADO (poder de veto, §A.6).** **OriginGuard aprovado** (parecer
+  dedicado): `/refresh` e `/logout` (cookie) seguem na allowlist; o bypass exige Bearer (não
+  auto-enviado pelo browser → sem vetor CSRF); guard antes do Jwt só checa presença; sem
+  `enableCors` reforça a defesa. CPF do substituído com TTL 48h + expurgo nula CPF/nome (sem log);
+  trilha `passagem_aceites` só rótulos (sem CPF/URL); RBAC correto (POST catálogos + DELETE admissão
+  = Master/Super Admin); sem segredo/flag commitada; régua loga só contagens. Não-bloqueantes
+  (follow-up): remover fallback morto do cookie `ea_access` no `jwt-auth.guard`; DTO no POST de
+  catálogos; avaliar se a trilha/NC deve sobreviver à exclusão da admissão (hoje cascade).
+
+**Liberação:** com os dois avais, criada a flag `.claude/state/READY_ajustes-2b-2c` (local,
+git-ignored). Sequência de merges na `main`: `feat/fase-1b-regua` (régua) → `feat/ajustes-2b-2c`
+(que já traz a Fase 2B como ancestral; a 2C já estava na main). Em seguida, push de todo o histórico
+ao GitHub. Flag removida após o push.
+
+---
+
+## 2026-06-26 — Ajustes 2B/2C — Marco 2: Wizard + catálogos (OST-EA-AJUSTES-2B-2C)
+
+Branch: `feat/ajustes-2b-2c`. Marco 2 de 3 (Wizard + catálogos). Reforma completa do wizard (F6)
+com catálogos reais e validação de obrigatórios.
+
+### Backend
+- **Schema/migrations 0004–0006** (ea-db): `candidatos.data_nascimento` (W7); `dados_vaga_folha` +
+  `substituido_nome/cpf/expurgar_em` (W2); `dados_vaga_folha.escala` → `text` (catálogo é longo);
+  tabelas de catálogo `motivos_contratacao`, `beneficios_catalogo`, `escalas_catalogo`.
+- **Seed `db:seed:catalogos`** (idempotente): motivos (Substituição, Aumento de demanda); **104
+  escalas** (distintas dos clientes — texto livre); **10 benefícios** (base curada). *Decisão: a
+  extração atômica de `beneficios_padrao` é impraticável (valores monetários embutidos), então o
+  catálogo de benefícios nasce curado e o admin estende; escala usa as strings reais.*
+- **Endpoints** `/catalogos/{motivos,beneficios,escalas}` — GET autenticado; **POST só Master/Super
+  Admin** (admin estende o catálogo).
+- **W6 — gate de aceite no `POST /admissoes`**: campos obrigatórios (salário, escala, benefícios,
+  tipo de contrato, tempo de contrato, data de nascimento, telefone, e-mail; + nome/CPF do
+  substituído quando motivo=Substituição). Com pendência e sem `aceitePendencias` → **409
+  `needsAceite` + `camposPendentes`** (não impede — F4; exige aceite explícito). O **log permanente**
+  do aceite é da esteira (S3, marco 3).
+- **W2 substituição + TTL**: persiste nome/CPF do substituído e `substituicao_expurgar_em` = now+48h
+  (placeholder até a assinatura/INT-4). **`ExpurgoService`** (sweep in-process a cada 1h + no boot)
+  nula CPF/nome ao vencer o TTL (§A.6 — minimização/descarte). *Decisão: sweep in-process sem dep
+  extra; BullMQ fica reservado à fila do Pandapé (Fase 5).*
+
+### Frontend (wizard)
+- **W5** tipo de contrato — 6 valores fixos (Temporário/Terceirizado/Estágio/Interno/Fopag/Jovem
+  Aprendiz). **W4** escala — `Select` com busca do catálogo (pré-seleciona o padrão do cliente).
+  **W3** benefícios — **`MultiSelect`** (novo componente) do catálogo (chips + busca). **W2** motivo
+  — `Select` do catálogo; "Substituição" revela nome+CPF do substituído (obrigatórios). Em
+  escala/benefícios/motivo, **admin** vê "Adicionar 'X'" (cria no catálogo e seleciona).
+- **W1** checklist da régua **recolhido por padrão** (resumo "X obrigatórios, Y facultativos" +
+  "Ver documentos"/"Recolher"); documentos **ordenados** (obrigatórios primeiro, depois facultativos,
+  alfabético). **W6** campos com `*`; ao confirmar com pendência, modal de aceite. **W7** data de
+  nascimento calcula idade em tempo real; **aviso destacado de menor de idade** (não bloqueia).
+
+### Verificações + smoke E2E
+- `lint`/`typecheck`/`test` **verdes** (38). Smoke: catálogos (motivos 2/benefícios 10/escalas 104);
+  POST sem obrigatórios → **409 needsAceite** com 8 campos; POST com aceite + Substituição → criada,
+  substituição persistida com `expurgar_em` +48h; **job de expurgo** (TTL forçado ao passado +
+  restart) **descartou CPF/nome** e logou. Admissão de teste expurgada (base demo = 4).
+
+### Correção pós-validação parcial — OriginGuard bloqueava o "Adicionar" do admin (§A.2/§A.6)
+Bug: o admin clicava em "Adicionar 'X'" no select de benefícios/escala/motivo e nada era criado.
+**Causa:** o `OriginGuard` retorna 403 em métodos mutantes quando o `Origin` não está na allowlist
+(`localhost:3010`). O diretor acessa por **túnel/ZeroTier** (Origin ≠ localhost), então TODO POST era
+bloqueado (GET passa — o guard ignora métodos seguros) e o `addCatalogo` falhava em silêncio.
+**Correção (revisar na auditoria de segurança):** o `OriginGuard` agora libera métodos mutantes
+**autenticados por Bearer token** em qualquer origem — o token vive em memória do front e o browser
+não o auto-envia, logo não há vetor de CSRF (um atacante cross-site não consegue anexá-lo). O fluxo
+**cookie** (ex.: `/refresh`) continua exigindo a allowlist. Comprovado: Bearer+Origin-de-túnel → 201;
+sem Bearer+Origin-de-túnel → 403. Front: `addCatalogo` passou a surfaceiar erro (não falha em
+silêncio). lint/typecheck/test verdes (38).
+
+### ⏸️ PARADA PARA VALIDAÇÃO VISUAL (§A.0) — Marco 2
+Servidores no ar (backend :3011, frontend :3010). Aguardando **aprovação visual do diretor** do
+wizard (W1–W7) + os catálogos. **Commit na branch**; gate fechado, sem `READY_*`. Depois, **M3
+(Pendências + trilha + CLAUDE.md)**.
+
+---
+
+## 2026-06-26 — Ajustes 2B/2C — Marco 1: Sistêmico + Gerenciador (OST-EA-AJUSTES-2B-2C)
+
+Branch: `feat/ajustes-2b-2c` (a partir de `feat/fase-2b-gerenciador`). **Decisão do coordenador
+(ordem de merge):** as branches em fila merge na sequência `1b-regua → 2b-gerenciador → ajustes`,
+cada uma após sua auditoria; esta OST estende o Gerenciador (2B) e o wizard, então nasce sobre a 2B.
+Entrega em **3 marcos validados** (definido com o diretor): **M1 Sistêmico+Gerenciador** (este),
+depois M2 Wizard+catálogos, depois M3 Pendências+trilha+CLAUDE.md.
+
+### M1 — o que foi feito
+- **G1 — Select estilizado em todo o sistema + z-index.** `Select` reescrito: dropdown em **portal**
+  (`position: fixed`, `z-60`) que **sobrepõe qualquer bloco** (não é cortado por `overflow`/stacking)
+  e usa `--surface-2` (opaco). Substituídos TODOS os `<select>` nativos restantes: wizard (cargo) e
+  admin/régua (cliente, cargo, exigência por linha). Não resta `<select>` nativo no sistema.
+- **G2 — busca interna.** O `Select` abre com campo de pesquisa (auto quando >8 opções) que filtra a
+  lista em tempo real (sem acento/caixa). Atende cliente/cargo/exigência e os longos do wizard (M2).
+- **G3 — fundo dos modais no tema claro.** Novo componente `Modal` (portal, overlay + painel
+  `glass` com `--surface-2`) — superfície limpa do DS no tema claro (corrige o "cinza de sistema").
+  **6 modais migrados:** ficha (olho), ConfirmDialog, AceiteLiberacao, EditAdmissao, Liberação e
+  RegistrarNC. Selects internos (z-60) sobrepõem o modal (z-55).
+- **G4 — sidebar recolhível + congelável.** Botão de setas recolhe para ícones (label vira tooltip);
+  passar o mouse expande temporariamente; **fixar/desafixar** congela expandido. **Decisão técnica:**
+  preferência persistida em **localStorage** (`ea-sidebar-pinned`) — mesmo padrão do tema, sem
+  backend. *(A expansão por hover é in-layout — transição de largura 200ms; overlay fica como refino
+  futuro se o diretor preferir.)*
+- **G4a — 3 colunas de frente no Gerenciador.** Auditoria/Exame/Cadastro com o status real como pill
+  (Cadastro mostra "—" enquanto não nasce — gate). Backend: `GET /admissoes` enriquece cada linha
+  com os status das frentes (+ rótulo do catálogo). Tabela passou a rolar horizontalmente (11 colunas).
+- **S1 / G4b — "Sinalizador" → "Pendências Obrigatórias".** Renomeado no Gerenciador (coluna +
+  filtro), no modal de ficha e no wizard. *(O modal de pendências (S2) e o log de passagem (S3) são
+  do M3.)*
+
+### Verificações + smoke
+- `pnpm lint`/`typecheck`/`test` **verdes** (38). `next build` OK. Smoke: `GET /admissoes` traz as 3
+  frentes por linha (Ana: Análise OK / Apto / Integração; demais com Cadastro "—").
+- **Operacional:** rodar `next build` com o `next dev` no ar corrompe o cache `.next` (erro
+  "Cannot find module './NN.js'"). Mitigação: limpar `.next` e reiniciar; não buildar com o dev ativo.
+
+### ⏸️ PARADA PARA VALIDAÇÃO VISUAL (§A.0) — Marco 1
+Servidores no ar (loopback): backend :3011, frontend `pnpm dev` :3010. Aguardando **aprovação visual
+do diretor** do M1 (selects estilizados/busca em todo o sistema, modais com fundo correto no tema
+claro, sidebar recolhível/congelável, 3 colunas de frente no gerenciador, renome). **Commit na
+branch**; gate fechado, sem `READY_*`. Após o aval, sigo para **M2 (Wizard + catálogos)**.
+
+---
+
+## 2026-06-26 — Fase 2B: Gerenciador de Admissões (OST-EA-FASE-2B)
+
+Branch: `feat/fase-2b-gerenciador` (a partir da `main`, que já tem o 2C; **independente** da branch
+da régua). Escopo: dar lógica real à casca do Gerenciador (F10) — tabela de admissões com
+paginação, busca global, filtros acumulativos (F7), KPIs-filtro, edição e deleção.
+
+### O que foi construído
+**Backend** (`apps/backend/src/admissoes/`, sem migration — tabelas já existiam):
+- `GET /admissoes` — lista **paginada** (page/pageSize, server-side) com filtros acumulativos
+  (busca `q` nome/CPF, cliente, cargo, tipo de contrato, farol, sinalizador, período de/até),
+  **KPIs** (total/ativos/concluídos/declinados) calculados sobre o conjunto base (sem o filtro de
+  farol/concluído, p/ funcionarem como botão de filtro) e `tiposContrato` distintos (alimenta o
+  Select). CPF nunca é retornado na lista (só filtra). "Concluído" = existe frente
+  CADASTRO_CONTRATO concluída (processo finalizado) — via `EXISTS` parametrizado.
+- `GET /admissoes/:id` — campos editáveis (prefill do formulário).
+- `PATCH /admissoes/:id` — edita vaga/folha + contrato/data/matrícula/farol; **recalcula o
+  sinalizador** (F5) com os novos valores; **NÃO** altera CPF nem cod_cliente (identidade — §A.3).
+- `DELETE /admissoes/:id` — `@Roles("MASTER","SUPER_ADMIN")`.
+
+**Frontend** (`apps/frontend`):
+- `gerenciador/page.tsx` reescrita: 4 KPIs clicáveis (filtro radio-like), busca global em tempo
+  real (debounce), filtros (cliente autocomplete, cargo/contrato/farol/sinalizador via `Select`,
+  período), tabela com paginação (prev/próxima), pill de farol e de sinalizador, ações por linha
+  (olho → `AdmissaoDetalheModal` reusado; lápis → `EditAdmissaoModal`; lixeira → `ConfirmDialog`,
+  **só para Master/Super Admin**).
+- `components/gerenciador/EditAdmissaoModal.tsx` (novo). Pill **azul** (`.pill.in` / tom `in`) p/ o
+  farol ATIVO e ícone `trash` adicionados ao DS.
+
+### Decisões de implementação (dentro do escopo)
+- **Deleção = HARD DELETE.** As FKs em cascata (vaga/folha, documentos, frentes, eventos, NCs,
+  integração Pandapé) removem os filhos. Confirmação obrigatória avisa que remove os vínculos.
+  **Restrita a Master/Super Admin** (ação destrutiva; botão só aparece para admin no front e o
+  guard barra no back). Soft delete fica como evolução futura.
+- **Farol → pill:** ATIVO azul (`--accent`), DECLINOU vermelho, RESCISÃO laranja (`--warn-2`),
+  BANCO_PAUSADA cinza — conforme a OST.
+- **KPI "Concluídos"** mapeado para CADASTRO_CONTRATO concluída (não há valor de farol "concluído").
+
+### Verificações + smoke E2E
+- `pnpm lint`/`typecheck`/`test` **verdes** (38). `next build` OK (`/gerenciador` 5.73 kB).
+- Smoke via API: lista paginada + KPIs `{total:4, ativos:4, concluidos:1, declinados:0}` +
+  tiposContrato; prefill; **edição persiste** (centroCusto/salário) e recalcula sinalizador;
+  filtro `concluido=true` → Ana Esteira; busca `q=Ana`; **RBAC do delete: COMUM → 403**; delete
+  real (admissão descartável) com **cascata confirmada** (frentes/docs/vaga → 0). Dados de smoke
+  expurgados. *(Incidente: o CPF de teste que escolhi colidiu com o de "Ana Esteira" (demo); a
+  limpeza removeu a admissão dela — recriada e restaurada ao estado concluído; base demo de volta a
+  4 admissões.)*
+
+### ⏸️ PARADA PARA VALIDAÇÃO VISUAL (§A.0)
+Servidores no ar (loopback): backend :3011, frontend `pnpm dev` :3010. Aguardando **aprovação
+visual do diretor** do Gerenciador com dados reais (tabela, busca, filtros/KPIs-filtro, edição,
+deleção, modal de ficha). **Commit na branch**; gate fechado, sem `READY_*` — flag/merge só após
+auditoria tester+segurança.
 ## 2026-06-26 — Fase 1B: Carga da Régua Documental (OST-EA-FASE-1B-REGUA)
 
 Branch: `feat/fase-1b-regua`. Escopo: carregar a régua documental real por (cliente+cargo+tipo),

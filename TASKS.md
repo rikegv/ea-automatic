@@ -73,9 +73,42 @@ DIARIO.md. O coordenador atualiza este arquivo a cada despacho.
 - [x] Auditoria tester (PASS) + segurança (APROVADO) → flag `READY_fase-2c-esteira` → merge na main → push
 - [ ] **Follow-ups 2C (fase futura):** NC-3 vira detecção automática quando kit (F9)/assinatura (INT-4) existirem; reabrir NC-1/NC-2 ao re-disparar (hoje idempotente por admissão+tipo não reabre); endpoint/UI de leitura da trilha `frente_status_eventos`; testes de integração das rotas de esteira/NC (testcontainers)
 
-### Fase 2B e pendências
-- [ ] F10 gerenciador (tabela), F7 filtros dinâmicos (Fase 2B)
+### Fase 2B — Gerenciador de Admissões ⏸️ (OST-EA-FASE-2B · branch `feat/fase-2b-gerenciador`, aguardando validação visual)
+- [x] `GET /admissoes` paginado + filtros acumulativos (q nome/CPF, cliente, cargo, contrato, farol, sinalizador, período) + KPIs (total/ativos/concluídos/declinados) como botão de filtro
+- [x] `GET /admissoes/:id` (prefill) + `PATCH /admissoes/:id` (edita vaga/folha + processo, recalcula sinalizador, não toca CPF/cliente)
+- [x] `DELETE /admissoes/:id` hard delete com cascata, restrito a Master/Super Admin (RBAC comprovado: COMUM→403)
+- [x] Gerenciador funcional: busca global, paginação, farol pill (azul/vermelho/laranja/cinza), edição (modal), deleção (confirmação), modal de ficha reusado da Esteira; `EditAdmissaoModal`, pill `in`, ícone trash
+- [x] lint/typecheck/test verdes (38); next build OK; smoke E2E (lista/edit/delete/RBAC)
+- [ ] **Validação visual do diretor** (gerenciador com dados reais) — PARADA atual
+- [ ] Auditoria tester+segurança → `READY_fase-2b-gerenciador` → merge
+- [ ] **Follow-up:** edição não permite trocar cargo (mudaria a régua) — avaliar se desejável; soft delete como evolução
 - [ ] **Follow-ups técnicos (fase futura):** e2e do `POST /admissoes` com testcontainers (400/idempotência/contagem frentes-docs); migrar CPF do path do `GET /admissoes/candidato/:cpf` para o corpo (POST) — higiene de log/proxy
+
+## Ajustes 2B/2C ⏸️ (OST-EA-AJUSTES-2B-2C · branch `feat/ajustes-2b-2c`) — 3 marcos
+### Marco 1 — Sistêmico + Gerenciador (aguardando validação visual)
+- [x] G1 Select estilizado em todo o sistema (portal z-60, sobrepõe; opaco) — sem `<select>` nativo restante
+- [x] G2 busca interna no Select (auto >8 opções)
+- [x] G3 componente `Modal` (portal, surface-2) — fundo correto no tema claro; 6 modais migrados
+- [x] G4 sidebar recolhível/congelável; preferência em localStorage (decisão registrada no DIARIO)
+- [x] G4a 3 colunas de frente (Auditoria/Exame/Cadastro) no Gerenciador com status real
+- [x] S1/G4b "Sinalizador" → "Pendências Obrigatórias" (gerenciador, modal, wizard)
+- [x] lint/typecheck/test verdes (38); smoke das frentes
+- [ ] **Validação visual do diretor (M1)** — PARADA atual
+### Marco 2 — Wizard + catálogos (aguardando validação visual)
+- [x] Schema/migrations 0004–0006 (data_nascimento, substituição+TTL, escala→text, 3 catálogos); seed-catalogos idempotente
+- [x] Endpoints /catalogos/{motivos,beneficios,escalas} (GET auth; POST admin)
+- [x] W1 doc list recolhível + ordenada; W2 motivo + substituição (nome/CPF) + TTL 48h + ExpurgoService; W3 benefícios MultiSelect; W4 escala Select; W5 contrato 6 fixos; W6 obrigatórios + aceite (409 needsAceite); W7 aviso menor de idade
+- [x] Componentes: MultiSelect (novo); Select.onAdd (admin estende catálogo)
+- [x] lint/typecheck/test verdes (38); smoke E2E (gate de aceite, substituição+TTL, job de expurgo)
+- [ ] **Validação visual do diretor (M2)** — PARADA atual
+### Marco 3 — Pendências + trilha + CLAUDE.md (aguardando validação visual)
+- [x] CLAUDE.md §A.3 regras 8/9/10 (log de passagem, gate IA Fase 4, TTL CPF substituição)
+- [x] S2: `pendenciasObrigatorias` (domínio+testes); pill clicável → PendenciasModal → editar filtrado (`camposFiltro`)
+- [x] S3: tabela `passagem_aceites` (migration 0007); aceite de passagem na esteira (409 passagemComPendencia) + trilha gravada; `temPendencias` na fila; trilha no modal de ficha
+- [x] lint/typecheck/test verdes (40); smoke E2E (NC-1 + log de passagem juntos)
+- [x] **Validação visual do diretor (M1/M2/M3)** — APROVADA
+- [x] Auditoria tester (PASS) + segurança (APROVADO, OriginGuard aprovado) → flag `READY_ajustes-2b-2c` → merges (régua → ajustes) → push
+- [ ] **Follow-ups da auditoria (fase futura):** remover fallback morto do cookie `ea_access` (`jwt-auth.guard`); DTO mínimo no POST de catálogos; avaliar trilha/NC sobreviver à exclusão da admissão (hoje cascade); e2e HTTP das rotas novas (catálogos RBAC, 409 needsAceite, aceite de passagem); `next build` no CI
 
 ## Fase 3 — Esteira e Frentes Paralelas
 - [ ] Faróis em abas (F8), F12 frentes independentes, avanço por aba, upload de ASO

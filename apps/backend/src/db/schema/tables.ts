@@ -104,8 +104,33 @@ export const candidatos = pgTable("candidatos", {
   nome: varchar("nome", { length: 200 }).notNull(),
   email: varchar("email", { length: 180 }),
   telefone: varchar("telefone", { length: 30 }),
+  // Data de nascimento (ajustes-2B-2C/W7): aviso de menor de idade no wizard.
+  dataNascimento: date("data_nascimento"),
   criadoEm,
   atualizadoEm,
+});
+
+// ── Catálogos abertos (admin adiciona pelo gerenciador) — wizard W2/W3/W4 ─────
+// Motivo de contratação (W2), Benefício (W3), Escala (W4). Seedados a partir dos valores reais dos
+// clientes; o consultor escolhe, só Master/Super Admin acrescenta.
+export const motivosContratacao = pgTable("motivos_contratacao", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  nome: varchar("nome", { length: 120 }).notNull().unique(),
+  ativo: boolean("ativo").notNull().default(true),
+  criadoEm,
+});
+export const beneficiosCatalogo = pgTable("beneficios_catalogo", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  nome: varchar("nome", { length: 160 }).notNull().unique(),
+  ativo: boolean("ativo").notNull().default(true),
+  criadoEm,
+});
+export const escalasCatalogo = pgTable("escalas_catalogo", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  // texto livre (descrições de escala chegam a ~120+ chars nos clientes reais).
+  nome: text("nome").notNull().unique(),
+  ativo: boolean("ativo").notNull().default(true),
+  criadoEm,
 });
 
 // ── Admissão (entidade central: Candidato + Cliente + Cargo) ────────────────
@@ -143,7 +168,8 @@ export const dadosVagaFolha = pgTable("dados_vaga_folha", {
     .references(() => admissoes.id, { onDelete: "cascade" }),
   salario: numeric("salario", { precision: 12, scale: 2 }),
   beneficios: text("beneficios"),
-  escala: varchar("escala", { length: 80 }),
+  // texto livre (escala do catálogo pode ser uma descrição longa — W4).
+  escala: text("escala"),
   centroCusto: varchar("centro_custo", { length: 80 }),
   departamento: varchar("departamento", { length: 120 }),
   gestorBp: varchar("gestor_bp", { length: 160 }),
@@ -152,6 +178,12 @@ export const dadosVagaFolha = pgTable("dados_vaga_folha", {
   // Endereço é campo de folha (decisão de diretor — §A.3): pré-preenchido pelo enderecoPadrao do
   // cliente no wizard, mas editável por admissão. Nullable: não bloqueia.
   endereco: text("endereco"),
+  // Substituição (W2): quando motivo = "Substituição", nome + CPF da pessoa substituída. O CPF é
+  // dado pessoal com retenção mínima (LGPD): expurgado por job ao passar `substituicaoExpurgarEm`
+  // (TTL 48h após a assinatura — mesmo padrão da staging efêmera §A.6).
+  substituidoNome: varchar("substituido_nome", { length: 200 }),
+  substituidoCpf: varchar("substituido_cpf", { length: 11 }),
+  substituicaoExpurgarEm: timestamp("substituicao_expurgar_em", { withTimezone: true }),
 });
 
 // ── DocumentoAdmissão (estado por documento exigido — SÓ status) ────────────
@@ -275,6 +307,27 @@ export const naoConformidades = pgTable(
     uniqNcPorAdmissao: unique().on(t.admissaoId, t.tipo),
   }),
 );
+
+// ── PassagemAceite: trilha de aceite por passagem (S3 — ajustes-2B-2C) ───────
+// Registro PERMANENTE de cada avanço de frente (concluir Auditoria/Exame) feito com campos
+// obrigatórios pendentes, sob aceite explícito do consultor. Trilha de passagem (regra 8), NÃO
+// penalização — a penalização é decidida na tela de Não Conformidades. Sem CPF (§A.6).
+export const passagemAceites = pgTable("passagem_aceites", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  admissaoId: uuid("admissao_id")
+    .notNull()
+    .references(() => admissoes.id, { onDelete: "cascade" }),
+  frenteId: uuid("frente_id")
+    .notNull()
+    .references(() => frentesAdmissao.id, { onDelete: "cascade" }),
+  tipo: frenteTipoEnum("tipo").notNull(),
+  deStatus: varchar("de_status", { length: 40 }),
+  paraStatus: varchar("para_status", { length: 40 }),
+  // Campos obrigatórios que estavam vazios no momento do avanço (rótulos legíveis, sem dado pessoal).
+  camposPendentes: text("campos_pendentes"),
+  autorId: uuid("autor_id").references(() => usuarios.id),
+  criadoEm,
+});
 
 // ── IntegraçãoPandapé (anexo opcional — só quando a admissão veio do Pandapé) ─
 export const integracaoPandape = pgTable("integracao_pandape", {

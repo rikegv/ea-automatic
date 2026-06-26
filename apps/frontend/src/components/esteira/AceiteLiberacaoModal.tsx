@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { GlassCard } from "@/components/ui/GlassCard";
+import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { Icon } from "@/components/ui/Icon";
 import { cn } from "@/lib/cn";
@@ -36,13 +36,7 @@ export function AceiteLiberacaoModal({
   const bloqueado = diretoria && !motivo.trim();
 
   return (
-    <div
-      className="fixed inset-0 z-50 grid place-items-center bg-[rgba(7,17,31,0.55)] p-4 backdrop-blur-sm"
-      role="dialog"
-      aria-modal="true"
-      onClick={onCancel}
-    >
-      <GlassCard className="panel w-full max-w-md" onClick={(e: React.MouseEvent) => e.stopPropagation()}>
+    <Modal onClose={onCancel} className="max-w-md" ariaLabel={title}>
         <div className="mb-3 flex items-start gap-3">
           <span className="grid h-10 w-10 flex-none place-items-center rounded-full bg-[rgba(214,69,69,0.14)] text-danger">
             <Icon name="alert" className="h-5 w-5" />
@@ -102,8 +96,7 @@ export function AceiteLiberacaoModal({
                 : "Estou ciente — liberar"}
           </Button>
         </div>
-      </GlassCard>
-    </div>
+    </Modal>
   );
 }
 

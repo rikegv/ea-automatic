@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { calcSinalizadorPreenchimento, STATUS_INICIAL_FRENTE } from "./admissao";
+import {
+  calcSinalizadorPreenchimento,
+  pendenciasObrigatorias,
+  STATUS_INICIAL_FRENTE,
+} from "./admissao";
 
 describe("STATUS_INICIAL_FRENTE (§A.3 regra 1)", () => {
   it("AUDITORIA nasce em ANALISE_PENDENTE e EXAME em A_AGENDAR", () => {
@@ -50,5 +54,29 @@ describe("calcSinalizadorPreenchimento (§A.3 / F5)", () => {
       }),
     ).toBe("PENDENTE");
     expect(calcSinalizadorPreenchimento({})).toBe("PENDENTE");
+  });
+});
+
+describe("pendenciasObrigatorias (S2/S3)", () => {
+  it("lista os campos obrigatórios vazios", () => {
+    expect(
+      pendenciasObrigatorias({
+        codCliente: "1001",
+        cargoId: "x",
+        dataAdmissao: "",
+        vagaFolha: { salario: "", beneficios: "", escala: "" },
+      }),
+    ).toEqual(["Salário", "Data de admissão", "Pacote de benefícios", "Escala"]);
+  });
+
+  it("sem pendências quando tudo preenchido", () => {
+    expect(
+      pendenciasObrigatorias({
+        codCliente: "1001",
+        cargoId: "x",
+        dataAdmissao: "2026-07-01",
+        vagaFolha: { salario: "1800", beneficios: "VR", escala: "6x1" },
+      }),
+    ).toEqual([]);
   });
 });

@@ -1,0 +1,1 @@
+ALTER TABLE "escalas_catalogo" ALTER COLUMN "nome" SET DATA TYPE text;

@@ -1,4 +1,5 @@
-import { BadRequestException, Controller, Get, Query } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Get, Post, Query } from "@nestjs/common";
+import { Roles } from "../../auth/decorators";
 import { CatalogosService } from "./catalogos.service";
 
 // Referência (tipos de documento, status por frente). Autenticado, sem restrição de papel:
@@ -34,5 +35,35 @@ export class CatalogosController {
       throw new BadRequestException("codCliente e cargoId são obrigatórios");
     }
     return this.catalogos.listRegua(codCliente, cargoId);
+  }
+
+  // ── Catálogos abertos do wizard (W2/W3/W4) — GET autenticado; POST só Master/Super Admin ──
+  @Get("motivos")
+  motivos() {
+    return this.catalogos.listMotivos();
+  }
+  @Get("beneficios")
+  beneficios() {
+    return this.catalogos.listBeneficios();
+  }
+  @Get("escalas")
+  escalas() {
+    return this.catalogos.listEscalas();
+  }
+
+  @Post("motivos")
+  @Roles("MASTER", "SUPER_ADMIN")
+  addMotivo(@Body("nome") nome: string) {
+    return this.catalogos.addMotivo(nome);
+  }
+  @Post("beneficios")
+  @Roles("MASTER", "SUPER_ADMIN")
+  addBeneficio(@Body("nome") nome: string) {
+    return this.catalogos.addBeneficio(nome);
+  }
+  @Post("escalas")
+  @Roles("MASTER", "SUPER_ADMIN")
+  addEscala(@Body("nome") nome: string) {
+    return this.catalogos.addEscala(nome);
   }
 }

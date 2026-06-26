@@ -23,4 +23,9 @@ export class PatchStatusDto {
   @IsString()
   @MaxLength(500)
   liberacaoMotivo?: string;
+
+  // S3 — aceite de avanço com campos obrigatórios pendentes (gera o log de passagem permanente).
+  @IsOptional()
+  @IsBoolean()
+  aceitePassagem?: boolean;
 }

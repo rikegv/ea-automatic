@@ -42,6 +42,7 @@ interface EsteiraItem {
   asoAnexado?: boolean;
   disponivel?: boolean;
   obrigatoriosPendentes?: boolean;
+  temPendencias?: boolean;
 }
 interface EsteiraResp {
   items: EsteiraItem[];
@@ -73,6 +74,7 @@ const TONE_VAR: Record<PillTone, string | undefined> = {
   or: "var(--warn-2)",
   dg: "var(--danger)",
   nt: undefined,
+  in: "var(--accent)",
 };
 
 function fmtData(d?: string | null): string {
@@ -89,7 +91,7 @@ function fmtDataAdmissao(d?: string | null): string {
 
 type DialogState =
   | {
-      kind: "conclui" | "reversao" | "aptoSemAso" | "auditoriaIncompleta";
+      kind: "conclui" | "reversao" | "aptoSemAso" | "auditoriaIncompleta" | "passagem";
       frenteId: string;
       status: string;
       message: string;
@@ -211,7 +213,13 @@ export default function EsteiraPage() {
 
   // ── PATCH de status (avanço/reversão/aceite) ────────────────────────────────
   const doPatch = useCallback(
-    async (frenteId: string, status: string, confirmar: boolean, liberacao?: AceiteLiberacao) => {
+    async (
+      frenteId: string,
+      status: string,
+      confirmar: boolean,
+      liberacao?: AceiteLiberacao,
+      aceitePassagem = false,
+    ) => {
       setActingId(frenteId);
       setActionError(null);
       try {
@@ -223,6 +231,7 @@ export default function EsteiraPage() {
             body: {
               status,
               confirmar,
+              aceitePassagem,
               liberacaoDiretoria: liberacao?.diretoria,
               liberacaoMotivo: liberacao?.motivo || undefined,
             },
@@ -240,13 +249,16 @@ export default function EsteiraPage() {
       } catch (e) {
         if (e instanceof ApiError && e.status === 409) {
           const reason = (e.data as { reason?: string } | undefined)?.reason;
-          // aptoSemAso / auditoriaIncompleta = aceite com pendência (Via 1/2); reversao = reabrir cadastro.
+          // aptoSemAso/auditoriaIncompleta = aceite com Via 1/2; passagem = aceite de pendências (S3);
+          // reversao = reabrir cadastro.
           const kind =
             reason === "aptoSemAso"
               ? "aptoSemAso"
               : reason === "auditoriaIncompleta"
                 ? "auditoriaIncompleta"
-                : "reversao";
+                : reason === "passagemComPendencia"
+                  ? "passagem"
+                  : "reversao";
           setDialog({ kind, frenteId, status, message: e.message });
         } else {
           setDialog(null);
@@ -279,6 +291,18 @@ export default function EsteiraPage() {
         frenteId: item.frenteId,
         status: novo,
         message: "Concluir a Auditoria com documentos obrigatórios pendentes na régua.",
+      });
+      return;
+    }
+    // Avançar (concluir Auditoria/Exame) com campos obrigatórios pendentes: aceite de passagem (S3).
+    const concluindo = (rota === "auditoria" && novo === "ANALISE_OK") || (isExame && novo === "APTO");
+    if (concluindo && item.temPendencias) {
+      setDialog({
+        kind: "passagem",
+        frenteId: item.frenteId,
+        status: novo,
+        message:
+          "Estou ciente que estou avançando esta admissão com pendências obrigatórias não preenchidas. Fica registrado na trilha de passagem.",
       });
       return;
     }
@@ -333,8 +357,9 @@ export default function EsteiraPage() {
 
   function confirmarDialog() {
     if (!dialog) return;
-    // conclusão simples não exige aceite; reversão e "apto sem ASO" sim (confirmar=true).
-    void doPatch(dialog.frenteId, dialog.status, dialog.kind !== "conclui");
+    // conclusão simples não exige aceite; reversão/apto-sem-ASO/passagem sim. O aceite também marca
+    // aceitePassagem=true (registra a trilha de passagem se houver pendências — S3).
+    void doPatch(dialog.frenteId, dialog.status, dialog.kind !== "conclui", undefined, dialog.kind !== "conclui");
   }
 
   const items = data?.items ?? [];
@@ -658,13 +683,25 @@ export default function EsteiraPage() {
         onCancel={() => setDialog(null)}
       />
 
+      {/* S3 — aceite de avanço com pendências obrigatórias (gera trilha de passagem) */}
+      <ConfirmDialog
+        open={dialog?.kind === "passagem"}
+        title="Avançar com pendências?"
+        message={dialog?.message ?? ""}
+        confirmLabel="Estou ciente — avançar"
+        tone="danger"
+        busy={Boolean(dialog && actingId === dialog.frenteId)}
+        onConfirm={confirmarDialog}
+        onCancel={() => setDialog(null)}
+      />
+
       {/* Aceite COM PENDÊNCIA + escolha Via 1/Via 2 (apto sem ASO / auditoria incompleta) */}
       {(dialog?.kind === "aptoSemAso" || dialog?.kind === "auditoriaIncompleta") && (
         <AceiteLiberacaoModal
           title={dialog.kind === "aptoSemAso" ? "Apto sem ASO" : "Auditoria com pendência"}
           message={dialog.message}
           busy={actingId === dialog.frenteId}
-          onConfirm={(l) => doPatch(dialog.frenteId, dialog.status, true, l)}
+          onConfirm={(l) => doPatch(dialog.frenteId, dialog.status, true, l, true)}
           onCancel={() => setDialog(null)}
         />
       )}

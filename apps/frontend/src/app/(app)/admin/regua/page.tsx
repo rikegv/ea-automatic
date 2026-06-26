@@ -7,6 +7,7 @@ import { useAuth } from "@/lib/auth-context";
 import { PageHead } from "@/components/ui/PageHead";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Button } from "@/components/ui/Button";
+import { Select } from "@/components/ui/Select";
 
 interface Cliente {
   codCliente: string;
@@ -125,27 +126,26 @@ export default function ReguaPage() {
         </p>
       )}
 
-      <GlassCard className="mb-5 flex flex-wrap items-center gap-3 p-4">
-        <select
+      <GlassCard className="mb-5 flex flex-wrap items-end gap-3 p-4">
+        <Select
+          className="min-w-[260px]"
           value={codCliente}
-          onChange={(e) => setCodCliente(e.target.value)}
-          className="ds-select w-auto"
-        >
-          <option value="">Selecione o cliente…</option>
-          {clientes.map((c) => (
-            <option key={c.codCliente} value={c.codCliente}>
-              {c.codCliente} — {c.razaoSocial}
-            </option>
-          ))}
-        </select>
-        <select value={cargoId} onChange={(e) => setCargoId(e.target.value)} className="ds-select w-auto">
-          <option value="">Selecione o cargo…</option>
-          {cargos.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.nome}
-            </option>
-          ))}
-        </select>
+          onChange={setCodCliente}
+          placeholder="Selecione o cliente…"
+          ariaLabel="Cliente"
+          options={clientes.map((c) => ({
+            value: c.codCliente,
+            label: `${c.codCliente} — ${c.razaoSocial}`,
+          }))}
+        />
+        <Select
+          className="min-w-[220px]"
+          value={cargoId}
+          onChange={setCargoId}
+          placeholder="Selecione o cargo…"
+          ariaLabel="Cargo"
+          options={cargos.map((c) => ({ value: c.id, label: c.nome }))}
+        />
         <Button onClick={salvar} disabled={!podeEditar || saving} className="py-2.5">
           {saving ? "Salvando…" : "Salvar régua"}
         </Button>
@@ -185,18 +185,17 @@ export default function ReguaPage() {
                 <tr key={t.id}>
                   <td>{t.nome}</td>
                   <td>
-                    <select
+                    <Select
+                      className="min-w-[180px]"
                       disabled={!podeEditar}
                       value={mapa[t.id] ?? "NAO_OBRIGATORIO"}
-                      onChange={(e) => setMapa({ ...mapa, [t.id]: e.target.value as ExigenciaDocumento })}
-                      className="ds-select w-auto py-1.5"
-                    >
-                      {EXIGENCIA_DOCUMENTO.map((ex) => (
-                        <option key={ex} value={ex}>
-                          {ROTULO_EXIGENCIA[ex]}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={(v) => setMapa({ ...mapa, [t.id]: v as ExigenciaDocumento })}
+                      ariaLabel={`Exigência de ${t.nome}`}
+                      options={EXIGENCIA_DOCUMENTO.map((ex) => ({
+                        value: ex,
+                        label: ROTULO_EXIGENCIA[ex],
+                      }))}
+                    />
                   </td>
                 </tr>
               ))

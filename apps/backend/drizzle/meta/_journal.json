@@ -29,6 +29,34 @@
       "when": 1782472770929,
       "tag": "0003_massive_shatterstar",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1782506348698,
+      "tag": "0004_whole_union_jack",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1782506474947,
+      "tag": "0005_lively_kingpin",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1782507014989,
+      "tag": "0006_lowly_sabretooth",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1782510552213,
+      "tag": "0007_loving_warstar",
+      "breakpoints": true
     }
   ]
 }
