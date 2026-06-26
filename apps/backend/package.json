@@ -12,7 +12,8 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/migrate.ts",
     "db:seed": "tsx src/db/seed.ts",
-    "db:seed:clientes": "tsx src/db/seed-clientes.ts"
+    "db:seed:clientes": "tsx src/db/seed-clientes.ts",
+    "db:seed:catalogos": "tsx src/db/seed-catalogos.ts"
   },
   "dependencies": {
     "@ea/shared-types": "workspace:*",

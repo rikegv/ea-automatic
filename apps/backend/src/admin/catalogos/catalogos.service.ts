@@ -1,8 +1,17 @@
-import { Inject, Injectable } from "@nestjs/common";
+import { BadRequestException, Inject, Injectable } from "@nestjs/common";
 import { and, asc, eq, ilike, or } from "drizzle-orm";
 import type { Database } from "../../db/client";
 import { DRIZZLE } from "../../db/drizzle.module";
-import { cargos, clientes, frenteStatusCatalogo, reguaDocumental, tiposDocumento } from "../../db/schema";
+import {
+  beneficiosCatalogo,
+  cargos,
+  clientes,
+  escalasCatalogo,
+  frenteStatusCatalogo,
+  motivosContratacao,
+  reguaDocumental,
+  tiposDocumento,
+} from "../../db/schema";
 
 /** Dados de referência (somente leitura) usados pelas telas — visíveis a qualquer autenticado. */
 @Injectable()
@@ -77,5 +86,64 @@ export class CatalogosService {
         and(eq(reguaDocumental.codCliente, codCliente), eq(reguaDocumental.cargoId, cargoId)),
       )
       .orderBy(asc(tiposDocumento.nome));
+  }
+
+  // ── Catálogos abertos do wizard (W2/W3/W4) ────────────────────────────────
+  listMotivos() {
+    return this.db
+      .select({ id: motivosContratacao.id, nome: motivosContratacao.nome })
+      .from(motivosContratacao)
+      .where(eq(motivosContratacao.ativo, true))
+      .orderBy(asc(motivosContratacao.nome));
+  }
+
+  listBeneficios() {
+    return this.db
+      .select({ id: beneficiosCatalogo.id, nome: beneficiosCatalogo.nome })
+      .from(beneficiosCatalogo)
+      .where(eq(beneficiosCatalogo.ativo, true))
+      .orderBy(asc(beneficiosCatalogo.nome));
+  }
+
+  listEscalas() {
+    return this.db
+      .select({ id: escalasCatalogo.id, nome: escalasCatalogo.nome })
+      .from(escalasCatalogo)
+      .where(eq(escalasCatalogo.ativo, true))
+      .orderBy(asc(escalasCatalogo.nome));
+  }
+
+  /** Acrescenta um item ao catálogo (só Master/Super Admin — guard no controller). */
+  async addMotivo(nome: string) {
+    return this.addCatalogo("motivo", nome);
+  }
+  async addBeneficio(nome: string) {
+    return this.addCatalogo("beneficio", nome);
+  }
+  async addEscala(nome: string) {
+    return this.addCatalogo("escala", nome);
+  }
+
+  private async addCatalogo(tipo: "motivo" | "beneficio" | "escala", nomeRaw: string) {
+    const nome = nomeRaw?.trim();
+    if (!nome) throw new BadRequestException("Nome obrigatório");
+    const tabela =
+      tipo === "motivo"
+        ? motivosContratacao
+        : tipo === "beneficio"
+          ? beneficiosCatalogo
+          : escalasCatalogo;
+    const [row] = await this.db
+      .insert(tabela)
+      .values({ nome })
+      .onConflictDoNothing({ target: tabela.nome })
+      .returning({ id: tabela.id, nome: tabela.nome });
+    if (row) return row;
+    // já existia — devolve o existente.
+    const [existente] = await this.db
+      .select({ id: tabela.id, nome: tabela.nome })
+      .from(tabela)
+      .where(eq(tabela.nome, nome));
+    return existente;
   }
 }
