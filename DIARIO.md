@@ -37,11 +37,27 @@ rígido que o humano (Fase 4). Regra 10 — **TTL 48h do CPF de substituição**
   **NC-1** + **log de passagem** (campos "Salário, Pacote de benefícios, Escala", autor); detalhe
   retorna `pendencias` e `passagens`. Base demo restaurada (4 admissões, nc=0, passagens=0).
 
-### ⏸️ PARADA PARA VALIDAÇÃO VISUAL (§A.0) — Marco 3 (fecha a OST)
-Servidores no ar (backend :3011, frontend :3010). Aguardando **aprovação visual do diretor** do M3
-(modal de pendências + "preencher filtrado"; aceite de passagem na esteira + trilha no modal de
-ficha). **Commit na branch**; gate fechado, sem `READY_*`. Com o aval do M3, a OST inteira (M1+M2+M3
-+ correção OriginGuard) segue para auditoria tester+segurança → `READY` → merges.
+### ✅ VALIDAÇÃO VISUAL APROVADA + auditoria da OST inteira (fluxo §A.0)
+- **Validação visual do diretor: APROVADA integralmente** — M1, M2 e M3.
+- **tester — VEREDITO: PASS.** `install --frozen-lockfile`/`lint`/`typecheck`/`test` exit 0
+  (**40 testes**); `nest build` OK; **`next build` limpo OK** (rotas /esteira /gerenciador /nova
+  /nao-conformidades compilam — gap fechado após parar o dev). Gate §A.7 ativo (push bloqueado exit
+  2). Migrations 0004–0007 aplicadas no ea-db. Regras de domínio cobertas (gate, sinalizador,
+  pendênciasObrigatorias, CPF, trilha). Não-bloqueantes: sem e2e das rotas novas (lógica decidível em
+  domínio puro testado).
+- **seguranca — VEREDITO: APROVADO (poder de veto, §A.6).** **OriginGuard aprovado** (parecer
+  dedicado): `/refresh` e `/logout` (cookie) seguem na allowlist; o bypass exige Bearer (não
+  auto-enviado pelo browser → sem vetor CSRF); guard antes do Jwt só checa presença; sem
+  `enableCors` reforça a defesa. CPF do substituído com TTL 48h + expurgo nula CPF/nome (sem log);
+  trilha `passagem_aceites` só rótulos (sem CPF/URL); RBAC correto (POST catálogos + DELETE admissão
+  = Master/Super Admin); sem segredo/flag commitada; régua loga só contagens. Não-bloqueantes
+  (follow-up): remover fallback morto do cookie `ea_access` no `jwt-auth.guard`; DTO no POST de
+  catálogos; avaliar se a trilha/NC deve sobreviver à exclusão da admissão (hoje cascade).
+
+**Liberação:** com os dois avais, criada a flag `.claude/state/READY_ajustes-2b-2c` (local,
+git-ignored). Sequência de merges na `main`: `feat/fase-1b-regua` (régua) → `feat/ajustes-2b-2c`
+(que já traz a Fase 2B como ancestral; a 2C já estava na main). Em seguida, push de todo o histórico
+ao GitHub. Flag removida após o push.
 
 ---
 

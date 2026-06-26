@@ -100,7 +100,9 @@ DIARIO.md. O coordenador atualiza este arquivo a cada despacho.
 - [x] S2: `pendenciasObrigatorias` (domínio+testes); pill clicável → PendenciasModal → editar filtrado (`camposFiltro`)
 - [x] S3: tabela `passagem_aceites` (migration 0007); aceite de passagem na esteira (409 passagemComPendencia) + trilha gravada; `temPendencias` na fila; trilha no modal de ficha
 - [x] lint/typecheck/test verdes (40); smoke E2E (NC-1 + log de passagem juntos)
-- [ ] **Validação visual do diretor (M3)** — PARADA atual; depois auditoria de toda a OST → READY → merges
+- [x] **Validação visual do diretor (M1/M2/M3)** — APROVADA
+- [x] Auditoria tester (PASS) + segurança (APROVADO, OriginGuard aprovado) → flag `READY_ajustes-2b-2c` → merges (régua → ajustes) → push
+- [ ] **Follow-ups da auditoria (fase futura):** remover fallback morto do cookie `ea_access` (`jwt-auth.guard`); DTO mínimo no POST de catálogos; avaliar trilha/NC sobreviver à exclusão da admissão (hoje cascade); e2e HTTP das rotas novas (catálogos RBAC, 409 needsAceite, aceite de passagem); `next build` no CI
 
 ## Fase 3 — Esteira e Frentes Paralelas
 - [ ] Faróis em abas (F8), F12 frentes independentes, avanço por aba, upload de ASO
