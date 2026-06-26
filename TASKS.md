@@ -38,7 +38,14 @@ DIARIO.md. O coordenador atualiza este arquivo a cada despacho.
 - [x] Auditoria tester (PASS) + segurança (APROVADO) → flag READY_fase-2-casca → merge na main → push ao GitHub (SSH; main=8a3c26e confirmado no remoto)
 
 ## Fase 1B — Carga de dados (OST separada)
-- [ ] Carga das bases (clientes: código + CNPJ + razão social — insumo §A.9), cargos, régua
+### Clientes ✅ (OST-EA-FASE-1B · READY_fase-1b-clientes → merge → push)
+- [x] Expansão do Cliente: +6 colunas (empresa_grupo, regiao, descricao_regiao, beneficios/escala/endereco_padrao) + `endereco` na DadosVagaFolha — migration `0001_icy_hawkeye`
+- [x] Carga idempotente de 114 clientes (CSV → seed-clientes.ts, upsert por cod_cliente), todos com cnpj+razão
+- [x] Wizard F1 pré-preenche região/empresa (informativos) e folha (benefícios/escala/endereço, editáveis)
+- [x] CLAUDE.md §A.3 atualizado com os novos campos
+- [ ] **Régua real** por (cliente+cargo) — hoje só pares demo têm régua; clientes reais geram admissão com 0 documentos até carregar
+- [ ] Carga de cargos reais (catálogo próprio — normalização contínua)
+- [ ] Follow-up segurança: `seed-clientes.ts` logar `err.message` no catch; teste do mapeamento CSV quando houver infra de teste de DB
 
 ## Fase 2 — Cadastro e Gerenciador
 ### Fase 2A — Wizard de Nova Admissão ✅ (OST-EA-FASE-2A · READY_fase-2a-wizard → merge → push)

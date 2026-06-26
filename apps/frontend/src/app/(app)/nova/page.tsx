@@ -18,6 +18,13 @@ interface Cliente {
   cnpj: string | null;
   razaoSocial: string;
   nomeOperacao: string | null;
+  // Fase 1B — campos expandidos do cliente (informativos + padrões de folha, F1)
+  empresaGrupo?: string | null;
+  regiao?: string | null;
+  descricaoRegiao?: string | null;
+  beneficiosPadrao?: string | null;
+  escalaPadrao?: string | null;
+  enderecoPadrao?: string | null;
 }
 interface Cargo {
   id: string;
@@ -54,6 +61,7 @@ const VAGA_EMPTY = {
   motivo: "",
   centroCusto: "",
   escala: "",
+  endereco: "",
   departamento: "",
   gestorBp: "",
 };
@@ -65,6 +73,12 @@ function formatCpf(value: string): string {
     .replace(/^(\d{3})(\d)/, "$1.$2")
     .replace(/^(\d{3})\.(\d{3})(\d)/, "$1.$2.$3")
     .replace(/\.(\d{3})(\d)/, ".$1-$2");
+}
+
+// Região do cliente em texto legível (F1): "Região 7 — São José Campos".
+function formatRegiao(regiao?: string | null, descricao?: string | null): string {
+  const partes = [regiao?.trim(), descricao?.trim()].filter(Boolean);
+  return partes.length ? partes.join(" — ") : "—";
 }
 
 // Pill por exigência da régua (F5/F2): obrigatório destaca, facultativo dim.
@@ -190,6 +204,30 @@ export default function NovaAdmissaoPage() {
     return () => clearTimeout(handle);
   }, [token, cpfValid, cpfDigits]);
 
+  // F1 — seleção do cliente: aplica os padrões de folha (benefícios/escala/endereço)
+  // já no momento da escolha. Preserva edições do usuário: um campo só é reescrito
+  // se estiver vazio ou ainda igual ao padrão do cliente anterior (não tocado).
+  function selecionarCliente(c: Cliente) {
+    const prev = cliente;
+    const aplicar = (
+      atual: string,
+      padraoAnterior?: string | null,
+      padraoNovo?: string | null,
+    ) => (atual === "" || atual === (padraoAnterior ?? "") ? (padraoNovo ?? "") : atual);
+
+    setVaga((v) => ({
+      ...v,
+      beneficios: aplicar(v.beneficios, prev?.beneficiosPadrao, c.beneficiosPadrao),
+      escala: aplicar(v.escala, prev?.escalaPadrao, c.escalaPadrao),
+      endereco: aplicar(v.endereco, prev?.enderecoPadrao, c.enderecoPadrao),
+    }));
+    setCliente(c);
+  }
+
+  const clienteTemPadroes = Boolean(
+    cliente?.beneficiosPadrao || cliente?.escalaPadrao || cliente?.enderecoPadrao,
+  );
+
   function reaproveitar() {
     if (!lookup?.candidato) return;
     setCand((c) => ({
@@ -217,6 +255,7 @@ export default function NovaAdmissaoPage() {
       salario: vaga.salario || undefined,
       beneficios: vaga.beneficios || undefined,
       escala: vaga.escala || undefined,
+      endereco: vaga.endereco || undefined,
       centroCusto: vaga.centroCusto || undefined,
       departamento: vaga.departamento || undefined,
       gestorBp: vaga.gestorBp || undefined,
@@ -358,7 +397,7 @@ export default function NovaAdmissaoPage() {
                   return (
                     <button
                       key={c.codCliente}
-                      onClick={() => setCliente(c)}
+                      onClick={() => selecionarCliente(c)}
                       className={cnRow(selected)}
                     >
                       <div className="min-w-0">
@@ -388,6 +427,20 @@ export default function NovaAdmissaoPage() {
                   <span>CNPJ {cliente.cnpj ?? "—"}</span>
                   <span>Operação {cliente.nomeOperacao ?? "—"}</span>
                 </div>
+
+                {/* F1 — informativos expandidos (read-only) */}
+                <div className="mt-3 grid gap-3 border-t border-[var(--border)] pt-3 sm:grid-cols-2">
+                  <div>
+                    <div className="eyebrow !mb-1">Empresa do grupo</div>
+                    <div className="text-[13px] text-dim">{cliente.empresaGrupo ?? "—"}</div>
+                  </div>
+                  <div>
+                    <div className="eyebrow !mb-1">Região</div>
+                    <div className="text-[13px] text-dim">
+                      {formatRegiao(cliente.regiao, cliente.descricaoRegiao)}
+                    </div>
+                  </div>
+                </div>
               </GlassCard>
             )}
           </div>
@@ -396,6 +449,26 @@ export default function NovaAdmissaoPage() {
         {/* ── ETAPA 2 — VAGA / CARGO ────────────────────────────────────── */}
         {step === 1 && (
           <div className="grid gap-5">
+            {/* F1 — informativos do cliente, contexto da folha (read-only) */}
+            {cliente && (
+              <div className="grid gap-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 sm:grid-cols-3">
+                <div>
+                  <div className="eyebrow !mb-1">Cliente</div>
+                  <div className="truncate text-[13px] text-dim">{cliente.razaoSocial}</div>
+                </div>
+                <div>
+                  <div className="eyebrow !mb-1">Empresa do grupo</div>
+                  <div className="truncate text-[13px] text-dim">{cliente.empresaGrupo ?? "—"}</div>
+                </div>
+                <div>
+                  <div className="eyebrow !mb-1">Região</div>
+                  <div className="truncate text-[13px] text-dim">
+                    {formatRegiao(cliente.regiao, cliente.descricaoRegiao)}
+                  </div>
+                </div>
+              </div>
+            )}
+
             <Field label="Cargo *">
               <select className="ds-select" value={cargoId} onChange={(e) => setCargoId(e.target.value)}>
                 <option value="">Selecione o cargo…</option>
@@ -455,6 +528,12 @@ export default function NovaAdmissaoPage() {
             {/* Folha / vaga — todos opcionais (F4) */}
             <div>
               <div className="eyebrow">Dados de vaga / folha (opcional)</div>
+              {clienteTemPadroes && (
+                <p className="mb-3 inline-flex items-center gap-1.5 text-[12px] text-dim">
+                  <Icon name="check" className="h-3.5 w-3.5 text-accent" />
+                  Pré-preenchido a partir do padrão do cliente — edite à vontade.
+                </p>
+              )}
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 <Field label="Salário">
                   <input
@@ -524,6 +603,14 @@ export default function NovaAdmissaoPage() {
                     placeholder="VT, VR, plano de saúde…"
                     value={vaga.beneficios}
                     onChange={(e) => setVaga({ ...vaga, beneficios: e.target.value })}
+                  />
+                </Field>
+                <Field label="Endereço" className="sm:col-span-2 lg:col-span-3">
+                  <input
+                    className="ds-input"
+                    placeholder="Rua, número, bairro, cidade/UF…"
+                    value={vaga.endereco}
+                    onChange={(e) => setVaga({ ...vaga, endereco: e.target.value })}
                   />
                 </Field>
               </div>

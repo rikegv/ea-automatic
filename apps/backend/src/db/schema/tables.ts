@@ -42,6 +42,14 @@ export const clientes = pgTable("clientes", {
   cnpj: varchar("cnpj", { length: 18 }),
   razaoSocial: varchar("razao_social", { length: 200 }).notNull(),
   nomeOperacao: varchar("nome_operacao", { length: 200 }),
+  // ── Carga 1B (§A.3): atributos de cliente que pré-preenchem o wizard (F1). Nullable: não
+  // bloqueiam e mantêm os clientes demo/seed válidos. beneficiosPadrao pode ser longo (~466 chars).
+  empresaGrupo: text("empresa_grupo"),
+  regiao: text("regiao"),
+  descricaoRegiao: text("descricao_regiao"),
+  beneficiosPadrao: text("beneficios_padrao"),
+  escalaPadrao: text("escala_padrao"),
+  enderecoPadrao: text("endereco_padrao"),
   ativo: boolean("ativo").notNull().default(true),
   criadoEm,
   atualizadoEm,
@@ -135,6 +143,9 @@ export const dadosVagaFolha = pgTable("dados_vaga_folha", {
   gestorBp: varchar("gestor_bp", { length: 160 }),
   motivo: varchar("motivo", { length: 200 }),
   tempoContrato: varchar("tempo_contrato", { length: 80 }),
+  // Endereço é campo de folha (decisão de diretor — §A.3): pré-preenchido pelo enderecoPadrao do
+  // cliente no wizard, mas editável por admissão. Nullable: não bloqueia.
+  endereco: text("endereco"),
 });
 
 // ── DocumentoAdmissão (estado por documento exigido — SÓ status) ────────────

@@ -41,6 +41,12 @@ export class CatalogosService {
         cnpj: clientes.cnpj,
         razaoSocial: clientes.razaoSocial,
         nomeOperacao: clientes.nomeOperacao,
+        empresaGrupo: clientes.empresaGrupo,
+        regiao: clientes.regiao,
+        descricaoRegiao: clientes.descricaoRegiao,
+        beneficiosPadrao: clientes.beneficiosPadrao,
+        escalaPadrao: clientes.escalaPadrao,
+        enderecoPadrao: clientes.enderecoPadrao,
       })
       .from(clientes)
       .where(filtro)

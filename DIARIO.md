@@ -5,6 +5,72 @@ feito e **por quê** (rastreabilidade para o diretor e para as próximas sessõe
 
 ---
 
+## 2026-06-26 — Fase 1B: Expansão do Cliente + carga de 114 clientes (OST-EA-FASE-1B)
+
+Branch: `feat/fase-1b-clientes`. Escopo: expandir a entidade Cliente (autorizado pelo diretor) e
+carregar a base real de 114 clientes. Inclui o ajuste do autopreenchimento do wizard (F1).
+
+### Decisões de diretor registradas
+- **Expansão do schema do Cliente** além do documento original — autorizada. CLAUDE.md §A.3 atualizado.
+- **Coluna `endereco` na `DadosVagaFolha`** — a OST trata endereço como campo de folha, mas a
+  `DadosVagaFolha` da 1A não tinha essa coluna (região e empresa são informativos sem persistência;
+  só benefícios/escala existiam). Adicionei `endereco` (text nullable) para o prefill de endereço ser
+  de fato editável e persistido. Decisão apresentada na validação visual e **ratificada pelo diretor**.
+
+### O que foi construído
+**Schema/migration** (`apps/backend/drizzle/0001_icy_hawkeye.sql`, aditiva e nullable — não quebra
+seed/dados):
+- `clientes` +6 colunas `text`: `empresaGrupo`, `regiao`, `descricaoRegiao`, `beneficiosPadrao`,
+  `escalaPadrao`, `enderecoPadrao` (atributos fixos + padrões sugeridos).
+- `dadosVagaFolha` +1 coluna `text`: `endereco`.
+- `text` (não `varchar`) porque `beneficios_padrao` chega a ~466 chars.
+
+**Carga** (idempotente):
+- CSV movido (`git mv`) para `apps/backend/src/db/data/clientes-carga-1b.csv`.
+- Loader `apps/backend/src/db/seed-clientes.ts` (dep `csv-parse`, `csv-parse/sync`), script
+  `db:seed:clientes`. Upsert por `codCliente` (`onConflictDoUpdate` em todos os campos), strings
+  vazias → null. Loga só contagens (§A.6 — nada de CNPJ/razão/endereço).
+- **114 clientes carregados**, todos com cnpj E razão social; rodar 2x não duplica (contagem estável).
+
+**Contrato/wizard (F1)**:
+- `catalogos.service.ts` `listClientes` expõe os 6 campos novos.
+- `create-admissao.dto.ts` + `admissoes.service.ts` aceitam/persistem `vagaFolha.endereco`.
+- Frontend `nova/page.tsx`: ao selecionar o cliente, mostra região/empresa (informativos) e
+  pré-preenche benefícios/escala/**endereço** a partir dos `*_padrao` — todos editáveis (F4),
+  preservando edições do usuário ao trocar de cliente. Aviso sutil de "pré-preenchido".
+
+### Verificações + smoke test
+- `pnpm lint`/`typecheck`/`test` verdes (**21 testes**; backend 15, frontend 1, shared-types 5).
+  Lockfile mudou pela dep `csv-parse` (consistente com `--frozen-lockfile`).
+- Smoke E2E: login → `GET /catalogos/clientes?q=` retorna clientes REAIS com os 6 campos
+  preenchidos (null tratado); POST com cliente real + `endereco` → persistido na `dados_vaga_folha`;
+  cliente real sem régua → 0 documentos (não-bloqueio, sinalizador PARCIAL). Dados de teste expurgados.
+- Banco final: **116 clientes** (114 da carga completos + 2 demo). Migration confere no
+  `information_schema` (7 colunas `text`); demo 1001/1002 intactos com colunas novas em NULL.
+
+### Validação visual + auditoria (fluxo §A.0)
+- **Validação visual do diretor: APROVADA** (autopreenchimento com cliente real, campos de folha
+  editáveis, troca de cliente atualizando padrões; coluna `endereco` ratificada).
+- **tester — VEREDITO: PASS.** lint/typecheck/test exit 0; lockfile consistente; migration aditiva
+  confirmada no `_journal.json` e no ea-db; carga idempotente provada (2 runs, contagem estável 116);
+  114 cods presentes e completos; gate ativo (push bloqueado, exit 2). Não-bloqueante: sem teste
+  unitário do mapeamento CSV (projeto sem infra de teste de DB; exercitado E2E na carga real).
+- **seguranca — VEREDITO: APROVADO (poder de veto, §A.6).** Loader loga só contagens; CSV versionado
+  é dado corporativo (CNPJ PJ/razão/endereço de operação) — **zero CPF/segredo** (varredura confirmou);
+  migration não-destrutiva; `listClientes` autenticada sem abertura indevida; sem injeção (Drizzle
+  parametrizado). Não-bloqueante: no `catch` do loader, logar `err.message` em vez do objeto completo.
+
+**Liberação:** com os dois avais, criada a flag `.claude/state/READY_fase-1b-clientes` (local,
+git-ignored), merge na `main` e push ao GitHub. Flag removida após o push.
+
+### Follow-ups registrados (TASKS.md, não bloqueiam)
+- Carga da régua real por (cliente+cargo) — hoje só os pares demo têm régua; clientes reais geram
+  admissão com 0 documentos até a régua ser carregada.
+- `seed-clientes.ts`: logar `err.message` no catch (recomendação da segurança).
+- Teste unitário do mapeamento CSV quando houver infra de teste de DB.
+
+---
+
 ## 2026-06-26 — Fase 2A: Wizard de Nova Admissão (F6) — funcional (OST-EA-FASE-2A)
 
 Branch: `feat/fase-2a-wizard`. Escopo: dar LÓGICA REAL ao wizard de cadastro (a casca já existia

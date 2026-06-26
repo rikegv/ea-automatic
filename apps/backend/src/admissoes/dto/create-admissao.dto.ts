@@ -72,6 +72,12 @@ export class VagaFolhaInputDto {
   @IsString()
   @MaxLength(80)
   tempoContrato?: string;
+
+  // Endereço da folha (decisão de diretor — §A.3): pré-preenchido pelo enderecoPadrao do cliente
+  // no wizard, editável por admissão. Texto livre (sem MaxLength).
+  @IsOptional()
+  @IsString()
+  endereco?: string;
 }
 
 export class CreateAdmissaoDto {

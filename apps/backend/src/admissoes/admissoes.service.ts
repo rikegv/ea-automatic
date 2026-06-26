@@ -131,6 +131,7 @@ export class AdmissoesService {
         gestorBp: dto.vagaFolha?.gestorBp ?? null,
         motivo: dto.vagaFolha?.motivo ?? null,
         tempoContrato: dto.vagaFolha?.tempoContrato ?? null,
+        endereco: dto.vagaFolha?.endereco ?? null,
       });
 
       // h. nascimento paralelo (regra 1 / F12): AUDITORIA + EXAME. CADASTRO_CONTRATO não nasce (regra 3).

@@ -67,8 +67,11 @@ consomem dashboards e administram cadastros (papel Master/Super Admin).
 **O EA não modela Vaga.** Quando o candidato chega, a vaga já virou o **cargo** dele.
 
 Entidades centrais:
-- **Cliente** — chave `cod_cliente` (sempre o cliente). Atributos: `cnpj`, `razao_social`,
-  `nome_operacao`. O De/Para apelido↔razão social resolve-se pelo código.
+- **Cliente** — chave `cod_cliente` (sempre o cliente). Atributos fixos: `cnpj`, `razao_social`,
+  `nome_operacao`, `empresa_grupo` (empresa do Grupo Soulan a que pertence), `regiao` e
+  `descricao_regiao`. Atributos de **padrão sugerido** (pré-preenchem o wizard; o consultor edita,
+  **não são rígidos**): `beneficios_padrao`, `escala_padrao`, `endereco_padrao`. O De/Para
+  apelido↔razão social resolve-se pelo código. *(Expansão autorizada pelo diretor na Fase 1B.)*
 - **Cargo** — catálogo próprio; normalização contínua dentro do sistema.
 - **TipoDocumento** — 21 tipos (da base de documentos).
 - **ReguaDocumental** — chave `(cod_cliente + cargo)` → por tipo de documento: obrigatório /
@@ -76,8 +79,9 @@ Entidades centrais:
 - **Candidato** — chave `cpf`. Pode ter N admissões.
 - **Admissão** — entidade central. Liga Candidato + Cliente + Cargo. `tipo_contrato`, `matricula`,
   datas, `farol_global` (ATIVO/DECLINOU/RESCISÃO/BANCO-PAUSADA), `sinalizador_preenchimento`.
-- **DadosVagaFolha** (anexo) — salário, benefícios, escala, centro de custo, departamento,
-  gestor BP, motivo, tempo de contrato.
+- **DadosVagaFolha** (anexo) — salário, benefícios, escala, `endereco`, centro de custo,
+  departamento, gestor BP, motivo, tempo de contrato. Benefícios/escala/endereço pré-preenchem a
+  partir dos `*_padrao` do cliente (F1), editáveis. *(`endereco` adicionado na Fase 1B.)*
 - **DocumentoAdmissão** — estado por documento exigido (pendente/entregue/inconforme). **Só
   status, nunca o arquivo.**
 - **FrenteAdmissão** — cada frente (AUDITORIA, EXAME, CADASTRO-CONTRATO) como entidade própria,
