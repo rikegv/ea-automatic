@@ -4,6 +4,7 @@ import { APP_GUARD } from "@nestjs/core";
 import { JwtModule } from "@nestjs/jwt";
 import { ThrottlerGuard, ThrottlerModule } from "@nestjs/throttler";
 import { AdminModule } from "./admin/admin.module";
+import { AdmissoesModule } from "./admissoes/admissoes.module";
 import { AuthModule } from "./auth/auth.module";
 import { JwtAuthGuard } from "./auth/guards/jwt-auth.guard";
 import { OriginGuard } from "./auth/guards/origin.guard";
@@ -22,6 +23,7 @@ import { UsersModule } from "./users/users.module";
     UsersModule,
     AuthModule,
     AdminModule,
+    AdmissoesModule,
   ],
   controllers: [HealthController],
   providers: [

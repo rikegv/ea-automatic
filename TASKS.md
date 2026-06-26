@@ -41,11 +41,17 @@ DIARIO.md. O coordenador atualiza este arquivo a cada despacho.
 - [ ] Carga das bases (clientes: código + CNPJ + razão social — insumo §A.9), cargos, régua
 
 ## Fase 2 — Cadastro e Gerenciador
-- [ ] **Follow-up da auditoria 1A/casca (resolver no início da fase):**
-  - [ ] Guard `NODE_ENV !== "production"` no topo de `apps/backend/src/db/seed-demo.ts` (script dev-only; hoje loga senha dev e tem default `Demo!2026`) — segurança §A.6
-  - [ ] Teste automatizado de RBAC: consultor COMUM → 403 nas rotas de administração (hoje só verificado por leitura dos guards) — tester
-- [ ] Wizard (F6), F1 autopreenchimento, F3 validador CPF, F4 pendências, F5 sinalizadores
-- [ ] F11 duplicado por CPF, F10 gerenciador, F7 filtros
+### Fase 2A — Wizard de Nova Admissão ✅ (OST-EA-FASE-2A · READY_fase-2a-wizard → merge → push)
+- [x] Follow-up casca: guard `NODE_ENV === "production"` em `seed-demo.ts` (§A.6)
+- [x] Follow-up casca: teste automatizado de RBAC (COMUM→403) — `roles.guard.spec.ts` (6 casos)
+- [x] Wizard F6 (3 etapas + stepper), F1 autopreenchimento (cliente), F3 validador CPF em tempo real
+- [x] F4 não-bloqueio + F5 sinalizador (calcSinalizadorPreenchimento PENDENTE/PARCIAL/OK)
+- [x] F11 duplicado por CPF com reaproveitamento (preserva histórico)
+- [x] POST /admissoes transacional: nascem AUDITORIA+EXAME (F12), gate segura CADASTRO_CONTRATO, documentos da régua
+- [x] Dados demo (2 clientes, 3 cargos, régua) no seed-demo dev-only
+### Fase 2B/2C e pendências
+- [ ] F10 gerenciador (tabela), F7 filtros dinâmicos (Fase 2B)
+- [ ] **Follow-ups técnicos (fase futura):** e2e do `POST /admissoes` com testcontainers (400/idempotência/contagem frentes-docs); migrar CPF do path do `GET /admissoes/candidato/:cpf` para o corpo (POST) — higiene de log/proxy
 
 ## Fase 3 — Esteira e Frentes Paralelas
 - [ ] Faróis em abas (F8), F12 frentes independentes, avanço por aba, upload de ASO

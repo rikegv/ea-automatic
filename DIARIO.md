@@ -5,6 +5,74 @@ feito e **por quê** (rastreabilidade para o diretor e para as próximas sessõe
 
 ---
 
+## 2026-06-26 — Fase 2A: Wizard de Nova Admissão (F6) — funcional (OST-EA-FASE-2A)
+
+Branch: `feat/fase-2a-wizard`. Escopo: dar LÓGICA REAL ao wizard de cadastro (a casca já existia
+e fora aprovada), salvando uma Admissão real no banco. **NÃO** inclui operação dos faróis (2C) nem
+o gerenciador em tabela (2B).
+
+### Abertura — follow-ups da casca pagos antes de empilhar
+- `seed-demo.ts`: guard `NODE_ENV === "production"` como **primeira** instrução do `main()` —
+  aborta com exit 1 antes de qualquer `argon2.hash`/insert/`console.log` de senha dev (§A.6).
+- Teste automatizado de RBAC: `apps/backend/src/auth/guards/roles.guard.spec.ts` (6 casos) —
+  COMUM→403, MASTER/SUPER_ADMIN→permite, rota sem `@Roles`→permite, usuário ausente→403.
+
+### O que foi construído
+**Backend** (sem migration — todas as tabelas já existiam da 1A):
+- Módulo `apps/backend/src/admissoes/` (operacional, autenticado, SEM `@Roles` — consultor COMUM
+  cria admissão): `POST /admissoes` e `GET /admissoes/candidato/:cpf` (F11, nunca 404, não loga CPF).
+- Leituras operacionais em `catalogos` (referência, qualquer autenticado): `GET /catalogos/clientes?q=`,
+  `/catalogos/cargos`, `/catalogos/regua?codCliente=&cargoId=` (JOIN régua×tiposDocumento).
+- Domínio puro `apps/backend/src/domain/admissao.ts`: `STATUS_INICIAL_FRENTE`
+  (AUDITORIA→ANALISE_PENDENTE, EXAME→A_AGENDAR) e `calcSinalizadorPreenchimento` (PENDENTE/PARCIAL/OK)
+  — testado em `admissao.spec.ts` (4 casos).
+- `POST /admissoes` numa `db.transaction` honrando as regras §A.3: valida CPF (F3, 400 antes do tx) →
+  cliente/cargo existem → candidato `onConflictDoNothing` por CPF (regra 6, preserva histórico) →
+  sinalizador puro (F5, não bloqueia — F4/regra 5) → admissão (farol ATIVO) → DadosVagaFolha 1:1 →
+  frentes AUDITORIA+EXAME (regra 1/F12), CADASTRO_CONTRATO **não** nasce (gate, regra 3) →
+  DocumentoAdmissao PENDENTE só para OBRIGATORIO/FACULTATIVO (regra 7, só status).
+- `seed-demo.ts` estendido (dev-only, atrás do guard): 2 clientes, 3 cargos, régua de 20 itens —
+  o wizard precisava de dados sobre os quais operar (a carga real é a OST 1B).
+
+**Frontend** (`apps/frontend`, fiel ao DS, sem CSS solto):
+- `app/(app)/nova/page.tsx` reescrito: wizard de 3 etapas com `components/nova/Stepper.tsx`
+  (barra de progresso). Etapa 1 cliente (busca debounce + card-resumo, F1); Etapa 2 cargo +
+  preview da régua com pills por exigência + campos da folha (todos opcionais, F4); Etapa 3
+  candidato com validação de CPF em tempo real (F3) e alerta de duplicado + "Reaproveitar dados" (F11).
+  Tela de êxito com sinalizador (pill, F5), frentes nascidas e nº de documentos.
+
+### Verificações já feitas (pré-auditoria) + smoke test ponta-a-ponta
+- `pnpm lint`/`typecheck`/`test` verdes: **21 testes** (backend 15, frontend 1, shared-types 5);
+  `next build` OK; ai-service pytest 1 passed.
+- Smoke E2E via proxy same-origin (login master demo → catálogos → POST): admissão completa →
+  sinalizador **OK**, frentes AUDITORIA+EXAME, 8 documentos; POST incompleto → **PARCIAL** (não
+  bloqueia); CPF inválido → **400**; F11 antes `null` / depois candidato+contagem. Conferido direto
+  no ea-db: frentes corretas, **sem CADASTRO_CONTRATO** (gate), 8/8 docs PENDENTE, vaga/folha 1:1.
+- Dados de smoke test (Maria, João) e cargos de teste expurgados ao final — base demo limpa
+  (3 cargos, régua só nos pares válidos).
+
+### Validação visual + auditoria da fábrica (fluxo §A.0)
+- **Validação visual do diretor: APROVADA** (frentes paralelas nascendo, gate segurando, sinalizador
+  PARCIAL no não-bloqueio, CPF validado, reaproveitamento OK).
+- **tester — VEREDITO: PASS.** lint/typecheck/test exit 0; 21 testes; lockfile inalterado; regras de
+  domínio cobertas (F3/F4/F5/F12/regra 6/regra 7) por unit + leitura; POST atômico; gate fechado.
+  Não-bloqueante: sem teste de integração de DB do `create` (projeto não tem infra pg de teste; lógica
+  decidível está em domínio puro unit-testado) — recomendado e2e com testcontainers em fase futura.
+- **seguranca — VEREDITO: APROVADO (poder de veto, §A.6).** CPF nunca logado; rotas novas
+  autenticadas e sem abertura indevida de administração; guard de produção do seed na ordem certa;
+  só status persistido (regra 7); DTO class-validator + ValidationPipe whitelist; sem SQL cru.
+  Não-bloqueante: CPF no path do `GET /admissoes/candidato/:cpf` é capturável por log de proxy/ingress
+  — migrar para POST-com-corpo numa fase futura (não é violação deste PR).
+
+**Liberação:** com os dois avais, criada a flag `.claude/state/READY_fase-2a-wizard` (local,
+git-ignored), merge na `main` e push ao GitHub. Flag removida após o push.
+
+### Follow-ups registrados para fases futuras (TASKS.md)
+- e2e do `POST /admissoes` (testcontainers) cobrindo 400/idempotência/contagem de frentes-docs.
+- `GET /admissoes/candidato/:cpf` → migrar CPF do path para o corpo (POST) — higiene de log/proxy.
+
+---
+
 ## 2026-06-25 — Design System + Fase 2 (casca visual) (OST-EA-DESIGN-SYSTEM)
 
 Branch: `feat/fase-1a-nucleo` (mesma da 1A — ainda sem merge; a casca reestiliza o login da 1A,
