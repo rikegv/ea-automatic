@@ -1,4 +1,6 @@
 import { Body, Controller, Get, Param, Post } from "@nestjs/common";
+import { CurrentUser } from "../auth/decorators";
+import type { AuthUser } from "../auth/auth.types";
 import { AdmissoesService } from "./admissoes.service";
 import { CreateAdmissaoDto } from "./dto/create-admissao.dto";
 
@@ -13,7 +15,7 @@ export class AdmissoesController {
   }
 
   @Post()
-  create(@Body() dto: CreateAdmissaoDto) {
-    return this.admissoes.create(dto);
+  create(@Body() dto: CreateAdmissaoDto, @CurrentUser() user: AuthUser) {
+    return this.admissoes.create(dto, user);
   }
 }

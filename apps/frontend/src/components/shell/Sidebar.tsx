@@ -20,6 +20,7 @@ const OPERACAO: NavDef[] = [
   { href: "/analise", icon: "chart", label: "Análise gerencial" },
   { href: "/nova", icon: "plus", label: "Nova admissão" },
   { href: "/esteira", icon: "layers", label: "Esteira admissional" },
+  { href: "/nao-conformidades", icon: "alert", label: "Não conformidades" },
   { href: "/gerenciador", icon: "table", label: "Gerenciador" },
 ];
 

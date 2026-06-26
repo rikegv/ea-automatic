@@ -56,7 +56,18 @@ DIARIO.md. O coordenador atualiza este arquivo a cada despacho.
 - [x] F11 duplicado por CPF com reaproveitamento (preserva histórico)
 - [x] POST /admissoes transacional: nascem AUDITORIA+EXAME (F12), gate segura CADASTRO_CONTRATO, documentos da régua
 - [x] Dados demo (2 clientes, 3 cargos, régua) no seed-demo dev-only
-### Fase 2B/2C e pendências
+### Fase 2C — Operação dos faróis + Não Conformidades (branch `feat/fase-2c-esteira`)
+- [x] Núcleo da esteira (F8): faróis em abas, gate contínuo do Cadastro, reversão com aceite, ASO (aprovado pelo diretor)
+- [x] 8 ajustes da esteira: (1) sumir ao concluir + acessível na busca; (2) aceite "apto sem ASO" → NC-2; (3) busca por candidato (nome/CPF); (4) modal de ficha somente leitura; (5) KPI como filtro; (6) "Total na fila"; (7) laranja "aguardando reenvio"; (8) `Select` estilizado
+- [x] Tela de Não Conformidades (menu Operação): 2 vias (penaliza/liberação diretoria), 3 gatilhos (NC-1/NC-2/NC-3), contador por consultor, histórico mantido ao resolver
+- [x] `admissoes.consultor_id` + migration `0003` (`nao_conformidades` + enums) aplicada no ea-db
+- [x] Ajustes finais: (1) coluna/campo "Data de admissão" nas abas + NC + modal; (2) escolha Via 1/Via 2 integrada no modal de aceite (motivo obrigatório na Via 2, botão travado sem ele) + gate de aceite na auditoria incompleta; (3) data de admissão no modal de ficha
+- [x] lint/typecheck/test verdes (38); nest+next build OK; smoke E2E dos gatilhos + Via 2 + expurgo
+- [x] **Validação visual do diretor** (esteira ajustada + tela de NC + 3 ajustes finais) — APROVADA
+- [x] Auditoria tester (PASS) + segurança (APROVADO) → flag `READY_fase-2c-esteira` → merge na main → push
+- [ ] **Follow-ups 2C (fase futura):** NC-3 vira detecção automática quando kit (F9)/assinatura (INT-4) existirem; reabrir NC-1/NC-2 ao re-disparar (hoje idempotente por admissão+tipo não reabre); endpoint/UI de leitura da trilha `frente_status_eventos`; testes de integração das rotas de esteira/NC (testcontainers)
+
+### Fase 2B e pendências
 - [ ] F10 gerenciador (tabela), F7 filtros dinâmicos (Fase 2B)
 - [ ] **Follow-ups técnicos (fase futura):** e2e do `POST /admissoes` com testcontainers (400/idempotência/contagem frentes-docs); migrar CPF do path do `GET /admissoes/candidato/:cpf` para o corpo (POST) — higiene de log/proxy
 

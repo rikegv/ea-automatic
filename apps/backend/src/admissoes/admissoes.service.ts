@@ -18,6 +18,7 @@ import {
   STATUS_INICIAL_FRENTE,
 } from "../domain/admissao";
 import { FRENTES_AO_NASCER } from "../domain/frentes";
+import type { AuthUser } from "../auth/auth.types";
 import type { CreateAdmissaoDto } from "./dto/create-admissao.dto";
 
 @Injectable()
@@ -53,7 +54,7 @@ export class AdmissoesService {
   }
 
   /** F6 — cria a admissão e seus filhos numa transação (nascimento paralelo das frentes — regra 1). */
-  async create(dto: CreateAdmissaoDto) {
+  async create(dto: CreateAdmissaoDto, user?: AuthUser) {
     // a. validação de CPF (F3) — chave técnica de identidade.
     const cpf = normalizeCpf(dto.candidato.cpf);
     if (!isValidCpf(cpf)) {
@@ -114,6 +115,8 @@ export class AdmissoesService {
           cargoId: dto.cargoId,
           tipoContrato: dto.tipoContrato ?? null,
           dataAdmissao: dto.dataAdmissao ?? null,
+          // Consultor que gerou a admissão (Fase 2C) — base da atribuição de NC (Via 1).
+          consultorId: user?.id ?? null,
           sinalizadorPreenchimento,
         })
         .returning({ id: admissoes.id });

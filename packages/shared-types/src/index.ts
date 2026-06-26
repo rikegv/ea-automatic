@@ -40,6 +40,27 @@ export type StatusCadastroContrato = (typeof STATUS_CADASTRO_CONTRATO)[number];
 export const EXIGENCIA_DOCUMENTO = ["OBRIGATORIO", "NAO_OBRIGATORIO", "FACULTATIVO"] as const;
 export type ExigenciaDocumento = (typeof EXIGENCIA_DOCUMENTO)[number];
 
+// ── Não conformidades (Fase 2C) ────────────────────────────────────────────
+export const NC_TIPO = ["NC1", "NC2", "NC3"] as const;
+export type NcTipo = (typeof NC_TIPO)[number];
+
+export const NC_STATUS = ["ABERTA", "RESOLVIDA"] as const;
+export type NcStatus = (typeof NC_STATUS)[number];
+
+export const NC_LIBERACAO = ["NENHUMA", "PENDENTE", "APROVADA", "REPROVADA"] as const;
+export type NcLiberacao = (typeof NC_LIBERACAO)[number];
+
+/** Rótulos curtos dos gatilhos de NC (consumidos pela tela e pelos filtros). */
+export const NC_TIPO_ROTULO: Record<NcTipo, string> = {
+  NC1: "Auditoria sem documentos",
+  NC2: "Exame sem ASO",
+  NC3: "Cadastro incompleto",
+};
+
+/** Termo de ciência fixo do aceite "apto sem ASO" (gatilho da NC2). */
+export const TERMO_APTO_SEM_ASO =
+  "Estou ciente que estou marcando este candidato como apto sem o ASO anexado.";
+
 /**
  * Valida um CPF brasileiro pelos dígitos verificadores (F3 — CPF é a chave de identidade).
  * Aceita com ou sem máscara. Rejeita sequências repetidas (ex.: 000.000.000-00).

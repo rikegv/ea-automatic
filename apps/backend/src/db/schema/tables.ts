@@ -17,6 +17,9 @@ import {
   exigenciaEnum,
   farolGlobalEnum,
   frenteTipoEnum,
+  ncLiberacaoEnum,
+  ncStatusEnum,
+  ncTipoEnum,
   papelEnum,
   sinalizadorEnum,
 } from "./enums";
@@ -117,6 +120,9 @@ export const admissoes = pgTable("admissoes", {
   cargoId: uuid("cargo_id")
     .notNull()
     .references(() => cargos.id),
+  // Consultor que GEROU a admissão (Fase 2C): associado às não conformidades que ela vier a gerar
+  // (Via 1 — penaliza o consultor). Nullable: admissões anteriores à 2C não têm autor registrado.
+  consultorId: uuid("consultor_id").references(() => usuarios.id),
   tipoContrato: varchar("tipo_contrato", { length: 60 }),
   matricula: varchar("matricula", { length: 60 }),
   dataAdmissao: date("data_admissao"),
@@ -205,6 +211,68 @@ export const frenteStatusCatalogo = pgTable(
   },
   (t) => ({
     uniqStatusPorFrente: unique().on(t.tipo, t.codigo),
+  }),
+);
+
+// ── FrenteStatusEventos: trilha de mudanças de status da esteira (F8 / §A.3) ──
+// Auditoria aditiva de cada transição de status de frente, incluindo reversões (recuo de etapa)
+// que reabrem pendência num candidato já em cadastro. `autorId` nullable: transições do sistema
+// (ex.: nascimento lazy) podem não ter autor. Sem CPF nem URL — apenas estado (§A.6).
+export const frenteStatusEventos = pgTable("frente_status_eventos", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  admissaoId: uuid("admissao_id")
+    .notNull()
+    .references(() => admissoes.id, { onDelete: "cascade" }),
+  frenteId: uuid("frente_id")
+    .notNull()
+    .references(() => frentesAdmissao.id, { onDelete: "cascade" }),
+  tipo: frenteTipoEnum("tipo").notNull(),
+  deStatus: varchar("de_status", { length: 40 }),
+  paraStatus: varchar("para_status", { length: 40 }),
+  reversao: boolean("reversao").notNull().default(false),
+  autorId: uuid("autor_id").references(() => usuarios.id),
+  criadoEm,
+});
+
+// ── NãoConformidade: desvio de processo numa admissão (Fase 2C) ─────────────
+// Modelo de duas vias: Via 1 (NC comum, penaliza o consultor que gerou a admissão) e Via 2
+// (liberação por determinação da diretoria — aprovada pela supervisão, não penaliza). Três
+// gatilhos (tipo): NC1 auditoria sem docs, NC2 exame sem ASO (com aceite), NC3 cadastro incompleto
+// (flags manuais). Sem CPF/URL — referencia a admissão por id (§A.6). Resolver fecha mas o
+// registro PERMANECE (histórico por consultor).
+export const naoConformidades = pgTable(
+  "nao_conformidades",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    admissaoId: uuid("admissao_id")
+      .notNull()
+      .references(() => admissoes.id, { onDelete: "cascade" }),
+    tipo: ncTipoEnum("tipo").notNull(),
+    // Consultor responsável (autor da admissão). Nullable: admissões antigas sem consultor.
+    consultorId: uuid("consultor_id").references(() => usuarios.id),
+    status: ncStatusEnum("status").notNull().default("ABERTA"),
+    detalhe: text("detalhe"),
+    // NC2 — termo de ciência do aceite "apto sem ASO" (autor = consultorId, data = criadoEm).
+    aceiteTermo: text("aceite_termo"),
+    // NC3 — flags manuais (kit/assinatura ainda não existem: F9/INT-4 são fases futuras).
+    flagSemKit: boolean("flag_sem_kit").notNull().default(false),
+    flagSemAssinatura: boolean("flag_sem_assinatura").notNull().default(false),
+    flagCadastroNaoMarcado: boolean("flag_cadastro_nao_marcado").notNull().default(false),
+    // Via 2 — liberação por determinação da diretoria.
+    liberacaoStatus: ncLiberacaoEnum("liberacao_status").notNull().default("NENHUMA"),
+    liberacaoMotivo: text("liberacao_motivo"),
+    liberacaoSolicitanteId: uuid("liberacao_solicitante_id").references(() => usuarios.id),
+    liberacaoAprovadorId: uuid("liberacao_aprovador_id").references(() => usuarios.id),
+    liberacaoDecididoEm: timestamp("liberacao_decidido_em", { withTimezone: true }),
+    // Resolução (Via 1) — fecha a NC mantendo o histórico.
+    resolvidoPor: uuid("resolvido_por").references(() => usuarios.id),
+    resolvidoEm: timestamp("resolvido_em", { withTimezone: true }),
+    criadoEm,
+    atualizadoEm,
+  },
+  (t) => ({
+    // Uma NC por (admissão + tipo): idempotente para os gatilhos automáticos (NC1/NC2).
+    uniqNcPorAdmissao: unique().on(t.admissaoId, t.tipo),
   }),
 );
 

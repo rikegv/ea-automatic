@@ -23,6 +23,8 @@ export type IconName =
   | "left"
   | "right"
   | "tag"
+  | "eye"
+  | "x"
   | "sun"
   | "moon";
 
@@ -102,6 +104,13 @@ const PATHS: Record<IconName, JSX.Element> = {
       <circle cx="7.5" cy="7.5" r="1.5" fill="currentColor" />
     </>
   ),
+  eye: (
+    <>
+      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" />
+      <circle cx="12" cy="12" r="3" />
+    </>
+  ),
+  x: <path d="M18 6L6 18M6 6l12 12" />,
   sun: (
     <>
       <circle cx="12" cy="12" r="4" />

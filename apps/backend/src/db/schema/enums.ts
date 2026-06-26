@@ -36,3 +36,25 @@ export const sinalizadorEnum = pgEnum("sinalizador_preenchimento", [
   "INCONFORMIDADE",
   "COMPETENCIAS",
 ]);
+
+/**
+ * Tipo de não conformidade (Fase 2C — tela de Não Conformidades). Três gatilhos:
+ * NC1 = Auditoria concluída com obrigatórios pendentes; NC2 = Exame "apto" sem ASO (aceite do
+ * consultor é o gatilho); NC3 = Cadastro incompleto (flags manuais — kit/assinatura/realizado).
+ */
+export const ncTipoEnum = pgEnum("nc_tipo", ["NC1", "NC2", "NC3"]);
+
+/** Estado de resolução da NC. O registro PERMANECE no histórico mesmo após resolvida. */
+export const ncStatusEnum = pgEnum("nc_status", ["ABERTA", "RESOLVIDA"]);
+
+/**
+ * Via 2 — liberação por determinação da diretoria. NENHUMA = NC comum (penaliza o consultor);
+ * PENDENTE = consultor flagou e aguarda supervisão; APROVADA = exceção reconhecida (não penaliza);
+ * REPROVADA = volta a ser NC comum (Via 1).
+ */
+export const ncLiberacaoEnum = pgEnum("nc_liberacao", [
+  "NENHUMA",
+  "PENDENTE",
+  "APROVADA",
+  "REPROVADA",
+]);

@@ -23,6 +23,7 @@ const config: Config = {
         "accent-2": "var(--accent-2)",
         ok: "var(--ok)",
         warn: "var(--warn)",
+        "warn-2": "var(--warn-2)",
         danger: "var(--danger)",
       },
       fontFamily: {

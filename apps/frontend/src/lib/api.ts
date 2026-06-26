@@ -4,6 +4,8 @@ export class ApiError extends Error {
   constructor(
     message: string,
     public readonly status: number,
+    /** Corpo bruto da resposta de erro (ex.: { needsConfirmation, reason } do 409). */
+    public readonly data?: unknown,
   ) {
     super(message);
     this.name = "ApiError";
@@ -35,7 +37,7 @@ export async function apiFetch<T = unknown>(path: string, opts: ApiOptions = {})
   if (!res.ok) {
     const raw = data?.message ?? data?.error ?? res.statusText;
     const message = Array.isArray(raw) ? raw.join(", ") : String(raw);
-    throw new ApiError(message, res.status);
+    throw new ApiError(message, res.status, data);
   }
   return data as T;
 }

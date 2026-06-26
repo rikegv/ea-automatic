@@ -10,7 +10,7 @@
     "sourceMap": true,
     "outDir": "dist",
     "baseUrl": ".",
-    "types": ["node"],
+    "types": ["node", "multer"],
     "paths": {
       "@ea/shared-types": ["../../packages/shared-types/src/index.ts"]
     }

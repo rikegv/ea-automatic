@@ -5,6 +5,118 @@ feito e **por quê** (rastreabilidade para o diretor e para as próximas sessõe
 
 ---
 
+## 2026-06-26 — Fase 2C (continuação): Ajustes da Esteira + Tela de Não Conformidade
+
+Branch: `feat/fase-2c-esteira` (mesma da 2C; **working tree, sem commit** — aguardando validação
+visual). A lógica principal da 2C (faróis, gate contínuo, reversão) já fora aprovada pelo diretor;
+esta continuação aplica os 8 ajustes da validação visual e adiciona a tela de Não Conformidades.
+
+### 8 ajustes da Esteira
+1. **Sumir ao concluir** — itens com a frente concluída (auditoria=ok / exame=apto / cadastro=
+   integração) saem da fila principal e dos KPIs (backend filtra `concluida=false`). Continuam
+   acessíveis pela busca por candidato (item 3) ou filtrando pelo próprio status de conclusão.
+2. **Aceite "apto sem ASO"** — `EXAME→APTO` sem ASO anexado retorna **409 `reason: aptoSemAso`**;
+   o front exige aceite explícito (termo fixo). O aceite É o gatilho da **NC-2** (registra autor,
+   data e termo). Bloqueia até o aceite (única exceção ao não-bloqueio — é aceite, não trava).
+3. **Busca por candidato** — filtro `q` (nome ou CPF) em todas as abas; CPF casa por dígitos.
+4. **Visualização rápida** — ícone de olho por linha abre modal **somente leitura**
+   (`GET /esteira/admissao/:id`): candidato (nome/CPF/tel/e-mail), cliente, cargo, status das três
+   frentes, checklist de documentos (exigência+estado) e sinalizador. Sem edição.
+5. **KPIs como filtro** — clicar num KPI de status filtra a aba por aquele status (toggle).
+6. **"Na frente" → "Total na fila"** em todas as abas.
+7. **Laranja para "Aguardando reenvio"** — novo token `--warn-2` (#ea580c claro / #f97316 escuro),
+   pill `.pill.or` e KPI, distinguindo de "Análise pendente" (amarelo).
+8. **Seletores estilizados** — novo componente `Select` (botão `.ds-select` + popover glass) que
+   substitui o `<select>` nativo (cujo dropdown herdava o cinza do SO no tema escuro). Usado nos
+   filtros e na operação de status por linha.
+
+### Tela de Não Conformidades (menu novo em Operação, abaixo de Esteira)
+- Acessível a **todos os consultores** (visão de gestão, §A.3). Só a **decisão** da liberação por
+  diretoria exige supervisão (`@Roles(MASTER, SUPER_ADMIN)`).
+- **Modelo de duas vias:** Via 1 (NC comum — penaliza o consultor que **gerou** a admissão) e Via 2
+  (liberação por determinação da diretoria — `flag + motivo` → supervisão aprova/reprova; aprovada
+  é exceção reconhecida, **não penaliza**; reprovada volta à Via 1).
+- **3 gatilhos:** **NC-1** auditoria concluída com obrigatórios pendentes (automático, não bloqueia);
+  **NC-2** exame apto sem ASO (gatilho = o aceite do item 2); **NC-3** cadastro incompleto (3 flags
+  **manuais**: sem kit / sem assinatura / "realizado" não marcado — kit/assinatura são F9/INT-4,
+  detecção automática fica para quando existirem). Registro manual de NC-3 pela própria tela,
+  buscando a admissão na frente de Cadastro.
+- **Resolver** fecha a NC mantendo o **registro no histórico** (a NC resolvida ainda penaliza — a
+  gestão vê quantas vezes o consultor liberou com inconformidade). **Contador penalizante por
+  consultor** visível na tela (clicável = filtro).
+
+### Decisões de implementação (dentro do escopo)
+- **`admissoes.consultor_id`** (nullable, FK usuarios) — capturado do usuário autenticado no
+  `POST /admissoes`; é a base da atribuição da Via 1. Admissões anteriores à 2C ficam sem consultor
+  (NC mostra "—"). Migration aditiva `0003_massive_shatterstar` (também cria `nao_conformidades` +
+  enums `nc_tipo`/`nc_status`/`nc_liberacao`), aplicada no ea-db.
+- **Trilha sensível (§A.6):** `nao_conformidades` referencia a admissão por id; **sem CPF/URL**;
+  aceite NC-2 guarda autor+data+termo (mecânica do aceite de dupla correção). Idempotência por
+  `unique(admissao_id, tipo)`.
+- `ApiError` passou a carregar o corpo do erro (para o front distinguir `reason` do 409).
+
+### Verificações (pré-validação) + smoke E2E
+- `pnpm lint` / `typecheck` / `test` **verdes** (38 testes: backend 32 — inclui **+5** de
+  `nao-conformidade.spec.ts` — frontend 1, shared-types 5). `nest build` e `next build` OK
+  (**14 rotas**, `/nao-conformidades` presente). Lockfile inalterado.
+- Smoke via API (servidores loopback): NC-1 nasce ao concluir auditoria com 5 obrigatórios
+  pendentes; `EXAME→APTO` sem ASO → **409 aptoSemAso**, com aceite → **NC-2** (termo gravado);
+  item 1 confirmado (candidato some da fila e reaparece na busca `q`); ciclo da Via 2
+  (solicitar→aprovar = não penaliza) e resolver (mantém histórico/penaliza) OK; NC-3 manual OK;
+  detalhe (item 4) retorna ficha completa. **Dados de smoke expurgados** — base demo restaurada
+  ao original (nc=0, eventos=15, frentes=10; kaa/Carla nos status originais).
+
+### Ajustes finais (3, pós-validação parcial)
+1. **Data de admissão** — coluna "Data adm." (campo `admissoes.data_admissao`, formatado dd/mm/aaaa
+   por partes p/ não sofrer fuso) em todas as abas da esteira e na tela de NC; e campo no modal de
+   ficha (item 4). *Obs.: a OST chamou de `data_admissao_prevista`; não existe tal coluna — é o
+   mesmo `data_admissao` do wizard (data prevista). Usado o campo existente, sem duplicar.*
+2. **Via 1/Via 2 integrada no aceite** — todo aceite de liberação com pendência (apto sem ASO,
+   auditoria incompleta, cadastro incompleto) agora abre o modal com a escolha "Esta liberação foi
+   a pedido da diretoria?": **Não** → NC penalizante (Via 1); **Sim** → motivo **obrigatório**
+   (botão desabilitado sem ele) → NC nasce `liberacao_status=PENDENTE` (aguardando supervisão),
+   não penaliza até a decisão. Conectado ao fluxo de aprovação Master/Super Admin já existente.
+   Concluir Auditoria com obrigatórios pendentes passou a exigir aceite (409 `auditoriaIncompleta`),
+   simétrico ao "apto sem ASO" — a esteira sinaliza o caso por `obrigatoriosPendentes` no item.
+3. **Modal de ficha** — data de admissão confirmada no modal do ícone de olho.
+
+Verificações: `lint`/`typecheck`/`test` **verdes** (38). Smoke E2E do novo fluxo: `AUD→ANALISE_OK`
+sem aceite → **409 auditoriaIncompleta**; Via 2 sem motivo → **400**; Via 2 completa → **NC1
+PENDENTE** (situação "aguardando supervisão", penaliza até decidir); admin **aprova** → não
+penaliza; data de admissão presente nas respostas de esteira/NC/detalhe. Base demo restaurada a um
+estado **limpo e consistente com o gate** (nc=0, frentes=9; Ana em cadastro; Bruno/Carla/kaa nas
+filas — Carla/Bruno sem ASO p/ exercitar o aceite).
+
+### ✅ VALIDAÇÃO VISUAL APROVADA + auditoria da fábrica (fluxo §A.0)
+- **Validação visual do diretor: APROVADA** — data de admissão nas abas e no modal; Via 1/Via 2
+  integrada no aceite com motivo obrigatório; fluxo de aprovação Master conectado. A interpretação
+  de `data_admissao` (campo existente, sem duplicata) foi **ratificada pelo diretor**.
+- **tester — VEREDITO: PASS.** `pnpm install --frozen-lockfile` (lockfile consistente),
+  `lint`/`typecheck`/`test` exit 0 (**38 testes** JS — backend 32, frontend 1, shared-types 5 — +
+  ai-service pytest 1), `nest build` e `next build` OK (14 rotas, inclui `/esteira` e
+  `/nao-conformidades`). Gate §A.7 ativo (push bloqueado exit 2 sem flag; `git status` exit 0).
+  Migrations `0002`/`0003` aplicadas no ea-db (`nao_conformidades` 19 colunas, `consultor_id`,
+  enums nc_*). Domínio decidível coberto (esteira/nao-conformidade/frentes/admissao/roles specs).
+  Não-bloqueantes: sem testes de integração das rotas de esteira/NC (lógica decidível está em
+  domínio puro testado); membro de tipo morto `NcSituacao."REPROVADA"` (cosmético); cobertura de
+  front mínima (coberta pela validação visual).
+- **seguranca — VEREDITO: APROVADO (poder de veto, §A.6).** Nenhum log de CPF/dado pessoal no
+  backend novo; CPF só em resposta autenticada (`GET /esteira/admissao/:id`); filtro `q` é predicado
+  `ilike` parametrizado, não persistido/logado. Trilhas `frente_status_eventos` e `nao_conformidades`
+  referenciam admissão por id — **sem CPF/URL**. Aceite NC-2 e motivo da Via 2 gravam autor+data
+  (trilha consultável, registro permanece após resolver). RBAC: só `PATCH .../liberacao/decisao`
+  exige MASTER/SUPER_ADMIN (COMUM barrado); demais rotas operacionais autenticadas. ASO só metadados
+  (binário descartado, memoryStorage). DTOs class-validator + ValidationPipe whitelist; sem SQL cru;
+  sem segredo/flag commitada; isolamento CentraAtend intacto. Não-bloqueantes: `q` (pode conter CPF)
+  viaja em query string de GET — hardening de infra futura (access log da ponte) ou migrar p/ POST;
+  `consultorId` nullable em admissões pré-2C (decisão documentada).
+
+**Liberação:** com os dois avais, criada a flag `.claude/state/READY_fase-2c-esteira` (local,
+git-ignored) — destrava o gate. Em seguida: commit da branch, merge na `main` e push ao GitHub.
+A flag é removida após o push (nunca versionada).
+
+---
+
 ## 2026-06-26 — Fase 1B: Expansão do Cliente + carga de 114 clientes (OST-EA-FASE-1B)
 
 Branch: `feat/fase-1b-clientes`. Escopo: expandir a entidade Cliente (autorizado pelo diretor) e
