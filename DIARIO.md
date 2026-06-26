@@ -47,6 +47,18 @@ com catálogos reais e validação de obrigatórios.
   substituição persistida com `expurgar_em` +48h; **job de expurgo** (TTL forçado ao passado +
   restart) **descartou CPF/nome** e logou. Admissão de teste expurgada (base demo = 4).
 
+### Correção pós-validação parcial — OriginGuard bloqueava o "Adicionar" do admin (§A.2/§A.6)
+Bug: o admin clicava em "Adicionar 'X'" no select de benefícios/escala/motivo e nada era criado.
+**Causa:** o `OriginGuard` retorna 403 em métodos mutantes quando o `Origin` não está na allowlist
+(`localhost:3010`). O diretor acessa por **túnel/ZeroTier** (Origin ≠ localhost), então TODO POST era
+bloqueado (GET passa — o guard ignora métodos seguros) e o `addCatalogo` falhava em silêncio.
+**Correção (revisar na auditoria de segurança):** o `OriginGuard` agora libera métodos mutantes
+**autenticados por Bearer token** em qualquer origem — o token vive em memória do front e o browser
+não o auto-envia, logo não há vetor de CSRF (um atacante cross-site não consegue anexá-lo). O fluxo
+**cookie** (ex.: `/refresh`) continua exigindo a allowlist. Comprovado: Bearer+Origin-de-túnel → 201;
+sem Bearer+Origin-de-túnel → 403. Front: `addCatalogo` passou a surfaceiar erro (não falha em
+silêncio). lint/typecheck/test verdes (38).
+
 ### ⏸️ PARADA PARA VALIDAÇÃO VISUAL (§A.0) — Marco 2
 Servidores no ar (backend :3011, frontend :3010). Aguardando **aprovação visual do diretor** do
 wizard (W1–W7) + os catálogos. **Commit na branch**; gate fechado, sem `READY_*`. Depois, **M3

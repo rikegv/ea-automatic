@@ -157,6 +157,7 @@ export default function NovaAdmissaoPage() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [result, setResult] = useState<CreateResult | null>(null);
   const [aceiteCampos, setAceiteCampos] = useState<string[] | null>(null);
+  const [catErro, setCatErro] = useState<string | null>(null);
 
   const cpfDigits = normalizeCpf(cand.cpf);
   const cpfTouched = cpfDigits.length > 0;
@@ -240,18 +241,23 @@ export default function NovaAdmissaoPage() {
     setCliente(c);
   }
 
-  // Admin acrescenta item ao catálogo e já seleciona.
+  // Admin acrescenta item ao catálogo e já seleciona. Erro é surfaceado (não falha em silêncio).
   async function addCatalogo(
     tipo: "motivos" | "beneficios" | "escalas",
     nome: string,
     aoCriar: (nome: string) => void,
   ) {
-    const r = await apiFetch<CatItem>(`/catalogos/${tipo}`, { method: "POST", token, body: { nome } });
-    const lista = await apiFetch<CatItem[]>(`/catalogos/${tipo}`, { token });
-    if (tipo === "motivos") setMotivos(lista);
-    else if (tipo === "beneficios") setBeneficios(lista);
-    else setEscalas(lista);
-    aoCriar(r.nome);
+    setCatErro(null);
+    try {
+      const r = await apiFetch<CatItem>(`/catalogos/${tipo}`, { method: "POST", token, body: { nome } });
+      const lista = await apiFetch<CatItem[]>(`/catalogos/${tipo}`, { token });
+      if (tipo === "motivos") setMotivos(lista);
+      else if (tipo === "beneficios") setBeneficios(lista);
+      else setEscalas(lista);
+      aoCriar(r.nome);
+    } catch (e) {
+      setCatErro(e instanceof ApiError ? e.message : "Falha ao adicionar ao catálogo.");
+    }
   }
 
   function reaproveitar() {
@@ -543,6 +549,11 @@ export default function NovaAdmissaoPage() {
             <div>
               <div className="eyebrow">Dados de vaga / folha</div>
               <p className="mb-3 text-[12px] text-dim">Campos com * são obrigatórios (pendências exigem aceite — F4).</p>
+              {catErro && (
+                <p className="mb-3 rounded-xl border border-[var(--border)] bg-[rgba(214,69,69,0.1)] px-3 py-2 text-[13px] text-danger">
+                  {catErro}
+                </p>
+              )}
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 <Field label="Salário *">
                   <input
