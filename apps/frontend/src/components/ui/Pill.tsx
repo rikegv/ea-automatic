@@ -7,13 +7,15 @@ export function Pill({
   tone,
   children,
   className,
+  title,
 }: {
   tone: PillTone;
   children: React.ReactNode;
   className?: string;
+  title?: string;
 }) {
   return (
-    <span className={cn("pill", tone, className)}>
+    <span className={cn("pill", tone, className)} title={title}>
       <span className="pd" />
       {children}
     </span>

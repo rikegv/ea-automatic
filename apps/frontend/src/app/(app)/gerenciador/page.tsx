@@ -83,10 +83,21 @@ function frenteTone(f?: { status: string; concluida: boolean }): PillTone {
   return "wn";
 }
 
-// 11 colunas (com as 3 frentes — G4a). Tabela rola horizontalmente.
+/** Pill de status que trunca o texto dentro da coluna (não estoura a largura). */
+function StatusPill({ tone, label }: { tone: PillTone; label: string }) {
+  return (
+    <Pill tone={tone} className="max-w-full" title={label}>
+      <span className="min-w-0 truncate">{label}</span>
+    </Pill>
+  );
+}
+
+// 11 colunas (com as 3 frentes — G4a). Texto (Candidato/Cliente/Cargo/Auditoria) absorve em `fr`;
+// colunas curtas (Contrato/Data/Exame/Cadastro/Status/Pendências/Ações) ficam no mínimo necessário.
+// Preenche 100% da largura; só rola abaixo de ~980px (telas pequenas), nunca sobra espaço à direita.
 const GRID =
-  "170px 150px 140px 100px 92px 128px 104px 128px 104px 134px 96px";
-const GRID_MIN = "min-w-[1350px]";
+  "minmax(0,1.5fr) minmax(0,1.3fr) minmax(0,1.15fr) 84px 78px minmax(0,1.25fr) 92px 100px 86px 110px 84px";
+const GRID_MIN = "min-w-[980px]";
 
 export default function GerenciadorPage() {
   const { token, isAdmin } = useAuth();
@@ -462,19 +473,19 @@ export default function GerenciadorPage() {
                 <div className="meta truncate">{r.tipoContrato || "—"}</div>
                 <div className="meta">{fmtDataAdmissao(r.dataAdmissao)}</div>
                 <div className="min-w-0">
-                  {fa ? <Pill tone={frenteTone(fa)}>{fa.rotulo}</Pill> : <span className="meta">—</span>}
+                  {fa ? <StatusPill tone={frenteTone(fa)} label={fa.rotulo} /> : <span className="meta">—</span>}
                 </div>
                 <div className="min-w-0">
-                  {ex ? <Pill tone={frenteTone(ex)}>{ex.rotulo}</Pill> : <span className="meta">—</span>}
+                  {ex ? <StatusPill tone={frenteTone(ex)} label={ex.rotulo} /> : <span className="meta">—</span>}
                 </div>
                 <div className="min-w-0">
-                  {cad ? <Pill tone={frenteTone(cad)}>{cad.rotulo}</Pill> : <span className="meta">—</span>}
+                  {cad ? <StatusPill tone={frenteTone(cad)} label={cad.rotulo} /> : <span className="meta">—</span>}
                 </div>
                 <div className="min-w-0">
-                  <Pill tone={farolP.tone}>{farolP.label}</Pill>
+                  <StatusPill tone={farolP.tone} label={farolP.label} />
                 </div>
                 <div className="min-w-0">
-                  <Pill tone={sinalP.tone}>{sinalP.label}</Pill>
+                  <StatusPill tone={sinalP.tone} label={sinalP.label} />
                 </div>
                 <div className="flex items-center gap-1">
                   <button
