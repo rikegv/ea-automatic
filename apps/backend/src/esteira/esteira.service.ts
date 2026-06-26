@@ -5,7 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { and, asc, count, eq, gte, ilike, inArray, lt, or } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, ilike, inArray, lt, or } from "drizzle-orm";
 import { normalizeCpf, TERMO_APTO_SEM_ASO } from "@ea/shared-types";
 import type { AuthUser } from "../auth/auth.types";
 import type { Database } from "../db/client";
@@ -15,14 +15,18 @@ import {
   candidatos,
   cargos,
   clientes,
+  dadosVagaFolha,
   documentosAdmissao,
   frenteStatusCatalogo,
   frenteStatusEventos,
   frentesAdmissao,
   naoConformidades,
+  passagemAceites,
   reguaDocumental,
   tiposDocumento,
+  usuarios,
 } from "../db/schema";
+import { pendenciasObrigatorias } from "../domain/admissao";
 import type { FrenteTipo } from "../domain/frentes";
 import { podeAbrirCadastro } from "../domain/frentes";
 import {
@@ -146,6 +150,10 @@ export class EsteiraService {
       tipo === "CADASTRO_CONTRATO" ? await this.disponibilidadeMap(admissaoIds) : new Map();
     const pendSet =
       tipo === "AUDITORIA" ? await this.obrigatoriosPendentesSet(admissaoIds) : new Set<string>();
+    const pendObrigSet =
+      tipo === "AUDITORIA" || tipo === "EXAME"
+        ? await this.pendenciasSet(admissaoIds)
+        : new Set<string>();
 
     const items = rows.map((r) => {
       const base = {
@@ -163,13 +171,17 @@ export class EsteiraService {
         sinalizador: r.sinalizador,
       };
       if (tipo === "EXAME") {
-        return { ...base, asoAnexado: asoSet.has(r.admissaoId) };
+        return { ...base, asoAnexado: asoSet.has(r.admissaoId), temPendencias: pendObrigSet.has(r.admissaoId) };
       }
       if (tipo === "CADASTRO_CONTRATO") {
         return { ...base, disponivel: dispMap.get(r.admissaoId) ?? false };
       }
       if (tipo === "AUDITORIA") {
-        return { ...base, obrigatoriosPendentes: pendSet.has(r.admissaoId) };
+        return {
+          ...base,
+          obrigatoriosPendentes: pendSet.has(r.admissaoId),
+          temPendencias: pendObrigSet.has(r.admissaoId),
+        };
       }
       return base;
     });
@@ -363,6 +375,30 @@ export class EsteiraService {
           }
         : {};
 
+    // S3 — log de aceite por passagem: concluir AUDITORIA/EXAME com campos obrigatórios pendentes
+    // da admissão exige aceite e gera trilha permanente (regra 8 — trilha, não penalização).
+    const ehPassagem = (tipo === "AUDITORIA" || tipo === "EXAME") && conclui(tipo, novo);
+    let pendenciasPassagem: string[] = [];
+    if (ehPassagem && admissao) {
+      const vaga = await this.db.query.dadosVagaFolha.findFirst({
+        where: eq(dadosVagaFolha.admissaoId, frente.admissaoId),
+      });
+      pendenciasPassagem = pendenciasObrigatorias({
+        codCliente: admissao.codCliente,
+        cargoId: admissao.cargoId,
+        dataAdmissao: admissao.dataAdmissao,
+        vagaFolha: { salario: vaga?.salario, beneficios: vaga?.beneficios, escala: vaga?.escala },
+      });
+    }
+    if (pendenciasPassagem.length > 0 && !dto.aceitePassagem) {
+      throw new ConflictException({
+        needsConfirmation: true,
+        reason: "passagemComPendencia",
+        camposPendentes: pendenciasPassagem,
+        message: "Estou ciente que estou avançando esta admissão com pendências obrigatórias não preenchidas.",
+      });
+    }
+
     const result = await this.db.transaction(async (tx) => {
       const concl = conclui(tipo, novo);
       const agora = new Date();
@@ -393,6 +429,19 @@ export class EsteiraService {
         reversao: ehReversao,
         autorId: user.id,
       });
+
+      // S3 — trilha de passagem (permanente) quando se avançou com pendências obrigatórias.
+      if (pendenciasPassagem.length > 0) {
+        await tx.insert(passagemAceites).values({
+          admissaoId: frente.admissaoId,
+          frenteId,
+          tipo,
+          deStatus: frente.status,
+          paraStatus: novo,
+          camposPendentes: pendenciasPassagem.join(", "),
+          autorId: user.id,
+        });
+      }
 
       // Recalcula o gate com o estado pós-mudança.
       const estadoDepois = irmas.map((f) =>
@@ -537,6 +586,35 @@ export class EsteiraService {
     return set;
   }
 
+  /** Conjunto de admissões com ≥1 campo obrigatório vazio (S2/S3 — pendências da admissão). */
+  private async pendenciasSet(admissaoIds: string[]): Promise<Set<string>> {
+    if (admissaoIds.length === 0) return new Set();
+    const linhas = await this.db
+      .select({
+        id: admissoes.id,
+        codCliente: admissoes.codCliente,
+        cargoId: admissoes.cargoId,
+        dataAdmissao: admissoes.dataAdmissao,
+        salario: dadosVagaFolha.salario,
+        beneficios: dadosVagaFolha.beneficios,
+        escala: dadosVagaFolha.escala,
+      })
+      .from(admissoes)
+      .leftJoin(dadosVagaFolha, eq(dadosVagaFolha.admissaoId, admissoes.id))
+      .where(inArray(admissoes.id, admissaoIds));
+    const set = new Set<string>();
+    for (const l of linhas) {
+      const pend = pendenciasObrigatorias({
+        codCliente: l.codCliente,
+        cargoId: l.cargoId,
+        dataAdmissao: l.dataAdmissao,
+        vagaFolha: { salario: l.salario, beneficios: l.beneficios, escala: l.escala },
+      });
+      if (pend.length > 0) set.add(l.id);
+    }
+    return set;
+  }
+
   /**
    * Item 4 (2C) — detalhe SOMENTE LEITURA de uma admissão para o modal de visualização rápida:
    * cliente, cargo, candidato, status das três frentes, checklist de documentos, sinalizador e
@@ -615,6 +693,32 @@ export class EsteiraService {
       )
       .orderBy(asc(tiposDocumento.nome));
 
+    // S2 — pendências obrigatórias (campos vazios da admissão).
+    const vaga = await this.db.query.dadosVagaFolha.findFirst({
+      where: eq(dadosVagaFolha.admissaoId, admissaoId),
+    });
+    const pendencias = pendenciasObrigatorias({
+      codCliente: adm.codCliente,
+      cargoId: adm.cargoId,
+      dataAdmissao: adm.dataAdmissao,
+      vagaFolha: { salario: vaga?.salario, beneficios: vaga?.beneficios, escala: vaga?.escala },
+    });
+
+    // S3 — trilha de passagem (avanços com pendência), com autor.
+    const passagensRows = await this.db
+      .select({
+        tipo: passagemAceites.tipo,
+        deStatus: passagemAceites.deStatus,
+        paraStatus: passagemAceites.paraStatus,
+        camposPendentes: passagemAceites.camposPendentes,
+        criadoEm: passagemAceites.criadoEm,
+        autor: usuarios.nome,
+      })
+      .from(passagemAceites)
+      .leftJoin(usuarios, eq(passagemAceites.autorId, usuarios.id))
+      .where(eq(passagemAceites.admissaoId, admissaoId))
+      .orderBy(desc(passagemAceites.criadoEm));
+
     return {
       admissaoId: adm.admissaoId,
       recebidoEm: adm.criadoEm,
@@ -622,6 +726,14 @@ export class EsteiraService {
       tipoContrato: adm.tipoContrato,
       farolGlobal: adm.farolGlobal,
       sinalizador: adm.sinalizador,
+      pendencias,
+      passagens: passagensRows.map((p) => ({
+        tipo: p.tipo,
+        rotulo: rotuloDe(p.tipo, p.paraStatus ?? ""),
+        camposPendentes: p.camposPendentes,
+        autor: p.autor,
+        criadoEm: p.criadoEm,
+      })),
       candidato: {
         nome: adm.candidatoNome,
         cpf: adm.candidatoCpf,

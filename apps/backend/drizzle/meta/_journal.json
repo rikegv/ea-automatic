@@ -50,6 +50,13 @@
       "when": 1782507014989,
       "tag": "0006_lowly_sabretooth",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1782510552213,
+      "tag": "0007_loving_warstar",
+      "breakpoints": true
     }
   ]
 }

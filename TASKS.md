@@ -95,7 +95,12 @@ DIARIO.md. O coordenador atualiza este arquivo a cada despacho.
 - [x] Componentes: MultiSelect (novo); Select.onAdd (admin estende catálogo)
 - [x] lint/typecheck/test verdes (38); smoke E2E (gate de aceite, substituição+TTL, job de expurgo)
 - [ ] **Validação visual do diretor (M2)** — PARADA atual
-### Marco 3 — Pendências + trilha (a fazer): S2 modal de pendências + "preencher"; S3 log de aceite por passagem (tabela+trilha); CLAUDE.md §A.3 (gate IA Fase 4, TTL CPF substituição, log de passagem)
+### Marco 3 — Pendências + trilha + CLAUDE.md (aguardando validação visual)
+- [x] CLAUDE.md §A.3 regras 8/9/10 (log de passagem, gate IA Fase 4, TTL CPF substituição)
+- [x] S2: `pendenciasObrigatorias` (domínio+testes); pill clicável → PendenciasModal → editar filtrado (`camposFiltro`)
+- [x] S3: tabela `passagem_aceites` (migration 0007); aceite de passagem na esteira (409 passagemComPendencia) + trilha gravada; `temPendencias` na fila; trilha no modal de ficha
+- [x] lint/typecheck/test verdes (40); smoke E2E (NC-1 + log de passagem juntos)
+- [ ] **Validação visual do diretor (M3)** — PARADA atual; depois auditoria de toda a OST → READY → merges
 
 ## Fase 3 — Esteira e Frentes Paralelas
 - [ ] Faróis em abas (F8), F12 frentes independentes, avanço por aba, upload de ASO

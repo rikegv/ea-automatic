@@ -5,6 +5,46 @@ feito e **por quê** (rastreabilidade para o diretor e para as próximas sessõe
 
 ---
 
+## 2026-06-26 — Ajustes 2B/2C — Marco 3: Pendências + trilha + CLAUDE.md (OST-EA-AJUSTES-2B-2C)
+
+Branch: `feat/ajustes-2b-2c`. Marco 3 de 3 (final) — S1/S2/S3 e a doc.
+
+### CLAUDE.md §A.3 (regras 8/9/10)
+Regra 8 — **log de aceite por passagem** (trilha, não penalização). Regra 9 — **gate da IA** mais
+rígido que o humano (Fase 4). Regra 10 — **TTL 48h do CPF de substituição** (LGPD).
+
+### S2 — modal de Pendências Obrigatórias
+- Helper puro `pendenciasObrigatorias` (domínio, + 2 testes): conjunto fixo Salário, Data de
+  admissão, Pacote de benefícios, Cliente, Cargo, Escala. `GET /esteira/admissao/:id` passou a
+  retornar `pendencias`.
+- Frontend: a pill "Pendências Obrigatórias" do Gerenciador virou **clicável** → `PendenciasModal`
+  lista os campos vazios; **"Preencher pendências"** abre o `EditAdmissaoModal` **filtrado** apenas
+  nesses campos (prop `camposFiltro`).
+
+### S3 — log de aceite por passagem (trilha permanente)
+- Tabela `passagem_aceites` (migration `0007`): admissão, frente, de/para status, campos pendentes
+  (rótulos, sem CPF — §A.6), autor, data. Cascade.
+- Esteira `mudarStatus`: concluir AUDITORIA/EXAME com campos obrigatórios pendentes da admissão →
+  **409 `passagemComPendencia`** (+ campos) se sem `aceitePassagem`; com aceite, grava a trilha no
+  tx. Os itens da fila trazem `temPendencias` (o front roteia direto para o aceite). O aceite Via 1/
+  Via 2 (régua/ASO) envia `aceitePassagem=true` junto, então **um único aceite** limpa o gate de
+  régua/ASO **e** registra a passagem (e cria a NC quando aplicável). `GET /esteira/admissao/:id`
+  retorna `passagens` (trilha consultável); exibida no modal de ficha.
+
+### Verificações + smoke E2E
+- `lint`/`typecheck`/`test` **verdes** (40 testes: +2 de `pendenciasObrigatorias`). Smoke:
+  concluir auditoria com pendências (régua + campos) com `confirmar+aceitePassagem` → ANALISE_OK +
+  **NC-1** + **log de passagem** (campos "Salário, Pacote de benefícios, Escala", autor); detalhe
+  retorna `pendencias` e `passagens`. Base demo restaurada (4 admissões, nc=0, passagens=0).
+
+### ⏸️ PARADA PARA VALIDAÇÃO VISUAL (§A.0) — Marco 3 (fecha a OST)
+Servidores no ar (backend :3011, frontend :3010). Aguardando **aprovação visual do diretor** do M3
+(modal de pendências + "preencher filtrado"; aceite de passagem na esteira + trilha no modal de
+ficha). **Commit na branch**; gate fechado, sem `READY_*`. Com o aval do M3, a OST inteira (M1+M2+M3
++ correção OriginGuard) segue para auditoria tester+segurança → `READY` → merges.
+
+---
+
 ## 2026-06-26 — Ajustes 2B/2C — Marco 2: Wizard + catálogos (OST-EA-AJUSTES-2B-2C)
 
 Branch: `feat/ajustes-2b-2c`. Marco 2 de 3 (Wizard + catálogos). Reforma completa do wizard (F6)

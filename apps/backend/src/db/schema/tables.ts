@@ -308,6 +308,27 @@ export const naoConformidades = pgTable(
   }),
 );
 
+// ── PassagemAceite: trilha de aceite por passagem (S3 — ajustes-2B-2C) ───────
+// Registro PERMANENTE de cada avanço de frente (concluir Auditoria/Exame) feito com campos
+// obrigatórios pendentes, sob aceite explícito do consultor. Trilha de passagem (regra 8), NÃO
+// penalização — a penalização é decidida na tela de Não Conformidades. Sem CPF (§A.6).
+export const passagemAceites = pgTable("passagem_aceites", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  admissaoId: uuid("admissao_id")
+    .notNull()
+    .references(() => admissoes.id, { onDelete: "cascade" }),
+  frenteId: uuid("frente_id")
+    .notNull()
+    .references(() => frentesAdmissao.id, { onDelete: "cascade" }),
+  tipo: frenteTipoEnum("tipo").notNull(),
+  deStatus: varchar("de_status", { length: 40 }),
+  paraStatus: varchar("para_status", { length: 40 }),
+  // Campos obrigatórios que estavam vazios no momento do avanço (rótulos legíveis, sem dado pessoal).
+  camposPendentes: text("campos_pendentes"),
+  autorId: uuid("autor_id").references(() => usuarios.id),
+  criadoEm,
+});
+
 // ── IntegraçãoPandapé (anexo opcional — só quando a admissão veio do Pandapé) ─
 export const integracaoPandape = pgTable("integracao_pandape", {
   id: uuid("id").defaultRandom().primaryKey(),

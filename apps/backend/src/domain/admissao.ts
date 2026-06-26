@@ -52,3 +52,31 @@ export function calcSinalizadorPreenchimento(i: SinalizadorInput): Sinalizador {
   if (identidade && clienteCargo) return "PARCIAL";
   return "PENDENTE";
 }
+
+/** Entrada do cálculo de pendências obrigatórias (S2/S3 — ajustes-2B-2C). */
+export interface PendenciasInput {
+  codCliente?: string | null;
+  cargoId?: string | null;
+  dataAdmissao?: string | null;
+  vagaFolha?: {
+    salario?: string | number | null;
+    beneficios?: string | null;
+    escala?: string | null;
+  } | null;
+}
+
+/**
+ * Campos obrigatórios vazios da admissão (badge "Pendências Obrigatórias" — S2; e gatilho do log de
+ * passagem — S3). Conjunto fixo: Salário, Data de admissão, Pacote de benefícios, Cliente, Cargo,
+ * Escala. Função PURA. Cliente/Cargo são sempre exigidos na criação, mas constam por completude.
+ */
+export function pendenciasObrigatorias(i: PendenciasInput): string[] {
+  const pend: string[] = [];
+  if (!presente(i.codCliente)) pend.push("Cliente");
+  if (!presente(i.cargoId)) pend.push("Cargo");
+  if (!presente(i.vagaFolha?.salario)) pend.push("Salário");
+  if (!presente(i.dataAdmissao)) pend.push("Data de admissão");
+  if (!presente(i.vagaFolha?.beneficios)) pend.push("Pacote de benefícios");
+  if (!presente(i.vagaFolha?.escala)) pend.push("Escala");
+  return pend;
+}

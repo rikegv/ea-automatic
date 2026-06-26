@@ -61,12 +61,28 @@ export function EditAdmissaoModal({
   candidatoNome,
   onClose,
   onSaved,
+  camposFiltro,
 }: {
   admissaoId: string;
   candidatoNome: string;
   onClose: () => void;
   onSaved: (msg: string) => void;
+  /** Chaves de campo a exibir (S2 — "preencher pendências"); ausente = formulário inteiro. */
+  camposFiltro?: string[];
 }) {
+  const mostra = (campo: string) => !camposFiltro || camposFiltro.includes(campo);
+  const verProcesso = ["tipoContrato", "dataAdmissao", "matricula", "farol"].some(mostra);
+  const verFolha = [
+    "salario",
+    "escala",
+    "centroCusto",
+    "departamento",
+    "gestorBp",
+    "tempoContrato",
+    "motivo",
+    "beneficios",
+    "endereco",
+  ].some(mostra);
   const { token } = useAuth();
   const [data, setData] = useState<AdmissaoEdit | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -164,58 +180,93 @@ export function EditAdmissaoModal({
           <p className="py-8 text-center text-sm text-faint">Carregando…</p>
         ) : (
           <div className="space-y-5">
+            {camposFiltro && (
+              <p className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[12.5px] text-dim">
+                Preenchendo apenas as pendências obrigatórias.
+              </p>
+            )}
+            {verProcesso && (
             <section>
               <div className="mb-2 text-[11px] uppercase tracking-wide text-faint">Processo</div>
               <div className="grid gap-3 sm:grid-cols-2">
+                {mostra("tipoContrato") && (
                 <Campo rotulo="Tipo de contrato">
                   <input className="ds-input" value={tipoContrato} onChange={(e) => setTipoContrato(e.target.value)} />
                 </Campo>
+                )}
+                {mostra("dataAdmissao") && (
                 <Campo rotulo="Data de admissão">
                   <input type="date" className="ds-input" value={dataAdmissao} onChange={(e) => setDataAdmissao(e.target.value)} />
                 </Campo>
+                )}
+                {mostra("matricula") && (
                 <Campo rotulo="Matrícula">
                   <input className="ds-input" value={matricula} onChange={(e) => setMatricula(e.target.value)} />
                 </Campo>
+                )}
+                {mostra("farol") && (
                 <Campo rotulo="Status (farol)">
                   <Select value={farol} onChange={setFarol} options={FAROL_OPTS} ariaLabel="Farol" />
                 </Campo>
+                )}
               </div>
             </section>
+            )}
 
+            {verFolha && (
             <section>
               <div className="mb-2 text-[11px] uppercase tracking-wide text-faint">Vaga / folha</div>
               <div className="grid gap-3 sm:grid-cols-2">
+                {mostra("salario") && (
                 <Campo rotulo="Salário">
                   <input className="ds-input" inputMode="decimal" value={vf.salario ?? ""} onChange={(e) => setVfField("salario")(e.target.value)} placeholder="0,00" />
                 </Campo>
+                )}
+                {mostra("escala") && (
                 <Campo rotulo="Escala">
                   <input className="ds-input" value={vf.escala ?? ""} onChange={(e) => setVfField("escala")(e.target.value)} />
                 </Campo>
+                )}
+                {mostra("centroCusto") && (
                 <Campo rotulo="Centro de custo">
                   <input className="ds-input" value={vf.centroCusto ?? ""} onChange={(e) => setVfField("centroCusto")(e.target.value)} />
                 </Campo>
+                )}
+                {mostra("departamento") && (
                 <Campo rotulo="Departamento">
                   <input className="ds-input" value={vf.departamento ?? ""} onChange={(e) => setVfField("departamento")(e.target.value)} />
                 </Campo>
+                )}
+                {mostra("gestorBp") && (
                 <Campo rotulo="Gestor / BP">
                   <input className="ds-input" value={vf.gestorBp ?? ""} onChange={(e) => setVfField("gestorBp")(e.target.value)} />
                 </Campo>
+                )}
+                {mostra("tempoContrato") && (
                 <Campo rotulo="Tempo de contrato">
                   <input className="ds-input" value={vf.tempoContrato ?? ""} onChange={(e) => setVfField("tempoContrato")(e.target.value)} />
                 </Campo>
+                )}
+                {mostra("motivo") && (
                 <Campo rotulo="Motivo">
                   <input className="ds-input" value={vf.motivo ?? ""} onChange={(e) => setVfField("motivo")(e.target.value)} />
                 </Campo>
+                )}
               </div>
               <div className="mt-3 grid gap-3">
+                {mostra("beneficios") && (
                 <Campo rotulo="Benefícios">
                   <textarea className="ds-input min-h-[64px] resize-y" value={vf.beneficios ?? ""} onChange={(e) => setVfField("beneficios")(e.target.value)} />
                 </Campo>
+                )}
+                {mostra("endereco") && (
                 <Campo rotulo="Endereço">
                   <textarea className="ds-input min-h-[64px] resize-y" value={vf.endereco ?? ""} onChange={(e) => setVfField("endereco")(e.target.value)} />
                 </Campo>
+                )}
               </div>
             </section>
+            )}
 
             {erro && <p className="text-sm text-danger">{erro}</p>}
 

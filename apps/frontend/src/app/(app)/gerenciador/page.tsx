@@ -12,6 +12,7 @@ import { Select } from "@/components/ui/Select";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AdmissaoDetalheModal } from "@/components/esteira/AdmissaoDetalheModal";
 import { EditAdmissaoModal } from "@/components/gerenciador/EditAdmissaoModal";
+import { PendenciasModal } from "@/components/gerenciador/PendenciasModal";
 
 interface AdmRow {
   admissaoId: string;
@@ -128,6 +129,8 @@ export default function GerenciadorPage() {
   // Modais
   const [viewId, setViewId] = useState<string | null>(null);
   const [editRow, setEditRow] = useState<AdmRow | null>(null);
+  const [editFiltro, setEditFiltro] = useState<string[] | undefined>(undefined);
+  const [pendRow, setPendRow] = useState<AdmRow | null>(null);
   const [delRow, setDelRow] = useState<AdmRow | null>(null);
   const [deleting, setDeleting] = useState(false);
 
@@ -484,9 +487,14 @@ export default function GerenciadorPage() {
                 <div className="min-w-0">
                   <StatusPill tone={farolP.tone} label={farolP.label} />
                 </div>
-                <div className="min-w-0">
+                <button
+                  type="button"
+                  className="flex min-w-0 items-center rounded-lg text-left transition hover:opacity-80"
+                  title="Ver pendências obrigatórias"
+                  onClick={() => setPendRow(r)}
+                >
                   <StatusPill tone={sinalP.tone} label={sinalP.label} />
-                </div>
+                </button>
                 <div className="flex items-center gap-1">
                   <button
                     type="button"
@@ -557,13 +565,30 @@ export default function GerenciadorPage() {
 
       {/* Modais */}
       {viewId && <AdmissaoDetalheModal admissaoId={viewId} onClose={() => setViewId(null)} />}
+      {pendRow && (
+        <PendenciasModal
+          admissaoId={pendRow.admissaoId}
+          candidatoNome={pendRow.candidatoNome}
+          onClose={() => setPendRow(null)}
+          onPreencher={(campos) => {
+            setEditRow(pendRow);
+            setEditFiltro(campos);
+            setPendRow(null);
+          }}
+        />
+      )}
       {editRow && (
         <EditAdmissaoModal
           admissaoId={editRow.admissaoId}
           candidatoNome={editRow.candidatoNome}
-          onClose={() => setEditRow(null)}
+          camposFiltro={editFiltro}
+          onClose={() => {
+            setEditRow(null);
+            setEditFiltro(undefined);
+          }}
           onSaved={(msg) => {
             setEditRow(null);
+            setEditFiltro(undefined);
             setFlash(msg);
             void load();
           }}
