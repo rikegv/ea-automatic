@@ -5,6 +5,61 @@ feito e **por quê** (rastreabilidade para o diretor e para as próximas sessõe
 
 ---
 
+## 2026-06-26 — Fase 2B: Gerenciador de Admissões (OST-EA-FASE-2B)
+
+Branch: `feat/fase-2b-gerenciador` (a partir da `main`, que já tem o 2C; **independente** da branch
+da régua). Escopo: dar lógica real à casca do Gerenciador (F10) — tabela de admissões com
+paginação, busca global, filtros acumulativos (F7), KPIs-filtro, edição e deleção.
+
+### O que foi construído
+**Backend** (`apps/backend/src/admissoes/`, sem migration — tabelas já existiam):
+- `GET /admissoes` — lista **paginada** (page/pageSize, server-side) com filtros acumulativos
+  (busca `q` nome/CPF, cliente, cargo, tipo de contrato, farol, sinalizador, período de/até),
+  **KPIs** (total/ativos/concluídos/declinados) calculados sobre o conjunto base (sem o filtro de
+  farol/concluído, p/ funcionarem como botão de filtro) e `tiposContrato` distintos (alimenta o
+  Select). CPF nunca é retornado na lista (só filtra). "Concluído" = existe frente
+  CADASTRO_CONTRATO concluída (processo finalizado) — via `EXISTS` parametrizado.
+- `GET /admissoes/:id` — campos editáveis (prefill do formulário).
+- `PATCH /admissoes/:id` — edita vaga/folha + contrato/data/matrícula/farol; **recalcula o
+  sinalizador** (F5) com os novos valores; **NÃO** altera CPF nem cod_cliente (identidade — §A.3).
+- `DELETE /admissoes/:id` — `@Roles("MASTER","SUPER_ADMIN")`.
+
+**Frontend** (`apps/frontend`):
+- `gerenciador/page.tsx` reescrita: 4 KPIs clicáveis (filtro radio-like), busca global em tempo
+  real (debounce), filtros (cliente autocomplete, cargo/contrato/farol/sinalizador via `Select`,
+  período), tabela com paginação (prev/próxima), pill de farol e de sinalizador, ações por linha
+  (olho → `AdmissaoDetalheModal` reusado; lápis → `EditAdmissaoModal`; lixeira → `ConfirmDialog`,
+  **só para Master/Super Admin**).
+- `components/gerenciador/EditAdmissaoModal.tsx` (novo). Pill **azul** (`.pill.in` / tom `in`) p/ o
+  farol ATIVO e ícone `trash` adicionados ao DS.
+
+### Decisões de implementação (dentro do escopo)
+- **Deleção = HARD DELETE.** As FKs em cascata (vaga/folha, documentos, frentes, eventos, NCs,
+  integração Pandapé) removem os filhos. Confirmação obrigatória avisa que remove os vínculos.
+  **Restrita a Master/Super Admin** (ação destrutiva; botão só aparece para admin no front e o
+  guard barra no back). Soft delete fica como evolução futura.
+- **Farol → pill:** ATIVO azul (`--accent`), DECLINOU vermelho, RESCISÃO laranja (`--warn-2`),
+  BANCO_PAUSADA cinza — conforme a OST.
+- **KPI "Concluídos"** mapeado para CADASTRO_CONTRATO concluída (não há valor de farol "concluído").
+
+### Verificações + smoke E2E
+- `pnpm lint`/`typecheck`/`test` **verdes** (38). `next build` OK (`/gerenciador` 5.73 kB).
+- Smoke via API: lista paginada + KPIs `{total:4, ativos:4, concluidos:1, declinados:0}` +
+  tiposContrato; prefill; **edição persiste** (centroCusto/salário) e recalcula sinalizador;
+  filtro `concluido=true` → Ana Esteira; busca `q=Ana`; **RBAC do delete: COMUM → 403**; delete
+  real (admissão descartável) com **cascata confirmada** (frentes/docs/vaga → 0). Dados de smoke
+  expurgados. *(Incidente: o CPF de teste que escolhi colidiu com o de "Ana Esteira" (demo); a
+  limpeza removeu a admissão dela — recriada e restaurada ao estado concluído; base demo de volta a
+  4 admissões.)*
+
+### ⏸️ PARADA PARA VALIDAÇÃO VISUAL (§A.0)
+Servidores no ar (loopback): backend :3011, frontend `pnpm dev` :3010. Aguardando **aprovação
+visual do diretor** do Gerenciador com dados reais (tabela, busca, filtros/KPIs-filtro, edição,
+deleção, modal de ficha). **Commit na branch**; gate fechado, sem `READY_*` — flag/merge só após
+auditoria tester+segurança.
+
+---
+
 ## 2026-06-26 — Fase 2C (continuação): Ajustes da Esteira + Tela de Não Conformidade
 
 Branch: `feat/fase-2c-esteira` (mesma da 2C; **working tree, sem commit** — aguardando validação

@@ -73,6 +73,7 @@ const TONE_VAR: Record<PillTone, string | undefined> = {
   or: "var(--warn-2)",
   dg: "var(--danger)",
   nt: undefined,
+  in: "var(--accent)",
 };
 
 function fmtData(d?: string | null): string {

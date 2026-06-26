@@ -747,6 +747,13 @@
   .pill.nt .pd {
     background: var(--dim);
   }
+  .pill.in {
+    background: rgba(34, 176, 219, 0.14);
+    color: var(--accent);
+  }
+  .pill.in .pd {
+    background: var(--accent);
+  }
 
   /* ---- lista / tabela glass (faróis) ---- */
   .list {

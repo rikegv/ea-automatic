@@ -67,8 +67,15 @@ DIARIO.md. O coordenador atualiza este arquivo a cada despacho.
 - [x] Auditoria tester (PASS) + segurança (APROVADO) → flag `READY_fase-2c-esteira` → merge na main → push
 - [ ] **Follow-ups 2C (fase futura):** NC-3 vira detecção automática quando kit (F9)/assinatura (INT-4) existirem; reabrir NC-1/NC-2 ao re-disparar (hoje idempotente por admissão+tipo não reabre); endpoint/UI de leitura da trilha `frente_status_eventos`; testes de integração das rotas de esteira/NC (testcontainers)
 
-### Fase 2B e pendências
-- [ ] F10 gerenciador (tabela), F7 filtros dinâmicos (Fase 2B)
+### Fase 2B — Gerenciador de Admissões ⏸️ (OST-EA-FASE-2B · branch `feat/fase-2b-gerenciador`, aguardando validação visual)
+- [x] `GET /admissoes` paginado + filtros acumulativos (q nome/CPF, cliente, cargo, contrato, farol, sinalizador, período) + KPIs (total/ativos/concluídos/declinados) como botão de filtro
+- [x] `GET /admissoes/:id` (prefill) + `PATCH /admissoes/:id` (edita vaga/folha + processo, recalcula sinalizador, não toca CPF/cliente)
+- [x] `DELETE /admissoes/:id` hard delete com cascata, restrito a Master/Super Admin (RBAC comprovado: COMUM→403)
+- [x] Gerenciador funcional: busca global, paginação, farol pill (azul/vermelho/laranja/cinza), edição (modal), deleção (confirmação), modal de ficha reusado da Esteira; `EditAdmissaoModal`, pill `in`, ícone trash
+- [x] lint/typecheck/test verdes (38); next build OK; smoke E2E (lista/edit/delete/RBAC)
+- [ ] **Validação visual do diretor** (gerenciador com dados reais) — PARADA atual
+- [ ] Auditoria tester+segurança → `READY_fase-2b-gerenciador` → merge
+- [ ] **Follow-up:** edição não permite trocar cargo (mudaria a régua) — avaliar se desejável; soft delete como evolução
 - [ ] **Follow-ups técnicos (fase futura):** e2e do `POST /admissoes` com testcontainers (400/idempotência/contagem frentes-docs); migrar CPF do path do `GET /admissoes/candidato/:cpf` para o corpo (POST) — higiene de log/proxy
 
 ## Fase 3 — Esteira e Frentes Paralelas
