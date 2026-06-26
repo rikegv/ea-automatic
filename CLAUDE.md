@@ -103,6 +103,18 @@ Entidades centrais:
 5. Não-bloqueio: Admissão é criável com obrigatórios vazios; o sinalizador marca, nunca impede.
 6. Reaproveitamento por CPF: CPF existente oferece reaproveitar dados, preservando histórico.
 7. Documento é efêmero: guarda-se o status; o binário transita e é descartado.
+8. **Log de aceite por passagem (trilha, não penalização).** Todo avanço de frente na Esteira
+   (Auditoria→Exame, Exame→Cadastro) com campos obrigatórios pendentes exige **aceite explícito** do
+   consultor e gera um **log permanente e consultável** (quem, quando, quais campos pendentes). É
+   trilha de passagem — distinta do log de não conformidade (§A.6); a penalização é decidida na tela
+   de Não Conformidades, não aqui. *(Ajustes-2B-2C, S3.)*
+9. **Gate da IA (Fase 4/F2) é mais rígido que o humano.** Quando o motor de IA entrar, ele **não
+   avança de fase** se houver pendências obrigatórias — o gate humano admite o avanço com aceite
+   (regra 8), o gate da IA não. *(Regra futura — implementar na Fase 4.)*
+10. **TTL do CPF de substituição (LGPD).** Quando o motivo de contratação é "Substituição", o CPF da
+    pessoa substituída é retido por no máximo **48h após a assinatura do contrato** e então
+    **expurgado automaticamente** (mesmo padrão da staging efêmera, §A.6) — retenção mínima
+    necessária para o cadastro na folha/eSocial. *(Ajustes-2B-2C, W2.)*
 
 **Princípio da Independência Operacional com Integridade de Processo.** Cada frente opera
 autônoma no seu menu (fila, status, responsáveis próprios), mas todas compartilham a mesma
