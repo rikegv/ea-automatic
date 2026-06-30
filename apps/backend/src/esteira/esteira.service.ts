@@ -136,6 +136,7 @@ export class EsteiraService {
         dataAdmissao: admissoes.dataAdmissao,
         drivePastaUrl: admissoes.drivePastaUrl,
         driveAsoUrl: admissoes.driveAsoUrl,
+        origem: admissoes.origem,
         sinalizador: admissoes.sinalizadorPreenchimento,
       })
       .from(frentesAdmissao)
@@ -177,6 +178,7 @@ export class EsteiraService {
         dataAdmissao: r.dataAdmissao,
         drivePastaUrl: r.drivePastaUrl,
         driveAsoUrl: r.driveAsoUrl,
+        origem: r.origem,
         sinalizador: r.sinalizador,
       };
       if (tipo === "EXAME") {
@@ -618,6 +620,7 @@ export class EsteiraService {
         tipoContrato: admissoes.tipoContrato,
         farolGlobal: admissoes.farolGlobal,
         isBanco: admissoes.isBanco,
+        origem: admissoes.origem,
         drivePastaUrl: admissoes.drivePastaUrl,
         driveAsoUrl: admissoes.driveAsoUrl,
         sinalizador: admissoes.sinalizadorPreenchimento,
@@ -723,6 +726,7 @@ export class EsteiraService {
       tipoContrato: adm.tipoContrato,
       farolGlobal: adm.farolGlobal,
       isBanco: adm.isBanco,
+      origem: adm.origem,
       drivePastaUrl: adm.drivePastaUrl,
       driveAsoUrl: adm.driveAsoUrl,
       sinalizador: adm.sinalizador,

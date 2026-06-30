@@ -1116,3 +1116,70 @@ ao GitHub. Flag local, nunca versionada (removida após o push).
 **Drive real (pendência aberta com o Fernando):** o bloqueio `storageQuotaExceeded` está em
 resolução — Opção A (Shared Drive) ou Opção B (domain-wide delegation). Ao liberar:
 `DRIVE_MOCK=false` + smoke real do upload, **sem nova validação visual** (só confirmação técnica).
+
+## ✅ FASE 5 — INTEGRAÇÃO PANDAPÉ (OST-EA-FASE-5) — 2026-06-30
+
+**Mudança de modelo (diretor + admin de infra): webhook → verificação periódica (cron-pull).**
+O desenho original (A.5/INT-1) previa webhook via ingress público. Adotado job agendado por cron
+na VM que consulta a API periodicamente — **elimina a exposição pública do servidor** e dispensa
+o ingress da TI (antes pendência §A.9). CLAUDE.md A.5/A.8/A.9 atualizados.
+
+**Pré-requisito ainda pendente (não bloqueou):** `PANDAPE_API_TOKEN` está sendo solicitado pelo
+diretor ao suporte Pandapé. Tudo construído para receber o token via env, **sem hardcode**; sem
+token a integração fica **pronta porém inerte**. Quando chegar, o diretor configura e um smoke
+real é feito sem nova OST.
+
+### O que foi entregue (DoD)
+- **Job agendado:** `infra/install-pandape-cron.sh` instala crontab `*/5 7-23 * * *` (a cada 5 min,
+  7h–23h, todos os dias; fora da janela não roda) disparando `POST /internal/pandape/tick`
+  protegido por `X-Internal-Token`. Script idempotente, não grava o token em claro (expande em
+  runtime via `infra/.env`). A instalação na VM é ação deliberada (script entregue, crontab não
+  instalado pela fábrica).
+- **Cliente da API (backend, `apps/backend/src/pandape/`):** `PandapeApiService` (Bearer via
+  `PANDAPE_API_TOKEN`, `GET /v3/precollaborators/{id}`, listagem de mudanças, `getVacancy` para
+  cliente/cargo). `estaAtivo()` falso sem token → no-op, `fetch` nunca chamado.
+- **Fila BullMQ/Redis cabeada de verdade** (uso reservado desde a Fase 4): `ea-redis` db 1 +
+  prefix `ea:bull` (isolado), worker `concurrency:1` + `limiter {max:800, duration:5min}` (folga
+  sob o teto 1.000/5min compartilhado, §A.5) + backoff exponencial (5 tentativas).
+- **Idempotência** (índice unique `uq_integracao_pandape_precollab`, migration `0011`): novo
+  `IdPreCollaborator` → cria Candidato+Admissão+Frentes (AUDITORIA+EXAME, regra 1)+Documentos pela
+  régua; conhecido com etapa diferente → atualiza só a etapa; mesma etapa → no-op. Job 2× sobre o
+  mesmo payload **não duplica** (corrida tratada via violação 23505).
+- **Reuso sem reescrita:** `AdmissoesService.create(dto, user?, opts?)` com `opts.bypassAceite`
+  (sistema não clica aceite — regra 5 não-bloqueio) e `opts.origem`/`opts.pandape`;
+  `AuditoriaService.auditarBuffer(...)` extraído por equivalência alimenta a F2 existente
+  (staging efêmera, IA incremental, Drive, expurgo TTL 48h) com binário baixado em memória.
+- **Pull de documentos:** baixa a URL pública **só em memória** → `auditarBuffer` → descarte.
+  **URL nunca persistida nem logada** (§A.6). Tipo não mapeável é pulado sem quebrar.
+- **Cliente/Cargo:** resolvidos via `getVacancy` (best-effort por CNPJ/nome); **quando não
+  resolvem, a criação é adiada** (o tick reabre) em vez de inventar `cod_cliente` — o schema
+  exige FK NOT NULL (Admissão liga Candidato+Cliente+Cargo, §A.3). Depende do **de/para
+  Pandapé→catálogo** (insumo do diretor, §A.9, par com as regras de auditoria e os tipos de doc).
+- **Autoria das transições do sistema:** quando o pull fecha a régua e a auditoria auto-conclui,
+  o autor do evento é o SUPER_ADMIN mais antigo (autorId é FK para usuários; usuário sintético
+  violaria a FK) — ação de sistema atribuída a usuário real, não fake.
+- **Saída manual (inalterada):** "Admissão finalizada" segue clicada pelo consultor no Pandapé;
+  o EA não automatiza (sem endpoint de escrita/RPA).
+- **Badge "Via Pandapé":** chip azul accent (ícone de elo), só quando `origem=PANDAPE`; aparece no
+  Gerenciador, na Esteira (3 abas), na ficha do candidato e no modal de edição. `origem` exposto
+  em `GET /admissoes`, `GET /esteira/:frente`, `GET /admissoes/:id` e `GET /esteira/admissao/:id`.
+
+### Validação visual do diretor (§A.0): APROVADA
+App subido localmente (backend 3011 / frontend 3010), base demo com "Ana Esteira" marcada
+`origem=PANDAPE`; data path confirmado no `GET /api/admissoes` real (origem PANDAPE × MANUAL).
+Diretor abriu no navegador e **aprovou o badge nos 4 lugares**.
+
+### Gates de fábrica
+- **tester — VERDE.** backend **93 testes** (+25 novos: idempotência a/b/c/d, bypassAceite,
+  equivalência auditarBuffer, inércia sem token, pull de docs com checagem §A.6 de não-vazamento
+  de URL), `typecheck`/`lint` limpos, ai-service 31 (não tocado). Zero bugs no código de produção;
+  toda a API Pandapé mockada, sem rede real.
+- **segurança — APROVADO sem veto.** 7 pontos §A.6 com evidência arquivo:linha — URL só em
+  memória (descartada no `finally`), zero PII/URL em log, staging efêmera intacta, entrypoint
+  fail-closed (`InternalTokenGuard` rejeita header ausente/divergente e token não setado), token
+  env-only com inércia, crontab sem segredo em claro, limiter/backoff + Redis isolado.
+
+### Insumos do diretor para ativar (§A.9)
+`PANDAPE_API_TOKEN` + de/para Pandapé→catálogo (cliente/cargo via `IdVacancy`; tipos de documento).
+Sem o token a Fase 5 fica inerte; sem o de/para, vagas não-mapeadas adiam (não inventam FK).
+Investigação do formato real dos campos será registrada aqui quando o token permitir o teste real.

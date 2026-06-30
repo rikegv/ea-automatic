@@ -75,7 +75,21 @@ export class AuditoriaService {
     user: AuthUser,
   ) {
     if (!file) throw new BadRequestException("Arquivo obrigatório (campo 'file')");
+    return this.auditarBuffer(admissaoId, tipoDocumentoId, file, user);
+  }
 
+  /**
+   * Núcleo da auditoria de UM documento, desacoplado do multipart (Fase 5 / INT-1): aceita qualquer
+   * fonte com buffer + nome, permitindo o pull de docs do Pandapé reusar a F2 sem reescrita.
+   * `auditarDocumento` (upload manual) valida a presença do arquivo e delega aqui — equivalência.
+   */
+  async auditarBuffer(
+    admissaoId: string,
+    tipoDocumentoId: string,
+    arquivo: { buffer: Buffer; originalname: string },
+    user: AuthUser,
+  ) {
+    const file = arquivo;
     const adm = await this.carregarAdmissao(admissaoId);
 
     const tipo = await this.db.query.tiposDocumento.findFirst({

@@ -169,17 +169,33 @@ Administração de Cadastros (clientes, cargos, régua — restrito à administr
 ## A.5 — Integrações
 
 **INT-1 Pandapé (ATS).**
-- Entrada **push**: webhook próprio do EA (sem tocar no webhook G.Infor, intocável) para
-  "Candidato enviado para admissão" e "Pré-Colaborador mudou de etapa". Payload traz
-  `IdPreCollaborator`, `IdMatch`, `IdVacancy`, etapa destino. Com o ID, chamar
-  `GET /v3/precollaborators/{id}` e puxar dados + links de documento.
-- Entrada push **depende de ingress público** (a construir com a TI). Sem ele, cai para pull.
+- Entrada **por verificação periódica (pull agendado)** — *modelo adotado na Fase 5, em
+  substituição ao webhook/ingress originalmente previsto* (decisão do diretor + admin de infra:
+  elimina a exposição pública do servidor). Um **job agendado por cron na VM** dispara
+  `POST /internal/pandape/tick` (protegido por `X-Internal-Token`) **a cada 5 min, das 7h às 23h,
+  todos os dias** (`*/5 7-23 * * *`; fora da janela não executa). O tick consulta a API buscando
+  candidatos com mudanças desde a última verificação (novos envios para admissão e mudanças de
+  etapa em processos já conhecidos) e enfileira o processamento. Com o `IdPreCollaborator`, chama
+  `GET /v3/precollaborators/{id}` e puxa dados + links de documento. **Autenticação por
+  `PANDAPE_API_TOKEN`** (Bearer, via env; sem token a integração fica **pronta porém inerte**, sem
+  hardcode). *(O webhook G.Infor permanece intocável; o pivot para cron-pull dispensa o ingress
+  público da TI — antes pendência §A.9 da Fase 5.)*
+- **Idempotência:** `integracao_pandape` registra o `IdPreCollaborator` (índice unique) de cada
+  processado. Novo → cria Candidato+Admissão+Frentes (AUDITORIA+EXAME, regra 1)+Documentos pela
+  régua; conhecido com etapa diferente → atualiza só a etapa; conhecido mesma etapa → no-op.
+  Rodar o job 2× sobre o mesmo payload não duplica nada.
 - Saída **manual**: não há endpoint de movimentação de etapa. "Admissão finalizada" é clicada
   pelo consultor no Pandapé. Sem RPA.
-- **Rate limit 1.000 req/5min compartilhado entre API e webhook** → fila (BullMQ) + backoff são
-  requisito de segurança (excesso do EA pode atrasar o webhook que alimenta a folha).
-- Links de documento são **URLs públicas que não expiram** → baixar, auditar, arquivar,
-  descartar; **nunca persistir a URL** (LGPD).
+- **Rate limit 1.000 req/5min compartilhado** → fila **BullMQ** (Redis `ea-redis`, db/prefix
+  isolados) com worker rate-limited (folga sob o teto) + backoff exponencial — requisito de
+  segurança (excesso do EA pode atrasar o webhook G.Infor que alimenta a folha).
+- Links de documento são **URLs públicas que não expiram** → baixar (só em memória), auditar
+  (alimenta a F2 via staging efêmera), arquivar, descartar; **nunca persistir nem logar a URL**
+  (LGPD §A.6).
+- **Cliente/Cargo:** quando o endpoint da vaga (`IdVacancy`) retorna cliente (nome/CNPJ) e cargo,
+  mapeia para `cod_cliente`+`cargo`; quando não resolve, a criação é **adiada** (o tick reabre)
+  em vez de inventar `cod_cliente` — depende do **de/para Pandapé→catálogo** (insumo do diretor,
+  §A.9, par com as regras de auditoria e o mapa de tipos de documento).
 
 **INT-2 Google Drive.** Service account com delegation (padrão CentraAtend). Prontuário nomeado
 nome do funcionário + cliente, documentos renomeados; arquivos descartados após salvar.
@@ -237,8 +253,10 @@ tem de ser bloqueado de fato. Disciplina de worktree: poda após merge, nada sob
 - **Fase 3 — Esteira e Frentes Paralelas:** faróis em abas (F8), F12, avanço por aba, ASO.
 - **Fase 4 — Motor de IA e Arquivamento:** auditoria incremental, staging, Drive, kit (F9).
   *Depende de: regras de auditoria, service account, árvore do Drive.*
-- **Fase 5 — Integração Pandapé:** ingress, webhook, pull, criação automática, sincronização.
-  *Depende de: ingress (TI).*
+- **Fase 5 — Integração Pandapé:** job agendado (cron-pull), cliente da API, criação automática
+  idempotente, sincronização de etapa, pull de documentos para a F2, badge de origem.
+  *Modelo cron-pull em vez de webhook → **dispensa o ingress da TI**. Depende de:
+  `PANDAPE_API_TOKEN` (diretor) e do de/para Pandapé→catálogo (cliente/cargo/tipos de documento).*
 - **Fase 6 — Dashboards/BI.** *Depende de: definição dos dashboards.*
 
 Fases 0–3 são o núcleo, construível imediatamente. Insumos das fases 4–6 são reunidos pelo
@@ -251,7 +269,12 @@ diretor em paralelo à construção do núcleo.
 - Regras de auditoria documental (critério de aprovação da IA na F2) — pendência mais pesada.
 - Service account no projeto Google Cloud `ea-v2-automatic` (já existe) + habilitar APIs
   (Vertex AI API, Drive API) + definir árvore de pastas do Drive. *Necessário só na Fase 4.*
-- Ingress público do webhook (TI). *Necessário só na Fase 5.*
+- ~~Ingress público do webhook (TI).~~ **Dispensado na Fase 5** — o modelo passou a cron-pull
+  (verificação periódica), sem exposição pública.
+- **`PANDAPE_API_TOKEN`** (diretor solicita ao suporte Pandapé) + **de/para Pandapé→catálogo**
+  (cliente/cargo via `IdVacancy` e tipos de documento). Sem o token a Fase 5 fica pronta porém
+  inerte; sem o de/para, admissões com vaga não-mapeada são adiadas (não inventam `cod_cliente`).
+  *Necessário só na Fase 5 (ativação).*
 - Base oficial de clientes (código + CNPJ + razão social) — sobe no formato atual.
 - Definição dos dashboards.
 - Acessos: GitHub (repo criado), VM, Pandapé, Clicksign. Credencial de IA é a service account

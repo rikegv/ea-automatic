@@ -45,7 +45,13 @@ export class StagingService {
    * Grava o buffer do multipart em disco e devolve o caminho. O buffer é referenciado só aqui e
    * descartado pelo GC ao fim do handler (nunca persistido em banco — §A.6).
    */
-  async salvar(admissaoId: string, codigoTipo: string, file: Express.Multer.File): Promise<string> {
+  async salvar(
+    admissaoId: string,
+    codigoTipo: string,
+    // Aceita qualquer fonte com buffer + nome (Multer.File é estruturalmente compatível). Permite o
+    // pull de docs do Pandapé (Fase 5 / INT-1) reusar a staging sem depender de multipart.
+    file: { buffer: Buffer; originalname: string },
+  ): Promise<string> {
     const dir = this.caminho(admissaoId);
     await mkdir(dir, { recursive: true });
     const ext = extname(file.originalname) || "";

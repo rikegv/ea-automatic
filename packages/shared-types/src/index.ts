@@ -29,6 +29,12 @@ export const FAROL_GLOBAL_LABEL: Record<FarolGlobal, string> = {
   RESCISAO: "Rescisão",
 };
 
+// ── Origem da admissão (Fase 5 / INT-1) ────────────────────────────────────
+// MANUAL: criada pelo wizard (F6). PANDAPE: criada pela sync do ATS (webhook/pull). Alimenta o
+// badge de origem no Gerenciador/Esteira do frontend.
+export const ORIGEM = ["MANUAL", "PANDAPE"] as const;
+export type Origem = (typeof ORIGEM)[number];
+
 // ── Frentes paralelas e independentes (F12 / §A.3) ─────────────────────────
 export const FRENTE = ["AUDITORIA", "EXAME", "CADASTRO_CONTRATO"] as const;
 export type Frente = (typeof FRENTE)[number];

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import type { Origem } from "@ea/shared-types";
 import { apiFetch, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/cn";
@@ -8,6 +9,7 @@ import { PageHead } from "@/components/ui/PageHead";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Pill, type PillTone } from "@/components/ui/Pill";
 import { PendenciasBadge } from "@/components/ui/PendenciasBadge";
+import { OrigemBadge } from "@/components/ui/OrigemBadge";
 import { Icon } from "@/components/ui/Icon";
 import { Select } from "@/components/ui/Select";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -26,6 +28,7 @@ interface AdmRow {
   tipoContrato: string | null;
   dataAdmissao: string | null;
   farolGlobal: string;
+  origem: Origem;
   sinalizador: string;
   concluido: boolean;
   frentes: Record<string, { status: string; rotulo: string; concluida: boolean }>;
@@ -514,8 +517,13 @@ export default function GerenciadorPage() {
                   <div key={r.admissaoId} className="row" style={{ gridTemplateColumns: GRID }}>
                     <div className="min-w-0">
                       <div className="nm truncate">{r.candidatoNome}</div>
-                      {r.concluido && (
-                        <div className="meta truncate text-ok">Processo concluído</div>
+                      {(r.origem === "PANDAPE" || r.concluido) && (
+                        <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                          <OrigemBadge origem={r.origem} />
+                          {r.concluido && (
+                            <span className="meta truncate text-ok">Processo concluído</span>
+                          )}
+                        </div>
                       )}
                     </div>
                     <div className="min-w-0">

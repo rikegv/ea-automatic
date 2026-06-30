@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { AuditoriaStatus, ResultadoAuditoria } from "@ea/shared-types";
+import type { AuditoriaStatus, Origem, ResultadoAuditoria } from "@ea/shared-types";
 import { apiFetch, apiUpload, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/cn";
@@ -9,6 +9,7 @@ import { PageHead } from "@/components/ui/PageHead";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Pill, type PillTone } from "@/components/ui/Pill";
 import { PendenciasBadge } from "@/components/ui/PendenciasBadge";
+import { OrigemBadge } from "@/components/ui/OrigemBadge";
 import { Icon } from "@/components/ui/Icon";
 import { GoogleDriveLogo } from "@/components/ui/GoogleDriveLogo";
 import { Select } from "@/components/ui/Select";
@@ -47,6 +48,7 @@ interface EsteiraItem {
   dataInicio: string | null;
   dataConclusao: string | null;
   dataAdmissao: string | null;
+  origem: Origem;
   sinalizador: string;
   asoAnexado?: boolean;
   disponivel?: boolean;
@@ -640,7 +642,10 @@ export default function EsteiraPage() {
             return (
               <div key={item.frenteId} className="row" style={{ gridTemplateColumns: gridCols }}>
                 <div className="min-w-0">
-                  <div className="nm truncate">{item.candidatoNome}</div>
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <span className="nm truncate">{item.candidatoNome}</span>
+                    <OrigemBadge origem={item.origem} className="flex-none" />
+                  </div>
                   <div className="meta truncate">
                     {item.concluida
                       ? `Concluída em ${fmtData(item.dataConclusao)}`
