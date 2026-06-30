@@ -54,3 +54,44 @@ O endpoint `/internal/pandape/tick` é criado pelo backend (outro módulo). Sem
 `PANDAPE_API_TOKEN` (em `apps/backend/.env`), o tick **responde mas não puxa nada**
 do Pandapé: integração **pronta porém INERTE**. É INÉRCIA, não mock — paridade
 conceitual com o fail-fast anti-mock (commit 82c986e), porém sem quebrar o boot.
+
+## Cron Clicksign (INT-4)
+
+A integração Clicksign (INT-4, §A.5) também é **cron-pull** — não polling manual.
+Uma entrada de crontab dispara, a cada 1 min, o *tick* que processa a fila de
+envelopes de assinatura (geração de kit, disparo do envelope, download no
+`document_closed` e arquivamento no Drive).
+
+- **O que faz:** `POST http://127.0.0.1:${BACKEND_PORT:-3011}/internal/clicksign/tick`
+  com o header `X-Internal-Token` (mesmo segredo `INTERNAL_TOKEN` usado entre
+  backend e ai-service).
+- **Janela:** `*/1 7-23 * * *` — a cada **1 minuto**, das **07h às 23h**, todos os dias.
+  Mais frequente que o Pandapé (5 min) porque o `download.original_file_url` da
+  Clicksign **expira em ~5 min** (§A.5, INT-4) — a cadência minuto-a-minuto reduz a
+  janela entre o `document_closed` e o download/arquivamento.
+- **Segredo fora do crontab:** a linha de cron carrega `infra/.env` em runtime e
+  lê `INTERNAL_TOKEN` de lá; o token nunca é gravado no crontab (`crontab -l` não
+  o expõe).
+
+### Instalar
+
+```bash
+bash infra/install-clicksign-cron.sh
+```
+
+O script é **idempotente** (remove a linha antiga pelo marcador `# ea-clicksign-tick`
+antes de adicionar a nova) e instala no crontab do usuário corrente. Exige
+`INTERNAL_TOKEN` em `infra/.env` (ou exportado). Ao final imprime a linha gerada e
+manda verificar com `crontab -l`.
+
+> A instalação é uma **ação deliberada na VM** — o script não é executado pelo
+> processo de build/CI.
+
+### Inércia sem token
+
+O endpoint `/internal/clicksign/tick` é criado pelo backend (outro módulo). Sem
+`CLICKSIGN_API_TOKEN` (em `apps/backend/.env`, git-ignored, insumo do diretor §A.9),
+o tick **responde mas não envia/baixa nada** da Clicksign: integração **pronta porém
+INERTE**. É INÉRCIA, não mock — paridade conceitual com o fail-fast anti-mock
+(commit 82c986e), porém sem quebrar o boot. Base sandbox por padrão
+(`CLICKSIGN_API_BASE_URL=https://sandbox.clicksign.com/api/v3`).

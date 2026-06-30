@@ -85,6 +85,25 @@ export const NC_TIPO_ROTULO: Record<NcTipo, string> = {
 export const TERMO_APTO_SEM_ASO =
   "Estou ciente que estou marcando este candidato como apto sem o ASO anexado.";
 
+// ── Clicksign — assinatura do contrato (INT-4 / F9) ────────────────────────
+// SEM_ENVELOPE: kit ainda não gerado (inicial). AGUARDANDO_ASSINATURA: envelope disparado.
+// ASSINADO: document_closed (contrato arquivado no Drive). CANCELADO: reenvio por correção (§A.5).
+export const CLICKSIGN_STATUS = [
+  "SEM_ENVELOPE",
+  "AGUARDANDO_ASSINATURA",
+  "ASSINADO",
+  "CANCELADO",
+] as const;
+export type ClicksignStatus = (typeof CLICKSIGN_STATUS)[number];
+
+/** Rótulos de exibição do status Clicksign (UI). */
+export const CLICKSIGN_STATUS_LABEL: Record<ClicksignStatus, string> = {
+  SEM_ENVELOPE: "Sem envelope",
+  AGUARDANDO_ASSINATURA: "Aguardando assinatura",
+  ASSINADO: "Assinado",
+  CANCELADO: "Cancelado",
+};
+
 // ── Fase 4 — Auditoria documental por IA (F2 / INT-3) ──────────────────────
 /** Veredito da IA sobre um documento. Mapeia para estado_documento no banco (ver abaixo). */
 export const AUDITORIA_STATUS = ["VALIDADO", "INCONFORME", "PENDENTE"] as const;

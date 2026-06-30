@@ -8,6 +8,7 @@ import { AdmissoesModule } from "./admissoes/admissoes.module";
 import { AiModule } from "./ai/ai.module";
 import { AuditoriaModule } from "./auditoria/auditoria.module";
 import { AuthModule } from "./auth/auth.module";
+import { ClicksignModule } from "./clicksign/clicksign.module";
 import { JwtAuthGuard } from "./auth/guards/jwt-auth.guard";
 import { OriginGuard } from "./auth/guards/origin.guard";
 import { RolesGuard } from "./auth/guards/roles.guard";
@@ -40,6 +41,7 @@ import { UsersModule } from "./users/users.module";
     AuditoriaModule,
     KitModule,
     PandapeModule,
+    ClicksignModule,
   ],
   controllers: [HealthController],
   providers: [

@@ -111,7 +111,21 @@ export class EsteiraService {
     // Item 1 (2C): ao concluir, o candidato SOME da fila principal. A busca por candidato (ou o
     // filtro explícito pelo status de conclusão) o reexpõe — fica acessível pela busca avançada.
     if (!buscandoCandidato && filtros.status !== STATUS_CONCLUI[tipo]) {
-      itensWhere.push(eq(frentesAdmissao.concluida, false));
+      const naoConcluida = eq(frentesAdmissao.concluida, false);
+      if (tipo === "CADASTRO_CONTRATO") {
+        // INT-4: "Aguardando assinatura" (e "Cancelado", à espera de reenvio) é trabalho EM
+        // ANDAMENTO mesmo com o Cadastro concluído (INTEGRACAO) — o contrato ainda não foi
+        // assinado/arquivado. Mantém na fila principal sem depender da busca (igual a qualquer
+        // pendente da frente); só some quando ASSINADO/SEM_ENVELOPE.
+        itensWhere.push(
+          or(
+            naoConcluida,
+            inArray(admissoes.clicksignStatus, ["AGUARDANDO_ASSINATURA", "CANCELADO"]),
+          )!,
+        );
+      } else {
+        itensWhere.push(naoConcluida);
+      }
     }
     if (q) {
       const cpfDigits = normalizeCpf(q);
@@ -136,6 +150,8 @@ export class EsteiraService {
         dataAdmissao: admissoes.dataAdmissao,
         drivePastaUrl: admissoes.drivePastaUrl,
         driveAsoUrl: admissoes.driveAsoUrl,
+        clicksignStatus: admissoes.clicksignStatus,
+        contratoAssinadoDriveUrl: admissoes.contratoAssinadoDriveUrl,
         origem: admissoes.origem,
         sinalizador: admissoes.sinalizadorPreenchimento,
       })
@@ -178,6 +194,8 @@ export class EsteiraService {
         dataAdmissao: r.dataAdmissao,
         drivePastaUrl: r.drivePastaUrl,
         driveAsoUrl: r.driveAsoUrl,
+        clicksignStatus: r.clicksignStatus,
+        contratoAssinadoDriveUrl: r.contratoAssinadoDriveUrl,
         origem: r.origem,
         sinalizador: r.sinalizador,
       };
@@ -623,6 +641,9 @@ export class EsteiraService {
         origem: admissoes.origem,
         drivePastaUrl: admissoes.drivePastaUrl,
         driveAsoUrl: admissoes.driveAsoUrl,
+        clicksignStatus: admissoes.clicksignStatus,
+        clicksignEnvelopeId: admissoes.clicksignEnvelopeId,
+        contratoAssinadoDriveUrl: admissoes.contratoAssinadoDriveUrl,
         sinalizador: admissoes.sinalizadorPreenchimento,
         candidatoNome: candidatos.nome,
         candidatoCpf: candidatos.cpf,
@@ -729,6 +750,10 @@ export class EsteiraService {
       origem: adm.origem,
       drivePastaUrl: adm.drivePastaUrl,
       driveAsoUrl: adm.driveAsoUrl,
+      clicksignStatus: adm.clicksignStatus,
+      // Não expõe o ID do envelope (referência técnica interna) — só se já existe (§A.6).
+      temEnvelope: Boolean(adm.clicksignEnvelopeId),
+      contratoAssinadoDriveUrl: adm.contratoAssinadoDriveUrl,
       sinalizador: adm.sinalizador,
       pendencias,
       passagens: passagensRows.map((p) => ({

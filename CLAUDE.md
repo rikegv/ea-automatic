@@ -210,12 +210,31 @@ documentos são exigidos; **regras de auditoria** (pendência a fornecer pelo di
 documento está válido.
 
 **INT-4 Clicksign (assinatura).** Pipeline a partir do PDF-mãe: upload → desmembra (F9) → vincula
-→ kit pronto dispara envelope (API 3.0). Acompanhamento por **webhook (push obrigatório — não há
-polling em documentos)**. No `document_closed`, o payload traz `downloads.original_file_url`, que
-**expira em ~5 min**: baixar imediatamente no handler e arquivar no Drive. Dependência externa com
-custo, já em uso hoje.
-- **Reenvio por correção:** cancelar o envelope errado (assinado vira "cancelado" no histórico),
-  corrigir no EA, regerar kit, novo envelope. Drive mantém versão (cancelado + válido).
+→ **kit pronto (gate F12: as 3 frentes concluídas) dispara o envelope** (API v3, JSON:API; auth por
+header `Authorization: <CLICKSIGN_API_TOKEN>`). Criação do envelope: `POST /envelopes` (draft) →
+`POST .../documents` (PDF base64 inline) → `POST .../signers` (nome completo + e-mail + **CPF
+mascarado** `000.000.000-00`, dígito validado) → `POST .../requirements` (agree/sign + provide_evidence/
+email) → `PATCH .../{id}` status `running`. O `clicksign_envelope_id` é gravado na admissão.
+- Acompanhamento por **verificação periódica (cron-pull)** — *modelo adotado em substituição ao
+  webhook originalmente previsto, mesma decisão da Fase 5 (Pandapé): sem exposição pública.* Job
+  por cron na VM dispara `POST /internal/clicksign/tick` (guard `X-Internal-Token`) **a cada 1 min,
+  das 7h às 23h** (`*/1 7-23 * * *`). O tick consulta os envelopes `AGUARDANDO_ASSINATURA`
+  (`GET /envelopes/{id}`); cadência minuto-a-minuto pela janela curta da URL do arquivo. Fila
+  **BullMQ** (`ea-redis`, isolada) com limiter sob o teto **sandbox 20 req/10s / prod 50 req/10s** +
+  backoff.
+- No envelope `closed`: a URL do PDF assinado vem em `GET /envelopes/{id}/documents` →
+  `data[].links.files.original` (S3 presigned, **expira ~5 min**) → baixar **síncrono no mesmo ciclo**
+  e arquivar na subpasta **ADMISSÃO** do Drive (mesma régua de pastas da Fase 4); grava
+  `contrato_assinado_drive_url` e marca `clicksign_status = ASSINADO`. A URL da Clicksign **nunca é
+  persistida nem logada** (§A.6). Dependência externa com custo, já em uso hoje.
+- Indicador de status do envelope (`AGUARDANDO_ASSINATURA`/`ASSINADO`/`CANCELADO`) na ficha e na aba
+  Cadastro da Esteira; **"Aguardando assinatura" permanece visível na fila** (trabalho em andamento,
+  embora a frente Cadastro já esteja em INTEGRAÇÃO). Link do contrato assinado reusa o logo do Drive.
+- **Reenvio por correção:** cancelar o envelope errado, corrigir no EA, regerar kit (F9), novo
+  envelope. *Nota de sandbox: envelope em `running` não tem cancelamento programático nesta conta
+  (DELETE só em `draft`); o cancelamento é **best-effort** e o estado autoritativo é o EA
+  (`clicksign_status = CANCELADO`) + a trilha de dupla correção — coerente com "responsabilização,
+  não verificação técnica".* Drive mantém versão (cancelado + válido).
 - **Alerta de dupla correção (bloqueio ativo com aceite):** pendência bloqueante exigindo aceite
   explícito do consultor de que corrigiu no **EA Automatic** e **diretamente no G.I** (não no
   Pandapé — envio Pandapé→G.I é único/irreversível). Aceite registra autor, data e termo de
@@ -227,7 +246,8 @@ custo, já em uso hoje.
 
 A frente de Segurança audita, com poder de veto, em todo PR que toca estes domínios:
 - **Staging efêmera:** fora do banco, expurgo no fechamento, TTL 48h.
-- **URLs do Pandapé:** só em memória; nunca em banco, nunca em log.
+- **URLs externas (Pandapé; download do assinado da Clicksign):** só em memória; nunca em banco,
+  nunca em log. (Persistir só referências do Drive, ex.: `contrato_assinado_drive_url`.)
 - **CPF/dados pessoais:** CPF é chave técnica, não aparece em log; minimização.
 - **Aceite de dupla correção:** log de auditoria sensível, permanente e consultável.
 - **Auth/RBAC:** consultor não acessa rotas de administração; toda rota sensível com guard.

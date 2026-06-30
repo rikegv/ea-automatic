@@ -1,11 +1,19 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { BadRequestException, Inject, Injectable, NotFoundException } from "@nestjs/common";
+import {
+  BadRequestException,
+  ConflictException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from "@nestjs/common";
 import { eq } from "drizzle-orm";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
-import { admissoes, candidatos } from "../db/schema";
+import { admissoes, candidatos, frentesAdmissao } from "../db/schema";
 import { AiClientService } from "../ai/ai-client.service";
+import { kitLiberado } from "../domain/frentes";
+import { ClicksignQueueService } from "../clicksign/clicksign-queue.service";
 import { StagingService } from "../staging/staging.service";
 
 /** Entrada do mapa de download (token → kit). Em memória: kit é efêmero (TTL 1h no purge). */
@@ -42,9 +50,15 @@ export class KitService {
     @Inject(DRIZZLE) private readonly db: Database,
     private readonly staging: StagingService,
     private readonly ai: AiClientService,
+    private readonly clicksignQueue: ClicksignQueueService,
   ) {}
 
-  /** Gera o kit a partir do PDF-mãe e devolve um token de download. */
+  /**
+   * Gera o kit a partir do PDF-mãe e devolve um token de download. GATE F9 (§A.4 / INT-4): o kit só
+   * nasce após as TRÊS frentes concluídas (`kitLiberado`); sem isso, 409. Quando liberado, após
+   * materializar o kit na staging, enfileira `criar-envelope` na Clicksign (não bloqueia o response
+   * do download — o envelope sobe no worker, fila + backoff §A.5).
+   */
   async gerar(admissaoId: string, file: Express.Multer.File | undefined) {
     if (!file) throw new BadRequestException("Arquivo do kit obrigatório (campo 'file')");
 
@@ -54,6 +68,17 @@ export class KitService {
       .innerJoin(candidatos, eq(admissoes.candidatoCpf, candidatos.cpf))
       .where(eq(admissoes.id, admissaoId));
     if (!adm) throw new NotFoundException("Admissão não encontrada");
+
+    // Gate F9: as 3 frentes (AUDITORIA + EXAME + CADASTRO_CONTRATO) precisam estar concluídas.
+    const frentes = await this.db
+      .select({ tipo: frentesAdmissao.tipo, concluida: frentesAdmissao.concluida })
+      .from(frentesAdmissao)
+      .where(eq(frentesAdmissao.admissaoId, admissaoId));
+    if (!kitLiberado(frentes)) {
+      throw new ConflictException(
+        "O kit exige as 3 frentes concluídas (Auditoria, Exame e Cadastro/Contrato).",
+      );
+    }
 
     // PDF-mãe na staging (buffer descartado após gravar).
     const stagingPath = await this.staging.salvarKit(file);
@@ -67,6 +92,9 @@ export class KitService {
     if (!this.staging.dentroDaRaiz(stagingPathKit)) {
       throw new NotFoundException("Kit gerado fora da staging");
     }
+
+    // Dispara a assinatura (INT-4) sem bloquear o download: enfileira a criação do envelope.
+    await this.clicksignQueue.enfileirarCriarEnvelope(admissaoId, stagingPathKit);
 
     const token = randomUUID();
     const nomeArquivo = `kit_${this.sanitizar(adm.nomeCandidato)}.pdf`;

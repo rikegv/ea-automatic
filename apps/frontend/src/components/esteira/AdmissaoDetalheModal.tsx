@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import type { Origem } from "@ea/shared-types";
+import { useCallback, useEffect, useState } from "react";
+import type { ClicksignStatus, Origem } from "@ea/shared-types";
 import { apiFetch, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { Modal } from "@/components/ui/Modal";
@@ -9,7 +9,9 @@ import { Pill, type PillTone } from "@/components/ui/Pill";
 import { Icon } from "@/components/ui/Icon";
 import { OrigemBadge } from "@/components/ui/OrigemBadge";
 import { GoogleDriveLogo } from "@/components/ui/GoogleDriveLogo";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { farolPill } from "@/lib/farol";
+import { clicksignPill, temEnvelopeReenviavel } from "@/lib/clicksign";
 
 interface FrenteDetalhe {
   tipo: string;
@@ -35,6 +37,10 @@ interface AdmissaoDetalhe {
   // Preenchido quando a régua fecha e o prontuário é arquivado no Drive (T4 / Fase 4).
   drivePastaUrl: string | null;
   driveAsoUrl: string | null;
+  // Clicksign (INT-4 / F9) — status do envelope de assinatura do contrato.
+  clicksignStatus: ClicksignStatus;
+  temEnvelope: boolean;
+  contratoAssinadoDriveUrl: string | null;
   candidato: { nome: string; cpf: string; email: string | null; telefone: string | null };
   cliente: { codCliente: string; razaoSocial: string; operacao: string | null };
   cargo: string;
@@ -126,7 +132,13 @@ export function AdmissaoDetalheModal({
   const [data, setData] = useState<AdmissaoDetalhe | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  // Reenvio por correção (INT-4 / §A.5): loading, erro e o modal de aceite de dupla correção.
+  const [reenviando, setReenviando] = useState(false);
+  const [reenvioError, setReenvioError] = useState<string | null>(null);
+  const [reenvioFlash, setReenvioFlash] = useState<string | null>(null);
+  const [duplaCorrecaoMsg, setDuplaCorrecaoMsg] = useState<string | null>(null);
+
+  const carregar = useCallback(() => {
     let vivo = true;
     apiFetch<AdmissaoDetalhe>(`/esteira/admissao/${admissaoId}`, { token })
       .then((r) => vivo && setData(r))
@@ -138,7 +150,44 @@ export function AdmissaoDetalheModal({
     };
   }, [admissaoId, token]);
 
+  useEffect(() => carregar(), [carregar]);
+
+  // Reenvio por correção. Sem aceite → backend pode responder 409 (origem Pandapé sem aceite),
+  // pedindo confirmação de dupla correção: abrimos o modal com o termo de ciência (`message`) e,
+  // ao confirmar, repetimos o POST com { aceiteDuplaCorrecao: true }.
+  const reenviar = useCallback(
+    async (aceiteDuplaCorrecao: boolean) => {
+      setReenviando(true);
+      setReenvioError(null);
+      setReenvioFlash(null);
+      try {
+        await apiFetch(`/clicksign/${admissaoId}/reenviar-correcao`, {
+          method: "POST",
+          token,
+          body: aceiteDuplaCorrecao ? { aceiteDuplaCorrecao: true } : {},
+        });
+        setDuplaCorrecaoMsg(null);
+        setReenvioFlash("Envelope cancelado e reenviado para correção.");
+        carregar();
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 409) {
+          const body = e.data as { reason?: string; message?: string } | undefined;
+          if (body?.reason === "duplaCorrecao") {
+            setDuplaCorrecaoMsg(body.message ?? e.message);
+            return;
+          }
+        }
+        setDuplaCorrecaoMsg(null);
+        setReenvioError(e instanceof ApiError ? e.message : "Falha ao reenviar por correção.");
+      } finally {
+        setReenviando(false);
+      }
+    },
+    [admissaoId, token, carregar],
+  );
+
   return (
+    <>
     <Modal onClose={onClose} className="max-w-2xl" ariaLabel="Ficha da admissão">
       <div className="mb-4 flex items-start justify-between gap-3">
         <div className="min-w-0">
@@ -203,6 +252,65 @@ export function AdmissaoDetalheModal({
               </a>
             )}
           </section>
+
+          {/* Assinatura do contrato (Clicksign / INT-4 / F9) */}
+          {(data.temEnvelope ||
+            data.clicksignStatus !== "SEM_ENVELOPE" ||
+            data.contratoAssinadoDriveUrl) && (
+            <section className="flex flex-wrap items-center gap-2">
+              <span className="text-[12.5px] text-dim">Assinatura (Clicksign):</span>
+              {(() => {
+                const c = clicksignPill(data.clicksignStatus);
+                return <Pill tone={c.tone}>{c.label}</Pill>;
+              })()}
+
+              {/* Contrato assinado arquivado no Drive */}
+              {data.contratoAssinadoDriveUrl && (
+                <a
+                  href={data.contratoAssinadoDriveUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-[12.5px] font-semibold text-text transition hover:bg-[var(--surface-2)]"
+                  title="Abrir contrato assinado no Google Drive"
+                >
+                  <GoogleDriveLogo className="h-4 w-4" />
+                  Contrato assinado no Drive
+                </a>
+              )}
+
+              {/* Reenviar por correção — só quando há envelope ativo (§A.5 INT-4) */}
+              {temEnvelopeReenviavel(data.clicksignStatus) && (
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-[12.5px] font-semibold text-dim transition hover:bg-[var(--surface-2)] hover:text-accent disabled:opacity-60"
+                  onClick={() => reenviar(false)}
+                  disabled={reenviando}
+                  title="Cancelar o envelope atual e reenviar para correção"
+                >
+                  {reenviando ? (
+                    <span
+                      className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent"
+                      aria-hidden="true"
+                    />
+                  ) : (
+                    <Icon name="pen" className="h-3.5 w-3.5" />
+                  )}
+                  {reenviando ? "Reenviando…" : "Reenviar por correção"}
+                </button>
+              )}
+            </section>
+          )}
+
+          {reenvioError && (
+            <p className="-mt-2 text-[12.5px] text-danger" role="alert">
+              {reenvioError}
+            </p>
+          )}
+          {reenvioFlash && (
+            <p className="-mt-2 inline-flex items-center gap-1.5 text-[12.5px] text-ok">
+              <Icon name="check" className="h-3.5 w-3.5" /> {reenvioFlash}
+            </p>
+          )}
 
           {/* Sinalizador + pendências obrigatórias (S2) */}
           <section className="flex flex-wrap items-center gap-2">
@@ -295,5 +403,19 @@ export function AdmissaoDetalheModal({
         </div>
       )}
     </Modal>
+
+    {/* Aceite de dupla correção (§A.5 INT-4) — bloqueio ativo: origem Pandapé exige ciência de
+        que a correção foi feita no EA Automatic E diretamente no G.I. */}
+    <ConfirmDialog
+      open={duplaCorrecaoMsg !== null}
+      title="Confirmar dupla correção"
+      message={duplaCorrecaoMsg ?? ""}
+      confirmLabel="Estou ciente — reenviar"
+      tone="danger"
+      busy={reenviando}
+      onConfirm={() => reenviar(true)}
+      onCancel={() => setDuplaCorrecaoMsg(null)}
+    />
+    </>
   );
 }

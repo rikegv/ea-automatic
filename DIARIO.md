@@ -1183,3 +1183,69 @@ Diretor abriu no navegador e **aprovou o badge nos 4 lugares**.
 `PANDAPE_API_TOKEN` + de/para Pandapé→catálogo (cliente/cargo via `IdVacancy`; tipos de documento).
 Sem o token a Fase 5 fica inerte; sem o de/para, vagas não-mapeadas adiam (não inventam FK).
 Investigação do formato real dos campos será registrada aqui quando o token permitir o teste real.
+
+## ✅ INT-4 — CLICKSIGN (ASSINATURA ELETRÔNICA DO KIT) — 2026-06-30
+
+**Modelo de acompanhamento: verificação periódica (cron-pull), não webhook** — mesma decisão da
+Fase 5 (Pandapé), por decisão do diretor + admin de infra: sem exposição pública. CLAUDE.md A.5
+INT-4 / A.6 atualizados. Credencial CLICKSIGN_API_TOKEN já na VM (sandbox); sem token = inerte.
+
+### O que foi entregue (DoD)
+- **Criação do envelope (gatilho: kit pronto + gate F12):** novo `kitLiberado(frentes)` (as 3
+  frentes concluídas) em domain/frentes.ts; `KitService.gerar` exige o gate (409 sem as 3) e
+  enfileira `criar-envelope` sem bloquear o download. O worker cria o envelope na Clicksign v3
+  (JSON:API): `POST /envelopes` → `/documents` (PDF base64 inline) → `/signers` (nome completo +
+  e-mail + CPF formatado, validado) → `/requirements` (agree/sign + provide_evidence/email) →
+  `PATCH` running; grava `clicksign_envelope_id` + `clicksign_status=AGUARDANDO_ASSINATURA`.
+- **Job cron-pull:** `infra/install-clicksign-cron.sh` (`*/1 7-23 * * *`) → `POST
+  /internal/clicksign/tick` (guard X-Internal-Token, fail-closed). Fila BullMQ `clicksign-sync`
+  (ea-redis db1, prefix ea:bull) com limiter 18/10s (sob o teto sandbox 20/10s; prod 50/10s) +
+  backoff. O tick consulta envelopes AGUARDANDO_ASSINATURA via `GET /envelopes/{id}`.
+- **Download + arquivamento no mesmo ciclo:** envelope `closed` → URL do assinado em
+  `GET /envelopes/{id}/documents` (`data[].links.files.original`, S3 presigned ~5min) → baixa
+  SÍNCRONO em memória → staging efêmera → arquiva na subpasta ADMISSÃO do Drive (régua de pastas
+  da Fase 4) → grava `contrato_assinado_drive_url` + `clicksign_status=ASSINADO` → expurga staging.
+  **URL da Clicksign nunca persistida nem logada** (§A.6).
+- **Reenvio por correção:** `POST /clicksign/:admissaoId/reenviar-correcao` cancela (best-effort —
+  ver nota sandbox) → `CANCELADO` → regenera kit (F9) → novo envelope. **Dupla correção:** origem
+  PANDAPE sem `aceiteDuplaCorrecao` → 409 needsConfirmation; com aceite grava
+  `dupla_correcao_aceites` (autor/data/termo — log permanente §A.6) ANTES de agir.
+- **Interface:** pill de status (Aguardando assinatura/Assinado/Cancelado) na ficha e na aba
+  Cadastro; link "Contrato no Drive" (logo do Drive); botão "Reenviar por correção" + modal de
+  aceite. Schema: enum `clicksign_status` + colunas em admissoes + tabela `dupla_correcao_aceites`
+  (migration 0012).
+
+### Teste real no sandbox (e2e) + validação visual do diretor: APROVADA
+App subido (backend 3011 / frontend 3010 / ai-service 8000). Gerado o kit de um candidato
+kit-liberado → o EA criou e ativou o envelope na Clicksign (running). **O diretor assinou de
+verdade no sandbox** ("Assinatura feita com sucesso"). Disparado o tick manualmente (cron ainda
+não instalado na VM): o EA detectou `closed` → baixou o assinado → arquivou no Drive → ficha virou
+**ASSINADO** com link do contrato. Loop ponta-a-ponta provado com assinatura real.
+
+### Descobertas reais do sandbox (documentadas no código)
+- Signatário exige **nome completo** + **CPF válido não-sequencial** (Clicksign valida dígito e
+  rejeita blacklist como 123…09). Candidatos reais não têm o problema (dados demo ajustados).
+- **Envelope `running` não cancela programaticamente** nesta conta (DELETE só em draft; PATCH
+  canceled rejeitado; sem rota /cancel). Cancelamento é best-effort; estado autoritativo é o EA
+  (CANCELADO) + trilha de dupla correção (§A.5 "responsabilização, não verificação técnica").
+- CPF enviado à Clicksign é **formatado** (pontuação), não redigido — exigência legal; nunca logado.
+
+### Correções de código durante a validação (com regressão)
+1. **BullMQ não aceita `:` em jobId** → `env:${id}` → `env-${id}` (clicksign-queue.service.ts).
+2. **Visibilidade na fila Cadastro:** admissões AGUARDANDO_ASSINATURA/CANCELADO permanecem na lista
+   principal mesmo com a frente concluída (INTEGRACAO) — são trabalho em andamento; só somem quando
+   ASSINADO/SEM_ENVELOPE (esteira.service.ts). **Bug apontado pelo diretor na validação**; corrigido
+   e confirmado (item reaparece sem busca). Ambos com teste de regressão provado por mutação.
+
+### Gates de fábrica
+- **tester — VERDE:** backend **128** (+16 novos: regressão jobId, regressão visibilidade Cadastro
+  a/b/c/d, ciclo processarTick closed/canceled/running/sem-pasta, controller 202 + parse aceite),
+  frontend 11, shared 5, ai-service 31. Anti-vacuidade por mutação. Zero bugs no código.
+- **segurança — APROVADO 8/8 sem veto:** URL S3 só em memória/descartada; `contrato_assinado_drive_url`
+  é a pasta do Drive (referência), não a URL Clicksign; CPF/PII fora de log; staging efêmera;
+  entrypoint fail-closed; token env-only inerte; crontab sem segredo; limiter/backoff + Redis
+  isolado; aceite dupla correção imutável; RBAC ok.
+
+### Pendência aberta (não bloqueia o merge — mesmo bloqueio da Fase 4)
+**DRIVE_MOCK=true** (Fernando): o arquivamento real do assinado roda pelo mesmo caminho porém em
+mock (link MOCK-*). Quando a SA tiver escrita no Shared Drive, grava o arquivo real — sem nova OST.

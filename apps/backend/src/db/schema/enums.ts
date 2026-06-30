@@ -54,6 +54,18 @@ export const ncTipoEnum = pgEnum("nc_tipo", ["NC1", "NC2", "NC3"]);
 export const ncStatusEnum = pgEnum("nc_status", ["ABERTA", "RESOLVIDA"]);
 
 /**
+ * Status do envelope de assinatura na Clicksign (INT-4 / F9). SEM_ENVELOPE (inicial — kit ainda
+ * não gerado) · AGUARDANDO_ASSINATURA (envelope disparado) · ASSINADO (document_closed) ·
+ * CANCELADO (reenvio por correção — §A.5). Estado, nunca URL/PII (§A.6).
+ */
+export const clicksignStatusEnum = pgEnum("clicksign_status", [
+  "SEM_ENVELOPE",
+  "AGUARDANDO_ASSINATURA",
+  "ASSINADO",
+  "CANCELADO",
+]);
+
+/**
  * Via 2 — liberação por determinação da diretoria. NENHUMA = NC comum (penaliza o consultor);
  * PENDENTE = consultor flagou e aguarda supervisão; APROVADA = exceção reconhecida (não penaliza);
  * REPROVADA = volta a ser NC comum (Via 1).
