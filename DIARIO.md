@@ -5,6 +5,199 @@ feito e **por quê** (rastreabilidade para o diretor e para as próximas sessõe
 
 ---
 
+## 2026-06-29 — Fase 4 AJUSTES FINAIS (OST-EA-FASE-4-AJUSTES-FINAIS) + smoke real do Drive
+
+Branch `feat/fase-4-ia-arquivamento` (working tree). Backend (item 1) pelo coordenador; itens 2–3
+(logo do Drive, layout do Kit em 2 colunas) pelo agente `frontend`.
+
+### 1. ASO arquivado no Drive após VALIDADO (backend)
+- Ao auditar o ASO e obter **VALIDADO**, o backend arquiva o ASO **na hora** na subpasta ASO do
+  prontuário (não espera o fechamento da régua) e **remove o ASO da staging** para não duplicar no
+  lote do fechamento. Migration `0010`: coluna `admissoes.drive_aso_url`.
+- **Decisão registrada:** criada coluna `drive_aso_url` (em vez de reusar `drive_pasta_url`). Motivo:
+  o fechamento da régua usa `drive_pasta_url == null` como guarda; reusar a mesma coluna para o ASO
+  impediria o arquivamento do restante. `drive_aso_url` = link do prontuário (o ASO vive na subpasta
+  ASO). Exposto na fila e na ficha da Esteira (o front mostra o link quando `drivePastaUrl` OU
+  `driveAsoUrl`). Mesmo roteamento por contrato/Fopag; sem pasta-pai mapeada → não arquiva (log).
+- Smoke (mock): ASO com nome+CPF conferindo → VALIDADO → `drive_aso_url` setado, ASO sai da staging.
+
+### Smoke REAL do Drive (DRIVE_MOCK=false) — ⛔ BLOQUEIO 2 AINDA ABERTO
+O admin (Fernando) confirmou ter compartilhado as pastas com a SA. Liguei `DRIVE_MOCK=false` e rodei
+o smoke real (Temporários). Resultado: **criação de pasta OK, mas o UPLOAD falhou com HTTP 403
+`storageQuotaExceeded`** — *"Service Accounts do not have storage quota. Leverage shared drives, or
+use OAuth delegation."* **Diagnóstico:** as pastas compartilhadas estão num **My Drive** (pasta
+comum compartilhada com a SA), não num **Shared Drive (Team Drive)**. A SA cria subpastas, mas não
+pode ser dona de bytes de arquivo em My Drive (sem quota) → upload falha. **Ação do diretor/Fernando
+(uma das duas):** (a) mover a árvore de pastas para um **Shared Drive/Team Drive** (e atualizar os
+folder IDs se mudarem), OU (b) habilitar **delegação de domínio** no Admin do Workspace e definir
+`DRIVE_DELEGATED_SUBJECT` (e-mail de um usuário Workspace com quota) — o código já suporta. Revertido
+para `DRIVE_MOCK=true` para não quebrar o fluxo da esteira na validação visual. *(Resíduo: o smoke
+chegou a criar uma pasta de teste vazia "TESTE Aso Drive — …" sob Temporários no Drive real; como o
+sistema NÃO deleta nada (item 6), a limpeza dessa pasta de teste é manual por um admin.)*
+
+### 2, 3 (frontend — agente)
+Item 2: logo OFICIAL do Google Drive (SVG inline, sem URL externa — on-prem) no link de prontuário
+(linha da aba Auditoria + ficha), tooltip "Abrir prontuário no Google Drive", aparece quando há
+`drivePastaUrl` ou `driveAsoUrl`. Item 3: tela do Kit em **duas colunas** — esquerda o formulário +
+indicador de processamento; direita painel "Kits gerados" com busca por nome, filtro por data, lista
+(candidato/arquivo/data-hora/status), visualizar + download, "Expirado" quando TTL 1h venceu; espaço
+reservado para a INT-4 (Clicksign) futura.
+
+### Gates
+`pnpm lint` exit 0 · backend `typecheck`/`test` (58) · ai-service `ruff`. Frontend typecheck+build
+pelo agente. **PARADA para validação visual (§A.0).** Após o aval: tester + segurança.
+
+---
+
+## 2026-06-29 — Fase 4 AJUSTES VISUAIS (OST-EA-FASE-4-AJUSTES-VISUAIS) — 6 grupos
+
+Branch `feat/fase-4-ia-arquivamento` (working tree). Coordenador fez o backend (itens 4, 5a, 6) e
+delegou o frontend (itens 1–5) ao agente `frontend` (dirs disjuntos; dev server parado durante o
+build do agente para evitar a corrupção do cache `.next`).
+
+### 6. Auditoria do código do Drive (resposta ao Fernando — deleção acidental)
+Auditado `apps/ai-service/app/drive.py` (único módulo que fala com o Drive). **As ÚNICAS operações
+são aditivas/somente-leitura**, confirmadas por leitura + `grep` em todo o `ai-service`:
+1. **Verificar se a pasta existe** — `files().list` (somente leitura).
+2. **Criar pasta** — `files().create` (aditivo).
+3. **Fazer upload de arquivo** — `files().create` (aditivo).
+(+ `files().get` apenas para ler o `webViewLink` da pasta — somente leitura.)
+**ZERO** chamadas destrutivas/mutantes: nenhum `files().delete`, `files().update`, trash/untrash,
+`move` (alterar `parents`), `rename` ou `permissions()`. Reforço no código: docstring de `drive.py`
+agora declara o CONTRATO DE OPERAÇÕES e proíbe explicitamente operações destrutivas (a revisão deve
+vetar qualquer adição). *Nota de escopo:* o escopo OAuth segue `…/auth/drive` (a API do Drive não tem
+escopo "criar+ler sem deletar"; `drive.file` quebraria o acesso à árvore de pastas pré-provisionada
+em Shared Drive, que a SA não criou). A proteção real é a ausência total de chamadas destrutivas.
+
+### 4. Link do Drive na Esteira (backend)
+`GET /esteira/admissao/:id` (ficha) e os itens da fila da Esteira passaram a expor `drivePastaUrl`
+(referência da pasta do prontuário, não PII — §A.6). O front exibe o link/ícone na aba Auditoria e
+na ficha quando preenchido (após a régua fechar e o arquivamento no Drive disparar).
+
+### 5a. Histórico de kits (backend)
+`KitService` mantém um histórico EM MEMÓRIA (sem CPF, §A.6; some no restart, junto com os kits
+expurgados por TTL 1h). `GET /kit/historico` → `{items:[{token, admissaoId, candidatoNome,
+nomeArquivo, criadoEm, disponivel}]}`. Download ganhou `?inline=1` (abre no navegador) além do
+attachment. Smoke: gerar kit → aparece no histórico com `disponivel=true`.
+
+### 1, 2, 3, 5b (frontend — agente)
+Tabela do Gerenciador sem truncamento (pills `nowrap` + min-width nas colunas de status; texto
+redistribuído) e mesmo tratamento na aba Exame; badge "Pendências Obrig." diferenciado (⚠ + borda
+pontilhada, claramente clicável) no Gerenciador e nas 3 abas; ASO com **upload único que já audita**
+(removido o botão "Auditar ASO" separado); indicador de processamento destacado no Gerador de Kit.
+
+### DoD do tester (item 5c)
+O tester deve validar a geração de kit com um **PDF-mãe de ≥20 páginas** (comportamento com PDFs
+grandes — o Gemini pode levar segundos; confirmar o indicador de processamento e o sucesso).
+
+### Gates + parada
+`pnpm lint`/`typecheck`/`test` verdes no backend (58); frontend typecheck+build pelo agente. Smokes
+de backend OK (histórico, `drivePastaUrl`, auditoria do Drive). **PARADA para validação visual
+(§A.0)** — gate fechado, sem `READY_*`. Após o aval: tester + segurança.
+
+---
+
+## 2026-06-29 — Fase 4 COMPLEMENTO (OST-EA-FASE-4-COMPLEMENTO) — 6 ajustes
+
+Branch `feat/fase-4-ia-arquivamento` (working tree). Coordenador construiu o núcleo acoplado
+(schema/migration/domínio/serviços/seed) e delegou o frontend ao agente `frontend` (dirs disjuntos).
+
+### 1. Farol global — novos status + transições automáticas
+- Enum `farol_global` migrado SEM recriar (preserva dados): `ATIVO`→`EM_ADMISSAO`, `BANCO_PAUSADA`→
+  `BANCO_AGUARDAR` (rename migra as linhas), +`ADMISSAO_CONCLUIDA`; default `EM_ADMISSAO`. Migration
+  `0009` com `ALTER TYPE ... RENAME VALUE`/`ADD VALUE` (testado em tx no PG16; o SQL gerado pelo
+  drizzle-kit, destrutivo, foi substituído pelo rename seguro — snapshot mantido).
+- Derivação automática pura `deriveFarolGlobal` (domínio, +4 testes): `BANCO_AGUARDAR` quando
+  Auditoria=ANALISE_OK & Exame=APTO & sem `data_admissao`; ao preencher a data → `EM_ADMISSAO`.
+  Estados manuais (DECLINOU/RESCISAO/ADMISSAO_CONCLUIDA) são pegajosos (não sobrescritos). Helper
+  `recomputeFarolGlobal` chamado após mudança de frente (esteira), conclusão automática da auditoria
+  e edição da data (gerenciador). Pills no front: Em Admissão=azul, Banco-Aguardar=cinza, Admissão
+  Concluída=verde, Declinou=vermelho, Rescisão=laranja.
+
+### 2. Automação do status de Auditoria
+- Ao completar a régua obrigatória, `auditarDocumento` conclui a AUDITORIA (→ANALISE_OK, concluída)
+  **sem clique**, faz o nascimento lazy do Cadastro (gate, regra 3) e reavalia o farol. Idempotente.
+  Smoke real: 6 obrigatórios ENTREGUE → audita 1 doc → `auditoriaAuto={ANALISE_OK, gateAberto:true}`,
+  Cadastro nasceu.
+
+### 3. Auditoria do ASO pela IA (aba Exame)
+- Reusa o pipeline de auditoria existente: 3 regras seedadas em `ASO` (nome confere, legibilidade,
+  resultado APTO/INAPTO — a 3ª mapeia INAPTO→INCONFORME). Front: botão "Auditar ASO" na aba Exame
+  (modal espelhando a aba Auditoria) com badge + motivo. A IA informa; o consultor decide o "Apto".
+
+### 4. Pendências obrigatórias na Esteira
+- Badge clicável "Pendências Obrig." nas 3 abas, reusando o `PendenciasModal`/`EditAdmissaoModal`
+  (camposFiltro) do Gerenciador. Pendências vêm de `GET /esteira/admissao/:id`.
+
+### 5. Gerenciador mostra TODAS as admissões
+- A regra de "sumir quando concluído" é só da Esteira; o gerenciador já listava tudo (confirmado).
+  "Data adm." exibe "—" quando nula. BANCO_AGUARDAR aparece com a pill cinza e frentes concluídas.
+
+### 6. Banco-Aguardar — documento de formalização + is_banco
+- **Decisão registrada:** coluna `admissoes.is_banco` (boolean, default false). Quando true, a
+  ausência de `data_admissao` não é pendência; o **Termo de Banco** (novo TipoDocumento `TERMO_BANCO`,
+  roteado p/ subpasta Drive ADMISSAO) passa a ser a pendência obrigatória. `pendenciasObrigatorias`
+  estendida (isBanco/termoBancoEntregue, +1 teste). Front: toggle "Admissão de banco" + upload do
+  Termo no EditAdmissaoModal. O arquivo-modelo será fornecido pelo diretor.
+
+### Gates + base demo
+- `pnpm lint` exit 0 · `typecheck` 3/3 · `pnpm test` (backend 58, frontend 11) · ai-service ruff +
+  pytest 31. Smokes via API: BANCO_AGUARDAR (ida/volta), auto-conclusão da Auditoria, contratos de
+  leitura (isBanco/pendencias/tipos-documento).
+- **Incidente (transparência §A.0):** ao limpar uma admissão de teste, o CPF que escolhi
+  (`52998224725`) colidiu com o da demo **Ana Esteira** — o `delete ... where candidato_cpf` removeu
+  a admissão real dela. **Recriada** (CPF novo) e levada a concluída (`ADMISSAO_CONCLUIDA`). Lição
+  reincidente: usar sempre CPF de teste sabidamente fora da base demo. Base demo final (4): Ana
+  (Admissão Concluída), Bruno (Em Admissão — cenário do link do Drive), Carla (Em Admissão), kaa
+  (Banco-Aguardar + is_banco — exemplo do item 1/6).
+- **PARADA para validação visual (§A.0).** Gate fechado, sem `READY_*`. Após o aval: tester + segurança.
+
+---
+
+## 2026-06-29 — Fase 4: ajustes pós-validação visual (Kit F9, regra do comprovante, demo Drive)
+
+Branch `feat/fase-4-ia-arquivamento` (working tree, não commitado). Correções pedidas pelo diretor
+na validação visual, sem nova parada formal — só reconfirmação técnica.
+
+### Bug do Kit (F9) — busca de admissão + HTTP 422 mascarado
+- **Busca não listava** (`apps/frontend/.../kit/page.tsx`): o campo só buscava ao digitar e só casava
+  por nome de candidato/CPF. Passou a **listar as admissões ao focar** (sem adivinhar nome), filtrar
+  ao digitar, e **distinguir erro de busca** (sessão) de lista vazia. Geração F9 provada ponta a ponta
+  (Gemini extrai a página do candidato → download).
+- **HTTP 422 virava 503** (`apps/backend/src/ai/ai-client.service.ts`): o `ai-client` convertia
+  **qualquer** resposta não-OK do ai-service em `503 "Motor de IA indisponível"`, mascarando o **422**
+  (erro de ENTRADA acionável: PDF-mãe sem a página do candidato). Agora o **422 é propagado como 422**
+  (sem repassar o corpo do ai-service — §A.6), e o front exibe "Nenhuma página do PDF casou com este
+  candidato. Confira se enviou o PDF-mãe correto." Smoke: candidato presente → **201** + kit; candidato
+  ausente → **422** (antes 503). PDF-mãe de demo (Bruno/Carla/Ana) servido em `/demo-kit-pdf-mae.pdf`
+  (em `public/`, **git-ignored** — artefato de demo).
+
+### Regra do comprovante de residência — aceitar titular familiar com aviso
+- Antes a IA reprovava comprovante em nome de familiar (o system prompt exigia nome/CPF batendo com o
+  cadastro). Agora **aceita titular familiar** (cônjuge/pai/mãe) → **VALIDADO** com aviso literal
+  *"Documento em nome de terceiro — consultor deve verificar se é familiar do candidato."* (decisão do
+  consultor). Mudou: `gemini.py` (system prompt defere à regra p/ titular diferente), `seed-regras.ts`
+  e a linha no `ea-db` (texto idêntico ao da seed → re-seed idempotente). Provado com Gemini real.
+
+### Demo do link do Drive (mock) — cenário pronto
+- Admissão **Bruno Pereira (Temporário)** com 5/6 obrigatórios ENTREGUE e o **COMPROVANTE_RESIDENCIA
+  INCONFORME** bloqueando. Auditar o comprovante (em nome de familiar) → VALIDADO → **régua 6/6** →
+  arquivamento dispara → **link mock do Drive** aparece na esteira (`MOCK-…`) e grava `drive_pasta_url`.
+  Ciclo provado via API e **resetado** para reprodução ao vivo (RESERVISTA INCONFORME órfão zerado).
+
+### Evolução registrada (F9 → INT-4) — não implementada
+- CLAUDE.md §A.4 F9: ao subir o PDF-mãe, o sistema **identifica automaticamente todos os candidatos**,
+  separa **um kit por candidato**, **linka cada kit à admissão** e **dispara o envelope na Clicksign
+  por candidato**; a seleção manual atual é substituída pela identificação automática. **Junto com a
+  INT-4**, não antes.
+
+### Gates
+`pnpm lint` exit 0 · `typecheck` (backend/frontend) · `pnpm test` (backend 53, frontend 11) ·
+ai-service `ruff` limpo + `pytest` 31. Servidores no ar (backend :3011 rebuild, frontend :3010,
+ai-service :8000 com `DRIVE_MOCK=true`). Gate de deploy fechado (sem `READY_*`).
+
+---
+
 ## 2026-06-26 — Ajustes 2B/2C — Marco 3: Pendências + trilha + CLAUDE.md (OST-EA-AJUSTES-2B-2C)
 
 Branch: `feat/ajustes-2b-2c`. Marco 3 de 3 (final) — S1/S2/S3 e a doc.
@@ -780,3 +973,146 @@ Após o DoD aprovado pelo diretor, a fundação passou pelas duas frentes de aud
 git-ignored) — a liberação deliberada que destrava o gate de push para a Fase 0. Em seguida, merge
 de `feat/fase-0-fundacao` na `main`. Push não executado nesta etapa (não solicitado); a flag
 permite o push quando o diretor decidir.
+
+---
+
+## Fase 4 — Motor de IA + Arquivamento (OST-EA-FASE-4) — 2026-06-28
+
+Branch `feat/fase-4-ia-arquivamento`. Auditoria documental por IA (F2), arquivamento no Drive
+(INT-2) e gerador de kit (F9). Construído pela fábrica (arquiteto → ia/backend/frontend/devops em
+paralelo, dirs disjuntos), contra contratos congelados em `@ea/shared-types`.
+
+### Correção de segurança imediata
+- **`credentials.json` NÃO estava no `.gitignore`** (a OST assumiu que sim). A service account
+  estava untracked, a um `git add` de vazar. Adicionado `credentials.json` +
+  `apps/ai-service/credentials.json` ao `.gitignore`; confirmado via `git check-ignore`.
+
+### Decisões de arquitetura (arquiteto)
+- **Fluxo das regras:** o backend (dono do Drizzle) lê as `regras_auditoria` ativas e as passa no
+  payload; o ai-service é **stateless**, não abre conexão Postgres (desacoplamento §A.1).
+- **Propriedade do Drive:** o ai-service é o único detentor da credencial Google e o único que sobe
+  ao Drive; o backend nunca recebe a credencial. Staging compartilhada por bind-mount do mesmo path
+  (host backend ↔ container ai-service).
+- **CPF para conferência:** enviado ao ai-service **só** para a chamada do Gemini (a OST §1 exige;
+  a imagem do documento já o contém). Nunca logado, nunca persistido, nunca ecoado no `motivo`.
+- **Kit (F9):** recorte literal da OST §5 — extrair páginas do candidato + download temporário
+  (TTL 1h). **Sem** Clicksign/INT-4 e **sem** gate F12 nesta OST (registrados como futuros; a
+  subpasta Drive "ADMISSÃO" fica provisionada para o kit assinado futuro).
+
+### Entregue
+- **ai-service** (FastAPI/Vertex Gemini): `POST /auditoria/documento`, `POST /drive/arquivar`,
+  `POST /kit/gerar`; auth por `X-Internal-Token`; saída estruturada do Gemini validada contra o
+  enum; anti prompt-injection; Dockerfile + `.dockerignore`. 16 pytest (Gemini/Drive mockados),
+  ruff limpo.
+- **backend** (NestJS): tabela `regras_auditoria` + coluna `admissoes.drive_pasta_url` (migration
+  `0008`); seed de 50 regras baseline (CRUD `admin/regras`, MASTER/SUPER_ADMIN); helper de
+  completude extraído (`ReguaCompletudeService`, reusado pela Esteira sem mudar comportamento);
+  `ai-client` (fetch, sem axios); staging efêmera + purge (sweep 1h: admissão >48h, `_kits` >1h);
+  `POST/GET /esteira/auditoria/...`; `POST /kit/:id/gerar` + `GET /kit/download/:token`; roteamento
+  Drive por tipo_contrato/Fopag(cod_cliente)/skip. 51 specs verdes.
+- **frontend** (Next.js): aba Auditoria com botão "Auditar documento" + spinner + badge
+  VALIDADO/INCONFORME/PENDENTE + `motivo`; barra de progresso "X de Y"; aviso "arquivado no Drive"
+  com link; CRUD de regras em Administração; página Gerador de Kit. Lint/typecheck/build verdes.
+- **infra** (devops): serviço `ea-ai` no compose — interno (sem porta pública), credencial montada
+  read-only, staging bind-mount compartilhada; isolamento do CentraAtend preservado. `config` valida.
+
+### Gates (estado integrado)
+`pnpm lint` exit 0 · `pnpm typecheck` 3/3 · `pnpm test` 57 (shared-types 5, backend 51, frontend 1)
+· ai-service `ruff` limpo + `pytest` 16. (Warning pré-existente `StarletteDeprecationWarning` no
+TestClient — não-bloqueante, mesma anomalia da Fase 0.)
+
+### ⛔ Bloqueios para a validação visual (pendências do diretor §A.9 — descobertos por smoke real)
+A OST afirmou "APIs habilitadas", mas o smoke real com a credencial revelou:
+1. **Vertex AI API desabilitada** no projeto `ea-v2-automatic` (`aiplatform.googleapis.com` →
+   `SERVICE_DISABLED`). A SA autentica; o 403 é de serviço desligado. → habilitar a API.
+2. **Drive upload bloqueado** por `storageQuotaExceeded`: service account pura não tem cota no
+   *My Drive*. Criar/listar/excluir pasta funciona (Drive API ON, SA Editor), mas o **upload de
+   arquivo** exige um **Shared Drive** (mover a árvore de pastas para lá) **ou** **domain-wide
+   delegation** (impersonar um usuário Workspace — suporte já implementado via
+   `DRIVE_DELEGATED_SUBJECT`).
+
+Sem (1) e (2) o fluxo real (upload → auditoria IA → arquivamento Drive) não pode ser demonstrado
+de ponta a ponta. Código 100% pronto; refazer os smokes ao destravar.
+
+### Estado / próximo passo
+Build completo e verde. **PARADO para validação visual (§A.0 / DoD)** — segurança e tester só
+depois do aval visual do diretor. Gate de deploy fechado (sem flag `READY_*`). Pendente: decisão do
+diretor sobre os bloqueios 1–2 e sobre validar agora em modo mock vs. após o destravamento.
+Nota operacional: em dev a stack roda no host (ai-service em `:8000` para casar com
+`AI_SERVICE_URL`; o README cita `:8010` como alternativa).
+
+### Validação híbrida (modo mock do Drive) — 2026-06-28 (continuação)
+
+Diretor optou por subir o stack em **modo híbrido** para a validação visual: **Gemini real**
+(Vertex foi habilitada — bloqueio 1 RESOLVIDO) + **Drive em mock** (`DRIVE_MOCK=true`) até o admin
+Workspace (Fernando) adicionar a service account como Contribuidor nos Drives Compartilhados
+(bloqueio 2 em andamento). Mapeamento completo de pastas do Drive (por `tipo_contrato`; Fopag por
+`cod_cliente`; subpastas ASO/ADMISSÃO/BENEFÍCIOS/DOCUMENTOS PESSOAIS) fornecido pelo diretor e
+implementado no roteamento do backend.
+
+Ajustes nesta etapa:
+- **Reconciliação de contrato:** o backend enviava `pastaPaiId`; o ai-service espera
+  `parentFolderId` — alinhado no backend (`ai-client` + `auditoria.service`).
+- **Env do backend:** `AI_SERVICE_URL`/`INTERNAL_TOKEN`/`STAGING_DIR` adicionados ao
+  `apps/backend/.env` (o backend lê via `@nestjs/config`, não o `infra/.env`).
+- **Modo mock do Drive:** flag `DRIVE_MOCK` no ai-service (link fictício, sem chamar o Google).
+- **Modelo Gemini:** `gemini-2.0-flash` indisponível em `us-central1` → trocado para
+  `gemini-2.5-flash` (autorizado pela OST).
+- **Injeção de data atual** no prompt do Gemini (correção): o senso de "hoje" do modelo é o cutoff
+  de treino; sem a data injetada, regras relativas a data (ex.: comprovante ≤90 dias) falhavam.
+- **Bug do Gerador de Kit (F9):** botão "Gerar kit" não habilitava — exigia seleção da admissão no
+  dropdown (o backend chaveia por `admissaoId`). Corrigido: condição extraída para `lib/kit.ts`
+  (`podeGerar`) + auto-seleção (`autoMatch`) + helper text. Testes puros em `kit.spec.ts`.
+
+Smokes reais executados (via API, Gemini real): auditoria **VALIDADO** e **INCONFORME** (com
+conferência de CPF/nome), progresso da régua, kit F9 (extrai a página do candidato de um PDF-mãe de
+3 páginas), e o fluxo **Temporário → régua fecha → link do Drive (mock)** ponta a ponta.
+
+### Auditorias da fábrica (§A.0)
+- **tester — PASS.** Gates reconfirmados do zero: `pnpm lint`/`typecheck` (3/3)/`test`
+  (shared-types 5, backend 53, frontend 11); ai-service `ruff` + `pytest` (31). Cobertura de domínio
+  conferida; preencheu lacunas em `drive-routing.spec.ts` (Fopag completo, skip 42/43/undefined).
+  Gate fechado, sem flag.
+- **segurança — APROVADO COM RESSALVAS → corrigidas.** Os 5 requisitos rígidos §A.6 passam. Duas
+  ressalvas corrigidas e em reauditoria: **R1 (MÉDIA)** path traversal real em
+  `ai-service/app/staging.py` (`caminho_staging_seguro` com containment sob `STAGING_DIR`, 400 fora
+  da área; cobre os 3 routers); **R2 (BAIXA)** link mock sem PII (`MOCK-{sha256[:8]}`) +
+  fail-fast de boot se `DRIVE_MOCK=true` em produção (`APP_ENV`).
+
+### Pendências do diretor remanescentes (§A.9)
+- **Drive write (bloqueio 2):** Fernando (admin Workspace) adicionar
+  `ea-automatic-sa@ea-v2-automatic` como Contribuidor nos Drives Compartilhados. Ao liberar:
+  `DRIVE_MOCK=false`, re-smoke real do upload, sem nova validação visual (só confirmação técnica).
+- **Critério oficial de auditoria (regras):** o seed são baselines/placeholders (ex.: a regra de
+  CPF no comprovante de residência é estrita demais). O critério real é insumo do diretor, editável
+  em Administração → Regras de auditoria.
+
+### ✅ ENCERRAMENTO DA FASE 4 — VALIDAÇÃO VISUAL APROVADA + merge na main — 2026-06-30
+
+**Validação visual do diretor (§A.0): APROVADA.** Ajustes confirmados em tela: ASO arquivado com
+logo do Drive, régua automática (completude → ANALISE_OK sem clique), kit em duas colunas com busca
+e filtro, logo do Google Drive na esteira e na ficha do candidato.
+
+**Auditorias de fábrica reconfirmadas no fechamento:**
+- **tester — VERDE.** `pnpm lint`/`typecheck` (3/3) + `test`: backend 58, frontend 11, ai-service
+  `ruff` + `pytest` 31 = **100 testes verdes**, zero alterações de código. Regras de domínio da
+  Fase 4 cobertas (completude da régua, gate do Cadastro, `farol_global` derivado/BANCO_AGUARDAR,
+  veredito IA → estado, regra 9).
+- **segurança — APROVADO.** §A.6 conforme item a item; **item 6 (Drive)** auditado linha a linha:
+  `drive.py` faz apenas `files().list/create/get` — **nenhuma operação destrutiva**
+  (delete/trash/move/rename/permissions), contrato anti-deleção do Fernando respeitado. Zero PII em
+  log (redação de CPF defensiva no `gemini.py`, mock por hash SHA-256). Segredos fora do git e da
+  imagem. **Aprovou explicitamente o merge com o smoke do Drive ainda em `DRIVE_MOCK=true`** (o
+  bloqueio é de infra/permissão, não de código).
+  - **Ressalva MÉDIA (não-bloqueante, follow-up devops antes do go-live real do Drive):** o bloco
+    `ea-ai` do `infra/docker-compose.yml` não define `APP_ENV`, então o fail-fast
+    `_proibir_mock_em_producao` (`config.py`) fica dormente mesmo na VM. Corrigir definindo
+    `APP_ENV=production` no compose produtivo ao habilitar o Drive real.
+
+**Gate de deploy (§A.7):** flag `READY_fase-4-ia-arquivamento` criada deliberadamente após os dois
+gates verdes + validação visual; merge `--no-ff` de `feat/fase-4-ia-arquivamento` na `main` e push
+ao GitHub. Flag local, nunca versionada (removida após o push).
+
+**Drive real (pendência aberta com o Fernando):** o bloqueio `storageQuotaExceeded` está em
+resolução — Opção A (Shared Drive) ou Opção B (domain-wide delegation). Ao liberar:
+`DRIVE_MOCK=false` + smoke real do upload, **sem nova validação visual** (só confirmação técnica).

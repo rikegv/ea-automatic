@@ -1,17 +1,26 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { apiFetch, ApiError } from "@/lib/api";
+import type { AuditoriaStatus, ResultadoAuditoria } from "@ea/shared-types";
+import { apiFetch, apiUpload, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/cn";
 import { PageHead } from "@/components/ui/PageHead";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Pill, type PillTone } from "@/components/ui/Pill";
+import { PendenciasBadge } from "@/components/ui/PendenciasBadge";
 import { Icon } from "@/components/ui/Icon";
+import { GoogleDriveLogo } from "@/components/ui/GoogleDriveLogo";
 import { Select } from "@/components/ui/Select";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AdmissaoDetalheModal } from "@/components/esteira/AdmissaoDetalheModal";
-import { AceiteLiberacaoModal, type AceiteLiberacao } from "@/components/esteira/AceiteLiberacaoModal";
+import {
+  AceiteLiberacaoModal,
+  type AceiteLiberacao,
+} from "@/components/esteira/AceiteLiberacaoModal";
+import { AuditoriaDocsModal } from "@/components/esteira/AuditoriaDocsModal";
+import { PendenciasModal } from "@/components/gerenciador/PendenciasModal";
+import { EditAdmissaoModal } from "@/components/gerenciador/EditAdmissaoModal";
 
 // ── Contrato de API (F8/F7) ─────────────────────────────────────────────────
 const ABAS = [
@@ -43,6 +52,9 @@ interface EsteiraItem {
   disponivel?: boolean;
   obrigatoriosPendentes?: boolean;
   temPendencias?: boolean;
+  // Preenchido quando a régua fecha e o prontuário é arquivado no Drive (T4 / Fase 4).
+  drivePastaUrl?: string | null;
+  driveAsoUrl?: string | null;
 }
 interface EsteiraResp {
   items: EsteiraItem[];
@@ -77,6 +89,29 @@ const TONE_VAR: Record<PillTone, string | undefined> = {
   in: "var(--accent)",
 };
 
+// Veredito da IA do ASO (T3) → tom + rótulo da pill.
+const ASO_TONE: Record<AuditoriaStatus, PillTone> = {
+  VALIDADO: "ok",
+  INCONFORME: "dg",
+  PENDENTE: "wn",
+};
+const ASO_ROTULO: Record<AuditoriaStatus, string> = {
+  VALIDADO: "Validado",
+  INCONFORME: "Inconforme",
+  PENDENTE: "Pendente",
+};
+const ASO_ACCEPT = ".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png";
+
+/** Spinner inline (Tailwind animate-spin), herda a cor do texto. */
+function Spinner() {
+  return (
+    <span
+      className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"
+      aria-hidden="true"
+    />
+  );
+}
+
 function fmtData(d?: string | null): string {
   if (!d) return "—";
   const dt = new Date(d);
@@ -89,14 +124,12 @@ function fmtDataAdmissao(d?: string | null): string {
   return m ? `${m[3]}/${m[2]}/${m[1]}` : fmtData(d);
 }
 
-type DialogState =
-  | {
-      kind: "conclui" | "reversao" | "aptoSemAso" | "auditoriaIncompleta" | "passagem";
-      frenteId: string;
-      status: string;
-      message: string;
-    }
-  | null;
+type DialogState = {
+  kind: "conclui" | "reversao" | "aptoSemAso" | "auditoriaIncompleta" | "passagem";
+  frenteId: string;
+  status: string;
+  message: string;
+} | null;
 
 export default function EsteiraPage() {
   const { token } = useAuth();
@@ -104,6 +137,7 @@ export default function EsteiraPage() {
   const rota = ABAS[aba].rota;
   const isExame = rota === "exame";
   const isCadastro = rota === "cadastro";
+  const isAuditoria = rota === "auditoria";
 
   // Dados da frente
   const [data, setData] = useState<EsteiraResp | null>(null);
@@ -129,6 +163,15 @@ export default function EsteiraPage() {
   const [flash, setFlash] = useState<string | null>(null);
   // Modal de visualização rápida (item 4)
   const [viewId, setViewId] = useState<string | null>(null);
+  // Modal de auditoria documental por IA (Fase 4 / F2) — só na aba Auditoria.
+  const [auditId, setAuditId] = useState<string | null>(null);
+  // ASO (T3) — upload único que anexa E audita na IA. tipoDocumentoId do ASO + veredito por frente.
+  const [asoTipoId, setAsoTipoId] = useState<string | null>(null);
+  const [asoResult, setAsoResult] = useState<Record<string, ResultadoAuditoria>>({});
+  // Pendências obrigatórias (item 4) — badge clicável → modal → preencher (reusa o padrão do Gerenciador).
+  const [pendItem, setPendItem] = useState<EsteiraItem | null>(null);
+  const [editItem, setEditItem] = useState<EsteiraItem | null>(null);
+  const [editFiltro, setEditFiltro] = useState<string[] | undefined>(undefined);
 
   const catMap = useMemo(() => {
     const m = new Map<string, StatusCat>();
@@ -141,6 +184,14 @@ export default function EsteiraPage() {
     const h = setTimeout(() => setCandDebounced(candQuery.trim()), 350);
     return () => clearTimeout(h);
   }, [candQuery]);
+
+  // tipoDocumentoId do ASO (T3) — uma vez; usado no upload+auditoria unificados da aba Exame.
+  useEffect(() => {
+    if (!token) return;
+    apiFetch<{ id: string; codigo: string }[]>("/catalogos/tipos-documento", { token })
+      .then((tipos) => setAsoTipoId(tipos.find((t) => t.codigo === "ASO")?.id ?? null))
+      .catch(() => setAsoTipoId(null));
+  }, [token]);
 
   // ── Carga da fila com os filtros atuais ─────────────────────────────────────
   const load = useCallback(async () => {
@@ -295,7 +346,8 @@ export default function EsteiraPage() {
       return;
     }
     // Avançar (concluir Auditoria/Exame) com campos obrigatórios pendentes: aceite de passagem (S3).
-    const concluindo = (rota === "auditoria" && novo === "ANALISE_OK") || (isExame && novo === "APTO");
+    const concluindo =
+      (rota === "auditoria" && novo === "ANALISE_OK") || (isExame && novo === "APTO");
     if (concluindo && item.temPendencias) {
       setDialog({
         kind: "passagem",
@@ -320,36 +372,33 @@ export default function EsteiraPage() {
     }
   }
 
-  // ── Upload de ASO (Exame) — multipart, fora do apiFetch (JSON) ───────────────
-  async function uploadAso(item: EsteiraItem, file: File) {
+  // ── ASO (T3): upload ÚNICO que anexa E audita na IA ──────────────────────────
+  // O endpoint de auditoria recebe o arquivo (efêmero), retorna o veredito e marca o ASO como
+  // ENTREGUE quando VALIDADO (reflete em asoAnexado após o reload). Não há mais botão separado.
+  async function uploadEAuditarAso(item: EsteiraItem, file: File) {
+    if (!asoTipoId) {
+      setActionError("Tipo de documento ASO não encontrado no catálogo.");
+      return;
+    }
     setActingId(item.frenteId);
     setActionError(null);
     setFlash(null);
     try {
       const fd = new FormData();
       fd.append("file", file);
-      const res = await fetch(`/api/esteira/exame/${item.admissaoId}/aso`, {
-        method: "POST",
-        credentials: "include",
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        body: fd,
-      });
-      if (!res.ok) {
-        const txt = await res.text();
-        let msg = "Falha ao anexar o ASO.";
-        try {
-          const j = txt ? JSON.parse(txt) : null;
-          const raw = j?.message ?? j?.error;
-          if (raw) msg = Array.isArray(raw) ? raw.join(", ") : String(raw);
-        } catch {
-          /* corpo não-JSON — mantém a mensagem padrão */
-        }
-        throw new Error(msg);
-      }
-      setFlash(`ASO anexado para ${item.candidatoNome}.`);
+      fd.append("tipoDocumentoId", asoTipoId);
+      const resp = await apiUpload<{ resultado: ResultadoAuditoria }>(
+        `/esteira/auditoria/${item.admissaoId}/documento`,
+        fd,
+        token,
+      );
+      setAsoResult((m) => ({ ...m, [item.frenteId]: resp.resultado }));
+      setFlash(
+        `ASO de ${item.candidatoNome} auditado: ${ASO_ROTULO[resp.resultado.status]}.`,
+      );
       await load();
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : "Falha ao anexar o ASO.");
+      setActionError(e instanceof ApiError ? e.message : "Falha ao anexar e auditar o ASO.");
     } finally {
       setActingId(null);
     }
@@ -359,7 +408,13 @@ export default function EsteiraPage() {
     if (!dialog) return;
     // conclusão simples não exige aceite; reversão/apto-sem-ASO/passagem sim. O aceite também marca
     // aceitePassagem=true (registra a trilha de passagem se houver pendências — S3).
-    void doPatch(dialog.frenteId, dialog.status, dialog.kind !== "conclui", undefined, dialog.kind !== "conclui");
+    void doPatch(
+      dialog.frenteId,
+      dialog.status,
+      dialog.kind !== "conclui",
+      undefined,
+      dialog.kind !== "conclui",
+    );
   }
 
   const items = data?.items ?? [];
@@ -367,9 +422,14 @@ export default function EsteiraPage() {
   // KPIs (item 5/6): "Total na fila" + um card por status EM ANDAMENTO (exclui o de conclusão, que
   // sai da fila). Cada card de status filtra a lista ao clicar (toggle).
   const kpiStatus = statusCatalogo.filter((c) => !c.conclui);
+  // Colunas: Candidato · Cliente · Cargo · Data adm. · Status · Operação · olho. As de status/operação
+  // recebem largura suficiente (pills não truncam; coluna de operação comporta Select + ações) e o
+  // espaçamento fica equilibrado entre as abas (T1c).
   const gridCols = isExame
-    ? "minmax(0,1.5fr) minmax(0,1fr) minmax(0,0.9fr) 100px 96px 196px 40px"
-    : "minmax(0,1.6fr) minmax(0,1.1fr) minmax(0,0.95fr) 104px 112px 168px 40px";
+    ? "minmax(0,1.5fr) minmax(0,1fr) minmax(0,0.9fr) 104px 124px 340px 40px"
+    : isAuditoria
+      ? "minmax(0,1.5fr) minmax(0,1fr) minmax(0,0.9fr) 104px 124px 280px 40px"
+      : "minmax(0,1.6fr) minmax(0,1.1fr) minmax(0,0.95fr) 108px 128px 176px 40px";
 
   function toggleStatusKpi(code: string) {
     setStatusFiltro((cur) => (cur === code ? "" : code));
@@ -401,7 +461,7 @@ export default function EsteiraPage() {
       {/* ── KPIs por frente (reais; clicáveis = filtro, item 5) ──────────── */}
       <div className="mb-[18px] grid grid-cols-2 gap-[14px] sm:grid-cols-3 xl:grid-cols-5">
         <GlassCard className="fk">
-          <div className="num">{loading && !data ? "—" : data?.kpis.total ?? 0}</div>
+          <div className="num">{loading && !data ? "—" : (data?.kpis.total ?? 0)}</div>
           <div className="lbl">Total na fila</div>
         </GlassCard>
         {kpiStatus.map((c) => {
@@ -557,7 +617,7 @@ export default function EsteiraPage() {
           <span>Cargo</span>
           <span>Data adm.</span>
           <span>Status</span>
-          <span>{isExame ? "ASO / Avanço" : "Avanço"}</span>
+          <span>{isExame ? "ASO / Avanço" : isAuditoria ? "Avanço / Auditoria" : "Avanço"}</span>
           <span />
         </div>
 
@@ -586,6 +646,14 @@ export default function EsteiraPage() {
                       ? `Concluída em ${fmtData(item.dataConclusao)}`
                       : `Aberta em ${fmtData(item.dataInicio)}`}
                   </div>
+                  {item.temPendencias && (
+                    <PendenciasBadge
+                      tone="wn"
+                      label="Pendências Obrig."
+                      className="mt-1"
+                      onClick={() => setPendItem(item)}
+                    />
+                  )}
                 </div>
                 <div className="min-w-0">
                   <div className="meta truncate text-text">{item.clienteRazao}</div>
@@ -598,51 +666,113 @@ export default function EsteiraPage() {
                 </div>
 
                 {/* Coluna de operação */}
-                <div className="flex min-w-0 items-center gap-2">
-                  {pausado ? (
-                    <span
-                      className="inline-flex items-center gap-2 text-[12px] text-faint"
-                      title="O Cadastro reabre sozinho quando Auditoria e Exame concluírem. O trabalho fica preservado."
-                    >
-                      <Icon name="clock" className="h-4 w-4 flex-none" />
-                      Pausado — aguarda Auditoria + Exame
-                    </span>
-                  ) : (
-                    <Select
-                      className="min-w-0 flex-1"
-                      ariaLabel={`Mudar status de ${item.candidatoNome}`}
-                      disabled={acting}
-                      value={item.status}
-                      onChange={(novo) => onSelectStatus(item, novo)}
-                      options={statusCatalogo.map((c) => ({
-                        value: c.codigo,
-                        label: c.rotulo,
-                        color: TONE_VAR[statusTone(c.codigo, c)],
-                      }))}
-                    />
-                  )}
-
-                  {isExame && (
-                    <label
-                      className={cn(
-                        "flex flex-none cursor-pointer items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2 text-[12px] font-semibold transition hover:bg-[var(--surface-2)]",
-                        item.asoAnexado ? "text-ok" : "text-dim",
-                        acting && "pointer-events-none opacity-60",
-                      )}
-                      title={item.asoAnexado ? "ASO anexado — reanexar" : "Anexar ASO"}
-                    >
-                      <Icon name={item.asoAnexado ? "check" : "doc"} className="h-4 w-4" />
-                      {item.asoAnexado ? "Anexado" : "ASO"}
-                      <input
-                        type="file"
-                        className="hidden"
-                        onChange={(e) => {
-                          const f = e.target.files?.[0];
-                          if (f) void uploadAso(item, f);
-                          e.target.value = "";
-                        }}
+                <div className="flex min-w-0 flex-col gap-1.5">
+                  <div className="flex min-w-0 items-center gap-2">
+                    {pausado ? (
+                      <span
+                        className="inline-flex items-center gap-2 text-[12px] text-faint"
+                        title="O Cadastro reabre sozinho quando Auditoria e Exame concluírem. O trabalho fica preservado."
+                      >
+                        <Icon name="clock" className="h-4 w-4 flex-none" />
+                        Pausado — aguarda Auditoria + Exame
+                      </span>
+                    ) : (
+                      <Select
+                        className="min-w-0 flex-1"
+                        ariaLabel={`Mudar status de ${item.candidatoNome}`}
+                        disabled={acting}
+                        value={item.status}
+                        onChange={(novo) => onSelectStatus(item, novo)}
+                        options={statusCatalogo.map((c) => ({
+                          value: c.codigo,
+                          label: c.rotulo,
+                          color: TONE_VAR[statusTone(c.codigo, c)],
+                        }))}
                       />
-                    </label>
+                    )}
+
+                    {/* ASO (T3): upload ÚNICO → anexa + audita na IA automaticamente */}
+                    {isExame && (
+                      <label
+                        className={cn(
+                          "flex flex-none cursor-pointer items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2 text-[12px] font-semibold transition hover:bg-[var(--surface-2)]",
+                          item.asoAnexado ? "text-ok" : "text-dim",
+                          (acting || !asoTipoId) && "pointer-events-none opacity-60",
+                        )}
+                        title={
+                          item.asoAnexado
+                            ? "ASO anexado — reanexar e reauditar na IA"
+                            : "Anexar ASO (audita na IA automaticamente)"
+                        }
+                      >
+                        {acting ? (
+                          <Spinner />
+                        ) : (
+                          <Icon name={item.asoAnexado ? "check" : "doc"} className="h-4 w-4" />
+                        )}
+                        {acting ? "Auditando…" : item.asoAnexado ? "Anexado" : "ASO"}
+                        <input
+                          type="file"
+                          accept={ASO_ACCEPT}
+                          className="hidden"
+                          disabled={acting || !asoTipoId}
+                          onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            if (f) void uploadEAuditarAso(item, f);
+                            e.target.value = "";
+                          }}
+                        />
+                      </label>
+                    )}
+
+                    {isAuditoria && (
+                      <button
+                        type="button"
+                        className="inline-flex flex-none items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2 text-[12px] font-semibold text-dim transition hover:bg-[var(--surface-2)] hover:text-accent"
+                        title="Auditar documentos com IA"
+                        onClick={() => setAuditId(item.admissaoId)}
+                      >
+                        <Icon name="doc" className="h-4 w-4" />
+                        Auditar
+                      </button>
+                    )}
+
+                    {/* Link do prontuário no Drive (T4) — só após a régua fechar; pasta ou ASO */}
+                    {isAuditoria && (item.drivePastaUrl || item.driveAsoUrl) && (
+                      <a
+                        href={item.drivePastaUrl || item.driveAsoUrl || undefined}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="grid h-9 w-9 flex-none place-items-center rounded-lg border border-[var(--border)] bg-[var(--surface)] transition hover:bg-[var(--surface-2)]"
+                        title="Abrir prontuário no Google Drive"
+                        aria-label={`Abrir prontuário de ${item.candidatoNome} no Google Drive`}
+                      >
+                        <GoogleDriveLogo className="h-[18px] w-[18px]" />
+                      </a>
+                    )}
+                  </div>
+
+                  {/* Veredito da IA do ASO (T3) — badge + motivo abaixo do campo */}
+                  {isExame && asoResult[item.frenteId] && (
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
+                      <Pill tone={ASO_TONE[asoResult[item.frenteId].status]}>
+                        {ASO_ROTULO[asoResult[item.frenteId].status]}
+                      </Pill>
+                      {asoResult[item.frenteId].motivo && (
+                        <span
+                          className={cn(
+                            "min-w-0 text-[12px]",
+                            asoResult[item.frenteId].status === "VALIDADO"
+                              ? "text-ok"
+                              : asoResult[item.frenteId].status === "INCONFORME"
+                                ? "text-danger"
+                                : "text-warn",
+                          )}
+                        >
+                          {asoResult[item.frenteId].motivo}
+                        </span>
+                      )}
+                    </div>
                   )}
                 </div>
 
@@ -708,6 +838,48 @@ export default function EsteiraPage() {
 
       {/* ── Modal de visualização rápida (item 4) ────────────────────────── */}
       {viewId && <AdmissaoDetalheModal admissaoId={viewId} onClose={() => setViewId(null)} />}
+
+      {/* ── Modal de auditoria documental por IA (Fase 4 / F2) ────────────── */}
+      {auditId && (
+        <AuditoriaDocsModal
+          admissaoId={auditId}
+          onClose={(mudou) => {
+            setAuditId(null);
+            if (mudou) void load();
+          }}
+        />
+      )}
+
+      {/* ── Pendências obrigatórias (item 4) — mesmo padrão do Gerenciador ── */}
+      {pendItem && (
+        <PendenciasModal
+          admissaoId={pendItem.admissaoId}
+          candidatoNome={pendItem.candidatoNome}
+          onClose={() => setPendItem(null)}
+          onPreencher={(campos) => {
+            setEditItem(pendItem);
+            setEditFiltro(campos);
+            setPendItem(null);
+          }}
+        />
+      )}
+      {editItem && (
+        <EditAdmissaoModal
+          admissaoId={editItem.admissaoId}
+          candidatoNome={editItem.candidatoNome}
+          camposFiltro={editFiltro}
+          onClose={() => {
+            setEditItem(null);
+            setEditFiltro(undefined);
+          }}
+          onSaved={(msg) => {
+            setEditItem(null);
+            setEditFiltro(undefined);
+            setFlash(msg);
+            void load();
+          }}
+        />
+      )}
     </>
   );
 }

@@ -1,11 +1,18 @@
 [project]
 name = "ea-ai-service"
-version = "0.0.0"
-description = "EA AUTOMATIC — motor de IA (FastAPI). Vertex AI/Gemini via service account. Fase 0: esqueleto."
+version = "0.1.0"
+description = "EA AUTOMATIC — motor de IA (FastAPI). Vertex AI/Gemini via service account. Fase 4: auditoria documental (F2), arquivamento Drive (INT-2), gerador de kit (F9)."
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.34",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.5",
+    "python-multipart>=0.0.12",
+    "google-genai>=1.0",
+    "google-api-python-client>=2.140",
+    "google-auth>=2.34",
+    "pypdf>=5.1",
 ]
 
 [dependency-groups]

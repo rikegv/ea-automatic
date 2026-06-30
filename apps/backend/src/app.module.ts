@@ -5,13 +5,18 @@ import { JwtModule } from "@nestjs/jwt";
 import { ThrottlerGuard, ThrottlerModule } from "@nestjs/throttler";
 import { AdminModule } from "./admin/admin.module";
 import { AdmissoesModule } from "./admissoes/admissoes.module";
+import { AiModule } from "./ai/ai.module";
+import { AuditoriaModule } from "./auditoria/auditoria.module";
 import { AuthModule } from "./auth/auth.module";
 import { JwtAuthGuard } from "./auth/guards/jwt-auth.guard";
 import { OriginGuard } from "./auth/guards/origin.guard";
 import { RolesGuard } from "./auth/guards/roles.guard";
 import { DrizzleModule } from "./db/drizzle.module";
 import { EsteiraModule } from "./esteira/esteira.module";
+import { KitModule } from "./kit/kit.module";
 import { NaoConformidadesModule } from "./nao-conformidades/nao-conformidades.module";
+import { ReguaModule } from "./regua/regua.module";
+import { StagingModule } from "./staging/staging.module";
 import { HealthController } from "./health/health.controller";
 import { HealthService } from "./health/health.service";
 import { UsersModule } from "./users/users.module";
@@ -28,6 +33,11 @@ import { UsersModule } from "./users/users.module";
     AdmissoesModule,
     EsteiraModule,
     NaoConformidadesModule,
+    AiModule,
+    StagingModule,
+    ReguaModule,
+    AuditoriaModule,
+    KitModule,
   ],
   controllers: [HealthController],
   providers: [

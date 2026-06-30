@@ -26,13 +26,26 @@ const TIPOS_DOCUMENTO: Array<{ codigo: string; nome: string }> = [
   { codigo: "DEPENDENTES_IR", nome: "Declaração de Dependentes (IR)" },
   { codigo: "VACINA_COVID", nome: "Comprovante de Vacinação COVID-19" },
   { codigo: "CURRICULO", nome: "Currículo" },
+  // Documento de formalização da admissão de banco (§A.3 / Fase 4 complemento). Arquivado no
+  // Drive na subpasta ADMISSÃO. O arquivo-modelo será fornecido pelo diretor.
+  { codigo: "TERMO_BANCO", nome: "Termo de Banco" },
 ];
 
 // Status por frente (§A.3) — alimenta os seletores da esteira (F8). `conclui` marca o status
 // terminal que conclui a frente (insumo do gate do Cadastro, regra 3).
-const STATUS_FRENTE: Array<{ tipo: "AUDITORIA" | "EXAME" | "CADASTRO_CONTRATO"; codigo: string; rotulo: string; conclui: boolean }> = [
+const STATUS_FRENTE: Array<{
+  tipo: "AUDITORIA" | "EXAME" | "CADASTRO_CONTRATO";
+  codigo: string;
+  rotulo: string;
+  conclui: boolean;
+}> = [
   { tipo: "AUDITORIA", codigo: "ANALISE_PENDENTE", rotulo: "Análise pendente", conclui: false },
-  { tipo: "AUDITORIA", codigo: "AGUARDA_REENVIO", rotulo: "Aguardando reenvio dos docs", conclui: false },
+  {
+    tipo: "AUDITORIA",
+    codigo: "AGUARDA_REENVIO",
+    rotulo: "Aguardando reenvio dos docs",
+    conclui: false,
+  },
   { tipo: "AUDITORIA", codigo: "ANALISE_OK", rotulo: "Análise OK", conclui: true },
   { tipo: "AUDITORIA", codigo: "DECLINOU", rotulo: "Declinou", conclui: false },
   { tipo: "EXAME", codigo: "A_AGENDAR", rotulo: "A agendar", conclui: false },
@@ -74,9 +87,12 @@ async function main(): Promise<void> {
 
   // 3) Status por frente.
   const comOrdem = STATUS_FRENTE.map((s, i) => ({ ...s, ordem: i }));
-  await db.insert(frenteStatusCatalogo).values(comOrdem).onConflictDoNothing({
-    target: [frenteStatusCatalogo.tipo, frenteStatusCatalogo.codigo],
-  });
+  await db
+    .insert(frenteStatusCatalogo)
+    .values(comOrdem)
+    .onConflictDoNothing({
+      target: [frenteStatusCatalogo.tipo, frenteStatusCatalogo.codigo],
+    });
   console.log(`[seed] status por frente: ${STATUS_FRENTE.length}`);
 
   await sql.end();

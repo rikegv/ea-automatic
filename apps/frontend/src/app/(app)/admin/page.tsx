@@ -12,6 +12,12 @@ const CARDS: { href: string; icon: IconName; title: string; desc: string }[] = [
     title: "Régua documental",
     desc: "Exigência de cada documento por (cliente + cargo).",
   },
+  {
+    href: "/admin/regras",
+    icon: "check",
+    title: "Regras de auditoria",
+    desc: "Critério de validade de cada documento (motor de IA).",
+  },
 ];
 
 export default function AdminHome() {

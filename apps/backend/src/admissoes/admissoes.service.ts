@@ -5,7 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { isValidCpf, normalizeCpf } from "@ea/shared-types";
+import { isValidCpf, normalizeCpf, type FarolGlobal } from "@ea/shared-types";
 import { and, count, desc, eq, gte, ilike, inArray, lte, or, sql } from "drizzle-orm";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
@@ -20,11 +20,9 @@ import {
   frentesAdmissao,
   reguaDocumental,
 } from "../db/schema";
-import {
-  calcSinalizadorPreenchimento,
-  STATUS_INICIAL_FRENTE,
-} from "../domain/admissao";
+import { calcSinalizadorPreenchimento, STATUS_INICIAL_FRENTE } from "../domain/admissao";
 import { FRENTES_AO_NASCER } from "../domain/frentes";
+import { recomputeFarolGlobal } from "./farol";
 import type { AuthUser } from "../auth/auth.types";
 import type { CreateAdmissaoDto } from "./dto/create-admissao.dto";
 import type { UpdateAdmissaoDto } from "./dto/update-admissao.dto";
@@ -194,9 +192,7 @@ export class AdmissoesService {
         endereco: vf.endereco ?? null,
         substituidoNome: ehSubstituicao ? (vf.substituidoNome ?? null) : null,
         substituidoCpf: ehSubstituicao ? substituidoCpf : null,
-        substituicaoExpurgarEm: ehSubstituicao
-          ? new Date(Date.now() + 48 * 60 * 60 * 1000)
-          : null,
+        substituicaoExpurgarEm: ehSubstituicao ? new Date(Date.now() + 48 * 60 * 60 * 1000) : null,
       });
 
       // h. nascimento paralelo (regra 1 / F12): AUDITORIA + EXAME. CADASTRO_CONTRATO não nasce (regra 3).
@@ -275,7 +271,7 @@ export class AdmissoesService {
 
     // Filtros de status (farol/concluído) — só na lista, não nos KPIs.
     const listWhere = [...base];
-    if (filtros.farol) listWhere.push(eq(admissoes.farolGlobal, filtros.farol as "ATIVO"));
+    if (filtros.farol) listWhere.push(eq(admissoes.farolGlobal, filtros.farol as FarolGlobal));
     if (filtros.concluido) listWhere.push(concluidoExpr);
 
     const [{ total }] = await this.db
@@ -295,6 +291,7 @@ export class AdmissoesService {
         tipoContrato: admissoes.tipoContrato,
         dataAdmissao: admissoes.dataAdmissao,
         farolGlobal: admissoes.farolGlobal,
+        isBanco: admissoes.isBanco,
         sinalizador: admissoes.sinalizadorPreenchimento,
         concluido: concluidoExpr,
         criadoEm: admissoes.criadoEm,
@@ -355,7 +352,7 @@ export class AdmissoesService {
     const [kpi] = await this.db
       .select({
         total: sql<number>`count(*)::int`,
-        ativos: sql<number>`count(*) filter (where ${admissoes.farolGlobal} = 'ATIVO')::int`,
+        ativos: sql<number>`count(*) filter (where ${admissoes.farolGlobal} = 'EM_ADMISSAO')::int`,
         declinados: sql<number>`count(*) filter (where ${admissoes.farolGlobal} = 'DECLINOU')::int`,
         concluidos: sql<number>`count(*) filter (where ${concluidoExpr})::int`,
       })
@@ -392,6 +389,7 @@ export class AdmissoesService {
       dataAdmissao: adm.dataAdmissao,
       matricula: adm.matricula,
       farolGlobal: adm.farolGlobal,
+      isBanco: adm.isBanco,
       vagaFolha: {
         salario: vaga?.salario ?? null,
         beneficios: vaga?.beneficios ?? null,
@@ -422,9 +420,10 @@ export class AdmissoesService {
     });
 
     // Campo "" no payload → limpa (null); ausente → mantém.
-    const orNull = (v?: string) => (v === undefined ? undefined : v.trim() === "" ? null : v.trim());
+    const orNull = (v?: string) =>
+      v === undefined ? undefined : v.trim() === "" ? null : v.trim();
 
-    return this.db.transaction(async (tx) => {
+    const result = await this.db.transaction(async (tx) => {
       // Vaga/folha (1:1).
       if (dto.vagaFolha) {
         const vf = dto.vagaFolha;
@@ -444,10 +443,14 @@ export class AdmissoesService {
           .where(eq(dadosVagaFolha.admissaoId, id));
       }
 
-      const novoTipoContrato = dto.tipoContrato === undefined ? adm.tipoContrato : orNull(dto.tipoContrato);
-      const novaDataAdmissao = dto.dataAdmissao === undefined ? adm.dataAdmissao : orNull(dto.dataAdmissao);
+      const novoTipoContrato =
+        dto.tipoContrato === undefined ? adm.tipoContrato : orNull(dto.tipoContrato);
+      const novaDataAdmissao =
+        dto.dataAdmissao === undefined ? adm.dataAdmissao : orNull(dto.dataAdmissao);
       const novoSalario =
-        dto.vagaFolha?.salario === undefined ? (vaga?.salario ?? null) : dto.vagaFolha.salario || null;
+        dto.vagaFolha?.salario === undefined
+          ? (vaga?.salario ?? null)
+          : dto.vagaFolha.salario || null;
 
       // Recalcula o sinalizador (F5) com os valores efetivos.
       const sinalizador = calcSinalizadorPreenchimento({
@@ -465,7 +468,8 @@ export class AdmissoesService {
           tipoContrato: novoTipoContrato,
           dataAdmissao: novaDataAdmissao,
           matricula: dto.matricula === undefined ? adm.matricula : orNull(dto.matricula),
-          farolGlobal: (dto.farolGlobal as "ATIVO") ?? adm.farolGlobal,
+          farolGlobal: (dto.farolGlobal as FarolGlobal) ?? adm.farolGlobal,
+          isBanco: dto.isBanco === undefined ? adm.isBanco : dto.isBanco,
           sinalizadorPreenchimento: sinalizador,
           atualizadoEm: new Date(),
         })
@@ -474,6 +478,11 @@ export class AdmissoesService {
 
       return { admissaoId: upd.id, sinalizador: upd.sinalizador };
     });
+
+    // Editar a data de admissão pode alternar EM_ADMISSAO ↔ BANCO_AGUARDAR (§A.3 / Fase 4
+    // complemento). A escolha manual de farol (DECLINOU/RESCISAO/ADMISSAO_CONCLUIDA) é preservada.
+    const farolGlobal = await recomputeFarolGlobal(this.db, id);
+    return { ...result, farolGlobal };
   }
 
   /**

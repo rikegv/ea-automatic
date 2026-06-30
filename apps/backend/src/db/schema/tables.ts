@@ -151,10 +151,20 @@ export const admissoes = pgTable("admissoes", {
   tipoContrato: varchar("tipo_contrato", { length: 60 }),
   matricula: varchar("matricula", { length: 60 }),
   dataAdmissao: date("data_admissao"),
-  farolGlobal: farolGlobalEnum("farol_global").notNull().default("ATIVO"),
+  farolGlobal: farolGlobalEnum("farol_global").notNull().default("EM_ADMISSAO"),
+  // Admissão de "banco" (§A.3 / Fase 4 complemento): contratação aprovada que aguarda vaga/data.
+  // Quando true, a ausência de data_admissao NÃO é pendência (é esperado) e o "Termo de Banco"
+  // passa a ser a pendência obrigatória de formalização.
+  isBanco: boolean("is_banco").notNull().default(false),
   sinalizadorPreenchimento: sinalizadorEnum("sinalizador_preenchimento")
     .notNull()
     .default("PENDENTE"),
+  // URL da pasta do Drive criada ao fechar a régua obrigatória (Fase 4 / INT-2). É REFERÊNCIA
+  // (link da pasta do prontuário), não dado pessoal nem URL do Pandapé — pode persistir (§A.6).
+  drivePastaUrl: text("drive_pasta_url"),
+  // URL do prontuário no Drive gravada ao arquivar o ASO logo após a auditoria VALIDADO (Fase 4
+  // ajustes finais — o ASO não espera o fechamento da régua). Referência (link da pasta), não PII.
+  driveAsoUrl: text("drive_aso_url"),
   criadoEm,
   atualizadoEm,
 });
@@ -327,6 +337,22 @@ export const passagemAceites = pgTable("passagem_aceites", {
   camposPendentes: text("campos_pendentes"),
   autorId: uuid("autor_id").references(() => usuarios.id),
   criadoEm,
+});
+
+// ── RegraAuditoria: critério configurável de aprovação da IA por tipo de doc (Fase 4 / INT-3) ─
+// O admin (Master/Super Admin) descreve, em texto, o que torna um documento válido. A régua
+// (regua_documental) diz QUAIS documentos são exigidos; estas regras dizem SE cada um está válido.
+// O `descricao_regra` é o critério em linguagem natural enviado ao motor de IA — nunca contém PII
+// (§A.6). Uma regra com tipo "DOCUMENTOS EM GERAL" é seedada para todos os tipos (baseline).
+export const regrasAuditoria = pgTable("regras_auditoria", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  tipoDocumentoId: uuid("tipo_documento_id")
+    .notNull()
+    .references(() => tiposDocumento.id, { onDelete: "cascade" }),
+  descricaoRegra: text("descricao_regra").notNull(),
+  ativo: boolean("ativo").notNull().default(true),
+  criadoEm,
+  atualizadoEm,
 });
 
 // ── IntegraçãoPandapé (anexo opcional — só quando a admissão veio do Pandapé) ─
