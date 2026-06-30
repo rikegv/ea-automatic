@@ -18,7 +18,7 @@ describe("resolvePastaPaiId — por tipo de contrato (acento/caixa-insensível)"
 
 describe("resolvePastaPaiId — Fopag resolve por cod_cliente", () => {
   it("usa o mapa por código quando o contrato é Fopag", () => {
-    expect(resolvePastaPaiId("Fopag", "16", {})).toBe("1bt7fXm2BdKv8ium9k5J8In5u334r-YLY");
+    expect(resolvePastaPaiId("Fopag", "16", {})).toBe("1WXvWoiOMbFFWhLlYMLpCHAh8vTAaYpxn");
     expect(resolvePastaPaiId("fopag", "44", {})).toBe("1FILnKhlgdPfoz1M_lje_8Rw2w1foGMYi");
   });
 
