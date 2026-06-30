@@ -54,6 +54,9 @@ services:
     container_name: ea-ai
     restart: unless-stopped
     environment:
+      # Produção por padrão (§A.6): arma o fail-fast _proibir_mock_em_producao
+      # (config.py) — boot recusa DRIVE_MOCK=true em ambiente produtivo.
+      APP_ENV: ${APP_ENV:-production}
       GOOGLE_APPLICATION_CREDENTIALS: /app/credentials.json
       GOOGLE_CLOUD_PROJECT: ${GCP_PROJECT:-ea-v2-automatic}
       VERTEX_AI_LOCATION: ${VERTEX_AI_LOCATION:-us-central1}
