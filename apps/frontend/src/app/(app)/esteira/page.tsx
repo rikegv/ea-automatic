@@ -1,7 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { AuditoriaStatus, Origem, ResultadoAuditoria } from "@ea/shared-types";
+import type {
+  AuditoriaStatus,
+  ClicksignStatus,
+  Origem,
+  ResultadoAuditoria,
+} from "@ea/shared-types";
 import { apiFetch, apiUpload, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/cn";
@@ -15,6 +20,7 @@ import { GoogleDriveLogo } from "@/components/ui/GoogleDriveLogo";
 import { Select } from "@/components/ui/Select";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AdmissaoDetalheModal } from "@/components/esteira/AdmissaoDetalheModal";
+import { clicksignPill } from "@/lib/clicksign";
 import {
   AceiteLiberacaoModal,
   type AceiteLiberacao,
@@ -57,6 +63,9 @@ interface EsteiraItem {
   // Preenchido quando a régua fecha e o prontuário é arquivado no Drive (T4 / Fase 4).
   drivePastaUrl?: string | null;
   driveAsoUrl?: string | null;
+  // Clicksign (INT-4 / F9) — status do envelope + contrato assinado arquivado no Drive.
+  clicksignStatus?: ClicksignStatus;
+  contratoAssinadoDriveUrl?: string | null;
 }
 interface EsteiraResp {
   items: EsteiraItem[];
@@ -779,6 +788,32 @@ export default function EsteiraPage() {
                       )}
                     </div>
                   )}
+
+                  {/* Assinatura Clicksign (INT-4 / F9) — só na aba Cadastro; SEM_ENVELOPE fica
+                      oculto (discreto). Reenvio por correção é feito na ficha (modal de detalhe). */}
+                  {isCadastro &&
+                    (item.contratoAssinadoDriveUrl ||
+                      (item.clicksignStatus && item.clicksignStatus !== "SEM_ENVELOPE")) && (
+                      <div className="flex min-w-0 flex-wrap items-center gap-2">
+                        {item.clicksignStatus && item.clicksignStatus !== "SEM_ENVELOPE" && (
+                          <Pill tone={clicksignPill(item.clicksignStatus).tone}>
+                            {clicksignPill(item.clicksignStatus).label}
+                          </Pill>
+                        )}
+                        {item.contratoAssinadoDriveUrl && (
+                          <a
+                            href={item.contratoAssinadoDriveUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-[12px] font-semibold text-text transition hover:bg-[var(--surface-2)]"
+                            title="Abrir contrato assinado no Google Drive"
+                          >
+                            <GoogleDriveLogo className="h-[15px] w-[15px]" />
+                            Contrato no Drive
+                          </a>
+                        )}
+                      </div>
+                    )}
                 </div>
 
                 {/* Visualização rápida (item 4) */}

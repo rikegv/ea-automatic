@@ -29,3 +29,15 @@ export function podeAbrirCadastro(frentes: EstadoFrente[]): boolean {
   const exame = frentes.find((f) => f.tipo === "EXAME");
   return Boolean(auditoria?.concluida && exame?.concluida);
 }
+
+/**
+ * Gate do kit (F9 / INT-4) — o kit de assinatura só nasce após as TRÊS frentes concluídas:
+ * AUDITORIA, EXAME e CADASTRO_CONTRATO. "Concluída" é a mesma noção das demais frentes
+ * (`frentesAdmissao.concluida` / `STATUS_CONCLUI` em esteira.ts — CADASTRO_CONTRATO conclui em
+ * INTEGRACAO). Função pura: a fonte de verdade é o estado das frentes da admissão. Reusa o gate do
+ * Cadastro (regra 3) e soma a conclusão do próprio Cadastro/Contrato.
+ */
+export function kitLiberado(frentes: EstadoFrente[]): boolean {
+  const cadastro = frentes.find((f) => f.tipo === "CADASTRO_CONTRATO");
+  return podeAbrirCadastro(frentes) && Boolean(cadastro?.concluida);
+}

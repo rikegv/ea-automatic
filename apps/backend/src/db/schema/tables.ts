@@ -1,6 +1,7 @@
 import {
   boolean,
   date,
+  index,
   integer,
   numeric,
   pgTable,
@@ -13,6 +14,7 @@ import {
   varchar,
 } from "drizzle-orm/pg-core";
 import {
+  clicksignStatusEnum,
   estadoDocumentoEnum,
   exigenciaEnum,
   farolGlobalEnum,
@@ -169,6 +171,13 @@ export const admissoes = pgTable("admissoes", {
   // URL do prontuário no Drive gravada ao arquivar o ASO logo após a auditoria VALIDADO (Fase 4
   // ajustes finais — o ASO não espera o fechamento da régua). Referência (link da pasta), não PII.
   driveAsoUrl: text("drive_aso_url"),
+  // Assinatura na Clicksign (INT-4 / F9). `clicksignEnvelopeId` é o ID do envelope na API 3.0 —
+  // referência técnica, não PII nem URL do Pandapé (§A.6). `clicksignStatus` espelha o ciclo do
+  // envelope (SEM_ENVELOPE inicial). `contratoAssinadoDriveUrl` é o link do contrato assinado já
+  // arquivado no Drive (referência, não binário — regra 7); o original da Clicksign expira em ~5min.
+  clicksignEnvelopeId: varchar("clicksign_envelope_id", { length: 80 }),
+  clicksignStatus: clicksignStatusEnum("clicksign_status").notNull().default("SEM_ENVELOPE"),
+  contratoAssinadoDriveUrl: text("contrato_assinado_drive_url"),
   criadoEm,
   atualizadoEm,
 });
@@ -379,4 +388,27 @@ export const integracaoPandape = pgTable(
   // Postgres admite múltiplos NULL sob unique — admissões manuais (sem linha de integração) não
   // conflitam; idPrecollaborator permanece nullable.
   (t) => ({ uniqPrecollab: unique("uq_integracao_pandape_precollab").on(t.idPrecollaborator) }),
+);
+
+// ── DuplaCorrecaoAceites: trilha de aceite da dupla correção (INT-4 / §A.5 / §A.6) ───────────
+// Log de auditoria SENSÍVEL, permanente e consultável (§A.6): no reenvio por correção de um
+// contrato, o consultor aceita explicitamente que corrigiu no EA Automatic E diretamente no G.I
+// (controle por responsabilização, não verificação técnica). Guarda autor, termo de ciência e
+// data — sem CPF nem URL (§A.6). Aditivo: nunca atualizado, só inserido.
+export const duplaCorrecaoAceites = pgTable(
+  "dupla_correcao_aceites",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    admissaoId: uuid("admissao_id")
+      .notNull()
+      .references(() => admissoes.id, { onDelete: "cascade" }),
+    autorId: uuid("autor_id")
+      .notNull()
+      .references(() => usuarios.id),
+    termo: text("termo").notNull(),
+    criadoEm,
+  },
+  (t) => ({
+    idxAdmissao: index("idx_dupla_correcao_aceites_admissao").on(t.admissaoId),
+  }),
 );
