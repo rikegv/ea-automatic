@@ -1,0 +1,77 @@
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { Queue } from "bullmq";
+import type IORedis from "ioredis";
+import {
+  criarConexaoRedis,
+  JOB_POLL_TICK,
+  JOB_SYNC_CANDIDATE,
+  PANDAPE_QUEUE,
+  PANDAPE_QUEUE_OPTIONS,
+  type SyncCandidateJobData,
+} from "./pandape.queue";
+
+/**
+ * Dono do lado PRODUTOR da fila (a `Queue` BullMQ) e da conexão Redis dedicada. Tolerante a Redis
+ * indisponível no boot (§A.5 — paridade com a tolerância dos sweeps in-process): se a criação
+ * falhar, loga e segue; os enfileiramentos viram no-op. O Worker (consumidor) vive no SyncService.
+ */
+@Injectable()
+export class PandapeQueueService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger("PandapeQueueService");
+  private connection?: IORedis;
+  private queue?: Queue;
+
+  constructor(private readonly config: ConfigService) {}
+
+  onModuleInit(): void {
+    try {
+      const host = this.config.get<string>("REDIS_HOST") ?? "127.0.0.1";
+      const port = Number(this.config.get<string>("REDIS_PORT") ?? 6380);
+      this.connection = criarConexaoRedis(host, port);
+      // Sem este listener, um erro de conexão vira exceção não tratada e derruba o processo.
+      this.connection.on("error", (err) => {
+        this.logger.warn(`Conexão Redis (fila Pandapé) com erro: ${err.message}`);
+      });
+      this.queue = new Queue(PANDAPE_QUEUE, {
+        connection: this.connection,
+        ...PANDAPE_QUEUE_OPTIONS,
+      });
+      this.logger.log("Fila pandape-sync inicializada.");
+    } catch (err) {
+      this.logger.warn(
+        `Fila pandape-sync indisponível no boot (segue sem derrubar o app): ${
+          err instanceof Error ? err.message : "erro"
+        }`,
+      );
+    }
+  }
+
+  async onModuleDestroy(): Promise<void> {
+    await this.queue?.close().catch(() => undefined);
+    await this.connection?.quit().catch(() => undefined);
+  }
+
+  /** Enfileira um `poll-tick`. No-op (logado) se a fila não subiu. */
+  async enfileirarTick(): Promise<void> {
+    if (!this.queue) {
+      this.logger.warn("enfileirarTick ignorado: fila indisponível.");
+      return;
+    }
+    await this.queue.add(JOB_POLL_TICK, {});
+  }
+
+  /** Enfileira um `sync-candidate` para 1 idPreCollaborator. No-op (logado) se a fila não subiu. */
+  async enfileirarCandidato(idPrecollaborator: string): Promise<void> {
+    if (!this.queue) {
+      this.logger.warn("enfileirarCandidato ignorado: fila indisponível.");
+      return;
+    }
+    // jobId estável pelo idPreCollaborator: dedup de jobs em voo para o mesmo candidato.
+    await this.queue.add(
+      JOB_SYNC_CANDIDATE,
+      { idPrecollaborator } satisfies SyncCandidateJobData,
+      { jobId: `cand:${idPrecollaborator}` },
+    );
+  }
+}

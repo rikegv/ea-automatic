@@ -9,5 +9,7 @@ import { AuditoriaService } from "./auditoria.service";
   imports: [ReguaModule, StagingModule],
   controllers: [AuditoriaController],
   providers: [AuditoriaService],
+  // Exporta o service para o pull de docs do Pandapé (Fase 5) reusar a F2 incremental.
+  exports: [AuditoriaService],
 })
 export class AuditoriaModule {}

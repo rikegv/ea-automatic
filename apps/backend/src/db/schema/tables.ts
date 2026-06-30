@@ -20,6 +20,7 @@ import {
   ncLiberacaoEnum,
   ncStatusEnum,
   ncTipoEnum,
+  origemEnum,
   papelEnum,
   sinalizadorEnum,
 } from "./enums";
@@ -159,6 +160,9 @@ export const admissoes = pgTable("admissoes", {
   sinalizadorPreenchimento: sinalizadorEnum("sinalizador_preenchimento")
     .notNull()
     .default("PENDENTE"),
+  // Origem da admissão (Fase 5 / INT-1): MANUAL (wizard F6) ou PANDAPE (sync). Default MANUAL —
+  // admissões anteriores e as criadas pelo wizard permanecem MANUAL sem alteração de chamada.
+  origem: origemEnum("origem").notNull().default("MANUAL"),
   // URL da pasta do Drive criada ao fechar a régua obrigatória (Fase 4 / INT-2). É REFERÊNCIA
   // (link da pasta do prontuário), não dado pessoal nem URL do Pandapé — pode persistir (§A.6).
   drivePastaUrl: text("drive_pasta_url"),
@@ -356,16 +360,23 @@ export const regrasAuditoria = pgTable("regras_auditoria", {
 });
 
 // ── IntegraçãoPandapé (anexo opcional — só quando a admissão veio do Pandapé) ─
-export const integracaoPandape = pgTable("integracao_pandape", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  admissaoId: uuid("admissao_id")
-    .notNull()
-    .unique()
-    .references(() => admissoes.id, { onDelete: "cascade" }),
-  idPrecollaborator: varchar("id_precollaborator", { length: 80 }),
-  idMatch: varchar("id_match", { length: 80 }),
-  idVacancy: varchar("id_vacancy", { length: 80 }),
-  etapa: varchar("etapa", { length: 120 }),
-  criadoEm,
-  atualizadoEm,
-});
+export const integracaoPandape = pgTable(
+  "integracao_pandape",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    admissaoId: uuid("admissao_id")
+      .notNull()
+      .unique()
+      .references(() => admissoes.id, { onDelete: "cascade" }),
+    idPrecollaborator: varchar("id_precollaborator", { length: 80 }),
+    idMatch: varchar("id_match", { length: 80 }),
+    idVacancy: varchar("id_vacancy", { length: 80 }),
+    etapa: varchar("etapa", { length: 120 }),
+    criadoEm,
+    atualizadoEm,
+  },
+  // Unique no id_precollaborator: idempotência da sync Pandapé (uma admissão por pré-colaborador).
+  // Postgres admite múltiplos NULL sob unique — admissões manuais (sem linha de integração) não
+  // conflitam; idPrecollaborator permanece nullable.
+  (t) => ({ uniqPrecollab: unique("uq_integracao_pandape_precollab").on(t.idPrecollaborator) }),
+);

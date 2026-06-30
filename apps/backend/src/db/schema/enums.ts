@@ -17,6 +17,9 @@ export const farolGlobalEnum = pgEnum("farol_global", [
 /** Frentes paralelas e independentes (§A.3 / F12). */
 export const frenteTipoEnum = pgEnum("frente_tipo", ["AUDITORIA", "EXAME", "CADASTRO_CONTRATO"]);
 
+/** Origem da admissão (Fase 5 / INT-1): MANUAL (wizard F6) ou PANDAPE (sync via webhook/pull). */
+export const origemEnum = pgEnum("origem", ["MANUAL", "PANDAPE"]);
+
 /** Exigência de um documento na régua (cliente + cargo). */
 export const exigenciaEnum = pgEnum("exigencia_documento", [
   "OBRIGATORIO",

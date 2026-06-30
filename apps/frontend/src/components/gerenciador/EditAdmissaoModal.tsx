@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { AuditoriaStatus, ResultadoAuditoria } from "@ea/shared-types";
+import type { AuditoriaStatus, Origem, ResultadoAuditoria } from "@ea/shared-types";
 import { apiFetch, apiUpload, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { Pill, type PillTone } from "@/components/ui/Pill";
 import { Icon } from "@/components/ui/Icon";
+import { OrigemBadge } from "@/components/ui/OrigemBadge";
 import { Select } from "@/components/ui/Select";
 import { cn } from "@/lib/cn";
 import { FAROL_SELECT_OPTIONS } from "@/lib/farol";
@@ -30,6 +31,7 @@ interface AdmissaoEdit {
   matricula: string | null;
   farolGlobal: string;
   isBanco: boolean;
+  origem: Origem;
   vagaFolha: VagaFolha;
 }
 interface TipoDocumento {
@@ -215,7 +217,10 @@ export function EditAdmissaoModal({
       <div className="mb-4 flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="eyebrow !mb-1">Editar admissão</div>
-          <h3 className="truncate text-[18px] font-extrabold">{candidatoNome}</h3>
+          <div className="flex min-w-0 items-center gap-2">
+            <h3 className="truncate text-[18px] font-extrabold">{candidatoNome}</h3>
+            {data && <OrigemBadge origem={data.origem} className="flex-none" />}
+          </div>
           <p className="psub !mb-0 mt-1">CPF e cliente não são editáveis (identidade).</p>
         </div>
         <button

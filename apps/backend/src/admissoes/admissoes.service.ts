@@ -18,6 +18,7 @@ import {
   documentosAdmissao,
   frenteStatusCatalogo,
   frentesAdmissao,
+  integracaoPandape,
   reguaDocumental,
 } from "../db/schema";
 import { calcSinalizadorPreenchimento, STATUS_INICIAL_FRENTE } from "../domain/admissao";
@@ -42,6 +43,17 @@ export interface ListarAdmissoesFiltros {
 }
 
 const DATA_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Opções de criação por origem (Fase 5 / INT-1). A sync do Pandapé reusa `create` SEM duplicar
+ * lógica: marca `origem`, anexa a linha de IntegraçãoPandapé na MESMA transação e desativa o
+ * bloqueio por aceite (regra 5 — não-bloqueio: a sync não pode travar por campos pendentes).
+ */
+export interface CreateAdmissaoOpts {
+  origem?: "MANUAL" | "PANDAPE";
+  bypassAceite?: boolean;
+  pandape?: { idPrecollaborator: string; idMatch?: string; idVacancy?: string; etapa?: string };
+}
 
 @Injectable()
 export class AdmissoesService {
@@ -76,7 +88,7 @@ export class AdmissoesService {
   }
 
   /** F6 — cria a admissão e seus filhos numa transação (nascimento paralelo das frentes — regra 1). */
-  async create(dto: CreateAdmissaoDto, user?: AuthUser) {
+  async create(dto: CreateAdmissaoDto, user?: AuthUser, opts?: CreateAdmissaoOpts) {
     // a. validação de CPF (F3) — chave técnica de identidade.
     const cpf = normalizeCpf(dto.candidato.cpf);
     if (!isValidCpf(cpf)) {
@@ -99,7 +111,7 @@ export class AdmissoesService {
       if (!vf.substituidoNome) pend.push("Nome do substituído");
       if (!vf.substituidoCpf) pend.push("CPF do substituído");
     }
-    if (pend.length > 0 && !dto.aceitePendencias) {
+    if (pend.length > 0 && !dto.aceitePendencias && !opts?.bypassAceite) {
       throw new ConflictException({
         needsAceite: true,
         camposPendentes: pend,
@@ -170,10 +182,23 @@ export class AdmissoesService {
           // Consultor que gerou a admissão (Fase 2C) — base da atribuição de NC (Via 1).
           consultorId: user?.id ?? null,
           sinalizadorPreenchimento,
+          origem: opts?.origem ?? "MANUAL",
         })
         .returning({ id: admissoes.id });
 
       const admissaoId = admissao.id;
+
+      // f.1 IntegraçãoPandapé (anexo opcional) — na MESMA transação, só quando a admissão veio do
+      // Pandapé (Fase 5 / INT-1). Não persistir URLs do Pandapé aqui (§A.6): só os IDs e a etapa.
+      if (opts?.pandape) {
+        await tx.insert(integracaoPandape).values({
+          admissaoId,
+          idPrecollaborator: opts.pandape.idPrecollaborator,
+          idMatch: opts.pandape.idMatch,
+          idVacancy: opts.pandape.idVacancy,
+          etapa: opts.pandape.etapa,
+        });
+      }
 
       // g. dados de vaga/folha (1:1). Substituição (W2): CPF do substituído com TTL 48h — o relógio
       // dispara na assinatura do contrato (futuro); por ora marca expurgo em now+48h (placeholder
@@ -292,6 +317,7 @@ export class AdmissoesService {
         dataAdmissao: admissoes.dataAdmissao,
         farolGlobal: admissoes.farolGlobal,
         isBanco: admissoes.isBanco,
+        origem: admissoes.origem,
         sinalizador: admissoes.sinalizadorPreenchimento,
         concluido: concluidoExpr,
         criadoEm: admissoes.criadoEm,
@@ -390,6 +416,7 @@ export class AdmissoesService {
       matricula: adm.matricula,
       farolGlobal: adm.farolGlobal,
       isBanco: adm.isBanco,
+      origem: adm.origem,
       vagaFolha: {
         salario: vaga?.salario ?? null,
         beneficios: vaga?.beneficios ?? null,

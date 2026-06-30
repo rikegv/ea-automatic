@@ -15,6 +15,7 @@ import { DrizzleModule } from "./db/drizzle.module";
 import { EsteiraModule } from "./esteira/esteira.module";
 import { KitModule } from "./kit/kit.module";
 import { NaoConformidadesModule } from "./nao-conformidades/nao-conformidades.module";
+import { PandapeModule } from "./pandape/pandape.module";
 import { ReguaModule } from "./regua/regua.module";
 import { StagingModule } from "./staging/staging.module";
 import { HealthController } from "./health/health.controller";
@@ -38,6 +39,7 @@ import { UsersModule } from "./users/users.module";
     ReguaModule,
     AuditoriaModule,
     KitModule,
+    PandapeModule,
   ],
   controllers: [HealthController],
   providers: [

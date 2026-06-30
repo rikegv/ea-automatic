@@ -28,6 +28,7 @@ export type IconName =
   | "trash"
   | "folder"
   | "download"
+  | "link"
   | "logout"
   | "sun"
   | "moon";
@@ -136,6 +137,12 @@ const PATHS: Record<IconName, JSX.Element> = {
     <>
       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
       <path d="M7 10l5 5 5-5M12 15V3" />
+    </>
+  ),
+  link: (
+    <>
+      <path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+      <path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
     </>
   ),
   sun: (
