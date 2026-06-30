@@ -22,6 +22,10 @@ pnpm-debug.log*
 .env.*.local
 infra/.env
 
+# google service account credential (INT-2 Drive + INT-3 Vertex AI) — NEVER commit
+credentials.json
+apps/ai-service/credentials.json
+
 # python (ai-service)
 __pycache__/
 *.py[cod]
@@ -38,3 +42,6 @@ apps/ai-service/.venv/
 .DS_Store
 .idea/
 *.swp
+
+# artefato de demo (PDF-mãe do kit F9) — não versionar
+apps/frontend/public/demo-kit-pdf-mae.pdf

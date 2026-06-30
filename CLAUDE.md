@@ -78,7 +78,20 @@ Entidades centrais:
   não obrigatório / facultativo. Coração da auditoria e do checklist de pendências.
 - **Candidato** — chave `cpf`. Pode ter N admissões.
 - **Admissão** — entidade central. Liga Candidato + Cliente + Cargo. `tipo_contrato`, `matricula`,
-  datas, `farol_global` (ATIVO/DECLINOU/RESCISÃO/BANCO-PAUSADA), `sinalizador_preenchimento`.
+  datas, `farol_global`, `is_banco`, `sinalizador_preenchimento`.
+  - **`farol_global`** (Fase 4 complemento): `EM_ADMISSAO` (inicial) · `BANCO_AGUARDAR` · `ADMISSAO_CONCLUIDA`
+    · `DECLINOU` · `RESCISAO`. **Automático** (derivado, não sobrescreve os manuais): `BANCO_AGUARDAR`
+    quando Auditoria=ANALISE_OK **e** Exame=APTO **e** `data_admissao` ausente; ao preencher a data,
+    volta a `EM_ADMISSAO`. **Manuais** (pegajosos): `DECLINOU`, `RESCISAO` e `ADMISSAO_CONCLUIDA`
+    (todas as etapas + contrato assinado — flag manual até a INT-4). *(Antes: ATIVO→EM_ADMISSAO;
+    BANCO_PAUSADA→BANCO_AGUARDAR.)*
+  - **`is_banco`** (boolean): admissão de banco — a ausência de `data_admissao` NÃO é pendência (é
+    esperada); no lugar, o **Termo de Banco** (TipoDocumento próprio, arquivado na subpasta ADMISSÃO
+    do Drive) é a pendência obrigatória de formalização.
+  - **Automação da Auditoria (regra 2/complemento):** quando todos os obrigatórios da régua ficam
+    VALIDADO (régua completa), a frente AUDITORIA vai a `ANALISE_OK` **automaticamente** (sem clique),
+    abrindo o gate do Cadastro (regra 3) e reavaliando o farol. Consistente com a regra 9 (a IA não
+    avança com pendências obrigatórias — régua completa = zero pendências).
 - **DadosVagaFolha** (anexo) — salário, benefícios, escala, `endereco`, centro de custo,
   departamento, gestor BP, motivo, tempo de contrato. Benefícios/escala/endereço pré-preenchem a
   partir dos `*_padrao` do cliente (F1), editáveis. *(`endereco` adicionado na Fase 1B.)*
@@ -138,6 +151,12 @@ Admissão. Independência na operação; integridade no fluxo, garantida pelo ga
   Cadastro/Contrato). Edição de status e avanço por aba, só com os seletores do status atual.
 - **F9** Gerador de kit + assinatura. Desmembra PDF-mãe por candidato; kit pronto dispara a
   assinatura (INT-4); assinado retorna ao Drive. Kit só nasce após as três frentes (gate F12).
+  - **Evolução prevista (junto com a INT-4, não antes):** ao subir o PDF-mãe, o sistema
+    **identifica automaticamente todos os candidatos presentes** no PDF, separa **um kit por
+    candidato**, **linka cada kit à admissão correspondente** no banco e **dispara o envelope de
+    assinatura na Clicksign para cada candidato**. A seleção manual de candidato (comportamento
+    atual da Fase 4) é **substituída pela identificação automática**. Implementar **junto com a
+    INT-4 (Clicksign)**, não antes.
 - **F10** Gerenciador (tabela): editar/salvar/deletar, filtros avançados, pesquisa global.
 - **F11** Duplicado por CPF com reaproveitamento.
 - **F12** Frentes paralelas e independentes (ver regras de domínio).

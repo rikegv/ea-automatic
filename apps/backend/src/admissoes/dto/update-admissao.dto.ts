@@ -1,5 +1,6 @@
 import { Type } from "class-transformer";
 import {
+  IsBoolean,
   IsDateString,
   IsIn,
   IsOptional,
@@ -32,6 +33,11 @@ export class UpdateAdmissaoDto {
   @IsOptional()
   @IsIn(FAROL_GLOBAL as unknown as string[])
   farolGlobal?: string;
+
+  /** Admissão de banco (§A.3 / Fase 4 complemento): muda a regra de pendência (Termo de Banco). */
+  @IsOptional()
+  @IsBoolean()
+  isBanco?: boolean;
 
   @IsOptional()
   @ValidateNested()

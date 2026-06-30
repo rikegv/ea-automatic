@@ -7,9 +7,27 @@
 export const PAPEL = ["COMUM", "MASTER", "SUPER_ADMIN"] as const;
 export type Papel = (typeof PAPEL)[number];
 
-// ── Farol global da admissão ───────────────────────────────────────────────
-export const FAROL_GLOBAL = ["ATIVO", "DECLINOU", "RESCISAO", "BANCO_PAUSADA"] as const;
+// ── Farol global da admissão (§A.3) ────────────────────────────────────────
+// EM_ADMISSAO: status inicial (era "ATIVO"). BANCO_AGUARDAR: Auditoria=ok & Exame=apto &
+// data_admissao ausente (unifica o antigo "BANCO_PAUSADA"). ADMISSAO_CONCLUIDA: todas as etapas
+// concluídas + contrato assinado (flag manual até a INT-4). DECLINOU/RESCISAO mantidos.
+export const FAROL_GLOBAL = [
+  "EM_ADMISSAO",
+  "BANCO_AGUARDAR",
+  "ADMISSAO_CONCLUIDA",
+  "DECLINOU",
+  "RESCISAO",
+] as const;
 export type FarolGlobal = (typeof FAROL_GLOBAL)[number];
+
+/** Rótulos de exibição do farol global (UI). */
+export const FAROL_GLOBAL_LABEL: Record<FarolGlobal, string> = {
+  EM_ADMISSAO: "Em Admissão",
+  BANCO_AGUARDAR: "Banco-Aguardar",
+  ADMISSAO_CONCLUIDA: "Admissão Concluída",
+  DECLINOU: "Declinou",
+  RESCISAO: "Rescisão",
+};
 
 // ── Frentes paralelas e independentes (F12 / §A.3) ─────────────────────────
 export const FRENTE = ["AUDITORIA", "EXAME", "CADASTRO_CONTRATO"] as const;
@@ -60,6 +78,63 @@ export const NC_TIPO_ROTULO: Record<NcTipo, string> = {
 /** Termo de ciência fixo do aceite "apto sem ASO" (gatilho da NC2). */
 export const TERMO_APTO_SEM_ASO =
   "Estou ciente que estou marcando este candidato como apto sem o ASO anexado.";
+
+// ── Fase 4 — Auditoria documental por IA (F2 / INT-3) ──────────────────────
+/** Veredito da IA sobre um documento. Mapeia para estado_documento no banco (ver abaixo). */
+export const AUDITORIA_STATUS = ["VALIDADO", "INCONFORME", "PENDENTE"] as const;
+export type AuditoriaStatus = (typeof AUDITORIA_STATUS)[number];
+
+/** Estado IA → estado_documento persistido (§A.3 regra 7 — só status, nunca o arquivo). */
+export const AUDITORIA_PARA_ESTADO: Record<
+  AuditoriaStatus,
+  "ENTREGUE" | "INCONFORME" | "PENDENTE"
+> = {
+  VALIDADO: "ENTREGUE",
+  INCONFORME: "INCONFORME",
+  PENDENTE: "PENDENTE",
+};
+
+/**
+ * Resultado da auditoria de UM documento. `motivo` é o veredito textual da regra — NUNCA deve
+ * conter PII extraída do documento (§A.6). É o shape devolvido pelo ai-service e repassado ao front.
+ */
+export interface ResultadoAuditoria {
+  valido: boolean;
+  status: AuditoriaStatus;
+  motivo: string;
+  camposConferidos: string[];
+}
+
+/** Regra de auditoria configurável pelo admin (Master/Super Admin) por tipo de documento. */
+export interface RegraAuditoria {
+  id: string;
+  tipoDocumentoId: string;
+  descricaoRegra: string;
+  ativo: boolean;
+  criadoEm: string;
+  atualizadoEm: string;
+}
+
+/** Progresso da régua obrigatória de uma admissão (barra "X de Y"). Sem PII — só rótulos. */
+export interface ProgressoRegua {
+  obrigatoriosTotal: number;
+  obrigatoriosEntregues: number;
+  faltantes: string[];
+  completa: boolean;
+}
+
+/**
+ * Subpastas criadas pelo EA dentro de "{nome} — {nome_operacao}" no Drive (INT-2). O roteamento
+ * por tipo de documento é resolvido pelo backend; estes são os quatro destinos fixos.
+ */
+export const DRIVE_SUBPASTA = ["ASO", "ADMISSAO", "BENEFICIOS", "DOCUMENTOS_PESSOAIS"] as const;
+export type DriveSubpasta = (typeof DRIVE_SUBPASTA)[number];
+
+/** Resultado do arquivamento no Drive ao fechar a régua obrigatória. */
+export interface ArquivamentoDrive {
+  pastaUrl: string;
+  arquivados: number;
+}
 
 /**
  * Valida um CPF brasileiro pelos dígitos verificadores (F3 — CPF é a chave de identidade).

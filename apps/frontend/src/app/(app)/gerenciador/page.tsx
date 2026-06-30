@@ -7,12 +7,14 @@ import { cn } from "@/lib/cn";
 import { PageHead } from "@/components/ui/PageHead";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Pill, type PillTone } from "@/components/ui/Pill";
+import { PendenciasBadge } from "@/components/ui/PendenciasBadge";
 import { Icon } from "@/components/ui/Icon";
 import { Select } from "@/components/ui/Select";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AdmissaoDetalheModal } from "@/components/esteira/AdmissaoDetalheModal";
 import { EditAdmissaoModal } from "@/components/gerenciador/EditAdmissaoModal";
 import { PendenciasModal } from "@/components/gerenciador/PendenciasModal";
+import { farolPill, FAROL_SELECT_OPTIONS } from "@/lib/farol";
 
 interface AdmRow {
   admissaoId: string;
@@ -47,12 +49,6 @@ interface CargoLite {
   nome: string;
 }
 
-const FAROL: Record<string, { tone: PillTone; label: string }> = {
-  ATIVO: { tone: "in", label: "Ativo" },
-  DECLINOU: { tone: "dg", label: "Declinou" },
-  RESCISAO: { tone: "or", label: "Rescisão" },
-  BANCO_PAUSADA: { tone: "nt", label: "Banco / pausada" },
-};
 const SINAL: Record<string, { tone: PillTone; label: string }> = {
   OK: { tone: "ok", label: "Completo" },
   PARCIAL: { tone: "wn", label: "Parcial" },
@@ -64,10 +60,7 @@ const SINAL_OPTS = [
   { value: "", label: "Todos" },
   ...Object.entries(SINAL).map(([value, v]) => ({ value, label: v.label })),
 ];
-const FAROL_OPTS = [
-  { value: "", label: "Todos" },
-  ...Object.entries(FAROL).map(([value, v]) => ({ value, label: v.label })),
-];
+const FAROL_OPTS = [{ value: "", label: "Todos" }, ...FAROL_SELECT_OPTIONS];
 
 function fmtDataAdmissao(d?: string | null): string {
   if (!d) return "—";
@@ -84,21 +77,22 @@ function frenteTone(f?: { status: string; concluida: boolean }): PillTone {
   return "wn";
 }
 
-/** Pill de status que trunca o texto dentro da coluna (não estoura a largura). */
+/** Pill de status — NUNCA trunca (T1): a coluna tem largura suficiente para o rótulo mais longo. */
 function StatusPill({ tone, label }: { tone: PillTone; label: string }) {
   return (
-    <Pill tone={tone} className="max-w-full" title={label}>
-      <span className="min-w-0 truncate">{label}</span>
+    <Pill tone={tone} className="whitespace-nowrap" title={label}>
+      {label}
     </Pill>
   );
 }
 
-// 11 colunas (com as 3 frentes — G4a). Texto (Candidato/Cliente/Cargo/Auditoria) absorve em `fr`;
-// colunas curtas (Contrato/Data/Exame/Cadastro/Status/Pendências/Ações) ficam no mínimo necessário.
-// Preenche 100% da largura; só rola abaixo de ~980px (telas pequenas), nunca sobra espaço à direita.
+// 11 colunas (com as 3 frentes — G4a). As colunas de status recebem largura FIXA suficiente para o
+// rótulo mais longo sem truncar ("Aguardando reenvio dos docs" na Auditoria, "Admissão Concluída"
+// no Status). As de texto (Candidato/Cliente/Cargo/Contrato) absorvem o restante em `fr` — truncam
+// com ellipsis só quando muito longas, sem grandes vazios (T1a/T1b).
 const GRID =
-  "minmax(0,1.5fr) minmax(0,1.3fr) minmax(0,1.15fr) 84px 78px minmax(0,1.25fr) 92px 100px 86px 110px 84px";
-const GRID_MIN = "min-w-[980px]";
+  "minmax(0,1.4fr) minmax(0,1.2fr) minmax(0,1fr) minmax(0,0.9fr) 92px 206px 116px 124px 152px 156px 92px";
+const GRID_MIN = "min-w-[1320px]";
 
 export default function GerenciadorPage() {
   const { token, isAdmin } = useAuth();
@@ -225,7 +219,7 @@ export default function GerenciadorPage() {
   // KPIs como filtro (radio-like): clicar aplica, clicar de novo desfaz.
   const kpiAtivo = useMemo(() => {
     if (concluido) return "concluidos";
-    if (farol === "ATIVO") return "ativos";
+    if (farol === "EM_ADMISSAO") return "ativos";
     if (farol === "DECLINOU") return "declinados";
     if (!farol) return "total";
     return "";
@@ -238,7 +232,7 @@ export default function GerenciadorPage() {
       setConcluido(false);
     } else if (kpi === "ativos") {
       setConcluido(false);
-      setFarol((f) => (f === "ATIVO" ? "" : "ATIVO"));
+      setFarol((f) => (f === "EM_ADMISSAO" ? "" : "EM_ADMISSAO"));
     } else if (kpi === "declinados") {
       setConcluido(false);
       setFarol((f) => (f === "DECLINOU" ? "" : "DECLINOU"));
@@ -325,7 +319,12 @@ export default function GerenciadorPage() {
         <KpiCard id="total" label="Total geral" value={k?.total ?? 0} />
         <KpiCard id="ativos" label="Ativos" value={k?.ativos ?? 0} tone="var(--accent)" />
         <KpiCard id="concluidos" label="Concluídos" value={k?.concluidos ?? 0} tone="var(--ok)" />
-        <KpiCard id="declinados" label="Declinados" value={k?.declinados ?? 0} tone="var(--danger)" />
+        <KpiCard
+          id="declinados"
+          label="Declinados"
+          value={k?.declinados ?? 0}
+          tone="var(--danger)"
+        />
       </div>
 
       {/* Filtros */}
@@ -387,39 +386,83 @@ export default function GerenciadorPage() {
           {/* Cargo */}
           <div>
             <span className="ds-label">Cargo</span>
-            <Select value={cargoId} onChange={reset1(setCargoId)} options={cargoOpts} placeholder="Todos" ariaLabel="Cargo" />
+            <Select
+              value={cargoId}
+              onChange={reset1(setCargoId)}
+              options={cargoOpts}
+              placeholder="Todos"
+              ariaLabel="Cargo"
+            />
           </div>
           {/* Tipo de contrato */}
           <div>
             <span className="ds-label">Contrato</span>
-            <Select value={tipoContrato} onChange={reset1(setTipoContrato)} options={contratoOpts} placeholder="Todos" ariaLabel="Tipo de contrato" />
+            <Select
+              value={tipoContrato}
+              onChange={reset1(setTipoContrato)}
+              options={contratoOpts}
+              placeholder="Todos"
+              ariaLabel="Tipo de contrato"
+            />
           </div>
         </div>
         <div className="mt-3 grid gap-3 md:grid-cols-[1fr_1fr_1fr_1fr_auto] md:items-end">
           <div>
             <span className="ds-label">Status (farol)</span>
-            <Select value={farol} onChange={reset1(setFarol)} options={FAROL_OPTS} placeholder="Todos" ariaLabel="Farol" />
+            <Select
+              value={farol}
+              onChange={reset1(setFarol)}
+              options={FAROL_OPTS}
+              placeholder="Todos"
+              ariaLabel="Farol"
+            />
           </div>
           <div>
             <span className="ds-label">Pendências Obrig.</span>
-            <Select value={sinalizador} onChange={reset1(setSinalizador)} options={SINAL_OPTS} placeholder="Todos" ariaLabel="Sinalizador" />
+            <Select
+              value={sinalizador}
+              onChange={reset1(setSinalizador)}
+              options={SINAL_OPTS}
+              placeholder="Todos"
+              ariaLabel="Sinalizador"
+            />
           </div>
           <div>
             <span className="ds-label">De</span>
-            <input type="date" className="ds-input" value={from} max={to || undefined} onChange={(e) => reset1(setFrom)(e.target.value)} />
+            <input
+              type="date"
+              className="ds-input"
+              value={from}
+              max={to || undefined}
+              onChange={(e) => reset1(setFrom)(e.target.value)}
+            />
           </div>
           <div>
             <span className="ds-label">Até</span>
-            <input type="date" className="ds-input" value={to} min={from || undefined} onChange={(e) => reset1(setTo)(e.target.value)} />
+            <input
+              type="date"
+              className="ds-input"
+              value={to}
+              min={from || undefined}
+              onChange={(e) => reset1(setTo)(e.target.value)}
+            />
           </div>
-          <button type="button" className="btn-secondary px-4 py-3 disabled:opacity-50" onClick={limparFiltros} disabled={!temFiltro}>
+          <button
+            type="button"
+            className="btn-secondary px-4 py-3 disabled:opacity-50"
+            onClick={limparFiltros}
+            disabled={!temFiltro}
+          >
             Limpar
           </button>
         </div>
       </GlassCard>
 
       {actionError && (
-        <p className="mb-3 rounded-xl border border-[var(--border)] bg-[rgba(214,69,69,0.1)] px-3 py-2 text-sm text-danger" role="alert">
+        <p
+          className="mb-3 rounded-xl border border-[var(--border)] bg-[rgba(214,69,69,0.1)] px-3 py-2 text-sm text-danger"
+          role="alert"
+        >
           {actionError}
         </p>
       )}
@@ -432,112 +475,133 @@ export default function GerenciadorPage() {
       {/* Tabela */}
       <GlassCard className="list">
         <div className="overflow-x-auto">
-        <div className={GRID_MIN}>
-        <div className="list-head" style={{ gridTemplateColumns: GRID }}>
-          <span>Candidato</span>
-          <span>Cliente</span>
-          <span>Cargo</span>
-          <span>Contrato</span>
-          <span>Data adm.</span>
-          <span>Auditoria</span>
-          <span>Exame</span>
-          <span>Cadastro</span>
-          <span>Status</span>
-          <span>Pendências Obrig.</span>
-          <span>Ações</span>
-        </div>
+          <div className={GRID_MIN}>
+            <div className="list-head" style={{ gridTemplateColumns: GRID }}>
+              <span>Candidato</span>
+              <span>Cliente</span>
+              <span>Cargo</span>
+              <span>Contrato</span>
+              <span>Data adm.</span>
+              <span>Auditoria</span>
+              <span>Exame</span>
+              <span>Cadastro</span>
+              <span>Status</span>
+              <span>Pendências Obrig.</span>
+              <span>Ações</span>
+            </div>
 
-        {loading ? (
-          <div className="px-4 py-10 text-center text-sm text-faint">Carregando…</div>
-        ) : loadError ? (
-          <div className="px-4 py-10 text-center text-sm text-danger">{loadError}</div>
-        ) : items.length === 0 ? (
-          <div className="px-4 py-10 text-center text-sm text-faint">
-            {temFiltro ? "Nenhuma admissão com os filtros atuais." : "Nenhuma admissão cadastrada."}
-          </div>
-        ) : (
-          items.map((r) => {
-            const farolP = FAROL[r.farolGlobal] ?? { tone: "nt" as PillTone, label: r.farolGlobal };
-            const sinalP = SINAL[r.sinalizador] ?? { tone: "nt" as PillTone, label: r.sinalizador };
-            const fa = r.frentes?.AUDITORIA;
-            const ex = r.frentes?.EXAME;
-            const cad = r.frentes?.CADASTRO_CONTRATO;
-            return (
-              <div key={r.admissaoId} className="row" style={{ gridTemplateColumns: GRID }}>
-                <div className="min-w-0">
-                  <div className="nm truncate">{r.candidatoNome}</div>
-                  {r.concluido && <div className="meta truncate text-ok">Processo concluído</div>}
-                </div>
-                <div className="min-w-0">
-                  <div className="meta truncate text-text">{r.clienteOperacao || r.clienteRazao}</div>
-                  <div className="meta truncate">Código {r.codCliente}</div>
-                </div>
-                <div className="meta truncate">{r.cargoNome}</div>
-                <div className="meta truncate">{r.tipoContrato || "—"}</div>
-                <div className="meta">{fmtDataAdmissao(r.dataAdmissao)}</div>
-                <div className="min-w-0">
-                  {fa ? <StatusPill tone={frenteTone(fa)} label={fa.rotulo} /> : <span className="meta">—</span>}
-                </div>
-                <div className="min-w-0">
-                  {ex ? <StatusPill tone={frenteTone(ex)} label={ex.rotulo} /> : <span className="meta">—</span>}
-                </div>
-                <div className="min-w-0">
-                  {cad ? <StatusPill tone={frenteTone(cad)} label={cad.rotulo} /> : <span className="meta">—</span>}
-                </div>
-                <div className="min-w-0">
-                  <StatusPill tone={farolP.tone} label={farolP.label} />
-                </div>
-                <button
-                  type="button"
-                  className="flex min-w-0 items-center rounded-lg text-left transition hover:opacity-80"
-                  title="Ver pendências obrigatórias"
-                  onClick={() => setPendRow(r)}
-                >
-                  <StatusPill tone={sinalP.tone} label={sinalP.label} />
-                </button>
-                <div className="flex items-center gap-1">
-                  <button
-                    type="button"
-                    className="grid h-8 w-8 place-items-center rounded-lg text-faint transition hover:bg-[var(--surface-2)] hover:text-accent"
-                    title="Ver ficha"
-                    aria-label={`Ver ${r.candidatoNome}`}
-                    onClick={() => setViewId(r.admissaoId)}
-                  >
-                    <Icon name="eye" className="h-[17px] w-[17px]" />
-                  </button>
-                  <button
-                    type="button"
-                    className="grid h-8 w-8 place-items-center rounded-lg text-faint transition hover:bg-[var(--surface-2)] hover:text-accent"
-                    title="Editar"
-                    aria-label={`Editar ${r.candidatoNome}`}
-                    onClick={() => setEditRow(r)}
-                  >
-                    <Icon name="pen" className="h-[16px] w-[16px]" />
-                  </button>
-                  {isAdmin && (
-                    <button
-                      type="button"
-                      className="grid h-8 w-8 place-items-center rounded-lg text-faint transition hover:bg-[rgba(214,69,69,0.12)] hover:text-danger"
-                      title="Excluir"
-                      aria-label={`Excluir ${r.candidatoNome}`}
-                      onClick={() => setDelRow(r)}
-                    >
-                      <Icon name="trash" className="h-[16px] w-[16px]" />
-                    </button>
-                  )}
-                </div>
+            {loading ? (
+              <div className="px-4 py-10 text-center text-sm text-faint">Carregando…</div>
+            ) : loadError ? (
+              <div className="px-4 py-10 text-center text-sm text-danger">{loadError}</div>
+            ) : items.length === 0 ? (
+              <div className="px-4 py-10 text-center text-sm text-faint">
+                {temFiltro
+                  ? "Nenhuma admissão com os filtros atuais."
+                  : "Nenhuma admissão cadastrada."}
               </div>
-            );
-          })
-        )}
-        </div>
+            ) : (
+              items.map((r) => {
+                const farolP = farolPill(r.farolGlobal);
+                const sinalP = SINAL[r.sinalizador] ?? {
+                  tone: "nt" as PillTone,
+                  label: r.sinalizador,
+                };
+                const fa = r.frentes?.AUDITORIA;
+                const ex = r.frentes?.EXAME;
+                const cad = r.frentes?.CADASTRO_CONTRATO;
+                return (
+                  <div key={r.admissaoId} className="row" style={{ gridTemplateColumns: GRID }}>
+                    <div className="min-w-0">
+                      <div className="nm truncate">{r.candidatoNome}</div>
+                      {r.concluido && (
+                        <div className="meta truncate text-ok">Processo concluído</div>
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="meta truncate text-text">
+                        {r.clienteOperacao || r.clienteRazao}
+                      </div>
+                      <div className="meta truncate">Código {r.codCliente}</div>
+                    </div>
+                    <div className="meta truncate">{r.cargoNome}</div>
+                    <div className="meta truncate">{r.tipoContrato || "—"}</div>
+                    <div className="meta">{fmtDataAdmissao(r.dataAdmissao)}</div>
+                    <div className="min-w-0">
+                      {fa ? (
+                        <StatusPill tone={frenteTone(fa)} label={fa.rotulo} />
+                      ) : (
+                        <span className="meta">—</span>
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      {ex ? (
+                        <StatusPill tone={frenteTone(ex)} label={ex.rotulo} />
+                      ) : (
+                        <span className="meta">—</span>
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      {cad ? (
+                        <StatusPill tone={frenteTone(cad)} label={cad.rotulo} />
+                      ) : (
+                        <span className="meta">—</span>
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <StatusPill tone={farolP.tone} label={farolP.label} />
+                    </div>
+                    <div className="min-w-0">
+                      <PendenciasBadge
+                        tone={sinalP.tone}
+                        label={sinalP.label}
+                        onClick={() => setPendRow(r)}
+                      />
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        className="grid h-8 w-8 place-items-center rounded-lg text-faint transition hover:bg-[var(--surface-2)] hover:text-accent"
+                        title="Ver ficha"
+                        aria-label={`Ver ${r.candidatoNome}`}
+                        onClick={() => setViewId(r.admissaoId)}
+                      >
+                        <Icon name="eye" className="h-[17px] w-[17px]" />
+                      </button>
+                      <button
+                        type="button"
+                        className="grid h-8 w-8 place-items-center rounded-lg text-faint transition hover:bg-[var(--surface-2)] hover:text-accent"
+                        title="Editar"
+                        aria-label={`Editar ${r.candidatoNome}`}
+                        onClick={() => setEditRow(r)}
+                      >
+                        <Icon name="pen" className="h-[16px] w-[16px]" />
+                      </button>
+                      {isAdmin && (
+                        <button
+                          type="button"
+                          className="grid h-8 w-8 place-items-center rounded-lg text-faint transition hover:bg-[rgba(214,69,69,0.12)] hover:text-danger"
+                          title="Excluir"
+                          aria-label={`Excluir ${r.candidatoNome}`}
+                          onClick={() => setDelRow(r)}
+                        >
+                          <Icon name="trash" className="h-[16px] w-[16px]" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
         </div>
 
         {/* Paginação */}
         {data && data.total > 0 && (
           <div className="flex items-center justify-between gap-3 px-4 pb-2 pt-4">
             <span className="text-[12.5px] text-dim">
-              {data.total} admissõe{data.total === 1 ? "" : "s"} · página {data.page} de {data.totalPages}
+              {data.total} admissõe{data.total === 1 ? "" : "s"} · página {data.page} de{" "}
+              {data.totalPages}
             </span>
             <div className="flex gap-2">
               <button

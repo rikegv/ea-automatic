@@ -24,6 +24,7 @@ const OPERACAO: NavDef[] = [
   { href: "/esteira", icon: "layers", label: "Esteira admissional" },
   { href: "/nao-conformidades", icon: "alert", label: "Não conformidades" },
   { href: "/gerenciador", icon: "table", label: "Gerenciador" },
+  { href: "/kit", icon: "pen", label: "Gerador de kit" },
 ];
 
 const PAPEL_ROTULO: Record<Papel, string> = {

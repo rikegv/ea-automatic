@@ -14,7 +14,8 @@
     "db:seed": "tsx src/db/seed.ts",
     "db:seed:clientes": "tsx src/db/seed-clientes.ts",
     "db:seed:regua": "tsx src/db/seed-regua.ts",
-    "db:seed:catalogos": "tsx src/db/seed-catalogos.ts"
+    "db:seed:catalogos": "tsx src/db/seed-catalogos.ts",
+    "db:seed:regras": "tsx src/db/seed-regras.ts"
   },
   "dependencies": {
     "@ea/shared-types": "workspace:*",

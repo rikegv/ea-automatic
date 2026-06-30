@@ -3,12 +3,15 @@ import { pgEnum } from "drizzle-orm/pg-core";
 /** RBAC (CLAUDE.md §A.3): Comum (consultor) · Master · Super Admin. */
 export const papelEnum = pgEnum("papel", ["COMUM", "MASTER", "SUPER_ADMIN"]);
 
-/** Farol global da admissão (§A.3). */
+/** Farol global da admissão (§A.3). EM_ADMISSAO (inicial) · BANCO_AGUARDAR (Aud=ok & Exame=apto &
+ * sem data_admissao; unifica o antigo BANCO_PAUSADA) · ADMISSAO_CONCLUIDA (etapas + contrato
+ * assinado) · DECLINOU · RESCISAO. */
 export const farolGlobalEnum = pgEnum("farol_global", [
-  "ATIVO",
+  "EM_ADMISSAO",
+  "BANCO_AGUARDAR",
+  "ADMISSAO_CONCLUIDA",
   "DECLINOU",
   "RESCISAO",
-  "BANCO_PAUSADA",
 ]);
 
 /** Frentes paralelas e independentes (§A.3 / F12). */

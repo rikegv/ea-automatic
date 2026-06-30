@@ -44,6 +44,37 @@ services:
     networks:
       - ea-net
 
+  # ai-service (FastAPI / Vertex AI / Gemini) — INT-3, Fase 4.
+  # Serviço INTERNO (§A.6): SEM porta pública. Alcançável só na rede ea-net
+  # via http://ea-ai:8000. Defesa em profundidade pelo header X-Internal-Token.
+  ea-ai:
+    build:
+      context: ../apps/ai-service
+      dockerfile: Dockerfile
+    container_name: ea-ai
+    restart: unless-stopped
+    environment:
+      GOOGLE_APPLICATION_CREDENTIALS: /app/credentials.json
+      GOOGLE_CLOUD_PROJECT: ${GCP_PROJECT:-ea-v2-automatic}
+      VERTEX_AI_LOCATION: ${VERTEX_AI_LOCATION:-us-central1}
+      STAGING_DIR: ${STAGING_DIR:-/tmp/ea-staging}
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN:?defina INTERNAL_TOKEN em infra/.env}
+    volumes:
+      # credencial Google (Drive + Vertex AI) montada read-only; nunca commitada.
+      - ../apps/ai-service/credentials.json:/app/credentials.json:ro
+      # staging efêmera (§A.6) — BIND-MOUNT do MESMO path do host: o backend
+      # roda no host em dev e precisa enxergar o mesmo diretório que o container.
+      - ${STAGING_DIR:-/tmp/ea-staging}:${STAGING_DIR:-/tmp/ea-staging}
+    healthcheck:
+      # imagem slim pode não ter curl → usa urllib do próprio Python.
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:8000/health').status==200 else sys.exit(1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - ea-net
+
 volumes:
   ea-dbdata:
     name: ea-dbdata

@@ -27,8 +27,10 @@ import {
   usuarios,
 } from "../db/schema";
 import { pendenciasObrigatorias } from "../domain/admissao";
+import { recomputeFarolGlobal } from "../admissoes/farol";
 import type { FrenteTipo } from "../domain/frentes";
 import { podeAbrirCadastro } from "../domain/frentes";
+import { ReguaCompletudeService } from "../regua/regua-completude.service";
 import {
   conclui,
   isReversao,
@@ -59,15 +61,16 @@ const DATA_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 @Injectable()
 export class EsteiraService {
-  constructor(@Inject(DRIZZLE) private readonly db: Database) {}
+  constructor(
+    @Inject(DRIZZLE) private readonly db: Database,
+    private readonly reguaCompletude: ReguaCompletudeService,
+  ) {}
 
   /** Resolve e valida o segmento de rota; 400 quando inválido. */
   resolverTipo(frente: string): FrenteTipo {
     const tipo = ROTA_PARA_TIPO[frente];
     if (!tipo) {
-      throw new BadRequestException(
-        "Frente inválida (use auditoria | exame | cadastro)",
-      );
+      throw new BadRequestException("Frente inválida (use auditoria | exame | cadastro)");
     }
     return tipo;
   }
@@ -131,6 +134,8 @@ export class EsteiraService {
         dataInicio: frentesAdmissao.dataInicio,
         dataConclusao: frentesAdmissao.dataConclusao,
         dataAdmissao: admissoes.dataAdmissao,
+        drivePastaUrl: admissoes.drivePastaUrl,
+        driveAsoUrl: admissoes.driveAsoUrl,
         sinalizador: admissoes.sinalizadorPreenchimento,
       })
       .from(frentesAdmissao)
@@ -149,7 +154,9 @@ export class EsteiraService {
     const dispMap =
       tipo === "CADASTRO_CONTRATO" ? await this.disponibilidadeMap(admissaoIds) : new Map();
     const pendSet =
-      tipo === "AUDITORIA" ? await this.obrigatoriosPendentesSet(admissaoIds) : new Set<string>();
+      tipo === "AUDITORIA"
+        ? await this.reguaCompletude.obrigatoriosPendentesSet(admissaoIds)
+        : new Set<string>();
     const pendObrigSet =
       tipo === "AUDITORIA" || tipo === "EXAME"
         ? await this.pendenciasSet(admissaoIds)
@@ -168,10 +175,16 @@ export class EsteiraService {
         dataInicio: r.dataInicio,
         dataConclusao: r.dataConclusao,
         dataAdmissao: r.dataAdmissao,
+        drivePastaUrl: r.drivePastaUrl,
+        driveAsoUrl: r.driveAsoUrl,
         sinalizador: r.sinalizador,
       };
       if (tipo === "EXAME") {
-        return { ...base, asoAnexado: asoSet.has(r.admissaoId), temPendencias: pendObrigSet.has(r.admissaoId) };
+        return {
+          ...base,
+          asoAnexado: asoSet.has(r.admissaoId),
+          temPendencias: pendObrigSet.has(r.admissaoId),
+        };
       }
       if (tipo === "CADASTRO_CONTRATO") {
         return { ...base, disponivel: dispMap.get(r.admissaoId) ?? false };
@@ -218,24 +231,34 @@ export class EsteiraService {
     return { items, kpis: { porStatus, total }, statusCatalogo };
   }
 
-  /** Conjunto de admissões com ASO ENTREGUE (regra 7 — só status, nunca o arquivo). */
-  private async asoEntregueSet(admissaoIds: string[]): Promise<Set<string>> {
+  /** Conjunto de admissões com um documento (por código) ENTREGUE (§A.6 — só status). */
+  private async docEntregueSet(admissaoIds: string[], codigo: string): Promise<Set<string>> {
     if (admissaoIds.length === 0) return new Set();
-    const aso = await this.db.query.tiposDocumento.findFirst({
-      where: eq(tiposDocumento.codigo, "ASO"),
+    const tipo = await this.db.query.tiposDocumento.findFirst({
+      where: eq(tiposDocumento.codigo, codigo),
     });
-    if (!aso) return new Set();
+    if (!tipo) return new Set();
     const linhas = await this.db
       .select({ admissaoId: documentosAdmissao.admissaoId })
       .from(documentosAdmissao)
       .where(
         and(
           inArray(documentosAdmissao.admissaoId, admissaoIds),
-          eq(documentosAdmissao.tipoDocumentoId, aso.id),
+          eq(documentosAdmissao.tipoDocumentoId, tipo.id),
           eq(documentosAdmissao.estado, "ENTREGUE"),
         ),
       );
     return new Set(linhas.map((l) => l.admissaoId));
+  }
+
+  /** Conjunto de admissões com ASO ENTREGUE (regra 7 — só status, nunca o arquivo). */
+  private async asoEntregueSet(admissaoIds: string[]): Promise<Set<string>> {
+    return this.docEntregueSet(admissaoIds, "ASO");
+  }
+
+  /** Conjunto de admissões com o Termo de Banco ENTREGUE (§A.3 / Fase 4 complemento). */
+  private async termoBancoEntregueSet(admissaoIds: string[]): Promise<Set<string>> {
+    return this.docEntregueSet(admissaoIds, "TERMO_BANCO");
   }
 
   /** Mapa admissaoId → disponível (AUDITORIA e EXAME concluídas) para a frente de Cadastro. */
@@ -337,7 +360,8 @@ export class EsteiraService {
 
     // Gatilho NC-2 (2C item 2): marcar EXAME como "apto" SEM ASO anexado exige aceite explícito do
     // consultor. O aceite É o gatilho da NC-2 (registra autor + data + termo). Bloqueia até o aceite.
-    const exigeAceiteAso = tipo === "EXAME" && conclui(tipo, novo) && !(await this.temAso(frente.admissaoId));
+    const exigeAceiteAso =
+      tipo === "EXAME" && conclui(tipo, novo) && !(await this.temAso(frente.admissaoId));
     if (exigeAceiteAso && !dto.confirmar) {
       throw new ConflictException({
         needsConfirmation: true,
@@ -350,7 +374,11 @@ export class EsteiraService {
     // Cálculo read-only ANTES do tx. Concluir com pendência exige aceite explícito (item 2).
     const faltantesAuditoria =
       tipo === "AUDITORIA" && conclui(tipo, novo) && admissao
-        ? await this.obrigatoriosPendentes(frente.admissaoId, admissao.codCliente, admissao.cargoId)
+        ? await this.reguaCompletude.faltantesObrigatorios(
+            frente.admissaoId,
+            admissao.codCliente,
+            admissao.cargoId,
+          )
         : [];
     if (faltantesAuditoria.length > 0 && !dto.confirmar) {
       throw new ConflictException({
@@ -383,11 +411,16 @@ export class EsteiraService {
       const vaga = await this.db.query.dadosVagaFolha.findFirst({
         where: eq(dadosVagaFolha.admissaoId, frente.admissaoId),
       });
+      const termoBancoEntregue = admissao.isBanco
+        ? (await this.termoBancoEntregueSet([admissao.id])).has(admissao.id)
+        : false;
       pendenciasPassagem = pendenciasObrigatorias({
         codCliente: admissao.codCliente,
         cargoId: admissao.cargoId,
         dataAdmissao: admissao.dataAdmissao,
         vagaFolha: { salario: vaga?.salario, beneficios: vaga?.beneficios, escala: vaga?.escala },
+        isBanco: admissao.isBanco,
+        termoBancoEntregue,
       });
     }
     if (pendenciasPassagem.length > 0 && !dto.aceitePassagem) {
@@ -395,7 +428,8 @@ export class EsteiraService {
         needsConfirmation: true,
         reason: "passagemComPendencia",
         camposPendentes: pendenciasPassagem,
-        message: "Estou ciente que estou avançando esta admissão com pendências obrigatórias não preenchidas.",
+        message:
+          "Estou ciente que estou avançando esta admissão com pendências obrigatórias não preenchidas.",
       });
     }
 
@@ -506,6 +540,11 @@ export class EsteiraService {
       return { upd, gateAberto, cadastroId, nasceuAgora, ncCriada };
     });
 
+    // Reavalia o farol global (§A.3 / Fase 4 complemento): concluir Auditoria+Exame sem data de
+    // admissão leva a BANCO_AGUARDAR; reverter/concluir pode voltar a EM_ADMISSAO. Pós-tx (estado
+    // derivado, não transacional com a mudança de frente).
+    await recomputeFarolGlobal(this.db, frente.admissaoId);
+
     return {
       frente: {
         frenteId: result.upd.id,
@@ -529,64 +568,8 @@ export class EsteiraService {
     return (await this.asoEntregueSet([admissaoId])).has(admissaoId);
   }
 
-  /**
-   * Documentos OBRIGATÓRIOS da régua (cliente+cargo) que ainda NÃO estão ENTREGUE na admissão —
-   * insumo do gatilho NC-1. Retorna os nomes dos tipos faltantes (sem CPF/dado pessoal).
-   */
-  private async obrigatoriosPendentes(
-    admissaoId: string,
-    codCliente: string,
-    cargoId: string,
-  ): Promise<string[]> {
-    const linhas = await this.db
-      .select({ nome: tiposDocumento.nome, estado: documentosAdmissao.estado })
-      .from(reguaDocumental)
-      .innerJoin(tiposDocumento, eq(tiposDocumento.id, reguaDocumental.tipoDocumentoId))
-      .leftJoin(
-        documentosAdmissao,
-        and(
-          eq(documentosAdmissao.admissaoId, admissaoId),
-          eq(documentosAdmissao.tipoDocumentoId, reguaDocumental.tipoDocumentoId),
-        ),
-      )
-      .where(
-        and(
-          eq(reguaDocumental.codCliente, codCliente),
-          eq(reguaDocumental.cargoId, cargoId),
-          eq(reguaDocumental.exigencia, "OBRIGATORIO"),
-        ),
-      );
-    return linhas.filter((l) => l.estado !== "ENTREGUE").map((l) => l.nome);
-  }
-
-  /** Conjunto de admissões (entre as informadas) com ≥1 obrigatório pendente — flag da fila de Auditoria. */
-  private async obrigatoriosPendentesSet(admissaoIds: string[]): Promise<Set<string>> {
-    if (admissaoIds.length === 0) return new Set();
-    const linhas = await this.db
-      .select({ admissaoId: admissoes.id, estado: documentosAdmissao.estado })
-      .from(admissoes)
-      .innerJoin(
-        reguaDocumental,
-        and(
-          eq(reguaDocumental.codCliente, admissoes.codCliente),
-          eq(reguaDocumental.cargoId, admissoes.cargoId),
-          eq(reguaDocumental.exigencia, "OBRIGATORIO"),
-        ),
-      )
-      .leftJoin(
-        documentosAdmissao,
-        and(
-          eq(documentosAdmissao.admissaoId, admissoes.id),
-          eq(documentosAdmissao.tipoDocumentoId, reguaDocumental.tipoDocumentoId),
-        ),
-      )
-      .where(inArray(admissoes.id, admissaoIds));
-    const set = new Set<string>();
-    for (const l of linhas) if (l.estado !== "ENTREGUE") set.add(l.admissaoId);
-    return set;
-  }
-
-  /** Conjunto de admissões com ≥1 campo obrigatório vazio (S2/S3 — pendências da admissão). */
+  /** Conjunto de admissões com ≥1 campo obrigatório vazio (S2/S3 — pendências da admissão).
+   * Admissão de banco: não cobra data de admissão, cobra o Termo de Banco (§A.3 / Fase 4). */
   private async pendenciasSet(admissaoIds: string[]): Promise<Set<string>> {
     if (admissaoIds.length === 0) return new Set();
     const linhas = await this.db
@@ -595,6 +578,7 @@ export class EsteiraService {
         codCliente: admissoes.codCliente,
         cargoId: admissoes.cargoId,
         dataAdmissao: admissoes.dataAdmissao,
+        isBanco: admissoes.isBanco,
         salario: dadosVagaFolha.salario,
         beneficios: dadosVagaFolha.beneficios,
         escala: dadosVagaFolha.escala,
@@ -602,6 +586,9 @@ export class EsteiraService {
       .from(admissoes)
       .leftJoin(dadosVagaFolha, eq(dadosVagaFolha.admissaoId, admissoes.id))
       .where(inArray(admissoes.id, admissaoIds));
+    const termoSet = await this.termoBancoEntregueSet(
+      linhas.filter((l) => l.isBanco).map((l) => l.id),
+    );
     const set = new Set<string>();
     for (const l of linhas) {
       const pend = pendenciasObrigatorias({
@@ -609,6 +596,8 @@ export class EsteiraService {
         cargoId: l.cargoId,
         dataAdmissao: l.dataAdmissao,
         vagaFolha: { salario: l.salario, beneficios: l.beneficios, escala: l.escala },
+        isBanco: l.isBanco,
+        termoBancoEntregue: termoSet.has(l.id),
       });
       if (pend.length > 0) set.add(l.id);
     }
@@ -628,6 +617,9 @@ export class EsteiraService {
         dataAdmissao: admissoes.dataAdmissao,
         tipoContrato: admissoes.tipoContrato,
         farolGlobal: admissoes.farolGlobal,
+        isBanco: admissoes.isBanco,
+        drivePastaUrl: admissoes.drivePastaUrl,
+        driveAsoUrl: admissoes.driveAsoUrl,
         sinalizador: admissoes.sinalizadorPreenchimento,
         candidatoNome: candidatos.nome,
         candidatoCpf: candidatos.cpf,
@@ -697,11 +689,16 @@ export class EsteiraService {
     const vaga = await this.db.query.dadosVagaFolha.findFirst({
       where: eq(dadosVagaFolha.admissaoId, admissaoId),
     });
+    const termoBancoEntregue = adm.isBanco
+      ? (await this.termoBancoEntregueSet([admissaoId])).has(admissaoId)
+      : false;
     const pendencias = pendenciasObrigatorias({
       codCliente: adm.codCliente,
       cargoId: adm.cargoId,
       dataAdmissao: adm.dataAdmissao,
       vagaFolha: { salario: vaga?.salario, beneficios: vaga?.beneficios, escala: vaga?.escala },
+      isBanco: adm.isBanco,
+      termoBancoEntregue,
     });
 
     // S3 — trilha de passagem (avanços com pendência), com autor.
@@ -725,6 +722,9 @@ export class EsteiraService {
       dataAdmissao: adm.dataAdmissao,
       tipoContrato: adm.tipoContrato,
       farolGlobal: adm.farolGlobal,
+      isBanco: adm.isBanco,
+      drivePastaUrl: adm.drivePastaUrl,
+      driveAsoUrl: adm.driveAsoUrl,
       sinalizador: adm.sinalizador,
       pendencias,
       passagens: passagensRows.map((p) => ({
@@ -740,7 +740,11 @@ export class EsteiraService {
         email: adm.candidatoEmail,
         telefone: adm.candidatoTelefone,
       },
-      cliente: { codCliente: adm.codCliente, razaoSocial: adm.clienteRazao, operacao: adm.clienteOperacao },
+      cliente: {
+        codCliente: adm.codCliente,
+        razaoSocial: adm.clienteRazao,
+        operacao: adm.clienteOperacao,
+      },
       cargo: adm.cargoNome,
       frentes: frentes.map((f) => ({
         tipo: f.tipo,
