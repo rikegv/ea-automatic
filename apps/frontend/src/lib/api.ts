@@ -18,6 +18,29 @@ export interface ApiOptions {
   token?: string | null;
 }
 
+/**
+ * Bloqueio de senha temporária (OST-EA-GESTAO-USUARIOS): o backend responde 403 com código
+ * `SENHA_TEMPORARIA` em qualquer rota enquanto o usuário não trocar a senha. Redirecionamos para
+ * a tela de troca — reforço ao guard do (app)/layout para chamadas disparadas fora do fluxo de
+ * navegação. Evita loop quando já estamos em /trocar-senha ou /login.
+ */
+function isSenhaTemporaria(status: number, data: unknown): boolean {
+  if (status !== 403 || typeof data !== "object" || data === null) return false;
+  const d = data as { code?: unknown; message?: unknown; error?: unknown };
+  return (
+    d.code === "SENHA_TEMPORARIA" ||
+    d.message === "SENHA_TEMPORARIA" ||
+    d.error === "SENHA_TEMPORARIA"
+  );
+}
+
+function redirecionarSenhaTemporaria(): void {
+  if (typeof window === "undefined") return;
+  const p = window.location.pathname;
+  if (p === "/trocar-senha" || p === "/login") return;
+  window.location.assign("/trocar-senha");
+}
+
 /** Cliente HTTP same-origin: o browser fala com /api (proxy do Next → backend). */
 export async function apiFetch<T = unknown>(path: string, opts: ApiOptions = {}): Promise<T> {
   const headers: Record<string, string> = {};
@@ -35,6 +58,7 @@ export async function apiFetch<T = unknown>(path: string, opts: ApiOptions = {})
   const data = text ? JSON.parse(text) : null;
 
   if (!res.ok) {
+    if (isSenhaTemporaria(res.status, data)) redirecionarSenhaTemporaria();
     const raw = data?.message ?? data?.error ?? res.statusText;
     const message = Array.isArray(raw) ? raw.join(", ") : String(raw);
     throw new ApiError(message, res.status, data);
@@ -66,6 +90,7 @@ export async function apiUpload<T = unknown>(
   const data = text ? JSON.parse(text) : null;
 
   if (!res.ok) {
+    if (isSenhaTemporaria(res.status, data)) redirecionarSenhaTemporaria();
     const raw = data?.message ?? data?.error ?? res.statusText;
     const message = Array.isArray(raw) ? raw.join(", ") : String(raw);
     throw new ApiError(message, res.status, data);

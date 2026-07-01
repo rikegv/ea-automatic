@@ -18,12 +18,18 @@ export class AuthService {
     if (!u || !u.ativo) throw new UnauthorizedException("Credenciais inválidas");
     const ok = await argon2.verify(u.senhaHash, password);
     if (!ok) throw new UnauthorizedException("Credenciais inválidas");
-    return { id: u.id, email: u.email, papel: u.papel };
+    return { id: u.id, email: u.email, papel: u.papel, senhaTemporaria: u.senhaTemporaria };
   }
 
   async issueTokens(user: AuthUser): Promise<{ accessToken: string; refreshToken: string }> {
     const accessToken = await this.jwt.signAsync(
-      { sub: user.id, email: user.email, papel: user.papel, typ: "access" },
+      {
+        sub: user.id,
+        email: user.email,
+        papel: user.papel,
+        senhaTemporaria: user.senhaTemporaria,
+        typ: "access",
+      },
       {
         secret: this.config.getOrThrow<string>("JWT_ACCESS_SECRET"),
         expiresIn: this.config.get<string>("JWT_ACCESS_TTL") ?? "900s",
@@ -54,7 +60,12 @@ export class AuthService {
 
     const u = await this.users.findById(payload.sub);
     if (!u || !u.ativo) throw new UnauthorizedException("Usuário inativo");
-    const user: AuthUser = { id: u.id, email: u.email, papel: u.papel };
+    const user: AuthUser = {
+      id: u.id,
+      email: u.email,
+      papel: u.papel,
+      senhaTemporaria: u.senhaTemporaria,
+    };
     const tokens = await this.issueTokens(user);
     return { user, ...tokens };
   }

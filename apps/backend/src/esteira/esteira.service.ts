@@ -12,6 +12,7 @@ import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
 import {
   admissoes,
+  candidatoAlteracoesLog,
   candidatos,
   cargos,
   clientes,
@@ -740,6 +741,22 @@ export class EsteiraService {
       .where(eq(passagemAceites.admissaoId, admissaoId))
       .orderBy(desc(passagemAceites.criadoEm));
 
+    // Trilha de alteração de candidato (OST-EA-GESTAO-USUARIOS): quem mudou o quê, com autor.
+    // Nota (§A.6): valorAnterior/valorNovo PODEM conter dado pessoal — exposto só na leitura do
+    // detalhe (visão coletiva da esteira), nunca logado no servidor.
+    const alteracoesRows = await this.db
+      .select({
+        campo: candidatoAlteracoesLog.campo,
+        valorAnterior: candidatoAlteracoesLog.valorAnterior,
+        valorNovo: candidatoAlteracoesLog.valorNovo,
+        criadoEm: candidatoAlteracoesLog.criadoEm,
+        autorNome: usuarios.nome,
+      })
+      .from(candidatoAlteracoesLog)
+      .leftJoin(usuarios, eq(candidatoAlteracoesLog.autorId, usuarios.id))
+      .where(eq(candidatoAlteracoesLog.admissaoId, admissaoId))
+      .orderBy(desc(candidatoAlteracoesLog.criadoEm));
+
     return {
       admissaoId: adm.admissaoId,
       recebidoEm: adm.criadoEm,
@@ -762,6 +779,13 @@ export class EsteiraService {
         camposPendentes: p.camposPendentes,
         autor: p.autor,
         criadoEm: p.criadoEm,
+      })),
+      alteracoes: alteracoesRows.map((a) => ({
+        campo: a.campo,
+        valorAnterior: a.valorAnterior,
+        valorNovo: a.valorNovo,
+        autorNome: a.autorNome,
+        criadoEm: a.criadoEm,
       })),
       candidato: {
         nome: adm.candidatoNome,

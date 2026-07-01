@@ -10,7 +10,12 @@ import type { AuthUser } from "../auth/auth.types";
  * `staging.salvar` recebe o mesmo arquivo e o retorno é idêntico. IA/Drive/staging são mockados.
  */
 
-const USER: AuthUser = { id: "user-1", email: "consultor@soulan.com.br", papel: "COMUM" };
+const USER: AuthUser = {
+  id: "user-1",
+  email: "consultor@soulan.com.br",
+  papel: "COMUM",
+  senhaTemporaria: false,
+};
 
 const ADM = {
   id: "adm-1",

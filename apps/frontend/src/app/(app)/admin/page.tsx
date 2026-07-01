@@ -18,6 +18,12 @@ const CARDS: { href: string; icon: IconName; title: string; desc: string }[] = [
     title: "Regras de auditoria",
     desc: "Critério de validade de cada documento (motor de IA).",
   },
+  {
+    href: "/admin/usuarios",
+    icon: "users",
+    title: "Usuários",
+    desc: "Cadastro, papéis, acesso e reset de senha.",
+  },
 ];
 
 export default function AdminHome() {

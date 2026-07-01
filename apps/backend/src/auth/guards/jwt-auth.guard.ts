@@ -1,9 +1,4 @@
-import {
-  CanActivate,
-  ExecutionContext,
-  Injectable,
-  UnauthorizedException,
-} from "@nestjs/common";
+import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { JwtService } from "@nestjs/jwt";
 import { Reflector } from "@nestjs/core";
@@ -36,7 +31,12 @@ export class JwtAuthGuard implements CanActivate {
         secret: this.config.getOrThrow<string>("JWT_ACCESS_SECRET"),
       });
       if (payload.typ !== "access") throw new Error("tipo de token inválido");
-      req.user = { id: payload.sub, email: payload.email, papel: payload.papel };
+      req.user = {
+        id: payload.sub,
+        email: payload.email,
+        papel: payload.papel,
+        senhaTemporaria: payload.senhaTemporaria ?? false,
+      };
       return true;
     } catch {
       throw new UnauthorizedException("Token de acesso inválido ou expirado");

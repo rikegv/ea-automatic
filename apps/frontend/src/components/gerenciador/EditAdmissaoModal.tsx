@@ -24,6 +24,13 @@ interface VagaFolha {
   tempoContrato: string | null;
   endereco: string | null;
 }
+interface CandidatoEdit {
+  cpf: string;
+  nome: string;
+  email: string | null;
+  telefone: string | null;
+  dataNascimento: string | null;
+}
 interface AdmissaoEdit {
   admissaoId: string;
   tipoContrato: string | null;
@@ -33,6 +40,7 @@ interface AdmissaoEdit {
   isBanco: boolean;
   origem: Origem;
   vagaFolha: VagaFolha;
+  candidato: CandidatoEdit;
 }
 interface TipoDocumento {
   id: string;
@@ -56,6 +64,13 @@ const STATUS_ROTULO: Record<AuditoriaStatus, string> = {
 const ACCEPT = ".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png";
 
 const s = (v: string | null | undefined) => v ?? "";
+
+// Máscara de exibição do CPF (mesma do AdmissaoDetalheModal) — CPF é somente leitura.
+function fmtCpf(cpf: string): string {
+  const d = (cpf ?? "").replace(/\D/g, "");
+  if (d.length !== 11) return cpf || "—";
+  return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`;
+}
 
 function Campo({ rotulo, children }: { rotulo: string; children: React.ReactNode }) {
   return (
@@ -85,6 +100,9 @@ export function EditAdmissaoModal({
   camposFiltro?: string[];
 }) {
   const mostra = (campo: string) => !camposFiltro || camposFiltro.includes(campo);
+  // Seção Candidato só aparece no formulário inteiro ou se o filtro de pendências pedir
+  // explicitamente um campo pessoal (não faz parte do fluxo de pendências hoje).
+  const verCandidato = ["nome", "email", "telefone", "dataNascimento"].some(mostra);
   const verProcesso = ["tipoContrato", "dataAdmissao", "matricula", "farol"].some(mostra);
   const verFolha = [
     "salario",
@@ -104,6 +122,11 @@ export function EditAdmissaoModal({
   const [busy, setBusy] = useState(false);
 
   // form fields
+  const [cpf, setCpf] = useState("");
+  const [nome, setNome] = useState("");
+  const [email, setEmail] = useState("");
+  const [telefone, setTelefone] = useState("");
+  const [dataNascimento, setDataNascimento] = useState("");
   const [tipoContrato, setTipoContrato] = useState("");
   const [dataAdmissao, setDataAdmissao] = useState("");
   const [matricula, setMatricula] = useState("");
@@ -138,6 +161,11 @@ export function EditAdmissaoModal({
     apiFetch<AdmissaoEdit>(`/admissoes/${admissaoId}`, { token })
       .then((r) => {
         setData(r);
+        setCpf(s(r.candidato.cpf));
+        setNome(s(r.candidato.nome));
+        setEmail(s(r.candidato.email));
+        setTelefone(s(r.candidato.telefone));
+        setDataNascimento(s(r.candidato.dataNascimento).slice(0, 10));
         setTipoContrato(s(r.tipoContrato));
         setDataAdmissao(s(r.dataAdmissao).slice(0, 10));
         setMatricula(s(r.matricula));
@@ -189,6 +217,11 @@ export function EditAdmissaoModal({
   }
 
   async function salvar() {
+    // Nome do candidato é obrigatório — bloqueia no client (o backend manteria o anterior).
+    if (verCandidato && !nome.trim()) {
+      setErro("O nome do candidato é obrigatório.");
+      return;
+    }
     setBusy(true);
     setErro(null);
     try {
@@ -202,6 +235,7 @@ export function EditAdmissaoModal({
           farolGlobal: farol,
           isBanco,
           vagaFolha: vf,
+          candidato: { nome, email, telefone, dataNascimento },
         },
       });
       onSaved(`Admissão de ${candidatoNome} atualizada.`);
@@ -244,6 +278,61 @@ export function EditAdmissaoModal({
               Preenchendo apenas as pendências obrigatórias.
             </p>
           )}
+          {verCandidato && (
+            <section>
+              <div className="mb-2 text-[11px] uppercase tracking-wide text-faint">Candidato</div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Campo rotulo="CPF (identidade — não editável)">
+                  <input
+                    className="ds-input"
+                    value={fmtCpf(cpf)}
+                    readOnly
+                    disabled
+                    aria-label="CPF do candidato"
+                  />
+                </Campo>
+                {mostra("nome") && (
+                  <Campo rotulo="Nome">
+                    <input
+                      className="ds-input"
+                      value={nome}
+                      onChange={(e) => setNome(e.target.value)}
+                    />
+                  </Campo>
+                )}
+                {mostra("email") && (
+                  <Campo rotulo="E-mail">
+                    <input
+                      type="email"
+                      className="ds-input"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                    />
+                  </Campo>
+                )}
+                {mostra("telefone") && (
+                  <Campo rotulo="Telefone">
+                    <input
+                      className="ds-input"
+                      value={telefone}
+                      onChange={(e) => setTelefone(e.target.value)}
+                    />
+                  </Campo>
+                )}
+                {mostra("dataNascimento") && (
+                  <Campo rotulo="Data de nascimento">
+                    <input
+                      type="date"
+                      className="ds-input"
+                      value={dataNascimento}
+                      onChange={(e) => setDataNascimento(e.target.value)}
+                    />
+                  </Campo>
+                )}
+              </div>
+            </section>
+          )}
+
           {verProcesso && (
             <section>
               <div className="mb-2 text-[11px] uppercase tracking-wide text-faint">Processo</div>
