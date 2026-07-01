@@ -14,6 +14,7 @@ const SUBNAV = [
   { href: "/admin/cargos", label: "Cargos" },
   { href: "/admin/regua", label: "Régua documental" },
   { href: "/admin/regras", label: "Regras de auditoria" },
+  { href: "/admin/usuarios", label: "Usuários" },
 ];
 
 /** Camada de administração: roda DENTRO do AppShell. Só guard de papel + sub-abas. */

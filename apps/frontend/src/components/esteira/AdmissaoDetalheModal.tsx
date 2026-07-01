@@ -54,6 +54,49 @@ interface AdmissaoDetalhe {
     autor: string | null;
     criadoEm: string;
   }[];
+  // Histórico de alterações de campos da admissão (mais recente primeiro). Somente leitura.
+  alteracoes?: {
+    campo: string;
+    valorAnterior: string | null;
+    valorNovo: string | null;
+    autorNome: string | null;
+    criadoEm: string;
+  }[];
+}
+
+// Rótulos amigáveis dos campos versionados no histórico de alterações.
+const CAMPO_ROTULO: Record<string, string> = {
+  salario: "Salário",
+  dataAdmissao: "Data de admissão",
+  data_admissao: "Data de admissão",
+  tipoContrato: "Tipo de contrato",
+  tipo_contrato: "Tipo de contrato",
+  cargo: "Cargo",
+  matricula: "Matrícula",
+  beneficios: "Benefícios",
+  escala: "Escala",
+  endereco: "Endereço",
+  centroCusto: "Centro de custo",
+  centro_custo: "Centro de custo",
+  departamento: "Departamento",
+  gestorBp: "Gestor BP",
+  gestor_bp: "Gestor BP",
+  motivo: "Motivo",
+  tempoContrato: "Tempo de contrato",
+  tempo_contrato: "Tempo de contrato",
+  farolGlobal: "Farol global",
+  farol_global: "Farol global",
+  email: "E-mail",
+  telefone: "Telefone",
+  nome: "Nome",
+};
+function campoRotulo(campo: string): string {
+  return CAMPO_ROTULO[campo] ?? campo;
+}
+function fmtDataHora(d?: string | null): string {
+  if (!d) return "—";
+  const dt = new Date(d);
+  return Number.isNaN(+dt) ? "—" : dt.toLocaleString("pt-BR");
 }
 
 const FRENTE_ROTULO: Record<string, string> = {
@@ -400,6 +443,36 @@ export function AdmissaoDetalheModal({
               </div>
             )}
           </section>
+
+          {/* Histórico de alterações (OST-EA-GESTAO-USUARIOS) — somente leitura, mais recente
+              primeiro. Segue o modelo visual da Trilha de passagem; oculto se não houver registros. */}
+          {data.alteracoes && data.alteracoes.length > 0 && (
+            <section>
+              <div className="mb-2 text-[11px] uppercase tracking-wide text-faint">
+                Histórico de alterações
+              </div>
+              <div className="space-y-1.5">
+                {data.alteracoes.map((a, i) => (
+                  <div
+                    key={i}
+                    className="rounded-lg border border-[var(--border)] px-3 py-2 text-[12.5px]"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-text">{campoRotulo(a.campo)}</span>
+                      <span className="text-faint">
+                        {a.autorNome ?? "Sistema"} · {fmtDataHora(a.criadoEm)}
+                      </span>
+                    </div>
+                    <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-dim">
+                      <span className="text-faint line-through">{a.valorAnterior ?? "—"}</span>
+                      <Icon name="arr" className="h-3 w-3 flex-none text-faint" />
+                      <span className="text-text">{a.valorNovo ?? "—"}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
         </div>
       )}
     </Modal>

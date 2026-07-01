@@ -1249,3 +1249,134 @@ não instalado na VM): o EA detectou `closed` → baixou o assinado → arquivou
 ### Pendência aberta (não bloqueia o merge — mesmo bloqueio da Fase 4)
 **DRIVE_MOCK=true** (Fernando): o arquivamento real do assinado roda pelo mesmo caminho porém em
 mock (link MOCK-*). Quando a SA tiver escrita no Shared Drive, grava o arquivo real — sem nova OST.
+
+## 🔎 PANDAPÉ — CREDENCIAIS REAIS (OAuth) + INVESTIGAÇÃO DA API v1 — 2026-06-30
+
+Chegaram as credenciais reais (OAuth client_credentials): `PANDAPE_CLIENT_ID` + `PANDAPE_CLIENT_SECRET`
+na VM (apps/backend/.env). A Fase 5 fora construída para um `PANDAPE_API_TOKEN` fixo — ajustado o
+cliente para OAuth. Investigação feita contra a API real + swagger oficial
+(`https://api.pandape.com.br/swagger/v1/swagger.json`). **Descobertas importantes (a API real é
+bem diferente do que a Fase 5 assumiu):**
+
+**Autenticação — OAuth2 client_credentials (IdentityServer), confirmada ao vivo:**
+- Token: `POST https://login.pandape.com.br/connect/token` (x-www-form-urlencoded), body
+  `grant_type=client_credentials`, `scope=PandapeApi`, `client_id`, `client_secret`.
+- Resposta `Bearer`, `expires_in=3600` (1h). Cliente passou a obter/cachear/renovar o token
+  automaticamente; secret e token **nunca** são logados nem persistidos (§A.6).
+
+**Endpoints reais são `/v1` (não `/v3`) e camelCase — o código da Fase 5 apontava para `/v3` (morto):**
+- `GET /v1/PreCollaborator/Get?idPreCollaborator=<int>` → { idMatch, idVacancy, name, surname, email,
+  admissionDate, **vacancyJob** (cargo como string), currentFolderName, **documents:[{name, link,
+  extension}]** }. **NÃO traz CPF.**
+- `GET /v1/Match/Get?idMatch=<int>` → traz **CPF**, phone, birthDate, cep/address. (CPF vem do Match,
+  não do pré-colaborador → o pull precisa encadear PreCollaborator→Match.)
+- `GET /v1/Vacancy/List` → { idVacancy, **job** (cargo string), city, description, tags[] }. **Não há
+  Vacancy/Get por id; a vaga NÃO carrega cliente.**
+- `GET /v1/Client/List` / `Client/Get?idClient` → { idClient, name, businessName, **cif (=CNPJ, 14
+  díg)**, address, contact }.
+
+**RESPOSTA À PERGUNTA DO DIRETOR (admissão nasce completa ou precisa de complemento manual?):**
+- **Cargo:** vem como **texto livre** (`vacancyJob`/`job`, ex.: "Estágio em Engenharia Ambiental").
+  Dá para mapear, mas exige **de/para (normalização) para o catálogo de cargos do EA** — não é um id
+  pronto. → semi-automático.
+- **Cliente:** a **vaga NÃO retorna cliente** (sem idClient/CNPJ). Existe cliente estruturado com
+  **CNPJ (`cif`)** no endpoint `Client/List`, e o join natural seria **Pandapé `cif` ↔ EA
+  `cliente.cnpj`** — MAS **não há ligação direta vaga→cliente** exposta (Vacancy não tem idClient;
+  Request/List e Headquarter/List nos casos testados vieram vazios). → **na prática a admissão
+  nascerá SEM cliente resolvido → complemento manual do consultor** (regra de não-bloqueio), a menos
+  que se confirme uma cadeia confiável vaga→cliente em pré-colaborador real.
+- **Documentos:** `documents[].link` (URL) + name/extension — alimentam o pull da F2 (URL só em
+  memória, nunca persistida §A.6).
+
+**GAP CRÍTICO DE DISCOVERY (decisão pendente do diretor):** a API v1 **não tem endpoint de listagem
+nem de "mudanças desde"** de pré-colaboradores — só `Get` por `idPreCollaborator`. O modelo cron-pull
+da Fase 5 pressupõe descobrir novos pré-colaboradores; **sem endpoint de enumeração isso não é
+possível só por polling**. Opções: (a) reintroduzir o **webhook** do Pandapé (que empurra o
+IdPreCollaborator) — volta ao desenho original; (b) outra via de enumeração a confirmar com o suporte
+Pandapé. **Reportado ao diretor — escolha de arquitetura.**
+
+**Não consegui buscar um pré-colaborador específico:** sem endpoint de listagem e sem um
+`idPreCollaborator` de teste válido (id=1 → 404), falta um **id real de teste** para o fetch ponta a
+ponta. Solicitado ao diretor um IdPreCollaborator válido do ambiente de testes.
+
+**Follow-up (não nesta rodada):** remap completo do `pandape-sync` para o fluxo real
+(PreCollaborator→Match p/ CPF; cargo via vacancyJob + de/para; cliente via CNPJ se a cadeia
+vaga→cliente fechar; documents[].link no pull) + decisão de discovery (webhook vs outro).
+
+---
+
+## 2026-07-01 — OST-EA-GESTAO-USUARIOS (tela de administração de usuários + 2 regras de segurança)
+
+Branch `feat/ost-ea-gestao-usuarios`. Coordenação despachou 4 exploradores (auth/RBAC/schema,
+auditoria de rotas de exclusão, frontend/modal, padrão de log/edição) → 1 agente `backend` coeso +
+1 agente `frontend` em paralelo (árvores disjuntas). **Gate fechado; nada commitado; sem flag
+`READY_`. Aguardando validação visual do diretor** antes de tester/segurança (§A.0/§A.7).
+
+**Escopo entregue:**
+1. **Tela de gestão de usuários** (`/admin/usuarios`, sub-aba de Administração, herda o guard de papel
+   do `admin/layout.tsx` + `@Roles("MASTER","SUPER_ADMIN")` no backend `admin/usuarios`). Listagem
+   (nome/e-mail/papel/status/criado em), criar (gera senha temporária forte exibida uma vez p/ copiar),
+   editar (nome/e-mail/papel), desativar = **soft delete** (`ativo=false`, nunca remove — preserva
+   histórico), resetar senha (nova temporária exibida). Senha via `crypto.randomInt` (≥12 chars),
+   hash argon2, senha em claro **só** na resposta de criação/reset, nunca logada/persistida (§A.6).
+2. **Troca obrigatória de senha no 1º acesso:** coluna `usuarios.senha_temporaria` (migration 0013);
+   flag propagada no access token e em `/auth/login`+`/auth/me`; `SenhaTemporariaGuard` global entre
+   `JwtAuthGuard` e `RolesGuard` → enquanto `true`, toda rota sem `@Public`/`@PermiteSenhaTemporaria`
+   responde `403 {code:"SENHA_TEMPORARIA"}`. `POST /auth/trocar-senha` valida senha atual, exige nova
+   diferente, limpa a flag e reemite tokens. Front bloqueia navegação → `/trocar-senha` (usuário novo
+   e reset). Cobre os dois cenários.
+3. **Regra global de exclusão (COMUM nunca exclui):** auditoria das rotas `@Delete` do sistema —
+   `DELETE /admissoes/:id`, `/admin/clientes/:cod`, `/admin/cargos/:id`, `/admin/regras/:id`,
+   `/admin/regua`. **Todas já exigiam `@Roles("MASTER","SUPER_ADMIN")`** (conforme); catálogos/tipos de
+   doc não têm rota de delete. Nenhuma alteração necessária além de **blindar com testes** (spec
+   `rbac-exclusao` cobre as 5 + `admin/usuarios` negando COMUM). COMUM segue podendo **editar** dados
+   de candidato (o `PATCH /admissoes/:id` não tem `@Roles` — correto pela regra).
+4. **Log de alteração de candidato:** tabela nova `candidato_alteracoes_log` (migration 0013;
+   `{admissao_id→cascade, campo, valor_anterior, valor_novo, autor_id→usuarios nullable, criado_em}`,
+   índice por admissão). Gravado dentro da transação de `admissoes.service.editar` (propagado
+   `@CurrentUser`), diff campo-a-campo dos editáveis de `admissoes`+`dados_vaga_folha`; campos
+   inalterados e CPF/cliente (imutáveis) não geram log. **Exceção consciente §A.6:** ao contrário das
+   trilhas de frente (que evitam PII), esta guarda valores que PODEM ser PII (salário, etc.) — exigido
+   pela OST; documentado no comentário do schema; CPF nunca (imutável).
+5. **Linha do tempo no modal do candidato:** `GET /esteira/admissao/:id` passou a devolver
+   `alteracoes[]` (desc por data, `leftJoin usuarios` p/ autor); nova `<section>` "Histórico de
+   alterações" (somente leitura) ao fim do `AdmissaoDetalheModal` (modal único das 3 telas).
+
+**Verificação (coordenador, integrada):** `pnpm typecheck` (3 pacotes), `pnpm lint`, `pnpm test`
+(**186 testes / 27 arquivos**, incl. os 4 specs novos da DoD) — **verdes**. Migration 0013 aplicada no
+`ea-db`; schema conferido no banco. **Gap de integração pego e corrigido:** o agente editou
+`packages/shared-types/src` (typecheck passa via path-mapping) mas não rebuildou o `dist` → `nest build`
+quebrava (`UsuarioListItem` ausente no `.d.ts`); resolvido rebuildando o shared-types antes do backend.
+**Smoke test ponta a ponta (10/10)** contra o app rodando (back 3011 + front 3010): login por papel,
+criação com senha temporária, bloqueio `SENHA_TEMPORARIA`, troca de senha, distinção dos dois 403
+(senha × RBAC), COMUM barrado no delete, e a timeline registrando a alteração com autor. Artefatos de
+teste limpos.
+
+**DoD — status:** tela funcional ✅ · senha temporária exibida na criação/reset ✅ · troca obrigatória
+bloqueando (novo + reset) ✅ · auditoria de exclusão + testes RBAC ✅ · log de alteração gravando ✅ ·
+timeline no modal ✅ · lint/typecheck/test verdes ✅ · **validação visual do diretor: PENDENTE** ·
+gate fechado / flag `READY_`: **só após auditoria** ✅.
+
+**Ajuste de escopo (2026-07-01, ainda em validação, nada commitado):** o COMUM passou a poder editar
+**todos** os dados de vaga+candidato, **incluindo os campos pessoais antes imutáveis** (nome, e-mail,
+telefone, data de nascimento). Data de admissão/salário/escala(horário) já eram editáveis. Backend:
+`UpdateAdmissaoDto` ganhou bloco `candidato` (CPF **fora** — identidade §A.3); `admissoes.service.editar`
+abriu o update do `candidatos` (antes insert-only) dentro da mesma transação, com o **mesmo mecanismo de
+log** (cada campo pessoal alterado vira linha em `candidato_alteracoes_log`); `obter` (prefill do form)
+passou a devolver o bloco `candidato`. Frontend: seção "Candidato" no `EditAdmissaoModal` (CPF
+somente-leitura; nome/e-mail/telefone/nascimento editáveis), enviada no `PATCH`. **Regra mantida:
+COMUM continua SEM excluir nada** (nenhuma rota de delete tocada). Teste novo cobre o log dos campos
+pessoais (+CPF nunca logado). Verificação integrada: typecheck (3 pkg) + lint + **187 testes** verdes;
+**smoke test 6/6** com COMUM editando os campos pessoais ao vivo (timeline com autor; delete → 403).
+**PARANDO de novo para validação visual** antes de tester/segurança.
+
+**Fechamento (2026-07-01):** **validação visual do diretor APROVADA** (3 pontos + ajuste de escopo:
+edição ampliada de dados pessoais + log + CPF protegido). Gate de qualidade: **tester PASS** (typecheck
+3 pacotes + lint + 187 testes backend + 31 ai-service; 4 coberturas da DoD confirmadas) e **segurança
+APROVADO** (§A.6: RBAC das 5 rotas de exclusão nega COMUM + `admin/usuarios` idem; exceção de PII no
+`candidato_alteracoes_log` documentada e CPF nunca logado; senha temporária via `crypto.randomInt`, sem
+vazar `senhaHash`/token/segredo; auto-desativação bloqueada). **Notas não-bloqueantes registradas pela
+segurança** (governança, à decisão do produto): (1) `candidato_alteracoes_log.admissao_id` é
+`ON DELETE cascade` → excluir a admissão apaga a trilha de edição (distinta do log de dupla correção,
+que é permanente); (2) um MASTER pode se auto-promover a SUPER_ADMIN via `admin/usuarios` (dentro da
+fronteira de confiança admin). Liberado para `READY_gestao-usuarios` → merge na main → push.

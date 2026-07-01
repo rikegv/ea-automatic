@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthUser } from "../auth/auth.types";
 import { ClicksignSyncService, TERMO_DUPLA_CORRECAO } from "./clicksign-sync.service";
 
-const USER: AuthUser = { id: "u-1", email: "c@e.com", papel: "COMUM" };
+const USER: AuthUser = { id: "u-1", email: "c@e.com", papel: "COMUM", senhaTemporaria: false };
 
 /** Monta o service com colaboradores mockados (sem subir Worker/Redis — onModuleInit não é chamado). */
 function montar(over: {

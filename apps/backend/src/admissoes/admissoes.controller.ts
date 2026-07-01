@@ -1,13 +1,4 @@
-import {
-  Body,
-  Controller,
-  Delete,
-  Get,
-  Param,
-  Patch,
-  Post,
-  Query,
-} from "@nestjs/common";
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from "@nestjs/common";
 import { CurrentUser, Roles } from "../auth/decorators";
 import type { AuthUser } from "../auth/auth.types";
 import { AdmissoesService } from "./admissoes.service";
@@ -68,8 +59,8 @@ export class AdmissoesController {
 
   /** F10 — edita vaga/folha + contrato/data/matrícula/farol (não toca CPF/cod_cliente). */
   @Patch(":id")
-  editar(@Param("id") id: string, @Body() dto: UpdateAdmissaoDto) {
-    return this.admissoes.editar(id, dto);
+  editar(@Param("id") id: string, @Body() dto: UpdateAdmissaoDto, @CurrentUser() user: AuthUser) {
+    return this.admissoes.editar(id, dto, user);
   }
 
   /** F10 — deleta a admissão (ação destrutiva): só Master/Super Admin. */

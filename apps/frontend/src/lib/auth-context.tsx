@@ -8,6 +8,8 @@ export interface SessionUser {
   id: string;
   email: string;
   papel: Papel;
+  /** Senha temporária ativa (usuário novo ou reset): força a troca antes de usar o app. */
+  senhaTemporaria: boolean;
 }
 
 interface AuthState {
@@ -20,6 +22,8 @@ interface AuthContextValue extends AuthState {
   isAdmin: boolean;
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+  /** Troca obrigatória de senha temporária: atualiza token + user (senhaTemporaria=false). */
+  trocarSenha: (senhaAtual: string, novaSenha: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -49,10 +53,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setState({ user: null, token: null, loading: false });
   }, []);
 
+  const trocarSenha = useCallback(async (senhaAtual: string, novaSenha: string) => {
+    const r = await apiFetch<LoginResponse>("/auth/trocar-senha", {
+      method: "POST",
+      body: { senhaAtual, novaSenha },
+    });
+    setState({ user: r.user, token: r.accessToken, loading: false });
+  }, []);
+
   const isAdmin = state.user?.papel === "MASTER" || state.user?.papel === "SUPER_ADMIN";
 
   return (
-    <AuthContext.Provider value={{ ...state, isAdmin, login, logout }}>
+    <AuthContext.Provider value={{ ...state, isAdmin, login, logout, trocarSenha }}>
       {children}
     </AuthContext.Provider>
   );

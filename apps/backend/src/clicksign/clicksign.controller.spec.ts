@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthUser } from "../auth/auth.types";
 import { ClicksignController } from "./clicksign.controller";
 
-const USER: AuthUser = { id: "u-1", email: "c@e.com", papel: "COMUM" };
+const USER: AuthUser = { id: "u-1", email: "c@e.com", papel: "COMUM", senhaTemporaria: false };
 
 function montar() {
   const enfileirarTick = vi.fn().mockResolvedValue(undefined);

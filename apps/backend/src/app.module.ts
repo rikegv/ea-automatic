@@ -12,6 +12,7 @@ import { ClicksignModule } from "./clicksign/clicksign.module";
 import { JwtAuthGuard } from "./auth/guards/jwt-auth.guard";
 import { OriginGuard } from "./auth/guards/origin.guard";
 import { RolesGuard } from "./auth/guards/roles.guard";
+import { SenhaTemporariaGuard } from "./auth/guards/senha-temporaria.guard";
 import { DrizzleModule } from "./db/drizzle.module";
 import { EsteiraModule } from "./esteira/esteira.module";
 import { KitModule } from "./kit/kit.module";
@@ -46,10 +47,13 @@ import { UsersModule } from "./users/users.module";
   controllers: [HealthController],
   providers: [
     HealthService,
-    // Ordem dos guards globais: throttle → origin → autenticação → papel (§A.2/§A.3).
+    // Ordem dos guards globais: throttle → origin → autenticação → senha temporária → papel
+    // (§A.2/§A.3 + OST-EA-GESTAO-USUARIOS). O SenhaTemporariaGuard vem logo após o JwtAuthGuard
+    // (que popula req.user) e antes do RolesGuard: força a troca de senha no primeiro acesso.
     { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_GUARD, useClass: OriginGuard },
     { provide: APP_GUARD, useClass: JwtAuthGuard },
+    { provide: APP_GUARD, useClass: SenhaTemporariaGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
   ],
 })

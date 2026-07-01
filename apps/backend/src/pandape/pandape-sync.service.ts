@@ -29,6 +29,18 @@ import {
  * `origem=PANDAPE` + `bypassAceite` (regra 5 — a sync nunca trava por campos pendentes). O pull de
  * docs reusa `AuditoriaService.auditarBuffer` (F2 incremental). URLs do Pandapé só em memória; nunca
  * em banco/log. CPF nunca é logado (§A.6).
+ *
+ * TODO — REMAP COMPLETO DO SYNC = FOLLOW-UP (API v1 real, reportado ao diretor):
+ *  - CPF/telefone/dataNascimento: NÃO vêm de PreCollaborator/Get → enriquecer via `api.getMatch(idMatch)`
+ *    (MatchModel). Hoje o sync lê `pc.cpf` (campo opcional do enrichment, ausente na API v1) → sem CPF
+ *    a criação adia (não-bloqueio). Wire do getMatch é follow-up.
+ *  - Cliente: a vaga (Vacancy/List) NÃO traz cliente/CNPJ → o de/para vaga→cod_cliente precisa de outra
+ *    fonte (Client/List por `cif`=CNPJ + mapeamento do diretor, §A.9). Hoje adia sem inventar FK.
+ *  - Cargo: usar `vacancyJob` (string) da vaga; normalização do catálogo é follow-up.
+ *  - Etapa: NÃO vem de PreCollaborator/Get → vem do payload do webhook (INT-1). Sem ela, "conhecido"
+ *    vira no-op (não atualiza etapa). Follow-up.
+ *  - Discovery: a API v1 não lista pré-colaboradores novos → `listarMudancas()` retorna [] (depende de
+ *    webhook ou id conhecido). Decisão de arquitetura pendente.
  */
 @Injectable()
 export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
@@ -54,11 +66,10 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
       this.connection.on("error", (err) => {
         this.logger.warn(`Conexão Redis (worker Pandapé) com erro: ${err.message}`);
       });
-      this.worker = new Worker(
-        PANDAPE_QUEUE,
-        async (job: Job) => this.processarJob(job),
-        { connection: this.connection, ...PANDAPE_WORKER_OPTIONS },
-      );
+      this.worker = new Worker(PANDAPE_QUEUE, async (job: Job) => this.processarJob(job), {
+        connection: this.connection,
+        ...PANDAPE_WORKER_OPTIONS,
+      });
       this.worker.on("failed", (job, err) => {
         this.logger.warn(`Job ${job?.name ?? "?"} falhou (será retentado): ${err.message}`);
       });
@@ -226,9 +237,10 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
     }
 
     for (const doc of documentos) {
-      const url = doc.url;
+      // API v1: o campo real é `link` (e o rótulo é `name`); `url`/`label`/`tipo` são compat legado.
+      const url = doc.url ?? doc.link;
       if (!url) continue;
-      const codigo = resolverTipoDocumento(doc.label ?? doc.tipo);
+      const codigo = resolverTipoDocumento(doc.label ?? doc.tipo ?? doc.name);
       if (!codigo) {
         // NUNCA logar a URL nem CPF — só um rótulo genérico (§A.6).
         this.logger.warn("Documento Pandapé com tipo não mapeado — pulado.");
@@ -246,7 +258,9 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
       try {
         const res = await fetch(url); // URL pública, só em memória.
         if (!res.ok) {
-          this.logger.warn(`Download de documento do Pandapé falhou (HTTP ${res.status}) — pulado.`);
+          this.logger.warn(
+            `Download de documento do Pandapé falhou (HTTP ${res.status}) — pulado.`,
+          );
           continue;
         }
         buffer = Buffer.from(await res.arrayBuffer());
@@ -288,9 +302,11 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
       codCliente = cli?.codCliente;
     }
     let cargoId: string | undefined;
-    if (vaga.cargoNome) {
+    // API v1: o cargo da vaga é `job` (string). `cargoNome` é o campo de/para legado (remap follow-up).
+    const cargoNome = vaga.cargoNome ?? vaga.job;
+    if (cargoNome) {
       const cargo = await this.db.query.cargos.findFirst({
-        where: eq(cargos.nome, vaga.cargoNome),
+        where: eq(cargos.nome, cargoNome),
       });
       cargoId = cargo?.id;
     }
@@ -317,7 +333,7 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
         orderBy: asc(usuarios.criadoEm),
       }));
     if (!u) return undefined;
-    return { id: u.id, email: u.email, papel: u.papel };
+    return { id: u.id, email: u.email, papel: u.papel, senhaTemporaria: u.senhaTemporaria };
   }
 
   /** Detecta violação de unique (Postgres 23505) — usado para tratar corrida como "já existe". */

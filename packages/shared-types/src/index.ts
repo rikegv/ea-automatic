@@ -7,6 +7,34 @@
 export const PAPEL = ["COMUM", "MASTER", "SUPER_ADMIN"] as const;
 export type Papel = (typeof PAPEL)[number];
 
+// ── Gestão de usuários (OST-EA-GESTAO-USUARIOS — restrito Master/Super Admin) ───────────────
+/** Item da listagem/administração de usuários. NUNCA carrega senhaHash (§A.6). */
+export interface UsuarioListItem {
+  id: string;
+  nome: string;
+  email: string;
+  papel: Papel;
+  ativo: boolean;
+  criadoEm: string;
+}
+
+/** Resposta da criação/reset de usuário: a senha temporária em claro só trafega UMA vez. */
+export interface CriarUsuarioResposta {
+  usuario: UsuarioListItem;
+  senhaTemporaria: string;
+}
+
+/** Resposta do reset de senha (Master/Super Admin). */
+export interface ResetSenhaResposta {
+  senhaTemporaria: string;
+}
+
+/**
+ * Código de erro estável no corpo do 403 quando o usuário ainda tem senha temporária. O frontend
+ * detecta este código para redirecionar à tela de troca obrigatória no primeiro acesso.
+ */
+export const SENHA_TEMPORARIA_CODE = "SENHA_TEMPORARIA" as const;
+
 // ── Farol global da admissão (§A.3) ────────────────────────────────────────
 // EM_ADMISSAO: status inicial (era "ATIVO"). BANCO_AGUARDAR: Auditoria=ok & Exame=apto &
 // data_admissao ausente (unifica o antigo "BANCO_PAUSADA"). ADMISSAO_CONCLUIDA: todas as etapas

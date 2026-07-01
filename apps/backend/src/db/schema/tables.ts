@@ -38,6 +38,9 @@ export const usuarios = pgTable("usuarios", {
   senhaHash: text("senha_hash").notNull(),
   papel: papelEnum("papel").notNull().default("COMUM"),
   ativo: boolean("ativo").notNull().default(true),
+  // Senha temporária (OST-EA-GESTAO-USUARIOS): true logo após criação/reset pelo admin. Enquanto
+  // true, o SenhaTemporariaGuard exige a troca no primeiro acesso antes de liberar as demais rotas.
+  senhaTemporaria: boolean("senha_temporaria").notNull().default(false),
   criadoEm,
   atualizadoEm,
 });
@@ -410,5 +413,30 @@ export const duplaCorrecaoAceites = pgTable(
   },
   (t) => ({
     idxAdmissao: index("idx_dupla_correcao_aceites_admissao").on(t.admissaoId),
+  }),
+);
+
+// ── CandidatoAlteracaoLog: trilha de edição de dados da admissão/vaga (OST-EA-GESTAO-USUARIOS) ──
+// ATENÇÃO (§A.6): ao contrário das trilhas de frente (frente_status_eventos, passagem_aceites, que
+// deliberadamente evitam PII e guardam só rótulos/estado), esta tabela guarda os VALORES ANTES/DEPOIS
+// de campos editados — que PODEM ser dado pessoal/sensível (salário, benefícios, endereço). É uma
+// EXCEÇÃO CONSCIENTE exigida pela OST (trilha de "quem mudou o quê" no candidato). Minimização:
+// o CPF NUNCA é logado aqui (é campo imutável — identidade, §A.3 — jamais editado por `editar`).
+// `autorId` nullable: ações do sistema (ex.: recompute de farol) não têm autor humano.
+export const candidatoAlteracoesLog = pgTable(
+  "candidato_alteracoes_log",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    admissaoId: uuid("admissao_id")
+      .notNull()
+      .references(() => admissoes.id, { onDelete: "cascade" }),
+    campo: varchar("campo", { length: 60 }).notNull(),
+    valorAnterior: text("valor_anterior"),
+    valorNovo: text("valor_novo"),
+    autorId: uuid("autor_id").references(() => usuarios.id),
+    criadoEm,
+  },
+  (t) => ({
+    idxAdmissao: index("idx_candidato_alteracoes_log_admissao").on(t.admissaoId),
   }),
 );

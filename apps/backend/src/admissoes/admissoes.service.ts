@@ -11,6 +11,7 @@ import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
 import {
   admissoes,
+  candidatoAlteracoesLog,
   candidatos,
   cargos,
   clientes,
@@ -409,6 +410,9 @@ export class AdmissoesService {
     const vaga = await this.db.query.dadosVagaFolha.findFirst({
       where: eq(dadosVagaFolha.admissaoId, id),
     });
+    const candidato = await this.db.query.candidatos.findFirst({
+      where: eq(candidatos.cpf, adm.candidatoCpf),
+    });
     return {
       admissaoId: adm.id,
       tipoContrato: adm.tipoContrato,
@@ -417,6 +421,14 @@ export class AdmissoesService {
       farolGlobal: adm.farolGlobal,
       isBanco: adm.isBanco,
       origem: adm.origem,
+      // Dados pessoais do candidato (OST — ajuste de escopo): editáveis, exceto o CPF (identidade §A.3).
+      candidato: {
+        cpf: adm.candidatoCpf,
+        nome: candidato?.nome ?? "",
+        email: candidato?.email ?? null,
+        telefone: candidato?.telefone ?? null,
+        dataNascimento: candidato?.dataNascimento ?? null,
+      },
       vagaFolha: {
         salario: vaga?.salario ?? null,
         beneficios: vaga?.beneficios ?? null,
@@ -436,7 +448,7 @@ export class AdmissoesService {
    * NÃO altera CPF nem cod_cliente (identidade — §A.3). Recalcula o sinalizador (F5) com os novos
    * valores para a coluna do gerenciador continuar verdadeira.
    */
-  async editar(id: string, dto: UpdateAdmissaoDto) {
+  async editar(id: string, dto: UpdateAdmissaoDto, user?: AuthUser) {
     const adm = await this.db.query.admissoes.findFirst({ where: eq(admissoes.id, id) });
     if (!adm) throw new NotFoundException("Admissão não encontrada");
     const candidato = await this.db.query.candidatos.findFirst({
@@ -449,11 +461,53 @@ export class AdmissoesService {
     // Campo "" no payload → limpa (null); ausente → mantém.
     const orNull = (v?: string) =>
       v === undefined ? undefined : v.trim() === "" ? null : v.trim();
+    // Valor efetivo de campo texto: ausente (undefined) → mantém o anterior; "" → null; senão trim.
+    const efetivo = (v: string | undefined, anterior: string | null) =>
+      v === undefined ? anterior : v.trim() === "" ? null : v.trim();
 
     const result = await this.db.transaction(async (tx) => {
+      // Trilha de alteração de candidato (OST-EA-GESTAO-USUARIOS). Compara estado anterior vs novo
+      // campo a campo; só campos que MUDARAM viram log (nunca CPF/cod_cliente — imutáveis, §A.3).
+      const logs: { campo: string; valorAnterior: string | null; valorNovo: string | null }[] = [];
+      const str = (v: unknown): string | null =>
+        v === null || v === undefined ? null : v instanceof Date ? v.toISOString() : String(v);
+      const registrar = (campo: string, anterior: unknown, novo: unknown) => {
+        const a = str(anterior);
+        const n = str(novo);
+        if (a !== n) logs.push({ campo, valorAnterior: a, valorNovo: n });
+      };
+
       // Vaga/folha (1:1).
       if (dto.vagaFolha) {
         const vf = dto.vagaFolha;
+        const novoSalarioVf =
+          vf.salario === undefined ? (vaga?.salario ?? null) : vf.salario || null;
+        registrar("salario", vaga?.salario ?? null, novoSalarioVf);
+        registrar(
+          "beneficios",
+          vaga?.beneficios ?? null,
+          efetivo(vf.beneficios, vaga?.beneficios ?? null),
+        );
+        registrar("escala", vaga?.escala ?? null, efetivo(vf.escala, vaga?.escala ?? null));
+        registrar(
+          "centroCusto",
+          vaga?.centroCusto ?? null,
+          efetivo(vf.centroCusto, vaga?.centroCusto ?? null),
+        );
+        registrar(
+          "departamento",
+          vaga?.departamento ?? null,
+          efetivo(vf.departamento, vaga?.departamento ?? null),
+        );
+        registrar("gestorBp", vaga?.gestorBp ?? null, efetivo(vf.gestorBp, vaga?.gestorBp ?? null));
+        registrar("motivo", vaga?.motivo ?? null, efetivo(vf.motivo, vaga?.motivo ?? null));
+        registrar(
+          "tempoContrato",
+          vaga?.tempoContrato ?? null,
+          efetivo(vf.tempoContrato, vaga?.tempoContrato ?? null),
+        );
+        registrar("endereco", vaga?.endereco ?? null, efetivo(vf.endereco, vaga?.endereco ?? null));
+
         await tx
           .update(dadosVagaFolha)
           .set({
@@ -470,10 +524,60 @@ export class AdmissoesService {
           .where(eq(dadosVagaFolha.admissaoId, id));
       }
 
+      // Dados pessoais do candidato (OST-EA-GESTAO-USUARIOS — ajuste de escopo): nome/e-mail/telefone/
+      // nascimento agora editáveis (antes imutáveis). CPF permanece imutável (identidade, §A.3). O
+      // candidato é compartilhado por CPF → a alteração vale para todas as admissões dessa pessoa; o
+      // log fica sob ESTA admissão. Cada campo que muda vira uma linha em candidato_alteracoes_log.
+      let novoNomeCandidato = candidato?.nome ?? "";
+      if (dto.candidato && candidato) {
+        const c = dto.candidato;
+        // nome é obrigatório (notNull): vazio/ausente mantém o anterior.
+        const novoNome =
+          c.nome !== undefined && c.nome.trim() !== "" ? c.nome.trim() : candidato.nome;
+        const novoEmail = efetivo(c.email, candidato.email ?? null);
+        const novoTelefone = efetivo(c.telefone, candidato.telefone ?? null);
+        const novoNasc =
+          c.dataNascimento === undefined
+            ? (candidato.dataNascimento ?? null)
+            : c.dataNascimento.trim() === ""
+              ? null
+              : c.dataNascimento.trim();
+
+        registrar("nome", candidato.nome, novoNome);
+        registrar("email", candidato.email ?? null, novoEmail);
+        registrar("telefone", candidato.telefone ?? null, novoTelefone);
+        registrar("dataNascimento", candidato.dataNascimento ?? null, novoNasc);
+
+        novoNomeCandidato = novoNome;
+
+        await tx
+          .update(candidatos)
+          .set({
+            nome: novoNome,
+            email: novoEmail,
+            telefone: novoTelefone,
+            dataNascimento: novoNasc,
+            atualizadoEm: new Date(),
+          })
+          .where(eq(candidatos.cpf, adm.candidatoCpf));
+      }
+
       const novoTipoContrato =
         dto.tipoContrato === undefined ? adm.tipoContrato : orNull(dto.tipoContrato);
       const novaDataAdmissao =
         dto.dataAdmissao === undefined ? adm.dataAdmissao : orNull(dto.dataAdmissao);
+      const novaMatricula = dto.matricula === undefined ? adm.matricula : orNull(dto.matricula);
+      // farolGlobal: só loga se veio no dto (ação direta do usuário). O recompute automático pós-
+      // transação (recomputeFarolGlobal) é do sistema e NÃO gera log de usuário (OST).
+      const novoFarol = (dto.farolGlobal as FarolGlobal) ?? adm.farolGlobal;
+      const novoIsBanco = dto.isBanco === undefined ? adm.isBanco : dto.isBanco;
+
+      registrar("tipoContrato", adm.tipoContrato, novoTipoContrato);
+      registrar("dataAdmissao", adm.dataAdmissao, novaDataAdmissao);
+      registrar("matricula", adm.matricula, novaMatricula);
+      if (dto.farolGlobal !== undefined) registrar("farolGlobal", adm.farolGlobal, novoFarol);
+      registrar("isBanco", adm.isBanco, novoIsBanco);
+
       const novoSalario =
         dto.vagaFolha?.salario === undefined
           ? (vaga?.salario ?? null)
@@ -481,7 +585,7 @@ export class AdmissoesService {
 
       // Recalcula o sinalizador (F5) com os valores efetivos.
       const sinalizador = calcSinalizadorPreenchimento({
-        candidato: { nome: candidato?.nome ?? "", cpf: adm.candidatoCpf },
+        candidato: { nome: novoNomeCandidato, cpf: adm.candidatoCpf },
         codCliente: adm.codCliente,
         cargoId: adm.cargoId,
         dataAdmissao: novaDataAdmissao ?? undefined,
@@ -494,14 +598,26 @@ export class AdmissoesService {
         .set({
           tipoContrato: novoTipoContrato,
           dataAdmissao: novaDataAdmissao,
-          matricula: dto.matricula === undefined ? adm.matricula : orNull(dto.matricula),
-          farolGlobal: (dto.farolGlobal as FarolGlobal) ?? adm.farolGlobal,
-          isBanco: dto.isBanco === undefined ? adm.isBanco : dto.isBanco,
+          matricula: novaMatricula,
+          farolGlobal: novoFarol,
+          isBanco: novoIsBanco,
           sinalizadorPreenchimento: sinalizador,
           atualizadoEm: new Date(),
         })
         .where(eq(admissoes.id, id))
         .returning({ id: admissoes.id, sinalizador: admissoes.sinalizadorPreenchimento });
+
+      if (logs.length > 0) {
+        await tx.insert(candidatoAlteracoesLog).values(
+          logs.map((l) => ({
+            admissaoId: id,
+            campo: l.campo,
+            valorAnterior: l.valorAnterior,
+            valorNovo: l.valorNovo,
+            autorId: user?.id ?? null,
+          })),
+        );
+      }
 
       return { admissaoId: upd.id, sinalizador: upd.sinalizador };
     });
