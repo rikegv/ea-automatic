@@ -1,6 +1,14 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import type { Papel } from "@ea/shared-types";
 import { apiFetch } from "./api";
 
@@ -33,6 +41,11 @@ type LoginResponse = { accessToken: string; user: SessionUser };
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>({ user: null, token: null, loading: true });
 
+  // Espelha o token corrente num ref para os callbacks estáveis (deps []) sempre lerem o valor
+  // atual, sem fechar sobre um `state` defasado. Necessário no `trocarSenha` (senha temporária).
+  const tokenRef = useRef<string | null>(null);
+  tokenRef.current = state.token;
+
   // Restaura a sessão pelo refresh token (cookie httpOnly) ao montar.
   useEffect(() => {
     apiFetch<LoginResponse>("/auth/refresh", { method: "POST" })
@@ -54,9 +67,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const trocarSenha = useCallback(async (senhaAtual: string, novaSenha: string) => {
+    // /auth/trocar-senha NÃO é @Public — exige o Bearer. Enviamos o token corrente (via ref),
+    // senão o backend responde 401 "Token de acesso ausente" no primeiro acesso (senha temporária).
     const r = await apiFetch<LoginResponse>("/auth/trocar-senha", {
       method: "POST",
       body: { senhaAtual, novaSenha },
+      token: tokenRef.current ?? undefined,
     });
     setState({ user: r.user, token: r.accessToken, loading: false });
   }, []);
