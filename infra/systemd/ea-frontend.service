@@ -1,0 +1,18 @@
+[Unit]
+Description=EA AUTOMATIC - frontend (Next.js prod, 0.0.0.0:3010)
+After=network-online.target ea-backend.service
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=/home/henrique/apps/ea-automatic/apps/frontend
+Environment=NODE_ENV=production
+Environment=PATH=/home/henrique/.nvm/versions/node/v20.20.2/bin:/usr/local/bin:/usr/bin:/bin
+# next start -p 3010 (bind 0.0.0.0 por padrão -> alcançável pela VPN).
+ExecStart=/home/henrique/.nvm/versions/node/v20.20.2/bin/node node_modules/next/dist/bin/next start -p 3010
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target
