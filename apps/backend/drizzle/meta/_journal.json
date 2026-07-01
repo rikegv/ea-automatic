@@ -99,6 +99,13 @@
       "when": 1782915191993,
       "tag": "0013_jazzy_shadow_king",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1782924618242,
+      "tag": "0014_bent_vampiro",
+      "breakpoints": true
     }
   ]
 }

@@ -1380,3 +1380,11 @@ segurança** (governança, à decisão do produto): (1) `candidato_alteracoes_lo
 `ON DELETE cascade` → excluir a admissão apaga a trilha de edição (distinta do log de dupla correção,
 que é permanente); (2) um MASTER pode se auto-promover a SUPER_ADMIN via `admin/usuarios` (dentro da
 fronteira de confiança admin). Liberado para `READY_gestao-usuarios` → merge na main → push.
+
+**Ajustes de governança pós-merge (2026-07-01, aprovados pelo diretor; commit direto na main):**
+(1) `candidato_alteracoes_log.admissao_id` → **`ON DELETE set null`** + coluna nullable (migration 0014):
+a trilha de edição (quem/quando/campo/valores) **sobrevive** à exclusão da admissão; perde-se só o
+vínculo. (2) **Anti auto-promoção:** `UsersService.atualizar` agora rejeita (403) qualquer alteração do
+PRÓPRIO papel (`id === solicitante` com `papel` diferente) — só outro Super Admin muda o papel de um
+usuário, nunca sobre si mesmo. 2 testes novos (bloqueio próprio + outro Super Admin promove). Verde:
+typecheck + lint + 189 testes.

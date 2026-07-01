@@ -427,9 +427,9 @@ export const candidatoAlteracoesLog = pgTable(
   "candidato_alteracoes_log",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    admissaoId: uuid("admissao_id")
-      .notNull()
-      .references(() => admissoes.id, { onDelete: "cascade" }),
+    // ON DELETE SET NULL (governança): a trilha de edição SOBREVIVE se a admissão for excluída depois
+    // (quem/quando/campo/valores permanecem para auditoria; perde-se só o vínculo com a admissão).
+    admissaoId: uuid("admissao_id").references(() => admissoes.id, { onDelete: "set null" }),
     campo: varchar("campo", { length: 60 }).notNull(),
     valorAnterior: text("valor_anterior"),
     valorNovo: text("valor_novo"),

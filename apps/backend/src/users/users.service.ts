@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Inject,
   Injectable,
   NotFoundException,
@@ -84,6 +85,14 @@ export class UsersService {
 
     if (dto.ativo === false && id === solicitanteId) {
       throw new BadRequestException("Você não pode desativar a si mesmo");
+    }
+
+    // Governança: ninguém altera o PRÓPRIO papel (evita auto-promoção a SUPER_ADMIN). A mudança de
+    // papel de um usuário só pode ser feita por OUTRO usuário (Super Admin), nunca sobre si mesmo.
+    if (dto.papel !== undefined && id === solicitanteId && dto.papel !== alvo.papel) {
+      throw new ForbiddenException(
+        "Você não pode alterar o próprio papel; solicite a outro Super Admin",
+      );
     }
 
     const patch: Partial<typeof usuarios.$inferInsert> = { atualizadoEm: new Date() };

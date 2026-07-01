@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException } from "@nestjs/common";
+import { BadRequestException, ConflictException, ForbiddenException } from "@nestjs/common";
 import * as argon2 from "argon2";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { UsersService } from "./users.service";
@@ -132,6 +132,25 @@ describe("UsersService (OST — gestão de usuários)", () => {
     const r = await svc.atualizar("u-1", { ativo: false }, "admin-9");
     expect(h.capturas.update.set?.ativo).toBe(false);
     expect(r.ativo).toBe(false);
+  });
+
+  it("atualizar: bloqueia auto-alteração do próprio papel (anti auto-promoção) → 403", async () => {
+    const h = makeDb();
+    h.findFirst.mockResolvedValue({ ...ROW, id: "u-1", papel: "MASTER" });
+    const svc = new UsersService(h.db as never);
+    await expect(svc.atualizar("u-1", { papel: "SUPER_ADMIN" }, "u-1")).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+  });
+
+  it("atualizar: OUTRO Super Admin PODE alterar o papel do usuário", async () => {
+    const h = makeDb();
+    h.findFirst.mockResolvedValue({ ...ROW, id: "u-1", papel: "MASTER" });
+    h.setUpdateRow({ ...ROW, id: "u-1", papel: "SUPER_ADMIN" });
+    const svc = new UsersService(h.db as never);
+    const r = await svc.atualizar("u-1", { papel: "SUPER_ADMIN" }, "super-9");
+    expect(h.capturas.update.set?.papel).toBe("SUPER_ADMIN");
+    expect(r.papel).toBe("SUPER_ADMIN");
   });
 
   it("atualizar: e-mail já usado por outro → 409", async () => {
