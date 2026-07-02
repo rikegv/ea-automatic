@@ -1,6 +1,19 @@
 #!/usr/bin/env bash
 # install-pandape-cron.sh — EA AUTOMATIC / INT-1 Pandapé (Fase 5).
 #
+# ┌───────────────────────────────────────────────────────────────────────────┐
+# │ DEPRECADO (OST-EA-WEBHOOK-PANDAPE) — NÃO INSTALAR.                          │
+# │                                                                            │
+# │ A DESCOBERTA de novos candidatos passou a ser via WEBHOOK RECEPTOR         │
+# │ (POST /api/webhooks/pandape), que substitui o cron-pull de descoberta.     │
+# │ A API v1 do Pandapé não tem endpoint de descoberta, então `listarMudancas`│
+# │ já é inerte (retorna []) — este cron não descobriria nada.                 │
+# │                                                                            │
+# │ O endpoint /internal/pandape/tick e o código do worker PERMANECEM no lugar,│
+# │ inertes, úteis só para um eventual RE-SYNC pontual de ids já conhecidos.   │
+# │ Este script fica versionado apenas como referência histórica.              │
+# └───────────────────────────────────────────────────────────────────────────┘
+#
 # Instala (idempotente) UMA entrada de crontab para o usuário corrente que
 # dispara o tick da integração Pandapé a cada 5 min, das 07h às 23h, todos os
 # dias. O modelo é JOB AGENDADO (cron), não webhook (§A.5/§A.8).
