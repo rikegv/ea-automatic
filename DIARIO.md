@@ -1458,3 +1458,63 @@ OriginGuard intactos) ✅ · erro de credenciais sem quebrar layout ✅ · respo
 lint/typecheck/test verdes ✅ · logo real em disco ✅ · validação visual APROVADA ✅ · tester PASS ✅ · segurança
 APROVADO ✅. Liberado para `READY_ola-tela-login` → merge na main → push. Publicação em :3010 (`deploy-local.sh`)
 é passo deliberado separado, à decisão do diretor.
+
+---
+
+## 2026-07-02 — Webhook receptor do Pandapé (OST-EA-WEBHOOK-PANDAPE / INT-1)
+
+Branch `OST-EA-WEBHOOK-PANDAPE`. **Decisão do diretor: a integração Pandapé passa a ser via WEBHOOK, não
+cron-pull** (o Fernando monta a rede/proxy em paralelo; construímos o lado do EA para estar pronto). Backend
+pelo agente `backend`; gate por `tester` + `seguranca`. Sem UI → sem validação visual (§A.0 N/A).
+
+### O que foi construído (reúso máximo, zero duplicação da cadeia da Fase 5)
+- **Endpoint** `POST /api/webhooks/pandape` (`pandape-webhook.controller.ts`, `@Public()` só p/ pular o JWT):
+  recebe o evento "Candidato enviado para admissão" (payload traz `IdPreCollaborator`, confirmado pelo suporte
+  André/Pandapé) → valida origem → extrai o id (tolerante a casing, `dto/pandape-webhook.dto.ts`) → **enfileira**
+  na fila existente → responde **202** rápido, sem aguardar o enriquecimento. O worker da Fase 5
+  (`processarCandidato`) faz enriquecimento (GET PreCollaborator/Match/Client) + idempotência + backoff —
+  **nada dessa lógica foi tocado**.
+- **Idempotência (§2):** reusa o unique `idPrecollaborator` em `integracao_pandape` + `jobId cand:${id}` na fila.
+  Webhook duplicado (o Pandapé pode reenviar) → dois enfileiramentos → uma admissão. Sem duplicação.
+- **Auth de origem (`pandape-webhook.guard.ts`, fail-closed):** dois mecanismos config-driven, autoriza com ≥1
+  configurado satisfeito — **token compartilhado** (`PANDAPE_WEBHOOK_TOKEN`, header `x-pandape-webhook-token`,
+  comparação constante-tempo com `crypto.timingSafeEqual` + guarda de tamanho) **ou allowlist de IP**
+  (`PANDAPE_WEBHOOK_IPS`, parse manual do `X-Forwarded-For` porque não há `trust proxy`; fallback
+  `socket.remoteAddress`; normaliza IPv6-mapped). Sem nenhum configurado → **401** (rota nasce fechada, pronta
+  porém inerte, como o resto da INT-1). Ponto de extensão para **HMAC de assinatura** deixado comentado, caso o
+  suporte confirme que o Pandapé assina o payload. Envs adicionados ao `infra/.env.example`.
+- **Tratamento de falha (§4):** `enfileirarCandidato` passou a retornar `boolean` (false se a fila/Redis estiver
+  fora, com try/catch e log genérico). Fila fora → o controller responde **503** → o Pandapé reenvia (evento não
+  se perde). Id ausente → **400** (sem ecoar o corpo). Retry do enriquecimento já é coberto pelo backoff da fila
+  (5 tentativas, exponencial).
+- **Badge "Via Pandapé" (§5):** automático — a criação com `origem: PANDAPE` já liga o badge; nada a fazer.
+
+### Decisão sobre o cron-pull de descoberta (§3) — DEPRECADO
+O suporte oficial confirmou que **não existe endpoint de descoberta** na API do Pandapé; `listarMudancas()` já
+era inerte na API v1 e o crontab **não tinha entrada instalada**. Decisão: o cron-pull de **descoberta** fica
+**deprecado** — o webhook o substitui. `infra/install-pandape-cron.sh` recebeu cabeçalho de DEPRECAÇÃO (não
+instalar). A rota `/internal/pandape/tick` e o worker **permanecem no lugar, inertes**, úteis apenas para um
+eventual re-sync pontual de ids já conhecidos (mudança de etapa) — não removidos.
+
+### Condição de ATIVAÇÃO (bloqueia o smoke real, NÃO o merge — dependência de infra, §A.9)
+A segurança APROVOU o merge, mas registrou condição para quando o Fernando ligar o proxy externo (o smoke real
+será etapa futura, sem nova OST): (1) o backend **não** pode ser exposto direto (manter bind **loopback**
+`127.0.0.1:3011` — mitigação-chave já presente em `main.ts`; sem port-forward de 3011); (2) o proxy do Fernando
+**deve sobrescrever** o `X-Forwarded-For` com o IP real (`proxy_set_header X-Forwarded-For $remote_addr`),
+**nunca** append — senão a allowlist de IP é forjável; (3) recomendação forte: **ativar por token** como
+mecanismo primário (imune à topologia de rede), IP como defesa-em-profundidade, HMAC se o Pandapé assinar.
+Nota não-bloqueante: sem `trust proxy`, o throttler global chaveia pelo IP do proxy (cap agregado, não
+por-cliente) — condição pré-existente do app, fora do escopo deste PR.
+
+### Gate
+- **tester PASS:** typecheck 3 pacotes + `eslint .` limpo + testes verdes — shared-types 5, **backend 207**
+  (11 do guard + 7 do controller, +1 de casing adicionado pelo QA), frontend 13, ai-service 31. Idempotência da
+  Fase 5 (`pandape-sync.service.spec.ts`, 15) intacta.
+- **segurança APROVADO** (§A.6): fail-closed real; `timingSafeEqual` com guarda de tamanho; zero log de
+  token/IP/payload/CPF/URL; `@Public()` não afrouxa Origin/throttler; DTO permissivo sem prototype pollution
+  (só o `id` string é consumido adiante); nenhum arquivo de auth/RBAC tocado; bind loopback como mitigação.
+
+**DoD — final:** endpoint receptor criado e validando origem ✅ · reúso da cadeia de enriquecimento + idempotência ✅ ·
+decisão do cron-pull documentada ✅ · lint/typecheck/test verdes ✅ · teste com payload simulado (mock) ✅ · smoke real
+com o Fernando = etapa futura (sem nova OST) ✅ · tester PASS ✅ · segurança APROVADO ✅. Liberado para
+`READY_webhook-pandape` → merge na main → push. Rota nasce **fechada/inerte** até token ou IPs do Pandapé.

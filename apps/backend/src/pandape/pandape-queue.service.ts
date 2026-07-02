@@ -61,17 +61,31 @@ export class PandapeQueueService implements OnModuleInit, OnModuleDestroy {
     await this.queue.add(JOB_POLL_TICK, {});
   }
 
-  /** Enfileira um `sync-candidate` para 1 idPreCollaborator. No-op (logado) se a fila não subiu. */
-  async enfileirarCandidato(idPrecollaborator: string): Promise<void> {
+  /**
+   * Enfileira um `sync-candidate` para 1 idPreCollaborator.
+   * Retorna `true` se enfileirou; `false` se a fila não subiu (Redis fora no boot) OU se o
+   * `queue.add` lançou. O retorno permite ao webhook (INT-1) responder 503 em vez de perder o
+   * evento silenciosamente — o Pandapé reenvia (§A.5). O chamador do tick (loop) ignora o retorno.
+   */
+  async enfileirarCandidato(idPrecollaborator: string): Promise<boolean> {
     if (!this.queue) {
       this.logger.warn("enfileirarCandidato ignorado: fila indisponível.");
-      return;
+      return false;
     }
-    // jobId estável pelo idPreCollaborator: dedup de jobs em voo para o mesmo candidato.
-    await this.queue.add(
-      JOB_SYNC_CANDIDATE,
-      { idPrecollaborator } satisfies SyncCandidateJobData,
-      { jobId: `cand:${idPrecollaborator}` },
-    );
+    try {
+      // jobId estável pelo idPreCollaborator: dedup de jobs em voo para o mesmo candidato.
+      await this.queue.add(
+        JOB_SYNC_CANDIDATE,
+        { idPrecollaborator } satisfies SyncCandidateJobData,
+        { jobId: `cand:${idPrecollaborator}` },
+      );
+      return true;
+    } catch (err) {
+      // Sem vazar dados (§A.6): mensagem genérica, nunca o id/CPF.
+      this.logger.warn(
+        `Falha ao enfileirar sync-candidate: ${err instanceof Error ? err.message : "erro"}`,
+      );
+      return false;
+    }
   }
 }

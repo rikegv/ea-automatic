@@ -6,6 +6,8 @@ import { PandapeApiService } from "./pandape-api.service";
 import { PandapeController } from "./pandape.controller";
 import { PandapeQueueService } from "./pandape-queue.service";
 import { PandapeSyncService } from "./pandape-sync.service";
+import { PandapeWebhookController } from "./pandape-webhook.controller";
+import { PandapeWebhookGuard } from "./pandape-webhook.guard";
 
 /**
  * Módulo da integração Pandapé (Fase 5 / INT-1). Desacoplado do núcleo (§A.1): reusa
@@ -14,12 +16,13 @@ import { PandapeSyncService } from "./pandape-sync.service";
  */
 @Module({
   imports: [AdmissoesModule, AuditoriaModule],
-  controllers: [PandapeController],
+  controllers: [PandapeController, PandapeWebhookController],
   providers: [
     PandapeApiService,
     PandapeQueueService,
     PandapeSyncService,
     InternalTokenGuard,
+    PandapeWebhookGuard,
   ],
 })
 export class PandapeModule {}
