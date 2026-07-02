@@ -1388,3 +1388,73 @@ vínculo. (2) **Anti auto-promoção:** `UsersService.atualizar` agora rejeita (
 PRÓPRIO papel (`id === solicitante` com `papel` diferente) — só outro Super Admin muda o papel de um
 usuário, nunca sobre si mesmo. 2 testes novos (bloqueio próprio + outro Super Admin promove). Verde:
 typecheck + lint + 189 testes.
+
+---
+
+## 2026-07-02 — Nova tela de login / identidade visual (OST-EA-TELA-LOGIN)
+
+Branch `OST-EA-TELA-LOGIN`. Substitui a tela de login por uma identidade premium fiel ao HTML de
+referência aprovado pelo diretor (mesmo padrão do CentraFin, adaptado à marca/stack do EA).
+
+### 1. Reprodução visual (`apps/frontend/src/app/login/page.tsx`, reescrito)
+- Card **glassmorphism** em duas colunas (split 50/50 no desktop, coluna única no mobile via
+  `md:grid-cols-2`), sobre fundo **slate-950** com **3 orbes** de luz difusos (blur 140px) e **grid**
+  sutil (opacity 0.07). Dois orbes pulsam (`orb-pulse` 8s; o segundo com `animation-delay: 2.5s`).
+- Coluna esquerda: **logo com halo** (drop-shadow azul difuso) + **flutuação** (`float` 4s), título
+  "Bem-vindo ao **EA Automatic**" com gradiente azul→verde no nome, texto de apoio. Coluna direita:
+  formulário e-mail/senha.
+- **Ícones em SVG inline** (envelope, cadeado, olho mostrar/ocultar, alerta, escudo) — **sem fonte de
+  ícone externa** (robustez, sem dependência de CDN), conforme a OST.
+- **Animações** adicionadas ao `tailwind.config.ts` (`orb-pulse`, `float`, `fade-in-up`) — reutilizáveis;
+  sombras do botão (glow no hover/focus) e halo do logo como valores arbitrários do Tailwind.
+- **Decisão registrada:** a tela de login é uma **tela de marca dedicada** e renderiza **sempre no tema
+  escuro** (paleta fixa #22B0DB azul / #AAD12F verde), independente do `[data-theme]` do app — fiel à
+  referência (que é dark-only). Por isso o **ThemeToggle foi removido** desta tela (a referência não o
+  possui). A `/trocar-senha` **não** faz parte do escopo desta OST (segue no visual antigo); sugere-se
+  um follow-up para dar o mesmo tratamento e manter a coerência do fluxo de auth.
+
+### 2. Autenticação REAL preservada (nada da lógica mudou)
+- O submit chama `useAuth().login(email, password)` → **POST /auth/login** já existente (JWT HS256 +
+  refresh em cookie httpOnly + OriginGuard). Em erro, exibe o bloco **"Acesso Negado"** abaixo do
+  formulário (sem quebra de layout), com a mensagem da API (fallback "E-mail ou senha incorretos.").
+  Spinner no botão + dots "Autenticando…" durante a chamada.
+- **RBAC e troca obrigatória de senha intactos:** após login, `router.replace("/")`; o `(app)/layout`
+  redireciona para `/trocar-senha` quando `senhaTemporaria === true` (fluxo inalterado).
+- **Sem Google/SSO** — só a auth própria do EA.
+
+### 3. Sugestão registrada (não implementada nesta OST, por decisão do diretor)
+- Substituir a marca "EA AUTOMATIC" (quadro gradiente `Brand`) da **sidebar** pelo mesmo `logo-ea.png`,
+  para consistência de marca em todo o sistema. Fica como sugestão — aguarda decisão.
+
+### Pendências / status
+- **Logo (`public/logo-ea.png`): PENDENTE dos bytes reais.** O logo veio embutido no HTML como base64
+  (~20 KB); a reprodução manual do base64 é inconfiável (corromperia o PNG), então o arquivo precisa ser
+  colocado em disco a partir do `index.html` original para eu decodificar os bytes exatos. A página já
+  referencia `/logo-ea.png` (dimensionado por altura, `w-auto object-contain`) — só falta o arquivo.
+- **Verificação:** **prettier ✓ · typecheck (frontend) ✓ · lint ✓ · vitest 13/13 ✓**.
+
+**DoD — status:** tela nova substituindo a atual ✅ · login funcional (auth real, RBAC, troca de senha,
+OriginGuard intactos) ✅ · erro de credenciais sem quebrar layout ✅ · responsivo (grid → coluna única) ✅ ·
+ícones SVG inline ✅ · lint/typecheck/test verdes ✅ · **logo real em disco: PENDENTE** · **validação visual
+do diretor: PENDENTE** (parada obrigatória, §A.0) · gate fechado / flag `READY_`: **só após auditoria**.
+
+**Fechamento (2026-07-02):** logo real recebido (Opção B — diretor colocou `apps/frontend/public/logo-ea.png`,
+PNG 1024×1024 RGBA transparente, servido 200/`image/png`). **Validação visual do diretor APROVADA**: (a) identidade
+visual aprovada como está; (b) mantém **dark-only, sem toggle de tema** no login; (c) sem promover para :3010 agora
+— login funcional real fica para a origem correta na etapa de tester/segurança. Preview servido em dev na :3020
+(bind VPN) sem tocar a produção :3010.
+
+Gate de qualidade: **tester PASS** (typecheck 3 pacotes + `eslint .` limpo + **207 testes Node** [shared-types 5,
+frontend 13, backend 189] + **31 ai-service**; DoD coberta por `auth-context.spec.tsx` — login/trocarSenha ainda
+exercem o fluxo real; sem teste de render novo por falta de alias `@/` no vitest do frontend, decisão de QA
+registrada) e **segurança APROVADO** (§A.6: auth/OriginGuard/refresh-cookie/gate de senha temporária **intactos** —
+nenhum arquivo de auth tocado; zero `console.*`/storage/log de senha·CPF·token; mensagem de erro genérica do backend;
+sem segredo hardcoded, sem SSO/Google reintroduzido; toggle de senha e `autoComplete` adequados). Notas
+não-bloqueantes: (N1) `setSubmitting(false)` movido para o `catch` — no sucesso o botão fica desabilitado até o
+`router.replace("/")` (intencional, evita flash); (N2) `public/logo-ea.png` era untracked → **incluído no commit**.
+
+**DoD — final:** tela nova substituindo a atual ✅ · login funcional preservado (auth real, RBAC, troca de senha,
+OriginGuard intactos) ✅ · erro de credenciais sem quebrar layout ✅ · responsivo ✅ · ícones SVG inline ✅ ·
+lint/typecheck/test verdes ✅ · logo real em disco ✅ · validação visual APROVADA ✅ · tester PASS ✅ · segurança
+APROVADO ✅. Liberado para `READY_ola-tela-login` → merge na main → push. Publicação em :3010 (`deploy-local.sh`)
+é passo deliberado separado, à decisão do diretor.
