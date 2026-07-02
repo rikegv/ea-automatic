@@ -33,6 +33,26 @@ const config: Config = {
       borderRadius: {
         glass: "var(--r)",
       },
+      keyframes: {
+        // Animações da tela de login (OST-EA-TELA-LOGIN) — portadas 1:1 do HTML de referência.
+        "orb-pulse": {
+          "0%, 100%": { transform: "scale(1)", opacity: "0.85" },
+          "50%": { transform: "scale(1.12)", opacity: "1" },
+        },
+        float: {
+          "0%, 100%": { transform: "translateY(0)" },
+          "50%": { transform: "translateY(-12px)" },
+        },
+        "fade-in-up": {
+          from: { opacity: "0", transform: "translateY(18px)" },
+          to: { opacity: "1", transform: "translateY(0)" },
+        },
+      },
+      animation: {
+        "orb-pulse": "orb-pulse 8s ease-in-out infinite",
+        float: "float 4s ease-in-out infinite",
+        "fade-in-up": "fade-in-up 0.55s cubic-bezier(0.22, 1, 0.36, 1) forwards",
+      },
     },
   },
   plugins: [],
