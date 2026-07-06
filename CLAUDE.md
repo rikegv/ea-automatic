@@ -169,17 +169,23 @@ Administração de Cadastros (clientes, cargos, régua — restrito à administr
 ## A.5 — Integrações
 
 **INT-1 Pandapé (ATS).**
-- Entrada **por verificação periódica (pull agendado)** — *modelo adotado na Fase 5, em
-  substituição ao webhook/ingress originalmente previsto* (decisão do diretor + admin de infra:
-  elimina a exposição pública do servidor). Um **job agendado por cron na VM** dispara
-  `POST /internal/pandape/tick` (protegido por `X-Internal-Token`) **a cada 5 min, das 7h às 23h,
-  todos os dias** (`*/5 7-23 * * *`; fora da janela não executa). O tick consulta a API buscando
-  candidatos com mudanças desde a última verificação (novos envios para admissão e mudanças de
-  etapa em processos já conhecidos) e enfileira o processamento. Com o `IdPreCollaborator`, chama
-  `GET /v3/precollaborators/{id}` e puxa dados + links de documento. **Autenticação por
-  `PANDAPE_API_TOKEN`** (Bearer, via env; sem token a integração fica **pronta porém inerte**, sem
-  hardcode). *(O webhook G.Infor permanece intocável; o pivot para cron-pull dispensa o ingress
-  público da TI — antes pendência §A.9 da Fase 5.)*
+- Entrada **por webhook** — **modelo vigente** (decisão do diretor, commit `4f8e69e`, 02/07/2026).
+  O Pandapé emite o evento "Candidato enviado para admissão" (payload traz `IdPreCollaborator`,
+  confirmado pelo suporte); um **servidor intermediário na VPN (box do Fernando)** recebe e repassa
+  o `POST /api/webhooks/pandape` ao EA. O handler valida origem (`PandapeWebhookGuard`: header
+  `x-pandape-webhook-token` **ou** allowlist de IP via `X-Forwarded-For`; **fail-closed** → 401 sem
+  credencial), extrai o id, **enfileira** na fila BullMQ e responde rápido (202); o worker faz o
+  enriquecimento. Com o `IdPreCollaborator`, chama `GET .../precollaborators/{id}` e puxa dados +
+  links de documento. **Auth de origem por `PANDAPE_WEBHOOK_TOKEN`/`PANDAPE_WEBHOOK_IPS`; auth da
+  API Pandapé por `PANDAPE_API_TOKEN`** (Bearer, via env). Sem credencial a rota nasce **fechada/
+  inerte**, sem hardcode. *(O webhook G.Infor permanece intocável.)*
+- **Cron-pull de descoberta — DEPRECADO.** O desenho anterior (commit `3f95921`, 30/06/2026) previa
+  ingestão por verificação periódica (`POST /internal/pandape/tick`, `*/5 7-23 * * *`, protegido por
+  `X-Internal-Token`). Foi **substituído pelo webhook**: a **API v1 do Pandapé não tem endpoint de
+  listagem/descoberta de pré-colaboradores** (confirmado pelo suporte), então `listarMudancas()`
+  retorna `[]` e o cron não descobre nada sozinho. A rota `/internal/pandape/tick` e o worker
+  **permanecem no lugar, inertes**, úteis apenas para re-sync pontual de um id **já conhecido**
+  (mudança de etapa); `infra/install-pandape-cron.sh` está marcado como DEPRECADO (não instalar).
 - **Idempotência:** `integracao_pandape` registra o `IdPreCollaborator` (índice unique) de cada
   processado. Novo → cria Candidato+Admissão+Frentes (AUDITORIA+EXAME, regra 1)+Documentos pela
   régua; conhecido com etapa diferente → atualiza só a etapa; conhecido mesma etapa → no-op.
@@ -193,8 +199,9 @@ Administração de Cadastros (clientes, cargos, régua — restrito à administr
   (alimenta a F2 via staging efêmera), arquivar, descartar; **nunca persistir nem logar a URL**
   (LGPD §A.6).
 - **Cliente/Cargo:** quando o endpoint da vaga (`IdVacancy`) retorna cliente (nome/CNPJ) e cargo,
-  mapeia para `cod_cliente`+`cargo`; quando não resolve, a criação é **adiada** (o tick reabre)
-  em vez de inventar `cod_cliente` — depende do **de/para Pandapé→catálogo** (insumo do diretor,
+  mapeia para `cod_cliente`+`cargo`; quando não resolve, a criação é **adiada**
+  em vez de inventar `cod_cliente` — reprocessável quando o webhook reentregar / o dado chegar,
+  depende do **de/para Pandapé→catálogo** (insumo do diretor,
   §A.9, par com as regras de auditoria e o mapa de tipos de documento).
 
 **INT-2 Google Drive.** Service account com delegation (padrão CentraAtend). Prontuário nomeado
@@ -273,10 +280,12 @@ tem de ser bloqueado de fato. Disciplina de worktree: poda após merge, nada sob
 - **Fase 3 — Esteira e Frentes Paralelas:** faróis em abas (F8), F12, avanço por aba, ASO.
 - **Fase 4 — Motor de IA e Arquivamento:** auditoria incremental, staging, Drive, kit (F9).
   *Depende de: regras de auditoria, service account, árvore do Drive.*
-- **Fase 5 — Integração Pandapé:** job agendado (cron-pull), cliente da API, criação automática
-  idempotente, sincronização de etapa, pull de documentos para a F2, badge de origem.
-  *Modelo cron-pull em vez de webhook → **dispensa o ingress da TI**. Depende de:
-  `PANDAPE_API_TOKEN` (diretor) e do de/para Pandapé→catálogo (cliente/cargo/tipos de documento).*
+- **Fase 5 — Integração Pandapé:** webhook receptor (`POST /api/webhooks/pandape`), cliente da API,
+  criação automática idempotente, sincronização de etapa, pull de documentos para a F2, badge de origem.
+  *Modelo **webhook** (vigente, commit `4f8e69e`, 02/07/2026) — cron-pull de descoberta DEPRECADO por
+  limitação da API v1 (sem endpoint de listagem). Depende de: `PANDAPE_API_TOKEN` +
+  `PANDAPE_WEBHOOK_TOKEN`/`PANDAPE_WEBHOOK_IPS` (diretor/Fernando), do ingress na VPN (box do Fernando)
+  e do de/para Pandapé→catálogo (cliente/cargo/tipos de documento).*
 - **Fase 6 — Dashboards/BI.** *Depende de: definição dos dashboards.*
 
 Fases 0–3 são o núcleo, construível imediatamente. Insumos das fases 4–6 são reunidos pelo
@@ -289,8 +298,12 @@ diretor em paralelo à construção do núcleo.
 - Regras de auditoria documental (critério de aprovação da IA na F2) — pendência mais pesada.
 - Service account no projeto Google Cloud `ea-v2-automatic` (já existe) + habilitar APIs
   (Vertex AI API, Drive API) + definir árvore de pastas do Drive. *Necessário só na Fase 4.*
-- ~~Ingress público do webhook (TI).~~ **Dispensado na Fase 5** — o modelo passou a cron-pull
-  (verificação periódica), sem exposição pública.
+- **Ingress do webhook na VPN (Fernando).** O modelo vigente é **webhook** (commit `4f8e69e`,
+  02/07/2026): o box intermediário do Fernando (na VPN ZeroTier) repassa o POST do Pandapé ao EA.
+  Não é exposição pública do EA — o backend permanece **loopback** (`127.0.0.1:3011`); o ingress é o
+  proxy same-origin do Next (`0.0.0.0:3010`, rota `/api/webhooks/pandape`). *(A tentativa anterior de
+  dispensar o ingress via cron-pull — commit `3f95921`, 30/06 — foi revertida: a API v1 não descobre
+  pré-colaboradores.)*
 - **`PANDAPE_API_TOKEN`** (diretor solicita ao suporte Pandapé) + **de/para Pandapé→catálogo**
   (cliente/cargo via `IdVacancy` e tipos de documento). Sem o token a Fase 5 fica pronta porém
   inerte; sem o de/para, admissões com vaga não-mapeada são adiadas (não inventam `cod_cliente`).
