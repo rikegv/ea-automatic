@@ -27,7 +27,7 @@ import { PandapeWebhookGuard } from "./pandape-webhook.guard";
  * throttler globais permanecem intactos.
  *
  * IDEMPOTÊNCIA: o controller NÃO deduplica. Webhook duplicado é coberto rio abaixo pelo
- * `jobId: cand:${id}` (dedup de jobs em voo) + o unique `idPrecollaborator` em `integracao_pandape`
+ * `jobId: cand-${id}` (dedup de jobs em voo) + o unique `idPrecollaborator` em `integracao_pandape`
  * (uma admissão por pré-colaborador). Duas entregas do mesmo evento → dois enfileiramentos → um único
  * efeito. Ver `pandape-sync.service.spec.ts`.
  *

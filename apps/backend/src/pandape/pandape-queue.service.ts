@@ -74,10 +74,12 @@ export class PandapeQueueService implements OnModuleInit, OnModuleDestroy {
     }
     try {
       // jobId estável pelo idPreCollaborator: dedup de jobs em voo para o mesmo candidato.
+      // Separador "-" (não ":"): o BullMQ 5.x REJEITA custom jobId contendo ":" ("Custom Id
+      // cannot contain :"), o que fazia todo webhook real cair em 503 na fila. Ver INT-1/§A.5.
       await this.queue.add(
         JOB_SYNC_CANDIDATE,
         { idPrecollaborator } satisfies SyncCandidateJobData,
-        { jobId: `cand:${idPrecollaborator}` },
+        { jobId: `cand-${idPrecollaborator}` },
       );
       return true;
     } catch (err) {

@@ -93,7 +93,7 @@ describe("PandapeWebhookController — POST /api/webhooks/pandape (INT-1)", () =
   });
 
   it("(e) webhook duplicado: 2 chamadas → enfileira 2x e responde 202 (dedup é do jobId/unique, não do controller)", async () => {
-    // O controller NÃO deduplica: a dedup mora no jobId `cand:${id}` (jobs em voo) + no unique
+    // O controller NÃO deduplica: a dedup mora no jobId `cand-${id}` (jobs em voo) + no unique
     // `idPrecollaborator` (pandape-sync.service.spec.ts). Duas entregas → dois enfileiramentos → um efeito.
     const enfileirar = vi.fn().mockResolvedValue(true);
     const controller = controllerCom(enfileirar);
