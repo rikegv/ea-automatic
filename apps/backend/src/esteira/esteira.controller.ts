@@ -6,13 +6,17 @@ import {
   Patch,
   Post,
   Query,
+  Res,
+  StreamableFile,
   UploadedFile,
   UseInterceptors,
 } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
+import type { Response } from "express";
 import { CurrentUser } from "../auth/decorators";
 import type { AuthUser } from "../auth/auth.types";
 import { PatchStatusDto } from "./dto/patch-status.dto";
+import { RelatorioClinicaDto } from "./dto/relatorio-clinica.dto";
 import { EsteiraService } from "./esteira.service";
 
 /**
@@ -50,6 +54,30 @@ export class EsteiraController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.esteira.mudarStatus(frenteId, dto, user);
+  }
+
+  /**
+   * Relatório da clínica (preview JSON). Recebe um lote de admissões e devolve uma linha por
+   * candidato com empregador/CNPJ resolvidos (situação do vínculo). Operacional (COMUM).
+   */
+  @Post("relatorio-clinica/preview")
+  relatorioClinicaPreview(@Body() dto: RelatorioClinicaDto) {
+    return this.esteira.relatorioClinicaPreview(dto);
+  }
+
+  /**
+   * Relatório da clínica (download CSV). Mesmas colunas do preview; separador ';' + BOM UTF-8 para
+   * o Excel BR. §A.6: CPF/CNPJ vão só no arquivo, nunca em log.
+   */
+  @Post("relatorio-clinica")
+  async relatorioClinicaCsv(
+    @Body() dto: RelatorioClinicaDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<StreamableFile> {
+    const { conteudo, nomeArquivo } = await this.esteira.relatorioClinicaCsv(dto);
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${nomeArquivo}"`);
+    return new StreamableFile(Buffer.from(conteudo, "utf-8"));
   }
 
   /** Anexa o ASO do exame (só metadados — o binário não é persistido; §A.6). */

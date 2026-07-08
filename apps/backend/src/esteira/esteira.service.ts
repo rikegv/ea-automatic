@@ -5,7 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { and, asc, count, desc, eq, gte, ilike, inArray, lt, or } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, ilike, inArray, lt, or, sql } from "drizzle-orm";
 import { normalizeCpf, TERMO_APTO_SEM_ASO } from "@ea/shared-types";
 import type { AuthUser } from "../auth/auth.types";
 import type { Database } from "../db/client";
@@ -40,6 +40,7 @@ import {
   STATUS_CONCLUI,
 } from "../domain/esteira";
 import type { PatchStatusDto } from "./dto/patch-status.dto";
+import type { RelatorioClinicaDto } from "./dto/relatorio-clinica.dto";
 
 /** Mapeia o segmento de rota (`auditoria|exame|cadastro`) para o tipo de frente do domínio. */
 const ROTA_PARA_TIPO: Record<string, FrenteTipo> = {
@@ -856,4 +857,189 @@ export class EsteiraService {
 
     return { ok: true, aso: { nome, registradoEm } };
   }
+
+  /**
+   * Relatório da clínica — UMA linha por admissão do lote, no layout EXATO do MODELO_DE_AGENDAMENTO
+   * do diretor (colunas/ordem/nomes fixos, ver `COLUNAS_RELATORIO`). EMPRESA/CNPJ = empregador do
+   * vínculo (view `vw_vinculo_empresa_cnpj`; FOPAG = o próprio cliente); CNPJ CLIENTE = CNPJ do cliente.
+   *
+   * Preserva a ordem dos `admissaoIds`; ids inexistentes são ignorados em silêncio. §A.6/LGPD:
+   * CPF/CNPJ jamais são logados — só devolvidos para exibição/CSV que a clínica consome.
+   * `agendamento` sai VAZIO: a data do exame ainda não é modelada — é o campo que a clínica preenche.
+   */
+  async resolverLinhas(admissaoIds: string[]): Promise<LinhaRelatorioClinica[]> {
+    if (admissaoIds.length === 0) {
+      throw new BadRequestException("Informe ao menos uma admissão (admissaoIds).");
+    }
+
+    // Admissão + candidato + cargo + cliente + folha (setor). LEFT em folha (pode não existir).
+    const base = await this.db
+      .select({
+        admissaoId: admissoes.id,
+        nome: candidatos.nome,
+        cpf: candidatos.cpf,
+        dataNascimento: candidatos.dataNascimento,
+        cargo: cargos.nome,
+        codCliente: admissoes.codCliente,
+        cliente: clientes.razaoSocial,
+        cnpjCliente: clientes.cnpj,
+        regiao: clientes.descricaoRegiao,
+        regiaoCod: clientes.regiao,
+        setor: dadosVagaFolha.departamento,
+      })
+      .from(admissoes)
+      .innerJoin(candidatos, eq(admissoes.candidatoCpf, candidatos.cpf))
+      .innerJoin(cargos, eq(admissoes.cargoId, cargos.id))
+      .innerJoin(clientes, eq(admissoes.codCliente, clientes.codCliente))
+      .leftJoin(dadosVagaFolha, eq(dadosVagaFolha.admissaoId, admissoes.id))
+      .where(inArray(admissoes.id, admissaoIds));
+
+    // Empregador/CNPJ (EMPRESA/CNPJ) pela view — resolvido por cod_cliente. Raw sql (view fora do schema).
+    const codClientes = [...new Set(base.map((b) => b.codCliente))];
+    const viewMap = new Map<string, VwVinculoLinha>();
+    if (codClientes.length > 0) {
+      const rows = (await this.db.execute(sql`
+        SELECT cod_cliente, tipo_servico, empresa_resolvida, cnpj_resolvido
+        FROM vw_vinculo_empresa_cnpj
+        WHERE cod_cliente IN (${sql.join(
+          codClientes.map((c) => sql`${c}`),
+          sql`, `,
+        )})
+      `)) as unknown as VwVinculoLinha[];
+      for (const r of rows) viewMap.set(r.cod_cliente, r);
+    }
+
+    const porAdmissao = new Map<string, (typeof base)[number]>();
+    for (const b of base) porAdmissao.set(b.admissaoId, b);
+
+    // Preserva a ordem do input; ignora ids inexistentes silenciosamente.
+    const linhas: LinhaRelatorioClinica[] = [];
+    for (const id of admissaoIds) {
+      const b = porAdmissao.get(id);
+      if (!b) continue;
+      const vw = viewMap.get(b.codCliente);
+      // Estágio NÃO faz exame admissional → fora do relatório da clínica (§ decisão do diretor).
+      if (vw?.tipo_servico === "ESTAGIO") continue;
+      linhas.push({
+        admissaoId: b.admissaoId,
+        empresa: vw?.empresa_resolvida ?? "",
+        cnpj: vw?.cnpj_resolvido ?? "",
+        cod: b.codCliente,
+        cliente: b.cliente,
+        cnpjCliente: b.cnpjCliente ?? "",
+        nome: b.nome,
+        setor: b.setor ?? "",
+        cargo: b.cargo,
+        cpf: formatarCpf(b.cpf),
+        dataNascimento: formatarData(b.dataNascimento),
+        agendamento: "",
+        regiao: b.regiao ?? b.regiaoCod ?? "",
+      });
+    }
+    return linhas;
+  }
+
+  /** Preview do relatório da clínica (JSON) — mesma resolução do CSV. */
+  async relatorioClinicaPreview(dto: RelatorioClinicaDto): Promise<{ linhas: LinhaRelatorioClinica[] }> {
+    return { linhas: await this.resolverLinhas(dto.admissaoIds) };
+  }
+
+  /**
+   * CSV do relatório da clínica — layout MODELO_DE_AGENDAMENTO (mesmas colunas/ordem/nomes). Separador
+   * ';' (padrão BR/Excel), BOM UTF-8 + CRLF. O controller define os headers de download.
+   */
+  async relatorioClinicaCsv(dto: RelatorioClinicaDto): Promise<{ conteudo: string; nomeArquivo: string }> {
+    const linhas = await this.resolverLinhas(dto.admissaoIds);
+    const corpo = linhas.map((l) =>
+      [
+        l.empresa,
+        l.cnpj,
+        l.cod,
+        l.cliente,
+        l.cnpjCliente,
+        l.nome,
+        l.setor,
+        l.cargo,
+        l.cpf,
+        l.dataNascimento,
+        l.agendamento,
+        l.regiao,
+      ]
+        .map(escaparCsv)
+        .join(";"),
+    );
+    // BOM UTF-8 + CRLF (convenção do Excel para CSV).
+    const conteudo = "﻿" + [COLUNAS_RELATORIO.join(";"), ...corpo].join("\r\n") + "\r\n";
+    return { conteudo, nomeArquivo: `relatorio-clinica-${linhas.length}-candidatos.csv` };
+  }
+}
+
+/** Colunas do relatório da clínica — layout EXATO do MODELO_DE_AGENDAMENTO (ordem e nomes fixos). */
+const COLUNAS_RELATORIO = [
+  "EMPRESA",
+  "CNPJ",
+  "COD",
+  "CLIENTE",
+  "CNPJ CLIENTE",
+  "NOME",
+  "SETOR",
+  "CARGO",
+  "CPF",
+  "DATA DE NASCIMENTO",
+  "AGENDAMENTO",
+  "REGIÃO",
+] as const;
+
+/** Uma linha do relatório da clínica (preview JSON e CSV compartilham este formato). */
+export interface LinhaRelatorioClinica {
+  admissaoId: string;
+  empresa: string;
+  cnpj: string;
+  cod: string;
+  cliente: string;
+  cnpjCliente: string;
+  nome: string;
+  setor: string;
+  cargo: string;
+  cpf: string;
+  dataNascimento: string;
+  agendamento: string;
+  regiao: string;
+}
+
+/** Projeção da view `vw_vinculo_empresa_cnpj` usada pelo relatório. */
+interface VwVinculoLinha {
+  cod_cliente: string;
+  tipo_servico: string | null;
+  empresa_resolvida: string | null;
+  cnpj_resolvido: string | null;
+}
+
+/** Formata CPF real como 000.000.000-00 (só exibição/CSV — nunca logado, §A.6). */
+function formatarCpf(cpf: string): string {
+  const d = normalizeCpf(cpf);
+  if (d.length !== 11) return cpf;
+  return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`;
+}
+
+/** Data ISO (YYYY-MM-DD) → dd/mm/aaaa (padrão BR do modelo). Vazio se ausente. */
+function formatarData(iso: string | null): string {
+  if (!iso) return "";
+  const [ano, mes, dia] = iso.slice(0, 10).split("-");
+  return ano && mes && dia ? `${dia}/${mes}/${ano}` : "";
+}
+
+/**
+ * Escapa uma célula CSV: quoting quando há ';', aspas ou quebra de linha; E neutraliza injeção de
+ * fórmula (§ endurecimento de saída) — célula iniciando com = + - @ (ou tab/CR) é prefixada com `'`
+ * para o Excel/Sheets tratá-la como texto, não fórmula. NOME/SETOR/CARGO vêm de cadastro editável e o
+ * arquivo abre na clínica (parte externa).
+ */
+function escaparCsv(valor: string): string {
+  let v = valor ?? "";
+  if (/^[=+\-@\t\r]/.test(v)) v = `'${v}`;
+  if (/[";\r\n]/.test(v)) {
+    return `"${v.replace(/"/g, '""')}"`;
+  }
+  return v;
 }

@@ -45,3 +45,6 @@ apps/ai-service/.venv/
 
 # artefato de demo (PDF-mãe do kit F9) — não versionar
 apps/frontend/public/demo-kit-pdf-mae.pdf
+
+# amostra do relatório da clínica — gerada localmente, pode conter CNPJ de cliente (§A.6); não versionar
+relatorio-clinica-exemplo.csv

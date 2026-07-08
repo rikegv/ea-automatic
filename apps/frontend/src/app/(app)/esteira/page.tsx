@@ -7,7 +7,7 @@ import type {
   Origem,
   ResultadoAuditoria,
 } from "@ea/shared-types";
-import { apiFetch, apiUpload, ApiError } from "@/lib/api";
+import { apiFetch, apiUpload, apiDownloadPost, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/cn";
 import { PageHead } from "@/components/ui/PageHead";
@@ -183,6 +183,10 @@ export default function EsteiraPage() {
   const [pendItem, setPendItem] = useState<EsteiraItem | null>(null);
   const [editItem, setEditItem] = useState<EsteiraItem | null>(null);
   const [editFiltro, setEditFiltro] = useState<string[] | undefined>(undefined);
+  // Relatório da clínica (aba Exame) — seleção múltipla de admissões → CSV consolidado.
+  const [selecionados, setSelecionados] = useState<Set<string>>(new Set());
+  const [gerandoRelatorio, setGerandoRelatorio] = useState(false);
+  const [relatorioError, setRelatorioError] = useState<string | null>(null);
 
   const catMap = useMemo(() => {
     const m = new Map<string, StatusCat>();
@@ -237,6 +241,8 @@ export default function EsteiraPage() {
     setStatusFiltro("");
     setActionError(null);
     setFlash(null);
+    setSelecionados(new Set());
+    setRelatorioError(null);
     setAba(i);
   }
 
@@ -437,13 +443,69 @@ export default function EsteiraPage() {
   // recebem largura suficiente (pills não truncam; coluna de operação comporta Select + ações) e o
   // espaçamento fica equilibrado entre as abas (T1c).
   const gridCols = isExame
-    ? "minmax(0,1.5fr) minmax(0,1fr) minmax(0,0.9fr) 104px 124px 340px 40px"
+    ? "40px minmax(0,1.5fr) minmax(0,1fr) minmax(0,0.9fr) 104px 124px 340px 40px"
     : isAuditoria
       ? "minmax(0,1.5fr) minmax(0,1fr) minmax(0,0.9fr) 104px 124px 280px 40px"
       : "minmax(0,1.6fr) minmax(0,1.1fr) minmax(0,0.95fr) 108px 128px 176px 40px";
 
   function toggleStatusKpi(code: string) {
     setStatusFiltro((cur) => (cur === code ? "" : code));
+  }
+
+  // ── Relatório da clínica (aba Exame) ────────────────────────────────────────
+  // Após cada recarga da fila, poda da seleção os ids que saíram da lista (filtro/avanço).
+  useEffect(() => {
+    if (!isExame) return;
+    setSelecionados((cur) => {
+      if (cur.size === 0) return cur;
+      const validos = new Set(items.map((it) => it.admissaoId));
+      const next = new Set([...cur].filter((id) => validos.has(id)));
+      return next.size === cur.size ? cur : next;
+    });
+  }, [items, isExame]);
+
+  const todosSelecionados = items.length > 0 && items.every((it) => selecionados.has(it.admissaoId));
+  const algunsSelecionados = selecionados.size > 0 && !todosSelecionados;
+
+  function toggleSelecionado(admissaoId: string) {
+    setRelatorioError(null);
+    setSelecionados((cur) => {
+      const next = new Set(cur);
+      if (next.has(admissaoId)) next.delete(admissaoId);
+      else next.add(admissaoId);
+      return next;
+    });
+  }
+
+  function toggleSelecionarTodos() {
+    setRelatorioError(null);
+    setSelecionados((cur) =>
+      cur.size >= items.length ? new Set() : new Set(items.map((it) => it.admissaoId)),
+    );
+  }
+
+  async function gerarRelatorioClinica() {
+    const ids = [...selecionados];
+    if (ids.length === 0) return;
+    setGerandoRelatorio(true);
+    setRelatorioError(null);
+    try {
+      await apiDownloadPost(
+        "/esteira/relatorio-clinica",
+        { admissaoIds: ids },
+        "relatorio-clinica.csv",
+        token,
+      );
+      setFlash(
+        `Relatório da clínica gerado (${ids.length} ${ids.length === 1 ? "candidato" : "candidatos"}).`,
+      );
+    } catch (e) {
+      setRelatorioError(
+        e instanceof ApiError ? e.message : "Falha ao gerar o relatório da clínica.",
+      );
+    } finally {
+      setGerandoRelatorio(false);
+    }
   }
 
   return (
@@ -620,9 +682,66 @@ export default function EsteiraPage() {
         </p>
       )}
 
+      {/* ── Relatório da clínica (aba Exame): seleção múltipla → CSV ──────── */}
+      {isExame && (
+        <div className="mb-[14px] flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              className="btn-primary inline-flex items-center gap-2 px-4 py-2.5 text-sm disabled:opacity-50"
+              disabled={selecionados.size === 0 || gerandoRelatorio}
+              onClick={() => void gerarRelatorioClinica()}
+              title={
+                selecionados.size === 0
+                  ? "Selecione ao menos um candidato na fila"
+                  : "Baixar o CSV consolidado para a clínica"
+              }
+            >
+              {gerandoRelatorio ? <Spinner /> : <Icon name="doc" className="h-4 w-4" />}
+              {gerandoRelatorio
+                ? "Gerando…"
+                : `Gerar relatório clínica${selecionados.size > 0 ? ` (${selecionados.size})` : ""}`}
+            </button>
+            {selecionados.size > 0 && !gerandoRelatorio && (
+              <button
+                type="button"
+                className="text-[13px] text-dim underline-offset-2 hover:underline"
+                onClick={() => setSelecionados(new Set())}
+              >
+                Limpar seleção
+              </button>
+            )}
+          </div>
+          {relatorioError && (
+            <p
+              className="rounded-xl border border-[var(--border)] bg-[rgba(214,69,69,0.1)] px-3 py-2 text-sm text-danger"
+              role="alert"
+            >
+              {relatorioError}
+            </p>
+          )}
+        </div>
+      )}
+
       {/* ── Lista / faróis ───────────────────────────────────────────────── */}
       <GlassCard className="list">
         <div className="list-head" style={{ gridTemplateColumns: gridCols }}>
+          {isExame && (
+            <span className="flex items-center">
+              <input
+                type="checkbox"
+                className="h-4 w-4 cursor-pointer accent-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-40"
+                aria-label="Selecionar todos os candidatos da fila"
+                title="Selecionar todos"
+                disabled={items.length === 0}
+                checked={todosSelecionados}
+                ref={(el) => {
+                  if (el) el.indeterminate = algunsSelecionados;
+                }}
+                onChange={toggleSelecionarTodos}
+              />
+            </span>
+          )}
           <span>Candidato</span>
           <span>Cliente</span>
           <span>Cargo</span>
@@ -650,6 +769,17 @@ export default function EsteiraPage() {
             const pausado = isCadastro && item.disponivel === false;
             return (
               <div key={item.frenteId} className="row" style={{ gridTemplateColumns: gridCols }}>
+                {isExame && (
+                  <div className="flex items-center">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 cursor-pointer accent-[var(--accent)]"
+                      aria-label={`Selecionar ${item.candidatoNome} para o relatório da clínica`}
+                      checked={selecionados.has(item.admissaoId)}
+                      onChange={() => toggleSelecionado(item.admissaoId)}
+                    />
+                  </div>
+                )}
                 <div className="min-w-0">
                   <div className="flex min-w-0 items-center gap-1.5">
                     <span className="nm truncate">{item.candidatoNome}</span>

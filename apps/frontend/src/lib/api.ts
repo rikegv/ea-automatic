@@ -135,6 +135,67 @@ export async function apiDownload(
   URL.revokeObjectURL(url);
 }
 
+/** Extrai o filename de um header Content-Disposition (aspas opcionais, RFC5987 filename*). */
+function nomeDoContentDisposition(header: string | null, fallback: string): string {
+  if (!header) return fallback;
+  // filename*=UTF-8''nome.csv  (tem prioridade e vem URL-encoded)
+  const star = /filename\*=(?:UTF-8'')?([^;]+)/i.exec(header);
+  if (star?.[1]) {
+    try {
+      return decodeURIComponent(star[1].trim().replace(/^["']|["']$/g, ""));
+    } catch {
+      /* cai para o filename simples abaixo */
+    }
+  }
+  const plain = /filename=("?)([^";]+)\1/i.exec(header);
+  return plain?.[2]?.trim() || fallback;
+}
+
+/**
+ * POST com corpo JSON cuja resposta é um arquivo (ex.: relatório da clínica em CSV, Esteira/Exame).
+ * Diferente do `apiDownload` (GET, sem corpo): aqui enviamos `admissaoIds` e baixamos o blob,
+ * honrando o filename do header Content-Disposition (fallback quando ausente).
+ */
+export async function apiDownloadPost(
+  path: string,
+  body: unknown,
+  fallbackName: string,
+  token?: string | null,
+): Promise<void> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  const res = await fetch(`${BASE}${path}`, {
+    method: "POST",
+    headers,
+    credentials: "include",
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    let message = res.statusText;
+    try {
+      const j = text ? JSON.parse(text) : null;
+      const raw = j?.message ?? j?.error;
+      if (raw) message = Array.isArray(raw) ? raw.join(", ") : String(raw);
+    } catch {
+      /* corpo não-JSON — mantém statusText */
+    }
+    throw new ApiError(message, res.status);
+  }
+
+  const name = nomeDoContentDisposition(res.headers.get("Content-Disposition"), fallbackName);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 /**
  * Abre um arquivo binário autenticado numa nova aba (ex.: pré-visualização inline do kit, F9).
  * Como o endpoint exige Authorization Bearer, não dá para apontar a aba direto na URL — busca-se o
