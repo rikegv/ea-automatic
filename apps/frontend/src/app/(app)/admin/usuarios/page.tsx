@@ -36,14 +36,14 @@ const PAPEL_OPTIONS = [
 const EMPTY = { nome: "", email: "", papel: "COMUM" as Papel };
 
 function fmtData(d?: string | null): string {
-  if (!d) return "—";
+  if (!d) return "não informado";
   const dt = new Date(d);
-  return Number.isNaN(+dt) ? "—" : dt.toLocaleDateString("pt-BR");
+  return Number.isNaN(+dt) ? "não informado" : dt.toLocaleDateString("pt-BR");
 }
 
 /**
  * Bloco copiável da senha temporária: aparece após criar usuário ou resetar senha. A senha só é
- * exibida uma vez (o backend não a persiste em claro) — o admin a entrega por fora do sistema.
+ * exibida uma vez (o backend não a persiste em claro): o admin a entrega por fora do sistema.
  */
 function SenhaTemporaria({ senha, onFechar }: { senha: string; onFechar: () => void }) {
   const [copiado, setCopiado] = useState(false);
@@ -53,7 +53,7 @@ function SenhaTemporaria({ senha, onFechar }: { senha: string; onFechar: () => v
       setCopiado(true);
       setTimeout(() => setCopiado(false), 2000);
     } catch {
-      /* clipboard indisponível — o admin pode selecionar o texto manualmente */
+      /* clipboard indisponível, o admin pode selecionar o texto manualmente */
     }
   }
   return (
@@ -89,7 +89,7 @@ function SenhaTemporaria({ senha, onFechar }: { senha: string; onFechar: () => v
 }
 
 /**
- * Admin — Gestão de usuários (OST-EA-GESTAO-USUARIOS). Criação com senha temporária, edição de
+ * Admin: Gestão de usuários (OST-EA-GESTAO-USUARIOS). Criação com senha temporária, edição de
  * dados/papel, ativar/desativar (soft delete = bloqueio de login, preserva histórico) e reset de
  * senha. Restrito a Master / Super Admin (gating herdado do AdminLayout).
  */
@@ -220,7 +220,7 @@ export default function UsuariosPage() {
       <PageHead
         eyebrow="Administração"
         title="Usuários"
-        subtitle="Cadastro, papéis e acesso — senha temporária na criação e no reset; desativar bloqueia o login sem apagar o histórico."
+        subtitle="Cadastro, papéis e acesso: senha temporária na criação e no reset; desativar bloqueia o login sem apagar o histórico."
       />
 
       {/* ── Criar usuário ──────────────────────────────────────────────── */}

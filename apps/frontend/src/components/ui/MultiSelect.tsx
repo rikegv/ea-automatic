@@ -18,7 +18,7 @@ function norm(s: string): string {
 }
 
 /**
- * Seletor MÚLTIPLO do design system (W3 — benefícios). Mesmo padrão do `Select`: botão `.ds-select`
+ * Seletor MÚLTIPLO do design system (W3, benefícios). Mesmo padrão do `Select`: botão `.ds-select`
  * + popover glass em portal (z-60, sobrepõe). Busca interna, marca/desmarca por item, mostra as
  * escolhas como chips. Com `onAdd` (admin), cria um item novo a partir da busca.
  */

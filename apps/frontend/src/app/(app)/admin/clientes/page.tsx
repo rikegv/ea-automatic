@@ -103,7 +103,7 @@ export default function ClientesPage() {
     if (token) void load();
   }, [token, load]);
 
-  // Opções de vínculo — buscadas uma vez e cacheadas em estado.
+  // Opções de vínculo: buscadas uma vez e cacheadas em estado.
   useEffect(() => {
     if (!token) return;
     apiFetch<VinculoOpcao[]>("/admin/clientes/vinculo-opcoes", { token })
@@ -156,7 +156,7 @@ export default function ClientesPage() {
     setError(null);
     try {
       if (editando) {
-        // EDITAR — o codCliente (chave) não muda; envia só os campos editáveis.
+        // EDITAR: o codCliente (chave) não muda; envia só os campos editáveis.
         await apiFetch(`/admin/clientes/${encodeURIComponent(editando)}`, {
           method: "PATCH",
           token,
@@ -331,7 +331,7 @@ export default function ClientesPage() {
         </div>
       </GlassCard>
 
-      {/* Filtros da lista — status (ativos/inativos/todos) + tipo, busca e pendência (E lógico). */}
+      {/* Filtros da lista: status (ativos/inativos/todos) + tipo, busca e pendência (E lógico). */}
       <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
         {(["ativos", "inativos", "todos"] as Filtro[]).map((f) => (
           <button
@@ -456,7 +456,7 @@ function cnpjVinculoLabel(c: Cliente) {
 }
 
 function tipoServicoPill(c: Cliente) {
-  if (!c.tipoServicoRotulo) return <span className="text-faint">—</span>;
+  if (!c.tipoServicoRotulo) return <span className="text-faint">não informado</span>;
   return <Pill tone={tipoTone(c.tipoServico)}>{c.tipoServicoRotulo}</Pill>;
 }
 
@@ -490,10 +490,10 @@ function FragmentRow({
           </button>
         </td>
         <td className="font-mono">{c.codCliente}</td>
-        <td>{c.razaoSocial}</td>
-        <td>{c.cnpj ?? "—"}</td>
-        <td>{c.nomeOperacao ?? "—"}</td>
-        <td>{c.empresaVinculo ?? <span className="text-faint">—</span>}</td>
+        <td className="text-dim">{c.razaoSocial}</td>
+        <td>{c.cnpj ?? "não informado"}</td>
+        <td className="font-semibold">{c.nomeOperacao ?? c.razaoSocial}</td>
+        <td>{c.empresaVinculo ?? <span className="text-faint">não informado</span>}</td>
         <td>{cnpjVinculoLabel(c)}</td>
         <td>{tipoServicoPill(c)}</td>
         <td>
@@ -529,7 +529,7 @@ function FragmentRow({
             <div className="m-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-4">
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 <Ficha rotulo="Empregador (Soulan)">
-                  {c.empresaVinculo ?? <span className="text-faint">—</span>}
+                  {c.empresaVinculo ?? <span className="text-faint">não informado</span>}
                 </Ficha>
                 <Ficha rotulo="CNPJ do vínculo">{cnpjVinculoLabel(c)}</Ficha>
                 <Ficha rotulo="Tipo de serviço">{tipoServicoPill(c)}</Ficha>
@@ -538,10 +538,10 @@ function FragmentRow({
                 </Ficha>
                 <Ficha rotulo="Razão social">{c.razaoSocial}</Ficha>
                 <Ficha rotulo="CNPJ do cliente">
-                  {c.cnpj ? <span className="font-mono">{c.cnpj}</span> : <span className="text-faint">—</span>}
+                  {c.cnpj ? <span className="font-mono">{c.cnpj}</span> : <span className="text-faint">não informado</span>}
                 </Ficha>
                 <Ficha rotulo="Nome Operação">
-                  {c.nomeOperacao ?? <span className="text-faint">—</span>}
+                  {c.nomeOperacao ?? <span className="text-faint">não informado</span>}
                 </Ficha>
                 <Ficha rotulo="Status">{c.ativo ? "Ativo" : "Inativo"}</Ficha>
               </div>

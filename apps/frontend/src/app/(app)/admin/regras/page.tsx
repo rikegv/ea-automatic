@@ -19,7 +19,7 @@ interface TipoDocumento {
 }
 
 /**
- * Admin — Regras de auditoria por tipo de documento (Fase 4 / INT-3). A régua diz QUAIS documentos
+ * Admin: Regras de auditoria por tipo de documento (Fase 4 / INT-3). A régua diz QUAIS documentos
  * são exigidos; aqui o admin define SE cada documento está válido (critério textual que o motor de IA
  * aplica). CRUD restrito a Master/Super Admin (gating no AdminLayout). Sem PII.
  */
@@ -133,7 +133,7 @@ export default function RegrasAuditoriaPage() {
       <PageHead
         eyebrow="Cadastros"
         title="Regras de auditoria"
-        subtitle="Critério de validade de cada tipo de documento — aplicado pelo motor de IA na auditoria (F2)."
+        subtitle="Critério de validade de cada tipo de documento, aplicado pelo motor de IA na auditoria (F2)."
       />
 
       {semTipos && (

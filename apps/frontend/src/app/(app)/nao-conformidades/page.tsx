@@ -65,13 +65,13 @@ const SIT_TONE: Record<Situacao, PillTone> = {
 };
 
 function fmtData(d?: string | null): string {
-  if (!d) return "—";
+  if (!d) return "não informado";
   const dt = new Date(d);
-  return Number.isNaN(+dt) ? "—" : dt.toLocaleDateString("pt-BR");
+  return Number.isNaN(+dt) ? "não informado" : dt.toLocaleDateString("pt-BR");
 }
-// Data de admissão é um `date` (YYYY-MM-DD) — formata por partes p/ não sofrer fuso.
+// Data de admissão é um `date` (YYYY-MM-DD): formata por partes p/ não sofrer fuso.
 function fmtDataAdmissao(d?: string | null): string {
-  if (!d) return "—";
+  if (!d) return "não informado";
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(d);
   return m ? `${m[3]}/${m[2]}/${m[1]}` : fmtData(d);
 }
@@ -127,7 +127,7 @@ export default function NaoConformidadesPage() {
   const consultorOpts = useMemo(() => {
     const opts = (data?.contadores ?? [])
       .filter((c) => c.consultorId)
-      .map((c) => ({ value: c.consultorId as string, label: c.consultorNome ?? "—" }));
+      .map((c) => ({ value: c.consultorId as string, label: c.consultorNome ?? "não informado" }));
     return [{ value: "", label: "Todos" }, ...opts];
   }, [data]);
 
@@ -333,7 +333,7 @@ export default function NaoConformidadesPage() {
                 <div className="min-w-0">
                   <div className="nm truncate">{nc.candidatoNome}</div>
                   <div className="meta truncate" title={nc.detalhe ?? ""}>
-                    {nc.detalhe ?? "—"}
+                    {nc.detalhe ?? "não informado"}
                   </div>
                 </div>
                 <div className="min-w-0">
@@ -344,7 +344,7 @@ export default function NaoConformidadesPage() {
                   <Pill tone="nt">{nc.tipo}</Pill>
                   <div className="meta mt-1 truncate">{NC_TIPO_ROTULO[nc.tipo]}</div>
                 </div>
-                <div className="meta truncate">{nc.consultorNome ?? "—"}</div>
+                <div className="meta truncate">{nc.consultorNome ?? "não informado"}</div>
                 <div className="meta">{fmtDataAdmissao(nc.dataAdmissao)}</div>
                 <div className="meta">{fmtData(nc.criadoEm)}</div>
 
@@ -380,7 +380,7 @@ export default function NaoConformidadesPage() {
                         type="button"
                         className="btn-primary px-2.5 py-1.5 text-[12px] disabled:opacity-50"
                         disabled={acting}
-                        onClick={() => patch(nc.id, "/liberacao/decisao", { aprovar: true }, "Liberação aprovada — exceção reconhecida.")}
+                        onClick={() => patch(nc.id, "/liberacao/decisao", { aprovar: true }, "Liberação aprovada: exceção reconhecida.")}
                       >
                         Aprovar
                       </button>
@@ -388,7 +388,7 @@ export default function NaoConformidadesPage() {
                         type="button"
                         className="btn-secondary px-2.5 py-1.5 text-[12px] disabled:opacity-50"
                         disabled={acting}
-                        onClick={() => patch(nc.id, "/liberacao/decisao", { aprovar: false }, "Liberação reprovada — volta a NC comum.")}
+                        onClick={() => patch(nc.id, "/liberacao/decisao", { aprovar: false }, "Liberação reprovada: volta a NC comum.")}
                       >
                         Reprovar
                       </button>
@@ -569,7 +569,7 @@ function RegistrarNc3Modal({
     <Modal onClose={onClose} className="max-w-lg" ariaLabel="Registrar NC de Cadastro">
         <h3 className="text-[17px] font-extrabold">Registrar NC de Cadastro</h3>
         <p className="psub !mb-3 mt-1">
-          Cadastro incompleto (NC-3). As flags são manuais nesta fase — kit (F9) e assinatura
+          Cadastro incompleto (NC-3). As flags são manuais nesta fase: kit (F9) e assinatura
           (Clicksign) ainda não foram construídos; a detecção será automática quando existirem.
         </p>
 

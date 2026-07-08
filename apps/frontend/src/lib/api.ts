@@ -21,7 +21,7 @@ export interface ApiOptions {
 /**
  * Bloqueio de senha temporária (OST-EA-GESTAO-USUARIOS): o backend responde 403 com código
  * `SENHA_TEMPORARIA` em qualquer rota enquanto o usuário não trocar a senha. Redirecionamos para
- * a tela de troca — reforço ao guard do (app)/layout para chamadas disparadas fora do fluxo de
+ * a tela de troca: reforço ao guard do (app)/layout para chamadas disparadas fora do fluxo de
  * navegação. Evita loop quando já estamos em /trocar-senha ou /login.
  */
 function isSenhaTemporaria(status: number, data: unknown): boolean {
@@ -67,7 +67,7 @@ export async function apiFetch<T = unknown>(path: string, opts: ApiOptions = {})
 }
 
 /**
- * Upload multipart same-origin (Fase 4 — auditoria documental / kit). Não fixa Content-Type:
+ * Upload multipart same-origin (Fase 4, auditoria documental / kit). Não fixa Content-Type:
  * o browser injeta o boundary do FormData. Resposta sempre JSON (o binário de documento é efêmero
  * no backend; o front nunca o recebe de volta aqui). Para baixar arquivo, ver `apiDownload`.
  */
@@ -119,7 +119,7 @@ export async function apiDownload(
       const raw = j?.message ?? j?.error;
       if (raw) message = Array.isArray(raw) ? raw.join(", ") : String(raw);
     } catch {
-      /* corpo não-JSON — mantém statusText */
+      /* corpo não-JSON, mantém statusText */
     }
     throw new ApiError(message, res.status);
   }
@@ -179,7 +179,7 @@ export async function apiDownloadPost(
       const raw = j?.message ?? j?.error;
       if (raw) message = Array.isArray(raw) ? raw.join(", ") : String(raw);
     } catch {
-      /* corpo não-JSON — mantém statusText */
+      /* corpo não-JSON, mantém statusText */
     }
     throw new ApiError(message, res.status);
   }
@@ -198,7 +198,7 @@ export async function apiDownloadPost(
 
 /**
  * Abre um arquivo binário autenticado numa nova aba (ex.: pré-visualização inline do kit, F9).
- * Como o endpoint exige Authorization Bearer, não dá para apontar a aba direto na URL — busca-se o
+ * Como o endpoint exige Authorization Bearer, não dá para apontar a aba direto na URL: busca-se o
  * blob com o token e abre-se um object URL. Mesmo padrão de auth do `apiDownload`.
  */
 export async function apiOpenInline(path: string, token?: string | null): Promise<void> {
@@ -214,7 +214,7 @@ export async function apiOpenInline(path: string, token?: string | null): Promis
       const raw = j?.message ?? j?.error;
       if (raw) message = Array.isArray(raw) ? raw.join(", ") : String(raw);
     } catch {
-      /* corpo não-JSON — mantém statusText */
+      /* corpo não-JSON, mantém statusText */
     }
     throw new ApiError(message, res.status);
   }

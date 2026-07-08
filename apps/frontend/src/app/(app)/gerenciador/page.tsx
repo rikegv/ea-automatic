@@ -10,7 +10,7 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import { Pill, type PillTone } from "@/components/ui/Pill";
 import { PendenciasBadge } from "@/components/ui/PendenciasBadge";
 import { OrigemBadge } from "@/components/ui/OrigemBadge";
-import { Icon } from "@/components/ui/Icon";
+import { Icon, type IconName } from "@/components/ui/Icon";
 import { Select } from "@/components/ui/Select";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AdmissaoDetalheModal } from "@/components/esteira/AdmissaoDetalheModal";
@@ -66,9 +66,9 @@ const SINAL_OPTS = [
 const FAROL_OPTS = [{ value: "", label: "Todos" }, ...FAROL_SELECT_OPTIONS];
 
 function fmtDataAdmissao(d?: string | null): string {
-  if (!d) return "—";
+  if (!d) return "não informado";
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(d);
-  return m ? `${m[3]}/${m[2]}/${m[1]}` : "—";
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : "não informado";
 }
 
 /** Tom da pill de uma frente (mesma leitura da Esteira). */
@@ -80,7 +80,7 @@ function frenteTone(f?: { status: string; concluida: boolean }): PillTone {
   return "wn";
 }
 
-/** Pill de status — NUNCA trunca (T1): a coluna tem largura suficiente para o rótulo mais longo. */
+/** Pill de status: NUNCA trunca (T1): a coluna tem largura suficiente para o rótulo mais longo. */
 function StatusPill({ tone, label }: { tone: PillTone; label: string }) {
   return (
     <Pill tone={tone} className="whitespace-nowrap" title={label}>
@@ -89,9 +89,9 @@ function StatusPill({ tone, label }: { tone: PillTone; label: string }) {
   );
 }
 
-// 11 colunas (com as 3 frentes — G4a). As colunas de status recebem largura FIXA suficiente para o
+// 11 colunas (com as 3 frentes, G4a). As colunas de status recebem largura FIXA suficiente para o
 // rótulo mais longo sem truncar ("Aguardando reenvio dos docs" na Auditoria, "Admissão Concluída"
-// no Status). As de texto (Candidato/Cliente/Cargo/Contrato) absorvem o restante em `fr` — truncam
+// no Status). As de texto (Candidato/Cliente/Cargo/Contrato) absorvem o restante em `fr`: truncam
 // com ellipsis só quando muito longas, sem grandes vazios (T1a/T1b).
 const GRID =
   "minmax(0,1.4fr) minmax(0,1.2fr) minmax(0,1fr) minmax(0,0.9fr) 92px 206px 116px 124px 152px 156px 92px";
@@ -281,52 +281,52 @@ export default function GerenciadorPage() {
     label,
     value,
     tone,
+    icon,
   }: {
     id: "total" | "ativos" | "concluidos" | "declinados";
     label: string;
     value: number;
     tone?: string;
+    icon?: IconName;
   }) => {
     const ativo = kpiAtivo === id;
     return (
       <GlassCard
         as="button"
         className={cn(
-          "fk text-left transition hover:bg-[var(--surface-2)]",
+          "fk text-left transition hover:bg-[var(--surface-2)] !px-4 !py-3.5",
           ativo && "!border-[var(--accent)] ring-1 ring-[var(--accent)]",
         )}
         onClick={() => aplicarKpi(id)}
         aria-pressed={ativo}
       >
-        <div className="num" style={tone ? { color: tone } : undefined}>
-          {loading && !data ? "—" : value}
-        </div>
-        <div className="lbl flex items-center gap-1.5">
-          {label}
+        <div className="mb-0.5 flex items-center justify-between">
+          {icon && <Icon name={icon} className="h-4 w-4 opacity-70" style={tone ? { color: tone } : undefined} />}
           {ativo && <Icon name="check" className="h-3 w-3 text-accent" />}
         </div>
+        <div className="num" style={tone ? { color: tone } : undefined}>
+          {loading && !data ? "…" : value}
+        </div>
+        <div className="lbl">{label}</div>
       </GlassCard>
     );
   };
 
   return (
     <>
-      <PageHead
-        eyebrow="Gerenciador"
-        title="Todas as admissões"
-        subtitle="Tabela com busca global, filtros acumulativos e edição (F10/F7)."
-      />
+      <PageHead title="Esteira Admissional" />
 
       {/* KPIs (clicáveis = filtro) */}
-      <div className="mb-[18px] grid grid-cols-2 gap-[14px] sm:grid-cols-4">
-        <KpiCard id="total" label="Total geral" value={k?.total ?? 0} />
-        <KpiCard id="ativos" label="Ativos" value={k?.ativos ?? 0} tone="var(--accent)" />
-        <KpiCard id="concluidos" label="Concluídos" value={k?.concluidos ?? 0} tone="var(--ok)" />
+      <div className="mb-[18px] grid grid-cols-2 gap-[12px] sm:grid-cols-3 xl:grid-cols-5">
+        <KpiCard id="total" label="Total geral" value={k?.total ?? 0} icon="layers" />
+        <KpiCard id="ativos" label="Ativos" value={k?.ativos ?? 0} tone="var(--accent)" icon="chart" />
+        <KpiCard id="concluidos" label="Concluídos" value={k?.concluidos ?? 0} tone="var(--ok)" icon="check" />
         <KpiCard
           id="declinados"
           label="Declinados"
           value={k?.declinados ?? 0}
           tone="var(--danger)"
+          icon="x"
         />
       </div>
 
@@ -533,27 +533,27 @@ export default function GerenciadorPage() {
                       <div className="meta truncate">Código {r.codCliente}</div>
                     </div>
                     <div className="meta truncate">{r.cargoNome}</div>
-                    <div className="meta truncate">{r.tipoContrato || "—"}</div>
+                    <div className="meta truncate">{r.tipoContrato || "não informado"}</div>
                     <div className="meta">{fmtDataAdmissao(r.dataAdmissao)}</div>
                     <div className="min-w-0">
                       {fa ? (
                         <StatusPill tone={frenteTone(fa)} label={fa.rotulo} />
                       ) : (
-                        <span className="meta">—</span>
+                        <span className="meta">não informado</span>
                       )}
                     </div>
                     <div className="min-w-0">
                       {ex ? (
                         <StatusPill tone={frenteTone(ex)} label={ex.rotulo} />
                       ) : (
-                        <span className="meta">—</span>
+                        <span className="meta">não informado</span>
                       )}
                     </div>
                     <div className="min-w-0">
                       {cad ? (
                         <StatusPill tone={frenteTone(cad)} label={cad.rotulo} />
                       ) : (
-                        <span className="meta">—</span>
+                        <span className="meta">não informado</span>
                       )}
                     </div>
                     <div className="min-w-0">

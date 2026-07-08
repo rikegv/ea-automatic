@@ -135,7 +135,7 @@ export default function ReguaPage() {
           ariaLabel="Cliente"
           options={clientes.map((c) => ({
             value: c.codCliente,
-            label: `${c.codCliente} — ${c.razaoSocial}`,
+            label: `${c.codCliente} · ${c.razaoSocial}`,
           }))}
         />
         <Select

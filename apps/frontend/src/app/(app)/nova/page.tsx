@@ -59,7 +59,7 @@ const STEPS: StepDef[] = [
   { label: "Candidato", hint: "Identidade e admissão" },
 ];
 
-// W5 — tipo de contrato: valores fixos.
+// W5: tipo de contrato, valores fixos.
 const TIPOS_CONTRATO = ["Temporário", "Terceirizado", "Estágio", "Interno", "Fopag", "Jovem Aprendiz"];
 const MOTIVO_SUBSTITUICAO = "Substituição";
 
@@ -87,7 +87,7 @@ function formatCpf(value: string): string {
 }
 function formatRegiao(regiao?: string | null, descricao?: string | null): string {
   const partes = [regiao?.trim(), descricao?.trim()].filter(Boolean);
-  return partes.length ? partes.join(" — ") : "—";
+  return partes.length ? partes.join(", ") : "não informado";
 }
 function calcIdade(nasc: string): number | null {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(nasc);
@@ -126,18 +126,18 @@ export default function NovaAdmissaoPage() {
   const { token, isAdmin } = useAuth();
   const [step, setStep] = useState(0);
 
-  // Etapa 1 — cliente
+  // Etapa 1: cliente
   const [clienteQuery, setClienteQuery] = useState("");
   const [clienteResults, setClienteResults] = useState<Cliente[]>([]);
   const [clienteSearching, setClienteSearching] = useState(false);
   const [cliente, setCliente] = useState<Cliente | null>(null);
 
-  // Etapa 2 — cargo + régua + folha
+  // Etapa 2: cargo + régua + folha
   const [cargos, setCargos] = useState<Cargo[]>([]);
   const [cargoId, setCargoId] = useState("");
   const [regua, setRegua] = useState<ReguaItem[]>([]);
   const [reguaLoading, setReguaLoading] = useState(false);
-  const [docsAbertos, setDocsAbertos] = useState(false); // W1 — recolhido por padrão
+  const [docsAbertos, setDocsAbertos] = useState(false); // W1: recolhido por padrão
   const [vaga, setVaga] = useState(VAGA_EMPTY);
   const [beneficiosSel, setBeneficiosSel] = useState<string[]>([]);
 
@@ -146,7 +146,7 @@ export default function NovaAdmissaoPage() {
   const [beneficios, setBeneficios] = useState<CatItem[]>([]);
   const [escalas, setEscalas] = useState<CatItem[]>([]);
 
-  // Etapa 3 — candidato
+  // Etapa 3: candidato
   const [cand, setCand] = useState(CAND_EMPTY);
   const [lookup, setLookup] = useState<CandidatoLookup | null>(null);
   const [lookupLoading, setLookupLoading] = useState(false);
@@ -271,7 +271,7 @@ export default function NovaAdmissaoPage() {
     setReaproveitado(true);
   }
 
-  // W1 — documentos exigidos (obrigatórios + facultativos), ordenados alfabeticamente por grupo.
+  // W1: documentos exigidos (obrigatórios + facultativos), ordenados alfabeticamente por grupo.
   const docsExigidos = useMemo(() => {
     const grupo = (e: ExigenciaDocumento) => (e === "OBRIGATORIO" ? 0 : e === "FACULTATIVO" ? 1 : 2);
     return regua
@@ -411,16 +411,12 @@ export default function NovaAdmissaoPage() {
 
   return (
     <>
-      <PageHead
-        eyebrow="Nova admissão"
-        title="Cadastro em etapas"
-        subtitle="Wizard: cliente → vaga → candidato. Pendências sinalizam, nunca bloqueiam (F4)."
-      />
+      <PageHead eyebrow="Nova admissão" title="Cadastro em etapas" />
 
       <GlassCard className="panel">
         <Stepper steps={STEPS} current={step} />
 
-        {/* ── ETAPA 1 — CLIENTE ─────────────────────────────────────────── */}
+        {/* ── ETAPA 1: CLIENTE ─────────────────────────────────────────── */}
         {step === 0 && (
           <div className="grid gap-4">
             <Field label="Buscar cliente por razão social, CNPJ, operação ou código">
@@ -443,11 +439,13 @@ export default function NovaAdmissaoPage() {
                   return (
                     <button key={c.codCliente} onClick={() => selecionarCliente(c)} className={cnRow(selected)}>
                       <div className="min-w-0">
-                        <div className="truncate font-semibold">{c.razaoSocial}</div>
+                        <div className="truncate text-[16px] font-bold">
+                          {c.nomeOperacao ?? c.razaoSocial}
+                        </div>
                         <div className="truncate text-[12.5px] text-dim">
+                          {c.nomeOperacao ? `${c.razaoSocial} · ` : ""}
                           Código {c.codCliente}
                           {c.cnpj ? ` · CNPJ ${c.cnpj}` : ""}
-                          {c.nomeOperacao ? ` · ${c.nomeOperacao}` : ""}
                         </div>
                       </div>
                       {selected && <Icon name="check" className="h-5 w-5 flex-none text-accent" />}
@@ -459,18 +457,20 @@ export default function NovaAdmissaoPage() {
             {cliente && (
               <GlassCard className="p-4">
                 <div className="eyebrow">Cliente selecionado</div>
-                <div className="text-[15px] font-semibold">{cliente.razaoSocial}</div>
+                <div className="text-[20px] font-extrabold leading-tight">
+                  {cliente.nomeOperacao ?? cliente.razaoSocial}
+                </div>
+                <div className="mt-0.5 text-[12.5px] text-dim">{cliente.razaoSocial}</div>
                 <div className="mt-1 grid gap-1 text-[13px] text-dim sm:grid-cols-3">
                   <span>
                     Código <b className="text-text">{cliente.codCliente}</b>
                   </span>
-                  <span>CNPJ {cliente.cnpj ?? "—"}</span>
-                  <span>Operação {cliente.nomeOperacao ?? "—"}</span>
+                  <span>CNPJ {cliente.cnpj ?? "não informado"}</span>
                 </div>
                 <div className="mt-3 grid gap-3 border-t border-[var(--border)] pt-3 sm:grid-cols-2">
                   <div>
                     <div className="eyebrow !mb-1">Empresa do grupo</div>
-                    <div className="text-[13px] text-dim">{cliente.empresaGrupo ?? "—"}</div>
+                    <div className="text-[13px] text-dim">{cliente.empresaGrupo ?? "não informado"}</div>
                   </div>
                   <div>
                     <div className="eyebrow !mb-1">Região</div>
@@ -482,7 +482,7 @@ export default function NovaAdmissaoPage() {
           </div>
         )}
 
-        {/* ── ETAPA 2 — VAGA / CARGO ────────────────────────────────────── */}
+        {/* ── ETAPA 2: VAGA / CARGO ────────────────────────────────────── */}
         {step === 1 && (
           <div className="grid gap-5">
             <Field label="Cargo *">
@@ -495,7 +495,7 @@ export default function NovaAdmissaoPage() {
               />
             </Field>
 
-            {/* W1 — checklist da régua recolhível */}
+            {/* W1: checklist da régua recolhível */}
             {cargoId && (
               <GlassCard className="p-4">
                 <div className="flex items-center justify-between gap-3">
@@ -548,7 +548,7 @@ export default function NovaAdmissaoPage() {
             {/* Folha / vaga */}
             <div>
               <div className="eyebrow">Dados de vaga / folha</div>
-              <p className="mb-3 text-[12px] text-dim">Campos com * são obrigatórios (pendências exigem aceite — F4).</p>
+              <p className="mb-3 text-[12px] text-dim">Campos com * são obrigatórios (pendências exigem aceite, F4).</p>
               {catErro && (
                 <p className="mb-3 rounded-xl border border-[var(--border)] bg-[rgba(214,69,69,0.1)] px-3 py-2 text-[13px] text-danger">
                   {catErro}
@@ -616,7 +616,7 @@ export default function NovaAdmissaoPage() {
                     onAdd={isAdmin ? (nome) => addCatalogo("motivos", nome, (n) => setVaga((v) => ({ ...v, motivo: n }))) : undefined}
                   />
                 </Field>
-                {/* W2 — substituição */}
+                {/* W2: substituição */}
                 {ehSubstituicao && (
                   <>
                     <Field label="Nome do substituído *">
@@ -660,7 +660,7 @@ export default function NovaAdmissaoPage() {
           </div>
         )}
 
-        {/* ── ETAPA 3 — CANDIDATO ───────────────────────────────────────── */}
+        {/* ── ETAPA 3: CANDIDATO ───────────────────────────────────────── */}
         {step === 2 && (
           <div className="grid gap-5">
             <div className="grid gap-3 sm:grid-cols-2">
@@ -700,12 +700,12 @@ export default function NovaAdmissaoPage() {
               </Field>
             </div>
 
-            {/* W7 — aviso de menor de idade */}
+            {/* W7: aviso de menor de idade */}
             {menorIdade && (
               <div className="flex items-start gap-3 rounded-xl border border-[var(--warn-2)] bg-[rgba(249,115,22,0.1)] px-4 py-3">
                 <Icon name="alert" className="mt-0.5 h-5 w-5 flex-none text-warn-2" />
                 <p className="text-[13px] text-text">
-                  <b>Candidato menor de idade ({idade} anos)</b> — verifique as restrições legais e o tipo de contrato (Jovem Aprendiz).
+                  <b>Candidato menor de idade ({idade} anos)</b>: verifique as restrições legais e o tipo de contrato (Jovem Aprendiz).
                 </p>
               </div>
             )}
@@ -765,12 +765,12 @@ export default function NovaAdmissaoPage() {
         </div>
       </GlassCard>
 
-      {/* W6 — aceite de criação com pendências */}
+      {/* W6: aceite de criação com pendências */}
       <ConfirmDialog
         open={aceiteCampos !== null}
         title="Criar com pendências obrigatórias?"
         message={`Campos obrigatórios vazios: ${(aceiteCampos ?? []).join(", ")}. A admissão pode ser criada (F4), mas registra que você está ciente das pendências.`}
-        confirmLabel="Estou ciente — criar"
+        confirmLabel="Estou ciente, criar"
         tone="danger"
         busy={submitting}
         onConfirm={() => confirmar(true)}

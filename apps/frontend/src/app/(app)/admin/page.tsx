@@ -31,8 +31,7 @@ export default function AdminHome() {
     <>
       <PageHead
         eyebrow="Administração"
-        title="Cadastros"
-        subtitle="Clientes, cargos e régua documental — base do processo admissional."
+        title="Menu Gerencial"
       />
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         {CARDS.map((c) => (

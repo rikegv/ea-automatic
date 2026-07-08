@@ -25,7 +25,7 @@ const CARDS: QuickCard[] = [
     href: "/esteira",
     icon: "layers",
     title: "Esteira admissional",
-    desc: "Faróis de auditoria, exame e cadastro — operação por frente.",
+    desc: "Faróis de auditoria, exame e cadastro: operação por frente.",
   },
   {
     href: "/gerenciador",
@@ -41,7 +41,7 @@ const CARDS: QuickCard[] = [
   },
 ];
 
-/** Saudação por horário — leve, sem dependência de dados reais nesta fase. */
+/** Saudação por horário: leve, sem dependência de dados reais nesta fase. */
 function saudacao(): string {
   const h = new Date().getHours();
   if (h < 12) return "Bom dia";
@@ -69,7 +69,7 @@ export default function HomePage() {
 
       <RadarBanner />
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
         {CARDS.map((c) => (
           <GlassCard key={c.href} as={Link} href={c.href} className="qcard block">
             <div className="q-ico">

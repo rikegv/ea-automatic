@@ -68,7 +68,7 @@ const ACCEPT = ".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png";
  * Modal de auditoria documental por IA (F2 / INT-3) de uma admissão. Por documento da régua:
  * "Auditar documento" → seleção de arquivo (PDF/JPG/PNG) → spinner → badge do veredito + motivo.
  * Barra de progresso da régua obrigatória ("X de Y validados"). Quando a régua fecha, o backend
- * arquiva no Drive e devolve `arquivado.pastaUrl` — exibido como aviso com link. Nenhum binário é
+ * arquiva no Drive e devolve `arquivado.pastaUrl`, exibido como aviso com link. Nenhum binário é
  * persistido nem exibido; só status e motivo (§A.3 r.7 / §A.6). CPF não aparece aqui.
  */
 export function AuditoriaDocsModal({
@@ -164,10 +164,10 @@ export function AuditoriaDocsModal({
         <div className="min-w-0">
           <div className="eyebrow !mb-1">Auditoria documental por IA</div>
           <h3 className="truncate text-[18px] font-extrabold">
-            {detalhe?.candidato.nome ?? (loadError ? "—" : "Carregando…")}
+            {detalhe?.candidato.nome ?? (loadError ? "não informado" : "Carregando…")}
           </h3>
           <p className="psub !mb-0 mt-1">
-            Envie cada documento para análise. O arquivo é efêmero — guardamos só o veredito.
+            Envie cada documento para análise. O arquivo é efêmero, guardamos só o veredito.
           </p>
         </div>
         <button
@@ -292,7 +292,7 @@ export function AuditoriaDocsModal({
                   </div>
                 </div>
 
-                {/* Motivo do veredito (texto da regra — sem PII) */}
+                {/* Motivo do veredito (texto da regra, sem PII) */}
                 {result?.motivo && (
                   <p
                     className={cn(

@@ -65,10 +65,10 @@ const ACCEPT = ".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png";
 
 const s = (v: string | null | undefined) => v ?? "";
 
-// Máscara de exibição do CPF (mesma do AdmissaoDetalheModal) — CPF é somente leitura.
+// Máscara de exibição do CPF (mesma do AdmissaoDetalheModal): CPF é somente leitura.
 function fmtCpf(cpf: string): string {
   const d = (cpf ?? "").replace(/\D/g, "");
-  if (d.length !== 11) return cpf || "—";
+  if (d.length !== 11) return cpf || "não informado";
   return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`;
 }
 
@@ -82,8 +82,8 @@ function Campo({ rotulo, children }: { rotulo: string; children: React.ReactNode
 }
 
 /**
- * F10 — edição de uma admissão (Gerenciador). Edita vaga/folha + contrato/data/matrícula/farol.
- * NÃO edita CPF nem cliente (identidade — §A.3). Persiste via PATCH /admissoes/:id.
+ * F10: edição de uma admissão (Gerenciador). Edita vaga/folha + contrato/data/matrícula/farol.
+ * NÃO edita CPF nem cliente (identidade, §A.3). Persiste via PATCH /admissoes/:id.
  */
 export function EditAdmissaoModal({
   admissaoId,
@@ -96,7 +96,7 @@ export function EditAdmissaoModal({
   candidatoNome: string;
   onClose: () => void;
   onSaved: (msg: string) => void;
-  /** Chaves de campo a exibir (S2 — "preencher pendências"); ausente = formulário inteiro. */
+  /** Chaves de campo a exibir (S2, "preencher pendências"); ausente = formulário inteiro. */
   camposFiltro?: string[];
 }) {
   const mostra = (campo: string) => !camposFiltro || camposFiltro.includes(campo);
@@ -144,7 +144,7 @@ export function EditAdmissaoModal({
     endereco: "",
   });
 
-  // Termo de Banco (upload via endpoint de auditoria, fora da régua) — Item 6.
+  // Termo de Banco (upload via endpoint de auditoria, fora da régua). Item 6.
   const [tiposDoc, setTiposDoc] = useState<TipoDocumento[]>([]);
   const [termoBuscando, setTermoBuscando] = useState(false);
   const [termoResult, setTermoResult] = useState<ResultadoAuditoria | null>(null);
@@ -217,7 +217,7 @@ export function EditAdmissaoModal({
   }
 
   async function salvar() {
-    // Nome do candidato é obrigatório — bloqueia no client (o backend manteria o anterior).
+    // Nome do candidato é obrigatório: bloqueia no client (o backend manteria o anterior).
     if (verCandidato && !nome.trim()) {
       setErro("O nome do candidato é obrigatório.");
       return;
@@ -282,7 +282,7 @@ export function EditAdmissaoModal({
             <section>
               <div className="mb-2 text-[11px] uppercase tracking-wide text-faint">Candidato</div>
               <div className="grid gap-3 sm:grid-cols-2">
-                <Campo rotulo="CPF (identidade — não editável)">
+                <Campo rotulo="CPF (identidade, não editável)">
                   <input
                     className="ds-input"
                     value={fmtCpf(cpf)}
@@ -377,7 +377,7 @@ export function EditAdmissaoModal({
                 )}
               </div>
 
-              {/* Item 6 — admissão de banco + Termo de Banco */}
+              {/* Item 6: admissão de banco + Termo de Banco */}
               {mostra("isBanco") && (
                 <div className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3">
                   <label className="flex cursor-pointer items-start gap-2.5">

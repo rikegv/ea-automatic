@@ -5,7 +5,7 @@ import { AuthProvider, useAuth } from "./auth-context";
 
 /**
  * Regressão (bug "Token de acesso ausente" no 1º acesso): `trocarSenha` precisa enviar o Bearer
- * corrente — /auth/trocar-senha NÃO é @Public. Antes o token era omitido → 401 no primeiro login
+ * corrente: /auth/trocar-senha NÃO é @Public. Antes o token era omitido → 401 no primeiro login
  * dos usuários com senha temporária. Aqui mockamos o fetch e conferimos o header Authorization.
  */
 type Call = { url: string; init: RequestInit };

@@ -4,7 +4,7 @@ import { cn } from "@/lib/cn";
 
 /**
  * Marcador de PROCEDÊNCIA da admissão (Fase 5 / INT-1). Distingue admissões que entraram pelo
- * Pandapé das criadas manualmente no wizard. Discreto e informativo (tom accent — azul Soulan,
+ * Pandapé das criadas manualmente no wizard. Discreto e informativo (tom accent, azul Soulan,
  * não-alarmante): renderiza um chip "Via Pandapé" SOMENTE quando `origem === "PANDAPE"`. Para
  * origem MANUAL (o default silencioso), não renderiza nada.
  *
@@ -18,7 +18,7 @@ export function OrigemBadge({
 }: {
   origem?: Origem | null;
   className?: string;
-  /** Apenas o ícone (com tooltip) — para colunas estreitas. */
+  /** Apenas o ícone (com tooltip), para colunas estreitas. */
   iconOnly?: boolean;
 }) {
   if (origem !== "PANDAPE") return null;

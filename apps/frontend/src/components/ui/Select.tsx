@@ -8,7 +8,7 @@ import { Icon } from "./Icon";
 export interface SelectOption {
   value: string;
   label: string;
-  /** Cor opcional do ponto (status) — mantém o seletor com a mesma leitura das pills. */
+  /** Cor opcional do ponto (status): mantém o seletor com a mesma leitura das pills. */
   color?: string;
 }
 
@@ -21,7 +21,7 @@ function norm(s: string): string {
 }
 
 /**
- * Seletor estilizado do design system (2C/ajustes-2B-2C). Substitui o `<select>` nativo — cujo
+ * Seletor estilizado do design system (2C/ajustes-2B-2C). Substitui o `<select>` nativo, cujo
  * dropdown herda o tema do SO (cinza no modo escuro). Botão `.ds-select` + popover glass renderizado
  * em **portal** (position fixed, z-index alto) para **sobrepor qualquer bloco** e não ser cortado por
  * `overflow`/stacking de containers. Com `searchable` (auto p/ listas longas), abre com campo de

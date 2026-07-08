@@ -16,7 +16,7 @@ const CAMPO_KEY: Record<string, string> = {
 };
 
 /**
- * S2 — modal de Pendências Obrigatórias. Lista os campos obrigatórios vazios da admissão. "Preencher
+ * S2: modal de Pendências Obrigatórias. Lista os campos obrigatórios vazios da admissão. "Preencher
  * pendências" abre o formulário de edição já filtrado nesses campos (via `onPreencher`).
  */
 export function PendenciasModal({

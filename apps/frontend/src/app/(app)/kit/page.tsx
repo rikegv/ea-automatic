@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/Button";
 import { Icon } from "@/components/ui/Icon";
 import { cn } from "@/lib/cn";
 
-// Linha de admissão (subconjunto do que /admissoes devolve — sem CPF, §A.6).
+// Linha de admissão (subconjunto do que /admissoes devolve, sem CPF, §A.6).
 interface AdmRow {
   admissaoId: string;
   candidatoNome: string;
@@ -41,7 +41,7 @@ interface HistoricoResp {
 /** Formata ISO → dd/mm/aaaa hh:mm (pt-BR). */
 function fmtDataHora(iso: string): string {
   const dt = new Date(iso);
-  if (Number.isNaN(+dt)) return "—";
+  if (Number.isNaN(+dt)) return "não informado";
   return dt.toLocaleString("pt-BR", {
     day: "2-digit",
     month: "2-digit",
@@ -149,7 +149,7 @@ export default function KitPage() {
   }, [query]);
 
   // Busca por nome/CPF quando há texto; SEM texto (campo só focado) lista as admissões disponíveis
-  // — assim o consultor sempre vê o que pode selecionar, em vez de ter de adivinhar o nome.
+  // assim o consultor sempre vê o que pode selecionar, em vez de ter de adivinhar o nome.
   useEffect(() => {
     if (!token || !open) {
       setResults([]);
@@ -237,7 +237,7 @@ export default function KitPage() {
       />
 
       <div className="grid items-start gap-5 lg:grid-cols-2">
-        {/* ════ COLUNA ESQUERDA — formulário de geração ════════════════════ */}
+        {/* ════ COLUNA ESQUERDA - formulário de geração ════════════════════ */}
         <GlassCard className="space-y-5 p-5">
         {/* ── 1. Admissão ──────────────────────────────────────────────── */}
         <div className="relative">
@@ -302,7 +302,7 @@ export default function KitPage() {
           <div className="flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[13px]">
             <Icon name="users" className="h-4 w-4 flex-none text-accent" />
             <span className="min-w-0 truncate">
-              <b>{selecionada.candidatoNome}</b> — {selecionada.clienteRazao} ·{" "}
+              <b>{selecionada.candidatoNome}</b> · {selecionada.clienteRazao} ·{" "}
               {selecionada.cargoNome}
             </span>
           </div>
@@ -367,7 +367,7 @@ export default function KitPage() {
         </Button>
       </GlassCard>
 
-        {/* ════ COLUNA DIREITA — kits gerados (+ espaço futuro p/ Clicksign) ═ */}
+        {/* ════ COLUNA DIREITA - kits gerados (+ espaço futuro p/ Clicksign) ═ */}
         <GlassCard className="list">
           <div className="flex items-center justify-between gap-3 px-4 pb-2 pt-3">
             <div className="min-w-0">
@@ -491,7 +491,7 @@ export default function KitPage() {
                     ) : (
                       <span
                         className="flex-none rounded-lg border border-[var(--border)] px-2.5 py-1 text-[12px] font-semibold text-faint"
-                        title="Token expirado (TTL 1h) — gere o kit novamente para baixar"
+                        title="Token expirado (TTL 1h): gere o kit novamente para baixar"
                       >
                         Expirado
                       </span>
@@ -504,7 +504,7 @@ export default function KitPage() {
         </GlassCard>
       </div>
 
-      {/* ── Indicador de processamento (T5b) — overlay destacado ─────────── */}
+      {/* ── Indicador de processamento (T5b), overlay destacado ─────────── */}
       {gerando && (
         <div
           className="fixed inset-0 z-50 grid place-items-center bg-[rgba(0,0,0,0.55)] backdrop-blur-sm"

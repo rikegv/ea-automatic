@@ -14,7 +14,7 @@ interface Slide {
 }
 
 /**
- * Insights MOCK desta fase — a geração real (regras/IA) é da Fase 6 (DESIGN-SYSTEM.md).
+ * Insights MOCK desta fase: a geração real (regras/IA) é da Fase 6 (DESIGN-SYSTEM.md).
  * Reproduz os três insights do protótipo aprovado.
  */
 const SLIDES: Slide[] = [
@@ -24,7 +24,7 @@ const SLIDES: Slide[] = [
     text: (
       <>
         O cliente <b>Testetestando</b> está com <b>5 vagas</b> de Operador de Teste para iniciar em{" "}
-        <b>3 de julho</b> — fiquem atentos, só <b>4</b> estão com o processo pronto.
+        <b>3 de julho</b>. Fiquem atentos, só <b>4</b> estão com o processo pronto.
       </>
     ),
   },

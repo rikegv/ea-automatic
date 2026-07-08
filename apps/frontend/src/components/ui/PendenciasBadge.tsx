@@ -3,7 +3,7 @@ import type { PillTone } from "@/components/ui/Pill";
 import { cn } from "@/lib/cn";
 
 /**
- * Badge CLICÁVEL de pendências obrigatórias (Fase 4 — ajustes visuais, T2).
+ * Badge CLICÁVEL de pendências obrigatórias (Fase 4, ajustes visuais, T2).
  * Diferencia-se das pills de status (sólidas, não-clicáveis): ícone de alerta + borda pontilhada
  * + cursor-pointer/hover, deixando claro que é interativo (abre o modal de pendências). A cor
  * segue o tom do sinalizador (mesma leitura semântica do Design System).

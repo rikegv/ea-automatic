@@ -313,6 +313,14 @@ diretor em paralelo à construção do núcleo.
 - Acessos: GitHub (repo criado), VM, Pandapé, Clicksign. Credencial de IA é a service account
   Google acima — **não há token Anthropic no EA**.
 
+## A.11 — Convenção de UI: travessão PROIBIDO (regra permanente)
+
+O caractere **travessão "—" (em dash, U+2014) é PROIBIDO em todo o sistema**: em qualquer texto de
+UI, mensagem, rótulo, placeholder, título, aviso, tooltip, célula de tabela e comentário que chegue
+ao usuário. No lugar, usar **vírgula, ponto, dois-pontos ou reescrever a frase**. Marcador de célula
+vazia usa **"não informado"**, nunca o glifo. A regra vale para **toda entrega futura**, não só a OST
+que a originou: nenhum código novo introduz travessão em texto apresentável. *(Decisão do diretor.)*
+
 ## A.10 — Registro de ideia futura (fora do escopo atual)
 
 **Ponte EA ↔ CentraAtend (comunicar candidato por WhatsApp).** Botão "comunicar candidato" no EA

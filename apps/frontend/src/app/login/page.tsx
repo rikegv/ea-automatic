@@ -6,13 +6,13 @@ import { useAuth } from "@/lib/auth-context";
 
 /**
  * Tela de login (OST-EA-TELA-LOGIN). Identidade visual premium portada 1:1 do HTML de
- * referência aprovado pelo diretor — glassmorphism em duas colunas, aurora de orbes e
+ * referência aprovado pelo diretor: glassmorphism em duas colunas, aurora de orbes e
  * logo com halo. Tela de marca dedicada: renderiza sempre no tema escuro (paleta fixa
  * do design system: azul #22B0DB + verde #AAD12F), independente do [data-theme] do app.
  *
  * A lógica de autenticação é a REAL já existente: POST /auth/login via useAuth().login
  * (JWT + refresh em cookie + OriginGuard). A troca obrigatória de senha temporária e o
- * RBAC seguem intactos — o (app)/layout redireciona para /trocar-senha quando aplicável.
+ * RBAC seguem intactos: o (app)/layout redireciona para /trocar-senha quando aplicável.
  */
 export default function LoginPage() {
   const { login, user, loading } = useAuth();
@@ -42,7 +42,7 @@ export default function LoginPage() {
 
   return (
     <div className="relative flex min-h-screen w-full items-center justify-center overflow-hidden bg-slate-950 p-4 text-white antialiased">
-      {/* AMBIENT GLOW — 3 orbes de fundo, paleta EA (azul + verde discreto) + grid sutil */}
+      {/* AMBIENT GLOW: 3 orbes de fundo, paleta EA (azul + verde discreto) + grid sutil */}
       <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
         <div className="animate-orb-pulse absolute -left-40 -top-40 h-[640px] w-[640px] rounded-full bg-[#22B0DB]/25 blur-[140px]" />
         <div className="animate-orb-pulse absolute -bottom-48 -right-48 h-[680px] w-[680px] rounded-full bg-blue-900/25 blur-[140px] [animation-delay:2.5s]" />
@@ -60,7 +60,7 @@ export default function LoginPage() {
       {/* CARD GLASSMORPHISM */}
       <main className="animate-fade-in-up relative z-10 w-full max-w-5xl">
         <div className="grid overflow-hidden rounded-3xl border border-white/10 bg-white/[0.04] shadow-[0_30px_80px_-20px_rgba(0,0,0,0.7)] backdrop-blur-2xl md:grid-cols-2">
-          {/* ESQUERDA — identidade visual / logo */}
+          {/* ESQUERDA: identidade visual / logo */}
           <section className="relative flex flex-col justify-center border-b border-white/10 bg-gradient-to-br from-[#22B0DB]/[0.10] via-transparent to-transparent p-8 md:border-b-0 md:border-r md:p-12">
             <div
               aria-hidden="true"
@@ -87,7 +87,7 @@ export default function LoginPage() {
             </div>
           </section>
 
-          {/* DIREITA — formulário e-mail/senha (sem Google — auth própria do EA) */}
+          {/* DIREITA: formulário e-mail/senha (sem Google, auth própria do EA) */}
           <section className="flex flex-col justify-center p-8 md:p-12">
             <header className="mb-8">
               <p className="mb-2 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.32em] text-[#22B0DB]">
@@ -237,7 +237,7 @@ export default function LoginPage() {
               </button>
             </form>
 
-            {/* Erro / Acesso Negado — sem layout shift (bloco abaixo do formulário) */}
+            {/* Erro / Acesso Negado: sem layout shift (bloco abaixo do formulário) */}
             {error && (
               <div
                 role="alert"

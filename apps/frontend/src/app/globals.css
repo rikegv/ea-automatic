@@ -3,10 +3,10 @@
 @tailwind utilities;
 
 /* ============================================================================
-   EA AUTOMATIC — Design System (DESIGN-SYSTEM.md)
+   EA AUTOMATIC - Design System (DESIGN-SYSTEM.md)
    Tokens dos DOIS temas. CLARO é o padrão (:root); ESCURO via [data-theme="dark"].
    As classes de componente abaixo são portadas 1:1 dos protótipos aprovados
-   (prototipo-claro.html / prototipo-escuro.html). Reproduzem — não reinterpretam.
+   (prototipo-claro.html / prototipo-escuro.html). Reproduzem, não reinterpretam.
    ========================================================================== */
 
 :root {
@@ -25,7 +25,7 @@
   --accent-2: #7ba81f;
   --ok: #2e9e63;
   --warn: #c98a12;
-  /* laranja "aguardando reenvio" — distinto do amarelo de "análise pendente" (2C item 7) */
+  /* laranja "aguardando reenvio", distinto do amarelo de "análise pendente" (2C item 7) */
   --warn-2: #ea580c;
   --danger: #d64545;
   --r: 20px;

@@ -72,7 +72,7 @@ export function Sidebar() {
   // Fixado = sempre expandido. Desafixado = recolhido; expande ao passar o mouse (temporário).
   const expanded = pinned || hovering;
 
-  const name = user ? displayName(user.email) : "—";
+  const name = user ? displayName(user.email) : "não informado";
   const initial = name.charAt(0).toUpperCase() || "?";
   const papel = user ? PAPEL_ROTULO[user.papel] : "";
 
@@ -112,7 +112,7 @@ export function Sidebar() {
           <NavItem
             href="/admin"
             icon="cog"
-            label="Cadastros"
+            label="Menu Gerencial"
             active={isActive(pathname, "/admin")}
             expanded={expanded}
           />

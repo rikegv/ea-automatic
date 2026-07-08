@@ -35,7 +35,7 @@ export default function AnalisePage() {
       <PageHead
         eyebrow="Análise gerencial"
         title="Indicadores da operação"
-        subtitle="Visão consolidada — atualizada em tempo real."
+        subtitle="Visão consolidada, atualizada em tempo real."
       />
 
       <div className="mb-[26px] grid grid-cols-2 gap-[14px] sm:grid-cols-3 xl:grid-cols-6">
@@ -46,7 +46,7 @@ export default function AnalisePage() {
 
       <GlassCard className="panel">
         <h3>Volume de admissões</h3>
-        <p className="psub">Por semana — últimas 6 semanas</p>
+        <p className="psub">Por semana, últimas 6 semanas</p>
         <div className="bars">
           {BARS.map((b) => (
             <div key={b.label} className="bar-wrap">

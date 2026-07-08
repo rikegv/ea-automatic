@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/Button";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
 
 /**
- * Troca obrigatória de senha temporária (fora do grupo (app), sem sidebar — como /login).
+ * Troca obrigatória de senha temporária (fora do grupo (app), sem sidebar, como /login).
  * Chega aqui todo usuário com `senhaTemporaria === true` (cadastro novo ou reset pelo admin).
  * O bloqueio de acesso ao app está no (app)/layout.tsx; aqui só resolvemos a troca.
  */

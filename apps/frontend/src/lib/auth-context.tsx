@@ -67,7 +67,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const trocarSenha = useCallback(async (senhaAtual: string, novaSenha: string) => {
-    // /auth/trocar-senha NÃO é @Public — exige o Bearer. Enviamos o token corrente (via ref),
+    // /auth/trocar-senha NÃO é @Public, exige o Bearer. Enviamos o token corrente (via ref),
     // senão o backend responde 401 "Token de acesso ausente" no primeiro acesso (senha temporária).
     const r = await apiFetch<LoginResponse>("/auth/trocar-senha", {
       method: "POST",

@@ -40,7 +40,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     try {
       window.localStorage.setItem(STORAGE_KEY, t);
     } catch {
-      /* localStorage indisponível — tema só nesta sessão. */
+      /* localStorage indisponível, tema só nesta sessão. */
     }
     setThemeState(t);
   }, []);

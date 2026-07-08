@@ -13,8 +13,8 @@ export interface AceiteLiberacao {
 
 /**
  * Modal de aceite de liberação COM PENDÊNCIA (2C item 2). Integra a escolha Via 1 × Via 2:
- * — Não (Via 1): segue como não conformidade do consultor (penaliza).
- * — Sim (Via 2): liberação por determinação da diretoria → exige motivo; a NC nasce aguardando
+ * - Não (Via 1): segue como não conformidade do consultor (penaliza).
+ * - Sim (Via 2): liberação por determinação da diretoria, exige motivo; a NC nasce aguardando
  *   aprovação do Master/Super Admin (não penaliza até a decisão).
  * Usado para "apto sem ASO" e "auditoria incompleta".
  */
@@ -53,13 +53,13 @@ export function AceiteLiberacaoModal({
             <Opcao
               ativo={!diretoria}
               onClick={() => setDiretoria(false)}
-              titulo="Não — não conformidade do consultor"
+              titulo="Não, não conformidade do consultor"
               desc="Via 1: registra a NC penalizando o consultor responsável."
             />
             <Opcao
               ativo={diretoria}
               onClick={() => setDiretoria(true)}
-              titulo="Sim — liberação por determinação da diretoria"
+              titulo="Sim, liberação por determinação da diretoria"
               desc="Via 2: vai à supervisão (Master/Super Admin) para aprovação; não penaliza se aprovada."
             />
           </div>
@@ -93,7 +93,7 @@ export function AceiteLiberacaoModal({
               ? "Processando…"
               : diretoria
                 ? "Enviar à supervisão"
-                : "Estou ciente — liberar"}
+                : "Estou ciente, liberar"}
           </Button>
         </div>
     </Modal>

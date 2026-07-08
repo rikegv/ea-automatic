@@ -7,7 +7,7 @@ import { cn } from "@/lib/cn";
 /**
  * Casca padrão de modal (ajustes-2B-2C / G3). Overlay + painel glass renderizados em **portal**
  * (z-index alto, fora de qualquer stacking context). O painel usa `--surface-2` (mais opaco) para
- * ler como superfície limpa do design system no **tema claro** — corrige o "fundo cinza de sistema
+ * ler como superfície limpa do design system no **tema claro**: corrige o "fundo cinza de sistema
  * antigo". Fecha por clique-fora e Escape. Selects internos (z-60) sobrepõem o modal (z-55).
  */
 export function Modal({

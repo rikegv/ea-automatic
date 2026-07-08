@@ -1,7 +1,7 @@
 import type { SVGProps } from "react";
 
 /**
- * Conjunto de ícones do EA AUTOMATIC — portado 1:1 dos protótipos aprovados.
+ * Conjunto de ícones do EA AUTOMATIC, portado 1:1 dos protótipos aprovados.
  * Traço currentColor; o tamanho vem do contexto (CSS define width/height do svg).
  */
 export type IconName =

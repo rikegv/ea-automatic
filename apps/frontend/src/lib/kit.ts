@@ -1,10 +1,10 @@
 /**
- * Lógica pura do Gerador de Kit (F9) — extraída da página para ser testável sem DOM.
+ * Lógica pura do Gerador de Kit (F9), extraída da página para ser testável sem DOM.
  * O kit é chaveado por `admissaoId` real (POST /kit/:admissaoId/gerar), então a geração só
  * habilita quando há uma admissão SELECIONADA da lista (não basta digitar o nome livre).
  */
 
-/** Subconjunto da admissão necessário aqui — sem CPF nem PII (§A.6). */
+/** Subconjunto da admissão necessário aqui, sem CPF nem PII (§A.6). */
 export interface AdmissaoSelecionavel {
   admissaoId: string;
   candidatoNome: string;
@@ -22,7 +22,7 @@ export function normalizeNome(s: string): string {
 
 /**
  * Habilitação do botão "Gerar kit": exige admissão selecionada (com id), arquivo escolhido e
- * nenhuma geração em andamento. Função pura para teste — a ordem de seleção não importa.
+ * nenhuma geração em andamento. Função pura para teste: a ordem de seleção não importa.
  */
 export function podeGerar(
   selecionada: AdmissaoSelecionavel | null,

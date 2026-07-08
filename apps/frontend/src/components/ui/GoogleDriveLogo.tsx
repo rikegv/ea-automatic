@@ -1,7 +1,7 @@
 import type { SVGProps } from "react";
 
 /**
- * Logo oficial do Google Drive (triângulo multicolor) em SVG inline — sem dependência de URL
+ * Logo oficial do Google Drive (triângulo multicolor) em SVG inline, sem dependência de URL
  * externa, pois o sistema roda on-prem / por túnel e imagens externas podem ser bloqueadas.
  * Cores oficiais; o tamanho vem do `className`/props (default ~16px).
  */
