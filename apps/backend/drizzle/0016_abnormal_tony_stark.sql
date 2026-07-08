@@ -1,0 +1,1 @@
+ALTER TABLE "entidades_soulan" ADD COLUMN "cnpj" varchar(18);

@@ -25,6 +25,7 @@ import {
   origemEnum,
   papelEnum,
   sinalizadorEnum,
+  tipoServicoEnum,
 } from "./enums";
 
 const criadoEm = timestamp("criado_em", { withTimezone: true }).defaultNow().notNull();
@@ -155,6 +156,12 @@ export const admissoes = pgTable("admissoes", {
   // (Via 1 — penaliza o consultor). Nullable: admissões anteriores à 2C não têm autor registrado.
   consultorId: uuid("consultor_id").references(() => usuarios.id),
   tipoContrato: varchar("tipo_contrato", { length: 60 }),
+  // Vínculo cliente↔(empresa Soulan, filial, tipo) escolhido para esta admissão (OST estrutural).
+  // NULLABLE e ON DELETE SET NULL: não obrigatório; admissões existentes e o wizard atual seguem por
+  // `tipo_contrato`. Quando preenchido, resolve a entidade/CNPJ e a pasta do Drive a partir do vínculo.
+  clienteVinculoId: uuid("cliente_vinculo_id").references(() => clienteVinculos.id, {
+    onDelete: "set null",
+  }),
   matricula: varchar("matricula", { length: 60 }),
   dataAdmissao: date("data_admissao"),
   farolGlobal: farolGlobalEnum("farol_global").notNull().default("EM_ADMISSAO"),
@@ -438,5 +445,66 @@ export const candidatoAlteracoesLog = pgTable(
   },
   (t) => ({
     idxAdmissao: index("idx_candidato_alteracoes_log_admissao").on(t.admissaoId),
+  }),
+);
+
+// ── Entidade do Grupo Soulan (empresa contratante) — OST estrutural ─────────
+// Catálogo das empresas Soulan (ex.: SOULAN ADMINISTRAÇÃO, NEAT). Regra final do diretor: o match é
+// SÓ pelo número da EMPRESA (ignora filial), então o CNPJ é FIXO por entidade e mora aqui (`cnpj`,
+// completo). `cnpjRaiz` (8 díg) mantido por compat. CNPJ nulo = tipo cujo CNPJ o diretor ainda não
+// forneceu (Temporário/Terceiro/Estágio) — não inventar.
+export const entidadesSoulan = pgTable("entidades_soulan", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  nome: varchar("nome", { length: 200 }).notNull(),
+  cnpjRaiz: varchar("cnpj_raiz", { length: 8 }),
+  cnpj: varchar("cnpj", { length: 18 }),
+  ativo: boolean("ativo").notNull().default(true),
+  criadoEm,
+  atualizadoEm,
+});
+
+// ── CNPJ completo por filial da entidade Soulan (empresa + filial → CNPJ) ────
+// DADO PENDENTE do diretor: aqui só a ESTRUTURA. `cnpj` fica nulo até a fonte autoritativa chegar
+// (não inventar). FOPAG não usa esta tabela (documento = CNPJ do próprio cliente).
+export const entidadeFiliais = pgTable(
+  "entidade_filiais",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    entidadeId: uuid("entidade_id")
+      .notNull()
+      .references(() => entidadesSoulan.id, { onDelete: "cascade" }),
+    filial: varchar("filial", { length: 20 }).notNull(),
+    cnpj: varchar("cnpj", { length: 18 }),
+    nomeFilial: text("nome_filial"),
+    ativo: boolean("ativo").notNull().default(true),
+    criadoEm,
+    atualizadoEm,
+  },
+  (t) => ({ uq: unique("uq_entidade_filial").on(t.entidadeId, t.filial) }),
+);
+
+// ── Vínculo cliente ↔ (empresa Soulan, filial, tipo de serviço) — 1:N ───────
+// Um cliente pode ter vários vínculos (ex.: temporário E terceiro). `tipoServico` é derivado do
+// código "Empresa" da base. `isFopag` (código > 6): documento usa o CNPJ do cliente; `entidadeId`
+// fica NULL (não há entidade Soulan). Não-FOPAG resolve o CNPJ via `entidade_filiais` (pendente).
+export const clienteVinculos = pgTable(
+  "cliente_vinculos",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    codCliente: varchar("cod_cliente", { length: 40 })
+      .notNull()
+      .references(() => clientes.codCliente, { onDelete: "cascade" }),
+    empresaCodigo: varchar("empresa_codigo", { length: 10 }).notNull(),
+    tipoServico: tipoServicoEnum("tipo_servico").notNull(),
+    filial: varchar("filial", { length: 20 }),
+    isFopag: boolean("is_fopag").notNull().default(false),
+    entidadeId: uuid("entidade_id").references(() => entidadesSoulan.id, { onDelete: "set null" }),
+    ativo: boolean("ativo").notNull().default(true),
+    criadoEm,
+    atualizadoEm,
+  },
+  (t) => ({
+    uq: unique("uq_cliente_vinculo").on(t.codCliente, t.empresaCodigo, t.filial),
+    idxCliente: index("idx_cliente_vinculos_cliente").on(t.codCliente),
   }),
 );

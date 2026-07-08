@@ -17,6 +17,19 @@ export const farolGlobalEnum = pgEnum("farol_global", [
 /** Frentes paralelas e independentes (§A.3 / F12). */
 export const frenteTipoEnum = pgEnum("frente_tipo", ["AUDITORIA", "EXAME", "CADASTRO_CONTRATO"]);
 
+/**
+ * Tipo de serviço do vínculo cliente↔empresa Soulan (OST estrutural). Derivado do código "Empresa"
+ * da base: 1,3=TEMPORARIO · 2=TERCEIRO · 4=ESTAGIO · 5,6=INTERNO · >6=FOPAG (documento usa o CNPJ do
+ * próprio cliente). É a mesma taxonomia de `admissoes.tipo_contrato`.
+ */
+export const tipoServicoEnum = pgEnum("tipo_servico", [
+  "TEMPORARIO",
+  "TERCEIRO",
+  "ESTAGIO",
+  "INTERNO",
+  "FOPAG",
+]);
+
 /** Origem da admissão (Fase 5 / INT-1): MANUAL (wizard F6) ou PANDAPE (sync via webhook/pull). */
 export const origemEnum = pgEnum("origem", ["MANUAL", "PANDAPE"]);
 
