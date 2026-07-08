@@ -15,7 +15,10 @@
     "db:seed:clientes": "tsx src/db/seed-clientes.ts",
     "db:seed:regua": "tsx src/db/seed-regua.ts",
     "db:seed:catalogos": "tsx src/db/seed-catalogos.ts",
-    "db:seed:regras": "tsx src/db/seed-regras.ts"
+    "db:seed:regras": "tsx src/db/seed-regras.ts",
+    "db:seed:clientes-atualizada": "tsx src/db/seed-clientes-atualizada.ts",
+    "db:seed:entidades-soulan": "tsx src/db/seed-entidades-soulan.ts",
+    "db:view:clinica": "tsx src/db/view-relatorio-clinica.ts"
   },
   "dependencies": {
     "@ea/shared-types": "workspace:*",
