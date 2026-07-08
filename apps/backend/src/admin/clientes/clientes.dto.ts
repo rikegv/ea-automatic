@@ -22,6 +22,13 @@ export class CreateClienteDto {
   nomeOperacao?: string;
 }
 
+export class DefinirVinculoDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(40)
+  opcaoId!: string;
+}
+
 export class UpdateClienteDto {
   @IsOptional()
   @IsString()
