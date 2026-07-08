@@ -18,6 +18,7 @@ import {
   clientes,
   dadosVagaFolha,
   documentosAdmissao,
+  exameAgendamento,
   frenteStatusCatalogo,
   frenteStatusEventos,
   frentesAdmissao,
@@ -31,6 +32,7 @@ import { pendenciasObrigatorias } from "../domain/admissao";
 import { recomputeFarolGlobal } from "../admissoes/farol";
 import type { FrenteTipo } from "../domain/frentes";
 import { podeAbrirCadastro } from "../domain/frentes";
+import { AuditoriaService } from "../auditoria/auditoria.service";
 import { ReguaCompletudeService } from "../regua/regua-completude.service";
 import {
   conclui,
@@ -39,6 +41,7 @@ import {
   reversaoDerrubaCadastro,
   STATUS_CONCLUI,
 } from "../domain/esteira";
+import type { AgendamentoExameDto } from "./dto/agendamento-exame.dto";
 import type { PatchStatusDto } from "./dto/patch-status.dto";
 import type { RelatorioClinicaDto } from "./dto/relatorio-clinica.dto";
 
@@ -66,6 +69,7 @@ export class EsteiraService {
   constructor(
     @Inject(DRIZZLE) private readonly db: Database,
     private readonly reguaCompletude: ReguaCompletudeService,
+    private readonly auditoria: AuditoriaService,
   ) {}
 
   /** Resolve e valida o segmento de rota; 400 quando inválido. */
@@ -156,6 +160,7 @@ export class EsteiraService {
         contratoAssinadoDriveUrl: admissoes.contratoAssinadoDriveUrl,
         origem: admissoes.origem,
         sinalizador: admissoes.sinalizadorPreenchimento,
+        asoValidado: admissoes.asoValidado,
       })
       .from(frentesAdmissao)
       .innerJoin(admissoes, eq(frentesAdmissao.admissaoId, admissoes.id))
@@ -170,6 +175,8 @@ export class EsteiraService {
     // Enriquecimento por frente: ASO (exame), disponibilidade do gate (cadastro) e obrigatórios
     // pendentes (auditoria — sinaliza o aceite ao concluir, gatilho da NC-1).
     const asoSet = tipo === "EXAME" ? await this.asoEntregueSet(admissaoIds) : new Set<string>();
+    const agendamentoMap =
+      tipo === "EXAME" ? await this.agendamentoMap(admissaoIds) : new Map<string, AgendamentoResumo>();
     const dispMap =
       tipo === "CADASTRO_CONTRATO" ? await this.disponibilidadeMap(admissaoIds) : new Map();
     const pendSet =
@@ -202,9 +209,14 @@ export class EsteiraService {
         sinalizador: r.sinalizador,
       };
       if (tipo === "EXAME") {
+        const ag = agendamentoMap.get(r.admissaoId);
         return {
           ...base,
           asoAnexado: asoSet.has(r.admissaoId),
+          asoValidado: r.asoValidado,
+          temAgendamento: !!ag?.data,
+          reagendamentos: ag?.reagendamentos ?? 0,
+          agendamento: ag ?? null,
           temPendencias: pendObrigSet.has(r.admissaoId),
         };
       }
@@ -276,6 +288,24 @@ export class EsteiraService {
   /** Conjunto de admissões com ASO ENTREGUE (regra 7 — só status, nunca o arquivo). */
   private async asoEntregueSet(admissaoIds: string[]): Promise<Set<string>> {
     return this.docEntregueSet(admissaoIds, "ASO");
+  }
+
+  /** Agendamento do exame por admissão (para exibir na fila EXAME: data, fornecedor, reagendamentos). */
+  private async agendamentoMap(admissaoIds: string[]): Promise<Map<string, AgendamentoResumo>> {
+    if (admissaoIds.length === 0) return new Map();
+    const rows = await this.db
+      .select({
+        admissaoId: exameAgendamento.admissaoId,
+        data: exameAgendamento.data,
+        horario: exameAgendamento.horario,
+        nomeClinica: exameAgendamento.nomeClinica,
+        local: exameAgendamento.local,
+        fornecedor: exameAgendamento.fornecedor,
+        reagendamentos: exameAgendamento.reagendamentos,
+      })
+      .from(exameAgendamento)
+      .where(inArray(exameAgendamento.admissaoId, admissaoIds));
+    return new Map(rows.map((r) => [r.admissaoId, r]));
   }
 
   /** Conjunto de admissões com o Termo de Banco ENTREGUE (§A.3 / Fase 4 complemento). */
@@ -380,16 +410,48 @@ export class EsteiraService {
       });
     }
 
-    // Gatilho NC-2 (2C item 2): marcar EXAME como "apto" SEM ASO anexado exige aceite explícito do
-    // consultor. O aceite É o gatilho da NC-2 (registra autor + data + termo). Bloqueia até o aceite.
-    const exigeAceiteAso =
-      tipo === "EXAME" && conclui(tipo, novo) && !(await this.temAso(frente.admissaoId));
-    if (exigeAceiteAso && !dto.confirmar) {
+    // GATE de transição (OST modal de agendamento) — bloqueios DUROS, sem aceite/bypass. São gates de
+    // transição de status, NÃO alteram a regra geral "pendências sinalizam, nunca bloqueiam" da criação.
+    // (a) AGENDADO exige os dados do exame cadastrados no modal (data preenchida).
+    if (tipo === "EXAME" && novo === "AGENDADO" && !(await this.temAgendamento(frente.admissaoId))) {
       throw new ConflictException({
-        needsConfirmation: true,
-        reason: "aptoSemAso",
-        message: TERMO_APTO_SEM_ASO,
+        needsConfirmation: false,
+        reason: "exameSemAgendamento",
+        message:
+          "Cadastre as informações do exame (modal de agendamento) antes de marcar como Agendado.",
       });
+    }
+    // (b) APTO exige ASO ANEXADO e VALIDADO PELA I.A (apto). A validação é da I.A (não flag manual):
+    // `asoValidado` vem do veredito da I.A ao anexar/auditar o ASO. Controle por PAPEL:
+    //   • COMUM (consultor): trava DURA — só um aviso, SEM opção de liberar sem ASO.
+    //   • MASTER e SUPER_ADMIN: podem liberar Apto sem ASO — exige autorização explícita
+    //     (needsConfirmation), registrada em seu nome (responsável da transição + NC-2).
+    // A trava geral não é afrouxada para o comum; é uma exceção autorizada e rastreada (tela de NC).
+    let liberouAptoSemAso = false;
+    if (tipo === "EXAME" && conclui(tipo, novo)) {
+      const anexado = await this.temAso(frente.admissaoId);
+      const asoOk = anexado && admissao?.asoValidado === true;
+      if (!asoOk) {
+        if (user.papel === "COMUM") {
+          throw new ConflictException({
+            needsConfirmation: false,
+            reason: "aptoSemAsoValidado",
+            message: anexado
+              ? "O ASO ainda não foi validado pela I.A como apto. Aguarde a leitura da I.A."
+              : "Anexe o ASO para liberar como Apto (a I.A valida o documento).",
+          });
+        }
+        // MASTER / SUPER_ADMIN — autorização explícita da liberação sem ASO (fica registrada).
+        if (!dto.confirmar) {
+          throw new ConflictException({
+            needsConfirmation: true,
+            reason: "aptoSemAsoSuperAdmin",
+            message:
+              "Liberar APTO sem ASO validado pela I.A? A liberação fica registrada em seu nome.",
+          });
+        }
+        liberouAptoSemAso = true;
+      }
     }
 
     // Gatilho NC-1 (2C): Auditoria concluída ("análise ok") com obrigatórios pendentes na régua.
@@ -412,7 +474,7 @@ export class EsteiraService {
 
     // Via 1 × Via 2 do aceite (item 2): a pedido da diretoria → NC nasce PENDENTE de aprovação
     // (com motivo) em vez de penalizar. Motivo é obrigatório nesse caso.
-    const geraNc = exigeAceiteAso || faltantesAuditoria.length > 0;
+    const geraNc = liberouAptoSemAso || faltantesAuditoria.length > 0;
     if (geraNc && dto.liberacaoDiretoria && !dto.liberacaoMotivo?.trim()) {
       throw new BadRequestException("Informe o motivo da liberação por diretoria.");
     }
@@ -525,7 +587,7 @@ export class EsteiraService {
 
       // Gatilhos de não conformidade (2C) — registro aditivo, idempotente por (admissão, tipo).
       let ncCriada: "NC1" | "NC2" | null = null;
-      if (exigeAceiteAso) {
+      if (liberouAptoSemAso) {
         const [nc] = await tx
           .insert(naoConformidades)
           .values({
@@ -533,7 +595,9 @@ export class EsteiraService {
             tipo: "NC2",
             consultorId: admissao?.consultorId ?? null,
             aceiteTermo: TERMO_APTO_SEM_ASO,
-            detalhe: "Exame marcado como apto sem ASO anexado.",
+            // Registro da exceção: liberado sem ASO validado pela I.A por Super Admin (autor da
+            // transição = frente.responsavelId = user.id, data = criadoEm).
+            detalhe: "Exame liberado como apto SEM ASO validado pela I.A (autorização de Super Admin).",
             ...ncLiberacao,
           })
           .onConflictDoNothing({
@@ -817,8 +881,10 @@ export class EsteiraService {
   }
 
   /**
-   * F8 (Exame) — registra o ASO como ENTREGUE. NÃO persiste o binário (regra 7 / §A.6): lê só
-   * metadados (nome e tamanho) e descarta o buffer. Sem motor de IA (Fase 4).
+   * F8 (Exame) — anexa o ASO e dispara a VALIDAÇÃO PELA I.A (gate de APTO). Registra o ASO como
+   * ENTREGUE (anexado) e a I.A lê o documento decidindo apto/inapto → grava `asoValidado`. NÃO
+   * persiste o binário (regra 7 / §A.6): só metadados + staging efêmera (expurgada). Robusto: se a
+   * I.A estiver indisponível, o ASO fica ANEXADO porém NÃO validado (gate segue travado até revalidar).
    */
   async anexarAso(admissaoId: string, file?: Express.Multer.File) {
     if (!file) throw new BadRequestException("Arquivo ASO obrigatório (campo 'file')");
@@ -855,7 +921,86 @@ export class EsteiraService {
         },
       });
 
-    return { ok: true, aso: { nome, registradoEm } };
+    // Novo ASO → volta a NÃO validado; a I.A revalida na leitura do documento (não é flag manual).
+    await this.db
+      .update(admissoes)
+      .set({ asoValidado: false, atualizadoEm: registradoEm })
+      .where(eq(admissoes.id, admissaoId));
+
+    // Validação pela I.A: lê o ASO e decide apto/inapto. VALIDADO → destrava o gate de APTO.
+    let iaStatus: string;
+    let asoValidado = false;
+    try {
+      const veredito = await this.auditoria.classificarAso(admissaoId, {
+        buffer: file.buffer,
+        originalname: nome,
+      });
+      iaStatus = veredito.status;
+      asoValidado = veredito.valido;
+      if (asoValidado) {
+        await this.db
+          .update(admissoes)
+          .set({ asoValidado: true, atualizadoEm: new Date() })
+          .where(eq(admissoes.id, admissaoId));
+      }
+    } catch {
+      // I.A indisponível → ASO anexado porém NÃO validado (gate travado; reenviar para revalidar).
+      iaStatus = "INDISPONIVEL";
+    }
+
+    return { ok: true, aso: { nome, registradoEm }, asoValidado, iaStatus };
+  }
+
+  // ── Modal de Gestão de Agendamento do Exame (aba EXAME) ──────────────────────
+
+  /** Devolve o agendamento do exame da admissão (ou null se ainda não cadastrado). */
+  async obterAgendamento(admissaoId: string) {
+    const [row] = await this.db
+      .select()
+      .from(exameAgendamento)
+      .where(eq(exameAgendamento.admissaoId, admissaoId));
+    return row ?? null;
+  }
+
+  /**
+   * Cadastra (1ª vez) OU reagenda (já existe) o agendamento do exame. Reagendar OBRIGA atualizar os
+   * dados e INCREMENTA o contador de reagendamentos (sub-status). Sem PII — só logística do exame.
+   */
+  async salvarAgendamento(admissaoId: string, dto: AgendamentoExameDto) {
+    const admissao = await this.db.query.admissoes.findFirst({ where: eq(admissoes.id, admissaoId) });
+    if (!admissao) throw new NotFoundException("Admissão não encontrada");
+
+    const existente = await this.obterAgendamento(admissaoId);
+    const agora = new Date();
+    const valores = {
+      data: dto.data,
+      horario: dto.horario,
+      nomeClinica: dto.nomeClinica,
+      local: dto.local,
+      fornecedor: dto.fornecedor,
+    };
+
+    if (!existente) {
+      const [row] = await this.db
+        .insert(exameAgendamento)
+        .values({ admissaoId, ...valores })
+        .returning();
+      return { ok: true, reagendou: false, agendamento: row };
+    }
+
+    // Já existe → é reagendamento: incrementa o contador (independe da flag, o registro já existia).
+    const [row] = await this.db
+      .update(exameAgendamento)
+      .set({ ...valores, reagendamentos: existente.reagendamentos + 1, atualizadoEm: agora })
+      .where(eq(exameAgendamento.id, existente.id))
+      .returning();
+    return { ok: true, reagendou: true, agendamento: row };
+  }
+
+  /** A admissão tem agendamento de exame com data preenchida? (gate de AGENDADO). */
+  private async temAgendamento(admissaoId: string): Promise<boolean> {
+    const ag = await this.obterAgendamento(admissaoId);
+    return !!ag?.data;
   }
 
   /**
@@ -886,12 +1031,14 @@ export class EsteiraService {
         regiao: clientes.descricaoRegiao,
         regiaoCod: clientes.regiao,
         setor: dadosVagaFolha.departamento,
+        agendamentoData: exameAgendamento.data,
       })
       .from(admissoes)
       .innerJoin(candidatos, eq(admissoes.candidatoCpf, candidatos.cpf))
       .innerJoin(cargos, eq(admissoes.cargoId, cargos.id))
       .innerJoin(clientes, eq(admissoes.codCliente, clientes.codCliente))
       .leftJoin(dadosVagaFolha, eq(dadosVagaFolha.admissaoId, admissoes.id))
+      .leftJoin(exameAgendamento, eq(exameAgendamento.admissaoId, admissoes.id))
       .where(inArray(admissoes.id, admissaoIds));
 
     // Empregador/CNPJ (EMPRESA/CNPJ) pela view — resolvido por cod_cliente. Raw sql (view fora do schema).
@@ -932,7 +1079,7 @@ export class EsteiraService {
         cargo: b.cargo,
         cpf: formatarCpf(b.cpf),
         dataNascimento: formatarData(b.dataNascimento),
-        agendamento: "",
+        agendamento: formatarData(b.agendamentoData),
         regiao: b.regiao ?? b.regiaoCod ?? "",
       });
     }
@@ -989,6 +1136,17 @@ const COLUNAS_RELATORIO = [
   "AGENDAMENTO",
   "REGIÃO",
 ] as const;
+
+/** Resumo do agendamento do exame exibido na fila EXAME. */
+interface AgendamentoResumo {
+  admissaoId: string;
+  data: string | null;
+  horario: string | null;
+  nomeClinica: string | null;
+  local: string | null;
+  fornecedor: string | null;
+  reagendamentos: number;
+}
 
 /** Uma linha do relatório da clínica (preview JSON e CSV compartilham este formato). */
 export interface LinhaRelatorioClinica {

@@ -18,6 +18,7 @@ import {
   estadoDocumentoEnum,
   exigenciaEnum,
   farolGlobalEnum,
+  fornecedorExameEnum,
   frenteTipoEnum,
   ncLiberacaoEnum,
   ncStatusEnum,
@@ -181,6 +182,9 @@ export const admissoes = pgTable("admissoes", {
   // URL do prontuário no Drive gravada ao arquivar o ASO logo após a auditoria VALIDADO (Fase 4
   // ajustes finais — o ASO não espera o fechamento da régua). Referência (link da pasta), não PII.
   driveAsoUrl: text("drive_aso_url"),
+  // ASO validado pelo consultor (aba EXAME): gate de APTO exige ASO anexado E validado. Um novo
+  // upload de ASO zera este flag (precisa revalidar). Aditivo, default false (admissões existentes).
+  asoValidado: boolean("aso_validado").notNull().default(false),
   // Assinatura na Clicksign (INT-4 / F9). `clicksignEnvelopeId` é o ID do envelope na API 3.0 —
   // referência técnica, não PII nem URL do Pandapé (§A.6). `clicksignStatus` espelha o ciclo do
   // envelope (SEM_ENVELOPE inicial). `contratoAssinadoDriveUrl` é o link do contrato assinado já
@@ -217,6 +221,26 @@ export const dadosVagaFolha = pgTable("dados_vaga_folha", {
   substituidoNome: varchar("substituido_nome", { length: 200 }),
   substituidoCpf: varchar("substituido_cpf", { length: 11 }),
   substituicaoExpurgarEm: timestamp("substituicao_expurgar_em", { withTimezone: true }),
+});
+
+// ── ExameAgendamento (1:1 da Admissão) — gestão do agendamento do exame (aba EXAME) ─────────
+// O consultor lança os dados que a clínica/fornecedor respondeu por e-mail. `reagendamentos` conta
+// quantas vezes foi reagendado (sub-status). `data` alimenta a coluna AGENDAMENTO do relatório da
+// clínica. Aditivo/reversível. Sem PII (só logística do exame).
+export const exameAgendamento = pgTable("exame_agendamento", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  admissaoId: uuid("admissao_id")
+    .notNull()
+    .unique()
+    .references(() => admissoes.id, { onDelete: "cascade" }),
+  data: date("data"),
+  horario: varchar("horario", { length: 5 }), // "HH:MM"
+  nomeClinica: varchar("nome_clinica", { length: 200 }),
+  local: text("local"),
+  fornecedor: fornecedorExameEnum("fornecedor"),
+  reagendamentos: integer("reagendamentos").notNull().default(0),
+  criadoEm,
+  atualizadoEm,
 });
 
 // ── DocumentoAdmissão (estado por documento exigido — SÓ status) ────────────

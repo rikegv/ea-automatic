@@ -79,7 +79,9 @@ const regua = {
 
 function montar() {
   const captured: unknown[] = [];
-  const svc = new EsteiraService(fakeDb(captured) as never, regua as never);
+  // AuditoriaService (3º arg): só usado no anexarAso (fora deste teste de listagem) → stub vazio.
+  const auditoria = {} as never;
+  const svc = new EsteiraService(fakeDb(captured) as never, regua as never, auditoria);
   return { svc, captured };
 }
 

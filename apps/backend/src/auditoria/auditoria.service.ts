@@ -129,6 +129,15 @@ export class AuditoriaService {
         set: { estado, observacao, atualizadoEm: agora },
       });
 
+    // 4.4) ASO → o veredito da IA governa o gate de APTO da esteira (§ OST modal): VALIDADO (apto)
+    // destrava; INCONFORME/PENDENTE mantém travado. É a I.A que valida, não um flag manual.
+    if (tipo.codigo === "ASO") {
+      await this.db
+        .update(admissoes)
+        .set({ asoValidado: resultado.status === "VALIDADO", atualizadoEm: agora })
+        .where(eq(admissoes.id, admissaoId));
+    }
+
     // 4.5) ASO VALIDADO → arquiva imediatamente na subpasta ASO do prontuário (Fase 4 ajustes
     // finais), sem esperar o fechamento da régua. Remove o ASO da staging p/ não duplicar no lote.
     let asoArquivado: { pastaUrl: string } | undefined;
@@ -164,6 +173,38 @@ export class AuditoriaService {
       ...(auditoriaAuto ? { auditoriaAuto } : {}),
       ...(arquivado ? { arquivado } : {}),
     };
+  }
+
+  /**
+   * Classifica UM ASO pela IA para o gate de APTO da esteira — devolve SÓ o veredito (apto/inapto),
+   * sem persistir estado de documento nem arquivar (isso é da auditoria da régua). Reusa a staging
+   * efêmera + regras ativas do ASO + motor de IA. §A.6: buffer só na staging (expurgado no finally);
+   * CPF vai apenas no payload da IA e nunca é logado.
+   */
+  async classificarAso(admissaoId: string, arquivo: { buffer: Buffer; originalname: string }) {
+    const adm = await this.carregarAdmissao(admissaoId);
+    const tipo = await this.db.query.tiposDocumento.findFirst({
+      where: eq(tiposDocumento.codigo, "ASO"),
+    });
+    if (!tipo) throw new NotFoundException("Tipo de documento ASO não cadastrado");
+
+    const stagingPath = await this.staging.salvar(admissaoId, tipo.codigo, arquivo);
+    try {
+      const regras = await this.db
+        .select({ descricaoRegra: regrasAuditoria.descricaoRegra })
+        .from(regrasAuditoria)
+        .where(and(eq(regrasAuditoria.tipoDocumentoId, tipo.id), eq(regrasAuditoria.ativo, true)));
+      const resultado = await this.ai.auditarDocumento({
+        stagingPath,
+        tipoDocumentoCodigo: tipo.codigo,
+        tipoDocumentoNome: tipo.nome,
+        candidato: { nome: adm.candidatoNome, cpf: adm.candidatoCpf },
+        regras: regras.map((r) => ({ descricaoRegra: r.descricaoRegra })),
+      });
+      return { status: resultado.status, valido: resultado.status === "VALIDADO" };
+    } finally {
+      await this.staging.removerArquivo(stagingPath).catch(() => undefined);
+    }
   }
 
   /**

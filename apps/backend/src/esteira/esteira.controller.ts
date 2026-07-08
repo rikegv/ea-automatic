@@ -5,6 +5,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
   Res,
   StreamableFile,
@@ -15,6 +16,7 @@ import { FileInterceptor } from "@nestjs/platform-express";
 import type { Response } from "express";
 import { CurrentUser } from "../auth/decorators";
 import type { AuthUser } from "../auth/auth.types";
+import { AgendamentoExameDto } from "./dto/agendamento-exame.dto";
 import { PatchStatusDto } from "./dto/patch-status.dto";
 import { RelatorioClinicaDto } from "./dto/relatorio-clinica.dto";
 import { EsteiraService } from "./esteira.service";
@@ -88,5 +90,17 @@ export class EsteiraController {
     @UploadedFile() file: Express.Multer.File,
   ) {
     return this.esteira.anexarAso(admissaoId, file);
+  }
+
+  /** Agendamento do exame (modal) — devolve o registro atual ou null. */
+  @Get("exame/:admissaoId/agendamento")
+  obterAgendamento(@Param("admissaoId") admissaoId: string) {
+    return this.esteira.obterAgendamento(admissaoId);
+  }
+
+  /** Cadastra ou reagenda o agendamento do exame (modal da aba EXAME). */
+  @Put("exame/:admissaoId/agendamento")
+  salvarAgendamento(@Param("admissaoId") admissaoId: string, @Body() dto: AgendamentoExameDto) {
+    return this.esteira.salvarAgendamento(admissaoId, dto);
   }
 }

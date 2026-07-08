@@ -1,16 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type {
-  AuditoriaStatus,
-  ClicksignStatus,
-  Origem,
-  ResultadoAuditoria,
-} from "@ea/shared-types";
+import type { ClicksignStatus, Origem } from "@ea/shared-types";
 import { apiFetch, apiUpload, apiDownloadPost, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/cn";
-import { PageHead } from "@/components/ui/PageHead";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Pill, type PillTone } from "@/components/ui/Pill";
 import { PendenciasBadge } from "@/components/ui/PendenciasBadge";
@@ -26,14 +20,15 @@ import {
   type AceiteLiberacao,
 } from "@/components/esteira/AceiteLiberacaoModal";
 import { AuditoriaDocsModal } from "@/components/esteira/AuditoriaDocsModal";
+import { AgendamentoExameModal } from "@/components/esteira/AgendamentoExameModal";
 import { PendenciasModal } from "@/components/gerenciador/PendenciasModal";
 import { EditAdmissaoModal } from "@/components/gerenciador/EditAdmissaoModal";
 
 // ── Contrato de API (F8/F7) ─────────────────────────────────────────────────
 const ABAS = [
-  { label: "Auditoria", rota: "auditoria" },
-  { label: "Exame", rota: "exame" },
-  { label: "Cadastro / Contrato", rota: "cadastro" },
+  { label: "AUDITORIA", rota: "auditoria", icone: "doc" },
+  { label: "EXAME", rota: "exame", icone: "heart" },
+  { label: "CADASTRO", rota: "cadastro", icone: "pen" },
 ] as const;
 
 interface StatusCat {
@@ -57,13 +52,25 @@ interface EsteiraItem {
   origem: Origem;
   sinalizador: string;
   asoAnexado?: boolean;
+  // EXAME, validação do ASO (gate de APTO) + agendamento do exame (modal de gestão).
+  asoValidado?: boolean;
+  temAgendamento?: boolean;
+  reagendamentos?: number;
+  agendamento?: {
+    data: string | null;
+    horario: string | null;
+    nomeClinica: string | null;
+    local: string | null;
+    fornecedor: "MEDICAL" | "LIMER" | null;
+    reagendamentos: number;
+  } | null;
   disponivel?: boolean;
   obrigatoriosPendentes?: boolean;
   temPendencias?: boolean;
   // Preenchido quando a régua fecha e o prontuário é arquivado no Drive (T4 / Fase 4).
   drivePastaUrl?: string | null;
   driveAsoUrl?: string | null;
-  // Clicksign (INT-4 / F9) — status do envelope + contrato assinado arquivado no Drive.
+  // Clicksign (INT-4 / F9), status do envelope + contrato assinado arquivado no Drive.
   clicksignStatus?: ClicksignStatus;
   contratoAssinadoDriveUrl?: string | null;
 }
@@ -100,18 +107,22 @@ const TONE_VAR: Record<PillTone, string | undefined> = {
   in: "var(--accent)",
 };
 
-// Veredito da IA do ASO (T3) → tom + rótulo da pill.
-const ASO_TONE: Record<AuditoriaStatus, PillTone> = {
-  VALIDADO: "ok",
-  INCONFORME: "dg",
-  PENDENTE: "wn",
-};
-const ASO_ROTULO: Record<AuditoriaStatus, string> = {
-  VALIDADO: "Validado",
-  INCONFORME: "Inconforme",
-  PENDENTE: "Pendente",
-};
 const ASO_ACCEPT = ".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png";
+
+// Flash do upload de ASO por veredito da I.A (a validação é da I.A na leitura do documento, nunca
+// manual). `tone` decide a cor do aviso: sucesso (validado) vs aviso (demais).
+const ASO_FLASH: Record<string, { msg: string; tone: "ok" | "wn" }> = {
+  VALIDADO: { msg: "ASO validado pela I.A (apto).", tone: "ok" },
+  INCONFORME: {
+    msg: "ASO anexado, mas a I.A não validou como apto (inconforme).",
+    tone: "wn",
+  },
+  PENDENTE: { msg: "ASO anexado; validação da I.A pendente.", tone: "wn" },
+  INDISPONIVEL: {
+    msg: "ASO anexado; I.A indisponível no momento, reenvie para revalidar.",
+    tone: "wn",
+  },
+};
 
 /** Spinner inline (Tailwind animate-spin), herda a cor do texto. */
 function Spinner() {
@@ -124,19 +135,19 @@ function Spinner() {
 }
 
 function fmtData(d?: string | null): string {
-  if (!d) return "—";
+  if (!d) return "não informado";
   const dt = new Date(d);
-  return Number.isNaN(+dt) ? "—" : dt.toLocaleDateString("pt-BR");
+  return Number.isNaN(+dt) ? "não informado" : dt.toLocaleDateString("pt-BR");
 }
-// Data de admissão é um `date` (YYYY-MM-DD) — formata por partes p/ não sofrer deslocamento de fuso.
+// Data de admissão é um `date` (YYYY-MM-DD): formata por partes p/ não sofrer deslocamento de fuso.
 function fmtDataAdmissao(d?: string | null): string {
-  if (!d) return "—";
+  if (!d) return "não informado";
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(d);
   return m ? `${m[3]}/${m[2]}/${m[1]}` : fmtData(d);
 }
 
 type DialogState = {
-  kind: "conclui" | "reversao" | "aptoSemAso" | "auditoriaIncompleta" | "passagem";
+  kind: "conclui" | "reversao" | "aptoSemAsoSuperAdmin" | "auditoriaIncompleta" | "passagem";
   frenteId: string;
   status: string;
   message: string;
@@ -163,7 +174,7 @@ export default function EsteiraPage() {
   const [statusFiltro, setStatusFiltro] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
-  // Busca por candidato (item 3) — nome ou CPF; revela também concluídos (item 1).
+  // Busca por candidato (item 3), nome ou CPF; revela também concluídos (item 1).
   const [candQuery, setCandQuery] = useState("");
   const [candDebounced, setCandDebounced] = useState("");
 
@@ -171,19 +182,18 @@ export default function EsteiraPage() {
   const [dialog, setDialog] = useState<DialogState>(null);
   const [actingId, setActingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [flash, setFlash] = useState<string | null>(null);
+  const [flash, setFlash] = useState<{ msg: string; tone: "ok" | "wn" } | null>(null);
   // Modal de visualização rápida (item 4)
   const [viewId, setViewId] = useState<string | null>(null);
-  // Modal de auditoria documental por IA (Fase 4 / F2) — só na aba Auditoria.
+  // Modal de auditoria documental por IA (Fase 4 / F2), só na aba Auditoria.
   const [auditId, setAuditId] = useState<string | null>(null);
-  // ASO (T3) — upload único que anexa E audita na IA. tipoDocumentoId do ASO + veredito por frente.
-  const [asoTipoId, setAsoTipoId] = useState<string | null>(null);
-  const [asoResult, setAsoResult] = useState<Record<string, ResultadoAuditoria>>({});
-  // Pendências obrigatórias (item 4) — badge clicável → modal → preencher (reusa o padrão do Gerenciador).
+  // Modal de Gestão de Agendamento do Exame (aba EXAME), cadastro/visualização/reagendamento.
+  const [agendaItem, setAgendaItem] = useState<EsteiraItem | null>(null);
+  // Pendências obrigatórias (item 4), badge clicável → modal → preencher (reusa o padrão do Gerenciador).
   const [pendItem, setPendItem] = useState<EsteiraItem | null>(null);
   const [editItem, setEditItem] = useState<EsteiraItem | null>(null);
   const [editFiltro, setEditFiltro] = useState<string[] | undefined>(undefined);
-  // Relatório da clínica (aba Exame) — seleção múltipla de admissões → CSV consolidado.
+  // Relatório da clínica (aba Exame), seleção múltipla de admissões → CSV consolidado.
   const [selecionados, setSelecionados] = useState<Set<string>>(new Set());
   const [gerandoRelatorio, setGerandoRelatorio] = useState(false);
   const [relatorioError, setRelatorioError] = useState<string | null>(null);
@@ -199,14 +209,6 @@ export default function EsteiraPage() {
     const h = setTimeout(() => setCandDebounced(candQuery.trim()), 350);
     return () => clearTimeout(h);
   }, [candQuery]);
-
-  // tipoDocumentoId do ASO (T3) — uma vez; usado no upload+auditoria unificados da aba Exame.
-  useEffect(() => {
-    if (!token) return;
-    apiFetch<{ id: string; codigo: string }[]>("/catalogos/tipos-documento", { token })
-      .then((tipos) => setAsoTipoId(tipos.find((t) => t.codigo === "ASO")?.id ?? null))
-      .catch(() => setAsoTipoId(null));
-  }, [token]);
 
   // ── Carga da fila com os filtros atuais ─────────────────────────────────────
   const load = useCallback(async () => {
@@ -235,7 +237,7 @@ export default function EsteiraPage() {
     load();
   }, [load]);
 
-  // Troca de aba: o filtro de status é específico da frente — reseta para não vazar código inválido.
+  // Troca de aba: o filtro de status é específico da frente, reseta para não vazar código inválido.
   function trocarAba(i: number) {
     if (i === aba) return;
     setStatusFiltro("");
@@ -307,21 +309,33 @@ export default function EsteiraPage() {
         );
         setDialog(null);
         if (resp?.ncCriada) {
-          setFlash(
-            liberacao?.diretoria
+          setFlash({
+            msg: liberacao?.diretoria
               ? `Liberação por diretoria enviada à supervisão (${resp.ncCriada}).`
               : `Não conformidade registrada (${resp.ncCriada}).`,
-          );
+            tone: "ok",
+          });
         }
         await load();
       } catch (e) {
         if (e instanceof ApiError && e.status === 409) {
-          const reason = (e.data as { reason?: string } | undefined)?.reason;
-          // aptoSemAso/auditoriaIncompleta = aceite com Via 1/2; passagem = aceite de pendências (S3);
-          // reversao = reabrir cadastro.
+          const payload = e.data as
+            | { reason?: string; needsConfirmation?: boolean; message?: string }
+            | undefined;
+          const reason = payload?.reason;
+          // Gates DUROS (modal de agendamento): needsConfirmation:false → bloqueio sem bypass.
+          // Exibe a mensagem como aviso/erro; NÃO abre diálogo de confirmação.
+          if (payload?.needsConfirmation === false) {
+            setDialog(null);
+            setActionError(payload.message ?? e.message);
+            return;
+          }
+          // aptoSemAsoSuperAdmin = gate APTO por papel (só SUPER_ADMIN pode autorizar liberar Apto
+          // sem ASO validado, diálogo de confirmação); auditoriaIncompleta = aceite com Via 1/2;
+          // passagem = aceite de pendências (S3); reversao = reabrir cadastro.
           const kind =
-            reason === "aptoSemAso"
-              ? "aptoSemAso"
+            reason === "aptoSemAsoSuperAdmin"
+              ? "aptoSemAsoSuperAdmin"
               : reason === "auditoriaIncompleta"
                 ? "auditoriaIncompleta"
                 : reason === "passagemComPendencia"
@@ -342,16 +356,9 @@ export default function EsteiraPage() {
   function onSelectStatus(item: EsteiraItem, novo: string) {
     if (!novo || novo === item.status) return;
     setActionError(null);
-    // Exame → "apto" sem ASO anexado: aceite com escolha Via 1/Via 2 (item 2 — gatilho da NC-2).
-    if (isExame && novo === "APTO" && !item.asoAnexado) {
-      setDialog({
-        kind: "aptoSemAso",
-        frenteId: item.frenteId,
-        status: novo,
-        message: "Estou ciente que estou marcando este candidato como apto sem o ASO anexado.",
-      });
-      return;
-    }
+    // Exame → "apto" sem ASO validado pela I.A: o gate é do BACKEND, por PAPEL (não checa papel aqui).
+    // O PATCH é enviado e o 409 decide: needsConfirmation:false → aviso puro (COMUM/MASTER, sem opção
+    // de liberar); needsConfirmation:true (aptoSemAsoSuperAdmin) → diálogo de confirmação.
     // Auditoria → "análise ok" com obrigatórios pendentes: aceite com escolha Via 1/Via 2 (NC-1).
     if (rota === "auditoria" && novo === "ANALISE_OK" && item.obrigatoriosPendentes) {
       setDialog({
@@ -389,33 +396,30 @@ export default function EsteiraPage() {
     }
   }
 
-  // ── ASO (T3): upload ÚNICO que anexa E audita na IA ──────────────────────────
-  // O endpoint de auditoria recebe o arquivo (efêmero), retorna o veredito e marca o ASO como
-  // ENTREGUE quando VALIDADO (reflete em asoAnexado após o reload). Não há mais botão separado.
-  async function uploadEAuditarAso(item: EsteiraItem, file: File) {
-    if (!asoTipoId) {
-      setActionError("Tipo de documento ASO não encontrado no catálogo.");
-      return;
-    }
+  // ── ASO (T3): upload único que anexa E dispara a validação pela I.A ──────────
+  // O binário é efêmero (§A.6): o backend lê o documento na I.A e grava o veredito (`asoValidado`),
+  // refletido em asoAnexado/asoValidado após o reload. NÃO há controle manual de validação, quem
+  // decide apto/inapto é a I.A na leitura. O flash reflete o `iaStatus` devolvido.
+  async function uploadAso(item: EsteiraItem, file: File) {
     setActingId(item.frenteId);
     setActionError(null);
     setFlash(null);
     try {
       const fd = new FormData();
       fd.append("file", file);
-      fd.append("tipoDocumentoId", asoTipoId);
-      const resp = await apiUpload<{ resultado: ResultadoAuditoria }>(
-        `/esteira/auditoria/${item.admissaoId}/documento`,
+      const resp = await apiUpload<{ ok: boolean; asoValidado: boolean; iaStatus: string }>(
+        `/esteira/exame/${item.admissaoId}/aso`,
         fd,
         token,
       );
-      setAsoResult((m) => ({ ...m, [item.frenteId]: resp.resultado }));
-      setFlash(
-        `ASO de ${item.candidatoNome} auditado: ${ASO_ROTULO[resp.resultado.status]}.`,
-      );
+      const aviso = ASO_FLASH[resp.iaStatus] ?? {
+        msg: "ASO anexado.",
+        tone: "ok" as const,
+      };
+      setFlash(aviso);
       await load();
     } catch (e) {
-      setActionError(e instanceof ApiError ? e.message : "Falha ao anexar e auditar o ASO.");
+      setActionError(e instanceof ApiError ? e.message : "Falha ao anexar o ASO.");
     } finally {
       setActingId(null);
     }
@@ -423,15 +427,13 @@ export default function EsteiraPage() {
 
   function confirmarDialog() {
     if (!dialog) return;
-    // conclusão simples não exige aceite; reversão/apto-sem-ASO/passagem sim. O aceite também marca
-    // aceitePassagem=true (registra a trilha de passagem se houver pendências — S3).
-    void doPatch(
-      dialog.frenteId,
-      dialog.status,
-      dialog.kind !== "conclui",
-      undefined,
-      dialog.kind !== "conclui",
-    );
+    // conclusão simples não exige aceite; reversão/passagem/apto-sem-ASO (super admin) sim.
+    const confirmar = dialog.kind !== "conclui";
+    // aptoSemAsoSuperAdmin: autoriza SÓ o Apto (confirmar); NÃO marca aceitePassagem, deixa o backend
+    // pedir o aceite de passagem depois, se houver pendências obrigatórias (fluxo passagem já tratado).
+    // Demais aceites marcam aceitePassagem=true (registra a trilha de passagem se houver pendências, S3).
+    const aceitePassagem = confirmar && dialog.kind !== "aptoSemAsoSuperAdmin";
+    void doPatch(dialog.frenteId, dialog.status, confirmar, undefined, aceitePassagem);
   }
 
   const items = data?.items ?? [];
@@ -496,9 +498,10 @@ export default function EsteiraPage() {
         "relatorio-clinica.csv",
         token,
       );
-      setFlash(
-        `Relatório da clínica gerado (${ids.length} ${ids.length === 1 ? "candidato" : "candidatos"}).`,
-      );
+      setFlash({
+        msg: `Relatório da clínica gerado (${ids.length} ${ids.length === 1 ? "candidato" : "candidatos"}).`,
+        tone: "ok",
+      });
     } catch (e) {
       setRelatorioError(
         e instanceof ApiError ? e.message : "Falha ao gerar o relatório da clínica.",
@@ -510,11 +513,9 @@ export default function EsteiraPage() {
 
   return (
     <>
-      <PageHead
-        eyebrow="Esteira admissional"
-        title="Faróis por frente"
-        subtitle="Cada frente opera de forma independente. Todos os consultores enxergam todas (F8/F12)."
-      />
+      <div className="mb-[26px]">
+        <h1 className="text-[26px] font-extrabold">Farol Admissional</h1>
+      </div>
 
       {/* ── Abas ─────────────────────────────────────────────────────────── */}
       <div className="mb-[22px] flex gap-2">
@@ -526,6 +527,7 @@ export default function EsteiraPage() {
             onClick={() => trocarAba(i)}
           >
             <span className="dot" />
+            <Icon name={a.icone} className="h-3.5 w-3.5 flex-none" />
             {a.label}
           </button>
         ))}
@@ -534,7 +536,7 @@ export default function EsteiraPage() {
       {/* ── KPIs por frente (reais; clicáveis = filtro, item 5) ──────────── */}
       <div className="mb-[18px] grid grid-cols-2 gap-[14px] sm:grid-cols-3 xl:grid-cols-5">
         <GlassCard className="fk">
-          <div className="num">{loading && !data ? "—" : (data?.kpis.total ?? 0)}</div>
+          <div className="num">{loading && !data ? "…" : (data?.kpis.total ?? 0)}</div>
           <div className="lbl">Total na fila</div>
         </GlassCard>
         {kpiStatus.map((c) => {
@@ -568,7 +570,7 @@ export default function EsteiraPage() {
       {/* ── Filtros (F7) ─────────────────────────────────────────────────── */}
       <GlassCard className="mb-[18px] p-4">
         <div className="grid gap-3 md:grid-cols-[1.4fr_1.4fr_1.1fr_0.9fr_0.9fr_auto] md:items-end">
-          {/* Candidato (nome ou CPF) — item 3 */}
+          {/* Candidato (nome ou CPF), item 3 */}
           <div>
             <span className="ds-label">Candidato</span>
             <input
@@ -615,7 +617,7 @@ export default function EsteiraPage() {
             )}
           </div>
 
-          {/* Status (do catálogo da aba) — seletor estilizado (item 8) */}
+          {/* Status (do catálogo da aba), seletor estilizado (item 8) */}
           <div>
             <span className="ds-label">Status</span>
             <Select
@@ -677,8 +679,15 @@ export default function EsteiraPage() {
         </p>
       )}
       {flash && (
-        <p className="mb-3 inline-flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[rgba(91,214,138,0.12)] px-3 py-2 text-sm text-ok">
-          <Icon name="check" className="h-4 w-4" /> {flash}
+        <p
+          className={cn(
+            "mb-3 inline-flex items-center gap-2 rounded-xl border border-[var(--border)] px-3 py-2 text-sm",
+            flash.tone === "ok"
+              ? "bg-[rgba(91,214,138,0.12)] text-ok"
+              : "bg-[rgba(214,142,69,0.12)] text-warn",
+          )}
+        >
+          <Icon name={flash.tone === "ok" ? "check" : "alert"} className="h-4 w-4" /> {flash.msg}
         </p>
       )}
 
@@ -805,8 +814,24 @@ export default function EsteiraPage() {
                 </div>
                 <div className="meta truncate">{item.cargoNome}</div>
                 <div className="meta">{fmtDataAdmissao(item.dataAdmissao)}</div>
-                <div className="min-w-0">
+                <div className="flex min-w-0 flex-col items-start gap-1">
                   <Pill tone={tone}>{rotulo}</Pill>
+                  {/* Sub-status de reagendamento + indicador discreto de exame agendado (EXAME) */}
+                  {isExame && (item.reagendamentos ?? 0) > 0 && (
+                    <Pill tone="or" title="Exame reagendado">
+                      Reagendado {item.reagendamentos}x
+                    </Pill>
+                  )}
+                  {isExame && item.temAgendamento && item.agendamento?.data && (
+                    <span
+                      className="inline-flex items-center gap-1 text-[11px] text-dim"
+                      title="Exame agendado"
+                    >
+                      <Icon name="clock" className="h-3 w-3 flex-none" />
+                      {fmtDataAdmissao(item.agendamento.data)}
+                      {item.agendamento.horario ? ` ${item.agendamento.horario}` : ""}
+                    </span>
+                  )}
                 </div>
 
                 {/* Coluna de operação */}
@@ -818,7 +843,7 @@ export default function EsteiraPage() {
                         title="O Cadastro reabre sozinho quando Auditoria e Exame concluírem. O trabalho fica preservado."
                       >
                         <Icon name="clock" className="h-4 w-4 flex-none" />
-                        Pausado — aguarda Auditoria + Exame
+                        Pausado: aguarda Auditoria + Exame
                       </span>
                     ) : (
                       <Select
@@ -835,18 +860,18 @@ export default function EsteiraPage() {
                       />
                     )}
 
-                    {/* ASO (T3): upload ÚNICO → anexa + audita na IA automaticamente */}
+                    {/* ASO (T3): upload único → anexa e dispara a validação pela I.A no backend */}
                     {isExame && (
                       <label
                         className={cn(
                           "flex flex-none cursor-pointer items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2 text-[12px] font-semibold transition hover:bg-[var(--surface-2)]",
                           item.asoAnexado ? "text-ok" : "text-dim",
-                          (acting || !asoTipoId) && "pointer-events-none opacity-60",
+                          acting && "pointer-events-none opacity-60",
                         )}
                         title={
                           item.asoAnexado
-                            ? "ASO anexado — reanexar e reauditar na IA"
-                            : "Anexar ASO (audita na IA automaticamente)"
+                            ? "ASO anexado, reanexar para revalidar na I.A"
+                            : "Anexar ASO (valida na I.A automaticamente)"
                         }
                       >
                         {acting ? (
@@ -854,19 +879,39 @@ export default function EsteiraPage() {
                         ) : (
                           <Icon name={item.asoAnexado ? "check" : "doc"} className="h-4 w-4" />
                         )}
-                        {acting ? "Auditando…" : item.asoAnexado ? "Anexado" : "ASO"}
+                        {acting ? "Enviando…" : item.asoAnexado ? "Anexado" : "ASO"}
                         <input
                           type="file"
                           accept={ASO_ACCEPT}
                           className="hidden"
-                          disabled={acting || !asoTipoId}
+                          disabled={acting}
                           onChange={(e) => {
                             const f = e.target.files?.[0];
-                            if (f) void uploadEAuditarAso(item, f);
+                            if (f) void uploadAso(item, f);
                             e.target.value = "";
                           }}
                         />
                       </label>
+                    )}
+
+                    {/* Modal de Gestão de Agendamento do Exame (cadastro / visualização / reagendar) */}
+                    {isExame && (
+                      <button
+                        type="button"
+                        className={cn(
+                          "inline-flex flex-none items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2 text-[12px] font-semibold transition hover:bg-[var(--surface-2)]",
+                          item.temAgendamento ? "text-accent" : "text-dim",
+                        )}
+                        title={
+                          item.temAgendamento
+                            ? "Ver / reagendar o exame"
+                            : "Cadastrar o agendamento do exame"
+                        }
+                        onClick={() => setAgendaItem(item)}
+                      >
+                        <Icon name="clock" className="h-4 w-4" />
+                        Agendamento
+                      </button>
                     )}
 
                     {isAuditoria && (
@@ -881,7 +926,7 @@ export default function EsteiraPage() {
                       </button>
                     )}
 
-                    {/* Link do prontuário no Drive (T4) — só após a régua fechar; pasta ou ASO */}
+                    {/* Link do prontuário no Drive (T4), só após a régua fechar; pasta ou ASO */}
                     {isAuditoria && (item.drivePastaUrl || item.driveAsoUrl) && (
                       <a
                         href={item.drivePastaUrl || item.driveAsoUrl || undefined}
@@ -896,30 +941,10 @@ export default function EsteiraPage() {
                     )}
                   </div>
 
-                  {/* Veredito da IA do ASO (T3) — badge + motivo abaixo do campo */}
-                  {isExame && asoResult[item.frenteId] && (
-                    <div className="flex min-w-0 flex-wrap items-center gap-2">
-                      <Pill tone={ASO_TONE[asoResult[item.frenteId].status]}>
-                        {ASO_ROTULO[asoResult[item.frenteId].status]}
-                      </Pill>
-                      {asoResult[item.frenteId].motivo && (
-                        <span
-                          className={cn(
-                            "min-w-0 text-[12px]",
-                            asoResult[item.frenteId].status === "VALIDADO"
-                              ? "text-ok"
-                              : asoResult[item.frenteId].status === "INCONFORME"
-                                ? "text-danger"
-                                : "text-warn",
-                          )}
-                        >
-                          {asoResult[item.frenteId].motivo}
-                        </span>
-                      )}
-                    </div>
-                  )}
+                  {/* O veredito do ASO pela I.A saiu da linha da fila, agora vive no modal de detalhe
+                      do candidato (ícone de OLHO). A lista fica limpa. */}
 
-                  {/* Assinatura Clicksign (INT-4 / F9) — só na aba Cadastro; SEM_ENVELOPE fica
+                  {/* Assinatura Clicksign (INT-4 / F9), só na aba Cadastro; SEM_ENVELOPE fica
                       oculto (discreto). Reenvio por correção é feito na ficha (modal de detalhe). */}
                   {isCadastro &&
                     (item.contratoAssinadoDriveUrl ||
@@ -983,22 +1008,36 @@ export default function EsteiraPage() {
         onCancel={() => setDialog(null)}
       />
 
-      {/* S3 — aceite de avanço com pendências obrigatórias (gera trilha de passagem) */}
+      {/* S3, aceite de avanço com pendências obrigatórias (gera trilha de passagem) */}
       <ConfirmDialog
         open={dialog?.kind === "passagem"}
         title="Avançar com pendências?"
         message={dialog?.message ?? ""}
-        confirmLabel="Estou ciente — avançar"
+        confirmLabel="Estou ciente, avançar"
         tone="danger"
         busy={Boolean(dialog && actingId === dialog.frenteId)}
         onConfirm={confirmarDialog}
         onCancel={() => setDialog(null)}
       />
 
-      {/* Aceite COM PENDÊNCIA + escolha Via 1/Via 2 (apto sem ASO / auditoria incompleta) */}
-      {(dialog?.kind === "aptoSemAso" || dialog?.kind === "auditoriaIncompleta") && (
+      {/* Gate APTO por papel (backend): só SUPER_ADMIN recebe needsConfirmation → pode autorizar
+          liberar APTO sem ASO validado pela I.A. Reenvia o PATCH com confirmar:true (o backend pode
+          ainda pedir o aceite de passagem em seguida). COMUM/MASTER nunca chegam aqui (aviso puro). */}
+      <ConfirmDialog
+        open={dialog?.kind === "aptoSemAsoSuperAdmin"}
+        title="Liberar Apto sem ASO validado?"
+        message={dialog?.message ?? ""}
+        confirmLabel="Autorizar liberação"
+        tone="danger"
+        busy={Boolean(dialog && actingId === dialog.frenteId)}
+        onConfirm={confirmarDialog}
+        onCancel={() => setDialog(null)}
+      />
+
+      {/* Aceite COM PENDÊNCIA + escolha Via 1/Via 2 (auditoria incompleta) */}
+      {dialog?.kind === "auditoriaIncompleta" && (
         <AceiteLiberacaoModal
-          title={dialog.kind === "aptoSemAso" ? "Apto sem ASO" : "Auditoria com pendência"}
+          title="Auditoria com pendência"
           message={dialog.message}
           busy={actingId === dialog.frenteId}
           onConfirm={(l) => doPatch(dialog.frenteId, dialog.status, true, l, true)}
@@ -1007,7 +1046,19 @@ export default function EsteiraPage() {
       )}
 
       {/* ── Modal de visualização rápida (item 4) ────────────────────────── */}
-      {viewId && <AdmissaoDetalheModal admissaoId={viewId} onClose={() => setViewId(null)} />}
+      {viewId &&
+        (() => {
+          // Veredito do ASO (I.A) só existe na aba Exame; passa ao modal para exibir lá o estado.
+          const vi = items.find((i) => i.admissaoId === viewId);
+          return (
+            <AdmissaoDetalheModal
+              admissaoId={viewId}
+              asoAnexado={isExame ? vi?.asoAnexado : undefined}
+              asoValidado={isExame ? vi?.asoValidado : undefined}
+              onClose={() => setViewId(null)}
+            />
+          );
+        })()}
 
       {/* ── Modal de auditoria documental por IA (Fase 4 / F2) ────────────── */}
       {auditId && (
@@ -1020,7 +1071,22 @@ export default function EsteiraPage() {
         />
       )}
 
-      {/* ── Pendências obrigatórias (item 4) — mesmo padrão do Gerenciador ── */}
+      {/* ── Modal de Gestão de Agendamento do Exame (aba EXAME) ───────────── */}
+      {agendaItem && (
+        <AgendamentoExameModal
+          admissaoId={agendaItem.admissaoId}
+          candidatoNome={agendaItem.candidatoNome}
+          onClose={(salvou) => {
+            setAgendaItem(null);
+            if (salvou) {
+              setFlash({ msg: "Agendamento do exame salvo.", tone: "ok" });
+              void load();
+            }
+          }}
+        />
+      )}
+
+      {/* ── Pendências obrigatórias (item 4), mesmo padrão do Gerenciador ── */}
       {pendItem && (
         <PendenciasModal
           admissaoId={pendItem.admissaoId}
@@ -1045,7 +1111,7 @@ export default function EsteiraPage() {
           onSaved={(msg) => {
             setEditItem(null);
             setEditFiltro(undefined);
-            setFlash(msg);
+            setFlash({ msg, tone: "ok" });
             void load();
           }}
         />

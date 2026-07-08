@@ -37,7 +37,7 @@ interface AdmissaoDetalhe {
   // Preenchido quando a régua fecha e o prontuário é arquivado no Drive (T4 / Fase 4).
   drivePastaUrl: string | null;
   driveAsoUrl: string | null;
-  // Clicksign (INT-4 / F9) — status do envelope de assinatura do contrato.
+  // Clicksign (INT-4 / F9), status do envelope de assinatura do contrato.
   clicksignStatus: ClicksignStatus;
   temEnvelope: boolean;
   contratoAssinadoDriveUrl: string | null;
@@ -94,9 +94,9 @@ function campoRotulo(campo: string): string {
   return CAMPO_ROTULO[campo] ?? campo;
 }
 function fmtDataHora(d?: string | null): string {
-  if (!d) return "—";
+  if (!d) return "não informado";
   const dt = new Date(d);
-  return Number.isNaN(+dt) ? "—" : dt.toLocaleString("pt-BR");
+  return Number.isNaN(+dt) ? "não informado" : dt.toLocaleString("pt-BR");
 }
 
 const FRENTE_ROTULO: Record<string, string> = {
@@ -136,17 +136,17 @@ function docTone(estado: string): PillTone {
 }
 function fmtCpf(cpf: string): string {
   const d = (cpf ?? "").replace(/\D/g, "");
-  if (d.length !== 11) return cpf || "—";
+  if (d.length !== 11) return cpf || "não informado";
   return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`;
 }
 function fmtData(d?: string | null): string {
-  if (!d) return "—";
+  if (!d) return "não informado";
   const dt = new Date(d);
-  return Number.isNaN(+dt) ? "—" : dt.toLocaleDateString("pt-BR");
+  return Number.isNaN(+dt) ? "não informado" : dt.toLocaleDateString("pt-BR");
 }
-// Data de admissão é um `date` (YYYY-MM-DD) — formata por partes p/ não sofrer fuso.
+// Data de admissão é um `date` (YYYY-MM-DD), formata por partes p/ não sofrer fuso.
 function fmtDataAdmissao(d?: string | null): string {
-  if (!d) return "—";
+  if (!d) return "não informado";
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(d);
   return m ? `${m[3]}/${m[2]}/${m[1]}` : fmtData(d);
 }
@@ -161,14 +161,19 @@ function Campo({ rotulo, valor }: { rotulo: string; valor: string }) {
 }
 
 /**
- * Item 4 (2C) — modal SOMENTE LEITURA com a ficha da admissão. Não edita: visão rápida do
+ * Item 4 (2C), modal SOMENTE LEITURA com a ficha da admissão. Não edita: visão rápida do
  * candidato, frentes, checklist de documentos e sinalizador.
  */
 export function AdmissaoDetalheModal({
   admissaoId,
+  asoAnexado,
+  asoValidado,
   onClose,
 }: {
   admissaoId: string;
+  // Veredito do ASO pela I.A (aba Exame), read-only; ausente (undefined) fora da aba Exame.
+  asoAnexado?: boolean;
+  asoValidado?: boolean;
   onClose: () => void;
 }) {
   const { token } = useAuth();
@@ -237,7 +242,7 @@ export function AdmissaoDetalheModal({
           <div className="eyebrow !mb-1">Ficha da admissão</div>
           <div className="flex min-w-0 items-center gap-2">
             <h3 className="truncate text-[18px] font-extrabold">
-              {data?.candidato.nome ?? (error ? "—" : "Carregando…")}
+              {data?.candidato.nome ?? (error ? "não informado" : "Carregando…")}
             </h3>
             {data && <OrigemBadge origem={data.origem} className="flex-none" />}
           </div>
@@ -266,12 +271,12 @@ export function AdmissaoDetalheModal({
           {/* Identificação */}
           <section className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             <Campo rotulo="CPF" valor={fmtCpf(data.candidato.cpf)} />
-            <Campo rotulo="Telefone" valor={data.candidato.telefone || "—"} />
-            <Campo rotulo="E-mail" valor={data.candidato.email || "—"} />
+            <Campo rotulo="Telefone" valor={data.candidato.telefone || "não informado"} />
+            <Campo rotulo="E-mail" valor={data.candidato.email || "não informado"} />
             <Campo rotulo="Cliente" valor={data.cliente.razaoSocial} />
             <Campo rotulo="Cargo" valor={data.cargo} />
             <Campo rotulo="Data de admissão" valor={fmtDataAdmissao(data.dataAdmissao)} />
-            <Campo rotulo="Contrato" valor={data.tipoContrato || "—"} />
+            <Campo rotulo="Contrato" valor={data.tipoContrato || "não informado"} />
           </section>
 
           {/* Farol global da admissão (§A.3) */}
@@ -281,7 +286,7 @@ export function AdmissaoDetalheModal({
               const f = farolPill(data.farolGlobal);
               return <Pill tone={f.tone}>{f.label}</Pill>;
             })()}
-            {/* Prontuário no Drive (T4) — só após a régua fechar; pasta ou ASO */}
+            {/* Prontuário no Drive (T4), só após a régua fechar; pasta ou ASO */}
             {(data.drivePastaUrl || data.driveAsoUrl) && (
               <a
                 href={data.drivePastaUrl || data.driveAsoUrl || undefined}
@@ -295,6 +300,27 @@ export function AdmissaoDetalheModal({
               </a>
             )}
           </section>
+
+          {/* Veredito do ASO pela I.A (aba Exame), read-only. Quem decide apto/inapto é a I.A na
+              leitura do documento; aqui só refletimos o estado (saiu da linha da fila). */}
+          {asoAnexado !== undefined && (
+            <section className="flex flex-wrap items-center gap-2">
+              <span className="text-[12.5px] text-dim">ASO (I.A):</span>
+              {asoValidado ? (
+                <Pill tone="ok" title="A I.A validou o ASO como apto">
+                  ASO validado pela I.A
+                </Pill>
+              ) : asoAnexado ? (
+                <Pill tone="wn" title="ASO anexado; aguardando o veredito da I.A">
+                  ASO anexado, aguardando validação da I.A
+                </Pill>
+              ) : (
+                <Pill tone="nt" title="ASO ainda não anexado">
+                  ASO não anexado
+                </Pill>
+              )}
+            </section>
+          )}
 
           {/* Assinatura do contrato (Clicksign / INT-4 / F9) */}
           {(data.temEnvelope ||
@@ -321,7 +347,7 @@ export function AdmissaoDetalheModal({
                 </a>
               )}
 
-              {/* Reenviar por correção — só quando há envelope ativo (§A.5 INT-4) */}
+              {/* Reenviar por correção, só quando há envelope ativo (§A.5 INT-4) */}
               {temEnvelopeReenviavel(data.clicksignStatus) && (
                 <button
                   type="button"
@@ -381,7 +407,7 @@ export function AdmissaoDetalheModal({
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-semibold text-text">{p.rotulo}</span>
                       <span className="text-faint">
-                        {p.autor ?? "—"} · {fmtData(p.criadoEm)}
+                        {p.autor ?? "não informado"} · {fmtData(p.criadoEm)}
                       </span>
                     </div>
                     {p.camposPendentes && (
@@ -444,7 +470,7 @@ export function AdmissaoDetalheModal({
             )}
           </section>
 
-          {/* Histórico de alterações (OST-EA-GESTAO-USUARIOS) — somente leitura, mais recente
+          {/* Histórico de alterações (OST-EA-GESTAO-USUARIOS), somente leitura, mais recente
               primeiro. Segue o modelo visual da Trilha de passagem; oculto se não houver registros. */}
           {data.alteracoes && data.alteracoes.length > 0 && (
             <section>
@@ -464,9 +490,9 @@ export function AdmissaoDetalheModal({
                       </span>
                     </div>
                     <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-dim">
-                      <span className="text-faint line-through">{a.valorAnterior ?? "—"}</span>
+                      <span className="text-faint line-through">{a.valorAnterior ?? "não informado"}</span>
                       <Icon name="arr" className="h-3 w-3 flex-none text-faint" />
-                      <span className="text-text">{a.valorNovo ?? "—"}</span>
+                      <span className="text-text">{a.valorNovo ?? "não informado"}</span>
                     </div>
                   </div>
                 ))}
@@ -477,13 +503,13 @@ export function AdmissaoDetalheModal({
       )}
     </Modal>
 
-    {/* Aceite de dupla correção (§A.5 INT-4) — bloqueio ativo: origem Pandapé exige ciência de
+    {/* Aceite de dupla correção (§A.5 INT-4), bloqueio ativo: origem Pandapé exige ciência de
         que a correção foi feita no EA Automatic E diretamente no G.I. */}
     <ConfirmDialog
       open={duplaCorrecaoMsg !== null}
       title="Confirmar dupla correção"
       message={duplaCorrecaoMsg ?? ""}
-      confirmLabel="Estou ciente — reenviar"
+      confirmLabel="Estou ciente, reenviar"
       tone="danger"
       busy={reenviando}
       onConfirm={() => reenviar(true)}
