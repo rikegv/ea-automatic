@@ -1,8 +1,11 @@
 import {
+  ConflictException,
   GatewayTimeoutException,
+  GoneException,
   HttpException,
   Injectable,
   Logger,
+  NotFoundException,
   ServiceUnavailableException,
   UnprocessableEntityException,
 } from "@nestjs/common";
@@ -36,6 +39,38 @@ export interface GerarKitPayload {
   nomeCandidato: string;
 }
 
+/** Motor de extração do kit (OST etapa 3). Job assíncrono: inicia e acompanha por polling. */
+export interface ExtrairKitPayload {
+  kitTipoId: string;
+  documentos: Array<{ stagingPath: string; arquivo: string }>;
+}
+/** Reimportação de PDFs para um funcionário do resultado. Devolve o resultado atualizado. */
+export interface ReimportarKitResposta {
+  resultado: unknown;
+  anexados: string[];
+}
+export interface KitJobStart {
+  jobId: string;
+  totalLotes: number;
+}
+/** `resultado` (quando status==="concluido") já vem em camelCase, pronto para a tela. */
+export interface KitJobStatus {
+  status: "processando" | "concluido" | "erro";
+  loteAtual: number;
+  totalLotes: number;
+  mensagem: string;
+  retries: number;
+  resultado: unknown | null;
+  erro: string | null;
+}
+
+/** Download binário (Etapa 4): o PDF/ZIP consolidado + os cabeçalhos que o front repassa ao browser. */
+export interface KitBinario {
+  buffer: Buffer;
+  contentType: string;
+  contentDisposition: string;
+}
+
 /**
  * Wrapper HTTP para o `ai-service` (FastAPI / Vertex AI — INT-3). Usa o `fetch` global do Node 20
  * (sem axios). Autentica com `X-Internal-Token`. NUNCA loga CPF, nome ou payload (§A.6) — só status
@@ -47,6 +82,7 @@ export class AiClientService {
   private readonly baseUrl: string;
   private readonly token: string;
   private static readonly TIMEOUT_MS = 120_000;
+  private static readonly DOWNLOAD_TIMEOUT_MS = 300_000;
 
   constructor(config: ConfigService) {
     this.baseUrl = (config.get<string>("AI_SERVICE_URL") ?? "http://localhost:8000").replace(
@@ -71,17 +107,143 @@ export class AiClientService {
     return this.post<{ stagingPathKit: string }>("/kit/gerar", payload);
   }
 
-  private async post<T>(path: string, body: unknown): Promise<T> {
+  /** Inicia o job de extração do kit e devolve o id + total de lotes (OST etapa 3). */
+  extrairKit(payload: ExtrairKitPayload): Promise<KitJobStart> {
+    return this.post<KitJobStart>("/kit/extrair", payload);
+  }
+
+  /** Progresso/estado do job de extração (polling). */
+  extrairKitStatus(jobId: string): Promise<KitJobStatus> {
+    return this.get<KitJobStatus>(`/kit/extrair/status/${encodeURIComponent(jobId)}`);
+  }
+
+  /**
+   * Reimporta PDFs para UM funcionário do resultado (anexa os documentos que faltavam). Devolve o
+   * resultado atualizado. Mensagens de erro FIXAS aqui (nunca o corpo do ai-service, §A.6): 404
+   * resultado expirado, 409 PDF de outra pessoa, 422 nada reconhecido, 503 IA indisponível.
+   */
+  async reimportarKit(
+    jobId: string,
+    indice: number,
+    documentos: Array<{ stagingPath: string; arquivo: string }>,
+  ): Promise<ReimportarKitResposta> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), AiClientService.TIMEOUT_MS);
+    const path = `/kit/reimportar/${encodeURIComponent(jobId)}/funcionario/${indice}`;
+    try {
+      const res = await fetch(`${this.baseUrl}${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Internal-Token": this.token },
+        body: JSON.stringify({ documentos }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        this.logger.error(`ai-service ${path} respondeu HTTP ${res.status}`);
+        if (res.status === 404) {
+          throw new NotFoundException("Resultado expirado. Reprocesse o kit para reimportar.");
+        }
+        if (res.status === 409) {
+          throw new ConflictException(
+            "O PDF enviado parece ser de outra pessoa. Nada foi anexado; confira o arquivo.",
+          );
+        }
+        if (res.status === 422) {
+          throw new UnprocessableEntityException(
+            "Nenhum documento deste funcionário foi reconhecido no PDF enviado.",
+          );
+        }
+        throw new ServiceUnavailableException("Motor de IA indisponível para reimportar.");
+      }
+      return (await res.json()) as ReimportarKitResposta;
+    } catch (err) {
+      if (err instanceof HttpException) throw err;
+      if (err instanceof Error && err.name === "AbortError") {
+        this.logger.error(`ai-service ${path} excedeu o tempo limite`);
+        throw new GatewayTimeoutException("Motor de IA não respondeu no tempo limite");
+      }
+      this.logger.error(
+        `Falha ao chamar ai-service ${path}: ${err instanceof Error ? err.message : "erro"}`,
+      );
+      throw new ServiceUnavailableException("Motor de IA indisponível");
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** PDF consolidado de UM funcionário do job (Etapa 4). */
+  baixarKitFuncionario(jobId: string, indice: number): Promise<KitBinario> {
+    return this.baixarBinario(
+      `/kit/download/${encodeURIComponent(jobId)}/funcionario/${indice}`,
+    );
+  }
+
+  /** ZIP com um PDF por funcionário do job (Etapa 4). */
+  baixarKitZip(jobId: string): Promise<KitBinario> {
+    return this.baixarBinario(`/kit/download/${encodeURIComponent(jobId)}/zip`);
+  }
+
+  /**
+   * GET binário no ai-service (PDF/ZIP do kit). Devolve o corpo + Content-Type/Disposition para o
+   * controller repassar ao browser. 404 (job/funcionário inexistente) e 410 (origem expirada por
+   * TTL) viram exceções acionáveis; nada de PII em log (§A.6). Timeout folgado (ZIP de muitos kits).
+   */
+  private async baixarBinario(path: string): Promise<KitBinario> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), AiClientService.DOWNLOAD_TIMEOUT_MS);
+    try {
+      const res = await fetch(`${this.baseUrl}${path}`, {
+        method: "GET",
+        headers: { "X-Internal-Token": this.token },
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        this.logger.error(`ai-service ${path} respondeu HTTP ${res.status}`);
+        if (res.status === 404) throw new NotFoundException("Kit não disponível para download.");
+        if (res.status === 410) {
+          throw new GoneException("Os PDFs de origem expiraram. Reprocesse o kit para baixar.");
+        }
+        throw new ServiceUnavailableException(`Motor de IA indisponível (HTTP ${res.status})`);
+      }
+      const buffer = Buffer.from(await res.arrayBuffer());
+      return {
+        buffer,
+        contentType: res.headers.get("content-type") ?? "application/octet-stream",
+        contentDisposition: res.headers.get("content-disposition") ?? "attachment",
+      };
+    } catch (err) {
+      if (err instanceof HttpException) throw err;
+      if (err instanceof Error && err.name === "AbortError") {
+        this.logger.error(`ai-service ${path} excedeu o tempo limite`);
+        throw new GatewayTimeoutException("Motor de IA não respondeu no tempo limite");
+      }
+      this.logger.error(
+        `Falha ao chamar ai-service ${path}: ${err instanceof Error ? err.message : "erro"}`,
+      );
+      throw new ServiceUnavailableException("Motor de IA indisponível");
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private get<T>(path: string): Promise<T> {
+    return this.requisitar<T>("GET", path);
+  }
+
+  private post<T>(path: string, body: unknown): Promise<T> {
+    return this.requisitar<T>("POST", path, body);
+  }
+
+  private async requisitar<T>(metodo: "GET" | "POST", path: string, body?: unknown): Promise<T> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), AiClientService.TIMEOUT_MS);
     try {
       const res = await fetch(`${this.baseUrl}${path}`, {
-        method: "POST",
+        method: metodo,
         headers: {
           "Content-Type": "application/json",
           "X-Internal-Token": this.token,
         },
-        body: JSON.stringify(body),
+        body: metodo === "POST" ? JSON.stringify(body) : undefined,
         signal: controller.signal,
       });
       if (!res.ok) {

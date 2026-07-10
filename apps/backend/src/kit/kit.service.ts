@@ -10,7 +10,7 @@ import {
 import { eq } from "drizzle-orm";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
-import { admissoes, candidatos, frentesAdmissao } from "../db/schema";
+import { admissoes, candidatos, frentesAdmissao, kitTipo } from "../db/schema";
 import { AiClientService } from "../ai/ai-client.service";
 import { kitLiberado } from "../domain/frentes";
 import { ClicksignQueueService } from "../clicksign/clicksign-queue.service";
@@ -52,6 +52,86 @@ export class KitService {
     private readonly ai: AiClientService,
     private readonly clicksignQueue: ClicksignQueueService,
   ) {}
+
+  /**
+   * Motor de extração (OST etapa 3): recebe os N PDFs da folha + o kit selecionado, os coloca na
+   * staging efêmera (§A.6) e INICIA o job no ai-service (fila com espaçamento + retry/backoff no
+   * 429). Devolve o id do job + total de lotes; a tela acompanha por polling (`statusMotor`). Passa
+   * o NOME do arquivo enviado para o ai-service rotular a origem, sem nunca expor o caminho interno.
+   * Só admin (guard no controller). Nada de PII em log.
+   */
+  async processarMotor(kitTipoId: string, files: Express.Multer.File[] | undefined) {
+    const id = kitTipoId?.trim();
+    if (!id) throw new BadRequestException("Selecione um kit antes de processar.");
+    const kit = await this.db.query.kitTipo.findFirst({ where: eq(kitTipo.id, id) });
+    if (!kit) throw new NotFoundException("Kit não encontrado.");
+    const arquivos = files ?? [];
+    if (arquivos.length === 0) throw new BadRequestException("Envie ao menos um PDF.");
+    for (const f of arquivos) {
+      const ehPdf =
+        f.mimetype === "application/pdf" || (f.originalname ?? "").toLowerCase().endsWith(".pdf");
+      if (!ehPdf) throw new BadRequestException("Apenas arquivos PDF são aceitos.");
+    }
+
+    // Coloca cada PDF na staging efêmera; o ai-service lê pelo caminho e apaga ao fim (§A.6).
+    const documentos: { stagingPath: string; arquivo: string }[] = [];
+    for (const f of arquivos) {
+      const stagingPath = await this.staging.salvarKit(f);
+      documentos.push({ stagingPath, arquivo: f.originalname });
+    }
+
+    const { jobId, totalLotes } = await this.ai.extrairKit({ kitTipoId: id, documentos });
+    return { jobId, totalLotes, kit: { id: kit.id, nome: kit.nome } };
+  }
+
+  /** Progresso do job de extração (polling da tela). Repassa o estado do ai-service. */
+  statusMotor(jobId: string) {
+    return this.ai.extrairKitStatus(jobId);
+  }
+
+  /**
+   * Etapa 4 (download): PDF consolidado de um funcionário do job. O ai-service concatena as páginas
+   * originais na ordem do kit (com aviso se incompleto) e devolve o binário; aqui só repassamos.
+   */
+  downloadFuncionario(jobId: string, indice: number) {
+    if (!Number.isInteger(indice) || indice < 0) {
+      throw new BadRequestException("Índice de funcionário inválido.");
+    }
+    return this.ai.baixarKitFuncionario(jobId, indice);
+  }
+
+  /** Etapa 4 (download): ZIP com um PDF por funcionário do job. */
+  downloadZip(jobId: string) {
+    return this.ai.baixarKitZip(jobId);
+  }
+
+  /**
+   * Reimporta PDFs para UM funcionário do resultado: coloca os novos PDFs na staging efêmera e pede
+   * ao ai-service para classificar (mesmo fluxo título+nome) e ANEXAR os documentos que faltavam ao
+   * funcionário. Devolve o resultado atualizado. Só admin (guard no controller). Nada de PII em log.
+   */
+  async reimportarFuncionario(
+    jobId: string,
+    indice: number,
+    files: Express.Multer.File[] | undefined,
+  ) {
+    if (!Number.isInteger(indice) || indice < 0) {
+      throw new BadRequestException("Índice de funcionário inválido.");
+    }
+    const arquivos = files ?? [];
+    if (arquivos.length === 0) throw new BadRequestException("Envie ao menos um PDF.");
+    for (const f of arquivos) {
+      const ehPdf =
+        f.mimetype === "application/pdf" || (f.originalname ?? "").toLowerCase().endsWith(".pdf");
+      if (!ehPdf) throw new BadRequestException("Apenas arquivos PDF são aceitos.");
+    }
+    const documentos: { stagingPath: string; arquivo: string }[] = [];
+    for (const f of arquivos) {
+      const stagingPath = await this.staging.salvarKit(f);
+      documentos.push({ stagingPath, arquivo: f.originalname });
+    }
+    return this.ai.reimportarKit(jobId, indice, documentos);
+  }
 
   /**
    * Gera o kit a partir do PDF-mãe e devolve um token de download. GATE F9 (§A.4 / INT-4): o kit só

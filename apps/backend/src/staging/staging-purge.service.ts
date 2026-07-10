@@ -7,7 +7,7 @@ import { StagingService } from "./staging.service";
  * Expurgo por TTL da staging efêmera (§A.6 / F2). Sweep in-process a cada 1h (mesmo padrão do
  * ExpurgoService; BullMQ fica reservado à fila do Pandapé). Regras:
  *   - dir de admissão com mtime > 48h  → removido (admissão que nunca fechou a régua);
- *   - arquivo em `_kits` com mtime > 1h → removido (kit é de uso imediato).
+ *   - arquivo em `_kits` com mtime > 2h → removido (janela do resultado do Gerador de Kit).
  * O mtime é o relógio — não há tabela de metadados de arquivo (§A.6). Loga só contagens.
  */
 @Injectable()
@@ -16,7 +16,9 @@ export class StagingPurgeService implements OnModuleInit, OnModuleDestroy {
   private timer?: NodeJS.Timeout;
   private static readonly INTERVALO_MS = 60 * 60 * 1000; // 1h
   private static readonly TTL_ADMISSAO_MS = 48 * 60 * 60 * 1000; // 48h
-  private static readonly TTL_KIT_MS = 60 * 60 * 1000; // 1h
+  // Janela do resultado do Gerador de Kit: o resultado processado (e as origens para o download)
+  // ficam disponíveis por no mínimo 2h, mesmo se o consultor sair da tela e voltar. Depois, §A.6.
+  private static readonly TTL_KIT_MS = 2 * 60 * 60 * 1000; // 2h
 
   constructor(private readonly staging: StagingService) {}
 
