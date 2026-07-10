@@ -61,7 +61,19 @@ const STEPS: StepDef[] = [
 
 // W5: tipo de contrato, valores fixos.
 const TIPOS_CONTRATO = ["Temporário", "Terceirizado", "Estágio", "Interno", "Fopag", "Jovem Aprendiz"];
+// OST Regras de Fluxo, item 5: tempo de contrato em lista fixa (dias), sem digitação livre.
+const TEMPOS_CONTRATO = ["30", "60", "90", "120", "150", "180", "210", "240", "270"];
 const MOTIVO_SUBSTITUICAO = "Substituição";
+// OST Regras de Fluxo, item 3: benefícios que abrem campo de valor editável ao serem selecionados.
+const BENEFICIOS_COM_VALOR = ["VR", "AM"];
+// Prefixo estável ("VR"/"AM") do benefício, usado como chave do valor-padrão por cliente (item 4).
+function prefixoBeneficio(nome: string): string | null {
+  const up = nome.trim().toUpperCase();
+  return BENEFICIOS_COM_VALOR.find((p) => up.startsWith(p)) ?? null;
+}
+function precisaValorBeneficio(nome: string): boolean {
+  return prefixoBeneficio(nome) !== null;
+}
 
 const VAGA_EMPTY = {
   salario: "",
@@ -133,13 +145,19 @@ export default function NovaAdmissaoPage() {
   const [cliente, setCliente] = useState<Cliente | null>(null);
 
   // Etapa 2: cargo + régua + folha
-  const [cargos, setCargos] = useState<Cargo[]>([]);
+  // Item 1 (TRAVA): só cargos com régua cadastrada para o cliente. Sem régua = trava, nunca catálogo.
+  const [cargosCliente, setCargosCliente] = useState<Cargo[]>([]);
+  const [clienteTemRegua, setClienteTemRegua] = useState<boolean | null>(null);
   const [cargoId, setCargoId] = useState("");
   const [regua, setRegua] = useState<ReguaItem[]>([]);
   const [reguaLoading, setReguaLoading] = useState(false);
   const [docsAbertos, setDocsAbertos] = useState(false); // W1: recolhido por padrão
   const [vaga, setVaga] = useState(VAGA_EMPTY);
   const [beneficiosSel, setBeneficiosSel] = useState<string[]>([]);
+  // Item 3: valor por benefício (VR/AM), editável; combinado ao texto de benefícios no envio.
+  const [beneficiosValores, setBeneficiosValores] = useState<Record<string, string>>({});
+  // Item 4: valores-padrão de VR/AM DAQUELE cliente (chave "VR"/"AM"), pré-preenchem o campo.
+  const [beneficiosPadraoCliente, setBeneficiosPadraoCliente] = useState<Record<string, string>>({});
 
   // catálogos abertos (W2/W3/W4)
   const [motivos, setMotivos] = useState<CatItem[]>([]);
@@ -166,6 +184,13 @@ export default function NovaAdmissaoPage() {
   const menorIdade = idade !== null && idade < 18;
   const ehSubstituicao = vaga.motivo === MOTIVO_SUBSTITUICAO;
 
+  // Item 4: valor efetivo do benefício = o que o consultor digitou; se intocado, o padrão do cliente.
+  const valorBeneficio = (nome: string): string => {
+    if (beneficiosValores[nome] !== undefined) return beneficiosValores[nome];
+    const p = prefixoBeneficio(nome);
+    return (p && beneficiosPadraoCliente[p]) || "";
+  };
+
   // ── Etapa 1: busca de clientes (debounce ~300ms) ──────────────────────────
   useEffect(() => {
     const q = clienteQuery.trim();
@@ -187,11 +212,42 @@ export default function NovaAdmissaoPage() {
   // ── cargos + catálogos (uma vez) ──────────────────────────────────────────
   useEffect(() => {
     if (!token) return;
-    apiFetch<Cargo[]>("/catalogos/cargos", { token }).then(setCargos).catch(() => setCargos([]));
     apiFetch<CatItem[]>("/catalogos/motivos", { token }).then(setMotivos).catch(() => setMotivos([]));
     apiFetch<CatItem[]>("/catalogos/beneficios", { token }).then(setBeneficios).catch(() => setBeneficios([]));
     apiFetch<CatItem[]>("/catalogos/escalas", { token }).then(setEscalas).catch(() => setEscalas([]));
   }, [token]);
+
+  // ── Item 1: cargos com régua do cliente selecionado (com fallback) ─────────
+  // Ao trocar de cliente, busca os cargos que têm régua para ele. `temRegua=false` (cliente sem
+  // régua cadastrada) cai no catálogo global: nunca lista vazia parecendo quebrada (decisão OST).
+  useEffect(() => {
+    if (!token || !cliente) {
+      setCargosCliente([]);
+      setClienteTemRegua(null);
+      setBeneficiosPadraoCliente({});
+      return;
+    }
+    setClienteTemRegua(null);
+    apiFetch<{ temRegua: boolean; cargos: Cargo[] }>(
+      `/catalogos/cargos-por-cliente?codCliente=${encodeURIComponent(cliente.codCliente)}`,
+      { token },
+    )
+      .then((r) => {
+        setCargosCliente(r.cargos);
+        setClienteTemRegua(r.temRegua);
+      })
+      .catch(() => {
+        setCargosCliente([]);
+        setClienteTemRegua(false);
+      });
+    // Item 4: valores-padrão de VR/AM salvos deste cliente (pré-preenchem o campo de valor).
+    apiFetch<Record<string, string>>(
+      `/catalogos/beneficios-padrao-cliente?codCliente=${encodeURIComponent(cliente.codCliente)}`,
+      { token },
+    )
+      .then((r) => setBeneficiosPadraoCliente(r ?? {}))
+      .catch(() => setBeneficiosPadraoCliente({}));
+  }, [token, cliente]);
 
   // ── Etapa 2: preview da régua ─────────────────────────────────────────────
   useEffect(() => {
@@ -238,6 +294,11 @@ export default function NovaAdmissaoPage() {
       escala: aplicar(v.escala, prev?.escalaPadrao, c.escalaPadrao),
       endereco: aplicar(v.endereco, prev?.enderecoPadrao, c.enderecoPadrao),
     }));
+    // Item 1: cargos são por cliente, então trocar o cliente zera o cargo e a régua já carregada.
+    if (prev?.codCliente !== c.codCliente) {
+      setCargoId("");
+      setRegua([]);
+    }
     setCliente(c);
   }
 
@@ -288,7 +349,14 @@ export default function NovaAdmissaoPage() {
     setSubmitting(true);
     setSubmitError(null);
 
-    const beneficios = beneficiosSel.join(", ");
+    // Item 3/4: benefícios viram texto; VR/AM carregam o valor efetivo (digitado ou padrão do cliente),
+    // ex.: "VR (Vale-Refeição): 500,00". Esse valor é o que o backend persiste como padrão do cliente.
+    const beneficios = beneficiosSel
+      .map((nome) => {
+        const val = precisaValorBeneficio(nome) ? valorBeneficio(nome).trim() : "";
+        return val ? `${nome}: ${val}` : nome;
+      })
+      .join(", ");
     const vagaFolha = {
       salario: vaga.salario || undefined,
       beneficios: beneficios || undefined,
@@ -346,9 +414,13 @@ export default function NovaAdmissaoPage() {
     setClienteResults([]);
     setCliente(null);
     setCargoId("");
+    setCargosCliente([]);
+    setClienteTemRegua(null);
     setRegua([]);
     setVaga(VAGA_EMPTY);
     setBeneficiosSel([]);
+    setBeneficiosValores({});
+    setBeneficiosPadraoCliente({});
     setCand(CAND_EMPTY);
     setLookup(null);
     setReaproveitado(false);
@@ -489,10 +561,36 @@ export default function NovaAdmissaoPage() {
               <Select
                 value={cargoId}
                 onChange={setCargoId}
-                placeholder="Selecione o cargo…"
+                placeholder={
+                  clienteTemRegua === false
+                    ? "Cadastre a régua do cliente primeiro"
+                    : "Selecione o cargo…"
+                }
                 ariaLabel="Cargo"
-                options={cargos.map((c) => ({ value: c.id, label: c.nome }))}
+                disabled={clienteTemRegua !== true}
+                options={(clienteTemRegua === true ? cargosCliente : []).map((c) => ({
+                  value: c.id,
+                  label: c.nome,
+                }))}
               />
+              {clienteTemRegua === null && cliente && (
+                <p className="mt-1.5 text-[11.5px] text-faint">Verificando a régua do cliente…</p>
+              )}
+              {clienteTemRegua === true && (
+                <p className="mt-1.5 text-[11.5px] text-faint">
+                  Cargos com régua cadastrada para este cliente ({cargosCliente.length}).
+                </p>
+              )}
+              {clienteTemRegua === false && (
+                <div className="mt-2 flex items-start gap-2 rounded-xl border border-[var(--warn-2)] bg-[rgba(249,115,22,0.1)] px-3 py-2.5">
+                  <Icon name="alert" className="mt-0.5 h-4 w-4 flex-none text-warn-2" />
+                  <p className="text-[12.5px] text-text">
+                    <b>Este cliente não tem régua cadastrada.</b> A seleção de cargo fica travada:
+                    cadastre a régua do cliente (menu Régua de Documentos) antes de criar a admissão.
+                    A régua é o que a I.A usa para auditar os documentos.
+                  </p>
+                </div>
+              )}
             </Field>
 
             {/* W1: checklist da régua recolhível */}
@@ -574,11 +672,12 @@ export default function NovaAdmissaoPage() {
                   />
                 </Field>
                 <Field label="Tempo de contrato *">
-                  <input
-                    className="ds-input"
-                    placeholder="Indeterminado, 90 dias…"
+                  <Select
                     value={vaga.tempoContrato}
-                    onChange={(e) => setVaga({ ...vaga, tempoContrato: e.target.value })}
+                    onChange={(v) => setVaga({ ...vaga, tempoContrato: v })}
+                    placeholder="Selecione o tempo…"
+                    ariaLabel="Tempo de contrato"
+                    options={TEMPOS_CONTRATO.map((t) => ({ value: t, label: `${t} dias` }))}
                   />
                 </Field>
                 <Field label="Escala *" className="sm:col-span-2 lg:col-span-3">
@@ -590,6 +689,11 @@ export default function NovaAdmissaoPage() {
                     options={escalas.map((e) => ({ value: e.nome, label: e.nome }))}
                     onAdd={isAdmin ? (nome) => addCatalogo("escalas", nome, (n) => setVaga((v) => ({ ...v, escala: n }))) : undefined}
                   />
+                  {cliente?.escalaPadrao && (
+                    <p className="mt-1.5 text-[11.5px] text-faint">
+                      Padrão do cliente (pré-selecionado, editável): {cliente.escalaPadrao}
+                    </p>
+                  )}
                 </Field>
                 <Field label="Benefícios *" className="sm:col-span-2 lg:col-span-3">
                   <MultiSelect
@@ -604,6 +708,32 @@ export default function NovaAdmissaoPage() {
                     <p className="mt-1.5 text-[11.5px] text-faint">
                       Padrão do cliente: {cliente.beneficiosPadrao}
                     </p>
+                  )}
+                  {/* Item 3: VR e AM abrem um campo de valor editável (seleção pelo menu acima). */}
+                  {beneficiosSel.filter(precisaValorBeneficio).length > 0 && (
+                    <div className="mt-2.5 grid gap-2.5 sm:grid-cols-2">
+                      {beneficiosSel.filter(precisaValorBeneficio).map((nome) => (
+                        <label key={nome} className="min-w-0">
+                          <span className="ds-label">Valor de {nome}</span>
+                          <input
+                            className="ds-input"
+                            inputMode="decimal"
+                            placeholder="Ex.: 500,00"
+                            value={valorBeneficio(nome)}
+                            onChange={(e) =>
+                              setBeneficiosValores((m) => ({ ...m, [nome]: e.target.value }))
+                            }
+                          />
+                          {prefixoBeneficio(nome) &&
+                            beneficiosPadraoCliente[prefixoBeneficio(nome)!] &&
+                            beneficiosValores[nome] === undefined && (
+                              <span className="mt-1 block text-[11px] text-faint">
+                                Padrão salvo deste cliente (editável).
+                              </span>
+                            )}
+                        </label>
+                      ))}
+                    </div>
                   )}
                 </Field>
                 <Field label="Motivo de contratação">
@@ -638,13 +768,13 @@ export default function NovaAdmissaoPage() {
                     </Field>
                   </>
                 )}
-                <Field label="Centro de custo">
+                <Field label="Centro de custo *">
                   <input className="ds-input" value={vaga.centroCusto} onChange={(e) => setVaga({ ...vaga, centroCusto: e.target.value })} />
                 </Field>
                 <Field label="Departamento">
                   <input className="ds-input" value={vaga.departamento} onChange={(e) => setVaga({ ...vaga, departamento: e.target.value })} />
                 </Field>
-                <Field label="Gestor / BP">
+                <Field label="Gestor / BP *">
                   <input className="ds-input" value={vaga.gestorBp} onChange={(e) => setVaga({ ...vaga, gestorBp: e.target.value })} />
                 </Field>
                 <Field label="Endereço" className="sm:col-span-2 lg:col-span-3">
@@ -689,8 +819,11 @@ export default function NovaAdmissaoPage() {
                   )}
                 </div>
               </Field>
-              <Field label="Data prevista de admissão">
+              <Field label="Data de admissão *">
                 <input type="date" className="ds-input" value={cand.dataAdmissao} onChange={(e) => setCand({ ...cand, dataAdmissao: e.target.value })} />
+                <p className="mt-1 text-[11px] text-faint">
+                  Obrigatória, porém não bloqueia: se ficar vazia, entra como pendência (F4).
+                </p>
               </Field>
               <Field label="Telefone *">
                 <input className="ds-input" placeholder="(11) 99999-0000" value={cand.telefone} onChange={(e) => setCand({ ...cand, telefone: e.target.value })} />

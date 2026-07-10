@@ -13,6 +13,8 @@ const CAMPO_KEY: Record<string, string> = {
   "Data de admissão": "dataAdmissao",
   "Pacote de benefícios": "beneficios",
   Escala: "escala",
+  "Centro de custo": "centroCusto",
+  "Gestor / BP": "gestorBp",
 };
 
 /**

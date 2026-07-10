@@ -183,6 +183,11 @@ export class EsteiraService {
       tipo === "AUDITORIA"
         ? await this.reguaCompletude.obrigatoriosPendentesSet(admissaoIds)
         : new Set<string>();
+    // Item 8 — contador de documentos obrigatórios pendentes por admissão (badge da aba Auditoria).
+    const docsPendentesMap =
+      tipo === "AUDITORIA"
+        ? await this.reguaCompletude.obrigatoriosPendentesCountMap(admissaoIds)
+        : new Map<string, number>();
     const pendObrigSet =
       tipo === "AUDITORIA" || tipo === "EXAME"
         ? await this.pendenciasSet(admissaoIds)
@@ -227,6 +232,7 @@ export class EsteiraService {
         return {
           ...base,
           obrigatoriosPendentes: pendSet.has(r.admissaoId),
+          docsPendentes: docsPendentesMap.get(r.admissaoId) ?? 0,
           temPendencias: pendObrigSet.has(r.admissaoId),
         };
       }
@@ -262,7 +268,17 @@ export class EsteiraService {
       total += k.n;
     }
 
-    return { items, kpis: { porStatus, total }, statusCatalogo };
+    // Item 9 — KPI "com pendências obrigatórias de campo": admissões EM ANDAMENTO (frente não
+    // concluída) desta frente, sob o mesmo filtro cliente/período, que têm ≥1 pendência obrigatória
+    // (domain `pendenciasObrigatorias`, via `pendenciasSet`). Vale para as três frentes.
+    const emAndamentoRows = await this.db
+      .select({ admissaoId: frentesAdmissao.admissaoId })
+      .from(frentesAdmissao)
+      .innerJoin(admissoes, eq(frentesAdmissao.admissaoId, admissoes.id))
+      .where(and(...clientePeriodo, eq(frentesAdmissao.concluida, false)));
+    const comPendencias = (await this.pendenciasSet(emAndamentoRows.map((r) => r.admissaoId))).size;
+
+    return { items, kpis: { porStatus, total, comPendencias }, statusCatalogo };
   }
 
   /** Conjunto de admissões com um documento (por código) ENTREGUE (§A.6 — só status). */
@@ -502,7 +518,13 @@ export class EsteiraService {
         codCliente: admissao.codCliente,
         cargoId: admissao.cargoId,
         dataAdmissao: admissao.dataAdmissao,
-        vagaFolha: { salario: vaga?.salario, beneficios: vaga?.beneficios, escala: vaga?.escala },
+        vagaFolha: {
+          salario: vaga?.salario,
+          beneficios: vaga?.beneficios,
+          escala: vaga?.escala,
+          centroCusto: vaga?.centroCusto,
+          gestorBp: vaga?.gestorBp,
+        },
         isBanco: admissao.isBanco,
         termoBancoEntregue,
       });
@@ -668,6 +690,8 @@ export class EsteiraService {
         salario: dadosVagaFolha.salario,
         beneficios: dadosVagaFolha.beneficios,
         escala: dadosVagaFolha.escala,
+        centroCusto: dadosVagaFolha.centroCusto,
+        gestorBp: dadosVagaFolha.gestorBp,
       })
       .from(admissoes)
       .leftJoin(dadosVagaFolha, eq(dadosVagaFolha.admissaoId, admissoes.id))
@@ -681,7 +705,13 @@ export class EsteiraService {
         codCliente: l.codCliente,
         cargoId: l.cargoId,
         dataAdmissao: l.dataAdmissao,
-        vagaFolha: { salario: l.salario, beneficios: l.beneficios, escala: l.escala },
+        vagaFolha: {
+          salario: l.salario,
+          beneficios: l.beneficios,
+          escala: l.escala,
+          centroCusto: l.centroCusto,
+          gestorBp: l.gestorBp,
+        },
         isBanco: l.isBanco,
         termoBancoEntregue: termoSet.has(l.id),
       });
@@ -786,7 +816,13 @@ export class EsteiraService {
       codCliente: adm.codCliente,
       cargoId: adm.cargoId,
       dataAdmissao: adm.dataAdmissao,
-      vagaFolha: { salario: vaga?.salario, beneficios: vaga?.beneficios, escala: vaga?.escala },
+      vagaFolha: {
+        salario: vaga?.salario,
+        beneficios: vaga?.beneficios,
+        escala: vaga?.escala,
+        centroCusto: vaga?.centroCusto,
+        gestorBp: vaga?.gestorBp,
+      },
       isBanco: adm.isBanco,
       termoBancoEntregue,
     });

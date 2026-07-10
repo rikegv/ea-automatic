@@ -74,6 +74,7 @@ function fakeDb(captured: unknown[]) {
 
 const regua = {
   obrigatoriosPendentesSet: vi.fn().mockResolvedValue(new Set()),
+  obrigatoriosPendentesCountMap: vi.fn().mockResolvedValue(new Map()),
   faltantesObrigatorios: vi.fn().mockResolvedValue([]),
 };
 

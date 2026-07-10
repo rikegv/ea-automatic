@@ -29,6 +29,29 @@ export class CatalogosController {
     return this.catalogos.listCargos();
   }
 
+  // Clientes ativos sem NENHUMA régua cadastrada (item 1). Autenticado, sem restrição de papel.
+  @Get("clientes-sem-regua")
+  clientesSemRegua() {
+    return this.catalogos.listClientesSemRegua();
+  }
+
+  // Valores padrão de VR/AM do cliente (item 4) para pré-preencher o wizard.
+  @Get("beneficios-padrao-cliente")
+  beneficiosPadraoCliente(@Query("codCliente") codCliente?: string) {
+    if (!codCliente?.trim()) {
+      throw new BadRequestException("codCliente é obrigatório");
+    }
+    return this.catalogos.getBeneficiosPadraoCliente(codCliente);
+  }
+
+  @Get("cargos-por-cliente")
+  cargosPorCliente(@Query("codCliente") codCliente?: string) {
+    if (!codCliente?.trim()) {
+      throw new BadRequestException("codCliente é obrigatório");
+    }
+    return this.catalogos.listCargosPorCliente(codCliente);
+  }
+
   @Get("regua")
   regua(@Query("codCliente") codCliente?: string, @Query("cargoId") cargoId?: string) {
     if (!codCliente?.trim() || !cargoId?.trim()) {

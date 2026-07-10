@@ -10,6 +10,7 @@ import { Pill, type PillTone } from "@/components/ui/Pill";
 import { Icon } from "@/components/ui/Icon";
 import { OrigemBadge } from "@/components/ui/OrigemBadge";
 import { Select } from "@/components/ui/Select";
+import { MultiSelect } from "@/components/ui/MultiSelect";
 import { cn } from "@/lib/cn";
 import { FAROL_SELECT_OPTIONS } from "@/lib/farol";
 
@@ -151,10 +152,21 @@ export function EditAdmissaoModal({
   const [termoErro, setTermoErro] = useState<string | null>(null);
   const termoRef = useRef<HTMLInputElement | null>(null);
 
+  // OST Regras de Fluxo, item 7: escala e benefícios pela esteira usam o MESMO menu do cadastro
+  // (catálogo, sem texto livre). Carrega os catálogos de escala e benefícios.
+  const [escalasCat, setEscalasCat] = useState<{ id: string; nome: string }[]>([]);
+  const [beneficiosCat, setBeneficiosCat] = useState<{ id: string; nome: string }[]>([]);
+
   useEffect(() => {
     apiFetch<TipoDocumento[]>("/catalogos/tipos-documento", { token })
       .then(setTiposDoc)
       .catch(() => setTiposDoc([]));
+    apiFetch<{ id: string; nome: string }[]>("/catalogos/escalas", { token })
+      .then(setEscalasCat)
+      .catch(() => setEscalasCat([]));
+    apiFetch<{ id: string; nome: string }[]>("/catalogos/beneficios", { token })
+      .then(setBeneficiosCat)
+      .catch(() => setBeneficiosCat([]));
   }, [token]);
 
   useEffect(() => {
@@ -229,13 +241,16 @@ export function EditAdmissaoModal({
         method: "PATCH",
         token,
         body: {
+          // Datas vazias vão como `undefined` (omitidas), não `""`: o backend valida com
+          // @IsDateString() + @IsOptional(): string vazia falha ("must be a valid ISO 8601
+          // date string"), undefined é aceito. Mesmo tratamento do wizard (nova/page.tsx).
           tipoContrato,
-          dataAdmissao: dataAdmissao || "",
+          dataAdmissao: dataAdmissao || undefined,
           matricula,
           farolGlobal: farol,
           isBanco,
           vagaFolha: vf,
-          candidato: { nome, email, telefone, dataNascimento },
+          candidato: { nome, email, telefone, dataNascimento: dataNascimento || undefined },
         },
       });
       onSaved(`Admissão de ${candidatoNome} atualizada.`);
@@ -245,6 +260,25 @@ export function EditAdmissaoModal({
       setBusy(false);
     }
   }
+
+  // Item 7: opções do menu = catálogo + valor legado atual (para não perder dado fora do catálogo).
+  const escalaAtual = (vf.escala ?? "").trim();
+  const escalaOptions = [
+    ...escalasCat.map((e) => ({ value: e.nome, label: e.nome })),
+    ...(escalaAtual && !escalasCat.some((e) => e.nome === escalaAtual)
+      ? [{ value: escalaAtual, label: escalaAtual }]
+      : []),
+  ];
+  const beneficiosSel = (vf.beneficios ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const beneficiosOptions = [
+    ...beneficiosCat.map((b) => ({ value: b.nome, label: b.nome })),
+    ...beneficiosSel
+      .filter((n) => !beneficiosCat.some((b) => b.nome === n))
+      .map((n) => ({ value: n, label: n })),
+  ];
 
   return (
     <Modal onClose={onClose} className="max-w-2xl" ariaLabel="Editar admissão">
@@ -494,10 +528,12 @@ export function EditAdmissaoModal({
                 )}
                 {mostra("escala") && (
                   <Campo rotulo="Escala">
-                    <input
-                      className="ds-input"
+                    <Select
                       value={vf.escala ?? ""}
-                      onChange={(e) => setVfField("escala")(e.target.value)}
+                      onChange={setVfField("escala")}
+                      placeholder="Selecione a escala…"
+                      ariaLabel="Escala"
+                      options={escalaOptions}
                     />
                   </Campo>
                 )}
@@ -550,10 +586,12 @@ export function EditAdmissaoModal({
               <div className="mt-3 grid gap-3">
                 {mostra("beneficios") && (
                   <Campo rotulo="Benefícios">
-                    <textarea
-                      className="ds-input min-h-[64px] resize-y"
-                      value={vf.beneficios ?? ""}
-                      onChange={(e) => setVfField("beneficios")(e.target.value)}
+                    <MultiSelect
+                      values={beneficiosSel}
+                      onChange={(vals) => setVfField("beneficios")(vals.join(", "))}
+                      placeholder="Selecione os benefícios…"
+                      ariaLabel="Benefícios"
+                      options={beneficiosOptions}
                     />
                   </Campo>
                 )}

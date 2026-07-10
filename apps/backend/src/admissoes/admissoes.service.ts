@@ -14,6 +14,7 @@ import {
   candidatoAlteracoesLog,
   candidatos,
   cargos,
+  clienteBeneficioPadrao,
   clientes,
   dadosVagaFolha,
   documentosAdmissao,
@@ -23,6 +24,7 @@ import {
   reguaDocumental,
 } from "../db/schema";
 import { calcSinalizadorPreenchimento, STATUS_INICIAL_FRENTE } from "../domain/admissao";
+import { parseBeneficiosPadrao } from "../domain/beneficios";
 import { FRENTES_AO_NASCER } from "../domain/frentes";
 import { recomputeFarolGlobal } from "./farol";
 import type { AuthUser } from "../auth/auth.types";
@@ -37,6 +39,7 @@ export interface ListarAdmissoesFiltros {
   farol?: string;
   sinalizador?: string;
   concluido?: boolean;
+  comPendencias?: boolean;
   from?: string;
   to?: string;
   page?: number;
@@ -103,6 +106,8 @@ export class AdmissoesService {
     if (!vf.salario) pend.push("Salário");
     if (!vf.escala) pend.push("Escala");
     if (!vf.beneficios) pend.push("Benefícios");
+    if (!vf.centroCusto) pend.push("Centro de custo");
+    if (!vf.gestorBp) pend.push("Gestor / BP");
     if (!dto.tipoContrato) pend.push("Tipo de contrato");
     if (!vf.tempoContrato) pend.push("Tempo de contrato");
     if (!dto.candidato.dataNascimento) pend.push("Data de nascimento");
@@ -125,7 +130,7 @@ export class AdmissoesService {
       throw new BadRequestException("CPF do substituído inválido");
     }
 
-    return this.db.transaction(async (tx) => {
+    const resultado = await this.db.transaction(async (tx) => {
       // b. cliente e cargo precisam existir.
       const cliente = await tx.query.clientes.findFirst({
         where: eq(clientes.codCliente, dto.codCliente),
@@ -254,6 +259,26 @@ export class AdmissoesService {
         documentos: exigidos.length,
       };
     });
+
+    // j. VR/AM viram PADRÃO do cliente (item 4): pré-preenchem a próxima admissão. Best-effort FORA
+    // da transação — nunca quebra a criação (envolvido em try/catch). Last write wins por (cliente,
+    // benefício). Só valor monetário por cliente, sem PII (§A.6).
+    try {
+      const padroes = parseBeneficiosPadrao(vf.beneficios);
+      for (const p of padroes) {
+        await this.db
+          .insert(clienteBeneficioPadrao)
+          .values({ codCliente: dto.codCliente, beneficio: p.beneficio, valor: p.valor })
+          .onConflictDoUpdate({
+            target: [clienteBeneficioPadrao.codCliente, clienteBeneficioPadrao.beneficio],
+            set: { valor: p.valor, atualizadoEm: new Date() },
+          });
+      }
+    } catch {
+      // best-effort: persistir o padrão de benefício nunca invalida uma admissão já criada.
+    }
+
+    return resultado;
   }
 
   /**
@@ -295,10 +320,13 @@ export class AdmissoesService {
     // "Concluído" = existe frente CADASTRO_CONTRATO concluída.
     const concluidoExpr = sql<boolean>`EXISTS (SELECT 1 FROM frentes_admissao f WHERE f.admissao_id = ${admissoes.id} AND f.tipo = 'CADASTRO_CONTRATO' AND f.concluida = true)`;
 
-    // Filtros de status (farol/concluído) — só na lista, não nos KPIs.
+    // Filtros de status (farol/concluído/pendências): só na lista, não nos KPIs (os cards mostram
+    // a distribuição do conjunto base e funcionam como botão de filtro, §A.12).
     const listWhere = [...base];
     if (filtros.farol) listWhere.push(eq(admissoes.farolGlobal, filtros.farol as FarolGlobal));
     if (filtros.concluido) listWhere.push(concluidoExpr);
+    // "Com pendências obrigatórias" = sinalizador de preenchimento diferente de OK (falta campo-núcleo).
+    if (filtros.comPendencias) listWhere.push(sql`${admissoes.sinalizadorPreenchimento} <> 'OK'`);
 
     const [{ total }] = await this.db
       .select({ total: count() })
@@ -382,6 +410,7 @@ export class AdmissoesService {
         ativos: sql<number>`count(*) filter (where ${admissoes.farolGlobal} = 'EM_ADMISSAO')::int`,
         declinados: sql<number>`count(*) filter (where ${admissoes.farolGlobal} = 'DECLINOU')::int`,
         concluidos: sql<number>`count(*) filter (where ${concluidoExpr})::int`,
+        comPendencias: sql<number>`count(*) filter (where ${admissoes.sinalizadorPreenchimento} <> 'OK')::int`,
       })
       .from(admissoes)
       .innerJoin(candidatos, eq(admissoes.candidatoCpf, candidatos.cpf))
@@ -399,6 +428,7 @@ export class AdmissoesService {
         ativos: kpi?.ativos ?? 0,
         concluidos: kpi?.concluidos ?? 0,
         declinados: kpi?.declinados ?? 0,
+        comPendencias: kpi?.comPendencias ?? 0,
       },
     };
   }

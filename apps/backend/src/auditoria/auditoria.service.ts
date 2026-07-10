@@ -25,6 +25,16 @@ import { ReguaCompletudeService } from "../regua/regua-completude.service";
 import { StagingService } from "../staging/staging.service";
 
 /**
+ * Precisa (re)arquivar no Drive? Sim quando ainda não há link (null) OU quando o link salvo é um
+ * placeholder de MOCK (gerado com DRIVE_MOCK=on): esse link aponta para uma pasta inexistente e
+ * resolve 404. Tratá-lo como "não arquivado" faz o próximo evento de documento regravar o link REAL
+ * (self-heal), sem depender de limpeza manual do banco. Um link real (`/folders/<id>`) não re-arquiva.
+ */
+export function precisaArquivarDrive(url: string | null): boolean {
+  return url == null || url.includes("/folders/MOCK-");
+}
+
+/**
  * Orquestração da auditoria documental incremental (F2 / INT-3, Fase 4). Por documento:
  * staging → IA → grava SÓ o estado/motivo (§A.3 regra 7) → recalcula sinalizador e progresso →
  * ao fechar a régua obrigatória, arquiva no Drive e expurga a staging. O CPF do candidato só
@@ -141,7 +151,11 @@ export class AuditoriaService {
     // 4.5) ASO VALIDADO → arquiva imediatamente na subpasta ASO do prontuário (Fase 4 ajustes
     // finais), sem esperar o fechamento da régua. Remove o ASO da staging p/ não duplicar no lote.
     let asoArquivado: { pastaUrl: string } | undefined;
-    if (tipo.codigo === "ASO" && resultado.status === "VALIDADO" && adm.driveAsoUrl == null) {
+    if (
+      tipo.codigo === "ASO" &&
+      resultado.status === "VALIDADO" &&
+      precisaArquivarDrive(adm.driveAsoUrl)
+    ) {
       asoArquivado = await this.arquivarAsoNoDrive(adm, stagingPath, tipo.codigo, tipo.nome);
     }
 
@@ -160,7 +174,7 @@ export class AuditoriaService {
 
     // 8) Fechou a régua e ainda não arquivou? → arquiva no Drive e expurga a staging.
     let arquivado: { pastaUrl: string } | undefined;
-    if (progresso.completa && adm.drivePastaUrl == null) {
+    if (progresso.completa && precisaArquivarDrive(adm.drivePastaUrl)) {
       arquivado = await this.arquivarNoDrive(adm);
     }
 

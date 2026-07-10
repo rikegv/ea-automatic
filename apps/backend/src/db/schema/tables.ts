@@ -66,6 +66,27 @@ export const clientes = pgTable("clientes", {
   atualizadoEm,
 });
 
+// ── ClienteBeneficioPadrao: valor padrão de VR/AM por cliente (item 4) ──────
+// Ao criar uma admissão, o valor informado para VR (Vale-Refeição) e AM (Assistência Médica) vira
+// PADRÃO do cliente (last write wins), pré-preenchendo a próxima admissão. `beneficio` é a chave
+// ESTÁVEL ("VR"/"AM"), independente do rótulo completo. Sem PII — só valor monetário por cliente.
+export const clienteBeneficioPadrao = pgTable(
+  "cliente_beneficio_padrao",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    codCliente: text("cod_cliente")
+      .notNull()
+      .references(() => clientes.codCliente, { onDelete: "cascade" }),
+    beneficio: varchar("beneficio", { length: 10 }).notNull(),
+    valor: text("valor").notNull(),
+    criadoEm,
+    atualizadoEm,
+  },
+  (t) => ({
+    uq: unique("uq_cliente_beneficio_padrao").on(t.codCliente, t.beneficio),
+  }),
+);
+
 // ── Cargo (catálogo próprio) ────────────────────────────────────────────────
 export const cargos = pgTable("cargos", {
   id: uuid("id").defaultRandom().primaryKey(),

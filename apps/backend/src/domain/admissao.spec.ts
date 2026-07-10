@@ -65,9 +65,27 @@ describe("pendenciasObrigatorias (S2/S3)", () => {
         codCliente: "1001",
         cargoId: "x",
         dataAdmissao: "",
-        vagaFolha: { salario: "", beneficios: "", escala: "" },
+        vagaFolha: { salario: "", beneficios: "", escala: "", centroCusto: "", gestorBp: "" },
       }),
-    ).toEqual(["Salário", "Data de admissão", "Pacote de benefícios", "Escala"]);
+    ).toEqual([
+      "Salário",
+      "Data de admissão",
+      "Pacote de benefícios",
+      "Escala",
+      "Centro de custo",
+      "Gestor / BP",
+    ]);
+  });
+
+  it("Centro de custo e Gestor / BP vazios geram pendência (item 4, não-bloqueante)", () => {
+    expect(
+      pendenciasObrigatorias({
+        codCliente: "1001",
+        cargoId: "x",
+        dataAdmissao: "2026-07-01",
+        vagaFolha: { salario: "1800", beneficios: "VR", escala: "6x1", centroCusto: "", gestorBp: "" },
+      }),
+    ).toEqual(["Centro de custo", "Gestor / BP"]);
   });
 
   it("sem pendências quando tudo preenchido", () => {
@@ -76,7 +94,13 @@ describe("pendenciasObrigatorias (S2/S3)", () => {
         codCliente: "1001",
         cargoId: "x",
         dataAdmissao: "2026-07-01",
-        vagaFolha: { salario: "1800", beneficios: "VR", escala: "6x1" },
+        vagaFolha: {
+          salario: "1800",
+          beneficios: "VR",
+          escala: "6x1",
+          centroCusto: "CC01",
+          gestorBp: "Fulano",
+        },
       }),
     ).toEqual([]);
   });
@@ -86,7 +110,13 @@ describe("pendenciasObrigatorias (S2/S3)", () => {
       codCliente: "1001",
       cargoId: "x",
       dataAdmissao: "",
-      vagaFolha: { salario: "1800", beneficios: "VR", escala: "6x1" },
+      vagaFolha: {
+        salario: "1800",
+        beneficios: "VR",
+        escala: "6x1",
+        centroCusto: "CC01",
+        gestorBp: "Fulano",
+      },
       isBanco: true,
     };
     // sem termo → "Termo de Banco" no lugar de "Data de admissão"

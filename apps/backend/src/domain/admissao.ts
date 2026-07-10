@@ -62,6 +62,8 @@ export interface PendenciasInput {
     salario?: string | number | null;
     beneficios?: string | null;
     escala?: string | null;
+    centroCusto?: string | null;
+    gestorBp?: string | null;
   } | null;
   /** Admissão de banco (§A.3 / Fase 4 complemento): troca "Data de admissão" por "Termo de Banco". */
   isBanco?: boolean | null;
@@ -75,7 +77,9 @@ export const PENDENCIA_TERMO_BANCO = "Termo de Banco";
 /**
  * Campos obrigatórios vazios da admissão (badge "Pendências Obrigatórias" — S2; e gatilho do log de
  * passagem — S3). Conjunto fixo: Salário, Data de admissão, Pacote de benefícios, Cliente, Cargo,
- * Escala. Função PURA. Cliente/Cargo são sempre exigidos na criação, mas constam por completude.
+ * Escala, Centro de custo, Gestor / BP. Função PURA. Cliente/Cargo são sempre exigidos na criação,
+ * mas constam por completude. Centro de custo e Gestor / BP seguem o mesmo padrão não-bloqueante
+ * (§A.3 regra 5): sinalizam, nunca impedem.
  *
  * Admissão de banco (§A.3 / Fase 4 complemento): a ausência de `dataAdmissao` é ESPERADA (não é
  * pendência); no lugar, o "Termo de Banco" é exigido até estar ENTREGUE.
@@ -92,6 +96,8 @@ export function pendenciasObrigatorias(i: PendenciasInput): string[] {
   }
   if (!presente(i.vagaFolha?.beneficios)) pend.push("Pacote de benefícios");
   if (!presente(i.vagaFolha?.escala)) pend.push("Escala");
+  if (!presente(i.vagaFolha?.centroCusto)) pend.push("Centro de custo");
+  if (!presente(i.vagaFolha?.gestorBp)) pend.push("Gestor / BP");
   return pend;
 }
 

@@ -1,10 +1,11 @@
 import { BadRequestException, Inject, Injectable } from "@nestjs/common";
-import { and, asc, eq, ilike, or } from "drizzle-orm";
+import { and, asc, eq, ilike, or, sql } from "drizzle-orm";
 import type { Database } from "../../db/client";
 import { DRIZZLE } from "../../db/drizzle.module";
 import {
   beneficiosCatalogo,
   cargos,
+  clienteBeneficioPadrao,
   clientes,
   escalasCatalogo,
   frenteStatusCatalogo,
@@ -62,6 +63,43 @@ export class CatalogosService {
       .orderBy(asc(clientes.razaoSocial));
   }
 
+  /**
+   * Clientes ATIVOS que ainda NÃO têm NENHUMA linha de régua documental (item 1). Alimenta a tela
+   * de administração para sinalizar quais clientes precisam de checklist. Ordenado por razão social.
+   */
+  listClientesSemRegua() {
+    return this.db
+      .select({
+        codCliente: clientes.codCliente,
+        razaoSocial: clientes.razaoSocial,
+        nomeOperacao: clientes.nomeOperacao,
+      })
+      .from(clientes)
+      .where(
+        and(
+          eq(clientes.ativo, true),
+          sql`NOT EXISTS (SELECT 1 FROM ${reguaDocumental} r WHERE r.cod_cliente = ${clientes.codCliente})`,
+        ),
+      )
+      .orderBy(asc(clientes.razaoSocial));
+  }
+
+  /**
+   * Valores PADRÃO de VR/AM de um cliente (item 4) — só os que já foram salvos. Retorna um objeto
+   * `Record<string,string>` (ex.: `{ "VR": "500,00", "AM": "300,00" }`) para pré-preencher o wizard.
+   */
+  async getBeneficiosPadraoCliente(codCliente: string): Promise<Record<string, string>> {
+    const cod = codCliente?.trim();
+    if (!cod) throw new BadRequestException("codCliente é obrigatório");
+    const rows = await this.db
+      .select({ beneficio: clienteBeneficioPadrao.beneficio, valor: clienteBeneficioPadrao.valor })
+      .from(clienteBeneficioPadrao)
+      .where(eq(clienteBeneficioPadrao.codCliente, cod));
+    const out: Record<string, string> = {};
+    for (const r of rows) out[r.beneficio] = r.valor;
+    return out;
+  }
+
   /** Cargos ativos para o wizard (F6). */
   listCargos() {
     return this.db
@@ -69,6 +107,25 @@ export class CatalogosService {
       .from(cargos)
       .where(eq(cargos.ativo, true))
       .orderBy(asc(cargos.nome));
+  }
+
+  /**
+   * Cargos DISTINTOS que têm régua cadastrada para um cliente (item 1 / F6). Restringe o seletor de
+   * cargo do wizard aos cargos com checklist para aquele cliente; `temRegua` sinaliza ao frontend se
+   * cai no fallback (catálogo global `listCargos`) quando o cliente ainda não tem régua.
+   */
+  async listCargosPorCliente(
+    codCliente: string,
+  ): Promise<{ temRegua: boolean; cargos: { id: string; nome: string }[] }> {
+    const cod = codCliente?.trim();
+    if (!cod) throw new BadRequestException("codCliente é obrigatório");
+    const rows = await this.db
+      .selectDistinct({ id: cargos.id, nome: cargos.nome })
+      .from(reguaDocumental)
+      .innerJoin(cargos, eq(cargos.id, reguaDocumental.cargoId))
+      .where(and(eq(reguaDocumental.codCliente, cod), eq(cargos.ativo, true)))
+      .orderBy(asc(cargos.nome));
+    return { temRegua: rows.length > 0, cargos: rows };
   }
 
   /** Régua resolvida do par (cliente + cargo) com JOIN no tipo de documento (§A.3 regra 4 / F4). */

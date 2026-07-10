@@ -94,4 +94,39 @@ export class ReguaCompletudeService {
     for (const l of linhas) if (l.estado !== "ENTREGUE") set.add(l.admissaoId);
     return set;
   }
+
+  /**
+   * Contador (por admissão) de documentos OBRIGATÓRIOS da régua ainda NÃO ENTREGUE (item 8 / F2 —
+   * badge da fila de Auditoria). Espelha a query do `obrigatoriosPendentesSet`, mas conta em vez de
+   * só marcar presença. Todos os ids consultados vêm no mapa (0 quando a régua está completa ou não
+   * há obrigatório pendente). Sem PII (§A.6).
+   */
+  async obrigatoriosPendentesCountMap(admissaoIds: string[]): Promise<Map<string, number>> {
+    const map = new Map<string, number>();
+    if (admissaoIds.length === 0) return map;
+    for (const id of admissaoIds) map.set(id, 0);
+    const linhas = await this.db
+      .select({ admissaoId: admissoes.id, estado: documentosAdmissao.estado })
+      .from(admissoes)
+      .innerJoin(
+        reguaDocumental,
+        and(
+          eq(reguaDocumental.codCliente, admissoes.codCliente),
+          eq(reguaDocumental.cargoId, admissoes.cargoId),
+          eq(reguaDocumental.exigencia, "OBRIGATORIO"),
+        ),
+      )
+      .leftJoin(
+        documentosAdmissao,
+        and(
+          eq(documentosAdmissao.admissaoId, admissoes.id),
+          eq(documentosAdmissao.tipoDocumentoId, reguaDocumental.tipoDocumentoId),
+        ),
+      )
+      .where(inArray(admissoes.id, admissaoIds));
+    for (const l of linhas) {
+      if (l.estado !== "ENTREGUE") map.set(l.admissaoId, (map.get(l.admissaoId) ?? 0) + 1);
+    }
+    return map;
+  }
 }
