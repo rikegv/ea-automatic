@@ -48,3 +48,6 @@ apps/frontend/public/demo-kit-pdf-mae.pdf
 
 # amostra do relatório da clínica — gerada localmente, pode conter CNPJ de cliente (§A.6); não versionar
 relatorio-clinica-exemplo.csv
+
+# base de dados de clientes (planilha de insumo, contém dados de cliente §A.6); fica só em disco, não versionar
+/BASE ATUALIZADA CLIENTES 07-07.xlsx
