@@ -1,12 +1,14 @@
 import { Icon } from "@/components/ui/Icon";
 import type { PillTone } from "@/components/ui/Pill";
+import { statusIconName } from "@/components/ui/StatusPill";
 import { cn } from "@/lib/cn";
 
 /**
  * Badge CLICÁVEL de pendências obrigatórias (Fase 4, ajustes visuais, T2).
- * Diferencia-se das pills de status (sólidas, não-clicáveis): ícone de alerta + borda pontilhada
- * + cursor-pointer/hover, deixando claro que é interativo (abre o modal de pendências). A cor
- * segue o tom do sinalizador (mesma leitura semântica do Design System).
+ * Diferencia-se das pills de status (sólidas, não-clicáveis): ÍCONE DINÂMICO por estado (§A.12,
+ * check verde = completo/ok · exclamação amarela = pendente · X vermelho = recusado/declinado)
+ * + borda pontilhada + cursor-pointer/hover, deixando claro que é interativo (abre o modal de
+ * pendências). A cor segue o tom do sinalizador (mesma leitura semântica do Design System).
  */
 const TONE_VAR: Record<PillTone, string> = {
   ok: "var(--ok)",
@@ -42,7 +44,7 @@ export function PendenciasBadge({
         className,
       )}
     >
-      <Icon name="alert" className="h-3.5 w-3.5 flex-none" />
+      <Icon name={statusIconName(tone)} className="h-3.5 w-3.5 flex-none" />
       {label}
     </button>
   );

@@ -7,7 +7,8 @@ import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/cn";
 import { PageHead } from "@/components/ui/PageHead";
 import { GlassCard } from "@/components/ui/GlassCard";
-import { Pill, type PillTone } from "@/components/ui/Pill";
+import { type PillTone } from "@/components/ui/Pill";
+import { StatusPill } from "@/components/ui/StatusPill";
 import { PendenciasBadge } from "@/components/ui/PendenciasBadge";
 import { OrigemBadge } from "@/components/ui/OrigemBadge";
 import { Icon, type IconName } from "@/components/ui/Icon";
@@ -40,7 +41,13 @@ interface ListResp {
   pageSize: number;
   totalPages: number;
   tiposContrato: string[];
-  kpis: { total: number; ativos: number; concluidos: number; declinados: number };
+  kpis: {
+    total: number;
+    ativos: number;
+    concluidos: number;
+    declinados: number;
+    comPendencias: number;
+  };
 }
 interface ClienteLite {
   codCliente: string;
@@ -55,7 +62,7 @@ interface CargoLite {
 const SINAL: Record<string, { tone: PillTone; label: string }> = {
   OK: { tone: "ok", label: "Completo" },
   PARCIAL: { tone: "wn", label: "Parcial" },
-  PENDENTE: { tone: "nt", label: "Pendente" },
+  PENDENTE: { tone: "wn", label: "Pendente" },
   INCONFORMIDADE: { tone: "dg", label: "Inconformidade" },
   COMPETENCIAS: { tone: "nt", label: "Competências" },
 };
@@ -80,22 +87,13 @@ function frenteTone(f?: { status: string; concluida: boolean }): PillTone {
   return "wn";
 }
 
-/** Pill de status: NUNCA trunca (T1): a coluna tem largura suficiente para o rótulo mais longo. */
-function StatusPill({ tone, label }: { tone: PillTone; label: string }) {
-  return (
-    <Pill tone={tone} className="whitespace-nowrap" title={label}>
-      {label}
-    </Pill>
-  );
-}
-
-// 11 colunas (com as 3 frentes, G4a). As colunas de status recebem largura FIXA suficiente para o
-// rótulo mais longo sem truncar ("Aguardando reenvio dos docs" na Auditoria, "Admissão Concluída"
-// no Status). As de texto (Candidato/Cliente/Cargo/Contrato) absorvem o restante em `fr`: truncam
-// com ellipsis só quando muito longas, sem grandes vazios (T1a/T1b).
+// 11 colunas (com as 3 frentes, G4a). Padrão único de tabela (§A.12): cada coluna tem min-width
+// suficiente para NÃO cortar o conteúdo; o container rola na horizontal (overflow-x) em vez de
+// esmagar. As de texto (Candidato/Cliente/Cargo/Contrato) têm piso em px (nunca truncam "AJUDANTE
+// GERAL" nem o nome) e crescem em `fr`; as de status têm largura para o rótulo mais longo.
 const GRID =
-  "minmax(0,1.4fr) minmax(0,1.2fr) minmax(0,1fr) minmax(0,0.9fr) 92px 206px 116px 124px 152px 156px 92px";
-const GRID_MIN = "min-w-[1320px]";
+  "minmax(170px,1.6fr) minmax(150px,1.2fr) minmax(176px,1fr) minmax(110px,0.9fr) 96px 206px 130px 140px 160px 156px 100px";
+const GRID_MIN = "min-w-[1760px]";
 
 export default function GerenciadorPage() {
   const { token, isAdmin } = useAuth();
@@ -119,6 +117,8 @@ export default function GerenciadorPage() {
   const [farol, setFarol] = useState("");
   const [sinalizador, setSinalizador] = useState("");
   const [concluido, setConcluido] = useState(false);
+  // Card/filtro "Com pendências obrigatórias" (§A.12): toggle independente do farol/concluído.
+  const [comPendencias, setComPendencias] = useState(false);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [page, setPage] = useState(1);
@@ -160,6 +160,7 @@ export default function GerenciadorPage() {
     if (farol) qs.set("farol", farol);
     if (sinalizador) qs.set("sinalizador", sinalizador);
     if (concluido) qs.set("concluido", "true");
+    if (comPendencias) qs.set("comPendencias", "true");
     if (from) qs.set("from", from);
     if (to) qs.set("to", to);
     qs.set("page", String(page));
@@ -172,7 +173,20 @@ export default function GerenciadorPage() {
     } finally {
       setLoading(false);
     }
-  }, [token, q, codCliente, cargoId, tipoContrato, farol, sinalizador, concluido, from, to, page]);
+  }, [
+    token,
+    q,
+    codCliente,
+    cargoId,
+    tipoContrato,
+    farol,
+    sinalizador,
+    concluido,
+    comPendencias,
+    from,
+    to,
+    page,
+  ]);
 
   useEffect(() => {
     load();
@@ -211,12 +225,22 @@ export default function GerenciadorPage() {
     setFarol("");
     setSinalizador("");
     setConcluido(false);
+    setComPendencias(false);
     setFrom("");
     setTo("");
     setPage(1);
   }
   const temFiltro = Boolean(
-    q || codCliente || cargoId || tipoContrato || farol || sinalizador || concluido || from || to,
+    q ||
+    codCliente ||
+    cargoId ||
+    tipoContrato ||
+    farol ||
+    sinalizador ||
+    concluido ||
+    comPendencias ||
+    from ||
+    to,
   );
 
   // KPIs como filtro (radio-like): clicar aplica, clicar de novo desfaz.
@@ -301,7 +325,13 @@ export default function GerenciadorPage() {
         aria-pressed={ativo}
       >
         <div className="mb-0.5 flex items-center justify-between">
-          {icon && <Icon name={icon} className="h-4 w-4 opacity-70" style={tone ? { color: tone } : undefined} />}
+          {icon && (
+            <Icon
+              name={icon}
+              className="h-4 w-4 opacity-70"
+              style={tone ? { color: tone } : undefined}
+            />
+          )}
           {ativo && <Icon name="check" className="h-3 w-3 text-accent" />}
         </div>
         <div className="num" style={tone ? { color: tone } : undefined}>
@@ -319,8 +349,20 @@ export default function GerenciadorPage() {
       {/* KPIs (clicáveis = filtro) */}
       <div className="mb-[18px] grid grid-cols-2 gap-[12px] sm:grid-cols-3 xl:grid-cols-5">
         <KpiCard id="total" label="Total geral" value={k?.total ?? 0} icon="layers" />
-        <KpiCard id="ativos" label="Ativos" value={k?.ativos ?? 0} tone="var(--accent)" icon="chart" />
-        <KpiCard id="concluidos" label="Concluídos" value={k?.concluidos ?? 0} tone="var(--ok)" icon="check" />
+        <KpiCard
+          id="ativos"
+          label="Ativos"
+          value={k?.ativos ?? 0}
+          tone="var(--accent)"
+          icon="chart"
+        />
+        <KpiCard
+          id="concluidos"
+          label="Concluídos"
+          value={k?.concluidos ?? 0}
+          tone="var(--ok)"
+          icon="check"
+        />
         <KpiCard
           id="declinados"
           label="Declinados"
@@ -328,6 +370,33 @@ export default function GerenciadorPage() {
           tone="var(--danger)"
           icon="x"
         />
+        {/* Card "Com pendências obrigatórias" (§A.12): clicável = filtro (toggle independente). */}
+        <GlassCard
+          as="button"
+          className={cn(
+            "fk text-left transition hover:bg-[var(--surface-2)] !px-4 !py-3.5",
+            comPendencias && "!border-[var(--accent)] ring-1 ring-[var(--accent)]",
+          )}
+          onClick={() => {
+            setComPendencias((v) => !v);
+            setPage(1);
+          }}
+          aria-pressed={comPendencias}
+          title={
+            comPendencias
+              ? "Remover filtro de pendências obrigatórias"
+              : "Filtrar só admissões com pendências obrigatórias"
+          }
+        >
+          <div className="mb-0.5 flex items-center justify-between">
+            <Icon name="alert" className="h-4 w-4 opacity-70" style={{ color: "var(--warn)" }} />
+            {comPendencias && <Icon name="check" className="h-3 w-3 text-accent" />}
+          </div>
+          <div className="num" style={{ color: "var(--warn)" }}>
+            {loading && !data ? "…" : (k?.comPendencias ?? 0)}
+          </div>
+          <div className="lbl">Com pendências obrigatórias</div>
+        </GlassCard>
       </div>
 
       {/* Filtros */}
@@ -480,10 +549,10 @@ export default function GerenciadorPage() {
         <div className="overflow-x-auto">
           <div className={GRID_MIN}>
             <div className="list-head" style={{ gridTemplateColumns: GRID }}>
-              <span>Candidato</span>
-              <span>Cliente</span>
-              <span>Cargo</span>
-              <span>Contrato</span>
+              <span className="text-left">Candidato</span>
+              <span className="text-left">Cliente</span>
+              <span className="text-left">Cargo</span>
+              <span className="text-left">Contrato</span>
               <span>Data adm.</span>
               <span>Auditoria</span>
               <span>Exame</span>
@@ -526,47 +595,47 @@ export default function GerenciadorPage() {
                         </div>
                       )}
                     </div>
+                    {/* Cliente: só o nome da operação (§A.12); o código vai no modal do olho. */}
                     <div className="min-w-0">
                       <div className="meta truncate text-text">
                         {r.clienteOperacao || r.clienteRazao}
                       </div>
-                      <div className="meta truncate">Código {r.codCliente}</div>
                     </div>
                     <div className="meta truncate">{r.cargoNome}</div>
                     <div className="meta truncate">{r.tipoContrato || "não informado"}</div>
-                    <div className="meta">{fmtDataAdmissao(r.dataAdmissao)}</div>
-                    <div className="min-w-0">
+                    <div className="meta text-center">{fmtDataAdmissao(r.dataAdmissao)}</div>
+                    <div className="flex min-w-0 items-center justify-center">
                       {fa ? (
                         <StatusPill tone={frenteTone(fa)} label={fa.rotulo} />
                       ) : (
                         <span className="meta">não informado</span>
                       )}
                     </div>
-                    <div className="min-w-0">
+                    <div className="flex min-w-0 items-center justify-center">
                       {ex ? (
                         <StatusPill tone={frenteTone(ex)} label={ex.rotulo} />
                       ) : (
                         <span className="meta">não informado</span>
                       )}
                     </div>
-                    <div className="min-w-0">
+                    <div className="flex min-w-0 items-center justify-center">
                       {cad ? (
                         <StatusPill tone={frenteTone(cad)} label={cad.rotulo} />
                       ) : (
                         <span className="meta">não informado</span>
                       )}
                     </div>
-                    <div className="min-w-0">
+                    <div className="flex min-w-0 items-center justify-center">
                       <StatusPill tone={farolP.tone} label={farolP.label} />
                     </div>
-                    <div className="min-w-0">
+                    <div className="flex min-w-0 items-center justify-center">
                       <PendenciasBadge
                         tone={sinalP.tone}
                         label={sinalP.label}
                         onClick={() => setPendRow(r)}
                       />
                     </div>
-                    <div className="flex items-center gap-1">
+                    <div className="flex items-center justify-center gap-1">
                       <button
                         type="button"
                         className="grid h-8 w-8 place-items-center rounded-lg text-faint transition hover:bg-[var(--surface-2)] hover:text-accent"

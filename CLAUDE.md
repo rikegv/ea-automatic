@@ -321,6 +321,40 @@ ao usuário. No lugar, usar **vírgula, ponto, dois-pontos ou reescrever a frase
 vazia usa **"não informado"**, nunca o glifo. A regra vale para **toda entrega futura**, não só a OST
 que a originou: nenhum código novo introduz travessão em texto apresentável. *(Decisão do diretor.)*
 
+## A.12 — Padrão único de tabela (regra permanente)
+
+O sistema tem **UMA ÚNICA máscara visual de tabela**. Toda tela com tabela (Farol, Gerenciador,
+Clientes, Régua, Usuários e qualquer nova) segue este padrão, **sem precisar ser pedido**:
+- **Colunas proporcionais e responsivas**: larguras equilibradas, sem apertar o conteúdo e sem
+  overflow escondido. Colunas de status/pill recebem largura suficiente para o rótulo mais longo.
+- **Títulos de coluna centralizados** no cabeçalho (thead / `.list-head`).
+- **Divisória sutil e premium entre colunas**, com sombreamento leve no padrão do sistema
+  (hairline `var(--border)` por sombra interna, sem alterar a largura das colunas).
+- **Ícone dinâmico por status**: o ícone acompanha o estado real, nunca é fixo. Completo/ok =
+  **check verde**; pendente = **exclamação amarela**; recusado/declinado = **X vermelho**.
+- **Coluna de PENDÊNCIAS OBRIGATÓRIAS separada** (nunca embutida em Ações), com badge dinâmico
+  que segue a regra do ícone acima.
+- **KPI/card "Com pendências obrigatórias"** presente e **clicável como filtro** (toggle), igual
+  aos demais cards da tela.
+
+Referência visual: o Gerenciador (colunas Candidato · Cliente · Cargo · Contrato · Data adm. ·
+Auditoria · Exame · Cadastro · Status · Pendências Obrig. · Ações). As três abas do Farol
+(Auditoria, Exame, Cadastro) replicam a mesma identidade, adaptando as colunas de cada frente.
+Vale a §A.11 (travessão proibido). *(Decisão do diretor.)*
+
+## A.13 — Verificação visual obrigatória antes de reportar (regra permanente)
+
+Nenhuma entrega que toque a interface é considerada concluída sem **prova visual**. Antes de
+reportar qualquer entrega visual como "feita", a fábrica DEVE:
+1. Abrir a página real no browser (localhost, build de produção servido, sessão autenticada).
+2. Tirar **screenshot** de cada tela alterada e olhar o resultado renderizado, não só o código.
+3. Confirmar no retorno que **nenhuma coluna está esmagada, sobreposta ou cortando conteúdo**
+   (nomes/cargos não truncam de forma indevida; pills de status e badges de pendência ficam cada
+   um na sua coluna; a tabela rola na horizontal em vez de espremer).
+Teste verde de build/lint/typecheck NÃO substitui esse passo. Reportar "concluído" sem a
+confirmação visual é falha de processo. O harness de screenshot (Playwright headless + login de
+teste) é insumo da fábrica, mantido fora do repositório. *(Decisão do diretor, retrabalho visual.)*
+
 ## A.10 — Registro de ideia futura (fora do escopo atual)
 
 **Ponte EA ↔ CentraAtend (comunicar candidato por WhatsApp).** Botão "comunicar candidato" no EA

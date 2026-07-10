@@ -769,6 +769,14 @@
     letter-spacing: 0.06em;
     color: var(--faint);
     font-weight: 600;
+    /* Padrão único de tabela (§A.12): títulos de coluna centralizados. */
+    text-align: center;
+  }
+  /* Padrão único de tabela (§A.12): divisória sutil e premium entre colunas (hairline por sombra
+     interna, não altera a largura das colunas). Aplica no cabeçalho e em cada linha. */
+  .list-head > * + *,
+  .row > * + * {
+    box-shadow: inset 1px 0 0 0 color-mix(in srgb, var(--border-strong) 70%, transparent);
   }
   .row {
     display: grid;
@@ -809,7 +817,8 @@
     border-collapse: collapse;
   }
   .ds-table thead th {
-    text-align: left;
+    /* Padrão único de tabela (§A.12): títulos de coluna centralizados. */
+    text-align: center;
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.06em;
@@ -823,6 +832,11 @@
   }
   .ds-table tbody tr + tr td {
     border-top: 1px solid var(--border);
+  }
+  /* Padrão único de tabela (§A.12): divisória sutil e premium entre colunas. */
+  .ds-table thead th + th,
+  .ds-table tbody td + td {
+    border-left: 1px solid color-mix(in srgb, var(--border-strong) 70%, transparent);
   }
   .ds-table tbody tr:hover td {
     background: var(--surface);
