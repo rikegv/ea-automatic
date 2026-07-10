@@ -85,6 +85,34 @@ export class CatalogosService {
   }
 
   /**
+   * Clientes ATIVOS que JÁ têm régua documental cadastrada (§A.12, painel "Com régua"). Traz a
+   * contagem de cargos distintos com checklist, para o CRUD (listar/buscar/editar/inativar). `q`
+   * filtra (case-insensitive) por razão/operação/código. Ordenado por razão social.
+   */
+  listClientesComRegua(q?: string) {
+    const termo = q?.trim();
+    const filtroBusca = termo
+      ? or(
+          ilike(clientes.razaoSocial, `%${termo}%`),
+          ilike(clientes.nomeOperacao, `%${termo}%`),
+          ilike(clientes.codCliente, `%${termo}%`),
+        )
+      : undefined;
+    return this.db
+      .select({
+        codCliente: clientes.codCliente,
+        razaoSocial: clientes.razaoSocial,
+        nomeOperacao: clientes.nomeOperacao,
+        cargos: sql<number>`count(distinct ${reguaDocumental.cargoId})::int`,
+      })
+      .from(clientes)
+      .innerJoin(reguaDocumental, eq(reguaDocumental.codCliente, clientes.codCliente))
+      .where(filtroBusca ? and(eq(clientes.ativo, true), filtroBusca) : eq(clientes.ativo, true))
+      .groupBy(clientes.codCliente, clientes.razaoSocial, clientes.nomeOperacao)
+      .orderBy(asc(clientes.razaoSocial));
+  }
+
+  /**
    * Valores PADRÃO de VR/AM de um cliente (item 4) — só os que já foram salvos. Retorna um objeto
    * `Record<string,string>` (ex.: `{ "VR": "500,00", "AM": "300,00" }`) para pré-preencher o wizard.
    */

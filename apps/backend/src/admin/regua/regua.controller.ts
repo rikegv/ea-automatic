@@ -26,4 +26,10 @@ export class ReguaController {
   ) {
     return this.regua.remove(codCliente, cargoId, tipoDocumentoId);
   }
+
+  // Inativa toda a régua de um cliente (§A.12, painel "Com régua"): devolve o cliente à lista sem régua.
+  @Delete("cliente")
+  removeCliente(@Query("codCliente") codCliente: string) {
+    return this.regua.removeCliente(codCliente);
+  }
 }

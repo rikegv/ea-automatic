@@ -35,6 +35,12 @@ export class CatalogosController {
     return this.catalogos.listClientesSemRegua();
   }
 
+  // Clientes ativos que JÁ têm régua cadastrada (§A.12, painel "Com régua"). `q` filtra a busca.
+  @Get("clientes-com-regua")
+  clientesComRegua(@Query("q") q?: string) {
+    return this.catalogos.listClientesComRegua(q);
+  }
+
   // Valores padrão de VR/AM do cliente (item 4) para pré-preencher o wizard.
   @Get("beneficios-padrao-cliente")
   beneficiosPadraoCliente(@Query("codCliente") codCliente?: string) {

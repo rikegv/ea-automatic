@@ -54,4 +54,15 @@ export class ReguaService {
       );
     return { ok: true };
   }
+
+  /**
+   * Inativa a régua de um cliente (§A.12, CRUD do painel "Com régua"): remove TODAS as linhas de
+   * régua do cliente, devolvendo-o à lista "sem régua". Ação da administração (Master/Super Admin).
+   */
+  async removeCliente(codCliente: string) {
+    await this.db
+      .delete(reguaDocumental)
+      .where(eq(reguaDocumental.codCliente, codCliente));
+    return { ok: true };
+  }
 }
