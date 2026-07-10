@@ -24,8 +24,11 @@ const OPERACAO: NavDef[] = [
   { href: "/esteira", icon: "layers", label: "Esteira admissional" },
   { href: "/nao-conformidades", icon: "alert", label: "Não conformidades" },
   { href: "/gerenciador", icon: "table", label: "Gerenciador" },
-  { href: "/kit", icon: "pen", label: "Gerador de kit" },
 ];
+
+// Gerador de kit (motor de extração, OST): tela própria, restrita a Master / Super Admin. Fica na
+// navegação principal (fora de Configurações), visível só para quem tem acesso.
+const GERADOR_KIT: NavDef = { href: "/gerador-kit", icon: "pen", label: "Gerador de kit" };
 
 const PAPEL_ROTULO: Record<Papel, string> = {
   SUPER_ADMIN: "Super Admin",
@@ -86,7 +89,12 @@ export function Sidebar() {
       )}
     >
       {/* Topo: marca + botão recolher/fixar (setas) */}
-      <div className={cn("mb-[18px] flex items-center", expanded ? "justify-between" : "justify-center")}>
+      <div
+        className={cn(
+          "mb-[18px] flex items-center",
+          expanded ? "justify-between" : "justify-center",
+        )}
+      >
         {expanded && <Brand className="ml-1.5" />}
         <button
           type="button"
@@ -101,7 +109,7 @@ export function Sidebar() {
       </div>
 
       <div className={cn("nav-label", !expanded && "hidden")}>Operação</div>
-      {OPERACAO.map((n) => (
+      {(isAdmin ? [...OPERACAO, GERADOR_KIT] : OPERACAO).map((n) => (
         <NavItem key={n.href} {...n} active={isActive(pathname, n.href)} expanded={expanded} />
       ))}
 

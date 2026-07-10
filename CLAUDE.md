@@ -362,3 +362,31 @@ que delega o envio ao CentraAtend (que já é a plataforma de WhatsApp). Fase fu
 quando o núcleo do EA (Fases 0–3) e o CentraAtend estiverem maduros. Requer o CentraAtend expor
 um serviço de envio consumível + template HSM aprovado pela Meta. O coordenador deve lembrar o
 diretor no gatilho natural.
+
+## A.14 — Escopo fechado: só o que a OST pede (regra permanente)
+
+A fábrica **NÃO pode alterar, criar, modificar ou excluir absolutamente NADA** que não esteja
+explicitamente listado no escopo da OST em curso (ou de qualquer OST futura). Isso inclui, sem
+exceção: nomes de menu, rótulos, textos, posições de elementos, arquivos, rotas, componentes e o
+comportamento de qualquer tela ou funcionalidade **não mencionada** na OST. **Na menor dúvida sobre
+se algo está dentro do escopo, PARE IMEDIATAMENTE e pergunte ao diretor antes de agir**, mesmo que a
+mudança pareça óbvia, pequena ou de bom senso. A fábrica não decide por conta própria o que "faria
+sentido" mexer. Se a implementação do que foi pedido exigir tocar em algo fora da lista da OST, isso
+também é motivo de parada e pergunta. *(Decisão do diretor, após violações: renomeação de menu
+lateral sem pedido e texto movido para lugar errado. Não pode se repetir.)*
+
+## A.15 — Pendência conhecida: F9 antiga acoplada ao INT-4 (não urgente)
+
+A **F9 antiga** (gerador de kit manual, um kit por admissão a partir do PDF-mãe) foi **tirada do
+menu** (a tela `/kit` não é mais acessível pela navegação; o Gerador de Kit atual vive em
+`/gerador-kit`), mas o **código NÃO foi excluído** do repositório de propósito. Motivo: o fluxo de
+**reenvio por correção do Clicksign (INT-4)** ainda depende dela, `reenviarCorrecao`
+(`clicksign-sync.service.ts`) chama `KitService.gerar` (o método antigo) para regerar o kit e
+disparar novo envelope (§A.5). Remover a F9 isolada **quebraria** o reenvio de correção do Clicksign
+(build + fluxo operacional + testes).
+
+**Ação futura (quando a frente do Clicksign/INT-4 for trabalhada):** primeiro **migrar o
+`reenviarCorrecao` para não depender mais do `kit.gerar` antigo**, e só então **remover a F9 de vez**
+(código, rotas `/kit/*/gerar` e `/kit/download/:token` e `/kit/historico`, `gemini.localizar_paginas_kit`,
+schemas `KitRequest`/`KitResponse`, a tela `/kit` e `lib/kit.ts`). Não remover a F9 antes disso.
+*(Registrado pelo diretor ao aprovar o Gerador de Kit novo.)*
