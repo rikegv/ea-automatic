@@ -646,7 +646,6 @@ export default function NovaAdmissaoPage() {
             {/* Folha / vaga */}
             <div>
               <div className="eyebrow">Dados de vaga / folha</div>
-              <p className="mb-3 text-[12px] text-dim">Campos com * são obrigatórios (pendências exigem aceite, F4).</p>
               {catErro && (
                 <p className="mb-3 rounded-xl border border-[var(--border)] bg-[rgba(214,69,69,0.1)] px-3 py-2 text-[13px] text-danger">
                   {catErro}
@@ -822,7 +821,7 @@ export default function NovaAdmissaoPage() {
               <Field label="Data de admissão *">
                 <input type="date" className="ds-input" value={cand.dataAdmissao} onChange={(e) => setCand({ ...cand, dataAdmissao: e.target.value })} />
                 <p className="mt-1 text-[11px] text-faint">
-                  Obrigatória, porém não bloqueia: se ficar vazia, entra como pendência (F4).
+                  Obrigatória, porém não bloqueia: se ficar vazia, entra como pendência.
                 </p>
               </Field>
               <Field label="Telefone *">
