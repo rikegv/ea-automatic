@@ -1,9 +1,22 @@
 import { Inject, Injectable } from "@nestjs/common";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { ProgressoRegua } from "@ea/shared-types";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
-import { admissoes, documentosAdmissao, reguaDocumental, tiposDocumento } from "../db/schema";
+import {
+  admissoes,
+  candidatos,
+  documentosAdmissao,
+  reguaDocumental,
+  tiposDocumento,
+} from "../db/schema";
+
+// Régua padrão: a Carteira de Reservista (código RESERVISTA) só é OBRIGATÓRIA para o sexo
+// MASCULINO. Para candidatas (ou quando o sexo ainda não foi informado) a linha do Reservista é
+// removida do cálculo de pendências. Filtro em SQL para as consultas em lote; em memória na
+// consulta por admissão. `is distinct from` trata o NULL como "não masculino".
+const RESERVISTA_COD = "RESERVISTA";
+const naoExigeReservista = sql`not (${tiposDocumento.codigo} = ${RESERVISTA_COD} and ${candidatos.sexo} is distinct from 'MASCULINO')`;
 import {
   calcularProgressoRegua,
   faltantesObrigatorios,
@@ -28,6 +41,7 @@ export class ReguaCompletudeService {
   ): Promise<DocReguaEstado[]> {
     const linhas = await this.db
       .select({
+        codigo: tiposDocumento.codigo,
         nome: tiposDocumento.nome,
         exigencia: reguaDocumental.exigencia,
         estado: documentosAdmissao.estado,
@@ -44,7 +58,17 @@ export class ReguaCompletudeService {
       .where(
         and(eq(reguaDocumental.codCliente, codCliente), eq(reguaDocumental.cargoId, cargoId)),
       );
-    return linhas.map((l) => ({ nome: l.nome, exigencia: l.exigencia, estado: l.estado ?? null }));
+    // Sexo do candidato desta admissão (para o condicional do Reservista da régua padrão).
+    const cand = await this.db
+      .select({ sexo: candidatos.sexo })
+      .from(admissoes)
+      .innerJoin(candidatos, eq(candidatos.cpf, admissoes.candidatoCpf))
+      .where(eq(admissoes.id, admissaoId))
+      .limit(1);
+    const masculino = cand[0]?.sexo === "MASCULINO";
+    return linhas
+      .filter((l) => !(l.codigo === RESERVISTA_COD && !masculino))
+      .map((l) => ({ nome: l.nome, exigencia: l.exigencia, estado: l.estado ?? null }));
   }
 
   /** Nomes dos documentos OBRIGATÓRIOS ainda não ENTREGUE (insumo do gatilho NC-1). */
@@ -74,6 +98,7 @@ export class ReguaCompletudeService {
     const linhas = await this.db
       .select({ admissaoId: admissoes.id, estado: documentosAdmissao.estado })
       .from(admissoes)
+      .innerJoin(candidatos, eq(candidatos.cpf, admissoes.candidatoCpf))
       .innerJoin(
         reguaDocumental,
         and(
@@ -82,6 +107,7 @@ export class ReguaCompletudeService {
           eq(reguaDocumental.exigencia, "OBRIGATORIO"),
         ),
       )
+      .innerJoin(tiposDocumento, eq(tiposDocumento.id, reguaDocumental.tipoDocumentoId))
       .leftJoin(
         documentosAdmissao,
         and(
@@ -89,7 +115,7 @@ export class ReguaCompletudeService {
           eq(documentosAdmissao.tipoDocumentoId, reguaDocumental.tipoDocumentoId),
         ),
       )
-      .where(inArray(admissoes.id, admissaoIds));
+      .where(and(inArray(admissoes.id, admissaoIds), naoExigeReservista));
     const set = new Set<string>();
     for (const l of linhas) if (l.estado !== "ENTREGUE") set.add(l.admissaoId);
     return set;
@@ -108,6 +134,7 @@ export class ReguaCompletudeService {
     const linhas = await this.db
       .select({ admissaoId: admissoes.id, estado: documentosAdmissao.estado })
       .from(admissoes)
+      .innerJoin(candidatos, eq(candidatos.cpf, admissoes.candidatoCpf))
       .innerJoin(
         reguaDocumental,
         and(
@@ -116,6 +143,7 @@ export class ReguaCompletudeService {
           eq(reguaDocumental.exigencia, "OBRIGATORIO"),
         ),
       )
+      .innerJoin(tiposDocumento, eq(tiposDocumento.id, reguaDocumental.tipoDocumentoId))
       .leftJoin(
         documentosAdmissao,
         and(
@@ -123,7 +151,7 @@ export class ReguaCompletudeService {
           eq(documentosAdmissao.tipoDocumentoId, reguaDocumental.tipoDocumentoId),
         ),
       )
-      .where(inArray(admissoes.id, admissaoIds));
+      .where(and(inArray(admissoes.id, admissaoIds), naoExigeReservista));
     for (const l of linhas) {
       if (l.estado !== "ENTREGUE") map.set(l.admissaoId, (map.get(l.admissaoId) ?? 0) + 1);
     }

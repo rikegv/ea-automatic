@@ -14,6 +14,8 @@
     "db:seed": "tsx src/db/seed.ts",
     "db:seed:clientes": "tsx src/db/seed-clientes.ts",
     "db:seed:regua": "tsx src/db/seed-regua.ts",
+    "db:seed:regua-padrao": "tsx src/db/seed-regua-padrao.ts",
+    "db:seed:kit": "tsx src/db/seed-kit.ts",
     "db:seed:catalogos": "tsx src/db/seed-catalogos.ts",
     "db:seed:regras": "tsx src/db/seed-regras.ts",
     "db:seed:clientes-atualizada": "tsx src/db/seed-clientes-atualizada.ts",

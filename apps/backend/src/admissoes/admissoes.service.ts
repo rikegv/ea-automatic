@@ -6,7 +6,7 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { isValidCpf, normalizeCpf, type FarolGlobal } from "@ea/shared-types";
-import { and, count, desc, eq, gte, ilike, inArray, lte, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, gte, ilike, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
 import {
@@ -149,8 +149,17 @@ export class AdmissoesService {
           email: dto.candidato.email ?? null,
           telefone: dto.candidato.telefone ?? null,
           dataNascimento: dto.candidato.dataNascimento ?? null,
+          sexo: dto.candidato.sexo ?? null,
         })
         .onConflictDoNothing({ target: candidatos.cpf });
+      // Preserva o candidato existente (regra 6); só COMPLETA o sexo quando ainda está vazio (o
+      // Reservista da régua padrão depende dele). Não sobrescreve um sexo já informado.
+      if (dto.candidato.sexo) {
+        await tx
+          .update(candidatos)
+          .set({ sexo: dto.candidato.sexo })
+          .where(and(eq(candidatos.cpf, cpf), isNull(candidatos.sexo)));
+      }
 
       // d. régua do par (cliente + cargo) — define os documentos exigidos (regra 4).
       const regua = await tx

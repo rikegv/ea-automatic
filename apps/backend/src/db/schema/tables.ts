@@ -25,6 +25,7 @@ import {
   ncTipoEnum,
   origemEnum,
   papelEnum,
+  sexoEnum,
   sinalizadorEnum,
   tipoServicoEnum,
 } from "./enums";
@@ -135,6 +136,9 @@ export const candidatos = pgTable("candidatos", {
   telefone: varchar("telefone", { length: 30 }),
   // Data de nascimento (ajustes-2B-2C/W7): aviso de menor de idade no wizard.
   dataNascimento: date("data_nascimento"),
+  // Sexo (régua padrão): condiciona a exigência da Carteira de Reservista (só MASCULINO). Nulo nos
+  // candidatos criados antes do campo existir; nesses casos o Reservista não é cobrado.
+  sexo: sexoEnum("sexo"),
   criadoEm,
   atualizadoEm,
 });
@@ -161,6 +165,38 @@ export const escalasCatalogo = pgTable("escalas_catalogo", {
   ativo: boolean("ativo").notNull().default(true),
   criadoEm,
 });
+
+// ── Gerador de Kit (OST): kits por tipo de vínculo + dicionário de títulos por kit ──
+// Dois níveis: kit_tipo (KIT TEMPORÁRIO, KIT TERCEIRO, ...) e kit_regra_documento (os títulos de
+// documento daquele kit, na ordem em que entram no kit consolidado do funcionário). O motor usa o
+// dicionário do KIT selecionado no upload, o que elimina falsos "não reconhecidos" entre kits.
+export const kitTipo = pgTable("kit_tipo", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  nome: varchar("nome", { length: 120 }).notNull().unique(),
+  ordem: integer("ordem").notNull().default(0),
+  ativo: boolean("ativo").notNull().default(true),
+  criadoEm,
+  atualizadoEm,
+});
+
+export const kitRegraDocumento = pgTable(
+  "kit_regra_documento",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    kitTipoId: uuid("kit_tipo_id")
+      .notNull()
+      .references(() => kitTipo.id, { onDelete: "cascade" }),
+    titulo: varchar("titulo", { length: 200 }).notNull(),
+    ordem: integer("ordem").notNull().default(0),
+    ativo: boolean("ativo").notNull().default(true),
+    criadoEm,
+    atualizadoEm,
+  },
+  // O título é único DENTRO de um kit (o mesmo documento base repete entre kits diferentes).
+  (t) => ({
+    uqKitTitulo: unique("uq_kit_documento_titulo").on(t.kitTipoId, t.titulo),
+  }),
+);
 
 // ── Admissão (entidade central: Candidato + Cliente + Cargo) ────────────────
 export const admissoes = pgTable("admissoes", {

@@ -2,6 +2,7 @@ import { Transform, Type } from "class-transformer";
 import {
   IsBoolean,
   IsDateString,
+  IsIn,
   IsOptional,
   IsString,
   IsUUID,
@@ -9,6 +10,9 @@ import {
   MinLength,
   ValidateNested,
 } from "class-validator";
+
+export const SEXO_VALORES = ["MASCULINO", "FEMININO"] as const;
+export type SexoValor = (typeof SEXO_VALORES)[number];
 
 /** Candidato do wizard (F6/F11). CPF e nome obrigatórios; o CPF é validado por dígitos no service (F3). */
 export class CandidatoInputDto {
@@ -35,6 +39,12 @@ export class CandidatoInputDto {
   @IsOptional()
   @IsDateString()
   dataNascimento?: string;
+
+  // Sexo (régua padrão): condiciona a exigência da Carteira de Reservista (só MASCULINO). Opcional
+  // no contrato (candidatos antigos/integração podem não ter); o wizard passa a exigir no F6.
+  @IsOptional()
+  @IsIn(SEXO_VALORES as unknown as string[])
+  sexo?: SexoValor;
 }
 
 /** Dados de vaga/folha (anexo 1:1) — opcionais por padrão (não bloqueiam — regra 5/F4). */

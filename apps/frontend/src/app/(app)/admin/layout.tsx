@@ -13,6 +13,7 @@ const SUBNAV = [
   { href: "/admin/clientes", label: "Clientes" },
   { href: "/admin/cargos", label: "Cargos" },
   { href: "/admin/regua", label: "Régua documental" },
+  { href: "/admin/kit-regras", label: "Regras do kit" },
   { href: "/admin/regras", label: "Regras de auditoria" },
   { href: "/admin/usuarios", label: "Usuários" },
 ];
@@ -43,7 +44,10 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
     <>
       <div className="mb-[22px] flex flex-wrap gap-2">
         {SUBNAV.map((n) => {
-          const active = n.href === "/admin" ? pathname === "/admin" : pathname.startsWith(n.href);
+          const active =
+            n.href === "/admin"
+              ? pathname === "/admin"
+              : pathname === n.href || pathname.startsWith(`${n.href}/`);
           return (
             <Link key={n.href} href={n.href} className={cn("tab", active && "active")}>
               {n.label}

@@ -88,7 +88,20 @@ const VAGA_EMPTY = {
   substituidoNome: "",
   substituidoCpf: "",
 };
-const CAND_EMPTY = { nome: "", cpf: "", telefone: "", email: "", dataAdmissao: "", dataNascimento: "" };
+const CAND_EMPTY = {
+  nome: "",
+  cpf: "",
+  telefone: "",
+  email: "",
+  dataAdmissao: "",
+  dataNascimento: "",
+  sexo: "",
+};
+// Sexo do candidato (régua padrão): condiciona a Carteira de Reservista (só MASCULINO).
+const SEXO_OPCOES = [
+  { value: "MASCULINO", label: "Masculino" },
+  { value: "FEMININO", label: "Feminino" },
+];
 
 function formatCpf(value: string): string {
   const d = normalizeCpf(value).slice(0, 11);
@@ -342,7 +355,7 @@ export default function NovaAdmissaoPage() {
   const nObrig = docsExigidos.filter((r) => r.exigencia === "OBRIGATORIO").length;
   const nFacult = docsExigidos.length - nObrig;
 
-  const canConfirm = Boolean(cliente && cargoId && cand.nome.trim() && cpfValid);
+  const canConfirm = Boolean(cliente && cargoId && cand.nome.trim() && cpfValid && cand.sexo);
 
   async function confirmar(aceitePendencias = false) {
     if (!cliente || !cargoId) return;
@@ -385,6 +398,7 @@ export default function NovaAdmissaoPage() {
             telefone: cand.telefone || undefined,
             email: cand.email || undefined,
             dataNascimento: cand.dataNascimento || undefined,
+            sexo: cand.sexo || undefined,
           },
           dataAdmissao: cand.dataAdmissao || undefined,
           tipoContrato: vaga.tipoContrato || undefined,
@@ -817,6 +831,18 @@ export default function NovaAdmissaoPage() {
                     <span className="text-[12px] text-dim">{idade} anos</span>
                   )}
                 </div>
+              </Field>
+              <Field label="Sexo *">
+                <Select
+                  value={cand.sexo}
+                  onChange={(v) => setCand({ ...cand, sexo: v })}
+                  options={SEXO_OPCOES}
+                  placeholder="Selecione…"
+                  ariaLabel="Sexo do candidato"
+                />
+                <p className="mt-1 text-[11px] text-faint">
+                  Define a exigência da Carteira de Reservista (só para o sexo masculino).
+                </p>
               </Field>
               <Field label="Data de admissão *">
                 <input type="date" className="ds-input" value={cand.dataAdmissao} onChange={(e) => setCand({ ...cand, dataAdmissao: e.target.value })} />

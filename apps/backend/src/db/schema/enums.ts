@@ -33,6 +33,9 @@ export const tipoServicoEnum = pgEnum("tipo_servico", [
 /** Origem da admissão (Fase 5 / INT-1): MANUAL (wizard F6) ou PANDAPE (sync via webhook/pull). */
 export const origemEnum = pgEnum("origem", ["MANUAL", "PANDAPE"]);
 
+/** Sexo do candidato. Usado pela régua padrão: Reservista só é obrigatório para MASCULINO. */
+export const sexoEnum = pgEnum("sexo", ["MASCULINO", "FEMININO"]);
+
 /** Fornecedor do exame admissional (seleção FIXA no modal de agendamento da aba EXAME). */
 export const fornecedorExameEnum = pgEnum("fornecedor_exame", ["MEDICAL", "LIMER"]);
 
