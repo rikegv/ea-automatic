@@ -24,6 +24,19 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-2.5-flash"
     staging_dir: str = "/tmp/ea-staging"
     internal_token: str = ""
+    # Banco (somente leitura): o motor de kit lê o dicionário de títulos ATIVOS do kit selecionado
+    # em kit_regra_documento. Vazio = motor de kit inerte (endpoint responde 503).
+    database_url: str = ""
+    # Motor de kit, fila controlada + retry/backoff contra o 429 do Vertex (disputa temporária de
+    # recurso, não limite fixo). Lotes em SEQUÊNCIA com espaçamento; no 429, backoff exponencial.
+    kit_lote_paginas: int = 28
+    kit_espaco_lote_s: float = 1.5
+    kit_retry_max: int = 5
+    kit_retry_base_s: float = 2.0
+    # Janela de retenção do resultado processado (em memória): o consultor pode sair da tela e
+    # voltar dentro dessa janela e reencontrar o último resultado, sem custo novo de I.A. Depois,
+    # o job é expurgado (§A.6). Casa com o TTL de 2h da staging (StagingPurgeService).
+    kit_job_ttl_s: int = 2 * 60 * 60
     # Domain-wide delegation (INT-2, padrão CentraAtend). Vazio = SA pura (só Shared Drives
     # aceitam upload; My Drive recusa por falta de quota). Preencha com o e-mail do usuário a
     # impersonar quando o destino for um My Drive compartilhado.

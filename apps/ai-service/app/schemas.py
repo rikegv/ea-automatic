@@ -72,3 +72,37 @@ class KitRequest(_CamelModel):
 
 class KitResponse(_CamelModel):
     staging_path_kit: str
+
+
+# ── Kit: motor de extração (OST etapa 2/3) ───────────────────────────────────
+class DocumentoStagingIn(_CamelModel):
+    staging_path: str
+    # Nome do arquivo enviado (rótulo amigável na tela; o caminho de staging nunca é exposto, §A.6).
+    arquivo: str
+
+
+class KitExtrairRequest(_CamelModel):
+    kit_tipo_id: str
+    documentos: list[DocumentoStagingIn]
+
+
+# Reimportação de PDFs para UM funcionário já identificado (anexa os documentos que faltavam).
+class KitReimportarRequest(_CamelModel):
+    documentos: list[DocumentoStagingIn]
+
+
+# Início do job assíncrono (fila): o processamento roda em segundo plano, a tela acompanha por polling.
+class KitJobStart(_CamelModel):
+    job_id: str
+    total_lotes: int
+
+
+# Progresso/estado do job. `resultado` (dict já em camelCase) só vem quando status == "concluido".
+class KitJobStatus(_CamelModel):
+    status: str  # processando | concluido | erro
+    lote_atual: int
+    total_lotes: int
+    mensagem: str
+    retries: int
+    resultado: dict | None = None
+    erro: str | None = None
