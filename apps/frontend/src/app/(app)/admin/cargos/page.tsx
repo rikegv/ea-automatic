@@ -1,17 +1,21 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { PageHead } from "@/components/ui/PageHead";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Button } from "@/components/ui/Button";
+import { StatusPill } from "@/components/ui/StatusPill";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 
 interface Cargo {
   id: string;
   nome: string;
   ativo: boolean;
 }
+
+type Filtro = "ativos" | "inativos" | "todos";
 
 export default function CargosPage() {
   const { token } = useAuth();
@@ -20,6 +24,13 @@ export default function CargosPage() {
   const [error, setError] = useState<string | null>(null);
   const [nome, setNome] = useState("");
   const [saving, setSaving] = useState(false);
+  const [filtro, setFiltro] = useState<Filtro>("ativos");
+  const [busca, setBusca] = useState("");
+  // id em edição (null = modo criação).
+  const [editando, setEditando] = useState<string | null>(null);
+  // cargo pendente de confirmação de inativação (null = modal fechado) + estado de "processando".
+  const [confirmar, setConfirmar] = useState<Cargo | null>(null);
+  const [inativando, setInativando] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -37,12 +48,48 @@ export default function CargosPage() {
     if (token) void load();
   }, [token, load]);
 
-  async function create(e: FormEvent) {
+  // Filtro por status + busca em tempo real por nome (E lógico). A lista já vem ordenada por nome do
+  // backend; o filtro preserva a ordem alfabética.
+  const visiveis = useMemo(() => {
+    const q = busca.trim().toLowerCase();
+    return rows.filter((c) => {
+      if (filtro === "ativos" && !c.ativo) return false;
+      if (filtro === "inativos" && c.ativo) return false;
+      if (q && !c.nome.toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [rows, filtro, busca]);
+  const nAtivos = useMemo(() => rows.filter((c) => c.ativo).length, [rows]);
+  const nInativos = rows.length - nAtivos;
+
+  function iniciarEdicao(c: Cargo) {
+    setEditando(c.id);
+    setNome(c.nome);
+    setError(null);
+    if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function cancelarEdicao() {
+    setEditando(null);
+    setNome("");
+    setError(null);
+  }
+
+  async function salvar(e: FormEvent) {
     e.preventDefault();
     setSaving(true);
     setError(null);
     try {
-      await apiFetch("/admin/cargos", { method: "POST", token, body: { nome } });
+      if (editando) {
+        await apiFetch(`/admin/cargos/${encodeURIComponent(editando)}`, {
+          method: "PATCH",
+          token,
+          body: { nome },
+        });
+      } else {
+        await apiFetch("/admin/cargos", { method: "POST", token, body: { nome } });
+      }
+      setEditando(null);
       setNome("");
       await load();
     } catch (e) {
@@ -52,32 +99,102 @@ export default function CargosPage() {
     }
   }
 
-  async function remove(id: string, label: string) {
-    if (!window.confirm(`Remover o cargo "${label}"?`)) return;
+  // Confirmação de inativação pelo modal premium do sistema (ConfirmDialog). `confirmar` guarda o
+  // cargo alvo; esta função executa a inativação (soft-delete no backend) ao confirmar.
+  async function confirmarInativacao() {
+    const c = confirmar;
+    if (!c) return;
+    setInativando(true);
+    setError(null);
     try {
-      await apiFetch(`/admin/cargos/${id}`, { method: "DELETE", token });
+      await apiFetch(`/admin/cargos/${encodeURIComponent(c.id)}`, { method: "DELETE", token });
+      if (editando === c.id) cancelarEdicao();
+      setConfirmar(null);
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Erro ao remover");
+      setError(e instanceof Error ? e.message : "Erro ao inativar");
+    } finally {
+      setInativando(false);
+    }
+  }
+
+  async function reativar(c: Cargo) {
+    try {
+      await apiFetch(`/admin/cargos/${encodeURIComponent(c.id)}/reativar`, {
+        method: "PATCH",
+        token,
+      });
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Erro ao reativar");
     }
   }
 
   return (
     <>
-      <PageHead eyebrow="Cadastros" title="Cargos" subtitle="Catálogo de cargos da admissão." />
+      <PageHead
+        eyebrow="Cadastros"
+        title="Cargos"
+        subtitle="Catálogo de cargos da admissão. Inativar preserva os vínculos e o histórico."
+      />
 
-      <GlassCard as="form" onSubmit={create} className="mb-5 flex flex-wrap gap-3 p-4">
+      <GlassCard as="form" onSubmit={salvar} className="mb-5 flex flex-wrap gap-3 p-4">
+        {editando && (
+          <p className="w-full text-sm text-accent">Editando um cargo, ajuste o nome e salve.</p>
+        )}
         <input
           required
-          placeholder="Nome do cargo *"
+          placeholder={editando ? "Nome do cargo *" : "Novo cargo *"}
           value={nome}
           onChange={(e) => setNome(e.target.value)}
           className="ds-input flex-1"
         />
         <Button type="submit" disabled={saving} className="shrink-0 py-2.5">
-          {saving ? "Adicionando…" : "Adicionar"}
+          {saving ? "Salvando…" : editando ? "Salvar alterações" : "Adicionar"}
         </Button>
+        {editando && (
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={cancelarEdicao}
+            disabled={saving}
+            className="shrink-0 py-2.5"
+          >
+            Cancelar
+          </Button>
+        )}
       </GlassCard>
+
+      {/* Filtros da lista: status (com contador do catálogo) + busca em tempo real por nome. */}
+      <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
+        {(["ativos", "inativos", "todos"] as Filtro[]).map((f) => (
+          <button
+            key={f}
+            type="button"
+            onClick={() => setFiltro(f)}
+            className={`rounded-full border px-3 py-1 capitalize transition ${
+              filtro === f
+                ? "border-accent bg-[var(--surface-2)] text-accent"
+                : "border-[var(--border)] text-dim hover:text-text"
+            }`}
+          >
+            {f}
+            {f === "ativos"
+              ? ` (${nAtivos})`
+              : f === "inativos"
+                ? ` (${nInativos})`
+                : ` (${rows.length})`}
+          </button>
+        ))}
+
+        <input
+          value={busca}
+          onChange={(e) => setBusca(e.target.value)}
+          placeholder="Buscar cargo por nome"
+          aria-label="Buscar cargo por nome"
+          className="ds-input h-auto w-auto min-w-[16rem] py-1.5"
+        />
+      </div>
 
       {error && (
         <p
@@ -89,43 +206,84 @@ export default function CargosPage() {
       )}
 
       <GlassCard className="overflow-hidden p-2">
-        <table className="ds-table">
-          <thead>
-            <tr>
-              <th>Cargo</th>
-              <th>Ativo</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
+        <div className="overflow-x-auto">
+          <table className="ds-table min-w-[480px]">
+            <thead>
               <tr>
-                <td colSpan={3} className="py-8 text-center text-faint">
-                  Carregando…
-                </td>
+                <th>Cargo</th>
+                <th className="w-32">Status</th>
+                <th className="w-40" />
               </tr>
-            ) : rows.length === 0 ? (
-              <tr>
-                <td colSpan={3} className="py-8 text-center text-faint">
-                  Nenhum cargo cadastrado.
-                </td>
-              </tr>
-            ) : (
-              rows.map((c) => (
-                <tr key={c.id}>
-                  <td>{c.nome}</td>
-                  <td>{c.ativo ? "sim" : "não"}</td>
-                  <td className="text-right">
-                    <button onClick={() => remove(c.id, c.nome)} className="text-danger hover:underline">
-                      remover
-                    </button>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr>
+                  <td colSpan={3} className="py-8 text-center text-faint">
+                    Carregando…
                   </td>
                 </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+              ) : visiveis.length === 0 ? (
+                <tr>
+                  <td colSpan={3} className="py-8 text-center text-faint">
+                    Nenhum cargo neste filtro.
+                  </td>
+                </tr>
+              ) : (
+                visiveis.map((c) => (
+                  <tr key={c.id} className={c.ativo ? "" : "opacity-60"}>
+                    <td className="font-semibold">{c.nome}</td>
+                    <td className="text-center">
+                      {/* Padrão único §A.12: ícone dinâmico de status (check verde = ativo,
+                          neutro = inativo), via o mesmo StatusPill do Gerenciador/Esteira. */}
+                      <span className="inline-flex justify-center">
+                        <StatusPill
+                          tone={c.ativo ? "ok" : "nt"}
+                          label={c.ativo ? "Ativo" : "Inativo"}
+                        />
+                      </span>
+                    </td>
+                    <td className="whitespace-nowrap text-right">
+                      <button onClick={() => iniciarEdicao(c)} className="text-accent hover:underline">
+                        editar
+                      </button>
+                      <span className="px-2 text-faint">·</span>
+                      {c.ativo ? (
+                        <button
+                          onClick={() => setConfirmar(c)}
+                          className="text-danger hover:underline"
+                        >
+                          inativar
+                        </button>
+                      ) : (
+                        <button onClick={() => reativar(c)} className="text-accent hover:underline">
+                          reativar
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
       </GlassCard>
+
+      {/* Modal premium do sistema (§A.12) para confirmar a inativação. Soft-delete: preserva os
+          vínculos e o histórico, sem exclusão física, reversível pela reativação. */}
+      <ConfirmDialog
+        open={Boolean(confirmar)}
+        title="Inativar cargo"
+        message={
+          confirmar
+            ? `Inativar o cargo "${confirmar.nome}"? Ele sai das opções selecionáveis de novas admissões, mas não é excluído: os vínculos e o histórico são preservados e você pode reativar quando quiser.`
+            : ""
+        }
+        confirmLabel="Inativar"
+        tone="danger"
+        busy={inativando}
+        onConfirm={confirmarInativacao}
+        onCancel={() => setConfirmar(null)}
+      />
     </>
   );
 }

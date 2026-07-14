@@ -21,6 +21,13 @@ export class CargosService {
   }
 
   async update(id: string, dto: UpdateCargoDto) {
+    // Renomear para um nome já existente colidiria com o unique de `nome` (500 cru). Antecipamos com
+    // um 409 claro: o diretor vai renomear cargos para corrigir grafias e pode esbarrar em duplicata.
+    if (dto.nome !== undefined) {
+      const existing = await this.db.query.cargos.findFirst({ where: eq(cargos.nome, dto.nome) });
+      if (existing && existing.id !== id)
+        throw new ConflictException("Já existe um cargo com esse nome.");
+    }
     const [row] = await this.db
       .update(cargos)
       .set({ ...dto, atualizadoEm: new Date() })
@@ -30,9 +37,29 @@ export class CargosService {
     return row;
   }
 
-  async remove(id: string) {
-    const [row] = await this.db.delete(cargos).where(eq(cargos.id, id)).returning();
+  /**
+   * INATIVA o cargo (ativo=false). NUNCA exclusão física, NUNCA cascata: os vínculos (admissões, régua)
+   * são preservados; o cargo apenas sai das opções selecionáveis (o catálogo do wizard já filtra
+   * ativo=true). Mesmo padrão da tela de clientes; reversível via `reativar`.
+   */
+  async inativar(id: string) {
+    const [row] = await this.db
+      .update(cargos)
+      .set({ ativo: false, atualizadoEm: new Date() })
+      .where(eq(cargos.id, id))
+      .returning({ id: cargos.id });
     if (!row) throw new NotFoundException("Cargo não encontrado");
-    return { ok: true };
+    return { ok: true, ativo: false };
+  }
+
+  /** Reativa o cargo (volta às opções selecionáveis). */
+  async reativar(id: string) {
+    const [row] = await this.db
+      .update(cargos)
+      .set({ ativo: true, atualizadoEm: new Date() })
+      .where(eq(cargos.id, id))
+      .returning({ id: cargos.id });
+    if (!row) throw new NotFoundException("Cargo não encontrado");
+    return { ok: true, ativo: true };
   }
 }
