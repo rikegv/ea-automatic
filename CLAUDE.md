@@ -390,3 +390,39 @@ disparar novo envelope (§A.5). Remover a F9 isolada **quebraria** o reenvio de 
 (código, rotas `/kit/*/gerar` e `/kit/download/:token` e `/kit/historico`, `gemini.localizar_paginas_kit`,
 schemas `KitRequest`/`KitResponse`, a tela `/kit` e `lib/kit.ts`). Não remover a F9 antes disso.
 *(Registrado pelo diretor ao aprovar o Gerador de Kit novo.)*
+
+## A.16 — Regras permanentes de importação da esteira (regra permanente)
+
+Enquanto o diretor **importar** histórico de admissões (planilha / carga), toda importação da esteira
+aplica estas duas regras **automaticamente, sem intervenção manual**. Valem para a carga atual e para
+**toda importação futura**, até o diretor deixar de importar e passar a operar só pela frente viva.
+
+- **Regra 1, admissão CONCLUÍDA** (origem ATIVO, farol `ADMISSAO_CONCLUIDA`): já aconteceu na vida
+  real, então entra com **tudo concluído**. Auditoria `ANALISE_OK`, Exame `APTO` e Cadastro/Contrato
+  `INTEGRACAO` (a frente de Cadastro é **criada** já concluída), todas `concluida=true`; **documentos
+  `ENTREGUE`** (zero pendência obrigatória); **assinatura `ASSINADO`**; **sinalizador `OK`**. Data de
+  conclusão das frentes = `coalesce(data_admissao, criado_em)`.
+- **Regra 2, DECLÍNIO** (origem DECLINOU/RESCISAO/CANCELADA, farol `DECLINOU`/`RESCISAO`): **encerrado,
+  nada ativo na esteira**. Frentes em estado de declínio (Auditoria `DECLINOU`, Exame `CANCELADO`),
+  `concluida=false` (**não falsear êxito**); **não cria** frente de Cadastro; assinatura `SEM_ENVELOPE`;
+  documentos **permanecem no estado real** (`PENDENTE`, histórico, nunca foram entregues). Quem declinou
+  **não deixa nada ativo**; se voltar no futuro, é **processo novo do zero**.
+
+**Declínio nunca entra em fila operacional nem conta como pendência em NENHUM card/KPI, em nenhuma
+superfície.** Isso é garantido **em código** (não por manipulação de dados), pelo **filtro por farol**
+(`DECLINOU`/`RESCISAO` excluídos): na Esteira em `esteira.service.listar` (itens das filas Auditoria/
+Exame/Cadastro **e** todos os KPIs, inclusive "com pendências obrigatórias") e no Gerenciador em
+`admissoes.service` (KPI/filtro "com pendências obrigatórias"). O declínio segue **visível só como
+histórico consultável no Gerenciador** (farol `DECLINOU`, com as frentes em estado de declínio).
+
+Na **coluna Pendências Obrigatórias** do Gerenciador, uma admissão com farol `DECLINOU`/`RESCISAO`
+mostra a tag **"Declínio"** (derivada do farol, dado autoritativo), **nunca "Parcial" nem "Completo"**:
+declínio está encerrado, não tem pendência de processo vivo. *(Bloco D.)*
+
+**Onde vive a rotina:** `apps/backend/src/db/regras-esteira-import.ts` exporta
+`aplicarRegrasImportacao(sql)`, idempotente e transacional, que aplica as duas regras por farol. Toda
+rotina de carga (`carga-*.ts`) **chama essa função ao final**, após criar as admissões e definir o
+farol, então a próxima importação **herda tudo automaticamente**. O runner `corrige-frente1.ts` só
+re-aplica manualmente sobre uma base já importada. §A.6: a rotina opera só por farol/status, sem PII.
+*(Decisão do diretor, OST regras permanentes de importação + correção da carga Frente 1.)*
+

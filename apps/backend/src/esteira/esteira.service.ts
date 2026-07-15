@@ -5,7 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { and, asc, count, desc, eq, gte, ilike, inArray, lt, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, ilike, inArray, lt, notInArray, or, sql } from "drizzle-orm";
 import { normalizeCpf, TERMO_APTO_SEM_ASO } from "@ea/shared-types";
 import type { AuthUser } from "../auth/auth.types";
 import type { Database } from "../db/client";
@@ -89,8 +89,15 @@ export class EsteiraService {
   async listar(frente: string, filtros: EsteiraFiltros) {
     const tipo = this.resolverTipo(frente);
 
-    // Filtros de cliente/período (compartilhados por itens e KPIs).
-    const clientePeriodo = [eq(frentesAdmissao.tipo, tipo)];
+    // Filtros de cliente/período (compartilhados por itens e KPIs). Regra permanente de importação
+    // (§A.3, Regra 2 do declínio): admissões com farol de encerramento por declínio/rescisão NUNCA
+    // entram em fila operacional nem nos KPIs da Esteira. Quem declinou não deixa trabalho ativo;
+    // segue visível só como histórico no Gerenciador (que é baseado em farol). Vale para declínios
+    // importados E futuros/vivos.
+    const clientePeriodo = [
+      eq(frentesAdmissao.tipo, tipo),
+      notInArray(admissoes.farolGlobal, ["DECLINOU", "RESCISAO"]),
+    ];
     if (filtros.codCliente) {
       clientePeriodo.push(eq(admissoes.codCliente, filtros.codCliente));
     }

@@ -329,13 +329,18 @@ export class AdmissoesService {
     // "Concluído" = existe frente CADASTRO_CONTRATO concluída.
     const concluidoExpr = sql<boolean>`EXISTS (SELECT 1 FROM frentes_admissao f WHERE f.admissao_id = ${admissoes.id} AND f.tipo = 'CADASTRO_CONTRATO' AND f.concluida = true)`;
 
+    // "Com pendências obrigatórias" = sinalizador de preenchimento diferente de OK (falta campo-núcleo),
+    // MAS quem declinou/rescindiu NUNCA conta como pendência em nenhum card (regra permanente de
+    // importação, §A.3/Regra 2): pendência é de quem está no processo; o declínio saiu. Fica só como
+    // histórico. Mesma exclusão por farol que a Esteira aplica nas filas operacionais.
+    const comPendenciaExpr = sql<boolean>`(${admissoes.sinalizadorPreenchimento} <> 'OK' AND ${admissoes.farolGlobal} NOT IN ('DECLINOU', 'RESCISAO'))`;
+
     // Filtros de status (farol/concluído/pendências): só na lista, não nos KPIs (os cards mostram
     // a distribuição do conjunto base e funcionam como botão de filtro, §A.12).
     const listWhere = [...base];
     if (filtros.farol) listWhere.push(eq(admissoes.farolGlobal, filtros.farol as FarolGlobal));
     if (filtros.concluido) listWhere.push(concluidoExpr);
-    // "Com pendências obrigatórias" = sinalizador de preenchimento diferente de OK (falta campo-núcleo).
-    if (filtros.comPendencias) listWhere.push(sql`${admissoes.sinalizadorPreenchimento} <> 'OK'`);
+    if (filtros.comPendencias) listWhere.push(comPendenciaExpr);
 
     const [{ total }] = await this.db
       .select({ total: count() })
@@ -419,7 +424,7 @@ export class AdmissoesService {
         ativos: sql<number>`count(*) filter (where ${admissoes.farolGlobal} = 'EM_ADMISSAO')::int`,
         declinados: sql<number>`count(*) filter (where ${admissoes.farolGlobal} = 'DECLINOU')::int`,
         concluidos: sql<number>`count(*) filter (where ${concluidoExpr})::int`,
-        comPendencias: sql<number>`count(*) filter (where ${admissoes.sinalizadorPreenchimento} <> 'OK')::int`,
+        comPendencias: sql<number>`count(*) filter (where ${comPendenciaExpr})::int`,
       })
       .from(admissoes)
       .innerJoin(candidatos, eq(admissoes.candidatoCpf, candidatos.cpf))
