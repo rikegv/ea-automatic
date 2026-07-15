@@ -426,3 +426,39 @@ farol, então a próxima importação **herda tudo automaticamente**. O runner `
 re-aplica manualmente sobre uma base já importada. §A.6: a rotina opera só por farol/status, sem PII.
 *(Decisão do diretor, OST regras permanentes de importação + correção da carga Frente 1.)*
 
+## A.17 — Frente mapeada e pendente: Formulário de VT online (self-service mobile)
+
+**No forno, NÃO construir agora.** Frente definida pelo diretor, aguardando a liberação da construção
+e o insumo pendente (a tabela de preços). Registrada aqui para o coordenador acionar quando o diretor
+liberar.
+
+**Objetivo.** O candidato preenche o próprio vale-transporte pelo celular, e o formulário de VT é
+anexado ao Kit Admissional para assinatura junto ao contrato.
+
+**Escopo (do diretor).**
+- **Mobile-first / responsivo.** O candidato entra digitando o **CPF**; o sistema carrega o nome
+  completo automaticamente (o candidato já existe na base, chave CPF, §A.3).
+- **Endereço por CEP** autocompletado via base dos Correios (parte confiável/fácil).
+- **Conduções SEM cálculo automático de rota** (decisão do diretor: o pedaço difícil foi removido de
+  propósito, sem dependência de API paga de rotas). O candidato preenche num formulário intuitivo:
+  seleciona o **tipo de transporte** de uma lista e informa as conduções que usa. O sistema **sugere**
+  a tarifa a partir de uma **tabela de preços interna vigente**, que o candidato confirma ou ajusta.
+  O sistema soma ida + volta e o total.
+- **Abrangência.** ~90% dos candidatos são de São Paulo capital e Grande SP. A tabela cobre Metrô SP,
+  CPTM, ônibus municipal SP, EMTU (intermunicipal Grande SP) e Bilhete Único / integração. Tarifas
+  públicas e estáveis, **cadastráveis e mantidas internamente** (provável catálogo próprio, padrão
+  dos demais catálogos de admin).
+- **Integração com o Kit.** Após o preenchimento, gera o formulário de VT e o **anexa automaticamente**
+  ao Kit Admissional (F9 / INT-4) para assinatura junto ao contrato.
+- **Regra de negócio.** O preenchimento do VT **NÃO é obrigatório** para o sistema gerar o Kit
+  Admissional: o kit gera com ou sem VT.
+
+**Insumo pendente do diretor (bloqueia a construção):** a **tabela de preços vigente** dos transportes
+(Metrô, CPTM, ônibus SP, EMTU, Bilhete Único).
+
+**Complexidade:** média, bem definida. O ponto que seria difícil (cálculo automático de rota/tarifa)
+foi deliberadamente cortado; o candidato preenche e a tabela só sugere valores.
+
+**Status:** mapeada, no forno, aguardando o diretor liberar a construção e fornecer a tabela de preços.
+O coordenador lembra o diretor no gatilho natural (quando a frente do Kit/INT-4 estiver madura).
+*(Registro solicitado pelo diretor.)*
