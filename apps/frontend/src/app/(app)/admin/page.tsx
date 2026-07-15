@@ -23,6 +23,12 @@ const CARDS: { href: string; icon: IconName; title: string; desc: string }[] = [
     desc: "Catálogo de motivos de declínio da admissão.",
   },
   {
+    href: "/admin/tarifas",
+    icon: "table",
+    title: "Tarifas de transporte",
+    desc: "Tarifa vigente por cidade e transporte, base do formulário de VT.",
+  },
+  {
     href: "/admin/regua",
     icon: "doc",
     title: "Régua documental",

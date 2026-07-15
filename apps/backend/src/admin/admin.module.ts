@@ -15,12 +15,15 @@ import { RegrasController } from "./regras/regras.controller";
 import { RegrasService } from "./regras/regras.service";
 import { ReguaController } from "./regua/regua.controller";
 import { ReguaService } from "./regua/regua.service";
+import { TarifasController } from "./tarifas/tarifas.controller";
+import { TarifasService } from "./tarifas/tarifas.service";
 
 @Module({
   controllers: [
     ClientesController,
     CargosController,
     MotivosDeclinioController,
+    TarifasController,
     ReguaController,
     CatalogosController,
     RegrasController,
@@ -31,6 +34,7 @@ import { ReguaService } from "./regua/regua.service";
     ClientesService,
     CargosService,
     MotivosDeclinioService,
+    TarifasService,
     ReguaService,
     CatalogosService,
     RegrasService,

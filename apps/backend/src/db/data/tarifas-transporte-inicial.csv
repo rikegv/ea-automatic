@@ -1,0 +1,19 @@
+﻿cidade_sistema,tipo_transporte,valor_rs,observacao
+São Paulo,Ônibus municipal (SPTrans),5.30,comum
+São Paulo,Metrô,5.40,comum
+São Paulo,CPTM / Trem,5.40,comum
+São Paulo,Integração ônibus + metrô/trem,9.38,Bilhete Único comum
+Intermunicipal,EMTU (maior valor comum),12.00,praticado sempre pelo maior valor
+Mogi das Cruzes,Ônibus municipal,5.50,desde mar/2026
+Suzano,Ônibus municipal,6.00,mantido 2026
+Arujá,Ônibus municipal,6.00,desde jan/2026
+Ferraz de Vasconcelos,Ônibus municipal,6.00,mantido 2026
+Itaquaquecetuba,Ônibus municipal,6.30,comum em dinheiro
+Poá,Ônibus municipal,6.00,sem reajuste 2026 - confirmar
+Guararema,Ônibus municipal,0.00,GRATUITO
+Santa Isabel,Ônibus municipal,0.00,GRATUITO
+Osasco,Ônibus municipal,6.10,CIOESTE
+Barueri,Ônibus municipal,6.10,CIOESTE
+Carapicuíba,Ônibus municipal,6.10,CIOESTE
+Jandira,Ônibus municipal,6.10,CIOESTE
+Itapevi,Ônibus municipal,6.10,CIOESTE

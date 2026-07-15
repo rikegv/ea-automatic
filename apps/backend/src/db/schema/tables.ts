@@ -107,6 +107,29 @@ export const motivosDeclinio = pgTable("motivos_declinio", {
   atualizadoEm,
 });
 
+// ── Tarifa de transporte (catálogo próprio, fundação do VT Online §A.17) ─────
+// Tarifa vigente por (cidade + tipo de transporte), mantida internamente. O formulário de VT
+// (OST seguinte) lê daqui para SUGERIR o valor ao candidato, que confirma ou ajusta.
+// `valor` é numeric(10,2): gratuidade é 0.00 (valor real, não ausência de tarifa).
+// Soft-delete por `ativo`, mesmo padrão de Cargo e Motivo de declínio.
+export const tarifasTransporte = pgTable(
+  "tarifas_transporte",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    cidade: varchar("cidade", { length: 120 }).notNull(),
+    tipoTransporte: varchar("tipo_transporte", { length: 120 }).notNull(),
+    valor: numeric("valor", { precision: 10, scale: 2 }).notNull(),
+    observacao: varchar("observacao", { length: 240 }),
+    ativo: boolean("ativo").notNull().default(true),
+    criadoEm,
+    atualizadoEm,
+  },
+  (t) => ({
+    // Chave de negócio: uma tarifa por cidade + transporte. O service antecipa a colisão com 409.
+    uqCidadeTransporte: unique("uq_tarifa_cidade_transporte").on(t.cidade, t.tipoTransporte),
+  }),
+);
+
 // ── TipoDocumento (21 tipos) ────────────────────────────────────────────────
 export const tiposDocumento = pgTable("tipos_documento", {
   id: uuid("id").defaultRandom().primaryKey(),

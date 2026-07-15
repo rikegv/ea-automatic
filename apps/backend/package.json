@@ -20,6 +20,7 @@
     "db:seed:regras": "tsx src/db/seed-regras.ts",
     "db:seed:clientes-atualizada": "tsx src/db/seed-clientes-atualizada.ts",
     "db:seed:entidades-soulan": "tsx src/db/seed-entidades-soulan.ts",
+    "db:seed:tarifas": "tsx src/db/seed-tarifas.ts",
     "db:view:clinica": "tsx src/db/view-relatorio-clinica.ts"
   },
   "dependencies": {
