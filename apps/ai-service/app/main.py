@@ -9,7 +9,7 @@ Endpoints internos protegidos por X-Internal-Token (defesa em profundidade, sem 
 from fastapi import FastAPI
 
 from app.config import get_settings
-from app.routers import auditoria, drive, kit
+from app.routers import auditoria, drive, kit, vt
 
 # Fail-fast no boot: valida o ambiente (ex.: DRIVE_MOCK proibido em produção) antes de servir.
 get_settings()
@@ -19,6 +19,7 @@ app = FastAPI(title="EA AUTOMATIC — AI Service", version="0.1.0")
 app.include_router(auditoria.router)
 app.include_router(drive.router)
 app.include_router(kit.router)
+app.include_router(vt.router)
 
 
 @app.get("/health")

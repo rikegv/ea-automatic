@@ -39,6 +39,30 @@ export interface GerarKitPayload {
   nomeCandidato: string;
 }
 
+/** Uma linha do itinerário no documento de VT, já pronta para a tabela do PDF. */
+export interface ConducaoVtPayload {
+  sentido: "IDA" | "VOLTA";
+  /** Coluna "Meio de transporte": tipo + cidade (ex.: "Ônibus municipal - São Paulo"). */
+  meioTransporte: string;
+  /** Coluna "Cartão/tipo": o cartão que o candidato declarou usar. */
+  cartao: string;
+  valor: number;
+}
+
+/** Dados do documento de VT (optante ou recusa). Tudo já resolvido pelo backend. */
+export interface DocumentoVtPayload {
+  tipo: "OPTANTE" | "NAO_OPTANTE";
+  nome: string;
+  cpf: string;
+  dataNascimento: string | null;
+  endereco: string;
+  cidadeUf: string;
+  conducoes: ConducaoVtPayload[];
+  totalIda: number;
+  totalVolta: number;
+  totalDia: number;
+}
+
 /** Motor de extração do kit (OST etapa 3). Job assíncrono: inicia e acompanha por polling. */
 export interface ExtrairKitPayload {
   kitTipoId: string;
@@ -181,6 +205,16 @@ export class AiClientService {
   }
 
   /**
+   * Documento do formulário de VT (§A.17 etapa 2), optante ou não-optante. O ai-service compõe o
+   * PDF com reportlab e devolve os bytes; nada é gravado em disco de nenhum dos dois lados.
+   * O payload leva PII (nome, CPF, endereço) porque o documento oficial exige: vai só no corpo do
+   * POST, nunca em log (§A.6).
+   */
+  gerarDocumentoVt(payload: DocumentoVtPayload): Promise<KitBinario> {
+    return this.postBinario("/vt/documento", payload);
+  }
+
+  /**
    * GET binário no ai-service (PDF/ZIP do kit). Devolve o corpo + Content-Type/Disposition para o
    * controller repassar ao browser. 404 (job/funcionário inexistente) e 410 (origem expirada por
    * TTL) viram exceções acionáveis; nada de PII em log (§A.6). Timeout folgado (ZIP de muitos kits).
@@ -218,6 +252,45 @@ export class AiClientService {
         `Falha ao chamar ai-service ${path}: ${err instanceof Error ? err.message : "erro"}`,
       );
       throw new ServiceUnavailableException("Motor de IA indisponível");
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * POST com corpo JSON que RESPONDE binário (PDF). Espelha o baixarBinario, mas para os casos em
+   * que o documento é composto a partir de dados, não recortado de um arquivo existente.
+   * O corpo do POST nunca é logado: leva PII (§A.6).
+   */
+  private async postBinario(path: string, body: unknown): Promise<KitBinario> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), AiClientService.DOWNLOAD_TIMEOUT_MS);
+    try {
+      const res = await fetch(`${this.baseUrl}${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Internal-Token": this.token },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        this.logger.error(`ai-service ${path} respondeu HTTP ${res.status}`);
+        throw new ServiceUnavailableException(`Motor de documentos indisponível (HTTP ${res.status})`);
+      }
+      return {
+        buffer: Buffer.from(await res.arrayBuffer()),
+        contentType: res.headers.get("content-type") ?? "application/pdf",
+        contentDisposition: res.headers.get("content-disposition") ?? "attachment",
+      };
+    } catch (err) {
+      if (err instanceof HttpException) throw err;
+      if (err instanceof Error && err.name === "AbortError") {
+        this.logger.error(`ai-service ${path} excedeu o tempo limite`);
+        throw new GatewayTimeoutException("Motor de documentos não respondeu no tempo limite");
+      }
+      this.logger.error(
+        `Falha ao chamar ai-service ${path}: ${err instanceof Error ? err.message : "erro"}`,
+      );
+      throw new ServiceUnavailableException("Motor de documentos indisponível");
     } finally {
       clearTimeout(timer);
     }

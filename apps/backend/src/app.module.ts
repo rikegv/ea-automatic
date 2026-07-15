@@ -23,6 +23,7 @@ import { StagingModule } from "./staging/staging.module";
 import { HealthController } from "./health/health.controller";
 import { HealthService } from "./health/health.service";
 import { UsersModule } from "./users/users.module";
+import { VtModule } from "./vt/vt.module";
 
 @Module({
   imports: [
@@ -43,6 +44,7 @@ import { UsersModule } from "./users/users.module";
     KitModule,
     PandapeModule,
     ClicksignModule,
+    VtModule,
   ],
   controllers: [HealthController],
   providers: [

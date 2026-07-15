@@ -95,3 +95,12 @@ export const ncLiberacaoEnum = pgEnum("nc_liberacao", [
   "APROVADA",
   "REPROVADA",
 ]);
+
+/** Sentido do trajeto no formulário de VT (§A.17): ida e volta são descritos separadamente. */
+export const sentidoVtEnum = pgEnum("sentido_vt", ["IDA", "VOLTA"]);
+
+/**
+ * Cartão de transporte usado em cada condução (§A.17). Lista fechada definida pelo diretor;
+ * OUTRO abre campo de texto obrigatório (`cartaoOutro`) para o candidato nomear o cartão.
+ */
+export const cartaoVtEnum = pgEnum("cartao_vt", ["BILHETE_UNICO", "CARTAO_TOP", "OUTRO"]);

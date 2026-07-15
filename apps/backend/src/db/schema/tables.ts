@@ -14,6 +14,7 @@ import {
   varchar,
 } from "drizzle-orm/pg-core";
 import {
+  cartaoVtEnum,
   clicksignStatusEnum,
   estadoDocumentoEnum,
   exigenciaEnum,
@@ -25,6 +26,7 @@ import {
   ncTipoEnum,
   origemEnum,
   papelEnum,
+  sentidoVtEnum,
   sexoEnum,
   sinalizadorEnum,
   tipoServicoEnum,
@@ -625,5 +627,64 @@ export const clienteVinculos = pgTable(
   (t) => ({
     uq: unique("uq_cliente_vinculo").on(t.codCliente, t.empresaCodigo, t.filial),
     idxCliente: index("idx_cliente_vinculos_cliente").on(t.codCliente),
+  }),
+);
+
+// ── Formulário de VT (self-service do candidato, §A.17 etapa 2) ─────────────
+// O candidato preenche o próprio vale-transporte pelo celular. UM formulário por admissão
+// (unique em `admissao_id`): reenvio sobrescreve o anterior, o kit compõe um documento só.
+//
+// §A.6: o endereço residencial é PII, gravado por necessidade real (o documento oficial de VT
+// exige o endereço do beneficiário) e por minimização não guardamos nada além do necessário.
+// A identificação (CPF + data de nascimento) é CREDENCIAL de acesso: nunca é logada e não é
+// duplicada aqui: o vínculo é pela admissão, e o CPF já vive em `candidatos`.
+export const formulariosVt = pgTable("formularios_vt", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  admissaoId: uuid("admissao_id")
+    .notNull()
+    .unique()
+    .references(() => admissoes.id, { onDelete: "cascade" }),
+  // OPTANTE preenche itinerários; NÃO-OPTANTE gera o documento de recusa (nenhuma condução).
+  optante: boolean("optante").notNull(),
+  cep: varchar("cep", { length: 8 }).notNull(),
+  logradouro: varchar("logradouro", { length: 200 }).notNull(),
+  numero: varchar("numero", { length: 20 }).notNull(),
+  complemento: varchar("complemento", { length: 100 }),
+  bairro: varchar("bairro", { length: 120 }).notNull(),
+  cidade: varchar("cidade", { length: 120 }).notNull(),
+  uf: varchar("uf", { length: 2 }).notNull(),
+  // Totais do dia gravados como SNAPSHOT do envio: a tarifa pode ser reajustada depois, mas o
+  // documento assinado tem de continuar batendo com o que o candidato declarou.
+  totalIda: numeric("total_ida", { precision: 10, scale: 2 }).notNull().default("0"),
+  totalVolta: numeric("total_volta", { precision: 10, scale: 2 }).notNull().default("0"),
+  totalDia: numeric("total_dia", { precision: 10, scale: 2 }).notNull().default("0"),
+  // Aceite dos 3 avisos ("Estou ciente das informações passadas"): trilha de responsabilização,
+  // no mesmo espírito do aceite de dupla correção (§A.6).
+  cienteEm: timestamp("ciente_em", { withTimezone: true }).notNull(),
+  criadoEm,
+  atualizadoEm,
+});
+
+// Uma linha por condução declarada (ex.: ônibus + metrô na ida = 2 linhas com sentido IDA).
+// `valor` é SNAPSHOT: a tarifa vem sugerida de `tarifas_transporte`, mas o candidato pode ajustar,
+// e é o valor declarado que vai ao documento assinado.
+export const formularioVtConducoes = pgTable(
+  "formulario_vt_conducoes",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    formularioId: uuid("formulario_id")
+      .notNull()
+      .references(() => formulariosVt.id, { onDelete: "cascade" }),
+    sentido: sentidoVtEnum("sentido").notNull(),
+    ordem: integer("ordem").notNull(),
+    cidade: varchar("cidade", { length: 120 }).notNull(),
+    tipoTransporte: varchar("tipo_transporte", { length: 120 }).notNull(),
+    cartao: cartaoVtEnum("cartao").notNull(),
+    // Só preenchido quando `cartao` = OUTRO (o candidato nomeia o cartão).
+    cartaoOutro: varchar("cartao_outro", { length: 60 }),
+    valor: numeric("valor", { precision: 10, scale: 2 }).notNull(),
+  },
+  (t) => ({
+    idxFormulario: index("idx_conducao_formulario").on(t.formularioId),
   }),
 );

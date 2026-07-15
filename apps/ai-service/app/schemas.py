@@ -106,3 +106,28 @@ class KitJobStatus(_CamelModel):
     retries: int
     resultado: dict | None = None
     erro: str | None = None
+
+
+# ── Documento de VT (§A.17 etapa 2, Parte D) ─────────────────────────────────
+class ConducaoVt(_CamelModel):
+    """Uma linha do itinerário, já resolvida pelo backend (nada é calculado aqui)."""
+
+    sentido: str = Field(description="IDA ou VOLTA")
+    meio_transporte: str = Field(description='Coluna "Meio de transporte": tipo + cidade')
+    cartao: str = Field(description='Coluna "Cartão/tipo"')
+    valor: float
+
+
+class DocumentoVtRequest(_CamelModel):
+    """Dados do documento de VT. Leva PII por necessidade (§A.6): nunca logar o corpo."""
+
+    tipo: str = Field(description="OPTANTE ou NAO_OPTANTE")
+    nome: str
+    cpf: str
+    data_nascimento: str | None = None
+    endereco: str
+    cidade_uf: str
+    conducoes: list[ConducaoVt] = []
+    total_ida: float = 0
+    total_volta: float = 0
+    total_dia: float = 0
