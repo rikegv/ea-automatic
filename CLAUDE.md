@@ -176,9 +176,12 @@ Administração de Cadastros (clientes, cargos, régua — restrito à administr
   `x-pandape-webhook-token` **ou** allowlist de IP via `X-Forwarded-For`; **fail-closed** → 401 sem
   credencial), extrai o id, **enfileira** na fila BullMQ e responde rápido (202); o worker faz o
   enriquecimento. Com o `IdPreCollaborator`, chama `GET .../precollaborators/{id}` e puxa dados +
-  links de documento. **Auth de origem por `PANDAPE_WEBHOOK_TOKEN`/`PANDAPE_WEBHOOK_IPS`; auth da
-  API Pandapé por `PANDAPE_API_TOKEN`** (Bearer, via env). Sem credencial a rota nasce **fechada/
-  inerte**, sem hardcode. *(O webhook G.Infor permanece intocável.)*
+  links de documento. **Auth de origem** por `PANDAPE_WEBHOOK_TOKEN` (o `PANDAPE_WEBHOOK_IPS` fica
+  vazio de propósito: o box está atrás de NAT e só enxerga IP interno, então o modelo é
+  **token-only**). **Auth da API Pandapé** é **OAuth2 client_credentials**: `PANDAPE_CLIENT_ID` +
+  `PANDAPE_CLIENT_SECRET` trocados por token em `PANDAPE_TOKEN_URL` (**não** existe
+  `PANDAPE_API_TOKEN`; o nome antigo era erro de documentação). Sem credencial a rota nasce
+  **fechada/inerte**, sem hardcode. *(O webhook G.Infor permanece intocável.)*
 - **Cron-pull de descoberta — DEPRECADO.** O desenho anterior (commit `3f95921`, 30/06/2026) previa
   ingestão por verificação periódica (`POST /internal/pandape/tick`, `*/5 7-23 * * *`, protegido por
   `X-Internal-Token`). Foi **substituído pelo webhook**: a **API v1 do Pandapé não tem endpoint de
@@ -283,9 +286,11 @@ tem de ser bloqueado de fato. Disciplina de worktree: poda após merge, nada sob
 - **Fase 5 — Integração Pandapé:** webhook receptor (`POST /api/webhooks/pandape`), cliente da API,
   criação automática idempotente, sincronização de etapa, pull de documentos para a F2, badge de origem.
   *Modelo **webhook** (vigente, commit `4f8e69e`, 02/07/2026) — cron-pull de descoberta DEPRECADO por
-  limitação da API v1 (sem endpoint de listagem). Depende de: `PANDAPE_API_TOKEN` +
-  `PANDAPE_WEBHOOK_TOKEN`/`PANDAPE_WEBHOOK_IPS` (diretor/Fernando), do ingress na VPN (box do Fernando)
-  e do de/para Pandapé→catálogo (cliente/cargo/tipos de documento).*
+  limitação da API v1 (sem endpoint de listagem).* **DESTRAVADA** (jul/2026): as credenciais estão
+  configuradas e o suporte Pandapé (André) confirmou o disparo do webhook na mudança de etapa
+  (payload com `IdPreCollaborator`). É o **item 2 da §A.18** (ligar o motor da esteira). *Dependência
+  funcional remanescente: o de/para Pandapé→catálogo (cliente/cargo via `IdVacancy` e tipos de
+  documento); sem ele a criação é adiada em vez de inventar `cod_cliente` (§A.5).*
 - **Fase 6 — Dashboards/BI.** *Depende de: definição dos dashboards.*
 
 Fases 0–3 são o núcleo, construível imediatamente. Insumos das fases 4–6 são reunidos pelo
@@ -304,10 +309,18 @@ diretor em paralelo à construção do núcleo.
   proxy same-origin do Next (`0.0.0.0:3010`, rota `/api/webhooks/pandape`). *(A tentativa anterior de
   dispensar o ingress via cron-pull — commit `3f95921`, 30/06 — foi revertida: a API v1 não descobre
   pré-colaboradores.)*
-- **`PANDAPE_API_TOKEN`** (diretor solicita ao suporte Pandapé) + **de/para Pandapé→catálogo**
-  (cliente/cargo via `IdVacancy` e tipos de documento). Sem o token a Fase 5 fica pronta porém
-  inerte; sem o de/para, admissões com vaga não-mapeada são adiadas (não inventam `cod_cliente`).
-  *Necessário só na Fase 5 (ativação).*
+- ~~**`PANDAPE_API_TOKEN`**~~ — **RESOLVIDO (jul/2026), não é mais pendência.** Duas correções aqui:
+  (1) a credencial da API do Pandapé **não é** um `PANDAPE_API_TOKEN`: o cliente usa **OAuth2
+  client_credentials** (`PANDAPE_CLIENT_ID` + `PANDAPE_CLIENT_SECRET`, token em `PANDAPE_TOKEN_URL`),
+  e **ambos já estão configurados** no `.env` do backend; (2) a auth de origem do webhook
+  (`PANDAPE_WEBHOOK_TOKEN`) **também já está configurada**, com o guard fail-closed ativo. O
+  `PANDAPE_WEBHOOK_IPS` fica **vazio de propósito**: o box está atrás de **NAT** e o PHP só enxerga o
+  IP interno, então allowlist de IP barraria o próprio Pandapé — o modelo adotado é **token-only**
+  (decisão do diretor, ver `LEIA-ME-FERNANDO.md`). O suporte Pandapé (**André**) confirmou e
+  destravou o disparo do webhook na mudança de etapa. **A Frente 2 está DESTRAVADA.**
+- **De/para Pandapé→catálogo** (cliente/cargo via `IdVacancy` e tipos de documento) — **segue
+  pendente**. Não trava a Frente 2: sem ele, admissão com vaga não-mapeada é **adiada** e
+  reprocessável, nunca inventa `cod_cliente` (§A.5). *Necessário para a ativação plena.*
 - Base oficial de clientes (código + CNPJ + razão social) — sobe no formato atual.
 - Definição dos dashboards.
 - Acessos: GitHub (repo criado), VM, Pandapé, Clicksign. Credencial de IA é a service account
@@ -426,11 +439,29 @@ farol, então a próxima importação **herda tudo automaticamente**. O runner `
 re-aplica manualmente sobre uma base já importada. §A.6: a rotina opera só por farol/status, sem PII.
 *(Decisão do diretor, OST regras permanentes de importação + correção da carga Frente 1.)*
 
-## A.17 — Frente mapeada e pendente: Formulário de VT online (self-service mobile)
+## A.17 — Formulário de VT online (self-service mobile): EM CONSTRUÇÃO, por etapas
 
-**No forno, NÃO construir agora.** Frente definida pelo diretor, aguardando a liberação da construção
-e o insumo pendente (a tabela de preços). Registrada aqui para o coordenador acionar quando o diretor
-liberar.
+**Frente LIBERADA e em construção.** A tabela de preços (o insumo que bloqueava) **foi entregue e já
+está no sistema**. Estado por etapa:
+
+| Etapa | O que é | Estado |
+|---|---|---|
+| **1** | Tarifas de transporte (tabela + tela `/admin/tarifas`) | **em `main`/produção** (18 tarifas) |
+| **2** | Formulário do candidato (`/vt`) + os 2 PDFs (optante / não-optante) | **em `main`/produção** |
+| **3** | VT compõe o **Kit** (e auditoria) | **a fazer** |
+| **4** | Tela de **Benefícios** | **em andamento** (parte 1 entregue: `admissao_beneficio`, `status_cadastro_beneficio`, memória cliente+cargo) |
+
+**Acesso público:** pendência de **infraestrutura**, com o Fernando (**em andamento**). A tela `/vt`
+está pronta e validada, mas hoje só é alcançável **dentro da VPN**; o candidato no 4G ainda não abre.
+Pacote técnico pronto e testado (vhost `vt.soulanrh.com.br`, fail-closed, allowlist só dos caminhos
+da `/vt`, `/api/auth/*` bloqueado, certbot). Falta o Fernando aplicar (DNS + vhost + certificado) e o
+diretor validar da internet. *O código não depende disso: é infra.*
+
+**Etapa 3 (a fazer):** o VT ainda **não** está ligado ao kit nem à auditoria. `tipos_documento` já tem
+`FORMULARIO_VT` e `CARTAO_TRANSPORTE` cadastrados, porém **dormentes** (0 réguas, 0 documentos): o
+catálogo já previa o documento e ninguém ligou os fios.
+
+O texto abaixo é o escopo original da frente, mantido como referência do que foi pedido.
 
 **Objetivo.** O candidato preenche o próprio vale-transporte pelo celular, e o formulário de VT é
 anexado ao Kit Admissional para assinatura junto ao contrato.
@@ -453,12 +484,61 @@ anexado ao Kit Admissional para assinatura junto ao contrato.
 - **Regra de negócio.** O preenchimento do VT **NÃO é obrigatório** para o sistema gerar o Kit
   Admissional: o kit gera com ou sem VT.
 
-**Insumo pendente do diretor (bloqueia a construção):** a **tabela de preços vigente** dos transportes
-(Metrô, CPTM, ônibus SP, EMTU, Bilhete Único).
+**Insumo do diretor:** a **tabela de preços vigente** dos transportes (Metrô, CPTM, ônibus SP, EMTU,
+Bilhete Único). **ENTREGUE e no sistema** (etapa 1), mantida pela tela `/admin/tarifas`.
 
 **Complexidade:** média, bem definida. O ponto que seria difícil (cálculo automático de rota/tarifa)
 foi deliberadamente cortado; o candidato preenche e a tabela só sugere valores.
 
-**Status:** mapeada, no forno, aguardando o diretor liberar a construção e fornecer a tabela de preços.
-O coordenador lembra o diretor no gatilho natural (quando a frente do Kit/INT-4 estiver madura).
-*(Registro solicitado pelo diretor.)*
+**Status:** **em construção.** Etapas 1 e 2 em produção; etapa 4 em andamento (§A.18, item 1);
+etapa 3 a fazer; acesso público em andamento com o Fernando.
+*(Registro solicitado pelo diretor; atualizado para o estado real.)*
+
+## A.18 — Ordem das próximas frentes (decisão do diretor)
+
+Sequência **definida pelo diretor**. O coordenador segue esta ordem e não antecipa frente sem aval.
+
+1. **Fechar a tela de Benefícios** (OST 2, **em andamento**). Consome a estrutura da etapa 4/parte 1:
+   `admissao_beneficio` (pacote estruturado), `admissoes.status_cadastro_beneficio`
+   (PENDENTE/CADASTRADO) e a memória de pacote por (cliente + cargo), derivada do último pacote.
+2. **LIGAR O MOTOR DA ESTEIRA.** Fazer a esteira operar **ponta a ponta com admissões VIVAS de
+   verdade**, não mais só dado histórico da carga. Hoje a base é quase toda finalizada (1.432
+   concluídas + 724 declínios) e as filas vivem praticamente vazias; o motor é o que passa a
+   alimentá-las. Inclui a **Frente 2** (admissões vivas entrando pelo **webhook do Pandapé**,
+   **já destravada pelo André**) e o fluxo vivo rodando de verdade.
+3. **Tela de Gestão de Pendências Obrigatórias** (§A.19). Depois do motor, de propósito: a fila só
+   faz sentido quando existir admissão viva chegando para preencher.
+
+## A.19 — Frente mapeada: Tela de Gestão de Pendências Obrigatórias
+
+**Mapeada, a fazer DEPOIS de ligar o motor da esteira (§A.18, item 2).** Registrada aqui para o
+coordenador acionar no gatilho certo.
+
+**O que é.** Tela dedicada, **com entrada no menu lateral**: a **fila de trabalho** de quem preenche
+informação obrigatória. Não é relatório, é lista de tarefa.
+
+**Escopo (do diretor).**
+- Lista as admissões **VIVAS** com **qualquer** campo obrigatório faltando: cliente, cargo, salário,
+  data de admissão, tipo de contrato, centro de custo, gestor/BP, escala e pacote de benefícios.
+- Cada linha mostra o **candidato** e **QUAIS campos faltam**. O time preenche **direto dali**.
+- Ao **zerar** as pendências, a admissão **sai da fila** (a fila é o próprio estado, não uma marcação).
+- **Ordenação por urgência:** proximidade da **data de admissão** (quem admite antes aparece antes).
+
+**Reuso obrigatório: a régua unificada já existe, NÃO recalcular.** `pendenciasObrigatorias`
+(`domain/admissao.ts`) é a fonte única, e o `sinalizador_preenchimento` **deriva** dela desde o
+ajuste da etapa 4 (OK <=> zero pendência). Coluna do Gerenciador, KPI, radar, sinalizador e modal
+já concordam por construção. Esta tela **consome** isso; qualquer régua nova recria exatamente a
+divergência que aquele ajuste eliminou (a coluna dizia "Completo" enquanto o modal listava
+pendência na MESMA admissão).
+
+**Propósito distinto das telas que já existem** (não é sobreposição):
+- **Gerenciador:** visão geral de todas as admissões, com filtro e busca.
+- **Tela de Benefícios (OST 2):** gestão do benefício e do seu cadastro (PENDENTE/CADASTRADO).
+- **Esta:** a **fila de resolução de pendência**, de qualquer campo obrigatório.
+
+**Nota de recorte (§A.16 + ajuste da etapa 4):** a régua unificada vale para admissões **vivas**
+(EM_ADMISSAO / BANCO_AGUARDAR). **Finalizadas** (ADMISSAO_CONCLUIDA) e **encerradas**
+(DECLINOU / RESCISAO) **não são recalculadas** e **não entram nesta fila**: quem declinou não deixa
+trabalho ativo, e o histórico da carga fica intacto.
+
+**Status:** mapeada, aguardando o motor da esteira. *(Registro solicitado pelo diretor.)*
