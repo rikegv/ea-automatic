@@ -25,6 +25,7 @@ export type IconName =
   | "tag"
   | "eye"
   | "x"
+  | "filter"
   | "trash"
   | "folder"
   | "download"
@@ -61,6 +62,7 @@ const PATHS: Record<IconName, JSX.Element> = {
     </>
   ),
   check: <path d="M20 6L9 17l-5-5" />,
+  filter: <path d="M22 4H2l8 9.4V20l4-2v-4.6z" />,
   doc: (
     <>
       <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />

@@ -12,7 +12,8 @@ import { StatusPill } from "@/components/ui/StatusPill";
 import { PendenciasBadge } from "@/components/ui/PendenciasBadge";
 import { OrigemBadge } from "@/components/ui/OrigemBadge";
 import { Icon, type IconName } from "@/components/ui/Icon";
-import { Select } from "@/components/ui/Select";
+import { FiltroTrigger, FiltroCampo } from "@/components/ui/FiltroTrigger";
+import { MultiSelect } from "@/components/ui/MultiSelect";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AdmissaoDetalheModal } from "@/components/esteira/AdmissaoDetalheModal";
 import { EditAdmissaoModal } from "@/components/gerenciador/EditAdmissaoModal";
@@ -43,12 +44,15 @@ interface ListResp {
   tiposContrato: string[];
   kpis: {
     total: number;
-    ativos: number;
+    emAndamento: number;
     concluidos: number;
     declinados: number;
     comPendencias: number;
   };
 }
+
+// Cards clicáveis do topo (Bloco A), seleção mutuamente exclusiva. Ordem fixa na fileira.
+type CardId = "total" | "andamento" | "concluidas" | "pendencias" | "declinados";
 interface ClienteLite {
   codCliente: string;
   razaoSocial: string;
@@ -66,11 +70,8 @@ const SINAL: Record<string, { tone: PillTone; label: string }> = {
   INCONFORMIDADE: { tone: "dg", label: "Inconformidade" },
   COMPETENCIAS: { tone: "nt", label: "Competências" },
 };
-const SINAL_OPTS = [
-  { value: "", label: "Todos" },
-  ...Object.entries(SINAL).map(([value, v]) => ({ value, label: v.label })),
-];
-const FAROL_OPTS = [{ value: "", label: "Todos" }, ...FAROL_SELECT_OPTIONS];
+// Opções multi-select (Bloco B): sem a opção "Todos" (vazio = sem filtro).
+const SINAL_OPTS = Object.entries(SINAL).map(([value, v]) => ({ value, label: v.label }));
 
 function fmtDataAdmissao(d?: string | null): string {
   if (!d) return "não informado";
@@ -92,8 +93,8 @@ function frenteTone(f?: { status: string; concluida: boolean }): PillTone {
 // esmagar. As de texto (Candidato/Cliente/Cargo/Contrato) têm piso em px (nunca truncam "AJUDANTE
 // GERAL" nem o nome) e crescem em `fr`; as de status têm largura para o rótulo mais longo.
 const GRID =
-  "minmax(170px,1.6fr) minmax(150px,1.2fr) minmax(176px,1fr) minmax(110px,0.9fr) 96px 206px 130px 140px 160px 156px 100px";
-const GRID_MIN = "min-w-[1760px]";
+  "minmax(232px,1.8fr) minmax(168px,1.2fr) minmax(190px,1.1fr) minmax(120px,0.9fr) 108px 160px 200px 140px 150px 160px 100px";
+const GRID_MIN = "min-w-[1880px]";
 
 export default function GerenciadorPage() {
   const { token, isAdmin } = useAuth();
@@ -104,21 +105,20 @@ export default function GerenciadorPage() {
   const [flash, setFlash] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  // Filtros
+  // Filtros (Bloco B: multi-select, estados como listas)
   const [candQuery, setCandQuery] = useState("");
   const [q, setQ] = useState("");
-  const [codCliente, setCodCliente] = useState("");
-  const [cliQuery, setCliQuery] = useState("");
-  const [cliResults, setCliResults] = useState<ClienteLite[]>([]);
-  const [cliOpen, setCliOpen] = useState(false);
-  const [cargoId, setCargoId] = useState("");
+  const [codClientes, setCodClientes] = useState<string[]>([]);
+  const [clientes, setClientes] = useState<ClienteLite[]>([]);
+  const [cargoIds, setCargoIds] = useState<string[]>([]);
   const [cargos, setCargos] = useState<CargoLite[]>([]);
-  const [tipoContrato, setTipoContrato] = useState("");
-  const [farol, setFarol] = useState("");
-  const [sinalizador, setSinalizador] = useState("");
+  const [tipoContratos, setTipoContratos] = useState<string[]>([]);
+  const [farol, setFarol] = useState<string[]>([]);
+  const [sinalizadores, setSinalizadores] = useState<string[]>([]);
   const [concluido, setConcluido] = useState(false);
-  // Card/filtro "Com pendências obrigatórias" (§A.12): toggle independente do farol/concluído.
   const [comPendencias, setComPendencias] = useState(false);
+  // Card "Admissões em Andamento" (Bloco A): em aberto no geral (nem concluído nem declínio).
+  const [emAndamento, setEmAndamento] = useState(false);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [page, setPage] = useState(1);
@@ -131,12 +131,15 @@ export default function GerenciadorPage() {
   const [delRow, setDelRow] = useState<AdmRow | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  // catálogo de cargos (uma vez)
+  // catálogos de cargos e clientes (uma vez)
   useEffect(() => {
     if (!token) return;
     apiFetch<CargoLite[]>("/catalogos/cargos", { token })
       .then(setCargos)
       .catch(() => setCargos([]));
+    apiFetch<ClienteLite[]>("/catalogos/clientes", { token })
+      .then(setClientes)
+      .catch(() => setClientes([]));
   }, [token]);
 
   // debounce da busca global
@@ -154,13 +157,14 @@ export default function GerenciadorPage() {
     setLoadError(null);
     const qs = new URLSearchParams();
     if (q) qs.set("q", q);
-    if (codCliente) qs.set("codCliente", codCliente);
-    if (cargoId) qs.set("cargoId", cargoId);
-    if (tipoContrato) qs.set("tipoContrato", tipoContrato);
-    if (farol) qs.set("farol", farol);
-    if (sinalizador) qs.set("sinalizador", sinalizador);
+    if (codClientes.length) qs.set("codCliente", codClientes.join(","));
+    if (cargoIds.length) qs.set("cargoId", cargoIds.join(","));
+    if (tipoContratos.length) qs.set("tipoContrato", tipoContratos.join(","));
+    if (farol.length) qs.set("farol", farol.join(","));
+    if (sinalizadores.length) qs.set("sinalizador", sinalizadores.join(","));
     if (concluido) qs.set("concluido", "true");
     if (comPendencias) qs.set("comPendencias", "true");
+    if (emAndamento) qs.set("emAndamento", "true");
     if (from) qs.set("from", from);
     if (to) qs.set("to", to);
     qs.set("page", String(page));
@@ -176,13 +180,14 @@ export default function GerenciadorPage() {
   }, [
     token,
     q,
-    codCliente,
-    cargoId,
-    tipoContrato,
+    codClientes,
+    cargoIds,
+    tipoContratos,
     farol,
-    sinalizador,
+    sinalizadores,
     concluido,
     comPendencias,
+    emAndamento,
     from,
     to,
     page,
@@ -192,23 +197,8 @@ export default function GerenciadorPage() {
     load();
   }, [load]);
 
-  // Autocomplete de cliente
-  useEffect(() => {
-    const term = cliQuery.trim();
-    if (!token || !term || !cliOpen) {
-      setCliResults([]);
-      return;
-    }
-    const h = setTimeout(() => {
-      apiFetch<ClienteLite[]>(`/catalogos/clientes?q=${encodeURIComponent(term)}`, { token })
-        .then(setCliResults)
-        .catch(() => setCliResults([]));
-    }, 300);
-    return () => clearTimeout(h);
-  }, [cliQuery, token, cliOpen]);
-
-  // reset de página quando um filtro muda
-  function reset1<T>(setter: (v: T) => void) {
+  // reset de página quando um filtro multi muda
+  function resetPage<T>(setter: (v: T) => void) {
     return (v: T) => {
       setter(v);
       setPage(1);
@@ -218,55 +208,67 @@ export default function GerenciadorPage() {
   function limparFiltros() {
     setCandQuery("");
     setQ("");
-    setCodCliente("");
-    setCliQuery("");
-    setCargoId("");
-    setTipoContrato("");
-    setFarol("");
-    setSinalizador("");
+    setCodClientes([]);
+    setCargoIds([]);
+    setTipoContratos([]);
+    setFarol([]);
+    setSinalizadores([]);
     setConcluido(false);
     setComPendencias(false);
+    setEmAndamento(false);
     setFrom("");
     setTo("");
     setPage(1);
   }
   const temFiltro = Boolean(
     q ||
-    codCliente ||
-    cargoId ||
-    tipoContrato ||
-    farol ||
-    sinalizador ||
+    codClientes.length ||
+    cargoIds.length ||
+    tipoContratos.length ||
+    farol.length ||
+    sinalizadores.length ||
     concluido ||
     comPendencias ||
+    emAndamento ||
     from ||
     to,
   );
 
-  // KPIs como filtro (radio-like): clicar aplica, clicar de novo desfaz.
-  const kpiAtivo = useMemo(() => {
-    if (concluido) return "concluidos";
-    if (farol === "EM_ADMISSAO") return "ativos";
-    if (farol === "DECLINOU") return "declinados";
-    if (!farol) return "total";
-    return "";
-  }, [farol, concluido]);
+  // Contagem de filtros do MODAL ativos (badge do FiltroTrigger). Cards do Bloco A ficam de fora.
+  const filtrosModal =
+    (codClientes.length ? 1 : 0) +
+    (cargoIds.length ? 1 : 0) +
+    (tipoContratos.length ? 1 : 0) +
+    (farol.length ? 1 : 0) +
+    (sinalizadores.length ? 1 : 0) +
+    (from || to ? 1 : 0);
 
-  function aplicarKpi(kpi: "total" | "ativos" | "concluidos" | "declinados") {
+  // Cards como filtro ÚNICO (§A.12/Bloco A): só um selecionado por vez, clicar de novo desfaz.
+  // O card ativo é derivado dos filtros de card (farol/concluído/pendências/em andamento).
+  const cardAtivo: CardId | "" = useMemo(() => {
+    if (comPendencias) return "pendencias";
+    if (emAndamento) return "andamento";
+    if (concluido) return "concluidas";
+    if (farol.length > 0 && farol.every((f) => f === "DECLINOU" || f === "RESCISAO"))
+      return "declinados";
+    if (!farol.length && !concluido && !comPendencias && !emAndamento) return "total";
+    return "";
+  }, [farol, concluido, comPendencias, emAndamento]);
+
+  // Seleção mutuamente exclusiva: SEMPRE limpa todos os filtros de card antes de setar um. Isso
+  // corrige o bug do card "Declínios" preso (antes o card de pendências era um toggle independente
+  // e coexistia com os de status).
+  function selecionarCard(card: CardId) {
     setPage(1);
-    if (kpi === "total") {
-      setFarol("");
-      setConcluido(false);
-    } else if (kpi === "ativos") {
-      setConcluido(false);
-      setFarol((f) => (f === "EM_ADMISSAO" ? "" : "EM_ADMISSAO"));
-    } else if (kpi === "declinados") {
-      setConcluido(false);
-      setFarol((f) => (f === "DECLINOU" ? "" : "DECLINOU"));
-    } else {
-      setFarol("");
-      setConcluido((c) => !c);
-    }
+    setFarol([]);
+    setConcluido(false);
+    setComPendencias(false);
+    setEmAndamento(false);
+    if (card === "total" || card === cardAtivo) return; // reclicar o ativo (ou Total) => nada selecionado
+    if (card === "andamento") setEmAndamento(true);
+    else if (card === "concluidas") setConcluido(true);
+    else if (card === "pendencias") setComPendencias(true);
+    else if (card === "declinados") setFarol(["DECLINOU", "RESCISAO"]);
   }
 
   async function confirmarDelete() {
@@ -288,15 +290,13 @@ export default function GerenciadorPage() {
 
   const items = data?.items ?? [];
   const k = data?.kpis;
-  const cargoOpts = useMemo(
-    () => [{ value: "", label: "Todos" }, ...cargos.map((c) => ({ value: c.id, label: c.nome }))],
-    [cargos],
+  const clienteOpts = useMemo(
+    () => clientes.map((c) => ({ value: c.codCliente, label: c.nomeOperacao || c.razaoSocial })),
+    [clientes],
   );
+  const cargoOpts = useMemo(() => cargos.map((c) => ({ value: c.id, label: c.nome })), [cargos]);
   const contratoOpts = useMemo(
-    () => [
-      { value: "", label: "Todos" },
-      ...(data?.tiposContrato ?? []).map((t) => ({ value: t, label: t })),
-    ],
+    () => (data?.tiposContrato ?? []).map((t) => ({ value: t, label: t })),
     [data],
   );
 
@@ -307,13 +307,13 @@ export default function GerenciadorPage() {
     tone,
     icon,
   }: {
-    id: "total" | "ativos" | "concluidos" | "declinados";
+    id: CardId;
     label: string;
     value: number;
     tone?: string;
     icon?: IconName;
   }) => {
-    const ativo = kpiAtivo === id;
+    const ativo = cardAtivo === id;
     return (
       <GlassCard
         as="button"
@@ -321,7 +321,7 @@ export default function GerenciadorPage() {
           "fk text-left transition hover:bg-[var(--surface-2)] !px-4 !py-3.5",
           ativo && "!border-[var(--accent)] ring-1 ring-[var(--accent)]",
         )}
-        onClick={() => aplicarKpi(id)}
+        onClick={() => selecionarCard(id)}
         aria-pressed={ativo}
       >
         <div className="mb-0.5 flex items-center justify-between">
@@ -344,191 +344,133 @@ export default function GerenciadorPage() {
 
   return (
     <>
-      <PageHead title="Esteira Admissional" />
+      {/* Bloco F: página em coluna flex ocupando a altura da viewport. Cabeçalho e cards são fixos
+          (shrink-0); a tabela preenche o resto (flex-1) e rola internamente, então a barra de
+          rolagem (horizontal e vertical) fica SEMPRE acessível, sem caçar o rodapé da página, em
+          qualquer largura (os cards podem quebrar em várias linhas que a tabela se ajusta). */}
+      <div className="flex h-[calc(100dvh-72px)] flex-col">
+      <div className="flex shrink-0 items-start justify-between gap-4">
+        <PageHead title="Esteira Admissional" />
+        <div className="flex items-center gap-2 pt-1">
+          <input
+            type="search"
+            className="ds-input rounded-full w-72"
+            placeholder="Buscar por nome, CPF ou cliente"
+            aria-label="Buscar por nome, CPF ou cliente"
+            value={candQuery}
+            onChange={(e) => setCandQuery(e.target.value)}
+          />
+          {temFiltro && (
+            <button
+              type="button"
+              className="btn-secondary inline-flex items-center gap-1.5 px-3 py-2 text-[13px]"
+              onClick={limparFiltros}
+            >
+              <Icon name="x" className="h-4 w-4" /> Limpar filtro
+            </button>
+          )}
+          <FiltroTrigger count={filtrosModal} onLimpar={limparFiltros}>
+            <FiltroCampo label="Cliente">
+              <MultiSelect
+                values={codClientes}
+                onChange={resetPage(setCodClientes)}
+                options={clienteOpts}
+                placeholder="Todos"
+                ariaLabel="Cliente"
+              />
+            </FiltroCampo>
+            <FiltroCampo label="Cargo">
+              <MultiSelect
+                values={cargoIds}
+                onChange={resetPage(setCargoIds)}
+                options={cargoOpts}
+                placeholder="Todos"
+                ariaLabel="Cargo"
+              />
+            </FiltroCampo>
+            <FiltroCampo label="Contrato">
+              <MultiSelect
+                values={tipoContratos}
+                onChange={resetPage(setTipoContratos)}
+                options={contratoOpts}
+                placeholder="Todos"
+                ariaLabel="Tipo de contrato"
+              />
+            </FiltroCampo>
+            <FiltroCampo label="Status">
+              <MultiSelect
+                values={farol}
+                onChange={resetPage(setFarol)}
+                options={FAROL_SELECT_OPTIONS}
+                placeholder="Todos"
+                ariaLabel="Status (farol)"
+              />
+            </FiltroCampo>
+            <FiltroCampo label="Pendências">
+              <MultiSelect
+                values={sinalizadores}
+                onChange={resetPage(setSinalizadores)}
+                options={SINAL_OPTS}
+                placeholder="Todas"
+                ariaLabel="Pendências"
+              />
+            </FiltroCampo>
+            <FiltroCampo label="Período">
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  type="date"
+                  className="ds-input"
+                  aria-label="De"
+                  value={from}
+                  max={to || undefined}
+                  onChange={(e) => resetPage(setFrom)(e.target.value)}
+                />
+                <input
+                  type="date"
+                  className="ds-input"
+                  aria-label="Até"
+                  value={to}
+                  min={from || undefined}
+                  onChange={(e) => resetPage(setTo)(e.target.value)}
+                />
+              </div>
+            </FiltroCampo>
+          </FiltroTrigger>
+        </div>
+      </div>
 
-      {/* KPIs (clicáveis = filtro) */}
-      <div className="mb-[18px] grid grid-cols-2 gap-[12px] sm:grid-cols-3 xl:grid-cols-5">
+      {/* KPIs clicáveis = filtro ÚNICO (Bloco A). Ordem fixa; Declínios SEMPRE o último card. */}
+      <div className="mb-[18px] grid shrink-0 grid-cols-2 gap-[12px] sm:grid-cols-3 xl:grid-cols-5">
         <KpiCard id="total" label="Total geral" value={k?.total ?? 0} icon="layers" />
         <KpiCard
-          id="ativos"
-          label="Ativos"
-          value={k?.ativos ?? 0}
+          id="andamento"
+          label="Admissões em Andamento"
+          value={k?.emAndamento ?? 0}
           tone="var(--accent)"
           icon="chart"
         />
         <KpiCard
-          id="concluidos"
-          label="Concluídos"
+          id="concluidas"
+          label="Admissões Concluídas"
           value={k?.concluidos ?? 0}
           tone="var(--ok)"
           icon="check"
         />
         <KpiCard
+          id="pendencias"
+          label="Com pendências obrigatórias"
+          value={k?.comPendencias ?? 0}
+          tone="var(--warn)"
+          icon="alert"
+        />
+        <KpiCard
           id="declinados"
-          label="Declinados"
+          label="Declínios"
           value={k?.declinados ?? 0}
           tone="var(--danger)"
           icon="x"
         />
-        {/* Card "Com pendências obrigatórias" (§A.12): clicável = filtro (toggle independente). */}
-        <GlassCard
-          as="button"
-          className={cn(
-            "fk text-left transition hover:bg-[var(--surface-2)] !px-4 !py-3.5",
-            comPendencias && "!border-[var(--accent)] ring-1 ring-[var(--accent)]",
-          )}
-          onClick={() => {
-            setComPendencias((v) => !v);
-            setPage(1);
-          }}
-          aria-pressed={comPendencias}
-          title={
-            comPendencias
-              ? "Remover filtro de pendências obrigatórias"
-              : "Filtrar só admissões com pendências obrigatórias"
-          }
-        >
-          <div className="mb-0.5 flex items-center justify-between">
-            <Icon name="alert" className="h-4 w-4 opacity-70" style={{ color: "var(--warn)" }} />
-            {comPendencias && <Icon name="check" className="h-3 w-3 text-accent" />}
-          </div>
-          <div className="num" style={{ color: "var(--warn)" }}>
-            {loading && !data ? "…" : (k?.comPendencias ?? 0)}
-          </div>
-          <div className="lbl">Com pendências obrigatórias</div>
-        </GlassCard>
       </div>
-
-      {/* Filtros */}
-      <GlassCard className="mb-[18px] p-4">
-        <div className="grid gap-3 md:grid-cols-[1.4fr_1.4fr_1.2fr_1fr] md:items-end">
-          {/* Busca global */}
-          <div>
-            <span className="ds-label">Busca (nome ou CPF)</span>
-            <input
-              className="ds-input"
-              placeholder="Buscar candidato…"
-              value={candQuery}
-              onChange={(e) => setCandQuery(e.target.value)}
-            />
-          </div>
-          {/* Cliente */}
-          <div className="relative">
-            <span className="ds-label">Cliente</span>
-            <input
-              className="ds-input"
-              placeholder="Buscar cliente…"
-              value={cliQuery}
-              onChange={(e) => {
-                setCliQuery(e.target.value);
-                setCliOpen(true);
-                if (codCliente) {
-                  setCodCliente("");
-                  setPage(1);
-                }
-              }}
-              onFocus={() => setCliOpen(true)}
-              onBlur={() => setTimeout(() => setCliOpen(false), 150)}
-            />
-            {cliOpen && cliResults.length > 0 && (
-              <div className="glass absolute left-0 right-0 top-[100%] z-30 mt-1 max-h-64 overflow-auto p-1.5">
-                {cliResults.map((c) => (
-                  <button
-                    key={c.codCliente}
-                    type="button"
-                    className="flex w-full flex-col items-start gap-0.5 rounded-lg px-3 py-2 text-left hover:bg-[var(--surface-2)]"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => {
-                      setCodCliente(c.codCliente);
-                      setCliQuery(c.nomeOperacao || c.razaoSocial);
-                      setCliOpen(false);
-                      setCliResults([]);
-                      setPage(1);
-                    }}
-                  >
-                    <span className="truncate text-[13.5px] font-semibold">
-                      {c.nomeOperacao || c.razaoSocial}
-                    </span>
-                    <span className="truncate text-[12px] text-dim">Código {c.codCliente}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-          {/* Cargo */}
-          <div>
-            <span className="ds-label">Cargo</span>
-            <Select
-              value={cargoId}
-              onChange={reset1(setCargoId)}
-              options={cargoOpts}
-              placeholder="Todos"
-              ariaLabel="Cargo"
-            />
-          </div>
-          {/* Tipo de contrato */}
-          <div>
-            <span className="ds-label">Contrato</span>
-            <Select
-              value={tipoContrato}
-              onChange={reset1(setTipoContrato)}
-              options={contratoOpts}
-              placeholder="Todos"
-              ariaLabel="Tipo de contrato"
-            />
-          </div>
-        </div>
-        <div className="mt-3 grid gap-3 md:grid-cols-[1fr_1fr_1fr_1fr_auto] md:items-end">
-          <div>
-            <span className="ds-label">Status (farol)</span>
-            <Select
-              value={farol}
-              onChange={reset1(setFarol)}
-              options={FAROL_OPTS}
-              placeholder="Todos"
-              ariaLabel="Farol"
-            />
-          </div>
-          <div>
-            <span className="ds-label">Pendências Obrig.</span>
-            <Select
-              value={sinalizador}
-              onChange={reset1(setSinalizador)}
-              options={SINAL_OPTS}
-              placeholder="Todos"
-              ariaLabel="Sinalizador"
-            />
-          </div>
-          <div>
-            <span className="ds-label">De</span>
-            <input
-              type="date"
-              className="ds-input"
-              value={from}
-              max={to || undefined}
-              onChange={(e) => reset1(setFrom)(e.target.value)}
-            />
-          </div>
-          <div>
-            <span className="ds-label">Até</span>
-            <input
-              type="date"
-              className="ds-input"
-              value={to}
-              min={from || undefined}
-              onChange={(e) => reset1(setTo)(e.target.value)}
-            />
-          </div>
-          <button
-            type="button"
-            className="btn-secondary px-4 py-3 disabled:opacity-50"
-            onClick={limparFiltros}
-            disabled={!temFiltro}
-          >
-            Limpar
-          </button>
-        </div>
-      </GlassCard>
 
       {actionError && (
         <p
@@ -544,22 +486,23 @@ export default function GerenciadorPage() {
         </p>
       )}
 
-      {/* Tabela */}
-      <GlassCard className="list">
-        <div className="overflow-x-auto">
+      {/* Tabela. Bloco F: área de scroll com altura limitada (a barra fica sempre acessível, sem
+          precisar rolar a página até o fim), barra premium (ea-scroll) e coluna Ações fixa. */}
+      <GlassCard className="list flex min-h-0 flex-1 flex-col">
+        <div className="ea-scroll min-h-0 flex-1 overflow-auto">
           <div className={GRID_MIN}>
             <div className="list-head" style={{ gridTemplateColumns: GRID }}>
-              <span className="text-left">Candidato</span>
-              <span className="text-left">Cliente</span>
-              <span className="text-left">Cargo</span>
-              <span className="text-left">Contrato</span>
+              <span>Candidato</span>
+              <span>Cliente</span>
+              <span>Cargo</span>
+              <span>Contrato</span>
               <span>Data adm.</span>
+              <span>Status</span>
               <span>Auditoria</span>
               <span>Exame</span>
               <span>Cadastro</span>
-              <span>Status</span>
               <span>Pendências Obrig.</span>
-              <span>Ações</span>
+              <span className="col-fix">Ações</span>
             </div>
 
             {loading ? (
@@ -575,35 +518,54 @@ export default function GerenciadorPage() {
             ) : (
               items.map((r) => {
                 const farolP = farolPill(r.farolGlobal);
-                const sinalP = SINAL[r.sinalizador] ?? {
-                  tone: "nt" as PillTone,
-                  label: r.sinalizador,
-                };
+                // Bloco D (regra permanente §A.16): quem declinou/rescindiu está ENCERRADO, não tem
+                // pendência de processo vivo. A coluna Pendências Obrigatórias mostra "Declínio",
+                // NUNCA "Parcial"/"Completo". Derivado do farol (dado autoritativo), não do sinalizador.
+                const ehDeclinio =
+                  r.farolGlobal === "DECLINOU" || r.farolGlobal === "RESCISAO";
+                const sinalP: { tone: PillTone; label: string } = ehDeclinio
+                  ? { tone: "dg", label: "Declínio" }
+                  : (SINAL[r.sinalizador] ?? { tone: "nt", label: r.sinalizador });
                 const fa = r.frentes?.AUDITORIA;
                 const ex = r.frentes?.EXAME;
                 const cad = r.frentes?.CADASTRO_CONTRATO;
                 return (
                   <div key={r.admissaoId} className="row" style={{ gridTemplateColumns: GRID }}>
-                    <div className="min-w-0">
-                      <div className="nm truncate">{r.candidatoNome}</div>
-                      {(r.origem === "PANDAPE" || r.concluido) && (
-                        <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                    {/* Ajuste 1: nome do candidato alinhado à ESQUERDA (só o conteúdo; o título da
+                        coluna segue centralizado). Ajuste 2: title = tooltip com o texto completo. */}
+                    <div className="min-w-0 text-left">
+                      <div className="nm truncate" title={r.candidatoNome}>
+                        {r.candidatoNome}
+                      </div>
+                      {r.origem === "PANDAPE" && (
+                        <div className="mt-1 flex flex-wrap items-center justify-start gap-1.5">
                           <OrigemBadge origem={r.origem} />
-                          {r.concluido && (
-                            <span className="meta truncate text-ok">Processo concluído</span>
-                          )}
                         </div>
                       )}
                     </div>
                     {/* Cliente: só o nome da operação (§A.12); o código vai no modal do olho. */}
-                    <div className="min-w-0">
-                      <div className="meta truncate text-text">
+                    <div className="min-w-0 text-center">
+                      <div
+                        className="meta truncate text-text"
+                        title={r.clienteOperacao || r.clienteRazao}
+                      >
                         {r.clienteOperacao || r.clienteRazao}
                       </div>
                     </div>
-                    <div className="meta truncate">{r.cargoNome}</div>
-                    <div className="meta truncate">{r.tipoContrato || "não informado"}</div>
+                    <div className="meta truncate text-center" title={r.cargoNome}>
+                      {r.cargoNome}
+                    </div>
+                    <div
+                      className="meta truncate text-center"
+                      title={r.tipoContrato || "não informado"}
+                    >
+                      {r.tipoContrato || "não informado"}
+                    </div>
                     <div className="meta text-center">{fmtDataAdmissao(r.dataAdmissao)}</div>
+                    {/* Status movido para ANTES de Auditoria (ajuste de ordem das colunas). */}
+                    <div className="flex min-w-0 items-center justify-center">
+                      <StatusPill tone={farolP.tone} label={farolP.label} />
+                    </div>
                     <div className="flex min-w-0 items-center justify-center">
                       {fa ? (
                         <StatusPill tone={frenteTone(fa)} label={fa.rotulo} />
@@ -626,16 +588,13 @@ export default function GerenciadorPage() {
                       )}
                     </div>
                     <div className="flex min-w-0 items-center justify-center">
-                      <StatusPill tone={farolP.tone} label={farolP.label} />
-                    </div>
-                    <div className="flex min-w-0 items-center justify-center">
                       <PendenciasBadge
                         tone={sinalP.tone}
                         label={sinalP.label}
                         onClick={() => setPendRow(r)}
                       />
                     </div>
-                    <div className="flex items-center justify-center gap-1">
+                    <div className="col-fix flex items-center justify-center gap-1">
                       <button
                         type="button"
                         className="grid h-8 w-8 place-items-center rounded-lg text-faint transition hover:bg-[var(--surface-2)] hover:text-accent"
@@ -703,6 +662,7 @@ export default function GerenciadorPage() {
           </div>
         )}
       </GlassCard>
+      </div>
 
       {/* Modais */}
       {viewId && <AdmissaoDetalheModal admissaoId={viewId} onClose={() => setViewId(null)} />}

@@ -11,7 +11,8 @@ import { Modal } from "@/components/ui/Modal";
 import { Pill, type PillTone } from "@/components/ui/Pill";
 import { Button } from "@/components/ui/Button";
 import { Icon } from "@/components/ui/Icon";
-import { Select } from "@/components/ui/Select";
+import { FiltroTrigger, FiltroCampo } from "@/components/ui/FiltroTrigger";
+import { MultiSelect } from "@/components/ui/MultiSelect";
 import { AdmissaoDetalheModal } from "@/components/esteira/AdmissaoDetalheModal";
 
 type Situacao = "ABERTA" | "AGUARDA_SUPERVISAO" | "RESOLVIDA" | "LIBERADA_DIRETORIA";
@@ -50,6 +51,11 @@ interface CadAdmissao {
   clienteRazao: string;
   codCliente: string;
 }
+interface ClienteCat {
+  codCliente: string;
+  razaoSocial: string;
+  nomeOperacao: string | null;
+}
 
 const SIT_ROTULO: Record<Situacao, string> = {
   ABERTA: "Aberta",
@@ -86,12 +92,20 @@ export default function NaoConformidadesPage() {
   const [flash, setFlash] = useState<string | null>(null);
   const [actingId, setActingId] = useState<string | null>(null);
 
+  // Busca rápida (cilindro no cabeçalho) com debounce simples
+  const [qInput, setQInput] = useState("");
+  const [q, setQ] = useState("");
+
   // Filtros
-  const [tipo, setTipo] = useState("");
-  const [situacao, setSituacao] = useState("");
-  const [consultorId, setConsultorId] = useState("");
+  const [tipos, setTipos] = useState<string[]>([]);
+  const [situacoes, setSituacoes] = useState<string[]>([]);
+  const [consultorIds, setConsultorIds] = useState<string[]>([]);
+  const [codClientes, setCodClientes] = useState<string[]>([]);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+
+  // Catálogo de clientes (para o filtro Cliente)
+  const [clientes, setClientes] = useState<ClienteCat[]>([]);
 
   // Modais
   const [viewId, setViewId] = useState<string | null>(null);
@@ -103,9 +117,11 @@ export default function NaoConformidadesPage() {
     setLoading(true);
     setLoadError(null);
     const qs = new URLSearchParams();
-    if (tipo) qs.set("tipo", tipo);
-    if (situacao) qs.set("situacao", situacao);
-    if (consultorId) qs.set("consultorId", consultorId);
+    if (q) qs.set("q", q);
+    if (tipos.length) qs.set("tipo", tipos.join(","));
+    if (situacoes.length) qs.set("situacao", situacoes.join(","));
+    if (consultorIds.length) qs.set("consultorId", consultorIds.join(","));
+    if (codClientes.length) qs.set("codCliente", codClientes.join(","));
     if (from) qs.set("from", from);
     if (to) qs.set("to", to);
     const suffix = qs.toString() ? `?${qs.toString()}` : "";
@@ -118,24 +134,69 @@ export default function NaoConformidadesPage() {
     } finally {
       setLoading(false);
     }
-  }, [token, tipo, situacao, consultorId, from, to]);
+  }, [token, q, tipos, situacoes, consultorIds, codClientes, from, to]);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  const consultorOpts = useMemo(() => {
-    const opts = (data?.contadores ?? [])
-      .filter((c) => c.consultorId)
-      .map((c) => ({ value: c.consultorId as string, label: c.consultorNome ?? "não informado" }));
-    return [{ value: "", label: "Todos" }, ...opts];
-  }, [data]);
+  // debounce da busca rápida
+  useEffect(() => {
+    const h = setTimeout(() => setQ(qInput.trim()), 300);
+    return () => clearTimeout(h);
+  }, [qInput]);
 
-  const temFiltro = Boolean(tipo || situacao || consultorId || from || to);
+  // Carrega o catálogo de clientes uma vez (opções do filtro Cliente).
+  useEffect(() => {
+    if (!token) return;
+    apiFetch<ClienteCat[]>("/catalogos/clientes", { token })
+      .then(setClientes)
+      .catch(() => setClientes([]));
+  }, [token]);
+
+  const tipoOpts = useMemo(
+    () => [
+      { value: "NC1", label: NC_TIPO_ROTULO.NC1 },
+      { value: "NC2", label: NC_TIPO_ROTULO.NC2 },
+      { value: "NC3", label: NC_TIPO_ROTULO.NC3 },
+    ],
+    [],
+  );
+  const situacaoOpts = useMemo(
+    () => [
+      { value: "ABERTA", label: "Aberta" },
+      { value: "AGUARDA_SUPERVISAO", label: "Aguardando supervisão" },
+      { value: "RESOLVIDA", label: "Resolvida" },
+      { value: "LIBERADA_DIRETORIA", label: "Liberada pela diretoria" },
+    ],
+    [],
+  );
+  const consultorOpts = useMemo(
+    () =>
+      (data?.contadores ?? [])
+        .filter((c) => c.consultorId)
+        .map((c) => ({ value: c.consultorId as string, label: c.consultorNome ?? "não informado" })),
+    [data],
+  );
+  const clienteOpts = useMemo(
+    () => clientes.map((c) => ({ value: c.codCliente, label: c.nomeOperacao || c.razaoSocial })),
+    [clientes],
+  );
+
+  const filtroCount =
+    (tipos.length ? 1 : 0) +
+    (situacoes.length ? 1 : 0) +
+    (consultorIds.length ? 1 : 0) +
+    (codClientes.length ? 1 : 0) +
+    (from || to ? 1 : 0);
+  const temFiltro = filtroCount > 0 || Boolean(q) || Boolean(qInput.trim());
   function limparFiltros() {
-    setTipo("");
-    setSituacao("");
-    setConsultorId("");
+    setQInput("");
+    setQ("");
+    setTipos([]);
+    setSituacoes([]);
+    setConsultorIds([]);
+    setCodClientes([]);
     setFrom("");
     setTo("");
   }
@@ -158,27 +219,118 @@ export default function NaoConformidadesPage() {
 
   return (
     <>
-      <PageHead
-        eyebrow="Conformidade do processo"
-        title="Não conformidades"
-        subtitle="Desvios de processo por admissão. Via 1 penaliza o consultor; Via 2 (liberação por diretoria) é exceção reconhecida pela supervisão."
-      />
+      {/* Bloco F: página em coluna flex ocupando a altura da viewport. Cabeçalho, contador e ação de
+          registro ficam fixos (shrink-0); a tabela preenche o resto (flex-1) e rola internamente, com
+          a barra de rolagem premium (ea-scroll) sempre acessível e a coluna Situação/ação fixa
+          (col-fix) durante o scroll horizontal. */}
+      <div className="flex h-[calc(100dvh-72px)] flex-col">
+      <div className="flex shrink-0 items-start justify-between gap-4">
+        <PageHead
+          eyebrow="Conformidade do processo"
+          title="Não conformidades"
+          subtitle="Desvios de processo por admissão. Via 1 penaliza o consultor; Via 2 (liberação por diretoria) é exceção reconhecida pela supervisão."
+        />
+        <div className="flex items-center gap-2 pt-1">
+          <input
+            type="search"
+            className="ds-input rounded-full w-72"
+            placeholder="Buscar por nome, CPF ou cliente"
+            aria-label="Buscar por nome, CPF ou cliente"
+            value={qInput}
+            onChange={(e) => setQInput(e.target.value)}
+          />
+          {temFiltro && (
+            <button
+              type="button"
+              className="btn-secondary inline-flex items-center gap-1.5 px-3 py-2 text-[13px]"
+              onClick={limparFiltros}
+            >
+              <Icon name="x" className="h-4 w-4" /> Limpar filtro
+            </button>
+          )}
+          <FiltroTrigger count={filtroCount} onLimpar={limparFiltros}>
+            <FiltroCampo label="Tipo">
+              <MultiSelect
+                ariaLabel="Filtrar por tipo"
+                values={tipos}
+                onChange={setTipos}
+                options={tipoOpts}
+                placeholder="Todos os tipos"
+              />
+            </FiltroCampo>
+            <FiltroCampo label="Situação">
+              <MultiSelect
+                ariaLabel="Filtrar por situação"
+                values={situacoes}
+                onChange={setSituacoes}
+                options={situacaoOpts}
+                placeholder="Todas as situações"
+              />
+            </FiltroCampo>
+            <FiltroCampo label="Consultor">
+              <MultiSelect
+                ariaLabel="Filtrar por consultor"
+                values={consultorIds}
+                onChange={setConsultorIds}
+                options={consultorOpts}
+                placeholder="Todos os consultores"
+              />
+            </FiltroCampo>
+            <FiltroCampo label="Cliente">
+              <MultiSelect
+                ariaLabel="Filtrar por cliente"
+                values={codClientes}
+                onChange={setCodClientes}
+                options={clienteOpts}
+                placeholder="Todos os clientes"
+              />
+            </FiltroCampo>
+            <FiltroCampo label="Período">
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  type="date"
+                  className="ds-input"
+                  aria-label="Registrada de"
+                  value={from}
+                  max={to || undefined}
+                  onChange={(e) => setFrom(e.target.value)}
+                />
+                <input
+                  type="date"
+                  className="ds-input"
+                  aria-label="Registrada até"
+                  value={to}
+                  min={from || undefined}
+                  onChange={(e) => setTo(e.target.value)}
+                />
+              </div>
+            </FiltroCampo>
+          </FiltroTrigger>
+        </div>
+      </div>
 
       {/* ── Contador por consultor (gestão) ───────────────────────────────── */}
       {data && data.contadores.length > 0 && (
-        <GlassCard className="mb-[18px] p-4">
+        <GlassCard className="mb-[18px] shrink-0 p-4">
           <div className="mb-3 text-[11px] uppercase tracking-wide text-faint">
             NCs que penalizam, por consultor
           </div>
           <div className="flex flex-wrap gap-2">
             {data.contadores.map((c) => {
-              const ativo = consultorId === c.consultorId;
+              const ativo = Boolean(c.consultorId && consultorIds.includes(c.consultorId));
               return (
                 <button
                   key={c.consultorId ?? "sem"}
                   type="button"
                   disabled={!c.consultorId}
-                  onClick={() => c.consultorId && setConsultorId(ativo ? "" : c.consultorId)}
+                  onClick={() =>
+                    c.consultorId &&
+                    setConsultorIds((prev) =>
+                      prev.includes(c.consultorId as string)
+                        ? prev.filter((x) => x !== c.consultorId)
+                        : [...prev, c.consultorId as string],
+                    )
+                  }
                   className={cn(
                     "flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[13px] transition",
                     c.consultorId && "hover:bg-[var(--surface-2)]",
@@ -197,87 +349,14 @@ export default function NaoConformidadesPage() {
         </GlassCard>
       )}
 
-      {/* ── Filtros + ação de registro ────────────────────────────────────── */}
-      <GlassCard className="mb-[18px] p-4">
-        <div className="grid gap-3 md:grid-cols-[1fr_1.2fr_1.2fr_0.9fr_0.9fr_auto] md:items-end">
-          <div>
-            <span className="ds-label">Tipo</span>
-            <Select
-              ariaLabel="Filtrar por tipo"
-              value={tipo}
-              onChange={setTipo}
-              placeholder="Todos"
-              options={[
-                { value: "", label: "Todos" },
-                { value: "NC1", label: NC_TIPO_ROTULO.NC1 },
-                { value: "NC2", label: NC_TIPO_ROTULO.NC2 },
-                { value: "NC3", label: NC_TIPO_ROTULO.NC3 },
-              ]}
-            />
-          </div>
-          <div>
-            <span className="ds-label">Situação</span>
-            <Select
-              ariaLabel="Filtrar por situação"
-              value={situacao}
-              onChange={setSituacao}
-              placeholder="Todas"
-              options={[
-                { value: "", label: "Todas" },
-                { value: "ABERTA", label: "Aberta" },
-                { value: "AGUARDA_SUPERVISAO", label: "Aguardando supervisão" },
-                { value: "RESOLVIDA", label: "Resolvida" },
-                { value: "LIBERADA_DIRETORIA", label: "Liberada pela diretoria" },
-              ]}
-            />
-          </div>
-          <div>
-            <span className="ds-label">Consultor</span>
-            <Select
-              ariaLabel="Filtrar por consultor"
-              value={consultorId}
-              onChange={setConsultorId}
-              placeholder="Todos"
-              options={consultorOpts}
-            />
-          </div>
-          <div>
-            <span className="ds-label">De</span>
-            <input
-              type="date"
-              className="ds-input"
-              value={from}
-              max={to || undefined}
-              onChange={(e) => setFrom(e.target.value)}
-            />
-          </div>
-          <div>
-            <span className="ds-label">Até</span>
-            <input
-              type="date"
-              className="ds-input"
-              value={to}
-              min={from || undefined}
-              onChange={(e) => setTo(e.target.value)}
-            />
-          </div>
-          <button
-            type="button"
-            className="btn-secondary px-4 py-3 disabled:opacity-50"
-            onClick={limparFiltros}
-            disabled={!temFiltro}
-          >
-            Limpar
-          </button>
-        </div>
-        <div className="mt-3 flex justify-end">
-          <Button className="px-4 py-2.5" onClick={() => setRegistrarOpen(true)}>
-            <span className="inline-flex items-center gap-2">
-              <Icon name="plus" className="h-4 w-4" /> Registrar NC de Cadastro
-            </span>
-          </Button>
-        </div>
-      </GlassCard>
+      {/* ── Ação de registro ──────────────────────────────────────────────── */}
+      <div className="mb-[18px] flex shrink-0 items-center justify-end gap-3">
+        <Button className="px-4 py-2.5" onClick={() => setRegistrarOpen(true)}>
+          <span className="inline-flex items-center gap-2">
+            <Icon name="plus" className="h-4 w-4" /> Registrar NC de Cadastro
+          </span>
+        </Button>
+      </div>
 
       {actionError && (
         <p
@@ -294,7 +373,12 @@ export default function NaoConformidadesPage() {
       )}
 
       {/* ── Lista ─────────────────────────────────────────────────────────── */}
-      <GlassCard className="list">
+      <GlassCard className="list flex min-h-0 flex-1 flex-col">
+        <div className="ea-scroll min-h-0 flex-1 overflow-auto">
+        {/* Bloco F: min-width para a tabela ROLAR em telas menores (em vez de esmagar as colunas),
+            no mesmo padrão das outras telas. As duas últimas colunas (Situação/ação e olho) ficam
+            fixas à direita (col-fix), com a Situação deslocada 40px (largura do olho). */}
+        <div className="min-w-[1120px]">
         <div
           className="list-head"
           style={{ gridTemplateColumns: "minmax(0,1.35fr) minmax(0,1.05fr) 126px 124px 92px 92px minmax(0,1.45fr) 40px" }}
@@ -305,8 +389,10 @@ export default function NaoConformidadesPage() {
           <span>Consultor</span>
           <span>Data adm.</span>
           <span>Registrada</span>
-          <span>Situação / ação</span>
-          <span />
+          <span className="col-fix" style={{ right: 40 }}>
+            Situação / ação
+          </span>
+          <span className="col-fix" />
         </div>
 
         {loading ? (
@@ -330,26 +416,39 @@ export default function NaoConformidadesPage() {
                 className="row"
                 style={{ gridTemplateColumns: "minmax(0,1.35fr) minmax(0,1.05fr) 126px 124px 92px 92px minmax(0,1.45fr) 40px" }}
               >
-                <div className="min-w-0">
-                  <div className="nm truncate">{nc.candidatoNome}</div>
+                {/* Ajuste 1: nome do candidato à ESQUERDA (título da coluna segue centralizado). */}
+                <div className="min-w-0 text-left">
+                  <div className="nm truncate" title={nc.candidatoNome}>
+                    {nc.candidatoNome}
+                  </div>
                   <div className="meta truncate" title={nc.detalhe ?? ""}>
                     {nc.detalhe ?? "não informado"}
                   </div>
                 </div>
-                <div className="min-w-0">
-                  <div className="meta truncate text-text">{nc.clienteRazao}</div>
+                <div className="min-w-0 text-center">
+                  <div className="meta truncate text-text" title={nc.clienteRazao}>
+                    {nc.clienteRazao}
+                  </div>
                   <div className="meta truncate">Código {nc.codCliente}</div>
                 </div>
-                <div className="min-w-0">
+                <div className="min-w-0 text-center">
                   <Pill tone="nt">{nc.tipo}</Pill>
                   <div className="meta mt-1 truncate">{NC_TIPO_ROTULO[nc.tipo]}</div>
                 </div>
-                <div className="meta truncate">{nc.consultorNome ?? "não informado"}</div>
-                <div className="meta">{fmtDataAdmissao(nc.dataAdmissao)}</div>
-                <div className="meta">{fmtData(nc.criadoEm)}</div>
+                <div
+                  className="meta truncate text-center"
+                  title={nc.consultorNome ?? "não informado"}
+                >
+                  {nc.consultorNome ?? "não informado"}
+                </div>
+                <div className="meta text-center">{fmtDataAdmissao(nc.dataAdmissao)}</div>
+                <div className="meta text-center">{fmtData(nc.criadoEm)}</div>
 
                 {/* Situação + ações */}
-                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <div
+                  className="col-fix flex min-w-0 flex-wrap items-center justify-center gap-2"
+                  style={{ right: 40 }}
+                >
                   <Pill tone={SIT_TONE[nc.situacao]}>{SIT_ROTULO[nc.situacao]}</Pill>
 
                   {nc.status !== "RESOLVIDA" && nc.situacao !== "LIBERADA_DIRETORIA" && (
@@ -401,20 +500,25 @@ export default function NaoConformidadesPage() {
                   )}
                 </div>
 
-                <button
-                  type="button"
-                  className="grid h-8 w-8 place-items-center rounded-lg text-faint transition hover:bg-[var(--surface-2)] hover:text-accent"
-                  title="Ver ficha (somente leitura)"
-                  aria-label={`Ver ficha de ${nc.candidatoNome}`}
-                  onClick={() => setViewId(nc.admissaoId)}
-                >
-                  <Icon name="eye" className="h-[18px] w-[18px]" />
-                </button>
+                <div className="col-fix grid place-items-center">
+                  <button
+                    type="button"
+                    className="grid h-8 w-8 place-items-center rounded-lg text-faint transition hover:bg-[var(--surface-2)] hover:text-accent"
+                    title="Ver ficha (somente leitura)"
+                    aria-label={`Ver ficha de ${nc.candidatoNome}`}
+                    onClick={() => setViewId(nc.admissaoId)}
+                  >
+                    <Icon name="eye" className="h-[18px] w-[18px]" />
+                  </button>
+                </div>
               </div>
             );
           })
         )}
+        </div>
+        </div>
       </GlassCard>
+      </div>
 
       {viewId && <AdmissaoDetalheModal admissaoId={viewId} onClose={() => setViewId(null)} />}
       {liberacaoNc && (

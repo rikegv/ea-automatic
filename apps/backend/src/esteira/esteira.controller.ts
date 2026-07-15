@@ -16,6 +16,7 @@ import { FileInterceptor } from "@nestjs/platform-express";
 import type { Response } from "express";
 import { CurrentUser } from "../auth/decorators";
 import type { AuthUser } from "../auth/auth.types";
+import { parseMulti } from "../common/parse-multi";
 import { AgendamentoExameDto } from "./dto/agendamento-exame.dto";
 import { PatchStatusDto } from "./dto/patch-status.dto";
 import { RelatorioClinicaDto } from "./dto/relatorio-clinica.dto";
@@ -45,7 +46,13 @@ export class EsteiraController {
     @Query("to") to?: string,
     @Query("q") q?: string,
   ) {
-    return this.esteira.listar(frente, { codCliente, status, from, to, q });
+    return this.esteira.listar(frente, {
+      codCliente: parseMulti(codCliente),
+      status: parseMulti(status),
+      from,
+      to,
+      q,
+    });
   }
 
   /** Muda o status de uma frente; mantém o gate do Cadastro e a trilha de eventos. */

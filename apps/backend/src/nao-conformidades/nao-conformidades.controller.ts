@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Param, Patch, Post, Query } from "@nestjs/common";
 import { CurrentUser, Roles } from "../auth/decorators";
 import type { AuthUser } from "../auth/auth.types";
+import { parseMulti } from "../common/parse-multi";
 import {
   DecidirLiberacaoDto,
   RegistrarNc3Dto,
@@ -19,13 +20,23 @@ export class NaoConformidadesController {
 
   @Get()
   listar(
+    @Query("q") q?: string,
     @Query("tipo") tipo?: string,
     @Query("consultorId") consultorId?: string,
     @Query("situacao") situacao?: string,
+    @Query("codCliente") codCliente?: string,
     @Query("from") from?: string,
     @Query("to") to?: string,
   ) {
-    return this.nc.listar({ tipo, consultorId, situacao, from, to });
+    return this.nc.listar({
+      q,
+      tipo: parseMulti(tipo),
+      consultorId: parseMulti(consultorId),
+      situacao: parseMulti(situacao),
+      codCliente: parseMulti(codCliente),
+      from,
+      to,
+    });
   }
 
   /** NC-3 manual (Cadastro incompleto) — flags manuais até kit/assinatura existirem (F9/INT-4). */

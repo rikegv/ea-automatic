@@ -5,7 +5,8 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { and, count, desc, eq, gte, lt, ne } from "drizzle-orm";
+import { and, count, desc, eq, gte, ilike, inArray, lt, ne, or } from "drizzle-orm";
+import { normalizeCpf } from "@ea/shared-types";
 import type { AuthUser } from "../auth/auth.types";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
@@ -25,9 +26,13 @@ import type {
 } from "./dto/nc.dto";
 
 export interface NcFiltros {
-  tipo?: string;
-  consultorId?: string;
-  situacao?: string;
+  // Busca rápida (Bloco C): nome, CPF ou cliente, num campo só.
+  q?: string;
+  // Multi-select (Bloco B): OU dentro do mesmo filtro. Vazio/ausente = sem filtro.
+  tipo?: string[];
+  consultorId?: string[];
+  situacao?: string[];
+  codCliente?: string[];
   from?: string;
   to?: string;
 }
@@ -41,8 +46,26 @@ export class NaoConformidadesService {
   /** Lista de NCs (com filtros) + contador penalizante por consultor (gestão). */
   async listar(filtros: NcFiltros) {
     const where = [];
-    if (filtros.tipo) where.push(eq(naoConformidades.tipo, filtros.tipo as "NC1" | "NC2" | "NC3"));
-    if (filtros.consultorId) where.push(eq(naoConformidades.consultorId, filtros.consultorId));
+    if (filtros.tipo?.length) {
+      where.push(inArray(naoConformidades.tipo, filtros.tipo as ("NC1" | "NC2" | "NC3")[]));
+    }
+    if (filtros.consultorId?.length) {
+      where.push(inArray(naoConformidades.consultorId, filtros.consultorId));
+    }
+    if (filtros.codCliente?.length) where.push(inArray(admissoes.codCliente, filtros.codCliente));
+    const q = filtros.q?.trim();
+    if (q) {
+      // Busca rápida (Bloco C): NOME, CPF e CLIENTE (razão/operação/código).
+      const cpfDigits = normalizeCpf(q);
+      const conds = [
+        ilike(candidatos.nome, `%${q}%`),
+        ilike(clientes.razaoSocial, `%${q}%`),
+        ilike(clientes.nomeOperacao, `%${q}%`),
+        ilike(clientes.codCliente, `%${q}%`),
+      ];
+      if (cpfDigits.length >= 3) conds.push(ilike(candidatos.cpf, `%${cpfDigits}%`));
+      where.push(or(...conds)!);
+    }
     if (filtros.from) {
       if (!DATA_RE.test(filtros.from)) throw new BadRequestException("from inválido (YYYY-MM-DD)");
       where.push(gte(naoConformidades.criadoEm, new Date(`${filtros.from}T00:00:00`)));
@@ -92,7 +115,7 @@ export class NaoConformidadesService {
         situacao: ncSituacao(r.status, r.liberacaoStatus),
         penaliza: penalizaConsultor(r.liberacaoStatus),
       }))
-      .filter((r) => !filtros.situacao || r.situacao === filtros.situacao);
+      .filter((r) => !filtros.situacao?.length || filtros.situacao.includes(r.situacao));
 
     // Contador penalizante por consultor (independe dos filtros de exibição) — visão de gestão.
     const contadorRows = await this.db

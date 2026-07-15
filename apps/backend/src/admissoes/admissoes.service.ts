@@ -33,13 +33,15 @@ import type { UpdateAdmissaoDto } from "./dto/update-admissao.dto";
 
 export interface ListarAdmissoesFiltros {
   q?: string;
-  codCliente?: string;
-  cargoId?: string;
-  tipoContrato?: string;
-  farol?: string;
-  sinalizador?: string;
+  // Multi-select (Bloco B): OU dentro do mesmo filtro (inArray). Vazio/ausente = sem filtro.
+  codCliente?: string[];
+  cargoId?: string[];
+  tipoContrato?: string[];
+  farol?: string[];
+  sinalizador?: string[];
   concluido?: boolean;
   comPendencias?: boolean;
+  emAndamento?: boolean;
   from?: string;
   to?: string;
   page?: number;
@@ -303,11 +305,11 @@ export class AdmissoesService {
 
     // Filtros base (compartilhados pela lista e pelos KPIs).
     const base = [];
-    if (filtros.codCliente) base.push(eq(admissoes.codCliente, filtros.codCliente));
-    if (filtros.cargoId) base.push(eq(admissoes.cargoId, filtros.cargoId));
-    if (filtros.tipoContrato) base.push(eq(admissoes.tipoContrato, filtros.tipoContrato));
-    if (filtros.sinalizador) {
-      base.push(eq(admissoes.sinalizadorPreenchimento, filtros.sinalizador as "PENDENTE"));
+    if (filtros.codCliente?.length) base.push(inArray(admissoes.codCliente, filtros.codCliente));
+    if (filtros.cargoId?.length) base.push(inArray(admissoes.cargoId, filtros.cargoId));
+    if (filtros.tipoContrato?.length) base.push(inArray(admissoes.tipoContrato, filtros.tipoContrato));
+    if (filtros.sinalizador?.length) {
+      base.push(inArray(admissoes.sinalizadorPreenchimento, filtros.sinalizador as "PENDENTE"[]));
     }
     if (filtros.from) {
       if (!DATA_RE.test(filtros.from)) throw new BadRequestException("from inválido (YYYY-MM-DD)");
@@ -319,11 +321,16 @@ export class AdmissoesService {
     }
     const q = filtros.q?.trim();
     if (q) {
+      // Busca rápida (Bloco C): NOME, CPF e CLIENTE (razão/operação/código), tudo num campo só.
       const cpfDigits = normalizeCpf(q);
-      const porNome = ilike(candidatos.nome, `%${q}%`);
-      base.push(
-        cpfDigits.length >= 3 ? or(porNome, ilike(candidatos.cpf, `%${cpfDigits}%`))! : porNome,
-      );
+      const conds = [
+        ilike(candidatos.nome, `%${q}%`),
+        ilike(clientes.razaoSocial, `%${q}%`),
+        ilike(clientes.nomeOperacao, `%${q}%`),
+        ilike(clientes.codCliente, `%${q}%`),
+      ];
+      if (cpfDigits.length >= 3) conds.push(ilike(candidatos.cpf, `%${cpfDigits}%`));
+      base.push(or(...conds)!);
     }
 
     // "Concluído" = existe frente CADASTRO_CONTRATO concluída.
@@ -335,17 +342,24 @@ export class AdmissoesService {
     // histórico. Mesma exclusão por farol que a Esteira aplica nas filas operacionais.
     const comPendenciaExpr = sql<boolean>`(${admissoes.sinalizadorPreenchimento} <> 'OK' AND ${admissoes.farolGlobal} NOT IN ('DECLINOU', 'RESCISAO'))`;
 
-    // Filtros de status (farol/concluído/pendências): só na lista, não nos KPIs (os cards mostram
-    // a distribuição do conjunto base e funcionam como botão de filtro, §A.12).
+    // "Em andamento" = admissão EM ABERTO no geral: nem concluída nem declínio/rescisão. São os faróis
+    // de processo vivo (EM_ADMISSAO, BANCO_AGUARDAR). Numa base histórica dá ~0; o card fica pronto para
+    // quando o EA operar admissões vivas (Bloco A).
+    const emAndamentoExpr = sql<boolean>`${admissoes.farolGlobal} IN ('EM_ADMISSAO', 'BANCO_AGUARDAR')`;
+
+    // Filtros de status (farol/concluído/pendências/em andamento): só na lista, não nos KPIs (os cards
+    // mostram a distribuição do conjunto base e funcionam como botão de filtro, §A.12).
     const listWhere = [...base];
-    if (filtros.farol) listWhere.push(eq(admissoes.farolGlobal, filtros.farol as FarolGlobal));
+    if (filtros.farol?.length) listWhere.push(inArray(admissoes.farolGlobal, filtros.farol as FarolGlobal[]));
     if (filtros.concluido) listWhere.push(concluidoExpr);
     if (filtros.comPendencias) listWhere.push(comPendenciaExpr);
+    if (filtros.emAndamento) listWhere.push(emAndamentoExpr);
 
     const [{ total }] = await this.db
       .select({ total: count() })
       .from(admissoes)
       .innerJoin(candidatos, eq(admissoes.candidatoCpf, candidatos.cpf))
+      .innerJoin(clientes, eq(admissoes.codCliente, clientes.codCliente))
       .where(listWhere.length ? and(...listWhere) : undefined);
 
     const items = await this.db
@@ -421,13 +435,14 @@ export class AdmissoesService {
     const [kpi] = await this.db
       .select({
         total: sql<number>`count(*)::int`,
-        ativos: sql<number>`count(*) filter (where ${admissoes.farolGlobal} = 'EM_ADMISSAO')::int`,
-        declinados: sql<number>`count(*) filter (where ${admissoes.farolGlobal} = 'DECLINOU')::int`,
+        emAndamento: sql<number>`count(*) filter (where ${emAndamentoExpr})::int`,
+        declinados: sql<number>`count(*) filter (where ${admissoes.farolGlobal} IN ('DECLINOU', 'RESCISAO'))::int`,
         concluidos: sql<number>`count(*) filter (where ${concluidoExpr})::int`,
         comPendencias: sql<number>`count(*) filter (where ${comPendenciaExpr})::int`,
       })
       .from(admissoes)
       .innerJoin(candidatos, eq(admissoes.candidatoCpf, candidatos.cpf))
+      .innerJoin(clientes, eq(admissoes.codCliente, clientes.codCliente))
       .where(base.length ? and(...base) : undefined);
 
     return {
@@ -439,7 +454,7 @@ export class AdmissoesService {
       tiposContrato: tiposContratoRows.map((r) => r.tipo).filter((t): t is string => Boolean(t)),
       kpis: {
         total: kpi?.total ?? 0,
-        ativos: kpi?.ativos ?? 0,
+        emAndamento: kpi?.emAndamento ?? 0,
         concluidos: kpi?.concluidos ?? 0,
         declinados: kpi?.declinados ?? 0,
         comPendencias: kpi?.comPendencias ?? 0,

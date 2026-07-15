@@ -53,8 +53,9 @@ const ROTA_PARA_TIPO: Record<string, FrenteTipo> = {
 };
 
 export interface EsteiraFiltros {
-  codCliente?: string;
-  status?: string;
+  // Multi-select (Bloco B): OU dentro do mesmo filtro (inArray). Vazio/ausente = sem filtro.
+  codCliente?: string[];
+  status?: string[];
   from?: string;
   to?: string;
   /** Busca por candidato (nome ou CPF) — F7. Quando presente, REVELA também as frentes já
@@ -98,8 +99,8 @@ export class EsteiraService {
       eq(frentesAdmissao.tipo, tipo),
       notInArray(admissoes.farolGlobal, ["DECLINOU", "RESCISAO"]),
     ];
-    if (filtros.codCliente) {
-      clientePeriodo.push(eq(admissoes.codCliente, filtros.codCliente));
+    if (filtros.codCliente?.length) {
+      clientePeriodo.push(inArray(admissoes.codCliente, filtros.codCliente));
     }
     if (filtros.from) {
       if (!DATA_RE.test(filtros.from)) throw new BadRequestException("from inválido (YYYY-MM-DD)");
@@ -116,14 +117,16 @@ export class EsteiraService {
     const q = filtros.q?.trim();
     const buscandoCandidato = Boolean(q);
 
-    // Itens aplicam também o filtro de status.
+    // Itens aplicam também o filtro de status (multi-select, Bloco B: OU dentro do filtro).
     const itensWhere = [...clientePeriodo];
-    if (filtros.status) {
-      itensWhere.push(eq(frentesAdmissao.status, filtros.status));
+    if (filtros.status?.length) {
+      itensWhere.push(inArray(frentesAdmissao.status, filtros.status));
     }
     // Item 1 (2C): ao concluir, o candidato SOME da fila principal. A busca por candidato (ou o
-    // filtro explícito pelo status de conclusão) o reexpõe — fica acessível pela busca avançada.
-    if (!buscandoCandidato && filtros.status !== STATUS_CONCLUI[tipo]) {
+    // filtro explícito PELO status de conclusão) o reexpõe. Com multi-select, basta que UM dos status
+    // marcados seja o de conclusão para revelar as concluídas.
+    const filtraStatusConclui = Boolean(filtros.status?.includes(STATUS_CONCLUI[tipo]));
+    if (!buscandoCandidato && !filtraStatusConclui) {
       const naoConcluida = eq(frentesAdmissao.concluida, false);
       if (tipo === "CADASTRO_CONTRATO") {
         // INT-4: "Aguardando assinatura" (e "Cancelado", à espera de reenvio) é trabalho EM
@@ -141,11 +144,16 @@ export class EsteiraService {
       }
     }
     if (q) {
+      // Busca rápida (Bloco C): NOME, CPF e CLIENTE (razão/operação/código).
       const cpfDigits = normalizeCpf(q);
-      const porNome = ilike(candidatos.nome, `%${q}%`);
-      itensWhere.push(
-        cpfDigits.length >= 3 ? or(porNome, ilike(candidatos.cpf, `%${cpfDigits}%`))! : porNome,
-      );
+      const conds = [
+        ilike(candidatos.nome, `%${q}%`),
+        ilike(clientes.razaoSocial, `%${q}%`),
+        ilike(clientes.nomeOperacao, `%${q}%`),
+        ilike(clientes.codCliente, `%${q}%`),
+      ];
+      if (cpfDigits.length >= 3) conds.push(ilike(candidatos.cpf, `%${cpfDigits}%`));
+      itensWhere.push(or(...conds)!);
     }
 
     const rows = await this.db

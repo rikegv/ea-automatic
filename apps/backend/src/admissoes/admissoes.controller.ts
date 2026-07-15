@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from "@nestjs/common";
 import { CurrentUser, Roles } from "../auth/decorators";
 import type { AuthUser } from "../auth/auth.types";
+import { parseMulti } from "../common/parse-multi";
 import { AdmissoesService } from "./admissoes.service";
 import { CreateAdmissaoDto } from "./dto/create-admissao.dto";
 import { UpdateAdmissaoDto } from "./dto/update-admissao.dto";
@@ -22,6 +23,7 @@ export class AdmissoesController {
     @Query("sinalizador") sinalizador?: string,
     @Query("concluido") concluido?: string,
     @Query("comPendencias") comPendencias?: string,
+    @Query("emAndamento") emAndamento?: string,
     @Query("from") from?: string,
     @Query("to") to?: string,
     @Query("page") page?: string,
@@ -29,13 +31,14 @@ export class AdmissoesController {
   ) {
     return this.admissoes.listar({
       q,
-      codCliente,
-      cargoId,
-      tipoContrato,
-      farol,
-      sinalizador,
+      codCliente: parseMulti(codCliente),
+      cargoId: parseMulti(cargoId),
+      tipoContrato: parseMulti(tipoContrato),
+      farol: parseMulti(farol),
+      sinalizador: parseMulti(sinalizador),
       concluido: concluido === "true",
       comPendencias: comPendencias === "true",
+      emAndamento: emAndamento === "true",
       from,
       to,
       page: page ? Number(page) : undefined,

@@ -12,7 +12,10 @@ import { PendenciasBadge } from "@/components/ui/PendenciasBadge";
 import { OrigemBadge } from "@/components/ui/OrigemBadge";
 import { Icon } from "@/components/ui/Icon";
 import { GoogleDriveLogo } from "@/components/ui/GoogleDriveLogo";
+import { ExcelLogo } from "@/components/ui/ExcelLogo";
 import { Select } from "@/components/ui/Select";
+import { FiltroTrigger, FiltroCampo } from "@/components/ui/FiltroTrigger";
+import { MultiSelect } from "@/components/ui/MultiSelect";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AdmissaoDetalheModal } from "@/components/esteira/AdmissaoDetalheModal";
 import { clicksignPill } from "@/lib/clicksign";
@@ -181,12 +184,10 @@ export default function EsteiraPage() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  // Filtros (F7)
-  const [codCliente, setCodCliente] = useState("");
-  const [cliQuery, setCliQuery] = useState("");
-  const [cliResults, setCliResults] = useState<ClienteLite[]>([]);
-  const [cliOpen, setCliOpen] = useState(false);
-  const [statusFiltro, setStatusFiltro] = useState("");
+  // Filtros (F7), agora no modal premium (Bloco B): cliente e status multi-select.
+  const [codClientes, setCodClientes] = useState<string[]>([]);
+  const [clientes, setClientes] = useState<ClienteLite[]>([]);
+  const [statusFiltro, setStatusFiltro] = useState<string[]>([]);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   // Busca por candidato (item 3), nome ou CPF; revela também concluídos (item 1).
@@ -233,8 +234,8 @@ export default function EsteiraPage() {
     setLoading(true);
     setLoadError(null);
     const qs = new URLSearchParams();
-    if (codCliente) qs.set("codCliente", codCliente);
-    if (statusFiltro) qs.set("status", statusFiltro);
+    if (codClientes.length) qs.set("codCliente", codClientes.join(","));
+    if (statusFiltro.length) qs.set("status", statusFiltro.join(","));
     if (from) qs.set("from", from);
     if (to) qs.set("to", to);
     if (candDebounced) qs.set("q", candDebounced);
@@ -248,7 +249,7 @@ export default function EsteiraPage() {
     } finally {
       setLoading(false);
     }
-  }, [token, rota, codCliente, statusFiltro, from, to, candDebounced]);
+  }, [token, rota, codClientes, statusFiltro, from, to, candDebounced]);
 
   useEffect(() => {
     load();
@@ -257,7 +258,7 @@ export default function EsteiraPage() {
   // Troca de aba: o filtro de status é específico da frente, reseta para não vazar código inválido.
   function trocarAba(i: number) {
     if (i === aba) return;
-    setStatusFiltro("");
+    setStatusFiltro([]);
     setActionError(null);
     setFlash(null);
     setSelecionados(new Set());
@@ -266,39 +267,41 @@ export default function EsteiraPage() {
     setAba(i);
   }
 
-  // ── Autocomplete de cliente (debounce ~300ms) ───────────────────────────────
+  // ── Catálogo de clientes (carrega todos uma vez p/ o multi-select do modal) ──
   useEffect(() => {
-    const q = cliQuery.trim();
-    if (!token || !q || !cliOpen) {
-      setCliResults([]);
-      return;
-    }
-    const handle = setTimeout(() => {
-      apiFetch<ClienteLite[]>(`/catalogos/clientes?q=${encodeURIComponent(q)}`, { token })
-        .then(setCliResults)
-        .catch(() => setCliResults([]));
-    }, 300);
-    return () => clearTimeout(handle);
-  }, [cliQuery, token, cliOpen]);
+    if (!token) return;
+    apiFetch<ClienteLite[]>("/catalogos/clientes", { token })
+      .then(setClientes)
+      .catch(() => setClientes([]));
+  }, [token]);
 
-  function selecionarCliente(c: ClienteLite) {
-    setCodCliente(c.codCliente);
-    setCliQuery(c.razaoSocial);
-    setCliOpen(false);
-    setCliResults([]);
-  }
+  const clienteOptions = useMemo(
+    () =>
+      clientes.map((c) => ({
+        value: c.codCliente,
+        label: c.nomeOperacao || c.razaoSocial,
+      })),
+    [clientes],
+  );
+  const statusOptions = useMemo(
+    () => (data?.statusCatalogo ?? []).map((c) => ({ value: c.codigo, label: c.rotulo })),
+    [data],
+  );
+
   function limparFiltros() {
-    setCodCliente("");
-    setCliQuery("");
-    setCliResults([]);
-    setCliOpen(false);
-    setStatusFiltro("");
+    setCodClientes([]);
+    setStatusFiltro([]);
     setFrom("");
     setTo("");
     setCandQuery("");
-    setSoPendencias(false);
   }
-  const temFiltro = Boolean(codCliente || statusFiltro || from || to || candQuery || soPendencias);
+  const temFiltro = Boolean(
+    codClientes.length || statusFiltro.length || from || to || candQuery || soPendencias,
+  );
+  // Contagem de filtros ATIVOS do modal (badge do gatilho): cliente, status, período. A busca rápida
+  // (candQuery) vive fora do modal, na barra do cabeçalho, e NÃO entra no badge do gatilho.
+  const filtroCount =
+    (codClientes.length ? 1 : 0) + (statusFiltro.length ? 1 : 0) + (from || to ? 1 : 0);
 
   // ── PATCH de status (avanço/reversão/aceite) ────────────────────────────────
   const doPatch = useCallback(
@@ -494,7 +497,7 @@ export default function EsteiraPage() {
   const gridMin = isExame ? "min-w-[1680px]" : "min-w-[1480px]";
 
   function toggleStatusKpi(code: string) {
-    setStatusFiltro((cur) => (cur === code ? "" : code));
+    setStatusFiltro((cur) => (cur.includes(code) ? cur.filter((c) => c !== code) : [...cur, code]));
   }
 
   // ── Relatório da clínica (aba Exame) ────────────────────────────────────────
@@ -559,12 +562,107 @@ export default function EsteiraPage() {
 
   return (
     <>
-      <div className="mb-[26px]">
+      {/* Bloco F: página em coluna flex ocupando a altura da viewport. Cabeçalho, abas e cards são
+          fixos (shrink-0); a tabela preenche o resto (flex-1) e rola internamente, então a barra de
+          rolagem (horizontal e vertical) fica SEMPRE acessível, sem caçar o rodapé da página, e a
+          coluna Ações fica fixa à direita durante o scroll horizontal. */}
+      <div className="flex h-[calc(100dvh-72px)] flex-col">
+      <div className="mb-[26px] flex shrink-0 items-center justify-between gap-3">
         <h1 className="text-[26px] font-extrabold">Farol Admissional</h1>
+        <div className="flex items-center gap-2.5">
+          {/* Busca rápida na tela (fora do modal): liga no mesmo candQuery; o backend busca nome, CPF
+              e cliente. Barra tipo cilindro (rounded-full). */}
+          <input
+            className="ds-input rounded-full w-[300px]"
+            placeholder="Buscar por nome, CPF ou cliente"
+            aria-label="Buscar por nome, CPF ou cliente"
+            value={candQuery}
+            onChange={(e) => setCandQuery(e.target.value)}
+          />
+          {/* Botão discreto: só aparece quando há filtro ativo que o Limpar zera (cliente/status/busca/
+              período). Mesma cobertura da função limparFiltros. */}
+          {Boolean(codClientes.length || statusFiltro.length || from || to || candQuery) && (
+            <button
+              type="button"
+              onClick={limparFiltros}
+              className="flex-none text-sm text-dim transition hover:text-danger"
+              title="Limpar todos os filtros"
+            >
+              Limpar filtro
+            </button>
+          )}
+          {/* Bloco E: "Gerar Relatório Clínica" movido para o topo, ao lado do filtro, na aba Exame.
+              Mesmo padrão premium do ícone do Drive (ExcelLogo). Função 100% preservada (dispara
+              gerarRelatorioClinica sobre a seleção). Divisória delicada entre o Excel e o filtro. */}
+          {isExame && (
+            <>
+              <button
+                type="button"
+                onClick={() => void gerarRelatorioClinica()}
+                disabled={selecionados.size === 0 || gerandoRelatorio}
+                aria-label="Gerar relatório da clínica"
+                title={
+                  selecionados.size === 0
+                    ? "Selecione ao menos um candidato na fila para gerar o relatório da clínica"
+                    : `Gerar o relatório da clínica (${selecionados.size} selecionado${selecionados.size > 1 ? "s" : ""})`
+                }
+                className="grid h-11 w-11 flex-none place-items-center rounded-xl border border-[var(--border)] bg-[var(--surface)] transition hover:bg-[var(--surface-2)] disabled:opacity-40 disabled:hover:bg-[var(--surface)]"
+              >
+                {gerandoRelatorio ? <Spinner /> : <ExcelLogo className="h-[20px] w-[20px]" />}
+              </button>
+              <div
+                aria-hidden="true"
+                className="h-6 w-px flex-none bg-[color-mix(in_srgb,var(--border-strong)_70%,transparent)]"
+              />
+            </>
+          )}
+          <FiltroTrigger count={filtroCount} onLimpar={limparFiltros}>
+            <FiltroCampo label="Cliente">
+            <MultiSelect
+              ariaLabel="Filtrar por cliente"
+              values={codClientes}
+              onChange={setCodClientes}
+              options={clienteOptions}
+              placeholder="Todos os clientes"
+            />
+          </FiltroCampo>
+
+          <FiltroCampo label="Status">
+            <MultiSelect
+              ariaLabel="Filtrar por status"
+              values={statusFiltro}
+              onChange={setStatusFiltro}
+              options={statusOptions}
+              placeholder="Todos os status"
+            />
+          </FiltroCampo>
+
+          <FiltroCampo label="Período">
+            <div className="grid grid-cols-2 gap-2">
+              <input
+                type="date"
+                className="ds-input"
+                aria-label="Data inicial"
+                value={from}
+                max={to || undefined}
+                onChange={(e) => setFrom(e.target.value)}
+              />
+              <input
+                type="date"
+                className="ds-input"
+                aria-label="Data final"
+                value={to}
+                min={from || undefined}
+                onChange={(e) => setTo(e.target.value)}
+              />
+            </div>
+          </FiltroCampo>
+          </FiltroTrigger>
+        </div>
       </div>
 
       {/* ── Abas ─────────────────────────────────────────────────────────── */}
-      <div className="mb-[22px] flex gap-2">
+      <div className="mb-[22px] flex shrink-0 gap-2">
         {ABAS.map((a, i) => (
           <button
             key={a.rota}
@@ -580,28 +678,28 @@ export default function EsteiraPage() {
       </div>
 
       {/* ── KPIs por frente (reais; clicáveis = filtro, itens 5/9/10) ────── */}
-      <div className="mb-[18px] grid grid-cols-2 gap-[14px] sm:grid-cols-3 xl:grid-cols-5">
+      <div className="mb-[18px] grid shrink-0 grid-cols-2 gap-[14px] sm:grid-cols-3 xl:grid-cols-5">
         {/* Item 10: "Total na fila" vira toggle: clicar limpa o filtro de status (mostra todos). */}
         <GlassCard
           as="button"
           className={cn(
             "fk text-left transition hover:bg-[var(--surface-2)]",
-            statusFiltro === "" && "!border-[var(--accent)] ring-1 ring-[var(--accent)]",
+            statusFiltro.length === 0 && "!border-[var(--accent)] ring-1 ring-[var(--accent)]",
           )}
-          onClick={() => setStatusFiltro("")}
-          aria-pressed={statusFiltro === ""}
+          onClick={() => setStatusFiltro([])}
+          aria-pressed={statusFiltro.length === 0}
           title="Mostrar todos os status"
         >
           <div className="num">{loading && !data ? "…" : (data?.kpis.total ?? 0)}</div>
           <div className="lbl flex items-center gap-1.5">
             Total na fila
-            {statusFiltro === "" && <Icon name="check" className="h-3 w-3 text-accent" />}
+            {statusFiltro.length === 0 && <Icon name="check" className="h-3 w-3 text-accent" />}
           </div>
         </GlassCard>
         {kpiStatus.map((c) => {
           const tone = statusTone(c.codigo, c);
           const color = TONE_VAR[tone];
-          const ativo = statusFiltro === c.codigo;
+          const ativo = statusFiltro.includes(c.codigo);
           return (
             <GlassCard
               as="button"
@@ -650,108 +748,6 @@ export default function EsteiraPage() {
         </GlassCard>
       </div>
 
-      {/* ── Filtros (F7) ─────────────────────────────────────────────────── */}
-      <GlassCard className="mb-[18px] p-4">
-        <div className="grid gap-3 md:grid-cols-[1.4fr_1.4fr_1.1fr_0.9fr_0.9fr_auto] md:items-end">
-          {/* Candidato (nome ou CPF), item 3 */}
-          <div>
-            <span className="ds-label">Candidato</span>
-            <input
-              className="ds-input"
-              placeholder="Nome ou CPF…"
-              value={candQuery}
-              onChange={(e) => setCandQuery(e.target.value)}
-            />
-          </div>
-
-          {/* Cliente (autocomplete) */}
-          <div className="relative">
-            <span className="ds-label">Cliente</span>
-            <input
-              className="ds-input"
-              placeholder="Buscar cliente…"
-              value={cliQuery}
-              onChange={(e) => {
-                setCliQuery(e.target.value);
-                setCliOpen(true);
-                if (codCliente) setCodCliente("");
-              }}
-              onFocus={() => setCliOpen(true)}
-              onBlur={() => setTimeout(() => setCliOpen(false), 150)}
-            />
-            {cliOpen && cliResults.length > 0 && (
-              <div className="glass absolute left-0 right-0 top-[100%] z-30 mt-1 max-h-64 overflow-auto p-1.5">
-                {cliResults.map((c) => (
-                  <button
-                    key={c.codCliente}
-                    type="button"
-                    className="flex w-full flex-col items-start gap-0.5 rounded-lg px-3 py-2 text-left hover:bg-[var(--surface-2)]"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => selecionarCliente(c)}
-                  >
-                    <span className="truncate text-[13.5px] font-semibold">{c.razaoSocial}</span>
-                    <span className="truncate text-[12px] text-dim">
-                      Código {c.codCliente}
-                      {c.nomeOperacao ? ` · ${c.nomeOperacao}` : ""}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Status (do catálogo da aba), seletor estilizado (item 8) */}
-          <div>
-            <span className="ds-label">Status</span>
-            <Select
-              ariaLabel="Filtrar por status"
-              value={statusFiltro}
-              onChange={setStatusFiltro}
-              placeholder="Todos"
-              options={[
-                { value: "", label: "Todos" },
-                ...statusCatalogo.map((c) => ({
-                  value: c.codigo,
-                  label: c.rotulo,
-                  color: TONE_VAR[statusTone(c.codigo, c)],
-                })),
-              ]}
-            />
-          </div>
-
-          {/* Período */}
-          <div>
-            <span className="ds-label">De</span>
-            <input
-              type="date"
-              className="ds-input"
-              value={from}
-              max={to || undefined}
-              onChange={(e) => setFrom(e.target.value)}
-            />
-          </div>
-          <div>
-            <span className="ds-label">Até</span>
-            <input
-              type="date"
-              className="ds-input"
-              value={to}
-              min={from || undefined}
-              onChange={(e) => setTo(e.target.value)}
-            />
-          </div>
-
-          <button
-            type="button"
-            className="btn-secondary px-4 py-3 disabled:opacity-50"
-            onClick={limparFiltros}
-            disabled={!temFiltro}
-          >
-            Limpar
-          </button>
-        </div>
-      </GlassCard>
-
       {/* ── Feedback de ação ─────────────────────────────────────────────── */}
       {actionError && (
         <p
@@ -776,24 +772,10 @@ export default function EsteiraPage() {
 
       {/* ── Relatório da clínica (aba Exame): seleção múltipla → CSV ──────── */}
       {isExame && (
-        <div className="mb-[14px] flex flex-wrap items-center justify-between gap-3">
+        <div className="mb-[14px] flex shrink-0 flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-3">
-            <button
-              type="button"
-              className="btn-primary inline-flex items-center gap-2 px-4 py-2.5 text-sm disabled:opacity-50"
-              disabled={selecionados.size === 0 || gerandoRelatorio}
-              onClick={() => void gerarRelatorioClinica()}
-              title={
-                selecionados.size === 0
-                  ? "Selecione ao menos um candidato na fila"
-                  : "Baixar o CSV consolidado para a clínica"
-              }
-            >
-              {gerandoRelatorio ? <Spinner /> : <Icon name="doc" className="h-4 w-4" />}
-              {gerandoRelatorio
-                ? "Gerando…"
-                : `Gerar relatório clínica${selecionados.size > 0 ? ` (${selecionados.size})` : ""}`}
-            </button>
+            {/* Bloco E: o botão "Gerar Relatório Clínica" foi para o topo (ao lado do filtro). Aqui
+                permanece só o "Limpar seleção" de apoio. */}
             {selecionados.size > 0 && !gerandoRelatorio && (
               <button
                 type="button"
@@ -816,8 +798,8 @@ export default function EsteiraPage() {
       )}
 
       {/* ── Lista / faróis ───────────────────────────────────────────────── */}
-      <GlassCard className="list">
-        <div className="overflow-x-auto">
+      <GlassCard className="list flex min-h-0 flex-1 flex-col">
+        <div className="ea-scroll min-h-0 flex-1 overflow-auto">
           <div className={gridMin}>
             <div className="list-head" style={{ gridTemplateColumns: gridCols }}>
               {isExame && (
@@ -836,16 +818,16 @@ export default function EsteiraPage() {
                   />
                 </span>
               )}
-              <span className="text-left">Candidato</span>
-              <span className="text-left">Cliente</span>
-              <span className="text-left">Cargo</span>
+              <span>Candidato</span>
+              <span>Cliente</span>
+              <span>Cargo</span>
               <span>Data adm.</span>
               <span>Status</span>
               <span>Pendências Obrig.</span>
               <span>
                 {isExame ? "ASO / Avanço" : isAuditoria ? "Avanço / Auditoria" : "Avanço"}
               </span>
-              <span>Ações</span>
+              <span className="col-fix">Ações</span>
             </div>
 
             {loading ? (
@@ -877,7 +859,7 @@ export default function EsteiraPage() {
                     style={{ gridTemplateColumns: gridCols }}
                   >
                     {isExame && (
-                      <div className="flex items-center">
+                      <div className="flex items-center justify-center">
                         <input
                           type="checkbox"
                           className="h-4 w-4 cursor-pointer accent-[var(--accent)]"
@@ -887,9 +869,12 @@ export default function EsteiraPage() {
                         />
                       </div>
                     )}
-                    <div className="min-w-0">
-                      <div className="flex min-w-0 items-center gap-1.5">
-                        <span className="nm truncate">{item.candidatoNome}</span>
+                    {/* Ajuste 1: nome do candidato à ESQUERDA (título da coluna segue centralizado). */}
+                    <div className="min-w-0 text-left">
+                      <div className="flex min-w-0 items-center justify-start gap-1.5">
+                        <span className="nm truncate" title={item.candidatoNome}>
+                          {item.candidatoNome}
+                        </span>
                         <OrigemBadge origem={item.origem} className="flex-none" />
                       </div>
                       <div className="meta truncate">
@@ -899,12 +884,17 @@ export default function EsteiraPage() {
                       </div>
                     </div>
                     {/* Cliente: só o nome da operação (§A.12); o código vai no modal do olho. */}
-                    <div className="min-w-0">
-                      <div className="meta truncate text-text">
+                    <div className="min-w-0 text-center">
+                      <div
+                        className="meta truncate text-text"
+                        title={item.clienteOperacao || item.clienteRazao}
+                      >
                         {item.clienteOperacao || item.clienteRazao}
                       </div>
                     </div>
-                    <div className="meta truncate">{item.cargoNome}</div>
+                    <div className="meta truncate text-center" title={item.cargoNome}>
+                      {item.cargoNome}
+                    </div>
                     <div className="meta text-center">{fmtDataAdmissao(item.dataAdmissao)}</div>
                     <div className="flex min-w-0 flex-col items-center gap-1">
                       <StatusPill tone={tone} label={rotulo} />
@@ -1059,7 +1049,7 @@ export default function EsteiraPage() {
                     </div>
 
                     {/* Coluna AÇÕES: prontuário no Drive (se houver) + olho + editar. */}
-                    <div className="flex items-center justify-center gap-0.5">
+                    <div className="col-fix flex items-center justify-center gap-0.5">
                       {isAuditoria && (item.drivePastaUrl || item.driveAsoUrl) && (
                         <a
                           href={item.drivePastaUrl || item.driveAsoUrl || undefined}
@@ -1101,6 +1091,7 @@ export default function EsteiraPage() {
           </div>
         </div>
       </GlassCard>
+      </div>
 
       {/* ── Diálogos ─────────────────────────────────────────────────────── */}
       <ConfirmDialog

@@ -198,6 +198,81 @@
     color: var(--accent);
   }
 
+  /* Ícone de filtro flutuante (Bloco B): sobe e desce levemente, em loop suave e contínuo, para
+     chamar atenção sem ser agressivo. Idêntico nas três telas (Esteira, Não Conformidades,
+     Gerenciador). Respeita quem prefere menos movimento. */
+  @keyframes filtro-flutua {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-3px);
+    }
+  }
+  .filtro-flutua {
+    animation: filtro-flutua 2.2s ease-in-out infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .filtro-flutua {
+      animation: none;
+    }
+  }
+
+  /* Bloco F: barra de rolagem premium (fina, arredondada, cores do tema, clara e escura). Aplicada
+     na área de scroll das tabelas (`.ea-scroll`). Substitui o "tubo branco" padrão do navegador. */
+  .ea-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--border-strong) 85%, transparent) transparent;
+  }
+  .ea-scroll::-webkit-scrollbar {
+    height: 10px;
+    width: 10px;
+  }
+  .ea-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .ea-scroll::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--border-strong) 80%, transparent);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  .ea-scroll::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in srgb, var(--accent) 55%, var(--border-strong));
+    background-clip: padding-box;
+  }
+  .ea-scroll::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  /* Bloco F: coluna de Ações FIXA à direita. Fica sempre visível durante o scroll horizontal, então
+     o usuário nunca perde o botão de ação. Fundo fosco (blur) que cobre o conteúdo que passa por
+     baixo, no tema claro e escuro, com uma sombra premium delicada à esquerda. */
+  .col-fix {
+    position: sticky;
+    right: 0;
+    z-index: 3;
+    background: color-mix(in srgb, var(--surface-2) 88%, var(--bg));
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+  }
+  .col-fix::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 16px;
+    transform: translateX(-100%);
+    background: linear-gradient(
+      to left,
+      color-mix(in srgb, var(--bg) 24%, transparent),
+      transparent
+    );
+    pointer-events: none;
+  }
+
   /* ---- eyebrow / head ---- */
   .eyebrow {
     font-size: 12px;
