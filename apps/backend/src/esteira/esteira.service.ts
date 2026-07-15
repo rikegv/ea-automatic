@@ -16,6 +16,7 @@ import {
   candidatos,
   cargos,
   clientes,
+  motivosDeclinio,
   dadosVagaFolha,
   documentosAdmissao,
   exameAgendamento,
@@ -767,11 +768,14 @@ export class EsteiraService {
         clienteOperacao: clientes.nomeOperacao,
         cargoId: admissoes.cargoId,
         cargoNome: cargos.nome,
+        // Motivo do declínio (Fase 2): nome do catálogo, quando a admissão tem motivo vinculado.
+        motivoDeclinio: motivosDeclinio.nome,
       })
       .from(admissoes)
       .innerJoin(candidatos, eq(admissoes.candidatoCpf, candidatos.cpf))
       .innerJoin(clientes, eq(admissoes.codCliente, clientes.codCliente))
       .innerJoin(cargos, eq(admissoes.cargoId, cargos.id))
+      .leftJoin(motivosDeclinio, eq(admissoes.motivoDeclinioId, motivosDeclinio.id))
       .where(eq(admissoes.id, admissaoId));
 
     if (!adm) throw new NotFoundException("Admissão não encontrada");
@@ -881,6 +885,9 @@ export class EsteiraService {
       dataAdmissao: adm.dataAdmissao,
       tipoContrato: adm.tipoContrato,
       farolGlobal: adm.farolGlobal,
+      // Motivo do declínio (Fase 2): só é usado na tela quando o farol é de declínio; null quando
+      // a admissão não tem motivo vinculado (aparece como "não informado").
+      motivoDeclinio: adm.motivoDeclinio,
       isBanco: adm.isBanco,
       origem: adm.origem,
       drivePastaUrl: adm.drivePastaUrl,

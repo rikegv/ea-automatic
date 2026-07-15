@@ -9,6 +9,8 @@ import { KitRegrasController } from "./kit-regras/kit-regras.controller";
 import { KitRegrasService } from "./kit-regras/kit-regras.service";
 import { KitTiposController } from "./kit-regras/kit-tipos.controller";
 import { KitTiposService } from "./kit-regras/kit-tipos.service";
+import { MotivosDeclinioController } from "./motivos-declinio/motivos-declinio.controller";
+import { MotivosDeclinioService } from "./motivos-declinio/motivos-declinio.service";
 import { RegrasController } from "./regras/regras.controller";
 import { RegrasService } from "./regras/regras.service";
 import { ReguaController } from "./regua/regua.controller";
@@ -18,6 +20,7 @@ import { ReguaService } from "./regua/regua.service";
   controllers: [
     ClientesController,
     CargosController,
+    MotivosDeclinioController,
     ReguaController,
     CatalogosController,
     RegrasController,
@@ -27,6 +30,7 @@ import { ReguaService } from "./regua/regua.service";
   providers: [
     ClientesService,
     CargosService,
+    MotivosDeclinioService,
     ReguaService,
     CatalogosService,
     RegrasService,

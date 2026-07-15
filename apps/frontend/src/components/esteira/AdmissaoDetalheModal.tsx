@@ -32,6 +32,8 @@ interface AdmissaoDetalhe {
   dataAdmissao: string | null;
   tipoContrato: string | null;
   farolGlobal: string;
+  // Motivo do declínio (Fase 2): só exibido quando o farol é de declínio; null = "não informado".
+  motivoDeclinio: string | null;
   origem: Origem;
   sinalizador: string;
   // Preenchido quando a régua fecha e o prontuário é arquivado no Drive (T4 / Fase 4).
@@ -286,6 +288,16 @@ export function AdmissaoDetalheModal({
               const f = farolPill(data.farolGlobal);
               return <Pill tone={f.tone}>{f.label}</Pill>;
             })()}
+            {/* Motivo do declínio (Fase 2): claro e visível ao lado do status, só para admissões de
+                declínio. Sem motivo vinculado aparece como "não informado" (§A.11). */}
+            {(data.farolGlobal === "DECLINOU" || data.farolGlobal === "RESCISAO") && (
+              <span className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-1 text-[12.5px]">
+                <span className="text-dim">Motivo do declínio:</span>
+                <span className="font-semibold text-text">
+                  {data.motivoDeclinio || "não informado"}
+                </span>
+              </span>
+            )}
             {/* Prontuário no Drive (T4), só após a régua fechar; pasta ou ASO */}
             {(data.drivePastaUrl || data.driveAsoUrl) && (
               <a

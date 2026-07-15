@@ -97,6 +97,16 @@ export const cargos = pgTable("cargos", {
   atualizadoEm,
 });
 
+// ── Motivo de declínio (catálogo próprio, mesmo padrão de Cargo) ─────────────
+// Motivo pelo qual uma admissão declinou (25 canônicos aprovados na Fase 1). Soft-delete por `ativo`.
+export const motivosDeclinio = pgTable("motivos_declinio", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  nome: varchar("nome", { length: 160 }).notNull().unique(),
+  ativo: boolean("ativo").notNull().default(true),
+  criadoEm,
+  atualizadoEm,
+});
+
 // ── TipoDocumento (21 tipos) ────────────────────────────────────────────────
 export const tiposDocumento = pgTable("tipos_documento", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -249,6 +259,11 @@ export const admissoes = pgTable("admissoes", {
   clicksignEnvelopeId: varchar("clicksign_envelope_id", { length: 80 }),
   clicksignStatus: clicksignStatusEnum("clicksign_status").notNull().default("SEM_ENVELOPE"),
   contratoAssinadoDriveUrl: text("contrato_assinado_drive_url"),
+  // Motivo do declínio (Fase 2). FK NULLABLE para o catálogo `motivos_declinio`; só faz sentido
+  // quando o farol é de declínio. ON DELETE SET NULL: inativar/remover um motivo não apaga a admissão.
+  motivoDeclinioId: uuid("motivo_declinio_id").references(() => motivosDeclinio.id, {
+    onDelete: "set null",
+  }),
   criadoEm,
   atualizadoEm,
 });
