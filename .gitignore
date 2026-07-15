@@ -51,3 +51,12 @@ relatorio-clinica-exemplo.csv
 
 # base de dados de clientes (planilha de insumo, contém dados de cliente §A.6); fica só em disco, não versionar
 /BASE ATUALIZADA CLIENTES 07-07.xlsx
+
+# Insumos de dados (planilhas e extrações): podem conter CPF e dados pessoais de candidato (§A.6).
+# Regra genérica, para que toda planilha futura nasça protegida sem depender de lembrar do nome.
+# Ficam só em disco, na VM; nunca no repositório.
+*.xlsx
+*.csv
+# Exceção: bases de carga versionadas de propósito (dados de cliente/régua, sem dado pessoal),
+# consumidas pelos seeds do backend.
+!apps/backend/src/db/data/*.csv
