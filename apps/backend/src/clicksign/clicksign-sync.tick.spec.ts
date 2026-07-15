@@ -33,7 +33,9 @@ interface AdmRow {
 }
 
 function montar(opts: { selectResults: unknown[]; status?: string; url?: string }) {
-  const consultarStatus = vi.fn().mockResolvedValue(opts.status ? { status: opts.status } : undefined);
+  const consultarStatus = vi
+    .fn()
+    .mockResolvedValue(opts.status ? { status: opts.status } : undefined);
   const obterUrlAssinado = vi.fn().mockResolvedValue(opts.url);
   const api = { estaAtivo: () => true, consultarStatus, obterUrlAssinado };
 
@@ -139,9 +141,7 @@ describe("ClicksignSyncService.processarTick — ciclo de verificação (INT-4 /
 
     await svc.processarTick();
 
-    expect(setCalls).toEqual([
-      expect.objectContaining({ clicksignStatus: "CANCELADO" }),
-    ]);
+    expect(setCalls).toEqual([expect.objectContaining({ clicksignStatus: "CANCELADO" })]);
     expect(obterUrlAssinado).not.toHaveBeenCalled();
     expect(ai.arquivarDrive).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();

@@ -36,7 +36,9 @@ export function FiltroTrigger({
         type="button"
         onClick={() => setOpen(true)}
         aria-label={ativo ? `Filtros (${count} ativo${count > 1 ? "s" : ""})` : "Abrir filtros"}
-        title={ativo ? `${count} filtro${count > 1 ? "s" : ""} ativo${count > 1 ? "s" : ""}` : "Filtrar"}
+        title={
+          ativo ? `${count} filtro${count > 1 ? "s" : ""} ativo${count > 1 ? "s" : ""}` : "Filtrar"
+        }
         className={cn(
           "relative grid h-11 w-11 flex-none place-items-center rounded-xl border transition",
           ativo

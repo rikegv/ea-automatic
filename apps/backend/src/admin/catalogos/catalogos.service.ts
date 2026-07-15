@@ -167,9 +167,7 @@ export class CatalogosService {
       })
       .from(reguaDocumental)
       .innerJoin(tiposDocumento, eq(reguaDocumental.tipoDocumentoId, tiposDocumento.id))
-      .where(
-        and(eq(reguaDocumental.codCliente, codCliente), eq(reguaDocumental.cargoId, cargoId)),
-      )
+      .where(and(eq(reguaDocumental.codCliente, codCliente), eq(reguaDocumental.cargoId, cargoId)))
       .orderBy(asc(tiposDocumento.nome));
   }
 

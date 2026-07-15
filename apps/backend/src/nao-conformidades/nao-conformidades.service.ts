@@ -10,20 +10,9 @@ import { normalizeCpf } from "@ea/shared-types";
 import type { AuthUser } from "../auth/auth.types";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
-import {
-  admissoes,
-  candidatos,
-  cargos,
-  clientes,
-  naoConformidades,
-  usuarios,
-} from "../db/schema";
+import { admissoes, candidatos, cargos, clientes, naoConformidades, usuarios } from "../db/schema";
 import { ncSituacao, penalizaConsultor } from "../domain/nao-conformidade";
-import type {
-  DecidirLiberacaoDto,
-  RegistrarNc3Dto,
-  SolicitarLiberacaoDto,
-} from "./dto/nc.dto";
+import type { DecidirLiberacaoDto, RegistrarNc3Dto, SolicitarLiberacaoDto } from "./dto/nc.dto";
 
 export interface NcFiltros {
   // Busca rápida (Bloco C): nome, CPF ou cliente, num campo só.

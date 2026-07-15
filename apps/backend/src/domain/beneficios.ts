@@ -18,7 +18,9 @@ export interface BeneficioPadraoParseado {
   valor: string;
 }
 
-export function parseBeneficiosPadrao(beneficios: string | null | undefined): BeneficioPadraoParseado[] {
+export function parseBeneficiosPadrao(
+  beneficios: string | null | undefined,
+): BeneficioPadraoParseado[] {
   if (!beneficios || typeof beneficios !== "string") return [];
   const itens = beneficios.split(/,\s+/);
   const out: BeneficioPadraoParseado[] = [];

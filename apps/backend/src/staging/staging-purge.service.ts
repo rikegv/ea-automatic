@@ -57,7 +57,9 @@ export class StagingPurgeService implements OnModuleInit, OnModuleDestroy {
           }
         }
       } catch (err) {
-        this.logger.warn(`Falha ao expurgar ${e.name}: ${err instanceof Error ? err.message : "erro"}`);
+        this.logger.warn(
+          `Falha ao expurgar ${e.name}: ${err instanceof Error ? err.message : "erro"}`,
+        );
       }
     }
 

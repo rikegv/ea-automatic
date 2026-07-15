@@ -1,11 +1,4 @@
-import {
-  IsBoolean,
-  IsNotEmpty,
-  IsOptional,
-  IsString,
-  IsUUID,
-  MaxLength,
-} from "class-validator";
+import { IsBoolean, IsNotEmpty, IsOptional, IsString, IsUUID, MaxLength } from "class-validator";
 
 /** Registro manual de NC-3 (Cadastro incompleto) — flags manuais (kit/assinatura/realizado). */
 export class RegistrarNc3Dto {

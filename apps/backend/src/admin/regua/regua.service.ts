@@ -14,9 +14,7 @@ export class ReguaService {
     return this.db
       .select()
       .from(reguaDocumental)
-      .where(
-        and(eq(reguaDocumental.codCliente, codCliente), eq(reguaDocumental.cargoId, cargoId)),
-      );
+      .where(and(eq(reguaDocumental.codCliente, codCliente), eq(reguaDocumental.cargoId, cargoId)));
   }
 
   /** Upsert por (cod_cliente + cargo + tipo_documento) — define a exigência de cada documento. */
@@ -60,9 +58,7 @@ export class ReguaService {
    * régua do cliente, devolvendo-o à lista "sem régua". Ação da administração (Master/Super Admin).
    */
   async removeCliente(codCliente: string) {
-    await this.db
-      .delete(reguaDocumental)
-      .where(eq(reguaDocumental.codCliente, codCliente));
+    await this.db.delete(reguaDocumental).where(eq(reguaDocumental.codCliente, codCliente));
     return { ok: true };
   }
 }

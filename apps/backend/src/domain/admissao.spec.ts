@@ -83,7 +83,13 @@ describe("pendenciasObrigatorias (S2/S3)", () => {
         codCliente: "1001",
         cargoId: "x",
         dataAdmissao: "2026-07-01",
-        vagaFolha: { salario: "1800", beneficios: "VR", escala: "6x1", centroCusto: "", gestorBp: "" },
+        vagaFolha: {
+          salario: "1800",
+          beneficios: "VR",
+          escala: "6x1",
+          centroCusto: "",
+          gestorBp: "",
+        },
       }),
     ).toEqual(["Centro de custo", "Gestor / BP"]);
   });

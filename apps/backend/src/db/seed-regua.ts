@@ -92,7 +92,8 @@ async function main(): Promise<void> {
   for (const l of linhas) {
     const t = l.tipo_documento.trim().toUpperCase();
     if (!TIPO_MAP[t]) tiposDesconhecidos.add(l.tipo_documento.trim());
-    if (!EXIGENCIAS.has(l.exigencia.trim() as Exigencia)) exigenciasInvalidas.add(l.exigencia.trim());
+    if (!EXIGENCIAS.has(l.exigencia.trim() as Exigencia))
+      exigenciasInvalidas.add(l.exigencia.trim());
   }
   if (tiposDesconhecidos.size > 0) {
     throw new Error(`Tipos de documento sem mapeamento: ${[...tiposDesconhecidos].join(", ")}`);
@@ -148,7 +149,9 @@ async function main(): Promise<void> {
       continue;
     }
     const cargoId = cargoIdPorNome.get(l.cargo.trim());
-    const tipoDocumentoId = tipoIdPorCodigo.get(TIPO_MAP[l.tipo_documento.trim().toUpperCase()].codigo);
+    const tipoDocumentoId = tipoIdPorCodigo.get(
+      TIPO_MAP[l.tipo_documento.trim().toUpperCase()].codigo,
+    );
     if (!cargoId || !tipoDocumentoId) continue; // defensivo — não deveria ocorrer
     reguaPorChave.set(`${cod}|${cargoId}|${tipoDocumentoId}`, {
       codCliente: cod,
@@ -169,7 +172,11 @@ async function main(): Promise<void> {
       .insert(reguaDocumental)
       .values(lote)
       .onConflictDoUpdate({
-        target: [reguaDocumental.codCliente, reguaDocumental.cargoId, reguaDocumental.tipoDocumentoId],
+        target: [
+          reguaDocumental.codCliente,
+          reguaDocumental.cargoId,
+          reguaDocumental.tipoDocumentoId,
+        ],
         set: { exigencia: drizzleSql`excluded.exigencia`, atualizadoEm: drizzleSql`now()` },
       })
       .returning({ inserido: drizzleSql<boolean>`(xmax = 0)` });

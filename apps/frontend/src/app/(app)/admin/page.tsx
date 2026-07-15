@@ -9,7 +9,12 @@ import { Icon, type IconName } from "@/components/ui/Icon";
 // Um card por tela do Menu Gerencial (padrão: ícone + título + descrição curta + seta). Ordem e
 // lista completas conforme a OST de padronização.
 const CARDS: { href: string; icon: IconName; title: string; desc: string }[] = [
-  { href: "/admin/clientes", icon: "users", title: "Clientes", desc: "Código, CNPJ, razão social e operação." },
+  {
+    href: "/admin/clientes",
+    icon: "users",
+    title: "Clientes",
+    desc: "Código, CNPJ, razão social e operação.",
+  },
   { href: "/admin/cargos", icon: "tag", title: "Cargos", desc: "Catálogo de cargos da admissão." },
   {
     href: "/admin/motivos-declinio",

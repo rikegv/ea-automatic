@@ -69,7 +69,9 @@ const PATHS: Record<IconName, JSX.Element> = {
       <path d="M14 2v6h6" />
     </>
   ),
-  heart: <path d="M19 14c1.5-1.5 3-3.2 3-5.5A3.5 3.5 0 0 0 12 6 3.5 3.5 0 0 0 2 8.5c0 2.3 1.5 4 3 5.5l7 7z" />,
+  heart: (
+    <path d="M19 14c1.5-1.5 3-3.2 3-5.5A3.5 3.5 0 0 0 12 6 3.5 3.5 0 0 0 2 8.5c0 2.3 1.5 4 3 5.5l7 7z" />
+  ),
   pen: (
     <>
       <path d="M12 20h9" />

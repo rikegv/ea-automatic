@@ -1,12 +1,4 @@
-import {
-  Body,
-  Controller,
-  Get,
-  Param,
-  Post,
-  UploadedFile,
-  UseInterceptors,
-} from "@nestjs/common";
+import { Body, Controller, Get, Param, Post, UploadedFile, UseInterceptors } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
 import { CurrentUser } from "../auth/decorators";
 import type { AuthUser } from "../auth/auth.types";

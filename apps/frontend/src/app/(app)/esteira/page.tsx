@@ -567,530 +567,533 @@ export default function EsteiraPage() {
           rolagem (horizontal e vertical) fica SEMPRE acessível, sem caçar o rodapé da página, e a
           coluna Ações fica fixa à direita durante o scroll horizontal. */}
       <div className="flex h-[calc(100dvh-72px)] flex-col">
-      <div className="mb-[26px] flex shrink-0 items-center justify-between gap-3">
-        <h1 className="text-[26px] font-extrabold">Farol Admissional</h1>
-        <div className="flex items-center gap-2.5">
-          {/* Busca rápida na tela (fora do modal): liga no mesmo candQuery; o backend busca nome, CPF
+        <div className="mb-[26px] flex shrink-0 items-center justify-between gap-3">
+          <h1 className="text-[26px] font-extrabold">Farol Admissional</h1>
+          <div className="flex items-center gap-2.5">
+            {/* Busca rápida na tela (fora do modal): liga no mesmo candQuery; o backend busca nome, CPF
               e cliente. Barra tipo cilindro (rounded-full). */}
-          <input
-            className="ds-input rounded-full w-[300px]"
-            placeholder="Buscar por nome, CPF ou cliente"
-            aria-label="Buscar por nome, CPF ou cliente"
-            value={candQuery}
-            onChange={(e) => setCandQuery(e.target.value)}
-          />
-          {/* Botão discreto: só aparece quando há filtro ativo que o Limpar zera (cliente/status/busca/
+            <input
+              className="ds-input rounded-full w-[300px]"
+              placeholder="Buscar por nome, CPF ou cliente"
+              aria-label="Buscar por nome, CPF ou cliente"
+              value={candQuery}
+              onChange={(e) => setCandQuery(e.target.value)}
+            />
+            {/* Botão discreto: só aparece quando há filtro ativo que o Limpar zera (cliente/status/busca/
               período). Mesma cobertura da função limparFiltros. */}
-          {Boolean(codClientes.length || statusFiltro.length || from || to || candQuery) && (
-            <button
-              type="button"
-              onClick={limparFiltros}
-              className="flex-none text-sm text-dim transition hover:text-danger"
-              title="Limpar todos os filtros"
-            >
-              Limpar filtro
-            </button>
-          )}
-          {/* Bloco E: "Gerar Relatório Clínica" movido para o topo, ao lado do filtro, na aba Exame.
+            {Boolean(codClientes.length || statusFiltro.length || from || to || candQuery) && (
+              <button
+                type="button"
+                onClick={limparFiltros}
+                className="flex-none text-sm text-dim transition hover:text-danger"
+                title="Limpar todos os filtros"
+              >
+                Limpar filtro
+              </button>
+            )}
+            {/* Bloco E: "Gerar Relatório Clínica" movido para o topo, ao lado do filtro, na aba Exame.
               Mesmo padrão premium do ícone do Drive (ExcelLogo). Função 100% preservada (dispara
               gerarRelatorioClinica sobre a seleção). Divisória delicada entre o Excel e o filtro. */}
-          {isExame && (
-            <>
-              <button
-                type="button"
-                onClick={() => void gerarRelatorioClinica()}
-                disabled={selecionados.size === 0 || gerandoRelatorio}
-                aria-label="Gerar relatório da clínica"
-                title={
-                  selecionados.size === 0
-                    ? "Selecione ao menos um candidato na fila para gerar o relatório da clínica"
-                    : `Gerar o relatório da clínica (${selecionados.size} selecionado${selecionados.size > 1 ? "s" : ""})`
-                }
-                className="grid h-11 w-11 flex-none place-items-center rounded-xl border border-[var(--border)] bg-[var(--surface)] transition hover:bg-[var(--surface-2)] disabled:opacity-40 disabled:hover:bg-[var(--surface)]"
-              >
-                {gerandoRelatorio ? <Spinner /> : <ExcelLogo className="h-[20px] w-[20px]" />}
-              </button>
-              <div
-                aria-hidden="true"
-                className="h-6 w-px flex-none bg-[color-mix(in_srgb,var(--border-strong)_70%,transparent)]"
-              />
-            </>
-          )}
-          <FiltroTrigger count={filtroCount} onLimpar={limparFiltros}>
-            <FiltroCampo label="Cliente">
-            <MultiSelect
-              ariaLabel="Filtrar por cliente"
-              values={codClientes}
-              onChange={setCodClientes}
-              options={clienteOptions}
-              placeholder="Todos os clientes"
-            />
-          </FiltroCampo>
+            {isExame && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => void gerarRelatorioClinica()}
+                  disabled={selecionados.size === 0 || gerandoRelatorio}
+                  aria-label="Gerar relatório da clínica"
+                  title={
+                    selecionados.size === 0
+                      ? "Selecione ao menos um candidato na fila para gerar o relatório da clínica"
+                      : `Gerar o relatório da clínica (${selecionados.size} selecionado${selecionados.size > 1 ? "s" : ""})`
+                  }
+                  className="grid h-11 w-11 flex-none place-items-center rounded-xl border border-[var(--border)] bg-[var(--surface)] transition hover:bg-[var(--surface-2)] disabled:opacity-40 disabled:hover:bg-[var(--surface)]"
+                >
+                  {gerandoRelatorio ? <Spinner /> : <ExcelLogo className="h-[20px] w-[20px]" />}
+                </button>
+                <div
+                  aria-hidden="true"
+                  className="h-6 w-px flex-none bg-[color-mix(in_srgb,var(--border-strong)_70%,transparent)]"
+                />
+              </>
+            )}
+            <FiltroTrigger count={filtroCount} onLimpar={limparFiltros}>
+              <FiltroCampo label="Cliente">
+                <MultiSelect
+                  ariaLabel="Filtrar por cliente"
+                  values={codClientes}
+                  onChange={setCodClientes}
+                  options={clienteOptions}
+                  placeholder="Todos os clientes"
+                />
+              </FiltroCampo>
 
-          <FiltroCampo label="Status">
-            <MultiSelect
-              ariaLabel="Filtrar por status"
-              values={statusFiltro}
-              onChange={setStatusFiltro}
-              options={statusOptions}
-              placeholder="Todos os status"
-            />
-          </FiltroCampo>
+              <FiltroCampo label="Status">
+                <MultiSelect
+                  ariaLabel="Filtrar por status"
+                  values={statusFiltro}
+                  onChange={setStatusFiltro}
+                  options={statusOptions}
+                  placeholder="Todos os status"
+                />
+              </FiltroCampo>
 
-          <FiltroCampo label="Período">
-            <div className="grid grid-cols-2 gap-2">
-              <input
-                type="date"
-                className="ds-input"
-                aria-label="Data inicial"
-                value={from}
-                max={to || undefined}
-                onChange={(e) => setFrom(e.target.value)}
-              />
-              <input
-                type="date"
-                className="ds-input"
-                aria-label="Data final"
-                value={to}
-                min={from || undefined}
-                onChange={(e) => setTo(e.target.value)}
-              />
-            </div>
-          </FiltroCampo>
-          </FiltroTrigger>
+              <FiltroCampo label="Período">
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    type="date"
+                    className="ds-input"
+                    aria-label="Data inicial"
+                    value={from}
+                    max={to || undefined}
+                    onChange={(e) => setFrom(e.target.value)}
+                  />
+                  <input
+                    type="date"
+                    className="ds-input"
+                    aria-label="Data final"
+                    value={to}
+                    min={from || undefined}
+                    onChange={(e) => setTo(e.target.value)}
+                  />
+                </div>
+              </FiltroCampo>
+            </FiltroTrigger>
+          </div>
         </div>
-      </div>
 
-      {/* ── Abas ─────────────────────────────────────────────────────────── */}
-      <div className="mb-[22px] flex shrink-0 gap-2">
-        {ABAS.map((a, i) => (
-          <button
-            key={a.rota}
-            type="button"
-            className={cn("tab", i === aba && "active")}
-            onClick={() => trocarAba(i)}
-          >
-            <span className="dot" />
-            <Icon name={a.icone} className="h-3.5 w-3.5 flex-none" />
-            {a.label}
-          </button>
-        ))}
-      </div>
-
-      {/* ── KPIs por frente (reais; clicáveis = filtro, itens 5/9/10) ────── */}
-      <div className="mb-[18px] grid shrink-0 grid-cols-2 gap-[14px] sm:grid-cols-3 xl:grid-cols-5">
-        {/* Item 10: "Total na fila" vira toggle: clicar limpa o filtro de status (mostra todos). */}
-        <GlassCard
-          as="button"
-          className={cn(
-            "fk text-left transition hover:bg-[var(--surface-2)]",
-            statusFiltro.length === 0 && "!border-[var(--accent)] ring-1 ring-[var(--accent)]",
-          )}
-          onClick={() => setStatusFiltro([])}
-          aria-pressed={statusFiltro.length === 0}
-          title="Mostrar todos os status"
-        >
-          <div className="num">{loading && !data ? "…" : (data?.kpis.total ?? 0)}</div>
-          <div className="lbl flex items-center gap-1.5">
-            Total na fila
-            {statusFiltro.length === 0 && <Icon name="check" className="h-3 w-3 text-accent" />}
-          </div>
-        </GlassCard>
-        {kpiStatus.map((c) => {
-          const tone = statusTone(c.codigo, c);
-          const color = TONE_VAR[tone];
-          const ativo = statusFiltro.includes(c.codigo);
-          return (
-            <GlassCard
-              as="button"
-              key={c.codigo}
-              className={cn(
-                "fk text-left transition hover:bg-[var(--surface-2)]",
-                ativo && "!border-[var(--accent)] ring-1 ring-[var(--accent)]",
-              )}
-              onClick={() => toggleStatusKpi(c.codigo)}
-              aria-pressed={ativo}
-              title={ativo ? "Remover filtro" : `Filtrar por ${c.rotulo}`}
+        {/* ── Abas ─────────────────────────────────────────────────────────── */}
+        <div className="mb-[22px] flex shrink-0 gap-2">
+          {ABAS.map((a, i) => (
+            <button
+              key={a.rota}
+              type="button"
+              className={cn("tab", i === aba && "active")}
+              onClick={() => trocarAba(i)}
             >
-              <div className="num" style={color ? { color } : undefined}>
-                {data?.kpis.porStatus[c.codigo] ?? 0}
-              </div>
-              <div className="lbl flex items-center gap-1.5">
-                {c.rotulo}
-                {ativo && <Icon name="check" className="h-3 w-3 text-accent" />}
-              </div>
-            </GlassCard>
-          );
-        })}
-        {/* Item 9 / §A.12: admissões com campos obrigatórios pendentes. Clicável = filtro (toggle),
-            mostra só quem tem pendência obrigatória nesta frente. */}
-        <GlassCard
-          as="button"
-          className={cn(
-            "fk text-left transition hover:bg-[var(--surface-2)]",
-            soPendencias && "!border-[var(--accent)] ring-1 ring-[var(--accent)]",
-          )}
-          onClick={() => setSoPendencias((v) => !v)}
-          aria-pressed={soPendencias}
-          title={
-            soPendencias
-              ? "Remover filtro de pendências obrigatórias"
-              : "Filtrar só candidatos com pendências obrigatórias"
-          }
-        >
-          <div className="num" style={{ color: TONE_VAR.wn }}>
-            {loading && !data ? "…" : (data?.kpis.comPendencias ?? 0)}
-          </div>
-          <div className="lbl flex items-center gap-1.5">
-            Com pendências obrigatórias
-            {soPendencias && <Icon name="check" className="h-3 w-3 text-accent" />}
-          </div>
-        </GlassCard>
-      </div>
+              <span className="dot" />
+              <Icon name={a.icone} className="h-3.5 w-3.5 flex-none" />
+              {a.label}
+            </button>
+          ))}
+        </div>
 
-      {/* ── Feedback de ação ─────────────────────────────────────────────── */}
-      {actionError && (
-        <p
-          className="mb-3 rounded-xl border border-[var(--border)] bg-[rgba(214,69,69,0.1)] px-3 py-2 text-sm text-danger"
-          role="alert"
-        >
-          {actionError}
-        </p>
-      )}
-      {flash && (
-        <p
-          className={cn(
-            "mb-3 inline-flex items-center gap-2 rounded-xl border border-[var(--border)] px-3 py-2 text-sm",
-            flash.tone === "ok"
-              ? "bg-[rgba(91,214,138,0.12)] text-ok"
-              : "bg-[rgba(214,142,69,0.12)] text-warn",
-          )}
-        >
-          <Icon name={flash.tone === "ok" ? "check" : "alert"} className="h-4 w-4" /> {flash.msg}
-        </p>
-      )}
-
-      {/* ── Relatório da clínica (aba Exame): seleção múltipla → CSV ──────── */}
-      {isExame && (
-        <div className="mb-[14px] flex shrink-0 flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-3">
-            {/* Bloco E: o botão "Gerar Relatório Clínica" foi para o topo (ao lado do filtro). Aqui
-                permanece só o "Limpar seleção" de apoio. */}
-            {selecionados.size > 0 && !gerandoRelatorio && (
-              <button
-                type="button"
-                className="text-[13px] text-dim underline-offset-2 hover:underline"
-                onClick={() => setSelecionados(new Set())}
+        {/* ── KPIs por frente (reais; clicáveis = filtro, itens 5/9/10) ────── */}
+        <div className="mb-[18px] grid shrink-0 grid-cols-2 gap-[14px] sm:grid-cols-3 xl:grid-cols-5">
+          {/* Item 10: "Total na fila" vira toggle: clicar limpa o filtro de status (mostra todos). */}
+          <GlassCard
+            as="button"
+            className={cn(
+              "fk text-left transition hover:bg-[var(--surface-2)]",
+              statusFiltro.length === 0 && "!border-[var(--accent)] ring-1 ring-[var(--accent)]",
+            )}
+            onClick={() => setStatusFiltro([])}
+            aria-pressed={statusFiltro.length === 0}
+            title="Mostrar todos os status"
+          >
+            <div className="num">{loading && !data ? "…" : (data?.kpis.total ?? 0)}</div>
+            <div className="lbl flex items-center gap-1.5">
+              Total na fila
+              {statusFiltro.length === 0 && <Icon name="check" className="h-3 w-3 text-accent" />}
+            </div>
+          </GlassCard>
+          {kpiStatus.map((c) => {
+            const tone = statusTone(c.codigo, c);
+            const color = TONE_VAR[tone];
+            const ativo = statusFiltro.includes(c.codigo);
+            return (
+              <GlassCard
+                as="button"
+                key={c.codigo}
+                className={cn(
+                  "fk text-left transition hover:bg-[var(--surface-2)]",
+                  ativo && "!border-[var(--accent)] ring-1 ring-[var(--accent)]",
+                )}
+                onClick={() => toggleStatusKpi(c.codigo)}
+                aria-pressed={ativo}
+                title={ativo ? "Remover filtro" : `Filtrar por ${c.rotulo}`}
               >
-                Limpar seleção
-              </button>
+                <div className="num" style={color ? { color } : undefined}>
+                  {data?.kpis.porStatus[c.codigo] ?? 0}
+                </div>
+                <div className="lbl flex items-center gap-1.5">
+                  {c.rotulo}
+                  {ativo && <Icon name="check" className="h-3 w-3 text-accent" />}
+                </div>
+              </GlassCard>
+            );
+          })}
+          {/* Item 9 / §A.12: admissões com campos obrigatórios pendentes. Clicável = filtro (toggle),
+            mostra só quem tem pendência obrigatória nesta frente. */}
+          <GlassCard
+            as="button"
+            className={cn(
+              "fk text-left transition hover:bg-[var(--surface-2)]",
+              soPendencias && "!border-[var(--accent)] ring-1 ring-[var(--accent)]",
+            )}
+            onClick={() => setSoPendencias((v) => !v)}
+            aria-pressed={soPendencias}
+            title={
+              soPendencias
+                ? "Remover filtro de pendências obrigatórias"
+                : "Filtrar só candidatos com pendências obrigatórias"
+            }
+          >
+            <div className="num" style={{ color: TONE_VAR.wn }}>
+              {loading && !data ? "…" : (data?.kpis.comPendencias ?? 0)}
+            </div>
+            <div className="lbl flex items-center gap-1.5">
+              Com pendências obrigatórias
+              {soPendencias && <Icon name="check" className="h-3 w-3 text-accent" />}
+            </div>
+          </GlassCard>
+        </div>
+
+        {/* ── Feedback de ação ─────────────────────────────────────────────── */}
+        {actionError && (
+          <p
+            className="mb-3 rounded-xl border border-[var(--border)] bg-[rgba(214,69,69,0.1)] px-3 py-2 text-sm text-danger"
+            role="alert"
+          >
+            {actionError}
+          </p>
+        )}
+        {flash && (
+          <p
+            className={cn(
+              "mb-3 inline-flex items-center gap-2 rounded-xl border border-[var(--border)] px-3 py-2 text-sm",
+              flash.tone === "ok"
+                ? "bg-[rgba(91,214,138,0.12)] text-ok"
+                : "bg-[rgba(214,142,69,0.12)] text-warn",
+            )}
+          >
+            <Icon name={flash.tone === "ok" ? "check" : "alert"} className="h-4 w-4" /> {flash.msg}
+          </p>
+        )}
+
+        {/* ── Relatório da clínica (aba Exame): seleção múltipla → CSV ──────── */}
+        {isExame && (
+          <div className="mb-[14px] flex shrink-0 flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-3">
+              {/* Bloco E: o botão "Gerar Relatório Clínica" foi para o topo (ao lado do filtro). Aqui
+                permanece só o "Limpar seleção" de apoio. */}
+              {selecionados.size > 0 && !gerandoRelatorio && (
+                <button
+                  type="button"
+                  className="text-[13px] text-dim underline-offset-2 hover:underline"
+                  onClick={() => setSelecionados(new Set())}
+                >
+                  Limpar seleção
+                </button>
+              )}
+            </div>
+            {relatorioError && (
+              <p
+                className="rounded-xl border border-[var(--border)] bg-[rgba(214,69,69,0.1)] px-3 py-2 text-sm text-danger"
+                role="alert"
+              >
+                {relatorioError}
+              </p>
             )}
           </div>
-          {relatorioError && (
-            <p
-              className="rounded-xl border border-[var(--border)] bg-[rgba(214,69,69,0.1)] px-3 py-2 text-sm text-danger"
-              role="alert"
-            >
-              {relatorioError}
-            </p>
-          )}
-        </div>
-      )}
+        )}
 
-      {/* ── Lista / faróis ───────────────────────────────────────────────── */}
-      <GlassCard className="list flex min-h-0 flex-1 flex-col">
-        <div className="ea-scroll min-h-0 flex-1 overflow-auto">
-          <div className={gridMin}>
-            <div className="list-head" style={{ gridTemplateColumns: gridCols }}>
-              {isExame && (
-                <span className="flex items-center justify-center">
-                  <input
-                    type="checkbox"
-                    className="h-4 w-4 cursor-pointer accent-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-40"
-                    aria-label="Selecionar todos os candidatos da fila"
-                    title="Selecionar todos"
-                    disabled={itemsVisiveis.length === 0}
-                    checked={todosSelecionados}
-                    ref={(el) => {
-                      if (el) el.indeterminate = algunsSelecionados;
-                    }}
-                    onChange={toggleSelecionarTodos}
-                  />
+        {/* ── Lista / faróis ───────────────────────────────────────────────── */}
+        <GlassCard className="list flex min-h-0 flex-1 flex-col">
+          <div className="ea-scroll min-h-0 flex-1 overflow-auto">
+            <div className={gridMin}>
+              <div className="list-head" style={{ gridTemplateColumns: gridCols }}>
+                {isExame && (
+                  <span className="flex items-center justify-center">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 cursor-pointer accent-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-40"
+                      aria-label="Selecionar todos os candidatos da fila"
+                      title="Selecionar todos"
+                      disabled={itemsVisiveis.length === 0}
+                      checked={todosSelecionados}
+                      ref={(el) => {
+                        if (el) el.indeterminate = algunsSelecionados;
+                      }}
+                      onChange={toggleSelecionarTodos}
+                    />
+                  </span>
+                )}
+                <span>Candidato</span>
+                <span>Cliente</span>
+                <span>Cargo</span>
+                <span>Data adm.</span>
+                <span>Status</span>
+                <span>Pendências Obrig.</span>
+                <span>
+                  {isExame ? "ASO / Avanço" : isAuditoria ? "Avanço / Auditoria" : "Avanço"}
                 </span>
-              )}
-              <span>Candidato</span>
-              <span>Cliente</span>
-              <span>Cargo</span>
-              <span>Data adm.</span>
-              <span>Status</span>
-              <span>Pendências Obrig.</span>
-              <span>
-                {isExame ? "ASO / Avanço" : isAuditoria ? "Avanço / Auditoria" : "Avanço"}
-              </span>
-              <span className="col-fix">Ações</span>
-            </div>
-
-            {loading ? (
-              <div className="px-4 py-10 text-center text-sm text-faint">Carregando frente…</div>
-            ) : loadError ? (
-              <div className="px-4 py-10 text-center text-sm text-danger">{loadError}</div>
-            ) : itemsVisiveis.length === 0 ? (
-              <div className="px-4 py-10 text-center text-sm text-faint">
-                {temFiltro
-                  ? "Nenhum candidato nesta frente com os filtros atuais."
-                  : "Nenhum candidato em andamento nesta frente."}
+                <span className="col-fix">Ações</span>
               </div>
-            ) : (
-              itemsVisiveis.map((item) => {
-                const tone = statusTone(item.status, catMap.get(item.status));
-                const rotulo = catMap.get(item.status)?.rotulo ?? item.status;
-                const acting = actingId === item.frenteId;
-                const pausado = isCadastro && item.disponivel === false;
-                // Coluna Pendências Obrig. (§A.12): tom/rótulo pelo sinalizador de preenchimento (F5),
-                // mesma leitura do Gerenciador. O X de frente recusada vive na coluna Status (StatusPill).
-                const sinalP = SINAL[item.sinalizador] ?? {
-                  tone: "nt" as PillTone,
-                  label: item.sinalizador,
-                };
-                return (
-                  <div
-                    key={item.frenteId}
-                    className="row"
-                    style={{ gridTemplateColumns: gridCols }}
-                  >
-                    {isExame && (
-                      <div className="flex items-center justify-center">
-                        <input
-                          type="checkbox"
-                          className="h-4 w-4 cursor-pointer accent-[var(--accent)]"
-                          aria-label={`Selecionar ${item.candidatoNome} para o relatório da clínica`}
-                          checked={selecionados.has(item.admissaoId)}
-                          onChange={() => toggleSelecionado(item.admissaoId)}
+
+              {loading ? (
+                <div className="px-4 py-10 text-center text-sm text-faint">Carregando frente…</div>
+              ) : loadError ? (
+                <div className="px-4 py-10 text-center text-sm text-danger">{loadError}</div>
+              ) : itemsVisiveis.length === 0 ? (
+                <div className="px-4 py-10 text-center text-sm text-faint">
+                  {temFiltro
+                    ? "Nenhum candidato nesta frente com os filtros atuais."
+                    : "Nenhum candidato em andamento nesta frente."}
+                </div>
+              ) : (
+                itemsVisiveis.map((item) => {
+                  const tone = statusTone(item.status, catMap.get(item.status));
+                  const rotulo = catMap.get(item.status)?.rotulo ?? item.status;
+                  const acting = actingId === item.frenteId;
+                  const pausado = isCadastro && item.disponivel === false;
+                  // Coluna Pendências Obrig. (§A.12): tom/rótulo pelo sinalizador de preenchimento (F5),
+                  // mesma leitura do Gerenciador. O X de frente recusada vive na coluna Status (StatusPill).
+                  const sinalP = SINAL[item.sinalizador] ?? {
+                    tone: "nt" as PillTone,
+                    label: item.sinalizador,
+                  };
+                  return (
+                    <div
+                      key={item.frenteId}
+                      className="row"
+                      style={{ gridTemplateColumns: gridCols }}
+                    >
+                      {isExame && (
+                        <div className="flex items-center justify-center">
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 cursor-pointer accent-[var(--accent)]"
+                            aria-label={`Selecionar ${item.candidatoNome} para o relatório da clínica`}
+                            checked={selecionados.has(item.admissaoId)}
+                            onChange={() => toggleSelecionado(item.admissaoId)}
+                          />
+                        </div>
+                      )}
+                      {/* Ajuste 1: nome do candidato à ESQUERDA (título da coluna segue centralizado). */}
+                      <div className="min-w-0 text-left">
+                        <div className="flex min-w-0 items-center justify-start gap-1.5">
+                          <span className="nm truncate" title={item.candidatoNome}>
+                            {item.candidatoNome}
+                          </span>
+                          <OrigemBadge origem={item.origem} className="flex-none" />
+                        </div>
+                        <div className="meta truncate">
+                          {item.concluida
+                            ? `Concluída em ${fmtData(item.dataConclusao)}`
+                            : `Aberta em ${fmtData(item.dataInicio)}`}
+                        </div>
+                      </div>
+                      {/* Cliente: só o nome da operação (§A.12); o código vai no modal do olho. */}
+                      <div className="min-w-0 text-center">
+                        <div
+                          className="meta truncate text-text"
+                          title={item.clienteOperacao || item.clienteRazao}
+                        >
+                          {item.clienteOperacao || item.clienteRazao}
+                        </div>
+                      </div>
+                      <div className="meta truncate text-center" title={item.cargoNome}>
+                        {item.cargoNome}
+                      </div>
+                      <div className="meta text-center">{fmtDataAdmissao(item.dataAdmissao)}</div>
+                      <div className="flex min-w-0 flex-col items-center gap-1">
+                        <StatusPill tone={tone} label={rotulo} />
+                        {/* Sub-status de reagendamento + indicador discreto de exame agendado (EXAME) */}
+                        {isExame && (item.reagendamentos ?? 0) > 0 && (
+                          <Pill tone="or" title="Exame reagendado">
+                            Reagendado {item.reagendamentos}x
+                          </Pill>
+                        )}
+                        {isExame && item.temAgendamento && item.agendamento?.data && (
+                          <span
+                            className="inline-flex items-center gap-1 text-[11px] text-dim"
+                            title="Exame agendado"
+                          >
+                            <Icon name="clock" className="h-3 w-3 flex-none" />
+                            {fmtDataAdmissao(item.agendamento.data)}
+                            {item.agendamento.horario ? ` ${item.agendamento.horario}` : ""}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Coluna Pendências Obrig. (§A.12): só o badge, centralizado. */}
+                      <div className="flex min-w-0 items-center justify-center">
+                        <PendenciasBadge
+                          tone={sinalP.tone}
+                          label={sinalP.label}
+                          onClick={() => setPendItem(item)}
                         />
                       </div>
-                    )}
-                    {/* Ajuste 1: nome do candidato à ESQUERDA (título da coluna segue centralizado). */}
-                    <div className="min-w-0 text-left">
-                      <div className="flex min-w-0 items-center justify-start gap-1.5">
-                        <span className="nm truncate" title={item.candidatoNome}>
-                          {item.candidatoNome}
-                        </span>
-                        <OrigemBadge origem={item.origem} className="flex-none" />
-                      </div>
-                      <div className="meta truncate">
-                        {item.concluida
-                          ? `Concluída em ${fmtData(item.dataConclusao)}`
-                          : `Aberta em ${fmtData(item.dataInicio)}`}
-                      </div>
-                    </div>
-                    {/* Cliente: só o nome da operação (§A.12); o código vai no modal do olho. */}
-                    <div className="min-w-0 text-center">
-                      <div
-                        className="meta truncate text-text"
-                        title={item.clienteOperacao || item.clienteRazao}
-                      >
-                        {item.clienteOperacao || item.clienteRazao}
-                      </div>
-                    </div>
-                    <div className="meta truncate text-center" title={item.cargoNome}>
-                      {item.cargoNome}
-                    </div>
-                    <div className="meta text-center">{fmtDataAdmissao(item.dataAdmissao)}</div>
-                    <div className="flex min-w-0 flex-col items-center gap-1">
-                      <StatusPill tone={tone} label={rotulo} />
-                      {/* Sub-status de reagendamento + indicador discreto de exame agendado (EXAME) */}
-                      {isExame && (item.reagendamentos ?? 0) > 0 && (
-                        <Pill tone="or" title="Exame reagendado">
-                          Reagendado {item.reagendamentos}x
-                        </Pill>
-                      )}
-                      {isExame && item.temAgendamento && item.agendamento?.data && (
-                        <span
-                          className="inline-flex items-center gap-1 text-[11px] text-dim"
-                          title="Exame agendado"
-                        >
-                          <Icon name="clock" className="h-3 w-3 flex-none" />
-                          {fmtDataAdmissao(item.agendamento.data)}
-                          {item.agendamento.horario ? ` ${item.agendamento.horario}` : ""}
-                        </span>
-                      )}
-                    </div>
 
-                    {/* Coluna Pendências Obrig. (§A.12): só o badge, centralizado. */}
-                    <div className="flex min-w-0 items-center justify-center">
-                      <PendenciasBadge
-                        tone={sinalP.tone}
-                        label={sinalP.label}
-                        onClick={() => setPendItem(item)}
-                      />
-                    </div>
-
-                    {/* Coluna AVANÇO / FRENTE: controle de avanço + ação da frente */}
-                    <div className="flex min-w-0 flex-col gap-1.5">
-                      <div className="flex min-w-0 items-center gap-2">
-                        {pausado ? (
-                          <span
-                            className="inline-flex items-center gap-2 text-[12px] text-faint"
-                            title="O Cadastro reabre sozinho quando Auditoria e Exame concluírem. O trabalho fica preservado."
-                          >
-                            <Icon name="clock" className="h-4 w-4 flex-none" />
-                            Pausado: aguarda Auditoria + Exame
-                          </span>
-                        ) : (
-                          <Select
-                            className="min-w-0 flex-1"
-                            ariaLabel={`Mudar status de ${item.candidatoNome}`}
-                            disabled={acting}
-                            value={item.status}
-                            onChange={(novo) => onSelectStatus(item, novo)}
-                            options={statusCatalogo.map((c) => ({
-                              value: c.codigo,
-                              label: c.rotulo,
-                              color: TONE_VAR[statusTone(c.codigo, c)],
-                            }))}
-                          />
-                        )}
-
-                        {/* ASO (T3): upload único → anexa e dispara a validação pela I.A no backend */}
-                        {isExame && (
-                          <label
-                            className={cn(
-                              "flex flex-none cursor-pointer items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2 text-[12px] font-semibold transition hover:bg-[var(--surface-2)]",
-                              item.asoAnexado ? "text-ok" : "text-dim",
-                              acting && "pointer-events-none opacity-60",
-                            )}
-                            title={
-                              item.asoAnexado
-                                ? "ASO anexado, reanexar para revalidar na I.A"
-                                : "Anexar ASO (valida na I.A automaticamente)"
-                            }
-                          >
-                            {acting ? (
-                              <Spinner />
-                            ) : (
-                              <Icon name={item.asoAnexado ? "check" : "doc"} className="h-4 w-4" />
-                            )}
-                            {acting ? "Enviando…" : item.asoAnexado ? "Anexado" : "ASO"}
-                            <input
-                              type="file"
-                              accept={ASO_ACCEPT}
-                              className="hidden"
+                      {/* Coluna AVANÇO / FRENTE: controle de avanço + ação da frente */}
+                      <div className="flex min-w-0 flex-col gap-1.5">
+                        <div className="flex min-w-0 items-center gap-2">
+                          {pausado ? (
+                            <span
+                              className="inline-flex items-center gap-2 text-[12px] text-faint"
+                              title="O Cadastro reabre sozinho quando Auditoria e Exame concluírem. O trabalho fica preservado."
+                            >
+                              <Icon name="clock" className="h-4 w-4 flex-none" />
+                              Pausado: aguarda Auditoria + Exame
+                            </span>
+                          ) : (
+                            <Select
+                              className="min-w-0 flex-1"
+                              ariaLabel={`Mudar status de ${item.candidatoNome}`}
                               disabled={acting}
-                              onChange={(e) => {
-                                const f = e.target.files?.[0];
-                                if (f) void uploadAso(item, f);
-                                e.target.value = "";
-                              }}
+                              value={item.status}
+                              onChange={(novo) => onSelectStatus(item, novo)}
+                              options={statusCatalogo.map((c) => ({
+                                value: c.codigo,
+                                label: c.rotulo,
+                                color: TONE_VAR[statusTone(c.codigo, c)],
+                              }))}
                             />
-                          </label>
-                        )}
+                          )}
 
-                        {/* Modal de Gestão de Agendamento do Exame (cadastro / visualização / reagendar) */}
-                        {isExame && (
-                          <button
-                            type="button"
-                            className={cn(
-                              "inline-flex flex-none items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2 text-[12px] font-semibold transition hover:bg-[var(--surface-2)]",
-                              item.temAgendamento ? "text-accent" : "text-dim",
-                            )}
-                            title={
-                              item.temAgendamento
-                                ? "Ver / reagendar o exame"
-                                : "Cadastrar o agendamento do exame"
-                            }
-                            onClick={() => setAgendaItem(item)}
-                          >
-                            <Icon name="clock" className="h-4 w-4" />
-                            Agendamento
-                          </button>
-                        )}
+                          {/* ASO (T3): upload único → anexa e dispara a validação pela I.A no backend */}
+                          {isExame && (
+                            <label
+                              className={cn(
+                                "flex flex-none cursor-pointer items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2 text-[12px] font-semibold transition hover:bg-[var(--surface-2)]",
+                                item.asoAnexado ? "text-ok" : "text-dim",
+                                acting && "pointer-events-none opacity-60",
+                              )}
+                              title={
+                                item.asoAnexado
+                                  ? "ASO anexado, reanexar para revalidar na I.A"
+                                  : "Anexar ASO (valida na I.A automaticamente)"
+                              }
+                            >
+                              {acting ? (
+                                <Spinner />
+                              ) : (
+                                <Icon
+                                  name={item.asoAnexado ? "check" : "doc"}
+                                  className="h-4 w-4"
+                                />
+                              )}
+                              {acting ? "Enviando…" : item.asoAnexado ? "Anexado" : "ASO"}
+                              <input
+                                type="file"
+                                accept={ASO_ACCEPT}
+                                className="hidden"
+                                disabled={acting}
+                                onChange={(e) => {
+                                  const f = e.target.files?.[0];
+                                  if (f) void uploadAso(item, f);
+                                  e.target.value = "";
+                                }}
+                              />
+                            </label>
+                          )}
 
-                        {isAuditoria && (
-                          <button
-                            type="button"
-                            className="inline-flex flex-none items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2 text-[12px] font-semibold text-dim transition hover:bg-[var(--surface-2)] hover:text-accent"
-                            title="Auditar documentos com IA"
-                            onClick={() => setAuditId(item.admissaoId)}
-                          >
-                            <Icon name="doc" className="h-4 w-4" />
-                            Auditar
-                          </button>
-                        )}
-                      </div>
+                          {/* Modal de Gestão de Agendamento do Exame (cadastro / visualização / reagendar) */}
+                          {isExame && (
+                            <button
+                              type="button"
+                              className={cn(
+                                "inline-flex flex-none items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2 text-[12px] font-semibold transition hover:bg-[var(--surface-2)]",
+                                item.temAgendamento ? "text-accent" : "text-dim",
+                              )}
+                              title={
+                                item.temAgendamento
+                                  ? "Ver / reagendar o exame"
+                                  : "Cadastrar o agendamento do exame"
+                              }
+                              onClick={() => setAgendaItem(item)}
+                            >
+                              <Icon name="clock" className="h-4 w-4" />
+                              Agendamento
+                            </button>
+                          )}
 
-                      {/* O veredito do ASO pela I.A saiu da linha da fila, agora vive no modal de detalhe
+                          {isAuditoria && (
+                            <button
+                              type="button"
+                              className="inline-flex flex-none items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2 text-[12px] font-semibold text-dim transition hover:bg-[var(--surface-2)] hover:text-accent"
+                              title="Auditar documentos com IA"
+                              onClick={() => setAuditId(item.admissaoId)}
+                            >
+                              <Icon name="doc" className="h-4 w-4" />
+                              Auditar
+                            </button>
+                          )}
+                        </div>
+
+                        {/* O veredito do ASO pela I.A saiu da linha da fila, agora vive no modal de detalhe
                       do candidato (ícone de OLHO). A lista fica limpa. */}
 
-                      {/* Assinatura Clicksign (INT-4 / F9), só na aba Cadastro; SEM_ENVELOPE fica
+                        {/* Assinatura Clicksign (INT-4 / F9), só na aba Cadastro; SEM_ENVELOPE fica
                       oculto (discreto). Reenvio por correção é feito na ficha (modal de detalhe). */}
-                      {isCadastro &&
-                        (item.contratoAssinadoDriveUrl ||
-                          (item.clicksignStatus && item.clicksignStatus !== "SEM_ENVELOPE")) && (
-                          <div className="flex min-w-0 flex-wrap items-center gap-2">
-                            {item.clicksignStatus && item.clicksignStatus !== "SEM_ENVELOPE" && (
-                              <Pill tone={clicksignPill(item.clicksignStatus).tone}>
-                                {clicksignPill(item.clicksignStatus).label}
-                              </Pill>
-                            )}
-                            {item.contratoAssinadoDriveUrl && (
-                              <a
-                                href={item.contratoAssinadoDriveUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-[12px] font-semibold text-text transition hover:bg-[var(--surface-2)]"
-                                title="Abrir contrato assinado no Google Drive"
-                              >
-                                <GoogleDriveLogo className="h-[15px] w-[15px]" />
-                                Contrato no Drive
-                              </a>
-                            )}
-                          </div>
-                        )}
-                    </div>
+                        {isCadastro &&
+                          (item.contratoAssinadoDriveUrl ||
+                            (item.clicksignStatus && item.clicksignStatus !== "SEM_ENVELOPE")) && (
+                            <div className="flex min-w-0 flex-wrap items-center gap-2">
+                              {item.clicksignStatus && item.clicksignStatus !== "SEM_ENVELOPE" && (
+                                <Pill tone={clicksignPill(item.clicksignStatus).tone}>
+                                  {clicksignPill(item.clicksignStatus).label}
+                                </Pill>
+                              )}
+                              {item.contratoAssinadoDriveUrl && (
+                                <a
+                                  href={item.contratoAssinadoDriveUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-[12px] font-semibold text-text transition hover:bg-[var(--surface-2)]"
+                                  title="Abrir contrato assinado no Google Drive"
+                                >
+                                  <GoogleDriveLogo className="h-[15px] w-[15px]" />
+                                  Contrato no Drive
+                                </a>
+                              )}
+                            </div>
+                          )}
+                      </div>
 
-                    {/* Coluna AÇÕES: prontuário no Drive (se houver) + olho + editar. */}
-                    <div className="col-fix flex items-center justify-center gap-0.5">
-                      {isAuditoria && (item.drivePastaUrl || item.driveAsoUrl) && (
-                        <a
-                          href={item.drivePastaUrl || item.driveAsoUrl || undefined}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="grid h-8 w-8 flex-none place-items-center rounded-lg text-faint transition hover:bg-[var(--surface-2)]"
-                          title="Abrir prontuário no Google Drive"
-                          aria-label={`Abrir prontuário de ${item.candidatoNome} no Google Drive`}
+                      {/* Coluna AÇÕES: prontuário no Drive (se houver) + olho + editar. */}
+                      <div className="col-fix flex items-center justify-center gap-0.5">
+                        {isAuditoria && (item.drivePastaUrl || item.driveAsoUrl) && (
+                          <a
+                            href={item.drivePastaUrl || item.driveAsoUrl || undefined}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="grid h-8 w-8 flex-none place-items-center rounded-lg text-faint transition hover:bg-[var(--surface-2)]"
+                            title="Abrir prontuário no Google Drive"
+                            aria-label={`Abrir prontuário de ${item.candidatoNome} no Google Drive`}
+                          >
+                            <GoogleDriveLogo className="h-[17px] w-[17px]" />
+                          </a>
+                        )}
+                        <button
+                          type="button"
+                          className="grid h-8 w-8 place-items-center rounded-lg text-faint transition hover:bg-[var(--surface-2)] hover:text-accent"
+                          title="Ver ficha (somente leitura)"
+                          aria-label={`Ver ficha de ${item.candidatoNome}`}
+                          onClick={() => setViewId(item.admissaoId)}
                         >
-                          <GoogleDriveLogo className="h-[17px] w-[17px]" />
-                        </a>
-                      )}
-                      <button
-                        type="button"
-                        className="grid h-8 w-8 place-items-center rounded-lg text-faint transition hover:bg-[var(--surface-2)] hover:text-accent"
-                        title="Ver ficha (somente leitura)"
-                        aria-label={`Ver ficha de ${item.candidatoNome}`}
-                        onClick={() => setViewId(item.admissaoId)}
-                      >
-                        <Icon name="eye" className="h-[18px] w-[18px]" />
-                      </button>
-                      <button
-                        type="button"
-                        className="grid h-8 w-8 place-items-center rounded-lg text-faint transition hover:bg-[var(--surface-2)] hover:text-accent"
-                        title="Editar admissão"
-                        aria-label={`Editar admissão de ${item.candidatoNome}`}
-                        onClick={() => {
-                          setEditFiltro(undefined);
-                          setEditItem(item);
-                        }}
-                      >
-                        <Icon name="pen" className="h-[16px] w-[16px]" />
-                      </button>
+                          <Icon name="eye" className="h-[18px] w-[18px]" />
+                        </button>
+                        <button
+                          type="button"
+                          className="grid h-8 w-8 place-items-center rounded-lg text-faint transition hover:bg-[var(--surface-2)] hover:text-accent"
+                          title="Editar admissão"
+                          aria-label={`Editar admissão de ${item.candidatoNome}`}
+                          onClick={() => {
+                            setEditFiltro(undefined);
+                            setEditItem(item);
+                          }}
+                        >
+                          <Icon name="pen" className="h-[16px] w-[16px]" />
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                );
-              })
-            )}
+                  );
+                })
+              )}
+            </div>
           </div>
-        </div>
-      </GlassCard>
+        </GlassCard>
       </div>
 
       {/* ── Diálogos ─────────────────────────────────────────────────────── */}

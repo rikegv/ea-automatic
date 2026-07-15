@@ -92,10 +92,7 @@ export class EsteiraController {
   /** Anexa o ASO do exame (só metadados — o binário não é persistido; §A.6). */
   @Post("exame/:admissaoId/aso")
   @UseInterceptors(FileInterceptor("file"))
-  anexarAso(
-    @Param("admissaoId") admissaoId: string,
-    @UploadedFile() file: Express.Multer.File,
-  ) {
+  anexarAso(@Param("admissaoId") admissaoId: string, @UploadedFile() file: Express.Multer.File) {
     return this.esteira.anexarAso(admissaoId, file);
   }
 

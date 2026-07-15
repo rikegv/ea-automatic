@@ -71,7 +71,9 @@ describe("PandapeApiService — inércia sem credenciais OAuth (§A.5/§A.9)", (
   });
 
   it("inerte se faltar SÓ o secret (client_id presente, secret vazio)", () => {
-    const svc = new PandapeApiService(config({ PANDAPE_CLIENT_ID: "abc", PANDAPE_CLIENT_SECRET: "" }));
+    const svc = new PandapeApiService(
+      config({ PANDAPE_CLIENT_ID: "abc", PANDAPE_CLIENT_SECRET: "" }),
+    );
     expect(svc.estaAtivo()).toBe(false);
   });
 
@@ -143,7 +145,11 @@ describe("PandapeApiService — OAuth client_credentials (cache + refresh + Bear
     vi.stubGlobal("fetch", fn);
     const svc = new PandapeApiService(comCredenciais());
 
-    await Promise.all([svc.getPrecollaborator("A"), svc.getPrecollaborator("B"), svc.getMatch("C")]);
+    await Promise.all([
+      svc.getPrecollaborator("A"),
+      svc.getPrecollaborator("B"),
+      svc.getMatch("C"),
+    ]);
 
     expect(calls.filter((c) => c.url.includes("/connect/token"))).toHaveLength(1);
   });
@@ -183,7 +189,9 @@ describe("PandapeApiService — OAuth client_credentials (cache + refresh + Bear
   it("erro na emissão do token → loga SÓ o status (nunca secret/token) e a chamada vira no-op", async () => {
     const { fn } = fetchRouter({ tokenStatus: 401, apiBody: {} });
     vi.stubGlobal("fetch", fn);
-    const svc = new PandapeApiService(comCredenciais({ PANDAPE_CLIENT_SECRET: "super-secreto-123" }));
+    const svc = new PandapeApiService(
+      comCredenciais({ PANDAPE_CLIENT_SECRET: "super-secreto-123" }),
+    );
     const errorSpy = vi
       .spyOn((svc as unknown as { logger: { error: (m: string) => void } }).logger, "error")
       .mockImplementation(() => undefined);
@@ -230,14 +238,16 @@ describe("PandapeApiService — endpoints v1 (sem /v3)", () => {
 
     await svc.getPrecollaborator("PC-9");
 
-    expect(calls.some((c) => c.url.endsWith("/v1/PreCollaborator/Get?idPreCollaborator=PC-9"))).toBe(
-      true,
-    );
+    expect(
+      calls.some((c) => c.url.endsWith("/v1/PreCollaborator/Get?idPreCollaborator=PC-9")),
+    ).toBe(true);
     expect(calls.some((c) => c.url.includes("/v3/"))).toBe(false);
   });
 
   it("getMatch chama /v1/Match/Get?idMatch= e devolve o CPF (fonte do CPF)", async () => {
-    const { fn, calls } = fetchRouter({ apiBody: { idMatch: 7, cpf: "52998224725", phone: "11999" } });
+    const { fn, calls } = fetchRouter({
+      apiBody: { idMatch: 7, cpf: "52998224725", phone: "11999" },
+    });
     vi.stubGlobal("fetch", fn);
     const svc = new PandapeApiService(comCredenciais());
 

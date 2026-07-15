@@ -82,7 +82,14 @@ function makeService(parts: {
     ...parts.auditoria,
   } as unknown as AuditoriaService;
   const config = { get: () => undefined } as unknown as ConfigService;
-  const svc = new PandapeSyncService(parts.db as never, config, parts.api, queue, admissoes, auditoria);
+  const svc = new PandapeSyncService(
+    parts.db as never,
+    config,
+    parts.api,
+    queue,
+    admissoes,
+    auditoria,
+  );
   return { svc, queue, admissoes, auditoria };
 }
 
@@ -118,7 +125,12 @@ describe("PandapeSyncService — idempotência da sync (DoD §1 / regra 1 / uniq
     expect(opts).toMatchObject({
       origem: "PANDAPE",
       bypassAceite: true,
-      pandape: { idPrecollaborator: "PC-1", idMatch: "M-1", idVacancy: "V-1", etapa: "DOCUMENTACAO" },
+      pandape: {
+        idPrecollaborator: "PC-1",
+        idMatch: "M-1",
+        idVacancy: "V-1",
+        etapa: "DOCUMENTACAO",
+      },
     });
     expect(dto).toMatchObject({ codCliente: "C-10", cargoId: "cargo-1" });
     // nenhuma atualização de etapa: é criação, não conhecido.
@@ -267,9 +279,7 @@ describe("PandapeSyncService — idempotência da sync (DoD §1 / regra 1 / uniq
     const { db, update, updateSet } = makeDb();
     db.query.integracaoPandape.findFirst.mockResolvedValue({ id: "int-1", etapa: "DOCUMENTACAO" });
     const api = makeApi({
-      getPrecollaborator: vi
-        .fn()
-        .mockResolvedValue(pc({ etapa: undefined, stage: "ENTREVISTA" })),
+      getPrecollaborator: vi.fn().mockResolvedValue(pc({ etapa: undefined, stage: "ENTREVISTA" })),
     });
     const { svc } = makeService({ db, api });
 
@@ -346,7 +356,10 @@ describe("PandapeSyncService — pull de docs reusa F2 (DoD §5 / §A.6 URL nunc
       papel: "SUPER_ADMIN",
     });
     // tiposDocumento.findFirst resolve por código (RG existe; o que não for mapeável nem chega aqui).
-    db.query.tiposDocumento.findFirst.mockImplementation(async () => ({ id: "tipo-rg", codigo: "RG" }));
+    db.query.tiposDocumento.findFirst.mockImplementation(async () => ({
+      id: "tipo-rg",
+      codigo: "RG",
+    }));
     const api = makeApi({
       getPrecollaborator: vi.fn().mockResolvedValue(pc({ documents })),
       getVacancy: vi.fn().mockResolvedValue({
@@ -421,7 +434,9 @@ describe("PandapeSyncService — pull de docs reusa F2 (DoD §5 / §A.6 URL nunc
     db.query.tiposDocumento.findFirst.mockResolvedValue({ id: "tipo-cpf", codigo: "CPF" });
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({ ok: false, status: 404, arrayBuffer: async () => new ArrayBuffer(0) }),
+      vi
+        .fn()
+        .mockResolvedValue({ ok: false, status: 404, arrayBuffer: async () => new ArrayBuffer(0) }),
     );
     const { svc, auditoria } = makeService({ db, api });
 

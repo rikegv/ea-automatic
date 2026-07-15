@@ -19,12 +19,12 @@ function montar(over: {
     estaAtivo: vi.fn().mockReturnValue(over.apiAtivo ?? false),
     cancelarEnvelope: over.cancelar ?? vi.fn().mockResolvedValue(undefined),
   };
-  const gerar = over.gerar ?? vi.fn().mockResolvedValue({ downloadToken: "tok", nomeArquivo: "kit.pdf" });
+  const gerar =
+    over.gerar ?? vi.fn().mockResolvedValue({ downloadToken: "tok", nomeArquivo: "kit.pdf" });
   const insertValues = vi.fn().mockResolvedValue(undefined);
   const insert = over.insert ?? vi.fn().mockReturnValue({ values: insertValues });
   const updateWhere = vi.fn().mockResolvedValue(undefined);
-  const update =
-    over.update ?? vi.fn().mockReturnValue({ set: () => ({ where: updateWhere }) });
+  const update = over.update ?? vi.fn().mockReturnValue({ set: () => ({ where: updateWhere }) });
   const db = {
     query: { admissoes: { findFirst: vi.fn().mockResolvedValue(over.admissao) } },
     insert,

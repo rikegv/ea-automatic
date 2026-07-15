@@ -27,12 +27,7 @@ export function ExcelLogo({ className = "h-[18px] w-[18px]", ...rest }: SVGProps
       {/* tile verde do Excel */}
       <rect x="6.6" y="11" width="10.8" height="8.2" rx="1.6" fill="#1d7a45" />
       {/* X branco */}
-      <path
-        d="M9 13.1l6 4M15 13.1l-6 4"
-        stroke="#ffffff"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-      />
+      <path d="M9 13.1l6 4M15 13.1l-6 4" stroke="#ffffff" strokeWidth="1.5" strokeLinecap="round" />
     </svg>
   );
 }

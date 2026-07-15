@@ -5,10 +5,7 @@ import type { SVGProps } from "react";
  * externa, pois o sistema roda on-prem / por túnel e imagens externas podem ser bloqueadas.
  * Cores oficiais; o tamanho vem do `className`/props (default ~16px).
  */
-export function GoogleDriveLogo({
-  className = "h-4 w-4",
-  ...rest
-}: SVGProps<SVGSVGElement>) {
+export function GoogleDriveLogo({ className = "h-4 w-4", ...rest }: SVGProps<SVGSVGElement>) {
   return (
     <svg
       viewBox="0 0 87.3 78"

@@ -56,7 +56,9 @@ async function main(): Promise<void> {
     `SELECT count(*)::int AS n FROM vw_vinculo_empresa_cnpj WHERE cnpj_resolvido IS NOT NULL;`,
   );
   await sql.end();
-  console.log(`[view-relatorio-clinica] vw_vinculo_empresa_cnpj criada. CNPJ resolvido em ${n}/131 vínculos.`);
+  console.log(
+    `[view-relatorio-clinica] vw_vinculo_empresa_cnpj criada. CNPJ resolvido em ${n}/131 vínculos.`,
+  );
 }
 
 if ((process.argv[1] ?? "").includes("view-relatorio-clinica")) {

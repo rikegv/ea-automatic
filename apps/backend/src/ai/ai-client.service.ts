@@ -172,9 +172,7 @@ export class AiClientService {
 
   /** PDF consolidado de UM funcionário do job (Etapa 4). */
   baixarKitFuncionario(jobId: string, indice: number): Promise<KitBinario> {
-    return this.baixarBinario(
-      `/kit/download/${encodeURIComponent(jobId)}/funcionario/${indice}`,
-    );
+    return this.baixarBinario(`/kit/download/${encodeURIComponent(jobId)}/funcionario/${indice}`);
   }
 
   /** ZIP com um PDF por funcionário do job (Etapa 4). */

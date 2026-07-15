@@ -1,384 +1,1284 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="pt-BR">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>EA AUTOMATIC — Protótipo (Claro)</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
-<style>
-  :root{
-    --bg:#eef3f8; --bg2:#e6edf4;
-    --surface:rgba(255,255,255,.74); --surface-2:rgba(255,255,255,.93);
-    --border:rgba(15,55,90,.10); --border-strong:rgba(15,55,90,.18);
-    --text:#0d2b45; --dim:#557089; --faint:#90a3b6;
-    --accent:#1593bd; --accent-vivid:#22b0db; --accent-2:#7ba81f;
-    --ok:#2e9e63; --warn:#c98a12; --danger:#d64545;
-    --r:20px;
-  }
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:'Inter',sans-serif;background:linear-gradient(160deg,#f4f7fb,#e9eef5);color:var(--text);min-height:100vh;overflow-x:hidden}
-  h1,h2,h3,.num{font-family:'Manrope',sans-serif;letter-spacing:-.02em}
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EA AUTOMATIC — Protótipo (Claro)</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Manrope:wght@500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg: #eef3f8;
+        --bg2: #e6edf4;
+        --surface: rgba(255, 255, 255, 0.74);
+        --surface-2: rgba(255, 255, 255, 0.93);
+        --border: rgba(15, 55, 90, 0.1);
+        --border-strong: rgba(15, 55, 90, 0.18);
+        --text: #0d2b45;
+        --dim: #557089;
+        --faint: #90a3b6;
+        --accent: #1593bd;
+        --accent-vivid: #22b0db;
+        --accent-2: #7ba81f;
+        --ok: #2e9e63;
+        --warn: #c98a12;
+        --danger: #d64545;
+        --r: 20px;
+      }
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        font-family: "Inter", sans-serif;
+        background: linear-gradient(160deg, #f4f7fb, #e9eef5);
+        color: var(--text);
+        min-height: 100vh;
+        overflow-x: hidden;
+      }
+      h1,
+      h2,
+      h3,
+      .num {
+        font-family: "Manrope", sans-serif;
+        letter-spacing: -0.02em;
+      }
 
-  /* aurora de fundo — assinatura */
-  .aurora{position:fixed;inset:0;z-index:0;overflow:hidden;filter:blur(90px);opacity:.22;pointer-events:none}
-  .blob{position:absolute;border-radius:50%}
-  .b1{width:500px;height:500px;background:#22b0db;top:-150px;left:-80px;opacity:.5}
-  .b2{width:520px;height:520px;background:#56c2e0;bottom:-190px;right:-70px;opacity:.42}
-  .b3{width:360px;height:360px;background:#aad12f;top:42%;left:48%;opacity:.30}
+      /* aurora de fundo — assinatura */
+      .aurora {
+        position: fixed;
+        inset: 0;
+        z-index: 0;
+        overflow: hidden;
+        filter: blur(90px);
+        opacity: 0.22;
+        pointer-events: none;
+      }
+      .blob {
+        position: absolute;
+        border-radius: 50%;
+      }
+      .b1 {
+        width: 500px;
+        height: 500px;
+        background: #22b0db;
+        top: -150px;
+        left: -80px;
+        opacity: 0.5;
+      }
+      .b2 {
+        width: 520px;
+        height: 520px;
+        background: #56c2e0;
+        bottom: -190px;
+        right: -70px;
+        opacity: 0.42;
+      }
+      .b3 {
+        width: 360px;
+        height: 360px;
+        background: #aad12f;
+        top: 42%;
+        left: 48%;
+        opacity: 0.3;
+      }
 
-  .glass{background:var(--surface);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
-    border:1px solid var(--border);border-radius:var(--r);
-    box-shadow:0 6px 24px rgba(15,40,75,.08), 0 1px 2px rgba(15,40,75,.04), inset 0 1px 0 rgba(255,255,255,.6)}
+      .glass {
+        background: var(--surface);
+        backdrop-filter: blur(18px);
+        -webkit-backdrop-filter: blur(18px);
+        border: 1px solid var(--border);
+        border-radius: var(--r);
+        box-shadow:
+          0 6px 24px rgba(15, 40, 75, 0.08),
+          0 1px 2px rgba(15, 40, 75, 0.04),
+          inset 0 1px 0 rgba(255, 255, 255, 0.6);
+      }
 
-  .screen{display:none;position:relative;z-index:1}
-  .screen.active{display:block}
+      .screen {
+        display: none;
+        position: relative;
+        z-index: 1;
+      }
+      .screen.active {
+        display: block;
+      }
 
-  /* ---------- LOGIN ---------- */
-  #login{min-height:100vh;align-items:center;justify-content:center;padding:24px}
-  #login.active{display:flex}
-  .login-card{width:100%;max-width:400px;padding:40px 36px}
-  .brand{display:flex;align-items:center;gap:12px;margin-bottom:8px}
-  .brand .mark{width:38px;height:38px;border-radius:11px;background:linear-gradient(135deg,var(--accent-vivid),var(--accent-2));
-    display:grid;place-items:center;color:#06210a;font-family:'Manrope';font-weight:800;font-size:18px}
-  .brand .name{font-family:'Manrope';font-weight:800;font-size:19px}
-  .brand .name span{color:var(--accent)}
-  .login-card .sub{color:var(--dim);font-size:14px;margin:18px 0 26px}
-  .field{margin-bottom:16px}
-  .field label{display:block;font-size:12.5px;color:var(--dim);margin-bottom:7px;font-weight:500}
-  .field input{width:100%;padding:12px 14px;border-radius:12px;background:rgba(255,255,255,.7);
-    border:1px solid var(--border);color:var(--text);font-size:14px;font-family:inherit;transition:.2s}
-  .field input:focus{outline:none;border-color:var(--accent);background:#fff}
-  .btn{width:100%;padding:13px;border:none;border-radius:12px;font-family:'Manrope';font-weight:700;font-size:14.5px;
-    cursor:pointer;background:linear-gradient(135deg,var(--accent-vivid),#1593bd);color:#fff;transition:.2s}
-  .btn:hover{transform:translateY(-1px);box-shadow:0 8px 24px rgba(34,176,219,.3)}
+      /* ---------- LOGIN ---------- */
+      #login {
+        min-height: 100vh;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+      }
+      #login.active {
+        display: flex;
+      }
+      .login-card {
+        width: 100%;
+        max-width: 400px;
+        padding: 40px 36px;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 8px;
+      }
+      .brand .mark {
+        width: 38px;
+        height: 38px;
+        border-radius: 11px;
+        background: linear-gradient(135deg, var(--accent-vivid), var(--accent-2));
+        display: grid;
+        place-items: center;
+        color: #06210a;
+        font-family: "Manrope";
+        font-weight: 800;
+        font-size: 18px;
+      }
+      .brand .name {
+        font-family: "Manrope";
+        font-weight: 800;
+        font-size: 19px;
+      }
+      .brand .name span {
+        color: var(--accent);
+      }
+      .login-card .sub {
+        color: var(--dim);
+        font-size: 14px;
+        margin: 18px 0 26px;
+      }
+      .field {
+        margin-bottom: 16px;
+      }
+      .field label {
+        display: block;
+        font-size: 12.5px;
+        color: var(--dim);
+        margin-bottom: 7px;
+        font-weight: 500;
+      }
+      .field input {
+        width: 100%;
+        padding: 12px 14px;
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.7);
+        border: 1px solid var(--border);
+        color: var(--text);
+        font-size: 14px;
+        font-family: inherit;
+        transition: 0.2s;
+      }
+      .field input:focus {
+        outline: none;
+        border-color: var(--accent);
+        background: #fff;
+      }
+      .btn {
+        width: 100%;
+        padding: 13px;
+        border: none;
+        border-radius: 12px;
+        font-family: "Manrope";
+        font-weight: 700;
+        font-size: 14.5px;
+        cursor: pointer;
+        background: linear-gradient(135deg, var(--accent-vivid), #1593bd);
+        color: #fff;
+        transition: 0.2s;
+      }
+      .btn:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 8px 24px rgba(34, 176, 219, 0.3);
+      }
 
-  /* ---------- APP SHELL ---------- */
-  #app{display:none;min-height:100vh}
-  #app.active{display:grid;grid-template-columns:248px 1fr}
-  .side{position:relative;z-index:1;margin:16px 0 16px 16px;padding:22px 16px;display:flex;flex-direction:column;gap:6px}
-  .side .brand{margin:4px 6px 22px}
-  .nav-item{display:flex;align-items:center;gap:12px;padding:11px 13px;border-radius:12px;color:var(--dim);
-    cursor:pointer;font-size:14px;font-weight:500;transition:.18s;border:1px solid transparent}
-  .nav-item svg{width:18px;height:18px;flex:none}
-  .ico{display:inline-flex}.ico svg{width:1em;height:1em}
-  .nav-item:hover{background:var(--surface);color:var(--text)}
-  .nav-item.active{background:var(--surface-2);color:var(--text);border-color:var(--border)}
-  .nav-item.active svg{color:var(--accent)}
-  .nav-sep{height:1px;background:var(--border);margin:12px 8px}
-  .nav-label{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--faint);padding:6px 13px 4px}
-  .side .user{margin-top:auto;display:flex;align-items:center;gap:11px;padding:12px;border-radius:13px;background:var(--surface)}
-  .side .user .av{width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,var(--accent-2),#2d9b6e);color:#fff;
-    display:grid;place-items:center;font-family:'Manrope';font-weight:700;font-size:14px}
-  .side .user .info{line-height:1.3}
-  .side .user .info b{font-size:13px;font-weight:600;display:block}
-  .side .user .info small{font-size:11px;color:var(--faint)}
+      /* ---------- APP SHELL ---------- */
+      #app {
+        display: none;
+        min-height: 100vh;
+      }
+      #app.active {
+        display: grid;
+        grid-template-columns: 248px 1fr;
+      }
+      .side {
+        position: relative;
+        z-index: 1;
+        margin: 16px 0 16px 16px;
+        padding: 22px 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .side .brand {
+        margin: 4px 6px 22px;
+      }
+      .nav-item {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 11px 13px;
+        border-radius: 12px;
+        color: var(--dim);
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 500;
+        transition: 0.18s;
+        border: 1px solid transparent;
+      }
+      .nav-item svg {
+        width: 18px;
+        height: 18px;
+        flex: none;
+      }
+      .ico {
+        display: inline-flex;
+      }
+      .ico svg {
+        width: 1em;
+        height: 1em;
+      }
+      .nav-item:hover {
+        background: var(--surface);
+        color: var(--text);
+      }
+      .nav-item.active {
+        background: var(--surface-2);
+        color: var(--text);
+        border-color: var(--border);
+      }
+      .nav-item.active svg {
+        color: var(--accent);
+      }
+      .nav-sep {
+        height: 1px;
+        background: var(--border);
+        margin: 12px 8px;
+      }
+      .nav-label {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--faint);
+        padding: 6px 13px 4px;
+      }
+      .side .user {
+        margin-top: auto;
+        display: flex;
+        align-items: center;
+        gap: 11px;
+        padding: 12px;
+        border-radius: 13px;
+        background: var(--surface);
+      }
+      .side .user .av {
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        background: linear-gradient(135deg, var(--accent-2), #2d9b6e);
+        color: #fff;
+        display: grid;
+        place-items: center;
+        font-family: "Manrope";
+        font-weight: 700;
+        font-size: 14px;
+      }
+      .side .user .info {
+        line-height: 1.3;
+      }
+      .side .user .info b {
+        font-size: 13px;
+        font-weight: 600;
+        display: block;
+      }
+      .side .user .info small {
+        font-size: 11px;
+        color: var(--faint);
+      }
 
-  .main{padding:28px 32px 40px;position:relative;z-index:1;overflow-y:auto;max-height:100vh}
-  .page{display:none}.page.active{display:block}
-  .head{margin-bottom:26px}
-  .head h1{font-size:26px;font-weight:800}
-  .head p{color:var(--dim);font-size:14px;margin-top:5px}
-  .eyebrow{font-size:12px;text-transform:uppercase;letter-spacing:.1em;color:var(--accent);font-weight:600;margin-bottom:8px}
+      .main {
+        padding: 28px 32px 40px;
+        position: relative;
+        z-index: 1;
+        overflow-y: auto;
+        max-height: 100vh;
+      }
+      .page {
+        display: none;
+      }
+      .page.active {
+        display: block;
+      }
+      .head {
+        margin-bottom: 26px;
+      }
+      .head h1 {
+        font-size: 26px;
+        font-weight: 800;
+      }
+      .head p {
+        color: var(--dim);
+        font-size: 14px;
+        margin-top: 5px;
+      }
+      .eyebrow {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: var(--accent);
+        font-weight: 600;
+        margin-bottom: 8px;
+      }
 
-  /* KPIs */
-  .kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:14px;margin-bottom:26px}
-  .kpi{padding:18px 18px}
-  .kpi .k-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
-  .kpi .k-ico{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;background:rgba(21,147,189,.12)}
-  .kpi .k-ico svg{width:16px;height:16px;color:var(--accent)}
-  .kpi .num{font-size:30px;font-weight:800;line-height:1}
-  .kpi .lbl{font-size:12px;color:var(--dim);margin-top:6px}
-  .kpi .tag{font-size:11px;font-weight:600;padding:3px 7px;border-radius:6px}
-  .tag.up{background:rgba(91,214,138,.15);color:var(--ok)}
-  .tag.warn{background:rgba(245,196,81,.15);color:var(--warn)}
-  .tag.dn{background:rgba(255,107,107,.15);color:var(--danger)}
+      /* KPIs */
+      .kpis {
+        display: grid;
+        grid-template-columns: repeat(6, 1fr);
+        gap: 14px;
+        margin-bottom: 26px;
+      }
+      .kpi {
+        padding: 18px 18px;
+      }
+      .kpi .k-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 14px;
+      }
+      .kpi .k-ico {
+        width: 32px;
+        height: 32px;
+        border-radius: 9px;
+        display: grid;
+        place-items: center;
+        background: rgba(21, 147, 189, 0.12);
+      }
+      .kpi .k-ico svg {
+        width: 16px;
+        height: 16px;
+        color: var(--accent);
+      }
+      .kpi .num {
+        font-size: 30px;
+        font-weight: 800;
+        line-height: 1;
+      }
+      .kpi .lbl {
+        font-size: 12px;
+        color: var(--dim);
+        margin-top: 6px;
+      }
+      .kpi .tag {
+        font-size: 11px;
+        font-weight: 600;
+        padding: 3px 7px;
+        border-radius: 6px;
+      }
+      .tag.up {
+        background: rgba(91, 214, 138, 0.15);
+        color: var(--ok);
+      }
+      .tag.warn {
+        background: rgba(245, 196, 81, 0.15);
+        color: var(--warn);
+      }
+      .tag.dn {
+        background: rgba(255, 107, 107, 0.15);
+        color: var(--danger);
+      }
 
-  /* cards de acesso */
-  .quick{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:26px}
-  .qcard{padding:24px 22px;cursor:pointer;transition:.2s;position:relative;overflow:hidden}
-  .qcard:hover{transform:translateY(-3px);border-color:var(--border-strong);background:var(--surface-2)}
-  .qcard .q-ico{width:46px;height:46px;border-radius:13px;display:grid;place-items:center;margin-bottom:16px;
-    background:linear-gradient(135deg,rgba(34,176,219,.26),rgba(123,168,31,.18));border:1px solid var(--border)}
-  .qcard .q-ico svg{width:23px;height:23px;color:var(--accent)}
-  .qcard h3{font-size:16px;font-weight:700;margin-bottom:6px}
-  .qcard p{font-size:12.5px;color:var(--dim);line-height:1.5}
-  .qcard .arr{position:absolute;top:22px;right:20px;color:var(--faint);transition:.2s}
-  .qcard:hover .arr{color:var(--accent);transform:translateX(3px)}
+      /* cards de acesso */
+      .quick {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 16px;
+        margin-bottom: 26px;
+      }
+      .qcard {
+        padding: 24px 22px;
+        cursor: pointer;
+        transition: 0.2s;
+        position: relative;
+        overflow: hidden;
+      }
+      .qcard:hover {
+        transform: translateY(-3px);
+        border-color: var(--border-strong);
+        background: var(--surface-2);
+      }
+      .qcard .q-ico {
+        width: 46px;
+        height: 46px;
+        border-radius: 13px;
+        display: grid;
+        place-items: center;
+        margin-bottom: 16px;
+        background: linear-gradient(135deg, rgba(34, 176, 219, 0.26), rgba(123, 168, 31, 0.18));
+        border: 1px solid var(--border);
+      }
+      .qcard .q-ico svg {
+        width: 23px;
+        height: 23px;
+        color: var(--accent);
+      }
+      .qcard h3 {
+        font-size: 16px;
+        font-weight: 700;
+        margin-bottom: 6px;
+      }
+      .qcard p {
+        font-size: 12.5px;
+        color: var(--dim);
+        line-height: 1.5;
+      }
+      .qcard .arr {
+        position: absolute;
+        top: 22px;
+        right: 20px;
+        color: var(--faint);
+        transition: 0.2s;
+      }
+      .qcard:hover .arr {
+        color: var(--accent);
+        transform: translateX(3px);
+      }
 
-  /* chart */
-  .panel{padding:22px 24px}
-  .panel h3{font-size:15px;font-weight:700;margin-bottom:2px}
-  .panel .psub{font-size:12.5px;color:var(--dim);margin-bottom:20px}
-  .bars{display:flex;align-items:flex-end;gap:14px;height:150px}
-  .bar-wrap{flex:1;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:8px}
-  .bar{width:100%;border-radius:8px 8px 0 0;background:linear-gradient(180deg,var(--accent-vivid),rgba(34,176,219,.4));transition:.3s}
-  .bar-wrap small{font-size:11px;color:var(--faint)}
+      /* chart */
+      .panel {
+        padding: 22px 24px;
+      }
+      .panel h3 {
+        font-size: 15px;
+        font-weight: 700;
+        margin-bottom: 2px;
+      }
+      .panel .psub {
+        font-size: 12.5px;
+        color: var(--dim);
+        margin-bottom: 20px;
+      }
+      .bars {
+        display: flex;
+        align-items: flex-end;
+        gap: 14px;
+        height: 150px;
+      }
+      .bar-wrap {
+        flex: 1;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+      .bar {
+        width: 100%;
+        border-radius: 8px 8px 0 0;
+        background: linear-gradient(180deg, var(--accent-vivid), rgba(34, 176, 219, 0.4));
+        transition: 0.3s;
+      }
+      .bar-wrap small {
+        font-size: 11px;
+        color: var(--faint);
+      }
 
+      /* banner de notícias (herói da home) */
+      .banner {
+        position: relative;
+        padding: 30px 32px;
+        min-height: 150px;
+        overflow: hidden;
+        margin-bottom: 26px;
+      }
+      .banner .b-eyebrow {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        color: var(--accent);
+        font-weight: 600;
+        margin-bottom: 14px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .banner .b-eyebrow .live {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--accent);
+        box-shadow: 0 0 0 0 rgba(34, 176, 219, 0.6);
+        animation: pulse 2s infinite;
+      }
+      @keyframes pulse {
+        0% {
+          box-shadow: 0 0 0 0 rgba(34, 176, 219, 0.55);
+        }
+        70% {
+          box-shadow: 0 0 0 9px rgba(34, 176, 219, 0);
+        }
+        100% {
+          box-shadow: 0 0 0 0 rgba(34, 176, 219, 0);
+        }
+      }
+      .slides {
+        position: relative;
+        min-height: 64px;
+      }
+      .slide {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: flex-start;
+        gap: 16px;
+        opacity: 0;
+        transform: translateX(16px);
+        transition:
+          opacity 0.5s,
+          transform 0.5s;
+        pointer-events: none;
+      }
+      .slide.on {
+        opacity: 1;
+        transform: translateX(0);
+        pointer-events: auto;
+      }
+      .slide .s-ico {
+        width: 46px;
+        height: 46px;
+        border-radius: 13px;
+        flex: none;
+        display: grid;
+        place-items: center;
+        border: 1px solid var(--border);
+        background: rgba(34, 176, 219, 0.14);
+      }
+      .slide .s-ico svg {
+        width: 23px;
+        height: 23px;
+        color: var(--accent);
+      }
+      .slide .s-ico.warn {
+        background: rgba(201, 138, 18, 0.14);
+      }
+      .slide .s-ico.warn svg {
+        color: var(--warn);
+      }
+      .slide .s-ico.peak {
+        background: rgba(123, 168, 31, 0.16);
+      }
+      .slide .s-ico.peak svg {
+        color: var(--accent-2);
+      }
+      .slide .s-txt {
+        font-size: 16.5px;
+        line-height: 1.55;
+        font-weight: 500;
+        color: var(--text);
+        font-family: "Manrope";
+        max-width: 760px;
+      }
+      .slide .s-txt b {
+        color: var(--accent);
+        font-weight: 700;
+      }
+      .banner .b-foot {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-top: 18px;
+      }
+      .dots {
+        display: flex;
+        gap: 7px;
+      }
+      .dots .d {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--faint);
+        opacity: 0.5;
+        cursor: pointer;
+        transition: 0.2s;
+      }
+      .dots .d.on {
+        background: var(--accent);
+        opacity: 1;
+        width: 22px;
+        border-radius: 4px;
+      }
+      .b-nav {
+        display: flex;
+        gap: 8px;
+      }
+      .b-nav button {
+        width: 34px;
+        height: 34px;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--dim);
+        cursor: pointer;
+        display: grid;
+        place-items: center;
+        transition: 0.18s;
+      }
+      .b-nav button:hover {
+        color: var(--text);
+        background: var(--surface-2);
+        border-color: var(--border-strong);
+      }
+      .b-nav button svg {
+        width: 17px;
+        height: 17px;
+      }
 
-  /* banner de notícias (herói da home) */
-  .banner{position:relative;padding:30px 32px;min-height:150px;overflow:hidden;margin-bottom:26px}
-  .banner .b-eyebrow{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:var(--accent);font-weight:600;margin-bottom:14px;display:flex;align-items:center;gap:8px}
-  .banner .b-eyebrow .live{width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 0 rgba(34,176,219,.6);animation:pulse 2s infinite}
-  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(34,176,219,.55)}70%{box-shadow:0 0 0 9px rgba(34,176,219,0)}100%{box-shadow:0 0 0 0 rgba(34,176,219,0)}}
-  .slides{position:relative;min-height:64px}
-  .slide{position:absolute;inset:0;display:flex;align-items:flex-start;gap:16px;opacity:0;transform:translateX(16px);transition:opacity .5s,transform .5s;pointer-events:none}
-  .slide.on{opacity:1;transform:translateX(0);pointer-events:auto}
-  .slide .s-ico{width:46px;height:46px;border-radius:13px;flex:none;display:grid;place-items:center;border:1px solid var(--border);background:rgba(34,176,219,.14)}
-  .slide .s-ico svg{width:23px;height:23px;color:var(--accent)}
-  .slide .s-ico.warn{background:rgba(201,138,18,.14)} .slide .s-ico.warn svg{color:var(--warn)}
-  .slide .s-ico.peak{background:rgba(123,168,31,.16)} .slide .s-ico.peak svg{color:var(--accent-2)}
-  .slide .s-txt{font-size:16.5px;line-height:1.55;font-weight:500;color:var(--text);font-family:'Manrope';max-width:760px}
-  .slide .s-txt b{color:var(--accent);font-weight:700}
-  .banner .b-foot{display:flex;align-items:center;justify-content:space-between;margin-top:18px}
-  .dots{display:flex;gap:7px}
-  .dots .d{width:7px;height:7px;border-radius:50%;background:var(--faint);opacity:.5;cursor:pointer;transition:.2s}
-  .dots .d.on{background:var(--accent);opacity:1;width:22px;border-radius:4px}
-  .b-nav{display:flex;gap:8px}
-  .b-nav button{width:34px;height:34px;border-radius:10px;border:1px solid var(--border);background:var(--surface);
-    color:var(--dim);cursor:pointer;display:grid;place-items:center;transition:.18s}
-  .b-nav button:hover{color:var(--text);background:var(--surface-2);border-color:var(--border-strong)}
-  .b-nav button svg{width:17px;height:17px}
+      /* esteira / faróis */
+      .tabs {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 22px;
+      }
+      .tab {
+        padding: 10px 18px;
+        border-radius: 12px;
+        font-size: 13.5px;
+        font-weight: 600;
+        cursor: pointer;
+        color: var(--dim);
+        border: 1px solid transparent;
+        transition: 0.18s;
+      }
+      .tab:hover {
+        color: var(--text);
+      }
+      .tab.active {
+        background: var(--surface-2);
+        color: var(--text);
+        border-color: var(--border);
+      }
+      .tab.active .dot {
+        background: var(--accent);
+      }
+      .tab .dot {
+        display: inline-block;
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--faint);
+        margin-right: 8px;
+        vertical-align: middle;
+      }
 
-  /* esteira / faróis */
-  .tabs{display:flex;gap:8px;margin-bottom:22px}
-  .tab{padding:10px 18px;border-radius:12px;font-size:13.5px;font-weight:600;cursor:pointer;color:var(--dim);
-    border:1px solid transparent;transition:.18s}
-  .tab:hover{color:var(--text)}
-  .tab.active{background:var(--surface-2);color:var(--text);border-color:var(--border)}
-  .tab.active .dot{background:var(--accent)}
-  .tab .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--faint);margin-right:8px;vertical-align:middle}
+      .farol-kpis {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 14px;
+        margin-bottom: 22px;
+      }
+      .fk {
+        padding: 16px 18px;
+      }
+      .fk .num {
+        font-size: 24px;
+        font-weight: 800;
+      }
+      .fk .lbl {
+        font-size: 12px;
+        color: var(--dim);
+        margin-top: 5px;
+      }
 
-  .farol-kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:22px}
-  .fk{padding:16px 18px}
-  .fk .num{font-size:24px;font-weight:800}
-  .fk .lbl{font-size:12px;color:var(--dim);margin-top:5px}
+      .list {
+        padding: 8px;
+      }
+      .row {
+        display: grid;
+        grid-template-columns: 2fr 1.4fr 1.4fr 1fr 40px;
+        gap: 14px;
+        align-items: center;
+        padding: 15px 16px;
+        border-radius: 13px;
+        transition: 0.15s;
+      }
+      .row:hover {
+        background: var(--surface);
+      }
+      .row + .row {
+        border-top: 1px solid var(--border);
+      }
+      .row .nm {
+        font-weight: 600;
+        font-size: 14px;
+      }
+      .row .meta {
+        font-size: 12.5px;
+        color: var(--dim);
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        font-weight: 600;
+        padding: 5px 11px;
+        border-radius: 8px;
+      }
+      .pill .pd {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+      }
+      .pill.ok {
+        background: rgba(91, 214, 138, 0.13);
+        color: var(--ok);
+      }
+      .pill.ok .pd {
+        background: var(--ok);
+      }
+      .pill.wn {
+        background: rgba(245, 196, 81, 0.13);
+        color: var(--warn);
+      }
+      .pill.wn .pd {
+        background: var(--warn);
+      }
+      .pill.dg {
+        background: rgba(255, 107, 107, 0.13);
+        color: var(--danger);
+      }
+      .pill.dg .pd {
+        background: var(--danger);
+      }
+      .pill.nt {
+        background: rgba(147, 164, 186, 0.13);
+        color: var(--dim);
+      }
+      .pill.nt .pd {
+        background: var(--dim);
+      }
+      .row .go {
+        color: var(--faint);
+        cursor: pointer;
+        text-align: center;
+      }
+      .row .go:hover {
+        color: var(--accent);
+      }
+      .list-head {
+        display: grid;
+        grid-template-columns: 2fr 1.4fr 1.4fr 1fr 40px;
+        gap: 14px;
+        padding: 6px 16px 12px;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--faint);
+        font-weight: 600;
+      }
 
-  .list{padding:8px}
-  .row{display:grid;grid-template-columns:2fr 1.4fr 1.4fr 1fr 40px;gap:14px;align-items:center;
-    padding:15px 16px;border-radius:13px;transition:.15s}
-  .row:hover{background:var(--surface)}
-  .row + .row{border-top:1px solid var(--border)}
-  .row .nm{font-weight:600;font-size:14px}
-  .row .meta{font-size:12.5px;color:var(--dim)}
-  .pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;padding:5px 11px;border-radius:8px}
-  .pill .pd{width:6px;height:6px;border-radius:50%}
-  .pill.ok{background:rgba(91,214,138,.13);color:var(--ok)} .pill.ok .pd{background:var(--ok)}
-  .pill.wn{background:rgba(245,196,81,.13);color:var(--warn)} .pill.wn .pd{background:var(--warn)}
-  .pill.dg{background:rgba(255,107,107,.13);color:var(--danger)} .pill.dg .pd{background:var(--danger)}
-  .pill.nt{background:rgba(147,164,186,.13);color:var(--dim)} .pill.nt .pd{background:var(--dim)}
-  .row .go{color:var(--faint);cursor:pointer;text-align:center}
-  .row .go:hover{color:var(--accent)}
-  .list-head{display:grid;grid-template-columns:2fr 1.4fr 1.4fr 1fr 40px;gap:14px;padding:6px 16px 12px;
-    font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--faint);font-weight:600}
-
-  .demo-note{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);z-index:50;
-    font-size:12px;color:var(--dim);padding:8px 16px;border-radius:30px}
-  @media(max-width:1100px){.kpis{grid-template-columns:repeat(3,1fr)}.quick{grid-template-columns:repeat(2,1fr)}}
-</style>
-</head>
-<body>
-
-<div class="aurora"><div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div></div>
-
-<!-- LOGIN -->
-<section id="login" class="screen active">
-  <div class="login-card glass">
-    <div class="brand"><div class="mark">EA</div><div class="name">EA <span>AUTOMATIC</span></div></div>
-    <p class="sub">Gestão da esteira admissional. Entre para continuar.</p>
-    <div class="field"><label>E-mail</label><input type="email" value="admin@ea.local"></div>
-    <div class="field"><label>Senha</label><input type="password" value="••••••••••"></div>
-    <button class="btn" onclick="enter()">Entrar</button>
-  </div>
-</section>
-
-<!-- APP -->
-<div id="app">
-  <aside class="side glass">
-    <div class="brand"><div class="mark">EA</div><div class="name">EA <span>AUTOMATIC</span></div></div>
-    <div class="nav-label">Operação</div>
-    <div class="nav-item active" onclick="nav(this,'home')"><i class="ico" data-i="home"></i><span>Início</span></div>
-    <div class="nav-item" onclick="nav(this,'analise')"><i class="ico" data-i="chart"></i><span>Análise gerencial</span></div>
-    <div class="nav-item" onclick="nav(this,'nova')"><i class="ico" data-i="plus"></i><span>Nova admissão</span></div>
-    <div class="nav-item" onclick="nav(this,'esteira')"><i class="ico" data-i="layers"></i><span>Esteira admissional</span></div>
-    <div class="nav-item" onclick="nav(this,'ger')"><i class="ico" data-i="table"></i><span>Gerenciador</span></div>
-    <div class="nav-sep"></div>
-    <div class="nav-label">Administração</div>
-    <div class="nav-item" onclick="nav(this,'admin')"><i class="ico" data-i="cog"></i><span>Cadastros</span></div>
-    <div class="user">
-      <div class="av">R</div>
-      <div class="info"><b>Rike Vieira</b><small>Super Admin</small></div>
+      .demo-note {
+        position: fixed;
+        bottom: 16px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 50;
+        font-size: 12px;
+        color: var(--dim);
+        padding: 8px 16px;
+        border-radius: 30px;
+      }
+      @media (max-width: 1100px) {
+        .kpis {
+          grid-template-columns: repeat(3, 1fr);
+        }
+        .quick {
+          grid-template-columns: repeat(2, 1fr);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="aurora">
+      <div class="blob b1"></div>
+      <div class="blob b2"></div>
+      <div class="blob b3"></div>
     </div>
-  </aside>
 
-  <main class="main">
-    <!-- HOME -->
-    <section class="page active" id="page-home">
-      <div class="head">
-        <div class="eyebrow">Painel inicial</div>
-        <h1>Bom dia, Rike</h1>
-        <p>O que está acontecendo na esteira agora.</p>
-      </div>
-
-      <div class="banner glass">
-        <div class="b-eyebrow"><span class="live"></span>Radar da esteira</div>
-        <div class="slides" id="slides">
-          <div class="slide on">
-            <div class="s-ico warn"><i class="ico" data-i="alert"></i></div>
-            <div class="s-txt">O cliente <b>Testetestando</b> está com <b>5 vagas</b> de Operador de Teste para iniciar em <b>3 de julho</b> — fiquem atentos, só <b>4</b> estão com o processo pronto.</div>
-          </div>
-          <div class="slide">
-            <div class="s-ico"><i class="ico" data-i="layers"></i></div>
-            <div class="s-txt">Hoje a EA Automatic está com <b>14 clientes</b> em andamento, somando <b>59 admissões</b> ativas na esteira.</div>
-          </div>
-          <div class="slide">
-            <div class="s-ico peak"><i class="ico" data-i="peak"></i></div>
-            <div class="s-txt">Prepare o time: o próximo pico é <b>16/07</b>, com <b>50 pessoas</b> iniciando no mesmo dia.</div>
-          </div>
+    <!-- LOGIN -->
+    <section id="login" class="screen active">
+      <div class="login-card glass">
+        <div class="brand">
+          <div class="mark">EA</div>
+          <div class="name">EA <span>AUTOMATIC</span></div>
         </div>
-        <div class="b-foot">
-          <div class="dots" id="dots"></div>
-          <div class="b-nav">
-            <button onclick="slidePrev()" aria-label="Anterior"><i class="ico" data-i="left"></i></button>
-            <button onclick="slideNext()" aria-label="Próximo"><i class="ico" data-i="right"></i></button>
-          </div>
-        </div>
-      </div>
-
-      <div class="quick">
-        <div class="qcard glass" onclick="goNav('nova')"><div class="q-ico"><i class="ico" data-i="plus"></i></div><span class="arr"><i class="ico" data-i="arr"></i></span><h3>Nova admissão</h3><p>Cadastrar candidato em três etapas: cliente, vaga e dados pessoais.</p></div>
-        <div class="qcard glass" onclick="goNav('esteira')"><div class="q-ico"><i class="ico" data-i="layers"></i></div><span class="arr"><i class="ico" data-i="arr"></i></span><h3>Esteira admissional</h3><p>Faróis de auditoria, exame e cadastro — operação por frente.</p></div>
-        <div class="qcard glass" onclick="goNav('ger')"><div class="q-ico"><i class="ico" data-i="table"></i></div><span class="arr"><i class="ico" data-i="arr"></i></span><h3>Gerenciador</h3><p>Todas as admissões em tabela, com filtros e busca global.</p></div>
-        <div class="qcard glass" onclick="goNav('analise')"><div class="q-ico"><i class="ico" data-i="chart"></i></div><span class="arr"><i class="ico" data-i="arr"></i></span><h3>Análise gerencial</h3><p>KPIs da operação e volume de admissões por período.</p></div>
+        <p class="sub">Gestão da esteira admissional. Entre para continuar.</p>
+        <div class="field"><label>E-mail</label><input type="email" value="admin@ea.local" /></div>
+        <div class="field"><label>Senha</label><input type="password" value="••••••••••" /></div>
+        <button class="btn" onclick="enter()">Entrar</button>
       </div>
     </section>
 
-    <section class="page" id="page-analise">
-      <div class="head">
-        <div class="eyebrow">Análise gerencial</div>
-        <h1>Indicadores da operação</h1>
-        <p>Visão consolidada — atualizada em tempo real.</p>
-      </div>
-      <div class="kpis">
-        <div class="kpi glass"><div class="k-top"><div class="k-ico"><i class="ico" data-i="layers"></i></div><span class="tag up">+8%</span></div><div class="num">142</div><div class="lbl">Admissões ativas</div></div>
-        <div class="kpi glass"><div class="k-top"><div class="k-ico"><i class="ico" data-i="clock"></i></div><span class="tag dn">11</span></div><div class="num">11</div><div class="lbl">SLA vencido</div></div>
-        <div class="kpi glass"><div class="k-top"><div class="k-ico"><i class="ico" data-i="check"></i></div><span class="tag up">mês</span></div><div class="num">87</div><div class="lbl">Concluídas no mês</div></div>
-        <div class="kpi glass"><div class="k-top"><div class="k-ico"><i class="ico" data-i="doc"></i></div></div><div class="num">53</div><div class="lbl">Em auditoria</div></div>
-        <div class="kpi glass"><div class="k-top"><div class="k-ico"><i class="ico" data-i="heart"></i></div></div><div class="num">38</div><div class="lbl">Em exame</div></div>
-        <div class="kpi glass"><div class="k-top"><div class="k-ico"><i class="ico" data-i="pen"></i></div></div><div class="num">21</div><div class="lbl">Em cadastro</div></div>
-      </div>
-      <div class="panel glass">
-        <h3>Volume de admissões</h3>
-        <p class="psub">Por semana — últimas 6 semanas</p>
-        <div class="bars">
-          <div class="bar-wrap"><div class="bar" style="height:55%"></div><small>S1</small></div>
-          <div class="bar-wrap"><div class="bar" style="height:72%"></div><small>S2</small></div>
-          <div class="bar-wrap"><div class="bar" style="height:48%"></div><small>S3</small></div>
-          <div class="bar-wrap"><div class="bar" style="height:88%"></div><small>S4</small></div>
-          <div class="bar-wrap"><div class="bar" style="height:67%"></div><small>S5</small></div>
-          <div class="bar-wrap"><div class="bar" style="height:95%"></div><small>S6</small></div>
+    <!-- APP -->
+    <div id="app">
+      <aside class="side glass">
+        <div class="brand">
+          <div class="mark">EA</div>
+          <div class="name">EA <span>AUTOMATIC</span></div>
         </div>
-      </div>
-    </section>
+        <div class="nav-label">Operação</div>
+        <div class="nav-item active" onclick="nav(this, 'home')">
+          <i class="ico" data-i="home"></i><span>Início</span>
+        </div>
+        <div class="nav-item" onclick="nav(this, 'analise')">
+          <i class="ico" data-i="chart"></i><span>Análise gerencial</span>
+        </div>
+        <div class="nav-item" onclick="nav(this, 'nova')">
+          <i class="ico" data-i="plus"></i><span>Nova admissão</span>
+        </div>
+        <div class="nav-item" onclick="nav(this, 'esteira')">
+          <i class="ico" data-i="layers"></i><span>Esteira admissional</span>
+        </div>
+        <div class="nav-item" onclick="nav(this, 'ger')">
+          <i class="ico" data-i="table"></i><span>Gerenciador</span>
+        </div>
+        <div class="nav-sep"></div>
+        <div class="nav-label">Administração</div>
+        <div class="nav-item" onclick="nav(this, 'admin')">
+          <i class="ico" data-i="cog"></i><span>Cadastros</span>
+        </div>
+        <div class="user">
+          <div class="av">R</div>
+          <div class="info"><b>Rike Vieira</b><small>Super Admin</small></div>
+        </div>
+      </aside>
 
-    <!-- ESTEIRA -->
-    <section class="page" id="page-esteira">
-      <div class="head">
-        <div class="eyebrow">Esteira admissional</div>
-        <h1>Faróis por frente</h1>
-        <p>Cada frente opera de forma independente. Todos os consultores enxergam todas.</p>
-      </div>
-      <div class="tabs">
-        <div class="tab active" onclick="tab(this,0)"><span class="dot"></span>Auditoria</div>
-        <div class="tab" onclick="tab(this,1)"><span class="dot"></span>Exame</div>
-        <div class="tab" onclick="tab(this,2)"><span class="dot"></span>Cadastro / Contrato</div>
-      </div>
-      <div class="farol-kpis">
-        <div class="fk glass"><div class="num">53</div><div class="lbl">Na frente</div></div>
-        <div class="fk glass"><div class="num" style="color:var(--ok)">31</div><div class="lbl">Documentação completa</div></div>
-        <div class="fk glass"><div class="num" style="color:var(--warn)">18</div><div class="lbl">Pendência de documento</div></div>
-        <div class="fk glass"><div class="num" style="color:var(--danger)">4</div><div class="lbl">Aguardando reenvio</div></div>
-      </div>
-      <div class="list glass">
-        <div class="list-head"><span>Candidato</span><span>Cliente</span><span>Cargo</span><span>Status</span><span></span></div>
-        <div class="row"><div><div class="nm">Alessandra A. de Freitas</div><div class="meta">recebido há 2 dias</div></div><div class="meta">PETZ</div><div class="meta">Ajudante Geral</div><div><span class="pill ok"><span class="pd"></span>Análise ok</span></div><div class="go"><i class="ico" data-i="arr"></i></div></div>
-        <div class="row"><div><div class="nm">Marcos Guilherme Molinari</div><div class="meta">recebido há 1 dia</div></div><div class="meta">Blue Skies</div><div class="meta">Operador</div><div><span class="pill wn"><span class="pd"></span>Pendente</span></div><div class="go"><i class="ico" data-i="arr"></i></div></div>
-        <div class="row"><div><div class="nm">Cláudio N. Miranda</div><div class="meta">recebido hoje</div></div><div class="meta">AutoZone</div><div class="meta">Estoquista</div><div><span class="pill dg"><span class="pd"></span>Aguard. reenvio</span></div><div class="go"><i class="ico" data-i="arr"></i></div></div>
-        <div class="row"><div><div class="nm">Patrícia Souza Lima</div><div class="meta">recebido há 3 dias</div></div><div class="meta">BMB Obramax</div><div class="meta">Vendedora</div><div><span class="pill ok"><span class="pd"></span>Análise ok</span></div><div class="go"><i class="ico" data-i="arr"></i></div></div>
-      </div>
-    </section>
+      <main class="main">
+        <!-- HOME -->
+        <section class="page active" id="page-home">
+          <div class="head">
+            <div class="eyebrow">Painel inicial</div>
+            <h1>Bom dia, Rike</h1>
+            <p>O que está acontecendo na esteira agora.</p>
+          </div>
 
-    <!-- placeholders simples -->
-    <section class="page" id="page-nova"><div class="head"><div class="eyebrow">Nova admissão</div><h1>Cadastro em etapas</h1><p>Wizard: cliente → vaga → candidato. (tela na Fase 2)</p></div><div class="panel glass"><p style="color:var(--dim)">Protótipo da etapa de cadastro entra na Fase 2.</p></div></section>
-    <section class="page" id="page-ger"><div class="head"><div class="eyebrow">Gerenciador</div><h1>Todas as admissões</h1><p>Tabela com filtros e busca global. (tela na Fase 2)</p></div><div class="panel glass"><p style="color:var(--dim)">Protótipo do gerenciador entra na Fase 2.</p></div></section>
-    <section class="page" id="page-admin"><div class="head"><div class="eyebrow">Administração</div><h1>Cadastros</h1><p>Clientes, cargos e régua documental.</p></div><div class="quick"><div class="qcard glass"><div class="q-ico"><i class="ico" data-i="users"></i></div><h3>Clientes</h3><p>Código, razão social, CNPJ e nome de operação.</p></div><div class="qcard glass"><div class="q-ico"><i class="ico" data-i="tag"></i></div><h3>Cargos</h3><p>Catálogo de cargos do processo.</p></div><div class="qcard glass"><div class="q-ico"><i class="ico" data-i="doc"></i></div><h3>Régua documental</h3><p>Documentos exigidos por cliente + cargo.</p></div></div></section>
-  </main>
-</div>
+          <div class="banner glass">
+            <div class="b-eyebrow"><span class="live"></span>Radar da esteira</div>
+            <div class="slides" id="slides">
+              <div class="slide on">
+                <div class="s-ico warn"><i class="ico" data-i="alert"></i></div>
+                <div class="s-txt">
+                  O cliente <b>Testetestando</b> está com <b>5 vagas</b> de Operador de Teste para
+                  iniciar em <b>3 de julho</b> — fiquem atentos, só <b>4</b> estão com o processo
+                  pronto.
+                </div>
+              </div>
+              <div class="slide">
+                <div class="s-ico"><i class="ico" data-i="layers"></i></div>
+                <div class="s-txt">
+                  Hoje a EA Automatic está com <b>14 clientes</b> em andamento, somando
+                  <b>59 admissões</b> ativas na esteira.
+                </div>
+              </div>
+              <div class="slide">
+                <div class="s-ico peak"><i class="ico" data-i="peak"></i></div>
+                <div class="s-txt">
+                  Prepare o time: o próximo pico é <b>16/07</b>, com <b>50 pessoas</b> iniciando no
+                  mesmo dia.
+                </div>
+              </div>
+            </div>
+            <div class="b-foot">
+              <div class="dots" id="dots"></div>
+              <div class="b-nav">
+                <button onclick="slidePrev()" aria-label="Anterior">
+                  <i class="ico" data-i="left"></i>
+                </button>
+                <button onclick="slideNext()" aria-label="Próximo">
+                  <i class="ico" data-i="right"></i>
+                </button>
+              </div>
+            </div>
+          </div>
 
-<div class="demo-note glass">Protótipo · modo claro · navegue pelo menu lateral</div>
+          <div class="quick">
+            <div class="qcard glass" onclick="goNav('nova')">
+              <div class="q-ico"><i class="ico" data-i="plus"></i></div>
+              <span class="arr"><i class="ico" data-i="arr"></i></span>
+              <h3>Nova admissão</h3>
+              <p>Cadastrar candidato em três etapas: cliente, vaga e dados pessoais.</p>
+            </div>
+            <div class="qcard glass" onclick="goNav('esteira')">
+              <div class="q-ico"><i class="ico" data-i="layers"></i></div>
+              <span class="arr"><i class="ico" data-i="arr"></i></span>
+              <h3>Esteira admissional</h3>
+              <p>Faróis de auditoria, exame e cadastro — operação por frente.</p>
+            </div>
+            <div class="qcard glass" onclick="goNav('ger')">
+              <div class="q-ico"><i class="ico" data-i="table"></i></div>
+              <span class="arr"><i class="ico" data-i="arr"></i></span>
+              <h3>Gerenciador</h3>
+              <p>Todas as admissões em tabela, com filtros e busca global.</p>
+            </div>
+            <div class="qcard glass" onclick="goNav('analise')">
+              <div class="q-ico"><i class="ico" data-i="chart"></i></div>
+              <span class="arr"><i class="ico" data-i="arr"></i></span>
+              <h3>Análise gerencial</h3>
+              <p>KPIs da operação e volume de admissões por período.</p>
+            </div>
+          </div>
+        </section>
 
-<script>
-  // ícones
-  const I={
-    HOME:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10l9-7 9 7v9a2 2 0 0 1-2 2h-3v-7H8v7H5a2 2 0 0 1-2-2z"/></svg>',
-    PLUS:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>',
-    LAYERS:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l9 5-9 5-9-5z"/><path d="M3 12l9 5 9-5"/></svg>',
-    TABLE:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 4v16"/></svg>',
-    COG:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.3 1a7 7 0 0 0-1.7-1l-.3-2.5h-4l-.3 2.5a7 7 0 0 0-1.7 1l-2.3-1-2 3.4L4.1 11a7 7 0 0 0 0 2l-2 1.5 2 3.4 2.3-1a7 7 0 0 0 1.7 1l.3 2.5h4l.3-2.5a7 7 0 0 0 1.7-1l2.3 1 2-3.4-2-1.5a7 7 0 0 0 .1-1z"/></svg>',
-    CLOCK:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
-    CHECK:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>',
-    DOC:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>',
-    HEART:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 14c1.5-1.5 3-3.2 3-5.5A3.5 3.5 0 0 0 12 6 3.5 3.5 0 0 0 2 8.5c0 2.3 1.5 4 3 5.5l7 7z"/></svg>',
-    PEN:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>',
-    ARR:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
-    USERS:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.9"/></svg>',
-    ALERT:'<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z\"/><path d=\"M12 9v4M12 17h.01\"/></svg>',
-    PEAK:'<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M3 17l6-6 4 4 8-8\"/><path d=\"M21 7v6h-6\"/></svg>',
-    CHART:'<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M3 3v18h18\"/><rect x=\"7\" y=\"11\" width=\"3\" height=\"6\"/><rect x=\"13\" y=\"7\" width=\"3\" height=\"10\"/></svg>',
-    LEFT:'<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M15 18l-6-6 6-6\"/></svg>',
-    RIGHT:'<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M9 18l6-6-6-6\"/></svg>',
-    TAG:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 12l-8 8-9-9V3h8z"/><circle cx="7.5" cy="7.5" r="1.5" fill="currentColor"/></svg>'
-  };
-  document.querySelectorAll('[data-i]').forEach(function(e){var k=e.dataset.i.toUpperCase();if(I[k])e.innerHTML=I[k];});
+        <section class="page" id="page-analise">
+          <div class="head">
+            <div class="eyebrow">Análise gerencial</div>
+            <h1>Indicadores da operação</h1>
+            <p>Visão consolidada — atualizada em tempo real.</p>
+          </div>
+          <div class="kpis">
+            <div class="kpi glass">
+              <div class="k-top">
+                <div class="k-ico"><i class="ico" data-i="layers"></i></div>
+                <span class="tag up">+8%</span>
+              </div>
+              <div class="num">142</div>
+              <div class="lbl">Admissões ativas</div>
+            </div>
+            <div class="kpi glass">
+              <div class="k-top">
+                <div class="k-ico"><i class="ico" data-i="clock"></i></div>
+                <span class="tag dn">11</span>
+              </div>
+              <div class="num">11</div>
+              <div class="lbl">SLA vencido</div>
+            </div>
+            <div class="kpi glass">
+              <div class="k-top">
+                <div class="k-ico"><i class="ico" data-i="check"></i></div>
+                <span class="tag up">mês</span>
+              </div>
+              <div class="num">87</div>
+              <div class="lbl">Concluídas no mês</div>
+            </div>
+            <div class="kpi glass">
+              <div class="k-top">
+                <div class="k-ico"><i class="ico" data-i="doc"></i></div>
+              </div>
+              <div class="num">53</div>
+              <div class="lbl">Em auditoria</div>
+            </div>
+            <div class="kpi glass">
+              <div class="k-top">
+                <div class="k-ico"><i class="ico" data-i="heart"></i></div>
+              </div>
+              <div class="num">38</div>
+              <div class="lbl">Em exame</div>
+            </div>
+            <div class="kpi glass">
+              <div class="k-top">
+                <div class="k-ico"><i class="ico" data-i="pen"></i></div>
+              </div>
+              <div class="num">21</div>
+              <div class="lbl">Em cadastro</div>
+            </div>
+          </div>
+          <div class="panel glass">
+            <h3>Volume de admissões</h3>
+            <p class="psub">Por semana — últimas 6 semanas</p>
+            <div class="bars">
+              <div class="bar-wrap">
+                <div class="bar" style="height: 55%"></div>
+                <small>S1</small>
+              </div>
+              <div class="bar-wrap">
+                <div class="bar" style="height: 72%"></div>
+                <small>S2</small>
+              </div>
+              <div class="bar-wrap">
+                <div class="bar" style="height: 48%"></div>
+                <small>S3</small>
+              </div>
+              <div class="bar-wrap">
+                <div class="bar" style="height: 88%"></div>
+                <small>S4</small>
+              </div>
+              <div class="bar-wrap">
+                <div class="bar" style="height: 67%"></div>
+                <small>S5</small>
+              </div>
+              <div class="bar-wrap">
+                <div class="bar" style="height: 95%"></div>
+                <small>S6</small>
+              </div>
+            </div>
+          </div>
+        </section>
 
+        <!-- ESTEIRA -->
+        <section class="page" id="page-esteira">
+          <div class="head">
+            <div class="eyebrow">Esteira admissional</div>
+            <h1>Faróis por frente</h1>
+            <p>Cada frente opera de forma independente. Todos os consultores enxergam todas.</p>
+          </div>
+          <div class="tabs">
+            <div class="tab active" onclick="tab(this, 0)"><span class="dot"></span>Auditoria</div>
+            <div class="tab" onclick="tab(this, 1)"><span class="dot"></span>Exame</div>
+            <div class="tab" onclick="tab(this, 2)">
+              <span class="dot"></span>Cadastro / Contrato
+            </div>
+          </div>
+          <div class="farol-kpis">
+            <div class="fk glass">
+              <div class="num">53</div>
+              <div class="lbl">Na frente</div>
+            </div>
+            <div class="fk glass">
+              <div class="num" style="color: var(--ok)">31</div>
+              <div class="lbl">Documentação completa</div>
+            </div>
+            <div class="fk glass">
+              <div class="num" style="color: var(--warn)">18</div>
+              <div class="lbl">Pendência de documento</div>
+            </div>
+            <div class="fk glass">
+              <div class="num" style="color: var(--danger)">4</div>
+              <div class="lbl">Aguardando reenvio</div>
+            </div>
+          </div>
+          <div class="list glass">
+            <div class="list-head">
+              <span>Candidato</span><span>Cliente</span><span>Cargo</span><span>Status</span
+              ><span></span>
+            </div>
+            <div class="row">
+              <div>
+                <div class="nm">Alessandra A. de Freitas</div>
+                <div class="meta">recebido há 2 dias</div>
+              </div>
+              <div class="meta">PETZ</div>
+              <div class="meta">Ajudante Geral</div>
+              <div>
+                <span class="pill ok"><span class="pd"></span>Análise ok</span>
+              </div>
+              <div class="go"><i class="ico" data-i="arr"></i></div>
+            </div>
+            <div class="row">
+              <div>
+                <div class="nm">Marcos Guilherme Molinari</div>
+                <div class="meta">recebido há 1 dia</div>
+              </div>
+              <div class="meta">Blue Skies</div>
+              <div class="meta">Operador</div>
+              <div>
+                <span class="pill wn"><span class="pd"></span>Pendente</span>
+              </div>
+              <div class="go"><i class="ico" data-i="arr"></i></div>
+            </div>
+            <div class="row">
+              <div>
+                <div class="nm">Cláudio N. Miranda</div>
+                <div class="meta">recebido hoje</div>
+              </div>
+              <div class="meta">AutoZone</div>
+              <div class="meta">Estoquista</div>
+              <div>
+                <span class="pill dg"><span class="pd"></span>Aguard. reenvio</span>
+              </div>
+              <div class="go"><i class="ico" data-i="arr"></i></div>
+            </div>
+            <div class="row">
+              <div>
+                <div class="nm">Patrícia Souza Lima</div>
+                <div class="meta">recebido há 3 dias</div>
+              </div>
+              <div class="meta">BMB Obramax</div>
+              <div class="meta">Vendedora</div>
+              <div>
+                <span class="pill ok"><span class="pd"></span>Análise ok</span>
+              </div>
+              <div class="go"><i class="ico" data-i="arr"></i></div>
+            </div>
+          </div>
+        </section>
 
-  var curS=0, slidesEls, dotsWrap, timerS;
-  function buildDots(){
-    slidesEls=document.querySelectorAll('.slide'); dotsWrap=document.getElementById('dots');
-    if(!dotsWrap) return;
-    dotsWrap.innerHTML='';
-    slidesEls.forEach(function(_,i){var d=document.createElement('div');d.className='d'+(i===0?' on':'');d.onclick=function(){goSlide(i)};dotsWrap.appendChild(d);});
-  }
-  function showS(i){
-    if(!slidesEls) return;
-    curS=(i+slidesEls.length)%slidesEls.length;
-    slidesEls.forEach(function(s,k){s.classList.toggle('on',k===curS);});
-    document.querySelectorAll('#dots .d').forEach(function(d,k){d.classList.toggle('on',k===curS);});
-  }
-  function goSlide(i){showS(i);restartTimer();}
-  function slideNext(){showS(curS+1);restartTimer();}
-  function slidePrev(){showS(curS-1);restartTimer();}
-  function restartTimer(){clearInterval(timerS);timerS=setInterval(function(){showS(curS+1);},5000);}
-  function startCarousel(){buildDots();restartTimer();
-    var b=document.querySelector('.banner');
-    if(b){b.addEventListener('mouseenter',function(){clearInterval(timerS);});
-          b.addEventListener('mouseleave',function(){restartTimer();});}
-  }
+        <!-- placeholders simples -->
+        <section class="page" id="page-nova">
+          <div class="head">
+            <div class="eyebrow">Nova admissão</div>
+            <h1>Cadastro em etapas</h1>
+            <p>Wizard: cliente → vaga → candidato. (tela na Fase 2)</p>
+          </div>
+          <div class="panel glass">
+            <p style="color: var(--dim)">Protótipo da etapa de cadastro entra na Fase 2.</p>
+          </div>
+        </section>
+        <section class="page" id="page-ger">
+          <div class="head">
+            <div class="eyebrow">Gerenciador</div>
+            <h1>Todas as admissões</h1>
+            <p>Tabela com filtros e busca global. (tela na Fase 2)</p>
+          </div>
+          <div class="panel glass">
+            <p style="color: var(--dim)">Protótipo do gerenciador entra na Fase 2.</p>
+          </div>
+        </section>
+        <section class="page" id="page-admin">
+          <div class="head">
+            <div class="eyebrow">Administração</div>
+            <h1>Cadastros</h1>
+            <p>Clientes, cargos e régua documental.</p>
+          </div>
+          <div class="quick">
+            <div class="qcard glass">
+              <div class="q-ico"><i class="ico" data-i="users"></i></div>
+              <h3>Clientes</h3>
+              <p>Código, razão social, CNPJ e nome de operação.</p>
+            </div>
+            <div class="qcard glass">
+              <div class="q-ico"><i class="ico" data-i="tag"></i></div>
+              <h3>Cargos</h3>
+              <p>Catálogo de cargos do processo.</p>
+            </div>
+            <div class="qcard glass">
+              <div class="q-ico"><i class="ico" data-i="doc"></i></div>
+              <h3>Régua documental</h3>
+              <p>Documentos exigidos por cliente + cargo.</p>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
 
-  function enter(){document.getElementById('login').classList.remove('active');document.getElementById('app').classList.add('active');startCarousel();}
-  function nav(el,page){
-    document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
-    el.classList.add('active');
-    document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
-    document.getElementById('page-'+page).classList.add('active');
-  }
-  function goNav(page){
-    document.querySelectorAll('.nav-item').forEach(n=>{n.classList.remove('active');if(n.getAttribute('onclick').includes("'"+page+"'"))n.classList.add('active');});
-    document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
-    document.getElementById('page-'+page).classList.add('active');
-  }
-  function tab(el,i){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));el.classList.add('active');}
-</script>
-</body>
+    <div class="demo-note glass">Protótipo · modo claro · navegue pelo menu lateral</div>
+
+    <script>
+      // ícones
+      const I = {
+        HOME: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10l9-7 9 7v9a2 2 0 0 1-2 2h-3v-7H8v7H5a2 2 0 0 1-2-2z"/></svg>',
+        PLUS: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>',
+        LAYERS:
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l9 5-9 5-9-5z"/><path d="M3 12l9 5 9-5"/></svg>',
+        TABLE:
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 4v16"/></svg>',
+        COG: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.3 1a7 7 0 0 0-1.7-1l-.3-2.5h-4l-.3 2.5a7 7 0 0 0-1.7 1l-2.3-1-2 3.4L4.1 11a7 7 0 0 0 0 2l-2 1.5 2 3.4 2.3-1a7 7 0 0 0 1.7 1l.3 2.5h4l.3-2.5a7 7 0 0 0 1.7-1l2.3 1 2-3.4-2-1.5a7 7 0 0 0 .1-1z"/></svg>',
+        CLOCK:
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+        CHECK:
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>',
+        DOC: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>',
+        HEART:
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 14c1.5-1.5 3-3.2 3-5.5A3.5 3.5 0 0 0 12 6 3.5 3.5 0 0 0 2 8.5c0 2.3 1.5 4 3 5.5l7 7z"/></svg>',
+        PEN: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>',
+        ARR: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
+        USERS:
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.9"/></svg>',
+        ALERT:
+          '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z\"/><path d=\"M12 9v4M12 17h.01\"/></svg>',
+        PEAK: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M3 17l6-6 4 4 8-8\"/><path d=\"M21 7v6h-6\"/></svg>',
+        CHART:
+          '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M3 3v18h18\"/><rect x=\"7\" y=\"11\" width=\"3\" height=\"6\"/><rect x=\"13\" y=\"7\" width=\"3\" height=\"10\"/></svg>',
+        LEFT: '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M15 18l-6-6 6-6\"/></svg>',
+        RIGHT:
+          '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M9 18l6-6-6-6\"/></svg>',
+        TAG: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 12l-8 8-9-9V3h8z"/><circle cx="7.5" cy="7.5" r="1.5" fill="currentColor"/></svg>',
+      };
+      document.querySelectorAll("[data-i]").forEach(function (e) {
+        var k = e.dataset.i.toUpperCase();
+        if (I[k]) e.innerHTML = I[k];
+      });
+
+      var curS = 0,
+        slidesEls,
+        dotsWrap,
+        timerS;
+      function buildDots() {
+        slidesEls = document.querySelectorAll(".slide");
+        dotsWrap = document.getElementById("dots");
+        if (!dotsWrap) return;
+        dotsWrap.innerHTML = "";
+        slidesEls.forEach(function (_, i) {
+          var d = document.createElement("div");
+          d.className = "d" + (i === 0 ? " on" : "");
+          d.onclick = function () {
+            goSlide(i);
+          };
+          dotsWrap.appendChild(d);
+        });
+      }
+      function showS(i) {
+        if (!slidesEls) return;
+        curS = (i + slidesEls.length) % slidesEls.length;
+        slidesEls.forEach(function (s, k) {
+          s.classList.toggle("on", k === curS);
+        });
+        document.querySelectorAll("#dots .d").forEach(function (d, k) {
+          d.classList.toggle("on", k === curS);
+        });
+      }
+      function goSlide(i) {
+        showS(i);
+        restartTimer();
+      }
+      function slideNext() {
+        showS(curS + 1);
+        restartTimer();
+      }
+      function slidePrev() {
+        showS(curS - 1);
+        restartTimer();
+      }
+      function restartTimer() {
+        clearInterval(timerS);
+        timerS = setInterval(function () {
+          showS(curS + 1);
+        }, 5000);
+      }
+      function startCarousel() {
+        buildDots();
+        restartTimer();
+        var b = document.querySelector(".banner");
+        if (b) {
+          b.addEventListener("mouseenter", function () {
+            clearInterval(timerS);
+          });
+          b.addEventListener("mouseleave", function () {
+            restartTimer();
+          });
+        }
+      }
+
+      function enter() {
+        document.getElementById("login").classList.remove("active");
+        document.getElementById("app").classList.add("active");
+        startCarousel();
+      }
+      function nav(el, page) {
+        document.querySelectorAll(".nav-item").forEach((n) => n.classList.remove("active"));
+        el.classList.add("active");
+        document.querySelectorAll(".page").forEach((p) => p.classList.remove("active"));
+        document.getElementById("page-" + page).classList.add("active");
+      }
+      function goNav(page) {
+        document.querySelectorAll(".nav-item").forEach((n) => {
+          n.classList.remove("active");
+          if (n.getAttribute("onclick").includes("'" + page + "'")) n.classList.add("active");
+        });
+        document.querySelectorAll(".page").forEach((p) => p.classList.remove("active"));
+        document.getElementById("page-" + page).classList.add("active");
+      }
+      function tab(el, i) {
+        document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
+        el.classList.add("active");
+      }
+    </script>
+  </body>
 </html>

@@ -1,4 +1,13 @@
-import { IsBoolean, IsDateString, IsIn, IsOptional, IsString, Matches, MaxLength, MinLength } from "class-validator";
+import {
+  IsBoolean,
+  IsDateString,
+  IsIn,
+  IsOptional,
+  IsString,
+  Matches,
+  MaxLength,
+  MinLength,
+} from "class-validator";
 // ValidarAsoDto removido: a validação do ASO é feita pela I.A na leitura do documento (não manual).
 
 /** Fornecedor do exame — seleção FIXA (§ modal de agendamento). */

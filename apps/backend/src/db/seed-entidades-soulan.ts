@@ -26,7 +26,10 @@ type EntKey = "CONSULTORIA" | "ADMINISTRACAO" | "NEAT" | "CENTRAL_ESTAGIOS";
 
 /** Entidades Soulan. `cnpj` = representativo (matriz) da entidade; o CNPJ efetivo de Temp/Terc é por filial. */
 const ENTIDADES: Record<EntKey, { nome: string; cnpj: string }> = {
-  CONSULTORIA: { nome: "SOULAN CONSULTORIA E MAO DE OBRA TEMPORARIA LTDA", cnpj: "59.749.705/0001-59" },
+  CONSULTORIA: {
+    nome: "SOULAN CONSULTORIA E MAO DE OBRA TEMPORARIA LTDA",
+    cnpj: "59.749.705/0001-59",
+  },
   ADMINISTRACAO: {
     nome: "SOULAN ADMINISTRACAO E ASSESSORIA EM RECURSOS HUMANOS LTDA",
     cnpj: "59.051.086/0001-24",
@@ -72,7 +75,10 @@ async function main(): Promise<void> {
 
   // ── 1) UPSERT entidades_soulan (nome sem unique → select-or-insert). ──
   const idPorEnt = new Map<EntKey, string>();
-  for (const [key, { nome, cnpj }] of Object.entries(ENTIDADES) as [EntKey, { nome: string; cnpj: string }][]) {
+  for (const [key, { nome, cnpj }] of Object.entries(ENTIDADES) as [
+    EntKey,
+    { nome: string; cnpj: string },
+  ][]) {
     const raiz = raizDe(cnpj);
     const [ex] = await db.select().from(entidadesSoulan).where(eq(entidadesSoulan.nome, nome));
     if (ex) {
@@ -92,7 +98,10 @@ async function main(): Promise<void> {
 
   // ── 2) Reset e repopular entidade_filiais (entidade + filial → CNPJ) para Temporário/Terceiro. ──
   await db.delete(entidadeFiliais);
-  for (const [key, filiais] of Object.entries(CNPJ_POR_FILIAL) as [EntKey, Record<string, string>][]) {
+  for (const [key, filiais] of Object.entries(CNPJ_POR_FILIAL) as [
+    EntKey,
+    Record<string, string>,
+  ][]) {
     const entidadeId = idPorEnt.get(key);
     if (!entidadeId) continue;
     const rows = Object.entries(filiais).map(([filial, cnpj]) => ({ entidadeId, filial, cnpj }));
@@ -133,7 +142,9 @@ async function main(): Promise<void> {
   await sql.end();
 
   console.log("=== SEED entidades-soulan (regra empresa + FILIAL p/ Temp/Terc) ===");
-  console.log(`entidades_soulan: ${idPorEnt.size} (CONSULTORIA, ADMINISTRACAO, NEAT, CENTRAL_ESTAGIOS).`);
+  console.log(
+    `entidades_soulan: ${idPorEnt.size} (CONSULTORIA, ADMINISTRACAO, NEAT, CENTRAL_ESTAGIOS).`,
+  );
   const nFiliais = Object.values(CNPJ_POR_FILIAL).reduce((a, f) => a + Object.keys(f).length, 0);
   console.log(`entidade_filiais: ${nFiliais} mapeamentos (empresa+filial → CNPJ).`);
   const totalResolvido = linhas.reduce((a, l) => a + l.resolvidos, 0);

@@ -56,7 +56,9 @@ export default function RegrasAuditoriaPage() {
     if (!token) return;
     apiFetch<TipoDocumento[]>("/catalogos/tipos-documento", { token })
       .then(setTipos)
-      .catch((e) => setError(e instanceof ApiError ? e.message : "Erro ao carregar tipos de documento."));
+      .catch((e) =>
+        setError(e instanceof ApiError ? e.message : "Erro ao carregar tipos de documento."),
+      );
   }, [token]);
 
   const load = useCallback(async () => {
@@ -143,7 +145,11 @@ export default function RegrasAuditoriaPage() {
       )}
 
       {/* ── Adicionar regra ──────────────────────────────────────────────── */}
-      <GlassCard as="form" onSubmit={criar} className="mb-5 grid gap-3 p-4 md:grid-cols-[260px_1fr_auto] md:items-start">
+      <GlassCard
+        as="form"
+        onSubmit={criar}
+        className="mb-5 grid gap-3 p-4 md:grid-cols-[260px_1fr_auto] md:items-start"
+      >
         <div>
           <span className="ds-label">Tipo de documento</span>
           <Select
@@ -163,7 +169,11 @@ export default function RegrasAuditoriaPage() {
             onChange={(e) => setNovaDescricao(e.target.value)}
           />
         </div>
-        <Button type="submit" disabled={saving || !novoTipo || !novaDescricao.trim()} className="self-end py-2.5">
+        <Button
+          type="submit"
+          disabled={saving || !novoTipo || !novaDescricao.trim()}
+          className="self-end py-2.5"
+        >
           {saving ? "Adicionando…" : "Adicionar"}
         </Button>
       </GlassCard>
@@ -224,7 +234,9 @@ export default function RegrasAuditoriaPage() {
                 const busy = busyId === r.id;
                 return (
                   <tr key={r.id}>
-                    <td className="align-top">{nomePorTipo.get(r.tipoDocumentoId) ?? r.tipoDocumentoId}</td>
+                    <td className="align-top">
+                      {nomePorTipo.get(r.tipoDocumentoId) ?? r.tipoDocumentoId}
+                    </td>
                     <td className="align-top">
                       {editando ? (
                         <textarea

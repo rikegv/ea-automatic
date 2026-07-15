@@ -17,9 +17,9 @@ export class RegrasService {
   list(tipoDocumentoId?: string) {
     const q = this.db.select().from(regrasAuditoria);
     if (tipoDocumentoId) {
-      return q.where(eq(regrasAuditoria.tipoDocumentoId, tipoDocumentoId)).orderBy(
-        asc(regrasAuditoria.criadoEm),
-      );
+      return q
+        .where(eq(regrasAuditoria.tipoDocumentoId, tipoDocumentoId))
+        .orderBy(asc(regrasAuditoria.criadoEm));
     }
     return q.orderBy(asc(regrasAuditoria.tipoDocumentoId), asc(regrasAuditoria.criadoEm));
   }

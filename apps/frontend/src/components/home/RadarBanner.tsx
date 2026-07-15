@@ -79,11 +79,7 @@ export function RadarBanner() {
   );
 
   return (
-    <GlassCard
-      className="banner mb-[26px]"
-      onMouseEnter={clear}
-      onMouseLeave={start}
-    >
+    <GlassCard className="banner mb-[26px]" onMouseEnter={clear} onMouseLeave={start}>
       <div className="b-eyebrow">
         <span className="live" />
         Radar da esteira

@@ -239,133 +239,139 @@ export default function KitPage() {
       <div className="grid items-start gap-5 lg:grid-cols-2">
         {/* ════ COLUNA ESQUERDA - formulário de geração ════════════════════ */}
         <GlassCard className="space-y-5 p-5">
-        {/* ── 1. Admissão ──────────────────────────────────────────────── */}
-        <div className="relative">
-          <label className="ds-label" htmlFor="kit-busca">
-            Admissão (candidato)
-          </label>
-          <input
-            id="kit-busca"
-            className="ds-input"
-            placeholder="Buscar candidato por nome…"
-            value={query}
-            onChange={(e) => {
-              setQuery(e.target.value);
-              setOpen(true);
-              if (selecionada) setSelecionada(null);
-            }}
-            onFocus={() => setOpen(true)}
-            onBlur={onBlurBusca}
-            autoComplete="off"
-            aria-describedby="kit-busca-ajuda"
-          />
-          {!selecionada && (
-            <p id="kit-busca-ajuda" className="mt-1.5 text-[12px] text-dim">
-              Selecione a admissão na lista para habilitar a geração.
-            </p>
-          )}
-          {open && (
-            <div className="glass absolute left-0 right-0 top-[100%] z-30 mt-1 max-h-64 overflow-auto p-1.5">
-              {searching ? (
-                <div className="px-3 py-2 text-[13px] text-faint">Buscando…</div>
-              ) : erroBusca ? (
-                <div className="px-3 py-2 text-[13px] text-danger">
-                  Falha ao buscar admissões. Recarregue a página (a sessão pode ter expirado).
-                </div>
-              ) : results.length === 0 ? (
-                <div className="px-3 py-2 text-[13px] text-faint">
-                  {query.trim().length > 0
-                    ? "Nenhuma admissão encontrada para essa busca."
-                    : "Nenhuma admissão disponível."}
-                </div>
-              ) : (
-                results.map((a) => (
-                  <button
-                    key={a.admissaoId}
-                    type="button"
-                    className="flex w-full flex-col items-start gap-0.5 rounded-lg px-3 py-2 text-left hover:bg-[var(--surface-2)]"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => selecionar(a)}
-                  >
-                    <span className="truncate text-[13.5px] font-semibold">{a.candidatoNome}</span>
-                    <span className="truncate text-[12px] text-dim">
-                      {a.clienteRazao} · {a.cargoNome}
-                    </span>
-                  </button>
-                ))
-              )}
+          {/* ── 1. Admissão ──────────────────────────────────────────────── */}
+          <div className="relative">
+            <label className="ds-label" htmlFor="kit-busca">
+              Admissão (candidato)
+            </label>
+            <input
+              id="kit-busca"
+              className="ds-input"
+              placeholder="Buscar candidato por nome…"
+              value={query}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                setOpen(true);
+                if (selecionada) setSelecionada(null);
+              }}
+              onFocus={() => setOpen(true)}
+              onBlur={onBlurBusca}
+              autoComplete="off"
+              aria-describedby="kit-busca-ajuda"
+            />
+            {!selecionada && (
+              <p id="kit-busca-ajuda" className="mt-1.5 text-[12px] text-dim">
+                Selecione a admissão na lista para habilitar a geração.
+              </p>
+            )}
+            {open && (
+              <div className="glass absolute left-0 right-0 top-[100%] z-30 mt-1 max-h-64 overflow-auto p-1.5">
+                {searching ? (
+                  <div className="px-3 py-2 text-[13px] text-faint">Buscando…</div>
+                ) : erroBusca ? (
+                  <div className="px-3 py-2 text-[13px] text-danger">
+                    Falha ao buscar admissões. Recarregue a página (a sessão pode ter expirado).
+                  </div>
+                ) : results.length === 0 ? (
+                  <div className="px-3 py-2 text-[13px] text-faint">
+                    {query.trim().length > 0
+                      ? "Nenhuma admissão encontrada para essa busca."
+                      : "Nenhuma admissão disponível."}
+                  </div>
+                ) : (
+                  results.map((a) => (
+                    <button
+                      key={a.admissaoId}
+                      type="button"
+                      className="flex w-full flex-col items-start gap-0.5 rounded-lg px-3 py-2 text-left hover:bg-[var(--surface-2)]"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => selecionar(a)}
+                    >
+                      <span className="truncate text-[13.5px] font-semibold">
+                        {a.candidatoNome}
+                      </span>
+                      <span className="truncate text-[12px] text-dim">
+                        {a.clienteRazao} · {a.cargoNome}
+                      </span>
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+
+          {selecionada && (
+            <div className="flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[13px]">
+              <Icon name="users" className="h-4 w-4 flex-none text-accent" />
+              <span className="min-w-0 truncate">
+                <b>{selecionada.candidatoNome}</b> · {selecionada.clienteRazao} ·{" "}
+                {selecionada.cargoNome}
+              </span>
             </div>
           )}
-        </div>
 
-        {selecionada && (
-          <div className="flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[13px]">
-            <Icon name="users" className="h-4 w-4 flex-none text-accent" />
-            <span className="min-w-0 truncate">
-              <b>{selecionada.candidatoNome}</b> · {selecionada.clienteRazao} ·{" "}
-              {selecionada.cargoNome}
-            </span>
+          {/* ── 2. PDF-mãe ───────────────────────────────────────────────── */}
+          <div>
+            <span className="ds-label">PDF-mãe</span>
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".pdf,application/pdf"
+              className="hidden"
+              onChange={(e) => {
+                setFile(e.target.files?.[0] ?? null);
+                setError(null);
+                setOk(null);
+              }}
+            />
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 rounded-xl border border-dashed border-[var(--border-strong)] bg-[var(--surface)] px-3 py-3 text-left text-[13px] text-dim transition hover:bg-[var(--surface-2)]"
+              onClick={() => fileRef.current?.click()}
+            >
+              <Icon name="doc" className="h-4 w-4 flex-none text-accent" />
+              {file ? (
+                <span className="truncate text-text">{file.name}</span>
+              ) : (
+                "Selecionar PDF-mãe…"
+              )}
+            </button>
           </div>
-        )}
 
-        {/* ── 2. PDF-mãe ───────────────────────────────────────────────── */}
-        <div>
-          <span className="ds-label">PDF-mãe</span>
-          <input
-            ref={fileRef}
-            type="file"
-            accept=".pdf,application/pdf"
-            className="hidden"
-            onChange={(e) => {
-              setFile(e.target.files?.[0] ?? null);
-              setError(null);
-              setOk(null);
-            }}
-          />
-          <button
-            type="button"
-            className="flex w-full items-center gap-2 rounded-xl border border-dashed border-[var(--border-strong)] bg-[var(--surface)] px-3 py-3 text-left text-[13px] text-dim transition hover:bg-[var(--surface-2)]"
-            onClick={() => fileRef.current?.click()}
-          >
-            <Icon name="doc" className="h-4 w-4 flex-none text-accent" />
-            {file ? <span className="truncate text-text">{file.name}</span> : "Selecionar PDF-mãe…"}
-          </button>
-        </div>
-
-        {/* ── Feedback ─────────────────────────────────────────────────── */}
-        {error && (
-          <p
-            className="rounded-xl border border-[var(--border)] bg-[rgba(214,69,69,0.1)] px-3 py-2 text-sm text-danger"
-            role="alert"
-          >
-            {error}
-          </p>
-        )}
-        {ok && (
-          <p className="flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[rgba(46,158,99,0.12)] px-3 py-2 text-sm text-ok">
-            <Icon name="check" className="h-4 w-4 flex-none" /> {ok}
-          </p>
-        )}
-
-        {/* ── 3. Gerar ─────────────────────────────────────────────────── */}
-        <Button
-          onClick={gerar}
-          disabled={!habilitado}
-          className={cn("w-full justify-center py-3", gerando && "opacity-80")}
-        >
-          {gerando ? (
-            <span className="inline-flex items-center gap-2">
-              <span
-                className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"
-                aria-hidden="true"
-              />
-              Gerando kit…
-            </span>
-          ) : (
-            "Gerar kit"
+          {/* ── Feedback ─────────────────────────────────────────────────── */}
+          {error && (
+            <p
+              className="rounded-xl border border-[var(--border)] bg-[rgba(214,69,69,0.1)] px-3 py-2 text-sm text-danger"
+              role="alert"
+            >
+              {error}
+            </p>
           )}
-        </Button>
-      </GlassCard>
+          {ok && (
+            <p className="flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[rgba(46,158,99,0.12)] px-3 py-2 text-sm text-ok">
+              <Icon name="check" className="h-4 w-4 flex-none" /> {ok}
+            </p>
+          )}
+
+          {/* ── 3. Gerar ─────────────────────────────────────────────────── */}
+          <Button
+            onClick={gerar}
+            disabled={!habilitado}
+            className={cn("w-full justify-center py-3", gerando && "opacity-80")}
+          >
+            {gerando ? (
+              <span className="inline-flex items-center gap-2">
+                <span
+                  className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"
+                  aria-hidden="true"
+                />
+                Gerando kit…
+              </span>
+            ) : (
+              "Gerar kit"
+            )}
+          </Button>
+        </GlassCard>
 
         {/* ════ COLUNA DIREITA - kits gerados (+ espaço futuro p/ Clicksign) ═ */}
         <GlassCard className="list">
@@ -514,7 +520,9 @@ export default function KitPage() {
           <GlassCard className="mx-4 flex max-w-sm items-center gap-4 px-6 py-5">
             <Icon name="cog" className="h-8 w-8 flex-none animate-spin text-accent" />
             <div className="min-w-0">
-              <div className="text-[15px] font-extrabold text-text">Agente trabalhando, aguarde…</div>
+              <div className="text-[15px] font-extrabold text-text">
+                Agente trabalhando, aguarde…
+              </div>
               <div className="mt-0.5 text-[13px] text-dim">
                 Desmembrando o PDF-mãe e gerando o kit. Pode levar alguns segundos.
               </div>

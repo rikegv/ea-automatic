@@ -243,7 +243,10 @@ export default function CargosPage() {
                       </span>
                     </td>
                     <td className="whitespace-nowrap text-right">
-                      <button onClick={() => iniciarEdicao(c)} className="text-accent hover:underline">
+                      <button
+                        onClick={() => iniciarEdicao(c)}
+                        className="text-accent hover:underline"
+                      >
                         editar
                       </button>
                       <span className="px-2 text-faint">·</span>

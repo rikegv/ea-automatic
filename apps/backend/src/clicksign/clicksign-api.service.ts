@@ -177,7 +177,11 @@ export class ClicksignApiService {
       signer: { data: { type: "signers", id: ref.signerId } },
     };
     await this.req("POST", `/envelopes/${enc(envId)}/requirements`, {
-      data: { type: "requirements", attributes: { action: "agree", role: "sign" }, relationships: rel },
+      data: {
+        type: "requirements",
+        attributes: { action: "agree", role: "sign" },
+        relationships: rel,
+      },
     });
     await this.req("POST", `/envelopes/${enc(envId)}/requirements`, {
       data: {

@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  calcularProgressoRegua,
-  faltantesObrigatorios,
-  type DocReguaEstado,
-} from "./regua";
+import { calcularProgressoRegua, faltantesObrigatorios, type DocReguaEstado } from "./regua";
 
 const doc = (
   nome: string,

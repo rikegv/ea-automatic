@@ -5,7 +5,20 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { and, asc, count, desc, eq, gte, ilike, inArray, lt, notInArray, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  gte,
+  ilike,
+  inArray,
+  lt,
+  notInArray,
+  or,
+  sql,
+} from "drizzle-orm";
 import { normalizeCpf, TERMO_APTO_SEM_ASO } from "@ea/shared-types";
 import type { AuthUser } from "../auth/auth.types";
 import type { Database } from "../db/client";
@@ -193,7 +206,9 @@ export class EsteiraService {
     // pendentes (auditoria — sinaliza o aceite ao concluir, gatilho da NC-1).
     const asoSet = tipo === "EXAME" ? await this.asoEntregueSet(admissaoIds) : new Set<string>();
     const agendamentoMap =
-      tipo === "EXAME" ? await this.agendamentoMap(admissaoIds) : new Map<string, AgendamentoResumo>();
+      tipo === "EXAME"
+        ? await this.agendamentoMap(admissaoIds)
+        : new Map<string, AgendamentoResumo>();
     const dispMap =
       tipo === "CADASTRO_CONTRATO" ? await this.disponibilidadeMap(admissaoIds) : new Map();
     const pendSet =
@@ -447,7 +462,11 @@ export class EsteiraService {
     // GATE de transição (OST modal de agendamento) — bloqueios DUROS, sem aceite/bypass. São gates de
     // transição de status, NÃO alteram a regra geral "pendências sinalizam, nunca bloqueiam" da criação.
     // (a) AGENDADO exige os dados do exame cadastrados no modal (data preenchida).
-    if (tipo === "EXAME" && novo === "AGENDADO" && !(await this.temAgendamento(frente.admissaoId))) {
+    if (
+      tipo === "EXAME" &&
+      novo === "AGENDADO" &&
+      !(await this.temAgendamento(frente.admissaoId))
+    ) {
       throw new ConflictException({
         needsConfirmation: false,
         reason: "exameSemAgendamento",
@@ -637,7 +656,8 @@ export class EsteiraService {
             aceiteTermo: TERMO_APTO_SEM_ASO,
             // Registro da exceção: liberado sem ASO validado pela I.A por Super Admin (autor da
             // transição = frente.responsavelId = user.id, data = criadoEm).
-            detalhe: "Exame liberado como apto SEM ASO validado pela I.A (autorização de Super Admin).",
+            detalhe:
+              "Exame liberado como apto SEM ASO validado pela I.A (autorização de Super Admin).",
             ...ncLiberacao,
           })
           .onConflictDoNothing({
@@ -1027,7 +1047,9 @@ export class EsteiraService {
    * dados e INCREMENTA o contador de reagendamentos (sub-status). Sem PII — só logística do exame.
    */
   async salvarAgendamento(admissaoId: string, dto: AgendamentoExameDto) {
-    const admissao = await this.db.query.admissoes.findFirst({ where: eq(admissoes.id, admissaoId) });
+    const admissao = await this.db.query.admissoes.findFirst({
+      where: eq(admissoes.id, admissaoId),
+    });
     if (!admissao) throw new NotFoundException("Admissão não encontrada");
 
     const existente = await this.obterAgendamento(admissaoId);
@@ -1147,7 +1169,9 @@ export class EsteiraService {
   }
 
   /** Preview do relatório da clínica (JSON) — mesma resolução do CSV. */
-  async relatorioClinicaPreview(dto: RelatorioClinicaDto): Promise<{ linhas: LinhaRelatorioClinica[] }> {
+  async relatorioClinicaPreview(
+    dto: RelatorioClinicaDto,
+  ): Promise<{ linhas: LinhaRelatorioClinica[] }> {
     return { linhas: await this.resolverLinhas(dto.admissaoIds) };
   }
 
@@ -1155,7 +1179,9 @@ export class EsteiraService {
    * CSV do relatório da clínica — layout MODELO_DE_AGENDAMENTO (mesmas colunas/ordem/nomes). Separador
    * ';' (padrão BR/Excel), BOM UTF-8 + CRLF. O controller define os headers de download.
    */
-  async relatorioClinicaCsv(dto: RelatorioClinicaDto): Promise<{ conteudo: string; nomeArquivo: string }> {
+  async relatorioClinicaCsv(
+    dto: RelatorioClinicaDto,
+  ): Promise<{ conteudo: string; nomeArquivo: string }> {
     const linhas = await this.resolverLinhas(dto.admissaoIds);
     const corpo = linhas.map((l) =>
       [

@@ -307,7 +307,8 @@ export class AdmissoesService {
     const base = [];
     if (filtros.codCliente?.length) base.push(inArray(admissoes.codCliente, filtros.codCliente));
     if (filtros.cargoId?.length) base.push(inArray(admissoes.cargoId, filtros.cargoId));
-    if (filtros.tipoContrato?.length) base.push(inArray(admissoes.tipoContrato, filtros.tipoContrato));
+    if (filtros.tipoContrato?.length)
+      base.push(inArray(admissoes.tipoContrato, filtros.tipoContrato));
     if (filtros.sinalizador?.length) {
       base.push(inArray(admissoes.sinalizadorPreenchimento, filtros.sinalizador as "PENDENTE"[]));
     }
@@ -350,7 +351,8 @@ export class AdmissoesService {
     // Filtros de status (farol/concluído/pendências/em andamento): só na lista, não nos KPIs (os cards
     // mostram a distribuição do conjunto base e funcionam como botão de filtro, §A.12).
     const listWhere = [...base];
-    if (filtros.farol?.length) listWhere.push(inArray(admissoes.farolGlobal, filtros.farol as FarolGlobal[]));
+    if (filtros.farol?.length)
+      listWhere.push(inArray(admissoes.farolGlobal, filtros.farol as FarolGlobal[]));
     if (filtros.concluido) listWhere.push(concluidoExpr);
     if (filtros.comPendencias) listWhere.push(comPendenciaExpr);
     if (filtros.emAndamento) listWhere.push(emAndamentoExpr);

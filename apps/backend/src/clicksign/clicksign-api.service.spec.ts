@@ -24,7 +24,9 @@ describe("ClicksignApiService — inércia sem token (§A.5)", () => {
     ).resolves.toBeUndefined();
     await expect(svc.consultarStatus("e")).resolves.toBeUndefined();
     await expect(svc.obterUrlAssinado("e")).resolves.toBeUndefined();
-    await expect(svc.criarRequirement("e", { documentId: "d", signerId: "s" })).resolves.toBeUndefined();
+    await expect(
+      svc.criarRequirement("e", { documentId: "d", signerId: "s" }),
+    ).resolves.toBeUndefined();
     await expect(svc.ativarEnvelope("e")).resolves.toBeUndefined();
     await expect(svc.cancelarEnvelope("e")).resolves.toBeUndefined();
 

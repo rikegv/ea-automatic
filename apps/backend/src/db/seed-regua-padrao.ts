@@ -84,8 +84,12 @@ async function main(): Promise<void> {
   console.log(`  Clientes: ${tot.clientes} | Cargos: ${tot.cargos}`);
   console.log(`  Clientes que TINHAM régua (sobrescritos): ${sobrescritos}`);
   console.log(`  Clientes que NAO tinham régua (criados):   ${criados}`);
-  console.log(`  Antes:  ${antes.clientes_com_regua} clientes, ${antes.pares} pares, ${antes.linhas} linhas`);
-  console.log(`  Depois: ${depois.clientes_com_regua} clientes, ${depois.pares} pares, ${depois.linhas} linhas`);
+  console.log(
+    `  Antes:  ${antes.clientes_com_regua} clientes, ${antes.pares} pares, ${antes.linhas} linhas`,
+  );
+  console.log(
+    `  Depois: ${depois.clientes_com_regua} clientes, ${depois.pares} pares, ${depois.linhas} linhas`,
+  );
   console.log(`  (RESERVISTA é condicional: só vira pendência para sexo masculino.)`);
 
   await sql.end();

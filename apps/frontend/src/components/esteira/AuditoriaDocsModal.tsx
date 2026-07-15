@@ -1,11 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type {
-  AuditoriaStatus,
-  ProgressoRegua,
-  ResultadoAuditoria,
-} from "@ea/shared-types";
+import type { AuditoriaStatus, ProgressoRegua, ResultadoAuditoria } from "@ea/shared-types";
 import { apiFetch, apiUpload, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { Modal } from "@/components/ui/Modal";
@@ -108,7 +104,8 @@ export function AuditoriaDocsModal({
         setProgresso(prog);
       })
       .catch((e) => {
-        if (vivo) setLoadError(e instanceof ApiError ? e.message : "Falha ao carregar os documentos.");
+        if (vivo)
+          setLoadError(e instanceof ApiError ? e.message : "Falha ao carregar os documentos.");
       });
     return () => {
       vivo = false;
@@ -159,7 +156,11 @@ export function AuditoriaDocsModal({
       : 0;
 
   return (
-    <Modal onClose={() => onClose(mudouRef.current)} className="max-w-2xl" ariaLabel="Auditar documentos">
+    <Modal
+      onClose={() => onClose(mudouRef.current)}
+      className="max-w-2xl"
+      ariaLabel="Auditar documentos"
+    >
       <div className="mb-4 flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="eyebrow !mb-1">Auditoria documental por IA</div>
@@ -185,7 +186,8 @@ export function AuditoriaDocsModal({
         <div className="mb-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3">
           <div className="mb-1.5 flex items-center justify-between text-[12.5px]">
             <span className="font-semibold text-text">
-              {progresso.obrigatoriosEntregues} de {progresso.obrigatoriosTotal} obrigatórios validados
+              {progresso.obrigatoriosEntregues} de {progresso.obrigatoriosTotal} obrigatórios
+              validados
             </span>
             <span className={cn(progresso.completa ? "text-ok" : "text-dim")}>
               {progresso.completa ? "Régua completa" : `${pct}%`}
@@ -256,7 +258,9 @@ export function AuditoriaDocsModal({
                     <div className="text-[11.5px] text-faint">{EXIG_ROTULO[d.exigencia]}</div>
                   </div>
                   <div className="flex flex-none items-center gap-2">
-                    {jaTeveVeredito && <Pill tone={STATUS_TONE[status]}>{STATUS_ROTULO[status]}</Pill>}
+                    {jaTeveVeredito && (
+                      <Pill tone={STATUS_TONE[status]}>{STATUS_ROTULO[status]}</Pill>
+                    )}
                     <input
                       ref={(el) => {
                         if (tipoId) fileRefs.current[tipoId] = el;

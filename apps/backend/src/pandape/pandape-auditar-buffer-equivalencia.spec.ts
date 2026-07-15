@@ -74,12 +74,16 @@ function makeService() {
     removerAdmissao: vi.fn().mockResolvedValue(undefined),
   };
   const ai = {
-    auditarDocumento: vi.fn().mockResolvedValue({ status: "VALIDADO", motivo: "Documento legível" }),
+    auditarDocumento: vi
+      .fn()
+      .mockResolvedValue({ status: "VALIDADO", motivo: "Documento legível" }),
     arquivarDrive: vi.fn(),
   };
   const reguaCompletude = {
     // régua NÃO completa → não dispara auto-conclusão nem arquivamento (caminho simples e estável).
-    progresso: vi.fn().mockResolvedValue({ completa: false, obrigatoriosTotal: 5, obrigatoriosOk: 2 }),
+    progresso: vi
+      .fn()
+      .mockResolvedValue({ completa: false, obrigatoriosTotal: 5, obrigatoriosOk: 2 }),
   };
   const svc = new AuditoriaService(
     db as never,
@@ -115,15 +119,18 @@ describe("AuditoriaService — equivalência auditarDocumento ↔ auditarBuffer 
     // mesmo veredito/estado/progresso/sinalizador.
     expect(viaDocumento).toEqual(viaBuffer);
     // veredito VALIDADO da IA → estado persistido ENTREGUE (mapa do domínio).
-    expect(viaDocumento.documento).toMatchObject({ tipoDocumentoId: "tipo-rg", estado: "ENTREGUE" });
+    expect(viaDocumento.documento).toMatchObject({
+      tipoDocumentoId: "tipo-rg",
+      estado: "ENTREGUE",
+    });
   });
 
   it("auditarDocumento sem arquivo → BadRequest (guard do multipart); auditarBuffer não é alcançado", async () => {
     const { svc, staging } = makeService();
 
-    await expect(
-      svc.auditarDocumento("adm-1", "tipo-rg", undefined, USER),
-    ).rejects.toBeInstanceOf(BadRequestException);
+    await expect(svc.auditarDocumento("adm-1", "tipo-rg", undefined, USER)).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
     expect(staging.salvar).not.toHaveBeenCalled();
   });
 

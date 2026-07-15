@@ -144,7 +144,10 @@ export function Select({
       >
         <span className={cn("flex min-w-0 items-center gap-2", !selected && "text-faint")}>
           {selected?.color && (
-            <span className="h-1.5 w-1.5 flex-none rounded-full" style={{ background: selected.color }} />
+            <span
+              className="h-1.5 w-1.5 flex-none rounded-full"
+              style={{ background: selected.color }}
+            />
           )}
           <span className="truncate">{selected?.label ?? placeholder}</span>
         </span>
@@ -196,10 +199,15 @@ export function Select({
                       onClick={() => escolher(o.value)}
                     >
                       {o.color && (
-                        <span className="h-1.5 w-1.5 flex-none rounded-full" style={{ background: o.color }} />
+                        <span
+                          className="h-1.5 w-1.5 flex-none rounded-full"
+                          style={{ background: o.color }}
+                        />
                       )}
                       <span className="truncate">{o.label}</span>
-                      {active && <Icon name="check" className="ml-auto h-3.5 w-3.5 flex-none text-accent" />}
+                      {active && (
+                        <Icon name="check" className="ml-auto h-3.5 w-3.5 flex-none text-accent" />
+                      )}
                     </button>
                   );
                 })

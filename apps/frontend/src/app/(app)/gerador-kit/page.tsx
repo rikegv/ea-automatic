@@ -711,8 +711,8 @@ function Resultado({
                       )}
                     </div>
                     <div className="mt-0.5 text-[12px] text-dim">
-                      {f.cpfMascarado ? `CPF ${f.cpfMascarado}` : "sem CPF"} · {f.documentos.length}/
-                      {dados.dicionario.length} documentos
+                      {f.cpfMascarado ? `CPF ${f.cpfMascarado}` : "sem CPF"} · {f.documentos.length}
+                      /{dados.dicionario.length} documentos
                     </div>
                   </div>
                 </button>

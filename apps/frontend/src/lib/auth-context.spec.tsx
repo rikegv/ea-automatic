@@ -19,7 +19,11 @@ function mockFetch(): Call[] {
       calls.push({ url: u, init });
       // /auth/refresh no mount → sem sessão (rejeita para o AuthProvider marcar "deslogado").
       if (u.endsWith("/auth/refresh")) {
-        return { ok: false, status: 401, text: async () => JSON.stringify({ message: "sem sessão" }) };
+        return {
+          ok: false,
+          status: 401,
+          text: async () => JSON.stringify({ message: "sem sessão" }),
+        };
       }
       if (u.endsWith("/auth/login")) {
         return {

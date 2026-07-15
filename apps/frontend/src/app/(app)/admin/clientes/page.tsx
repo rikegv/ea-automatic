@@ -311,11 +311,7 @@ export default function ClientesPage() {
         )}
         <div className="flex flex-wrap gap-2 sm:col-span-5">
           <Button type="submit" disabled={saving} className="py-2.5 sm:w-fit">
-            {saving
-              ? "Salvando…"
-              : editando
-                ? "Salvar alterações"
-                : "Adicionar cliente"}
+            {saving ? "Salvando…" : editando ? "Salvar alterações" : "Adicionar cliente"}
           </Button>
           {editando && (
             <Button
@@ -538,7 +534,11 @@ function FragmentRow({
                 </Ficha>
                 <Ficha rotulo="Razão social">{c.razaoSocial}</Ficha>
                 <Ficha rotulo="CNPJ do cliente">
-                  {c.cnpj ? <span className="font-mono">{c.cnpj}</span> : <span className="text-faint">não informado</span>}
+                  {c.cnpj ? (
+                    <span className="font-mono">{c.cnpj}</span>
+                  ) : (
+                    <span className="text-faint">não informado</span>
+                  )}
                 </Ficha>
                 <Ficha rotulo="Nome Operação">
                   {c.nomeOperacao ?? <span className="text-faint">não informado</span>}

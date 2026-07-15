@@ -60,7 +60,14 @@ const STEPS: StepDef[] = [
 ];
 
 // W5: tipo de contrato, valores fixos.
-const TIPOS_CONTRATO = ["Temporário", "Terceirizado", "Estágio", "Interno", "Fopag", "Jovem Aprendiz"];
+const TIPOS_CONTRATO = [
+  "Temporário",
+  "Terceirizado",
+  "Estágio",
+  "Interno",
+  "Fopag",
+  "Jovem Aprendiz",
+];
 // OST Regras de Fluxo, item 5: tempo de contrato em lista fixa (dias), sem digitação livre.
 const TEMPOS_CONTRATO = ["30", "60", "90", "120", "150", "180", "210", "240", "270"];
 const MOTIVO_SUBSTITUICAO = "Substituição";
@@ -170,7 +177,9 @@ export default function NovaAdmissaoPage() {
   // Item 3: valor por benefício (VR/AM), editável; combinado ao texto de benefícios no envio.
   const [beneficiosValores, setBeneficiosValores] = useState<Record<string, string>>({});
   // Item 4: valores-padrão de VR/AM DAQUELE cliente (chave "VR"/"AM"), pré-preenchem o campo.
-  const [beneficiosPadraoCliente, setBeneficiosPadraoCliente] = useState<Record<string, string>>({});
+  const [beneficiosPadraoCliente, setBeneficiosPadraoCliente] = useState<Record<string, string>>(
+    {},
+  );
 
   // catálogos abertos (W2/W3/W4)
   const [motivos, setMotivos] = useState<CatItem[]>([]);
@@ -225,9 +234,15 @@ export default function NovaAdmissaoPage() {
   // ── cargos + catálogos (uma vez) ──────────────────────────────────────────
   useEffect(() => {
     if (!token) return;
-    apiFetch<CatItem[]>("/catalogos/motivos", { token }).then(setMotivos).catch(() => setMotivos([]));
-    apiFetch<CatItem[]>("/catalogos/beneficios", { token }).then(setBeneficios).catch(() => setBeneficios([]));
-    apiFetch<CatItem[]>("/catalogos/escalas", { token }).then(setEscalas).catch(() => setEscalas([]));
+    apiFetch<CatItem[]>("/catalogos/motivos", { token })
+      .then(setMotivos)
+      .catch(() => setMotivos([]));
+    apiFetch<CatItem[]>("/catalogos/beneficios", { token })
+      .then(setBeneficios)
+      .catch(() => setBeneficios([]));
+    apiFetch<CatItem[]>("/catalogos/escalas", { token })
+      .then(setEscalas)
+      .catch(() => setEscalas([]));
   }, [token]);
 
   // ── Item 1: cargos com régua do cliente selecionado (com fallback) ─────────
@@ -323,7 +338,11 @@ export default function NovaAdmissaoPage() {
   ) {
     setCatErro(null);
     try {
-      const r = await apiFetch<CatItem>(`/catalogos/${tipo}`, { method: "POST", token, body: { nome } });
+      const r = await apiFetch<CatItem>(`/catalogos/${tipo}`, {
+        method: "POST",
+        token,
+        body: { nome },
+      });
       const lista = await apiFetch<CatItem[]>(`/catalogos/${tipo}`, { token });
       if (tipo === "motivos") setMotivos(lista);
       else if (tipo === "beneficios") setBeneficios(lista);
@@ -347,7 +366,8 @@ export default function NovaAdmissaoPage() {
 
   // W1: documentos exigidos (obrigatórios + facultativos), ordenados alfabeticamente por grupo.
   const docsExigidos = useMemo(() => {
-    const grupo = (e: ExigenciaDocumento) => (e === "OBRIGATORIO" ? 0 : e === "FACULTATIVO" ? 1 : 2);
+    const grupo = (e: ExigenciaDocumento) =>
+      e === "OBRIGATORIO" ? 0 : e === "FACULTATIVO" ? 1 : 2;
     return regua
       .filter((r) => r.exigencia === "OBRIGATORIO" || r.exigencia === "FACULTATIVO")
       .sort((a, b) => grupo(a.exigencia) - grupo(b.exigencia) || a.nome.localeCompare(b.nome));
@@ -453,7 +473,11 @@ export default function NovaAdmissaoPage() {
           : "nt";
     return (
       <>
-        <PageHead eyebrow="Nova admissão" title="Admissão criada" subtitle="Frentes paralelas nascidas (F12)." />
+        <PageHead
+          eyebrow="Nova admissão"
+          title="Admissão criada"
+          subtitle="Frentes paralelas nascidas (F12)."
+        />
         <GlassCard className="panel max-w-2xl">
           <div className="mb-5 flex items-center gap-3">
             <span className="grid h-11 w-11 flex-none place-items-center rounded-full bg-[rgba(91,214,138,0.15)] text-ok">
@@ -523,7 +547,11 @@ export default function NovaAdmissaoPage() {
                 {clienteResults.map((c) => {
                   const selected = cliente?.codCliente === c.codCliente;
                   return (
-                    <button key={c.codCliente} onClick={() => selecionarCliente(c)} className={cnRow(selected)}>
+                    <button
+                      key={c.codCliente}
+                      onClick={() => selecionarCliente(c)}
+                      className={cnRow(selected)}
+                    >
                       <div className="min-w-0">
                         <div className="truncate text-[16px] font-bold">
                           {c.nomeOperacao ?? c.razaoSocial}
@@ -556,11 +584,15 @@ export default function NovaAdmissaoPage() {
                 <div className="mt-3 grid gap-3 border-t border-[var(--border)] pt-3 sm:grid-cols-2">
                   <div>
                     <div className="eyebrow !mb-1">Empresa do grupo</div>
-                    <div className="text-[13px] text-dim">{cliente.empresaGrupo ?? "não informado"}</div>
+                    <div className="text-[13px] text-dim">
+                      {cliente.empresaGrupo ?? "não informado"}
+                    </div>
                   </div>
                   <div>
                     <div className="eyebrow !mb-1">Região</div>
-                    <div className="text-[13px] text-dim">{formatRegiao(cliente.regiao, cliente.descricaoRegiao)}</div>
+                    <div className="text-[13px] text-dim">
+                      {formatRegiao(cliente.regiao, cliente.descricaoRegiao)}
+                    </div>
                   </div>
                 </div>
               </GlassCard>
@@ -600,8 +632,8 @@ export default function NovaAdmissaoPage() {
                   <Icon name="alert" className="mt-0.5 h-4 w-4 flex-none text-warn-2" />
                   <p className="text-[12.5px] text-text">
                     <b>Este cliente não tem régua cadastrada.</b> A seleção de cargo fica travada:
-                    cadastre a régua do cliente (menu Régua de Documentos) antes de criar a admissão.
-                    A régua é o que a I.A usa para auditar os documentos.
+                    cadastre a régua do cliente (menu Régua de Documentos) antes de criar a
+                    admissão. A régua é o que a I.A usa para auditar os documentos.
                   </p>
                 </div>
               )}
@@ -700,7 +732,14 @@ export default function NovaAdmissaoPage() {
                     placeholder="Selecione a escala…"
                     ariaLabel="Escala"
                     options={escalas.map((e) => ({ value: e.nome, label: e.nome }))}
-                    onAdd={isAdmin ? (nome) => addCatalogo("escalas", nome, (n) => setVaga((v) => ({ ...v, escala: n }))) : undefined}
+                    onAdd={
+                      isAdmin
+                        ? (nome) =>
+                            addCatalogo("escalas", nome, (n) =>
+                              setVaga((v) => ({ ...v, escala: n })),
+                            )
+                        : undefined
+                    }
                   />
                   {cliente?.escalaPadrao && (
                     <p className="mt-1.5 text-[11.5px] text-faint">
@@ -715,7 +754,14 @@ export default function NovaAdmissaoPage() {
                     placeholder="Selecione os benefícios…"
                     ariaLabel="Benefícios"
                     options={beneficios.map((b) => ({ value: b.nome, label: b.nome }))}
-                    onAdd={isAdmin ? (nome) => addCatalogo("beneficios", nome, (n) => setBeneficiosSel((s) => [...s, n])) : undefined}
+                    onAdd={
+                      isAdmin
+                        ? (nome) =>
+                            addCatalogo("beneficios", nome, (n) =>
+                              setBeneficiosSel((s) => [...s, n]),
+                            )
+                        : undefined
+                    }
                   />
                   {cliente?.beneficiosPadrao && (
                     <p className="mt-1.5 text-[11.5px] text-faint">
@@ -756,7 +802,14 @@ export default function NovaAdmissaoPage() {
                     placeholder="Selecione o motivo…"
                     ariaLabel="Motivo de contratação"
                     options={motivos.map((m) => ({ value: m.nome, label: m.nome }))}
-                    onAdd={isAdmin ? (nome) => addCatalogo("motivos", nome, (n) => setVaga((v) => ({ ...v, motivo: n }))) : undefined}
+                    onAdd={
+                      isAdmin
+                        ? (nome) =>
+                            addCatalogo("motivos", nome, (n) =>
+                              setVaga((v) => ({ ...v, motivo: n })),
+                            )
+                        : undefined
+                    }
                   />
                 </Field>
                 {/* W2: substituição */}
@@ -775,20 +828,36 @@ export default function NovaAdmissaoPage() {
                         className="ds-input"
                         placeholder="000.000.000-00"
                         value={vaga.substituidoCpf}
-                        onChange={(e) => setVaga({ ...vaga, substituidoCpf: formatCpf(e.target.value) })}
+                        onChange={(e) =>
+                          setVaga({ ...vaga, substituidoCpf: formatCpf(e.target.value) })
+                        }
                       />
-                      <p className="mt-1 text-[11px] text-faint">Retido 48h (LGPD), expurgado após uso.</p>
+                      <p className="mt-1 text-[11px] text-faint">
+                        Retido 48h (LGPD), expurgado após uso.
+                      </p>
                     </Field>
                   </>
                 )}
                 <Field label="Centro de custo *">
-                  <input className="ds-input" value={vaga.centroCusto} onChange={(e) => setVaga({ ...vaga, centroCusto: e.target.value })} />
+                  <input
+                    className="ds-input"
+                    value={vaga.centroCusto}
+                    onChange={(e) => setVaga({ ...vaga, centroCusto: e.target.value })}
+                  />
                 </Field>
                 <Field label="Departamento">
-                  <input className="ds-input" value={vaga.departamento} onChange={(e) => setVaga({ ...vaga, departamento: e.target.value })} />
+                  <input
+                    className="ds-input"
+                    value={vaga.departamento}
+                    onChange={(e) => setVaga({ ...vaga, departamento: e.target.value })}
+                  />
                 </Field>
                 <Field label="Gestor / BP *">
-                  <input className="ds-input" value={vaga.gestorBp} onChange={(e) => setVaga({ ...vaga, gestorBp: e.target.value })} />
+                  <input
+                    className="ds-input"
+                    value={vaga.gestorBp}
+                    onChange={(e) => setVaga({ ...vaga, gestorBp: e.target.value })}
+                  />
                 </Field>
                 <Field label="Endereço" className="sm:col-span-2 lg:col-span-3">
                   <input
@@ -808,11 +877,20 @@ export default function NovaAdmissaoPage() {
           <div className="grid gap-5">
             <div className="grid gap-3 sm:grid-cols-2">
               <Field label="Nome completo *" className="sm:col-span-2">
-                <input className="ds-input" placeholder="Maria Souza" value={cand.nome} onChange={(e) => setCand({ ...cand, nome: e.target.value })} />
+                <input
+                  className="ds-input"
+                  placeholder="Maria Souza"
+                  value={cand.nome}
+                  onChange={(e) => setCand({ ...cand, nome: e.target.value })}
+                />
               </Field>
               <Field label="CPF *">
                 <input
-                  className={cn("ds-input", cpfTouched && !cpfValid && "!border-[var(--danger)]", cpfValid && "!border-[var(--ok)]")}
+                  className={cn(
+                    "ds-input",
+                    cpfTouched && !cpfValid && "!border-[var(--danger)]",
+                    cpfValid && "!border-[var(--ok)]",
+                  )}
                   placeholder="000.000.000-00"
                   value={cand.cpf}
                   onChange={(e) => {
@@ -821,15 +899,23 @@ export default function NovaAdmissaoPage() {
                   }}
                 />
                 <div className="mt-1.5 h-5">
-                  {cpfTouched && (cpfValid ? <Pill tone="ok">CPF válido</Pill> : <Pill tone="dg">CPF inválido</Pill>)}
+                  {cpfTouched &&
+                    (cpfValid ? (
+                      <Pill tone="ok">CPF válido</Pill>
+                    ) : (
+                      <Pill tone="dg">CPF inválido</Pill>
+                    ))}
                 </div>
               </Field>
               <Field label="Data de nascimento *">
-                <input type="date" className="ds-input" value={cand.dataNascimento} onChange={(e) => setCand({ ...cand, dataNascimento: e.target.value })} />
+                <input
+                  type="date"
+                  className="ds-input"
+                  value={cand.dataNascimento}
+                  onChange={(e) => setCand({ ...cand, dataNascimento: e.target.value })}
+                />
                 <div className="mt-1.5 min-h-5">
-                  {idade !== null && (
-                    <span className="text-[12px] text-dim">{idade} anos</span>
-                  )}
+                  {idade !== null && <span className="text-[12px] text-dim">{idade} anos</span>}
                 </div>
               </Field>
               <Field label="Sexo *">
@@ -845,16 +931,32 @@ export default function NovaAdmissaoPage() {
                 </p>
               </Field>
               <Field label="Data de admissão *">
-                <input type="date" className="ds-input" value={cand.dataAdmissao} onChange={(e) => setCand({ ...cand, dataAdmissao: e.target.value })} />
+                <input
+                  type="date"
+                  className="ds-input"
+                  value={cand.dataAdmissao}
+                  onChange={(e) => setCand({ ...cand, dataAdmissao: e.target.value })}
+                />
                 <p className="mt-1 text-[11px] text-faint">
                   Obrigatória, porém não bloqueia: se ficar vazia, entra como pendência.
                 </p>
               </Field>
               <Field label="Telefone *">
-                <input className="ds-input" placeholder="(11) 99999-0000" value={cand.telefone} onChange={(e) => setCand({ ...cand, telefone: e.target.value })} />
+                <input
+                  className="ds-input"
+                  placeholder="(11) 99999-0000"
+                  value={cand.telefone}
+                  onChange={(e) => setCand({ ...cand, telefone: e.target.value })}
+                />
               </Field>
               <Field label="E-mail *">
-                <input type="email" className="ds-input" placeholder="maria@exemplo.com" value={cand.email} onChange={(e) => setCand({ ...cand, email: e.target.value })} />
+                <input
+                  type="email"
+                  className="ds-input"
+                  placeholder="maria@exemplo.com"
+                  value={cand.email}
+                  onChange={(e) => setCand({ ...cand, email: e.target.value })}
+                />
               </Field>
             </div>
 
@@ -863,7 +965,8 @@ export default function NovaAdmissaoPage() {
               <div className="flex items-start gap-3 rounded-xl border border-[var(--warn-2)] bg-[rgba(249,115,22,0.1)] px-4 py-3">
                 <Icon name="alert" className="mt-0.5 h-5 w-5 flex-none text-warn-2" />
                 <p className="text-[13px] text-text">
-                  <b>Candidato menor de idade ({idade} anos)</b>: verifique as restrições legais e o tipo de contrato (Jovem Aprendiz).
+                  <b>Candidato menor de idade ({idade} anos)</b>: verifique as restrições legais e o
+                  tipo de contrato (Jovem Aprendiz).
                 </p>
               </div>
             )}
@@ -879,7 +982,8 @@ export default function NovaAdmissaoPage() {
                     <div>
                       <div className="font-semibold">CPF já cadastrado</div>
                       <p className="text-[12.5px] text-dim">
-                        {lookup.candidato.nome} · {lookup.admissoes} admissão(ões) anterior(es). A nova admissão preserva o histórico (F11).
+                        {lookup.candidato.nome} · {lookup.admissoes} admissão(ões) anterior(es). A
+                        nova admissão preserva o histórico (F11).
                       </p>
                     </div>
                   </div>
@@ -895,7 +999,10 @@ export default function NovaAdmissaoPage() {
             )}
 
             {submitError && (
-              <p className="rounded-xl border border-[var(--border)] bg-[rgba(214,69,69,0.1)] px-3 py-2 text-sm text-danger" role="alert">
+              <p
+                className="rounded-xl border border-[var(--border)] bg-[rgba(214,69,69,0.1)] px-3 py-2 text-sm text-danger"
+                role="alert"
+              >
                 {submitError}
               </p>
             )}
@@ -904,19 +1011,32 @@ export default function NovaAdmissaoPage() {
 
         {/* ── NAVEGAÇÃO ─────────────────────────────────────────────────── */}
         <div className="mt-6 flex items-center justify-between gap-3 border-t border-[var(--border)] pt-5">
-          <Button variant="secondary" onClick={() => setStep((s) => Math.max(0, s - 1))} disabled={step === 0} className="px-3 py-2.5">
+          <Button
+            variant="secondary"
+            onClick={() => setStep((s) => Math.max(0, s - 1))}
+            disabled={step === 0}
+            className="px-3 py-2.5"
+          >
             <span className="inline-flex items-center gap-2">
               <Icon name="left" className="h-4 w-4" /> Anterior
             </span>
           </Button>
           {step < 2 ? (
-            <Button onClick={() => setStep((s) => Math.min(2, s + 1))} disabled={(step === 0 && !cliente) || (step === 1 && !cargoId)} className="px-4 py-2.5">
+            <Button
+              onClick={() => setStep((s) => Math.min(2, s + 1))}
+              disabled={(step === 0 && !cliente) || (step === 1 && !cargoId)}
+              className="px-4 py-2.5"
+            >
               <span className="inline-flex items-center gap-2">
                 Próximo <Icon name="right" className="h-4 w-4" />
               </span>
             </Button>
           ) : (
-            <Button onClick={() => confirmar(false)} disabled={!canConfirm || submitting} className="px-5 py-2.5">
+            <Button
+              onClick={() => confirmar(false)}
+              disabled={!canConfirm || submitting}
+              className="px-5 py-2.5"
+            >
               {submitting ? "Criando…" : "Confirmar admissão"}
             </Button>
           )}

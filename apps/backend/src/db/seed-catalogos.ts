@@ -1,12 +1,7 @@
 import "dotenv/config";
 import { isNotNull } from "drizzle-orm";
 import { createDb } from "./client";
-import {
-  beneficiosCatalogo,
-  clientes,
-  escalasCatalogo,
-  motivosContratacao,
-} from "./schema";
+import { beneficiosCatalogo, clientes, escalasCatalogo, motivosContratacao } from "./schema";
 
 /**
  * Seed dos catálogos abertos do wizard (ajustes-2B-2C — W2/W3/W4). Idempotente (UPSERT por nome).
@@ -48,7 +43,9 @@ async function main(): Promise<void> {
     .selectDistinct({ escala: clientes.escalaPadrao })
     .from(clientes)
     .where(isNotNull(clientes.escalaPadrao));
-  const escalas = [...new Set(escRows.map((r) => r.escala?.trim()).filter((e): e is string => Boolean(e)))];
+  const escalas = [
+    ...new Set(escRows.map((r) => r.escala?.trim()).filter((e): e is string => Boolean(e))),
+  ];
   if (escalas.length > 0) {
     await db
       .insert(escalasCatalogo)

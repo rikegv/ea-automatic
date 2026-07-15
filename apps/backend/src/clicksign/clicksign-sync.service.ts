@@ -16,7 +16,13 @@ import type IORedis from "ioredis";
 import type { AuthUser } from "../auth/auth.types";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
-import { admissoes, candidatos, clientes, duplaCorrecaoAceites, frentesAdmissao } from "../db/schema";
+import {
+  admissoes,
+  candidatos,
+  clientes,
+  duplaCorrecaoAceites,
+  frentesAdmissao,
+} from "../db/schema";
 import { AiClientService, type ArquivoDrive } from "../ai/ai-client.service";
 import { montarNomePasta, resolvePastaPaiId } from "../ai/drive-routing";
 import { recomputeFarolGlobal } from "../admissoes/farol";
@@ -147,7 +153,9 @@ export class ClicksignSyncService implements OnModuleInit, OnModuleDestroy {
 
     if (!adm.candidatoEmail) {
       // Sem e-mail não há como autenticar/notificar o signatário (requirement provide_evidence=email).
-      this.logger.warn("Envelope não criado: candidato sem e-mail (não-bloqueio, aguarda correção).");
+      this.logger.warn(
+        "Envelope não criado: candidato sem e-mail (não-bloqueio, aguarda correção).",
+      );
       return;
     }
 

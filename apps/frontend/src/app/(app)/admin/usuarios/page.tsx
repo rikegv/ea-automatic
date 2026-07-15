@@ -224,7 +224,11 @@ export default function UsuariosPage() {
       />
 
       {/* ── Criar usuário ──────────────────────────────────────────────── */}
-      <GlassCard as="form" onSubmit={criar} className="mb-5 grid gap-3 p-4 md:grid-cols-[1fr_1fr_200px_auto] md:items-end">
+      <GlassCard
+        as="form"
+        onSubmit={criar}
+        className="mb-5 grid gap-3 p-4 md:grid-cols-[1fr_1fr_200px_auto] md:items-end"
+      >
         <div>
           <span className="ds-label">Nome</span>
           <input
@@ -255,14 +259,16 @@ export default function UsuariosPage() {
             options={PAPEL_OPTIONS}
           />
         </div>
-        <Button type="submit" disabled={saving || !form.nome.trim() || !form.email.trim()} className="py-2.5">
+        <Button
+          type="submit"
+          disabled={saving || !form.nome.trim() || !form.email.trim()}
+          className="py-2.5"
+        >
           {saving ? "Criando…" : "Criar usuário"}
         </Button>
       </GlassCard>
 
-      {senhaGerada && (
-        <SenhaTemporaria senha={senhaGerada} onFechar={() => setSenhaGerada(null)} />
-      )}
+      {senhaGerada && <SenhaTemporaria senha={senhaGerada} onFechar={() => setSenhaGerada(null)} />}
 
       {error && (
         <p
@@ -406,7 +412,10 @@ export default function UsuariosPage() {
                               }
                               aria-label={u.ativo ? "Desativar usuário" : "Reativar usuário"}
                             >
-                              <Icon name={u.ativo ? "logout" : "check"} className="h-[17px] w-[17px]" />
+                              <Icon
+                                name={u.ativo ? "logout" : "check"}
+                                className="h-[17px] w-[17px]"
+                              />
                             </button>
                           </>
                         )}

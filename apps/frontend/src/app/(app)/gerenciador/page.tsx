@@ -349,319 +349,318 @@ export default function GerenciadorPage() {
           rolagem (horizontal e vertical) fica SEMPRE acessível, sem caçar o rodapé da página, em
           qualquer largura (os cards podem quebrar em várias linhas que a tabela se ajusta). */}
       <div className="flex h-[calc(100dvh-72px)] flex-col">
-      <div className="flex shrink-0 items-start justify-between gap-4">
-        <PageHead title="Esteira Admissional" />
-        <div className="flex items-center gap-2 pt-1">
-          <input
-            type="search"
-            className="ds-input rounded-full w-72"
-            placeholder="Buscar por nome, CPF ou cliente"
-            aria-label="Buscar por nome, CPF ou cliente"
-            value={candQuery}
-            onChange={(e) => setCandQuery(e.target.value)}
-          />
-          {temFiltro && (
-            <button
-              type="button"
-              className="btn-secondary inline-flex items-center gap-1.5 px-3 py-2 text-[13px]"
-              onClick={limparFiltros}
-            >
-              <Icon name="x" className="h-4 w-4" /> Limpar filtro
-            </button>
-          )}
-          <FiltroTrigger count={filtrosModal} onLimpar={limparFiltros}>
-            <FiltroCampo label="Cliente">
-              <MultiSelect
-                values={codClientes}
-                onChange={resetPage(setCodClientes)}
-                options={clienteOpts}
-                placeholder="Todos"
-                ariaLabel="Cliente"
-              />
-            </FiltroCampo>
-            <FiltroCampo label="Cargo">
-              <MultiSelect
-                values={cargoIds}
-                onChange={resetPage(setCargoIds)}
-                options={cargoOpts}
-                placeholder="Todos"
-                ariaLabel="Cargo"
-              />
-            </FiltroCampo>
-            <FiltroCampo label="Contrato">
-              <MultiSelect
-                values={tipoContratos}
-                onChange={resetPage(setTipoContratos)}
-                options={contratoOpts}
-                placeholder="Todos"
-                ariaLabel="Tipo de contrato"
-              />
-            </FiltroCampo>
-            <FiltroCampo label="Status">
-              <MultiSelect
-                values={farol}
-                onChange={resetPage(setFarol)}
-                options={FAROL_SELECT_OPTIONS}
-                placeholder="Todos"
-                ariaLabel="Status (farol)"
-              />
-            </FiltroCampo>
-            <FiltroCampo label="Pendências">
-              <MultiSelect
-                values={sinalizadores}
-                onChange={resetPage(setSinalizadores)}
-                options={SINAL_OPTS}
-                placeholder="Todas"
-                ariaLabel="Pendências"
-              />
-            </FiltroCampo>
-            <FiltroCampo label="Período">
-              <div className="grid grid-cols-2 gap-2">
-                <input
-                  type="date"
-                  className="ds-input"
-                  aria-label="De"
-                  value={from}
-                  max={to || undefined}
-                  onChange={(e) => resetPage(setFrom)(e.target.value)}
+        <div className="flex shrink-0 items-start justify-between gap-4">
+          <PageHead title="Esteira Admissional" />
+          <div className="flex items-center gap-2 pt-1">
+            <input
+              type="search"
+              className="ds-input rounded-full w-72"
+              placeholder="Buscar por nome, CPF ou cliente"
+              aria-label="Buscar por nome, CPF ou cliente"
+              value={candQuery}
+              onChange={(e) => setCandQuery(e.target.value)}
+            />
+            {temFiltro && (
+              <button
+                type="button"
+                className="btn-secondary inline-flex items-center gap-1.5 px-3 py-2 text-[13px]"
+                onClick={limparFiltros}
+              >
+                <Icon name="x" className="h-4 w-4" /> Limpar filtro
+              </button>
+            )}
+            <FiltroTrigger count={filtrosModal} onLimpar={limparFiltros}>
+              <FiltroCampo label="Cliente">
+                <MultiSelect
+                  values={codClientes}
+                  onChange={resetPage(setCodClientes)}
+                  options={clienteOpts}
+                  placeholder="Todos"
+                  ariaLabel="Cliente"
                 />
-                <input
-                  type="date"
-                  className="ds-input"
-                  aria-label="Até"
-                  value={to}
-                  min={from || undefined}
-                  onChange={(e) => resetPage(setTo)(e.target.value)}
+              </FiltroCampo>
+              <FiltroCampo label="Cargo">
+                <MultiSelect
+                  values={cargoIds}
+                  onChange={resetPage(setCargoIds)}
+                  options={cargoOpts}
+                  placeholder="Todos"
+                  ariaLabel="Cargo"
                 />
-              </div>
-            </FiltroCampo>
-          </FiltroTrigger>
+              </FiltroCampo>
+              <FiltroCampo label="Contrato">
+                <MultiSelect
+                  values={tipoContratos}
+                  onChange={resetPage(setTipoContratos)}
+                  options={contratoOpts}
+                  placeholder="Todos"
+                  ariaLabel="Tipo de contrato"
+                />
+              </FiltroCampo>
+              <FiltroCampo label="Status">
+                <MultiSelect
+                  values={farol}
+                  onChange={resetPage(setFarol)}
+                  options={FAROL_SELECT_OPTIONS}
+                  placeholder="Todos"
+                  ariaLabel="Status (farol)"
+                />
+              </FiltroCampo>
+              <FiltroCampo label="Pendências">
+                <MultiSelect
+                  values={sinalizadores}
+                  onChange={resetPage(setSinalizadores)}
+                  options={SINAL_OPTS}
+                  placeholder="Todas"
+                  ariaLabel="Pendências"
+                />
+              </FiltroCampo>
+              <FiltroCampo label="Período">
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    type="date"
+                    className="ds-input"
+                    aria-label="De"
+                    value={from}
+                    max={to || undefined}
+                    onChange={(e) => resetPage(setFrom)(e.target.value)}
+                  />
+                  <input
+                    type="date"
+                    className="ds-input"
+                    aria-label="Até"
+                    value={to}
+                    min={from || undefined}
+                    onChange={(e) => resetPage(setTo)(e.target.value)}
+                  />
+                </div>
+              </FiltroCampo>
+            </FiltroTrigger>
+          </div>
         </div>
-      </div>
 
-      {/* KPIs clicáveis = filtro ÚNICO (Bloco A). Ordem fixa; Declínios SEMPRE o último card. */}
-      <div className="mb-[18px] grid shrink-0 grid-cols-2 gap-[12px] sm:grid-cols-3 xl:grid-cols-5">
-        <KpiCard id="total" label="Total geral" value={k?.total ?? 0} icon="layers" />
-        <KpiCard
-          id="andamento"
-          label="Admissões em Andamento"
-          value={k?.emAndamento ?? 0}
-          tone="var(--accent)"
-          icon="chart"
-        />
-        <KpiCard
-          id="concluidas"
-          label="Admissões Concluídas"
-          value={k?.concluidos ?? 0}
-          tone="var(--ok)"
-          icon="check"
-        />
-        <KpiCard
-          id="pendencias"
-          label="Com pendências obrigatórias"
-          value={k?.comPendencias ?? 0}
-          tone="var(--warn)"
-          icon="alert"
-        />
-        <KpiCard
-          id="declinados"
-          label="Declínios"
-          value={k?.declinados ?? 0}
-          tone="var(--danger)"
-          icon="x"
-        />
-      </div>
+        {/* KPIs clicáveis = filtro ÚNICO (Bloco A). Ordem fixa; Declínios SEMPRE o último card. */}
+        <div className="mb-[18px] grid shrink-0 grid-cols-2 gap-[12px] sm:grid-cols-3 xl:grid-cols-5">
+          <KpiCard id="total" label="Total geral" value={k?.total ?? 0} icon="layers" />
+          <KpiCard
+            id="andamento"
+            label="Admissões em Andamento"
+            value={k?.emAndamento ?? 0}
+            tone="var(--accent)"
+            icon="chart"
+          />
+          <KpiCard
+            id="concluidas"
+            label="Admissões Concluídas"
+            value={k?.concluidos ?? 0}
+            tone="var(--ok)"
+            icon="check"
+          />
+          <KpiCard
+            id="pendencias"
+            label="Com pendências obrigatórias"
+            value={k?.comPendencias ?? 0}
+            tone="var(--warn)"
+            icon="alert"
+          />
+          <KpiCard
+            id="declinados"
+            label="Declínios"
+            value={k?.declinados ?? 0}
+            tone="var(--danger)"
+            icon="x"
+          />
+        </div>
 
-      {actionError && (
-        <p
-          className="mb-3 rounded-xl border border-[var(--border)] bg-[rgba(214,69,69,0.1)] px-3 py-2 text-sm text-danger"
-          role="alert"
-        >
-          {actionError}
-        </p>
-      )}
-      {flash && (
-        <p className="mb-3 inline-flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[rgba(91,214,138,0.12)] px-3 py-2 text-sm text-ok">
-          <Icon name="check" className="h-4 w-4" /> {flash}
-        </p>
-      )}
+        {actionError && (
+          <p
+            className="mb-3 rounded-xl border border-[var(--border)] bg-[rgba(214,69,69,0.1)] px-3 py-2 text-sm text-danger"
+            role="alert"
+          >
+            {actionError}
+          </p>
+        )}
+        {flash && (
+          <p className="mb-3 inline-flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[rgba(91,214,138,0.12)] px-3 py-2 text-sm text-ok">
+            <Icon name="check" className="h-4 w-4" /> {flash}
+          </p>
+        )}
 
-      {/* Tabela. Bloco F: área de scroll com altura limitada (a barra fica sempre acessível, sem
+        {/* Tabela. Bloco F: área de scroll com altura limitada (a barra fica sempre acessível, sem
           precisar rolar a página até o fim), barra premium (ea-scroll) e coluna Ações fixa. */}
-      <GlassCard className="list flex min-h-0 flex-1 flex-col">
-        <div className="ea-scroll min-h-0 flex-1 overflow-auto">
-          <div className={GRID_MIN}>
-            <div className="list-head" style={{ gridTemplateColumns: GRID }}>
-              <span>Candidato</span>
-              <span>Cliente</span>
-              <span>Cargo</span>
-              <span>Contrato</span>
-              <span>Data adm.</span>
-              <span>Status</span>
-              <span>Auditoria</span>
-              <span>Exame</span>
-              <span>Cadastro</span>
-              <span>Pendências Obrig.</span>
-              <span className="col-fix">Ações</span>
-            </div>
-
-            {loading ? (
-              <div className="px-4 py-10 text-center text-sm text-faint">Carregando…</div>
-            ) : loadError ? (
-              <div className="px-4 py-10 text-center text-sm text-danger">{loadError}</div>
-            ) : items.length === 0 ? (
-              <div className="px-4 py-10 text-center text-sm text-faint">
-                {temFiltro
-                  ? "Nenhuma admissão com os filtros atuais."
-                  : "Nenhuma admissão cadastrada."}
+        <GlassCard className="list flex min-h-0 flex-1 flex-col">
+          <div className="ea-scroll min-h-0 flex-1 overflow-auto">
+            <div className={GRID_MIN}>
+              <div className="list-head" style={{ gridTemplateColumns: GRID }}>
+                <span>Candidato</span>
+                <span>Cliente</span>
+                <span>Cargo</span>
+                <span>Contrato</span>
+                <span>Data adm.</span>
+                <span>Status</span>
+                <span>Auditoria</span>
+                <span>Exame</span>
+                <span>Cadastro</span>
+                <span>Pendências Obrig.</span>
+                <span className="col-fix">Ações</span>
               </div>
-            ) : (
-              items.map((r) => {
-                const farolP = farolPill(r.farolGlobal);
-                // Bloco D (regra permanente §A.16): quem declinou/rescindiu está ENCERRADO, não tem
-                // pendência de processo vivo. A coluna Pendências Obrigatórias mostra "Declínio",
-                // NUNCA "Parcial"/"Completo". Derivado do farol (dado autoritativo), não do sinalizador.
-                const ehDeclinio =
-                  r.farolGlobal === "DECLINOU" || r.farolGlobal === "RESCISAO";
-                const sinalP: { tone: PillTone; label: string } = ehDeclinio
-                  ? { tone: "dg", label: "Declínio" }
-                  : (SINAL[r.sinalizador] ?? { tone: "nt", label: r.sinalizador });
-                const fa = r.frentes?.AUDITORIA;
-                const ex = r.frentes?.EXAME;
-                const cad = r.frentes?.CADASTRO_CONTRATO;
-                return (
-                  <div key={r.admissaoId} className="row" style={{ gridTemplateColumns: GRID }}>
-                    {/* Ajuste 1: nome do candidato alinhado à ESQUERDA (só o conteúdo; o título da
+
+              {loading ? (
+                <div className="px-4 py-10 text-center text-sm text-faint">Carregando…</div>
+              ) : loadError ? (
+                <div className="px-4 py-10 text-center text-sm text-danger">{loadError}</div>
+              ) : items.length === 0 ? (
+                <div className="px-4 py-10 text-center text-sm text-faint">
+                  {temFiltro
+                    ? "Nenhuma admissão com os filtros atuais."
+                    : "Nenhuma admissão cadastrada."}
+                </div>
+              ) : (
+                items.map((r) => {
+                  const farolP = farolPill(r.farolGlobal);
+                  // Bloco D (regra permanente §A.16): quem declinou/rescindiu está ENCERRADO, não tem
+                  // pendência de processo vivo. A coluna Pendências Obrigatórias mostra "Declínio",
+                  // NUNCA "Parcial"/"Completo". Derivado do farol (dado autoritativo), não do sinalizador.
+                  const ehDeclinio = r.farolGlobal === "DECLINOU" || r.farolGlobal === "RESCISAO";
+                  const sinalP: { tone: PillTone; label: string } = ehDeclinio
+                    ? { tone: "dg", label: "Declínio" }
+                    : (SINAL[r.sinalizador] ?? { tone: "nt", label: r.sinalizador });
+                  const fa = r.frentes?.AUDITORIA;
+                  const ex = r.frentes?.EXAME;
+                  const cad = r.frentes?.CADASTRO_CONTRATO;
+                  return (
+                    <div key={r.admissaoId} className="row" style={{ gridTemplateColumns: GRID }}>
+                      {/* Ajuste 1: nome do candidato alinhado à ESQUERDA (só o conteúdo; o título da
                         coluna segue centralizado). Ajuste 2: title = tooltip com o texto completo. */}
-                    <div className="min-w-0 text-left">
-                      <div className="nm truncate" title={r.candidatoNome}>
-                        {r.candidatoNome}
-                      </div>
-                      {r.origem === "PANDAPE" && (
-                        <div className="mt-1 flex flex-wrap items-center justify-start gap-1.5">
-                          <OrigemBadge origem={r.origem} />
+                      <div className="min-w-0 text-left">
+                        <div className="nm truncate" title={r.candidatoNome}>
+                          {r.candidatoNome}
                         </div>
-                      )}
-                    </div>
-                    {/* Cliente: só o nome da operação (§A.12); o código vai no modal do olho. */}
-                    <div className="min-w-0 text-center">
-                      <div
-                        className="meta truncate text-text"
-                        title={r.clienteOperacao || r.clienteRazao}
-                      >
-                        {r.clienteOperacao || r.clienteRazao}
+                        {r.origem === "PANDAPE" && (
+                          <div className="mt-1 flex flex-wrap items-center justify-start gap-1.5">
+                            <OrigemBadge origem={r.origem} />
+                          </div>
+                        )}
                       </div>
-                    </div>
-                    <div className="meta truncate text-center" title={r.cargoNome}>
-                      {r.cargoNome}
-                    </div>
-                    <div
-                      className="meta truncate text-center"
-                      title={r.tipoContrato || "não informado"}
-                    >
-                      {r.tipoContrato || "não informado"}
-                    </div>
-                    <div className="meta text-center">{fmtDataAdmissao(r.dataAdmissao)}</div>
-                    {/* Status movido para ANTES de Auditoria (ajuste de ordem das colunas). */}
-                    <div className="flex min-w-0 items-center justify-center">
-                      <StatusPill tone={farolP.tone} label={farolP.label} />
-                    </div>
-                    <div className="flex min-w-0 items-center justify-center">
-                      {fa ? (
-                        <StatusPill tone={frenteTone(fa)} label={fa.rotulo} />
-                      ) : (
-                        <span className="meta">não informado</span>
-                      )}
-                    </div>
-                    <div className="flex min-w-0 items-center justify-center">
-                      {ex ? (
-                        <StatusPill tone={frenteTone(ex)} label={ex.rotulo} />
-                      ) : (
-                        <span className="meta">não informado</span>
-                      )}
-                    </div>
-                    <div className="flex min-w-0 items-center justify-center">
-                      {cad ? (
-                        <StatusPill tone={frenteTone(cad)} label={cad.rotulo} />
-                      ) : (
-                        <span className="meta">não informado</span>
-                      )}
-                    </div>
-                    <div className="flex min-w-0 items-center justify-center">
-                      <PendenciasBadge
-                        tone={sinalP.tone}
-                        label={sinalP.label}
-                        onClick={() => setPendRow(r)}
-                      />
-                    </div>
-                    <div className="col-fix flex items-center justify-center gap-1">
-                      <button
-                        type="button"
-                        className="grid h-8 w-8 place-items-center rounded-lg text-faint transition hover:bg-[var(--surface-2)] hover:text-accent"
-                        title="Ver ficha"
-                        aria-label={`Ver ${r.candidatoNome}`}
-                        onClick={() => setViewId(r.admissaoId)}
+                      {/* Cliente: só o nome da operação (§A.12); o código vai no modal do olho. */}
+                      <div className="min-w-0 text-center">
+                        <div
+                          className="meta truncate text-text"
+                          title={r.clienteOperacao || r.clienteRazao}
+                        >
+                          {r.clienteOperacao || r.clienteRazao}
+                        </div>
+                      </div>
+                      <div className="meta truncate text-center" title={r.cargoNome}>
+                        {r.cargoNome}
+                      </div>
+                      <div
+                        className="meta truncate text-center"
+                        title={r.tipoContrato || "não informado"}
                       >
-                        <Icon name="eye" className="h-[17px] w-[17px]" />
-                      </button>
-                      <button
-                        type="button"
-                        className="grid h-8 w-8 place-items-center rounded-lg text-faint transition hover:bg-[var(--surface-2)] hover:text-accent"
-                        title="Editar"
-                        aria-label={`Editar ${r.candidatoNome}`}
-                        onClick={() => setEditRow(r)}
-                      >
-                        <Icon name="pen" className="h-[16px] w-[16px]" />
-                      </button>
-                      {isAdmin && (
+                        {r.tipoContrato || "não informado"}
+                      </div>
+                      <div className="meta text-center">{fmtDataAdmissao(r.dataAdmissao)}</div>
+                      {/* Status movido para ANTES de Auditoria (ajuste de ordem das colunas). */}
+                      <div className="flex min-w-0 items-center justify-center">
+                        <StatusPill tone={farolP.tone} label={farolP.label} />
+                      </div>
+                      <div className="flex min-w-0 items-center justify-center">
+                        {fa ? (
+                          <StatusPill tone={frenteTone(fa)} label={fa.rotulo} />
+                        ) : (
+                          <span className="meta">não informado</span>
+                        )}
+                      </div>
+                      <div className="flex min-w-0 items-center justify-center">
+                        {ex ? (
+                          <StatusPill tone={frenteTone(ex)} label={ex.rotulo} />
+                        ) : (
+                          <span className="meta">não informado</span>
+                        )}
+                      </div>
+                      <div className="flex min-w-0 items-center justify-center">
+                        {cad ? (
+                          <StatusPill tone={frenteTone(cad)} label={cad.rotulo} />
+                        ) : (
+                          <span className="meta">não informado</span>
+                        )}
+                      </div>
+                      <div className="flex min-w-0 items-center justify-center">
+                        <PendenciasBadge
+                          tone={sinalP.tone}
+                          label={sinalP.label}
+                          onClick={() => setPendRow(r)}
+                        />
+                      </div>
+                      <div className="col-fix flex items-center justify-center gap-1">
                         <button
                           type="button"
-                          className="grid h-8 w-8 place-items-center rounded-lg text-faint transition hover:bg-[rgba(214,69,69,0.12)] hover:text-danger"
-                          title="Excluir"
-                          aria-label={`Excluir ${r.candidatoNome}`}
-                          onClick={() => setDelRow(r)}
+                          className="grid h-8 w-8 place-items-center rounded-lg text-faint transition hover:bg-[var(--surface-2)] hover:text-accent"
+                          title="Ver ficha"
+                          aria-label={`Ver ${r.candidatoNome}`}
+                          onClick={() => setViewId(r.admissaoId)}
                         >
-                          <Icon name="trash" className="h-[16px] w-[16px]" />
+                          <Icon name="eye" className="h-[17px] w-[17px]" />
                         </button>
-                      )}
+                        <button
+                          type="button"
+                          className="grid h-8 w-8 place-items-center rounded-lg text-faint transition hover:bg-[var(--surface-2)] hover:text-accent"
+                          title="Editar"
+                          aria-label={`Editar ${r.candidatoNome}`}
+                          onClick={() => setEditRow(r)}
+                        >
+                          <Icon name="pen" className="h-[16px] w-[16px]" />
+                        </button>
+                        {isAdmin && (
+                          <button
+                            type="button"
+                            className="grid h-8 w-8 place-items-center rounded-lg text-faint transition hover:bg-[rgba(214,69,69,0.12)] hover:text-danger"
+                            title="Excluir"
+                            aria-label={`Excluir ${r.candidatoNome}`}
+                            onClick={() => setDelRow(r)}
+                          >
+                            <Icon name="trash" className="h-[16px] w-[16px]" />
+                          </button>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </div>
-
-        {/* Paginação */}
-        {data && data.total > 0 && (
-          <div className="flex items-center justify-between gap-3 px-4 pb-2 pt-4">
-            <span className="text-[12.5px] text-dim">
-              {data.total} admissõe{data.total === 1 ? "" : "s"} · página {data.page} de{" "}
-              {data.totalPages}
-            </span>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                className="btn-secondary px-3 py-2 text-[13px] disabled:opacity-50"
-                disabled={page <= 1 || loading}
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-                aria-label="Página anterior"
-              >
-                <Icon name="left" className="h-4 w-4" />
-              </button>
-              <button
-                type="button"
-                className="btn-secondary px-3 py-2 text-[13px] disabled:opacity-50"
-                disabled={page >= data.totalPages || loading}
-                onClick={() => setPage((p) => p + 1)}
-                aria-label="Próxima página"
-              >
-                <Icon name="right" className="h-4 w-4" />
-              </button>
+                  );
+                })
+              )}
             </div>
           </div>
-        )}
-      </GlassCard>
+
+          {/* Paginação */}
+          {data && data.total > 0 && (
+            <div className="flex items-center justify-between gap-3 px-4 pb-2 pt-4">
+              <span className="text-[12.5px] text-dim">
+                {data.total} admissõe{data.total === 1 ? "" : "s"} · página {data.page} de{" "}
+                {data.totalPages}
+              </span>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  className="btn-secondary px-3 py-2 text-[13px] disabled:opacity-50"
+                  disabled={page <= 1 || loading}
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  aria-label="Página anterior"
+                >
+                  <Icon name="left" className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary px-3 py-2 text-[13px] disabled:opacity-50"
+                  disabled={page >= data.totalPages || loading}
+                  onClick={() => setPage((p) => p + 1)}
+                  aria-label="Próxima página"
+                >
+                  <Icon name="right" className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+          )}
+        </GlassCard>
       </div>
 
       {/* Modais */}

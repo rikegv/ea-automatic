@@ -133,7 +133,9 @@ export function MultiSelect({
               key={v}
               className="inline-flex max-w-full items-center gap-1 rounded-lg bg-[var(--surface-2)] px-2 py-1 text-[12px]"
             >
-              <span className="min-w-0 truncate">{options.find((o) => o.value === v)?.label ?? v}</span>
+              <span className="min-w-0 truncate">
+                {options.find((o) => o.value === v)?.label ?? v}
+              </span>
               <button
                 type="button"
                 className="flex-none text-faint hover:text-danger"
@@ -184,7 +186,9 @@ export function MultiSelect({
                       <span
                         className={cn(
                           "grid h-4 w-4 flex-none place-items-center rounded border",
-                          on ? "border-[var(--accent)] bg-[var(--accent)] text-white" : "border-[var(--border-strong)]",
+                          on
+                            ? "border-[var(--accent)] bg-[var(--accent)] text-white"
+                            : "border-[var(--border-strong)]",
                         )}
                       >
                         {on && <Icon name="check" className="h-3 w-3" />}

@@ -6,3 +6,12 @@ coverage
 pnpm-lock.yaml
 *.tsbuildinfo
 apps/ai-service/.venv
+
+# Documentacao: a prosa e autoral (o prettier reescreve enfase e quebras de linha).
+*.md
+
+# Artefatos gerados pelo drizzle-kit: reescritos no formato dele a cada generate.
+apps/backend/drizzle/meta/
+
+# Config local da maquina do desenvolvedor (gitignored, nunca chega ao repo).
+.claude/settings.local.json

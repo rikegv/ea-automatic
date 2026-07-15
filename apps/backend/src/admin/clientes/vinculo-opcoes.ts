@@ -33,22 +33,118 @@ const CENTRAL_ESTAGIOS = "SOULAN CENTRAL DE ESTAGIOS LTDA";
 /** Fonte única das opções — espelha as regras/CNPJs do seed-entidades-soulan. */
 export const VINCULO_OPCOES: VinculoOpcao[] = [
   // Temporário — SOULAN CONSULTORIA, CNPJ por filial.
-  { id: "TEMP_F1", label: "Temporário — SOULAN CONSULTORIA (filial 1) · 59.749.705/0002-30", tipoServico: "TEMPORARIO", empresaCodigo: "1", filial: "1", isFopag: false, entidadeNome: CONSULTORIA },
-  { id: "TEMP_F2", label: "Temporário — SOULAN CONSULTORIA (filial 2) · 59.749.705/0001-59", tipoServico: "TEMPORARIO", empresaCodigo: "1", filial: "2", isFopag: false, entidadeNome: CONSULTORIA },
-  { id: "TEMP_F4", label: "Temporário — SOULAN CONSULTORIA (filial 4) · 59.749.705/0004-00", tipoServico: "TEMPORARIO", empresaCodigo: "1", filial: "4", isFopag: false, entidadeNome: CONSULTORIA },
-  { id: "TEMP_F5", label: "Temporário — SOULAN CONSULTORIA (filial 5) · 59.749.705/0006-63", tipoServico: "TEMPORARIO", empresaCodigo: "1", filial: "5", isFopag: false, entidadeNome: CONSULTORIA },
-  { id: "TEMP_F7", label: "Temporário — SOULAN CONSULTORIA (filial 7) · 59.749.705/0007-44", tipoServico: "TEMPORARIO", empresaCodigo: "1", filial: "7", isFopag: false, entidadeNome: CONSULTORIA },
+  {
+    id: "TEMP_F1",
+    label: "Temporário — SOULAN CONSULTORIA (filial 1) · 59.749.705/0002-30",
+    tipoServico: "TEMPORARIO",
+    empresaCodigo: "1",
+    filial: "1",
+    isFopag: false,
+    entidadeNome: CONSULTORIA,
+  },
+  {
+    id: "TEMP_F2",
+    label: "Temporário — SOULAN CONSULTORIA (filial 2) · 59.749.705/0001-59",
+    tipoServico: "TEMPORARIO",
+    empresaCodigo: "1",
+    filial: "2",
+    isFopag: false,
+    entidadeNome: CONSULTORIA,
+  },
+  {
+    id: "TEMP_F4",
+    label: "Temporário — SOULAN CONSULTORIA (filial 4) · 59.749.705/0004-00",
+    tipoServico: "TEMPORARIO",
+    empresaCodigo: "1",
+    filial: "4",
+    isFopag: false,
+    entidadeNome: CONSULTORIA,
+  },
+  {
+    id: "TEMP_F5",
+    label: "Temporário — SOULAN CONSULTORIA (filial 5) · 59.749.705/0006-63",
+    tipoServico: "TEMPORARIO",
+    empresaCodigo: "1",
+    filial: "5",
+    isFopag: false,
+    entidadeNome: CONSULTORIA,
+  },
+  {
+    id: "TEMP_F7",
+    label: "Temporário — SOULAN CONSULTORIA (filial 7) · 59.749.705/0007-44",
+    tipoServico: "TEMPORARIO",
+    empresaCodigo: "1",
+    filial: "7",
+    isFopag: false,
+    entidadeNome: CONSULTORIA,
+  },
   // Terceiro — SOULAN ADMINISTRAÇÃO, CNPJ por filial.
-  { id: "TERC_F1", label: "Terceiro — SOULAN ADMINISTRAÇÃO (filial 1) · 59.051.086/0001-24", tipoServico: "TERCEIRO", empresaCodigo: "2", filial: "1", isFopag: false, entidadeNome: ADMINISTRACAO },
-  { id: "TERC_F2", label: "Terceiro — SOULAN ADMINISTRAÇÃO (filial 2) · 59.051.086/0001-24", tipoServico: "TERCEIRO", empresaCodigo: "2", filial: "2", isFopag: false, entidadeNome: ADMINISTRACAO },
-  { id: "TERC_F4", label: "Terceiro — SOULAN ADMINISTRAÇÃO (filial 4) · 59.051.086/0002-05", tipoServico: "TERCEIRO", empresaCodigo: "2", filial: "4", isFopag: false, entidadeNome: ADMINISTRACAO },
+  {
+    id: "TERC_F1",
+    label: "Terceiro — SOULAN ADMINISTRAÇÃO (filial 1) · 59.051.086/0001-24",
+    tipoServico: "TERCEIRO",
+    empresaCodigo: "2",
+    filial: "1",
+    isFopag: false,
+    entidadeNome: ADMINISTRACAO,
+  },
+  {
+    id: "TERC_F2",
+    label: "Terceiro — SOULAN ADMINISTRAÇÃO (filial 2) · 59.051.086/0001-24",
+    tipoServico: "TERCEIRO",
+    empresaCodigo: "2",
+    filial: "2",
+    isFopag: false,
+    entidadeNome: ADMINISTRACAO,
+  },
+  {
+    id: "TERC_F4",
+    label: "Terceiro — SOULAN ADMINISTRAÇÃO (filial 4) · 59.051.086/0002-05",
+    tipoServico: "TERCEIRO",
+    empresaCodigo: "2",
+    filial: "4",
+    isFopag: false,
+    entidadeNome: ADMINISTRACAO,
+  },
   // Estágio — CNPJ fixo da CENTRAL DE ESTÁGIOS.
-  { id: "ESTAGIO", label: "Estágio — SOULAN CENTRAL DE ESTÁGIOS · 02.489.512/0001-99", tipoServico: "ESTAGIO", empresaCodigo: "4", filial: null, isFopag: false, entidadeNome: CENTRAL_ESTAGIOS },
+  {
+    id: "ESTAGIO",
+    label: "Estágio — SOULAN CENTRAL DE ESTÁGIOS · 02.489.512/0001-99",
+    tipoServico: "ESTAGIO",
+    empresaCodigo: "4",
+    filial: null,
+    isFopag: false,
+    entidadeNome: CENTRAL_ESTAGIOS,
+  },
   // Interno — CNPJ fixo da entidade.
-  { id: "INTERNO_ADM", label: "Interno — SOULAN ADMINISTRAÇÃO · 59.051.086/0001-24", tipoServico: "INTERNO", empresaCodigo: "5", filial: null, isFopag: false, entidadeNome: ADMINISTRACAO },
-  { id: "INTERNO_NEAT", label: "Interno — NEAT · 11.063.100/0001-83", tipoServico: "INTERNO", empresaCodigo: "6", filial: null, isFopag: false, entidadeNome: NEAT },
+  {
+    id: "INTERNO_ADM",
+    label: "Interno — SOULAN ADMINISTRAÇÃO · 59.051.086/0001-24",
+    tipoServico: "INTERNO",
+    empresaCodigo: "5",
+    filial: null,
+    isFopag: false,
+    entidadeNome: ADMINISTRACAO,
+  },
+  {
+    id: "INTERNO_NEAT",
+    label: "Interno — NEAT · 11.063.100/0001-83",
+    tipoServico: "INTERNO",
+    empresaCodigo: "6",
+    filial: null,
+    isFopag: false,
+    entidadeNome: NEAT,
+  },
   // FOPAG — usa o CNPJ do próprio cliente.
-  { id: "FOPAG", label: "FOPAG — CNPJ do próprio cliente", tipoServico: "FOPAG", empresaCodigo: "99", filial: null, isFopag: true, entidadeNome: null },
+  {
+    id: "FOPAG",
+    label: "FOPAG — CNPJ do próprio cliente",
+    tipoServico: "FOPAG",
+    empresaCodigo: "99",
+    filial: null,
+    isFopag: true,
+    entidadeNome: null,
+  },
 ];
 
 /** Vínculo atual de um cliente → id da opção correspondente (para pré-selecionar no select). */
@@ -61,7 +157,8 @@ export function opcaoIdDoVinculo(v: {
   let candidato: string | null = null;
   if (v.isFopag) candidato = "FOPAG";
   else if (v.tipoServico === "ESTAGIO") candidato = "ESTAGIO";
-  else if (v.tipoServico === "INTERNO") candidato = v.empresaCodigo === "6" ? "INTERNO_NEAT" : "INTERNO_ADM";
+  else if (v.tipoServico === "INTERNO")
+    candidato = v.empresaCodigo === "6" ? "INTERNO_NEAT" : "INTERNO_ADM";
   else if (v.tipoServico === "TEMPORARIO") candidato = `TEMP_F${v.filial ?? ""}`;
   else if (v.tipoServico === "TERCEIRO") candidato = `TERC_F${v.filial ?? ""}`;
   // Só retorna se for uma opção do catálogo (ex.: TERC_F10 não existe → null, sem CNPJ conhecido).

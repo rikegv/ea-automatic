@@ -2,11 +2,7 @@ import { Body, Controller, Get, Param, Patch, Post, Query } from "@nestjs/common
 import { CurrentUser, Roles } from "../auth/decorators";
 import type { AuthUser } from "../auth/auth.types";
 import { parseMulti } from "../common/parse-multi";
-import {
-  DecidirLiberacaoDto,
-  RegistrarNc3Dto,
-  SolicitarLiberacaoDto,
-} from "./dto/nc.dto";
+import { DecidirLiberacaoDto, RegistrarNc3Dto, SolicitarLiberacaoDto } from "./dto/nc.dto";
 import { NaoConformidadesService } from "./nao-conformidades.service";
 
 /**

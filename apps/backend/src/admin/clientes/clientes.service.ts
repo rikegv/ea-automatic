@@ -72,7 +72,9 @@ export class ClientesService {
         empresaVinculo: v?.empresa_resolvida ?? null,
         cnpjVinculo: v?.cnpj_resolvido ?? null,
         tipoServico: v?.tipo_servico ?? null,
-        tipoServicoRotulo: v?.tipo_servico ? (TIPO_SERVICO_ROTULO[v.tipo_servico] ?? v.tipo_servico) : null,
+        tipoServicoRotulo: v?.tipo_servico
+          ? (TIPO_SERVICO_ROTULO[v.tipo_servico] ?? v.tipo_servico)
+          : null,
         // Id da opção do catálogo p/ pré-selecionar no editar; null = vínculo sem CNPJ conhecido/ausente.
         vinculoOpcaoId: opcaoId,
       };
@@ -128,7 +130,10 @@ export class ClientesService {
       .where(eq(clienteVinculos.codCliente, codCliente));
 
     if (existentes.length > 0) {
-      await this.db.update(clienteVinculos).set(valores).where(eq(clienteVinculos.id, existentes[0].id));
+      await this.db
+        .update(clienteVinculos)
+        .set(valores)
+        .where(eq(clienteVinculos.id, existentes[0].id));
     } else {
       await this.db.insert(clienteVinculos).values({ codCliente, ...valores });
     }

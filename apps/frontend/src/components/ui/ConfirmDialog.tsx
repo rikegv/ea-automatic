@@ -35,33 +35,31 @@ export function ConfirmDialog({
   return (
     <Modal onClose={onCancel} className="max-w-md" ariaLabel={title}>
       <div className="mb-4 flex items-start gap-3">
-          <span
-            className={cn(
-              "grid h-10 w-10 flex-none place-items-center rounded-full",
-              danger
-                ? "bg-[rgba(214,69,69,0.14)] text-danger"
-                : "bg-[var(--sico)] text-accent",
-            )}
-          >
-            <Icon name={danger ? "alert" : "check"} className="h-5 w-5" />
-          </span>
-          <div className="min-w-0">
-            <h3>{title}</h3>
-            <p className="psub !mb-0 mt-1">{message}</p>
-          </div>
+        <span
+          className={cn(
+            "grid h-10 w-10 flex-none place-items-center rounded-full",
+            danger ? "bg-[rgba(214,69,69,0.14)] text-danger" : "bg-[var(--sico)] text-accent",
+          )}
+        >
+          <Icon name={danger ? "alert" : "check"} className="h-5 w-5" />
+        </span>
+        <div className="min-w-0">
+          <h3>{title}</h3>
+          <p className="psub !mb-0 mt-1">{message}</p>
         </div>
-        <div className="mt-5 flex justify-end gap-2">
-          <Button variant="secondary" onClick={onCancel} disabled={busy} className="px-4 py-2.5">
-            {cancelLabel}
-          </Button>
-          <Button
-            onClick={onConfirm}
-            disabled={busy}
-            className={cn("px-4 py-2.5", danger && "!bg-[var(--danger)] !text-white")}
-          >
-            {busy ? "Processando…" : confirmLabel}
-          </Button>
-        </div>
+      </div>
+      <div className="mt-5 flex justify-end gap-2">
+        <Button variant="secondary" onClick={onCancel} disabled={busy} className="px-4 py-2.5">
+          {cancelLabel}
+        </Button>
+        <Button
+          onClick={onConfirm}
+          disabled={busy}
+          className={cn("px-4 py-2.5", danger && "!bg-[var(--danger)] !text-white")}
+        >
+          {busy ? "Processando…" : confirmLabel}
+        </Button>
+      </div>
     </Modal>
   );
 }

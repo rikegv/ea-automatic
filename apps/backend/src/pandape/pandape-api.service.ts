@@ -136,10 +136,9 @@ export class PandapeApiService {
   private static readonly MARGEM_MS = 60_000; // renova 60s antes do expires_in real.
 
   constructor(config: ConfigService) {
-    this.baseUrl = (config.get<string>("PANDAPE_API_BASE_URL") ?? "https://api.pandape.com.br").replace(
-      /\/+$/,
-      "",
-    );
+    this.baseUrl = (
+      config.get<string>("PANDAPE_API_BASE_URL") ?? "https://api.pandape.com.br"
+    ).replace(/\/+$/, "");
     this.tokenUrl = (
       config.get<string>("PANDAPE_TOKEN_URL") ?? "https://login.pandape.com.br/connect/token"
     ).trim();

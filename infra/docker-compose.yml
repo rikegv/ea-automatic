@@ -70,7 +70,13 @@ services:
       - ${STAGING_DIR:-/tmp/ea-staging}:${STAGING_DIR:-/tmp/ea-staging}
     healthcheck:
       # imagem slim pode não ter curl → usa urllib do próprio Python.
-      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:8000/health').status==200 else sys.exit(1)"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:8000/health').status==200 else sys.exit(1)",
+        ]
       interval: 10s
       timeout: 5s
       retries: 5

@@ -65,7 +65,10 @@ export function PendenciasModal({
       ) : (
         <div className="space-y-1.5">
           {pendencias.map((p) => (
-            <div key={p} className="flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-[13.5px]">
+            <div
+              key={p}
+              className="flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-[13.5px]"
+            >
               <span className="h-1.5 w-1.5 flex-none rounded-full bg-[var(--warn)]" />
               {p}
             </div>

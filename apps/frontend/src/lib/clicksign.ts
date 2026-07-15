@@ -1,7 +1,4 @@
-import {
-  CLICKSIGN_STATUS_LABEL,
-  type ClicksignStatus,
-} from "@ea/shared-types";
+import { CLICKSIGN_STATUS_LABEL, type ClicksignStatus } from "@ea/shared-types";
 import type { PillTone } from "@/components/ui/Pill";
 
 /**

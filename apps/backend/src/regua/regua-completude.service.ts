@@ -55,9 +55,7 @@ export class ReguaCompletudeService {
           eq(documentosAdmissao.tipoDocumentoId, reguaDocumental.tipoDocumentoId),
         ),
       )
-      .where(
-        and(eq(reguaDocumental.codCliente, codCliente), eq(reguaDocumental.cargoId, cargoId)),
-      );
+      .where(and(eq(reguaDocumental.codCliente, codCliente), eq(reguaDocumental.cargoId, cargoId)));
     // Sexo do candidato desta admissão (para o condicional do Reservista da régua padrão).
     const cand = await this.db
       .select({ sexo: candidatos.sexo })
