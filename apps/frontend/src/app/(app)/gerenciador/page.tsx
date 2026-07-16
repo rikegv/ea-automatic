@@ -565,15 +565,22 @@ export default function GerenciadorPage() {
                       <div className="flex min-w-0 items-center justify-center">
                         <StatusPill tone={farolP.tone} label={farolP.label} />
                       </div>
+                      {/* Auditoria/Exame: em admissão declinada, a coluna mostra "Declínio" DERIVADO do
+                          farol (só apresentação, o status real da frente NÃO é lido/alterado — OST
+                          declínio não-destrutivo). Fora de declínio, mostra o status real. */}
                       <div className="flex min-w-0 items-center justify-center">
-                        {fa ? (
+                        {ehDeclinio ? (
+                          <StatusPill tone="dg" label="Declínio" />
+                        ) : fa ? (
                           <StatusPill tone={frenteTone(fa)} label={fa.rotulo} />
                         ) : (
                           <span className="meta">não informado</span>
                         )}
                       </div>
                       <div className="flex min-w-0 items-center justify-center">
-                        {ex ? (
+                        {ehDeclinio ? (
+                          <StatusPill tone="dg" label="Declínio" />
+                        ) : ex ? (
                           <StatusPill tone={frenteTone(ex)} label={ex.rotulo} />
                         ) : (
                           <span className="meta">não informado</span>

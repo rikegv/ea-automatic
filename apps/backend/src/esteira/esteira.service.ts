@@ -373,6 +373,8 @@ export class EsteiraService {
         nomeClinica: exameAgendamento.nomeClinica,
         local: exameAgendamento.local,
         fornecedor: exameAgendamento.fornecedor,
+        valor: exameAgendamento.valor,
+        previsaoAso: exameAgendamento.previsaoAso,
         reagendamentos: exameAgendamento.reagendamentos,
       })
       .from(exameAgendamento)
@@ -766,22 +768,13 @@ export class EsteiraService {
     });
     if (!motivo) throw new BadRequestException("Motivo de declínio inválido.");
 
-    await this.db.transaction(async (tx) => {
-      await tx
-        .update(admissoes)
-        .set({ farolGlobal: "DECLINOU", motivoDeclinioId, atualizadoEm: new Date() })
-        .where(eq(admissoes.id, admissaoId));
-      await tx
-        .update(frentesAdmissao)
-        .set({ status: "DECLINOU", concluida: false, dataConclusao: null })
-        .where(
-          and(eq(frentesAdmissao.admissaoId, admissaoId), eq(frentesAdmissao.tipo, "AUDITORIA")),
-        );
-      await tx
-        .update(frentesAdmissao)
-        .set({ status: "CANCELADO", concluida: false, dataConclusao: null })
-        .where(and(eq(frentesAdmissao.admissaoId, admissaoId), eq(frentesAdmissao.tipo, "EXAME")));
-    });
+    // REGRA DE OURO (OST declínio não-destrutivo): o declínio é um MARCADOR da ADMISSÃO (farol
+    // DECLINOU + motivo). NÃO toca em nenhuma frente — o exame, o prontuário, o ASO, as datas ficam
+    // exatamente como estão. A exibição "Declínio" nas colunas é derivada do farol (não do dado).
+    await this.db
+      .update(admissoes)
+      .set({ farolGlobal: "DECLINOU", motivoDeclinioId, atualizadoEm: new Date() })
+      .where(eq(admissoes.id, admissaoId));
 
     return { admissaoId, farolGlobal: "DECLINOU", motivoDeclinioId };
   }
@@ -861,10 +854,12 @@ export class EsteiraService {
         clicksignEnvelopeId: admissoes.clicksignEnvelopeId,
         contratoAssinadoDriveUrl: admissoes.contratoAssinadoDriveUrl,
         sinalizador: admissoes.sinalizadorPreenchimento,
+        matricula: admissoes.matricula,
         candidatoNome: candidatos.nome,
         candidatoCpf: candidatos.cpf,
         candidatoEmail: candidatos.email,
         candidatoTelefone: candidatos.telefone,
+        candidatoDataNascimento: candidatos.dataNascimento,
         codCliente: admissoes.codCliente,
         clienteRazao: clientes.razaoSocial,
         clienteOperacao: clientes.nomeOperacao,
@@ -932,6 +927,9 @@ export class EsteiraService {
     const vaga = await this.db.query.dadosVagaFolha.findFirst({
       where: eq(dadosVagaFolha.admissaoId, admissaoId),
     });
+    // BLOCO 3 do modal (Exame): dados do agendamento (data/horário/clínica/local/valor/previsão ASO),
+    // coletados de exame_agendamento. Null quando o exame ainda não foi agendado.
+    const agendamento = await this.obterAgendamento(admissaoId);
     const termoBancoEntregue = adm.isBanco
       ? (await this.termoBancoEntregueSet([admissaoId])).has(admissaoId)
       : false;
@@ -1016,11 +1014,13 @@ export class EsteiraService {
         autorNome: a.autorNome,
         criadoEm: a.criadoEm,
       })),
+      matricula: adm.matricula,
       candidato: {
         nome: adm.candidatoNome,
         cpf: adm.candidatoCpf,
         email: adm.candidatoEmail,
         telefone: adm.candidatoTelefone,
+        dataNascimento: adm.candidatoDataNascimento,
       },
       cliente: {
         codCliente: adm.codCliente,
@@ -1028,6 +1028,24 @@ export class EsteiraService {
         operacao: adm.clienteOperacao,
       },
       cargo: adm.cargoNome,
+      // BLOCO 2: salário/escala/endereço da folha (endereço = o da admissão, decisão do diretor).
+      vagaFolha: {
+        salario: vaga?.salario ?? null,
+        escala: vaga?.escala ?? null,
+        endereco: vaga?.endereco ?? null,
+      },
+      // BLOCO 3: dados do exame coletados do agendamento (só leitura no olho). Null = não agendado.
+      exame: agendamento
+        ? {
+            data: agendamento.data,
+            horario: agendamento.horario,
+            nomeClinica: agendamento.nomeClinica,
+            local: agendamento.local,
+            fornecedor: agendamento.fornecedor,
+            valor: agendamento.valor,
+            previsaoAso: agendamento.previsaoAso,
+          }
+        : null,
       frentes: frentes.map((f) => ({
         tipo: f.tipo,
         status: f.status,
@@ -1144,6 +1162,10 @@ export class EsteiraService {
       nomeClinica: dto.nomeClinica,
       local: dto.local,
       fornecedor: dto.fornecedor,
+      // Novos (decisão do diretor): valor do exame e previsão do ASO. O modal manda o formulário
+      // inteiro, então vazio limpa (null); valor vem como número e é gravado com 2 casas.
+      valor: dto.valor === undefined ? null : dto.valor.toFixed(2),
+      previsaoAso: dto.previsaoAso ?? null,
     };
 
     if (!existente) {
@@ -1315,6 +1337,8 @@ interface AgendamentoResumo {
   nomeClinica: string | null;
   local: string | null;
   fornecedor: string | null;
+  valor: string | null;
+  previsaoAso: string | null;
   reagendamentos: number;
 }
 

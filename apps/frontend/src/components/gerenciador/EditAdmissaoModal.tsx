@@ -11,6 +11,7 @@ import { Icon } from "@/components/ui/Icon";
 import { OrigemBadge } from "@/components/ui/OrigemBadge";
 import { Select } from "@/components/ui/Select";
 import { MultiSelect } from "@/components/ui/MultiSelect";
+import { Bloco } from "@/components/ui/Bloco";
 import { cn } from "@/lib/cn";
 import { FAROL_SELECT_OPTIONS } from "@/lib/farol";
 import {
@@ -39,10 +40,29 @@ interface CandidatoEdit {
   telefone: string | null;
   dataNascimento: string | null;
 }
+interface ExameInfo {
+  data: string | null;
+  horario: string | null;
+  nomeClinica: string | null;
+  local: string | null;
+  fornecedor: string | null;
+  valor: string | null;
+  previsaoAso: string | null;
+}
+interface FrenteInfo {
+  tipo: string;
+  status: string;
+  rotulo: string;
+  concluida: boolean;
+}
 interface AdmissaoEdit {
   admissaoId: string;
   codCliente: string;
   cargoId: string;
+  // Nomes p/ o BLOCO 2 (exibição, não editáveis — identidade §A.3).
+  clienteRazao: string | null;
+  clienteOperacao: string | null;
+  cargoNome: string | null;
   tipoContrato: string | null;
   dataAdmissao: string | null;
   matricula: string | null;
@@ -57,6 +77,12 @@ interface AdmissaoEdit {
   beneficiosLegado: string | null;
   /** Pacote ESTRUTURADO (§A.17 etapa 4): o modo novo, quando não há blob. */
   pacoteBeneficios: { beneficioId: string; nome: string; valor: number | null }[];
+  // BLOCO 3 (só leitura): dados do exame do agendamento. null = ainda não agendado.
+  exame: ExameInfo | null;
+  // BLOCO 4 (só leitura): status das frentes.
+  frentes: FrenteInfo[];
+  // BLOCO 5 (só leitura): documentos que faltam.
+  documentosPendentes: { nome: string; exigencia: string; estado: string }[];
 }
 interface TipoDocumento {
   id: string;
@@ -78,6 +104,12 @@ const STATUS_ROTULO: Record<AuditoriaStatus, string> = {
   PENDENTE: "Pendente",
 };
 const ACCEPT = ".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png";
+const FORNECEDOR_ROTULO: Record<string, string> = { MEDICAL: "Medical", LIMER: "Limer" };
+const FRENTE_ROTULO: Record<string, string> = {
+  AUDITORIA: "Auditoria",
+  EXAME: "Exame",
+  CADASTRO_CONTRATO: "Cadastro / Contrato",
+};
 
 const s = (v: string | null | undefined) => v ?? "";
 
@@ -87,7 +119,24 @@ function fmtCpf(cpf: string): string {
   if (d.length !== 11) return cpf || "não informado";
   return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`;
 }
+// `date` YYYY-MM-DD formatado por partes (sem sofrer fuso).
+function fmtData(d?: string | null): string {
+  if (!d) return "não informado";
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(d);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : d;
+}
+function fmtMoeda(v?: string | null): string {
+  if (v === null || v === undefined || v === "") return "não informado";
+  const n = Number(v);
+  return Number.isNaN(n) ? String(v) : `R$ ${n.toFixed(2).replace(".", ",")}`;
+}
+function frenteTone(f: FrenteInfo): PillTone {
+  if (f.concluida) return "ok";
+  if (f.status === "DECLINOU" || f.status === "CANCELADO") return "dg";
+  return "wn";
+}
 
+/** Campo EDITÁVEL: rótulo + o input/select passado como children. */
 function Campo({ rotulo, children }: { rotulo: string; children: React.ReactNode }) {
   return (
     <div className="min-w-0">
@@ -96,10 +145,22 @@ function Campo({ rotulo, children }: { rotulo: string; children: React.ReactNode
     </div>
   );
 }
+/** Campo SOMENTE LEITURA (cliente/cargo/exame/documentos): mesmo desenho do olho. */
+function CampoView({ rotulo, valor }: { rotulo: string; valor: string }) {
+  return (
+    <div className="min-w-0">
+      <div className="text-[11px] uppercase tracking-wide text-faint">{rotulo}</div>
+      <div className="mt-0.5 truncate text-[13.5px] text-text" title={valor}>
+        {valor}
+      </div>
+    </div>
+  );
+}
 
 /**
- * F10: edição de uma admissão (Gerenciador). Edita vaga/folha + contrato/data/matrícula/farol.
- * NÃO edita CPF nem cliente (identidade, §A.3). Persiste via PATCH /admissoes/:id.
+ * F10: edição de uma admissão (Gerenciador), em BLOCOS (mesmo design do olho). Edita vaga/folha +
+ * contrato/data/matrícula/farol + dados pessoais. NÃO edita CPF/cliente/cargo (identidade, §A.3),
+ * nem os dados do exame (esses vivem na tela de agendamento). Persiste via PATCH /admissoes/:id.
  */
 export function EditAdmissaoModal({
   admissaoId,
@@ -119,7 +180,6 @@ export function EditAdmissaoModal({
   // Seção Candidato só aparece no formulário inteiro ou se o filtro de pendências pedir
   // explicitamente um campo pessoal (não faz parte do fluxo de pendências hoje).
   const verCandidato = ["nome", "email", "telefone", "dataNascimento"].some(mostra);
-  const verProcesso = ["tipoContrato", "dataAdmissao", "matricula", "farol"].some(mostra);
   const verFolha = [
     "salario",
     "escala",
@@ -131,6 +191,9 @@ export function EditAdmissaoModal({
     "beneficios",
     "endereco",
   ].some(mostra);
+  // BLOCO 2 junta processo (contrato/data/matrícula) + folha; farol/banco vão para o BLOCO 4.
+  const verTrabalho = ["tipoContrato", "dataAdmissao", "matricula"].some(mostra) || verFolha;
+  const verStatus = mostra("farol") || mostra("isBanco") || !camposFiltro;
   const { token } = useAuth();
   const [data, setData] = useState<AdmissaoEdit | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -363,6 +426,8 @@ export function EditAdmissaoModal({
       .map((n) => ({ value: n, label: n })),
   ];
 
+  const declinioFarol = farol === "DECLINOU" || farol === "RESCISAO";
+
   return (
     <Modal onClose={onClose} className="max-w-2xl" ariaLabel="Editar admissão">
       <div className="mb-4 flex items-start justify-between gap-3">
@@ -372,7 +437,7 @@ export function EditAdmissaoModal({
             <h3 className="truncate text-[18px] font-extrabold">{candidatoNome}</h3>
             {data && <OrigemBadge origem={data.origem} className="flex-none" />}
           </div>
-          <p className="psub !mb-0 mt-1">CPF e cliente não são editáveis (identidade).</p>
+          <p className="psub !mb-0 mt-1">CPF, cliente e cargo não são editáveis (identidade).</p>
         </div>
         <button
           type="button"
@@ -389,15 +454,16 @@ export function EditAdmissaoModal({
       ) : !data ? (
         <p className="py-8 text-center text-sm text-faint">Carregando…</p>
       ) : (
-        <div className="space-y-5">
+        <div className="space-y-4">
           {camposFiltro && (
             <p className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[12.5px] text-dim">
               Preenchendo apenas as pendências obrigatórias.
             </p>
           )}
+
+          {/* BLOCO 1 — Dados pessoais */}
           {verCandidato && (
-            <section>
-              <div className="mb-2 text-[11px] uppercase tracking-wide text-faint">Candidato</div>
+            <Bloco titulo="Dados pessoais">
               <div className="grid gap-3 sm:grid-cols-2">
                 <Campo rotulo="CPF (identidade, não editável)">
                   <input
@@ -417,6 +483,15 @@ export function EditAdmissaoModal({
                     />
                   </Campo>
                 )}
+                {mostra("telefone") && (
+                  <Campo rotulo="Telefone">
+                    <input
+                      className="ds-input"
+                      value={telefone}
+                      onChange={(e) => setTelefone(e.target.value)}
+                    />
+                  </Campo>
+                )}
                 {mostra("email") && (
                   <Campo rotulo="E-mail">
                     <input
@@ -424,15 +499,6 @@ export function EditAdmissaoModal({
                       className="ds-input"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
-                    />
-                  </Campo>
-                )}
-                {mostra("telefone") && (
-                  <Campo rotulo="Telefone">
-                    <input
-                      className="ds-input"
-                      value={telefone}
-                      onChange={(e) => setTelefone(e.target.value)}
                     />
                   </Campo>
                 )}
@@ -447,13 +513,33 @@ export function EditAdmissaoModal({
                   </Campo>
                 )}
               </div>
-            </section>
+            </Bloco>
           )}
 
-          {verProcesso && (
-            <section>
-              <div className="mb-2 text-[11px] uppercase tracking-wide text-faint">Processo</div>
+          {/* BLOCO 2 — Trabalho e cadastro */}
+          {verTrabalho && (
+            <Bloco titulo="Trabalho e cadastro">
+              {!camposFiltro && (
+                <div className="mb-3 grid gap-3 sm:grid-cols-2">
+                  <CampoView
+                    rotulo="Cliente (não editável)"
+                    valor={data.clienteOperacao || data.clienteRazao || "não informado"}
+                  />
+                  <CampoView rotulo="Cargo (não editável)" valor={data.cargoNome || "não informado"} />
+                </div>
+              )}
               <div className="grid gap-3 sm:grid-cols-2">
+                {mostra("salario") && (
+                  <Campo rotulo="Salário">
+                    <input
+                      className="ds-input"
+                      inputMode="decimal"
+                      value={vf.salario ?? ""}
+                      onChange={(e) => setVfField("salario")(e.target.value)}
+                      placeholder="0,00"
+                    />
+                  </Campo>
+                )}
                 {mostra("tipoContrato") && (
                   <Campo rotulo="Tipo de contrato">
                     <input
@@ -479,146 +565,6 @@ export function EditAdmissaoModal({
                       className="ds-input"
                       value={matricula}
                       onChange={(e) => setMatricula(e.target.value)}
-                    />
-                  </Campo>
-                )}
-                {mostra("farol") && (
-                  <Campo rotulo="Status (farol)">
-                    <Select
-                      value={farol}
-                      onChange={setFarol}
-                      options={FAROL_OPTS}
-                      ariaLabel="Farol"
-                    />
-                  </Campo>
-                )}
-                {/* Motivo do declínio (§A.14, item 3): só quando o farol é de declínio. Grava no mesmo
-                    campo que o modal do olho exibe. */}
-                {mostra("farol") && (farol === "DECLINOU" || farol === "RESCISAO") && (
-                  <Campo rotulo="Motivo do declínio">
-                    <Select
-                      value={motivoDeclinioId}
-                      onChange={setMotivoDeclinioId}
-                      placeholder="Selecione o motivo…"
-                      ariaLabel="Motivo do declínio"
-                      options={motivosDeclinioCat.map((m) => ({ value: m.id, label: m.nome }))}
-                    />
-                  </Campo>
-                )}
-              </div>
-
-              {/* Item 6: admissão de banco + Termo de Banco */}
-              {mostra("isBanco") && (
-                <div className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3">
-                  <label className="flex cursor-pointer items-start gap-2.5">
-                    <input
-                      type="checkbox"
-                      className="mt-0.5 h-4 w-4 flex-none accent-[var(--accent)]"
-                      checked={isBanco}
-                      onChange={(e) => setIsBanco(e.target.checked)}
-                    />
-                    <span className="min-w-0">
-                      <span className="text-[13.5px] font-semibold text-text">
-                        Admissão de banco
-                      </span>
-                      <span className="mt-0.5 block text-[12px] text-dim">
-                        Para admissão de banco, a ausência de data de admissão é esperada (não é
-                        pendência); o Termo de Banco é a pendência de formalização.
-                      </span>
-                    </span>
-                  </label>
-
-                  {isBanco && (
-                    <div className="mt-3 border-t border-[var(--border)] pt-3">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <input
-                          ref={termoRef}
-                          type="file"
-                          accept={ACCEPT}
-                          className="hidden"
-                          disabled={!termoTipoId || termoBuscando}
-                          onChange={(e) => {
-                            const f = e.target.files?.[0];
-                            if (f) void enviarTermoBanco(f);
-                            e.target.value = "";
-                          }}
-                        />
-                        <button
-                          type="button"
-                          className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[12.5px] font-semibold text-dim transition hover:bg-[var(--surface-2)] hover:text-text disabled:opacity-50"
-                          disabled={!termoTipoId || termoBuscando}
-                          title={
-                            termoTipoId
-                              ? "Enviar Termo de Banco"
-                              : "Tipo TERMO_BANCO não encontrado"
-                          }
-                          onClick={() => termoRef.current?.click()}
-                        >
-                          {termoBuscando ? (
-                            <>
-                              <span
-                                className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"
-                                aria-hidden="true"
-                              />
-                              Enviando…
-                            </>
-                          ) : (
-                            <>
-                              <Icon name="doc" className="h-4 w-4" />
-                              {termoResult ? "Reenviar Termo de Banco" : "Termo de Banco"}
-                            </>
-                          )}
-                        </button>
-                        {termoResult && (
-                          <Pill tone={STATUS_TONE[termoResult.status]}>
-                            {STATUS_ROTULO[termoResult.status]}
-                          </Pill>
-                        )}
-                      </div>
-                      <p className="mt-2 text-[12px] text-dim">
-                        O documento-modelo será fornecido pelo diretor. O upload registra o
-                        documento (vai ao Drive na pasta ADMISSÃO no fluxo de arquivamento).
-                      </p>
-                      {termoResult?.motivo && (
-                        <p
-                          className={cn(
-                            "mt-1 text-[12.5px]",
-                            termoResult.status === "VALIDADO"
-                              ? "text-ok"
-                              : termoResult.status === "INCONFORME"
-                                ? "text-danger"
-                                : "text-warn",
-                          )}
-                        >
-                          {termoResult.motivo}
-                        </p>
-                      )}
-                      {termoErro && (
-                        <p className="mt-1 text-[12.5px] text-danger" role="alert">
-                          {termoErro}
-                        </p>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-            </section>
-          )}
-
-          {verFolha && (
-            <section>
-              <div className="mb-2 text-[11px] uppercase tracking-wide text-faint">
-                Vaga / folha
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                {mostra("salario") && (
-                  <Campo rotulo="Salário">
-                    <input
-                      className="ds-input"
-                      inputMode="decimal"
-                      value={vf.salario ?? ""}
-                      onChange={(e) => setVfField("salario")(e.target.value)}
-                      placeholder="0,00"
                     />
                   </Campo>
                 )}
@@ -746,7 +692,7 @@ export function EditAdmissaoModal({
                     </Campo>
                   ))}
                 {mostra("endereco") && (
-                  <Campo rotulo="Endereço">
+                  <Campo rotulo="Endereço de trabalho">
                     <textarea
                       className="ds-input min-h-[64px] resize-y"
                       value={vf.endereco ?? ""}
@@ -755,7 +701,189 @@ export function EditAdmissaoModal({
                   </Campo>
                 )}
               </div>
-            </section>
+            </Bloco>
+          )}
+
+          {/* BLOCO 3 — Exame admissional (só leitura; editado na tela de agendamento). */}
+          {!camposFiltro && (
+            <Bloco titulo="Exame admissional">
+              {data.exame ? (
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                  <CampoView rotulo="Data" valor={fmtData(data.exame.data)} />
+                  <CampoView rotulo="Horário" valor={data.exame.horario || "não informado"} />
+                  <CampoView rotulo="Clínica" valor={data.exame.nomeClinica || "não informado"} />
+                  <CampoView rotulo="Local" valor={data.exame.local || "não informado"} />
+                  <CampoView
+                    rotulo="Fornecedor"
+                    valor={
+                      data.exame.fornecedor
+                        ? (FORNECEDOR_ROTULO[data.exame.fornecedor] ?? data.exame.fornecedor)
+                        : "não informado"
+                    }
+                  />
+                  <CampoView rotulo="Valor do exame" valor={fmtMoeda(data.exame.valor)} />
+                  <CampoView rotulo="Previsão do ASO" valor={fmtData(data.exame.previsaoAso)} />
+                </div>
+              ) : (
+                <p className="text-[13px] text-faint">Exame ainda não agendado.</p>
+              )}
+              <p className="mt-2 text-[11.5px] text-faint">
+                Valor e previsão do ASO são cadastrados na tela de agendamento do exame.
+              </p>
+            </Bloco>
+          )}
+
+          {/* BLOCO 4 — Status das frentes (farol editável + motivo + frentes + banco/Termo). */}
+          {verStatus && (
+            <Bloco titulo="Status das frentes">
+              <div className="grid gap-3 sm:grid-cols-2">
+                {mostra("farol") && (
+                  <Campo rotulo="Status (farol)">
+                    <Select value={farol} onChange={setFarol} options={FAROL_OPTS} ariaLabel="Farol" />
+                  </Campo>
+                )}
+                {/* Motivo do declínio (§A.14, item 3): só quando o farol é de declínio. */}
+                {mostra("farol") && declinioFarol && (
+                  <Campo rotulo="Motivo do declínio">
+                    <Select
+                      value={motivoDeclinioId}
+                      onChange={setMotivoDeclinioId}
+                      placeholder="Selecione o motivo…"
+                      ariaLabel="Motivo do declínio"
+                      options={motivosDeclinioCat.map((m) => ({ value: m.id, label: m.nome }))}
+                    />
+                  </Campo>
+                )}
+              </div>
+
+              {/* Status atual das 3 frentes (só leitura; editado na Esteira). */}
+              {!camposFiltro && data.frentes.length > 0 && (
+                <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                  {data.frentes.map((f) => (
+                    <div
+                      key={f.tipo}
+                      className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-3"
+                    >
+                      <div className="mb-1.5 text-[12.5px] font-semibold text-text">
+                        {FRENTE_ROTULO[f.tipo] ?? f.tipo}
+                      </div>
+                      <Pill tone={frenteTone(f)}>{f.rotulo}</Pill>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Item 6: admissão de banco + Termo de Banco */}
+              {mostra("isBanco") && (
+                <div className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-3">
+                  <label className="flex cursor-pointer items-start gap-2.5">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5 h-4 w-4 flex-none accent-[var(--accent)]"
+                      checked={isBanco}
+                      onChange={(e) => setIsBanco(e.target.checked)}
+                    />
+                    <span className="min-w-0">
+                      <span className="text-[13.5px] font-semibold text-text">Admissão de banco</span>
+                      <span className="mt-0.5 block text-[12px] text-dim">
+                        Para admissão de banco, a ausência de data de admissão é esperada (não é
+                        pendência); o Termo de Banco é a pendência de formalização.
+                      </span>
+                    </span>
+                  </label>
+
+                  {isBanco && (
+                    <div className="mt-3 border-t border-[var(--border)] pt-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <input
+                          ref={termoRef}
+                          type="file"
+                          accept={ACCEPT}
+                          className="hidden"
+                          disabled={!termoTipoId || termoBuscando}
+                          onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            if (f) void enviarTermoBanco(f);
+                            e.target.value = "";
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[12.5px] font-semibold text-dim transition hover:bg-[var(--surface-2)] hover:text-text disabled:opacity-50"
+                          disabled={!termoTipoId || termoBuscando}
+                          title={
+                            termoTipoId ? "Enviar Termo de Banco" : "Tipo TERMO_BANCO não encontrado"
+                          }
+                          onClick={() => termoRef.current?.click()}
+                        >
+                          {termoBuscando ? (
+                            <>
+                              <span
+                                className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"
+                                aria-hidden="true"
+                              />
+                              Enviando…
+                            </>
+                          ) : (
+                            <>
+                              <Icon name="doc" className="h-4 w-4" />
+                              {termoResult ? "Reenviar Termo de Banco" : "Termo de Banco"}
+                            </>
+                          )}
+                        </button>
+                        {termoResult && (
+                          <Pill tone={STATUS_TONE[termoResult.status]}>
+                            {STATUS_ROTULO[termoResult.status]}
+                          </Pill>
+                        )}
+                      </div>
+                      <p className="mt-2 text-[12px] text-dim">
+                        O documento-modelo será fornecido pelo diretor. O upload registra o documento
+                        (vai ao Drive na pasta ADMISSÃO no fluxo de arquivamento).
+                      </p>
+                      {termoResult?.motivo && (
+                        <p
+                          className={cn(
+                            "mt-1 text-[12.5px]",
+                            termoResult.status === "VALIDADO"
+                              ? "text-ok"
+                              : termoResult.status === "INCONFORME"
+                                ? "text-danger"
+                                : "text-warn",
+                          )}
+                        >
+                          {termoResult.motivo}
+                        </p>
+                      )}
+                      {termoErro && (
+                        <p className="mt-1 text-[12.5px] text-danger" role="alert">
+                          {termoErro}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </Bloco>
+          )}
+
+          {/* BLOCO 5 — Documentos pendentes (só leitura; some se não há pendência). */}
+          {!camposFiltro && data.documentosPendentes.length > 0 && (
+            <Bloco titulo="Documentos pendentes">
+              <div className="space-y-1.5">
+                {data.documentosPendentes.map((d) => (
+                  <div
+                    key={d.nome}
+                    className="flex items-center justify-between gap-3 rounded-lg bg-[var(--surface-2)] px-3 py-2"
+                  >
+                    <div className="min-w-0 truncate text-[13.5px] text-text">{d.nome}</div>
+                    <Pill tone={d.estado === "INCONFORME" ? "dg" : "wn"}>
+                      {d.estado === "INCONFORME" ? "Inconforme" : "Pendente"}
+                    </Pill>
+                  </div>
+                ))}
+              </div>
+            </Bloco>
           )}
 
           {erro && <p className="text-sm text-danger">{erro}</p>}

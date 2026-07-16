@@ -535,21 +535,28 @@ export default function EsteiraPage() {
   // Avanço/Frente · Ações. Status e Pendências têm largura suficiente para o rótulo mais longo (sem
   // overflow entre colunas). A coluna Avanço só tem o controle da frente (Select + Auditar/ASO/
   // Agendamento); olho/editar vivem na coluna Ações.
-  // Larguras rebalanceadas (OST ajustes, item 5b): antes Candidato levava 2fr e sobrava um vazio
-  // grande até Cliente. Os três campos de texto (Candidato/Cliente/Cargo) dividem a folga de forma
-  // proporcional ao conteúdo, sem cortar (o container rola na horizontal, §A.12).
+  // Larguras (OST correção, item 3 + §A.20): Candidato deixou de ser o mais guloso (era o que criava
+  // o vazio grande) e a coluna Avanço passou a CRESCER (minmax com fr) em vez de ficar fixa e
+  // espremida. Assim a folga das telas largas vai para o SELETOR de status do fim, não para um vazio
+  // no meio; nada fica esmagado nem cortado, e o container rola na horizontal se faltar espaço (§A.12).
   const COL = {
-    cand: "minmax(200px,1.5fr)",
-    cli: "minmax(170px,1.3fr)",
-    cargo: "minmax(180px,1.2fr)",
+    cand: "minmax(190px,1.1fr)",
+    cli: "minmax(170px,1fr)",
+    cargo: "minmax(180px,1fr)",
     // Cabe o rótulo mais longo do campo ("Temporário") e o vazio ("não informado", §A.11).
     contrato: "130px",
     data: "110px",
     status: "210px",
     pend: "150px",
-    acoes: "116px",
+    acoes: "120px",
   };
-  const avanco = isExame ? "380px" : isAuditoria ? "240px" : "220px";
+  // Exame carrega 3 controles na barra (seletor + ASO + Agendamento): precisa de piso maior para
+  // "Agendamento" não cortar (§A.20). Auditoria tem 2 (seletor + Auditar) e Cadastro só o seletor.
+  const avanco = isExame
+    ? "minmax(480px,1.9fr)"
+    : isAuditoria
+      ? "minmax(260px,1.5fr)"
+      : "minmax(240px,1.3fr)";
   // Ordem (OST ajustes, item 5a): Tipo de contrato é a PRIMEIRA coluna de conteúdo, antes de
   // Candidato. Só na Esteira; o Gerenciador não muda. O checkbox do Exame segue como afordância à
   // esquerda de tudo.
@@ -567,8 +574,8 @@ export default function EsteiraPage() {
   ]
     .filter(Boolean)
     .join(" ");
-  // +130px da coluna Contrato: o container rola na horizontal em vez de esmagar as demais (§A.12).
-  const gridMin = isExame ? "min-w-[1810px]" : "min-w-[1610px]";
+  // Piso de largura: abaixo dele o container rola na horizontal em vez de esmagar as colunas (§A.12).
+  const gridMin = isExame ? "min-w-[1840px]" : "min-w-[1540px]";
 
   function toggleStatusKpi(code: string) {
     setStatusFiltro((cur) => (cur.includes(code) ? cur.filter((c) => c !== code) : [...cur, code]));
@@ -1005,18 +1012,14 @@ export default function EsteiraPage() {
                       >
                         {item.tipoContrato || "não informado"}
                       </div>
-                      {/* Ajuste 1: nome do candidato à ESQUERDA (título da coluna segue centralizado). */}
+                      {/* Coluna Candidato: só o nome (à ESQUERDA) + badge de origem. Sem sub-linha de
+                          data (removida, OST ajustes: não foi pedida). */}
                       <div className="min-w-0 text-left">
                         <div className="flex min-w-0 items-center justify-start gap-1.5">
                           <span className="nm truncate" title={item.candidatoNome}>
                             {item.candidatoNome}
                           </span>
                           <OrigemBadge origem={item.origem} className="flex-none" />
-                        </div>
-                        <div className="meta truncate">
-                          {item.concluida
-                            ? `Concluída em ${fmtData(item.dataConclusao)}`
-                            : `Aberta em ${fmtData(item.dataInicio)}`}
                         </div>
                       </div>
                       {/* Cliente: só o nome da operação (§A.12); o código vai no modal do olho. */}
@@ -1063,7 +1066,9 @@ export default function EsteiraPage() {
 
                       {/* Coluna AVANÇO / FRENTE: controle de avanço + ação da frente */}
                       <div className="flex min-w-0 flex-col gap-1.5">
-                        <div className="flex min-w-0 items-center gap-2">
+                        {/* flex-wrap: se a coluna apertar, ASO/Agendamento descem para a linha de
+                            baixo em vez de cortar o rótulo (§A.20, nada esmagado/suprimido). */}
+                        <div className="flex min-w-0 flex-wrap items-center gap-2">
                           {pausado ? (
                             <span
                               className="inline-flex items-center gap-2 text-[12px] text-faint"
@@ -1074,17 +1079,35 @@ export default function EsteiraPage() {
                             </span>
                           ) : (
                             <Select
-                              className="min-w-0 flex-1"
+                              // max-w cap: o seletor não "engole" a linha (era o que espremia ASO/
+                              // Agendamento no Exame). Fica com largura confortável e sobra espaço para
+                              // os botões da frente, sem cortar (§A.20).
+                              className="min-w-[130px] max-w-[240px] flex-1"
                               menuFit
                               ariaLabel={`Mudar status de ${item.candidatoNome}`}
                               disabled={acting}
                               value={item.status}
                               onChange={(novo) => onSelectStatus(item, novo)}
-                              options={statusCatalogo.map((c) => ({
-                                value: c.codigo,
-                                label: c.rotulo,
-                                color: TONE_VAR[statusTone(c.codigo, c)],
-                              }))}
+                              options={[
+                                ...statusCatalogo.map((c) => ({
+                                  value: c.codigo,
+                                  label: c.rotulo,
+                                  color: TONE_VAR[statusTone(c.codigo, c)],
+                                })),
+                                // Declínio é uma opção DENTRO do seletor (OST correção, item 2). A
+                                // Auditoria já tem "Declinou" no catálogo; nas frentes que não têm
+                                // (Exame, Cadastro) injetamos a MESMA opção (sem tocar o catálogo/régua).
+                                // onSelectStatus intercepta "DECLINOU" e abre o modal de motivo.
+                                ...(statusCatalogo.some((c) => c.codigo === "DECLINOU")
+                                  ? []
+                                  : [
+                                      {
+                                        value: "DECLINOU",
+                                        label: "Declinou",
+                                        color: TONE_VAR[statusTone("DECLINOU")],
+                                      },
+                                    ]),
+                              ]}
                             />
                           )}
 
@@ -1156,23 +1179,6 @@ export default function EsteiraPage() {
                               Auditar
                             </button>
                           )}
-                          {/* Declínio da admissão (OST item 3): ação disponível em TODAS as frentes,
-                              por usabilidade. Encerra a admissão inteira (§A.16); abre o modal de
-                              motivo antes de aplicar. */}
-                          <button
-                            type="button"
-                            className="inline-flex flex-none items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2 text-[12px] font-semibold text-dim transition hover:bg-[var(--surface-2)] hover:text-danger disabled:opacity-50"
-                            title="Declinar a admissão (encerra em todas as frentes)"
-                            disabled={acting}
-                            onClick={() => {
-                              setMotivoDeclinioSel("");
-                              setDeclinioErro(null);
-                              setDeclinioItem(item);
-                            }}
-                          >
-                            <Icon name="x" className="h-4 w-4" />
-                            Declínio
-                          </button>
                         </div>
 
                         {/* O veredito do ASO pela I.A saiu da linha da fila, agora vive no modal de detalhe

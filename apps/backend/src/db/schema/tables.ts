@@ -344,6 +344,11 @@ export const exameAgendamento = pgTable("exame_agendamento", {
   nomeClinica: varchar("nome_clinica", { length: 200 }),
   local: text("local"),
   fornecedor: fornecedorExameEnum("fornecedor"),
+  // Valor do exame (o exame é tratado no agendamento — decisão do diretor). numeric(10,2); nulo até
+  // o time preencher. Não é PII (logística/custo do exame).
+  valor: numeric("valor", { precision: 10, scale: 2 }),
+  // Previsão de quando o ASO fica pronto, informada pela clínica (só existe depois do agendamento).
+  previsaoAso: date("previsao_aso"),
   reagendamentos: integer("reagendamentos").notNull().default(0),
   criadoEm,
   atualizadoEm,

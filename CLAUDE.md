@@ -542,3 +542,12 @@ pendência na MESMA admissão).
 trabalho ativo, e o histórico da carga fica intacto.
 
 **Status:** mapeada, aguardando o motor da esteira. *(Registro solicitado pelo diretor.)*
+
+## A.20 — Largura de colunas e prova visual anti-esmagamento (regra permanente)
+
+Em **toda tela com tabela**, a fábrica deve **sempre ajustar as larguras das colunas para aproveitar
+ao máximo o espaço disponível**, e **sempre validar (§A.13)** que **nenhum nome de coluna, texto de
+célula ou controle (seletor, botão) está sendo suprimido, cortado ou esmagado**. Complementa a §A.12
+(máscara única de tabela) e a §A.13 (prova visual obrigatória): não basta a tabela existir, ela tem
+de aproveitar o espaço sem vazios grandes de um lado e colunas espremidas do outro, e isso só é dado
+como concluído com a screenshot conferida. *(Decisão do diretor, após colunas esmagadas na Esteira.)*

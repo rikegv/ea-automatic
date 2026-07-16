@@ -20,6 +20,7 @@ import {
   clientes,
   dadosVagaFolha,
   documentosAdmissao,
+  exameAgendamento,
   tiposDocumento,
   frenteStatusCatalogo,
   frentesAdmissao,
@@ -519,6 +520,49 @@ export class AdmissoesService {
     const candidato = await this.db.query.candidatos.findFirst({
       where: eq(candidatos.cpf, adm.candidatoCpf),
     });
+    // BLOCO 2 (nomes de cliente/cargo p/ exibir) e BLOCO 3 (exame): o lápis mostra, não edita esses.
+    const cliente = await this.db.query.clientes.findFirst({
+      where: eq(clientes.codCliente, adm.codCliente),
+    });
+    const cargo = await this.db.query.cargos.findFirst({ where: eq(cargos.id, adm.cargoId) });
+    const agendamento = await this.db.query.exameAgendamento.findFirst({
+      where: eq(exameAgendamento.admissaoId, id),
+    });
+    // BLOCO 4 (status das frentes, só leitura no lápis) e BLOCO 5 (documentos que FALTAM). Mesmo dado
+    // do olho, para os dois modais terem o mesmo design de blocos.
+    const frentesRows = await this.db
+      .select({
+        tipo: frentesAdmissao.tipo,
+        status: frentesAdmissao.status,
+        concluida: frentesAdmissao.concluida,
+        rotulo: frenteStatusCatalogo.rotulo,
+      })
+      .from(frentesAdmissao)
+      .leftJoin(
+        frenteStatusCatalogo,
+        and(
+          eq(frenteStatusCatalogo.tipo, frentesAdmissao.tipo),
+          eq(frenteStatusCatalogo.codigo, frentesAdmissao.status),
+        ),
+      )
+      .where(eq(frentesAdmissao.admissaoId, id));
+    const docsRows = await this.db
+      .select({
+        nome: tiposDocumento.nome,
+        exigencia: reguaDocumental.exigencia,
+        estado: documentosAdmissao.estado,
+      })
+      .from(reguaDocumental)
+      .innerJoin(tiposDocumento, eq(tiposDocumento.id, reguaDocumental.tipoDocumentoId))
+      .leftJoin(
+        documentosAdmissao,
+        and(
+          eq(documentosAdmissao.admissaoId, id),
+          eq(documentosAdmissao.tipoDocumentoId, reguaDocumental.tipoDocumentoId),
+        ),
+      )
+      .where(and(eq(reguaDocumental.codCliente, adm.codCliente), eq(reguaDocumental.cargoId, adm.cargoId)))
+      .orderBy(asc(tiposDocumento.nome));
     // Pacote ESTRUTURADO (§A.17 etapa 4). O modal de edição decide o modo pelo BLOB legado, não por
     // esta lista: admissão com blob edita o blob (não migramos); sem blob, edita estruturado. Uma
     // admissão nova sem nenhum benefício escolhido tem blob nulo e pacote vazio, e ainda assim é
@@ -539,6 +583,10 @@ export class AdmissoesService {
       // O par (cliente + cargo) alimenta a sugestão de pacote do modal de pendências (§A.17 etapa 4).
       codCliente: adm.codCliente,
       cargoId: adm.cargoId,
+      // Nomes p/ o BLOCO 2 (exibição; cliente/cargo não são editáveis no lápis — identidade §A.3).
+      clienteRazao: cliente?.razaoSocial ?? null,
+      clienteOperacao: cliente?.nomeOperacao ?? null,
+      cargoNome: cargo?.nome ?? null,
       tipoContrato: adm.tipoContrato,
       dataAdmissao: adm.dataAdmissao,
       matricula: adm.matricula,
@@ -574,6 +622,30 @@ export class AdmissoesService {
         nome: b.nome,
         valor: b.valor === null ? null : Number(b.valor),
       })),
+      // BLOCO 3 (Exame): dados do agendamento, SÓ LEITURA no lápis (valor/previsão ASO são editados na
+      // tela de agendamento, decisão do diretor). Null = exame ainda não agendado.
+      exame: agendamento
+        ? {
+            data: agendamento.data,
+            horario: agendamento.horario,
+            nomeClinica: agendamento.nomeClinica,
+            local: agendamento.local,
+            fornecedor: agendamento.fornecedor,
+            valor: agendamento.valor,
+            previsaoAso: agendamento.previsaoAso,
+          }
+        : null,
+      // BLOCO 4 (só leitura): status das frentes com rótulo do catálogo.
+      frentes: frentesRows.map((f) => ({
+        tipo: f.tipo,
+        status: f.status,
+        rotulo: f.rotulo ?? f.status,
+        concluida: f.concluida,
+      })),
+      // BLOCO 5 (só leitura): documentos que FALTAM (não-entregues).
+      documentosPendentes: docsRows
+        .filter((d) => (d.estado ?? "PENDENTE") !== "ENTREGUE")
+        .map((d) => ({ nome: d.nome, exigencia: d.exigencia, estado: d.estado ?? "PENDENTE" })),
     };
   }
 
@@ -840,10 +912,20 @@ export class AdmissoesService {
       // transação (recomputeFarolGlobal) é do sistema e NÃO gera log de usuário (OST).
       const novoFarol = (dto.farolGlobal as FarolGlobal) ?? adm.farolGlobal;
       const novoIsBanco = dto.isBanco === undefined ? adm.isBanco : dto.isBanco;
-      // Motivo do declínio: ausente = mantém; null/"" = limpa; uuid = vincula (§A.14, item 3). Grava
-      // no MESMO admissoes.motivo_declinio_id que o modal do olho lê, sem segundo campo.
-      const novoMotivoDeclinio =
-        dto.motivoDeclinioId === undefined ? adm.motivoDeclinioId : dto.motivoDeclinioId || null;
+      // REATIVAÇÃO = reverso COMPLETO do declínio (OST): a admissão estava em DECLINOU/RESCISAO e
+      // volta a um farol ativo. Não basta trocar o farol: o motivo é limpo e as frentes voltam ao
+      // estado inicial de admissão viva (Auditoria "Análise pendente", Exame "A agendar"), senão a
+      // admissão reaparece na fila ainda marcada como declinada. Espelha a `declinarAdmissao`.
+      const eraDeclinio = adm.farolGlobal === "DECLINOU" || adm.farolGlobal === "RESCISAO";
+      const novoEhDeclinio = novoFarol === "DECLINOU" || novoFarol === "RESCISAO";
+      const reativando = eraDeclinio && !novoEhDeclinio;
+      // Motivo do declínio: ao reativar, LIMPA sempre. Fora disso: ausente = mantém; null/"" = limpa;
+      // uuid = vincula (§A.14, item 3). Grava no MESMO admissoes.motivo_declinio_id do olho.
+      const novoMotivoDeclinio = reativando
+        ? null
+        : dto.motivoDeclinioId === undefined
+          ? adm.motivoDeclinioId
+          : dto.motivoDeclinioId || null;
 
       registrar("tipoContrato", adm.tipoContrato, novoTipoContrato);
       registrar("dataAdmissao", adm.dataAdmissao, novaDataAdmissao);
@@ -906,6 +988,11 @@ export class AdmissoesService {
         })
         .where(eq(admissoes.id, id))
         .returning({ id: admissoes.id, sinalizador: admissoes.sinalizadorPreenchimento });
+
+      // Reativação (OST declínio não-destrutivo): NÃO toca em nenhuma frente. O declínio nunca
+      // sobrescreveu o dado real das frentes, então não há o que "restaurar": o exame/prontuário/ASO/
+      // datas seguem intactos. Reativar = só desligar o farol (novoFarol) + limpar o motivo
+      // (novoMotivoDeclinio, acima) + recalcular o sinalizador pelo estado REAL (feito acima).
 
       if (logs.length > 0) {
         await tx.insert(candidatoAlteracoesLog).values(

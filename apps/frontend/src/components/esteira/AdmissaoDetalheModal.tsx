@@ -12,6 +12,7 @@ import { GoogleDriveLogo } from "@/components/ui/GoogleDriveLogo";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { farolPill } from "@/lib/farol";
 import { clicksignPill, temEnvelopeReenviavel } from "@/lib/clicksign";
+import { Bloco } from "@/components/ui/Bloco";
 
 interface FrenteDetalhe {
   tipo: string;
@@ -43,9 +44,28 @@ interface AdmissaoDetalhe {
   clicksignStatus: ClicksignStatus;
   temEnvelope: boolean;
   contratoAssinadoDriveUrl: string | null;
-  candidato: { nome: string; cpf: string; email: string | null; telefone: string | null };
+  matricula: string | null;
+  candidato: {
+    nome: string;
+    cpf: string;
+    email: string | null;
+    telefone: string | null;
+    dataNascimento: string | null;
+  };
   cliente: { codCliente: string; razaoSocial: string; operacao: string | null };
   cargo: string;
+  // BLOCO 2: salário/escala/endereço da folha (endereço = o da admissão).
+  vagaFolha: { salario: string | null; escala: string | null; endereco: string | null };
+  // BLOCO 3: dados do exame (coletados do agendamento). null = exame ainda não agendado.
+  exame: {
+    data: string | null;
+    horario: string | null;
+    nomeClinica: string | null;
+    local: string | null;
+    fornecedor: string | null;
+    valor: string | null;
+    previsaoAso: string | null;
+  } | null;
   frentes: FrenteDetalhe[];
   documentos: DocDetalhe[];
   pendencias: string[];
@@ -125,6 +145,7 @@ const EXIG_ROTULO: Record<string, string> = {
   NAO_OBRIGATORIO: "Não obrigatório",
   FACULTATIVO: "Facultativo",
 };
+const FORNECEDOR_ROTULO: Record<string, string> = { MEDICAL: "Medical", LIMER: "Limer" };
 
 function frenteTone(f: FrenteDetalhe): PillTone {
   if (f.concluida) return "ok";
@@ -152,19 +173,27 @@ function fmtDataAdmissao(d?: string | null): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(d);
   return m ? `${m[3]}/${m[2]}/${m[1]}` : fmtData(d);
 }
+function fmtMoeda(v?: string | null): string {
+  if (v === null || v === undefined || v === "") return "não informado";
+  const n = Number(v);
+  return Number.isNaN(n) ? String(v) : `R$ ${n.toFixed(2).replace(".", ",")}`;
+}
 
 function Campo({ rotulo, valor }: { rotulo: string; valor: string }) {
   return (
     <div className="min-w-0">
       <div className="text-[11px] uppercase tracking-wide text-faint">{rotulo}</div>
-      <div className="mt-0.5 truncate text-[13.5px] text-text">{valor}</div>
+      <div className="mt-0.5 truncate text-[13.5px] text-text" title={valor}>
+        {valor}
+      </div>
     </div>
   );
 }
 
 /**
- * Item 4 (2C), modal SOMENTE LEITURA com a ficha da admissão. Não edita: visão rápida do
- * candidato, frentes, checklist de documentos e sinalizador.
+ * Modal SOMENTE LEITURA com a ficha da admissão, em BLOCOS (mesmo design do lápis). Não edita nada.
+ * BLOCO 1 dados pessoais · 2 trabalho/cadastro · 3 exame · 4 status das frentes · 5 documentos
+ * pendentes (só os que faltam). Trilha de passagem e histórico ficam ao fim (auditoria).
  */
 export function AdmissaoDetalheModal({
   admissaoId,
@@ -236,6 +265,15 @@ export function AdmissaoDetalheModal({
     [admissaoId, token, carregar],
   );
 
+  // BLOCO 5: só os documentos que FALTAM (não-entregues). Se vazio, o bloco não aparece.
+  const docsPendentes = data?.documentos.filter((d) => d.estado !== "ENTREGUE") ?? [];
+  const temAssinatura =
+    !!data &&
+    (data.temEnvelope ||
+      data.clicksignStatus !== "SEM_ENVELOPE" ||
+      !!data.contratoAssinadoDriveUrl);
+  const temProntuario = !!data && (!!data.drivePastaUrl || !!data.driveAsoUrl);
+
   return (
     <>
       <Modal onClose={onClose} className="max-w-2xl" ariaLabel="Ficha da admissão">
@@ -249,9 +287,7 @@ export function AdmissaoDetalheModal({
               {data && <OrigemBadge origem={data.origem} className="flex-none" />}
             </div>
             {data && (
-              <p className="psub !mb-0 mt-1">
-                Somente leitura · recebido em {fmtData(data.recebidoEm)}
-              </p>
+              <p className="psub !mb-0 mt-1">Somente leitura · recebido em {fmtData(data.recebidoEm)}</p>
             )}
           </div>
           <button
@@ -269,147 +305,211 @@ export function AdmissaoDetalheModal({
         ) : !data ? (
           <p className="py-8 text-center text-sm text-faint">Carregando ficha…</p>
         ) : (
-          <div className="space-y-5">
-            {/* Identificação */}
-            <section className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-              <Campo rotulo="CPF" valor={fmtCpf(data.candidato.cpf)} />
-              <Campo rotulo="Telefone" valor={data.candidato.telefone || "não informado"} />
-              <Campo rotulo="E-mail" valor={data.candidato.email || "não informado"} />
-              <Campo rotulo="Cliente" valor={data.cliente.razaoSocial} />
-              <Campo rotulo="Cargo" valor={data.cargo} />
-              <Campo rotulo="Data de admissão" valor={fmtDataAdmissao(data.dataAdmissao)} />
-              <Campo rotulo="Contrato" valor={data.tipoContrato || "não informado"} />
-            </section>
+          <div className="space-y-4">
+            {/* BLOCO 1 — Dados pessoais */}
+            <Bloco titulo="Dados pessoais">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                <Campo rotulo="Nome" valor={data.candidato.nome || "não informado"} />
+                <Campo rotulo="CPF" valor={fmtCpf(data.candidato.cpf)} />
+                <Campo rotulo="Telefone" valor={data.candidato.telefone || "não informado"} />
+                <Campo rotulo="E-mail" valor={data.candidato.email || "não informado"} />
+                <Campo
+                  rotulo="Data de nascimento"
+                  valor={fmtData(data.candidato.dataNascimento)}
+                />
+              </div>
+            </Bloco>
 
-            {/* Farol global da admissão (§A.3) */}
-            <section className="flex flex-wrap items-center gap-2">
-              <span className="text-[12.5px] text-dim">Status:</span>
-              {(() => {
-                const f = farolPill(data.farolGlobal);
-                return <Pill tone={f.tone}>{f.label}</Pill>;
-              })()}
-              {/* Motivo do declínio (Fase 2): claro e visível ao lado do status, só para admissões de
-                declínio. Sem motivo vinculado aparece como "não informado" (§A.11). */}
-              {(data.farolGlobal === "DECLINOU" || data.farolGlobal === "RESCISAO") && (
-                <span className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-1 text-[12.5px]">
-                  <span className="text-dim">Motivo do declínio:</span>
-                  <span className="font-semibold text-text">
-                    {data.motivoDeclinio || "não informado"}
-                  </span>
-                </span>
-              )}
-              {/* Prontuário no Drive (T4), só após a régua fechar; pasta ou ASO */}
-              {(data.drivePastaUrl || data.driveAsoUrl) && (
-                <a
-                  href={data.drivePastaUrl || data.driveAsoUrl || undefined}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-[12.5px] font-semibold text-text transition hover:bg-[var(--surface-2)]"
-                  title="Abrir prontuário no Google Drive"
-                >
-                  <GoogleDriveLogo className="h-4 w-4" />
-                  Prontuário no Drive
-                </a>
-              )}
-            </section>
+            {/* BLOCO 2 — Trabalho e cadastro */}
+            <Bloco titulo="Trabalho e cadastro">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                <Campo rotulo="Cliente" valor={data.cliente.operacao || data.cliente.razaoSocial} />
+                <Campo rotulo="Cargo" valor={data.cargo} />
+                <Campo rotulo="Salário" valor={fmtMoeda(data.vagaFolha.salario)} />
+                <Campo rotulo="Tipo de contrato" valor={data.tipoContrato || "não informado"} />
+                <Campo rotulo="Data de admissão" valor={fmtDataAdmissao(data.dataAdmissao)} />
+                <Campo rotulo="Matrícula" valor={data.matricula || "não informado"} />
+                <Campo rotulo="Escala" valor={data.vagaFolha.escala || "não informado"} />
+                <Campo
+                  rotulo="Endereço de trabalho"
+                  valor={data.vagaFolha.endereco || "não informado"}
+                />
+              </div>
+            </Bloco>
 
-            {/* Veredito do ASO pela I.A (aba Exame), read-only. Quem decide apto/inapto é a I.A na
-              leitura do documento; aqui só refletimos o estado (saiu da linha da fila). */}
-            {asoAnexado !== undefined && (
-              <section className="flex flex-wrap items-center gap-2">
-                <span className="text-[12.5px] text-dim">ASO (I.A):</span>
-                {asoValidado ? (
-                  <Pill tone="ok" title="A I.A validou o ASO como apto">
-                    ASO validado pela I.A
-                  </Pill>
-                ) : asoAnexado ? (
-                  <Pill tone="wn" title="ASO anexado; aguardando o veredito da I.A">
-                    ASO anexado, aguardando validação da I.A
-                  </Pill>
-                ) : (
-                  <Pill tone="nt" title="ASO ainda não anexado">
-                    ASO não anexado
-                  </Pill>
-                )}
-              </section>
-            )}
-
-            {/* Assinatura do contrato (Clicksign / INT-4 / F9) */}
-            {(data.temEnvelope ||
-              data.clicksignStatus !== "SEM_ENVELOPE" ||
-              data.contratoAssinadoDriveUrl) && (
-              <section className="flex flex-wrap items-center gap-2">
-                <span className="text-[12.5px] text-dim">Assinatura (Clicksign):</span>
-                {(() => {
-                  const c = clicksignPill(data.clicksignStatus);
-                  return <Pill tone={c.tone}>{c.label}</Pill>;
-                })()}
-
-                {/* Contrato assinado arquivado no Drive */}
-                {data.contratoAssinadoDriveUrl && (
-                  <a
-                    href={data.contratoAssinadoDriveUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-[12.5px] font-semibold text-text transition hover:bg-[var(--surface-2)]"
-                    title="Abrir contrato assinado no Google Drive"
-                  >
-                    <GoogleDriveLogo className="h-4 w-4" />
-                    Contrato assinado no Drive
-                  </a>
-                )}
-
-                {/* Reenviar por correção, só quando há envelope ativo (§A.5 INT-4) */}
-                {temEnvelopeReenviavel(data.clicksignStatus) && (
-                  <button
-                    type="button"
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-[12.5px] font-semibold text-dim transition hover:bg-[var(--surface-2)] hover:text-accent disabled:opacity-60"
-                    onClick={() => reenviar(false)}
-                    disabled={reenviando}
-                    title="Cancelar o envelope atual e reenviar para correção"
-                  >
-                    {reenviando ? (
-                      <span
-                        className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent"
-                        aria-hidden="true"
-                      />
-                    ) : (
-                      <Icon name="pen" className="h-3.5 w-3.5" />
-                    )}
-                    {reenviando ? "Reenviando…" : "Reenviar por correção"}
-                  </button>
-                )}
-              </section>
-            )}
-
-            {reenvioError && (
-              <p className="-mt-2 text-[12.5px] text-danger" role="alert">
-                {reenvioError}
-              </p>
-            )}
-            {reenvioFlash && (
-              <p className="-mt-2 inline-flex items-center gap-1.5 text-[12.5px] text-ok">
-                <Icon name="check" className="h-3.5 w-3.5" /> {reenvioFlash}
-              </p>
-            )}
-
-            {/* Sinalizador + pendências obrigatórias (S2) */}
-            <section className="flex flex-wrap items-center gap-2">
-              <span className="text-[12.5px] text-dim">Pendências obrigatórias:</span>
-              <Pill tone={SINAL_TONE[data.sinalizador] ?? "nt"}>
-                {SINAL_ROTULO[data.sinalizador] ?? data.sinalizador}
-              </Pill>
-              {data.pendencias.length > 0 && (
-                <span className="text-[12.5px] text-warn">{data.pendencias.join(" · ")}</span>
-              )}
-            </section>
-
-            {/* Trilha de passagem (S3) */}
-            {data.passagens.length > 0 && (
-              <section>
-                <div className="mb-2 text-[11px] uppercase tracking-wide text-faint">
-                  Trilha de passagem (avanços com pendência)
+            {/* BLOCO 3 — Exame admissional (coletado do agendamento) */}
+            <Bloco titulo="Exame admissional">
+              {data.exame ? (
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                  <Campo rotulo="Data" valor={fmtDataAdmissao(data.exame.data)} />
+                  <Campo rotulo="Horário" valor={data.exame.horario || "não informado"} />
+                  <Campo rotulo="Clínica" valor={data.exame.nomeClinica || "não informado"} />
+                  <Campo rotulo="Local" valor={data.exame.local || "não informado"} />
+                  <Campo
+                    rotulo="Fornecedor"
+                    valor={
+                      data.exame.fornecedor
+                        ? (FORNECEDOR_ROTULO[data.exame.fornecedor] ?? data.exame.fornecedor)
+                        : "não informado"
+                    }
+                  />
+                  <Campo rotulo="Valor do exame" valor={fmtMoeda(data.exame.valor)} />
+                  <Campo
+                    rotulo="Previsão do ASO"
+                    valor={fmtDataAdmissao(data.exame.previsaoAso)}
+                  />
                 </div>
+              ) : (
+                <p className="text-[13px] text-faint">Exame ainda não agendado.</p>
+              )}
+              {/* Veredito do ASO pela I.A (aba Exame), read-only: a I.A decide apto/inapto na leitura. */}
+              {asoAnexado !== undefined && (
+                <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-[var(--border)] pt-3">
+                  <span className="text-[12.5px] text-dim">ASO (I.A):</span>
+                  {asoValidado ? (
+                    <Pill tone="ok">ASO validado pela I.A</Pill>
+                  ) : asoAnexado ? (
+                    <Pill tone="wn">ASO anexado, aguardando validação da I.A</Pill>
+                  ) : (
+                    <Pill tone="nt">ASO não anexado</Pill>
+                  )}
+                </div>
+              )}
+            </Bloco>
+
+            {/* BLOCO 4 — Status das frentes (+ farol, motivo de declínio, assinatura/Drive) */}
+            <Bloco titulo="Status das frentes">
+              <div className="mb-3 flex flex-wrap items-center gap-2">
+                <span className="text-[12.5px] text-dim">Farol:</span>
+                {(() => {
+                  const f = farolPill(data.farolGlobal);
+                  return <Pill tone={f.tone}>{f.label}</Pill>;
+                })()}
+                {(data.farolGlobal === "DECLINOU" || data.farolGlobal === "RESCISAO") && (
+                  <span className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-1 text-[12.5px]">
+                    <span className="text-dim">Motivo do declínio:</span>
+                    <span className="font-semibold text-text">
+                      {data.motivoDeclinio || "não informado"}
+                    </span>
+                  </span>
+                )}
+                <span className="text-[12.5px] text-dim">Pendências:</span>
+                <Pill tone={SINAL_TONE[data.sinalizador] ?? "nt"}>
+                  {SINAL_ROTULO[data.sinalizador] ?? data.sinalizador}
+                </Pill>
+              </div>
+              {data.pendencias.length > 0 && (
+                <p className="mb-3 text-[12.5px] text-warn">{data.pendencias.join(" · ")}</p>
+              )}
+              <div className="grid gap-2 sm:grid-cols-3">
+                {data.frentes.map((f) => (
+                  <div
+                    key={f.tipo}
+                    className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-3"
+                  >
+                    <div className="mb-1.5 text-[12.5px] font-semibold text-text">
+                      {FRENTE_ROTULO[f.tipo] ?? f.tipo}
+                    </div>
+                    <Pill tone={frenteTone(f)}>{f.rotulo}</Pill>
+                  </div>
+                ))}
+                {data.frentes.length === 0 && <p className="text-sm text-faint">Nenhuma frente.</p>}
+              </div>
+
+              {/* Assinatura (Clicksign / INT-4) + prontuário/contrato no Drive + reenviar por correção. */}
+              {(temAssinatura || temProntuario) && (
+                <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-[var(--border)] pt-3">
+                  {temAssinatura && (
+                    <>
+                      <span className="text-[12.5px] text-dim">Assinatura:</span>
+                      {(() => {
+                        const c = clicksignPill(data.clicksignStatus);
+                        return <Pill tone={c.tone}>{c.label}</Pill>;
+                      })()}
+                    </>
+                  )}
+                  {temProntuario && (
+                    <a
+                      href={data.drivePastaUrl || data.driveAsoUrl || undefined}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-[12.5px] font-semibold text-text transition hover:bg-[var(--surface-2)]"
+                      title="Abrir prontuário no Google Drive"
+                    >
+                      <GoogleDriveLogo className="h-4 w-4" />
+                      Prontuário no Drive
+                    </a>
+                  )}
+                  {data.contratoAssinadoDriveUrl && (
+                    <a
+                      href={data.contratoAssinadoDriveUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-[12.5px] font-semibold text-text transition hover:bg-[var(--surface-2)]"
+                      title="Abrir contrato assinado no Google Drive"
+                    >
+                      <GoogleDriveLogo className="h-4 w-4" />
+                      Contrato assinado no Drive
+                    </a>
+                  )}
+                  {temEnvelopeReenviavel(data.clicksignStatus) && (
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-[12.5px] font-semibold text-dim transition hover:bg-[var(--surface-2)] hover:text-accent disabled:opacity-60"
+                      onClick={() => reenviar(false)}
+                      disabled={reenviando}
+                      title="Cancelar o envelope atual e reenviar para correção"
+                    >
+                      {reenviando ? (
+                        <span
+                          className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent"
+                          aria-hidden="true"
+                        />
+                      ) : (
+                        <Icon name="pen" className="h-3.5 w-3.5" />
+                      )}
+                      {reenviando ? "Reenviando…" : "Reenviar por correção"}
+                    </button>
+                  )}
+                </div>
+              )}
+              {reenvioError && (
+                <p className="mt-2 text-[12.5px] text-danger" role="alert">
+                  {reenvioError}
+                </p>
+              )}
+              {reenvioFlash && (
+                <p className="mt-2 inline-flex items-center gap-1.5 text-[12.5px] text-ok">
+                  <Icon name="check" className="h-3.5 w-3.5" /> {reenvioFlash}
+                </p>
+              )}
+            </Bloco>
+
+            {/* BLOCO 5 — Documentos pendentes (só os que faltam; some se não há pendência) */}
+            {docsPendentes.length > 0 && (
+              <Bloco titulo="Documentos pendentes">
+                <div className="space-y-1.5">
+                  {docsPendentes.map((d) => (
+                    <div
+                      key={d.nome}
+                      className="flex items-center justify-between gap-3 rounded-lg bg-[var(--surface-2)] px-3 py-2"
+                    >
+                      <div className="min-w-0">
+                        <div className="truncate text-[13.5px] text-text">{d.nome}</div>
+                        <div className="text-[11.5px] text-faint">{EXIG_ROTULO[d.exigencia]}</div>
+                      </div>
+                      <Pill tone={docTone(d.estado)}>
+                        {d.estado === "INCONFORME" ? "Inconforme" : "Pendente"}
+                      </Pill>
+                    </div>
+                  ))}
+                </div>
+              </Bloco>
+            )}
+
+            {/* Trilha de passagem (S3) — auditoria, preservada. */}
+            {data.passagens.length > 0 && (
+              <Bloco titulo="Trilha de passagem (avanços com pendência)">
                 <div className="space-y-1.5">
                   {data.passagens.map((p, i) => (
                     <div
@@ -422,73 +522,16 @@ export function AdmissaoDetalheModal({
                           {p.autor ?? "não informado"} · {fmtData(p.criadoEm)}
                         </span>
                       </div>
-                      {p.camposPendentes && (
-                        <div className="mt-0.5 text-warn">{p.camposPendentes}</div>
-                      )}
+                      {p.camposPendentes && <div className="mt-0.5 text-warn">{p.camposPendentes}</div>}
                     </div>
                   ))}
                 </div>
-              </section>
+              </Bloco>
             )}
 
-            {/* Frentes */}
-            <section>
-              <div className="mb-2 text-[11px] uppercase tracking-wide text-faint">
-                Status das frentes
-              </div>
-              <div className="grid gap-2 sm:grid-cols-3">
-                {data.frentes.map((f) => (
-                  <div key={f.tipo} className="rounded-xl border border-[var(--border)] p-3">
-                    <div className="mb-1.5 text-[12.5px] font-semibold text-text">
-                      {FRENTE_ROTULO[f.tipo] ?? f.tipo}
-                    </div>
-                    <Pill tone={frenteTone(f)}>{f.rotulo}</Pill>
-                  </div>
-                ))}
-                {data.frentes.length === 0 && <p className="text-sm text-faint">Nenhuma frente.</p>}
-              </div>
-            </section>
-
-            {/* Checklist de documentos */}
-            <section>
-              <div className="mb-2 text-[11px] uppercase tracking-wide text-faint">
-                Checklist de documentos
-              </div>
-              {data.documentos.length === 0 ? (
-                <p className="text-sm text-faint">
-                  Sem régua para este par cliente+cargo (nenhum documento exigido).
-                </p>
-              ) : (
-                <div className="space-y-1.5">
-                  {data.documentos.map((d) => (
-                    <div
-                      key={d.nome}
-                      className="flex items-center justify-between gap-3 rounded-lg px-3 py-2 hover:bg-[var(--surface)]"
-                    >
-                      <div className="min-w-0">
-                        <div className="truncate text-[13.5px] text-text">{d.nome}</div>
-                        <div className="text-[11.5px] text-faint">{EXIG_ROTULO[d.exigencia]}</div>
-                      </div>
-                      <Pill tone={docTone(d.estado)}>
-                        {d.estado === "ENTREGUE"
-                          ? "Entregue"
-                          : d.estado === "INCONFORME"
-                            ? "Inconforme"
-                            : "Pendente"}
-                      </Pill>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </section>
-
-            {/* Histórico de alterações (OST-EA-GESTAO-USUARIOS), somente leitura, mais recente
-              primeiro. Segue o modelo visual da Trilha de passagem; oculto se não houver registros. */}
+            {/* Histórico de alterações — auditoria, preservada. */}
             {data.alteracoes && data.alteracoes.length > 0 && (
-              <section>
-                <div className="mb-2 text-[11px] uppercase tracking-wide text-faint">
-                  Histórico de alterações
-                </div>
+              <Bloco titulo="Histórico de alterações">
                 <div className="space-y-1.5">
                   {data.alteracoes.map((a, i) => (
                     <div
@@ -511,7 +554,7 @@ export function AdmissaoDetalheModal({
                     </div>
                   ))}
                 </div>
-              </section>
+              </Bloco>
             )}
           </div>
         )}

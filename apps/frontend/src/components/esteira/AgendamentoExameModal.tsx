@@ -28,6 +28,8 @@ interface AgendamentoRow {
   nomeClinica: string | null;
   local: string | null;
   fornecedor: Fornecedor | null;
+  valor: string | null; // decimal "500.00"
+  previsaoAso: string | null; // YYYY-MM-DD
   reagendamentos: number;
 }
 
@@ -35,6 +37,12 @@ function fmtData(d?: string | null): string {
   if (!d) return "não informado";
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(d);
   return m ? `${m[3]}/${m[2]}/${m[1]}` : d;
+}
+
+function fmtValor(v?: string | null): string {
+  if (v === null || v === undefined || v === "") return "não informado";
+  const n = Number(v);
+  return Number.isNaN(n) ? String(v) : `R$ ${n.toFixed(2).replace(".", ",")}`;
 }
 
 /**
@@ -66,6 +74,9 @@ export function AgendamentoExameModal({
   const [nomeClinica, setNomeClinica] = useState("");
   const [local, setLocal] = useState("");
   const [fornecedor, setFornecedor] = useState<Fornecedor | "">("");
+  // Novos (decisão do diretor): valor do exame e previsão do ASO (informada pela clínica). Opcionais.
+  const [valor, setValor] = useState("");
+  const [previsaoAso, setPrevisaoAso] = useState("");
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -85,6 +96,8 @@ export function AgendamentoExameModal({
           setNomeClinica(row.nomeClinica ?? "");
           setLocal(row.local ?? "");
           setFornecedor(row.fornecedor ?? "");
+          setValor(row.valor ?? "");
+          setPrevisaoAso(row.previsaoAso ?? "");
           setEditing(false);
         } else {
           setAtual(null);
@@ -125,6 +138,8 @@ export function AgendamentoExameModal({
           nomeClinica: nomeClinica.trim(),
           local: local.trim(),
           fornecedor,
+          valor: valor.trim() || undefined,
+          previsaoAso: previsaoAso || undefined,
           reagendar: temAgendamento ? true : undefined,
         },
       });
@@ -172,6 +187,10 @@ export function AgendamentoExameModal({
                 rotulo="Fornecedor"
                 valor={atual?.fornecedor ? FORNECEDOR_ROTULO[atual.fornecedor] : "não informado"}
               />
+              <div className="grid grid-cols-2 gap-3">
+                <Campo rotulo="Valor do exame" valor={fmtValor(atual?.valor)} />
+                <Campo rotulo="Previsão do ASO" valor={fmtData(atual?.previsaoAso)} />
+              </div>
             </div>
           ) : (
             /* ── Modo CADASTRO / REAGENDAMENTO, formulário editável ─────────── */
@@ -238,6 +257,28 @@ export function AgendamentoExameModal({
                   placeholder="Selecionar fornecedor…"
                   options={FORNECEDOR_OPCOES}
                 />
+              </div>
+              {/* Novos (opcionais): valor do exame e previsão do ASO informada pela clínica. */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <span className="ds-label">Valor do exame</span>
+                  <input
+                    className="ds-input"
+                    inputMode="decimal"
+                    placeholder="Ex.: 120,00"
+                    value={valor}
+                    onChange={(e) => setValor(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <span className="ds-label">Previsão do ASO</span>
+                  <input
+                    type="date"
+                    className="ds-input"
+                    value={previsaoAso}
+                    onChange={(e) => setPrevisaoAso(e.target.value)}
+                  />
+                </div>
               </div>
             </div>
           )}
