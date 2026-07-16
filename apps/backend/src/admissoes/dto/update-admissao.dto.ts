@@ -7,6 +7,7 @@ import {
   IsIn,
   IsOptional,
   IsString,
+  IsUUID,
   MaxLength,
   ValidateNested,
 } from "class-validator";
@@ -80,6 +81,15 @@ export class UpdateAdmissaoDto {
   @IsOptional()
   @IsIn(FAROL_GLOBAL as unknown as string[], { message: "Status (farol) inválido." })
   farolGlobal?: string;
+
+  /**
+   * Motivo do declínio (catálogo motivos_declinio) — GRAVA no MESMO campo `motivo_declinio_id` que o
+   * modal do olho exibe (§A.14, item 3: unificar, sem segundo campo). `null` limpa; ausente mantém.
+   * Só faz sentido quando o farol é de declínio; o front só envia nesse caso.
+   */
+  @IsOptional()
+  @IsUUID(undefined, { message: "Motivo de declínio inválido. Selecione um motivo da lista." })
+  motivoDeclinioId?: string | null;
 
   /** Admissão de banco (§A.3 / Fase 4 complemento): muda a regra de pendência (Termo de Banco). */
   @IsOptional()

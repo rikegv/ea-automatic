@@ -18,6 +18,7 @@ import { CurrentUser } from "../auth/decorators";
 import type { AuthUser } from "../auth/auth.types";
 import { parseMulti } from "../common/parse-multi";
 import { AgendamentoExameDto } from "./dto/agendamento-exame.dto";
+import { DeclinarDto } from "./dto/declinar.dto";
 import { PatchStatusDto } from "./dto/patch-status.dto";
 import { RelatorioClinicaDto } from "./dto/relatorio-clinica.dto";
 import { EsteiraService } from "./esteira.service";
@@ -34,6 +35,16 @@ export class EsteiraController {
   @Get("admissao/:admissaoId")
   detalhe(@Param("admissaoId") admissaoId: string) {
     return this.esteira.detalhe(admissaoId);
+  }
+
+  /**
+   * Declínio da admissão INTEIRA, acionável de qualquer frente (OST ajustes, item 3). Aplica o
+   * efeito completo do declínio (farol DECLINOU + motivo + Auditoria "Declinou" + Exame "Cancelado"),
+   * encerrando a admissão em todas as frentes (§A.16). Operacional (COMUM), como o resto da esteira.
+   */
+  @Patch("admissao/:admissaoId/declinar")
+  declinar(@Param("admissaoId") admissaoId: string, @Body() dto: DeclinarDto) {
+    return this.esteira.declinarAdmissao(admissaoId, dto.motivoDeclinioId);
   }
 
   /** Fila de uma frente com KPIs e catálogo de status (F7/F8). */

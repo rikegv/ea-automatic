@@ -37,6 +37,7 @@ export function Select({
   ariaLabel,
   searchable,
   onAdd,
+  menuFit = false,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -49,6 +50,12 @@ export function Select({
   searchable?: boolean;
   /** Quando fornecido (admin), permite criar um item novo a partir da busca. */
   onAdd?: (nome: string) => void | Promise<void>;
+  /**
+   * Popover ajusta a largura ao MAIOR rótulo (em vez de ficar preso à largura do gatilho), mostrando
+   * o texto completo das opções sem corte. Usado onde a coluna é estreita (barra de Avanço da
+   * Esteira). O gatilho recolhido segue truncando; só a lista aberta cresce.
+   */
+  menuFit?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -163,8 +170,15 @@ export function Select({
           <div
             ref={menuRef}
             role="listbox"
-            className="glass fixed z-[60] overflow-hidden p-1.5 !bg-[var(--surface-2)]"
-            style={{ top: pos.top, left: pos.left, width: pos.width }}
+            className={cn(
+              "glass fixed z-[60] overflow-hidden p-1.5 !bg-[var(--surface-2)]",
+              menuFit && "w-max max-w-[min(92vw,560px)]",
+            )}
+            style={
+              menuFit
+                ? { top: pos.top, left: pos.left, minWidth: pos.width }
+                : { top: pos.top, left: pos.left, width: pos.width }
+            }
           >
             {comBusca && (
               <div className="px-1 pb-1.5">
@@ -204,7 +218,7 @@ export function Select({
                           style={{ background: o.color }}
                         />
                       )}
-                      <span className="truncate">{o.label}</span>
+                      <span className={menuFit ? "whitespace-nowrap" : "truncate"}>{o.label}</span>
                       {active && (
                         <Icon name="check" className="ml-auto h-3.5 w-3.5 flex-none text-accent" />
                       )}

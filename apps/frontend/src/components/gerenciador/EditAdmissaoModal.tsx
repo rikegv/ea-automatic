@@ -14,7 +14,6 @@ import { MultiSelect } from "@/components/ui/MultiSelect";
 import { cn } from "@/lib/cn";
 import { FAROL_SELECT_OPTIONS } from "@/lib/farol";
 import {
-  beneficiosSemValor,
   fmtValorBeneficio,
   foraDoPadraoPacote,
   precisaValorBeneficio,
@@ -48,6 +47,8 @@ interface AdmissaoEdit {
   dataAdmissao: string | null;
   matricula: string | null;
   farolGlobal: string;
+  /** Motivo do declínio já vinculado (id do catálogo motivos_declinio) ou null. */
+  motivoDeclinioId: string | null;
   isBanco: boolean;
   origem: Origem;
   vagaFolha: VagaFolha;
@@ -146,6 +147,9 @@ export function EditAdmissaoModal({
   const [dataAdmissao, setDataAdmissao] = useState("");
   const [matricula, setMatricula] = useState("");
   const [farol, setFarol] = useState("EM_ADMISSAO");
+  // Motivo do declínio (§A.14, item 3): só aparece/edita quando o farol é de declínio.
+  const [motivoDeclinioId, setMotivoDeclinioId] = useState("");
+  const [motivosDeclinioCat, setMotivosDeclinioCat] = useState<{ id: string; nome: string }[]>([]);
   const [isBanco, setIsBanco] = useState(false);
   const [vf, setVf] = useState<VagaFolha>({
     salario: "",
@@ -189,6 +193,9 @@ export function EditAdmissaoModal({
     apiFetch<{ id: string; nome: string }[]>("/catalogos/beneficios", { token })
       .then(setBeneficiosCat)
       .catch(() => setBeneficiosCat([]));
+    apiFetch<{ id: string; nome: string }[]>("/catalogos/motivos-declinio", { token })
+      .then(setMotivosDeclinioCat)
+      .catch(() => setMotivosDeclinioCat([]));
   }, [token]);
 
   useEffect(() => {
@@ -204,6 +211,7 @@ export function EditAdmissaoModal({
         setDataAdmissao(s(r.dataAdmissao).slice(0, 10));
         setMatricula(s(r.matricula));
         setFarol(r.farolGlobal);
+        setMotivoDeclinioId(s(r.motivoDeclinioId));
         setIsBanco(Boolean(r.isBanco));
         // §A.17 etapa 4: o BLOB decide o modo. Com blob => string legada; sem blob => estruturado.
         setTemLegado(Boolean(r.beneficiosLegado));
@@ -291,11 +299,9 @@ export function EditAdmissaoModal({
       setErro("O nome do candidato é obrigatório.");
       return;
     }
-    // Benefício que exige valor não pode ser salvo sem valor (o backend revalida igual).
-    if (semValorModal.length > 0) {
-      setErro(`Informe o valor de: ${semValorModal.join(", ")}.`);
-      return;
-    }
+    // Valor de benefício NÃO trava o salvar (OST ajustes, item 1): o salvar grava o que já está
+    // preenchido; um valor de benefício em falta segue visível como pendência no formulário (o campo
+    // de valor continua ali), mas não impede salvar o resto, nem quando o farol é de declínio.
     setBusy(true);
     setErro(null);
     try {
@@ -310,6 +316,10 @@ export function EditAdmissaoModal({
           dataAdmissao: dataAdmissao || undefined,
           matricula,
           farolGlobal: farol,
+          // Motivo do declínio: em declínio, envia o id escolhido (ou null se nenhum). Ao TIRAR o
+          // farol de declínio, envia null para LIMPAR o motivo órfão (OST ajustes, item 2).
+          motivoDeclinioId:
+            farol === "DECLINOU" || farol === "RESCISAO" ? motivoDeclinioId || null : null,
           isBanco,
           vagaFolha: vf,
           // Só no modo estruturado: no legado o pacote continua indo dentro de vagaFolha.beneficios.
@@ -346,9 +356,6 @@ export function EditAdmissaoModal({
     .filter(Boolean);
   // Mesma regra do wizard, do mesmo helper: as duas telas nunca divergem no que é "fora do padrão".
   const foraDoPadraoModal = foraDoPadraoPacote(padraoPar, pacoteSel, pacoteValores);
-  // Valor OBRIGATÓRIO (decisão do diretor). Só no modo estruturado: o pacote legado é string e não
-  // tem campo de valor para exigir. Mesma regra do wizard, do shared-types.
-  const semValorModal = temLegado ? [] : beneficiosSemValor(pacoteSel, pacoteValores);
   const beneficiosOptions = [
     ...beneficiosCat.map((b) => ({ value: b.nome, label: b.nome })),
     ...beneficiosSel
@@ -482,6 +489,19 @@ export function EditAdmissaoModal({
                       onChange={setFarol}
                       options={FAROL_OPTS}
                       ariaLabel="Farol"
+                    />
+                  </Campo>
+                )}
+                {/* Motivo do declínio (§A.14, item 3): só quando o farol é de declínio. Grava no mesmo
+                    campo que o modal do olho exibe. */}
+                {mostra("farol") && (farol === "DECLINOU" || farol === "RESCISAO") && (
+                  <Campo rotulo="Motivo do declínio">
+                    <Select
+                      value={motivoDeclinioId}
+                      onChange={setMotivoDeclinioId}
+                      placeholder="Selecione o motivo…"
+                      ariaLabel="Motivo do declínio"
+                      options={motivosDeclinioCat.map((m) => ({ value: m.id, label: m.nome }))}
                     />
                   </Campo>
                 )}
@@ -744,7 +764,7 @@ export function EditAdmissaoModal({
             <Button variant="secondary" className="px-4 py-2.5" onClick={onClose} disabled={busy}>
               Cancelar
             </Button>
-            <Button className="px-4 py-2.5" onClick={salvar} disabled={busy || semValorModal.length > 0}>
+            <Button className="px-4 py-2.5" onClick={salvar} disabled={busy}>
               {busy ? "Salvando…" : "Salvar alterações"}
             </Button>
           </div>

@@ -80,6 +80,13 @@ export class CatalogosController {
     return this.catalogos.listEscalas();
   }
 
+  // Motivos de declínio (catálogo motivos_declinio). GET autenticado, sem restrição de papel: o
+  // modal de edição do Gerenciador (perfil Comum) usa para vincular o motivo ao marcar declínio.
+  @Get("motivos-declinio")
+  motivosDeclinio() {
+    return this.catalogos.listMotivosDeclinio();
+  }
+
   @Post("motivos")
   @Roles("MASTER", "SUPER_ADMIN")
   addMotivo(@Body("nome") nome: string) {

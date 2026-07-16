@@ -14,6 +14,8 @@ import { Icon } from "@/components/ui/Icon";
 import { GoogleDriveLogo } from "@/components/ui/GoogleDriveLogo";
 import { ExcelLogo } from "@/components/ui/ExcelLogo";
 import { Select } from "@/components/ui/Select";
+import { Modal } from "@/components/ui/Modal";
+import { Button } from "@/components/ui/Button";
 import { FiltroTrigger, FiltroCampo } from "@/components/ui/FiltroTrigger";
 import { MultiSelect } from "@/components/ui/MultiSelect";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -220,6 +222,14 @@ export default function EsteiraPage() {
   const [pendItem, setPendItem] = useState<EsteiraItem | null>(null);
   const [editItem, setEditItem] = useState<EsteiraItem | null>(null);
   const [editFiltro, setEditFiltro] = useState<string[] | undefined>(undefined);
+  // Declínio da ADMISSÃO acionável de qualquer frente (OST item 3). O declínio é sempre da admissão
+  // inteira (usabilidade: declinar de onde estiver); reusa o MESMO efeito do lápis (farol DECLINOU +
+  // motivo_declinio_id), e o §A.16 tira a admissão de todas as filas.
+  const [declinioItem, setDeclinioItem] = useState<EsteiraItem | null>(null);
+  const [motivosDeclinio, setMotivosDeclinio] = useState<{ id: string; nome: string }[]>([]);
+  const [motivoDeclinioSel, setMotivoDeclinioSel] = useState("");
+  const [declinioBusy, setDeclinioBusy] = useState(false);
+  const [declinioErro, setDeclinioErro] = useState<string | null>(null);
   // Relatório da clínica (aba Exame), seleção múltipla de admissões → CSV consolidado.
   const [selecionados, setSelecionados] = useState<Set<string>>(new Set());
   const [gerandoRelatorio, setGerandoRelatorio] = useState(false);
@@ -282,6 +292,10 @@ export default function EsteiraPage() {
     apiFetch<ClienteLite[]>("/catalogos/clientes", { token })
       .then(setClientes)
       .catch(() => setClientes([]));
+    // Motivos de declínio (OST item 3): o MESMO catálogo do modal do lápis e da admin.
+    apiFetch<{ id: string; nome: string }[]>("/catalogos/motivos-declinio", { token })
+      .then(setMotivosDeclinio)
+      .catch(() => setMotivosDeclinio([]));
   }, [token]);
 
   const clienteOptions = useMemo(
@@ -384,9 +398,44 @@ export default function EsteiraPage() {
     [token, load],
   );
 
+  // Declínio da admissão INTEIRA (OST item 3): um endpoint dedicado aplica o efeito completo numa
+  // transação — farol DECLINOU + motivo + Auditoria "Declinou" + Exame "Cancelado" (mesma regra 2 do
+  // §A.16, agora ao vivo). O §A.16 tira a admissão das filas; o Gerenciador reflete as 3 frentes e o
+  // farol. Nenhuma frente fica "aberta"/"Aguardando".
+  async function confirmarDeclinio() {
+    if (!declinioItem || !motivoDeclinioSel) return;
+    setDeclinioBusy(true);
+    setDeclinioErro(null);
+    try {
+      await apiFetch(`/esteira/admissao/${declinioItem.admissaoId}/declinar`, {
+        method: "PATCH",
+        token,
+        body: { motivoDeclinioId: motivoDeclinioSel },
+      });
+      const nome = declinioItem.candidatoNome;
+      setDeclinioItem(null);
+      setMotivoDeclinioSel("");
+      setFlash({ msg: `Admissão de ${nome} declinada.`, tone: "ok" });
+      await load();
+    } catch (e) {
+      setDeclinioErro(e instanceof ApiError ? e.message : "Falha ao declinar a admissão.");
+    } finally {
+      setDeclinioBusy(false);
+    }
+  }
+
   function onSelectStatus(item: EsteiraItem, novo: string) {
     if (!novo || novo === item.status) return;
     setActionError(null);
+    // "Declinou" (status do catálogo da Auditoria) passa a ser a AÇÃO de declínio da admissão (OST
+    // item 3): abre o modal de motivo em vez do caminho antigo de status de frente. Nas outras
+    // frentes o declínio vem pelo botão dedicado (o catálogo delas não tem "Declinou").
+    if (novo === "DECLINOU") {
+      setMotivoDeclinioSel("");
+      setDeclinioErro(null);
+      setDeclinioItem(item);
+      return;
+    }
     // Exame → "apto" sem ASO validado pela I.A: o gate é do BACKEND, por PAPEL (não checa papel aqui).
     // O PATCH é enviado e o 409 decide: needsConfirmation:false → aviso puro (COMUM/MASTER, sem opção
     // de liberar); needsConfirmation:true (aptoSemAsoSuperAdmin) → diálogo de confirmação.
@@ -486,10 +535,13 @@ export default function EsteiraPage() {
   // Avanço/Frente · Ações. Status e Pendências têm largura suficiente para o rótulo mais longo (sem
   // overflow entre colunas). A coluna Avanço só tem o controle da frente (Select + Auditar/ASO/
   // Agendamento); olho/editar vivem na coluna Ações.
+  // Larguras rebalanceadas (OST ajustes, item 5b): antes Candidato levava 2fr e sobrava um vazio
+  // grande até Cliente. Os três campos de texto (Candidato/Cliente/Cargo) dividem a folga de forma
+  // proporcional ao conteúdo, sem cortar (o container rola na horizontal, §A.12).
   const COL = {
-    cand: "minmax(200px,2fr)",
-    cli: "minmax(160px,1.2fr)",
-    cargo: "minmax(176px,1fr)",
+    cand: "minmax(200px,1.5fr)",
+    cli: "minmax(170px,1.3fr)",
+    cargo: "minmax(180px,1.2fr)",
     // Cabe o rótulo mais longo do campo ("Temporário") e o vazio ("não informado", §A.11).
     contrato: "130px",
     data: "110px",
@@ -498,12 +550,15 @@ export default function EsteiraPage() {
     acoes: "116px",
   };
   const avanco = isExame ? "380px" : isAuditoria ? "240px" : "220px";
+  // Ordem (OST ajustes, item 5a): Tipo de contrato é a PRIMEIRA coluna de conteúdo, antes de
+  // Candidato. Só na Esteira; o Gerenciador não muda. O checkbox do Exame segue como afordância à
+  // esquerda de tudo.
   const gridCols = [
     isExame ? "40px" : null,
+    COL.contrato,
     COL.cand,
     COL.cli,
     COL.cargo,
-    COL.contrato,
     COL.data,
     COL.status,
     COL.pend,
@@ -878,10 +933,10 @@ export default function EsteiraPage() {
                     />
                   </span>
                 )}
+                <span>Tipo de contrato</span>
                 <span>Candidato</span>
                 <span>Cliente</span>
                 <span>Cargo</span>
-                <span>Tipo de contrato</span>
                 <span>Data adm.</span>
                 <span>Status</span>
                 <span>Pendências Obrig.</span>
@@ -938,6 +993,18 @@ export default function EsteiraPage() {
                           />
                         </div>
                       )}
+                      {/* Tipo de contrato: PRIMEIRA coluna de conteúdo (OST ajustes, item 5a). Vazio =
+                          "não informado" (§A.11), em tom apagado para bater o olho em quem está sem o
+                          dado. */}
+                      <div
+                        className={cn(
+                          "meta truncate text-center",
+                          !item.tipoContrato && "text-faint",
+                        )}
+                        title={item.tipoContrato || "não informado"}
+                      >
+                        {item.tipoContrato || "não informado"}
+                      </div>
                       {/* Ajuste 1: nome do candidato à ESQUERDA (título da coluna segue centralizado). */}
                       <div className="min-w-0 text-left">
                         <div className="flex min-w-0 items-center justify-start gap-1.5">
@@ -963,18 +1030,6 @@ export default function EsteiraPage() {
                       </div>
                       <div className="meta truncate text-center" title={item.cargoNome}>
                         {item.cargoNome}
-                      </div>
-                      {/* Tipo de contrato: a régua unificada cobra o campo, então a fila mostra o
-                          que cobra. Vazio = "não informado" (§A.11), em tom apagado para o olho
-                          bater direto em quem está sem o dado. */}
-                      <div
-                        className={cn(
-                          "meta truncate text-center",
-                          !item.tipoContrato && "text-faint",
-                        )}
-                        title={item.tipoContrato || "não informado"}
-                      >
-                        {item.tipoContrato || "não informado"}
                       </div>
                       <div className="meta text-center">{fmtDataAdmissao(item.dataAdmissao)}</div>
                       <div className="flex min-w-0 flex-col items-center gap-1">
@@ -1020,6 +1075,7 @@ export default function EsteiraPage() {
                           ) : (
                             <Select
                               className="min-w-0 flex-1"
+                              menuFit
                               ariaLabel={`Mudar status de ${item.candidatoNome}`}
                               disabled={acting}
                               value={item.status}
@@ -1100,6 +1156,23 @@ export default function EsteiraPage() {
                               Auditar
                             </button>
                           )}
+                          {/* Declínio da admissão (OST item 3): ação disponível em TODAS as frentes,
+                              por usabilidade. Encerra a admissão inteira (§A.16); abre o modal de
+                              motivo antes de aplicar. */}
+                          <button
+                            type="button"
+                            className="inline-flex flex-none items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2 text-[12px] font-semibold text-dim transition hover:bg-[var(--surface-2)] hover:text-danger disabled:opacity-50"
+                            title="Declinar a admissão (encerra em todas as frentes)"
+                            disabled={acting}
+                            onClick={() => {
+                              setMotivoDeclinioSel("");
+                              setDeclinioErro(null);
+                              setDeclinioItem(item);
+                            }}
+                          >
+                            <Icon name="x" className="h-4 w-4" />
+                            Declínio
+                          </button>
                         </div>
 
                         {/* O veredito do ASO pela I.A saiu da linha da fila, agora vive no modal de detalhe
@@ -1305,6 +1378,65 @@ export default function EsteiraPage() {
             void load();
           }}
         />
+      )}
+      {/* Modal de declínio da admissão (OST item 3): acionável de qualquer frente; exige motivo. */}
+      {declinioItem && (
+        <Modal
+          onClose={() => {
+            setDeclinioItem(null);
+            setMotivoDeclinioSel("");
+            setDeclinioErro(null);
+          }}
+          className="max-w-md"
+          ariaLabel="Declinar admissão"
+        >
+          <div className="mb-4">
+            <div className="eyebrow !mb-1">Declinar admissão</div>
+            <h3 className="truncate text-[18px] font-extrabold">{declinioItem.candidatoNome}</h3>
+            <p className="psub !mb-0 mt-1">
+              O declínio encerra a admissão inteira nas três frentes (Auditoria, Exame e Cadastro) e a
+              tira das filas. Escolha o motivo para confirmar.
+            </p>
+          </div>
+          <div className="space-y-3">
+            <label className="block">
+              <span className="ds-label">Motivo do declínio</span>
+              <Select
+                value={motivoDeclinioSel}
+                onChange={setMotivoDeclinioSel}
+                placeholder="Selecione o motivo…"
+                ariaLabel="Motivo do declínio"
+                options={motivosDeclinio.map((m) => ({ value: m.id, label: m.nome }))}
+              />
+            </label>
+            {declinioErro && (
+              <p className="text-sm text-danger" role="alert">
+                {declinioErro}
+              </p>
+            )}
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="secondary"
+                className="px-4 py-2.5"
+                onClick={() => {
+                  setDeclinioItem(null);
+                  setMotivoDeclinioSel("");
+                  setDeclinioErro(null);
+                }}
+                disabled={declinioBusy}
+              >
+                Cancelar
+              </Button>
+              <Button
+                className="px-4 py-2.5"
+                onClick={confirmarDeclinio}
+                disabled={declinioBusy || !motivoDeclinioSel}
+              >
+                {declinioBusy ? "Declinando…" : "Confirmar declínio"}
+              </Button>
+            </div>
+          </div>
+        </Modal>
       )}
     </>
   );

@@ -751,6 +751,41 @@ export class EsteiraService {
     };
   }
 
+  /**
+   * Declínio da admissão INTEIRA (OST ajustes, item 3), acionável de qualquer frente. Aplica AO VIVO
+   * a regra 2 do §A.16, numa transação: farol DECLINOU + motivo (no MESMO `motivo_declinio_id` do
+   * lápis/olho), Auditoria "Declinou" e Exame "Cancelado" (concluida=false, não falseia êxito).
+   * A frente de Cadastro NÃO é tocada: a coluna Cadastro segue o farol (ehDeclinio) no Gerenciador.
+   * Nenhuma frente fica "aberta"/"Aguardando". O §A.16 tira a admissão de todas as filas.
+   */
+  async declinarAdmissao(admissaoId: string, motivoDeclinioId: string) {
+    const adm = await this.db.query.admissoes.findFirst({ where: eq(admissoes.id, admissaoId) });
+    if (!adm) throw new NotFoundException("Admissão não encontrada");
+    const motivo = await this.db.query.motivosDeclinio.findFirst({
+      where: eq(motivosDeclinio.id, motivoDeclinioId),
+    });
+    if (!motivo) throw new BadRequestException("Motivo de declínio inválido.");
+
+    await this.db.transaction(async (tx) => {
+      await tx
+        .update(admissoes)
+        .set({ farolGlobal: "DECLINOU", motivoDeclinioId, atualizadoEm: new Date() })
+        .where(eq(admissoes.id, admissaoId));
+      await tx
+        .update(frentesAdmissao)
+        .set({ status: "DECLINOU", concluida: false, dataConclusao: null })
+        .where(
+          and(eq(frentesAdmissao.admissaoId, admissaoId), eq(frentesAdmissao.tipo, "AUDITORIA")),
+        );
+      await tx
+        .update(frentesAdmissao)
+        .set({ status: "CANCELADO", concluida: false, dataConclusao: null })
+        .where(and(eq(frentesAdmissao.admissaoId, admissaoId), eq(frentesAdmissao.tipo, "EXAME")));
+    });
+
+    return { admissaoId, farolGlobal: "DECLINOU", motivoDeclinioId };
+  }
+
   /** A admissão tem o ASO registrado como ENTREGUE? (só status — §A.6). */
   private async temAso(admissaoId: string): Promise<boolean> {
     return (await this.asoEntregueSet([admissaoId])).has(admissaoId);

@@ -543,6 +543,9 @@ export class AdmissoesService {
       dataAdmissao: adm.dataAdmissao,
       matricula: adm.matricula,
       farolGlobal: adm.farolGlobal,
+      // Motivo do declínio (mesmo campo que o modal do olho exibe): o modal do lápis o edita quando
+      // o farol é de declínio (§A.14, item 3).
+      motivoDeclinioId: adm.motivoDeclinioId,
       isBanco: adm.isBanco,
       origem: adm.origem,
       // Dados pessoais do candidato (OST — ajuste de escopo): editáveis, exceto o CPF (identidade §A.3).
@@ -688,7 +691,10 @@ export class AdmissoesService {
   }
 
   async editar(id: string, dto: UpdateAdmissaoDto, user?: AuthUser) {
-    await this.validarValoresDoPacote(dto.pacoteBeneficios);
+    // OST ajustes, item 1: a edição pelo Gerenciador NÃO trava por valor de benefício em falta. O
+    // salvar grava o que já está preenchido; o valor que falta segue como pendência (visível no
+    // modal), sem bloquear. Vale inclusive quando o farol é de declínio. (A criação pelo wizard
+    // mantém a exigência — fora do escopo desta OST.)
     const adm = await this.db.query.admissoes.findFirst({ where: eq(admissoes.id, id) });
     if (!adm) throw new NotFoundException("Admissão não encontrada");
     const candidato = await this.db.query.candidatos.findFirst({
@@ -834,6 +840,10 @@ export class AdmissoesService {
       // transação (recomputeFarolGlobal) é do sistema e NÃO gera log de usuário (OST).
       const novoFarol = (dto.farolGlobal as FarolGlobal) ?? adm.farolGlobal;
       const novoIsBanco = dto.isBanco === undefined ? adm.isBanco : dto.isBanco;
+      // Motivo do declínio: ausente = mantém; null/"" = limpa; uuid = vincula (§A.14, item 3). Grava
+      // no MESMO admissoes.motivo_declinio_id que o modal do olho lê, sem segundo campo.
+      const novoMotivoDeclinio =
+        dto.motivoDeclinioId === undefined ? adm.motivoDeclinioId : dto.motivoDeclinioId || null;
 
       registrar("tipoContrato", adm.tipoContrato, novoTipoContrato);
       registrar("dataAdmissao", adm.dataAdmissao, novaDataAdmissao);
@@ -889,6 +899,7 @@ export class AdmissoesService {
           dataAdmissao: novaDataAdmissao,
           matricula: novaMatricula,
           farolGlobal: novoFarol,
+          motivoDeclinioId: novoMotivoDeclinio,
           isBanco: novoIsBanco,
           sinalizadorPreenchimento: sinalizador,
           atualizadoEm: new Date(),

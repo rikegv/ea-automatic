@@ -10,6 +10,7 @@ import {
   escalasCatalogo,
   frenteStatusCatalogo,
   motivosContratacao,
+  motivosDeclinio,
   reguaDocumental,
   tiposDocumento,
 } from "../../db/schema";
@@ -194,6 +195,17 @@ export class CatalogosService {
       .from(escalasCatalogo)
       .where(eq(escalasCatalogo.ativo, true))
       .orderBy(asc(escalasCatalogo.nome));
+  }
+
+  // Motivos de declínio ativos (catálogo motivos_declinio, o MESMO que o modal do olho exibe e a
+  // admin mantém). GET aberto, como os demais catálogos operacionais: o modal do lápis (Gerenciador,
+  // perfil Comum) carrega a lista para vincular o motivo ao marcar declínio (§A.14, item 3 da OST).
+  listMotivosDeclinio() {
+    return this.db
+      .select({ id: motivosDeclinio.id, nome: motivosDeclinio.nome })
+      .from(motivosDeclinio)
+      .where(eq(motivosDeclinio.ativo, true))
+      .orderBy(asc(motivosDeclinio.nome));
   }
 
   /** Acrescenta um item ao catálogo (só Master/Super Admin — guard no controller). */
