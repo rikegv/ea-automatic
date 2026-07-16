@@ -5,25 +5,32 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { isValidCpf, normalizeCpf, type FarolGlobal } from "@ea/shared-types";
-import { and, count, desc, eq, gte, ilike, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import { beneficioExigeValor, isValidCpf, normalizeCpf, type FarolGlobal } from "@ea/shared-types";
+import { and, asc, count, desc, eq, gte, ilike, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
 import {
+  admissaoBeneficio,
   admissoes,
   candidatoAlteracoesLog,
   candidatos,
   cargos,
+  beneficiosCatalogo,
   clienteBeneficioPadrao,
   clientes,
   dadosVagaFolha,
   documentosAdmissao,
+  tiposDocumento,
   frenteStatusCatalogo,
   frentesAdmissao,
   integracaoPandape,
   reguaDocumental,
 } from "../db/schema";
-import { calcSinalizadorPreenchimento, STATUS_INICIAL_FRENTE } from "../domain/admissao";
+import {
+  calcSinalizadorPreenchimento,
+  ehFarolVivo,
+  STATUS_INICIAL_FRENTE,
+} from "../domain/admissao";
 import { parseBeneficiosPadrao } from "../domain/beneficios";
 import { FRENTES_AO_NASCER } from "../domain/frentes";
 import { recomputeFarolGlobal } from "./farol";
@@ -59,6 +66,17 @@ export interface CreateAdmissaoOpts {
   origem?: "MANUAL" | "PANDAPE";
   bypassAceite?: boolean;
   pandape?: { idPrecollaborator: string; idMatch?: string; idVacancy?: string; etapa?: string };
+}
+
+/**
+ * Executor de consulta: o `db` ou a transação em curso. A transação do Drizzle não é atribuível a
+ * `Database`, então extraímos o tipo do callback de `transaction` em vez de duplicar a assinatura.
+ */
+type Executor = Database | Parameters<Parameters<Database["transaction"]>[0]>[0];
+
+/** numeric do driver ("500.00") no formato que o consultor lê e digita ("500,00"). */
+function fmtValorBr(valor: string): string {
+  return String(valor).replace(".", ",");
 }
 
 @Injectable()
@@ -101,13 +119,18 @@ export class AdmissoesService {
       throw new BadRequestException("CPF inválido");
     }
 
+    // Valor obrigatório nos benefícios que têm valor. Antes da transação: erro de payload não
+    // deve abrir transação nem criar nada.
+    await this.validarValoresDoPacote(dto.pacoteBeneficios);
+
     // a.1 W6 — campos obrigatórios. NÃO impede (F4/regra 5), mas exige ACEITE EXPLÍCITO quando há
     // pendências. O log permanente do aceite por passagem é da esteira (S3, marco 3).
     const vf = dto.vagaFolha ?? {};
     const pend: string[] = [];
     if (!vf.salario) pend.push("Salário");
     if (!vf.escala) pend.push("Escala");
-    if (!vf.beneficios) pend.push("Benefícios");
+    // O pacote conta como preenchido pelo ESTRUTURADO (admissão nova) ou pela string (legado).
+    if (!vf.beneficios && !dto.pacoteBeneficios?.length) pend.push("Benefícios");
     if (!vf.centroCusto) pend.push("Centro de custo");
     if (!vf.gestorBp) pend.push("Gestor / BP");
     if (!dto.tipoContrato) pend.push("Tipo de contrato");
@@ -178,13 +201,23 @@ export class AdmissoesService {
         );
 
       // e. sinalizador de preenchimento (F5) — marca, nunca bloqueia (regra 5).
+      // Régua UNIFICADA: o sinalizador deriva das pendências obrigatórias, então a coluna do
+      // Gerenciador, o KPI, o radar e o modal passam a dizer a mesma coisa. Admissão nova nasce
+      // VIVA (EM_ADMISSAO), então sempre segue a régua nova.
       const sinalizadorPreenchimento = calcSinalizadorPreenchimento({
         candidato: { nome: dto.candidato.nome, cpf },
         codCliente: dto.codCliente,
         cargoId: dto.cargoId,
         dataAdmissao: dto.dataAdmissao,
         tipoContrato: dto.tipoContrato,
-        vagaFolha: { salario: dto.vagaFolha?.salario },
+        vagaFolha: {
+          salario: vf.salario,
+          beneficios: vf.beneficios,
+          escala: vf.escala,
+          centroCusto: vf.centroCusto,
+          gestorBp: vf.gestorBp,
+        },
+        temBeneficioEstruturado: Boolean(dto.pacoteBeneficios?.length),
       });
 
       // f. admissão (entidade central).
@@ -236,6 +269,18 @@ export class AdmissoesService {
         substituidoCpf: ehSubstituicao ? substituidoCpf : null,
         substituicaoExpurgarEm: ehSubstituicao ? new Date(Date.now() + 48 * 60 * 60 * 1000) : null,
       });
+
+      // g.2 pacote de benefícios ESTRUTURADO (§A.17 etapa 4). Admissão nova grava aqui; a string
+      // `dados_vaga_folha.beneficios` fica nula e continua existindo só para as importadas.
+      if (dto.pacoteBeneficios?.length) {
+        await tx.insert(admissaoBeneficio).values(
+          dto.pacoteBeneficios.map((b) => ({
+            admissaoId,
+            beneficioId: b.beneficioId,
+            valor: b.valor === undefined ? null : b.valor.toFixed(2),
+          })),
+        );
+      }
 
       // h. nascimento paralelo (regra 1 / F12): AUDITORIA + EXAME. CADASTRO_CONTRATO não nasce (regra 3).
       const agora = new Date();
@@ -474,8 +519,26 @@ export class AdmissoesService {
     const candidato = await this.db.query.candidatos.findFirst({
       where: eq(candidatos.cpf, adm.candidatoCpf),
     });
+    // Pacote ESTRUTURADO (§A.17 etapa 4). O modal de edição decide o modo pelo BLOB legado, não por
+    // esta lista: admissão com blob edita o blob (não migramos); sem blob, edita estruturado. Uma
+    // admissão nova sem nenhum benefício escolhido tem blob nulo e pacote vazio, e ainda assim é
+    // estruturada, que é o comportamento certo.
+    const pacote = await this.db
+      .select({
+        beneficioId: admissaoBeneficio.beneficioId,
+        nome: beneficiosCatalogo.nome,
+        valor: admissaoBeneficio.valor,
+      })
+      .from(admissaoBeneficio)
+      .innerJoin(beneficiosCatalogo, eq(beneficiosCatalogo.id, admissaoBeneficio.beneficioId))
+      .where(eq(admissaoBeneficio.admissaoId, id))
+      .orderBy(asc(beneficiosCatalogo.nome));
+
     return {
       admissaoId: adm.id,
+      // O par (cliente + cargo) alimenta a sugestão de pacote do modal de pendências (§A.17 etapa 4).
+      codCliente: adm.codCliente,
+      cargoId: adm.cargoId,
       tipoContrato: adm.tipoContrato,
       dataAdmissao: adm.dataAdmissao,
       matricula: adm.matricula,
@@ -501,6 +564,13 @@ export class AdmissoesService {
         tempoContrato: vaga?.tempoContrato ?? null,
         endereco: vaga?.endereco ?? null,
       },
+      // `beneficiosLegado` é o blob importado: quando presente, o modal edita a string (como hoje).
+      beneficiosLegado: vaga?.beneficios ?? null,
+      pacoteBeneficios: pacote.map((b) => ({
+        beneficioId: b.beneficioId,
+        nome: b.nome,
+        valor: b.valor === null ? null : Number(b.valor),
+      })),
     };
   }
 
@@ -509,7 +579,116 @@ export class AdmissoesService {
    * NÃO altera CPF nem cod_cliente (identidade — §A.3). Recalcula o sinalizador (F5) com os novos
    * valores para a coluna do gerenciador continuar verdadeira.
    */
+  /** Idem, mas aceita a transação em curso (para ler o estado recém-gravado). */
+  private async rotularPacote(exec: Executor, admissaoId: string): Promise<string> {
+    const linhas = await exec
+      .select({ nome: beneficiosCatalogo.nome, valor: admissaoBeneficio.valor })
+      .from(admissaoBeneficio)
+      .innerJoin(beneficiosCatalogo, eq(beneficiosCatalogo.id, admissaoBeneficio.beneficioId))
+      .where(eq(admissaoBeneficio.admissaoId, admissaoId))
+      .orderBy(asc(beneficiosCatalogo.nome));
+    return linhas
+      .map((l) => (l.valor === null ? l.nome : `${l.nome}: ${fmtValorBr(l.valor)}`))
+      .join(", ");
+  }
+
+  /**
+   * PARTE C, memória por (cliente + cargo): o ÚLTIMO pacote alocado para aquele par.
+   *
+   * DERIVADO, sem tabela de padrão: "o último pacote" é lido da admissão mais recente daquele
+   * cliente+cargo que tenha alocação estruturada. Assim "cada nova alocação atualiza o padrão" sai
+   * de graça e não existe segunda fonte de verdade para dessincronizar (decisão do diretor; o
+   * `cliente_beneficio_padrao` que já existe é o contra-exemplo: 2 linhas e valor com lixo).
+   *
+   * Devolve [] quando o par nunca teve alocação: aí o wizard não sugere nada.
+   */
+  async pacotePadraoClienteCargo(codCliente: string, cargoId: string) {
+    const ultima = await this.db
+      .select({ id: admissoes.id })
+      .from(admissoes)
+      .innerJoin(admissaoBeneficio, eq(admissaoBeneficio.admissaoId, admissoes.id))
+      .where(and(eq(admissoes.codCliente, codCliente), eq(admissoes.cargoId, cargoId)))
+      .orderBy(desc(admissoes.criadoEm))
+      .limit(1);
+    if (ultima.length === 0) return { beneficios: [] as { beneficioId: string; nome: string; valor: number | null }[] };
+
+    const linhas = await this.db
+      .select({
+        beneficioId: admissaoBeneficio.beneficioId,
+        nome: beneficiosCatalogo.nome,
+        valor: admissaoBeneficio.valor,
+      })
+      .from(admissaoBeneficio)
+      .innerJoin(beneficiosCatalogo, eq(beneficiosCatalogo.id, admissaoBeneficio.beneficioId))
+      .where(eq(admissaoBeneficio.admissaoId, ultima[0].id))
+      .orderBy(asc(beneficiosCatalogo.nome));
+
+    return {
+      beneficios: linhas.map((l) => ({
+        beneficioId: l.beneficioId,
+        nome: l.nome,
+        valor: l.valor === null ? null : Number(l.valor),
+      })),
+    };
+  }
+
+  /**
+   * Valor OBRIGATÓRIO nos benefícios que têm valor (§A.17 etapa 4, decisão do diretor).
+   *
+   * Se o consultor aloca VR / VA / AM / Cesta básica / PLR / Auxílio creche, ele TEM de dizer
+   * quanto. Não fere a regra 5 (não-bloqueio): a regra 5 é sobre criar a admissão com campo-núcleo
+   * vazio; aqui, se o benefício não for alocado, nada é exigido. É consistência do que foi
+   * escolhido, no mesmo espírito do "cartão OUTRO exige o nome" do formulário de VT.
+   *
+   * A regra de QUEM tem valor vive no shared-types: a tela e o backend leem a MESMA função.
+   */
+  private async validarValoresDoPacote(
+    pacote: { beneficioId: string; valor?: number }[] | undefined,
+  ): Promise<void> {
+    if (!pacote?.length) return;
+    const nomes = await this.db
+      .select({ id: beneficiosCatalogo.id, nome: beneficiosCatalogo.nome })
+      .from(beneficiosCatalogo)
+      .where(inArray(beneficiosCatalogo.id, pacote.map((b) => b.beneficioId)));
+    const porId = new Map(nomes.map((n) => [n.id, n.nome]));
+    const semValor = pacote
+      .filter((b) => {
+        const nome = porId.get(b.beneficioId);
+        return nome && beneficioExigeValor(nome) && (b.valor === undefined || b.valor === null);
+      })
+      .map((b) => porId.get(b.beneficioId)!);
+    if (semValor.length > 0) {
+      throw new BadRequestException(
+        `Informe o valor de: ${semValor.join(", ")}.`,
+      );
+    }
+  }
+
+  /**
+   * Termo de Banco ENTREGUE? Só faz sentido em admissão de banco, onde ele substitui a "Data de
+   * admissão" na régua de pendências (§A.3). Mesma definição da Esteira: documento em ENTREGUE.
+   */
+  private async termoBancoEntregue(admissaoId: string): Promise<boolean> {
+    const tipo = await this.db.query.tiposDocumento.findFirst({
+      where: eq(tiposDocumento.codigo, "TERMO_BANCO"),
+    });
+    if (!tipo) return false;
+    const [linha] = await this.db
+      .select({ id: documentosAdmissao.id })
+      .from(documentosAdmissao)
+      .where(
+        and(
+          eq(documentosAdmissao.admissaoId, admissaoId),
+          eq(documentosAdmissao.tipoDocumentoId, tipo.id),
+          eq(documentosAdmissao.estado, "ENTREGUE"),
+        ),
+      )
+      .limit(1);
+    return Boolean(linha);
+  }
+
   async editar(id: string, dto: UpdateAdmissaoDto, user?: AuthUser) {
+    await this.validarValoresDoPacote(dto.pacoteBeneficios);
     const adm = await this.db.query.admissoes.findFirst({ where: eq(admissoes.id, id) });
     if (!adm) throw new NotFoundException("Admissão não encontrada");
     const candidato = await this.db.query.candidatos.findFirst({
@@ -585,6 +764,29 @@ export class AdmissoesService {
           .where(eq(dadosVagaFolha.admissaoId, id));
       }
 
+      // Pacote ESTRUTURADO: ausente = não mexe; presente = SUBSTITUI o pacote inteiro. A troca é
+      // delete+insert dentro da transação (o front manda a lista final que ficou na tela).
+      if (dto.pacoteBeneficios) {
+        // Estado ANTES, lido só aqui: edição que não mexe em benefício não paga esta consulta.
+        // Rótulo legível ("VR (Vale-Refeição): 500,00, ...") em vez de uma lista de uuids, porque
+        // o histórico do olho é lido por gente.
+        const pacoteAntes = await this.rotularPacote(tx, id);
+        await tx.delete(admissaoBeneficio).where(eq(admissaoBeneficio.admissaoId, id));
+        if (dto.pacoteBeneficios.length > 0) {
+          await tx.insert(admissaoBeneficio).values(
+            dto.pacoteBeneficios.map((b) => ({
+              admissaoId: id,
+              beneficioId: b.beneficioId,
+              valor: b.valor === undefined ? null : b.valor.toFixed(2),
+            })),
+          );
+        }
+        const pacoteDepois = await this.rotularPacote(tx, id);
+        // Mesmo campo "beneficios" da trilha antiga: para quem lê o histórico, é a mesma informação,
+        // independente de estar em string legada ou estruturada.
+        registrar("beneficios", pacoteAntes || null, pacoteDepois || null);
+      }
+
       // Dados pessoais do candidato (OST-EA-GESTAO-USUARIOS — ajuste de escopo): nome/e-mail/telefone/
       // nascimento agora editáveis (antes imutáveis). CPF permanece imutável (identidade, §A.3). O
       // candidato é compartilhado por CPF → a alteração vale para todas as admissões dessa pessoa; o
@@ -644,15 +846,41 @@ export class AdmissoesService {
           ? (vaga?.salario ?? null)
           : dto.vagaFolha.salario || null;
 
-      // Recalcula o sinalizador (F5) com os valores efetivos.
-      const sinalizador = calcSinalizadorPreenchimento({
-        candidato: { nome: novoNomeCandidato, cpf: adm.candidatoCpf },
-        codCliente: adm.codCliente,
-        cargoId: adm.cargoId,
-        dataAdmissao: novaDataAdmissao ?? undefined,
-        tipoContrato: novoTipoContrato ?? undefined,
-        vagaFolha: { salario: novoSalario ?? undefined },
-      });
+      // Recalcula o sinalizador (F5) com os valores efetivos, pela régua UNIFICADA.
+      //
+      // RECORTE (decisão do diretor): só admissão VIVA é recalculada. Uma admissão CONCLUÍDA ou de
+      // DECLÍNIO editada aqui MANTÉM o sinalizador que tem: a régua nova não reescreve o histórico
+      // da carga, então os cards da base histórica não se mexem. `novoFarol` é o farol efetivo
+      // depois desta edição, não o anterior: mudar o farol para concluída congela o sinalizador
+      // no mesmo passo.
+      const efetivoVf = {
+        salario: novoSalario ?? undefined,
+        beneficios: dto.vagaFolha?.beneficios ?? vaga?.beneficios ?? undefined,
+        escala: dto.vagaFolha?.escala ?? vaga?.escala ?? undefined,
+        centroCusto: dto.vagaFolha?.centroCusto ?? vaga?.centroCusto ?? undefined,
+        gestorBp: dto.vagaFolha?.gestorBp ?? vaga?.gestorBp ?? undefined,
+      };
+      // Pacote estruturado DEPOIS da edição: o que veio no dto, ou o que já estava gravado.
+      const temEstruturado = dto.pacoteBeneficios
+        ? dto.pacoteBeneficios.length > 0
+        : (await tx
+            .select({ id: admissaoBeneficio.id })
+            .from(admissaoBeneficio)
+            .where(eq(admissaoBeneficio.admissaoId, id))
+            .limit(1)) .length > 0;
+      const sinalizador = ehFarolVivo(novoFarol)
+        ? calcSinalizadorPreenchimento({
+            candidato: { nome: novoNomeCandidato, cpf: adm.candidatoCpf },
+            codCliente: adm.codCliente,
+            cargoId: adm.cargoId,
+            dataAdmissao: novaDataAdmissao ?? undefined,
+            tipoContrato: novoTipoContrato ?? undefined,
+            vagaFolha: efetivoVf,
+            isBanco: novoIsBanco,
+            termoBancoEntregue: novoIsBanco ? await this.termoBancoEntregue(id) : false,
+            temBeneficioEstruturado: temEstruturado,
+          })
+        : adm.sinalizadorPreenchimento;
 
       const [upd] = await tx
         .update(admissoes)

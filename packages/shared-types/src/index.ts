@@ -79,13 +79,21 @@ export type StatusAuditoria = (typeof STATUS_AUDITORIA)[number];
 export const STATUS_EXAME = ["A_AGENDAR", "AGENDADO", "APTO", "CANCELADO"] as const;
 export type StatusExame = (typeof STATUS_EXAME)[number];
 
-export const STATUS_CADASTRO_CONTRATO = [
-  "A_CADASTRAR",
-  "CADASTRADO",
-  "ENVIAR",
-  "ENVIADO",
-  "INTEGRACAO",
-] as const;
+/**
+ * Cadastro/Contrato tem DOIS status: "A cadastrar" e "Cadastrado" (concluinte).
+ *
+ * Reorganização (decisão do diretor): `ENVIAR`/`ENVIADO` e `INTEGRACAO` eram resíduo da esteira
+ * manual antiga. `ENVIAR`/`ENVIADO` nunca tiveram uma admissão sequer e saíram, porque o estado do
+ * contrato hoje vive em `admissoes.clicksign_status` (INT-4), não aqui. `INTEGRACAO` virou
+ * `CADASTRADO` e **trouxe o `conclui: true` junto** (migration 0026).
+ *
+ * O `CADASTRADO` intermediário (não concluinte, também sem uso) foi REMOVIDO e cedeu o nome ao
+ * concluinte: existe UM "Cadastrado" só, e ele conclui a frente. Dois status com o mesmo rótulo e
+ * sentidos diferentes seria exatamente o que a reorganização veio eliminar.
+ *
+ * A ORDEM importa: `ORDEM_STATUS` (domain/esteira.ts) deriva daqui e define o que é reversão.
+ */
+export const STATUS_CADASTRO_CONTRATO = ["A_CADASTRAR", "CADASTRADO"] as const;
 export type StatusCadastroContrato = (typeof STATUS_CADASTRO_CONTRATO)[number];
 
 // ── Exigência documental na régua (cliente + cargo) ────────────────────────
@@ -214,4 +222,38 @@ export function isValidCpf(input: string): boolean {
 /** Normaliza um CPF para 11 dígitos sem máscara (uso como chave técnica). */
 export function normalizeCpf(input: string): string {
   return (input ?? "").replace(/\D/g, "");
+}
+
+/**
+ * Benefícios que TÊM valor (§A.17 etapa 4). Vive aqui, e não em cada app, porque a regra é usada
+ * pelos DOIS lados: o wizard/modal decide se mostra o campo e bloqueia sem valor, e o backend
+ * valida o mesmo. Duas cópias = a divergência que a régua unificada acabou de eliminar.
+ *
+ * A lista é do diretor: VR, VA, AM, Cesta básica, PLR e Auxílio creche. Os demais do catálogo
+ * (VT, Assistência Odontológica, Seguro de vida, Refeição no local) são só concedidos/não, sem valor.
+ */
+const BENEFICIOS_COM_VALOR = [
+  "VR", // VR (Vale-Refeição)
+  "VA", // VA (Vale-Alimentação)
+  "AM", // AM (Assistência Médica)
+  "CESTA BASICA",
+  "PLR", // Participação nos lucros (PLR)
+  "AUXILIO CRECHE",
+] as const;
+
+/** Maiúsculas e sem acento: o catálogo é editável e o nome chega com acento ("Auxílio creche"). */
+function normalizarNomeBeneficio(nome: string): string {
+  return (nome ?? "").trim().toUpperCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+}
+
+/**
+ * O benefício exige valor? Casa por PREFIXO ("VR (Vale-Refeição)", "Cesta básica") ou pelo código
+ * entre parênteses ("Participação nos lucros (PLR)").
+ *
+ * O código entre parênteses existe porque casar só por prefixo NÃO funciona: "Participação nos
+ * lucros (PLR)" não começa com "PLR". Era o furo da regra antiga, que só olhava prefixo.
+ */
+export function beneficioExigeValor(nome: string): boolean {
+  const n = normalizarNomeBeneficio(nome);
+  return BENEFICIOS_COM_VALOR.some((chave) => n.startsWith(chave) || n.includes(`(${chave})`));
 }

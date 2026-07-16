@@ -53,10 +53,10 @@ const STATUS_FRENTE: Array<{
   { tipo: "EXAME", codigo: "APTO", rotulo: "Apto", conclui: true },
   { tipo: "EXAME", codigo: "CANCELADO", rotulo: "Cancelado", conclui: false },
   { tipo: "CADASTRO_CONTRATO", codigo: "A_CADASTRAR", rotulo: "A cadastrar", conclui: false },
-  { tipo: "CADASTRO_CONTRATO", codigo: "CADASTRADO", rotulo: "Cadastrado", conclui: false },
-  { tipo: "CADASTRO_CONTRATO", codigo: "ENVIAR", rotulo: "Enviar", conclui: false },
-  { tipo: "CADASTRO_CONTRATO", codigo: "ENVIADO", rotulo: "Enviado", conclui: false },
-  { tipo: "CADASTRO_CONTRATO", codigo: "INTEGRACAO", rotulo: "Integração", conclui: true },
+  // Único status além de "A cadastrar", e é o CONCLUINTE (migration 0026). Base nova nasce com o
+  // catálogo já reorganizado; base existente é migrada pela 0026 (o seed é onConflictDoNothing e
+  // não corrigiria sozinho).
+  { tipo: "CADASTRO_CONTRATO", codigo: "CADASTRADO", rotulo: "Cadastrado", conclui: true },
 ];
 
 async function main(): Promise<void> {

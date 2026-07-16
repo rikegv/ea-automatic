@@ -24,6 +24,7 @@ import type { AuthUser } from "../auth/auth.types";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
 import {
+  admissaoBeneficio,
   admissoes,
   candidatoAlteracoesLog,
   candidatos,
@@ -144,9 +145,12 @@ export class EsteiraService {
       const naoConcluida = eq(frentesAdmissao.concluida, false);
       if (tipo === "CADASTRO_CONTRATO") {
         // INT-4: "Aguardando assinatura" (e "Cancelado", à espera de reenvio) é trabalho EM
-        // ANDAMENTO mesmo com o Cadastro concluído (INTEGRACAO) — o contrato ainda não foi
+        // ANDAMENTO mesmo com o Cadastro concluído (CADASTRADO) — o contrato ainda não foi
         // assinado/arquivado. Mantém na fila principal sem depender da busca (igual a qualquer
         // pendente da frente); só some quando ASSINADO/SEM_ENVELOPE.
+        //
+        // Repare que a regra depende de `concluida` + `clicksign_status`, NUNCA do código do status:
+        // por isso a reorganização (0026) não a afeta. O contrato vive no Clicksign, não na frente.
         itensWhere.push(
           or(
             naoConcluida,
@@ -184,6 +188,10 @@ export class EsteiraService {
         dataInicio: frentesAdmissao.dataInicio,
         dataConclusao: frentesAdmissao.dataConclusao,
         dataAdmissao: admissoes.dataAdmissao,
+        // Coluna "Tipo de contrato" das 3 abas: a régua unificada cobra o campo como pendência
+        // obrigatória, então a fila precisa mostrar o que está cobrando. Nullable: admissão criada
+        // sem o tipo é justamente a que tem a pendência, e a tela mostra "não informado" (§A.11).
+        tipoContrato: admissoes.tipoContrato,
         drivePastaUrl: admissoes.drivePastaUrl,
         driveAsoUrl: admissoes.driveAsoUrl,
         clicksignStatus: admissoes.clicksignStatus,
@@ -239,6 +247,7 @@ export class EsteiraService {
         dataInicio: r.dataInicio,
         dataConclusao: r.dataConclusao,
         dataAdmissao: r.dataAdmissao,
+        tipoContrato: r.tipoContrato,
         drivePastaUrl: r.drivePastaUrl,
         driveAsoUrl: r.driveAsoUrl,
         clicksignStatus: r.clicksignStatus,
@@ -311,7 +320,21 @@ export class EsteiraService {
       .where(and(...clientePeriodo, eq(frentesAdmissao.concluida, false)));
     const comPendencias = (await this.pendenciasSet(emAndamentoRows.map((r) => r.admissaoId))).size;
 
-    return { items, kpis: { porStatus, total, comPendencias }, statusCatalogo };
+    // KPI "Cadastrado" (aba Cadastro, decisão do diretor): quantas JÁ foram cadastradas. Precisa de
+    // consulta própria porque `porStatus` conta só `concluida = false`, e "Cadastrado" é o status
+    // CONCLUINTE da frente — ali daria sempre 0. Mesmo filtro cliente/período dos demais KPIs, então
+    // herda a exclusão de declínio (§A.16). Só a aba Cadastro consulta; as outras não pagam a query.
+    let cadastrados = 0;
+    if (tipo === "CADASTRO_CONTRATO") {
+      const [linha] = await this.db
+        .select({ n: count() })
+        .from(frentesAdmissao)
+        .innerJoin(admissoes, eq(frentesAdmissao.admissaoId, admissoes.id))
+        .where(and(...clientePeriodo, eq(frentesAdmissao.concluida, true)));
+      cadastrados = linha?.n ?? 0;
+    }
+
+    return { items, kpis: { porStatus, total, comPendencias, cadastrados }, statusCatalogo };
   }
 
   /** Conjunto de admissões com um documento (por código) ENTREGUE (§A.6 — só status). */
@@ -360,6 +383,21 @@ export class EsteiraService {
   /** Conjunto de admissões com o Termo de Banco ENTREGUE (§A.3 / Fase 4 complemento). */
   private async termoBancoEntregueSet(admissaoIds: string[]): Promise<Set<string>> {
     return this.docEntregueSet(admissaoIds, "TERMO_BANCO");
+  }
+
+  /**
+   * Quais destas admissões têm pacote de benefícios ESTRUTURADO (§A.17 etapa 4).
+   *
+   * Em LOTE, no mesmo padrão do `termoBancoEntregueSet`: a lista da esteira avalia a pendência de
+   * centenas de linhas de uma vez, e uma consulta por linha viraria N+1.
+   */
+  private async beneficiosEstruturadosSet(admissaoIds: string[]): Promise<Set<string>> {
+    if (admissaoIds.length === 0) return new Set();
+    const linhas = await this.db
+      .selectDistinct({ admissaoId: admissaoBeneficio.admissaoId })
+      .from(admissaoBeneficio)
+      .where(inArray(admissaoBeneficio.admissaoId, admissaoIds));
+    return new Set(linhas.map((l) => l.admissaoId));
   }
 
   /** Mapa admissaoId → disponível (AUDITORIA e EXAME concluídas) para a frente de Cadastro. */
@@ -555,6 +593,7 @@ export class EsteiraService {
         codCliente: admissao.codCliente,
         cargoId: admissao.cargoId,
         dataAdmissao: admissao.dataAdmissao,
+        tipoContrato: admissao.tipoContrato,
         vagaFolha: {
           salario: vaga?.salario,
           beneficios: vaga?.beneficios,
@@ -564,6 +603,9 @@ export class EsteiraService {
         },
         isBanco: admissao.isBanco,
         termoBancoEntregue,
+        temBeneficioEstruturado: (await this.beneficiosEstruturadosSet([admissao.id])).has(
+          admissao.id,
+        ),
       });
     }
     if (pendenciasPassagem.length > 0 && !dto.aceitePassagem) {
@@ -724,6 +766,7 @@ export class EsteiraService {
         codCliente: admissoes.codCliente,
         cargoId: admissoes.cargoId,
         dataAdmissao: admissoes.dataAdmissao,
+        tipoContrato: admissoes.tipoContrato,
         isBanco: admissoes.isBanco,
         salario: dadosVagaFolha.salario,
         beneficios: dadosVagaFolha.beneficios,
@@ -737,12 +780,15 @@ export class EsteiraService {
     const termoSet = await this.termoBancoEntregueSet(
       linhas.filter((l) => l.isBanco).map((l) => l.id),
     );
+    // Em lote: uma consulta para todas as linhas, não uma por linha.
+    const beneficioSet = await this.beneficiosEstruturadosSet(linhas.map((l) => l.id));
     const set = new Set<string>();
     for (const l of linhas) {
       const pend = pendenciasObrigatorias({
         codCliente: l.codCliente,
         cargoId: l.cargoId,
         dataAdmissao: l.dataAdmissao,
+        tipoContrato: l.tipoContrato,
         vagaFolha: {
           salario: l.salario,
           beneficios: l.beneficios,
@@ -752,6 +798,7 @@ export class EsteiraService {
         },
         isBanco: l.isBanco,
         termoBancoEntregue: termoSet.has(l.id),
+        temBeneficioEstruturado: beneficioSet.has(l.id),
       });
       if (pend.length > 0) set.add(l.id);
     }
@@ -857,6 +904,7 @@ export class EsteiraService {
       codCliente: adm.codCliente,
       cargoId: adm.cargoId,
       dataAdmissao: adm.dataAdmissao,
+      tipoContrato: adm.tipoContrato,
       vagaFolha: {
         salario: vaga?.salario,
         beneficios: vaga?.beneficios,
@@ -866,6 +914,7 @@ export class EsteiraService {
       },
       isBanco: adm.isBanco,
       termoBancoEntregue,
+      temBeneficioEstruturado: (await this.beneficiosEstruturadosSet([admissaoId])).has(admissaoId),
     });
 
     // S3 — trilha de passagem (avanços com pendência), com autor.

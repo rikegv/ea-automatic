@@ -1,5 +1,7 @@
 import { Type } from "class-transformer";
 import {
+  ArrayMaxSize,
+  IsArray,
   IsBoolean,
   IsDateString,
   IsIn,
@@ -9,7 +11,7 @@ import {
   ValidateNested,
 } from "class-validator";
 import { FAROL_GLOBAL } from "@ea/shared-types";
-import { VagaFolhaInputDto } from "./create-admissao.dto";
+import { BeneficioAlocadoDto, VagaFolhaInputDto } from "./create-admissao.dto";
 
 /**
  * Edição dos dados PESSOAIS do candidato (OST-EA-GESTAO-USUARIOS, ajuste de escopo). Nome/e-mail/
@@ -33,7 +35,10 @@ export class CandidatoUpdateDto {
   telefone?: string;
 
   @IsOptional()
-  @IsDateString()
+  @IsDateString(
+    {},
+    { message: "A data de nascimento informada é inválida. Confira e tente novamente." },
+  )
   dataNascimento?: string;
 }
 
@@ -43,13 +48,28 @@ export class CandidatoUpdateDto {
  * do candidato. **NÃO** edita CPF nem cod_cliente (identidade — §A.3).
  */
 export class UpdateAdmissaoDto {
+  /**
+   * Pacote de benefícios ESTRUTURADO (§A.17 etapa 4). Ausente = não mexe nos benefícios; presente
+   * = SUBSTITUI o pacote inteiro (o front sempre manda a lista completa que ficou na tela).
+   * Admissão com blob legado continua editando a string, não isto (ver `editar` no service).
+   */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(30)
+  @ValidateNested({ each: true })
+  @Type(() => BeneficioAlocadoDto)
+  pacoteBeneficios?: BeneficioAlocadoDto[];
+
   @IsOptional()
   @IsString()
   @MaxLength(60)
   tipoContrato?: string;
 
   @IsOptional()
-  @IsDateString()
+  @IsDateString(
+    {},
+    { message: "A data de admissão informada é inválida. Confira e tente novamente." },
+  )
   dataAdmissao?: string;
 
   @IsOptional()
@@ -58,7 +78,7 @@ export class UpdateAdmissaoDto {
   matricula?: string;
 
   @IsOptional()
-  @IsIn(FAROL_GLOBAL as unknown as string[])
+  @IsIn(FAROL_GLOBAL as unknown as string[], { message: "Status (farol) inválido." })
   farolGlobal?: string;
 
   /** Admissão de banco (§A.3 / Fase 4 complemento): muda a regra de pendência (Termo de Banco). */

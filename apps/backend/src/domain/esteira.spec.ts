@@ -16,7 +16,11 @@ describe("conclui() / isStatusValido() (§A.3 status por frente)", () => {
     expect(conclui("AUDITORIA", "ANALISE_PENDENTE")).toBe(false);
     expect(conclui("EXAME", "APTO")).toBe(true);
     expect(conclui("EXAME", "AGENDADO")).toBe(false);
-    expect(conclui("CADASTRO_CONTRATO", "INTEGRACAO")).toBe(true);
+    // Reorganização (migration 0026): o concluinte do Cadastro é CADASTRADO, não mais INTEGRACAO.
+    expect(conclui("CADASTRO_CONTRATO", "CADASTRADO")).toBe(true);
+    expect(conclui("CADASTRO_CONTRATO", "A_CADASTRAR")).toBe(false);
+    // Os status da esteira manual antiga saíram do catálogo e não concluem mais nada.
+    expect(conclui("CADASTRO_CONTRATO", "INTEGRACAO")).toBe(false);
     expect(conclui("CADASTRO_CONTRATO", "ENVIADO")).toBe(false);
   });
 
@@ -24,7 +28,7 @@ describe("conclui() / isStatusValido() (§A.3 status por frente)", () => {
     expect(STATUS_CONCLUI).toEqual({
       AUDITORIA: "ANALISE_OK",
       EXAME: "APTO",
-      CADASTRO_CONTRATO: "INTEGRACAO",
+      CADASTRO_CONTRATO: "CADASTRADO",
     });
   });
 
@@ -33,8 +37,12 @@ describe("conclui() / isStatusValido() (§A.3 status por frente)", () => {
     expect(isStatusValido("AUDITORIA", "DECLINOU")).toBe(true);
     // status válido, mas de outra frente:
     expect(isStatusValido("AUDITORIA", "APTO")).toBe(false);
-    expect(isStatusValido("EXAME", "INTEGRACAO")).toBe(false);
+    expect(isStatusValido("CADASTRO_CONTRATO", "CADASTRADO")).toBe(true);
     expect(isStatusValido("CADASTRO_CONTRATO", "FOO")).toBe(false);
+    // Resíduo da esteira manual: fora do catálogo desde a 0026.
+    expect(isStatusValido("CADASTRO_CONTRATO", "INTEGRACAO")).toBe(false);
+    expect(isStatusValido("CADASTRO_CONTRATO", "ENVIAR")).toBe(false);
+    expect(isStatusValido("CADASTRO_CONTRATO", "ENVIADO")).toBe(false);
   });
 
   it("ORDEM_STATUS cobre todos os status de cada frente (progressão)", () => {
@@ -45,13 +53,8 @@ describe("conclui() / isStatusValido() (§A.3 status por frente)", () => {
       "DECLINOU",
     ]);
     expect(ORDEM_STATUS.EXAME).toEqual(["A_AGENDAR", "AGENDADO", "APTO", "CANCELADO"]);
-    expect(ORDEM_STATUS.CADASTRO_CONTRATO).toEqual([
-      "A_CADASTRAR",
-      "CADASTRADO",
-      "ENVIAR",
-      "ENVIADO",
-      "INTEGRACAO",
-    ]);
+    // A coluna Cadastro tem só estes dois (0026): "A cadastrar" e o concluinte "Cadastrado".
+    expect(ORDEM_STATUS.CADASTRO_CONTRATO).toEqual(["A_CADASTRAR", "CADASTRADO"]);
   });
 });
 
@@ -59,7 +62,7 @@ describe("isReversao() — recuo de etapa (F8)", () => {
   it("detecta voltar etapa na progressão", () => {
     expect(isReversao("AUDITORIA", "ANALISE_OK", "ANALISE_PENDENTE")).toBe(true);
     expect(isReversao("EXAME", "APTO", "A_AGENDAR")).toBe(true);
-    expect(isReversao("CADASTRO_CONTRATO", "ENVIADO", "CADASTRADO")).toBe(true);
+    expect(isReversao("CADASTRO_CONTRATO", "CADASTRADO", "A_CADASTRAR")).toBe(true);
   });
 
   it("avançar ou repetir não é reversão", () => {
@@ -121,6 +124,8 @@ describe("reversaoDerrubaCadastro() — alerta de reabrir pendência", () => {
   });
 
   it("CADASTRO_CONTRATO nunca derruba o próprio gate", () => {
-    expect(reversaoDerrubaCadastro("CADASTRO_CONTRATO", "INTEGRACAO", "ENVIADO", true)).toBe(false);
+    expect(reversaoDerrubaCadastro("CADASTRO_CONTRATO", "CADASTRADO", "A_CADASTRAR", true)).toBe(
+      false,
+    );
   });
 });

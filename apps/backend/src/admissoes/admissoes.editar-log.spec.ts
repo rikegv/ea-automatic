@@ -33,6 +33,15 @@ function montar(adm: Row, vaga: Row | undefined) {
         return Promise.resolve(undefined);
       },
     })),
+    // §A.17 etapa 4: o `editar` passou a ler o pacote ESTRUTURADO (admissao_beneficio) para a régua
+    // unificada do sinalizador. Stub vazio = admissão sem pacote estruturado, que é o caso destes
+    // testes (eles cobrem a TRILHA de alteração, não os benefícios).
+    select: vi.fn(() => ({
+      from: () => ({
+        where: () => ({ limit: async () => [] as Row[] }),
+      }),
+    })),
+    delete: vi.fn(() => ({ where: async () => undefined })),
   };
   const db = {
     query: {

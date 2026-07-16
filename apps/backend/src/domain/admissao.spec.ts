@@ -14,17 +14,62 @@ describe("STATUS_INICIAL_FRENTE (§A.3 regra 1)", () => {
 });
 
 describe("calcSinalizadorPreenchimento (§A.3 / F5)", () => {
+  // RÉGUA UNIFICADA (§A.17 etapa 4): "completo" passou a ser "zero pendência obrigatória", então o
+  // caso OK precisa dos MESMOS 8 campos que a pendência cobra, não só dos 7 antigos. Era esta a
+  // divergência que fazia a coluna dizer "Completo" e o modal listar pendência na mesma admissão.
   const completo = {
     candidato: { nome: "Maria Souza", cpf: "39053344705" },
     codCliente: "1001",
     cargoId: "11111111-1111-1111-1111-111111111111",
     dataAdmissao: "2026-07-01",
     tipoContrato: "CLT",
-    vagaFolha: { salario: "1800.00" },
+    vagaFolha: {
+      salario: "1800.00",
+      beneficios: "VT (Vale-Transporte)",
+      escala: "5x2",
+      centroCusto: "CC1",
+      gestorBp: "Ana",
+    },
   };
 
-  it("retorna OK com todos os campos-núcleo presentes", () => {
+  it("retorna OK sem nenhuma pendência obrigatória", () => {
     expect(calcSinalizadorPreenchimento(completo)).toBe("OK");
+  });
+
+  it("régua unificada: sinalizador e pendências NUNCA se contradizem", () => {
+    // O bug: núcleo cheio, mas SEM pacote de benefícios -> antes dava OK ("Completo" na coluna)
+    // enquanto o modal listava "Pacote de benefícios". Agora os dois concordam.
+    const semBeneficio = {
+      ...completo,
+      vagaFolha: { ...completo.vagaFolha, beneficios: null },
+    };
+    expect(pendenciasObrigatorias(semBeneficio)).toContain("Pacote de benefícios");
+    expect(calcSinalizadorPreenchimento(semBeneficio)).toBe("PARCIAL");
+
+    // Idem para centro de custo e gestor/BP, que também só existiam na régua da pendência.
+    const semCentro = { ...completo, vagaFolha: { ...completo.vagaFolha, centroCusto: null } };
+    expect(pendenciasObrigatorias(semCentro)).toContain("Centro de custo");
+    expect(calcSinalizadorPreenchimento(semCentro)).toBe("PARCIAL");
+
+    // E o inverso: zero pendência <=> OK.
+    expect(pendenciasObrigatorias(completo)).toEqual([]);
+    expect(calcSinalizadorPreenchimento(completo)).toBe("OK");
+  });
+
+  it("tipo de contrato voltou para a régua: sem ele, sinalizador e pendência concordam", () => {
+    const semContrato = { ...completo, tipoContrato: "" };
+    expect(pendenciasObrigatorias(semContrato)).toContain("Tipo de contrato");
+    expect(calcSinalizadorPreenchimento(semContrato)).toBe("PARCIAL");
+  });
+
+  it("pacote ESTRUTURADO conta como benefício preenchido (admissão nova, sem string)", () => {
+    const estruturado = {
+      ...completo,
+      vagaFolha: { ...completo.vagaFolha, beneficios: null },
+      temBeneficioEstruturado: true,
+    };
+    expect(pendenciasObrigatorias(estruturado)).toEqual([]);
+    expect(calcSinalizadorPreenchimento(estruturado)).toBe("OK");
   });
 
   it("retorna PARCIAL com identidade + cliente + cargo, faltando campos-núcleo", () => {
@@ -65,10 +110,14 @@ describe("pendenciasObrigatorias (S2/S3)", () => {
         codCliente: "1001",
         cargoId: "x",
         dataAdmissao: "",
+        tipoContrato: "",
         vagaFolha: { salario: "", beneficios: "", escala: "", centroCusto: "", gestorBp: "" },
       }),
     ).toEqual([
       "Salário",
+      // Tipo de contrato voltou para a régua (decisão do diretor). Como o sinalizador DERIVA
+      // daqui, ele volta a ser cobrado na coluna, no KPI e no radar de uma vez só.
+      "Tipo de contrato",
       "Data de admissão",
       "Pacote de benefícios",
       "Escala",
@@ -83,6 +132,7 @@ describe("pendenciasObrigatorias (S2/S3)", () => {
         codCliente: "1001",
         cargoId: "x",
         dataAdmissao: "2026-07-01",
+        tipoContrato: "CLT",
         vagaFolha: {
           salario: "1800",
           beneficios: "VR",
@@ -100,6 +150,7 @@ describe("pendenciasObrigatorias (S2/S3)", () => {
         codCliente: "1001",
         cargoId: "x",
         dataAdmissao: "2026-07-01",
+        tipoContrato: "CLT",
         vagaFolha: {
           salario: "1800",
           beneficios: "VR",
@@ -116,6 +167,7 @@ describe("pendenciasObrigatorias (S2/S3)", () => {
       codCliente: "1001",
       cargoId: "x",
       dataAdmissao: "",
+      tipoContrato: "CLT",
       vagaFolha: {
         salario: "1800",
         beneficios: "VR",

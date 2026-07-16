@@ -579,11 +579,23 @@ export default function GerenciadorPage() {
                           <span className="meta">não informado</span>
                         )}
                       </div>
+                      {/* Cadastro: a frente tem nascimento LAZY (só é criada quando o gate abre —
+                          Auditoria + Exame concluídas, §A.3 regra 3). Para admissão VIVA, a ausência
+                          de frente não é dado faltando, é etapa que ainda não chegou: "Aguardando"
+                          (decisão do diretor).
+                          EXCEÇÃO — declínio (§A.16, mesma razão da coluna Pendências): quem declinou
+                          está ENCERRADO e também não tem frente de Cadastro, mas não está aguardando
+                          coisa alguma; dizer "Aguardando" nas 724 seria falsear processo vivo. Mostra
+                          "Declínio", igual à coluna Pendências, derivado do farol (dado autoritativo).
+                          Os três estados da coluna: Aguardando (viva) · Cadastrado (concluída) ·
+                          Declínio (encerrada). */}
                       <div className="flex min-w-0 items-center justify-center">
-                        {cad ? (
+                        {ehDeclinio ? (
+                          <StatusPill tone="dg" label="Declínio" />
+                        ) : cad ? (
                           <StatusPill tone={frenteTone(cad)} label={cad.rotulo} />
                         ) : (
-                          <span className="meta">não informado</span>
+                          <StatusPill tone="nt" label="Aguardando" />
                         )}
                       </div>
                       <div className="flex min-w-0 items-center justify-center">

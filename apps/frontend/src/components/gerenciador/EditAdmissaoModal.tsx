@@ -13,6 +13,14 @@ import { Select } from "@/components/ui/Select";
 import { MultiSelect } from "@/components/ui/MultiSelect";
 import { cn } from "@/lib/cn";
 import { FAROL_SELECT_OPTIONS } from "@/lib/farol";
+import {
+  beneficiosSemValor,
+  fmtValorBeneficio,
+  foraDoPadraoPacote,
+  precisaValorBeneficio,
+  rotuloPacote,
+  type BeneficioPacote,
+} from "@/lib/beneficios";
 
 interface VagaFolha {
   salario: string | null;
@@ -34,6 +42,8 @@ interface CandidatoEdit {
 }
 interface AdmissaoEdit {
   admissaoId: string;
+  codCliente: string;
+  cargoId: string;
   tipoContrato: string | null;
   dataAdmissao: string | null;
   matricula: string | null;
@@ -42,6 +52,10 @@ interface AdmissaoEdit {
   origem: Origem;
   vagaFolha: VagaFolha;
   candidato: CandidatoEdit;
+  /** Blob legado (2.066 importadas). Presente => o modal edita a STRING, como sempre fez. */
+  beneficiosLegado: string | null;
+  /** Pacote ESTRUTURADO (§A.17 etapa 4): o modo novo, quando não há blob. */
+  pacoteBeneficios: { beneficioId: string; nome: string; valor: number | null }[];
 }
 interface TipoDocumento {
   id: string;
@@ -156,6 +170,14 @@ export function EditAdmissaoModal({
   // (catálogo, sem texto livre). Carrega os catálogos de escala e benefícios.
   const [escalasCat, setEscalasCat] = useState<{ id: string; nome: string }[]>([]);
   const [beneficiosCat, setBeneficiosCat] = useState<{ id: string; nome: string }[]>([]);
+  // §A.17 etapa 4, modo ESTRUTURADO. A regra do modo é o BLOB: admissão com blob legado continua
+  // editando a string (não migramos, decisão do diretor); sem blob, edita estruturado.
+  const [pacoteSel, setPacoteSel] = useState<string[]>([]);
+  const [pacoteValores, setPacoteValores] = useState<Record<string, string>>({});
+  const [temLegado, setTemLegado] = useState(false);
+  // §A.17 etapa 4, item 3b: a MESMA inteligência do wizard aqui, porque é neste modal (aberto pelo
+  // "Preencher pendências") que a maioria das correções acontece.
+  const [padraoPar, setPadraoPar] = useState<BeneficioPacote[] | null>(null);
 
   useEffect(() => {
     apiFetch<TipoDocumento[]>("/catalogos/tipos-documento", { token })
@@ -183,6 +205,41 @@ export function EditAdmissaoModal({
         setMatricula(s(r.matricula));
         setFarol(r.farolGlobal);
         setIsBanco(Boolean(r.isBanco));
+        // §A.17 etapa 4: o BLOB decide o modo. Com blob => string legada; sem blob => estruturado.
+        setTemLegado(Boolean(r.beneficiosLegado));
+        const pacote = r.pacoteBeneficios ?? [];
+        setPacoteSel(pacote.map((b) => b.nome));
+        setPacoteValores(
+          Object.fromEntries(
+            pacote
+              .filter((b) => b.valor !== null)
+              .map((b) => [b.nome, fmtValorBeneficio(b.valor!)]),
+          ),
+        );
+
+        // Item 3b: sugestão do último pacote do cliente+cargo. Só SUGERE quando não há pacote e não
+        // há blob legado, que é exatamente o caso da pendência "Pacote de benefícios". Nunca
+        // sobrescreve o que a admissão já tem.
+        if (!r.beneficiosLegado) {
+          apiFetch<{ beneficios: BeneficioPacote[] }>(
+            `/admissoes/padrao-cliente-cargo?codCliente=${encodeURIComponent(r.codCliente)}&cargoId=${encodeURIComponent(r.cargoId)}`,
+            { token },
+          )
+            .then((pp) => {
+              const sugestao = pp.beneficios ?? [];
+              setPadraoPar(sugestao.length ? sugestao : null);
+              if (sugestao.length === 0 || pacote.length > 0) return;
+              setPacoteSel(sugestao.map((b) => b.nome));
+              setPacoteValores(
+                Object.fromEntries(
+                  sugestao
+                    .filter((b) => b.valor !== null)
+                    .map((b) => [b.nome, fmtValorBeneficio(b.valor!)]),
+                ),
+              );
+            })
+            .catch(() => setPadraoPar(null));
+        }
         setVf({
           salario: s(r.vagaFolha.salario),
           beneficios: s(r.vagaFolha.beneficios),
@@ -234,6 +291,11 @@ export function EditAdmissaoModal({
       setErro("O nome do candidato é obrigatório.");
       return;
     }
+    // Benefício que exige valor não pode ser salvo sem valor (o backend revalida igual).
+    if (semValorModal.length > 0) {
+      setErro(`Informe o valor de: ${semValorModal.join(", ")}.`);
+      return;
+    }
     setBusy(true);
     setErro(null);
     try {
@@ -250,6 +312,15 @@ export function EditAdmissaoModal({
           farolGlobal: farol,
           isBanco,
           vagaFolha: vf,
+          // Só no modo estruturado: no legado o pacote continua indo dentro de vagaFolha.beneficios.
+          pacoteBeneficios: temLegado
+            ? undefined
+            : pacoteSel.flatMap((nome) => {
+                const b = beneficiosCat.find((x) => x.nome === nome);
+                if (!b) return [];
+                const bruto = precisaValorBeneficio(nome) ? (pacoteValores[nome] ?? "").trim() : "";
+                return [{ beneficioId: b.id, valor: bruto || undefined }];
+              }),
           candidato: { nome, email, telefone, dataNascimento: dataNascimento || undefined },
         },
       });
@@ -273,6 +344,11 @@ export function EditAdmissaoModal({
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
+  // Mesma regra do wizard, do mesmo helper: as duas telas nunca divergem no que é "fora do padrão".
+  const foraDoPadraoModal = foraDoPadraoPacote(padraoPar, pacoteSel, pacoteValores);
+  // Valor OBRIGATÓRIO (decisão do diretor). Só no modo estruturado: o pacote legado é string e não
+  // tem campo de valor para exigir. Mesma regra do wizard, do shared-types.
+  const semValorModal = temLegado ? [] : beneficiosSemValor(pacoteSel, pacoteValores);
   const beneficiosOptions = [
     ...beneficiosCat.map((b) => ({ value: b.nome, label: b.nome })),
     ...beneficiosSel
@@ -584,17 +660,71 @@ export function EditAdmissaoModal({
                 )}
               </div>
               <div className="mt-3 grid gap-3">
-                {mostra("beneficios") && (
-                  <Campo rotulo="Benefícios">
-                    <MultiSelect
-                      values={beneficiosSel}
-                      onChange={(vals) => setVfField("beneficios")(vals.join(", "))}
-                      placeholder="Selecione os benefícios…"
-                      ariaLabel="Benefícios"
-                      options={beneficiosOptions}
-                    />
-                  </Campo>
-                )}
+                {mostra("beneficios") &&
+                  (temLegado ? (
+                    // MODO LEGADO: admissão importada, o pacote vive na string. Editando como sempre
+                    // editou; não migramos o blob (decisão do diretor).
+                    <Campo rotulo="Benefícios">
+                      <MultiSelect
+                        values={beneficiosSel}
+                        onChange={(vals) => setVfField("beneficios")(vals.join(", "))}
+                        placeholder="Selecione os benefícios…"
+                        ariaLabel="Benefícios"
+                        options={beneficiosOptions}
+                      />
+                      <p className="mt-1.5 text-[11.5px] text-faint">
+                        Pacote importado, mantido como texto.
+                      </p>
+                    </Campo>
+                  ) : (
+                    // MODO ESTRUTURADO (§A.17 etapa 4): mesmo desenho do wizard, para o consultor
+                    // não ver duas linguagens diferentes para a mesma coisa.
+                    <Campo rotulo="Benefícios">
+                      <MultiSelect
+                        values={pacoteSel}
+                        onChange={setPacoteSel}
+                        placeholder="Selecione os benefícios…"
+                        ariaLabel="Benefícios"
+                        options={beneficiosCat.map((b) => ({ value: b.nome, label: b.nome }))}
+                      />
+                      {padraoPar && !foraDoPadraoModal && (
+                        <p className="mt-1.5 text-[11.5px] text-faint">
+                          Pacote sugerido pela última admissão deste cliente/cargo (editável):{" "}
+                          <span className="font-semibold text-dim">{rotuloPacote(padraoPar)}</span>
+                        </p>
+                      )}
+                      {foraDoPadraoModal && (
+                        <p
+                          role="alert"
+                          className="mt-2 flex items-start gap-2 rounded-lg border border-[var(--warn-border,#e6c200)] bg-[rgba(230,194,0,0.12)] px-2.5 py-2 text-[11.5px] leading-relaxed text-text"
+                        >
+                          <Icon name="alert" className="mt-[1px] h-3.5 w-3.5 flex-none text-warn" />
+                          <span>
+                            Você está alocando um pacote de benefícios fora do padrão deste
+                            cliente/cargo.
+                          </span>
+                        </p>
+                      )}
+                      {pacoteSel.filter(precisaValorBeneficio).length > 0 && (
+                        <div className="mt-2.5 grid gap-2.5 sm:grid-cols-2">
+                          {pacoteSel.filter(precisaValorBeneficio).map((nome) => (
+                            <label key={nome} className="min-w-0">
+                              <span className="ds-label">Valor de {nome}</span>
+                              <input
+                                className="ds-input"
+                                inputMode="decimal"
+                                placeholder="Ex.: 500,00"
+                                value={pacoteValores[nome] ?? ""}
+                                onChange={(e) =>
+                                  setPacoteValores((m) => ({ ...m, [nome]: e.target.value }))
+                                }
+                              />
+                            </label>
+                          ))}
+                        </div>
+                      )}
+                    </Campo>
+                  ))}
                 {mostra("endereco") && (
                   <Campo rotulo="Endereço">
                     <textarea
@@ -614,7 +744,7 @@ export function EditAdmissaoModal({
             <Button variant="secondary" className="px-4 py-2.5" onClick={onClose} disabled={busy}>
               Cancelar
             </Button>
-            <Button className="px-4 py-2.5" onClick={salvar} disabled={busy}>
+            <Button className="px-4 py-2.5" onClick={salvar} disabled={busy || semValorModal.length > 0}>
               {busy ? "Salvando…" : "Salvar alterações"}
             </Button>
           </div>

@@ -104,3 +104,13 @@ export const sentidoVtEnum = pgEnum("sentido_vt", ["IDA", "VOLTA"]);
  * OUTRO abre campo de texto obrigatório (`cartaoOutro`) para o candidato nomear o cartão.
  */
 export const cartaoVtEnum = pgEnum("cartao_vt", ["BILHETE_UNICO", "CARTAO_TOP", "OUTRO"]);
+
+/**
+ * Status de cadastro do pacote de benefícios do candidato (§A.17 etapa 4). É POR CANDIDATO/admissão,
+ * não por benefício: a pergunta que a operação faz é "os benefícios desta pessoa já foram
+ * cadastrados?", e não "o VR já foi?". Toda admissão nasce PENDENTE.
+ */
+export const statusCadastroBeneficioEnum = pgEnum("status_cadastro_beneficio", [
+  "PENDENTE",
+  "CADASTRADO",
+]);

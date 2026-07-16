@@ -21,11 +21,18 @@ export const ORDEM_STATUS: Record<FrenteTipo, string[]> = {
   CADASTRO_CONTRATO: [...STATUS_CADASTRO_CONTRATO],
 };
 
-/** Status terminal que conclui cada frente (insumo do gate — regra 3). */
+/**
+ * Status terminal que conclui cada frente (insumo do gate — regra 3).
+ *
+ * CADASTRO_CONTRATO conclui em `CADASTRADO` (era `INTEGRACAO` até a migration 0026, que renomeou o
+ * concluinte). Esta linha é a chave de conclusão da frente: dela dependem `conclui()`, o gate do
+ * Cadastro, `kitLiberado()` (gate F12 do kit/F9) e o disparo do envelope na Clicksign (INT-4).
+ * Trocar o código aqui sem migrar `frentes_admissao.status` junto pararia o kit e a assinatura.
+ */
 export const STATUS_CONCLUI: Record<FrenteTipo, string> = {
   AUDITORIA: "ANALISE_OK",
   EXAME: "APTO",
-  CADASTRO_CONTRATO: "INTEGRACAO",
+  CADASTRO_CONTRATO: "CADASTRADO",
 };
 
 /** O status conclui a frente? */

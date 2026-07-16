@@ -103,7 +103,9 @@ describe("EsteiraService.listar — visibilidade do Cadastro por clicksignStatus
     await svc.listar("cadastro", {});
     const where = captured[0];
 
-    // (a) concluída (INTEGRACAO) aguardando assinatura → trabalho em andamento, aparece sem q.
+    // (a) concluída (CADASTRADO) aguardando assinatura → trabalho em andamento, aparece sem q.
+    // A regra olha `concluida` + `clicksign_status`, nunca o código do status: por isso a
+    // reorganização da 0026 (INTEGRACAO → CADASTRADO) não muda nada aqui.
     expect(avalia(where, rowCadastro(true, "AGUARDANDO_ASSINATURA"))).toBe(true);
     // (b) concluída + envelope CANCELADO (à espera de reenvio) → aparece sem q.
     expect(avalia(where, rowCadastro(true, "CANCELADO"))).toBe(true);

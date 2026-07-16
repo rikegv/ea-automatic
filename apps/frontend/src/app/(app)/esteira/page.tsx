@@ -54,6 +54,8 @@ interface EsteiraItem {
   dataInicio: string | null;
   dataConclusao: string | null;
   dataAdmissao: string | null;
+  /** Tipo de contrato (Efetivo, Temporário, PJ…). Nulo quando ainda não informado. */
+  tipoContrato: string | null;
   origem: Origem;
   sinalizador: string;
   asoAnexado?: boolean;
@@ -84,7 +86,14 @@ interface EsteiraItem {
 interface EsteiraResp {
   items: EsteiraItem[];
   // Item 9: comPendencias = admissões em andamento com pendências obrigatórias (nas 3 frentes).
-  kpis: { porStatus: Record<string, number>; total: number; comPendencias: number };
+  // cadastrados = frente de Cadastro CONCLUÍDA (só a aba Cadastro; as outras vêm 0). Fora do
+  // `porStatus` de propósito: aquele conta só frente em andamento e daria 0 no status concluinte.
+  kpis: {
+    porStatus: Record<string, number>;
+    total: number;
+    comPendencias: number;
+    cadastrados: number;
+  };
   statusCatalogo: StatusCat[];
 }
 interface ClienteLite {
@@ -464,17 +473,25 @@ export default function EsteiraPage() {
   const statusCatalogo = data?.statusCatalogo ?? [];
   // KPIs (item 5/6): "Total na fila" + um card por status EM ANDAMENTO (exclui o de conclusão, que
   // sai da fila). Cada card de status filtra a lista ao clicar (toggle).
-  const kpiStatus = statusCatalogo.filter((c) => !c.conclui);
+  //
+  // Declínio SEMPRE o ÚLTIMO card da fileira (decisão do diretor). Não basta ordenar entre os cards
+  // de status: depois deles ainda vem o card "Com pendências obrigatórias" (§A.12), e era ELE que
+  // deixava o "Declinou" no meio. Por isso o card de declínio é separado aqui e renderizado depois
+  // do de pendências. Só a Auditoria tem DECLINOU no catálogo; nas outras abas nada é renderizado.
+  const kpiStatus = statusCatalogo.filter((c) => !c.conclui && c.codigo !== "DECLINOU");
+  const kpiDeclinio = statusCatalogo.find((c) => c.codigo === "DECLINOU");
   // Máscara única de tabela (§A.12): colunas REALMENTE separadas, com min-width por coluna para o
   // conteúdo NUNCA cortar/sobrepor; o container rola na horizontal (overflow-x) em vez de esmagar.
-  // Ordem: [check(exame)] Candidato · Cliente · Cargo · Data · Status · Pendências · Avanço/Frente ·
-  // Ações. Status e Pendências têm largura suficiente para o rótulo mais longo (sem overflow entre
-  // colunas). A coluna Avanço só tem o controle da frente (Select + Auditar/ASO/Agendamento);
-  // olho/editar vivem na coluna Ações.
+  // Ordem: [check(exame)] Candidato · Cliente · Cargo · Contrato · Data · Status · Pendências ·
+  // Avanço/Frente · Ações. Status e Pendências têm largura suficiente para o rótulo mais longo (sem
+  // overflow entre colunas). A coluna Avanço só tem o controle da frente (Select + Auditar/ASO/
+  // Agendamento); olho/editar vivem na coluna Ações.
   const COL = {
     cand: "minmax(200px,2fr)",
     cli: "minmax(160px,1.2fr)",
     cargo: "minmax(176px,1fr)",
+    // Cabe o rótulo mais longo do campo ("Temporário") e o vazio ("não informado", §A.11).
+    contrato: "130px",
     data: "110px",
     status: "210px",
     pend: "150px",
@@ -486,6 +503,7 @@ export default function EsteiraPage() {
     COL.cand,
     COL.cli,
     COL.cargo,
+    COL.contrato,
     COL.data,
     COL.status,
     COL.pend,
@@ -494,10 +512,42 @@ export default function EsteiraPage() {
   ]
     .filter(Boolean)
     .join(" ");
-  const gridMin = isExame ? "min-w-[1680px]" : "min-w-[1480px]";
+  // +130px da coluna Contrato: o container rola na horizontal em vez de esmagar as demais (§A.12).
+  const gridMin = isExame ? "min-w-[1810px]" : "min-w-[1610px]";
 
   function toggleStatusKpi(code: string) {
     setStatusFiltro((cur) => (cur.includes(code) ? cur.filter((c) => c !== code) : [...cur, code]));
+  }
+
+  /**
+   * Card de KPI de um status do catálogo (clicável = filtro, §A.12). Extraído porque a fileira usa o
+   * MESMO card em duas posições: os status comuns no meio e o "Declinou" depois do card de
+   * pendências, como último da fileira. Duas cópias do JSX divergiriam na primeira alteração.
+   */
+  function cardStatus(c: StatusCat) {
+    const color = TONE_VAR[statusTone(c.codigo, c)];
+    const ativo = statusFiltro.includes(c.codigo);
+    return (
+      <GlassCard
+        as="button"
+        key={c.codigo}
+        className={cn(
+          "fk text-left transition hover:bg-[var(--surface-2)]",
+          ativo && "!border-[var(--accent)] ring-1 ring-[var(--accent)]",
+        )}
+        onClick={() => toggleStatusKpi(c.codigo)}
+        aria-pressed={ativo}
+        title={ativo ? "Remover filtro" : `Filtrar por ${c.rotulo}`}
+      >
+        <div className="num" style={color ? { color } : undefined}>
+          {data?.kpis.porStatus[c.codigo] ?? 0}
+        </div>
+        <div className="lbl flex items-center gap-1.5">
+          {c.rotulo}
+          {ativo && <Icon name="check" className="h-3 w-3 text-accent" />}
+        </div>
+      </GlassCard>
+    );
   }
 
   // ── Relatório da clínica (aba Exame) ────────────────────────────────────────
@@ -696,32 +746,7 @@ export default function EsteiraPage() {
               {statusFiltro.length === 0 && <Icon name="check" className="h-3 w-3 text-accent" />}
             </div>
           </GlassCard>
-          {kpiStatus.map((c) => {
-            const tone = statusTone(c.codigo, c);
-            const color = TONE_VAR[tone];
-            const ativo = statusFiltro.includes(c.codigo);
-            return (
-              <GlassCard
-                as="button"
-                key={c.codigo}
-                className={cn(
-                  "fk text-left transition hover:bg-[var(--surface-2)]",
-                  ativo && "!border-[var(--accent)] ring-1 ring-[var(--accent)]",
-                )}
-                onClick={() => toggleStatusKpi(c.codigo)}
-                aria-pressed={ativo}
-                title={ativo ? "Remover filtro" : `Filtrar por ${c.rotulo}`}
-              >
-                <div className="num" style={color ? { color } : undefined}>
-                  {data?.kpis.porStatus[c.codigo] ?? 0}
-                </div>
-                <div className="lbl flex items-center gap-1.5">
-                  {c.rotulo}
-                  {ativo && <Icon name="check" className="h-3 w-3 text-accent" />}
-                </div>
-              </GlassCard>
-            );
-          })}
+          {kpiStatus.map((c) => cardStatus(c))}
           {/* Item 9 / §A.12: admissões com campos obrigatórios pendentes. Clicável = filtro (toggle),
             mostra só quem tem pendência obrigatória nesta frente. */}
           <GlassCard
@@ -746,6 +771,41 @@ export default function EsteiraPage() {
               {soPendencias && <Icon name="check" className="h-3 w-3 text-accent" />}
             </div>
           </GlassCard>
+          {/* KPI "Cadastrado" (aba Cadastro, decisão do diretor): quantas JÁ foram cadastradas. Vem
+              de `kpis.cadastrados`, e não de `porStatus`, porque este último só conta frente EM
+              ANDAMENTO (concluida=false) — "Cadastrado" é o status concluinte e ali daria sempre 0.
+              Clicável como os demais (§A.12): filtra pelo status de conclusão, que é justamente o
+              que reexpõe as concluídas na fila. */}
+          {isCadastro && (
+            <GlassCard
+              as="button"
+              className={cn(
+                "fk text-left transition hover:bg-[var(--surface-2)]",
+                statusFiltro.includes("CADASTRADO") &&
+                  "!border-[var(--accent)] ring-1 ring-[var(--accent)]",
+              )}
+              onClick={() => toggleStatusKpi("CADASTRADO")}
+              aria-pressed={statusFiltro.includes("CADASTRADO")}
+              title={
+                statusFiltro.includes("CADASTRADO")
+                  ? "Remover filtro"
+                  : "Filtrar só as já cadastradas"
+              }
+            >
+              <div className="num" style={{ color: TONE_VAR.ok }}>
+                {loading && !data ? "…" : (data?.kpis.cadastrados ?? 0)}
+              </div>
+              <div className="lbl flex items-center gap-1.5">
+                Cadastrado
+                {statusFiltro.includes("CADASTRADO") && (
+                  <Icon name="check" className="h-3 w-3 text-accent" />
+                )}
+              </div>
+            </GlassCard>
+          )}
+          {/* Declínio SEMPRE o último card da fileira (decisão do diretor) — por isso vem DEPOIS do
+              card de pendências, e não junto dos demais status. */}
+          {kpiDeclinio && cardStatus(kpiDeclinio)}
         </div>
 
         {/* ── Feedback de ação ─────────────────────────────────────────────── */}
@@ -821,6 +881,7 @@ export default function EsteiraPage() {
                 <span>Candidato</span>
                 <span>Cliente</span>
                 <span>Cargo</span>
+                <span>Tipo de contrato</span>
                 <span>Data adm.</span>
                 <span>Status</span>
                 <span>Pendências Obrig.</span>
@@ -842,10 +903,18 @@ export default function EsteiraPage() {
                 </div>
               ) : (
                 itemsVisiveis.map((item) => {
-                  const tone = statusTone(item.status, catMap.get(item.status));
-                  const rotulo = catMap.get(item.status)?.rotulo ?? item.status;
                   const acting = actingId === item.frenteId;
+                  // Gate do Cadastro (§A.3 regra 3): a frente só abre com Auditoria E Exame
+                  // concluídas. Enquanto não abre, `disponivel` vem false do backend.
                   const pausado = isCadastro && item.disponivel === false;
+                  // Coluna Status da aba Cadastro (decisão do diretor): enquanto o gate não abre, o
+                  // status real da frente ("A cadastrar") mente para o consultor, porque não há nada
+                  // a cadastrar ainda. Mostra "Aguardando" e o motivo no title. O status no banco
+                  // NÃO muda: isto é leitura de tela.
+                  const tone = pausado ? "nt" : statusTone(item.status, catMap.get(item.status));
+                  const rotulo = pausado
+                    ? "Aguardando"
+                    : (catMap.get(item.status)?.rotulo ?? item.status);
                   // Coluna Pendências Obrig. (§A.12): tom/rótulo pelo sinalizador de preenchimento (F5),
                   // mesma leitura do Gerenciador. O X de frente recusada vive na coluna Status (StatusPill).
                   const sinalP = SINAL[item.sinalizador] ?? {
@@ -894,6 +963,18 @@ export default function EsteiraPage() {
                       </div>
                       <div className="meta truncate text-center" title={item.cargoNome}>
                         {item.cargoNome}
+                      </div>
+                      {/* Tipo de contrato: a régua unificada cobra o campo, então a fila mostra o
+                          que cobra. Vazio = "não informado" (§A.11), em tom apagado para o olho
+                          bater direto em quem está sem o dado. */}
+                      <div
+                        className={cn(
+                          "meta truncate text-center",
+                          !item.tipoContrato && "text-faint",
+                        )}
+                        title={item.tipoContrato || "não informado"}
+                      >
+                        {item.tipoContrato || "não informado"}
                       </div>
                       <div className="meta text-center">{fmtDataAdmissao(item.dataAdmissao)}</div>
                       <div className="flex min-w-0 flex-col items-center gap-1">

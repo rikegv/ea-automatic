@@ -33,24 +33,35 @@ export interface SinalizadorInput {
 const presente = (v: unknown): boolean => v !== undefined && v !== null && String(v).trim() !== "";
 
 /**
- * Calcula o sinalizador de preenchimento (F5). Função PURA, defensável e sem bloqueio (regra 5):
+ * Calcula o sinalizador de preenchimento (F5). Função PURA, sem bloqueio (regra 5).
  *
- * Campos-núcleo: candidato.nome, candidato.cpf, codCliente, cargoId, dataAdmissao,
- * vagaFolha.salario, tipoContrato.
+ * RÉGUA UNIFICADA (§A.17 etapa 4, ajuste do diretor): o sinalizador DERIVA de
+ * `pendenciasObrigatorias`. Antes existiam duas definições de "completo" que nunca concordaram: o
+ * sinalizador olhava 7 campos e a pendência olhava 8, e nenhum dos dois olhava os mesmos. O
+ * resultado era a coluna do Gerenciador dizer "Completo" enquanto o modal da MESMA admissão listava
+ * "Pacote de benefícios" como pendente. Agora coluna, KPI, radar, sinalizador e modal concordam por
+ * construção: OK <=> zero pendência obrigatória.
  *
- * - todos os campos-núcleo presentes → "OK";
- * - identidade (nome+cpf) + cliente + cargo presentes, mas faltam campos-núcleo → "PARCIAL";
- * - só identidade (ou menos) → "PENDENTE".
+ * - identidade (nome+cpf) + cliente + cargo ausentes → "PENDENTE" (não dá nem para avaliar o resto);
+ * - identidade + cliente + cargo presentes e ZERO pendência obrigatória → "OK";
+ * - identidade + cliente + cargo presentes, mas com pendência → "PARCIAL".
  */
-export function calcSinalizadorPreenchimento(i: SinalizadorInput): Sinalizador {
+export function calcSinalizadorPreenchimento(i: SinalizadorInput & PendenciasInput): Sinalizador {
   const identidade = presente(i.candidato?.nome) && presente(i.candidato?.cpf);
   const clienteCargo = presente(i.codCliente) && presente(i.cargoId);
-  const demaisNucleo =
-    presente(i.dataAdmissao) && presente(i.vagaFolha?.salario) && presente(i.tipoContrato);
+  if (!identidade || !clienteCargo) return "PENDENTE";
+  return pendenciasObrigatorias(i).length === 0 ? "OK" : "PARCIAL";
+}
 
-  if (identidade && clienteCargo && demaisNucleo) return "OK";
-  if (identidade && clienteCargo) return "PARCIAL";
-  return "PENDENTE";
+/**
+ * O farol é de admissão VIVA (em processo)? Só estas seguem a régua unificada.
+ *
+ * Recorte do diretor: admissão FINALIZADA (concluída) ou encerrada (declínio/rescisão) NÃO é
+ * recalculada, fica com o status que tem. Isso preserva o histórico da carga (1.432 concluídas +
+ * 724 declínios) e mantém os cards da base histórica exatamente onde estão.
+ */
+export function ehFarolVivo(farol?: string | null): boolean {
+  return farol === "EM_ADMISSAO" || farol === "BANCO_AGUARDAR";
 }
 
 /** Entrada do cálculo de pendências obrigatórias (S2/S3 — ajustes-2B-2C). */
@@ -58,6 +69,8 @@ export interface PendenciasInput {
   codCliente?: string | null;
   cargoId?: string | null;
   dataAdmissao?: string | null;
+  /** Tipo de contrato (CLT, etc.). Faz parte da régua por decisão do diretor. */
+  tipoContrato?: string | null;
   vagaFolha?: {
     salario?: string | number | null;
     beneficios?: string | null;
@@ -69,6 +82,16 @@ export interface PendenciasInput {
   isBanco?: boolean | null;
   /** Termo de Banco já ENTREGUE? (só relevante quando isBanco). */
   termoBancoEntregue?: boolean | null;
+  /**
+   * A admissão tem pelo menos um benefício ESTRUTURADO alocado (§A.17 etapa 4)?
+   *
+   * Existe porque o pacote passou a ter DUAS representações: admissão nova grava em
+   * `admissao_beneficio` (estruturado) e NÃO escreve a string; as 2.066 importadas continuam só
+   * com o blob em `dados_vaga_folha.beneficios`, que não é migrado. Sem este campo, toda admissão
+   * nova nasceria com "Pacote de benefícios" pendente para sempre, contaminando o sinalizador e o
+   * log de passagem (S3).
+   */
+  temBeneficioEstruturado?: boolean | null;
 }
 
 /** Rótulo da pendência de formalização do banco (documento, não campo de folha). */
@@ -76,8 +99,8 @@ export const PENDENCIA_TERMO_BANCO = "Termo de Banco";
 
 /**
  * Campos obrigatórios vazios da admissão (badge "Pendências Obrigatórias" — S2; e gatilho do log de
- * passagem — S3). Conjunto fixo: Salário, Data de admissão, Pacote de benefícios, Cliente, Cargo,
- * Escala, Centro de custo, Gestor / BP. Função PURA. Cliente/Cargo são sempre exigidos na criação,
+ * passagem, S3). Conjunto fixo: Cliente, Cargo, Salário, Tipo de contrato, Data de admissão,
+ * Pacote de benefícios, Escala, Centro de custo, Gestor / BP. Função PURA. Cliente/Cargo são sempre exigidos na criação,
  * mas constam por completude. Centro de custo e Gestor / BP seguem o mesmo padrão não-bloqueante
  * (§A.3 regra 5): sinalizam, nunca impedem.
  *
@@ -89,12 +112,17 @@ export function pendenciasObrigatorias(i: PendenciasInput): string[] {
   if (!presente(i.codCliente)) pend.push("Cliente");
   if (!presente(i.cargoId)) pend.push("Cargo");
   if (!presente(i.vagaFolha?.salario)) pend.push("Salário");
+  if (!presente(i.tipoContrato)) pend.push("Tipo de contrato");
   if (i.isBanco) {
     if (!i.termoBancoEntregue) pend.push(PENDENCIA_TERMO_BANCO);
   } else if (!presente(i.dataAdmissao)) {
     pend.push("Data de admissão");
   }
-  if (!presente(i.vagaFolha?.beneficios)) pend.push("Pacote de benefícios");
+  // O pacote conta como preenchido por QUALQUER uma das duas representações: o estruturado
+  // (admissão nova) ou o blob legado (admissão importada). Ver `temBeneficioEstruturado`.
+  if (!i.temBeneficioEstruturado && !presente(i.vagaFolha?.beneficios)) {
+    pend.push("Pacote de benefícios");
+  }
   if (!presente(i.vagaFolha?.escala)) pend.push("Escala");
   if (!presente(i.vagaFolha?.centroCusto)) pend.push("Centro de custo");
   if (!presente(i.vagaFolha?.gestorBp)) pend.push("Gestor / BP");

@@ -1,16 +1,27 @@
 import { Transform, Type } from "class-transformer";
 import {
+  ArrayMaxSize,
+  IsArray,
   IsBoolean,
   IsDateString,
   IsIn,
+  IsNumber,
   IsOptional,
   IsString,
   IsUUID,
   MaxLength,
+  Min,
   MinLength,
   ValidateNested,
 } from "class-validator";
 
+/**
+ * Mensagens de validação em LINGUAGEM DE GENTE (ajuste do diretor).
+ *
+ * Sem `message`, o class-validator devolve o texto cru dele ("dataAdmissao must be a valid ISO 8601
+ * date string"), que vaza nome de campo e jargão para o consultor. Toda regra deste fluxo (o wizard
+ * F6) diz o que fazer, não o que a biblioteca pensa.
+ */
 export const SEXO_VALORES = ["MASCULINO", "FEMININO"] as const;
 export type SexoValor = (typeof SEXO_VALORES)[number];
 
@@ -37,13 +48,16 @@ export class CandidatoInputDto {
 
   // Data de nascimento (W7) — base do aviso de menor de idade.
   @IsOptional()
-  @IsDateString()
+  @IsDateString(
+    {},
+    { message: "A data de nascimento informada é inválida. Confira e tente novamente." },
+  )
   dataNascimento?: string;
 
   // Sexo (régua padrão): condiciona a exigência da Carteira de Reservista (só MASCULINO). Opcional
   // no contrato (candidatos antigos/integração podem não ter); o wizard passa a exigir no F6.
   @IsOptional()
-  @IsIn(SEXO_VALORES as unknown as string[])
+  @IsIn(SEXO_VALORES as unknown as string[], { message: "Selecione um sexo válido." })
   sexo?: SexoValor;
 }
 
@@ -107,13 +121,47 @@ export class VagaFolhaInputDto {
   substituidoCpf?: string;
 }
 
+/**
+ * Um benefício ALOCADO à admissão (§A.17 etapa 4). Substitui, para admissões novas, a string
+ * achatada de `vagaFolha.beneficios`. `valor` é opcional: nem todo benefício tem valor (ex.:
+ * "Seguro de vida" é só concedido/não concedido, enquanto VR e VA têm valor).
+ */
+export class BeneficioAlocadoDto {
+  @IsUUID(undefined, { message: "Benefício inválido. Selecione um benefício da lista." })
+  beneficioId!: string;
+
+  // Aceita "500,00" e "500.00" (o front é pt-BR). Zero é válido.
+  @IsOptional()
+  @Transform(({ value }) =>
+    typeof value === "string" ? Number(value.replace(/\./g, "").replace(",", ".")) : value,
+  )
+  @IsNumber(
+    { maxDecimalPlaces: 2 },
+    { message: "Valor do benefício inválido. Use o formato 500,00." },
+  )
+  @Min(0, { message: "O valor do benefício não pode ser negativo." })
+  valor?: number;
+}
+
 export class CreateAdmissaoDto {
+  /**
+   * Pacote de benefícios ESTRUTURADO (§A.17 etapa 4). Admissão nova grava AQUI, e não mais na
+   * string `vagaFolha.beneficios` (que segue existindo só para as 2.066 importadas, não migradas).
+   * Teto defensivo: o catálogo tem 10 itens; 30 cobre qualquer crescimento sem virar payload aberto.
+   */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(30)
+  @ValidateNested({ each: true })
+  @Type(() => BeneficioAlocadoDto)
+  pacoteBeneficios?: BeneficioAlocadoDto[];
+
   @IsString()
   @MinLength(1)
   @MaxLength(40)
   codCliente!: string;
 
-  @IsUUID()
+  @IsUUID(undefined, { message: "Selecione um cargo válido." })
   cargoId!: string;
 
   @ValidateNested()
@@ -121,7 +169,10 @@ export class CreateAdmissaoDto {
   candidato!: CandidatoInputDto;
 
   @IsOptional()
-  @IsDateString()
+  @IsDateString(
+    {},
+    { message: "A data de admissão informada é inválida. Confira e tente novamente." },
+  )
   dataAdmissao?: string;
 
   @IsOptional()
@@ -136,6 +187,6 @@ export class CreateAdmissaoDto {
 
   // W6 — aceite explícito ao criar com campos obrigatórios pendentes (F4: marca, não impede).
   @IsOptional()
-  @IsBoolean()
+  @IsBoolean({ message: "Aceite das pendências inválido." })
   aceitePendencias?: boolean;
 }

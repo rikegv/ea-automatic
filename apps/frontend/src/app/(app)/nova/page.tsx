@@ -10,6 +10,13 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import { Button } from "@/components/ui/Button";
 import { Pill, type PillTone } from "@/components/ui/Pill";
 import { Icon } from "@/components/ui/Icon";
+import {
+  beneficiosSemValor,
+  foraDoPadraoPacote,
+  precisaValorBeneficio,
+  rotuloPacote,
+  type BeneficioPacote,
+} from "@/lib/beneficios";
 import { Select } from "@/components/ui/Select";
 import { MultiSelect } from "@/components/ui/MultiSelect";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -72,14 +79,15 @@ const TIPOS_CONTRATO = [
 const TEMPOS_CONTRATO = ["30", "60", "90", "120", "150", "180", "210", "240", "270"];
 const MOTIVO_SUBSTITUICAO = "Substituição";
 // OST Regras de Fluxo, item 3: benefícios que abrem campo de valor editável ao serem selecionados.
-const BENEFICIOS_COM_VALOR = ["VR", "AM"];
-// Prefixo estável ("VR"/"AM") do benefício, usado como chave do valor-padrão por cliente (item 4).
+/**
+ * Prefixo estável ("VR"/"AM") usado SÓ como chave do valor-padrão LEGADO por cliente
+ * (`cliente_beneficio_padrao`, item 4), que só guarda esses dois. NÃO confundir com
+ * `precisaValorBeneficio`: quem tem valor são 6 benefícios, e essa regra vive no shared-types.
+ */
+const PREFIXOS_PADRAO_CLIENTE_LEGADO = ["VR", "AM"];
 function prefixoBeneficio(nome: string): string | null {
   const up = nome.trim().toUpperCase();
-  return BENEFICIOS_COM_VALOR.find((p) => up.startsWith(p)) ?? null;
-}
-function precisaValorBeneficio(nome: string): boolean {
-  return prefixoBeneficio(nome) !== null;
+  return PREFIXOS_PADRAO_CLIENTE_LEGADO.find((p) => up.startsWith(p)) ?? null;
 }
 
 const VAGA_EMPTY = {
@@ -184,6 +192,9 @@ export default function NovaAdmissaoPage() {
   // catálogos abertos (W2/W3/W4)
   const [motivos, setMotivos] = useState<CatItem[]>([]);
   const [beneficios, setBeneficios] = useState<CatItem[]>([]);
+  // PARTE C (§A.17 etapa 4): último pacote alocado para este cliente+cargo. null = par sem
+  // histórico (não sugere nada). O padrão é DERIVADO no backend da última admissão do par.
+  const [padraoPar, setPadraoPar] = useState<BeneficioPacote[] | null>(null);
   const [escalas, setEscalas] = useState<CatItem[]>([]);
 
   // Etapa 3: candidato
@@ -276,6 +287,52 @@ export default function NovaAdmissaoPage() {
       .then((r) => setBeneficiosPadraoCliente(r ?? {}))
       .catch(() => setBeneficiosPadraoCliente({}));
   }, [token, cliente]);
+
+  // Valor OBRIGATÓRIO (decisão do diretor): quem seleciona VR/VA/AM/Cesta básica/PLR/Auxílio creche
+  // tem de dizer quanto. Bloqueia o avanço; o backend revalida pela mesma regra.
+  const semValor = beneficiosSemValor(beneficiosSel, beneficiosValoresEfetivos());
+
+  // PARTE C: o pacote na tela foge do padrão deste cliente+cargo? Regra compartilhada com o modal
+  // de pendências do Gerenciador (lib/beneficios), para as duas telas nunca divergirem.
+  const foraDoPadrao = useMemo(
+    () => foraDoPadraoPacote(padraoPar, beneficiosSel, beneficiosValoresEfetivos()),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [padraoPar, beneficiosSel, beneficiosValores, beneficiosPadraoCliente],
+  );
+
+  /** Valores efetivos de cada benefício selecionado (o digitado, ou o padrão do cliente). */
+  function beneficiosValoresEfetivos(): Record<string, string> {
+    return Object.fromEntries(beneficiosSel.map((nome) => [nome, valorBeneficio(nome)]));
+  }
+
+  // PARTE C: ao ter cliente + cargo, busca o último pacote daquele par e PRÉ-PREENCHE. É sugestão
+  // editável: o consultor confirma ou ajusta. Roda quando o PAR muda; não sobrescreve digitação
+  // posterior, porque só dispara na troca de cliente/cargo.
+  useEffect(() => {
+    if (!token || !cliente || !cargoId) {
+      setPadraoPar(null);
+      return;
+    }
+    apiFetch<{ beneficios: { nome: string; valor: number | null }[] }>(
+      `/admissoes/padrao-cliente-cargo?codCliente=${encodeURIComponent(cliente.codCliente)}&cargoId=${encodeURIComponent(cargoId)}`,
+      { token },
+    )
+      .then((r) => {
+        const pacote = r.beneficios ?? [];
+        setPadraoPar(pacote.length ? pacote : null);
+        if (pacote.length === 0) return;
+        setBeneficiosSel(pacote.map((b) => b.nome));
+        setBeneficiosValores(
+          Object.fromEntries(
+            pacote
+              .filter((b) => b.valor !== null)
+              .map((b) => [b.nome, b.valor!.toFixed(2).replace(".", ",")]),
+          ),
+        );
+      })
+      .catch(() => setPadraoPar(null));
+  }, [token, cliente, cargoId]);
+
 
   // ── Etapa 2: preview da régua ─────────────────────────────────────────────
   useEffect(() => {
@@ -382,17 +439,17 @@ export default function NovaAdmissaoPage() {
     setSubmitting(true);
     setSubmitError(null);
 
-    // Item 3/4: benefícios viram texto; VR/AM carregam o valor efetivo (digitado ou padrão do cliente),
-    // ex.: "VR (Vale-Refeição): 500,00". Esse valor é o que o backend persiste como padrão do cliente.
-    const beneficios = beneficiosSel
-      .map((nome) => {
-        const val = precisaValorBeneficio(nome) ? valorBeneficio(nome).trim() : "";
-        return val ? `${nome}: ${val}` : nome;
-      })
-      .join(", ");
+    // §A.17 etapa 4: o pacote vai ESTRUTURADO (admissao_beneficio), não mais como string achatada.
+    // A string `vagaFolha.beneficios` deixa de ser enviada: ela permanece só nas 2.066 importadas,
+    // que não são migradas. Valor só onde a tela pede (VR/AM, regra que já existia).
+    const pacoteBeneficios = beneficiosSel.flatMap((nome) => {
+      const b = beneficios.find((x) => x.nome === nome);
+      if (!b) return []; // benefício fora do catálogo: não há id para alocar.
+      const bruto = precisaValorBeneficio(nome) ? valorBeneficio(nome).trim() : "";
+      return [{ beneficioId: b.id, valor: bruto || undefined }];
+    });
     const vagaFolha = {
       salario: vaga.salario || undefined,
-      beneficios: beneficios || undefined,
       escala: vaga.escala || undefined,
       endereco: vaga.endereco || undefined,
       centroCusto: vaga.centroCusto || undefined,
@@ -412,6 +469,7 @@ export default function NovaAdmissaoPage() {
         body: {
           codCliente: cliente.codCliente,
           cargoId,
+          pacoteBeneficios: pacoteBeneficios.length ? pacoteBeneficios : undefined,
           candidato: {
             cpf: cand.cpf,
             nome: cand.nome.trim(),
@@ -763,6 +821,38 @@ export default function NovaAdmissaoPage() {
                         : undefined
                     }
                   />
+                  {/* PARTE C: aviso claro quando o pacote foge do padrão do cliente+cargo.
+                      Deixa alocar (não-bloqueio), só avisa. */}
+                  {semValor.length > 0 && (
+                    <p
+                      role="alert"
+                      className="mt-2 flex items-start gap-2 rounded-lg border border-[var(--border)] bg-[rgba(214,69,69,0.1)] px-2.5 py-2 text-[11.5px] leading-relaxed text-danger"
+                    >
+                      <Icon name="alert" className="mt-[1px] h-3.5 w-3.5 flex-none" />
+                      <span>
+                        Informe o valor de: <b>{semValor.join(", ")}</b>. Estes benefícios exigem
+                        valor para a admissão seguir.
+                      </span>
+                    </p>
+                  )}
+                  {foraDoPadrao && (
+                    <p
+                      role="alert"
+                      className="mt-2 flex items-start gap-2 rounded-lg border border-[var(--warn-border,#e6c200)] bg-[rgba(230,194,0,0.12)] px-2.5 py-2 text-[11.5px] leading-relaxed text-text"
+                    >
+                      <Icon name="alert" className="mt-[1px] h-3.5 w-3.5 flex-none text-warn" />
+                      <span>
+                        Você está alocando um pacote de benefícios fora do padrão deste
+                        cliente/cargo.
+                      </span>
+                    </p>
+                  )}
+                  {padraoPar && !foraDoPadrao && (
+                    <p className="mt-1.5 text-[11.5px] text-faint">
+                      Pacote sugerido pela última admissão deste cliente/cargo (editável):{" "}
+                      <span className="font-semibold text-dim">{rotuloPacote(padraoPar)}</span>
+                    </p>
+                  )}
                   {cliente?.beneficiosPadrao && (
                     <p className="mt-1.5 text-[11.5px] text-faint">
                       Padrão do cliente: {cliente.beneficiosPadrao}
@@ -1024,7 +1114,10 @@ export default function NovaAdmissaoPage() {
           {step < 2 ? (
             <Button
               onClick={() => setStep((s) => Math.min(2, s + 1))}
-              disabled={(step === 0 && !cliente) || (step === 1 && !cargoId)}
+              disabled={
+                (step === 0 && !cliente) ||
+                (step === 1 && (!cargoId || semValor.length > 0))
+              }
               className="px-4 py-2.5"
             >
               <span className="inline-flex items-center gap-2">

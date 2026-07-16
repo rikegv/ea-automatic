@@ -12,6 +12,20 @@ import { UpdateAdmissaoDto } from "./dto/update-admissao.dto";
 export class AdmissoesController {
   constructor(private readonly admissoes: AdmissoesService) {}
 
+  /**
+   * PARTE C (§A.17 etapa 4): último pacote de benefícios alocado para um cliente+cargo.
+   *
+   * O wizard chama ao escolher cliente e cargo, para SUGERIR o pacote (benefícios e valores) da
+   * última vez. É sugestão editável: o consultor confirma ou ajusta. Par sem histórico devolve
+   * lista vazia e a tela não sugere nada.
+   *
+   * Vem ANTES de @Get(":id") de propósito: senão "padrao-cliente-cargo" cairia na rota de id.
+   */
+  @Get("padrao-cliente-cargo")
+  padraoClienteCargo(@Query("codCliente") codCliente: string, @Query("cargoId") cargoId: string) {
+    return this.admissoes.pacotePadraoClienteCargo(codCliente, cargoId);
+  }
+
   /** F10/F7 — Gerenciador: lista paginada com filtros, busca global e KPIs. */
   @Get()
   listar(

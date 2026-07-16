@@ -8,9 +8,10 @@ import type { Sql } from "postgres";
  * depois de criadas as admissões e definido o farol.
  *
  *  REGRA 1: farol `ADMISSAO_CONCLUIDA` (origem ATIVO): admissão que já aconteceu na vida real entra
- *    com TUDO concluído. Auditoria `ANALISE_OK`, Exame `APTO`, Cadastro/Contrato `INTEGRACAO` (frente
- *    criada), todas `concluida=true`; documentos `ENTREGUE` (zero pendência); assinatura `ASSINADO`;
- *    sinalizador `OK`. Data de conclusão das frentes = coalesce(data_admissao, criado_em).
+ *    com TUDO concluído. Auditoria `ANALISE_OK`, Exame `APTO`, Cadastro/Contrato `CADASTRADO` (frente
+ *    criada; era `INTEGRACAO` até a migration 0026, que renomeou o concluinte), todas `concluida=true`;
+ *    documentos `ENTREGUE` (zero pendência); assinatura `ASSINADO`; sinalizador `OK`. Data de conclusão
+ *    das frentes = coalesce(data_admissao, criado_em).
  *
  *  REGRA 2: farol `DECLINOU`/`RESCISAO` (origem DECLINOU/RESCISAO/CANCELADA): declínio ENCERRADO,
  *    nada ativo na esteira. Frentes em estado de declínio (Auditoria `DECLINOU`, Exame `CANCELADO`),
@@ -46,12 +47,12 @@ export async function aplicarRegrasImportacao(sql: Sql): Promise<void> {
 
     await sql`
       INSERT INTO frentes_admissao (admissao_id, tipo, status, concluida, data_inicio, data_conclusao)
-      SELECT a.id, 'CADASTRO_CONTRATO', 'INTEGRACAO', true,
+      SELECT a.id, 'CADASTRO_CONTRATO', 'CADASTRADO', true,
              a.criado_em, COALESCE(a.data_admissao::timestamptz, a.criado_em)
       FROM admissoes a
       WHERE a.farol_global = 'ADMISSAO_CONCLUIDA'
       ON CONFLICT (admissao_id, tipo) DO UPDATE
-      SET status = 'INTEGRACAO', concluida = true,
+      SET status = 'CADASTRADO', concluida = true,
           data_conclusao = COALESCE(frentes_admissao.data_conclusao, EXCLUDED.data_conclusao),
           atualizado_em = now()`;
 

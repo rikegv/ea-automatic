@@ -10,6 +10,9 @@ import { Icon } from "@/components/ui/Icon";
 // Rótulo de pendência → chave de campo editável (S2). Cliente/Cargo não são editáveis.
 const CAMPO_KEY: Record<string, string> = {
   Salário: "salario",
+  // Tipo de contrato voltou para a régua (decisão do diretor). Sem esta linha a pendência aparece
+  // mas o "Preencher pendências" some, e o consultor vê o problema sem conseguir resolver.
+  "Tipo de contrato": "tipoContrato",
   "Data de admissão": "dataAdmissao",
   "Pacote de benefícios": "beneficios",
   Escala: "escala",

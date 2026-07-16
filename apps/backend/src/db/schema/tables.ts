@@ -29,6 +29,7 @@ import {
   sentidoVtEnum,
   sexoEnum,
   sinalizadorEnum,
+  statusCadastroBeneficioEnum,
   tipoServicoEnum,
 } from "./enums";
 
@@ -263,6 +264,14 @@ export const admissoes = pgTable("admissoes", {
   // passa a ser a pendência obrigatória de formalização.
   isBanco: boolean("is_banco").notNull().default(false),
   sinalizadorPreenchimento: sinalizadorEnum("sinalizador_preenchimento")
+    .notNull()
+    .default("PENDENTE"),
+  // Status do cadastro do pacote de benefícios (§A.17 etapa 4). POR CANDIDATO, não por benefício.
+  // Toda admissão nasce PENDENTE; a tela de Benefícios (OST seguinte) é quem marca CADASTRADO.
+  // ATENÇÃO: as admissões que já existiam herdaram PENDENTE pelo default, inclusive as concluídas
+  // e as de declínio. Nenhuma tela lê este campo ainda; quem for consumi-lo precisa decidir o
+  // recorte (provavelmente só admissões vivas, como manda a §A.16).
+  statusCadastroBeneficio: statusCadastroBeneficioEnum("status_cadastro_beneficio")
     .notNull()
     .default("PENDENTE"),
   // Origem da admissão (Fase 5 / INT-1): MANUAL (wizard F6) ou PANDAPE (sync). Default MANUAL —
@@ -686,5 +695,41 @@ export const formularioVtConducoes = pgTable(
   },
   (t) => ({
     idxFormulario: index("idx_conducao_formulario").on(t.formularioId),
+  }),
+);
+
+// ── AdmissaoBeneficio: pacote de benefícios ESTRUTURADO (§A.17 etapa 4) ─────
+// Uma linha por benefício alocado à admissão. Substitui, para admissões NOVAS, a string achatada
+// de `dados_vaga_folha.beneficios` (ex.: "VR (Vale-Refeição): 500,00, VT (Vale-Transporte)").
+//
+// A string legada NÃO é migrada e NÃO é apagada (decisão do diretor): os 2.066 blobs importados
+// continuam em `dados_vaga_folha.beneficios`, consultáveis como hoje. Ou seja, por um tempo as duas
+// representações convivem: admissão nova lê daqui, admissão antiga lê da string.
+//
+// `valor` é NULLABLE de propósito: nem todo benefício tem valor (ex.: "Seguro de vida" é só
+// concedido/não concedido, enquanto VR e VA têm valor). Sem PII (§A.6): só vínculo e valor.
+export const admissaoBeneficio = pgTable(
+  "admissao_beneficio",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    admissaoId: uuid("admissao_id")
+      .notNull()
+      .references(() => admissoes.id, { onDelete: "cascade" }),
+    // RESTRICT, não CASCADE: apagar um benefício do catálogo não pode evaporar silenciosamente o
+    // que já foi alocado a uma pessoa. O catálogo é soft-delete (`ativo`) e não tem rota de DELETE,
+    // então na prática isto nunca bloqueia nada: é rede de proteção do histórico.
+    beneficioId: uuid("beneficio_id")
+      .notNull()
+      .references(() => beneficiosCatalogo.id, { onDelete: "restrict" }),
+    valor: numeric("valor", { precision: 12, scale: 2 }),
+    criadoEm,
+    atualizadoEm,
+  },
+  (t) => ({
+    // Um registro por benefício alocado: o mesmo benefício não entra duas vezes na mesma admissão.
+    uqAdmissaoBeneficio: unique("uq_admissao_beneficio").on(t.admissaoId, t.beneficioId),
+    // A leitura natural é "os benefícios desta admissão" (ficha, tela de Benefícios, memória
+    // cliente+cargo da Parte C).
+    idxAdmissao: index("idx_admissao_beneficio_admissao").on(t.admissaoId),
   }),
 );
