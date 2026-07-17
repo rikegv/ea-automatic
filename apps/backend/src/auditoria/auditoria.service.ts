@@ -71,7 +71,14 @@ export class AuditoriaService {
       .innerJoin(clientes, eq(admissoes.codCliente, clientes.codCliente))
       .where(eq(admissoes.id, admissaoId));
     if (!adm) throw new NotFoundException("Admissão não encontrada");
-    return adm;
+    // cod_cliente/cargo_id são nuláveis desde a Liberação Admissional, mas o innerJoin em `clientes`
+    // acima já descarta a pré-admissão (AGUARDANDO_LIBERACAO) — ela não tem cliente e nunca é
+    // auditada. O guard torna o invariante explícito e estreita o tipo para o resto do método.
+    if (!adm.codCliente || !adm.cargoId) {
+      throw new NotFoundException("Admissão sem cliente/cargo (aguardando liberação).");
+    }
+    // Reafirma o não-nulo no tipo de retorno (o guard acima garante em runtime).
+    return { ...adm, codCliente: adm.codCliente, cargoId: adm.cargoId };
   }
 
   /**

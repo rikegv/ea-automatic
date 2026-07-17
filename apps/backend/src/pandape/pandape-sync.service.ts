@@ -9,7 +9,12 @@ import { DRIZZLE } from "../db/drizzle.module";
 import { cargos, clientes, integracaoPandape, tiposDocumento, usuarios } from "../db/schema";
 import { AdmissoesService } from "../admissoes/admissoes.service";
 import { AuditoriaService } from "../auditoria/auditoria.service";
-import { PandapeApiService, type PandaperPrecollaborator } from "./pandape-api.service";
+import {
+  PandapeApiService,
+  type PandapeMatch,
+  type PandaperPrecollaborator,
+} from "./pandape-api.service";
+import type { CandidatoInputDto, SexoValor } from "../admissoes/dto/create-admissao.dto";
 import { PandapeQueueService } from "./pandape-queue.service";
 import { resolverTipoDocumento } from "./resolver-tipo-documento";
 import {
@@ -42,6 +47,26 @@ import {
  *  - Discovery: a API v1 não lista pré-colaboradores novos → `listarMudancas()` retorna [] (depende de
  *    webhook ou id conhecido). Decisão de arquitetura pendente.
  */
+/** O Match manda `birthDate` como datetime; a admissão quer YYYY-MM-DD. */
+const DATA_ISO_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Sexo do Pandapé → sexo do EA, pelo dicionário OFICIAL (`GET /v1/Dictionary/Sex`, confirmado ao vivo
+ * em 17/07): **1=Masculino, 2=Feminino, 0=Não Especificado**.
+ *
+ * Não é detalhe cosmético: o sexo condiciona a exigência da **Carteira de Reservista** na régua
+ * padrão (só MASCULINO). Inverter o mapa cobraria Reservista de candidata mulher. "Não especificado"
+ * e ausente viram `undefined` — o mesmo que o EA já faz com candidato sem sexo (não cobra Reservista),
+ * em vez de chutar um valor.
+ */
+export function sexoDoPandape(idSex: number | string | undefined | null): SexoValor | undefined {
+  if (idSex === undefined || idSex === null) return undefined;
+  const v = String(idSex).trim();
+  if (v === "1") return "MASCULINO";
+  if (v === "2") return "FEMININO";
+  return undefined;
+}
+
 @Injectable()
 export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger("PandapeSyncService");
@@ -167,44 +192,50 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
     pc: PandaperPrecollaborator,
     etapa: string | undefined,
   ): Promise<void> {
-    if (!pc.cpf || !pc.nome) {
-      this.logger.warn("Pré-colaborador sem CPF/nome — sync adiada (não-bloqueio).");
-      return;
-    }
+    // O `PreCollaborator/Get` NÃO traz CPF, telefone, nascimento nem sexo: tudo isso vem do MATCH
+    // (`GET /v1/Match/Get?idMatch=`, confirmado no swagger oficial e ao vivo). O `idMatch` é a ponte,
+    // e vem do próprio pré-colaborador. Sem esta chamada o CPF nunca chega e a sync adia para sempre.
+    const match = pc.idMatch ? await this.api.getMatch(String(pc.idMatch)) : undefined;
+    const dados = this.candidatoDoMatch(pc, match);
 
-    const alvo = await this.resolverClienteCargo(pc.idVacancy);
-    if (!alvo) {
-      // Sem mapeamento de cliente/cargo (insumo do diretor pendente, §A.9): adia sem inventar FK.
+    if (!dados) {
+      // §A.6: o motivo é logado, o dado pessoal NÃO. O `idPreCollaborator` é id do ATS (não é
+      // atributo da pessoa) e vai junto de propósito: sem ele o evento adiado fica INVISÍVEL e
+      // ninguém consegue reprocessar. Era o buraco: adiava calado.
       this.logger.warn(
-        "Vaga do Pandapé não mapeável para cliente/cargo — admissão adiada (aguardando de/para, §A.9).",
+        `Sync adiada (não-bloqueio) — idPreCollaborator=${pc.idPreCollaborator}, motivo: ${this.motivoAdiamento(pc, match)}.`,
       );
       return;
     }
 
+    const pandapeOpts = {
+      idPrecollaborator: pc.idPreCollaborator,
+      idMatch: pc.idMatch,
+      idVacancy: pc.idVacancy,
+      etapa,
+    };
+
+    const alvo = await this.resolverClienteCargo(pc.idVacancy);
+
     try {
+      if (!alvo) {
+        // Sem de/para vaga→cliente (manual por design, §A.9): NÃO adia mais. Cria a PRÉ-ADMISSÃO em
+        // AGUARDANDO_LIBERACAO (candidato + IDs do Pandapé), SEM cliente/cargo/frentes/documentos. O
+        // consultor atribui cliente+cargo na tela de Liberação Admissional e aí a admissão nasce.
+        // NÃO puxa documentos: sem régua (= cliente+cargo) não há onde mapeá-los; o pull acontece
+        // depois, no fluxo normal da esteira, após a liberação.
+        await this.admissoes.criarPreAdmissao(dados, pandapeOpts);
+        this.logger.log(
+          `Pré-admissão criada (AGUARDANDO_LIBERACAO) — idPreCollaborator=${pc.idPreCollaborator}.`,
+        );
+        return;
+      }
+
+      // Caminho completo (de/para resolvido): admissão nasce direto na esteira.
       const criada = await this.admissoes.create(
-        {
-          codCliente: alvo.codCliente,
-          cargoId: alvo.cargoId,
-          candidato: {
-            cpf: pc.cpf,
-            nome: pc.nome,
-            telefone: pc.telefone,
-            email: pc.email,
-            dataNascimento: pc.dataNascimento,
-          },
-        },
+        { codCliente: alvo.codCliente, cargoId: alvo.cargoId, candidato: dados },
         undefined,
-        {
-          origem: "PANDAPE",
-          bypassAceite: true,
-          pandape: {
-            idPrecollaborator: pc.idPreCollaborator,
-            idMatch: pc.idMatch,
-            idVacancy: pc.idVacancy,
-            etapa,
-          },
-        },
+        { origem: "PANDAPE", bypassAceite: true, pandape: pandapeOpts },
       );
       // Pull de docs (F2 incremental) após o nascimento das frentes (regra 1).
       await this.puxarDocumentos(criada.admissaoId, pc.documents ?? []);
@@ -216,6 +247,53 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
       }
       throw err; // demais erros sobem para o backoff do BullMQ.
     }
+  }
+
+  /**
+   * Monta o candidato a partir do pré-colaborador + do MATCH. Devolve `undefined` quando falta o
+   * mínimo (CPF ou nome) — aí a criação adia, sem inventar nada.
+   *
+   * Origem de cada campo (só o que a API devolve DE FATO):
+   *  - `cpf`      ← Match (11 dígitos, sem pontuação; `normalizeCpf` no `create` é no-op aqui).
+   *  - `nome`     ← PreCollaborator `name` + `surname` (reais); o Match é fallback.
+   *  - `email`    ← PreCollaborator (real); Match é fallback.
+   *  - `telefone` ← Match (vem "11-987654321", cabe nos 30 do DTO; guardado como veio).
+   *  - `dataNascimento` ← Match, fatiado de datetime para YYYY-MM-DD.
+   *  - `sexo`     ← Match `idSex` pelo dicionário oficial.
+   *
+   * CEP/endereço do Match NÃO são mapeados (decisão do diretor): `candidatos` não tem esses campos e
+   * `dadosVagaFolha.endereco` é o endereço de FOLHA (local de trabalho, vindo do cliente) — gravar o
+   * endereço residencial ali corromperia o dado da folha.
+   */
+  private candidatoDoMatch(
+    pc: PandaperPrecollaborator,
+    match: PandapeMatch | undefined,
+  ): CandidatoInputDto | undefined {
+    const cpf = (pc.cpf ?? match?.cpf ?? "").trim();
+    const nome = (
+      pc.nome ??
+      [pc.name, pc.surname].filter(Boolean).join(" ").trim() ??
+      [match?.name, match?.surname].filter(Boolean).join(" ").trim()
+    ).trim();
+    if (!cpf || !nome) return undefined;
+
+    const nascimento = String(match?.birthDate ?? "").slice(0, 10);
+    return {
+      cpf,
+      nome,
+      email: pc.email ?? match?.email,
+      telefone: pc.telefone ?? match?.phone,
+      dataNascimento: DATA_ISO_RE.test(nascimento) ? nascimento : undefined,
+      sexo: sexoDoPandape(match?.idSex),
+    };
+  }
+
+  /** Motivo legível do adiamento, SEM dado pessoal (§A.6) — só o que falta e de onde viria. */
+  private motivoAdiamento(pc: PandaperPrecollaborator, match: PandapeMatch | undefined): string {
+    if (!pc.idMatch) return "pré-colaborador sem idMatch (é a ponte até o CPF, no Match)";
+    if (!match) return "Match não retornado pela API (inerte, id inexistente ou falha na chamada)";
+    if (!match.cpf?.trim()) return "Match sem CPF preenchido";
+    return "pré-colaborador sem nome";
   }
 
   /**

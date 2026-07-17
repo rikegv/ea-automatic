@@ -4,6 +4,7 @@ import type { AuthUser } from "../auth/auth.types";
 import { parseMulti } from "../common/parse-multi";
 import { AdmissoesService } from "./admissoes.service";
 import { CreateAdmissaoDto } from "./dto/create-admissao.dto";
+import { LiberarAdmissaoDto } from "./dto/liberar-admissao.dto";
 import { UpdateAdmissaoDto } from "./dto/update-admissao.dto";
 
 // Operacional do wizard (F6/F11) e do Gerenciador (F10/F7). Autenticado, sem restrição de papel
@@ -65,6 +66,16 @@ export class AdmissoesController {
     return this.admissoes.lookupCandidato(cpf);
   }
 
+  /**
+   * Liberação Admissional — fila das pré-admissões (farol AGUARDANDO_LIBERACAO). Autenticado, sem
+   * restrição de papel: liberar é operacional (a restrição de Master é só para RECUSAR, Parte 2).
+   * Vem ANTES de @Get(":id") de propósito.
+   */
+  @Get("aguardando-liberacao")
+  aguardandoLiberacao() {
+    return this.admissoes.listarAguardandoLiberacao();
+  }
+
   /** F10 — campos editáveis (prefill do formulário de edição). */
   @Get(":id")
   obter(@Param("id") id: string) {
@@ -80,6 +91,12 @@ export class AdmissoesController {
   @Patch(":id")
   editar(@Param("id") id: string, @Body() dto: UpdateAdmissaoDto, @CurrentUser() user: AuthUser) {
     return this.admissoes.editar(id, dto, user);
+  }
+
+  /** Liberação Admissional — atribui cliente+cargo e faz a pré-admissão nascer na esteira. */
+  @Patch(":id/liberar")
+  liberar(@Param("id") id: string, @Body() dto: LiberarAdmissaoDto, @CurrentUser() user: AuthUser) {
+    return this.admissoes.liberar(id, dto, user);
   }
 
   /** F10 — deleta a admissão (ação destrutiva): só Master/Super Admin. */

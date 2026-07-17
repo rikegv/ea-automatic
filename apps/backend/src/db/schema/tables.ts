@@ -240,12 +240,12 @@ export const admissoes = pgTable("admissoes", {
   candidatoCpf: varchar("candidato_cpf", { length: 11 })
     .notNull()
     .references(() => candidatos.cpf),
-  codCliente: varchar("cod_cliente", { length: 40 })
-    .notNull()
-    .references(() => clientes.codCliente),
-  cargoId: uuid("cargo_id")
-    .notNull()
-    .references(() => cargos.id),
+  // NULÁVEIS a partir da Liberação Admissional (Parte 1): a pré-admissão do Pandapé
+  // (farol AGUARDANDO_LIBERACAO) chega SEM cliente/cargo, atribuídos só na liberação. Fora desse
+  // estado seguem sempre preenchidos — os innerJoin da esteira/Gerenciador já descartam o nulo, e o
+  // farol AGUARDANDO_LIBERACAO é excluído de todas as filas/KPIs.
+  codCliente: varchar("cod_cliente", { length: 40 }).references(() => clientes.codCliente),
+  cargoId: uuid("cargo_id").references(() => cargos.id),
   // Consultor que GEROU a admissão (Fase 2C): associado às não conformidades que ela vier a gerar
   // (Via 1 — penaliza o consultor). Nullable: admissões anteriores à 2C não têm autor registrado.
   consultorId: uuid("consultor_id").references(() => usuarios.id),

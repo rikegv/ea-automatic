@@ -70,7 +70,14 @@ export interface PandapeMatch {
   surname?: string;
   email?: string;
   phone?: string;
+  /** Vem como datetime completo ("1990-01-15T00:00:00"), não data pura — fatiar para YYYY-MM-DD. */
   birthDate?: string;
+  /**
+   * Sexo pelo dicionário OFICIAL do Pandapé (GET /v1/Dictionary/Sex, confirmado ao vivo em 17/07):
+   * **1=Masculino, 2=Feminino, 0=Não Especificado**. O EA usa para a régua do Reservista, então
+   * inverter isto cobraria Reservista de quem não deve: mapear só pelo dicionário, nunca por palpite.
+   */
+  idSex?: number | string;
   cep?: string;
   address?: string;
 }

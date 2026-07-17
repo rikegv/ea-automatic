@@ -57,6 +57,8 @@ function makeApi(over: Partial<Record<keyof PandapeApiService, unknown>> = {}) {
     listarMudancas: vi.fn().mockResolvedValue([]),
     getPrecollaborator: vi.fn(),
     getVacancy: vi.fn(),
+    // O CPF vem do Match. Por padrão devolve undefined; os cenários que precisam sobrescrevem.
+    getMatch: vi.fn().mockResolvedValue(undefined),
     ...over,
   } as unknown as PandapeApiService;
 }
@@ -75,6 +77,7 @@ function makeService(parts: {
   } as unknown as PandapeQueueService;
   const admissoes = {
     create: vi.fn().mockResolvedValue({ admissaoId: "adm-1" }),
+    criarPreAdmissao: vi.fn().mockResolvedValue({ admissaoId: "pre-1" }),
     ...parts.admissoes,
   } as unknown as AdmissoesService;
   const auditoria = {
@@ -241,10 +244,13 @@ describe("PandapeSyncService — idempotência da sync (DoD §1 / regra 1 / uniq
     await expect(svc.processarCandidato("PC-1")).rejects.toThrow("db down");
   });
 
-  it("vaga NÃO mapeável (sem cliente/cargo) → adia: NÃO cria admissão (não inventa FK)", async () => {
+  it("vaga NÃO mapeável (sem cliente/cargo) → cria PRÉ-ADMISSÃO (AGUARDANDO_LIBERACAO), não `create`", async () => {
+    // Liberação Admissional: o de/para vaga→cliente é manual, então em vez de adiar calado, o webhook
+    // cria a pré-admissão sem cliente/cargo. `create` (nascimento completo) NÃO é chamado; a criação
+    // vai por `criarPreAdmissao`, que recebe o candidato do Match + os IDs do Pandapé.
     const { db } = makeDb();
     db.query.integracaoPandape.findFirst.mockResolvedValue(undefined);
-    db.query.clientes.findFirst.mockResolvedValue(undefined); // CNPJ não bate
+    db.query.clientes.findFirst.mockResolvedValue(undefined); // CNPJ não bate → alvo undefined
     db.query.cargos.findFirst.mockResolvedValue(undefined);
     const api = makeApi({
       getPrecollaborator: vi.fn().mockResolvedValue(pc()),
@@ -253,7 +259,14 @@ describe("PandapeSyncService — idempotência da sync (DoD §1 / regra 1 / uniq
     const { svc, admissoes } = makeService({ db, api });
 
     await svc.processarCandidato("PC-1");
+
     expect(admissoes.create).not.toHaveBeenCalled();
+    expect(admissoes.criarPreAdmissao).toHaveBeenCalledTimes(1);
+    const [candidato, pandape] = (
+      admissoes.criarPreAdmissao as ReturnType<typeof vi.fn>
+    ).mock.calls[0];
+    expect(candidato).toMatchObject({ cpf: "52998224725" });
+    expect(pandape).toMatchObject({ idPrecollaborator: "PC-1", idMatch: "M-1", idVacancy: "V-1" });
   });
 
   it("pré-colaborador sem CPF → adia (não-bloqueio): NÃO cria admissão", async () => {
@@ -445,5 +458,121 @@ describe("PandapeSyncService — pull de docs reusa F2 (DoD §5 / §A.6 URL nunc
     expect(auditoria.auditarBuffer).not.toHaveBeenCalled();
 
     vi.unstubAllGlobals();
+  });
+});
+
+// ── Parte 1 (OST ligar o CPF): o CPF vem do Match, não do PreCollaborator ────────────────────────
+import { sexoDoPandape } from "./pandape-sync.service";
+
+/** Pré-colaborador REALISTA da API v1: sem CPF/telefone/nascimento/sexo (esses vêm do Match). */
+function pcReal(over: Partial<PandaperPrecollaborator> = {}): PandaperPrecollaborator {
+  return {
+    idPreCollaborator: "PC-9",
+    idMatch: "M-9",
+    idVacancy: "V-1",
+    etapa: "DOCUMENTACAO",
+    name: "Maria",
+    surname: "Silva Souza",
+    email: "maria@example.com",
+    documents: [],
+    ...over,
+  };
+}
+
+describe("sexoDoPandape — dicionário oficial /v1/Dictionary/Sex (1=M, 2=F, 0=NÃO ESP.)", () => {
+  it("1 → MASCULINO, 2 → FEMININO (string e número)", () => {
+    expect(sexoDoPandape(1)).toBe("MASCULINO");
+    expect(sexoDoPandape("1")).toBe("MASCULINO");
+    expect(sexoDoPandape(2)).toBe("FEMININO");
+    expect(sexoDoPandape("2")).toBe("FEMININO");
+  });
+  it("0 (não especificado), undefined e null → undefined (não chuta — não cobra Reservista)", () => {
+    expect(sexoDoPandape(0)).toBeUndefined();
+    expect(sexoDoPandape("0")).toBeUndefined();
+    expect(sexoDoPandape(undefined)).toBeUndefined();
+    expect(sexoDoPandape(null)).toBeUndefined();
+  });
+});
+
+describe("PandapeSyncService — CPF ligado via Match (OST Parte 1)", () => {
+  function prontoParaCriar() {
+    const { db } = makeDb();
+    db.query.integracaoPandape.findFirst.mockResolvedValue(undefined); // novo
+    db.query.clientes.findFirst.mockResolvedValue({ codCliente: "C-10" });
+    db.query.cargos.findFirst.mockResolvedValue({ id: "cargo-1" });
+    return db;
+  }
+  const vaga = { idVacancy: "V-1", clienteCnpj: "12345678000190", cargoNome: "Operador" };
+
+  it("chama getMatch(idMatch) e o CPF do MATCH chega ao candidato", async () => {
+    const db = prontoParaCriar();
+    const getMatch = vi.fn().mockResolvedValue({
+      cpf: "52998224725",
+      phone: "11-987654321",
+      birthDate: "1990-05-20T00:00:00",
+      idSex: 2,
+    });
+    const api = makeApi({
+      getPrecollaborator: vi.fn().mockResolvedValue(pcReal()),
+      getVacancy: vi.fn().mockResolvedValue(vaga),
+      getMatch,
+    });
+    const { svc, admissoes } = makeService({ db, api });
+
+    await svc.processarCandidato("PC-9");
+
+    expect(getMatch).toHaveBeenCalledWith("M-9");
+    expect(admissoes.create).toHaveBeenCalledTimes(1);
+    const [dto] = (admissoes.create as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(dto.candidato).toMatchObject({
+      cpf: "52998224725",
+      nome: "Maria Silva Souza", // name + surname do PreCollaborator
+      telefone: "11-987654321", // do Match
+      dataNascimento: "1990-05-20", // datetime do Match fatiado para YYYY-MM-DD
+      sexo: "FEMININO", // idSex 2 pelo dicionário
+      email: "maria@example.com",
+    });
+  });
+
+  it("sem idMatch → NÃO cria, adia com log contendo o idPreCollaborator e o motivo, SEM PII", async () => {
+    const db = prontoParaCriar();
+    const api = makeApi({
+      getPrecollaborator: vi.fn().mockResolvedValue(pcReal({ idMatch: undefined })),
+      getVacancy: vi.fn().mockResolvedValue(vaga),
+    });
+    const { svc, admissoes } = makeService({ db, api });
+    const warn = vi.spyOn(
+      (svc as unknown as { logger: { warn: (m: string) => void } }).logger,
+      "warn",
+    );
+
+    await svc.processarCandidato("PC-9");
+
+    expect(admissoes.create).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledTimes(1);
+    const msg = warn.mock.calls[0][0];
+    expect(msg).toContain("PC-9"); // id do ATS, para reprocessar
+    expect(msg).toContain("idMatch"); // motivo
+    // §A.6: nenhum dado pessoal no log (o pcReal nem tem CPF, mas garantimos o nome também).
+    expect(msg).not.toContain("Maria");
+  });
+
+  it("Match sem CPF → NÃO cria, adia com motivo 'Match sem CPF' (não inventa CPF)", async () => {
+    const db = prontoParaCriar();
+    const api = makeApi({
+      getPrecollaborator: vi.fn().mockResolvedValue(pcReal()),
+      getVacancy: vi.fn().mockResolvedValue(vaga),
+      getMatch: vi.fn().mockResolvedValue({ phone: "11-999999999", cpf: "" }),
+    });
+    const { svc, admissoes } = makeService({ db, api });
+    const warn = vi.spyOn(
+      (svc as unknown as { logger: { warn: (m: string) => void } }).logger,
+      "warn",
+    );
+
+    await svc.processarCandidato("PC-9");
+
+    expect(admissoes.create).not.toHaveBeenCalled();
+    expect(warn.mock.calls[0][0]).toContain("Match sem CPF");
   });
 });

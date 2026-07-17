@@ -15,11 +15,15 @@ interface NavDef {
   href: string;
   icon: IconName;
   label: string;
+  /** Faixa vermelha premium (tela crítica / principal indicador). */
+  critical?: boolean;
 }
 
 const OPERACAO: NavDef[] = [
   { href: "/", icon: "home", label: "Início" },
   { href: "/analise", icon: "chart", label: "Análise gerencial" },
+  // 3º item, com destaque vermelho: é a tela crítica (pré-admissões aguardando liberação).
+  { href: "/liberacao", icon: "clock", label: "Liberação Admissional", critical: true },
   { href: "/nova", icon: "plus", label: "Nova admissão" },
   { href: "/esteira", icon: "layers", label: "Esteira admissional" },
   { href: "/nao-conformidades", icon: "alert", label: "Não conformidades" },

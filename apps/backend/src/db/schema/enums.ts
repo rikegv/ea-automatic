@@ -12,6 +12,10 @@ export const farolGlobalEnum = pgEnum("farol_global", [
   "ADMISSAO_CONCLUIDA",
   "DECLINOU",
   "RESCISAO",
+  // Pré-admissão do Pandapé (Liberação Admissional, Parte 1): chegou pelo webhook mas ainda SEM
+  // cliente/cargo (de/para manual). Fica na sala de espera até o consultor atribuir e liberar; não
+  // vaza em fila/KPI da esteira nem do Gerenciador (excluída junto de DECLINOU/RESCISAO).
+  "AGUARDANDO_LIBERACAO",
 ]);
 
 /** Frentes paralelas e independentes (§A.3 / F12). */

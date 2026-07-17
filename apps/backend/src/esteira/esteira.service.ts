@@ -126,7 +126,9 @@ export class EsteiraService {
     // importados E futuros/vivos.
     const clientePeriodo = [
       eq(frentesAdmissao.tipo, tipo),
-      notInArray(admissoes.farolGlobal, ["DECLINOU", "RESCISAO"]),
+      // AGUARDANDO_LIBERACAO junto de DECLINOU/RESCISAO: a pré-admissão do Pandapé não entra em fila
+      // nem KPI da Esteira (ela nem tem frentes ainda; a exclusão é o cinto reforçado).
+      notInArray(admissoes.farolGlobal, ["DECLINOU", "RESCISAO", "AGUARDANDO_LIBERACAO"]),
     ];
     if (filtros.codCliente?.length) {
       clientePeriodo.push(inArray(admissoes.codCliente, filtros.codCliente));
@@ -563,7 +565,7 @@ export class EsteiraService {
     // Gatilho NC-1 (2C): Auditoria concluída ("análise ok") com obrigatórios pendentes na régua.
     // Cálculo read-only ANTES do tx. Concluir com pendência exige aceite explícito (item 2).
     const faltantesAuditoria =
-      tipo === "AUDITORIA" && conclui(tipo, novo) && admissao
+      tipo === "AUDITORIA" && conclui(tipo, novo) && admissao?.codCliente && admissao.cargoId
         ? await this.reguaCompletude.faltantesObrigatorios(
             frente.admissaoId,
             admissao.codCliente,
@@ -928,6 +930,11 @@ export class EsteiraService {
       .where(eq(admissoes.id, admissaoId));
 
     if (!adm) throw new NotFoundException("Admissão não encontrada");
+    // O innerJoin cliente+cargo acima já descarta a pré-admissão (AGUARDANDO_LIBERACAO, cliente/cargo
+    // nulos): ela é vista na tela de Liberação, nunca neste detalhe da Esteira. Guard explícito.
+    if (!adm.codCliente || !adm.cargoId) {
+      throw new NotFoundException("Admissão sem cliente/cargo (aguardando liberação).");
+    }
 
     const frentes = await this.db
       .select({
@@ -1321,7 +1328,9 @@ export class EsteiraService {
     const linhas: LinhaRelatorioClinica[] = [];
     for (const id of admissaoIds) {
       const b = porAdmissao.get(id);
-      if (!b) continue;
+      // `base` já innerJoina cliente/cargo, então uma pré-admissão (cod nulo) nem chega aqui; o guard
+      // de codCliente é o que estreita o tipo (nulável desde a Liberação Admissional).
+      if (!b || !b.codCliente) continue;
       const vw = viewMap.get(b.codCliente);
       // Estágio NÃO faz exame admissional → fora do relatório da clínica (§ decisão do diretor).
       if (vw?.tipo_servico === "ESTAGIO") continue;

@@ -11,6 +11,7 @@ export function NavItem({
   label,
   active,
   expanded = true,
+  critical = false,
 }: {
   href: string;
   icon: IconName;
@@ -18,11 +19,18 @@ export function NavItem({
   active: boolean;
   /** Recolhido (false): só o ícone, centralizado; o label vira tooltip. */
   expanded?: boolean;
+  /** Faixa vermelha premium (tela crítica): preenche a linha do item para chamar atenção. */
+  critical?: boolean;
 }) {
   return (
     <Link
       href={href}
-      className={cn("nav-item", active && "active", !expanded && "justify-center")}
+      className={cn(
+        "nav-item",
+        active && "active",
+        !expanded && "justify-center",
+        critical && "nav-item-critical",
+      )}
       aria-current={active ? "page" : undefined}
       title={expanded ? undefined : label}
     >

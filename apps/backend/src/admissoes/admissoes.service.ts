@@ -37,7 +37,7 @@ import { parseBeneficiosPadrao } from "../domain/beneficios";
 import { FRENTES_AO_NASCER } from "../domain/frentes";
 import { recomputeFarolGlobal } from "./farol";
 import type { AuthUser } from "../auth/auth.types";
-import type { CreateAdmissaoDto } from "./dto/create-admissao.dto";
+import type { CandidatoInputDto, CreateAdmissaoDto } from "./dto/create-admissao.dto";
 import type { UpdateAdmissaoDto } from "./dto/update-admissao.dto";
 
 export interface ListarAdmissoesFiltros {
@@ -340,6 +340,188 @@ export class AdmissoesService {
   }
 
   /**
+   * PRÉ-ADMISSÃO (Liberação Admissional, Parte 1). Cria a admissão do Pandapé em
+   * `AGUARDANDO_LIBERACAO`, SEM cliente/cargo — porque o de/para vaga→cliente é manual (§A.9) e adiar
+   * calado deixava o candidato invisível. Aqui NÃO nascem régua, frentes nem documentos: eles
+   * dependem do par (cliente + cargo) e só nascem na `liberar`. Idempotência pelo unique
+   * `idPrecollaborator` (o caller trata a colisão como "já existe").
+   *
+   * NÃO reusa `create`: aquele exige cliente/cargo (dá 404 sem eles) e faz o nascimento completo.
+   */
+  async criarPreAdmissao(
+    candidato: CandidatoInputDto,
+    pandape: NonNullable<CreateAdmissaoOpts["pandape"]>,
+  ): Promise<{ admissaoId: string }> {
+    const cpf = normalizeCpf(candidato.cpf);
+    if (!isValidCpf(cpf)) throw new BadRequestException("CPF inválido");
+
+    return this.db.transaction(async (tx) => {
+      // Candidato por CPF, preservando o existente (regra 6). Completa o sexo só se estava vazio.
+      await tx
+        .insert(candidatos)
+        .values({
+          cpf,
+          nome: candidato.nome,
+          email: candidato.email ?? null,
+          telefone: candidato.telefone ?? null,
+          dataNascimento: candidato.dataNascimento ?? null,
+          sexo: candidato.sexo ?? null,
+        })
+        .onConflictDoNothing({ target: candidatos.cpf });
+      if (candidato.sexo) {
+        await tx
+          .update(candidatos)
+          .set({ sexo: candidato.sexo })
+          .where(and(eq(candidatos.cpf, cpf), isNull(candidatos.sexo)));
+      }
+
+      // Admissão em AGUARDANDO_LIBERACAO, cliente/cargo NULOS. Sinalizador PENDENTE (nada preenchido);
+      // não é recomputado enquanto o farol não for vivo (ehFarolVivo), então fica estável.
+      const [adm] = await tx
+        .insert(admissoes)
+        .values({
+          candidatoCpf: cpf,
+          codCliente: null,
+          cargoId: null,
+          farolGlobal: "AGUARDANDO_LIBERACAO",
+          sinalizadorPreenchimento: "PENDENTE",
+          origem: "PANDAPE",
+        })
+        .returning({ id: admissoes.id });
+
+      await tx.insert(integracaoPandape).values({
+        admissaoId: adm.id,
+        idPrecollaborator: pandape.idPrecollaborator,
+        idMatch: pandape.idMatch,
+        idVacancy: pandape.idVacancy,
+        etapa: pandape.etapa,
+      });
+
+      // dados_vaga_folha vazio: preserva o 1:1 que o `create` estabelece (todo lugar que a lê usa
+      // leftJoin, mas manter a linha evita surpresa). Preenchido depois no lápis/liberação.
+      await tx.insert(dadosVagaFolha).values({ admissaoId: adm.id });
+
+      return { admissaoId: adm.id };
+    });
+  }
+
+  /**
+   * LIBERAÇÃO (Liberação Admissional, Parte 1). Atribui cliente+cargo à pré-admissão e dispara o
+   * MESMO nascimento do `create`: régua do par → documentos PENDENTES → frentes AUDITORIA+EXAME →
+   * farol EM_ADMISSAO. A partir daqui a admissão aparece na Esteira e some da sala de espera.
+   *
+   * Se o par não tiver régua, nasce sem checklist (0 documentos) — sinalizado no retorno (`temRegua`),
+   * NUNCA bloqueado (regra 5).
+   */
+  async liberar(
+    admissaoId: string,
+    dto: { codCliente: string; cargoId: string },
+    user: AuthUser,
+  ): Promise<{ admissaoId: string; temRegua: boolean }> {
+    const adm = await this.db.query.admissoes.findFirst({ where: eq(admissoes.id, admissaoId) });
+    if (!adm) throw new NotFoundException("Admissão não encontrada");
+    if (adm.farolGlobal !== "AGUARDANDO_LIBERACAO") {
+      throw new ConflictException("Esta admissão não está aguardando liberação.");
+    }
+    const cliente = await this.db.query.clientes.findFirst({
+      where: eq(clientes.codCliente, dto.codCliente),
+    });
+    if (!cliente) throw new NotFoundException("Cliente não encontrado");
+    const cargo = await this.db.query.cargos.findFirst({ where: eq(cargos.id, dto.cargoId) });
+    if (!cargo) throw new NotFoundException("Cargo não encontrado");
+
+    return this.db.transaction(async (tx) => {
+      // Régua do par (cliente + cargo) — mesma leitura do `create`.
+      const regua = await tx
+        .select({
+          tipoDocumentoId: reguaDocumental.tipoDocumentoId,
+          exigencia: reguaDocumental.exigencia,
+        })
+        .from(reguaDocumental)
+        .where(
+          and(
+            eq(reguaDocumental.codCliente, dto.codCliente),
+            eq(reguaDocumental.cargoId, dto.cargoId),
+          ),
+        );
+
+      const sinalizador = calcSinalizadorPreenchimento({
+        candidato: { nome: "", cpf: adm.candidatoCpf },
+        codCliente: dto.codCliente,
+        cargoId: dto.cargoId,
+        dataAdmissao: adm.dataAdmissao ?? undefined,
+        tipoContrato: adm.tipoContrato ?? undefined,
+        vagaFolha: {},
+        temBeneficioEstruturado: false,
+      });
+
+      await tx
+        .update(admissoes)
+        .set({
+          codCliente: dto.codCliente,
+          cargoId: dto.cargoId,
+          farolGlobal: "EM_ADMISSAO",
+          sinalizadorPreenchimento: sinalizador,
+          consultorId: user.id,
+          atualizadoEm: new Date(),
+        })
+        .where(eq(admissoes.id, admissaoId));
+
+      // Nascimento paralelo (regra 1 / F12): AUDITORIA + EXAME. Espelha o `create` (h/i).
+      const agora = new Date();
+      await tx.insert(frentesAdmissao).values(
+        FRENTES_AO_NASCER.map((tipo) => ({
+          admissaoId,
+          tipo,
+          status: STATUS_INICIAL_FRENTE[tipo],
+          concluida: false,
+          dataInicio: agora,
+        })),
+      );
+
+      const exigidos = regua.filter(
+        (r) => r.exigencia === "OBRIGATORIO" || r.exigencia === "FACULTATIVO",
+      );
+      if (exigidos.length > 0) {
+        await tx.insert(documentosAdmissao).values(
+          exigidos.map((r) => ({
+            admissaoId,
+            tipoDocumentoId: r.tipoDocumentoId,
+            estado: "PENDENTE" as const,
+          })),
+        );
+      }
+
+      return { admissaoId, temRegua: regua.length > 0 };
+    });
+  }
+
+  /**
+   * Fila da Liberação Admissional: as pré-admissões em `AGUARDANDO_LIBERACAO`. leftJoin em
+   * cliente/cargo (nulos aqui, é a única superfície que os trata nulos). Mostra o que veio do Match
+   * (telefone/nascimento/sexo) e a origem/chegada. Ordena por chegada (mais antigo primeiro).
+   */
+  async listarAguardandoLiberacao() {
+    return this.db
+      .select({
+        admissaoId: admissoes.id,
+        candidatoNome: candidatos.nome,
+        candidatoCpf: candidatos.cpf,
+        telefone: candidatos.telefone,
+        dataNascimento: candidatos.dataNascimento,
+        sexo: candidatos.sexo,
+        origem: admissoes.origem,
+        criadoEm: admissoes.criadoEm,
+        idVacancy: integracaoPandape.idVacancy,
+      })
+      .from(admissoes)
+      .innerJoin(candidatos, eq(admissoes.candidatoCpf, candidatos.cpf))
+      .leftJoin(integracaoPandape, eq(integracaoPandape.admissaoId, admissoes.id))
+      .where(eq(admissoes.farolGlobal, "AGUARDANDO_LIBERACAO"))
+      .orderBy(asc(admissoes.criadoEm));
+  }
+
+  /**
    * F10/F7 — Gerenciador: lista paginada de TODAS as admissões com filtros acumulativos + busca
    * global (nome/CPF) + KPIs (total/ativos/concluídos/declinados). "Concluído" = a frente
    * CADASTRO_CONTRATO da admissão está concluída (processo finalizado). Os KPIs aplicam os filtros
@@ -388,7 +570,7 @@ export class AdmissoesService {
     // MAS quem declinou/rescindiu NUNCA conta como pendência em nenhum card (regra permanente de
     // importação, §A.3/Regra 2): pendência é de quem está no processo; o declínio saiu. Fica só como
     // histórico. Mesma exclusão por farol que a Esteira aplica nas filas operacionais.
-    const comPendenciaExpr = sql<boolean>`(${admissoes.sinalizadorPreenchimento} <> 'OK' AND ${admissoes.farolGlobal} NOT IN ('DECLINOU', 'RESCISAO'))`;
+    const comPendenciaExpr = sql<boolean>`(${admissoes.sinalizadorPreenchimento} <> 'OK' AND ${admissoes.farolGlobal} NOT IN ('DECLINOU', 'RESCISAO', 'AGUARDANDO_LIBERACAO'))`;
 
     // "Em andamento" = admissão EM ABERTO no geral: nem concluída nem declínio/rescisão. São os faróis
     // de processo vivo (EM_ADMISSAO, BANCO_AGUARDAR). Numa base histórica dá ~0; o card fica pronto para
@@ -522,10 +704,13 @@ export class AdmissoesService {
       where: eq(candidatos.cpf, adm.candidatoCpf),
     });
     // BLOCO 2 (nomes de cliente/cargo p/ exibir) e BLOCO 3 (exame): o lápis mostra, não edita esses.
-    const cliente = await this.db.query.clientes.findFirst({
-      where: eq(clientes.codCliente, adm.codCliente),
-    });
-    const cargo = await this.db.query.cargos.findFirst({ where: eq(cargos.id, adm.cargoId) });
+    // cliente/cargo podem ser nulos numa pré-admissão (AGUARDANDO_LIBERACAO): não consultar com nulo.
+    const cliente = adm.codCliente
+      ? await this.db.query.clientes.findFirst({ where: eq(clientes.codCliente, adm.codCliente) })
+      : undefined;
+    const cargo = adm.cargoId
+      ? await this.db.query.cargos.findFirst({ where: eq(cargos.id, adm.cargoId) })
+      : undefined;
     const agendamento = await this.db.query.exameAgendamento.findFirst({
       where: eq(exameAgendamento.admissaoId, id),
     });
@@ -547,28 +732,32 @@ export class AdmissoesService {
         ),
       )
       .where(eq(frentesAdmissao.admissaoId, id));
-    const docsRows = await this.db
-      .select({
-        nome: tiposDocumento.nome,
-        exigencia: reguaDocumental.exigencia,
-        estado: documentosAdmissao.estado,
-      })
-      .from(reguaDocumental)
-      .innerJoin(tiposDocumento, eq(tiposDocumento.id, reguaDocumental.tipoDocumentoId))
-      .leftJoin(
-        documentosAdmissao,
-        and(
-          eq(documentosAdmissao.admissaoId, id),
-          eq(documentosAdmissao.tipoDocumentoId, reguaDocumental.tipoDocumentoId),
-        ),
-      )
-      .where(
-        and(
-          eq(reguaDocumental.codCliente, adm.codCliente),
-          eq(reguaDocumental.cargoId, adm.cargoId),
-        ),
-      )
-      .orderBy(asc(tiposDocumento.nome));
+    // Régua só existe com (cliente + cargo): pré-admissão (nulos) não tem checklist ainda.
+    const docsRows =
+      adm.codCliente && adm.cargoId
+        ? await this.db
+            .select({
+              nome: tiposDocumento.nome,
+              exigencia: reguaDocumental.exigencia,
+              estado: documentosAdmissao.estado,
+            })
+            .from(reguaDocumental)
+            .innerJoin(tiposDocumento, eq(tiposDocumento.id, reguaDocumental.tipoDocumentoId))
+            .leftJoin(
+              documentosAdmissao,
+              and(
+                eq(documentosAdmissao.admissaoId, id),
+                eq(documentosAdmissao.tipoDocumentoId, reguaDocumental.tipoDocumentoId),
+              ),
+            )
+            .where(
+              and(
+                eq(reguaDocumental.codCliente, adm.codCliente),
+                eq(reguaDocumental.cargoId, adm.cargoId),
+              ),
+            )
+            .orderBy(asc(tiposDocumento.nome))
+        : [];
     // Pacote ESTRUTURADO (§A.17 etapa 4). O modal de edição decide o modo pelo BLOB legado, não por
     // esta lista: admissão com blob edita o blob (não migramos); sem blob, edita estruturado. Uma
     // admissão nova sem nenhum benefício escolhido tem blob nulo e pacote vazio, e ainda assim é

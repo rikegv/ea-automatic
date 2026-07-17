@@ -53,7 +53,9 @@ function envKeyFopag(cod: string): string {
  */
 export function resolvePastaPaiId(
   tipoContrato: string | null | undefined,
-  codCliente: string,
+  // Nulável: cod_cliente da admissão passou a poder ser nulo (Liberação Admissional). O corpo já
+  // trata com `?? ""` (sem pasta-pai → não arquiva), então aceitar nulo é seguro e explícito.
+  codCliente: string | null | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): string | null {
   const t = norm(tipoContrato ?? "");

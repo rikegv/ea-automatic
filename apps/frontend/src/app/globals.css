@@ -393,6 +393,20 @@
   .nav-item.active svg {
     color: var(--accent);
   }
+  /* Item crítico (Liberação Admissional): faixa vermelha premium preenchendo a linha, para sinalizar
+     que é a tela crítica / principal indicador. Vence hover e active (todos listados). */
+  .nav-item-critical,
+  .nav-item-critical:hover,
+  .nav-item-critical.active {
+    background: linear-gradient(90deg, var(--danger), color-mix(in srgb, var(--danger) 78%, #000));
+    color: #fff;
+    border-color: transparent;
+    font-weight: 700;
+    box-shadow: 0 3px 12px -2px rgba(214, 69, 69, 0.55);
+  }
+  .nav-item-critical svg {
+    color: #fff;
+  }
   .nav-sep {
     height: 1px;
     background: var(--border);

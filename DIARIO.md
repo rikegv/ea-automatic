@@ -1706,3 +1706,170 @@ são de sessões anteriores e ficam aqui pelo hash, sem narrativa que eu não pr
 - `6bd8f8c` 17/07 — feat(regua-documental): CRUD de tipos de documento em rota admin própria
 - `33ab7f9` 17/07 — docs(claude): corrige catálogo de documentos (30, não 21), registra rotina de commit/push e o estado das regras de fluxo
 - `7123e01` 17/07 — feat(exame/declinio): gate AGENDADO completo, bypass APTO com autor correto na NC, trilha de declinio/reativacao com histórico
+
+---
+
+## 2026-07-17 (tarde) — Pandapé: CPF ligado via Match + furos da carga (OST Partes 1 e 2)
+
+**Código pronto e testado, AINDA NÃO commitado** (aguarda validação do diretor, §A.21). Diário
+atualizado antes de encerrar, conforme a norma.
+
+### Parte 1 — CPF ligado (o fio que faltava)
+
+- `PandapeSyncService.criarAdmissao` agora chama **`api.getMatch(pc.idMatch)`** (o método já existia,
+  aponta para `/v1/Match/Get`) e monta o candidato a partir do Match. Antes ninguém chamava, então
+  `pc.cpf` vinha `undefined` e a sync adiava para sempre.
+- Novo `candidatoDoMatch(pc, match)`: mapeia **CPF** (do Match), **nome** (`name`+`surname` do
+  pré-colaborador), **email**, **telefone** (Match), **data de nascimento** (Match, datetime fatiado
+  para YYYY-MM-DD) e **sexo**. **CEP/endereço NÃO mapeados** (decisão do diretor nesta sessão): não há
+  onde gravar sem corromper o `dadosVagaFolha.endereco`, que é endereço de FOLHA, não residencial.
+- **`idSex` resolvido pelo dicionário OFICIAL** (`GET /v1/Dictionary/Sex`, consultado ao vivo):
+  **1=Masculino, 2=Feminino, 0=Não Especificado**. Função `sexoDoPandape` mapeia só por isso, nunca
+  por palpite (inverter cobraria Reservista de mulher). `idSex` adicionado à interface `PandapeMatch`.
+- **Adiamento agora é visível:** se falta CPF/nome, ainda adia (não cria sem CPF), mas loga 1 linha
+  com o **`idPreCollaborator`** (id do ATS, para reprocessar) e o **motivo** (sem idMatch / Match não
+  retornado / Match sem CPF). §A.6: nenhum dado pessoal no log.
+- **Prova ao vivo** sobre 3 Matches reais (idVacancy 847, valores mascarados): CPF de 11 dígitos,
+  telefone, nascimento e sexo corretos (idSex 2→FEMININO, 1→MASCULINO).
+
+### Parte 1.2 — os dois furos da carga, corrigidos com teste
+
+- **Furo do NULL:** `carga-frente1.ts` trocou `eq(dataAdmissao, dataAdmissao)` (que com NULL nunca
+  casa) por **`isNull(admissoes.dataAdmissao)`**. Provado no banco real: a chave da admissão sem data
+  casava **0** com o padrão antigo (duplicaria) e casa **1** com `isNull` (deduplica).
+- **Furo do CPF cru:** o dedup agora compara **`normalizeCpf(r.cpf)`** dos dois lados (o `create`
+  grava normalizado). Não depende do `normalize.py` externo. O mesmo CPF normalizado vai ao insert.
+- Testes: `sexoDoPandape` (dicionário) + 3 cenários de `criarAdmissao` (CPF do Match chega; sem
+  idMatch adia com log; Match sem CPF adia). Backend **252 testes** (+6). Typecheck/eslint/prettier
+  verdes.
+
+### Parte 2 — dedup carga × webhook: opções levantadas, AGUARDANDO escolha do diretor
+
+**Não implementada, por ordem da OST.** As opções e trade-offs foram ao diretor. **O painel do
+Pandapé NÃO deve ser cadastrado até a dedup fechar** — enquanto não fechar, o webhook segue inerte e
+sem risco. (Detalhe do levantamento: a API expõe `/v2/matches?IdVacancy=` como LISTA com CPF, o que
+viabiliza a opção de backfill por CPF; ver o report ao diretor.)
+
+### Pendências herdadas (inalteradas)
+
+Logo e 4 scripts de dados soltos; 2 erros de ESLint pré-existentes (`nova`, `vt`); prova visual
+§A.13 depende de sudo (Chromium sem libs); estrutural cliente-empresa = 3 combos de CNPJ, não 21.
+
+---
+
+## 2026-07-17 (noite) — Liberação Admissional, Parte 1/3 (núcleo: pré-admissão, webhook, tela)
+
+**Código pronto e validado ao vivo pela fábrica, AINDA NÃO commitado** (aguarda validação do diretor
+na tela, §A.21). Parte 1 de 3: faltam a **Parte 2 (recusa)** e a **Parte 3 (indicador/ping/popup)**
+antes de o Pandapé ir ao painel. **Webhook NÃO cadastrado no painel** (a dedup ainda não fechou).
+
+### O que entrou
+
+- **Migration 0028_liberacao_admissional**: novo farol `AGUARDANDO_LIBERACAO`; `cod_cliente` e
+  `cargo_id` NULÁVEIS (1ª vez). Aplicada no banco dev, confirmada.
+- **shared-types + domínio**: `AGUARDANDO_LIBERACAO` no `FAROL_GLOBAL` + rótulo "Aguardando
+  Liberação"; adicionado a **`FAROL_MANUAL`** (crítico: sem isso qualquer recompute derivaria
+  EM_ADMISSAO e arrancaria a admissão da sala de espera); excluído do `FAROL_SELECT_OPTIONS` (não é
+  escolha manual do lápis).
+- **Webhook** (`PandapeSyncService.criarAdmissao`): em vez de adiar quando o de/para não resolve,
+  chama `AdmissoesService.criarPreAdmissao` — cria em AGUARDANDO_LIBERACAO com candidato do Match +
+  IDs do Pandapé, SEM cliente/cargo/frentes/documentos. Integra a Parte 1 do CPF (getMatch). Sem CPF,
+  mantém o adiamento com log.
+- **AdmissoesService**: `criarPreAdmissao` (pré-admissão), `liberar` (atribui cliente+cargo → régua →
+  documentos PENDENTES → frentes AUDITORIA+EXAME → farol EM_ADMISSAO; retorna `temRegua`),
+  `listarAguardandoLiberacao` (fila, leftJoin, dados do Match). Rotas: `GET /admissoes/aguardando-
+  liberacao`, `PATCH /admissoes/:id/liberar` (operacional, sem restrição de papel; a de Master é só
+  para RECUSAR, Parte 2).
+- **Tela `/liberacao`** ("Liberação Admissional"), item próprio na Operação do Sidebar (ícone clock,
+  decisão do diretor). Lista candidato/CPF/telefone/nascimento/sexo/origem/chegada + seletores de
+  cliente e cargo + botão Liberar. Avisa quando o par não tem régua (não bloqueia).
+
+### Auditoria do nulo (item 5, o custo real da abordagem)
+
+`cod_cliente`/`cargo_id` nuláveis pela 1ª vez. Pontos verificados e como cada um trata o nulo:
+
+- **SAFE por innerJoin** (a pré-admissão some da query): esteira `listar` filas/itens/KPIs; Gerenciador
+  `listar` total/itens/KPIs (por isso a pré-admissão NÃO aparece nem conta lá); NCs; benefícios-memória
+  por (cliente+cargo); régua-completude (todas as queries).
+- **SAFE por exclusão de farol**: adicionei `AGUARDANDO_LIBERACAO` às listas junto de DECLINOU/RESCISAO
+  (esteira `clientePeriodo` e Gerenciador `comPendenciaExpr`) — cinto reforçado.
+- **CORRIGIDO (quebrava/tipo com nulo)**: `obter` do Gerenciador (guarda cliente/cargo/régua quando
+  nulos); `auditoria.carregarAdmissao` e `esteira` detalhe (guard explícito → NotFound, inalcançável
+  para pré-admissão); `esteira` gate de auditoria (narrow); relatório da clínica (guard no `continue`);
+  `resolvePastaPaiId` (param aceita nulo, corpo já tratava); `frontend/lib/farol` (tom da pill).
+- **Aceito (inalcançável)**: clicksign/auditoria só rodam sobre admissão com frentes/contrato, que a
+  pré-admissão não tem; guard defensivo posto mesmo assim.
+
+### Validação ao vivo (fábrica)
+
+Cadeia real: getMatch de um idMatch real da vaga 847 → `criarPreAdmissao`. A pré-admissão aparece
+**só** na fila de Liberação, com CPF (11 díg), telefone, nascimento e sexo do Match; **não vaza** em
+nenhuma KPI da esteira nem do Gerenciador (total do Gerenciador segue 2158; filtro por
+AGUARDANDO_LIBERACAO = 0). Liberar uma 2ª pré-admissão (cliente+cargo com régua) → EM_ADMISSAO, 2
+frentes, 7 documentos, saiu da fila. A 2ª foi limpa; a 1ª ficou aguardando para o diretor validar na
+tela. *(Prova visual §A.13 é do diretor: Chromium não sobe nesta VM.)*
+
+### Para o diretor validar
+
+Há **1 pré-admissão** na tela `/liberacao` (admissaoId `d32c95c8…`). Fluxo a conferir: vê o candidato
+com dados do Match sem cliente/cargo → atribui cliente+cargo → Liberar → entra na esteira com
+régua/documentos/frentes e some da liberação. Depois da validação, limpar a pré-admissão de teste.
+
+---
+
+## 2026-07-17 (noite, 2) — Liberação Admissional: ajustes visuais (itens 1, 2, 3)
+
+**Ajustes na tela e no menu, NÃO commitados** (aguarda validação do diretor). O diretor validou o
+fluxo da Parte 1 na tela (liberou a pré-admissão de teste #1, que virou EM_ADMISSAO na esteira);
+essa #1 foi limpa e uma pré-admissão nova foi posta na fila para validar estes ajustes.
+
+- **Item 1 (seletores)**: adicionado `menuFit` aos seletores de Cliente e Cargo — o painel aberto
+  agora abre em `w-max` (até 560px) com `whitespace-nowrap`, exibindo a opção inteira sem cortar. E o
+  cliente passou a mostrar o **NOME OPERACIONAL**: rótulo `código · nome operacional · razão social`
+  (cai para `código · razão social` quando não há nome operacional). O campo `nomeOperacao` já existe
+  em `clientes` e o `/admin/clientes` já o retorna (117/228 preenchidos); nada inventado.
+- **Item 2 (menu)**: "Liberação Admissional" movido para o **3º item** da Operação. Faixa **vermelha
+  premium** (`.nav-item-critical`: gradiente do `--danger`, texto branco, negrito, sombra) preenchendo
+  a linha do item, vencendo hover/active, sem quebrar o layout (funciona recolhido também). Prop
+  `critical` no `NavItem`/`NavDef`. É só o destaque visual; o contador/badge é a Parte 3, não feito.
+- **Item 3 (tag Pandapé)**: **nada a remover** — a coluna Candidato já mostrava só o nome
+  (`{candidatoNome}`), sem tag. A origem Pandapé nunca esteve colada ao nome. Reportado ao diretor.
+
+Gate: typecheck (3 pacotes), eslint e 252 testes verdes. §A.13: prova visual é do diretor.
+
+### PRÓXIMA OST da Liberação (registrada, pendente do diretor)
+
+**Item 4 — formulário de pendências obrigatórias na liberação.** Ao liberar, além de cliente+cargo,
+oferecer o preenchimento das demais pendências obrigatórias da admissão (salário, benefícios, escala,
+data, centro de custo, gestor/BP etc.). **A trava de liberação segue só cliente+cargo** (o resto é
+pendência que segue para a esteira, não bloqueia). **Campos exatos a definir pelo diretor.** Não
+construído nesta OST.
+
+---
+
+## 2026-07-17 (noite, 3) — Liberação Admissional: reestruturação (tabela leitura + modal + tempo parado)
+
+**Reestruturação da tela, NÃO commitada** (aguarda validação do diretor). Só a tela de Liberação.
+
+- **Tabela só leitura + botão**: removidos os seletores de cliente/cargo de dentro da linha. Colunas:
+  Candidato · CPF · Telefone · Nascimento · Sexo · Chegada · **Parado (dias)** · **Parado (horas)** ·
+  Ação (botão Liberar). O botão abre o modal.
+- **Tempo parado** (desde a Chegada até agora, `nowMs` fixado no load): duas leituras do MESMO total.
+  Dias por **piso** (dias completos, decisão do diretor: 36h → "1 dia"), horas por piso. Singular/
+  plural tratado ("1 dia"/"2 dias"). **Sem cor de urgência** (decisão do diretor: limites ficam para
+  depois; as colunas já nascem prontas para receber a cor).
+- **Modal de liberação** (base `Modal`): candidato identificado no topo (nome + CPF), seletores de
+  Cliente e Cargo com espaço para respirar (`menuFit`). **Cliente = "código · nome operacional"**
+  (razão social REMOVIDA da exibição; fallback "código · razão social" quando não há nome operacional).
+  Botão Liberar dispara a lógica de nascimento existente; **trava segue só cliente+cargo**. O modal
+  tem um marcador explícito onde a PRÓXIMA OST (pendências) adiciona campos ABAIXO de cliente/cargo,
+  sem refazer o modal.
+
+Validação ao vivo (fábrica): a pré-admissão de teste teve a chegada retroagida 36h para demonstrar as
+colunas — a tela mostra "1 dia / 36 horas". Gate: typecheck (3 pacotes), eslint, 252 testes verdes.
+Limpar a pré-admissão de teste após a validação do diretor. §A.13: prova visual é do diretor.
+
+**PRÓXIMA OST da Liberação (item 4)**: campos de pendências obrigatórias DENTRO do modal, abaixo de
+cliente/cargo (salário, benefícios, escala, data, centro de custo, gestor/BP etc.), com a trava de
+liberação seguindo só cliente+cargo. **Campos exatos a definir com o diretor.** Webhook segue sem
+cadastro no painel.
