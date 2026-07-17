@@ -7,7 +7,24 @@ import { PageHead } from "@/components/ui/PageHead";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Button } from "@/components/ui/Button";
 import { Select } from "@/components/ui/Select";
+import { MultiSelect } from "@/components/ui/MultiSelect";
 import { Modal } from "@/components/ui/Modal";
+import { precisaValorBeneficio } from "@/lib/beneficios";
+
+// Tipo de contrato: MESMA lista fixa do wizard (não é texto livre). A régua unificada pede o "tipo".
+const TIPOS_CONTRATO = [
+  "Temporário",
+  "Terceirizado",
+  "Estágio",
+  "Interno",
+  "Fopag",
+  "Jovem Aprendiz",
+];
+
+interface CatItem {
+  id: string;
+  nome: string;
+}
 
 interface PreAdmissao {
   admissaoId: string;
@@ -26,6 +43,8 @@ interface Cliente {
   razaoSocial: string;
   // Nome operacional (fantasia): o time reconhece o cliente por ele, não pela razão social.
   nomeOperacao: string | null;
+  // Escala sugerida do cliente (o valor pré-preenche; as opções vêm do catálogo, independentes).
+  escalaPadrao: string | null;
 }
 interface Cargo {
   id: string;
@@ -56,6 +75,13 @@ function fmtCpf(cpf: string): string {
 function rotuloCliente(c: Cliente): string {
   return `${c.codCliente} · ${c.nomeOperacao ?? c.razaoSocial}`;
 }
+// Salário em pt-BR ("2.500,00") → string numérica que o Postgres aceita ("2500.00"). Mesma convenção
+// do valor de benefício (o backend guarda o salário cru como numeric, sem transform próprio).
+function salarioParaNumero(s: string): string | undefined {
+  const t = s.trim();
+  if (!t) return undefined;
+  return t.replace(/\./g, "").replace(",", ".");
+}
 
 // Tempo parado desde a CHEGADA (criadoEm) até agora. Duas leituras do MESMO total: dias (piso, dias
 // completos decorridos) e horas (piso). `nowMs` vem do estado, atualizado no load/liberar.
@@ -84,10 +110,23 @@ export default function LiberacaoPage() {
   const [okMsg, setOkMsg] = useState<string | null>(null);
   // "Agora" fixado no carregamento — as colunas de tempo parado calculam a partir daqui.
   const [nowMs, setNowMs] = useState(() => Date.now());
-  // Modal de liberação: a pré-admissão alvo (null = fechado) + a escolha de cliente/cargo do modal.
+  // Catálogos reusados (mesmos endpoints do wizard/lápis): benefícios e escalas.
+  const [beneficiosCat, setBeneficiosCat] = useState<CatItem[]>([]);
+  const [escalasCat, setEscalasCat] = useState<CatItem[]>([]);
+  // Modal de liberação: a pré-admissão alvo (null = fechado) + os campos do formulário.
   const [alvo, setAlvo] = useState<PreAdmissao | null>(null);
   const [codCliente, setCodCliente] = useState("");
   const [cargoId, setCargoId] = useState("");
+  // Campos obrigatórios (régua unificada §A.19), todos opcionais na liberação — só cliente+cargo travam.
+  const [salario, setSalario] = useState("");
+  const [tipoContrato, setTipoContrato] = useState("");
+  const [dataAdmissao, setDataAdmissao] = useState("");
+  const [escala, setEscala] = useState("");
+  const [centroCusto, setCentroCusto] = useState("");
+  const [gestorBp, setGestorBp] = useState("");
+  // Pacote de benefícios (REUSA a régua de valor de lib/beneficios): nomes selecionados + valor por nome.
+  const [beneficiosSel, setBeneficiosSel] = useState<string[]>([]);
+  const [beneficiosValores, setBeneficiosValores] = useState<Record<string, string>>({});
   const [liberando, setLiberando] = useState(false);
   const [modalErro, setModalErro] = useState<string | null>(null);
 
@@ -95,14 +134,18 @@ export default function LiberacaoPage() {
     if (!token) return;
     setLoading(true);
     try {
-      const [pre, cli, car] = await Promise.all([
+      const [pre, cli, car, ben, esc] = await Promise.all([
         apiFetch<PreAdmissao[]>("/admissoes/aguardando-liberacao", { token }),
         apiFetch<Cliente[]>("/admin/clientes", { token }),
         apiFetch<Cargo[]>("/admin/cargos", { token }),
+        apiFetch<CatItem[]>("/catalogos/beneficios", { token }),
+        apiFetch<CatItem[]>("/catalogos/escalas", { token }),
       ]);
       setRows(pre);
       setClientes(cli);
       setCargos(car);
+      setBeneficiosCat(ben);
+      setEscalasCat(esc);
       setNowMs(Date.now());
       setError(null);
     } catch (e) {
@@ -116,15 +159,65 @@ export default function LiberacaoPage() {
     void load();
   }, [load]);
 
+  // Benefícios e escala DEPENDEM de cliente+cargo: ao escolher o par, pré-preenche o pacote pela
+  // memória (mesma rota do wizard). Escala sugere o padrão do cliente (opções são independentes).
+  useEffect(() => {
+    if (!token || !alvo || !codCliente || !cargoId) return;
+    let vivo = true;
+    apiFetch<{ beneficios: { nome: string; valor: number | null }[] }>(
+      `/admissoes/padrao-cliente-cargo?codCliente=${encodeURIComponent(codCliente)}&cargoId=${encodeURIComponent(cargoId)}`,
+      { token },
+    )
+      .then((r) => {
+        if (!vivo) return;
+        const pacote = r.beneficios ?? [];
+        if (pacote.length === 0) return;
+        setBeneficiosSel(pacote.map((b) => b.nome));
+        setBeneficiosValores(
+          Object.fromEntries(
+            pacote
+              .filter((b) => b.valor !== null)
+              .map((b) => [b.nome, b.valor!.toFixed(2).replace(".", ",")]),
+          ),
+        );
+      })
+      .catch(() => {
+        /* memória é sugestão; falha não bloqueia a liberação */
+      });
+    const cli = clientes.find((c) => c.codCliente === codCliente);
+    if (cli?.escalaPadrao) setEscala((e) => e || cli.escalaPadrao!);
+    return () => {
+      vivo = false;
+    };
+  }, [token, alvo, codCliente, cargoId, clientes]);
+
   function abrirModal(r: PreAdmissao) {
     setAlvo(r);
     setCodCliente("");
     setCargoId("");
+    setSalario("");
+    setTipoContrato("");
+    setDataAdmissao("");
+    setEscala("");
+    setCentroCusto("");
+    setGestorBp("");
+    setBeneficiosSel([]);
+    setBeneficiosValores({});
     setModalErro(null);
   }
   function fecharModal() {
     if (liberando) return;
     setAlvo(null);
+  }
+
+  // Pacote no formato do backend (mesma montagem do wizard): nome→beneficioId; valor só nos que exigem.
+  function montarPacote(): { beneficioId: string; valor?: string }[] {
+    return beneficiosSel.flatMap((nome) => {
+      const b = beneficiosCat.find((x) => x.nome === nome);
+      if (!b) return [];
+      const bruto = precisaValorBeneficio(nome) ? (beneficiosValores[nome] ?? "").trim() : "";
+      return [{ beneficioId: b.id, valor: bruto || undefined }];
+    });
   }
 
   async function liberar() {
@@ -134,9 +227,26 @@ export default function LiberacaoPage() {
     setError(null);
     setOkMsg(null);
     try {
+      const pacoteBeneficios = montarPacote();
       const r = await apiFetch<{ temRegua: boolean }>(
         `/admissoes/${encodeURIComponent(alvo.admissaoId)}/liberar`,
-        { method: "PATCH", token, body: { codCliente, cargoId } },
+        {
+          method: "PATCH",
+          token,
+          body: {
+            codCliente,
+            cargoId,
+            tipoContrato: tipoContrato || undefined,
+            dataAdmissao: dataAdmissao || undefined,
+            vagaFolha: {
+              salario: salarioParaNumero(salario),
+              escala: escala || undefined,
+              centroCusto: centroCusto || undefined,
+              gestorBp: gestorBp || undefined,
+            },
+            pacoteBeneficios: pacoteBeneficios.length ? pacoteBeneficios : undefined,
+          },
+        },
       );
       setOkMsg(
         r.temRegua
@@ -159,6 +269,18 @@ export default function LiberacaoPage() {
   }
 
   const podeLiberar = Boolean(codCliente && cargoId);
+
+  // Campos da régua unificada §A.19 ainda vazios (hint visual; a fonte autoritativa é o backend, que
+  // recalcula o sinalizador ao liberar). Cliente/Cargo não entram: são a trava, já garantidos aqui.
+  const pendentesNoModal = [
+    !salario && "Salário",
+    !tipoContrato && "Tipo de contrato",
+    !dataAdmissao && "Data de admissão",
+    beneficiosSel.length === 0 && "Pacote de benefícios",
+    !escala && "Escala",
+    !centroCusto && "Centro de custo",
+    !gestorBp && "Gestor / BP",
+  ].filter(Boolean) as string[];
 
   return (
     <>
@@ -292,8 +414,107 @@ export default function LiberacaoPage() {
                 options={cargos.map((c) => ({ value: c.id, label: c.nome }))}
               />
             </label>
-            {/* PRÓXIMA OST (item 4): campos de pendências obrigatórias entram aqui, abaixo de
-                cliente/cargo. A trava de liberação continua sendo só cliente+cargo. */}
+            {/* Demais campos obrigatórios (régua unificada §A.19), abaixo de cliente/cargo. Opcionais:
+                o que ficar vazio vira pendência na esteira; SÓ cliente+cargo travam a liberação. */}
+            <div className="grid grid-cols-2 gap-4">
+              <label className="grid gap-1.5">
+                <span className="ds-label">Salário</span>
+                <input
+                  className="ds-input"
+                  inputMode="decimal"
+                  placeholder="Ex.: 2.500,00"
+                  value={salario}
+                  onChange={(e) => setSalario(e.target.value)}
+                />
+              </label>
+              <label className="grid gap-1.5">
+                <span className="ds-label">Data de admissão</span>
+                <input
+                  type="date"
+                  className="ds-input"
+                  value={dataAdmissao}
+                  onChange={(e) => setDataAdmissao(e.target.value)}
+                />
+              </label>
+              <label className="grid gap-1.5">
+                <span className="ds-label">Tipo de contrato</span>
+                <Select
+                  value={tipoContrato}
+                  onChange={setTipoContrato}
+                  placeholder="Selecione…"
+                  ariaLabel="Tipo de contrato"
+                  options={TIPOS_CONTRATO.map((t) => ({ value: t, label: t }))}
+                />
+              </label>
+              <label className="grid gap-1.5">
+                <span className="ds-label">Escala</span>
+                <Select
+                  value={escala}
+                  onChange={setEscala}
+                  placeholder="Selecione…"
+                  ariaLabel="Escala"
+                  searchable
+                  menuFit
+                  options={escalasCat.map((e) => ({ value: e.nome, label: e.nome }))}
+                />
+              </label>
+              <label className="grid gap-1.5">
+                <span className="ds-label">Centro de custo</span>
+                <input
+                  className="ds-input"
+                  value={centroCusto}
+                  onChange={(e) => setCentroCusto(e.target.value)}
+                />
+              </label>
+              <label className="grid gap-1.5">
+                <span className="ds-label">Gestor / BP</span>
+                <input
+                  className="ds-input"
+                  value={gestorBp}
+                  onChange={(e) => setGestorBp(e.target.value)}
+                />
+              </label>
+            </div>
+
+            {/* Pacote de benefícios: REUSA a régua de valor (precisaValorBeneficio). Menu, nunca texto
+                livre; valores pré-preenchidos pela memória cliente+cargo, editáveis. */}
+            <label className="grid gap-1.5">
+              <span className="ds-label">Benefícios</span>
+              <MultiSelect
+                values={beneficiosSel}
+                onChange={setBeneficiosSel}
+                placeholder="Selecione os benefícios…"
+                ariaLabel="Benefícios"
+                options={beneficiosCat.map((b) => ({ value: b.nome, label: b.nome }))}
+              />
+            </label>
+            {beneficiosSel.filter(precisaValorBeneficio).length > 0 && (
+              <div className="grid grid-cols-2 gap-3">
+                {beneficiosSel.filter(precisaValorBeneficio).map((nome) => (
+                  <label key={nome} className="grid gap-1.5">
+                    <span className="ds-label">Valor de {nome}</span>
+                    <input
+                      className="ds-input"
+                      inputMode="decimal"
+                      placeholder="Ex.: 500,00"
+                      value={beneficiosValores[nome] ?? ""}
+                      onChange={(e) =>
+                        setBeneficiosValores((v) => ({ ...v, [nome]: e.target.value }))
+                      }
+                    />
+                  </label>
+                ))}
+              </div>
+            )}
+
+            {/* Sinalização do que ainda falta (mesmos campos da régua unificada). Só cliente+cargo
+                travam; o resto é pendência que segue para a esteira. */}
+            {podeLiberar && pendentesNoModal.length > 0 && (
+              <p className="rounded-xl border border-[var(--border)] bg-[rgba(201,138,18,0.1)] px-3 py-2 text-[12.5px] text-warn">
+                Ainda pendente (não bloqueia, segue como pendência na esteira):{" "}
+                {pendentesNoModal.join(", ")}.
+              </p>
+            )}
           </div>
 
           {modalErro && (

@@ -1935,3 +1935,60 @@ preservados (vaga diferente/terminal). Limpar a pré-admissão de teste após va
 **Com a dedup fechada, o Pandapé fica APTO ao painel** — mas o cadastro no painel é decisão do diretor,
 e a tela ainda não tem item 4 (pendências) / Parte 2 (recusa) / Parte 3 (indicador/ping). Webhook
 segue SEM cadastro no painel.
+
+---
+
+## 2026-07-17 (noite, 6) — Dedup COMMITADA + levantamento do item 4 (fonte a espelhar)
+
+**Dedup Pandapé commitada e no remoto: `481e008`** (migration 0029 + trava B + badge). Gate verde (256
+testes), add nominal, logo/scripts fora, pré-admissão de teste limpa. **Pandapé APTO ao painel, mas
+SEM cadastro** — aguardando as 3 partes da tela (item 4 pendências → Parte 2 recusa → Parte 3
+indicador/ping) e a decisão do diretor de quando ligar. Sequência aprovada: **item 4 → recusa → ping**.
+
+**Levantamento do item 4 (fonte dos campos obrigatórios, SÓ diagnóstico):**
+- **Fonte AUTORITATIVA = `pendenciasObrigatorias` (`domain/admissao.ts`)**, a régua unificada §A.19:
+  Cliente · Cargo · Salário · Tipo de contrato · Data de admissão (ou Termo de Banco se isBanco) ·
+  Pacote de benefícios · Escala · Centro de custo · Gestor/BP. Coluna, KPI, sinalizador, radar e o
+  modal de pendências do lápis já concordam com ela por construção.
+- **O lápis NÃO diverge** (o PendenciasModal traduz essa lista para os campos editáveis).
+- **O wizard DIVERGE (mais rígido, definição antiga):** exige a mais Tempo de contrato, Data de
+  nascimento, Telefone, E-mail (e Sexo/Nome no client), e — inversamente — NÃO inclui Data de admissão
+  no `pend` do backend (mas a régua inclui). Espelhar o wizard recriaria a divergência que a §A.19
+  eliminou.
+- **Dependem de cliente+cargo (só carregam depois deles):** pacote de benefícios (memória por
+  cliente+cargo) e régua documental. **Escala NÃO é filtrada por cliente** (catálogo aberto; só o
+  valor sugerido vem do `escalaPadrao` do cliente). Os demais são globais/texto livre.
+- **Recomendação:** o modal do item 4 espelha `pendenciasObrigatorias` (o que o lápis já espelha),
+  não o wizard, para manter modal/coluna/KPI/sinalizador consistentes. Aguardando o diretor confirmar
+  a fonte para montar a OST do item 4.
+
+---
+
+## 2026-07-17 (noite, 7) — Liberação Admissional, item 4: pendências obrigatórias no modal
+
+**Código pronto e validado ao vivo, NÃO commitado** (aguarda validação do diretor). Espelha a fonte
+autoritativa `pendenciasObrigatorias` (domain/admissao.ts, régua §A.19), REUSANDO o que já existe.
+
+- **Modal** (abaixo de cliente/cargo, no marcador da Parte 1): Salário, Tipo de contrato (lista fixa
+  do wizard), Data de admissão, Escala (catálogo `/catalogos/escalas`, sugestão via escalaPadrao do
+  cliente), Centro de custo, Gestor/BP, **Pacote de benefícios** (MultiSelect + valores, REUSANDO
+  `precisaValorBeneficio` de `lib/beneficios`; pré-preenchido pela memória cliente+cargo via
+  `/admissoes/padrao-cliente-cargo`). **Tempo de contrato NÃO entra** (a régua unificada não o lista).
+- **Trava = SÓ cliente+cargo.** Os demais campos são opcionais; hint no modal mostra o que ainda falta
+  (não bloqueia). Data de admissão vazia não trava.
+- **Backend `liberar`** estendido: valida valores do pacote (mesma `validarValoresDoPacote`), grava
+  vagaFolha/tipo/data/pacote na pré-admissão e recalcula o sinalizador com os valores reais. Corrigido
+  um bug latente: passava `nome:""` ao sinalizador → caía em PENDENTE; agora lê o nome real do
+  candidato. DTO `LiberarAdmissaoDto` reusa `VagaFolhaInputDto`/`BeneficioAlocadoDto` do create.
+- **Salário**: normalizado no front (pt-BR "2.500,00" → "2500.00") antes de enviar (numeric do banco).
+
+**Validação ao vivo (fábrica):** liberar COMPLETO → admissão nasce EM_ADMISSAO com salário/escala/
+centro/gestor/tipo/data + VR=500 gravados, 2 frentes, 7 docs, **sinalizador OK** (zero pendência).
+Liberar SÓ cliente+cargo → nasce PARCIAL e a esteira lista as 7 pendências exatas da régua unificada;
+data vazia NÃO bloqueou. Gate: 256 testes, typecheck/eslint verdes. Pré-admissão de teste na fila para
+o diretor validar o modal; limpar após.
+
+Reuso confirmado (nada recriado): `Select`, `MultiSelect`, `Modal`, `lib/beneficios`
+(`precisaValorBeneficio`), catálogos `/catalogos/beneficios` e `/catalogos/escalas`, memória
+`/admissoes/padrao-cliente-cargo`, `validarValoresDoPacote`. Faltam **Parte 2 (recusa)** e **Parte 3
+(indicador/ping)** antes do Pandapé ao painel. Webhook segue SEM cadastro no painel.

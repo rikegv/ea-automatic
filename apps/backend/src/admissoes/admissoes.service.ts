@@ -474,7 +474,24 @@ export class AdmissoesService {
    */
   async liberar(
     admissaoId: string,
-    dto: { codCliente: string; cargoId: string },
+    dto: {
+      codCliente: string;
+      cargoId: string;
+      tipoContrato?: string;
+      dataAdmissao?: string;
+      vagaFolha?: {
+        salario?: string;
+        beneficios?: string;
+        escala?: string;
+        centroCusto?: string;
+        departamento?: string;
+        gestorBp?: string;
+        motivo?: string;
+        tempoContrato?: string;
+        endereco?: string;
+      };
+      pacoteBeneficios?: { beneficioId: string; valor?: number }[];
+    },
     user: AuthUser,
   ): Promise<{ admissaoId: string; temRegua: boolean }> {
     const adm = await this.db.query.admissoes.findFirst({ where: eq(admissoes.id, admissaoId) });
@@ -488,6 +505,20 @@ export class AdmissoesService {
     if (!cliente) throw new NotFoundException("Cliente não encontrado");
     const cargo = await this.db.query.cargos.findFirst({ where: eq(cargos.id, dto.cargoId) });
     if (!cargo) throw new NotFoundException("Cargo não encontrado");
+
+    // Nome do candidato (sempre presente): o sinalizador exige identidade (nome+cpf) para avaliar a
+    // régua; sem o nome real ele cairia em PENDENTE mesmo com tudo preenchido.
+    const candidato = await this.db.query.candidatos.findFirst({
+      where: eq(candidatos.cpf, adm.candidatoCpf),
+    });
+
+    // Mesma validação do `create` (benefício que exige valor não passa sem valor). Fora da tx.
+    await this.validarValoresDoPacote(dto.pacoteBeneficios);
+
+    const vf = dto.vagaFolha ?? {};
+    const novoTipoContrato = dto.tipoContrato ?? adm.tipoContrato ?? undefined;
+    const novaDataAdmissao = dto.dataAdmissao ?? adm.dataAdmissao ?? undefined;
+    const temEstruturado = Boolean(dto.pacoteBeneficios?.length);
 
     return this.db.transaction(async (tx) => {
       // Régua do par (cliente + cargo) — mesma leitura do `create`.
@@ -504,14 +535,24 @@ export class AdmissoesService {
           ),
         );
 
+      // Sinalizador com os valores REALMENTE preenchidos no modal (régua unificada §A.19): o que
+      // ficou vazio vira pendência na esteira, o que foi preenchido não. Mesma função do `create`.
       const sinalizador = calcSinalizadorPreenchimento({
-        candidato: { nome: "", cpf: adm.candidatoCpf },
+        candidato: { nome: candidato?.nome ?? "", cpf: adm.candidatoCpf },
         codCliente: dto.codCliente,
         cargoId: dto.cargoId,
-        dataAdmissao: adm.dataAdmissao ?? undefined,
-        tipoContrato: adm.tipoContrato ?? undefined,
-        vagaFolha: {},
-        temBeneficioEstruturado: false,
+        dataAdmissao: novaDataAdmissao,
+        tipoContrato: novoTipoContrato,
+        vagaFolha: {
+          salario: vf.salario,
+          beneficios: vf.beneficios,
+          escala: vf.escala,
+          centroCusto: vf.centroCusto,
+          gestorBp: vf.gestorBp,
+        },
+        isBanco: adm.isBanco,
+        termoBancoEntregue: false,
+        temBeneficioEstruturado: temEstruturado,
       });
 
       await tx
@@ -519,12 +560,40 @@ export class AdmissoesService {
         .set({
           codCliente: dto.codCliente,
           cargoId: dto.cargoId,
+          tipoContrato: novoTipoContrato ?? null,
+          dataAdmissao: novaDataAdmissao ?? null,
           farolGlobal: "EM_ADMISSAO",
           sinalizadorPreenchimento: sinalizador,
           consultorId: user.id,
           atualizadoEm: new Date(),
         })
         .where(eq(admissoes.id, admissaoId));
+
+      // Vaga/folha: a pré-admissão já tem a linha 1:1 (vazia, da criação) — ATUALIZA com o preenchido.
+      await tx
+        .update(dadosVagaFolha)
+        .set({
+          salario: vf.salario ?? null,
+          escala: vf.escala ?? null,
+          centroCusto: vf.centroCusto ?? null,
+          departamento: vf.departamento ?? null,
+          gestorBp: vf.gestorBp ?? null,
+          motivo: vf.motivo ?? null,
+          tempoContrato: vf.tempoContrato ?? null,
+          endereco: vf.endereco ?? null,
+        })
+        .where(eq(dadosVagaFolha.admissaoId, admissaoId));
+
+      // Pacote de benefícios ESTRUTURADO (§A.17 etapa 4). Mesma gravação do `create` (g.2).
+      if (dto.pacoteBeneficios?.length) {
+        await tx.insert(admissaoBeneficio).values(
+          dto.pacoteBeneficios.map((b) => ({
+            admissaoId,
+            beneficioId: b.beneficioId,
+            valor: b.valor === undefined ? null : b.valor.toFixed(2),
+          })),
+        );
+      }
 
       // Nascimento paralelo (regra 1 / F12): AUDITORIA + EXAME. Espelha o `create` (h/i).
       const agora = new Date();
