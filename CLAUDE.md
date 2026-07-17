@@ -73,7 +73,10 @@ Entidades centrais:
   **não são rígidos**): `beneficios_padrao`, `escala_padrao`, `endereco_padrao`. O De/Para
   apelido↔razão social resolve-se pelo código. *(Expansão autorizada pelo diretor na Fase 1B.)*
 - **Cargo** — catálogo próprio; normalização contínua dentro do sistema.
-- **TipoDocumento** — 21 tipos (da base de documentos).
+- **TipoDocumento** — **30 tipos** (da base de documentos). Catálogo **vivo**, com CRUD próprio na
+  tela da Régua documental (criar/renomear/inativar/reativar, rota `admin/tipos-documento`), então
+  este número **muda**: a fonte da verdade é a tabela `tipos_documento`, não este documento.
+  *(Antes constava "21 tipos", defasado.)*
 - **ReguaDocumental** — chave `(cod_cliente + cargo)` → por tipo de documento: obrigatório /
   não obrigatório / facultativo. Coração da auditoria e do checklist de pendências.
 - **Candidato** — chave `cpf`. Pode ter N admissões.
@@ -551,3 +554,43 @@ célula ou controle (seletor, botão) está sendo suprimido, cortado ou esmagado
 (máscara única de tabela) e a §A.13 (prova visual obrigatória): não basta a tabela existir, ela tem
 de aproveitar o espaço sem vazios grandes de um lado e colunas espremidas do outro, e isso só é dado
 como concluído com a screenshot conferida. *(Decisão do diretor, após colunas esmagadas na Esteira.)*
+
+## A.21 — Rotina de commit e push (regra permanente)
+
+**O gatilho é a validação do diretor na tela.** Validou, a fábrica está autorizada a **commitar E dar
+push como rotina**, sem pedir aval a cada vez. Antes disso, nada sai.
+
+Ordem obrigatória, sem atalho:
+1. **Gate verde**: typecheck, lint e testes. Vermelho não passa, nem "só isso".
+2. **Validação do diretor na tela** (§A.13/§A.0). Teste verde não substitui.
+3. **Commit com recorte de escopo (§A.14)**: `git add` **nominal**, arquivo por arquivo, **nunca
+   `git add .`**. O que não é da OST em curso fica solto no working tree.
+4. **Push**.
+
+**A trava da §A.7 continua valendo e NÃO é dispensada por esta seção.** O hook `PreToolUse`
+(`scripts/gate-deploy.sh`) bloqueia o push sem flag `.claude/state/READY_*`. A rotina é: criar a flag
+**depois** dos passos 1 e 2, dar o push, **remover a flag**. A flag é o registro deliberado de que o
+gate e a validação aconteceram; ela nunca nasce antes deles nem sobrevive ao push. *(Decisão do
+diretor: o push vira rotina; a trava permanece como mecanismo.)*
+
+## A.22 — Regras de fluxo: estado atual (registro)
+
+Fechamento de itens da **OST Regras de Fluxo**, para tirá-los do backlog e evitar retrabalho.
+
+- **Tipo e tempo de contrato: IMPLEMENTADOS e funcionais.** São **dois campos distintos**, ambos em
+  lista fixa, sem digitação livre (`apps/frontend/src/app/(app)/nova/page.tsx`):
+  - **`tipoContrato`** (W5): Temporário · Terceirizado · Estágio · Interno · Fopag · Jovem Aprendiz.
+  - **`tempoContrato`** (item 5 da OST Regras de Fluxo): **30/60/90/120/150/180/210/240/270** dias.
+
+  *Nota de precisão: a lista 30…270 é o **tempo** de contrato, não o **tipo**. Os dois já estavam
+  prontos; o registro aqui só corrige a confusão entre os campos.* **Saem do backlog.**
+- **Escala vinculada (escala filtrada por cliente): CONGELADA** por decisão do diretor. Hoje o
+  catálogo de escalas é aberto (`catalogos.listEscalas`, todas as escalas ativas), e o cliente só
+  **pré-preenche** via `escala_padrao` (§A.3). Não implementar sem o diretor descongelar.
+- **Pendente, único item remanescente: contador de documentos obrigatórios pendentes POR
+  FUNCIONÁRIO.** Os **KPIs agregados de pendência já estão ativos** (Esteira e Gerenciador). O que
+  falta é **só a exibição por linha**: o backend **já calcula e já envia** o número
+  (`regua-completude.service.obrigatoriosPendentesCountMap` → campo `docsPendentes` nos itens da aba
+  Auditoria), e o frontend **declara o campo mas nunca o renderiza**
+  (`app/(app)/esteira/page.tsx`, o tipo tem `docsPendentes?: number` e nada consome). **A badge é a
+  pendência, não o cálculo.** *(Registro solicitado pelo diretor.)*
