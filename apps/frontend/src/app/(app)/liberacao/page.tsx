@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiFetch, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { cn } from "@/lib/cn";
 import { PageHead } from "@/components/ui/PageHead";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Button } from "@/components/ui/Button";
@@ -50,6 +51,20 @@ interface Cargo {
   id: string;
   nome: string;
 }
+interface Recusada {
+  admissaoId: string;
+  candidatoNome: string;
+  candidatoCpf: string;
+  telefone: string | null;
+  dataNascimento: string | null;
+  sexo: string | null;
+  origem: string;
+  criadoEm: string;
+  recusadoEm: string | null;
+  recusadoPor: string | null;
+}
+
+type Aba = "aguardando" | "recusadas";
 
 const ROTULO_SEXO: Record<string, string> = {
   MASCULINO: "Masculino",
@@ -101,13 +116,19 @@ function paradoHoras(criadoEm: string, nowMs: number): string {
 }
 
 export default function LiberacaoPage() {
-  const { token } = useAuth();
+  const { token, isAdmin } = useAuth();
   const [rows, setRows] = useState<PreAdmissao[]>([]);
+  const [recusadas, setRecusadas] = useState<Recusada[]>([]);
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [cargos, setCargos] = useState<Cargo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
+  // Toggle Aguardando (padrão) × Admissões Recusadas.
+  const [aba, setAba] = useState<Aba>("aguardando");
+  // Modal de detalhe de uma recusada (histórico quem/quando + reativar).
+  const [recusadaAlvo, setRecusadaAlvo] = useState<Recusada | null>(null);
+  const [acaoRecusa, setAcaoRecusa] = useState(false);
   // "Agora" fixado no carregamento — as colunas de tempo parado calculam a partir daqui.
   const [nowMs, setNowMs] = useState(() => Date.now());
   // Catálogos reusados (mesmos endpoints do wizard/lápis): benefícios e escalas.
@@ -134,14 +155,16 @@ export default function LiberacaoPage() {
     if (!token) return;
     setLoading(true);
     try {
-      const [pre, cli, car, ben, esc] = await Promise.all([
+      const [pre, rec, cli, car, ben, esc] = await Promise.all([
         apiFetch<PreAdmissao[]>("/admissoes/aguardando-liberacao", { token }),
+        apiFetch<Recusada[]>("/admissoes/recusadas", { token }),
         apiFetch<Cliente[]>("/admin/clientes", { token }),
         apiFetch<Cargo[]>("/admin/cargos", { token }),
         apiFetch<CatItem[]>("/catalogos/beneficios", { token }),
         apiFetch<CatItem[]>("/catalogos/escalas", { token }),
       ]);
       setRows(pre);
+      setRecusadas(rec);
       setClientes(cli);
       setCargos(car);
       setBeneficiosCat(ben);
@@ -268,6 +291,53 @@ export default function LiberacaoPage() {
     }
   }
 
+  // Recusa (Parte 2, só Master/Super Admin): a partir do modal de liberação. Farol → recusada, sai da fila.
+  async function recusar() {
+    if (!alvo) return;
+    setAcaoRecusa(true);
+    setModalErro(null);
+    setError(null);
+    setOkMsg(null);
+    try {
+      await apiFetch(`/admissoes/${encodeURIComponent(alvo.admissaoId)}/recusar`, {
+        method: "PATCH",
+        token,
+      });
+      setOkMsg(`${alvo.candidatoNome} recusado. Movido para "Admissões Recusadas".`);
+      setAlvo(null);
+      await load();
+    } catch (e) {
+      setModalErro(e instanceof Error ? e.message : "Erro ao recusar");
+    } finally {
+      setAcaoRecusa(false);
+    }
+  }
+
+  // Reativa uma recusada (só Master/Super Admin): volta para a fila de aguardando.
+  async function reativarRecusada() {
+    if (!recusadaAlvo) return;
+    setAcaoRecusa(true);
+    setError(null);
+    setOkMsg(null);
+    try {
+      await apiFetch(
+        `/admissoes/${encodeURIComponent(recusadaAlvo.admissaoId)}/reativar-recusada`,
+        {
+          method: "PATCH",
+          token,
+        },
+      );
+      setOkMsg(`${recusadaAlvo.candidatoNome} reativado. Voltou para "Aguardando".`);
+      setRecusadaAlvo(null);
+      setAba("aguardando");
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Erro ao reativar");
+    } finally {
+      setAcaoRecusa(false);
+    }
+  }
+
   const podeLiberar = Boolean(codCliente && cargoId);
 
   // Campos da régua unificada §A.19 ainda vazios (hint visual; a fonte autoritativa é o backend, que
@@ -304,80 +374,160 @@ export default function LiberacaoPage() {
         </p>
       )}
 
-      <GlassCard className="overflow-hidden p-2">
-        <div className="ea-scroll overflow-x-auto">
-          <table className="ds-table min-w-[900px]">
-            <thead>
-              <tr>
-                <th>Candidato</th>
-                <th className="w-[150px]">CPF</th>
-                <th className="w-[130px]">Telefone</th>
-                <th className="w-[120px]">Nascimento</th>
-                <th className="w-[100px]">Sexo</th>
-                <th className="w-[110px]">Chegada</th>
-                <th className="w-[100px]">Parado (dias)</th>
-                <th className="w-[110px]">Parado (horas)</th>
-                <th className="w-[120px]">Ação</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
+      {/* Toggle Aguardando (padrão) × Admissões Recusadas. */}
+      <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
+        {(["aguardando", "recusadas"] as Aba[]).map((a) => (
+          <button
+            key={a}
+            type="button"
+            onClick={() => setAba(a)}
+            className={cn(
+              "rounded-full border px-3 py-1 transition",
+              aba === a
+                ? "border-accent bg-[var(--surface-2)] text-accent"
+                : "border-[var(--border)] text-dim hover:text-text",
+            )}
+          >
+            {a === "aguardando"
+              ? `Aguardando (${rows.length})`
+              : `Admissões Recusadas (${recusadas.length})`}
+          </button>
+        ))}
+      </div>
+
+      {aba === "aguardando" ? (
+        <GlassCard className="overflow-hidden p-2">
+          <div className="ea-scroll overflow-x-auto">
+            <table className="ds-table min-w-[900px]">
+              <thead>
                 <tr>
-                  <td colSpan={9} className="py-8 text-center text-faint">
-                    Carregando…
-                  </td>
+                  <th>Candidato</th>
+                  <th className="w-[150px]">CPF</th>
+                  <th className="w-[130px]">Telefone</th>
+                  <th className="w-[120px]">Nascimento</th>
+                  <th className="w-[100px]">Sexo</th>
+                  <th className="w-[110px]">Chegada</th>
+                  <th className="w-[100px]">Parado (dias)</th>
+                  <th className="w-[110px]">Parado (horas)</th>
+                  <th className="w-[120px]">Ação</th>
                 </tr>
-              ) : rows.length === 0 ? (
-                <tr>
-                  <td colSpan={9} className="py-8 text-center text-faint">
-                    Nenhuma pré-admissão aguardando liberação.
-                  </td>
-                </tr>
-              ) : (
-                rows.map((r) => (
-                  <tr key={r.admissaoId}>
-                    <td className="font-semibold">
-                      <span className="inline-flex items-center gap-2">
-                        {r.candidatoNome}
-                        {r.possivelDuplicata && (
-                          <span
-                            className="inline-flex items-center rounded-full border border-[rgba(234,88,12,0.35)] bg-[rgba(234,88,12,0.12)] px-2 py-0.5 text-[11px] font-semibold text-warn-2"
-                            title="Já existe admissão viva deste CPF sem vaga comparável. Confirme se não é duplicata antes de liberar."
-                          >
-                            Possível duplicata
-                          </span>
-                        )}
-                      </span>
-                    </td>
-                    <td className="whitespace-nowrap font-mono text-[12.5px]">
-                      {fmtCpf(r.candidatoCpf)}
-                    </td>
-                    <td className="whitespace-nowrap text-[12.5px]">
-                      {r.telefone ?? "não informado"}
-                    </td>
-                    <td className="whitespace-nowrap text-[12.5px]">{fmtData(r.dataNascimento)}</td>
-                    <td className="text-[12.5px]">
-                      {r.sexo ? (ROTULO_SEXO[r.sexo] ?? r.sexo) : "não informado"}
-                    </td>
-                    <td className="whitespace-nowrap text-[12.5px]">{fmtData(r.criadoEm)}</td>
-                    <td className="whitespace-nowrap text-[12.5px]">
-                      {paradoDias(r.criadoEm, nowMs)}
-                    </td>
-                    <td className="whitespace-nowrap text-[12.5px]">
-                      {paradoHoras(r.criadoEm, nowMs)}
-                    </td>
-                    <td>
-                      <Button onClick={() => abrirModal(r)} className="w-full py-2">
-                        Liberar
-                      </Button>
+              </thead>
+              <tbody>
+                {loading ? (
+                  <tr>
+                    <td colSpan={9} className="py-8 text-center text-faint">
+                      Carregando…
                     </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </GlassCard>
+                ) : rows.length === 0 ? (
+                  <tr>
+                    <td colSpan={9} className="py-8 text-center text-faint">
+                      Nenhuma pré-admissão aguardando liberação.
+                    </td>
+                  </tr>
+                ) : (
+                  rows.map((r) => (
+                    <tr key={r.admissaoId}>
+                      <td className="font-semibold">
+                        <span className="inline-flex items-center gap-2">
+                          {r.candidatoNome}
+                          {r.possivelDuplicata && (
+                            <span
+                              className="inline-flex items-center rounded-full border border-[rgba(234,88,12,0.35)] bg-[rgba(234,88,12,0.12)] px-2 py-0.5 text-[11px] font-semibold text-warn-2"
+                              title="Já existe admissão viva deste CPF sem vaga comparável. Confirme se não é duplicata antes de liberar."
+                            >
+                              Possível duplicata
+                            </span>
+                          )}
+                        </span>
+                      </td>
+                      <td className="whitespace-nowrap font-mono text-[12.5px]">
+                        {fmtCpf(r.candidatoCpf)}
+                      </td>
+                      <td className="whitespace-nowrap text-[12.5px]">
+                        {r.telefone ?? "não informado"}
+                      </td>
+                      <td className="whitespace-nowrap text-[12.5px]">
+                        {fmtData(r.dataNascimento)}
+                      </td>
+                      <td className="text-[12.5px]">
+                        {r.sexo ? (ROTULO_SEXO[r.sexo] ?? r.sexo) : "não informado"}
+                      </td>
+                      <td className="whitespace-nowrap text-[12.5px]">{fmtData(r.criadoEm)}</td>
+                      <td className="whitespace-nowrap text-[12.5px]">
+                        {paradoDias(r.criadoEm, nowMs)}
+                      </td>
+                      <td className="whitespace-nowrap text-[12.5px]">
+                        {paradoHoras(r.criadoEm, nowMs)}
+                      </td>
+                      <td>
+                        <Button onClick={() => abrirModal(r)} className="w-full py-2">
+                          Liberar
+                        </Button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </GlassCard>
+      ) : (
+        <GlassCard className="overflow-hidden p-2">
+          <div className="ea-scroll overflow-x-auto">
+            <table className="ds-table min-w-[820px]">
+              <thead>
+                <tr>
+                  <th>Candidato</th>
+                  <th className="w-[150px]">CPF</th>
+                  <th className="w-[130px]">Telefone</th>
+                  <th className="w-[180px]">Recusado por</th>
+                  <th className="w-[120px]">Recusado em</th>
+                  <th className="w-[120px]">Ação</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading ? (
+                  <tr>
+                    <td colSpan={6} className="py-8 text-center text-faint">
+                      Carregando…
+                    </td>
+                  </tr>
+                ) : recusadas.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="py-8 text-center text-faint">
+                      Nenhuma admissão recusada.
+                    </td>
+                  </tr>
+                ) : (
+                  recusadas.map((r) => (
+                    <tr key={r.admissaoId}>
+                      <td className="font-semibold">{r.candidatoNome}</td>
+                      <td className="whitespace-nowrap font-mono text-[12.5px]">
+                        {fmtCpf(r.candidatoCpf)}
+                      </td>
+                      <td className="whitespace-nowrap text-[12.5px]">
+                        {r.telefone ?? "não informado"}
+                      </td>
+                      <td className="text-[12.5px]">{r.recusadoPor ?? "não informado"}</td>
+                      <td className="whitespace-nowrap text-[12.5px]">{fmtData(r.recusadoEm)}</td>
+                      <td>
+                        <Button
+                          variant="secondary"
+                          onClick={() => setRecusadaAlvo(r)}
+                          className="w-full py-2"
+                        >
+                          Ver
+                        </Button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </GlassCard>
+      )}
 
       {alvo && (
         <Modal onClose={fecharModal} ariaLabel="Liberar admissão" className="max-w-[560px] p-6">
@@ -526,12 +676,67 @@ export default function LiberacaoPage() {
             </p>
           )}
 
-          <div className="mt-6 flex justify-end gap-3">
-            <Button variant="secondary" onClick={fecharModal} disabled={liberando}>
-              Cancelar
+          <div className="mt-6 flex items-center justify-between gap-3">
+            {/* Recusar: visível a todos, ATIVO só para Master/Super Admin (o backend também barra por
+                @Roles). Consultor comum vê desabilitado. */}
+            <Button
+              variant="secondary"
+              onClick={() => void recusar()}
+              disabled={!isAdmin || liberando || acaoRecusa}
+              title={isAdmin ? undefined : "Só Master ou Super Admin pode recusar."}
+              className="!border-[rgba(214,69,69,0.4)] !text-danger"
+            >
+              {acaoRecusa ? "Recusando…" : "Recusar"}
             </Button>
-            <Button onClick={() => void liberar()} disabled={!podeLiberar || liberando}>
-              {liberando ? "Liberando…" : "Liberar"}
+            <div className="flex gap-3">
+              <Button variant="secondary" onClick={fecharModal} disabled={liberando || acaoRecusa}>
+                Cancelar
+              </Button>
+              <Button
+                onClick={() => void liberar()}
+                disabled={!podeLiberar || liberando || acaoRecusa}
+              >
+                {liberando ? "Liberando…" : "Liberar"}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Modal de detalhe da recusada: histórico (quem/quando) + reativar (só Master/Super Admin). */}
+      {recusadaAlvo && (
+        <Modal
+          onClose={() => !acaoRecusa && setRecusadaAlvo(null)}
+          ariaLabel="Admissão recusada"
+          className="max-w-[460px] p-6"
+        >
+          <div className="mb-5">
+            <div className="eyebrow !mb-1">Admissão recusada</div>
+            <h2 className="font-display text-xl font-bold">{recusadaAlvo.candidatoNome}</h2>
+            <p className="mt-0.5 font-mono text-[13px] text-dim">
+              {fmtCpf(recusadaAlvo.candidatoCpf)}
+            </p>
+          </div>
+          <div className="grid gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3 text-[13px]">
+            <div className="flex justify-between gap-3">
+              <span className="text-dim">Recusado por</span>
+              <span className="font-semibold">{recusadaAlvo.recusadoPor ?? "não informado"}</span>
+            </div>
+            <div className="flex justify-between gap-3">
+              <span className="text-dim">Recusado em</span>
+              <span className="font-semibold">{fmtData(recusadaAlvo.recusadoEm)}</span>
+            </div>
+          </div>
+          <div className="mt-6 flex justify-end gap-3">
+            <Button variant="secondary" onClick={() => setRecusadaAlvo(null)} disabled={acaoRecusa}>
+              Fechar
+            </Button>
+            <Button
+              onClick={() => void reativarRecusada()}
+              disabled={!isAdmin || acaoRecusa}
+              title={isAdmin ? undefined : "Só Master ou Super Admin pode reativar."}
+            >
+              {acaoRecusa ? "Reativando…" : "Reativar"}
             </Button>
           </div>
         </Modal>

@@ -27,6 +27,7 @@ import {
   integracaoPandape,
   motivosDeclinio,
   reguaDocumental,
+  usuarios,
 } from "../db/schema";
 import {
   calcSinalizadorPreenchimento,
@@ -650,6 +651,94 @@ export class AdmissoesService {
   }
 
   /**
+   * Liberação Admissional — Parte 2. RECUSA uma pré-admissão (só Master/Super Admin, gate no
+   * controller). Farol → LIBERACAO_RECUSADA (terminal), grava quem+quando (SEM motivo, decisão do
+   * diretor) e registra na trilha permanente (candidato_alteracoes_log, mesmo padrão do declínio).
+   * A admissão sai da fila de aguardando; não vaza em fila/KPI (farol excluído).
+   */
+  async recusarLiberacao(admissaoId: string, user: AuthUser): Promise<void> {
+    const adm = await this.db.query.admissoes.findFirst({ where: eq(admissoes.id, admissaoId) });
+    if (!adm) throw new NotFoundException("Admissão não encontrada");
+    if (adm.farolGlobal !== "AGUARDANDO_LIBERACAO") {
+      throw new ConflictException(
+        "Só é possível recusar uma admissão que está aguardando liberação.",
+      );
+    }
+    const agora = new Date();
+    await this.db.transaction(async (tx) => {
+      await tx
+        .update(admissoes)
+        .set({
+          farolGlobal: "LIBERACAO_RECUSADA",
+          recusadoPorId: user.id,
+          recusadoEm: agora,
+          atualizadoEm: agora,
+        })
+        .where(eq(admissoes.id, admissaoId));
+      await tx.insert(candidatoAlteracoesLog).values({
+        admissaoId,
+        campo: "farolGlobal",
+        valorAnterior: "AGUARDANDO_LIBERACAO",
+        valorNovo: "LIBERACAO_RECUSADA",
+        autorId: user.id,
+      });
+    });
+  }
+
+  /**
+   * Liberação Admissional — Parte 2. REATIVA uma recusada (só Master/Super Admin): farol volta a
+   * AGUARDANDO_LIBERACAO, limpa quem/quando da recusa e registra a reativação na trilha. A admissão
+   * volta para a fila de aguardando.
+   */
+  async reativarRecusada(admissaoId: string, user: AuthUser): Promise<void> {
+    const adm = await this.db.query.admissoes.findFirst({ where: eq(admissoes.id, admissaoId) });
+    if (!adm) throw new NotFoundException("Admissão não encontrada");
+    if (adm.farolGlobal !== "LIBERACAO_RECUSADA") {
+      throw new ConflictException("Esta admissão não está recusada.");
+    }
+    await this.db.transaction(async (tx) => {
+      await tx
+        .update(admissoes)
+        .set({
+          farolGlobal: "AGUARDANDO_LIBERACAO",
+          recusadoPorId: null,
+          recusadoEm: null,
+          atualizadoEm: new Date(),
+        })
+        .where(eq(admissoes.id, admissaoId));
+      await tx.insert(candidatoAlteracoesLog).values({
+        admissaoId,
+        campo: "farolGlobal",
+        valorAnterior: "LIBERACAO_RECUSADA",
+        valorNovo: "AGUARDANDO_LIBERACAO",
+        autorId: user.id,
+      });
+    });
+  }
+
+  /** Fila das RECUSADAS (visão "Admissões Recusadas"). Mostra quem recusou + quando (autor + data). */
+  async listarRecusadas() {
+    return this.db
+      .select({
+        admissaoId: admissoes.id,
+        candidatoNome: candidatos.nome,
+        candidatoCpf: candidatos.cpf,
+        telefone: candidatos.telefone,
+        dataNascimento: candidatos.dataNascimento,
+        sexo: candidatos.sexo,
+        origem: admissoes.origem,
+        criadoEm: admissoes.criadoEm,
+        recusadoEm: admissoes.recusadoEm,
+        recusadoPor: usuarios.nome,
+      })
+      .from(admissoes)
+      .innerJoin(candidatos, eq(admissoes.candidatoCpf, candidatos.cpf))
+      .leftJoin(usuarios, eq(admissoes.recusadoPorId, usuarios.id))
+      .where(eq(admissoes.farolGlobal, "LIBERACAO_RECUSADA"))
+      .orderBy(desc(admissoes.recusadoEm));
+  }
+
+  /**
    * F10/F7 — Gerenciador: lista paginada de TODAS as admissões com filtros acumulativos + busca
    * global (nome/CPF) + KPIs (total/ativos/concluídos/declinados). "Concluído" = a frente
    * CADASTRO_CONTRATO da admissão está concluída (processo finalizado). Os KPIs aplicam os filtros
@@ -698,7 +787,7 @@ export class AdmissoesService {
     // MAS quem declinou/rescindiu NUNCA conta como pendência em nenhum card (regra permanente de
     // importação, §A.3/Regra 2): pendência é de quem está no processo; o declínio saiu. Fica só como
     // histórico. Mesma exclusão por farol que a Esteira aplica nas filas operacionais.
-    const comPendenciaExpr = sql<boolean>`(${admissoes.sinalizadorPreenchimento} <> 'OK' AND ${admissoes.farolGlobal} NOT IN ('DECLINOU', 'RESCISAO', 'AGUARDANDO_LIBERACAO'))`;
+    const comPendenciaExpr = sql<boolean>`(${admissoes.sinalizadorPreenchimento} <> 'OK' AND ${admissoes.farolGlobal} NOT IN ('DECLINOU', 'RESCISAO', 'AGUARDANDO_LIBERACAO', 'LIBERACAO_RECUSADA'))`;
 
     // "Em andamento" = admissão EM ABERTO no geral: nem concluída nem declínio/rescisão. São os faróis
     // de processo vivo (EM_ADMISSAO, BANCO_AGUARDAR). Numa base histórica dá ~0; o card fica pronto para

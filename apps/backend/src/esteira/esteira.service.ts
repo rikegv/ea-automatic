@@ -126,9 +126,14 @@ export class EsteiraService {
     // importados E futuros/vivos.
     const clientePeriodo = [
       eq(frentesAdmissao.tipo, tipo),
-      // AGUARDANDO_LIBERACAO junto de DECLINOU/RESCISAO: a pré-admissão do Pandapé não entra em fila
-      // nem KPI da Esteira (ela nem tem frentes ainda; a exclusão é o cinto reforçado).
-      notInArray(admissoes.farolGlobal, ["DECLINOU", "RESCISAO", "AGUARDANDO_LIBERACAO"]),
+      // AGUARDANDO_LIBERACAO e LIBERACAO_RECUSADA junto de DECLINOU/RESCISAO: pré-admissão e recusada
+      // não entram em fila nem KPI da Esteira (nem têm frentes; a exclusão é o cinto reforçado).
+      notInArray(admissoes.farolGlobal, [
+        "DECLINOU",
+        "RESCISAO",
+        "AGUARDANDO_LIBERACAO",
+        "LIBERACAO_RECUSADA",
+      ]),
     ];
     if (filtros.codCliente?.length) {
       clientePeriodo.push(inArray(admissoes.codCliente, filtros.codCliente));

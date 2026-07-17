@@ -14,6 +14,8 @@ export const FAROL_TONE: Record<FarolGlobal, PillTone> = {
   RESCISAO: "or",
   // Pré-admissão aguardando liberação: neutro (é uma sala de espera, não um estado do processo vivo).
   AGUARDANDO_LIBERACAO: "nt",
+  // Liberação recusada: vermelho (encerrada por recusa, como o declínio).
+  LIBERACAO_RECUSADA: "dg",
 };
 
 /** {tone,label} de um farol (aceita string crua do backend; cai em neutro se desconhecido). */
@@ -31,7 +33,7 @@ export function farolPill(codigo: string): { tone: PillTone; label: string } {
  * arrancaria a admissão da esteira. A liberação é feita na tela de Liberação Admissional, não aqui.
  */
 export const FAROL_SELECT_OPTIONS = FAROL_GLOBAL.filter(
-  (value) => value !== "AGUARDANDO_LIBERACAO",
+  (value) => value !== "AGUARDANDO_LIBERACAO" && value !== "LIBERACAO_RECUSADA",
 ).map((value) => ({
   value,
   label: FAROL_GLOBAL_LABEL[value],

@@ -137,6 +137,8 @@ const FAROL_MANUAL: ReadonlySet<FarolGlobal> = new Set<FarolGlobal>([
   // Pré-admissão (Liberação Admissional): sem isto, qualquer recompute (editar/frente/auditoria)
   // derivaria EM_ADMISSAO e ARRANCARIA a admissão da sala de espera antes de ter cliente/cargo.
   "AGUARDANDO_LIBERACAO",
+  // Recusa da liberação (Parte 2): terminal e manual, a automação não a sobrescreve.
+  "LIBERACAO_RECUSADA",
 ]);
 
 /** Entrada da derivação automática do farol global. */

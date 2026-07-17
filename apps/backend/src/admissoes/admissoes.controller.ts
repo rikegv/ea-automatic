@@ -76,6 +76,12 @@ export class AdmissoesController {
     return this.admissoes.listarAguardandoLiberacao();
   }
 
+  /** Liberação Admissional — fila das RECUSADAS (Parte 2). Antes de @Get(":id"). */
+  @Get("recusadas")
+  recusadas() {
+    return this.admissoes.listarRecusadas();
+  }
+
   /** F10 — campos editáveis (prefill do formulário de edição). */
   @Get(":id")
   obter(@Param("id") id: string) {
@@ -97,6 +103,20 @@ export class AdmissoesController {
   @Patch(":id/liberar")
   liberar(@Param("id") id: string, @Body() dto: LiberarAdmissaoDto, @CurrentUser() user: AuthUser) {
     return this.admissoes.liberar(id, dto, user);
+  }
+
+  /** Liberação Admissional Parte 2 — RECUSA (destrutivo-ish/manual): só Master/Super Admin. */
+  @Patch(":id/recusar")
+  @Roles("MASTER", "SUPER_ADMIN")
+  recusar(@Param("id") id: string, @CurrentUser() user: AuthUser) {
+    return this.admissoes.recusarLiberacao(id, user);
+  }
+
+  /** Liberação Admissional Parte 2 — REATIVA uma recusada (volta à fila): só Master/Super Admin. */
+  @Patch(":id/reativar-recusada")
+  @Roles("MASTER", "SUPER_ADMIN")
+  reativarRecusada(@Param("id") id: string, @CurrentUser() user: AuthUser) {
+    return this.admissoes.reativarRecusada(id, user);
   }
 
   /** F10 — deleta a admissão (ação destrutiva): só Master/Super Admin. */

@@ -1992,3 +1992,34 @@ Reuso confirmado (nada recriado): `Select`, `MultiSelect`, `Modal`, `lib/benefic
 (`precisaValorBeneficio`), catálogos `/catalogos/beneficios` e `/catalogos/escalas`, memória
 `/admissoes/padrao-cliente-cargo`, `validarValoresDoPacote`. Faltam **Parte 2 (recusa)** e **Parte 3
 (indicador/ping)** antes do Pandapé ao painel. Webhook segue SEM cadastro no painel.
+
+---
+
+## 2026-07-17 (noite, 8) — Item 4 commitado + tag Via Pandapé + Recusa (Parte 2)
+
+- **Item 4 COMMITADO e no remoto: `a063ff5`** (modal de liberação espelhando pendenciasObrigatorias +
+  fix do nome no sinalizador e da normalização do salário). Gate verde, add nominal, pré-admissão de
+  teste limpa.
+
+**Abaixo, NÃO commitado ainda** (aguarda validação do diretor na tela):
+
+- **Tag "Via Pandapé" REMOVIDA** da coluna Candidato na Esteira e no Gerenciador (só o nome, §A.12).
+  O `OrigemBadge` segue no detalhe (olho/lápis); o dado `origem` no backend intocado. Imports órfãos
+  removidos.
+- **Recusa (Parte 2):**
+  - Migration 0030: farol `LIBERACAO_RECUSADA` (terminal, reversível) + colunas `recusado_por_id`/
+    `recusado_em` (quem+quando, SEM motivo, decisão do diretor). Trilha permanente no
+    `candidato_alteracoes_log` (mesmo padrão do declínio). Farol em FAROL_MANUAL + nas exclusões
+    esteira/gerenciador (não vaza em fila/KPI). Fora do FAROL_SELECT_OPTIONS.
+  - Backend: `recusarLiberacao`/`reativarRecusada`/`listarRecusadas`; rotas
+    `PATCH /admissoes/:id/recusar` e `/reativar-recusada` com **@Roles("MASTER","SUPER_ADMIN")**
+    (mesma trava do delete). Recusa exige AGUARDANDO_LIBERACAO; reativar exige LIBERACAO_RECUSADA.
+  - Tela: toggle Aguardando × Admissões Recusadas; botão Recusar no modal (desabilitado p/ comum,
+    ativo Master/SA); visão de recusadas com quem/quando; modal de detalhe com Reativar (idem papel).
+  - **Validado ao vivo:** recusar (SA) → farol recusado + quem/quando + 1 evento na trilha, sai da
+    fila, aparece em recusadas; Gerenciador segue 2158 (não vaza); reativar → volta a AGUARDANDO +
+    limpa colunas + 1 evento na trilha. RBAC pelas @Roles (comum tem o botão desabilitado; backend
+    barra por papel, como o delete). Gate: 256 testes, typecheck/eslint verdes.
+
+Pré-admissão de teste deixada em AGUARDANDO para o diretor validar o fluxo de recusa/reativar na tela.
+Falta só a **Parte 3 (indicador/ping)** antes do Pandapé ao painel. Webhook segue SEM cadastro.

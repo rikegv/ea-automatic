@@ -9,7 +9,6 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import { Pill, type PillTone } from "@/components/ui/Pill";
 import { StatusPill } from "@/components/ui/StatusPill";
 import { PendenciasBadge } from "@/components/ui/PendenciasBadge";
-import { OrigemBadge } from "@/components/ui/OrigemBadge";
 import { Icon } from "@/components/ui/Icon";
 import { GoogleDriveLogo } from "@/components/ui/GoogleDriveLogo";
 import { ExcelLogo } from "@/components/ui/ExcelLogo";
@@ -1012,15 +1011,12 @@ export default function EsteiraPage() {
                       >
                         {item.tipoContrato || "não informado"}
                       </div>
-                      {/* Coluna Candidato: só o nome (à ESQUERDA) + badge de origem. Sem sub-linha de
-                          data (removida, OST ajustes: não foi pedida). */}
+                      {/* Coluna Candidato: SÓ o nome (§A.12). A origem Pandapé fica no detalhe (olho),
+                          não colada ao nome na tabela. */}
                       <div className="min-w-0 text-left">
-                        <div className="flex min-w-0 items-center justify-start gap-1.5">
-                          <span className="nm truncate" title={item.candidatoNome}>
-                            {item.candidatoNome}
-                          </span>
-                          <OrigemBadge origem={item.origem} className="flex-none" />
-                        </div>
+                        <span className="nm truncate" title={item.candidatoNome}>
+                          {item.candidatoNome}
+                        </span>
                       </div>
                       {/* Cliente: só o nome da operação (§A.12); o código vai no modal do olho. */}
                       <div className="min-w-0 text-center">

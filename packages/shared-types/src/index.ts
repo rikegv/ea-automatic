@@ -48,6 +48,9 @@ export const FAROL_GLOBAL = [
   // Pré-admissão do Pandapé aguardando cliente/cargo (Liberação Admissional). Estado manual: a
   // automação do farol NÃO o sobrescreve até a liberação atribuir cliente/cargo.
   "AGUARDANDO_LIBERACAO",
+  // Pré-admissão RECUSADA na Liberação (Parte 2, só Master/Super Admin). Terminal: fora de fila/KPI,
+  // como o declínio. Reversível (reativar → volta a AGUARDANDO_LIBERACAO).
+  "LIBERACAO_RECUSADA",
 ] as const;
 export type FarolGlobal = (typeof FAROL_GLOBAL)[number];
 
@@ -59,6 +62,7 @@ export const FAROL_GLOBAL_LABEL: Record<FarolGlobal, string> = {
   DECLINOU: "Declinou",
   RESCISAO: "Rescisão",
   AGUARDANDO_LIBERACAO: "Aguardando Liberação",
+  LIBERACAO_RECUSADA: "Liberação Recusada",
 };
 
 // ── Origem da admissão (Fase 5 / INT-1) ────────────────────────────────────

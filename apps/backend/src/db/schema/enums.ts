@@ -16,6 +16,9 @@ export const farolGlobalEnum = pgEnum("farol_global", [
   // cliente/cargo (de/para manual). Fica na sala de espera até o consultor atribuir e liberar; não
   // vaza em fila/KPI da esteira nem do Gerenciador (excluída junto de DECLINOU/RESCISAO).
   "AGUARDANDO_LIBERACAO",
+  // Pré-admissão RECUSADA na Liberação (Parte 2): terminal, fora de fila/KPI (como o declínio).
+  // Reversível pela reativação (volta a AGUARDANDO_LIBERACAO).
+  "LIBERACAO_RECUSADA",
 ]);
 
 /** Frentes paralelas e independentes (§A.3 / F12). */

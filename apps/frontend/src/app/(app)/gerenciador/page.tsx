@@ -10,7 +10,6 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import { type PillTone } from "@/components/ui/Pill";
 import { StatusPill } from "@/components/ui/StatusPill";
 import { PendenciasBadge } from "@/components/ui/PendenciasBadge";
-import { OrigemBadge } from "@/components/ui/OrigemBadge";
 import { Icon, type IconName } from "@/components/ui/Icon";
 import { FiltroTrigger, FiltroCampo } from "@/components/ui/FiltroTrigger";
 import { MultiSelect } from "@/components/ui/MultiSelect";
@@ -533,14 +532,10 @@ export default function GerenciadorPage() {
                       {/* Ajuste 1: nome do candidato alinhado à ESQUERDA (só o conteúdo; o título da
                         coluna segue centralizado). Ajuste 2: title = tooltip com o texto completo. */}
                       <div className="min-w-0 text-left">
+                        {/* SÓ o nome (§A.12). A origem Pandapé fica no detalhe (lápis), não na coluna. */}
                         <div className="nm truncate" title={r.candidatoNome}>
                           {r.candidatoNome}
                         </div>
-                        {r.origem === "PANDAPE" && (
-                          <div className="mt-1 flex flex-wrap items-center justify-start gap-1.5">
-                            <OrigemBadge origem={r.origem} />
-                          </div>
-                        )}
                       </div>
                       {/* Cliente: só o nome da operação (§A.12); o código vai no modal do olho. */}
                       <div className="min-w-0 text-center">

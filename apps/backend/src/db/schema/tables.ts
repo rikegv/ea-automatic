@@ -310,6 +310,11 @@ export const admissoes = pgTable(
     // permitem decidir com segurança se é a mesma pessoa/processo (ex.: já há admissão viva do CPF sem
     // idVacancy comparável). NÃO bloqueia — só sinaliza na tela de Liberação para o consultor decidir.
     possivelDuplicata: boolean("possivel_duplicata").notNull().default(false),
+    // Recusa da liberação (Parte 2): quem recusou + quando (SEM motivo, decisão do diretor). Estado
+    // atual da recusa, para a tela ler numa linha só; a trilha permanente vive no
+    // candidato_alteracoes_log. Limpos ao reativar. Nulos fora do farol LIBERACAO_RECUSADA.
+    recusadoPorId: uuid("recusado_por_id").references(() => usuarios.id),
+    recusadoEm: timestamp("recusado_em", { withTimezone: true }),
     criadoEm,
     atualizadoEm,
   },
