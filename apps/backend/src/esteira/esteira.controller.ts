@@ -43,8 +43,13 @@ export class EsteiraController {
    * encerrando a admissão em todas as frentes (§A.16). Operacional (COMUM), como o resto da esteira.
    */
   @Patch("admissao/:admissaoId/declinar")
-  declinar(@Param("admissaoId") admissaoId: string, @Body() dto: DeclinarDto) {
-    return this.esteira.declinarAdmissao(admissaoId, dto.motivoDeclinioId);
+  declinar(
+    @Param("admissaoId") admissaoId: string,
+    @Body() dto: DeclinarDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    // `user.id` alimenta o autor da trilha do declínio (candidato_alteracoes_log).
+    return this.esteira.declinarAdmissao(admissaoId, dto.motivoDeclinioId, user.id);
   }
 
   /** Fila de uma frente com KPIs e catálogo de status (F7/F8). */

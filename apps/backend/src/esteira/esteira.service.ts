@@ -19,7 +19,7 @@ import {
   or,
   sql,
 } from "drizzle-orm";
-import { normalizeCpf, TERMO_APTO_SEM_ASO } from "@ea/shared-types";
+import { normalizeCpf, TERMO_APTO_SEM_ASO, type Papel } from "@ea/shared-types";
 import type { AuthUser } from "../auth/auth.types";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
@@ -79,6 +79,20 @@ export interface EsteiraFiltros {
 }
 
 const DATA_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Papel por extenso para o texto da NC (registro lido por gente). Mesma grafia da tela de usuários.
+ * O detalhe da NC-2 NUNCA fixa o papel: quem libera Apto sem ASO é Master OU Super Admin, e a NC é
+ * o registro de responsabilização — dizer o papel errado seria mentir sobre quem autorizou.
+ */
+const ROTULO_PAPEL: Record<Papel, string> = {
+  COMUM: "Consultor",
+  MASTER: "Master",
+  SUPER_ADMIN: "Super Admin",
+};
+function rotuloPapel(papel: Papel): string {
+  return ROTULO_PAPEL[papel] ?? papel;
+}
 
 @Injectable()
 export class EsteiraService {
@@ -501,18 +515,17 @@ export class EsteiraService {
 
     // GATE de transição (OST modal de agendamento) — bloqueios DUROS, sem aceite/bypass. São gates de
     // transição de status, NÃO alteram a regra geral "pendências sinalizam, nunca bloqueiam" da criação.
-    // (a) AGENDADO exige os dados do exame cadastrados no modal (data preenchida).
-    if (
-      tipo === "EXAME" &&
-      novo === "AGENDADO" &&
-      !(await this.temAgendamento(frente.admissaoId))
-    ) {
-      throw new ConflictException({
-        needsConfirmation: false,
-        reason: "exameSemAgendamento",
-        message:
-          "Cadastre as informações do exame (modal de agendamento) antes de marcar como Agendado.",
-      });
+    // (a) AGENDADO exige o agendamento COMPLETO: data, horário, clínica, local e fornecedor. Antes
+    // o guard só olhava a data, então uma linha incompleta gravada fora do modal passava.
+    if (tipo === "EXAME" && novo === "AGENDADO") {
+      const faltantes = await this.camposAgendamentoFaltantes(frente.admissaoId);
+      if (faltantes.length > 0) {
+        throw new ConflictException({
+          needsConfirmation: false,
+          reason: "exameSemAgendamento",
+          message: `Cadastre as informações do exame (modal de agendamento) antes de marcar como Agendado. Falta preencher: ${faltantes.join(", ")}.`,
+        });
+      }
     }
     // (b) APTO exige ASO ANEXADO e VALIDADO PELA I.A (apto). A validação é da I.A (não flag manual):
     // `asoValidado` vem do veredito da I.A ao anexar/auditar o ASO. Controle por PAPEL:
@@ -698,10 +711,11 @@ export class EsteiraService {
             tipo: "NC2",
             consultorId: admissao?.consultorId ?? null,
             aceiteTermo: TERMO_APTO_SEM_ASO,
-            // Registro da exceção: liberado sem ASO validado pela I.A por Super Admin (autor da
-            // transição = frente.responsavelId = user.id, data = criadoEm).
-            detalhe:
-              "Exame liberado como apto SEM ASO validado pela I.A (autorização de Super Admin).",
+            // Registro da exceção: liberado sem ASO validado pela I.A (autor da transição =
+            // frente.responsavelId = user.id, data = criadoEm). O papel sai do usuário que
+            // confirmou, NUNCA fixo: quem libera é Master OU Super Admin, e a NC é registro
+            // permanente de responsabilização — tem de dizer a verdade sobre quem autorizou.
+            detalhe: `Exame liberado como apto SEM ASO validado pela I.A (autorização de ${rotuloPapel(user.papel)}).`,
             ...ncLiberacao,
           })
           .onConflictDoNothing({
@@ -760,7 +774,7 @@ export class EsteiraService {
    * A frente de Cadastro NÃO é tocada: a coluna Cadastro segue o farol (ehDeclinio) no Gerenciador.
    * Nenhuma frente fica "aberta"/"Aguardando". O §A.16 tira a admissão de todas as filas.
    */
-  async declinarAdmissao(admissaoId: string, motivoDeclinioId: string) {
+  async declinarAdmissao(admissaoId: string, motivoDeclinioId: string, autorId?: string) {
     const adm = await this.db.query.admissoes.findFirst({ where: eq(admissoes.id, admissaoId) });
     if (!adm) throw new NotFoundException("Admissão não encontrada");
     const motivo = await this.db.query.motivosDeclinio.findFirst({
@@ -768,13 +782,51 @@ export class EsteiraService {
     });
     if (!motivo) throw new BadRequestException("Motivo de declínio inválido.");
 
+    // Motivo ANTERIOR pelo NOME (não uuid): o histórico é lido por gente, mesmo critério do lápis.
+    // Lido ANTES do update, senão o valor some.
+    const motivoAnterior = adm.motivoDeclinioId
+      ? ((
+          await this.db.query.motivosDeclinio.findFirst({
+            where: eq(motivosDeclinio.id, adm.motivoDeclinioId),
+          })
+        )?.nome ?? null)
+      : null;
+
     // REGRA DE OURO (OST declínio não-destrutivo): o declínio é um MARCADOR da ADMISSÃO (farol
     // DECLINOU + motivo). NÃO toca em nenhuma frente — o exame, o prontuário, o ASO, as datas ficam
     // exatamente como estão. A exibição "Declínio" nas colunas é derivada do farol (não do dado).
-    await this.db
-      .update(admissoes)
-      .set({ farolGlobal: "DECLINOU", motivoDeclinioId, atualizadoEm: new Date() })
-      .where(eq(admissoes.id, admissaoId));
+    await this.db.transaction(async (tx) => {
+      await tx
+        .update(admissoes)
+        .set({ farolGlobal: "DECLINOU", motivoDeclinioId, atualizadoEm: new Date() })
+        .where(eq(admissoes.id, admissaoId));
+
+      // TRILHA DO EVENTO (append-only). O farol e o motivo são sobrescritos NA LINHA da admissão:
+      // sem isto, declinar → reativar → declinar de novo apaga o motivo anterior e o "quando" nunca
+      // existiu. A data do evento é o `criadoEm` da linha do log. Mesmo formato/tabela do lápis, para
+      // o histórico da pessoa ser UM só. O evento é da ADMISSÃO, não é segmentado por frente.
+      const linhas: { campo: string; valorAnterior: string | null; valorNovo: string | null }[] =
+        [];
+      if (adm.farolGlobal !== "DECLINOU") {
+        linhas.push({
+          campo: "farolGlobal",
+          valorAnterior: adm.farolGlobal,
+          valorNovo: "DECLINOU",
+        });
+      }
+      if (motivoAnterior !== motivo.nome) {
+        linhas.push({
+          campo: "motivoDeclinio",
+          valorAnterior: motivoAnterior,
+          valorNovo: motivo.nome,
+        });
+      }
+      if (linhas.length > 0) {
+        await tx
+          .insert(candidatoAlteracoesLog)
+          .values(linhas.map((l) => ({ ...l, admissaoId, autorId: autorId ?? null })));
+      }
+    });
 
     return { admissaoId, farolGlobal: "DECLINOU", motivoDeclinioId };
   }
@@ -1185,10 +1237,28 @@ export class EsteiraService {
     return { ok: true, reagendou: true, agendamento: row };
   }
 
-  /** A admissão tem agendamento de exame com data preenchida? (gate de AGENDADO). */
-  private async temAgendamento(admissaoId: string): Promise<boolean> {
+  /**
+   * Campos do agendamento que faltam para marcar AGENDADO (gate). Devolve os RÓTULOS do que falta,
+   * na ordem do modal, para a mensagem dizer exatamente o que preencher.
+   *
+   * São os MESMOS 5 campos que o `AgendamentoExameDto` já exige, e é esse o ponto: o DTO fecha o
+   * caminho da tela, este guard fecha os outros (seed, backfill, SQL). As colunas de
+   * `exame_agendamento` são nullable, então uma linha gravada fora do modal passaria com só a data.
+   *
+   * `valor` e `previsaoAso` NÃO entram: são opcionais por decisão do diretor (a previsão quem informa
+   * é a clínica, e pode não ter respondido no momento do agendamento). Exigi-los aqui travaria um
+   * exame legitimamente agendado.
+   */
+  private async camposAgendamentoFaltantes(admissaoId: string): Promise<string[]> {
     const ag = await this.obterAgendamento(admissaoId);
-    return !!ag?.data;
+    if (!ag) return ["data", "horário", "clínica", "local", "fornecedor"];
+    const faltantes: string[] = [];
+    if (!ag.data) faltantes.push("data");
+    if (!ag.horario) faltantes.push("horário");
+    if (!ag.nomeClinica) faltantes.push("clínica");
+    if (!ag.local) faltantes.push("local");
+    if (!ag.fornecedor) faltantes.push("fornecedor");
+    return faltantes;
   }
 
   /**

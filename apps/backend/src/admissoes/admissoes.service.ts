@@ -25,6 +25,7 @@ import {
   frenteStatusCatalogo,
   frentesAdmissao,
   integracaoPandape,
+  motivosDeclinio,
   reguaDocumental,
 } from "../db/schema";
 import {
@@ -561,7 +562,12 @@ export class AdmissoesService {
           eq(documentosAdmissao.tipoDocumentoId, reguaDocumental.tipoDocumentoId),
         ),
       )
-      .where(and(eq(reguaDocumental.codCliente, adm.codCliente), eq(reguaDocumental.cargoId, adm.cargoId)))
+      .where(
+        and(
+          eq(reguaDocumental.codCliente, adm.codCliente),
+          eq(reguaDocumental.cargoId, adm.cargoId),
+        ),
+      )
       .orderBy(asc(tiposDocumento.nome));
     // Pacote ESTRUTURADO (§A.17 etapa 4). O modal de edição decide o modo pelo BLOB legado, não por
     // esta lista: admissão com blob edita o blob (não migramos); sem blob, edita estruturado. Uma
@@ -655,6 +661,17 @@ export class AdmissoesService {
    * valores para a coluna do gerenciador continuar verdadeira.
    */
   /** Idem, mas aceita a transação em curso (para ler o estado recém-gravado). */
+  /** Nome do motivo de declínio (para a trilha ser legível). `null` quando não há motivo. */
+  private async nomeMotivoDeclinio(exec: Executor, id: string | null): Promise<string | null> {
+    if (!id) return null;
+    const linhas = await exec
+      .select({ nome: motivosDeclinio.nome })
+      .from(motivosDeclinio)
+      .where(eq(motivosDeclinio.id, id))
+      .limit(1);
+    return linhas[0]?.nome ?? null;
+  }
+
   private async rotularPacote(exec: Executor, admissaoId: string): Promise<string> {
     const linhas = await exec
       .select({ nome: beneficiosCatalogo.nome, valor: admissaoBeneficio.valor })
@@ -685,7 +702,8 @@ export class AdmissoesService {
       .where(and(eq(admissoes.codCliente, codCliente), eq(admissoes.cargoId, cargoId)))
       .orderBy(desc(admissoes.criadoEm))
       .limit(1);
-    if (ultima.length === 0) return { beneficios: [] as { beneficioId: string; nome: string; valor: number | null }[] };
+    if (ultima.length === 0)
+      return { beneficios: [] as { beneficioId: string; nome: string; valor: number | null }[] };
 
     const linhas = await this.db
       .select({
@@ -724,7 +742,12 @@ export class AdmissoesService {
     const nomes = await this.db
       .select({ id: beneficiosCatalogo.id, nome: beneficiosCatalogo.nome })
       .from(beneficiosCatalogo)
-      .where(inArray(beneficiosCatalogo.id, pacote.map((b) => b.beneficioId)));
+      .where(
+        inArray(
+          beneficiosCatalogo.id,
+          pacote.map((b) => b.beneficioId),
+        ),
+      );
     const porId = new Map(nomes.map((n) => [n.id, n.nome]));
     const semValor = pacote
       .filter((b) => {
@@ -733,9 +756,7 @@ export class AdmissoesService {
       })
       .map((b) => porId.get(b.beneficioId)!);
     if (semValor.length > 0) {
-      throw new BadRequestException(
-        `Informe o valor de: ${semValor.join(", ")}.`,
-      );
+      throw new BadRequestException(`Informe o valor de: ${semValor.join(", ")}.`);
     }
   }
 
@@ -932,6 +953,17 @@ export class AdmissoesService {
       registrar("matricula", adm.matricula, novaMatricula);
       if (dto.farolGlobal !== undefined) registrar("farolGlobal", adm.farolGlobal, novoFarol);
       registrar("isBanco", adm.isBanco, novoIsBanco);
+      // TRILHA DO DECLÍNIO: o motivo é sobrescrito na linha da admissão (e a reativação o LIMPA),
+      // então sem log o "por que" do declínio anterior some no próximo ciclo. Registrado pelo NOME
+      // (o histórico é lido por gente) e só quando muda: edição que não mexe no motivo não paga as
+      // consultas. Declínio = motivo entra; reativação = motivo vai a null. A data é o `criadoEm`.
+      if (novoMotivoDeclinio !== adm.motivoDeclinioId) {
+        registrar(
+          "motivoDeclinio",
+          await this.nomeMotivoDeclinio(tx, adm.motivoDeclinioId),
+          await this.nomeMotivoDeclinio(tx, novoMotivoDeclinio),
+        );
+      }
 
       const novoSalario =
         dto.vagaFolha?.salario === undefined
@@ -955,11 +987,13 @@ export class AdmissoesService {
       // Pacote estruturado DEPOIS da edição: o que veio no dto, ou o que já estava gravado.
       const temEstruturado = dto.pacoteBeneficios
         ? dto.pacoteBeneficios.length > 0
-        : (await tx
-            .select({ id: admissaoBeneficio.id })
-            .from(admissaoBeneficio)
-            .where(eq(admissaoBeneficio.admissaoId, id))
-            .limit(1)) .length > 0;
+        : (
+            await tx
+              .select({ id: admissaoBeneficio.id })
+              .from(admissaoBeneficio)
+              .where(eq(admissaoBeneficio.admissaoId, id))
+              .limit(1)
+          ).length > 0;
       const sinalizador = ehFarolVivo(novoFarol)
         ? calcSinalizadorPreenchimento({
             candidato: { nome: novoNomeCandidato, cpf: adm.candidatoCpf },
