@@ -235,6 +235,9 @@ export class AdmissoesService {
           consultorId: user?.id ?? null,
           sinalizadorPreenchimento,
           origem: opts?.origem ?? "MANUAL",
+          // idVacancy desnormalizado só quando vem do Pandapé (dedup/unique parcial). Manual = null,
+          // então o unique parcial nunca barra digitação no wizard.
+          idVacancy: opts?.pandape?.idVacancy ?? null,
         })
         .returning({ id: admissoes.id });
 
@@ -351,6 +354,7 @@ export class AdmissoesService {
   async criarPreAdmissao(
     candidato: CandidatoInputDto,
     pandape: NonNullable<CreateAdmissaoOpts["pandape"]>,
+    opts?: { possivelDuplicata?: boolean },
   ): Promise<{ admissaoId: string }> {
     const cpf = normalizeCpf(candidato.cpf);
     if (!isValidCpf(cpf)) throw new BadRequestException("CPF inválido");
@@ -386,6 +390,11 @@ export class AdmissoesService {
           farolGlobal: "AGUARDANDO_LIBERACAO",
           sinalizadorPreenchimento: "PENDENTE",
           origem: "PANDAPE",
+          // idVacancy DESNORMALIZADO: chave da dedup e do unique parcial (candidato_cpf + id_vacancy
+          // vivo). Se a corrida furar o cheque da trava, o unique parcial rejeita este insert (23505,
+          // tratado como "já existe" pelo caller).
+          idVacancy: pandape.idVacancy ?? null,
+          possivelDuplicata: opts?.possivelDuplicata ?? false,
         })
         .returning({ id: admissoes.id });
 
@@ -403,6 +412,56 @@ export class AdmissoesService {
 
       return { admissaoId: adm.id };
     });
+  }
+
+  /**
+   * DEDUP Pandapé — admissões VIVAS do CPF (não terminais). "Viva" = EM_ADMISSAO / BANCO_AGUARDAR /
+   * AGUARDANDO_LIBERACAO (§A.16: declínio/rescisão/concluída são terminais e viram processo NOVO).
+   * Devolve o `idVacancy` de cada uma para a trava decidir por (CPF + vaga). Manuais/históricas têm
+   * idVacancy nulo (nunca casam por vaga; entram no cálculo do "ambíguo").
+   */
+  async vivasPorCpf(cpf: string): Promise<{ id: string; idVacancy: string | null }[]> {
+    return this.db
+      .select({ id: admissoes.id, idVacancy: admissoes.idVacancy })
+      .from(admissoes)
+      .where(
+        and(
+          eq(admissoes.candidatoCpf, normalizeCpf(cpf)),
+          inArray(admissoes.farolGlobal, ["EM_ADMISSAO", "BANCO_AGUARDAR", "AGUARDANDO_LIBERACAO"]),
+        ),
+      );
+  }
+
+  /**
+   * DEDUP Pandapé — o novo evento é a MESMA pessoa+vaga de uma admissão viva já existente (trava B1):
+   * "adota" o evento na admissão existente (atualiza os IDs do Pandapé e a etapa) em vez de criar uma
+   * duplicata. Se a admissão existente não tiver linha de integração (não deveria, pois só Pandapé tem
+   * idVacancy), faz upsert defensivo.
+   */
+  async adotarEventoPandape(
+    admissaoId: string,
+    pandape: NonNullable<CreateAdmissaoOpts["pandape"]>,
+  ): Promise<void> {
+    const [row] = await this.db
+      .update(integracaoPandape)
+      .set({
+        idPrecollaborator: pandape.idPrecollaborator,
+        idMatch: pandape.idMatch,
+        idVacancy: pandape.idVacancy,
+        etapa: pandape.etapa,
+        atualizadoEm: new Date(),
+      })
+      .where(eq(integracaoPandape.admissaoId, admissaoId))
+      .returning({ id: integracaoPandape.id });
+    if (!row) {
+      await this.db.insert(integracaoPandape).values({
+        admissaoId,
+        idPrecollaborator: pandape.idPrecollaborator,
+        idMatch: pandape.idMatch,
+        idVacancy: pandape.idVacancy,
+        etapa: pandape.etapa,
+      });
+    }
   }
 
   /**
@@ -512,11 +571,11 @@ export class AdmissoesService {
         sexo: candidatos.sexo,
         origem: admissoes.origem,
         criadoEm: admissoes.criadoEm,
-        idVacancy: integracaoPandape.idVacancy,
+        idVacancy: admissoes.idVacancy,
+        possivelDuplicata: admissoes.possivelDuplicata,
       })
       .from(admissoes)
       .innerJoin(candidatos, eq(admissoes.candidatoCpf, candidatos.cpf))
-      .leftJoin(integracaoPandape, eq(integracaoPandape.admissaoId, admissoes.id))
       .where(eq(admissoes.farolGlobal, "AGUARDANDO_LIBERACAO"))
       .orderBy(asc(admissoes.criadoEm));
   }

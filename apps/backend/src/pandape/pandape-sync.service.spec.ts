@@ -78,6 +78,9 @@ function makeService(parts: {
   const admissoes = {
     create: vi.fn().mockResolvedValue({ admissaoId: "adm-1" }),
     criarPreAdmissao: vi.fn().mockResolvedValue({ admissaoId: "pre-1" }),
+    // Dedup (trava b): por padrão nenhum CPF tem admissão viva → cria normal, sem flag.
+    vivasPorCpf: vi.fn().mockResolvedValue([]),
+    adotarEventoPandape: vi.fn().mockResolvedValue(undefined),
     ...parts.admissoes,
   } as unknown as AdmissoesService;
   const auditoria = {
@@ -262,9 +265,8 @@ describe("PandapeSyncService — idempotência da sync (DoD §1 / regra 1 / uniq
 
     expect(admissoes.create).not.toHaveBeenCalled();
     expect(admissoes.criarPreAdmissao).toHaveBeenCalledTimes(1);
-    const [candidato, pandape] = (
-      admissoes.criarPreAdmissao as ReturnType<typeof vi.fn>
-    ).mock.calls[0];
+    const [candidato, pandape] = (admissoes.criarPreAdmissao as ReturnType<typeof vi.fn>).mock
+      .calls[0];
     expect(candidato).toMatchObject({ cpf: "52998224725" });
     expect(pandape).toMatchObject({ idPrecollaborator: "PC-1", idMatch: "M-1", idVacancy: "V-1" });
   });
@@ -574,5 +576,56 @@ describe("PandapeSyncService — CPF ligado via Match (OST Parte 1)", () => {
 
     expect(admissoes.create).not.toHaveBeenCalled();
     expect(warn.mock.calls[0][0]).toContain("Match sem CPF");
+  });
+});
+
+// ── Dedup (OST trava por idVacancy + flag possível duplicata) ────────────────────────────────────
+describe("PandapeSyncService — dedup por CPF + idVacancy (trava b)", () => {
+  function prontoParaPreAdmissao(vivas: { id: string; idVacancy: string | null }[]) {
+    const { db } = makeDb();
+    db.query.integracaoPandape.findFirst.mockResolvedValue(undefined); // idPrecollaborator novo
+    db.query.clientes.findFirst.mockResolvedValue(undefined); // de/para não resolve → pré-admissão
+    db.query.cargos.findFirst.mockResolvedValue(undefined);
+    const api = makeApi({
+      getPrecollaborator: vi.fn().mockResolvedValue(pcReal({ idVacancy: "V-1" })),
+      getVacancy: vi.fn().mockResolvedValue({ idVacancy: "V-1" }),
+      getMatch: vi.fn().mockResolvedValue({ cpf: "52998224725", idSex: 1 }),
+    });
+    return makeService({ db, api, admissoes: { vivasPorCpf: vi.fn().mockResolvedValue(vivas) } });
+  }
+
+  it("B1 — mesmo CPF + MESMA vaga viva → ADOTA a existente, NÃO cria (sem duplicata)", async () => {
+    const { svc, admissoes } = prontoParaPreAdmissao([{ id: "adm-viva", idVacancy: "V-1" }]);
+    await svc.processarCandidato("PC-9");
+    expect(admissoes.adotarEventoPandape).toHaveBeenCalledTimes(1);
+    expect((admissoes.adotarEventoPandape as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe(
+      "adm-viva",
+    );
+    expect(admissoes.criarPreAdmissao).not.toHaveBeenCalled();
+  });
+
+  it("B3 — mesmo CPF, vaga DIFERENTE viva → cria 2ª pré-admissão (legítima), sem flag", async () => {
+    const { svc, admissoes } = prontoParaPreAdmissao([{ id: "adm-outra", idVacancy: "V-99" }]);
+    await svc.processarCandidato("PC-9");
+    expect(admissoes.adotarEventoPandape).not.toHaveBeenCalled();
+    expect(admissoes.criarPreAdmissao).toHaveBeenCalledTimes(1);
+    const [, , opts] = (admissoes.criarPreAdmissao as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(opts).toMatchObject({ possivelDuplicata: false });
+  });
+
+  it("B2 — viva sem idVacancy comparável (histórico/manual) → cria COM flag possível duplicata", async () => {
+    const { svc, admissoes } = prontoParaPreAdmissao([{ id: "adm-hist", idVacancy: null }]);
+    await svc.processarCandidato("PC-9");
+    expect(admissoes.adotarEventoPandape).not.toHaveBeenCalled();
+    expect(admissoes.criarPreAdmissao).toHaveBeenCalledTimes(1);
+    const [, , opts] = (admissoes.criarPreAdmissao as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(opts).toMatchObject({ possivelDuplicata: true });
+  });
+
+  it("nenhuma viva → cria normal, sem flag", async () => {
+    const { svc, admissoes } = prontoParaPreAdmissao([]);
+    await svc.processarCandidato("PC-9");
+    const [, , opts] = (admissoes.criarPreAdmissao as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(opts).toMatchObject({ possivelDuplicata: false });
   });
 });

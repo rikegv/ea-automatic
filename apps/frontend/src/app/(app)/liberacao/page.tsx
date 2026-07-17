@@ -19,6 +19,7 @@ interface PreAdmissao {
   origem: string;
   criadoEm: string;
   idVacancy: string | null;
+  possivelDuplicata: boolean;
 }
 interface Cliente {
   codCliente: string;
@@ -213,7 +214,19 @@ export default function LiberacaoPage() {
               ) : (
                 rows.map((r) => (
                   <tr key={r.admissaoId}>
-                    <td className="font-semibold">{r.candidatoNome}</td>
+                    <td className="font-semibold">
+                      <span className="inline-flex items-center gap-2">
+                        {r.candidatoNome}
+                        {r.possivelDuplicata && (
+                          <span
+                            className="inline-flex items-center rounded-full border border-[rgba(234,88,12,0.35)] bg-[rgba(234,88,12,0.12)] px-2 py-0.5 text-[11px] font-semibold text-warn-2"
+                            title="Já existe admissão viva deste CPF sem vaga comparável. Confirme se não é duplicata antes de liberar."
+                          >
+                            Possível duplicata
+                          </span>
+                        )}
+                      </span>
+                    </td>
                     <td className="whitespace-nowrap font-mono text-[12.5px]">
                       {fmtCpf(r.candidatoCpf)}
                     </td>

@@ -215,18 +215,38 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
       etapa,
     };
 
+    // TRAVA DE DEDUP (b) — antes de criar, olha as admissões VIVAS deste CPF (a idempotência por
+    // idPrecollaborator, acima, já cobriu "mesmo evento 2x"; aqui pega mesma pessoa+vaga com id
+    // DIFERENTE, ex.: pré-colaborador reemitido, ou histórico vivo que chega pelo webhook).
+    //   B1: existe VIVA com o MESMO idVacancy → ADOTA o evento na existente, NÃO cria duplicata.
+    //   B2: há VIVA sem idVacancy comparável → cria, mas MARCA "possível duplicata" (humano decide).
+    //   B3: nenhuma VIVA (ou só de vaga diferente) → cria normal.
+    const vivas = await this.admissoes.vivasPorCpf(dados.cpf);
+    const mesmaVaga = pc.idVacancy ? vivas.find((v) => v.idVacancy === pc.idVacancy) : undefined;
+    const possivelDuplicata =
+      vivas.length > 0 && (!pc.idVacancy || vivas.some((v) => !v.idVacancy));
+
     const alvo = await this.resolverClienteCargo(pc.idVacancy);
 
     try {
+      if (mesmaVaga) {
+        // B1 — mesma pessoa + mesma vaga viva. Não duplica: adota o evento na admissão existente.
+        await this.admissoes.adotarEventoPandape(mesmaVaga.id, pandapeOpts);
+        this.logger.log(
+          `Evento Pandapé adotado em admissão viva existente (mesmo CPF+vaga) — idPreCollaborator=${pc.idPreCollaborator}, sem duplicar.`,
+        );
+        return;
+      }
+
       if (!alvo) {
         // Sem de/para vaga→cliente (manual por design, §A.9): NÃO adia mais. Cria a PRÉ-ADMISSÃO em
         // AGUARDANDO_LIBERACAO (candidato + IDs do Pandapé), SEM cliente/cargo/frentes/documentos. O
         // consultor atribui cliente+cargo na tela de Liberação Admissional e aí a admissão nasce.
         // NÃO puxa documentos: sem régua (= cliente+cargo) não há onde mapeá-los; o pull acontece
         // depois, no fluxo normal da esteira, após a liberação.
-        await this.admissoes.criarPreAdmissao(dados, pandapeOpts);
+        await this.admissoes.criarPreAdmissao(dados, pandapeOpts, { possivelDuplicata });
         this.logger.log(
-          `Pré-admissão criada (AGUARDANDO_LIBERACAO) — idPreCollaborator=${pc.idPreCollaborator}.`,
+          `Pré-admissão criada (AGUARDANDO_LIBERACAO) — idPreCollaborator=${pc.idPreCollaborator}${possivelDuplicata ? " [possível duplicata]" : ""}.`,
         );
         return;
       }

@@ -10,9 +10,11 @@ import {
   text,
   timestamp,
   unique,
+  uniqueIndex,
   uuid,
   varchar,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import {
   cartaoVtEnum,
   clicksignStatusEnum,
@@ -235,72 +237,95 @@ export const kitRegraDocumento = pgTable(
 );
 
 // ── Admissão (entidade central: Candidato + Cliente + Cargo) ────────────────
-export const admissoes = pgTable("admissoes", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  candidatoCpf: varchar("candidato_cpf", { length: 11 })
-    .notNull()
-    .references(() => candidatos.cpf),
-  // NULÁVEIS a partir da Liberação Admissional (Parte 1): a pré-admissão do Pandapé
-  // (farol AGUARDANDO_LIBERACAO) chega SEM cliente/cargo, atribuídos só na liberação. Fora desse
-  // estado seguem sempre preenchidos — os innerJoin da esteira/Gerenciador já descartam o nulo, e o
-  // farol AGUARDANDO_LIBERACAO é excluído de todas as filas/KPIs.
-  codCliente: varchar("cod_cliente", { length: 40 }).references(() => clientes.codCliente),
-  cargoId: uuid("cargo_id").references(() => cargos.id),
-  // Consultor que GEROU a admissão (Fase 2C): associado às não conformidades que ela vier a gerar
-  // (Via 1 — penaliza o consultor). Nullable: admissões anteriores à 2C não têm autor registrado.
-  consultorId: uuid("consultor_id").references(() => usuarios.id),
-  tipoContrato: varchar("tipo_contrato", { length: 60 }),
-  // Vínculo cliente↔(empresa Soulan, filial, tipo) escolhido para esta admissão (OST estrutural).
-  // NULLABLE e ON DELETE SET NULL: não obrigatório; admissões existentes e o wizard atual seguem por
-  // `tipo_contrato`. Quando preenchido, resolve a entidade/CNPJ e a pasta do Drive a partir do vínculo.
-  clienteVinculoId: uuid("cliente_vinculo_id").references(() => clienteVinculos.id, {
-    onDelete: "set null",
+export const admissoes = pgTable(
+  "admissoes",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    candidatoCpf: varchar("candidato_cpf", { length: 11 })
+      .notNull()
+      .references(() => candidatos.cpf),
+    // NULÁVEIS a partir da Liberação Admissional (Parte 1): a pré-admissão do Pandapé
+    // (farol AGUARDANDO_LIBERACAO) chega SEM cliente/cargo, atribuídos só na liberação. Fora desse
+    // estado seguem sempre preenchidos — os innerJoin da esteira/Gerenciador já descartam o nulo, e o
+    // farol AGUARDANDO_LIBERACAO é excluído de todas as filas/KPIs.
+    codCliente: varchar("cod_cliente", { length: 40 }).references(() => clientes.codCliente),
+    cargoId: uuid("cargo_id").references(() => cargos.id),
+    // Consultor que GEROU a admissão (Fase 2C): associado às não conformidades que ela vier a gerar
+    // (Via 1 — penaliza o consultor). Nullable: admissões anteriores à 2C não têm autor registrado.
+    consultorId: uuid("consultor_id").references(() => usuarios.id),
+    tipoContrato: varchar("tipo_contrato", { length: 60 }),
+    // Vínculo cliente↔(empresa Soulan, filial, tipo) escolhido para esta admissão (OST estrutural).
+    // NULLABLE e ON DELETE SET NULL: não obrigatório; admissões existentes e o wizard atual seguem por
+    // `tipo_contrato`. Quando preenchido, resolve a entidade/CNPJ e a pasta do Drive a partir do vínculo.
+    clienteVinculoId: uuid("cliente_vinculo_id").references(() => clienteVinculos.id, {
+      onDelete: "set null",
+    }),
+    matricula: varchar("matricula", { length: 60 }),
+    dataAdmissao: date("data_admissao"),
+    farolGlobal: farolGlobalEnum("farol_global").notNull().default("EM_ADMISSAO"),
+    // Admissão de "banco" (§A.3 / Fase 4 complemento): contratação aprovada que aguarda vaga/data.
+    // Quando true, a ausência de data_admissao NÃO é pendência (é esperado) e o "Termo de Banco"
+    // passa a ser a pendência obrigatória de formalização.
+    isBanco: boolean("is_banco").notNull().default(false),
+    sinalizadorPreenchimento: sinalizadorEnum("sinalizador_preenchimento")
+      .notNull()
+      .default("PENDENTE"),
+    // Status do cadastro do pacote de benefícios (§A.17 etapa 4). POR CANDIDATO, não por benefício.
+    // Toda admissão nasce PENDENTE; a tela de Benefícios (OST seguinte) é quem marca CADASTRADO.
+    // ATENÇÃO: as admissões que já existiam herdaram PENDENTE pelo default, inclusive as concluídas
+    // e as de declínio. Nenhuma tela lê este campo ainda; quem for consumi-lo precisa decidir o
+    // recorte (provavelmente só admissões vivas, como manda a §A.16).
+    statusCadastroBeneficio: statusCadastroBeneficioEnum("status_cadastro_beneficio")
+      .notNull()
+      .default("PENDENTE"),
+    // Origem da admissão (Fase 5 / INT-1): MANUAL (wizard F6) ou PANDAPE (sync). Default MANUAL —
+    // admissões anteriores e as criadas pelo wizard permanecem MANUAL sem alteração de chamada.
+    origem: origemEnum("origem").notNull().default("MANUAL"),
+    // URL da pasta do Drive criada ao fechar a régua obrigatória (Fase 4 / INT-2). É REFERÊNCIA
+    // (link da pasta do prontuário), não dado pessoal nem URL do Pandapé — pode persistir (§A.6).
+    drivePastaUrl: text("drive_pasta_url"),
+    // URL do prontuário no Drive gravada ao arquivar o ASO logo após a auditoria VALIDADO (Fase 4
+    // ajustes finais — o ASO não espera o fechamento da régua). Referência (link da pasta), não PII.
+    driveAsoUrl: text("drive_aso_url"),
+    // ASO validado pelo consultor (aba EXAME): gate de APTO exige ASO anexado E validado. Um novo
+    // upload de ASO zera este flag (precisa revalidar). Aditivo, default false (admissões existentes).
+    asoValidado: boolean("aso_validado").notNull().default(false),
+    // Assinatura na Clicksign (INT-4 / F9). `clicksignEnvelopeId` é o ID do envelope na API 3.0 —
+    // referência técnica, não PII nem URL do Pandapé (§A.6). `clicksignStatus` espelha o ciclo do
+    // envelope (SEM_ENVELOPE inicial). `contratoAssinadoDriveUrl` é o link do contrato assinado já
+    // arquivado no Drive (referência, não binário — regra 7); o original da Clicksign expira em ~5min.
+    clicksignEnvelopeId: varchar("clicksign_envelope_id", { length: 80 }),
+    clicksignStatus: clicksignStatusEnum("clicksign_status").notNull().default("SEM_ENVELOPE"),
+    contratoAssinadoDriveUrl: text("contrato_assinado_drive_url"),
+    // Motivo do declínio (Fase 2). FK NULLABLE para o catálogo `motivos_declinio`; só faz sentido
+    // quando o farol é de declínio. ON DELETE SET NULL: inativar/remover um motivo não apaga a admissão.
+    motivoDeclinioId: uuid("motivo_declinio_id").references(() => motivosDeclinio.id, {
+      onDelete: "set null",
+    }),
+    // Id da vaga do Pandapé DESNORMALIZADO na admissão (dedup, também vive em integracao_pandape).
+    // Presente só nas admissões vindas do Pandapé; nulo nas manuais e nas históricas. É a chave da
+    // trava anti-duplicata por (CPF + vaga viva) e do unique parcial abaixo.
+    idVacancy: varchar("id_vacancy", { length: 80 }),
+    // Marcador de POSSÍVEL DUPLICATA (dedup, caso ambíguo): a pré-admissão nasceu com sinais que não
+    // permitem decidir com segurança se é a mesma pessoa/processo (ex.: já há admissão viva do CPF sem
+    // idVacancy comparável). NÃO bloqueia — só sinaliza na tela de Liberação para o consultor decidir.
+    possivelDuplicata: boolean("possivel_duplicata").notNull().default(false),
+    criadoEm,
+    atualizadoEm,
+  },
+  (t) => ({
+    // Defesa em profundidade contra CORRIDA (dois webhooks do mesmo par no mesmo instante): impede, no
+    // banco, DUAS admissões VIVAS para o mesmo (candidato_cpf + id_vacancy). Parcial:
+    //  - só quando id_vacancy IS NOT NULL → NUNCA bloqueia admissão manual do wizard (sem vaga);
+    //  - só entre faróis VIVOS → uma admissão nova é permitida quando a anterior do par já é TERMINAL
+    //    (§A.16, processo novo do zero) e não barra 2 admissões da mesma pessoa em vagas diferentes.
+    uqCpfVagaViva: uniqueIndex("uq_admissao_cpf_vaga_viva")
+      .on(t.candidatoCpf, t.idVacancy)
+      .where(
+        sql`${t.idVacancy} is not null and ${t.farolGlobal} in ('EM_ADMISSAO','BANCO_AGUARDAR','AGUARDANDO_LIBERACAO')`,
+      ),
   }),
-  matricula: varchar("matricula", { length: 60 }),
-  dataAdmissao: date("data_admissao"),
-  farolGlobal: farolGlobalEnum("farol_global").notNull().default("EM_ADMISSAO"),
-  // Admissão de "banco" (§A.3 / Fase 4 complemento): contratação aprovada que aguarda vaga/data.
-  // Quando true, a ausência de data_admissao NÃO é pendência (é esperado) e o "Termo de Banco"
-  // passa a ser a pendência obrigatória de formalização.
-  isBanco: boolean("is_banco").notNull().default(false),
-  sinalizadorPreenchimento: sinalizadorEnum("sinalizador_preenchimento")
-    .notNull()
-    .default("PENDENTE"),
-  // Status do cadastro do pacote de benefícios (§A.17 etapa 4). POR CANDIDATO, não por benefício.
-  // Toda admissão nasce PENDENTE; a tela de Benefícios (OST seguinte) é quem marca CADASTRADO.
-  // ATENÇÃO: as admissões que já existiam herdaram PENDENTE pelo default, inclusive as concluídas
-  // e as de declínio. Nenhuma tela lê este campo ainda; quem for consumi-lo precisa decidir o
-  // recorte (provavelmente só admissões vivas, como manda a §A.16).
-  statusCadastroBeneficio: statusCadastroBeneficioEnum("status_cadastro_beneficio")
-    .notNull()
-    .default("PENDENTE"),
-  // Origem da admissão (Fase 5 / INT-1): MANUAL (wizard F6) ou PANDAPE (sync). Default MANUAL —
-  // admissões anteriores e as criadas pelo wizard permanecem MANUAL sem alteração de chamada.
-  origem: origemEnum("origem").notNull().default("MANUAL"),
-  // URL da pasta do Drive criada ao fechar a régua obrigatória (Fase 4 / INT-2). É REFERÊNCIA
-  // (link da pasta do prontuário), não dado pessoal nem URL do Pandapé — pode persistir (§A.6).
-  drivePastaUrl: text("drive_pasta_url"),
-  // URL do prontuário no Drive gravada ao arquivar o ASO logo após a auditoria VALIDADO (Fase 4
-  // ajustes finais — o ASO não espera o fechamento da régua). Referência (link da pasta), não PII.
-  driveAsoUrl: text("drive_aso_url"),
-  // ASO validado pelo consultor (aba EXAME): gate de APTO exige ASO anexado E validado. Um novo
-  // upload de ASO zera este flag (precisa revalidar). Aditivo, default false (admissões existentes).
-  asoValidado: boolean("aso_validado").notNull().default(false),
-  // Assinatura na Clicksign (INT-4 / F9). `clicksignEnvelopeId` é o ID do envelope na API 3.0 —
-  // referência técnica, não PII nem URL do Pandapé (§A.6). `clicksignStatus` espelha o ciclo do
-  // envelope (SEM_ENVELOPE inicial). `contratoAssinadoDriveUrl` é o link do contrato assinado já
-  // arquivado no Drive (referência, não binário — regra 7); o original da Clicksign expira em ~5min.
-  clicksignEnvelopeId: varchar("clicksign_envelope_id", { length: 80 }),
-  clicksignStatus: clicksignStatusEnum("clicksign_status").notNull().default("SEM_ENVELOPE"),
-  contratoAssinadoDriveUrl: text("contrato_assinado_drive_url"),
-  // Motivo do declínio (Fase 2). FK NULLABLE para o catálogo `motivos_declinio`; só faz sentido
-  // quando o farol é de declínio. ON DELETE SET NULL: inativar/remover um motivo não apaga a admissão.
-  motivoDeclinioId: uuid("motivo_declinio_id").references(() => motivosDeclinio.id, {
-    onDelete: "set null",
-  }),
-  criadoEm,
-  atualizadoEm,
-});
+);
 
 // ── DadosVagaFolha (anexo 1:1 da Admissão) ──────────────────────────────────
 export const dadosVagaFolha = pgTable("dados_vaga_folha", {

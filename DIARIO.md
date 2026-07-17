@@ -1873,3 +1873,65 @@ Limpar a pré-admissão de teste após a validação do diretor. §A.13: prova v
 cliente/cargo (salário, benefícios, escala, data, centro de custo, gestor/BP etc.), com a trava de
 liberação seguindo só cliente+cargo. **Campos exatos a definir com o diretor.** Webhook segue sem
 cadastro no painel.
+
+---
+
+## 2026-07-17 (noite, 4) — Dedup Pandapé (opção D híbrida): DESENHO trazido, pendente de aprovação
+
+**Desenho, NÃO implementado.** Aguarda aprovação do diretor antes de codar. Considera o novo fluxo:
+o webhook cria PRÉ-ADMISSÃO em AGUARDANDO_LIBERACAO (commit c5bb98d), não admissão na esteira.
+
+**Superfície real (medida):** 2158 admissões, só **2 VIVAS** (1 EM_ADMISSAO + 1 BANCO_AGUARDAR); 2156
+terminais. Nenhuma histórica tem `integracao_pandape`. Pela §A.16, histórico terminal que volta é
+processo NOVO, não duplicata → a duplicata cross-path só existe para CPF com admissão VIVA (2 hoje).
+
+**Camadas:**
+1. **Idempotência por idPrecollaborator (já existe, intacta):** mesmo id 2x → update/no-op, não duplica.
+2. **Trava (b) por CPF vivo (núcleo do desenho):** antes de criar, busca VIVAS do CPF (EM_ADMISSAO/
+   BANCO_AGUARDAR/AGUARDANDO_LIBERACAO). B1: existe VIVA de MESMO idVacancy → ATUALIZA, não cria.
+   B2: VIVA de vaga diferente ou sem idVacancy → cria com **flag "possível duplicata"** para o humano
+   reconciliar. B3: sem VIVA → cria. "Contexto" na chegada = **idVacancy** (o webhook tem), não
+   cliente/cargo (que ainda não existem). Preserva os 36 CPFs com N admissões (vaga diferente = nova).
+3. **Backfill (a): parte fraca, achado importante.** O `idPrecollaborator` **NÃO é backfillável** —
+   `/v2/matches` traz idMatch/CPF, não idPreCollaborator, e não há caminho CPF→idPreCollaborator. O
+   backfill só consegue gravar idMatch+idVacancy por CPF, é caro (varrer ~6928 vagas, teto 1000/5min),
+   ambíguo (CPF em N vagas) e de rendimento ~zero hoje (2 vivos, talvez nem no Pandapé). Recomendação:
+   **adiar ou escopar aos vivos**, não fazer em massa.
+
+**Constraint:** unique cego por CPF está fora (36 CPFs com N admissões). Recomendado: trava em código
+primeiro; opcional desnormalizar `idVacancy` em `admissoes` (migration pequena) para um **unique
+parcial** `(candidato_cpf, id_vacancy) WHERE farol vivo AND id_vacancy not null` que blinda corrida.
+
+**Decisões pedidas ao diretor:** (1) incluir o flag de possível duplicata (recomendo forte); (2)
+desnormalizar idVacancy (recomendo); (3) backfill — adiar vs escopar aos vivos. **Webhook segue sem
+cadastro no painel até a dedup fechar.**
+
+---
+
+## 2026-07-17 (noite, 5) — Dedup Pandapé IMPLEMENTADA (trava idVacancy + flag + unique parcial)
+
+**Código pronto e validado ao vivo, NÃO commitado** (aguarda validação do diretor). Desenho aprovado
+na entrada anterior. Backfill (a) ADIADO (idPrecollaborator não é backfillável, rendimento ~zero).
+
+- **Migration 0029**: `admissoes.id_vacancy` (idVacancy do Pandapé desnormalizado) + `possivel_duplicata`
+  (bool) + **UNIQUE PARCIAL** `uq_admissao_cpf_vaga_viva (candidato_cpf, id_vacancy) WHERE id_vacancy
+  IS NOT NULL AND farol IN (EM_ADMISSAO, BANCO_AGUARDAR, AGUARDANDO_LIBERACAO)`. Só entre vivos e só
+  com vaga → não barra wizard manual (id_vacancy nulo) nem 2ª admissão em vaga diferente / após terminal.
+- **Trava (b) no webhook** (`criarAdmissao`), depois da idempotência por idPrecollaborator:
+  `vivasPorCpf(cpf)` → B1 (mesma vaga viva) `adotarEventoPandape` (atualiza a existente, não duplica);
+  B2 (viva sem idVacancy comparável) cria com `possivelDuplicata=true`; B3 (nenhuma/vaga diferente) cria
+  normal. `create`/`criarPreAdmissao` gravam `id_vacancy` na admissão (dedup + unique). O race que fura
+  o cheque é rejeitado pelo unique parcial (23505 → tratado como "já existe" pelo `ehViolacaoUnique`).
+- **Flag na tela**: `listarAguardandoLiberacao` devolve `possivelDuplicata`; a coluna Candidato mostra
+  badge "Possível duplicata" (laranja, com tooltip). NÃO bloqueia liberação (é alerta; humano decide).
+
+**Validação ao vivo (fábrica):** unique parcial barra 2 vivas do mesmo CPF+vaga (23505), permite vaga
+diferente, permite processo novo após terminal (§A.16), NÃO barra wizard manual (id_vacancy nulo).
+B3 pela cadeia real (getMatch → cria com idVacancy=847). B1 real: 2º evento mesmo CPF+vaga → adotou
+(idPrecollaborator atualizado), contagem seguiu 1, sem duplicar. Flag chega à API (possivelDuplicata=
+true). Testes: 256 no backend (+4 dedup, com dente: B1/B2 falham sem a trava). Casos-limite dos 36 CPFs
+preservados (vaga diferente/terminal). Limpar a pré-admissão de teste após validação.
+
+**Com a dedup fechada, o Pandapé fica APTO ao painel** — mas o cadastro no painel é decisão do diretor,
+e a tela ainda não tem item 4 (pendências) / Parte 2 (recusa) / Parte 3 (indicador/ping). Webhook
+segue SEM cadastro no painel.
