@@ -5,6 +5,62 @@ feito e **por quê** (rastreabilidade para o diretor e para as próximas sessõe
 
 ---
 
+## NORMA DO DIÁRIO (permanente, ler antes de qualquer coisa)
+
+**Este arquivo é a fonte de verdade do estado do projeto, junto com o estado real no disco.** A
+memória do coordenador não é fonte: ela morre no fim da sessão e mente entre sessões.
+
+1. **Ler no início de CADA sessão.** Antes de despachar qualquer tarefa, a fábrica lê este diário e
+   se reorienta pelo **estado REAL**: `git log`/`git status`, flags em `.claude/state/`, o banco, os
+   serviços no ar. O diário diz o que foi feito e por quê; o disco diz o que existe. Divergiu entre
+   os dois, **o disco ganha e o diário é corrigido na hora**.
+2. **Registro corrido e datado, de TUDO.** Uma entrada por dia/sessão, ao final dela, **antes de
+   encerrar**. Não é "só o importante": o registro tem de ser completo o bastante para uma sessão
+   futura reconstruir o estado do projeto **só lendo isto**. Cada entrada cobre: o que entrou, o que
+   commitou (**com hash**), o que testou, o que o diretor validou, o que ficou aberto, o que travou
+   e **por quê**.
+3. **Decisão/regra/diagnóstico entra na hora.** Sempre que o diretor ou o coordenador fecha uma
+   decisão, define uma regra ou conclui um diagnóstico, grava-se **no momento**, não no fim.
+4. **Decisões fechadas não se re-litigam.** Vão para a seção abaixo. Reabrir uma delas exige o
+   diretor dizer explicitamente que mudou de ideia.
+5. **Entradas novas vão no FIM do arquivo** (ordem cronológica, mais recente por último).
+6. **§A.6 vale aqui também:** o diário nunca recebe CPF, nome de candidato, telefone, endereço nem
+   URL de documento. Contagens, estrutura e decisões, sim; dado pessoal, não.
+
+*Complementa o `TASKS.md` (backlog por fase, §A.8), que marca O QUE falta. O diário guarda o PORQUÊ.*
+
+---
+
+## DECISÕES FECHADAS (não re-litigar)
+
+> Decididas pelo diretor ou confirmadas por diagnóstico com evidência. Só o diretor reabre.
+
+- **De/para vaga→cliente é MANUAL POR DESIGN.** A API do Pandapé **não expõe** o vínculo vaga→cliente
+  (confirmado no swagger oficial e ao vivo em 17/07: `VacancyModel` não tem campo de cliente,
+  `/v2/requests` também não; existe base de clientes com CNPJ, mas nenhuma aresta até a vaga). O
+  consultor relaciona manualmente. A admissão **entrar incompleta e virar pendência obrigatória é o
+  comportamento CORRETO**; adiar sem inventar `cod_cliente` é o certo. Automação é futura, com o
+  módulo de Atração & Seleção. **Não é bug, não é escopo, não re-litigar.**
+- **CPF não é bloqueador.** Vem de **`GET /v1/Match/Get?idMatch=`** (e `/v2/matches`), não do
+  `PreCollaborator/Get`. Provado ao vivo (17/07): 20/20 candidatos reais com `cpf` preenchido, 11
+  dígitos sem pontuação; escopo `PandapeApi` já contemplado no token do EA. O `getMatch()` **já
+  existe** no código; falta só chamá-lo. A cadeia é: webhook → `IdPreCollaborator` →
+  `PreCollaborator/Get` → `IdMatch` → `Match/Get` → `cpf`.
+- **Deduplicação carga × webhook: as duas chaves são cegas entre si.** A carga deduplica por
+  (cpf + cod_cliente + cargo_id + data_admissao) e **não grava** `idPrecollaborator`; o webhook
+  deduplica **só** por `idPrecollaborator`. Não há unique em `admissoes`. **36 CPFs já têm mais de
+  uma admissão legítima** (§A.3: um candidato pode ter N admissões), então "um por CPF" não serve de
+  regra. **Fechar a dedup JUNTO com o fio do CPF, antes de cadastrar o webhook no painel do Pandapé.**
+- **Rotina de push (§A.21).** Diretor validou na tela → gate verde → `git add` **nominal** → commit →
+  push. Flag `.claude/state/READY_*` nasce **depois** do gate e da validação e morre após o push. Logo
+  e scripts de dados **ficam fora** do commit.
+- **Previsão do ASO fora do gate do AGENDADO.** Quem a informa é a clínica, e pode não ter respondido
+  no momento do agendamento; exigi-la travaria um exame legitimamente agendado. O gate cobra os **5**
+  campos (data, horário, clínica, local, fornecedor).
+- **Escala vinculada (escala filtrada por cliente): CONGELADA** por decisão do diretor (§A.22).
+
+---
+
 ## 2026-06-29 — Fase 4 AJUSTES FINAIS (OST-EA-FASE-4-AJUSTES-FINAIS) + smoke real do Drive
 
 Branch `feat/fase-4-ia-arquivamento` (working tree). Backend (item 1) pelo coordenador; itens 2–3
@@ -1518,3 +1574,135 @@ por-cliente) — condição pré-existente do app, fora do escopo deste PR.
 decisão do cron-pull documentada ✅ · lint/typecheck/test verdes ✅ · teste com payload simulado (mock) ✅ · smoke real
 com o Fernando = etapa futura (sem nova OST) ✅ · tester PASS ✅ · segurança APROVADO ✅. Liberado para
 `READY_webhook-pandape` → merge na main → push. Rota nasce **fechada/inerte** até token ou IPs do Pandapé.
+
+---
+
+## 2026-07-17 — Retroalimentação do diário + régua documental, gates do exame, trilha de declínio
+
+**Sessão longa, várias OSTs.** Esta entrada também **fecha um buraco de 15 dias**: a última entrada
+anterior era de **02/07** e desde então entraram **37 commits** sem registro. Reconstruí o que dava
+pelo git (fonte real) e detalhei o que foi feito nesta sessão; o que não presenciei está listado como
+commit, sem narrativa inventada.
+
+### Entrou nesta sessão (commitado e no ar)
+
+- **`6bd8f8c` — régua documental: CRUD de tipos de documento em rota admin própria.** A premissa da
+  OST ("só falta o criar") não se sustentou: **não existia CRUD nenhum** de tipos de documento, nem
+  tela nem endpoint (os tipos entravam só por seed), e o "inativar" da tela inativava a **régua de um
+  cliente**, não um documento. Construídos criar/renomear/inativar/reativar. **Sem migration**:
+  `tipos_documento.ativo` já existia. Decisões: criar pede **só o nome** (a exigência vive por
+  cliente+cargo na régua, não é atributo do documento); `/catalogos/tipos-documento` ficou
+  **intocado** de propósito (alimenta Esteira/Auditoria, que precisam dos inativos para resolver o
+  nome de documentos de admissões antigas); renomear **não** regera o `codigo` (é a identidade técnica,
+  ex. `TERMO_BANCO`); trava de nome duplicado (409), porque o modal de Auditoria resolve documento
+  **por nome** e duplicata colidiria em silêncio.
+- **`33ab7f9` — CLAUDE.md.** Catálogo corrigido para **30 documentos** (não 21) e marcado como número
+  **vivo** (a régua agora tem CRUD; a fonte da verdade é a tabela). Criadas **§A.21** (rotina de
+  commit/push) e **§A.22** (regras de fluxo: tipo e tempo de contrato implementados; escala vinculada
+  congelada; resta a badge por linha do contador de docs obrigatórios).
+- **`7123e01` — gates do exame + trilha de declínio.**
+  - **Gate AGENDADO** passou a exigir os **5** campos (antes só olhava a data, então linha incompleta
+    gravada fora do modal passava; as colunas de `exame_agendamento` são nullable).
+  - **Bypass do APTO: nada mudou, porque já incluía o MASTER.** O que estava errado era o **texto da
+    NC-2**, fixo em "autorização de Super Admin" mesmo quando quem liberava era Master. Passou a
+    nomear o papel real. O `reason` (`aptoSemAsoSuperAdmin`) ficou como está **por decisão do
+    diretor**: é código de fio com o front (7 pontos), ninguém o lê.
+  - **12 testes** (`esteira.gates-exame.spec.ts`) para as duas regras mais duras do Exame, que
+    estavam **sem rede nenhuma**. Validados com **teste de dente**: revertendo o guard ao
+    comportamento antigo, 3 falham; revertendo o texto da NC, o caso do Master falha.
+  - **Trilha de declínio/reativação** no `candidato_alteracoes_log` (append-only já existente): data =
+    `criadoEm`, motivo pelo **nome** (o histórico é lido por gente), autor pelo `user.id`. Cobre os
+    **dois** caminhos: o `declinarAdmissao` da Esteira (que não logava **nada** e nem recebia o
+    usuário) e o lápis do Gerenciador (que logava só o farol, nunca o motivo). Validado na API real:
+    declinar → reativar → declinar por outro motivo deixa **os dois motivos no histórico**; base de
+    teste restaurada depois.
+
+### Diagnósticos fechados nesta sessão (viraram DECISÕES FECHADAS, ver topo)
+
+- **CPF do Pandapé**: vem do `Match/Get`. Provado ao vivo contra o swagger oficial + API real.
+- **De/para vaga→cliente**: a API não expõe o vínculo. Manual por design, confirmado pelo diretor.
+- **Dedup carga × webhook**: chaves cegas entre si; duplicaria no primeiro webhook real.
+
+### Estado real verificado hoje (não é memória, é medição)
+
+- **Canal Pandapé no ar e fail-closed:** receptor 401 sem credencial (pelos dois caminhos); ponte do
+  Fernando (`webpanda.php`) **funcional ponta a ponta** (sem Bearer 403, Bearer errado 403, Bearer
+  certo devolve o status **real** do EA); OAuth client_credentials **200**, escopo
+  `ExternalRequestApi PandapeApi`. **Mas o webhook está inerte na prática**: sem o fio do `getMatch`,
+  o CPF não chega e o sync adia em silêncio (job completa, nunca retenta).
+- **Base:** 2158 admissões, **todas `origem=MANUAL`** (a carga carimba MANUAL, então é
+  indistinguível do wizard); **zero `PANDAPE`**. 30 tipos de documento ativos. 36 CPFs com >1 admissão.
+- **Furos da carga (reais, ainda abertos):** o ramo de data nula usa `data_admissao = data_admissao`,
+  que com NULL **nunca casa** (deveria ser `isNull`) → re-executar duplica as linhas sem data (hoje
+  atinge **1** admissão, mas um extrato com muitas datas nulas duplicaria todas); e o SELECT de dedup
+  compara **CPF cru** do CSV contra o CPF **normalizado** no banco.
+
+### Pendências abertas conscientes
+
+- **Logo** (`globals.css`, `Sidebar.tsx`, `LogoEA.tsx`, `logosoulan.png`): soltos no working tree por
+  decisão, tratar depois. **4 scripts de dados** (`db/*.ts`) idem. Nunca entram nos commits.
+- **ESLint:** 2 erros **pré-existentes** de config (`react-hooks/exhaustive-deps` não encontrada) em
+  `nova/page.tsx` e `vt/page.tsx`. Fora de escopo até o diretor mandar.
+- **§A.13 sem prova visual:** o Chromium do Playwright **não sobe nesta VM** (faltam libs de sistema);
+  instalar exige `sudo`, que é destrave do diretor. Hoje a validação visual é do diretor, na tela.
+- **Estrutural cliente-empresa:** ⚠️ **a OST falava em "~21 CNPJs de filial a popular"; o banco diz
+  outra coisa.** `entidade_filiais` tem **8 filiais, todas com CNPJ**. Dos 131 vínculos: 104 não-FOPAG,
+  dos quais **101 resolvem CNPJ e só 3 não** (combos faltando: NEAT filial 0, SOULAN ADM filial 10,
+  SOULAN CENTRAL DE ESTÁGIOS filial 4); os 27 FOPAG **não usam** `entidade_filiais` por design (o
+  documento usa o CNPJ do próprio cliente). **A pendência real é 3 combos, não 21.** Achado colateral:
+  `admissoes.cliente_vinculo_id` está **0/2158 populado** — a coluna existe e nunca foi ligada.
+- **Gates do exame não estão no CLAUDE.md.** A OST citou "§A.29", que **não existe** (o documento vai
+  até §A.22). As regras estão no código e nos testes, sem seção própria na constituição.
+
+### Aberto / próximo passo
+
+- **OST Pandapé (CPF + dedup) foi iniciada e PAUSADA** por esta OST de diário, **sem nenhuma alteração
+  de código**. Estado: Parte 1 (ligar o `getMatch`) levantada e pronta para implementar; Parte 2
+  (dedup) **para no levantamento das opções** e aguarda escolha do diretor; Parte 3 (os 2 furos da
+  carga) a corrigir. Achado a aproveitar: o `idSex` do Pandapé vem como **1 e 2**, e o EA usa
+  `MASCULINO`/`FEMININO` — vai precisar de de/para explícito.
+- **Diário e TASKS.md:** o `TASKS.md` está parado desde **26/06** e não reflete nada das Fases 4-5 nem
+  do VT/benefícios/régua. Não foi tocado nesta OST (fora do escopo); merece uma OST própria.
+
+### Buraco de 02/07 a 17/07 — os 37 commits sem entrada de diário (reconstruído do git)
+
+Listados como registro factual. As três últimas linhas (17/07) estão detalhadas acima; as demais
+são de sessões anteriores e ficam aqui pelo hash, sem narrativa que eu não presenciei.
+
+- `4f8e69e` 02/07 — feat(pandape): endpoint receptor de webhook (OST-EA-WEBHOOK-PANDAPE / INT-1)
+- `f63263a` 02/07 — merge: OST-EA-WEBHOOK-PANDAPE — endpoint receptor de webhook do Pandapé (INT-1)
+- `d4e3a3c` 06/07 — docs: investigacao de vaga e requisicao no Pandape
+- `91ac6c7` 06/07 — docs(claude-md): §A.5 vigente = webhook, cron-pull DEPRECADO
+- `315ced1` 07/07 — fix(pandape): jobId sem ':' que causava 503 e reentrega infinita no webhook
+- `3e61a50` 08/07 — feat(schema): vínculo cliente↔empresa Soulan (entidades, filiais, tipo de serviço)
+- `7225e9b` 08/07 — feat(match): regra empresa+filial → entidade/CNPJ + view do vínculo
+- `dbf2638` 08/07 — feat(esteira): relatório da clínica no padrão MODELO_DE_AGENDAMENTO
+- `d522e35` 08/07 — feat(clientes): vínculo na tela, CRUD com inativação, filtros e rótulos
+- `e8ba869` 08/07 — feat(esteira): modal de agendamento do exame + gates de transição + validação de ASO pela I.A + gate APTO por papel (Master/Super Admin)
+- `162b87d` 08/07 — feat(ui): ajustes visuais (esteira, gerenciador, wizard, Menu Gerencial) + varredura de travessões §A.11 + CLAUDE.md
+- `aa1d1c5` 10/07 — feat(fluxo): regras de preenchimento + migration 0018 (cliente_beneficio_padrao)
+- `0886943` 10/07 — feat(regua): painel de clientes sem/com régua com busca + CRUD por cargo
+- `f4b924f` 10/07 — feat(ui): padrão único de tabela §A.12 (Farol, Gerenciador e todas as tabelas)
+- `7a5f0d7` 10/07 — fix(ui): textos do wizard (remoção de frases desnecessárias, (F4) removido)
+- `f840ad6` 10/07 — feat(kit): painel de regras multi-kit, schema e régua padrão
+- `c55a5ca` 10/07 — feat(kit): motor de extração no ai-service (fila com retry/backoff)
+- `befbdb5` 10/07 — feat(kit): backend do Gerador de Kit (processamento, download, reimport)
+- `a422005` 10/07 — feat(kit): tela do Gerador de Kit (upload, resultado, busca, retenção)
+- `da50f1d` 10/07 — chore: ignorar planilha de dados de clientes
+- `1e7d9a4` 14/07 — feat(cargos): CRUD completo com busca, soft-delete e modal premium na tela de cargos
+- `c6458ae` 15/07 — feat(import): regras permanentes de importação da esteira (§A.16)
+- `716252b` 15/07 — feat(ui): KPIs, filtros multi-select, busca rápida e padrão de tabela (Blocos A-F)
+- `0a9c936` 15/07 — feat(declinio): catálogo de motivos de declínio e motivo no modal (Fase 2)
+- `d1fd838` 15/07 — feat(admin): Menu Gerencial navegável por cards, com busca
+- `c461ae1` 15/07 — docs(claude): registra frente A.17 (Formulário de VT online)
+- `a584070` 15/07 — style: aplica formatação prettier em toda a base
+- `f207c60` 15/07 — chore: ignora planilhas e extrações de dados por regra genérica (§A.6)
+- `afb477d` 15/07 — feat(tarifas): tabela e tela de admin de tarifas de transporte (VT etapa 1)
+- `6260fcd` 15/07 — feat(vt): formulário de VT online do candidato (acesso, itinerários, avisos, PDFs)
+- `1b5ed0f` 15/07 — docs(claude): atualiza §A.17, §A.9, §A.8 para o estado real e registra §A.18/§A.19
+- `cd6a118` 16/07 — feat(esteira): reorganiza status de Cadastro, benefícios estruturados, régua unificada e ajustes de KPI/colunas
+- `b85ad1c` 16/07 — feat(esteira): declínio da admissão por qualquer frente + motivo no lápis, trava do salvar e ajustes de colunas
+- `cdbbfa4` 16/07 — feat(esteira): declínio não-destrutivo + reversão, modais em blocos, exame (valor/previsão ASO), declínio no seletor e ajustes de colunas
+- `6bd8f8c` 17/07 — feat(regua-documental): CRUD de tipos de documento em rota admin própria
+- `33ab7f9` 17/07 — docs(claude): corrige catálogo de documentos (30, não 21), registra rotina de commit/push e o estado das regras de fluxo
+- `7123e01` 17/07 — feat(exame/declinio): gate AGENDADO completo, bypass APTO com autor correto na NC, trilha de declinio/reativacao com histórico
