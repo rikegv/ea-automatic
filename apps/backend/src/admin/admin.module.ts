@@ -17,6 +17,8 @@ import { ReguaController } from "./regua/regua.controller";
 import { ReguaService } from "./regua/regua.service";
 import { TarifasController } from "./tarifas/tarifas.controller";
 import { TarifasService } from "./tarifas/tarifas.service";
+import { TiposDocumentoController } from "./tipos-documento/tipos-documento.controller";
+import { TiposDocumentoService } from "./tipos-documento/tipos-documento.service";
 
 @Module({
   controllers: [
@@ -25,6 +27,7 @@ import { TarifasService } from "./tarifas/tarifas.service";
     MotivosDeclinioController,
     TarifasController,
     ReguaController,
+    TiposDocumentoController,
     CatalogosController,
     RegrasController,
     KitTiposController,
@@ -36,6 +39,7 @@ import { TarifasService } from "./tarifas/tarifas.service";
     MotivosDeclinioService,
     TarifasService,
     ReguaService,
+    TiposDocumentoService,
     CatalogosService,
     RegrasService,
     KitTiposService,

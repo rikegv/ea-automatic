@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { EXIGENCIA_DOCUMENTO, type ExigenciaDocumento } from "@ea/shared-types";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
@@ -10,6 +10,7 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import { Button } from "@/components/ui/Button";
 import { Select } from "@/components/ui/Select";
 import { Icon } from "@/components/ui/Icon";
+import { StatusPill } from "@/components/ui/StatusPill";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 
 interface Cliente {
@@ -24,6 +25,7 @@ interface TipoDocumento {
   id: string;
   codigo: string;
   nome: string;
+  ativo: boolean;
 }
 interface ReguaRow {
   tipoDocumentoId: string;
@@ -35,6 +37,15 @@ const ROTULO_EXIGENCIA: Record<ExigenciaDocumento, string> = {
   NAO_OBRIGATORIO: "Não obrigatório",
   FACULTATIVO: "Facultativo",
 };
+
+/** Ordenação da lista: obrigatórios primeiro, na mesma ordem do seletor de exigência. */
+const PESO_EXIGENCIA: Record<ExigenciaDocumento, number> = {
+  OBRIGATORIO: 0,
+  NAO_OBRIGATORIO: 1,
+  FACULTATIVO: 2,
+};
+
+type FiltroDocs = "ativos" | "inativos";
 
 export default function ReguaPage() {
   const { token } = useAuth();
@@ -64,22 +75,62 @@ export default function ReguaPage() {
   const [expandido, setExpandido] = useState<string | null>(null);
   const [cargosExp, setCargosExp] = useState<{ id: string; nome: string }[]>([]);
   const [loadingCargosExp, setLoadingCargosExp] = useState(false);
+  // CRUD do catálogo de documentos (criar/renomear/inativar/reativar) na própria tela da régua.
+  const [filtroDocs, setFiltroDocs] = useState<FiltroDocs>("ativos");
+  const [nomeDoc, setNomeDoc] = useState("");
+  const [editandoDoc, setEditandoDoc] = useState<string | null>(null);
+  const [savingDoc, setSavingDoc] = useState(false);
+  const [inativarDoc, setInativarDoc] = useState<TipoDocumento | null>(null);
+  const [inativandoDoc, setInativandoDoc] = useState(false);
+  // Exigência congelada no último load/save. A ordenação lê DAQUI, não do `mapa` vivo, senão a linha
+  // pularia de grupo no meio da edição, embaixo do cursor do usuário.
+  const [ordemMapa, setOrdemMapa] = useState<Record<string, ExigenciaDocumento>>({});
 
-  // Carrega referências (clientes, cargos, 21 tipos de documento).
+  // Catálogo de documentos: a tela de gestão precisa dos inativos também (filtro "inativos"), por
+  // isso a rota de admin e não `/catalogos/tipos-documento` (essa serve a Esteira e traz todos).
+  const loadTipos = useCallback(async () => {
+    if (!token) return;
+    try {
+      setTipos(await apiFetch<TipoDocumento[]>("/admin/tipos-documento", { token }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Erro ao carregar os documentos");
+    }
+  }, [token]);
+
+  // Carrega referências (clientes, cargos).
   useEffect(() => {
     if (!token) return;
     Promise.all([
       apiFetch<Cliente[]>("/admin/clientes", { token }),
       apiFetch<Cargo[]>("/admin/cargos", { token }),
-      apiFetch<TipoDocumento[]>("/catalogos/tipos-documento", { token }),
     ])
-      .then(([cli, car, tip]) => {
+      .then(([cli, car]) => {
         setClientes(cli);
         setCargos(car);
-        setTipos(tip);
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Erro ao carregar referências"));
   }, [token]);
+
+  useEffect(() => {
+    void loadTipos();
+  }, [loadTipos]);
+
+  const tiposAtivos = useMemo(() => tipos.filter((t) => t.ativo), [tipos]);
+  const tiposInativos = useMemo(() => tipos.filter((t) => !t.ativo), [tipos]);
+
+  // Ordem da lista de ativos: obrigatórios primeiro, alfabético dentro de cada grupo.
+  const tiposOrdenados = useMemo(() => {
+    return [...tiposAtivos].sort((a, b) => {
+      const pa = PESO_EXIGENCIA[ordemMapa[a.id] ?? "NAO_OBRIGATORIO"];
+      const pb = PESO_EXIGENCIA[ordemMapa[b.id] ?? "NAO_OBRIGATORIO"];
+      return pa !== pb ? pa - pb : a.nome.localeCompare(b.nome, "pt-BR");
+    });
+  }, [tiposAtivos, ordemMapa]);
+
+  const inativosOrdenados = useMemo(
+    () => [...tiposInativos].sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR")),
+    [tiposInativos],
+  );
 
   // Item 1: lista de clientes sem régua (recarrega após salvar, para o cliente sair da lista).
   const loadSemRegua = useCallback(async () => {
@@ -153,10 +204,15 @@ export default function ReguaPage() {
         `/admin/regua?codCliente=${encodeURIComponent(codCliente)}&cargoId=${cargoId}`,
         { token },
       );
+      // O mapa cobre só os documentos ATIVOS: são os que a tela edita e salva. Régua de documento
+      // inativado permanece intacta no banco (inativar não reescreve régua já cadastrada).
+      const ativos = new Set(tipos.filter((t) => t.ativo).map((t) => t.id));
       const base: Record<string, ExigenciaDocumento> = {};
-      for (const t of tipos) base[t.id] = "NAO_OBRIGATORIO";
-      for (const r of rows) base[r.tipoDocumentoId] = r.exigencia;
+      for (const id of ativos) base[id] = "NAO_OBRIGATORIO";
+      for (const r of rows)
+        if (ativos.has(r.tipoDocumentoId)) base[r.tipoDocumentoId] = r.exigencia;
       setMapa(base);
+      setOrdemMapa(base);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Erro ao carregar régua");
@@ -178,13 +234,16 @@ export default function ReguaPage() {
         body: {
           codCliente,
           cargoId,
-          itens: tipos.map((t) => ({
+          // Só os ATIVOS: enviar um documento inativado rebaixaria a exigência dele na régua já
+          // salva, mudando o que a auditoria cobra. Inativar não mexe em régua existente.
+          itens: tiposAtivos.map((t) => ({
             tipoDocumentoId: t.id,
             exigencia: mapa[t.id] ?? "NAO_OBRIGATORIO",
           })),
         },
       });
       setSavedMsg("Régua salva.");
+      setOrdemMapa(mapa);
       recarregarPaineis();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Erro ao salvar");
@@ -235,6 +294,87 @@ export default function ReguaPage() {
       setCargosExp([]);
     } finally {
       setLoadingCargosExp(false);
+    }
+  }
+
+  // ── CRUD do catálogo de documentos ────────────────────────────────────────
+  // O formulário pede só o NOME. A exigência não é atributo do documento: ela vive por
+  // (cliente + cargo) na régua, e é definida no seletor da própria linha, como já era.
+
+  function iniciarEdicaoDoc(t: TipoDocumento) {
+    setEditandoDoc(t.id);
+    setNomeDoc(t.nome);
+    setError(null);
+  }
+
+  function cancelarEdicaoDoc() {
+    setEditandoDoc(null);
+    setNomeDoc("");
+    setError(null);
+  }
+
+  async function salvarDoc(e: FormEvent) {
+    e.preventDefault();
+    const nome = nomeDoc.trim();
+    if (!nome) return;
+    setSavingDoc(true);
+    setError(null);
+    setSavedMsg(null);
+    try {
+      if (editandoDoc) {
+        await apiFetch(`/admin/tipos-documento/${encodeURIComponent(editandoDoc)}`, {
+          method: "PATCH",
+          token,
+          body: { nome },
+        });
+        setSavedMsg(`Documento renomeado para "${nome}".`);
+      } else {
+        await apiFetch("/admin/tipos-documento", { method: "POST", token, body: { nome } });
+        setSavedMsg(`Documento "${nome}" criado e disponível na régua.`);
+      }
+      setEditandoDoc(null);
+      setNomeDoc("");
+      setFiltroDocs("ativos");
+      await loadTipos();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Erro ao salvar o documento");
+    } finally {
+      setSavingDoc(false);
+    }
+  }
+
+  async function confirmarInativarDoc() {
+    const t = inativarDoc;
+    if (!t) return;
+    setInativandoDoc(true);
+    setError(null);
+    try {
+      await apiFetch(`/admin/tipos-documento/${encodeURIComponent(t.id)}`, {
+        method: "DELETE",
+        token,
+      });
+      if (editandoDoc === t.id) cancelarEdicaoDoc();
+      setInativarDoc(null);
+      setSavedMsg(`Documento "${t.nome}" inativado.`);
+      await loadTipos();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Erro ao inativar o documento");
+    } finally {
+      setInativandoDoc(false);
+    }
+  }
+
+  async function reativarDoc(t: TipoDocumento) {
+    setError(null);
+    try {
+      await apiFetch(`/admin/tipos-documento/${encodeURIComponent(t.id)}/reativar`, {
+        method: "PATCH",
+        token,
+      });
+      setSavedMsg(`Documento "${t.nome}" reativado.`);
+      await loadTipos();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Erro ao reativar o documento");
     }
   }
 
@@ -436,43 +576,147 @@ export default function ReguaPage() {
         </p>
       )}
 
+      {/* Catálogo de documentos da régua: criar e renomear. Só o NOME: a exigência não é atributo
+          do documento, ela vive por (cliente + cargo) no seletor de cada linha da tabela. */}
+      <GlassCard as="form" onSubmit={salvarDoc} className="mb-5 p-4">
+        <div className="eyebrow !mb-0">Documentos da régua</div>
+        <p className="mt-1 mb-3 text-[12.5px] text-dim">
+          {editandoDoc
+            ? "Renomeando um documento. Ajuste o nome e salve."
+            : "Cadastre um documento novo. Ele entra na lista de ativos e passa a ser oferecido em todas as réguas; a exigência é definida por cliente e cargo, no seletor da linha."}
+        </p>
+        <div className="flex flex-wrap gap-3">
+          <input
+            required
+            placeholder={editandoDoc ? "Nome do documento *" : "Novo documento *"}
+            aria-label={editandoDoc ? "Nome do documento" : "Novo documento"}
+            value={nomeDoc}
+            onChange={(e) => setNomeDoc(e.target.value)}
+            className="ds-input flex-1"
+          />
+          <Button type="submit" disabled={savingDoc} className="shrink-0 py-2.5">
+            {savingDoc ? "Salvando…" : editandoDoc ? "Salvar alterações" : "Adicionar documento"}
+          </Button>
+          {editandoDoc && (
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={cancelarEdicaoDoc}
+              disabled={savingDoc}
+              className="shrink-0 py-2.5"
+            >
+              Cancelar
+            </Button>
+          )}
+        </div>
+      </GlassCard>
+
+      {/* Ativos é o padrão da tela; inativado sai daqui e fica consultável no filtro "Inativos". */}
+      <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
+        {(["ativos", "inativos"] as FiltroDocs[]).map((f) => (
+          <button
+            key={f}
+            type="button"
+            onClick={() => setFiltroDocs(f)}
+            className={cn(
+              "rounded-full border px-3 py-1 transition",
+              filtroDocs === f
+                ? "border-accent bg-[var(--surface-2)] text-accent"
+                : "border-[var(--border)] text-dim hover:text-text",
+            )}
+          >
+            {f === "ativos"
+              ? `Ativos (${tiposAtivos.length})`
+              : `Inativos (${tiposInativos.length})`}
+          </button>
+        ))}
+      </div>
+
       <GlassCard className="overflow-hidden p-2">
-        <table className="ds-table">
-          <thead>
-            <tr>
-              <th>Documento</th>
-              <th>Exigência</th>
-            </tr>
-          </thead>
-          <tbody>
-            {tipos.length === 0 ? (
+        <div className="overflow-x-auto">
+          <table className="ds-table min-w-[620px]">
+            <thead>
               <tr>
-                <td colSpan={2} className="py-8 text-center text-faint">
-                  Carregando tipos de documento…
-                </td>
+                <th>Documento</th>
+                <th className="w-[230px]">{filtroDocs === "ativos" ? "Exigência" : "Status"}</th>
+                <th className="w-[160px]">Ações</th>
               </tr>
-            ) : (
-              tipos.map((t) => (
-                <tr key={t.id}>
-                  <td>{t.nome}</td>
-                  <td>
-                    <Select
-                      className="min-w-[180px]"
-                      disabled={!podeEditar}
-                      value={mapa[t.id] ?? "NAO_OBRIGATORIO"}
-                      onChange={(v) => setMapa({ ...mapa, [t.id]: v as ExigenciaDocumento })}
-                      ariaLabel={`Exigência de ${t.nome}`}
-                      options={EXIGENCIA_DOCUMENTO.map((ex) => ({
-                        value: ex,
-                        label: ROTULO_EXIGENCIA[ex],
-                      }))}
-                    />
+            </thead>
+            <tbody>
+              {filtroDocs === "ativos" ? (
+                tiposOrdenados.length === 0 ? (
+                  <tr>
+                    <td colSpan={3} className="py-8 text-center text-faint">
+                      Nenhum documento ativo. Cadastre o primeiro no campo acima.
+                    </td>
+                  </tr>
+                ) : (
+                  tiposOrdenados.map((t) => (
+                    <tr key={t.id}>
+                      <td>{t.nome}</td>
+                      <td>
+                        <Select
+                          className="min-w-[180px]"
+                          disabled={!podeEditar}
+                          value={mapa[t.id] ?? "NAO_OBRIGATORIO"}
+                          onChange={(v) => setMapa({ ...mapa, [t.id]: v as ExigenciaDocumento })}
+                          ariaLabel={`Exigência de ${t.nome}`}
+                          options={EXIGENCIA_DOCUMENTO.map((ex) => ({
+                            value: ex,
+                            label: ROTULO_EXIGENCIA[ex],
+                          }))}
+                        />
+                      </td>
+                      <td className="whitespace-nowrap text-right">
+                        <button
+                          type="button"
+                          onClick={() => iniciarEdicaoDoc(t)}
+                          className="text-accent hover:underline"
+                        >
+                          editar
+                        </button>
+                        <span className="px-2 text-faint">·</span>
+                        <button
+                          type="button"
+                          onClick={() => setInativarDoc(t)}
+                          className="text-danger hover:underline"
+                        >
+                          inativar
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )
+              ) : inativosOrdenados.length === 0 ? (
+                <tr>
+                  <td colSpan={3} className="py-8 text-center text-faint">
+                    Nenhum documento inativo.
                   </td>
                 </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+              ) : (
+                inativosOrdenados.map((t) => (
+                  <tr key={t.id} className="opacity-60">
+                    <td>{t.nome}</td>
+                    <td className="text-center">
+                      <span className="inline-flex justify-center">
+                        <StatusPill tone="nt" label="Inativo" />
+                      </span>
+                    </td>
+                    <td className="whitespace-nowrap text-right">
+                      <button
+                        type="button"
+                        onClick={() => void reativarDoc(t)}
+                        className="text-accent hover:underline"
+                      >
+                        reativar
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
       </GlassCard>
 
       <ConfirmDialog
@@ -488,6 +732,23 @@ export default function ReguaPage() {
         busy={inativando}
         onConfirm={confirmarInativar}
         onCancel={() => setInativar(null)}
+      />
+
+      {/* Inativação do DOCUMENTO (não confundir com inativar a régua de um cliente, acima). Soft
+          delete: preserva as réguas já cadastradas e o histórico de documentos das admissões. */}
+      <ConfirmDialog
+        open={Boolean(inativarDoc)}
+        title="Inativar documento"
+        message={
+          inativarDoc
+            ? `Inativar o documento "${inativarDoc.nome}"? Ele sai da lista de ativos e deixa de ser oferecido no cadastro das réguas. Atenção: as réguas já salvas que exigem este documento não são alteradas, então as admissões em andamento seguem cobrando ele. Você pode reativar quando quiser.`
+            : ""
+        }
+        confirmLabel="Inativar"
+        tone="danger"
+        busy={inativandoDoc}
+        onConfirm={confirmarInativarDoc}
+        onCancel={() => setInativarDoc(null)}
       />
     </>
   );
