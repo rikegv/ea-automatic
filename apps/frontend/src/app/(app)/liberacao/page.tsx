@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/Button";
 import { Select } from "@/components/ui/Select";
 import { MultiSelect } from "@/components/ui/MultiSelect";
 import { Modal } from "@/components/ui/Modal";
+import { useLiberacaoRefresh } from "@/components/shell/LiberacaoAlerta";
 import { precisaValorBeneficio } from "@/lib/beneficios";
 
 // Tipo de contrato: MESMA lista fixa do wizard (não é texto livre). A régua unificada pede o "tipo".
@@ -83,6 +84,24 @@ function fmtCpf(cpf: string): string {
     : cpf;
 }
 /**
+ * Busca por candidato (nome parcial OU CPF), no mesmo espírito da esteira/gerenciador, mas
+ * client-side: as duas listas já estão carregadas em memória. Nome é case-insensitive e parcial;
+ * CPF é normalizado por dígitos, então casa digitado com ou sem pontuação.
+ */
+function filtrarBusca<T extends { candidatoNome: string; candidatoCpf: string }>(
+  itens: T[],
+  busca: string,
+): T[] {
+  const q = busca.trim().toLowerCase();
+  if (!q) return itens;
+  const qDigitos = q.replace(/\D/g, "");
+  return itens.filter(
+    (it) =>
+      it.candidatoNome.toLowerCase().includes(q) ||
+      (qDigitos.length > 0 && it.candidatoCpf.replace(/\D/g, "").includes(qDigitos)),
+  );
+}
+/**
  * Rótulo do cliente no seletor: "código · nome operacional" (o time reconhece por ele). Sem nome
  * operacional, cai para "código · razão social". A razão social NÃO entra quando há nome operacional
  * (é longa e polui).
@@ -117,6 +136,9 @@ function paradoHoras(criadoEm: string, nowMs: number): string {
 
 export default function LiberacaoPage() {
   const { token, isAdmin } = useAuth();
+  // Refresh imediato do badge do menu (Parte 3): a fila muda ao liberar/recusar/reativar, e o contador
+  // não pode esperar o polling de 90s. Rede de fundo (90s) continua; isto só antecipa no evento.
+  const refreshBadge = useLiberacaoRefresh();
   const [rows, setRows] = useState<PreAdmissao[]>([]);
   const [recusadas, setRecusadas] = useState<Recusada[]>([]);
   const [clientes, setClientes] = useState<Cliente[]>([]);
@@ -126,6 +148,8 @@ export default function LiberacaoPage() {
   const [okMsg, setOkMsg] = useState<string | null>(null);
   // Toggle Aguardando (padrão) × Admissões Recusadas.
   const [aba, setAba] = useState<Aba>("aguardando");
+  // Busca por candidato (nome ou CPF): filtra as DUAS visões ao mesmo tempo, client-side.
+  const [busca, setBusca] = useState("");
   // Modal de detalhe de uma recusada (histórico quem/quando + reativar).
   const [recusadaAlvo, setRecusadaAlvo] = useState<Recusada | null>(null);
   const [acaoRecusa, setAcaoRecusa] = useState(false);
@@ -278,6 +302,7 @@ export default function LiberacaoPage() {
       );
       setAlvo(null);
       await load();
+      refreshBadge(); // saiu da fila: badge cai na hora.
     } catch (e) {
       const msg =
         e instanceof ApiError && typeof e.data === "object" && e.data
@@ -306,6 +331,7 @@ export default function LiberacaoPage() {
       setOkMsg(`${alvo.candidatoNome} recusado. Movido para "Admissões Recusadas".`);
       setAlvo(null);
       await load();
+      refreshBadge(); // saiu da fila: badge cai na hora.
     } catch (e) {
       setModalErro(e instanceof Error ? e.message : "Erro ao recusar");
     } finally {
@@ -331,6 +357,7 @@ export default function LiberacaoPage() {
       setRecusadaAlvo(null);
       setAba("aguardando");
       await load();
+      refreshBadge(); // voltou para a fila: badge sobe na hora.
     } catch (e) {
       setError(e instanceof Error ? e.message : "Erro ao reativar");
     } finally {
@@ -339,6 +366,10 @@ export default function LiberacaoPage() {
   }
 
   const podeLiberar = Boolean(codCliente && cargoId);
+
+  // Visões filtradas pela busca (nome/CPF). Busca vazia = listas completas (sem regressão).
+  const rowsFiltradas = filtrarBusca(rows, busca);
+  const recusadasFiltradas = filtrarBusca(recusadas, busca);
 
   // Campos da régua unificada §A.19 ainda vazios (hint visual; a fonte autoritativa é o backend, que
   // recalcula o sinalizador ao liberar). Cliente/Cargo não entram: são a trava, já garantidos aqui.
@@ -374,7 +405,7 @@ export default function LiberacaoPage() {
         </p>
       )}
 
-      {/* Toggle Aguardando (padrão) × Admissões Recusadas. */}
+      {/* Toggle Aguardando (padrão) × Admissões Recusadas + busca por candidato (nome/CPF). */}
       <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
         {(["aguardando", "recusadas"] as Aba[]).map((a) => (
           <button
@@ -389,10 +420,20 @@ export default function LiberacaoPage() {
             )}
           >
             {a === "aguardando"
-              ? `Aguardando (${rows.length})`
-              : `Admissões Recusadas (${recusadas.length})`}
+              ? `Aguardando (${rowsFiltradas.length})`
+              : `Admissões Recusadas (${recusadasFiltradas.length})`}
           </button>
         ))}
+        {/* Busca rápida na tela: mesmo padrão da esteira (barra cilindro). Filtra Aguardando E
+          Recusadas ao mesmo tempo, por nome parcial ou CPF (com ou sem pontuação). */}
+        <input
+          type="search"
+          className="ds-input rounded-full w-[280px] sm:ml-auto"
+          placeholder="Buscar por nome ou CPF"
+          aria-label="Buscar por nome ou CPF"
+          value={busca}
+          onChange={(e) => setBusca(e.target.value)}
+        />
       </div>
 
       {aba === "aguardando" ? (
@@ -419,14 +460,16 @@ export default function LiberacaoPage() {
                       Carregando…
                     </td>
                   </tr>
-                ) : rows.length === 0 ? (
+                ) : rowsFiltradas.length === 0 ? (
                   <tr>
                     <td colSpan={9} className="py-8 text-center text-faint">
-                      Nenhuma pré-admissão aguardando liberação.
+                      {busca
+                        ? "Nenhum candidato encontrado para a busca."
+                        : "Nenhuma pré-admissão aguardando liberação."}
                     </td>
                   </tr>
                 ) : (
-                  rows.map((r) => (
+                  rowsFiltradas.map((r) => (
                     <tr key={r.admissaoId}>
                       <td className="font-semibold">
                         <span className="inline-flex items-center gap-2">
@@ -493,14 +536,16 @@ export default function LiberacaoPage() {
                       Carregando…
                     </td>
                   </tr>
-                ) : recusadas.length === 0 ? (
+                ) : recusadasFiltradas.length === 0 ? (
                   <tr>
                     <td colSpan={6} className="py-8 text-center text-faint">
-                      Nenhuma admissão recusada.
+                      {busca
+                        ? "Nenhum candidato encontrado para a busca."
+                        : "Nenhuma admissão recusada."}
                     </td>
                   </tr>
                 ) : (
-                  recusadas.map((r) => (
+                  recusadasFiltradas.map((r) => (
                     <tr key={r.admissaoId}>
                       <td className="font-semibold">{r.candidatoNome}</td>
                       <td className="whitespace-nowrap font-mono text-[12.5px]">

@@ -12,6 +12,7 @@ export function NavItem({
   active,
   expanded = true,
   critical = false,
+  badge = 0,
 }: {
   href: string;
   icon: IconName;
@@ -21,7 +22,10 @@ export function NavItem({
   expanded?: boolean;
   /** Faixa vermelha premium (tela crítica): preenche a linha do item para chamar atenção. */
   critical?: boolean;
+  /** Contador (Parte 3): >0 mostra o número; 0 esconde. Recolhido vira um ponto sobre o ícone. */
+  badge?: number;
 }) {
+  const temBadge = badge > 0;
   return (
     <Link
       href={href}
@@ -32,10 +36,21 @@ export function NavItem({
         critical && "nav-item-critical",
       )}
       aria-current={active ? "page" : undefined}
-      title={expanded ? undefined : label}
+      title={expanded ? undefined : temBadge ? `${label} (${badge})` : label}
     >
-      <Icon name={icon} />
+      <span className="relative flex-none">
+        <Icon name={icon} />
+        {/* Recolhido: sem espaço para o número, um ponto sobre o ícone sinaliza pendência. */}
+        {!expanded && temBadge && (
+          <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-white ring-2 ring-[var(--danger)]" />
+        )}
+      </span>
       {expanded && <span className="truncate">{label}</span>}
+      {expanded && temBadge && (
+        <span className="ml-auto flex-none rounded-full bg-white/90 px-2 py-0.5 text-[11px] font-bold text-danger">
+          {badge}
+        </span>
+      )}
     </Link>
   );
 }

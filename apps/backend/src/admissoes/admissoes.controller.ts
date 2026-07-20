@@ -82,6 +82,12 @@ export class AdmissoesController {
     return this.admissoes.listarRecusadas();
   }
 
+  /** Contagem leve de aguardando liberação (Parte 3: badge + polling do popup). Antes de @Get(":id"). */
+  @Get("aguardando-liberacao/contagem")
+  contagemAguardando() {
+    return this.admissoes.contarAguardandoLiberacao();
+  }
+
   /** F10 — campos editáveis (prefill do formulário de edição). */
   @Get(":id")
   obter(@Param("id") id: string) {

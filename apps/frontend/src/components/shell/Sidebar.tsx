@@ -7,6 +7,7 @@ import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/cn";
 import { Brand } from "@/components/ui/Brand";
 import { NavItem } from "@/components/ui/NavItem";
+import { useLiberacaoCount } from "./LiberacaoAlerta";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
 import { Button } from "@/components/ui/Button";
 import { Icon, type IconName } from "@/components/ui/Icon";
@@ -59,6 +60,7 @@ function isActive(pathname: string, href: string): boolean {
 
 export function Sidebar() {
   const { user, isAdmin, logout } = useAuth();
+  const liberacaoCount = useLiberacaoCount();
   const pathname = usePathname();
   const router = useRouter();
 
@@ -114,7 +116,13 @@ export function Sidebar() {
 
       <div className={cn("nav-label", !expanded && "hidden")}>Operação</div>
       {(isAdmin ? [...OPERACAO, GERADOR_KIT] : OPERACAO).map((n) => (
-        <NavItem key={n.href} {...n} active={isActive(pathname, n.href)} expanded={expanded} />
+        <NavItem
+          key={n.href}
+          {...n}
+          active={isActive(pathname, n.href)}
+          expanded={expanded}
+          badge={n.href === "/liberacao" ? liberacaoCount : 0}
+        />
       ))}
 
       {isAdmin && (

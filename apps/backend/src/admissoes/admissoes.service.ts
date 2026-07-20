@@ -716,6 +716,18 @@ export class AdmissoesService {
     });
   }
 
+  /**
+   * Contagem LEVE de pré-admissões aguardando liberação (Parte 3: badge no menu + polling do popup).
+   * Só um count por farol (índice do enum), sem payload — chamado por todos os usuários a cada ~1-2min.
+   */
+  async contarAguardandoLiberacao(): Promise<{ count: number }> {
+    const [row] = await this.db
+      .select({ count: count() })
+      .from(admissoes)
+      .where(eq(admissoes.farolGlobal, "AGUARDANDO_LIBERACAO"));
+    return { count: Number(row?.count ?? 0) };
+  }
+
   /** Fila das RECUSADAS (visão "Admissões Recusadas"). Mostra quem recusou + quando (autor + data). */
   async listarRecusadas() {
     return this.db
