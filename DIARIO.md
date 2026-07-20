@@ -2023,3 +2023,145 @@ Reuso confirmado (nada recriado): `Select`, `MultiSelect`, `Modal`, `lib/benefic
 
 Pré-admissão de teste deixada em AGUARDANDO para o diretor validar o fluxo de recusa/reativar na tela.
 Falta só a **Parte 3 (indicador/ping)** antes do Pandapé ao painel. Webhook segue SEM cadastro.
+
+---
+
+## 2026-07-17 (noite, 9) — B+C commitado + Parte 3 (indicador + popup + ping): tela COMPLETA
+
+- **B+C COMMITADO e no remoto: `2542100`** (recusa/reativação Parte 2 + remoção da tag Via Pandapé das
+  tabelas). Gate verde, add nominal, dados de teste limpos.
+
+**Parte 3, NÃO commitada ainda** (aguarda validação do diretor):
+
+- **Endpoint de contagem leve:** `GET /admissoes/aguardando-liberacao/contagem` → `{count}` (um
+  count por farol, sem payload). Barato: chamado por todos a cada ~90s.
+- **Provider global `LiberacaoAlerta`** (no AppShell): UM polling só (90s) alimenta o badge do menu
+  (via contexto `useLiberacaoCount`) E o popup. Sem canal de push → polling do cliente (padrão do
+  RadarBanner + apiFetch, reusando Modal). NÃO empilha popup.
+- **Badge no item de menu "Liberação Admissional"** (decisão do diretor: mais limpo que cabeçalho, e
+  global — visível em qualquer tela, inclusive Farol e Gerenciador). Número em badge branco sobre a
+  faixa vermelha; recolhido vira um ponto sobre o ícone; **zero → some**. Clicável (o item já leva a
+  /liberacao).
+- **Popup global:** sobe quando há pendência (0→>0), para TODOS os perfis; "Estou ciente" fecha e
+  **suprime por 20 min** (decisão do diretor: reaparição espaçada, o contador segue vivo a 90s);
+  "Ver liberação" leva à tela. "Estou ciente" NÃO zera o contador (só liberar/recusar zera). Zerou →
+  popup fecha e para de subir.
+
+**Validado (fábrica):** endpoint devolve `{count:1}` com uma pré-admissão na fila; pré-admissão
+deixada em AGUARDANDO para o diretor ver o badge + o popup na tela. Gate: 256 testes, typecheck/eslint
+verdes. Custo do count: `count(*)` por farol sobre ~2159 linhas (microssegundos); índice em
+farol_global só se a base crescer muito.
+
+**Com as 3 partes fechadas, a tela de Liberação Admissional está COMPLETA.** O Pandapé fica APTO ao
+painel — cadastro é decisão do diretor (quando ligar). Webhook segue SEM cadastro no painel.
+
+---
+
+## 2026-07-17 — FECHAMENTO DE SESSÃO (retomar amanhã 18/07)
+
+Gate no fechamento: **typecheck verde** (3 pacotes), **testes verdes** (backend 256, frontend 13,
+shared-types 5). ESLint: só os **2 erros pré-existentes** de config (`nova/page.tsx`, `vt/page.tsx`,
+`react-hooks/exhaustive-deps` não encontrada) — não são das mudanças da sessão. `main` sincronizado
+com o remoto.
+
+### COMMITADO E NO REMOTO HOJE (git log --oneline)
+- `2542100` feat(liberacao): Parte 2 recusa/reativação (Master/Super Admin, farol LIBERACAO_RECUSADA,
+  migration 0030) + remoção da tag "Via Pandapé" das tabelas (Esteira/Gerenciador).
+- `a063ff5` feat(liberacao): item 4 (pendências obrigatórias no modal, espelha régua §A.19) + fix
+  sinalizador/salário.
+- `481e008` feat(pandape): dedup por idVacancy (trava viva + unique parcial + flag possível duplicata).
+- `c5bb98d` feat(liberacao): Liberação Admissional Parte 1 (pré-admissão, webhook, tela, ajustes visuais).
+- (antes na sessão: `e37ccaa` norma do diário; `7123e01` gates do exame + trilha declínio;
+  `33ab7f9` CLAUDE.md 30 docs/§A.21/§A.22; `6bd8f8c` régua documental CRUD.)
+
+### PRONTO MAS NÃO COMMITADO (Rike valida amanhã)
+- **Parte 3 (indicador/ping/popup):** badge no item de menu Liberação (contagem via polling 90s),
+  popup global com "Estou ciente" (reaparição 20min) e "Ver liberação", endpoint leve
+  `GET /admissoes/aguardando-liberacao/contagem`. Arquivos no working tree:
+  `admissoes.controller.ts`, `admissoes.service.ts` (endpoint), `components/shell/AppShell.tsx`,
+  `components/shell/Sidebar.tsx` (badge), `components/ui/NavItem.tsx` (badge),
+  `components/shell/LiberacaoAlerta.tsx` (NOVO, untracked).
+  ⚠️ **`Sidebar.tsx` está MISTURADO** (badge da Parte 3 + mudanças do LOGO soltas): ao commitar a
+  Parte 3 amanhã, separar cirurgicamente (mesmo procedimento já usado: voltar ao HEAD, reaplicar só a
+  Parte 3, add, restaurar). `globals.css` no working tree é só LOGO (não foi tocado na Parte 3).
+
+### SOLTOS NO WORKING TREE (conscientes, NÃO commitar sem decisão do Rike)
+- **Logo:** `globals.css`, `Sidebar.tsx` (parte logo), `LogoEA.tsx`, `logosoulan.png`.
+- **Scripts de dados (4 em db/):** `backfill-motivo-declinio.ts`, `carga-frente1.ts`,
+  `corrige-frente1.ts`, `recalcula-sinalizador-vivas.ts`. **`carga-frente1.ts` tem os 2 furos JÁ
+  CORRIGIDOS no working tree** (`normalizeCpf(r.cpf)` linha 53, `isNull(dataAdmissao)` linha 65) —
+  mas NÃO commitado; **um checkout limpo rodaria a versão bugada.**
+
+### HIGIENE
+- **Pré-admissão de teste PRESERVADA** em AGUARDANDO_LIBERACAO (total da base = 2159 = 2158 + 1). O
+  Rike vai usá-la amanhã para validar a Parte 3 (badge + popup). **Limpar só depois da validação.**
+
+### PLANO DE GO-LIVE DO PANDAPÉ (definido hoje; executar amanhã, NÃO agora)
+Ordem segura: (1) **commitar `carga-frente1.ts` corrigido**; (2) Rike **gera o extrato fresco** pelo
+normalize.py (insumo dele, fora do repo — NÃO está nesta máquina); (3) rodar a carga em **DRY-RUN
+(CARGA_DRY=1)** e conferir contagens + duplicatas de campo-chave ANTES de gravar; (4) **rodar a carga
+real**; (5) **só então cadastrar o webhook no painel** (corte temporal natural).
+Ressalvas conhecidas (levantamento de hoje):
+- A carga **NÃO tem update-path**: correções de campos-chave (cliente/cargo/data) no extrato fresco
+  **DUPLICAM** essas linhas (chave nova = insert novo, a antiga fica).
+- A carga grava **idVacancy NULO** (a planilha não tem o id da vaga), então o **unique parcial NÃO
+  protege** a sobreposição carga×webhook. Quem protege é a **FLAG "possível duplicata"**: pessoa VIVA
+  da carga que reaparece pelo webhook → cria com flag → consultor reconcilia na tela (nunca duplica
+  calado). Superfície viva da carga hoje: 2 (1 EM_ADMISSAO + 1 BANCO_AGUARDAR).
+- Data de corte não é obrigatória (a flag cobre), mas reduz o ruído de flags; o corte real é o
+  momento de cadastrar o webhook no painel.
+
+### DECISÕES PENDENTES DO RIKE (amanhã)
+1. Validar a **Parte 3** e mandar commitar (separando do logo no Sidebar.tsx).
+2. Decidir se **commita o `carga-frente1.ts` corrigido** (recomendado) antes de rodar a carga.
+3. **Gerar o extrato fresco** (normalize.py).
+4. Definir o **momento controlado de cadastrar o webhook no painel = go-live**.
+
+### ESTADO DA TELA DE LIBERAÇÃO ADMISSIONAL
+**COMPLETA:** Parte 1 (núcleo + modal + tempo parado), item 4 (pendências obrigatórias), Parte 2
+(recusa/reativação), Parte 3 (indicador/ping, pronta a validar). **Pandapé APTO ao painel; webhook
+SEM cadastro.**
+
+---
+
+## 2026-07-20 — Parte 3 da Liberação COMMITADA; tela de Liberação Admissional COMPLETA
+
+**Rike validou na tela e autorizou a §A.21.** A Parte 3 (que estava pronta mas não commitada) foi
+commitada, e com ela a **tela de Liberação Admissional está COMPLETA (Partes 1+2+3 + item 4)**.
+
+### O QUE ENTROU (commit `3911be1`, feat(liberacao): Parte 3)
+- **Indicador/badge + popup:** provider único `LiberacaoAlerta` no topo da casca (`AppShell`). Badge
+  no menu via contexto (`useLiberacaoCount`), popup insistente com reaparição de 20min. Endpoint leve
+  `GET /admissoes/aguardando-liberacao/contagem` (só count por farol `AGUARDANDO_LIBERACAO`).
+- **Correção do contador (refresh imediato):** o badge agora **cai/sobe na hora** ao liberar/recusar/
+  reativar. O provider expõe `useLiberacaoRefresh` (rebusca imediata do `tick`), e a tela chama logo
+  após a resposta OK de cada ação. Polling de 90s mantido como rede de fundo; popup de 20min intocado.
+- **Busca por candidato:** campo `type=search` (padrão da esteira, barra cilindro) que filtra as
+  **duas** visões (Aguardando e Recusadas) ao mesmo tempo, por **nome parcial OU CPF** normalizado por
+  dígitos (com/sem pontuação), client-side (as listas já estão em memória). Contadores das abas e
+  estados vazios acompanham a busca; busca vazia = listas completas.
+- **Sidebar separado cirurgicamente (§A.21):** só o hook + badge da Parte 3 entraram no commit; o
+  **logo continua solto** no working tree (método do diário: reconstruir a versão só-Parte-3, stageá-la,
+  restaurar a completa).
+
+### CAUSA RAIZ DIAGNOSTICADA NO CAMINHO (registro p/ futuro)
+O "refresh não pegou" na 1ª validação **não era bug de código** (os 3 pontos — chamada no lugar certo,
+contexto único, badge lê o estado do refresh — estavam corretos). O frontend prod (`next-server`,
+systemd `ea-frontend`) servia um **build antigo (18/07)**; o fonte não é recompilado sozinho. Correção
+= **sequência segura stop→build→start** (memória do projeto: nunca buildar/dev com o serviço no ar,
+clobbera `.next`). Feita duas vezes (contador e busca). Build final `E3tEdawpMmRrFWuzskCX1`.
+
+### GATE
+Typecheck verde. Lint com os **2 erros pré-existentes de config** (`react-hooks/exhaustive-deps` não
+encontrada em `nova/page.tsx:299` e `vt/page.tsx:245`), nenhum novo. **274 testes** verdes (backend
+256, frontend 13, shared-types 5). `main` sincronizado com o remoto após o push.
+
+### CONTINUAM SOLTOS (conscientes, fora deste commit)
+- **Logo:** `globals.css`, `LogoEA.tsx`, `logosoulan.png` e a **parte-logo do `Sidebar.tsx`** (que
+  ficou `MM`: Parte 3 commitada + logo solto).
+- **4 scripts de dados** em `db/`: `backfill-motivo-declinio.ts`, `carga-frente1.ts` (com os 2 furos
+  já corrigidos, ainda não commitado), `corrige-frente1.ts`, `recalcula-sinalizador-vivas.ts`.
+
+### ABERTO (inalterado)
+Go-live do Pandapé (commitar `carga-frente1.ts` → extrato fresco → dry-run → carga → cadastrar webhook)
+e a decisão sobre o logo. **Tela de Liberação Admissional: COMPLETA.**
