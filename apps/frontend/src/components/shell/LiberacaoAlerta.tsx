@@ -18,6 +18,11 @@ import { Button } from "@/components/ui/Button";
 // Polling do contador (leve): 90s. Reaparição do popup insistente após "Estou ciente": 20 min
 // (decisão do diretor). O contador segue vivo o tempo todo; só o popup é espaçado.
 const POLL_MS = 90_000;
+/**
+ * MESMO ciclo do contador, exportado para a tela de Liberação usar no auto-refresh da LISTA. Um só
+ * número governa as duas coisas: mudou aqui, mudou nos dois lugares.
+ */
+export const LIBERACAO_POLL_MS = POLL_MS;
 const REAPARICAO_MS = 20 * 60_000;
 
 const CountContext = createContext<number>(0);

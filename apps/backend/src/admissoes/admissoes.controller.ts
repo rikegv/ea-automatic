@@ -5,6 +5,7 @@ import { parseMulti } from "../common/parse-multi";
 import { AdmissoesService } from "./admissoes.service";
 import { CreateAdmissaoDto } from "./dto/create-admissao.dto";
 import { LiberarAdmissaoDto } from "./dto/liberar-admissao.dto";
+import { LiberarEmLoteDto } from "./dto/liberar-lote.dto";
 import { UpdateAdmissaoDto } from "./dto/update-admissao.dto";
 
 // Operacional do wizard (F6/F11) e do Gerenciador (F10/F7). Autenticado, sem restrição de papel
@@ -97,6 +98,20 @@ export class AdmissoesController {
   @Post()
   create(@Body() dto: CreateAdmissaoDto, @CurrentUser() user: AuthUser) {
     return this.admissoes.create(dto, user);
+  }
+
+  /**
+   * Liberação Admissional EM LOTE: mesmo cliente+cargo para N pré-admissões, cada uma nascendo pelo
+   * MESMO miolo da liberação individual. SEM @Roles, espelhando a individual (liberar é fluxo
+   * operacional, qualquer perfil autenticado libera; só recusar/reativar são de administração).
+   *
+   * DECLARADA ANTES do @Patch(":id"): o Nest casa rotas na ordem de declaração e o `:id` engoliria
+   * "liberar-lote" como se fosse um id. Mesmo cuidado das rotas GET de liberação acima.
+   */
+  @Patch("liberar-lote")
+  liberarEmLote(@Body() dto: LiberarEmLoteDto, @CurrentUser() user: AuthUser) {
+    const { admissaoIds, ...campos } = dto;
+    return this.admissoes.liberarEmLote(admissaoIds, campos, user);
   }
 
   /** F10 — edita vaga/folha + contrato/data/matrícula/farol (não toca CPF/cod_cliente). */

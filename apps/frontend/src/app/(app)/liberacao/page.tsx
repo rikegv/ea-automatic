@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { apiFetch, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/cn";
@@ -10,7 +10,11 @@ import { Button } from "@/components/ui/Button";
 import { Select } from "@/components/ui/Select";
 import { MultiSelect } from "@/components/ui/MultiSelect";
 import { Modal } from "@/components/ui/Modal";
-import { useLiberacaoRefresh } from "@/components/shell/LiberacaoAlerta";
+import {
+  LIBERACAO_POLL_MS,
+  useLiberacaoCount,
+  useLiberacaoRefresh,
+} from "@/components/shell/LiberacaoAlerta";
 import { precisaValorBeneficio } from "@/lib/beneficios";
 
 // Tipo de contrato: MESMA lista fixa do wizard (não é texto livre). A régua unificada pede o "tipo".
@@ -109,6 +113,28 @@ function filtrarBusca<T extends { candidatoNome: string; candidatoCpf: string }>
 function rotuloCliente(c: Cliente): string {
   return `${c.codCliente} · ${c.nomeOperacao ?? c.razaoSocial}`;
 }
+/**
+ * Memória de pacote por (cliente + cargo), §A.17 etapa 4. MESMA rota do wizard e do modal individual,
+ * usada também pelo modal do lote: escolhido o par, o pacote sugerido é o mesmo, então preencher uma
+ * vez vale para as N. Falha é silenciosa: a memória é sugestão, nunca bloqueia a liberação.
+ */
+async function buscarPacotePadrao(
+  token: string,
+  codCliente: string,
+  cargoId: string,
+): Promise<{ nome: string; valor: number | null }[]> {
+  const r = await apiFetch<{ beneficios: { nome: string; valor: number | null }[] }>(
+    `/admissoes/padrao-cliente-cargo?codCliente=${encodeURIComponent(codCliente)}&cargoId=${encodeURIComponent(cargoId)}`,
+    { token },
+  );
+  return r.beneficios ?? [];
+}
+/** Valores do pacote no formato do input (pt-BR), só para os benefícios que têm valor na memória. */
+function valoresDoPacote(pacote: { nome: string; valor: number | null }[]): Record<string, string> {
+  return Object.fromEntries(
+    pacote.filter((b) => b.valor !== null).map((b) => [b.nome, b.valor!.toFixed(2).replace(".", ",")]),
+  );
+}
 // Salário em pt-BR ("2.500,00") → string numérica que o Postgres aceita ("2500.00"). Mesma convenção
 // do valor de benefício (o backend guarda o salário cru como numeric, sem transform próprio).
 function salarioParaNumero(s: string): string | undefined {
@@ -139,6 +165,9 @@ export default function LiberacaoPage() {
   // Refresh imediato do badge do menu (Parte 3): a fila muda ao liberar/recusar/reativar, e o contador
   // não pode esperar o polling de 90s. Rede de fundo (90s) continua; isto só antecipa no evento.
   const refreshBadge = useLiberacaoRefresh();
+  // Contagem do MESMO polling do badge (90s). Mudou (subiu ou desceu), a lista visível recarrega na
+  // hora, sem esperar o ciclo próprio da tela.
+  const liberacaoCount = useLiberacaoCount();
   const [rows, setRows] = useState<PreAdmissao[]>([]);
   const [recusadas, setRecusadas] = useState<Recusada[]>([]);
   const [clientes, setClientes] = useState<Cliente[]>([]);
@@ -174,6 +203,27 @@ export default function LiberacaoPage() {
   const [beneficiosValores, setBeneficiosValores] = useState<Record<string, string>>({});
   const [liberando, setLiberando] = useState(false);
   const [modalErro, setModalErro] = useState<string | null>(null);
+  // LIBERAÇÃO EM MASSA: ids selecionados na aba Aguardando, modal do lote e relatório final.
+  const [selecionados, setSelecionados] = useState<string[]>([]);
+  const [loteAberto, setLoteAberto] = useState(false);
+  const [loteCodCliente, setLoteCodCliente] = useState("");
+  const [loteCargoId, setLoteCargoId] = useState("");
+  // MESMOS campos do individual, todos opcionais (só cliente+cargo travam). O preenchido vale para as
+  // N do lote; o vazio vira pendência individual de cada admissão na esteira.
+  const [loteSalario, setLoteSalario] = useState("");
+  const [loteTipoContrato, setLoteTipoContrato] = useState("");
+  const [loteDataAdmissao, setLoteDataAdmissao] = useState("");
+  const [loteEscala, setLoteEscala] = useState("");
+  const [loteCentroCusto, setLoteCentroCusto] = useState("");
+  const [loteGestorBp, setLoteGestorBp] = useState("");
+  const [loteBeneficiosSel, setLoteBeneficiosSel] = useState<string[]>([]);
+  const [loteBeneficiosValores, setLoteBeneficiosValores] = useState<Record<string, string>>({});
+  const [loteErro, setLoteErro] = useState<string | null>(null);
+  const [loteEmCurso, setLoteEmCurso] = useState(false);
+  const [loteResultado, setLoteResultado] = useState<{
+    liberadas: { admissaoId: string; candidato: string }[];
+    falhas: { candidato: string; motivo: string }[];
+  } | null>(null);
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -206,27 +256,88 @@ export default function LiberacaoPage() {
     void load();
   }, [load]);
 
+  // Enquanto montado: não aplica resposta que chega depois de sair da tela.
+  const montado = useRef(true);
+  useEffect(() => {
+    montado.current = true;
+    return () => {
+      montado.current = false;
+    };
+  }, []);
+  // Uma recarga em voo por vez (o ciclo próprio e o gatilho da contagem podem coincidir).
+  const recargaEmVoo = useRef(false);
+
+  /**
+   * Auto-refresh da LISTA (go-live do Pandapé): com admissão viva caindo a qualquer momento, a tela
+   * aberta tem de mostrar a nova pré-admissão sem refresh manual.
+   *
+   * Recarga SILENCIOSA e deliberadamente parcial: rebusca só as DUAS listas (aguardando e recusadas),
+   * não os catálogos (clientes, cargos, benefícios, escalas), que não mudam nesse ritmo. Não mexe em
+   * `loading` (a tabela não pisca "Carregando…"), não toca em `busca` nem na aba (a busca é client-side
+   * sobre as listas, então o filtro digitado continua valendo e o campo não é limpo), e não escreve em
+   * `error`/`okMsg`. Falha de rede aqui é silenciosa: o auto-refresh é auxiliar, o `load` inicial é
+   * quem reporta erro.
+   */
+  const recarregarListas = useCallback(async () => {
+    if (!token || recargaEmVoo.current) return;
+    recargaEmVoo.current = true;
+    try {
+      const [pre, rec] = await Promise.all([
+        apiFetch<PreAdmissao[]>("/admissoes/aguardando-liberacao", { token }),
+        apiFetch<Recusada[]>("/admissoes/recusadas", { token }),
+      ]);
+      if (!montado.current) return;
+      setRows(pre);
+      setRecusadas(rec);
+      setNowMs(Date.now()); // colunas de tempo parado acompanham a recarga.
+    } catch {
+      /* auto-refresh é auxiliar; falha de rede não perturba a tela */
+    } finally {
+      recargaEmVoo.current = false;
+    }
+  }, [token]);
+
+  // Ciclo próprio da tela, no MESMO intervalo do contador (90s). Só enquanto a tela está montada e a
+  // aba do browser visível (aba em segundo plano não gera tráfego).
+  useEffect(() => {
+    if (!token) return;
+    const id = setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      void recarregarListas();
+    }, LIBERACAO_POLL_MS);
+    return () => clearInterval(id);
+  }, [token, recarregarListas]);
+
+  // Gatilho pela contagem do provider: o badge detectou mudança (chegou/saiu pré-admissão), a lista
+  // reflete na mesma hora. `useRef` inicia com o valor atual, então não dispara à toa no primeiro render.
+  const countAnterior = useRef(liberacaoCount);
+  useEffect(() => {
+    if (countAnterior.current === liberacaoCount) return;
+    countAnterior.current = liberacaoCount;
+    void recarregarListas();
+  }, [liberacaoCount, recarregarListas]);
+
+  // PODA da seleção pelo id: a lista se atualiza sozinha (90s), então uma selecionada pode sumir
+  // (outro consultor liberou ou recusou). Fora da lista, fora da seleção: o lote nunca tenta liberar
+  // algo que já saiu da fila.
+  useEffect(() => {
+    setSelecionados((sel) => {
+      const vivos = new Set(rows.map((r) => r.admissaoId));
+      const podado = sel.filter((id) => vivos.has(id));
+      return podado.length === sel.length ? sel : podado;
+    });
+  }, [rows]);
+
   // Benefícios e escala DEPENDEM de cliente+cargo: ao escolher o par, pré-preenche o pacote pela
   // memória (mesma rota do wizard). Escala sugere o padrão do cliente (opções são independentes).
   useEffect(() => {
     if (!token || !alvo || !codCliente || !cargoId) return;
     let vivo = true;
-    apiFetch<{ beneficios: { nome: string; valor: number | null }[] }>(
-      `/admissoes/padrao-cliente-cargo?codCliente=${encodeURIComponent(codCliente)}&cargoId=${encodeURIComponent(cargoId)}`,
-      { token },
-    )
-      .then((r) => {
-        if (!vivo) return;
-        const pacote = r.beneficios ?? [];
-        if (pacote.length === 0) return;
+    buscarPacotePadrao(token, codCliente, cargoId)
+      .then((pacote) => {
+        if (!vivo || pacote.length === 0) return;
         setBeneficiosSel(pacote.map((b) => b.nome));
-        setBeneficiosValores(
-          Object.fromEntries(
-            pacote
-              .filter((b) => b.valor !== null)
-              .map((b) => [b.nome, b.valor!.toFixed(2).replace(".", ",")]),
-          ),
-        );
+        setBeneficiosValores(valoresDoPacote(pacote));
       })
       .catch(() => {
         /* memória é sugestão; falha não bloqueia a liberação */
@@ -237,6 +348,27 @@ export default function LiberacaoPage() {
       vivo = false;
     };
   }, [token, alvo, codCliente, cargoId, clientes]);
+
+  // Memória do par no LOTE: mesma rota, mesma regra do individual. Escolhido cliente+cargo, o pacote
+  // sugerido pré-preenche e o consultor edita; o que valer para todas é aplicado às N.
+  useEffect(() => {
+    if (!token || !loteAberto || !loteCodCliente || !loteCargoId) return;
+    let vivo = true;
+    buscarPacotePadrao(token, loteCodCliente, loteCargoId)
+      .then((pacote) => {
+        if (!vivo || pacote.length === 0) return;
+        setLoteBeneficiosSel(pacote.map((b) => b.nome));
+        setLoteBeneficiosValores(valoresDoPacote(pacote));
+      })
+      .catch(() => {
+        /* memória é sugestão; falha não bloqueia o lote */
+      });
+    const cli = clientes.find((c) => c.codCliente === loteCodCliente);
+    if (cli?.escalaPadrao) setLoteEscala((e) => e || cli.escalaPadrao!);
+    return () => {
+      vivo = false;
+    };
+  }, [token, loteAberto, loteCodCliente, loteCargoId, clientes]);
 
   function abrirModal(r: PreAdmissao) {
     setAlvo(r);
@@ -258,11 +390,14 @@ export default function LiberacaoPage() {
   }
 
   // Pacote no formato do backend (mesma montagem do wizard): nome→beneficioId; valor só nos que exigem.
-  function montarPacote(): { beneficioId: string; valor?: string }[] {
-    return beneficiosSel.flatMap((nome) => {
+  function montarPacote(
+    sel: string[] = beneficiosSel,
+    valores: Record<string, string> = beneficiosValores,
+  ): { beneficioId: string; valor?: string }[] {
+    return sel.flatMap((nome) => {
       const b = beneficiosCat.find((x) => x.nome === nome);
       if (!b) return [];
-      const bruto = precisaValorBeneficio(nome) ? (beneficiosValores[nome] ?? "").trim() : "";
+      const bruto = precisaValorBeneficio(nome) ? (valores[nome] ?? "").trim() : "";
       return [{ beneficioId: b.id, valor: bruto || undefined }];
     });
   }
@@ -367,12 +502,119 @@ export default function LiberacaoPage() {
 
   const podeLiberar = Boolean(codCliente && cargoId);
 
+  // ---------- Liberação em massa ----------
+  function abrirLote() {
+    setLoteCodCliente("");
+    setLoteCargoId("");
+    setLoteSalario("");
+    setLoteTipoContrato("");
+    setLoteDataAdmissao("");
+    setLoteEscala("");
+    setLoteCentroCusto("");
+    setLoteGestorBp("");
+    setLoteBeneficiosSel([]);
+    setLoteBeneficiosValores({});
+    setLoteErro(null);
+    setLoteAberto(true);
+  }
+  function fecharLote() {
+    if (loteEmCurso) return;
+    setLoteAberto(false);
+  }
+  function alternarSelecao(id: string) {
+    setSelecionados((sel) => (sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id]));
+  }
+
+  /**
+   * Executa o lote SÓ com as não-duplicatas selecionadas (as duplicatas são bloqueadas no modal e
+   * seguem para tratamento individual). Erro que barra o lote inteiro (par sem régua, teto, cliente
+   * ou cargo inexistente) volta do backend e é mostrado DENTRO do modal, sem liberar ninguém.
+   */
+  async function liberarLote() {
+    if (loteSelecionadasOk.length === 0 || !loteCodCliente || !loteCargoId) return;
+    const lotePacote = montarPacote(loteBeneficiosSel, loteBeneficiosValores);
+    setLoteEmCurso(true);
+    setLoteErro(null);
+    setError(null);
+    setOkMsg(null);
+    try {
+      const r = await apiFetch<{
+        liberadas: { admissaoId: string; candidato: string }[];
+        falhas: { candidato: string; motivo: string }[];
+      }>("/admissoes/liberar-lote", {
+        method: "PATCH",
+        token,
+        body: {
+          admissaoIds: loteSelecionadasOk.map((x) => x.admissaoId),
+          codCliente: loteCodCliente,
+          cargoId: loteCargoId,
+          // O preenchido vale para TODAS as N; o vazio segue como pendência individual de cada uma.
+          tipoContrato: loteTipoContrato || undefined,
+          dataAdmissao: loteDataAdmissao || undefined,
+          vagaFolha: {
+            salario: salarioParaNumero(loteSalario),
+            escala: loteEscala || undefined,
+            centroCusto: loteCentroCusto || undefined,
+            gestorBp: loteGestorBp || undefined,
+          },
+          pacoteBeneficios: lotePacote.length ? lotePacote : undefined,
+        },
+      });
+      setLoteAberto(false);
+      setLoteResultado(r);
+      setSelecionados([]);
+      await load();
+      refreshBadge(); // saíram da fila: badge cai na hora.
+    } catch (e) {
+      const msg =
+        e instanceof ApiError && typeof e.data === "object" && e.data
+          ? ((e.data as { message?: string }).message ?? e.message)
+          : e instanceof Error
+            ? e.message
+            : "Erro ao liberar o lote";
+      setLoteErro(msg);
+    } finally {
+      setLoteEmCurso(false);
+    }
+  }
+
   // Visões filtradas pela busca (nome/CPF). Busca vazia = listas completas (sem regressão).
   const rowsFiltradas = filtrarBusca(rows, busca);
   const recusadasFiltradas = filtrarBusca(recusadas, busca);
 
+  // Seleção em massa. "Selecionar todos" opera SÓ sobre as linhas VISÍVEIS (filtradas pela busca),
+  // nunca sobre a base inteira: o consultor não seleciona o que não está vendo.
+  const idsVisiveis = rowsFiltradas.map((r) => r.admissaoId);
+  const selecionadosVisiveis = idsVisiveis.filter((id) => selecionados.includes(id));
+  const todosVisiveisMarcados =
+    idsVisiveis.length > 0 && selecionadosVisiveis.length === idsVisiveis.length;
+  function alternarTodosVisiveis() {
+    setSelecionados((sel) =>
+      todosVisiveisMarcados
+        ? sel.filter((id) => !idsVisiveis.includes(id))
+        : [...new Set([...sel, ...idsVisiveis])],
+    );
+  }
+  // Selecionadas do lote, separadas pela trava de duplicata: as marcadas "possível duplicata" NÃO
+  // são liberadas em massa (decisão do diretor), vão para tratamento individual.
+  const selecionadasObjs = rows.filter((r) => selecionados.includes(r.admissaoId));
+  const loteDuplicatas = selecionadasObjs.filter((r) => r.possivelDuplicata);
+  const loteSelecionadasOk = selecionadasObjs.filter((r) => !r.possivelDuplicata);
+  const podeLiberarLote = Boolean(loteCodCliente && loteCargoId && loteSelecionadasOk.length > 0);
+
   // Campos da régua unificada §A.19 ainda vazios (hint visual; a fonte autoritativa é o backend, que
   // recalcula o sinalizador ao liberar). Cliente/Cargo não entram: são a trava, já garantidos aqui.
+  // Mesma régua de hint, aplicada aos campos do LOTE (vale igual para todas as N).
+  const lotePendentes = [
+    !loteSalario && "Salário",
+    !loteTipoContrato && "Tipo de contrato",
+    !loteDataAdmissao && "Data de admissão",
+    loteBeneficiosSel.length === 0 && "Pacote de benefícios",
+    !loteEscala && "Escala",
+    !loteCentroCusto && "Centro de custo",
+    !loteGestorBp && "Gestor / BP",
+  ].filter(Boolean) as string[];
+
   const pendentesNoModal = [
     !salario && "Salário",
     !tipoContrato && "Tipo de contrato",
@@ -436,12 +678,42 @@ export default function LiberacaoPage() {
         />
       </div>
 
+      {/* Barra de ação da seleção em massa: só aparece com algo marcado, para não poluir a tela. */}
+      {aba === "aguardando" && selecionados.length > 0 && (
+        <div className="mb-3 flex flex-wrap items-center gap-3 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-sm">
+          <span className="font-semibold">
+            {selecionados.length} selecionada{selecionados.length === 1 ? "" : "s"}
+          </span>
+          <button
+            type="button"
+            className="text-[13px] text-dim underline-offset-2 hover:underline"
+            onClick={() => setSelecionados([])}
+          >
+            Limpar seleção
+          </button>
+          <Button className="ml-auto py-2" onClick={abrirLote}>
+            Liberar selecionadas
+          </Button>
+        </div>
+      )}
+
       {aba === "aguardando" ? (
         <GlassCard className="overflow-hidden p-2">
           <div className="ea-scroll overflow-x-auto">
-            <table className="ds-table min-w-[900px]">
+            <table className="ds-table min-w-[944px]">
               <thead>
                 <tr>
+                  <th className="w-[44px]">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 cursor-pointer accent-[var(--accent)]"
+                      aria-label="Selecionar todas as visíveis"
+                      title="Seleciona só as linhas visíveis pela busca"
+                      checked={todosVisiveisMarcados}
+                      onChange={alternarTodosVisiveis}
+                      disabled={idsVisiveis.length === 0}
+                    />
+                  </th>
                   <th>Candidato</th>
                   <th className="w-[150px]">CPF</th>
                   <th className="w-[130px]">Telefone</th>
@@ -456,13 +728,13 @@ export default function LiberacaoPage() {
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan={9} className="py-8 text-center text-faint">
+                    <td colSpan={10} className="py-8 text-center text-faint">
                       Carregando…
                     </td>
                   </tr>
                 ) : rowsFiltradas.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="py-8 text-center text-faint">
+                    <td colSpan={10} className="py-8 text-center text-faint">
                       {busca
                         ? "Nenhum candidato encontrado para a busca."
                         : "Nenhuma pré-admissão aguardando liberação."}
@@ -471,6 +743,15 @@ export default function LiberacaoPage() {
                 ) : (
                   rowsFiltradas.map((r) => (
                     <tr key={r.admissaoId}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 cursor-pointer accent-[var(--accent)]"
+                          aria-label={`Selecionar ${r.candidatoNome}`}
+                          checked={selecionados.includes(r.admissaoId)}
+                          onChange={() => alternarSelecao(r.admissaoId)}
+                        />
+                      </td>
                       <td className="font-semibold">
                         <span className="inline-flex items-center gap-2">
                           {r.candidatoNome}
@@ -744,6 +1025,247 @@ export default function LiberacaoPage() {
                 {liberando ? "Liberando…" : "Liberar"}
               </Button>
             </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Modal do LOTE: variante enxuta do individual, SÓ cliente + cargo. Os demais campos variam por
+          pessoa e por isso não são preenchidos em massa: viram pendência individual na esteira.
+          Também NÃO carrega o pacote de benefícios da memória do par (isso é do individual). */}
+      {loteAberto && (
+        <Modal
+          onClose={fecharLote}
+          ariaLabel="Liberar selecionadas"
+          className="max-w-[560px] p-6"
+        >
+          <div className="mb-5">
+            <div className="eyebrow !mb-1">Liberação em massa</div>
+            <h2 className="font-display text-xl font-bold">
+              {loteSelecionadasOk.length} pré-admiss{loteSelecionadasOk.length === 1 ? "ão" : "ões"}{" "}
+              selecionada{loteSelecionadasOk.length === 1 ? "" : "s"}
+            </h2>
+            <p className="mt-1 text-[13px] text-dim">
+              Só cliente e cargo são obrigatórios. Tudo o que você preencher aqui é aplicado a todas as
+              selecionadas; o que ficar em branco vira pendência individual de cada admissão na
+              esteira.
+            </p>
+          </div>
+
+          {/* TRAVA 1, duplicatas: listadas e bloqueadas. Seguem para tratamento individual. */}
+          {loteDuplicatas.length > 0 && (
+            <div className="mb-4 rounded-xl border border-[rgba(234,88,12,0.35)] bg-[rgba(234,88,12,0.12)] px-3 py-2 text-[12.5px] text-warn-2">
+              <p className="font-semibold">
+                {loteDuplicatas.length} selecionada{loteDuplicatas.length === 1 ? "" : "s"} não
+                {loteDuplicatas.length === 1 ? " será liberada" : " serão liberadas"} em massa
+                (possível duplicata):
+              </p>
+              <ul className="mt-1 list-disc pl-5">
+                {loteDuplicatas.map((d) => (
+                  <li key={d.admissaoId}>{d.candidatoNome}</li>
+                ))}
+              </ul>
+              <p className="mt-1">
+                Já existe admissão viva desse CPF. Libere uma a uma, conferindo antes se não é
+                duplicata.
+              </p>
+            </div>
+          )}
+
+          <div className="grid gap-4">
+            <label className="grid gap-1.5">
+              <span className="ds-label">Cliente</span>
+              <Select
+                value={loteCodCliente}
+                onChange={setLoteCodCliente}
+                placeholder="Selecione o cliente…"
+                ariaLabel="Cliente do lote"
+                searchable
+                menuFit
+                options={clientes.map((c) => ({ value: c.codCliente, label: rotuloCliente(c) }))}
+              />
+            </label>
+            <label className="grid gap-1.5">
+              <span className="ds-label">Cargo</span>
+              <Select
+                value={loteCargoId}
+                onChange={setLoteCargoId}
+                placeholder="Selecione o cargo…"
+                ariaLabel="Cargo do lote"
+                searchable
+                menuFit
+                options={cargos.map((c) => ({ value: c.id, label: c.nome }))}
+              />
+            </label>
+
+            {/* MESMOS campos do individual, todos opcionais: o preenchido vale para as N do lote, o
+                vazio vira pendência individual de cada admissão na esteira. */}
+            <div className="grid grid-cols-2 gap-4">
+              <label className="grid gap-1.5">
+                <span className="ds-label">Salário</span>
+                <input
+                  className="ds-input"
+                  inputMode="decimal"
+                  placeholder="Ex.: 2.500,00"
+                  value={loteSalario}
+                  onChange={(e) => setLoteSalario(e.target.value)}
+                />
+              </label>
+              <label className="grid gap-1.5">
+                <span className="ds-label">Data de admissão</span>
+                <input
+                  type="date"
+                  className="ds-input"
+                  value={loteDataAdmissao}
+                  onChange={(e) => setLoteDataAdmissao(e.target.value)}
+                />
+              </label>
+              <label className="grid gap-1.5">
+                <span className="ds-label">Tipo de contrato</span>
+                <Select
+                  value={loteTipoContrato}
+                  onChange={setLoteTipoContrato}
+                  placeholder="Selecione…"
+                  ariaLabel="Tipo de contrato do lote"
+                  options={TIPOS_CONTRATO.map((t) => ({ value: t, label: t }))}
+                />
+              </label>
+              <label className="grid gap-1.5">
+                <span className="ds-label">Escala</span>
+                <Select
+                  value={loteEscala}
+                  onChange={setLoteEscala}
+                  placeholder="Selecione…"
+                  ariaLabel="Escala do lote"
+                  searchable
+                  menuFit
+                  options={escalasCat.map((e) => ({ value: e.nome, label: e.nome }))}
+                />
+              </label>
+              <label className="grid gap-1.5">
+                <span className="ds-label">Centro de custo</span>
+                <input
+                  className="ds-input"
+                  value={loteCentroCusto}
+                  onChange={(e) => setLoteCentroCusto(e.target.value)}
+                />
+              </label>
+              <label className="grid gap-1.5">
+                <span className="ds-label">Gestor / BP</span>
+                <input
+                  className="ds-input"
+                  value={loteGestorBp}
+                  onChange={(e) => setLoteGestorBp(e.target.value)}
+                />
+              </label>
+            </div>
+
+            {/* Benefícios: MESMA régua de valor do individual, pré-preenchidos pela memória do par
+                cliente+cargo (o pacote costuma ser o mesmo para todas do lote), editáveis. */}
+            <label className="grid gap-1.5">
+              <span className="ds-label">Benefícios</span>
+              <MultiSelect
+                values={loteBeneficiosSel}
+                onChange={setLoteBeneficiosSel}
+                placeholder="Selecione os benefícios…"
+                ariaLabel="Benefícios do lote"
+                options={beneficiosCat.map((b) => ({ value: b.nome, label: b.nome }))}
+              />
+            </label>
+            {loteBeneficiosSel.filter(precisaValorBeneficio).length > 0 && (
+              <div className="grid grid-cols-2 gap-3">
+                {loteBeneficiosSel.filter(precisaValorBeneficio).map((nome) => (
+                  <label key={nome} className="grid gap-1.5">
+                    <span className="ds-label">Valor de {nome}</span>
+                    <input
+                      className="ds-input"
+                      inputMode="decimal"
+                      placeholder="Ex.: 500,00"
+                      value={loteBeneficiosValores[nome] ?? ""}
+                      onChange={(e) =>
+                        setLoteBeneficiosValores((v) => ({ ...v, [nome]: e.target.value }))
+                      }
+                    />
+                  </label>
+                ))}
+              </div>
+            )}
+
+            {/* Mesma sinalização do individual: o que ficar vazio não bloqueia, segue como pendência
+                de CADA uma das admissões do lote. */}
+            {podeLiberarLote && lotePendentes.length > 0 && (
+              <p className="rounded-xl border border-[var(--border)] bg-[rgba(201,138,18,0.1)] px-3 py-2 text-[12.5px] text-warn">
+                Ainda pendente em cada uma das {loteSelecionadasOk.length} (não bloqueia, segue como
+                pendência na esteira): {lotePendentes.join(", ")}.
+              </p>
+            )}
+          </div>
+
+          {/* TRAVA 2, par sem régua: o backend barra o lote ANTES de liberar qualquer uma, e a
+              mensagem dele aparece aqui. Nenhuma admissão nasce sem checklist. */}
+          {loteErro && (
+            <p
+              className="mt-4 rounded-xl border border-[var(--border)] bg-[rgba(214,69,69,0.1)] px-3 py-2 text-sm text-danger"
+              role="alert"
+            >
+              {loteErro}
+            </p>
+          )}
+
+          <div className="mt-6 flex justify-end gap-3">
+            <Button variant="secondary" onClick={fecharLote} disabled={loteEmCurso}>
+              Cancelar
+            </Button>
+            <Button onClick={() => void liberarLote()} disabled={!podeLiberarLote || loteEmCurso}>
+              {loteEmCurso
+                ? "Liberando…"
+                : `Liberar ${loteSelecionadasOk.length} selecionada${loteSelecionadasOk.length === 1 ? "" : "s"}`}
+            </Button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Relatório do lote: o que nasceu na esteira e o que falhou, candidato a candidato. */}
+      {loteResultado && (
+        <Modal
+          onClose={() => setLoteResultado(null)}
+          ariaLabel="Resultado da liberação em massa"
+          className="max-w-[560px] p-6"
+        >
+          <div className="mb-4">
+            <div className="eyebrow !mb-1">Liberação em massa</div>
+            <h2 className="font-display text-xl font-bold">
+              {loteResultado.liberadas.length} liberada
+              {loteResultado.liberadas.length === 1 ? "" : "s"}
+              {loteResultado.falhas.length > 0 ? `, ${loteResultado.falhas.length} com falha` : ""}
+            </h2>
+          </div>
+
+          {loteResultado.liberadas.length > 0 && (
+            <div className="mb-4 rounded-xl border border-[var(--border)] bg-[rgba(46,158,99,0.12)] px-3 py-2 text-[12.5px] text-ok">
+              <p className="font-semibold">Entraram na esteira:</p>
+              <ul className="mt-1 list-disc pl-5">
+                {loteResultado.liberadas.map((l) => (
+                  <li key={l.admissaoId}>{l.candidato}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {loteResultado.falhas.length > 0 && (
+            <div className="rounded-xl border border-[var(--border)] bg-[rgba(214,69,69,0.1)] px-3 py-2 text-[12.5px] text-danger">
+              <p className="font-semibold">Não liberadas (seguem na fila):</p>
+              <ul className="mt-1 list-disc pl-5">
+                {loteResultado.falhas.map((f, i) => (
+                  <li key={`${f.candidato}-${i}`}>
+                    {f.candidato}: {f.motivo}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <div className="mt-6 flex justify-end">
+            <Button onClick={() => setLoteResultado(null)}>Fechar</Button>
           </div>
         </Modal>
       )}

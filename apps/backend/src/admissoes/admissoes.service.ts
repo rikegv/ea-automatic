@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  HttpException,
   Inject,
   Injectable,
   NotFoundException,
@@ -40,6 +41,15 @@ import { recomputeFarolGlobal } from "./farol";
 import type { AuthUser } from "../auth/auth.types";
 import type { CandidatoInputDto, CreateAdmissaoDto } from "./dto/create-admissao.dto";
 import type { UpdateAdmissaoDto } from "./dto/update-admissao.dto";
+
+/**
+ * Teto de pré-admissões por lote de liberação (decisão do diretor). Acima disso a chamada é barrada:
+ * o lote é síncrono e o consultor espera na tela.
+ */
+const LOTE_LIBERACAO_MAX = 50;
+
+/** Transação do Drizzle, derivada do próprio `Database` (não depende do dialeto importado). */
+type DbTransaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
 export interface ListarAdmissoesFiltros {
   q?: string;
@@ -516,113 +526,276 @@ export class AdmissoesService {
     // Mesma validação do `create` (benefício que exige valor não passa sem valor). Fora da tx.
     await this.validarValoresDoPacote(dto.pacoteBeneficios);
 
+    return this.db.transaction(async (tx) => {
+      // Régua do par (cliente + cargo), mesma leitura do `create`. No LOTE esta leitura acontece UMA
+      // vez, fora do laço (é o mesmo par para todas), e é passada pronta ao miolo.
+      const regua = await this.lerReguaDoPar(tx, dto.codCliente, dto.cargoId);
+      await this.aplicarLiberacao(tx, {
+        adm,
+        candidatoNome: candidato?.nome ?? "",
+        dto,
+        regua,
+        user,
+      });
+      return { admissaoId, temRegua: regua.length > 0 };
+    });
+  }
+
+  /** Régua documental do par (cliente + cargo). Aceita `db` ou `tx` (mesma leitura do `create`). */
+  private async lerReguaDoPar(
+    exec: Database | DbTransaction,
+    codCliente: string,
+    cargoId: string,
+  ): Promise<{ tipoDocumentoId: string; exigencia: string }[]> {
+    return exec
+      .select({
+        tipoDocumentoId: reguaDocumental.tipoDocumentoId,
+        exigencia: reguaDocumental.exigencia,
+      })
+      .from(reguaDocumental)
+      .where(and(eq(reguaDocumental.codCliente, codCliente), eq(reguaDocumental.cargoId, cargoId)));
+  }
+
+  /**
+   * MIOLO do nascimento por liberação, dentro de UMA transação já aberta. Extraído do `liberar` para
+   * ser reusado, IDÊNTICO, pela liberação em LOTE: sinalizador (régua unificada §A.19) → admissão
+   * (cliente/cargo/farol EM_ADMISSAO) → vaga/folha → benefícios estruturados → frentes AUDITORIA+EXAME
+   * (regra 1 / F12) → documentos PENDENTES da régua.
+   *
+   * A régua chega PRONTA (lida uma vez por par) e o chamador é quem decide o que fazer com
+   * `regua.length === 0`: o individual deixa nascer sem checklist (regra 5, sinaliza `temRegua`), o
+   * lote BARRA antes do laço (decisão do diretor, um par sem régua não nasce 50 vezes sem checklist).
+   */
+  private async aplicarLiberacao(
+    tx: DbTransaction,
+    params: {
+      adm: typeof admissoes.$inferSelect;
+      candidatoNome: string;
+      dto: {
+        codCliente: string;
+        cargoId: string;
+        tipoContrato?: string;
+        dataAdmissao?: string;
+        vagaFolha?: {
+          salario?: string;
+          beneficios?: string;
+          escala?: string;
+          centroCusto?: string;
+          departamento?: string;
+          gestorBp?: string;
+          motivo?: string;
+          tempoContrato?: string;
+          endereco?: string;
+        };
+        pacoteBeneficios?: { beneficioId: string; valor?: number }[];
+      };
+      regua: { tipoDocumentoId: string; exigencia: string }[];
+      user: AuthUser;
+    },
+  ): Promise<void> {
+    const { adm, candidatoNome, dto, regua, user } = params;
+    const admissaoId = adm.id;
     const vf = dto.vagaFolha ?? {};
     const novoTipoContrato = dto.tipoContrato ?? adm.tipoContrato ?? undefined;
     const novaDataAdmissao = dto.dataAdmissao ?? adm.dataAdmissao ?? undefined;
     const temEstruturado = Boolean(dto.pacoteBeneficios?.length);
 
-    return this.db.transaction(async (tx) => {
-      // Régua do par (cliente + cargo) — mesma leitura do `create`.
-      const regua = await tx
-        .select({
-          tipoDocumentoId: reguaDocumental.tipoDocumentoId,
-          exigencia: reguaDocumental.exigencia,
-        })
-        .from(reguaDocumental)
-        .where(
-          and(
-            eq(reguaDocumental.codCliente, dto.codCliente),
-            eq(reguaDocumental.cargoId, dto.cargoId),
-          ),
-        );
+    // Sinalizador com os valores REALMENTE preenchidos no modal (régua unificada §A.19): o que
+    // ficou vazio vira pendência na esteira, o que foi preenchido não. Mesma função do `create`.
+    const sinalizador = calcSinalizadorPreenchimento({
+      candidato: { nome: candidatoNome, cpf: adm.candidatoCpf },
+      codCliente: dto.codCliente,
+      cargoId: dto.cargoId,
+      dataAdmissao: novaDataAdmissao,
+      tipoContrato: novoTipoContrato,
+      vagaFolha: {
+        salario: vf.salario,
+        beneficios: vf.beneficios,
+        escala: vf.escala,
+        centroCusto: vf.centroCusto,
+        gestorBp: vf.gestorBp,
+      },
+      isBanco: adm.isBanco,
+      termoBancoEntregue: false,
+      temBeneficioEstruturado: temEstruturado,
+    });
 
-      // Sinalizador com os valores REALMENTE preenchidos no modal (régua unificada §A.19): o que
-      // ficou vazio vira pendência na esteira, o que foi preenchido não. Mesma função do `create`.
-      const sinalizador = calcSinalizadorPreenchimento({
-        candidato: { nome: candidato?.nome ?? "", cpf: adm.candidatoCpf },
+    await tx
+      .update(admissoes)
+      .set({
         codCliente: dto.codCliente,
         cargoId: dto.cargoId,
-        dataAdmissao: novaDataAdmissao,
-        tipoContrato: novoTipoContrato,
-        vagaFolha: {
-          salario: vf.salario,
-          beneficios: vf.beneficios,
-          escala: vf.escala,
-          centroCusto: vf.centroCusto,
-          gestorBp: vf.gestorBp,
-        },
-        isBanco: adm.isBanco,
-        termoBancoEntregue: false,
-        temBeneficioEstruturado: temEstruturado,
-      });
+        tipoContrato: novoTipoContrato ?? null,
+        dataAdmissao: novaDataAdmissao ?? null,
+        farolGlobal: "EM_ADMISSAO",
+        sinalizadorPreenchimento: sinalizador,
+        consultorId: user.id,
+        atualizadoEm: new Date(),
+      })
+      .where(eq(admissoes.id, admissaoId));
 
-      await tx
-        .update(admissoes)
-        .set({
-          codCliente: dto.codCliente,
-          cargoId: dto.cargoId,
-          tipoContrato: novoTipoContrato ?? null,
-          dataAdmissao: novaDataAdmissao ?? null,
-          farolGlobal: "EM_ADMISSAO",
-          sinalizadorPreenchimento: sinalizador,
-          consultorId: user.id,
-          atualizadoEm: new Date(),
-        })
-        .where(eq(admissoes.id, admissaoId));
+    // Vaga/folha: a pré-admissão já tem a linha 1:1 (vazia, da criação) — ATUALIZA com o preenchido.
+    await tx
+      .update(dadosVagaFolha)
+      .set({
+        salario: vf.salario ?? null,
+        escala: vf.escala ?? null,
+        centroCusto: vf.centroCusto ?? null,
+        departamento: vf.departamento ?? null,
+        gestorBp: vf.gestorBp ?? null,
+        motivo: vf.motivo ?? null,
+        tempoContrato: vf.tempoContrato ?? null,
+        endereco: vf.endereco ?? null,
+      })
+      .where(eq(dadosVagaFolha.admissaoId, admissaoId));
 
-      // Vaga/folha: a pré-admissão já tem a linha 1:1 (vazia, da criação) — ATUALIZA com o preenchido.
-      await tx
-        .update(dadosVagaFolha)
-        .set({
-          salario: vf.salario ?? null,
-          escala: vf.escala ?? null,
-          centroCusto: vf.centroCusto ?? null,
-          departamento: vf.departamento ?? null,
-          gestorBp: vf.gestorBp ?? null,
-          motivo: vf.motivo ?? null,
-          tempoContrato: vf.tempoContrato ?? null,
-          endereco: vf.endereco ?? null,
-        })
-        .where(eq(dadosVagaFolha.admissaoId, admissaoId));
-
-      // Pacote de benefícios ESTRUTURADO (§A.17 etapa 4). Mesma gravação do `create` (g.2).
-      if (dto.pacoteBeneficios?.length) {
-        await tx.insert(admissaoBeneficio).values(
-          dto.pacoteBeneficios.map((b) => ({
-            admissaoId,
-            beneficioId: b.beneficioId,
-            valor: b.valor === undefined ? null : b.valor.toFixed(2),
-          })),
-        );
-      }
-
-      // Nascimento paralelo (regra 1 / F12): AUDITORIA + EXAME. Espelha o `create` (h/i).
-      const agora = new Date();
-      await tx.insert(frentesAdmissao).values(
-        FRENTES_AO_NASCER.map((tipo) => ({
+    // Pacote de benefícios ESTRUTURADO (§A.17 etapa 4). Mesma gravação do `create` (g.2).
+    if (dto.pacoteBeneficios?.length) {
+      await tx.insert(admissaoBeneficio).values(
+        dto.pacoteBeneficios.map((b) => ({
           admissaoId,
-          tipo,
-          status: STATUS_INICIAL_FRENTE[tipo],
-          concluida: false,
-          dataInicio: agora,
+          beneficioId: b.beneficioId,
+          valor: b.valor === undefined ? null : b.valor.toFixed(2),
         })),
       );
+    }
 
-      const exigidos = regua.filter(
-        (r) => r.exigencia === "OBRIGATORIO" || r.exigencia === "FACULTATIVO",
+    // Nascimento paralelo (regra 1 / F12): AUDITORIA + EXAME. Espelha o `create` (h/i).
+    const agora = new Date();
+    await tx.insert(frentesAdmissao).values(
+      FRENTES_AO_NASCER.map((tipo) => ({
+        admissaoId,
+        tipo,
+        status: STATUS_INICIAL_FRENTE[tipo],
+        concluida: false,
+        dataInicio: agora,
+      })),
+    );
+
+    const exigidos = regua.filter(
+      (r) => r.exigencia === "OBRIGATORIO" || r.exigencia === "FACULTATIVO",
+    );
+    if (exigidos.length > 0) {
+      await tx.insert(documentosAdmissao).values(
+        exigidos.map((r) => ({
+          admissaoId,
+          tipoDocumentoId: r.tipoDocumentoId,
+          estado: "PENDENTE" as const,
+        })),
       );
-      if (exigidos.length > 0) {
-        await tx.insert(documentosAdmissao).values(
-          exigidos.map((r) => ({
-            admissaoId,
-            tipoDocumentoId: r.tipoDocumentoId,
-            estado: "PENDENTE" as const,
-          })),
-        );
-      }
+    }
+  }
 
-      return { admissaoId, temRegua: regua.length > 0 };
+  /**
+   * LIBERAÇÃO EM LOTE (Liberação Admissional). Aplica os MESMOS valores a N pré-admissões, cada uma
+   * nascendo pelo miolo `aplicarLiberacao` (idêntico ao individual).
+   *
+   * MESMO conjunto de campos do individual, MESMA obrigatoriedade: só cliente+cargo travam. O que vier
+   * preenchido é aplicado às N (o caso real é N pessoas do mesmo cliente, cargo e salário); o que vier
+   * vazio vira pendência individual de cada admissão na esteira, exatamente como quando o consultor
+   * libera uma a uma deixando campos em branco. O pacote de benefícios usa a MESMA régua de valor do
+   * individual (`validarValoresDoPacote`), validada uma vez e aplicada às N.
+   *
+   * PARCIAL-COM-RELATÓRIO: uma transação INDEPENDENTE por admissão. A de número 30 falhar não desfaz
+   * as 29 anteriores nem impede as 20 seguintes; a falha volta no relatório. Reprocessar é seguro (a
+   * já liberada não está mais em AGUARDANDO_LIBERACAO e cai como falha, sem duplicar nada).
+   *
+   * BARRAS ANTES DO LAÇO (decisões do diretor): teto de 50 por lote; par sem régua documental não
+   * libera em massa (nascer 50 sem checklist é diferente de nascer 1); e pré-admissão marcada
+   * "possível duplicata" não entra no lote, é tratada individualmente (aqui vira falha reportada, o
+   * front já a bloqueia antes).
+   */
+  async liberarEmLote(
+    admissaoIds: string[],
+    dto: {
+      codCliente: string;
+      cargoId: string;
+      tipoContrato?: string;
+      dataAdmissao?: string;
+      vagaFolha?: {
+        salario?: string;
+        beneficios?: string;
+        escala?: string;
+        centroCusto?: string;
+        departamento?: string;
+        gestorBp?: string;
+        motivo?: string;
+        tempoContrato?: string;
+        endereco?: string;
+      };
+      pacoteBeneficios?: { beneficioId: string; valor?: number }[];
+    },
+    user: AuthUser,
+  ): Promise<{
+    liberadas: { admissaoId: string; candidato: string }[];
+    falhas: { candidato: string; motivo: string }[];
+  }> {
+    const ids = [...new Set(admissaoIds)];
+    if (ids.length === 0) throw new BadRequestException("Selecione ao menos uma pré-admissão.");
+    if (ids.length > LOTE_LIBERACAO_MAX) {
+      throw new BadRequestException(
+        `Máximo de ${LOTE_LIBERACAO_MAX} pré-admissões por lote. Selecione menos e repita a operação.`,
+      );
+    }
+
+    // Cliente e cargo: validados UMA vez (são os mesmos para todas).
+    const cliente = await this.db.query.clientes.findFirst({
+      where: eq(clientes.codCliente, dto.codCliente),
     });
+    if (!cliente) throw new NotFoundException("Cliente não encontrado");
+    const cargo = await this.db.query.cargos.findFirst({ where: eq(cargos.id, dto.cargoId) });
+    if (!cargo) throw new NotFoundException("Cargo não encontrado");
+
+    // Mesma régua de valor do individual (benefício que exige valor não passa sem valor). O pacote é
+    // o mesmo para as N, então valida UMA vez, antes do laço: pacote inválido não libera ninguém.
+    await this.validarValoresDoPacote(dto.pacoteBeneficios);
+
+    // Régua do par: lida UMA vez e reaproveitada nas N. Sem régua, o lote NÃO passa (decisão do
+    // diretor). O backend é a autoridade: o front bloqueia antes, isto garante que nenhuma chamada
+    // direta contorne a regra.
+    const regua = await this.lerReguaDoPar(this.db, dto.codCliente, dto.cargoId);
+    if (regua.length === 0) {
+      throw new ConflictException(
+        "Este par de cliente e cargo não tem régua documental cadastrada. Cadastre a régua antes de liberar em massa.",
+      );
+    }
+
+    const liberadas: { admissaoId: string; candidato: string }[] = [];
+    const falhas: { candidato: string; motivo: string }[] = [];
+
+    for (const admissaoId of ids) {
+      // Nome só para o relatório da tela. §A.6: identifica a linha para o consultor, nunca vai a log.
+      let nome = "não informado";
+      try {
+        const adm = await this.db.query.admissoes.findFirst({ where: eq(admissoes.id, admissaoId) });
+        if (!adm) throw new NotFoundException("Admissão não encontrada");
+        const candidato = await this.db.query.candidatos.findFirst({
+          where: eq(candidatos.cpf, adm.candidatoCpf),
+        });
+        nome = candidato?.nome ?? nome;
+
+        if (adm.farolGlobal !== "AGUARDANDO_LIBERACAO") {
+          throw new ConflictException("Não está mais aguardando liberação.");
+        }
+        if (adm.possivelDuplicata) {
+          throw new ConflictException(
+            "Possível duplicata: precisa ser liberada individualmente, não em massa.",
+          );
+        }
+
+        await this.db.transaction(async (tx) => {
+          await this.aplicarLiberacao(tx, { adm, candidatoNome: nome, dto, regua, user });
+        });
+        liberadas.push({ admissaoId, candidato: nome });
+      } catch (e) {
+        falhas.push({
+          candidato: nome,
+          motivo: e instanceof HttpException ? e.message : "Erro ao liberar",
+        });
+      }
+    }
+
+    return { liberadas, falhas };
   }
 
   /**
