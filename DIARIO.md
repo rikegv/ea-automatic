@@ -2348,3 +2348,80 @@ separar por arquivo sem cirurgia no diff.*
 Ressalva de processo (§A.13): sem screenshot, o Playwright headless não sobe nesta VM (faltam
 bibliotecas de sistema que exigem `sudo`, destravar do diretor). A validação foi feita pelo diretor
 direto na tela de produção.
+
+---
+
+## 2026-07-21 (noite) — Documentos padrão na régua documental (VALIDADO e commitado)
+
+Diretor validou na tela os dois usos e **executou a aplicação em massa**. §A.21 cumprida.
+
+### Números confirmados ANTES de construir (o diretor não precisou chutar)
+- Catálogo: **30 tipos de documento, todos ativos**, e a tela da régua lista os 30.
+- Os **7 códigos do padrão existem** no catálogo e estão ativos: `RG`, `CPF`, `CTPS`,
+  `COMPROVANTE_RESIDENCIA`, `DADOS_BANCARIOS`, `COMPROVANTE_ESCOLARIDADE`, `RESERVISTA`.
+- Base da régua hoje: **3.047 linhas, 432 pares, 206 clientes**. **431 pares têm exatamente o mesmo
+  conjunto de 7 obrigatórios**; o único fora do padrão é **54981, Auxiliar de Expedição**, com 30
+  documentos, editado à mão em 16/07.
+- **11 pares** cliente+cargo estão em uso por admissões e **sem nenhuma régua** (5 deles com admissão
+  viva): AVL/Analista de Engenharia, CATENA IT/Desenvolvedor Frontend, SLING/Analista de Departamento
+  Pessoal, SONOVA/Analista de Expansão, SOULAN/Consultor Trainee (esses 5 vivos) e BMB (OBRAMAX)/
+  Analista de Roteirização, BUNGE/Manager de HRBP, CIA DAS LETRAS-RJ/Faxineiro(a), EUCATEX/Analista de
+  Contas a Pagar PL, MEIWA/Auxiliar de Escritório, SOULAN/Consultor Pleno.
+
+### Padrão (decisão do diretor) e fonte única
+Os **7 documentos como OBRIGATORIO**. **ASO NÃO entra**: quem controla o exame é a frente EXAME
+(§A.16), e cobrá-lo na régua criaria exigência duplicada. Os demais tipos ativos ficam NAO_OBRIGATORIO,
+que já é o default da tela.
+
+Os 7 códigos foram **promovidos do `seed-regua-padrao.ts` para `CODIGOS_REGUA_PADRAO` em
+`packages/shared-types`**, consumida agora pelas **três** bocas: o botão da tela, a aplicação em massa e
+o próprio seed (que deixou de definir o padrão e passou a consumi-lo). Elas não podem mais discordar.
+
+### Uso (a), botão na régua atual
+"Aplicar documentos padrão" em `/admin/regua`: marca os 7 como OBRIGATORIO **no mapa em memória**, sem
+tocar no resto do mapa (o que estava marcado à mão não é apagado nem rebaixado). Nada vai ao banco no
+clique; o consultor confere e usa o "Salvar régua" que já existia (`PUT /admin/regua`). **Zero backend
+novo neste uso.**
+
+### Uso (b), aplicação em massa nos pendentes
+Rotas novas em `admin/regua` (herdam o `@Roles("MASTER","SUPER_ADMIN")` da classe):
+`GET pendentes-padrao` (lista o alvo, alimenta a confirmação) e `POST aplicar-padrao-pendentes`.
+- **Alvo restrito, por design:** só pares que **já são usados por admissões** e não têm régua. **Não**
+  se cria régua para todo cargo do catálogo (232 clientes × 370 cargos daria 85.840 pares inventados).
+- **Só adiciona onde não há nada:** o alvo já exclui quem tem régua e o insert ainda vai
+  `onConflictDoNothing`. **Nada é sobrescrito e nada é apagado**, então o par 54981 editado à mão fica
+  intocado. Rodar duas vezes não duplica.
+- O alvo é **recalculado no servidor**, não vem do cliente. Tela de confirmação lista os pares antes de
+  gravar, e o relatório mostra o que foi aplicado.
+
+**O `seed-regua-padrao.ts` NÃO foi usado como motor (proibição do diretor, e com razão):** ele
+`delete from regua_documental` e faz cross join de todos os clientes por todos os cargos. Rodado hoje
+geraria **85.840 pares e 600.880 linhas** e destruiria a régua customizada. Ele segue existindo só como
+carga inicial; o motor do botão é a rota nova, cirúrgica e sem DELETE.
+
+### Gate
+Typecheck limpo nos dois apps, lint com os **2 erros de config pré-existentes**, **287 testes**
+(269 backend, 13 frontend, 5 shared-types). **5 novos** em `regua-padrao.spec.ts`: os 7 códigos, a
+ausência do ASO, inserção de 7 por par como OBRIGATORIO, uso de `onConflictDoNothing` sem nenhum
+delete, e nada inserido quando não há pendente. Backend e frontend rebuildados e reiniciados
+(`/admin/regua` 200).
+
+### RESULTADO REAL da aplicação (conferido no banco depois da validação)
+- Base da régua: **3.047 → 3.297 linhas**, **432 → 448 pares**, **206 → 210 clientes**.
+- **Os 11 pares alvo receberam exatamente 7 documentos OBRIGATORIO cada** (77 linhas): AVL, BMB
+  (OBRAMAX), BUNGE, CATENA IT, CIA DAS LETRAS-RJ, EUCATEX, MEIWA, SLING, SONOVA e os dois pares da
+  SOULAN. Nenhum deles nasce mais sem checklist.
+- **O par 54981 (Auxiliar de Expedição) segue com os 30 documentos**, intocado: a semântica "só adiciona
+  onde não há nada" fez o que prometia.
+- As demais 173 linhas do dia são **trabalho manual do diretor na tela** (6 pares do cliente 57269 CIA
+  DAS LETRAS, salvos com o botão do padrão + os demais tipos como não obrigatórios). Conferido: nenhuma
+  linha antiga foi alterada ou apagada por esta entrega.
+
+### Commit e gate
+Gate verde: typecheck limpo, lint com os **2 erros de config pré-existentes**, **287 testes** (269
+backend, 13 frontend, 5 shared-types), sendo 5 novos em `regua-padrao.spec.ts`. `git add` nominal de 6
+arquivos; logo, `LogoEA.tsx` e os 3 scripts de dados seguem **soltos, fora do commit** (§A.14). Flag
+`READY_*` criada após o gate e a validação, push, flag removida.
+
+Ressalva §A.13: sem screenshot (Playwright headless não sobe nesta VM, falta `sudo` para as
+bibliotecas). A validação foi feita pelo diretor direto na tela de produção.
