@@ -58,6 +58,11 @@ memória do coordenador não é fonte: ela morre no fim da sessão e mente entre
   no momento do agendamento; exigi-la travaria um exame legitimamente agendado. O gate cobra os **5**
   campos (data, horário, clínica, local, fornecedor).
 - **Escala vinculada (escala filtrada por cliente): CONGELADA** por decisão do diretor (§A.22).
+- **GO-LIVE do Pandapé FEITO (21/07/2026).** Webhook "EA Automatic" cadastrado no painel, ATIVO, com
+  evento "Candidato enviado para admissão", URL `https://soulan.com.br/webpanda/webpanda.php` e
+  autenticação por token estático (o painel monta o `Authorization: Bearer`). **Confirmado ao vivo:**
+  duas admissões reais chegaram e caíram na Liberação Admissional. O corte temporal do go-live está
+  feito e o sistema recebe fluxo vivo. **Não re-litigar** (entrada de 21/07).
 
 ---
 
@@ -2165,3 +2170,181 @@ encontrada em `nova/page.tsx:299` e `vt/page.tsx:245`), nenhum novo. **274 teste
 ### ABERTO (inalterado)
 Go-live do Pandapé (commitar `carga-frente1.ts` → extrato fresco → dry-run → carga → cadastrar webhook)
 e a decisão sobre o logo. **Tela de Liberação Admissional: COMPLETA.**
+
+---
+
+## 2026-07-20 — Carga fresca do go-live Pandapé (extrato 20/07), em 2 rounds. Webhook AINDA sem cadastro
+
+Carga do extrato **`CARGA ATUALIZADA ADMISSOES 20-07.xlsx`** (o de/para e a geração dos CSVs pela
+fábrica, `frente1_ok.csv` + `backfill_motivos.csv`, insumos fora do repo). Executada em 2 rounds
+(carga inicial + recuperação de falhas). **Parou ANTES do webhook**, aguardando validação do Rike na
+tela e a decisão do momento de ligar (o corte do go-live).
+
+### RESULTADO REAL (com ressalvas honestas)
+- **Base 2159 → 2281** (122 admissões líquidas agregadas pelo extrato).
+- **Estado final por farol:** ADMISSAO_CONCLUIDA **1485** · DECLINOU **705** · RESCISAO **55** ·
+  EM_ADMISSAO **34** · BANCO_AGUARDAR **2**. **Superfície viva: 36** (34 EM_ADMISSAO + 2 BANCO) — é o
+  que acende a esteira ao vivo.
+- **Ressalva 1 (sem perda):** dos rows "recuperados" por nome, **19 já existiam na base com o CPF
+  correto** — o extrato trazia CPF com typo, e o dedup `(cpf+cliente+cargo+data)` reconheceu que eram
+  duplicatas do typo e pulou. Por isso o round de recuperação criou só **4 novas** (ERIK vivo + 1
+  declínio + 2 concluídas), não 23. Nada perdido.
+- **Ressalva 2 (sem deleção):** diferença de **2** entre a soma dos contadores `created` (124) e o
+  crescimento líquido (122) = **reconciliação do farol derivado (§A.16)**, que reclassifica alguns
+  EM_ADMISSAO como concluídos. **Integridade verificada:** 0 grupos com chave duplicada, re-run
+  idempotente (`created=0`), a rotina de importação só faz UPDATE (nunca DELETE).
+- **Falhas que o dry-run não pegou:** o DRY não chama `create`, então `isValidCpf` e limites de coluna
+  só disparam na carga real. 1º round: 34 falhas (32 CPF inválido + 2 telefone >30). Recuperadas no 2º
+  round (20 CPF por nome único + DIEGO com CPF corrigido pelo Rike + IGOR/ERIK com telefone corrigido).
+
+### PENDENTES DE CPF (fora do sistema)
+- **41 admissões** (39 declínios + 2 concluídas) sem CPF em nenhuma fonte, guardadas no
+  **`pendentes_cpf.csv`** (nome/cliente/cargo/data/farol), **FORA do EA**, para tratar na **Fase 6
+  (dashboards)**. Não entram agora (candidato exige CPF válido, §A.3; marcador/estrutural avaliado e
+  descartado por ora). Nota de composição: GUILHERME (linha 2016) recuperou por nome e entrou;
+  GEOVANNA (156, concluída) não casou e é pendente.
+- **Decisão registrada:** os **29 declínios sem CPF originais** + estes **41** = todos tratados na
+  **Fase 6**, como contagem de declínio por cliente/motivo (sem candidato), não como ficha na esteira.
+
+### CADASTROS APLICADOS (catálogo, passo de "aplicar")
+- **12 cargos novos** (Atendente, Caixa, Analista de Contas a Pagar PL, Analista de Departamento
+  Pessoal, Analista de Engenharia, Supervisora de Caixa, Auxiliar de Escritório, Analista de Expansão,
+  Coordenador Comercial, Atendente de Marketing, Desenvolvedor Frontend, Especialista Tech Canais
+  Digitais) + 1 já existente (Assistente Comercial, mapeado). **4 clientes novos** (57384 CIA DAS
+  LETRAS-RJ, 57315 BUNGE, 51260 EUCATEX, 57390 SLING). **26º motivo de declínio** (CLIENTE NÃO CONVOCOU).
+- **Backfill de motivos feito:** declínios com motivo **759/760**.
+
+### COMMIT / GATE
+- **`06b1cad`** `chore(carga): carga-frente1 com CPF normalizado, dataAdmissao null-safe e matrícula
+  preservada` (só o script; logo e os outros 3 scripts de dados seguem soltos).
+- **Gate verde:** typecheck, lint (só os 2 erros de config pré-existentes), **274 testes**.
+
+### WEBHOOK DO PANDAPÉ: AINDA SEM CADASTRO no painel
+Aguarda a **validação do Rike na tela** (base carregada) + a **decisão do momento de ligar** = o corte
+do go-live. Só depois disso o motor da esteira passa a receber admissões vivas de verdade.
+
+---
+
+## 2026-07-21 — GO-LIVE DO PANDAPÉ: webhook cadastrado, ATIVO e CONFIRMADO AO VIVO
+
+**Marco fechado.** O motor da esteira está ligado: o EA passou a receber admissões vivas de verdade,
+não mais só dado histórico de carga. É o item 2 da §A.18.
+
+### Cadastro no painel do Pandapé (feito pelo Rike)
+- **Nome do webhook:** `EA Automatic`.
+- **Evento:** "Candidato enviado para admissão" (o único cujo payload traz `IdPreCollaborator`,
+  confirmado pelo suporte/André).
+- **URL:** `https://soulan.com.br/webpanda/webpanda.php` (ponte PHP no box público do Fernando, que
+  repassa ao EA na rede interna em `192.168.1.22:3010/api/webhooks/pandape`). A URL do EA **não** vai
+  no painel.
+- **Autenticação: token estático**, e o campo recebe **só o código**, sem a palavra "Bearer": o painel
+  do Pandapé monta sozinho o header `Authorization: Bearer <token>`. A ponte valida esse Bearer e
+  injeta o `x-pandape-webhook-token` no repasse, que é o que o `PandapeWebhookGuard` confere. Modelo
+  **token-only** (§A.5/§A.9: o box está atrás de NAT, `PANDAPE_WEBHOOK_IPS` vazio de propósito).
+
+### Verificação da ponte antes de ligar (feita nesta sessão)
+Três testes contra a URL pública, resultado igual ao esperado: GET → **405**; POST sem Bearer → **403**
+`forbidden`; POST com Bearer correto e corpo sem `IdPreCollaborator` → **400 vindo do EA**
+(`IdPreCollaborator ausente no payload`). Esse 400 é a prova de que a mensagem foi gerada pelo backend
+do EA, ou seja, o caminho estava fechado ponta a ponta antes do cadastro. Infra conferida junto:
+`ea-backend` e `ea-frontend` active, `ea-db` e `ea-redis` healthy, Redis respondendo PONG.
+
+### TESTE AO VIVO: fluxo real confirmado
+**Duas admissões REAIS chegaram do Pandapé e caíram na tela de Liberação Admissional.** Fluxo
+confirmado ponta a ponta: **Pandapé → ponte `webpanda.php` → EA**. Sistema recebendo fluxo vivo.
+Comportamento conforme o desenho: sem o de/para vaga→cliente (manual por design, decisão fechada), a
+pré-admissão nasce em `AGUARDANDO_LIBERACAO` com candidato e IDs do Pandapé, sem cliente/cargo/frentes,
+e o consultor atribui cliente + cargo na tela de Liberação.
+
+### Carga fresca concluída antes do corte
+Extrato de 20/07 aplicado antes de ligar o webhook: base **2159 → 2281**. Ficaram **41 pendentes de
+CPF** no arquivo externo (`pendentes_cpf.csv`, fora do EA), para tratar na **Fase 6**.
+
+### Estado
+O corte temporal do go-live está feito: o que vier daqui para frente entra pelo webhook; o que está na
+base é histórico de carga. **Próximo item da §A.18: a Tela de Gestão de Pendências Obrigatórias
+(§A.19)**, que agora tem sentido, existe admissão viva chegando para preencher.
+
+---
+
+## 2026-07-21 (tarde) — Auto-refresh da lista de Liberação + LIBERAÇÃO EM MASSA (aguardando validação)
+
+Duas OSTs na sequência do go-live, ambas na tela de Liberação Admissional. **Nada commitado**: as duas
+aguardam a validação do diretor na tela (§A.21, passo 2).
+
+### OST 1, auto-refresh da LISTA (entregue, em produção para validar)
+Com o Pandapé ligado, a pré-admissão cai a qualquer momento e a lista não se atualizava sozinha (só o
+badge do menu tinha polling). Agora a lista recarrega com **dois gatilhos**: o **mesmo ciclo de 90s**
+do contador (`LIBERACAO_POLL_MS` exportado do `LiberacaoAlerta`, um número só governando os dois) e a
+**mudança da contagem do provider** (subiu ou desceu, a lista reflete na hora). Recarga silenciosa e
+parcial: rebusca só as duas listas, **não** os catálogos, não mexe em `loading`, `busca`, aba nem
+mensagens, e por isso **a busca digitada não é limpa** (o filtro é client-side sobre as listas). Uma
+recarga em voo por vez; pausa com a aba do browser em segundo plano; falha de rede é silenciosa.
+Arquivos: `components/shell/LiberacaoAlerta.tsx`, `app/(app)/liberacao/page.tsx`.
+
+### OST 2, liberação em MASSA (entregue, em produção para validar)
+Caso real que motivou: 50 pré-admissões do mesmo cliente e cargo, inviável uma a uma.
+
+**Backend.** O miolo do nascimento foi **extraído** do `liberar` para `aplicarLiberacao(tx, ...)` e a
+leitura da régua para `lerReguaDoPar(exec, ...)`. O individual passou a chamar o mesmo miolo, **sem
+mudança de comportamento**; o lote reusa **exatamente** o mesmo código (sinalizador da régua unificada
+§A.19, frentes AUDITORIA+EXAME da regra 1, documentos PENDENTES da régua, benefícios). Nada foi
+recriado. `liberarEmLote(ids, dto, user)`: valida cliente e cargo **uma vez**, valida o pacote de
+benefícios **uma vez** (mesma `validarValoresDoPacote` do individual), lê a régua **uma vez** e percorre
+os ids em **N transações independentes**, devolvendo `{ liberadas, falhas }`. Rota
+`PATCH /admissoes/liberar-lote`, **sem `@Roles`** (espelha a individual, liberar é operacional),
+declarada **antes** do `@Patch(":id")` para o `:id` não engolir o path.
+
+**Conjunto de campos do lote (ajuste do diretor, JÁ INCORPORADO nesta entrega).** O lote nasceu com só
+cliente e cargo e o diretor pediu, antes do commit, **todos os campos da liberação individual**:
+cliente, cargo, salário, benefícios, escala, centro de custo, gestor/BP, tipo de contrato e data de
+admissão. **Obrigatórios seguem sendo só cliente + cargo.** O que o consultor preenche é aplicado a
+**todas as N** do lote (caso real: mesmo cliente, cargo e salário, preenche uma vez); o que fica em
+branco vira **pendência individual** de cada admissão, pelo `calcSinalizadorPreenchimento` de sempre.
+A **data de admissão não tem tratamento especial** (decisão do diretor): igual aos demais campos.
+Os benefícios reusam a régua de valor e a **memória de pacote por (cliente + cargo)** do individual,
+agora também oferecida no lote. O DTO reusa `VagaFolhaInputDto` e `BeneficioAlocadoDto` do `create`.
+
+**Regras de bloqueio (decisões do diretor), todas antes de qualquer transação:**
+- **Teto de 50** por lote, no DTO e de novo no service.
+- **Par sem régua documental**: o lote é barrado inteiro. Nascer 1 sem checklist é a regra 5; nascer 50
+  sem checklist não. O backend é a autoridade, então chamada direta também não contorna.
+- **Possível duplicata**: não é liberada em massa, vira falha reportada. O front já a separa antes.
+- **Parcial-com-relatório**: a de número 30 falhar não desfaz as 29 nem impede as 20 seguintes.
+  Reprocessar é seguro (a já liberada não está mais em AGUARDANDO_LIBERACAO e cai como falha).
+
+**Frontend.** Coluna de checkbox (44px) na aba Aguardando, `min-w` de 900 para 944px dentro do
+`overflow-x-auto` que já existia; "selecionar todos" marca **só as linhas visíveis pela busca**; barra
+de ação com a contagem; **modal do lote com TODOS os campos da liberação individual** (obrigatórios só
+cliente e cargo), com a memória de pacote do par pré-preenchendo os benefícios e a escala padrão do
+cliente, listando e bloqueando as duplicatas; hint do que segue pendente em cada uma; botão
+"Liberando…"; modal de **relatório** com liberadas e falhas por candidato. A busca da memória e a
+montagem do pacote viraram funções compartilhadas: individual e lote usam o MESMO código. A seleção é **podada por id** a cada recarga
+automática: sumiu da lista, sai da seleção. *(Extensão da máscara §A.12 com coluna de seleção,
+aprovada pelo diretor.)*
+
+**Decisão de rota (perguntada ao diretor, §A.30):** a trava de par sem régua **não** ganhou rota de
+consulta. A listagem de régua é `@Roles("MASTER","SUPER_ADMIN")` e consultor Comum não a acessa;
+abrir a rota afrouxaria o RBAC e criar outra fugiria do escopo. O bloqueio acontece **no confirmar**,
+com a mensagem do backend dentro do modal e **nenhuma admissão liberada**.
+
+### Gate e commit
+Typecheck limpo, lint com os **2 erros de config pré-existentes** (`react-hooks/exhaustive-deps` em
+`nova/page.tsx` e `vt/page.tsx`), **282 testes** (264 backend, 13 frontend, 5 shared-types). Entre eles
+**8 novos** em `admissoes.liberar-lote.spec.ts`: transação por admissão, campos preenchidos aplicados às
+N com os vazios seguindo como pendência individual, parcial-com-relatório, duplicata fora do lote, par
+sem régua barrando antes de qualquer transação, teto de 50, seleção vazia e cliente inexistente.
+Backend e frontend rebuildados e serviços reiniciados (`/liberacao` 200, API 200).
+
+**Diretor VALIDOU na tela** (modal completo, obrigatórios só cliente e cargo) e a rotina §A.21 foi
+executada: `git add` nominal dos 6 arquivos das duas OSTs, commit, flag `READY_*` criada, push, flag
+removida. Logo, `LogoEA.tsx` e os scripts de dados seguem **soltos, fora do commit** (§A.14).
+
+*Nota de recorte: o auto-refresh (OST 1) entrou no MESMO commit da massa. Os dois vivem no mesmo
+`liberacao/page.tsx` e o `LIBERACAO_POLL_MS` exportado é consumido por ele, então não havia como
+separar por arquivo sem cirurgia no diff.*
+
+### Aberto
+Ressalva de processo (§A.13): sem screenshot, o Playwright headless não sobe nesta VM (faltam
+bibliotecas de sistema que exigem `sudo`, destravar do diretor). A validação foi feita pelo diretor
+direto na tela de produção.
