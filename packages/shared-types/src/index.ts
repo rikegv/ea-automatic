@@ -108,6 +108,32 @@ export type StatusCadastroContrato = (typeof STATUS_CADASTRO_CONTRATO)[number];
 export const EXIGENCIA_DOCUMENTO = ["OBRIGATORIO", "NAO_OBRIGATORIO", "FACULTATIVO"] as const;
 export type ExigenciaDocumento = (typeof EXIGENCIA_DOCUMENTO)[number];
 
+/**
+ * DOCUMENTOS PADRÃO da régua documental (decisão do diretor). FONTE ÚNICA, consumida pelo botão
+ * "Aplicar documentos padrão" da tela `/admin/regua`, pela aplicação em massa nos pares pendentes e
+ * pelo `seed-regua-padrao.ts`. Vive aqui, e não no seed, justamente para que as três bocas não
+ * possam discordar entre si.
+ *
+ * São `codigo` de `tipos_documento`, todos aplicados como **OBRIGATORIO**. Os demais tipos ativos do
+ * catálogo ficam NAO_OBRIGATORIO, que já é o default da tela.
+ *
+ * O **ASO NÃO entra** (decisão do diretor): quem controla o exame é a frente EXAME (§A.16), e cobrá-lo
+ * também na régua criaria exigência duplicada da mesma coisa.
+ *
+ * Nota herdada do seed: o RESERVISTA é OBRIGATORIO aqui, mas é **condicional na completude**, só conta
+ * como pendência para candidato do sexo masculino (`regua-completude.service`).
+ */
+export const CODIGOS_REGUA_PADRAO = [
+  "RG",
+  "CPF",
+  "CTPS",
+  "COMPROVANTE_RESIDENCIA",
+  "DADOS_BANCARIOS",
+  "COMPROVANTE_ESCOLARIDADE",
+  "RESERVISTA",
+] as const;
+export type CodigoReguaPadrao = (typeof CODIGOS_REGUA_PADRAO)[number];
+
 // ── Não conformidades (Fase 2C) ────────────────────────────────────────────
 export const NC_TIPO = ["NC1", "NC2", "NC3"] as const;
 export type NcTipo = (typeof NC_TIPO)[number];

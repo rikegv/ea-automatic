@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { CODIGOS_REGUA_PADRAO } from "@ea/shared-types";
 import { sql as drizzleSql } from "drizzle-orm";
 import { createDb } from "./client";
 
@@ -14,15 +15,9 @@ import { createDb } from "./client";
  * O RESERVISTA é marcado OBRIGATORIO aqui, mas é CONDICIONAL na completude: só conta como pendência
  * para candidatos do sexo MASCULINO (regra-completude.service). Para mulheres não vira pendência.
  */
-const CODIGOS_PADRAO = [
-  "RG",
-  "CPF",
-  "COMPROVANTE_RESIDENCIA",
-  "DADOS_BANCARIOS",
-  "CTPS",
-  "RESERVISTA",
-  "COMPROVANTE_ESCOLARIDADE",
-];
+// FONTE ÚNICA (shared-types): a mesma lista que alimenta o botão da tela e a aplicação em massa nos
+// pares pendentes. O seed não define mais o padrão por conta própria, só o consome.
+const CODIGOS_PADRAO: readonly string[] = CODIGOS_REGUA_PADRAO;
 
 type Contagem = { clientes_com_regua: number; pares: number; linhas: number };
 

@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Put, Query } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Post, Put, Query } from "@nestjs/common";
 import { Roles } from "../../auth/decorators";
 import { ReguaService } from "./regua.service";
 import { UpsertReguaDto } from "./regua.dto";
@@ -11,6 +11,25 @@ export class ReguaController {
   @Get()
   list(@Query("codCliente") codCliente: string, @Query("cargoId") cargoId: string) {
     return this.regua.list(codCliente, cargoId);
+  }
+
+  /**
+   * Pares (cliente + cargo) usados por admissões e SEM nenhuma régua: alvo da aplicação em massa do
+   * padrão. Só leitura, alimenta a confirmação na tela. Herda o @Roles da classe (administração).
+   */
+  @Get("pendentes-padrao")
+  pendentesPadrao() {
+    return this.regua.paresPendentesPadrao();
+  }
+
+  /**
+   * Aplica os documentos padrão nos pares pendentes. SÓ adiciona onde não há nada: par com régua já
+   * cadastrada fica intocado, nada é sobrescrito nem apagado. O alvo é recalculado no servidor, não
+   * vem do cliente.
+   */
+  @Post("aplicar-padrao-pendentes")
+  aplicarPadraoPendentes() {
+    return this.regua.aplicarPadraoNosPendentes();
   }
 
   @Put()

@@ -1,7 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
-import { EXIGENCIA_DOCUMENTO, type ExigenciaDocumento } from "@ea/shared-types";
+import {
+  CODIGOS_REGUA_PADRAO,
+  EXIGENCIA_DOCUMENTO,
+  type ExigenciaDocumento,
+} from "@ea/shared-types";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/cn";
@@ -31,6 +35,19 @@ interface ReguaRow {
   tipoDocumentoId: string;
   exigencia: ExigenciaDocumento;
 }
+/** Par (cliente + cargo) usado por admissões e sem nenhuma régua: alvo do padrão em massa. */
+interface ParPendente {
+  codCliente: string;
+  cliente: string;
+  cargoId: string;
+  cargo: string;
+  admissoes: number;
+}
+interface RelatorioMassa {
+  paresAplicados: { codCliente: string; cliente: string; cargo: string }[];
+  linhasInseridas: number;
+  documentosPorPar: number;
+}
 
 const ROTULO_EXIGENCIA: Record<ExigenciaDocumento, string> = {
   OBRIGATORIO: "Obrigatório",
@@ -58,6 +75,11 @@ export default function ReguaPage() {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
+  // USO (b): pares em uso sem régua (alvo do padrão em massa), confirmação e relatório.
+  const [pendentesPadrao, setPendentesPadrao] = useState<ParPendente[]>([]);
+  const [confirmarMassa, setConfirmarMassa] = useState(false);
+  const [aplicandoMassa, setAplicandoMassa] = useState(false);
+  const [relatorioMassa, setRelatorioMassa] = useState<RelatorioMassa | null>(null);
   // Item 1: clientes sem NENHUMA régua cadastrada (a admissão trava o cargo até cadastrarem aqui).
   const [semRegua, setSemRegua] = useState<
     { codCliente: string; razaoSocial: string; nomeOperacao: string | null }[]
@@ -171,10 +193,22 @@ export default function ReguaPage() {
   }, [loadComRegua, comReguaQ]);
 
   // Recarrega os dois painéis (após salvar/inativar): um cliente migra de uma lista para a outra.
+  // Pares em uso sem régua: alvo do padrão em massa. Recarrega junto dos demais painéis, então some
+  // sozinho quando o padrão é aplicado (o alvo é o próprio estado, não uma marcação).
+  const loadPendentesPadrao = useCallback(async () => {
+    if (!token) return;
+    try {
+      setPendentesPadrao(await apiFetch<ParPendente[]>("/admin/regua/pendentes-padrao", { token }));
+    } catch {
+      /* painel auxiliar: falha não quebra o cadastro da régua */
+    }
+  }, [token]);
+
   const recarregarPaineis = useCallback(() => {
     void loadSemRegua();
     void loadComRegua(comReguaQ);
-  }, [loadSemRegua, loadComRegua, comReguaQ]);
+    void loadPendentesPadrao();
+  }, [loadSemRegua, loadComRegua, comReguaQ, loadPendentesPadrao]);
 
   async function confirmarInativar() {
     if (!inativar) return;
@@ -254,6 +288,47 @@ export default function ReguaPage() {
 
   const semBase = clientes.length === 0 || cargos.length === 0;
   const podeEditar = Boolean(codCliente && cargoId);
+
+  /**
+   * USO (a): marca os documentos PADRÃO (fonte única `CODIGOS_REGUA_PADRAO`) como OBRIGATORIO no mapa
+   * em memória. NÃO apaga nem rebaixa o resto: quem já estava marcado à mão continua como está, só os
+   * do padrão são ajustados. Nada vai ao banco aqui, o consultor confere e usa o "Salvar régua" que
+   * já existe.
+   */
+  /** USO (b): dispara a aplicação em massa. O alvo é recalculado no servidor, não vai daqui. */
+  async function aplicarPadraoEmMassa() {
+    setAplicandoMassa(true);
+    setError(null);
+    setSavedMsg(null);
+    try {
+      const r = await apiFetch<RelatorioMassa>("/admin/regua/aplicar-padrao-pendentes", {
+        method: "POST",
+        token,
+      });
+      setConfirmarMassa(false);
+      setRelatorioMassa(r);
+      recarregarPaineis();
+      void loadRegua();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Erro ao aplicar o padrão nos pendentes");
+    } finally {
+      setAplicandoMassa(false);
+    }
+  }
+
+  function aplicarPadraoNoMapa() {
+    const idsPadrao = tipos
+      .filter((t) => t.ativo && (CODIGOS_REGUA_PADRAO as readonly string[]).includes(t.codigo))
+      .map((t) => t.id);
+    setMapa((m) => {
+      const novo = { ...m };
+      for (const id of idsPadrao) novo[id] = "OBRIGATORIO";
+      return novo;
+    });
+    setSavedMsg(
+      `Documentos padrão marcados como obrigatórios (${idsPadrao.length}). Confira e clique em "Salvar régua".`,
+    );
+  }
 
   // §A.12 item 4a: filtro client-side do painel "sem régua".
   const semReguaFiltrado = semRegua.filter((c) => {
@@ -557,10 +632,68 @@ export default function ReguaPage() {
           ariaLabel="Cargo"
           options={cargos.map((c) => ({ value: c.id, label: c.nome }))}
         />
+        {/* USO (a): preenche o padrão no mapa em memória; o salvar continua sendo o de sempre. */}
+        <Button
+          variant="secondary"
+          onClick={aplicarPadraoNoMapa}
+          disabled={!podeEditar || saving}
+          className="py-2.5"
+          title="Marca os documentos padrão como obrigatórios. O que você já marcou à mão não é apagado."
+        >
+          Aplicar documentos padrão
+        </Button>
         <Button onClick={salvar} disabled={!podeEditar || saving} className="py-2.5">
           {saving ? "Salvando…" : "Salvar régua"}
         </Button>
       </GlassCard>
+
+      {/* USO (b): aplicação em massa do padrão nos pares que já são usados por admissões e estão sem
+          nenhuma régua. Só adiciona onde não há nada; régua existente nunca é tocada. */}
+      {pendentesPadrao.length > 0 && (
+        <GlassCard className="mb-5 flex flex-wrap items-center gap-3 p-4">
+          <div className="min-w-[280px] flex-1">
+            <p className="text-sm font-semibold">
+              {pendentesPadrao.length} par{pendentesPadrao.length === 1 ? "" : "es"} de cliente e cargo
+              em uso sem régua cadastrada
+            </p>
+            <p className="mt-0.5 text-[12.5px] text-dim">
+              Essas admissões nascem sem checklist de documentos. Aplicar o padrão resolve todas de uma
+              vez, sem tocar em nenhuma régua já cadastrada.
+            </p>
+          </div>
+          <Button
+            variant="secondary"
+            className="py-2.5"
+            onClick={() => setConfirmarMassa(true)}
+            disabled={aplicandoMassa}
+          >
+            {aplicandoMassa ? "Aplicando…" : "Aplicar padrão nos pendentes"}
+          </Button>
+        </GlassCard>
+      )}
+
+      {/* Relatório da aplicação em massa. */}
+      {relatorioMassa && (
+        <GlassCard className="mb-5 p-4">
+          <p className="text-sm font-semibold text-ok">
+            Padrão aplicado em {relatorioMassa.paresAplicados.length} par
+            {relatorioMassa.paresAplicados.length === 1 ? "" : "es"} ({relatorioMassa.linhasInseridas}{" "}
+            linhas de régua, {relatorioMassa.documentosPorPar} documentos por par).
+          </p>
+          <ul className="mt-2 grid gap-1 text-[12.5px] text-dim">
+            {relatorioMassa.paresAplicados.map((p) => (
+              <li key={`${p.codCliente}-${p.cargo}`}>
+                {p.codCliente} · {p.cliente} · {p.cargo}
+              </li>
+            ))}
+          </ul>
+          <div className="mt-3">
+            <Button variant="secondary" className="py-2" onClick={() => setRelatorioMassa(null)}>
+              Fechar
+            </Button>
+          </div>
+        </GlassCard>
+      )}
 
       {error && (
         <p
@@ -732,6 +865,17 @@ export default function ReguaPage() {
         busy={inativando}
         onConfirm={confirmarInativar}
         onCancel={() => setInativar(null)}
+      />
+
+      {/* Confirmação da aplicação em massa: mostra exatamente o que será aplicado antes de gravar. */}
+      <ConfirmDialog
+        open={confirmarMassa}
+        title="Aplicar documentos padrão nos pendentes"
+        message={`Aplicar os ${CODIGOS_REGUA_PADRAO.length} documentos padrão como obrigatórios em ${pendentesPadrao.length} par${pendentesPadrao.length === 1 ? "" : "es"} de cliente e cargo que estão em uso e sem régua: ${pendentesPadrao.map((p) => `${p.cliente} (${p.cargo})`).join("; ")}. Só adiciona onde não há nada cadastrado: nenhuma régua existente é alterada ou apagada.`}
+        confirmLabel="Aplicar padrão"
+        busy={aplicandoMassa}
+        onConfirm={() => void aplicarPadraoEmMassa()}
+        onCancel={() => setConfirmarMassa(false)}
       />
 
       {/* Inativação do DOCUMENTO (não confundir com inativar a régua de um cliente, acima). Soft
