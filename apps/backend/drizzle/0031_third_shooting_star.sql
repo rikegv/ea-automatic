@@ -1,0 +1,1 @@
+ALTER TYPE "public"."estado_documento" ADD VALUE 'AGUARDANDO_AUDITORIA';

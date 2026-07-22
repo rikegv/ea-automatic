@@ -58,6 +58,10 @@ export const estadoDocumentoEnum = pgEnum("estado_documento", [
   "PENDENTE",
   "ENTREGUE",
   "INCONFORME",
+  // Documento COLETADO (baixado do Pandapé e gravado na régua) porém ainda NÃO auditado pela IA:
+  // desacoplamento coleta/auditoria (a coleta não se perde se a IA cair). Não é ENTREGUE (segue
+  // faltante na régua) nem INCONFORME; a auditoria fica pendente e é reprocessável.
+  "AGUARDANDO_AUDITORIA",
 ]);
 
 /** Sinalizador de preenchimento da admissão (§A.3 / F5). Marca, nunca bloqueia (regra 5). */

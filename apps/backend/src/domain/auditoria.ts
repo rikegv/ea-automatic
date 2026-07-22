@@ -7,6 +7,13 @@ import { AUDITORIA_PARA_ESTADO, type AuditoriaStatus } from "@ea/shared-types";
 
 export type EstadoDocumentoPersistido = "PENDENTE" | "ENTREGUE" | "INCONFORME";
 
+/**
+ * Estado de documento COLETADO porém ainda NÃO auditado (desacoplamento coleta/auditoria). Gravado
+ * ANTES de chamar a IA; se a IA cair, o documento permanece neste estado (coleta preservada,
+ * auditoria pendente, reprocessável). Não é veredito da IA, por isso fica fora de `EstadoDocumentoPersistido`.
+ */
+export const ESTADO_AGUARDANDO_AUDITORIA = "AGUARDANDO_AUDITORIA" as const;
+
 /** Veredito da IA → estado_documento. VALIDADO→ENTREGUE, INCONFORME→INCONFORME, PENDENTE→PENDENTE. */
 export function estadoDocumentoDeAuditoria(status: AuditoriaStatus): EstadoDocumentoPersistido {
   return AUDITORIA_PARA_ESTADO[status];

@@ -7,7 +7,12 @@
  */
 import type { ProgressoRegua } from "@ea/shared-types";
 
-export type EstadoDocumento = "PENDENTE" | "ENTREGUE" | "INCONFORME" | null;
+export type EstadoDocumento =
+  | "PENDENTE"
+  | "ENTREGUE"
+  | "INCONFORME"
+  | "AGUARDANDO_AUDITORIA"
+  | null;
 
 /** Linha da régua de uma admissão: o tipo exigido + seu estado atual (null = nunca tocado). */
 export interface DocReguaEstado {
