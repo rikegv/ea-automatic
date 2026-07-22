@@ -6,6 +6,8 @@ import { apiFetch, apiUpload, apiDownloadPost, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/cn";
 import { GlassCard } from "@/components/ui/GlassCard";
+import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
+import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
 import { Pill, type PillTone } from "@/components/ui/Pill";
 import { StatusPill } from "@/components/ui/StatusPill";
 import { PendenciasBadge } from "@/components/ui/PendenciasBadge";
@@ -115,6 +117,16 @@ const SINAL: Record<string, { tone: PillTone; label: string }> = {
   PENDENTE: { tone: "wn", label: "Pendências Obrig." },
   INCONFORMIDADE: { tone: "dg", label: "Inconformidade" },
   COMPETENCIAS: { tone: "nt", label: "Competências" },
+};
+
+// Rank da coluna Pendências Obrig. para a ordenação clicável: do resolvido para o mais grave, que é
+// a leitura útil da fila. Ordenar pelo texto da pill agruparia por acaso do alfabeto.
+const RANK_SINAL: Record<string, number> = {
+  OK: 0,
+  COMPETENCIAS: 1,
+  PARCIAL: 2,
+  PENDENTE: 3,
+  INCONFORMIDADE: 4,
 };
 
 // Tom da pill derivado do status + catálogo (2C item 7): aguardando reenvio em laranja (distinto
@@ -515,10 +527,51 @@ export default function EsteiraPage() {
     void doPatch(dialog.frenteId, dialog.status, confirmar, undefined, aceitePassagem);
   }
 
-  const items = data?.items ?? [];
+  // Ordenação padrão da fila: MAIS RECENTE PRIMEIRO (OST ajustes visuais, fase 2a). A fila chega do
+  // backend em ordem CRESCENTE de criação, então a admissão nova caía no FIM da tabela, que é
+  // justamente a que o consultor precisa ver. A inversão é feita aqui, no cliente, porque a aba
+  // carrega o conjunto inteiro (não é paginada) e o payload já traz a data de início da frente, que
+  // nasce junto com a admissão (regra 1). Sem data, o item vai para o fim da lista.
+  // O desempate usa a ordem original invertida, preservando a sequência de criação do backend.
+  const items = useMemo(() => {
+    const brutos = data?.items ?? [];
+    return brutos
+      .map((it, i) => ({ it, i }))
+      .sort((a, b) => {
+        const ta = a.it.dataInicio ? Date.parse(a.it.dataInicio) : NaN;
+        const tb = b.it.dataInicio ? Date.parse(b.it.dataInicio) : NaN;
+        const va = Number.isNaN(ta);
+        const vb = Number.isNaN(tb);
+        if (va !== vb) return va ? 1 : -1; // sem data desce
+        if (!va && ta !== tb) return tb - ta; // mais recente primeiro
+        return b.i - a.i; // desempate: ordem de criação invertida
+      })
+      .map((x) => x.it);
+  }, [data]);
   // Filtro do card "Com pendências obrigatórias" (§A.12): mostra só quem tem campo obrigatório pendente.
-  const itemsVisiveis = soPendencias ? items.filter((it) => it.temPendencias) : items;
+  const itemsFiltrados = soPendencias ? items.filter((it) => it.temPendencias) : items;
   const statusCatalogo = data?.statusCatalogo ?? [];
+
+  // Ordenação clicável do Farol (OST visual, fase 3). A lógica é compartilhada (`useOrdenacao`),
+  // desenhada para as outras tabelas ligarem depois só declarando as colunas. Aqui declaramos o
+  // TIPO de cada coluna, que é o que define o comportamento do primeiro clique.
+  // Status e Pendências ordenam por RANK, não pelo texto da pill: alfabética em status não diz nada
+  // ("A agendar" antes de "Apto" é coincidência), enquanto a ordem do catálogo é a do fluxo real.
+  const colunasOrdenaveis = useMemo<ColOrd<EsteiraItem>[]>(
+    () => [
+      { chave: "contrato", tipo: "texto", valor: (i) => i.tipoContrato },
+      { chave: "candidato", tipo: "texto", valor: (i) => i.candidatoNome },
+      { chave: "cliente", tipo: "texto", valor: (i) => i.clienteOperacao || i.clienteRazao },
+      { chave: "cargo", tipo: "texto", valor: (i) => i.cargoNome },
+      { chave: "data", tipo: "data", valor: (i) => i.dataAdmissao },
+      { chave: "status", tipo: "status", valor: (i) => catMap.get(i.status)?.ordem ?? null },
+      { chave: "pendencias", tipo: "status", valor: (i) => RANK_SINAL[i.sinalizador] ?? null },
+    ],
+    [catMap],
+  );
+  const ord = useOrdenacao(colunasOrdenaveis, itemsFiltrados);
+  const itemsVisiveis = ord.itens;
+
   // KPIs (item 5/6): "Total na fila" + um card por status EM ANDAMENTO (exclui o de conclusão, que
   // sai da fila). Cada card de status filtra a lista ao clicar (toggle).
   //
@@ -543,10 +596,14 @@ export default function EsteiraPage() {
     cli: "minmax(170px,1fr)",
     cargo: "minmax(180px,1fr)",
     // Cabe o rótulo mais longo do campo ("Temporário") e o vazio ("não informado", §A.11).
-    contrato: "130px",
+    // Larguras revistas na fase 3 (§A.20): a seta de ordenação passou a ocupar ~13px do cabeçalho,
+    // e nesta largura o título "TIPO DE CONTRATO" começava a cortar (precisava 123px, tinha 117).
+    // "PENDÊNCIAS OBRIG." estava no limite exato, sem folga nenhuma. Ambas ganharam margem, medida
+    // no browser, não estimada.
+    contrato: "148px",
     data: "110px",
     status: "210px",
-    pend: "150px",
+    pend: "168px",
     acoes: "120px",
   };
   // Exame carrega 3 controles na barra (seletor + ASO + Agendamento): precisa de piso maior para
@@ -939,13 +996,29 @@ export default function EsteiraPage() {
                     />
                   </span>
                 )}
-                <span>Tipo de contrato</span>
-                <span>Candidato</span>
-                <span>Cliente</span>
-                <span>Cargo</span>
-                <span>Data adm.</span>
-                <span>Status</span>
-                <span>Pendências Obrig.</span>
+                {/* Colunas ordenáveis (OST visual, fase 3). Avanço e Ações ficam de fora: são
+                    controles, não dado comparável. */}
+                <ColunaOrdenavel ord={ord} chave="contrato">
+                  Tipo de contrato
+                </ColunaOrdenavel>
+                <ColunaOrdenavel ord={ord} chave="candidato">
+                  Candidato
+                </ColunaOrdenavel>
+                <ColunaOrdenavel ord={ord} chave="cliente">
+                  Cliente
+                </ColunaOrdenavel>
+                <ColunaOrdenavel ord={ord} chave="cargo">
+                  Cargo
+                </ColunaOrdenavel>
+                <ColunaOrdenavel ord={ord} chave="data">
+                  Data adm.
+                </ColunaOrdenavel>
+                <ColunaOrdenavel ord={ord} chave="status">
+                  Status
+                </ColunaOrdenavel>
+                <ColunaOrdenavel ord={ord} chave="pendencias">
+                  Pendências Obrig.
+                </ColunaOrdenavel>
                 <span>
                   {isExame ? "ASO / Avanço" : isAuditoria ? "Avanço / Auditoria" : "Avanço"}
                 </span>
@@ -1014,9 +1087,13 @@ export default function EsteiraPage() {
                       {/* Coluna Candidato: SÓ o nome (§A.12). A origem Pandapé fica no detalhe (olho),
                           não colada ao nome na tabela. */}
                       <div className="min-w-0 text-left">
-                        <span className="nm truncate" title={item.candidatoNome}>
+                        {/* §A.20: o `truncate` estava num <span>, que é INLINE, e em elemento
+                            inline o text-overflow não se aplica. Resultado: nome comprido vazava
+                            por cima da coluna Cliente. `block` faz o corte com reticências valer;
+                            o title já dava o nome completo no hover. */}
+                        <div className="nm truncate" title={item.candidatoNome}>
                           {item.candidatoNome}
-                        </span>
+                        </div>
                       </div>
                       {/* Cliente: só o nome da operação (§A.12); o código vai no modal do olho. */}
                       <div className="min-w-0 text-center">

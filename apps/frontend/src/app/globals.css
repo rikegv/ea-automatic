@@ -247,31 +247,14 @@
     background: transparent;
   }
 
-  /* Bloco F: coluna de Ações FIXA à direita. Fica sempre visível durante o scroll horizontal, então
-     o usuário nunca perde o botão de ação. Fundo fosco (blur) que cobre o conteúdo que passa por
-     baixo, no tema claro e escuro, com uma sombra premium delicada à esquerda. */
+  /* Coluna de Ações DESCONGELADA (OST ajustes visuais, fase 2b). Antes (Bloco F) ela era sticky à
+     direita, com fundo fosco e sombra, e ficava parada enquanto o resto da tabela rolava. Por
+     decisão do diretor a coluna passa a ROLAR JUNTO com as demais: vira uma coluna comum.
+     A classe é mantida (é o marcador semântico da coluna de Ações nas três telas de grid) e apenas
+     deixa de fixar, então nenhuma tela precisou mudar de marcação. O `right` que sobrou no estilo
+     inline das Não Conformidades fica inerte com position estático. */
   .col-fix {
-    position: sticky;
-    right: 0;
-    z-index: 3;
-    background: color-mix(in srgb, var(--surface-2) 88%, var(--bg));
-    backdrop-filter: blur(6px);
-    -webkit-backdrop-filter: blur(6px);
-  }
-  .col-fix::before {
-    content: "";
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    left: 0;
-    width: 16px;
-    transform: translateX(-100%);
-    background: linear-gradient(
-      to left,
-      color-mix(in srgb, var(--bg) 24%, transparent),
-      transparent
-    );
-    pointer-events: none;
+    position: static;
   }
 
   /* ---- eyebrow / head ---- */
@@ -861,6 +844,17 @@
     font-weight: 600;
     /* Padrão único de tabela (§A.12): títulos de coluna centralizados. */
     text-align: center;
+    /* Cabeçalho CONGELADO (OST ajustes visuais, fase 2c): a primeira linha gruda no topo da área de
+       scroll, então o usuário nunca perde a referência das colunas ao rolar a fila. Precisa de fundo
+       opaco: o GlassCard é translúcido e, sem isto, as linhas passariam legíveis por baixo. */
+    position: sticky;
+    top: 0;
+    z-index: 4;
+    background: color-mix(in srgb, var(--surface-2) 94%, var(--bg));
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    /* Hairline inferior separando o cabeçalho das linhas que passam por baixo. */
+    box-shadow: 0 1px 0 0 var(--border);
   }
   /* Padrão único de tabela (§A.12): divisória sutil e premium entre colunas (hairline por sombra
      interna, não altera a largura das colunas). Aplica no cabeçalho e em cada linha. */
@@ -915,6 +909,17 @@
     color: var(--faint);
     font-weight: 600;
     padding: 12px 16px;
+    /* Cabeçalho CONGELADO (OST ajustes visuais, fase 2c), mesma regra das tabelas de grid
+       (`.list-head`): uma máscara única de tabela no sistema (§A.12). O sticky vai no `th` porque
+       `border-collapse: collapse` não fixa `thead`/`tr`. Nas tabelas que só rolam na horizontal a
+       regra fica inerte, sem efeito colateral. */
+    position: sticky;
+    top: 0;
+    z-index: 4;
+    background: color-mix(in srgb, var(--surface-2) 94%, var(--bg));
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    box-shadow: 0 1px 0 0 var(--border);
   }
   .ds-table tbody td {
     padding: 13px 16px;

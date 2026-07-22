@@ -2726,3 +2726,93 @@ de tamanho N; PDF protegido → INCONFORME sem chamar a IA; `pdfProtegidoPorSenh
 Validação visual do diretor: Esteira → Auditoria → Evelyn → "Auditar" e conferir CPF/CTPS ENTREGUE
 com motivo, e o Comprovante INCONFORME com "protegido por senha". Mesma ressalva §A.13 (screenshot
 automatizado indisponível neste ambiente). **Sem commit até a validação** (§A.21).
+
+---
+
+## 2026-07-22 — OST VISUAL DE TABELAS: ordenação padrão, cabeçalho fixo, ordenação clicável no Farol
+
+Sessão PARALELA à das cargas/dedup, em branch e worktree próprias (`ost/tabelas-visual`,
+`/home/henrique/apps/ea-tabelas-visual`), saída do HEAD `8d2c6c4`. Fronteira dura da OST: **só
+frontend**. Nada de backend (`admissoes.service.ts`, `esteira.service.ts`, `pandape-*`, auditoria,
+ai-service, migrations). Build só na worktree, para não clobberar o `.next` de produção.
+
+### Levantamento: 13 tabelas, 11 telas, ZERO componente compartilhado
+Duas famílias de CSS, nenhuma abstração de React em comum (só modais em `components/`):
+- **grid `div`** (`.list-head` + `.row`): Esteira (3 abas), Gerenciador, Não conformidades;
+- **`<table class="ds-table">`**: Liberação (2 tabelas), admin/clientes, cargos, régua, usuários,
+  tarifas, motivos-declínio, regras.
+
+**12 das 13 são de rolagem e carregam o conjunto inteiro no cliente.** A exceção é o **Gerenciador**,
+**paginado no servidor** (20 por página, 2282 registros, 115 páginas).
+
+### Fase 2, três ajustes
+1. **Farol, mais recente primeiro.** A fila chegava em ordem CRESCENTE de criação, então a admissão
+   nova caía no fim da tabela. Resolvido no frontend, ordenando por `dataInicio` da frente (nasce
+   junto com a admissão, regra 1), vazio por último, desempate pela ordem de criação invertida.
+2. **Coluna de Ações DESCONGELADA.** `.col-fix` deixou de ser `sticky` e virou coluna comum. A
+   classe permanece como marcador semântico, então nenhuma tela mudou de marcação. Ganho colateral:
+   congelada, ela cobria e **cortava a pill de status** ("Análise pendente" virava "Análise").
+3. **Cabeçalho CONGELADO.** `.list-head` e `.ds-table thead th` grudam no topo da área de rolagem,
+   com fundo opaco (o GlassCard é translúcido; sem isso as linhas vazam por baixo). **Efetivo nas 3
+   tabelas de grid**; nas `ds-table` a regra fica **inerte**, porque o `GlassCard overflow-hidden`
+   ancestral impede o sticky. Registrado, não forçado: dar rolagem vertical própria àquelas telas é
+   mudança de layout fora do escopo desta OST.
+
+### Fase 3, ordenação clicável (LIGADA SÓ NO FAROL, por decisão do diretor)
+Peça nova e **reutilizável**, desenhada para as outras tabelas ligarem sem reescrita:
+- `lib/ordenacao.ts`: `useOrdenacao(colunas, itens)`, comparadores por tipo e a regra de direção.
+- `components/ui/ColunaOrdenavel.tsx`: cabeçalho clicável, serve às **duas** famílias via `as="span"`
+  (grid) ou `as="th"` (`ds-table`). Clique num `<button>` de verdade, com `aria-sort`.
+
+Comportamento do primeiro clique por tipo: **texto** A-Z, **data** mais recente, **número** maior
+primeiro, **status** ordem do catálogo. Segundo clique inverte. **Vazio vai sempre para o fim, nas
+duas direções**, para "não informado" não ocupar o topo só por virar a seta. Status e Pendências
+ordenam por **rank** (`ordem` do catálogo e `RANK_SINAL`), não pelo texto da pill: alfabética em
+status não significa nada. Sem coluna escolhida a lista sai **intacta**, então a ordenação padrão
+(mais recente primeiro) é preservada e o clique é sobreposição do usuário. O desempate é a posição
+original, então linhas de valor igual não embaralham a cada clique.
+
+### §A.20, nome longo invadindo a coluna vizinha (Bloco 3)
+Causa real: o `truncate` estava num **`<span>`**, que é **inline**, e em elemento inline o
+`text-overflow` não se aplica. O nome vazava por cima da coluna Cliente. Trocado por `<div>`.
+**Varredura da mesma família de CSS:** era o **único** caso. O Gerenciador já usava `<div>` e está
+correto; as demais ocorrências de `span.truncate` no sistema estão dentro de containers flex, onde
+o span vira item de bloco e o corte funciona. Nada mais a corrigir.
+
+**Regressão própria, achada e corrigida na medição:** a seta de ordenação passou a ocupar ~13px do
+cabeçalho e "TIPO DE CONTRATO" começou a cortar (precisava 123px, tinha 117). "PENDÊNCIAS OBRIG."
+estava no limite exato, sem folga. Larguras revistas para 148px e 168px, **medidas no browser**, não
+estimadas. Conferência automatizada de `scrollWidth > clientWidth` em todo cabeçalho das 3 abas:
+zero cortado.
+
+### Conta de teste dedicada do harness (§A.13)
+Para os prints era preciso uma sessão autenticada e **não existia conta de teste**, apesar de a §A.13
+pressupor uma. Na primeira sessão a conta semente `admin@ea.local` foi ativada temporariamente e
+**restaurada ao estado original** (inativa, hash idêntico, conferido). Agora existe conta própria:
+**`harness.visual@ea.local`** ("Harness Visual (QA)", SUPER_ADMIN, ativa), senha aleatória fora do
+repositório em `~/.ea-harness/credenciais.env` (0600, diretório 0700). **Não é conta de pessoa
+real.** Nenhuma conta de produção volta a ser tocada por harness. *Se o EA algum dia for exposto
+fora da rede interna, esta conta tem de ser desativada antes.*
+
+### Gate
+Typecheck verde. Lint com **2 erros PRÉ-EXISTENTES** (`nova/page.tsx`, `vt/page.tsx`, regra
+`react-hooks/exhaustive-deps` não encontrada): reproduzidos idênticos no repo principal intocado, não
+são desta OST. Prova visual em `~/ost-tabelas-prints/` (build de produção da worktree na porta 3099,
+produção intacta em 3010), incluindo o **antes** capturado no build de produção.
+
+### DÍVIDAS REGISTRADAS (não corrigir agora)
+1. **Ordenação padrão do Farol está no lugar errado.** A origem é `esteira.service.ts:230`
+   (`.orderBy(asc(admissoes.criadoEm))`), que está na fronteira proibida desta OST. Quando o backend
+   puder ser tocado: trocar para `desc` na origem e **remover o `useMemo` de inversão** do frontend.
+2. **A ordenação clicável é CLIENT-SIDE.** Só é honesta em tabela que carrega o conjunto inteiro. Se
+   o Farol virar paginado no servidor, ela passa a ordenar apenas a página visível e **mente**. Nesse
+   dia a ordenação tem de subir para a API (`orderBy`), não ficar no `useOrdenacao`.
+3. **Gerenciador fora, de propósito** (decisão do diretor). Ordenar 20 de 2282 no cliente mostraria
+   ordem falsa, e o `orderBy` na API exige `admissoes.service.ts`. Resolver junto com o backend.
+4. **Cabeçalho fixo inerte nas `ds-table`** (ver Fase 2, item 3).
+
+### Pronto para a ligação seguinte (NÃO ligado, aguardando validação do padrão numa tela)
+Com a peça pronta, ligar cada tabela é declarar as colunas e trocar `<span>`/`<th>` por
+`<ColunaOrdenavel>`. Candidatas imediatas, todas de rolagem com conjunto inteiro no cliente:
+Não conformidades, Liberação (2), admin/clientes, usuários, tarifas, cargos, régua,
+motivos-declínio, regras. Fica de fora só o Gerenciador (dívida 3).
