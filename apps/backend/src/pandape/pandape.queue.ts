@@ -16,12 +16,23 @@ export const PANDAPE_QUEUE = "pandape-sync";
 /** Prefixo de namespace isolado no Redis (§A.1 — namespace próprio do EA). */
 export const PANDAPE_BULL_PREFIX = "ea:bull";
 
-/** Dois tipos de job: o tick que varre mudanças e o sync de 1 pré-colaborador. */
+/**
+ * Tipos de job: o tick que varre mudanças, o sync de 1 pré-colaborador e o PULL DE DOCUMENTOS de uma
+ * admissão recém-liberada (que é o que faz a coleta rodar sem disparar N chamadas simultâneas ao
+ * Pandapé: passa pelo mesmo limiter com headroom).
+ */
 export const JOB_POLL_TICK = "poll-tick";
 export const JOB_SYNC_CANDIDATE = "sync-candidate";
+export const JOB_PULL_DOCS = "pull-docs";
 
 /** Dados do job `sync-candidate` (1 idPreCollaborator por job). */
 export interface SyncCandidateJobData {
+  idPrecollaborator: string;
+}
+
+/** Dados do job `pull-docs`: a admissão que acabou de nascer e o pré-colaborador de origem. */
+export interface PullDocsJobData {
+  admissaoId: string;
   idPrecollaborator: string;
 }
 

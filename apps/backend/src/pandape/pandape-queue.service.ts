@@ -5,9 +5,11 @@ import type IORedis from "ioredis";
 import {
   criarConexaoRedis,
   JOB_POLL_TICK,
+  JOB_PULL_DOCS,
   JOB_SYNC_CANDIDATE,
   PANDAPE_QUEUE,
   PANDAPE_QUEUE_OPTIONS,
+  type PullDocsJobData,
   type SyncCandidateJobData,
 } from "./pandape.queue";
 
@@ -86,6 +88,37 @@ export class PandapeQueueService implements OnModuleInit, OnModuleDestroy {
       // Sem vazar dados (§A.6): mensagem genérica, nunca o id/CPF.
       this.logger.warn(
         `Falha ao enfileirar sync-candidate: ${err instanceof Error ? err.message : "erro"}`,
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Enfileira o PULL DE DOCUMENTOS de uma admissão recém-liberada (INT-1 / §A.9).
+   *
+   * É enfileirado, e não chamado direto, por dois motivos: a liberação EM MASSA de N admissões não
+   * pode disparar N chamadas simultâneas ao Pandapé (o limiter da fila serializa sob o teto
+   * compartilhado, §A.5), e a liberação **nunca** pode ser travada ou revertida por falha do pull.
+   * Fila indisponível → devolve false e a liberação segue igual (o evento se perde, não a liberação).
+   *
+   * `jobId` estável por admissão: reprocessar a mesma liberação não empilha pull duplicado. O
+   * separador é "-" porque o BullMQ 5.x rejeita ":" em custom jobId.
+   */
+  async enfileirarPullDocumentos(admissaoId: string, idPrecollaborator: string): Promise<boolean> {
+    if (!this.queue) {
+      this.logger.warn("enfileirarPullDocumentos ignorado: fila indisponível.");
+      return false;
+    }
+    try {
+      await this.queue.add(
+        JOB_PULL_DOCS,
+        { admissaoId, idPrecollaborator } satisfies PullDocsJobData,
+        { jobId: `pull-${admissaoId}` },
+      );
+      return true;
+    } catch (err) {
+      this.logger.warn(
+        `Falha ao enfileirar pull-docs: ${err instanceof Error ? err.message : "erro"}`,
       );
       return false;
     }

@@ -4,7 +4,7 @@ import { AuditoriaModule } from "../auditoria/auditoria.module";
 import { InternalTokenGuard } from "./internal-token.guard";
 import { PandapeApiService } from "./pandape-api.service";
 import { PandapeController } from "./pandape.controller";
-import { PandapeQueueService } from "./pandape-queue.service";
+import { PandapeQueueModule } from "./pandape-queue.module";
 import { PandapeSyncService } from "./pandape-sync.service";
 import { PandapeWebhookController } from "./pandape-webhook.controller";
 import { PandapeWebhookGuard } from "./pandape-webhook.guard";
@@ -15,11 +15,10 @@ import { PandapeWebhookGuard } from "./pandape-webhook.guard";
  * é global. A fila/worker (BullMQ) sobem nos providers de lifecycle. INERTE sem PANDAPE_API_TOKEN.
  */
 @Module({
-  imports: [AdmissoesModule, AuditoriaModule],
+  imports: [AdmissoesModule, AuditoriaModule, PandapeQueueModule],
   controllers: [PandapeController, PandapeWebhookController],
   providers: [
     PandapeApiService,
-    PandapeQueueService,
     PandapeSyncService,
     InternalTokenGuard,
     PandapeWebhookGuard,

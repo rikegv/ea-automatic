@@ -1,5 +1,5 @@
 import { BadRequestException, Inject, Injectable, Logger, NotFoundException } from "@nestjs/common";
-import { and, eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import type { ProgressoRegua } from "@ea/shared-types";
 import type { AuthUser } from "../auth/auth.types";
 import type { Database } from "../db/client";
@@ -20,9 +20,14 @@ import { montarNomePasta, resolvePastaPaiId, resolveSubpasta } from "../ai/drive
 import { recomputeFarolGlobal } from "../admissoes/farol";
 import { calcSinalizadorPreenchimento } from "../domain/admissao";
 import { podeAbrirCadastro } from "../domain/frentes";
-import { estadoDocumentoDeAuditoria, limitarMotivo } from "../domain/auditoria";
+import {
+  ESTADO_AGUARDANDO_AUDITORIA,
+  estadoDocumentoDeAuditoria,
+  limitarMotivo,
+} from "../domain/auditoria";
 import { ReguaCompletudeService } from "../regua/regua-completude.service";
 import { StagingService } from "../staging/staging.service";
+import { pdfProtegidoPorSenha } from "../pandape/mime-documento";
 
 /**
  * Precisa (re)arquivar no Drive? Sim quando ainda não há link (null) OU quando o link salvo é um
@@ -96,9 +101,8 @@ export class AuditoriaService {
   }
 
   /**
-   * Núcleo da auditoria de UM documento, desacoplado do multipart (Fase 5 / INT-1): aceita qualquer
-   * fonte com buffer + nome, permitindo o pull de docs do Pandapé reusar a F2 sem reescrita.
-   * `auditarDocumento` (upload manual) valida a presença do arquivo e delega aqui — equivalência.
+   * Auditoria de UM documento a partir de UM arquivo (upload manual ou 1 anexo do pull). É açúcar
+   * sobre `auditarConjunto`: um documento de arquivo único é um conjunto de tamanho 1.
    */
   async auditarBuffer(
     admissaoId: string,
@@ -106,7 +110,23 @@ export class AuditoriaService {
     arquivo: { buffer: Buffer; originalname: string },
     user: AuthUser,
   ) {
-    const file = arquivo;
+    return this.auditarConjunto(admissaoId, tipoDocumentoId, [arquivo], user);
+  }
+
+  /**
+   * Núcleo da auditoria por CONJUNTO (BLOCO 1): recebe TODOS os arquivos do MESMO documento (frente e
+   * verso de um CPF/RG/CNH, as páginas de uma CTPS) e faz UMA auditoria sobre a peça inteira, com UM
+   * veredito e UM registro por (admissão + tipo). Antes cada arquivo era auditado isolado e o upsert
+   * fazia o último vencer (gravava o verso e reprovava por dados que estavam na frente); agora a IA
+   * julga o conjunto. Aceita qualquer fonte com buffer + nome, então o pull do Pandapé reusa a F2.
+   */
+  async auditarConjunto(
+    admissaoId: string,
+    tipoDocumentoId: string,
+    arquivos: Array<{ buffer: Buffer; originalname: string }>,
+    user: AuthUser,
+  ) {
+    if (arquivos.length === 0) throw new BadRequestException("Nenhum arquivo para auditar");
     const adm = await this.carregarAdmissao(admissaoId);
 
     const tipo = await this.db.query.tiposDocumento.findFirst({
@@ -114,8 +134,42 @@ export class AuditoriaService {
     });
     if (!tipo) throw new NotFoundException("Tipo de documento não encontrado");
 
-    // 1) Staging efêmera — buffer vai a disco e é descartado (§A.6).
-    const stagingPath = await this.staging.salvar(admissaoId, tipo.codigo, file);
+    const agora = new Date();
+
+    // BLOCO 3 (PDF protegido por senha): detectado na coleta, ANTES da IA. PDF cifrado o Vertex nem
+    // lê ("no pages"); em vez de queimar uma chamada e prender em AGUARDANDO, vira INCONFORME com
+    // motivo ACIONÁVEL. AGUARDANDO_AUDITORIA fica reservado a falha de SISTEMA (IA fora/timeout).
+    const usaveis = arquivos.filter((a) => !pdfProtegidoPorSenha(a.buffer));
+    if (usaveis.length === 0) {
+      const observacao = limitarMotivo(
+        "Documento protegido por senha. Reenviar o arquivo sem proteção para permitir a auditoria.",
+      );
+      await this.db
+        .insert(documentosAdmissao)
+        .values({ admissaoId, tipoDocumentoId, estado: "INCONFORME", observacao })
+        .onConflictDoUpdate({
+          target: [documentosAdmissao.admissaoId, documentosAdmissao.tipoDocumentoId],
+          set: { estado: "INCONFORME", observacao, atualizadoEm: agora },
+        });
+      const sinalizador = await this.recalcularSinalizador(admissaoId, adm);
+      const progresso = await this.reguaCompletude.progresso(
+        admissaoId,
+        adm.codCliente,
+        adm.cargoId,
+      );
+      return {
+        resultado: { valido: false, status: "INCONFORME", motivo: observacao, camposConferidos: [] },
+        documento: { tipoDocumentoId, estado: "INCONFORME" as const },
+        progresso,
+        sinalizador,
+      };
+    }
+
+    // 1) Staging efêmera — cada arquivo do conjunto vai a disco e é descartado depois (§A.6).
+    const stagingPaths: string[] = [];
+    for (const f of usaveis) {
+      stagingPaths.push(await this.staging.salvar(admissaoId, tipo.codigo, f));
+    }
 
     // 2) Regras ATIVAS do tipo (critério de validade — texto, sem PII).
     const regras = await this.db
@@ -125,25 +179,46 @@ export class AuditoriaService {
         and(eq(regrasAuditoria.tipoDocumentoId, tipoDocumentoId), eq(regrasAuditoria.ativo, true)),
       );
 
-    // 3) IA — o CPF vai SÓ aqui; nunca é logado.
+    // 3) DESACOPLAMENTO (BLOCO B): grava a COLETA ANTES de auditar, com motivo explicativo (BLOCO 2:
+    //    o AGUARDANDO diz por que ainda não auditou). Se a IA cair, a coleta PERMANECE gravada.
+    //    `setWhere` protege um doc já ENTREGUE de ser rebaixado antes de a IA confirmar o novo veredito.
+    await this.db
+      .insert(documentosAdmissao)
+      .values({
+        admissaoId,
+        tipoDocumentoId,
+        estado: ESTADO_AGUARDANDO_AUDITORIA,
+        observacao: "Documento coletado, aguardando a análise por IA.",
+      })
+      .onConflictDoUpdate({
+        target: [documentosAdmissao.admissaoId, documentosAdmissao.tipoDocumentoId],
+        set: {
+          estado: ESTADO_AGUARDANDO_AUDITORIA,
+          observacao: "Documento coletado, aguardando a análise por IA.",
+          atualizadoEm: agora,
+        },
+        setWhere: ne(documentosAdmissao.estado, "ENTREGUE"),
+      });
+
+    // 4) IA — o CPF vai SÓ aqui; nunca é logado. Todo o conjunto numa chamada, UM veredito. Se falhar,
+    //    o `throw` sobe e o documento PERMANECE AGUARDANDO_AUDITORIA (passo 3): coleta não se perde.
     const resultado = await this.ai.auditarDocumento({
-      stagingPath,
+      stagingPaths,
       tipoDocumentoCodigo: tipo.codigo,
       tipoDocumentoNome: tipo.nome,
       candidato: { nome: adm.candidatoNome, cpf: adm.candidatoCpf },
       regras: regras.map((r) => ({ descricaoRegra: r.descricaoRegra })),
     });
 
-    // 4) Persiste SÓ status + motivo (cap 500, sem PII — §A.3 regra 7 / §A.6).
+    // 5) IA respondeu → grava o veredito (SÓ status + motivo, cap 500, sem PII — §A.3 regra 7 / §A.6).
     const estado = estadoDocumentoDeAuditoria(resultado.status);
     const observacao = limitarMotivo(resultado.motivo);
-    const agora = new Date();
     await this.db
       .insert(documentosAdmissao)
       .values({ admissaoId, tipoDocumentoId, estado, observacao })
       .onConflictDoUpdate({
         target: [documentosAdmissao.admissaoId, documentosAdmissao.tipoDocumentoId],
-        set: { estado, observacao, atualizadoEm: agora },
+        set: { estado, observacao, atualizadoEm: new Date() },
       });
 
     // 4.4) ASO → o veredito da IA governa o gate de APTO da esteira (§ OST modal): VALIDADO (apto)
@@ -156,14 +231,14 @@ export class AuditoriaService {
     }
 
     // 4.5) ASO VALIDADO → arquiva imediatamente na subpasta ASO do prontuário (Fase 4 ajustes
-    // finais), sem esperar o fechamento da régua. Remove o ASO da staging p/ não duplicar no lote.
+    // finais), sem esperar o fechamento da régua. O ASO é arquivo único: usa o primeiro do conjunto.
     let asoArquivado: { pastaUrl: string } | undefined;
     if (
       tipo.codigo === "ASO" &&
       resultado.status === "VALIDADO" &&
       precisaArquivarDrive(adm.driveAsoUrl)
     ) {
-      asoArquivado = await this.arquivarAsoNoDrive(adm, stagingPath, tipo.codigo, tipo.nome);
+      asoArquivado = await this.arquivarAsoNoDrive(adm, stagingPaths[0], tipo.codigo, tipo.nome);
     }
 
     // 5) Recalcula o sinalizador da admissão (INCONFORMIDADE domina; senão o cálculo do wizard).
@@ -216,7 +291,7 @@ export class AuditoriaService {
         .from(regrasAuditoria)
         .where(and(eq(regrasAuditoria.tipoDocumentoId, tipo.id), eq(regrasAuditoria.ativo, true)));
       const resultado = await this.ai.auditarDocumento({
-        stagingPath,
+        stagingPaths: [stagingPath],
         tipoDocumentoCodigo: tipo.codigo,
         tipoDocumentoNome: tipo.nome,
         candidato: { nome: adm.candidatoNome, cpf: adm.candidatoCpf },

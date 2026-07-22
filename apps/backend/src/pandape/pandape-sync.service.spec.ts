@@ -45,6 +45,8 @@ function makeDb() {
       cargos: { findFirst: vi.fn() },
       tiposDocumento: { findFirst: vi.fn() },
       usuarios: { findFirst: vi.fn() },
+      // Dedup do pull: por padrão nada entregue ainda → o documento é puxado.
+      documentosAdmissao: { findFirst: vi.fn().mockResolvedValue(undefined) },
     },
     update,
   };
@@ -59,6 +61,9 @@ function makeApi(over: Partial<Record<keyof PandapeApiService, unknown>> = {}) {
     getVacancy: vi.fn(),
     // O CPF vem do Match. Por padrão devolve undefined; os cenários que precisam sobrescrevem.
     getMatch: vi.fn().mockResolvedValue(undefined),
+    // Documentos vêm da v3 (forms[].documents[]). Por padrão sem formulário: os cenários de pull
+    // sobrescrevem. Mantém os testes de identidade/idempotência alheios ao pull.
+    getFormulariosDocumentos: vi.fn().mockResolvedValue([]),
     ...over,
   } as unknown as PandapeApiService;
 }
@@ -84,6 +89,8 @@ function makeService(parts: {
     ...parts.admissoes,
   } as unknown as AdmissoesService;
   const auditoria = {
+    // BLOCO 1: o pull agora audita o CONJUNTO (todos os arquivos do tipo numa chamada).
+    auditarConjunto: vi.fn().mockResolvedValue({ documento: {}, progresso: { completa: false } }),
     auditarBuffer: vi.fn().mockResolvedValue({ documento: {}, progresso: { completa: false } }),
     ...parts.auditoria,
   } as unknown as AuditoriaService;
@@ -356,11 +363,22 @@ describe("PandapeSyncService — pull de docs reusa F2 (DoD §5 / §A.6 URL nunc
     return vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
+      // headers.get("content-type") é lido pelo fix do mime (BLOCO A); aqui devolve null e os bytes
+      // não têm assinatura reconhecível, então a extensão fica indefinida (comportamento neutro).
+      headers: { get: () => null },
       arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
     });
   }
 
-  function novoComDocs(documents: PandaperPrecollaborator["documents"]) {
+  /** Formulários no formato da v3: o NOME do formulário é o tipo; os documentos ficam dentro dele. */
+  function forms(itens: { name: string; links: (string | undefined)[] }[]) {
+    return itens.map((f) => ({
+      name: f.name,
+      documents: f.links.map((link) => (link ? { link, name: "arquivo.pdf" } : { name: "x.pdf" })),
+    }));
+  }
+
+  function novoComDocs(formularios: ReturnType<typeof forms>) {
     const { db, update } = makeDb();
     db.query.integracaoPandape.findFirst.mockResolvedValue(undefined);
     db.query.clientes.findFirst.mockResolvedValue({ codCliente: "C-10" });
@@ -376,7 +394,8 @@ describe("PandapeSyncService — pull de docs reusa F2 (DoD §5 / §A.6 URL nunc
       codigo: "RG",
     }));
     const api = makeApi({
-      getPrecollaborator: vi.fn().mockResolvedValue(pc({ documents })),
+      getPrecollaborator: vi.fn().mockResolvedValue(pc()),
+      getFormulariosDocumentos: vi.fn().mockResolvedValue(formularios),
       getVacancy: vi.fn().mockResolvedValue({
         idVacancy: "V-1",
         clienteCnpj: "12345678000190",
@@ -386,34 +405,38 @@ describe("PandapeSyncService — pull de docs reusa F2 (DoD §5 / §A.6 URL nunc
     return { db, update, api };
   }
 
-  it("doc com tipo mapeável → auditarBuffer 1x; tipo NÃO mapeável → PULADO (não quebra)", async () => {
-    const { db, api } = novoComDocs([
-      { label: "RG", url: URL_SECRETA },
-      { label: "Documento Estranho XYZ", url: "https://pandape.example.com/x?t=2" },
-    ]);
+  it("doc com tipo mapeável → auditarConjunto 1x; tipo NÃO mapeável → PULADO (não quebra)", async () => {
+    const { db, api } = novoComDocs(
+      forms([
+        { name: "RG", links: [URL_SECRETA] },
+        { name: "Documento Estranho XYZ", links: ["https://pandape.example.com/x?t=2"] },
+      ]),
+    );
     vi.stubGlobal("fetch", fetchOk());
     const { svc, auditoria } = makeService({ db, api });
 
     await svc.processarCandidato("PC-1");
 
-    // só o mapeável foi auditado.
-    expect(auditoria.auditarBuffer).toHaveBeenCalledTimes(1);
-    const [admissaoId, tipoId, arquivo, user] = (
-      auditoria.auditarBuffer as ReturnType<typeof vi.fn>
+    // só o mapeável foi auditado, como um conjunto (array de arquivos).
+    expect(auditoria.auditarConjunto).toHaveBeenCalledTimes(1);
+    const [admissaoId, tipoId, arquivos, user] = (
+      auditoria.auditarConjunto as ReturnType<typeof vi.fn>
     ).mock.calls[0];
     expect(admissaoId).toBe("adm-1");
     expect(tipoId).toBe("tipo-rg");
-    expect(arquivo.buffer).toBeInstanceOf(Buffer);
+    expect(Array.isArray(arquivos)).toBe(true);
+    expect(arquivos).toHaveLength(1);
+    expect(arquivos[0].buffer).toBeInstanceOf(Buffer);
     // o originalname é o CÓDIGO do tipo, NUNCA a URL (§A.6).
-    expect(arquivo.originalname).toBe("RG");
-    expect(arquivo.originalname).not.toContain("http");
+    expect(arquivos[0].originalname).toBe("RG");
+    expect(arquivos[0].originalname).not.toContain("http");
     expect(user).toMatchObject({ id: "user-sys" });
 
     vi.unstubAllGlobals();
   });
 
-  it("a URL pública NUNCA aparece em chamada que persista (create/update/auditarBuffer) nem em log (§A.6)", async () => {
-    const { db, update, api } = novoComDocs([{ label: "RG", url: URL_SECRETA }]);
+  it("a URL pública NUNCA aparece em chamada que persista (create/update/auditarConjunto) nem em log (§A.6)", async () => {
+    const { db, update, api } = novoComDocs(forms([{ name: "RG", links: [URL_SECRETA] }]));
     vi.stubGlobal("fetch", fetchOk());
     const { svc, admissoes, auditoria } = makeService({ db, api });
 
@@ -434,18 +457,95 @@ describe("PandapeSyncService — pull de docs reusa F2 (DoD §5 / §A.6 URL nunc
     // mas nada que persista/loga pode conter a url.
     expect(contemUrl((admissoes.create as ReturnType<typeof vi.fn>).mock.calls)).toBe(false);
     expect(contemUrl((update as ReturnType<typeof vi.fn>).mock.calls)).toBe(false);
-    expect(contemUrl((auditoria.auditarBuffer as ReturnType<typeof vi.fn>).mock.calls)).toBe(false);
+    expect(contemUrl((auditoria.auditarConjunto as ReturnType<typeof vi.fn>).mock.calls)).toBe(false);
     expect(contemUrl(logSpy.mock.calls)).toBe(false);
     expect(contemUrl(warnSpy.mock.calls)).toBe(false);
 
     vi.unstubAllGlobals();
   });
 
+  it("CTPS com múltiplos arquivos → TODAS as páginas num conjunto (regra do primeiro REVOGADA)", async () => {
+    const { db, api } = novoComDocs(
+      forms([
+        {
+          name: "CTPS (Carteira de Trabalho e Previdência Social)",
+          links: ["https://p.example/1", "https://p.example/2", "https://p.example/3"],
+        },
+      ]),
+    );
+    db.query.tiposDocumento.findFirst.mockResolvedValue({ id: "tipo-ctps", codigo: "CTPS" });
+    vi.stubGlobal("fetch", fetchOk());
+    const { svc, auditoria } = makeService({ db, api });
+
+    await svc.processarCandidato("PC-1");
+
+    // UMA auditoria sobre o conjunto, com as 3 páginas juntas (não mais só a primeira).
+    expect(auditoria.auditarConjunto).toHaveBeenCalledTimes(1);
+    const arquivos = (auditoria.auditarConjunto as ReturnType<typeof vi.fn>).mock.calls[0][2];
+    expect(arquivos).toHaveLength(3);
+    vi.unstubAllGlobals();
+  });
+
+  it("tipo com múltiplos arquivos (frente e verso) → UM conjunto com todos, não N chamadas", async () => {
+    const { db, api } = novoComDocs(
+      forms([{ name: "CPF", links: ["https://p.example/a", "https://p.example/b"] }]),
+    );
+    db.query.tiposDocumento.findFirst.mockResolvedValue({ id: "tipo-cpf", codigo: "CPF" });
+    vi.stubGlobal("fetch", fetchOk());
+    const { svc, auditoria } = makeService({ db, api });
+
+    await svc.processarCandidato("PC-1");
+
+    expect(auditoria.auditarConjunto).toHaveBeenCalledTimes(1);
+    const arquivos = (auditoria.auditarConjunto as ReturnType<typeof vi.fn>).mock.calls[0][2];
+    expect(arquivos).toHaveLength(2);
+    vi.unstubAllGlobals();
+  });
+
+  it("formulário SEM destino no de/para → registra rótulo do formulário no log, sem PII e sem auditar", async () => {
+    const { db, api } = novoComDocs(
+      forms([{ name: "Informações de Vale Transporte", links: [URL_SECRETA] }]),
+    );
+    vi.stubGlobal("fetch", fetchOk());
+    const { svc, auditoria } = makeService({ db, api });
+    const warnSpy = vi
+      .spyOn((svc as unknown as { logger: { warn: (m: string) => void } }).logger, "warn")
+      .mockImplementation(() => undefined);
+
+    await svc.processarCandidato("PC-1");
+
+    expect(auditoria.auditarConjunto).not.toHaveBeenCalled();
+    const logado = JSON.stringify(warnSpy.mock.calls);
+    // o RÓTULO do formulário aparece (é o que torna auditável)...
+    expect(logado).toContain("Informações de Vale Transporte");
+    expect(logado).toContain("SEM DESTINO");
+    // ...mas a URL e o nome do arquivo, NUNCA (§A.6).
+    expect(logado).not.toContain("naoexpira");
+    expect(logado).not.toContain("arquivo.pdf");
+    vi.unstubAllGlobals();
+  });
+
+  it("DEDUP: tipo já ENTREGUE nesta admissão não é baixado de novo", async () => {
+    const { db, api } = novoComDocs(forms([{ name: "RG", links: [URL_SECRETA] }]));
+    db.query.documentosAdmissao.findFirst.mockResolvedValue({ id: "doc-1", estado: "ENTREGUE" });
+    const fetchSpy = fetchOk();
+    vi.stubGlobal("fetch", fetchSpy);
+    const { svc, auditoria } = makeService({ db, api });
+
+    await svc.processarCandidato("PC-1");
+
+    expect(auditoria.auditarConjunto).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
   it("doc sem URL → ignorado; download HTTP falho (não-ok) → pulado sem quebrar", async () => {
-    const { db, api } = novoComDocs([
-      { label: "RG" }, // sem url
-      { label: "CPF", url: "https://pandape.example.com/cpf?t=3" },
-    ]);
+    const { db, api } = novoComDocs(
+      forms([
+        { name: "RG", links: [undefined] }, // formulário sem link
+        { name: "CPF", links: ["https://pandape.example.com/cpf?t=3"] },
+      ]),
+    );
     db.query.tiposDocumento.findFirst.mockResolvedValue({ id: "tipo-cpf", codigo: "CPF" });
     vi.stubGlobal(
       "fetch",
@@ -457,7 +557,7 @@ describe("PandapeSyncService — pull de docs reusa F2 (DoD §5 / §A.6 URL nunc
 
     await expect(svc.processarCandidato("PC-1")).resolves.toBeUndefined();
     // sem url → não baixa; com url mas 404 → pulado. Nenhuma auditoria.
-    expect(auditoria.auditarBuffer).not.toHaveBeenCalled();
+    expect(auditoria.auditarConjunto).not.toHaveBeenCalled();
 
     vi.unstubAllGlobals();
   });

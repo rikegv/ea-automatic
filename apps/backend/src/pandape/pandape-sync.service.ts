@@ -1,12 +1,19 @@
 import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Worker, type Job } from "bullmq";
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import type IORedis from "ioredis";
 import type { AuthUser } from "../auth/auth.types";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
-import { cargos, clientes, integracaoPandape, tiposDocumento, usuarios } from "../db/schema";
+import {
+  cargos,
+  clientes,
+  documentosAdmissao,
+  integracaoPandape,
+  tiposDocumento,
+  usuarios,
+} from "../db/schema";
 import { AdmissoesService } from "../admissoes/admissoes.service";
 import { AuditoriaService } from "../auditoria/auditoria.service";
 import {
@@ -16,15 +23,25 @@ import {
 } from "./pandape-api.service";
 import type { CandidatoInputDto, SexoValor } from "../admissoes/dto/create-admissao.dto";
 import { PandapeQueueService } from "./pandape-queue.service";
+import { resolverExtensaoDocumento } from "./mime-documento";
 import { resolverTipoDocumento } from "./resolver-tipo-documento";
 import {
   criarConexaoRedis,
   JOB_POLL_TICK,
+  JOB_PULL_DOCS,
   JOB_SYNC_CANDIDATE,
   PANDAPE_QUEUE,
   PANDAPE_WORKER_OPTIONS,
+  type PullDocsJobData,
   type SyncCandidateJobData,
 } from "./pandape.queue";
+
+/**
+ * Teto de segurança da auditoria por conjunto (BLOCO 1): número máximo de arquivos do MESMO tipo
+ * enviados numa única chamada à IA. Cobre frente/verso e páginas de carteira com folga; acima disso
+ * (número absurdo), audita os primeiros e registra no log, para não estourar o payload do Vertex.
+ */
+const MAX_ARQUIVOS_CONJUNTO = 10;
 
 /**
  * Lógica idempotente da sincronização Pandapé (Fase 5 / INT-1, OST §3) + o Worker BullMQ (consumidor).
@@ -122,6 +139,11 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
     if (job.name === JOB_SYNC_CANDIDATE) {
       const { idPrecollaborator } = job.data as SyncCandidateJobData;
       await this.processarCandidato(idPrecollaborator);
+      return;
+    }
+    if (job.name === JOB_PULL_DOCS) {
+      const { admissaoId, idPrecollaborator } = job.data as PullDocsJobData;
+      await this.puxarDocumentosDaAdmissao(admissaoId, idPrecollaborator);
     }
   }
 
@@ -258,7 +280,7 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
         { origem: "PANDAPE", bypassAceite: true, pandape: pandapeOpts },
       );
       // Pull de docs (F2 incremental) após o nascimento das frentes (regra 1).
-      await this.puxarDocumentos(criada.admissaoId, pc.documents ?? []);
+      await this.puxarDocumentos(criada.admissaoId, pc.idPreCollaborator);
     } catch (err) {
       // Corrida: outro tick criou a mesma admissão primeiro → o unique idPrecollaborator estoura.
       if (this.ehViolacaoUnique(err)) {
@@ -322,11 +344,22 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
    * buffer é descartado ao fim de cada documento. Roda sob um "usuário sistema" real (ver
    * `resolverUsuarioSistema`) porque o fechamento da régua grava um evento com autor (FK).
    */
-  private async puxarDocumentos(
-    admissaoId: string,
-    documentos: PandaperPrecollaborator["documents"],
-  ): Promise<void> {
-    if (!documentos || documentos.length === 0) return;
+  /**
+   * Entrada PÚBLICA do pull, consumida pelo job `pull-docs` que a LIBERAÇÃO enfileira (§A.9). É o
+   * mesmo pull do nascimento pelo webhook, só que disparado quando a admissão passa a ter régua
+   * (cliente + cargo), que é o que dá destino a cada documento.
+   *
+   * Inerte sem token (não quebra ambiente sem credencial). Erro sobe para o backoff do BullMQ: o job
+   * é retentado, e a LIBERAÇÃO já aconteceu e não é afetada (é job separado, fora da transação).
+   */
+  async puxarDocumentosDaAdmissao(admissaoId: string, idPrecollaborator: string): Promise<void> {
+    if (!this.api.estaAtivo()) return;
+    await this.puxarDocumentos(admissaoId, idPrecollaborator);
+  }
+
+  private async puxarDocumentos(admissaoId: string, idPrecollaborator: string): Promise<void> {
+    const formularios = await this.api.getFormulariosDocumentos(idPrecollaborator);
+    if (formularios.length === 0) return;
 
     const userSistema = await this.resolverUsuarioSistema();
     if (!userSistema) {
@@ -334,16 +367,23 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    for (const doc of documentos) {
-      // API v1: o campo real é `link` (e o rótulo é `name`); `url`/`label`/`tipo` são compat legado.
-      const url = doc.url ?? doc.link;
-      if (!url) continue;
-      const codigo = resolverTipoDocumento(doc.label ?? doc.tipo ?? doc.name);
+    for (const form of formularios) {
+      const rotulo = (form.name ?? "").trim();
+      const docs = (form.documents ?? []).filter((d) => d.link ?? d.url);
+      if (docs.length === 0) continue; // formulário sem anexo: nada a puxar.
+
+      const codigo = resolverTipoDocumento(rotulo);
       if (!codigo) {
-        // NUNCA logar a URL nem CPF — só um rótulo genérico (§A.6).
-        this.logger.warn("Documento Pandapé com tipo não mapeado — pulado.");
+        // BLOCO 2: NÃO descarta calado. O rótulo do FORMULÁRIO não é PII (é "Informações de Vale
+        // Transporte", não o nome do arquivo), então vai ao log de propósito: é o que permite ver
+        // que chegou algo sem destino. Nome de arquivo e URL seguem proibidos (§A.6).
+        this.logger.warn(
+          `Documento Pandapé SEM DESTINO no de/para (não auditado, nada perdido no Pandapé) — ` +
+            `idPreCollaborator=${idPrecollaborator}, formulário="${rotulo}", arquivos=${docs.length}.`,
+        );
         continue;
       }
+
       const tipo = await this.db.query.tiposDocumento.findFirst({
         where: eq(tiposDocumento.codigo, codigo),
       });
@@ -352,30 +392,66 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
         continue;
       }
 
-      let buffer: Buffer | undefined;
-      try {
-        const res = await fetch(url); // URL pública, só em memória.
-        if (!res.ok) {
-          this.logger.warn(
-            `Download de documento do Pandapé falhou (HTTP ${res.status}) — pulado.`,
-          );
-          continue;
-        }
-        buffer = Buffer.from(await res.arrayBuffer());
-        await this.auditoria.auditarBuffer(
-          admissaoId,
-          tipo.id,
-          { buffer, originalname: `${codigo}` },
-          userSistema,
-        );
-      } catch (err) {
+      // DEDUP (BLOCO 3): tipo já ENTREGUE nesta admissão não é reprocessado. É o que torna a
+      // re-consulta futura (OST do scheduler) segura, sem baixar de novo o que já entrou.
+      // O enum de `estado` tem só PENDENTE/ENTREGUE/INCONFORME: INCONFORME NÃO entra na trava de
+      // propósito, porque documento reprovado deve poder ser reenviado e re-auditado.
+      const jaTem = await this.db.query.documentosAdmissao.findFirst({
+        where: and(
+          eq(documentosAdmissao.admissaoId, admissaoId),
+          eq(documentosAdmissao.tipoDocumentoId, tipo.id),
+          eq(documentosAdmissao.estado, "ENTREGUE"),
+        ),
+      });
+      if (jaTem) continue;
+
+      // MÚLTIPLOS ARQUIVOS (BLOCO 1): auditoria por CONJUNTO. A "regra do primeiro" da CTPS está
+      // REVOGADA (pegava só a página da foto e a régua reprovava por dados que estão na página de
+      // qualificação): agora TODAS as páginas/lados vão juntos à IA, que localiza o exigido em
+      // qualquer uma. Teto de segurança para não mandar um número absurdo de imagens numa chamada.
+      const selecionados = docs.slice(0, MAX_ARQUIVOS_CONJUNTO);
+      if (docs.length > MAX_ARQUIVOS_CONJUNTO) {
         this.logger.warn(
-          `Falha ao puxar/auditar documento do Pandapé: ${
-            err instanceof Error ? err.message : "erro"
-          }`,
+          `Formulário com ${docs.length} arquivos no tipo=${codigo}; auditando os primeiros ` +
+            `${MAX_ARQUIVOS_CONJUNTO} (teto de segurança do conjunto).`,
         );
-      } finally {
-        buffer = undefined; // descarta o binário da memória.
+      } else if (docs.length > 1) {
+        this.logger.log(
+          `Formulário com múltiplos arquivos, tipo=${codigo}, arquivos=${docs.length}, ` +
+            `auditados como um conjunto único.`,
+        );
+      }
+
+      // Baixa TODOS os arquivos do tipo (URLs públicas, só em memória, §A.6) e monta o conjunto.
+      const arquivos: Array<{ buffer: Buffer; originalname: string }> = [];
+      try {
+        for (const doc of selecionados) {
+          const url = doc.link ?? doc.url;
+          if (!url) continue;
+          const res = await fetch(url);
+          if (!res.ok) {
+            this.logger.warn(`Download de documento do Pandapé falhou (HTTP ${res.status}), pulado.`);
+            continue;
+          }
+          const buffer = Buffer.from(await res.arrayBuffer());
+          // BLOCO A (fix do mime): o `originalname` é o CÓDIGO do tipo (nunca o nome real, §A.6), sem
+          // extensão. Resolvemos a extensão pelo Content-Type (mime NÃO é PII) e, na falta, pelos
+          // magic bytes, para a staging gravar COM extensão e a IA receber o mime correto.
+          const ext = resolverExtensaoDocumento(res.headers.get("content-type"), buffer);
+          arquivos.push({ buffer, originalname: `${codigo}${ext ?? ""}` });
+        }
+        if (arquivos.length === 0) continue; // nada baixável neste tipo.
+        // UMA auditoria sobre o conjunto inteiro (BLOCO 1): um veredito, um registro por tipo. Os
+        // buffers ficam SÓ em memória (§A.6) e são liberados ao fim desta iteração (escopo do form).
+        await this.auditoria.auditarConjunto(admissaoId, tipo.id, arquivos, userSistema);
+      } catch (err) {
+        // BLOCO B/C: a coleta NÃO se perde. O documento já foi gravado como AGUARDANDO_AUDITORIA
+        // antes da chamada da IA (ver `auditarConjunto`), então a falha aqui deixa só a AUDITORIA
+        // pendente, visível na régua, reprocessável sem baixar de novo. §A.6: sem nome/URL.
+        this.logger.warn(
+          `Documento coletado do Pandapé mas auditoria falhou (fica AGUARDANDO_AUDITORIA, ` +
+            `nada perdido): ${err instanceof Error ? err.message : "erro"}`,
+        );
       }
     }
   }

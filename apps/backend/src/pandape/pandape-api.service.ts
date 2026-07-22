@@ -21,6 +21,32 @@ export interface PandapeDocument {
 }
 
 /**
+ * Formulário do processo admissional do Pandapé (GET /v3/precollaborators/{id} → `forms[]`).
+ *
+ * O `name` do FORMULÁRIO é o que identifica o TIPO do documento ("Comprovante de Residência",
+ * "CTPS (Carteira de Trabalho e Previdência Social)"). É a entrada do `resolverTipoDocumento`.
+ *
+ * Por que a v3 e não a v1/v2: nelas os documentos vêm soltos em `documents[]` na raiz, e o único
+ * rótulo disponível é o **nome do arquivo** ("IMG-<numeros>.jpg"), que não diz o tipo e ainda carrega
+ * PII (já foi visto CPF no nome do arquivo). A v3 é a única versão que entrega a associação
+ * tipo → documentos. Confirmado ao vivo contra a API real.
+ */
+export interface PandapeFormulario {
+  name?: string;
+  documents?: PandapeDocument[];
+}
+
+/**
+ * Pré-colaborador na v3 — GET /v3/precollaborators/{id}. Usado SÓ para documentos: a identidade
+ * (idMatch, nome, e-mail, vaga) continua vindo da v1, que é o que o resto do sync já consome.
+ * A v3 não devolve `answers` nem `documents` na raiz.
+ */
+export interface PandapePrecollaboratorV3 {
+  idPreCollaborator?: string;
+  forms?: PandapeFormulario[];
+}
+
+/**
  * Pré-colaborador do Pandapé — GET /v1/PreCollaborator/Get?idPreCollaborator={id}. JSON é camelCase
  * (confirmado contra a API real + swagger v1). **NÃO traz CPF** (nem telefone/nascimento): esses
  * dados pessoais vêm de `getMatch(idMatch)` (MatchModel). O `vacancyJob` é o cargo como string; a
@@ -240,6 +266,21 @@ export class PandapeApiService {
     return this.get<PandaperPrecollaborator>(
       `/v1/PreCollaborator/Get?idPreCollaborator=${encodeURIComponent(id)}`,
     );
+  }
+
+  /**
+   * GET /v3/precollaborators/{id} → `forms[]` com os documentos AGRUPADOS POR FORMULÁRIO. **Fonte do
+   * TIPO do documento** (o `name` do formulário). Inerte → []. Id/URL/nome de arquivo NUNCA logados.
+   *
+   * Endpoint separado do `getPrecollaborator` (v1) de propósito: a identidade segue na v1, que é o
+   * que o resto do sync consome; a v3 entra só onde ela é melhor, que é o tipo do documento.
+   */
+  async getFormulariosDocumentos(id: string): Promise<PandapeFormulario[]> {
+    if (this.inerte()) return [];
+    const pc = await this.get<PandapePrecollaboratorV3>(
+      `/v3/precollaborators/${encodeURIComponent(id)}`,
+    );
+    return Array.isArray(pc?.forms) ? pc.forms : [];
   }
 
   /**

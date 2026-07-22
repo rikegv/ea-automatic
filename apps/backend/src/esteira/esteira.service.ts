@@ -969,6 +969,8 @@ export class EsteiraService {
         nome: tiposDocumento.nome,
         exigencia: reguaDocumental.exigencia,
         estado: documentosAdmissao.estado,
+        // Motivo do veredito da IA (BLOCO 2): texto acionável, sem PII (§A.6). Exibido na aba Auditoria.
+        observacao: documentosAdmissao.observacao,
       })
       .from(reguaDocumental)
       .innerJoin(tiposDocumento, eq(tiposDocumento.id, reguaDocumental.tipoDocumentoId))
@@ -1122,6 +1124,7 @@ export class EsteiraService {
         nome: d.nome,
         exigencia: d.exigencia,
         estado: d.estado ?? "PENDENTE",
+        observacao: d.observacao ?? null,
       })),
     };
   }

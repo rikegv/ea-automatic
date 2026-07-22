@@ -14,7 +14,8 @@ import type { ArquivamentoDrive, DriveSubpasta, ResultadoAuditoria } from "@ea/s
 
 /** Payload de auditoria de UM documento. `candidato.cpf` vai SÓ para a IA — nunca é logado (§A.6). */
 export interface AuditarDocumentoPayload {
-  stagingPath: string;
+  /** Auditoria por CONJUNTO: 1 ou mais arquivos do MESMO documento (frente e verso, páginas). */
+  stagingPaths: string[];
   tipoDocumentoCodigo: string;
   tipoDocumentoNome: string;
   candidato: { nome: string; cpf: string };

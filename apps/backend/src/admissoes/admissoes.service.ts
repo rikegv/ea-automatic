@@ -4,6 +4,8 @@ import {
   HttpException,
   Inject,
   Injectable,
+  Logger,
+  Optional,
   NotFoundException,
 } from "@nestjs/common";
 import { beneficioExigeValor, isValidCpf, normalizeCpf, type FarolGlobal } from "@ea/shared-types";
@@ -37,6 +39,7 @@ import {
 } from "../domain/admissao";
 import { parseBeneficiosPadrao } from "../domain/beneficios";
 import { FRENTES_AO_NASCER } from "../domain/frentes";
+import { PandapeQueueService } from "../pandape/pandape-queue.service";
 import { recomputeFarolGlobal } from "./farol";
 import type { AuthUser } from "../auth/auth.types";
 import type { CandidatoInputDto, CreateAdmissaoDto } from "./dto/create-admissao.dto";
@@ -94,7 +97,52 @@ function fmtValorBr(valor: string): string {
 
 @Injectable()
 export class AdmissoesService {
-  constructor(@Inject(DRIZZLE) private readonly db: Database) {}
+  private readonly logger = new Logger("AdmissoesService");
+
+  constructor(
+    @Inject(DRIZZLE) private readonly db: Database,
+    // OPCIONAL de propósito: o pull do Pandapé é efeito colateral da liberação, não parte do núcleo.
+    // Scripts de carga e testes constroem o service sem fila, e a liberação segue funcionando igual
+    // (sem fila, o pull simplesmente não é enfileirado e a liberação não é afetada).
+    @Optional() private readonly pandapeQueue?: PandapeQueueService,
+  ) {}
+
+  /**
+   * PULL DE DOCUMENTOS NA LIBERAÇÃO (§A.9). A admissão acabou de ganhar cliente + cargo, logo ganhou
+   * régua, logo cada documento do Pandapé tem onde encaixar. Enfileira o pull do acervo que o
+   * candidato JÁ anexou (inclusive o que ele mandou enquanto esperava a liberação).
+   *
+   * TRAVA DE COMPORTAMENTO: isto é EFEITO COLATERAL, nunca gate. Roda **depois** da transação de
+   * liberação, é `try/catch` de ponta a ponta e é ENFILEIRADO (não chamado direto), então Pandapé
+   * fora, Redis fora ou timeout **não revertem nem travam a liberação**. Sem origem Pandapé (admissão
+   * manual), é no-op silencioso.
+   */
+  private async enfileirarPullDocumentos(admissaoId: string): Promise<void> {
+    try {
+      const integracao = await this.db.query.integracaoPandape.findFirst({
+        where: eq(integracaoPandape.admissaoId, admissaoId),
+      });
+      if (!integracao?.idPrecollaborator) return; // não veio do Pandapé: nada a puxar.
+      if (!this.pandapeQueue) return; // sem fila injetada (script/teste): nada a enfileirar.
+      const ok = await this.pandapeQueue.enfileirarPullDocumentos(
+        admissaoId,
+        integracao.idPrecollaborator,
+      );
+      if (!ok) {
+        // §A.6: só ids técnicos, nunca PII. Serve para reprocessar depois.
+        this.logger.warn(
+          `Pull de documentos NÃO enfileirado (fila indisponível) para a admissão ${admissaoId}. ` +
+            "A liberação foi concluída normalmente.",
+        );
+      }
+    } catch (err) {
+      this.logger.warn(
+        `Falha ao enfileirar o pull de documentos (liberação NÃO afetada): ${
+          err instanceof Error ? err.message : "erro"
+        }`,
+      );
+    }
+  }
 
   /**
    * F11 / regra 6 — lookup em tempo real do candidato por CPF. NUNCA 404 (consulta, não recurso):
@@ -526,7 +574,7 @@ export class AdmissoesService {
     // Mesma validação do `create` (benefício que exige valor não passa sem valor). Fora da tx.
     await this.validarValoresDoPacote(dto.pacoteBeneficios);
 
-    return this.db.transaction(async (tx) => {
+    const resultado = await this.db.transaction(async (tx) => {
       // Régua do par (cliente + cargo), mesma leitura do `create`. No LOTE esta leitura acontece UMA
       // vez, fora do laço (é o mesmo par para todas), e é passada pronta ao miolo.
       const regua = await this.lerReguaDoPar(tx, dto.codCliente, dto.cargoId);
@@ -539,6 +587,10 @@ export class AdmissoesService {
       });
       return { admissaoId, temRegua: regua.length > 0 };
     });
+
+    // Pull do acervo do Pandapé: FORA da transação e sem poder derrubá-la (ver o método).
+    await this.enfileirarPullDocumentos(admissaoId);
+    return resultado;
   }
 
   /** Régua documental do par (cliente + cargo). Aceita `db` ou `tx` (mesma leitura do `create`). */
@@ -786,6 +838,9 @@ export class AdmissoesService {
         await this.db.transaction(async (tx) => {
           await this.aplicarLiberacao(tx, { adm, candidatoNome: nome, dto, regua, user });
         });
+        // Um job de pull POR ADMISSÃO: liberar 30 de uma vez enfileira 30 jobs, que o limiter da
+        // fila serializa sob o teto do Pandapé, em vez de 30 chamadas simultâneas (§A.5).
+        await this.enfileirarPullDocumentos(admissaoId);
         liberadas.push({ admissaoId, candidato: nome });
       } catch (e) {
         falhas.push({
