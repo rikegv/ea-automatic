@@ -8,6 +8,8 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import { Button } from "@/components/ui/Button";
 import { StatusPill } from "@/components/ui/StatusPill";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
+import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
 
 interface Motivo {
   id: string;
@@ -59,6 +61,18 @@ export default function MotivosDeclinioPage() {
       return true;
     });
   }, [rows, filtro, busca]);
+
+  // Ordenação clicável (OST visual, leva das 11 tabelas). Status por RANK (ativo primeiro), não
+  // alfabética. A coluna de ações não entra: é controle, não dado.
+  const colunas = useMemo<ColOrd<Motivo>[]>(
+    () => [
+      { chave: "nome", tipo: "texto", valor: (c) => c.nome },
+      { chave: "status", tipo: "status", valor: (c) => (c.ativo ? 0 : 1) },
+    ],
+    [],
+  );
+  const ord = useOrdenacao(colunas, visiveis);
+
   const nAtivos = useMemo(() => rows.filter((c) => c.ativo).length, [rows]);
   const nInativos = rows.length - nAtivos;
 
@@ -213,8 +227,12 @@ export default function MotivosDeclinioPage() {
           <table className="ds-table min-w-[480px]">
             <thead>
               <tr>
-                <th>Motivo</th>
-                <th className="w-32">Status</th>
+                <ColunaOrdenavel as="th" ord={ord} chave="nome">
+                  Motivo
+                </ColunaOrdenavel>
+                <ColunaOrdenavel as="th" ord={ord} chave="status" className="w-32">
+                  Status
+                </ColunaOrdenavel>
                 <th className="w-40" />
               </tr>
             </thead>
@@ -232,7 +250,7 @@ export default function MotivosDeclinioPage() {
                   </td>
                 </tr>
               ) : (
-                visiveis.map((c) => (
+                ord.itens.map((c) => (
                   <tr key={c.id} className={c.ativo ? "" : "opacity-60"}>
                     <td className="font-semibold">{c.nome}</td>
                     <td className="text-center">

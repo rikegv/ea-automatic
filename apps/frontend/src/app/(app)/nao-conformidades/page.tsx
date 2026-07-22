@@ -14,6 +14,8 @@ import { Icon } from "@/components/ui/Icon";
 import { FiltroTrigger, FiltroCampo } from "@/components/ui/FiltroTrigger";
 import { MultiSelect } from "@/components/ui/MultiSelect";
 import { AdmissaoDetalheModal } from "@/components/esteira/AdmissaoDetalheModal";
+import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
+import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
 
 type Situacao = "ABERTA" | "AGUARDA_SUPERVISAO" | "RESOLVIDA" | "LIBERADA_DIRETORIA";
 
@@ -62,6 +64,15 @@ const SIT_ROTULO: Record<Situacao, string> = {
   AGUARDA_SUPERVISAO: "Aguardando supervisão",
   RESOLVIDA: "Resolvida",
   LIBERADA_DIRETORIA: "Liberada pela diretoria",
+};
+// Rank da situação para a ordenação clicável: ordem do FLUXO, do início para o fim, igual ao que a
+// coluna Status do Farol faz com o catálogo. O primeiro clique traz as abertas primeiro, que é a
+// leitura de fila de trabalho. Alfabética aqui não significaria nada.
+const SIT_RANK: Record<Situacao, number> = {
+  ABERTA: 0,
+  AGUARDA_SUPERVISAO: 1,
+  LIBERADA_DIRETORIA: 2,
+  RESOLVIDA: 3,
 };
 const SIT_TONE: Record<Situacao, PillTone> = {
   ABERTA: "dg",
@@ -153,6 +164,23 @@ export default function NaoConformidadesPage() {
       .then(setClientes)
       .catch(() => setClientes([]));
   }, [token]);
+
+  // Ordenação clicável (OST visual, leva das 11 tabelas). Tipo ordena pelo RÓTULO exibido e Situação
+  // por RANK de fluxo. As duas colunas de data trazem a mais recente no primeiro clique. A coluna do
+  // olho (detalhe) fica de fora: é controle.
+  const colunas = useMemo<ColOrd<NcItem>[]>(
+    () => [
+      { chave: "candidato", tipo: "texto", valor: (n) => n.candidatoNome },
+      { chave: "cliente", tipo: "texto", valor: (n) => n.clienteRazao },
+      { chave: "tipo", tipo: "texto", valor: (n) => NC_TIPO_ROTULO[n.tipo] },
+      { chave: "consultor", tipo: "texto", valor: (n) => n.consultorNome },
+      { chave: "dataAdmissao", tipo: "data", valor: (n) => n.dataAdmissao },
+      { chave: "registrada", tipo: "data", valor: (n) => n.criadoEm },
+      { chave: "situacao", tipo: "status", valor: (n) => SIT_RANK[n.situacao] },
+    ],
+    [],
+  );
+  const ord = useOrdenacao(colunas, data?.items ?? []);
 
   const tipoOpts = useMemo(
     () => [
@@ -395,15 +423,27 @@ export default function NaoConformidadesPage() {
                     "minmax(0,1.35fr) minmax(0,1.05fr) 126px 124px 92px 92px minmax(0,1.45fr) 40px",
                 }}
               >
-                <span>Candidato</span>
-                <span>Cliente</span>
-                <span>Tipo</span>
-                <span>Consultor</span>
-                <span>Data adm.</span>
-                <span>Registrada</span>
-                <span className="col-fix" style={{ right: 40 }}>
+                <ColunaOrdenavel ord={ord} chave="candidato">
+                  Candidato
+                </ColunaOrdenavel>
+                <ColunaOrdenavel ord={ord} chave="cliente">
+                  Cliente
+                </ColunaOrdenavel>
+                <ColunaOrdenavel ord={ord} chave="tipo">
+                  Tipo
+                </ColunaOrdenavel>
+                <ColunaOrdenavel ord={ord} chave="consultor">
+                  Consultor
+                </ColunaOrdenavel>
+                <ColunaOrdenavel ord={ord} chave="dataAdmissao">
+                  Data adm.
+                </ColunaOrdenavel>
+                <ColunaOrdenavel ord={ord} chave="registrada">
+                  Registrada
+                </ColunaOrdenavel>
+                <ColunaOrdenavel ord={ord} chave="situacao">
                   Situação / ação
-                </span>
+                </ColunaOrdenavel>
                 <span className="col-fix" />
               </div>
 
@@ -418,7 +458,7 @@ export default function NaoConformidadesPage() {
                     : "Nenhuma não conformidade registrada. 🎉"}
                 </div>
               ) : (
-                data!.items.map((nc) => {
+                ord.itens.map((nc) => {
                   const acting = actingId === nc.id;
                   const podeLiberar =
                     nc.liberacaoStatus === "NENHUMA" || nc.liberacaoStatus === "REPROVADA";

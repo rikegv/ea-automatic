@@ -11,6 +11,8 @@ import { Select } from "@/components/ui/Select";
 import { Pill } from "@/components/ui/Pill";
 import { Icon } from "@/components/ui/Icon";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
+import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
 
 interface TipoDocumento {
   id: string;
@@ -50,6 +52,22 @@ export default function RegrasAuditoriaPage() {
     for (const t of tipos) m.set(t.id, t.nome);
     return m;
   }, [tipos]);
+
+  // Ordenação clicável (OST visual, leva das 11 tabelas). Documento ordena pelo NOME exibido, não
+  // pelo id cru da coluna. Estado por RANK (ativa primeiro). Ações fica de fora: é controle.
+  const colunas = useMemo<ColOrd<RegraAuditoria>[]>(
+    () => [
+      {
+        chave: "documento",
+        tipo: "texto",
+        valor: (r) => nomePorTipo.get(r.tipoDocumentoId) ?? r.tipoDocumentoId,
+      },
+      { chave: "criterio", tipo: "texto", valor: (r) => r.descricaoRegra },
+      { chave: "estado", tipo: "status", valor: (r) => (r.ativo ? 0 : 1) },
+    ],
+    [nomePorTipo],
+  );
+  const ord = useOrdenacao(colunas, rows);
 
   // Carrega os 21 tipos de documento (catálogo) uma vez.
   useEffect(() => {
@@ -209,9 +227,15 @@ export default function RegrasAuditoriaPage() {
         <table className="ds-table">
           <thead>
             <tr>
-              <th className="w-[220px]">Documento</th>
-              <th>Critério</th>
-              <th className="w-[120px]">Estado</th>
+              <ColunaOrdenavel as="th" ord={ord} chave="documento" className="w-[220px]">
+                Documento
+              </ColunaOrdenavel>
+              <ColunaOrdenavel as="th" ord={ord} chave="criterio">
+                Critério
+              </ColunaOrdenavel>
+              <ColunaOrdenavel as="th" ord={ord} chave="estado" className="w-[130px]">
+                Estado
+              </ColunaOrdenavel>
               <th className="w-[160px]" />
             </tr>
           </thead>
@@ -229,7 +253,7 @@ export default function RegrasAuditoriaPage() {
                 </td>
               </tr>
             ) : (
-              rows.map((r) => {
+              ord.itens.map((r) => {
                 const editando = editId === r.id;
                 const busy = busyId === r.id;
                 return (

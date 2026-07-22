@@ -2816,3 +2816,69 @@ Com a peça pronta, ligar cada tabela é declarar as colunas e trocar `<span>`/`
 `<ColunaOrdenavel>`. Candidatas imediatas, todas de rolagem com conjunto inteiro no cliente:
 Não conformidades, Liberação (2), admin/clientes, usuários, tarifas, cargos, régua,
 motivos-declínio, regras. Fica de fora só o Gerenciador (dívida 3).
+
+---
+
+## 2026-07-22 (tarde, 3): ordenação clicável replicada nas tabelas restantes
+
+O diretor validou o padrão no Farol e liberou a réplica. A peça criada na fase 3 (`useOrdenacao` +
+`ColunaOrdenavel`) foi ligada nas demais tabelas **sem nenhuma alteração na peça**, o que era o teste
+real do desenho: se tivesse sido preciso reescrever o hook para caber numa tela, o desenho estaria
+errado.
+
+### O que foi ligado (9 arquivos, 10 tabelas)
+`admin/cargos` (2 colunas), `admin/motivos-declinio` (2), `admin/regras` (3), `admin/regua` (1),
+`admin/usuarios` (5), `admin/tarifas` (5), `admin/clientes` (8), `liberacao` aba Aguardando (8) e aba
+Recusadas (5), `nao-conformidades` (7).
+
+**Esteira Exame e Cadastro já estavam prontas** e não exigiram trabalho: as três abas do Farol
+compartilham **um único** `.list-head`, então ligar o Farol ligou as três de uma vez. Conferido: 7
+colunas ordenáveis em cada aba.
+
+**Gerenciador segue de fora**, por decisão do diretor: é paginado no servidor (20 de 2282) e ordenar
+no cliente mostraria ordem falsa.
+
+### Decisões de tipo por coluna
+- **Números ordenam pela grandeza, nunca pelo texto.** `tarifas.Valor` usa o número, não a string em
+  BRL (senão "R$ 9,38" viria antes de "R$ 12,00"). "Parado (dias)" e "Parado (horas)" da Liberação
+  são a MESMA grandeza em unidades diferentes, as duas derivadas de `criadoEm`: ordenam pelo tempo
+  parado em ms (senão "10 dias" viria antes de "5 dias" e "9:00" antes de "36:30").
+- **Rank, não alfabética, onde o texto não tem ordem natural.** `usuarios.Papel` usa hierarquia
+  (Super Admin, Master, Comum). `nao-conformidades.Situação` usa a ordem do FLUXO (Aberta,
+  Aguardando supervisão, Liberada, Resolvida), igual ao que a coluna Status do Farol faz com o
+  catálogo. Ativo/Inativo dos catálogos: ativo primeiro.
+- **Rótulo exibido, não código cru.** `regras.Documento` ordena pelo nome do tipo, não pelo
+  `tipoDocumentoId`. `clientes.Tipo de serviço` pelo rótulo.
+
+### Coluna deliberadamente NÃO ligada, com motivo
+A segunda coluna da **régua** ficou de fora. Ela é dupla: no modo "ativos" é um **Select de edição**
+da régua em composição, e ordenar reposicionaria a linha embaixo do cursor no meio do preenchimento;
+no modo "inativos" é uma pill constante "Inativo", igual em toda linha, logo sem informação. Só a
+coluna Documento é dado ordenável ali. Colunas de controle (Ações, Avanço, checkbox, olho) seguem
+fora em todas as telas, como no Farol.
+
+### Gate, prova textual (o diretor valida em produção, não por print)
+- **Corte de cabeçalho (§A.20):** a mesma checagem automatizada de `scrollWidth > clientWidth` rodada
+  no Farol, agora em **todas** as tabelas ligadas. Resultado: **zero cabeçalho cortado** em 11
+  tabelas. Larguras ajustadas preventivamente onde a seta apertava (Telefone, Nascimento, Chegada,
+  Parado dias/horas, Recusado por/em, Papel, Status, Criado em, Estado).
+- **Ordenação:** leitura da ordem REALMENTE renderizada, antes e depois de cada clique, por tabela.
+  Números confirmados pela grandeza (Valor: 1o clique deu 12,00 / 9,38 / 6,30) e papel pela
+  hierarquia (1o clique deu três Super Admin no topo).
+- **Ordem padrão preservada:** comparação da ordem renderizada no carregamento contra a ordem CRUA
+  da API, em 5 tabelas, 8 linhas cada. **Idênticas**, ou seja, sem clique a peça não mexe em nada.
+- Typecheck verde. Lint com os mesmos **2 erros pré-existentes** de `react-hooks/exhaustive-deps`
+  (`nova/page.tsx`, `vt/page.tsx`), intocados.
+
+### NÃO PROVADO em comportamento, por falta de dado (declarado)
+`liberacao` aba **Recusadas** e **nao-conformidades** estão com a fila **vazia** na base. Os
+cabeçalhos ordenáveis renderizam (5 e 7 colunas, conferido) e o código passa no typecheck, mas o
+**reordenamento de linhas não pôde ser exercitado**, porque não há linha. Conferir quando houver
+dado real.
+
+### Risco de conflito com a sessão das cargas (mapeado, não resolvido aqui)
+Esta entrega toca `liberacao/page.tsx` e `nao-conformidades/page.tsx`, e a sessão das cargas tem WIP
+em `liberacao/page.tsx` (opção "em branco" nos dropdowns do modal). **Regiões diferentes** do arquivo,
+o modal deles contra a tabela daqui, então deve casar. A área que o diretor sinalizou como risco
+(coluna de status da Esteira, rótulo "Parcial" e overflow da pill) **não foi tocada** por esta
+entrega: a Esteira não teve nenhuma alteração aqui.

@@ -14,6 +14,8 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import { Button } from "@/components/ui/Button";
 import { Select } from "@/components/ui/Select";
 import { Icon } from "@/components/ui/Icon";
+import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
+import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
 import { StatusPill } from "@/components/ui/StatusPill";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 
@@ -152,6 +154,20 @@ export default function ReguaPage() {
   const inativosOrdenados = useMemo(
     () => [...tiposInativos].sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR")),
     [tiposInativos],
+  );
+
+  // Ordenação clicável (OST visual, leva das 11 tabelas). SÓ a coluna Documento entra. A segunda
+  // coluna é dupla e não é dado ordenável: no modo "ativos" ela é um SELECT de edição da régua em
+  // composição (ordenar reposicionaria a linha embaixo do cursor no meio do preenchimento) e no modo
+  // "inativos" é uma pill constante "Inativo", igual em toda linha. Ações é controle.
+  // Sem clique, a ordem padrão de cada lista é preservada: obrigatórios primeiro nos ativos.
+  const colunas = useMemo<ColOrd<TipoDocumento>[]>(
+    () => [{ chave: "documento", tipo: "texto", valor: (t) => t.nome }],
+    [],
+  );
+  const ord = useOrdenacao(
+    colunas,
+    filtroDocs === "ativos" ? tiposOrdenados : inativosOrdenados,
   );
 
   // Item 1: lista de clientes sem régua (recarrega após salvar, para o cliente sair da lista).
@@ -770,21 +786,23 @@ export default function ReguaPage() {
           <table className="ds-table min-w-[620px]">
             <thead>
               <tr>
-                <th>Documento</th>
+                <ColunaOrdenavel as="th" ord={ord} chave="documento">
+                  Documento
+                </ColunaOrdenavel>
                 <th className="w-[230px]">{filtroDocs === "ativos" ? "Exigência" : "Status"}</th>
                 <th className="w-[160px]">Ações</th>
               </tr>
             </thead>
             <tbody>
               {filtroDocs === "ativos" ? (
-                tiposOrdenados.length === 0 ? (
+                ord.itens.length === 0 ? (
                   <tr>
                     <td colSpan={3} className="py-8 text-center text-faint">
                       Nenhum documento ativo. Cadastre o primeiro no campo acima.
                     </td>
                   </tr>
                 ) : (
-                  tiposOrdenados.map((t) => (
+                  ord.itens.map((t) => (
                     <tr key={t.id}>
                       <td>{t.nome}</td>
                       <td>
@@ -820,14 +838,14 @@ export default function ReguaPage() {
                     </tr>
                   ))
                 )
-              ) : inativosOrdenados.length === 0 ? (
+              ) : ord.itens.length === 0 ? (
                 <tr>
                   <td colSpan={3} className="py-8 text-center text-faint">
                     Nenhum documento inativo.
                   </td>
                 </tr>
               ) : (
-                inativosOrdenados.map((t) => (
+                ord.itens.map((t) => (
                   <tr key={t.id} className="opacity-60">
                     <td>{t.nome}</td>
                     <td className="text-center">

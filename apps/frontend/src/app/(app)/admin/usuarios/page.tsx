@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import type { Papel } from "@ea/shared-types";
 import { apiFetch, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
@@ -11,6 +11,8 @@ import { Select } from "@/components/ui/Select";
 import { Pill } from "@/components/ui/Pill";
 import { Icon } from "@/components/ui/Icon";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
+import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
 
 interface Usuario {
   id: string;
@@ -26,6 +28,10 @@ const PAPEL_ROTULO: Record<Papel, string> = {
   MASTER: "Master",
   COMUM: "Comum",
 };
+
+// Rank do papel para a ordenação clicável: hierarquia real, do mais poderoso para o menos. Ordenar
+// "Comum/Master/Super Admin" por alfabética não diz nada sobre o nível de acesso.
+const PAPEL_RANK: Record<Papel, number> = { SUPER_ADMIN: 0, MASTER: 1, COMUM: 2 };
 
 const PAPEL_OPTIONS = [
   { value: "COMUM", label: "Comum" },
@@ -132,6 +138,20 @@ export default function UsuariosPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Ordenação clicável (OST visual, leva das 11 tabelas). Papel e Status ordenam por RANK, não
+  // alfabética. A coluna de ações não entra: é controle, não dado.
+  const colunas = useMemo<ColOrd<Usuario>[]>(
+    () => [
+      { chave: "nome", tipo: "texto", valor: (u) => u.nome },
+      { chave: "email", tipo: "texto", valor: (u) => u.email },
+      { chave: "papel", tipo: "status", valor: (u) => PAPEL_RANK[u.papel] },
+      { chave: "status", tipo: "status", valor: (u) => (u.ativo ? 0 : 1) },
+      { chave: "criadoEm", tipo: "data", valor: (u) => u.criadoEm },
+    ],
+    [],
+  );
+  const ord = useOrdenacao(colunas, rows);
 
   async function criar(e: FormEvent) {
     e.preventDefault();
@@ -284,11 +304,21 @@ export default function UsuariosPage() {
         <table className="ds-table">
           <thead>
             <tr>
-              <th>Nome</th>
-              <th>E-mail</th>
-              <th className="w-[160px]">Papel</th>
-              <th className="w-[110px]">Status</th>
-              <th className="w-[120px]">Criado em</th>
+              <ColunaOrdenavel as="th" ord={ord} chave="nome">
+                Nome
+              </ColunaOrdenavel>
+              <ColunaOrdenavel as="th" ord={ord} chave="email">
+                E-mail
+              </ColunaOrdenavel>
+              <ColunaOrdenavel as="th" ord={ord} chave="papel" className="w-[170px]">
+                Papel
+              </ColunaOrdenavel>
+              <ColunaOrdenavel as="th" ord={ord} chave="status" className="w-[120px]">
+                Status
+              </ColunaOrdenavel>
+              <ColunaOrdenavel as="th" ord={ord} chave="criadoEm" className="w-[135px]">
+                Criado em
+              </ColunaOrdenavel>
               <th className="w-[180px]" />
             </tr>
           </thead>
@@ -306,7 +336,7 @@ export default function UsuariosPage() {
                 </td>
               </tr>
             ) : (
-              rows.map((u) => {
+              ord.itens.map((u) => {
                 const editando = editId === u.id;
                 const busy = busyId === u.id;
                 const ehAtual = atual?.id === u.id;

@@ -8,6 +8,8 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import { Button } from "@/components/ui/Button";
 import { StatusPill } from "@/components/ui/StatusPill";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
+import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
 
 interface Tarifa {
   id: string;
@@ -80,6 +82,21 @@ export default function TarifasPage() {
       return true;
     });
   }, [rows, filtro, busca]);
+
+  // Ordenação clicável (OST visual, leva das 11 tabelas). Valor é NÚMERO (ordena pela grandeza, não
+  // pelo texto formatado em BRL) e Status é RANK (ativa primeiro). Ações fica de fora: é controle.
+  const colunas = useMemo<ColOrd<Tarifa>[]>(
+    () => [
+      { chave: "cidade", tipo: "texto", valor: (t) => t.cidade },
+      { chave: "transporte", tipo: "texto", valor: (t) => t.tipoTransporte },
+      { chave: "valor", tipo: "numero", valor: (t) => t.valor },
+      { chave: "observacao", tipo: "texto", valor: (t) => t.observacao },
+      { chave: "status", tipo: "status", valor: (t) => (t.ativo ? 0 : 1) },
+    ],
+    [],
+  );
+  const ord = useOrdenacao(colunas, visiveis);
+
   const nAtivas = useMemo(() => rows.filter((t) => t.ativo).length, [rows]);
   const nInativas = rows.length - nAtivas;
 
@@ -271,11 +288,21 @@ export default function TarifasPage() {
           <table className="ds-table min-w-[860px]">
             <thead>
               <tr>
-                <th>Cidade</th>
-                <th>Transporte</th>
-                <th className="w-32">Valor</th>
-                <th>Observação</th>
-                <th className="w-32">Status</th>
+                <ColunaOrdenavel as="th" ord={ord} chave="cidade">
+                  Cidade
+                </ColunaOrdenavel>
+                <ColunaOrdenavel as="th" ord={ord} chave="transporte">
+                  Transporte
+                </ColunaOrdenavel>
+                <ColunaOrdenavel as="th" ord={ord} chave="valor" className="w-32">
+                  Valor
+                </ColunaOrdenavel>
+                <ColunaOrdenavel as="th" ord={ord} chave="observacao">
+                  Observação
+                </ColunaOrdenavel>
+                <ColunaOrdenavel as="th" ord={ord} chave="status" className="w-32">
+                  Status
+                </ColunaOrdenavel>
                 <th className="w-40" />
               </tr>
             </thead>
@@ -293,7 +320,7 @@ export default function TarifasPage() {
                   </td>
                 </tr>
               ) : (
-                visiveis.map((t) => (
+                ord.itens.map((t) => (
                   <tr key={t.id} className={t.ativo ? "" : "opacity-60"}>
                     <td className="font-semibold">{t.cidade}</td>
                     <td>{t.tipoTransporte}</td>

@@ -7,6 +7,8 @@ import { PageHead } from "@/components/ui/PageHead";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Button } from "@/components/ui/Button";
 import { Pill, type PillTone } from "@/components/ui/Pill";
+import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
+import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
 
 interface Cliente {
   codCliente: string;
@@ -125,6 +127,26 @@ export default function ClientesPage() {
       return true;
     });
   }, [rows, filtro, filtroTipo, busca, soPendencia]);
+
+  // Ordenação clicável (OST visual, leva das 11 tabelas). Os campos opcionais entram como texto e o
+  // vazio cai para o fim nas duas direções, então cliente sem CNPJ/operação/vínculo não ocupa o topo
+  // só por inverter a seta. Tipo de serviço ordena pelo RÓTULO exibido, não pelo código cru.
+  // A coluna do expansor e a de ações não entram: são controle, não dado.
+  const colunas = useMemo<ColOrd<Cliente>[]>(
+    () => [
+      { chave: "codigo", tipo: "texto", valor: (c) => c.codCliente },
+      { chave: "razao", tipo: "texto", valor: (c) => c.razaoSocial },
+      { chave: "cnpj", tipo: "texto", valor: (c) => c.cnpj },
+      { chave: "operacao", tipo: "texto", valor: (c) => c.nomeOperacao },
+      { chave: "empresa", tipo: "texto", valor: (c) => c.empresaVinculo },
+      { chave: "cnpjVinculo", tipo: "texto", valor: (c) => c.cnpjVinculo },
+      { chave: "tipoServico", tipo: "texto", valor: (c) => c.tipoServicoRotulo },
+      { chave: "status", tipo: "status", valor: (c) => (c.ativo ? 0 : 1) },
+    ],
+    [],
+  );
+  const ord = useOrdenacao(colunas, visiveis);
+
   const nAtivos = useMemo(() => rows.filter((c) => c.ativo).length, [rows]);
   const nInativos = rows.length - nAtivos;
 
@@ -398,14 +420,30 @@ export default function ClientesPage() {
             <thead>
               <tr>
                 <th className="w-8" />
-                <th>Código</th>
-                <th>Razão social</th>
-                <th>CNPJ</th>
-                <th>Nome Operação</th>
-                <th>Empresa (Soulan)</th>
-                <th>CNPJ vínculo</th>
-                <th>Tipo de serviço</th>
-                <th>Status</th>
+                <ColunaOrdenavel as="th" ord={ord} chave="codigo">
+                  Código
+                </ColunaOrdenavel>
+                <ColunaOrdenavel as="th" ord={ord} chave="razao">
+                  Razão social
+                </ColunaOrdenavel>
+                <ColunaOrdenavel as="th" ord={ord} chave="cnpj">
+                  CNPJ
+                </ColunaOrdenavel>
+                <ColunaOrdenavel as="th" ord={ord} chave="operacao">
+                  Nome Operação
+                </ColunaOrdenavel>
+                <ColunaOrdenavel as="th" ord={ord} chave="empresa">
+                  Empresa (Soulan)
+                </ColunaOrdenavel>
+                <ColunaOrdenavel as="th" ord={ord} chave="cnpjVinculo">
+                  CNPJ vínculo
+                </ColunaOrdenavel>
+                <ColunaOrdenavel as="th" ord={ord} chave="tipoServico">
+                  Tipo de serviço
+                </ColunaOrdenavel>
+                <ColunaOrdenavel as="th" ord={ord} chave="status">
+                  Status
+                </ColunaOrdenavel>
                 <th />
               </tr>
             </thead>
@@ -423,7 +461,7 @@ export default function ClientesPage() {
                   </td>
                 </tr>
               ) : (
-                visiveis.map((c) => {
+                ord.itens.map((c) => {
                   const aberto = expandido === c.codCliente;
                   return (
                     <FragmentRow

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/cn";
@@ -10,6 +10,8 @@ import { Button } from "@/components/ui/Button";
 import { Select } from "@/components/ui/Select";
 import { MultiSelect } from "@/components/ui/MultiSelect";
 import { Modal } from "@/components/ui/Modal";
+import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
+import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
 import {
   LIBERACAO_POLL_MS,
   useLiberacaoCount,
@@ -582,6 +584,40 @@ export default function LiberacaoPage() {
   const rowsFiltradas = filtrarBusca(rows, busca);
   const recusadasFiltradas = filtrarBusca(recusadas, busca);
 
+  // Ordenação clicável (OST visual, leva das 11 tabelas), uma instância por tabela.
+  //
+  // "Parado (dias)" e "Parado (horas)" são a MESMA grandeza em unidades diferentes, e as duas são
+  // derivadas de `criadoEm`. Ordenar pelo texto exibido mentiria ("10 dias" viria antes de "5 dias"
+  // e "9:00" antes de "36:30"), então as duas ordenam pelo tempo parado em ms. Como número, o
+  // primeiro clique traz o MAIOR primeiro, que é quem está esperando há mais tempo.
+  // Chegada é data e traz o mais recente primeiro. Checkbox e Ação ficam de fora: são controle.
+  const colunasFila = useMemo<ColOrd<PreAdmissao>[]>(
+    () => [
+      { chave: "candidato", tipo: "texto", valor: (r) => r.candidatoNome },
+      { chave: "cpf", tipo: "texto", valor: (r) => r.candidatoCpf },
+      { chave: "telefone", tipo: "texto", valor: (r) => r.telefone },
+      { chave: "nascimento", tipo: "data", valor: (r) => r.dataNascimento },
+      { chave: "sexo", tipo: "texto", valor: (r) => (r.sexo ? (ROTULO_SEXO[r.sexo] ?? r.sexo) : null) },
+      { chave: "chegada", tipo: "data", valor: (r) => r.criadoEm },
+      { chave: "paradoDias", tipo: "numero", valor: (r) => paradoMs(r.criadoEm, nowMs) },
+      { chave: "paradoHoras", tipo: "numero", valor: (r) => paradoMs(r.criadoEm, nowMs) },
+    ],
+    [nowMs],
+  );
+  const ordFila = useOrdenacao(colunasFila, rowsFiltradas);
+
+  const colunasRecusadas = useMemo<ColOrd<Recusada>[]>(
+    () => [
+      { chave: "candidato", tipo: "texto", valor: (r) => r.candidatoNome },
+      { chave: "cpf", tipo: "texto", valor: (r) => r.candidatoCpf },
+      { chave: "telefone", tipo: "texto", valor: (r) => r.telefone },
+      { chave: "recusadoPor", tipo: "texto", valor: (r) => r.recusadoPor },
+      { chave: "recusadoEm", tipo: "data", valor: (r) => r.recusadoEm },
+    ],
+    [],
+  );
+  const ordRecusadas = useOrdenacao(colunasRecusadas, recusadasFiltradas);
+
   // Seleção em massa. "Selecionar todos" opera SÓ sobre as linhas VISÍVEIS (filtradas pela busca),
   // nunca sobre a base inteira: o consultor não seleciona o que não está vendo.
   const idsVisiveis = rowsFiltradas.map((r) => r.admissaoId);
@@ -714,14 +750,30 @@ export default function LiberacaoPage() {
                       disabled={idsVisiveis.length === 0}
                     />
                   </th>
-                  <th>Candidato</th>
-                  <th className="w-[150px]">CPF</th>
-                  <th className="w-[130px]">Telefone</th>
-                  <th className="w-[120px]">Nascimento</th>
-                  <th className="w-[100px]">Sexo</th>
-                  <th className="w-[110px]">Chegada</th>
-                  <th className="w-[100px]">Parado (dias)</th>
-                  <th className="w-[110px]">Parado (horas)</th>
+                  <ColunaOrdenavel as="th" ord={ordFila} chave="candidato">
+                    Candidato
+                  </ColunaOrdenavel>
+                  <ColunaOrdenavel as="th" ord={ordFila} chave="cpf" className="w-[150px]">
+                    CPF
+                  </ColunaOrdenavel>
+                  <ColunaOrdenavel as="th" ord={ordFila} chave="telefone" className="w-[140px]">
+                    Telefone
+                  </ColunaOrdenavel>
+                  <ColunaOrdenavel as="th" ord={ordFila} chave="nascimento" className="w-[135px]">
+                    Nascimento
+                  </ColunaOrdenavel>
+                  <ColunaOrdenavel as="th" ord={ordFila} chave="sexo" className="w-[110px]">
+                    Sexo
+                  </ColunaOrdenavel>
+                  <ColunaOrdenavel as="th" ord={ordFila} chave="chegada" className="w-[125px]">
+                    Chegada
+                  </ColunaOrdenavel>
+                  <ColunaOrdenavel as="th" ord={ordFila} chave="paradoDias" className="w-[130px]">
+                    Parado (dias)
+                  </ColunaOrdenavel>
+                  <ColunaOrdenavel as="th" ord={ordFila} chave="paradoHoras" className="w-[140px]">
+                    Parado (horas)
+                  </ColunaOrdenavel>
                   <th className="w-[120px]">Ação</th>
                 </tr>
               </thead>
@@ -741,7 +793,7 @@ export default function LiberacaoPage() {
                     </td>
                   </tr>
                 ) : (
-                  rowsFiltradas.map((r) => (
+                  ordFila.itens.map((r) => (
                     <tr key={r.admissaoId}>
                       <td>
                         <input
@@ -802,11 +854,21 @@ export default function LiberacaoPage() {
             <table className="ds-table min-w-[820px]">
               <thead>
                 <tr>
-                  <th>Candidato</th>
-                  <th className="w-[150px]">CPF</th>
-                  <th className="w-[130px]">Telefone</th>
-                  <th className="w-[180px]">Recusado por</th>
-                  <th className="w-[120px]">Recusado em</th>
+                  <ColunaOrdenavel as="th" ord={ordRecusadas} chave="candidato">
+                    Candidato
+                  </ColunaOrdenavel>
+                  <ColunaOrdenavel as="th" ord={ordRecusadas} chave="cpf" className="w-[150px]">
+                    CPF
+                  </ColunaOrdenavel>
+                  <ColunaOrdenavel as="th" ord={ordRecusadas} chave="telefone" className="w-[140px]">
+                    Telefone
+                  </ColunaOrdenavel>
+                  <ColunaOrdenavel as="th" ord={ordRecusadas} chave="recusadoPor" className="w-[190px]">
+                    Recusado por
+                  </ColunaOrdenavel>
+                  <ColunaOrdenavel as="th" ord={ordRecusadas} chave="recusadoEm" className="w-[140px]">
+                    Recusado em
+                  </ColunaOrdenavel>
                   <th className="w-[120px]">Ação</th>
                 </tr>
               </thead>
@@ -826,7 +888,7 @@ export default function LiberacaoPage() {
                     </td>
                   </tr>
                 ) : (
-                  recusadasFiltradas.map((r) => (
+                  ordRecusadas.itens.map((r) => (
                     <tr key={r.admissaoId}>
                       <td className="font-semibold">{r.candidatoNome}</td>
                       <td className="whitespace-nowrap font-mono text-[12.5px]">
