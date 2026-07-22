@@ -2425,3 +2425,304 @@ arquivos; logo, `LogoEA.tsx` e os 3 scripts de dados seguem **soltos, fora do co
 
 Ressalva §A.13: sem screenshot (Playwright headless não sobe nesta VM, falta `sudo` para as
 bibliotecas). A validação foi feita pelo diretor direto na tela de produção.
+
+---
+
+## 2026-07-21 (noite, 2) — Opção "em branco" nos dropdowns opcionais da liberação (aguardando validação)
+
+**Nada commitado**: aguarda a validação do diretor na tela (§A.21, passo 2).
+
+**Problema.** Os dropdowns da liberação vinham pré-preenchidos pela memória do par cliente+cargo e
+**não tinham como voltar a vazio**. Sem a informação correta em mãos, o consultor era empurrado a
+liberar com um valor que podia estar errado.
+
+**Solução (decisão do diretor).** Mantém o pré-preenchimento (agilidade) e acrescenta a opção
+**"Não informado"** como primeira opção dos dropdowns OPCIONAIS. Selecioná-la **esvazia** o campo,
+mesmo que ele tenha vindo pré-preenchido, e o campo esvaziado vira **pendência individual** na esteira
+pelo `calcSinalizadorPreenchimento` de sempre (regra 5, não-bloqueio). Nenhuma mudança de backend.
+
+**Escopo real, confirmado na tela (a lista da OST não batia).** Os dropdowns opcionais da liberação são
+**dois**, e valem para os **dois** modais (individual e massa), logo **4 seletores**: **tipo de
+contrato** e **escala**. Cliente e cargo ficaram de fora, são a trava obrigatória. Benefícios é
+`MultiSelect` e já esvaziava desmarcando, não precisou de opção vazia.
+
+**Divergência levantada e decidida pelo diretor:** a OST citava **"tempo de contrato"**, que **NÃO
+existe no modal de liberação** (nem individual nem massa). Ele vive no wizard de Nova Admissão (§A.22,
+lista 30 a 270 dias). Perguntei antes de agir (§A.30) e o diretor decidiu **deixar como está**: o campo
+não é adicionado à liberação, e a entrega fica só nos dois dropdowns que realmente existem lá.
+
+**Nota visual:** com a opção vazia presente, um campo em branco passa a exibir "Não informado" no lugar
+do placeholder "Selecione…". É deliberado e usa o vocabulário da §A.11 para vazio.
+
+### Gate
+Typecheck limpo nos dois apps, lint com os **2 erros de config pré-existentes**, **287 testes**
+(269 backend, 13 frontend, 5 shared-types), sem teste novo (mudança é de opções de UI, sem regra nova:
+o comportamento de campo vazio virando pendência já é coberto pelos testes do lote e do sinalizador).
+Frontend rebuildado e reiniciado (`/liberacao` 200). Backend não foi tocado.
+
+### Aberto
+Validação do diretor: esvaziar um dropdown pré-preenchido, liberar, e conferir que o campo aparece como
+pendência individual, no individual e no massa. Ressalva §A.13: sem screenshot (Playwright headless não
+sobe nesta VM).
+
+---
+
+## 2026-07-21 (noite, 3) — De/para de documentos do Pandapé implementado (aguardando validação)
+
+**Nada commitado**: aguarda a validação do diretor (§A.21, passo 2). Escopo TRAVADO no de/para: **não**
+houve migração para a v3, **não** houve pull na liberação e **não** houve scheduler. Isso vem nas OSTs
+seguintes, nesta ordem.
+
+### Bloco 1, normalizador geral (sem gambiarra por string)
+O diagnóstico era: o mapa comparava o rótulo inteiro normalizado, e os nomes do Pandapé vêm decorados.
+A correção é **geral, em duas camadas**, e não caso a caso:
+1. **Normalizador** passou a remover o **conteúdo entre parênteses** (decoração/instrução ao candidato)
+   e o `trim` já mata o espaço à direita que a API manda. Isso sozinho resolve CTPS, CNH e Conta
+   Bancária, que viram "ctps", "cnh" e "conta bancaria".
+2. **Desambiguação por especificidade**: entre as chaves do mapa que aparecem no rótulo como
+   **sequência de palavras inteiras**, vence a **mais longa**. É o que faz "Certidão de Nascimento dos
+   filhos até 21 anos" cair em CERTIDAO_NASCIMENTO_FILHOS, e não no CERTIDAO_NASCIMENTO genérico.
+   Casar por palavra inteira é deliberado: por pedaço de palavra, "pis" bateria dentro de qualquer
+   palavra que contivesse essas letras.
+
+**Por que ainda existem âncoras explícitas por formulário** (a OST pediu para declarar): 6 casos não
+são dedutíveis de regra nenhuma, porque o nome do formulário do Pandapé **diz mais** do que o tipo do
+catálogo, e a correspondência é semântica, não textual. São eles: "Cartão de Inscrição no PIS" →
+PIS_PASEP, "Cartão SUS" → CARTAO_SUS, "Comprovante de Estado Civil ou Certidão de Nascimento" →
+CERTIDAO_NASC_CASAMENTO, "Certificado de Reservista" → RESERVISTA, "FOTO DO ROSTO PARA CRACHA" →
+FOTO_CRACHA e "Comprovante de frequência escolar dos dependentes" → FREQUENCIA_ESCOLAR_DEPENDENTES.
+Adivinhar essas por heurística seria inventar tipo, o que a §A.3 proíbe.
+
+### Bloco 3, tipos novos e ARMAZENAMENTO (confirmado ANTES de gravar, como a OST exigiu)
+Criados por `seed-tipos-documento-pandape.ts` (idempotente, upsert por `codigo`): **FOTO_CRACHA**
+("Foto para Crachá") e **FREQUENCIA_ESCOLAR_DEPENDENTES** ("Comprovante de Frequência Escolar de
+Dependentes"). Ambos **ATIVOS** e **NÃO obrigatórios**; nenhuma régua existente foi tocada. Catálogo:
+**30 → 32 tipos**; régua permanece em 3.297 linhas.
+
+**Destino físico do FOTO_CRACHA, conferido no código:** o roteamento é `resolveSubpasta`
+(`ai/drive-routing.ts`), que só desvia ASO, FORMULARIO_VT, CARTAO_TRANSPORTE e TERMO_BANCO; todo o
+resto cai no default **DOCUMENTOS_PESSOAIS**, dentro do prontuário do candidato no Drive. O FOTO_3X4
+também cai nesse default, então **FOTO_CRACHA já grava no mesmo local físico do FOTO_3X4 sem uma linha
+de código a mais**: tipo separado no catálogo, mesma subpasta. Nada foi alterado no roteamento.
+
+### Bloco 4, exclusões deliberadas
+Ficaram registradas **em código** (`EXCLUIDOS_DE_PROPOSITO`), para que a ausência de destino seja lida
+como decisão e não como esquecimento: Vale Transporte (outra frente, §A.17), Consulta de Qualificação
+Cadastral eSocial (não trazer), Atestado Médico Admissional (é o ASO, frente EXAME, §A.16) e as três
+seções de campos estruturados (Dados Contratuais, Dados Pessoais, Dependentes).
+
+### PENDÊNCIA QUE VOLTA PARA O DIRETOR
+**"Comprovante de Vacina - Funcionário Admitido"** (linha 19) **não estava nem no Bloco 2 nem no Bloco
+4**. A fábrica **não mapeou por conta própria** (§A.14): ficou sem destino, e o teste trava esse estado
+de propósito. Hoje não tem anexo, então não perde nada; quando o diretor decidir, o candidato natural é
+VACINA_FUNCIONARIO (ou VACINA_COVID, se na prática for só COVID).
+
+### Resultado (prova rodada com o mapeador real contra os 23 formulários)
+**16 de 23 resolvem.** Dos **11 com anexo hoje, 10 têm destino**; o único sem destino é o Vale
+Transporte, que é exclusão deliberada. Antes desta OST eram 5 de 23, e **7 formulários com anexo iam
+para o descarte**, incluindo os 4 arquivos de CTPS e a Conta Bancária.
+
+### Gate
+Typecheck limpo nos dois apps, lint com os **2 erros de config pré-existentes**, **313 testes** (295
+backend, 13 frontend, 5 shared-types). O spec do mapeador foi de 3 para **29 testes**, com os 23
+formulários reais travados um a um.
+
+### Achado lateral (NÃO corrigido, fora do escopo)
+`montarNomePasta` (`ai/drive-routing.ts`) monta o nome da pasta do Drive com **travessão**, o que
+contraria a §A.11. É texto que chega ao usuário no Drive. Não toquei (§A.14); fica registrado para o
+diretor decidir se vira correção.
+
+---
+
+## 2026-07-21 (noite, 4) — Pull de documentos migrado para a API v3 (aguardando validação)
+
+**Nada commitado.** Escopo travado na LEITURA: **não** há pull na liberação e **não** há scheduler.
+O `puxarDocumentos` segue sendo chamado só onde já era (criação pelo caminho completo do webhook), que
+hoje não acontece por causa do de/para de vaga. Isso é deliberado: as próximas OSTs ligam o gatilho.
+
+### Bloco 0, consumidores da v1/v2 mapeados ANTES de trocar
+- `getPrecollaborator` (v1) tem **um** consumidor: `pandape-sync.processarCandidato`, que usa
+  **identidade** (`idMatch`, `idVacancy`, `name`/`surname`, `email`, `etapa`/`stage`), **não** documentos.
+- `pc.documents` tinha **um** consumidor: a chamada `puxarDocumentos(criada.admissaoId, pc.documents)`.
+- `getMatch` (v1) é a fonte do **CPF**, sem relação com documentos.
+- `documents` no `clicksign-api.service` é **outra API** (Clicksign), não tem nada com Pandapé.
+
+**Conclusão do levantamento: só o pedaço de documentos migra.** A identidade continua na v1 de
+propósito, porque a v3 **não devolve `answers`** e o resto do sync já está estabilizado na v1. Trocar
+tudo seria risco sem ganho nesta OST.
+
+### Bloco 1, o que mudou
+`getFormulariosDocumentos(id)` novo no cliente (GET `/v3/precollaborators/{id}` → `forms[]`), e o
+`puxarDocumentos` passou a receber o **idPreCollaborator** e a iterar `forms[].documents[]`, usando o
+**nome do formulário** como entrada do resolver. Download em memória, `auditarBuffer` (F2) e descarte
+do buffer seguem **os mesmos**: foi troca de fonte, não reescrita do pipeline.
+
+### Bloco 2, COMO fica visível o documento sem destino (a OST pediu para confirmar)
+Escolhi **log de aviso, sem PII**, e explico o porquê: o **rótulo do FORMULÁRIO** ("Informações de Vale
+Transporte") **não é dado pessoal**, então pode e deve aparecer; o **nome do arquivo** é que carrega
+PII (já foi visto CPF nele) e continua proibido, junto da URL. A linha registra
+`idPreCollaborator`, o rótulo do formulário e a **quantidade** de arquivos, e diz explicitamente que
+nada se perdeu no Pandapé. Um teste garante que o rótulo aparece e que URL e nome de arquivo não.
+
+**Limitação honesta:** isso é visível no log do servidor, **não na tela**. Não criei campo nem status
+novo porque seria estrutura fora do escopo desta OST (§A.14). Quando a coleta automática entrar, o
+lugar natural é uma superfície na Auditoria; fica registrado como candidato a OST.
+
+**Pendência continua governada só pela régua**: obrigatório ausente trava, não obrigatório não trava.
+Nada aqui mexeu nisso.
+
+### Bloco 3, múltiplos arquivos e dedup
+- **CTPS traz sempre o primeiro** (decisão do diretor: é a imagem da página da foto). No candidato real
+  isso descarta 3 dos 4 arquivos de CTPS.
+- **Demais tipos trazem todos**, sem regra inventada, e o log registra quando vieram múltiplos.
+  **Tipos que apareceram com múltiplos no candidato real: CTPS (4) e CPF (2).** Só esses dois.
+- **Dedup por (admissão + tipo) já ENTREGUE**: não rebaixa nem rebaixa nada, só não baixa de novo.
+  `INCONFORME` **fica de fora da trava** de propósito, para documento reprovado poder ser reenviado e
+  re-auditado. *Limitação registrada:* a dedup é por TIPO, não por arquivo; dedup por arquivo vai
+  precisar de uma marca do que já veio, e isso entra na OST do scheduler, que é quem re-consulta.
+
+### Bloco 4, prova contra o candidato real (15 arquivos, o mesmo da sonda)
+Antes: **0 de 15** (a v1 só dava o nome do arquivo, e nenhum mapeava).
+
+| Tipo resolvido | Arquivos | Trazidos |
+|---|---|---|
+| CTPS | 4 | 1 (regra do primeiro) |
+| CPF | 2 | 2 |
+| PIS_PASEP, CARTAO_SUS, COMPROVANTE_ESCOLARIDADE, CERTIDAO_NASC_CASAMENTO, COMPROVANTE_RESIDENCIA, DADOS_BANCARIOS, FOTO_CRACHA, TITULO_ELEITOR | 1 cada | 1 cada |
+| SEM DESTINO (Informações de Vale Transporte) | 1 | 0, registrado no log |
+
+**11 dos 15 arquivos passam a ser auditados**, 3 saem pela regra do primeiro (CTPS) e 1 fica sem
+destino de propósito (VT, exclusão do diretor). **10 dos 11 formulários com anexo** têm destino.
+
+### Gate
+Typecheck limpo nos dois apps, lint com os **2 erros de config pré-existentes**, **317 testes** (299
+backend, 13 frontend, 5 shared-types). O spec do sync foi de 24 para **28 testes**: CTPS pelo primeiro,
+múltiplos em tipo não-CTPS, formulário sem destino logado sem PII e dedup por tipo já entregue. Os 3
+testes de pull que existiam foram **migrados** para o formato `forms[]`, incluindo o que prova que a
+URL nunca vaza.
+
+### Aberto
+Validação do diretor. Ressalva §A.13: aqui não há tela, a prova é a tabela acima e a suíte.
+
+---
+
+## Desacoplar gravação da auditoria + fix do mime + reprocesso da Evelyn (§A.9)
+
+**Diagnóstico raiz (provado, Bloco 0).** A liberação da Evelyn não subiu documento não por acoplamento
+sozinho: a auditoria dava HTTP 500 porque o pull do Pandapé gravava o arquivo na staging SEM extensão
+(`originalname` = código do tipo), o ai-service caía no default `application/octet-stream` e o Vertex
+rejeitava com 400. Prova A/B ao vivo: mesmo arquivo COM extensão devolve veredito 200; SEM extensão dá
+500. O ai-service estava saudável, o formato é que chegava indeterminado.
+
+### Bloco A, fix do mime (estratégia adotada)
+Duas camadas, `mime NÃO é PII` (pode ser usado; nome de arquivo e URL do Pandapé seguem proibidos):
+- **Backend (primário + fallback), `pandape/mime-documento.ts`:** resolve a extensão pelo
+  **Content-Type do download** e, na falta (ausente/vazio/octet-stream), pelos **magic bytes** do
+  buffer (PDF `%PDF`, JPEG `FF D8 FF`, PNG `89 50 4E 47`). O pull passa `originalname = codigo+ext`, e
+  a staging grava COM extensão. Ajuste do reprocesso: os magic bytes acabaram valendo como verdade
+  sobre um Content-Type mentiroso, resolvendo o "não confiar cegamente no header".
+- **ai-service (defensivo), `gemini.resolver_mime` + `routers/auditoria`:** se nem extensão nem magic
+  bytes resolverem, NÃO manda octet-stream ao Vertex, devolve **415 controlado** (nunca mais o 500
+  silencioso). Cobertura: **PDF, JPEG, PNG** (os formatos que a auditoria aceita).
+
+### Bloco B, desacoplamento (coleta antes da auditoria)
+`auditarBuffer` agora **grava o documento como `AGUARDANDO_AUDITORIA` ANTES** de chamar a IA; no
+sucesso atualiza para o veredito (ENTREGUE/INCONFORME/PENDENTE); na falha da IA o `throw` sobe mas o
+documento **permanece gravado** (coleta preservada, reprocessável, staging mantida). `setWhere` impede
+rebaixar um doc já ENTREGUE numa reauditoria. Novo valor no enum `estado_documento`
+(migration `0031`), tratado como não-ENTREGUE em toda a régua/sinalizador/KPIs por construção.
+
+### Bloco C, visibilidade (superfície escolhida)
+**Status na aba Auditoria**: o `AuditoriaDocsModal` ganhou a pill azul **"Aguardando auditoria"**
+(tom `in`), distinta de Pendente (âmbar) e Inconforme (vermelho). A falha da IA deixa de ser engolida
+num WARN: o documento aparece coletado, esperando auditoria. (Não inventei tela nova.)
+
+### Bloco D, reprocesso da Evelyn (idPreCollaborator 400244), antes → depois
+Antes: **8 documentos, todos PENDENTE** (a coleta de 21:08 morreu no 500). Depois do reprocesso pelo
+fluxo real (fila BullMQ → worker → mime corrigido → desacoplado):
+
+| Documento | Estado depois | Como resolveu |
+|---|---|---|
+| Certidão Nasc./Casamento, CNH, Comprovante de Escolaridade, Título de Eleitor | **ENTREGUE** | veredito real da IA (VALIDADO) |
+| CPF, Carteira de Trabalho (CTPS) | **INCONFORME** | veredito real da IA |
+| RG | **PENDENTE** | veredito real (ilegível) |
+| Foto para Crachá | **PENDENTE** | sem regras de auditoria (esperado) |
+| Comprovante de Residência | **AGUARDANDO_AUDITORIA** | PDF que o Vertex recusa ("no pages"): coleta preservada pelo desacoplamento |
+| Carteira de Reservista, Comprovante de Conta Bancária | **PENDENTE** | candidato não enviou (nunca coletado) |
+
+**7 documentos auditados com veredito real** (antes eram 0), **1 aguardando** (coleta salva, não
+perdida), o resto no estado correto. Extensões gravadas batem com os magic bytes reais (mime correto).
+Idempotência pelo upsert na chave (admissão, tipo) + índice único, sem duplicata.
+
+### Achado fora de escopo (registrado, não corrigido)
+O "no pages" do Comprovante de Residência é um PDF real que o Vertex não parseia, distinto do
+octet-stream. O desacoplamento o torna **não destrutivo** (fica AGUARDANDO). O ai-service ainda
+devolve 500 cru para 400s do Vertex que NÃO sejam de mime (fora do escopo desta OST).
+
+### Gate
+Backend **313 testes** + lint limpo + typecheck; ai-service **21 testes** (2 novos: mime por magic
+bytes → 200, formato indeterminado → 415); frontend typecheck limpo. Testes de regressão que travam o
+bug: (1) mime nunca vira octet-stream, (2) IA falhando deixa o doc AGUARDANDO_AUDITORIA, (3) reprocesso
+sem duplicata.
+
+### Aberto
+Validação visual do diretor na tela (frontend já no ar): abrir Esteira → aba Auditoria → Evelyn →
+"Auditar" e conferir os vereditos + a pill "Aguardando auditoria" no Comprovante de Residência.
+Ressalva §A.13: o Chromium deste ambiente não tem as libs de sistema (libatk/libgbm/libasound), então
+o screenshot automatizado não rodou aqui; a prova é a tabela acima + a suíte. **Sem commit até a
+validação** (§A.21).
+
+---
+
+## Auditoria por CONJUNTO + motivo visível + PDF protegido (§A.9)
+
+**Causa raiz (provada na investigação anterior).** O CPF da Evelyn veio com 2 arquivos (frente e
+verso). Cada um era auditado ISOLADO e o upsert por (admissão + tipo) fazia o ÚLTIMO vencer, gravando
+o veredito do verso ("nome não coincide, número ausente, fora do prazo", que descreve um verso). A IA
+acertava; a CONSOLIDAÇÃO errava. Na CTPS, a "regra do primeiro" trazia a página da foto, sem os dados
+que a régua exige (que estão na página de qualificação). O Comprovante de Residência era um PDF
+protegido por senha, que o Vertex nem lê ("no pages").
+
+### Bloco 1, auditar o CONJUNTO como uma peça só
+Quando um tipo tem vários arquivos, o pull agora baixa TODOS e faz UMA chamada à IA com o conjunto,
+para UM veredito e UM registro por (admissão + tipo). O `auditarBuffer` virou açúcar de
+`auditarConjunto([arquivo])`; o ai-service recebe `stagingPaths[]` e o prompt avisa que são partes do
+MESMO documento (frente/verso, páginas), satisfazendo cada regra com QUALQUER uma. **A "regra do
+primeiro" da CTPS está REVOGADA** (declaração explícita, decisão anterior desfeita pelo diretor): as
+4 páginas vão juntas. Teto de segurança: **10 arquivos** por conjunto (cobre frente/verso e páginas
+com folga; acima disso audita os primeiros e loga). Persistência segue UM registro por tipo (upsert +
+índice único).
+
+### Bloco 2, motivo real visível na tela
+A IA já devolvia motivo específico; ele só não chegava ao usuário (a tela mostrava só o status). O
+detalhe da admissão (`esteira.detalhe`) passou a incluir `observacao` (o motivo, sem PII, §A.6), e o
+`AuditoriaDocsModal` renderiza o motivo persistido junto do status, para INCONFORME, PENDENTE e
+AGUARDANDO_AUDITORIA (que agora diz "Documento coletado, aguardando a análise por IA."). Superfície
+escolhida: **status + motivo na aba Auditoria**, sem tela nova.
+
+### Bloco 3, PDF protegido por senha
+Detecção barata na COLETA, antes da IA: `pdfProtegidoPorSenha` vê `%PDF` + o marcador `/Encrypt` no
+buffer (sem lib, sem PII). Documento protegido vira **INCONFORME com motivo acionável** ("Documento
+protegido por senha. Reenviar o arquivo sem proteção..."), NÃO fica preso em AGUARDANDO_AUDITORIA
+(reservado a falha de SISTEMA: IA fora/timeout).
+
+### Validação na Evelyn (antes → depois), reprocesso de UMA admissão
+| Documento | Antes | Depois | Como |
+|---|---|---|---|
+| CPF | INCONFORME (veredito do verso) | **ENTREGUE** | conjunto frente+verso: "RG aceito como comprovante de CPF" |
+| CTPS | INCONFORME ("CPF não visível") | **ENTREGUE** | 4 páginas juntas: a IA acha o dado exigido |
+| Comprovante de Residência | AGUARDANDO_AUDITORIA (preso) | **INCONFORME** | "protegido por senha, reenviar sem proteção" |
+
+Os dois falsos positivos sumiram; o PDF protegido virou pendência acionável. O `observacao` chega na
+API do detalhe (provado por chamada real) e o modal o exibe.
+
+### Gate
+Backend **318 testes** + lint + typecheck; ai-service **22 testes** (novo: conjunto envia N imagens +
+prompt); frontend typecheck. Testes de regressão novos: conjunto de N → 1 chamada com `stagingPaths`
+de tamanho N; PDF protegido → INCONFORME sem chamar a IA; `pdfProtegidoPorSenha` (só PDF com
+`/Encrypt`, nunca imagem). Specs do pull migrados de `auditarBuffer` N× para `auditarConjunto` 1×.
+
+### Aberto
+Validação visual do diretor: Esteira → Auditoria → Evelyn → "Auditar" e conferir CPF/CTPS ENTREGUE
+com motivo, e o Comprovante INCONFORME com "protegido por senha". Mesma ressalva §A.13 (screenshot
+automatizado indisponível neste ambiente). **Sem commit até a validação** (§A.21).
