@@ -13,7 +13,10 @@ import { cn } from "@/lib/cn";
 interface DocDetalhe {
   nome: string;
   exigencia: "OBRIGATORIO" | "NAO_OBRIGATORIO" | "FACULTATIVO";
-  estado: "PENDENTE" | "ENTREGUE" | "INCONFORME";
+  // AGUARDANDO_AUDITORIA: documento coletado (ex.: pull do Pandapé) porém a IA ainda não auditou.
+  estado: "PENDENTE" | "ENTREGUE" | "INCONFORME" | "AGUARDANDO_AUDITORIA";
+  // Motivo persistido do veredito (BLOCO 2): texto acionável da IA, sem PII (§A.6). Pode ser null.
+  observacao?: string | null;
 }
 interface AdmissaoDetalhe {
   candidato: { nome: string };
@@ -52,11 +55,28 @@ const STATUS_ROTULO: Record<AuditoriaStatus, string> = {
   PENDENTE: "Pendente",
 };
 // Estado persistido inicial (antes de auditar nesta sessão) → veredito equivalente para exibição.
-const ESTADO_PARA_STATUS: Record<DocDetalhe["estado"], AuditoriaStatus> = {
+// AGUARDANDO_AUDITORIA fica de fora: não é veredito da IA, tem pill própria (ver `pillDoc`).
+const ESTADO_PARA_STATUS: Record<"ENTREGUE" | "INCONFORME" | "PENDENTE", AuditoriaStatus> = {
   ENTREGUE: "VALIDADO",
   INCONFORME: "INCONFORME",
   PENDENTE: "PENDENTE",
 };
+
+/**
+ * Pill a exibir para um documento. Veredito desta sessão tem prioridade; senão deriva do estado
+ * persistido. AGUARDANDO_AUDITORIA (coletado, IA ainda não rodou) recebe pill azul própria; PENDENTE
+ * "nunca tocado" não recebe pill (null).
+ */
+function pillDoc(
+  result: ResultadoAuditoria | undefined,
+  estado: DocDetalhe["estado"],
+): { tone: PillTone; rotulo: string } | null {
+  if (result) return { tone: STATUS_TONE[result.status], rotulo: STATUS_ROTULO[result.status] };
+  if (estado === "AGUARDANDO_AUDITORIA") return { tone: "in", rotulo: "Aguardando auditoria" };
+  if (estado === "PENDENTE") return null;
+  const s = ESTADO_PARA_STATUS[estado];
+  return { tone: STATUS_TONE[s], rotulo: STATUS_ROTULO[s] };
+}
 
 const ACCEPT = ".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png";
 
@@ -245,11 +265,13 @@ export function AuditoriaDocsModal({
           {documentos.map((d) => {
             const tipoId = idPorNome.get(d.nome);
             const result = tipoId ? resultados[tipoId] : undefined;
-            // Veredito a exibir: o desta sessão tem prioridade; senão, o estado persistido.
-            const status: AuditoriaStatus = result?.status ?? ESTADO_PARA_STATUS[d.estado];
+            // Pill do documento (veredito da sessão, estado persistido ou "aguardando auditoria").
+            const pill = pillDoc(result, d.estado);
             const auditando = auditandoId === tipoId;
             const erro = tipoId ? erroDoc[tipoId] : undefined;
-            const jaTeveVeredito = Boolean(result) || d.estado !== "PENDENTE";
+            // "Reauditar" só quando houve veredito real; AGUARDANDO_AUDITORIA ainda não foi auditado.
+            const jaTeveVeredito =
+              Boolean(result) || (d.estado !== "PENDENTE" && d.estado !== "AGUARDANDO_AUDITORIA");
             return (
               <div key={d.nome} className="rounded-xl border border-[var(--border)] p-3">
                 <div className="flex items-center justify-between gap-3">
@@ -258,9 +280,7 @@ export function AuditoriaDocsModal({
                     <div className="text-[11.5px] text-faint">{EXIG_ROTULO[d.exigencia]}</div>
                   </div>
                   <div className="flex flex-none items-center gap-2">
-                    {jaTeveVeredito && (
-                      <Pill tone={STATUS_TONE[status]}>{STATUS_ROTULO[status]}</Pill>
-                    )}
+                    {pill && <Pill tone={pill.tone}>{pill.rotulo}</Pill>}
                     <input
                       ref={(el) => {
                         if (tipoId) fileRefs.current[tipoId] = el;
@@ -297,20 +317,22 @@ export function AuditoriaDocsModal({
                 </div>
 
                 {/* Motivo do veredito (texto da regra, sem PII) */}
-                {result?.motivo && (
-                  <p
-                    className={cn(
-                      "mt-2 text-[12.5px]",
-                      status === "VALIDADO"
-                        ? "text-ok"
-                        : status === "INCONFORME"
-                          ? "text-danger"
-                          : "text-warn",
-                    )}
-                  >
-                    {result.motivo}
-                  </p>
-                )}
+                {/* Motivo do veredito (BLOCO 2): o da sessão tem prioridade; senão o persistido
+                    (INCONFORME/PENDENTE) ou a explicação do AGUARDANDO. Texto da regra, sem PII. */}
+                {(() => {
+                  const motivo = result?.motivo ?? d.observacao;
+                  if (!motivo) return null;
+                  const st = result?.status ?? d.estado;
+                  const cor =
+                    st === "VALIDADO" || st === "ENTREGUE"
+                      ? "text-ok"
+                      : st === "INCONFORME"
+                        ? "text-danger"
+                        : st === "AGUARDANDO_AUDITORIA"
+                          ? "text-dim"
+                          : "text-warn";
+                  return <p className={cn("mt-2 text-[12.5px]", cor)}>{motivo}</p>;
+                })()}
                 {erro && (
                   <p className="mt-2 text-[12.5px] text-danger" role="alert">
                     {erro}
