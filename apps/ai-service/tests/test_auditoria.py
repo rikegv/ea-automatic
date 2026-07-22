@@ -55,7 +55,7 @@ def test_auditar_envia_data_no_prompt(monkeypatch):
     resp = client.post(
         "/auditoria/documento",
         json={
-            "stagingPath": _staging_pdf(),
+            "stagingPaths": [_staging_pdf()],
             "tipoDocumentoCodigo": "CR",
             "tipoDocumentoNome": "Comprovante de Residência",
             "candidato": {"nome": "Fulano", "cpf": "529.982.247-25"},
@@ -88,7 +88,7 @@ def _staging_pdf(_tmp_path=None) -> str:
 
 def _req(staging_path: str) -> dict:
     return {
-        "stagingPath": staging_path,
+        "stagingPaths": [staging_path],
         "tipoDocumentoCodigo": "RG",
         "tipoDocumentoNome": "Documento de Identidade",
         "candidato": {"nome": "Fulano de Tal", "cpf": "529.982.247-25"},
@@ -178,6 +178,30 @@ def test_motivo_redige_cpf(monkeypatch, tmp_path):
     assert "[CPF]" in motivo
 
 
+def test_auditoria_por_conjunto_envia_todas_as_imagens(monkeypatch):
+    # Auditoria por conjunto: 2 arquivos do MESMO documento (frente e verso) vão numa ÚNICA chamada,
+    # com o prompt avisando que é um conjunto. Um veredito só.
+    capturado = {}
+
+    class _Models:
+        def generate_content(self, *, model, contents, config):  # noqa: ARG002
+            capturado["n_partes"] = len(contents)
+            capturado["prompt"] = contents[-1].text
+            return SimpleNamespace(
+                text=json.dumps({"status": "VALIDADO", "motivo": "ok", "camposConferidos": []})
+            )
+
+    monkeypatch.setattr(gemini, "get_client", lambda: SimpleNamespace(models=_Models()))
+    p1, p2 = _staging_pdf(), _staging_pdf()
+    req = _req(p1)
+    req["stagingPaths"] = [p1, p2]
+    resp = client.post("/auditoria/documento", json=req, headers={"X-Internal-Token": "test-token"})
+    assert resp.status_code == 200
+    # 2 imagens + 1 prompt = 3 partes; o prompt reconhece o conjunto.
+    assert capturado["n_partes"] == 3
+    assert "CONJUNTO" in capturado["prompt"]
+
+
 def test_401_sem_token(tmp_path):
     resp = client.post("/auditoria/documento", json=_req(_staging_pdf(tmp_path)))
     assert resp.status_code == 401
@@ -241,3 +265,41 @@ def test_staging_legitimo_dentro_da_area(monkeypatch):
         "/auditoria/documento", json=_req(_staging_pdf()), headers={"X-Internal-Token": "test-token"}
     )
     assert resp.status_code == 200
+
+
+# ── Fix do mime (§A.9): arquivo SEM extensão (caminho do pull do Pandapé) ───────────────────
+def _staging_sem_extensao(magic: bytes) -> str:
+    """Grava um arquivo DENTRO do staging SEM extensão (mimetiza o pull do Pandapé)."""
+    base = Path(get_settings().staging_dir)
+    base.mkdir(parents=True, exist_ok=True)
+    p = base / f"CPF-{uuid.uuid4().hex}"  # sem sufixo, como o código do tipo
+    p.write_bytes(magic)
+    return str(p)
+
+
+def test_mime_resolvido_por_magic_bytes(monkeypatch):
+    # Sem extensão no path, mas conteúdo é PDF → resolve pelos magic bytes e NÃO dá 500.
+    monkeypatch.setattr(
+        gemini,
+        "get_client",
+        lambda: _fake_client({"status": "VALIDADO", "motivo": "ok", "camposConferidos": []}),
+    )
+    resp = client.post(
+        "/auditoria/documento",
+        json=_req(_staging_sem_extensao(b"%PDF-1.4 conteudo")),
+        headers={"X-Internal-Token": "test-token"},
+    )
+    assert resp.status_code == 200
+
+
+def test_formato_indeterminado_vira_415_nao_500(monkeypatch):
+    # Sem extensão E sem assinatura reconhecível → 415 controlado (nunca octet-stream → 500 silencioso).
+    monkeypatch.setattr(
+        gemini, "get_client", lambda: (_ for _ in ()).throw(AssertionError("não pode chamar a IA"))
+    )
+    resp = client.post(
+        "/auditoria/documento",
+        json=_req(_staging_sem_extensao(b"\x00\x01\x02\x03 lixo binario")),
+        headers={"X-Internal-Token": "test-token"},
+    )
+    assert resp.status_code == 415

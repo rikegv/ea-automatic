@@ -4,11 +4,12 @@ Lê o documento da staging, audita contra as regras ativas (server-supplied) e d
 ResultadoAuditoria com status restrito ao enum. §A.6: sem log de PII; buffer descartado.
 """
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from starlette.status import HTTP_415_UNSUPPORTED_MEDIA_TYPE
 
 from app import gemini
 from app.auth import require_internal_token
-from app.gemini import _mime_de
+from app.gemini import resolver_mime
 from app.schemas import AuditoriaRequest, ResultadoAuditoria
 from app.staging import ler_staging
 
@@ -33,19 +34,39 @@ def auditar_documento(
             campos_conferidos=[],
         )
 
-    conteudo = ler_staging(req.staging_path)
+    if not req.staging_paths:
+        raise HTTPException(status_code=422, detail="Nenhum arquivo para auditar.")
+
+    # Auditoria por CONJUNTO: lê cada arquivo do MESMO documento e resolve o mime de cada um. BLOCO A
+    # (defensivo): mime pela extensão e, na falta, pelos magic bytes; se nem assim resolver, NÃO manda
+    # `application/octet-stream` ao Vertex (400 → 500 silencioso), devolve 415 controlado que o backend
+    # traduz em "aguardando auditoria". §A.6: o motivo não carrega PII (é o formato, não o conteúdo).
+    partes: list[tuple[bytes, str]] = []
+    for sp in req.staging_paths:
+        conteudo = ler_staging(sp)
+        mime_type = resolver_mime(sp, conteudo)
+        if mime_type is None:
+            for c, _ in partes:
+                del c
+            del conteudo
+            raise HTTPException(
+                status_code=HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                detail="Formato de arquivo não suportado para auditoria (esperado PDF, JPEG ou PNG).",
+            )
+        partes.append((conteudo, mime_type))
     try:
         resultado = gemini.auditar_documento(
-            conteudo=conteudo,
-            mime_type=_mime_de(req.staging_path),
+            partes=partes,
             tipo_documento_nome=req.tipo_documento_nome,
             candidato_nome=req.candidato.nome,
             candidato_cpf=req.candidato.cpf,
             regras=regras,
         )
     finally:
-        # §A.6 — descarta o buffer do documento da memória após a chamada.
-        del conteudo
+        # §A.6 — descarta os buffers dos documentos da memória após a chamada.
+        for c, _ in partes:
+            del c
+        partes.clear()
 
     status = resultado["status"]
     return ResultadoAuditoria(

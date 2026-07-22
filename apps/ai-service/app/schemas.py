@@ -28,7 +28,9 @@ class RegraIn(_CamelModel):
 
 
 class AuditoriaRequest(_CamelModel):
-    staging_path: str
+    # Auditoria por CONJUNTO: 1 ou mais arquivos do MESMO documento (frente e verso, páginas),
+    # auditados numa única chamada para UM veredito. O backend garante a lista não vazia.
+    staging_paths: list[str] = Field(default_factory=list)
     tipo_documento_codigo: str
     tipo_documento_nome: str
     candidato: CandidatoIn
