@@ -92,7 +92,7 @@ interface ResultadoSalvo {
 }
 
 export default function ProcessarKitPage() {
-  const { token, isAdmin } = useAuth();
+  const { token } = useAuth();
   const [kits, setKits] = useState<KitTipo[]>([]);
   const [selKitId, setSelKitId] = useState("");
   const [arquivos, setArquivos] = useState<File[]>([]);
@@ -128,7 +128,7 @@ export default function ProcessarKitPage() {
 
   // Retenção 2h: ao (re)entrar na tela, reencontra o último resultado processado, se ainda vivo.
   useEffect(() => {
-    if (!token || !isAdmin) return;
+    if (!token) return;
     let vivo = true;
     (async () => {
       let salvo: ResultadoSalvo | null = null;
@@ -159,7 +159,7 @@ export default function ProcessarKitPage() {
     return () => {
       vivo = false;
     };
-  }, [token, isAdmin]);
+  }, [token]);
 
   function adicionarArquivos(lista: FileList | null) {
     if (!lista) return;
@@ -242,17 +242,9 @@ export default function ProcessarKitPage() {
 
   const podeProcessar = Boolean(selKitId) && arquivos.length > 0 && !processando;
 
-  // Acesso restrito a Master / Super Admin (a tela saiu de Configurações, mantém o guard aqui).
-  if (!isAdmin) {
-    return (
-      <>
-        <PageHead eyebrow="Gerador de kit" title="Acesso restrito" />
-        <GlassCard className="p-4">
-          <p className="text-dim">O gerador de kit é exclusivo de Master / Super Admin.</p>
-        </GlassCard>
-      </>
-    );
-  }
+  // Acesso governado pelo MENU `gerador-kit` (não mais pelo papel): o `(app)/layout` já bloqueia quem
+  // não tem o menu, e o backend gate as operações pelo mesmo menu. A trava por papel saiu (decisão do
+  // diretor): o COMUM que tem o menu Gerador de kit usa a tela.
 
   return (
     <>
