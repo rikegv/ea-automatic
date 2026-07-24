@@ -18,6 +18,14 @@ import {
   useLiberacaoRefresh,
 } from "@/components/shell/LiberacaoAlerta";
 import { precisaValorBeneficio } from "@/lib/beneficios";
+import { caixaAlta } from "@/lib/nome";
+
+/**
+ * Teto de caracteres da observação livre da liberação. ESPELHA `OBSERVACAO_LIBERACAO_MAX` do
+ * backend (`admissoes/dto/observacao-liberacao.ts`), que é quem valida de verdade: aqui o número só
+ * evita que o consultor digite um texto que voltaria recusado.
+ */
+const OBSERVACAO_MAX = 500;
 
 // Tipo de contrato: MESMA lista fixa do wizard (não é texto livre). A régua unificada pede o "tipo".
 const TIPOS_CONTRATO = [
@@ -131,18 +139,44 @@ async function buscarPacotePadrao(
   );
   return r.beneficios ?? [];
 }
+/**
+ * Opção "em branco" dos dropdowns OPCIONAIS da liberação (decisão do diretor). Sem ela, um campo
+ * pré-preenchido pela memória do par cliente+cargo não tinha como voltar a vazio, e o consultor era
+ * obrigado a liberar com um valor que podia estar errado. Selecionar esta opção ESVAZIA o campo, que
+ * então segue como pendência individual na esteira (regra 5, não-bloqueio).
+ *
+ * NÃO se aplica a cliente e cargo: são a trava da liberação, obrigatórios.
+ */
+const OPCAO_EM_BRANCO = { value: "", label: "Não informado" };
+
 /** Valores do pacote no formato do input (pt-BR), só para os benefícios que têm valor na memória. */
 function valoresDoPacote(pacote: { nome: string; valor: number | null }[]): Record<string, string> {
   return Object.fromEntries(
     pacote.filter((b) => b.valor !== null).map((b) => [b.nome, b.valor!.toFixed(2).replace(".", ",")]),
   );
 }
-// Salário em pt-BR ("2.500,00") → string numérica que o Postgres aceita ("2500.00"). Mesma convenção
-// do valor de benefício (o backend guarda o salário cru como numeric, sem transform próprio).
+// MÁSCARA de moeda pt-BR (Bloco 3): a PRIMEIRA barreira. Guarda só dígitos e formata como centavos,
+// então valor inválido (letras, "R$", pontuação solta) nem consegue ser digitado. Ex.: "250000" vira
+// "2.500,00". A normalização do backend (autoridade) é a barreira final.
+function maskMoedaBR(raw: string): string {
+  const digitos = raw.replace(/\D/g, "");
+  if (!digitos) return "";
+  const n = Number(digitos) / 100;
+  return n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// Salário em pt-BR ("2.500,00") → string numérica que o Postgres aceita ("2500.00"). Espelha o backend
+// (ponto milhar, vírgula decimal, tolera "R$"/espaço) para defesa em profundidade; a máscara acima já
+// garante o formato limpo, e o backend valida de novo de qualquer forma.
 function salarioParaNumero(s: string): string | undefined {
   const t = s.trim();
   if (!t) return undefined;
-  return t.replace(/\./g, "").replace(",", ".");
+  const limpo = t
+    .replace(/r\$/gi, "")
+    .replace(/\s/g, "")
+    .replace(/\./g, "")
+    .replace(",", ".");
+  return limpo || undefined;
 }
 
 // Tempo parado desde a CHEGADA (criadoEm) até agora. Duas leituras do MESMO total: dias (piso, dias
@@ -200,6 +234,9 @@ export default function LiberacaoPage() {
   const [escala, setEscala] = useState("");
   const [centroCusto, setCentroCusto] = useState("");
   const [gestorBp, setGestorBp] = useState("");
+  // Observação LIVRE (Bloco 2): o que não cabe em campo estruturado ("VT possui 6% de desconto").
+  // Opcional, não bloqueia e não vira pendência; aparece depois no modal do olho (Bloco 3).
+  const [observacao, setObservacao] = useState("");
   // Pacote de benefícios (REUSA a régua de valor de lib/beneficios): nomes selecionados + valor por nome.
   const [beneficiosSel, setBeneficiosSel] = useState<string[]>([]);
   const [beneficiosValores, setBeneficiosValores] = useState<Record<string, string>>({});
@@ -218,6 +255,8 @@ export default function LiberacaoPage() {
   const [loteEscala, setLoteEscala] = useState("");
   const [loteCentroCusto, setLoteCentroCusto] = useState("");
   const [loteGestorBp, setLoteGestorBp] = useState("");
+  // Observação LIVRE do LOTE (Bloco 2): mesma regra dos demais campos, o preenchido vale para as N.
+  const [loteObservacao, setLoteObservacao] = useState("");
   const [loteBeneficiosSel, setLoteBeneficiosSel] = useState<string[]>([]);
   const [loteBeneficiosValores, setLoteBeneficiosValores] = useState<Record<string, string>>({});
   const [loteErro, setLoteErro] = useState<string | null>(null);
@@ -382,6 +421,7 @@ export default function LiberacaoPage() {
     setEscala("");
     setCentroCusto("");
     setGestorBp("");
+    setObservacao("");
     setBeneficiosSel([]);
     setBeneficiosValores({});
     setModalErro(null);
@@ -429,13 +469,16 @@ export default function LiberacaoPage() {
               gestorBp: gestorBp || undefined,
             },
             pacoteBeneficios: pacoteBeneficios.length ? pacoteBeneficios : undefined,
+            // Observação livre (Bloco 2): só vai quando tem conteúdo; vazia é `undefined`.
+            observacaoLiberacao: observacao.trim() || undefined,
           },
         },
       );
+      const nomeExibicao = caixaAlta(alvo.candidatoNome);
       setOkMsg(
         r.temRegua
-          ? `${alvo.candidatoNome} liberado. A admissão entrou na esteira com a régua documental do par.`
-          : `${alvo.candidatoNome} liberado e na esteira. Atenção: este par cliente e cargo não tem régua documental cadastrada, então a admissão nasceu sem checklist de documentos.`,
+          ? `${nomeExibicao} liberado. A admissão entrou na esteira com a régua documental do par.`
+          : `${nomeExibicao} liberado e na esteira. Atenção: este par cliente e cargo não tem régua documental cadastrada, então a admissão nasceu sem checklist de documentos.`,
       );
       setAlvo(null);
       await load();
@@ -465,7 +508,7 @@ export default function LiberacaoPage() {
         method: "PATCH",
         token,
       });
-      setOkMsg(`${alvo.candidatoNome} recusado. Movido para "Admissões Recusadas".`);
+      setOkMsg(`${caixaAlta(alvo.candidatoNome)} recusado. Movido para "Admissões Recusadas".`);
       setAlvo(null);
       await load();
       refreshBadge(); // saiu da fila: badge cai na hora.
@@ -490,7 +533,7 @@ export default function LiberacaoPage() {
           token,
         },
       );
-      setOkMsg(`${recusadaAlvo.candidatoNome} reativado. Voltou para "Aguardando".`);
+      setOkMsg(`${caixaAlta(recusadaAlvo.candidatoNome)} reativado. Voltou para "Aguardando".`);
       setRecusadaAlvo(null);
       setAba("aguardando");
       await load();
@@ -514,6 +557,7 @@ export default function LiberacaoPage() {
     setLoteEscala("");
     setLoteCentroCusto("");
     setLoteGestorBp("");
+    setLoteObservacao("");
     setLoteBeneficiosSel([]);
     setLoteBeneficiosValores({});
     setLoteErro(null);
@@ -560,6 +604,8 @@ export default function LiberacaoPage() {
             gestorBp: loteGestorBp || undefined,
           },
           pacoteBeneficios: lotePacote.length ? lotePacote : undefined,
+          // Observação livre (Bloco 2): a MESMA para todas as N, como os demais campos do lote.
+          observacaoLiberacao: loteObservacao.trim() || undefined,
         },
       });
       setLoteAberto(false);
@@ -806,7 +852,8 @@ export default function LiberacaoPage() {
                       </td>
                       <td className="font-semibold">
                         <span className="inline-flex items-center gap-2">
-                          {r.candidatoNome}
+                          {/* Bloco 1 da OST: caixa alta de exibição (o banco segue como veio). */}
+                          {caixaAlta(r.candidatoNome)}
                           {r.possivelDuplicata && (
                             <span
                               className="inline-flex items-center rounded-full border border-[rgba(234,88,12,0.35)] bg-[rgba(234,88,12,0.12)] px-2 py-0.5 text-[11px] font-semibold text-warn-2"
@@ -890,7 +937,8 @@ export default function LiberacaoPage() {
                 ) : (
                   ordRecusadas.itens.map((r) => (
                     <tr key={r.admissaoId}>
-                      <td className="font-semibold">{r.candidatoNome}</td>
+                      {/* Bloco 1 da OST: caixa alta de exibição, igual à tabela de Aguardando. */}
+                      <td className="font-semibold">{caixaAlta(r.candidatoNome)}</td>
                       <td className="whitespace-nowrap font-mono text-[12.5px]">
                         {fmtCpf(r.candidatoCpf)}
                       </td>
@@ -921,7 +969,7 @@ export default function LiberacaoPage() {
         <Modal onClose={fecharModal} ariaLabel="Liberar admissão" className="max-w-[560px] p-6">
           <div className="mb-5">
             <div className="eyebrow !mb-1">Liberação Admissional</div>
-            <h2 className="font-display text-xl font-bold">{alvo.candidatoNome}</h2>
+            <h2 className="font-display text-xl font-bold">{caixaAlta(alvo.candidatoNome)}</h2>
             <p className="mt-0.5 font-mono text-[13px] text-dim">{fmtCpf(alvo.candidatoCpf)}</p>
           </div>
 
@@ -962,7 +1010,7 @@ export default function LiberacaoPage() {
                   inputMode="decimal"
                   placeholder="Ex.: 2.500,00"
                   value={salario}
-                  onChange={(e) => setSalario(e.target.value)}
+                  onChange={(e) => setSalario(maskMoedaBR(e.target.value))}
                 />
               </label>
               <label className="grid gap-1.5">
@@ -981,7 +1029,10 @@ export default function LiberacaoPage() {
                   onChange={setTipoContrato}
                   placeholder="Selecione…"
                   ariaLabel="Tipo de contrato"
-                  options={TIPOS_CONTRATO.map((t) => ({ value: t, label: t }))}
+                  options={[
+                    OPCAO_EM_BRANCO,
+                    ...TIPOS_CONTRATO.map((t) => ({ value: t, label: t })),
+                  ]}
                 />
               </label>
               <label className="grid gap-1.5">
@@ -993,7 +1044,10 @@ export default function LiberacaoPage() {
                   ariaLabel="Escala"
                   searchable
                   menuFit
-                  options={escalasCat.map((e) => ({ value: e.nome, label: e.nome }))}
+                  options={[
+                    OPCAO_EM_BRANCO,
+                    ...escalasCat.map((e) => ({ value: e.nome, label: e.nome })),
+                  ]}
                 />
               </label>
               <label className="grid gap-1.5">
@@ -1044,6 +1098,27 @@ export default function LiberacaoPage() {
                 ))}
               </div>
             )}
+
+            {/* OBSERVAÇÕES LIVRES (Bloco 2 da OST). Campo de texto para o que não cabe em campo
+                estruturado (caso real: "VT possui 6% de desconto"). OPCIONAL: não bloqueia a
+                liberação e NÃO entra na régua de pendências obrigatórias. Fica depois dos campos
+                estruturados de propósito: primeiro o consultor preenche o que é dado, depois
+                escreve o que é recado. Aparece no modal do olho após a liberação (Bloco 3). */}
+            <label className="grid gap-1.5">
+              <span className="ds-label">Observações (opcional)</span>
+              <textarea
+                className="ds-input min-h-[76px] resize-y py-2"
+                maxLength={OBSERVACAO_MAX}
+                placeholder="Informação que não cabe nos campos acima. Ex.: VT possui 6% de desconto."
+                aria-label="Observações da liberação"
+                value={observacao}
+                onChange={(e) => setObservacao(e.target.value)}
+              />
+              <span className="text-[11.5px] text-faint">
+                Fica visível na ficha do candidato depois de liberado. {observacao.length} de{" "}
+                {OBSERVACAO_MAX} caracteres.
+              </span>
+            </label>
 
             {/* Sinalização do que ainda falta (mesmos campos da régua unificada). Só cliente+cargo
                 travam; o resto é pendência que segue para a esteira. */}
@@ -1123,7 +1198,7 @@ export default function LiberacaoPage() {
               </p>
               <ul className="mt-1 list-disc pl-5">
                 {loteDuplicatas.map((d) => (
-                  <li key={d.admissaoId}>{d.candidatoNome}</li>
+                  <li key={d.admissaoId}>{caixaAlta(d.candidatoNome)}</li>
                 ))}
               </ul>
               <p className="mt-1">
@@ -1169,7 +1244,7 @@ export default function LiberacaoPage() {
                   inputMode="decimal"
                   placeholder="Ex.: 2.500,00"
                   value={loteSalario}
-                  onChange={(e) => setLoteSalario(e.target.value)}
+                  onChange={(e) => setLoteSalario(maskMoedaBR(e.target.value))}
                 />
               </label>
               <label className="grid gap-1.5">
@@ -1188,7 +1263,10 @@ export default function LiberacaoPage() {
                   onChange={setLoteTipoContrato}
                   placeholder="Selecione…"
                   ariaLabel="Tipo de contrato do lote"
-                  options={TIPOS_CONTRATO.map((t) => ({ value: t, label: t }))}
+                  options={[
+                    OPCAO_EM_BRANCO,
+                    ...TIPOS_CONTRATO.map((t) => ({ value: t, label: t })),
+                  ]}
                 />
               </label>
               <label className="grid gap-1.5">
@@ -1200,7 +1278,10 @@ export default function LiberacaoPage() {
                   ariaLabel="Escala do lote"
                   searchable
                   menuFit
-                  options={escalasCat.map((e) => ({ value: e.nome, label: e.nome }))}
+                  options={[
+                    OPCAO_EM_BRANCO,
+                    ...escalasCat.map((e) => ({ value: e.nome, label: e.nome })),
+                  ]}
                 />
               </label>
               <label className="grid gap-1.5">
@@ -1251,6 +1332,25 @@ export default function LiberacaoPage() {
                 ))}
               </div>
             )}
+
+            {/* OBSERVAÇÕES LIVRES do LOTE (Bloco 2 da OST). MESMO campo do individual e MESMA regra
+                dos demais campos do lote: o que for escrito aqui é gravado em TODAS as N
+                selecionadas. Opcional, não bloqueia. */}
+            <label className="grid gap-1.5">
+              <span className="ds-label">Observações (opcional)</span>
+              <textarea
+                className="ds-input min-h-[76px] resize-y py-2"
+                maxLength={OBSERVACAO_MAX}
+                placeholder="Informação que não cabe nos campos acima. Ex.: VT possui 6% de desconto."
+                aria-label="Observações da liberação em massa"
+                value={loteObservacao}
+                onChange={(e) => setLoteObservacao(e.target.value)}
+              />
+              <span className="text-[11.5px] text-faint">
+                Vale para as {loteSelecionadasOk.length} selecionadas e fica visível na ficha de cada
+                candidato. {loteObservacao.length} de {OBSERVACAO_MAX} caracteres.
+              </span>
+            </label>
 
             {/* Mesma sinalização do individual: o que ficar vazio não bloqueia, segue como pendência
                 de CADA uma das admissões do lote. */}
@@ -1307,7 +1407,7 @@ export default function LiberacaoPage() {
               <p className="font-semibold">Entraram na esteira:</p>
               <ul className="mt-1 list-disc pl-5">
                 {loteResultado.liberadas.map((l) => (
-                  <li key={l.admissaoId}>{l.candidato}</li>
+                  <li key={l.admissaoId}>{caixaAlta(l.candidato)}</li>
                 ))}
               </ul>
             </div>
@@ -1319,7 +1419,7 @@ export default function LiberacaoPage() {
               <ul className="mt-1 list-disc pl-5">
                 {loteResultado.falhas.map((f, i) => (
                   <li key={`${f.candidato}-${i}`}>
-                    {f.candidato}: {f.motivo}
+                    {caixaAlta(f.candidato)}: {f.motivo}
                   </li>
                 ))}
               </ul>
@@ -1341,7 +1441,9 @@ export default function LiberacaoPage() {
         >
           <div className="mb-5">
             <div className="eyebrow !mb-1">Admissão recusada</div>
-            <h2 className="font-display text-xl font-bold">{recusadaAlvo.candidatoNome}</h2>
+            <h2 className="font-display text-xl font-bold">
+              {caixaAlta(recusadaAlvo.candidatoNome)}
+            </h2>
             <p className="mt-0.5 font-mono text-[13px] text-dim">
               {fmtCpf(recusadaAlvo.candidatoCpf)}
             </p>

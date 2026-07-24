@@ -550,6 +550,7 @@ export class AdmissoesService {
         endereco?: string;
       };
       pacoteBeneficios?: { beneficioId: string; valor?: number }[];
+      observacaoLiberacao?: string;
     },
     user: AuthUser,
   ): Promise<{ admissaoId: string; temRegua: boolean }> {
@@ -640,6 +641,7 @@ export class AdmissoesService {
           endereco?: string;
         };
         pacoteBeneficios?: { beneficioId: string; valor?: number }[];
+        observacaoLiberacao?: string;
       };
       regua: { tipoDocumentoId: string; exigencia: string }[];
       user: AuthUser;
@@ -651,6 +653,10 @@ export class AdmissoesService {
     const novoTipoContrato = dto.tipoContrato ?? adm.tipoContrato ?? undefined;
     const novaDataAdmissao = dto.dataAdmissao ?? adm.dataAdmissao ?? undefined;
     const temEstruturado = Boolean(dto.pacoteBeneficios?.length);
+    // Observação livre (Bloco 2). Só grava o que tem conteúdo: espaço em branco vira null, para o
+    // modal do olho não abrir um bloco vazio. NÃO entra no sinalizador: é opcional por definição.
+    // No LOTE este mesmo valor chega igual para as N (o miolo é o mesmo do individual).
+    const observacaoLiberacao = dto.observacaoLiberacao?.trim() || null;
 
     // Sinalizador com os valores REALMENTE preenchidos no modal (régua unificada §A.19): o que
     // ficou vazio vira pendência na esteira, o que foi preenchido não. Mesma função do `create`.
@@ -681,6 +687,7 @@ export class AdmissoesService {
         dataAdmissao: novaDataAdmissao ?? null,
         farolGlobal: "EM_ADMISSAO",
         sinalizadorPreenchimento: sinalizador,
+        observacaoLiberacao,
         consultorId: user.id,
         atualizadoEm: new Date(),
       })
@@ -776,6 +783,7 @@ export class AdmissoesService {
         endereco?: string;
       };
       pacoteBeneficios?: { beneficioId: string; valor?: number }[];
+      observacaoLiberacao?: string;
     },
     user: AuthUser,
   ): Promise<{
@@ -843,9 +851,17 @@ export class AdmissoesService {
         await this.enfileirarPullDocumentos(admissaoId);
         liberadas.push({ admissaoId, candidato: nome });
       } catch (e) {
+        // BLOCO 4: o catch NÃO logava nada, então as falhas ficavam sem rastro (o erro morria entre
+        // o backend, que não registrava, e a tela, que recebia rótulo genérico). §A.6: loga id
+        // técnico + mensagem real, NUNCA nome/CPF (o `nome` fica só no relatório da tela).
+        const real = e instanceof Error ? e.message : String(e);
+        this.logger.warn(`Falha ao liberar em lote admissao=${admissaoId}: ${real}`);
         falhas.push({
           candidato: nome,
-          motivo: e instanceof HttpException ? e.message : "Erro ao liberar",
+          // Motivo REAL à tela, por admissão (como o motivo da auditoria): HttpException traz a msg
+          // amigável; qualquer outro erro traz a mensagem real, não mais "Erro ao liberar" cego.
+          // (Salário mal formatado agora é barrado no DTO com 400, nem chega aqui.)
+          motivo: e instanceof HttpException ? e.message : real,
         });
       }
     }

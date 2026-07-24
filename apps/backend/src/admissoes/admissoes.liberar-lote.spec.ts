@@ -1,6 +1,10 @@
+import "reflect-metadata";
+import { plainToInstance } from "class-transformer";
+import { validateSync } from "class-validator";
 import { describe, expect, it, vi } from "vitest";
 import type { AuthUser } from "../auth/auth.types";
 import { AdmissoesService } from "./admissoes.service";
+import { LiberarEmLoteDto } from "./dto/liberar-lote.dto";
 
 /**
  * Liberação Admissional EM LOTE. Cobre as regras que o lote adiciona sobre o nascimento já testado
@@ -18,6 +22,8 @@ const USER: AuthUser = {
 type Row = Record<string, unknown>;
 
 interface Cenario {
+  /** `null` = admissão sem origem Pandapé (nada a puxar). Ausente = veio do Pandapé. */
+  integracao?: Row | null;
   admissoes: Row[];
   regua?: Row[];
   clienteExiste?: boolean;
@@ -48,6 +54,11 @@ function montar(cen: Cenario) {
 
   const db = {
     query: {
+      // Origem Pandapé da admissão: alimenta o pull enfileirado na liberação.
+      integracaoPandape: {
+        findFirst: async () =>
+          cen.integracao === undefined ? { idPrecollaborator: "PC-1" } : cen.integracao,
+      },
       clientes: { findFirst: async () => (cen.clienteExiste === false ? undefined : { id: "c1" }) },
       cargos: { findFirst: async () => (cen.cargoExiste === false ? undefined : { id: "cg1" }) },
       // O service passa o `where` por id; o fake resolve pelo id da chamada corrente do laço.
@@ -71,10 +82,12 @@ function montar(cen: Cenario) {
   function idDoWhere(_args: unknown): string {
     return idCorrente;
   }
-  const service = new AdmissoesService(db as never);
+  const fila = { enfileirarPullDocumentos: vi.fn().mockResolvedValue(true) };
+  const service = new AdmissoesService(db as never, fila as never);
   // Envolve o findFirst para saber qual id o laço pede a cada volta: a ordem é a dos ids enviados.
   return {
     service,
+    fila,
     inseridos,
     atualizados,
     contarTransacoes: () => transacoes,
@@ -163,6 +176,76 @@ describe("AdmissoesService.liberarEmLote", () => {
     }
   });
 
+  it("REGRESSÃO (OST salário): salário com VÍRGULA passa pelo DTO e libera as N (era 9/0)", async () => {
+    // O caso que quebrou: salário "R$ 2.500,00" (o MESMO para as N) estourava 22P02 e derrubava
+    // TODAS. Agora o DTO normaliza para "2500.00" ANTES do service, e o lote inteiro passa.
+    const ids = [
+      "11111111-1111-4111-8111-111111111111",
+      "22222222-2222-4222-8222-222222222222",
+      "33333333-3333-4333-8333-333333333333",
+    ];
+    const dto = plainToInstance(LiberarEmLoteDto, {
+      admissaoIds: ids,
+      codCliente: "100",
+      cargoId: "44444444-4444-4444-8444-444444444444",
+      vagaFolha: { salario: "R$ 2.500,00" },
+    });
+    // Validação real (o que o ValidationPipe roda): não deve haver erro e o salário vem canônico.
+    expect(validateSync(dto, { whitelist: true })).toHaveLength(0);
+    expect(dto.vagaFolha?.salario).toBe("2500.00");
+
+    const ctx = montar({ admissoes: ids.map(aguardando), regua: REGUA_OK });
+    const r = await rodarLote(ctx, ids, dto);
+
+    expect(r.liberadas).toHaveLength(3);
+    expect(r.falhas).toHaveLength(0);
+    const vagas = ctx.atualizados.filter((u) => "salario" in u);
+    expect(vagas).toHaveLength(3);
+    for (const v of vagas) expect(v.salario).toBe("2500.00");
+  });
+
+  it("observação livre do lote é gravada em TODAS as N (Bloco 2 da OST)", async () => {
+    const ids = ["a1", "a2", "a3"];
+    const ctx = montar({ admissoes: ids.map(aguardando), regua: REGUA_OK });
+    await rodarLote(ctx, ids, {
+      codCliente: "100",
+      cargoId: "11111111-1111-4111-8111-111111111111",
+      observacaoLiberacao: "VT possui 6% de desconto",
+    });
+
+    const admissoesAtualizadas = ctx.atualizados.filter((u) => u.farolGlobal === "EM_ADMISSAO");
+    expect(admissoesAtualizadas).toHaveLength(3);
+    for (const u of admissoesAtualizadas) {
+      expect(u.observacaoLiberacao).toBe("VT possui 6% de desconto");
+    }
+  });
+
+  it("observação em branco grava null (o modal do olho não abre bloco vazio)", async () => {
+    const ctx = montar({ admissoes: [aguardando("a1")], regua: REGUA_OK });
+    await rodarLote(ctx, ["a1"], {
+      codCliente: "100",
+      cargoId: "11111111-1111-4111-8111-111111111111",
+      observacaoLiberacao: "   ",
+    });
+
+    const [u] = ctx.atualizados.filter((x) => x.farolGlobal === "EM_ADMISSAO");
+    expect(u.observacaoLiberacao).toBeNull();
+  });
+
+  it("observação NÃO conta como campo preenchido da régua unificada (é opcional)", async () => {
+    const ctx = montar({ admissoes: [aguardando("a1")], regua: REGUA_OK });
+    await rodarLote(ctx, ["a1"], {
+      codCliente: "100",
+      cargoId: "11111111-1111-4111-8111-111111111111",
+      // Tudo o que a régua §A.19 cobra preenchido, MENOS nada: só a observação é extra.
+      observacaoLiberacao: "Recado do consultor",
+    });
+
+    const [u] = ctx.atualizados.filter((x) => x.farolGlobal === "EM_ADMISSAO");
+    // A observação não maquia pendência: sem salário/contrato/data/benefícios, segue pendente.
+    expect(u.sinalizadorPreenchimento).not.toBe("OK");
+  });
+
   it("parcial-com-relatório: a falha do meio não derruba as boas", async () => {
     const ids = ["a1", "a2", "a3"];
     const ctx = montar({
@@ -204,6 +287,38 @@ describe("AdmissoesService.liberarEmLote", () => {
     const ctx = montar({ admissoes: ids.map(aguardando), regua: REGUA_OK });
     await expect(rodarLote(ctx, ids)).rejects.toThrow(/50/);
     expect(ctx.contarTransacoes()).toBe(0);
+  });
+
+  it("enfileira UM pull de documentos POR admissão liberada (massa não dispara N chamadas diretas)", async () => {
+    const ids = ["a1", "a2", "a3"];
+    const ctx = montar({ admissoes: ids.map(aguardando), regua: REGUA_OK });
+
+    await rodarLote(ctx, ids);
+
+    expect(ctx.fila.enfileirarPullDocumentos).toHaveBeenCalledTimes(3);
+    // o job carrega a admissão + o pré-colaborador de origem.
+    expect(ctx.fila.enfileirarPullDocumentos).toHaveBeenCalledWith("a1", "PC-1");
+  });
+
+  it("admissão SEM origem Pandapé não enfileira pull", async () => {
+    const ctx = montar({ admissoes: [aguardando("a1")], regua: REGUA_OK, integracao: null });
+
+    await rodarLote(ctx, ["a1"]);
+
+    expect(ctx.fila.enfileirarPullDocumentos).not.toHaveBeenCalled();
+  });
+
+  it("FALHA do pull NÃO trava nem reverte a liberação (Pandapé/Redis fora)", async () => {
+    const ids = ["a1", "a2"];
+    const ctx = montar({ admissoes: ids.map(aguardando), regua: REGUA_OK });
+    ctx.fila.enfileirarPullDocumentos.mockRejectedValue(new Error("Pandapé indisponível"));
+
+    const r = await rodarLote(ctx, ids);
+
+    // as duas seguem liberadas, sem falha reportada: o pull é efeito colateral, não gate.
+    expect(r.liberadas).toHaveLength(2);
+    expect(r.falhas).toHaveLength(0);
+    expect(ctx.contarTransacoes()).toBe(2);
   });
 
   it("seleção vazia é recusada", async () => {

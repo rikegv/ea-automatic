@@ -6,10 +6,12 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  MaxLength,
   MinLength,
   ValidateNested,
 } from "class-validator";
 import { BeneficioAlocadoDto, VagaFolhaInputDto } from "./create-admissao.dto";
+import { OBSERVACAO_LIBERACAO_MAX } from "./observacao-liberacao";
 
 /**
  * Liberação Admissional EM LOTE: aplica os MESMOS valores a N pré-admissões selecionadas.
@@ -55,4 +57,15 @@ export class LiberarEmLoteDto {
   @ValidateNested({ each: true })
   @Type(() => BeneficioAlocadoDto)
   pacoteBeneficios?: BeneficioAlocadoDto[];
+
+  /**
+   * Observação LIVRE da liberação (Bloco 2), MESMO campo do individual e MESMA regra dos demais
+   * campos do lote: o preenchido vale para TODAS as N selecionadas. Opcional, não bloqueia.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(OBSERVACAO_LIBERACAO_MAX, {
+    message: `A observação da liberação tem no máximo ${OBSERVACAO_LIBERACAO_MAX} caracteres.`,
+  })
+  observacaoLiberacao?: string;
 }

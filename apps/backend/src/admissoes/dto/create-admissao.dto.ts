@@ -9,11 +9,13 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  Matches,
   MaxLength,
   Min,
   MinLength,
   ValidateNested,
 } from "class-validator";
+import { normalizarSalarioParaDto } from "./valor-monetario-br";
 
 /**
  * Mensagens de validação em LINGUAGEM DE GENTE (ajuste do diretor).
@@ -63,10 +65,17 @@ export class CandidatoInputDto {
 
 /** Dados de vaga/folha (anexo 1:1) — opcionais por padrão (não bloqueiam — regra 5/F4). */
 export class VagaFolhaInputDto {
-  // numeric no banco: aceita string|número e normaliza para string antes da validação.
+  // Coluna `numeric` no banco. Era o ÚNICO numérico sem validação de formato: valor não-numérico
+  // estourava 22P02 e, num lote, derrubava TODAS. Agora normaliza o pt-BR que o consultor digita
+  // (ponto milhar, vírgula decimal, "R$", espaço) para a forma canônica "2500.00" e, se não sobrar
+  // número, o `@Matches` barra com 400 claro ANTES do banco. Ver `valor-monetario-br`. A validação
+  // é no BACKEND (autoridade): chamada direta à API também é barrada.
   @IsOptional()
-  @Transform(({ value }) => (value === undefined || value === null ? value : String(value)))
-  @IsString()
+  @Transform(({ value }) => normalizarSalarioParaDto(value))
+  @Matches(/^\d+(\.\d{1,2})?$/, {
+    message:
+      "Salário inválido. Informe um valor como 2500 ou 2.500,00 (ponto separa o milhar, vírgula os centavos).",
+  })
   salario?: string;
 
   @IsOptional()
