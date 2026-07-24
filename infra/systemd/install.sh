@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# EA AUTOMATIC — instala/atualiza os serviços systemd de USUÁRIO (backend + frontend).
+# EA AUTOMATIC — instala/atualiza os serviços systemd de USUÁRIO (backend + frontend + ai-service).
 #
 # Por que systemd de usuário (e não docker-compose para os apps): os apps rodam como processos
 # host (proxy same-origin loopback, DB em porta publicada do host, sem Dockerfiles). Nesta VM não
@@ -22,9 +22,19 @@ DEST="$HOME/.config/systemd/user"
 NODE_BIN="$(readlink -f "$(command -v node)")"
 NODE_DIR="$(dirname "$NODE_BIN")"
 
+# `uv` roda o ai-service (Python 3.12). Mesma portabilidade do node: o caminho real é resolvido aqui
+# e reescrito no unit, então trocar a instalação do uv não quebra o serviço.
+UV_BIN="$(readlink -f "$(command -v uv)" 2>/dev/null || true)"
+if [ -z "$UV_BIN" ]; then
+  echo "[install] ERRO: 'uv' não encontrado no PATH. O ai-service não pode ser instalado sem ele." >&2
+  exit 1
+fi
+UV_DIR="$(dirname "$UV_BIN")"
+
 # Placeholders gravados nos units versionados (ambiente de referência).
 REF_REPO="/home/henrique/apps/ea-automatic"
 REF_NODE_DIR="/home/henrique/.nvm/versions/node/v20.20.2/bin"
+REF_UV_DIR="/home/henrique/.local/bin"
 
 echo "[install] repo    = $REPO"
 echo "[install] node    = $NODE_BIN"
@@ -33,9 +43,10 @@ echo "[install] destino = $DEST"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 mkdir -p "$DEST"
 
-for svc in ea-backend.service ea-frontend.service; do
+for svc in ea-backend.service ea-frontend.service ea-ai-service.service; do
   sed -e "s#${REF_REPO}#${REPO}#g" \
       -e "s#${REF_NODE_DIR}#${NODE_DIR}#g" \
+      -e "s#${REF_UV_DIR}#${UV_DIR}#g" \
       "$SRC/$svc" > "$DEST/$svc"
   echo "[install] $svc -> $DEST/$svc"
 done
@@ -45,7 +56,8 @@ loginctl enable-linger "$(whoami)" 2>/dev/null || \
   echo "[install] aviso: não foi possível habilitar linger (start no boot pode exigir sessão ativa)"
 
 systemctl --user daemon-reload
-systemctl --user enable --now ea-backend.service ea-frontend.service
+systemctl --user enable --now ea-backend.service ea-frontend.service ea-ai-service.service
 
 echo "[install] OK. Status:"
-systemctl --user --no-pager status ea-backend.service ea-frontend.service | grep -E 'Active:|Loaded:' || true
+systemctl --user --no-pager status ea-backend.service ea-frontend.service ea-ai-service.service \
+  | grep -E 'Active:|Loaded:' || true

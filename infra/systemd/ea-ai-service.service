@@ -1,0 +1,27 @@
+[Unit]
+Description=EA AUTOMATIC - ai-service (FastAPI/Vertex AI, loopback 127.0.0.1:8000)
+After=network-online.target
+Wants=network-online.target
+# Reinício resiliente sem lockout por rate-limit (para sobreviver a quedas repetidas).
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=/home/henrique/apps/ea-automatic/apps/ai-service
+Environment=APP_ENV=production
+# `uv` vive em ~/.local/bin e o venv do projeto é resolvido pelo próprio `uv run`.
+Environment=PATH=/home/henrique/.local/bin:/usr/local/bin:/usr/bin:/bin
+# Lê apps/ai-service/.env via pydantic-settings (cwd = WorkingDirectory).
+# `--no-sync` evita que um start em produção mexa nas dependências sozinho.
+ExecStart=/home/henrique/.local/bin/uv run --no-sync uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=3
+# O log vai para o journal (append por natureza, com rotação do próprio journald). É a correção do
+# problema real que apagou o rastro de uma falha: o processo era iniciado à mão redirecionando com
+# `>`, e cada reinício TRUNCAVA o arquivo de log. Com o journal isso não acontece, e o histórico
+# sobrevive a restart e a reboot (`journalctl --user -u ea-ai-service`).
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
