@@ -48,6 +48,16 @@ function envKeyFopag(cod: string): string {
 }
 
 /**
+ * Um cod_cliente do contrato Fopag TEM pasta-pai mapeada? (fallback em código OU override por env).
+ * Usado pela TELA DE DIAGNÓSTICO (Bloco 2): só o Fopag resolve por cliente, então só ele tem a lacuna
+ * "cliente novo sem pasta", que derrubou o prontuário do Willden em silêncio.
+ */
+export function fopagTemPastaPai(codCliente: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  const cod = (codCliente ?? "").trim();
+  return Boolean(env[envKeyFopag(cod)] ?? FOPAG_FALLBACK[cod]);
+}
+
+/**
  * Resolve o ID da pasta-pai do Drive. `null` quando não há mapeamento (não arquivar). Override por
  * env tem precedência sobre o mapa de fallback.
  */
@@ -80,7 +90,18 @@ export function resolveSubpasta(codigoTipo: string): DriveSubpasta {
   return SUBPASTA_POR_CODIGO[(codigoTipo ?? "").toUpperCase()] ?? "DOCUMENTOS_PESSOAIS";
 }
 
-/** Nome da pasta do prontuário: "{nome do candidato} — {nome da operação do cliente}". */
+/**
+ * Nome da pasta do prontuário: "{NOME DO CANDIDATO EM CAIXA ALTA} — {nome da operação}" (decisão do
+ * diretor). Só o nome do candidato vira caixa alta; a operação fica como está.
+ *
+ * REAPROVEITAMENTO PRESERVADO. O nome é a CHAVE do reuso da pasta (`buscar_ou_criar_pasta` procura por
+ * nome antes de criar), então mudar a caixa poderia deixar de reconhecer as pastas antigas e voltar a
+ * DUPLICAR. Isso NÃO acontece porque a busca do Drive (`name = 'X'`) casa de forma INSENSÍVEL à caixa,
+ * provado ao vivo na pasta real do Willden: consultar o nome antigo em MAIÚSCULO devolve a MESMA pasta.
+ * Efeito prático: candidato que já tem pasta (caixa antiga) continua sendo reaproveitado, e só a pasta
+ * NOVA nasce em caixa alta. Nada é renomeado retroativamente. O separador segue como estava (convenção
+ * de nome de pasta já existente, fora do texto de UI da §A.11).
+ */
 export function montarNomePasta(nomeCandidato: string, nomeOperacao: string | null): string {
-  return `${nomeCandidato} — ${nomeOperacao ?? ""}`.trim();
+  return `${nomeCandidato.toUpperCase()} — ${nomeOperacao ?? ""}`.trim();
 }

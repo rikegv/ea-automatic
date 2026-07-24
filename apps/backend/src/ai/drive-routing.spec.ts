@@ -65,11 +65,15 @@ describe("resolveSubpasta — roteamento por tipo de documento", () => {
 });
 
 describe("montarNomePasta", () => {
-  it("formata '{candidato} — {operação}'", () => {
-    expect(montarNomePasta("Maria Silva", "Loja Centro")).toBe("Maria Silva — Loja Centro");
+  it("nome do candidato em CAIXA ALTA; operação como está (decisão do diretor)", () => {
+    expect(montarNomePasta("Maria Silva", "Loja Centro")).toBe("MARIA SILVA — Loja Centro");
+  });
+
+  it("caixa alta preserva acentos", () => {
+    expect(montarNomePasta("João Conceição", "Op")).toBe("JOÃO CONCEIÇÃO — Op");
   });
 
   it("tolera operação nula (sem quebrar o nome do prontuário)", () => {
-    expect(montarNomePasta("Maria Silva", null)).toBe("Maria Silva —");
+    expect(montarNomePasta("Maria Silva", null)).toBe("MARIA SILVA —");
   });
 });

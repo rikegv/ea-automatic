@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { ClicksignStatus, Origem } from "@ea/shared-types";
 import { apiFetch, ApiError } from "@/lib/api";
+import { cn } from "@/lib/cn";
 import { useAuth } from "@/lib/auth-context";
 import { Modal } from "@/components/ui/Modal";
 import { Pill, type PillTone } from "@/components/ui/Pill";
@@ -11,6 +12,7 @@ import { OrigemBadge } from "@/components/ui/OrigemBadge";
 import { GoogleDriveLogo } from "@/components/ui/GoogleDriveLogo";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { farolPill } from "@/lib/farol";
+import { caixaAlta } from "@/lib/nome";
 import { clicksignPill, temEnvelopeReenviavel } from "@/lib/clicksign";
 import { Bloco } from "@/components/ui/Bloco";
 
@@ -25,7 +27,9 @@ interface FrenteDetalhe {
 interface DocDetalhe {
   nome: string;
   exigencia: "OBRIGATORIO" | "NAO_OBRIGATORIO" | "FACULTATIVO";
-  estado: "PENDENTE" | "ENTREGUE" | "INCONFORME";
+  // AGUARDANDO_AUDITORIA existe desde o desacoplamento coleta/auditoria e chegava aqui rotulado como
+  // "Pendente", escondendo que o documento JÁ CHEGOU e só espera a IA.
+  estado: "PENDENTE" | "ENTREGUE" | "INCONFORME" | "AGUARDANDO_AUDITORIA";
 }
 interface AdmissaoDetalhe {
   admissaoId: string;
@@ -44,6 +48,10 @@ interface AdmissaoDetalhe {
   clicksignStatus: ClicksignStatus;
   temEnvelope: boolean;
   contratoAssinadoDriveUrl: string | null;
+  // Observação LIVRE deixada na liberação (Bloco 3). null/vazio = o consultor não escreveu nada.
+  // NÃO é o `observacao` de `documentos_admissao` (motivo do veredito da IA por documento), que
+  // nesta mesma ficha aparece na lista de documentos.
+  observacaoLiberacao: string | null;
   matricula: string | null;
   candidato: {
     nome: string;
@@ -155,7 +163,15 @@ function frenteTone(f: FrenteDetalhe): PillTone {
 function docTone(estado: string): PillTone {
   if (estado === "ENTREGUE") return "ok";
   if (estado === "INCONFORME") return "dg";
+  if (estado === "AGUARDANDO_AUDITORIA") return "in";
   return "wn";
+}
+
+/** Rótulo do estado do documento nesta ficha. Cada estado diz uma coisa diferente ao consultor. */
+function docRotulo(estado: string): string {
+  if (estado === "INCONFORME") return "Inconforme";
+  if (estado === "AGUARDANDO_AUDITORIA") return "Aguardando auditoria";
+  return "Não recebido";
 }
 function fmtCpf(cpf: string): string {
   const d = (cpf ?? "").replace(/\D/g, "");
@@ -266,7 +282,15 @@ export function AdmissaoDetalheModal({
   );
 
   // BLOCO 5: só os documentos que FALTAM (não-entregues). Se vazio, o bloco não aparece.
+  //
+  // POR QUE O CONTADOR EXISTE (OST do modal do olho, Bloco 1). Esta lista sempre foi FILTRADA pelos
+  // não-entregues, mas não dizia quantos JÁ estavam prontos. Numa régua de 30 documentos com 8
+  // concluídos, o consultor via 22 linhas seguidas dizendo "Pendente" e concluía que NADA tinha sido
+  // feito, quando a auditoria já havia rodado. O dado sempre esteve certo (esta ficha e o modal de
+  // Auditar leem o MESMO endpoint); o que faltava era o denominador.
   const docsPendentes = data?.documentos.filter((d) => d.estado !== "ENTREGUE") ?? [];
+  const docsTotal = data?.documentos.length ?? 0;
+  const docsConcluidos = docsTotal - docsPendentes.length;
   const temAssinatura =
     !!data &&
     (data.temEnvelope ||
@@ -281,8 +305,10 @@ export function AdmissaoDetalheModal({
           <div className="min-w-0">
             <div className="eyebrow !mb-1">Ficha da admissão</div>
             <div className="flex min-w-0 items-center gap-2">
+              {/* Bloco 1 da OST: nome do candidato em CAIXA ALTA (exibição). O fallback de
+                  carregamento/erro NÃO passa pelo helper: não é nome, é estado da tela. */}
               <h3 className="truncate text-[18px] font-extrabold">
-                {data?.candidato.nome ?? (error ? "não informado" : "Carregando…")}
+                {data ? caixaAlta(data.candidato.nome) : error ? "não informado" : "Carregando…"}
               </h3>
               {data && <OrigemBadge origem={data.origem} className="flex-none" />}
             </div>
@@ -306,10 +332,27 @@ export function AdmissaoDetalheModal({
           <p className="py-8 text-center text-sm text-faint">Carregando ficha…</p>
         ) : (
           <div className="space-y-4">
+            {/* OBSERVAÇÃO DA LIBERAÇÃO (Bloco 3 da OST) — o recado que o consultor deixou no ato da
+                liberação para quem tocar a admissão adiante (caso real: "VT possui 6% de desconto").
+                Fica ANTES de todos os blocos, de propósito: é informação de contexto que muda a
+                leitura do resto da ficha, e escondê-la no fim é o mesmo que não ter.
+                Vazia (ou nunca preenchida), NÃO ocupa espaço: o bloco simplesmente não existe.
+                `whitespace-pre-wrap` preserva as quebras de linha que o consultor digitou. */}
+            {data.observacaoLiberacao?.trim() && (
+              <div className="rounded-xl border border-[rgba(201,138,18,0.35)] bg-[rgba(201,138,18,0.1)] px-3 py-2.5">
+                <div className="text-[11px] uppercase tracking-wide text-warn">
+                  Observação da liberação
+                </div>
+                <p className="mt-1 whitespace-pre-wrap text-[13.5px] text-text">
+                  {data.observacaoLiberacao}
+                </p>
+              </div>
+            )}
+
             {/* BLOCO 1 — Dados pessoais */}
             <Bloco titulo="Dados pessoais">
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                <Campo rotulo="Nome" valor={data.candidato.nome || "não informado"} />
+                <Campo rotulo="Nome" valor={caixaAlta(data.candidato.nome) || "não informado"} />
                 <Campo rotulo="CPF" valor={fmtCpf(data.candidato.cpf)} />
                 <Campo rotulo="Telefone" valor={data.candidato.telefone || "não informado"} />
                 <Campo rotulo="E-mail" valor={data.candidato.email || "não informado"} />
@@ -488,6 +531,13 @@ export function AdmissaoDetalheModal({
             {/* BLOCO 5 — Documentos pendentes (só os que faltam; some se não há pendência) */}
             {docsPendentes.length > 0 && (
               <Bloco titulo="Documentos pendentes">
+                {/* O denominador: sem ele a lista parecia dizer que nada foi auditado. */}
+                <p className="mb-2 text-[12.5px] text-dim">
+                  <span className={cn("font-semibold", docsConcluidos > 0 && "text-ok")}>
+                    {docsConcluidos} de {docsTotal}
+                  </span>{" "}
+                  documentos já concluídos. Abaixo, só os {docsPendentes.length} que faltam.
+                </p>
                 <div className="space-y-1.5">
                   {docsPendentes.map((d) => (
                     <div
@@ -498,9 +548,7 @@ export function AdmissaoDetalheModal({
                         <div className="truncate text-[13.5px] text-text">{d.nome}</div>
                         <div className="text-[11.5px] text-faint">{EXIG_ROTULO[d.exigencia]}</div>
                       </div>
-                      <Pill tone={docTone(d.estado)}>
-                        {d.estado === "INCONFORME" ? "Inconforme" : "Pendente"}
-                      </Pill>
+                      <Pill tone={docTone(d.estado)}>{docRotulo(d.estado)}</Pill>
                     </div>
                   ))}
                 </div>
