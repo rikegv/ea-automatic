@@ -75,6 +75,8 @@ function fakeDb(captured: unknown[]) {
 const regua = {
   obrigatoriosPendentesSet: vi.fn().mockResolvedValue(new Set()),
   obrigatoriosPendentesCountMap: vi.fn().mockResolvedValue(new Map()),
+  // OST B1 / Bloco 6: progresso da régua obrigatória exibido na coluna Status da aba Auditoria.
+  progressoObrigatoriosMap: vi.fn().mockResolvedValue(new Map()),
   faltantesObrigatorios: vi.fn().mockResolvedValue([]),
 };
 

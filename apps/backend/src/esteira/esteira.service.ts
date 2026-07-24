@@ -5,6 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
+import { alias as aliasedTable } from "drizzle-orm/pg-core";
 import {
   and,
   asc,
@@ -44,6 +45,8 @@ import {
   usuarios,
 } from "../db/schema";
 import { pendenciasObrigatorias } from "../domain/admissao";
+import { auditoriaParada, horasParado } from "../domain/auditoria-parada";
+import { equivalentesDoSlot } from "../domain/documentos-equivalentes";
 import { recomputeFarolGlobal } from "../admissoes/farol";
 import type { FrenteTipo } from "../domain/frentes";
 import { podeAbrirCadastro } from "../domain/frentes";
@@ -249,6 +252,15 @@ export class EsteiraService {
       tipo === "AUDITORIA"
         ? await this.reguaCompletude.obrigatoriosPendentesCountMap(admissaoIds)
         : new Map<string, number>();
+    // OST B1 / Bloco 6: progresso da régua obrigatória (entregues/total) para a coluna Status da
+    // aba Auditoria mostrar QUANTO já foi auditado, em vez de "Análise pendente" para todo mundo.
+    const progressoMap =
+      tipo === "AUDITORIA"
+        ? await this.reguaCompletude.progressoObrigatoriosMap(admissaoIds)
+        : new Map<
+            string,
+            { entregues: number; total: number; inconformes: number; recebidos: number }
+          >();
     const pendObrigSet =
       tipo === "AUDITORIA" || tipo === "EXAME"
         ? await this.pendenciasSet(admissaoIds)
@@ -296,6 +308,12 @@ export class EsteiraService {
           ...base,
           obrigatoriosPendentes: pendSet.has(r.admissaoId),
           docsPendentes: docsPendentesMap.get(r.admissaoId) ?? 0,
+          progressoObrigatorios: progressoMap.get(r.admissaoId) ?? {
+            entregues: 0,
+            total: 0,
+            inconformes: 0,
+            recebidos: 0,
+          },
           temPendencias: pendObrigSet.has(r.admissaoId),
         };
       }
@@ -913,6 +931,10 @@ export class EsteiraService {
         clicksignEnvelopeId: admissoes.clicksignEnvelopeId,
         contratoAssinadoDriveUrl: admissoes.contratoAssinadoDriveUrl,
         sinalizador: admissoes.sinalizadorPreenchimento,
+        // Observação livre deixada na LIBERAÇÃO (Bloco 3): o recado do consultor para quem tocar a
+        // admissão adiante. Não confundir com `documentos_admissao.observacao` (motivo do veredito
+        // por documento), que este mesmo detalhe também devolve, dentro de `documentos[]`.
+        observacaoLiberacao: admissoes.observacaoLiberacao,
         matricula: admissoes.matricula,
         candidatoNome: candidatos.nome,
         candidatoCpf: candidatos.cpf,
@@ -963,14 +985,28 @@ export class EsteiraService {
     const rotuloDe = (tipo: string, codigo: string) =>
       catalogo.find((c) => c.tipo === tipo && c.codigo === codigo)?.rotulo ?? codigo;
 
+    // Alias de `usuarios` só para o validador humano do documento: a query já usa `usuarios` para
+    // outros papéis, e sem o alias o join colidiria.
+    const validadores = aliasedTable(usuarios, "validadores_doc");
+
     // Checklist de documentos: exigência da régua + estado na admissão (regra 7 — só status).
     const documentos = await this.db
       .select({
         nome: tiposDocumento.nome,
+        codigo: tiposDocumento.codigo,
+        // Id do tipo do SLOT. A tela usa para auditar/reauditar a linha sem depender do nome.
+        tipoDocumentoId: tiposDocumento.id,
         exigencia: reguaDocumental.exigencia,
         estado: documentosAdmissao.estado,
         // Motivo do veredito da IA (BLOCO 2): texto acionável, sem PII (§A.6). Exibido na aba Auditoria.
         observacao: documentosAdmissao.observacao,
+        // OST B1 / Bloco 3: QUEM validou o documento à mão. Vai para a TELA (não fica só na trilha),
+        // e é o que a reauditoria usa para perguntar antes de deixar a IA sobrescrever (Bloco 4).
+        validadoPorNome: validadores.nome,
+        validadoEm: documentosAdmissao.validadoEm,
+        // OST motivo verdadeiro / Bloco 5: carimbo do último toque no documento. Serve ao marcador
+        // de AUDITORIA PARADA (quanto tempo faz que ele está coletado sem veredito).
+        atualizadoEm: documentosAdmissao.atualizadoEm,
       })
       .from(reguaDocumental)
       .innerJoin(tiposDocumento, eq(tiposDocumento.id, reguaDocumental.tipoDocumentoId))
@@ -981,6 +1017,7 @@ export class EsteiraService {
           eq(documentosAdmissao.tipoDocumentoId, reguaDocumental.tipoDocumentoId),
         ),
       )
+      .leftJoin(validadores, eq(validadores.id, documentosAdmissao.validadoPorId))
       .where(
         and(
           eq(reguaDocumental.codCliente, adm.codCliente),
@@ -988,6 +1025,16 @@ export class EsteiraService {
         ),
       )
       .orderBy(asc(tiposDocumento.nome));
+
+    // OST A / Bloco 3 — EQUIVALÊNCIA DE TIPO. Documento recebido num tipo que não está na régua
+    // (caso real: "Foto para Crachá") ficava invisível, porque o checklist é montado pela RÉGUA.
+    // A linha do slot equivalente ("Foto 3x4") passa a exibir esse documento, e a auditoria/
+    // reauditoria daquela linha aponta para o tipo REAL do documento recebido.
+    const documentosFinal = await this.preencherSlotsEquivalentes(admissaoId, documentos);
+
+    // Um "agora" só para todo o detalhe: duas linhas do mesmo checklist não podem discordar sobre o
+    // limiar de parada por terem sido calculadas com relógios diferentes.
+    const agoraDetalhe = new Date();
 
     // S2 — pendências obrigatórias (campos vazios da admissão).
     const vaga = await this.db.query.dadosVagaFolha.findFirst({
@@ -1065,6 +1112,8 @@ export class EsteiraService {
       temEnvelope: Boolean(adm.clicksignEnvelopeId),
       contratoAssinadoDriveUrl: adm.contratoAssinadoDriveUrl,
       sinalizador: adm.sinalizador,
+      // Bloco 3: null quando o consultor não escreveu nada — a tela não abre o bloco nesse caso.
+      observacaoLiberacao: adm.observacaoLiberacao,
       pendencias,
       passagens: passagensRows.map((p) => ({
         tipo: p.tipo,
@@ -1120,13 +1169,89 @@ export class EsteiraService {
         dataInicio: f.dataInicio,
         dataConclusao: f.dataConclusao,
       })),
-      documentos: documentos.map((d) => ({
+      documentos: documentosFinal.map((d) => ({
         nome: d.nome,
+        // Tipo a usar ao auditar/reauditar ESTA linha (pode ser o equivalente, ver Bloco 3).
+        tipoDocumentoId: d.tipoDocumentoId,
         exigencia: d.exigencia,
         estado: d.estado ?? "PENDENTE",
         observacao: d.observacao ?? null,
+        validadoPorNome: d.validadoEm ? (d.validadoPorNome ?? "não informado") : null,
+        validadoEm: d.validadoEm ?? null,
+        // OST motivo verdadeiro / Bloco 5: MARCADOR DE TEMPO PARADO. Só é preenchido quando o
+        // documento está em AGUARDANDO_AUDITORIA além do limiar (6h), então a tela não precisa saber
+        // a regra nem fazer conta: campo ausente significa "nada a sinalizar". Não é contador
+        // permanente de coluna (avaliado e recusado), é marcador de anomalia.
+        paradoHa: auditoriaParada({ estado: d.estado, atualizadoEm: d.atualizadoEm }, agoraDetalhe)
+          ? horasParado(d.atualizadoEm, agoraDetalhe)
+          : null,
       })),
     };
+  }
+
+  /**
+   * OST A / Bloco 3 — preenche um slot VAZIO do checklist com o documento de um tipo equivalente
+   * (ver `domain/documentos-equivalentes`). Só age quando o slot não tem documento próprio: um
+   * documento no tipo da régua sempre ganha do equivalente. Quando o equivalente entra, a linha passa
+   * a carregar o `tipoDocumentoId` REAL do documento recebido, para a tela auditar a coisa certa.
+   * §A.6: só códigos, estados e motivo, nada de PII.
+   */
+  private async preencherSlotsEquivalentes<
+    T extends {
+      codigo: string;
+      tipoDocumentoId: string;
+      estado: string | null;
+      observacao: string | null;
+      validadoPorNome?: string | null;
+      validadoEm?: Date | null;
+      // Carimbo do documento REAL, para o marcador de auditoria parada valer também no slot
+      // preenchido por equivalente (senão o equivalente preso nunca sinalizaria).
+      atualizadoEm?: Date | null;
+    },
+  >(admissaoId: string, linhas: T[]): Promise<T[]> {
+    const alvos = linhas.filter((l) => !l.estado && equivalentesDoSlot(l.codigo).length > 0);
+    if (alvos.length === 0) return linhas;
+
+    const codigos = [...new Set(alvos.flatMap((l) => [...equivalentesDoSlot(l.codigo)]))];
+    const recebidos = await this.db
+      .select({
+        codigo: tiposDocumento.codigo,
+        tipoDocumentoId: tiposDocumento.id,
+        estado: documentosAdmissao.estado,
+        observacao: documentosAdmissao.observacao,
+        validadoPorNome: usuarios.nome,
+        validadoEm: documentosAdmissao.validadoEm,
+        atualizadoEm: documentosAdmissao.atualizadoEm,
+      })
+      .from(documentosAdmissao)
+      .innerJoin(tiposDocumento, eq(tiposDocumento.id, documentosAdmissao.tipoDocumentoId))
+      .leftJoin(usuarios, eq(usuarios.id, documentosAdmissao.validadoPorId))
+      .where(
+        and(
+          eq(documentosAdmissao.admissaoId, admissaoId),
+          inArray(tiposDocumento.codigo, codigos),
+        ),
+      );
+    if (recebidos.length === 0) return linhas;
+
+    const porCodigo = new Map(recebidos.map((r) => [r.codigo, r]));
+    return linhas.map((l) => {
+      if (l.estado) return l;
+      for (const cod of equivalentesDoSlot(l.codigo)) {
+        const achado = porCodigo.get(cod);
+        if (!achado) continue;
+        return {
+          ...l,
+          tipoDocumentoId: achado.tipoDocumentoId,
+          estado: achado.estado,
+          observacao: achado.observacao,
+          validadoPorNome: achado.validadoPorNome,
+          validadoEm: achado.validadoEm,
+          atualizadoEm: achado.atualizadoEm,
+        };
+      }
+      return l;
+    });
   }
 
   /**
@@ -1153,19 +1278,29 @@ export class EsteiraService {
     const tamanho = file.size;
     const registradoEm = new Date();
 
+    // OST visualização/descarte, BLOCO 4 — §A.6. A observação gravada era
+    // `ASO anexado: {nome do arquivo} ({bytes})`, e era a ÚNICA porta por onde nome de arquivo
+    // entrava em `documentos_admissao`. Nome de arquivo escolhido por quem envia carrega PII na
+    // prática (já se viu CPF em nome de arquivo), então o nome SAI e o tamanho FICA: o tamanho é o
+    // que serve para conferir que o upload subiu inteiro, e não identifica ninguém.
+    //
+    // O nome no DRIVE não muda (`{Nome do Tipo}_{nome do candidato}`): lá o nome da pessoa entra de
+    // propósito, é o prontuário dela (§A.6, exceção deliberada já registrada).
+    const observacaoAso = `ASO anexado (${tamanho} bytes)`;
+
     await this.db
       .insert(documentosAdmissao)
       .values({
         admissaoId,
         tipoDocumentoId: aso.id,
         estado: "ENTREGUE",
-        observacao: `ASO anexado: ${nome} (${tamanho} bytes)`,
+        observacao: observacaoAso,
       })
       .onConflictDoUpdate({
         target: [documentosAdmissao.admissaoId, documentosAdmissao.tipoDocumentoId],
         set: {
           estado: "ENTREGUE",
-          observacao: `ASO anexado: ${nome} (${tamanho} bytes)`,
+          observacao: observacaoAso,
           atualizadoEm: registradoEm,
         },
       });

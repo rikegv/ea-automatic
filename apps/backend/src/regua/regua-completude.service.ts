@@ -125,6 +125,70 @@ export class ReguaCompletudeService {
    * só marcar presença. Todos os ids consultados vêm no mapa (0 quando a régua está completa ou não
    * há obrigatório pendente). Sem PII (§A.6).
    */
+  /**
+   * PROGRESSO da régua obrigatória por admissão (OST B1 / Bloco 6): quantos obrigatórios já estão
+   * ENTREGUE e quantos são no total. É o que a coluna Status da aba Auditoria exibe como "9/10",
+   * para o trabalho da IA parar de ser invisível: hoje toda admissão mostra "Análise pendente",
+   * tenha faltando um documento ou dez.
+   *
+   * Mesma query do contador de pendentes (mesma régua, mesmo recorte de Reservista), contando os
+   * dois lados em vez de só o que falta. Sem PII (§A.6).
+   */
+  async progressoObrigatoriosMap(
+    admissaoIds: string[],
+  ): Promise<Map<string, { entregues: number; total: number; inconformes: number; recebidos: number }>> {
+    const map = new Map<
+      string,
+      { entregues: number; total: number; inconformes: number; recebidos: number }
+    >();
+    if (admissaoIds.length === 0) return map;
+    for (const id of admissaoIds) map.set(id, { entregues: 0, total: 0, inconformes: 0, recebidos: 0 });
+    const linhas = await this.db
+      .select({ admissaoId: admissoes.id, estado: documentosAdmissao.estado })
+      .from(admissoes)
+      .innerJoin(candidatos, eq(candidatos.cpf, admissoes.candidatoCpf))
+      .innerJoin(
+        reguaDocumental,
+        and(
+          eq(reguaDocumental.codCliente, admissoes.codCliente),
+          eq(reguaDocumental.cargoId, admissoes.cargoId),
+          eq(reguaDocumental.exigencia, "OBRIGATORIO"),
+        ),
+      )
+      .innerJoin(tiposDocumento, eq(tiposDocumento.id, reguaDocumental.tipoDocumentoId))
+      .leftJoin(
+        documentosAdmissao,
+        and(
+          eq(documentosAdmissao.admissaoId, admissoes.id),
+          eq(documentosAdmissao.tipoDocumentoId, reguaDocumental.tipoDocumentoId),
+        ),
+      )
+      .where(and(inArray(admissoes.id, admissaoIds), naoExigeReservista));
+    for (const l of linhas) {
+      const atual = map.get(l.admissaoId) ?? {
+        entregues: 0,
+        total: 0,
+        inconformes: 0,
+        recebidos: 0,
+      };
+      atual.total += 1;
+      if (l.estado === "ENTREGUE") atual.entregues += 1;
+      // RECEBIDO é diferente de APROVADO: o documento chegou, mesmo que tenha sido reprovado ou que
+      // a IA ainda não o tenha julgado. É o que separa "o candidato não mandou nada" de "mandou e
+      // estamos trabalhando". Sem isto, um documento aguardando auditoria faria a admissão parecer
+      // que não recebeu nada, e a entrega já aconteceu.
+      if (l.estado === "ENTREGUE" || l.estado === "INCONFORME" || l.estado === "AGUARDANDO_AUDITORIA") {
+        atual.recebidos += 1;
+      }
+      // REPROVADO conta separado do não recebido: os dois "faltam", mas exigem ações OPOSTAS. Não
+      // recebido é aguardar/cobrar o candidato; INCONFORME é o time entrar e atuar (reauditar,
+      // validar por humano, pedir reenvio). Sem este número, a lista não distingue os dois.
+      if (l.estado === "INCONFORME") atual.inconformes += 1;
+      map.set(l.admissaoId, atual);
+    }
+    return map;
+  }
+
   async obrigatoriosPendentesCountMap(admissaoIds: string[]): Promise<Map<string, number>> {
     const map = new Map<string, number>();
     if (admissaoIds.length === 0) return map;

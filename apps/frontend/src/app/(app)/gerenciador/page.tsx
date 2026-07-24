@@ -18,6 +18,7 @@ import { AdmissaoDetalheModal } from "@/components/esteira/AdmissaoDetalheModal"
 import { EditAdmissaoModal } from "@/components/gerenciador/EditAdmissaoModal";
 import { PendenciasModal } from "@/components/gerenciador/PendenciasModal";
 import { farolPill, FAROL_SELECT_OPTIONS } from "@/lib/farol";
+import { caixaAlta } from "@/lib/nome";
 
 interface AdmRow {
   admissaoId: string;
@@ -62,15 +63,38 @@ interface CargoLite {
   nome: string;
 }
 
+// OST B2 / Bloco 1: RÓTULO UNIFICADO, igual à Esteira. Os três valores que significam "falta
+// informação obrigatória" (PARCIAL, PENDENTE e INCONFORMIDADE) leem **Parcial**, no mesmo tom. Antes
+// a mesma admissão podia ler "Inconformidade" aqui e "Parcial" na Esteira, sugerindo gravidades
+// diferentes para o mesmo estado de fundo. "Completo" e "Competências" seguem: são estados distintos,
+// não graus do mesmo. O ENUM do domínio NÃO muda; isto é rótulo de tela.
 const SINAL: Record<string, { tone: PillTone; label: string }> = {
   OK: { tone: "ok", label: "Completo" },
   PARCIAL: { tone: "wn", label: "Parcial" },
-  PENDENTE: { tone: "wn", label: "Pendente" },
-  INCONFORMIDADE: { tone: "dg", label: "Inconformidade" },
+  PENDENTE: { tone: "wn", label: "Parcial" },
+  INCONFORMIDADE: { tone: "wn", label: "Parcial" },
   COMPETENCIAS: { tone: "nt", label: "Competências" },
 };
-// Opções multi-select (Bloco B): sem a opção "Todos" (vazio = sem filtro).
-const SINAL_OPTS = Object.entries(SINAL).map(([value, v]) => ({ value, label: v.label }));
+
+/**
+ * OST B2 / Bloco 1 — o filtro AGRUPA os três valores numa opção só. Derivar as opções do mapa acima
+ * (o que era feito antes) passaria a gerar TRÊS entradas "Parcial" no dropdown, todas iguais e com
+ * efeitos diferentes. Aqui a opção exibida é uma, e na hora de consultar ela se expande nos valores
+ * reais do enum, que é o que o backend filtra (`inArray` sobre `sinalizador_preenchimento`).
+ */
+const GRUPO_SINAL: Record<string, string[]> = {
+  OK: ["OK"],
+  PARCIAL: ["PARCIAL", "PENDENTE", "INCONFORMIDADE"],
+  COMPETENCIAS: ["COMPETENCIAS"],
+};
+const SINAL_OPTS = Object.keys(GRUPO_SINAL).map((value) => ({
+  value,
+  label: SINAL[value].label,
+}));
+/** Expande as opções escolhidas nos valores de enum que o backend entende. */
+function valoresDoFiltroSinal(escolhidos: string[]): string[] {
+  return [...new Set(escolhidos.flatMap((v) => GRUPO_SINAL[v] ?? [v]))];
+}
 
 function fmtDataAdmissao(d?: string | null): string {
   if (!d) return "não informado";
@@ -160,7 +184,8 @@ export default function GerenciadorPage() {
     if (cargoIds.length) qs.set("cargoId", cargoIds.join(","));
     if (tipoContratos.length) qs.set("tipoContrato", tipoContratos.join(","));
     if (farol.length) qs.set("farol", farol.join(","));
-    if (sinalizadores.length) qs.set("sinalizador", sinalizadores.join(","));
+    if (sinalizadores.length)
+      qs.set("sinalizador", valoresDoFiltroSinal(sinalizadores).join(","));
     if (concluido) qs.set("concluido", "true");
     if (comPendencias) qs.set("comPendencias", "true");
     if (emAndamento) qs.set("emAndamento", "true");
@@ -276,7 +301,7 @@ export default function GerenciadorPage() {
     setActionError(null);
     try {
       await apiFetch(`/admissoes/${delRow.admissaoId}`, { method: "DELETE", token });
-      setFlash(`Admissão de ${delRow.candidatoNome} excluída.`);
+      setFlash(`Admissão de ${caixaAlta(delRow.candidatoNome)} excluída.`);
       setDelRow(null);
       if (data && data.items.length === 1 && page > 1) setPage((p) => p - 1);
       else await load();
@@ -533,8 +558,9 @@ export default function GerenciadorPage() {
                         coluna segue centralizado). Ajuste 2: title = tooltip com o texto completo. */}
                       <div className="min-w-0 text-left">
                         {/* SÓ o nome (§A.12). A origem Pandapé fica no detalhe (lápis), não na coluna. */}
-                        <div className="nm truncate" title={r.candidatoNome}>
-                          {r.candidatoNome}
+                        {/* Bloco 1 da OST: caixa alta de EXIBIÇÃO, aqui e no `title` do hover. */}
+                        <div className="nm truncate" title={caixaAlta(r.candidatoNome)}>
+                          {caixaAlta(r.candidatoNome)}
                         </div>
                       </div>
                       {/* Cliente: só o nome da operação (§A.12); o código vai no modal do olho. */}
@@ -713,7 +739,7 @@ export default function GerenciadorPage() {
         title="Excluir admissão"
         message={
           delRow
-            ? `Excluir a admissão de ${delRow.candidatoNome}? Remove também documentos, frentes e não conformidades vinculadas. Esta ação não pode ser desfeita.`
+            ? `Excluir a admissão de ${caixaAlta(delRow.candidatoNome)}? Remove também documentos, frentes e não conformidades vinculadas. Esta ação não pode ser desfeita.`
             : ""
         }
         confirmLabel="Excluir"

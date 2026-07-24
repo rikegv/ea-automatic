@@ -9,6 +9,7 @@ import { Select } from "@/components/ui/Select";
 import { Icon } from "@/components/ui/Icon";
 import { Pill } from "@/components/ui/Pill";
 import { cn } from "@/lib/cn";
+import { caixaAlta } from "@/lib/nome";
 
 // Fornecedor do exame, seleção FIXA (espelha FORNECEDORES_EXAME do backend).
 type Fornecedor = "MEDICAL" | "LIMER";
@@ -159,7 +160,8 @@ export function AgendamentoExameModal({
         </span>
         <div className="min-w-0">
           <h3 className="text-[17px] font-extrabold">Agendamento do exame</h3>
-          <p className="psub !mb-0 mt-1 truncate">{candidatoNome}</p>
+          {/* Bloco 1 da OST: caixa alta de exibição; a prop segue com o nome original. */}
+          <p className="psub !mb-0 mt-1 truncate">{caixaAlta(candidatoNome)}</p>
         </div>
         {temAgendamento && (atual?.reagendamentos ?? 0) > 0 && (
           <Pill tone="or" className="ml-auto flex-none">

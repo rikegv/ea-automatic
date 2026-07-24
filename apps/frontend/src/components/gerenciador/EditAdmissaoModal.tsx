@@ -14,6 +14,7 @@ import { MultiSelect } from "@/components/ui/MultiSelect";
 import { Bloco } from "@/components/ui/Bloco";
 import { cn } from "@/lib/cn";
 import { FAROL_SELECT_OPTIONS } from "@/lib/farol";
+import { caixaAlta } from "@/lib/nome";
 import {
   fmtValorBeneficio,
   foraDoPadraoPacote,
@@ -397,7 +398,7 @@ export function EditAdmissaoModal({
           candidato: { nome, email, telefone, dataNascimento: dataNascimento || undefined },
         },
       });
-      onSaved(`Admissão de ${candidatoNome} atualizada.`);
+      onSaved(`Admissão de ${caixaAlta(candidatoNome)} atualizada.`);
     } catch (e) {
       setErro(e instanceof ApiError ? e.message : "Falha ao salvar.");
     } finally {
@@ -434,7 +435,7 @@ export function EditAdmissaoModal({
         <div className="min-w-0">
           <div className="eyebrow !mb-1">Editar admissão</div>
           <div className="flex min-w-0 items-center gap-2">
-            <h3 className="truncate text-[18px] font-extrabold">{candidatoNome}</h3>
+            <h3 className="truncate text-[18px] font-extrabold">{caixaAlta(candidatoNome)}</h3>
             {data && <OrigemBadge origem={data.origem} className="flex-none" />}
           </div>
           <p className="psub !mb-0 mt-1">CPF, cliente e cargo não são editáveis (identidade).</p>
@@ -476,6 +477,10 @@ export function EditAdmissaoModal({
                 </Campo>
                 {mostra("nome") && (
                   <Campo rotulo="Nome">
+                    {/* Bloco 1 da OST: este input é o ÚNICO lugar da tela onde o nome NÃO sobe para
+                        caixa alta, de propósito. É campo EDITÁVEL: exibir em caixa alta aqui faria
+                        o consultor salvar o nome em caixa alta no banco, e a OST é explícita em não
+                        alterar o dado. O cabeçalho do mesmo modal (leitura) sobe normalmente. */}
                     <input
                       className="ds-input"
                       value={nome}

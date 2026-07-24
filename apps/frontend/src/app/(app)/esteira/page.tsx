@@ -22,6 +22,8 @@ import { MultiSelect } from "@/components/ui/MultiSelect";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AdmissaoDetalheModal } from "@/components/esteira/AdmissaoDetalheModal";
 import { clicksignPill } from "@/lib/clicksign";
+import { caixaAlta } from "@/lib/nome";
+import { rotuloDaAuditoria, type ProgressoObrigatorios } from "@/lib/rotulo-auditoria";
 import {
   AceiteLiberacaoModal,
   type AceiteLiberacao,
@@ -79,6 +81,9 @@ interface EsteiraItem {
   temPendencias?: boolean;
   // Item 8: quantos documentos OBRIGATÓRIOS da régua o candidato ainda deve (aba Auditoria).
   docsPendentes?: number;
+  // OST B1 / Bloco 6: progresso da régua obrigatória (aba Auditoria). É o que faz o trabalho da IA
+  // aparecer: sem isto toda admissão exibia "Análise pendente", faltando um documento ou dez.
+  progressoObrigatorios?: ProgressoObrigatorios;
   // Preenchido quando a régua fecha e o prontuário é arquivado no Drive (T4 / Fase 4).
   drivePastaUrl?: string | null;
   driveAsoUrl?: string | null;
@@ -111,11 +116,18 @@ const STATUS_DANGER = new Set(["DECLINOU", "CANCELADO"]);
 
 // Coluna Pendências Obrig. (§A.12), mesma leitura do Gerenciador: tom + rótulo pelo sinalizador de
 // preenchimento (F5). O ícone é dinâmico (check verde / exclamação amarela / X vermelho) na badge.
+// OST B1 / Bloco 5: RÓTULO UNIFICADO. Antes esta coluna dizia "Inconformidade" (vermelho) para uma
+// admissão e "Parcial" (amarelo) para outra, sendo que AS DUAS estão no mesmo estado de fundo: falta
+// informação obrigatória. O rótulo diferente fazia parecer que uma estava pior que a outra. Agora
+// tudo que é "falta preencher" lê **Parcial**, no mesmo tom. "Completo" (nada falta) e "Competências"
+// seguem, porque são estados distintos, não graus do mesmo. O termo "Inconformidade" SAI daqui; ele
+// continua existindo como valor do sinalizador no domínio e na ficha da admissão, onde significa
+// "há documento INCONFORME" e não "faltam campos".
 const SINAL: Record<string, { tone: PillTone; label: string }> = {
   OK: { tone: "ok", label: "Completo" },
   PARCIAL: { tone: "wn", label: "Parcial" },
-  PENDENTE: { tone: "wn", label: "Pendências Obrig." },
-  INCONFORMIDADE: { tone: "dg", label: "Inconformidade" },
+  PENDENTE: { tone: "wn", label: "Parcial" },
+  INCONFORMIDADE: { tone: "wn", label: "Parcial" },
   COMPETENCIAS: { tone: "nt", label: "Competências" },
 };
 
@@ -423,7 +435,7 @@ export default function EsteiraPage() {
         token,
         body: { motivoDeclinioId: motivoDeclinioSel },
       });
-      const nome = declinioItem.candidatoNome;
+      const nome = caixaAlta(declinioItem.candidatoNome);
       setDeclinioItem(null);
       setMotivoDeclinioSel("");
       setFlash({ msg: `Admissão de ${nome} declinada.`, tone: "ok" });
@@ -592,7 +604,9 @@ export default function EsteiraPage() {
   // espremida. Assim a folga das telas largas vai para o SELETOR de status do fim, não para um vazio
   // no meio; nada fica esmagado nem cortado, e o container rola na horizontal se faltar espaço (§A.12).
   const COL = {
-    cand: "minmax(190px,1.1fr)",
+    // "Nome" (antes "Candidato"): o piso cai porque o cabeçalho encolheu; o conteúdo continua
+    // mandando pelo `fr`, então nome longo segue com o mesmo espaço em tela larga.
+    cand: "minmax(170px,1.1fr)",
     cli: "minmax(170px,1fr)",
     cargo: "minmax(180px,1fr)",
     // Cabe o rótulo mais longo do campo ("Temporário") e o vazio ("não informado", §A.11).
@@ -600,7 +614,10 @@ export default function EsteiraPage() {
     // e nesta largura o título "TIPO DE CONTRATO" começava a cortar (precisava 123px, tinha 117).
     // "PENDÊNCIAS OBRIG." estava no limite exato, sem folga nenhuma. Ambas ganharam margem, medida
     // no browser, não estimada.
-    contrato: "148px",
+    // "Contrato" (antes "Tipo de contrato"): o cabeçalho encolheu, então a largura passa a ser
+    // ditada pelo CONTEÚDO mais longo ("Temporário") mais a seta de ordenação (~13px), não mais pelo
+    // título. Medido no browser: 112px cobre o conteúdo com folga; eram 148px.
+    contrato: "112px",
     data: "110px",
     status: "210px",
     pend: "168px",
@@ -998,11 +1015,14 @@ export default function EsteiraPage() {
                 )}
                 {/* Colunas ordenáveis (OST visual, fase 3). Avanço e Ações ficam de fora: são
                     controles, não dado comparável. */}
+                {/* OST do espaço horizontal: "Tipo de contrato" virou "Contrato" e "Candidato"
+                    virou "Nome". Rótulos mais curtos liberam largura de cabeçalho, que é o que
+                    empurrava as últimas colunas para fora da área visível. */}
                 <ColunaOrdenavel ord={ord} chave="contrato">
-                  Tipo de contrato
+                  Contrato
                 </ColunaOrdenavel>
                 <ColunaOrdenavel ord={ord} chave="candidato">
-                  Candidato
+                  Nome
                 </ColunaOrdenavel>
                 <ColunaOrdenavel ord={ord} chave="cliente">
                   Cliente
@@ -1046,9 +1066,25 @@ export default function EsteiraPage() {
                   // a cadastrar ainda. Mostra "Aguardando" e o motivo no title. O status no banco
                   // NÃO muda: isto é leitura de tela.
                   const tone = pausado ? "nt" : statusTone(item.status, catMap.get(item.status));
+                  // RÓTULO REAL DA AUDITORIA (OST do status real). "Análise pendente" era ESTÁTICO:
+                  // quem não recebeu nada e quem recebeu quase tudo liam o mesmo texto. O rótulo passa
+                  // a sair do PROGRESSO, pela mesma fonte que alimenta as tags (nunca divergem).
+                  //
+                  // Só substitui o ANALISE_PENDENTE, de propósito. `AGUARDA_REENVIO` e `DECLINOU` são
+                  // estados postos por DECISÃO (humana ou de fluxo) e não podem ser mascarados por um
+                  // cálculo. `ANALISE_OK` também não é tratado aqui: o rótulo dele virou "Análise
+                  // finalizada" no CATÁLOGO (`frente_status_catalogo`, dado de seed), lido por TODAS
+                  // as superfícies, então o mapeamento fixo que existia neste ponto virou redundante
+                  // e saiu. Uma fonte só, e o seletor da própria linha deixa de divergir da coluna.
+                  // O ENUM e a máquina de estados seguem intocados: isto é tela.
+                  const progAud = isAuditoria ? item.progressoObrigatorios : undefined;
+                  const rotuloDerivado =
+                    progAud && progAud.total > 0 && item.status === "ANALISE_PENDENTE"
+                      ? rotuloDaAuditoria(progAud)
+                      : null;
                   const rotulo = pausado
                     ? "Aguardando"
-                    : (catMap.get(item.status)?.rotulo ?? item.status);
+                    : (rotuloDerivado ?? catMap.get(item.status)?.rotulo ?? item.status);
                   // Coluna Pendências Obrig. (§A.12): tom/rótulo pelo sinalizador de preenchimento (F5),
                   // mesma leitura do Gerenciador. O X de frente recusada vive na coluna Status (StatusPill).
                   const sinalP = SINAL[item.sinalizador] ?? {
@@ -1091,8 +1127,11 @@ export default function EsteiraPage() {
                             inline o text-overflow não se aplica. Resultado: nome comprido vazava
                             por cima da coluna Cliente. `block` faz o corte com reticências valer;
                             o title já dava o nome completo no hover. */}
-                        <div className="nm truncate" title={item.candidatoNome}>
-                          {item.candidatoNome}
+                        {/* Bloco 1 da OST: nome sempre em CAIXA ALTA na tela (exibição, o banco
+                            segue com o valor original). O `title` acompanha, senão o hover
+                            mostraria uma grafia diferente da célula. */}
+                        <div className="nm truncate" title={caixaAlta(item.candidatoNome)}>
+                          {caixaAlta(item.candidatoNome)}
                         </div>
                       </div>
                       {/* Cliente: só o nome da operação (§A.12); o código vai no modal do olho. */}
@@ -1110,6 +1149,39 @@ export default function EsteiraPage() {
                       <div className="meta text-center">{fmtDataAdmissao(item.dataAdmissao)}</div>
                       <div className="flex min-w-0 flex-col items-center gap-1">
                         <StatusPill tone={tone} label={rotulo} />
+                        {/* OST B1 / Bloco 6: contador de progresso da régua OBRIGATÓRIA (é o que
+                            trava o fluxo). Formato "9/10 aprovados": cabe na coluna sem competir com
+                            a pill, e diz de imediato quanto falta. Verde quando fecha. */}
+                        {/* Contador em TAGS COLORIDAS, mesma linguagem visual da pill de status:
+                            verde para aprovado, vermelho para reprovado. Substitui o "4/6" cinza, que
+                            não distinguia o que já passou do que precisa de ação. */}
+                        {isAuditoria && (progAud?.total ?? 0) > 0 && (
+                          <Pill
+                            tone="ok"
+                            title={`${progAud!.entregues} de ${progAud!.total} documentos obrigatórios aprovados na auditoria`}
+                          >
+                            <span className="tabular-nums">{progAud!.entregues} aprovados</span>
+                          </Pill>
+                        )}
+                        {/* REPROVADOS: aparece SÓ quando existe, e em vermelho, porque é chamada
+                            para AÇÃO do time (reauditar, validar por humano, pedir reenvio), não um
+                            estado neutro de espera. Documento não recebido e documento reprovado
+                            caem os dois no "que falta" do contador acima, mas pedem coisas opostas:
+                            um é cobrar o candidato, o outro é o time entrar. Linha própria em vez de
+                            emendar no mesmo texto: a coluna tem 210px e "4/6 aprovados, 2
+                            reprovados" não cabe sem apertar. Zero reprovados não desenha nada, para
+                            a varredura da lista continuar limpa. */}
+                        {isAuditoria && (progAud?.inconformes ?? 0) > 0 && (
+                          <Pill
+                            tone="dg"
+                            title={`${progAud!.inconformes} documento(s) obrigatório(s) REPROVADO(s) na auditoria: precisa de ação do time (reauditar, validar por humano ou pedir reenvio)`}
+                          >
+                            <Icon name="alert" className="h-3 w-3 flex-none" />
+                            <span className="tabular-nums">
+                              {progAud!.inconformes} reprovado{progAud!.inconformes === 1 ? "" : "s"}
+                            </span>
+                          </Pill>
+                        )}
                         {/* Sub-status de reagendamento + indicador discreto de exame agendado (EXAME) */}
                         {isExame && (item.reagendamentos ?? 0) > 0 && (
                           <Pill tone="or" title="Exame reagendado">
@@ -1286,7 +1358,13 @@ export default function EsteiraPage() {
 
                       {/* Coluna AÇÕES: prontuário no Drive (se houver) + olho + editar. */}
                       <div className="col-fix flex items-center justify-center gap-0.5">
-                        {isAuditoria && (item.drivePastaUrl || item.driveAsoUrl) && (
+                        {/* OST do Drive / Bloco 1: o acesso ao prontuário sai de TODAS as abas,
+                            não só da Auditoria. O botão existia apenas aqui e a admissão some desta
+                            fila justamente quando a pasta nasce (a régua fecha, a frente conclui e a
+                            linha sai da aba), então o link só aparecia onde a admissão já não
+                            estava. Nas abas de Exame e Cadastro a admissão continua viva e é lá que
+                            o consultor precisa alcançar o prontuário. */}
+                        {(item.drivePastaUrl || item.driveAsoUrl) && (
                           <a
                             href={item.drivePastaUrl || item.driveAsoUrl || undefined}
                             target="_blank"
@@ -1471,7 +1549,9 @@ export default function EsteiraPage() {
         >
           <div className="mb-4">
             <div className="eyebrow !mb-1">Declinar admissão</div>
-            <h3 className="truncate text-[18px] font-extrabold">{declinioItem.candidatoNome}</h3>
+            <h3 className="truncate text-[18px] font-extrabold">
+              {caixaAlta(declinioItem.candidatoNome)}
+            </h3>
             <p className="psub !mb-0 mt-1">
               O declínio encerra a admissão inteira nas três frentes (Auditoria, Exame e Cadastro) e a
               tira das filas. Escolha o motivo para confirmar.

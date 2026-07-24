@@ -6,6 +6,7 @@ import { useAuth } from "@/lib/auth-context";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { Icon } from "@/components/ui/Icon";
+import { caixaAlta } from "@/lib/nome";
 
 // Rótulo de pendência → chave de campo editável (S2). Cliente/Cargo não são editáveis.
 const CAMPO_KEY: Record<string, string> = {
@@ -55,7 +56,8 @@ export function PendenciasModal({
         </span>
         <div className="min-w-0">
           <h3 className="text-[17px] font-extrabold">Pendências obrigatórias</h3>
-          <p className="psub !mb-0 mt-1 truncate">{candidatoNome}</p>
+          {/* Bloco 1 da OST: caixa alta de exibição; a prop segue com o nome original. */}
+          <p className="psub !mb-0 mt-1 truncate">{caixaAlta(candidatoNome)}</p>
         </div>
       </div>
 
