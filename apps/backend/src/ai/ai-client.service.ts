@@ -11,6 +11,11 @@ import {
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import type { ArquivamentoDrive, DriveSubpasta, ResultadoAuditoria } from "@ea/shared-types";
+import {
+  familiaPorStatus,
+  MOTIVO_FALHA_IA,
+  type FamiliaFalhaIa,
+} from "../domain/falha-auditoria";
 
 /** Payload de auditoria de UM documento. `candidato.cpf` vai SÓ para a IA — nunca é logado (§A.6). */
 export interface AuditarDocumentoPayload {
@@ -97,6 +102,65 @@ export interface KitBinario {
 }
 
 /**
+ * FALHA DA AUDITORIA COM FAMÍLIA (OST motivo verdadeiro, Blocos 1 e 2).
+ *
+ * Antes existia UMA exceção especial, a de quota, e todo o resto virava `ServiceUnavailableException`
+ * genérica. Duas consequências ruins: o chamador só sabia reescrever o motivo do caso de quota, e o
+ * 415 (arquivo que não serve) era rotulado "Motor de IA indisponível", afirmação FALSA que mandava o
+ * consultor esperar por um sistema que estava no ar.
+ *
+ * Agora toda falha da auditoria carrega a `familia` (ver `domain/falha-auditoria`), e é a família que
+ * decide as três coisas que importam: o texto exibido, se o documento vira INCONFORME ou fica
+ * coletado, e se pode ser retentado.
+ */
+export class FalhaAuditoriaIaException extends HttpException {
+  constructor(
+    readonly familia: FamiliaFalhaIa,
+    mensagem: string,
+    status: number,
+  ) {
+    super(mensagem, status);
+  }
+}
+
+/**
+ * QUOTA da IA esgotada. Mantida como subclasse por ser o caso com nome próprio no código e nos
+ * testes desde a OST B1; hoje é só a família `QUOTA` da hierarquia acima. O documento não tem nada de
+ * errado, o limite de uso do Vertex é que foi atingido. O ai-service já retentou com backoff antes de
+ * chegar aqui.
+ */
+export class MotorIaSemQuotaException extends FalhaAuditoriaIaException {
+  constructor() {
+    super(
+      "QUOTA",
+      "Limite de uso da IA atingido (quota). O documento segue coletado e será reanalisado.",
+      429,
+    );
+  }
+}
+
+/**
+ * Motivo persistido quando a auditoria parou por quota. Alias do texto da família, para não existirem
+ * dois textos concorrentes dizendo a mesma coisa.
+ */
+export const MOTIVO_QUOTA_IA = MOTIVO_FALHA_IA.QUOTA;
+
+/**
+ * Família de QUALQUER erro que chegue do caminho da auditoria. Ponto único de leitura, para o
+ * chamador nunca precisar de `instanceof` encadeado:
+ *  - exceção já classificada  → usa a família que ela carrega;
+ *  - outra `HttpException`    → classifica pelo status (cobre exceções levantadas fora deste client);
+ *  - qualquer outra coisa     → `DESCONHECIDA`, que tem texto próprio e não retenta.
+ * Nunca devolve `undefined`: falha sem família seria falha sem motivo exibido, que é o defeito que
+ * esta OST veio corrigir.
+ */
+export function familiaDaFalha(err: unknown): FamiliaFalhaIa {
+  if (err instanceof FalhaAuditoriaIaException) return err.familia;
+  if (err instanceof HttpException) return familiaPorStatus(err.getStatus());
+  return "DESCONHECIDA";
+}
+
+/**
  * Wrapper HTTP para o `ai-service` (FastAPI / Vertex AI — INT-3). Usa o `fetch` global do Node 20
  * (sem axios). Autentica com `X-Internal-Token`. NUNCA loga CPF, nome ou payload (§A.6) — só status
  * e rota em caso de erro. Timeout por AbortController (operações de IA podem ser lentas).
@@ -118,6 +182,53 @@ export class AiClientService {
   }
 
   /** Audita um documento contra as regras do tipo. Devolve o veredito (sem PII). */
+  /**
+   * READINESS do Vertex pelo CAMINHO REAL (tela de diagnóstico, Bloco 3): o ai-service faz uma
+   * geração mínima (1 token) e diz se o modelo respondeu. NÃO é o /health (que mente: já respondeu
+   * 200 com a auditoria em 503). Timeout curto: um readiness lento é ele próprio um sinal. Nunca
+   * lança: erro de rede vira `{ok:false}`.
+   */
+  async readinessVertex(): Promise<{ ok: boolean; detalhe: string; erro?: string }> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20_000);
+    try {
+      const res = await fetch(`${this.baseUrl}/readiness`, {
+        method: "GET",
+        headers: { "X-Internal-Token": this.token },
+        signal: controller.signal,
+      });
+      if (!res.ok) return { ok: false, detalhe: `ai-service /readiness HTTP ${res.status}` };
+      return (await res.json()) as { ok: boolean; detalhe: string; erro?: string };
+    } catch (err) {
+      return {
+        ok: false,
+        detalhe: "ai-service inalcançável",
+        erro: err instanceof Error ? err.name : "erro",
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** READINESS do Drive pelo caminho real (about.get com a credencial em uso). Nunca lança. */
+  async readinessDrive(): Promise<{ ok: boolean; detalhe: string; identidade?: string; erro?: string }> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15_000);
+    try {
+      const res = await fetch(`${this.baseUrl}/readiness/drive`, {
+        method: "GET",
+        headers: { "X-Internal-Token": this.token },
+        signal: controller.signal,
+      });
+      if (!res.ok) return { ok: false, detalhe: `ai-service /readiness/drive HTTP ${res.status}` };
+      return (await res.json()) as { ok: boolean; detalhe: string; identidade?: string; erro?: string };
+    } catch (err) {
+      return { ok: false, detalhe: "ai-service inalcançável", erro: err instanceof Error ? err.name : "erro" };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   auditarDocumento(payload: AuditarDocumentoPayload): Promise<ResultadoAuditoria> {
     return this.post<ResultadoAuditoria>("/auditoria/documento", payload);
   }
@@ -305,6 +416,19 @@ export class AiClientService {
     return this.requisitar<T>("POST", path, body);
   }
 
+  /**
+   * Mensagem exibida para uma falha classificada. A FAMÍLIA é sempre a mesma régua, mas o TEXTO
+   * depende de quem chamou: os motivos de `MOTIVO_FALHA_IA` falam de documento auditado e de pedir
+   * reenvio ao candidato, o que só faz sentido na auditoria. Kit, Drive e VT usam o mesmo motor e
+   * ficam com o texto genérico de antes, para não passarem a instruir o consultor a pedir reenvio de
+   * um documento que nem está em jogo ali.
+   */
+  private static mensagemDeFalha(path: string, familia: FamiliaFalhaIa, status: number): string {
+    if (path === "/auditoria/documento") return MOTIVO_FALHA_IA[familia];
+    if (familia === "ENTRADA") return "Documento não pôde ser processado pelo motor de IA.";
+    return `Motor de IA indisponível (HTTP ${status})`;
+  }
+
   private async requisitar<T>(metodo: "GET" | "POST", path: string, body?: unknown): Promise<T> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), AiClientService.TIMEOUT_MS);
@@ -321,27 +445,40 @@ export class AiClientService {
       if (!res.ok) {
         // Só status + rota — nunca o corpo (pode espelhar PII enviada) (§A.6).
         this.logger.error(`ai-service ${path} respondeu HTTP ${res.status}`);
-        // 422 é erro de ENTRADA acionável (ex.: PDF-mãe sem a página do candidato), não
-        // indisponibilidade — propaga como 422 para o front exibir orientação ao consultor. O
-        // corpo do ai-service NÃO é repassado (pode espelhar PII, §A.6); a mensagem é fixa.
-        if (res.status === 422) {
-          throw new UnprocessableEntityException(
-            "Documento não pôde ser processado pelo motor de IA.",
-          );
-        }
-        throw new ServiceUnavailableException(`Motor de IA indisponível (HTTP ${res.status})`);
+        // OST motivo verdadeiro / Bloco 2: TODA falha sai classificada por família, e é a família
+        // que carrega a verdade. O 415 vinha daqui rotulado "Motor de IA indisponível", que é falso:
+        // o motor RESPONDEU, e respondeu que o arquivo é que não serve. O corpo do ai-service segue
+        // sem ser repassado (pode espelhar PII, §A.6); a mensagem vem da tabela fixa da família.
+        const familia = familiaPorStatus(res.status);
+        this.logger.warn(`ai-service ${path}: falha de família ${familia} (HTTP ${res.status})`);
+        if (familia === "QUOTA") throw new MotorIaSemQuotaException();
+        throw new FalhaAuditoriaIaException(
+          familia,
+          AiClientService.mensagemDeFalha(path, familia, res.status),
+          res.status,
+        );
       }
       return (await res.json()) as T;
     } catch (err) {
       if (err instanceof HttpException) throw err;
       if (err instanceof Error && err.name === "AbortError") {
+        // Timeout é INDISPONIBILIDADE: o motor não respondeu a tempo, o documento não tem culpa.
         this.logger.error(`ai-service ${path} excedeu o tempo limite`);
-        throw new GatewayTimeoutException("Motor de IA não respondeu no tempo limite");
+        throw new FalhaAuditoriaIaException(
+          "INDISPONIBILIDADE",
+          MOTIVO_FALHA_IA.INDISPONIBILIDADE,
+          504,
+        );
       }
+      // Rede caiu, DNS, conexão recusada: o motor está fora, mesma família do timeout.
       this.logger.error(
         `Falha ao chamar ai-service ${path}: ${err instanceof Error ? err.message : "erro"}`,
       );
-      throw new ServiceUnavailableException("Motor de IA indisponível");
+      throw new FalhaAuditoriaIaException(
+        "INDISPONIBILIDADE",
+        MOTIVO_FALHA_IA.INDISPONIBILIDADE,
+        503,
+      );
     } finally {
       clearTimeout(timer);
     }
