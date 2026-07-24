@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { ClicksignStatus, Origem } from "@ea/shared-types";
 import { apiFetch, ApiError } from "@/lib/api";
-import { cn } from "@/lib/cn";
 import { useAuth } from "@/lib/auth-context";
 import { Modal } from "@/components/ui/Modal";
 import { Pill, type PillTone } from "@/components/ui/Pill";
@@ -24,13 +23,6 @@ interface FrenteDetalhe {
   dataInicio: string | null;
   dataConclusao: string | null;
 }
-interface DocDetalhe {
-  nome: string;
-  exigencia: "OBRIGATORIO" | "NAO_OBRIGATORIO" | "FACULTATIVO";
-  // AGUARDANDO_AUDITORIA existe desde o desacoplamento coleta/auditoria e chegava aqui rotulado como
-  // "Pendente", escondendo que o documento JÁ CHEGOU e só espera a IA.
-  estado: "PENDENTE" | "ENTREGUE" | "INCONFORME" | "AGUARDANDO_AUDITORIA";
-}
 interface AdmissaoDetalhe {
   admissaoId: string;
   recebidoEm: string | null;
@@ -49,8 +41,8 @@ interface AdmissaoDetalhe {
   temEnvelope: boolean;
   contratoAssinadoDriveUrl: string | null;
   // Observação LIVRE deixada na liberação (Bloco 3). null/vazio = o consultor não escreveu nada.
-  // NÃO é o `observacao` de `documentos_admissao` (motivo do veredito da IA por documento), que
-  // nesta mesma ficha aparece na lista de documentos.
+  // NÃO é o `observacao` de `documentos_admissao` (motivo do veredito da IA por documento), que vive
+  // no modal de Auditar, não nesta ficha.
   observacaoLiberacao: string | null;
   matricula: string | null;
   candidato: {
@@ -75,7 +67,6 @@ interface AdmissaoDetalhe {
     previsaoAso: string | null;
   } | null;
   frentes: FrenteDetalhe[];
-  documentos: DocDetalhe[];
   pendencias: string[];
   passagens: {
     tipo: string;
@@ -148,30 +139,12 @@ const SINAL_ROTULO: Record<string, string> = {
   INCONFORMIDADE: "Inconformidade",
   COMPETENCIAS: "Competências",
 };
-const EXIG_ROTULO: Record<string, string> = {
-  OBRIGATORIO: "Obrigatório",
-  NAO_OBRIGATORIO: "Não obrigatório",
-  FACULTATIVO: "Facultativo",
-};
 const FORNECEDOR_ROTULO: Record<string, string> = { MEDICAL: "Medical", LIMER: "Limer" };
 
 function frenteTone(f: FrenteDetalhe): PillTone {
   if (f.concluida) return "ok";
   if (f.status === "DECLINOU" || f.status === "CANCELADO") return "dg";
   return "wn";
-}
-function docTone(estado: string): PillTone {
-  if (estado === "ENTREGUE") return "ok";
-  if (estado === "INCONFORME") return "dg";
-  if (estado === "AGUARDANDO_AUDITORIA") return "in";
-  return "wn";
-}
-
-/** Rótulo do estado do documento nesta ficha. Cada estado diz uma coisa diferente ao consultor. */
-function docRotulo(estado: string): string {
-  if (estado === "INCONFORME") return "Inconforme";
-  if (estado === "AGUARDANDO_AUDITORIA") return "Aguardando auditoria";
-  return "Não recebido";
 }
 function fmtCpf(cpf: string): string {
   const d = (cpf ?? "").replace(/\D/g, "");
@@ -208,8 +181,9 @@ function Campo({ rotulo, valor }: { rotulo: string; valor: string }) {
 
 /**
  * Modal SOMENTE LEITURA com a ficha da admissão, em BLOCOS (mesmo design do lápis). Não edita nada.
- * BLOCO 1 dados pessoais · 2 trabalho/cadastro · 3 exame · 4 status das frentes · 5 documentos
- * pendentes (só os que faltam). Trilha de passagem e histórico ficam ao fim (auditoria).
+ * BLOCO 1 dados pessoais · 2 trabalho/cadastro · 3 exame · 4 status das frentes. A gestão documental
+ * (lista de documentos, veredito da IA) NÃO fica aqui: vive só no modal de Auditar. Trilha de
+ * passagem e histórico ficam ao fim (auditoria).
  */
 export function AdmissaoDetalheModal({
   admissaoId,
@@ -281,16 +255,6 @@ export function AdmissaoDetalheModal({
     [admissaoId, token, carregar],
   );
 
-  // BLOCO 5: só os documentos que FALTAM (não-entregues). Se vazio, o bloco não aparece.
-  //
-  // POR QUE O CONTADOR EXISTE (OST do modal do olho, Bloco 1). Esta lista sempre foi FILTRADA pelos
-  // não-entregues, mas não dizia quantos JÁ estavam prontos. Numa régua de 30 documentos com 8
-  // concluídos, o consultor via 22 linhas seguidas dizendo "Pendente" e concluía que NADA tinha sido
-  // feito, quando a auditoria já havia rodado. O dado sempre esteve certo (esta ficha e o modal de
-  // Auditar leem o MESMO endpoint); o que faltava era o denominador.
-  const docsPendentes = data?.documentos.filter((d) => d.estado !== "ENTREGUE") ?? [];
-  const docsTotal = data?.documentos.length ?? 0;
-  const docsConcluidos = docsTotal - docsPendentes.length;
   const temAssinatura =
     !!data &&
     (data.temEnvelope ||
@@ -527,33 +491,6 @@ export function AdmissaoDetalheModal({
                 </p>
               )}
             </Bloco>
-
-            {/* BLOCO 5 — Documentos pendentes (só os que faltam; some se não há pendência) */}
-            {docsPendentes.length > 0 && (
-              <Bloco titulo="Documentos pendentes">
-                {/* O denominador: sem ele a lista parecia dizer que nada foi auditado. */}
-                <p className="mb-2 text-[12.5px] text-dim">
-                  <span className={cn("font-semibold", docsConcluidos > 0 && "text-ok")}>
-                    {docsConcluidos} de {docsTotal}
-                  </span>{" "}
-                  documentos já concluídos. Abaixo, só os {docsPendentes.length} que faltam.
-                </p>
-                <div className="space-y-1.5">
-                  {docsPendentes.map((d) => (
-                    <div
-                      key={d.nome}
-                      className="flex items-center justify-between gap-3 rounded-lg bg-[var(--surface-2)] px-3 py-2"
-                    >
-                      <div className="min-w-0">
-                        <div className="truncate text-[13.5px] text-text">{d.nome}</div>
-                        <div className="text-[11.5px] text-faint">{EXIG_ROTULO[d.exigencia]}</div>
-                      </div>
-                      <Pill tone={docTone(d.estado)}>{docRotulo(d.estado)}</Pill>
-                    </div>
-                  ))}
-                </div>
-              </Bloco>
-            )}
 
             {/* Trilha de passagem (S3) — auditoria, preservada. */}
             {data.passagens.length > 0 && (

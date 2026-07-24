@@ -82,8 +82,6 @@ interface AdmissaoEdit {
   exame: ExameInfo | null;
   // BLOCO 4 (só leitura): status das frentes.
   frentes: FrenteInfo[];
-  // BLOCO 5 (só leitura): documentos que faltam.
-  documentosPendentes: { nome: string; exigencia: string; estado: string }[];
 }
 interface TipoDocumento {
   id: string;
@@ -869,25 +867,6 @@ export function EditAdmissaoModal({
                   )}
                 </div>
               )}
-            </Bloco>
-          )}
-
-          {/* BLOCO 5 — Documentos pendentes (só leitura; some se não há pendência). */}
-          {!camposFiltro && data.documentosPendentes.length > 0 && (
-            <Bloco titulo="Documentos pendentes">
-              <div className="space-y-1.5">
-                {data.documentosPendentes.map((d) => (
-                  <div
-                    key={d.nome}
-                    className="flex items-center justify-between gap-3 rounded-lg bg-[var(--surface-2)] px-3 py-2"
-                  >
-                    <div className="min-w-0 truncate text-[13.5px] text-text">{d.nome}</div>
-                    <Pill tone={d.estado === "INCONFORME" ? "dg" : "wn"}>
-                      {d.estado === "INCONFORME" ? "Inconforme" : "Pendente"}
-                    </Pill>
-                  </div>
-                ))}
-              </div>
             </Bloco>
           )}
 

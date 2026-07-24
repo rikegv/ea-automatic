@@ -1091,7 +1091,7 @@ export default function LiberacaoPage() {
                       placeholder="Ex.: 500,00"
                       value={beneficiosValores[nome] ?? ""}
                       onChange={(e) =>
-                        setBeneficiosValores((v) => ({ ...v, [nome]: e.target.value }))
+                        setBeneficiosValores((v) => ({ ...v, [nome]: maskMoedaBR(e.target.value) }))
                       }
                     />
                   </label>
@@ -1325,7 +1325,7 @@ export default function LiberacaoPage() {
                       placeholder="Ex.: 500,00"
                       value={loteBeneficiosValores[nome] ?? ""}
                       onChange={(e) =>
-                        setLoteBeneficiosValores((v) => ({ ...v, [nome]: e.target.value }))
+                        setLoteBeneficiosValores((v) => ({ ...v, [nome]: maskMoedaBR(e.target.value) }))
                       }
                     />
                   </label>

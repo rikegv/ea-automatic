@@ -15,7 +15,7 @@ import {
   MinLength,
   ValidateNested,
 } from "class-validator";
-import { normalizarSalarioParaDto } from "./valor-monetario-br";
+import { normalizarSalarioParaDto, parseValorBR } from "./valor-monetario-br";
 
 /**
  * Mensagens de validação em LINGUAGEM DE GENTE (ajuste do diretor).
@@ -139,11 +139,19 @@ export class BeneficioAlocadoDto {
   @IsUUID(undefined, { message: "Benefício inválido. Selecione um benefício da lista." })
   beneficioId!: string;
 
-  // Aceita "500,00" e "500.00" (o front é pt-BR). Zero é válido.
+  // Aceita o pt-BR que o consultor digita, MESMA tolerância do salário (ponto milhar, vírgula decimal,
+  // "R$", espaço), reusando `parseValorBR`. Antes o transform só removia milhar/vírgula e NÃO tirava
+  // "R$"/espaço, então "R$ 44,00" virava NaN e o campo era mais estrito que o salário no MESMO modal.
+  // Vazio -> undefined (opcional, não bloqueia); inválido -> texto cru, e o `@IsNumber` barra com 400
+  // claro ANTES do banco. Zero é válido. Ver `valor-monetario-br`.
   @IsOptional()
-  @Transform(({ value }) =>
-    typeof value === "string" ? Number(value.replace(/\./g, "").replace(",", ".")) : value,
-  )
+  @Transform(({ value }) => {
+    if (typeof value !== "string") return value;
+    const t = value.trim();
+    if (t === "") return undefined;
+    const n = parseValorBR(t);
+    return n === null ? t : n;
+  })
   @IsNumber(
     { maxDecimalPlaces: 2 },
     { message: "Valor do benefício inválido. Use o formato 500,00." },
