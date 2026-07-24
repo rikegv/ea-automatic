@@ -120,7 +120,7 @@ export function LiberacaoAlertaProvider({ children }: { children: ReactNode }) {
           <div className="mb-4">
             <div className="eyebrow !mb-1">Liberação Admissional</div>
             <h2 className="font-display text-xl font-bold">
-              {count} admissão{count === 1 ? "" : "ões"} aguardando liberação
+              {count} admiss{count === 1 ? "ão" : "ões"} aguardando liberação
             </h2>
             <p className="mt-1 text-[13px] text-dim">
               {count === 1 ? "Há uma pré-admissão" : `Há ${count} pré-admissões`} do Pandapé
