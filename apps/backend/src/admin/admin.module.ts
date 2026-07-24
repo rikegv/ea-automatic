@@ -5,6 +5,8 @@ import { CatalogosController } from "./catalogos/catalogos.controller";
 import { CatalogosService } from "./catalogos/catalogos.service";
 import { ClientesController } from "./clientes/clientes.controller";
 import { ClientesService } from "./clientes/clientes.service";
+import { EscalasController } from "./escalas/escalas.controller";
+import { EscalasService } from "./escalas/escalas.service";
 import { KitRegrasController } from "./kit-regras/kit-regras.controller";
 import { KitRegrasService } from "./kit-regras/kit-regras.service";
 import { KitTiposController } from "./kit-regras/kit-tipos.controller";
@@ -25,6 +27,7 @@ import { TiposDocumentoService } from "./tipos-documento/tipos-documento.service
     ClientesController,
     CargosController,
     MotivosDeclinioController,
+    EscalasController,
     TarifasController,
     ReguaController,
     TiposDocumentoController,
@@ -37,6 +40,7 @@ import { TiposDocumentoService } from "./tipos-documento/tipos-documento.service
     ClientesService,
     CargosService,
     MotivosDeclinioService,
+    EscalasService,
     TarifasService,
     ReguaService,
     TiposDocumentoService,
