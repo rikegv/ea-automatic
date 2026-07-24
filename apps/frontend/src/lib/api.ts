@@ -116,6 +116,21 @@ function ehRotaDeSessao(path: string): boolean {
 }
 
 /**
+ * Fluxo PÚBLICO com sessão PRÓPRIA (não a do EA). O candidato do VT se identifica por CPF + data de
+ * nascimento e recebe um token curto próprio (`typ: "vt"`), SEM cookie de refresh do EA. Um 401 aqui
+ * é erro da própria identificação/sessão do VT (ex.: "Dados não encontrados"), NÃO sessão do EA
+ * expirada: tentar renovar e, ao falhar, redirecionar mandaria o candidato para o login do EA, que
+ * ele nem tem. Então o 401 tem de apenas virar `ApiError` e a própria tela do VT mostrar a mensagem.
+ *
+ * O `/kit` NÃO entra aqui de propósito: é rota AUTENTICADA do EA (o consultor logado gera o kit),
+ * cujo 401 é sessão do EA de verdade e a renovação é o comportamento certo; o token de download do
+ * kit falha com 404, não 401, então nunca cai neste ciclo.
+ */
+function ehFluxoPublicoComSessaoPropria(path: string): boolean {
+  return path.startsWith("/vt/");
+}
+
+/**
  * Executa a requisição autenticada e, em 401, RENOVA e REENVIA UMA única vez com o mesmo corpo.
  *
  * POR QUE REENVIAR É SEGURO, inclusive em POST/PATCH/PUT/DELETE: o 401 nasce no `JwtAuthGuard`,
@@ -132,7 +147,7 @@ async function fetchComRenovacao(
 ): Promise<Response> {
   const primeiro = tokenExplicito ?? tokenDaSessao;
   const res = await fetch(`${BASE}${path}`, montarInit(primeiro));
-  if (res.status !== 401 || ehRotaDeSessao(path)) return res;
+  if (res.status !== 401 || ehRotaDeSessao(path) || ehFluxoPublicoComSessaoPropria(path)) return res;
 
   const novo = await renovarSessao();
   if (!novo) {
