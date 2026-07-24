@@ -15,6 +15,9 @@
   --bg2: #e6edf4;
   --surface: rgba(255, 255, 255, 0.74);
   --surface-2: rgba(255, 255, 255, 0.93);
+  /* Fundo OPACO do cabeçalho congelado de tabela (§A.12): o `--surface-2` translúcido deixava as
+     linhas vazarem por baixo ao rolar. Este token é sólido (sem alpha), tema-aware. */
+  --table-head-bg: #f6f9fc;
   --border: rgba(15, 55, 90, 0.1);
   --border-strong: rgba(15, 55, 90, 0.18);
   --text: #0d2b45;
@@ -61,6 +64,9 @@
   --bg2: #0a1a30;
   --surface: rgba(255, 255, 255, 0.05);
   --surface-2: rgba(255, 255, 255, 0.08);
+  /* Opaco no escuro: o `--surface-2` a 8% deixava as linhas legíveis por baixo do cabeçalho ao
+     rolar. Cor sólida, um leve lift sobre o `--bg` para o cabeçalho ler como barra. */
+  --table-head-bg: #1a2331;
   --border: rgba(255, 255, 255, 0.1);
   --border-strong: rgba(255, 255, 255, 0.16);
   --text: #eaf0f7;
@@ -177,27 +183,6 @@
     bottom: -170px;
   }
 
-  /* ---- marca ---- */
-  .brand-mark {
-    width: 38px;
-    height: 38px;
-    border-radius: 11px;
-    background: linear-gradient(135deg, var(--accent-vivid), var(--accent-2));
-    display: grid;
-    place-items: center;
-    color: #06210a;
-    font-family: var(--font-manrope), "Manrope", sans-serif;
-    font-weight: 800;
-    font-size: 18px;
-  }
-  .brand-name {
-    font-family: var(--font-manrope), "Manrope", sans-serif;
-    font-weight: 800;
-    font-size: 19px;
-  }
-  .brand-name span {
-    color: var(--accent);
-  }
 
   /* Fundo NÉVOA do logo da sidebar (OST logo sidebar): halo cinza difuso e esfumaçado atrás do
      logo branco, para dar contraste SEM placa sólida nem borda dura. Concentração mais escura no
@@ -205,21 +190,21 @@
      contrasta). Ver LogoEA.tsx. */
   .logo-ea-mist {
     background: radial-gradient(
-      56% 54% at 50% 54%,
-      rgba(58, 66, 80, 0.62) 0%,
-      rgba(96, 106, 122, 0.34) 36%,
-      rgba(150, 160, 178, 0.12) 60%,
-      transparent 78%
+      64% 62% at 50% 54%,
+      rgba(30, 38, 52, 0.85) 0%,
+      rgba(68, 78, 96, 0.54) 32%,
+      rgba(128, 140, 160, 0.24) 58%,
+      transparent 84%
     );
-    filter: blur(3.5px);
+    filter: blur(6px);
     border-radius: 50%;
   }
   :root[data-theme="dark"] .logo-ea-mist {
     background: radial-gradient(
-      58% 56% at 50% 55%,
-      rgba(255, 255, 255, 0.1) 0%,
-      rgba(255, 255, 255, 0.038) 45%,
-      transparent 72%
+      66% 64% at 50% 55%,
+      rgba(255, 255, 255, 0.24) 0%,
+      rgba(255, 255, 255, 0.1) 44%,
+      transparent 80%
     );
   }
 
@@ -874,7 +859,7 @@
     position: sticky;
     top: 0;
     z-index: 4;
-    background: color-mix(in srgb, var(--surface-2) 94%, var(--bg));
+    background: var(--table-head-bg);
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
     /* Hairline inferior separando o cabeçalho das linhas que passam por baixo. */
@@ -940,7 +925,7 @@
     position: sticky;
     top: 0;
     z-index: 4;
-    background: color-mix(in srgb, var(--surface-2) 94%, var(--bg));
+    background: var(--table-head-bg);
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
     box-shadow: 0 1px 0 0 var(--border);

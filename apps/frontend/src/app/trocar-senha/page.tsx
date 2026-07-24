@@ -6,7 +6,6 @@ import { useAuth } from "@/lib/auth-context";
 import { ApiError } from "@/lib/api";
 import { Aurora } from "@/components/ui/Aurora";
 import { GlassCard } from "@/components/ui/GlassCard";
-import { Brand } from "@/components/ui/Brand";
 import { Button } from "@/components/ui/Button";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
 
@@ -65,7 +64,13 @@ export default function TrocarSenhaPage() {
       </div>
       <main className="relative z-[1] flex min-h-screen items-center justify-center p-6">
         <GlassCard as="form" onSubmit={onSubmit} className="w-full max-w-[400px] p-[40px_36px]">
-          <Brand className="mb-2" />
+          {/* Logo oficial (mesmo /logo-ea.png do login e da sidebar). Sombra esfumaçada por
+              drop-shadow, no espírito do login. */}
+          <img
+            src="/logo-ea.png"
+            alt="EA Automatic"
+            className="mx-auto mb-2 h-20 w-auto object-contain [filter:drop-shadow(0_0_24px_rgba(34,176,219,0.42))_drop-shadow(0_10px_20px_rgba(0,0,0,0.45))]"
+          />
           <p className="mb-[26px] mt-[18px] text-sm text-dim">
             Sua senha atual é temporária. Defina uma nova senha para continuar.
           </p>
