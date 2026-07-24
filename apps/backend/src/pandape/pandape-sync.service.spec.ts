@@ -33,11 +33,19 @@ function pc(over: Partial<PandaperPrecollaborator> = {}): PandaperPrecollaborato
   };
 }
 
-/** db mock: só os acessos que o sync usa. `query.X.findFirst` e `update().set().where()`. */
+/** db mock: só os acessos que o sync usa. `query.X.findFirst`, `select()` e `update().set().where()`. */
 function makeDb() {
   const updateWhere = vi.fn().mockResolvedValue(undefined);
   const updateSet = vi.fn(() => ({ where: updateWhere }));
   const update = vi.fn(() => ({ set: updateSet }));
+  // Marcas de arquivo já coletado (dedup por arquivo): base VAZIA nestes cenários, que é o caso do
+  // pull de uma admissão nova. A dedup por arquivo tem spec próprio (pandape-dedup-arquivo.spec.ts).
+  const select = vi.fn(() => ({
+    from: () => ({ where: () => Promise.resolve([] as Array<{ hashConteudo: string }>) }),
+  }));
+  const insert = vi.fn(() => ({
+    values: () => ({ onConflictDoNothing: () => Promise.resolve(undefined) }),
+  }));
   const db = {
     query: {
       integracaoPandape: { findFirst: vi.fn() },
@@ -48,9 +56,11 @@ function makeDb() {
       // Dedup do pull: por padrão nada entregue ainda → o documento é puxado.
       documentosAdmissao: { findFirst: vi.fn().mockResolvedValue(undefined) },
     },
+    select,
+    insert,
     update,
   };
-  return { db, update, updateSet, updateWhere };
+  return { db, update, updateSet, updateWhere, select, insert };
 }
 
 function makeApi(over: Partial<Record<keyof PandapeApiService, unknown>> = {}) {
@@ -95,6 +105,7 @@ function makeService(parts: {
     ...parts.auditoria,
   } as unknown as AuditoriaService;
   const config = { get: () => undefined } as unknown as ConfigService;
+  const scheduler = { estaLigado: vi.fn().mockResolvedValue(true) } as never;
   const svc = new PandapeSyncService(
     parts.db as never,
     config,
@@ -102,6 +113,7 @@ function makeService(parts: {
     queue,
     admissoes,
     auditoria,
+    scheduler,
   );
   return { svc, queue, admissoes, auditoria };
 }

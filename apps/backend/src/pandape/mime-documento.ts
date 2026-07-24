@@ -35,16 +35,24 @@ export function extensaoDeContentType(
   }
 }
 
-/** Fareja os magic bytes do conteúdo → extensão. null = assinatura não reconhecida. */
+/**
+ * Fareja os magic bytes do conteúdo → extensão. null = assinatura não reconhecida.
+ *
+ * O piso de tamanho é POR ASSINATURA, não global. Antes exigia 4 bytes para todas, e a do JPEG tem
+ * 3: um buffer de exatamente `FF D8 FF` era recusado. Não muda nada em arquivo real (JPEG de 3 bytes
+ * não existe), mas a função agora é a régua da triagem de conteúdo da auditoria
+ * (`auditoria/conteudo-documento`), e ali o certo é a assinatura decidir, não um piso arbitrário.
+ */
 export function extensaoPorMagicBytes(buffer: Buffer): ExtensaoSuportada | null {
+  if (buffer.length < 3) return null;
+  // JPEG: FF D8 FF (3 bytes)
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return ".jpg";
+  }
   if (buffer.length < 4) return null;
   // %PDF
   if (buffer[0] === 0x25 && buffer[1] === 0x50 && buffer[2] === 0x44 && buffer[3] === 0x46) {
     return ".pdf";
-  }
-  // JPEG: FF D8 FF
-  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
-    return ".jpg";
   }
   // PNG: 89 50 4E 47
   if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) {
@@ -63,18 +71,4 @@ export function resolverExtensaoDocumento(
   buffer: Buffer,
 ): ExtensaoSuportada | null {
   return extensaoDeContentType(contentType) ?? extensaoPorMagicBytes(buffer);
-}
-
-/**
- * BLOCO 3 (PDF protegido) — detecta na COLETA, sem lib externa, se um PDF está criptografado /
- * protegido por senha, ANTES de mandar para a IA (que devolveria "no pages" e um 500 inútil). O
- * critério barato: é um PDF (`%PDF`) e o corpo declara o dicionário de criptografia (`/Encrypt`), que
- * é justamente o que marca um PDF cifrado no trailer. Só olha bytes de estrutura, sem PII (§A.6).
- */
-export function pdfProtegidoPorSenha(buffer: Buffer): boolean {
-  if (buffer.length < 5) return false;
-  const ehPdf = buffer[0] === 0x25 && buffer[1] === 0x50 && buffer[2] === 0x44 && buffer[3] === 0x46;
-  if (!ehPdf) return false;
-  // `/Encrypt` como bytes latin1 (o token aparece cru no PDF, mesmo com streams comprimidos).
-  return buffer.includes(Buffer.from("/Encrypt", "latin1"));
 }

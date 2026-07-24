@@ -99,7 +99,10 @@ afterEach(() => vi.restoreAllMocks());
 describe("AuditoriaService — equivalência auditarDocumento ↔ auditarBuffer (DoD §3)", () => {
   it("ambos passam o MESMO arquivo a staging.salvar e retornam o MESMO resultado", async () => {
     const { svc, staging } = makeService();
-    const arquivo = { buffer: Buffer.from([10, 20, 30]), originalname: "RG" };
+    // Magic bytes de JPEG de verdade: desde a OST do motivo verdadeiro, conteúdo que NÃO é
+    // documento é reprovado na triagem e nem chega à IA (ver `auditoria/conteudo-documento`).
+    // Este teste é sobre a equivalência dos dois caminhos, então o insumo tem de ser um documento.
+    const arquivo = { buffer: Buffer.from([0xff, 0xd8, 0xff, 0xe0]), originalname: "RG" };
 
     // caminho manual (multipart) — passa o file Multer-like.
     const viaDocumento = await svc.auditarDocumento(
@@ -136,7 +139,7 @@ describe("AuditoriaService — equivalência auditarDocumento ↔ auditarBuffer 
 
   it("o CPF do candidato vai SÓ para a IA e NÃO aparece no que é persistido (§A.6)", async () => {
     const { svc, ai, staging } = makeService();
-    const arquivo = { buffer: Buffer.from([1]), originalname: "RG" };
+    const arquivo = { buffer: Buffer.from([0xff, 0xd8, 0xff, 0xe0]), originalname: "RG" };
 
     await svc.auditarBuffer("adm-1", "tipo-rg", arquivo, USER);
 

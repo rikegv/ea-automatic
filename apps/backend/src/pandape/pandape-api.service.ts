@@ -256,6 +256,25 @@ export class PandapeApiService {
     }
   }
 
+  /**
+   * READINESS do Pandapé (tela de diagnóstico, Bloco 3): CAMINHO REAL, não /health. Exercita o
+   * OAuth2 client_credentials (emissão de token). `indisponivel` quando sem credencial (ambiente
+   * inerte, não é "fora do ar"). Nunca lança. §A.6: sem segredo no retorno.
+   */
+  async readiness(): Promise<{ estado: "ok" | "fora" | "indisponivel"; detalhe: string }> {
+    if (this.inerte()) {
+      return { estado: "indisponivel", detalhe: "sem credencial configurada (rota inerte)" };
+    }
+    try {
+      const token = await this.getAccessToken();
+      return token
+        ? { estado: "ok", detalhe: "OAuth2 respondeu, token emitido" }
+        : { estado: "fora", detalhe: "OAuth2 não emitiu token" };
+    } catch {
+      return { estado: "fora", detalhe: "falha ao emitir token OAuth2" };
+    }
+  }
+
   // ── Endpoints (v1) ──────────────────────────────────────────────────────────
   /**
    * GET /v1/PreCollaborator/Get?idPreCollaborator={id}. Inerte → undefined. NUNCA loga o id/CPF/URL.

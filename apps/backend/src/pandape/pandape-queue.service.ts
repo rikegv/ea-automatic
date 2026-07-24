@@ -6,6 +6,7 @@ import {
   criarConexaoRedis,
   JOB_POLL_TICK,
   JOB_PULL_DOCS,
+  JOB_SCHEDULER_TICK,
   JOB_SYNC_CANDIDATE,
   PANDAPE_QUEUE,
   PANDAPE_QUEUE_OPTIONS,
@@ -54,6 +55,32 @@ export class PandapeQueueService implements OnModuleInit, OnModuleDestroy {
     await this.connection?.quit().catch(() => undefined);
   }
 
+  /**
+   * Estado da fila para a TELA DE DIAGNÓSTICO (Bloco 3): contagem por estado e se a fila subiu.
+   * `disponivel:false` = Redis não subiu no boot (a fila é no-op). Nunca lança.
+   */
+  async statusFila(): Promise<{
+    disponivel: boolean;
+    contagem?: { ativos: number; aguardando: number; falhados: number; atrasados: number };
+    erro?: string;
+  }> {
+    if (!this.queue) return { disponivel: false };
+    try {
+      const c = await this.queue.getJobCounts("active", "waiting", "failed", "delayed");
+      return {
+        disponivel: true,
+        contagem: {
+          ativos: c.active ?? 0,
+          aguardando: c.waiting ?? 0,
+          falhados: c.failed ?? 0,
+          atrasados: c.delayed ?? 0,
+        },
+      };
+    } catch (err) {
+      return { disponivel: false, erro: err instanceof Error ? err.name : "erro" };
+    }
+  }
+
   /** Enfileira um `poll-tick`. No-op (logado) se a fila não subiu. */
   async enfileirarTick(): Promise<void> {
     if (!this.queue) {
@@ -61,6 +88,28 @@ export class PandapeQueueService implements OnModuleInit, OnModuleDestroy {
       return;
     }
     await this.queue.add(JOB_POLL_TICK, {});
+  }
+
+  /**
+   * Enfileira um `scheduler-tick` (OST scheduler): um ciclo de re-consulta. jobId único por ciclo
+   * (carimbo de tempo) porque um jobId estável de job já concluído (removeOnComplete) bloquearia o
+   * próximo ciclo. Concorrência 1 do worker serializa ciclos que se sobreponham. Retorna `false` se a
+   * fila não subiu (o scheduler in-process apenas loga e tenta no próximo tick).
+   */
+  async enfileirarSchedulerTick(): Promise<boolean> {
+    if (!this.queue) {
+      this.logger.warn("enfileirarSchedulerTick ignorado: fila indisponível.");
+      return false;
+    }
+    try {
+      await this.queue.add(JOB_SCHEDULER_TICK, {}, { jobId: `scheduler-tick-${Date.now()}` });
+      return true;
+    } catch (err) {
+      this.logger.warn(
+        `Falha ao enfileirar scheduler-tick: ${err instanceof Error ? err.message : "erro"}`,
+      );
+      return false;
+    }
   }
 
   /**
@@ -104,16 +153,29 @@ export class PandapeQueueService implements OnModuleInit, OnModuleDestroy {
    * `jobId` estável por admissão: reprocessar a mesma liberação não empilha pull duplicado. O
    * separador é "-" porque o BullMQ 5.x rejeita ":" em custom jobId.
    */
-  async enfileirarPullDocumentos(admissaoId: string, idPrecollaborator: string): Promise<boolean> {
+  async enfileirarPullDocumentos(
+    admissaoId: string,
+    idPrecollaborator: string,
+    opts: { reprocessar?: boolean; jobIdSufixo?: string } = {},
+  ): Promise<boolean> {
     if (!this.queue) {
       this.logger.warn("enfileirarPullDocumentos ignorado: fila indisponível.");
       return false;
     }
     try {
+      // O sufixo existe para a VARREDURA sob demanda: sem ele, o jobId estável `pull-<admissao>` já
+      // consta como concluído no histórico do BullMQ e a nova solicitação seria descartada calada.
+      const jobId = opts.jobIdSufixo
+        ? `pull-${admissaoId}-${opts.jobIdSufixo}`
+        : `pull-${admissaoId}`;
       await this.queue.add(
         JOB_PULL_DOCS,
-        { admissaoId, idPrecollaborator } satisfies PullDocsJobData,
-        { jobId: `pull-${admissaoId}` },
+        {
+          admissaoId,
+          idPrecollaborator,
+          ...(opts.reprocessar ? { reprocessar: true } : {}),
+        } satisfies PullDocsJobData,
+        { jobId },
       );
       return true;
     } catch (err) {

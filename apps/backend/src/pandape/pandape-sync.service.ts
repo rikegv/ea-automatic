@@ -9,6 +9,7 @@ import { DRIZZLE } from "../db/drizzle.module";
 import {
   cargos,
   clientes,
+  documentoArquivosColetados,
   documentosAdmissao,
   integracaoPandape,
   tiposDocumento,
@@ -25,16 +26,20 @@ import type { CandidatoInputDto, SexoValor } from "../admissoes/dto/create-admis
 import { PandapeQueueService } from "./pandape-queue.service";
 import { resolverExtensaoDocumento } from "./mime-documento";
 import { resolverTipoDocumento } from "./resolver-tipo-documento";
+import { decidirColeta, hashArquivo, precisaAuditarConjunto } from "./dedup-arquivo";
 import {
   criarConexaoRedis,
   JOB_POLL_TICK,
   JOB_PULL_DOCS,
+  JOB_SCHEDULER_TICK,
   JOB_SYNC_CANDIDATE,
   PANDAPE_QUEUE,
   PANDAPE_WORKER_OPTIONS,
   type PullDocsJobData,
   type SyncCandidateJobData,
 } from "./pandape.queue";
+import { PandapeSchedulerService } from "./pandape-scheduler.service";
+import { agregarCiclo, SCHEDULER_TETO_IA_POR_CICLO } from "../domain/scheduler-pandape";
 
 /**
  * Teto de segurança da auditoria por conjunto (BLOCO 1): número máximo de arquivos do MESMO tipo
@@ -42,6 +47,36 @@ import {
  * (número absurdo), audita os primeiros e registra no log, para não estourar o payload do Vertex.
  */
 const MAX_ARQUIVOS_CONJUNTO = 10;
+
+/**
+ * Relatório PII-FREE de um pull, devolvido pelo job `pull-docs` (fica no `returnvalue` do BullMQ) e
+ * consumido pela varredura para o relatório por admissão. Só códigos de tipo, contagens, rótulos de
+ * FORMULÁRIO e o motivo do veredito — nunca nome de arquivo, nunca URL, nunca CPF (§A.6).
+ */
+export interface ResumoTipoPull {
+  codigo: string;
+  arquivos: number;
+  novos: number;
+  jaConhecidos: number;
+  acao:
+    | "AUDITADO"
+    | "PULADO_SEM_BAIXAR"
+    | "PULADO_NADA_NOVO"
+    | "PULADO_VALIDACAO_HUMANA"
+    | "SEM_ARQUIVO"
+    | "FALHA";
+  estado?: string;
+  motivo?: string;
+}
+
+export interface ResumoPull {
+  admissaoId: string;
+  inerte?: boolean;
+  formularios: number;
+  /** Rótulos de FORMULÁRIO sem destino no de/para (o VT cai aqui). Rótulo não é PII (§A.6). */
+  semDestino: string[];
+  tipos: ResumoTipoPull[];
+}
 
 /**
  * Lógica idempotente da sincronização Pandapé (Fase 5 / INT-1, OST §3) + o Worker BullMQ (consumidor).
@@ -97,6 +132,7 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
     private readonly queue: PandapeQueueService,
     private readonly admissoes: AdmissoesService,
     private readonly auditoria: AuditoriaService,
+    private readonly scheduler: PandapeSchedulerService,
   ) {}
 
   // ── Worker lifecycle (consumidor) ─────────────────────────────────────────
@@ -130,8 +166,11 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
     await this.connection?.quit().catch(() => undefined);
   }
 
-  /** Roteia o job para o handler certo. */
-  private async processarJob(job: Job): Promise<void> {
+  /**
+   * Roteia o job para o handler certo. O `pull-docs` DEVOLVE o resumo (PII-free): o BullMQ guarda no
+   * `returnvalue` e a varredura lê de lá o relatório por admissão, sem tabela nova.
+   */
+  private async processarJob(job: Job): Promise<ResumoPull | void> {
     if (job.name === JOB_POLL_TICK) {
       await this.processarTick();
       return;
@@ -142,9 +181,91 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
       return;
     }
     if (job.name === JOB_PULL_DOCS) {
-      const { admissaoId, idPrecollaborator } = job.data as PullDocsJobData;
-      await this.puxarDocumentosDaAdmissao(admissaoId, idPrecollaborator);
+      const { admissaoId, idPrecollaborator, reprocessar } = job.data as PullDocsJobData;
+      return this.puxarDocumentosDaAdmissao(admissaoId, idPrecollaborator, { reprocessar });
     }
+    if (job.name === JOB_SCHEDULER_TICK) {
+      await this.rodarCicloScheduler();
+      return;
+    }
+  }
+
+  // ── Ciclo do scheduler de re-consulta (OST scheduler) ────────────────────────
+  /**
+   * UM ciclo de re-consulta das admissões vivas de origem Pandapé. Roda NO WORKER (este método é
+   * chamado só pelo job `scheduler-tick`), então já está sob o limiter e a concorrência 1 — as
+   * admissões são varridas SEQUENCIALMENTE, nunca em paralelo. Cada admissão reusa `puxarDocumentos`
+   * (INCREMENTAL: a dedup por arquivo pula o que já veio sem baixar, e só documento NOVO é auditado;
+   * validação humana tem precedência e nunca é tocada; INCONFORME reentra pois o candidato pode
+   * reenviar). Reprocessar=false: é o pull normal, não a varredura retroativa.
+   *
+   * BLOCO 3 (teto de segurança de IA): conta as auditorias disparadas e, batido o teto, PARA o ciclo
+   * e registra, em vez de esvaziar a quota. Em regime normal o custo é quase zero (a dedup pula tudo).
+   */
+  async rodarCicloScheduler(): Promise<void> {
+    // Re-checa o liga/desliga: o toggle pode ter virado entre o enfileiramento e a execução.
+    if (!(await this.scheduler.estaLigado())) {
+      this.logger.log("Ciclo do scheduler ignorado: DESLIGADO.");
+      return;
+    }
+    await this.scheduler.marcarInicioCiclo();
+
+    // Inerte sem token: o loop está vivo (bate o heartbeat), só não há o que buscar. Não é "parado".
+    if (!this.api.estaAtivo()) {
+      await this.scheduler.registrarCiclo({
+        varridas: 0,
+        novos: 0,
+        falhas: 0,
+        abortado: false,
+        nota: "integração inerte (sem credencial); nada a re-consultar",
+      });
+      return;
+    }
+
+    const alvos = await this.scheduler.admissoesVivasPandape();
+    const resumos: Array<{ inerte?: boolean; tipos: Array<{ novos: number; acao: string }> }> = [];
+    let auditorias = 0;
+    let abortado = false;
+
+    for (const alvo of alvos) {
+      // Teto checado ENTRE admissões: um ciclo anormal para aqui em vez de queimar quota.
+      if (auditorias >= SCHEDULER_TETO_IA_POR_CICLO) {
+        abortado = true;
+        break;
+      }
+      try {
+        const resumo = await this.puxarDocumentosDaAdmissao(alvo.admissaoId, alvo.idPrecollaborator);
+        resumos.push(resumo);
+        auditorias += resumo.tipos.filter((t) => t.acao === "AUDITADO").length;
+      } catch (err) {
+        // Falha de UMA admissão não derruba o ciclo. §A.6: sem id/PII, só a contagem.
+        this.logger.warn(
+          `Ciclo do scheduler: falha ao re-consultar uma admissão (segue): ${
+            err instanceof Error ? err.message : "erro"
+          }`,
+        );
+        resumos.push({ tipos: [{ novos: 0, acao: "FALHA" }] });
+      }
+    }
+
+    const agg = agregarCiclo(resumos);
+    const nota = abortado
+      ? `teto de segurança de IA (${SCHEDULER_TETO_IA_POR_CICLO}) atingido; ciclo interrompido`
+      : alvos.length === 0
+        ? "nenhuma admissão viva de origem Pandapé"
+        : null;
+    await this.scheduler.registrarCiclo({
+      varridas: agg.varridas,
+      novos: agg.novos,
+      falhas: agg.falhas,
+      abortado,
+      nota,
+    });
+    this.logger.log(
+      `Ciclo do scheduler concluído: alvos=${alvos.length}, varridas=${agg.varridas}, ` +
+        `novos=${agg.novos}, auditorias=${agg.auditorias}, falhas=${agg.falhas}` +
+        (abortado ? " [ABORTADO pelo teto de IA]" : ""),
+    );
   }
 
   // ── Entrada do cron ────────────────────────────────────────────────────────
@@ -352,19 +473,36 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
    * Inerte sem token (não quebra ambiente sem credencial). Erro sobe para o backoff do BullMQ: o job
    * é retentado, e a LIBERAÇÃO já aconteceu e não é afetada (é job separado, fora da transação).
    */
-  async puxarDocumentosDaAdmissao(admissaoId: string, idPrecollaborator: string): Promise<void> {
-    if (!this.api.estaAtivo()) return;
-    await this.puxarDocumentos(admissaoId, idPrecollaborator);
+  async puxarDocumentosDaAdmissao(
+    admissaoId: string,
+    idPrecollaborator: string,
+    opts: { reprocessar?: boolean } = {},
+  ): Promise<ResumoPull> {
+    if (!this.api.estaAtivo()) {
+      return { admissaoId, inerte: true, formularios: 0, semDestino: [], tipos: [] };
+    }
+    return this.puxarDocumentos(admissaoId, idPrecollaborator, opts);
   }
 
-  private async puxarDocumentos(admissaoId: string, idPrecollaborator: string): Promise<void> {
+  private async puxarDocumentos(
+    admissaoId: string,
+    idPrecollaborator: string,
+    opts: { reprocessar?: boolean } = {},
+  ): Promise<ResumoPull> {
+    const reprocessar = opts.reprocessar === true;
     const formularios = await this.api.getFormulariosDocumentos(idPrecollaborator);
-    if (formularios.length === 0) return;
+    const resumo: ResumoPull = {
+      admissaoId,
+      formularios: formularios.length,
+      semDestino: [],
+      tipos: [],
+    };
+    if (formularios.length === 0) return resumo;
 
     const userSistema = await this.resolverUsuarioSistema();
     if (!userSistema) {
       this.logger.warn("Sem usuário sistema para auditar docs do Pandapé — pull adiado.");
-      return;
+      return resumo;
     }
 
     for (const form of formularios) {
@@ -374,6 +512,7 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
 
       const codigo = resolverTipoDocumento(rotulo);
       if (!codigo) {
+        resumo.semDestino.push(rotulo);
         // BLOCO 2: NÃO descarta calado. O rótulo do FORMULÁRIO não é PII (é "Informações de Vale
         // Transporte", não o nome do arquivo), então vai ao log de propósito: é o que permite ver
         // que chegou algo sem destino. Nome de arquivo e URL seguem proibidos (§A.6).
@@ -392,21 +531,8 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
         continue;
       }
 
-      // DEDUP (BLOCO 3): tipo já ENTREGUE nesta admissão não é reprocessado. É o que torna a
-      // re-consulta futura (OST do scheduler) segura, sem baixar de novo o que já entrou.
-      // O enum de `estado` tem só PENDENTE/ENTREGUE/INCONFORME: INCONFORME NÃO entra na trava de
-      // propósito, porque documento reprovado deve poder ser reenviado e re-auditado.
-      const jaTem = await this.db.query.documentosAdmissao.findFirst({
-        where: and(
-          eq(documentosAdmissao.admissaoId, admissaoId),
-          eq(documentosAdmissao.tipoDocumentoId, tipo.id),
-          eq(documentosAdmissao.estado, "ENTREGUE"),
-        ),
-      });
-      if (jaTem) continue;
-
-      // MÚLTIPLOS ARQUIVOS (BLOCO 1): auditoria por CONJUNTO. A "regra do primeiro" da CTPS está
-      // REVOGADA (pegava só a página da foto e a régua reprovava por dados que estão na página de
+      // MÚLTIPLOS ARQUIVOS: auditoria por CONJUNTO. A "regra do primeiro" da CTPS está REVOGADA
+      // (pegava só a página da foto e a régua reprovava por dados que estão na página de
       // qualificação): agora TODAS as páginas/lados vão juntos à IA, que localiza o exigido em
       // qualquer uma. Teto de segurança para não mandar um número absurdo de imagens numa chamada.
       const selecionados = docs.slice(0, MAX_ARQUIVOS_CONJUNTO);
@@ -422,8 +548,70 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
         );
       }
 
+      // DEDUP POR ARQUIVO (Bloco 1) — estado do tipo + marcas de arquivo já coletado. A trava antiga
+      // era só "tipo já ENTREGUE"; ela continua valendo (dentro de `decidirColeta`), agora somada à
+      // marca por arquivo, que é o que permite pular SEM BAIXAR e o que torna o REPROCESSO idempotente.
+      const docAtual = await this.db.query.documentosAdmissao.findFirst({
+        where: and(
+          eq(documentosAdmissao.admissaoId, admissaoId),
+          eq(documentosAdmissao.tipoDocumentoId, tipo.id),
+        ),
+      });
+
+      // OST B1 / Bloco 4 — VALIDAÇÃO HUMANA TEM PRECEDÊNCIA ABSOLUTA AQUI. Documento assumido por um
+      // consultor NÃO é reauditado pela coleta automática nem pelo LOTE, em nenhuma hipótese e sem
+      // confirmação possível: não há ninguém para confirmar nada num job de fila. A reauditoria
+      // MANUAL é o único caminho que sobrescreve, e só com aceite explícito de quem clicou.
+      // Esta é a trava que estava escrita e era inócua, porque a marcação não existia.
+      if (docAtual?.validadoEm) {
+        resumo.tipos.push({
+          codigo,
+          arquivos: selecionados.length,
+          novos: 0,
+          jaConhecidos: 0,
+          acao: "PULADO_VALIDACAO_HUMANA",
+          estado: docAtual.estado,
+        });
+        continue;
+      }
+      const marcas = await this.db
+        .select({ hashConteudo: documentoArquivosColetados.hashConteudo })
+        .from(documentoArquivosColetados)
+        .where(
+          and(
+            eq(documentoArquivosColetados.admissaoId, admissaoId),
+            eq(documentoArquivosColetados.tipoDocumentoId, tipo.id),
+          ),
+        );
+      const conhecidos = new Set(marcas.map((m) => m.hashConteudo));
+
+      const acao = decidirColeta({
+        estadoAtual: docAtual?.estado,
+        hashesConhecidos: conhecidos.size,
+        arquivosNoPandape: selecionados.length,
+        reprocessar,
+      });
+      if (acao === "PULAR_SEM_BAIXAR") {
+        resumo.tipos.push({
+          codigo,
+          arquivos: selecionados.length,
+          novos: 0,
+          jaConhecidos: conhecidos.size,
+          acao: "PULADO_SEM_BAIXAR",
+          estado: docAtual?.estado,
+        });
+        continue;
+      }
+
       // Baixa TODOS os arquivos do tipo (URLs públicas, só em memória, §A.6) e monta o conjunto.
+      // A marca é o SHA-256 do CONTEÚDO, então o hash só existe depois de o byte chegar: o "não
+      // re-baixar" é entregue pela decisão acima (acervo idêntico ao marcado), não aqui.
       const arquivos: Array<{ buffer: Buffer; originalname: string }> = [];
+      const hashes: string[] = [];
+      const tamanhos: number[] = [];
+      // Conjunto (não contador): dois anexos com bytes IDÊNTICOS são UM arquivo novo, e uma marca só.
+      // No acervo real isso acontece (o mesmo arquivo subido quatro vezes no formulário da CTPS).
+      const novosHashes = new Set<string>();
       try {
         for (const doc of selecionados) {
           const url = doc.link ?? doc.url;
@@ -434,26 +622,149 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
             continue;
           }
           const buffer = Buffer.from(await res.arrayBuffer());
+          const hash = hashArquivo(buffer);
+          if (!conhecidos.has(hash)) novosHashes.add(hash);
           // BLOCO A (fix do mime): o `originalname` é o CÓDIGO do tipo (nunca o nome real, §A.6), sem
           // extensão. Resolvemos a extensão pelo Content-Type (mime NÃO é PII) e, na falta, pelos
           // magic bytes, para a staging gravar COM extensão e a IA receber o mime correto.
           const ext = resolverExtensaoDocumento(res.headers.get("content-type"), buffer);
           arquivos.push({ buffer, originalname: `${codigo}${ext ?? ""}` });
+          hashes.push(hash);
+          tamanhos.push(buffer.length);
         }
-        if (arquivos.length === 0) continue; // nada baixável neste tipo.
-        // UMA auditoria sobre o conjunto inteiro (BLOCO 1): um veredito, um registro por tipo. Os
-        // buffers ficam SÓ em memória (§A.6) e são liberados ao fim desta iteração (escopo do form).
-        await this.auditoria.auditarConjunto(admissaoId, tipo.id, arquivos, userSistema);
+        if (arquivos.length === 0) {
+          resumo.tipos.push({
+            codigo,
+            arquivos: 0,
+            novos: 0,
+            jaConhecidos: conhecidos.size,
+            acao: "SEM_ARQUIVO",
+            estado: docAtual?.estado,
+          });
+          continue; // nada baixável neste tipo.
+        }
+
+        // Conjunto inalterado (todos os hashes já marcados) → NÃO re-audita. É a idempotência: rodar
+        // a varredura duas vezes não gasta chamada de IA nem reescreve veredito íntegro.
+        if (
+          !precisaAuditarConjunto({
+            novos: novosHashes.size,
+            hashesConhecidosAntes: conhecidos.size,
+            estadoAtual: docAtual?.estado,
+          })
+        ) {
+          resumo.tipos.push({
+            codigo,
+            arquivos: arquivos.length,
+            novos: 0,
+            jaConhecidos: conhecidos.size,
+            acao: "PULADO_NADA_NOVO",
+            estado: docAtual?.estado,
+          });
+          continue;
+        }
+
+        // UMA auditoria sobre o conjunto inteiro: um veredito, um registro por tipo. Chegando arquivo
+        // NOVO num tipo que já tinha documento, o conjunto mudou e o veredito é refeito sobre a peça
+        // inteira. Os buffers ficam SÓ em memória (§A.6) e são liberados ao fim desta iteração.
+        const auditado = await this.auditoria.auditarConjunto(
+          admissaoId,
+          tipo.id,
+          arquivos,
+          userSistema,
+        );
+
+        // Marca de arquivo gravada SÓ após a auditoria concluir: "tem marca" passa a significar
+        // "passou pelo fluxo atual". Falha da IA não marca, então o ciclo seguinte tenta de novo.
+        await this.registrarArquivosColetados(admissaoId, tipo.id, hashes, tamanhos);
+
+        resumo.tipos.push({
+          codigo,
+          arquivos: arquivos.length,
+          novos: novosHashes.size,
+          jaConhecidos: conhecidos.size,
+          acao: "AUDITADO",
+          estado: auditado?.documento?.estado,
+          motivo: auditado?.resultado?.motivo ?? undefined,
+        });
       } catch (err) {
         // BLOCO B/C: a coleta NÃO se perde. O documento já foi gravado como AGUARDANDO_AUDITORIA
         // antes da chamada da IA (ver `auditarConjunto`), então a falha aqui deixa só a AUDITORIA
-        // pendente, visível na régua, reprocessável sem baixar de novo. §A.6: sem nome/URL.
+        // pendente, visível na régua, reprocessável. §A.6: sem nome/URL.
+        const msg = err instanceof Error ? err.message : "erro";
         this.logger.warn(
           `Documento coletado do Pandapé mas auditoria falhou (fica AGUARDANDO_AUDITORIA, ` +
-            `nada perdido): ${err instanceof Error ? err.message : "erro"}`,
+            `nada perdido): ${msg}`,
         );
+        resumo.tipos.push({
+          codigo,
+          arquivos: arquivos.length,
+          novos: novosHashes.size,
+          jaConhecidos: conhecidos.size,
+          acao: "FALHA",
+          motivo: msg,
+        });
       }
     }
+    return resumo;
+  }
+
+  /**
+   * OST A / Bloco 5 — baixa TODOS os anexos de UM tipo, SEM passar pela dedup por hash. É a fonte de
+   * último recurso da REAUDITORIA: quando o arquivo não está mais na staging local, buscamos de novo
+   * no Pandapé. A dedup existe para poupar trabalho automático repetido, e por isso NÃO se aplica
+   * aqui: reauditar é ação explícita de um humano que quer novo veredito.
+   *
+   * Devolve [] se a integração está inerte, se o tipo não aparece nos formulários ou se nada baixou.
+   * §A.6: a URL só transita em memória, o `originalname` é o CÓDIGO do tipo, nunca o nome real.
+   */
+  async baixarArquivosDoTipo(
+    idPrecollaborator: string,
+    codigoTipo: string,
+  ): Promise<Array<{ buffer: Buffer; originalname: string }>> {
+    if (!this.api.estaAtivo()) return [];
+    const formularios = await this.api.getFormulariosDocumentos(idPrecollaborator);
+    const arquivos: Array<{ buffer: Buffer; originalname: string }> = [];
+    for (const form of formularios) {
+      if (resolverTipoDocumento((form.name ?? "").trim()) !== codigoTipo) continue;
+      const docs = (form.documents ?? [])
+        .filter((d) => d.link ?? d.url)
+        .slice(0, MAX_ARQUIVOS_CONJUNTO);
+      for (const doc of docs) {
+        const url = doc.link ?? doc.url;
+        if (!url) continue;
+        const res = await fetch(url);
+        if (!res.ok) {
+          this.logger.warn(`Download para reauditoria falhou (HTTP ${res.status}), pulado.`);
+          continue;
+        }
+        const buffer = Buffer.from(await res.arrayBuffer());
+        const ext = resolverExtensaoDocumento(res.headers.get("content-type"), buffer);
+        arquivos.push({ buffer, originalname: `${codigoTipo}${ext ?? ""}` });
+      }
+    }
+    return arquivos;
+  }
+
+  /**
+   * Persiste a marca de cada arquivo coletado (SHA-256 do conteúdo). `onConflictDoNothing` porque o
+   * mesmo arquivo pode reaparecer em outro formulário e porque dois ciclos podem correr juntos.
+   * §A.6: grava digest + tamanho, jamais nome de arquivo ou URL.
+   */
+  async registrarArquivosColetados(
+    admissaoId: string,
+    tipoDocumentoId: string,
+    hashes: string[],
+    tamanhos: number[],
+  ): Promise<void> {
+    if (hashes.length === 0) return;
+    const linhas = hashes.map((hashConteudo, i) => ({
+      admissaoId,
+      tipoDocumentoId,
+      hashConteudo,
+      tamanhoBytes: tamanhos[i] ?? 0,
+    }));
+    await this.db.insert(documentoArquivosColetados).values(linhas).onConflictDoNothing();
   }
 
   /**

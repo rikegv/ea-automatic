@@ -24,6 +24,13 @@ export const PANDAPE_BULL_PREFIX = "ea:bull";
 export const JOB_POLL_TICK = "poll-tick";
 export const JOB_SYNC_CANDIDATE = "sync-candidate";
 export const JOB_PULL_DOCS = "pull-docs";
+/**
+ * SCHEDULER TICK (OST scheduler): um ciclo de re-consulta das admissões vivas de origem Pandapé. Roda
+ * NO WORKER (sob o limiter, concorrência 1 → nunca dispara N chamadas simultâneas) e varre as
+ * admissões sequencialmente, incremental pela dedup por arquivo. Enfileirado pelo scheduler
+ * in-process (cadência fixa) e pelo disparo manual da tela de diagnóstico.
+ */
+export const JOB_SCHEDULER_TICK = "scheduler-tick";
 
 /** Dados do job `sync-candidate` (1 idPreCollaborator por job). */
 export interface SyncCandidateJobData {
@@ -34,6 +41,13 @@ export interface SyncCandidateJobData {
 export interface PullDocsJobData {
   admissaoId: string;
   idPrecollaborator: string;
+  /**
+   * REPROCESSO explícito (varredura retroativa, sob demanda). Derruba a trava por tipo (documento já
+   * ENTREGUE volta a ser auditado) para corrigir o passivo auditado pelo fluxo antigo. NUNCA derruba
+   * a idempotência: se todos os arquivos já têm marca, o tipo é pulado do mesmo jeito. Ausente/false
+   * no pull normal da liberação e do webhook, que seguem com o comportamento vigente.
+   */
+  reprocessar?: boolean;
 }
 
 /**

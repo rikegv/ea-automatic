@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   extensaoDeContentType,
   extensaoPorMagicBytes,
-  pdfProtegidoPorSenha,
   resolverExtensaoDocumento,
 } from "./mime-documento";
 
@@ -67,24 +66,7 @@ describe("resolverExtensaoDocumento (header primeiro, magic bytes de rede)", () 
   });
 });
 
-describe("pdfProtegidoPorSenha (BLOCO 3, detecção na coleta)", () => {
-  it("PDF com /Encrypt no corpo → protegido", () => {
-    const pdf = Buffer.concat([
-      Buffer.from("%PDF-1.4\n"),
-      Buffer.from("<< /Filter /Standard /V 2 /Encrypt 5 0 R >>"),
-    ]);
-    expect(pdfProtegidoPorSenha(pdf)).toBe(true);
-  });
-
-  it("PDF sem /Encrypt → não protegido", () => {
-    const pdf = Buffer.from("%PDF-1.4\n<< /Type /Catalog >> conteudo normal");
-    expect(pdfProtegidoPorSenha(pdf)).toBe(false);
-  });
-
-  it("não é PDF (JPEG/PNG/lixo) → nunca marca protegido, mesmo com o texto /Encrypt", () => {
-    expect(pdfProtegidoPorSenha(JPEG)).toBe(false);
-    expect(pdfProtegidoPorSenha(PNG)).toBe(false);
-    // um JPEG que por acaso contenha os bytes /Encrypt não é um PDF cifrado.
-    expect(pdfProtegidoPorSenha(Buffer.concat([JPEG, Buffer.from("/Encrypt")]))).toBe(false);
-  });
-});
+// NOTA (OST A / Bloco 1): a detecção de PDF protegido por senha SAIU deste módulo. O critério
+// antigo era a string `/Encrypt` no buffer, que dá falso positivo em PDF cifrado só por permissões
+// (abre sem senha) e reprovou documento bom. A decisão agora é do ai-service, com pypdf tentando
+// abrir com senha vazia; a suíte correspondente vive em `apps/ai-service/tests/test_pdf_seguranca.py`.
