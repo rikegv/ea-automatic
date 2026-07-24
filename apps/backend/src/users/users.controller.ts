@@ -2,6 +2,7 @@ import { Body, Controller, Get, Param, Patch, Post, Put } from "@nestjs/common";
 import type { AuthUser } from "../auth/auth.types";
 import { CurrentUser, Roles } from "../auth/decorators";
 import { MenusService } from "../auth/menus.service";
+import { codigosPadraoDoPapel } from "../domain/menus";
 import { AtualizarUsuarioDto, CriarUsuarioDto, DefinirMenusDto } from "./users.dto";
 import { UsersService } from "./users.service";
 
@@ -39,16 +40,28 @@ export class UsersController {
     return { codigos: [...(await this.menus.codigosDoUsuario(id))] };
   }
 
-  /** Salva a associação USUÁRIO x MENU (substitui o conjunto). Só admin (herda o @Roles da classe). */
+  /**
+   * Salva a associação USUÁRIO x MENU (substitui o conjunto). Só admin (herda o @Roles da classe).
+   * Passa o papel do alvo para o service filtrar os menus bloqueados para COMUM (Diagnóstico/Usuários).
+   */
   @Put(":id/menus")
   async definirMenus(@Param("id") id: string, @Body() dto: DefinirMenusDto) {
-    await this.menus.definirMenusDoUsuario(id, dto.menus);
-    return { ok: true, total: dto.menus.length };
+    const alvo = await this.users.findById(id);
+    const aplicados = await this.menus.definirMenusDoUsuario(id, dto.menus, alvo?.papel);
+    return { ok: true, total: aplicados.length };
   }
 
   @Post()
-  criar(@Body() dto: CriarUsuarioDto) {
-    return this.users.criar(dto);
+  async criar(@Body() dto: CriarUsuarioDto) {
+    const res = await this.users.criar(dto);
+    // Novo usuário nasce com o PADRÃO do papel (decisão do diretor, 24/07/2026): o COMUM enxerga toda
+    // a Operação por padrão, em vez de nascer sem menu nenhum. Administração segue concessão pontual.
+    await this.menus.definirMenusDoUsuario(
+      res.usuario.id,
+      codigosPadraoDoPapel(dto.papel),
+      dto.papel,
+    );
+    return res;
   }
 
   @Patch(":id")

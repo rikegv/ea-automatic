@@ -207,7 +207,16 @@ export const MENUS: MenuDef[] = [
     href: "/admin/kit-regras",
     grupo: "ADMIN",
     ordem: 26,
-    operacoes: ["KitRegrasController.*", "KitTiposController.*"],
+    // GET de lista dos TIPOS de kit (`KitTiposController.list`) fica ABERTA (leitura de catálogo, §
+    // "ler é trabalho"): o Gerador de kit (menu `gerador-kit`, operação do COMUM) monta o seletor a
+    // partir dela. Sem isto, o COMUM com `gerador-kit` mas sem `kit-regras` tomaria 403 no dropdown.
+    // Só as ESCRITAS de tipos e TODA a controller de regras (tela admin dedicada) seguem gated.
+    operacoes: [
+      "KitRegrasController.*",
+      "KitTiposController.criar",
+      "KitTiposController.atualizar",
+      "KitTiposController.remover",
+    ],
   },
   {
     codigo: "regras",
@@ -249,20 +258,28 @@ export const MENU_SEMPRE_VISIVEL = new Set<string>(["inicio"]);
 export const TODOS_CODIGOS_MENU = MENUS.map((m) => m.codigo);
 
 /**
- * Menus que um usuário COMUM enxergava ANTES desta OST: o grupo OPERAÇÃO, menos o Gerador de kit
- * (que a sidebar já mostrava só para admin). É a base do GRANDFATHER da migração (Bloco 5): dar
- * "todos os menus" a um COMUM seria ESCALONAR privilégio (ele passaria a ver a Administração, que não
- * via). O grandfather tem de reproduzir EXATAMENTE o acesso de hoje, papel a papel.
+ * PADRÃO DO COMUM (decisão do diretor, 24/07/2026): o consultor COMUM enxerga TODO o grupo OPERAÇÃO
+ * por padrão (os 8 menus, INCLUINDO o Gerador de kit), e a Administração fica como concessão pontual,
+ * usuário a usuário. Isto INVERTE o grandfather original, que dava só "o que o papel já via" (Operação
+ * MENOS o Gerador de kit): aquele recorte vinha INTERROMPENDO a operação (cliente e cargo sumindo na
+ * Liberação, Gerador de kit indisponível). Administração NUNCA entra no padrão do COMUM.
  */
-export const MENUS_COMUM_HOJE = MENUS.filter(
-  (m) => m.grupo === "OPERACAO" && m.codigo !== "gerador-kit",
-).map((m) => m.codigo);
+export const MENUS_PADRAO_COMUM = MENUS.filter((m) => m.grupo === "OPERACAO").map((m) => m.codigo);
 
-/** Códigos que um papel enxergava ANTES desta OST (para o grandfather sem ruptura). */
-export function codigosGrandfather(papel: string): string[] {
+/** Códigos que um papel recebe por PADRÃO. Admin recebe todos (tem bypass no guard; é por coerência). */
+export function codigosPadraoDoPapel(papel: string): string[] {
   if (papel === "MASTER" || papel === "SUPER_ADMIN") return TODOS_CODIGOS_MENU;
-  return MENUS_COMUM_HOJE;
+  return MENUS_PADRAO_COMUM;
 }
+
+/**
+ * Menus que NÃO podem ser concedidos a um COMUM em hipótese alguma: as controllers de Diagnóstico e
+ * Usuários são `@Roles` admin-only, então marcar para um COMUM só faria o menu APARECER e o backend
+ * BARRAR os dados (tela vazia / erro confuso). São filtrados ao salvar a config de um COMUM
+ * (`definirMenusDoUsuario`) e a tela de configuração os desabilita para COMUM. Já ficam fora do padrão
+ * por construção (padrão = só Operação, e estes são Administração).
+ */
+export const MENUS_BLOQUEADOS_COMUM = new Set<string>(["diagnostico", "usuarios"]);
 
 /**
  * Índice reverso `Controller.handler` -> menu, mais o conjunto de controllers com `*`. Construído uma

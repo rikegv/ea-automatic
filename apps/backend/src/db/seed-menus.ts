@@ -2,7 +2,7 @@ import "dotenv/config";
 import { sql as fragmento } from "drizzle-orm";
 import { createDb } from "./client";
 import { menus, usuarios, usuarioMenus } from "./schema";
-import { MENUS, codigosGrandfather } from "../domain/menus";
+import { MENUS, codigosPadraoDoPapel } from "../domain/menus";
 
 /**
  * SEED do catálogo de MENUS + GRANDFATHER da migração (OST permissão de menu, Bloco 5).
@@ -55,9 +55,9 @@ async function main(): Promise<void> {
       });
     console.log(`[seed-menus] catálogo: ${MENUS.length} menus convergidos.`);
 
-    // 2) Grandfather SENSÍVEL AO PAPEL: cada usuário ATIVO sem NENHUMA linha recebe EXATAMENTE o que
-    //    o papel dele enxergava hoje. COMUM → menus de operação (sem Administração, sem Gerador de
-    //    kit); admin → todos. Dar "todos" a um COMUM seria escalonar privilégio.
+    // 2) PADRÃO POR PAPEL: cada usuário ATIVO sem NENHUMA linha recebe o padrão do papel. COMUM → TODO
+    //    o grupo Operação (incluindo o Gerador de kit, decisão do diretor 24/07/2026), sem
+    //    Administração; admin → todos. Administração no COMUM segue concessão pontual, pela tela.
     const ativos = await db
       .select({ id: usuarios.id, papel: usuarios.papel })
       .from(usuarios)
@@ -70,7 +70,7 @@ async function main(): Promise<void> {
 
     let linhas = 0;
     for (const u of alvo) {
-      const codigos = codigosGrandfather(u.papel);
+      const codigos = codigosPadraoDoPapel(u.papel);
       await db
         .insert(usuarioMenus)
         .values(codigos.map((menuCodigo) => ({ usuarioId: u.id, menuCodigo })))

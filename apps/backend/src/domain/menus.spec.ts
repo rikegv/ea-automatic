@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   MENUS,
-  MENUS_COMUM_HOJE,
+  MENUS_BLOQUEADOS_COMUM,
+  MENUS_PADRAO_COMUM,
   TODOS_CODIGOS_MENU,
-  codigosGrandfather,
+  codigosPadraoDoPapel,
   menuDaOperacao,
 } from "./menus";
 
@@ -52,25 +53,53 @@ describe("mapa operação -> menu", () => {
     expect(menuDaOperacao("AdmissoesController", "deletar")).toBeNull();
     expect(menuDaOperacao("NaoConformidadesController", "decidirLiberacao")).toBeNull();
   });
+
+  it("Gerador de kit: as 5 operações da tela caem TODAS no menu gerador-kit", () => {
+    for (const h of ["processar", "statusProcessar", "downloadFuncionario", "reimportar", "downloadZip"]) {
+      expect(menuDaOperacao("KitController", h)).toBe("gerador-kit");
+    }
+  });
+
+  it("kit-tipos: a LISTA (dropdown do Gerador de kit) é ABERTA; só as escritas são gated por kit-regras", () => {
+    expect(menuDaOperacao("KitTiposController", "list")).toBeNull(); // dropdown do Gerador de kit
+    expect(menuDaOperacao("KitTiposController", "criar")).toBe("kit-regras");
+    expect(menuDaOperacao("KitTiposController", "atualizar")).toBe("kit-regras");
+    expect(menuDaOperacao("KitTiposController", "remover")).toBe("kit-regras");
+  });
 });
 
-describe("grandfather da migração (Bloco 5): reproduz o acesso de hoje, papel a papel", () => {
-  it("COMUM recebe os menus de operação, SEM administração e SEM gerador de kit", () => {
-    const c = codigosGrandfather("COMUM");
-    expect(c).toEqual(MENUS_COMUM_HOJE);
+describe("padrão do papel (decisão do diretor 24/07/2026): COMUM enxerga toda a Operação", () => {
+  it("COMUM recebe TODOS os menus de Operação, INCLUINDO o Gerador de kit, e NENHUM de Administração", () => {
+    const c = codigosPadraoDoPapel("COMUM");
+    expect(c).toEqual(MENUS_PADRAO_COMUM);
+    // padrão = exatamente o grupo OPERACAO.
+    expect([...c].sort()).toEqual(
+      MENUS.filter((m) => m.grupo === "OPERACAO")
+        .map((m) => m.codigo)
+        .sort(),
+    );
     expect(c).toContain("esteira");
     expect(c).toContain("liberacao");
-    expect(c).not.toContain("gerador-kit");
-    expect(c).not.toContain("clientes");
+    expect(c).toContain("gerador-kit"); // a inversão desta OST
+    expect(c).not.toContain("clientes"); // Administração fica fora do padrão
     expect(c).not.toContain("usuarios");
   });
 
-  it("dar 'todos' a um COMUM seria escalonar privilégio: o grandfather NÃO faz isso", () => {
-    expect(codigosGrandfather("COMUM").length).toBeLessThan(TODOS_CODIGOS_MENU.length);
+  it("padrão do COMUM não inclui nenhum menu de Administração (concessão pontual)", () => {
+    const c = new Set(codigosPadraoDoPapel("COMUM"));
+    for (const m of MENUS) if (m.grupo === "ADMIN") expect(c.has(m.codigo)).toBe(false);
+    expect(codigosPadraoDoPapel("COMUM").length).toBeLessThan(TODOS_CODIGOS_MENU.length);
+  });
+
+  it("Diagnóstico e Usuários são bloqueados para COMUM (são @Roles admin-only)", () => {
+    expect(MENUS_BLOQUEADOS_COMUM.has("diagnostico")).toBe(true);
+    expect(MENUS_BLOQUEADOS_COMUM.has("usuarios")).toBe(true);
+    // e não estão no padrão (padrão é só Operação).
+    for (const b of MENUS_BLOQUEADOS_COMUM) expect(codigosPadraoDoPapel("COMUM")).not.toContain(b);
   });
 
   it("MASTER e SUPER_ADMIN recebem todos (coerência de tela; o guard já os libera por bypass)", () => {
-    expect(codigosGrandfather("MASTER")).toEqual(TODOS_CODIGOS_MENU);
-    expect(codigosGrandfather("SUPER_ADMIN")).toEqual(TODOS_CODIGOS_MENU);
+    expect(codigosPadraoDoPapel("MASTER")).toEqual(TODOS_CODIGOS_MENU);
+    expect(codigosPadraoDoPapel("SUPER_ADMIN")).toEqual(TODOS_CODIGOS_MENU);
   });
 });

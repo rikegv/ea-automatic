@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
 import { menus, usuarioMenus } from "../db/schema";
-import { MENUS, TODOS_CODIGOS_MENU } from "../domain/menus";
+import { MENUS, MENUS_BLOQUEADOS_COMUM, TODOS_CODIGOS_MENU } from "../domain/menus";
 
 /**
  * Leitura da permissão de MENU de um usuário (OST permissão de menu).
@@ -52,10 +52,25 @@ export class MenusService {
     return linhas;
   }
 
-  /** Substitui a associação do usuário pelo conjunto informado (usado pela tela de configuração). */
-  async definirMenusDoUsuario(usuarioId: string, codigos: string[]): Promise<void> {
-    // Só códigos que existem no registro entram (ignora lixo do cliente, sem quebrar).
-    const validos = codigos.filter((c) => TODOS_CODIGOS_MENU.includes(c));
+  /**
+   * Substitui a associação do usuário pelo conjunto informado (usado pela tela de configuração e pela
+   * criação de usuário). Devolve os códigos EFETIVAMENTE aplicados.
+   *
+   * `papel` do alvo: quando NÃO é admin, filtra fora os menus bloqueados para COMUM (Diagnóstico e
+   * Usuários, `@Roles` admin-only), que só apareceriam na barra e seriam barrados no backend. Sem
+   * `papel` informado, mantém o comportamento antigo (não filtra) por segurança.
+   */
+  async definirMenusDoUsuario(
+    usuarioId: string,
+    codigos: string[],
+    papel?: string,
+  ): Promise<string[]> {
+    const ehAdmin = papel === "MASTER" || papel === "SUPER_ADMIN";
+    // Só códigos que existem no registro entram (ignora lixo do cliente, sem quebrar); e, para
+    // não-admin, remove os bloqueados para COMUM.
+    const validos = codigos.filter(
+      (c) => TODOS_CODIGOS_MENU.includes(c) && (ehAdmin || !MENUS_BLOQUEADOS_COMUM.has(c)),
+    );
     await this.db.transaction(async (tx) => {
       await tx.delete(usuarioMenus).where(eq(usuarioMenus.usuarioId, usuarioId));
       if (validos.length > 0) {
@@ -64,5 +79,6 @@ export class MenusService {
           .values(validos.map((menuCodigo) => ({ usuarioId, menuCodigo })));
       }
     });
+    return validos;
   }
 }

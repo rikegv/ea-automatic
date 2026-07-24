@@ -23,6 +23,13 @@ interface MenuCat {
   ordem: number;
 }
 
+/**
+ * Menus que NÃO podem ser marcados para um COMUM: Diagnóstico e Usuários têm a controller @Roles
+ * admin-only no backend, então marcar aqui só faria o menu aparecer e a tela barrar os dados. O
+ * backend também filtra ao salvar (defesa em profundidade); aqui a caixa nasce desabilitada.
+ */
+const BLOQUEADOS_COMUM = new Set<string>(["diagnostico", "usuarios"]);
+
 export function ConfigMenusModal({
   usuario,
   token,
@@ -126,21 +133,37 @@ export function ConfigMenusModal({
             <div key={grupo}>
               <div className="nav-label !mb-1.5">{rotuloGrupo[grupo] ?? grupo}</div>
               <div className="space-y-1">
-                {grupos[grupo].map((m) => (
-                  <label
-                    key={m.codigo}
-                    className="flex cursor-pointer items-center gap-2.5 rounded-lg border border-[var(--border)] px-3 py-2 text-[13.5px] text-text transition hover:bg-[var(--surface-2)]"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={sel.has(m.codigo)}
-                      onChange={() => alterna(m.codigo)}
-                      className="h-4 w-4 flex-none accent-[var(--accent)]"
-                    />
-                    <span className="font-semibold">{m.rotulo}</span>
-                    <span className="ml-auto text-[11.5px] text-faint">{m.href}</span>
-                  </label>
-                ))}
+                {grupos[grupo].map((m) => {
+                  const bloqueado = !ehAdmin && BLOQUEADOS_COMUM.has(m.codigo);
+                  return (
+                    <label
+                      key={m.codigo}
+                      className={
+                        "flex items-center gap-2.5 rounded-lg border border-[var(--border)] px-3 py-2 text-[13.5px] transition " +
+                        (bloqueado
+                          ? "cursor-not-allowed text-faint opacity-60"
+                          : "cursor-pointer text-text hover:bg-[var(--surface-2)]")
+                      }
+                      title={
+                        bloqueado
+                          ? "Restrito à administração: não pode ser liberado para o perfil Comum."
+                          : undefined
+                      }
+                    >
+                      <input
+                        type="checkbox"
+                        checked={sel.has(m.codigo) && !bloqueado}
+                        onChange={() => alterna(m.codigo)}
+                        disabled={bloqueado}
+                        className="h-4 w-4 flex-none accent-[var(--accent)]"
+                      />
+                      <span className="font-semibold">{m.rotulo}</span>
+                      <span className="ml-auto text-[11.5px] text-faint">
+                        {bloqueado ? "somente administração" : m.href}
+                      </span>
+                    </label>
+                  );
+                })}
               </div>
             </div>
           ))}
