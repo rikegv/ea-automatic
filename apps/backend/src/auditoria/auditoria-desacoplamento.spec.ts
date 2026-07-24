@@ -151,23 +151,43 @@ describe("AuditoriaService — desacoplamento coleta/auditoria (BLOCO B/E)", () 
     expect(payload.stagingPaths).toHaveLength(2);
   });
 
-  it("BLOCO 3: PDF protegido por senha → INCONFORME acionável, SEM chamar a IA", async () => {
-    const ai = { auditarDocumento: vi.fn(), arquivarDrive: vi.fn() };
-    const { svc, inserts } = makeService(ai);
-    const pdfProtegido = {
+  it("OST A/Bloco 1: PDF com /Encrypt NÃO é mais vetado aqui — vai para a IA (fim do falso positivo)", async () => {
+    // REGRESSÃO da CTPS da Silvia. O backend vetava por achar a string `/Encrypt` no buffer, e ela
+    // existe em PDF cifrado só por PERMISSÕES, que abre sem senha. Agora quem decide é o ai-service,
+    // tentando abrir com senha vazia (pypdf). O backend não adivinha: manda auditar.
+    const ai = {
+      auditarDocumento: vi.fn().mockResolvedValue({ status: "VALIDADO", motivo: "Legível." }),
+      arquivarDrive: vi.fn(),
+    };
+    const { svc } = makeService(ai);
+    const pdfComEncrypt = {
       buffer: Buffer.concat([Buffer.from("%PDF-1.4\n"), Buffer.from("<< /Encrypt 5 0 R >>")]),
-      originalname: "COMPROVANTE_RESIDENCIA.pdf",
+      originalname: "CTPS.pdf",
     };
 
-    const out = await svc.auditarConjunto("adm-1", "tipo-rg", [pdfProtegido], USER);
+    const out = await svc.auditarConjunto("adm-1", "tipo-rg", [pdfComEncrypt], USER);
 
-    // a IA NÃO é chamada (detecção na coleta); o veredito é INCONFORME com motivo acionável.
-    expect(ai.auditarDocumento).not.toHaveBeenCalled();
+    expect(ai.auditarDocumento).toHaveBeenCalledTimes(1);
+    expect(out.documento).toMatchObject({ estado: "ENTREGUE" });
+  });
+
+  it("OST A/Bloco 1: INCONFORME por senha vindo do ai-service é persistido igual (motivo acionável)", async () => {
+    const ai = {
+      auditarDocumento: vi.fn().mockResolvedValue({
+        status: "INCONFORME",
+        motivo: "Documento protegido por senha. Reenviar o arquivo sem proteção para permitir a auditoria.",
+      }),
+      arquivarDrive: vi.fn(),
+    };
+    const { svc, inserts } = makeService(ai);
+    const arquivo = { buffer: Buffer.from("%PDF-1.4 real"), originalname: "CTPS.pdf" };
+
+    const out = await svc.auditarConjunto("adm-1", "tipo-rg", [arquivo], USER);
+
     expect(out.documento).toMatchObject({ estado: "INCONFORME" });
     expect(out.resultado.motivo).toMatch(/senha/i);
-    // gravou INCONFORME (nunca AGUARDANDO_AUDITORIA, que é só para falha de sistema).
+    // AGUARDANDO_AUDITORIA é gravado antes da IA (desacoplamento) e depois SUBSTITUÍDO pelo veredito.
     expect(inserts.some((i) => i.values.estado === "INCONFORME")).toBe(true);
-    expect(inserts.some((i) => i.values.estado === "AGUARDANDO_AUDITORIA")).toBe(false);
   });
 
   it("REPROCESSO sem duplicata: todo persist usa upsert no alvo (admissaoId, tipoDocumentoId)", async () => {

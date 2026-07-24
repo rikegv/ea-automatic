@@ -1,6 +1,6 @@
 import { BadRequestException, Inject, Injectable, Logger, NotFoundException } from "@nestjs/common";
-import { and, eq, ne } from "drizzle-orm";
-import type { ProgressoRegua } from "@ea/shared-types";
+import { and, eq, ne, sql } from "drizzle-orm";
+import type { ProgressoRegua, ResultadoAuditoria } from "@ea/shared-types";
 import type { AuthUser } from "../auth/auth.types";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
@@ -15,7 +15,14 @@ import {
   regrasAuditoria,
   tiposDocumento,
 } from "../db/schema";
-import { AiClientService, type ArquivoDrive } from "../ai/ai-client.service";
+import { AiClientService, familiaDaFalha, type ArquivoDrive } from "../ai/ai-client.service";
+import {
+  estadoAposFalha,
+  familiaRetentavel,
+  INTERVALOS_RETENTATIVA_MS,
+  MOTIVO_FALHA_IA,
+} from "../domain/falha-auditoria";
+import { triarConjunto } from "./conteudo-documento";
 import { montarNomePasta, resolvePastaPaiId, resolveSubpasta } from "../ai/drive-routing";
 import { recomputeFarolGlobal } from "../admissoes/farol";
 import { calcSinalizadorPreenchimento } from "../domain/admissao";
@@ -27,7 +34,6 @@ import {
 } from "../domain/auditoria";
 import { ReguaCompletudeService } from "../regua/regua-completude.service";
 import { StagingService } from "../staging/staging.service";
-import { pdfProtegidoPorSenha } from "../pandape/mime-documento";
 
 /**
  * Precisa (re)arquivar no Drive? Sim quando ainda não há link (null) OU quando o link salvo é um
@@ -37,6 +43,23 @@ import { pdfProtegidoPorSenha } from "../pandape/mime-documento";
  */
 export function precisaArquivarDrive(url: string | null): boolean {
   return url == null || url.includes("/folders/MOCK-");
+}
+
+/**
+ * Resultado do PÓS-VEREDITO (ver `aplicarPosVeredito`): tudo o que acontece DEPOIS de um documento
+ * mudar de estado, independente de quem mudou (IA ou pessoa).
+ */
+export interface PosVeredito {
+  progresso: ProgressoRegua;
+  sinalizador: string;
+  auditoriaAuto?: { status: string; gateAberto: boolean };
+  arquivado?: { pastaUrl: string; pastaJaExistia?: boolean; ignorados?: number };
+  /**
+   * Preenchido quando a régua fechou mas o envio ao Drive FALHOU. É o canal que impede a falha
+   * silenciosa: a tela mostra este texto no mesmo lugar do aviso de descarte. Ausente = nada a
+   * avisar (arquivou, ou a régua ainda não fechou).
+   */
+  avisoDrive?: string;
 }
 
 /**
@@ -136,40 +159,29 @@ export class AuditoriaService {
 
     const agora = new Date();
 
-    // BLOCO 3 (PDF protegido por senha): detectado na coleta, ANTES da IA. PDF cifrado o Vertex nem
-    // lê ("no pages"); em vez de queimar uma chamada e prender em AGUARDANDO, vira INCONFORME com
-    // motivo ACIONÁVEL. AGUARDANDO_AUDITORIA fica reservado a falha de SISTEMA (IA fora/timeout).
-    const usaveis = arquivos.filter((a) => !pdfProtegidoPorSenha(a.buffer));
-    if (usaveis.length === 0) {
-      const observacao = limitarMotivo(
-        "Documento protegido por senha. Reenviar o arquivo sem proteção para permitir a auditoria.",
-      );
-      await this.db
-        .insert(documentosAdmissao)
-        .values({ admissaoId, tipoDocumentoId, estado: "INCONFORME", observacao })
-        .onConflictDoUpdate({
-          target: [documentosAdmissao.admissaoId, documentosAdmissao.tipoDocumentoId],
-          set: { estado: "INCONFORME", observacao, atualizadoEm: agora },
-        });
-      const sinalizador = await this.recalcularSinalizador(admissaoId, adm);
-      const progresso = await this.reguaCompletude.progresso(
-        admissaoId,
-        adm.codCliente,
-        adm.cargoId,
-      );
-      return {
-        resultado: { valido: false, status: "INCONFORME", motivo: observacao, camposConferidos: [] },
-        documento: { tipoDocumentoId, estado: "INCONFORME" as const },
-        progresso,
-        sinalizador,
-      };
-    }
+    // OST A / Bloco 1 — A TRIAGEM DE "PDF PROTEGIDO" SAIU DAQUI, de propósito. O critério que existia
+    // neste ponto era a string `/Encrypt` no buffer, e ela aparece também em PDF cifrado APENAS por
+    // permissões (impressão/cópia) ou assinado digitalmente, que abre sem senha nenhuma. Isso reprovou
+    // a CTPS da Silvia, um documento bom. Detectar "exige senha para ABRIR" exige tentar abrir com
+    // senha vazia, e quem faz isso é o ai-service com pypdf (ver `app/pdf_seguranca.py`), que devolve
+    // o mesmo INCONFORME com motivo acionável sem gastar chamada de IA. Aqui não se adivinha mais.
 
-    // 1) Staging efêmera — cada arquivo do conjunto vai a disco e é descartado depois (§A.6).
+    // 1) Staging efêmera — cada arquivo do conjunto vai a disco e é descartado depois (§A.6). Salva
+    //    TODOS, inclusive o que a triagem abaixo vai reprovar: o consultor precisa poder VISUALIZAR
+    //    o que o candidato mandou para entender o veredito.
     const stagingPaths: string[] = [];
-    for (const f of usaveis) {
+    for (const f of arquivos) {
       stagingPaths.push(await this.staging.salvar(admissaoId, tipo.codigo, f));
     }
+
+    // OST motivo verdadeiro / Bloco 3 — TRIAGEM DE CONTEÚDO. O que chegou é mesmo um documento?
+    // Responder EM TEXTO no formulário do Pandapé, em vez de anexar arquivo, é caso legítimo do
+    // acervo (foi o que prendeu um Comprovante de Conta Bancária por 14h). Isso NÃO é falha de
+    // sistema, é o arquivo que não serve, logo é VEREDITO: INCONFORME com motivo acionável e SEM
+    // gastar chamada de IA. Mesma régua que já valia para o PDF protegido por senha.
+    // Não-bloqueio: se ao menos um arquivo do conjunto serve, audita-se o que serve.
+    const triagem = triarConjunto(arquivos.map((a, indice) => ({ ...a, indice })));
+    const stagingAuditaveis = triagem.auditaveis.map((a) => stagingPaths[a.indice]);
 
     // 2) Regras ATIVAS do tipo (critério de validade — texto, sem PII).
     const regras = await this.db
@@ -182,33 +194,80 @@ export class AuditoriaService {
     // 3) DESACOPLAMENTO (BLOCO B): grava a COLETA ANTES de auditar, com motivo explicativo (BLOCO 2:
     //    o AGUARDANDO diz por que ainda não auditou). Se a IA cair, a coleta PERMANECE gravada.
     //    `setWhere` protege um doc já ENTREGUE de ser rebaixado antes de a IA confirmar o novo veredito.
-    await this.db
-      .insert(documentosAdmissao)
-      .values({
-        admissaoId,
-        tipoDocumentoId,
-        estado: ESTADO_AGUARDANDO_AUDITORIA,
-        observacao: "Documento coletado, aguardando a análise por IA.",
-      })
-      .onConflictDoUpdate({
-        target: [documentosAdmissao.admissaoId, documentosAdmissao.tipoDocumentoId],
-        set: {
+    //
+    //    NÃO roda quando a triagem já reprovou o conjunto: sem chamada de IA não há o que proteger, e
+    //    passar por AGUARDANDO_AUDITORIA, mesmo por um instante, contradiz a regra de que aquele
+    //    estado é reservado a falha de SISTEMA (Bloco 3). O veredito é escrito direto.
+    if (!triagem.motivoInconforme) {
+      await this.db
+        .insert(documentosAdmissao)
+        .values({
+          admissaoId,
+          tipoDocumentoId,
           estado: ESTADO_AGUARDANDO_AUDITORIA,
           observacao: "Documento coletado, aguardando a análise por IA.",
-          atualizadoEm: agora,
-        },
-        setWhere: ne(documentosAdmissao.estado, "ENTREGUE"),
-      });
+        })
+        .onConflictDoUpdate({
+          target: [documentosAdmissao.admissaoId, documentosAdmissao.tipoDocumentoId],
+          set: {
+            estado: ESTADO_AGUARDANDO_AUDITORIA,
+            observacao: "Documento coletado, aguardando a análise por IA.",
+            // O RELÓGIO DA PARADA NÃO PODE SER REINICIADO POR UMA NOVA TENTATIVA QUE FALHA IGUAL.
+            // Provado ao vivo nesta OST: o documento preso recebeu um "Reauditar", falhou com o
+            // MESMO 415, e o carimbo pulou de 14h para 0h. Se cada tentativa zerasse o relógio, o
+            // marcador de tempo parado (Bloco 5) nunca cruzaria o limiar num documento que é
+            // retentado de tempos em tempos, que é justamente o que fica preso para sempre.
+            // Documento que JÁ estava aguardando preserva o carimbo original; qualquer transição
+            // real de estado carimba normalmente.
+            //
+            // O "senão" usa `now()` do SQL, NÃO um Date do JS. Interpolar um `Date` cru dentro do
+            // template `sql` do drizzle quebrava com "Received an instance of Date": ali o drizzle
+            // não conhece o tipo da coluna e repassa o Date direto ao postgres.js, que não o
+            // serializa. Isso derrubava TODO "Auditar" de documento válido com 500. `now()` resolve
+            // no banco e não passa parâmetro nenhum. (O `${ESTADO_AGUARDANDO_AUDITORIA}` é string,
+            // que o postgres.js serializa sem problema.)
+            atualizadoEm: sql`case when ${documentosAdmissao.estado} = ${ESTADO_AGUARDANDO_AUDITORIA}
+              then ${documentosAdmissao.atualizadoEm} else now() end`,
+          },
+          setWhere: ne(documentosAdmissao.estado, "ENTREGUE"),
+        });
+    }
 
-    // 4) IA — o CPF vai SÓ aqui; nunca é logado. Todo o conjunto numa chamada, UM veredito. Se falhar,
-    //    o `throw` sobe e o documento PERMANECE AGUARDANDO_AUDITORIA (passo 3): coleta não se perde.
-    const resultado = await this.ai.auditarDocumento({
-      stagingPaths,
-      tipoDocumentoCodigo: tipo.codigo,
-      tipoDocumentoNome: tipo.nome,
-      candidato: { nome: adm.candidatoNome, cpf: adm.candidatoCpf },
-      regras: regras.map((r) => ({ descricaoRegra: r.descricaoRegra })),
-    });
+    // 4) VEREDITO. Dois caminhos, um resultado só:
+    //    a) triagem reprovou o conjunto inteiro → veredito determinístico, sem IA (Bloco 3);
+    //    b) há arquivo auditável → IA, com retentativa só do que é transitório (Bloco 4).
+    //    O CPF vai SÓ para a IA; nunca é logado. Todo o conjunto numa chamada, UM veredito.
+    let resultado: ResultadoAuditoria;
+    if (triagem.motivoInconforme) {
+      this.logger.warn(
+        `Conjunto sem arquivo auditável: veredito INCONFORME sem gastar IA. tipo=${tipo.codigo}, ` +
+          `arquivos=${arquivos.length}.`,
+      );
+      resultado = {
+        valido: false,
+        status: "INCONFORME",
+        motivo: triagem.motivoInconforme,
+        camposConferidos: [],
+      };
+    } else {
+      try {
+        resultado = await this.auditarComRetentativa({
+          stagingPaths: stagingAuditaveis,
+          tipoDocumentoCodigo: tipo.codigo,
+          tipoDocumentoNome: tipo.nome,
+          candidato: { nome: adm.candidatoNome, cpf: adm.candidatoCpf },
+          regras: regras.map((r) => ({ descricaoRegra: r.descricaoRegra })),
+        });
+      } catch (err) {
+        // OST motivo verdadeiro / Bloco 1: o motivo passa a dizer a VERDADE para TODA família, não
+        // só para quota. Antes daqui, qualquer falha que não fosse 429 deixava o documento exibindo
+        // "aguardando a análise por IA", como se houvesse fila. Não há fila: ele está parado.
+        // O estado depende da família (Bloco 3): ENTRADA é problema do arquivo e vira INCONFORME;
+        // o resto é problema nosso e o documento continua COLETADO, sem veredito.
+        await this.gravarFalhaDeAuditoria(admissaoId, tipoDocumentoId, err);
+        throw err;
+      }
+    }
 
     // 5) IA respondeu → grava o veredito (SÓ status + motivo, cap 500, sem PII — §A.3 regra 7 / §A.6).
     const estado = estadoDocumentoDeAuditoria(resultado.status);
@@ -241,34 +300,184 @@ export class AuditoriaService {
       asoArquivado = await this.arquivarAsoNoDrive(adm, stagingPaths[0], tipo.codigo, tipo.nome);
     }
 
-    // 5) Recalcula o sinalizador da admissão (INCONFORMIDADE domina; senão o cálculo do wizard).
-    const sinalizador = await this.recalcularSinalizador(admissaoId, adm);
-
-    // 6) Progresso da régua obrigatória.
-    const progresso = await this.reguaCompletude.progresso(admissaoId, adm.codCliente, adm.cargoId);
-
-    // 7) Régua obrigatória completa → conclui a Auditoria AUTOMATICAMENTE (Fase 4 item 2): AUDITORIA
-    // passa a ANALISE_OK, abre o gate do Cadastro (regra 3) e reavalia o farol (BANCO_AGUARDAR).
-    let auditoriaAuto: { status: string; gateAberto: boolean } | undefined;
-    if (progresso.completa) {
-      auditoriaAuto = await this.autoConcluirAuditoria(admissaoId, user);
-    }
-
-    // 8) Fechou a régua e ainda não arquivou? → arquiva no Drive e expurga a staging.
-    let arquivado: { pastaUrl: string } | undefined;
-    if (progresso.completa && precisaArquivarDrive(adm.drivePastaUrl)) {
-      arquivado = await this.arquivarNoDrive(adm);
-    }
+    // 5 a 8) PÓS-VEREDITO, um ponto só: sinalizador, progresso, conclusão automática da frente e
+    // arquivamento no Drive. Extraído para `aplicarPosVeredito` porque a VALIDAÇÃO HUMANA precisa do
+    // MESMO tratamento (ver o comentário do método).
+    const pos = await this.aplicarPosVeredito(admissaoId, user);
 
     return {
       resultado,
       documento: { tipoDocumentoId, estado },
+      progresso: pos.progresso,
+      sinalizador: pos.sinalizador,
+      ...(asoArquivado ? { asoArquivado } : {}),
+      ...(pos.auditoriaAuto ? { auditoriaAuto: pos.auditoriaAuto } : {}),
+      ...(pos.arquivado ? { arquivado: pos.arquivado } : {}),
+      // Falha de arquivamento chega à tela como AVISO, não como erro que apaga o que foi salvo.
+      ...(pos.avisoDrive ? { avisoDrive: pos.avisoDrive } : {}),
+    };
+  }
+
+  /**
+   * CHAMADA À IA COM RETENTATIVA SELETIVA (OST motivo verdadeiro, Bloco 4).
+   *
+   * A política, em uma frase: **retenta o que pode melhorar sozinho, não retenta o que não muda**.
+   *  - QUOTA e INDISPONIBILIDADE são transitórias (a janela de quota vira, o motor volta), então
+   *    retentam **2 vezes**, com **2s e 6s** de intervalo, no máximo **3 tentativas** no total;
+   *  - ENTRADA (415/422) é determinística: o MESMO arquivo dá o MESMO veredito, sempre. Retentar só
+   *    queima chamada de IA e mantém o documento preso, então falha de primeira e vira INCONFORME;
+   *  - CREDENCIAL não converge sem alguém trocar a credencial, e DESCONHECIDA não se retenta às
+   *    cegas. Ambas falham de primeira e ficam visíveis como parada de sistema.
+   *
+   * Os intervalos são curtos de propósito: este é o SEGUNDO backoff da cadeia (o ai-service já
+   * retentou o Vertex antes de responder) e, no upload manual, roda dentro da espera do consultor.
+   * Quota longa não se resolve aqui, e não é para se resolver: quem garante que o documento não fica
+   * esquecido é o marcador de tempo parado (`domain/auditoria-parada`).
+   */
+  private async auditarComRetentativa(
+    payload: Parameters<AiClientService["auditarDocumento"]>[0],
+  ): Promise<ResultadoAuditoria> {
+    let ultimoErro: unknown;
+    for (let tentativa = 0; tentativa <= INTERVALOS_RETENTATIVA_MS.length; tentativa += 1) {
+      try {
+        return await this.ai.auditarDocumento(payload);
+      } catch (err) {
+        ultimoErro = err;
+        const familia = familiaDaFalha(err);
+        const ehUltima = tentativa === INTERVALOS_RETENTATIVA_MS.length;
+        if (!familiaRetentavel(familia) || ehUltima) throw err;
+        const espera = INTERVALOS_RETENTATIVA_MS[tentativa];
+        this.logger.warn(
+          `Auditoria falhou por ${familia} (transitória): retentando em ${espera}ms ` +
+            `(tentativa ${tentativa + 2} de ${INTERVALOS_RETENTATIVA_MS.length + 1}).`,
+        );
+        await new Promise((r) => setTimeout(r, espera));
+      }
+    }
+    throw ultimoErro; // inalcançável: o laço só sai por `return` ou `throw`.
+  }
+
+  /**
+   * GRAVA A FALHA NO DOCUMENTO com motivo VERDADEIRO (OST motivo verdadeiro, Blocos 1 e 3).
+   *
+   * Antes, só a quota reescrevia a observação; qualquer outra falha deixava a frase inicial
+   * ("Documento coletado, aguardando a análise por IA") no lugar, sugerindo uma fila inexistente.
+   * Agora toda família escreve o seu texto, e a família também decide o ESTADO:
+   *  - ENTRADA  → INCONFORME. O motor respondeu; quem não serve é o arquivo. É veredito, não espera.
+   *  - as demais → segue AGUARDANDO_AUDITORIA, porque a falha é NOSSA e o documento pode estar bom.
+   *
+   * A gravação NÃO rebaixa documento já ENTREGUE (mesma proteção do passo 3): uma falha de auditoria
+   * não pode desfazer um veredito bom que já existia.
+   */
+  private async gravarFalhaDeAuditoria(
+    admissaoId: string,
+    tipoDocumentoId: string,
+    err: unknown,
+  ): Promise<void> {
+    const familia = familiaDaFalha(err);
+    const estado = estadoAposFalha(familia);
+    this.logger.warn(
+      `Auditoria não concluída: família=${familia}, estado gravado=${estado}. ` +
+        `Motivo exibido ao consultor atualizado.`,
+    );
+    await this.db
+      .update(documentosAdmissao)
+      .set({
+        estado,
+        observacao: limitarMotivo(MOTIVO_FALHA_IA[familia]),
+        // Mesmo motivo do upsert de coleta: falhar de novo do mesmo jeito NÃO é evento novo, então
+        // não rejuvenesce o documento. Só a transição para INCONFORME carimba, porque aí o estado
+        // mudou de verdade e a contagem de parada perde o sentido.
+        ...(estado === "INCONFORME" ? { atualizadoEm: new Date() } : {}),
+      })
+      .where(
+        and(
+          eq(documentosAdmissao.admissaoId, admissaoId),
+          eq(documentosAdmissao.tipoDocumentoId, tipoDocumentoId),
+          ne(documentosAdmissao.estado, "ENTREGUE"),
+        ),
+      );
+  }
+
+  /**
+   * PÓS-VEREDITO: tudo o que tem de acontecer DEPOIS de um documento mudar de estado, seja qual for
+   * a mão que mudou.
+   *
+   * POR QUE EXISTE (OST visualização/descarte, Bloco 1). Estes quatro passos moravam DENTRO do
+   * `auditarConjunto`, e por isso só rodavam quando quem dava o veredito era a IA. A validação
+   * humana (`ValidacaoHumanaService.validar`) gravava ENTREGUE e parava ali: se ela fosse o
+   * documento que FECHAVA a régua, a frente AUDITORIA não ia sozinha para "Análise finalizada" e os
+   * documentos NÃO subiam para o Drive. A admissão ficava com a régua completa e o fluxo parado, sem
+   * nada na tela avisando. Com o pós-veredito num ponto só, os dois caminhos passam pelo mesmo lugar
+   * e não têm como divergir de novo.
+   *
+   * Recarrega a admissão de propósito: o chamador pode ter alterado o estado do Drive no meio do
+   * caminho (o ASO arquiva antes da régua fechar), e o que decide o arquivamento é o valor CORRENTE.
+   *
+   * Idempotente nos dois efeitos: `autoConcluirAuditoria` não reescreve frente já concluída, e
+   * `precisaArquivarDrive` não re-arquiva quando já existe link real.
+   */
+  async aplicarPosVeredito(admissaoId: string, user: AuthUser): Promise<PosVeredito> {
+    const adm = await this.carregarAdmissao(admissaoId);
+
+    // Sinalizador da admissão (INCONFORMIDADE domina; senão o cálculo do wizard).
+    const sinalizador = await this.recalcularSinalizador(admissaoId, adm);
+
+    // Progresso da régua obrigatória.
+    const progresso = await this.reguaCompletude.progresso(admissaoId, adm.codCliente, adm.cargoId);
+
+    // Régua obrigatória completa → conclui a Auditoria AUTOMATICAMENTE (Fase 4 item 2): AUDITORIA
+    // passa a ANALISE_OK, abre o gate do Cadastro (regra 3) e reavalia o farol (BANCO_AGUARDAR).
+    let auditoriaAuto: { status: string; gateAberto: boolean } | undefined;
+    let arquivado: { pastaUrl: string } | undefined;
+    let avisoDrive: string | undefined;
+    if (progresso.completa) {
+      auditoriaAuto = await this.autoConcluirAuditoria(admissaoId, user);
+      // Fechou a régua e ainda não arquivou? → arquiva no Drive e expurga a staging.
+      if (precisaArquivarDrive(adm.drivePastaUrl)) {
+        // FALHA DE ARQUIVAMENTO NÃO PODE SER SILENCIOSA NEM DESTRUTIVA (OST produção, Bloco 1).
+        // O caso real: a régua fechou, a frente foi a "Análise finalizada" na tela, e o envio ao
+        // Drive morreu no 16º arquivo com um erro do Google. Como a exceção subia, a requisição da
+        // validação humana terminava em erro DEPOIS de já ter gravado tudo, e o consultor ficava
+        // com a tela dizendo "finalizada" e o prontuário vazio. Ninguém era avisado.
+        // Agora: o que já foi persistido continua valendo, a staging NÃO é expurgada, a URL segue
+        // nula (então a próxima ação na admissão tenta de novo) e o consultor recebe um AVISO.
+        try {
+          arquivado = await this.arquivarNoDrive(adm);
+        } catch (err) {
+          avisoDrive = this.avisoFalhaDrive(err, adm.id);
+        }
+      }
+    }
+
+    return {
       progresso,
       sinalizador,
-      ...(asoArquivado ? { asoArquivado } : {}),
       ...(auditoriaAuto ? { auditoriaAuto } : {}),
       ...(arquivado ? { arquivado } : {}),
+      ...(avisoDrive ? { avisoDrive } : {}),
     };
+  }
+
+  /**
+   * Traduz uma falha de arquivamento em AVISO para o consultor, e registra o motivo real no log.
+   *
+   * O texto é dirigido a quem está na tela: diz que o veredito FOI salvo (senão a pessoa refaz o
+   * trabalho à toa), que os documentos não se perderam, e que o sistema tenta de novo sozinho na
+   * próxima ação. §A.6: o log leva o id da admissão e a família da falha, nunca nome nem CPF.
+   */
+  private avisoFalhaDrive(err: unknown, admissaoId: string): string {
+    const familia = familiaDaFalha(err);
+    const detalhe = err instanceof Error ? err.message : "erro";
+    this.logger.error(
+      `Arquivamento no Drive FALHOU (admissão ${admissaoId}): família=${familia}. ` +
+        `Staging preservada e URL não gravada, então a próxima ação na admissão tenta de novo. ` +
+        `Detalhe: ${detalhe}`,
+    );
+    return (
+      "Auditoria concluída e salva, mas o envio ao Drive falhou: os documentos continuam guardados " +
+      "aqui e o sistema tentará de novo na próxima ação desta admissão. Se insistir, avise a TI."
+    );
   }
 
   /**
@@ -434,7 +643,7 @@ export class AuditoriaService {
     }
     const arquivo: ArquivoDrive = {
       stagingPath,
-      nomeFinal: `${nomeTipo}_${adm.candidatoNome}`,
+      nomeFinal: `${nomeTipo}_${adm.candidatoNome.toUpperCase()}`,
       subpasta: resolveSubpasta(codigoTipo),
     };
     const { pastaUrl } = await this.ai.arquivarDrive({
@@ -458,7 +667,7 @@ export class AuditoriaService {
    */
   private async arquivarNoDrive(
     adm: Awaited<ReturnType<AuditoriaService["carregarAdmissao"]>>,
-  ): Promise<{ pastaUrl: string } | undefined> {
+  ): Promise<{ pastaUrl: string; pastaJaExistia?: boolean; ignorados?: number } | undefined> {
     const pastaPaiId = resolvePastaPaiId(adm.tipoContrato, adm.codCliente);
     if (!pastaPaiId) {
       this.logger.warn(
@@ -480,24 +689,35 @@ export class AuditoriaService {
       const nomeTipo = nomePorCodigo.get(a.codigoTipo) ?? a.codigoTipo;
       return {
         stagingPath: a.caminho,
-        nomeFinal: `${nomeTipo}_${adm.candidatoNome}`,
+        nomeFinal: `${nomeTipo}_${adm.candidatoNome.toUpperCase()}`,
         subpasta: resolveSubpasta(a.codigoTipo),
       };
     });
 
-    const { pastaUrl } = await this.ai.arquivarDrive({
+    const resultado = await this.ai.arquivarDrive({
       parentFolderId: pastaPaiId,
       pastaNome: montarNomePasta(adm.candidatoNome, adm.clienteOperacao),
       arquivos,
     });
+    const { pastaUrl } = resultado;
 
     await this.db
       .update(admissoes)
       .set({ drivePastaUrl: pastaUrl, atualizadoEm: new Date() })
       .where(eq(admissoes.id, adm.id));
     await this.staging.removerAdmissao(adm.id);
-    this.logger.log(`Régua fechada: documentos arquivados no Drive (admissão ${adm.id}).`);
+    // §A.6: contagens e id de admissão, nunca nome de arquivo nem de pessoa. `ignorados` é a medida
+    // direta da duplicação EVITADA: a staging guarda uma cópia por auditoria do mesmo documento.
+    this.logger.log(
+      `Régua fechada: documentos arquivados no Drive (admissão ${adm.id}). ` +
+        `enviados=${resultado.arquivados}, ignorados por já existirem=${resultado.ignorados ?? 0}, ` +
+        `pasta reutilizada=${resultado.pastaJaExistia ? "sim" : "não"}.`,
+    );
 
-    return { pastaUrl };
+    return {
+      pastaUrl,
+      ...(resultado.pastaJaExistia ? { pastaJaExistia: true } : {}),
+      ...(resultado.ignorados ? { ignorados: resultado.ignorados } : {}),
+    };
   }
 }
