@@ -64,6 +64,11 @@ class ArquivamentoDrive(_CamelModel):
 
     pasta_url: str
     arquivados: int
+    # Quantos arquivos foram PULADOS por já estarem no destino com o mesmo conteúdo (checar antes de
+    # subir). Zero é o caso normal; maior que zero significa que a duplicação foi evitada.
+    ignorados: int = 0
+    # A pasta do prontuário já existia e foi REUTILIZADA, em vez de criada agora. Sobe até a tela.
+    pasta_ja_existia: bool = False
 
 
 # ── Kit (F9) ───────────────────────────────────────────────────────────────

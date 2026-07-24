@@ -19,6 +19,7 @@ from pypdf import PdfReader
 
 from app.config import get_settings
 from app.kit_motor import PaginaClassificada
+from app.vertex_erros import chamar_com_backoff
 
 _VERTEX_SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
 
@@ -27,6 +28,58 @@ _STATUS_VALIDOS = {"VALIDADO", "INCONFORME", "PENDENTE"}
 
 # Padrão de CPF (com ou sem máscara) — usado para redigir qualquer eco de PII no `motivo`.
 _CPF_RE = re.compile(r"\d{3}\.?\d{3}\.?\d{3}-?\d{2}")
+
+
+def _gerar_conteudo(contents, config):
+    """Geração no Vertex RESILIENTE ao cliente httpx "closed" do SDK genai.
+
+    BUG REAL observado em produção (e que a tela de diagnóstico expôs): a `genai.Client` do SDK, quando
+    o objeto não é mantido em variável local, pode ter o httpx pool coletado/fechado, e a chamada
+    falha com `RuntimeError: Cannot send a request, as the client has been closed`. Prova ao vivo: a
+    chamada REST crua ao Vertex respondia 200 enquanto a via SDK devolvia "closed". A correção tem duas
+    camadas: (1) prender o cliente numa VARIÁVEL LOCAL antes de usar (evita a coleta do temporário);
+    (2) se ainda assim vier "closed", limpar o cache do cliente e recriar UMA vez. Restaura a auditoria
+    e serve ao readiness pelo MESMO caminho real.
+    """
+    def _uma_vez():
+        client = get_client()  # variável local: NÃO usar get_client()...().generate inline
+        return client.models.generate_content(
+            model=get_settings().gemini_model, contents=contents, config=config
+        )
+
+    try:
+        return _uma_vez()
+    except RuntimeError as exc:
+        if "has been closed" in str(exc):
+            get_client.cache_clear()
+            return _uma_vez()
+        raise
+
+
+def readiness_vertex() -> dict:
+    """CHECAGEM DE CAMINHO REAL do Vertex (Bloco 3 da tela de diagnóstico), NÃO um /health de processo.
+
+    A lição do incidente: o /health respondeu 200 enquanto a auditoria devolvia 500. Health de processo
+    diz que o serviço subiu, não que a IA funciona. Aqui exercitamos o caminho REAL de geração, com o
+    custo mínimo possível: um prompt trivial e `max_output_tokens=1`. Prova auth + endpoint + resposta
+    do modelo sem gastar chamada cara nem tocar em dado de candidato (§A.6: prompt fixo, sem PII).
+
+    Devolve {"ok": bool, "detalhe": str, "erro": str|None}. Nunca levanta: erro vira ok=False.
+    """
+    from google.genai import types as _types
+
+    try:
+        # SEM backoff de propósito: readiness precisa ser rápido e reportar o erro na hora (um 429
+        # aqui É a informação, não algo a mascarar com retry). Usa o mesmo caminho resiliente da
+        # auditoria, então prova exatamente o que a auditoria usa.
+        resp = _gerar_conteudo(
+            [_types.Part.from_text(text="ok")],
+            _types.GenerateContentConfig(max_output_tokens=1, temperature=0.0),
+        )
+        _ = getattr(resp, "text", None)
+        return {"ok": True, "detalhe": "geração mínima respondida pelo modelo", "erro": None}
+    except Exception as exc:  # noqa: BLE001 - readiness nunca derruba
+        return {"ok": False, "detalhe": "falha na geração de teste", "erro": type(exc).__name__}
 
 
 @lru_cache
@@ -215,10 +268,12 @@ def auditar_documento(
     )
     contents = [types.Part.from_bytes(data=c, mime_type=m) for c, m in partes]
     contents.append(types.Part.from_text(text=prompt))
-    response = get_client().models.generate_content(
-        model=get_settings().gemini_model,
-        contents=contents,
-        config=config,
+    # OST B1 / Bloco 1: quota (429) e indisponibilidade do Vertex são TRANSITÓRIAS e passam por
+    # backoff exponencial antes de desistir; erro de entrada ou credencial sobe na hora. O chamador
+    # recebe `ErroVertex` com a família e traduz em HTTP legível, nunca mais um 500 cru.
+    response = chamar_com_backoff(
+        lambda: _gerar_conteudo(contents, config),
+        o_que="auditoria de documento",
     )
     dado = _extrair_json(response)
     status = dado.get("status")
