@@ -5,49 +5,71 @@ import Link from "next/link";
 import { PageHead } from "@/components/ui/PageHead";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Icon, type IconName } from "@/components/ui/Icon";
+import { useAuth } from "@/lib/auth-context";
 
 // Um card por tela do Menu Gerencial (padrão: ícone + título + descrição curta + seta). Ordem e
 // lista completas conforme a OST de padronização.
-const CARDS: { href: string; icon: IconName; title: string; desc: string }[] = [
+const CARDS: { href: string; icon: IconName; title: string; desc: string; codigo: string }[] = [
   {
     href: "/admin/clientes",
+    codigo: "clientes",
     icon: "users",
     title: "Clientes",
     desc: "Código, CNPJ, razão social e operação.",
   },
-  { href: "/admin/cargos", icon: "tag", title: "Cargos", desc: "Catálogo de cargos da admissão." },
+  { href: "/admin/cargos", icon: "tag", title: "Cargos", desc: "Catálogo de cargos da admissão.", codigo: "cargos" },
+  {
+    href: "/admin/escalas",
+    codigo: "escalas",
+    icon: "clock",
+    title: "Escalas",
+    desc: "Catálogo de escalas de trabalho, usado na Liberação.",
+  },
   {
     href: "/admin/motivos-declinio",
+    codigo: "motivos-declinio",
     icon: "alert",
     title: "Motivos de declínio",
     desc: "Catálogo de motivos de declínio da admissão.",
   },
   {
     href: "/admin/tarifas",
+    codigo: "tarifas",
     icon: "table",
     title: "Tarifas de transporte",
     desc: "Tarifa vigente por cidade e transporte, base do formulário de VT.",
   },
   {
     href: "/admin/regua",
+    codigo: "regua",
     icon: "doc",
     title: "Régua documental",
     desc: "Exigência de cada documento por (cliente + cargo).",
   },
   {
     href: "/admin/kit-regras",
+    codigo: "kit-regras",
     icon: "layers",
     title: "Regras do kit",
     desc: "Documentos e régua padrão de cada tipo de kit.",
   },
   {
     href: "/admin/regras",
+    codigo: "regras",
     icon: "check",
     title: "Regras de auditoria",
     desc: "Critério de validade de cada documento (motor de IA).",
   },
   {
+    href: "/admin/diagnostico",
+    codigo: "diagnostico",
+    icon: "alert",
+    title: "Diagnóstico do sistema",
+    desc: "Sinais do banco, dependências externas e ações por alvo.",
+  },
+  {
     href: "/admin/usuarios",
+    codigo: "usuarios",
     icon: "users",
     title: "Usuários",
     desc: "Cadastro, papéis, acesso e reset de senha.",
@@ -64,14 +86,16 @@ function norm(s: string): string {
 
 export default function AdminHome() {
   const [busca, setBusca] = useState("");
+  const { temMenu } = useAuth();
 
-  // Busca só do Menu Gerencial: filtra os CARDS por título/descrição; os que não batem SOMEM (a tela
-  // continua sendo de cards, não vira lista). Ao limpar, todos voltam.
+  // OST permissão de menu: mostra só os cards cujo menu o usuário tem (admin vê todos por bypass),
+  // e então aplica a busca por título/descrição. A consultora de auditoria vê aqui só os 2 dela.
   const visiveis = useMemo(() => {
+    const permitidos = CARDS.filter((c) => temMenu(c.codigo));
     const q = norm(busca.trim());
-    if (!q) return CARDS;
-    return CARDS.filter((c) => norm(`${c.title} ${c.desc}`).includes(q));
-  }, [busca]);
+    if (!q) return permitidos;
+    return permitidos.filter((c) => norm(`${c.title} ${c.desc}`).includes(q));
+  }, [busca, temMenu]);
 
   return (
     <>

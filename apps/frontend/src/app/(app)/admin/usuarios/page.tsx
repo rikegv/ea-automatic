@@ -12,6 +12,7 @@ import { Pill } from "@/components/ui/Pill";
 import { Icon } from "@/components/ui/Icon";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
+import { ConfigMenusModal } from "@/components/admin/ConfigMenusModal";
 import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
 
 interface Usuario {
@@ -120,6 +121,8 @@ export default function UsuariosPage() {
   // ConfirmDialogs
   const [toggleAlvo, setToggleAlvo] = useState<Usuario | null>(null);
   const [resetAlvo, setResetAlvo] = useState<Usuario | null>(null);
+  // OST permissão de menu: usuário cujo conjunto de menus está sendo configurado (null = modal fechado).
+  const [configAlvo, setConfigAlvo] = useState<Usuario | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -421,6 +424,15 @@ export default function UsuariosPage() {
                             </button>
                             <button
                               type="button"
+                              onClick={() => setConfigAlvo(u)}
+                              className="grid h-8 w-8 place-items-center rounded-lg text-dim transition hover:bg-[var(--surface-2)] hover:text-accent"
+                              title="Configurar menus de acesso"
+                              aria-label="Configurar menus de acesso"
+                            >
+                              <Icon name="layers" className="h-[17px] w-[17px]" />
+                            </button>
+                            <button
+                              type="button"
                               onClick={() => setResetAlvo(u)}
                               className="grid h-8 w-8 place-items-center rounded-lg text-dim transition hover:bg-[var(--surface-2)] hover:text-accent"
                               title="Resetar senha"
@@ -485,6 +497,15 @@ export default function UsuariosPage() {
         onConfirm={confirmarReset}
         onCancel={() => setResetAlvo(null)}
       />
+
+      {/* Configuração de menus por usuário (OST permissão de menu, Bloco 4) */}
+      {configAlvo && (
+        <ConfigMenusModal
+          usuario={configAlvo}
+          token={token ?? undefined}
+          onClose={() => setConfigAlvo(null)}
+        />
+      )}
     </>
   );
 }

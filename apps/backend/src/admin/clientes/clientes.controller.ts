@@ -1,14 +1,24 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post } from "@nestjs/common";
-import { Roles } from "../../auth/decorators";
 import { ClientesService } from "./clientes.service";
 import { CreateClienteDto, DefinirVinculoDto, UpdateClienteDto } from "./clientes.dto";
 
-// Administração de cadastros — restrita a Master / Super Admin (§A.3 / escopo OST-1A).
-@Roles("MASTER", "SUPER_ADMIN")
+/**
+ * Catálogo de CLIENTES.
+ *
+ * RBAC POR OPERAÇÃO, não por controller (OST produção, Blocos 2 e 3). Mesma correção da controller
+ * de cargos, pela mesma razão: o `@Roles` na CLASSE cobria o GET, e o consultor COMUM tomava 403 ao
+ * abrir a Liberação Admissional, que é a operação diária dele. LER o cadastro de clientes é dado de
+ * TRABALHO; ADMINISTRAR (criar, editar, trocar vínculo, inativar, reativar) segue exclusivo de
+ * Master / Super Admin, método a método. O `JwtAuthGuard` global continua valendo em tudo.
+ *
+ * As duas rotas de leitura auxiliares ficam em lados opostos de propósito: `vinculo-opcoes` serve ao
+ * select da EDIÇÃO e continua restrita; `dependencias` também, porque só é consultada na inativação.
+ */
 @Controller("admin/clientes")
 export class ClientesController {
   constructor(private readonly clientes: ClientesService) {}
 
+  /** LEITURA: liberada a qualquer autenticado (o consultor precisa na Liberação e no wizard). */
   @Get()
   list() {
     return this.clientes.list();

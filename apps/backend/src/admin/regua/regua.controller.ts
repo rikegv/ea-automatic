@@ -1,9 +1,7 @@
 import { Body, Controller, Delete, Get, Post, Put, Query } from "@nestjs/common";
-import { Roles } from "../../auth/decorators";
 import { ReguaService } from "./regua.service";
 import { UpsertReguaDto } from "./regua.dto";
 
-@Roles("MASTER", "SUPER_ADMIN")
 @Controller("admin/regua")
 export class ReguaController {
   constructor(private readonly regua: ReguaService) {}

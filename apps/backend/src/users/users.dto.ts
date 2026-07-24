@@ -1,4 +1,6 @@
 import {
+  ArrayUnique,
+  IsArray,
   IsBoolean,
   IsEmail,
   IsIn,
@@ -45,4 +47,14 @@ export class AtualizarUsuarioDto {
   @IsOptional()
   @IsBoolean()
   ativo?: boolean;
+}
+
+/** Conjunto de menus marcados para um usuário (OST permissão de menu). Códigos inválidos são
+ * ignorados no serviço; aqui só validamos o formato. */
+export class DefinirMenusDto {
+  @IsArray()
+  @ArrayUnique()
+  @IsString({ each: true })
+  @MaxLength(60, { each: true })
+  menus!: string[];
 }

@@ -1,10 +1,8 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post } from "@nestjs/common";
-import { Roles } from "../../auth/decorators";
 import { AtualizarKitTipoDto, CriarKitTipoDto } from "./kit-regras.dto";
 import { KitTiposService } from "./kit-tipos.service";
 
 // Kits do Gerador de Kit por tipo de vínculo (OST). Só administração (Master / Super Admin).
-@Roles("MASTER", "SUPER_ADMIN")
 @Controller("admin/kit-tipos")
 export class KitTiposController {
   constructor(private readonly kits: KitTiposService) {}

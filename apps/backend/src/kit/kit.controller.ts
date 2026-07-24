@@ -14,7 +14,6 @@ import {
 } from "@nestjs/common";
 import { FileInterceptor, FilesInterceptor } from "@nestjs/platform-express";
 import type { Response } from "express";
-import { Roles } from "../auth/decorators";
 import { KitService } from "./kit.service";
 
 /**
@@ -37,7 +36,6 @@ export class KitController {
    * Só administração (Master / Super Admin). Multipart: campo 'files' (vários PDFs) + 'kitTipoId'.
    */
   @Post("processar")
-  @Roles("MASTER", "SUPER_ADMIN")
   @UseInterceptors(FilesInterceptor("files", 40))
   processar(@Body("kitTipoId") kitTipoId: string, @UploadedFiles() files: Express.Multer.File[]) {
     return this.kit.processarMotor(kitTipoId, files);
@@ -45,7 +43,6 @@ export class KitController {
 
   /** Progresso do job de extração (polling da tela). Só administração. */
   @Get("processar/status/:jobId")
-  @Roles("MASTER", "SUPER_ADMIN")
   statusProcessar(@Param("jobId") jobId: string) {
     return this.kit.statusMotor(jobId);
   }
@@ -55,7 +52,6 @@ export class KitController {
    * Faz stream do binário vindo do ai-service, repassando o nome de arquivo (kit_<funcionario>.pdf).
    */
   @Get("processar/:jobId/funcionario/:indice")
-  @Roles("MASTER", "SUPER_ADMIN")
   async downloadFuncionario(
     @Param("jobId") jobId: string,
     @Param("indice") indice: string,
@@ -74,7 +70,6 @@ export class KitController {
    * administração. Multipart: campo 'files' (os PDFs que faltam). Devolve o resultado atualizado.
    */
   @Post("processar/:jobId/funcionario/:indice/reimportar")
-  @Roles("MASTER", "SUPER_ADMIN")
   @UseInterceptors(FilesInterceptor("files", 40))
   reimportar(
     @Param("jobId") jobId: string,
@@ -86,7 +81,6 @@ export class KitController {
 
   /** Etapa 4: download em lote (ZIP com um PDF por funcionário). Só administração. */
   @Get("processar/:jobId/zip")
-  @Roles("MASTER", "SUPER_ADMIN")
   async downloadZip(
     @Param("jobId") jobId: string,
     @Res({ passthrough: true }) res: Response,

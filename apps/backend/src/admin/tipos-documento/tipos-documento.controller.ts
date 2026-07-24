@@ -1,5 +1,4 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post } from "@nestjs/common";
-import { Roles } from "../../auth/decorators";
 import { CreateTipoDocumentoDto, UpdateTipoDocumentoDto } from "./tipos-documento.dto";
 import { TiposDocumentoService } from "./tipos-documento.service";
 
@@ -12,7 +11,6 @@ import { TiposDocumentoService } from "./tipos-documento.service";
  * resolver o nome de documentos de admissões antigas; filtrar lá quebraria a leitura do histórico.
  * Esta rota é a visão de gestão, e é ela que a tela da régua consome.
  */
-@Roles("MASTER", "SUPER_ADMIN")
 @Controller("admin/tipos-documento")
 export class TiposDocumentoController {
   constructor(private readonly tipos: TiposDocumentoService) {}

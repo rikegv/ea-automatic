@@ -12,6 +12,7 @@ import { ConfigService } from "@nestjs/config";
 import type { Request, Response } from "express";
 import { UsersService } from "../users/users.service";
 import { AuthService } from "./auth.service";
+import { MenusService } from "./menus.service";
 import type { AuthUser } from "./auth.types";
 import { CurrentUser, PermiteSenhaTemporaria, Public } from "./decorators";
 import { LoginDto, TrocarSenhaDto } from "./dto";
@@ -25,6 +26,7 @@ export class AuthController {
     private readonly auth: AuthService,
     private readonly users: UsersService,
     private readonly config: ConfigService,
+    private readonly menus: MenusService,
   ) {}
 
   @Public()
@@ -58,10 +60,17 @@ export class AuthController {
   }
 
   // Liberado a quem tem senha temporária: o front lê user.senhaTemporaria para redirecionar à troca.
+  // Devolve também os MENUS do usuário (OST permissão de menu), que a sidebar e o guard de rota do
+  // front consomem. MASTER/SUPER_ADMIN recebem `todos: true` (bypass) em vez da lista, para a tela
+  // nunca depender de marcação e o admin ver tudo mesmo sem configuração.
   @PermiteSenhaTemporaria()
   @Get("me")
-  me(@CurrentUser() user: AuthUser) {
-    return { user };
+  async me(@CurrentUser() user: AuthUser) {
+    const admin = user.papel === "MASTER" || user.papel === "SUPER_ADMIN";
+    const menus = admin
+      ? { todos: true as const, codigos: [] as string[] }
+      : { todos: false as const, codigos: [...(await this.menus.codigosDoUsuario(user.id))] };
+    return { user, menus };
   }
 
   /**

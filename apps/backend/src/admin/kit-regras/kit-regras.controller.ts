@@ -1,10 +1,8 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query } from "@nestjs/common";
-import { Roles } from "../../auth/decorators";
 import { AtualizarKitRegraDto, CriarKitRegraDto, ReordenarKitRegraDto } from "./kit-regras.dto";
 import { KitRegrasService } from "./kit-regras.service";
 
 // Documentos de um kit (OST). Só administração (Master / Super Admin).
-@Roles("MASTER", "SUPER_ADMIN")
 @Controller("admin/kit-regras")
 export class KitRegrasController {
   constructor(private readonly regras: KitRegrasService) {}

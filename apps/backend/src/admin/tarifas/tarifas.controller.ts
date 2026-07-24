@@ -1,11 +1,9 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post } from "@nestjs/common";
-import { Roles } from "../../auth/decorators";
 import { TarifasService } from "./tarifas.service";
 import { CreateTarifaDto, UpdateTarifaDto } from "./tarifas.dto";
 
 // Gestão das tarifas de transporte (fundação do VT Online, §A.17). Só administração (§A.6):
 // consultor não acessa rotas de cadastro.
-@Roles("MASTER", "SUPER_ADMIN")
 @Controller("admin/tarifas")
 export class TarifasController {
   constructor(private readonly tarifas: TarifasService) {}

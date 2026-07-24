@@ -1,9 +1,7 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post } from "@nestjs/common";
-import { Roles } from "../../auth/decorators";
 import { MotivosDeclinioService } from "./motivos-declinio.service";
 import { CreateMotivoDeclinioDto, UpdateMotivoDeclinioDto } from "./motivos-declinio.dto";
 
-@Roles("MASTER", "SUPER_ADMIN")
 @Controller("admin/motivos-declinio")
 export class MotivosDeclinioController {
   constructor(private readonly motivos: MotivosDeclinioService) {}
