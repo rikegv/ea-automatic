@@ -12,12 +12,16 @@ import { ClicksignModule } from "./clicksign/clicksign.module";
 import { JwtAuthGuard } from "./auth/guards/jwt-auth.guard";
 import { OriginGuard } from "./auth/guards/origin.guard";
 import { RolesGuard } from "./auth/guards/roles.guard";
+import { MenuGuard } from "./auth/guards/menu.guard";
+import { MenusModule } from "./auth/menus.module";
+import { DiagnosticoModule } from "./diagnostico/diagnostico.module";
 import { SenhaTemporariaGuard } from "./auth/guards/senha-temporaria.guard";
 import { DrizzleModule } from "./db/drizzle.module";
 import { EsteiraModule } from "./esteira/esteira.module";
 import { KitModule } from "./kit/kit.module";
 import { NaoConformidadesModule } from "./nao-conformidades/nao-conformidades.module";
 import { PandapeModule } from "./pandape/pandape.module";
+import { ReauditoriaModule } from "./reauditoria/reauditoria.module";
 import { ReguaModule } from "./regua/regua.module";
 import { StagingModule } from "./staging/staging.module";
 import { HealthController } from "./health/health.controller";
@@ -33,6 +37,7 @@ import { VtModule } from "./vt/vt.module";
     DrizzleModule,
     UsersModule,
     AuthModule,
+    MenusModule,
     AdminModule,
     AdmissoesModule,
     EsteiraModule,
@@ -43,8 +48,10 @@ import { VtModule } from "./vt/vt.module";
     AuditoriaModule,
     KitModule,
     PandapeModule,
+    ReauditoriaModule,
     ClicksignModule,
     VtModule,
+    DiagnosticoModule,
   ],
   controllers: [HealthController],
   providers: [
@@ -57,6 +64,9 @@ import { VtModule } from "./vt/vt.module";
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: SenhaTemporariaGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
+    // Permissão de MENU por usuário (OST): por último, depois de papel. Admin tem bypass; operação
+    // não reivindicada por menu passa (leitura de catálogo aberta). Ver `MenuGuard`.
+    { provide: APP_GUARD, useClass: MenuGuard },
   ],
 })
 export class AppModule {}

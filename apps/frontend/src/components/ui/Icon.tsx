@@ -32,7 +32,8 @@ export type IconName =
   | "link"
   | "logout"
   | "sun"
-  | "moon";
+  | "moon"
+  | "refresh";
 
 const PATHS: Record<IconName, JSX.Element> = {
   home: <path d="M3 10l9-7 9 7v9a2 2 0 0 1-2 2h-3v-7H8v7H5a2 2 0 0 1-2-2z" />,
@@ -156,6 +157,13 @@ const PATHS: Record<IconName, JSX.Element> = {
     </>
   ),
   moon: <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />,
+  // Reauditar (OST A / Bloco 5): setas circulares de "analisar de novo".
+  refresh: (
+    <>
+      <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+      <path d="M21 3v6h-6" />
+    </>
+  ),
 };
 
 interface IconProps extends SVGProps<SVGSVGElement> {

@@ -43,9 +43,16 @@ export class JwtAuthGuard implements CanActivate {
     }
   }
 
+  /**
+   * O access token vem SEMPRE no header `Authorization: Bearer`.
+   *
+   * O fallback para um cookie `ea_access` foi REMOVIDO (OST do refresh de sessão, Bloco 5): o backend
+   * nunca setou esse cookie em lugar nenhum, só o `ea_refresh` (httpOnly, path `/api/auth`), então o
+   * caminho era código morto. Varredura feita no repositório antes de remover: nenhuma outra
+   * referência a `ea_access`, nem no frontend, nem em teste, nem em infra.
+   */
   private extractToken(req: Request): string | undefined {
     const header = req.headers.authorization;
-    if (header?.startsWith("Bearer ")) return header.slice(7);
-    return req.cookies?.ea_access;
+    return header?.startsWith("Bearer ") ? header.slice(7) : undefined;
   }
 }

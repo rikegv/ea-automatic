@@ -41,29 +41,155 @@ function redirecionarSenhaTemporaria(): void {
   window.location.assign("/trocar-senha");
 }
 
+// ── Sessão: token corrente + renovação automática ───────────────────────────
+/**
+ * O QUE ISTO CONSERTA. O access token vive **15 minutos** e o relógio começa no CARREGAMENTO DA
+ * PÁGINA, não na última atividade. Não havia renovação nenhuma depois do mount do `AuthProvider`, e
+ * o cliente HTTP não tratava 401: o erro cru do guard ia para a tela. Quem passasse 15 minutos
+ * preenchendo um formulário (o caso real: modal do lote com 9 admissões) perdia a operação, e a
+ * única saída era recarregar a página, que destrói o preenchimento. O refresh token vive **7 dias**
+ * em cookie httpOnly, ou seja, o material para renovar sempre esteve lá e ninguém usava.
+ *
+ * §A.6: o token circula só em memória e nos headers. NUNCA é logado nem persistido aqui.
+ */
+let tokenDaSessao: string | null = null;
+let aoRenovarToken: ((token: string, user?: unknown) => void) | null = null;
+let aoExpirarSessao: (() => void) | null = null;
+
+/** O `AuthProvider` espelha aqui o token corrente, para o cliente HTTP renovar sozinho. */
+export function definirTokenDaSessao(token: string | null): void {
+  tokenDaSessao = token;
+}
+
+/** Ganchos do `AuthProvider`: token renovado (atualiza o estado) e sessão encerrada (vai ao login). */
+export function registrarGanchosDeSessao(ganchos: {
+  aoRenovar?: (token: string, user?: unknown) => void;
+  aoExpirar?: () => void;
+}): void {
+  aoRenovarToken = ganchos.aoRenovar ?? null;
+  aoExpirarSessao = ganchos.aoExpirar ?? null;
+}
+
+/** Renovação EM VOO COMPARTILHADA: N requisições que tomem 401 juntas disparam UM único refresh. */
+let refreshEmVoo: Promise<string | null> | null = null;
+
+/**
+ * Troca o refresh token (cookie httpOnly) por um access token novo. Devolve `null` quando a sessão
+ * acabou de verdade (refresh expirado ou ausente), e aí quem chama para de tentar: é a guarda
+ * anti-loop. Rota `@Public`, então não leva Authorization.
+ */
+export async function renovarSessao(): Promise<string | null> {
+  if (refreshEmVoo) return refreshEmVoo;
+  refreshEmVoo = (async () => {
+    try {
+      const res = await fetch(`${BASE}/auth/refresh`, { method: "POST", credentials: "include" });
+      if (!res.ok) return null;
+      const texto = await res.text();
+      const dados = texto ? JSON.parse(texto) : null;
+      const novo: string | null = dados?.accessToken ?? null;
+      if (!novo) return null;
+      tokenDaSessao = novo;
+      aoRenovarToken?.(novo, dados?.user);
+      return novo;
+    } catch {
+      return null; // rede fora: trata como não renovado, sem derrubar a sessão em loop.
+    } finally {
+      refreshEmVoo = null;
+    }
+  })();
+  return refreshEmVoo;
+}
+
+/** Sessão encerrada de verdade: o `AuthProvider` limpa o estado e leva ao login. */
+function sessaoExpirou(): void {
+  tokenDaSessao = null;
+  aoExpirarSessao?.();
+}
+
+/** Mensagem ACIONÁVEL no lugar do texto cru do guard ("Token de acesso inválido ou expirado"). */
+const MSG_SESSAO_EXPIRADA =
+  "Sua sessão expirou. Entre novamente para continuar; o que você preencheu segue nesta tela.";
+
+/** As rotas de sessão não entram no ciclo de renovação (401 nelas é o fim da linha, não um retry). */
+function ehRotaDeSessao(path: string): boolean {
+  return path.startsWith("/auth/");
+}
+
+/**
+ * Executa a requisição autenticada e, em 401, RENOVA e REENVIA UMA única vez com o mesmo corpo.
+ *
+ * POR QUE REENVIAR É SEGURO, inclusive em POST/PATCH/PUT/DELETE: o 401 nasce no `JwtAuthGuard`,
+ * ANTES do handler. O handler não executou, nada foi gravado, não há efeito colateral a repetir. Não
+ * é o caso perigoso de "reenviar algo que talvez já tenha sido aplicado".
+ *
+ * `montarInit` recebe o token vigente e devolve o init COMPLETO, então o corpo (JSON ou FormData) é
+ * remontado igual no reenvio, íntegro.
+ */
+async function fetchComRenovacao(
+  path: string,
+  montarInit: (token: string | null) => RequestInit,
+  tokenExplicito?: string | null,
+): Promise<Response> {
+  const primeiro = tokenExplicito ?? tokenDaSessao;
+  const res = await fetch(`${BASE}${path}`, montarInit(primeiro));
+  if (res.status !== 401 || ehRotaDeSessao(path)) return res;
+
+  const novo = await renovarSessao();
+  if (!novo) {
+    sessaoExpirou();
+    return res;
+  }
+  const segundo = await fetch(`${BASE}${path}`, montarInit(novo));
+  // Anti-loop: UMA tentativa. 401 de novo com token recém-emitido = sessão encerrada, sem terceira.
+  if (segundo.status === 401) sessaoExpirou();
+  return segundo;
+}
+
+/** Lê o corpo e converte o não-ok em `ApiError`, com a mensagem de sessão trocada pela acionável. */
+async function respostaOuErro<T>(res: Response): Promise<T> {
+  const texto = await res.text();
+  const dados = texto ? JSON.parse(texto) : null;
+  if (!res.ok) {
+    if (isSenhaTemporaria(res.status, dados)) redirecionarSenhaTemporaria();
+    if (res.status === 401) throw new ApiError(MSG_SESSAO_EXPIRADA, 401, dados);
+    const bruto = dados?.message ?? dados?.error ?? res.statusText;
+    const mensagem = Array.isArray(bruto) ? bruto.join(", ") : String(bruto);
+    throw new ApiError(mensagem, res.status, dados);
+  }
+  return dados as T;
+}
+
+/** Igual ao `respostaOuErro`, para respostas BINÁRIAS (o corpo de erro ainda é JSON). */
+async function erroDeRespostaBinaria(res: Response): Promise<ApiError> {
+  if (res.status === 401) return new ApiError(MSG_SESSAO_EXPIRADA, 401);
+  const texto = await res.text().catch(() => "");
+  let mensagem = res.statusText;
+  try {
+    const j = texto ? JSON.parse(texto) : null;
+    const bruto = j?.message ?? j?.error;
+    if (bruto) mensagem = Array.isArray(bruto) ? bruto.join(", ") : String(bruto);
+  } catch {
+    /* corpo não-JSON, mantém statusText */
+  }
+  return new ApiError(mensagem, res.status);
+}
+
 /** Cliente HTTP same-origin: o browser fala com /api (proxy do Next → backend). */
 export async function apiFetch<T = unknown>(path: string, opts: ApiOptions = {}): Promise<T> {
-  const headers: Record<string, string> = {};
-  if (opts.body !== undefined) headers["Content-Type"] = "application/json";
-  if (opts.token) headers["Authorization"] = `Bearer ${opts.token}`;
-
-  const res = await fetch(`${BASE}${path}`, {
-    method: opts.method ?? "GET",
-    headers,
-    credentials: "include",
-    body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-  });
-
-  const text = await res.text();
-  const data = text ? JSON.parse(text) : null;
-
-  if (!res.ok) {
-    if (isSenhaTemporaria(res.status, data)) redirecionarSenhaTemporaria();
-    const raw = data?.message ?? data?.error ?? res.statusText;
-    const message = Array.isArray(raw) ? raw.join(", ") : String(raw);
-    throw new ApiError(message, res.status, data);
-  }
-  return data as T;
+  // O corpo é serializado UMA vez e reusado no reenvio pós-renovação: o que o usuário preencheu vai
+  // íntegro na segunda tentativa (o caso real é o modal do lote com 9 admissões).
+  const corpo = opts.body !== undefined ? JSON.stringify(opts.body) : undefined;
+  const res = await fetchComRenovacao(
+    path,
+    (token) => {
+      const headers: Record<string, string> = {};
+      if (corpo !== undefined) headers["Content-Type"] = "application/json";
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      return { method: opts.method ?? "GET", headers, credentials: "include", body: corpo };
+    },
+    opts.token,
+  );
+  return respostaOuErro<T>(res);
 }
 
 /**
@@ -76,26 +202,17 @@ export async function apiUpload<T = unknown>(
   formData: FormData,
   token?: string | null,
 ): Promise<T> {
-  const headers: Record<string, string> = {};
-  if (token) headers["Authorization"] = `Bearer ${token}`;
-
-  const res = await fetch(`${BASE}${path}`, {
-    method: "POST",
-    headers,
-    credentials: "include",
-    body: formData,
-  });
-
-  const text = await res.text();
-  const data = text ? JSON.parse(text) : null;
-
-  if (!res.ok) {
-    if (isSenhaTemporaria(res.status, data)) redirecionarSenhaTemporaria();
-    const raw = data?.message ?? data?.error ?? res.statusText;
-    const message = Array.isArray(raw) ? raw.join(", ") : String(raw);
-    throw new ApiError(message, res.status, data);
-  }
-  return data as T;
+  // O MESMO FormData é reenviado na segunda tentativa (o objeto é reutilizável pelo fetch).
+  const res = await fetchComRenovacao(
+    path,
+    (t) => {
+      const headers: Record<string, string> = {};
+      if (t) headers["Authorization"] = `Bearer ${t}`;
+      return { method: "POST", headers, credentials: "include", body: formData };
+    },
+    token,
+  );
+  return respostaOuErro<T>(res);
 }
 
 /**
@@ -107,22 +224,16 @@ export async function apiDownload(
   fallbackName: string,
   token?: string | null,
 ): Promise<void> {
-  const headers: Record<string, string> = {};
-  if (token) headers["Authorization"] = `Bearer ${token}`;
-
-  const res = await fetch(`${BASE}${path}`, { headers, credentials: "include" });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    let message = res.statusText;
-    try {
-      const j = text ? JSON.parse(text) : null;
-      const raw = j?.message ?? j?.error;
-      if (raw) message = Array.isArray(raw) ? raw.join(", ") : String(raw);
-    } catch {
-      /* corpo não-JSON, mantém statusText */
-    }
-    throw new ApiError(message, res.status);
-  }
+  const res = await fetchComRenovacao(
+    path,
+    (t) => {
+      const headers: Record<string, string> = {};
+      if (t) headers["Authorization"] = `Bearer ${t}`;
+      return { headers, credentials: "include" };
+    },
+    token,
+  );
+  if (!res.ok) throw await erroDeRespostaBinaria(res);
 
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
@@ -162,27 +273,17 @@ export async function apiDownloadPost(
   fallbackName: string,
   token?: string | null,
 ): Promise<void> {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (token) headers["Authorization"] = `Bearer ${token}`;
-
-  const res = await fetch(`${BASE}${path}`, {
-    method: "POST",
-    headers,
-    credentials: "include",
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    let message = res.statusText;
-    try {
-      const j = text ? JSON.parse(text) : null;
-      const raw = j?.message ?? j?.error;
-      if (raw) message = Array.isArray(raw) ? raw.join(", ") : String(raw);
-    } catch {
-      /* corpo não-JSON, mantém statusText */
-    }
-    throw new ApiError(message, res.status);
-  }
+  const corpo = JSON.stringify(body);
+  const res = await fetchComRenovacao(
+    path,
+    (t) => {
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (t) headers["Authorization"] = `Bearer ${t}`;
+      return { method: "POST", headers, credentials: "include", body: corpo };
+    },
+    token,
+  );
+  if (!res.ok) throw await erroDeRespostaBinaria(res);
 
   const name = nomeDoContentDisposition(res.headers.get("Content-Disposition"), fallbackName);
   const blob = await res.blob();
@@ -202,22 +303,16 @@ export async function apiDownloadPost(
  * blob com o token e abre-se um object URL. Mesmo padrão de auth do `apiDownload`.
  */
 export async function apiOpenInline(path: string, token?: string | null): Promise<void> {
-  const headers: Record<string, string> = {};
-  if (token) headers["Authorization"] = `Bearer ${token}`;
-
-  const res = await fetch(`${BASE}${path}`, { headers, credentials: "include" });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    let message = res.statusText;
-    try {
-      const j = text ? JSON.parse(text) : null;
-      const raw = j?.message ?? j?.error;
-      if (raw) message = Array.isArray(raw) ? raw.join(", ") : String(raw);
-    } catch {
-      /* corpo não-JSON, mantém statusText */
-    }
-    throw new ApiError(message, res.status);
-  }
+  const res = await fetchComRenovacao(
+    path,
+    (t) => {
+      const headers: Record<string, string> = {};
+      if (t) headers["Authorization"] = `Bearer ${t}`;
+      return { headers, credentials: "include" };
+    },
+    token,
+  );
+  if (!res.ok) throw await erroDeRespostaBinaria(res);
 
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);

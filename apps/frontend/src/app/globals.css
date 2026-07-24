@@ -199,6 +199,30 @@
     color: var(--accent);
   }
 
+  /* Fundo NÉVOA do logo da sidebar (OST logo sidebar): halo cinza difuso e esfumaçado atrás do
+     logo branco, para dar contraste SEM placa sólida nem borda dura. Concentração mais escura no
+     centro, dissolvendo nas bordas (radial + blur). Tema-aware: no escuro fica sutil (o branco já
+     contrasta). Ver LogoEA.tsx. */
+  .logo-ea-mist {
+    background: radial-gradient(
+      56% 54% at 50% 54%,
+      rgba(58, 66, 80, 0.62) 0%,
+      rgba(96, 106, 122, 0.34) 36%,
+      rgba(150, 160, 178, 0.12) 60%,
+      transparent 78%
+    );
+    filter: blur(3.5px);
+    border-radius: 50%;
+  }
+  :root[data-theme="dark"] .logo-ea-mist {
+    background: radial-gradient(
+      58% 56% at 50% 55%,
+      rgba(255, 255, 255, 0.1) 0%,
+      rgba(255, 255, 255, 0.038) 45%,
+      transparent 72%
+    );
+  }
+
   /* Ícone de filtro flutuante (Bloco B): sobe e desce levemente, em loop suave e contínuo, para
      chamar atenção sem ser agressivo. Idêntico nas três telas (Esteira, Não Conformidades,
      Gerenciador). Respeita quem prefere menos movimento. */

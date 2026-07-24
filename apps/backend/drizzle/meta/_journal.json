@@ -225,6 +225,48 @@
       "when": 1784681381537,
       "tag": "0031_third_shooting_star",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1784717727450,
+      "tag": "0032_needy_gressill",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1784719035319,
+      "tag": "0033_omniscient_boomerang",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1784728202264,
+      "tag": "0034_naive_boom_boom",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1784770650395,
+      "tag": "0035_purple_rachel_grey",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1784828377632,
+      "tag": "0036_menus_permissao",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1784855128645,
+      "tag": "0037_tricky_amphibian",
+      "breakpoints": true
     }
   ]
 }

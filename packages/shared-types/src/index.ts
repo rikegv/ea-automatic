@@ -229,6 +229,10 @@ export type DriveSubpasta = (typeof DRIVE_SUBPASTA)[number];
 export interface ArquivamentoDrive {
   pastaUrl: string;
   arquivados: number;
+  /** Arquivos PULADOS por já estarem no destino com o mesmo conteúdo (checar antes de subir). */
+  ignorados?: number;
+  /** A pasta do prontuário já existia e foi reutilizada, em vez de criada agora. */
+  pastaJaExistia?: boolean;
 }
 
 /**

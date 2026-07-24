@@ -8,19 +8,35 @@ import { PageHead } from "@/components/ui/PageHead";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Icon } from "@/components/ui/Icon";
 
-/** Camada de administração: roda DENTRO do AppShell. Só guard de papel + botão de voltar. A navegação
- * do Menu Gerencial é 100% pelos cards (as abas de texto foram removidas). */
+/** Códigos dos menus do grupo Administração (define quem pode ABRIR o Menu Gerencial). */
+const ADMIN_MENUS = [
+  "clientes",
+  "cargos",
+  "escalas",
+  "motivos-declinio",
+  "tarifas",
+  "regua",
+  "kit-regras",
+  "regras",
+  "usuarios",
+];
+
+/** Camada de administração: roda DENTRO do AppShell. Botão de voltar + guard de ACESSO À CAMADA.
+ * OST permissão de menu: deixou de ser exclusiva de admin. Entra quem é admin OU tem ao menos um menu
+ * administrativo (ex.: a consultora de auditoria com Regras + Régua). O guard POR TELA (no layout do
+ * app) e o BACKEND barram cada tela específica que o usuário não tenha. */
 export default function AdminLayout({ children }: { children: ReactNode }) {
-  const { isAdmin } = useAuth();
+  const { isAdmin, temMenu } = useAuth();
   const pathname = usePathname();
 
-  if (!isAdmin) {
+  const podeAdministracao = isAdmin || ADMIN_MENUS.some((c) => temMenu(c));
+  if (!podeAdministracao) {
     return (
       <>
         <PageHead eyebrow="Administração" title="Acesso restrito" />
         <GlassCard className="panel">
           <p className="text-dim">
-            A administração de cadastros é exclusiva de Master / Super Admin.{" "}
+            Você não tem nenhum menu administrativo liberado.{" "}
             <Link href="/" className="text-accent underline">
               Voltar ao início
             </Link>

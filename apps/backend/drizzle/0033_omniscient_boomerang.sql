@@ -1,0 +1,2 @@
+ALTER TABLE "documento_arquivos_coletados" DROP CONSTRAINT "uq_arquivo_coletado_admissao_hash";--> statement-breakpoint
+ALTER TABLE "documento_arquivos_coletados" ADD CONSTRAINT "uq_arquivo_coletado_admissao_tipo_hash" UNIQUE("admissao_id","tipo_documento_id","hash_conteudo");

@@ -1,5 +1,8 @@
 import "dotenv/config";
 import * as argon2 from "argon2";
+// `sql` da drizzle sob alias: o `sql` do escopo é o cliente postgres.js do `createDb`, que sombrearia
+// este e faria o `excluded.*` virar uma query solta em vez de um fragmento SQL.
+import { sql as fragmento } from "drizzle-orm";
 import { createDb } from "./client";
 import { frenteStatusCatalogo, tiposDocumento, usuarios } from "./schema";
 
@@ -46,7 +49,10 @@ const STATUS_FRENTE: Array<{
     rotulo: "Aguardando reenvio dos docs",
     conclui: false,
   },
-  { tipo: "AUDITORIA", codigo: "ANALISE_OK", rotulo: "Análise OK", conclui: true },
+  // "Análise finalizada" (decisão do diretor): os três rótulos da coluna de status contam a
+  // MESMA história (Entrega pendente · Análise em andamento · Análise finalizada). É rótulo de
+  // catálogo, dado de seed; o CÓDIGO `ANALISE_OK` e a máquina de estados seguem intactos.
+  { tipo: "AUDITORIA", codigo: "ANALISE_OK", rotulo: "Análise finalizada", conclui: true },
   { tipo: "AUDITORIA", codigo: "DECLINOU", rotulo: "Declinou", conclui: false },
   { tipo: "EXAME", codigo: "A_AGENDAR", rotulo: "A agendar", conclui: false },
   { tipo: "EXAME", codigo: "AGENDADO", rotulo: "Agendado", conclui: false },
@@ -87,11 +93,21 @@ async function main(): Promise<void> {
 
   // 3) Status por frente.
   const comOrdem = STATUS_FRENTE.map((s, i) => ({ ...s, ordem: i }));
+  // CONVERGE o catálogo, em vez de só inserir o que falta. Era `onConflictDoNothing`, e por isso
+  // corrigir um RÓTULO aqui não chegava a uma base já semeada (foi o que obrigou a migration 0026 a
+  // reorganizar o Cadastro na mão). Agora o seed é a fonte de verdade do catálogo: rodar de novo
+  // alinha rótulo, ordem e `conclui`. A chave (tipo + código) NUNCA é tocada, e o seed é o ÚNICO
+  // escritor desta tabela (não há CRUD de status de frente), então não há edição manual a atropelar.
   await db
     .insert(frenteStatusCatalogo)
     .values(comOrdem)
-    .onConflictDoNothing({
+    .onConflictDoUpdate({
       target: [frenteStatusCatalogo.tipo, frenteStatusCatalogo.codigo],
+      set: {
+        rotulo: fragmento`excluded.rotulo`,
+        ordem: fragmento`excluded.ordem`,
+        conclui: fragmento`excluded.conclui`,
+      },
     });
   console.log(`[seed] status por frente: ${STATUS_FRENTE.length}`);
 

@@ -21,7 +21,13 @@
     "db:seed:clientes-atualizada": "tsx src/db/seed-clientes-atualizada.ts",
     "db:seed:entidades-soulan": "tsx src/db/seed-entidades-soulan.ts",
     "db:seed:tarifas": "tsx src/db/seed-tarifas.ts",
-    "db:view:clinica": "tsx src/db/view-relatorio-clinica.ts"
+    "db:view:clinica": "tsx src/db/view-relatorio-clinica.ts",
+    "db:varredura": "tsx src/db/varredura-documentos.ts",
+    "db:nomes-suspeitos": "tsx src/db/nomes-suspeitos.ts",
+    "db:reauditar": "tsx src/db/reauditar-admissao.ts",
+    "db:seed:menus": "tsx src/db/seed-menus.ts",
+    "db:destrava-aguardando": "tsx src/db/destrava-aguardando-auditoria.ts",
+    "db:rearquiva-drive": "tsx src/db/rearquiva-drive.ts"
   },
   "dependencies": {
     "@ea/shared-types": "workspace:*",

@@ -53,6 +53,39 @@ export const usuarios = pgTable("usuarios", {
   atualizadoEm,
 });
 
+// ── Menus + permissão de menu por usuário (OST permissão de menu) ───────────
+// Catálogo de MENUS em TABELA, no mesmo padrão de `frente_status_catalogo`: seed por
+// `onConflictDoUpdate` a partir do registro em código (`domain/menus.ts`), então a TELA de
+// configuração e o `/auth/me` leem daqui (fonte de verdade), e um menu novo aparece na configuração
+// só rodando o seed, sem deploy da tela. A chave é o `codigo` (slug estável); rótulo, rota, grupo e
+// ordem convergem no seed.
+export const menus = pgTable("menus", {
+  codigo: varchar("codigo", { length: 60 }).primaryKey(),
+  rotulo: varchar("rotulo", { length: 120 }).notNull(),
+  href: varchar("href", { length: 120 }).notNull(),
+  grupo: varchar("grupo", { length: 20 }).notNull(), // OPERACAO | ADMIN
+  ordem: integer("ordem").notNull(),
+  ativo: boolean("ativo").notNull().default(true),
+});
+
+// Associação USUÁRIO x MENU. A ausência de linha para um par (usuário, menu) significa "sem esse
+// menu". MASTER e SUPER_ADMIN NÃO dependem desta tabela: o guard os libera sempre (evita alguém se
+// trancar fora). §A.6: só ids e código de menu, nada de PII.
+export const usuarioMenus = pgTable(
+  "usuario_menus",
+  {
+    usuarioId: uuid("usuario_id")
+      .notNull()
+      .references(() => usuarios.id, { onDelete: "cascade" }),
+    menuCodigo: varchar("menu_codigo", { length: 60 })
+      .notNull()
+      .references(() => menus.codigo, { onDelete: "cascade" }),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.usuarioId, t.menuCodigo] }),
+  }),
+);
+
 // ── Cliente (chave de negócio: cod_cliente) ─────────────────────────────────
 export const clientes = pgTable("clientes", {
   codCliente: varchar("cod_cliente", { length: 40 }).primaryKey(),
@@ -315,6 +348,22 @@ export const admissoes = pgTable(
     // candidato_alteracoes_log. Limpos ao reativar. Nulos fora do farol LIBERACAO_RECUSADA.
     recusadoPorId: uuid("recusado_por_id").references(() => usuarios.id),
     recusadoEm: timestamp("recusado_em", { withTimezone: true }),
+    // OBSERVAÇÃO LIVRE DA LIBERAÇÃO (OST caixa alta + observações). Texto que o consultor deixa no
+    // modal de liberação (individual ou em massa) para quem tocar a admissão adiante, quando a
+    // informação não cabe em nenhum campo estruturado (caso real: "VT possui 6% de desconto").
+    //
+    // NÃO CONFUNDIR com `documentos_admissao.observacao`, que é o MOTIVO do veredito da auditoria por
+    // documento. São campos de tabelas diferentes, com donos e ciclos de vida diferentes: aquele é
+    // escrito pela IA/validação humana a cada veredito, este é escrito UMA vez, pelo consultor, no
+    // ato da liberação. O nome desambigua na leitura (`observacaoLiberacao` vs `observacao`).
+    //
+    // OPCIONAL: não bloqueia a liberação e NÃO entra na régua de pendências obrigatórias (§A.19).
+    // Teto de 500 caracteres, validado no DTO e no textarea; a coluna é `text` para não travar o
+    // limite no schema caso o diretor queira mais espaço depois.
+    //
+    // §A.6: texto livre digitado pelo consultor PODE conter dado pessoal, então vale a mesma regra
+    // do detalhe da esteira: exibido na leitura da ficha, NUNCA logado no servidor.
+    observacaoLiberacao: text("observacao_liberacao"),
     criadoEm,
     atualizadoEm,
   },
@@ -397,10 +446,67 @@ export const documentosAdmissao = pgTable(
       .references(() => tiposDocumento.id),
     estado: estadoDocumentoEnum("estado").notNull().default("PENDENTE"),
     observacao: text("observacao"),
+    // VALIDAÇÃO HUMANA (OST B1, Blocos 3 e 4). Era a marcação que FALTAVA: até aqui todo write neste
+    // estado passava pela IA, e a trava "a carga não reverte veredito humano" estava escrita mas era
+    // inócua, porque não havia como saber o que foi decidido por gente. Preenchido = um consultor
+    // assumiu o documento como válido, e isso tem PRECEDÊNCIA sobre a IA:
+    //  - a coleta automática e o LOTE PULAM o documento, sem exceção e sem confirmação possível;
+    //  - a reauditoria manual só passa por cima com aceite explícito de quem clicou.
+    // O nome do validador é EXIBIDO na tela junto do documento (não fica só na trilha).
+    // ON DELETE SET NULL: desativar um usuário não apaga o fato de que houve validação humana.
+    validadoPorId: uuid("validado_por_id").references(() => usuarios.id, { onDelete: "set null" }),
+    validadoEm: timestamp("validado_em", { withTimezone: true }),
     atualizadoEm,
   },
   (t) => ({
     uniqDocPorAdmissao: unique().on(t.admissaoId, t.tipoDocumentoId),
+  }),
+);
+
+// ── DocumentoArquivoColetado (marca de ARQUIVO já coletado — dedup por arquivo) ─────────────
+// Pré-requisito do scheduler (OST dedup por arquivo): a dedup por (admissão + tipo) impede duplicar
+// o TIPO, mas não sabe QUAIS arquivos já vieram — sem isto, cada ciclo re-baixaria e re-auditaria
+// tudo. A marca é o **SHA-256 do CONTEÚDO** do arquivo (hex, 64 chars).
+//
+// §A.6 — o que esta tabela deliberadamente NÃO guarda: **nome de arquivo** (já foi visto CPF em nome
+// de arquivo do Pandapé) e **URL do Pandapé** (pública e sem expiração). Um digest SHA-256 é
+// irreversível e não identifica pessoa: é só a impressão digital do byte-a-byte, que responde "este
+// arquivo exato eu já coletei?". `tamanhoBytes` é metadado técnico, não PII.
+//
+// A marca é POR (admissão + tipo + arquivo): o veredito é do conjunto de um tipo, e o mesmo arquivo
+// pode servir a dois tipos (ver a chave única abaixo).
+//
+// Semântica: a marca só é gravada DEPOIS de a auditoria do conjunto concluir. Por isso "tem marca"
+// equivale a "passou pelo fluxo ATUAL de coleta+auditoria", e a ausência de marca é o que faz o
+// REPROCESSO da varredura re-auditar o que foi gravado pelo fluxo antigo. Falha na IA deixa o
+// documento em AGUARDANDO_AUDITORIA e SEM marca, então o próximo ciclo tenta de novo.
+export const documentoArquivosColetados = pgTable(
+  "documento_arquivos_coletados",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    admissaoId: uuid("admissao_id")
+      .notNull()
+      .references(() => admissoes.id, { onDelete: "cascade" }),
+    tipoDocumentoId: uuid("tipo_documento_id")
+      .notNull()
+      .references(() => tiposDocumento.id),
+    /** SHA-256 do buffer, em hex minúsculo (64 chars). NUNCA nome de arquivo nem URL (§A.6). */
+    hashConteudo: varchar("hash_conteudo", { length: 64 }).notNull(),
+    tamanhoBytes: integer("tamanho_bytes").notNull(),
+    criadoEm,
+  },
+  (t) => ({
+    // Escopo da unicidade: (admissão + TIPO + arquivo). O tipo entra na chave porque o veredito é
+    // POR TIPO (auditoria por conjunto) e o MESMO arquivo pode servir legitimamente a dois tipos —
+    // o candidato manda um PDF único de RG+CPF nos dois formulários, e isso foi observado no acervo
+    // real. Com a chave só em (admissão + arquivo), o segundo tipo ficava SEM marca nenhuma e voltava
+    // a ser re-auditado em todo ciclo, matando a idempotência que esta tabela existe para dar.
+    uqArquivoPorTipo: unique("uq_arquivo_coletado_admissao_tipo_hash").on(
+      t.admissaoId,
+      t.tipoDocumentoId,
+      t.hashConteudo,
+    ),
+    idxAdmissaoTipo: index("idx_arquivo_coletado_admissao_tipo").on(t.admissaoId, t.tipoDocumentoId),
   }),
 );
 
@@ -564,6 +670,34 @@ export const integracaoPandape = pgTable(
   // conflitam; idPrecollaborator permanece nullable.
   (t) => ({ uniqPrecollab: unique("uq_integracao_pandape_precollab").on(t.idPrecollaborator) }),
 );
+
+// ── PandapeSchedulerEstado (scheduler de re-consulta do Pandapé, OST scheduler) ──────────────
+// Linha ÚNICA (PK fixa 'pandape') com o estado do scheduler que re-consulta as admissões vivas de
+// origem Pandapé em cadência fixa (fecha o buraco: documento anexado APÓS a liberação não entra
+// sozinho, porque o Pandapé só avisa mudança de etapa, nunca envio de documento).
+//
+// Guarda o LIGA/DESLIGA (Bloco 5, controlável sem deploy pela tela de diagnóstico), o heartbeat do
+// "vivo" (`ultimo_ciclo_ok_em`, base do sinal SCHEDULER PARADO) e o resultado do último ciclo (Bloco
+// 4: varridas/novos/falhas). §A.6: só contagens e instantes, jamais CPF/nome de arquivo/URL.
+export const pandapeSchedulerEstado = pgTable("pandape_scheduler_estado", {
+  // Singleton: uma linha só, chave fixa. Nunca cresce.
+  chave: varchar("chave", { length: 20 }).primaryKey().default("pandape"),
+  // LIGA/DESLIGA (Bloco 5). Lido a cada ciclo, então o toggle vale sem restart/deploy.
+  ligado: boolean("ligado").notNull().default(true),
+  // Início do último ciclo (rodou, independente de sucesso).
+  ultimoCicloEm: timestamp("ultimo_ciclo_em", { withTimezone: true }),
+  // Heartbeat: último ciclo BEM-SUCEDIDO. Base do sinal "scheduler parado" (só quando ligado).
+  ultimoCicloOkEm: timestamp("ultimo_ciclo_ok_em", { withTimezone: true }),
+  // Resultado do último ciclo (Bloco 4).
+  ultimoCicloVarridas: integer("ultimo_ciclo_varridas").notNull().default(0),
+  ultimoCicloNovos: integer("ultimo_ciclo_novos").notNull().default(0),
+  ultimoCicloFalhas: integer("ultimo_ciclo_falhas").notNull().default(0),
+  // Ciclo interrompido pelo teto de segurança de IA (Bloco 3).
+  ultimoCicloAbortado: boolean("ultimo_ciclo_abortado").notNull().default(false),
+  // Nota curta e sem PII do último ciclo (ex.: "inerte", "teto de IA atingido").
+  ultimoCicloNota: text("ultimo_ciclo_nota"),
+  atualizadoEm,
+});
 
 // ── DuplaCorrecaoAceites: trilha de aceite da dupla correção (INT-4 / §A.5 / §A.6) ───────────
 // Log de auditoria SENSÍVEL, permanente e consultável (§A.6): no reenvio por correção de um

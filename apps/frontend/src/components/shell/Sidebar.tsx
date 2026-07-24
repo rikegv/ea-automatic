@@ -5,9 +5,10 @@ import { useRouter, usePathname } from "next/navigation";
 import type { Papel } from "@ea/shared-types";
 import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/cn";
-import { Brand } from "@/components/ui/Brand";
+import { LogoEA } from "@/components/ui/LogoEA";
 import { NavItem } from "@/components/ui/NavItem";
 import { useLiberacaoCount } from "./LiberacaoAlerta";
+import { useDiagnosticoAlerta } from "./DiagnosticoAlerta";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
 import { Button } from "@/components/ui/Button";
 import { Icon, type IconName } from "@/components/ui/Icon";
@@ -16,24 +17,26 @@ interface NavDef {
   href: string;
   icon: IconName;
   label: string;
+  /** Código do menu (OST permissão de menu): a visibilidade segue `temMenu(codigo)`. */
+  codigo: string;
   /** Faixa vermelha premium (tela crítica / principal indicador). */
   critical?: boolean;
 }
 
 const OPERACAO: NavDef[] = [
-  { href: "/", icon: "home", label: "Início" },
-  { href: "/analise", icon: "chart", label: "Análise gerencial" },
+  { href: "/", icon: "home", label: "Início", codigo: "inicio" },
+  { href: "/analise", icon: "chart", label: "Análise gerencial", codigo: "analise" },
   // 3º item, com destaque vermelho: é a tela crítica (pré-admissões aguardando liberação).
-  { href: "/liberacao", icon: "clock", label: "Liberação Admissional", critical: true },
-  { href: "/nova", icon: "plus", label: "Nova admissão" },
-  { href: "/esteira", icon: "layers", label: "Esteira admissional" },
-  { href: "/nao-conformidades", icon: "alert", label: "Não conformidades" },
-  { href: "/gerenciador", icon: "table", label: "Gerenciador" },
+  { href: "/liberacao", icon: "clock", label: "Liberação Admissional", codigo: "liberacao", critical: true },
+  { href: "/nova", icon: "plus", label: "Nova admissão", codigo: "nova" },
+  { href: "/esteira", icon: "layers", label: "Esteira admissional", codigo: "esteira" },
+  { href: "/nao-conformidades", icon: "alert", label: "Não conformidades", codigo: "nao-conformidades" },
+  { href: "/gerenciador", icon: "table", label: "Gerenciador", codigo: "gerenciador" },
 ];
 
-// Gerador de kit (motor de extração, OST): tela própria, restrita a Master / Super Admin. Fica na
-// navegação principal (fora de Configurações), visível só para quem tem acesso.
-const GERADOR_KIT: NavDef = { href: "/gerador-kit", icon: "pen", label: "Gerador de kit" };
+// Gerador de kit (motor de extração, OST): tela própria. Visibilidade agora pelo menu `gerador-kit`
+// (OST permissão de menu), não mais só por `isAdmin`. Continua na navegação principal.
+const GERADOR_KIT: NavDef = { href: "/gerador-kit", icon: "pen", label: "Gerador de kit", codigo: "gerador-kit" };
 
 const PAPEL_ROTULO: Record<Papel, string> = {
   SUPER_ADMIN: "Super Admin",
@@ -42,6 +45,19 @@ const PAPEL_ROTULO: Record<Papel, string> = {
 };
 
 const STORAGE_KEY = "ea-sidebar-pinned";
+
+/** Códigos dos menus do grupo Administração (para decidir se o card "Menu Gerencial" aparece). */
+const ADMIN_MENUS = [
+  "clientes",
+  "cargos",
+  "escalas",
+  "motivos-declinio",
+  "tarifas",
+  "regua",
+  "kit-regras",
+  "regras",
+  "usuarios",
+];
 
 /** Deriva um nome de exibição a partir do e-mail (sem cadastro de nome na Fase 1A). */
 function displayName(email: string): string {
@@ -59,8 +75,9 @@ function isActive(pathname: string, href: string): boolean {
 }
 
 export function Sidebar() {
-  const { user, isAdmin, logout } = useAuth();
+  const { user, isAdmin, temMenu, logout } = useAuth();
   const liberacaoCount = useLiberacaoCount();
+  const diagAlerta = useDiagnosticoAlerta();
   const pathname = usePathname();
   const router = useRouter();
 
@@ -85,6 +102,20 @@ export function Sidebar() {
   const initial = name.charAt(0).toUpperCase() || "?";
   const papel = user ? PAPEL_ROTULO[user.papel] : "";
 
+  // Botão de recolher/fixar, reusado no topo (mesmo elemento nos dois estados do menu).
+  const toggleBtn = (
+    <button
+      type="button"
+      onClick={togglePin}
+      aria-label={pinned ? "Recolher menu" : "Fixar menu expandido"}
+      title={pinned ? "Recolher menu" : "Fixar menu expandido"}
+      aria-pressed={pinned}
+      className="grid h-8 w-8 flex-none place-items-center rounded-lg text-dim transition hover:bg-[var(--surface-2)] hover:text-text"
+    >
+      <Icon name={expanded ? "left" : "right"} className="h-[18px] w-[18px]" />
+    </button>
+  );
+
   return (
     <aside
       onMouseEnter={() => setHovering(true)}
@@ -94,38 +125,38 @@ export function Sidebar() {
         expanded ? "w-[248px] p-[22px_16px]" : "w-[76px] p-[22px_12px]",
       )}
     >
-      {/* Topo: marca + botão recolher/fixar (setas) */}
-      <div
-        className={cn(
-          "mb-[18px] flex items-center",
-          expanded ? "justify-between" : "justify-center",
-        )}
-      >
-        {expanded && <Brand className="ml-1.5" />}
-        <button
-          type="button"
-          onClick={togglePin}
-          aria-label={pinned ? "Recolher menu" : "Fixar menu expandido"}
-          title={pinned ? "Recolher menu" : "Fixar menu expandido"}
-          aria-pressed={pinned}
-          className="grid h-8 w-8 flex-none place-items-center rounded-lg text-dim transition hover:bg-[var(--surface-2)] hover:text-text"
-        >
-          <Icon name={expanded ? "left" : "right"} className="h-[18px] w-[18px]" />
-        </button>
-      </div>
+      {/* Topo: logo oficial do EA + botão recolher/fixar (setas). Expandido mostra o logo completo
+          (símbolo + "EA AUTOMATIC"); recolhido mostra só o símbolo, empilhado sobre o botão. */}
+      {expanded ? (
+        <div className="mb-[18px] flex items-center justify-between">
+          <LogoEA variant="full" className="ml-0.5" />
+          {toggleBtn}
+        </div>
+      ) : (
+        <div className="mb-[18px] flex flex-col items-center gap-2">
+          <LogoEA variant="symbol" />
+          {toggleBtn}
+        </div>
+      )}
 
+      {/* OST permissão de menu: a barra mostra SÓ os menus que o usuário tem (admin vê tudo por
+          bypass). O Gerador de kit deixou de depender de `isAdmin` e passou ao menu `gerador-kit`. */}
       <div className={cn("nav-label", !expanded && "hidden")}>Operação</div>
-      {(isAdmin ? [...OPERACAO, GERADOR_KIT] : OPERACAO).map((n) => (
-        <NavItem
-          key={n.href}
-          {...n}
-          active={isActive(pathname, n.href)}
-          expanded={expanded}
-          badge={n.href === "/liberacao" ? liberacaoCount : 0}
-        />
-      ))}
+      {[...OPERACAO, GERADOR_KIT]
+        .filter((n) => temMenu(n.codigo))
+        .map((n) => (
+          <NavItem
+            key={n.href}
+            {...n}
+            active={isActive(pathname, n.href)}
+            expanded={expanded}
+            badge={n.href === "/liberacao" ? liberacaoCount : 0}
+          />
+        ))}
 
-      {isAdmin && (
+      {/* Administração: o card "Menu Gerencial" aparece para admin OU para quem tem ao menos um menu
+          administrativo (ex.: a consultora de auditoria com Regras + Régua). */}
+      {(isAdmin || ADMIN_MENUS.some((c) => temMenu(c))) && (
         <>
           <div className="nav-sep" />
           <div className={cn("nav-label", !expanded && "hidden")}>Administração</div>
@@ -135,6 +166,7 @@ export function Sidebar() {
             label="Menu Gerencial"
             active={isActive(pathname, "/admin")}
             expanded={expanded}
+            badge={diagAlerta.total}
           />
         </>
       )}

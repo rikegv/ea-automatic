@@ -1,0 +1,1 @@
+ALTER TABLE "admissoes" ADD COLUMN "observacao_liberacao" text;
