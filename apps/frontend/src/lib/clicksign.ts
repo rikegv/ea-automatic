@@ -11,6 +11,9 @@ export const CLICKSIGN_TONE: Record<ClicksignStatus, PillTone> = {
   AGUARDANDO_ASSINATURA: "wn",
   ASSINADO: "ok",
   CANCELADO: "nt",
+  // Expirado é trabalho perdido que exige reenvio, não um estado neutro: sai em vermelho, como o
+  // recusado da §A.12.
+  EXPIRADO: "dg",
 };
 
 /** {tone,label} de um status Clicksign (aceita string crua; cai em neutro se desconhecido). */

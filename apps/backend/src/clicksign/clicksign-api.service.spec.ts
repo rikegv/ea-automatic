@@ -28,7 +28,9 @@ describe("ClicksignApiService — inércia sem token (§A.5)", () => {
       svc.criarRequirement("e", { documentId: "d", signerId: "s" }),
     ).resolves.toBeUndefined();
     await expect(svc.ativarEnvelope("e")).resolves.toBeUndefined();
-    await expect(svc.cancelarEnvelope("e")).resolves.toBeUndefined();
+    // `cancelarEnvelope` passou a devolver SE o provedor aceitou. Inerte nunca cancela nada, então
+    // false, que é o mesmo que a tela precisa saber: a notificação não saiu.
+    await expect(svc.cancelarEnvelope("e")).resolves.toBe(false);
 
     expect(fetchSpy).not.toHaveBeenCalled();
   });

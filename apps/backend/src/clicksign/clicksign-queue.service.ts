@@ -55,18 +55,33 @@ export class ClicksignQueueService implements OnModuleInit, OnModuleDestroy {
     await this.connection?.quit().catch(() => undefined);
   }
 
-  /** Enfileira a criação de 1 envelope para uma admissão. No-op (logado) se a fila não subiu. */
-  async enfileirarCriarEnvelope(admissaoId: string, stagingPathKit: string): Promise<void> {
+  /**
+   * Enfileira a criação de 1 envelope para uma admissão. Devolve se ENFILEIROU de fato.
+   *
+   * O jobId é ÚNICO POR DISPARO. Ele já foi estável (`env-<admissao>`) e isso criava um bug calado:
+   * o BullMQ guarda o job concluído (`removeOnComplete: 1000`), então o SEGUNDO disparo da mesma
+   * admissão era descartado sem erro nenhum. A tela dizia "enfileirado", o envelope não nascia, e o
+   * consultor não tinha como saber. Atingia todo reenvio por correção, toda troca de kit e todo
+   * redisparo depois de um cancelamento.
+   *
+   * É a MESMA armadilha que o `PandapeQueueService.enfileirarPullDocumentos` já documentava e
+   * resolvia com sufixo; a fila da Clicksign é que tinha ficado para trás.
+   *
+   * A proteção contra disparo em duplicidade deixou de ser o jobId e passou a ser o estado: o
+   * `criarEnvelope` recusa criar um segundo envelope para admissão que já tem um aguardando.
+   */
+  async enfileirarCriarEnvelope(admissaoId: string, stagingPathKit: string): Promise<boolean> {
     if (!this.queue) {
       this.logger.warn("enfileirarCriarEnvelope ignorado: fila indisponível.");
-      return;
+      return false;
     }
-    // jobId estável pela admissão: dedup de criações em voo para a mesma admissão.
-    await this.queue.add(
+    const jobId = `env-${admissaoId}-${Date.now().toString(36)}`;
+    const job = await this.queue.add(
       JOB_CRIAR_ENVELOPE,
       { admissaoId, stagingPathKit } satisfies CriarEnvelopeJobData,
-      { jobId: `env-${admissaoId}` },
+      { jobId },
     );
+    return Boolean(job?.id);
   }
 
   /** Enfileira um `poll-tick`. No-op (logado) se a fila não subiu. */

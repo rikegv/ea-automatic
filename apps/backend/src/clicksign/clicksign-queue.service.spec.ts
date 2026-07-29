@@ -20,10 +20,10 @@ function montar(comQueue: boolean) {
   return { svc, add, warn };
 }
 
-describe("ClicksignQueueService — jobId de criar-envelope (REGRESSÃO: BullMQ rejeita ':' em jobId)", () => {
+describe("ClicksignQueueService — jobId de criar-envelope (duas regressões travadas aqui)", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it("enfileira com jobId 'env-<admissaoId>' e SEM ':' (falharia se voltasse a usar 'env:')", async () => {
+  it("enfileira o job com a admissão no jobId e SEM ':' (BullMQ rejeita ':')", async () => {
     const { svc, add } = montar(true);
 
     await svc.enfileirarCriarEnvelope("adm-123", "/staging/_kits/kit.pdf");
@@ -36,9 +36,24 @@ describe("ClicksignQueueService — jobId de criar-envelope (REGRESSÃO: BullMQ 
     ];
     expect(nome).toBe(JOB_CRIAR_ENVELOPE);
     expect(data).toEqual({ admissaoId: "adm-123", stagingPathKit: "/staging/_kits/kit.pdf" });
-    // O formato exato e — sobretudo — a AUSÊNCIA de ':' são o que esta regressão protege.
-    expect(opts.jobId).toBe("env-adm-123");
+    expect(opts.jobId).toMatch(/^env-adm-123-/);
+    // A AUSÊNCIA de ':' é a primeira regressão protegida aqui.
     expect(opts.jobId).not.toContain(":");
+  });
+
+  /**
+   * A SEGUNDA regressão, achada no teste real de 28/07: com jobId ESTÁVEL (`env-<admissao>`), o
+   * BullMQ descartava em silêncio o segundo disparo da mesma admissão, porque o job concluído fica
+   * retido. A tela dizia "enfileirado" e o envelope não nascia.
+   */
+  it("dois disparos da MESMA admissão geram jobIds DIFERENTES (senão o 2º é descartado calado)", async () => {
+    const { svc, add } = montar(true);
+    await svc.enfileirarCriarEnvelope("adm-123", "/p/k1.pdf");
+    await new Promise((r) => setTimeout(r, 2));
+    await svc.enfileirarCriarEnvelope("adm-123", "/p/k2.pdf");
+    const j1 = (add.mock.calls[0][2] as { jobId: string }).jobId;
+    const j2 = (add.mock.calls[1][2] as { jobId: string }).jobId;
+    expect(j1).not.toBe(j2);
   });
 
   it("jobId nunca contém ':' mesmo com admissaoId 'normal' (BullMQ usa ':' como separador interno)", async () => {
@@ -46,7 +61,7 @@ describe("ClicksignQueueService — jobId de criar-envelope (REGRESSÃO: BullMQ 
     await svc.enfileirarCriarEnvelope("11111111-2222-3333-4444-555555555555", "/p/k.pdf");
     const opts = add.mock.calls[0][2] as { jobId: string };
     expect(opts.jobId).not.toContain(":");
-    expect(opts.jobId).toBe("env-11111111-2222-3333-4444-555555555555");
+    expect(opts.jobId).toMatch(/^env-11111111-2222-3333-4444-555555555555-/);
   });
 
   it("enfileirarTick adiciona o job poll-tick (payload vazio)", async () => {

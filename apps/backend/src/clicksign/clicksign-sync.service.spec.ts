@@ -3,6 +3,13 @@ import { ConfigService } from "@nestjs/config";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthUser } from "../auth/auth.types";
 import { ClicksignSyncService, TERMO_DUPLA_CORRECAO } from "./clicksign-sync.service";
+import { resolvePastaPaiId } from "../ai/drive-routing";
+
+/** Mock do DrivePastaPaiService: delega ao fallback puro (preserva o comportamento pré-tabela). */
+const drivePastaPaiFake = {
+  resolver: async (t: string | null | undefined, c: string | null | undefined) =>
+    resolvePastaPaiId(t, c, {}),
+};
 
 const USER: AuthUser = { id: "u-1", email: "c@e.com", papel: "COMUM", senhaTemporaria: false };
 
@@ -35,6 +42,24 @@ function montar(over: {
   const staging = { dentroDaRaiz: vi.fn(), salvar: vi.fn(), removerArquivo: vi.fn() };
   const ai = { arquivarDrive: vi.fn() };
   const kit = { gerar };
+  // Scheduler do tick (INT-4): o ciclo registra início/resultado; nos testes é inerte.
+  const schedulerFake = {
+    marcarInicioCiclo: vi.fn().mockResolvedValue(undefined),
+    registrarCiclo: vi.fn().mockResolvedValue(undefined),
+  };
+  // Assinante da empresa (INT-4): nos testes, um representante fixo resolvido sem banco.
+  const assinantesFake = {
+    resolverConjunto: vi.fn().mockResolvedValue([
+      {
+        codCliente: null,
+        nome: "Representante Soulan",
+        email: "representante@soulan.com.br",
+        cpf: "11144477735",
+        ordem: 1,
+        ativo: true,
+      },
+    ]),
+  };
   const svc = new ClicksignSyncService(
     db as never,
     {} as ConfigService,
@@ -43,6 +68,9 @@ function montar(over: {
     staging as never,
     ai as never,
     kit as never,
+    drivePastaPaiFake as never,
+    schedulerFake as never,
+    assinantesFake as never,
   );
   return { svc, api, gerar, insert, insertValues, update, db };
 }

@@ -31,6 +31,11 @@ export class AtualizarKitTipoDto {
 }
 
 // ── Documento de um kit ────────────────────────────────────────────────────
+/**
+ * `padrao` marca o documento de INSTRUÇÃO GERAL (o mesmo manual para todos, sem nome de funcionário
+ * na página). O motor não o cobra por nome e o replica no kit de cada pessoa do lote. Omitido,
+ * nasce `false`, ou seja, INDIVIDUAL, que é o documento da pessoa e continua exigindo nome.
+ */
 export class CriarKitRegraDto {
   @IsUUID()
   kitTipoId!: string;
@@ -39,6 +44,10 @@ export class CriarKitRegraDto {
   @MinLength(2)
   @MaxLength(200)
   titulo!: string;
+
+  @IsOptional()
+  @IsBoolean()
+  padrao?: boolean;
 }
 
 export class AtualizarKitRegraDto {
@@ -51,6 +60,10 @@ export class AtualizarKitRegraDto {
   @IsOptional()
   @IsBoolean()
   ativo?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  padrao?: boolean;
 }
 
 export class ReordenarKitRegraDto {

@@ -5,16 +5,19 @@ import {
   ConflictException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from "@nestjs/common";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
 import { admissoes, candidatos, frentesAdmissao, kitTipo } from "../db/schema";
 import { AiClientService } from "../ai/ai-client.service";
 import { kitLiberado } from "../domain/frentes";
+import { ehPausada } from "../domain/admissao";
 import { ClicksignQueueService } from "../clicksign/clicksign-queue.service";
 import { StagingService } from "../staging/staging.service";
+import { naoPausada } from "../db/admissao-filtros";
 
 /** Entrada do mapa de download (token → kit). Em memória: kit é efêmero (TTL 1h no purge). */
 interface KitDownload {
@@ -43,6 +46,7 @@ const HISTORICO_MAX = 50;
  */
 @Injectable()
 export class KitService {
+  private readonly logger = new Logger("KitService");
   private readonly downloads = new Map<string, KitDownload>();
   private readonly historico: KitHistorico[] = [];
 
@@ -134,6 +138,122 @@ export class KitService {
   }
 
   /**
+   * ENVIA O KIT PARA A FILA DE ASSINATURA (fluxo aprovado: cadastrado > gera kit > libera kit >
+   * "Enviar para assinatura" > fila > disparo em lote pelo consultor).
+   *
+   * NÃO cria envelope e NÃO manda e-mail. Só materializa o kit daquele funcionário na staging DA
+   * ADMISSÃO e carimba `kit_assinatura_path` + `kit_assinatura_em`, que é o que faz a admissão
+   * aparecer na fila "Prontos para solicitar" já com o kit anexado.
+   *
+   * IDENTIFICAÇÃO DA ADMISSÃO. O motor do kit não conhece admissão: ele devolve `nome` +
+   * `cpfMascarado` por funcionário (o CPF cru não sai do ai-service, §A.6). Então:
+   *  - com `admissaoId` no corpo, usa o que a tela escolheu (caminho do desempate humano);
+   *  - sem ele, casa automaticamente pelos 6 dígitos do meio do CPF mascarado contra as admissões
+   *    com o gate F9 fechado. Um único casamento segue; zero ou vários devolvem 409 com os
+   *    candidatos, para a tela perguntar em vez de adivinhar.
+   */
+  async enviarParaAssinatura(
+    jobId: string,
+    indice: number,
+    entrada: { admissaoId?: string; cpfMascarado?: string | null; nome?: string },
+  ) {
+    if (!Number.isInteger(indice) || indice < 0) {
+      throw new BadRequestException("Índice de funcionário inválido.");
+    }
+
+    const alvo = entrada.admissaoId
+      ? await this.carregarAlvo(entrada.admissaoId)
+      : await this.casarAdmissao(entrada.cpfMascarado, entrada.nome);
+
+    if (ehPausada(alvo.pausadaEm)) {
+      throw new ConflictException("Admissão pausada: retome a admissão para enviar à assinatura.");
+    }
+    const frentes = await this.db
+      .select({ tipo: frentesAdmissao.tipo, concluida: frentesAdmissao.concluida })
+      .from(frentesAdmissao)
+      .where(eq(frentesAdmissao.admissaoId, alvo.id));
+    if (!kitLiberado(frentes)) {
+      throw new ConflictException(
+        "O envio à assinatura exige as 3 frentes concluídas (Auditoria, Exame e Cadastro/Contrato).",
+      );
+    }
+
+    // Baixa o kit consolidado do ai-service e grava na staging DA ADMISSÃO (TTL 48h), não no
+    // diretório de kits avulsos (TTL 2h): a fila pode esperar o consultor por mais de um dia.
+    const { buffer } = await this.ai.baixarKitFuncionario(jobId, indice);
+    const stagingPath = await this.staging.salvar(alvo.id, "KIT_ASSINATURA", {
+      buffer,
+      originalname: "kit.pdf",
+    });
+
+    await this.db
+      .update(admissoes)
+      .set({ kitAssinaturaPath: stagingPath, kitAssinaturaEm: new Date(), atualizadoEm: new Date() })
+      .where(eq(admissoes.id, alvo.id));
+
+    // §A.6: log sem CPF. O nome do candidato é dado de trabalho, como no resto da esteira.
+    this.logger.log(`Kit enviado à fila de assinatura (admissão ${alvo.id}).`);
+    return { ok: true as const, admissaoId: alvo.id, candidato: alvo.nomeCandidato };
+  }
+
+  /** Carrega a admissão alvo do envio (erro claro quando não existe). */
+  private async carregarAlvo(admissaoId: string) {
+    const [adm] = await this.db
+      .select({
+        id: admissoes.id,
+        nomeCandidato: candidatos.nome,
+        pausadaEm: admissoes.pausadaEm,
+      })
+      .from(admissoes)
+      .innerJoin(candidatos, eq(admissoes.candidatoCpf, candidatos.cpf))
+      .where(eq(admissoes.id, admissaoId));
+    if (!adm) throw new NotFoundException("Admissão não encontrada");
+    return adm;
+  }
+
+  /**
+   * Casa o funcionário do kit com UMA admissão pelos 6 dígitos do meio do CPF mascarado
+   * (`***.456.789-**`), restrito a admissões VIVAS e sem envelope. Só devolve com casamento único;
+   * zero ou vários viram 409 com a lista, para a tela desempatar.
+   */
+  private async casarAdmissao(cpfMascarado: string | null | undefined, nome: string | undefined) {
+    const meio = (cpfMascarado ?? "").replace(/\D/g, "");
+    if (meio.length !== 6) {
+      throw new ConflictException({
+        needsPick: true,
+        motivo: "semCpf",
+        message:
+          "Não foi possível identificar o CPF deste funcionário no kit. Escolha a admissão na lista.",
+      });
+    }
+    const linhas = await this.db
+      .select({
+        id: admissoes.id,
+        nomeCandidato: candidatos.nome,
+        pausadaEm: admissoes.pausadaEm,
+      })
+      .from(admissoes)
+      .innerJoin(candidatos, eq(admissoes.candidatoCpf, candidatos.cpf))
+      .where(
+        and(
+          sql`substring(${admissoes.candidatoCpf} from 4 for 6) = ${meio}`,
+          isNull(admissoes.clicksignEnvelopeId),
+          naoPausada(),
+        ),
+      );
+    if (linhas.length === 1) return linhas[0];
+    throw new ConflictException({
+      needsPick: true,
+      motivo: linhas.length === 0 ? "semCasamento" : "ambiguo",
+      message:
+        linhas.length === 0
+          ? `Nenhuma admissão viva encontrada para ${nome ?? "este funcionário"}. Escolha na lista.`
+          : `Mais de uma admissão bate com ${nome ?? "este funcionário"}. Escolha na lista.`,
+      opcoes: linhas.map((l) => ({ admissaoId: l.id, candidato: l.nomeCandidato })),
+    });
+  }
+
+  /**
    * Gera o kit a partir do PDF-mãe e devolve um token de download. GATE F9 (§A.4 / INT-4): o kit só
    * nasce após as TRÊS frentes concluídas (`kitLiberado`); sem isso, 409. Quando liberado, após
    * materializar o kit na staging, enfileira `criar-envelope` na Clicksign (não bloqueia o response
@@ -143,11 +263,24 @@ export class KitService {
     if (!file) throw new BadRequestException("Arquivo do kit obrigatório (campo 'file')");
 
     const [adm] = await this.db
-      .select({ id: admissoes.id, nomeCandidato: candidatos.nome })
+      .select({
+        id: admissoes.id,
+        nomeCandidato: candidatos.nome,
+        pausadaEm: admissoes.pausadaEm,
+      })
       .from(admissoes)
       .innerJoin(candidatos, eq(admissoes.candidatoCpf, candidatos.cpf))
       .where(eq(admissoes.id, admissaoId));
     if (!adm) throw new NotFoundException("Admissão não encontrada");
+
+    // PAUSA (OST admissão pausada, ponto 5 dos 6): admissão pausada não gera kit. Barra ANTES de
+    // materializar qualquer coisa na staging, então a pausa não deixa resíduo para expurgar. É 409
+    // (conflito de estado), igual ao gate F9, e some sozinho ao retomar.
+    if (ehPausada(adm.pausadaEm)) {
+      throw new ConflictException(
+        "Admissão pausada: retome a admissão para gerar o kit.",
+      );
+    }
 
     // Gate F9: as 3 frentes (AUDITORIA + EXAME + CADASTRO_CONTRATO) precisam estar concluídas.
     const frentes = await this.db

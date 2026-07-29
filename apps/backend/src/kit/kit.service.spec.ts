@@ -8,7 +8,7 @@ type Frente = { tipo: string; concluida: boolean };
  * Monta o KitService com um `db.select()` que devolve, na 1ª chamada, a admissão (join candidato) e,
  * na 2ª, as frentes — espelhando a ordem das duas queries de `gerar`.
  */
-function montar(frentes: Frente[]) {
+function montar(frentes: Frente[], pausadaEm: Date | null = null) {
   let chamada = 0;
   // 1ª query: admissão + candidato (innerJoin); 2ª query: frentes (where direto).
   const db = {
@@ -17,7 +17,9 @@ function montar(frentes: Frente[]) {
       if (chamada === 1) {
         return {
           from: () => ({
-            innerJoin: () => ({ where: async () => [{ id: "adm-1", nomeCandidato: "Fulano" }] }),
+            innerJoin: () => ({
+              where: async () => [{ id: "adm-1", nomeCandidato: "Fulano", pausadaEm }],
+            }),
           }),
         };
       }
@@ -61,6 +63,27 @@ describe("KitService — gate F9 + enqueue Clicksign (INT-4)", () => {
       { tipo: "CADASTRO_CONTRATO", concluida: false },
     ]);
     await expect(svc.gerar("adm-1", FILE)).rejects.toBeInstanceOf(ConflictException);
+    expect(ai.gerarKit).not.toHaveBeenCalled();
+    expect(clicksignQueue.enfileirarCriarEnvelope).not.toHaveBeenCalled();
+  });
+
+  /**
+   * PAUSA (OST admissão pausada, ponto 5 dos 6). O kit é a porta de entrada do envelope da
+   * Clicksign, então barrar aqui é o que impede a pausa de vazar para a assinatura. O corte vem
+   * ANTES de salvar o PDF-mãe na staging, de propósito: pausa não pode deixar resíduo para expurgar.
+   */
+  it("admissão PAUSADA → 409, mesmo com as 3 frentes concluídas", async () => {
+    const { svc, ai, staging, clicksignQueue } = montar(
+      [
+        { tipo: "AUDITORIA", concluida: true },
+        { tipo: "EXAME", concluida: true },
+        { tipo: "CADASTRO_CONTRATO", concluida: true },
+      ],
+      new Date("2026-07-27T12:00:00Z"),
+    );
+    await expect(svc.gerar("adm-1", FILE)).rejects.toThrow(/pausada/i);
+    // Nada materializado e nada enfileirado: ao retomar, o kit é gerado do zero sem sobra.
+    expect(staging.salvarKit).not.toHaveBeenCalled();
     expect(ai.gerarKit).not.toHaveBeenCalled();
     expect(clicksignQueue.enfileirarCriarEnvelope).not.toHaveBeenCalled();
   });

@@ -42,12 +42,18 @@ export class KitRegrasService {
       .where(eq(kitRegraDocumento.kitTipoId, dto.kitTipoId));
     const [row] = await this.db
       .insert(kitRegraDocumento)
-      .values({ kitTipoId: dto.kitTipoId, titulo, ordem: (max ?? 0) + 1, ativo: true })
+      .values({
+        kitTipoId: dto.kitTipoId,
+        titulo,
+        ordem: (max ?? 0) + 1,
+        ativo: true,
+        padrao: dto.padrao ?? false,
+      })
       .returning();
     return row;
   }
 
-  /** Edita título e/ou ativo de um documento. Título continua único dentro do kit. */
+  /** Edita título, ativo e/ou padrão de um documento. Título continua único dentro do kit. */
   async atualizar(id: string, dto: AtualizarKitRegraDto) {
     const atual = await this.db.query.kitRegraDocumento.findFirst({
       where: eq(kitRegraDocumento.id, id),
@@ -63,6 +69,7 @@ export class KitRegrasService {
       patch.titulo = titulo;
     }
     if (dto.ativo !== undefined) patch.ativo = dto.ativo;
+    if (dto.padrao !== undefined) patch.padrao = dto.padrao;
     const [row] = await this.db
       .update(kitRegraDocumento)
       .set(patch)

@@ -9,6 +9,7 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Icon } from "@/components/ui/Icon";
+import { Modal } from "@/components/ui/Modal";
 import { Pill } from "@/components/ui/Pill";
 import { Select } from "@/components/ui/Select";
 
@@ -21,6 +22,12 @@ interface KitTipo {
 interface DicItem {
   titulo: string;
   ordem: number;
+  /**
+   * Documento PADRÃO: instrução geral, a mesma para todos, sem nome de funcionário na página. Entra
+   * no kit de cada pessoa do lote (o motor replica), então continua contando no total do painel; o
+   * que muda é que ele não é cobrado por nome nem cai em "não reconhecidos".
+   */
+  padrao?: boolean;
 }
 interface Documento {
   titulo: string;
@@ -249,8 +256,8 @@ export default function ProcessarKitPage() {
   return (
     <>
       <PageHead
-        eyebrow="Gerador de kit"
-        title="Processar kit"
+        eyebrow="Gerador De Kit"
+        title="Processar Kit"
         subtitle="Escolha o kit, envie os PDFs do sistema de folha e o motor separa os documentos por funcionário. Baixe o kit consolidado, por funcionário ou tudo em um ZIP."
       />
 
@@ -333,7 +340,7 @@ export default function ProcessarKitPage() {
 
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <Button onClick={processar} disabled={!podeProcessar} className="px-5 py-2.5">
-            {processando ? "Processando…" : "Processar kit"}
+            {processando ? "Processando…" : "Processar Kit"}
           </Button>
           {!processando && arquivos.length > 0 && (
             <span className="text-[12.5px] text-dim">
@@ -444,6 +451,16 @@ function Resultado({
   const [busca, setBusca] = useState("");
   const [retencao, setRetencao] = useState<(() => void) | null>(null);
   const [reimportando, setReimportando] = useState<number | null>(null);
+  // "Enviar para assinatura": anexa o kit à admissão e a põe na fila. NÃO dispara envelope.
+  const [enviando, setEnviando] = useState<number | null>(null);
+  const [flashEnvio, setFlashEnvio] = useState<string | null>(null);
+  const [enviados, setEnviados] = useState<Set<number>>(new Set());
+  const [desempate, setDesempate] = useState<{
+    indice: number;
+    func: Funcionario;
+    mensagem: string;
+    opcoes: { admissaoId: string; candidato: string }[];
+  } | null>(null);
   const reimportInputRef = useRef<HTMLInputElement>(null);
   const alvoReimport = useRef<number | null>(null);
 
@@ -515,6 +532,51 @@ function Resultado({
     const acao = retencao;
     setRetencao(null);
     acao?.();
+  }
+
+  /**
+   * Envia o kit deste funcionário para a fila "Prontos para solicitar" (tela Ass. Click). Não cria
+   * envelope e não manda e-mail: só anexa o kit à admissão. O disparo é ação humana, em lote, lá.
+   *
+   * O backend casa a admissão pelo CPF mascarado do funcionário; quando não é único, responde 409
+   * com as opções e a tela pergunta em vez de adivinhar.
+   */
+  async function enviarAssinatura(indice: number, func: Funcionario, admissaoId?: string) {
+    setEnviando(indice);
+    setErroDl(null);
+    setFlashEnvio(null);
+    try {
+      const r = await apiFetch<{ ok: true; admissaoId: string; candidato: string }>(
+        `/kit/processar/${jobId}/funcionario/${indice}/enviar-assinatura`,
+        {
+          method: "POST",
+          token,
+          body: { admissaoId, cpfMascarado: func.cpfMascarado, nome: func.nome },
+        },
+      );
+      setEnviados((s) => new Set(s).add(indice));
+      setDesempate(null);
+      setFlashEnvio(`${r.candidato} entrou na fila de assinatura com o kit anexado.`);
+    } catch (e) {
+      const corpo =
+        e instanceof ApiError
+          ? (e.data as
+              | { needsPick?: boolean; message?: string; opcoes?: { admissaoId: string; candidato: string }[] }
+              | undefined)
+          : undefined;
+      if (corpo?.needsPick) {
+        setDesempate({
+          indice,
+          func,
+          mensagem: corpo.message ?? "Escolha a admissão.",
+          opcoes: corpo.opcoes ?? [],
+        });
+      } else {
+        setErroDl(e instanceof ApiError ? e.message : "Falha ao enviar para assinatura.");
+      }
+    } finally {
+      setEnviando(null);
+    }
   }
 
   async function baixarFuncionario(indice: number, func: Funcionario) {
@@ -631,6 +693,12 @@ function Resultado({
         )}
       </div>
 
+      {flashEnvio && (
+        <p className="mb-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-ok">
+          {flashEnvio}
+        </p>
+      )}
+
       {erroDl && (
         <p
           className="mb-3 rounded-xl border border-[var(--border)] bg-[rgba(214,69,69,0.1)] px-3 py-2 text-sm text-danger"
@@ -741,6 +809,21 @@ function Resultado({
                   <Icon name="download" className="h-3.5 w-3.5" />
                   {baixando === `f${i}` ? "Baixando…" : "Baixar"}
                 </Button>
+
+                {/* Encaminha para a fila de assinatura COM o kit anexado. Não dispara envelope. */}
+                <Button
+                  onClick={() => void enviarAssinatura(i, f)}
+                  disabled={enviando !== null || baixando !== null || reimportando !== null}
+                  className="inline-flex flex-none items-center gap-1.5 px-3 py-1.5 text-[12.5px]"
+                  title="Anexar o kit à admissão e mandar para a fila de assinatura"
+                >
+                  <Icon name={enviados.has(i) ? "check" : "arr"} className="h-3.5 w-3.5" />
+                  {enviando === i
+                    ? "Enviando…"
+                    : enviados.has(i)
+                      ? "Na fila"
+                      : "Enviar para assinatura"}
+                </Button>
               </div>
 
               {/* Área expansível: revisão (se houver) + a lista detalhada de documentos de hoje */}
@@ -776,6 +859,14 @@ function Resultado({
                           >
                             {d.titulo}
                           </span>
+                          {d.padrao && (
+                            <span
+                              className="flex-none rounded border border-[var(--border)] px-1.5 py-0.5 text-[10.5px] font-semibold uppercase tracking-wide text-dim"
+                              title="Documento padrão: instrução geral, entra no kit de todos"
+                            >
+                              Padrão
+                            </span>
+                          )}
                           {doc && (
                             <span className="flex-none text-[11.5px] text-dim">
                               {fmtPaginas(doc.paginas)}
@@ -795,7 +886,7 @@ function Resultado({
       <ConfirmDialog
         open={confirmar !== null}
         tone="danger"
-        title="Confirmar identidade antes de baixar"
+        title="Confirmar Identidade Antes De Baixar"
         message={mensagemConfirmacao}
         confirmLabel="Confirmar e baixar"
         onConfirm={confirmarDownload}
@@ -804,12 +895,57 @@ function Resultado({
 
       <ConfirmDialog
         open={retencao !== null}
-        title="Baixe agora: os arquivos são temporários"
+        title="Baixe Agora: Os Arquivos São Temporários"
         message="Os documentos processados não ficam armazenados no sistema para download depois. Os arquivos são temporários e podem ser apagados a qualquer momento. Baixe agora o que precisar."
         confirmLabel="Entendi, baixar"
         onConfirm={confirmarRetencao}
         onCancel={() => setRetencao(null)}
       />
+
+      {/* Desempate: o CPF do kit não casou com exatamente UMA admissão, então quem escolhe é o
+          consultor. Melhor perguntar do que anexar o kit na pessoa errada. */}
+      {desempate && (
+        <Modal
+          onClose={() => setDesempate(null)}
+          className="max-w-md"
+          ariaLabel="Escolher a admissão"
+        >
+          <h3>Qual admissão?</h3>
+          <p className="psub mt-1">{desempate.mensagem}</p>
+          <p className="mt-2 text-[12.5px] text-dim">
+            Kit de <b>{desempate.func.nome}</b>
+            {desempate.func.cpfMascarado ? `, CPF ${desempate.func.cpfMascarado}` : ""}.
+          </p>
+
+          <div className="mt-4 space-y-1.5">
+            {desempate.opcoes.length === 0 ? (
+              <p className="text-[12.5px] text-faint">
+                Nenhuma admissão viva bate com este funcionário. Confira se a admissão existe e se as
+                três frentes estão concluídas.
+              </p>
+            ) : (
+              desempate.opcoes.map((o) => (
+                <button
+                  key={o.admissaoId}
+                  type="button"
+                  disabled={enviando !== null}
+                  onClick={() => void enviarAssinatura(desempate.indice, desempate.func, o.admissaoId)}
+                  className="flex w-full items-center justify-between rounded-lg border border-[var(--border)] px-3 py-2 text-left text-[13.5px] transition hover:bg-[var(--surface-2)]"
+                >
+                  <span>{o.candidato}</span>
+                  <Icon name="right" className="h-4 w-4 text-faint" />
+                </button>
+              ))
+            )}
+          </div>
+
+          <div className="mt-5 flex justify-end">
+            <Button variant="secondary" onClick={() => setDesempate(null)} className="px-4 py-2.5">
+              Cancelar
+            </Button>
+          </div>
+        </Modal>
+      )}
 
       {/* Upload oculto da reimportação por funcionário (os PDFs que faltam) */}
       <input

@@ -79,6 +79,23 @@ export class KitController {
     return this.kit.reimportarFuncionario(jobId, Number(indice), files);
   }
 
+  /**
+   * ENVIA o kit deste funcionário para a FILA DE ASSINATURA. Não cria envelope e não manda e-mail:
+   * só anexa o kit à admissão, que passa a aparecer em "Prontos para solicitar". O disparo é ação
+   * humana, em lote, na tela de assinaturas.
+   *
+   * `admissaoId` no corpo é opcional: sem ele o service casa pelo CPF mascarado do funcionário e,
+   * se não for único, devolve 409 com as opções para a tela desempatar.
+   */
+  @Post("processar/:jobId/funcionario/:indice/enviar-assinatura")
+  enviarAssinatura(
+    @Param("jobId") jobId: string,
+    @Param("indice") indice: string,
+    @Body() body: { admissaoId?: string; cpfMascarado?: string | null; nome?: string },
+  ) {
+    return this.kit.enviarParaAssinatura(jobId, Number(indice), body ?? {});
+  }
+
   /** Etapa 4: download em lote (ZIP com um PDF por funcionário). Só administração. */
   @Get("processar/:jobId/zip")
   async downloadZip(

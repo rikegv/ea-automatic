@@ -1,6 +1,13 @@
 import { ConfigService } from "@nestjs/config";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ClicksignSyncService } from "./clicksign-sync.service";
+import { resolvePastaPaiId } from "../ai/drive-routing";
+
+/** Mock do DrivePastaPaiService: delega ao fallback puro (preserva o comportamento pré-tabela). */
+const drivePastaPaiFake = {
+  resolver: async (t: string | null | undefined, c: string | null | undefined) =>
+    resolvePastaPaiId(t, c, {}),
+};
 
 // recomputeFarolGlobal toca o banco — fora do escopo deste ciclo; isola para o caminho ASSINADO.
 vi.mock("../admissoes/farol", () => ({
@@ -60,6 +67,24 @@ function montar(opts: { selectResults: unknown[]; status?: string; url?: string 
   const queue = { enfileirarTick: vi.fn(), enfileirarCriarEnvelope: vi.fn() };
   const kit = { gerar: vi.fn() };
 
+  // Scheduler do tick (INT-4): o ciclo registra início/resultado; nos testes é inerte.
+  const schedulerFake = {
+    marcarInicioCiclo: vi.fn().mockResolvedValue(undefined),
+    registrarCiclo: vi.fn().mockResolvedValue(undefined),
+  };
+  // Assinante da empresa (INT-4): nos testes, um representante fixo resolvido sem banco.
+  const assinantesFake = {
+    resolverConjunto: vi.fn().mockResolvedValue([
+      {
+        codCliente: null,
+        nome: "Representante Soulan",
+        email: "representante@soulan.com.br",
+        cpf: "11144477735",
+        ordem: 1,
+        ativo: true,
+      },
+    ]),
+  };
   const svc = new ClicksignSyncService(
     db as never,
     {} as ConfigService,
@@ -68,6 +93,9 @@ function montar(opts: { selectResults: unknown[]; status?: string; url?: string 
     staging as never,
     ai as never,
     kit as never,
+    drivePastaPaiFake as never,
+    schedulerFake as never,
+    assinantesFake as never,
   );
   const log = vi
     .spyOn((svc as unknown as { logger: { log: (m: string) => void } }).logger, "log")
@@ -160,6 +188,53 @@ describe("ClicksignSyncService.processarTick — ciclo de verificação (INT-4 /
     expect(obterUrlAssinado).not.toHaveBeenCalled();
     expect(ai.arquivarDrive).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("'running' PASSADO DO PRAZO → marca EXPIRADO (o registro não fica AGUARDANDO para sempre)", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const enviadoEm = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000);
+    const { svc, setCalls, ai } = montar({
+      selectResults: [[{ id: "adm-1", envelopeId: "env-1", enviadoEm }]],
+      status: "running",
+    });
+
+    await svc.processarTick();
+
+    expect(setCalls).toEqual([expect.objectContaining({ clicksignStatus: "EXPIRADO" })]);
+    expect(ai.arquivarDrive).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("'closed' vencido ainda ARQUIVA: o prazo só decide depois de closed/canceled", async () => {
+    // Assinado no último dia, ciclo rodou depois do vencimento. Expirar aqui perderia o contrato.
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      status: 200,
+      arrayBuffer: async () => new ArrayBuffer(8),
+    } as unknown as Response);
+    const enviadoEm = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000);
+    const { svc, setCalls } = montar({
+      selectResults: [[{ id: "adm-1", envelopeId: "env-1", enviadoEm }], [admRow()]],
+      status: "closed",
+      url: S3_URL,
+    });
+
+    await svc.processarTick();
+
+    expect(fetchSpy).toHaveBeenCalledWith(S3_URL);
+    expect(setCalls.find((s) => s.clicksignStatus === "ASSINADO")).toBeDefined();
+    expect(setCalls.find((s) => s.clicksignStatus === "EXPIRADO")).toBeUndefined();
+  });
+
+  it("'running' SEM carimbo de envio → segue aguardando (fail-safe do envelope antigo)", async () => {
+    const { svc, setCalls } = montar({
+      selectResults: [[{ id: "adm-1", envelopeId: "env-1", enviadoEm: null }]],
+      status: "running",
+    });
+
+    await svc.processarTick();
+
+    expect(setCalls).toEqual([]);
   });
 
   it("sem pasta-pai do Drive (resolvePastaPaiId null) → NÃO arquiva e NÃO marca ASSINADO (próximo ciclo)", async () => {

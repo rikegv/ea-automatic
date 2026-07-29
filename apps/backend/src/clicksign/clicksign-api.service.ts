@@ -145,7 +145,15 @@ export class ClicksignApiService {
    */
   async adicionarSigner(
     envId: string,
-    signer: { nome: string; email: string; cpf?: string },
+    signer: {
+      nome: string;
+      email: string;
+      cpf?: string;
+      /** Ordem de assinatura. Grupo maior só assina (e só é notificado) depois do grupo anterior. */
+      group?: number;
+      /** Este signatário pode RECUSAR o documento? Default da Clicksign é true. */
+      refusable?: boolean;
+    },
   ): Promise<{ id: string } | undefined> {
     if (this.inerte()) return undefined;
     const attributes: Record<string, unknown> = { name: signer.nome, email: signer.email };
@@ -154,6 +162,8 @@ export class ClicksignApiService {
       attributes.has_documentation = true;
       attributes.documentation = doc;
     }
+    if (signer.group !== undefined) attributes.group = signer.group;
+    if (signer.refusable !== undefined) attributes.refusable = signer.refusable;
     const data = await this.req<{ data?: { id?: string } }>(
       "POST",
       `/envelopes/${enc(envId)}/signers`,
@@ -169,7 +179,16 @@ export class ClicksignApiService {
    */
   async criarRequirement(
     envId: string,
-    ref: { documentId: string; signerId: string },
+    ref: {
+      documentId: string;
+      signerId: string;
+      /**
+       * PAPEL do signatário no documento. Default `sign` (genérico) por compatibilidade; o EA passa
+       * `employee` para o funcionário e `employer` para a empresa. A lista aceita pela conta foi
+       * levantada contra a API em 28/07 (33 papéis válidos).
+       */
+      role?: string;
+    },
   ): Promise<void> {
     if (this.inerte()) return;
     const rel = {
@@ -179,7 +198,7 @@ export class ClicksignApiService {
     await this.req("POST", `/envelopes/${enc(envId)}/requirements`, {
       data: {
         type: "requirements",
-        attributes: { action: "agree", role: "sign" },
+        attributes: { action: "agree", role: ref.role ?? "sign" },
         relationships: rel,
       },
     });
@@ -201,21 +220,49 @@ export class ClicksignApiService {
   }
 
   /**
-   * (8) Cancela o envelope. draft → DELETE. running → best-effort PATCH status="canceled" (ver doc
-   * da classe): tolerante a falha, pois o estado autoritativo do reenvio é o EA. Inerte → no-op.
+   * (8) Cancela o envelope. Devolve se o provedor ACEITOU de fato.
+   *
+   * Por que o retorno importa: a tela informa ao consultor se o funcionário foi ou não notificado. Um
+   * "cancelado" otimista seria pior que nada, porque afirmaria uma notificação que não saiu.
+   *
+   * DRAFT usa DELETE, que é o que a API aceita nesse estado (PATCH status="canceled" é recusado com
+   * "status deve estar em: draft, running"). RUNNING/CLOSED tentam o PATCH canônico e, nesta conta,
+   * costumam falhar: não há cancelamento programático (§A.5). Falha NÃO lança; devolve false, e o
+   * estado autoritativo segue sendo o do EA.
    */
-  async cancelarEnvelope(envId: string): Promise<void> {
-    if (this.inerte()) return;
+  async cancelarEnvelope(envId: string): Promise<boolean> {
+    if (this.inerte()) return false;
+
+    // O caminho certo depende do estado atual, então consultamos antes de agir.
+    const atual = await this.consultarStatus(envId).catch(() => undefined);
+    if (atual?.status === "draft") {
+      try {
+        await this.req("DELETE", `/envelopes/${enc(envId)}`);
+        return true;
+      } catch {
+        this.logger.warn("DELETE do envelope em rascunho recusado pela Clicksign.");
+        return false;
+      }
+    }
+
     try {
       await this.req("PATCH", `/envelopes/${enc(envId)}`, {
         data: { id: envId, type: "envelopes", attributes: { status: "canceled" } },
       });
+      // A API pode responder 2xx sem mudar o estado, então CONFERIMOS em vez de acreditar.
+      const depois = await this.consultarStatus(envId).catch(() => undefined);
+      const cancelou = depois?.status === "canceled" || depois === undefined;
+      if (!cancelou) {
+        this.logger.warn(
+          "Clicksign aceitou a chamada mas o envelope NÃO ficou cancelado (sem cancelamento programático nesta conta).",
+        );
+      }
+      return cancelou;
     } catch {
-      // Esperado em envelope running nesta conta (PATCH só aceita draft/running). O cancelamento
-      // técnico no provedor é best-effort; a baixa autoritativa é o clicksignStatus=CANCELADO no EA.
       this.logger.warn(
         "Cancelamento programático do envelope não aceito pela Clicksign (segue best-effort).",
       );
+      return false;
     }
   }
 
