@@ -20,6 +20,7 @@ import { DrizzleModule } from "./db/drizzle.module";
 import { EsteiraModule } from "./esteira/esteira.module";
 import { KitModule } from "./kit/kit.module";
 import { NaoConformidadesModule } from "./nao-conformidades/nao-conformidades.module";
+import { PastasDriveModule } from "./admin/pastas-drive/pastas-drive.module";
 import { PandapeModule } from "./pandape/pandape.module";
 import { ReauditoriaModule } from "./reauditoria/reauditoria.module";
 import { ReguaModule } from "./regua/regua.module";
@@ -28,6 +29,7 @@ import { HealthController } from "./health/health.controller";
 import { HealthService } from "./health/health.service";
 import { UsersModule } from "./users/users.module";
 import { VtModule } from "./vt/vt.module";
+import { VtColetaModule } from "./vt-coleta/vt-coleta.module";
 
 @Module({
   imports: [
@@ -39,6 +41,7 @@ import { VtModule } from "./vt/vt.module";
     AuthModule,
     MenusModule,
     AdminModule,
+    PastasDriveModule,
     AdmissoesModule,
     EsteiraModule,
     NaoConformidadesModule,
@@ -51,6 +54,7 @@ import { VtModule } from "./vt/vt.module";
     ReauditoriaModule,
     ClicksignModule,
     VtModule,
+    VtColetaModule,
     DiagnosticoModule,
   ],
   controllers: [HealthController],

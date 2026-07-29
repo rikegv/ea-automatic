@@ -45,6 +45,20 @@ export interface GerarKitPayload {
   nomeCandidato: string;
 }
 
+/**
+ * Um arquivo do bucket coletivo de VT (§A.17 etapa 3 / GCS). O ai-service já extraiu o CPF do nome do
+ * objeto: o nome cru NUNCA cruza esta fronteira (§A.6). `id` é o NOME DO OBJETO no bucket, um handle
+ * TRANSITÓRIO só para a baixa: contém NOME+CPF, então nunca é persistido nem logado (§A.6). `cpf` é
+ * null quando o nome está fora do padrão; `md5` é o digest hex do objeto.
+ */
+export interface ItemColetaVt {
+  id: string;
+  md5: string | null;
+  mimeType: string;
+  cpf: string | null;
+  ehPdf: boolean;
+}
+
 /** Uma linha do itinerário no documento de VT, já pronta para a tabela do PDF. */
 export interface ConducaoVtPayload {
   sentido: "IDA" | "VOLTA";
@@ -233,9 +247,55 @@ export class AiClientService {
     return this.post<ResultadoAuditoria>("/auditoria/documento", payload);
   }
 
+  /**
+   * VALIDA uma pasta-pai do Drive pelo caminho REAL (a credencial em uso enxerga a pasta?). Usado
+   * pela tela de gestão de pastas-pai (admin), antes de salvar. NUNCA lança: erro de rede ou
+   * ai-service inerte/mock viram `{ valido: false, motivo }`, para a tela mostrar a causa e NÃO
+   * salvar. §A.6: só envia o `folderId` (identificador, não PII).
+   */
+  async validarPastaDrive(folderId: string): Promise<{ valido: boolean; motivo?: string }> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15_000);
+    try {
+      const res = await fetch(`${this.baseUrl}/drive/validar-pasta`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Internal-Token": this.token },
+        body: JSON.stringify({ folderId }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        this.logger.warn(`ai-service /drive/validar-pasta respondeu HTTP ${res.status}`);
+        return { valido: false, motivo: `Validação do Drive indisponível (HTTP ${res.status}).` };
+      }
+      const body = (await res.json()) as { valido?: boolean; motivo?: string };
+      return { valido: Boolean(body.valido), motivo: body.motivo };
+    } catch (err) {
+      this.logger.warn(
+        `Falha ao validar pasta no Drive: ${err instanceof Error ? err.name : "erro"}`,
+      );
+      return { valido: false, motivo: "Serviço de validação do Drive inalcançável." };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   /** Arquiva os documentos no Drive ao fechar a régua obrigatória. */
   arquivarDrive(payload: ArquivarDrivePayload): Promise<ArquivamentoDrive> {
     return this.post<ArquivamentoDrive>("/drive/arquivar", payload);
+  }
+
+  /**
+   * Lista os arquivos do bucket coletivo de VT (§A.17 etapa 3 / GCS). O ai-service devolve, por
+   * arquivo, o nome do objeto (id, handle transitório), o md5, o mime e o CPF JÁ EXTRAÍDO do nome (o
+   * nome cru não volta, §A.6).
+   */
+  listarColetaVt(bucket: string): Promise<{ arquivos: ItemColetaVt[] }> {
+    return this.post<{ arquivos: ItemColetaVt[] }>("/coleta-vt/listar", { bucket });
+  }
+
+  /** Baixa UM objeto do bucket coletivo para a staging e devolve o caminho. O binário não trafega aqui. */
+  baixarColetaVt(bucket: string, id: string): Promise<{ stagingPath: string }> {
+    return this.post<{ stagingPath: string }>("/coleta-vt/baixar", { bucket, id });
   }
 
   /** Gera o kit (desmembra o PDF-mãe) e devolve o caminho do kit na staging. */

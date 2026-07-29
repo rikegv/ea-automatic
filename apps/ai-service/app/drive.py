@@ -17,6 +17,7 @@ permissions(). Nada disso existe aqui e qualquer adição deve ser vetada na rev
 from __future__ import annotations
 
 import hashlib
+import re
 from datetime import UTC, datetime
 from functools import lru_cache
 
@@ -26,6 +27,7 @@ from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaInMemoryUpload
 
 from app.config import get_settings
+from app.staging import escrever_staging
 
 _DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
 _FOLDER_MIME = "application/vnd.google-apps.folder"
@@ -247,3 +249,131 @@ def pasta_web_link(service, folder_id: str) -> str:
         .execute()
     )
     return res.get("webViewLink", "")
+
+
+def validar_pasta(service, folder_id: str) -> dict:
+    """Valida SOMENTE LEITURA se `folder_id` serve de pasta-pai ANTES de o EA cadastrar o id.
+
+    POR QUE EXISTE. Cadastrar um id de pasta-pai errado passa despercebido no cadastro e só explode
+    na hora de arquivar, quando o Drive recusa com `parentNotAFolder` e derruba um prontuário real
+    (foi o que aconteceu). Esta checagem antecipa o erro para o momento do cadastro, com um veredito
+    legivel, em vez de esperar a falha do arquivamento.
+
+    Um unico files().get (leitura, nunca escreve, honra o contrato do modulo) traz mimeType, a
+    capacidade de adicionar filhos e o estado de lixeira, e decide:
+      - HttpError 404 / notFound: pasta inexistente ou fora do alcance da conta.
+      - trashed: a pasta esta na lixeira.
+      - mimeType diferente de pasta: o id aponta para um ARQUIVO (a causa do `parentNotAFolder`).
+      - canAddChildren False: a conta ve a pasta mas nao tem permissao de escrita nela.
+      - caso contrario: valida.
+
+    §A.6: o folder_id sozinho nao e PII e pode aparecer no retorno/log; nada de nome de pessoa aqui.
+    """
+    try:
+        res = (
+            service.files()
+            .get(
+                fileId=folder_id,
+                fields="id,mimeType,capabilities/canAddChildren,trashed",
+                supportsAllDrives=True,
+            )
+            .execute()
+        )
+    except HttpError as exc:
+        status_code = getattr(getattr(exc, "resp", None), "status", None)
+        motivo = motivo_http(exc)
+        if status_code == 404 or motivo == "notFound":
+            return {
+                "valido": False,
+                "motivo": "Pasta nao encontrada ou a conta admin.soulan@ nao tem acesso.",
+            }
+        return {
+            "valido": False,
+            "motivo": f"Nao foi possivel validar a pasta no Drive ({motivo}).",
+        }
+
+    if res.get("trashed"):
+        return {"valido": False, "motivo": "A pasta esta na lixeira."}
+    if res.get("mimeType") != _FOLDER_MIME:
+        return {"valido": False, "motivo": "O ID informado nao e uma PASTA (e um arquivo)."}
+    capabilities = res.get("capabilities") or {}
+    if capabilities.get("canAddChildren") is False:
+        return {
+            "valido": False,
+            "motivo": (
+                "A conta admin.soulan@ enxerga a pasta mas nao pode adicionar arquivos nela "
+                "(sem permissao de escrita)."
+            ),
+        }
+    return {"valido": True}
+
+
+# ── Coleta de VT (§A.17): pasta coletiva onde o app Firebase deposita os PDFs de VT ──────────────
+# O EA só LÊ essa pasta (list + get_media). Nada é apagado, movido ou renomeado (contrato do módulo).
+
+# Token de 11 dígitos EXATOS (não faz parte de um número maior). O CPF acordado vem sem máscara.
+_CPF_RE = re.compile(r"(?<!\d)\d{11}(?!\d)")
+
+
+def listar_arquivos_da_pasta(service, parent_id: str) -> list[dict]:
+    """Lista os arquivos diretos da pasta coletiva (uma consulta paginada). SOMENTE LEITURA.
+
+    Mesmo padrão de paginação/flags de Shared Drive de `md5_existentes`. Devolve, por arquivo:
+    `{"id", "name", "md5", "mimeType"}` (md5 vindo de `md5Checksum`, pode ser None). O `name` é
+    consumido só DENTRO do ai-service (extração do CPF) e nunca sai deste serviço (§A.6).
+    """
+    achados: list[dict] = []
+    token = None
+    while True:
+        res = (
+            service.files()
+            .list(
+                q=f"'{parent_id}' in parents and trashed = false",
+                fields="nextPageToken,files(id,name,md5Checksum,mimeType)",
+                spaces="drive",
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
+                pageSize=200,
+                pageToken=token,
+            )
+            .execute()
+        )
+        for f in res.get("files", []):
+            achados.append(
+                {
+                    "id": f.get("id"),
+                    "name": f.get("name"),
+                    "md5": f.get("md5Checksum"),
+                    "mimeType": f.get("mimeType"),
+                }
+            )
+        token = res.get("nextPageToken")
+        if not token:
+            return achados
+
+
+def extrair_cpf_do_nome(nome: str) -> str | None:
+    """Extrai o CPF (11 dígitos, sem máscara) do nome do arquivo. §A.6: o nome NUNCA é logado.
+
+    Padrão acordado: `NOME COMPLETO EM MAIUSCULAS CPF.pdf`, com o CPF ao final. A estratégia tira a
+    extensão e procura tokens de 11 dígitos consecutivos; havendo mais de um, PREFERE o último (o
+    CPF fica no fim do nome, e um número interno do nome não deve ganhar dele). Devolve os 11 dígitos
+    ou None quando não há um token limpo de 11 dígitos.
+    """
+    if not nome:
+        return None
+    base = nome.rsplit(".", 1)[0]
+    achados = _CPF_RE.findall(base)
+    if not achados:
+        return None
+    return achados[-1]
+
+
+def baixar_para_staging(service, file_id: str) -> str:
+    """Baixa o binário do arquivo (files().get_media) para a staging efêmera. SOMENTE LEITURA.
+
+    Devolve o `stagingPath` (compatível com `ArquivoIn.stagingPath` do `POST /drive/arquivar`). O
+    conteúdo transita em memória e vai para a staging; §A.6: nem o conteúdo nem o nome são logados.
+    """
+    conteudo = service.files().get_media(fileId=file_id, supportsAllDrives=True).execute()
+    return escrever_staging(conteudo)

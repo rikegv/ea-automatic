@@ -6,6 +6,7 @@ tem de estar contido no `STAGING_DIR` resolvido — qualquer coisa fora (absolut
 `../` que escapa) é rejeitada com 400. Caminhos nunca são logados nem ecoados no erro.
 """
 
+import uuid
 from pathlib import Path
 
 from fastapi import HTTPException, status
@@ -42,3 +43,19 @@ def ler_staging(staging_path: str) -> bytes:
             detail="Arquivo de staging não encontrado.",
         )
     return alvo.read_bytes()
+
+
+def escrever_staging(conteudo: bytes, sufixo: str = ".pdf") -> str:
+    """Grava bytes na staging efêmera e devolve o stagingPath (compatível com ler_staging).
+
+    Escritor SIMÉTRICO ao `ler_staging`: o nome do arquivo é gerado internamente (uuid), nunca vem
+    de fora, então não há como o chamador forjar um caminho de escrita. O caminho de destino ainda
+    passa pelo mesmo guard de path traversal (`caminho_staging_seguro`) por defesa em profundidade.
+    §A.6: nada do conteúdo nem nome de origem é logado; o binário é efêmero (TTL da staging).
+    """
+    base = Path(get_settings().staging_dir).resolve()
+    base.mkdir(parents=True, exist_ok=True)
+    nome = f"{uuid.uuid4().hex}{sufixo}"
+    destino = caminho_staging_seguro(str(base / nome))
+    destino.write_bytes(conteudo)
+    return str(destino)

@@ -12,6 +12,7 @@ dependencies = [
     "google-genai>=1.0",
     "google-api-python-client>=2.140",
     "google-auth>=2.34",
+    "google-cloud-storage>=2.18",
     "pypdf>=5.1",
     "psycopg[binary]>=3.2",
     "reportlab>=5.0.0",

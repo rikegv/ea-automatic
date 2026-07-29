@@ -20,7 +20,7 @@ function norm(s: string): string {
 }
 
 /** Pasta-pai por tipo de contrato (chave normalizada). Jovem Aprendiz compartilha a do Interno. */
-const CONTRATO_FALLBACK: Record<string, string> = {
+export const CONTRATO_FALLBACK: Record<string, string> = {
   temporario: "1TE3LbPuuaePx_-GR3WNF-c-tFvOWYnXu",
   terceirizado: "19FNSX2fCObrH1uth7t0CesKSHcPzoRkz",
   estagio: "1UjcGJReRHBeiOMbaJ7c3bsgF4NWvxYQ0",
@@ -29,7 +29,7 @@ const CONTRATO_FALLBACK: Record<string, string> = {
 };
 
 /** Pasta-pai do contrato "Fopag", resolvida por cod_cliente (igualdade de string). */
-const FOPAG_FALLBACK: Record<string, string> = {
+export const FOPAG_FALLBACK: Record<string, string> = {
   "16": "1WXvWoiOMbFFWhLlYMLpCHAh8vTAaYpxn",
   "19": "1wQXWDKnfZo6mdTelu1MQYFXstixqD6CZ",
   "27": "17R3Jrpf9vDnn6CwlkM-dlxnWt1dMCquB",

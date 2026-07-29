@@ -14,7 +14,12 @@ from app import drive
 from app.auth import require_internal_token
 from app.config import get_settings
 from app.drive import SUBPASTA_NOME
-from app.schemas import ArquivamentoDrive, ArquivarRequest
+from app.schemas import (
+    ArquivamentoDrive,
+    ArquivarRequest,
+    ValidarPastaRequest,
+    ValidarPastaResponse,
+)
 from app.staging import ler_staging
 
 router = APIRouter(prefix="/drive", tags=["drive"])
@@ -232,3 +237,24 @@ def arquivar(req: ArquivarRequest, _: None = Depends(require_internal_token)) ->
         ignorados=ignorados,
         pasta_ja_existia=pasta_ja_existia,
     )
+
+
+# ── Validação de pasta-pai do Drive (read-only) ──────────────────────────────
+# Antecipa o `parentNotAFolder` (id de pasta-pai errado que só falharia no arquivamento) para o
+# momento do cadastro. Uma única leitura (files().get), nada é criado, movido ou apagado.
+
+
+@router.post("/validar-pasta", response_model=ValidarPastaResponse, response_model_by_alias=True)
+def validar_pasta(
+    req: ValidarPastaRequest, _: None = Depends(require_internal_token)
+) -> ValidarPastaResponse:
+    settings = get_settings()
+
+    # Modo mock (ambiente sem Drive real): não trava o cadastro, responde válido.
+    if settings.drive_mock:
+        logger.warning("DRIVE_MOCK ativo: validar-pasta simulado (sem chamada ao Drive).")
+        return ValidarPastaResponse(valido=True, motivo="mock")
+
+    service = drive.get_drive_service()
+    resultado = drive.validar_pasta(service, req.folder_id)
+    return ValidarPastaResponse(valido=resultado["valido"], motivo=resultado.get("motivo"))

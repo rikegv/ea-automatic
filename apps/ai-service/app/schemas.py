@@ -71,6 +71,51 @@ class ArquivamentoDrive(_CamelModel):
     pasta_ja_existia: bool = False
 
 
+# ── Coleta de VT (§A.17): bucket do GCS onde o app externo (Firebase) grava os PDFs ──────────
+# A fonte deixou de ser uma pasta do Drive e passou a ser um bucket do GCS; o EA só LÊ o bucket.
+class ListarColetaVtRequest(_CamelModel):
+    bucket: str
+
+
+class ItemColetaVt(_CamelModel):
+    """Um objeto do bucket. §A.6: o nome cru NUNCA sai do ai-service; sobe só o CPF.
+
+    `id` é o NOME do objeto (o backend precisa dele para pedir o download); `md5` é hex.
+    """
+
+    id: str
+    md5: str | None = None
+    mime_type: str
+    cpf: str | None = None
+    eh_pdf: bool
+
+
+class ListarColetaVtResponse(_CamelModel):
+    arquivos: list[ItemColetaVt] = Field(default_factory=list)
+
+
+class BaixarColetaVtRequest(_CamelModel):
+    bucket: str
+    # Nome do objeto no bucket (o `id` devolvido por /coleta-vt/listar).
+    id: str
+
+
+class BaixarColetaVtResponse(_CamelModel):
+    staging_path: str
+
+
+# ── Validação de pasta-pai do Drive (read-only, antes de o EA cadastrar o id) ─
+class ValidarPastaRequest(_CamelModel):
+    folder_id: str
+
+
+class ValidarPastaResponse(_CamelModel):
+    """Veredito da checagem read-only. `motivo` NUNCA contém PII (§A.6); o folderId não é PII."""
+
+    valido: bool
+    motivo: str | None = None
+
+
 # ── Kit (F9) ───────────────────────────────────────────────────────────────
 class KitRequest(_CamelModel):
     staging_path: str
