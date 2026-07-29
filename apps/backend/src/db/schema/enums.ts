@@ -93,6 +93,7 @@ export const clicksignStatusEnum = pgEnum("clicksign_status", [
   "AGUARDANDO_ASSINATURA",
   "ASSINADO",
   "CANCELADO",
+  "EXPIRADO",
 ]);
 
 /**

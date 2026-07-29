@@ -1,5 +1,6 @@
 import {
   boolean,
+  check,
   date,
   index,
   integer,
@@ -223,10 +224,16 @@ export const motivosContratacao = pgTable("motivos_contratacao", {
   ativo: boolean("ativo").notNull().default(true),
   criadoEm,
 });
+// `exigeValor` é a regra "este benefício precisa de quanto?" trazida do CÓDIGO para o CADASTRO (OST
+// cadastro de benefícios por tela). Antes ela vivia na constante `BENEFICIOS_COM_VALOR` do
+// shared-types e casava por TEXTO DO NOME, com dois defeitos: benefício novo nascia sem exigir valor
+// e não havia como mudar isso sem deploy, e RENOMEAR um benefício alterava a exigência em silêncio.
+// Agora a coluna é a fonte da verdade; `beneficioExigeValor` fica só como fallback do nome legado.
 export const beneficiosCatalogo = pgTable("beneficios_catalogo", {
   id: uuid("id").defaultRandom().primaryKey(),
   nome: varchar("nome", { length: 160 }).notNull().unique(),
   ativo: boolean("ativo").notNull().default(true),
+  exigeValor: boolean("exige_valor").notNull().default(false),
   criadoEm,
 });
 export const escalasCatalogo = pgTable("escalas_catalogo", {
@@ -260,6 +267,12 @@ export const kitRegraDocumento = pgTable(
     titulo: varchar("titulo", { length: 200 }).notNull(),
     ordem: integer("ordem").notNull().default(0),
     ativo: boolean("ativo").notNull().default(true),
+    // `padrao` separa o documento de INSTRUÇÃO GERAL (o mesmo manual para todo mundo, sem nome de
+    // funcionário na página) do documento INDIVIDUAL da pessoa. Mesmo espírito do `exigeValor` de
+    // benefícios: a regra vira CADASTRO, não fica presa ao texto do título nem ao código. O motor
+    // não cobra nome de um PADRÃO e o replica no kit de cada funcionário do lote. Nasce `false`,
+    // então todo documento já existente continua INDIVIDUAL e nada muda de comportamento.
+    padrao: boolean("padrao").notNull().default(false),
     criadoEm,
     atualizadoEm,
   },
@@ -300,6 +313,19 @@ export const admissoes = pgTable(
     // Quando true, a ausência de data_admissao NÃO é pendência (é esperado) e o "Termo de Banco"
     // passa a ser a pendência obrigatória de formalização.
     isBanco: boolean("is_banco").notNull().default(false),
+    // ── PAUSA (OST admissão pausada) ────────────────────────────────────────
+    // FLAG PARALELA, deliberadamente NÃO um valor de `farol_global`. O motivo é a auditoria, que
+    // CONTINUA durante a pausa: auditar chama `recomputeFarolGlobal`, então "Pausada" como farol
+    // teria de entrar em FAROL_MANUAL para não ser apagado, e entrar em FAROL_MANUAL congelaria a
+    // derivação (a admissão que fechasse Auditoria+Exame pausada não viraria BANCO_AGUARDAR). O
+    // farol MENTIRIA ao retomar. Com a flag, o farol deriva por baixo e retomar é só limpar a flag:
+    // o estado já está certo, nada recomeça.
+    // `pausada_em` null = NÃO pausada. É a única fonte da verdade da pausa.
+    pausadaEm: timestamp("pausada_em", { withTimezone: true }),
+    pausadaPor: uuid("pausada_por").references(() => usuarios.id, { onDelete: "set null" }),
+    // Motivo OPCIONAL (decisão do diretor): pausa rápida não pode depender de digitar justificativa.
+    // Quando preenchido, vai para a trilha do modal do olho junto do evento.
+    pausaMotivo: text("pausa_motivo"),
     sinalizadorPreenchimento: sinalizadorEnum("sinalizador_preenchimento")
       .notNull()
       .default("PENDENTE"),
@@ -320,6 +346,14 @@ export const admissoes = pgTable(
     // URL do prontuário no Drive gravada ao arquivar o ASO logo após a auditoria VALIDADO (Fase 4
     // ajustes finais — o ASO não espera o fechamento da régua). Referência (link da pasta), não PII.
     driveAsoUrl: text("drive_aso_url"),
+    // FIM DO SILÊNCIO DO ARQUIVAMENTO (OST re-baixar do Pandapé). Até aqui, arquivamento que não
+    // concluía deixava `drive_pasta_url` nula e mais nada: nem quem olhava o banco, nem a tela de
+    // diagnóstico, sabiam POR QUE o prontuário não existia (sem pasta-pai? staging expirada? o
+    // Google recusou?). Agora todo desfecho que não conclui grava o motivo REAL aqui, e conclusão
+    // bem-sucedida LIMPA os dois campos. Alimenta o sinal "Arquivamento No Drive Falhou".
+    // §A.6: texto de motivo e código de tipo de documento, nunca nome, CPF, arquivo ou URL externa.
+    driveFalhaMotivo: text("drive_falha_motivo"),
+    driveFalhaEm: timestamp("drive_falha_em", { withTimezone: true }),
     // ASO validado pelo consultor (aba EXAME): gate de APTO exige ASO anexado E validado. Um novo
     // upload de ASO zera este flag (precisa revalidar). Aditivo, default false (admissões existentes).
     asoValidado: boolean("aso_validado").notNull().default(false),
@@ -330,6 +364,24 @@ export const admissoes = pgTable(
     clicksignEnvelopeId: varchar("clicksign_envelope_id", { length: 80 }),
     clicksignStatus: clicksignStatusEnum("clicksign_status").notNull().default("SEM_ENVELOPE"),
     contratoAssinadoDriveUrl: text("contrato_assinado_drive_url"),
+    // Instante em que o envelope foi ATIVADO na Clicksign (draft -> running). É a base do prazo: o
+    // EA manda `deadline_at` = envio + 30 dias, e o tick usa este carimbo para marcar EXPIRADO quando
+    // o envelope passa do prazo sem fechar nem ser cancelado. Nulo em quem nunca teve envelope (e nas
+    // 1.486 admissões ASSINADO vindas da carga, §A.16 regra 1, que nunca passaram pela Clicksign).
+    clicksignEnviadoEm: timestamp("clicksign_enviado_em", { withTimezone: true }),
+    // KIT PRONTO PARA ASSINATURA (fila de disparo em lote). O consultor clica "Enviar para
+    // assinatura" no Gerador de Kit e o kit daquele funcionário é materializado na staging DA
+    // ADMISSÃO; aqui fica a REFERÊNCIA (caminho no disco efêmero) e o instante do envio.
+    //
+    // Por que não guardar o binário: regra 7 / §A.6, documento é efêmero e nunca vai ao banco. O
+    // caminho da staging não contém PII (uuid + código de tipo), é o mesmo tipo de referência que o
+    // job `criar-envelope` já carregava no payload.
+    //
+    // CONSEQUÊNCIA A CONHECER: a staging da admissão tem TTL de 48h (StagingPurgeService). Kit que
+    // ficar na fila mais que isso é expurgado, e a linha aparece BLOQUEADA na fila pedindo novo
+    // envio pelo Gerador de Kit. Os dois campos são zerados quando o envelope nasce.
+    kitAssinaturaPath: text("kit_assinatura_path"),
+    kitAssinaturaEm: timestamp("kit_assinatura_em", { withTimezone: true }),
     // Motivo do declínio (Fase 2). FK NULLABLE para o catálogo `motivos_declinio`; só faz sentido
     // quando o farol é de declínio. ON DELETE SET NULL: inativar/remover um motivo não apaga a admissão.
     motivoDeclinioId: uuid("motivo_declinio_id").references(() => motivosDeclinio.id, {
@@ -699,6 +751,136 @@ export const pandapeSchedulerEstado = pgTable("pandape_scheduler_estado", {
   atualizadoEm,
 });
 
+// ── VtColeta: ledger da coleta automática de formulário de VT (§A.17 etapa 3 / INT-2) ────────
+// LEDGER da varredura da pasta coletiva do Drive onde um app externo (Firebase) deposita os PDFs de
+// Vale-Transporte. Cada arquivo é casado com uma admissão viva pelo CPF do nome do arquivo, arquivado
+// na subpasta BENEFICIOS do prontuário e (quando o VT está na régua) dá baixa no FORMULARIO_VT.
+//
+// §A.6 (MINIMIZAÇÃO): NÃO guarda nome, CPF nem o NOME DO OBJETO no bucket (que contém NOME+CPF do
+// candidato). Só o `md5` do arquivo (dedup + idempotência: um arquivo já CASADO nunca é reprocessado),
+// a `origem` da fonte (ex.: "GCS") e o vínculo com a admissão. A chave de idempotência é o par
+// (md5, origem): assim uma fonte futura (Drive) nunca colide com a fonte GCS no mesmo digest.
+export const vtColeta = pgTable(
+  "vt_coleta",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    // Digest hex do arquivo. Parte da chave de idempotência da varredura (par com `origem`).
+    md5: text("md5").notNull(),
+    // Fonte do arquivo (ex.: "GCS"). Compõe a chave única com o md5 para isolar fontes distintas.
+    origem: text("origem").notNull(),
+    // Admissão casada. ON DELETE SET NULL: apagar a admissão não apaga o registro da coleta.
+    admissaoId: uuid("admissao_id").references(() => admissoes.id, { onDelete: "set null" }),
+    // Estado do casamento. Texto (não enum novo) para manter esta frente isolada no schema; os valores
+    // vivem em `domain/scheduler-vt-coleta` (CASADO | SEM_ADMISSAO | MULTIPLO | NOME_FORA_PADRAO |
+    // NAO_PDF | ERRO).
+    status: text("status").notNull(),
+    // O FORMULARIO_VT estava na régua da admissão casada? (true = deu baixa; false = só arquivou;
+    // null = não casou). Registro do porquê a baixa aconteceu ou não.
+    vtNaRegua: boolean("vt_na_regua"),
+    arquivadoEm: timestamp("arquivado_em", { withTimezone: true }),
+    criadoEm,
+    atualizadoEm,
+  },
+  (t) => ({
+    uqMd5Origem: unique("uq_vt_coleta_md5_origem").on(t.md5, t.origem),
+  }),
+);
+
+// ── VtColetaSchedulerEstado (scheduler da coleta de VT) ──────────────────────────────────────
+// Espelha `pandape_scheduler_estado`: linha ÚNICA (PK fixa 'vt-coleta') com o liga/desliga, o
+// heartbeat do "vivo" (`ultimo_ciclo_ok_em`) e o resultado do último ciclo. §A.6: só contagens e
+// instantes, jamais CPF/nome de arquivo/URL.
+export const vtColetaSchedulerEstado = pgTable("vt_coleta_scheduler_estado", {
+  chave: varchar("chave", { length: 20 }).primaryKey().default("vt-coleta"),
+  ligado: boolean("ligado").notNull().default(true),
+  ultimoCicloEm: timestamp("ultimo_ciclo_em", { withTimezone: true }),
+  ultimoCicloOkEm: timestamp("ultimo_ciclo_ok_em", { withTimezone: true }),
+  ultimoCicloVarridas: integer("ultimo_ciclo_varridas").notNull().default(0),
+  ultimoCicloNovos: integer("ultimo_ciclo_novos").notNull().default(0),
+  // Arquivos varridos que não casaram (sem admissão viva, múltiplo ou nome fora do padrão).
+  ultimoCicloSemAdmissao: integer("ultimo_ciclo_sem_admissao").notNull().default(0),
+  ultimoCicloFalhas: integer("ultimo_ciclo_falhas").notNull().default(0),
+  ultimoCicloAbortado: boolean("ultimo_ciclo_abortado").notNull().default(false),
+  ultimoCicloNota: text("ultimo_ciclo_nota"),
+  atualizadoEm,
+});
+
+// ── AssinanteEmpresa: quem assina o contrato PELA EMPRESA (INT-4) ────────────────────────────
+// Um contrato de trabalho tem DOIS assinantes: o funcionário (individual, vem do candidato) e a
+// EMPRESA (institucional). Mesmo modelo da pasta-pai do Drive: um PADRÃO e EXCEÇÕES por cliente.
+//
+//  - `cod_cliente` NULL  → é o PADRÃO, vale para todo cliente que não tenha exceção própria.
+//  - `cod_cliente` preenchido → exceção daquele cliente, tem precedência sobre o padrão.
+//
+// §A.6: `cpf` é PII e é persistido POR NECESSIDADE (a Clicksign exige documentação do signatário
+// para a assinatura ter valor jurídico), no mesmo regime do CPF do candidato: chave técnica, nunca
+// em log. `email` idem, é o canal de autenticação do requirement.
+export const assinanteEmpresa = pgTable(
+  "assinante_empresa",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    // NULL = padrão. ON DELETE CASCADE: apagar o cliente apaga a exceção dele (nunca sobra órfã).
+    codCliente: varchar("cod_cliente", { length: 40 }).references(() => clientes.codCliente, {
+      onDelete: "cascade",
+    }),
+    nome: varchar("nome", { length: 200 }).notNull(),
+    email: varchar("email", { length: 180 }).notNull(),
+    // 11 dígitos crus, como `candidatos.cpf`. Formatado só na hora de falar com a Clicksign.
+    // OBRIGATÓRIO por decisão do diretor: a API da Clicksign aceita signatário sem documentação,
+    // mas assinatura com CPF é mais forte juridicamente, então a régua daqui é mais dura que a dela.
+    cpf: varchar("cpf", { length: 11 }).notNull(),
+    // ORDEM de assinatura dentro do escopo. Vira o `group` do signatário na Clicksign (grupo =
+    // ordem + 1, porque o grupo 1 é sempre o funcionário).
+    //
+    // MESMA ORDEM = ASSINAM EM PARALELO; ordens diferentes = sequência, o seguinte só assina (e só é
+    // notificado) depois que o anterior assinou. Repetir ordem é LEGÍTIMO, então não há unique sobre
+    // ela.
+    ordem: integer("ordem").notNull().default(1),
+    ativo: boolean("ativo").notNull().default(true),
+    criadoEm,
+    atualizadoEm,
+  },
+  (t) => ({
+    // A TRAVA que resta, agora que o escopo aceita N representantes: a MESMA PESSOA não entra duas
+    // vezes no mesmo escopo. Dois índices parciais porque, no Postgres, NULLs não colidem entre si e
+    // é o NULL que marca o padrão.
+    uqCpfCliente: uniqueIndex("uq_assinante_empresa_cpf_cliente")
+      .on(t.codCliente, t.cpf)
+      .where(sql`${t.codCliente} is not null`),
+    uqCpfPadrao: uniqueIndex("uq_assinante_empresa_cpf_padrao")
+      .on(t.cpf)
+      .where(sql`${t.codCliente} is null`),
+    // Espelha a régua da própria API ("group deve ser maior que 0", conferido na sondagem).
+    ckOrdem: check("ck_assinante_empresa_ordem", sql`${t.ordem} >= 1`),
+  }),
+);
+
+// ── ClicksignSchedulerEstado (scheduler do tick da assinatura, INT-4) ────────────────────────
+// Espelha `pandape_scheduler_estado` e `vt_coleta_scheduler_estado`: linha ÚNICA (PK fixa
+// 'clicksign') com o liga/desliga, o heartbeat do "vivo" (`ultimo_ciclo_ok_em`) e o resultado do
+// último ciclo.
+//
+// POR QUE ESTA TABELA EXISTE: o tick da Clicksign dependia de um CRON externo
+// (`infra/install-clicksign-cron.sh`) que NUNCA foi instalado, então em 28 dias o tick rodou 3 vezes,
+// todas manuais. Trazer o agendamento para dentro do Nest (mesmo padrão dos outros dois) elimina a
+// dependência de infra e dá ao diretor o freio sem deploy. §A.6: só contagens e instantes, jamais
+// CPF nem URL de documento.
+export const clicksignSchedulerEstado = pgTable("clicksign_scheduler_estado", {
+  chave: varchar("chave", { length: 20 }).primaryKey().default("clicksign"),
+  ligado: boolean("ligado").notNull().default(true),
+  ultimoCicloEm: timestamp("ultimo_ciclo_em", { withTimezone: true }),
+  ultimoCicloOkEm: timestamp("ultimo_ciclo_ok_em", { withTimezone: true }),
+  // Envelopes consultados no último ciclo.
+  ultimoCicloVarridas: integer("ultimo_ciclo_varridas").notNull().default(0),
+  // Envelopes que FECHARAM neste ciclo (assinado baixado e arquivado no Drive).
+  ultimoCicloAssinados: integer("ultimo_ciclo_assinados").notNull().default(0),
+  // Envelopes marcados EXPIRADO neste ciclo (passaram do prazo sem fechar).
+  ultimoCicloExpirados: integer("ultimo_ciclo_expirados").notNull().default(0),
+  ultimoCicloFalhas: integer("ultimo_ciclo_falhas").notNull().default(0),
+  ultimoCicloNota: text("ultimo_ciclo_nota"),
+  atualizadoEm,
+});
+
 // ── DuplaCorrecaoAceites: trilha de aceite da dupla correção (INT-4 / §A.5 / §A.6) ───────────
 // Log de auditoria SENSÍVEL, permanente e consultável (§A.6): no reenvio por correção de um
 // contrato, o consultor aceita explicitamente que corrigiu no EA Automatic E diretamente no G.I
@@ -864,6 +1046,34 @@ export const formularioVtConducoes = pgTable(
   },
   (t) => ({
     idxFormulario: index("idx_conducao_formulario").on(t.formularioId),
+  }),
+);
+
+// ── DrivePastaPai: pasta-pai do Drive por (escopo + chave), fora do .env (INT-2) ─────────────
+// Tira o roteamento da pasta-pai do arquivamento do .env e do fallback em código, colocando-o numa
+// TABELA administrável pela tela (Master/Super Admin). Duas dimensões, no mesmo espírito de
+// `drive-routing`:
+//  - escopo CONTRATO: `chave` é o tipo de contrato NORMALIZADO (ex.: "temporario", "jovem aprendiz").
+//  - escopo FOPAG: `chave` é o `cod_cliente` (o contrato Fopag resolve a pasta por cliente).
+// `folderId` é o id da pasta do Drive: identificador, não segredo nem PII (§A.6), pode persistir.
+// `rotulo` é texto amigável para a tela (ex.: "Fopag cliente 16", "Contrato Temporario"), sem
+// travessão (§A.11). A resolução em runtime lê daqui primeiro; o fallback em código segue como rede
+// de segurança durante a transição. Soft-delete por `ativo`.
+export const drivePastaPai = pgTable(
+  "drive_pasta_pai",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    escopo: varchar("escopo", { length: 20 }).notNull(), // CONTRATO | FOPAG
+    chave: varchar("chave", { length: 60 }).notNull(),
+    folderId: varchar("folder_id", { length: 120 }).notNull(),
+    rotulo: varchar("rotulo", { length: 120 }).notNull(),
+    ativo: boolean("ativo").notNull().default(true),
+    criadoEm,
+    atualizadoEm,
+  },
+  (t) => ({
+    // Chave de negócio: uma pasta-pai por (escopo + chave). O upsert do service converge por ela.
+    uqEscopoChave: unique("uq_drive_pasta_pai_escopo_chave").on(t.escopo, t.chave),
   }),
 );
 

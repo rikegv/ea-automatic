@@ -267,6 +267,76 @@
       "when": 1784855128645,
       "tag": "0037_tricky_amphibian",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1784927166500,
+      "tag": "0038_vt_coleta_gcs",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1784927400111,
+      "tag": "0039_premium_wild_pack",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1785155157963,
+      "tag": "0040_wet_captain_stacy",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1785166165274,
+      "tag": "0041_luxuriant_fantastic_four",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1785178420997,
+      "tag": "0042_small_lenny_balinger",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1785239675992,
+      "tag": "0043_watery_lucky_pierre",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1785246230874,
+      "tag": "0044_bent_shocker",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1785252450793,
+      "tag": "0045_round_magik",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1785266217907,
+      "tag": "0046_wild_james_howlett",
+      "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1785320305851,
+      "tag": "0047_luxuriant_the_spike",
+      "breakpoints": true
     }
   ]
 }

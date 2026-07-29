@@ -1,0 +1,1 @@
+ALTER TABLE "kit_regra_documento" ADD COLUMN "padrao" boolean DEFAULT false NOT NULL;
