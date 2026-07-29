@@ -88,7 +88,7 @@ export const STATUS_EXAME = ["A_AGENDAR", "AGENDADO", "APTO", "CANCELADO"] as co
 export type StatusExame = (typeof STATUS_EXAME)[number];
 
 /**
- * Cadastro/Contrato tem DOIS status: "A cadastrar" e "Cadastrado" (concluinte).
+ * Cadastro/Contrato tem DOIS status: "A Cadastrar" e "Cadastrado" (concluinte).
  *
  * Reorganização (decisão do diretor): `ENVIAR`/`ENVIADO` e `INTEGRACAO` eram resíduo da esteira
  * manual antiga. `ENVIAR`/`ENVIADO` nunca tiveram uma admissão sequer e saíram, porque o estado do
@@ -146,9 +146,9 @@ export type NcLiberacao = (typeof NC_LIBERACAO)[number];
 
 /** Rótulos curtos dos gatilhos de NC (consumidos pela tela e pelos filtros). */
 export const NC_TIPO_ROTULO: Record<NcTipo, string> = {
-  NC1: "Auditoria sem documentos",
-  NC2: "Exame sem ASO",
-  NC3: "Cadastro incompleto",
+  NC1: "Auditoria Sem Documentos",
+  NC2: "Exame Sem ASO",
+  NC3: "Cadastro Incompleto",
 };
 
 /** Termo de ciência fixo do aceite "apto sem ASO" (gatilho da NC2). */
@@ -158,20 +158,25 @@ export const TERMO_APTO_SEM_ASO =
 // ── Clicksign — assinatura do contrato (INT-4 / F9) ────────────────────────
 // SEM_ENVELOPE: kit ainda não gerado (inicial). AGUARDANDO_ASSINATURA: envelope disparado.
 // ASSINADO: document_closed (contrato arquivado no Drive). CANCELADO: reenvio por correção (§A.5).
+// EXPIRADO: passou do prazo de assinatura sem fechar nem ser cancelado (o `deadline_at` que o EA
+// manda no envelope). Detectado pelo tick; é estado TERMINAL de abandono, não falha de sistema.
 export const CLICKSIGN_STATUS = [
   "SEM_ENVELOPE",
   "AGUARDANDO_ASSINATURA",
   "ASSINADO",
   "CANCELADO",
+  "EXPIRADO",
 ] as const;
 export type ClicksignStatus = (typeof CLICKSIGN_STATUS)[number];
 
 /** Rótulos de exibição do status Clicksign (UI). */
 export const CLICKSIGN_STATUS_LABEL: Record<ClicksignStatus, string> = {
-  SEM_ENVELOPE: "Sem envelope",
-  AGUARDANDO_ASSINATURA: "Aguardando assinatura",
+  // §A.24: rótulo de status é TAG, então title case.
+  SEM_ENVELOPE: "Sem Envelope",
+  AGUARDANDO_ASSINATURA: "Aguardando Assinatura",
   ASSINADO: "Assinado",
   CANCELADO: "Cancelado",
+  EXPIRADO: "Expirado",
 };
 
 // ── Fase 4 — Auditoria documental por IA (F2 / INT-3) ──────────────────────
@@ -263,12 +268,19 @@ export function normalizeCpf(input: string): string {
 }
 
 /**
- * Benefícios que TÊM valor (§A.17 etapa 4). Vive aqui, e não em cada app, porque a regra é usada
- * pelos DOIS lados: o wizard/modal decide se mostra o campo e bloqueia sem valor, e o backend
- * valida o mesmo. Duas cópias = a divergência que a régua unificada acabou de eliminar.
+ * Benefícios que TÊM valor (§A.17 etapa 4).
  *
- * A lista é do diretor: VR, VA, AM, Cesta básica, PLR e Auxílio creche. Os demais do catálogo
- * (VT, Assistência Odontológica, Seguro de vida, Refeição no local) são só concedidos/não, sem valor.
+ * ATENÇÃO, ISTO NÃO É MAIS A FONTE DA VERDADE (OST cadastro de benefícios por tela). A régua passou
+ * a ser a COLUNA `beneficios_catalogo.exige_valor`, mantida pela tela `/admin/beneficios` e servida
+ * às telas pelo `/catalogos/beneficios`. Esta lista fica como FALLBACK, para nome legado que nunca
+ * passou pelo backfill (migration 0040) e para o texto achatado das 2.188 admissões importadas, que
+ * não têm linha no catálogo.
+ *
+ * Por que ela saiu do comando: casava por TEXTO DO NOME, então benefício novo nascia sem exigir
+ * valor (e só deploy corrigia) e RENOMEAR um benefício mudava a exigência em silêncio.
+ *
+ * A lista original é do diretor: VR, VA, AM, Cesta básica, PLR e Auxílio creche. Os demais do
+ * catálogo (VT, Assistência Odontológica, Seguro de vida, Refeição no local) não têm valor.
  */
 const BENEFICIOS_COM_VALOR = [
   "VR", // VR (Vale-Refeição)
