@@ -23,6 +23,12 @@ interface KitDoc {
   titulo: string;
   ordem: number;
   ativo: boolean;
+  /**
+   * PADRÃO = documento de instrução geral, o mesmo para todos (um manual, por exemplo). Não traz
+   * nome de funcionário, então o motor não o cobra por nome e o replica no kit de cada pessoa.
+   * INDIVIDUAL = documento da pessoa, continua exigindo o nome para ser atribuído.
+   */
+  padrao: boolean;
 }
 
 /** Alça de arrastar (6 pontos). Inline para não depender de novo ícone no set. */
@@ -62,6 +68,34 @@ function AtivoToggle({
     >
       <Icon name={ativo ? "check" : "x"} className="h-3.5 w-3.5" />
       {ativo ? "Ativo" : "Inativo"}
+    </button>
+  );
+}
+
+/** Alterna PADRÃO (instrução geral, igual para todos) e INDIVIDUAL (documento da pessoa). */
+function PadraoToggle({
+  padrao,
+  onClick,
+  title,
+}: {
+  padrao: boolean;
+  onClick: () => void;
+  title: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      className={cn(
+        "inline-flex flex-none items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[12px] font-semibold transition",
+        padrao
+          ? "border-[var(--accent)] text-accent hover:bg-[rgba(59,130,246,0.1)]"
+          : "border-[var(--border)] text-dim hover:bg-[var(--surface-2)]",
+      )}
+    >
+      <Icon name={padrao ? "users" : "doc"} className="h-3.5 w-3.5" />
+      {padrao ? "Padrão" : "Individual"}
     </button>
   );
 }
@@ -263,6 +297,21 @@ export default function KitRegrasPage() {
     }
   }
 
+  async function alternarPadraoDoc(d: KitDoc) {
+    setError(null);
+    setDocs((cur) => cur.map((x) => (x.id === d.id ? { ...x, padrao: !x.padrao } : x)));
+    try {
+      await apiFetch(`/admin/kit-regras/${d.id}`, {
+        method: "PATCH",
+        token,
+        body: { padrao: !d.padrao },
+      });
+    } catch (e) {
+      setDocs((cur) => cur.map((x) => (x.id === d.id ? { ...x, padrao: d.padrao } : x)));
+      setError(e instanceof ApiError ? e.message : "Falha ao alternar o tipo do documento.");
+    }
+  }
+
   async function confirmarExcluirDoc() {
     if (!delDoc) return;
     setBusy(true);
@@ -319,7 +368,7 @@ export default function KitRegrasPage() {
     <>
       <PageHead
         eyebrow="Cadastros"
-        title="Regras do gerador de kit"
+        title="Regras Do Gerador De Kit"
         subtitle="Um kit por tipo de vínculo. Cada kit tem seu dicionário de títulos e a ordem em que o motor monta o kit consolidado do funcionário. Arraste para reordenar."
       />
 
@@ -557,6 +606,16 @@ export default function KitRegrasPage() {
                           </span>
                         )}
 
+                        <PadraoToggle
+                          padrao={d.padrao}
+                          onClick={() => void alternarPadraoDoc(d)}
+                          title={
+                            d.padrao
+                              ? "Padrão: instrução geral, entra no kit de todos sem exigir nome. Clique para tornar individual."
+                              : "Individual: documento da pessoa, exige o nome. Clique para marcar como padrão."
+                          }
+                        />
+
                         <AtivoToggle
                           ativo={d.ativo}
                           onClick={() => void alternarAtivoDoc(d)}
@@ -618,13 +677,13 @@ export default function KitRegrasPage() {
 
       <ConfirmDialog
         open={Boolean(delKit)}
-        title="Remover kit"
+        title="Remover Kit"
         message={
           delKit
             ? `Remover o kit "${delKit.nome}"? Apaga também todos os ${delKit.documentos} documento(s) dele. Esta ação não pode ser desfeita.`
             : ""
         }
-        confirmLabel="Remover kit"
+        confirmLabel="Remover Kit"
         tone="danger"
         busy={busy}
         onConfirm={confirmarExcluirKit}
@@ -632,7 +691,7 @@ export default function KitRegrasPage() {
       />
       <ConfirmDialog
         open={Boolean(delDoc)}
-        title="Remover documento do kit"
+        title="Remover Documento Do Kit"
         message={
           delDoc ? `Remover "${delDoc.titulo}" deste kit? O motor deixa de reconhecê-lo.` : ""
         }
