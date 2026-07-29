@@ -1,4 +1,8 @@
 import { Module } from "@nestjs/common";
+import { AssinanteEmpresaModule } from "../clicksign/assinante-empresa.module";
+import { AssinanteEmpresaController } from "./assinante-empresa/assinante-empresa.controller";
+import { BeneficiosController } from "./beneficios/beneficios.controller";
+import { BeneficiosService } from "./beneficios/beneficios.service";
 import { CargosController } from "./cargos/cargos.controller";
 import { CargosService } from "./cargos/cargos.service";
 import { CatalogosController } from "./catalogos/catalogos.controller";
@@ -23,11 +27,16 @@ import { TiposDocumentoController } from "./tipos-documento/tipos-documento.cont
 import { TiposDocumentoService } from "./tipos-documento/tipos-documento.service";
 
 @Module({
+  // O AssinanteEmpresaModule traz o service da tela de "quem assina pela empresa" (INT-4); o
+  // mesmo service é consumido pelo ClicksignModule ao montar o envelope.
+  imports: [AssinanteEmpresaModule],
   controllers: [
+    AssinanteEmpresaController,
     ClientesController,
     CargosController,
     MotivosDeclinioController,
     EscalasController,
+    BeneficiosController,
     TarifasController,
     ReguaController,
     TiposDocumentoController,
@@ -41,6 +50,7 @@ import { TiposDocumentoService } from "./tipos-documento/tipos-documento.service
     CargosService,
     MotivosDeclinioService,
     EscalasService,
+    BeneficiosService,
     TarifasService,
     ReguaService,
     TiposDocumentoService,
