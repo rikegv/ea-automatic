@@ -64,6 +64,35 @@ export function ehFarolVivo(farol?: string | null): boolean {
   return farol === "EM_ADMISSAO" || farol === "BANCO_AGUARDAR";
 }
 
+/**
+ * Os faróis de admissão VIVA, em UM lugar só (OST admissão pausada, Bloco 2).
+ *
+ * Existia como constante `FAROIS_VIVOS` COPIADA em três arquivos (`vt-coleta.service`,
+ * `varredura-documentos`, `recalcula-sinalizador-vivas`). Três cópias é como um processo automático
+ * novo nasce com o recorte errado; agora é esta.
+ */
+export const FAROIS_VIVOS = ["EM_ADMISSAO", "BANCO_AGUARDAR"] as const;
+
+/**
+ * A admissão pode ser TRABALHADA por processo automático agora? (OST admissão pausada.)
+ *
+ * É a régua única dos automáticos: viva pelo farol E não pausada. Existe para que o próximo
+ * processo automático nasça respeitando a pausa por construção, em vez de alguém lembrar de somar
+ * `pausada_em IS NULL` em mais uma query.
+ *
+ * ATENÇÃO ao que esta função NÃO governa: a AUDITORIA fica de FORA da pausa por decisão do diretor
+ * (o trabalho interno de análise documental não para; a pausa é sobre o cliente). Auditar não passa
+ * por aqui, e isso é intencional, não esquecimento.
+ */
+export function admissaoOperavel(farol?: string | null, pausadaEm?: Date | string | null): boolean {
+  return ehFarolVivo(farol) && !pausadaEm;
+}
+
+/** A admissão está pausada? Regra única de leitura da flag (null = não pausada). */
+export function ehPausada(pausadaEm?: Date | string | null): boolean {
+  return Boolean(pausadaEm);
+}
+
 /** Entrada do cálculo de pendências obrigatórias (S2/S3 — ajustes-2B-2C). */
 export interface PendenciasInput {
   codCliente?: string | null;
