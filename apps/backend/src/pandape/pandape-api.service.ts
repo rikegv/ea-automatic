@@ -47,6 +47,20 @@ export interface PandapePrecollaboratorV3 {
 }
 
 /**
+ * Falha de uma chamada que NÃO chegou a ter status HTTP. Existe porque o re-baixar do arquivamento
+ * (OST re-baixar do Pandapé) precisa distinguir "429, aborta e não insiste" de "não respondeu":
+ * o `get` genérico devolve `undefined` para tudo e apaga essa diferença.
+ */
+export type FalhaChamada = "TIMEOUT" | "REDE" | "SEM_TOKEN" | "INERTE";
+
+/** Resposta com o status VISÍVEL. `status` ausente quando a chamada nem chegou a responder. */
+export interface RespostaComStatus<T> {
+  dados?: T;
+  status?: number;
+  falha?: FalhaChamada;
+}
+
+/**
  * Pré-colaborador do Pandapé — GET /v1/PreCollaborator/Get?idPreCollaborator={id}. JSON é camelCase
  * (confirmado contra a API real + swagger v1). **NÃO traz CPF** (nem telefone/nascimento): esses
  * dados pessoais vêm de `getMatch(idMatch)` (MatchModel). O `vacancyJob` é o cargo como string; a
@@ -295,11 +309,28 @@ export class PandapeApiService {
    * que o resto do sync consome; a v3 entra só onde ela é melhor, que é o tipo do documento.
    */
   async getFormulariosDocumentos(id: string): Promise<PandapeFormulario[]> {
-    if (this.inerte()) return [];
-    const pc = await this.get<PandapePrecollaboratorV3>(
+    return (await this.getFormulariosDocumentosComStatus(id)).dados ?? [];
+  }
+
+  /**
+   * MESMA chamada do `getFormulariosDocumentos`, com o STATUS HTTP à vista. É o que o re-baixar do
+   * arquivamento (OST re-baixar do Pandapé) consome: lá o 429 tem de ABORTAR na hora e virar motivo
+   * gravado, e a versão que devolve `[]` para tudo confundiria o limite de cota com "sem formulário".
+   * §A.6: nada além do status sai daqui; id, URL e nome de arquivo continuam fora do log.
+   */
+  async getFormulariosDocumentosComStatus(
+    id: string,
+  ): Promise<RespostaComStatus<PandapeFormulario[]>> {
+    if (this.inerte()) return { falha: "INERTE" };
+    const res = await this.getComStatus<PandapePrecollaboratorV3>(
       `/v3/precollaborators/${encodeURIComponent(id)}`,
     );
-    return Array.isArray(pc?.forms) ? pc.forms : [];
+    const forms = Array.isArray(res.dados?.forms) ? res.dados.forms : undefined;
+    return {
+      ...(forms ? { dados: forms } : {}),
+      ...(res.status !== undefined ? { status: res.status } : {}),
+      ...(res.falha ? { falha: res.falha } : {}),
+    };
   }
 
   /**
@@ -363,10 +394,19 @@ export class PandapeApiService {
    * (undefined). Erros só logam status + verbo (NUNCA corpo/PII/URL/token — §A.6).
    */
   private async get<T>(path: string): Promise<T | undefined> {
+    return (await this.getComStatus<T>(path)).dados;
+  }
+
+  /**
+   * Mesmo GET, devolvendo o STATUS HTTP junto (ou a `falha` de quando não houve resposta). É o corpo
+   * ÚNICO da chamada: o `get` acima é açúcar sobre este, então não há dois caminhos de rede para
+   * divergirem. §A.6 preservado: continua sem logar corpo, URL, token ou PII.
+   */
+  private async getComStatus<T>(path: string): Promise<RespostaComStatus<T>> {
     const token = await this.getAccessToken();
     if (!token) {
       this.logger.error("Pandapé sem access_token válido — chamada GET abortada.");
-      return undefined;
+      return { falha: "SEM_TOKEN" };
     }
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), PandapeApiService.TIMEOUT_MS);
@@ -382,18 +422,16 @@ export class PandapeApiService {
       if (!res.ok) {
         // Só status — a rota pode conter um id, então logamos apenas o verbo/método (sem PII/URL).
         this.logger.error(`Pandapé respondeu HTTP ${res.status} em uma chamada GET`);
-        return undefined;
+        return { status: res.status };
       }
-      return (await res.json()) as T;
+      return { dados: (await res.json()) as T, status: res.status };
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
         this.logger.error("Chamada ao Pandapé excedeu o tempo limite");
-      } else {
-        this.logger.error(
-          `Falha ao chamar o Pandapé: ${err instanceof Error ? err.message : "erro"}`,
-        );
+        return { falha: "TIMEOUT" };
       }
-      return undefined;
+      this.logger.error(`Falha ao chamar o Pandapé: ${err instanceof Error ? err.message : "erro"}`);
+      return { falha: "REDE" };
     } finally {
       clearTimeout(timer);
     }

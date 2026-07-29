@@ -1,7 +1,22 @@
 import { BadRequestException } from "@nestjs/common";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AuditoriaService } from "../auditoria/auditoria.service";
+import { resolvePastaPaiId } from "../ai/drive-routing";
 import type { AuthUser } from "../auth/auth.types";
+
+/** Mock do DrivePastaPaiService: delega ao fallback puro (preserva o comportamento pré-tabela). */
+const drivePastaPaiFake = {
+  resolver: async (t: string | null | undefined, c: string | null | undefined) =>
+    resolvePastaPaiId(t, c, {}),
+};
+
+/**
+ * Re-baixa do Pandapé (OST re-baixar do Pandapé): esta suíte não chega ao arquivamento, então o
+ * service entra só para satisfazer o construtor. Devolve vazio, nunca toca a rede.
+ */
+const pandapeArquivosFake = {
+  baixarArquivosDosTipos: async () => ({ arquivos: [], semRetorno: [], chamadasApi: 0 }),
+};
 
 /**
  * QA do refactor de equivalência que a Fase 5 depende (DoD §3): `auditarDocumento` (upload manual,
@@ -90,6 +105,8 @@ function makeService() {
     staging as never,
     ai as never,
     reguaCompletude as never,
+    drivePastaPaiFake as never,
+     pandapeArquivosFake as never,
   );
   return { svc, staging, ai };
 }

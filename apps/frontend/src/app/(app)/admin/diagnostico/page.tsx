@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { apiFetch, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { PageHead } from "@/components/ui/PageHead";
@@ -12,10 +13,13 @@ import { Icon, type IconName } from "@/components/ui/Icon";
 import { cn } from "@/lib/cn";
 
 interface SinalItem {
-  admissaoId: string;
-  candidato: string;
+  // Sinais por admissão trazem admissaoId + candidato; sinais sem pessoa (coleta de VT) não.
+  admissaoId?: string;
+  candidato?: string;
   detalhe: string;
   horas?: number;
+  // Prefixo do md5 do objeto no bucket (coleta de VT). NÃO é PII (§A.6).
+  md5Prefixo?: string;
 }
 interface Sinal {
   chave: string;
@@ -41,6 +45,32 @@ interface EstadoScheduler {
   abortado: boolean;
   nota: string | null;
 }
+// Scheduler da coleta de VT (§A.17 etapa 3): espelha o do Pandapé, com a contagem extra `semAdmissao`
+// (arquivos varridos que não casaram com admissão viva).
+interface EstadoSchedulerVtColeta {
+  ligado: boolean;
+  parado: boolean;
+  ultimoCicloEm: string | null;
+  ultimoCicloOkEm: string | null;
+  varridas: number;
+  novos: number;
+  semAdmissao: number;
+  falhas: number;
+  abortado: boolean;
+  nota: string | null;
+}
+/** Estado do scheduler da assinatura (INT-4). Contagens próprias: assinados e expirados. */
+interface EstadoSchedulerClicksign {
+  ligado: boolean;
+  parado: boolean;
+  ultimoCicloEm: string | null;
+  ultimoCicloOkEm: string | null;
+  varridas: number;
+  assinados: number;
+  expirados: number;
+  falhas: number;
+  nota: string | null;
+}
 interface Snapshot {
   geradoEm: string;
   sinais: Sinal[];
@@ -49,6 +79,10 @@ interface Snapshot {
   ultimaColeta: { quando: string | null; candidato: string | null; arquivos: number; nota: string };
   historico: { familia: string; ultimas24h: number; ultimos7d: number }[];
   scheduler: EstadoScheduler;
+  // Estado do scheduler da coleta de VT. Opcional para compatibilidade com snapshots antigos.
+  vtColeta?: EstadoSchedulerVtColeta;
+  // Estado do scheduler da assinatura Clicksign. Opcional para compatibilidade.
+  clicksign?: EstadoSchedulerClicksign;
   alerta: { aceso: boolean; total: number; motivos: string[] };
 }
 
@@ -66,6 +100,9 @@ const ICONE_SINAL: Record<string, IconName> = {
   "parado-6h": "clock",
   "falha-familia": "alert",
   "fopag-sem-pasta": "folder",
+  "drive-vt-sem-casar": "doc",
+  // Arquivamento no Drive que não concluiu (ou concluiu incompleto), com o motivo real no detalhe.
+  "arquivamento-drive-falhou": "folder",
 };
 
 function quando(iso: string | null): string {
@@ -73,8 +110,18 @@ function quando(iso: string | null): string {
   return new Date(iso).toLocaleString("pt-BR");
 }
 
+/**
+ * Extrai o cod_cliente do detalhe do sinal "Cliente Fopag sem pasta-pai" (formato do backend:
+ * "cliente <cod> (Fopag) sem pasta-pai mapeada"). Alimenta o atalho "Cadastrar pasta", que abre a
+ * tela de Pastas do Drive já no escopo Fopag com a chave preenchida.
+ */
+function codFopagDoDetalhe(detalhe: string): string | null {
+  return /cliente\s+(\S+)\s+\(Fopag\)/i.exec(detalhe)?.[1] ?? null;
+}
+
 export default function DiagnosticoPage() {
   const { token } = useAuth();
+  const router = useRouter();
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const [erro, setErro] = useState<string | null>(null);
   const [carregando, setCarregando] = useState(true);
@@ -152,11 +199,55 @@ export default function DiagnosticoPage() {
     [token, carregar],
   );
 
+  // Controle do scheduler da ASSINATURA (INT-4): mesmo padrão dos outros dois, rotas próprias.
+  const acaoClicksign = useCallback(
+    async (rota: "toggle" | "rodar-agora", body: Record<string, unknown>, rotulo: string) => {
+      setAcaoEmVoo(`clicksign:${rota}`);
+      setAviso(null);
+      try {
+        const r = await apiFetch<Record<string, unknown>>(`/diagnostico/clicksign/${rota}`, {
+          method: "POST",
+          token,
+          body,
+        });
+        setAviso(`${rotulo}: ${JSON.stringify(r)}`);
+        await carregar();
+      } catch (e) {
+        setAviso(e instanceof ApiError ? e.message : "Falha na ação.");
+      } finally {
+        setAcaoEmVoo(null);
+      }
+    },
+    [token, carregar],
+  );
+
+  // Controle do scheduler da coleta de VT (§A.17 etapa 3): mesmo padrão do Pandapé, rotas próprias.
+  const acaoVtColeta = useCallback(
+    async (rota: "toggle" | "rodar-agora", body: Record<string, unknown>, rotulo: string) => {
+      setAcaoEmVoo(`vt-coleta:${rota}`);
+      setAviso(null);
+      try {
+        const r = await apiFetch<Record<string, unknown>>(`/diagnostico/vt-coleta/${rota}`, {
+          method: "POST",
+          token,
+          body,
+        });
+        setAviso(`${rotulo}: ${JSON.stringify(r)}`);
+        await carregar();
+      } catch (e) {
+        setAviso(e instanceof ApiError ? e.message : "Falha na ação.");
+      } finally {
+        setAcaoEmVoo(null);
+      }
+    },
+    [token, carregar],
+  );
+
   return (
     <>
       <PageHead
         eyebrow="Administração"
-        title="Diagnóstico do sistema"
+        title="Diagnóstico Do Sistema"
         subtitle="Estado do sistema num olhar. Clique num card para o detalhe e as ações por alvo."
       />
 
@@ -275,6 +366,76 @@ export default function DiagnosticoPage() {
                 style={{ color: snap.scheduler.parado ? "var(--danger)" : "var(--faint)" }}
               />
             </GlassCard>
+            {snap.vtColeta && (
+              <GlassCard
+                as="button"
+                onClick={() => setAberto("vt-coleta")}
+                className={cn(
+                  "flex items-center justify-between text-left transition hover:bg-[var(--surface-2)] !px-4 !py-3.5",
+                  snap.vtColeta.parado && "!border-[rgba(214,69,69,0.45)] ring-1 ring-[rgba(214,69,69,0.35)]",
+                )}
+              >
+                <div>
+                  <div className="lbl !mb-0.5">Scheduler da coleta de VT</div>
+                  <div
+                    className="text-[13.5px] font-semibold"
+                    style={{
+                      color: snap.vtColeta.parado
+                        ? "var(--danger)"
+                        : snap.vtColeta.ligado
+                          ? "var(--ok)"
+                          : "var(--dim)",
+                    }}
+                  >
+                    {snap.vtColeta.parado
+                      ? "parado"
+                      : snap.vtColeta.ligado
+                        ? `ativo · último ciclo ${snap.vtColeta.varridas} varridas, ${snap.vtColeta.novos} novos`
+                        : "desligado"}
+                  </div>
+                </div>
+                <Icon
+                  name={snap.vtColeta.parado ? "alert" : snap.vtColeta.ligado ? "check" : "right"}
+                  className="h-4 w-4"
+                  style={{ color: snap.vtColeta.parado ? "var(--danger)" : "var(--faint)" }}
+                />
+              </GlassCard>
+            )}
+            {snap.clicksign && (
+              <GlassCard
+                as="button"
+                onClick={() => setAberto("clicksign")}
+                className={cn(
+                  "flex items-center justify-between text-left transition hover:bg-[var(--surface-2)] !px-4 !py-3.5",
+                  snap.clicksign.parado && "!border-[rgba(214,69,69,0.45)] ring-1 ring-[rgba(214,69,69,0.35)]",
+                )}
+              >
+                <div>
+                  <div className="lbl !mb-0.5">Scheduler da assinatura</div>
+                  <div
+                    className="text-[13.5px] font-semibold"
+                    style={{
+                      color: snap.clicksign.parado
+                        ? "var(--danger)"
+                        : snap.clicksign.ligado
+                          ? "var(--ok)"
+                          : "var(--dim)",
+                    }}
+                  >
+                    {snap.clicksign.parado
+                      ? "parado"
+                      : snap.clicksign.ligado
+                        ? `ativo, último ciclo ${snap.clicksign.varridas} envelope(s)`
+                        : "desligado"}
+                  </div>
+                </div>
+                <Icon
+                  name={snap.clicksign.parado ? "alert" : snap.clicksign.ligado ? "check" : "right"}
+                  className="h-4 w-4"
+                  style={{ color: snap.clicksign.parado ? "var(--danger)" : "var(--faint)" }}
+                />
+              </GlassCard>
+            )}
             <GlassCard
               as="button"
               onClick={() => setAberto("coleta")}
@@ -320,33 +481,52 @@ export default function DiagnosticoPage() {
             <p className="py-6 text-center text-[13px] text-faint">Nenhuma ocorrência. Estado saudável.</p>
           ) : (
             <div className="max-h-[55vh] space-y-1.5 overflow-y-auto pr-1">
-              {sinalAberto.itens.map((it) => (
-                <div key={it.admissaoId} className="flex flex-wrap items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2">
-                  <span className="text-[13.5px] font-semibold text-text">{it.candidato}</span>
+              {sinalAberto.itens.map((it, i) => (
+                <div key={it.admissaoId ?? it.md5Prefixo ?? i} className="flex flex-wrap items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2">
+                  {/* Sinais por admissão mostram o candidato; a coleta de VT identifica pelo prefixo do
+                      md5 do objeto no bucket (o admin abre o arquivo no bucket), sem PII (§A.6). */}
+                  <span className="text-[13.5px] font-semibold text-text">
+                    {it.candidato ?? (it.md5Prefixo ? `Arquivo ${it.md5Prefixo}` : "não informado")}
+                  </span>
                   <span className="text-[12px] text-dim">{it.detalhe}</span>
                   {typeof it.horas === "number" && it.horas > 0 && (
                     <span className="text-[11.5px] text-faint">há {it.horas}h</span>
                   )}
-                  <div className="ml-auto flex gap-1.5">
-                    {(sinalAberto.chave === "regua-sem-pasta" || sinalAberto.chave === "fopag-sem-pasta") && (
+                  {it.admissaoId && (
+                    <div className="ml-auto flex gap-1.5">
+                      {sinalAberto.chave === "fopag-sem-pasta" && codFopagDoDetalhe(it.detalhe) && (
+                        <Button
+                          variant="secondary"
+                          className="!py-1 !px-2.5 text-[12px]"
+                          onClick={() =>
+                            router.push(
+                              `/admin/pastas-drive?fopag=${encodeURIComponent(codFopagDoDetalhe(it.detalhe)!)}`,
+                            )
+                          }
+                        >
+                          Cadastrar pasta
+                        </Button>
+                      )}
+                      {(sinalAberto.chave === "regua-sem-pasta" || sinalAberto.chave === "fopag-sem-pasta") && (
+                        <Button
+                          variant="secondary"
+                          className="!py-1 !px-2.5 text-[12px]"
+                          disabled={acaoEmVoo !== null}
+                          onClick={() => void acao("rearquivar", { admissaoId: it.admissaoId! }, "Rearquivar")}
+                        >
+                          Rearquivar
+                        </Button>
+                      )}
                       <Button
                         variant="secondary"
                         className="!py-1 !px-2.5 text-[12px]"
                         disabled={acaoEmVoo !== null}
-                        onClick={() => void acao("rearquivar", { admissaoId: it.admissaoId }, "Rearquivar")}
+                        onClick={() => void acao("repull", { admissaoId: it.admissaoId! }, "Re-pull")}
                       >
-                        Rearquivar
+                        Re-pull
                       </Button>
-                    )}
-                    <Button
-                      variant="secondary"
-                      className="!py-1 !px-2.5 text-[12px]"
-                      disabled={acaoEmVoo !== null}
-                      onClick={() => void acao("repull", { admissaoId: it.admissaoId }, "Re-pull")}
-                    >
-                      Re-pull
-                    </Button>
-                  </div>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -437,9 +617,155 @@ export default function DiagnosticoPage() {
         </Modal>
       )}
 
+      {/* ── DETALHE: scheduler da assinatura (INT-4) ── */}
+      {aberto === "clicksign" && snap?.clicksign && (
+        <Modal onClose={() => setAberto(null)} ariaLabel="Scheduler Da Assinatura" className="max-w-lg">
+          <div className="mb-3 flex items-center justify-between">
+            <div>
+              <div className="eyebrow !mb-1">Assinatura de contrato</div>
+              <h2 className="text-lg font-semibold text-text">Scheduler da assinatura</h2>
+            </div>
+            <StatusPill
+              tone={snap.clicksign.parado ? "dg" : snap.clicksign.ligado ? "ok" : "nt"}
+              label={snap.clicksign.parado ? "parado" : snap.clicksign.ligado ? "ativo" : "desligado"}
+            />
+          </div>
+          <p className="mb-3 text-[12.5px] text-dim">
+            Consulta os envelopes que estão aguardando assinatura na Clicksign. Fechou, baixa o
+            contrato assinado e arquiva no Drive. Foi cancelado, marca cancelado. Passou do prazo de
+            30 dias sem nenhum dos dois, marca expirado e acende o sinal.
+          </p>
+          <div className="mb-3 grid grid-cols-4 gap-2 text-center">
+            <div className="rounded-lg border border-[var(--border)] px-2 py-2">
+              <div className="text-lg font-bold text-text">{snap.clicksign.varridas}</div>
+              <div className="text-[11px] text-faint">varridas</div>
+            </div>
+            <div className="rounded-lg border border-[var(--border)] px-2 py-2">
+              <div className="text-lg font-bold text-text">{snap.clicksign.assinados}</div>
+              <div className="text-[11px] text-faint">assinados</div>
+            </div>
+            <div className="rounded-lg border border-[var(--border)] px-2 py-2">
+              <div
+                className="text-lg font-bold"
+                style={{ color: snap.clicksign.expirados > 0 ? "var(--danger)" : undefined }}
+              >
+                {snap.clicksign.expirados}
+              </div>
+              <div className="text-[11px] text-faint">expirados</div>
+            </div>
+            <div className="rounded-lg border border-[var(--border)] px-2 py-2">
+              <div
+                className="text-lg font-bold"
+                style={{ color: snap.clicksign.falhas > 0 ? "var(--danger)" : undefined }}
+              >
+                {snap.clicksign.falhas}
+              </div>
+              <div className="text-[11px] text-faint">falhas</div>
+            </div>
+          </div>
+          <div className="mb-3 space-y-1 text-[12.5px] text-dim">
+            <div>Último ciclo: {quando(snap.clicksign.ultimoCicloEm)}</div>
+            <div>Último ciclo bem-sucedido: {quando(snap.clicksign.ultimoCicloOkEm)}</div>
+            {snap.clicksign.nota && <div className="text-faint">Nota: {snap.clicksign.nota}</div>}
+          </div>
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button
+              variant="secondary"
+              disabled={acaoEmVoo !== null || !snap.clicksign.ligado}
+              onClick={() => void acaoClicksign("rodar-agora", {}, "Rodar ciclo agora")}
+            >
+              Rodar ciclo agora
+            </Button>
+            <Button
+              variant={snap.clicksign.ligado ? "secondary" : "primary"}
+              disabled={acaoEmVoo !== null}
+              onClick={() =>
+                void acaoClicksign(
+                  "toggle",
+                  { ligado: !snap.clicksign?.ligado },
+                  snap.clicksign?.ligado ? "Desligar" : "Ligar",
+                )
+              }
+            >
+              {snap.clicksign.ligado ? "Desligar scheduler" : "Ligar scheduler"}
+            </Button>
+          </div>
+        </Modal>
+      )}
+
+      {/* ── DETALHE: scheduler da coleta de VT (§A.17 etapa 3) ── */}
+      {aberto === "vt-coleta" && snap?.vtColeta && (
+        <Modal onClose={() => setAberto(null)} ariaLabel="Scheduler Da Coleta De VT" className="max-w-lg">
+          <div className="mb-3 flex items-center justify-between">
+            <div>
+              <div className="eyebrow !mb-1">Coleta automática</div>
+              <h2 className="text-lg font-semibold text-text">Scheduler da coleta de VT</h2>
+            </div>
+            <StatusPill
+              tone={snap.vtColeta.parado ? "dg" : snap.vtColeta.ligado ? "ok" : "nt"}
+              label={snap.vtColeta.parado ? "parado" : snap.vtColeta.ligado ? "ativo" : "desligado"}
+            />
+          </div>
+          <p className="mb-3 text-[12.5px] text-dim">
+            Varre a pasta de coleta de formulários de VT e casa cada arquivo com a admissão viva pelo
+            CPF. Incremental pela dedup por arquivo: só o que é novo é baixado e arquivado. Arquivos
+            que não casam viram o sinal &quot;Formulário de VT no Drive sem casar&quot;.
+          </p>
+          <div className="mb-3 grid grid-cols-4 gap-2 text-center">
+            <div className="rounded-lg border border-[var(--border)] px-2 py-2">
+              <div className="text-lg font-bold text-text">{snap.vtColeta.varridas}</div>
+              <div className="text-[11px] text-faint">varridas</div>
+            </div>
+            <div className="rounded-lg border border-[var(--border)] px-2 py-2">
+              <div className="text-lg font-bold text-text">{snap.vtColeta.novos}</div>
+              <div className="text-[11px] text-faint">novos</div>
+            </div>
+            <div className="rounded-lg border border-[var(--border)] px-2 py-2">
+              <div className="text-lg font-bold text-text">{snap.vtColeta.semAdmissao}</div>
+              <div className="text-[11px] text-faint">sem admissão</div>
+            </div>
+            <div className="rounded-lg border border-[var(--border)] px-2 py-2">
+              <div
+                className="text-lg font-bold"
+                style={{ color: snap.vtColeta.falhas > 0 ? "var(--danger)" : undefined }}
+              >
+                {snap.vtColeta.falhas}
+              </div>
+              <div className="text-[11px] text-faint">falhas</div>
+            </div>
+          </div>
+          <div className="mb-3 space-y-1 text-[12.5px] text-dim">
+            <div>Último ciclo: {quando(snap.vtColeta.ultimoCicloEm)}</div>
+            <div>Último ciclo bem-sucedido: {quando(snap.vtColeta.ultimoCicloOkEm)}</div>
+            {snap.vtColeta.abortado && (
+              <div className="text-warn">Último ciclo interrompido pelo teto de segurança.</div>
+            )}
+            {snap.vtColeta.nota && <div className="text-faint">Nota: {snap.vtColeta.nota}</div>}
+          </div>
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button
+              variant="secondary"
+              disabled={acaoEmVoo !== null || !snap.vtColeta.ligado}
+              onClick={() => void acaoVtColeta("rodar-agora", {}, "Rodar ciclo agora")}
+            >
+              Rodar ciclo agora
+            </Button>
+            <Button
+              variant={snap.vtColeta.ligado ? "secondary" : "primary"}
+              disabled={acaoEmVoo !== null}
+              onClick={() =>
+                void acaoVtColeta("toggle", { ligado: !snap.vtColeta?.ligado }, snap.vtColeta?.ligado ? "Desligar" : "Ligar")
+              }
+            >
+              {snap.vtColeta.ligado ? "Desligar scheduler" : "Ligar scheduler"}
+            </Button>
+          </div>
+        </Modal>
+      )}
+
       {/* ── DETALHE: histórico por família ── */}
       {aberto === "historico" && snap && (
-        <Modal onClose={() => setAberto(null)} ariaLabel="Falhas por família" className="max-w-lg">
+        <Modal onClose={() => setAberto(null)} ariaLabel="Falhas Por Família" className="max-w-lg">
           <div className="eyebrow !mb-1">Histórico</div>
           <h2 className="mb-3 text-lg font-semibold text-text">Falhas por família</h2>
           <div className="space-y-1.5">

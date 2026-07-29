@@ -12,6 +12,7 @@ import {
   documentosAdmissao,
   frentesAdmissao,
   frenteStatusEventos,
+  integracaoPandape,
   regrasAuditoria,
   tiposDocumento,
 } from "../db/schema";
@@ -23,7 +24,8 @@ import {
   MOTIVO_FALHA_IA,
 } from "../domain/falha-auditoria";
 import { triarConjunto } from "./conteudo-documento";
-import { montarNomePasta, resolvePastaPaiId, resolveSubpasta } from "../ai/drive-routing";
+import { montarNomePasta, resolveSubpasta } from "../ai/drive-routing";
+import { DrivePastaPaiService } from "../ai/drive-pasta-pai.service";
 import { recomputeFarolGlobal } from "../admissoes/farol";
 import { calcSinalizadorPreenchimento } from "../domain/admissao";
 import { podeAbrirCadastro } from "../domain/frentes";
@@ -34,6 +36,14 @@ import {
 } from "../domain/auditoria";
 import { ReguaCompletudeService } from "../regua/regua-completude.service";
 import { StagingService } from "../staging/staging.service";
+import { PandapeArquivosService, type AbortoBaixa } from "../pandape/pandape-arquivos.service";
+import {
+  limitar,
+  motivoFalhaEnvioDrive,
+  motivoPandapeSemTipos,
+  MOTIVO_DRIVE,
+  tiposFaltantesNoArquivamento,
+} from "../domain/drive-arquivamento";
 
 /**
  * Precisa (re)arquivar no Drive? Sim quando ainda não há link (null) OU quando o link salvo é um
@@ -63,6 +73,17 @@ export interface PosVeredito {
 }
 
 /**
+ * Desfecho do arquivamento. Os dois campos são independentes de propósito: o prontuário pode ter
+ * subido E ainda assim faltar documento (o Pandapé não devolveu um tipo), caso em que `arquivado`
+ * vem preenchido e `motivo` também. Perder o que EXISTE por causa do que falta seria pior.
+ */
+interface ResultadoArquivamento {
+  arquivado?: { pastaUrl: string; pastaJaExistia?: boolean; ignorados?: number };
+  /** Por que não concluiu (ou concluiu incompleto). Já gravado em `admissoes.drive_falha_motivo`. */
+  motivo?: string;
+}
+
+/**
  * Orquestração da auditoria documental incremental (F2 / INT-3, Fase 4). Por documento:
  * staging → IA → grava SÓ o estado/motivo (§A.3 regra 7) → recalcula sinalizador e progresso →
  * ao fechar a régua obrigatória, arquiva no Drive e expurga a staging. O CPF do candidato só
@@ -77,6 +98,8 @@ export class AuditoriaService {
     private readonly staging: StagingService,
     private readonly ai: AiClientService,
     private readonly reguaCompletude: ReguaCompletudeService,
+    private readonly drivePastaPai: DrivePastaPaiService,
+    private readonly pandapeArquivos: PandapeArquivosService,
   ) {}
 
   /** Carrega a admissão com o candidato e o cliente (sem expor nada em log). */
@@ -406,7 +429,7 @@ export class AuditoriaService {
    * POR QUE EXISTE (OST visualização/descarte, Bloco 1). Estes quatro passos moravam DENTRO do
    * `auditarConjunto`, e por isso só rodavam quando quem dava o veredito era a IA. A validação
    * humana (`ValidacaoHumanaService.validar`) gravava ENTREGUE e parava ali: se ela fosse o
-   * documento que FECHAVA a régua, a frente AUDITORIA não ia sozinha para "Análise finalizada" e os
+   * documento que FECHAVA a régua, a frente AUDITORIA não ia sozinha para "Análise Finalizada" e os
    * documentos NÃO subiam para o Drive. A admissão ficava com a régua completa e o fluxo parado, sem
    * nada na tela avisando. Com o pós-veredito num ponto só, os dois caminhos passam pelo mesmo lugar
    * e não têm como divergir de novo.
@@ -436,16 +459,20 @@ export class AuditoriaService {
       // Fechou a régua e ainda não arquivou? → arquiva no Drive e expurga a staging.
       if (precisaArquivarDrive(adm.drivePastaUrl)) {
         // FALHA DE ARQUIVAMENTO NÃO PODE SER SILENCIOSA NEM DESTRUTIVA (OST produção, Bloco 1).
-        // O caso real: a régua fechou, a frente foi a "Análise finalizada" na tela, e o envio ao
+        // O caso real: a régua fechou, a frente foi a "Análise Finalizada" na tela, e o envio ao
         // Drive morreu no 16º arquivo com um erro do Google. Como a exceção subia, a requisição da
         // validação humana terminava em erro DEPOIS de já ter gravado tudo, e o consultor ficava
         // com a tela dizendo "finalizada" e o prontuário vazio. Ninguém era avisado.
         // Agora: o que já foi persistido continua valendo, a staging NÃO é expurgada, a URL segue
         // nula (então a próxima ação na admissão tenta de novo) e o consultor recebe um AVISO.
         try {
-          arquivado = await this.arquivarNoDrive(adm);
+          const resultado = await this.arquivarNoDrive(adm);
+          arquivado = resultado.arquivado;
+          // Motivo apurado lá dentro (sem pasta-pai, sem arquivo, 429, tipo não devolvido): já foi
+          // GRAVADO na admissão e agora sobe à tela como aviso, com o texto real do que aconteceu.
+          avisoDrive = resultado.motivo;
         } catch (err) {
-          avisoDrive = this.avisoFalhaDrive(err, adm.id);
+          avisoDrive = await this.avisoFalhaDrive(err, adm.id);
         }
       }
     }
@@ -466,7 +493,7 @@ export class AuditoriaService {
    * trabalho à toa), que os documentos não se perderam, e que o sistema tenta de novo sozinho na
    * próxima ação. §A.6: o log leva o id da admissão e a família da falha, nunca nome nem CPF.
    */
-  private avisoFalhaDrive(err: unknown, admissaoId: string): string {
+  private async avisoFalhaDrive(err: unknown, admissaoId: string): Promise<string> {
     const familia = familiaDaFalha(err);
     const detalhe = err instanceof Error ? err.message : "erro";
     this.logger.error(
@@ -474,6 +501,8 @@ export class AuditoriaService {
         `Staging preservada e URL não gravada, então a próxima ação na admissão tenta de novo. ` +
         `Detalhe: ${detalhe}`,
     );
+    // FIM DO SILÊNCIO: a exceção do envio também vira motivo gravado, e não só log e aviso de tela.
+    await this.registrarFalhaDrive(admissaoId, motivoFalhaEnvioDrive(`${familia}, ${detalhe}`));
     return (
       "Auditoria concluída e salva, mas o envio ao Drive falhou: os documentos continuam guardados " +
       "aqui e o sistema tentará de novo na próxima ação desta admissão. Se insistir, avise a TI."
@@ -634,7 +663,7 @@ export class AuditoriaService {
     codigoTipo: string,
     nomeTipo: string,
   ): Promise<{ pastaUrl: string } | undefined> {
-    const pastaPaiId = resolvePastaPaiId(adm.tipoContrato, adm.codCliente);
+    const pastaPaiId = await this.drivePastaPai.resolver(adm.tipoContrato, adm.codCliente);
     if (!pastaPaiId) {
       this.logger.warn(
         `ASO não arquivado: sem pasta-pai do Drive para contrato/cliente da admissão ${adm.id}.`,
@@ -664,20 +693,39 @@ export class AuditoriaService {
    * Arquiva os documentos da staging no Drive (INT-2). Resolve a pasta-pai por contrato/cliente; se
    * não resolver, NÃO arquiva (deixa drivePastaUrl null e a staging viva até o TTL), logando sem PII.
    * Em sucesso, grava a URL da pasta (referência, não PII) e expurga a staging da admissão.
+   *
+   * ANTES DE ARQUIVAR, COMPLETA A STAGING (OST re-baixar do Pandapé). A staging tem TTL de 48h e a
+   * régua pode fechar muito depois da coleta (o caso real: documento validado à mão dias depois).
+   * Quando isso acontecia, este método achava a pasta vazia e devolvia `undefined` em silêncio.
+   * Agora ele levanta os tipos ENTREGUES, vê o que não tem arquivo e re-baixa só esses do Pandapé.
+   *
+   * TODO desfecho que não conclui GRAVA O MOTIVO em `admissoes.drive_falha_motivo`, e a conclusão
+   * limpa. Nunca mais falha calada.
    */
   private async arquivarNoDrive(
     adm: Awaited<ReturnType<AuditoriaService["carregarAdmissao"]>>,
-  ): Promise<{ pastaUrl: string; pastaJaExistia?: boolean; ignorados?: number } | undefined> {
-    const pastaPaiId = resolvePastaPaiId(adm.tipoContrato, adm.codCliente);
+  ): Promise<ResultadoArquivamento> {
+    const pastaPaiId = await this.drivePastaPai.resolver(adm.tipoContrato, adm.codCliente);
     if (!pastaPaiId) {
       this.logger.warn(
         `Arquivamento ignorado: sem pasta-pai do Drive para contrato/cliente da admissão ${adm.id}.`,
       );
-      return undefined;
+      await this.registrarFalhaDrive(adm.id, MOTIVO_DRIVE.SEM_PASTA_PAI);
+      return { motivo: MOTIVO_DRIVE.SEM_PASTA_PAI };
     }
 
+    // Completa a staging com o que faltar, re-baixando do Pandapé só os tipos ausentes. Devolve o
+    // motivo quando o prontuário vai ficar incompleto (nada aqui escreve veredito de documento).
+    const motivoIncompleto = await this.completarStagingParaArquivamento(adm);
+
     const arquivosStaging = await this.staging.listar(adm.id);
-    if (arquivosStaging.length === 0) return undefined;
+    if (arquivosStaging.length === 0) {
+      // Nada a subir: NÃO se cria prontuário vazio. O motivo já foi apurado acima (ou é a ausência
+      // de origem Pandapé com a staging expirada), então o sinal acende e alguém age.
+      const motivo = motivoIncompleto ?? MOTIVO_DRIVE.SEM_ARQUIVO_SEM_PANDAPE;
+      await this.registrarFalhaDrive(adm.id, motivo);
+      return { motivo };
+    }
 
     // Código → nome do tipo (para o nome final do arquivo) — sem PII.
     const tipos = await this.db
@@ -701,9 +749,17 @@ export class AuditoriaService {
     });
     const { pastaUrl } = resultado;
 
+    // Concluiu: grava a URL e LIMPA a falha anterior. Quando o prontuário subiu mas ficou incompleto
+    // (o Pandapé não devolveu algum tipo), a URL é gravada do mesmo jeito, porque perder o que EXISTE
+    // seria pior, e o motivo PERMANECE gravado para o sinal continuar aceso até alguém resolver.
     await this.db
       .update(admissoes)
-      .set({ drivePastaUrl: pastaUrl, atualizadoEm: new Date() })
+      .set({
+        drivePastaUrl: pastaUrl,
+        driveFalhaMotivo: motivoIncompleto ? limitar(motivoIncompleto) : null,
+        driveFalhaEm: motivoIncompleto ? new Date() : null,
+        atualizadoEm: new Date(),
+      })
       .where(eq(admissoes.id, adm.id));
     await this.staging.removerAdmissao(adm.id);
     // §A.6: contagens e id de admissão, nunca nome de arquivo nem de pessoa. `ignorados` é a medida
@@ -715,9 +771,135 @@ export class AuditoriaService {
     );
 
     return {
-      pastaUrl,
-      ...(resultado.pastaJaExistia ? { pastaJaExistia: true } : {}),
-      ...(resultado.ignorados ? { ignorados: resultado.ignorados } : {}),
+      arquivado: {
+        pastaUrl,
+        ...(resultado.pastaJaExistia ? { pastaJaExistia: true } : {}),
+        ...(resultado.ignorados ? { ignorados: resultado.ignorados } : {}),
+      },
+      ...(motivoIncompleto ? { motivo: motivoIncompleto } : {}),
     };
+  }
+
+  /**
+   * COMPLETA A STAGING ANTES DO ARQUIVAMENTO, re-baixando do Pandapé só os tipos que faltam.
+   *
+   * O BURACO QUE ISTO FECHA. O prontuário sempre foi montado a partir da staging efêmera, que tem TTL
+   * de 48h (§A.6). A régua, porém, fecha quando fecha: um documento validado à mão dias depois da
+   * coleta fechava a régua com a staging já expurgada, e o arquivamento subia uma pasta vazia ou nem
+   * subia. Foi o que aconteceu com três admissões reais, sem uma linha de aviso em lugar nenhum.
+   *
+   * A REGRA DO QUE VAI PARA O DRIVE (decisão do diretor): TODO documento ENTREGUE, obrigatório E
+   * facultativo. Se foi coletado e validado, vai.
+   *
+   * TRAVA CRÍTICA, NÃO NEGOCIÁVEL. Este caminho NÃO escreve em `documentos_admissao`. Ele não
+   * reaudita, não chama a IA e não toca `estado`, `observacao`, `validado_por_id` nem `validado_em`.
+   * Re-baixar é buscar o BINÁRIO que sumiu do disco, não julgar o documento de novo: o veredito da
+   * pessoa que validou permanece exatamente como está. A garantia é estrutural (o
+   * `PandapeArquivosService` não tem banco injetado) e está travada por teste com espião no `update`.
+   *
+   * TRAVAS DE COTA (§A.5, cota compartilhada com o webhook): só se pede o que falta; se nada falta, o
+   * Pandapé NEM É CHAMADO; uma única chamada de API por admissão; downloads sequenciais; 429 aborta
+   * na hora e vira motivo gravado, sem insistir.
+   *
+   * Devolve o MOTIVO quando o prontuário vai ficar incompleto, ou `undefined` quando está tudo lá.
+   */
+  private async completarStagingParaArquivamento(
+    adm: Awaited<ReturnType<AuditoriaService["carregarAdmissao"]>>,
+  ): Promise<string | undefined> {
+    // Tipos ENTREGUES da admissão (obrigatórios E facultativos). Só código de tipo, sem PII.
+    const entregues = (
+      await this.db
+        .select({ codigo: tiposDocumento.codigo })
+        .from(documentosAdmissao)
+        .innerJoin(tiposDocumento, eq(tiposDocumento.id, documentosAdmissao.tipoDocumentoId))
+        .where(
+          and(
+            eq(documentosAdmissao.admissaoId, adm.id),
+            eq(documentosAdmissao.estado, "ENTREGUE"),
+          ),
+        )
+    ).map((l) => l.codigo);
+    if (entregues.length === 0) return undefined;
+
+    // O nome do arquivo na staging usa o código SANITIZADO; a comparação tem de usar a mesma régua.
+    const naStagingCru = new Set((await this.staging.listar(adm.id)).map((a) => a.codigoTipo));
+    const naStaging = entregues.filter((c) => naStagingCru.has(sanitizarCodigo(c)));
+
+    const faltantes = tiposFaltantesNoArquivamento({
+      entregues,
+      naStaging,
+      // O ASO sobe sozinho ao ser validado e sai da staging logo depois: já está no prontuário.
+      jaNoDrive: precisaArquivarDrive(adm.driveAsoUrl) ? [] : ["ASO"],
+    });
+    if (faltantes.length === 0) return undefined; // staging completa: o Pandapé nem é chamado.
+
+    const idPrecollaborator = (
+      await this.db
+        .select({ id: integracaoPandape.idPrecollaborator })
+        .from(integracaoPandape)
+        .where(eq(integracaoPandape.admissaoId, adm.id))
+    )[0]?.id;
+    if (!idPrecollaborator) {
+      // Admissão manual (ou sem vínculo Pandapé): não há de onde re-baixar. Antes isso era silêncio
+      // absoluto; agora é motivo gravado e sinal aceso, que é a proteção possível para este caso.
+      this.logger.warn(
+        `Arquivamento incompleto (admissão ${adm.id}): ${faltantes.length} tipo(s) sem arquivo e ` +
+          `sem origem Pandapé para re-baixar.`,
+      );
+      return `${MOTIVO_DRIVE.SEM_ARQUIVO_SEM_PANDAPE} Tipos sem arquivo: ${faltantes.join(", ")}.`;
+    }
+
+    const baixa = await this.pandapeArquivos.baixarArquivosDosTipos(idPrecollaborator, faltantes);
+    // Salva na staging o que veio. A partir daqui o fluxo segue NORMAL: o lote sobe pelo mesmo
+    // caminho de sempre, com a mesma dedup por md5 do lado do Drive.
+    for (const arq of baixa.arquivos) {
+      await this.staging.salvar(adm.id, arq.codigoTipo, {
+        buffer: arq.buffer,
+        originalname: arq.originalname,
+      });
+    }
+    this.logger.log(
+      `Re-baixa para arquivamento (admissão ${adm.id}): faltavam=${faltantes.length}, ` +
+        `arquivos recuperados=${baixa.arquivos.length}, sem retorno=${baixa.semRetorno.length}.`,
+    );
+
+    if (baixa.abortadoPor) return motivoDoAborto(baixa.abortadoPor);
+    if (baixa.semRetorno.length > 0) return motivoPandapeSemTipos(baixa.semRetorno);
+    return undefined;
+  }
+
+  /**
+   * Grava o MOTIVO REAL de o arquivamento não ter concluído (OST re-baixar do Pandapé, item 4). É o
+   * fim do silêncio: sem isto, "prontuário não criado" e "prontuário criado pela metade" eram
+   * indistinguíveis de "ainda não chegou a hora". Alimenta o sinal "Arquivamento No Drive Falhou".
+   *
+   * NÃO toca documento nenhum: escreve só na linha da admissão. §A.6: motivo é texto de sistema com
+   * código de tipo, nunca nome, CPF, arquivo ou URL externa.
+   */
+  private async registrarFalhaDrive(admissaoId: string, motivo: string): Promise<void> {
+    const agora = new Date();
+    await this.db
+      .update(admissoes)
+      .set({ driveFalhaMotivo: limitar(motivo), driveFalhaEm: agora, atualizadoEm: agora })
+      .where(eq(admissoes.id, admissaoId));
+  }
+}
+
+/** Mesma sanitização que o `StagingService` aplica ao gravar (`{codigoTipo}__{uuid}.{ext}`). */
+function sanitizarCodigo(codigo: string): string {
+  return codigo.replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
+/** Aborto da re-baixa → motivo gravado. Exportado para o teste travar cada correspondência. */
+export function motivoDoAborto(aborto: AbortoBaixa): string {
+  switch (aborto) {
+    case "QUOTA":
+      return MOTIVO_DRIVE.QUOTA_PANDAPE;
+    case "TIMEOUT":
+      return MOTIVO_DRIVE.TIMEOUT_PANDAPE;
+    case "INERTE":
+      return MOTIVO_DRIVE.PANDAPE_INERTE;
+    default:
+      return MOTIVO_DRIVE.API_PANDAPE_FORA;
   }
 }

@@ -30,11 +30,18 @@ export interface Sinal {
 }
 
 export interface SinalItem {
-  admissaoId: string;
-  candidato: string;
+  /** Admissão afetada, quando o sinal é por admissão. Ausente em sinais sem admissão (coleta de VT). */
+  admissaoId?: string;
+  /** Nome do candidato (aceitável, CPF não). Ausente quando o sinal não é ligado a uma pessoa. */
+  candidato?: string;
   detalhe: string;
   /** Há quanto tempo (horas), quando o sinal tem antiguidade (paradoHa, staging, etc.). */
   horas?: number;
+  /**
+   * Prefixo do md5 do arquivo (coleta de VT). NÃO é PII (§A.6): o nome do objeto no bucket contém
+   * NOME+CPF e nunca é persistido, então o admin localiza o arquivo navegando o bucket pelo digest.
+   */
+  md5Prefixo?: string;
 }
 
 /** Histórico agregado (Bloco 6). */
@@ -59,8 +66,47 @@ export interface DiagnosticoSnapshot {
   historico: HistoricoFamilia[];
   /** Estado do scheduler de re-consulta do Pandapé (OST scheduler, Bloco 4). */
   scheduler: EstadoSchedulerSnapshot;
+  /** Estado do scheduler da coleta de VT (§A.17 etapa 3). Opcional para compat. */
+  vtColeta?: EstadoSchedulerVtColetaSnapshot;
+  /** Estado do scheduler da assinatura Clicksign (INT-4). Opcional para compat. */
+  clicksign?: EstadoSchedulerClicksignSnapshot;
   /** Resumo para o alerta (Bloco 7). */
   alerta: ResumoAlerta;
+}
+
+/**
+ * Bloco do scheduler da COLETA DE VT na tela (§A.17 etapa 3): liga/desliga, se está parado e o
+ * resultado do último ciclo (varridas/novos/semAdmissao/falhas). Espelha o bloco do Pandapé, com a
+ * contagem extra `semAdmissao` (arquivos varridos que não casaram com admissão viva).
+ */
+export interface EstadoSchedulerVtColetaSnapshot {
+  ligado: boolean;
+  parado: boolean;
+  ultimoCicloEm: string | null;
+  ultimoCicloOkEm: string | null;
+  varridas: number;
+  novos: number;
+  semAdmissao: number;
+  falhas: number;
+  abortado: boolean;
+  nota: string | null;
+}
+
+/**
+ * Bloco do scheduler da ASSINATURA (INT-4): liga/desliga, se está parado e o resultado do último
+ * ciclo. Espelha os outros dois, trocando as contagens pelas que fazem sentido aqui: `assinados`
+ * (envelopes que fecharam e foram arquivados no Drive) e `expirados` (passaram do prazo de 30 dias).
+ */
+export interface EstadoSchedulerClicksignSnapshot {
+  ligado: boolean;
+  parado: boolean;
+  ultimoCicloEm: string | null;
+  ultimoCicloOkEm: string | null;
+  varridas: number;
+  assinados: number;
+  expirados: number;
+  falhas: number;
+  nota: string | null;
 }
 
 /**

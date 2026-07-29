@@ -1,7 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthUser } from "../auth/auth.types";
 import { AuditoriaService } from "../auditoria/auditoria.service";
+import { resolvePastaPaiId } from "../ai/drive-routing";
 import { ValidacaoHumanaService } from "./validacao-humana.service";
+
+/** Mock do DrivePastaPaiService: delega ao fallback puro (preserva o comportamento pré-tabela). */
+const drivePastaPaiFake = {
+  resolver: async (t: string | null | undefined, c: string | null | undefined) =>
+    resolvePastaPaiId(t, c, {}),
+};
 
 /**
  * TESTE DE REGRESSÃO DO BLOCO 1 (OST visualização/descarte). É este arquivo que impede o buraco de
@@ -10,7 +17,7 @@ import { ValidacaoHumanaService } from "./validacao-humana.service";
  * O BURACO QUE EXISTIA: `ValidacaoHumanaService.validar` gravava ENTREGUE com autor e data e parava
  * ali. `autoConcluirAuditoria` e `arquivarNoDrive` só eram chamados de dentro do `auditarConjunto`,
  * ou seja, só quando quem dava o veredito era a IA. Consequência real: validação humana que FECHAVA a
- * régua deixava a frente AUDITORIA fora de "Análise finalizada" e os documentos fora do Drive, com a
+ * régua deixava a frente AUDITORIA fora de "Análise Finalizada" e os documentos fora do Drive, com a
  * admissão completa e o fluxo parado, sem aviso na tela.
  *
  * Por isso o teste monta o serviço REAL de validação humana com o serviço REAL de auditoria (só o
@@ -62,11 +69,18 @@ function makeDb() {
         ? [FRENTE_AUDITORIA, FRENTE_EXAME]
         : keys.includes("estado") && keys.length === 1
           ? [{ estado: "ENTREGUE" }]
-          : keys.includes("codigo") && keys.includes("nome")
-            ? [{ codigo: "RG", nome: "RG" }]
-            : keys.includes("nome") && keys.includes("em")
+          : // Tipos ENTREGUES da admissão (insumo do re-baixar): aqui o RG está na staging, então
+            // nada falta e o Pandapé nem chega a ser consultado.
+            keys.length === 1 && keys.includes("codigo")
+            ? [{ codigo: "RG" }]
+            : // id_precollaborator da integração Pandapé: esta admissão é manual.
+              keys.length === 1 && keys.includes("id")
               ? []
-              : [ADM];
+              : keys.includes("codigo") && keys.includes("nome")
+                ? [{ codigo: "RG", nome: "RG" }]
+                : keys.includes("nome") && keys.includes("em")
+                  ? []
+                  : [ADM];
     // Thenable: o Drizzle permite `await db.select().from(x)` sem `where` (é o caso da leitura do
     // catálogo de tipos dentro do arquivamento), então o builder precisa resolver sozinho.
     const builder = {
@@ -151,9 +165,23 @@ function montar(opts: { reguaCompleta: boolean; arquivosNaStaging?: number }) {
       faltantes: opts.reguaCompleta ? [] : ["CPF"],
     }),
   };
-  const auditoria = new AuditoriaService(db as never, staging as never, ai as never, regua as never);
+  // Re-baixa do Pandapé: nesta suíte a staging está completa, então ela NÃO pode ser chamada (é a
+  // trava de cota "só o que falta"). O espião fica disponível para os casos afirmarem isso.
+  const pandapeArquivos = {
+    baixarArquivosDosTipos: vi
+      .fn()
+      .mockResolvedValue({ arquivos: [], semRetorno: [], chamadasApi: 0 }),
+  };
+  const auditoria = new AuditoriaService(
+    db as never,
+    staging as never,
+    ai as never,
+    regua as never,
+    drivePastaPaiFake as never,
+    pandapeArquivos as never,
+  );
   const validacao = new ValidacaoHumanaService(db as never, auditoria);
-  return { validacao, auditoria, db, updates, inserts, staging, ai };
+  return { validacao, auditoria, db, updates, inserts, staging, ai, pandapeArquivos };
 }
 
 afterEach(() => vi.restoreAllMocks());
@@ -181,6 +209,9 @@ describe("BLOCO 1 — validação humana dispara o MESMO pós-veredito da IA", (
 
     // (c) a staging da admissão foi expurgada depois de arquivar (§A.6).
     expect(ctx.staging.removerAdmissao).toHaveBeenCalledWith("adm-1");
+
+    // (d) trava de cota: staging completa, então o Pandapé NÃO é consultado (OST re-baixar).
+    expect(ctx.pandapeArquivos.baixarArquivosDosTipos).not.toHaveBeenCalled();
   });
 
   it("gate do Cadastro abre pela validação humana: a frente CADASTRO_CONTRATO nasce", async () => {

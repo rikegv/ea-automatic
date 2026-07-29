@@ -2,7 +2,7 @@ import { Module } from "@nestjs/common";
 import { AdmissoesModule } from "../admissoes/admissoes.module";
 import { AuditoriaModule } from "../auditoria/auditoria.module";
 import { InternalTokenGuard } from "./internal-token.guard";
-import { PandapeApiService } from "./pandape-api.service";
+import { PandapeArquivosModule } from "./pandape-arquivos.module";
 import { PandapeController } from "./pandape.controller";
 import { PandapeQueueModule } from "./pandape-queue.module";
 import { PandapeSchedulerService } from "./pandape-scheduler.service";
@@ -16,10 +16,12 @@ import { PandapeWebhookGuard } from "./pandape-webhook.guard";
  * é global. A fila/worker (BullMQ) sobem nos providers de lifecycle. INERTE sem PANDAPE_API_TOKEN.
  */
 @Module({
-  imports: [AdmissoesModule, AuditoriaModule, PandapeQueueModule],
+  // `PandapeArquivosModule` é a FOLHA que carrega o `PandapeApiService` (uma instância só, um cache
+  // de token só) e a re-baixa por tipo. Ele é importado também pela Auditoria, que precisa re-baixar
+  // no arquivamento sem fechar ciclo com este módulo.
+  imports: [AdmissoesModule, AuditoriaModule, PandapeQueueModule, PandapeArquivosModule],
   controllers: [PandapeController, PandapeWebhookController],
   providers: [
-    PandapeApiService,
     PandapeSyncService,
     PandapeSchedulerService,
     InternalTokenGuard,
@@ -28,6 +30,6 @@ import { PandapeWebhookGuard } from "./pandape-webhook.guard";
   // Exporta o sync para a REAUDITORIA (OST A / Bloco 5) reusar o download por tipo e o registro das
   // marcas de arquivo, sem duplicar o cliente da API. Exporta o scheduler para a TELA DE DIAGNÓSTICO
   // ler o estado (Bloco 4) e para o controle ligar/desligar e disparar ciclo (Bloco 5).
-  exports: [PandapeSyncService, PandapeApiService, PandapeSchedulerService],
+  exports: [PandapeSyncService, PandapeArquivosModule, PandapeSchedulerService],
 })
 export class PandapeModule {}

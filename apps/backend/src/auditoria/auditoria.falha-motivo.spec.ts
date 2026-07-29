@@ -1,7 +1,22 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AuditoriaService } from "./auditoria.service";
 import { FalhaAuditoriaIaException, MotorIaSemQuotaException } from "../ai/ai-client.service";
+import { resolvePastaPaiId } from "../ai/drive-routing";
 import { MOTIVO_FALHA_IA } from "../domain/falha-auditoria";
+
+/** Mock do DrivePastaPaiService: delega ao fallback puro (preserva o comportamento pré-tabela). */
+const drivePastaPaiFake = {
+  resolver: async (t: string | null | undefined, c: string | null | undefined) =>
+    resolvePastaPaiId(t, c, {}),
+};
+
+/**
+ * Re-baixa do Pandapé (OST re-baixar do Pandapé): esta suíte não chega ao arquivamento, então o
+ * service entra só para satisfazer o construtor. Devolve vazio, nunca toca a rede.
+ */
+const pandapeArquivosFake = {
+  baixarArquivosDosTipos: async () => ({ arquivos: [], semRetorno: [], chamadasApi: 0 }),
+};
 import { MOTIVO_CONTEUDO } from "./conteudo-documento";
 import type { AuthUser } from "../auth/auth.types";
 
@@ -111,6 +126,8 @@ function makeService(auditarDocumento: ReturnType<typeof vi.fn>) {
     staging as never,
     { auditarDocumento } as never,
     reguaCompletude as never,
+    drivePastaPaiFake as never,
+     pandapeArquivosFake as never,
   );
   return { svc, inserts, updates, staging, auditarDocumento };
 }

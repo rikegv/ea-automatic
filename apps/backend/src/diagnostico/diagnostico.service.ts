@@ -7,15 +7,27 @@ import { AiClientService } from "../ai/ai-client.service";
 import { PandapeApiService } from "../pandape/pandape-api.service";
 import { PandapeQueueService } from "../pandape/pandape-queue.service";
 import { PandapeSchedulerService } from "../pandape/pandape-scheduler.service";
-import { fopagTemPastaPai } from "../ai/drive-routing";
+import { DrivePastaPaiService } from "../ai/drive-pasta-pai.service";
 import { MOTIVO_FALHA_IA, type FamiliaFalhaIa } from "../domain/falha-auditoria";
 import { LIMIAR_AUDITORIA_PARADA_MS } from "../domain/auditoria-parada";
 import { schedulerParado, type EstadoScheduler } from "../domain/scheduler-pandape";
 import {
+  schedulerParado as schedulerVtParado,
+  type EstadoScheduler as EstadoSchedulerVt,
+} from "../domain/scheduler-vt-coleta";
+import { VtColetaSchedulerService } from "../vt-coleta/vt-coleta-scheduler.service";
+import {
+  schedulerParado as schedulerClicksignParado,
+  type EstadoScheduler as EstadoSchedulerClicksign,
+} from "../domain/scheduler-clicksign";
+import { ClicksignSchedulerService } from "../clicksign/clicksign-scheduler.service";
+import {
   calcularAlerta,
   type Dependencia,
   type DiagnosticoSnapshot,
+  type EstadoSchedulerClicksignSnapshot,
   type EstadoSchedulerSnapshot,
+  type EstadoSchedulerVtColetaSnapshot,
   type Sinal,
   type SinalItem,
 } from "../domain/diagnostico";
@@ -46,6 +58,9 @@ export class DiagnosticoService {
     private readonly pandapeApi: PandapeApiService,
     private readonly fila: PandapeQueueService,
     private readonly scheduler: PandapeSchedulerService,
+    private readonly vtColetaScheduler: VtColetaSchedulerService,
+    private readonly clicksignScheduler: ClicksignSchedulerService,
+    private readonly drivePastaPai: DrivePastaPaiService,
   ) {}
 
   /**
@@ -64,14 +79,24 @@ export class DiagnosticoService {
       paradoAlem6h,
       falhasPorFamilia,
       fopagSemPasta,
+      driveVtSemCasar,
+      envelopesExpirados,
+      arquivamentoFalhou,
       estadoScheduler,
+      estadoVtColeta,
+      estadoClicksign,
     ] = await Promise.all([
       this.sinalPendenteComStaging(),
       this.sinalReguaFechadaSemPasta(),
       this.sinalParadoAlemLimiar(),
       this.sinalFalhasPorFamilia(),
       this.sinalFopagSemPasta(),
+      this.sinalDriveVtSemCasar(),
+      this.sinalEnvelopesExpirados(),
+      this.sinalArquivamentoDriveFalhou(),
       this.scheduler.estado(),
+      this.vtColetaScheduler.estado(),
+      this.clicksignScheduler.estado(),
     ]);
 
     const parado = schedulerParado(estadoScheduler, Date.now());
@@ -80,6 +105,9 @@ export class DiagnosticoService {
       reguaSemPasta,
       paradoAlem6h,
       falhasPorFamilia,
+      driveVtSemCasar,
+      envelopesExpirados,
+      arquivamentoFalhou,
       this.sinalScheduler(parado),
     ];
 
@@ -99,7 +127,135 @@ export class DiagnosticoService {
       ultimaColeta,
       historico,
       scheduler: this.blocoScheduler(estadoScheduler, parado),
+      vtColeta: this.blocoSchedulerVtColeta(estadoVtColeta),
+      clicksign: this.blocoSchedulerClicksign(estadoClicksign),
       alerta,
+    };
+  }
+
+  /** Bloco do scheduler da assinatura (INT-4): estado + resultado do último ciclo. */
+  private blocoSchedulerClicksign(
+    estado: EstadoSchedulerClicksign,
+  ): EstadoSchedulerClicksignSnapshot {
+    return {
+      ligado: estado.ligado,
+      parado: schedulerClicksignParado(estado, Date.now()),
+      ultimoCicloEm: estado.ultimoCicloEm,
+      ultimoCicloOkEm: estado.ultimoCicloOkEm,
+      varridas: estado.varridas,
+      assinados: estado.assinados,
+      expirados: estado.expirados,
+      falhas: estado.falhas,
+      nota: estado.nota,
+    };
+  }
+
+  /**
+   * Sinal ENVELOPE EXPIRADO (INT-4): contratos que passaram do prazo de assinatura sem fechar. Não é
+   * falha de sistema, é trabalho parado: o candidato não assinou e alguém precisa reenviar. Entra
+   * aqui porque, sem sinal, o registro EXPIRADO ficaria invisível fora da tela de assinaturas.
+   * §A.6: nome do candidato para identificar (como os demais sinais), nunca CPF.
+   */
+  private async sinalEnvelopesExpirados(): Promise<Sinal> {
+    const rows = (await this.db.execute(sql`
+      SELECT a.id AS admissao_id, c.nome AS candidato
+      FROM admissoes a
+      JOIN candidatos c ON c.cpf = a.candidato_cpf
+      WHERE a.clicksign_status = 'EXPIRADO'
+      ORDER BY a.atualizado_em DESC
+      LIMIT 50
+    `)) as unknown as LinhaAfetada[];
+    const itens: SinalItem[] = rows.map((r) => ({
+      admissaoId: r.admissao_id,
+      candidato: r.candidato,
+      detalhe: "envelope expirado sem assinatura: exige reenvio",
+    }));
+    return {
+      chave: "envelope-expirado",
+      rotulo: "Envelope de assinatura expirado",
+      total: itens.length,
+      itens,
+    };
+  }
+
+  /**
+   * Sinal ARQUIVAMENTO NO DRIVE FALHOU (OST re-baixar do Pandapé, item 4). É o fim do silêncio.
+   *
+   * O caso real que o originou: régua fechada, frente em "Análise Finalizada" na tela e prontuário
+   * inexistente no Drive, sem uma linha de aviso em lugar nenhum. Três admissões ficaram assim e só
+   * apareceram por conferência manual. Agora todo desfecho que não conclui grava o MOTIVO REAL em
+   * `admissoes.drive_falha_motivo`, e este sinal expõe candidata + motivo.
+   *
+   * Cobre também o prontuário que subiu INCOMPLETO (o motivo permanece mesmo com a pasta criada), que
+   * é justamente o caso em que a pasta existir esconderia o problema.
+   *
+   * §A.6: nome do candidato para identificar (como os demais sinais) e o texto do motivo, que é
+   * escrito com código de tipo de documento, nunca com CPF, arquivo ou URL.
+   */
+  private async sinalArquivamentoDriveFalhou(): Promise<Sinal> {
+    const rows = (await this.db.execute(sql`
+      SELECT a.id AS admissao_id, c.nome AS candidato, a.drive_falha_motivo AS detalhe,
+             EXTRACT(EPOCH FROM (now() - a.drive_falha_em)) / 3600 AS horas
+      FROM admissoes a
+      JOIN candidatos c ON c.cpf = a.candidato_cpf
+      WHERE a.drive_falha_motivo IS NOT NULL
+      ORDER BY a.drive_falha_em DESC
+      LIMIT 50
+    `)) as unknown as LinhaAfetada[];
+    return {
+      chave: "arquivamento-drive-falhou",
+      rotulo: "Arquivamento No Drive Falhou",
+      total: rows.length,
+      itens: rows.map((r) => ({
+        admissaoId: r.admissao_id,
+        candidato: r.candidato,
+        detalhe: r.detalhe ?? "arquivamento não concluído",
+        ...(r.horas !== undefined && r.horas !== null ? { horas: Math.floor(r.horas) } : {}),
+      })),
+    };
+  }
+
+  /** Bloco do scheduler da coleta de VT (§A.17 etapa 3): estado + resultado do último ciclo. */
+  private blocoSchedulerVtColeta(estado: EstadoSchedulerVt): EstadoSchedulerVtColetaSnapshot {
+    return {
+      ligado: estado.ligado,
+      parado: schedulerVtParado(estado, Date.now()),
+      ultimoCicloEm: estado.ultimoCicloEm,
+      ultimoCicloOkEm: estado.ultimoCicloOkEm,
+      varridas: estado.varridas,
+      novos: estado.novos,
+      semAdmissao: estado.semAdmissao,
+      falhas: estado.falhas,
+      abortado: estado.abortado,
+      nota: estado.nota,
+    };
+  }
+
+  /**
+   * Sinal VT SEM CASAR (§A.17 etapa 3): arquivos de VT no bucket coletivo que não casaram com
+   * uma admissão viva (sem admissão, múltiplo ou nome fora do padrão). §A.6: como o nome do objeto
+   * (NOME+CPF) nunca é persistido, cada item leva SÓ um prefixo do md5 e o rótulo do status, NUNCA
+   * CPF/nome/arquivo. O admin localiza o arquivo navegando o bucket pelo digest.
+   */
+  private async sinalDriveVtSemCasar(): Promise<Sinal> {
+    const rows = (await this.db.execute(sql`
+      SELECT md5, status FROM vt_coleta
+      WHERE status IN ('SEM_ADMISSAO', 'MULTIPLO', 'NOME_FORA_PADRAO')
+    `)) as unknown as Array<{ md5: string | null; status: string }>;
+    const rotulo: Record<string, string> = {
+      SEM_ADMISSAO: "sem admissão viva para o CPF",
+      MULTIPLO: "mais de uma admissão viva para o CPF",
+      NOME_FORA_PADRAO: "nome do arquivo fora do padrão (CPF não identificado)",
+    };
+    const itens: SinalItem[] = rows.map((r) => ({
+      detalhe: rotulo[r.status] ?? r.status,
+      md5Prefixo: r.md5 ? r.md5.slice(0, 12) : undefined,
+    }));
+    return {
+      chave: "drive-vt-sem-casar",
+      rotulo: "Formulário de VT no bucket sem casar com admissão",
+      total: itens.length,
+      itens,
     };
   }
 
@@ -132,12 +288,14 @@ export class DiagnosticoService {
 
   /** Resumo do alerta para o badge/popup: sinais de banco FRESCOS + dependências do CACHE (Bloco 7). */
   async alertaLeve() {
-    const [a, b, c, d, fopag, estadoScheduler] = await Promise.all([
+    const [a, b, c, d, fopag, vtSemCasar, arquivamentoFalhou, estadoScheduler] = await Promise.all([
       this.sinalPendenteComStaging(),
       this.sinalReguaFechadaSemPasta(),
       this.sinalParadoAlemLimiar(),
       this.sinalFalhasPorFamilia(),
       this.sinalFopagSemPasta(),
+      this.sinalDriveVtSemCasar(),
+      this.sinalArquivamentoDriveFalhou(),
       this.scheduler.estado(),
     ]);
     const sched = this.sinalScheduler(schedulerParado(estadoScheduler, Date.now()));
@@ -147,7 +305,7 @@ export class DiagnosticoService {
       this.depsCache && Date.now() - this.depsCache.at < DiagnosticoService.DEPS_TTL_MS
         ? this.depsCache.deps
         : [];
-    return calcularAlerta([a, b, c, d, sched], fopag, depsCacheadas);
+    return calcularAlerta([a, b, c, d, vtSemCasar, arquivamentoFalhou, sched], fopag, depsCacheadas);
   }
 
   // ── Bloco 1a: documento PENDENTE COM arquivo na staging (coleta perdida) ────
@@ -287,7 +445,7 @@ export class DiagnosticoService {
     `)) as unknown as Array<{ cod_cliente: string; candidato: string; admissao_id: string }>;
     const itens: SinalItem[] = [];
     for (const r of rows) {
-      if (fopagTemPastaPai(r.cod_cliente)) continue;
+      if (await this.drivePastaPai.fopagTemPastaPai(r.cod_cliente)) continue;
       itens.push({
         admissaoId: r.admissao_id,
         candidato: r.candidato,
