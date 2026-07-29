@@ -5,6 +5,11 @@ import { menus, usuarios, usuarioMenus } from "./schema";
 import { MENUS, codigosPadraoDoPapel } from "../domain/menus";
 
 /**
+ * ATENÇÃO (§A.23): o passo (1) daqui é catálogo e PODE rodar no deploy (menu novo precisa existir na
+ * tabela para aparecer na tela de configuração). O passo (2) CONCEDE ACESSO e não é rotina: só age
+ * sobre quem nunca foi configurado, mas ainda assim é concessão, e permissão de menu é decisão do
+ * diretor, nunca da fábrica. Distribuir menu novo aos usuários é passo separado, com pedido dele.
+ *
  * SEED do catálogo de MENUS + GRANDFATHER da migração (OST permissão de menu, Bloco 5).
  *
  * 1) CONVERGE a tabela `menus` a partir do registro em código (`domain/menus`), no MESMO padrão do

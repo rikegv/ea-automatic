@@ -12,12 +12,15 @@ export const ROTA_MENU: { prefixo: string; codigo: string }[] = [
   { prefixo: "/admin/clientes", codigo: "clientes" },
   { prefixo: "/admin/cargos", codigo: "cargos" },
   { prefixo: "/admin/escalas", codigo: "escalas" },
+  { prefixo: "/admin/beneficios", codigo: "beneficios" },
   { prefixo: "/admin/motivos-declinio", codigo: "motivos-declinio" },
   { prefixo: "/admin/tarifas", codigo: "tarifas" },
   { prefixo: "/admin/regua", codigo: "regua" },
   { prefixo: "/admin/kit-regras", codigo: "kit-regras" },
   { prefixo: "/admin/regras", codigo: "regras" },
   { prefixo: "/admin/usuarios", codigo: "usuarios" },
+  { prefixo: "/admin/pastas-drive", codigo: "pastas-drive" },
+  { prefixo: "/admin/assinante-empresa", codigo: "assinante-empresa" },
   { prefixo: "/admin/diagnostico", codigo: "diagnostico" },
   { prefixo: "/liberacao", codigo: "liberacao" },
   { prefixo: "/nova", codigo: "nova" },
@@ -25,6 +28,12 @@ export const ROTA_MENU: { prefixo: string; codigo: string }[] = [
   { prefixo: "/nao-conformidades", codigo: "nao-conformidades" },
   { prefixo: "/gerenciador", codigo: "gerenciador" },
   { prefixo: "/gerador-kit", codigo: "gerador-kit" },
+  { prefixo: "/assinaturas", codigo: "assinaturas" },
+  // A TELA F9 ANTIGA (§A.15). Saiu do menu mas continuava alcançável por URL, e como não estava
+  // mapeada aqui o guard deixava passar qualquer autenticado, sendo que dela se dispara envelope
+  // de assinatura. Passa a ser governada pelo mesmo menu que governa a operação no backend
+  // (`KitController.gerar`), então tela e operação ficam com a MESMA régua.
+  { prefixo: "/kit", codigo: "assinaturas" },
   { prefixo: "/analise", codigo: "analise" },
 ];
 

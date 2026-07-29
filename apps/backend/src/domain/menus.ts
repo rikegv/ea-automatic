@@ -47,7 +47,7 @@ export const MENUS: MenuDef[] = [
   { codigo: "inicio", rotulo: "Início", href: "/", grupo: "OPERACAO", ordem: 0, operacoes: [] },
   {
     codigo: "analise",
-    rotulo: "Análise gerencial",
+    rotulo: "Análise Gerencial",
     href: "/analise",
     grupo: "OPERACAO",
     ordem: 1,
@@ -67,7 +67,7 @@ export const MENUS: MenuDef[] = [
   },
   {
     codigo: "nova",
-    rotulo: "Nova admissão",
+    rotulo: "Nova Admissão",
     href: "/nova",
     grupo: "OPERACAO",
     ordem: 3,
@@ -75,7 +75,7 @@ export const MENUS: MenuDef[] = [
   },
   {
     codigo: "esteira",
-    rotulo: "Esteira admissional",
+    rotulo: "Esteira Admissional",
     href: "/esteira",
     grupo: "OPERACAO",
     ordem: 4,
@@ -83,6 +83,11 @@ export const MENUS: MenuDef[] = [
     // abertas (dado de trabalho, consultado por outras telas também).
     operacoes: [
       "EsteiraController.declinar",
+      // PAUSA (OST admissão pausada): operacional, no MESMO menu do declínio. "Qualquer consultor
+      // pausa e retoma" (decisão do diretor) sai de graça daqui, porque `esteira` está no padrão
+      // do COMUM (todo o grupo Operação).
+      "EsteiraController.pausar",
+      "EsteiraController.retomar",
       "EsteiraController.mudarStatus",
       "EsteiraController.relatorioClinicaPreview",
       "EsteiraController.relatorioClinicaCsv",
@@ -96,7 +101,7 @@ export const MENUS: MenuDef[] = [
   },
   {
     codigo: "nao-conformidades",
-    rotulo: "Não conformidades",
+    rotulo: "Não Conformidades",
     href: "/nao-conformidades",
     grupo: "OPERACAO",
     ordem: 5,
@@ -119,7 +124,7 @@ export const MENUS: MenuDef[] = [
   },
   {
     codigo: "gerador-kit",
-    rotulo: "Gerador de kit",
+    rotulo: "Gerador De Kit",
     href: "/gerador-kit",
     grupo: "OPERACAO",
     ordem: 7,
@@ -129,7 +134,54 @@ export const MENUS: MenuDef[] = [
       "KitController.downloadFuncionario",
       "KitController.reimportar",
       "KitController.downloadZip",
+      // "Enviar para assinatura": anexa o kit à admissão e a põe na fila. NÃO dispara envelope, então
+      // pertence ao menu de quem GERA o kit, não ao de quem dispara.
+      "KitController.enviarAssinatura",
     ],
+  },
+  {
+    codigo: "assinaturas",
+    rotulo: "Ass. Click",
+    href: "/assinaturas",
+    grupo: "OPERACAO",
+    ordem: 8,
+    // As 4 operações da tela (INT-4) MAIS as duas da F9 antiga.
+    //
+    // POR QUE `KitController.gerar` ENTRA AQUI: era a operação que criava envelope para QUALQUER
+    // autenticado. A tela `/kit` saiu do menu (§A.15) mas a rota continuou alcançável por URL, e o
+    // handler não era reivindicado por menu nenhum, então o `MenuGuard` deixava passar. Trazê-lo para
+    // este menu fecha a porta pelo mecanismo que o sistema já tem, sem apagar a F9 (que o
+    // `reenviarCorrecao` ainda usa, §A.15). `historico` acompanha porque é a leitura da mesma tela.
+    //
+    // `KitController.download` fica FORA de propósito: o token de download é consumido também pelo
+    // reenvio disparado da Esteira, e reivindicá-lo quebraria quem tem "esteira" sem ter este menu.
+    operacoes: [
+      "ClicksignController.listar",
+      "ClicksignController.dispararLote",
+      "ClicksignController.disparar",
+      "ClicksignController.trocarKit",
+      "ClicksignController.verKit",
+      "ClicksignController.cancelar",
+      "ClicksignController.reenviarCorrecao",
+      "KitController.gerar",
+      "KitController.historico",
+    ],
+  },
+  {
+    codigo: "assinante-empresa",
+    rotulo: "Assinante Da Empresa",
+    // A rota continua sob `/admin/` (não movemos arquivo nem quebramos link); o que mudou é o GRUPO,
+    // que é o que decide onde o menu aparece e quem o recebe por padrão.
+    href: "/admin/assinante-empresa",
+    grupo: "OPERACAO",
+    ordem: 9,
+    // Quem assina o contrato PELA EMPRESA (INT-4): conjunto padrão + conjunto por cliente, com ordem.
+    //
+    // SAIU DE ADMINISTRAÇÃO por decisão do diretor: o COMUM passa a cadastrar os grupos de assinatura.
+    // Junto com isso, o `@Roles` admin foi REMOVIDO da controller. Sem essa remoção o menu apareceria
+    // e as operações tomariam 403, porque o `RolesGuard` roda ANTES do `MenuGuard` (foi exatamente o
+    // que aconteceu com o Gerador de Kit). Agora quem governa estas operações é só o menu.
+    operacoes: ["AssinanteEmpresaController.*"],
   },
   // ── Administração ─────────────────────────────────────────────────────────
   {
@@ -176,37 +228,53 @@ export const MENUS: MenuDef[] = [
     ],
   },
   {
+    codigo: "beneficios",
+    rotulo: "Benefícios",
+    href: "/admin/beneficios",
+    grupo: "ADMIN",
+    // Fica junto dos demais cadastros de admissão (clientes, cargos, escalas), decisão do diretor.
+    // GET de LISTA fica FORA (catálogo, leitura aberta): a Liberação, o wizard e o modal do
+    // Gerenciador leem `/catalogos/beneficios` e o perfil COMUM depende disso.
+    ordem: 23,
+    operacoes: [
+      "BeneficiosController.create",
+      "BeneficiosController.update",
+      "BeneficiosController.reativar",
+      "BeneficiosController.remove",
+    ],
+  },
+  {
     codigo: "motivos-declinio",
-    rotulo: "Motivos de declínio",
+    rotulo: "Motivos De Declínio",
     href: "/admin/motivos-declinio",
     grupo: "ADMIN",
-    ordem: 23,
+    ordem: 24,
     // GET de lista aqui é a tela admin (a leitura aberta é `/catalogos/motivos-declinio`).
     operacoes: ["MotivosDeclinioController.*"],
   },
   {
     codigo: "tarifas",
-    rotulo: "Tarifas de transporte",
+    rotulo: "Tarifas De Transporte",
     href: "/admin/tarifas",
     grupo: "ADMIN",
-    ordem: 24,
+    ordem: 25,
     operacoes: ["TarifasController.*"],
   },
   {
     codigo: "regua",
-    rotulo: "Régua documental",
+    rotulo: "Régua Documental",
     href: "/admin/regua",
     grupo: "ADMIN",
-    ordem: 25,
+    ordem: 26,
     // A tela da Régua também administra o catálogo de TIPOS DE DOCUMENTO.
     operacoes: ["ReguaController.*", "TiposDocumentoController.*"],
   },
   {
     codigo: "kit-regras",
-    rotulo: "Regras do kit",
+    rotulo: "Regras Do Kit",
     href: "/admin/kit-regras",
     grupo: "ADMIN",
-    ordem: 26,
+    ordem: 27,
     // GET de lista dos TIPOS de kit (`KitTiposController.list`) fica ABERTA (leitura de catálogo, §
     // "ler é trabalho"): o Gerador de kit (menu `gerador-kit`, operação do COMUM) monta o seletor a
     // partir dela. Sem isto, o COMUM com `gerador-kit` mas sem `kit-regras` tomaria 403 no dropdown.
@@ -220,29 +288,37 @@ export const MENUS: MenuDef[] = [
   },
   {
     codigo: "regras",
-    rotulo: "Regras de auditoria",
+    rotulo: "Regras De Auditoria",
     href: "/admin/regras",
     grupo: "ADMIN",
-    ordem: 27,
+    ordem: 28,
     operacoes: ["RegrasController.*"],
   },
   {
     codigo: "diagnostico",
-    rotulo: "Diagnóstico do sistema",
+    rotulo: "Diagnóstico Do Sistema",
     href: "/admin/diagnostico",
     grupo: "ADMIN",
-    ordem: 29,
+    ordem: 30,
     // Igual a "usuarios": a controller é @Roles admin-only (a tela mostra dado de sistema e dispara
     // reprocessamento). Fica no catálogo para a regra de liberação por perfil, mas não é reivindicada
     // por menu (marcar para COMUM não concede acesso, fail-closed pelo RolesGuard).
     operacoes: [],
   },
   {
+    codigo: "pastas-drive",
+    rotulo: "Pastas Do Drive",
+    href: "/admin/pastas-drive",
+    grupo: "ADMIN",
+    ordem: 31,
+    operacoes: ["PastasDriveController.*"],
+  },
+  {
     codigo: "usuarios",
     rotulo: "Usuários",
     href: "/admin/usuarios",
     grupo: "ADMIN",
-    ordem: 28,
+    ordem: 29,
     // A tela de USUÁRIOS (que é a própria tela de configuração de menus) segue restrita a
     // MASTER/SUPER_ADMIN pelo `@Roles` da controller (Bloco 4). Por isso NÃO é reivindicada por menu:
     // marcar "usuarios" para um COMUM não concederia gestão de usuários (fail-closed pelo RolesGuard),
@@ -318,4 +394,41 @@ export function menuDaOperacao(controller: string, handler: string): string | nu
   const exato = INDICE.porHandler.get(`${controller}.${handler}`);
   if (exato) return exato;
   return INDICE.porControllerCoringa.get(controller) ?? null;
+}
+
+/**
+ * PLANO DE SALVAMENTO DA TELA DE PERMISSÃO (correção do salvamento por SUBSTITUIÇÃO).
+ *
+ * O DEFEITO QUE ISTO ELIMINA: a tela salvava mandando a lista inteira, e o backend apagava tudo e
+ * regravava. Quem abria a tela, ganhava um menu novo enquanto ela estava aberta e depois salvava,
+ * REMOVIA o menu novo sem perceber, porque a página mandou a lista antiga. Já mordeu duas vezes: o
+ * menu `assinaturas` sumiu de 4 dos 5 COMUM em 28/07, e o `assinante-empresa` sumiu depois.
+ *
+ * A CORREÇÃO: a tela passa a dizer também QUAIS MENUS ELA CONHECIA (`conhecidos`, o catálogo que ela
+ * exibiu). O backend só mexe dentro desse escopo. Menu que a tela não conhecia (porque nasceu depois
+ * que ela carregou) é PRESERVADO em vez de apagado.
+ *
+ * Função pura de propósito: a regra é testável sem banco, e o service fica só com o I/O.
+ *
+ * @param atuais      o que o usuário tem hoje
+ * @param selecionados o que veio marcado da tela (já filtrado por papel/validade pelo chamador)
+ * @param conhecidos  o catálogo que a tela exibiu, o escopo do que ela pode remover
+ */
+export function planejarSelecaoDeMenus(input: {
+  atuais: Iterable<string>;
+  selecionados: Iterable<string>;
+  conhecidos: Iterable<string>;
+}): { inserir: string[]; remover: string[]; preservados: string[] } {
+  const atuais = new Set(input.atuais);
+  const selecionados = new Set(input.selecionados);
+  const escopo = new Set(input.conhecidos);
+
+  // Só sai o que a tela CONHECIA e não veio marcado. O resto do que o usuário tem fica de pé.
+  const remover = [...atuais].filter((c) => escopo.has(c) && !selecionados.has(c));
+  // Entra o que veio marcado e ainda não existe. Marcado fora do escopo entra assim mesmo: pedido
+  // explícito de quem salvou, e ignorá-lo seria outra forma de mentir sobre o que a tela fez.
+  const inserir = [...selecionados].filter((c) => !atuais.has(c));
+  const preservados = [...atuais].filter((c) => !escopo.has(c) && !selecionados.has(c));
+
+  return { inserir, remover, preservados };
 }

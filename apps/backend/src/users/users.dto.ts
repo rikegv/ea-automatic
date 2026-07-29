@@ -57,4 +57,23 @@ export class DefinirMenusDto {
   @IsString({ each: true })
   @MaxLength(60, { each: true })
   menus!: string[];
+
+  /**
+   * O CATÁLOGO QUE A TELA EXIBIU, ou seja, o escopo do que ela tem autoridade para remover. Menu que
+   * não estiver aqui é PRESERVADO, mesmo não vindo em `menus`.
+   *
+   * Na FORMA é opcional; quem exige é a controller, com UMA mensagem clara. A obrigatoriedade aqui
+   * dispararia a cascata inteira do class-validator ("must be an array", "each value...") e o
+   * consultor leria cinco frases técnicas em vez de "recarregue a página".
+   *
+   * Ele é a correção do defeito: enquanto dava para salvar sem declarar o escopo, uma página aberta
+   * antes de um menu novo nascer apagava esse menu em silêncio. Aconteceu com o `assinaturas` e
+   * depois com o `assinante-empresa`.
+   */
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @IsString({ each: true })
+  @MaxLength(60, { each: true })
+  conhecidos?: string[];
 }

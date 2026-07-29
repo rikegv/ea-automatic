@@ -84,10 +84,12 @@ export function ConfigMenusModal({
     setSalvando(true);
     setErro(null);
     try {
+      // `conhecidos` é o catálogo que ESTA tela exibiu. O backend só remove dentro desse escopo, então
+      // um menu que nasceu depois de a página carregar é preservado em vez de sumir no salvamento.
       await apiFetch(`/admin/usuarios/${usuario.id}/menus`, {
         method: "PUT",
         token,
-        body: { menus: [...sel] },
+        body: { menus: [...sel], conhecidos: (catalogo ?? []).map((m) => m.codigo) },
       });
       onClose(true);
     } catch (e) {
@@ -95,7 +97,7 @@ export function ConfigMenusModal({
     } finally {
       setSalvando(false);
     }
-  }, [usuario.id, token, sel, onClose]);
+  }, [usuario.id, token, sel, catalogo, onClose]);
 
   const rotuloGrupo: Record<string, string> = { OPERACAO: "Operação", ADMIN: "Administração" };
 

@@ -1,9 +1,14 @@
 import { Inject, Injectable } from "@nestjs/common";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
 import { menus, usuarioMenus } from "../db/schema";
-import { MENUS, MENUS_BLOQUEADOS_COMUM, TODOS_CODIGOS_MENU } from "../domain/menus";
+import {
+  MENUS,
+  MENUS_BLOQUEADOS_COMUM,
+  TODOS_CODIGOS_MENU,
+  planejarSelecaoDeMenus,
+} from "../domain/menus";
 
 /**
  * Leitura da permissão de MENU de um usuário (OST permissão de menu).
@@ -80,5 +85,61 @@ export class MenusService {
       }
     });
     return validos;
+  }
+
+  /**
+   * SALVA A SELEÇÃO VINDA DA TELA sem apagar o que a tela não conhecia.
+   *
+   * Por que existe, separado do `definirMenusDoUsuario`: aquele SUBSTITUI o conjunto inteiro, o que é
+   * correto para criar usuário (não há nada a preservar) e é justamente o defeito quando vem de uma
+   * tela que pode estar desatualizada. Menu novo, nascido depois que a página carregou, não estava na
+   * lista enviada e era apagado em silêncio. Aconteceu duas vezes, com o `assinaturas` e com o
+   * `assinante-empresa`.
+   *
+   * Aqui a tela declara o ESCOPO que ela enxergava (`conhecidos`), e só dentro dele há remoção. O
+   * plano em si é função pura (`planejarSelecaoDeMenus`), testada sem banco.
+   *
+   * Devolve o que ficou aplicado e o que foi PRESERVADO, para a trilha mostrar que houve preservação
+   * em vez de a correção ser invisível.
+   */
+  async salvarSelecaoDaTela(
+    usuarioId: string,
+    selecionados: string[],
+    conhecidos: string[],
+    papel?: string,
+  ): Promise<{ aplicados: string[]; preservados: string[] }> {
+    const ehAdmin = papel === "MASTER" || papel === "SUPER_ADMIN";
+    const permitido = (c: string) =>
+      TODOS_CODIGOS_MENU.includes(c) && (ehAdmin || !MENUS_BLOQUEADOS_COMUM.has(c));
+
+    const validos = selecionados.filter(permitido);
+    const escopo = conhecidos.filter((c) => TODOS_CODIGOS_MENU.includes(c));
+    const atuais = await this.codigosDoUsuario(usuarioId);
+
+    const { inserir, remover, preservados } = planejarSelecaoDeMenus({
+      atuais,
+      selecionados: validos,
+      conhecidos: escopo,
+    });
+
+    if (inserir.length > 0 || remover.length > 0) {
+      await this.db.transaction(async (tx) => {
+        if (remover.length > 0) {
+          await tx
+            .delete(usuarioMenus)
+            .where(
+              and(eq(usuarioMenus.usuarioId, usuarioId), inArray(usuarioMenus.menuCodigo, remover)),
+            );
+        }
+        if (inserir.length > 0) {
+          await tx
+            .insert(usuarioMenus)
+            .values(inserir.map((menuCodigo) => ({ usuarioId, menuCodigo })));
+        }
+      });
+    }
+
+    const aplicados = [...(await this.codigosDoUsuario(usuarioId))];
+    return { aplicados, preservados };
   }
 }

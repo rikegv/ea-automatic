@@ -4,22 +4,11 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { useAuth } from "@/lib/auth-context";
+import { podeAbrirAdministracao } from "@/lib/admin-menus";
 import { PageHead } from "@/components/ui/PageHead";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Icon } from "@/components/ui/Icon";
 
-/** Códigos dos menus do grupo Administração (define quem pode ABRIR o Menu Gerencial). */
-const ADMIN_MENUS = [
-  "clientes",
-  "cargos",
-  "escalas",
-  "motivos-declinio",
-  "tarifas",
-  "regua",
-  "kit-regras",
-  "regras",
-  "usuarios",
-];
 
 /** Camada de administração: roda DENTRO do AppShell. Botão de voltar + guard de ACESSO À CAMADA.
  * OST permissão de menu: deixou de ser exclusiva de admin. Entra quem é admin OU tem ao menos um menu
@@ -29,11 +18,11 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
   const { isAdmin, temMenu } = useAuth();
   const pathname = usePathname();
 
-  const podeAdministracao = isAdmin || ADMIN_MENUS.some((c) => temMenu(c));
+  const podeAdministracao = isAdmin || podeAbrirAdministracao(temMenu);
   if (!podeAdministracao) {
     return (
       <>
-        <PageHead eyebrow="Administração" title="Acesso restrito" />
+        <PageHead eyebrow="Administração" title="Acesso Restrito" />
         <GlassCard className="panel">
           <p className="text-dim">
             Você não tem nenhum menu administrativo liberado.{" "}

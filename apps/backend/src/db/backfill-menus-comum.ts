@@ -5,6 +5,13 @@ import { usuarios, usuarioMenus } from "./schema";
 import { MENUS_PADRAO_COMUM } from "../domain/menus";
 
 /**
+ * NÃO É ROTINA DE DEPLOY (§A.23). Este script CONCEDE ACESSO, e permissão de menu é decisão do
+ * diretor, nunca da fábrica. Só rode sob pedido explícito dele, e reporte antes/depois por usuário.
+ *
+ * Por que o aviso existe: em 28/07/2026 ele foi rodado para conceder UM menu novo e, como concede
+ * TODO o grupo Operação, acabou concedendo `analise` e `nao-conformidades` a 3 usuários que não os
+ * tinham. Para conceder um menu específico, faça a concessão específica, não rode isto.
+ *
  * BACKFILL do PADRÃO DO COMUM (decisão do diretor, 24/07/2026, Opção B).
  *
  * CONCEDE os 8 menus do grupo OPERAÇÃO (`MENUS_PADRAO_COMUM`, incluindo o Gerador de kit) a TODOS os

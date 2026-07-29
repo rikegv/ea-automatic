@@ -60,6 +60,15 @@ describe("mapa operação -> menu", () => {
     }
   });
 
+  it("PAUSA: pausar/retomar caem no menu `esteira`, que o COMUM tem por padrão", () => {
+    // "Qualquer consultor pausa e retoma" (decisão do diretor). Como `esteira` é do grupo Operação e
+    // o padrão do COMUM é TODO o grupo Operação, cair neste menu É a permissão. Se alguém mover a
+    // pausa para um menu de Administração, este teste quebra antes de o COMUM perder o botão.
+    expect(menuDaOperacao("EsteiraController", "pausar")).toBe("esteira");
+    expect(menuDaOperacao("EsteiraController", "retomar")).toBe("esteira");
+    expect(codigosPadraoDoPapel("COMUM")).toContain("esteira");
+  });
+
   it("kit-tipos: a LISTA (dropdown do Gerador de kit) é ABERTA; só as escritas são gated por kit-regras", () => {
     expect(menuDaOperacao("KitTiposController", "list")).toBeNull(); // dropdown do Gerador de kit
     expect(menuDaOperacao("KitTiposController", "criar")).toBe("kit-regras");

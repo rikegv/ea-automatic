@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Put } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Put } from "@nestjs/common";
 import type { AuthUser } from "../auth/auth.types";
 import { CurrentUser, Roles } from "../auth/decorators";
 import { MenusService } from "../auth/menus.service";
@@ -41,14 +41,32 @@ export class UsersController {
   }
 
   /**
-   * Salva a associação USUÁRIO x MENU (substitui o conjunto). Só admin (herda o @Roles da classe).
-   * Passa o papel do alvo para o service filtrar os menus bloqueados para COMUM (Diagnóstico/Usuários).
+   * Salva a associação USUÁRIO x MENU. Só admin (herda o @Roles da classe). Passa o papel do alvo
+   * para o service filtrar os menus bloqueados para COMUM (Diagnóstico/Usuários).
+   *
+   * NÃO substitui mais o conjunto inteiro: a tela declara em `conhecidos` o catálogo que exibiu, e a
+   * remoção acontece só dentro desse escopo. Menu que nasceu depois de a página carregar é
+   * preservado em vez de apagado em silêncio, que foi o defeito que sumiu com o `assinaturas` e
+   * depois com o `assinante-empresa`. O total preservado volta na resposta, para não ser invisível.
    */
   @Put(":id/menus")
   async definirMenus(@Param("id") id: string, @Body() dto: DefinirMenusDto) {
+    // Sem o escopo declarado não dá para saber o que a tela podia remover, e adivinhar é justamente o
+    // que apagava menu novo. Uma aba antiga leva erro VISÍVEL pedindo recarga, em vez de remoção
+    // silenciosa. A mensagem é uma só, para o consultor entender o que fazer.
+    if (!dto.conhecidos || dto.conhecidos.length === 0) {
+      throw new BadRequestException(
+        "Recarregue a página de usuários e salve de novo: esta aba está desatualizada e não sabe quais menus existem hoje.",
+      );
+    }
     const alvo = await this.users.findById(id);
-    const aplicados = await this.menus.definirMenusDoUsuario(id, dto.menus, alvo?.papel);
-    return { ok: true, total: aplicados.length };
+    const { aplicados, preservados } = await this.menus.salvarSelecaoDaTela(
+      id,
+      dto.menus,
+      dto.conhecidos,
+      alvo?.papel,
+    );
+    return { ok: true, total: aplicados.length, preservados: preservados.length };
   }
 
   @Post()

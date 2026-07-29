@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import type { Papel } from "@ea/shared-types";
 import { useAuth } from "@/lib/auth-context";
+import { podeAbrirAdministracao } from "@/lib/admin-menus";
 import { cn } from "@/lib/cn";
 import { LogoEA } from "@/components/ui/LogoEA";
 import { NavItem } from "@/components/ui/NavItem";
@@ -25,18 +26,31 @@ interface NavDef {
 
 const OPERACAO: NavDef[] = [
   { href: "/", icon: "home", label: "Início", codigo: "inicio" },
-  { href: "/analise", icon: "chart", label: "Análise gerencial", codigo: "analise" },
+  { href: "/analise", icon: "chart", label: "Análise Gerencial", codigo: "analise" },
   // 3º item, com destaque vermelho: é a tela crítica (pré-admissões aguardando liberação).
   { href: "/liberacao", icon: "clock", label: "Liberação Admissional", codigo: "liberacao", critical: true },
-  { href: "/nova", icon: "plus", label: "Nova admissão", codigo: "nova" },
-  { href: "/esteira", icon: "layers", label: "Esteira admissional", codigo: "esteira" },
-  { href: "/nao-conformidades", icon: "alert", label: "Não conformidades", codigo: "nao-conformidades" },
+  { href: "/nova", icon: "plus", label: "Nova Admissão", codigo: "nova" },
+  { href: "/esteira", icon: "layers", label: "Esteira Admissional", codigo: "esteira" },
+  { href: "/nao-conformidades", icon: "alert", label: "Não Conformidades", codigo: "nao-conformidades" },
   { href: "/gerenciador", icon: "table", label: "Gerenciador", codigo: "gerenciador" },
 ];
 
 // Gerador de kit (motor de extração, OST): tela própria. Visibilidade agora pelo menu `gerador-kit`
 // (OST permissão de menu), não mais só por `isAdmin`. Continua na navegação principal.
-const GERADOR_KIT: NavDef = { href: "/gerador-kit", icon: "pen", label: "Gerador de kit", codigo: "gerador-kit" };
+const GERADOR_KIT: NavDef = { href: "/gerador-kit", icon: "pen", label: "Gerador De Kit", codigo: "gerador-kit" };
+
+// Gerenciamento de assinatura (INT-4): fila dos envelopes da Clicksign e as ações de gestão
+// (solicitar, cancelar, reenviar por correção). Visibilidade pelo menu `assinaturas`.
+const ASSINATURAS: NavDef = {
+  href: "/assinaturas",
+  icon: "doc",
+  label: "Ass. Click",
+  codigo: "assinaturas",
+};
+
+// Assinante Da Empresa (INT-4) NÃO entra aqui: por decisão do diretor a tela vive SÓ no Menu
+// Gerencial, como sempre foi. Quem tem o menu chega nela pelo card do Gerencial; a barra lateral não
+// ganha item para essa rota.
 
 const PAPEL_ROTULO: Record<Papel, string> = {
   SUPER_ADMIN: "Super Admin",
@@ -46,18 +60,6 @@ const PAPEL_ROTULO: Record<Papel, string> = {
 
 const STORAGE_KEY = "ea-sidebar-pinned";
 
-/** Códigos dos menus do grupo Administração (para decidir se o card "Menu Gerencial" aparece). */
-const ADMIN_MENUS = [
-  "clientes",
-  "cargos",
-  "escalas",
-  "motivos-declinio",
-  "tarifas",
-  "regua",
-  "kit-regras",
-  "regras",
-  "usuarios",
-];
 
 /** Deriva um nome de exibição a partir do e-mail (sem cadastro de nome na Fase 1A). */
 function displayName(email: string): string {
@@ -142,7 +144,7 @@ export function Sidebar() {
       {/* OST permissão de menu: a barra mostra SÓ os menus que o usuário tem (admin vê tudo por
           bypass). O Gerador de kit deixou de depender de `isAdmin` e passou ao menu `gerador-kit`. */}
       <div className={cn("nav-label", !expanded && "hidden")}>Operação</div>
-      {[...OPERACAO, GERADOR_KIT]
+      {[...OPERACAO, GERADOR_KIT, ASSINATURAS]
         .filter((n) => temMenu(n.codigo))
         .map((n) => (
           <NavItem
@@ -156,7 +158,7 @@ export function Sidebar() {
 
       {/* Administração: o card "Menu Gerencial" aparece para admin OU para quem tem ao menos um menu
           administrativo (ex.: a consultora de auditoria com Regras + Régua). */}
-      {(isAdmin || ADMIN_MENUS.some((c) => temMenu(c))) && (
+      {(isAdmin || podeAbrirAdministracao(temMenu)) && (
         <>
           <div className="nav-sep" />
           <div className={cn("nav-label", !expanded && "hidden")}>Administração</div>
