@@ -435,8 +435,8 @@ export default function UsuariosPage() {
                               type="button"
                               onClick={() => setResetAlvo(u)}
                               className="grid h-8 w-8 place-items-center rounded-lg text-dim transition hover:bg-[var(--surface-2)] hover:text-accent"
-                              title="Resetar senha"
-                              aria-label="Resetar senha"
+                              title="Resetar Senha"
+                              aria-label="Resetar Senha"
                             >
                               <Icon name="clock" className="h-[17px] w-[17px]" />
                             </button>
@@ -490,7 +490,7 @@ export default function UsuariosPage() {
       {/* Reset de senha */}
       <ConfirmDialog
         open={Boolean(resetAlvo)}
-        title="Resetar senha"
+        title="Resetar Senha"
         message={`Gerar uma nova senha temporária para "${resetAlvo?.nome}"? A senha atual deixa de valer e o usuário terá de trocá-la no próximo acesso.`}
         confirmLabel="Gerar nova senha"
         busy={confirmBusy}

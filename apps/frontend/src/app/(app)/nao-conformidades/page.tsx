@@ -258,7 +258,7 @@ export default function NaoConformidadesPage() {
         <div className="flex shrink-0 items-start justify-between gap-4">
           <PageHead
             eyebrow="Conformidade do processo"
-            title="Não conformidades"
+            title="Não Conformidades"
             subtitle="Desvios de processo por admissão. Via 1 penaliza o consultor; Via 2 (liberação por diretoria) é exceção reconhecida pela supervisão."
           />
           <div className="flex items-center gap-2 pt-1">
@@ -753,7 +753,7 @@ function RegistrarNc3Modal({
   );
 
   return (
-    <Modal onClose={onClose} className="max-w-lg" ariaLabel="Registrar NC de Cadastro">
+    <Modal onClose={onClose} className="max-w-lg" ariaLabel="Registrar NC De Cadastro">
       <h3 className="text-[17px] font-extrabold">Registrar NC de Cadastro</h3>
       <p className="psub !mb-3 mt-1">
         Cadastro incompleto (NC-3). As flags são manuais nesta fase: kit (F9) e assinatura

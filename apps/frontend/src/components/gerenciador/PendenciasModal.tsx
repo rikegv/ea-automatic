@@ -49,7 +49,7 @@ export function PendenciasModal({
   const editaveis = (pendencias ?? []).map((p) => CAMPO_KEY[p]).filter(Boolean);
 
   return (
-    <Modal onClose={onClose} className="max-w-md" ariaLabel="Pendências obrigatórias">
+    <Modal onClose={onClose} className="max-w-md" ariaLabel="Pendências Obrigatórias">
       <div className="mb-3 flex items-start gap-3">
         <span className="grid h-10 w-10 flex-none place-items-center rounded-full bg-[var(--sico-warn)] text-warn">
           <Icon name="alert" className="h-5 w-5" />

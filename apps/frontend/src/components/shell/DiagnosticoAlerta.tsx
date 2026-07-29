@@ -84,7 +84,7 @@ export function DiagnosticoAlertaProvider({ children }: { children: ReactNode })
     <AlertaContext.Provider value={resumo}>
       {children}
       {popupAberto && resumo.aceso && (
-        <Modal onClose={estouCiente} ariaLabel="Diagnóstico do sistema" className="max-w-[460px] p-6">
+        <Modal onClose={estouCiente} ariaLabel="Diagnóstico Do Sistema" className="max-w-[460px] p-6">
           <div className="mb-4">
             <div className="eyebrow !mb-1">Diagnóstico do sistema</div>
             <h2 className="font-display text-xl font-bold">

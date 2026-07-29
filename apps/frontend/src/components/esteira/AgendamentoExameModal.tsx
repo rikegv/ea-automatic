@@ -153,7 +153,7 @@ export function AgendamentoExameModal({
   }
 
   return (
-    <Modal onClose={() => onClose(false)} className="max-w-lg" ariaLabel="Agendamento do exame">
+    <Modal onClose={() => onClose(false)} className="max-w-lg" ariaLabel="Agendamento Do Exame">
       <div className="mb-4 flex items-start gap-3">
         <span className="grid h-10 w-10 flex-none place-items-center rounded-full bg-[var(--surface)] text-accent">
           <Icon name="clock" className="h-5 w-5" />

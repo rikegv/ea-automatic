@@ -302,7 +302,7 @@ export default function EscalasPage() {
           vínculos e o histórico, sem exclusão física, reversível pela reativação. */}
       <ConfirmDialog
         open={Boolean(confirmar)}
-        title="Inativar escala"
+        title="Inativar Escala"
         message={
           confirmar
             ? `Inativar a escala "${confirmar.nome}"? Ela sai das opções selecionáveis, mas não é excluída: as admissões que já a usam preservam o vínculo e você pode reativar quando quiser.`

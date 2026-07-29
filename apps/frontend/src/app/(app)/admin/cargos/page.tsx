@@ -293,7 +293,7 @@ export default function CargosPage() {
           vínculos e o histórico, sem exclusão física, reversível pela reativação. */}
       <ConfirmDialog
         open={Boolean(confirmar)}
-        title="Inativar cargo"
+        title="Inativar Cargo"
         message={
           confirmar
             ? `Inativar o cargo "${confirmar.nome}"? Ele sai das opções selecionáveis de novas admissões, mas não é excluído: os vínculos e o histórico são preservados e você pode reativar quando quiser.`

@@ -152,7 +152,7 @@ export default function RegrasAuditoriaPage() {
     <>
       <PageHead
         eyebrow="Cadastros"
-        title="Regras de auditoria"
+        title="Regras De Auditoria"
         subtitle="Critério de validade de cada tipo de documento, aplicado pelo motor de IA na auditoria (F2)."
       />
 
@@ -328,8 +328,8 @@ export default function RegrasAuditoriaPage() {
                               type="button"
                               onClick={() => setDelAlvo(r)}
                               className="grid h-8 w-8 place-items-center rounded-lg text-dim transition hover:bg-[var(--surface-2)] hover:text-danger"
-                              title="Excluir regra"
-                              aria-label="Excluir regra"
+                              title="Excluir Regra"
+                              aria-label="Excluir Regra"
                             >
                               <Icon name="trash" className="h-[17px] w-[17px]" />
                             </button>
@@ -347,7 +347,7 @@ export default function RegrasAuditoriaPage() {
 
       <ConfirmDialog
         open={Boolean(delAlvo)}
-        title="Excluir regra"
+        title="Excluir Regra"
         message={
           delAlvo
             ? `Excluir a regra de "${nomePorTipo.get(delAlvo.tipoDocumentoId) ?? "documento"}"? Esta ação não pode ser desfeita.`

@@ -473,7 +473,7 @@ export default function ReguaPage() {
     <>
       <PageHead
         eyebrow="Cadastros"
-        title="Régua documental"
+        title="Régua Documental"
         subtitle="Exigência de cada documento por (cliente + cargo). Muda o cargo, muda o checklist."
       />
 
@@ -872,7 +872,7 @@ export default function ReguaPage() {
 
       <ConfirmDialog
         open={Boolean(inativar)}
-        title="Inativar régua do cliente"
+        title="Inativar Régua Do Cliente"
         message={
           inativar
             ? `Remover toda a régua de ${inativar.nome}? O cliente volta para a lista "sem régua" e a Nova Admissão trava a seleção de cargo até recadastrar. Esta ação não pode ser desfeita.`
@@ -888,7 +888,7 @@ export default function ReguaPage() {
       {/* Confirmação da aplicação em massa: mostra exatamente o que será aplicado antes de gravar. */}
       <ConfirmDialog
         open={confirmarMassa}
-        title="Aplicar documentos padrão nos pendentes"
+        title="Aplicar Documentos Padrão Nos Pendentes"
         message={`Aplicar os ${CODIGOS_REGUA_PADRAO.length} documentos padrão como obrigatórios em ${pendentesPadrao.length} par${pendentesPadrao.length === 1 ? "" : "es"} de cliente e cargo que estão em uso e sem régua: ${pendentesPadrao.map((p) => `${p.cliente} (${p.cargo})`).join("; ")}. Só adiciona onde não há nada cadastrado: nenhuma régua existente é alterada ou apagada.`}
         confirmLabel="Aplicar padrão"
         busy={aplicandoMassa}
@@ -900,7 +900,7 @@ export default function ReguaPage() {
           delete: preserva as réguas já cadastradas e o histórico de documentos das admissões. */}
       <ConfirmDialog
         open={Boolean(inativarDoc)}
-        title="Inativar documento"
+        title="Inativar Documento"
         message={
           inativarDoc
             ? `Inativar o documento "${inativarDoc.nome}"? Ele sai da lista de ativos e deixa de ser oferecido no cadastro das réguas. Atenção: as réguas já salvas que exigem este documento não são alteradas, então as admissões em andamento seguem cobrando ele. Você pode reativar quando quiser.`

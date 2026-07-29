@@ -33,8 +33,8 @@ export default function AnalisePage() {
   return (
     <>
       <PageHead
-        eyebrow="Análise gerencial"
-        title="Indicadores da operação"
+        eyebrow="Análise Gerencial"
+        title="Indicadores Da Operação"
         subtitle="Visão consolidada, atualizada em tempo real."
       />
 

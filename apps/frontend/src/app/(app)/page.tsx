@@ -18,13 +18,13 @@ const CARDS: QuickCard[] = [
   {
     href: "/nova",
     icon: "plus",
-    title: "Nova admissão",
+    title: "Nova Admissão",
     desc: "Cadastrar candidato em três etapas: cliente, vaga e dados pessoais.",
   },
   {
     href: "/esteira",
     icon: "layers",
-    title: "Esteira admissional",
+    title: "Esteira Admissional",
     desc: "Faróis de auditoria, exame e cadastro: operação por frente.",
   },
   {
@@ -36,7 +36,7 @@ const CARDS: QuickCard[] = [
   {
     href: "/analise",
     icon: "chart",
-    title: "Análise gerencial",
+    title: "Análise Gerencial",
     desc: "KPIs da operação e volume de admissões por período.",
   },
 ];

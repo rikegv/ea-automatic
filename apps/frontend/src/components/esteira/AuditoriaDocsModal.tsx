@@ -59,7 +59,7 @@ interface AuditarResp {
   /**
    * OST produção / Bloco 1: a régua fechou mas o envio ao Drive falhou. Vem preenchido em QUALQUER
    * caminho que feche a régua (auditar, reauditar, validar por humano), porque a falha silenciosa
-   * foi exatamente o defeito: a tela dizia "Análise finalizada" e o prontuário ficava vazio.
+   * foi exatamente o defeito: a tela dizia "Análise Finalizada" e o prontuário ficava vazio.
    */
   avisoDrive?: string;
 }

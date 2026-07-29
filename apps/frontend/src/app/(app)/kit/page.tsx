@@ -232,7 +232,7 @@ export default function KitPage() {
     <>
       <PageHead
         eyebrow="Assinatura"
-        title="Gerador de kit"
+        title="Gerador De Kit"
         subtitle="Desmembra o PDF-mãe pela admissão escolhida e baixa o kit pronto para assinatura (F9)."
       />
 

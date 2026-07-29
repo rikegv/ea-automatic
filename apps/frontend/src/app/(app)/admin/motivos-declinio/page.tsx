@@ -151,7 +151,7 @@ export default function MotivosDeclinioPage() {
     <>
       <PageHead
         eyebrow="Cadastros"
-        title="Motivos de declínio"
+        title="Motivos De Declínio"
         subtitle="Catálogo de motivos de declínio. Inativar preserva os vínculos e o histórico."
       />
 
@@ -296,7 +296,7 @@ export default function MotivosDeclinioPage() {
           vínculos e o histórico, sem exclusão física, reversível pela reativação. */}
       <ConfirmDialog
         open={Boolean(confirmar)}
-        title="Inativar motivo"
+        title="Inativar Motivo"
         message={
           confirmar
             ? `Inativar o motivo "${confirmar.nome}"? Ele sai das opções selecionáveis, mas não é excluído: os vínculos e o histórico são preservados e você pode reativar quando quiser.`

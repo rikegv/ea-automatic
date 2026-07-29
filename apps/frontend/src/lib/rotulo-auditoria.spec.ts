@@ -5,7 +5,7 @@ import { rotuloDaAuditoria, type ProgressoObrigatorios } from "./rotulo-auditori
  * Rótulo da coluna de status da Auditoria (OST do status real).
  *
  * O caso que originou a frente: duas admissões, uma sem NADA recebido e outra com quase tudo
- * aprovado, exibiam o mesmo "Análise pendente" estático.
+ * aprovado, exibiam o mesmo "Análise Pendente" estático.
  */
 function p(over: Partial<ProgressoObrigatorios> = {}): ProgressoObrigatorios {
   return { entregues: 0, total: 6, inconformes: 0, recebidos: 0, ...over };
@@ -13,40 +13,40 @@ function p(over: Partial<ProgressoObrigatorios> = {}): ProgressoObrigatorios {
 
 describe("rotuloDaAuditoria", () => {
   it("nada recebido → Entrega pendente (a ação é cobrar o candidato)", () => {
-    expect(rotuloDaAuditoria(p())).toBe("Entrega pendente");
+    expect(rotuloDaAuditoria(p())).toBe("Entrega Pendente");
   });
 
   it("entrega começou mas nem todos aprovados → Análise em andamento", () => {
-    expect(rotuloDaAuditoria(p({ entregues: 4, recebidos: 4 }))).toBe("Análise em andamento");
+    expect(rotuloDaAuditoria(p({ entregues: 4, recebidos: 4 }))).toBe("Análise Em Andamento");
   });
 
   it("todos os obrigatórios aprovados → Análise finalizada", () => {
-    expect(rotuloDaAuditoria(p({ entregues: 6, recebidos: 6 }))).toBe("Análise finalizada");
+    expect(rotuloDaAuditoria(p({ entregues: 6, recebidos: 6 }))).toBe("Análise Finalizada");
   });
 
   it("REGRA DO DIRETOR: havendo REPROVADO nunca é Análise finalizada", () => {
     // 5 aprovados + 1 reprovado = 6 recebidos de 6, mas NÃO está finalizada.
     expect(rotuloDaAuditoria(p({ entregues: 5, inconformes: 1, recebidos: 6 }))).toBe(
-      "Análise em andamento",
+      "Análise Em Andamento",
     );
     // Guarda extra: nem mesmo com a contagem de aprovados batendo o total por inconsistência de dado.
     expect(rotuloDaAuditoria(p({ entregues: 6, inconformes: 1, recebidos: 6 }))).toBe(
-      "Análise em andamento",
+      "Análise Em Andamento",
     );
   });
 
   it("documento que CHEGOU e espera a IA não deixa a admissão como Entrega pendente", () => {
     // Nenhum aprovado ainda, mas 2 chegaram (aguardando auditoria): a entrega ACONTECEU.
-    expect(rotuloDaAuditoria(p({ entregues: 0, recebidos: 2 }))).toBe("Análise em andamento");
+    expect(rotuloDaAuditoria(p({ entregues: 0, recebidos: 2 }))).toBe("Análise Em Andamento");
   });
 
   it("documento reprovado também conta como recebido (o candidato mandou)", () => {
     expect(rotuloDaAuditoria(p({ entregues: 0, inconformes: 3, recebidos: 3 }))).toBe(
-      "Análise em andamento",
+      "Análise Em Andamento",
     );
   });
 
   it("régua sem obrigatórios não vira Análise finalizada por vacuidade", () => {
-    expect(rotuloDaAuditoria(p({ total: 0, entregues: 0, recebidos: 0 }))).toBe("Entrega pendente");
+    expect(rotuloDaAuditoria(p({ total: 0, entregues: 0, recebidos: 0 }))).toBe("Entrega Pendente");
   });
 });

@@ -187,7 +187,7 @@ export default function TarifasPage() {
     <>
       <PageHead
         eyebrow="Cadastros"
-        title="Tarifas de transporte"
+        title="Tarifas De Transporte"
         subtitle="Tabela de tarifas vigentes por cidade e transporte. O formulário de VT sugere estes valores ao candidato. Inativar preserva o histórico."
       />
 
@@ -371,7 +371,7 @@ export default function TarifasPage() {
           sugestões do formulário de VT, mas não é excluída e o histórico é preservado. Reversível. */}
       <ConfirmDialog
         open={Boolean(confirmar)}
-        title="Inativar tarifa"
+        title="Inativar Tarifa"
         message={
           confirmar
             ? `Inativar a tarifa de ${confirmar.tipoTransporte} em ${confirmar.cidade}? Ela deixa de ser sugerida no formulário de VT, mas não é excluída: o histórico é preservado e você pode reativar quando quiser.`
