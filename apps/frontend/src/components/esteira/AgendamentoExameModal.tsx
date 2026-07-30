@@ -27,11 +27,28 @@ interface AgendamentoRow {
   data: string | null; // YYYY-MM-DD
   horario: string | null; // "HH:MM"
   nomeClinica: string | null;
+  /** Clínica escolhida no catálogo (OST Onda 2, item 4). */
+  clinicaId?: string | null;
   local: string | null;
   fornecedor: Fornecedor | null;
   valor: string | null; // decimal "500.00"
   previsaoAso: string | null; // YYYY-MM-DD
   reagendamentos: number;
+  /** Endereços do dia (multi-endereço, OST Onda 2). FONTE DA VERDADE de clínica, local e horário. */
+  enderecos?: {
+    ordem: number;
+    clinicaId: string | null;
+    nomeClinica: string | null;
+    local: string | null;
+    horario: string | null;
+  }[];
+}
+
+/** Um endereço no FORMULÁRIO. `data` é única do agendamento e não entra aqui. */
+interface EnderecoForm {
+  clinicaId: string;
+  local: string;
+  horario: string;
 }
 
 function fmtData(d?: string | null): string {
@@ -71,9 +88,12 @@ export function AgendamentoExameModal({
   const [editing, setEditing] = useState(false);
 
   const [data, setData] = useState("");
-  const [horario, setHorario] = useState("");
-  const [nomeClinica, setNomeClinica] = useState("");
-  const [local, setLocal] = useState("");
+  // MULTI-ENDEREÇO (OST Onda 2): o formulário guarda uma LISTA. Cada endereço tem clínica (da lista
+  // do Gerencial, nunca texto livre) e horário PRÓPRIO. A data é única e vive fora daqui.
+  const [enderecos, setEnderecos] = useState<EnderecoForm[]>([
+    { clinicaId: "", local: "", horario: "" },
+  ]);
+  const [clinicas, setClinicas] = useState<{ id: string; nome: string }[]>([]);
   const [fornecedor, setFornecedor] = useState<Fornecedor | "">("");
   // Novos (decisão do diretor): valor do exame e previsão do ASO (informada pela clínica). Opcionais.
   const [valor, setValor] = useState("");
@@ -81,6 +101,21 @@ export function AgendamentoExameModal({
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+
+  // Catálogo de CLÍNICAS ATIVAS (OST Onda 2, item 4): as opções do seletor. Falha silenciosa deixa a
+  // lista vazia, e aí o gate do formulário impede o salvamento em vez de gravar clínica inventada.
+  useEffect(() => {
+    if (!token) return;
+    let vivo = true;
+    apiFetch<{ id: string; nome: string }[]>("/catalogos/clinicas", { token })
+      .then((lista) => {
+        if (vivo) setClinicas(lista);
+      })
+      .catch(() => setClinicas([]));
+    return () => {
+      vivo = false;
+    };
+  }, [token]);
 
   // Carga do registro atual (GET), popula o form em modo visualização/reagendamento.
   useEffect(() => {
@@ -93,9 +128,24 @@ export function AgendamentoExameModal({
         if (row && row.data) {
           setAtual(row);
           setData(row.data ?? "");
-          setHorario(row.horario ?? "");
-          setNomeClinica(row.nomeClinica ?? "");
-          setLocal(row.local ?? "");
+          // Agendamento novo traz a LISTA; agendamento anterior ao multi-endereço cai no fallback do
+          // formato antigo (um endereço só), para a tela nunca abrir vazia sobre dado que existe.
+          const lista = (row.enderecos ?? []).map((e) => ({
+            clinicaId: e.clinicaId ?? "",
+            local: e.local ?? "",
+            horario: e.horario ?? "",
+          }));
+          setEnderecos(
+            lista.length > 0
+              ? lista
+              : [
+                  {
+                    clinicaId: row.clinicaId ?? "",
+                    local: row.local ?? "",
+                    horario: row.horario ?? "",
+                  },
+                ],
+          );
           setFornecedor(row.fornecedor ?? "");
           setValor(row.valor ?? "");
           setPrevisaoAso(row.previsaoAso ?? "");
@@ -118,12 +168,17 @@ export function AgendamentoExameModal({
   }, [admissaoId, token]);
 
   const temAgendamento = Boolean(atual);
+  // PREVISÃO DO ASO entra no gate (OST Onda 2): ela deixou de ser opcional porque é a data que o
+  // verificador de hora em hora compara com a do exame para decidir entre "Aguardando Liberação Do
+  // ASO" e "ASO Pendente". Sem ela, o status automático não teria como existir.
   const completo =
     data.trim() !== "" &&
-    horario.trim() !== "" &&
-    nomeClinica.trim() !== "" &&
-    local.trim() !== "" &&
-    fornecedor !== "";
+    enderecos.length > 0 &&
+    enderecos.every(
+      (e) => e.clinicaId !== "" && e.local.trim() !== "" && e.horario.trim() !== "",
+    ) &&
+    fornecedor !== "" &&
+    previsaoAso.trim() !== "";
 
   async function salvar() {
     if (!completo) return; // `completo` garante fornecedor !== "" (narrowing por alias)
@@ -135,12 +190,14 @@ export function AgendamentoExameModal({
         token,
         body: {
           data,
-          horario,
-          nomeClinica: nomeClinica.trim(),
-          local: local.trim(),
+          enderecos: enderecos.map((e) => ({
+            clinicaId: e.clinicaId,
+            local: e.local.trim(),
+            horario: e.horario,
+          })),
           fornecedor,
           valor: valor.trim() || undefined,
-          previsaoAso: previsaoAso || undefined,
+          previsaoAso,
           reagendar: temAgendamento ? true : undefined,
         },
       });
@@ -179,12 +236,35 @@ export function AgendamentoExameModal({
           {/* ── Modo VISUALIZAÇÃO, dados atuais, sem edição ─────────────────── */}
           {temAgendamento && !editing ? (
             <div className="grid gap-3">
-              <div className="grid grid-cols-2 gap-3">
-                <Campo rotulo="Data" valor={fmtData(atual?.data)} />
-                <Campo rotulo="Horário" valor={atual?.horario || "não informado"} />
-              </div>
-              <Campo rotulo="Nome da clínica" valor={atual?.nomeClinica || "não informado"} />
-              <Campo rotulo="Local da realização" valor={atual?.local || "não informado"} />
+              <Campo rotulo="Data" valor={fmtData(atual?.data)} />
+              {/* MULTI-ENDEREÇO: a visualização lista TODOS os endereços do dia, cada um com o seu
+                  horário. Agendamento anterior ao multi-endereço cai no par singular do fallback. */}
+              {(atual?.enderecos ?? []).length > 0 ? (
+                <div className="grid gap-2">
+                  {(atual?.enderecos ?? []).map((e) => (
+                    <div
+                      key={e.ordem}
+                      className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2"
+                    >
+                      <div className="text-[11px] uppercase tracking-wide text-faint">
+                        Endereço {e.ordem} · {e.horario || "sem horário"}
+                      </div>
+                      <div className="text-[13.5px] text-text">
+                        {e.nomeClinica || "não informado"}
+                      </div>
+                      <div className="break-words text-[12.5px] text-dim">
+                        {e.local || "não informado"}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <>
+                  <Campo rotulo="Horário" valor={atual?.horario || "não informado"} />
+                  <Campo rotulo="Nome da clínica" valor={atual?.nomeClinica || "não informado"} />
+                  <Campo rotulo="Local da realização" valor={atual?.local || "não informado"} />
+                </>
+              )}
               <Campo
                 rotulo="Fornecedor"
                 valor={atual?.fornecedor ? FORNECEDOR_ROTULO[atual.fornecedor] : "não informado"}
@@ -214,40 +294,104 @@ export function AgendamentoExameModal({
                     onChange={(e) => setData(e.target.value)}
                   />
                 </div>
-                <div>
-                  <span className="ds-label">
-                    Horário <span className="text-danger">*</span>
+              </div>
+
+              {/* MULTI-ENDEREÇO (OST Onda 2): o candidato pode fazer o exame em mais de um lugar no
+                  MESMO dia. A data é única (campo acima); cada endereço tem clínica e horário
+                  próprios, e o validador de atraso usa o ÚLTIMO horário do dia como referência. */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="ds-label !mb-0">
+                    Endereços do exame <span className="text-danger">*</span>
                   </span>
-                  <input
-                    type="time"
-                    className="ds-input"
-                    value={horario}
-                    onChange={(e) => setHorario(e.target.value)}
-                  />
+                  <Button
+                    variant="secondary"
+                    className="!py-1 !text-[12px]"
+                    onClick={() =>
+                      setEnderecos((cur) => [...cur, { clinicaId: "", local: "", horario: "" }])
+                    }
+                  >
+                    Adicionar endereço
+                  </Button>
                 </div>
+
+                {enderecos.map((e, i) => (
+                  <div
+                    key={i}
+                    className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-3"
+                  >
+                    <div className="mb-2 flex items-center justify-between">
+                      <span className="text-[12px] uppercase tracking-wide text-faint">
+                        Endereço {i + 1}
+                      </span>
+                      {enderecos.length > 1 && (
+                        <button
+                          type="button"
+                          className="text-[11.5px] text-danger hover:underline"
+                          onClick={() => setEnderecos((cur) => cur.filter((_, k) => k !== i))}
+                        >
+                          remover
+                        </button>
+                      )}
+                    </div>
+                    <div className="grid gap-2">
+                      <div>
+                        <span className="ds-label">
+                          Clínica <span className="text-danger">*</span>
+                        </span>
+                        <Select
+                          value={e.clinicaId}
+                          onChange={(v) =>
+                            setEnderecos((cur) =>
+                              cur.map((x, k) => (k === i ? { ...x, clinicaId: v } : x)),
+                            )
+                          }
+                          ariaLabel={`Clínica do endereço ${i + 1}`}
+                          options={[
+                            { value: "", label: "Selecione a clínica" },
+                            ...clinicas.map((c) => ({ value: c.id, label: c.nome })),
+                          ]}
+                        />
+                      </div>
+                      <div className="grid grid-cols-[1fr_120px] gap-2">
+                        <div>
+                          <span className="ds-label">
+                            Local da realização <span className="text-danger">*</span>
+                          </span>
+                          <input
+                            className="ds-input"
+                            placeholder="Endereço / unidade do exame…"
+                            value={e.local}
+                            onChange={(ev) =>
+                              setEnderecos((cur) =>
+                                cur.map((x, k) => (k === i ? { ...x, local: ev.target.value } : x)),
+                              )
+                            }
+                          />
+                        </div>
+                        <div>
+                          <span className="ds-label">
+                            Horário <span className="text-danger">*</span>
+                          </span>
+                          <input
+                            type="time"
+                            className="ds-input"
+                            value={e.horario}
+                            onChange={(ev) =>
+                              setEnderecos((cur) =>
+                                cur.map((x, k) =>
+                                  k === i ? { ...x, horario: ev.target.value } : x,
+                                ),
+                              )
+                            }
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
-              <div>
-                <span className="ds-label">
-                  Nome da clínica <span className="text-danger">*</span>
-                </span>
-                <input
-                  className="ds-input"
-                  placeholder="Clínica responsável pelo exame…"
-                  value={nomeClinica}
-                  onChange={(e) => setNomeClinica(e.target.value)}
-                />
-              </div>
-              <div>
-                <span className="ds-label">
-                  Local da realização <span className="text-danger">*</span>
-                </span>
-                <input
-                  className="ds-input"
-                  placeholder="Endereço / unidade do exame…"
-                  value={local}
-                  onChange={(e) => setLocal(e.target.value)}
-                />
-              </div>
+
               <div>
                 <span className="ds-label">
                   Fornecedor <span className="text-danger">*</span>

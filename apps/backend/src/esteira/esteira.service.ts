@@ -15,6 +15,7 @@ import {
   gte,
   ilike,
   inArray,
+  isNotNull,
   lt,
   notInArray,
   or,
@@ -24,6 +25,7 @@ import { normalizeCpf, TERMO_APTO_SEM_ASO, type Papel } from "@ea/shared-types";
 import type { AuthUser } from "../auth/auth.types";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
+import { naoPausada } from "../db/admissao-filtros";
 import {
   admissaoBeneficio,
   admissoes,
@@ -34,7 +36,9 @@ import {
   motivosDeclinio,
   dadosVagaFolha,
   documentosAdmissao,
+  clinicasCatalogo,
   exameAgendamento,
+  exameAgendamentoEndereco,
   frenteStatusCatalogo,
   frenteStatusEventos,
   frentesAdmissao,
@@ -52,6 +56,8 @@ import type { FrenteTipo } from "../domain/frentes";
 import { podeAbrirCadastro } from "../domain/frentes";
 import { AuditoriaService } from "../auditoria/auditoria.service";
 import { ReguaCompletudeService } from "../regua/regua-completude.service";
+import { pendenciasObrigatoriasSet } from "../regua/pendencias-lote";
+import { configDoCliente } from "../regua/pendencia-config.repo";
 import {
   conclui,
   isReversao,
@@ -77,8 +83,14 @@ export interface EsteiraFiltros {
   from?: string;
   to?: string;
   /** Busca por candidato (nome ou CPF) — F7. Quando presente, REVELA também as frentes já
-   * concluídas (que somem da fila principal — item 1 da 2C). */
+   * concluídas (que somem da fila principal — item 1 da 2C) e as PAUSADAS. */
   q?: string;
+  /**
+   * Filtro do card "Pausadas" (OST admissão pausada, Bloco 4). true = mostra SÓ as pausadas.
+   * Ausente/false = fila normal, que EXCLUI as pausadas. Mesmo mecanismo já usado para a frente
+   * concluída: some da fila, reaparece na busca ou no filtro explícito.
+   */
+  pausadas?: boolean;
 }
 
 const DATA_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -156,6 +168,11 @@ export class EsteiraService {
     const q = filtros.q?.trim();
     const buscandoCandidato = Boolean(q);
 
+    // PAUSA (OST admissão pausada, ponto 6 dos 6). Os KPIs contam TRABALHO A FAZER, e admissão
+    // pausada não vai ser trabalhada agora: sai de TODAS as contagens, sempre, sem exceção de busca.
+    // O card "Pausadas" é contado à parte, logo abaixo.
+    const kpiWhere = [...clientePeriodo, naoPausada()];
+
     // Itens aplicam também o filtro de status (multi-select, Bloco B: OU dentro do filtro).
     const itensWhere = [...clientePeriodo];
     if (filtros.status?.length) {
@@ -185,6 +202,17 @@ export class EsteiraService {
         itensWhere.push(naoConcluida);
       }
     }
+    // PAUSA nos ITENS: mesmo mecanismo da frente concluída, três caminhos e nenhum inventado.
+    //  - filtro "Pausadas" ligado → mostra SÓ as pausadas (é o card clicável, §A.12);
+    //  - busca por candidato → não filtra pausa (a busca REVELA, como já revela as concluídas);
+    //  - fila normal → esconde as pausadas.
+    // É isto que faz a pausada sumir da fila sem virar admissão fantasma: sempre a um clique.
+    if (filtros.pausadas) {
+      itensWhere.push(isNotNull(admissoes.pausadaEm));
+    } else if (!buscandoCandidato) {
+      itensWhere.push(naoPausada());
+    }
+
     if (q) {
       // Busca rápida (Bloco C): NOME, CPF e CLIENTE (razão/operação/código).
       const cpfDigits = normalizeCpf(q);
@@ -222,6 +250,8 @@ export class EsteiraService {
         contratoAssinadoDriveUrl: admissoes.contratoAssinadoDriveUrl,
         origem: admissoes.origem,
         sinalizador: admissoes.sinalizadorPreenchimento,
+        // PAUSA: vai no item para a coluna Status renderizar a tag "Pausada" (Bloco 5).
+        pausadaEm: admissoes.pausadaEm,
         asoValidado: admissoes.asoValidado,
       })
       .from(frentesAdmissao)
@@ -253,7 +283,7 @@ export class EsteiraService {
         ? await this.reguaCompletude.obrigatoriosPendentesCountMap(admissaoIds)
         : new Map<string, number>();
     // OST B1 / Bloco 6: progresso da régua obrigatória (entregues/total) para a coluna Status da
-    // aba Auditoria mostrar QUANTO já foi auditado, em vez de "Análise pendente" para todo mundo.
+    // aba Auditoria mostrar QUANTO já foi auditado, em vez de "Análise Pendente" para todo mundo.
     const progressoMap =
       tipo === "AUDITORIA"
         ? await this.reguaCompletude.progressoObrigatoriosMap(admissaoIds)
@@ -261,10 +291,11 @@ export class EsteiraService {
             string,
             { entregues: number; total: number; inconformes: number; recebidos: number }
           >();
-    const pendObrigSet =
-      tipo === "AUDITORIA" || tipo === "EXAME"
-        ? await this.pendenciasSet(admissaoIds)
-        : new Set<string>();
+    // PENDÊNCIAS OBRIGATÓRIAS (campos), calculadas AO VIVO pela régua unificada `pendenciasObrigatorias`
+    // (§A.19). É a MESMA fonte que o modal de pendências abre ao clicar no badge, e agora vale para as
+    // TRÊS abas, não só Auditoria e Exame: o pill da coluna "Pendências Obrigatórias" precisa dela em
+    // qualquer aba, senão a de Cadastro volta a cair no `sinalizador` e a divergir do card.
+    const pendObrigSet = await this.pendenciasSet(admissaoIds);
 
     const items = rows.map((r) => {
       const base = {
@@ -287,6 +318,10 @@ export class EsteiraService {
         contratoAssinadoDriveUrl: r.contratoAssinadoDriveUrl,
         origem: r.origem,
         sinalizador: r.sinalizador,
+        pausadaEm: r.pausadaEm,
+        // Sobe no BASE (antes ia só nas abas Auditoria e Exame): é o que alinha o pill da coluna
+        // "Pendências Obrigatórias" com o badge que abre a lista, em TODAS as abas.
+        temPendencias: pendObrigSet.has(r.admissaoId),
       };
       if (tipo === "EXAME") {
         const ag = agendamentoMap.get(r.admissaoId);
@@ -338,7 +373,7 @@ export class EsteiraService {
       .select({ status: frentesAdmissao.status, n: count() })
       .from(frentesAdmissao)
       .innerJoin(admissoes, eq(frentesAdmissao.admissaoId, admissoes.id))
-      .where(and(...clientePeriodo, eq(frentesAdmissao.concluida, false)))
+      .where(and(...kpiWhere, eq(frentesAdmissao.concluida, false)))
       .groupBy(frentesAdmissao.status);
 
     const porStatus: Record<string, number> = {};
@@ -356,24 +391,49 @@ export class EsteiraService {
       .select({ admissaoId: frentesAdmissao.admissaoId })
       .from(frentesAdmissao)
       .innerJoin(admissoes, eq(frentesAdmissao.admissaoId, admissoes.id))
-      .where(and(...clientePeriodo, eq(frentesAdmissao.concluida, false)));
+      .where(and(...kpiWhere, eq(frentesAdmissao.concluida, false)));
     const comPendencias = (await this.pendenciasSet(emAndamentoRows.map((r) => r.admissaoId))).size;
 
     // KPI "Cadastrado" (aba Cadastro, decisão do diretor): quantas JÁ foram cadastradas. Precisa de
     // consulta própria porque `porStatus` conta só `concluida = false`, e "Cadastrado" é o status
     // CONCLUINTE da frente — ali daria sempre 0. Mesmo filtro cliente/período dos demais KPIs, então
     // herda a exclusão de declínio (§A.16). Só a aba Cadastro consulta; as outras não pagam a query.
+    //
+    // GENERALIZADO na OST do card "Aptas": a mesma contagem serve à aba EXAME, onde o concluinte é
+    // APTO. Uma consulta só, feita apenas nas abas que exibem o card (Cadastro e Exame); a Auditoria
+    // não paga a query. `cadastrados` mantém o nome por compatibilidade com a tela do Cadastro, e
+    // `aptas` é o mesmo número lido pela aba do Exame.
     let cadastrados = 0;
-    if (tipo === "CADASTRO_CONTRATO") {
+    let aptas = 0;
+    if (tipo === "CADASTRO_CONTRATO" || tipo === "EXAME") {
       const [linha] = await this.db
         .select({ n: count() })
         .from(frentesAdmissao)
         .innerJoin(admissoes, eq(frentesAdmissao.admissaoId, admissoes.id))
-        .where(and(...clientePeriodo, eq(frentesAdmissao.concluida, true)));
-      cadastrados = linha?.n ?? 0;
+        .where(and(...kpiWhere, eq(frentesAdmissao.concluida, true)));
+      const concluidas = linha?.n ?? 0;
+      if (tipo === "CADASTRO_CONTRATO") cadastrados = concluidas;
+      else aptas = concluidas;
     }
 
-    return { items, kpis: { porStatus, total, comPendencias, cadastrados }, statusCatalogo };
+    // KPI "Pausadas" (OST admissão pausada, Bloco 4): o card que impede a pausada de virar admissão
+    // fantasma. Conta as PAUSADAS desta frente ainda EM ANDAMENTO, sob o mesmo cliente/período dos
+    // demais cards, e é clicável como filtro (§A.12). Note que usa `clientePeriodo` (que exclui
+    // declínio), NÃO `kpiWhere`: aqui a pausa é justamente o que se quer contar.
+    const [linhaPausadas] = await this.db
+      .select({ n: count() })
+      .from(frentesAdmissao)
+      .innerJoin(admissoes, eq(frentesAdmissao.admissaoId, admissoes.id))
+      .where(
+        and(...clientePeriodo, eq(frentesAdmissao.concluida, false), isNotNull(admissoes.pausadaEm)),
+      );
+    const pausadas = linhaPausadas?.n ?? 0;
+
+    return {
+      items,
+      kpis: { porStatus, total, comPendencias, cadastrados, aptas, pausadas },
+      statusCatalogo,
+    };
   }
 
   /** Conjunto de admissões com um documento (por código) ENTREGUE (§A.6 — só status). */
@@ -406,10 +466,14 @@ export class EsteiraService {
     if (admissaoIds.length === 0) return new Map();
     const rows = await this.db
       .select({
+        id: exameAgendamento.id,
         admissaoId: exameAgendamento.admissaoId,
         data: exameAgendamento.data,
+        // As colunas de clínica/endereço/horário do PAI são histórico (multi-endereço, OST Onda 2):
+        // continuam aqui para a linha antiga não ficar vazia, mas quem manda é `enderecos`.
         horario: exameAgendamento.horario,
         nomeClinica: exameAgendamento.nomeClinica,
+        clinicaId: exameAgendamento.clinicaId,
         local: exameAgendamento.local,
         fornecedor: exameAgendamento.fornecedor,
         valor: exameAgendamento.valor,
@@ -418,7 +482,11 @@ export class EsteiraService {
       })
       .from(exameAgendamento)
       .where(inArray(exameAgendamento.admissaoId, admissaoIds));
-    return new Map(rows.map((r) => [r.admissaoId, r]));
+    // Endereços em UMA consulta para a página inteira (multi-endereço, OST Onda 2).
+    const enderecos = await this.enderecosPorAgendamento(rows.map((r) => r.id));
+    return new Map(
+      rows.map((r) => [r.admissaoId, { ...r, enderecos: enderecos.get(r.id) ?? [] }]),
+    );
   }
 
   /** Conjunto de admissões com o Termo de Banco ENTREGUE (§A.3 / Fase 4 complemento). */
@@ -639,6 +707,7 @@ export class EsteiraService {
           beneficios: vaga?.beneficios,
           escala: vaga?.escala,
           centroCusto: vaga?.centroCusto,
+          setor: vaga?.setor,
           gestorBp: vaga?.gestorBp,
         },
         isBanco: admissao.isBanco,
@@ -646,7 +715,7 @@ export class EsteiraService {
         temBeneficioEstruturado: (await this.beneficiosEstruturadosSet([admissao.id])).has(
           admissao.id,
         ),
-      });
+      }, await configDoCliente(this.db, admissao?.codCliente));
     }
     if (pendenciasPassagem.length > 0 && !dto.aceitePassagem) {
       throw new ConflictException({
@@ -856,59 +925,108 @@ export class EsteiraService {
     return { admissaoId, farolGlobal: "DECLINOU", motivoDeclinioId };
   }
 
+  // ── PAUSA DA ADMISSÃO (OST admissão pausada) ──────────────────────────────
+  /**
+   * PAUSA a admissão. Questão interna do cliente, sem declinar (que é encerramento) e sem deixar a
+   * admissão rodando nos automáticos.
+   *
+   * REGRA DE OURO, o irmão da regra do declínio: a pausa é uma FLAG da admissão
+   * (`pausada_em`/`pausada_por`/`pausa_motivo`) e NÃO TOCA em frente nenhuma, nem no farol. As três
+   * frentes ficam exatamente onde estão, o farol continua derivando por baixo, e é por isso que
+   * retomar não precisa restaurar nada: nada foi alterado para começar.
+   *
+   * SÓ `EM_ADMISSAO` (decisão do diretor): `BANCO_AGUARDAR` já é estado de espera e pausar seria
+   * redundante; concluída e declinada não têm o que pausar.
+   *
+   * O que a pausa NÃO faz: não para a AUDITORIA. O consultor segue auditando documento durante a
+   * pausa, de propósito (a pausa é sobre o cliente, não sobre a análise interna).
+   *
+   * Qualquer consultor pausa (não é ação restrita), como o declínio.
+   */
+  async pausarAdmissao(admissaoId: string, motivo: string | undefined, autorId?: string) {
+    const adm = await this.db.query.admissoes.findFirst({ where: eq(admissoes.id, admissaoId) });
+    if (!adm) throw new NotFoundException("Admissão não encontrada");
+    if (adm.pausadaEm) throw new ConflictException("Esta admissão já está pausada.");
+    if (adm.farolGlobal !== "EM_ADMISSAO") {
+      throw new ConflictException(
+        "Só admissão em andamento pode ser pausada (banco, concluída e declinada não entram).",
+      );
+    }
+
+    const pausaMotivo = motivo?.trim() || null;
+    const pausadaEm = new Date();
+
+    await this.db.transaction(async (tx) => {
+      await tx
+        .update(admissoes)
+        .set({ pausadaEm, pausadaPor: autorId ?? null, pausaMotivo, atualizadoEm: new Date() })
+        .where(eq(admissoes.id, admissaoId));
+
+      // TRILHA (append-only), mesma tabela e formato do declínio e do lápis: o histórico da pessoa é
+      // UM só. A flag é sobrescrita na linha, então sem isto pausar → retomar → pausar apagaria o
+      // motivo anterior e o "quando" nunca teria existido. Quem/quando saem do log (autor + criadoEm).
+      const linhas: { campo: string; valorAnterior: string | null; valorNovo: string | null }[] = [
+        { campo: "pausa", valorAnterior: null, valorNovo: "Admissão pausada" },
+      ];
+      if (pausaMotivo) {
+        linhas.push({ campo: "motivoPausa", valorAnterior: null, valorNovo: pausaMotivo });
+      }
+      await tx
+        .insert(candidatoAlteracoesLog)
+        .values(linhas.map((l) => ({ ...l, admissaoId, autorId: autorId ?? null })));
+    });
+
+    return { admissaoId, pausada: true, pausadaEm: pausadaEm.toISOString() };
+  }
+
+  /**
+   * RETOMA a admissão. Limpa a flag e pronto: como a pausa nunca tocou frente nem farol, cada frente
+   * continua no ponto em que estava e o farol já reflete o estado real (inclusive se Auditoria e
+   * Exame fecharam DURANTE a pausa, porque a derivação nunca foi congelada). Nada recomeça.
+   *
+   * O envelope da Clicksign volta à lista de alvos do tick pelo mesmo motivo: ele nunca foi
+   * cancelado nem tocado, só deixou de ser consultado enquanto a flag estava de pé.
+   *
+   * O motivo da pausa é PRESERVADO na linha (`pausa_motivo`) de propósito: apagar jogaria fora o
+   * "por quê" da última pausa. Quem quiser o histórico completo tem a trilha.
+   */
+  async retomarAdmissao(admissaoId: string, autorId?: string) {
+    const adm = await this.db.query.admissoes.findFirst({ where: eq(admissoes.id, admissaoId) });
+    if (!adm) throw new NotFoundException("Admissão não encontrada");
+    if (!adm.pausadaEm) throw new ConflictException("Esta admissão não está pausada.");
+
+    await this.db.transaction(async (tx) => {
+      await tx
+        .update(admissoes)
+        .set({ pausadaEm: null, pausadaPor: null, atualizadoEm: new Date() })
+        .where(eq(admissoes.id, admissaoId));
+
+      await tx.insert(candidatoAlteracoesLog).values({
+        campo: "pausa",
+        valorAnterior: "Admissão pausada",
+        valorNovo: "Admissão retomada",
+        admissaoId,
+        autorId: autorId ?? null,
+      });
+    });
+
+    return { admissaoId, pausada: false };
+  }
+
   /** A admissão tem o ASO registrado como ENTREGUE? (só status — §A.6). */
   private async temAso(admissaoId: string): Promise<boolean> {
     return (await this.asoEntregueSet([admissaoId])).has(admissaoId);
   }
 
-  /** Conjunto de admissões com ≥1 campo obrigatório vazio (S2/S3 — pendências da admissão).
-   * Admissão de banco: não cobra data de admissão, cobra o Termo de Banco (§A.3 / Fase 4). */
+  /**
+   * Conjunto de admissões com ≥1 campo obrigatório vazio (S2/S3). Delega para a FONTE ÚNICA
+   * (`regua/pendencias-lote`), que o Gerenciador também usa: era esta lógica morando só aqui, com o
+   * Gerenciador decidindo por SQL sobre o enum gravado, que fazia as duas telas divergirem.
+   */
   private async pendenciasSet(admissaoIds: string[]): Promise<Set<string>> {
-    if (admissaoIds.length === 0) return new Set();
-    const linhas = await this.db
-      .select({
-        id: admissoes.id,
-        codCliente: admissoes.codCliente,
-        cargoId: admissoes.cargoId,
-        dataAdmissao: admissoes.dataAdmissao,
-        tipoContrato: admissoes.tipoContrato,
-        isBanco: admissoes.isBanco,
-        salario: dadosVagaFolha.salario,
-        beneficios: dadosVagaFolha.beneficios,
-        escala: dadosVagaFolha.escala,
-        centroCusto: dadosVagaFolha.centroCusto,
-        gestorBp: dadosVagaFolha.gestorBp,
-      })
-      .from(admissoes)
-      .leftJoin(dadosVagaFolha, eq(dadosVagaFolha.admissaoId, admissoes.id))
-      .where(inArray(admissoes.id, admissaoIds));
-    const termoSet = await this.termoBancoEntregueSet(
-      linhas.filter((l) => l.isBanco).map((l) => l.id),
-    );
-    // Em lote: uma consulta para todas as linhas, não uma por linha.
-    const beneficioSet = await this.beneficiosEstruturadosSet(linhas.map((l) => l.id));
-    const set = new Set<string>();
-    for (const l of linhas) {
-      const pend = pendenciasObrigatorias({
-        codCliente: l.codCliente,
-        cargoId: l.cargoId,
-        dataAdmissao: l.dataAdmissao,
-        tipoContrato: l.tipoContrato,
-        vagaFolha: {
-          salario: l.salario,
-          beneficios: l.beneficios,
-          escala: l.escala,
-          centroCusto: l.centroCusto,
-          gestorBp: l.gestorBp,
-        },
-        isBanco: l.isBanco,
-        termoBancoEntregue: termoSet.has(l.id),
-        temBeneficioEstruturado: beneficioSet.has(l.id),
-      });
-      if (pend.length > 0) set.add(l.id);
-    }
-    return set;
+    return pendenciasObrigatoriasSet(this.db, admissaoIds);
   }
+
 
   /**
    * Item 4 (2C) — detalhe SOMENTE LEITURA de uma admissão para o modal de visualização rápida:
@@ -931,6 +1049,10 @@ export class EsteiraService {
         clicksignEnvelopeId: admissoes.clicksignEnvelopeId,
         contratoAssinadoDriveUrl: admissoes.contratoAssinadoDriveUrl,
         sinalizador: admissoes.sinalizadorPreenchimento,
+        // PAUSA (OST admissão pausada): o modal do olho mostra o estado e o motivo; os EVENTOS de
+        // pausa/retomada saem da mesma trilha de `alteracoes` que o modal já lista.
+        pausadaEm: admissoes.pausadaEm,
+        pausaMotivo: admissoes.pausaMotivo,
         // Observação livre deixada na LIBERAÇÃO (Bloco 3): o recado do consultor para quem tocar a
         // admissão adiante. Não confundir com `documentos_admissao.observacao` (motivo do veredito
         // por documento), que este mesmo detalhe também devolve, dentro de `documentos[]`.
@@ -941,6 +1063,8 @@ export class EsteiraService {
         candidatoEmail: candidatos.email,
         candidatoTelefone: candidatos.telefone,
         candidatoDataNascimento: candidatos.dataNascimento,
+        // Nome do banco vindo do formulário do Pandapé (OST do banco no modal do olho).
+        candidatoBanco: candidatos.banco,
         codCliente: admissoes.codCliente,
         clienteRazao: clientes.razaoSocial,
         clienteOperacao: clientes.nomeOperacao,
@@ -1056,12 +1180,13 @@ export class EsteiraService {
         beneficios: vaga?.beneficios,
         escala: vaga?.escala,
         centroCusto: vaga?.centroCusto,
+        setor: vaga?.setor,
         gestorBp: vaga?.gestorBp,
       },
       isBanco: adm.isBanco,
       termoBancoEntregue,
       temBeneficioEstruturado: (await this.beneficiosEstruturadosSet([admissaoId])).has(admissaoId),
-    });
+    }, await configDoCliente(this.db, adm.codCliente));
 
     // S3 — trilha de passagem (avanços com pendência), com autor.
     const passagensRows = await this.db
@@ -1103,6 +1228,10 @@ export class EsteiraService {
       // Motivo do declínio (Fase 2): só é usado na tela quando o farol é de declínio; null quando
       // a admissão não tem motivo vinculado (aparece como "não informado").
       motivoDeclinio: adm.motivoDeclinio,
+      // PAUSA (OST admissão pausada): estado e motivo na ficha. Os EVENTOS de pausa/retomada (quem,
+      // quando) vêm na mesma lista `alteracoes` que o modal já exibe, sem estrutura nova.
+      pausadaEm: adm.pausadaEm,
+      pausaMotivo: adm.pausaMotivo,
       isBanco: adm.isBanco,
       origem: adm.origem,
       drivePastaUrl: adm.drivePastaUrl,
@@ -1136,6 +1265,9 @@ export class EsteiraService {
         email: adm.candidatoEmail,
         telefone: adm.candidatoTelefone,
         dataNascimento: adm.candidatoDataNascimento,
+        // Informação a mais na ficha, não substituição: a auditoria do comprovante bancário pela IA
+        // (agência, conta, titularidade) segue exatamente como está.
+        banco: adm.candidatoBanco,
       },
       cliente: {
         codCliente: adm.codCliente,
@@ -1143,16 +1275,29 @@ export class EsteiraService {
         operacao: adm.clienteOperacao,
       },
       cargo: adm.cargoNome,
-      // BLOCO 2: salário/escala/endereço da folha (endereço = o da admissão, decisão do diretor).
+      // BLOCO 2: dados da folha (endereço = o da admissão, decisão do diretor).
+      //
+      // CENTRO DE CUSTO, DEPARTAMENTO e GESTOR BP entram aqui (OST dos três bugs do modal do olho).
+      // Eles JÁ estavam carregados: `vaga` é a linha inteira de `dados_vaga_folha`, e o próprio
+      // cálculo de pendências logo acima lê `centroCusto` e `gestorBp` dela. O que faltava era
+      // devolvê-los, então o dado existia no servidor e morria antes da resposta. O lápis do
+      // Gerenciador (`/admissoes/:id`) sempre os devolveu; era só este detalhe que não.
       vagaFolha: {
         salario: vaga?.salario ?? null,
         escala: vaga?.escala ?? null,
         endereco: vaga?.endereco ?? null,
+        centroCusto: vaga?.centroCusto ?? null,
+        departamento: vaga?.departamento ?? null,
+        setor: vaga?.setor ?? null,
+        gestorBp: vaga?.gestorBp ?? null,
       },
       // BLOCO 3: dados do exame coletados do agendamento (só leitura no olho). Null = não agendado.
       exame: agendamento
         ? {
             data: agendamento.data,
+            // MULTI-ENDEREÇO (OST Onda 2): a ficha mostra a LISTA. Os campos singulares abaixo são o
+            // histórico do agendamento de um endereço só e seguem para não quebrar leitura antiga.
+            enderecos: agendamento.enderecos,
             horario: agendamento.horario,
             nomeClinica: agendamento.nomeClinica,
             local: agendamento.local,
@@ -1260,7 +1405,7 @@ export class EsteiraService {
    * persiste o binário (regra 7 / §A.6): só metadados + staging efêmera (expurgada). Robusto: se a
    * I.A estiver indisponível, o ASO fica ANEXADO porém NÃO validado (gate segue travado até revalidar).
    */
-  async anexarAso(admissaoId: string, file?: Express.Multer.File) {
+  async anexarAso(admissaoId: string, file?: Express.Multer.File, user?: AuthUser) {
     if (!file) throw new BadRequestException("Arquivo ASO obrigatório (campo 'file')");
 
     const admissao = await this.db.query.admissoes.findFirst({
@@ -1332,7 +1477,67 @@ export class EsteiraService {
       iaStatus = "INDISPONIVEL";
     }
 
-    return { ok: true, aso: { nome, registradoEm }, asoValidado, iaStatus };
+    // TRANSIÇÃO PÓS-ASO (OST Onda 2, item 3): com o ASO anexado E VALIDADO pela I.A, a frente vai
+    // sozinha para APTO, conclui e abre o gate do Cadastro, tirando a admissão da espera.
+    //
+    // O GATILHO É O VEREDITO, NÃO O ANEXO, e isso é deliberado (decisão confirmada pelo diretor). O
+    // APTO sempre exigiu ASO anexado E validado pela I.A ("é a I.A que valida, não um flag manual"),
+    // e disparar no mero anexo contornaria esse controle: bastaria subir qualquer arquivo para
+    // concluir a frente. Na prática é o mesmo instante, porque a classificação acontece aqui mesmo,
+    // de forma síncrona. I.A indisponível ou veredito reprovado NÃO concluem: a frente fica onde
+    // está e o consultor reenvia.
+    const aptoAuto = asoValidado ? await this.concluirExamePorAso(admissaoId, user) : undefined;
+
+    return {
+      ok: true,
+      aso: { nome, registradoEm },
+      asoValidado,
+      iaStatus,
+      ...(aptoAuto ? { aptoAuto } : {}),
+    };
+  }
+
+  /**
+   * Conclui a frente EXAME em APTO por causa do ASO validado (OST Onda 2, transição pós-ASO).
+   *
+   * Só age quando a frente está num dos estados de espera; frente já concluída, CANCELADA ou ainda em
+   * A_AGENDAR não é tocada. Idempotente: repetir o anexo não gera evento novo nem desconclui nada.
+   * O gate do Cadastro continua sendo aberto por quem sempre abriu, o `recomputeFarolGlobal` e o
+   * nascimento lazy da frente, exatamente como no caminho manual.
+   */
+  private async concluirExamePorAso(
+    admissaoId: string,
+    user?: AuthUser,
+  ): Promise<{ de: string; para: string } | undefined> {
+    const [frente] = await this.db
+      .select({
+        id: frentesAdmissao.id,
+        status: frentesAdmissao.status,
+        concluida: frentesAdmissao.concluida,
+      })
+      .from(frentesAdmissao)
+      .where(and(eq(frentesAdmissao.admissaoId, admissaoId), eq(frentesAdmissao.tipo, "EXAME")));
+    if (!frente || frente.concluida) return undefined;
+    if (!["AGENDADO", "AGUARDANDO_ASO", "ASO_PENDENTE"].includes(frente.status)) return undefined;
+
+    const agora = new Date();
+    await this.db.transaction(async (tx) => {
+      await tx
+        .update(frentesAdmissao)
+        .set({ status: "APTO", concluida: true, dataConclusao: agora, atualizadoEm: agora })
+        .where(eq(frentesAdmissao.id, frente.id));
+      await tx.insert(frenteStatusEventos).values({
+        admissaoId,
+        frenteId: frente.id,
+        tipo: "EXAME",
+        deStatus: frente.status,
+        paraStatus: "APTO",
+        reversao: false,
+        autorId: user?.id ?? null,
+      });
+    });
+    await recomputeFarolGlobal(this.db, admissaoId);
+    return { de: frente.status, para: "APTO" };
   }
 
   // ── Modal de Gestão de Agendamento do Exame (aba EXAME) ──────────────────────
@@ -1343,48 +1548,189 @@ export class EsteiraService {
       .select()
       .from(exameAgendamento)
       .where(eq(exameAgendamento.admissaoId, admissaoId));
-    return row ?? null;
+    if (!row) return null;
+    return { ...row, enderecos: await this.enderecosDoAgendamento(row.id) };
+  }
+
+  /**
+   * Os endereços de UM agendamento, na ordem. É a FONTE DA VERDADE de clínica, endereço e horário
+   * desde o multi-endereço (OST Onda 2): as colunas equivalentes no pai são histórico e não são mais
+   * escritas.
+   */
+  private async enderecosDoAgendamento(agendamentoId: string) {
+    return this.db
+      .select({
+        id: exameAgendamentoEndereco.id,
+        ordem: exameAgendamentoEndereco.ordem,
+        clinicaId: exameAgendamentoEndereco.clinicaId,
+        nomeClinica: exameAgendamentoEndereco.nomeClinica,
+        local: exameAgendamentoEndereco.local,
+        horario: exameAgendamentoEndereco.horario,
+      })
+      .from(exameAgendamentoEndereco)
+      .where(eq(exameAgendamentoEndereco.agendamentoId, agendamentoId))
+      .orderBy(asc(exameAgendamentoEndereco.ordem));
+  }
+
+  /**
+   * Endereços de VÁRIOS agendamentos, em UMA consulta (fila do Exame e planilha da clínica). Uma
+   * consulta por linha da fila viraria N+1 na primeira página com 50 candidatos.
+   */
+  private async enderecosPorAgendamento(
+    agendamentoIds: string[],
+  ): Promise<Map<string, Array<{ ordem: number; nomeClinica: string | null; local: string | null; horario: string | null }>>> {
+    const mapa = new Map<string, Array<{ ordem: number; nomeClinica: string | null; local: string | null; horario: string | null }>>();
+    if (agendamentoIds.length === 0) return mapa;
+    const linhas = await this.db
+      .select({
+        agendamentoId: exameAgendamentoEndereco.agendamentoId,
+        ordem: exameAgendamentoEndereco.ordem,
+        nomeClinica: exameAgendamentoEndereco.nomeClinica,
+        local: exameAgendamentoEndereco.local,
+        horario: exameAgendamentoEndereco.horario,
+      })
+      .from(exameAgendamentoEndereco)
+      .where(inArray(exameAgendamentoEndereco.agendamentoId, agendamentoIds))
+      .orderBy(asc(exameAgendamentoEndereco.ordem));
+    for (const l of linhas) {
+      const lista = mapa.get(l.agendamentoId) ?? [];
+      lista.push({ ordem: l.ordem, nomeClinica: l.nomeClinica, local: l.local, horario: l.horario });
+      mapa.set(l.agendamentoId, lista);
+    }
+    return mapa;
   }
 
   /**
    * Cadastra (1ª vez) OU reagenda (já existe) o agendamento do exame. Reagendar OBRIGA atualizar os
    * dados e INCREMENTA o contador de reagendamentos (sub-status). Sem PII — só logística do exame.
    */
-  async salvarAgendamento(admissaoId: string, dto: AgendamentoExameDto) {
+  async salvarAgendamento(admissaoId: string, dto: AgendamentoExameDto, user?: AuthUser) {
     const admissao = await this.db.query.admissoes.findFirst({
       where: eq(admissoes.id, admissaoId),
     });
     if (!admissao) throw new NotFoundException("Admissão não encontrada");
 
+    // Resolve TODAS as clínicas de uma vez e grava o nome junto de cada endereço: se a clínica for
+    // inativada depois, o agendamento antigo continua dizendo qual era (OST das clínicas).
+    const ids = [...new Set(dto.enderecos.map((e) => e.clinicaId))];
+    const catalogo = await this.db
+      .select({ id: clinicasCatalogo.id, nome: clinicasCatalogo.nome })
+      .from(clinicasCatalogo)
+      .where(inArray(clinicasCatalogo.id, ids));
+    const nomePorId = new Map(catalogo.map((c) => [c.id, c.nome]));
+    for (const e of dto.enderecos) {
+      if (!nomePorId.has(e.clinicaId)) {
+        throw new NotFoundException("Clínica não encontrada no cadastro.");
+      }
+    }
+
     const existente = await this.obterAgendamento(admissaoId);
     const agora = new Date();
     const valores = {
       data: dto.data,
-      horario: dto.horario,
-      nomeClinica: dto.nomeClinica,
-      local: dto.local,
       fornecedor: dto.fornecedor,
-      // Novos (decisão do diretor): valor do exame e previsão do ASO. O modal manda o formulário
-      // inteiro, então vazio limpa (null); valor vem como número e é gravado com 2 casas.
       valor: dto.valor === undefined ? null : dto.valor.toFixed(2),
-      previsaoAso: dto.previsaoAso ?? null,
+      previsaoAso: dto.previsaoAso,
     };
 
-    if (!existente) {
-      const [row] = await this.db
-        .insert(exameAgendamento)
-        .values({ admissaoId, ...valores })
-        .returning();
-      return { ok: true, reagendou: false, agendamento: row };
+    // O PAI guarda o que é do agendamento inteiro (data, fornecedor, valor, previsão). Clínica,
+    // endereço e horário vivem na tabela FILHA, uma linha por endereço: é ela a fonte da verdade.
+    // As colunas antigas do pai não são mais escritas e ficam com o valor histórico.
+    const agendamentoId = await this.db.transaction(async (tx) => {
+      let id: string;
+      if (!existente) {
+        const [row] = await tx
+          .insert(exameAgendamento)
+          .values({ admissaoId, ...valores })
+          .returning({ id: exameAgendamento.id });
+        id = row.id;
+      } else {
+        await tx
+          .update(exameAgendamento)
+          .set({ ...valores, reagendamentos: existente.reagendamentos + 1, atualizadoEm: agora })
+          .where(eq(exameAgendamento.id, existente.id));
+        id = existente.id;
+      }
+      // SUBSTITUI a lista inteira: o modal manda o conjunto completo, então apagar e regravar é o
+      // que mantém ordem e remoções coerentes sem diff manual.
+      await tx
+        .delete(exameAgendamentoEndereco)
+        .where(eq(exameAgendamentoEndereco.agendamentoId, id));
+      await tx.insert(exameAgendamentoEndereco).values(
+        dto.enderecos.map((e, indice) => ({
+          agendamentoId: id,
+          ordem: indice + 1,
+          clinicaId: e.clinicaId,
+          nomeClinica: nomePorId.get(e.clinicaId) ?? null,
+          local: e.local,
+          horario: e.horario,
+        })),
+      );
+      return id;
+    });
+
+    const statusAuto = await this.marcarExameAgendado(admissaoId, user);
+    const agendamento = await this.obterAgendamento(admissaoId);
+    return {
+      ok: true,
+      reagendou: Boolean(existente),
+      agendamentoId,
+      agendamento,
+      ...(statusAuto ? { statusAuto } : {}),
+    };
+  }
+
+  /**
+   * AGENDAR É AUTOMÁTICO (OST Onda 2): salvar o agendamento move a frente EXAME para AGENDADO.
+   *
+   * Antes disto o consultor preenchia o modal e AINDA precisava trocar o status na mão. Duas coisas
+   * para o mesmo fato, e a fila mostrava "A Agendar" para quem já tinha exame marcado.
+   *
+   * O que NÃO é sobrescrito, de propósito:
+   *  - frente CONCLUÍDA (APTO): reagendar não desconclui exame que já terminou;
+   *  - CANCELADO: é decisão humana de encerrar, não pode ser desfeita por um salvamento;
+   *  - quem já está em AGENDADO: não gera evento repetido na trilha.
+   * Os dois status de espera do ASO (AGUARDANDO_ASO, ASO_PENDENTE) VOLTAM para AGENDADO, que é o
+   * ponto do reagendamento.
+   *
+   * Idempotente e silencioso: devolve `undefined` quando não havia o que mudar.
+   */
+  private async marcarExameAgendado(
+    admissaoId: string,
+    user?: AuthUser,
+  ): Promise<{ de: string; para: string } | undefined> {
+    const [frente] = await this.db
+      .select({
+        id: frentesAdmissao.id,
+        status: frentesAdmissao.status,
+        concluida: frentesAdmissao.concluida,
+      })
+      .from(frentesAdmissao)
+      .where(
+        and(eq(frentesAdmissao.admissaoId, admissaoId), eq(frentesAdmissao.tipo, "EXAME")),
+      );
+    if (!frente) return undefined;
+    if (frente.concluida || frente.status === "CANCELADO" || frente.status === "AGENDADO") {
+      return undefined;
     }
 
-    // Já existe → é reagendamento: incrementa o contador (independe da flag, o registro já existia).
-    const [row] = await this.db
-      .update(exameAgendamento)
-      .set({ ...valores, reagendamentos: existente.reagendamentos + 1, atualizadoEm: agora })
-      .where(eq(exameAgendamento.id, existente.id))
-      .returning();
-    return { ok: true, reagendou: true, agendamento: row };
+    const agora = new Date();
+    await this.db.transaction(async (tx) => {
+      await tx
+        .update(frentesAdmissao)
+        .set({ status: "AGENDADO", atualizadoEm: agora })
+        .where(eq(frentesAdmissao.id, frente.id));
+      await tx.insert(frenteStatusEventos).values({
+        admissaoId,
+        frenteId: frente.id,
+        tipo: "EXAME",
+        deStatus: frente.status,
+        paraStatus: "AGENDADO",
+        reversao: false,
+        autorId: user?.id ?? null,
+      });
+    });
+    return { de: frente.status, para: "AGENDADO" };
   }
 
   /**
@@ -1401,13 +1747,25 @@ export class EsteiraService {
    */
   private async camposAgendamentoFaltantes(admissaoId: string): Promise<string[]> {
     const ag = await this.obterAgendamento(admissaoId);
-    if (!ag) return ["data", "horário", "clínica", "local", "fornecedor"];
+    if (!ag) return ["data", "endereço do exame", "fornecedor"];
     const faltantes: string[] = [];
     if (!ag.data) faltantes.push("data");
-    if (!ag.horario) faltantes.push("horário");
-    if (!ag.nomeClinica) faltantes.push("clínica");
-    if (!ag.local) faltantes.push("local");
     if (!ag.fornecedor) faltantes.push("fornecedor");
+    // MULTI-ENDEREÇO (OST Onda 2): o gate passou a olhar a LISTA. Um agendamento sem nenhum endereço
+    // não está agendado; e endereço incompleto (sem clínica, sem local ou sem horário) é o mesmo
+    // buraco que o gate sempre cobriu, agora por linha.
+    if (ag.enderecos.length === 0) {
+      faltantes.push("endereço do exame");
+    } else {
+      const incompletos = ag.enderecos.filter((e) => !e.nomeClinica || !e.local || !e.horario);
+      if (incompletos.length > 0) {
+        faltantes.push(
+          incompletos.length === ag.enderecos.length
+            ? "clínica, local e horário dos endereços"
+            : `dados de ${incompletos.length} endereço(s)`,
+        );
+      }
+    }
     return faltantes;
   }
 
@@ -1438,8 +1796,12 @@ export class EsteiraService {
         cnpjCliente: clientes.cnpj,
         regiao: clientes.descricaoRegiao,
         regiaoCod: clientes.regiao,
-        setor: dadosVagaFolha.departamento,
+        // COLUNA SETOR da planilha da clínica: passa a vir do campo SETOR próprio (OST Onda 2,
+        // confirmado pelo diretor). Vinha de `departamento` porque o Setor não existia como campo;
+        // agora existe, e o Departamento NÃO entra na planilha (nunca teve coluna lá).
+        setor: dadosVagaFolha.setor,
         agendamentoData: exameAgendamento.data,
+        agendamentoId: exameAgendamento.id,
       })
       .from(admissoes)
       .innerJoin(candidatos, eq(admissoes.candidatoCpf, candidatos.cpf))
@@ -1469,6 +1831,9 @@ export class EsteiraService {
 
     // Preserva a ordem do input; ignora ids inexistentes silenciosamente.
     const linhas: LinhaRelatorioClinica[] = [];
+    const enderecosMapa = await this.enderecosPorAgendamento(
+      base.map((b) => b.agendamentoId).filter((id): id is string => Boolean(id)),
+    );
     for (const id of admissaoIds) {
       const b = porAdmissao.get(id);
       // `base` já innerJoina cliente/cargo, então uma pré-admissão (cod nulo) nem chega aqui; o guard
@@ -1477,7 +1842,7 @@ export class EsteiraService {
       const vw = viewMap.get(b.codCliente);
       // Estágio NÃO faz exame admissional → fora do relatório da clínica (§ decisão do diretor).
       if (vw?.tipo_servico === "ESTAGIO") continue;
-      linhas.push({
+      const base = {
         admissaoId: b.admissaoId,
         empresa: vw?.empresa_resolvida ?? "",
         cnpj: vw?.cnpj_resolvido ?? "",
@@ -1489,9 +1854,24 @@ export class EsteiraService {
         cargo: b.cargo,
         cpf: formatarCpf(b.cpf),
         dataNascimento: formatarData(b.dataNascimento),
-        agendamento: formatarData(b.agendamentoData),
         regiao: b.regiao ?? b.regiaoCod ?? "",
-      });
+      };
+      // UMA LINHA POR ENDEREÇO (OST Onda 2, decisão do diretor): três endereços viram três linhas,
+      // cada uma com a sua clínica, o seu endereço e o seu horário. Sem endereço nenhum (agendamento
+      // antigo ou ainda por marcar), sai UMA linha, como sempre saiu.
+      const doAgendamento = b.agendamentoId ? (enderecosMapa.get(b.agendamentoId) ?? []) : [];
+      if (doAgendamento.length === 0) {
+        linhas.push({ ...base, agendamento: formatarData(b.agendamentoData) });
+        continue;
+      }
+      for (const e of doAgendamento) {
+        linhas.push({
+          ...base,
+          agendamento: [formatarData(b.agendamentoData), e.horario].filter(Boolean).join(" "),
+          clinica: e.nomeClinica ?? "",
+          endereco: e.local ?? "",
+        });
+      }
     }
     return linhas;
   }
@@ -1524,6 +1904,8 @@ export class EsteiraService {
         l.cpf,
         l.dataNascimento,
         l.agendamento,
+        l.clinica ?? "",
+        l.endereco ?? "",
         l.regiao,
       ]
         .map(escaparCsv)
@@ -1548,13 +1930,27 @@ const COLUNAS_RELATORIO = [
   "CPF",
   "DATA DE NASCIMENTO",
   "AGENDAMENTO",
+  // Colunas novas do multi-endereço (OST Onda 2): com três endereços saem três linhas, e é aqui que
+  // a clínica e o endereço de CADA uma aparecem.
+  "CLÍNICA",
+  "ENDEREÇO",
   "REGIÃO",
 ] as const;
 
 /** Resumo do agendamento do exame exibido na fila EXAME. */
+interface EnderecoResumo {
+  ordem: number;
+  nomeClinica: string | null;
+  local: string | null;
+  horario: string | null;
+}
+
 interface AgendamentoResumo {
   admissaoId: string;
   data: string | null;
+  /** Endereços do dia, na ordem. FONTE DA VERDADE de clínica, endereço e horário. */
+  enderecos: EnderecoResumo[];
+  /** Legado do agendamento de um endereço só. Mantido para não quebrar leitura antiga. */
   horario: string | null;
   nomeClinica: string | null;
   local: string | null;
@@ -1578,6 +1974,9 @@ export interface LinhaRelatorioClinica {
   cpf: string;
   dataNascimento: string;
   agendamento: string;
+  /** Clínica e endereço DESTA linha (multi-endereço). Vazios no agendamento antigo, de um só. */
+  clinica?: string;
+  endereco?: string;
   regiao: string;
 }
 

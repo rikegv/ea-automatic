@@ -19,6 +19,7 @@ import type { AuthUser } from "../auth/auth.types";
 import { parseMulti } from "../common/parse-multi";
 import { AgendamentoExameDto } from "./dto/agendamento-exame.dto";
 import { DeclinarDto } from "./dto/declinar.dto";
+import { PausarDto } from "./dto/pausar.dto";
 import { PatchStatusDto } from "./dto/patch-status.dto";
 import { RelatorioClinicaDto } from "./dto/relatorio-clinica.dto";
 import { EsteiraService } from "./esteira.service";
@@ -52,6 +53,25 @@ export class EsteiraController {
     return this.esteira.declinarAdmissao(admissaoId, dto.motivoDeclinioId, user.id);
   }
 
+  /**
+   * PAUSA a admissão (OST admissão pausada). Operacional como o declínio: QUALQUER consultor pausa,
+   * não é ação restrita. Sai da fila e dos automáticos; a auditoria continua.
+   */
+  @Patch("admissao/:admissaoId/pausar")
+  pausar(
+    @Param("admissaoId") admissaoId: string,
+    @Body() dto: PausarDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.esteira.pausarAdmissao(admissaoId, dto.motivo, user.id);
+  }
+
+  /** RETOMA a admissão pausada. Volta exatamente de onde parou (a pausa não alterou nada). */
+  @Patch("admissao/:admissaoId/retomar")
+  retomar(@Param("admissaoId") admissaoId: string, @CurrentUser() user: AuthUser) {
+    return this.esteira.retomarAdmissao(admissaoId, user.id);
+  }
+
   /** Fila de uma frente com KPIs e catálogo de status (F7/F8). */
   @Get(":frente")
   listar(
@@ -61,6 +81,7 @@ export class EsteiraController {
     @Query("from") from?: string,
     @Query("to") to?: string,
     @Query("q") q?: string,
+    @Query("pausadas") pausadas?: string,
   ) {
     return this.esteira.listar(frente, {
       codCliente: parseMulti(codCliente),
@@ -68,6 +89,8 @@ export class EsteiraController {
       from,
       to,
       q,
+      // Card "Pausadas" clicável (§A.12): "1"/"true" liga o filtro que mostra SÓ as pausadas.
+      pausadas: pausadas === "1" || pausadas === "true",
     });
   }
 
@@ -108,8 +131,13 @@ export class EsteiraController {
   /** Anexa o ASO do exame (só metadados — o binário não é persistido; §A.6). */
   @Post("exame/:admissaoId/aso")
   @UseInterceptors(FileInterceptor("file"))
-  anexarAso(@Param("admissaoId") admissaoId: string, @UploadedFile() file: Express.Multer.File) {
-    return this.esteira.anexarAso(admissaoId, file);
+  anexarAso(
+    @Param("admissaoId") admissaoId: string,
+    @UploadedFile() file: Express.Multer.File,
+    @CurrentUser() user: AuthUser,
+  ) {
+    // `user` é o autor do evento quando o ASO validado conclui a frente em APTO (transição pós-ASO).
+    return this.esteira.anexarAso(admissaoId, file, user);
   }
 
   /** Agendamento do exame (modal) — devolve o registro atual ou null. */
@@ -120,7 +148,13 @@ export class EsteiraController {
 
   /** Cadastra ou reagenda o agendamento do exame (modal da aba EXAME). */
   @Put("exame/:admissaoId/agendamento")
-  salvarAgendamento(@Param("admissaoId") admissaoId: string, @Body() dto: AgendamentoExameDto) {
-    return this.esteira.salvarAgendamento(admissaoId, dto);
+  salvarAgendamento(
+    @Param("admissaoId") admissaoId: string,
+    @Body() dto: AgendamentoExameDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    // `user` alimenta o autor do evento de status: salvar o agendamento agora move a frente para
+    // AGENDADO automaticamente (OST Onda 2), e toda transição de frente tem autor na trilha.
+    return this.esteira.salvarAgendamento(admissaoId, dto, user);
   }
 }
