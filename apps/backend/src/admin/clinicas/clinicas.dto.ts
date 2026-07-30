@@ -10,6 +10,17 @@ export class CreateClinicaDto {
   @MinLength(1)
   @MaxLength(200)
   nome!: string;
+
+  /**
+   * FORNECEDOR da clínica (OST do fornecedor por clínica). Texto livre de propósito: era um enum de
+   * dois valores e o ponto da mudança é poder cadastrar fornecedor novo sem migração de banco.
+   * Obrigatório na criação: o agendamento DERIVA o fornecedor daqui, e clínica sem ele deixaria o
+   * agendamento sem fornecedor nenhum.
+   */
+  @IsString()
+  @MinLength(1)
+  @MaxLength(60)
+  fornecedor!: string;
 }
 
 export class UpdateClinicaDto {
@@ -18,6 +29,12 @@ export class UpdateClinicaDto {
   @MinLength(1)
   @MaxLength(200)
   nome?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(60)
+  fornecedor?: string;
 
   @IsOptional()
   @IsBoolean()

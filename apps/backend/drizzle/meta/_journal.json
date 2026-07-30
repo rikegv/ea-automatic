@@ -372,6 +372,13 @@
       "when": 1785354922632,
       "tag": "0052_woozy_apocalypse",
       "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1785376029199,
+      "tag": "0053_light_bill_hollister",
+      "breakpoints": true
     }
   ]
 }

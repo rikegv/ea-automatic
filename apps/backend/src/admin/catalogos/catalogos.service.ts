@@ -205,7 +205,11 @@ export class CatalogosService {
    */
   listClinicas() {
     return this.db
-      .select({ id: clinicasCatalogo.id, nome: clinicasCatalogo.nome })
+      .select({
+        id: clinicasCatalogo.id,
+        nome: clinicasCatalogo.nome,
+        fornecedor: clinicasCatalogo.fornecedor,
+      })
       .from(clinicasCatalogo)
       .where(eq(clinicasCatalogo.ativo, true))
       .orderBy(asc(clinicasCatalogo.nome));

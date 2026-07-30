@@ -1566,6 +1566,7 @@ export class EsteiraService {
         nomeClinica: exameAgendamentoEndereco.nomeClinica,
         local: exameAgendamentoEndereco.local,
         horario: exameAgendamentoEndereco.horario,
+        fornecedor: exameAgendamentoEndereco.fornecedor,
       })
       .from(exameAgendamentoEndereco)
       .where(eq(exameAgendamentoEndereco.agendamentoId, agendamentoId))
@@ -1578,8 +1579,8 @@ export class EsteiraService {
    */
   private async enderecosPorAgendamento(
     agendamentoIds: string[],
-  ): Promise<Map<string, Array<{ ordem: number; nomeClinica: string | null; local: string | null; horario: string | null }>>> {
-    const mapa = new Map<string, Array<{ ordem: number; nomeClinica: string | null; local: string | null; horario: string | null }>>();
+  ): Promise<Map<string, EnderecoResumo[]>> {
+    const mapa = new Map<string, EnderecoResumo[]>();
     if (agendamentoIds.length === 0) return mapa;
     const linhas = await this.db
       .select({
@@ -1588,13 +1589,20 @@ export class EsteiraService {
         nomeClinica: exameAgendamentoEndereco.nomeClinica,
         local: exameAgendamentoEndereco.local,
         horario: exameAgendamentoEndereco.horario,
+        fornecedor: exameAgendamentoEndereco.fornecedor,
       })
       .from(exameAgendamentoEndereco)
       .where(inArray(exameAgendamentoEndereco.agendamentoId, agendamentoIds))
       .orderBy(asc(exameAgendamentoEndereco.ordem));
     for (const l of linhas) {
       const lista = mapa.get(l.agendamentoId) ?? [];
-      lista.push({ ordem: l.ordem, nomeClinica: l.nomeClinica, local: l.local, horario: l.horario });
+      lista.push({
+        ordem: l.ordem,
+        nomeClinica: l.nomeClinica,
+        local: l.local,
+        horario: l.horario,
+        fornecedor: l.fornecedor,
+      });
       mapa.set(l.agendamentoId, lista);
     }
     return mapa;
@@ -1614,12 +1622,16 @@ export class EsteiraService {
     // inativada depois, o agendamento antigo continua dizendo qual era (OST das clínicas).
     const ids = [...new Set(dto.enderecos.map((e) => e.clinicaId))];
     const catalogo = await this.db
-      .select({ id: clinicasCatalogo.id, nome: clinicasCatalogo.nome })
+      .select({
+        id: clinicasCatalogo.id,
+        nome: clinicasCatalogo.nome,
+        fornecedor: clinicasCatalogo.fornecedor,
+      })
       .from(clinicasCatalogo)
       .where(inArray(clinicasCatalogo.id, ids));
-    const nomePorId = new Map(catalogo.map((c) => [c.id, c.nome]));
+    const porId = new Map(catalogo.map((c) => [c.id, c]));
     for (const e of dto.enderecos) {
-      if (!nomePorId.has(e.clinicaId)) {
+      if (!porId.has(e.clinicaId)) {
         throw new NotFoundException("Clínica não encontrada no cadastro.");
       }
     }
@@ -1628,7 +1640,6 @@ export class EsteiraService {
     const agora = new Date();
     const valores = {
       data: dto.data,
-      fornecedor: dto.fornecedor,
       valor: dto.valor === undefined ? null : dto.valor.toFixed(2),
       previsaoAso: dto.previsaoAso,
     };
@@ -1661,7 +1672,11 @@ export class EsteiraService {
           agendamentoId: id,
           ordem: indice + 1,
           clinicaId: e.clinicaId,
-          nomeClinica: nomePorId.get(e.clinicaId) ?? null,
+          nomeClinica: porId.get(e.clinicaId)?.nome ?? null,
+          // FORNECEDOR DERIVADO da clínica deste endereço (OST do fornecedor por clínica), copiado
+          // aqui pelo mesmo motivo do nome: se a clínica trocar de fornecedor depois, o agendamento
+          // antigo continua dizendo com quem foi feito.
+          fornecedor: porId.get(e.clinicaId)?.fornecedor ?? null,
           local: e.local,
           horario: e.horario,
         })),
@@ -1747,21 +1762,24 @@ export class EsteiraService {
    */
   private async camposAgendamentoFaltantes(admissaoId: string): Promise<string[]> {
     const ag = await this.obterAgendamento(admissaoId);
-    if (!ag) return ["data", "endereço do exame", "fornecedor"];
+    if (!ag) return ["data", "endereço do exame"];
     const faltantes: string[] = [];
     if (!ag.data) faltantes.push("data");
-    if (!ag.fornecedor) faltantes.push("fornecedor");
     // MULTI-ENDEREÇO (OST Onda 2): o gate passou a olhar a LISTA. Um agendamento sem nenhum endereço
     // não está agendado; e endereço incompleto (sem clínica, sem local ou sem horário) é o mesmo
     // buraco que o gate sempre cobriu, agora por linha.
     if (ag.enderecos.length === 0) {
       faltantes.push("endereço do exame");
     } else {
-      const incompletos = ag.enderecos.filter((e) => !e.nomeClinica || !e.local || !e.horario);
+      // O FORNECEDOR entra aqui, e não mais como campo do pai: ele vem da clínica, então endereço com
+      // clínica sem fornecedor cadastrado é endereço incompleto.
+      const incompletos = ag.enderecos.filter(
+        (e) => !e.nomeClinica || !e.local || !e.horario || !e.fornecedor,
+      );
       if (incompletos.length > 0) {
         faltantes.push(
           incompletos.length === ag.enderecos.length
-            ? "clínica, local e horário dos endereços"
+            ? "clínica, local, horário e fornecedor dos endereços"
             : `dados de ${incompletos.length} endereço(s)`,
         );
       }
@@ -1870,6 +1888,7 @@ export class EsteiraService {
           agendamento: [formatarData(b.agendamentoData), e.horario].filter(Boolean).join(" "),
           clinica: e.nomeClinica ?? "",
           endereco: e.local ?? "",
+          fornecedor: e.fornecedor ?? "",
         });
       }
     }
@@ -1906,6 +1925,7 @@ export class EsteiraService {
         l.agendamento,
         l.clinica ?? "",
         l.endereco ?? "",
+        l.fornecedor ?? "",
         l.regiao,
       ]
         .map(escaparCsv)
@@ -1934,6 +1954,7 @@ const COLUNAS_RELATORIO = [
   // a clínica e o endereço de CADA uma aparecem.
   "CLÍNICA",
   "ENDEREÇO",
+  "FORNECEDOR",
   "REGIÃO",
 ] as const;
 
@@ -1943,6 +1964,8 @@ interface EnderecoResumo {
   nomeClinica: string | null;
   local: string | null;
   horario: string | null;
+  /** Fornecedor DESTE endereço, derivado da clínica dele. */
+  fornecedor: string | null;
 }
 
 interface AgendamentoResumo {
@@ -1974,9 +1997,10 @@ export interface LinhaRelatorioClinica {
   cpf: string;
   dataNascimento: string;
   agendamento: string;
-  /** Clínica e endereço DESTA linha (multi-endereço). Vazios no agendamento antigo, de um só. */
+  /** Clínica, endereço e fornecedor DESTA linha (multi-endereço). Vazios no agendamento antigo. */
   clinica?: string;
   endereco?: string;
+  fornecedor?: string;
   regiao: string;
 }
 

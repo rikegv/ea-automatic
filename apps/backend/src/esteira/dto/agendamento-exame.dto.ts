@@ -5,7 +5,6 @@ import {
   IsArray,
   IsBoolean,
   IsDateString,
-  IsIn,
   IsNumber,
   IsOptional,
   IsString,
@@ -17,8 +16,8 @@ import {
 } from "class-validator";
 // ValidarAsoDto removido: a validação do ASO é feita pela I.A na leitura do documento (não manual).
 
-/** Fornecedor do exame — seleção FIXA (§ modal de agendamento). */
-export const FORNECEDORES_EXAME = ["MEDICAL", "LIMER"] as const;
+// A constante `FORNECEDORES_EXAME` (lista fixa MEDICAL/LIMER) SAIU com o enum: fornecedor agora é
+// cadastrado na clínica e derivado dela, sem lista fechada no código.
 
 /**
  * Dados que o consultor lança no modal de Gestão de Agendamento do Exame (aba EXAME). A clínica/
@@ -64,8 +63,9 @@ export class AgendamentoExameDto {
   @Type(() => EnderecoExameDto)
   enderecos!: EnderecoExameDto[];
 
-  @IsIn(FORNECEDORES_EXAME)
-  fornecedor!: (typeof FORNECEDORES_EXAME)[number];
+  // FORNECEDOR SAIU DAQUI (OST do fornecedor por clínica): ele é atributo da CLÍNICA e passou a ser
+  // DERIVADO, por endereço, da clínica escolhida. A tela não pergunta mais, e o payload não o traz:
+  // aceitar um fornecedor do cliente permitiria contradizer o cadastro da clínica.
 
   // Valor do exame (novo — decisão do diretor). Opcional: o time preenche quando souber. Aceita
   // "500,00" e "500.00" (front pt-BR), mesma regra dos benefícios. Zero é válido (gratuito).

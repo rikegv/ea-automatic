@@ -13,7 +13,8 @@ import {
 
 /**
  * GATES DO EXAME (OST 3 furos) — as duas regras mais duras da frente, antes sem rede:
- *   (a) AGENDADO exige o agendamento COMPLETO (data, horário, clínica, local, fornecedor).
+ *   (a) AGENDADO exige o agendamento COMPLETO (data e, por endereço, clínica, local, horário e o
+ *       fornecedor que vem da clínica).
  *   (b) APTO exige ASO anexado E validado pela I.A; COMUM trava, MASTER/SUPER_ADMIN liberam com
  *       confirmação explícita, gerando NC-2 + termo.
  *
@@ -182,6 +183,8 @@ const ENDERECO_COMPLETO = {
   nomeClinica: "Clínica Medical",
   local: "Av. Paulista, 1000",
   horario: "09:00",
+  // FORNECEDOR vem da CLÍNICA e é copiado no endereço (OST do fornecedor por clínica). Saiu do pai.
+  fornecedor: "MEDICAL",
 };
 
 const AGENDAMENTO_COMPLETO = {
@@ -197,7 +200,7 @@ const AGENDAMENTO_COMPLETO = {
 };
 
 describe("Gate (a): AGENDADO exige o agendamento completo", () => {
-  it("trava quando NÃO existe agendamento, listando os 5 campos", async () => {
+  it("trava quando NÃO existe agendamento, listando o que falta", async () => {
     const { svc } = montar({ agendamento: null });
     const err = await capturar(
       svc.mudarStatus(FRENTE_ID, { status: "AGENDADO" } as never, user("COMUM")),
@@ -205,16 +208,15 @@ describe("Gate (a): AGENDADO exige o agendamento completo", () => {
     expect(err?.reason).toBe("exameSemAgendamento");
     expect(err?.needsConfirmation).toBe(false);
     expect(err?.message).toContain("data");
-    expect(err?.message).toContain("fornecedor");
+    // Sem agendamento nenhum, o que falta é a data e o ENDEREÇO. O fornecedor não é mais campo do
+    // agendamento: ele vem da clínica escolhida em cada endereço.
+    expect(err?.message).toContain("endereço do exame");
   });
 
   it("FURO 1: trava com agendamento INCOMPLETO (só data), dizendo o que falta", async () => {
     // Este é o furo: a linha existe com data, mas sem os demais campos (gravada fora do modal, que
     // exige tudo). Antes o guard só olhava a data e deixava passar.
-    const { svc } = montar({
-      agendamento: { ...AGENDAMENTO_COMPLETO, fornecedor: null },
-      enderecos: [],
-    });
+    const { svc } = montar({ agendamento: AGENDAMENTO_COMPLETO, enderecos: [] });
     const err = await capturar(
       svc.mudarStatus(FRENTE_ID, { status: "AGENDADO" } as never, user("COMUM")),
     );
@@ -223,21 +225,22 @@ describe("Gate (a): AGENDADO exige o agendamento completo", () => {
     // Com o multi-endereço, "sem clínica/local/horário" virou "sem ENDEREÇO": eles moram na tabela
     // filha, e um agendamento sem nenhuma linha filha não está agendado.
     expect(msg).toContain("endereço do exame");
-    expect(msg).toContain("fornecedor");
     // A data está preenchida: não pode ser cobrada.
     expect(msg).not.toContain("Falta preencher: data");
   });
 
-  it("trava quando falta UM só campo (fornecedor)", async () => {
+  it("trava quando o endereço está sem FORNECEDOR (clínica sem fornecedor cadastrado)", async () => {
+    // O fornecedor deixou de ser campo do pai: ele vem da clínica. Clínica sem fornecedor cadastrado
+    // produz endereço incompleto, e o gate cobra.
     const { svc } = montar({
-      agendamento: { ...AGENDAMENTO_COMPLETO, fornecedor: null },
-      enderecos: [ENDERECO_COMPLETO],
+      agendamento: AGENDAMENTO_COMPLETO,
+      enderecos: [{ ...ENDERECO_COMPLETO, fornecedor: null }],
     });
     const err = await capturar(
       svc.mudarStatus(FRENTE_ID, { status: "AGENDADO" } as never, user("COMUM")),
     );
     expect(err?.reason).toBe("exameSemAgendamento");
-    expect(String(err?.message)).toContain("fornecedor");
+    expect(String(err?.message)).toContain("endereço");
   });
 
   it("caminho feliz: com os 5 campos PASSA (previsão do ASO e valor são opcionais)", async () => {

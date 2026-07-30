@@ -11,16 +11,9 @@ import { Pill } from "@/components/ui/Pill";
 import { cn } from "@/lib/cn";
 import { caixaAlta } from "@/lib/nome";
 
-// Fornecedor do exame, seleção FIXA (espelha FORNECEDORES_EXAME do backend).
-type Fornecedor = "MEDICAL" | "LIMER";
-const FORNECEDOR_OPCOES: { value: Fornecedor; label: string }[] = [
-  { value: "MEDICAL", label: "Medical" },
-  { value: "LIMER", label: "Limer" },
-];
-const FORNECEDOR_ROTULO: Record<Fornecedor, string> = {
-  MEDICAL: "Medical",
-  LIMER: "Limer",
-};
+// A lista FIXA de fornecedores saiu (OST do fornecedor por clínica): ele é cadastrado na clínica e
+// vem dela, por endereço, como TEXTO. O campo do agendamento antigo (do pai) segue sendo exibido em
+// `atual.fornecedor` para o registro anterior à mudança continuar legível.
 
 /** Registro devolvido pelo GET /esteira/exame/{id}/agendamento (ou null). */
 interface AgendamentoRow {
@@ -30,7 +23,8 @@ interface AgendamentoRow {
   /** Clínica escolhida no catálogo (OST Onda 2, item 4). */
   clinicaId?: string | null;
   local: string | null;
-  fornecedor: Fornecedor | null;
+  /** Fornecedor do agendamento ANTIGO (histórico). O atual vem por endereço. */
+  fornecedor: string | null;
   valor: string | null; // decimal "500.00"
   previsaoAso: string | null; // YYYY-MM-DD
   reagendamentos: number;
@@ -41,6 +35,7 @@ interface AgendamentoRow {
     nomeClinica: string | null;
     local: string | null;
     horario: string | null;
+    fornecedor: string | null;
   }[];
 }
 
@@ -93,8 +88,7 @@ export function AgendamentoExameModal({
   const [enderecos, setEnderecos] = useState<EnderecoForm[]>([
     { clinicaId: "", local: "", horario: "" },
   ]);
-  const [clinicas, setClinicas] = useState<{ id: string; nome: string }[]>([]);
-  const [fornecedor, setFornecedor] = useState<Fornecedor | "">("");
+  const [clinicas, setClinicas] = useState<{ id: string; nome: string; fornecedor: string | null }[]>([]);
   // Novos (decisão do diretor): valor do exame e previsão do ASO (informada pela clínica). Opcionais.
   const [valor, setValor] = useState("");
   const [previsaoAso, setPrevisaoAso] = useState("");
@@ -107,7 +101,9 @@ export function AgendamentoExameModal({
   useEffect(() => {
     if (!token) return;
     let vivo = true;
-    apiFetch<{ id: string; nome: string }[]>("/catalogos/clinicas", { token })
+    apiFetch<{ id: string; nome: string; fornecedor: string | null }[]>("/catalogos/clinicas", {
+      token,
+    })
       .then((lista) => {
         if (vivo) setClinicas(lista);
       })
@@ -146,7 +142,6 @@ export function AgendamentoExameModal({
                   },
                 ],
           );
-          setFornecedor(row.fornecedor ?? "");
           setValor(row.valor ?? "");
           setPrevisaoAso(row.previsaoAso ?? "");
           setEditing(false);
@@ -177,11 +172,10 @@ export function AgendamentoExameModal({
     enderecos.every(
       (e) => e.clinicaId !== "" && e.local.trim() !== "" && e.horario.trim() !== "",
     ) &&
-    fornecedor !== "" &&
     previsaoAso.trim() !== "";
 
   async function salvar() {
-    if (!completo) return; // `completo` garante fornecedor !== "" (narrowing por alias)
+    if (!completo) return;
     setSaving(true);
     setSaveError(null);
     try {
@@ -195,7 +189,6 @@ export function AgendamentoExameModal({
             local: e.local.trim(),
             horario: e.horario,
           })),
-          fornecedor,
           valor: valor.trim() || undefined,
           previsaoAso,
           reagendar: temAgendamento ? true : undefined,
@@ -248,6 +241,7 @@ export function AgendamentoExameModal({
                     >
                       <div className="text-[11px] uppercase tracking-wide text-faint">
                         Endereço {e.ordem} · {e.horario || "sem horário"}
+                        {e.fornecedor ? ` · ${e.fornecedor}` : ""}
                       </div>
                       <div className="text-[13.5px] text-text">
                         {e.nomeClinica || "não informado"}
@@ -267,7 +261,7 @@ export function AgendamentoExameModal({
               )}
               <Campo
                 rotulo="Fornecedor"
-                valor={atual?.fornecedor ? FORNECEDOR_ROTULO[atual.fornecedor] : "não informado"}
+                valor={atual?.fornecedor || "não informado"}
               />
               <div className="grid grid-cols-2 gap-3">
                 <Campo rotulo="Valor do exame" valor={fmtValor(atual?.valor)} />
@@ -392,18 +386,8 @@ export function AgendamentoExameModal({
                 ))}
               </div>
 
-              <div>
-                <span className="ds-label">
-                  Fornecedor <span className="text-danger">*</span>
-                </span>
-                <Select
-                  ariaLabel="Fornecedor do exame"
-                  value={fornecedor}
-                  onChange={(v) => setFornecedor(v as Fornecedor)}
-                  placeholder="Selecionar fornecedor…"
-                  options={FORNECEDOR_OPCOES}
-                />
-              </div>
+              {/* O SELETOR DE FORNECEDOR SAIU (OST do fornecedor por clínica): ele é atributo da
+                  CLÍNICA e vem dela, por endereço. Cada bloco de endereço acima mostra qual é. */}
               {/* Novos (opcionais): valor do exame e previsão do ASO informada pela clínica. */}
               <div className="grid grid-cols-2 gap-3">
                 <div>

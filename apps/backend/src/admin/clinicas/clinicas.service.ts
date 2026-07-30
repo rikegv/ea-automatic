@@ -42,7 +42,10 @@ export class ClinicasService {
           : "Já existe uma clínica inativa com esse nome. Reative em vez de criar outra.",
       );
     }
-    const [row] = await this.db.insert(clinicasCatalogo).values({ nome }).returning();
+    const [row] = await this.db
+      .insert(clinicasCatalogo)
+      .values({ nome, fornecedor: dto.fornecedor.trim() })
+      .returning();
     return row;
   }
 
@@ -59,7 +62,11 @@ export class ClinicasService {
     }
     const [row] = await this.db
       .update(clinicasCatalogo)
-      .set({ ...(nome !== undefined ? { nome } : {}), ...(dto.ativo !== undefined ? { ativo: dto.ativo } : {}) })
+      .set({
+        ...(nome !== undefined ? { nome } : {}),
+        ...(dto.fornecedor !== undefined ? { fornecedor: dto.fornecedor.trim() } : {}),
+        ...(dto.ativo !== undefined ? { ativo: dto.ativo } : {}),
+      })
       .where(eq(clinicasCatalogo.id, id))
       .returning();
     if (!row) throw new NotFoundException("Clínica não encontrada");

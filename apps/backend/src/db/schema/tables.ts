@@ -22,7 +22,6 @@ import {
   estadoDocumentoEnum,
   exigenciaEnum,
   farolGlobalEnum,
-  fornecedorExameEnum,
   frenteTipoEnum,
   ncLiberacaoEnum,
   ncStatusEnum,
@@ -257,6 +256,16 @@ export const beneficiosCatalogo = pgTable("beneficios_catalogo", {
 export const clinicasCatalogo = pgTable("clinicas_catalogo", {
   id: uuid("id").defaultRandom().primaryKey(),
   nome: varchar("nome", { length: 200 }).notNull().unique(),
+  /**
+   * FORNECEDOR da clínica (OST do fornecedor por clínica). Os dados reais mostraram que a relação é
+   * um-para-um: cada clínica sempre aparece com o MESMO fornecedor, e as menores são credenciadas da
+   * rede MEDICAL. Então o fornecedor é atributo da CLÍNICA, não do agendamento, e o agendamento
+   * deixou de perguntar: ele deriva daqui.
+   *
+   * Coluna de TEXTO, não enum: o enum `fornecedor_exame` era rígido por definição, e o ponto desta
+   * OST é justamente poder cadastrar fornecedor novo sem migração.
+   */
+  fornecedor: varchar("fornecedor", { length: 60 }),
   ativo: boolean("ativo").notNull().default(true),
   criadoEm,
 });
@@ -536,7 +545,12 @@ export const exameAgendamento = pgTable("exame_agendamento", {
   // clínica, com o nome em texto acima preservando o que foi escolhido na época.
   clinicaId: uuid("clinica_id").references(() => clinicasCatalogo.id, { onDelete: "set null" }),
   local: text("local"),
-  fornecedor: fornecedorExameEnum("fornecedor"),
+  /**
+   * HISTÓRICO. Saiu do enum `fornecedor_exame` para texto (OST do fornecedor por clínica) e deixou de
+   * ser escrito: o fornecedor agora é POR ENDEREÇO, derivado da clínica de cada um. A coluna fica com
+   * o valor do agendamento de antes da migração.
+   */
+  fornecedor: varchar("fornecedor", { length: 60 }),
   // Valor do exame (o exame é tratado no agendamento — decisão do diretor). numeric(10,2); nulo até
   // o time preencher. Não é PII (logística/custo do exame).
   valor: numeric("valor", { precision: 10, scale: 2 }),
@@ -583,6 +597,12 @@ export const exameAgendamentoEndereco = pgTable(
     local: text("local"),
     /** Horário PRÓPRIO deste endereço, "HH:MM". É o que a regra do atraso compara. */
     horario: varchar("horario", { length: 5 }),
+    /**
+     * Fornecedor DESTE endereço, copiado da clínica no momento do agendamento. Denormalizado pelo
+     * mesmo motivo do `nome_clinica`: se a clínica mudar de fornecedor depois, o agendamento antigo
+     * continua dizendo com quem foi feito.
+     */
+    fornecedor: varchar("fornecedor", { length: 60 }),
     criadoEm,
   },
   (t) => ({ uniqOrdem: unique("uq_agendamento_endereco_ordem").on(t.agendamentoId, t.ordem) }),

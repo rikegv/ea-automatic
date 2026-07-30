@@ -44,7 +44,10 @@ export const origemEnum = pgEnum("origem", ["MANUAL", "PANDAPE"]);
 export const sexoEnum = pgEnum("sexo", ["MASCULINO", "FEMININO"]);
 
 /** Fornecedor do exame admissional (seleção FIXA no modal de agendamento da aba EXAME). */
-export const fornecedorExameEnum = pgEnum("fornecedor_exame", ["MEDICAL", "LIMER"]);
+// O enum `fornecedor_exame` SAIU (OST do fornecedor por clínica): o fornecedor virou coluna de texto
+// na clínica e no endereço do agendamento, para poder ser cadastrado sem migração. O TIPO continua
+// dropado na migração 0053, porque nenhuma coluna o usa mais e tipo órfão só confunde quem lê o
+// schema depois.
 
 /** Exigência de um documento na régua (cliente + cargo). */
 export const exigenciaEnum = pgEnum("exigencia_documento", [
