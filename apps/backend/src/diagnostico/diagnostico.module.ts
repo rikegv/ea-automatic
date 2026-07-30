@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { AuditoriaModule } from "../auditoria/auditoria.module";
 import { ClicksignModule } from "../clicksign/clicksign.module";
+import { EsteiraModule } from "../esteira/esteira.module";
 import { PandapeModule } from "../pandape/pandape.module";
 import { PandapeQueueModule } from "../pandape/pandape-queue.module";
 import { ReauditoriaModule } from "../reauditoria/reauditoria.module";
@@ -18,6 +19,8 @@ import { DiagnosticoService } from "./diagnostico.service";
   imports: [
     AuditoriaModule,
     ClicksignModule,
+    // Traz o ExameSchedulerService (verificador de status do Exame), mesmo papel do VtColetaModule.
+    EsteiraModule,
     PandapeModule,
     PandapeQueueModule,
     ReauditoriaModule,

@@ -83,6 +83,20 @@ interface Snapshot {
   vtColeta?: EstadoSchedulerVtColeta;
   // Estado do scheduler da assinatura Clicksign. Opcional para compatibilidade.
   clicksign?: EstadoSchedulerClicksign;
+  /** Verificador de status do Exame (OST Onda 2). */
+  exame?: {
+    ligado: boolean;
+    parado: boolean;
+    ultimoCicloEm: string | null;
+    ultimoCicloOkEm: string | null;
+    varridas: number;
+    aguardando: number;
+    pendentes: number;
+    falhas: number;
+    nota: string | null;
+    totalAguardando: number;
+    totalPendentes: number;
+  };
   alerta: { aceso: boolean; total: number; motivos: string[] };
 }
 
@@ -206,6 +220,28 @@ export default function DiagnosticoPage() {
       setAviso(null);
       try {
         const r = await apiFetch<Record<string, unknown>>(`/diagnostico/clicksign/${rota}`, {
+          method: "POST",
+          token,
+          body,
+        });
+        setAviso(`${rotulo}: ${JSON.stringify(r)}`);
+        await carregar();
+      } catch (e) {
+        setAviso(e instanceof ApiError ? e.message : "Falha na ação.");
+      } finally {
+        setAcaoEmVoo(null);
+      }
+    },
+    [token, carregar],
+  );
+
+  // Controle do verificador do EXAME (OST Onda 2): mesmo padrão dos outros três, rotas próprias.
+  const acaoExame = useCallback(
+    async (rota: "toggle" | "rodar-agora", body: Record<string, unknown>, rotulo: string) => {
+      setAcaoEmVoo(`exame:${rota}`);
+      setAviso(null);
+      try {
+        const r = await apiFetch<Record<string, unknown>>(`/diagnostico/exame/${rota}`, {
           method: "POST",
           token,
           body,
@@ -433,6 +469,41 @@ export default function DiagnosticoPage() {
                   name={snap.clicksign.parado ? "alert" : snap.clicksign.ligado ? "check" : "right"}
                   className="h-4 w-4"
                   style={{ color: snap.clicksign.parado ? "var(--danger)" : "var(--faint)" }}
+                />
+              </GlassCard>
+            )}
+            {snap.exame && (
+              <GlassCard
+                as="button"
+                onClick={() => setAberto("exame")}
+                className={cn(
+                  "flex items-center justify-between text-left transition hover:bg-[var(--surface-2)] !px-4 !py-3.5",
+                  snap.exame.parado && "!border-[rgba(214,69,69,0.45)] ring-1 ring-[rgba(214,69,69,0.35)]",
+                )}
+              >
+                <div>
+                  <div className="lbl !mb-0.5">Verificador do exame</div>
+                  <div
+                    className="text-[13.5px] font-semibold"
+                    style={{
+                      color: snap.exame.parado
+                        ? "var(--danger)"
+                        : snap.exame.ligado
+                          ? "var(--ok)"
+                          : "var(--dim)",
+                    }}
+                  >
+                    {snap.exame.parado
+                      ? "parado"
+                      : snap.exame.ligado
+                        ? `ativo, ${snap.exame.totalPendentes} com ASO pendente`
+                        : "desligado"}
+                  </div>
+                </div>
+                <Icon
+                  name={snap.exame.parado ? "alert" : snap.exame.ligado ? "check" : "right"}
+                  className="h-4 w-4"
+                  style={{ color: snap.exame.parado ? "var(--danger)" : "var(--faint)" }}
                 />
               </GlassCard>
             )}
@@ -688,6 +759,83 @@ export default function DiagnosticoPage() {
               }
             >
               {snap.clicksign.ligado ? "Desligar scheduler" : "Ligar scheduler"}
+            </Button>
+          </div>
+        </Modal>
+      )}
+
+      {/* ── DETALHE: verificador de status do Exame (OST Onda 2) ── */}
+      {aberto === "exame" && snap?.exame && (
+        <Modal onClose={() => setAberto(null)} ariaLabel="Verificador Do Exame" className="max-w-lg">
+          <div className="mb-3 flex items-center justify-between">
+            <div>
+              <div className="eyebrow !mb-1">Frente de exame</div>
+              <h2 className="text-lg font-semibold text-text">Verificador do exame</h2>
+            </div>
+            <StatusPill
+              tone={snap.exame.parado ? "dg" : snap.exame.ligado ? "ok" : "nt"}
+              label={snap.exame.parado ? "parado" : snap.exame.ligado ? "ativo" : "desligado"}
+            />
+          </div>
+          <p className="mb-3 text-[12.5px] text-dim">
+            De hora em hora, ajusta o status da frente ao que o relógio já decidiu. Exame que passou
+            sem ASO anexado vira &quot;ASO Pendente&quot;; previsão do ASO posterior à data do exame
+            vira &quot;Aguardando Liberação Do ASO&quot;. Com mais de um endereço no dia, a
+            referência é o ÚLTIMO horário. Ele nunca conclui a frente: quem faz isso é o APTO.
+          </p>
+          <div className="mb-3 grid grid-cols-4 gap-2 text-center">
+            <div className="rounded-lg border border-[var(--border)] px-2 py-2">
+              <div className="text-lg font-bold text-text">{snap.exame.varridas}</div>
+              <div className="text-[11px] text-faint">varridas</div>
+            </div>
+            <div className="rounded-lg border border-[var(--border)] px-2 py-2">
+              <div className="text-lg font-bold text-text">{snap.exame.totalAguardando}</div>
+              <div className="text-[11px] text-faint">aguardando ASO</div>
+            </div>
+            <div className="rounded-lg border border-[var(--border)] px-2 py-2">
+              <div
+                className="text-lg font-bold"
+                style={{ color: snap.exame.totalPendentes > 0 ? "var(--danger)" : undefined }}
+              >
+                {snap.exame.totalPendentes}
+              </div>
+              <div className="text-[11px] text-faint">ASO pendente</div>
+            </div>
+            <div className="rounded-lg border border-[var(--border)] px-2 py-2">
+              <div
+                className="text-lg font-bold"
+                style={{ color: snap.exame.falhas > 0 ? "var(--danger)" : undefined }}
+              >
+                {snap.exame.falhas}
+              </div>
+              <div className="text-[11px] text-faint">falhas</div>
+            </div>
+          </div>
+          <div className="mb-3 space-y-1 text-[12.5px] text-dim">
+            <div>Último ciclo: {quando(snap.exame.ultimoCicloEm)}</div>
+            <div>Último ciclo bem-sucedido: {quando(snap.exame.ultimoCicloOkEm)}</div>
+            {snap.exame.nota && <div className="text-faint">Nota: {snap.exame.nota}</div>}
+          </div>
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button
+              variant="secondary"
+              disabled={acaoEmVoo !== null || !snap.exame.ligado}
+              onClick={() => void acaoExame("rodar-agora", {}, "Rodar ciclo agora")}
+            >
+              Rodar ciclo agora
+            </Button>
+            <Button
+              variant={snap.exame.ligado ? "secondary" : "primary"}
+              disabled={acaoEmVoo !== null}
+              onClick={() =>
+                void acaoExame(
+                  "toggle",
+                  { ligado: !snap.exame?.ligado },
+                  snap.exame?.ligado ? "Desligar" : "Ligar",
+                )
+              }
+            >
+              {snap.exame.ligado ? "Desligar verificador" : "Ligar verificador"}
             </Button>
           </div>
         </Modal>

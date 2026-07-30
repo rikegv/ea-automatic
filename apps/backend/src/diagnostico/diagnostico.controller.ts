@@ -5,6 +5,9 @@ import { AuditoriaService } from "../auditoria/auditoria.service";
 import { ReauditoriaService } from "../reauditoria/reauditoria.service";
 import { PandapeQueueService } from "../pandape/pandape-queue.service";
 import { PandapeSchedulerService } from "../pandape/pandape-scheduler.service";
+import { VtColetaSchedulerService } from "../vt-coleta/vt-coleta-scheduler.service";
+import { ClicksignSchedulerService } from "../clicksign/clicksign-scheduler.service";
+import { ExameSchedulerService } from "../esteira/exame-scheduler.service";
 import { Inject } from "@nestjs/common";
 import { sql } from "drizzle-orm";
 import type { Database } from "../db/client";
@@ -37,6 +40,9 @@ export class DiagnosticoController {
     private readonly auditoria: AuditoriaService,
     private readonly fila: PandapeQueueService,
     private readonly scheduler: PandapeSchedulerService,
+    private readonly vtColetaScheduler: VtColetaSchedulerService,
+    private readonly clicksignScheduler: ClicksignSchedulerService,
+    private readonly exameScheduler: ExameSchedulerService,
   ) {}
 
   /** Snapshot completo (sinais + dependências + última coleta + histórico + alerta). */
@@ -111,6 +117,75 @@ export class DiagnosticoController {
     this.logger.log(`[DIAGNOSTICO][trilha] acao=scheduler-rodar-agora por=${user.id} (${user.papel})`);
     const r = await this.scheduler.dispararCiclo();
     return { ok: r.enfileirado, ...r };
+  }
+
+  /**
+   * §A.17 etapa 3: LIGA/DESLIGA o scheduler da coleta de VT, sem deploy. Persistido → vale no próximo
+   * ciclo. É o freio do diretor se a varredura começar a causar problema.
+   */
+  @Post("vt-coleta/toggle")
+  async vtColetaToggle(@Body() dto: SchedulerToggleDto, @CurrentUser() user: AuthUser) {
+    this.logger.log(
+      `[DIAGNOSTICO][trilha] acao=vt-coleta-${dto.ligado ? "ligar" : "desligar"} por=${user.id} (${user.papel})`,
+    );
+    await this.vtColetaScheduler.definirLigado(dto.ligado);
+    return { ok: true, ligado: dto.ligado };
+  }
+
+  /**
+   * §A.17 etapa 3: dispara UM ciclo da coleta de VT AGORA (enfileira no worker). No-op se o scheduler
+   * estiver desligado (respeita o freio).
+   */
+  @Post("vt-coleta/rodar-agora")
+  async vtColetaRodarAgora(@CurrentUser() user: AuthUser) {
+    this.logger.log(`[DIAGNOSTICO][trilha] acao=vt-coleta-rodar-agora por=${user.id} (${user.papel})`);
+    const r = await this.vtColetaScheduler.dispararCiclo();
+    return { ok: r.enfileirado, ...r };
+  }
+
+  /**
+   * INT-4: LIGA/DESLIGA o scheduler da assinatura, sem deploy. Persistido → vale no próximo ciclo.
+   * É o freio do diretor sobre o polling da Clicksign.
+   */
+  @Post("clicksign/toggle")
+  async clicksignToggle(@Body() dto: SchedulerToggleDto, @CurrentUser() user: AuthUser) {
+    this.logger.log(
+      `[DIAGNOSTICO][trilha] acao=clicksign-${dto.ligado ? "ligar" : "desligar"} por=${user.id} (${user.papel})`,
+    );
+    await this.clicksignScheduler.definirLigado(dto.ligado);
+    return { ok: true, ligado: dto.ligado };
+  }
+
+  /**
+   * INT-4: dispara UM ciclo do tick da assinatura AGORA (enfileira no worker). No-op se o scheduler
+   * estiver desligado (respeita o freio).
+   */
+  @Post("clicksign/rodar-agora")
+  async clicksignRodarAgora(@CurrentUser() user: AuthUser) {
+    this.logger.log(`[DIAGNOSTICO][trilha] acao=clicksign-rodar-agora por=${user.id} (${user.papel})`);
+    const r = await this.clicksignScheduler.dispararCiclo();
+    return { ok: r.enfileirado, ...r };
+  }
+
+  @Post("exame/toggle")
+  async exameToggle(@Body() dto: SchedulerToggleDto, @CurrentUser() user: AuthUser) {
+    this.logger.log(
+      `[DIAGNOSTICO][trilha] acao=exame-${dto.ligado ? "ligar" : "desligar"} por=${user.id} (${user.papel})`,
+    );
+    await this.exameScheduler.definirLigado(dto.ligado);
+    return { ok: true, ligado: dto.ligado };
+  }
+
+  /**
+   * Dispara UM ciclo do verificador de status do Exame AGORA. Ao contrário dos outros três, ele NÃO
+   * enfileira: o ciclo é banco local, sem serviço externo nem cota, então roda direto e o retorno já
+   * traz o que ele fez. Respeita o freio: desligado, é no-op.
+   */
+  @Post("exame/rodar-agora")
+  async exameRodarAgora(@CurrentUser() user: AuthUser) {
+    this.logger.log(`[DIAGNOSTICO][trilha] acao=exame-rodar-agora por=${user.id} (${user.papel})`);
+    const r = await this.exameScheduler.rodarCiclo();
+    return { ok: r.ligado, ...r };
   }
 
   /** Trilha da ação: quem, quando, o quê. §A.6: id de usuário e de admissão, nada de PII. */

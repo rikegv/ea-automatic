@@ -70,6 +70,8 @@ export interface DiagnosticoSnapshot {
   vtColeta?: EstadoSchedulerVtColetaSnapshot;
   /** Estado do scheduler da assinatura Clicksign (INT-4). Opcional para compat. */
   clicksign?: EstadoSchedulerClicksignSnapshot;
+  /** Estado do verificador de status do Exame (OST Onda 2). Opcional para compat. */
+  exame?: EstadoSchedulerExameSnapshot;
   /** Resumo para o alerta (Bloco 7). */
   alerta: ResumoAlerta;
 }
@@ -123,6 +125,26 @@ export interface EstadoSchedulerSnapshot {
   falhas: number;
   abortado: boolean;
   nota: string | null;
+}
+
+/**
+ * Bloco do VERIFICADOR DO EXAME na tela (OST Onda 2). Espelha os outros três, trocando as contagens
+ * pelas que fazem sentido aqui: quantas frentes ele moveu para cada estado de espera no último ciclo,
+ * e quantas estão nesses estados AGORA (que é o número que o time usa para agir).
+ */
+export interface EstadoSchedulerExameSnapshot {
+  ligado: boolean;
+  parado: boolean;
+  ultimoCicloEm: string | null;
+  ultimoCicloOkEm: string | null;
+  varridas: number;
+  aguardando: number;
+  pendentes: number;
+  falhas: number;
+  nota: string | null;
+  /** Quantas frentes estão AGORA em cada espera (não é do ciclo, é o estado da fila). */
+  totalAguardando: number;
+  totalPendentes: number;
 }
 
 export interface ResumoAlerta {

@@ -21,11 +21,14 @@ import {
   type EstadoScheduler as EstadoSchedulerClicksign,
 } from "../domain/scheduler-clicksign";
 import { ClicksignSchedulerService } from "../clicksign/clicksign-scheduler.service";
+import { ExameSchedulerService } from "../esteira/exame-scheduler.service";
+import { schedulerParado as schedulerExameParado } from "../domain/scheduler-exame";
 import {
   calcularAlerta,
   type Dependencia,
   type DiagnosticoSnapshot,
   type EstadoSchedulerClicksignSnapshot,
+  type EstadoSchedulerExameSnapshot,
   type EstadoSchedulerSnapshot,
   type EstadoSchedulerVtColetaSnapshot,
   type Sinal,
@@ -60,6 +63,7 @@ export class DiagnosticoService {
     private readonly scheduler: PandapeSchedulerService,
     private readonly vtColetaScheduler: VtColetaSchedulerService,
     private readonly clicksignScheduler: ClicksignSchedulerService,
+    private readonly exameScheduler: ExameSchedulerService,
     private readonly drivePastaPai: DrivePastaPaiService,
   ) {}
 
@@ -85,6 +89,8 @@ export class DiagnosticoService {
       estadoScheduler,
       estadoVtColeta,
       estadoClicksign,
+      estadoExame,
+      esperaExame,
     ] = await Promise.all([
       this.sinalPendenteComStaging(),
       this.sinalReguaFechadaSemPasta(),
@@ -97,6 +103,8 @@ export class DiagnosticoService {
       this.scheduler.estado(),
       this.vtColetaScheduler.estado(),
       this.clicksignScheduler.estado(),
+      this.exameScheduler.estado(),
+      this.exameScheduler.contagemEspera(),
     ]);
 
     const parado = schedulerParado(estadoScheduler, Date.now());
@@ -129,6 +137,7 @@ export class DiagnosticoService {
       scheduler: this.blocoScheduler(estadoScheduler, parado),
       vtColeta: this.blocoSchedulerVtColeta(estadoVtColeta),
       clicksign: this.blocoSchedulerClicksign(estadoClicksign),
+      exame: this.blocoSchedulerExame(estadoExame, esperaExame),
       alerta,
     };
   }
@@ -212,6 +221,29 @@ export class DiagnosticoService {
         detalhe: r.detalhe ?? "arquivamento não concluído",
         ...(r.horas !== undefined && r.horas !== null ? { horas: Math.floor(r.horas) } : {}),
       })),
+    };
+  }
+
+  /**
+   * Bloco do VERIFICADOR DO EXAME (OST Onda 2): estado do loop + o que ele fez no último ciclo + o
+   * tamanho ATUAL de cada fila de espera, que é o número sobre o qual o time age.
+   */
+  private blocoSchedulerExame(
+    estado: Awaited<ReturnType<ExameSchedulerService["estado"]>>,
+    espera: { aguardando: number; pendentes: number },
+  ): EstadoSchedulerExameSnapshot {
+    return {
+      ligado: estado.ligado,
+      parado: schedulerExameParado(estado, Date.now()),
+      ultimoCicloEm: estado.ultimoCicloEm,
+      ultimoCicloOkEm: estado.ultimoCicloOkEm,
+      varridas: estado.varridas,
+      aguardando: estado.aguardando,
+      pendentes: estado.pendentes,
+      falhas: estado.falhas,
+      nota: estado.nota,
+      totalAguardando: espera.aguardando,
+      totalPendentes: espera.pendentes,
     };
   }
 
