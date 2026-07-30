@@ -594,3 +594,53 @@ Fechamento de itens da **OST Regras de Fluxo**, para tirá-los do backlog e evit
   Auditoria), e o frontend **declara o campo mas nunca o renderiza**
   (`app/(app)/esteira/page.tsx`, o tipo tem `docsPendentes?: number` e nada consome). **A badge é a
   pendência, não o cálculo.** *(Registro solicitado pelo diretor.)*
+
+## A.23 — Quem decide o que cada usuário enxerga é o diretor (regra permanente)
+
+**A permissão de menu é decisão do diretor, nunca da fábrica.** Nenhuma concessão, remoção ou
+alteração de menu de usuário acontece por iniciativa da fábrica, nem como efeito colateral de um
+script rodado para outro fim. A fábrica só executa concessão de menu quando o diretor **pede aquela
+concessão explicitamente**, e reporta antes/depois usuário a usuário.
+
+**Vale inclusive para os scripts que existem.** `db/seed-menus.ts` (grandfather de quem nunca foi
+configurado) e `db/backfill-menus-comum.ts` (concede TODO o grupo Operação ao COMUM) **não são
+rotina de deploy**: rodá-los concede acesso, então só rodam sob pedido explícito do diretor.
+Distribuir o menu novo aos usuários é passo separado, com decisão do diretor.
+
+**MENU NOVO NASCE SÓ PARA O SUPER ADMIN (regra permanente).** Todo menu criado pela fábrica nasce
+visível apenas para o SUPER_ADMIN. É o diretor quem libera quem usa e quem enxerga cada menu, pela
+tela de liberação de menu-por-usuário feita para isso. A fábrica **registra** o menu no catálogo
+(para ele existir e ser selecionável) e **para por aí**: nunca decide nem distribui quem vê o quê.
+Menu novo que não aparece para os demais usuários **não é bug**, é o diretor ainda não ter liberado.
+
+**O REGISTRO NO CATÁLOGO É AUTOMÁTICO, e isso não é concessão.** O registro dos menus vive em código
+(`domain/menus`), mas a tela de liberação lista a TABELA `menus`. Enquanto a ponte entre os dois foi
+um seed manual fora do deploy, menu novo subia funcionando e **invisível para liberar**: aconteceu com
+o `clinicas` em 29/07/2026, que tinha rota, tela e CRUD no ar e não existia como opção na tela de
+permissões. Agora `MenusCatalogoService` converge a tabela a partir do registro **a cada boot**, então
+menu novo nasce listável pelo simples fato de existir em código. Ele **REGISTRA e nada mais**: o
+grandfather (que concede) continua fora do deploy, dentro do `seed-menus.ts`, e só roda a pedido.
+
+*(Decisão do diretor, após o backfill conceder `analise` e `nao-conformidades` a 3 usuários como
+efeito colateral de conceder o menu de assinaturas.)*
+
+**Nota operacional que a regra não cobre, e o diretor precisa saber:** a tela de Usuários salva por
+SUBSTITUIÇÃO (`definirMenusDoUsuario` apaga todos os menus do usuário e regrava a lista enviada).
+Quem abre a tela, o sistema ganha um menu novo enquanto ela está aberta, e depois salva, **remove o
+menu novo sem perceber**, porque a página mandou a lista antiga. Foi o que aconteceu com o menu
+`assinaturas` em 28/07/2026: sumiu de 4 dos 5 COMUM logo após o deploy.
+
+## A.24 — Title case em títulos e tags (regra permanente)
+
+Todo texto que seja **TÍTULO** ou **TAG** no sistema usa a **primeira letra de cada palavra em
+maiúscula**. Vale para título de tela, título de card, título de modal, rótulo de aba, rótulo de
+pill/badge de status e qualquer etiqueta curta que classifique algo.
+
+Exemplos: "Aguardando Assinatura" (não "Aguardando assinatura"), "Prontos Para Solicitar", "Gestão
+Das Assinaturas", "Sem Envelope".
+
+**O que NÃO é título nem tag** segue a escrita normal, com maiúscula só na primeira palavra: frase de
+apoio, texto de ajuda, mensagem de erro, descrição, corpo de modal, texto de botão que é uma AÇÃO
+("Enviar para assinatura", "Trocar kit"). Botão é comando, não etiqueta.
+
+Vale para toda entrega futura, não só para a OST que originou a regra. *(Decisão do diretor.)*

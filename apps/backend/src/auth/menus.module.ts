@@ -1,4 +1,5 @@
 import { Global, Module } from "@nestjs/common";
+import { MenusCatalogoService } from "./menus-catalogo.service";
 import { MenusService } from "./menus.service";
 
 /**
@@ -8,7 +9,9 @@ import { MenusService } from "./menus.service";
  */
 @Global()
 @Module({
-  providers: [MenusService],
-  exports: [MenusService],
+  // `MenusCatalogoService` converge a TABELA de menus a partir do registro em código no boot, para
+  // menu novo nascer listável na tela de liberação. Registra, NUNCA concede acesso (§A.23).
+  providers: [MenusService, MenusCatalogoService],
+  exports: [MenusService, MenusCatalogoService],
 })
 export class MenusModule {}

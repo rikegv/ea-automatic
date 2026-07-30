@@ -11,6 +11,8 @@ export const ROTA_MENU: { prefixo: string; codigo: string }[] = [
   // Mais específico primeiro (o guard casa por prefixo, primeira correspondência vence).
   { prefixo: "/admin/clientes", codigo: "clientes" },
   { prefixo: "/admin/cargos", codigo: "cargos" },
+  { prefixo: "/admin/clinicas", codigo: "clinicas" },
+  { prefixo: "/admin/pendencias-cliente", codigo: "pendencias-cliente" },
   { prefixo: "/admin/escalas", codigo: "escalas" },
   { prefixo: "/admin/beneficios", codigo: "beneficios" },
   { prefixo: "/admin/motivos-declinio", codigo: "motivos-declinio" },

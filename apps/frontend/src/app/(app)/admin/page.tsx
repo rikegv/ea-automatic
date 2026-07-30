@@ -26,6 +26,20 @@ const CARDS: { href: string; icon: IconName; title: string; desc: string; codigo
     desc: "Catálogo de escalas de trabalho, usado na Liberação.",
   },
   {
+    href: "/admin/clinicas",
+    codigo: "clinicas",
+    icon: "doc",
+    title: "Clínicas",
+    desc: "Catálogo de clínicas do exame, usado no agendamento.",
+  },
+  {
+    href: "/admin/pendencias-cliente",
+    codigo: "pendencias-cliente",
+    icon: "check",
+    title: "Obrigatoriedade Por Cliente",
+    desc: "Liga e desliga cada pendência obrigatória por cliente, individualmente ou em massa.",
+  },
+  {
     href: "/admin/beneficios",
     codigo: "beneficios",
     icon: "heart",

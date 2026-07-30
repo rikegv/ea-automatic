@@ -228,6 +228,34 @@ export const MENUS: MenuDef[] = [
     ],
   },
   {
+    // CADASTRO DE CLÍNICAS (OST Onda 2, item 4): menu do GERENCIAL, no molde de Escalas. Guarda só o
+    // nome; o agendamento do exame passa a selecionar desta lista.
+    codigo: "clinicas",
+    rotulo: "Clínicas",
+    href: "/admin/clinicas",
+    grupo: "ADMIN",
+    ordem: 23,
+    operacoes: [
+      "ClinicasController.create",
+      "ClinicasController.update",
+      "ClinicasController.reativar",
+      "ClinicasController.remove",
+    ],
+  },
+  {
+    // OBRIGATORIEDADE DE PENDÊNCIAS POR CLIENTE (OST da tela de obrigatoriedade). Menu do GERENCIAL.
+    // Nasce só para o SUPER_ADMIN: quem libera para os demais é o diretor (§A.23).
+    codigo: "pendencias-cliente",
+    rotulo: "Obrigatoriedade Por Cliente",
+    href: "/admin/pendencias-cliente",
+    grupo: "ADMIN",
+    ordem: 24,
+    operacoes: [
+      "PendenciasClienteController.atualizar",
+      "PendenciasClienteController.aplicarEmMassa",
+    ],
+  },
+  {
     codigo: "beneficios",
     rotulo: "Benefícios",
     href: "/admin/beneficios",
