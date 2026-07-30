@@ -424,6 +424,19 @@ export const admissoes = pgTable(
     clicksignEnvelopeId: varchar("clicksign_envelope_id", { length: 80 }),
     clicksignStatus: clicksignStatusEnum("clicksign_status").notNull().default("SEM_ENVELOPE"),
     contratoAssinadoDriveUrl: text("contrato_assinado_drive_url"),
+    /**
+     * TROCA DE CLIENTE/CARGO (OST da correção do cliente errado). Carimbo do momento em que o Master
+     * trocou o par, e quem trocou. **Nulo = nada a revisar**, que é o estado normal de toda admissão.
+     *
+     * Por que um carimbo e não um booleano: o aviso vermelho do modal precisa dizer QUANDO aconteceu,
+     * e o "Revisado" apenas limpa o carimbo. O que aconteceu não se perde, fica no histórico
+     * (`candidato_alteracoes_log`), que é a trilha permanente; isto aqui é só o sinal de "ainda não
+     * revisado".
+     */
+    trocaClienteEm: timestamp("troca_cliente_em", { withTimezone: true }),
+    trocaClientePor: uuid("troca_cliente_por").references(() => usuarios.id, {
+      onDelete: "set null",
+    }),
     // Instante em que o envelope foi ATIVADO na Clicksign (draft -> running). É a base do prazo: o
     // EA manda `deadline_at` = envio + 30 dias, e o tick usa este carimbo para marcar EXPIRADO quando
     // o envelope passa do prazo sem fechar nem ser cancelado. Nulo em quem nunca teve envelope (e nas

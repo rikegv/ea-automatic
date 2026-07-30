@@ -52,11 +52,16 @@ const presente = (v: unknown): boolean => v !== undefined && v !== null && Strin
  * - identidade + cliente + cargo presentes e ZERO pendência obrigatória → "OK";
  * - identidade + cliente + cargo presentes, mas com pendência → "PARCIAL".
  */
-export function calcSinalizadorPreenchimento(i: SinalizadorInput & PendenciasInput): Sinalizador {
+export function calcSinalizadorPreenchimento(
+  i: SinalizadorInput & PendenciasInput,
+  config?: ConfigPendencias | null,
+): Sinalizador {
   const identidade = presente(i.candidato?.nome) && presente(i.candidato?.cpf);
   const clienteCargo = presente(i.codCliente) && presente(i.cargoId);
   if (!identidade || !clienteCargo) return "PENDENTE";
-  return pendenciasObrigatorias(i).length === 0 ? "OK" : "PARCIAL";
+  // A config vem junto para o enum GRAVADO concordar com a contagem viva: sem ela, um item desligado
+  // para o cliente continuaria contando aqui e o KPI do Gerenciador (que ainda lê o enum) mentiria.
+  return pendenciasObrigatorias(i, config).length === 0 ? "OK" : "PARCIAL";
 }
 
 /**

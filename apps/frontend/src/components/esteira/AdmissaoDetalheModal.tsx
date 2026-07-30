@@ -9,6 +9,7 @@ import { Pill, type PillTone } from "@/components/ui/Pill";
 import { Icon } from "@/components/ui/Icon";
 import { OrigemBadge } from "@/components/ui/OrigemBadge";
 import { GoogleDriveLogo } from "@/components/ui/GoogleDriveLogo";
+import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { farolPill } from "@/lib/farol";
 import { caixaAlta } from "@/lib/nome";
@@ -47,6 +48,8 @@ interface AdmissaoDetalhe {
   // NÃO é o `observacao` de `documentos_admissao` (motivo do veredito da IA por documento), que vive
   // no modal de Auditar, não nesta ficha.
   observacaoLiberacao: string | null;
+  /** TROCA DE CLIENTE: carimbo não nulo = houve troca e ainda não foi revisada. */
+  trocaClienteEm?: string | null;
   matricula: string | null;
   candidato: {
     nome: string;
@@ -129,6 +132,11 @@ const CAMPO_ROTULO: Record<string, string> = {
   // lápis, então pausar/retomar aparecem no histórico com quem e quando, sem tabela nova.
   pausa: "Pausa da admissão",
   motivoPausa: "Motivo da pausa",
+  // Troca de cliente/cargo (OST da correção do cliente errado): os dois eventos da troca e o da
+  // revisão entram no MESMO histórico, sem tabela nova.
+  trocaCliente: "Troca de cliente",
+  trocaCargo: "Troca de cargo",
+  trocaClienteRevisada: "Revisão da troca de cliente",
   email: "E-mail",
   telefone: "Telefone",
   nome: "Nome",
@@ -261,6 +269,11 @@ export function AdmissaoDetalheModal({
   const [buscaVtFlash, setBuscaVtFlash] = useState<string | null>(null);
   const [buscaVtErro, setBuscaVtErro] = useState<string | null>(null);
 
+  // Revisão da TROCA DE CLIENTE (OST da correção do cliente errado). O `confirmando` existe porque a
+  // ação FICA REGISTRADA com o nome de quem clicou, e a tela avisa isso ANTES de confirmar.
+  const [revisando, setRevisando] = useState(false);
+  const [confirmandoRevisao, setConfirmandoRevisao] = useState(false);
+
   const carregar = useCallback(() => {
     let vivo = true;
     apiFetch<AdmissaoDetalhe>(`/esteira/admissao/${admissaoId}`, { token })
@@ -368,6 +381,19 @@ export function AdmissaoDetalheModal({
       !!data.contratoAssinadoDriveUrl);
   const temProntuario = !!data && (!!data.drivePastaUrl || !!data.driveAsoUrl);
 
+  async function marcarRevisado() {
+    setRevisando(true);
+    try {
+      await apiFetch(`/admissoes/${admissaoId}/troca-cliente/revisado`, { method: "PATCH", token });
+      setConfirmandoRevisao(false);
+      carregar();
+    } catch {
+      setConfirmandoRevisao(false);
+    } finally {
+      setRevisando(false);
+    }
+  }
+
   return (
     <>
       {/* LARGURA (OST dos três bugs do modal): era `max-w-2xl` (672px) para uma ficha com quatro
@@ -421,6 +447,34 @@ export function AdmissaoDetalheModal({
                 <p className="mt-1 whitespace-pre-wrap text-[13.5px] text-text">
                   {data.observacaoLiberacao}
                 </p>
+              </div>
+            )}
+
+            {/* AVISO DE TROCA DE CLIENTE (OST da correção do cliente errado). VERMELHO e antes de
+                tudo, porque muda a leitura da ficha inteira: o sistema reaponta sozinho o que é
+                estrutural (pasta do Drive, assinante, obrigatoriedade, régua), mas NÃO sabe julgar se
+                os documentos já coletados servem para o cliente e o cargo novos. Isso é do consultor,
+                e o aviso fica até ele clicar em Revisado. */}
+            {data.trocaClienteEm && (
+              <div className="rounded-xl border border-[rgba(214,69,69,0.45)] bg-[rgba(214,69,69,0.1)] px-3 py-2.5">
+                <div className="text-[11px] uppercase tracking-wide text-danger">
+                  Troca De Cliente Ou Cargo
+                </div>
+                <p className="mt-1 text-[13.5px] text-text">
+                  Esta admissão teve o cliente e o cargo trocados em {fmtDataHora(data.trocaClienteEm)}.
+                  Revise os DOCUMENTOS já coletados e o prontuário: a régua documental do novo par pode
+                  exigir outros documentos, e o que foi coletado antes pode não servir.
+                </p>
+                <div className="mt-2 flex justify-end">
+                  <Button
+                    variant="secondary"
+                    className="!py-1.5 !text-[12.5px]"
+                    disabled={revisando}
+                    onClick={() => setConfirmandoRevisao(true)}
+                  >
+                    {revisando ? "Registrando…" : "Revisado"}
+                  </Button>
+                </div>
               </div>
             )}
 
@@ -799,6 +853,18 @@ export function AdmissaoDetalheModal({
 
       {/* Aceite de dupla correção (§A.5 INT-4), bloqueio ativo: origem Pandapé exige ciência de
         que a correção foi feita no EA Automatic E diretamente no G.I. */}
+      {/* A revisão da troca FICA REGISTRADA com o nome de quem clicou, então a tela diz isso ANTES
+        de confirmar. O aviso sai da ficha; o que aconteceu permanece no histórico. */}
+      <ConfirmDialog
+        open={confirmandoRevisao}
+        title="Confirmar Revisão Da Troca"
+        message="Confirma que revisou os documentos e o prontuário para o cliente e o cargo novos? O aviso sai da ficha, e esta confirmação fica registrada no histórico com o seu nome e a data."
+        confirmLabel="Sim, revisei"
+        busy={revisando}
+        onConfirm={() => void marcarRevisado()}
+        onCancel={() => setConfirmandoRevisao(false)}
+      />
+
       <ConfirmDialog
         open={duplaCorrecaoMsg !== null}
         title="Confirmar Dupla Correção"

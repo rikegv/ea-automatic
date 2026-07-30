@@ -379,6 +379,13 @@
       "when": 1785376029199,
       "tag": "0053_light_bill_hollister",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1785377962946,
+      "tag": "0054_dusty_talon",
+      "breakpoints": true
     }
   ]
 }

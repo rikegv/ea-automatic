@@ -6,6 +6,7 @@ import { AdmissoesService } from "./admissoes.service";
 import { CreateAdmissaoDto } from "./dto/create-admissao.dto";
 import { LiberarAdmissaoDto } from "./dto/liberar-admissao.dto";
 import { LiberarEmLoteDto } from "./dto/liberar-lote.dto";
+import { TrocarClienteDto } from "./dto/trocar-cliente.dto";
 import { UpdateAdmissaoDto } from "./dto/update-admissao.dto";
 
 // Operacional do wizard (F6/F11) e do Gerenciador (F10/F7). Autenticado, sem restrição de papel
@@ -121,6 +122,34 @@ export class AdmissoesController {
   }
 
   /** Liberação Admissional — atribui cliente+cargo e faz a pré-admissão nascer na esteira. */
+  /**
+   * TROCA CLIENTE E CARGO de uma admissão em andamento (OST da correção do cliente errado).
+   *
+   * ROTA PRÓPRIA, e não campo no `@Patch(":id")` genérico, por dois motivos: o RBAC fica no método
+   * certo (só MASTER/SUPER_ADMIN troca cliente, consultor não) e a troca tem efeitos colaterais
+   * (limpar o vínculo antigo, acender o aviso de revisão, registrar a trilha) que não cabem numa
+   * edição comum de campos.
+   */
+  @Patch(":id/trocar-cliente")
+  @Roles("MASTER", "SUPER_ADMIN")
+  trocarCliente(
+    @Param("id") id: string,
+    @Body() dto: TrocarClienteDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.admissoes.trocarCliente(id, dto, user);
+  }
+
+  /**
+   * O consultor dá a troca por revisada e o aviso vermelho some. SEM `@Roles`: quem confere os
+   * documentos é o consultor comum, e é ele quem precisa poder fechar o aviso. A ação fica na trilha
+   * com o nome dele, que é o controle aqui (responsabilização, não impedimento).
+   */
+  @Patch(":id/troca-cliente/revisado")
+  marcarTrocaRevisada(@Param("id") id: string, @CurrentUser() user: AuthUser) {
+    return this.admissoes.marcarTrocaRevisada(id, user);
+  }
+
   @Patch(":id/liberar")
   liberar(@Param("id") id: string, @Body() dto: LiberarAdmissaoDto, @CurrentUser() user: AuthUser) {
     return this.admissoes.liberar(id, dto, user);

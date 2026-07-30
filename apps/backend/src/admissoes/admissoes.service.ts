@@ -57,6 +57,7 @@ import { FRENTES_AO_NASCER } from "../domain/frentes";
 import { PandapeQueueService } from "../pandape/pandape-queue.service";
 import { recomputeFarolGlobal } from "./farol";
 import { pendenciasObrigatorias } from "../domain/admissao";
+import { CHAVES_PENDENCIA } from "../domain/pendencia-config";
 import { pendenciasObrigatoriasSet } from "../regua/pendencias-lote";
 import { configDoCliente } from "../regua/pendencia-config.repo";
 import type { AuthUser } from "../auth/auth.types";
@@ -1576,6 +1577,193 @@ export class AdmissoesService {
       )
       .limit(1);
     return Boolean(linha);
+  }
+
+  /**
+   * TROCA O CLIENTE E O CARGO de uma admissão em andamento (OST da correção do cliente errado).
+   *
+   * O PROBLEMA: o consultor selecionava o cliente errado na criação e não havia como corrigir. A
+   * admissão ficava travada na esteira, com régua, pasta do Drive e assinante do cliente errado.
+   *
+   * CLIENTE E CARGO JUNTOS, por decisão do diretor, e o motivo é estrutural: a régua documental e a
+   * memória resolvem por (cliente + cargo). Trocar só o cliente deixaria o par sem régua cadastrada,
+   * e a admissão sem checklist nenhum.
+   *
+   * O RECÁLCULO É QUASE DE GRAÇA, e isso é uma propriedade do desenho do sistema, não sorte: pasta-pai
+   * do Drive, assinante da Clicksign, obrigatoriedade por cliente, memória cliente+cargo, régua
+   * documental e o vínculo empresa/CNPJ são todos resolvidos POR CONSULTA no momento do uso. Trocar o
+   * par já os reaponta. O único ponteiro gravado na admissão é o `clienteVinculoId`, e por isso ele é
+   * LIMPO aqui: ele pertence a um vínculo do cliente ANTIGO.
+   *
+   * O que o sistema NÃO sabe fazer, e por isso existe o aviso: julgar se os documentos já coletados
+   * servem para o cliente/cargo novo, e se a régua nova exige outros. Isso é do consultor, e o
+   * carimbo `trocaClienteEm` acende o aviso vermelho até ele revisar.
+   *
+   * TRAVAS: só MASTER/SUPER_ADMIN (no controller) e só ANTES de concluir. Admissão com as três
+   * frentes fechadas não troca: a partir dali o processo terminou, e mexer no cliente reescreveria
+   * história.
+   */
+  async trocarCliente(
+    id: string,
+    dto: { codCliente: string; cargoId: string },
+    user: AuthUser,
+  ) {
+    const adm = await this.db.query.admissoes.findFirst({ where: eq(admissoes.id, id) });
+    if (!adm) throw new NotFoundException("Admissão não encontrada");
+
+    const frentes = await this.db
+      .select({ tipo: frentesAdmissao.tipo, concluida: frentesAdmissao.concluida })
+      .from(frentesAdmissao)
+      .where(eq(frentesAdmissao.admissaoId, id));
+    const TODAS = ["AUDITORIA", "EXAME", "CADASTRO_CONTRATO"] as const;
+    const concluidas = new Set(frentes.filter((f) => f.concluida).map((f) => String(f.tipo)));
+    if (TODAS.every((t) => concluidas.has(t))) {
+      throw new ConflictException(
+        "Esta admissão já concluiu as três frentes. A troca de cliente só vale antes da conclusão.",
+      );
+    }
+
+    const [cliente] = await this.db
+      .select({ codCliente: clientes.codCliente, razaoSocial: clientes.razaoSocial })
+      .from(clientes)
+      .where(eq(clientes.codCliente, dto.codCliente));
+    if (!cliente) throw new NotFoundException("Cliente não encontrado.");
+    const [cargo] = await this.db
+      .select({ id: cargos.id, nome: cargos.nome })
+      .from(cargos)
+      .where(eq(cargos.id, dto.cargoId));
+    if (!cargo) throw new NotFoundException("Cargo não encontrado.");
+
+    if (adm.codCliente === cliente.codCliente && adm.cargoId === cargo.id) {
+      throw new ConflictException("O cliente e o cargo informados já são os da admissão.");
+    }
+
+    // Rótulos do estado ANTERIOR para a trilha ficar legível (o código sozinho não diz nada a quem lê).
+    const anterior = await this.rotulosClienteCargo(adm.codCliente, adm.cargoId);
+    const agora = new Date();
+
+    await this.db.transaction(async (tx) => {
+      await tx
+        .update(admissoes)
+        .set({
+          codCliente: cliente.codCliente,
+          cargoId: cargo.id,
+          // Ponteiro do cliente ANTIGO: some na troca. Hoje é nulo em toda a base, mas deixá-lo
+          // apontando para o vínculo antigo seria uma bomba armada para quando ele passar a ser usado.
+          clienteVinculoId: null,
+          trocaClienteEm: agora,
+          trocaClientePor: user.id,
+          atualizadoEm: agora,
+        })
+        .where(eq(admissoes.id, id));
+
+      // HISTÓRICO: dois eventos, um por campo, no MESMO formato que o modal do olho já lê.
+      await tx.insert(candidatoAlteracoesLog).values([
+        {
+          admissaoId: id,
+          campo: "trocaCliente",
+          valorAnterior: anterior.cliente,
+          valorNovo: `${cliente.codCliente} - ${cliente.razaoSocial}`,
+          autorId: user.id,
+        },
+        {
+          admissaoId: id,
+          campo: "trocaCargo",
+          valorAnterior: anterior.cargo,
+          valorNovo: cargo.nome,
+          autorId: user.id,
+        },
+      ]);
+    });
+
+    // O enum GRAVADO precisa concordar com a régua do cliente NOVO: a obrigatoriedade pode ser outra,
+    // e o KPI do Gerenciador ainda lê o enum. A contagem viva das telas já mudou sozinha.
+    await this.recalcularSinalizadorDaAdmissao(id);
+
+    return {
+      ok: true,
+      cliente: { codCliente: cliente.codCliente, razaoSocial: cliente.razaoSocial },
+      cargo: { id: cargo.id, nome: cargo.nome },
+      anterior,
+      trocaClienteEm: agora.toISOString(),
+    };
+  }
+
+  /**
+   * O consultor confere os documentos e o prontuário e dá a troca por revisada: o carimbo é limpo e o
+   * aviso vermelho some. O que aconteceu NÃO some: fica no histórico, com quem revisou e quando.
+   */
+  async marcarTrocaRevisada(id: string, user: AuthUser) {
+    const adm = await this.db.query.admissoes.findFirst({ where: eq(admissoes.id, id) });
+    if (!adm) throw new NotFoundException("Admissão não encontrada");
+    if (!adm.trocaClienteEm) {
+      return { ok: true, jaRevisada: true };
+    }
+    const agora = new Date();
+    await this.db.transaction(async (tx) => {
+      await tx
+        .update(admissoes)
+        .set({ trocaClienteEm: null, trocaClientePor: null, atualizadoEm: agora })
+        .where(eq(admissoes.id, id));
+      await tx.insert(candidatoAlteracoesLog).values({
+        admissaoId: id,
+        campo: "trocaClienteRevisada",
+        valorAnterior: "pendente de revisão",
+        valorNovo: "revisada",
+        autorId: user.id,
+      });
+    });
+    return { ok: true, revisadaEm: agora.toISOString() };
+  }
+
+  /** Rótulos legíveis do par atual, para a trilha não guardar só códigos. */
+  private async rotulosClienteCargo(codCliente: string | null, cargoId: string | null) {
+    const [cli] = codCliente
+      ? await this.db
+          .select({ razaoSocial: clientes.razaoSocial })
+          .from(clientes)
+          .where(eq(clientes.codCliente, codCliente))
+      : [];
+    const [car] = cargoId
+      ? await this.db.select({ nome: cargos.nome }).from(cargos).where(eq(cargos.id, cargoId))
+      : [];
+    return {
+      cliente: codCliente ? `${codCliente}${cli ? ` - ${cli.razaoSocial}` : ""}` : "não informado",
+      cargo: car?.nome ?? "não informado",
+    };
+  }
+
+  /**
+   * Regrava `sinalizador_preenchimento` a partir da régua do cliente ATUAL da admissão. Usado depois
+   * da troca de cliente, quando a obrigatoriedade pode ter mudado.
+   */
+  private async recalcularSinalizadorDaAdmissao(id: string): Promise<void> {
+    const adm = await this.db.query.admissoes.findFirst({ where: eq(admissoes.id, id) });
+    if (!adm) return;
+    const cand = await this.db.query.candidatos.findFirst({
+      where: eq(candidatos.cpf, adm.candidatoCpf),
+    });
+    const vaga = await this.db.query.dadosVagaFolha.findFirst({
+      where: eq(dadosVagaFolha.admissaoId, id),
+    });
+    const temPend = (await pendenciasObrigatoriasSet(this.db, [id])).has(id);
+    const sinalizador = calcSinalizadorPreenchimento(
+      {
+        candidato: { nome: cand?.nome, cpf: cand?.cpf },
+        codCliente: adm.codCliente,
+        cargoId: adm.cargoId,
+        dataAdmissao: adm.dataAdmissao,
+        tipoContrato: adm.tipoContrato,
+        vagaFolha: { salario: vaga?.salario },
+      },
+      // A régua completa já foi avaliada por `pendenciasObrigatoriasSet` (que consulta a config do
+      // cliente); aqui o cálculo só precisa concordar com ela.
+      temPend ? undefined : new Set(CHAVES_PENDENCIA),
+    );
+    await this.db
+      .update(admissoes)
+      .set({ sinalizadorPreenchimento: sinalizador as "PENDENTE", atualizadoEm: new Date() })
+      .where(eq(admissoes.id, id));
   }
 
   async editar(id: string, dto: UpdateAdmissaoDto, user?: AuthUser) {

@@ -1053,6 +1053,9 @@ export class EsteiraService {
         // pausa/retomada saem da mesma trilha de `alteracoes` que o modal já lista.
         pausadaEm: admissoes.pausadaEm,
         pausaMotivo: admissoes.pausaMotivo,
+        // TROCA DE CLIENTE (OST da correção do cliente errado): carimbo não nulo acende o aviso
+        // vermelho no modal, até o consultor revisar os documentos e o prontuário.
+        trocaClienteEm: admissoes.trocaClienteEm,
         // Observação livre deixada na LIBERAÇÃO (Bloco 3): o recado do consultor para quem tocar a
         // admissão adiante. Não confundir com `documentos_admissao.observacao` (motivo do veredito
         // por documento), que este mesmo detalhe também devolve, dentro de `documentos[]`.
@@ -1243,6 +1246,7 @@ export class EsteiraService {
       sinalizador: adm.sinalizador,
       // Bloco 3: null quando o consultor não escreveu nada — a tela não abre o bloco nesse caso.
       observacaoLiberacao: adm.observacaoLiberacao,
+      trocaClienteEm: adm.trocaClienteEm,
       pendencias,
       passagens: passagensRows.map((p) => ({
         tipo: p.tipo,
