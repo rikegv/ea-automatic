@@ -48,7 +48,15 @@ function makeTx() {
 function makeDb() {
   const tx = makeTx();
   const transaction = vi.fn(async (cb: (t: unknown) => Promise<unknown>) => cb(tx));
-  return { db: { transaction } as never, transaction, tx };
+  // O gate de criação agora consulta a CONFIG de obrigatoriedade do cliente (OST da obrigatoriedade
+  // por cliente). Sem linha nenhuma = tudo obrigatório, que é justamente o cenário destes casos:
+  // o `select` devolve vazio e o comportamento medido aqui continua sendo o de sempre.
+  const selectBuilder = {
+    from: vi.fn(() => selectBuilder),
+    where: vi.fn(() => Promise.resolve([])),
+  };
+  const select = vi.fn(() => selectBuilder);
+  return { db: { transaction, select } as never, transaction, tx };
 }
 
 afterEach(() => vi.restoreAllMocks());

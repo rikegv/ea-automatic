@@ -92,6 +92,17 @@ export class VagaFolhaInputDto {
   @MaxLength(80)
   centroCusto?: string;
 
+  /**
+   * SETOR (OST Onda 2). Campo PRÓPRIO, distinto de Departamento e Centro de Custo: a operação usa os
+   * três. `@IsOptional` na FORMA, como os irmãos; quem o torna obrigatório é a régua de pendências
+   * (`pendenciasObrigatorias`), que é onde a liberação é barrada. Assim o wizard segue salvando
+   * rascunho incompleto (regra 5, não-bloqueio) e a liberação continua sendo o gate.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  setor?: string;
+
   @IsOptional()
   @IsString()
   @MaxLength(120)
