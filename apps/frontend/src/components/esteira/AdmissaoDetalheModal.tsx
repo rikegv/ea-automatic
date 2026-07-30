@@ -29,6 +29,9 @@ interface AdmissaoDetalhe {
   dataAdmissao: string | null;
   tipoContrato: string | null;
   farolGlobal: string;
+  /** PAUSA: instante da pausa (null = não pausada) e o motivo opcional. */
+  pausadaEm?: string | null;
+  pausaMotivo?: string | null;
   // Motivo do declínio (Fase 2): só exibido quando o farol é de declínio; null = "não informado".
   motivoDeclinio: string | null;
   origem: Origem;
@@ -51,11 +54,24 @@ interface AdmissaoDetalhe {
     email: string | null;
     telefone: string | null;
     dataNascimento: string | null;
+    /** Nome do banco informado pelo candidato no Pandapé (texto livre). Informação de ficha. */
+    banco?: string | null;
   };
   cliente: { codCliente: string; razaoSocial: string; operacao: string | null };
   cargo: string;
   // BLOCO 2: salário/escala/endereço da folha (endereço = o da admissão).
-  vagaFolha: { salario: string | null; escala: string | null; endereco: string | null };
+  vagaFolha: {
+    salario: string | null;
+    escala: string | null;
+    endereco: string | null;
+    // Trabalho e cadastro (OST dos três bugs do modal): vinham do banco e não eram devolvidos.
+    // Opcionais para o modal não quebrar contra um backend anterior a esta correção.
+    centroCusto?: string | null;
+    departamento?: string | null;
+    /** SETOR (OST Onda 2): campo próprio, distinto de Departamento e Centro de custo. */
+    setor?: string | null;
+    gestorBp?: string | null;
+  };
   // BLOCO 3: dados do exame (coletados do agendamento). null = exame ainda não agendado.
   exame: {
     data: string | null;
@@ -65,6 +81,8 @@ interface AdmissaoDetalhe {
     fornecedor: string | null;
     valor: string | null;
     previsaoAso: string | null;
+    /** Endereços do dia (multi-endereço, OST Onda 2). Vazio no agendamento antigo. */
+    enderecos?: { ordem: number; nomeClinica: string | null; local: string | null; horario: string | null }[];
   } | null;
   frentes: FrenteDetalhe[];
   pendencias: string[];
@@ -107,6 +125,10 @@ const CAMPO_ROTULO: Record<string, string> = {
   tempo_contrato: "Tempo de contrato",
   farolGlobal: "Farol global",
   farol_global: "Farol global",
+  // Eventos de PAUSA (OST admissão pausada). A trilha do modal do olho é a MESMA do declínio e do
+  // lápis, então pausar/retomar aparecem no histórico com quem e quando, sem tabela nova.
+  pausa: "Pausa da admissão",
+  motivoPausa: "Motivo da pausa",
   email: "E-mail",
   telefone: "Telefone",
   nome: "Nome",
@@ -162,17 +184,39 @@ function fmtDataAdmissao(d?: string | null): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(d);
   return m ? `${m[3]}/${m[2]}/${m[1]}` : fmtData(d);
 }
+/**
+ * Moeda em pt-BR de verdade: separador de MILHAR e vírgula decimal ("R$ 2.000,00").
+ *
+ * O QUE ISTO CONSERTA. A versão anterior era `toFixed(2).replace(".", ",")`, que produz "R$ 2000,00":
+ * o valor certo, sem o ponto de milhar. Num campo estreito, ao lado do lápis (que mostra o número
+ * cru, "2000.00"), isso se lê como se o modal estivesse inflando o salário, e foi assim que o
+ * problema chegou. O valor NUNCA foi multiplicado por nada: os dois endpoints devolvem a mesma
+ * string; o que faltava era a formatação.
+ *
+ * `Number` continua sendo a porta de entrada, então valor não numérico cai no texto cru em vez de
+ * virar "R$ NaN".
+ */
 function fmtMoeda(v?: string | null): string {
   if (v === null || v === undefined || v === "") return "não informado";
   const n = Number(v);
-  return Number.isNaN(n) ? String(v) : `R$ ${n.toFixed(2).replace(".", ",")}`;
+  if (Number.isNaN(n)) return String(v);
+  return `R$ ${n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+/**
+ * Um campo da ficha. O valor QUEBRA por dentro em vez de ser cortado.
+ *
+ * O QUE MUDOU E POR QUÊ (OST layout, ponto 3). Era `truncate`, que corta com reticências: E-MAIL do
+ * candidato e ESCALA são os dois campos que estouram a largura de uma coluna da grade, e a
+ * informação ficava OCULTA, visível só no tooltip. Como a regra é "nada cortado na borda, valor
+ * longo quebra por dentro", o `truncate` sai e entra `break-words`. A linha da grade cresce o
+ * necessário; o `title` continua, porque ajuda no hover mesmo sem corte.
+ */
 function Campo({ rotulo, valor }: { rotulo: string; valor: string }) {
   return (
     <div className="min-w-0">
       <div className="text-[11px] uppercase tracking-wide text-faint">{rotulo}</div>
-      <div className="mt-0.5 truncate text-[13.5px] text-text" title={valor}>
+      <div className="mt-0.5 break-words text-[13.5px] text-text" title={valor}>
         {valor}
       </div>
     </div>
@@ -206,6 +250,16 @@ export function AdmissaoDetalheModal({
   const [reenvioError, setReenvioError] = useState<string | null>(null);
   const [reenvioFlash, setReenvioFlash] = useState<string | null>(null);
   const [duplaCorrecaoMsg, setDuplaCorrecaoMsg] = useState<string | null>(null);
+
+  // Formulário de VT (§A.17): gerar o link que o consultor manda ao candidato + buscar o formulário
+  // já preenchido na pasta de coleta. O link é o único dado sensível (§A.6): fica só na tela.
+  const [vtLink, setVtLink] = useState<{ link: string; expiraEm: string } | null>(null);
+  const [vtLinkErro, setVtLinkErro] = useState<string | null>(null);
+  const [gerandoLink, setGerandoLink] = useState(false);
+  const [copiado, setCopiado] = useState(false);
+  const [buscandoVt, setBuscandoVt] = useState(false);
+  const [buscaVtFlash, setBuscaVtFlash] = useState<string | null>(null);
+  const [buscaVtErro, setBuscaVtErro] = useState<string | null>(null);
 
   const carregar = useCallback(() => {
     let vivo = true;
@@ -255,6 +309,58 @@ export function AdmissaoDetalheModal({
     [admissaoId, token, carregar],
   );
 
+  // Gera o link do VT. 422 = candidato sem CPF ou data de nascimento; 503 = gerador não configurado.
+  const gerarLinkVt = useCallback(async () => {
+    setGerandoLink(true);
+    setVtLinkErro(null);
+    setCopiado(false);
+    try {
+      const r = await apiFetch<{ link: string; expiraEm: string }>(
+        `/vt-coleta/admissao/${admissaoId}/gerar-link`,
+        { method: "POST", token },
+      );
+      setVtLink(r);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 422) {
+        setVtLinkErro(
+          "Candidato sem CPF ou data de nascimento. Complete a ficha antes de gerar o link do VT.",
+        );
+      } else if (e instanceof ApiError && e.status === 503) {
+        setVtLinkErro("Gerador de link do VT não configurado. Procure a administração.");
+      } else {
+        setVtLinkErro(e instanceof ApiError ? e.message : "Falha ao gerar o link do VT.");
+      }
+    } finally {
+      setGerandoLink(false);
+    }
+  }, [admissaoId, token]);
+
+  const copiarLinkVt = useCallback(async () => {
+    if (!vtLink) return;
+    try {
+      await navigator.clipboard.writeText(vtLink.link);
+      setCopiado(true);
+      setTimeout(() => setCopiado(false), 2000);
+    } catch {
+      /* clipboard indisponível: o consultor seleciona o campo e copia manualmente */
+    }
+  }, [vtLink]);
+
+  // Enfileira a busca do formulário de VT na pasta de coleta (responde 202).
+  const buscarVt = useCallback(async () => {
+    setBuscandoVt(true);
+    setBuscaVtErro(null);
+    setBuscaVtFlash(null);
+    try {
+      await apiFetch(`/vt-coleta/admissao/${admissaoId}/buscar`, { method: "POST", token });
+      setBuscaVtFlash("Busca enfileirada, o formulário aparece assim que a coleta processar.");
+    } catch (e) {
+      setBuscaVtErro(e instanceof ApiError ? e.message : "Falha ao buscar o formulário de VT.");
+    } finally {
+      setBuscandoVt(false);
+    }
+  }, [admissaoId, token]);
+
   const temAssinatura =
     !!data &&
     (data.temEnvelope ||
@@ -264,7 +370,12 @@ export function AdmissaoDetalheModal({
 
   return (
     <>
-      <Modal onClose={onClose} className="max-w-2xl" ariaLabel="Ficha da admissão">
+      {/* LARGURA (OST dos três bugs do modal): era `max-w-2xl` (672px) para uma ficha com quatro
+          blocos de grade de 3 colunas mais a trilha de alterações, e o conteúdo morria na borda.
+          `max-w-4xl` (896px) é largura que o sistema já usa e dá folga a cada coluna. Continua
+          RESPONSIVO: `max-w-*` é teto, não largura fixa, então em tela menor o modal encolhe e a
+          grade cai para 2 colunas pelo `sm:grid-cols-3`. */}
+      <Modal onClose={onClose} className="max-w-4xl" ariaLabel="Ficha da admissão">
         <div className="mb-4 flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="eyebrow !mb-1">Ficha da admissão</div>
@@ -324,6 +435,10 @@ export function AdmissaoDetalheModal({
                   rotulo="Data de nascimento"
                   valor={fmtData(data.candidato.dataNascimento)}
                 />
+                {/* Banco informado pelo candidato no formulário do Pandapé. É TEXTO LIVRE dele
+                    ("NUBANK", "BANCO DO BRASIL"), então aparece como veio. Informação a mais: a
+                    auditoria do comprovante bancário pela IA continua intacta. */}
+                <Campo rotulo="Banco" valor={data.candidato.banco || "não informado"} />
               </div>
             </Bloco>
 
@@ -337,6 +452,18 @@ export function AdmissaoDetalheModal({
                 <Campo rotulo="Data de admissão" valor={fmtDataAdmissao(data.dataAdmissao)} />
                 <Campo rotulo="Matrícula" valor={data.matricula || "não informado"} />
                 <Campo rotulo="Escala" valor={data.vagaFolha.escala || "não informado"} />
+                {/* Os três que faltavam no modal. Centro de custo e gestor BP são, inclusive,
+                    campos OBRIGATÓRIOS da régua de pendências: ficavam cobrados e invisíveis. */}
+                <Campo rotulo="Setor" valor={data.vagaFolha.setor || "não informado"} />
+                <Campo
+                  rotulo="Centro de custo"
+                  valor={data.vagaFolha.centroCusto || "não informado"}
+                />
+                <Campo rotulo="Gestor BP" valor={data.vagaFolha.gestorBp || "não informado"} />
+                <Campo
+                  rotulo="Departamento"
+                  valor={data.vagaFolha.departamento || "não informado"}
+                />
                 <Campo
                   rotulo="Endereço de trabalho"
                   valor={data.vagaFolha.endereco || "não informado"}
@@ -349,9 +476,29 @@ export function AdmissaoDetalheModal({
               {data.exame ? (
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                   <Campo rotulo="Data" valor={fmtDataAdmissao(data.exame.data)} />
-                  <Campo rotulo="Horário" valor={data.exame.horario || "não informado"} />
+                  <Campo
+                    rotulo="Horário"
+                    valor={
+                      // MULTI-ENDEREÇO: com mais de um endereço, a ficha mostra todos os horários do
+                      // dia, na ordem. Com um só, lê exatamente como antes.
+                      (data.exame.enderecos ?? []).length > 0
+                        ? (data.exame.enderecos ?? [])
+                            .map((e) => e.horario || "sem horário")
+                            .join(" · ")
+                        : data.exame.horario || "não informado"
+                    }
+                  />
                   <Campo rotulo="Clínica" valor={data.exame.nomeClinica || "não informado"} />
-                  <Campo rotulo="Local" valor={data.exame.local || "não informado"} />
+                  <Campo
+                    rotulo="Local"
+                    valor={
+                      (data.exame.enderecos ?? []).length > 0
+                        ? (data.exame.enderecos ?? [])
+                            .map((e) => `${e.nomeClinica ?? "clínica"}: ${e.local ?? ""}`.trim())
+                            .join(" | ")
+                        : data.exame.local || "não informado"
+                    }
+                  />
                   <Campo
                     rotulo="Fornecedor"
                     valor={
@@ -399,6 +546,20 @@ export function AdmissaoDetalheModal({
                       {data.motivoDeclinio || "não informado"}
                     </span>
                   </span>
+                )}
+                {/* PAUSA: a tag fica AO LADO do farol, não no lugar dele. O farol continua dizendo o
+                    ciclo de vida (que segue derivando por baixo da pausa) e a tag diz que o trabalho
+                    está parado. O motivo, quando informado, vem junto. */}
+                {data.pausadaEm && (
+                  <>
+                    <Pill tone="wn">Pausada</Pill>
+                    {data.pausaMotivo && (
+                      <span className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-1 text-[12.5px]">
+                        <span className="text-dim">Motivo da pausa:</span>
+                        <span className="font-semibold text-text">{data.pausaMotivo}</span>
+                      </span>
+                    )}
+                  </>
                 )}
                 <span className="text-[12.5px] text-dim">Pendências:</span>
                 <Pill tone={SINAL_TONE[data.sinalizador] ?? "nt"}>
@@ -475,7 +636,7 @@ export function AdmissaoDetalheModal({
                       ) : (
                         <Icon name="pen" className="h-3.5 w-3.5" />
                       )}
-                      {reenviando ? "Reenviando…" : "Reenviar por correção"}
+                      {reenviando ? "Reenviando…" : "Reenviar Por Correção"}
                     </button>
                   )}
                 </div>
@@ -488,6 +649,92 @@ export function AdmissaoDetalheModal({
               {reenvioFlash && (
                 <p className="mt-2 inline-flex items-center gap-1.5 text-[12.5px] text-ok">
                   <Icon name="check" className="h-3.5 w-3.5" /> {reenvioFlash}
+                </p>
+              )}
+            </Bloco>
+
+            {/* Formulário de VT (§A.17): gerar o link do candidato + buscar o formulário preenchido. */}
+            <Bloco titulo="Formulário de VT">
+              <p className="mb-3 text-[12.5px] text-dim">
+                Gere o link para o candidato preencher o vale-transporte pelo celular e envie a ele,
+                ou busque o formulário já preenchido na pasta de coleta.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-[12.5px] font-semibold text-text transition hover:bg-[var(--surface-2)] disabled:opacity-60"
+                  onClick={() => void gerarLinkVt()}
+                  disabled={gerandoLink}
+                  title="Gerar o link do formulário de VT para enviar ao candidato"
+                >
+                  {gerandoLink ? (
+                    <span
+                      className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent"
+                      aria-hidden="true"
+                    />
+                  ) : (
+                    <Icon name="link" className="h-3.5 w-3.5" />
+                  )}
+                  {gerandoLink ? "Gerando…" : "Gerar link do VT"}
+                </button>
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-[12.5px] font-semibold text-text transition hover:bg-[var(--surface-2)] disabled:opacity-60"
+                  onClick={() => void buscarVt()}
+                  disabled={buscandoVt}
+                  title="Buscar o formulário de VT já preenchido na pasta de coleta"
+                >
+                  {buscandoVt ? (
+                    <span
+                      className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent"
+                      aria-hidden="true"
+                    />
+                  ) : (
+                    <Icon name="refresh" className="h-3.5 w-3.5" />
+                  )}
+                  {buscandoVt ? "Buscando…" : "Buscar formulário de VT"}
+                </button>
+              </div>
+
+              {vtLink && (
+                <div className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-3">
+                  <div className="mb-1 text-[11px] uppercase tracking-wide text-faint">
+                    Link do formulário de VT
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value={vtLink.link}
+                      onFocus={(e) => e.currentTarget.select()}
+                      className="min-w-0 flex-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-[12.5px] text-text"
+                      aria-label="Link do formulário de VT"
+                    />
+                    <button
+                      type="button"
+                      className="inline-flex flex-none items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-[12.5px] font-semibold text-text transition hover:bg-[var(--surface-2)]"
+                      onClick={() => void copiarLinkVt()}
+                    >
+                      <Icon name={copiado ? "check" : "doc"} className="h-3.5 w-3.5" />
+                      {copiado ? "Copiado" : "Copiar"}
+                    </button>
+                  </div>
+                  <p className="mt-2 text-[12px] text-dim">Expira em {fmtData(vtLink.expiraEm)}</p>
+                </div>
+              )}
+              {vtLinkErro && (
+                <p className="mt-2 text-[12.5px] text-danger" role="alert">
+                  {vtLinkErro}
+                </p>
+              )}
+              {buscaVtFlash && (
+                <p className="mt-2 inline-flex items-center gap-1.5 text-[12.5px] text-ok">
+                  <Icon name="check" className="h-3.5 w-3.5" /> {buscaVtFlash}
+                </p>
+              )}
+              {buscaVtErro && (
+                <p className="mt-2 text-[12.5px] text-danger" role="alert">
+                  {buscaVtErro}
                 </p>
               )}
             </Bloco>
@@ -529,12 +776,17 @@ export function AdmissaoDetalheModal({
                           {a.autorNome ?? "Sistema"} · {fmtDataHora(a.criadoEm)}
                         </span>
                       </div>
+                      {/* `break-words` + `min-w-0`: o `flex-wrap` quebra ENTRE os spans, mas um valor
+                          longo e sem espaço (a lista de benefícios é o caso real) é um span só e
+                          vazava pela borda. Agora ele quebra por dentro e aparece inteiro. */}
                       <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-dim">
-                        <span className="text-faint line-through">
+                        <span className="min-w-0 break-words text-faint line-through">
                           {a.valorAnterior ?? "não informado"}
                         </span>
                         <Icon name="arr" className="h-3 w-3 flex-none text-faint" />
-                        <span className="text-text">{a.valorNovo ?? "não informado"}</span>
+                        <span className="min-w-0 break-words text-text">
+                          {a.valorNovo ?? "não informado"}
+                        </span>
                       </div>
                     </div>
                   ))}
@@ -549,7 +801,7 @@ export function AdmissaoDetalheModal({
         que a correção foi feita no EA Automatic E diretamente no G.I. */}
       <ConfirmDialog
         open={duplaCorrecaoMsg !== null}
-        title="Confirmar dupla correção"
+        title="Confirmar Dupla Correção"
         message={duplaCorrecaoMsg ?? ""}
         confirmLabel="Estou ciente, reenviar"
         tone="danger"
