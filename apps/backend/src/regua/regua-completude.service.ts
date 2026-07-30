@@ -128,7 +128,7 @@ export class ReguaCompletudeService {
   /**
    * PROGRESSO da régua obrigatória por admissão (OST B1 / Bloco 6): quantos obrigatórios já estão
    * ENTREGUE e quantos são no total. É o que a coluna Status da aba Auditoria exibe como "9/10",
-   * para o trabalho da IA parar de ser invisível: hoje toda admissão mostra "Análise pendente",
+   * para o trabalho da IA parar de ser invisível: hoje toda admissão mostra "Análise Pendente",
    * tenha faltando um documento ou dez.
    *
    * Mesma query do contador de pendentes (mesma régua, mesmo recorte de Reservista), contando os

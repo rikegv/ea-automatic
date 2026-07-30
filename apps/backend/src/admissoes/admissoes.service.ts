@@ -9,7 +9,22 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { beneficioExigeValor, isValidCpf, normalizeCpf, type FarolGlobal } from "@ea/shared-types";
-import { and, asc, count, desc, eq, gte, ilike, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  gte,
+  ilike,
+  inArray,
+  isNotNull,
+  isNull,
+  lte,
+  ne,
+  or,
+  sql,
+} from "drizzle-orm";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
 import {
@@ -41,6 +56,9 @@ import { parseBeneficiosPadrao } from "../domain/beneficios";
 import { FRENTES_AO_NASCER } from "../domain/frentes";
 import { PandapeQueueService } from "../pandape/pandape-queue.service";
 import { recomputeFarolGlobal } from "./farol";
+import { pendenciasObrigatorias } from "../domain/admissao";
+import { pendenciasObrigatoriasSet } from "../regua/pendencias-lote";
+import { configDoCliente } from "../regua/pendencia-config.repo";
 import type { AuthUser } from "../auth/auth.types";
 import type { CandidatoInputDto, CreateAdmissaoDto } from "./dto/create-admissao.dto";
 import type { UpdateAdmissaoDto } from "./dto/update-admissao.dto";
@@ -187,14 +205,36 @@ export class AdmissoesService {
     // a.1 W6 — campos obrigatórios. NÃO impede (F4/regra 5), mas exige ACEITE EXPLÍCITO quando há
     // pendências. O log permanente do aceite por passagem é da esteira (S3, marco 3).
     const vf = dto.vagaFolha ?? {};
-    const pend: string[] = [];
-    if (!vf.salario) pend.push("Salário");
-    if (!vf.escala) pend.push("Escala");
-    // O pacote conta como preenchido pelo ESTRUTURADO (admissão nova) ou pela string (legado).
-    if (!vf.beneficios && !dto.pacoteBeneficios?.length) pend.push("Benefícios");
-    if (!vf.centroCusto) pend.push("Centro de custo");
-    if (!vf.gestorBp) pend.push("Gestor / BP");
-    if (!dto.tipoContrato) pend.push("Tipo de contrato");
+    // OS ITENS COMPARTILHADOS saem da MESMA régua da esteira, respeitando a config por cliente (OST
+    // da obrigatoriedade por cliente). Antes esta lista era escrita à mão aqui, e por isso o wizard
+    // cobrava item que a esteira já não cobrava: desligar Centro de custo para um cliente valia na
+    // esteira e não na criação. Agora vale nos quatro pontos.
+    //
+    // Os itens ABAIXO (Tempo de contrato, Data de nascimento, Telefone, E-mail, substituído) são
+    // exclusivos do aceite de CRIAÇÃO (W6) e não fazem parte da régua de pendências obrigatórias,
+    // então seguem cobrados como sempre foram e NÃO aparecem na tela de configuração.
+    const configCliente = await configDoCliente(this.db, dto.codCliente);
+    const pend: string[] = pendenciasObrigatorias(
+      {
+        codCliente: dto.codCliente,
+        cargoId: dto.cargoId,
+        dataAdmissao: dto.dataAdmissao,
+        tipoContrato: dto.tipoContrato,
+        vagaFolha: {
+          salario: vf.salario,
+          beneficios: vf.beneficios,
+          escala: vf.escala,
+          centroCusto: vf.centroCusto,
+          setor: vf.setor,
+          gestorBp: vf.gestorBp,
+        },
+        // A criação não marca banco (o `is_banco` é definido depois, na esteira), então aqui a régua
+        // cobra a Data de admissão, nunca o Termo. É o comportamento que já existia.
+        isBanco: false,
+        temBeneficioEstruturado: Boolean(dto.pacoteBeneficios?.length),
+      },
+      configCliente,
+    );
     if (!vf.tempoContrato) pend.push("Tempo de contrato");
     if (!dto.candidato.dataNascimento) pend.push("Data de nascimento");
     if (!dto.candidato.telefone) pend.push("Telefone");
@@ -276,6 +316,7 @@ export class AdmissoesService {
           beneficios: vf.beneficios,
           escala: vf.escala,
           centroCusto: vf.centroCusto,
+          setor: vf.setor,
           gestorBp: vf.gestorBp,
         },
         temBeneficioEstruturado: Boolean(dto.pacoteBeneficios?.length),
@@ -324,6 +365,7 @@ export class AdmissoesService {
         beneficios: vf.beneficios ?? null,
         escala: vf.escala ?? null,
         centroCusto: vf.centroCusto ?? null,
+        setor: vf.setor ?? null,
         departamento: vf.departamento ?? null,
         gestorBp: vf.gestorBp ?? null,
         motivo: vf.motivo ?? null,
@@ -543,6 +585,7 @@ export class AdmissoesService {
         beneficios?: string;
         escala?: string;
         centroCusto?: string;
+        setor?: string;
         departamento?: string;
         gestorBp?: string;
         motivo?: string;
@@ -634,6 +677,7 @@ export class AdmissoesService {
           beneficios?: string;
           escala?: string;
           centroCusto?: string;
+        setor?: string;
           departamento?: string;
           gestorBp?: string;
           motivo?: string;
@@ -671,6 +715,7 @@ export class AdmissoesService {
         beneficios: vf.beneficios,
         escala: vf.escala,
         centroCusto: vf.centroCusto,
+        setor: vf.setor,
         gestorBp: vf.gestorBp,
       },
       isBanco: adm.isBanco,
@@ -700,6 +745,7 @@ export class AdmissoesService {
         salario: vf.salario ?? null,
         escala: vf.escala ?? null,
         centroCusto: vf.centroCusto ?? null,
+        setor: vf.setor ?? null,
         departamento: vf.departamento ?? null,
         gestorBp: vf.gestorBp ?? null,
         motivo: vf.motivo ?? null,
@@ -776,6 +822,7 @@ export class AdmissoesService {
         beneficios?: string;
         escala?: string;
         centroCusto?: string;
+        setor?: string;
         departamento?: string;
         gestorBp?: string;
         motivo?: string;
@@ -1043,18 +1090,36 @@ export class AdmissoesService {
     // MAS quem declinou/rescindiu NUNCA conta como pendência em nenhum card (regra permanente de
     // importação, §A.3/Regra 2): pendência é de quem está no processo; o declínio saiu. Fica só como
     // histórico. Mesma exclusão por farol que a Esteira aplica nas filas operacionais.
-    const comPendenciaExpr = sql<boolean>`(${admissoes.sinalizadorPreenchimento} <> 'OK' AND ${admissoes.farolGlobal} NOT IN ('DECLINOU', 'RESCISAO', 'AGUARDANDO_LIBERACAO', 'LIBERACAO_RECUSADA'))`;
+    // PAUSA (OST admissão pausada, ponto 6 dos 6): pausada também não conta como pendência. Mesmo
+    // princípio do declínio, motivo diferente: o declínio saiu do processo, a pausada está no
+    // processo mas não vai ser trabalhada agora, e cobrar pendência dela é mandar o time gastar
+    // esforço no que está parado por decisão. Some da CONTAGEM, não da lista (o Gerenciador é a
+    // visão geral consultável, §A.19: é ali que a pausada continua encontrável).
+    const comPendenciaExpr = sql<boolean>`(${admissoes.sinalizadorPreenchimento} <> 'OK' AND ${admissoes.pausadaEm} IS NULL AND ${admissoes.farolGlobal} NOT IN ('DECLINOU', 'RESCISAO', 'AGUARDANDO_LIBERACAO', 'LIBERACAO_RECUSADA'))`;
 
     // "Em andamento" = admissão EM ABERTO no geral: nem concluída nem declínio/rescisão. São os faróis
     // de processo vivo (EM_ADMISSAO, BANCO_AGUARDAR). Numa base histórica dá ~0; o card fica pronto para
     // quando o EA operar admissões vivas (Bloco A).
-    const emAndamentoExpr = sql<boolean>`${admissoes.farolGlobal} IN ('EM_ADMISSAO', 'BANCO_AGUARDAR')`;
+    // PAUSA: "em andamento" é trabalho andando. Pausada, por definição, não está andando.
+    const emAndamentoExpr = sql<boolean>`(${admissoes.farolGlobal} IN ('EM_ADMISSAO', 'BANCO_AGUARDAR') AND ${admissoes.pausadaEm} IS NULL)`;
 
     // Filtros de status (farol/concluído/pendências/em andamento): só na lista, não nos KPIs (os cards
     // mostram a distribuição do conjunto base e funcionam como botão de filtro, §A.12).
     const listWhere = [...base];
-    if (filtros.farol?.length)
-      listWhere.push(inArray(admissoes.farolGlobal, filtros.farol as FarolGlobal[]));
+    // PAUSA (OST da pausa, correção do diretor): "Admissão Pausada" entrou como mais uma opção do
+    // MESMO seletor de status, então ela também chega aqui como filtro. Não é valor do enum
+    // `farol_global` (é flag paralela), então é traduzida: marcar só "Pausada" filtra pela flag;
+    // marcar junto de outros status vira OU, que é o comportamento que o multi-select promete.
+    if (filtros.farol?.length) {
+      const querPausadas = filtros.farol.includes("PAUSADA");
+      const faroisReais = filtros.farol.filter((f) => f !== "PAUSADA") as FarolGlobal[];
+      const condicoes = [
+        ...(faroisReais.length ? [inArray(admissoes.farolGlobal, faroisReais)] : []),
+        ...(querPausadas ? [isNotNull(admissoes.pausadaEm)] : []),
+      ];
+      if (condicoes.length === 1) listWhere.push(condicoes[0]);
+      else if (condicoes.length > 1) listWhere.push(or(...condicoes)!);
+    }
     if (filtros.concluido) listWhere.push(concluidoExpr);
     if (filtros.comPendencias) listWhere.push(comPendenciaExpr);
     if (filtros.emAndamento) listWhere.push(emAndamentoExpr);
@@ -1080,6 +1145,8 @@ export class AdmissoesService {
         isBanco: admissoes.isBanco,
         origem: admissoes.origem,
         sinalizador: admissoes.sinalizadorPreenchimento,
+        // PAUSA: alimenta a tag "Pausada" na coluna Status do Gerenciador (Bloco 5).
+        pausadaEm: admissoes.pausadaEm,
         concluido: concluidoExpr,
         criadoEm: admissoes.criadoEm,
       })
@@ -1123,9 +1190,15 @@ export class AdmissoesService {
       m[f.tipo] = { status: f.status, rotulo: rotuloDe(f.tipo, f.status), concluida: f.concluida };
       frentesPorAdm.set(f.admissaoId, m);
     }
+    // PENDÊNCIAS OBRIGATÓRIAS por linha, da FONTE ÚNICA (OST do "Parcial" com zero pendências).
+    // A coluna mostrava "Parcial" lendo `sinalizador_preenchimento`, que a auditoria sobrescreve com
+    // INCONFORMIDADE quando há documento inconforme; documento inconforme não é pendência de CAMPO,
+    // então o pill contradizia o card da MESMA linha. Agora os dois leem o mesmo cálculo.
+    const pendSet = await pendenciasObrigatoriasSet(this.db, ids);
     const itemsComFrentes = items.map((i) => ({
       ...i,
       frentes: frentesPorAdm.get(i.admissaoId) ?? {},
+      temPendencias: pendSet.has(i.admissaoId),
     }));
 
     // Valores distintos de tipo de contrato (para o filtro Select).
@@ -1262,6 +1335,10 @@ export class AdmissoesService {
       // Motivo do declínio (mesmo campo que o modal do olho exibe): o modal do lápis o edita quando
       // o farol é de declínio (§A.14, item 3).
       motivoDeclinioId: adm.motivoDeclinioId,
+      // PAUSA (OST da pausa, correção): o lápis é onde a pausa é ACIONADA, pelo seletor de status.
+      // Precisa do estado atual para derivar o valor exibido e para o motivo já preenchido aparecer.
+      pausadaEm: adm.pausadaEm,
+      pausaMotivo: adm.pausaMotivo,
       isBanco: adm.isBanco,
       origem: adm.origem,
       // Dados pessoais do candidato (OST — ajuste de escopo): editáveis, exceto o CPF (identidade §A.3).
@@ -1277,6 +1354,7 @@ export class AdmissoesService {
         beneficios: vaga?.beneficios ?? null,
         escala: vaga?.escala ?? null,
         centroCusto: vaga?.centroCusto ?? null,
+        setor: vaga?.setor ?? null,
         departamento: vaga?.departamento ?? null,
         gestorBp: vaga?.gestorBp ?? null,
         motivo: vaga?.motivo ?? null,
@@ -1347,6 +1425,42 @@ export class AdmissoesService {
   }
 
   /**
+   * MEMÓRIA DO SETOR por (cliente + cargo): os setores DISTINTOS já usados naquele par, do mais
+   * recente para o mais antigo.
+   *
+   * Por que DISTINCT e não "o último", como o pacote de benefícios: o Setor vira menu de opções
+   * daquele cliente+cargo (decisão do diretor), e um par real tem mais de um setor legítimo. Devolver
+   * só o último transformaria o menu num campo de uma opção só.
+   *
+   * DERIVADO das admissões, sem tabela de padrão: cada Setor digitado já alimenta a memória por
+   * existir, então não há segunda fonte de verdade para dessincronizar (mesma razão do pacote).
+   *
+   * §A.6: nome de setor é dado de ORGANIZAÇÃO, não da pessoa. Nenhum dado pessoal entra aqui.
+   */
+  private async setoresDoParClienteCargo(codCliente: string, cargoId: string): Promise<string[]> {
+    const linhas = await this.db
+      .selectDistinctOn([dadosVagaFolha.setor], {
+        setor: dadosVagaFolha.setor,
+        criadoEm: admissoes.criadoEm,
+      })
+      .from(admissoes)
+      .innerJoin(dadosVagaFolha, eq(dadosVagaFolha.admissaoId, admissoes.id))
+      .where(
+        and(
+          eq(admissoes.codCliente, codCliente),
+          eq(admissoes.cargoId, cargoId),
+          isNotNull(dadosVagaFolha.setor),
+          ne(dadosVagaFolha.setor, ""),
+        ),
+      )
+      .orderBy(dadosVagaFolha.setor, desc(admissoes.criadoEm));
+    return linhas
+      .map((l) => l.setor)
+      .filter((s): s is string => typeof s === "string" && s.trim() !== "")
+      .sort((a, b) => a.localeCompare(b, "pt-BR"));
+  }
+
+  /**
    * PARTE C, memória por (cliente + cargo): o ÚLTIMO pacote alocado para aquele par.
    *
    * DERIVADO, sem tabela de padrão: "o último pacote" é lido da admissão mais recente daquele
@@ -1364,8 +1478,16 @@ export class AdmissoesService {
       .where(and(eq(admissoes.codCliente, codCliente), eq(admissoes.cargoId, cargoId)))
       .orderBy(desc(admissoes.criadoEm))
       .limit(1);
+    // SETORES já usados neste par (OST Onda 2). Vai SEMPRE, inclusive quando o par nunca teve pacote
+    // de benefícios: são memórias independentes, e devolver [] de setor só porque não houve benefício
+    // esconderia o histórico que o campo precisa para virar menu.
+    const setores = await this.setoresDoParClienteCargo(codCliente, cargoId);
+
     if (ultima.length === 0)
-      return { beneficios: [] as { beneficioId: string; nome: string; valor: number | null }[] };
+      return {
+        beneficios: [] as { beneficioId: string; nome: string; valor: number | null }[],
+        setores,
+      };
 
     const linhas = await this.db
       .select({
@@ -1384,6 +1506,7 @@ export class AdmissoesService {
         nome: l.nome,
         valor: l.valor === null ? null : Number(l.valor),
       })),
+      setores,
     };
   }
 
@@ -1395,14 +1518,22 @@ export class AdmissoesService {
    * vazio; aqui, se o benefício não for alocado, nada é exigido. É consistência do que foi
    * escolhido, no mesmo espírito do "cartão OUTRO exige o nome" do formulário de VT.
    *
-   * A regra de QUEM tem valor vive no shared-types: a tela e o backend leem a MESMA função.
+   * QUEM tem valor vem do CADASTRO (`beneficios_catalogo.exige_valor`), não mais do texto do nome
+   * (OST cadastro de benefícios por tela). A tela lê a mesma coluna pelo `/catalogos/beneficios`,
+   * então as duas pontas continuam concordando, e agora renomear um benefício NÃO altera a
+   * exigência: quem manda é o campo. `beneficioExigeValor` (shared-types) fica só como fallback dos
+   * nomes legados, para o caso de uma linha antiga que nunca passou pelo backfill.
    */
   private async validarValoresDoPacote(
     pacote: { beneficioId: string; valor?: number }[] | undefined,
   ): Promise<void> {
     if (!pacote?.length) return;
     const nomes = await this.db
-      .select({ id: beneficiosCatalogo.id, nome: beneficiosCatalogo.nome })
+      .select({
+        id: beneficiosCatalogo.id,
+        nome: beneficiosCatalogo.nome,
+        exigeValor: beneficiosCatalogo.exigeValor,
+      })
       .from(beneficiosCatalogo)
       .where(
         inArray(
@@ -1410,13 +1541,15 @@ export class AdmissoesService {
           pacote.map((b) => b.beneficioId),
         ),
       );
-    const porId = new Map(nomes.map((n) => [n.id, n.nome]));
+    const porId = new Map(nomes.map((n) => [n.id, n]));
     const semValor = pacote
       .filter((b) => {
-        const nome = porId.get(b.beneficioId);
-        return nome && beneficioExigeValor(nome) && (b.valor === undefined || b.valor === null);
+        const cat = porId.get(b.beneficioId);
+        if (!cat) return false;
+        const exige = cat.exigeValor ?? beneficioExigeValor(cat.nome);
+        return exige && (b.valor === undefined || b.valor === null);
       })
-      .map((b) => porId.get(b.beneficioId)!);
+      .map((b) => porId.get(b.beneficioId)!.nome);
     if (semValor.length > 0) {
       throw new BadRequestException(`Informe o valor de: ${semValor.join(", ")}.`);
     }
@@ -1495,6 +1628,7 @@ export class AdmissoesService {
           vaga?.centroCusto ?? null,
           efetivo(vf.centroCusto, vaga?.centroCusto ?? null),
         );
+        registrar("setor", vaga?.setor ?? null, efetivo(vf.setor, vaga?.setor ?? null));
         registrar(
           "departamento",
           vaga?.departamento ?? null,
@@ -1516,6 +1650,7 @@ export class AdmissoesService {
             beneficios: orNull(vf.beneficios),
             escala: orNull(vf.escala),
             centroCusto: orNull(vf.centroCusto),
+            setor: orNull(vf.setor),
             departamento: orNull(vf.departamento),
             gestorBp: orNull(vf.gestorBp),
             motivo: orNull(vf.motivo),
@@ -1597,7 +1732,7 @@ export class AdmissoesService {
       const novoIsBanco = dto.isBanco === undefined ? adm.isBanco : dto.isBanco;
       // REATIVAÇÃO = reverso COMPLETO do declínio (OST): a admissão estava em DECLINOU/RESCISAO e
       // volta a um farol ativo. Não basta trocar o farol: o motivo é limpo e as frentes voltam ao
-      // estado inicial de admissão viva (Auditoria "Análise pendente", Exame "A agendar"), senão a
+      // estado inicial de admissão viva (Auditoria "Análise Pendente", Exame "A Agendar"), senão a
       // admissão reaparece na fila ainda marcada como declinada. Espelha a `declinarAdmissao`.
       const eraDeclinio = adm.farolGlobal === "DECLINOU" || adm.farolGlobal === "RESCISAO";
       const novoEhDeclinio = novoFarol === "DECLINOU" || novoFarol === "RESCISAO";
@@ -1644,6 +1779,7 @@ export class AdmissoesService {
         beneficios: dto.vagaFolha?.beneficios ?? vaga?.beneficios ?? undefined,
         escala: dto.vagaFolha?.escala ?? vaga?.escala ?? undefined,
         centroCusto: dto.vagaFolha?.centroCusto ?? vaga?.centroCusto ?? undefined,
+        setor: dto.vagaFolha?.setor ?? vaga?.setor ?? undefined,
         gestorBp: dto.vagaFolha?.gestorBp ?? vaga?.gestorBp ?? undefined,
       };
       // Pacote estruturado DEPOIS da edição: o que veio no dto, ou o que já estava gravado.

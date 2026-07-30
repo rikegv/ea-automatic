@@ -52,8 +52,17 @@ describe("conclui() / isStatusValido() (§A.3 status por frente)", () => {
       "ANALISE_OK",
       "DECLINOU",
     ]);
-    expect(ORDEM_STATUS.EXAME).toEqual(["A_AGENDAR", "AGENDADO", "APTO", "CANCELADO"]);
-    // A coluna Cadastro tem só estes dois (0026): "A cadastrar" e o concluinte "Cadastrado".
+    // Os dois status de espera do ASO entraram na OST Onda 2, entre Agendado e Apto: descrevem a
+    // espera pelo ASO e NÃO concluem. O APTO segue sendo o único concluinte da frente.
+    expect(ORDEM_STATUS.EXAME).toEqual([
+      "A_AGENDAR",
+      "AGENDADO",
+      "AGUARDANDO_ASO",
+      "ASO_PENDENTE",
+      "APTO",
+      "CANCELADO",
+    ]);
+    // A coluna Cadastro tem só estes dois (0026): "A Cadastrar" e o concluinte "Cadastrado".
     expect(ORDEM_STATUS.CADASTRO_CONTRATO).toEqual(["A_CADASTRAR", "CADASTRADO"]);
   });
 });
