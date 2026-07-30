@@ -75,6 +75,12 @@ export class CatalogosController {
   beneficios() {
     return this.catalogos.listBeneficios();
   }
+  /** Clínicas ATIVAS: seletor do modal de Agendamento do Exame (OST Onda 2, item 4). */
+  @Get("clinicas")
+  clinicas() {
+    return this.catalogos.listClinicas();
+  }
+
   @Get("escalas")
   escalas() {
     return this.catalogos.listEscalas();

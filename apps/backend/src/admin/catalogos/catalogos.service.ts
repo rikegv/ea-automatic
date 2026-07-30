@@ -7,6 +7,7 @@ import {
   cargos,
   clienteBeneficioPadrao,
   clientes,
+  clinicasCatalogo,
   escalasCatalogo,
   frenteStatusCatalogo,
   motivosContratacao,
@@ -181,12 +182,33 @@ export class CatalogosService {
       .orderBy(asc(motivosContratacao.nome));
   }
 
+  // `exigeValor` vai junto de propósito: é a régua "este benefício precisa de quanto?", e as telas
+  // que montam o pacote (wizard, Liberação, modal do Gerenciador) precisam dela para decidir se
+  // mostram o campo de valor. Antes elas deduziam do NOME (constante do shared-types); agora leem o
+  // CADASTRO, a mesma fonte que o backend valida.
   listBeneficios() {
     return this.db
-      .select({ id: beneficiosCatalogo.id, nome: beneficiosCatalogo.nome })
+      .select({
+        id: beneficiosCatalogo.id,
+        nome: beneficiosCatalogo.nome,
+        exigeValor: beneficiosCatalogo.exigeValor,
+      })
       .from(beneficiosCatalogo)
       .where(eq(beneficiosCatalogo.ativo, true))
       .orderBy(asc(beneficiosCatalogo.nome));
+  }
+
+  /**
+   * CLÍNICAS ATIVAS (OST Onda 2, item 4): alimenta o seletor do modal de Agendamento do Exame.
+   * Leitura aberta a qualquer autenticado, como os demais catálogos operacionais: quem agenda é o
+   * consultor (perfil Comum), então exigir Master aqui tiraria o agendamento do ar para ele.
+   */
+  listClinicas() {
+    return this.db
+      .select({ id: clinicasCatalogo.id, nome: clinicasCatalogo.nome })
+      .from(clinicasCatalogo)
+      .where(eq(clinicasCatalogo.ativo, true))
+      .orderBy(asc(clinicasCatalogo.nome));
   }
 
   listEscalas() {
