@@ -5,6 +5,12 @@ node_modules/
 # build output
 dist/
 .next/
+# Builds ANTERIORES guardados para reverter em um comando (`mv dist.old dist`). Artefato de máquina,
+# nunca versionado: sem estas linhas eles aparecem no `git status`, e um `git add .` distraído
+# levaria 108 MB de build do frontend para o repositório.
+dist.old/
+.next.old/
+dist.new/
 out/
 *.tsbuildinfo
 
