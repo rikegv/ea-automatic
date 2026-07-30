@@ -1,7 +1,14 @@
 import { ConflictException, NotFoundException } from "@nestjs/common";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AdmissoesService } from "./admissoes.service";
-import { admissoes, candidatoAlteracoesLog, cargos, clientes, frentesAdmissao } from "../db/schema";
+import {
+  admissoes,
+  candidatoAlteracoesLog,
+  cargos,
+  clientes,
+  frentesAdmissao,
+  reguaDocumental,
+} from "../db/schema";
 import type { AuthUser } from "../auth/auth.types";
 
 /**
@@ -35,7 +42,11 @@ interface Escrita {
 }
 
 /** `frentes` diz quais estão concluídas; o resto do fake é o mínimo para o método rodar. */
-function makeDb(frentes: { tipo: string; concluida: boolean }[]) {
+function makeDb(
+  frentes: { tipo: string; concluida: boolean }[],
+  opts: { temRegua?: boolean } = {},
+) {
+  const temRegua = opts.temRegua !== false;
   const updates: Escrita[] = [];
   const inserts: Escrita[] = [];
 
@@ -50,6 +61,8 @@ function makeDb(frentes: { tipo: string; concluida: boolean }[]) {
       if (tabela === frentesAdmissao) return frentes;
       if (tabela === clientes) return [{ codCliente: "C-NOVO", razaoSocial: "CLIENTE NOVO LTDA" }];
       if (tabela === cargos) return [{ id: "cargo-novo", nome: "Auxiliar de Produção" }];
+      // Régua documental do par NOVO: `n = 0` significa par sem régua, que a troca barra.
+      if (tabela === reguaDocumental) return [{ n: temRegua ? 12 : 0 }];
       return [];
     };
     b.where = () => Promise.resolve(linhas());
@@ -151,6 +164,24 @@ describe("trocarCliente", () => {
     const svc = new AdmissoesService(db as never);
 
     await expect(svc.trocarCliente(ADM_ID, novo, MASTER)).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it("BLOQUEIA a troca para par SEM régua documental, dizendo QUAL par", async () => {
+    // Sem esta trava a admissão ficaria com checklist VAZIO, e o problema só apareceria depois,
+    // quando alguém notasse que a auditoria não cobra documento nenhum. Aconteceu em produção.
+    const { db, updates } = makeDb(EM_ANDAMENTO, { temRegua: false });
+    const svc = new AdmissoesService(db as never);
+
+    const err = await svc.trocarCliente(ADM_ID, novo, MASTER).catch((e: ConflictException) => e);
+
+    expect(err).toBeInstanceOf(ConflictException);
+    const msg = String((err as ConflictException).message);
+    expect(msg).toContain("C-NOVO");
+    expect(msg).toContain("CLIENTE NOVO LTDA");
+    expect(msg).toContain("Auxiliar de Produção");
+    expect(msg).toContain("régua documental");
+    // Não aplica NADA: a trava roda antes de tocar a admissão.
+    expect(updates.filter((u) => u.tabela === admissoes)).toEqual([]);
   });
 
   it("admissão inexistente é 404", async () => {

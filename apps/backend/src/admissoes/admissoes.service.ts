@@ -1638,6 +1638,30 @@ export class AdmissoesService {
       throw new ConflictException("O cliente e o cargo informados já são os da admissão.");
     }
 
+    // TRAVA DA RÉGUA (decisão do diretor, ajuste final do item 8). A régua documental resolve por
+    // (cliente + cargo): trocar para um par que nunca foi cadastrado deixaria a admissão com o
+    // CHECKLIST VAZIO, sem nenhum documento exigido, e o problema só apareceria depois, quando alguém
+    // percebesse que a auditoria não cobra nada. Aconteceu na prova em produção da entrega anterior.
+    //
+    // A mensagem diz QUAL par ficou sem régua, com nome e não só código: o Master precisa saber
+    // exatamente o que cadastrar antes de tentar de novo.
+    const [temRegua] = await this.db
+      .select({ n: count() })
+      .from(reguaDocumental)
+      .where(
+        and(
+          eq(reguaDocumental.codCliente, cliente.codCliente),
+          eq(reguaDocumental.cargoId, cargo.id),
+        ),
+      );
+    if (!temRegua || temRegua.n === 0) {
+      throw new ConflictException(
+        `O par ${cliente.codCliente} - ${cliente.razaoSocial} + ${cargo.nome} não tem régua ` +
+          `documental cadastrada. Cadastre a régua desse cliente e cargo antes de trocar, senão a ` +
+          `admissão ficaria sem nenhum documento exigido.`,
+      );
+    }
+
     // Rótulos do estado ANTERIOR para a trilha ficar legível (o código sozinho não diz nada a quem lê).
     const anterior = await this.rotulosClienteCargo(adm.codCliente, adm.cargoId);
     const agora = new Date();
