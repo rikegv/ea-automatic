@@ -25,6 +25,16 @@ const ARQUIVO = {
 function montar() {
   const gravados: Array<Record<string, unknown>> = [];
   const db = {
+    // TRANSIÇÃO PÓS-ASO (OST Onda 2): com o ASO validado, `anexarAso` consulta a frente EXAME para
+    // concluir em APTO. Esta suíte é sobre a OBSERVAÇÃO do documento (§A.6), não sobre a transição:
+    // devolver nenhuma frente faz o novo caminho sair sem tocar em nada, e o que se mede aqui
+    // continua sendo exatamente o que era.
+    select: vi.fn(() => {
+      const b: Record<string, unknown> = {};
+      b.from = () => b;
+      b.where = () => Promise.resolve([]);
+      return b;
+    }),
     query: {
       admissoes: { findFirst: vi.fn().mockResolvedValue({ id: "adm-1" }) },
       tiposDocumento: { findFirst: vi.fn().mockResolvedValue(ASO) },

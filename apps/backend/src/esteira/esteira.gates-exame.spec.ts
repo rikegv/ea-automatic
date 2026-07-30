@@ -6,6 +6,7 @@ import {
   dadosVagaFolha,
   documentosAdmissao,
   exameAgendamento,
+  exameAgendamentoEndereco,
   frentesAdmissao,
   naoConformidades,
 } from "../db/schema";
@@ -26,6 +27,8 @@ const ADMISSAO_ID = "adm-1";
 interface Fixtures {
   /** Linha de `exame_agendamento` (null = nunca agendou). */
   agendamento: Record<string, unknown> | null;
+  /** Linhas de `exame_agendamento_endereco` (multi-endereço, OST Onda 2). */
+  enderecos?: Record<string, unknown>[];
   /** ASO consta ENTREGUE em `documentos_admissao`? */
   asoEntregue: boolean;
   /** Veredito da I.A gravado em `admissoes.aso_validado`. */
@@ -53,6 +56,7 @@ const VAGA_COMPLETA = {
   beneficios: "VR",
   escala: "6x1",
   centroCusto: "CC-1",
+  setor: "Operações",
   gestorBp: "Fulano",
 };
 
@@ -63,6 +67,9 @@ function fakeDb(f: Fixtures, inseridos: { tabela: unknown; valores: unknown }[])
       return [{ id: FRENTE_ID, tipo: "EXAME", concluida: false }];
     }
     if (tabela === exameAgendamento) return f.agendamento ? [f.agendamento] : [];
+    // MULTI-ENDEREÇO: clínica, local e horário passaram a viver na tabela FILHA, e é dela que o gate
+    // lê. Sem endereço nenhum, o agendamento não está completo, que é o que o FURO 1 exercita.
+    if (tabela === exameAgendamentoEndereco) return f.enderecos ?? [];
     if (tabela === documentosAdmissao) {
       return f.asoEntregue ? [{ admissaoId: ADMISSAO_ID }] : [];
     }
@@ -168,6 +175,15 @@ async function capturar(p: Promise<unknown>): Promise<Record<string, unknown> | 
   }
 }
 
+/** Um endereço COMPLETO na tabela filha: clínica, local e horário (multi-endereço). */
+const ENDERECO_COMPLETO = {
+  ordem: 1,
+  clinicaId: "clinica-1",
+  nomeClinica: "Clínica Medical",
+  local: "Av. Paulista, 1000",
+  horario: "09:00",
+};
+
 const AGENDAMENTO_COMPLETO = {
   admissaoId: ADMISSAO_ID,
   data: "2026-07-30",
@@ -196,29 +212,27 @@ describe("Gate (a): AGENDADO exige o agendamento completo", () => {
     // Este é o furo: a linha existe com data, mas sem os demais campos (gravada fora do modal, que
     // exige tudo). Antes o guard só olhava a data e deixava passar.
     const { svc } = montar({
-      agendamento: {
-        ...AGENDAMENTO_COMPLETO,
-        horario: null,
-        nomeClinica: null,
-        local: null,
-        fornecedor: null,
-      },
+      agendamento: { ...AGENDAMENTO_COMPLETO, fornecedor: null },
+      enderecos: [],
     });
     const err = await capturar(
       svc.mudarStatus(FRENTE_ID, { status: "AGENDADO" } as never, user("COMUM")),
     );
     expect(err?.reason).toBe("exameSemAgendamento");
     const msg = String(err?.message);
-    expect(msg).toContain("horário");
-    expect(msg).toContain("clínica");
-    expect(msg).toContain("local");
+    // Com o multi-endereço, "sem clínica/local/horário" virou "sem ENDEREÇO": eles moram na tabela
+    // filha, e um agendamento sem nenhuma linha filha não está agendado.
+    expect(msg).toContain("endereço do exame");
     expect(msg).toContain("fornecedor");
     // A data está preenchida: não pode ser cobrada.
     expect(msg).not.toContain("Falta preencher: data");
   });
 
   it("trava quando falta UM só campo (fornecedor)", async () => {
-    const { svc } = montar({ agendamento: { ...AGENDAMENTO_COMPLETO, fornecedor: null } });
+    const { svc } = montar({
+      agendamento: { ...AGENDAMENTO_COMPLETO, fornecedor: null },
+      enderecos: [ENDERECO_COMPLETO],
+    });
     const err = await capturar(
       svc.mudarStatus(FRENTE_ID, { status: "AGENDADO" } as never, user("COMUM")),
     );
@@ -229,7 +243,7 @@ describe("Gate (a): AGENDADO exige o agendamento completo", () => {
   it("caminho feliz: com os 5 campos PASSA (previsão do ASO e valor são opcionais)", async () => {
     // Decisão do diretor: a previsão do ASO quem informa é a clínica e pode não ter chegado ainda,
     // então ela NÃO trava o AGENDADO.
-    const { svc } = montar({ agendamento: AGENDAMENTO_COMPLETO });
+    const { svc } = montar({ agendamento: AGENDAMENTO_COMPLETO, enderecos: [ENDERECO_COMPLETO] });
     const err = await capturar(
       svc.mudarStatus(FRENTE_ID, { status: "AGENDADO" } as never, user("COMUM")),
     );
