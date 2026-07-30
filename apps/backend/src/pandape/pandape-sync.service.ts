@@ -7,6 +7,8 @@ import type { AuthUser } from "../auth/auth.types";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
 import {
+  admissoes,
+  candidatos,
   cargos,
   clientes,
   documentoArquivosColetados,
@@ -19,9 +21,11 @@ import { AdmissoesService } from "../admissoes/admissoes.service";
 import { AuditoriaService } from "../auditoria/auditoria.service";
 import {
   PandapeApiService,
+  type PandapeFormulario,
   type PandapeMatch,
   type PandaperPrecollaborator,
 } from "./pandape-api.service";
+import { extrairNomeBanco } from "./extrair-banco";
 import type { CandidatoInputDto, SexoValor } from "../admissoes/dto/create-admissao.dto";
 import { PandapeQueueService } from "./pandape-queue.service";
 import { resolverExtensaoDocumento } from "./mime-documento";
@@ -491,6 +495,13 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
   ): Promise<ResumoPull> {
     const reprocessar = opts.reprocessar === true;
     const formularios = await this.api.getFormulariosDocumentos(idPrecollaborator);
+
+    // NOME DO BANCO (OST do banco no modal do olho): vem no MESMO payload que já buscamos para os
+    // documentos, então não custa chamada nova. É gravado no candidato como informação de ficha.
+    // §A.6: só o nome da instituição; agência e conta, que vêm no mesmo formulário, são ignoradas.
+    // A auditoria do comprovante bancário pela IA continua exatamente como está.
+    await this.gravarBancoDoCandidato(admissaoId, formularios);
+
     const resumo: ResumoPull = {
       admissaoId,
       formularios: formularios.length,
@@ -707,6 +718,38 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
       }
     }
     return resumo;
+  }
+
+  /**
+   * Grava o NOME DO BANCO informado pelo candidato no formulário do Pandapé (OST do banco no modal).
+   *
+   * Não sobrescreve com vazio: se o payload não trouxer o campo, o que já estava fica. Falha aqui
+   * NUNCA derruba o pull, porque isto é enriquecimento de ficha, não parte do fluxo documental.
+   *
+   * §A.6: `banco` é o nome da instituição, dado de baixa sensibilidade e exibido na ficha por decisão
+   * do diretor. Agência e conta, que vêm no MESMO formulário, não são lidas nem persistidas em lugar
+   * nenhum: quem as valida é a auditoria do comprovante pela IA, intocada por esta entrega.
+   */
+  private async gravarBancoDoCandidato(
+    admissaoId: string,
+    formularios: PandapeFormulario[],
+  ): Promise<void> {
+    try {
+      const banco = extrairNomeBanco(formularios);
+      if (!banco) return;
+      const adm = await this.db.query.admissoes.findFirst({
+        where: eq(admissoes.id, admissaoId),
+      });
+      if (!adm?.candidatoCpf) return;
+      await this.db
+        .update(candidatos)
+        .set({ banco })
+        .where(eq(candidatos.cpf, adm.candidatoCpf));
+      // §A.6: o log diz QUE gravou, nunca o nome do banco junto de quem é (nem CPF).
+      this.logger.log("Nome do banco do candidato atualizado a partir do formulário do Pandapé.");
+    } catch {
+      this.logger.warn("Não foi possível gravar o nome do banco do candidato (pull segue normal).");
+    }
   }
 
   /**

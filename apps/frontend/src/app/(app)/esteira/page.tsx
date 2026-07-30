@@ -23,6 +23,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AdmissaoDetalheModal } from "@/components/esteira/AdmissaoDetalheModal";
 import { clicksignPill } from "@/lib/clicksign";
 import { caixaAlta } from "@/lib/nome";
+import { pillPendencias } from "@/lib/pendencias-pill";
 import { rotuloDaAuditoria, type ProgressoObrigatorios } from "@/lib/rotulo-auditoria";
 import {
   AceiteLiberacaoModal,
@@ -82,7 +83,7 @@ interface EsteiraItem {
   // Item 8: quantos documentos OBRIGATÓRIOS da régua o candidato ainda deve (aba Auditoria).
   docsPendentes?: number;
   // OST B1 / Bloco 6: progresso da régua obrigatória (aba Auditoria). É o que faz o trabalho da IA
-  // aparecer: sem isto toda admissão exibia "Análise pendente", faltando um documento ou dez.
+  // aparecer: sem isto toda admissão exibia "Análise Pendente", faltando um documento ou dez.
   progressoObrigatorios?: ProgressoObrigatorios;
   // Preenchido quando a régua fecha e o prontuário é arquivado no Drive (T4 / Fase 4).
   drivePastaUrl?: string | null;
@@ -90,6 +91,8 @@ interface EsteiraItem {
   // Clicksign (INT-4 / F9), status do envelope + contrato assinado arquivado no Drive.
   clicksignStatus?: ClicksignStatus;
   contratoAssinadoDriveUrl?: string | null;
+  /** PAUSA: instante da pausa (null = não pausada). Alimenta a tag na coluna Status. */
+  pausadaEm?: string | null;
 }
 interface EsteiraResp {
   items: EsteiraItem[];
@@ -101,6 +104,10 @@ interface EsteiraResp {
     total: number;
     comPendencias: number;
     cadastrados: number;
+    /** Aba EXAME: quantas frentes já estão APTO (concluídas). Alimenta o card "Aptas". */
+    aptas: number;
+    /** PAUSA (OST admissão pausada): quantas desta frente estão pausadas. Card clicável. */
+    pausadas: number;
   };
   statusCatalogo: StatusCat[];
 }
@@ -112,24 +119,16 @@ interface ClienteLite {
 }
 
 // Status que sempre denotam fim negativo da frente (tom de inconformidade).
-const STATUS_DANGER = new Set(["DECLINOU", "CANCELADO"]);
+//
+// `ASO_PENDENTE` entra aqui por decisão do diretor (OST da tag vermelha): o exame já aconteceu e o
+// ASO não chegou, então é PENDÊNCIA e precisa saltar aos olhos, não se confundir com a espera normal
+// de "Aguardando Liberação Do ASO" (que segue em amarelo, porque o prazo ainda não venceu). O NOME
+// não muda; muda só a cor, dentro do mesmo esquema já usado pelas outras tags.
+const STATUS_DANGER = new Set(["DECLINOU", "CANCELADO", "ASO_PENDENTE"]);
 
-// Coluna Pendências Obrig. (§A.12), mesma leitura do Gerenciador: tom + rótulo pelo sinalizador de
-// preenchimento (F5). O ícone é dinâmico (check verde / exclamação amarela / X vermelho) na badge.
-// OST B1 / Bloco 5: RÓTULO UNIFICADO. Antes esta coluna dizia "Inconformidade" (vermelho) para uma
-// admissão e "Parcial" (amarelo) para outra, sendo que AS DUAS estão no mesmo estado de fundo: falta
-// informação obrigatória. O rótulo diferente fazia parecer que uma estava pior que a outra. Agora
-// tudo que é "falta preencher" lê **Parcial**, no mesmo tom. "Completo" (nada falta) e "Competências"
-// seguem, porque são estados distintos, não graus do mesmo. O termo "Inconformidade" SAI daqui; ele
-// continua existindo como valor do sinalizador no domínio e na ficha da admissão, onde significa
-// "há documento INCONFORME" e não "faltam campos".
-const SINAL: Record<string, { tone: PillTone; label: string }> = {
-  OK: { tone: "ok", label: "Completo" },
-  PARCIAL: { tone: "wn", label: "Parcial" },
-  PENDENTE: { tone: "wn", label: "Parcial" },
-  INCONFORMIDADE: { tone: "wn", label: "Parcial" },
-  COMPETENCIAS: { tone: "nt", label: "Competências" },
-};
+// Coluna Pendências Obrig. (§A.12): o mapa de tom/rótulo que vivia AQUI, copiado do Gerenciador,
+// virou `lib/pendencias-pill`. Era a duplicação que deixava as duas telas divergirem, e a razão de a
+// coluna dizer "Parcial" com zero pendência obrigatória: ela lia o enum, e não a contagem viva.
 
 // Rank da coluna Pendências Obrig. para a ordenação clicável: do resolvido para o mais grave, que é
 // a leitura útil da fila. Ordenar pelo texto da pill agruparia por acaso do alfabeto.
@@ -227,8 +226,10 @@ export default function EsteiraPage() {
   // Busca por candidato (item 3), nome ou CPF; revela também concluídos (item 1).
   const [candQuery, setCandQuery] = useState("");
   const [candDebounced, setCandDebounced] = useState("");
-  // Card "Com pendências obrigatórias" (§A.12): filtro client-side (toggle) só desta frente.
+  // Card "Com Pendências Obrigatórias" (§A.12): filtro client-side (toggle) só desta frente.
   const [soPendencias, setSoPendencias] = useState(false);
+  // PAUSA: filtro do card "Pausadas". Ligado, mostra SÓ as pausadas (que por padrão somem da fila).
+  const [soPausadas, setSoPausadas] = useState(false);
 
   // Operação de status
   const [dialog, setDialog] = useState<DialogState>(null);
@@ -281,6 +282,7 @@ export default function EsteiraPage() {
     if (from) qs.set("from", from);
     if (to) qs.set("to", to);
     if (candDebounced) qs.set("q", candDebounced);
+    if (soPausadas) qs.set("pausadas", "1");
     const suffix = qs.toString() ? `?${qs.toString()}` : "";
     try {
       const resp = await apiFetch<EsteiraResp>(`/esteira/${rota}${suffix}`, { token });
@@ -291,7 +293,7 @@ export default function EsteiraPage() {
     } finally {
       setLoading(false);
     }
-  }, [token, rota, codClientes, statusFiltro, from, to, candDebounced]);
+  }, [token, rota, codClientes, statusFiltro, from, to, candDebounced, soPausadas]);
 
   useEffect(() => {
     load();
@@ -560,7 +562,7 @@ export default function EsteiraPage() {
       })
       .map((x) => x.it);
   }, [data]);
-  // Filtro do card "Com pendências obrigatórias" (§A.12): mostra só quem tem campo obrigatório pendente.
+  // Filtro do card "Com Pendências Obrigatórias" (§A.12): mostra só quem tem campo obrigatório pendente.
   const itemsFiltrados = soPendencias ? items.filter((it) => it.temPendencias) : items;
   const statusCatalogo = data?.statusCatalogo ?? [];
 
@@ -568,7 +570,7 @@ export default function EsteiraPage() {
   // desenhada para as outras tabelas ligarem depois só declarando as colunas. Aqui declaramos o
   // TIPO de cada coluna, que é o que define o comportamento do primeiro clique.
   // Status e Pendências ordenam por RANK, não pelo texto da pill: alfabética em status não diz nada
-  // ("A agendar" antes de "Apto" é coincidência), enquanto a ordem do catálogo é a do fluxo real.
+  // ("A Agendar" antes de "Apto" é coincidência), enquanto a ordem do catálogo é a do fluxo real.
   const colunasOrdenaveis = useMemo<ColOrd<EsteiraItem>[]>(
     () => [
       { chave: "contrato", tipo: "texto", valor: (i) => i.tipoContrato },
@@ -588,7 +590,7 @@ export default function EsteiraPage() {
   // sai da fila). Cada card de status filtra a lista ao clicar (toggle).
   //
   // Declínio SEMPRE o ÚLTIMO card da fileira (decisão do diretor). Não basta ordenar entre os cards
-  // de status: depois deles ainda vem o card "Com pendências obrigatórias" (§A.12), e era ELE que
+  // de status: depois deles ainda vem o card "Com Pendências Obrigatórias" (§A.12), e era ELE que
   // deixava o "Declinou" no meio. Por isso o card de declínio é separado aqui e renderizado depois
   // do de pendências. Só a Auditoria tem DECLINOU no catálogo; nas outras abas nada é renderizado.
   const kpiStatus = statusCatalogo.filter((c) => !c.conclui && c.codigo !== "DECLINOU");
@@ -906,6 +908,29 @@ export default function EsteiraPage() {
               {soPendencias && <Icon name="check" className="h-3 w-3 text-accent" />}
             </div>
           </GlassCard>
+          {/* PAUSA (OST admissão pausada, Bloco 4). Este card é o que impede a pausada de virar
+              admissão fantasma: ela some da fila e das outras contagens, e fica aqui, a um clique.
+              Clicável como filtro (§A.12), igual aos demais. */}
+          <GlassCard
+            as="button"
+            className={cn(
+              "fk text-left transition hover:bg-[var(--surface-2)]",
+              soPausadas && "!border-[var(--accent)] ring-1 ring-[var(--accent)]",
+            )}
+            onClick={() => setSoPausadas((v) => !v)}
+            aria-pressed={soPausadas}
+            title={
+              soPausadas ? "Voltar para a fila normal" : "Mostrar só as admissões pausadas"
+            }
+          >
+            <div className="num" style={{ color: TONE_VAR.wn }}>
+              {loading && !data ? "…" : (data?.kpis.pausadas ?? 0)}
+            </div>
+            <div className="lbl flex items-center gap-1.5">
+              Pausadas
+              {soPausadas && <Icon name="check" className="h-3 w-3 text-accent" />}
+            </div>
+          </GlassCard>
           {/* KPI "Cadastrado" (aba Cadastro, decisão do diretor): quantas JÁ foram cadastradas. Vem
               de `kpis.cadastrados`, e não de `porStatus`, porque este último só conta frente EM
               ANDAMENTO (concluida=false) — "Cadastrado" é o status concluinte e ali daria sempre 0.
@@ -933,6 +958,34 @@ export default function EsteiraPage() {
               <div className="lbl flex items-center gap-1.5">
                 Cadastrado
                 {statusFiltro.includes("CADASTRADO") && (
+                  <Icon name="check" className="h-3 w-3 text-accent" />
+                )}
+              </div>
+            </GlassCard>
+          )}
+          {/* KPI "Aptas" (aba Exame). MESMA mecânica do card "Cadastrado" da aba Cadastro, e pelo
+              mesmo motivo: `porStatus` só conta frente EM ANDAMENTO (concluida=false), e APTO é o
+              status CONCLUINTE do Exame, então ali daria sempre 0. O número vem de `kpis.aptas`.
+              Clicar filtra pelo status de conclusão, que é justamente o que reexpõe as concluídas na
+              fila (`filtraStatusConclui` no backend). */}
+          {isExame && (
+            <GlassCard
+              as="button"
+              className={cn(
+                "fk text-left transition hover:bg-[var(--surface-2)]",
+                statusFiltro.includes("APTO") &&
+                  "!border-[var(--accent)] ring-1 ring-[var(--accent)]",
+              )}
+              onClick={() => toggleStatusKpi("APTO")}
+              aria-pressed={statusFiltro.includes("APTO")}
+              title={statusFiltro.includes("APTO") ? "Remover filtro" : "Filtrar só as aptas"}
+            >
+              <div className="num" style={{ color: TONE_VAR.ok }}>
+                {loading && !data ? "…" : (data?.kpis.aptas ?? 0)}
+              </div>
+              <div className="lbl flex items-center gap-1.5">
+                Aptas
+                {statusFiltro.includes("APTO") && (
                   <Icon name="check" className="h-3 w-3 text-accent" />
                 )}
               </div>
@@ -1062,11 +1115,11 @@ export default function EsteiraPage() {
                   // concluídas. Enquanto não abre, `disponivel` vem false do backend.
                   const pausado = isCadastro && item.disponivel === false;
                   // Coluna Status da aba Cadastro (decisão do diretor): enquanto o gate não abre, o
-                  // status real da frente ("A cadastrar") mente para o consultor, porque não há nada
+                  // status real da frente ("A Cadastrar") mente para o consultor, porque não há nada
                   // a cadastrar ainda. Mostra "Aguardando" e o motivo no title. O status no banco
                   // NÃO muda: isto é leitura de tela.
                   const tone = pausado ? "nt" : statusTone(item.status, catMap.get(item.status));
-                  // RÓTULO REAL DA AUDITORIA (OST do status real). "Análise pendente" era ESTÁTICO:
+                  // RÓTULO REAL DA AUDITORIA (OST do status real). "Análise Pendente" era ESTÁTICO:
                   // quem não recebeu nada e quem recebeu quase tudo liam o mesmo texto. O rótulo passa
                   // a sair do PROGRESSO, pela mesma fonte que alimenta as tags (nunca divergem).
                   //
@@ -1085,12 +1138,12 @@ export default function EsteiraPage() {
                   const rotulo = pausado
                     ? "Aguardando"
                     : (rotuloDerivado ?? catMap.get(item.status)?.rotulo ?? item.status);
-                  // Coluna Pendências Obrig. (§A.12): tom/rótulo pelo sinalizador de preenchimento (F5),
-                  // mesma leitura do Gerenciador. O X de frente recusada vive na coluna Status (StatusPill).
-                  const sinalP = SINAL[item.sinalizador] ?? {
-                    tone: "nt" as PillTone,
-                    label: item.sinalizador,
-                  };
+                  // Coluna Pendências Obrig. (§A.12): derivada num lugar só, igual ao Gerenciador.
+                  // `temPendencias` (contagem VIVA, a mesma que o card abre) manda sobre o enum, senão
+                  // documento inconforme fazia a coluna ler "Parcial" com zero pendência obrigatória.
+                  // Farol vai `undefined` de propósito: a Esteira NUNCA lista declínio/rescisão (§A.16, filtro por
+                  // farol no `esteira.service`), então o ramo de "Declínio" não se aplica aqui.
+                  const sinalP = pillPendencias(undefined, item.sinalizador, item.temPendencias);
                   return (
                     <div
                       key={item.frenteId}
@@ -1149,6 +1202,10 @@ export default function EsteiraPage() {
                       <div className="meta text-center">{fmtDataAdmissao(item.dataAdmissao)}</div>
                       <div className="flex min-w-0 flex-col items-center gap-1">
                         <StatusPill tone={tone} label={rotulo} />
+                        {/* PAUSA: mais um estado da MESMA coluna Status, empilhado sob a pill da
+                            frente. Não é coluna nova nem substitui o status real: a frente continua
+                            dizendo onde parou, a tag diz que está parada. */}
+                        {item.pausadaEm && <StatusPill tone="wn" label="Pausada" />}
                         {/* OST B1 / Bloco 6: contador de progresso da régua OBRIGATÓRIA (é o que
                             trava o fluxo). Formato "9/10 aprovados": cabe na coluna sem competir com
                             a pill, e diz de imediato quanto falta. Verde quando fecha. */}
@@ -1410,7 +1467,7 @@ export default function EsteiraPage() {
       {/* ── Diálogos ─────────────────────────────────────────────────────── */}
       <ConfirmDialog
         open={dialog?.kind === "conclui"}
-        title="Concluir frente"
+        title="Concluir Frente"
         message={dialog?.message ?? ""}
         confirmLabel="Concluir"
         busy={Boolean(dialog && actingId === dialog.frenteId)}
@@ -1419,7 +1476,7 @@ export default function EsteiraPage() {
       />
       <ConfirmDialog
         open={dialog?.kind === "reversao"}
-        title="Reabrir pendência"
+        title="Reabrir Pendência"
         message={dialog?.message ?? ""}
         confirmLabel="Confirmar reversão"
         tone="danger"
@@ -1431,7 +1488,7 @@ export default function EsteiraPage() {
       {/* S3, aceite de avanço com pendências obrigatórias (gera trilha de passagem) */}
       <ConfirmDialog
         open={dialog?.kind === "passagem"}
-        title="Avançar com pendências?"
+        title="Avançar Com Pendências?"
         message={dialog?.message ?? ""}
         confirmLabel="Estou ciente, avançar"
         tone="danger"
@@ -1445,7 +1502,7 @@ export default function EsteiraPage() {
           ainda pedir o aceite de passagem em seguida). COMUM/MASTER nunca chegam aqui (aviso puro). */}
       <ConfirmDialog
         open={dialog?.kind === "aptoSemAsoSuperAdmin"}
-        title="Liberar Apto sem ASO validado?"
+        title="Liberar Apto Sem ASO Validado?"
         message={dialog?.message ?? ""}
         confirmLabel="Autorizar liberação"
         tone="danger"

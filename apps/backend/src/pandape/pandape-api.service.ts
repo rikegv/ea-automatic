@@ -31,9 +31,25 @@ export interface PandapeDocument {
  * PII (já foi visto CPF no nome do arquivo). A v3 é a única versão que entrega a associação
  * tipo → documentos. Confirmado ao vivo contra a API real.
  */
+/**
+ * Uma resposta ESTRUTURADA de formulário (v3, `forms[].answers[]`). Confirmado contra a API real: o
+ * campo é identificado por `fieldName` (ex.: "Nome do Banco") e o valor vem em `answer`.
+ *
+ * §A.6: o formulário de Conta Bancária traz também agência e conta. O EA lê APENAS o nome do banco;
+ * os demais não são consumidos nem persistidos.
+ */
+export interface PandapeResposta {
+  fieldName?: string;
+  externalName?: string | null;
+  answer?: string | null;
+  idDatasource?: unknown;
+}
+
 export interface PandapeFormulario {
   name?: string;
   documents?: PandapeDocument[];
+  /** Campos estruturados do formulário. Fonte do "Nome do Banco" (OST do banco no modal do olho). */
+  answers?: PandapeResposta[];
 }
 
 /**
