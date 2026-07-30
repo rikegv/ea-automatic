@@ -337,6 +337,41 @@
       "when": 1785320305851,
       "tag": "0047_luxuriant_the_spike",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1785342564192,
+      "tag": "0048_windy_goblin_queen",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1785346019636,
+      "tag": "0049_thankful_betty_brant",
+      "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1785350306970,
+      "tag": "0050_secret_mimic",
+      "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1785353105863,
+      "tag": "0051_steep_energizer",
+      "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1785354922632,
+      "tag": "0052_woozy_apocalypse",
+      "breakpoints": true
     }
   ]
 }

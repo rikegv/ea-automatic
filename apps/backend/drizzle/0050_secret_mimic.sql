@@ -1,0 +1,1 @@
+ALTER TABLE "candidatos" ADD COLUMN "banco" varchar(120);

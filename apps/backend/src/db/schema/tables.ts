@@ -211,6 +211,14 @@ export const candidatos = pgTable("candidatos", {
   // Sexo (régua padrão): condiciona a exigência da Carteira de Reservista (só MASCULINO). Nulo nos
   // candidatos criados antes do campo existir; nesses casos o Reservista não é cobrado.
   sexo: sexoEnum("sexo"),
+  // NOME DO BANCO informado pelo candidato no formulário do Pandapé (OST do banco no modal do olho).
+  // É TEXTO LIVRE digitado por ele ("NUBANK", "BANCO DO BRASIL", "Nu Pagamentos S.A."), não um código
+  // normalizado: entra como INFORMAÇÃO A MAIS na ficha, nunca como regra de negócio.
+  //
+  // §A.6: guarda SÓ o nome da instituição. Agência e conta vêm no mesmo formulário do Pandapé e são
+  // deliberadamente NÃO persistidas: quem valida esses dados é a auditoria do comprovante pela IA,
+  // que continua exatamente como está, e retê-los aqui seria dado sensível sem uso.
+  banco: varchar("banco", { length: 120 }),
   criadoEm,
   atualizadoEm,
 });
@@ -236,6 +244,49 @@ export const beneficiosCatalogo = pgTable("beneficios_catalogo", {
   exigeValor: boolean("exige_valor").notNull().default(false),
   criadoEm,
 });
+/**
+ * CATÁLOGO DE CLÍNICAS (OST Onda 2, item 4). Guarda SÓ O NOME, por decisão do diretor: nada de
+ * endereço, telefone ou contato. O agendamento do exame passa a SELECIONAR daqui em vez de digitar
+ * texto livre, que é o que fazia a mesma clínica aparecer escrita de cinco formas diferentes.
+ *
+ * Mesmo ciclo de vida dos outros catálogos: inativar é EXCLUSÃO LÓGICA (`ativo=false`), nunca física
+ * e nunca em cascata, para o agendamento que já aponta para a clínica continuar legível.
+ *
+ * §A.6: nome de clínica é dado de fornecedor, não de pessoa.
+ */
+export const clinicasCatalogo = pgTable("clinicas_catalogo", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  nome: varchar("nome", { length: 200 }).notNull().unique(),
+  ativo: boolean("ativo").notNull().default(true),
+  criadoEm,
+});
+
+/**
+ * OBRIGATORIEDADE DE PENDÊNCIA POR CLIENTE (OST da tela de gestão de obrigatoriedade).
+ *
+ * Guarda o que está DESLIGADO, não o que está ligado, e essa escolha é o coração do desenho:
+ * **ausência de linha significa OBRIGATÓRIO**. Cliente que o diretor nunca configurou se comporta
+ * exatamente como antes da tela existir, e nenhuma admissão muda sozinha.
+ *
+ * `chave` é CANÔNICA (`CENTRO_CUSTO`, `GESTOR_BP`), nunca o rótulo de tela: rótulo já mudou uma vez
+ * no sistema, e config amarrada a texto de tela vira lixo silencioso na primeira renomeação.
+ *
+ * §A.6: código de cliente e chave de item. Nenhum dado pessoal.
+ */
+export const clientePendenciaConfig = pgTable(
+  "cliente_pendencia_config",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    codCliente: varchar("cod_cliente", { length: 40 })
+      .notNull()
+      .references(() => clientes.codCliente, { onDelete: "cascade" }),
+    chave: varchar("chave", { length: 40 }).notNull(),
+    obrigatorio: boolean("obrigatorio").notNull().default(true),
+    atualizadoEm,
+  },
+  (t) => ({ uniqClienteChave: unique("uq_cliente_pendencia").on(t.codCliente, t.chave) }),
+);
+
 export const escalasCatalogo = pgTable("escalas_catalogo", {
   id: uuid("id").defaultRandom().primaryKey(),
   // texto livre (descrições de escala chegam a ~120+ chars nos clientes reais).
@@ -446,6 +497,12 @@ export const dadosVagaFolha = pgTable("dados_vaga_folha", {
   escala: text("escala"),
   centroCusto: varchar("centro_custo", { length: 80 }),
   departamento: varchar("departamento", { length: 120 }),
+  // SETOR (OST Onda 2): campo PRÓPRIO, decisão do diretor de que são TRÊS coisas distintas que a
+  // operação usa junto (Setor, Departamento e Centro de Custo), não sinônimos. É pendência
+  // OBRIGATÓRIA e tem memória por (cliente + cargo). Nasce nullable porque as 2.188 admissões que já
+  // existem não têm o dado; a cobrança vale para admissão VIVA, pela régua de pendências (§A.16
+  // preserva o histórico).
+  setor: varchar("setor", { length: 120 }),
   gestorBp: varchar("gestor_bp", { length: 160 }),
   motivo: varchar("motivo", { length: 200 }),
   tempoContrato: varchar("tempo_contrato", { length: 80 }),
@@ -472,7 +529,12 @@ export const exameAgendamento = pgTable("exame_agendamento", {
     .references(() => admissoes.id, { onDelete: "cascade" }),
   data: date("data"),
   horario: varchar("horario", { length: 5 }), // "HH:MM"
+  // Nome da clínica em TEXTO. Mantido para não perder o histórico dos agendamentos que existem, e
+  // porque a clínica inativada no catálogo continua legível aqui (OST Onda 2, item 4).
   nomeClinica: varchar("nome_clinica", { length: 200 }),
+  // Clínica ESCOLHIDA no catálogo. `set null` na exclusão: o agendamento sobrevive à remoção da
+  // clínica, com o nome em texto acima preservando o que foi escolhido na época.
+  clinicaId: uuid("clinica_id").references(() => clinicasCatalogo.id, { onDelete: "set null" }),
   local: text("local"),
   fornecedor: fornecedorExameEnum("fornecedor"),
   // Valor do exame (o exame é tratado no agendamento — decisão do diretor). numeric(10,2); nulo até
@@ -486,6 +548,46 @@ export const exameAgendamento = pgTable("exame_agendamento", {
 });
 
 // ── DocumentoAdmissão (estado por documento exigido — SÓ status) ────────────
+/**
+ * ENDEREÇOS DO AGENDAMENTO DO EXAME (OST Onda 2, multi-endereço).
+ *
+ * POR QUE UMA TABELA FILHA. O agendamento nasceu com UM endereço e UM horário na própria linha, e a
+ * realidade tem candidato que faz o exame em três lugares no mesmo dia. Guardar o segundo e o
+ * terceiro exigiria colunas repetidas (`local2`, `horario2`), que é o desenho que nunca acaba.
+ *
+ * O QUE É A FONTE DA VERDADE: esta tabela. As colunas `clinica_id`, `nome_clinica`, `local` e
+ * `horario` do PAI continuam existindo, com o valor histórico do agendamento de antes da migração,
+ * mas NÃO são mais escritas. Ler daqui é o contrato; o pai guarda o que é do agendamento inteiro
+ * (data, fornecedor, valor, previsão do ASO).
+ *
+ * A DATA é ÚNICA e vive no PAI, de propósito (decisão do diretor): o dia é um só, o que varia é onde
+ * e a que horas. A tela pré-preenche a mesma data nos demais endereços e deixa editável, mas o que
+ * persiste é uma data por agendamento.
+ *
+ * §A.6: clínica, endereço e horário são logística do exame, não dado pessoal.
+ */
+export const exameAgendamentoEndereco = pgTable(
+  "exame_agendamento_endereco",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    agendamentoId: uuid("agendamento_id")
+      .notNull()
+      .references(() => exameAgendamento.id, { onDelete: "cascade" }),
+    /** Ordem de exibição e de execução no dia (1 = primeiro endereço). */
+    ordem: integer("ordem").notNull().default(1),
+    /** Clínica ESCOLHIDA no catálogo. `set null` preserva o agendamento se a clínica for removida. */
+    clinicaId: uuid("clinica_id").references(() => clinicasCatalogo.id, { onDelete: "set null" }),
+    /** Nome da clínica no momento do agendamento: mantém legível mesmo se ela for inativada. */
+    nomeClinica: varchar("nome_clinica", { length: 200 }),
+    /** O endereço em si (texto), como o consultor recebeu da clínica. */
+    local: text("local"),
+    /** Horário PRÓPRIO deste endereço, "HH:MM". É o que a regra do atraso compara. */
+    horario: varchar("horario", { length: 5 }),
+    criadoEm,
+  },
+  (t) => ({ uniqOrdem: unique("uq_agendamento_endereco_ordem").on(t.agendamentoId, t.ordem) }),
+);
+
 export const documentosAdmissao = pgTable(
   "documentos_admissao",
   {
@@ -876,6 +978,27 @@ export const clicksignSchedulerEstado = pgTable("clicksign_scheduler_estado", {
   ultimoCicloAssinados: integer("ultimo_ciclo_assinados").notNull().default(0),
   // Envelopes marcados EXPIRADO neste ciclo (passaram do prazo sem fechar).
   ultimoCicloExpirados: integer("ultimo_ciclo_expirados").notNull().default(0),
+  ultimoCicloFalhas: integer("ultimo_ciclo_falhas").notNull().default(0),
+  ultimoCicloNota: text("ultimo_ciclo_nota"),
+  atualizadoEm,
+});
+
+/**
+ * Estado do SCHEDULER DO EXAME (OST Onda 2), no mesmo molde dos outros três (Pandapé, VT, Clicksign).
+ * Uma linha só (`chave`), para a tela de Diagnóstico mostrar se o verificador está vivo e o que ele
+ * fez no último ciclo. §A.6: só contagens, nenhum id de pessoa.
+ */
+export const exameSchedulerEstado = pgTable("exame_scheduler_estado", {
+  chave: varchar("chave", { length: 20 }).primaryKey().default("exame"),
+  ligado: boolean("ligado").notNull().default(true),
+  ultimoCicloEm: timestamp("ultimo_ciclo_em", { withTimezone: true }),
+  ultimoCicloOkEm: timestamp("ultimo_ciclo_ok_em", { withTimezone: true }),
+  /** Frentes de EXAME avaliadas no último ciclo. */
+  ultimoCicloVarridas: integer("ultimo_ciclo_varridas").notNull().default(0),
+  /** Passaram a AGUARDANDO_ASO neste ciclo (previsão do ASO depois da data do exame). */
+  ultimoCicloAguardando: integer("ultimo_ciclo_aguardando").notNull().default(0),
+  /** Passaram a ASO_PENDENTE neste ciclo (exame já passou e nada anexado). */
+  ultimoCicloPendentes: integer("ultimo_ciclo_pendentes").notNull().default(0),
   ultimoCicloFalhas: integer("ultimo_ciclo_falhas").notNull().default(0),
   ultimoCicloNota: text("ultimo_ciclo_nota"),
   atualizadoEm,

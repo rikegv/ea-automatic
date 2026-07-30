@@ -84,8 +84,30 @@ export const STATUS_AUDITORIA = [
 ] as const;
 export type StatusAuditoria = (typeof STATUS_AUDITORIA)[number];
 
-export const STATUS_EXAME = ["A_AGENDAR", "AGENDADO", "APTO", "CANCELADO"] as const;
+/**
+ * Status da frente EXAME.
+ *
+ * OST Onda 2: entram DOIS status novos, e nenhum deles conclui a frente. Eles descrevem a espera
+ * entre o exame e o ASO, que antes era invisível (a frente ficava em "Agendado" tanto para quem tinha
+ * exame amanhã quanto para quem fez o exame semana passada e não mandou o ASO):
+ *  - `AGUARDANDO_ASO`: a previsão do ASO é POSTERIOR à data do exame, ou seja, a espera é esperada.
+ *  - `ASO_PENDENTE`: a data e hora do exame já passaram e não há ASO anexado, ou seja, está atrasado.
+ *
+ * O `APTO` NÃO muda e continua sendo o único que conclui a frente e abre o gate do Cadastro (decisão
+ * do diretor: "Apto - Exame Finalizado" é o APTO que já existe, não um status novo).
+ */
+export const STATUS_EXAME = [
+  "A_AGENDAR",
+  "AGENDADO",
+  "AGUARDANDO_ASO",
+  "ASO_PENDENTE",
+  "APTO",
+  "CANCELADO",
+] as const;
 export type StatusExame = (typeof STATUS_EXAME)[number];
+
+/** Os dois status de espera do ASO: automáticos, derivados pelo scheduler, nunca concluem a frente. */
+export const STATUS_EXAME_ESPERA_ASO = ["AGUARDANDO_ASO", "ASO_PENDENTE"] as const;
 
 /**
  * Cadastro/Contrato tem DOIS status: "A Cadastrar" e "Cadastrado" (concluinte).
