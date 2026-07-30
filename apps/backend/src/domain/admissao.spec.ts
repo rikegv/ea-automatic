@@ -28,6 +28,7 @@ describe("calcSinalizadorPreenchimento (§A.3 / F5)", () => {
       beneficios: "VT (Vale-Transporte)",
       escala: "5x2",
       centroCusto: "CC1",
+      setor: "Operações",
       gestorBp: "Ana",
     },
   };
@@ -111,7 +112,14 @@ describe("pendenciasObrigatorias (S2/S3)", () => {
         cargoId: "x",
         dataAdmissao: "",
         tipoContrato: "",
-        vagaFolha: { salario: "", beneficios: "", escala: "", centroCusto: "", gestorBp: "" },
+        vagaFolha: {
+          salario: "",
+          beneficios: "",
+          escala: "",
+          centroCusto: "",
+          setor: "",
+          gestorBp: "",
+        },
       }),
     ).toEqual([
       "Salário",
@@ -122,11 +130,12 @@ describe("pendenciasObrigatorias (S2/S3)", () => {
       "Pacote de benefícios",
       "Escala",
       "Centro de custo",
+      "Setor",
       "Gestor / BP",
     ]);
   });
 
-  it("Centro de custo e Gestor / BP vazios geram pendência (item 4, não-bloqueante)", () => {
+  it("Centro de custo, Setor e Gestor / BP vazios geram pendência (item 4 + OST Onda 2)", () => {
     expect(
       pendenciasObrigatorias({
         codCliente: "1001",
@@ -138,10 +147,11 @@ describe("pendenciasObrigatorias (S2/S3)", () => {
           beneficios: "VR",
           escala: "6x1",
           centroCusto: "",
+          setor: "",
           gestorBp: "",
         },
       }),
-    ).toEqual(["Centro de custo", "Gestor / BP"]);
+    ).toEqual(["Centro de custo", "Setor", "Gestor / BP"]);
   });
 
   it("sem pendências quando tudo preenchido", () => {
@@ -156,6 +166,7 @@ describe("pendenciasObrigatorias (S2/S3)", () => {
           beneficios: "VR",
           escala: "6x1",
           centroCusto: "CC01",
+          setor: "Operações",
           gestorBp: "Fulano",
         },
       }),
@@ -173,6 +184,7 @@ describe("pendenciasObrigatorias (S2/S3)", () => {
         beneficios: "VR",
         escala: "6x1",
         centroCusto: "CC01",
+        setor: "Operações",
         gestorBp: "Fulano",
       },
       isBanco: true,

@@ -3,6 +3,12 @@
  * testáveis isoladamente. Complementam `frentes.ts` (nascimento paralelo e gate do Cadastro).
  */
 import type { FarolGlobal } from "@ea/shared-types";
+import {
+  exigido,
+  ROTULO_PENDENCIA,
+  type ChavePendencia,
+  type ConfigPendencias,
+} from "./pendencia-config";
 import type { FrenteTipo } from "./frentes";
 
 /** Sinalizador de preenchimento que esta camada calcula (§A.3 / F5). INCONFORMIDADE e
@@ -105,6 +111,8 @@ export interface PendenciasInput {
     beneficios?: string | null;
     escala?: string | null;
     centroCusto?: string | null;
+    /** SETOR (OST Onda 2): campo próprio, distinto de Departamento e Centro de Custo. */
+    setor?: string | null;
     gestorBp?: string | null;
   } | null;
   /** Admissão de banco (§A.3 / Fase 4 complemento): troca "Data de admissão" por "Termo de Banco". */
@@ -136,25 +144,36 @@ export const PENDENCIA_TERMO_BANCO = "Termo de Banco";
  * Admissão de banco (§A.3 / Fase 4 complemento): a ausência de `dataAdmissao` é ESPERADA (não é
  * pendência); no lugar, o "Termo de Banco" é exigido até estar ENTREGUE.
  */
-export function pendenciasObrigatorias(i: PendenciasInput): string[] {
+export function pendenciasObrigatorias(
+  i: PendenciasInput,
+  config?: ConfigPendencias | null,
+): string[] {
   const pend: string[] = [];
-  if (!presente(i.codCliente)) pend.push("Cliente");
-  if (!presente(i.cargoId)) pend.push("Cargo");
-  if (!presente(i.vagaFolha?.salario)) pend.push("Salário");
-  if (!presente(i.tipoContrato)) pend.push("Tipo de contrato");
+  // `cobra` é o gargalo: TODO item passa por aqui, então item novo nasce configurável por construção
+  // e ninguém precisa lembrar de consultar a config (OST da obrigatoriedade por cliente).
+  const cobra = (chave: ChavePendencia, vazio: boolean) => {
+    if (vazio && exigido(chave, config)) pend.push(ROTULO_PENDENCIA[chave]);
+  };
+
+  cobra("CLIENTE", !presente(i.codCliente));
+  cobra("CARGO", !presente(i.cargoId));
+  cobra("SALARIO", !presente(i.vagaFolha?.salario));
+  cobra("TIPO_CONTRATO", !presente(i.tipoContrato));
+  // Data de admissão e Termo de Banco são o MESMO slot do processo, mas DOIS interruptores na tela
+  // (decisão do diretor): admissão de banco não cobra a data (a ausência é esperada) e cobra o Termo
+  // no lugar. Desligar um NÃO desliga o outro.
   if (i.isBanco) {
-    if (!i.termoBancoEntregue) pend.push(PENDENCIA_TERMO_BANCO);
-  } else if (!presente(i.dataAdmissao)) {
-    pend.push("Data de admissão");
+    cobra("TERMO_BANCO", !i.termoBancoEntregue);
+  } else {
+    cobra("DATA_ADMISSAO", !presente(i.dataAdmissao));
   }
   // O pacote conta como preenchido por QUALQUER uma das duas representações: o estruturado
   // (admissão nova) ou o blob legado (admissão importada). Ver `temBeneficioEstruturado`.
-  if (!i.temBeneficioEstruturado && !presente(i.vagaFolha?.beneficios)) {
-    pend.push("Pacote de benefícios");
-  }
-  if (!presente(i.vagaFolha?.escala)) pend.push("Escala");
-  if (!presente(i.vagaFolha?.centroCusto)) pend.push("Centro de custo");
-  if (!presente(i.vagaFolha?.gestorBp)) pend.push("Gestor / BP");
+  cobra("BENEFICIOS", !i.temBeneficioEstruturado && !presente(i.vagaFolha?.beneficios));
+  cobra("ESCALA", !presente(i.vagaFolha?.escala));
+  cobra("CENTRO_CUSTO", !presente(i.vagaFolha?.centroCusto));
+  cobra("SETOR", !presente(i.vagaFolha?.setor));
+  cobra("GESTOR_BP", !presente(i.vagaFolha?.gestorBp));
   return pend;
 }
 
