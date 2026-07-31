@@ -118,6 +118,27 @@ describe("painel da diretoria: o recorte", () => {
     expect(dosKpis(consultas).match(/a\.farol_global::text =/g)).toHaveLength(1);
   });
 
+  /**
+   * O KPI "AGUARDANDO LIBERAÇÃO" CONTA SÓ QUEM AGUARDA. `LIBERACAO_RECUSADA` é desfecho encerrado:
+   * somá-la mostrava no painel pré-admissões "a liberar" que já tinham sido tratadas. A recusa
+   * continua no acervo e na tabela de Farol, que agrupa o farol cru e não filtra status nenhum.
+   */
+  it("o KPI de aguardando liberação NÃO soma as recusadas", async () => {
+    const { db, consultas } = fakeDb();
+    await new GerencialService(db).painel({});
+    const kpis = dosKpis(consultas);
+    expect(kpis).toContain("a.farol_global = 'AGUARDANDO_LIBERACAO'");
+    expect(kpis).not.toContain("LIBERACAO_RECUSADA");
+  });
+
+  it("a tabela de Farol continua mostrando a recusa (agrupa o farol cru, sem excluir status)", async () => {
+    const { db, consultas } = fakeDb();
+    await new GerencialService(db).painel({});
+    const segFarol = consultas.find((q) => q.includes("as chave, a.farol_global::text as rotulo"))!;
+    expect(segFarol).toContain("group by");
+    expect(segFarol).not.toContain("LIBERACAO_RECUSADA");
+  });
+
   it("período entra como intervalo de data_admissao (a data do negócio, não a da carga)", async () => {
     const { db, consultas } = fakeDb();
     await new GerencialService(db).painel({ de: "2026-01-01", ate: "2026-01-31" });

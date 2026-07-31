@@ -30,10 +30,10 @@ export interface FiltrosGerencial {
   codCliente?: string;
   /**
    * Farol. Aceita UM valor (clique na linha da tabela Farol) ou uma LISTA separada por vírgula
-   * (clique num card de KPI). A lista existe porque três dos cinco KPIs são um CONJUNTO de faróis
-   * (pré-admissões = AGUARDANDO_LIBERACAO + LIBERACAO_RECUSADA; em admissão = EM_ADMISSAO +
-   * BANCO_AGUARDAR), e o card tem de filtrar exatamente o que ele conta, senão o número do card e o
-   * número do painel filtrado se contradizem na cara do diretor.
+   * (clique num card de KPI). A lista existe porque um KPI é um CONJUNTO de faróis (em admissão =
+   * EM_ADMISSAO + BANCO_AGUARDAR), e o card tem de filtrar exatamente o que ele conta, senão o
+   * número do card e o número do painel filtrado se contradizem na cara do diretor. Pela mesma
+   * regra, "Aguardando Liberação" filtra só `AGUARDANDO_LIBERACAO`, que é só o que ele conta.
    */
   farol?: string;
   tipoContrato?: string;
@@ -145,14 +145,22 @@ export class GerencialService {
   }
 
   /**
-   * Os CINCO números do topo. Cada um é uma fatia do farol, e juntos fecham o total: trabalhadas =
-   * ativos + declínios + rescisões + em admissão + aguardando liberação.
+   * Os CINCO números do topo. Cada um é uma fatia do farol.
+   *
+   * "AGUARDANDO LIBERAÇÃO" CONTA SÓ QUEM ESTÁ AGUARDANDO. `LIBERACAO_RECUSADA` ficava somada aqui e
+   * inflava o card com caso ENCERRADO: recusa é desfecho, já foi tratada, e ninguém está esperando
+   * decisão sobre ela. O painel mostrava duas admissões "a liberar" que não existiam como trabalho
+   * (correção pedida pelo diretor). A recusa continua na tabela de Farol, porque lá é um status real
+   * do acervo; o que ela não faz é entrar na contagem de pendência.
+   *
+   * Consequência aceita: os cards deixam de fechar a soma de `trabalhadas`, que já não fechava
+   * (RESCISAO nunca teve card). `trabalhadas` é o total do recorte, não a soma dos outros quatro.
    */
   private async kpis(f: FiltrosGerencial) {
     const [row] = (await this.db.execute(sql`
       select
         count(*)::int as trabalhadas,
-        count(*) filter (where a.farol_global in ('AGUARDANDO_LIBERACAO','LIBERACAO_RECUSADA'))::int as aguardando_liberacao,
+        count(*) filter (where a.farol_global = 'AGUARDANDO_LIBERACAO')::int as aguardando_liberacao,
         count(*) filter (where a.farol_global in ('EM_ADMISSAO','BANCO_AGUARDAR'))::int as em_admissao,
         count(*) filter (where a.farol_global = 'ADMISSAO_CONCLUIDA')::int as ativos,
         count(*) filter (where a.farol_global = 'DECLINOU')::int as declinios

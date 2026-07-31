@@ -86,15 +86,20 @@ const ROTULO_FAROL: Record<string, string> = {
 };
 
 /**
- * O RECORTE DE CADA CARD DE KPI, e por que ele é uma LISTA de faróis.
+ * O RECORTE DE CADA CARD DE KPI, e por que ele pode ser uma LISTA de faróis.
  *
- * Cada card conta uma fatia do farol, e três deles contam mais de um valor. O card só pode filtrar
+ * Cada card conta uma fatia do farol, e um deles conta mais de um valor. O card só pode filtrar
  * EXATAMENTE o que conta, senão o número do card e o número do painel filtrado se contradizem: clicar
  * em "Em Admissão" com 147 e ver o painel responder 146 é o tipo de divergência que derruba a
  * confiança no painel inteiro. Por isso o filtro `farol` do backend aceita lista.
+ *
+ * "Aguardando Liberação" NÃO leva `LIBERACAO_RECUSADA` junto: recusa é desfecho encerrado, não
+ * espera, e somá-la mostrava no painel pré-admissões "a liberar" que já tinham sido tratadas
+ * (correção pedida pelo diretor). O backend conta a mesma coisa, e a recusa segue visível na tabela
+ * de Farol, onde é um status real e clicável.
  */
 const KPI_FAROL = {
-  aguardandoLiberacao: "AGUARDANDO_LIBERACAO,LIBERACAO_RECUSADA",
+  aguardandoLiberacao: "AGUARDANDO_LIBERACAO",
   emAdmissao: "EM_ADMISSAO,BANCO_AGUARDAR",
   ativos: "ADMISSAO_CONCLUIDA",
   declinios: "DECLINOU",
