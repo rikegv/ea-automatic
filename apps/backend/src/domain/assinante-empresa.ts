@@ -107,6 +107,8 @@ export interface AssinanteEmpresa {
   /** Ordem de assinatura no escopo. Mesma ordem = paralelo; ordens diferentes = sequência. */
   ordem: number;
   ativo: boolean;
+  /** Vínculo (item 7): nível MAIS específico do escopo. `null`/ausente = escopo do cliente. */
+  clienteVinculoId?: string | null;
 }
 
 /**
@@ -127,11 +129,26 @@ export interface AssinanteEmpresa {
 export function resolverAssinantes(
   candidatos: AssinanteEmpresa[],
   codCliente: string | null | undefined,
+  clienteVinculoId?: string | null,
 ): AssinanteEmpresa[] {
   const ativos = candidatos.filter((c) => c.ativo);
   const cod = (codCliente ?? "").trim();
-  const doCliente = cod ? ativos.filter((c) => (c.codCliente ?? "").trim() === cod) : [];
-  const conjunto = doCliente.length > 0 ? doCliente : ativos.filter((c) => c.codCliente === null);
+  // TRÊS NÍVEIS desde o item 7, do mais específico ao mais geral: vínculo (cliente + contrato),
+  // cliente, padrão. Quem assina pelo contrato Temporário pode não ser quem assina pelo
+  // Terceirizado do MESMO cliente, e o nível do vínculo é o único que sabe distinguir os dois.
+  // Conjunto VAZIO num nível não é resposta: cai para o próximo, como o cliente já caía no padrão.
+  const doVinculo = clienteVinculoId
+    ? ativos.filter((c) => c.clienteVinculoId === clienteVinculoId)
+    : [];
+  const doCliente = cod
+    ? ativos.filter((c) => (c.codCliente ?? "").trim() === cod && !c.clienteVinculoId)
+    : [];
+  const conjunto =
+    doVinculo.length > 0
+      ? doVinculo
+      : doCliente.length > 0
+        ? doCliente
+        : ativos.filter((c) => c.codCliente === null && !c.clienteVinculoId);
   return [...conjunto].sort((a, b) => a.ordem - b.ordem || a.nome.localeCompare(b.nome, "pt-BR"));
 }
 

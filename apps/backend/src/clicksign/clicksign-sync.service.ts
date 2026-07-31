@@ -201,7 +201,8 @@ export class ClicksignSyncService implements OnModuleInit, OnModuleDestroy {
     // QUEM ASSINA PELA EMPRESA (exceção do cliente, senão o padrão). Resolvido ANTES de criar
     // qualquer coisa na Clicksign: sem representante cadastrado, não nasce envelope pela metade (um
     // draft órfão com só o funcionário ficaria vivo lá e não seria assinável).
-    const representantes = await this.assinantes.resolverConjunto(adm.codCliente);
+    // Item 7: o representante do CONTRATO da admissão, com o do cliente e o padrão como fallback.
+    const representantes = await this.assinantes.resolverConjunto(adm.codCliente, adm.clienteVinculoId);
     if (representantes.length === 0) {
       this.logger.warn(
         "Envelope não criado: sem representante da empresa cadastrado (padrão nem exceção do cliente). " +
@@ -549,6 +550,8 @@ export class ClicksignSyncService implements OnModuleInit, OnModuleDestroy {
         id: admissoes.id,
         codCliente: admissoes.codCliente,
         tipoContrato: admissoes.tipoContrato,
+        // Item 7: define QUEM assina pela empresa quando o cliente tem mais de um contrato.
+        clienteVinculoId: admissoes.clienteVinculoId,
         clicksignEnvelopeId: admissoes.clicksignEnvelopeId,
         clicksignStatus: admissoes.clicksignStatus,
         candidatoNome: candidatos.nome,

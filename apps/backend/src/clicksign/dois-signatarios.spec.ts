@@ -189,10 +189,13 @@ describe("criarEnvelope monta os DOIS signatários com papel e ordem corretos", 
     expect(papeis).not.toContain("sign");
   });
 
-  it("a resolução do assinante recebe o cod_cliente da admissão (para achar a exceção)", async () => {
+  it("a resolução do assinante recebe o cod_cliente E o vínculo da admissão", async () => {
+    // O vínculo (item 7) é o nível MAIS específico do escopo: quem assina pelo contrato Temporário
+    // pode não ser quem assina pelo Terceirizado do mesmo cliente. `undefined` aqui é o caso normal
+    // de hoje (admissão sem ponteiro), que cai no escopo do cliente, como antes.
     const { svc, assinantes } = montar();
     await svc.criarEnvelope("adm-1", "/staging/kit.pdf");
-    expect(assinantes.resolverConjunto).toHaveBeenCalledWith("631");
+    expect(assinantes.resolverConjunto).toHaveBeenCalledWith("631", undefined);
   });
 
   /**

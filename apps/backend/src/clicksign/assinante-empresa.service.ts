@@ -62,7 +62,10 @@ export class AssinanteEmpresaService {
    * O CONJUNTO que assina pela empresa nesta admissão, já na ordem. Lista vazia quando não há
    * representante nem do cliente nem padrão: o chamador NÃO monta o envelope.
    */
-  async resolverConjunto(codCliente: string | null | undefined): Promise<AssinanteEmpresa[]> {
+  async resolverConjunto(
+    codCliente: string | null | undefined,
+    clienteVinculoId?: string | null,
+  ): Promise<AssinanteEmpresa[]> {
     const rows = await this.db
       .select({
         codCliente: assinanteEmpresa.codCliente,
@@ -71,9 +74,10 @@ export class AssinanteEmpresaService {
         cpf: assinanteEmpresa.cpf,
         ordem: assinanteEmpresa.ordem,
         ativo: assinanteEmpresa.ativo,
+        clienteVinculoId: assinanteEmpresa.clienteVinculoId,
       })
       .from(assinanteEmpresa);
-    return resolverAssinantes(rows, codCliente);
+    return resolverAssinantes(rows, codCliente, clienteVinculoId);
   }
 
   /** Lista todos os representantes para a tela (CPF mascarado), padrão primeiro e por ordem. */
