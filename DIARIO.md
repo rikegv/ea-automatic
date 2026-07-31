@@ -6976,3 +6976,318 @@ idênticos. Com o salário validado no DTO, o 22P02 nem chega mais a este catch.
 - **Gate:** backend 530 testes (44 novos), typecheck e lint limpos (só os 2 erros pré-existentes de
   `react-hooks/exhaustive-deps`, alheios); frontend typecheck limpo. Backend e frontend rebuildados e
   no ar. Sem commit (§A.21), validação do Rike em produção.
+
+---
+
+## 31/07/2026, OST Dashboard Executivo (Painel da Diretoria)
+
+**Nota de processo, ler primeiro:** a sessão da noite de 30 para 31/07 **caiu antes de registrar
+aqui**. O código foi construído E subiu (build 01:30, serviços reiniciados 01:32), mas o diário ficou
+sem a entrada, então por algumas horas o disco tinha uma tela no ar que este arquivo não conhecia.
+Esta entrada cobre a OST inteira, do levantamento ao estado de agora, para uma sessão futura
+reconstruir tudo só lendo isto.
+
+### As 10 decisões do diretor (fechadas no levantamento, não re-litigar)
+
+1. **Eixo dos dois gráficos: `data_admissao`**, não `criado_em`.
+2. **Declínios só `DECLINOU`**, separado da rescisão. Rescisão aparece na tabela de Farol, não no KPI.
+3. **CINCO KPIs:** Admissões trabalhadas (total do recorte), **Aguardando liberação** (KPI novo e
+   exclusivo: as pré-admissões paradas ANTES da esteira, o represado da entrada, que **não** entra em
+   "Em admissão"), Em admissão (`EM_ADMISSAO` + `BANCO_AGUARDAR`), Total de ativos
+   (`ADMISSAO_CONCLUIDA`, destacado), Total de declínios (`DECLINOU`).
+4. **Cinco segmentações** com status reais: Farol, Contrato, Exame, Cliente (maior para menor, com
+   rolagem) e Cargo (idem).
+5. **Comparativo anual** por `data_admissao`, ano corrente contra ano-1.
+6. **Paleta oficial do sistema, dois temas** (claro e escuro), por tokens semânticos.
+7. **Tudo é filtro e tudo se relaciona:** clicar em linha de tabela OU em coluna de gráfico filtra o
+   painel inteiro; os filtros combinam; há filtro de Período no topo.
+8. **Menu novo**, nascendo só para o SUPER_ADMIN (§A.23).
+9. **Uma página, paisagem, sem rolar.**
+10. **Protótipo HTML aprovado** guardado nos Downloads do diretor, usado para fidelidade visual.
+
+### O que entrou
+
+**Backend, `apps/backend/src/gerencial/` (4 arquivos, novos):**
+- `gerencial.service.ts`: a leitura agregada inteira. **UM endpoint só** devolvendo KPIs, as 5
+  segmentações e as 2 séries **do MESMO recorte**. O motivo de ser um só, e não vários: dois
+  endpoints se desencontrariam na primeira combinação de filtros (decisão 7).
+- `gerencial.controller.ts`: `GET /api/gerencial` com o recorte na query.
+- `gerencial.module.ts`, registrado no `app.module.ts`.
+- `gerencial.service.spec.ts`: 7 testes.
+
+**Frontend:** `apps/frontend/src/app/(app)/diretoria/page.tsx` (a tela) e o item novo em
+`src/components/shell/Sidebar.tsx`.
+
+**Menu:** `apps/backend/src/domain/menus.ts` ganhou o código `diretoria` (grupo OPERACAO, ordem 1). O
+`MenusCatalogoService` converge a tabela no boot (§A.23), então a linha já está em `menus` e a tela de
+permissão consegue listar. **Zero concessão em `usuario_menus`**, conferido no banco: hoje só
+SUPER_ADMIN e MASTER enxergam, pelo bypass de papel. Quem libera para os demais é o diretor.
+
+### As razões de desenho que não se leem no código
+
+- **Por que `data_admissao` e não `criado_em`:** a base inteira foi importada entre 13 e 30 de julho
+  de 2026, então `criado_em` empilharia 2.400 admissões em 18 dias e não diria nada. `data_admissao` é
+  a data do negócio e cobre 99,7% das admissões. As poucas sem data entram nos KPIs (que contam
+  admissão, não dia) e ficam fora dos gráficos, porque não existe dia onde colocá-las.
+- **Um gráfico não filtra a si mesmo:** clicar no dia 12 filtra KPIs e tabelas, mas o gráfico de dias
+  continua mostrando os 31 com o dia 12 destacado. Se ele se filtrasse, a barra clicada viraria a
+  única do gráfico e não haveria como trocar de dia. Vale igual para o mês. Está no `condicoes(f,
+  exceto)` do service.
+- **Contrato agrupa pela coluna CRUA e rotula no TypeScript:** "(não informado)" é valor de TELA. Passá-lo
+  como parâmetro dentro do `group by` viraria um placeholder diferente do que está no `select`, e o
+  Postgres recusa (as duas expressões deixam de casar).
+- **O comparativo anual é resolvido pelo RELÓGIO** (ano corrente e ano-1), então em 2027 ele passa a
+  comparar 2027 com 2026 sozinho, sem tocar em código. Hoje o ano anterior quase não aparece no
+  gráfico, e esse é o retrato correto: 2025 tem 7 admissões contra 2.389 de 2026.
+- **A tela não trava a controller por `@Roles`**, de propósito: quem enxerga o painel é decisão do
+  diretor na tela de permissão de menu (§A.23), e um `@Roles` barraria mesmo com o menu concedido.
+  Continua exigindo autenticação, e o que a rota devolve é agregado (contagem por cliente, cargo e
+  status), sem nenhum dado pessoal (§A.6).
+
+### O que foi corrigido em 31/07 (falhas encontradas na reconferência)
+
+1. **O menu não existia na barra lateral.** O código estava registrado no catálogo E a linha estava na
+   tabela `menus`, mas o `Sidebar.tsx` tem uma **lista própria de itens** e ninguém acrescentou o
+   `diretoria`. Resultado: a tela estava no ar e **inalcançável pela navegação**. É a mesma classe de
+   defeito do `clinicas` em 29/07 (registro em um lugar, consumo em outro), só que do lado do
+   frontend. Corrigido, com ícone `peak` para não repetir o `chart` da Análise Gerencial, que é outra
+   tela.
+2. **Travessão no próprio código novo** (§A.11): o KPI sem valor mostrava "—" enquanto carregava.
+   Trocado por reticências.
+3. **Rótulo esmagado** (§A.20): "ADMISSÕES TRABALHAD..." vinha cortado no primeiro KPI. Tirado o
+   `truncate` e o tracking largo; agora quebra em duas linhas em vez de sumir.
+
+### Gate e prova
+
+- **Testes:** backend **917 passando, 96 arquivos** (7 do painel). Typecheck backend e frontend
+  limpos. Lint limpo nos arquivos tocados.
+- **Build e restart:** `next build` compilado, `systemctl --user restart ea-frontend`, health check
+  200 no backend (`/api/health`) e no frontend (`/login`). **Está no ar.**
+- **Prova visual (§A.13):** prints em `~/ost-diretoria-prints/` (tema escuro, tema claro, painel
+  filtrado), conferidos renderizados. O filtro cruzado está provado: clicar em "Admissão Concluída"
+  levou tudo a 1.484, Cliente caiu de 210 para 199 linhas, Cargo de 284 para 245, Exame ficou só com
+  "Apto", e os dois gráficos recalcularam.
+- **Os números fecham:** 2.404 trabalhadas = 1.484 ativos + 713 declínios + 147 em admissão + 55
+  rescisões + 5 aguardando liberação.
+
+### Achado de infra: o harness visual não subia
+
+O Playwright não rodava na VM: faltam **11 libs de sistema** (`libatk-1.0`, `libatk-bridge-2.0`,
+`libatspi`, `libXcomposite`, `libXdamage`, `libXfixes`, `libXrandr`, `libXrender`, `libXi`, `libgbm`,
+`libasound`) e **não há sudo** (pede senha). Contorno que funcionou, sem root: `apt-get download` dos
+pacotes `t64` do Ubuntu 24.04 + `dpkg-deb -x` num diretório temporário, rodando o node com
+`LD_LIBRARY_PATH` apontando para lá. Segundo obstáculo: **o SUPER_ADMIN recebe o modal "Diagnóstico Do
+Sistema" ao entrar**, e ele intercepta todo clique, então o script precisa fechá-lo (Escape em laço)
+antes de qualquer print. Sem esses dois contornos a §A.13 fica impossível de cumprir, e a tentação
+vira reportar "concluído" só com teste verde, que é exatamente a falha de processo que a regra proíbe.
+Registrado também na memória do coordenador.
+
+### Ressalvas factuais (não são defeito da OST)
+
+- **A barra lateral estoura a tela em 1366x768 e 1600x900:** ela tem 983px fixos de altura, então a
+  página ganha 215px e 83px de rolagem respectivamente. **Medido**, não estimado. O painel em si cabe
+  e não rola (700px dentro de 768 disponíveis, rolagem interna zero), ou seja, a decisão 9 está
+  cumprida do lado da tela. O estouro é do **shell**, vale para TODAS as telas e é anterior a esta
+  OST; o item novo somou uns 51px. **Não mexi** porque é fora do escopo da OST (§A.14). Se o diretor
+  quiser tratar, é decisão dele.
+- **Campo de data:** aparece `mm/dd/yyyy` nos prints porque o navegador do harness é headless en-US.
+  Campo de data nativo segue o locale do NAVEGADOR e não dá para forçar por HTML. No Chrome em pt-BR
+  do diretor sai `dd/mm/aaaa`.
+- **O protótipo dos Downloads não é acessível desta VM** (a pasta não existe aqui). A fidelidade
+  visual veio do que a sessão da madrugada já havia construído a partir dele.
+
+### Aberto
+
+- **Sem commit e sem push (§A.21):** o gatilho é a validação do diretor na tela. Tudo está no working
+  tree e no ar em produção para ele olhar. Arquivos: `apps/backend/src/gerencial/` (4, novos),
+  `apps/frontend/src/app/(app)/diretoria/page.tsx` (novo),
+  `apps/frontend/src/components/shell/Sidebar.tsx` (modificado),
+  `apps/backend/src/domain/menus.ts` e `apps/backend/src/app.module.ts` (modificados).
+- **Concessão do menu:** zero usuários além do bypass de admin. Distribuir é passo separado, decisão
+  do diretor (§A.23).
+
+## 31/07/2026, OST Controle Gerencial (os 8 ajustes do diretor no painel)
+
+O diretor validou o painel da diretoria e pediu 8 ajustes. Todos entregues, com prova visual em
+`~/ost-controle-gerencial-prints/`. Estado: **no ar em produção, sem commit e sem push** (§A.21: o
+gatilho é a validação dele na tela).
+
+### O que mudou, item a item
+
+1 e 3. **Menu e título.** O menu antigo **"Análise Gerencial" foi DELETADO de vez** (registro,
+barra lateral, mapa de rotas, card da home e a pasta `app/(app)/analise/`; `GET /analise` agora é
+**404**). O menu novo virou **"Controle Gerencial"**, e o **título da página** também: saíram o
+"Diretoria" e o "Esteira Admissional". O **código do menu continua `diretoria`** de propósito: é a
+chave em `usuario_menus`, e trocá-lo apagaria as liberações já concedidas pelo diretor.
+
+2 e 8. **Filtros no modal.** Saíram do topo e entraram no `FiltroTrigger`, o MESMO componente da
+Esteira, do Gerenciador e das Não Conformidades: ícone de filtro no canto superior direito, com badge
+da contagem de filtros ativos. Os seletores usam `menuFit`, que dimensiona a lista pelo MAIOR rótulo,
+então o nome aparece inteiro: **0 de 210 opções cortadas**, medido no DOM (`scrollWidth` x
+`clientWidth`), incluindo o rótulo mais longo da base, de 61 caracteres.
+
+4. **KPI vira filtro.** Cada card recorta o painel inteiro. "Admissões Trabalhadas" é o **limpar
+tudo** (decisão do diretor). Isto exigiu backend: três dos cinco cards contam um **conjunto** de
+faróis, então o filtro `farol` passou a aceitar **lista** (`AGUARDANDO_LIBERACAO,LIBERACAO_RECUSADA`),
+virando um OR de igualdades. Sem isso o card diria 5 e o painel filtrado responderia 3, que é o tipo
+de divergência que derruba a confiança no painel inteiro.
+
+5. **Números em cima das colunas** nos dois gráficos. No gráfico de dias o corpo é 8px com tracking
+fechado: a 9px, dois números de três dígitos em colunas vizinhas (148 e 189) encostavam.
+
+6. **O clique na coluna, e o que estava errado.** O clique **disparava** (medido no harness: o
+`GET /gerencial?dia=9` saía e os KPIs recalculavam), mas duas coisas atrapalhavam. **Primeira, faixa
+morta:** o respiro entre colunas era `gap` do container, ou seja, pixel que não pertencia a coluna
+nenhuma. Em 31 colunas de 17px com 3px de gap, **um em cada sete cliques caía no vazio**. O respiro
+virou padding DENTRO do botão: o visual é o mesmo e a cobertura passou a ser **0 pixel sem coluna em
+604px medidos**. **Segunda, ausência de resposta:** o gráfico não filtra a si mesmo (decisão original,
+correta, senão a coluna clicada viraria a única e não haveria como trocar de dia), então ele ficava
+idêntico depois do clique. Agora a coluna selecionada acende e as demais apagam.
+
+7. **Comparativo anual.** A barra do ano anterior só renderiza quando existem **dois anos com dado
+real**. A lógica ficou inteira (o backend devolve os dois anos, o ano de referência sai do relógio); o
+que entrou foi um **piso de volume** para o ano anterior, em `lib/comparativo-anual.ts` com teste
+próprio. Hoje 2025 tem 7 admissões contra 2.389 de 2026, resíduo de carga, então a legenda mostra
+**só 2026**. Quando 2027 rodar, 2026 passa o piso e o comparativo aparece sozinho.
+
+### Efeito colateral que o diretor precisa saber
+
+Deletar o menu `analise` da tabela **levou junto as 11 liberações** que existiam para ele (cascade de
+`usuario_menus`): marcelo, henrique.vieira, edilaine, harness.visual, daniela, vanderleia, sabrina,
+beatriz, gustavo, bruna e henrique.vieira.corporativo. Não é concessão nem remoção de acesso a nada
+vivo (§A.23): é o menu deletado levando o próprio registro. Nenhum outro menu foi tocado.
+
+O card da home que apontava para `/analise` foi removido junto, senão seria link para 404. **Não
+mexi na grade da home** (segue `xl:grid-cols-5`, agora com 3 cards): mudar o número de colunas é
+decisão visual fora do pedido (§A.14). Se o diretor quiser fechar a fileira, é um pedido de uma linha.
+
+### Prova (§A.13)
+
+`~/ost-controle-gerencial-prints/`: home sem o card, painel nos dois temas, modal de filtros, nome de
+61 caracteres inteiro na lista, KPI de ativos filtrando, "Trabalhadas" limpando (zero chips), KPI de
+pré-admissões com os dois faróis, clique em coluna de dia e de mês filtrando o painel inteiro. Gate:
+typecheck, lint dos arquivos tocados e **919 testes do backend + 84 do frontend** verdes.
+
+### Aberto
+
+- **Sem commit e sem push (§A.21).** Aguarda a validação do diretor em produção.
+
+---
+
+## 31/07/2026, INCIDENTE da transição pós-ASO, subida do backend e fechamento do dia em commits
+
+Dia de três partes: um incidente de produção diagnosticado e corrigido, a subida que estancou a
+origem, e o fechamento de todo o trabalho validado que estava solto no working tree.
+
+### O incidente: admissão com ASO validado não chegava ao Cadastro
+
+Chegou como "o exame não vira APTO depois da I.A ler o ASO". Eram **dois defeitos independentes**,
+os dois nascidos junto com a transição pós-ASO (commit `2db35f6`, 30/07), que subiu **sem nenhum
+teste cobrindo a transição**. Não foi entrega posterior que quebrou: o multi-endereço e o scheduler
+não tocam nesse caminho. O que mudou foi o volume, os ASOs reais começaram a chegar dia 30.
+
+**Defeito 1, `A_AGENDAR` ficava de fora.** `concluirExamePorAso` só aceitava AGENDADO,
+AGUARDANDO_ASO e ASO_PENDENTE. O código supôs que o exame sempre passa pelo agendamento no EA antes
+do ASO chegar; na operação real a clínica devolve o ASO e o consultor anexa sem ter registrado o
+agendamento. A I.A validava, `aso_validado` virava true e a frente ficava parada em silêncio.
+
+**Defeito 2, a frente de Cadastro não nascia.** O comentário do método afirmava que o nascimento
+lazy acontecia "exatamente como no caminho manual", e não acontecia: `mudarStatus` cria a linha
+CADASTRO_CONTRATO quando o gate abre, e a transição pós-ASO só chamava `recomputeFarolGlobal`. Como a
+fila do Cadastro parte de `frentes_admissao` com INNER JOIN por tipo, **sem a linha a admissão não
+existe na aba**, mesmo com as duas frentes concluídas.
+
+**Impacto medido:** 5 admissões travadas pelo defeito 1 e 23 APTAS e invisíveis no Cadastro pelo
+defeito 2. Mais 2 caíram no defeito 2 entre a primeira recuperação e a subida do backend, uma delas
+**3 minutos antes**. Total recuperado no dia: **30 admissões**, em duas rodadas.
+
+**Prova do diagnóstico, antes da correção:** na primeira admissão relatada, a operação contornou na
+mão e o banco registrou a sequência que fecha o raciocínio, agendamento manual, ASO anexado 7
+segundos depois e APTO 9 segundos depois disso (o tempo da chamada síncrona da I.A). Saiu de
+`A_AGENDAR` e funcionou na hora, mas seguiu fora do Cadastro, porque o defeito 2 é independente.
+
+### Correção e recuperação
+
+`STATUS_EXAME_APTO_POR_ASO` passa a incluir `A_AGENDAR`, e o nascimento do Cadastro vai **dentro da
+mesma transação** do APTO, respeitando o gate da regra 3. Continuam de fora, de propósito, a frente
+já concluída (idempotência) e CANCELADO, que é encerramento humano e não se desfaz por upload.
+
+`db/recupera-transicao-pos-aso.ts`: runner idempotente e transacional, com `RECUPERA_DRY=1`. Opera só
+por status e farol, sem PII. Rodou duas vezes, 28 e depois 2.
+
+O spec novo (11 casos) foi **conferido contra o código antigo**: revertidas as duas linhas, dois
+testes falham; restaurado, passam. A transição tinha subido sem rede, e agora tem.
+
+### A subida
+
+Backend construído 17:12:09 e reiniciado 17:12:24, health 200, **zero erro no log**, schedulers todos
+inicializados. Frontend **não** foi reconstruído: já estava no ar desde 14:58 e nenhum fonte era mais
+novo que o `BUILD_ID` dele. Migrações conferidas antes: 58 aplicadas contra 58 no journal, nada
+pendente. O `dist` anterior ficou guardado para reverter.
+
+**Prova de estancamento**, contra o bundle que o systemd carregou, em admissão descartável de CPF
+fake apagada ao final: frente em `A_AGENDAR` mais veredito VALIDADO devolveu
+`{"de":"A_AGENDAR","para":"APTO","cadastroNasceu":true}` e a linha de Cadastro nasceu. Resíduo no
+banco: zero.
+
+### Varredura final, tudo zerado
+
+- APTO sem frente de Cadastro: **0** (inclusive sem nenhum filtro de farol, universo inteiro).
+- `aso_validado` com exame não concluído: **0** (sem restrição de status).
+- Falha de join (cliente, cargo, candidato), pausadas, frente ausente em admissão viva: **0**.
+- Régua obrigatória completa com AUDITORIA aberta: **0** (a auto conclusão da regra 2 está de pé).
+- **6 admissões com ASO anexado e `aso_validado = false`**: não são bug, a I.A não deu VALIDADO. Só
+  destravam com reenvio ou conferência do ASO, e duas estão paradas há mais de uma semana. **Fica
+  aberto para o time.**
+- 23 com as três frentes concluídas e assinatura SEM_ENVELOPE: é a fila "Prontos Para Solicitar",
+  esperando ação humana por desenho (`criarEnvelope` sai da geração do kit, não de scheduler).
+- A fila drenou ao vivo durante a varredura, 9 Cadastros concluídos entre 17:08 e 17:20.
+
+### Regras permanentes novas (decisão do diretor)
+
+- **§A.25, validou, sobe e commita.** A validação do diretor dispara o ciclo inteiro: gate, subida com
+  health conferido, commit com `git add` nominal, push com a flag da §A.7 e registro aqui. Absorve a
+  §A.21 sem dispensar a trava.
+- **§A.26, mexeu em código validado, pergunta antes.** O teste é de **alcance**, não de intenção. Foi
+  escrita a partir deste incidente: a passagem para o Cadastro quebrou e ninguém viu até uma admissão
+  real travar, porque o elo quebrado não tinha teste.
+
+### Commits do fechamento
+
+Dez commits por frente, cobrindo tudo que estava validado e no ar sem commit:
+
+| Hash | Frente |
+|---|---|
+| `a68213a` | migrations 0055 a 0057, uniforme/EPI, vínculo por cliente, duplicatas do Drive |
+| `59a65a5` | painel da Diretoria e Controle Gerencial, home em três colunas |
+| `9287e6b` | Drive: pasta como âncora, prontuário completo, duplicata, reconciliação |
+| `dee5db8` | kit: dicionário com título tipado |
+| `cf90dc9` | admissões: sexo, uniforme e EPI, correção de CPF, troca de cliente, zerar pendência |
+| `d52432e` | régua: vínculo cliente mais tipo de serviço, normalização, Bloco 4 |
+| `15f03fe` | Clicksign: assinante da empresa por FOPAG e por vínculo |
+| `bc30bc6` | menus: Benefícios no Gerencial, Análise Gerencial removida |
+| `3118f26` | **fix da transição pós-ASO** (o incidente) |
+| `b012a4f` | seeds e scripts, Pandapé sem re-consultar admissão pausada |
+
+**Nota de rastreabilidade honesta:** os commits são temáticos, não bissectáveis. O git versiona
+arquivo inteiro, e vários arquivos carregam mudanças de mais de uma frente (o `esteira.service.ts`,
+por exemplo, foi no commit do incidente levando junto o filtro de vínculo e o campo de uniforme). O
+estado **final** é o que foi testado e está no ar; um commit isolado do meio pode não compilar.
+
+### Gate
+
+Typecheck limpo nos três pacotes. **1019 testes verdes** (backend 930, frontend 84, shared-types 5).
+Lint de fontes limpo, com os 2 erros pré-existentes de `react-hooks/exhaustive-deps` (config, alheios
+a este trabalho). **Atenção para as próximas sessões:** `pnpm lint` na raiz acusa 18.353 erros que
+vêm **todos** de `dist.old`, `.next.old` e `.next.deploy-old`, artefatos de reversão que o eslint não
+ignora. O lint que vale é sobre os diretórios `src`.
+
+`.next.deploy-old/` entrou no `.gitignore`: eram 132 MB aparecendo no `git status`, exatamente o
+acidente que o comentário do arquivo já descrevia para o `dist.old`.
+
+### Aberto
+
+- **`logosoulan.png` continua solto, de propósito.** É a pendência antiga do logo, registrada nas
+  entradas de 24/07 como "não commitar sem decisão do Rike". Não está na lista desta OST, então
+  ficou de fora. **Precisa da decisão do diretor.**
+- As 6 admissões com ASO não validado pela I.A, acima.

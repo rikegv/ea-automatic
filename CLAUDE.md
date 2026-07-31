@@ -644,3 +644,41 @@ apoio, texto de ajuda, mensagem de erro, descrição, corpo de modal, texto de b
 ("Enviar para assinatura", "Trocar kit"). Botão é comando, não etiqueta.
 
 Vale para toda entrega futura, não só para a OST que originou a regra. *(Decisão do diretor.)*
+
+## A.25 — Validou, sobe e commita (regra permanente)
+
+**Tudo que o diretor validar e estiver funcionando, a fábrica SOBE e COMMITA, e registra no DIARIO.**
+Trabalho validado não fica parado só no working tree. A validação do diretor é o gatilho completo, não
+só do commit: ela autoriza o ciclo inteiro, deploy, commit e registro.
+
+A ordem, que absorve e não substitui a §A.21:
+1. **Gate verde**: typecheck, lint e testes.
+2. **Validação do diretor na tela** (§A.13/§A.0).
+3. **Deploy**: build e restart do serviço que recebeu a mudança, com health conferido.
+4. **Commit com recorte de escopo (§A.14)**: `git add` nominal, arquivo por arquivo, nunca `git add .`.
+5. **Push**, com a flag `.claude/state/READY_*` criada depois dos passos 1 e 2 e removida logo após
+   (a trava da §A.7 continua valendo e não é dispensada por esta seção).
+6. **Registro no DIARIO** do que subiu.
+
+**Por que a regra existe:** entrega validada e não commitada vira dívida invisível. O working tree
+acumula frentes de sessões diferentes, ninguém sabe mais o que está no ar e o que é rascunho, e o
+próximo deploy carrega junto trabalho que ninguém revisou. *(Decisão do diretor.)*
+
+## A.26 — Mexeu em código validado, pergunta antes (regra permanente)
+
+**Se a fábrica for tocar arquivo ou código JÁ VALIDADO, ou cujo alcance IMPACTE código já validado,
+ela PERGUNTA ANTES de mexer.** Não basta o que ela vai alterar estar dentro da OST: se a alteração
+alcança algo que já funciona e já foi aprovado, a pergunta vem primeiro.
+
+O teste é de ALCANCE, não de intenção. Antes de editar, a fábrica verifica quem mais depende daquele
+ponto (função compartilhada, serviço consumido por outra frente, tabela lida por outra tela, contrato
+entre camadas) e, havendo código validado no caminho, pergunta antes de seguir.
+
+**Motivo, com o caso que originou a regra:** há muitas frentes abertas ao mesmo tempo, e impacto
+cruzado só aparece depois que já quebrou. Foi o que aconteceu na transição pós-ASO: a passagem para o
+Cadastro parou de funcionar e ninguém viu, até uma admissão real travar na operação. Teste verde não
+pega isso, porque o elo quebrado não tinha teste.
+
+Complementa a §A.14 (escopo fechado, só o que a OST pede): a §A.14 trata do que NÃO está na OST, esta
+trata do que ESTÁ na OST mas alcança o que já foi validado. Na menor dúvida, PARE e pergunte.
+*(Decisão do diretor.)*

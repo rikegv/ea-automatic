@@ -10,6 +10,9 @@ dist/
 # levaria 108 MB de build do frontend para o repositório.
 dist.old/
 .next.old/
+# Mesma coisa, com o nome usado no deploy do frontend: 132 MB que apareciam no `git status` e
+# entrariam num `git add .` distraído, exatamente o acidente que o comentário acima descreve.
+.next.deploy-old/
 dist.new/
 out/
 *.tsbuildinfo
