@@ -10,12 +10,40 @@ export interface BeneficioPacote {
 }
 
 /**
- * Quais benefícios exigem valor: a regra vive no shared-types e é a MESMA que o backend valida.
- * Reexportado aqui para as telas importarem de um lugar só (VR, VA, AM, Cesta básica, PLR,
- * Auxílio creche; decisão do diretor).
+ * Quais benefícios exigem valor. FALLBACK por nome, mantido no shared-types e usado só quando a
+ * linha do catálogo não é conhecida (benefício vindo do texto achatado das admissões importadas).
+ * A régua de verdade é a coluna `exige_valor` do cadastro: use `criarPrecisaValor` abaixo.
  */
 export { beneficioExigeValor as precisaValorBeneficio } from "@ea/shared-types";
 import { beneficioExigeValor } from "@ea/shared-types";
+
+/** Uma linha do catálogo como o `/catalogos/beneficios` devolve (só os ATIVOS). */
+export interface CatalogoBeneficio {
+  id: string;
+  nome: string;
+  exigeValor: boolean;
+}
+
+/**
+ * A régua de "precisa de valor?" a partir do CATÁLOGO (OST cadastro de benefícios por tela).
+ *
+ * Antes as telas deduziam a exigência do TEXTO DO NOME (`precisaValorBeneficio`), o que fazia
+ * benefício novo nascer sem exigir valor e renomear mudar a exigência em silêncio. Agora quem manda
+ * é a coluna `exige_valor`, a MESMA que o backend valida em `validarValoresDoPacote`, então as duas
+ * pontas não têm como divergir.
+ *
+ * Nome fora do catálogo (legado achatado, ou benefício inativado depois de alocado) cai no fallback
+ * por nome, em vez de virar "não exige valor" por omissão.
+ */
+export function criarPrecisaValor(
+  catalogo: { nome: string; exigeValor?: boolean }[] | null | undefined,
+): (nome: string) => boolean {
+  const porNome = new Map((catalogo ?? []).map((b) => [b.nome, b.exigeValor]));
+  return (nome: string) => {
+    const doCatalogo = porNome.get(nome);
+    return doCatalogo === undefined ? beneficioExigeValor(nome) : doCatalogo === true;
+  };
+}
 
 /** "500" / "500.5" → "500,00" (como o consultor lê e digita). */
 export function fmtValorBeneficio(valor: number): string {
@@ -45,12 +73,14 @@ export function foraDoPadraoPacote(
   padrao: BeneficioPacote[] | null,
   selecionados: string[],
   valores: Record<string, string>,
+  /** Régua de "precisa de valor?". Passe a do CATÁLOGO (`criarPrecisaValor`); o default é o fallback. */
+  precisaValor: (nome: string) => boolean = beneficioExigeValor,
 ): boolean {
   if (!padrao || padrao.length === 0) return false;
   const atual = new Map(
     selecionados.map((nome) => [
       nome,
-      beneficioExigeValor(nome) ? normalizarValor(valores[nome] ?? "") : "",
+      precisaValor(nome) ? normalizarValor(valores[nome] ?? "") : "",
     ]),
   );
   const esperado = new Map(padrao.map((b) => [b.nome, b.valor === null ? "" : String(b.valor)]));
@@ -66,14 +96,14 @@ export function foraDoPadraoPacote(
 
 /**
  * Benefícios selecionados que EXIGEM valor e estão sem valor (§A.17 etapa 4, decisão do diretor).
- * Usada pelo wizard e pelo modal para bloquear o avanço com mensagem clara. O backend revalida
- * pela mesma regra do shared-types.
+ * Usada pelo wizard e pelo modal para bloquear o avanço com mensagem clara. O backend revalida pela
+ * MESMA régua, que agora é a coluna `exige_valor` do cadastro.
  */
 export function beneficiosSemValor(
   selecionados: string[],
   valores: Record<string, string>,
+  /** Régua de "precisa de valor?". Passe a do CATÁLOGO (`criarPrecisaValor`); o default é o fallback. */
+  precisaValor: (nome: string) => boolean = beneficioExigeValor,
 ): string[] {
-  return selecionados.filter(
-    (nome) => beneficioExigeValor(nome) && !(valores[nome] ?? "").trim(),
-  );
+  return selecionados.filter((nome) => precisaValor(nome) && !(valores[nome] ?? "").trim());
 }

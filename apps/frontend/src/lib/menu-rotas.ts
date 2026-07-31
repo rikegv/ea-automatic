@@ -36,7 +36,9 @@ export const ROTA_MENU: { prefixo: string; codigo: string }[] = [
   // de assinatura. Passa a ser governada pelo mesmo menu que governa a operação no backend
   // (`KitController.gerar`), então tela e operação ficam com a MESMA régua.
   { prefixo: "/kit", codigo: "assinaturas" },
-  { prefixo: "/analise", codigo: "analise" },
+  // CONTROLE GERENCIAL: governado pelo menu `diretoria`, que nasce só para o SUPER_ADMIN (§A.23). Sem
+  // esta linha o guard deixaria qualquer autenticado abrir a URL direto.
+  { prefixo: "/diretoria", codigo: "diretoria" },
 ];
 
 /**

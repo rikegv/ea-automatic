@@ -46,12 +46,19 @@ export const MENUS: MenuDef[] = [
   // ── Operação ──────────────────────────────────────────────────────────────
   { codigo: "inicio", rotulo: "Início", href: "/", grupo: "OPERACAO", ordem: 0, operacoes: [] },
   {
-    codigo: "analise",
-    rotulo: "Análise Gerencial",
-    href: "/analise",
+    // CONTROLE GERENCIAL (OST do dashboard executivo, ajustes do diretor). Menu NOVO: nasce só para o
+    // SUPER_ADMIN e o diretor libera quem enxerga (§A.23). O CÓDIGO segue `diretoria` de propósito,
+    // mesmo com o rótulo novo: o código é a chave em `usuario_menus`, e trocá-lo apagaria as
+    // liberações já feitas pelo diretor. Rótulo é tela; código é chave.
+    //
+    // A tela "Análise Gerencial" (menu `analise`, mock sem dado real) foi DELETADA nesta OST por
+    // decisão do diretor, junto com a rota `/analise`.
+    codigo: "diretoria",
+    rotulo: "Controle Gerencial",
+    href: "/diretoria",
     grupo: "OPERACAO",
     ordem: 1,
-    // Compõe a partir de leituras compartilhadas; sem operação própria de backend.
+    // Leitura agregada, sem operação própria de escrita.
     operacoes: [],
   },
   {

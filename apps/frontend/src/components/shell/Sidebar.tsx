@@ -26,7 +26,13 @@ interface NavDef {
 
 const OPERACAO: NavDef[] = [
   { href: "/", icon: "home", label: "Início", codigo: "inicio" },
-  { href: "/analise", icon: "chart", label: "Análise Gerencial", codigo: "analise" },
+  // CONTROLE GERENCIAL (OST do dashboard executivo). Item NOVO: como todo menu novo, ele só aparece
+  // para quem tem o código `diretoria`, e o código nasce concedido apenas ao SUPER_ADMIN (§A.23).
+  // Quem libera para os demais é o diretor, na tela de permissão de menu. O código continua
+  // `diretoria` mesmo com o rótulo novo: é a chave das liberações já concedidas.
+  //
+  // A "Análise Gerencial" (casca com dado mock) foi DELETADA nesta OST, por decisão do diretor.
+  { href: "/diretoria", icon: "peak", label: "Controle Gerencial", codigo: "diretoria" },
   // 3º item, com destaque vermelho: é a tela crítica (pré-admissões aguardando liberação).
   { href: "/liberacao", icon: "clock", label: "Liberação Admissional", codigo: "liberacao", critical: true },
   { href: "/nova", icon: "plus", label: "Nova Admissão", codigo: "nova" },
