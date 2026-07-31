@@ -1,0 +1,245 @@
+import { describe, expect, it } from "vitest";
+import { EsteiraService } from "./esteira.service";
+import { documentosAdmissao, frentesAdmissao } from "../db/schema";
+
+/**
+ * TRANSIÇÃO PÓS-ASO — a rede que faltava (incidente de 31/07/2026).
+ *
+ * A transição nasceu sem teste e quebrou de duas maneiras ao mesmo tempo, as duas visíveis só na
+ * operação real:
+ *   (a) exame em A_AGENDAR não virava APTO. A I.A validava o ASO, `aso_validado` virava `true` e a
+ *       frente ficava parada, porque a lista de estados aceitos supunha que o agendamento sempre
+ *       fosse registrado no EA antes do ASO chegar. Não é o que acontece: o consultor recebe o ASO
+ *       da clínica e anexa sem ter agendado no sistema. 5 admissões travaram assim.
+ *   (b) a frente CADASTRO_CONTRATO não nascia. A fila do Cadastro parte de `frentes_admissao` com
+ *       INNER JOIN por tipo, então sem a linha a admissão não aparece na aba, mesmo APTA. 23
+ *       admissões ficaram APTAS e invisíveis no Cadastro.
+ *
+ * Cada `it` aqui trava um dos dois furos, mais os limites que NÃO podem mudar (CANCELADO e frente
+ * concluída ficam de fora; ASO reprovado pela I.A não conclui nada).
+ *
+ * Sem Postgres: db falso que devolve as frentes irmãs da fixture e grava o que foi escrito, então o
+ * teste observa o comportamento REAL do serviço.
+ */
+
+const ADMISSAO_ID = "adm-1";
+const FRENTE_EXAME_ID = "frente-exame-1";
+
+interface Fixtures {
+  /** Status atual da frente EXAME. */
+  status: string;
+  /** A frente EXAME já está concluída? */
+  concluida?: boolean;
+  /** A AUDITORIA já concluiu (é o outro lado do gate do Cadastro, regra 3)? */
+  auditoriaConcluida?: boolean;
+  /** Já existe frente CADASTRO_CONTRATO (nascimento lazy não repete)? */
+  cadastroExiste?: boolean;
+  /** Veredito da I.A sobre o ASO anexado. */
+  vereditoIa?: "VALIDADO" | "INCONFORME";
+  /** A I.A estoura (indisponível)? */
+  iaFalha?: boolean;
+}
+
+interface Escrita {
+  tabela: unknown;
+  valores: Record<string, unknown>;
+}
+
+function montar(f: Fixtures) {
+  const escritas: Escrita[] = [];
+  const atualizacoes: Escrita[] = [];
+
+  const irmas = [
+    {
+      id: FRENTE_EXAME_ID,
+      tipo: "EXAME",
+      status: f.status,
+      concluida: f.concluida ?? false,
+    },
+    {
+      id: "frente-auditoria-1",
+      tipo: "AUDITORIA",
+      status: "ANALISE_OK",
+      concluida: f.auditoriaConcluida ?? true,
+    },
+    ...(f.cadastroExiste
+      ? [
+          {
+            id: "frente-cadastro-1",
+            tipo: "CADASTRO_CONTRATO",
+            status: "A_CADASTRAR",
+            concluida: false,
+          },
+        ]
+      : []),
+  ];
+
+  const chain = (): Record<string, unknown> => {
+    let tabela: unknown = null;
+    const b: Record<string, unknown> = {};
+    b.from = (t: unknown) => {
+      tabela = t;
+      return b;
+    };
+    for (const m of ["innerJoin", "leftJoin", "orderBy", "groupBy", "limit", "where"]) {
+      b[m] = () => b;
+    }
+    b.then = (res: (v: unknown[]) => unknown, rej: (e: unknown) => unknown) =>
+      Promise.resolve(tabela === frentesAdmissao ? irmas : []).then(res, rej);
+    return b;
+  };
+
+  const escrita = (tabela: unknown, destino: Escrita[]) => {
+    const b: Record<string, unknown> = {};
+    b.values = (v: unknown) => {
+      destino.push({ tabela, valores: v as Record<string, unknown> });
+      return b;
+    };
+    b.set = (v: unknown) => {
+      atualizacoes.push({ tabela, valores: v as Record<string, unknown> });
+      return b;
+    };
+    b.where = () => b;
+    b.onConflictDoUpdate = () => b;
+    b.onConflictDoNothing = () => b;
+    b.returning = () => Promise.resolve([{ id: "novo-1" }]);
+    b.then = (res: (v: unknown[]) => unknown, rej: (e: unknown) => unknown) =>
+      Promise.resolve([]).then(res, rej);
+    return b;
+  };
+
+  const exec = {
+    select: () => chain(),
+    selectDistinct: () => chain(),
+    insert: (t: unknown) => escrita(t, escritas),
+    update: (t: unknown) => escrita(t, escritas),
+    query: {
+      admissoes: {
+        findFirst: async () => ({
+          id: ADMISSAO_ID,
+          farolGlobal: "EM_ADMISSAO",
+          dataAdmissao: "2026-08-10",
+        }),
+      },
+      tiposDocumento: { findFirst: async () => ({ id: "tipo-aso", codigo: "ASO" }) },
+    },
+  } as Record<string, unknown>;
+  (exec as { transaction: unknown }).transaction = async (cb: (tx: unknown) => Promise<unknown>) =>
+    cb(exec);
+
+  const auditoria = {
+    classificarAso: async () => {
+      if (f.iaFalha) throw new Error("I.A indisponível");
+      const status = f.vereditoIa ?? "VALIDADO";
+      return { status, valido: status === "VALIDADO" };
+    },
+  };
+
+  const svc = new EsteiraService(exec as never, {} as never, auditoria as never);
+  return { svc, escritas, atualizacoes };
+}
+
+/** Upload mínimo de ASO (o buffer nunca é persistido — regra 7 / §A.6). */
+const ARQUIVO = {
+  originalname: "aso.pdf",
+  size: 1234,
+  buffer: Buffer.from("%PDF-1.4 aso"),
+} as unknown as Express.Multer.File;
+
+/** As inserções na tabela de frentes (nascimento lazy do Cadastro). */
+const frentesInseridas = (escritas: Escrita[]) =>
+  escritas.filter((e) => e.tabela === frentesAdmissao).map((e) => e.valores);
+
+describe("transição pós-ASO: o exame vira APTO quando a I.A valida", () => {
+  it("A_AGENDAR vira APTO: o ASO validado prova o exame mesmo sem agendamento registrado", async () => {
+    const { svc, atualizacoes } = montar({ status: "A_AGENDAR" });
+
+    const r = (await svc.anexarAso(ADMISSAO_ID, ARQUIVO)) as Record<string, unknown>;
+
+    expect(r.asoValidado).toBe(true);
+    expect(r.aptoAuto).toMatchObject({ de: "A_AGENDAR", para: "APTO" });
+    // A frente foi de fato concluída no banco, não só no retorno.
+    expect(atualizacoes).toContainEqual(
+      expect.objectContaining({
+        tabela: frentesAdmissao,
+        valores: expect.objectContaining({ status: "APTO", concluida: true }),
+      }),
+    );
+  });
+
+  it.each(["AGENDADO", "AGUARDANDO_ASO", "ASO_PENDENTE"])(
+    "%s vira APTO (os estados de espera continuam valendo)",
+    async (status) => {
+      const { svc } = montar({ status });
+      const r = (await svc.anexarAso(ADMISSAO_ID, ARQUIVO)) as Record<string, unknown>;
+      expect(r.aptoAuto).toMatchObject({ de: status, para: "APTO" });
+    },
+  );
+
+  it("abre o Cadastro: a frente CADASTRO_CONTRATO nasce junto do APTO", async () => {
+    const { svc, escritas } = montar({ status: "AGENDADO", auditoriaConcluida: true });
+
+    const r = (await svc.anexarAso(ADMISSAO_ID, ARQUIVO)) as Record<string, unknown>;
+
+    expect(r.aptoAuto).toMatchObject({ cadastroNasceu: true });
+    expect(frentesInseridas(escritas)).toContainEqual(
+      expect.objectContaining({
+        admissaoId: ADMISSAO_ID,
+        tipo: "CADASTRO_CONTRATO",
+        status: "A_CADASTRAR",
+        concluida: false,
+      }),
+    );
+  });
+
+  it("não abre o Cadastro com a AUDITORIA pendente (o gate da regra 3 continua de pé)", async () => {
+    const { svc, escritas } = montar({ status: "AGENDADO", auditoriaConcluida: false });
+
+    const r = (await svc.anexarAso(ADMISSAO_ID, ARQUIVO)) as Record<string, unknown>;
+
+    expect(r.aptoAuto).toMatchObject({ para: "APTO" });
+    expect(r.aptoAuto).not.toHaveProperty("cadastroNasceu");
+    expect(frentesInseridas(escritas)).toHaveLength(0);
+  });
+
+  it("não duplica o Cadastro que já existe (nascimento lazy é idempotente)", async () => {
+    const { svc, escritas } = montar({ status: "AGENDADO", cadastroExiste: true });
+
+    await svc.anexarAso(ADMISSAO_ID, ARQUIVO);
+
+    expect(frentesInseridas(escritas)).toHaveLength(0);
+  });
+
+  it("CANCELADO não vira APTO: encerramento humano não se desfaz por upload", async () => {
+    const { svc } = montar({ status: "CANCELADO" });
+    const r = (await svc.anexarAso(ADMISSAO_ID, ARQUIVO)) as Record<string, unknown>;
+    expect(r.asoValidado).toBe(true);
+    expect(r).not.toHaveProperty("aptoAuto");
+  });
+
+  it("frente já concluída não gera evento novo (idempotente)", async () => {
+    const { svc, escritas } = montar({ status: "APTO", concluida: true });
+    const r = (await svc.anexarAso(ADMISSAO_ID, ARQUIVO)) as Record<string, unknown>;
+    expect(r).not.toHaveProperty("aptoAuto");
+    expect(frentesInseridas(escritas)).toHaveLength(0);
+  });
+
+  it("ASO reprovado pela I.A não conclui a frente", async () => {
+    const { svc } = montar({ status: "AGENDADO", vereditoIa: "INCONFORME" });
+    const r = (await svc.anexarAso(ADMISSAO_ID, ARQUIVO)) as Record<string, unknown>;
+    expect(r.asoValidado).toBe(false);
+    expect(r).not.toHaveProperty("aptoAuto");
+  });
+
+  it("I.A indisponível deixa o ASO anexado e a frente parada (gate travado)", async () => {
+    const { svc, escritas } = montar({ status: "AGENDADO", iaFalha: true });
+
+    const r = (await svc.anexarAso(ADMISSAO_ID, ARQUIVO)) as Record<string, unknown>;
+
+    expect(r.iaStatus).toBe("INDISPONIVEL");
+    expect(r.asoValidado).toBe(false);
+    expect(r).not.toHaveProperty("aptoAuto");
+    // O ASO fica registrado como ENTREGUE mesmo assim: quem reenvia é o consultor.
+    expect(escritas.some((e) => e.tabela === documentosAdmissao)).toBe(true);
+  });
+});

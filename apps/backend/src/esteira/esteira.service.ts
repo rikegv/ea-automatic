@@ -58,6 +58,7 @@ import { AuditoriaService } from "../auditoria/auditoria.service";
 import { ReguaCompletudeService } from "../regua/regua-completude.service";
 import { pendenciasObrigatoriasSet } from "../regua/pendencias-lote";
 import { configDoCliente } from "../regua/pendencia-config.repo";
+import { filtroClienteOuVinculo } from "../regua/vinculo.repo";
 import {
   conclui,
   isReversao,
@@ -94,6 +95,21 @@ export interface EsteiraFiltros {
 }
 
 const DATA_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Estados do EXAME em que o ASO validado pela I.A conclui a frente em APTO (transição pós-ASO).
+ *
+ * A lista é por INCLUSÃO deliberada, e o que fica de fora é o que não pode ser desfeito por upload:
+ * frente já concluída (idempotência) e CANCELADO (encerramento humano do exame). A_AGENDAR ENTRA
+ * porque o ASO validado prova que o exame aconteceu, mesmo que o agendamento nunca tenha sido
+ * registrado no EA, que é o caso mais comum na operação (correção do incidente de 31/07/2026).
+ */
+const STATUS_EXAME_APTO_POR_ASO: readonly string[] = [
+  "A_AGENDAR",
+  "AGENDADO",
+  "AGUARDANDO_ASO",
+  "ASO_PENDENTE",
+];
 
 /**
  * Papel por extenso para o texto da NC (registro lido por gente). Mesma grafia da tela de usuários.
@@ -710,12 +726,13 @@ export class EsteiraService {
           setor: vaga?.setor,
           gestorBp: vaga?.gestorBp,
         },
+        possuiUniforme: vaga?.possuiUniforme,
         isBanco: admissao.isBanco,
         termoBancoEntregue,
         temBeneficioEstruturado: (await this.beneficiosEstruturadosSet([admissao.id])).has(
           admissao.id,
         ),
-      }, await configDoCliente(this.db, admissao?.codCliente));
+      }, await configDoCliente(this.db, admissao?.codCliente, admissao?.clienteVinculoId));
     }
     if (pendenciasPassagem.length > 0 && !dto.aceitePassagem) {
       throw new ConflictException({
@@ -1056,6 +1073,8 @@ export class EsteiraService {
         // TROCA DE CLIENTE (OST da correção do cliente errado): carimbo não nulo acende o aviso
         // vermelho no modal, até o consultor revisar os documentos e o prontuário.
         trocaClienteEm: admissoes.trocaClienteEm,
+        // Ponteiro do vínculo (item 7): define QUAL régua monta o checklist desta ficha.
+        clienteVinculoId: admissoes.clienteVinculoId,
         // Observação livre deixada na LIBERAÇÃO (Bloco 3): o recado do consultor para quem tocar a
         // admissão adiante. Não confundir com `documentos_admissao.observacao` (motivo do veredito
         // por documento), que este mesmo detalhe também devolve, dentro de `documentos[]`.
@@ -1149,6 +1168,9 @@ export class EsteiraService {
         and(
           eq(reguaDocumental.codCliente, adm.codCliente),
           eq(reguaDocumental.cargoId, adm.cargoId),
+          // VÍNCULO (item 7): o checklist da ficha é o do CONTRATO da admissão. Sem vínculo (a
+          // regra dos 233 clientes de um contrato só), lê a régua do cliente, como sempre leu.
+          filtroClienteOuVinculo(reguaDocumental.clienteVinculoId, adm.clienteVinculoId),
         ),
       )
       .orderBy(asc(tiposDocumento.nome));
@@ -1186,10 +1208,11 @@ export class EsteiraService {
         setor: vaga?.setor,
         gestorBp: vaga?.gestorBp,
       },
+      possuiUniforme: vaga?.possuiUniforme,
       isBanco: adm.isBanco,
       termoBancoEntregue,
       temBeneficioEstruturado: (await this.beneficiosEstruturadosSet([admissaoId])).has(admissaoId),
-    }, await configDoCliente(this.db, adm.codCliente));
+    }, await configDoCliente(this.db, adm.codCliente, adm.clienteVinculoId));
 
     // S3 — trilha de passagem (avanços com pendência), com autor.
     const passagensRows = await this.db
@@ -1294,6 +1317,21 @@ export class EsteiraService {
         departamento: vaga?.departamento ?? null,
         setor: vaga?.setor ?? null,
         gestorBp: vaga?.gestorBp ?? null,
+      },
+      // UNIFORME (OST Onda 3, item 1): vai para o quadro de DADOS PESSOAIS da ficha, porque tamanho
+      // é da pessoa, não da folha. `possui: null` = ninguém respondeu (é a pendência).
+      uniforme: {
+        possui: vaga?.possuiUniforme ?? null,
+        camiseta: vaga?.uniformeCamiseta ?? null,
+        calca: vaga?.uniformeCalca ?? null,
+        bota: vaga?.uniformeBota ?? null,
+      },
+      // EPI: alimenta o AVISO da ficha (o consultor precisa validar o EPI daquela admissão). Não é
+      // pendência obrigatória, então nunca entra em `pendencias`.
+      epi: {
+        possui: vaga?.possuiEpi ?? null,
+        itens: vaga?.epiItens ? vaga.epiItens.split(",") : [],
+        outros: vaga?.epiOutros ?? null,
       },
       // BLOCO 3: dados do exame coletados do agendamento (só leitura no olho). Null = não agendado.
       exame: agendamento
@@ -1504,25 +1542,53 @@ export class EsteiraService {
   /**
    * Conclui a frente EXAME em APTO por causa do ASO validado (OST Onda 2, transição pós-ASO).
    *
-   * Só age quando a frente está num dos estados de espera; frente já concluída, CANCELADA ou ainda em
-   * A_AGENDAR não é tocada. Idempotente: repetir o anexo não gera evento novo nem desconclui nada.
-   * O gate do Cadastro continua sendo aberto por quem sempre abriu, o `recomputeFarolGlobal` e o
-   * nascimento lazy da frente, exatamente como no caminho manual.
+   * NÃO age sobre frente já concluída (idempotente: repetir o anexo não gera evento novo nem
+   * desconclui nada) nem sobre exame CANCELADO, que é decisão humana de encerrar a frente e não se
+   * desfaz por upload de arquivo.
+   *
+   * **A_AGENDAR ENTRA, e isso é correção de incidente (31/07/2026).** A versão original só aceitava
+   * os estados de espera (AGENDADO, AGUARDANDO_ASO, ASO_PENDENTE), partindo de que o exame passa
+   * sempre pelo agendamento no EA antes do ASO chegar. Na operação real não passa: a clínica devolve
+   * o ASO e o consultor anexa sem nunca ter registrado o agendamento, então a frente ainda está em
+   * A_AGENDAR. A I.A validava o ASO, `aso_validado` virava `true` e a frente ficava parada, fora da
+   * fila do Cadastro. Foram 5 admissões travadas assim. O ASO validado É a prova de que o exame
+   * aconteceu: o agendamento não registrado é lacuna de registro, não motivo para não concluir.
+   *
+   * **O CADASTRO NASCE AQUI.** O comentário antigo dizia que o nascimento lazy da frente acontecia
+   * "exatamente como no caminho manual", e não acontecia: o caminho manual (`mudarStatus`) cria a
+   * frente CADASTRO_CONTRATO quando o gate abre, e este aqui só chamava o `recomputeFarolGlobal`. A
+   * fila do Cadastro parte de `frentes_admissao` com INNER JOIN por tipo, então sem a linha a
+   * admissão simplesmente não existe na aba, mesmo com as duas frentes concluídas. Foram 23
+   * admissões APTAS e invisíveis no Cadastro. O nascimento vai DENTRO da transação, junto do evento.
    */
   private async concluirExamePorAso(
     admissaoId: string,
     user?: AuthUser,
-  ): Promise<{ de: string; para: string } | undefined> {
-    const [frente] = await this.db
+  ): Promise<{ de: string; para: string; cadastroNasceu?: boolean } | undefined> {
+    // Todas as irmãs, não só o EXAME: o gate do Cadastro (regra 3) depende da AUDITORIA também.
+    const irmas = await this.db
       .select({
         id: frentesAdmissao.id,
+        tipo: frentesAdmissao.tipo,
         status: frentesAdmissao.status,
         concluida: frentesAdmissao.concluida,
       })
       .from(frentesAdmissao)
-      .where(and(eq(frentesAdmissao.admissaoId, admissaoId), eq(frentesAdmissao.tipo, "EXAME")));
+      .where(eq(frentesAdmissao.admissaoId, admissaoId));
+
+    const frente = irmas.find((f) => f.tipo === "EXAME");
     if (!frente || frente.concluida) return undefined;
-    if (!["AGENDADO", "AGUARDANDO_ASO", "ASO_PENDENTE"].includes(frente.status)) return undefined;
+    if (!STATUS_EXAME_APTO_POR_ASO.includes(frente.status)) return undefined;
+
+    // Gate recalculado com o EXAME já concluído (mesma conta do caminho manual).
+    const gateAberto = podeAbrirCadastro(
+      irmas.map((f) =>
+        f.tipo === "EXAME"
+          ? { tipo: f.tipo, concluida: true }
+          : { tipo: f.tipo, concluida: f.concluida },
+      ),
+    );
+    const precisaNascerCadastro = gateAberto && !irmas.some((f) => f.tipo === "CADASTRO_CONTRATO");
 
     const agora = new Date();
     await this.db.transaction(async (tx) => {
@@ -1539,9 +1605,23 @@ export class EsteiraService {
         reversao: false,
         autorId: user?.id ?? null,
       });
+      // Nascimento lazy do Cadastro (regra 3), igual ao caminho manual: só cria se não existe.
+      if (precisaNascerCadastro) {
+        await tx.insert(frentesAdmissao).values({
+          admissaoId,
+          tipo: "CADASTRO_CONTRATO",
+          status: "A_CADASTRAR",
+          concluida: false,
+          dataInicio: agora,
+        });
+      }
     });
     await recomputeFarolGlobal(this.db, admissaoId);
-    return { de: frente.status, para: "APTO" };
+    return {
+      de: frente.status,
+      para: "APTO",
+      ...(precisaNascerCadastro ? { cadastroNasceu: true } : {}),
+    };
   }
 
   // ── Modal de Gestão de Agendamento do Exame (aba EXAME) ──────────────────────
