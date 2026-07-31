@@ -134,6 +134,14 @@ export interface PendenciasInput {
    * log de passagem (S3).
    */
   temBeneficioEstruturado?: boolean | null;
+  /**
+   * UNIFORME (OST Onda 3, item 1): a pergunta "possui uniforme?" foi RESPONDIDA?
+   *
+   * `null`/`undefined` = ninguém respondeu, e é isso que vira pendência. `false` (não possui) é
+   * resposta VÁLIDA e fecha a pendência: o que se cobra é a resposta, não o uniforme. Ter uniforme
+   * nunca bloqueia nada (decisão do diretor).
+   */
+  possuiUniforme?: boolean | null;
 }
 
 /** Rótulo da pendência de formalização do banco (documento, não campo de folha). */
@@ -179,6 +187,8 @@ export function pendenciasObrigatorias(
   cobra("CENTRO_CUSTO", !presente(i.vagaFolha?.centroCusto));
   cobra("SETOR", !presente(i.vagaFolha?.setor));
   cobra("GESTOR_BP", !presente(i.vagaFolha?.gestorBp));
+  // A pendência é a RESPOSTA, não o uniforme: `false` (não possui) fecha, só o não respondido cobra.
+  cobra("UNIFORME", i.possuiUniforme === null || i.possuiUniforme === undefined);
   return pend;
 }
 

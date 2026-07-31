@@ -17,8 +17,17 @@ import {
   useLiberacaoCount,
   useLiberacaoRefresh,
 } from "@/components/shell/LiberacaoAlerta";
-import { precisaValorBeneficio } from "@/lib/beneficios";
+import { criarPrecisaValor } from "@/lib/beneficios";
 import { caixaAlta } from "@/lib/nome";
+import {
+  isValidCpf,
+  ITENS_EPI,
+  ROTULO_ITEM_EPI,
+  TAMANHOS_BOTA,
+  TAMANHOS_CALCA,
+  TAMANHOS_CAMISETA,
+  type ItemEpi,
+} from "@ea/shared-types";
 
 /**
  * Teto de caracteres da observação livre da liberação. ESPELHA `OBSERVACAO_LIBERACAO_MAX` do
@@ -40,6 +49,8 @@ const TIPOS_CONTRATO = [
 interface CatItem {
   id: string;
   nome: string;
+  /** Só o catálogo de BENEFÍCIOS traz: a régua "precisa de valor?" agora vem do cadastro. */
+  exigeValor?: boolean;
 }
 
 interface PreAdmissao {
@@ -139,6 +150,39 @@ async function buscarPacotePadrao(
   );
   return r.beneficios ?? [];
 }
+
+/**
+ * MEMÓRIA DO SETOR do par cliente+cargo (OST Onda 2): os setores DISTINTOS já usados naquele par,
+ * que viram as opções do campo. Mesma rota do pacote padrão, então não custa requisição nova.
+ * Falha silenciosa: sem memória o campo continua digitável, que é o comportamento de partida.
+ */
+async function buscarSetoresMemoria(
+  token: string,
+  codCliente: string,
+  cargoId: string,
+): Promise<string[]> {
+  const r = await apiFetch<{ setores?: string[] }>(
+    `/admissoes/padrao-cliente-cargo?codCliente=${encodeURIComponent(codCliente)}&cargoId=${encodeURIComponent(cargoId)}`,
+    { token },
+  );
+  return r.setores ?? [];
+}
+
+/**
+ * MEMÓRIA DE UNIFORME E EPI do par cliente+cargo (OST Onda 3, item 1). SÓ o "possui sim/não": o
+ * tamanho é individual e nunca vem sugerido (decisão do diretor). Mesma rota das outras memórias.
+ */
+async function buscarUniformeEpiMemoria(
+  token: string,
+  codCliente: string,
+  cargoId: string,
+): Promise<{ possuiUniforme: boolean | null; possuiEpi: boolean | null }> {
+  const r = await apiFetch<{ possuiUniforme?: boolean | null; possuiEpi?: boolean | null }>(
+    `/admissoes/padrao-cliente-cargo?codCliente=${encodeURIComponent(codCliente)}&cargoId=${encodeURIComponent(cargoId)}`,
+    { token },
+  );
+  return { possuiUniforme: r.possuiUniforme ?? null, possuiEpi: r.possuiEpi ?? null };
+}
 /**
  * Opção "em branco" dos dropdowns OPCIONAIS da liberação (decisão do diretor). Sem ela, um campo
  * pré-preenchido pela memória do par cliente+cargo não tinha como voltar a vazio, e o consultor era
@@ -148,6 +192,53 @@ async function buscarPacotePadrao(
  * NÃO se aplica a cliente e cargo: são a trava da liberação, obrigatórios.
  */
 const OPCAO_EM_BRANCO = { value: "", label: "Não informado" };
+
+/**
+ * Par Sim/Não do uniforme e do EPI (OST Onda 3, item 1). `null` é estado legítimo e visível: é o
+ * "ainda não respondido", que no uniforme é a própria pendência obrigatória. Por isso não é
+ * checkbox (que só sabe dois estados) nem select (que esconde a resposta atrás de um clique).
+ */
+function SimNao({
+  valor,
+  onChange,
+  aria,
+}: {
+  valor: boolean | null;
+  onChange: (v: boolean) => void;
+  aria: string;
+}) {
+  const base = "rounded-full border px-3.5 py-1 text-[12.5px] transition";
+  return (
+    <div className="flex gap-1.5" role="group" aria-label={aria}>
+      <button
+        type="button"
+        aria-pressed={valor === true}
+        onClick={() => onChange(true)}
+        className={cn(
+          base,
+          valor === true
+            ? "border-[rgba(46,158,99,0.5)] bg-[rgba(46,158,99,0.14)] text-ok"
+            : "border-[var(--border)] text-dim hover:text-text",
+        )}
+      >
+        Sim
+      </button>
+      <button
+        type="button"
+        aria-pressed={valor === false}
+        onClick={() => onChange(false)}
+        className={cn(
+          base,
+          valor === false
+            ? "border-[var(--border)] bg-[rgba(255,255,255,0.06)] text-text"
+            : "border-[var(--border)] text-dim hover:text-text",
+        )}
+      >
+        Não
+      </button>
+    </div>
+  );
+}
 
 /** Valores do pacote no formato do input (pt-BR), só para os benefícios que têm valor na memória. */
 function valoresDoPacote(pacote: { nome: string; valor: number | null }[]): Record<string, string> {
@@ -223,6 +314,9 @@ export default function LiberacaoPage() {
   // Catálogos reusados (mesmos endpoints do wizard/lápis): benefícios e escalas.
   const [beneficiosCat, setBeneficiosCat] = useState<CatItem[]>([]);
   const [escalasCat, setEscalasCat] = useState<CatItem[]>([]);
+  // "Precisa de valor?" derivado do CADASTRO (coluna `exige_valor`), não do texto do nome. Mesma
+  // régua que o backend valida, então renomear um benefício não muda mais a exigência.
+  const precisaValorBeneficio = useMemo(() => criarPrecisaValor(beneficiosCat), [beneficiosCat]);
   // Modal de liberação: a pré-admissão alvo (null = fechado) + os campos do formulário.
   const [alvo, setAlvo] = useState<PreAdmissao | null>(null);
   const [codCliente, setCodCliente] = useState("");
@@ -233,7 +327,39 @@ export default function LiberacaoPage() {
   const [dataAdmissao, setDataAdmissao] = useState("");
   const [escala, setEscala] = useState("");
   const [centroCusto, setCentroCusto] = useState("");
+  // SETOR e DEPARTAMENTO (OST Onda 2): TRÊS campos distintos que a operação usa junto. O
+  // Departamento existia no banco e no lápis, mas nunca teve caixa aqui; o Setor é novo.
+  const [setor, setSetor] = useState("");
+  const [departamento, setDepartamento] = useState("");
+  /** Setores já usados no par cliente+cargo: viram as opções do datalist (memória dinâmica). */
+  const [setoresMemoria, setSetoresMemoria] = useState<string[]>([]);
   const [gestorBp, setGestorBp] = useState("");
+  /**
+   * UNIFORME (OST Onda 3, item 1). `null` = ainda não respondido, que é a PENDÊNCIA OBRIGATÓRIA e
+   * trava o botão Liberar. Responder "não" libera igual: o que se cobra é a resposta, não o uniforme.
+   * Os tamanhos só existem no "sim" e são sempre em branco (tamanho é individual, sem memória).
+   */
+  /**
+   * VÍNCULOS do cliente escolhido (OST Onda 3, item 7, Bloco 5). Com dois ou mais, o consultor tem
+   * de dizer QUAL contrato, senão a admissão nasceria com a régua documental do contrato errado.
+   * Com um só (233 dos 234 clientes), a lista some da tela e nada é perguntado.
+   */
+  const [vinculos, setVinculos] = useState<{ id: string; rotulo: string }[]>([]);
+  const [vinculoSel, setVinculoSel] = useState("");
+  /**
+   * SEXO do candidato (OST do seletor de sexo). Vazio quando ninguém informou; o valor do Pandapé
+   * pré-preenche na abertura do modal. Muda QUAIS DOCUMENTOS a régua exige (o Reservista só vale
+   * para o masculino), então não é campo cosmético.
+   */
+  const [sexo, setSexo] = useState("");
+  const [possuiUniforme, setPossuiUniforme] = useState<boolean | null>(null);
+  const [uniCamiseta, setUniCamiseta] = useState("");
+  const [uniCalca, setUniCalca] = useState("");
+  const [uniBota, setUniBota] = useState("");
+  /** EPI: mesma mecânica do uniforme, MENOS a obrigatoriedade (não trava liberação). */
+  const [possuiEpi, setPossuiEpi] = useState<boolean | null>(null);
+  const [epiItens, setEpiItens] = useState<string[]>([]);
+  const [epiOutros, setEpiOutros] = useState("");
   // Observação LIVRE (Bloco 2): o que não cabe em campo estruturado ("VT possui 6% de desconto").
   // Opcional, não bloqueia e não vira pendência; aparece depois no modal do olho (Bloco 3).
   const [observacao, setObservacao] = useState("");
@@ -255,6 +381,8 @@ export default function LiberacaoPage() {
   const [loteEscala, setLoteEscala] = useState("");
   const [loteCentroCusto, setLoteCentroCusto] = useState("");
   const [loteGestorBp, setLoteGestorBp] = useState("");
+  const [loteSetor, setLoteSetor] = useState("");
+  const [loteDepartamento, setLoteDepartamento] = useState("");
   // Observação LIVRE do LOTE (Bloco 2): mesma regra dos demais campos, o preenchido vale para as N.
   const [loteObservacao, setLoteObservacao] = useState("");
   const [loteBeneficiosSel, setLoteBeneficiosSel] = useState<string[]>([]);
@@ -374,6 +502,13 @@ export default function LiberacaoPage() {
   useEffect(() => {
     if (!token || !alvo || !codCliente || !cargoId) return;
     let vivo = true;
+    // Memória do SETOR: independente do pacote, então roda em paralelo e não depende de haver
+    // benefício naquele par. Sem memória, a lista fica vazia e o campo segue digitável.
+    buscarSetoresMemoria(token, codCliente, cargoId)
+      .then((setores) => {
+        if (vivo) setSetoresMemoria(setores);
+      })
+      .catch(() => setSetoresMemoria([]));
     buscarPacotePadrao(token, codCliente, cargoId)
       .then((pacote) => {
         if (!vivo || pacote.length === 0) return;
@@ -382,6 +517,30 @@ export default function LiberacaoPage() {
       })
       .catch(() => {
         /* memória é sugestão; falha não bloqueia a liberação */
+      });
+    // Vínculos do cliente (item 7): define se a tela precisa perguntar o contrato.
+    apiFetch<{ id: string; rotulo: string; ativo: boolean }[]>(
+      `/admin/clientes/${encodeURIComponent(codCliente)}/vinculos`,
+      { token },
+    )
+      .then((vs) => {
+        if (!vivo) return;
+        const ativos = vs.filter((v) => v.ativo);
+        setVinculos(ativos);
+        // Um vínculo só não é escolha: a tela não pergunta e o backend resolve pelo cliente.
+        setVinculoSel(ativos.length >= 2 ? "" : "");
+      })
+      .catch(() => setVinculos([]));
+    // Uniforme e EPI: SÓ o "possui" vem da memória do par. Sugestão, não imposição: o consultor
+    // troca a resposta se aquele candidato for exceção. Sem memória, segue sem resposta.
+    buscarUniformeEpiMemoria(token, codCliente, cargoId)
+      .then((m) => {
+        if (!vivo) return;
+        if (m.possuiUniforme !== null) setPossuiUniforme((v) => (v === null ? m.possuiUniforme : v));
+        if (m.possuiEpi !== null) setPossuiEpi((v) => (v === null ? m.possuiEpi : v));
+      })
+      .catch(() => {
+        /* memória é sugestão; sem ela a resposta simplesmente nasce em branco */
       });
     const cli = clientes.find((c) => c.codCliente === codCliente);
     if (cli?.escalaPadrao) setEscala((e) => e || cli.escalaPadrao!);
@@ -395,6 +554,11 @@ export default function LiberacaoPage() {
   useEffect(() => {
     if (!token || !loteAberto || !loteCodCliente || !loteCargoId) return;
     let vivo = true;
+    buscarSetoresMemoria(token, loteCodCliente, loteCargoId)
+      .then((setores) => {
+        if (vivo) setSetoresMemoria(setores);
+      })
+      .catch(() => setSetoresMemoria([]));
     buscarPacotePadrao(token, loteCodCliente, loteCargoId)
       .then((pacote) => {
         if (!vivo || pacote.length === 0) return;
@@ -413,6 +577,10 @@ export default function LiberacaoPage() {
 
   function abrirModal(r: PreAdmissao) {
     setAlvo(r);
+    // SEXO (OST do seletor de sexo): o que veio do Pandapé PRÉ-PREENCHE o seletor, e o consultor
+    // pode trocar. Não é trava: o valor do Pandapé pode estar errado, foi o que travou um prontuário
+    // de verdade (candidata gravada como masculino, Reservista virando obrigatório).
+    setSexo(r.sexo ?? "");
     setCodCliente("");
     setCargoId("");
     setSalario("");
@@ -421,9 +589,22 @@ export default function LiberacaoPage() {
     setEscala("");
     setCentroCusto("");
     setGestorBp("");
+    setSetor("");
+    setDepartamento("");
     setObservacao("");
     setBeneficiosSel([]);
     setBeneficiosValores({});
+    // Uniforme e EPI nascem SEM resposta a cada candidato: a memória do par só entra quando
+    // cliente+cargo forem escolhidos, e o tamanho nunca é herdado de ninguém.
+    setVinculos([]);
+    setVinculoSel("");
+    setPossuiUniforme(null);
+    setUniCamiseta("");
+    setUniCalca("");
+    setUniBota("");
+    setPossuiEpi(null);
+    setEpiItens([]);
+    setEpiOutros("");
     setModalErro(null);
   }
   function fecharModal() {
@@ -466,11 +647,35 @@ export default function LiberacaoPage() {
               salario: salarioParaNumero(salario),
               escala: escala || undefined,
               centroCusto: centroCusto || undefined,
+              setor: setor || undefined,
+              departamento: departamento || undefined,
               gestorBp: gestorBp || undefined,
             },
             pacoteBeneficios: pacoteBeneficios.length ? pacoteBeneficios : undefined,
             // Observação livre (Bloco 2): só vai quando tem conteúdo; vazia é `undefined`.
             observacaoLiberacao: observacao.trim() || undefined,
+            // VÍNCULO (item 7): só vai quando o cliente tem mais de um contrato.
+            clienteVinculoId: exigeVinculo ? vinculoSel : undefined,
+            // SEXO: vai quando há valor (confirmado do Pandapé ou escolhido agora). Em branco não
+            // vai, e sexo ausente segue não cobrando Reservista de ninguém.
+            sexo: sexo || undefined,
+            // UNIFORME: a resposta é obrigatória (o botão nem habilita sem ela). Tamanho só no "sim";
+            // o backend também limpa, então "não possui" nunca carrega tamanho de ninguém.
+            uniforme: {
+              possui: possuiUniforme === true,
+              camiseta: possuiUniforme ? uniCamiseta || undefined : undefined,
+              calca: possuiUniforme ? uniCalca || undefined : undefined,
+              bota: possuiUniforme ? uniBota || undefined : undefined,
+            },
+            // EPI: opcional de ponta a ponta. Só vai quando o consultor respondeu alguma coisa.
+            epi:
+              possuiEpi === null
+                ? undefined
+                : {
+                    possui: possuiEpi,
+                    itens: possuiEpi ? epiItens : undefined,
+                    outros: possuiEpi && epiItens.includes("OUTROS") ? epiOutros.trim() : undefined,
+                  },
           },
         },
       );
@@ -545,7 +750,26 @@ export default function LiberacaoPage() {
     }
   }
 
-  const podeLiberar = Boolean(codCliente && cargoId);
+  /**
+   * FRENTE A do item 9: CPF com dígito verificador que não fecha NÃO é liberado. O CPF vem do
+   * Pandapé e a liberação é a porta de entrada da esteira, então é aqui que o erro de digitação para,
+   * antes de contaminar régua, Drive, kit e assinatura. A autoridade é o backend (que barra a chamada
+   * direta); aqui a trava é para o consultor ver o motivo antes de clicar.
+   */
+  const cpfAlvoInvalido = Boolean(alvo && !isValidCpf(alvo.candidatoCpf));
+  /**
+   * "Outros" marcado no EPI exige dizer QUAL é o item (o backend recusa sem isso). Não é regra nova:
+   * é a mesma do benefício que exige valor, o que foi escolhido tem de ficar completo.
+   */
+  const epiOutrosFaltando = epiItens.includes("OUTROS") && epiOutros.trim() === "";
+  /** Cliente de dois contratos exige a escolha; de um contrato só, nem aparece na tela. */
+  const exigeVinculo = vinculos.length >= 2;
+  const podeLiberar =
+    Boolean(codCliente && cargoId) &&
+    !cpfAlvoInvalido &&
+    possuiUniforme !== null &&
+    !epiOutrosFaltando &&
+    (!exigeVinculo || Boolean(vinculoSel));
 
   // ---------- Liberação em massa ----------
   function abrirLote() {
@@ -557,6 +781,8 @@ export default function LiberacaoPage() {
     setLoteEscala("");
     setLoteCentroCusto("");
     setLoteGestorBp("");
+    setLoteSetor("");
+    setLoteDepartamento("");
     setLoteObservacao("");
     setLoteBeneficiosSel([]);
     setLoteBeneficiosValores({});
@@ -601,6 +827,8 @@ export default function LiberacaoPage() {
             salario: salarioParaNumero(loteSalario),
             escala: loteEscala || undefined,
             centroCusto: loteCentroCusto || undefined,
+            setor: loteSetor || undefined,
+            departamento: loteDepartamento || undefined,
             gestorBp: loteGestorBp || undefined,
           },
           pacoteBeneficios: lotePacote.length ? lotePacote : undefined,
@@ -681,7 +909,14 @@ export default function LiberacaoPage() {
   // são liberadas em massa (decisão do diretor), vão para tratamento individual.
   const selecionadasObjs = rows.filter((r) => selecionados.includes(r.admissaoId));
   const loteDuplicatas = selecionadasObjs.filter((r) => r.possivelDuplicata);
-  const loteSelecionadasOk = selecionadasObjs.filter((r) => !r.possivelDuplicata);
+  // CPF inválido (item 9, Frente A): sai do lote pelo mesmo mecanismo da duplicata. Uma linha errada
+  // não derruba as outras N, e o nome dela aparece no modal para o Master saber quem corrigir.
+  const loteCpfInvalido = selecionadasObjs.filter(
+    (r) => !r.possivelDuplicata && !isValidCpf(r.candidatoCpf),
+  );
+  const loteSelecionadasOk = selecionadasObjs.filter(
+    (r) => !r.possivelDuplicata && isValidCpf(r.candidatoCpf),
+  );
   const podeLiberarLote = Boolean(loteCodCliente && loteCargoId && loteSelecionadasOk.length > 0);
 
   // Campos da régua unificada §A.19 ainda vazios (hint visual; a fonte autoritativa é o backend, que
@@ -694,16 +929,20 @@ export default function LiberacaoPage() {
     loteBeneficiosSel.length === 0 && "Pacote de benefícios",
     !loteEscala && "Escala",
     !loteCentroCusto && "Centro de custo",
+    !loteSetor && "Setor",
     !loteGestorBp && "Gestor / BP",
   ].filter(Boolean) as string[];
 
   const pendentesNoModal = [
+    // Uniforme NÃO entra nesta lista: ela é o aviso do que segue pendente DEPOIS de liberar, e o
+    // uniforme não passa daqui sem resposta (é trava, não pendência que segue para a esteira).
     !salario && "Salário",
     !tipoContrato && "Tipo de contrato",
     !dataAdmissao && "Data de admissão",
     beneficiosSel.length === 0 && "Pacote de benefícios",
     !escala && "Escala",
     !centroCusto && "Centro de custo",
+    !setor && "Setor",
     !gestorBp && "Gestor / BP",
   ].filter(Boolean) as string[];
 
@@ -973,6 +1212,23 @@ export default function LiberacaoPage() {
             <p className="mt-0.5 font-mono text-[13px] text-dim">{fmtCpf(alvo.candidatoCpf)}</p>
           </div>
 
+          {/* TRAVA DO CPF INVÁLIDO (item 9, Frente A). Bloqueia a liberação e diz por quê. Quem
+              corrige é Master ou Super Admin, pela rota de correção de CPF: por isso o texto aponta
+              para quem resolve, em vez de mandar o consultor tentar de novo. */}
+          {cpfAlvoInvalido && (
+            <div
+              className="mb-4 rounded-xl border border-[rgba(214,69,69,0.45)] bg-[rgba(214,69,69,0.1)] px-3 py-2.5"
+              role="alert"
+            >
+              <div className="text-[11px] uppercase tracking-wide text-danger">CPF Inválido</div>
+              <p className="mt-1 text-[13px] text-text">
+                O dígito verificador deste CPF não fecha, então ele está errado na origem. A liberação
+                fica bloqueada até a correção. Peça a um Master ou Super Admin que corrija o CPF desta
+                admissão, conferindo o documento do candidato.
+              </p>
+            </div>
+          )}
+
           {/* Cliente + cargo: o que ESTA OST entrega e a única trava de liberação. A próxima OST
               (pendências obrigatórias) adiciona campos ABAIXO deste bloco, sem refazer o modal. */}
           <div className="grid gap-4">
@@ -1000,9 +1256,52 @@ export default function LiberacaoPage() {
                 options={cargos.map((c) => ({ value: c.id, label: c.nome }))}
               />
             </label>
+            {/* CONTRATO DO CLIENTE (OST Onda 3, item 7, Bloco 5). Só aparece quando o cliente
+                trabalha com MAIS DE UM contrato, que é o único caso em que existe escolha a fazer.
+                Não é o tipo de contrato virando obrigatório para todo mundo: é desempatar entre
+                duas opções concretas, porque cada contrato tem régua documental própria. */}
+            {exigeVinculo && (
+              <label className="grid gap-1.5">
+                <span className="ds-label">
+                  Contrato do cliente <span className="text-danger">*</span>
+                </span>
+                <Select
+                  value={vinculoSel}
+                  onChange={setVinculoSel}
+                  placeholder="Selecione o contrato…"
+                  ariaLabel="Contrato do cliente"
+                  menuFit
+                  options={vinculos.map((v) => ({ value: v.id, label: v.rotulo }))}
+                />
+                <span className="text-[11.5px] text-dim">
+                  Este cliente trabalha com mais de um tipo de contrato, e cada um tem a sua régua
+                  documental. Escolha o contrato desta admissão.
+                </span>
+              </label>
+            )}
             {/* Demais campos obrigatórios (régua unificada §A.19), abaixo de cliente/cargo. Opcionais:
                 o que ficar vazio vira pendência na esteira; SÓ cliente+cargo travam a liberação. */}
             <div className="grid grid-cols-2 gap-4">
+              {/* SEXO: muda QUAIS documentos a régua exige (o Reservista só vale para o masculino),
+                  então fica junto dos campos que definem a admissão, não escondido. O que veio do
+                  Pandapé já vem selecionado e PODE ser corrigido aqui. */}
+              <label className="grid gap-1.5">
+                <span className="ds-label">Sexo</span>
+                <Select
+                  value={sexo}
+                  onChange={setSexo}
+                  placeholder="Selecione…"
+                  ariaLabel="Sexo do candidato"
+                  options={[
+                    { value: "FEMININO", label: "Feminino" },
+                    { value: "MASCULINO", label: "Masculino" },
+                  ]}
+                />
+                <span className="text-[11.5px] text-dim">
+                  Define quais documentos a régua exige. A carteira de reservista só é cobrada do
+                  sexo masculino.
+                </span>
+              </label>
               <label className="grid gap-1.5">
                 <span className="ds-label">Salário</span>
                 <input
@@ -1048,6 +1347,33 @@ export default function LiberacaoPage() {
                     OPCAO_EM_BRANCO,
                     ...escalasCat.map((e) => ({ value: e.nome, label: e.nome })),
                   ]}
+                />
+              </label>
+              {/* AS TRÊS JUNTAS (OST Onda 2): Setor, Departamento e Centro de custo são campos
+                  DISTINTOS que a operação usa junto, não sinônimos. O Setor é digitável e sugere os
+                  valores já usados neste cliente+cargo (memória dinâmica): o `list` é sugestão, não
+                  trava, então setor novo continua entrando e passa a alimentar a memória. */}
+              <label className="grid gap-1.5">
+                <span className="ds-label">Setor</span>
+                <input
+                  className="ds-input"
+                  value={setor}
+                  onChange={(e) => setSetor(e.target.value)}
+                  list="setores-memoria"
+                  placeholder="Digite ou escolha um já usado"
+                />
+                <datalist id="setores-memoria">
+                  {setoresMemoria.map((s) => (
+                    <option key={s} value={s} />
+                  ))}
+                </datalist>
+              </label>
+              <label className="grid gap-1.5">
+                <span className="ds-label">Departamento</span>
+                <input
+                  className="ds-input"
+                  value={departamento}
+                  onChange={(e) => setDepartamento(e.target.value)}
                 />
               </label>
               <label className="grid gap-1.5">
@@ -1119,6 +1445,154 @@ export default function LiberacaoPage() {
                 {OBSERVACAO_MAX} caracteres.
               </span>
             </label>
+
+            {/* UNIFORME (OST Onda 3, item 1). A RESPOSTA é obrigatória e trava o botão Liberar; ter
+                uniforme não bloqueia nada. Os tamanhos são seletores de catálogo fechado, nunca
+                digitáveis, e nascem em branco a cada candidato (tamanho é individual). */}
+            <div className="grid gap-2.5 rounded-xl border border-[var(--border)] px-3 py-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="ds-label !mb-0">
+                  Possui uniforme? <span className="text-danger">*</span>
+                </span>
+                <SimNao
+                  valor={possuiUniforme}
+                  aria="Possui uniforme"
+                  onChange={(v) => {
+                    setPossuiUniforme(v);
+                    if (!v) {
+                      setUniCamiseta("");
+                      setUniCalca("");
+                      setUniBota("");
+                    }
+                  }}
+                />
+              </div>
+              {possuiUniforme === null && (
+                <p className="text-[11.5px] text-warn">
+                  Resposta obrigatória para liberar. Ter uniforme não bloqueia o fluxo, não responder
+                  bloqueia.
+                </p>
+              )}
+              {possuiUniforme === true && (
+                <div className="grid grid-cols-3 gap-3">
+                  <label className="grid gap-1.5">
+                    <span className="ds-label">Camiseta</span>
+                    <Select
+                      value={uniCamiseta}
+                      onChange={setUniCamiseta}
+                      placeholder="Tamanho…"
+                      ariaLabel="Tamanho da camiseta"
+                      menuFit
+                      options={[
+                        OPCAO_EM_BRANCO,
+                        ...TAMANHOS_CAMISETA.map((t) => ({ value: t, label: t })),
+                      ]}
+                    />
+                  </label>
+                  <label className="grid gap-1.5">
+                    <span className="ds-label">Calça</span>
+                    <Select
+                      value={uniCalca}
+                      onChange={setUniCalca}
+                      placeholder="Tamanho…"
+                      ariaLabel="Tamanho da calça"
+                      searchable
+                      menuFit
+                      options={[
+                        OPCAO_EM_BRANCO,
+                        ...TAMANHOS_CALCA.map((t) => ({ value: t, label: t })),
+                      ]}
+                    />
+                  </label>
+                  <label className="grid gap-1.5">
+                    <span className="ds-label">Bota</span>
+                    <Select
+                      value={uniBota}
+                      onChange={setUniBota}
+                      placeholder="Tamanho…"
+                      ariaLabel="Tamanho da bota"
+                      searchable
+                      menuFit
+                      options={[
+                        OPCAO_EM_BRANCO,
+                        ...TAMANHOS_BOTA.map((t) => ({ value: t, label: t })),
+                      ]}
+                    />
+                  </label>
+                </div>
+              )}
+            </div>
+
+            {/* EPI (OST Onda 3, item 1). NÃO é pendência obrigatória: pode ficar sem resposta e a
+                liberação segue. Respondido "sim", o que for marcado vira o aviso da ficha, para o
+                consultor validar o EPI daquela admissão. */}
+            <div className="grid gap-2.5 rounded-xl border border-[var(--border)] px-3 py-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="ds-label !mb-0">Possui EPI?</span>
+                <SimNao
+                  valor={possuiEpi}
+                  aria="Possui EPI"
+                  onChange={(v) => {
+                    setPossuiEpi(v);
+                    if (!v) {
+                      setEpiItens([]);
+                      setEpiOutros("");
+                    }
+                  }}
+                />
+              </div>
+              {possuiEpi === true && (
+                <>
+                  <div className="flex flex-wrap gap-2">
+                    {ITENS_EPI.map((item) => {
+                      const marcado = epiItens.includes(item);
+                      return (
+                        <button
+                          key={item}
+                          type="button"
+                          aria-pressed={marcado}
+                          onClick={() =>
+                            setEpiItens((sel) => {
+                              const novo = marcado
+                                ? sel.filter((x) => x !== item)
+                                : [...sel, item as ItemEpi];
+                              if (item === "OUTROS" && marcado) setEpiOutros("");
+                              return novo;
+                            })
+                          }
+                          className={cn(
+                            "rounded-full border px-3 py-1 text-[12.5px] transition",
+                            marcado
+                              ? "border-[rgba(46,158,99,0.5)] bg-[rgba(46,158,99,0.14)] text-ok"
+                              : "border-[var(--border)] text-dim hover:text-text",
+                          )}
+                        >
+                          {ROTULO_ITEM_EPI[item]}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {epiItens.includes("OUTROS") && (
+                    <label className="grid gap-1.5">
+                      <span className="ds-label">Qual outro EPI?</span>
+                      <input
+                        className="ds-input"
+                        maxLength={200}
+                        placeholder="Ex.: protetor auricular"
+                        value={epiOutros}
+                        onChange={(e) => setEpiOutros(e.target.value)}
+                      />
+                      {epiOutrosFaltando && (
+                        <span className="text-[11.5px] text-warn">
+                          Diga qual é o item. Sem isso o aviso da ficha não informa nada a quem for
+                          validar.
+                        </span>
+                      )}
+                    </label>
+                  )}
+                </>
+              )}
+            </div>
 
             {/* Sinalização do que ainda falta (mesmos campos da régua unificada). Só cliente+cargo
                 travam; o resto é pendência que segue para a esteira. */}
@@ -1208,6 +1682,32 @@ export default function LiberacaoPage() {
             </div>
           )}
 
+          {/* TRAVA 2, CPF inválido (item 9, Frente A): o dígito verificador não fecha, então o CPF
+              está errado na origem. Fora do lote e nominal, para o Master saber quem corrigir. */}
+          {loteCpfInvalido.length > 0 && (
+            <div
+              className="mb-4 rounded-xl border border-[rgba(214,69,69,0.45)] bg-[rgba(214,69,69,0.1)] px-3 py-2 text-[12.5px] text-danger"
+              role="alert"
+            >
+              <p className="font-semibold">
+                {loteCpfInvalido.length} selecionada{loteCpfInvalido.length === 1 ? "" : "s"} com CPF
+                inválido{loteCpfInvalido.length === 1 ? " não será liberada" : " não serão liberadas"}
+                :
+              </p>
+              <ul className="mt-1 list-disc pl-5">
+                {loteCpfInvalido.map((d) => (
+                  <li key={d.admissaoId}>
+                    {caixaAlta(d.candidatoNome)} ({fmtCpf(d.candidatoCpf)})
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-1">
+                O dígito verificador não fecha. Um Master ou Super Admin precisa corrigir o CPF,
+                conferindo o documento do candidato, antes de liberar.
+              </p>
+            </div>
+          )}
+
           <div className="grid gap-4">
             <label className="grid gap-1.5">
               <span className="ds-label">Cliente</span>
@@ -1282,6 +1782,29 @@ export default function LiberacaoPage() {
                     OPCAO_EM_BRANCO,
                     ...escalasCat.map((e) => ({ value: e.nome, label: e.nome })),
                   ]}
+                />
+              </label>
+              <label className="grid gap-1.5">
+                <span className="ds-label">Setor</span>
+                <input
+                  className="ds-input"
+                  value={loteSetor}
+                  onChange={(e) => setLoteSetor(e.target.value)}
+                  list="setores-memoria-lote"
+                  placeholder="Digite ou escolha um já usado"
+                />
+                <datalist id="setores-memoria-lote">
+                  {setoresMemoria.map((s) => (
+                    <option key={s} value={s} />
+                  ))}
+                </datalist>
+              </label>
+              <label className="grid gap-1.5">
+                <span className="ds-label">Departamento</span>
+                <input
+                  className="ds-input"
+                  value={loteDepartamento}
+                  onChange={(e) => setLoteDepartamento(e.target.value)}
                 />
               </label>
               <label className="grid gap-1.5">

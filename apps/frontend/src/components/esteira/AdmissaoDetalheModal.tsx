@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { ClicksignStatus, Origem } from "@ea/shared-types";
+import { ROTULO_ITEM_EPI, type ItemEpi } from "@ea/shared-types";
+import { Select } from "@/components/ui/Select";
 import { apiFetch, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { Modal } from "@/components/ui/Modal";
@@ -75,6 +77,18 @@ interface AdmissaoDetalhe {
     setor?: string | null;
     gestorBp?: string | null;
   };
+  /**
+   * UNIFORME (OST Onda 3, item 1). Fica em DADOS PESSOAIS, não na folha: tamanho é da pessoa.
+   * `possui: null` = ninguém respondeu ainda, que é a pendência obrigatória cobrada na liberação.
+   */
+  uniforme?: {
+    possui: boolean | null;
+    camiseta: string | null;
+    calca: string | null;
+    bota: string | null;
+  };
+  /** EPI (OST Onda 3, item 1): alimenta o AVISO da ficha. Não é pendência obrigatória. */
+  epi?: { possui: boolean | null; itens: string[]; outros: string | null };
   // BLOCO 3: dados do exame (coletados do agendamento). null = exame ainda não agendado.
   exame: {
     data: string | null;
@@ -104,6 +118,16 @@ interface AdmissaoDetalhe {
     autorNome: string | null;
     criadoEm: string;
   }[];
+}
+
+/** Itens do EPI em texto legível, com o "Outros" já dizendo QUAL é (é o que o aviso precisa). */
+function listaEpi(epi: { itens: string[]; outros: string | null }): string {
+  const nomes = epi.itens.map((i) =>
+    i === "OUTROS"
+      ? `${ROTULO_ITEM_EPI.OUTROS} (${epi.outros ?? "não informado"})`
+      : (ROTULO_ITEM_EPI[i as ItemEpi] ?? i),
+  );
+  return nomes.length > 0 ? nomes.join(", ") : "não informado";
 }
 
 // Rótulos amigáveis dos campos versionados no histórico de alterações.
@@ -137,6 +161,8 @@ const CAMPO_ROTULO: Record<string, string> = {
   trocaCliente: "Troca de cliente",
   trocaCargo: "Troca de cargo",
   trocaClienteRevisada: "Revisão da troca de cliente",
+  // Correção de CPF (item 9): o de/para entra no MESMO histórico, com quem corrigiu e quando.
+  correcaoCpf: "Correção de CPF",
   email: "E-mail",
   telefone: "Telefone",
   nome: "Nome",
@@ -249,7 +275,9 @@ export function AdmissaoDetalheModal({
   asoValidado?: boolean;
   onClose: () => void;
 }) {
-  const { token } = useAuth();
+  // `isAdmin` (MASTER ou SUPER_ADMIN) governa a VISIBILIDADE das correções. A autoridade continua
+  // sendo o `@Roles` das rotas: esconder o botão é conveniência, não segurança.
+  const { token, isAdmin } = useAuth();
   const [data, setData] = useState<AdmissaoDetalhe | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -273,6 +301,47 @@ export function AdmissaoDetalheModal({
   // ação FICA REGISTRADA com o nome de quem clicou, e a tela avisa isso ANTES de confirmar.
   const [revisando, setRevisando] = useState(false);
   const [confirmandoRevisao, setConfirmandoRevisao] = useState(false);
+
+  /**
+   * CORREÇÕES DE MASTER (OST Onda 3, item 1, parte 3). Os MOTORES já existem e estão provados: esta
+   * é só a interface das rotas `PATCH /admissoes/:id/trocar-cliente` (item 8) e
+   * `PATCH /admissoes/:id/corrigir-cpf` (item 9). Toda trava (fase, régua do par, dígito do CPF,
+   * colisão) continua no backend, que é a autoridade: a tela só mostra o que ele responde.
+   */
+  const [trocaAberta, setTrocaAberta] = useState(false);
+  const [trocaCodCliente, setTrocaCodCliente] = useState("");
+  const [trocaCargoId, setTrocaCargoId] = useState("");
+  const [trocaErro, setTrocaErro] = useState<string | null>(null);
+  const [trocando, setTrocando] = useState(false);
+  const [cpfAberto, setCpfAberto] = useState(false);
+  const [cpfNovo, setCpfNovo] = useState("");
+  const [cpfErro, setCpfErro] = useState<string | null>(null);
+  const [cpfDuplicado, setCpfDuplicado] = useState<string | null>(null);
+  const [corrigindoCpf, setCorrigindoCpf] = useState(false);
+  const [clientes, setClientes] = useState<{ codCliente: string; razaoSocial: string; nomeOperacao: string | null }[]>([]);
+  const [cargos, setCargos] = useState<{ id: string; nome: string }[]>([]);
+
+  // Catálogos só quando a troca é aberta: quem só olha a ficha não paga duas listas grandes.
+  useEffect(() => {
+    if (!trocaAberta || !token || clientes.length > 0) return;
+    let vivo = true;
+    Promise.all([
+      apiFetch<{ codCliente: string; razaoSocial: string; nomeOperacao: string | null }[]>(
+        "/admin/clientes",
+        { token },
+      ),
+      apiFetch<{ id: string; nome: string }[]>("/admin/cargos", { token }),
+    ])
+      .then(([cli, car]) => {
+        if (!vivo) return;
+        setClientes(cli);
+        setCargos(car);
+      })
+      .catch(() => setTrocaErro("Não foi possível carregar clientes e cargos. Tente de novo."));
+    return () => {
+      vivo = false;
+    };
+  }, [trocaAberta, token, clientes.length]);
 
   const carregar = useCallback(() => {
     let vivo = true;
@@ -381,6 +450,69 @@ export function AdmissaoDetalheModal({
       !!data.contratoAssinadoDriveUrl);
   const temProntuario = !!data && (!!data.drivePastaUrl || !!data.driveAsoUrl);
 
+  /** Mensagem REAL do backend (ele explica a trava), com fallback só quando não vier nada. */
+  function mensagemDoErro(e: unknown, padrao: string): string {
+    if (e instanceof ApiError && typeof e.data === "object" && e.data) {
+      return (e.data as { message?: string }).message ?? e.message;
+    }
+    return e instanceof Error ? e.message : padrao;
+  }
+
+  async function trocarClienteCargo() {
+    if (!trocaCodCliente || !trocaCargoId) return;
+    setTrocando(true);
+    setTrocaErro(null);
+    try {
+      await apiFetch(`/admissoes/${admissaoId}/trocar-cliente`, {
+        method: "PATCH",
+        token,
+        body: { codCliente: trocaCodCliente, cargoId: trocaCargoId },
+      });
+      setTrocaAberta(false);
+      setTrocaCodCliente("");
+      setTrocaCargoId("");
+      carregar(); // recarrega a ficha: o par novo e o aviso vermelho aparecem na hora.
+    } catch (e) {
+      setTrocaErro(mensagemDoErro(e, "Não foi possível trocar o cliente e o cargo."));
+    } finally {
+      setTrocando(false);
+    }
+  }
+
+  /**
+   * Corrige o CPF. A COLISÃO não é bloqueio automático: o backend devolve 409 com o NOME de quem já
+   * tem aquele CPF, a tela mostra o nome, e o Master decide reenviando com `confirmarDuplicado`.
+   */
+  async function corrigirCpf(confirmarDuplicado = false) {
+    if (!cpfNovo.trim()) return;
+    setCorrigindoCpf(true);
+    setCpfErro(null);
+    try {
+      await apiFetch(`/admissoes/${admissaoId}/corrigir-cpf`, {
+        method: "PATCH",
+        token,
+        body: { cpf: cpfNovo, confirmarDuplicado: confirmarDuplicado || undefined },
+      });
+      setCpfAberto(false);
+      setCpfNovo("");
+      setCpfDuplicado(null);
+      carregar();
+    } catch (e) {
+      const corpo =
+        e instanceof ApiError && typeof e.data === "object" && e.data
+          ? (e.data as { codigo?: string; nomeDuplicado?: string; message?: string })
+          : null;
+      if (corpo?.codigo === "CPF_DUPLICADO") {
+        setCpfDuplicado(corpo.nomeDuplicado ?? "não informado");
+        setCpfErro(corpo.message ?? null);
+      } else {
+        setCpfErro(mensagemDoErro(e, "Não foi possível corrigir o CPF."));
+      }
+    } finally {
+      setCorrigindoCpf(false);
+    }
+  }
+
   async function marcarRevisado() {
     setRevisando(true);
     try {
@@ -478,6 +610,53 @@ export function AdmissaoDetalheModal({
               </div>
             )}
 
+            {/* AVISO DE EPI (OST Onda 3, item 1). Persiste na ficha enquanto a admissão tiver EPI:
+                o sistema sabe QUE tem e QUAIS são, mas quem valida se o EPI certo foi entregue é o
+                consultor. Amarelo, não vermelho: é trabalho a fazer, não erro a corrigir. */}
+            {data.epi?.possui === true && (
+              <div className="rounded-xl border border-[rgba(201,138,18,0.45)] bg-[rgba(201,138,18,0.1)] px-3 py-2.5">
+                <div className="text-[11px] uppercase tracking-wide text-warn">EPI A Validar</div>
+                <p className="mt-1 text-[13.5px] text-text">
+                  Esta admissão tem EPI:{" "}
+                  <span className="font-semibold">{listaEpi(data.epi)}</span>. Valide a entrega do
+                  equipamento com o cliente antes de concluir.
+                </p>
+              </div>
+            )}
+
+            {/* CORREÇÕES DE MASTER (OST Onda 3, item 1, parte 3). Só MASTER/SUPER_ADMIN VÊ, e o
+                `@Roles` das duas rotas é quem de fato barra o consultor comum. São as interfaces dos
+                motores dos itens 8 e 9, que já existiam e só não tinham botão. */}
+            {isAdmin && (
+              <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border)] px-3 py-2">
+                <span className="text-[11px] uppercase tracking-wide text-faint">Correções</span>
+                <div className="ml-auto flex flex-wrap gap-2">
+                  <Button
+                    variant="secondary"
+                    className="!py-1.5 !text-[12.5px]"
+                    onClick={() => {
+                      setTrocaErro(null);
+                      setTrocaAberta(true);
+                    }}
+                  >
+                    Trocar cliente e cargo
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    className="!py-1.5 !text-[12.5px]"
+                    onClick={() => {
+                      setCpfErro(null);
+                      setCpfDuplicado(null);
+                      setCpfNovo("");
+                      setCpfAberto(true);
+                    }}
+                  >
+                    Corrigir CPF
+                  </Button>
+                </div>
+              </div>
+            )}
+
             {/* BLOCO 1 — Dados pessoais */}
             <Bloco titulo="Dados pessoais">
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
@@ -493,13 +672,40 @@ export function AdmissaoDetalheModal({
                     ("NUBANK", "BANCO DO BRASIL"), então aparece como veio. Informação a mais: a
                     auditoria do comprovante bancário pela IA continua intacta. */}
                 <Campo rotulo="Banco" valor={data.candidato.banco || "não informado"} />
+                {/* UNIFORME (OST Onda 3, item 1). Fica aqui, e não no bloco da folha, porque tamanho
+                    é da PESSOA. "não respondido" é estado distinto de "não possui": o primeiro é
+                    pendência obrigatória, o segundo é resposta completa. */}
+                <Campo
+                  rotulo="Uniforme"
+                  valor={
+                    data.uniforme?.possui === true
+                      ? "Sim"
+                      : data.uniforme?.possui === false
+                        ? "Não"
+                        : "não respondido"
+                  }
+                />
+                {data.uniforme?.possui === true && (
+                  <>
+                    <Campo rotulo="Camiseta" valor={data.uniforme.camiseta || "não informado"} />
+                    <Campo rotulo="Calça" valor={data.uniforme.calca || "não informado"} />
+                    <Campo rotulo="Bota" valor={data.uniforme.bota || "não informado"} />
+                  </>
+                )}
               </div>
             </Bloco>
 
             {/* BLOCO 2 — Trabalho e cadastro */}
             <Bloco titulo="Trabalho e cadastro">
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                <Campo rotulo="Cliente" valor={data.cliente.operacao || data.cliente.razaoSocial} />
+                {/* CÓDIGO JUNTO DO NOME ("0060 - AVL"). SÓ informação visual: não é editável, não
+                    entra em régua e não é pendência. Existe porque há clientes com a MESMA razão
+                    social e CNPJs diferentes (o caso da IFF), e sem o código não dá para saber qual
+                    dos dois é o desta admissão. */}
+                <Campo
+                  rotulo="Cliente"
+                  valor={`${data.cliente.codCliente} - ${data.cliente.operacao || data.cliente.razaoSocial}`}
+                />
                 <Campo rotulo="Cargo" valor={data.cargo} />
                 <Campo rotulo="Salário" valor={fmtMoeda(data.vagaFolha.salario)} />
                 <Campo rotulo="Tipo de contrato" valor={data.tipoContrato || "não informado"} />
@@ -864,6 +1070,141 @@ export function AdmissaoDetalheModal({
         onConfirm={() => void marcarRevisado()}
         onCancel={() => setConfirmandoRevisao(false)}
       />
+
+      {/* TROCA DE CLIENTE E CARGO (item 8). Os DOIS juntos, porque régua e memória resolvem pelo par:
+          trocar só o cliente deixaria a admissão sem checklist. O backend recusa par sem régua e
+          admissão com as três frentes concluídas; a mensagem dele é mostrada como veio. */}
+      {trocaAberta && (
+        <Modal
+          onClose={() => !trocando && setTrocaAberta(false)}
+          ariaLabel="Trocar cliente e cargo"
+          className="max-w-[520px] p-6"
+        >
+          <div className="mb-5">
+            <div className="eyebrow !mb-1">Correção De Master</div>
+            <h2 className="font-display text-xl font-bold">Trocar Cliente E Cargo</h2>
+            <p className="mt-1 text-[13px] text-dim">
+              Atual: {data?.cliente.codCliente} · {data?.cliente.razaoSocial} · {data?.cargo}. A régua
+              documental e a memória resolvem pelo par cliente e cargo, então os dois trocam juntos.
+              Depois da troca, revise os documentos já coletados.
+            </p>
+          </div>
+          <div className="grid gap-4">
+            <label className="grid gap-1.5">
+              <span className="ds-label">Cliente novo</span>
+              <Select
+                value={trocaCodCliente}
+                onChange={setTrocaCodCliente}
+                placeholder="Selecione o cliente…"
+                ariaLabel="Cliente novo"
+                searchable
+                menuFit
+                options={clientes.map((c) => ({
+                  value: c.codCliente,
+                  label: `${c.codCliente} · ${c.nomeOperacao ?? c.razaoSocial}`,
+                }))}
+              />
+            </label>
+            <label className="grid gap-1.5">
+              <span className="ds-label">Cargo novo</span>
+              <Select
+                value={trocaCargoId}
+                onChange={setTrocaCargoId}
+                placeholder="Selecione o cargo…"
+                ariaLabel="Cargo novo"
+                searchable
+                menuFit
+                options={cargos.map((c) => ({ value: c.id, label: c.nome }))}
+              />
+            </label>
+          </div>
+          {trocaErro && (
+            <p
+              className="mt-4 rounded-xl border border-[var(--border)] bg-[rgba(214,69,69,0.1)] px-3 py-2 text-sm text-danger"
+              role="alert"
+            >
+              {trocaErro}
+            </p>
+          )}
+          <div className="mt-6 flex justify-end gap-3">
+            <Button
+              variant="secondary"
+              onClick={() => setTrocaAberta(false)}
+              disabled={trocando}
+            >
+              Cancelar
+            </Button>
+            <Button
+              onClick={() => void trocarClienteCargo()}
+              disabled={!trocaCodCliente || !trocaCargoId || trocando}
+            >
+              {trocando ? "Trocando…" : "Trocar"}
+            </Button>
+          </div>
+        </Modal>
+      )}
+
+      {/* CORRIGIR CPF (item 9). É só acertar o campo para bater com o documento: não reprocessa
+          auditoria, não renomeia arquivo, não reagrupa nada. O dígito é validado no backend, e a
+          colisão volta com o NOME de quem já tem o CPF, para o Master decidir. */}
+      {cpfAberto && (
+        <Modal
+          onClose={() => !corrigindoCpf && setCpfAberto(false)}
+          ariaLabel="Corrigir CPF"
+          className="max-w-[480px] p-6"
+        >
+          <div className="mb-5">
+            <div className="eyebrow !mb-1">Correção De Master</div>
+            <h2 className="font-display text-xl font-bold">Corrigir CPF</h2>
+            <p className="mt-1 text-[13px] text-dim">
+              {caixaAlta(data?.candidato.nome ?? "")}, CPF atual {fmtCpf(data?.candidato.cpf ?? "")}.
+              Confira o CPF no documento do candidato. A correção fica registrada no histórico com o
+              seu nome.
+            </p>
+          </div>
+          <label className="grid gap-1.5">
+            <span className="ds-label">CPF correto</span>
+            <input
+              className="ds-input font-mono"
+              inputMode="numeric"
+              maxLength={14}
+              placeholder="000.000.000-00"
+              value={cpfNovo}
+              onChange={(e) => {
+                setCpfNovo(e.target.value);
+                // Digitou de novo: a confirmação de duplicidade anterior não vale mais.
+                setCpfDuplicado(null);
+                setCpfErro(null);
+              }}
+            />
+          </label>
+          {cpfErro && (
+            <p
+              className={`mt-4 rounded-xl border border-[var(--border)] px-3 py-2 text-sm ${
+                cpfDuplicado ? "bg-[rgba(201,138,18,0.12)] text-warn" : "bg-[rgba(214,69,69,0.1)] text-danger"
+              }`}
+              role="alert"
+            >
+              {cpfErro}
+            </p>
+          )}
+          <div className="mt-6 flex justify-end gap-3">
+            <Button variant="secondary" onClick={() => setCpfAberto(false)} disabled={corrigindoCpf}>
+              Cancelar
+            </Button>
+            <Button
+              onClick={() => void corrigirCpf(cpfDuplicado !== null)}
+              disabled={!cpfNovo.trim() || corrigindoCpf}
+            >
+              {corrigindoCpf
+                ? "Corrigindo…"
+                : cpfDuplicado
+                  ? "É a mesma pessoa, corrigir"
+                  : "Corrigir"}
+            </Button>
+          </div>
+        </Modal>
+      )}
 
       <ConfirmDialog
         open={duplaCorrecaoMsg !== null}

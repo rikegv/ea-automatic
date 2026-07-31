@@ -7,6 +7,7 @@ import { CreateAdmissaoDto } from "./dto/create-admissao.dto";
 import { LiberarAdmissaoDto } from "./dto/liberar-admissao.dto";
 import { LiberarEmLoteDto } from "./dto/liberar-lote.dto";
 import { TrocarClienteDto } from "./dto/trocar-cliente.dto";
+import { CorrigirCpfDto } from "./dto/corrigir-cpf.dto";
 import { UpdateAdmissaoDto } from "./dto/update-admissao.dto";
 
 // Operacional do wizard (F6/F11) e do Gerenciador (F10/F7). Autenticado, sem restrição de papel
@@ -148,6 +149,17 @@ export class AdmissoesController {
   @Patch(":id/troca-cliente/revisado")
   marcarTrocaRevisada(@Param("id") id: string, @CurrentUser() user: AuthUser) {
     return this.admissoes.marcarTrocaRevisada(id, user);
+  }
+
+  /**
+   * CORRIGE O CPF da admissão (item 9, Frente B). ROTA PRÓPRIA e só MASTER/SUPER_ADMIN, pelo mesmo
+   * motivo da troca de cliente: o RBAC fica no método certo e a correção reaponta a admissão para
+   * outra linha de candidato, o que não cabe numa edição comum de campos.
+   */
+  @Patch(":id/corrigir-cpf")
+  @Roles("MASTER", "SUPER_ADMIN")
+  corrigirCpf(@Param("id") id: string, @Body() dto: CorrigirCpfDto, @CurrentUser() user: AuthUser) {
+    return this.admissoes.corrigirCpf(id, dto, user);
   }
 
   @Patch(":id/liberar")

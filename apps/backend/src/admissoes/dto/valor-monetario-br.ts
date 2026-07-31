@@ -36,9 +36,26 @@ export function parseValorBR(entrada: unknown): number | null {
   if (s === "") return null;
   // Depois disso, só dígitos, ponto, vírgula e um sinal opcional são aceitos: letra/lixo => inválido.
   if (!/^-?[\d.,]+$/.test(s)) return null;
-  // pt-BR: ponto = milhar (some), vírgula = decimal (vira ponto). Só a primeira vírgula vira ponto;
-  // se sobrar outra vírgula, a regex final barra (mais de um decimal é inválido).
-  s = s.replace(/\./g, "").replace(",", ".");
+  /**
+   * FORMA CANÔNICA ("1806.00"), e por que ela precisa de tratamento próprio.
+   *
+   * A regra pt-BR abaixo apaga TODO ponto por ser separador de milhar. Isso é certo para o que o
+   * consultor digita, e era ERRADO para o valor que a própria API devolve: `numeric(12,2)` do
+   * Postgres volta como "1806.00", e o lápis do Gerenciador carregava esse texto no campo. Salvar
+   * sem tocar em nada mandava "1806.00" de volta, o ponto sumia e o salário virava 180600,00.
+   * MULTIPLICAVA POR 100 A CADA SALVAMENTO, em silêncio, e foi assim que a base ganhou salários de
+   * 19.630.000,00 (esse passou duas vezes).
+   *
+   * O DESEMPATE é o tamanho do grupo depois do ponto: milhar em pt-BR tem SEMPRE três dígitos, então
+   * ponto seguido de um ou dois dígitos não pode ser milhar, é decimal. "2.500" continua sendo 2500
+   * (três dígitos, milhar), que é a regra declarada e testada.
+   */
+  const ehCanonico = !s.includes(",") && /^-?\d+\.\d{1,2}$/.test(s);
+  if (!ehCanonico) {
+    // pt-BR: ponto = milhar (some), vírgula = decimal (vira ponto). Só a primeira vírgula vira ponto;
+    // se sobrar outra vírgula, a regex final barra (mais de um decimal é inválido).
+    s = s.replace(/\./g, "").replace(",", ".");
+  }
   if (!/^-?\d+(\.\d+)?$/.test(s)) return null;
   const n = Number(s);
   return Number.isFinite(n) ? n : null;

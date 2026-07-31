@@ -19,6 +19,7 @@ import { EditAdmissaoModal } from "@/components/gerenciador/EditAdmissaoModal";
 import { PendenciasModal } from "@/components/gerenciador/PendenciasModal";
 import { farolPill, FAROL_SELECT_OPTIONS } from "@/lib/farol";
 import { caixaAlta } from "@/lib/nome";
+import { pillPendencias } from "@/lib/pendencias-pill";
 
 interface AdmRow {
   admissaoId: string;
@@ -30,8 +31,12 @@ interface AdmRow {
   tipoContrato: string | null;
   dataAdmissao: string | null;
   farolGlobal: string;
+  /** PAUSA (OST admissão pausada): instante da pausa, null = não pausada. Alimenta a tag do Status. */
+  pausadaEm?: string | null;
   origem: Origem;
   sinalizador: string;
+  /** Há campo obrigatório faltando? Fonte da verdade do pill de Pendências Obrigatórias. */
+  temPendencias?: boolean;
   concluido: boolean;
   frentes: Record<string, { status: string; rotulo: string; concluida: boolean }>;
 }
@@ -140,7 +145,7 @@ export default function GerenciadorPage() {
   const [sinalizadores, setSinalizadores] = useState<string[]>([]);
   const [concluido, setConcluido] = useState(false);
   const [comPendencias, setComPendencias] = useState(false);
-  // Card "Admissões em Andamento" (Bloco A): em aberto no geral (nem concluído nem declínio).
+  // Card "Admissões Em Andamento" (Bloco A): em aberto no geral (nem concluído nem declínio).
   const [emAndamento, setEmAndamento] = useState(false);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
@@ -465,10 +470,10 @@ export default function GerenciadorPage() {
 
         {/* KPIs clicáveis = filtro ÚNICO (Bloco A). Ordem fixa; Declínios SEMPRE o último card. */}
         <div className="mb-[18px] grid shrink-0 grid-cols-2 gap-[12px] sm:grid-cols-3 xl:grid-cols-5">
-          <KpiCard id="total" label="Total geral" value={k?.total ?? 0} icon="layers" />
+          <KpiCard id="total" label="Total Geral" value={k?.total ?? 0} icon="layers" />
           <KpiCard
             id="andamento"
-            label="Admissões em Andamento"
+            label="Admissões Em Andamento"
             value={k?.emAndamento ?? 0}
             tone="var(--accent)"
             icon="chart"
@@ -482,7 +487,7 @@ export default function GerenciadorPage() {
           />
           <KpiCard
             id="pendencias"
-            label="Com pendências obrigatórias"
+            label="Com Pendências Obrigatórias"
             value={k?.comPendencias ?? 0}
             tone="var(--warn)"
             icon="alert"
@@ -542,13 +547,17 @@ export default function GerenciadorPage() {
               ) : (
                 items.map((r) => {
                   const farolP = farolPill(r.farolGlobal);
-                  // Bloco D (regra permanente §A.16): quem declinou/rescindiu está ENCERRADO, não tem
-                  // pendência de processo vivo. A coluna Pendências Obrigatórias mostra "Declínio",
-                  // NUNCA "Parcial"/"Completo". Derivado do farol (dado autoritativo), não do sinalizador.
+                  // Bloco D (§A.16): quem declinou/rescindiu está ENCERRADO. Continua governando as
+                  // colunas das três FRENTES logo abaixo, por isso a constante permanece aqui.
                   const ehDeclinio = r.farolGlobal === "DECLINOU" || r.farolGlobal === "RESCISAO";
-                  const sinalP: { tone: PillTone; label: string } = ehDeclinio
-                    ? { tone: "dg", label: "Declínio" }
-                    : (SINAL[r.sinalizador] ?? { tone: "nt", label: r.sinalizador });
+                  // Pill da coluna Pendências Obrigatórias: derivado num lugar só (§A.16 Bloco D para
+                  // o declínio, e `temPendencias` como fonte da verdade). Era aqui que a coluna dizia
+                  // "Parcial" enquanto o card da MESMA linha listava zero pendência.
+                  const sinalP: { tone: PillTone; label: string } = pillPendencias(
+                    r.farolGlobal,
+                    r.sinalizador,
+                    r.temPendencias,
+                  );
                   const fa = r.frentes?.AUDITORIA;
                   const ex = r.frentes?.EXAME;
                   const cad = r.frentes?.CADASTRO_CONTRATO;
@@ -583,8 +592,12 @@ export default function GerenciadorPage() {
                       </div>
                       <div className="meta text-center">{fmtDataAdmissao(r.dataAdmissao)}</div>
                       {/* Status movido para ANTES de Auditoria (ajuste de ordem das colunas). */}
-                      <div className="flex min-w-0 items-center justify-center">
+                      <div className="flex min-w-0 flex-col items-center justify-center gap-1">
                         <StatusPill tone={farolP.tone} label={farolP.label} />
+                        {/* PAUSA (OST admissão pausada): mais um estado da MESMA coluna Status, no
+                            padrão do declínio. O farol continua dizendo o ciclo de vida (que segue
+                            derivando por baixo da pausa) e a tag diz que o trabalho está parado. */}
+                        {r.pausadaEm && <StatusPill tone="wn" label="Pausada" />}
                       </div>
                       {/* Auditoria/Exame: em admissão declinada, a coluna mostra "Declínio" DERIVADO do
                           farol (só apresentação, o status real da frente NÃO é lido/alterado — OST
@@ -736,7 +749,7 @@ export default function GerenciadorPage() {
       )}
       <ConfirmDialog
         open={Boolean(delRow)}
-        title="Excluir admissão"
+        title="Excluir Admissão"
         message={
           delRow
             ? `Excluir a admissão de ${caixaAlta(delRow.candidatoNome)}? Remove também documentos, frentes e não conformidades vinculadas. Esta ação não pode ser desfeita.`

@@ -12,7 +12,12 @@ import {
   ValidateNested,
 } from "class-validator";
 import { FAROL_GLOBAL } from "@ea/shared-types";
-import { BeneficioAlocadoDto, VagaFolhaInputDto } from "./create-admissao.dto";
+import {
+  BeneficioAlocadoDto,
+  SEXO_VALORES,
+  VagaFolhaInputDto,
+  type SexoValor,
+} from "./create-admissao.dto";
 
 /**
  * Edição dos dados PESSOAIS do candidato (OST-EA-GESTAO-USUARIOS, ajuste de escopo). Nome/e-mail/
@@ -41,6 +46,16 @@ export class CandidatoUpdateDto {
     { message: "A data de nascimento informada é inválida. Confira e tente novamente." },
   )
   dataNascimento?: string;
+
+  /**
+   * SEXO (OST do seletor de sexo, segunda entrega). O seletor nasceu na Liberação, e admissão JÁ
+   * liberada ficava sem onde corrigir: foi o caso real de uma candidata gravada como MASCULINO, com
+   * o Reservista virando obrigatório e o prontuário travado. Aqui é o caminho de correção do que já
+   * passou da liberação. Muda QUAIS documentos a régua e o arquivamento exigem.
+   */
+  @IsOptional()
+  @IsIn(SEXO_VALORES as unknown as string[], { message: "Selecione um sexo válido." })
+  sexo?: SexoValor;
 }
 
 /**

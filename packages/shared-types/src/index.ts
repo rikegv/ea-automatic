@@ -260,6 +260,20 @@ export interface ArquivamentoDrive {
   ignorados?: number;
   /** A pasta do prontuário já existia e foi reutilizada, em vez de criada agora. */
   pastaJaExistia?: boolean;
+  /**
+   * Ids das OUTRAS pastas do mesmo prontuário encontradas no Drive (OST da duplicação). O módulo do
+   * Drive não apaga nada (§A.6), então elas voltam aqui para o EA avisar o diretor, que consolida e
+   * remove à mão. Vazio é o caso normal.
+   */
+  duplicatas?: string[];
+  /**
+   * Arquivos que NÃO subiram neste lote. Uma falha por arquivo não derruba mais o arquivamento
+   * inteiro: a pasta e o que subiu são preservados, o link volta, e a próxima tentativa completa o
+   * resto (a checagem por md5 impede reenvio). Zero é o caso normal.
+   */
+  falhas?: number;
+  /** Motivos distintos das falhas (ex.: "TimeoutError"), sem PII. */
+  motivoFalhas?: string[];
 }
 
 /**
@@ -328,4 +342,56 @@ function normalizarNomeBeneficio(nome: string): string {
 export function beneficioExigeValor(nome: string): boolean {
   const n = normalizarNomeBeneficio(nome);
   return BENEFICIOS_COM_VALOR.some((chave) => n.startsWith(chave) || n.includes(`(${chave})`));
+}
+
+// ── Uniforme e EPI (OST Onda 3, item 1) ────────────────────────────────────
+/**
+ * TAMANHOS E ITENS SÃO CATÁLOGO FECHADO, e vivem aqui por um motivo: a tela de Liberação escolhe e
+ * o backend valida com as MESMAS listas. Nada é digitável (decisão do diretor), então uma lista
+ * copiada no frontend seria a porta para gravar tamanho que o backend recusa, ou aceitar tamanho que
+ * a tela nunca ofereceu.
+ */
+
+/** Camiseta: só alfabético. */
+export const TAMANHOS_CAMISETA = ["P", "M", "G", "GG", "G1", "G2", "G3", "G4"] as const;
+
+/** Numéricos 34 a 50, usados por calça e bota. */
+const TAMANHOS_NUMERICOS = Array.from({ length: 17 }, (_, i) => String(34 + i));
+
+/**
+ * Calça: alfabético E numérico na MESMA lista (decisão do diretor). São três campos no total
+ * (camiseta, calça, bota), e a calça é o único que aceita as duas formas, porque o fornecedor de
+ * uniforme trabalha com as duas.
+ */
+export const TAMANHOS_CALCA = [...TAMANHOS_CAMISETA, ...TAMANHOS_NUMERICOS] as readonly string[];
+
+/** Bota: só numérico. */
+export const TAMANHOS_BOTA = TAMANHOS_NUMERICOS as readonly string[];
+
+/** Itens de EPI selecionáveis. "OUTROS" é o único que abre campo de digitação. */
+export const ITENS_EPI = ["CAPACETE", "LUVA", "OCULOS", "OUTROS"] as const;
+export type ItemEpi = (typeof ITENS_EPI)[number];
+
+/** Rótulo de tela de cada item de EPI (§A.24: tag em title case). */
+export const ROTULO_ITEM_EPI: Record<ItemEpi, string> = {
+  CAPACETE: "Capacete",
+  LUVA: "Luva",
+  OCULOS: "Óculos",
+  OUTROS: "Outros",
+};
+
+/** Teto do texto livre do "Outros" do EPI. Espelhado na coluna do banco. */
+export const EPI_OUTROS_MAX = 200;
+
+export function ehTamanhoCamiseta(v: string): boolean {
+  return (TAMANHOS_CAMISETA as readonly string[]).includes(v);
+}
+export function ehTamanhoCalca(v: string): boolean {
+  return TAMANHOS_CALCA.includes(v);
+}
+export function ehTamanhoBota(v: string): boolean {
+  return TAMANHOS_BOTA.includes(v);
+}
+export function ehItemEpi(v: string): v is ItemEpi {
+  return (ITENS_EPI as readonly string[]).includes(v);
 }

@@ -31,6 +31,9 @@ describe("calcSinalizadorPreenchimento (§A.3 / F5)", () => {
       setor: "Operações",
       gestorBp: "Ana",
     },
+    // UNIFORME (OST Onda 3, item 1): entrou na régua, então "completo" passou a incluir a RESPOSTA
+    // de "possui uniforme?". `false` é resposta válida e fecha a pendência.
+    possuiUniforme: false,
   };
 
   it("retorna OK sem nenhuma pendência obrigatória", () => {
@@ -132,6 +135,8 @@ describe("pendenciasObrigatorias (S2/S3)", () => {
       "Centro de custo",
       "Setor",
       "Gestor / BP",
+      // Uniforme não respondido (OST Onda 3, item 1).
+      "Uniforme",
     ]);
   });
 
@@ -150,6 +155,8 @@ describe("pendenciasObrigatorias (S2/S3)", () => {
           setor: "",
           gestorBp: "",
         },
+        // Uniforme respondido: este caso isola centro de custo, setor e gestor.
+        possuiUniforme: true,
       }),
     ).toEqual(["Centro de custo", "Setor", "Gestor / BP"]);
   });
@@ -169,6 +176,7 @@ describe("pendenciasObrigatorias (S2/S3)", () => {
           setor: "Operações",
           gestorBp: "Fulano",
         },
+        possuiUniforme: true,
       }),
     ).toEqual([]);
   });
@@ -188,6 +196,7 @@ describe("pendenciasObrigatorias (S2/S3)", () => {
         gestorBp: "Fulano",
       },
       isBanco: true,
+      possuiUniforme: true,
     };
     // sem termo → "Termo de Banco" no lugar de "Data de admissão"
     expect(pendenciasObrigatorias(base)).toEqual(["Termo de Banco"]);

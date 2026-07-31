@@ -59,6 +59,10 @@ const VAGA_COMPLETA = {
   centroCusto: "CC-1",
   setor: "Operações",
   gestorBp: "Fulano",
+  // UNIFORME (OST Onda 3, item 1): entrou na régua unificada, então "vaga completa" agora inclui a
+  // RESPOSTA de "possui uniforme?". Sem ela, o avanço da frente cairia no aceite de passagem com
+  // pendência, que é justamente o que estes testes precisam NÃO acontecer no caminho feliz.
+  possuiUniforme: true,
 };
 
 function fakeDb(f: Fixtures, inseridos: { tabela: unknown; valores: unknown }[]) {

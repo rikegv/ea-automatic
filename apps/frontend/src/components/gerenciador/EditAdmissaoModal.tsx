@@ -13,12 +13,13 @@ import { Select } from "@/components/ui/Select";
 import { MultiSelect } from "@/components/ui/MultiSelect";
 import { Bloco } from "@/components/ui/Bloco";
 import { cn } from "@/lib/cn";
-import { FAROL_SELECT_OPTIONS } from "@/lib/farol";
+import { FAROL_PAUSADA, FAROL_SELECT_OPTIONS, valorSeletorFarol } from "@/lib/farol";
 import { caixaAlta } from "@/lib/nome";
+import { salarioParaCampo } from "@/lib/salario";
 import {
+  criarPrecisaValor,
   fmtValorBeneficio,
   foraDoPadraoPacote,
-  precisaValorBeneficio,
   rotuloPacote,
   type BeneficioPacote,
 } from "@/lib/beneficios";
@@ -40,6 +41,8 @@ interface CandidatoEdit {
   email: string | null;
   telefone: string | null;
   dataNascimento: string | null;
+  /** SEXO: corrigível aqui porque admissão já liberada não passa mais pela tela de Liberação. */
+  sexo: string | null;
 }
 interface ExameInfo {
   data: string | null;
@@ -70,6 +73,9 @@ interface AdmissaoEdit {
   farolGlobal: string;
   /** Motivo do declínio já vinculado (id do catálogo motivos_declinio) ou null. */
   motivoDeclinioId: string | null;
+  /** PAUSA: flag paralela. null = não pausada. O seletor de status a exibe como "Admissão Pausada". */
+  pausadaEm: string | null;
+  pausaMotivo: string | null;
   isBanco: boolean;
   origem: Origem;
   vagaFolha: VagaFolha;
@@ -178,7 +184,7 @@ export function EditAdmissaoModal({
   const mostra = (campo: string) => !camposFiltro || camposFiltro.includes(campo);
   // Seção Candidato só aparece no formulário inteiro ou se o filtro de pendências pedir
   // explicitamente um campo pessoal (não faz parte do fluxo de pendências hoje).
-  const verCandidato = ["nome", "email", "telefone", "dataNascimento"].some(mostra);
+  const verCandidato = ["nome", "email", "telefone", "dataNascimento", "sexo"].some(mostra);
   const verFolha = [
     "salario",
     "escala",
@@ -205,10 +211,25 @@ export function EditAdmissaoModal({
   const [email, setEmail] = useState("");
   const [telefone, setTelefone] = useState("");
   const [dataNascimento, setDataNascimento] = useState("");
+  /**
+   * SEXO do candidato (OST do seletor de sexo, segunda entrega). O seletor nasceu na Liberação e não
+   * alcançava admissão já liberada: foi o caso da candidata gravada como masculino, com o Reservista
+   * virando obrigatório e o prontuário travado. Muda QUAIS documentos a régua e o arquivamento exigem.
+   */
+  const [sexo, setSexo] = useState("");
   const [tipoContrato, setTipoContrato] = useState("");
   const [dataAdmissao, setDataAdmissao] = useState("");
   const [matricula, setMatricula] = useState("");
+  // Seletor de status. O valor pode ser um farol REAL ou o pseudo-valor PAUSADA (ver lib/farol):
+  // a pausa é flag paralela no banco, e este é o único ponto onde ela vira "mais um status" na tela.
   const [farol, setFarol] = useState("EM_ADMISSAO");
+  // Farol REAL da admissão, guardado à parte. É o que volta ao seletor quando a pausa é desfeita e o
+  // que é reenviado sem alteração enquanto a admissão está pausada (a pausa não mexe no farol).
+  const [farolReal, setFarolReal] = useState("EM_ADMISSAO");
+  const [pausadaEm, setPausadaEm] = useState<string | null>(null);
+  // Motivo da PAUSA (opcional): mesmo padrão do motivo do declínio, aparece quando "Pausada" é o
+  // status escolhido. Texto livre, vai para a trilha do modal do olho.
+  const [pausaMotivo, setPausaMotivo] = useState("");
   // Motivo do declínio (§A.14, item 3): só aparece/edita quando o farol é de declínio.
   const [motivoDeclinioId, setMotivoDeclinioId] = useState("");
   const [motivosDeclinioCat, setMotivosDeclinioCat] = useState<{ id: string; nome: string }[]>([]);
@@ -235,7 +256,12 @@ export function EditAdmissaoModal({
   // OST Regras de Fluxo, item 7: escala e benefícios pela esteira usam o MESMO menu do cadastro
   // (catálogo, sem texto livre). Carrega os catálogos de escala e benefícios.
   const [escalasCat, setEscalasCat] = useState<{ id: string; nome: string }[]>([]);
-  const [beneficiosCat, setBeneficiosCat] = useState<{ id: string; nome: string }[]>([]);
+  const [beneficiosCat, setBeneficiosCat] = useState<
+    { id: string; nome: string; exigeValor?: boolean }[]
+  >([]);
+  // "Precisa de valor?" derivado do CADASTRO (coluna `exige_valor`), não do texto do nome. Mesma
+  // régua que o backend valida, então renomear um benefício não muda mais a exigência.
+  const precisaValorBeneficio = criarPrecisaValor(beneficiosCat);
   // §A.17 etapa 4, modo ESTRUTURADO. A regra do modo é o BLOB: admissão com blob legado continua
   // editando a string (não migramos, decisão do diretor); sem blob, edita estruturado.
   const [pacoteSel, setPacoteSel] = useState<string[]>([]);
@@ -252,7 +278,7 @@ export function EditAdmissaoModal({
     apiFetch<{ id: string; nome: string }[]>("/catalogos/escalas", { token })
       .then(setEscalasCat)
       .catch(() => setEscalasCat([]));
-    apiFetch<{ id: string; nome: string }[]>("/catalogos/beneficios", { token })
+    apiFetch<{ id: string; nome: string; exigeValor?: boolean }[]>("/catalogos/beneficios", { token })
       .then(setBeneficiosCat)
       .catch(() => setBeneficiosCat([]));
     apiFetch<{ id: string; nome: string }[]>("/catalogos/motivos-declinio", { token })
@@ -269,10 +295,15 @@ export function EditAdmissaoModal({
         setEmail(s(r.candidato.email));
         setTelefone(s(r.candidato.telefone));
         setDataNascimento(s(r.candidato.dataNascimento).slice(0, 10));
+        setSexo(s(r.candidato.sexo));
         setTipoContrato(s(r.tipoContrato));
         setDataAdmissao(s(r.dataAdmissao).slice(0, 10));
         setMatricula(s(r.matricula));
-        setFarol(r.farolGlobal);
+        setFarolReal(r.farolGlobal);
+        setPausadaEm(r.pausadaEm ?? null);
+        setPausaMotivo(r.pausaMotivo ?? "");
+        // O seletor mostra "Pausada" quando a flag está de pé; senão, o farol real.
+        setFarol(valorSeletorFarol(r.farolGlobal, r.pausadaEm));
         setMotivoDeclinioId(s(r.motivoDeclinioId));
         setIsBanco(Boolean(r.isBanco));
         // §A.17 etapa 4: o BLOB decide o modo. Com blob => string legada; sem blob => estruturado.
@@ -311,7 +342,7 @@ export function EditAdmissaoModal({
             .catch(() => setPadraoPar(null));
         }
         setVf({
-          salario: s(r.vagaFolha.salario),
+          salario: salarioParaCampo(r.vagaFolha.salario),
           beneficios: s(r.vagaFolha.beneficios),
           escala: s(r.vagaFolha.escala),
           centroCusto: s(r.vagaFolha.centroCusto),
@@ -364,6 +395,11 @@ export function EditAdmissaoModal({
     // Valor de benefício NÃO trava o salvar (OST ajustes, item 1): o salvar grava o que já está
     // preenchido; um valor de benefício em falta segue visível como pendência no formulário (o campo
     // de valor continua ali), mas não impede salvar o resto, nem quando o farol é de declínio.
+    // PAUSA: o que o seletor pede vs. o que a admissão é hoje. As duas rotas dedicadas cuidam do
+    // resto (inclusive a trava de "só EM_ADMISSAO pausa", que responde 409 com mensagem clara).
+    const querPausar = farol === FAROL_PAUSADA;
+    const estaPausada = Boolean(pausadaEm);
+
     setBusy(true);
     setErro(null);
     try {
@@ -377,7 +413,10 @@ export function EditAdmissaoModal({
           tipoContrato,
           dataAdmissao: dataAdmissao || undefined,
           matricula,
-          farolGlobal: farol,
+          // PAUSA: quando o status escolhido é "Pausada", o farol NÃO é tocado (envia o real). A
+          // pausa é flag paralela justamente para o farol seguir derivando por baixo; sobrescrevê-lo
+          // aqui recriaria o farol mentiroso que a decisão anterior existiu para evitar.
+          farolGlobal: querPausar ? farolReal : farol,
           // Motivo do declínio: em declínio, envia o id escolhido (ou null se nenhum). Ao TIRAR o
           // farol de declínio, envia null para LIMPAR o motivo órfão (OST ajustes, item 2).
           motivoDeclinioId:
@@ -393,10 +432,34 @@ export function EditAdmissaoModal({
                 const bruto = precisaValorBeneficio(nome) ? (pacoteValores[nome] ?? "").trim() : "";
                 return [{ beneficioId: b.id, valor: bruto || undefined }];
               }),
-          candidato: { nome, email, telefone, dataNascimento: dataNascimento || undefined },
+          candidato: {
+            nome,
+            email,
+            telefone,
+            dataNascimento: dataNascimento || undefined,
+            // Em branco NÃO vai: omitir mantém o que está, e um salvamento de outro campo nunca
+            // apaga o sexo de ninguém.
+            sexo: sexo || undefined,
+          },
         },
       });
-      onSaved(`Admissão de ${caixaAlta(candidatoNome)} atualizada.`);
+      // PAUSAR / RETOMAR: o seletor é só o GATILHO. A mecânica é a MESMA já construída e provada,
+      // pelas rotas dedicadas, então tudo o que foi validado no Bloco 6 continua valendo sem
+      // duplicação de lógica. Roda DEPOIS do PATCH para o campo salvo não ser revertido em caso de
+      // erro na pausa (o erro aparece e a admissão fica sem pausar, nunca meio-salva).
+      let sufixo = "";
+      if (querPausar && !estaPausada) {
+        await apiFetch(`/esteira/admissao/${admissaoId}/pausar`, {
+          method: "PATCH",
+          token,
+          body: { motivo: pausaMotivo.trim() || undefined },
+        });
+        sufixo = " Admissão pausada.";
+      } else if (!querPausar && estaPausada) {
+        await apiFetch(`/esteira/admissao/${admissaoId}/retomar`, { method: "PATCH", token });
+        sufixo = " Admissão retomada.";
+      }
+      onSaved(`Admissão de ${caixaAlta(candidatoNome)} atualizada.${sufixo}`);
     } catch (e) {
       setErro(e instanceof ApiError ? e.message : "Falha ao salvar.");
     } finally {
@@ -417,7 +480,12 @@ export function EditAdmissaoModal({
     .map((s) => s.trim())
     .filter(Boolean);
   // Mesma regra do wizard, do mesmo helper: as duas telas nunca divergem no que é "fora do padrão".
-  const foraDoPadraoModal = foraDoPadraoPacote(padraoPar, pacoteSel, pacoteValores);
+  const foraDoPadraoModal = foraDoPadraoPacote(
+    padraoPar,
+    pacoteSel,
+    pacoteValores,
+    precisaValorBeneficio,
+  );
   const beneficiosOptions = [
     ...beneficiosCat.map((b) => ({ value: b.nome, label: b.nome })),
     ...beneficiosSel
@@ -512,6 +580,20 @@ export function EditAdmissaoModal({
                       className="ds-input"
                       value={dataNascimento}
                       onChange={(e) => setDataNascimento(e.target.value)}
+                    />
+                  </Campo>
+                )}
+                {mostra("sexo") && (
+                  <Campo rotulo="Sexo">
+                    <Select
+                      value={sexo}
+                      onChange={setSexo}
+                      placeholder="Selecione…"
+                      ariaLabel="Sexo do candidato"
+                      options={[
+                        { value: "FEMININO", label: "Feminino" },
+                        { value: "MASCULINO", label: "Masculino" },
+                      ]}
                     />
                   </Campo>
                 )}
@@ -743,6 +825,21 @@ export function EditAdmissaoModal({
                 {mostra("farol") && (
                   <Campo rotulo="Status (farol)">
                     <Select value={farol} onChange={setFarol} options={FAROL_OPTS} ariaLabel="Farol" />
+                  </Campo>
+                )}
+                {/* Motivo da PAUSA: MESMO padrão do motivo do declínio logo abaixo, aparece quando
+                    "Pausada" é o status escolhido. OPCIONAL (decisão do diretor): pausa rápida não
+                    depende de justificativa. Vai para a trilha do modal do olho, com quem e quando. */}
+                {mostra("farol") && farol === FAROL_PAUSADA && (
+                  <Campo rotulo="Motivo da pausa (opcional)">
+                    <input
+                      value={pausaMotivo}
+                      onChange={(e) => setPausaMotivo(e.target.value)}
+                      maxLength={500}
+                      placeholder="Ex.: cliente suspendeu a contratação até o próximo mês."
+                      className="ds-input"
+                      aria-label="Motivo da pausa"
+                    />
                   </Campo>
                 )}
                 {/* Motivo do declínio (§A.14, item 3): só quando o farol é de declínio. */}

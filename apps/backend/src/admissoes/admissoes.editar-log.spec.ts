@@ -80,6 +80,7 @@ const VAGA_BASE: Row = {
   beneficios: "VT",
   escala: "5x2",
   centroCusto: "CC1",
+  setor: "Operações",
   departamento: "TI",
   gestorBp: "Gestor",
   motivo: "Aumento de quadro",

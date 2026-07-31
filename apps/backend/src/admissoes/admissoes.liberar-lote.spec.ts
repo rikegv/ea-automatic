@@ -21,6 +21,13 @@ const USER: AuthUser = {
 
 type Row = Record<string, unknown>;
 
+/**
+ * CPFs de teste com o dígito verificador conferido: desde o item 9 a liberação BARRA CPF inválido,
+ * então o CPF do fixture precisa fechar de verdade (o antigo "12345678901" não fechava).
+ */
+const CPF_VALIDO = "52998224725";
+const CPF_INVALIDO = "52998224726";
+
 interface Cenario {
   /** `null` = admissão sem origem Pandapé (nada a puxar). Ausente = veio do Pandapé. */
   integracao?: Row | null;
@@ -66,7 +73,7 @@ function montar(cen: Cenario) {
         findFirst: async (args: { where?: unknown }) => porId.get(idDoWhere(args)),
       },
       candidatos: {
-        findFirst: async () => ({ nome: "Candidato Teste", cpf: "12345678901" }),
+        findFirst: async () => ({ nome: "Candidato Teste", cpf: CPF_VALIDO }),
       },
     },
     // Única leitura via select() no caminho do lote: a régua do par.
@@ -123,7 +130,7 @@ async function rodarLote(
 const REGUA_OK = [{ tipoDocumentoId: "td1", exigencia: "OBRIGATORIO" }];
 const aguardando = (id: string): Row => ({
   id,
-  candidatoCpf: "12345678901",
+  candidatoCpf: CPF_VALIDO,
   farolGlobal: "AGUARDANDO_LIBERACAO",
   isBanco: false,
   possivelDuplicata: false,
@@ -274,6 +281,22 @@ describe("AdmissoesService.liberarEmLote", () => {
 
     expect(r.liberadas).toHaveLength(1);
     expect(r.falhas[0].motivo).toContain("duplicata");
+  });
+
+  it("pré-admissão com CPF INVÁLIDO não é liberada, e as boas seguem (item 9, Frente A)", async () => {
+    // O CPF vem errado do Pandapé e a liberação é a porta de entrada: o dígito que não fecha para
+    // aqui. Por linha, não pelo lote inteiro: uma digitação errada não segura as outras N.
+    const ids = ["a1", "a2"];
+    const ctx = montar({
+      admissoes: [aguardando("a1"), { ...aguardando("a2"), candidatoCpf: CPF_INVALIDO }],
+      regua: REGUA_OK,
+    });
+    const r = await rodarLote(ctx, ids);
+
+    expect(r.liberadas.map((l) => l.admissaoId)).toEqual(["a1"]);
+    expect(r.falhas).toHaveLength(1);
+    expect(r.falhas[0].motivo).toContain("dígito verificador");
+    expect(ctx.contarTransacoes()).toBe(1); // a do CPF errado nem abriu transação
   });
 
   it("par sem régua documental barra o lote inteiro, antes de qualquer transação", async () => {

@@ -12,8 +12,8 @@ import { Pill, type PillTone } from "@/components/ui/Pill";
 import { Icon } from "@/components/ui/Icon";
 import {
   beneficiosSemValor,
+  criarPrecisaValor,
   foraDoPadraoPacote,
-  precisaValorBeneficio,
   rotuloPacote,
   type BeneficioPacote,
 } from "@/lib/beneficios";
@@ -42,6 +42,8 @@ interface Cargo {
 interface CatItem {
   id: string;
   nome: string;
+  /** Só o catálogo de BENEFÍCIOS traz: a régua "precisa de valor?" agora vem do cadastro. */
+  exigeValor?: boolean;
 }
 interface ReguaItem {
   tipoDocumentoId: string;
@@ -82,7 +84,7 @@ const MOTIVO_SUBSTITUICAO = "Substituição";
 /**
  * Prefixo estável ("VR"/"AM") usado SÓ como chave do valor-padrão LEGADO por cliente
  * (`cliente_beneficio_padrao`, item 4), que só guarda esses dois. NÃO confundir com
- * `precisaValorBeneficio`: quem tem valor são 6 benefícios, e essa regra vive no shared-types.
+ * `precisaValorBeneficio`, que hoje vem da coluna `exige_valor` do cadastro de benefícios.
  */
 const PREFIXOS_PADRAO_CLIENTE_LEGADO = ["VR", "AM"];
 function prefixoBeneficio(nome: string): string | null {
@@ -192,6 +194,9 @@ export default function NovaAdmissaoPage() {
   // catálogos abertos (W2/W3/W4)
   const [motivos, setMotivos] = useState<CatItem[]>([]);
   const [beneficios, setBeneficios] = useState<CatItem[]>([]);
+  // "Precisa de valor?" derivado do CADASTRO (coluna `exige_valor`), não do texto do nome. Mesma
+  // régua que o backend valida, então renomear um benefício não muda mais a exigência.
+  const precisaValorBeneficio = useMemo(() => criarPrecisaValor(beneficios), [beneficios]);
   // PARTE C (§A.17 etapa 4): último pacote alocado para este cliente+cargo. null = par sem
   // histórico (não sugere nada). O padrão é DERIVADO no backend da última admissão do par.
   const [padraoPar, setPadraoPar] = useState<BeneficioPacote[] | null>(null);
@@ -290,14 +295,24 @@ export default function NovaAdmissaoPage() {
 
   // Valor OBRIGATÓRIO (decisão do diretor): quem seleciona VR/VA/AM/Cesta básica/PLR/Auxílio creche
   // tem de dizer quanto. Bloqueia o avanço; o backend revalida pela mesma regra.
-  const semValor = beneficiosSemValor(beneficiosSel, beneficiosValoresEfetivos());
+  const semValor = beneficiosSemValor(
+    beneficiosSel,
+    beneficiosValoresEfetivos(),
+    precisaValorBeneficio,
+  );
 
   // PARTE C: o pacote na tela foge do padrão deste cliente+cargo? Regra compartilhada com o modal
   // de pendências do Gerenciador (lib/beneficios), para as duas telas nunca divergirem.
   const foraDoPadrao = useMemo(
-    () => foraDoPadraoPacote(padraoPar, beneficiosSel, beneficiosValoresEfetivos()),
+    () =>
+      foraDoPadraoPacote(
+        padraoPar,
+        beneficiosSel,
+        beneficiosValoresEfetivos(),
+        precisaValorBeneficio,
+      ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [padraoPar, beneficiosSel, beneficiosValores, beneficiosPadraoCliente],
+    [padraoPar, beneficiosSel, beneficiosValores, beneficiosPadraoCliente, precisaValorBeneficio],
   );
 
   /** Valores efetivos de cada benefício selecionado (o digitado, ou o padrão do cliente). */
@@ -532,8 +547,8 @@ export default function NovaAdmissaoPage() {
     return (
       <>
         <PageHead
-          eyebrow="Nova admissão"
-          title="Admissão criada"
+          eyebrow="Nova Admissão"
+          title="Admissão Criada"
           subtitle="Frentes paralelas nascidas (F12)."
         />
         <GlassCard className="panel max-w-2xl">
@@ -579,7 +594,7 @@ export default function NovaAdmissaoPage() {
 
   return (
     <>
-      <PageHead eyebrow="Nova admissão" title="Cadastro em etapas" />
+      <PageHead eyebrow="Nova Admissão" title="Cadastro Em Etapas" />
 
       <GlassCard className="panel">
         <Stepper steps={STEPS} current={step} />
@@ -1139,7 +1154,7 @@ export default function NovaAdmissaoPage() {
       {/* W6: aceite de criação com pendências */}
       <ConfirmDialog
         open={aceiteCampos !== null}
-        title="Criar com pendências obrigatórias?"
+        title="Criar Com Pendências Obrigatórias?"
         message={`Campos obrigatórios vazios: ${(aceiteCampos ?? []).join(", ")}. A admissão pode ser criada (F4), mas registra que você está ciente das pendências.`}
         confirmLabel="Estou ciente, criar"
         tone="danger"

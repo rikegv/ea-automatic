@@ -8,7 +8,13 @@ import {
   Optional,
   NotFoundException,
 } from "@nestjs/common";
-import { beneficioExigeValor, isValidCpf, normalizeCpf, type FarolGlobal } from "@ea/shared-types";
+import {
+  beneficioExigeValor,
+  isValidCpf,
+  ITENS_EPI,
+  normalizeCpf,
+  type FarolGlobal,
+} from "@ea/shared-types";
 import {
   and,
   asc,
@@ -60,6 +66,12 @@ import { pendenciasObrigatorias } from "../domain/admissao";
 import { CHAVES_PENDENCIA } from "../domain/pendencia-config";
 import { pendenciasObrigatoriasSet } from "../regua/pendencias-lote";
 import { configDoCliente } from "../regua/pendencia-config.repo";
+import {
+  filtroClienteOuVinculo,
+  preferirVinculo,
+  vinculosDoCliente,
+} from "../regua/vinculo.repo";
+import { exigeEscolhaDeVinculo } from "../domain/vinculo";
 import type { AuthUser } from "../auth/auth.types";
 import type { CandidatoInputDto, CreateAdmissaoDto } from "./dto/create-admissao.dto";
 import type { UpdateAdmissaoDto } from "./dto/update-admissao.dto";
@@ -69,6 +81,55 @@ import type { UpdateAdmissaoDto } from "./dto/update-admissao.dto";
  * o lote é síncrono e o consultor espera na tela.
  */
 const LOTE_LIBERACAO_MAX = 50;
+
+/**
+ * FRENTE A do item 9 (CPF errado do Pandapé): a liberação é a PORTA DE ENTRADA da esteira, e é aqui
+ * que o CPF matematicamente inválido é barrado, antes de a admissão nascer e contaminar régua, Drive,
+ * kit e envelope de assinatura. O dígito verificador só pega o erro de DIGITAÇÃO; CPF válido que é de
+ * OUTRA pessoa passa por aqui (nenhuma conta detecta isso) e é a auditoria do documento que revela,
+ * com a correção pela rota de Master (`corrigirCpf`).
+ *
+ * §A.6: a mensagem NÃO repete o CPF. A tela já o mostra ao lado do nome, e o texto do erro passa por
+ * log de falha do lote.
+ */
+const CPF_INVALIDO_NA_LIBERACAO =
+  "CPF inválido: o dígito verificador não fecha. Corrija o CPF antes de liberar esta admissão.";
+
+/** Entrada de uniforme e EPI da liberação (OST Onda 3, item 1). */
+interface UniformeEpiInput {
+  uniforme?: { possui: boolean; camiseta?: string; calca?: string; bota?: string };
+  epi?: { possui: boolean; itens?: string[]; outros?: string };
+}
+
+/**
+ * Traduz uniforme e EPI para as colunas de `dados_vaga_folha`, aplicando as duas regras de coerência
+ * do diretor: responder "não possui" LIMPA o detalhe (tamanho de quem não tem uniforme é lixo que
+ * reaparece na ficha), e "Outros" marcado EXIGE o texto do que é (mesma régua do benefício que exige
+ * valor: o que foi escolhido tem de ficar completo). Função pura, sem banco.
+ */
+function colunasUniformeEpi(i: UniformeEpiInput) {
+  const temUniforme = i.uniforme?.possui === true;
+  const temEpi = i.epi?.possui === true;
+  // Ordem canônica do catálogo, sem repetição: a lista gravada não depende da ordem de clique.
+  const itens = temEpi
+    ? ITENS_EPI.filter((it) => i.epi?.itens?.includes(it))
+    : [];
+  const outros = i.epi?.outros?.trim() ?? "";
+  if (itens.includes("OUTROS") && outros === "") {
+    throw new BadRequestException(
+      'Marcou "Outros" no EPI: informe qual é o item. Sem isso o aviso da ficha não diz nada a quem for validar.',
+    );
+  }
+  return {
+    possuiUniforme: i.uniforme?.possui ?? null,
+    uniformeCamiseta: temUniforme ? (i.uniforme?.camiseta ?? null) : null,
+    uniformeCalca: temUniforme ? (i.uniforme?.calca ?? null) : null,
+    uniformeBota: temUniforme ? (i.uniforme?.bota ?? null) : null,
+    possuiEpi: i.epi?.possui ?? null,
+    epiItens: itens.length > 0 ? itens.join(",") : null,
+    epiOutros: itens.includes("OUTROS") ? outros : null,
+  };
+}
 
 /** Transação do Drizzle, derivada do próprio `Database` (não depende do dialeto importado). */
 type DbTransaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
@@ -433,7 +494,13 @@ export class AdmissoesService {
           .insert(clienteBeneficioPadrao)
           .values({ codCliente: dto.codCliente, beneficio: p.beneficio, valor: p.valor })
           .onConflictDoUpdate({
+            // Mesma causa do incidente da régua: a migração do vínculo (0056) trocou o unique
+            // simples por um índice PARCIAL (`cliente_vinculo_id IS NULL`), e o Postgres não infere
+            // índice parcial sem o predicado. Aqui o efeito não era 500, era pior de perceber: o
+            // `catch` best-effort engolia o erro e a MEMÓRIA do pacote por cliente parou de gravar
+            // em silêncio. Este é o padrão do cliente inteiro, então o predicado é o do vínculo nulo.
             target: [clienteBeneficioPadrao.codCliente, clienteBeneficioPadrao.beneficio],
+            targetWhere: isNull(clienteBeneficioPadrao.clienteVinculoId),
             set: { valor: p.valor, atualizadoEm: new Date() },
           });
       }
@@ -595,6 +662,15 @@ export class AdmissoesService {
       };
       pacoteBeneficios?: { beneficioId: string; valor?: number }[];
       observacaoLiberacao?: string;
+      uniforme?: { possui: boolean; camiseta?: string; calca?: string; bota?: string };
+      epi?: { possui: boolean; itens?: string[]; outros?: string };
+      /** BLOCO 5 (item 7): vínculo escolhido. Só é exigido quando o cliente tem 2 ou mais. */
+      clienteVinculoId?: string;
+      /**
+       * SEXO confirmado ou CORRIGIDO na tela (OST do seletor de sexo). Só na liberação INDIVIDUAL: no
+       * lote, um mesmo valor valeria para todo mundo da leva, o que é errado por definição.
+       */
+      sexo?: "MASCULINO" | "FEMININO";
     },
     user: AuthUser,
   ): Promise<{ admissaoId: string; temRegua: boolean }> {
@@ -603,12 +679,27 @@ export class AdmissoesService {
     if (adm.farolGlobal !== "AGUARDANDO_LIBERACAO") {
       throw new ConflictException("Esta admissão não está aguardando liberação.");
     }
+    if (!isValidCpf(adm.candidatoCpf)) throw new BadRequestException(CPF_INVALIDO_NA_LIBERACAO);
+    // UNIFORME (OST Onda 3, item 1): a RESPOSTA é obrigatória para liberar individualmente. Ter
+    // uniforme não bloqueia nada; não ter respondido, sim. A trava mora aqui, e NÃO no miolo
+    // compartilhado, porque o LOTE segue a regra dos demais campos (o que vai em branco vira
+    // pendência individual na esteira, §A.3 regra 5), em vez de travar 50 liberações de uma vez.
+    if (typeof dto.uniforme?.possui !== "boolean") {
+      throw new BadRequestException(
+        "Responda se o candidato possui uniforme antes de liberar. Ter uniforme não bloqueia nada, mas a resposta é obrigatória.",
+      );
+    }
     const cliente = await this.db.query.clientes.findFirst({
       where: eq(clientes.codCliente, dto.codCliente),
     });
     if (!cliente) throw new NotFoundException("Cliente não encontrado");
     const cargo = await this.db.query.cargos.findFirst({ where: eq(cargos.id, dto.cargoId) });
     if (!cargo) throw new NotFoundException("Cargo não encontrado");
+
+    // BLOCO 5 (item 7): o cliente que trabalha com MAIS DE UM contrato exige a escolha de qual. Não
+    // é o `tipo_contrato` virando obrigatório para todo mundo: é uma escolha entre opções concretas,
+    // no único caso em que ela existe. Cliente de um vínculo (233 dos 234) não é perguntado nada.
+    const vinculoId = await this.escolherVinculoDaLiberacao(dto.codCliente, dto.clienteVinculoId);
 
     // Nome do candidato (sempre presente): o sinalizador exige identidade (nome+cpf) para avaliar a
     // régua; sem o nome real ele cairia em PENDENTE mesmo com tudo preenchido.
@@ -620,15 +711,26 @@ export class AdmissoesService {
     await this.validarValoresDoPacote(dto.pacoteBeneficios);
 
     const resultado = await this.db.transaction(async (tx) => {
+      // SEXO ANTES DE TUDO (OST do seletor de sexo). Grava o que o consultor confirmou ou corrigiu,
+      // e grava PRIMEIRO de propósito: a régua e o sinalizador calculados logo abaixo dependem dele
+      // (o Reservista só é exigido do sexo masculino). Gravar depois deixaria a admissão nascer com
+      // uma pendência que a correção acabou de eliminar.
+      if (dto.sexo) {
+        await tx
+          .update(candidatos)
+          .set({ sexo: dto.sexo, atualizadoEm: new Date() })
+          .where(eq(candidatos.cpf, adm.candidatoCpf));
+      }
       // Régua do par (cliente + cargo), mesma leitura do `create`. No LOTE esta leitura acontece UMA
       // vez, fora do laço (é o mesmo par para todas), e é passada pronta ao miolo.
-      const regua = await this.lerReguaDoPar(tx, dto.codCliente, dto.cargoId);
+      const regua = await this.lerReguaDoPar(tx, dto.codCliente, dto.cargoId, vinculoId);
       await this.aplicarLiberacao(tx, {
         adm,
         candidatoNome: candidato?.nome ?? "",
         dto,
         regua,
         user,
+        vinculoId,
       });
       return { admissaoId, temRegua: regua.length > 0 };
     });
@@ -638,19 +740,58 @@ export class AdmissoesService {
     return resultado;
   }
 
+  /**
+   * BLOCO 5 do item 7: qual vínculo (contrato) esta liberação usa?
+   *
+   * `null` quando o cliente tem 0 ou 1 vínculo, e isso NÃO é omissão: é a regra de ouro do Caminho 2.
+   * Com um vínculo só, régua, obrigatoriedade e assinante seguem resolvendo pelo cliente, como
+   * sempre resolveram, e nenhuma das 145 admissões vivas muda de comportamento.
+   *
+   * Com dois ou mais, a escolha passa a ser OBRIGATÓRIA, porque sem ela o sistema não sabe qual
+   * régua aplicar, e nascer com o checklist do contrato errado é pior que parar e perguntar.
+   */
+  private async escolherVinculoDaLiberacao(
+    codCliente: string,
+    escolhido?: string | null,
+  ): Promise<string | null> {
+    const vinculos = await vinculosDoCliente(this.db, codCliente);
+    if (!exigeEscolhaDeVinculo(vinculos)) return null;
+    if (!escolhido) {
+      throw new BadRequestException(
+        "Este cliente trabalha com mais de um tipo de contrato. Escolha o contrato antes de liberar, " +
+          "senão a admissão nasce com a régua documental do contrato errado.",
+      );
+    }
+    if (!vinculos.some((v) => v.id === escolhido)) {
+      throw new BadRequestException("O contrato escolhido não pertence a este cliente.");
+    }
+    return escolhido;
+  }
+
   /** Régua documental do par (cliente + cargo). Aceita `db` ou `tx` (mesma leitura do `create`). */
   private async lerReguaDoPar(
     exec: Database | DbTransaction,
     codCliente: string,
     cargoId: string,
+    vinculoId?: string | null,
   ): Promise<{ tipoDocumentoId: string; exigencia: string }[]> {
-    return exec
+    const linhas = await exec
       .select({
         tipoDocumentoId: reguaDocumental.tipoDocumentoId,
         exigencia: reguaDocumental.exigencia,
+        clienteVinculoId: reguaDocumental.clienteVinculoId,
       })
       .from(reguaDocumental)
-      .where(and(eq(reguaDocumental.codCliente, codCliente), eq(reguaDocumental.cargoId, cargoId)));
+      .where(
+        and(
+          eq(reguaDocumental.codCliente, codCliente),
+          eq(reguaDocumental.cargoId, cargoId),
+          // VÍNCULO (item 7): a régua do contrato escolhido tem precedência sobre a do cliente,
+          // documento a documento. Sem vínculo (233 dos 234 clientes), lê exatamente o que lia.
+          filtroClienteOuVinculo(reguaDocumental.clienteVinculoId, vinculoId ?? null),
+        ),
+      );
+    return preferirVinculo(linhas, (l) => l.tipoDocumentoId);
   }
 
   /**
@@ -687,12 +828,16 @@ export class AdmissoesService {
         };
         pacoteBeneficios?: { beneficioId: string; valor?: number }[];
         observacaoLiberacao?: string;
+        uniforme?: { possui: boolean; camiseta?: string; calca?: string; bota?: string };
+        epi?: { possui: boolean; itens?: string[]; outros?: string };
       };
       regua: { tipoDocumentoId: string; exigencia: string }[];
       user: AuthUser;
+      /** Vínculo escolhido (item 7). `null` = cliente de um vínculo só, resolve como sempre. */
+      vinculoId?: string | null;
     },
   ): Promise<void> {
-    const { adm, candidatoNome, dto, regua, user } = params;
+    const { adm, candidatoNome, dto, regua, user, vinculoId = null } = params;
     const admissaoId = adm.id;
     const vf = dto.vagaFolha ?? {};
     const novoTipoContrato = dto.tipoContrato ?? adm.tipoContrato ?? undefined;
@@ -702,6 +847,9 @@ export class AdmissoesService {
     // modal do olho não abrir um bloco vazio. NÃO entra no sinalizador: é opcional por definição.
     // No LOTE este mesmo valor chega igual para as N (o miolo é o mesmo do individual).
     const observacaoLiberacao = dto.observacaoLiberacao?.trim() || null;
+    // Uniforme e EPI já normalizados e coerentes (ver `colunasUniformeEpi`). No LOTE os dois vêm
+    // ausentes, e o resultado é exatamente o de hoje: colunas nulas, uniforme pendente na esteira.
+    const uniformeEpi = colunasUniformeEpi(dto);
 
     // Sinalizador com os valores REALMENTE preenchidos no modal (régua unificada §A.19): o que
     // ficou vazio vira pendência na esteira, o que foi preenchido não. Mesma função do `create`.
@@ -722,6 +870,7 @@ export class AdmissoesService {
       isBanco: adm.isBanco,
       termoBancoEntregue: false,
       temBeneficioEstruturado: temEstruturado,
+      possuiUniforme: uniformeEpi.possuiUniforme,
     });
 
     await tx
@@ -734,6 +883,10 @@ export class AdmissoesService {
         farolGlobal: "EM_ADMISSAO",
         sinalizadorPreenchimento: sinalizador,
         observacaoLiberacao,
+        // PONTEIRO DO VÍNCULO (item 7, Bloco 2): gravado no NASCIMENTO. É ele que faz régua,
+        // obrigatoriedade e assinante resolverem pelo contrato certo daí em diante, sem
+        // precisar redescobrir o vínculo a cada leitura.
+        clienteVinculoId: vinculoId,
         consultorId: user.id,
         atualizadoEm: new Date(),
       })
@@ -752,6 +905,7 @@ export class AdmissoesService {
         motivo: vf.motivo ?? null,
         tempoContrato: vf.tempoContrato ?? null,
         endereco: vf.endereco ?? null,
+        ...uniformeEpi,
       })
       .where(eq(dadosVagaFolha.admissaoId, admissaoId));
 
@@ -890,6 +1044,9 @@ export class AdmissoesService {
             "Possível duplicata: precisa ser liberada individualmente, não em massa.",
           );
         }
+        // MESMA trava do individual, por linha: uma pré-admissão com CPF inválido não derruba o lote
+        // inteiro, ela falha sozinha e aparece nominalmente no relatório final.
+        if (!isValidCpf(adm.candidatoCpf)) throw new BadRequestException(CPF_INVALIDO_NA_LIBERACAO);
 
         await this.db.transaction(async (tx) => {
           await this.aplicarLiberacao(tx, { adm, candidatoNome: nome, dto, regua, user });
@@ -1349,6 +1506,9 @@ export class AdmissoesService {
         email: candidato?.email ?? null,
         telefone: candidato?.telefone ?? null,
         dataNascimento: candidato?.dataNascimento ?? null,
+        // SEXO: o lápis passou a corrigir, então precisa vir preenchido para não parecer vazio e o
+        // consultor não gravar por cima sem querer.
+        sexo: candidato?.sexo ?? null,
       },
       vagaFolha: {
         salario: vaga?.salario ?? null,
@@ -1483,11 +1643,16 @@ export class AdmissoesService {
     // de benefícios: são memórias independentes, e devolver [] de setor só porque não houve benefício
     // esconderia o histórico que o campo precisa para virar menu.
     const setores = await this.setoresDoParClienteCargo(codCliente, cargoId);
+    // MEMÓRIA DE UNIFORME E EPI (OST Onda 3, item 1): só o "POSSUI sim/não", nunca o tamanho. Tamanho
+    // é da PESSOA (decisão do diretor), e sugerir o do candidato anterior é como o dado errado entra
+    // sem ninguém perceber. Independente do pacote, como os setores.
+    const uniformeEpi = await this.uniformeEpiDoParClienteCargo(codCliente, cargoId);
 
     if (ultima.length === 0)
       return {
         beneficios: [] as { beneficioId: string; nome: string; valor: number | null }[],
         setores,
+        ...uniformeEpi,
       };
 
     const linhas = await this.db
@@ -1508,6 +1673,45 @@ export class AdmissoesService {
         valor: l.valor === null ? null : Number(l.valor),
       })),
       setores,
+      ...uniformeEpi,
+    };
+  }
+
+  /**
+   * Última resposta de "possui uniforme?" e "possui EPI?" do par (cliente + cargo). SÓ as flags: o
+   * tamanho do uniforme é individual e nunca é sugerido (decisão do diretor).
+   *
+   * Cada flag vem da admissão MAIS RECENTE que a respondeu, e as duas são independentes: um par pode
+   * ter memória de uniforme e nenhuma de EPI. Sem memória, volta `null` e a tela nasce sem resposta,
+   * que é o estado que a pendência cobra.
+   */
+  private async uniformeEpiDoParClienteCargo(
+    codCliente: string,
+    cargoId: string,
+  ): Promise<{ possuiUniforme: boolean | null; possuiEpi: boolean | null }> {
+    const linhas = await this.db
+      .select({
+        possuiUniforme: dadosVagaFolha.possuiUniforme,
+        possuiEpi: dadosVagaFolha.possuiEpi,
+        criadoEm: admissoes.criadoEm,
+      })
+      .from(admissoes)
+      .innerJoin(dadosVagaFolha, eq(dadosVagaFolha.admissaoId, admissoes.id))
+      .where(
+        and(
+          eq(admissoes.codCliente, codCliente),
+          eq(admissoes.cargoId, cargoId),
+          or(
+            isNotNull(dadosVagaFolha.possuiUniforme),
+            isNotNull(dadosVagaFolha.possuiEpi),
+          ),
+        ),
+      )
+      .orderBy(desc(admissoes.criadoEm))
+      .limit(20);
+    return {
+      possuiUniforme: linhas.find((l) => l.possuiUniforme !== null)?.possuiUniforme ?? null,
+      possuiEpi: linhas.find((l) => l.possuiEpi !== null)?.possuiEpi ?? null,
     };
   }
 
@@ -1740,6 +1944,155 @@ export class AdmissoesService {
     return { ok: true, revisadaEm: agora.toISOString() };
   }
 
+  /**
+   * CORRIGE O CPF de uma admissão (item 9, Frente B). Só MASTER/SUPER_ADMIN (gate no controller).
+   *
+   * É SÓ ACERTAR O CAMPO para bater com o documento (decisão do diretor): não reprocessa auditoria,
+   * não renomeia arquivo do Drive, não reagrupa nada, e por isso NÃO acende aviso vermelho nem exige
+   * revisão como a troca de cliente. Aquilo é troca estrutural (muda régua e pasta); isto é correção
+   * de digitação.
+   *
+   * SEM TRAVA DE FASE, por decisão do diretor: a IA costuma pegar o CPF errado na auditoria, mas o
+   * erro pode aparecer depois, e uma admissão adiantada com CPF errado é exatamente a que mais precisa
+   * ser corrigida.
+   *
+   * COMO A TROCA ACONTECE: `admissoes.candidato_cpf` é FK de `candidatos.cpf` (PK), então corrigir NÃO
+   * é editar o CPF do candidato, é REAPONTAR a admissão para a linha certa. Editar a PK arrastaria
+   * junto as OUTRAS admissões da mesma pessoa (regra 6: um candidato tem N admissões), que estão
+   * certas. A linha nova nasce com os dados da antiga; a antiga, se ficar sem nenhuma admissão, é um
+   * fantasma de digitação e sai (§A.6, minimização).
+   *
+   * COLISÃO: se o CPF corrigido já pertence a alguém, o Master vê O NOME de quem é e decide (AVISA,
+   * não bloqueia). O reenvio com `confirmarDuplicado` é a decisão dele: a admissão passa a apontar
+   * para o candidato existente, e o nome dele NÃO é sobrescrito.
+   */
+  async corrigirCpf(
+    id: string,
+    dto: { cpf: string; confirmarDuplicado?: boolean },
+    user: AuthUser,
+  ) {
+    const adm = await this.db.query.admissoes.findFirst({ where: eq(admissoes.id, id) });
+    if (!adm) throw new NotFoundException("Admissão não encontrada");
+
+    const novo = normalizeCpf(dto.cpf);
+    // Não troca um errado por outro inválido: o CPF novo passa pelo MESMO dígito verificador da
+    // Frente A. §A.6: nem a mensagem nem o log repetem o CPF.
+    if (!isValidCpf(novo)) {
+      throw new BadRequestException(
+        "CPF inválido: o dígito verificador não fecha. Confira o CPF no documento e informe os 11 dígitos.",
+      );
+    }
+    if (novo === adm.candidatoCpf) {
+      throw new ConflictException("O CPF informado já é o desta admissão.");
+    }
+
+    const anterior = await this.db.query.candidatos.findFirst({
+      where: eq(candidatos.cpf, adm.candidatoCpf),
+    });
+    const jaExiste = await this.db.query.candidatos.findFirst({ where: eq(candidatos.cpf, novo) });
+
+    // Nomes das admissões que já usam o CPF novo: é o que o Master precisa ver para decidir. Nome, e
+    // não código: "o CPF é de FULANO DE TAL" é a informação que resolve, o id não diz nada.
+    const outras = jaExiste
+      ? await this.db
+          .select({ admissaoId: admissoes.id, farol: admissoes.farolGlobal })
+          .from(admissoes)
+          .where(eq(admissoes.candidatoCpf, novo))
+      : [];
+
+    if (jaExiste && !dto.confirmarDuplicado) {
+      throw new ConflictException({
+        // O front lê o CÓDIGO (não a frase) para abrir a confirmação com o nome do duplicado.
+        codigo: "CPF_DUPLICADO",
+        message:
+          `Este CPF já está cadastrado para ${jaExiste.nome}` +
+          (outras.length > 0
+            ? `, com ${outras.length} admiss${outras.length === 1 ? "ão" : "ões"}.`
+            : ".") +
+          " Confirme que é a mesma pessoa para aplicar a correção mesmo assim.",
+        nomeDuplicado: jaExiste.nome,
+        admissoesDoDuplicado: outras.length,
+      });
+    }
+
+    // O índice parcial `uq_admissao_cpf_vaga_viva` impede DUAS admissões vivas do mesmo
+    // (candidato_cpf + id_vacancy). Checar antes vira mensagem legível em vez de erro cru do banco.
+    if (adm.idVacancy && ehFarolVivo(adm.farolGlobal as FarolGlobal)) {
+      const [conflito] = await this.db
+        .select({ id: admissoes.id })
+        .from(admissoes)
+        .where(
+          and(
+            eq(admissoes.candidatoCpf, novo),
+            eq(admissoes.idVacancy, adm.idVacancy),
+            ne(admissoes.id, id),
+            inArray(admissoes.farolGlobal, [
+              "EM_ADMISSAO",
+              "BANCO_AGUARDAR",
+              "AGUARDANDO_LIBERACAO",
+            ]),
+          ),
+        );
+      if (conflito) {
+        throw new ConflictException(
+          "Já existe uma admissão viva desse CPF para a MESMA vaga do Pandapé. Trate a duplicata antes de corrigir o CPF.",
+        );
+      }
+    }
+
+    const agora = new Date();
+    await this.db.transaction(async (tx) => {
+      if (!jaExiste) {
+        // Linha nova com os dados que já existiam: só o CPF estava errado, o resto da ficha não.
+        await tx
+          .insert(candidatos)
+          .values({
+            cpf: novo,
+            nome: anterior?.nome ?? "não informado",
+            email: anterior?.email ?? null,
+            telefone: anterior?.telefone ?? null,
+            dataNascimento: anterior?.dataNascimento ?? null,
+            sexo: anterior?.sexo ?? null,
+            banco: anterior?.banco ?? null,
+          })
+          .onConflictDoNothing({ target: candidatos.cpf });
+      }
+
+      await tx
+        .update(admissoes)
+        .set({ candidatoCpf: novo, atualizadoEm: agora })
+        .where(eq(admissoes.id, id));
+
+      // HISTÓRICO do modal do olho, mesmo formato do item 8: de/para, quem e quando.
+      await tx.insert(candidatoAlteracoesLog).values({
+        admissaoId: id,
+        campo: "correcaoCpf",
+        valorAnterior: adm.candidatoCpf,
+        valorNovo: novo,
+        autorId: user.id,
+      });
+
+      // Fantasma de digitação: o CPF errado sem NENHUMA admissão apontando para ele não é histórico
+      // de ninguém, é PII sem uso (§A.6). Com admissão restante, fica: pertence a outra pessoa.
+      const [restantes] = await tx
+        .select({ n: count() })
+        .from(admissoes)
+        .where(eq(admissoes.candidatoCpf, adm.candidatoCpf));
+      if (!restantes || restantes.n === 0) {
+        await tx.delete(candidatos).where(eq(candidatos.cpf, adm.candidatoCpf));
+      }
+    });
+
+    return {
+      ok: true,
+      cpfAnterior: adm.candidatoCpf,
+      cpfNovo: novo,
+      // Só volta preenchido quando o Master confirmou uma colisão: a tela mostra de quem era o CPF.
+      duplicadoConfirmado: jaExiste ? { nome: jaExiste.nome } : null,
+      corrigidoEm: agora.toISOString(),
+    };
+  }
+
   /** Rótulos legíveis do par atual, para a trilha não guardar só códigos. */
   private async rotulosClienteCargo(codCliente: string | null, cargoId: string | null) {
     const [cli] = codCliente
@@ -1914,10 +2267,16 @@ export class AdmissoesService {
               ? null
               : c.dataNascimento.trim();
 
+        // SEXO (OST do seletor de sexo, segunda entrega): correção para admissão JÁ liberada, que
+        // é onde não havia caminho nenhum. Ausente no dto mantém o que está; nunca vira null por
+        // omissão, para um salvamento de outro campo não apagar o sexo de ninguém.
+        const novoSexo = c.sexo === undefined ? (candidato.sexo ?? null) : c.sexo;
+
         registrar("nome", candidato.nome, novoNome);
         registrar("email", candidato.email ?? null, novoEmail);
         registrar("telefone", candidato.telefone ?? null, novoTelefone);
         registrar("dataNascimento", candidato.dataNascimento ?? null, novoNasc);
+        registrar("sexo", candidato.sexo ?? null, novoSexo);
 
         novoNomeCandidato = novoNome;
 
@@ -1928,6 +2287,7 @@ export class AdmissoesService {
             email: novoEmail,
             telefone: novoTelefone,
             dataNascimento: novoNasc,
+            sexo: novoSexo,
             atualizadoEm: new Date(),
           })
           .where(eq(candidatos.cpf, adm.candidatoCpf));
@@ -2012,6 +2372,10 @@ export class AdmissoesService {
             dataAdmissao: novaDataAdmissao ?? undefined,
             tipoContrato: novoTipoContrato ?? undefined,
             vagaFolha: efetivoVf,
+            // A edição do lápis não mexe em uniforme (é campo da liberação), mas PRECISA levar a
+            // resposta já gravada: sem ela, salvar qualquer outro campo faria a admissão voltar a
+            // PARCIAL por uma pendência de uniforme que já tinha sido respondida.
+            possuiUniforme: vaga?.possuiUniforme,
             isBanco: novoIsBanco,
             termoBancoEntregue: novoIsBanco ? await this.termoBancoEntregue(id) : false,
             temBeneficioEstruturado: temEstruturado,
