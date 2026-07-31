@@ -1,8 +1,9 @@
 import "dotenv/config";
 import { Queue, type Job } from "bullmq";
-import { and, eq, inArray, isNotNull, ne, sql as raw } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, ne, sql as raw } from "drizzle-orm";
 import { createDb } from "./client";
 import { admissoes, documentoArquivosColetados, documentosAdmissao, integracaoPandape } from "./schema";
+import { FAROIS_VIVOS } from "../domain/admissao";
 import {
   criarConexaoRedis,
   JOB_PULL_DOCS,
@@ -44,8 +45,8 @@ import type { ResumoPull } from "../pandape/pandape-sync.service";
  *   pnpm --filter @ea/backend db:varredura -- --admissao=<uuid> # piloto: uma admissão só
  */
 
-/** §A.16 / §A.19: vivas são só estas. Concluídas, declínios e pré-admissões ficam fora. */
-const FAROIS_VIVOS = ["EM_ADMISSAO", "BANCO_AGUARDAR"] as const;
+// A cópia local de FAROIS_VIVOS saiu daqui (OST admissão pausada, Bloco 2): a constante agora vive
+// em `domain/admissao`, uma só para o repositório inteiro.
 
 /** Espera máxima pelo término dos jobs antes de desistir do acompanhamento (o lote segue no worker). */
 const TIMEOUT_MS = 30 * 60_000;
@@ -92,6 +93,9 @@ async function planejar(db: ReturnType<typeof createDb>["db"], admissaoFiltro?: 
     .where(
       and(
         inArray(admissoes.farolGlobal, [...FAROIS_VIVOS]),
+        // PAUSA: esta varredura PUXA documento do Pandapé (coleta), que é automático pausável. Não
+        // confundir com auditar um documento já recebido, que segue liberado durante a pausa.
+        isNull(admissoes.pausadaEm),
         isNotNull(admissoes.codCliente),
         isNotNull(admissoes.cargoId),
         isNotNull(integracaoPandape.idPrecollaborator),

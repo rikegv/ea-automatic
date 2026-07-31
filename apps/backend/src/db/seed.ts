@@ -42,24 +42,24 @@ const STATUS_FRENTE: Array<{
   rotulo: string;
   conclui: boolean;
 }> = [
-  { tipo: "AUDITORIA", codigo: "ANALISE_PENDENTE", rotulo: "Análise pendente", conclui: false },
+  { tipo: "AUDITORIA", codigo: "ANALISE_PENDENTE", rotulo: "Análise Pendente", conclui: false },
   {
     tipo: "AUDITORIA",
     codigo: "AGUARDA_REENVIO",
-    rotulo: "Aguardando reenvio dos docs",
+    rotulo: "Aguardando Reenvio Dos Docs",
     conclui: false,
   },
-  // "Análise finalizada" (decisão do diretor): os três rótulos da coluna de status contam a
+  // "Análise Finalizada" (decisão do diretor): os três rótulos da coluna de status contam a
   // MESMA história (Entrega pendente · Análise em andamento · Análise finalizada). É rótulo de
   // catálogo, dado de seed; o CÓDIGO `ANALISE_OK` e a máquina de estados seguem intactos.
-  { tipo: "AUDITORIA", codigo: "ANALISE_OK", rotulo: "Análise finalizada", conclui: true },
+  { tipo: "AUDITORIA", codigo: "ANALISE_OK", rotulo: "Análise Finalizada", conclui: true },
   { tipo: "AUDITORIA", codigo: "DECLINOU", rotulo: "Declinou", conclui: false },
-  { tipo: "EXAME", codigo: "A_AGENDAR", rotulo: "A agendar", conclui: false },
+  { tipo: "EXAME", codigo: "A_AGENDAR", rotulo: "A Agendar", conclui: false },
   { tipo: "EXAME", codigo: "AGENDADO", rotulo: "Agendado", conclui: false },
   { tipo: "EXAME", codigo: "APTO", rotulo: "Apto", conclui: true },
   { tipo: "EXAME", codigo: "CANCELADO", rotulo: "Cancelado", conclui: false },
-  { tipo: "CADASTRO_CONTRATO", codigo: "A_CADASTRAR", rotulo: "A cadastrar", conclui: false },
-  // Único status além de "A cadastrar", e é o CONCLUINTE (migration 0026). Base nova nasce com o
+  { tipo: "CADASTRO_CONTRATO", codigo: "A_CADASTRAR", rotulo: "A Cadastrar", conclui: false },
+  // Único status além de "A Cadastrar", e é o CONCLUINTE (migration 0026). Base nova nasce com o
   // catálogo já reorganizado; base existente é migrada pela 0026 (o seed é onConflictDoNothing e
   // não corrigiria sozinho).
   { tipo: "CADASTRO_CONTRATO", codigo: "CADASTRADO", rotulo: "Cadastrado", conclui: true },

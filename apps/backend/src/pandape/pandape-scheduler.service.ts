@@ -169,6 +169,9 @@ export class PandapeSchedulerService implements OnModuleInit, OnModuleDestroy {
       JOIN integracao_pandape ip ON ip.admissao_id = a.id
       WHERE ip.id_precollaborator IS NOT NULL
         AND a.farol_global IN ('EM_ADMISSAO', 'BANCO_AGUARDAR')
+        -- PAUSA (OST admissão pausada, ponto 1 dos 6): admissão pausada não é re-consultada. É SQL
+        -- cru aqui (a query não usa o query builder), mas a régua é a mesma de admissaoOperavelSql.
+        AND a.pausada_em IS NULL
     `)) as unknown as Array<{ admissao_id: string; id_precollaborator: string }>;
     return rows.map((r) => ({ admissaoId: r.admissao_id, idPrecollaborator: r.id_precollaborator }));
   }

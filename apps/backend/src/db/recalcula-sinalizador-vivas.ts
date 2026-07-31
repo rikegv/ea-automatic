@@ -9,7 +9,7 @@ import {
   documentosAdmissao,
   tiposDocumento,
 } from "./schema";
-import { calcSinalizadorPreenchimento } from "../domain/admissao";
+import { calcSinalizadorPreenchimento, FAROIS_VIVOS } from "../domain/admissao";
 
 /**
  * Recalcula o `sinalizador_preenchimento` das admissões VIVAS pela RÉGUA UNIFICADA (§A.17 etapa 4).
@@ -25,7 +25,10 @@ import { calcSinalizadorPreenchimento } from "../domain/admissao";
  * Idempotente: recalcular de novo dá o mesmo resultado. Só escreve quem muda.
  * §A.6: opera por farol/campos de folha; nada de PII em log (nem nome, nem CPF).
  */
-const FAROIS_VIVOS = ["EM_ADMISSAO", "BANCO_AGUARDAR"] as const;
+// A cópia local de FAROIS_VIVOS saiu daqui (OST admissão pausada, Bloco 2): agora vem de
+// `domain/admissao`. A PAUSA de propósito NÃO entra neste recorte: o sinalizador é campo DERIVADO da
+// régua de pendências, e deixá-lo desatualizado enquanto a admissão está pausada só criaria uma
+// divergência para consertar no retomar. Pausar esconde da fila, não congela dado derivado.
 
 async function main(): Promise<void> {
   const url = process.env.DATABASE_URL;
@@ -49,7 +52,11 @@ async function main(): Promise<void> {
         beneficios: dadosVagaFolha.beneficios,
         escala: dadosVagaFolha.escala,
         centroCusto: dadosVagaFolha.centroCusto,
+        setor: dadosVagaFolha.setor,
         gestorBp: dadosVagaFolha.gestorBp,
+        // Uniforme (OST Onda 3, item 1): sem esta coluna o recálculo carimbaria PARCIAL em toda
+        // admissão viva, inclusive nas que já responderam.
+        possuiUniforme: dadosVagaFolha.possuiUniforme,
       })
       .from(admissoes)
       .innerJoin(candidatos, eq(candidatos.cpf, admissoes.candidatoCpf))
@@ -104,11 +111,13 @@ async function main(): Promise<void> {
           beneficios: l.beneficios,
           escala: l.escala,
           centroCusto: l.centroCusto,
+          setor: l.setor,
           gestorBp: l.gestorBp,
         },
         isBanco: l.isBanco,
         termoBancoEntregue: comTermo.has(l.id),
         temBeneficioEstruturado: comEstruturado.has(l.id),
+        possuiUniforme: l.possuiUniforme,
       });
       if (novo === l.sinalizador) continue;
       mudaram++;

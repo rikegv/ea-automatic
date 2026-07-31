@@ -14,17 +14,26 @@ import { beneficiosCatalogo, clientes, escalasCatalogo, motivosContratacao } fro
  */
 const MOTIVOS = ["Substituição", "Aumento de demanda"];
 
-const BENEFICIOS_BASE = [
-  "VT (Vale-Transporte)",
-  "VR (Vale-Refeição)",
-  "VA (Vale-Alimentação)",
-  "AM (Assistência Médica)",
-  "Assistência Odontológica",
-  "Refeição no local",
-  "Cesta básica",
-  "Seguro de vida",
-  "Auxílio creche",
-  "Participação nos lucros (PLR)",
+/**
+ * Base curada dos benefícios, agora com `exigeValor` (OST cadastro de benefícios por tela): é a
+ * régua "este benefício precisa de quanto?", que virou COLUNA e é mantida pela tela
+ * `/admin/beneficios`. Os valores aqui são só o estado INICIAL de um banco novo.
+ *
+ * O `onConflictDoNothing` embaixo é deliberado e vale especialmente para este campo: rodar o seed de
+ * novo NÃO pode desfazer o que o diretor configurou na tela. Quem manda no benefício já existente é
+ * o cadastro; o seed só cobre o que ainda não existe.
+ */
+const BENEFICIOS_BASE: { nome: string; exigeValor: boolean }[] = [
+  { nome: "VT (Vale-Transporte)", exigeValor: false },
+  { nome: "VR (Vale-Refeição)", exigeValor: true },
+  { nome: "VA (Vale-Alimentação)", exigeValor: true },
+  { nome: "AM (Assistência Médica)", exigeValor: true },
+  { nome: "Assistência Odontológica", exigeValor: false },
+  { nome: "Refeição no local", exigeValor: false },
+  { nome: "Cesta básica", exigeValor: true },
+  { nome: "Seguro de vida", exigeValor: false },
+  { nome: "Auxílio creche", exigeValor: true },
+  { nome: "Participação nos lucros (PLR)", exigeValor: true },
 ];
 
 async function main(): Promise<void> {
@@ -56,7 +65,7 @@ async function main(): Promise<void> {
   // 3) Benefícios — base curada (admin estende).
   await db
     .insert(beneficiosCatalogo)
-    .values(BENEFICIOS_BASE.map((nome) => ({ nome })))
+    .values(BENEFICIOS_BASE)
     .onConflictDoNothing({ target: beneficiosCatalogo.nome });
 
   await sql.end();

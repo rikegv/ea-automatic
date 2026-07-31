@@ -2,7 +2,7 @@ import "dotenv/config";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "csv-parse/sync";
-import { sql as drizzleSql } from "drizzle-orm";
+import { isNull, sql as drizzleSql } from "drizzle-orm";
 import { createDb } from "./client";
 import { cargos, clientes, reguaDocumental, tiposDocumento } from "./schema";
 
@@ -177,6 +177,10 @@ async function main(): Promise<void> {
           reguaDocumental.cargoId,
           reguaDocumental.tipoDocumentoId,
         ],
+        // Mesmo predicado do incidente da régua: o unique virou índice PARCIAL na migração do
+        // vínculo (0056) e o Postgres não o infere sem o `WHERE`. Sem isto, esta carga estouraria
+        // do mesmo jeito que a tela estourou. O seed grava a régua do cliente inteiro.
+        targetWhere: isNull(reguaDocumental.clienteVinculoId),
         set: { exigencia: drizzleSql`excluded.exigencia`, atualizadoEm: drizzleSql`now()` },
       })
       .returning({ inserido: drizzleSql<boolean>`(xmax = 0)` });

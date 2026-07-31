@@ -1,6 +1,6 @@
 import "dotenv/config";
 import * as argon2 from "argon2";
-import { inArray } from "drizzle-orm";
+import { inArray, isNull } from "drizzle-orm";
 import { createDb } from "./client";
 import { cargos, clientes, reguaDocumental, tiposDocumento, usuarios } from "./schema";
 
@@ -161,6 +161,9 @@ async function main(): Promise<void> {
           reguaDocumental.cargoId,
           reguaDocumental.tipoDocumentoId,
         ],
+        // Mesmo predicado do incidente da régua (índice PARCIAL desde a migração 0056 do vínculo).
+        // No `doNothing` o campo do predicado do índice chama `where`, não `targetWhere`.
+        where: isNull(reguaDocumental.clienteVinculoId),
       });
     reguaInseridos += valores.length;
     console.log(
