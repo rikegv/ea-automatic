@@ -17,6 +17,32 @@ import {
 // consulta por admissão. `is distinct from` trata o NULL como "não masculino".
 const RESERVISTA_COD = "RESERVISTA";
 const naoExigeReservista = sql`not (${tiposDocumento.codigo} = ${RESERVISTA_COD} and ${candidatos.sexo} is distinct from 'MASCULINO')`;
+
+/**
+ * VÍNCULO (OST Onda 3, item 7). A régua candidata de uma admissão é a do CLIENTE (linha com vínculo
+ * nulo, que é como as 3.586 existentes ficaram) MAIS a do vínculo que a admissão aponta. Quando as
+ * duas cobrem o MESMO documento, quem vence é a do vínculo, e esse desempate é feito por
+ * `porDocumento` logo abaixo, não em SQL: sem ele o documento entraria duas vezes e o contador de
+ * pendências passaria a mentir.
+ *
+ * Admissão com ponteiro nulo (todas as de hoje) casa só com a linha de cliente, ou seja, nada muda.
+ */
+const REGUA_DO_VINCULO_DA_ADMISSAO = sql`(${reguaDocumental.clienteVinculoId} is null or ${reguaDocumental.clienteVinculoId} = ${admissoes.clienteVinculoId})`;
+
+/** Uma linha por (admissão + documento): a do vínculo tem precedência sobre a do cliente. */
+function porDocumento<
+  T extends { admissaoId: string; tipoDocumentoId: string; clienteVinculoId: string | null },
+>(linhas: T[]): T[] {
+  const escolhido = new Map<string, T>();
+  for (const l of linhas) {
+    const chave = `${l.admissaoId}|${l.tipoDocumentoId}`;
+    const atual = escolhido.get(chave);
+    if (!atual || (l.clienteVinculoId !== null && atual.clienteVinculoId === null)) {
+      escolhido.set(chave, l);
+    }
+  }
+  return [...escolhido.values()];
+}
 import {
   calcularProgressoRegua,
   faltantesObrigatorios,
@@ -45,6 +71,8 @@ export class ReguaCompletudeService {
         nome: tiposDocumento.nome,
         exigencia: reguaDocumental.exigencia,
         estado: documentosAdmissao.estado,
+        tipoDocumentoId: reguaDocumental.tipoDocumentoId,
+        clienteVinculoId: reguaDocumental.clienteVinculoId,
       })
       .from(reguaDocumental)
       .innerJoin(tiposDocumento, eq(tiposDocumento.id, reguaDocumental.tipoDocumentoId))
@@ -55,7 +83,15 @@ export class ReguaCompletudeService {
           eq(documentosAdmissao.tipoDocumentoId, reguaDocumental.tipoDocumentoId),
         ),
       )
-      .where(and(eq(reguaDocumental.codCliente, codCliente), eq(reguaDocumental.cargoId, cargoId)));
+      .where(
+        and(
+          eq(reguaDocumental.codCliente, codCliente),
+          eq(reguaDocumental.cargoId, cargoId),
+          // VÍNCULO (item 7): mesma régua candidata das consultas em lote, resolvida aqui pelo
+          // ponteiro da PRÓPRIA admissão, sem mudar a assinatura do método nem a de quem o chama.
+          sql`(${reguaDocumental.clienteVinculoId} is null or ${reguaDocumental.clienteVinculoId} = (select ${admissoes.clienteVinculoId} from ${admissoes} where ${admissoes.id} = ${admissaoId}))`,
+        ),
+      );
     // Sexo do candidato desta admissão (para o condicional do Reservista da régua padrão).
     const cand = await this.db
       .select({ sexo: candidatos.sexo })
@@ -64,7 +100,9 @@ export class ReguaCompletudeService {
       .where(eq(admissoes.id, admissaoId))
       .limit(1);
     const masculino = cand[0]?.sexo === "MASCULINO";
-    return linhas
+    // Desempate por documento (vínculo vence cliente) ANTES do recorte do Reservista: sem ele, um
+    // documento definido nos dois níveis apareceria duas vezes no progresso ("11/10").
+    return porDocumento(linhas.map((l) => ({ ...l, admissaoId })))
       .filter((l) => !(l.codigo === RESERVISTA_COD && !masculino))
       .map((l) => ({ nome: l.nome, exigencia: l.exigencia, estado: l.estado ?? null }));
   }
@@ -94,7 +132,12 @@ export class ReguaCompletudeService {
   async obrigatoriosPendentesSet(admissaoIds: string[]): Promise<Set<string>> {
     if (admissaoIds.length === 0) return new Set();
     const linhas = await this.db
-      .select({ admissaoId: admissoes.id, estado: documentosAdmissao.estado })
+      .select({
+        admissaoId: admissoes.id,
+        estado: documentosAdmissao.estado,
+        tipoDocumentoId: reguaDocumental.tipoDocumentoId,
+        clienteVinculoId: reguaDocumental.clienteVinculoId,
+      })
       .from(admissoes)
       .innerJoin(candidatos, eq(candidatos.cpf, admissoes.candidatoCpf))
       .innerJoin(
@@ -103,6 +146,7 @@ export class ReguaCompletudeService {
           eq(reguaDocumental.codCliente, admissoes.codCliente),
           eq(reguaDocumental.cargoId, admissoes.cargoId),
           eq(reguaDocumental.exigencia, "OBRIGATORIO"),
+          REGUA_DO_VINCULO_DA_ADMISSAO,
         ),
       )
       .innerJoin(tiposDocumento, eq(tiposDocumento.id, reguaDocumental.tipoDocumentoId))
@@ -115,7 +159,7 @@ export class ReguaCompletudeService {
       )
       .where(and(inArray(admissoes.id, admissaoIds), naoExigeReservista));
     const set = new Set<string>();
-    for (const l of linhas) if (l.estado !== "ENTREGUE") set.add(l.admissaoId);
+    for (const l of porDocumento(linhas)) if (l.estado !== "ENTREGUE") set.add(l.admissaoId);
     return set;
   }
 
@@ -144,7 +188,12 @@ export class ReguaCompletudeService {
     if (admissaoIds.length === 0) return map;
     for (const id of admissaoIds) map.set(id, { entregues: 0, total: 0, inconformes: 0, recebidos: 0 });
     const linhas = await this.db
-      .select({ admissaoId: admissoes.id, estado: documentosAdmissao.estado })
+      .select({
+        admissaoId: admissoes.id,
+        estado: documentosAdmissao.estado,
+        tipoDocumentoId: reguaDocumental.tipoDocumentoId,
+        clienteVinculoId: reguaDocumental.clienteVinculoId,
+      })
       .from(admissoes)
       .innerJoin(candidatos, eq(candidatos.cpf, admissoes.candidatoCpf))
       .innerJoin(
@@ -153,6 +202,7 @@ export class ReguaCompletudeService {
           eq(reguaDocumental.codCliente, admissoes.codCliente),
           eq(reguaDocumental.cargoId, admissoes.cargoId),
           eq(reguaDocumental.exigencia, "OBRIGATORIO"),
+          REGUA_DO_VINCULO_DA_ADMISSAO,
         ),
       )
       .innerJoin(tiposDocumento, eq(tiposDocumento.id, reguaDocumental.tipoDocumentoId))
@@ -164,7 +214,7 @@ export class ReguaCompletudeService {
         ),
       )
       .where(and(inArray(admissoes.id, admissaoIds), naoExigeReservista));
-    for (const l of linhas) {
+    for (const l of porDocumento(linhas)) {
       const atual = map.get(l.admissaoId) ?? {
         entregues: 0,
         total: 0,
@@ -194,7 +244,12 @@ export class ReguaCompletudeService {
     if (admissaoIds.length === 0) return map;
     for (const id of admissaoIds) map.set(id, 0);
     const linhas = await this.db
-      .select({ admissaoId: admissoes.id, estado: documentosAdmissao.estado })
+      .select({
+        admissaoId: admissoes.id,
+        estado: documentosAdmissao.estado,
+        tipoDocumentoId: reguaDocumental.tipoDocumentoId,
+        clienteVinculoId: reguaDocumental.clienteVinculoId,
+      })
       .from(admissoes)
       .innerJoin(candidatos, eq(candidatos.cpf, admissoes.candidatoCpf))
       .innerJoin(
@@ -203,6 +258,7 @@ export class ReguaCompletudeService {
           eq(reguaDocumental.codCliente, admissoes.codCliente),
           eq(reguaDocumental.cargoId, admissoes.cargoId),
           eq(reguaDocumental.exigencia, "OBRIGATORIO"),
+          REGUA_DO_VINCULO_DA_ADMISSAO,
         ),
       )
       .innerJoin(tiposDocumento, eq(tiposDocumento.id, reguaDocumental.tipoDocumentoId))
@@ -214,7 +270,7 @@ export class ReguaCompletudeService {
         ),
       )
       .where(and(inArray(admissoes.id, admissaoIds), naoExigeReservista));
-    for (const l of linhas) {
+    for (const l of porDocumento(linhas)) {
       if (l.estado !== "ENTREGUE") map.set(l.admissaoId, (map.get(l.admissaoId) ?? 0) + 1);
     }
     return map;

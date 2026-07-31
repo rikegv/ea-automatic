@@ -71,7 +71,7 @@ function makeDb() {
           ? [{ estado: "ENTREGUE" }]
           : // Tipos ENTREGUES da admissão (insumo do re-baixar): aqui o RG está na staging, então
             // nada falta e o Pandapé nem chega a ser consultado.
-            keys.length === 1 && keys.includes("codigo")
+            keys.includes("codigo") && keys.includes("validadoEm")
             ? [{ codigo: "RG" }]
             : // id_precollaborator da integração Pandapé: esta admissão é manual.
               keys.length === 1 && keys.includes("id")

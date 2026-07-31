@@ -1,4 +1,4 @@
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import type { Database } from "../db/client";
 import { clientePendenciaConfig } from "../db/schema";
 import {
@@ -7,6 +7,7 @@ import {
   type ChavePendencia,
   type ConfigPendencias,
 } from "../domain/pendencia-config";
+import { filtroClienteOuVinculo, preferirVinculo } from "./vinculo.repo";
 
 /**
  * LEITURA DA CONFIG DE OBRIGATORIEDADE POR CLIENTE, num lugar só (OST da tela de obrigatoriedade).
@@ -22,17 +23,34 @@ import {
  * §A.6: só código de cliente e chave. Nenhum dado pessoal.
  */
 
-/** Config de UM cliente. `codCliente` nulo (pré-admissão) devolve tudo obrigatório. */
+/**
+ * Config de UM cliente. `codCliente` nulo (pré-admissão) devolve tudo obrigatório.
+ *
+ * VÍNCULO (OST Onda 3, item 7): `vinculoId` opcional. Quando vem, a linha daquele vínculo tem
+ * PRECEDÊNCIA sobre a do cliente, chave a chave: o contrato Terceirizado pode desligar o Centro de
+ * custo sem que o Temporário do MESMO cliente desligue. Sem vínculo, ou sem linha própria dele, vale
+ * a do cliente, que é o comportamento de sempre.
+ */
 export async function configDoCliente(
   db: Database,
   codCliente: string | null | undefined,
+  vinculoId?: string | null,
 ): Promise<ConfigPendencias> {
   if (!codCliente) return TUDO_OBRIGATORIO;
   const linhas = await db
-    .select({ chave: clientePendenciaConfig.chave, obrigatorio: clientePendenciaConfig.obrigatorio })
+    .select({
+      chave: clientePendenciaConfig.chave,
+      obrigatorio: clientePendenciaConfig.obrigatorio,
+      clienteVinculoId: clientePendenciaConfig.clienteVinculoId,
+    })
     .from(clientePendenciaConfig)
-    .where(eq(clientePendenciaConfig.codCliente, codCliente));
-  return montar(linhas);
+    .where(
+      and(
+        eq(clientePendenciaConfig.codCliente, codCliente),
+        filtroClienteOuVinculo(clientePendenciaConfig.clienteVinculoId, vinculoId ?? null),
+      ),
+    );
+  return montar(preferirVinculo(linhas, (l) => l.chave));
 }
 
 /**
@@ -52,12 +70,16 @@ export async function configPorCliente(
       codCliente: clientePendenciaConfig.codCliente,
       chave: clientePendenciaConfig.chave,
       obrigatorio: clientePendenciaConfig.obrigatorio,
+      clienteVinculoId: clientePendenciaConfig.clienteVinculoId,
     })
     .from(clientePendenciaConfig)
     .where(inArray(clientePendenciaConfig.codCliente, codigos));
 
+  // LOTE: só as linhas de CLIENTE entram aqui. A precedência por vínculo é resolvida no caminho de
+  // UMA admissão (`configDoVinculo`), porque em lote a chave do mapa é o cliente, não o vínculo, e
+  // misturar os dois níveis aqui faria a config de um contrato vazar para o outro.
   const porCliente = new Map<string, { chave: string; obrigatorio: boolean }[]>();
-  for (const l of linhas) {
+  for (const l of linhas.filter((x) => x.clienteVinculoId === null)) {
     const lista = porCliente.get(l.codCliente) ?? [];
     lista.push({ chave: l.chave, obrigatorio: l.obrigatorio });
     porCliente.set(l.codCliente, lista);

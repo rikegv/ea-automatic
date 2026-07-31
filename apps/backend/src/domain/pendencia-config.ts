@@ -29,6 +29,9 @@ export const CHAVES_PENDENCIA = [
   "CENTRO_CUSTO",
   "SETOR",
   "GESTOR_BP",
+  // UNIFORME (OST Onda 3, item 1): a pendência é RESPONDER "possui uniforme? sim/não", não ter
+  // uniforme. Configurável como os demais, então cliente que não trabalha com uniforme desliga.
+  "UNIFORME",
 ] as const;
 
 export type ChavePendencia = (typeof CHAVES_PENDENCIA)[number];
@@ -49,6 +52,7 @@ export const ROTULO_PENDENCIA: Record<ChavePendencia, string> = {
   CENTRO_CUSTO: "Centro de custo",
   SETOR: "Setor",
   GESTOR_BP: "Gestor / BP",
+  UNIFORME: "Uniforme",
 };
 
 /**
@@ -67,6 +71,7 @@ export const AJUDA_PENDENCIA: Record<ChavePendencia, string> = {
   CENTRO_CUSTO: "Centro de custo da folha.",
   SETOR: "Setor da folha.",
   GESTOR_BP: "Gestor ou BP responsável.",
+  UNIFORME: "Respondido se o candidato possui uniforme. Ter uniforme não bloqueia o fluxo.",
 };
 
 /**

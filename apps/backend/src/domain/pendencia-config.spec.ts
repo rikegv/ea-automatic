@@ -42,6 +42,8 @@ describe("comportamento de quem NÃO foi configurado (intocado)", () => {
       "Centro de custo",
       "Setor",
       "Gestor / BP",
+      // Uniforme (OST Onda 3, item 1): item novo da régua, configurável como todos os outros.
+      "Uniforme",
     ]);
     // Config vazia, config nula e ausência de argumento são o MESMO comportamento.
     expect(pendenciasObrigatorias(VAZIA, TUDO_OBRIGATORIO)).toEqual(semArg);

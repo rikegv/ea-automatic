@@ -95,7 +95,7 @@ export class ValidacaoHumanaService {
     // Até esta OST o método parava na linha acima: gravava ENTREGUE com autor e data e devolvia só o
     // progresso. Quem chamava `autoConcluirAuditoria` e `arquivarNoDrive` era exclusivamente o
     // `auditarConjunto`, ou seja, SÓ o caminho da IA. Resultado real: quando a validação humana era o
-    // documento que FECHAVA a régua, a frente AUDITORIA não ia para "Análise finalizada" e nada subia
+    // documento que FECHAVA a régua, a frente AUDITORIA não ia para "Análise Finalizada" e nada subia
     // para o Drive; a admissão ficava completa e parada, sem aviso.
     //
     // Agora o veredito humano passa pelo MESMO pós-veredito da IA (`aplicarPosVeredito`). Não há

@@ -10,6 +10,7 @@ import { normalizeCpf } from "@ea/shared-types";
 import type { AuthUser } from "../auth/auth.types";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
+import { naoPausada } from "../db/admissao-filtros";
 import { admissoes, candidatos, cargos, clientes, naoConformidades, usuarios } from "../db/schema";
 import { ncSituacao, penalizaConsultor } from "../domain/nao-conformidade";
 import type { DecidirLiberacaoDto, RegistrarNc3Dto, SolicitarLiberacaoDto } from "./dto/nc.dto";
@@ -34,7 +35,16 @@ export class NaoConformidadesService {
 
   /** Lista de NCs (com filtros) + contador penalizante por consultor (gestão). */
   async listar(filtros: NcFiltros) {
-    const where = [];
+    // PAUSA (OST admissão pausada, Bloco 4): NC de admissão PAUSADA sai da fila. Decisão do diretor,
+    // e a razão é a mesma da fila da Esteira: o time não pode gastar esforço em demanda que não vai
+    // ser trabalhada agora. A NC NÃO é apagada nem resolvida, só deixa de ser listada enquanto a
+    // pausa dura; ao retomar ela reaparece com a data de abertura original.
+    //
+    // O CONTADOR penalizante por consultor (mais abaixo) fica INTOCADO de propósito: ele é o
+    // histórico do que já aconteceu, e pausar uma admissão não desfaz uma não conformidade que
+    // ocorreu. Suspender a fila é recorte de trabalho; apagar penalização seria reescrever o
+    // passado. Registrado para o diretor corrigir se a intenção for outra.
+    const where = [naoPausada()];
     if (filtros.tipo?.length) {
       where.push(inArray(naoConformidades.tipo, filtros.tipo as ("NC1" | "NC2" | "NC3")[]));
     }

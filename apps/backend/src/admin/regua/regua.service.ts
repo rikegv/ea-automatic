@@ -1,6 +1,6 @@
 import { Inject, Injectable } from "@nestjs/common";
 import { CODIGOS_REGUA_PADRAO } from "@ea/shared-types";
-import { and, eq, inArray, isNotNull, notExists, sql as drizzleSql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, notExists, sql as drizzleSql } from "drizzle-orm";
 import type { Database } from "../../db/client";
 import { DRIZZLE } from "../../db/drizzle.module";
 import { admissoes, cargos, clientes, reguaDocumental, tiposDocumento } from "../../db/schema";
@@ -35,6 +35,17 @@ export class ReguaService {
             reguaDocumental.cargoId,
             reguaDocumental.tipoDocumentoId,
           ],
+          // INCIDENTE DE PRODUÇÃO: sem este `targetWhere`, criar régua devolvia 500 para TODOS os
+          // papéis ("there is no unique or exclusion constraint matching the ON CONFLICT
+          // specification"). A chave composta de (cod_cliente, cargo, tipo) era a PRIMARY KEY da
+          // tabela até a migração do vínculo (0056), que a trocou por um `id` e por DOIS índices
+          // unique PARCIAIS: um para a régua do cliente (cliente_vinculo_id IS NULL) e outro para a
+          // do vínculo. O Postgres não infere índice parcial sem o mesmo predicado, então o
+          // `ON CONFLICT` deixou de casar com qualquer constraint e o insert passou a estourar.
+          //
+          // Esta tela grava a régua DO CLIENTE INTEIRO (vínculo nulo, o desenho aprovado do Caminho
+          // 2), então o predicado certo é exatamente o do `uq_regua_cliente`.
+          targetWhere: isNull(reguaDocumental.clienteVinculoId),
           set: { exigencia: item.exigencia, atualizadoEm: new Date() },
         });
     }

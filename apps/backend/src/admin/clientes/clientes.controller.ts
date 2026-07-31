@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post } from "@nestjs/common";
 import { ClientesService } from "./clientes.service";
 import { CreateClienteDto, DefinirVinculoDto, UpdateClienteDto } from "./clientes.dto";
+import { Roles } from "../../auth/decorators";
 
 /**
  * Catálogo de CLIENTES.
@@ -44,6 +45,22 @@ export class ClientesController {
   @Patch(":codCliente/vinculo")
   definirVinculo(@Param("codCliente") codCliente: string, @Body() dto: DefinirVinculoDto) {
     return this.clientes.definirVinculo(codCliente, dto.opcaoId);
+  }
+
+  /** Vínculos (contratos) do cliente. Item 7: um cliente pode operar mais de um tipo. */
+  @Get(":codCliente/vinculos")
+  listarVinculos(@Param("codCliente") codCliente: string) {
+    return this.clientes.listarVinculos(codCliente);
+  }
+
+  /** Remove um vínculo. As admissões dele voltam a resolver pela config do cliente. */
+  @Delete(":codCliente/vinculos/:vinculoId")
+  @Roles("MASTER", "SUPER_ADMIN")
+  removerVinculo(
+    @Param("codCliente") codCliente: string,
+    @Param("vinculoId") vinculoId: string,
+  ) {
+    return this.clientes.removerVinculo(codCliente, vinculoId);
   }
 
   /** Prévia das dependências (admissões em andamento) — usada para AVISAR antes de inativar. */

@@ -5,12 +5,13 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { and, eq, notInArray, sql } from "drizzle-orm";
+import { and, asc, eq, notInArray, sql } from "drizzle-orm";
 import type { Database } from "../../db/client";
 import { DRIZZLE } from "../../db/drizzle.module";
 import { admissoes, candidatos, clientes, clienteVinculos, entidadesSoulan } from "../../db/schema";
 import type { CreateClienteDto, UpdateClienteDto } from "./clientes.dto";
 import { opcaoIdDoVinculo, VINCULO_OPCOES } from "./vinculo-opcoes";
+import { ROTULO_TIPO_SERVICO } from "../../domain/vinculo";
 
 /** Faróis de admissão "em andamento" (afetados ao inativar o cliente). Excluídos os terminais. */
 const FAROIS_TERMINAIS = ["ADMISSAO_CONCLUIDA", "DECLINOU", "RESCISAO"] as const;
@@ -124,20 +125,71 @@ export class ClientesService {
       atualizadoEm: new Date(),
     };
 
-    const existentes = await this.db
+    /**
+     * UPSERT POR TIPO DE CONTRATO (OST Onda 3, item 7, Bloco 2), e não mais "atualiza a primeira
+     * linha que achar". Esta troca de uma linha é o que LIGA o eixo do vínculo:
+     *  - mesma opção, mesmo tipo -> atualiza aquele vínculo, exatamente como fazia antes;
+     *  - opção de OUTRO tipo -> nasce um SEGUNDO vínculo, e o cliente passa a operar os dois
+     *    contratos com régua, obrigatoriedade e assinante próprios.
+     * Antes, escolher o segundo tipo SOBRESCREVIA o primeiro, e era por isso que os 135 vínculos da
+     * base tinham um tipo cada: a estrutura permitia dois, o caminho de escrita não.
+     */
+    const [existente] = await this.db
       .select({ id: clienteVinculos.id })
       .from(clienteVinculos)
-      .where(eq(clienteVinculos.codCliente, codCliente));
+      .where(
+        and(
+          eq(clienteVinculos.codCliente, codCliente),
+          eq(clienteVinculos.tipoServico, opcao.tipoServico),
+        ),
+      );
 
-    if (existentes.length > 0) {
+    if (existente) {
       await this.db
         .update(clienteVinculos)
         .set(valores)
-        .where(eq(clienteVinculos.id, existentes[0].id));
+        .where(eq(clienteVinculos.id, existente.id));
     } else {
       await this.db.insert(clienteVinculos).values({ codCliente, ...valores });
     }
     return { ok: true, tipoServico: opcao.tipoServico };
+  }
+
+  /** Vínculos (contratos) de um cliente, para a tela mostrar quando há mais de um. */
+  async listarVinculos(codCliente: string) {
+    const linhas = await this.db
+      .select({
+        id: clienteVinculos.id,
+        tipoServico: clienteVinculos.tipoServico,
+        empresaCodigo: clienteVinculos.empresaCodigo,
+        filial: clienteVinculos.filial,
+        isFopag: clienteVinculos.isFopag,
+        ativo: clienteVinculos.ativo,
+      })
+      .from(clienteVinculos)
+      .where(eq(clienteVinculos.codCliente, codCliente))
+      .orderBy(asc(clienteVinculos.tipoServico));
+    return linhas.map((v) => ({ ...v, rotulo: ROTULO_TIPO_SERVICO[v.tipoServico as keyof typeof ROTULO_TIPO_SERVICO] ?? v.tipoServico }));
+  }
+
+  /**
+   * Remove um vínculo do cliente. As admissões que apontam para ele NÃO são apagadas: o ponteiro cai
+   * para null (o FK das admissões não é cascade) e elas voltam a resolver pela configuração do
+   * cliente, que é o comportamento seguro. A régua e a config PRÓPRIAS daquele vínculo saem junto
+   * (cascade), porque sem o vínculo elas não têm dono.
+   */
+  async removerVinculo(codCliente: string, vinculoId: string) {
+    const [v] = await this.db
+      .select({ id: clienteVinculos.id })
+      .from(clienteVinculos)
+      .where(and(eq(clienteVinculos.codCliente, codCliente), eq(clienteVinculos.id, vinculoId)));
+    if (!v) throw new NotFoundException("Vínculo não encontrado para este cliente.");
+    await this.db
+      .update(admissoes)
+      .set({ clienteVinculoId: null })
+      .where(eq(admissoes.clienteVinculoId, vinculoId));
+    await this.db.delete(clienteVinculos).where(eq(clienteVinculos.id, vinculoId));
+    return { ok: true };
   }
 
   async create(dto: CreateClienteDto) {

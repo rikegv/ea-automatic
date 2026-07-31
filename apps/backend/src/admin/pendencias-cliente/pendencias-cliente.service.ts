@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger, NotFoundException } from "@nestjs/common";
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import type { Database } from "../../db/client";
 import { DRIZZLE } from "../../db/drizzle.module";
 import { clientePendenciaConfig, clientes } from "../../db/schema";
@@ -159,7 +159,11 @@ export class PendenciasClienteService {
             ),
           )
           .onConflictDoUpdate({
+            // Mesma causa do incidente da régua (migração 0056 trocou o unique simples por índice
+            // PARCIAL): sem o predicado, esta tela também devolvia 500. Config do cliente inteiro,
+            // então o alvo é o índice de vínculo nulo.
             target: [clientePendenciaConfig.codCliente, clientePendenciaConfig.chave],
+            targetWhere: isNull(clientePendenciaConfig.clienteVinculoId),
             set: { obrigatorio: false, atualizadoEm: new Date() },
           });
       }

@@ -49,6 +49,10 @@ export async function pendenciasObrigatoriasSet(
       centroCusto: dadosVagaFolha.centroCusto,
       setor: dadosVagaFolha.setor,
       gestorBp: dadosVagaFolha.gestorBp,
+      // UNIFORME (OST Onda 3, item 1): a resposta "possui uniforme?" fecha a pendência. Sem ler a
+      // coluna aqui, TODA admissão apareceria eternamente pendente de uniforme, inclusive as que
+      // acabaram de responder na liberação.
+      possuiUniforme: dadosVagaFolha.possuiUniforme,
     })
     .from(admissoes)
     .leftJoin(dadosVagaFolha, eq(dadosVagaFolha.admissaoId, admissoes.id))
@@ -81,6 +85,7 @@ export async function pendenciasObrigatoriasSet(
       isBanco: l.isBanco,
       termoBancoEntregue: termoSet.has(l.id),
       temBeneficioEstruturado: beneficioSet.has(l.id),
+      possuiUniforme: l.possuiUniforme,
     }, doMapa(configs, l.codCliente));
     if (pend.length > 0) set.add(l.id);
   }

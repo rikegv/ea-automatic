@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ROLES_KEY } from "../auth/decorators";
+import { BeneficiosController } from "./beneficios/beneficios.controller";
 import { CargosController } from "./cargos/cargos.controller";
 import { ClientesController } from "./clientes/clientes.controller";
 import { menuDaOperacao } from "../domain/menus";
@@ -47,5 +48,25 @@ describe("escrita é governada por MENU; leitura de lista fica aberta", () => {
   it("a LEITURA de lista (dado de trabalho) NÃO é reivindicada por menu (fica aberta)", () => {
     expect(menuDaOperacao("CargosController", "list")).toBeNull();
     expect(menuDaOperacao("ClientesController", "list")).toBeNull();
+  });
+
+  // Catálogo de BENEFÍCIOS (OST cadastro de benefícios por tela): nasce na mesma régua, e a régua
+  // fica travada aqui para o cadastro novo não repetir o erro que derrubou a Liberação.
+  it("benefícios: classe SEM @Roles, escrita gated por menu, LEITURA aberta", () => {
+    expect(Reflect.getMetadata(ROLES_KEY, BeneficiosController)).toBeUndefined();
+    for (const m of ["create", "update", "reativar", "remove"]) {
+      expect(
+        Reflect.getMetadata(
+          ROLES_KEY,
+          (BeneficiosController.prototype as unknown as Record<string, unknown>)[m] as object,
+        ),
+        `beneficios.${m} não pode ter @Roles`,
+      ).toBeUndefined();
+      expect(menuDaOperacao("BeneficiosController", m), `beneficios.${m}`).toBe("beneficios");
+    }
+    // LER continua sendo dado de trabalho, nas duas rotas: a lista do admin e a do catálogo que a
+    // Liberação, o wizard e o modal do Gerenciador consomem (o perfil COMUM depende desta).
+    expect(menuDaOperacao("BeneficiosController", "list")).toBeNull();
+    expect(menuDaOperacao("CatalogosController", "beneficios")).toBeNull();
   });
 });
