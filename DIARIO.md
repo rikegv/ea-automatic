@@ -7291,3 +7291,105 @@ acidente que o comentário do arquivo já descrevia para o `dist.old`.
   entradas de 24/07 como "não commitar sem decisão do Rike". Não está na lista desta OST, então
   ficou de fora. **Precisa da decisão do diretor.**
 - As 6 admissões com ASO não validado pela I.A, acima.
+
+## 31/07/2026, OST Drive mais Controle Gerencial (2 ajustes)
+
+Dois ajustes pedidos pelo diretor no fim do dia, ambos **validados por ele e no ar em produção**.
+
+### 1. Drive, baixar o sinal das 12 pastas duplicadas sem apagar nada
+
+**A decisão dele:** conviver com as pastas duplicadas por enquanto. NÃO vai apagá-las agora, assume a
+remoção manual daqui pra frente, e não quer o aviso aceso no meio tempo. Zerar **o sinal**, nunca a
+pasta.
+
+**O problema que isso escancarou: o sinal é DERIVADO, não é uma marcação.** Todo caminho que arquiva
+ou reconcilia reconfere o Drive e regrava em `drive_duplicatas` o que encontrou. Baixar o aviso e
+parar por aí faria ele **voltar sozinho na varredura seguinte** (a reconciliação roda a cada 5
+minutos ao abrir o Diagnóstico), desfazendo a decisão do diretor sem ninguém perceber. Era o pedido
+explícito dele: "não podem reacender sozinhas enquanto as pastas existirem".
+
+**A solução: uma memória do que foi baixado.** Coluna nova `drive_duplicatas_baixadas` (migration
+**0058**, aditiva), que guarda os ids de "não acenda estas de novo enquanto existirem". Os ids
+**migram** de `drive_duplicatas` para ela, em vez de sumirem. Os três caminhos automáticos passaram a
+respeitá-la:
+
+- `auditoria.service` (arquivamento, ao fechar a régua);
+- `reconciliacao-drive.limparDuplicatasQueSumiram` (a varredura dos 5 minutos);
+- `reconciliacao-drive.ligarPastasQueJaExistem` (a busca de pasta por nome, que devolve duplicatas).
+
+**Dois comportamentos preservados de propósito:** duplicata **NOVA** acende normal (sobre ela ninguém
+decidiu nada), e id de pasta **apagada** sai da memória na reconciliação, ou seja, a decisão morre
+junto com a pasta e a lista não cresce para sempre.
+
+**O que foi aplicado:** 12 admissões, **17 pastas**, sinal baixado. **Nada foi apagado, movido ou
+renomeado no Drive** (§A.6, contrato do módulo, que não apaga).
+
+**Trilha (quem zerou e quando):** 12 registros em `candidato_alteracoes_log`, campo `drive_duplicatas`,
+autor **henrique.vieira@soulan.com.br**, 31/07 20:17 UTC. O autor é o **diretor**, e tem de ser: a
+trilha responde "quem decidiu", a decisão é dele por escrito e a fábrica só executou. A conta do
+harness visual não podia figurar ali, e um usuário genérico de sistema apagaria justamente a
+informação que a trilha existe para guardar. Por isso o runner **exige** o e-mail do autor e o confere
+no banco antes de gravar.
+
+**Entregas de código:**
+
+- Botão **"Zerar sinal"** no card "Pasta duplicada no Drive" do Diagnóstico, um alvo por vez, com
+  confirmação que avisa que as pastas continuam no Drive. Mesmo padrão do "Zerar pendência".
+- `POST /diagnostico/acao/zerar-duplicata` (admin-only pelo `@Roles` da controller).
+- `src/ai/drive-duplicatas.ts`, puro e testável: `listaIds`, `csvIds`, `duplicatasAcesas`.
+- `src/db/zera-sinal-duplicatas.ts`, runner do lote, **seco por padrão**, idempotente, que foi o que
+  aplicou os 12. A tela segue sendo o caminho normal do caso a caso.
+
+**Prova de que não reacende, feita contra o Drive de verdade:** depois de zerar, rodei a rotina real
+de reconciliação (`npx tsx src/db/reconcilia-drive.ts`, o mesmo serviço da produção). Resultado
+`0 avisos limpos, 0 pastas ligadas, 0 pendências zeradas`, e os 12 continuam baixados. Isso prova as
+**duas** coisas de uma vez: o aviso não voltou, **e as 17 pastas ainda existem no Drive**, porque
+pasta apagada teria sido podada da memória pela própria varredura.
+
+**Ressalva registrada:** o runner `liga-pastas-duplicadas.ts` ficou **fora** dessa proteção, de
+propósito. Ele é ato deliberado do diretor a partir de um plano em arquivo revisado por ele, não
+varredura automática; rodá-lo de novo sobre o mesmo plano acende o aviso outra vez.
+
+### 2. Controle Gerencial, o KPI "Aguardando Liberação" contava recusadas
+
+O painel mostrava **2 admissões "a liberar" que estavam RECUSADAS** (`LIBERACAO_RECUSADA`) e já
+tinham sido tratadas. O KPI somava os dois faróis, e recusa é **desfecho encerrado**: ninguém está
+esperando decisão sobre ela.
+
+- **Backend** (`gerencial.service.kpis`): passou a contar só `AGUARDANDO_LIBERACAO`.
+- **Frontend** (`KPI_FAROL.aguardandoLiberacao`): o clique no card filtra exatamente o que ele conta,
+  senão o número do card e o do painel filtrado se contradiriam, que é a regra que sustenta o painel.
+- **A tabela de Farol NÃO mudou**, como o diretor pediu: "Liberação Recusada: 2" continua lá,
+  clicável como filtro. Ela agrupa o farol cru e não exclui status nenhum.
+
+**Consequência aceita e registrada no código:** os cards deixam de fechar a soma de "Admissões
+Trabalhadas", que **já não fechava** (`RESCISAO` nunca teve card). "Trabalhadas" é o total do recorte,
+não a soma dos outros quatro.
+
+**Efeito real na tela:** o card foi de 2 para **0**, porque as duas eram justamente as recusadas. Não
+existe hoje nenhuma pré-admissão de fato aguardando liberação.
+
+### Gate e prova visual (§A.13)
+
+- Typecheck backend e frontend limpos. Lint limpo nos arquivos tocados.
+- **942 testes backend + 84 frontend verdes**, incluindo **10 testes novos** que travam as duas
+  regras: 6 em `ai/drive-duplicatas.spec.ts` (o que acende e o que não acende) e 4 em
+  `diagnostico/reconciliacao-drive.duplicatas.spec.ts` (a varredura não desfaz a decisão, poda o id
+  da pasta apagada, não mexe em quem está estável, e o comportamento original segue de pé). Mais 2 no
+  painel da diretoria.
+- Migration 0058 aplicada, backend e frontend rebuildados e reiniciados, health 200 nos dois.
+- **Prints conferidos renderizados**, antes e depois: card das duplicatas de **12** (com os nomes,
+  ids e o botão novo, sem coluna esmagada) para **0** com "Nenhuma ocorrência. Estado saudável.", e o
+  Controle Gerencial com "Aguardando Liberação: 0" ao lado de "Liberação Recusada: 2" na tabela de
+  Farol.
+- Harness visual: mesmos dois contornos de sempre (libs por `LD_LIBRARY_PATH` e o modal "Diagnóstico
+  Do Sistema" fechado no "Estou ciente"). Ponto novo aprendido: o harness tem de entrar pela porta
+  **3010** (Caddy), não pela 3020, senão o `OriginGuard` recusa o login, porque a 3020 não está no
+  `ALLOWED_ORIGINS`.
+
+### §A.26, alcance conferido antes de mexer
+
+Toquei o **arquivamento** (`auditoria.service`), que é código já validado. Motivo, dito ao diretor
+antes: sem isso o aviso reacenderia no primeiro rearquivamento e a decisão dele se desfaria. A
+alteração é só o **filtro do que gravar** em `drive_duplicatas`; nada mais do arquivamento mudou, e a
+régua, o veredito e a staging seguem intactos.
