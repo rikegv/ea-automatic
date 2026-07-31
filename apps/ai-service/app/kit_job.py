@@ -102,14 +102,18 @@ def _lotes_de(n_paginas: int) -> int:
 
 
 def _classificar_com_retry(
-    job_id: str, sub_bytes: bytes, dicionario: list[str]
+    job_id: str, sub_bytes: bytes, dicionario: list[kit_motor.TituloKit]
 ) -> list[kit_motor.PaginaClassificada]:
-    """Uma chamada ao Gemini por lote, com backoff exponencial no 429 (2, 4, 8, 16 ... segundos)."""
+    """Uma chamada ao Gemini por lote, com backoff exponencial no 429 (2, 4, 8, 16 ... segundos).
+
+    O Gemini recebe só os TÍTULOS: a marcação padrão/individual é regra de montagem do kit, não
+    ajuda a reconhecer o topo da página."""
     s = get_settings()
+    titulos = [t.titulo for t in dicionario]
     ultima: BaseException | None = None
     for tentativa in range(1, s.kit_retry_max + 1):
         try:
-            return gemini.classificar_um_lote(conteudo_pdf=sub_bytes, titulos_dicionario=dicionario)
+            return gemini.classificar_um_lote(conteudo_pdf=sub_bytes, titulos_dicionario=titulos)
         except Exception as exc:  # noqa: BLE001 - decide pelo tipo do erro logo abaixo
             ultima = exc
             if _e_429(exc) and tentativa < s.kit_retry_max:
@@ -140,7 +144,7 @@ def _mensagem_erro(exc: BaseException) -> str:
     return "Falha ao processar o kit."
 
 
-def _montar_resultado(res: kit_motor.ResultadoMotor, dicionario: list[str]) -> dict:
+def _montar_resultado(res: kit_motor.ResultadoMotor, dicionario: list[kit_motor.TituloKit]) -> dict:
     return {
         "funcionarios": [
             {
@@ -158,7 +162,10 @@ def _montar_resultado(res: kit_motor.ResultadoMotor, dicionario: list[str]) -> d
             {"arquivo": n.staging_path, "paginas": n.paginas, "motivo": n.motivo}
             for n in res.nao_reconhecidos
         ],
-        "dicionario": [{"titulo": t, "ordem": i + 1} for i, t in enumerate(dicionario)],
+        "dicionario": [
+            {"titulo": t.titulo, "ordem": i + 1, "padrao": t.padrao}
+            for i, t in enumerate(dicionario)
+        ],
         "log": {
             "pdfs": res.pdfs,
             "funcionarios": len(res.funcionarios),
@@ -168,7 +175,7 @@ def _montar_resultado(res: kit_motor.ResultadoMotor, dicionario: list[str]) -> d
     }
 
 
-def _rodar(job_id: str, documentos: list[dict], dicionario: list[str]) -> None:
+def _rodar(job_id: str, documentos: list[dict], dicionario: list[kit_motor.TituloKit]) -> None:
     s = get_settings()
     try:
         # 1. Lê os PDFs e conta os lotes totais.
@@ -221,7 +228,8 @@ def _rodar(job_id: str, documentos: list[dict], dicionario: list[str]) -> None:
 
 def iniciar(kit_tipo_id: str, documentos: list[dict]) -> tuple[str, int]:
     """Valida, conta os lotes e dispara o job em thread. Devolve (job_id, total_lotes)."""
-    dicionario = kit_dict.carregar_dicionario_kit(kit_tipo_id)
+    # Normaliza na fronteira: o dicionário entra como `TituloKit` e o resto da fila só lida com isso.
+    dicionario = kit_motor.normalizar_dicionario(kit_dict.carregar_dicionario_kit(kit_tipo_id))
     if not dicionario:
         raise ValueError("kit-sem-titulos")
     total_lotes = 0
@@ -239,7 +247,7 @@ def iniciar(kit_tipo_id: str, documentos: list[dict]) -> tuple[str, int]:
 
 
 def _classificar_documentos(
-    job_id: str, documentos: list[dict], dicionario: list[str]
+    job_id: str, documentos: list[dict], dicionario: list[kit_motor.TituloKit]
 ) -> list[tuple[str, list[kit_motor.PaginaClassificada]]]:
     """Classifica PDFs (mesmo fluxo do lote + retry/backoff no 429). Páginas 1-based na origem."""
     s = get_settings()
@@ -260,6 +268,34 @@ def _classificar_documentos(
     return paginas_por_pdf
 
 
+def _casar_alvo(alvo: dict, candidatos: list[kit_motor.Funcionario]) -> kit_motor.Funcionario | None:
+    """Encontra, entre os funcionários recém-lidos, o MESMO do painel (Ajuste 3).
+
+    Mesma hierarquia do motor: o CPF manda, o nome é secundário. Antes o casamento era por nome
+    normalizado EXATO, então a pessoa cujo nome canônico virou a grafia completa era recusada ao
+    reimportar um PDF que traz o nome truncado, que é justamente o caso que o Ajuste 2 conserta.
+
+    O CPF comparado é o MASCARADO, os 6 dígitos do meio. Basta para distinguir dentro de um lote de
+    algumas dezenas de pessoas e mantém a propriedade de §A.6 de o resultado do job nunca guardar o
+    CPF inteiro.
+    """
+    alvo_cpf = alvo.get("cpfMascarado")
+    if alvo_cpf:
+        por_cpf = next((f for f in candidatos if f.cpf_mascarado == alvo_cpf), None)
+        if por_cpf is not None:
+            return por_cpf
+    # Sem casar por CPF, cai no nome (igual ou truncado). Quem tem CPF DIFERENTE do alvo fica fora:
+    # CPF distinto é outra pessoa, e nome parecido não reabre essa porta.
+    compativeis = [
+        f
+        for f in candidatos
+        if (f.cpf_mascarado is None or alvo_cpf is None or f.cpf_mascarado == alvo_cpf)
+        and kit_motor.mesma_pessoa_por_nome(f.nome, alvo.get("nome"))
+    ]
+    # Mais de um compatível é ambiguidade: não adivinha, recusa e devolve o caso ao consultor.
+    return compativeis[0] if len(compativeis) == 1 else None
+
+
 def reimportar(job_id: str, indice: int, documentos: list[dict]) -> dict:
     """Reimporta PDFs para UM funcionário já identificado: classifica os novos PDFs (mesmo fluxo de
     detecção título+nome), confere se são da mesma pessoa e ANEXA os documentos que faltavam. Não
@@ -273,13 +309,13 @@ def reimportar(job_id: str, indice: int, documentos: list[dict]) -> dict:
     if indice < 0 or indice >= len(funcionarios):
         raise KeyError("indice")
     alvo = funcionarios[indice]
-    dicionario = [d["titulo"] for d in job.resultado.get("dicionario", [])]
+    dicionario = [
+        kit_motor.TituloKit(titulo=d["titulo"], padrao=bool(d.get("padrao")))
+        for d in job.resultado.get("dicionario", [])
+    ]
 
     novo = kit_motor.processar(_classificar_documentos(job_id, documentos, dicionario), dicionario)
-    alvo_norm = kit_motor.normalizar(alvo["nome"])
-    correspondente = next(
-        (f for f in novo.funcionarios if kit_motor.normalizar(f.nome) == alvo_norm), None
-    )
+    correspondente = _casar_alvo(alvo, novo.funcionarios)
     if correspondente is None:
         raise ReimportInvalido("nao_reconhecido" if not novo.funcionarios else "pessoa")
 

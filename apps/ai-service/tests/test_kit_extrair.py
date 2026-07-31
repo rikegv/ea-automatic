@@ -31,6 +31,10 @@ DIC = [
     "DECLARAÇÃO DE DEPENDENTES",
 ]
 
+# CPFs sintéticos com dígito verificador válido (o motor confere o verificador).
+CPF_ELAINE = "529.982.247-25"
+CPF_OUTRO = "390.533.447-05"
+
 
 @pytest.fixture(autouse=True)
 def _sem_espera(monkeypatch):
@@ -102,7 +106,11 @@ def test_fluxo_completo_mantem_staging_para_download(monkeypatch):
     assert data["status"] == "concluido"
     res = data["resultado"]
     assert res["log"]["pdfs"] == 2 and res["log"]["funcionarios"] == 3
-    assert res["dicionario"][0] == {"titulo": "REGISTRO DE EMPREGADO", "ordem": 1}
+    assert res["dicionario"][0] == {
+        "titulo": "REGISTRO DE EMPREGADO",
+        "ordem": 1,
+        "padrao": False,
+    }
     ana = next(f for f in res["funcionarios"] if f["nome"] == "Ana Lima")
     termo = next(d for d in ana["documentos"] if d["titulo"] == "TERMO DE RESPONSABILIDADE")
     assert termo["paginas"] == [1, 2] and termo["arquivo"] == Path(paths[1]).name
@@ -190,6 +198,52 @@ def test_reimportar_pessoa_divergente_409(monkeypatch):
     seq = [
         [_pg(1, "REGISTRO DE EMPREGADO", "Bruno Souza")],
         [_pg(1, "CONTRATO DE TRABALHO TEMPORÁRIO", "Outra Pessoa")],  # nome diferente -> recusa
+    ]
+    monkeypatch.setattr(gemini, "classificar_um_lote", _mock_classificador(seq))
+    job = _iniciar([_pdf_staging(1)])["jobId"]
+    _esperar(job)
+    r = client.post(
+        f"/kit/reimportar/{job}/funcionario/0",
+        json={"documentos": [{"stagingPath": _pdf_staging(1), "arquivo": "x.pdf"}]},
+        headers=AUTH,
+    )
+    assert r.status_code == 409
+
+
+def test_ajuste3_reimportar_casa_por_cpf_com_nome_truncado(monkeypatch):
+    """Ajuste 3: o nome canônico virou a grafia completa; o PDF reimportado traz o truncado.
+
+    Antes o casamento era por nome EXATO e isto era recusado com 409. Agora o CPF manda.
+    """
+    completo = "ELAINE CRISTINA LOPES FERNANDES DA SILVA"
+    truncado = "ELAINE CRISTINA LOPES FERNANDES DA S"
+    seq = [
+        [_pg(1, "REGISTRO DE EMPREGADO", completo, cpf=CPF_ELAINE)],  # processamento inicial
+        [_pg(1, "CONTRATO DE TRABALHO TEMPORÁRIO", truncado, cpf=CPF_ELAINE)],  # reimportação
+    ]
+    monkeypatch.setattr(gemini, "classificar_um_lote", _mock_classificador(seq))
+    path0 = _pdf_staging(1)
+    job = _iniciar([path0])["jobId"]
+    data = _esperar(job)
+    assert data["resultado"]["funcionarios"][0]["nome"] == completo
+
+    path1 = _pdf_staging(1)
+    r = client.post(
+        f"/kit/reimportar/{job}/funcionario/0",
+        json={"documentos": [{"stagingPath": path1, "arquivo": Path(path1).name}]},
+        headers=AUTH,
+    )
+    assert r.status_code == 200, r.text
+    assert "CONTRATO DE TRABALHO TEMPORÁRIO" in r.json()["anexados"]
+    for p in (path0, path1):
+        Path(p).unlink(missing_ok=True)
+
+
+def test_ajuste3_reimportar_cpf_diferente_continua_recusado(monkeypatch):
+    """Espelho: nome idêntico mas CPF de outra pessoa não pode anexar documento no alvo errado."""
+    seq = [
+        [_pg(1, "REGISTRO DE EMPREGADO", "Ana Lima", cpf=CPF_ELAINE)],
+        [_pg(1, "CONTRATO DE TRABALHO TEMPORÁRIO", "Ana Lima", cpf=CPF_OUTRO)],
     ]
     monkeypatch.setattr(gemini, "classificar_um_lote", _mock_classificador(seq))
     job = _iniciar([_pdf_staging(1)])["jobId"]
