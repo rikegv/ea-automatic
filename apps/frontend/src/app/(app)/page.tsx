@@ -33,12 +33,6 @@ const CARDS: QuickCard[] = [
     title: "Gerenciador",
     desc: "Todas as admissões em tabela, com filtros e busca global.",
   },
-  {
-    href: "/analise",
-    icon: "chart",
-    title: "Análise Gerencial",
-    desc: "KPIs da operação e volume de admissões por período.",
-  },
 ];
 
 /** Saudação por horário: leve, sem dependência de dados reais nesta fase. */
@@ -69,7 +63,9 @@ export default function HomePage() {
 
       <RadarBanner />
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
+      {/* A fileira fecha com o número de cards que existem: são três, então são três colunas no
+          xl. Com cinco colunas sobravam duas vagas vazias desde a remoção do menu antigo. */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {CARDS.map((c) => (
           <GlassCard key={c.href} as={Link} href={c.href} className="qcard block">
             <div className="q-ico">

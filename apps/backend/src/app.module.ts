@@ -18,6 +18,7 @@ import { DiagnosticoModule } from "./diagnostico/diagnostico.module";
 import { SenhaTemporariaGuard } from "./auth/guards/senha-temporaria.guard";
 import { DrizzleModule } from "./db/drizzle.module";
 import { EsteiraModule } from "./esteira/esteira.module";
+import { GerencialModule } from "./gerencial/gerencial.module";
 import { KitModule } from "./kit/kit.module";
 import { NaoConformidadesModule } from "./nao-conformidades/nao-conformidades.module";
 import { PastasDriveModule } from "./admin/pastas-drive/pastas-drive.module";
@@ -44,6 +45,7 @@ import { VtColetaModule } from "./vt-coleta/vt-coleta.module";
     PastasDriveModule,
     AdmissoesModule,
     EsteiraModule,
+    GerencialModule,
     NaoConformidadesModule,
     AiModule,
     StagingModule,
