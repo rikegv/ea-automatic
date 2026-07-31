@@ -14,11 +14,15 @@ import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
 import { DiagnosticoService } from "./diagnostico.service";
 import {
+  AcaoLigarPastaDto,
+  AcaoZerarPendenciaDto,
   AcaoReauditarDto,
   AcaoRearquivarDto,
   AcaoRepullDto,
   SchedulerToggleDto,
 } from "./diagnostico.dto";
+import { AiClientService } from "../ai/ai-client.service";
+import { idDaPastaUrl, urlDaPasta } from "../ai/drive-routing";
 
 /**
  * TELA DE DIAGNÓSTICO (OST). Acesso restrito a MASTER/SUPER_ADMIN (`@Roles` na classe): a tela mostra
@@ -43,6 +47,7 @@ export class DiagnosticoController {
     private readonly vtColetaScheduler: VtColetaSchedulerService,
     private readonly clicksignScheduler: ClicksignSchedulerService,
     private readonly exameScheduler: ExameSchedulerService,
+    private readonly ai: AiClientService,
   ) {}
 
   /** Snapshot completo (sinais + dependências + última coleta + histórico + alerta). */
@@ -76,6 +81,75 @@ export class DiagnosticoController {
       pastaUrl: pos.arquivado?.pastaUrl,
       aviso: pos.avisoDrive,
     };
+  }
+
+  /**
+   * LIGA a admissão a uma pasta que JÁ EXISTE no Drive (OST da duplicação, item 5).
+   *
+   * Grava `drive_pasta_url`, limpa o motivo de falha e, com isso, a admissão SAI do card "Régua
+   * Fechada Sem Pasta" na hora. Serve para o caso em que o prontuário existe e só o link se perdeu,
+   * que era trabalho de fábrica e agora o diretor resolve sozinho pela tela.
+   *
+   * A pasta é CONFERIDA no Drive antes de gravar: link inválido ou pasta inexistente vira erro
+   * claro, e não um link quebrado gravado na admissão. Não move nem apaga nada (§A.6).
+   */
+  @Post("acao/ligar-pasta")
+  async ligarPasta(@Body() dto: AcaoLigarPastaDto, @CurrentUser() user: AuthUser) {
+    this.registrarTrilha(user, "ligar-pasta", dto.admissaoId);
+    const folderId = idDaPastaUrl(dto.pasta);
+    if (!folderId) {
+      return { ok: false, motivo: "Link ou id de pasta inválido. Cole o link da pasta do Drive." };
+    }
+    const conferida = await this.ai.validarPastaDrive(folderId);
+    if (!conferida.valido) {
+      return {
+        ok: false,
+        motivo: `A pasta não foi encontrada no Drive${conferida.motivo ? ` (${conferida.motivo})` : ""}.`,
+      };
+    }
+    const url = urlDaPasta(folderId);
+    await this.db.execute(sql`
+      UPDATE admissoes
+         SET drive_pasta_url = ${url},
+             drive_falha_motivo = NULL,
+             drive_falha_em = NULL,
+             atualizado_em = now()
+       WHERE id = ${dto.admissaoId}
+    `);
+    this.logger.log(`Admissão ${dto.admissaoId} ligada à pasta ${folderId} pelo Diagnóstico.`);
+    return { ok: true, pastaUrl: url };
+  }
+
+  /**
+   * ZERA a pendência de arquivamento de uma admissão (decisão do diretor).
+   *
+   * O diretor identifica que o caso está resolvido e fecha o sinal ele mesmo, sem fábrica. Só apaga
+   * o MOTIVO da admissão: documento, pasta e veredito ficam como estão. A baixa é REGISTRADA em
+   * `candidato_alteracoes_log` (quem, quando, e qual motivo foi baixado), então nada some sem
+   * trilha. Se o problema não estiver resolvido de verdade, o próximo arquivamento acende de novo,
+   * que é o comportamento certo: o sinal reflete o estado, não uma marcação manual permanente.
+   */
+  @Post("acao/zerar-pendencia")
+  async zerarPendencia(@Body() dto: AcaoZerarPendenciaDto, @CurrentUser() user: AuthUser) {
+    this.registrarTrilha(user, "zerar-pendencia", dto.admissaoId);
+    const [atual] = (await this.db.execute(sql`
+      SELECT drive_falha_motivo FROM admissoes WHERE id = ${dto.admissaoId} LIMIT 1
+    `)) as unknown as Array<{ drive_falha_motivo: string | null }>;
+    if (!atual) return { ok: false, motivo: "Admissão não encontrada." };
+    if (!atual.drive_falha_motivo) return { ok: true, jaEstavaZerada: true };
+
+    await this.db.execute(sql`
+      UPDATE admissoes
+         SET drive_falha_motivo = NULL, drive_falha_em = NULL, atualizado_em = now()
+       WHERE id = ${dto.admissaoId}
+    `);
+    // Trilha permanente e consultável, no mesmo log de alterações da admissão.
+    await this.db.execute(sql`
+      INSERT INTO candidato_alteracoes_log (admissao_id, campo, valor_anterior, valor_novo, autor_id)
+      VALUES (${dto.admissaoId}, 'drive_falha_motivo', ${atual.drive_falha_motivo}, NULL, ${user.id})
+    `);
+    this.logger.log(`Pendência de arquivamento zerada na admissão ${dto.admissaoId}.`);
+    return { ok: true, zerada: true };
   }
 
   /** Bloco 5: re-pull de uma admissão (por alvo), pela fila BullMQ (espaçamento/backoff). */

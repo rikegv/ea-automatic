@@ -95,3 +95,51 @@ describe("motivos gravados — o fim do silêncio", () => {
     expect(limitar("x".repeat(5000))).toHaveLength(MAX_MOTIVO_DRIVE);
   });
 });
+
+/**
+ * DOCUMENTO VALIDADO À MÃO NÃO PRECISA DE ARQUIVO (decisão do diretor).
+ *
+ * Quem valida à mão está decidindo "considere entregue" para um documento que o sistema não
+ * conseguiu auditar, e isso acontece justamente quando NÃO existe arquivo: não veio na coleta e não
+ * está no Pandapé. O arquivamento continuava pedindo o binário, o prontuário ficava eternamente
+ * incompleto e o sinal do diagnóstico não zerava nunca, porque a condição não mudaria sozinha. Foi o
+ * caso dos quatro prontuários travados, todos exatamente nos documentos validados à mão.
+ */
+describe("tiposFaltantesNoArquivamento — validado à mão vale sem arquivo", () => {
+  it("o tipo validado à mão SAI dos faltantes, então o Pandapé não é chamado por ele", () => {
+    expect(
+      tiposFaltantesNoArquivamento({
+        entregues: ["RG", "CPF", "RESERVISTA"],
+        naStaging: ["RG", "CPF"],
+        aceitosSemArquivo: ["RESERVISTA"],
+      }),
+    ).toEqual([]);
+  });
+
+  it("o que NÃO foi validado à mão continua sendo cobrado (a regra não afrouxa o resto)", () => {
+    expect(
+      tiposFaltantesNoArquivamento({
+        entregues: ["RG", "CPF", "CTPS", "RESERVISTA"],
+        naStaging: ["RG"],
+        aceitosSemArquivo: ["RESERVISTA"],
+      }),
+    ).toEqual(["CPF", "CTPS"]);
+  });
+
+  it("validado à mão COM arquivo na staging segue arquivando normalmente", () => {
+    // Não é "ignore o documento": é "não exija o binário". Tendo binário, ele sobe.
+    expect(
+      tiposFaltantesNoArquivamento({
+        entregues: ["RESERVISTA"],
+        naStaging: ["RESERVISTA"],
+        aceitosSemArquivo: ["RESERVISTA"],
+      }),
+    ).toEqual([]);
+  });
+
+  it("sem a lista, nada muda para quem já funcionava", () => {
+    expect(
+      tiposFaltantesNoArquivamento({ entregues: ["RG", "CPF"], naStaging: ["RG"] }),
+    ).toEqual(["CPF"]);
+  });
+});

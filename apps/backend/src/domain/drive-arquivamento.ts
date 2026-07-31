@@ -37,13 +37,28 @@ export function tiposFaltantesNoArquivamento(entrada: {
   naStaging: readonly string[];
   /** Códigos já arquivados fora deste lote (hoje: o ASO). */
   jaNoDrive?: readonly string[];
+  /**
+   * Códigos ACEITOS SEM ARQUIVO (decisão do diretor): documento que uma PESSOA validou à mão.
+   *
+   * Por que isto existe. Quem valida à mão está justamente decidindo "considere entregue" para um
+   * documento que o sistema não conseguiu auditar, e na prática isso acontece quando NÃO HÁ arquivo:
+   * não veio na coleta e não está no Pandapé. O arquivamento continuava cobrando o binário, o
+   * prontuário ficava marcado como incompleto e o sinal do diagnóstico acendia para sempre, porque a
+   * condição nunca mudaria sozinha. Foi o caso dos quatro prontuários travados (CTPS, Reservista e
+   * Escolaridade), todos exatamente nos documentos validados à mão.
+   *
+   * O documento NÃO some e o veredito humano não é tocado: ele apenas deixa de ser exigido como
+   * arquivo. Se o arquivo existir na staging, sobe normalmente.
+   */
+  aceitosSemArquivo?: readonly string[];
 }): string[] {
   const temArquivo = new Set(entrada.naStaging);
   const fora = new Set(entrada.jaNoDrive ?? []);
+  const semArquivo = new Set(entrada.aceitosSemArquivo ?? []);
   const faltantes = new Set<string>();
   for (const codigo of entrada.entregues) {
     if (!codigo) continue;
-    if (temArquivo.has(codigo) || fora.has(codigo)) continue;
+    if (temArquivo.has(codigo) || fora.has(codigo) || semArquivo.has(codigo)) continue;
     faltantes.add(codigo);
   }
   return [...faltantes].sort();
@@ -66,7 +81,28 @@ export const MOTIVO_DRIVE = {
     "API do Pandapé não respondeu ao re-baixar os documentos: nada foi perdido, a próxima tentativa refaz a busca.",
   PANDAPE_INERTE:
     "Integração com o Pandapé inerte (sem credencial configurada): não foi possível re-baixar os documentos.",
+  /**
+   * A régua fechou e não havia NENHUM arquivo para enviar. A pasta é criada assim mesmo (decisão do
+   * diretor: régua fechada = prontuário existe, SEMPRE), e este aviso diz que ela nasceu vazia.
+   */
+  PASTA_CRIADA_SEM_ARQUIVO:
+    "A régua obrigatória fechou sem nenhum arquivo disponível para enviar: a pasta do prontuário foi criada mesmo assim, e os documentos podem ser anexados depois.",
 } as const;
+
+/**
+ * Motivo de quando parte dos arquivos não subiu, mas a PASTA e o que subiu foram preservados.
+ *
+ * Antes isto era uma exceção que derrubava o lote inteiro e fazia o EA perder o link de uma pasta que
+ * já existia no Drive. Agora é aviso: o prontuário está lá, incompleto, e a próxima tentativa
+ * completa sozinha (a checagem por md5 não reenvia o que já subiu).
+ */
+export function motivoEnvioParcial(falhas: number, motivos: readonly string[]): string {
+  const causa = motivos.length ? ` Causa: ${[...motivos].join(", ")}.` : "";
+  return limitar(
+    `${falhas} arquivo(s) não subiram ao Drive nesta tentativa.${causa} ` +
+      "A pasta e os demais arquivos foram preservados, e o sistema completa o envio sozinho na próxima ação desta admissão.",
+  );
+}
 
 /** Motivo de quando o Pandapé respondeu mas não devolveu os anexos de alguns tipos. */
 export function motivoPandapeSemTipos(codigos: readonly string[]): string {

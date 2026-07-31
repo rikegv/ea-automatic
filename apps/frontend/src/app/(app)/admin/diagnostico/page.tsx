@@ -588,6 +588,31 @@ export default function DiagnosticoPage() {
                           Rearquivar
                         </Button>
                       )}
+                      {/* LIGAR À PASTA EXISTENTE: para quando o prontuário JÁ está no Drive e só o
+                          link não ficou gravado (arquivamento que caiu no meio). Grava a URL e a
+                          admissão sai do card na hora, sem acionar a fábrica. */}
+                      {sinalAberto.chave === "regua-sem-pasta" && (
+                        <Button
+                          variant="secondary"
+                          className="!py-1 !px-2.5 text-[12px]"
+                          disabled={acaoEmVoo !== null}
+                          onClick={() => {
+                            const pasta = window.prompt(
+                              "Cole o link da pasta do Drive que já tem os documentos deste candidato:",
+                              "",
+                            );
+                            if (pasta?.trim()) {
+                              void acao(
+                                "ligar-pasta",
+                                { admissaoId: it.admissaoId!, pasta: pasta.trim() },
+                                "Ligar à pasta existente",
+                              );
+                            }
+                          }}
+                        >
+                          Ligar à pasta existente
+                        </Button>
+                      )}
                       <Button
                         variant="secondary"
                         className="!py-1 !px-2.5 text-[12px]"
@@ -596,6 +621,31 @@ export default function DiagnosticoPage() {
                       >
                         Re-pull
                       </Button>
+                      {/* ZERAR A PENDÊNCIA: o diretor fecha o sinal sozinho quando constatou que o
+                          caso está resolvido, sem acionar a fábrica. Fica registrado quem zerou. Se
+                          o problema persistir, o próximo arquivamento acende de novo. */}
+                      {sinalAberto.chave === "arquivamento-drive-falhou" && (
+                        <Button
+                          variant="secondary"
+                          className="!py-1 !px-2.5 text-[12px]"
+                          disabled={acaoEmVoo !== null}
+                          onClick={() => {
+                            if (
+                              window.confirm(
+                                `Zerar a pendência de arquivamento de ${it.candidato}? A baixa fica registrada com o seu usuário.`,
+                              )
+                            ) {
+                              void acao(
+                                "zerar-pendencia",
+                                { admissaoId: it.admissaoId! },
+                                "Zerar pendência",
+                              );
+                            }
+                          }}
+                        >
+                          Zerar pendência
+                        </Button>
+                      )}
                     </div>
                   )}
                 </div>

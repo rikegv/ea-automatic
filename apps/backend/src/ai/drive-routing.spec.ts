@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { montarNomePasta, resolvePastaPaiId, resolveSubpasta } from "./drive-routing";
+import {
+  idDaPastaUrl,
+  montarNomePasta,
+  resolvePastaPaiId,
+  resolveSubpasta,
+  urlDaPasta,
+} from "./drive-routing";
 
 describe("resolvePastaPaiId — por tipo de contrato (acento/caixa-insensível)", () => {
   it("resolve cada contrato fixo, tolerante a acento e caixa", () => {
@@ -75,5 +81,47 @@ describe("montarNomePasta", () => {
 
   it("tolera operação nula (sem quebrar o nome do prontuário)", () => {
     expect(montarNomePasta("Maria Silva", null)).toBe("MARIA SILVA —");
+  });
+});
+
+/**
+ * ÂNCORA DA PASTA (OST da duplicação). O link gravado vira id, e é ele que faz o arquivamento ir
+ * direto na pasta em vez de procurar por nome, que era onde a corrida criava a segunda pasta.
+ */
+describe("idDaPastaUrl", () => {
+  it("extrai o id do link que o sistema grava", () => {
+    expect(idDaPastaUrl("https://drive.google.com/drive/folders/1a3wsoYqyztQ8Zjiu33t")).toBe(
+      "1a3wsoYqyztQ8Zjiu33t",
+    );
+  });
+
+  it("aceita o id cru, que é o que o diretor cola na ação do Diagnóstico", () => {
+    expect(idDaPastaUrl("1a3wsoYqyztQ8Zjiu33t")).toBe("1a3wsoYqyztQ8Zjiu33t");
+  });
+
+  it("ignora link com parâmetro depois do id", () => {
+    expect(idDaPastaUrl("https://drive.google.com/drive/folders/1a3wsoYqyztQ8Zjiu33t?usp=sharing")).toBe(
+      "1a3wsoYqyztQ8Zjiu33t",
+    );
+  });
+
+  it("devolve null para o que não é pasta (aí o fluxo volta a procurar por nome, que é o certo)", () => {
+    expect(idDaPastaUrl(null)).toBeNull();
+    expect(idDaPastaUrl("")).toBeNull();
+    expect(idDaPastaUrl("   ")).toBeNull();
+    expect(idDaPastaUrl("qualquer coisa")).toBeNull();
+    expect(idDaPastaUrl("curto")).toBeNull();
+    expect(idDaPastaUrl("https://drive.google.com/drive/my-drive")).toBeNull();
+  });
+
+  it("o link fictício do mock NÃO vira âncora (id curto demais para ser pasta real)", () => {
+    expect(idDaPastaUrl("https://drive.google.com/drive/folders/MOCK-1a2b")).toBeNull();
+  });
+
+  it("urlDaPasta é o caminho de volta, e o par fecha", () => {
+    expect(urlDaPasta("1a3wsoYqyztQ8Zjiu33t")).toBe(
+      "https://drive.google.com/drive/folders/1a3wsoYqyztQ8Zjiu33t",
+    );
+    expect(idDaPastaUrl(urlDaPasta("1a3wsoYqyztQ8Zjiu33t"))).toBe("1a3wsoYqyztQ8Zjiu33t");
   });
 });

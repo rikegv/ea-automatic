@@ -17,6 +17,8 @@ from app.drive import SUBPASTA_NOME
 from app.schemas import (
     ArquivamentoDrive,
     ArquivarRequest,
+    LocalizarPastaRequest,
+    LocalizarPastaResponse,
     ValidarPastaRequest,
     ValidarPastaResponse,
 )
@@ -51,10 +53,26 @@ def arquivar(req: ArquivarRequest, _: None = Depends(require_internal_token)) ->
 
     service = drive.get_drive_service()
 
+    duplicatas: list[str] = []
     try:
-        pasta_func_id, pasta_ja_existia = drive.buscar_ou_criar_pasta(
-            service, req.pasta_nome, req.parent_folder_id
-        )
+        # ÂNCORA PRIMEIRO (OST da duplicação, decisão do diretor). Se a admissão já tem pasta
+        # gravada, vai direto nela pelo ID: quem tem link não procura, e quem não procura não cria
+        # uma segunda. É isto que fecha a corrida entre duas execuções simultâneas. A busca por nome
+        # só acontece na PRIMEIRA vez, ou se a pasta ancorada tiver sumido do Drive.
+        ancorada = drive.abrir_pasta_por_id(service, req.pasta_id) if req.pasta_id else None
+        if ancorada:
+            pasta_func_id, pasta_ja_existia = ancorada["id"], True
+        else:
+            if req.pasta_id:
+                logger.warning(
+                    "Pasta ancorada não encontrada no Drive (id=%s): caindo na busca por nome. "
+                    "Ela pode ter sido apagada ou movida para a lixeira.",
+                    req.pasta_id,
+                )
+            pasta_func_id, pasta_ja_existia, extras = drive.resolver_pasta_do_funcionario(
+                service, req.pasta_nome, req.parent_folder_id
+            )
+            duplicatas = [p["id"] for p in extras]
     except Exception as exc:  # noqa: BLE001
         # Este caminho subia um 502 MUDO: nem log, nem motivo. Descoberto na troca de credencial,
         # quando a identidade nova não enxergava a pasta-pai e a única informação disponível era
@@ -82,6 +100,8 @@ def arquivar(req: ArquivarRequest, _: None = Depends(require_internal_token)) ->
     md5_no_destino: dict[str, set[str]] = {}
     arquivados = 0
     ignorados = 0
+    # Falhas por arquivo: NÃO abortam o lote, viram contagem na resposta (ver o except do laço).
+    falhas: list[str] = []
     for indice, arq in enumerate(req.arquivos):
         nome_sub = SUBPASTA_NOME[arq.subpasta]
         if arq.subpasta not in subpasta_cache:
@@ -139,14 +159,14 @@ def arquivar(req: ArquivarRequest, _: None = Depends(require_internal_token)) ->
             # O que acabou de subir passa a contar como "já está lá": dois arquivos IDÊNTICOS dentro
             # do MESMO lote (a staging tem isso) sobem uma vez só.
             md5_no_destino[arq.subpasta].add(md5_local)
-        except HttpError as exc:
+        except Exception as exc:  # noqa: BLE001
             # DIAGNÓSTICO DO ARQUIVAMENTO. Antes, qualquer erro do Google subia como 500 cru: o
             # backend só via "HTTP 500" e o consultor não via nada. O caso real foi um 403
             # `parentNotAFolder` no 16º arquivo de um lote em que os 15 anteriores subiram para a
             # MESMA pasta, ou seja, erro transitório do Drive e não defeito do dado.
             # §A.6: logamos motivo, índice e id de pasta (id não é PII). NUNCA `nome_final`, que
             # carrega o nome do candidato.
-            motivo = drive.motivo_http(exc)
+            motivo = drive.motivo_http(exc) if isinstance(exc, HttpError) else type(exc).__name__
             logger.warning(
                 "Drive recusou upload (%s) no arquivo %d/%d, subpasta=%s, pastaId=%s. Retentando "
                 "com a pasta reresolvida.",
@@ -185,24 +205,27 @@ def arquivar(req: ArquivarRequest, _: None = Depends(require_internal_token)) ->
                 )
                 arquivados += 1
                 md5_no_destino[arq.subpasta].add(md5_local)
-            except HttpError as exc2:
-                motivo2 = drive.motivo_http(exc2)
+            except Exception as exc2:  # noqa: BLE001
+                # UM ARQUIVO QUE FALHA NÃO DERRUBA O LOTE (decisão do diretor: o sistema resolve
+                # sozinho). Antes isto virava 502, e o backend, que só grava a URL quando a resposta
+                # chega, perdia o link de uma pasta que JÁ EXISTIA no Drive com parte dos arquivos
+                # dentro. A admissão aparecia como "sem pasta" tendo pasta, e alguém tinha de agir à
+                # mão. Agora a falha é CONTADA, o lote continua, a resposta volta 200 com o link, e a
+                # próxima tentativa completa o que faltou (a checagem por md5 não reenvia nada).
+                #
+                # `Exception` e não `HttpError` de propósito: o erro real dos quatro prontuários
+                # travados foi `TimeoutError`, que não é HttpError e escapava de todo o tratamento.
+                motivo2 = drive.motivo_http(exc2) if isinstance(exc2, HttpError) else type(exc2).__name__
                 logger.error(
-                    "Arquivamento interrompido: Drive recusou (%s) no arquivo %d/%d, subpasta=%s. "
-                    "%d arquivo(s) já subiram; a staging NÃO deve ser expurgada.",
-                    motivo2,
+                    "Arquivo %d/%d NÃO subiu (%s), subpasta=%s. O lote continua; %d já subiram. "
+                    "A staging NÃO deve ser expurgada.",
                     indice + 1,
                     len(req.arquivos),
+                    motivo2,
                     arq.subpasta,
                     arquivados,
                 )
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail=(
-                        f"O Drive recusou o envio ({motivo2}) no arquivo {indice + 1} de "
-                        f"{len(req.arquivos)}. {arquivados} arquivo(s) foram enviados."
-                    ),
-                ) from exc2
+                falhas.append(motivo2)
         finally:
             del conteudo
 
@@ -223,19 +246,18 @@ def arquivar(req: ArquivarRequest, _: None = Depends(require_internal_token)) ->
             arquivados,
             type(exc).__name__,
         )
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=(
-                f"{arquivados} arquivo(s) foram enviados ao Drive, mas o link da pasta não pôde ser "
-                "lido. O sistema tentará de novo na próxima ação."
-            ),
-        ) from exc
+        # NEM ISTO derruba mais: a pasta existe e o id é conhecido, então monta-se o link canônico.
+        # Perder o link de uma pasta que existe é o que fazia a admissão voltar para a fila à toa.
+        pasta_url = f"https://drive.google.com/drive/folders/{pasta_func_id}"
 
     return ArquivamentoDrive(
         pasta_url=pasta_url,
         arquivados=arquivados,
         ignorados=ignorados,
         pasta_ja_existia=pasta_ja_existia,
+        duplicatas=duplicatas,
+        falhas=len(falhas),
+        motivo_falhas=sorted(set(falhas)),
     )
 
 
@@ -258,3 +280,40 @@ def validar_pasta(
     service = drive.get_drive_service()
     resultado = drive.validar_pasta(service, req.folder_id)
     return ValidarPastaResponse(valido=resultado["valido"], motivo=resultado.get("motivo"))
+
+
+@router.post("/localizar-pasta", response_model=LocalizarPastaResponse, response_model_by_alias=True)
+def localizar_pasta(
+    req: LocalizarPastaRequest, _: None = Depends(require_internal_token)
+) -> LocalizarPastaResponse:
+    """A pasta do prontuário JÁ EXISTE no Drive? SOMENTE LEITURA: não cria nem altera nada.
+
+    É o insumo da reconciliação automática do Diagnóstico: o sistema confere sozinho se o prontuário
+    está lá e, estando, liga a admissão e apaga a pendência, em vez de pedir que alguém olhe o Drive
+    e clique. Usa a MESMA régua do arquivamento (as duas convenções de nome e a pasta mais completa).
+    """
+    settings = get_settings()
+    if settings.drive_mock:
+        return LocalizarPastaResponse(encontrada=False)
+
+    service = drive.get_drive_service()
+    candidatas: dict[str, dict] = {}
+    for forma in drive.variantes_do_nome(req.pasta_nome):
+        for p in drive._pastas_com_nome(service, forma, req.parent_folder_id):  # noqa: SLF001
+            candidatas[p["id"]] = p
+    if not candidatas:
+        return LocalizarPastaResponse(encontrada=False)
+
+    for p in candidatas.values():
+        p["arquivos"] = drive.contar_arquivos(service, p["id"])
+    ordenadas = sorted(
+        candidatas.values(), key=lambda p: (-p.get("arquivos", 0), p.get("createdTime", ""))
+    )
+    escolhida = ordenadas[0]
+    return LocalizarPastaResponse(
+        encontrada=True,
+        pasta_id=escolhida["id"],
+        pasta_url=f"https://drive.google.com/drive/folders/{escolhida['id']}",
+        arquivos=escolhida.get("arquivos", 0),
+        duplicatas=[p["id"] for p in ordenadas[1:]],
+    )

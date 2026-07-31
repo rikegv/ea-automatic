@@ -8,6 +8,7 @@ import { PandapeApiService } from "../pandape/pandape-api.service";
 import { PandapeQueueService } from "../pandape/pandape-queue.service";
 import { PandapeSchedulerService } from "../pandape/pandape-scheduler.service";
 import { DrivePastaPaiService } from "../ai/drive-pasta-pai.service";
+import { ReconciliacaoDriveService } from "./reconciliacao-drive.service";
 import { MOTIVO_FALHA_IA, type FamiliaFalhaIa } from "../domain/falha-auditoria";
 import { LIMIAR_AUDITORIA_PARADA_MS } from "../domain/auditoria-parada";
 import { schedulerParado, type EstadoScheduler } from "../domain/scheduler-pandape";
@@ -65,6 +66,7 @@ export class DiagnosticoService {
     private readonly clicksignScheduler: ClicksignSchedulerService,
     private readonly exameScheduler: ExameSchedulerService,
     private readonly drivePastaPai: DrivePastaPaiService,
+    private readonly reconciliacao: ReconciliacaoDriveService,
   ) {}
 
   /**
@@ -77,6 +79,11 @@ export class DiagnosticoService {
   private static readonly DEPS_TTL_MS = 5 * 60 * 1000;
 
   async snapshot(): Promise<DiagnosticoSnapshot> {
+    // RECONCILIAÇÃO AUTOMÁTICA (decisão do diretor: quem resolve é o sistema, não o diretor). Abrir
+    // a tela É o gatilho: antes de montar os cards, o sistema confere o Drive e apaga sozinho o que
+    // já está resolvido (pasta duplicada que o diretor apagou, prontuário que existe e o EA não
+    // sabia). Tem throttle de 5 minutos por dentro e nunca derruba a tela se falhar.
+    await this.reconciliacao.reconciliarSeVencido();
     const [
       pendenteStaging,
       reguaSemPasta,
@@ -86,6 +93,7 @@ export class DiagnosticoService {
       driveVtSemCasar,
       envelopesExpirados,
       arquivamentoFalhou,
+      pastaDuplicada,
       estadoScheduler,
       estadoVtColeta,
       estadoClicksign,
@@ -100,6 +108,7 @@ export class DiagnosticoService {
       this.sinalDriveVtSemCasar(),
       this.sinalEnvelopesExpirados(),
       this.sinalArquivamentoDriveFalhou(),
+      this.sinalPastaDuplicada(),
       this.scheduler.estado(),
       this.vtColetaScheduler.estado(),
       this.clicksignScheduler.estado(),
@@ -116,6 +125,7 @@ export class DiagnosticoService {
       driveVtSemCasar,
       envelopesExpirados,
       arquivamentoFalhou,
+      pastaDuplicada,
       this.sinalScheduler(parado),
     ];
 
@@ -413,6 +423,38 @@ export class DiagnosticoService {
     };
   }
 
+  /**
+   * PASTA DUPLICADA NO DRIVE (OST da duplicação). Lista as admissões em que o arquivamento achou
+   * mais de uma pasta com o nome do prontuário e teve de escolher uma.
+   *
+   * A escolha não trava nada: o sistema liga na pasta MAIS COMPLETA e segue. Este sinal existe
+   * porque o que sobrou precisa de mão humana: o módulo do Drive não apaga (§A.6), então a remoção
+   * (ou a consolidação, quando as duas têm documento) é do diretor. Sai da lista sozinho quando ele
+   * apaga a pasta extra e o próximo arquivamento não encontra mais duplicata.
+   */
+  private async sinalPastaDuplicada(): Promise<Sinal> {
+    const rows = (await this.db.execute(sql`
+      SELECT a.id AS admissao_id, c.nome AS candidato, a.drive_duplicatas
+        FROM admissoes a
+        JOIN candidatos c ON c.cpf = a.candidato_cpf
+       WHERE a.drive_duplicatas IS NOT NULL AND a.drive_duplicatas <> ''
+       ORDER BY a.atualizado_em DESC
+    `)) as unknown as Array<LinhaAfetada & { drive_duplicatas: string }>;
+    return {
+      chave: "pasta-duplicada",
+      rotulo: "Pasta duplicada no Drive",
+      total: rows.length,
+      itens: rows.map((r) => {
+        const ids = r.drive_duplicatas.split(",").filter(Boolean);
+        return {
+          admissaoId: r.admissao_id,
+          candidato: r.candidato,
+          detalhe: `${ids.length} pasta(s) extra(s) para apagar: ${ids.join(", ")}`,
+        };
+      }),
+    };
+  }
+
   // ── Bloco 1c: AGUARDANDO_AUDITORIA há mais que o limiar (6h) ────────────────
   private async sinalParadoAlemLimiar(): Promise<Sinal> {
     const horasLimiar = LIMIAR_AUDITORIA_PARADA_MS / 3_600_000;
@@ -483,6 +525,24 @@ export class DiagnosticoService {
         candidato: r.candidato,
         detalhe: `cliente ${r.cod_cliente} (Fopag) sem pasta-pai mapeada`,
       });
+    }
+    // VÍNCULO FOPAG SEM PASTA (OST Onda 3, item 7, Bloco 4). O bloco acima só enxerga a lacuna
+    // quando JÁ existe admissão viva, ou seja, quando o problema já está atrapalhando alguém. Com o
+    // vínculo, o cadastro do contrato Fopag acontece ANTES da primeira admissão, e é aí que o
+    // diretor quer ser avisado: acende no Diagnóstico e não bloqueia o cadastro (decisão do diretor).
+    const vinculosFopag = (await this.db.execute(sql`
+      SELECT v.cod_cliente, cli.razao_social
+      FROM cliente_vinculos v
+      JOIN clientes cli ON cli.cod_cliente = v.cod_cliente
+      WHERE v.tipo_servico = 'FOPAG' AND v.ativo = true
+    `)) as unknown as Array<{ cod_cliente: string; razao_social: string }>;
+    const jaListados = new Set(itens.map((i) => i.detalhe));
+    for (const v of vinculosFopag) {
+      if (await this.drivePastaPai.fopagTemPastaPai(v.cod_cliente)) continue;
+      const detalhe = `vínculo Fopag do cliente ${v.cod_cliente} (${v.razao_social}) sem pasta-pai mapeada`;
+      if (jaListados.has(detalhe)) continue;
+      // Sem `admissaoId`: o alerta é do CADASTRO, não de uma admissão. §A.6: só código e razão social.
+      itens.push({ candidato: v.razao_social, detalhe });
     }
     return { chave: "fopag-sem-pasta", rotulo: "Cliente Fopag sem pasta-pai no Drive", total: itens.length, itens };
   }

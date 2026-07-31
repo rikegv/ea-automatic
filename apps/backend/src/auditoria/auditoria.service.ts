@@ -24,7 +24,9 @@ import {
   MOTIVO_FALHA_IA,
 } from "../domain/falha-auditoria";
 import { triarConjunto } from "./conteudo-documento";
-import { montarNomePasta, resolveSubpasta } from "../ai/drive-routing";
+import { idDaPastaUrl, montarNomePasta, resolveSubpasta } from "../ai/drive-routing";
+import { filtrarPorSexo } from "../domain/documentos-por-sexo";
+import { TravaPorChave } from "../domain/trava-por-chave";
 import { DrivePastaPaiService } from "../ai/drive-pasta-pai.service";
 import { recomputeFarolGlobal } from "../admissoes/farol";
 import { calcSinalizadorPreenchimento } from "../domain/admissao";
@@ -42,6 +44,7 @@ import {
   motivoFalhaEnvioDrive,
   motivoPandapeSemTipos,
   MOTIVO_DRIVE,
+  motivoEnvioParcial,
   tiposFaltantesNoArquivamento,
 } from "../domain/drive-arquivamento";
 
@@ -92,6 +95,8 @@ interface ResultadoArquivamento {
 @Injectable()
 export class AuditoriaService {
   private readonly logger = new Logger("AuditoriaService");
+  /** Serializa o arquivamento por admissão (OST da duplicação, item 4). Ver `TravaPorChave`. */
+  private readonly travaArquivamento = new TravaPorChave();
 
   constructor(
     @Inject(DRIZZLE) private readonly db: Database,
@@ -115,6 +120,9 @@ export class AuditoriaService {
         driveAsoUrl: admissoes.driveAsoUrl,
         candidatoNome: candidatos.nome,
         candidatoCpf: candidatos.cpf,
+        // Sexo do candidato: condiciona a exigência do Reservista. O arquivamento passou a precisar
+        // dele pelo mesmo motivo que a régua (OST do seletor de sexo), ver `tiposExigidosPorSexo`.
+        candidatoSexo: candidatos.sexo,
         clienteOperacao: clientes.nomeOperacao,
       })
       .from(admissoes)
@@ -675,10 +683,14 @@ export class AuditoriaService {
       nomeFinal: `${nomeTipo}_${adm.candidatoNome.toUpperCase()}`,
       subpasta: resolveSubpasta(codigoTipo),
     };
+    // ÂNCORA também aqui: o ASO vai para a MESMA pasta do prontuário, então usar o link já gravado
+    // impede que o arquivamento do ASO abra uma segunda pasta quando roda junto com o dos documentos.
+    const ancora = idDaPastaUrl(adm.drivePastaUrl) ?? idDaPastaUrl(adm.driveAsoUrl);
     const { pastaUrl } = await this.ai.arquivarDrive({
       parentFolderId: pastaPaiId,
       pastaNome: montarNomePasta(adm.candidatoNome, adm.clienteOperacao),
       arquivos: [arquivo],
+      ...(ancora ? { pastaId: ancora } : {}),
     });
     await this.db
       .update(admissoes)
@@ -705,6 +717,18 @@ export class AuditoriaService {
   private async arquivarNoDrive(
     adm: Awaited<ReturnType<AuditoriaService["carregarAdmissao"]>>,
   ): Promise<ResultadoArquivamento> {
+    // TRAVA POR ADMISSÃO (OST da duplicação, item 4): duas execuções simultâneas da MESMA admissão
+    // eram a causa provada das pastas duplicadas. A segunda espera a primeira e, quando chega a vez
+    // dela, o link já está gravado e vira âncora. A releitura da admissão dentro da trava é o que
+    // torna isso verdade: sem ela, a segunda ainda usaria o `adm` carregado ANTES da espera.
+    return this.travaArquivamento.executar(adm.id, async () =>
+      this.arquivarNoDriveSemTrava(await this.carregarAdmissao(adm.id)),
+    );
+  }
+
+  private async arquivarNoDriveSemTrava(
+    adm: Awaited<ReturnType<AuditoriaService["carregarAdmissao"]>>,
+  ): Promise<ResultadoArquivamento> {
     const pastaPaiId = await this.drivePastaPai.resolver(adm.tipoContrato, adm.codCliente);
     if (!pastaPaiId) {
       this.logger.warn(
@@ -719,13 +743,12 @@ export class AuditoriaService {
     const motivoIncompleto = await this.completarStagingParaArquivamento(adm);
 
     const arquivosStaging = await this.staging.listar(adm.id);
-    if (arquivosStaging.length === 0) {
-      // Nada a subir: NÃO se cria prontuário vazio. O motivo já foi apurado acima (ou é a ausência
-      // de origem Pandapé com a staging expirada), então o sinal acende e alguém age.
-      const motivo = motivoIncompleto ?? MOTIVO_DRIVE.SEM_ARQUIVO_SEM_PANDAPE;
-      await this.registrarFalhaDrive(adm.id, motivo);
-      return { motivo };
-    }
+    // RÉGUA FECHADA = PRONTUÁRIO EXISTE, SEMPRE (decisão do diretor). Antes, staging vazia fazia o
+    // método voltar sem criar nada: a admissão ficava com a régua completa e SEM pasta no Drive, e
+    // isso é exatamente "documento ausente impedindo a criação da pasta", que a regra proíbe. Quem
+    // fechou a régua fez isso conscientemente. A pasta nasce com o que existe (às vezes nada) e o
+    // motivo continua gravado, dizendo que o prontuário está incompleto.
+    const semArquivos = arquivosStaging.length === 0;
 
     // Código → nome do tipo (para o nome final do arquivo) — sem PII.
     const tipos = await this.db
@@ -746,27 +769,47 @@ export class AuditoriaService {
       parentFolderId: pastaPaiId,
       pastaNome: montarNomePasta(adm.candidatoNome, adm.clienteOperacao),
       arquivos,
+      // ÂNCORA (OST da duplicação): já tendo link, o Drive vai DIRETO nesta pasta e não procura por
+      // nome. É o que fecha a corrida na raiz, porque quem não procura não cria uma segunda pasta.
+      ...(idDaPastaUrl(adm.drivePastaUrl) ? { pastaId: idDaPastaUrl(adm.drivePastaUrl)! } : {}),
     });
     const { pastaUrl } = resultado;
 
-    // Concluiu: grava a URL e LIMPA a falha anterior. Quando o prontuário subiu mas ficou incompleto
-    // (o Pandapé não devolveu algum tipo), a URL é gravada do mesmo jeito, porque perder o que EXISTE
-    // seria pior, e o motivo PERMANECE gravado para o sinal continuar aceso até alguém resolver.
+    // O QUE FICA GRAVADO COMO AVISO, em ordem de importância. Nenhum deles impede a URL de ser
+    // gravada: a pasta existe, e perder o link de uma pasta que existe foi a origem de todos os
+    // casos que voltaram para a fila à toa.
+    const parcial = (resultado.falhas ?? 0) > 0;
+    const aviso = parcial
+      ? motivoEnvioParcial(resultado.falhas!, resultado.motivoFalhas ?? [])
+      : // O motivo apurado antes (Pandapé sem o tipo, 429, sem origem) é mais informativo que o
+        // texto genérico, então ele vence; o genérico cobre só o caso de não haver motivo nenhum.
+        (motivoIncompleto ?? (semArquivos ? MOTIVO_DRIVE.PASTA_CRIADA_SEM_ARQUIVO : undefined));
+
+    // Grava a URL e o aviso (ou LIMPA o aviso anterior, quando tudo concluiu).
     await this.db
       .update(admissoes)
       .set({
         drivePastaUrl: pastaUrl,
-        driveFalhaMotivo: motivoIncompleto ? limitar(motivoIncompleto) : null,
-        driveFalhaEm: motivoIncompleto ? new Date() : null,
+        driveFalhaMotivo: aviso ? limitar(aviso) : null,
+        driveFalhaEm: aviso ? new Date() : null,
+        // DUPLICATAS (OST da duplicação): o arquivamento nunca trava por ambiguidade, escolhe a
+        // pasta mais completa e deixa aqui as outras, para o diretor consolidar e apagar à mão.
+        // Só grava quando o Drive devolveu alguma: um arquivamento limpo não apaga aviso anterior.
+        ...(resultado.duplicatas?.length
+          ? { driveDuplicatas: resultado.duplicatas.join(",") }
+          : {}),
         atualizadoEm: new Date(),
       })
       .where(eq(admissoes.id, adm.id));
-    await this.staging.removerAdmissao(adm.id);
+    // A staging só é expurgada quando TUDO subiu: com falha parcial, o que não foi é justamente o
+    // que a próxima tentativa precisa reenviar. Expurgar aqui perderia o arquivo de vez.
+    if (!parcial) await this.staging.removerAdmissao(adm.id);
     // §A.6: contagens e id de admissão, nunca nome de arquivo nem de pessoa. `ignorados` é a medida
     // direta da duplicação EVITADA: a staging guarda uma cópia por auditoria do mesmo documento.
     this.logger.log(
       `Régua fechada: documentos arquivados no Drive (admissão ${adm.id}). ` +
         `enviados=${resultado.arquivados}, ignorados por já existirem=${resultado.ignorados ?? 0}, ` +
+        `falhas=${resultado.falhas ?? 0}, ` +
         `pasta reutilizada=${resultado.pastaJaExistia ? "sim" : "não"}.`,
     );
 
@@ -776,7 +819,8 @@ export class AuditoriaService {
         ...(resultado.pastaJaExistia ? { pastaJaExistia: true } : {}),
         ...(resultado.ignorados ? { ignorados: resultado.ignorados } : {}),
       },
-      ...(motivoIncompleto ? { motivo: motivoIncompleto } : {}),
+      // O aviso sobe à tela: prontuário criado, mas incompleto (parcial, sem arquivo ou faltando tipo).
+      ...(aviso ? { motivo: aviso } : {}),
     };
   }
 
@@ -807,29 +851,35 @@ export class AuditoriaService {
     adm: Awaited<ReturnType<AuditoriaService["carregarAdmissao"]>>,
   ): Promise<string | undefined> {
     // Tipos ENTREGUES da admissão (obrigatórios E facultativos). Só código de tipo, sem PII.
-    const entregues = (
-      await this.db
-        .select({ codigo: tiposDocumento.codigo })
-        .from(documentosAdmissao)
-        .innerJoin(tiposDocumento, eq(tiposDocumento.id, documentosAdmissao.tipoDocumentoId))
-        .where(
-          and(
-            eq(documentosAdmissao.admissaoId, adm.id),
-            eq(documentosAdmissao.estado, "ENTREGUE"),
-          ),
-        )
-    ).map((l) => l.codigo);
-    if (entregues.length === 0) return undefined;
+    // `validadoEm` vem junto: documento validado à MÃO é aceito SEM arquivo (ver `aceitosSemArquivo`).
+    const linhasEntregues = await this.db
+      .select({ codigo: tiposDocumento.codigo, validadoEm: documentosAdmissao.validadoEm })
+      .from(documentosAdmissao)
+      .innerJoin(tiposDocumento, eq(tiposDocumento.id, documentosAdmissao.tipoDocumentoId))
+      .where(
+        and(eq(documentosAdmissao.admissaoId, adm.id), eq(documentosAdmissao.estado, "ENTREGUE")),
+      );
+    const entregues = linhasEntregues.map((l) => l.codigo);
+    const validadosAMao = linhasEntregues.filter((l) => l.validadoEm).map((l) => l.codigo);
+    // MESMA CONDIÇÃO DE SEXO DA RÉGUA (OST do seletor de sexo, item 3). Sem isto, a linha do
+    // Reservista marcada ENTREGUE à mão continuava sendo cobrada aqui mesmo depois de o sexo ser
+    // corrigido para feminino: a régua parava de exigir, o arquivamento não, e o prontuário seguia
+    // travado. A linha do documento NÃO é apagada, só deixa de ser exigida (decisão do diretor).
+    const entreguesQueSeAplicam = filtrarPorSexo(entregues, adm.candidatoSexo);
+    if (entreguesQueSeAplicam.length === 0) return undefined;
 
     // O nome do arquivo na staging usa o código SANITIZADO; a comparação tem de usar a mesma régua.
     const naStagingCru = new Set((await this.staging.listar(adm.id)).map((a) => a.codigoTipo));
-    const naStaging = entregues.filter((c) => naStagingCru.has(sanitizarCodigo(c)));
+    const naStaging = entreguesQueSeAplicam.filter((c) => naStagingCru.has(sanitizarCodigo(c)));
 
     const faltantes = tiposFaltantesNoArquivamento({
-      entregues,
+      entregues: entreguesQueSeAplicam,
       naStaging,
       // O ASO sobe sozinho ao ser validado e sai da staging logo depois: já está no prontuário.
       jaNoDrive: precisaArquivarDrive(adm.driveAsoUrl) ? [] : ["ASO"],
+      // Validado à mão vale sem arquivo (decisão do diretor): não se pede ao Pandapé um binário que
+      // a pessoa já decidiu dispensar, e o prontuário fecha sem ele em vez de travar para sempre.
+      aceitosSemArquivo: validadosAMao,
     });
     if (faltantes.length === 0) return undefined; // staging completa: o Pandapé nem é chamado.
 

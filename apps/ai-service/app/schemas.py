@@ -57,6 +57,11 @@ class ArquivarRequest(_CamelModel):
     parent_folder_id: str
     pasta_nome: str
     arquivos: list[ArquivoIn] = Field(default_factory=list)
+    # ÂNCORA (OST da duplicação): id da pasta que a admissão JÁ tem gravada. Quando vem, o
+    # arquivamento vai direto nela e NÃO procura por nome, que é o que matava a corrida na raiz
+    # (duas execuções simultâneas procuravam, não achavam e criavam duas pastas). Só se a pasta
+    # tiver sumido do Drive o fluxo cai de volta na busca por nome.
+    pasta_id: str | None = None
 
 
 class ArquivamentoDrive(_CamelModel):
@@ -69,6 +74,15 @@ class ArquivamentoDrive(_CamelModel):
     ignorados: int = 0
     # A pasta do prontuário já existia e foi REUTILIZADA, em vez de criada agora. Sobe até a tela.
     pasta_ja_existia: bool = False
+    # DUPLICATAS encontradas (OST da duplicação): as outras pastas do mesmo prontuário que NÃO foram
+    # escolhidas. O módulo não apaga nada (§A.6), então elas sobem para o EA avisar o diretor, que
+    # consolida e remove à mão. Lista de ids do Drive, que não são PII.
+    duplicatas: list[str] = Field(default_factory=list)
+    # Arquivos que NÃO subiram. Um arquivo que falha não derruba mais o lote: a pasta e o que subiu
+    # são preservados, o link volta ao EA e a próxima tentativa completa o resto. Zero é o normal.
+    falhas: int = 0
+    # Motivos distintos das falhas (ex.: "TimeoutError"), para o EA gravar um aviso legível. Sem PII.
+    motivo_falhas: list[str] = Field(default_factory=list)
 
 
 # ── Coleta de VT (§A.17): bucket do GCS onde o app externo (Firebase) grava os PDFs ──────────
@@ -107,6 +121,23 @@ class BaixarColetaVtResponse(_CamelModel):
 # ── Validação de pasta-pai do Drive (read-only, antes de o EA cadastrar o id) ─
 class ValidarPastaRequest(_CamelModel):
     folder_id: str
+
+
+class LocalizarPastaRequest(_CamelModel):
+    """Procura a pasta do prontuário SEM criar nada (reconciliação automática do Diagnóstico)."""
+
+    parent_folder_id: str
+    pasta_nome: str
+
+
+class LocalizarPastaResponse(_CamelModel):
+    """A pasta existe? Devolve a MAIS COMPLETA e as outras, com a mesma régua do arquivamento."""
+
+    encontrada: bool
+    pasta_id: str | None = None
+    pasta_url: str | None = None
+    arquivos: int = 0
+    duplicatas: list[str] = Field(default_factory=list)
 
 
 class ValidarPastaResponse(_CamelModel):

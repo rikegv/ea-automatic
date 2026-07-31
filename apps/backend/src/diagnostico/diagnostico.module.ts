@@ -8,6 +8,7 @@ import { ReauditoriaModule } from "../reauditoria/reauditoria.module";
 import { VtColetaModule } from "../vt-coleta/vt-coleta.module";
 import { DiagnosticoController } from "./diagnostico.controller";
 import { DiagnosticoService } from "./diagnostico.service";
+import { ReconciliacaoDriveService } from "./reconciliacao-drive.service";
 
 /**
  * Tela de diagnóstico (OST). Importa os módulos cujos serviços a tela reusa: Auditoria (pós-veredito
@@ -27,6 +28,6 @@ import { DiagnosticoService } from "./diagnostico.service";
     VtColetaModule,
   ],
   controllers: [DiagnosticoController],
-  providers: [DiagnosticoService],
+  providers: [DiagnosticoService, ReconciliacaoDriveService],
 })
 export class DiagnosticoModule {}

@@ -228,8 +228,13 @@ def test_falha_ao_ler_staging_vira_502_nomeado(monkeypatch):
     assert "1 arquivo(s) foram enviados" in detalhe, "diz quantos já subiram"
 
 
-def test_falha_ao_ler_link_da_pasta_vira_502_nomeado(monkeypatch):
-    """O último passo também estava sem tratamento: falhar nele perdia um envio bem-sucedido."""
+def test_falha_ao_ler_link_da_pasta_NAO_perde_o_arquivamento(monkeypatch):
+    """Perder o link de uma pasta que EXISTE era o que devolvia a admissão para a fila à toa.
+
+    Antes isto virava 502: o envio dava certo, o backend não recebia a URL, não gravava nada, e a
+    admissão voltava a aparecer como "sem pasta" tendo pasta. Agora o id é conhecido, então o link
+    canônico é montado e o arquivamento se sustenta.
+    """
     fake = DriveFake()
     _montar(monkeypatch, fake, {"/s/1": PDF_A})
 
@@ -242,8 +247,10 @@ def test_falha_ao_ler_link_da_pasta_vira_502_nomeado(monkeypatch):
         json=_req([{"stagingPath": "/s/1", "nomeFinal": "RG_Fulano", "subpasta": "DOCUMENTOS_PESSOAIS"}]),
         headers=HEADERS,
     )
-    assert resp.status_code == 502
-    assert "1 arquivo(s) foram enviados" in resp.json()["detail"]
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["arquivados"] == 1
+    assert "/drive/folders/" in body["pastaUrl"], "monta o link a partir do id da pasta"
 
 
 def test_pasta_nova_recebe_marca_de_origem_na_descricao(monkeypatch):

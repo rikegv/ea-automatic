@@ -76,7 +76,7 @@ function makeDb(opts: { entregues: string[]; idPrecollaborator?: string }) {
         : keys.includes("estado") && keys.length === 1
           ? [{ estado: "ENTREGUE" }]
           : // Tipos ENTREGUES da admissão (insumo do re-baixar).
-            keys.length === 1 && keys.includes("codigo")
+            keys.includes("codigo") && keys.includes("validadoEm")
             ? opts.entregues.map((codigo) => ({ codigo }))
             : // id_precollaborator da integração Pandapé.
               keys.length === 1 && keys.includes("id")
@@ -331,8 +331,11 @@ describe("FIM DO SILÊNCIO: todo desfecho que não conclui grava o motivo real",
 
     // Uma tentativa, nenhuma retentativa: a cota é compartilhada com o webhook da esteira (§A.5).
     expect(ctx.pandapeArquivos.baixarArquivosDosTipos).toHaveBeenCalledTimes(1);
-    // Nada subiu (não se cria prontuário vazio) e o motivo REAL ficou gravado.
-    expect(ctx.ai.arquivarDrive).not.toHaveBeenCalled();
+    // REGRA NOVA (decisão do diretor): régua fechada = prontuário existe, SEMPRE. Mesmo sem nenhum
+    // arquivo para enviar, a pasta é criada, porque documento ausente não pode impedir a criação da
+    // pasta. O motivo REAL continua gravado, dizendo que o prontuário está incompleto.
+    expect(ctx.ai.arquivarDrive).toHaveBeenCalledTimes(1);
+    expect(ctx.ai.arquivarDrive.mock.calls[0][0].arquivos).toEqual([]);
     expect(emAdmissoes(ctx.updates)).toContainEqual(
       expect.objectContaining({
         valores: expect.objectContaining({ driveFalhaMotivo: MOTIVO_DRIVE.QUOTA_PANDAPE }),

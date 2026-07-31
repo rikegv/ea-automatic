@@ -17,6 +17,7 @@ permissions(). Nada disso existe aqui e qualquer adição deve ser vetada na rev
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 from datetime import UTC, datetime
 from functools import lru_cache
@@ -30,6 +31,8 @@ from app.config import get_settings
 from app.staging import escrever_staging
 
 _DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
+logger = logging.getLogger("ea.ai.drive")
+
 _FOLDER_MIME = "application/vnd.google-apps.folder"
 
 # Espelha DRIVE_SUBPASTA → nome de exibição no Drive (acentuado, como o RH espera).
@@ -163,6 +166,153 @@ def buscar_ou_criar_pasta(service, nome: str, parent_id: str) -> tuple[str, bool
     return criada["id"], False
 
 
+def contar_arquivos(service, folder_id: str) -> int:
+    """Quantos ARQUIVOS a pasta tem, contando dentro das subpastas. Sem PII (só ids e contagem).
+
+    É a medida de "pasta mais completa" (OST da duplicação): o prontuário guarda os documentos DENTRO
+    das subpastas (DOCUMENTOS PESSOAIS, ASO, ...), então contar só os filhos diretos diria 1 para uma
+    pasta com quinze documentos e 1 para outra com um. A recursão tem profundidade 2 no acervo real.
+    """
+    total = 0
+    pilha = [folder_id]
+    visitados: set[str] = set()
+    while pilha:
+        atual = pilha.pop()
+        if atual in visitados:
+            continue
+        visitados.add(atual)
+        token = None
+        while True:
+            res = (
+                service.files()
+                .list(
+                    q=f"'{_escapar(atual)}' in parents and trashed = false",
+                    fields="nextPageToken, files(id,mimeType)",
+                    spaces="drive",
+                    supportsAllDrives=True,
+                    includeItemsFromAllDrives=True,
+                    pageSize=1000,
+                    pageToken=token,
+                )
+                .execute()
+            )
+            for f in res.get("files", []):
+                if f.get("mimeType") == _FOLDER_MIME:
+                    pilha.append(f["id"])
+                else:
+                    total += 1
+            token = res.get("nextPageToken")
+            if not token:
+                break
+    return total
+
+
+def variantes_do_nome(nome: str) -> list[str]:
+    """O mesmo nome nas duas convenções de separador usadas no acervo.
+
+    O EA monta "NOME — Operação" (travessão). O acervo do processo ANTIGO usa "NOME - Operação"
+    (hífen). São strings diferentes, então a busca por nome NUNCA casava a pasta legada da mesma
+    pessoa e o EA criava uma segunda: é uma das duas causas de duplicação provadas no levantamento
+    (a outra é a corrida). Procurar pelas duas formas fecha esse caminho. A busca do Drive é
+    insensível à CAIXA, então não é preciso variar maiúscula/minúscula.
+    """
+    formas = {nome}
+    if "—" in nome:
+        formas.add(nome.replace("—", "-"))
+    if "-" in nome and "—" not in nome:
+        formas.add(nome.replace("-", "—"))
+    return sorted(formas)
+
+
+def abrir_pasta_por_id(service, folder_id: str) -> dict | None:
+    """A pasta existe, é pasta e não está na lixeira? Devolve os metadados, ou `None`.
+
+    É a validação da ÂNCORA (decisão do diretor): quando a admissão já tem o link gravado, o
+    arquivamento vai DIRETO nesse id, sem procurar por nome. Só se a pasta tiver sumido (apagada à
+    mão, movida para a lixeira) o fluxo volta a procurar, em vez de estourar.
+    """
+    try:
+        meta = (
+            service.files()
+            .get(fileId=folder_id, fields="id,mimeType,trashed", supportsAllDrives=True)
+            .execute()
+        )
+    except HttpError:
+        return None
+    if meta.get("trashed") or meta.get("mimeType") != _FOLDER_MIME:
+        return None
+    return meta
+
+
+def resolver_pasta_do_funcionario(
+    service, nome: str, parent_id: str
+) -> tuple[str, bool, list[dict]]:
+    """Pasta do prontuário: devolve (id escolhido, já existia, DUPLICATAS a sinalizar).
+
+    ESTA É A REGRA DA OST DA DUPLICAÇÃO, e ela substitui o desempate anterior (vencia a pasta MAIS
+    ANTIGA) por outro, que o diretor corrigiu com um caso real: a mais antiga pode ser de uma admissão
+    ANTERIOR da mesma pessoa (Rodrigo Macedo tem pasta de 2024 e de 2025), e gravar nela salvaria no
+    lugar errado. **Vence a pasta com MAIS ARQUIVOS**, que é a desta admissão; empate resolve pela
+    mais antiga, para continuar determinístico.
+
+    NUNCA TRAVA por ambiguidade (regra 3 da OST): escolhe a melhor e devolve as outras em
+    `duplicatas`, para o sistema avisar o diretor. §A.6: NADA é apagado aqui, a remoção é manual.
+
+    A busca cobre as duas convenções de separador (ver `variantes_do_nome`), então a pasta do
+    processo antigo entra na disputa em vez de virar uma duplicata nova.
+    """
+    candidatas: dict[str, dict] = {}
+    for forma in variantes_do_nome(nome):
+        for p in _pastas_com_nome(service, forma, parent_id):
+            candidatas[p["id"]] = p
+
+    if not candidatas:
+        criada = (
+            service.files()
+            .create(
+                body={
+                    "name": nome,
+                    "mimeType": _FOLDER_MIME,
+                    "parents": [parent_id],
+                    # Marca de origem: só na CRIAÇÃO (ver `descricao_de_criacao`).
+                    "description": descricao_de_criacao(),
+                },
+                fields="id",
+                supportsAllDrives=True,
+            )
+            .execute()
+        )
+        # Releitura pós-criação: se outro processo criou a mesma pasta no meio do caminho, os dois
+        # convergem para uma só (a mais antiga, porque recém-criadas estão as duas vazias).
+        apos: dict[str, dict] = {}
+        for forma in variantes_do_nome(nome):
+            for p in _pastas_com_nome(service, forma, parent_id):
+                apos[p["id"]] = p
+        if len(apos) > 1:
+            ordenadas = sorted(apos.values(), key=lambda p: p.get("createdTime", ""))
+            return ordenadas[0]["id"], False, ordenadas[1:]
+        return criada["id"], False, []
+
+    if len(candidatas) == 1:
+        return next(iter(candidatas)), True, []
+
+    # Mais de uma: conta os arquivos de cada e escolhe a mais completa.
+    for p in candidatas.values():
+        p["arquivos"] = contar_arquivos(service, p["id"])
+    ordenadas = sorted(
+        candidatas.values(), key=lambda p: (-p.get("arquivos", 0), p.get("createdTime", ""))
+    )
+    escolhida, extras = ordenadas[0], ordenadas[1:]
+    logger.warning(
+        "Prontuário com pasta DUPLICADA no Drive: %d candidatas sob o mesmo pai. Escolhida id=%s "
+        "(%d arquivo[s]); as outras vão sinalizadas para consolidação manual (nada foi apagado).",
+        len(ordenadas),
+        escolhida["id"],
+        escolhida.get("arquivos", 0),
+    )
+    return escolhida["id"], True, extras
+
+
 def md5_do_conteudo(conteudo: bytes) -> str:
     """MD5 do binário local, no MESMO formato do `md5Checksum` que o Drive devolve (hex minúsculo).
 
@@ -218,14 +368,43 @@ def _mime_de(nome: str) -> str:
     return "application/octet-stream"
 
 
+# Acima disto o envio vai em PEDAÇOS, em vez de um POST único.
+_LIMITE_RESUMABLE = 4 * 1024 * 1024
+_CHUNK = 4 * 1024 * 1024
+
+
 def subir_arquivo(service, *, conteudo: bytes, nome_final: str, parent_id: str) -> None:
-    media = MediaInMemoryUpload(conteudo, mimetype=_mime_de(nome_final), resumable=False)
-    service.files().create(
+    """Sobe UM arquivo. Arquivo grande vai em pedaços (resumable), e é isso que fecha o timeout.
+
+    O DEFEITO QUE ISTO CORRIGE. O envio era sempre um POST ÚNICO (`resumable=False`): o arquivo
+    inteiro numa requisição só. Com arquivo grande, a leitura da resposta estourava o timeout do
+    socket e vinha `TimeoutError`, que **não é** `HttpError` e por isso escapava de todo o tratamento
+    por arquivo do router, derrubando o lote inteiro. Aconteceu com quatro prontuários reais (Thais em
+    28/07, João em 29/07, Camila e Douglas em 30/07): a pasta ficava criada, parte dos arquivos subia,
+    e o link nunca era gravado.
+
+    Em pedaços, cada requisição carrega no máximo um chunk, então o tempo de cada ida ao Google é
+    limitado e previsível. Arquivo pequeno segue no caminho simples, que é mais rápido.
+    """
+    grande = len(conteudo) > _LIMITE_RESUMABLE
+    media = MediaInMemoryUpload(
+        conteudo,
+        mimetype=_mime_de(nome_final),
+        resumable=grande,
+        **({"chunksize": _CHUNK} if grande else {}),
+    )
+    requisicao = service.files().create(
         body={"name": nome_final, "parents": [parent_id]},
         media_body=media,
         fields="id",
         supportsAllDrives=True,
-    ).execute()
+    )
+    if not grande:
+        requisicao.execute()
+        return
+    resposta = None
+    while resposta is None:
+        _progresso, resposta = requisicao.next_chunk()
 
 
 def readiness_drive() -> dict:

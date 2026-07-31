@@ -2,7 +2,7 @@ import { Inject, Injectable } from "@nestjs/common";
 import { and, asc, eq } from "drizzle-orm";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
-import { drivePastaPai } from "../db/schema";
+import { clienteVinculos, drivePastaPai } from "../db/schema";
 import { fopagTemPastaPai as fopagFallback, resolvePastaPaiId as resolveFallback } from "./drive-routing";
 
 /**
@@ -81,8 +81,22 @@ export class DrivePastaPaiService {
     if (!t) return null;
     if (t === "fopag") {
       const cod = (codCliente ?? "").trim();
+      // 1) Cadastro POR CLIENTE vence sempre (decisão do diretor): é a exceção explícita, e existe
+      // caso real que depende dela (o RAFFOUL 25, empresa 44, gravado na pasta do grupo RAFUL).
       const daTabela = await this.buscarNaTabela("FOPAG", cod);
       if (daTabela) return daTabela;
+      // 2) EMPRESA DO VÍNCULO. É a correção de raiz do retrabalho: a pasta do Fopag no Drive é
+      // organizada por EMPRESA do grupo, não por cliente, e o sistema perguntava por cliente. Cada
+      // cliente novo da mesma empresa obrigava a recadastrar a MESMA pasta, e foi assim que os
+      // cadastros por cliente nasceram, todos apontando para a pasta da empresa correspondente.
+      const empresa = await this.empresaDoFopag(cod);
+      if (empresa) {
+        const porEmpresa = await this.buscarNaTabela("FOPAG", empresa);
+        if (porEmpresa) return porEmpresa;
+        // O mapa em código também é chaveado por empresa (16, 19, 27, ...), então vale tentar.
+        const doFallback = resolveFallback(tipoContrato, empresa, {});
+        if (doFallback) return doFallback;
+      }
     } else {
       const daTabela = await this.buscarNaTabela("CONTRATO", t);
       if (daTabela) return daTabela;
@@ -98,7 +112,39 @@ export class DrivePastaPaiService {
   async fopagTemPastaPai(codCliente: string): Promise<boolean> {
     const daTabela = await this.buscarNaTabela("FOPAG", codCliente);
     if (daTabela) return true;
-    return fopagFallback(codCliente, {});
+    if (fopagFallback(codCliente, {})) return true;
+    // MESMA régua do `resolver`: se a EMPRESA do vínculo tem pasta, o cliente TEM pasta, e o sinal
+    // do diagnóstico não pode cobrar cadastro que já existe. Sem isto, a tela seguiria pedindo
+    // mapeamento por cliente, que é exatamente o retrabalho que esta correção elimina.
+    const empresa = await this.empresaDoFopag(codCliente);
+    if (!empresa) return false;
+    if (await this.buscarNaTabela("FOPAG", empresa)) return true;
+    return fopagFallback(empresa, {});
+  }
+
+  /**
+   * Código da EMPRESA do grupo no vínculo Fopag ATIVO do cliente. `null` quando o cliente não tem
+   * vínculo Fopag cadastrado (aí não há por onde herdar e o mapeamento é mesmo necessário).
+   *
+   * Um cliente tem no máximo um vínculo por tipo de serviço (unique `uq_cliente_vinculo_tipo`), então
+   * não existe ambiguidade a resolver aqui.
+   */
+  private async empresaDoFopag(codCliente: string): Promise<string | null> {
+    const cod = (codCliente ?? "").trim();
+    if (!cod) return null;
+    const [row] = await this.db
+      .select({ empresa: clienteVinculos.empresaCodigo })
+      .from(clienteVinculos)
+      .where(
+        and(
+          eq(clienteVinculos.codCliente, cod),
+          eq(clienteVinculos.tipoServico, "FOPAG"),
+          eq(clienteVinculos.ativo, true),
+        ),
+      )
+      .limit(1);
+    const empresa = (row?.empresa ?? "").trim();
+    return empresa || null;
   }
 
   /** Lista todas as pastas-pai cadastradas (tela admin). Sem PII (§A.6). */

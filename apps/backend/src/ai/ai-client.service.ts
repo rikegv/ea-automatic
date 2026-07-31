@@ -38,6 +38,12 @@ export interface ArquivarDrivePayload {
   parentFolderId: string;
   pastaNome: string;
   arquivos: ArquivoDrive[];
+  /**
+   * ÂNCORA (OST da duplicação): id da pasta que a admissão JÁ tem gravada. Quando vem, o Drive vai
+   * direto nela e não procura por nome, que é o que impede duas execuções simultâneas de criarem
+   * duas pastas. Ausente na primeira vez, quando ainda não há link.
+   */
+  pastaId?: string;
 }
 
 export interface GerarKitPayload {
@@ -245,6 +251,51 @@ export class AiClientService {
 
   auditarDocumento(payload: AuditarDocumentoPayload): Promise<ResultadoAuditoria> {
     return this.post<ResultadoAuditoria>("/auditoria/documento", payload);
+  }
+
+  /**
+   * LOCALIZA a pasta do prontuário no Drive, SEM criar nada. Insumo da reconciliação automática:
+   * o sistema confere sozinho se o prontuário já existe e, existindo, liga a admissão e apaga a
+   * pendência. NUNCA lança: indisponibilidade vira `{ encontrada: false }`, e a reconciliação
+   * simplesmente não conclui nada naquele ciclo, sem apagar aviso nenhum por engano.
+   */
+  async localizarPastaDrive(
+    parentFolderId: string,
+    pastaNome: string,
+  ): Promise<{ encontrada: boolean; pastaUrl?: string; arquivos?: number; duplicatas?: string[] }> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 90_000);
+    try {
+      const res = await fetch(`${this.baseUrl}/drive/localizar-pasta`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Internal-Token": this.token },
+        body: JSON.stringify({ parentFolderId, pastaNome }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        this.logger.warn(`ai-service /drive/localizar-pasta respondeu HTTP ${res.status}`);
+        return { encontrada: false };
+      }
+      const body = (await res.json()) as {
+        encontrada?: boolean;
+        pastaUrl?: string;
+        arquivos?: number;
+        duplicatas?: string[];
+      };
+      return {
+        encontrada: Boolean(body.encontrada),
+        pastaUrl: body.pastaUrl,
+        arquivos: body.arquivos,
+        duplicatas: body.duplicatas,
+      };
+    } catch (err) {
+      this.logger.warn(
+        `Falha ao localizar pasta no Drive: ${err instanceof Error ? err.name : "erro"}`,
+      );
+      return { encontrada: false };
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /**

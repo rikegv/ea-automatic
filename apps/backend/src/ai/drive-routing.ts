@@ -105,3 +105,25 @@ export function resolveSubpasta(codigoTipo: string): DriveSubpasta {
 export function montarNomePasta(nomeCandidato: string, nomeOperacao: string | null): string {
   return `${nomeCandidato.toUpperCase()} — ${nomeOperacao ?? ""}`.trim();
 }
+
+/**
+ * Id da pasta a partir da URL gravada em `drive_pasta_url` (OST da duplicação). É o que transforma o
+ * link já salvo em ÂNCORA: com o id em mãos, o arquivamento vai direto na pasta e não procura por
+ * nome, então duas execuções simultâneas não conseguem mais criar duas pastas.
+ *
+ * Aceita a forma que o sistema grava (`/drive/folders/<id>`) e também um id cru colado à mão pelo
+ * diretor na ação do Diagnóstico. Devolve `null` para qualquer coisa que não seja um id plausível,
+ * porque um id inventado faria o arquivamento cair de volta na busca por nome, e é isso que se quer.
+ */
+export function idDaPastaUrl(url: string | null | undefined): string | null {
+  const s = (url ?? "").trim();
+  if (!s) return null;
+  const doLink = /\/folders\/([A-Za-z0-9_-]{10,})/.exec(s);
+  if (doLink) return doLink[1];
+  return /^[A-Za-z0-9_-]{10,}$/.test(s) ? s : null;
+}
+
+/** URL canônica da pasta do Drive a partir do id (referência, não PII). */
+export function urlDaPasta(folderId: string): string {
+  return `https://drive.google.com/drive/folders/${folderId}`;
+}

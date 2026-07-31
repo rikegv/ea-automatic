@@ -102,3 +102,78 @@ describe("seed drive_pasta_pai — importa os 14 mapeamentos sem perder nenhum",
     expect(ja?.folderId).toBe("ENVJA");
   });
 });
+
+/**
+ * FOPAG RESOLVE PELA EMPRESA DO VÍNCULO (OST de zerar as pendências do Diagnóstico).
+ *
+ * O RETRABALHO QUE ISTO ACABA. A pasta do Fopag no Drive é organizada por EMPRESA do grupo, e o
+ * sistema perguntava por CLIENTE. Cada cliente novo da mesma empresa obrigava o diretor a cadastrar
+ * de novo a MESMA pasta, e foi assim que nasceram os cadastros por cliente do acervo: todos apontando
+ * para a pasta da empresa correspondente. Agora a empresa do vínculo resolve sozinha.
+ *
+ * O CADASTRO POR CLIENTE CONTINUA VENCENDO, e não é detalhe: existe caso real que depende disso (o
+ * RAFFOUL 25, cuja empresa é a 44, gravado de propósito na pasta do grupo RAFUL, que é a da 33).
+ */
+function fakeDbComVinculo(opts: {
+  /** Pasta cadastrada para o CLIENTE (a primeira consulta do serviço). */
+  pastaDoCliente?: string;
+  /** Empresa do vínculo Fopag do cliente. */
+  empresa?: string;
+  /** Pasta cadastrada para a EMPRESA (a consulta que só acontece se o cliente não tiver). */
+  pastaDaEmpresa?: string;
+}) {
+  // O fake responde pela ORDEM das consultas, que é fixa no serviço: pasta do cliente, empresa do
+  // vínculo, pasta da empresa. Interpretar a condição do drizzle exigiria um duplo bem maior.
+  let consultasDePasta = 0;
+  return {
+    select: (proj: Record<string, unknown>) => {
+      const pedeEmpresa = Object.keys(proj ?? {}).includes("empresa");
+      return {
+        from: () => ({
+          where: () => ({
+            limit: async () => {
+              if (pedeEmpresa) return opts.empresa ? [{ empresa: opts.empresa }] : [];
+              consultasDePasta += 1;
+              const alvo = consultasDePasta === 1 ? opts.pastaDoCliente : opts.pastaDaEmpresa;
+              return alvo ? [{ folderId: alvo }] : [];
+            },
+          }),
+        }),
+      };
+    },
+  } as never;
+}
+
+describe("Fopag pela EMPRESA do vínculo", () => {
+  it("cliente SEM cadastro próprio herda a pasta da empresa dele", async () => {
+    const svc = new DrivePastaPaiService(
+      fakeDbComVinculo({ empresa: "33", pastaDaEmpresa: "PASTA_DA_EMPRESA_33" }),
+    );
+    expect(await svc.resolver("Fopag", "54928")).toBe("PASTA_DA_EMPRESA_33");
+    expect(await svc.fopagTemPastaPai("54928")).toBe(true);
+  });
+
+  it("cadastro POR CLIENTE vence a empresa (o caso RAFFOUL 25)", async () => {
+    const svc = new DrivePastaPaiService(
+      fakeDbComVinculo({
+        pastaDoCliente: "PASTA_DO_GRUPO_RAFUL",
+        empresa: "44",
+        pastaDaEmpresa: "PASTA_DA_EMPRESA_44",
+      }),
+    );
+    expect(await svc.resolver("Fopag", "56685")).toBe("PASTA_DO_GRUPO_RAFUL");
+  });
+
+  it("empresa sem pasta e cliente sem pasta segue null (não arquiva, e o sinal acende)", async () => {
+    const svc = new DrivePastaPaiService(
+      fakeDbComVinculo({ empresa: "37" }),
+    );
+    expect(await svc.resolver("Fopag", "55841")).toBeNull();
+    expect(await svc.fopagTemPastaPai("55841")).toBe(false);
+  });
+
+  it("cliente SEM vínculo Fopag não herda nada (não há de onde)", async () => {
+    const svc = new DrivePastaPaiService(fakeDbComVinculo({}));
+    expect(await svc.fopagTemPastaPai("99999")).toBe(false);
+  });
+});
