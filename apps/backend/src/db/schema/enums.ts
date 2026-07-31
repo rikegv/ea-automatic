@@ -35,6 +35,10 @@ export const tipoServicoEnum = pgEnum("tipo_servico", [
   "ESTAGIO",
   "INTERNO",
   "FOPAG",
+  // APRENDIZ (OST Onda 3, item 7): a taxonomia do vínculo tinha 5 valores e a de `tipo_contrato`
+  // tem 6 ("Jovem Aprendiz" ficava de fora). Sem ele, admissão de Jovem Aprendiz em cliente com
+  // mais de um vínculo não teria vínculo a resolver. Aditivo: nenhum vínculo existente muda.
+  "APRENDIZ",
 ]);
 
 /** Origem da admissão (Fase 5 / INT-1): MANUAL (wizard F6) ou PANDAPE (sync via webhook/pull). */

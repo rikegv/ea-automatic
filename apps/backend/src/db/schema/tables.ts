@@ -118,11 +118,20 @@ export const clienteBeneficioPadrao = pgTable(
       .references(() => clientes.codCliente, { onDelete: "cascade" }),
     beneficio: varchar("beneficio", { length: 10 }).notNull(),
     valor: text("valor").notNull(),
+    /** Vínculo (item 7): NULL = padrão do cliente todo; preenchido = padrão daquele contrato. */
+    clienteVinculoId: uuid("cliente_vinculo_id").references(() => clienteVinculos.id, {
+      onDelete: "cascade",
+    }),
     criadoEm,
     atualizadoEm,
   },
   (t) => ({
-    uq: unique("uq_cliente_beneficio_padrao").on(t.codCliente, t.beneficio),
+    uq: uniqueIndex("uq_cliente_beneficio_padrao")
+      .on(t.codCliente, t.beneficio)
+      .where(sql`${t.clienteVinculoId} is null`),
+    uqVinculo: uniqueIndex("uq_vinculo_beneficio_padrao")
+      .on(t.clienteVinculoId, t.beneficio)
+      .where(sql`${t.clienteVinculoId} is not null`),
   }),
 );
 
@@ -181,6 +190,7 @@ export const tiposDocumento = pgTable("tipos_documento", {
 export const reguaDocumental = pgTable(
   "regua_documental",
   {
+    id: uuid("id").defaultRandom().notNull(),
     codCliente: varchar("cod_cliente", { length: 40 })
       .notNull()
       .references(() => clientes.codCliente, { onDelete: "cascade" }),
@@ -191,11 +201,32 @@ export const reguaDocumental = pgTable(
       .notNull()
       .references(() => tiposDocumento.id, { onDelete: "cascade" }),
     exigencia: exigenciaEnum("exigencia").notNull(),
+    /**
+     * VÍNCULO (OST Onda 3, item 7, Caminho 2). NULL = régua do CLIENTE INTEIRO, que é como as 3.586
+     * linhas existentes ficam e por que nenhum dos 233 clientes de um vínculo só muda de
+     * comportamento. Preenchido = régua daquele vínculo (cliente + tipo de contrato), com
+     * PRECEDÊNCIA sobre a do cliente.
+     *
+     * A precedência é o que permite ao cliente de dois contratos ter checklists diferentes sem
+     * duplicar o cadastro do cliente, que era o custo do caminho descartado (trocar a PK).
+     */
+    clienteVinculoId: uuid("cliente_vinculo_id").references(() => clienteVinculos.id, {
+      onDelete: "cascade",
+    }),
     criadoEm,
     atualizadoEm,
   },
   (t) => ({
-    pk: primaryKey({ columns: [t.codCliente, t.cargoId, t.tipoDocumentoId] }),
+    // A PK composta (cod_cliente + cargo + tipo_documento) deu lugar a um id próprio: com o vínculo
+    // no jogo, o MESMO par cliente/cargo/documento existe duas vezes (uma por contrato), e a chave
+    // antiga proibia exatamente isso. A unicidade real virou os dois índices parciais abaixo.
+    pk: primaryKey({ columns: [t.id] }),
+    uqCliente: uniqueIndex("uq_regua_cliente")
+      .on(t.codCliente, t.cargoId, t.tipoDocumentoId)
+      .where(sql`${t.clienteVinculoId} is null`),
+    uqVinculo: uniqueIndex("uq_regua_vinculo")
+      .on(t.clienteVinculoId, t.cargoId, t.tipoDocumentoId)
+      .where(sql`${t.clienteVinculoId} is not null`),
   }),
 );
 
@@ -291,9 +322,23 @@ export const clientePendenciaConfig = pgTable(
       .references(() => clientes.codCliente, { onDelete: "cascade" }),
     chave: varchar("chave", { length: 40 }).notNull(),
     obrigatorio: boolean("obrigatorio").notNull().default(true),
+    /** Vínculo (item 7): NULL = vale para o cliente todo; preenchido = só daquele contrato. */
+    clienteVinculoId: uuid("cliente_vinculo_id").references(() => clienteVinculos.id, {
+      onDelete: "cascade",
+    }),
     atualizadoEm,
   },
-  (t) => ({ uniqClienteChave: unique("uq_cliente_pendencia").on(t.codCliente, t.chave) }),
+  (t) => ({
+    // Mesmo desenho da régua: uma linha por (cliente + chave) no nível do cliente, e uma por
+    // (vínculo + chave) no nível do contrato. O `unique` simples não expressa isso, então virou
+    // dois índices parciais.
+    uniqClienteChave: uniqueIndex("uq_cliente_pendencia")
+      .on(t.codCliente, t.chave)
+      .where(sql`${t.clienteVinculoId} is null`),
+    uniqVinculoChave: uniqueIndex("uq_vinculo_pendencia")
+      .on(t.clienteVinculoId, t.chave)
+      .where(sql`${t.clienteVinculoId} is not null`),
+  }),
 );
 
 export const escalasCatalogo = pgTable("escalas_catalogo", {
@@ -414,6 +459,12 @@ export const admissoes = pgTable(
     // §A.6: texto de motivo e código de tipo de documento, nunca nome, CPF, arquivo ou URL externa.
     driveFalhaMotivo: text("drive_falha_motivo"),
     driveFalhaEm: timestamp("drive_falha_em", { withTimezone: true }),
+    // PASTAS DUPLICADAS do prontuário (OST da duplicação). Ids das OUTRAS pastas com o mesmo nome
+    // encontradas no Drive, separados por vírgula. O arquivamento escolhe a mais completa, NUNCA
+    // trava por ambiguidade, e deixa aqui o que sobrou para o diretor consolidar e apagar à mão
+    // (§A.6: o módulo do Drive não apaga nada). Alimenta o sinal "Pasta Duplicada No Drive".
+    // Id de pasta é referência, não PII.
+    driveDuplicatas: text("drive_duplicatas"),
     // ASO validado pelo consultor (aba EXAME): gate de APTO exige ASO anexado E validado. Um novo
     // upload de ASO zera este flag (precisa revalidar). Aditivo, default false (admissões existentes).
     asoValidado: boolean("aso_validado").notNull().default(false),
@@ -537,6 +588,25 @@ export const dadosVagaFolha = pgTable("dados_vaga_folha", {
   substituidoNome: varchar("substituido_nome", { length: 200 }),
   substituidoCpf: varchar("substituido_cpf", { length: 11 }),
   substituicaoExpurgarEm: timestamp("substituicao_expurgar_em", { withTimezone: true }),
+  // ── UNIFORME (OST Onda 3, item 1) ─────────────────────────────────────────
+  // NULL = ninguém respondeu, e é essa ausência que vira PENDÊNCIA OBRIGATÓRIA (chave UNIFORME).
+  // `false` é resposta válida e fecha a pendência: cobra-se a RESPOSTA, não o uniforme. Nasce
+  // nullable porque as 2.188 admissões existentes não têm o dado, e §A.16 preserva o histórico.
+  possuiUniforme: boolean("possui_uniforme"),
+  // Tamanhos: catálogo FECHADO validado por `@ea/shared-types` (nada digitável). Só fazem sentido
+  // quando `possui_uniforme = true`; a limpeza ao responder "não" é do serviço, não do banco.
+  uniformeCamiseta: varchar("uniforme_camiseta", { length: 4 }),
+  uniformeCalca: varchar("uniforme_calca", { length: 4 }),
+  uniformeBota: varchar("uniforme_bota", { length: 4 }),
+  // ── EPI (OST Onda 3, item 1) ──────────────────────────────────────────────
+  // NÃO é pendência obrigatória (decisão do diretor): não trava liberação nenhuma. Serve ao AVISO
+  // do modal do olho, que diz ao consultor que aquela admissão tem EPI a validar.
+  possuiEpi: boolean("possui_epi"),
+  // Itens canônicos (CAPACETE, LUVA, OCULOS, OUTROS) separados por vírgula. Texto, e não tabela
+  // própria, porque é um conjunto pequeno e fechado sem atributo por item; "OUTROS" é o único que
+  // carrega dado extra, e ele tem coluna própria.
+  epiItens: text("epi_itens"),
+  epiOutros: varchar("epi_outros", { length: 200 }),
 });
 
 // ── ExameAgendamento (1:1 da Admissão) — gestão do agendamento do exame (aba EXAME) ─────────
@@ -972,6 +1042,14 @@ export const assinanteEmpresa = pgTable(
     // ela.
     ordem: integer("ordem").notNull().default(1),
     ativo: boolean("ativo").notNull().default(true),
+    /**
+     * VÍNCULO (item 7): TERCEIRO nível de escopo, acima do cliente. Precedência final:
+     * vínculo (cliente + contrato) > cliente > padrão. Quem assina pelo contrato Temporário pode
+     * não ser quem assina pelo Terceirizado do MESMO cliente, e antes disso não havia como dizer.
+     */
+    clienteVinculoId: uuid("cliente_vinculo_id").references(() => clienteVinculos.id, {
+      onDelete: "cascade",
+    }),
     criadoEm,
     atualizadoEm,
   },
@@ -981,7 +1059,10 @@ export const assinanteEmpresa = pgTable(
     // é o NULL que marca o padrão.
     uqCpfCliente: uniqueIndex("uq_assinante_empresa_cpf_cliente")
       .on(t.codCliente, t.cpf)
-      .where(sql`${t.codCliente} is not null`),
+      .where(sql`${t.codCliente} is not null and ${t.clienteVinculoId} is null`),
+    uqCpfVinculo: uniqueIndex("uq_assinante_empresa_cpf_vinculo")
+      .on(t.clienteVinculoId, t.cpf)
+      .where(sql`${t.clienteVinculoId} is not null`),
     uqCpfPadrao: uniqueIndex("uq_assinante_empresa_cpf_padrao")
       .on(t.cpf)
       .where(sql`${t.codCliente} is null`),
@@ -1142,6 +1223,11 @@ export const clienteVinculos = pgTable(
   },
   (t) => ({
     uq: unique("uq_cliente_vinculo").on(t.codCliente, t.empresaCodigo, t.filial),
+    // CHAVE DO CAMINHO 2 (OST Onda 3, item 7): UM vínculo por (cliente + tipo de contrato). É o que
+    // torna a resolução determinística: a admissão sabe o tipo, e o tipo aponta para exatamente um
+    // vínculo. Sem esta unique, dois vínculos do mesmo tipo tornariam a escolha ambígua e o sistema
+    // pegaria "o primeiro", que é como se escolhe a régua errada sem ninguém perceber.
+    uqTipo: unique("uq_cliente_vinculo_tipo").on(t.codCliente, t.tipoServico),
     idxCliente: index("idx_cliente_vinculos_cliente").on(t.codCliente),
   }),
 );
