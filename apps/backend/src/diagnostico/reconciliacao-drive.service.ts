@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger } from "@nestjs/common";
-import { and, eq, isNotNull, ne, sql } from "drizzle-orm";
+import { and, eq, isNotNull, ne, or, sql } from "drizzle-orm";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
 import { admissoes } from "../db/schema";
@@ -8,6 +8,7 @@ import { AiClientService } from "../ai/ai-client.service";
 import { AuditoriaService } from "../auditoria/auditoria.service";
 import { DrivePastaPaiService } from "../ai/drive-pasta-pai.service";
 import { idDaPastaUrl, montarNomePasta } from "../ai/drive-routing";
+import { csvIds, duplicatasAcesas, listaIds } from "../ai/drive-duplicatas";
 
 /**
  * RECONCILIAÇÃO AUTOMÁTICA DO DIAGNÓSTICO (decisão do diretor: o sistema trabalha PARA o diretor).
@@ -21,6 +22,8 @@ import { idDaPastaUrl, montarNomePasta } from "../ai/drive-routing";
  *  1. **Pasta duplicada já apagada.** O diretor apaga as pastas extras à mão (o módulo do Drive não
  *     apaga, §A.6), e o aviso continuava aceso porque nada reconferia. Agora cada id listado é
  *     verificado; some do aviso o que não existe mais, e o aviso inteiro sai quando não sobra nada.
+ *     A varredura RESPEITA a baixa manual do sinal: duplicata que o diretor baixou no Diagnóstico
+ *     não reacende aqui enquanto a pasta existir, senão a varredura desfaria a decisão dele.
  *
  *  2. **Prontuário que existe e o EA não sabe.** Quando o envio caía no meio (o timeout de upload que
  *     travou quatro admissões reais), a pasta ficava criada no Drive e a URL nunca era gravada: a
@@ -85,30 +88,50 @@ export class ReconciliacaoDriveService {
   /**
    * Confere no Drive cada pasta listada como duplicata e tira do aviso o que já foi apagado. O aviso
    * some inteiro quando nenhuma extra sobrevive, que é o caso depois de o diretor limpar o acervo.
+   *
+   * A LISTA DE BAIXADAS PASSA PELA MESMA PENEIRA. Ela é a memória de "não acenda isto de novo", e só
+   * faz sentido enquanto a pasta existe: apagada a pasta, o id sai da memória junto. Sem essa poda a
+   * lista cresceria para sempre e continuaria calando um aviso que não existe mais.
    */
   private async limparDuplicatasQueSumiram(): Promise<number> {
     const linhas = await this.db
-      .select({ id: admissoes.id, duplicatas: admissoes.driveDuplicatas })
+      .select({
+        id: admissoes.id,
+        duplicatas: admissoes.driveDuplicatas,
+        baixadas: admissoes.driveDuplicatasBaixadas,
+      })
       .from(admissoes)
-      .where(and(isNotNull(admissoes.driveDuplicatas), ne(admissoes.driveDuplicatas, "")));
+      .where(
+        or(
+          and(isNotNull(admissoes.driveDuplicatas), ne(admissoes.driveDuplicatas, "")),
+          and(isNotNull(admissoes.driveDuplicatasBaixadas), ne(admissoes.driveDuplicatasBaixadas, "")),
+        ),
+      );
 
     let limpas = 0;
     for (const linha of linhas) {
-      const ids = (linha.duplicatas ?? "").split(",").filter(Boolean);
+      const ids = listaIds(linha.duplicatas);
+      const baixadas = listaIds(linha.baixadas);
       const sobreviventes: string[] = [];
       for (const id of ids) {
         const { valido } = await this.ai.validarPastaDrive(id);
         if (valido) sobreviventes.push(id);
       }
-      if (sobreviventes.length === ids.length) continue; // nada mudou
+      const baixadasVivas: string[] = [];
+      for (const id of baixadas) {
+        const { valido } = await this.ai.validarPastaDrive(id);
+        if (valido) baixadasVivas.push(id);
+      }
+      if (sobreviventes.length === ids.length && baixadasVivas.length === baixadas.length) continue;
       await this.db
         .update(admissoes)
         .set({
-          driveDuplicatas: sobreviventes.length ? sobreviventes.join(",") : null,
+          driveDuplicatas: csvIds(sobreviventes),
+          driveDuplicatasBaixadas: csvIds(baixadasVivas),
           atualizadoEm: new Date(),
         })
         .where(eq(admissoes.id, linha.id));
-      limpas++;
+      if (sobreviventes.length !== ids.length) limpas++;
     }
     return limpas;
   }
@@ -139,6 +162,7 @@ export class ReconciliacaoDriveService {
         GROUP BY a.id
       )
       SELECT a.id, a.tipo_contrato, a.cod_cliente, a.drive_pasta_url, a.drive_falha_motivo,
+             a.drive_duplicatas_baixadas,
              c.nome AS candidato_nome, cl.nome_operacao AS cliente_operacao
         FROM admissoes a
         JOIN candidatos c ON c.cpf = a.candidato_cpf
@@ -155,6 +179,7 @@ export class ReconciliacaoDriveService {
       cod_cliente: string | null;
       drive_pasta_url: string | null;
       drive_falha_motivo: string | null;
+      drive_duplicatas_baixadas: string | null;
       candidato_nome: string;
       cliente_operacao: string | null;
     }>;
@@ -188,7 +213,13 @@ export class ReconciliacaoDriveService {
         continue;
       }
 
-      await this.zerar(adm.id, achada.pastaUrl, achada.duplicatas);
+      // As duplicatas que o diretor já baixou não voltam a acender: a pasta continua no Drive, ele
+      // assumiu a remoção manual, e regravar o id aqui desfaria a decisão dele na varredura seguinte.
+      await this.zerar(
+        adm.id,
+        achada.pastaUrl,
+        duplicatasAcesas(achada.duplicatas, adm.drive_duplicatas_baixadas),
+      );
       pastasLigadas++;
       if (adm.drive_falha_motivo) avisosLimpos++;
       this.logger.log(
@@ -232,7 +263,7 @@ export class ReconciliacaoDriveService {
         ...(pastaUrl ? { drivePastaUrl: pastaUrl } : {}),
         driveFalhaMotivo: null,
         driveFalhaEm: null,
-        ...(duplicatas?.length ? { driveDuplicatas: duplicatas.join(",") } : {}),
+        ...(duplicatas?.length ? { driveDuplicatas: csvIds(duplicatas) } : {}),
         atualizadoEm: new Date(),
       })
       .where(eq(admissoes.id, admissaoId));

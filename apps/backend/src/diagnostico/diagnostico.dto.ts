@@ -48,6 +48,20 @@ export class AcaoZerarPendenciaDto {
   admissaoId!: string;
 }
 
+/**
+ * ZERAR o sinal de PASTA DUPLICADA de UMA admissão (decisão do diretor).
+ *
+ * Existe porque o diretor decidiu conviver com as pastas extras por enquanto: ele NÃO vai apagá-las
+ * agora e assume a remoção manual daqui pra frente, mas não quer o aviso aceso no meio tempo. Só
+ * baixa o SINAL: nada é apagado, movido ou renomeado no Drive (§A.6), a pasta continua exatamente
+ * onde está. Os ids baixados ficam guardados para o aviso não voltar sozinho no próximo
+ * rearquivamento; duplicata NOVA acende normalmente.
+ */
+export class AcaoZerarDuplicataDto {
+  @IsUUID()
+  admissaoId!: string;
+}
+
 /** Bloco 5: liga/desliga o scheduler de re-consulta (sem deploy). */
 export class SchedulerToggleDto {
   @IsBoolean()

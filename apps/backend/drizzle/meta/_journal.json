@@ -407,6 +407,13 @@
       "when": 1785427383722,
       "tag": "0057_clear_smiling_tiger",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1785528334395,
+      "tag": "0058_exotic_overlord",
+      "breakpoints": true
     }
   ]
 }

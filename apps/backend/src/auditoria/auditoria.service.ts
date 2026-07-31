@@ -25,6 +25,7 @@ import {
 } from "../domain/falha-auditoria";
 import { triarConjunto } from "./conteudo-documento";
 import { idDaPastaUrl, montarNomePasta, resolveSubpasta } from "../ai/drive-routing";
+import { duplicatasAcesas } from "../ai/drive-duplicatas";
 import { filtrarPorSexo } from "../domain/documentos-por-sexo";
 import { TravaPorChave } from "../domain/trava-por-chave";
 import { DrivePastaPaiService } from "../ai/drive-pasta-pai.service";
@@ -118,6 +119,9 @@ export class AuditoriaService {
         dataAdmissao: admissoes.dataAdmissao,
         drivePastaUrl: admissoes.drivePastaUrl,
         driveAsoUrl: admissoes.driveAsoUrl,
+        // Duplicatas que o diretor já baixou no Diagnóstico: o arquivamento reconfere o Drive e
+        // acharia as mesmas pastas de novo, então precisa saber o que NÃO deve reacender.
+        driveDuplicatasBaixadas: admissoes.driveDuplicatasBaixadas,
         candidatoNome: candidatos.nome,
         candidatoCpf: candidatos.cpf,
         // Sexo do candidato: condiciona a exigência do Reservista. O arquivamento passou a precisar
@@ -778,6 +782,10 @@ export class AuditoriaService {
     // O QUE FICA GRAVADO COMO AVISO, em ordem de importância. Nenhum deles impede a URL de ser
     // gravada: a pasta existe, e perder o link de uma pasta que existe foi a origem de todos os
     // casos que voltaram para a fila à toa.
+    const duplicatasAcendendo = duplicatasAcesas(
+      resultado.duplicatas,
+      adm.driveDuplicatasBaixadas,
+    );
     const parcial = (resultado.falhas ?? 0) > 0;
     const aviso = parcial
       ? motivoEnvioParcial(resultado.falhas!, resultado.motivoFalhas ?? [])
@@ -795,9 +803,10 @@ export class AuditoriaService {
         // DUPLICATAS (OST da duplicação): o arquivamento nunca trava por ambiguidade, escolhe a
         // pasta mais completa e deixa aqui as outras, para o diretor consolidar e apagar à mão.
         // Só grava quando o Drive devolveu alguma: um arquivamento limpo não apaga aviso anterior.
-        ...(resultado.duplicatas?.length
-          ? { driveDuplicatas: resultado.duplicatas.join(",") }
-          : {}),
+        // O que o diretor JÁ BAIXOU no Diagnóstico fica de fora: a pasta continua lá, ele assumiu a
+        // remoção manual, e regravar o id aqui reacenderia o aviso que ele mandou apagar. Duplicata
+        // nova (id que ele nunca viu) acende normalmente.
+        ...(duplicatasAcendendo.length ? { driveDuplicatas: duplicatasAcendendo.join(",") } : {}),
         atualizadoEm: new Date(),
       })
       .where(eq(admissoes.id, adm.id));

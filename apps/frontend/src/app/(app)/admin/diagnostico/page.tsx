@@ -613,6 +613,33 @@ export default function DiagnosticoPage() {
                           Ligar à pasta existente
                         </Button>
                       )}
+                      {/* ZERAR O SINAL DA DUPLICATA: o diretor decidiu conviver com as pastas
+                          extras por ora e removê-las à mão depois, então o que sai é o AVISO. Nada
+                          é apagado no Drive (§A.6). Fica registrado quem zerou, e o aviso não volta
+                          sozinho enquanto as pastas existirem. */}
+                      {sinalAberto.chave === "pasta-duplicada" && (
+                        <Button
+                          variant="secondary"
+                          className="!py-1 !px-2.5 text-[12px]"
+                          disabled={acaoEmVoo !== null}
+                          onClick={() => {
+                            if (
+                              window.confirm(
+                                `Zerar o sinal de pasta duplicada de ${it.candidato}? ` +
+                                  "As pastas continuam no Drive, nada é apagado. A baixa fica registrada com o seu usuário.",
+                              )
+                            ) {
+                              void acao(
+                                "zerar-duplicata",
+                                { admissaoId: it.admissaoId! },
+                                "Zerar sinal",
+                              );
+                            }
+                          }}
+                        >
+                          Zerar sinal
+                        </Button>
+                      )}
                       <Button
                         variant="secondary"
                         className="!py-1 !px-2.5 text-[12px]"

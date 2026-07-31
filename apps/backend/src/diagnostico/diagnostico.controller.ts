@@ -15,6 +15,7 @@ import { DRIZZLE } from "../db/drizzle.module";
 import { DiagnosticoService } from "./diagnostico.service";
 import {
   AcaoLigarPastaDto,
+  AcaoZerarDuplicataDto,
   AcaoZerarPendenciaDto,
   AcaoReauditarDto,
   AcaoRearquivarDto,
@@ -23,6 +24,7 @@ import {
 } from "./diagnostico.dto";
 import { AiClientService } from "../ai/ai-client.service";
 import { idDaPastaUrl, urlDaPasta } from "../ai/drive-routing";
+import { csvIds, listaIds } from "../ai/drive-duplicatas";
 
 /**
  * TELA DE DIAGNÓSTICO (OST). Acesso restrito a MASTER/SUPER_ADMIN (`@Roles` na classe): a tela mostra
@@ -150,6 +152,57 @@ export class DiagnosticoController {
     `);
     this.logger.log(`Pendência de arquivamento zerada na admissão ${dto.admissaoId}.`);
     return { ok: true, zerada: true };
+  }
+
+  /**
+   * ZERA o sinal de PASTA DUPLICADA de uma admissão (decisão do diretor).
+   *
+   * O QUE ELE DECIDIU. As pastas extras continuam no Drive e ele passa a removê-las à mão, no tempo
+   * dele; o que sai é o AVISO. Esta ação faz exatamente isso e nada além: **não apaga, não move e não
+   * renomeia nada no Drive** (§A.6, contrato do módulo), não toca em documento, pasta-âncora nem
+   * veredito. A admissão sai do card na hora.
+   *
+   * POR QUE OS IDS NÃO SÃO SIMPLESMENTE APAGADOS. O sinal é DERIVADO: rearquivamento e reconciliação
+   * reconferem o Drive, achariam as mesmas pastas e regravariam o aviso, desfazendo a decisão na
+   * varredura seguinte. Por isso os ids migram para `drive_duplicatas_baixadas`, que é a memória de
+   * "não acenda estas de novo enquanto existirem". Duplicata NOVA (id que ele nunca viu) acende
+   * normalmente, e id de pasta apagada some da memória na reconciliação.
+   *
+   * TRILHA: quem baixou e quando ficam em `candidato_alteracoes_log`, permanente e consultável, no
+   * mesmo padrão do "zerar pendência".
+   */
+  @Post("acao/zerar-duplicata")
+  async zerarDuplicata(@Body() dto: AcaoZerarDuplicataDto, @CurrentUser() user: AuthUser) {
+    this.registrarTrilha(user, "zerar-duplicata", dto.admissaoId);
+    const [atual] = (await this.db.execute(sql`
+      SELECT drive_duplicatas, drive_duplicatas_baixadas
+        FROM admissoes WHERE id = ${dto.admissaoId} LIMIT 1
+    `)) as unknown as Array<{
+      drive_duplicatas: string | null;
+      drive_duplicatas_baixadas: string | null;
+    }>;
+    if (!atual) return { ok: false, motivo: "Admissão não encontrada." };
+    const acesas = listaIds(atual.drive_duplicatas);
+    if (acesas.length === 0) return { ok: true, jaEstavaZerada: true };
+
+    // A memória acumula: uma duplicata baixada antes continua baixada, sem repetir id.
+    const baixadas = csvIds([...new Set([...listaIds(atual.drive_duplicatas_baixadas), ...acesas])]);
+    await this.db.execute(sql`
+      UPDATE admissoes
+         SET drive_duplicatas = NULL,
+             drive_duplicatas_baixadas = ${baixadas},
+             atualizado_em = now()
+       WHERE id = ${dto.admissaoId}
+    `);
+    await this.db.execute(sql`
+      INSERT INTO candidato_alteracoes_log (admissao_id, campo, valor_anterior, valor_novo, autor_id)
+      VALUES (${dto.admissaoId}, 'drive_duplicatas', ${atual.drive_duplicatas}, NULL, ${user.id})
+    `);
+    this.logger.log(
+      `Sinal de pasta duplicada zerado na admissão ${dto.admissaoId} ` +
+        `(${acesas.length} pasta[s] permanecem no Drive, remoção manual pelo diretor).`,
+    );
+    return { ok: true, zeradas: acesas.length };
   }
 
   /** Bloco 5: re-pull de uma admissão (por alvo), pela fila BullMQ (espaçamento/backoff). */

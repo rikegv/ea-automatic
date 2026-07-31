@@ -1,0 +1,1 @@
+ALTER TABLE "admissoes" ADD COLUMN "drive_duplicatas_baixadas" text;

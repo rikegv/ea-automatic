@@ -465,6 +465,14 @@ export const admissoes = pgTable(
     // (§A.6: o módulo do Drive não apaga nada). Alimenta o sinal "Pasta Duplicada No Drive".
     // Id de pasta é referência, não PII.
     driveDuplicatas: text("drive_duplicatas"),
+    // DUPLICATAS BAIXADAS PELO DIRETOR. Ids que ele decidiu tirar do sinal SEM apagar a pasta no
+    // Drive: ele assume a remoção manual daqui pra frente e não quer o aviso aceso no meio tempo.
+    // Sem esta memória, o aviso voltaria sozinho no primeiro rearquivamento ou na reconciliação, que
+    // reconferem o Drive, acham as mesmas pastas e regravam `drive_duplicatas`, desfazendo a decisão.
+    // Id de pasta APAGADA sai desta lista na reconciliação (a decisão morre junto com a pasta, e uma
+    // duplicata NOVA volta a acender normalmente). Quem baixou e quando ficam em
+    // `candidato_alteracoes_log`, a trilha permanente. §A.6: só id de pasta, nunca PII.
+    driveDuplicatasBaixadas: text("drive_duplicatas_baixadas"),
     // ASO validado pelo consultor (aba EXAME): gate de APTO exige ASO anexado E validado. Um novo
     // upload de ASO zera este flag (precisa revalidar). Aditivo, default false (admissões existentes).
     asoValidado: boolean("aso_validado").notNull().default(false),

@@ -431,6 +431,11 @@ export class DiagnosticoService {
    * porque o que sobrou precisa de mão humana: o módulo do Drive não apaga (§A.6), então a remoção
    * (ou a consolidação, quando as duas têm documento) é do diretor. Sai da lista sozinho quando ele
    * apaga a pasta extra e o próximo arquivamento não encontra mais duplicata.
+   *
+   * SAI TAMBÉM QUANDO O DIRETOR BAIXA O SINAL pela tela ("Zerar sinal"), que é o caso de ele decidir
+   * conviver com as pastas e removê-las à mão depois. Aí o id migra para `drive_duplicatas_baixadas`
+   * e esta consulta deixa de vê-lo: a pasta segue no Drive, o aviso é que fica quieto. Duplicata
+   * NOVA acende normalmente, porque sobre ela ninguém decidiu nada.
    */
   private async sinalPastaDuplicada(): Promise<Sinal> {
     const rows = (await this.db.execute(sql`
