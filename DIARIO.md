@@ -7506,3 +7506,81 @@ tinham sido commitadas nas sessões anteriores (`cf90dc9`, `d52432e`, `15f03fe`,
    automática e arquivamento nesse caminho, que é exatamente o risco que a §A.26 manda evitar.
 3. **Segunda página do dashboard** (I.A contra humano, tempo de esteira, ranking de consultores):
    **não iniciada**, escopo a definir com o diretor.
+
+---
+
+## 03/08/2026, fechamento das duas pendências do ASO (decisão do diretor)
+
+As duas que ficaram abertas na OST do motivo do ASO, executadas com as condições que o diretor impôs.
+
+### 1. Sinalizador na hora, sem criar gatilho nenhum
+
+O ASO reprovado pela aba Exame gravava INCONFORME no documento e deixava o
+`sinalizador_preenchimento` como estava até alguém abrir a auditoria. A tela seguia dizendo "OK" com
+um ASO recusado dentro.
+
+**A condição do diretor (§A.26):** recalcular o sinalizador **não pode** disparar conclusão automática
+da Auditoria nem arquivamento no Drive. Por isso **não** se reusou `aplicarPosVeredito`, que faz
+exatamente essas três coisas a mais. Nasceu `AuditoriaService.sinalizadorApenas`, porta estreita que
+chama só `recalcularSinalizador` e escreve **uma coluna**: não toca frentes, não toca farol, não mede
+régua, não fala com o Drive.
+
+Roda para **qualquer** veredito, não só para a reprovação: o ASO reenviado e aprovado precisa LIMPAR
+a inconformidade no mesmo instante, senão a correção do consultor não apareceria.
+
+**Prova ao vivo, com a I.A real, e o antes e depois medido no banco:**
+
+| | antes | depois |
+|---|---|---|
+| sinalizador | `PARCIAL` | **`INCONFORMIDADE`** |
+| `drive_pasta_url` | `null` | `null` (nada arquivado) |
+| frentes | `AUDITORIA=ANALISE_OK/true EXAME=A_AGENDAR/false` | **idênticas** |
+| eventos de frente nos 5 min | . | **0** (nenhuma conclusão automática) |
+
+Veredito real da I.A: `INCONFORME`, motivo `"Documento não corresponde ao tipo esperado (ASO)."`. A
+admissão de teste foi **restaurada ao estado original** (linha do ASO removida, sinalizador de volta a
+`PARCIAL`, staging apagada).
+
+### 2. ASOs legados devolvidos a PENDENTE, sem gastar I.A
+
+Da época em que o documento virava ENTREGUE **antes** de a I.A classificar sobrou a combinação
+`estado = ENTREGUE` com `aso_validado = false`. São possíveis reprovações escondidas em verde.
+
+**Eram 4 pela manhã, são 3 agora**, e a diferença não é erro de contagem: o time trabalhou na
+produção durante o dia (o acervo de ASO foi de 86 para 97 documentos) e um dos quatro foi reenviado e
+aprovado no fluxo normal. Registro isso porque o número do relatório anterior era verdadeiro na hora
+em que foi medido.
+
+`db/pendencia-aso-legado.ts`, seco por padrão e idempotente, devolveu **2** a PENDENTE, com trilha em
+`candidato_alteracoes_log` (autor: o diretor). **Nenhuma chamada de I.A**: o time reanexa e a
+auditoria roda no fluxo normal. Rodar de novo devolve "0, nada a fazer".
+
+A observação é apagada **por requisito**: documento PENDENTE **com** observação é lido pelo sistema
+como "auditado, deu pendente" (`domain/aso-documento.asoFoiAnexado`), e manter o texto deixaria a
+linha marcada como anexada, o oposto do que foi pedido. O porquê fica na trilha.
+
+**O terceiro ficou de fora, de propósito:** LETÍCIA DE MOURA MACHADO está `ADMISSAO_CONCLUIDA`, com
+Exame APTO e Cadastro CADASTRADO. Não há reenvio a fazer em quem já foi admitido, e pôr essa em
+pendente criaria tarefa que ninguém vai executar. A §A.16 diz o mesmo ("finalizadas não são
+recalculadas e não entram nesta fila"). A flag `--incluir-finalizadas` existe para o diretor decidir
+o caso a caso.
+
+**Impacto medido antes de aplicar (§A.26):** o ASO **não consta na régua** de nenhuma das três, então
+a mudança de estado não altera completude, não mexe em KPI de pendência obrigatória e não dispara
+arquivamento. Nenhuma marca de dedup existia para limpar. Prova na tela: as duas linhas voltaram a
+exibir o botão neutro "ASO" ("Anexar ASO (valida na I.A automaticamente)"), sem o verde de anexado e
+sem o olho de visualizar.
+
+### Gate e commits
+
+Typecheck backend limpo, lint limpo nos arquivos tocados, **971 testes backend verdes** (3 novos, que
+travam o recálculo, a ausência de conclusão e de arquivamento, e a falha que não derruba o upload).
+Backend rebuildado e reiniciado, health 200.
+
+- `d83b97a` fix(aso): sinalizador na hora e os ASOs legados devolvidos a pendente
+
+### Aberto
+
+- **LETÍCIA** (`ADMISSAO_CONCLUIDA`), o único ASO legado não tratado, aguardando decisão do diretor.
+- **Segunda página do dashboard** (I.A contra humano, tempo de esteira, ranking de consultores): não
+  iniciada, escopo a definir.
