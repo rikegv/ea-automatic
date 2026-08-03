@@ -403,8 +403,13 @@ export class AuditoriaService {
    *
    * A gravação NÃO rebaixa documento já ENTREGUE (mesma proteção do passo 3): uma falha de auditoria
    * não pode desfazer um veredito bom que já existia.
+   *
+   * PÚBLICA porque o ASO da aba Exame (`EsteiraService.anexarAso`) precisa do MESMO tratamento: até
+   * esta OST, IA fora do ar deixava o ASO gravado como ENTREGUE, isto é, verde e sem veredito
+   * nenhum. Reusar daqui garante que os dois caminhos escrevem o mesmo texto e o mesmo estado por
+   * família, em vez de divergirem com o tempo.
    */
-  private async gravarFalhaDeAuditoria(
+  async gravarFalhaDeAuditoria(
     admissaoId: string,
     tipoDocumentoId: string,
     err: unknown,
@@ -522,10 +527,25 @@ export class AuditoriaService {
   }
 
   /**
-   * Classifica UM ASO pela IA para o gate de APTO da esteira — devolve SÓ o veredito (apto/inapto),
-   * sem persistir estado de documento nem arquivar (isso é da auditoria da régua). Reusa a staging
-   * efêmera + regras ativas do ASO + motor de IA. §A.6: buffer só na staging (expurgado no finally);
-   * CPF vai apenas no payload da IA e nunca é logado.
+   * Classifica UM ASO pela IA para o gate de APTO da esteira. Devolve o veredito COMPLETO
+   * (status + motivo), sem persistir estado de documento nem arquivar: quem grava é o chamador
+   * (`EsteiraService.anexarAso`), que é dono da linha do ASO em `documentos_admissao`.
+   *
+   * O `motivo` VOLTA, e isso é a correção desta OST. Antes o retorno era só
+   * `{ status, valido }`: a IA produzia a razão da reprovação (campo obrigatório do schema do
+   * Gemini) e ela era descartada exatamente aqui, então o consultor recebia "inconforme" sem saber
+   * o que corrigir. Nos demais caminhos (régua, reauditoria, Pandapé, termo de banco) o motivo
+   * sempre foi gravado e exibido; o ASO era o único buraco.
+   *
+   * A STAGING AGORA SOBREVIVE À CLASSIFICAÇÃO, e isso também é deliberado. O `finally` que apagava
+   * o arquivo tornava impossível VISUALIZAR o ASO recebido, enquanto todo documento da régua pode
+   * ser aberto na tela (`DocumentoArquivoService`). Sem o arquivo não há como o consultor conferir
+   * um ASO reprovado, que é justamente quando ele mais precisa olhar. Fica sob as MESMAS regras dos
+   * outros documentos: TTL de 48h da staging e expurgo no fechamento da régua (§A.6).
+   *
+   * O ASO é ARQUIVO ÚNICO (a régua nunca pede frente e verso dele), então cada envio SUBSTITUI o
+   * anterior na staging. Sem isso, reenviar o ASO acumularia peças que apareceriam como um conjunto
+   * na visualização e subiriam duplicadas no arquivamento.
    */
   async classificarAso(admissaoId: string, arquivo: { buffer: Buffer; originalname: string }) {
     const adm = await this.carregarAdmissao(admissaoId);
@@ -534,22 +554,37 @@ export class AuditoriaService {
     });
     if (!tipo) throw new NotFoundException("Tipo de documento ASO não cadastrado");
 
+    await this.limparStagingDoTipo(admissaoId, tipo.codigo);
     const stagingPath = await this.staging.salvar(admissaoId, tipo.codigo, arquivo);
-    try {
-      const regras = await this.db
-        .select({ descricaoRegra: regrasAuditoria.descricaoRegra })
-        .from(regrasAuditoria)
-        .where(and(eq(regrasAuditoria.tipoDocumentoId, tipo.id), eq(regrasAuditoria.ativo, true)));
-      const resultado = await this.ai.auditarDocumento({
-        stagingPaths: [stagingPath],
-        tipoDocumentoCodigo: tipo.codigo,
-        tipoDocumentoNome: tipo.nome,
-        candidato: { nome: adm.candidatoNome, cpf: adm.candidatoCpf },
-        regras: regras.map((r) => ({ descricaoRegra: r.descricaoRegra })),
-      });
-      return { status: resultado.status, valido: resultado.status === "VALIDADO" };
-    } finally {
-      await this.staging.removerArquivo(stagingPath).catch(() => undefined);
+    const regras = await this.db
+      .select({ descricaoRegra: regrasAuditoria.descricaoRegra })
+      .from(regrasAuditoria)
+      .where(and(eq(regrasAuditoria.tipoDocumentoId, tipo.id), eq(regrasAuditoria.ativo, true)));
+    const resultado = await this.ai.auditarDocumento({
+      stagingPaths: [stagingPath],
+      tipoDocumentoCodigo: tipo.codigo,
+      tipoDocumentoNome: tipo.nome,
+      candidato: { nome: adm.candidatoNome, cpf: adm.candidatoCpf },
+      regras: regras.map((r) => ({ descricaoRegra: r.descricaoRegra })),
+    });
+    return {
+      tipoDocumentoId: tipo.id,
+      status: resultado.status,
+      valido: resultado.status === "VALIDADO",
+      motivo: resultado.motivo,
+    };
+  }
+
+  /**
+   * Apaga da staging os arquivos de UM tipo daquela admissão. Usado pelo reenvio do ASO, onde o
+   * novo arquivo substitui o antigo. Falha ao remover não derruba o fluxo: o TTL de 48h da staging
+   * pega o resto. §A.6: nada de caminho no log.
+   */
+  private async limparStagingDoTipo(admissaoId: string, codigoTipo: string): Promise<void> {
+    const alvo = codigoTipo.replace(/[^a-zA-Z0-9_-]/g, "_");
+    const arquivos = (await this.staging.listar(admissaoId)).filter((a) => a.codigoTipo === alvo);
+    for (const a of arquivos) {
+      await this.staging.removerArquivo(a.caminho).catch(() => undefined);
     }
   }
 

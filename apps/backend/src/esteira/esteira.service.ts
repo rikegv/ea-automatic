@@ -49,6 +49,12 @@ import {
   usuarios,
 } from "../db/schema";
 import { pendenciasObrigatorias } from "../domain/admissao";
+import { asoFoiAnexado, type AsoStatus } from "../domain/aso-documento";
+import {
+  ESTADO_AGUARDANDO_AUDITORIA,
+  estadoDocumentoDeAuditoria,
+  limitarMotivo,
+} from "../domain/auditoria";
 import { auditoriaParada, horasParado } from "../domain/auditoria-parada";
 import { equivalentesDoSlot } from "../domain/documentos-equivalentes";
 import { recomputeFarolGlobal } from "../admissoes/farol";
@@ -282,7 +288,11 @@ export class EsteiraService {
 
     // Enriquecimento por frente: ASO (exame), disponibilidade do gate (cadastro) e obrigatórios
     // pendentes (auditoria — sinaliza o aceite ao concluir, gatilho da NC-1).
-    const asoSet = tipo === "EXAME" ? await this.asoEntregueSet(admissaoIds) : new Set<string>();
+    // ASO da aba Exame: estado + motivo, não mais um Set de "entregue" (ver `asoStatusMap`).
+    const asoInfo =
+      tipo === "EXAME"
+        ? await this.asoStatusMap(admissaoIds)
+        : { tipoDocumentoId: null, porAdmissao: new Map<string, AsoStatus>() };
     const agendamentoMap =
       tipo === "EXAME"
         ? await this.agendamentoMap(admissaoIds)
@@ -341,10 +351,18 @@ export class EsteiraService {
       };
       if (tipo === "EXAME") {
         const ag = agendamentoMap.get(r.admissaoId);
+        const aso = asoInfo.porAdmissao.get(r.admissaoId);
         return {
           ...base,
-          asoAnexado: asoSet.has(r.admissaoId),
+          asoAnexado: asoFoiAnexado(aso),
           asoValidado: r.asoValidado,
+          // Estado e MOTIVO do ASO: é o que permite a tela separar "aguardando validação" de
+          // "reprovado pela I.A", e mostrar a razão da recusa em vez de um texto fixo.
+          asoEstado: aso?.estado ?? null,
+          asoMotivo: aso?.observacao ?? null,
+          // Id do tipo ASO: a tela usa nas MESMAS rotas de visualização dos documentos da régua
+          // (`/esteira/auditoria/:admissaoId/documento/:tipoDocumentoId/...`).
+          asoTipoDocumentoId: asoInfo.tipoDocumentoId,
           temAgendamento: !!ag?.data,
           reagendamentos: ag?.reagendamentos ?? 0,
           agendamento: ag ?? null,
@@ -475,6 +493,47 @@ export class EsteiraService {
   /** Conjunto de admissões com ASO ENTREGUE (regra 7 — só status, nunca o arquivo). */
   private async asoEntregueSet(admissaoIds: string[]): Promise<Set<string>> {
     return this.docEntregueSet(admissaoIds, "ASO");
+  }
+
+  /**
+   * ESTADO E MOTIVO do ASO por admissão, para a fila do Exame (OST do motivo real do ASO).
+   *
+   * Substitui o `asoEntregueSet` NA ABA EXAME e não o apaga: o `docEntregueSet` continua servindo o
+   * Termo de Banco, e um filtro por `estado = 'ENTREGUE'` não consegue mais responder o que a tela
+   * precisa saber. Com o veredito virando estado, "anexado" e "aprovado" deixaram de ser a mesma
+   * coisa: um ASO reprovado ESTÁ anexado e NÃO está entregue, e o `Set` antigo o classificaria como
+   * nunca enviado, apagando da tela o próprio caso que esta OST existe para mostrar.
+   *
+   * §A.6: só id de tipo, estado e o motivo do veredito (texto de regra, sem PII).
+   */
+  private async asoStatusMap(
+    admissaoIds: string[],
+  ): Promise<{ tipoDocumentoId: string | null; porAdmissao: Map<string, AsoStatus> }> {
+    const vazio = { tipoDocumentoId: null, porAdmissao: new Map<string, AsoStatus>() };
+    if (admissaoIds.length === 0) return vazio;
+    const tipo = await this.db.query.tiposDocumento.findFirst({
+      where: eq(tiposDocumento.codigo, "ASO"),
+    });
+    if (!tipo) return vazio;
+    const linhas = await this.db
+      .select({
+        admissaoId: documentosAdmissao.admissaoId,
+        estado: documentosAdmissao.estado,
+        observacao: documentosAdmissao.observacao,
+      })
+      .from(documentosAdmissao)
+      .where(
+        and(
+          inArray(documentosAdmissao.admissaoId, admissaoIds),
+          eq(documentosAdmissao.tipoDocumentoId, tipo.id),
+        ),
+      );
+    return {
+      tipoDocumentoId: tipo.id,
+      porAdmissao: new Map(
+        linhas.map((l) => [l.admissaoId, { estado: l.estado, observacao: l.observacao }]),
+      ),
+    };
   }
 
   /** Agendamento do exame por admissão (para exibir na fila EXAME: data, fornecedor, reagendamentos). */
@@ -1442,10 +1501,29 @@ export class EsteiraService {
   }
 
   /**
-   * F8 (Exame) — anexa o ASO e dispara a VALIDAÇÃO PELA I.A (gate de APTO). Registra o ASO como
-   * ENTREGUE (anexado) e a I.A lê o documento decidindo apto/inapto → grava `asoValidado`. NÃO
-   * persiste o binário (regra 7 / §A.6): só metadados + staging efêmera (expurgada). Robusto: se a
-   * I.A estiver indisponível, o ASO fica ANEXADO porém NÃO validado (gate segue travado até revalidar).
+   * F8 (Exame) — anexa o ASO e dispara a VALIDAÇÃO PELA I.A (gate de APTO). A I.A lê o documento,
+   * decide apto/inapto e o VEREDITO DELA governa tanto `asoValidado` quanto o estado do documento.
+   * NÃO persiste o binário (regra 7 / §A.6): só metadados + staging efêmera.
+   *
+   * O ESTADO PASSOU A SEGUIR O VEREDITO (OST do motivo real do ASO). Antes, o documento era gravado
+   * como ENTREGUE ANTES da classificação e nunca reescrito depois: um ASO REPROVADO ficava verde,
+   * com a observação "ASO anexado (N bytes)", indistinguível de um aprovado. Os 86 ASOs da base
+   * estavam todos assim. Agora são dois momentos, no mesmo desenho já validado da auditoria da
+   * régua (`auditarConjunto`):
+   *
+   *  1. ANTES da I.A, grava a COLETA em AGUARDANDO_AUDITORIA. O ASO fica registrado como recebido
+   *     (com o tamanho, que é o que prova que o upload subiu inteiro) mesmo que a I.A caia depois.
+   *     Não é mais ENTREGUE de largada, porque "entregue" é veredito e ainda não houve veredito.
+   *  2. DEPOIS da I.A, grava o VEREDITO: estado por `estadoDocumentoDeAuditoria` (VALIDADO→ENTREGUE,
+   *     INCONFORME→INCONFORME, PENDENTE→PENDENTE) e observação = o MOTIVO REAL da I.A. Falha da I.A
+   *     cai em `gravarFalhaDeAuditoria`, a mesma rotina da régua, que escolhe estado e texto por
+   *     família (problema do arquivo vira INCONFORME; problema nosso fica AGUARDANDO_AUDITORIA).
+   *
+   * O QUE ISSO NÃO FAZ, de propósito (§A.14/§A.26): não chama `aplicarPosVeredito`. Este caminho
+   * nunca disparou conclusão automática da Auditoria nem arquivamento no Drive, e não é esta OST que
+   * vai criar esse gatilho. O efeito de um ASO INCONFORME sobre a régua é o efeito NATURAL do
+   * estado: a completude passa a não contá-lo como entregue, então a régua não fecha e nada é
+   * arquivado com um ASO recusado dentro.
    */
   async anexarAso(admissaoId: string, file?: Express.Multer.File, user?: AuthUser) {
     if (!file) throw new BadRequestException("Arquivo ASO obrigatório (campo 'file')");
@@ -1473,21 +1551,24 @@ export class EsteiraService {
     //
     // O nome no DRIVE não muda (`{Nome do Tipo}_{nome do candidato}`): lá o nome da pessoa entra de
     // propósito, é o prontuário dela (§A.6, exceção deliberada já registrada).
-    const observacaoAso = `ASO anexado (${tamanho} bytes)`;
+    const observacaoColeta = `ASO anexado (${tamanho} bytes), aguardando a análise por I.A.`;
 
+    // PASSO 1 — a COLETA, antes da I.A. Sem `setWhere` protegendo o ENTREGUE, ao contrário da régua:
+    // aqui o arquivo é NOVO e tem de ser rejulgado do zero, exatamente como `aso_validado` já voltava
+    // a `false` logo abaixo. Um ASO aprovado ontem não valida o que chegou agora.
     await this.db
       .insert(documentosAdmissao)
       .values({
         admissaoId,
         tipoDocumentoId: aso.id,
-        estado: "ENTREGUE",
-        observacao: observacaoAso,
+        estado: ESTADO_AGUARDANDO_AUDITORIA,
+        observacao: observacaoColeta,
       })
       .onConflictDoUpdate({
         target: [documentosAdmissao.admissaoId, documentosAdmissao.tipoDocumentoId],
         set: {
-          estado: "ENTREGUE",
-          observacao: observacaoAso,
+          estado: ESTADO_AGUARDANDO_AUDITORIA,
+          observacao: observacaoColeta,
           atualizadoEm: registradoEm,
         },
       });
@@ -1498,8 +1579,9 @@ export class EsteiraService {
       .set({ asoValidado: false, atualizadoEm: registradoEm })
       .where(eq(admissoes.id, admissaoId));
 
-    // Validação pela I.A: lê o ASO e decide apto/inapto. VALIDADO → destrava o gate de APTO.
+    // PASSO 2 — validação pela I.A: lê o ASO e decide apto/inapto. VALIDADO → destrava o gate de APTO.
     let iaStatus: string;
+    let iaMotivo: string | null = null;
     let asoValidado = false;
     try {
       const veredito = await this.auditoria.classificarAso(admissaoId, {
@@ -1508,15 +1590,44 @@ export class EsteiraService {
       });
       iaStatus = veredito.status;
       asoValidado = veredito.valido;
+      iaMotivo = limitarMotivo(veredito.motivo) || null;
+
+      // O VEREDITO VIRA ESTADO DO DOCUMENTO. É esta gravação que impede um ASO reprovado de seguir
+      // verde na tela, e é a mesma tradução usada pela auditoria da régua.
+      await this.db
+        .update(documentosAdmissao)
+        .set({
+          estado: estadoDocumentoDeAuditoria(veredito.status),
+          observacao: iaMotivo,
+          atualizadoEm: new Date(),
+        })
+        .where(
+          and(
+            eq(documentosAdmissao.admissaoId, admissaoId),
+            eq(documentosAdmissao.tipoDocumentoId, aso.id),
+          ),
+        );
+
       if (asoValidado) {
         await this.db
           .update(admissoes)
           .set({ asoValidado: true, atualizadoEm: new Date() })
           .where(eq(admissoes.id, admissaoId));
       }
-    } catch {
-      // I.A indisponível → ASO anexado porém NÃO validado (gate travado; reenviar para revalidar).
+    } catch (err) {
+      // I.A não respondeu → ASO anexado porém NÃO validado (gate travado; reenviar para revalidar).
+      // O estado e o texto saem da MESMA rotina da régua, por família de falha: problema do ARQUIVO
+      // (415/422) é veredito e vira INCONFORME; problema NOSSO segue em AGUARDANDO_AUDITORIA. Nunca
+      // mais fica ENTREGUE sem veredito nenhum.
       iaStatus = "INDISPONIVEL";
+      await this.auditoria.gravarFalhaDeAuditoria(admissaoId, aso.id, err);
+      const doc = await this.db.query.documentosAdmissao.findFirst({
+        where: and(
+          eq(documentosAdmissao.admissaoId, admissaoId),
+          eq(documentosAdmissao.tipoDocumentoId, aso.id),
+        ),
+      });
+      iaMotivo = doc?.observacao ?? null;
     }
 
     // TRANSIÇÃO PÓS-ASO (OST Onda 2, item 3): com o ASO anexado E VALIDADO pela I.A, a frente vai
@@ -1535,6 +1646,9 @@ export class EsteiraService {
       aso: { nome, registradoEm },
       asoValidado,
       iaStatus,
+      // O MOTIVO REAL DA I.A vai para a tela junto do veredito, para o aviso deixar de ser um texto
+      // fixo ("a I.A não validou como apto") e passar a dizer O QUE está errado no ASO.
+      iaMotivo,
       ...(aptoAuto ? { aptoAuto } : {}),
     };
   }

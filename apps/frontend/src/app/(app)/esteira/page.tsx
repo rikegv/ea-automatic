@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ClicksignStatus, Origem } from "@ea/shared-types";
-import { apiFetch, apiUpload, apiDownloadPost, ApiError } from "@/lib/api";
+import { apiFetch, apiUpload, apiDownloadPost, apiOpenInline, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/cn";
 import { GlassCard } from "@/components/ui/GlassCard";
@@ -67,6 +67,16 @@ interface EsteiraItem {
   asoAnexado?: boolean;
   // EXAME, validação do ASO (gate de APTO) + agendamento do exame (modal de gestão).
   asoValidado?: boolean;
+  /**
+   * Estado do ASO como DOCUMENTO e o MOTIVO do veredito da I.A. `asoAnexado` diz que chegou
+   * arquivo; estes dois dizem o que a I.A achou dele. INCONFORME é ASO REPROVADO, e o motivo é a
+   * razão da recusa, escrita pela I.A. Antes desta OST o reprovado ficava indistinguível do
+   * aprovado (ambos "ENTREGUE", ambos verdes) e a razão era descartada no backend.
+   */
+  asoEstado?: string | null;
+  asoMotivo?: string | null;
+  /** Tipo ASO: usado nas MESMAS rotas de visualização dos documentos da régua. */
+  asoTipoDocumentoId?: string | null;
   temAgendamento?: boolean;
   reagendamentos?: number;
   agendamento?: {
@@ -165,7 +175,7 @@ const ASO_ACCEPT = ".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png";
 const ASO_FLASH: Record<string, { msg: string; tone: "ok" | "wn" }> = {
   VALIDADO: { msg: "ASO validado pela I.A (apto).", tone: "ok" },
   INCONFORME: {
-    msg: "ASO anexado, mas a I.A não validou como apto (inconforme).",
+    msg: "ASO reprovado pela I.A.",
     tone: "wn",
   },
   PENDENTE: { msg: "ASO anexado; validação da I.A pendente.", tone: "wn" },
@@ -512,19 +522,63 @@ export default function EsteiraPage() {
     try {
       const fd = new FormData();
       fd.append("file", file);
-      const resp = await apiUpload<{ ok: boolean; asoValidado: boolean; iaStatus: string }>(
-        `/esteira/exame/${item.admissaoId}/aso`,
-        fd,
-        token,
-      );
-      const aviso = ASO_FLASH[resp.iaStatus] ?? {
+      const resp = await apiUpload<{
+        ok: boolean;
+        asoValidado: boolean;
+        iaStatus: string;
+        iaMotivo?: string | null;
+      }>(`/esteira/exame/${item.admissaoId}/aso`, fd, token);
+      const base = ASO_FLASH[resp.iaStatus] ?? {
         msg: "ASO anexado.",
         tone: "ok" as const,
       };
-      setFlash(aviso);
+      // O MOTIVO REAL DA I.A entra no aviso. O rótulo sozinho ("reprovado") diz que deu errado e
+      // não diz o que corrigir, que era exatamente a queixa: o consultor recebia a recusa no escuro.
+      const motivo = resp.iaMotivo?.trim();
+      setFlash(motivo ? { ...base, msg: `${base.msg} ${motivo}` } : base);
       await load();
     } catch (e) {
       setActionError(e instanceof ApiError ? e.message : "Falha ao anexar o ASO.");
+    } finally {
+      setActingId(null);
+    }
+  }
+
+  /**
+   * VER O ASO ANEXADO, pelas MESMAS rotas de visualização dos documentos da régua. O consultor não
+   * tinha como abrir o ASO que ele mesmo enviou: julgava a recusa da I.A no escuro, enquanto todo
+   * documento da Auditoria já podia ser aberto na tela. O arquivo é servido da staging, com o
+   * caminho resolvido no servidor a partir de (admissão, tipo, índice), nunca pelo cliente (§A.6).
+   *
+   * Arquivo único abre direto: o ASO nunca é conjunto (frente e verso), então não existe lista a
+   * escolher. Sem arquivo (TTL de 48h vencido ou régua fechada e staging expurgada) o aviso diz
+   * isso, e não é erro: é estado normal do fluxo.
+   */
+  async function verAso(item: EsteiraItem) {
+    const tipoId = item.asoTipoDocumentoId;
+    if (!tipoId) return;
+    setActingId(item.frenteId);
+    setActionError(null);
+    setFlash(null);
+    try {
+      const resp = await apiFetch<{
+        disponivel: boolean;
+        mensagem?: string;
+        arquivos: { indice: number }[];
+      }>(`/esteira/auditoria/${item.admissaoId}/documento/${tipoId}/arquivos`, { token });
+      if (!resp.disponivel || resp.arquivos.length === 0) {
+        setFlash({
+          msg: resp.mensagem ?? "ASO não está mais disponível para visualização.",
+          tone: "wn",
+        });
+        return;
+      }
+      await apiOpenInline(
+        `/esteira/auditoria/${item.admissaoId}/documento/${tipoId}/arquivo/${resp.arquivos[0].indice}`,
+        token,
+      );
+    } catch (e) {
+      setActionError(e instanceof ApiError ? e.message : "Falha ao abrir o ASO.");
     } finally {
       setActingId(null);
     }
@@ -1313,41 +1367,88 @@ export default function EsteiraPage() {
                             />
                           )}
 
-                          {/* ASO (T3): upload único → anexa e dispara a validação pela I.A no backend */}
-                          {isExame && (
-                            <label
-                              className={cn(
-                                "flex flex-none cursor-pointer items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2 text-[12px] font-semibold transition hover:bg-[var(--surface-2)]",
-                                item.asoAnexado ? "text-ok" : "text-dim",
-                                acting && "pointer-events-none opacity-60",
-                              )}
-                              title={
-                                item.asoAnexado
+                          {/* ASO (T3): upload único → anexa e dispara a validação pela I.A no backend.
+                              O botão SEGUE O VEREDITO: reprovado é vermelho e diz "Reprovado", nunca
+                              mais o check verde de "Anexado" que um ASO recusado exibia. */}
+                          {isExame &&
+                            (() => {
+                              const reprovado = item.asoEstado === "INCONFORME";
+                              const rotulo = acting
+                                ? "Enviando…"
+                                : reprovado
+                                  ? "Reprovado"
+                                  : item.asoValidado
+                                    ? "Validado"
+                                    : item.asoAnexado
+                                      ? "Anexado"
+                                      : "ASO";
+                              // O motivo da I.A já vem com pontuação própria, então o texto de apoio
+                              // só entra depois dele, sem duplicar ponto final.
+                              const titulo = reprovado
+                                ? `ASO reprovado pela I.A${item.asoMotivo ? `: ${item.asoMotivo.replace(/\.\s*$/, "")}` : ""}. Reanexar para revalidar.`
+                                : item.asoAnexado
                                   ? "ASO anexado, reanexar para revalidar na I.A"
-                                  : "Anexar ASO (valida na I.A automaticamente)"
-                              }
+                                  : "Anexar ASO (valida na I.A automaticamente)";
+                              return (
+                                <label
+                                  className={cn(
+                                    "flex flex-none cursor-pointer items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2 text-[12px] font-semibold transition hover:bg-[var(--surface-2)]",
+                                    reprovado
+                                      ? "text-danger"
+                                      : item.asoValidado
+                                        ? "text-ok"
+                                        : item.asoAnexado
+                                          ? "text-warn"
+                                          : "text-dim",
+                                    acting && "pointer-events-none opacity-60",
+                                  )}
+                                  title={titulo}
+                                >
+                                  {acting ? (
+                                    <Spinner />
+                                  ) : (
+                                    <Icon
+                                      name={
+                                        reprovado
+                                          ? "x"
+                                          : item.asoValidado
+                                            ? "check"
+                                            : item.asoAnexado
+                                              ? "alert"
+                                              : "doc"
+                                      }
+                                      className="h-4 w-4"
+                                    />
+                                  )}
+                                  {rotulo}
+                                  <input
+                                    type="file"
+                                    accept={ASO_ACCEPT}
+                                    className="hidden"
+                                    disabled={acting}
+                                    onChange={(e) => {
+                                      const f = e.target.files?.[0];
+                                      if (f) void uploadAso(item, f);
+                                      e.target.value = "";
+                                    }}
+                                  />
+                                </label>
+                              );
+                            })()}
+
+                          {/* VER O ASO: mesma visualização dos documentos da régua, servida da
+                              staging. Só aparece com ASO anexado (sem arquivo não há o que abrir). */}
+                          {isExame && item.asoAnexado && item.asoTipoDocumentoId && (
+                            <button
+                              type="button"
+                              className="inline-flex flex-none items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 py-2 text-dim transition hover:bg-[var(--surface-2)] hover:text-accent"
+                              disabled={acting}
+                              title="Visualizar o ASO anexado"
+                              aria-label="Visualizar o ASO anexado"
+                              onClick={() => void verAso(item)}
                             >
-                              {acting ? (
-                                <Spinner />
-                              ) : (
-                                <Icon
-                                  name={item.asoAnexado ? "check" : "doc"}
-                                  className="h-4 w-4"
-                                />
-                              )}
-                              {acting ? "Enviando…" : item.asoAnexado ? "Anexado" : "ASO"}
-                              <input
-                                type="file"
-                                accept={ASO_ACCEPT}
-                                className="hidden"
-                                disabled={acting}
-                                onChange={(e) => {
-                                  const f = e.target.files?.[0];
-                                  if (f) void uploadAso(item, f);
-                                  e.target.value = "";
-                                }}
-                              />
-                            </label>
+                              <Icon name="eye" className="h-4 w-4" />
+                            </button>
                           )}
 
                           {/* Modal de Gestão de Agendamento do Exame (cadastro / visualização / reagendar) */}
@@ -1532,6 +1633,9 @@ export default function EsteiraPage() {
               admissaoId={viewId}
               asoAnexado={isExame ? vi?.asoAnexado : undefined}
               asoValidado={isExame ? vi?.asoValidado : undefined}
+              asoEstado={isExame ? vi?.asoEstado : undefined}
+              asoMotivo={isExame ? vi?.asoMotivo : undefined}
+              asoTipoDocumentoId={isExame ? vi?.asoTipoDocumentoId : undefined}
               onClose={() => setViewId(null)}
             />
           );

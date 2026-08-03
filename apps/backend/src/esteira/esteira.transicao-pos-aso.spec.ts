@@ -122,6 +122,11 @@ function montar(f: Fixtures) {
         }),
       },
       tiposDocumento: { findFirst: async () => ({ id: "tipo-aso", codigo: "ASO" }) },
+      // Lido pelo caminho de falha da I.A, para devolver à tela o motivo que a rotina de falha
+      // acabou de gravar (o consultor precisa saber por que o ASO não foi julgado).
+      documentosAdmissao: {
+        findFirst: async () => ({ observacao: "O motor de IA está fora do ar." }),
+      },
     },
   } as Record<string, unknown>;
   (exec as { transaction: unknown }).transaction = async (cb: (tx: unknown) => Promise<unknown>) =>
@@ -131,13 +136,22 @@ function montar(f: Fixtures) {
     classificarAso: async () => {
       if (f.iaFalha) throw new Error("I.A indisponível");
       const status = f.vereditoIa ?? "VALIDADO";
-      return { status, valido: status === "VALIDADO" };
+      return {
+        tipoDocumentoId: "tipo-aso",
+        status,
+        valido: status === "VALIDADO",
+        motivo: status === "VALIDADO" ? "Apto, dentro da validade." : MOTIVO_REPROVA,
+      };
     },
+    gravarFalhaDeAuditoria: async () => undefined,
   };
 
   const svc = new EsteiraService(exec as never, {} as never, auditoria as never);
   return { svc, escritas, atualizacoes };
 }
+
+/** Motivo que a I.A devolve ao reprovar. É ele que tem de chegar ao banco e à tela. */
+const MOTIVO_REPROVA = "Exame com data de emissão vencida: o ASO tem mais de 90 dias.";
 
 /** Upload mínimo de ASO (o buffer nunca é persistido — regra 7 / §A.6). */
 const ARQUIVO = {
@@ -239,7 +253,57 @@ describe("transição pós-ASO: o exame vira APTO quando a I.A valida", () => {
     expect(r.iaStatus).toBe("INDISPONIVEL");
     expect(r.asoValidado).toBe(false);
     expect(r).not.toHaveProperty("aptoAuto");
-    // O ASO fica registrado como ENTREGUE mesmo assim: quem reenvia é o consultor.
+    // O ASO fica registrado (a coleta é gravada antes da I.A), agora SEM veredito: quem decide o
+    // estado nesse caso é `gravarFalhaDeAuditoria`, a mesma rotina da régua. E o motivo da parada
+    // volta para a tela, em vez do texto fixo de antes.
     expect(escritas.some((e) => e.tabela === documentosAdmissao)).toBe(true);
+    expect(r.iaMotivo).toBe("O motor de IA está fora do ar.");
+  });
+});
+
+/**
+ * O MOTIVO REAL DA REPROVAÇÃO (OST do motivo do ASO). A I.A sempre produziu a razão da recusa
+ * (campo obrigatório do schema do Gemini) e o caminho do ASO a descartava: `classificarAso`
+ * devolvia só `{ status, valido }`, e a observação do documento ficava com "ASO anexado (N bytes)",
+ * gravada ANTES da classificação e nunca reescrita. O consultor recebia "inconforme" sem saber o
+ * que corrigir, e o ASO reprovado seguia ENTREGUE, isto é, verde e indistinguível de um aprovado.
+ */
+describe("o veredito da I.A vira estado e motivo do documento", () => {
+  /** A última escrita feita na linha do documento (o veredito sobrescreve a coleta). */
+  const vereditoGravado = (atualizacoes: Escrita[]) =>
+    atualizacoes.filter((a) => a.tabela === documentosAdmissao).at(-1)?.valores;
+
+  it("reprovado: grava INCONFORME com o motivo real, nunca ENTREGUE", async () => {
+    const { svc, atualizacoes } = montar({ status: "AGENDADO", vereditoIa: "INCONFORME" });
+
+    const r = (await svc.anexarAso(ADMISSAO_ID, ARQUIVO)) as Record<string, unknown>;
+
+    expect(vereditoGravado(atualizacoes)).toMatchObject({
+      estado: "INCONFORME",
+      observacao: MOTIVO_REPROVA,
+    });
+    // O motivo também volta para quem acabou de enviar, para o aviso da tela deixar de ser fixo.
+    expect(r.iaMotivo).toBe(MOTIVO_REPROVA);
+  });
+
+  it("aprovado: grava ENTREGUE com o motivo, e o fluxo do apto segue intacto", async () => {
+    const { svc, atualizacoes } = montar({ status: "AGENDADO", vereditoIa: "VALIDADO" });
+
+    const r = (await svc.anexarAso(ADMISSAO_ID, ARQUIVO)) as Record<string, unknown>;
+
+    expect(vereditoGravado(atualizacoes)).toMatchObject({ estado: "ENTREGUE" });
+    expect(r.asoValidado).toBe(true);
+    expect(r.aptoAuto).toMatchObject({ para: "APTO" });
+  });
+
+  it("a coleta é gravada ANTES da I.A, e sem fingir veredito", async () => {
+    const { svc, escritas } = montar({ status: "AGENDADO", vereditoIa: "INCONFORME" });
+
+    await svc.anexarAso(ADMISSAO_ID, ARQUIVO);
+
+    const coleta = escritas.find((e) => e.tabela === documentosAdmissao)?.valores;
+    // AGUARDANDO_AUDITORIA, não ENTREGUE: o arquivo chegou, o veredito ainda não.
+    expect(coleta).toMatchObject({ estado: "AGUARDANDO_AUDITORIA" });
+    expect(coleta?.observacao).toContain("1234 bytes");
   });
 });

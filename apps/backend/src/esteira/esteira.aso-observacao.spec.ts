@@ -54,7 +54,13 @@ function montar() {
   };
   const auditoria = {
     // I.A responde válido: caminho feliz, sem interferir no que este teste observa.
-    classificarAso: vi.fn().mockResolvedValue({ status: "VALIDADO", valido: true }),
+    classificarAso: vi.fn().mockResolvedValue({
+      tipoDocumentoId: ASO.id,
+      status: "VALIDADO",
+      valido: true,
+      motivo: "Apto, dentro da validade.",
+    }),
+    gravarFalhaDeAuditoria: vi.fn(),
   };
   const svc = new EsteiraService(db as never, {} as never, auditoria as never);
   return { svc, gravados, auditoria };
@@ -72,7 +78,10 @@ describe("BLOCO 4 — observação do ASO não guarda nome de arquivo (§A.6)", 
 
     expect(observacoes.length).toBeGreaterThan(0);
     for (const obs of observacoes) {
-      expect(obs).toBe("ASO anexado (91234 bytes)");
+      // O tamanho FICA (prova que o upload subiu inteiro). O texto ganhou a explicação de que o
+      // veredito ainda não saiu, porque a coleta agora é gravada ANTES da I.A responder: quem
+      // sobrescreve esta linha depois é o motivo real do veredito, não mais o tamanho.
+      expect(obs).toContain("91234 bytes");
       // O que não pode estar lá, dito de forma explícita para o teste falhar alto se voltar:
       expect(obs).not.toContain("MARIA");
       expect(obs).not.toContain(".pdf");

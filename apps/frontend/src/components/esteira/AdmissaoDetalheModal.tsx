@@ -4,8 +4,9 @@ import { useCallback, useEffect, useState } from "react";
 import type { ClicksignStatus, Origem } from "@ea/shared-types";
 import { ROTULO_ITEM_EPI, type ItemEpi } from "@ea/shared-types";
 import { Select } from "@/components/ui/Select";
-import { apiFetch, ApiError } from "@/lib/api";
+import { apiFetch, apiOpenInline, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { cn } from "@/lib/cn";
 import { Modal } from "@/components/ui/Modal";
 import { Pill, type PillTone } from "@/components/ui/Pill";
 import { Icon } from "@/components/ui/Icon";
@@ -267,12 +268,20 @@ export function AdmissaoDetalheModal({
   admissaoId,
   asoAnexado,
   asoValidado,
+  asoEstado,
+  asoMotivo,
+  asoTipoDocumentoId,
   onClose,
 }: {
   admissaoId: string;
   // Veredito do ASO pela I.A (aba Exame), read-only; ausente (undefined) fora da aba Exame.
   asoAnexado?: boolean;
   asoValidado?: boolean;
+  /** Estado do ASO como documento e o MOTIVO do veredito da I.A (INCONFORME = reprovado). */
+  asoEstado?: string | null;
+  asoMotivo?: string | null;
+  /** Tipo ASO, para abrir o arquivo pelas mesmas rotas dos documentos da régua. */
+  asoTipoDocumentoId?: string | null;
   onClose: () => void;
 }) {
   // `isAdmin` (MASTER ou SUPER_ADMIN) governa a VISIBILIDADE das correções. A autoridade continua
@@ -280,6 +289,10 @@ export function AdmissaoDetalheModal({
   const { token, isAdmin } = useAuth();
   const [data, setData] = useState<AdmissaoDetalhe | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // VER O ASO anexado (mesma visualização dos documentos da régua, servida da staging).
+  const [abrindoAso, setAbrindoAso] = useState(false);
+  const [asoErro, setAsoErro] = useState<string | null>(null);
 
   // Reenvio por correção (INT-4 / §A.5): loading, erro e o modal de aceite de dupla correção.
   const [reenviando, setReenviando] = useState(false);
@@ -356,6 +369,37 @@ export function AdmissaoDetalheModal({
   }, [admissaoId, token]);
 
   useEffect(() => carregar(), [carregar]);
+
+  /**
+   * VER O ASO ANEXADO, pelas MESMAS rotas dos documentos da régua. O arquivo é servido da staging,
+   * com o caminho resolvido no servidor a partir de (admissão, tipo, índice), nunca pelo cliente
+   * (§A.6). O ASO é arquivo único, então abre direto. Sem arquivo (TTL de 48h vencido ou régua
+   * fechada e staging expurgada) mostra o aviso: é estado normal do fluxo, não erro.
+   */
+  const verAso = useCallback(async () => {
+    if (!asoTipoDocumentoId) return;
+    setAbrindoAso(true);
+    setAsoErro(null);
+    try {
+      const resp = await apiFetch<{
+        disponivel: boolean;
+        mensagem?: string;
+        arquivos: { indice: number }[];
+      }>(`/esteira/auditoria/${admissaoId}/documento/${asoTipoDocumentoId}/arquivos`, { token });
+      if (!resp.disponivel || resp.arquivos.length === 0) {
+        setAsoErro(resp.mensagem ?? "ASO não está mais disponível para visualização.");
+        return;
+      }
+      await apiOpenInline(
+        `/esteira/auditoria/${admissaoId}/documento/${asoTipoDocumentoId}/arquivo/${resp.arquivos[0].indice}`,
+        token,
+      );
+    } catch (e) {
+      setAsoErro(e instanceof ApiError ? e.message : "Falha ao abrir o ASO.");
+    } finally {
+      setAbrindoAso(false);
+    }
+  }, [admissaoId, asoTipoDocumentoId, token]);
 
   // Reenvio por correção. Sem aceite → backend pode responder 409 (origem Pandapé sem aceite),
   // pedindo confirmação de dupla correção: abrimos o modal com o termo de ciência (`message`) e,
@@ -776,16 +820,58 @@ export function AdmissaoDetalheModal({
               ) : (
                 <p className="text-[13px] text-faint">Exame ainda não agendado.</p>
               )}
-              {/* Veredito do ASO pela I.A (aba Exame), read-only: a I.A decide apto/inapto na leitura. */}
+              {/* Veredito do ASO pela I.A (aba Exame), read-only: a I.A decide apto/inapto na leitura.
+                  A PÍLULA FOI SEPARADA EM DUAS. Antes, "aguardando validação da I.A" cobria dois
+                  estados opostos: o ASO que ainda não tinha veredito e o que a I.A REPROVOU. Quem
+                  lia a ficha de um ASO recusado achava que era só esperar, e nunca via a razão da
+                  recusa, que a I.A escreve e o sistema descartava. Agora são estados distintos e o
+                  motivo real aparece embaixo. */}
               {asoAnexado !== undefined && (
-                <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-[var(--border)] pt-3">
-                  <span className="text-[12.5px] text-dim">ASO (I.A):</span>
-                  {asoValidado ? (
-                    <Pill tone="ok">ASO validado pela I.A</Pill>
-                  ) : asoAnexado ? (
-                    <Pill tone="wn">ASO anexado, aguardando validação da I.A</Pill>
-                  ) : (
-                    <Pill tone="nt">ASO não anexado</Pill>
+                <div className="mt-3 border-t border-[var(--border)] pt-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-[12.5px] text-dim">ASO (I.A):</span>
+                    {asoEstado === "INCONFORME" ? (
+                      <Pill tone="dg">ASO Reprovado Pela I.A</Pill>
+                    ) : asoValidado ? (
+                      <Pill tone="ok">ASO Validado Pela I.A</Pill>
+                    ) : asoAnexado ? (
+                      <Pill tone="wn">ASO Anexado, Aguardando Validação Da I.A</Pill>
+                    ) : (
+                      <Pill tone="nt">ASO Não Anexado</Pill>
+                    )}
+                    {/* VER O ASO: mesma visualização dos documentos da régua, servida da staging. */}
+                    {asoAnexado && asoTipoDocumentoId && (
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-[12px] font-semibold text-dim transition hover:bg-[var(--surface-2)] hover:text-accent"
+                        disabled={abrindoAso}
+                        title="Abrir o ASO anexado para conferir"
+                        onClick={() => void verAso()}
+                      >
+                        <Icon name="eye" className="h-4 w-4" />
+                        {abrindoAso ? "Abrindo…" : "Ver ASO"}
+                      </button>
+                    )}
+                  </div>
+                  {/* O MOTIVO REAL da I.A, que era descartado no backend e nunca chegava aqui. */}
+                  {asoMotivo?.trim() && (
+                    <p
+                      className={cn(
+                        "mt-2 text-[12.5px]",
+                        asoEstado === "INCONFORME"
+                          ? "text-danger"
+                          : asoValidado
+                            ? "text-ok"
+                            : "text-warn",
+                      )}
+                    >
+                      {asoMotivo}
+                    </p>
+                  )}
+                  {asoErro && (
+                    <p className="mt-2 text-[12.5px] text-danger" role="alert">
+                      {asoErro}
+                    </p>
                   )}
                 </div>
               )}
