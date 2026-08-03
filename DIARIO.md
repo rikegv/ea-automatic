@@ -7393,3 +7393,116 @@ Toquei o **arquivamento** (`auditoria.service`), que é código já validado. Mo
 antes: sem isso o aviso reacenderia no primeiro rearquivamento e a decisão dele se desfaria. A
 alteração é só o **filtro do que gravar** em `drive_duplicatas`; nada mais do arquivamento mudou, e a
 régua, o veredito e a staging seguem intactos.
+
+---
+
+## 03/08/2026, OST do motivo do ASO, OST dos assinantes da Clicksign e fechamento do dia
+
+Duas frentes construídas e commitadas, mais o mapa de fechamento pedido pelo diretor. As duas
+começaram por **investigação antes de mexer** (§A.14), e nas duas a investigação mudou o desenho.
+
+### 1. Auditoria por I.A: o motivo real da reprovação do ASO
+
+**A pergunta do diretor era se a I.A gera o motivo.** Gera, e sempre gerou: `motivo` é campo
+**obrigatório** no schema estruturado do Gemini (`ai-service/app/gemini.py`, `_AUDITORIA_SCHEMA`), e
+o system prompt manda escrever "um veredito curto e objetivo". Nos caminhos da régua, da reauditoria,
+do pull do Pandapé e do termo de banco ele era gravado em `documentos_admissao.observacao` e exibido.
+
+**O ASO era o único buraco, e o buraco era uma linha:** `classificarAso` devolvia `{ status, valido }`
+e descartava `resultado.motivo` ali mesmo. Pior, `anexarAso` gravava o documento como **ENTREGUE
+ANTES** da classificação e nunca reescrevia depois, então um ASO **reprovado ficava verde**, com a
+observação "ASO anexado (N bytes)", indistinguível de um aprovado. Conferido no banco: **86 ASOs, os
+86 em ENTREGUE**, 4 deles com `aso_validado = false`.
+
+O que passou a existir:
+
+- **Motivo real gravado e exibido**, na fila do Exame e na ficha. O aviso de tela deixou de ser texto
+  fixo ("a I.A não validou como apto") e passa a dizer o que está errado.
+- **Estado pelo veredito**, com `estadoDocumentoDeAuditoria` (VALIDADO→ENTREGUE, INCONFORME→
+  INCONFORME, PENDENTE→PENDENTE). A coleta grava AGUARDANDO_AUDITORIA antes da I.A, o veredito
+  sobrescreve depois. Falha da I.A cai em `gravarFalhaDeAuditoria`, a **mesma rotina da régua**, que
+  escolhe estado e texto por família.
+- **Pílula separada em duas.** "Aguardando validação da I.A" cobria dois estados opostos: o que ainda
+  não tem veredito e o que foi RECUSADO.
+- **Ver o ASO anexado**, pelas MESMAS rotas dos documentos da régua.
+- `domain/aso-documento`, porque "anexado" e "aprovado" deixaram de ser a mesma coisa.
+
+**§A.26, o alcance conferido antes de mexer.** Mudar o estado altera a completude da régua, que
+dispara conclusão automática da Auditoria e arquivamento no Drive. O efeito é o **natural e desejado**:
+ASO INCONFORME não conta como entregue, a régua não fecha e nada sobe ao Drive com exame recusado.
+Medido: o ASO é OBRIGATORIO em **1** linha de régua e NAO_OBRIGATORIO em **22**, então o alcance é
+estreito. O fluxo do aprovado (APTO, nascimento do Cadastro, arquivamento) segue idêntico, travado
+por teste. **Não** chama `aplicarPosVeredito`: este caminho nunca disparou conclusão nem arquivamento,
+e não é esta OST que cria esse gatilho.
+
+**Dois efeitos arrastados, registrados na hora:** (a) I.A fora do ar não deixa mais o ASO verde, fica
+AGUARDANDO_AUDITORIA; (b) com a staging viva para a visualização, o ASO da aba Exame passa a entrar
+no lote de arquivamento no fechamento da régua. **Antes ele nunca chegava ao Drive por esse caminho**,
+porque o `finally` de `classificarAso` apagava o arquivo no ato.
+
+**Prova com a I.A real.** Subi um comprovante de endereço como ASO numa admissão da fila. Veredito de
+verdade: `INCONFORME`, motivo `"O documento apresentado não corresponde ao tipo esperado."`, gravado
+no banco, exibido como `Reprovado` em vermelho na fila e como pílula "ASO Reprovado Pela I.A" com o
+motivo na ficha. `GET .../documento/{tipo}/arquivo/0` devolveu 200 `application/pdf` inline.
+**A admissão de teste foi restaurada ao estado original**: linha do ASO removida, staging apagada,
+`aso_validado` e as duas frentes exatamente como estavam.
+
+### 2. Gerenciador de assinatura: quem já assinou e quem está devendo
+
+**A investigação desmentiu a suposição.** Sondagem contra a API de **produção** da Clicksign:
+
+| Endpoint | Tem status por assinante? |
+|---|---|
+| `GET /envelopes/{id}/signers` | **Não.** `name`, `group`, `refusable`. Zero campo de assinatura |
+| `GET /envelopes/{id}/requirements` | **Não.** `action`, `role`, `auth` |
+| `GET /envelopes/{id}/events` | **Sim.** Evento `sign` com `data.signer.key` e o instante |
+
+O status por pessoa **existe mas não vem pronto**: nasce do cruzamento das duas listas, que é o que
+`domain/clicksign-assinantes` faz. Conferido nos dois envelopes reais: no assinado, dois eventos
+`sign` com as chaves **exatas** dos dois assinantes; no que aguarda, zero. O casamento é pela
+**chave**, nunca pelo nome, senão homônimo herdaria a assinatura do outro.
+
+**Consulta ao vivo, por linha, em segundo plano**, com concorrência limitada: cada envelope custa
+duas chamadas ao provedor, e embutir na lista faria a tela esperar a Clicksign e pressionaria o limite
+de requisições da conta. Sem cache de propósito, o dado tem de estar certo na hora da cobrança.
+Provedor fora do ar devolve 200 com o motivo, nunca 500: uma linha ruim não leva a fila junto.
+
+**A rota é reivindicada pelo menu `assinaturas`** (§A.23): operação não reivindicada fica **aberta a
+qualquer autenticado**, e esta expõe os nomes dos assinantes de um contrato. §A.6: o evento `sign`
+carrega e-mail, CPF, IP e coordenadas de quem assinou, e **nada disso atravessa o cliente da API**.
+
+**Prova na tela.** Aba de gestão: "0 de 2 assinaram, 2 pendentes: VITOR SILVA LOPES `Pendente` ·
+EDILAINE CARVALHO `Pendente`". Aba Assinados: "2 de 2 assinaram: GABRIEL PIRES VALENTE
+`Assinou 30/07/2026` · EDILAINE CARVALHO `Assinou 30/07/2026`".
+
+**Limite honesto do dia:** a conta **não tem hoje nenhum envelope misto** (um assinado, um pendente),
+então esse caso não tem screenshot. Está travado por teste com as chaves reais, e aparece sozinho
+assim que um dos dois assinar.
+
+### Gate
+
+Typecheck backend e frontend limpos. Lint limpo nos arquivos tocados (os 2 erros que restam são
+pré-existentes, em `nova/page.tsx` e `vt/page.tsx`, confirmado por stash). **968 testes backend + 84
+frontend verdes**, com **23 testes novos**: 7 em `domain/aso-documento.spec.ts`, 3 em
+`esteira.transicao-pos-aso.spec.ts`, 11 em `domain/clicksign-assinantes.spec.ts` e 5 em
+`clicksign-gestao.assinantes.spec.ts`. Backend e frontend rebuildados e reiniciados, health 200.
+
+### Commits do fechamento
+
+- `1c7abe2` fix(aso): o motivo real da reprovação, o estado correto e o documento visível
+- `3ed2df5` feat(clicksign): quem já assinou e quem está devendo, por envelope
+
+Antes deles o working tree já estava limpo de tudo mais: as frentes 1 a 8 e 11 do mapa do diretor já
+tinham sido commitadas nas sessões anteriores (`cf90dc9`, `d52432e`, `15f03fe`, `9287e6b`, `3118f26`,
+`59a65a5`, `5d26cba`, `f4f7c17`, `73d6293`, `7f1c658`).
+
+### Aberto, aguardando decisão do diretor
+
+1. **Os 4 ASOs antigos com `aso_validado = false`** seguem gravados como ENTREGUE, em verde. A
+   correção vale daqui para frente; o histórico **não** foi reprocessado, porque reauditar gasta
+   chamada de I.A e muda estado de admissão viva.
+2. **O `sinalizador_preenchimento` não recalcula na hora** quando o ASO vira INCONFORME pela aba
+   Exame. Ficou fora de propósito: chamar o pós-veredito criaria um gatilho novo de conclusão
+   automática e arquivamento nesse caminho, que é exatamente o risco que a §A.26 manda evitar.
+3. **Segunda página do dashboard** (I.A contra humano, tempo de esteira, ranking de consultores):
+   **não iniciada**, escopo a definir com o diretor.
