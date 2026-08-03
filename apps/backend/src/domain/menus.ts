@@ -164,6 +164,10 @@ export const MENUS: MenuDef[] = [
     // reenvio disparado da Esteira, e reivindicá-lo quebraria quem tem "esteira" sem ter este menu.
     operacoes: [
       "ClicksignController.listar",
+      // Leitura de quem já assinou e quem está devendo. REIVINDICADA de propósito: operação não
+      // reivindicada fica ABERTA a qualquer autenticado, e esta expõe os nomes dos assinantes de um
+      // contrato. Mesmo menu da lista, porque é a mesma tela.
+      "ClicksignController.assinantes",
       "ClicksignController.dispararLote",
       "ClicksignController.disparar",
       "ClicksignController.trocarKit",

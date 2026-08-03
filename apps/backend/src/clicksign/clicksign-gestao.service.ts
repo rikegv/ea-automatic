@@ -27,6 +27,11 @@ import {
   type AssinanteEmpresa,
   type FaseEnvelope,
 } from "../domain/assinante-empresa";
+import {
+  montarAssinantes,
+  resumoAssinaturas,
+  type AssinanteStatus,
+} from "../domain/clicksign-assinantes";
 import { validarPdfKit } from "../domain/pdf-kit";
 import { StagingService } from "../staging/staging.service";
 import { ClicksignApiService } from "./clicksign-api.service";
@@ -509,6 +514,62 @@ export class ClicksignGestaoService {
     if (!row?.kitPath) return null;
     if (!this.staging.dentroDaRaiz(row.kitPath) || !existsSync(row.kitPath)) return null;
     return { caminho: row.kitPath, candidato: row.candidato };
+  }
+
+  /**
+   * QUEM JÁ ASSINOU E QUEM ESTÁ DEVENDO, de UM envelope.
+   *
+   * O gerenciador mostrava só o status do ENVELOPE ("Aguardando Assinatura"), que diz que falta
+   * alguém e não diz QUEM. Sem isso não dá para cobrar: um envelope de admissão tem o funcionário e
+   * o representante da empresa, e o normal é um já ter assinado e o outro não.
+   *
+   * A resposta nasce de DUAS chamadas à Clicksign, porque a API não tem status por assinante em
+   * lugar nenhum (ver `domain/clicksign-assinantes`): a lista de assinantes dá os nomes, os eventos
+   * dão quem assinou. É consulta AO VIVO, não cache: o dado tem de estar certo na hora da cobrança,
+   * e o EA não guarda assinante nenhum (§A.6 e regra 7, o EA não vira cópia do provedor).
+   *
+   * Desfechos que NÃO são erro, e por isso devolvem lista vazia com motivo em vez de estourar:
+   * admissão sem envelope (nada a listar) e integração inerte (sem token). Falha da Clicksign
+   * também vira motivo na tela: a linha continua útil, só não mostra os assinantes.
+   *
+   * §A.6: sai nome, se assinou, quando e a ordem. Nunca e-mail, CPF, IP ou id de envelope.
+   */
+  async assinantes(admissaoId: string): Promise<{
+    assinantes: AssinanteStatus[];
+    resumo: { total: number; assinaram: number; pendentes: number };
+    indisponivel?: string;
+  }> {
+    const vazio = { assinantes: [], resumo: { total: 0, assinaram: 0, pendentes: 0 } };
+
+    const [adm] = await this.db
+      .select({ envelopeId: admissoes.clicksignEnvelopeId })
+      .from(admissoes)
+      .where(eq(admissoes.id, admissaoId));
+    if (!adm) throw new NotFoundException("Admissão não encontrada");
+    if (!adm.envelopeId) {
+      return { ...vazio, indisponivel: "Esta admissão ainda não tem envelope de assinatura." };
+    }
+    if (!this.api.estaAtivo()) {
+      return { ...vazio, indisponivel: "Integração com a Clicksign inativa no momento." };
+    }
+
+    try {
+      const [signers, eventos] = await Promise.all([
+        this.api.listarSigners(adm.envelopeId),
+        this.api.listarEventosAssinatura(adm.envelopeId),
+      ]);
+      const assinantes = montarAssinantes(signers, eventos);
+      return { assinantes, resumo: resumoAssinaturas(assinantes) };
+    } catch {
+      // §A.6: o log leva o id da admissão (referência interna), nunca o do envelope nem nome.
+      this.logger.warn(
+        `Não foi possível consultar os assinantes na Clicksign (admissão ${admissaoId}).`,
+      );
+      return {
+        ...vazio,
+        indisponivel: "Não foi possível consultar os assinantes na Clicksign agora.",
+      };
+    }
   }
 
   /** Carrega o alvo de uma ação destrutiva já com a fase detectada. */

@@ -127,6 +127,19 @@ export class ClicksignController {
     return new StreamableFile(createReadStream(alvo.caminho));
   }
 
+  /**
+   * QUEM JÁ ASSINOU E QUEM ESTÁ DEVENDO deste envelope. Consulta AO VIVO na Clicksign (a API não
+   * guarda status por assinante em campo próprio, ver `domain/clicksign-assinantes`), por linha e
+   * sob demanda: assim a lista da tela continua abrindo rápido e a cobrança olha dado fresco.
+   *
+   * Nunca 500 por causa do provedor: envelope inexistente, integração inerte ou Clicksign fora do ar
+   * devolvem 200 com `indisponivel` preenchido, e a tela mostra o motivo no lugar da lista.
+   */
+  @Get("clicksign/:admissaoId/assinantes")
+  assinantes(@Param("admissaoId") admissaoId: string) {
+    return this.gestao.assinantes(admissaoId);
+  }
+
   /** CANCELA o envelope atual da admissão. Não regenera kit nem dispara envelope novo. */
   @Post("clicksign/:admissaoId/cancelar")
   cancelar(@Param("admissaoId") admissaoId: string, @CurrentUser() user: AuthUser) {

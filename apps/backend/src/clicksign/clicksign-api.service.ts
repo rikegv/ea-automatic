@@ -53,6 +53,15 @@ import { ConfigService } from "@nestjs/config";
  *       Após o envelope fechar (closed), `files.original` aponta o PDF finalizado/assinado. Baixar
  *       SÍNCRONO no mesmo ciclo; a URL NUNCA é persistida nem logada (§A.6).
  *
+ *  9) listarSigners → GET /envelopes/{id}/signers
+ *       resp 200: data[].id, data[].attributes.{ name, group, refusable, ... }
+ *       **NÃO HÁ status de assinatura aqui** (conferido na produção em 03/08/2026). Ver (10).
+ *
+ * 10) listarEventosAssinatura → GET /envelopes/{id}/events
+ *       resp 200: data[].attributes.{ name, created, data }. O evento `name:"sign"` traz
+ *       `data.signer.key` (a MESMA chave de (9)) e é o único lugar da API v3 que diz quem já
+ *       assinou. O corpo do evento carrega e-mail, CPF, IP e geo: nada disso sai do cliente (§A.6).
+ *
  *  8) cancelarEnvelope:
  *       - draft   → DELETE /envelopes/{id}                       (204; running → 403)
  *       - running → NÃO há cancelamento programático nesta conta/sandbox: PATCH status="canceled" é
@@ -275,6 +284,64 @@ export class ClicksignApiService {
     );
     const status = data?.data?.attributes?.status;
     return status ? { status } : undefined;
+  }
+
+  /**
+   * (9) Lista os ASSINANTES do envelope. Inerte → [].
+   *
+   * Devolve SÓ id, nome e grupo. A resposta da Clicksign traz e-mail, CPF, telefone e configurações
+   * de biometria; nada disso sobe daqui (§A.6), e o que sobe é o que a tela precisa para dizer quem
+   * é quem. **Não existe status de assinatura neste endpoint** (conferido na API de produção em
+   * 03/08/2026): quem responde "assinou ou não" é `listarEventosAssinatura`.
+   */
+  async listarSigners(
+    envId: string,
+  ): Promise<Array<{ id: string; nome: string; grupo: number | null }>> {
+    if (this.inerte()) return [];
+    const data = await this.req<{
+      data?: Array<{ id?: string; attributes?: { name?: string; group?: number | null } }>;
+    }>("GET", `/envelopes/${enc(envId)}/signers`);
+    const linhas = data?.data;
+    if (!Array.isArray(linhas)) return [];
+    return linhas
+      .filter((s) => typeof s.id === "string" && s.id.length > 0)
+      .map((s) => ({
+        id: s.id as string,
+        nome: (s.attributes?.name ?? "").trim(),
+        grupo: typeof s.attributes?.group === "number" ? s.attributes.group : null,
+      }));
+  }
+
+  /**
+   * (10) Eventos `sign` do envelope, reduzidos ao par (chave do assinante, instante). Inerte → [].
+   *
+   * É A ÚNICA FONTE de "fulano já assinou" na API v3: nem `/signers` nem `/requirements` carregam
+   * estado de assinatura por pessoa. O corpo do evento traz o dossiê inteiro de quem assinou (e-mail,
+   * CPF, IP, latitude e longitude) e **nada disso atravessa**: só a chave e o `created` (§A.6).
+   *
+   * SEM `page[size]`, de propósito: a API devolveu vazio quando pedimos 100 por página, e a página
+   * padrão (20) cobre com folga o histórico de um envelope de admissão, que tem poucos eventos.
+   */
+  async listarEventosAssinatura(
+    envId: string,
+  ): Promise<Array<{ signerKey: string; em: string }>> {
+    if (this.inerte()) return [];
+    const data = await this.req<{
+      data?: Array<{
+        attributes?: { name?: string; created?: string; data?: { signer?: { key?: string } } };
+      }>;
+    }>("GET", `/envelopes/${enc(envId)}/events`);
+    const linhas = data?.data;
+    if (!Array.isArray(linhas)) return [];
+    const eventos: Array<{ signerKey: string; em: string }> = [];
+    for (const e of linhas) {
+      const a = e.attributes;
+      if (a?.name !== "sign") continue;
+      const key = a.data?.signer?.key;
+      if (typeof key !== "string" || key.length === 0) continue;
+      eventos.push({ signerKey: key, em: a.created ?? "" });
+    }
+    return eventos;
   }
 
   /**

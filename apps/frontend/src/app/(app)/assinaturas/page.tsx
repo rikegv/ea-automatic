@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import type { ClicksignStatus } from "@ea/shared-types";
 import { apiFetch, apiOpenInline, apiUpload, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
@@ -99,6 +99,67 @@ function AcaoIcone({
   );
 }
 
+/**
+ * QUEM ASSINOU E QUEM ESTÁ DEVENDO, embaixo da linha do candidato.
+ *
+ * POR QUE EXISTE. A tela mostrava só o status do ENVELOPE ("Aguardando Assinatura"), que diz que
+ * falta alguém e não diz QUEM. Um envelope de admissão tem o funcionário e o representante da
+ * empresa, e o caso normal é um já ter assinado e o outro não: sem esta lista não havia como cobrar
+ * a pessoa certa.
+ *
+ * Pendente vem PRIMEIRO (a ordenação vem pronta do backend), porque a tela existe para cobrar quem
+ * está devendo, não para celebrar quem já assinou.
+ */
+function Assinantes({ dados }: { dados: RespAssinantes | undefined }) {
+  if (!dados) {
+    return <span className="text-[12px] text-faint">Consultando os assinantes…</span>;
+  }
+  if (dados.indisponivel) {
+    return <span className="text-[12px] text-faint">{dados.indisponivel}</span>;
+  }
+  if (dados.assinantes.length === 0) {
+    return <span className="text-[12px] text-faint">Sem assinantes registrados no envelope.</span>;
+  }
+
+  const { total, assinaram, pendentes } = dados.resumo;
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+      <span
+        className={cn(
+          "text-[12px] font-semibold",
+          pendentes === 0 ? "text-ok" : "text-warn",
+        )}
+      >
+        {assinaram} de {total} assinaram
+        {pendentes > 0 ? `, ${pendentes} pendente${pendentes === 1 ? "" : "s"}` : ""}:
+      </span>
+      {dados.assinantes.map((a) => (
+        <span
+          key={`${a.nome}-${a.ordem ?? 0}-${a.assinou}`}
+          title={
+            a.assinou
+              ? `Assinou em ${formatarDataHora(a.assinadoEm)}`
+              : "Ainda não assinou, é quem falta cobrar"
+          }
+          className={cn(
+            "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11.5px] font-semibold",
+            a.assinou
+              ? "border-[rgba(45,138,86,0.35)] bg-[rgba(45,138,86,0.10)] text-ok"
+              : "border-[rgba(191,138,26,0.35)] bg-[rgba(191,138,26,0.10)] text-warn",
+          )}
+        >
+          <Icon name={a.assinou ? "check" : "clock"} className="h-3 w-3 flex-none" />
+          {caixaAlta(a.nome)}
+          {/* §A.24: o status dentro da tag é etiqueta, então vai em title case. */}
+          <span className="font-normal opacity-80">
+            {a.assinou ? `Assinou ${formatarData(a.assinadoEm)}` : "Pendente"}
+          </span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
 /** Resultado por candidato do disparo em lote (parcialidade: um falhar não derruba os outros). */
 interface ItemLote {
   admissaoId: string;
@@ -106,6 +167,29 @@ interface ItemLote {
   ok: boolean;
   motivo?: string;
 }
+
+/**
+ * Uma pessoa do envelope, com o status DELA. Espelha `AssinanteStatus` do backend.
+ *
+ * §A.6: chega nome, se assinou, quando e a ordem. A Clicksign devolve muito mais (e-mail, CPF, IP e
+ * até coordenadas de quem assinou) e o backend corta tudo isso antes de responder.
+ */
+interface AssinanteStatus {
+  nome: string;
+  assinou: boolean;
+  assinadoEm: string | null;
+  ordem: number | null;
+}
+
+interface RespAssinantes {
+  assinantes: AssinanteStatus[];
+  resumo: { total: number; assinaram: number; pendentes: number };
+  /** Preenchido quando não deu para consultar (sem envelope, integração inerte, provedor fora). */
+  indisponivel?: string;
+}
+
+/** Quantas linhas consultam assinantes ao mesmo tempo (ver o efeito que busca em segundo plano). */
+const LOTE_ASSINANTES = 4;
 
 type Aba = "aptos" | "abertos" | "assinados";
 
@@ -139,6 +223,17 @@ function formatarData(iso: string | null | undefined): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "não informado";
   return d.toLocaleDateString("pt-BR");
+}
+
+/** Data e hora em pt-BR, para o tooltip de quem já assinou (o minuto ajuda a conferir a cobrança). */
+function formatarDataHora(iso: string | null | undefined): string {
+  if (!iso) return "não informado";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "não informado";
+  return `${d.toLocaleDateString("pt-BR")} às ${d.toLocaleTimeString("pt-BR", {
+    hour: "2-digit",
+    minute: "2-digit",
+  })}`;
 }
 
 /** Quantos dias faltam para o envelope vencer. Negativo = já venceu. */
@@ -187,11 +282,15 @@ export default function AssinaturasPage() {
   const [alvoTroca, setAlvoTroca] = useState<Linha | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
 
+  // QUEM JÁ ASSINOU E QUEM ESTÁ DEVENDO, por linha. `undefined` = ainda buscando.
+  const [assinantes, setAssinantes] = useState<Record<string, RespAssinantes | undefined>>({});
+
   const carregar = useCallback(
     async (qual: Aba) => {
       if (!token) return;
       setLoading(true);
       setError(null);
+      setAssinantes({});
       try {
         const r = await apiFetch<{ itens: Linha[] }>(`/clicksign/envelopes?aba=${qual}`, { token });
         setItens(r.itens ?? []);
@@ -209,6 +308,54 @@ export default function AssinaturasPage() {
     setSelecao(new Set());
     void carregar(aba);
   }, [aba, carregar]);
+
+  /**
+   * Busca os assinantes das linhas QUE TÊM ENVELOPE, depois que a lista chegou.
+   *
+   * Em segundo plano e por linha, de propósito. Cada linha custa duas chamadas à Clicksign (a lista
+   * de assinantes e os eventos, ver o backend), então embutir isso na consulta da lista deixaria a
+   * tela inteira esperando o provedor e empurraria o limite de requisições da conta. Assim a tabela
+   * aparece na hora e cada linha completa sozinha.
+   *
+   * A CONCORRÊNCIA É LIMITADA (`LOTE_ASSINANTES`) pelo mesmo motivo: uma aba com muitos envelopes
+   * dispararia dezenas de chamadas simultâneas ao provedor. Falha de uma linha não contamina as
+   * outras: o backend responde 200 com o motivo, e a linha mostra o motivo.
+   */
+  useEffect(() => {
+    if (!token || loading) return;
+    const alvos = itens.filter((i) => i.temEnvelope).map((i) => i.admissaoId);
+    if (alvos.length === 0) return;
+    let vivo = true;
+
+    void (async () => {
+      for (let i = 0; i < alvos.length; i += LOTE_ASSINANTES) {
+        if (!vivo) return;
+        const fatia = alvos.slice(i, i + LOTE_ASSINANTES);
+        const respostas = await Promise.all(
+          fatia.map(async (id) => {
+            try {
+              return [id, await apiFetch<RespAssinantes>(`/clicksign/${id}/assinantes`, { token })] as const;
+            } catch {
+              return [
+                id,
+                {
+                  assinantes: [],
+                  resumo: { total: 0, assinaram: 0, pendentes: 0 },
+                  indisponivel: "Não foi possível consultar os assinantes agora.",
+                },
+              ] as const;
+            }
+          }),
+        );
+        if (!vivo) return;
+        setAssinantes((atual) => ({ ...atual, ...Object.fromEntries(respostas) }));
+      }
+    })();
+
+    return () => {
+      vivo = false;
+    };
+  }, [itens, loading, token]);
 
   const visiveis = useMemo(() => {
     const q = busca.trim().toLowerCase();
@@ -523,7 +670,8 @@ export default function AssinaturasPage() {
                   const rodando = busy === l.admissaoId;
                   const marcada = selecao.has(l.admissaoId);
                   return (
-                    <tr key={l.admissaoId} className={cn(l.bloqueio && "opacity-80")}>
+                    <Fragment key={l.admissaoId}>
+                    <tr className={cn(l.bloqueio && "opacity-80", l.temEnvelope && "border-b-0")}>
                       {naFila && (
                         <td className="text-center">
                           <input
@@ -645,6 +793,20 @@ export default function AssinaturasPage() {
                         </div>
                       </td>
                     </tr>
+
+                    {/* QUEM ASSINOU E QUEM ESTÁ DEVENDO. Sub-linha, e não uma coluna nova, porque a
+                        lista tem tamanho variável (dois assinantes no caso comum, mais quando o
+                        cliente exige testemunha) e espremer isso numa célula quebraria a máscara
+                        única de tabela (§A.12/§A.20). Só aparece em quem TEM envelope: sem envelope
+                        não existe assinante nenhum a listar. */}
+                    {l.temEnvelope && (
+                      <tr>
+                        <td colSpan={colunas} className="pt-0 pb-3 pl-4 align-top">
+                          <Assinantes dados={assinantes[l.admissaoId]} />
+                        </td>
+                      </tr>
+                    )}
+                    </Fragment>
                   );
                 })
               )}
