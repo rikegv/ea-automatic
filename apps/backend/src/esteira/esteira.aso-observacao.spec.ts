@@ -61,6 +61,9 @@ function montar() {
       motivo: "Apto, dentro da validade.",
     }),
     gravarFalhaDeAuditoria: vi.fn(),
+    // Porta estreita do sinalizador (recalcula na hora, sem pós-veredito). Irrelevante para o que
+    // esta suíte mede, mas presente para o serviço não cair no catch e logar um aviso enganoso.
+    sinalizadorApenas: vi.fn().mockResolvedValue("OK"),
   };
   const svc = new EsteiraService(db as never, {} as never, auditoria as never);
   return { svc, gravados, auditoria };

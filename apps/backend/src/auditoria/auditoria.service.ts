@@ -661,6 +661,28 @@ export class AuditoriaService {
   }
 
   /**
+   * SÓ O SINALIZADOR, e nada mais. É o `aplicarPosVeredito` **sem** o pós-veredito.
+   *
+   * POR QUE EXISTE, e por que é uma porta estreita de propósito (autorização do diretor, §A.26). O
+   * ASO da aba Exame precisa atualizar o `sinalizador_preenchimento` NA HORA em que a I.A reprova,
+   * senão a admissão continua exibindo "OK" com um ASO recusado dentro até alguém abrir a auditoria.
+   * O caminho pronto para isso seria `aplicarPosVeredito`, mas ele faz mais três coisas: mede a
+   * régua, **conclui a Auditoria sozinho** e **arquiva o prontuário no Drive**. O anexo de ASO nunca
+   * disparou nenhuma dessas, e o diretor autorizou o ajuste com uma condição explícita: atualizar o
+   * sinalizador **não pode** criar gatilho de conclusão nem de arquivamento.
+   *
+   * Então não se reusa o caminho largo. Este método chama só `recalcularSinalizador`, que lê os
+   * documentos e a vaga e escreve UMA coluna (`admissoes.sinalizador_preenchimento`). Não toca
+   * frentes, não toca farol, não mede régua, não fala com o Drive.
+   *
+   * Quem precisar do fluxo completo continua chamando `aplicarPosVeredito`: os dois caminhos existem
+   * separados justamente para que ninguém ganhe o efeito do outro sem pedir.
+   */
+  async sinalizadorApenas(admissaoId: string): Promise<string> {
+    return this.recalcularSinalizador(admissaoId, await this.carregarAdmissao(admissaoId));
+  }
+
+  /**
    * Recalcula `sinalizador_preenchimento`. Documento INCONFORME domina (→ INCONFORMIDADE, §A.3 — os
    * sinalizadores de auditoria pertencem à F2). Sem inconformidade, volta ao cálculo do wizard (F5).
    */

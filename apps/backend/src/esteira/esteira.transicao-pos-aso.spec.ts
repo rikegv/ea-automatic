@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { EsteiraService } from "./esteira.service";
 import { documentosAdmissao, frentesAdmissao } from "../db/schema";
 
@@ -144,10 +144,15 @@ function montar(f: Fixtures) {
       };
     },
     gravarFalhaDeAuditoria: async () => undefined,
+    // A PORTA ESTREITA do sinalizador. `aplicarPosVeredito` NÃO entra no fake de propósito: se o
+    // serviço um dia passar a chamá-lo daqui, o teste quebra com "is not a function", que é
+    // exatamente o alarme que o diretor pediu (recalcular o sinalizador não pode criar gatilho de
+    // conclusão nem de arquivamento).
+    sinalizadorApenas: vi.fn(async () => "INCONFORMIDADE"),
   };
 
   const svc = new EsteiraService(exec as never, {} as never, auditoria as never);
-  return { svc, escritas, atualizacoes };
+  return { svc, escritas, atualizacoes, auditoria };
 }
 
 /** Motivo que a I.A devolve ao reprovar. É ele que tem de chegar ao banco e à tela. */
@@ -294,6 +299,43 @@ describe("o veredito da I.A vira estado e motivo do documento", () => {
     expect(vereditoGravado(atualizacoes)).toMatchObject({ estado: "ENTREGUE" });
     expect(r.asoValidado).toBe(true);
     expect(r.aptoAuto).toMatchObject({ para: "APTO" });
+  });
+
+  it("SINALIZADOR NA HORA: reprovado recalcula sem passar pelo pós-veredito", async () => {
+    const { svc, auditoria, escritas } = montar({ status: "AGENDADO", vereditoIa: "INCONFORME" });
+
+    const r = (await svc.anexarAso(ADMISSAO_ID, ARQUIVO)) as Record<string, unknown>;
+
+    // Recalculou, e a tela recebe o valor novo sem precisar recarregar por fora.
+    expect(auditoria.sinalizadorApenas).toHaveBeenCalledWith(ADMISSAO_ID);
+    expect(r.sinalizador).toBe("INCONFORMIDADE");
+    // A CONDIÇÃO DO DIRETOR (§A.26): nada de conclusão automática nem de arquivamento.
+    expect(r).not.toHaveProperty("aptoAuto");
+    expect(r).not.toHaveProperty("arquivado");
+    expect(r).not.toHaveProperty("auditoriaAuto");
+    expect(frentesInseridas(escritas)).toHaveLength(0);
+  });
+
+  it("SINALIZADOR NA HORA: aprovado também recalcula, e o fluxo do apto segue inteiro", async () => {
+    const { svc, auditoria } = montar({ status: "AGENDADO", vereditoIa: "VALIDADO" });
+
+    const r = (await svc.anexarAso(ADMISSAO_ID, ARQUIVO)) as Record<string, unknown>;
+
+    // Simetria: o ASO reenviado e aprovado precisa LIMPAR a inconformidade no mesmo instante.
+    expect(auditoria.sinalizadorApenas).toHaveBeenCalledWith(ADMISSAO_ID);
+    // E o caminho do aprovado não perdeu nada: continua concluindo o exame em APTO.
+    expect(r.aptoAuto).toMatchObject({ para: "APTO" });
+  });
+
+  it("falha ao recalcular o sinalizador NÃO derruba o upload já gravado", async () => {
+    const { svc, auditoria } = montar({ status: "AGENDADO", vereditoIa: "INCONFORME" });
+    auditoria.sinalizadorApenas.mockRejectedValueOnce(new Error("banco fora"));
+
+    const r = (await svc.anexarAso(ADMISSAO_ID, ARQUIVO)) as Record<string, unknown>;
+
+    expect(r.ok).toBe(true);
+    expect(r.iaStatus).toBe("INCONFORME");
+    expect(r.sinalizador).toBeUndefined();
   });
 
   it("a coleta é gravada ANTES da I.A, e sem fingir veredito", async () => {

@@ -3,6 +3,7 @@ import {
   ConflictException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from "@nestjs/common";
 import { alias as aliasedTable } from "drizzle-orm/pg-core";
@@ -133,6 +134,8 @@ function rotuloPapel(papel: Papel): string {
 
 @Injectable()
 export class EsteiraService {
+  private readonly logger = new Logger("EsteiraService");
+
   constructor(
     @Inject(DRIZZLE) private readonly db: Database,
     private readonly reguaCompletude: ReguaCompletudeService,
@@ -1630,6 +1633,33 @@ export class EsteiraService {
       iaMotivo = doc?.observacao ?? null;
     }
 
+    // SINALIZADOR NA HORA (autorização do diretor, §A.26). O estado do ASO acabou de mudar, então o
+    // `sinalizador_preenchimento` da admissão muda junto, no mesmo instante: um ASO reprovado leva a
+    // admissão a INCONFORMIDADE sem esperar alguém abrir a auditoria. Antes disso, a tela seguia
+    // exibindo "OK" com um ASO recusado dentro até a próxima ação de auditoria.
+    //
+    // A PORTA É ESTREITA DE PROPÓSITO: `sinalizadorApenas` escreve UMA coluna e nada mais. O caminho
+    // largo (`aplicarPosVeredito`) mede a régua, conclui a Auditoria sozinho e arquiva no Drive, e a
+    // condição do diretor foi explícita: atualizar o sinalizador NÃO pode criar esses gatilhos neste
+    // caminho, que nunca os teve. Por isso não se reusa o pós-veredito aqui.
+    //
+    // Roda para QUALQUER veredito, não só para a reprovação, e isso é simetria necessária: o ASO que
+    // foi reprovado e depois é reenviado e aprovado precisa LIMPAR a inconformidade no mesmo instante,
+    // senão a correção do consultor não apareceria e o sinalizador ficaria preso em vermelho.
+    //
+    // Falha aqui não derruba o upload: o ASO já está gravado e o veredito também. O sinalizador é
+    // consequência, e a próxima ação de auditoria o recalcula de qualquer forma.
+    let sinalizador: string | undefined;
+    try {
+      sinalizador = await this.auditoria.sinalizadorApenas(admissaoId);
+    } catch {
+      // §A.6: só o id da admissão (referência interna), nunca nome nem CPF.
+      this.logger.warn(
+        `Sinalizador não recalculado após o ASO (admissão ${admissaoId}); ` +
+          `segue o cálculo da próxima ação de auditoria.`,
+      );
+    }
+
     // TRANSIÇÃO PÓS-ASO (OST Onda 2, item 3): com o ASO anexado E VALIDADO pela I.A, a frente vai
     // sozinha para APTO, conclui e abre o gate do Cadastro, tirando a admissão da espera.
     //
@@ -1649,6 +1679,8 @@ export class EsteiraService {
       // O MOTIVO REAL DA I.A vai para a tela junto do veredito, para o aviso deixar de ser um texto
       // fixo ("a I.A não validou como apto") e passar a dizer O QUE está errado no ASO.
       iaMotivo,
+      // Sinalizador já recalculado, para a tela refletir a inconformidade sem recarregar por fora.
+      ...(sinalizador ? { sinalizador } : {}),
       ...(aptoAuto ? { aptoAuto } : {}),
     };
   }
