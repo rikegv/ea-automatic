@@ -7783,3 +7783,64 @@ fake de banco que devolve linhas prontas passaria igual com ou sem o filtro.
 Typecheck backend e frontend limpos, lint limpo, **989 testes verdes** com 4 novos. O
 `diagnostico.service.ts` roda no servidor, então houve build e restart do `ea-backend`, com health 200
 e frontend 200. Validado pelo diretor na tela.
+
+---
+
+## 04/08/2026, card Contrato do Controle Gerencial passa a ser POR STATUS
+
+O card quebrava as admissões por TIPO de contrato (temporário, terceiro), que diz o regime da
+contratação e não diz nada sobre o andamento. Agora ele mostra **em que ponto do contrato cada
+admissão está**, no mesmo modelo do card de Exame.
+
+| Linha | Fonte | No momento da entrega |
+|---|---|---|
+| A Cadastrar | frente `CADASTRO_CONTRATO` | 73 |
+| Cadastrado | frente `CADASTRO_CONTRATO` | 1.555 |
+| Aguardando Assinatura | `admissoes.clicksign_status` (INT-4) | 1 |
+| Assinado | `admissoes.clicksign_status` (INT-4) | 1.516 |
+
+### As quatro linhas NÃO somam o total, e é assim que tem de ser
+
+O card consolida **duas trilhas paralelas que vivem em lugares diferentes**: o Cadastro é frente, a
+Assinatura NÃO é frente (mora numa coluna da admissão). As duas correm ao mesmo tempo, então uma
+admissão pode estar Cadastrada E Assinada, e conta nas duas linhas. Hoje **1.516 estão nas duas
+condições**, então as quatro linhas somam 3.145 contra 2.525 admissões.
+
+Isso é leitura correta de duas esteiras simultâneas, não erro de contagem: **cada PAR fecha a sua
+trilha**. A alternativa (um rótulo só por admissão, pelo estágio mais avançado) mostraria
+"Cadastrado 37" em vez de 1.555, tirando da conta todo mundo que já assinou, o que esconderia mais
+do que informaria. Registrado porque o número vai parecer estranho a quem olhar esperando soma.
+
+O card **não** quebra por cliente dentro dele, e o de Exame também não: ele RESPEITA o filtro de
+cliente, então clicar num cliente recalcula os quatro números. É o modelo pedido.
+
+### A chave carrega a trilha
+
+Cada linha tem chave `CAD:<status da frente>` ou `ASS:<clicksign_status>`. Sem esse prefixo,
+"Cadastrado" e "Assinado" seriam ambíguos na hora de montar o filtro, porque vêm de tabelas
+diferentes. É o que permite o card ser clicável com uma chave de filtro só.
+
+### §A.26: o que a mudança alcançou além do card
+
+Um card CLICÁVEL exige, por construção, condição no **recorte compartilhado**, que é o que faz "tudo
+filtra tudo" no painel. Não havia como entregar o card clicável sem isso. O que foi tocado:
+
+- `base`: ganhou `left join frentes_admissao fc ... and fc.tipo = 'CADASTRO_CONTRATO'`. **Não
+  multiplica linha**: existe no máximo uma frente por (admissão + tipo), garantido por unique, e
+  conferido no banco (a consulta devolve 2.525, igual ao total de admissões).
+- `condicoes`: perdeu o filtro por tipo de contrato, ganhou o filtro por status com prefixo de trilha.
+- Tela da diretoria: o seletor "Contrato", o chip de filtro ativo e o contador do badge.
+- `SEM_CONTRATO` (o rótulo "(não informado)") foi removido: era usado só pelo card antigo.
+
+O filtro por tipo de contrato **deixou de existir no painel**, porque as opções dele vinham
+exatamente da lista que o card montava.
+
+### Gate e subida
+
+Typecheck backend e frontend limpos, lint limpo, **997 testes verdes** com 8 novos, que travam a
+ordem de processo das linhas, as duas fontes, o filtro de cada trilha, a recusa de valor sem trilha e
+o join que não multiplica.
+
+O frontend foi **parado antes do build** e subido depois: uma janela curta de indisponibilidade de
+propósito, em vez de servir `.next` pela metade (o `next build` reescreve o diretório que o `next
+start` está servindo). Backend, frontend e ingress conferidos em 200. Validado pelo diretor na tela.
