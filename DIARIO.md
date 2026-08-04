@@ -7844,3 +7844,86 @@ o join que não multiplica.
 O frontend foi **parado antes do build** e subido depois: uma janela curta de indisponibilidade de
 propósito, em vez de servir `.next` pela metade (o `next build` reescreve o diretório que o `next
 start` está servindo). Backend, frontend e ingress conferidos em 200. Validado pelo diretor na tela.
+
+---
+
+## 04/08/2026, frente INTEGRAÇÃO: ondas 1 e 2 (fundação e nascimento lazy)
+
+Primeiras duas ondas do plano aprovado. **Nada aparece na tela**, de propósito: a frente passa a
+existir e a nascer, e só as ondas 4 e 5 a mostram. As duas subiram juntas, com parada obrigatória nos
+números da onda 3 antes de qualquer tela.
+
+### Onda 1: fundação
+
+`INTEGRACAO` existe de ponta a ponta: no `FRENTE` do shared-types, nos três Records do domínio
+(`STATUS_INICIAL_FRENTE`, `ORDEM_STATUS`, `STATUS_CONCLUI`), no enum `frente_tipo` do banco
+(migration `0059`) e no catálogo de status. Nasceu também `integracao_agendamento`, espelhando o
+`exame_agendamento`, com data, horário, modalidade (enum `tipo_integracao`) e o consultor
+responsável, que é referência a `usuarios` e não o autor automático da última mudança de status.
+
+Status: `A_AGENDAR` → `AGENDADO` → `REALIZADO`, mais `DECLINOU` e `RESCISAO` como desfechos. Os dois
+desfechos usam os nomes dos faróis existentes por decisão do diretor: nada de "CANCELADA", nada de
+farol novo. `REALIZADO` é o único concluinte.
+
+**O CATÁLOGO FOI PARA O SEED, NÃO PARA UMA MIGRATION**, e a tentativa contrária falhou de forma
+instrutiva: o Postgres não deixa USAR um valor de enum na mesma transação em que ele foi criado
+(`unsafe use of new value`), e o migrator do drizzle roda TODAS as migrations pendentes numa
+transação só, então separar em dois arquivos não resolve. O `seed.ts` já é o dono declarado desta
+tabela, com convergência por `onConflictDoUpdate`, então é lá que as 5 linhas vivem. Em produção
+foram aplicadas por INSERT idempotente pontual, para não rodar o seed inteiro (que também garante
+admin e tipos de documento) só por causa do catálogo.
+
+### Onda 2: nascimento lazy e a regra do cliente
+
+A frente nasce quando o `CADASTRO_CONTRATO` conclui, **na mesma transação**, e só quando o cliente
+exige. `onConflictDoNothing` fecha a corrida de dois cliques simultâneos.
+
+O flag reusa `cliente_pendencia_config` com a chave `INTEGRACAO`: a tabela já tem exatamente a forma
+necessária, `(cod_cliente, chave) -> obrigatorio boolean NOT NULL DEFAULT true`, e o default entrega
+o "todos nascem exigindo" sem popular uma linha sequer. **Zero migration.**
+
+**MAS A LEITURA É PRÓPRIA** (`esteira/integracao-obrigatoria.repo.ts`), e não o `configDoCliente` da
+régua. Aquele filtra por `ehChaveValida`, o conjunto de chaves de PENDÊNCIA do domínio, que é o que
+alimenta a tela de obrigatoriedade por cliente. Entrar naquele conjunto faria a integração aparecer
+como se fosse campo obrigatório de admissão, e ela é regra de PROCESSO. Um leitor estreito mantém a
+tabela compartilhada sem misturar os dois assuntos.
+
+### A não retroatividade sai da mecânica, não de uma data de corte
+
+A frente nasce no INSTANTE da transição, então quem já está `CADASTRADO` nunca passa pelo gatilho.
+Medido depois de subir:
+
+| | |
+|---|---|
+| Frentes de Integração existentes | **0** |
+| Admissões com Cadastro já concluído (não voltaram) | **1.555** |
+| Clientes exigindo integração (default, sem linha) | 235 |
+| Clientes desmarcados | 0 |
+
+Se uma admissão antiga for reaberta e concluir o Cadastro de novo, aí entra: passou pelo gatilho. É o
+comportamento que o diretor aprovou.
+
+### O teste que mais importa: o paralelismo com a assinatura
+
+A integração roda AO MESMO TEMPO que a assinatura, e não depois. Isso significa que o gate do kit
+(`kitLiberado`, que libera o envelope da Clicksign) NÃO pode passar a exigir a integração. Como ele
+resolve por NOME de frente, e não por contagem, a frente nova entrou **sem tocar nele**. Os testes
+travam isso nos três casos (sem frente, com frente aberta, com frente concluída), para que uma
+refatoração futura não transforme o paralelo em sequência e pare a assinatura.
+
+Um teste antigo quebrou e **estava certo em quebrar**: `esteira.spec.ts` fixava a forma exata do
+`STATUS_CONCLUI`. Atualizado com a entrada nova.
+
+### Gate
+
+19 testes novos, **1.013 verdes** no total. Typecheck backend e frontend limpos, lint limpo. Backend
+rebuildado e reiniciado, health 200. O pacote `shared-types` precisou de rebuild próprio: ele é
+consumido buildado, então a edição no fonte não chegava ao vitest sozinha.
+
+### Aberto, aguardando o diretor
+
+O KPI "Concluído" do Gerenciador, da onda 3. A regra aprovada, lida ao pé da letra, **zeraria o card**:
+todos os 235 clientes exigem integração por default e nenhuma das 1.555 admissões antigas tem a
+frente, então nenhuma teria "concluído a integração". A alternativa proposta é a presença da frente
+decidir (conta quem terminou o Cadastro e não tem integração PENDENTE), que preserva as 1.555 e faz
+as novas esperarem. Onda 3 não começa antes dessa resposta.
