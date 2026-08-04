@@ -514,13 +514,26 @@ export class DiagnosticoService {
   }
 
   // ── Bloco 2: cliente Fopag ATIVO sem pasta-pai mapeada + admissões travadas ─
+  /**
+   * CLIENTE INATIVO NÃO ACENDE O SINAL (decisão do diretor).
+   *
+   * O sinal estava cobrando pasta-pai de cliente com quem a Soulan não tem mais relacionamento e que
+   * já foi inativado no cadastro. Pendência operacional só faz sentido para cliente ATIVO, então a
+   * fonte da verdade passa a ser o CADASTRO: `clientes.ativo`.
+   *
+   * Os dois blocos recebem o filtro, mas quem estava sujo era o segundo: no momento da mudança, o
+   * bloco por admissão viva tinha 19 itens, todos de cliente ativo, e o bloco por vínculo tinha 27,
+   * dos quais 9 de cliente INATIVO. São esses 9 que somem.
+   */
   private async sinalFopagSemPasta(): Promise<Sinal> {
     // Clientes Fopag com admissão VIVA (o universo onde a lacuna importa).
     const rows = (await this.db.execute(sql`
       SELECT a.cod_cliente, c.nome AS candidato, a.id AS admissao_id
       FROM admissoes a
       JOIN candidatos c ON c.cpf = a.candidato_cpf
+      JOIN clientes cli ON cli.cod_cliente = a.cod_cliente
       WHERE a.tipo_contrato = 'Fopag' AND a.farol_global IN ('EM_ADMISSAO','BANCO_AGUARDAR')
+        AND cli.ativo = true
     `)) as unknown as Array<{ cod_cliente: string; candidato: string; admissao_id: string }>;
     const itens: SinalItem[] = [];
     for (const r of rows) {
@@ -539,7 +552,11 @@ export class DiagnosticoService {
       SELECT v.cod_cliente, cli.razao_social
       FROM cliente_vinculos v
       JOIN clientes cli ON cli.cod_cliente = v.cod_cliente
+      -- Dois "ativo" diferentes, de propósito: v.ativo é o VÍNCULO Fopag em vigor, cli.ativo é o
+      -- CADASTRO do cliente. Um vínculo pode continuar marcado como ativo num cliente que a Soulan já
+      -- encerrou, e era exatamente por aí que o inativo entrava na fila.
       WHERE v.tipo_servico = 'FOPAG' AND v.ativo = true
+        AND cli.ativo = true
     `)) as unknown as Array<{ cod_cliente: string; razao_social: string }>;
     const jaListados = new Set(itens.map((i) => i.detalhe));
     for (const v of vinculosFopag) {
