@@ -72,7 +72,7 @@ export const ORIGEM = ["MANUAL", "PANDAPE"] as const;
 export type Origem = (typeof ORIGEM)[number];
 
 // ── Frentes paralelas e independentes (F12 / §A.3) ─────────────────────────
-export const FRENTE = ["AUDITORIA", "EXAME", "CADASTRO_CONTRATO"] as const;
+export const FRENTE = ["AUDITORIA", "EXAME", "CADASTRO_CONTRATO", "INTEGRACAO"] as const;
 export type Frente = (typeof FRENTE)[number];
 
 // ── Status por frente (dados reais — §A.3) ─────────────────────────────────
@@ -125,6 +125,40 @@ export const STATUS_EXAME_ESPERA_ASO = ["AGUARDANDO_ASO", "ASO_PENDENTE"] as con
  */
 export const STATUS_CADASTRO_CONTRATO = ["A_CADASTRAR", "CADASTRADO"] as const;
 export type StatusCadastroContrato = (typeof STATUS_CADASTRO_CONTRATO)[number];
+
+/**
+ * Status da frente INTEGRAÇÃO, a ÚLTIMA etapa da esteira (decisão do diretor).
+ *
+ * `REALIZADO` é o único concluinte, e concluir aqui é o fim do processo: a admissão sai da esteira e
+ * passa a viver no Gerenciador. `DECLINOU` e `RESCISAO` são os desfechos de quem não seguiu, e usam
+ * os MESMOS nomes dos faróis existentes de propósito: o diretor decidiu não criar estado novo
+ * (nada de "CANCELADA"), então o desfecho da frente e o farol da admissão falam a mesma língua.
+ *
+ * A integração roda em PARALELO com a assinatura do contrato, e não depois dela. Por isso a
+ * INTEGRACAO fica fora do gate do kit (`kitLiberado`), que segue exigindo só Auditoria, Exame e
+ * Cadastro: às vezes o candidato está em integração e aproveita-se para reforçar a assinatura.
+ */
+export const STATUS_INTEGRACAO = [
+  "A_AGENDAR",
+  "AGENDADO",
+  "REALIZADO",
+  "DECLINOU",
+  "RESCISAO",
+] as const;
+export type StatusIntegracao = (typeof STATUS_INTEGRACAO)[number];
+
+/** Tipo da integração agendada (decisão do diretor). */
+export const TIPO_INTEGRACAO = ["ONLINE", "PRESENCIAL"] as const;
+export type TipoIntegracao = (typeof TIPO_INTEGRACAO)[number];
+
+/** Rótulos de exibição da frente INTEGRAÇÃO (§A.24: tag em Title Case). */
+export const STATUS_INTEGRACAO_LABEL: Record<StatusIntegracao, string> = {
+  A_AGENDAR: "A Agendar",
+  AGENDADO: "Agendado",
+  REALIZADO: "Realizado",
+  DECLINOU: "Declinou",
+  RESCISAO: "Rescisão",
+};
 
 // ── Exigência documental na régua (cliente + cargo) ────────────────────────
 export const EXIGENCIA_DOCUMENTO = ["OBRIGATORIO", "NAO_OBRIGATORIO", "FACULTATIVO"] as const;

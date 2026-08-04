@@ -23,6 +23,7 @@ import {
   exigenciaEnum,
   farolGlobalEnum,
   frenteTipoEnum,
+  tipoIntegracaoEnum,
   ncLiberacaoEnum,
   ncStatusEnum,
   ncTipoEnum,
@@ -1362,3 +1363,27 @@ export const admissaoBeneficio = pgTable(
     idxAdmissao: index("idx_admissao_beneficio_admissao").on(t.admissaoId),
   }),
 );
+
+/**
+ * AGENDAMENTO DA INTEGRAÇÃO (última etapa da esteira, decisão do diretor).
+ *
+ * Espelha o `exame_agendamento`: uma linha por admissão, criada quando o consultor agenda. O
+ * CONSULTOR responsável é escolhido numa lista de COMUM e MASTER (super admin fora), e por isso é
+ * uma referência a `usuarios`, e não o autor automático da última mudança de status.
+ *
+ * `set null` no consultor: o agendamento sobrevive à desativação do usuário, sem apagar a data.
+ * §A.6: sem PII, só data, horário, modalidade e o id de quem conduz.
+ */
+export const integracaoAgendamento = pgTable("integracao_agendamento", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  admissaoId: uuid("admissao_id")
+    .notNull()
+    .unique()
+    .references(() => admissoes.id, { onDelete: "cascade" }),
+  data: date("data"),
+  horario: varchar("horario", { length: 5 }), // "HH:MM"
+  tipo: tipoIntegracaoEnum("tipo"),
+  consultorId: uuid("consultor_id").references(() => usuarios.id, { onDelete: "set null" }),
+  criadoEm: timestamp("criado_em", { withTimezone: true }).notNull().defaultNow(),
+  atualizadoEm: timestamp("atualizado_em", { withTimezone: true }).notNull().defaultNow(),
+});

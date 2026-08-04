@@ -3,7 +3,7 @@
  * isoladamente. Complementam `frentes.ts` (gate contínuo do Cadastro, regra 3) cobrindo a
  * operação de status por frente e a reversão (recuo de etapa) com alerta.
  */
-import { STATUS_CADASTRO_CONTRATO, STATUS_EXAME } from "@ea/shared-types";
+import { STATUS_CADASTRO_CONTRATO, STATUS_EXAME, STATUS_INTEGRACAO } from "@ea/shared-types";
 import { podeAbrirCadastro, type EstadoFrente, type FrenteTipo } from "./frentes";
 
 /**
@@ -19,6 +19,7 @@ export const ORDEM_STATUS: Record<FrenteTipo, string[]> = {
   AUDITORIA: ["ANALISE_PENDENTE", "AGUARDA_REENVIO", "ANALISE_OK", "DECLINOU"],
   EXAME: [...STATUS_EXAME],
   CADASTRO_CONTRATO: [...STATUS_CADASTRO_CONTRATO],
+  INTEGRACAO: [...STATUS_INTEGRACAO],
 };
 
 /**
@@ -33,6 +34,8 @@ export const STATUS_CONCLUI: Record<FrenteTipo, string> = {
   AUDITORIA: "ANALISE_OK",
   EXAME: "APTO",
   CADASTRO_CONTRATO: "CADASTRADO",
+  // Concluir a INTEGRAÇÃO é o FIM da esteira: a admissão passa a viver no Gerenciador.
+  INTEGRACAO: "REALIZADO",
 };
 
 /** O status conclui a frente? */

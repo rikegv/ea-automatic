@@ -37,7 +37,7 @@ const TIPOS_DOCUMENTO: Array<{ codigo: string; nome: string }> = [
 // Status por frente (§A.3) — alimenta os seletores da esteira (F8). `conclui` marca o status
 // terminal que conclui a frente (insumo do gate do Cadastro, regra 3).
 const STATUS_FRENTE: Array<{
-  tipo: "AUDITORIA" | "EXAME" | "CADASTRO_CONTRATO";
+  tipo: "AUDITORIA" | "EXAME" | "CADASTRO_CONTRATO" | "INTEGRACAO";
   codigo: string;
   rotulo: string;
   conclui: boolean;
@@ -63,6 +63,16 @@ const STATUS_FRENTE: Array<{
   // catálogo já reorganizado; base existente é migrada pela 0026 (o seed é onConflictDoNothing e
   // não corrigiria sozinho).
   { tipo: "CADASTRO_CONTRATO", codigo: "CADASTRADO", rotulo: "Cadastrado", conclui: true },
+  // INTEGRAÇÃO, a ÚLTIMA etapa da esteira (decisão do diretor). O catálogo mora aqui, e não numa
+  // migration, porque o Postgres não deixa USAR um valor de enum na mesma transação em que ele foi
+  // criado, e o migrator roda tudo numa transação só. O seed é o dono desta tabela por desenho.
+  { tipo: "INTEGRACAO", codigo: "A_AGENDAR", rotulo: "A Agendar", conclui: false },
+  { tipo: "INTEGRACAO", codigo: "AGENDADO", rotulo: "Agendado", conclui: false },
+  // REALIZADO conclui: é o fim da esteira, a admissão passa a viver no Gerenciador.
+  { tipo: "INTEGRACAO", codigo: "REALIZADO", rotulo: "Realizado", conclui: true },
+  // Desfechos. NÃO concluem, pelo mesmo motivo do declínio das outras frentes: não falsear êxito.
+  { tipo: "INTEGRACAO", codigo: "DECLINOU", rotulo: "Declinou", conclui: false },
+  { tipo: "INTEGRACAO", codigo: "RESCISAO", rotulo: "Rescisão", conclui: false },
 ];
 
 async function main(): Promise<void> {

@@ -5,12 +5,14 @@
  * 1. Nascimento paralelo: ao criar a Admissão, nascem AUDITORIA e EXAME simultaneamente.
  * 2. Independência das frentes: concluir uma não altera a outra.
  * 3. Gate do Cadastro: CADASTRO_CONTRATO só abre com AUDITORIA E EXAME concluídas.
+ * 3b. INTEGRAÇÃO (última etapa): nasce quando o CADASTRO conclui, e SÓ para cliente que a exige.
+ *     Roda em PARALELO com a assinatura, então NÃO entra no gate do kit (`kitLiberado`).
  * 4. A régua resolve por (cliente+cargo): muda o cargo, muda o checklist.
  * 5. Não-bloqueio: Admissão é criável com obrigatórios vazios; o sinalizador marca, não impede.
  * 6. Reaproveitamento por CPF: CPF existente oferece reaproveitar dados, preservando histórico.
  * 7. Documento é efêmero: guarda-se o status; o binário transita e é descartado.
  */
-export type FrenteTipo = "AUDITORIA" | "EXAME" | "CADASTRO_CONTRATO";
+export type FrenteTipo = "AUDITORIA" | "EXAME" | "CADASTRO_CONTRATO" | "INTEGRACAO";
 
 export interface EstadoFrente {
   tipo: FrenteTipo;

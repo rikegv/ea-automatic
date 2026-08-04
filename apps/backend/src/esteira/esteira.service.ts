@@ -73,6 +73,8 @@ import {
   reversaoDerrubaCadastro,
   STATUS_CONCLUI,
 } from "../domain/esteira";
+import { STATUS_INICIAL_FRENTE } from "../domain/admissao";
+import { clienteExigeIntegracao } from "./integracao-obrigatoria.repo";
 import type { AgendamentoExameDto } from "./dto/agendamento-exame.dto";
 import type { PatchStatusDto } from "./dto/patch-status.dto";
 import type { RelatorioClinicaDto } from "./dto/relatorio-clinica.dto";
@@ -806,6 +808,20 @@ export class EsteiraService {
       });
     }
 
+    // FRENTE INTEGRAÇÃO (última etapa da esteira, decisão do diretor). Nasce LAZY quando o CADASTRO
+    // conclui, e SÓ para cliente que exige. A leitura fica FORA da transação de propósito: é uma
+    // consulta pura, e resolvê-la antes mantém a transação curta.
+    //
+    // É esta mecânica que garante a NÃO RETROATIVIDADE pedida: a frente nasce no INSTANTE da
+    // transição, então as admissões que já estão `CADASTRADO` nunca passam por aqui e não voltam
+    // para a esteira. Se uma delas for reaberta e concluir de novo, aí sim entra, porque passou pelo
+    // gatilho.
+    const nasceIntegracao =
+      tipo === "CADASTRO_CONTRATO" &&
+      conclui(tipo, novo) &&
+      !irmas.some((f) => f.tipo === "INTEGRACAO") &&
+      (await clienteExigeIntegracao(this.db, admissao?.codCliente));
+
     const result = await this.db.transaction(async (tx) => {
       const concl = conclui(tipo, novo);
       const agora = new Date();
@@ -872,6 +888,24 @@ export class EsteiraService {
           .returning({ id: frentesAdmissao.id });
         cadastroId = novoCad.id;
         nasceuAgora = true;
+      }
+
+      // Nascimento lazy da INTEGRAÇÃO, na MESMA transação da conclusão do Cadastro: ou as duas
+      // coisas acontecem, ou nenhuma. `onConflictDoNothing` fecha a corrida de dois cliques
+      // simultâneos, já que existe unique por (admissão + tipo).
+      if (nasceIntegracao) {
+        await tx
+          .insert(frentesAdmissao)
+          .values({
+            admissaoId: frente.admissaoId,
+            tipo: "INTEGRACAO",
+            status: STATUS_INICIAL_FRENTE.INTEGRACAO,
+            concluida: false,
+            dataInicio: agora,
+          })
+          .onConflictDoNothing({
+            target: [frentesAdmissao.admissaoId, frentesAdmissao.tipo],
+          });
       }
 
       // Gatilhos de não conformidade (2C) — registro aditivo, idempotente por (admissão, tipo).

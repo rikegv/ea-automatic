@@ -22,7 +22,17 @@ export const farolGlobalEnum = pgEnum("farol_global", [
 ]);
 
 /** Frentes paralelas e independentes (§A.3 / F12). */
-export const frenteTipoEnum = pgEnum("frente_tipo", ["AUDITORIA", "EXAME", "CADASTRO_CONTRATO"]);
+export const frenteTipoEnum = pgEnum("frente_tipo", [
+  "AUDITORIA",
+  "EXAME",
+  "CADASTRO_CONTRATO",
+  // Última etapa da esteira (decisão do diretor). Nasce quando o Cadastro conclui, e só para
+  // cliente que exige integração.
+  "INTEGRACAO",
+]);
+
+/** Modalidade da integração agendada. */
+export const tipoIntegracaoEnum = pgEnum("tipo_integracao", ["ONLINE", "PRESENCIAL"]);
 
 /**
  * Tipo de serviço do vínculo cliente↔empresa Soulan (OST estrutural). Derivado do código "Empresa"

@@ -21,9 +21,11 @@ export type Sinalizador = "PENDENTE" | "PARCIAL" | "OK";
  * status de abertura quando, mais tarde, o gate o liberar.
  */
 export const STATUS_INICIAL_FRENTE: Record<FrenteTipo, string> = {
+  // INTEGRACAO nasce a agendar, como o EXAME: a frente existe antes de ter data.
   AUDITORIA: "ANALISE_PENDENTE",
   EXAME: "A_AGENDAR",
   CADASTRO_CONTRATO: "A_CADASTRAR",
+  INTEGRACAO: "A_AGENDAR",
 };
 
 /** Entrada do cálculo do sinalizador — espelha os campos-núcleo do wizard (F6). */

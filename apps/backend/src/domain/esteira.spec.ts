@@ -29,6 +29,9 @@ describe("conclui() / isStatusValido() (§A.3 status por frente)", () => {
       AUDITORIA: "ANALISE_OK",
       EXAME: "APTO",
       CADASTRO_CONTRATO: "CADASTRADO",
+      // INTEGRAÇÃO, a última etapa (decisão do diretor). Concluir aqui é o FIM da esteira: a
+      // admissão passa a viver no Gerenciador.
+      INTEGRACAO: "REALIZADO",
     });
   });
 
