@@ -7718,3 +7718,68 @@ linhas de telefone acima de 30 caracteres** cuja admissão já existia e não fo
 Typecheck backend e frontend limpos, lint limpo nos arquivos novos, **985 testes verdes** com 14
 novos. Sem deploy: nenhum arquivo novo entra no bundle do servidor, são scripts avulsos mais um módulo
 de domínio consumido só por eles.
+
+---
+
+## 04/08/2026, cliente inativo deixa de acender o sinal de Fopag sem pasta-pai
+
+O sinal "Cliente Fopag sem pasta-pai" estava cobrando pasta de cliente com quem a Soulan **não tem
+mais relacionamento** e que já foi inativado no cadastro. Pendência operacional só faz sentido para
+cliente ATIVO, então a fonte da verdade passou a ser o CADASTRO: `clientes.ativo` (boolean NOT NULL,
+225 ativos e 10 inativos no momento da mudança).
+
+### A causa era sutil, e estava num dos dois blocos
+
+O sinal tem dois blocos. O que sujava era o **segundo**, e o motivo é que ele filtrava por `v.ativo`,
+que é o **VÍNCULO Fopag em vigor**, e não por `cli.ativo`, que é o **CADASTRO do cliente**. Um vínculo
+segue marcado como ativo dentro de um cliente já encerrado, e era por essa fresta que o inativo
+entrava na fila.
+
+| Bloco | Universo antes | Depois | Sai |
+|---|---|---|---|
+| 1. por admissão viva Fopag | 19 | 19 | 0 |
+| 2. por vínculo Fopag | 27 | **18** | **9** |
+
+O filtro entrou nos **dois** blocos. No bloco 1 ele não muda nada hoje (os 19 já eram de cliente
+ativo), mas evita o problema voltar se um cliente for inativado com admissão Fopag viva.
+
+Os 9 que saíram, todos com `ativo = f` conferido: INTEREP, THE BEST FOOD, as cinco KANASTRA, BAR E
+RESTAURANTE GALETIM e SANSOLE'S. **Nenhum dos 9 tinha pasta-pai mapeada**, ou seja, os 9 estavam mesmo
+acendendo o sinal. A fila zerou dos inativos **sozinha**: os sinais são recalculados do banco a cada
+chamada (só as dependências externas são cacheadas), então não houve dado a mexer nem cache a limpar.
+
+### A regra geral NÃO foi aplicada aos demais sinais, de propósito
+
+A OST pedia estender o critério aos outros sinais "que resolvem por cliente", citando régua sem pasta
+e arquivamento. Ao investigar, **eles não resolvem por cliente, resolvem por ADMISSÃO**: o sujeito é a
+contratação de uma pessoa, não a relação comercial. O Fopag é o único com cliente como sujeito.
+
+Todos foram medidos e **nenhum tem item de cliente inativo**, pelo mesmo motivo de fundo: cliente
+inativo **não tem nenhuma admissão viva** (os 10 inativos somam 17 concluídas e 8 declínios, nada em
+andamento).
+
+Aplicar o filtro neles não zeraria nada hoje e criaria risco: cliente inativado com alguém em
+contratação, ou admissão concluída de cliente inativo cujo arquivamento no Drive falhou, viraria
+trabalho ESCONDIDO. No arquivamento é pior, porque o documento nunca subiria e ninguém saberia.
+Reportado ao diretor antes de excluir, como a OST previa. **Fica como está até ele decidir o contrário.**
+
+### Um teste que passava sem testar nada
+
+Registro porque é o tipo de erro que se esconde de si mesmo. A primeira versão do
+`fopag-cliente-inativo.spec.ts` procurava o texto "cli.ativo" no SQL emitido, e **o comentário que eu
+mesmo escrevi explicando a regra também contém esse texto**. O teste ficava verde com o filtro
+REMOVIDO.
+
+Só apareceu porque testei o teste: tirei o filtro de propósito para ver se ele quebrava. Reescrito
+para ler apenas o SQL executável (linhas de comentário fora) e conferir a condição inteira
+`cli.ativo = true`. Verificado nos dois sentidos: sem o filtro, **2 dos 4 testes falham**; com ele,
+os 4 passam.
+
+O teste lê o SQL, e não o resultado, de propósito: os dois blocos filtram DENTRO da consulta, então um
+fake de banco que devolve linhas prontas passaria igual com ou sem o filtro.
+
+### Gate e subida
+
+Typecheck backend e frontend limpos, lint limpo, **989 testes verdes** com 4 novos. O
+`diagnostico.service.ts` roda no servidor, então houve build e restart do `ea-backend`, com health 200
+e frontend 200. Validado pelo diretor na tela.
