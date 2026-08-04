@@ -36,7 +36,14 @@ export interface FiltrosGerencial {
    * regra, "Aguardando Liberação" filtra só `AGUARDANDO_LIBERACAO`, que é só o que ele conta.
    */
   farol?: string;
-  tipoContrato?: string;
+  /**
+   * Card CONTRATO, que passou a ser POR STATUS (decisão do diretor; antes era por tipo de contrato).
+   *
+   * O valor carrega a TRILHA junto, porque o card consolida DUAS trilhas paralelas que vivem em
+   * lugares diferentes: `CAD:<status da frente CADASTRO_CONTRATO>` ou `ASS:<clicksign_status>`. Sem
+   * o prefixo, "CADASTRADO" e "ASSINADO" seriam ambíguos na hora de montar o filtro.
+   */
+  contrato?: string;
   /** Status da frente EXAME (APTO, CANCELADO, A_AGENDAR, ASO_PENDENTE, AGENDADO). */
   exame?: string;
   cargoId?: string;
@@ -80,13 +87,13 @@ export class GerencialService {
         .reduce((acc, c) => sql`${acc} or ${c}`);
       cond.push(sql`(${alternativas})`);
     }
-    if (f.tipoContrato) {
-      // "(não informado)" é um valor de tela para nulo/vazio, não um tipo de contrato do sistema.
-      cond.push(
-        f.tipoContrato === SEM_CONTRATO
-          ? sql`coalesce(nullif(a.tipo_contrato, ''), null) is null`
-          : sql`a.tipo_contrato = ${f.tipoContrato}`,
-      );
+    if (f.contrato) {
+      // `CAD:` lê a frente de Cadastro; `ASS:` lê o estado do envelope na admissão (INT-4).
+      const sep = f.contrato.indexOf(":");
+      const trilha = sep >= 0 ? f.contrato.slice(0, sep) : "";
+      const valor = sep >= 0 ? f.contrato.slice(sep + 1) : "";
+      if (trilha === "CAD" && valor) cond.push(sql`fc.status = ${valor}`);
+      if (trilha === "ASS" && valor) cond.push(sql`a.clicksign_status::text = ${valor}`);
     }
     if (f.exame) cond.push(sql`fe.status = ${f.exame}`);
     if (f.cargoId) cond.push(sql`a.cargo_id = ${f.cargoId}`);
@@ -108,14 +115,17 @@ export class GerencialService {
   }
 
   /**
-   * A base do recorte. O LEFT JOIN na frente de EXAME não multiplica linha: existe no máximo uma
-   * frente por (admissão + tipo), garantido por unique e conferido no acervo (zero duplicidade).
+   * A base do recorte. Os LEFT JOIN nas frentes de EXAME e de CADASTRO não multiplicam linha: existe
+   * no máximo uma frente por (admissão + tipo), garantido pelo unique `frentes_admissao_admissao_id_
+   * tipo_unique` e conferido no acervo (zero duplicidade). A contagem do painel continua sendo uma
+   * linha por admissão.
    */
   private base(f: FiltrosGerencial, exceto: "dia" | "mes" | null = null): SQL {
     return sql`
       from admissoes a
       left join frentes_admissao fe on fe.admissao_id = a.id and fe.tipo = 'EXAME'
       left join frente_status_catalogo cat on cat.tipo = 'EXAME' and cat.codigo = fe.status
+      left join frentes_admissao fc on fc.admissao_id = a.id and fc.tipo = 'CADASTRO_CONTRATO'
       left join clientes cl on cl.cod_cliente = a.cod_cliente
       left join cargos cg on cg.id = a.cargo_id
       where ${this.onde(f, exceto)}
@@ -200,21 +210,48 @@ export class GerencialService {
   }
 
   /**
-   * Contrato. Agrupa pela COLUNA CRUA e rotula no TypeScript de propósito: o texto "(não informado)"
-   * é um valor de TELA, e passá-lo como parâmetro dentro do `group by` viraria um placeholder
-   * diferente do que está no `select`, o que o Postgres recusa (as duas expressões deixam de casar).
+   * CONTRATO POR STATUS (decisão do diretor). Antes este card quebrava por TIPO de contrato
+   * (temporário, terceiro); agora mostra em que ponto do contrato cada admissão está, no mesmo
+   * modelo do card de Exame.
+   *
+   * O card consolida DUAS TRILHAS PARALELAS, e isso muda como ele se lê:
+   *  - CADASTRO, que é a frente `CADASTRO_CONTRATO` (A Cadastrar → Cadastrado);
+   *  - ASSINATURA, que NÃO é frente: vive em `admissoes.clicksign_status` (INT-4).
+   *
+   * As duas correm ao mesmo tempo, então uma admissão pode estar Cadastrada E Assinada, e vai contar
+   * nas duas linhas. As 4 linhas NÃO somam o total do recorte, e isso é correto: cada PAR fecha a sua
+   * própria trilha. No acervo atual são 1.516 admissões nas duas condições, então tratar isso como
+   * uma fila única exigiria inventar uma ordem entre trilhas que o processo não tem.
+   *
+   * ORDEM FIXA, de processo, e não por contagem: as quatro linhas são um caminho (a cadastrar,
+   * cadastrado, aguardando assinatura, assinado) e ler fora de ordem não ajuda ninguém.
+   *
+   * Uma consulta só, com contagem condicional, sobre o MESMO recorte dos demais cards.
    */
   private async segContrato(f: FiltrosGerencial): Promise<LinhaSegmento[]> {
-    const linhas = (await this.db.execute(sql`
-      select nullif(a.tipo_contrato, '') as tipo, count(*)::int as total
+    const [l] = (await this.db.execute(sql`
+      select
+        count(*) filter (where fc.status = 'A_CADASTRAR')::int as a_cadastrar,
+        count(*) filter (where fc.status = 'CADASTRADO')::int as cadastrado,
+        count(*) filter (where a.clicksign_status::text = 'AGUARDANDO_ASSINATURA')::int as aguardando,
+        count(*) filter (where a.clicksign_status::text = 'ASSINADO')::int as assinado
       ${this.base(f)}
-      group by 1 order by 2 desc
-    `)) as unknown as Array<{ tipo: string | null; total: number }>;
-    return linhas.map((l) => ({
-      chave: l.tipo ?? SEM_CONTRATO,
-      rotulo: l.tipo ?? SEM_CONTRATO,
-      total: Number(l.total),
-    }));
+    `)) as unknown as Array<{
+      a_cadastrar: number;
+      cadastrado: number;
+      aguardando: number;
+      assinado: number;
+    }>;
+    return [
+      { chave: "CAD:A_CADASTRAR", rotulo: "A Cadastrar", total: Number(l?.a_cadastrar ?? 0) },
+      { chave: "CAD:CADASTRADO", rotulo: "Cadastrado", total: Number(l?.cadastrado ?? 0) },
+      {
+        chave: "ASS:AGUARDANDO_ASSINATURA",
+        rotulo: "Aguardando Assinatura",
+        total: Number(l?.aguardando ?? 0),
+      },
+      { chave: "ASS:ASSINADO", rotulo: "Assinado", total: Number(l?.assinado ?? 0) },
+    ];
   }
 
   private async segExame(f: FiltrosGerencial): Promise<LinhaSegmento[]> {
@@ -267,6 +304,3 @@ export class GerencialService {
     }));
   }
 }
-
-/** Rótulo de tela para admissão sem tipo de contrato. Não é status novo: é a ausência, nomeada. */
-export const SEM_CONTRATO = "(não informado)";

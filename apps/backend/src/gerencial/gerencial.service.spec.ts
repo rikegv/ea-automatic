@@ -148,3 +148,79 @@ describe("painel da diretoria: o recorte", () => {
     expect(kpis).not.toContain("criado_em");
   });
 });
+
+/**
+ * CARD CONTRATO POR STATUS (decisão do diretor). Antes o card quebrava por TIPO de contrato
+ * (temporário, terceiro); agora mostra em que ponto do contrato a admissão está.
+ *
+ * O card consolida DUAS TRILHAS PARALELAS que vivem em lugares diferentes: o Cadastro é frente
+ * (`frentes_admissao`), a Assinatura NÃO é frente (`admissoes.clicksign_status`, INT-4). É por isso
+ * que a chave de cada linha carrega o prefixo da trilha: sem ele, "CADASTRADO" e "ASSINADO" seriam
+ * ambíguos na hora de montar o filtro.
+ */
+describe("painel da diretoria: card Contrato por status", () => {
+  it("o tipo de contrato saiu do recorte de vez", async () => {
+    const { db, consultas } = fakeDb();
+    await new GerencialService(db).painel({});
+    for (const q of consultas) expect(q).not.toContain("a.tipo_contrato");
+  });
+
+  it("devolve as 4 linhas em ordem de PROCESSO, não por contagem", async () => {
+    const { db } = fakeDb();
+    const r = await new GerencialService(db).painel({});
+    expect(r.segmentos.contrato.map((l) => l.rotulo)).toEqual([
+      "A Cadastrar",
+      "Cadastrado",
+      "Aguardando Assinatura",
+      "Assinado",
+    ]);
+  });
+
+  it("cada linha carrega a trilha na chave (o filtro depende disso)", async () => {
+    const { db } = fakeDb();
+    const r = await new GerencialService(db).painel({});
+    expect(r.segmentos.contrato.map((l) => l.chave)).toEqual([
+      "CAD:A_CADASTRAR",
+      "CAD:CADASTRADO",
+      "ASS:AGUARDANDO_ASSINATURA",
+      "ASS:ASSINADO",
+    ]);
+  });
+
+  it("o card lê as duas fontes: a frente de Cadastro e o estado do envelope", async () => {
+    const { db, consultas } = fakeDb();
+    await new GerencialService(db).painel({});
+    const card = consultas.find((q) => q.includes("as a_cadastrar"))!;
+    expect(card).toContain("fc.status = 'A_CADASTRAR'");
+    expect(card).toContain("a.clicksign_status::text = 'ASSINADO'");
+  });
+
+  it("clicar numa linha de CADASTRO filtra pela frente, e o filtro alcança TODO o painel", async () => {
+    const { db, consultas } = fakeDb();
+    await new GerencialService(db).painel({ contrato: "CAD:A_CADASTRAR" });
+    for (const q of consultas) expect(q).toContain("fc.status =");
+    expect(dosKpis(consultas)).not.toContain("clicksign_status::text = $");
+  });
+
+  it("clicar numa linha de ASSINATURA filtra pelo envelope, não pela frente", async () => {
+    const { db, consultas } = fakeDb();
+    await new GerencialService(db).painel({ contrato: "ASS:ASSINADO" });
+    const kpis = dosKpis(consultas);
+    expect(kpis).toContain("a.clicksign_status::text =");
+    expect(kpis).not.toContain("fc.status =");
+  });
+
+  it("valor sem trilha não vira filtro (não deixa passar recorte malformado)", async () => {
+    const { db, consultas } = fakeDb();
+    await new GerencialService(db).painel({ contrato: "CADASTRADO" });
+    expect(dosKpis(consultas)).toContain("where true");
+  });
+
+  it("o join da frente de Cadastro é LEFT e por tipo, para não multiplicar linha nem perder admissão", async () => {
+    const { db, consultas } = fakeDb();
+    await new GerencialService(db).painel({});
+    expect(dosKpis(consultas)).toContain(
+      "left join frentes_admissao fc on fc.admissao_id = a.id and fc.tipo = 'CADASTRO_CONTRATO'",
+    );
+  });
+});

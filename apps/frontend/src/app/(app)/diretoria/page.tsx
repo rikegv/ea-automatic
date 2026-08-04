@@ -66,7 +66,7 @@ interface Filtros {
   codCliente?: string;
   /** Um farol, ou vários separados por vírgula quando o recorte vem de um card de KPI. */
   farol?: string;
-  tipoContrato?: string;
+  contrato?: string;
   exame?: string;
   cargoId?: string;
   dia?: number;
@@ -200,7 +200,10 @@ export default function ControleGerencialPage() {
       const r = faroisAtivos.map((f) => ROTULO_FAROL[f] ?? f).join(" + ");
       itens.push({ campo: "farol", texto: `Farol: ${r}` });
     }
-    if (filtros.tipoContrato) itens.push({ campo: "tipoContrato", texto: `Contrato: ${filtros.tipoContrato}` });
+    if (filtros.contrato) {
+      const r = s?.contrato.find((l) => l.chave === filtros.contrato)?.rotulo ?? filtros.contrato;
+      itens.push({ campo: "contrato", texto: `Contrato: ${r}` });
+    }
     if (filtros.exame) {
       const r = s?.exame.find((l) => l.chave === filtros.exame)?.rotulo ?? filtros.exame;
       itens.push({ campo: "exame", texto: `Exame: ${r}` });
@@ -221,7 +224,7 @@ export default function ControleGerencialPage() {
     (filtros.de || filtros.ate ? 1 : 0) +
     (filtros.codCliente ? 1 : 0) +
     (filtros.farol ? 1 : 0) +
-    (filtros.tipoContrato ? 1 : 0) +
+    (filtros.contrato ? 1 : 0) +
     (filtros.exame ? 1 : 0) +
     (filtros.cargoId ? 1 : 0);
 
@@ -282,8 +285,8 @@ export default function ControleGerencialPage() {
           </FiltroCampo>
           <FiltroCampo label="Contrato">
             <Select
-              value={filtros.tipoContrato ?? ""}
-              onChange={(v) => alternar("tipoContrato", v || undefined)}
+              value={filtros.contrato ?? ""}
+              onChange={(v) => alternar("contrato", v || undefined)}
               placeholder="Todos"
               ariaLabel="Filtrar por contrato"
               menuFit
@@ -423,8 +426,8 @@ export default function ControleGerencialPage() {
         <Tabela
           titulo="Contrato"
           linhas={dados?.segmentos.contrato ?? []}
-          ativos={filtros.tipoContrato ? [filtros.tipoContrato] : []}
-          onClick={(c) => alternar("tipoContrato", c)}
+          ativos={filtros.contrato ? [filtros.contrato] : []}
+          onClick={(c) => alternar("contrato", c)}
         />
         <Tabela
           titulo="Exame Admissional"
