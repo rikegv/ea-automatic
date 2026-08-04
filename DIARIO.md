@@ -7584,3 +7584,137 @@ Backend rebuildado e reiniciado, health 200.
 - **LETÍCIA** (`ADMISSAO_CONCLUIDA`), o único ASO legado não tratado, aguardando decisão do diretor.
 - **Segunda página do dashboard** (I.A contra humano, tempo de esteira, ranking de consultores): não
   iniciada, escopo a definir.
+
+---
+
+## 04/08/2026, carga da base de 03-08 ponta a ponta, com identidade provisória para declínio
+
+A base de atualização de 03/08 (aba ESTEIRA DE ADMISSÃO, **2.514 linhas**) entrou no sistema. O dia
+foi três cargas encadeadas, cada uma com dry-run, trava e conferência no banco antes da real.
+
+### 1. Catálogo, antes de qualquer carga
+
+`db/carga-0308-catalogo.ts`, idempotente (rodado 2x, a segunda criou zero). **7 cargos e 1 cliente**.
+Catálogo foi de 382 para 389 cargos e de 234 para 235 clientes.
+
+Achado que reduziu muito o pedido ao diretor: dos 37 cargos "faltantes", **23 já estavam resolvidos
+pelo `DEPARA_CARGOS.csv` de julho**, com todos os alvos existindo no catálogo vivo. Sobraram 14.
+
+Achado equivalente no cliente: dos 7 códigos órfãos, **4 eram CNPJ de loja que já existe sob outro
+código** (`/0331-65` = 56880, `/1405-90` = 55889, `/0093-70` = 56261, `/0628-58` = 57073), o mesmo
+mapeamento que julho tinha feito na mão. Só **RAIA CAGC CORIFEU (26360)** precisou de cadastro novo.
+
+**Três cargos foram criados apesar de o diretor os ter listado como "usar existentes":** "Vendedor I",
+"Vendedor II" e "Supervisor" não existiam (havia "Vendedor", "Vendedor de Loja", "Vendedor JR",
+"Vendedor PL" e "Supervisora de Caixa"). Criados com o nome exato pedido, e não fundidos em
+"Vendedor", porque fundir descartaria em silêncio a distinção I/II. Reportado no ato.
+
+### 2. Carga principal, 55 admissões
+
+Runner PRÓPRIO (`db/carga-0308.ts`), e não uma alteração do `carga-frente1.ts` (§A.26). O layout da
+planilha mudou desde julho: entraram **8 colunas de exame** e o CARGO saiu da coluna 8 para a 15, então
+o gerador de julho aplicado direto leria a coluna errada.
+
+**Dedup em escada**, porque a chave de julho sozinha deixava passar duplicata em três cenários reais:
+
+| Regra | Pegou |
+|---|---|
+| 1. exata (cpf + cliente + cargo + data) | 2.273 |
+| 2. data corrigida (existente sem data) | 2 |
+| 3. já na esteira viva ou origem PANDAPE | 100 |
+| 4. nome + nascimento + cliente (CPF divergente) | 1 |
+
+A regra 3 foi a que mais rendeu: **98 linhas teriam duplicado admissões que entraram pelo webhook**,
+porque a chave da carga e a do webhook são cegas entre si.
+
+**Nada do que já estava na plataforma foi alterado:** ao bater a dedup o runner PULA e não corrige
+farol, data nem matrícula, ao contrário do `carga-frente1.ts`, que corrigia o farol.
+
+Resultado: **created 55, dupSkipped 2.376, zero falhas**. Trava de 600 criações não disparou.
+
+### 3. REGRA 3: os estados intermediários da esteira
+
+"CADASTRAR" e "DOC OK - AGUARDANDO ASO" não são farol, são estado de FRENTE, e por isso não cabiam no
+`regras-esteira-import.ts`. Em julho todos os estados vivos colapsavam em `EM_ADMISSAO` genérico.
+
+Nasceu `db/regras-esteira-vivas.ts`, **arquivo próprio e escopado por lista de ids** (§A.26): a função
+da §A.16 opera GLOBALMENTE por farol, e acrescentar a Regra 3 lá dentro alcançaria admissão que já
+está na plataforma. Resultado no banco: 11 em CADASTRAR (Auditoria `ANALISE_OK`, Exame `APTO`, Cadastro
+`A_CADASTRAR`) e 5 em DOC_OK (Auditoria concluída, Exame em aberto, **3 `AGENDADO`** por terem clínica,
+data e hora, 2 `A_AGENDAR`).
+
+### 4. Identidade provisória para declínio sem CPF (Opção 1a)
+
+O CPF é a chave de identidade, então 48 declínios sem CPF válido não entravam. O diretor aprovou a
+Opção 1a depois de um levantamento com quatro opções.
+
+`domain/identidade-provisoria.ts`: identificador **`PROV` + 7 em base 36, 11 caracteres**, que é
+exatamente a largura de `candidatos.cpf`. **Não precisou alargar coluna nenhuma.**
+
+Por que é seguro, e isto é mecânica que já existia, não remendo novo:
+- só UMA chave estrangeira aponta para `candidatos` (`admissoes.candidato_cpf`), então reconciliar é
+  operação de três comandos numa tabela só;
+- os TRÊS pontos que formatam ou exportam CPF (exibição e CSV da Esteira, mascaramento do Clicksign,
+  modal do frontend) já fazem a mesma verificação de "11 dígitos ou devolve cru". **Nenhum foi alterado**;
+- hoje 100% dos candidatos reais têm 11 dígitos, então `cpf !~ '^[0-9]{11}$'` isola os provisórios.
+
+`db/carga-provisorio.ts` grava por **SQL direto** (candidato, admissão, vaga, 2 frentes, documentos da
+régua), pulando o `isValidCpf`. O `AdmissoesService.create` **não foi tocado**.
+
+**As três proteções, exigidas antes da construção:**
+1. **Determinístico.** Rodei a carga uma 2ª vez sobre a base já carregada: **created 0**, com os 48
+   reconhecidos pelo contador `provisorioJaExiste`. Totais idênticos depois.
+2. **Reconciliação.** Provada de ponta a ponta num registro sintético criado e apagado: criou o
+   provisório, reconciliou para o CPF real, repontou a admissão, apagou o provisório, gravou a trilha,
+   **não duplicou**, e limpou tudo. A trilha grava o provisório e a marca de reconciliação, nunca o CPF
+   real em texto (§A.6).
+3. **Fora de fila, KPI e assinatura.** 14 testes em `identidade-provisoria.spec.ts`, mais verificação
+   contra o dado REAL no ar, usando as mesmas condições do código de produção: 0 em fila da Esteira,
+   0 no KPI de pendência do Gerenciador, 0 com envelope Clicksign, 0 passando no gate F12 do kit.
+
+Resultado: **+48 admissões**, todas DECLINOU, com Auditoria `DECLINOU` e Exame `CANCELADO` pela §A.16
+Regra 2 e zero frentes de Cadastro.
+
+### 5. Reprocesso das 5 vivas com CPF corrigido na origem
+
+O time corrigiu o dígito verificador de 5 linhas vivas. Só o CPF mudou; as outras colunas saíram da
+mesma planilha pelos mesmos resolvedores. Conferido antes: os 5 dígitos fecham e **nenhum colidia com
+candidato existente**, que era a condição de parada. **created 5**, 4 em `ADMISSAO_CONCLUIDA` e 1
+(PENDÊNCIAS DE DOC) em `EM_ADMISSAO` com as frentes abertas.
+
+### Números finais
+
+| | início do dia | fim |
+|---|---|---|
+| admissões | 2.410 | **2.520** |
+| candidatos | 2.373 | **2.481** |
+| candidatos provisórios | 0 | **48** |
+| cargos / clientes | 382 / 234 | **389 / 235** |
+
+Fora da carga, o Pandapé entregou 2 admissões vivas pelo webhook durante a tarde.
+
+### O que NÃO entrou, e está listado para o time
+
+`CONFERENCIA_CARGA_0308.csv` e os quatro arquivos por categoria, fora do repositório, com permissão
+600 (PII). **30 cegas vivas** aguardando conferência uma a uma (24 ATIVO e 6 intermediárias), e **6
+linhas de telefone acima de 30 caracteres** cuja admissão já existia e não foi alterada.
+
+### Limites honestos do dia
+
+- A §A.16 é global por farol, então ela carimbou `atualizado_em` em **1.484 admissões e 5.996 frentes
+  já existentes**. Os VALORES não mudaram: conferi documentos, Clicksign e a trilha de eventos, e
+  cruzei o último evento humano de cada frente contra o status atual. A única mudança de valor foi 1
+  sinalizador `PARCIAL` para `OK`, numa admissão da carga de julho, que é o alvo previsto da regra.
+- O runner grava `CRIADAS_0308.csv` com nome fixo e **sobrescreveu** a lista das 55 quando a rodada dos
+  provisórios rodou. Reconstruí as 55 a partir do banco e passei a usar diretório próprio por rodada.
+  Nenhum dado do banco foi afetado, era só o arquivo de relatório.
+- Recuperação de CPF por dígito verificador rendeu **0**: dos 18 declínios com CPF inválido, todos
+  geram um CPF válido ao recalcular, mas só 1 existe no banco com o nome batendo, e esse a
+  recuperação por nome único já tinha pego antes. Exigir confirmação no banco foi deliberado: sem
+  isso, os 18 receberiam um CPF plausível que talvez não seja do dono.
+
+### Gate
+
+Typecheck backend e frontend limpos, lint limpo nos arquivos novos, **985 testes verdes** com 14
+novos. Sem deploy: nenhum arquivo novo entra no bundle do servidor, são scripts avulsos mais um módulo
+de domínio consumido só por eles.
