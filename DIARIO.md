@@ -7991,3 +7991,68 @@ pela frente, não acumulado), e `realizadas`, o concluído da aba, no mesmo mold
 
 4 testes novos, **1.017 verdes** no total. Typecheck backend e frontend limpos, lint limpo. Backend
 rebuildado e reiniciado, health 200. Números validados pelo diretor antes das telas.
+
+---
+
+## 05/08/2026, frente INTEGRAÇÃO: onda 4 (a aba, o agendamento e a ficha de apresentação)
+
+Primeira onda que aparece na tela. Validada pelo diretor na plataforma.
+
+### O gatilho da onda 2 disparou sozinho, em produção
+
+O achado da entrega: **6 frentes de Integração nasceram às 11h de 05/08**, sem intervenção. O time
+concluiu 6 Cadastros e o nascimento lazy criou as frentes automaticamente, todas em `A Agendar`. A
+aba já abriu com dado real para validar, e o mecanismo se provou ao vivo antes de a tela existir.
+
+### A aba
+
+Quarta aba, depois do Cadastro, porque é isso que a sequência diz. Composição PRÓPRIA (decisão do
+diretor): Nome · Cliente · Cargo · Data · Horário · Tipo · Consultor · Status · Ações. Saem "Contrato",
+as pendências obrigatórias e a coluna de avanço; o seletor de status vive na coluna Status, porque na
+integração ele É o avanço. Piso `min-w-[1420px]`, então abaixo disso a tabela rola em vez de esmagar.
+
+**Hífen discreto** onde falta agendamento, em vez de "não informado" nas quatro colunas: o status da
+linha já diz que falta agendar, e repetir o aviso quatro vezes seria ruído (decisão do diretor).
+
+**FAROL de cor na linha**, tom suave de fundo (8% a 10%), lendo o MESMO dado que as colunas mostram,
+então a cor nunca discorda da linha: vermelho claro sem agendamento, amarelo agendado, verde
+realizado. Os desfechos de encerramento não pintam, porque a admissão sai da fila.
+
+### Os dois modais
+
+**Agendamento** (ícone de relógio): data, horário, tipo e consultor. O seletor traz COMUM e MASTER
+ativos (7 hoje) e **exclui os 4 super admins**, decidido no BACKEND (`/catalogos/consultores`), não na
+tela: regra de negócio não mora no frontend.
+
+**Salvar NÃO move a frente**, diferente do agendamento do exame. Lá o salvamento leva a AGENDADO
+sozinho porque a data do exame é o próprio fato; aqui o diretor descreveu o status como algo que o
+CONSULTOR registra, então mover por baixo tiraria dele o controle da fila. O modal diz isso em texto.
+Quem cobra o preenchimento é o gate de transição ao marcar "Agendado"; salvamento PARCIAL continua
+permitido (§A.3 regra 5).
+
+**Ficha de apresentação** (olho, só na aba da Integração): contrato de trabalho e benefícios, SOMENTE
+LEITURA. É o que o consultor mostra ao candidato no dia, então o recorte é curto de propósito, sem
+trilha, documentos, pausas nem histórico. Nas outras três abas o olho continua abrindo a ficha
+completa de sempre.
+
+**Endpoint PRÓPRIO** (`/esteira/integracao/{id}/apresentacao`) em vez de campo novo no `detalhe`
+(§A.26): o `detalhe` alimenta o modal do olho das três abas existentes e é código muito exercitado.
+Ele lê as DUAS fontes de benefício, o pacote estruturado e o texto achatado das 2.188 importadas,
+senão a ficha viria vazia para quase toda a base atual.
+
+### §A.26: o que foi tocado além da aba
+
+No `esteira/page.tsx`, o arquivo mais exercitado do sistema, foram CINCO pontos, todos condicionados a
+`isIntegracao`: registro da aba, grid, cabeçalho, células e coluna de ações. Nenhum comportamento das
+três abas existentes mudou. Os dois modais são COMPONENTES NOVOS, em arquivos próprios, então a página
+recebeu só import e estado.
+
+No backend, o único ponto compartilhado foi o `listar`, que ganhou o mapa do agendamento atrás de
+`tipo === "INTEGRACAO"`, no mesmo padrão dos extras das outras abas (uma consulta por página, não uma
+por linha).
+
+### Gate
+
+**1.017 testes verdes**, typecheck backend e frontend limpos, lint limpo. Backend rebuildado e
+reiniciado; o frontend foi PARADO antes do build e subido depois, para não servir `.next` pela metade.
+Três portas em 200. Validado pelo diretor na plataforma.
