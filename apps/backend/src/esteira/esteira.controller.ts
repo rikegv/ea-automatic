@@ -18,6 +18,8 @@ import { CurrentUser } from "../auth/decorators";
 import type { AuthUser } from "../auth/auth.types";
 import { parseMulti } from "../common/parse-multi";
 import { AgendamentoExameDto } from "./dto/agendamento-exame.dto";
+// Value import (não `import type`): o ValidationPipe precisa da CLASSE em runtime.
+import { AgendamentoIntegracaoDto } from "./dto/agendamento-integracao.dto";
 import { DeclinarDto } from "./dto/declinar.dto";
 import { PausarDto } from "./dto/pausar.dto";
 import { PatchStatusDto } from "./dto/patch-status.dto";
@@ -138,6 +140,27 @@ export class EsteiraController {
   ) {
     // `user` é o autor do evento quando o ASO validado conclui a frente em APTO (transição pós-ASO).
     return this.esteira.anexarAso(admissaoId, file, user);
+  }
+
+  /** Ficha de apresentação da integração (modal do olho): contrato e benefícios, só leitura. */
+  @Get("integracao/:admissaoId/apresentacao")
+  apresentacaoIntegracao(@Param("admissaoId") admissaoId: string) {
+    return this.esteira.apresentacaoIntegracao(admissaoId);
+  }
+
+  /** Agendamento da integração (modal da aba INTEGRAÇÃO) — devolve o registro atual ou null. */
+  @Get("integracao/:admissaoId/agendamento")
+  obterAgendamentoIntegracao(@Param("admissaoId") admissaoId: string) {
+    return this.esteira.obterAgendamentoIntegracao(admissaoId);
+  }
+
+  /** Cadastra ou reagenda a integração. Não move a frente: o status é do consultor. */
+  @Put("integracao/:admissaoId/agendamento")
+  salvarAgendamentoIntegracao(
+    @Param("admissaoId") admissaoId: string,
+    @Body() dto: AgendamentoIntegracaoDto,
+  ) {
+    return this.esteira.salvarAgendamentoIntegracao(admissaoId, dto);
   }
 
   /** Agendamento do exame (modal) — devolve o registro atual ou null. */

@@ -33,13 +33,45 @@ import { AuditoriaDocsModal } from "@/components/esteira/AuditoriaDocsModal";
 import { AgendamentoExameModal } from "@/components/esteira/AgendamentoExameModal";
 import { PendenciasModal } from "@/components/gerenciador/PendenciasModal";
 import { EditAdmissaoModal } from "@/components/gerenciador/EditAdmissaoModal";
+import { AgendamentoIntegracaoModal } from "@/components/esteira/AgendamentoIntegracaoModal";
+import { ApresentacaoIntegracaoModal } from "@/components/esteira/ApresentacaoIntegracaoModal";
 
 // ── Contrato de API (F8/F7) ─────────────────────────────────────────────────
 const ABAS = [
   { label: "AUDITORIA", rota: "auditoria", icone: "doc" },
   { label: "EXAME", rota: "exame", icone: "heart" },
   { label: "CADASTRO", rota: "cadastro", icone: "pen" },
+  // INTEGRAÇÃO, a ÚLTIMA etapa da esteira (decisão do diretor). Entra depois do Cadastro porque é
+  // isso que a sequência diz: auditoria e exame em paralelo, depois cadastro, depois integração.
+  { label: "INTEGRAÇÃO", rota: "integracao", icone: "users" },
 ] as const;
+
+/**
+ * FAROL DE COR DA LINHA na aba INTEGRAÇÃO (decisão do diretor). Tom SUAVE, de fundo, para varrer a
+ * fila com o olho sem competir com as pills de status:
+ *  - vermelho claro: sem agendamento, ninguém marcou nada ainda;
+ *  - amarelo: agendado, aguardando a confirmação de que aconteceu;
+ *  - verde: integração realizada.
+ *
+ * Lê o MESMO dado que as colunas mostram, então a cor nunca discorda da linha. Os desfechos de
+ * encerramento (declínio, rescisão) não pintam: a admissão sai da fila e a cor não teria a quem
+ * servir.
+ */
+function farolIntegracaoClasse(item: {
+  status: string;
+  integracao?: { data: string | null } | null;
+}): string {
+  if (item.status === "REALIZADO") return "bg-[color-mix(in_srgb,var(--ok)_10%,transparent)]";
+  if (item.status === "AGENDADO" || item.integracao?.data)
+    return "bg-[color-mix(in_srgb,var(--warn)_10%,transparent)]";
+  return "bg-[color-mix(in_srgb,var(--danger)_8%,transparent)]";
+}
+
+/** Rótulo de tela da modalidade da integração (§A.24: tag em Title Case). */
+const TIPO_INTEGRACAO_ROTULO: Record<string, string> = {
+  ONLINE: "Online",
+  PRESENCIAL: "Presencial",
+};
 
 interface StatusCat {
   codigo: string;
@@ -50,6 +82,13 @@ interface StatusCat {
 interface EsteiraItem {
   admissaoId: string;
   frenteId: string;
+  /** Agendamento da INTEGRAÇÃO. Só vem na aba da integração, e é null enquanto ninguém agendou. */
+  integracao?: {
+    data: string | null;
+    horario: string | null;
+    tipo: string | null;
+    consultorNome: string | null;
+  } | null;
   candidatoNome: string;
   codCliente: string;
   clienteRazao: string;
@@ -221,6 +260,10 @@ export default function EsteiraPage() {
   const isExame = rota === "exame";
   const isCadastro = rota === "cadastro";
   const isAuditoria = rota === "auditoria";
+  const isIntegracao = rota === "integracao";
+  // Modais da aba INTEGRAÇÃO. Estado próprio, sem tocar nos modais existentes das outras abas.
+  const [agendaIntegracao, setAgendaIntegracao] = useState<EsteiraItem | null>(null);
+  const [apresentacaoId, setApresentacaoId] = useState<string | null>(null);
 
   // Dados da frente
   const [data, setData] = useState<EsteiraResp | null>(null);
@@ -678,6 +721,11 @@ export default function EsteiraPage() {
     status: "210px",
     pend: "168px",
     acoes: "120px",
+    // Colunas da INTEGRAÇÃO. Larguras pelo CONTEÚDO mais longo, não pelo título: "Presencial" manda
+    // em Tipo, "00:00" em Horário, e Consultor precisa caber nome de gente (§A.20).
+    horario: "96px",
+    tipoIntegracao: "128px",
+    consultor: "minmax(190px,1.1fr)",
   };
   // Exame carrega 3 controles na barra (seletor + ASO + Agendamento): precisa de piso maior para
   // "Agendamento" não cortar (§A.20). Auditoria tem 2 (seletor + Auditar) e Cadastro só o seletor.
@@ -689,22 +737,43 @@ export default function EsteiraPage() {
   // Ordem (OST ajustes, item 5a): Tipo de contrato é a PRIMEIRA coluna de conteúdo, antes de
   // Candidato. Só na Esteira; o Gerenciador não muda. O checkbox do Exame segue como afordância à
   // esquerda de tudo.
-  const gridCols = [
-    isExame ? "40px" : null,
-    COL.contrato,
-    COL.cand,
-    COL.cli,
-    COL.cargo,
-    COL.data,
-    COL.status,
-    COL.pend,
-    avanco,
-    COL.acoes,
-  ]
+  const gridCols = (
+    isIntegracao
+      ? // A aba da INTEGRAÇÃO tem composição própria (decisão do diretor): sai "Contrato", saem as
+        // pendências obrigatórias e a coluna de avanço, e entram os três campos do agendamento. O
+        // seletor de status vive na própria coluna Status, porque aqui ele é o avanço.
+        [
+          COL.cand,
+          COL.cli,
+          COL.cargo,
+          COL.data,
+          COL.horario,
+          COL.tipoIntegracao,
+          COL.consultor,
+          COL.status,
+          COL.acoes,
+        ]
+      : [
+          isExame ? "40px" : null,
+          COL.contrato,
+          COL.cand,
+          COL.cli,
+          COL.cargo,
+          COL.data,
+          COL.status,
+          COL.pend,
+          avanco,
+          COL.acoes,
+        ]
+  )
     .filter(Boolean)
     .join(" ");
   // Piso de largura: abaixo dele o container rola na horizontal em vez de esmagar as colunas (§A.12).
-  const gridMin = isExame ? "min-w-[1840px]" : "min-w-[1540px]";
+  const gridMin = isExame
+    ? "min-w-[1840px]"
+    : isIntegracao
+      ? "min-w-[1420px]"
+      : "min-w-[1540px]";
 
   function toggleStatusKpi(code: string) {
     setStatusFiltro((cur) => (cur.includes(code) ? cur.filter((c) => c !== code) : [...cur, code]));
@@ -1125,9 +1194,11 @@ export default function EsteiraPage() {
                 {/* OST do espaço horizontal: "Tipo de contrato" virou "Contrato" e "Candidato"
                     virou "Nome". Rótulos mais curtos liberam largura de cabeçalho, que é o que
                     empurrava as últimas colunas para fora da área visível. */}
-                <ColunaOrdenavel ord={ord} chave="contrato">
-                  Contrato
-                </ColunaOrdenavel>
+                {!isIntegracao && (
+                  <ColunaOrdenavel ord={ord} chave="contrato">
+                    Contrato
+                  </ColunaOrdenavel>
+                )}
                 <ColunaOrdenavel ord={ord} chave="candidato">
                   Nome
                 </ColunaOrdenavel>
@@ -1137,18 +1208,32 @@ export default function EsteiraPage() {
                 <ColunaOrdenavel ord={ord} chave="cargo">
                   Cargo
                 </ColunaOrdenavel>
-                <ColunaOrdenavel ord={ord} chave="data">
-                  Data adm.
-                </ColunaOrdenavel>
-                <ColunaOrdenavel ord={ord} chave="status">
-                  Status
-                </ColunaOrdenavel>
-                <ColunaOrdenavel ord={ord} chave="pendencias">
-                  Pendências Obrig.
-                </ColunaOrdenavel>
-                <span>
-                  {isExame ? "ASO / Avanço" : isAuditoria ? "Avanço / Auditoria" : "Avanço"}
-                </span>
+                {isIntegracao ? (
+                  <>
+                    <span>Data</span>
+                    <span>Horário</span>
+                    <span>Tipo</span>
+                    <span>Consultor</span>
+                    <ColunaOrdenavel ord={ord} chave="status">
+                      Status
+                    </ColunaOrdenavel>
+                  </>
+                ) : (
+                  <>
+                    <ColunaOrdenavel ord={ord} chave="data">
+                      Data adm.
+                    </ColunaOrdenavel>
+                    <ColunaOrdenavel ord={ord} chave="status">
+                      Status
+                    </ColunaOrdenavel>
+                    <ColunaOrdenavel ord={ord} chave="pendencias">
+                      Pendências Obrig.
+                    </ColunaOrdenavel>
+                    <span>
+                      {isExame ? "ASO / Avanço" : isAuditoria ? "Avanço / Auditoria" : "Avanço"}
+                    </span>
+                  </>
+                )}
                 <span className="col-fix">Ações</span>
               </div>
 
@@ -1201,7 +1286,7 @@ export default function EsteiraPage() {
                   return (
                     <div
                       key={item.frenteId}
-                      className="row"
+                      className={cn("row", isIntegracao && farolIntegracaoClasse(item))}
                       style={{ gridTemplateColumns: gridCols }}
                     >
                       {isExame && (
@@ -1218,15 +1303,17 @@ export default function EsteiraPage() {
                       {/* Tipo de contrato: PRIMEIRA coluna de conteúdo (OST ajustes, item 5a). Vazio =
                           "não informado" (§A.11), em tom apagado para bater o olho em quem está sem o
                           dado. */}
-                      <div
-                        className={cn(
-                          "meta truncate text-center",
-                          !item.tipoContrato && "text-faint",
-                        )}
-                        title={item.tipoContrato || "não informado"}
-                      >
-                        {item.tipoContrato || "não informado"}
-                      </div>
+                      {!isIntegracao && (
+                        <div
+                          className={cn(
+                            "meta truncate text-center",
+                            !item.tipoContrato && "text-faint",
+                          )}
+                          title={item.tipoContrato || "não informado"}
+                        >
+                          {item.tipoContrato || "não informado"}
+                        </div>
+                      )}
                       {/* Coluna Candidato: SÓ o nome (§A.12). A origem Pandapé fica no detalhe (olho),
                           não colada ao nome na tabela. */}
                       <div className="min-w-0 text-left">
@@ -1253,7 +1340,40 @@ export default function EsteiraPage() {
                       <div className="meta truncate text-center" title={item.cargoNome}>
                         {item.cargoNome}
                       </div>
-                      <div className="meta text-center">{fmtDataAdmissao(item.dataAdmissao)}</div>
+                      {isIntegracao ? (
+                        <>
+                          {/* Agendamento da integração. Vazio vira HÍFEN discreto (decisão do
+                              diretor): o status da linha já diz que falta agendar, então repetir
+                              "não informado" em três colunas seria ruído. */}
+                          <div className="meta text-center">
+                            {item.integracao?.data ? (
+                              fmtDataAdmissao(item.integracao.data)
+                            ) : (
+                              <span className="text-faint/60">—</span>
+                            )}
+                          </div>
+                          <div className="meta text-center tabular-nums">
+                            {item.integracao?.horario ?? <span className="text-faint/60">—</span>}
+                          </div>
+                          <div className="meta truncate text-center">
+                            {item.integracao?.tipo ? (
+                              TIPO_INTEGRACAO_ROTULO[item.integracao.tipo]
+                            ) : (
+                              <span className="text-faint/60">—</span>
+                            )}
+                          </div>
+                          <div
+                            className="meta truncate text-center"
+                            title={item.integracao?.consultorNome ?? undefined}
+                          >
+                            {item.integracao?.consultorNome ?? (
+                              <span className="text-faint/60">—</span>
+                            )}
+                          </div>
+                        </>
+                      ) : (
+                        <div className="meta text-center">{fmtDataAdmissao(item.dataAdmissao)}</div>
+                      )}
                       <div className="flex min-w-0 flex-col items-center gap-1">
                         <StatusPill tone={tone} label={rotulo} />
                         {/* PAUSA: mais um estado da MESMA coluna Status, empilhado sob a pill da
@@ -1534,12 +1654,27 @@ export default function EsteiraPage() {
                             <GoogleDriveLogo className="h-[17px] w-[17px]" />
                           </a>
                         )}
+                        {isIntegracao && (
+                          <button
+                            type="button"
+                            className="grid h-8 w-8 place-items-center rounded-lg text-faint transition hover:bg-[var(--surface-2)] hover:text-accent"
+                            title="Agendar integração"
+                            aria-label={`Agendar integração de ${item.candidatoNome}`}
+                            onClick={() => setAgendaIntegracao(item)}
+                          >
+                            <Icon name="clock" className="h-[17px] w-[17px]" />
+                          </button>
+                        )}
                         <button
                           type="button"
                           className="grid h-8 w-8 place-items-center rounded-lg text-faint transition hover:bg-[var(--surface-2)] hover:text-accent"
                           title="Ver ficha (somente leitura)"
                           aria-label={`Ver ficha de ${item.candidatoNome}`}
-                          onClick={() => setViewId(item.admissaoId)}
+                          onClick={() =>
+                            isIntegracao
+                              ? setApresentacaoId(item.admissaoId)
+                              : setViewId(item.admissaoId)
+                          }
                         >
                           <Icon name="eye" className="h-[18px] w-[18px]" />
                         </button>
@@ -1564,6 +1699,25 @@ export default function EsteiraPage() {
           </div>
         </GlassCard>
       </div>
+
+      {/* Modais da aba INTEGRAÇÃO. Recarrega a fila ao salvar, para as colunas do agendamento
+          refletirem o que acabou de ser gravado. */}
+      {agendaIntegracao && (
+        <AgendamentoIntegracaoModal
+          admissaoId={agendaIntegracao.admissaoId}
+          candidatoNome={agendaIntegracao.candidatoNome}
+          onClose={(salvou) => {
+            setAgendaIntegracao(null);
+            if (salvou) void load();
+          }}
+        />
+      )}
+      {apresentacaoId && (
+        <ApresentacaoIntegracaoModal
+          admissaoId={apresentacaoId}
+          onClose={() => setApresentacaoId(null)}
+        />
+      )}
 
       {/* ── Diálogos ─────────────────────────────────────────────────────── */}
       <ConfirmDialog

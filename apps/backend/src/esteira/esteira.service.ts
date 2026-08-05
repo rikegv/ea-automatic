@@ -29,6 +29,7 @@ import { DRIZZLE } from "../db/drizzle.module";
 import { naoPausada } from "../db/admissao-filtros";
 import {
   admissaoBeneficio,
+  beneficiosCatalogo,
   admissoes,
   candidatoAlteracoesLog,
   candidatos,
@@ -39,6 +40,7 @@ import {
   documentosAdmissao,
   clinicasCatalogo,
   exameAgendamento,
+  integracaoAgendamento,
   exameAgendamentoEndereco,
   frenteStatusCatalogo,
   frenteStatusEventos,
@@ -75,6 +77,7 @@ import {
 } from "../domain/esteira";
 import { STATUS_INICIAL_FRENTE } from "../domain/admissao";
 import { clienteExigeIntegracao } from "./integracao-obrigatoria.repo";
+import type { AgendamentoIntegracaoDto } from "./dto/agendamento-integracao.dto";
 import type { AgendamentoExameDto } from "./dto/agendamento-exame.dto";
 import type { PatchStatusDto } from "./dto/patch-status.dto";
 import type { RelatorioClinicaDto } from "./dto/relatorio-clinica.dto";
@@ -306,6 +309,12 @@ export class EsteiraService {
         : new Map<string, AgendamentoResumo>();
     const dispMap =
       tipo === "CADASTRO_CONTRATO" ? await this.disponibilidadeMap(admissaoIds) : new Map();
+    // Agendamento da INTEGRAÇÃO para as colunas Data, Horário, Tipo e Consultor. Só a aba da
+    // integração paga esta consulta, no mesmo padrão dos demais extras por aba.
+    const integracaoMap =
+      tipo === "INTEGRACAO"
+        ? await this.integracaoMap(admissaoIds)
+        : new Map<string, IntegracaoResumo>();
     const pendSet =
       tipo === "AUDITORIA"
         ? await this.reguaCompletude.obrigatoriosPendentesSet(admissaoIds)
@@ -378,6 +387,11 @@ export class EsteiraService {
       }
       if (tipo === "CADASTRO_CONTRATO") {
         return { ...base, disponivel: dispMap.get(r.admissaoId) ?? false };
+      }
+      if (tipo === "INTEGRACAO") {
+        // `null` quando ninguém agendou: a tela mostra hífen discreto nas quatro colunas, porque o
+        // status da linha já diz que falta agendar (decisão do diretor).
+        return { ...base, integracao: integracaoMap.get(r.admissaoId) ?? null };
       }
       if (tipo === "AUDITORIA") {
         return {
@@ -714,6 +728,20 @@ export class EsteiraService {
           needsConfirmation: false,
           reason: "exameSemAgendamento",
           message: `Cadastre as informações do exame (modal de agendamento) antes de marcar como Agendado. Falta preencher: ${faltantes.join(", ")}.`,
+        });
+      }
+    }
+
+    // (a.2) MESMO gate para a INTEGRAÇÃO: marcar como Agendado exige o agendamento completo. O
+    // registro PARCIAL continua permitido (§A.3 regra 5, pendência sinaliza e não bloqueia); o que
+    // não se admite é a frente dizer "Agendado" sem haver agendamento.
+    if (tipo === "INTEGRACAO" && novo === "AGENDADO") {
+      const faltantes = await this.camposIntegracaoFaltantes(frente.admissaoId);
+      if (faltantes.length > 0) {
+        throw new ConflictException({
+          needsConfirmation: false,
+          reason: "integracaoSemAgendamento",
+          message: `Cadastre as informações da integração (modal de agendamento) antes de marcar como Agendado. Falta preencher: ${faltantes.join(", ")}.`,
         });
       }
     }
@@ -1848,6 +1876,168 @@ export class EsteiraService {
     };
   }
 
+  /**
+   * FICHA DE APRESENTAÇÃO DA INTEGRAÇÃO (modal do olho da aba INTEGRAÇÃO). SOMENTE LEITURA.
+   *
+   * É o que o consultor mostra ao candidato no dia: o que foi contratado e o que ele recebe. Por
+   * isso o recorte é CURTO e específico, contrato mais benefícios, e não a ficha completa da
+   * admissão, que tem trilha, documentos, pausas e histórico que não se apresenta a ninguém.
+   *
+   * ENDPOINT PRÓPRIO, e não um campo novo no `detalhe` (§A.26): o `detalhe` alimenta o modal do olho
+   * das TRÊS abas existentes e é código muito exercitado. Uma leitura nova, com payload próprio, não
+   * alcança nada do que já funciona.
+   *
+   * BENEFÍCIOS de duas fontes, porque a base tem as duas: o pacote ESTRUTURADO
+   * (`admissao_beneficio`, admissões novas) e o texto ACHATADO (`dados_vaga_folha.beneficios`, das
+   * 2.188 importadas, que nunca tiveram linha no catálogo). Mostrar só o estruturado deixaria a
+   * ficha vazia para quase toda a base atual.
+   *
+   * §A.6: nenhum CPF, nenhum contato. Nome do candidato entra porque é a ficha DELE, apresentada a
+   * ele; o resto é dado contratual e de catálogo.
+   */
+  async apresentacaoIntegracao(admissaoId: string) {
+    const [adm] = await this.db
+      .select({
+        admissaoId: admissoes.id,
+        candidatoNome: candidatos.nome,
+        dataAdmissao: admissoes.dataAdmissao,
+        tipoContrato: admissoes.tipoContrato,
+        matricula: admissoes.matricula,
+        cargoNome: cargos.nome,
+        clienteRazao: clientes.razaoSocial,
+        clienteOperacao: clientes.nomeOperacao,
+      })
+      .from(admissoes)
+      .innerJoin(candidatos, eq(candidatos.cpf, admissoes.candidatoCpf))
+      .leftJoin(cargos, eq(cargos.id, admissoes.cargoId))
+      .leftJoin(clientes, eq(clientes.codCliente, admissoes.codCliente))
+      .where(eq(admissoes.id, admissaoId));
+    if (!adm) throw new NotFoundException("Admissão não encontrada");
+
+    const vaga = await this.db.query.dadosVagaFolha.findFirst({
+      where: eq(dadosVagaFolha.admissaoId, admissaoId),
+    });
+
+    const estruturados = await this.db
+      .select({
+        nome: beneficiosCatalogo.nome,
+        valor: admissaoBeneficio.valor,
+        exigeValor: beneficiosCatalogo.exigeValor,
+      })
+      .from(admissaoBeneficio)
+      .innerJoin(beneficiosCatalogo, eq(beneficiosCatalogo.id, admissaoBeneficio.beneficioId))
+      .where(eq(admissaoBeneficio.admissaoId, admissaoId))
+      .orderBy(asc(beneficiosCatalogo.nome));
+
+    return {
+      candidato: adm.candidatoNome,
+      contrato: {
+        cargo: adm.cargoNome,
+        cliente: adm.clienteOperacao || adm.clienteRazao,
+        tipoContrato: adm.tipoContrato,
+        dataAdmissao: adm.dataAdmissao,
+        matricula: adm.matricula,
+        salario: vaga?.salario ?? null,
+        escala: vaga?.escala ?? null,
+        localTrabalho: vaga?.endereco ?? null,
+        centroCusto: vaga?.centroCusto ?? null,
+        departamento: vaga?.departamento ?? null,
+        gestorBp: vaga?.gestorBp ?? null,
+        tempoContrato: vaga?.tempoContrato ?? null,
+      },
+      beneficios: estruturados.map((b) => ({
+        nome: b.nome,
+        // Valor só aparece em quem tem valor; o resto é o benefício em si.
+        valor: b.exigeValor ? b.valor : null,
+      })),
+      // Texto achatado das importadas. A tela mostra este bloco só quando não há estruturado.
+      beneficiosTexto: estruturados.length === 0 ? (vaga?.beneficios ?? null) : null,
+    };
+  }
+
+  /**
+   * Agendamento da integração por admissão, para as colunas da aba. Uma consulta para a página
+   * inteira, e não uma por linha, pelo mesmo motivo dos demais mapas: a fila tem dezenas de linhas.
+   */
+  private async integracaoMap(admissaoIds: string[]): Promise<Map<string, IntegracaoResumo>> {
+    const mapa = new Map<string, IntegracaoResumo>();
+    if (admissaoIds.length === 0) return mapa;
+    const linhas = await this.db
+      .select({
+        admissaoId: integracaoAgendamento.admissaoId,
+        data: integracaoAgendamento.data,
+        horario: integracaoAgendamento.horario,
+        tipo: integracaoAgendamento.tipo,
+        consultorNome: usuarios.nome,
+      })
+      .from(integracaoAgendamento)
+      .leftJoin(usuarios, eq(usuarios.id, integracaoAgendamento.consultorId))
+      .where(inArray(integracaoAgendamento.admissaoId, admissaoIds));
+    for (const l of linhas) {
+      mapa.set(l.admissaoId, {
+        data: l.data ?? null,
+        horario: l.horario ?? null,
+        tipo: l.tipo ?? null,
+        consultorNome: l.consultorNome ?? null,
+      });
+    }
+    return mapa;
+  }
+
+  // ── Modal de Agendamento da INTEGRAÇÃO (aba INTEGRAÇÃO) ─────────────────────
+
+  /** Agendamento da integração da admissão, ou `null` se ainda não houver. */
+  async obterAgendamentoIntegracao(admissaoId: string) {
+    const [row] = await this.db
+      .select()
+      .from(integracaoAgendamento)
+      .where(eq(integracaoAgendamento.admissaoId, admissaoId));
+    return row ?? null;
+  }
+
+  /**
+   * Cadastra ou reagenda a integração. Upsert por admissão (há unique em `admissao_id`), então
+   * reagendar não cria linha nova e não perde o histórico de quem conduz.
+   *
+   * NÃO move a frente sozinho, ao contrário do agendamento do exame. Lá o salvamento leva a frente a
+   * AGENDADO automaticamente porque a data do exame é o próprio fato; aqui o diretor descreveu o
+   * status como algo que o CONSULTOR registra (a agendar, agendado, realizado), então mover por
+   * baixo tiraria dele o controle da própria fila. O avanço continua pelo seletor de status, e o
+   * gate de transição é que cobra o agendamento completo.
+   */
+  async salvarAgendamentoIntegracao(admissaoId: string, dto: AgendamentoIntegracaoDto) {
+    const adm = await this.db.query.admissoes.findFirst({ where: eq(admissoes.id, admissaoId) });
+    if (!adm) throw new NotFoundException("Admissão não encontrada");
+
+    const valores = {
+      data: dto.data ?? null,
+      horario: dto.horario ?? null,
+      tipo: dto.tipo ?? null,
+      consultorId: dto.consultorId ?? null,
+      atualizadoEm: new Date(),
+    };
+    const [row] = await this.db
+      .insert(integracaoAgendamento)
+      .values({ admissaoId, ...valores })
+      .onConflictDoUpdate({ target: integracaoAgendamento.admissaoId, set: valores })
+      .returning();
+    return row;
+  }
+
+  /**
+   * Campos que faltam para a integração poder ir a AGENDADO. Mesmo desenho do gate do exame: o
+   * registro parcial é permitido, o AVANÇO de status é que não mente.
+   */
+  private async camposIntegracaoFaltantes(admissaoId: string): Promise<string[]> {
+    const row = await this.obterAgendamentoIntegracao(admissaoId);
+    const faltam: string[] = [];
+    if (!row?.data) faltam.push("Data");
+    if (!row?.horario) faltam.push("Horário");
+    if (!row?.tipo) faltam.push("Tipo (online ou presencial)");
+    if (!row?.consultorId) faltam.push("Consultor responsável");
+    return faltam;
+  }
+
   // ── Modal de Gestão de Agendamento do Exame (aba EXAME) ──────────────────────
 
   /** Devolve o agendamento do exame da admissão (ou null se ainda não cadastrado). */
@@ -2274,6 +2464,14 @@ interface EnderecoResumo {
   horario: string | null;
   /** Fornecedor DESTE endereço, derivado da clínica dele. */
   fornecedor: string | null;
+}
+
+/** Agendamento da INTEGRAÇÃO, no recorte que a coluna da aba precisa. */
+interface IntegracaoResumo {
+  data: string | null;
+  horario: string | null;
+  tipo: string | null;
+  consultorNome: string | null;
 }
 
 interface AgendamentoResumo {

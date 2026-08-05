@@ -24,6 +24,13 @@ export class CatalogosController {
     return this.catalogos.listClientes(q);
   }
 
+  // Consultores para o seletor da INTEGRAÇÃO: COMUM e MASTER, ativos. Super admin fora (§A.6: só
+  // id e nome).
+  @Get("consultores")
+  consultores() {
+    return this.catalogos.listConsultores();
+  }
+
   @Get("cargos")
   cargos() {
     return this.catalogos.listCargos();

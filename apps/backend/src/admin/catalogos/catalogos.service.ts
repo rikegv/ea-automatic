@@ -1,5 +1,5 @@
 import { BadRequestException, Inject, Injectable } from "@nestjs/common";
-import { and, asc, eq, ilike, or, sql } from "drizzle-orm";
+import { and, asc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import type { Database } from "../../db/client";
 import { DRIZZLE } from "../../db/drizzle.module";
 import {
@@ -12,6 +12,7 @@ import {
   frenteStatusCatalogo,
   motivosContratacao,
   motivosDeclinio,
+  usuarios,
   reguaDocumental,
   tiposDocumento,
 } from "../../db/schema";
@@ -213,6 +214,25 @@ export class CatalogosService {
       .from(clinicasCatalogo)
       .where(eq(clinicasCatalogo.ativo, true))
       .orderBy(asc(clinicasCatalogo.nome));
+  }
+
+  /**
+   * CONSULTORES que podem conduzir uma INTEGRAÇÃO (decisão do diretor): COMUM e MASTER, ativos.
+   *
+   * O SUPER ADMIN fica FORA da lista de propósito. Ele é perfil de administração do sistema, não de
+   * operação da esteira, e oferecê-lo como responsável por uma integração convidaria a atribuir
+   * trabalho operacional a quem não o executa.
+   *
+   * Autenticado e sem restrição de papel, como os demais catálogos operacionais: qualquer consultor
+   * opera a aba da Integração (decisão do diretor), então qualquer um precisa montar o seletor.
+   * §A.6: só id e nome, sem e-mail nem qualquer outro dado de contato.
+   */
+  listConsultores() {
+    return this.db
+      .select({ id: usuarios.id, nome: usuarios.nome })
+      .from(usuarios)
+      .where(and(eq(usuarios.ativo, true), inArray(usuarios.papel, ["COMUM", "MASTER"])))
+      .orderBy(asc(usuarios.nome));
   }
 
   listEscalas() {
