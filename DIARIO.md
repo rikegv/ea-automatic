@@ -7927,3 +7927,67 @@ todos os 235 clientes exigem integração por default e nenhuma das 1.555 admiss
 frente, então nenhuma teria "concluído a integração". A alternativa proposta é a presença da frente
 decidir (conta quem terminou o Cadastro e não tem integração PENDENTE), que preserva as 1.555 e faz
 as novas esperarem. Onda 3 não começa antes dessa resposta.
+
+---
+
+## 05/08/2026, frente INTEGRAÇÃO: onda 3 (fila, KPI, desfecho e farol automático)
+
+Terceira onda do plano. Ainda **nada na tela**: as telas são as ondas 4 e 5. A parada aqui foi
+obrigatória, para o diretor conferir os números antes de qualquer interface.
+
+### O KPI "Concluído" do Gerenciador, e o número que quase zerou o card
+
+A frente INTEGRAÇÃO entrou como última etapa, então "cadastro concluído" deixou de significar
+"processo terminado" para quem ainda vai passar por ela. Sem ajuste, uma admissão VIVA em integração
+contaria como Concluída enquanto o time ainda trabalha nela.
+
+A regra, lida ao pé da letra ("conta só após a integração quando o cliente exige"), **zeraria o
+card**: todos os 235 clientes exigem integração por default e nenhuma das 1.555 admissões antigas tem
+a frente, porque a não retroatividade impediu. Levado ao diretor com os dois números medidos, ele
+confirmou a leitura B.
+
+**LEITURA B, adotada: quem decide é a PRESENÇA DA FRENTE, não a configuração do cliente.** Conta quem
+terminou o Cadastro e NÃO tem integração pendente.
+
+| Regra | Contagem |
+|---|---|
+| Antiga (só cadastro concluído) | 1.555 |
+| **Nova, leitura B** | **1.555** |
+| Leitura A, descartada | 0 |
+
+Cliente que não exige também segue contando no Cadastro: a frente nunca nasce para ele, então nunca
+há integração pendente.
+
+**Prova viva, numa transação desfeita no fim:** admissão sintética com Cadastro concluído dá 1.556;
+ao entrar na integração cai para 1.555 (sai da conta); ao ser REALIZADA volta a 1.556. `ROLLBACK` e
+zero resíduo.
+
+### O farol automático, escrito na transição e não na derivação
+
+`REALIZADO` grava `ADMISSAO_CONCLUIDA` na PRÓPRIA transição. `DECLINOU` e `RESCISAO` gravam o farol
+correspondente. Os três são pontuais e confinados à Integração.
+
+A alternativa (tornar `ADMISSAO_CONCLUIDA` derivável no `deriveFarolGlobal`) foi rejeitada pelo
+diretor a partir do levantamento: aquele farol mora em `FAROL_MANUAL`, e torná-lo derivável mudaria o
+comportamento de TODA admissão do sistema, inclusive das 1.511 já concluídas, em qualquer recálculo.
+
+O mesmo `FAROL_MANUAL` é o que torna a escrita pontual SEGURA: o `recomputeFarolGlobal` que roda logo
+após a transação PRESERVA os três, em vez de desfazer o que ela acabou de gravar. Os testes travam os
+dois lados.
+
+**DECLÍNIO E RESCISÃO NÃO REESCREVEM AS FRENTES ANTERIORES** (decisão do diretor, confirmada). O
+declínio comum carimba Auditoria "Declinou" e Exame "Cancelado", mas quem chega à integração já
+concluiu Auditoria, Exame e Cadastro de verdade, e carimbar apagaria trabalho que aconteceu. A §A.16
+Regra 2 existe para declínio IMPORTADO, que nunca teve essas frentes concluídas.
+
+### Fila e cards da aba
+
+Rota `integracao` no mapa genérico, então a aba responde pela rota que já existia. KPIs próprios:
+**`emIntegracao`**, o card "Admissões em Integração", que conta quem está na frente AGORA (trabalho
+pela frente, não acumulado), e `realizadas`, o concluído da aba, no mesmo molde de `cadastrados` e
+`aptas`.
+
+### Gate
+
+4 testes novos, **1.017 verdes** no total. Typecheck backend e frontend limpos, lint limpo. Backend
+rebuildado e reiniciado, health 200. Números validados pelo diretor antes das telas.
