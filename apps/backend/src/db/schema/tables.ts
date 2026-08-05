@@ -1383,6 +1383,11 @@ export const integracaoAgendamento = pgTable("integracao_agendamento", {
   data: date("data"),
   horario: varchar("horario", { length: 5 }), // "HH:MM"
   tipo: tipoIntegracaoEnum("tipo"),
+  /**
+   * Link da reunião, quando a integração é ONLINE (Meet, Teams, Zoom). OPCIONAL por decisão do
+   * diretor: o agendamento salva sem ele, e a sala pode ser criada depois. Presencial não usa.
+   */
+  link: text("link"),
   consultorId: uuid("consultor_id").references(() => usuarios.id, { onDelete: "set null" }),
   criadoEm: timestamp("criado_em", { withTimezone: true }).notNull().defaultNow(),
   atualizadoEm: timestamp("atualizado_em", { withTimezone: true }).notNull().defaultNow(),

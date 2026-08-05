@@ -78,6 +78,7 @@ import {
 import { STATUS_INICIAL_FRENTE } from "../domain/admissao";
 import { clienteExigeIntegracao } from "./integracao-obrigatoria.repo";
 import type { AgendamentoIntegracaoDto } from "./dto/agendamento-integracao.dto";
+import type { AgendamentoIntegracaoLoteDto } from "./dto/agendamento-integracao-lote.dto";
 import type { AgendamentoExameDto } from "./dto/agendamento-exame.dto";
 import type { PatchStatusDto } from "./dto/patch-status.dto";
 import type { RelatorioClinicaDto } from "./dto/relatorio-clinica.dto";
@@ -1996,32 +1997,186 @@ export class EsteiraService {
   }
 
   /**
-   * Cadastra ou reagenda a integração. Upsert por admissão (há unique em `admissao_id`), então
-   * reagendar não cria linha nova e não perde o histórico de quem conduz.
+   * Cadastra ou reagenda a integração, e LEVA A FRENTE PARA `AGENDADO` no mesmo gesto.
    *
-   * NÃO move a frente sozinho, ao contrário do agendamento do exame. Lá o salvamento leva a frente a
-   * AGENDADO automaticamente porque a data do exame é o próprio fato; aqui o diretor descreveu o
-   * status como algo que o CONSULTOR registra (a agendar, agendado, realizado), então mover por
-   * baixo tiraria dele o controle da própria fila. O avanço continua pelo seletor de status, e o
-   * gate de transição é que cobra o agendamento completo.
+   * MUDANÇA DE COMPORTAMENTO (decisão do diretor, unificando com o lote). A versão anterior aceitava
+   * salvamento parcial e deixava o avanço para o seletor. O diretor reviu: agendar é um ato único, e
+   * um agendamento sem horário ou sem responsável não é agendamento, é rascunho. Os quatro campos
+   * passaram a ser obrigatórios no DTO, e salvar já avança.
+   *
+   * O seletor de status continua existindo para os outros desfechos: Realizado, Declinou e Rescisão.
+   *
+   * TRANSACIONAL: o agendamento e o avanço são o mesmo ato, então gravar um sem o outro deixaria a
+   * linha mentindo (dados na tabela e status "A Agendar", ou o contrário). Upsert por admissão, então
+   * reagendar não cria linha nova.
    */
-  async salvarAgendamentoIntegracao(admissaoId: string, dto: AgendamentoIntegracaoDto) {
+  async salvarAgendamentoIntegracao(
+    admissaoId: string,
+    dto: AgendamentoIntegracaoDto,
+    user: AuthUser,
+  ) {
     const adm = await this.db.query.admissoes.findFirst({ where: eq(admissoes.id, admissaoId) });
     if (!adm) throw new NotFoundException("Admissão não encontrada");
 
+    const [frente] = await this.db
+      .select({ id: frentesAdmissao.id, status: frentesAdmissao.status })
+      .from(frentesAdmissao)
+      .where(
+        and(eq(frentesAdmissao.admissaoId, admissaoId), eq(frentesAdmissao.tipo, "INTEGRACAO")),
+      );
+    if (!frente) {
+      throw new BadRequestException("Esta admissão não está na frente de Integração.");
+    }
+
+    const agora = new Date();
     const valores = {
-      data: dto.data ?? null,
-      horario: dto.horario ?? null,
-      tipo: dto.tipo ?? null,
-      consultorId: dto.consultorId ?? null,
-      atualizadoEm: new Date(),
+      data: dto.data,
+      horario: dto.horario,
+      tipo: dto.tipo,
+      // Link só vale para ONLINE: trocar para presencial LIMPA o que estava lá, senão a linha
+      // guardaria uma sala que ninguém vai usar.
+      link: dto.tipo === "ONLINE" ? (dto.link ?? null) : null,
+      consultorId: dto.consultorId,
+      atualizadoEm: agora,
     };
-    const [row] = await this.db
-      .insert(integracaoAgendamento)
-      .values({ admissaoId, ...valores })
-      .onConflictDoUpdate({ target: integracaoAgendamento.admissaoId, set: valores })
-      .returning();
-    return row;
+
+    return await this.db.transaction(async (tx) => {
+      const [row] = await tx
+        .insert(integracaoAgendamento)
+        .values({ admissaoId, ...valores })
+        .onConflictDoUpdate({ target: integracaoAgendamento.admissaoId, set: valores })
+        .returning();
+
+      // Reagendar quem JÁ está em AGENDADO não gera evento: o status não mudou, só os dados. Evento
+      // sem transição sujaria a trilha com ruído.
+      if (frente.status !== "AGENDADO") {
+        await tx
+          .update(frentesAdmissao)
+          .set({ status: "AGENDADO", responsavelId: user.id, atualizadoEm: agora })
+          .where(eq(frentesAdmissao.id, frente.id));
+        await tx.insert(frenteStatusEventos).values({
+          admissaoId,
+          frenteId: frente.id,
+          tipo: "INTEGRACAO",
+          deStatus: frente.status,
+          paraStatus: "AGENDADO",
+          reversao: false,
+          autorId: user.id,
+        });
+      }
+      return row;
+    });
+  }
+
+  /**
+   * AGENDAMENTO EM MASSA (decisão do diretor). Vários candidatos, os MESMOS dados, uma operação.
+   *
+   * MULTI-CLIENTE POR DESENHO: o lote NÃO agrupa nem trava por cliente. Uma integração online das
+   * 14h atende gente de clientes diferentes, e obrigar um lote por cliente criaria trabalho que a
+   * realidade não pede.
+   *
+   * TRANSACIONAL, e é por isso que existe como endpoint em vez de um laço na tela. Fazer N chamadas
+   * do PUT individual deixaria estado PARCIAL quando a décima falhasse: uns agendados, outros não,
+   * e o consultor sem saber quais. Aqui ou o lote inteiro entra, ou nada entra.
+   *
+   * SOBREPOSIÇÃO: quem já tinha agendamento não é sobrescrito em silêncio. Sem `sobrescrever`, o
+   * lote PARA e devolve os nomes de quem já está marcado, para o consultor decidir com a informação
+   * na mão. É o mesmo padrão de `needsConfirmation` que a esteira já usa na reversão de status.
+   *
+   * Ao final as frentes vão para `AGENDADO` de uma vez, com evento na trilha, como qualquer
+   * transição. §A.6: os nomes só saem no ERRO de sobreposição, que é o que o consultor precisa ler.
+   */
+  async agendarIntegracaoEmLote(dto: AgendamentoIntegracaoLoteDto, user: AuthUser) {
+    const ids = [...new Set(dto.admissaoIds)];
+
+    // Frentes de INTEGRAÇÃO dos selecionados. Quem não tem a frente não entra no lote: agendar
+    // integração de quem não está na frente seria criar trabalho que a esteira não pediu.
+    const frentes = await this.db
+      .select({
+        id: frentesAdmissao.id,
+        admissaoId: frentesAdmissao.admissaoId,
+        status: frentesAdmissao.status,
+        concluida: frentesAdmissao.concluida,
+      })
+      .from(frentesAdmissao)
+      .where(
+        and(eq(frentesAdmissao.tipo, "INTEGRACAO"), inArray(frentesAdmissao.admissaoId, ids)),
+      );
+    if (frentes.length === 0) {
+      throw new BadRequestException("Nenhum dos selecionados está na frente de Integração.");
+    }
+
+    // Já agendados: têm linha com DATA. Linha sem data é rascunho, não agendamento.
+    const existentes = await this.db
+      .select({ admissaoId: integracaoAgendamento.admissaoId })
+      .from(integracaoAgendamento)
+      .where(
+        and(
+          inArray(integracaoAgendamento.admissaoId, ids),
+          isNotNull(integracaoAgendamento.data),
+        ),
+      );
+    if (existentes.length > 0 && !dto.sobrescrever) {
+      const idsExistentes = existentes.map((e) => e.admissaoId);
+      const nomes = await this.db
+        .select({ nome: candidatos.nome })
+        .from(admissoes)
+        .innerJoin(candidatos, eq(candidatos.cpf, admissoes.candidatoCpf))
+        .where(inArray(admissoes.id, idsExistentes));
+      throw new ConflictException({
+        needsConfirmation: true,
+        reason: "sobreposicao",
+        nomes: nomes.map((n) => n.nome),
+        message:
+          "Alguns selecionados já têm agendamento. Confirme para sobrescrever os dados atuais.",
+      });
+    }
+
+    const agora = new Date();
+    await this.db.transaction(async (tx) => {
+      for (const f of frentes) {
+        await tx
+          .insert(integracaoAgendamento)
+          .values({
+            admissaoId: f.admissaoId,
+            data: dto.data,
+            horario: dto.horario,
+            tipo: dto.tipo,
+            link: dto.tipo === "ONLINE" ? (dto.link ?? null) : null,
+            consultorId: dto.consultorId,
+          })
+          .onConflictDoUpdate({
+            target: integracaoAgendamento.admissaoId,
+            set: {
+              data: dto.data,
+              horario: dto.horario,
+              tipo: dto.tipo,
+              link: dto.tipo === "ONLINE" ? (dto.link ?? null) : null,
+              consultorId: dto.consultorId,
+              atualizadoEm: agora,
+            },
+          });
+
+        // A frente avança sozinha AQUI, e só aqui: no lote o agendamento e o avanço são o mesmo
+        // gesto do consultor. O fluxo individual segue como está, com o avanço pelo seletor.
+        if (f.status === "AGENDADO") continue;
+        await tx
+          .update(frentesAdmissao)
+          .set({ status: "AGENDADO", responsavelId: user.id, atualizadoEm: agora })
+          .where(eq(frentesAdmissao.id, f.id));
+        await tx.insert(frenteStatusEventos).values({
+          admissaoId: f.admissaoId,
+          frenteId: f.id,
+          tipo: "INTEGRACAO",
+          deStatus: f.status,
+          paraStatus: "AGENDADO",
+          reversao: false,
+          autorId: user.id,
+        });
+      }
+    });
+
+    return { agendados: frentes.length, sobrescritos: existentes.length };
   }
 
   /**

@@ -96,6 +96,9 @@ export const MENUS: MenuDef[] = [
       "EsteiraController.pausar",
       "EsteiraController.retomar",
       "EsteiraController.mudarStatus",
+      // Agendamento em massa: move as frentes para AGENDADO, então é mutação de status e se
+      // reivindica junto do `mudarStatus`. Sai de graça para o COMUM, que já tem o menu `esteira`.
+      "EsteiraController.agendarIntegracaoEmLote",
       "EsteiraController.relatorioClinicaPreview",
       "EsteiraController.relatorioClinicaCsv",
       "EsteiraController.anexarAso",

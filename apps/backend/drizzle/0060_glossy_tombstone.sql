@@ -1,0 +1,1 @@
+ALTER TABLE "integracao_agendamento" ADD COLUMN "link" text;

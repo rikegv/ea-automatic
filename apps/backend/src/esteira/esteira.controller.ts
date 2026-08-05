@@ -20,6 +20,7 @@ import { parseMulti } from "../common/parse-multi";
 import { AgendamentoExameDto } from "./dto/agendamento-exame.dto";
 // Value import (não `import type`): o ValidationPipe precisa da CLASSE em runtime.
 import { AgendamentoIntegracaoDto } from "./dto/agendamento-integracao.dto";
+import { AgendamentoIntegracaoLoteDto } from "./dto/agendamento-integracao-lote.dto";
 import { DeclinarDto } from "./dto/declinar.dto";
 import { PausarDto } from "./dto/pausar.dto";
 import { PatchStatusDto } from "./dto/patch-status.dto";
@@ -142,6 +143,21 @@ export class EsteiraController {
     return this.esteira.anexarAso(admissaoId, file, user);
   }
 
+  /**
+   * Agendamento EM MASSA da integração. Transacional: ou o lote inteiro entra, ou nada entra.
+   * Sem `sobrescrever`, devolve 409 com os NOMES de quem já tem agendamento, para o consultor
+   * confirmar antes de apagar o que estava marcado.
+   */
+  @Post("integracao/agendamento-lote")
+  agendarIntegracaoEmLote(
+    @Body() dto: AgendamentoIntegracaoLoteDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    // `user` alimenta o autor do evento de status: o lote move as frentes para AGENDADO, e toda
+    // transição de frente tem autor na trilha.
+    return this.esteira.agendarIntegracaoEmLote(dto, user);
+  }
+
   /** Ficha de apresentação da integração (modal do olho): contrato e benefícios, só leitura. */
   @Get("integracao/:admissaoId/apresentacao")
   apresentacaoIntegracao(@Param("admissaoId") admissaoId: string) {
@@ -154,13 +170,15 @@ export class EsteiraController {
     return this.esteira.obterAgendamentoIntegracao(admissaoId);
   }
 
-  /** Cadastra ou reagenda a integração. Não move a frente: o status é do consultor. */
+  /** Cadastra ou reagenda a integração. Salvar completo já leva a frente para AGENDADO. */
   @Put("integracao/:admissaoId/agendamento")
   salvarAgendamentoIntegracao(
     @Param("admissaoId") admissaoId: string,
     @Body() dto: AgendamentoIntegracaoDto,
+    @CurrentUser() user: AuthUser,
   ) {
-    return this.esteira.salvarAgendamentoIntegracao(admissaoId, dto);
+    // `user` alimenta o autor do evento de status: salvar move a frente, e toda transição tem autor.
+    return this.esteira.salvarAgendamentoIntegracao(admissaoId, dto, user);
   }
 
   /** Agendamento do exame (modal) — devolve o registro atual ou null. */

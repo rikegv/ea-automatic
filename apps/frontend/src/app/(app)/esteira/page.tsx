@@ -35,6 +35,7 @@ import { PendenciasModal } from "@/components/gerenciador/PendenciasModal";
 import { EditAdmissaoModal } from "@/components/gerenciador/EditAdmissaoModal";
 import { AgendamentoIntegracaoModal } from "@/components/esteira/AgendamentoIntegracaoModal";
 import { ApresentacaoIntegracaoModal } from "@/components/esteira/ApresentacaoIntegracaoModal";
+import { AgendamentoIntegracaoLoteModal } from "@/components/esteira/AgendamentoIntegracaoLoteModal";
 
 // ── Contrato de API (F8/F7) ─────────────────────────────────────────────────
 const ABAS = [
@@ -264,6 +265,7 @@ export default function EsteiraPage() {
   // Modais da aba INTEGRAÇÃO. Estado próprio, sem tocar nos modais existentes das outras abas.
   const [agendaIntegracao, setAgendaIntegracao] = useState<EsteiraItem | null>(null);
   const [apresentacaoId, setApresentacaoId] = useState<string | null>(null);
+  const [loteAberto, setLoteAberto] = useState(false);
 
   // Dados da frente
   const [data, setData] = useState<EsteiraResp | null>(null);
@@ -743,15 +745,21 @@ export default function EsteiraPage() {
         // pendências obrigatórias e a coluna de avanço, e entram os três campos do agendamento. O
         // seletor de status vive na própria coluna Status, porque aqui ele é o avanço.
         [
+          "40px",
           COL.cand,
-          COL.cli,
+          // Cliente ENXUTO nesta aba (§A.20): o nome de operação é curto e sobrava espaço, que
+          // agora vai para o seletor de status e para as ações.
+          "minmax(130px,0.7fr)",
           COL.cargo,
           COL.data,
           COL.horario,
           COL.tipoIntegracao,
           COL.consultor,
-          COL.status,
-          COL.acoes,
+          // Piso maior que o `COL.status` das outras abas: aqui esta coluna carrega o SELETOR de
+          // avanço, e no piso antigo o rótulo do status comprimia.
+          "minmax(240px,1.2fr)",
+          // Quatro ações em linha (agendar, Drive, olho, editar) precisam de largura própria.
+          "168px",
         ]
       : [
           isExame ? "40px" : null,
@@ -1141,6 +1149,28 @@ export default function EsteiraPage() {
           </p>
         )}
 
+        {/* ── Agendamento em massa (aba Integração): seleção múltipla → um agendamento ── */}
+        {isIntegracao && selecionados.size > 0 && (
+          <div className="mb-[14px] flex shrink-0 flex-wrap items-center gap-3">
+            <Button onClick={() => setLoteAberto(true)}>
+              <Icon name="clock" className="h-4 w-4" />
+              Agendar em massa ({selecionados.size})
+            </Button>
+            <button
+              type="button"
+              className="text-[13px] text-dim underline-offset-2 hover:underline"
+              onClick={() => setSelecionados(new Set())}
+            >
+              Limpar seleção
+            </button>
+            {/* A seleção NÃO trava por cliente (decisão do diretor): uma integração das 14h atende
+                gente de clientes diferentes. O aviso existe para o consultor saber que é de propósito. */}
+            <span className="text-[13px] text-faint">
+              Clientes diferentes podem ser agendados juntos.
+            </span>
+          </div>
+        )}
+
         {/* ── Relatório da clínica (aba Exame): seleção múltipla → CSV ──────── */}
         {isExame && (
           <div className="mb-[14px] flex shrink-0 flex-wrap items-center justify-between gap-3">
@@ -1173,7 +1203,7 @@ export default function EsteiraPage() {
           <div className="ea-scroll min-h-0 flex-1 overflow-auto">
             <div className={gridMin}>
               <div className="list-head" style={{ gridTemplateColumns: gridCols }}>
-                {isExame && (
+                {(isExame || isIntegracao) && (
                   <span className="flex items-center justify-center">
                     <input
                       type="checkbox"
@@ -1289,12 +1319,12 @@ export default function EsteiraPage() {
                       className={cn("row", isIntegracao && farolIntegracaoClasse(item))}
                       style={{ gridTemplateColumns: gridCols }}
                     >
-                      {isExame && (
+                      {(isExame || isIntegracao) && (
                         <div className="flex items-center justify-center">
                           <input
                             type="checkbox"
                             className="h-4 w-4 cursor-pointer accent-[var(--accent)]"
-                            aria-label={`Selecionar ${item.candidatoNome} para o relatório da clínica`}
+                            aria-label={`Selecionar ${item.candidatoNome}`}
                             checked={selecionados.has(item.admissaoId)}
                             onChange={() => toggleSelecionado(item.admissaoId)}
                           />
@@ -1374,7 +1404,12 @@ export default function EsteiraPage() {
                       ) : (
                         <div className="meta text-center">{fmtDataAdmissao(item.dataAdmissao)}</div>
                       )}
-                      <div className="flex min-w-0 flex-col items-center gap-1">
+                      <div
+                        className={cn(
+                          "flex min-w-0 flex-col items-center gap-1",
+                          isIntegracao && "hidden",
+                        )}
+                      >
                         <StatusPill tone={tone} label={rotulo} />
                         {/* PAUSA: mais um estado da MESMA coluna Status, empilhado sob a pill da
                             frente. Não é coluna nova nem substitui o status real: a frente continua
@@ -1431,14 +1466,17 @@ export default function EsteiraPage() {
                         )}
                       </div>
 
-                      {/* Coluna Pendências Obrig. (§A.12): só o badge, centralizado. */}
-                      <div className="flex min-w-0 items-center justify-center">
-                        <PendenciasBadge
-                          tone={sinalP.tone}
-                          label={sinalP.label}
-                          onClick={() => setPendItem(item)}
-                        />
-                      </div>
+                      {/* Coluna Pendências Obrig. (§A.12): só o badge, centralizado. Fora da aba
+                          INTEGRAÇÃO, cujo grid não tem esta coluna (decisão do diretor). */}
+                      {!isIntegracao && (
+                        <div className="flex min-w-0 items-center justify-center">
+                          <PendenciasBadge
+                            tone={sinalP.tone}
+                            label={sinalP.label}
+                            onClick={() => setPendItem(item)}
+                          />
+                        </div>
+                      )}
 
                       {/* Coluna AVANÇO / FRENTE: controle de avanço + ação da frente */}
                       <div className="flex min-w-0 flex-col gap-1.5">
@@ -1716,6 +1754,19 @@ export default function EsteiraPage() {
         <ApresentacaoIntegracaoModal
           admissaoId={apresentacaoId}
           onClose={() => setApresentacaoId(null)}
+        />
+      )}
+      {loteAberto && (
+        <AgendamentoIntegracaoLoteModal
+          admissaoIds={[...selecionados]}
+          onClose={(salvou) => {
+            setLoteAberto(false);
+            if (salvou) {
+              setSelecionados(new Set());
+              setFlash({ tone: "ok", msg: "Integração agendada para os selecionados." });
+              void load();
+            }
+          }}
         />
       )}
 

@@ -14,6 +14,7 @@ interface AgendamentoIntegracaoRow {
   data: string | null; // YYYY-MM-DD
   horario: string | null; // "HH:MM"
   tipo: string | null; // ONLINE | PRESENCIAL
+  link: string | null;
   consultorId: string | null;
 }
 
@@ -53,10 +54,16 @@ export function AgendamentoIntegracaoModal({
   const [data, setData] = useState("");
   const [horario, setHorario] = useState("");
   const [tipo, setTipo] = useState("");
+  const [link, setLink] = useState("");
   const [consultorId, setConsultorId] = useState("");
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+
+  // Os QUATRO campos são obrigatórios (decisão do diretor, unificando com o lote): agendar é um ato
+  // único, e um agendamento sem horário ou sem responsável é rascunho, não agendamento. O link fica
+  // de fora da conta de propósito, porque é opcional.
+  const completo = Boolean(data && horario && tipo && consultorId);
 
   // Consultores que podem conduzir: COMUM e MASTER, ativos. O SUPER ADMIN não vem na lista, e isso é
   // decidido no backend (`/catalogos/consultores`), não aqui: regra de negócio não mora na tela.
@@ -85,6 +92,7 @@ export function AgendamentoIntegracaoModal({
         setData(row?.data ?? "");
         setHorario(row?.horario ?? "");
         setTipo(row?.tipo ?? "");
+        setLink(row?.link ?? "");
         setConsultorId(row?.consultorId ?? "");
       })
       .catch((e) => {
@@ -106,10 +114,11 @@ export function AgendamentoIntegracaoModal({
         token,
         method: "PUT",
         body: {
-          data: data || undefined,
-          horario: horario || undefined,
-          tipo: tipo || undefined,
-          consultorId: consultorId || undefined,
+          data,
+          horario,
+          tipo,
+          link: tipo === "ONLINE" && link ? link : undefined,
+          consultorId,
         },
       });
       onClose(true);
@@ -180,6 +189,26 @@ export function AgendamentoIntegracaoModal({
             />
           </div>
 
+
+          {/* LINK só no ONLINE (decisão do diretor). Opcional: a sala costuma ser criada depois de
+              marcada a data, então exigir aqui travaria o agendamento por um dado que ainda não
+              existe. Trocar para Presencial limpa o link no backend. */}
+          {tipo === "ONLINE" && (
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-faint">
+                Link da reunião <span className="text-faint/70">(opcional)</span>
+              </span>
+              <input
+                type="url"
+                value={link}
+                onChange={(e) => setLink(e.target.value)}
+                placeholder="https://meet.google.com/..."
+                className="ds-input w-full"
+                aria-label="Link da reunião online"
+              />
+            </label>
+          )}
+
           <div>
             <span className="mb-1 block text-xs font-medium text-faint">Consultor responsável</span>
             <Select
@@ -193,10 +222,9 @@ export function AgendamentoIntegracaoModal({
             />
           </div>
 
-          {/* O consultor precisa saber POR QUE salvar não muda o status da linha. */}
           <p className="text-xs text-faint">
-            Salvar registra o agendamento. O status da frente continua sendo alterado pelo seletor da
-            linha.
+            Os quatro campos são obrigatórios. Ao salvar, a integração passa a Agendado. O seletor da
+            linha segue para os demais desfechos.
           </p>
 
           {saveError && <p className="text-sm text-danger">{saveError}</p>}
@@ -205,8 +233,8 @@ export function AgendamentoIntegracaoModal({
             <Button variant="secondary" onClick={() => onClose(false)} disabled={saving}>
               Cancelar
             </Button>
-            <Button onClick={salvar} disabled={saving}>
-              {saving ? "Salvando…" : "Salvar"}
+            <Button onClick={salvar} disabled={saving || !completo}>
+              {saving ? "Salvando…" : "Salvar e agendar"}
             </Button>
           </div>
         </div>

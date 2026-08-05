@@ -421,6 +421,13 @@
       "when": 1785877909987,
       "tag": "0059_aromatic_grandmaster",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1785943488566,
+      "tag": "0060_glossy_tombstone",
+      "breakpoints": true
     }
   ]
 }
