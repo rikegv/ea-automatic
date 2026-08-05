@@ -8056,3 +8056,91 @@ por linha).
 **1.017 testes verdes**, typecheck backend e frontend limpos, lint limpo. Backend rebuildado e
 reiniciado; o frontend foi PARADO antes do build e subido depois, para não servir `.next` pela metade.
 Três portas em 200. Validado pelo diretor na plataforma.
+
+---
+
+## 05/08/2026, Integração: agendamento em massa, redesenho da linha e a regra unificada
+
+Três entregas encadeadas sobre a aba que subiu de manhã, todas exclusivas dela.
+
+### Agendamento em massa
+
+Checkbox por linha e "selecionar todos", reusando o mecanismo que a aba Exame já tinha. Selecionando
+qualquer coisa aparece a barra com "Agendar em massa (N)".
+
+**MULTI-CLIENTE por desenho** (decisão do diretor): a seleção NÃO trava por cliente. Uma integração
+online das 14h atende gente de clientes diferentes, e obrigar um lote por cliente criaria trabalho que
+a realidade não pede.
+
+**ENDPOINT DE LOTE, em vez do laço na tela.** A OST autorizava chamar o PUT individual para cada
+selecionado, mas isso deixa **estado PARCIAL** quando a décima chamada falha: uns agendados, outros
+não, e o consultor sem saber quais. O endpoint novo é transacional, ou o lote inteiro entra ou nada
+entra, e de brinde resolve a performance (uma requisição em vez de duas por candidato).
+
+**SOBREPOSIÇÃO decidida no BACKEND.** Quem já tem agendamento não é sobrescrito em silêncio: sem
+`sobrescrever`, o lote devolve 409 com os NOMES, e só então a tela pede confirmação expressa. A
+verificação poderia morar na tela, com o que ela já carregou, mas aí a regra dependeria de o frontend
+saber quem tem agendamento e confiar nesse cálculo.
+
+O modal do lote é COMPONENTE SEPARADO do individual (§A.26), porque as regras diferem e misturar os
+dois encheria cada campo de condicional.
+
+### O bug da linha, e por que os botões apareciam embaixo do nome
+
+O diretor reportou as ações "abaixo do nome, poluindo". Não era escolha de layout: **a linha
+renderizava 12 células num grid de 10 colunas**. Ao montar a aba, as colunas "Pendências" e "Avanço"
+saíram do grid e do cabeçalho, mas as CÉLULAS continuaram na linha, e as duas sobrando quebravam para
+uma segunda linha implícita.
+
+Corrigido na raiz: a célula de Pendências sai na aba, e a de Avanço passa a SER a coluna Status,
+porque o seletor já mostra o status atual com cor. Dez células para dez colunas, linha em uma faixa
+só, ações alinhadas à direita.
+
+Junto foram os outros ajustes de largura (§A.20): Cliente caiu para `minmax(130px,0.7fr)` porque o
+nome de operação é curto e sobrava espaço, a coluna do seletor subiu para `minmax(240px,1.2fr)` porque
+o rótulo comprimia, e as ações ganharam 168px próprios.
+
+### Link da reunião
+
+Coluna `link` (migration 0060). Aparece só quando o tipo é ONLINE, nos dois modais, e é OPCIONAL: a
+sala costuma ser criada depois de marcada a data, então exigi-la travaria o agendamento por um dado
+que ainda não existe. No lote, a MESMA URL vale para o grupo inteiro.
+
+**Trocar de Online para Presencial LIMPA o link.** Guardar a sala de uma reunião que virou presencial
+deixaria um link clicável numa integração que não é online.
+
+### A MUDANÇA DE RUMO: o individual passou a avançar sozinho
+
+Registro com destaque porque **inverte uma decisão anterior, já implementada e já validada**.
+
+Na onda 4 o agendamento individual aceitava salvamento PARCIAL e NÃO movia a frente: o avanço era do
+consultor, pelo seletor. A justificativa era a §A.3 regra 5 (pendência sinaliza, não bloqueia) e o
+fato de o diretor ter descrito o status como algo que o consultor registra.
+
+O diretor reviu depois de ver o massa funcionando: **agendar é um ato único**, e um agendamento sem
+horário ou sem responsável não é agendamento, é rascunho. Os quatro campos viraram obrigatórios no DTO
+e salvar completo já leva a frente para `AGENDADO`, no individual e no lote. O seletor continua para os
+demais desfechos (Realizado, Declinou, Rescisão).
+
+Duas consequências de implementação:
+- o salvamento individual virou TRANSACIONAL, porque agendamento e avanço são o mesmo ato e gravar um
+  sem o outro deixaria a linha mentindo (dados preenchidos com status "A Agendar", ou o inverso);
+- reagendar quem JÁ está em `AGENDADO` não gera evento na trilha: o status não mudou, só os dados, e
+  evento sem transição é ruído.
+
+O gate de transição que cobrava o agendamento ao marcar "Agendado" pelo seletor continua no lugar, e
+passou a ser defesa do caminho manual em vez de regra principal.
+
+### §A.26
+
+Tudo condicionado a `isIntegracao` ou em componentes novos. As três abas existentes seguem com o mesmo
+array de larguras, as mesmas células e o mesmo comportamento. O ponto de atenção era a aba EXAME, que
+compartilha o mecanismo de seleção reusado pelo massa; o relatório da clínica foi conferido e segue
+igual. A operação do lote foi reivindicada pelo menu `esteira` (§A.23), junto do `mudarStatus`, porque
+move status.
+
+### Gate
+
+**1.017 testes verdes**, typecheck backend e frontend limpos, lint limpo. Migration 0060 aplicada.
+Backend rebuildado e reiniciado; frontend parado antes do build e subido depois. Três portas em 200.
+Validado pelo diretor na plataforma.
