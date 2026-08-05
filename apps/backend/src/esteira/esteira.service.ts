@@ -79,11 +79,13 @@ import type { AgendamentoExameDto } from "./dto/agendamento-exame.dto";
 import type { PatchStatusDto } from "./dto/patch-status.dto";
 import type { RelatorioClinicaDto } from "./dto/relatorio-clinica.dto";
 
-/** Mapeia o segmento de rota (`auditoria|exame|cadastro`) para o tipo de frente do domínio. */
+/** Mapeia o segmento de rota (`auditoria|exame|cadastro|integracao`) para o tipo de frente. */
 const ROTA_PARA_TIPO: Record<string, FrenteTipo> = {
   auditoria: "AUDITORIA",
   exame: "EXAME",
   cadastro: "CADASTRO_CONTRATO",
+  // Última etapa da esteira (decisão do diretor). A rota é genérica, então a aba entra aqui.
+  integracao: "INTEGRACAO",
 };
 
 export interface EsteiraFiltros {
@@ -444,7 +446,8 @@ export class EsteiraService {
     // `aptas` é o mesmo número lido pela aba do Exame.
     let cadastrados = 0;
     let aptas = 0;
-    if (tipo === "CADASTRO_CONTRATO" || tipo === "EXAME") {
+    let realizadas = 0;
+    if (tipo === "CADASTRO_CONTRATO" || tipo === "EXAME" || tipo === "INTEGRACAO") {
       const [linha] = await this.db
         .select({ n: count() })
         .from(frentesAdmissao)
@@ -452,7 +455,21 @@ export class EsteiraService {
         .where(and(...kpiWhere, eq(frentesAdmissao.concluida, true)));
       const concluidas = linha?.n ?? 0;
       if (tipo === "CADASTRO_CONTRATO") cadastrados = concluidas;
-      else aptas = concluidas;
+      else if (tipo === "EXAME") aptas = concluidas;
+      else realizadas = concluidas;
+    }
+
+    // CARD "ADMISSÕES EM INTEGRAÇÃO" (decisão do diretor). Conta quem está NA frente agora, ou seja,
+    // com a integração ainda ABERTA: é o trabalho que a aba tem pela frente, e não o acumulado.
+    // Só a aba da Integração paga esta consulta.
+    let emIntegracao = 0;
+    if (tipo === "INTEGRACAO") {
+      const [linha] = await this.db
+        .select({ n: count() })
+        .from(frentesAdmissao)
+        .innerJoin(admissoes, eq(frentesAdmissao.admissaoId, admissoes.id))
+        .where(and(...kpiWhere, eq(frentesAdmissao.concluida, false)));
+      emIntegracao = linha?.n ?? 0;
     }
 
     // KPI "Pausadas" (OST admissão pausada, Bloco 4): o card que impede a pausada de virar admissão
@@ -470,7 +487,7 @@ export class EsteiraService {
 
     return {
       items,
-      kpis: { porStatus, total, comPendencias, cadastrados, aptas, pausadas },
+      kpis: { porStatus, total, comPendencias, cadastrados, aptas, realizadas, emIntegracao, pausadas },
       statusCatalogo,
     };
   }
@@ -948,7 +965,33 @@ export class EsteiraService {
         if (nc) ncCriada = "NC1";
       }
 
-      return { upd, gateAberto, cadastroId, nasceuAgora, ncCriada };
+      // FAROL DA INTEGRAÇÃO (última etapa da esteira, decisão do diretor).
+      //
+      // Gravado AQUI, na própria transição, e NÃO no `deriveFarolGlobal`. A diferença importa: o
+      // `ADMISSAO_CONCLUIDA` mora em `FAROL_MANUAL`, e torná-lo derivável mudaria o comportamento de
+      // TODA admissão do sistema, inclusive das 1.511 já concluídas. Escrevendo pontualmente aqui, o
+      // alcance fica confinado à Integração e o `FAROL_MANUAL` continua intacto.
+      //
+      // O `recomputeFarolGlobal` que roda logo depois da transação NÃO desfaz isto: os três faróis
+      // abaixo estão em `FAROL_MANUAL`, então ele os preserva por construção.
+      //
+      // As frentes anteriores NÃO são reescritas. Quem chegou à integração já concluiu Auditoria,
+      // Exame e Cadastro; carimbar "Declinou" nelas apagaria trabalho que aconteceu de verdade. O
+      // §A.16 Regra 2 existe para declínio IMPORTADO, que nunca teve essas frentes concluídas.
+      let farolIntegracao: "ADMISSAO_CONCLUIDA" | "DECLINOU" | "RESCISAO" | null = null;
+      if (tipo === "INTEGRACAO") {
+        if (novo === "REALIZADO") farolIntegracao = "ADMISSAO_CONCLUIDA";
+        else if (novo === "DECLINOU") farolIntegracao = "DECLINOU";
+        else if (novo === "RESCISAO") farolIntegracao = "RESCISAO";
+      }
+      if (farolIntegracao) {
+        await tx
+          .update(admissoes)
+          .set({ farolGlobal: farolIntegracao, atualizadoEm: agora })
+          .where(eq(admissoes.id, frente.admissaoId));
+      }
+
+      return { upd, gateAberto, cadastroId, nasceuAgora, ncCriada, farolIntegracao };
     });
 
     // Reavalia o farol global (§A.3 / Fase 4 complemento): concluir Auditoria+Exame sem data de
@@ -971,6 +1014,7 @@ export class EsteiraService {
       },
       reversao: ehReversao,
       ncCriada: result.ncCriada,
+      ...(result.farolIntegracao ? { farolGlobal: result.farolIntegracao } : {}),
     };
   }
 

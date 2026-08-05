@@ -1241,8 +1241,25 @@ export class AdmissoesService {
       base.push(or(...conds)!);
     }
 
-    // "Concluído" = existe frente CADASTRO_CONTRATO concluída.
-    const concluidoExpr = sql<boolean>`EXISTS (SELECT 1 FROM frentes_admissao f WHERE f.admissao_id = ${admissoes.id} AND f.tipo = 'CADASTRO_CONTRATO' AND f.concluida = true)`;
+    // "Concluído" = terminou o Cadastro E NÃO tem integração PENDENTE.
+    //
+    // A frente INTEGRAÇÃO entrou como última etapa da esteira, então "cadastro concluído" deixou de
+    // significar "processo terminado" para quem ainda vai passar por ela. Sem a segunda metade desta
+    // expressão, uma admissão viva EM INTEGRAÇÃO contaria como Concluída no Gerenciador enquanto o
+    // time ainda trabalha nela.
+    //
+    // QUEM DECIDE É A PRESENÇA DA FRENTE, e não a configuração do cliente (leitura confirmada pelo
+    // diretor). A diferença não é acadêmica: hoje todos os 235 clientes exigem integração por
+    // default, e nenhuma das 1.555 admissões antigas tem a frente, porque a não retroatividade
+    // impediu. Olhar a configuração do cliente ZERARIA o KPI e reescreveria o passado; olhar a
+    // frente preserva as antigas (que não têm integração pendente) e faz só as novas esperarem.
+    //
+    // Cliente que NÃO exige integração também segue contando no Cadastro: a frente nunca nasce para
+    // ele, então nunca há integração pendente.
+    const concluidoExpr = sql<boolean>`(
+      EXISTS (SELECT 1 FROM frentes_admissao f WHERE f.admissao_id = ${admissoes.id} AND f.tipo = 'CADASTRO_CONTRATO' AND f.concluida = true)
+      AND NOT EXISTS (SELECT 1 FROM frentes_admissao i WHERE i.admissao_id = ${admissoes.id} AND i.tipo = 'INTEGRACAO' AND i.concluida = false)
+    )`;
 
     // "Com pendências obrigatórias" = sinalizador de preenchimento diferente de OK (falta campo-núcleo),
     // MAS quem declinou/rescindiu NUNCA conta como pendência em nenhum card (regra permanente de
