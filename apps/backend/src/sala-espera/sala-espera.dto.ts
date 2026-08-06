@@ -80,3 +80,9 @@ export class SalaEsperaDto {
   @MaxLength(180)
   email?: string;
 }
+
+/** Vínculo do registro da Sala com a admissão que chegou do Pandapé (match manual, onda 3). */
+export class VincularSalaDto {
+  @IsUUID("4", { message: "Admissão inválida." })
+  admissaoId!: string;
+}

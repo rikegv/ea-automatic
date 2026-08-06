@@ -1,8 +1,16 @@
 import { BadRequestException, Inject, Injectable, NotFoundException } from "@nestjs/common";
-import { and, asc, eq, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, ilike, isNull, or, sql } from "drizzle-orm";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
-import { cargos, clientes, salaEspera, salaEsperaStatus } from "../db/schema";
+import {
+  admissoes,
+  candidatoAlteracoesLog,
+  candidatos,
+  cargos,
+  clientes,
+  salaEspera,
+  salaEsperaStatus,
+} from "../db/schema";
 import type { SalaEsperaDto, SalaEsperaStatusDto } from "./sala-espera.dto";
 import type { AuthUser } from "../auth/auth.types";
 import { isValidCpf, normalizeCpf } from "@ea/shared-types";
@@ -117,6 +125,185 @@ export class SalaEsperaService {
     return base
       .where(and(eq(salaEsperaStatus.encerra, false), isNull(salaEspera.admissaoId)))
       .orderBy(asc(salaEspera.dataRecebimento));
+  }
+
+  // ── MATCH MANUAL com a Liberação (onda 3) ─────────────────────────────────
+
+  /**
+   * CANDIDATOS DA SALA que podem casar com uma admissão que chegou do Pandapé.
+   *
+   * A ORDEM DAS PISTAS É A ORDEM DA CONFIANÇA, e é isso que o `score` expressa:
+   *  1. CPF igual: identidade, não semelhança. Quando os dois lados têm CPF e ele bate, não há o que
+   *     discutir, e o operador confirma em vez de procurar.
+   *  2. telefone igual (só dígitos, para máscara diferente não atrapalhar);
+   *  3. nome parecido.
+   *
+   * Devolve SUGESTÕES, nunca decide: quem associa é o operador (decisão do diretor, match manual). O
+   * `score` só ordena a lista, para o caso óbvio aparecer primeiro.
+   *
+   * Só registros EM ABERTO entram: os mesmos dois critérios da fila (status não terminal e ainda não
+   * vinculado). Sugerir um registro já vinculado convidaria a vincular duas vezes.
+   *
+   * §A.6: recebe CPF e telefone como critério e devolve o registro da Sala, que é o que o operador
+   * precisa ler para decidir. Nada disso vai para log.
+   */
+  async buscarParaMatch(criterios: { cpf?: string; nome?: string; telefone?: string }) {
+    const cpf = normalizeCpf(criterios.cpf ?? "");
+    const nome = criterios.nome?.trim() ?? "";
+    const telefone = (criterios.telefone ?? "").replace(/\D/g, "");
+
+    const pistas = [];
+    if (cpf.length === 11) pistas.push(eq(salaEspera.cpf, cpf));
+    if (telefone.length >= 8) {
+      pistas.push(sql`regexp_replace(coalesce(${salaEspera.telefone}, ''), '\\D', '', 'g') = ${telefone}`);
+    }
+    if (nome.length >= 3) pistas.push(ilike(salaEspera.nome, `%${nome}%`));
+    // Sem pista nenhuma não se devolve a fila inteira: seria convite a vincular o registro errado.
+    if (pistas.length === 0) return [];
+
+    const score = sql<number>`(
+      case when ${salaEspera.cpf} is not null and ${salaEspera.cpf} = ${cpf} then 100 else 0 end +
+      case when regexp_replace(coalesce(${salaEspera.telefone}, ''), '\\D', '', 'g') = ${telefone}
+           and ${telefone} <> '' then 10 else 0 end
+    )`;
+
+    return this.db
+      .select({
+        id: salaEspera.id,
+        nome: salaEspera.nome,
+        telefone: salaEspera.telefone,
+        cpf: salaEspera.cpf,
+        dataNascimento: salaEspera.dataNascimento,
+        email: salaEspera.email,
+        dataRecebimento: salaEspera.dataRecebimento,
+        origem: salaEspera.origem,
+        codCliente: salaEspera.codCliente,
+        clienteRazao: clientes.razaoSocial,
+        clienteOperacao: clientes.nomeOperacao,
+        cargoId: salaEspera.cargoId,
+        cargoNome: cargos.nome,
+        statusNome: salaEsperaStatus.nome,
+        score,
+      })
+      .from(salaEspera)
+      .innerJoin(salaEsperaStatus, eq(salaEsperaStatus.id, salaEspera.statusId))
+      .leftJoin(clientes, eq(clientes.codCliente, salaEspera.codCliente))
+      .leftJoin(cargos, eq(cargos.id, salaEspera.cargoId))
+      .where(
+        and(
+          eq(salaEsperaStatus.encerra, false),
+          isNull(salaEspera.admissaoId),
+          or(...pistas),
+        ),
+      )
+      .orderBy(desc(score), asc(salaEspera.dataRecebimento))
+      .limit(20);
+  }
+
+  /**
+   * VINCULA o registro da Sala à admissão, e o registro SAI DA FILA na mesma transação.
+   *
+   * TRANSACIONAL de propósito: gravar o ponteiro sem baixar da fila (ou o contrário) deixaria o mesmo
+   * candidato aparecendo nos dois lugares, que é exatamente o que a fila existe para evitar.
+   *
+   * IDEMPOTÊNCIA COM RECUSA, não silenciosa: registro já vinculado devolve erro em vez de repontar.
+   * Repontar em silêncio permitiria mover o histórico de uma admissão para outra sem ninguém ver.
+   *
+   * CLIENTE E CARGO ele NÃO escreve: vão para o formulário da liberação, que é quem grava na
+   * admissão, pelo caminho que já existe e já é validado. O `liberar()` não foi tocado.
+   *
+   * TELEFONE é a exceção, e por um motivo concreto: o modal de liberação NÃO TEM caixa de telefone
+   * (a tela só o exibe como coluna), então não havia onde "pré-preencher". A regra do diretor
+   * (entra só se estiver vazio) é aplicada aqui, na mesma transação do vínculo, e SÓ quando o
+   * candidato está sem telefone. Telefone já preenchido nunca é sobrescrito.
+   */
+  async vincular(salaId: string, admissaoId: string, user: AuthUser) {
+    const [reg] = await this.db.select().from(salaEspera).where(eq(salaEspera.id, salaId));
+    if (!reg) throw new NotFoundException("Registro da Sala de Espera não encontrado.");
+    if (reg.admissaoId) {
+      throw new BadRequestException("Este registro já foi vinculado a uma admissão.");
+    }
+    const [adm] = await this.db
+      .select({ id: admissoes.id, candidatoCpf: admissoes.candidatoCpf })
+      .from(admissoes)
+      .where(eq(admissoes.id, admissaoId));
+    if (!adm) throw new NotFoundException("Admissão não encontrada.");
+
+    const agora = new Date();
+    return await this.db.transaction(async (tx) => {
+      const [row] = await tx
+        .update(salaEspera)
+        .set({ admissaoId, vinculadoEm: agora, atualizadoEm: agora })
+        .where(and(eq(salaEspera.id, salaId), isNull(salaEspera.admissaoId)))
+        .returning();
+      // A corrida de dois operadores no mesmo registro cai aqui: o `isNull` acima não casa na segunda
+      // vez, e a transação inteira volta atrás.
+      if (!row) throw new BadRequestException("Este registro já foi vinculado a uma admissão.");
+
+      // TRILHA: de onde veio e desde quando esperava. É o dado que hoje se perde, e o motivo de o
+      // diretor querer a Sala. §A.6: data e origem, sem PII.
+      await tx.insert(candidatoAlteracoesLog).values({
+        admissaoId,
+        campo: "salaEspera",
+        valorAnterior: null,
+        valorNovo: `Vinculado à Sala de Espera (origem ${reg.origem === "CLIENTE" ? "Cliente" : "Seleção"}, recebido em ${reg.dataRecebimento})`,
+        autorId: user?.id ?? null,
+      });
+
+      // TELEFONE, SÓ SE VAZIO. A leitura acontece DENTRO da transação e o UPDATE repete a condição
+      // no WHERE: assim, se alguém preencher o telefone entre a leitura e a escrita, o update não
+      // casa e o valor do consultor prevalece. Preencher o que está vazio é ajuda; sobrescrever o
+      // que alguém digitou seria perda de dado.
+      const telefoneSala = (reg.telefone ?? "").trim();
+      if (telefoneSala) {
+        const [cand] = await tx
+          .select({ telefone: candidatos.telefone })
+          .from(candidatos)
+          .where(eq(candidatos.cpf, adm.candidatoCpf));
+        if (cand && !(cand.telefone ?? "").trim()) {
+          const [tel] = await tx
+            .update(candidatos)
+            .set({ telefone: telefoneSala, atualizadoEm: agora })
+            .where(
+              and(
+                eq(candidatos.cpf, adm.candidatoCpf),
+                or(isNull(candidatos.telefone), eq(candidatos.telefone, "")),
+              ),
+            )
+            .returning({ cpf: candidatos.cpf });
+          // Mesma trilha das demais edições do candidato (campo "telefone"), para a alteração não
+          // aparecer do nada na ficha. Valor anterior vazio, que é a condição para chegar aqui.
+          if (tel) {
+            await tx.insert(candidatoAlteracoesLog).values({
+              admissaoId,
+              campo: "telefone",
+              valorAnterior: null,
+              valorNovo: telefoneSala,
+              autorId: user?.id ?? null,
+            });
+          }
+        }
+      }
+
+      return row;
+    });
+  }
+
+  /**
+   * Dados do registro para a tela PRÉ-PREENCHER. Devolve o que a Sala sabe; a decisão de usar ou não
+   * cada campo é da tela, que só preenche o que estiver VAZIO (decisão do diretor).
+   */
+  async dadosParaPreencher(salaId: string) {
+    const [reg] = await this.db
+      .select({
+        codCliente: salaEspera.codCliente,
+        cargoId: salaEspera.cargoId,
+        telefone: salaEspera.telefone,
+      })
+      .from(salaEspera)
+      .where(eq(salaEspera.id, salaId));
+    if (!reg) throw new NotFoundException("Registro da Sala de Espera não encontrado.");
+    return reg;
   }
 
   async criar(dto: SalaEsperaDto, user: AuthUser) {

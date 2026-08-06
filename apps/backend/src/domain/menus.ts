@@ -271,6 +271,8 @@ export const MENUS: MenuDef[] = [
     operacoes: [
       "SalaEsperaController.criar",
       "SalaEsperaController.atualizar",
+      // O vínculo é acionado da LIBERAÇÃO, não da Sala, mas é mutação DA SALA: reivindicado aqui.
+      "SalaEsperaController.vincular",
     ],
   },
   {

@@ -9,7 +9,9 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import { Button } from "@/components/ui/Button";
 import { Select } from "@/components/ui/Select";
 import { MultiSelect } from "@/components/ui/MultiSelect";
+import { Icon } from "@/components/ui/Icon";
 import { Modal } from "@/components/ui/Modal";
+import { VincularSalaModal, type Sugestao } from "@/components/liberacao/VincularSalaModal";
 import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
 import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
 import {
@@ -288,7 +290,7 @@ function paradoHoras(criadoEm: string, nowMs: number): string {
 }
 
 export default function LiberacaoPage() {
-  const { token, isAdmin } = useAuth();
+  const { token, isAdmin, temMenu } = useAuth();
   // Refresh imediato do badge do menu (Parte 3): a fila muda ao liberar/recusar/reativar, e o contador
   // não pode esperar o polling de 90s. Rede de fundo (90s) continua; isto só antecipa no evento.
   const refreshBadge = useLiberacaoRefresh();
@@ -319,6 +321,19 @@ export default function LiberacaoPage() {
   const precisaValorBeneficio = useMemo(() => criarPrecisaValor(beneficiosCat), [beneficiosCat]);
   // Modal de liberação: a pré-admissão alvo (null = fechado) + os campos do formulário.
   const [alvo, setAlvo] = useState<PreAdmissao | null>(null);
+  /**
+   * SALA DE ESPERA (onda 3): estado PRÓPRIO do vínculo, em três peças que não se misturam com nada
+   * do formulário de liberação.
+   *  - `salaTriagem`: o passo do vínculo, com o candidato da linha e o que a Sala já devolveu. Só
+   *    existe quando a busca ACHOU alguém; sem ninguém esperando, a liberação abre direto.
+   *  - `salaVinculada`: a marca do que foi vinculado, para o consultor ver dentro da liberação.
+   *  - `buscandoSala`: o id em consulta, que segura o botão daquela linha durante a busca.
+   */
+  const [salaTriagem, setSalaTriagem] = useState<{ r: PreAdmissao; sugestoes: Sugestao[] } | null>(
+    null,
+  );
+  const [salaVinculada, setSalaVinculada] = useState<string | null>(null);
+  const [buscandoSala, setBuscandoSala] = useState<string | null>(null);
   const [codCliente, setCodCliente] = useState("");
   const [cargoId, setCargoId] = useState("");
   // Campos obrigatórios (régua unificada §A.19), todos opcionais na liberação — só cliente+cargo travam.
@@ -575,14 +590,22 @@ export default function LiberacaoPage() {
     };
   }, [token, loteAberto, loteCodCliente, loteCargoId, clientes]);
 
-  function abrirModal(r: PreAdmissao) {
+  /**
+   * Abre o modal de liberação. O parâmetro `pre` é ADITIVO (§A.26) e existe por um motivo só: o
+   * vínculo com a Sala precisa entregar cliente e cargo JÁ preenchidos, e é aqui que os campos
+   * nascem. SEM ele a função se comporta exatamente como antes, porque cada campo cai no mesmo
+   * `""` de sempre: o caminho normal da liberação (clicar e liberar, sem vínculo) não muda.
+   */
+  function abrirModal(r: PreAdmissao, pre?: { codCliente?: string; cargoId?: string }) {
     setAlvo(r);
+    // Estado PRÓPRIO do vínculo, zerado junto: a marca é de um candidato, não da tela.
+    setSalaVinculada(null);
     // SEXO (OST do seletor de sexo): o que veio do Pandapé PRÉ-PREENCHE o seletor, e o consultor
     // pode trocar. Não é trava: o valor do Pandapé pode estar errado, foi o que travou um prontuário
     // de verdade (candidata gravada como masculino, Reservista virando obrigatório).
     setSexo(r.sexo ?? "");
-    setCodCliente("");
-    setCargoId("");
+    setCodCliente(pre?.codCliente ?? "");
+    setCargoId(pre?.cargoId ?? "");
     setSalario("");
     setTipoContrato("");
     setDataAdmissao("");
@@ -610,6 +633,40 @@ export default function LiberacaoPage() {
   function fecharModal() {
     if (liberando) return;
     setAlvo(null);
+  }
+
+  /**
+   * O CLIQUE DA LINHA (botão "Liberar Admissão"). Um clique só, e o caminho se decide sozinho:
+   *  - quem NÃO tem o menu da Sala nem consulta nada e cai direto na liberação, como sempre foi;
+   *  - com o menu, o sistema procura na Sala pelo CPF, nome e telefone do candidato. ACHOU alguém,
+   *    mostra o passo do vínculo; não achou, abre a liberação direto.
+   *
+   * A SALA NUNCA TRAVA A LIBERAÇÃO (§A.26): falha de rede, erro ou lista vazia caem todos no mesmo
+   * lugar, que é abrir o modal de liberação exatamente como antes desta OST. O vínculo é ajuda, e
+   * ajuda que quebra o fluxo crítico não é ajuda.
+   */
+  async function abrirLiberacao(r: PreAdmissao) {
+    if (!temMenu("sala-espera")) {
+      abrirModal(r);
+      return;
+    }
+    setBuscandoSala(r.admissaoId);
+    try {
+      const p = new URLSearchParams();
+      if (r.candidatoCpf) p.set("cpf", r.candidatoCpf);
+      if (r.candidatoNome) p.set("nome", r.candidatoNome);
+      if (r.telefone) p.set("telefone", r.telefone);
+      const achados = await apiFetch<Sugestao[]>(`/sala-espera/match?${p.toString()}`, { token });
+      if (achados.length > 0) {
+        setSalaTriagem({ r, sugestoes: achados });
+        return;
+      }
+    } catch {
+      /* Sala indisponível não impede liberar: segue para o modal de sempre. */
+    } finally {
+      setBuscandoSala(null);
+    }
+    abrirModal(r);
   }
 
   // Pacote no formato do backend (mesma montagem do wizard): nome→beneficioId; valor só nos que exigem.
@@ -1021,7 +1078,7 @@ export default function LiberacaoPage() {
       {aba === "aguardando" ? (
         <GlassCard className="overflow-hidden p-2">
           <div className="ea-scroll overflow-x-auto">
-            <table className="ds-table min-w-[944px]">
+            <table className="ds-table min-w-[1034px]">
               <thead>
                 <tr>
                   <th className="w-[44px]">
@@ -1059,7 +1116,9 @@ export default function LiberacaoPage() {
                   <ColunaOrdenavel as="th" ord={ordFila} chave="paradoHoras" className="w-[140px]">
                     Parado (horas)
                   </ColunaOrdenavel>
-                  <th className="w-[120px]">Ação</th>
+                  {/* Largura medida no rótulo mais longo do botão, "Liberar Admissão", que cabe em
+                      UMA linha (§A.20). */}
+                  <th className="w-[210px]">Ação</th>
                 </tr>
               </thead>
               <tbody>
@@ -1123,8 +1182,15 @@ export default function LiberacaoPage() {
                         {paradoHoras(r.criadoEm, nowMs)}
                       </td>
                       <td>
-                        <Button onClick={() => abrirModal(r)} className="w-full py-2">
-                          Liberar
+                        {/* UM CLIQUE: procura na Sala e segue para a liberação, com ou sem vínculo.
+                            O rótulo diz o que o botão entrega (a liberação da admissão), não a
+                            etapa intermediária, que pode nem existir. */}
+                        <Button
+                          onClick={() => void abrirLiberacao(r)}
+                          className="w-full whitespace-nowrap py-2"
+                          disabled={buscandoSala === r.admissaoId}
+                        >
+                          {buscandoSala === r.admissaoId ? "Abrindo…" : "Liberar Admissão"}
                         </Button>
                       </td>
                     </tr>
@@ -1204,6 +1270,30 @@ export default function LiberacaoPage() {
         </GlassCard>
       )}
 
+      {/* PASSO DO VÍNCULO, entre o clique da linha e a liberação. Só monta quando a Sala devolveu
+          candidato; feche por onde fechar, a liberação abre em seguida.
+
+          O PRÉ-PREENCHIMENTO ENTRA PELO `abrirModal`, não depois dele: é ele quem zera os campos a
+          cada abertura, então mandar cliente e cargo por fora seria escrever num estado que a
+          própria abertura apaga em seguida. Como o modal ainda não está aberto, "só se vazio" é o
+          estado inicial dele: não há escolha do consultor para sobrescrever. */}
+      {salaTriagem && (
+        <VincularSalaModal
+          admissaoId={salaTriagem.r.admissaoId}
+          candidatoNome={salaTriagem.r.candidatoNome}
+          candidatoCpf={salaTriagem.r.candidatoCpf}
+          candidatoTelefone={salaTriagem.r.telefone}
+          sugestoesIniciais={salaTriagem.sugestoes}
+          onClose={(dados) => {
+            const alvoTriagem = salaTriagem.r;
+            setSalaTriagem(null);
+            abrirModal(alvoTriagem, dados ?? undefined);
+            // Depois do `abrirModal`, que zera a marca: assim ela sobrevive à abertura.
+            if (dados) setSalaVinculada(dados.nome);
+          }}
+        />
+      )}
+
       {alvo && (
         <Modal onClose={fecharModal} ariaLabel="Liberar admissão" className="max-w-[560px] p-6">
           <div className="mb-5">
@@ -1227,6 +1317,16 @@ export default function LiberacaoPage() {
                 admissão, conferindo o documento do candidato.
               </p>
             </div>
+          )}
+
+          {/* SALA DE ESPERA (onda 3): aqui é só a MARCA do que já foi vinculado no passo anterior,
+              para o consultor saber de onde vieram o cliente e o cargo que já encontrou preenchidos.
+              Não há botão dentro do modal: o vínculo acontece na linha, antes de chegar aqui. */}
+          {salaVinculada && (
+            <p className="mb-4 flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[rgba(91,214,138,0.1)] px-3 py-2 text-[13px] text-ok">
+              <Icon name="check" className="h-4 w-4 flex-none" />
+              Vinculado à Sala de Espera: {caixaAlta(salaVinculada)}
+            </p>
           )}
 
           {/* Cliente + cargo: o que ESTA OST entrega e a única trava de liberação. A próxima OST
