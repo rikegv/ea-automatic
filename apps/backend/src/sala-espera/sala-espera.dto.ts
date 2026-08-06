@@ -85,4 +85,13 @@ export class SalaEsperaDto {
 export class VincularSalaDto {
   @IsUUID("4", { message: "Admissão inválida." })
   admissaoId!: string;
+
+  /**
+   * Veio da porta da SALA? Então o cliente e o cargo do registro entram na admissão, só nos campos
+   * vazios. Ausente ou false = porta da Liberação, que não escreve na admissão (comportamento da
+   * onda 3, preservado).
+   */
+  @IsOptional()
+  @IsBoolean()
+  prePreencherAdmissao?: boolean;
 }

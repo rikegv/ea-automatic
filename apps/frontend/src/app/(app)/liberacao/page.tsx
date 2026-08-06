@@ -21,6 +21,7 @@ import {
 } from "@/components/shell/LiberacaoAlerta";
 import { criarPrecisaValor } from "@/lib/beneficios";
 import { caixaAlta } from "@/lib/nome";
+import { resolverPrePreenchimento } from "@/lib/pre-preenchimento-liberacao";
 import {
   isValidCpf,
   ITENS_EPI,
@@ -66,6 +67,9 @@ interface PreAdmissao {
   criadoEm: string;
   idVacancy: string | null;
   possivelDuplicata: boolean;
+  /** Cliente e cargo JÁ atribuídos à admissão (hoje, quem os sugere é o match da Sala de Espera). */
+  codCliente: string | null;
+  cargoId: string | null;
 }
 interface Cliente {
   codCliente: string;
@@ -604,8 +608,11 @@ export default function LiberacaoPage() {
     // pode trocar. Não é trava: o valor do Pandapé pode estar errado, foi o que travou um prontuário
     // de verdade (candidata gravada como masculino, Reservista virando obrigatório).
     setSexo(r.sexo ?? "");
-    setCodCliente(pre?.codCliente ?? "");
-    setCargoId(pre?.cargoId ?? "");
+    // A regra de QUEM VENCE mora em `lib/pre-preenchimento-liberacao` e é testada lá: foi neste
+    // ponto que o auto-preenchimento da Sala se perdeu (gravava no banco e a tela abria vazia).
+    const sugerido = resolverPrePreenchimento(r, pre);
+    setCodCliente(sugerido.codCliente);
+    setCargoId(sugerido.cargoId);
     setSalario("");
     setTipoContrato("");
     setDataAdmissao("");

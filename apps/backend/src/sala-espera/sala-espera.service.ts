@@ -1,5 +1,5 @@
 import { BadRequestException, Inject, Injectable, NotFoundException } from "@nestjs/common";
-import { and, asc, desc, eq, ilike, isNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, ilike, isNotNull, isNull, or, sql } from "drizzle-orm";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
 import {
@@ -90,10 +90,15 @@ export class SalaEsperaService {
   // ── Registros da Sala ─────────────────────────────────────────────────────
 
   /**
-   * A fila. `incluirEncerrados` abre o histórico (o que declinou, desistiu ou já virou admissão),
-   * que é o que a onda 4 vai consumir; o padrão é só o trabalho em aberto, para a tela não poluir.
+   * A fila, em três recortes. O padrão (`aguardando`) é só o trabalho em aberto, para a tela não
+   * poluir; `vinculadas` é a aba nova, o histórico de quem já virou admissão; `todos` abre tudo.
+   *
+   * VINCULADAS é aba, não sumiço (conceito de hospital, decisão do diretor): quem foi vinculado sai
+   * da fila ativa mas continua consultável, com a data do vínculo. Antes daqui o registro
+   * simplesmente desaparecia da tela, e o time perdia a prova de que aquele candidato foi anunciado
+   * antes de aparecer no Pandapé, que é a razão de a Sala existir.
    */
-  async listar(incluirEncerrados = false) {
+  async listar(recorte: "aguardando" | "vinculadas" | "todos" = "aguardando") {
     const base = this.db
       .select({
         id: salaEspera.id,
@@ -121,7 +126,11 @@ export class SalaEsperaService {
       .leftJoin(clientes, eq(clientes.codCliente, salaEspera.codCliente))
       .leftJoin(cargos, eq(cargos.id, salaEspera.cargoId));
 
-    if (incluirEncerrados) return base.orderBy(asc(salaEspera.dataRecebimento));
+    if (recorte === "todos") return base.orderBy(asc(salaEspera.dataRecebimento));
+    if (recorte === "vinculadas") {
+      // Mais recente primeiro: o vínculo de agora é o que se confere.
+      return base.where(isNotNull(salaEspera.admissaoId)).orderBy(desc(salaEspera.vinculadoEm));
+    }
     return base
       .where(and(eq(salaEsperaStatus.encerra, false), isNull(salaEspera.admissaoId)))
       .orderBy(asc(salaEspera.dataRecebimento));
@@ -217,14 +226,39 @@ export class SalaEsperaService {
    * (entra só se estiver vazio) é aplicada aqui, na mesma transação do vínculo, e SÓ quando o
    * candidato está sem telefone. Telefone já preenchido nunca é sobrescrito.
    */
-  async vincular(salaId: string, admissaoId: string, user: AuthUser) {
+  /**
+   * `prePreencherAdmissao` é a diferença entre as DUAS portas do match, e é aditivo de propósito
+   * (§A.26).
+   *
+   *  - Porta da LIBERAÇÃO (onda 3, `false`, o padrão): o vínculo NÃO escreve na admissão. O que a
+   *    Sala sabe volta para o FORMULÁRIO aberto, e quem grava é o `liberar()`, pelo caminho que já
+   *    existe e já foi validado. Nada mudou desse lado.
+   *  - Porta da SALA (`true`): não há formulário aberto para pré-preencher, a admissão está lá na
+   *    fila da Liberação esperando alguém. Então o cliente e o cargo da Sala entram na admissão
+   *    AGORA, e SÓ NOS CAMPOS VAZIOS.
+   *
+   * O QUE ELE CONTINUA NÃO FAZENDO, nas duas portas: não libera, não cria frente, não mexe em farol.
+   * Vincular é sugestão de preenchimento, não passagem de fase. Quem libera é o time, na tela de
+   * Liberação, como sempre foi.
+   */
+  async vincular(
+    salaId: string,
+    admissaoId: string,
+    user: AuthUser,
+    opts: { prePreencherAdmissao?: boolean } = {},
+  ) {
     const [reg] = await this.db.select().from(salaEspera).where(eq(salaEspera.id, salaId));
     if (!reg) throw new NotFoundException("Registro da Sala de Espera não encontrado.");
     if (reg.admissaoId) {
       throw new BadRequestException("Este registro já foi vinculado a uma admissão.");
     }
     const [adm] = await this.db
-      .select({ id: admissoes.id, candidatoCpf: admissoes.candidatoCpf })
+      .select({
+        id: admissoes.id,
+        candidatoCpf: admissoes.candidatoCpf,
+        codCliente: admissoes.codCliente,
+        cargoId: admissoes.cargoId,
+      })
       .from(admissoes)
       .where(eq(admissoes.id, admissaoId));
     if (!adm) throw new NotFoundException("Admissão não encontrada.");
@@ -249,6 +283,39 @@ export class SalaEsperaService {
         valorNovo: `Vinculado à Sala de Espera (origem ${reg.origem === "CLIENTE" ? "Cliente" : "Seleção"}, recebido em ${reg.dataRecebimento})`,
         autorId: user?.id ?? null,
       });
+
+      // CLIENTE E CARGO, SÓ SE VAZIOS (porta da Sala). A admissão que chega do Pandapé NASCE SEM
+      // CLIENTE, então este é o campo que o vínculo tem a oferecer, e é o que faz a Liberação abrir
+      // já sabendo de quem é o candidato. O `isNull` no WHERE repete a condição: se alguém preencher
+      // entre a leitura e a escrita, o valor da pessoa prevalece.
+      if (opts.prePreencherAdmissao) {
+        const campos: Record<string, unknown> = {};
+        if (!adm.codCliente) campos.codCliente = reg.codCliente;
+        if (!adm.cargoId) campos.cargoId = reg.cargoId;
+        if (Object.keys(campos).length > 0) {
+          const [tocada] = await tx
+            .update(admissoes)
+            .set({ ...campos, atualizadoEm: agora })
+            .where(
+              and(
+                eq(admissoes.id, admissaoId),
+                ...(campos.codCliente ? [isNull(admissoes.codCliente)] : []),
+                ...(campos.cargoId ? [isNull(admissoes.cargoId)] : []),
+              ),
+            )
+            .returning({ id: admissoes.id });
+          // A trilha diz de onde veio a sugestão, para ninguém achar que o cliente caiu do céu.
+          if (tocada && campos.codCliente) {
+            await tx.insert(candidatoAlteracoesLog).values({
+              admissaoId,
+              campo: "codCliente",
+              valorAnterior: null,
+              valorNovo: `${String(campos.codCliente)} (sugerido pela Sala de Espera)`,
+              autorId: user?.id ?? null,
+            });
+          }
+        }
+      }
 
       // TELEFONE, SÓ SE VAZIO. A leitura acontece DENTRO da transação e o UPDATE repete a condição
       // no WHERE: assim, se alguém preencher o telefone entre a leitura e a escrita, o update não
@@ -304,6 +371,46 @@ export class SalaEsperaService {
       .where(eq(salaEspera.id, salaId));
     if (!reg) throw new NotFoundException("Registro da Sala de Espera não encontrado.");
     return reg;
+  }
+
+  /**
+   * AS ADMISSÕES DA FILA DE LIBERAÇÃO, para o match partindo da SALA.
+   *
+   * SEM FILTRO DE CLIENTE, e isso não é esquecimento: a admissão que chega do Pandapé **nasce sem
+   * cliente** (o cliente é justamente o que o time atribui na liberação). Filtrar por cliente aqui
+   * esconderia todo mundo. A identificação é NOME + CPF + NASCIMENTO, e a busca é por esses campos.
+   *
+   * Mesma fonte da tela de Liberação (`farol = AGUARDANDO_LIBERACAO`), mas servida pela rota da
+   * Sala: quem tem o menu `sala-espera` precisa enxergar esta lista sem depender do menu da
+   * Liberação (§A.23, a permissão é do diretor, e a fábrica não empresta menu).
+   */
+  async admissoesParaVincular(busca?: string) {
+    const termo = (busca ?? "").trim();
+    const digitos = termo.replace(/\D/g, "");
+    const filtros = [eq(admissoes.farolGlobal, "AGUARDANDO_LIBERACAO")];
+    if (termo.length >= 2) {
+      const porNome = ilike(candidatos.nome, `%${termo}%`);
+      // CPF com ou sem pontuação: compara só os dígitos dos dois lados.
+      const porCpf = digitos.length >= 3 ? [ilike(candidatos.cpf, `%${digitos}%`)] : [];
+      filtros.push(or(porNome, ...porCpf)!);
+    }
+    return this.db
+      .select({
+        admissaoId: admissoes.id,
+        nome: candidatos.nome,
+        cpf: candidatos.cpf,
+        dataNascimento: candidatos.dataNascimento,
+        telefone: candidatos.telefone,
+        origem: admissoes.origem,
+        criadoEm: admissoes.criadoEm,
+        codCliente: admissoes.codCliente,
+        cargoId: admissoes.cargoId,
+      })
+      .from(admissoes)
+      .innerJoin(candidatos, eq(candidatos.cpf, admissoes.candidatoCpf))
+      .where(and(...filtros))
+      .orderBy(asc(admissoes.criadoEm))
+      .limit(200);
   }
 
   async criar(dto: SalaEsperaDto, user: AuthUser) {

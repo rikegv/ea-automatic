@@ -1092,6 +1092,12 @@ export class AdmissoesService {
         criadoEm: admissoes.criadoEm,
         idVacancy: admissoes.idVacancy,
         possivelDuplicata: admissoes.possivelDuplicata,
+        // CLIENTE E CARGO JÁ ATRIBUÍDOS, quando existem. A pré-admissão do Pandapé nasce sem os dois,
+        // então o normal é virem nulos; eles só chegam preenchidos quando algo os SUGERIU antes, e
+        // hoje esse algo é o match partindo da Sala de Espera. Sem devolvê-los aqui, a sugestão fica
+        // gravada no banco e INVISÍVEL na tela, que foi o bug reportado pelo diretor.
+        codCliente: admissoes.codCliente,
+        cargoId: admissoes.cargoId,
       })
       .from(admissoes)
       .innerJoin(candidatos, eq(admissoes.candidatoCpf, candidatos.cpf))

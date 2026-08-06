@@ -60,16 +60,39 @@ export class SalaEsperaController {
     return this.sala.dadosParaPreencher(id);
   }
 
-  /** Vincula o registro à admissão. O registro sai da fila na MESMA transação. */
+  /**
+   * Vincula o registro à admissão. O registro sai da fila na MESMA transação.
+   *
+   * `prePreencherAdmissao` diz de QUAL porta veio o match: da Sala (true, escreve cliente e cargo
+   * vazios na admissão) ou da Liberação (false, o padrão, devolve os dados ao formulário aberto e
+   * não toca na admissão). Não libera nem avança fase em nenhuma das duas.
+   */
   @Post(":id/vincular")
   vincular(@Param("id") id: string, @Body() dto: VincularSalaDto, @CurrentUser() user: AuthUser) {
-    return this.sala.vincular(id, dto.admissaoId, user);
+    return this.sala.vincular(id, dto.admissaoId, user, {
+      prePreencherAdmissao: dto.prePreencherAdmissao === true,
+    });
   }
 
-  /** A fila. `todos=1` abre o histórico (encerrados e já vinculados). */
+  /**
+   * ADMISSÕES DA FILA DE LIBERAÇÃO para o match partindo da Sala. Busca por nome ou CPF; sem busca,
+   * devolve a fila inteira (ela é curta por natureza). Servida aqui, e não pela rota da Liberação,
+   * para quem tem o menu da Sala não depender do menu da Liberação.
+   */
+  @Get("admissoes-para-vincular")
+  admissoesParaVincular(@Query("busca") busca?: string) {
+    return this.sala.admissoesParaVincular(busca);
+  }
+
+  /**
+   * A fila. `recorte=vinculadas` abre a aba nova (quem já virou admissão), `recorte=todos` mostra
+   * tudo. `todos=1` continua funcionando: era o parâmetro da onda 2 e não se quebra contrato de
+   * quem já chama.
+   */
   @Get()
-  listar(@Query("todos") todos?: string) {
-    return this.sala.listar(todos === "1");
+  listar(@Query("recorte") recorte?: string, @Query("todos") todos?: string) {
+    if (recorte === "vinculadas" || recorte === "todos") return this.sala.listar(recorte);
+    return this.sala.listar(todos === "1" ? "todos" : "aguardando");
   }
 
   @Post()

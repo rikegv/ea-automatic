@@ -23,6 +23,7 @@ import { Modal } from "@/components/ui/Modal";
 import { Select } from "@/components/ui/Select";
 import { StatusPill } from "@/components/ui/StatusPill";
 import { caixaAlta } from "@/lib/nome";
+import { VincularAdmissaoLivreto } from "@/components/sala-espera/VincularAdmissaoLivreto";
 
 interface Registro {
   id: string;
@@ -41,6 +42,8 @@ interface Registro {
   statusId: string;
   statusNome: string;
   statusEncerra: boolean;
+  admissaoId: string | null;
+  vinculadoEm: string | null;
 }
 interface StatusAtivo {
   id: string;
@@ -48,8 +51,21 @@ interface StatusAtivo {
   encerra: boolean;
 }
 
+/**
+ * TABELA AUTO-RESPONSIVA (decisão do diretor): as colunas são PROPORCIONAIS e o `minmax(0, Nfr)`
+ * garante que elas encolham juntas em vez de estourar a largura. Assim a tabela ocupa 100% do espaço
+ * disponível em qualquer tela, sem rolagem horizontal como saída e sem coluna espremida.
+ *
+ * Os pesos vêm do conteúdo real, não de chute: Status é o maior (1.7) porque o pill mais longo do
+ * catálogo é "Aguardando confirmação do link"; Candidato e Cliente vêm logo atrás (nome de pessoa e
+ * "código - nome operacional" são os textos mais longos); Origem é o menor (só "Cliente" ou
+ * "Seleção"). A coluna de Ações é a única fixa, porque botão não estica.
+ */
 const COLS =
-  "minmax(180px,1.2fr) minmax(150px,1fr) minmax(160px,1fr) 130px 120px 110px minmax(200px,1.1fr) 70px";
+  "minmax(0,1.5fr) minmax(0,1.35fr) minmax(0,1fr) minmax(0,0.85fr) minmax(0,0.75fr) minmax(0,0.6fr) minmax(0,1.7fr) 130px";
+/** Na aba Vinculadas o Status dá lugar a QUANDO foi vinculado, e sobra a coluna do botão de vínculo. */
+const COLS_VINC =
+  "minmax(0,1.5fr) minmax(0,1.35fr) minmax(0,1fr) minmax(0,0.85fr) minmax(0,0.75fr) minmax(0,0.6fr) minmax(0,1.2fr) 56px";
 const ORIGEM_ROTULO: Record<string, string> = { CLIENTE: "Cliente", SELECAO: "Seleção" };
 
 /**
@@ -62,6 +78,17 @@ const ORIGEM_ROTULO: Record<string, string> = { CLIENTE: "Cliente", SELECAO: "Se
 function rotuloCliente(cod: string, operacao?: string | null, razao?: string | null): string {
   const nome = operacao || razao || "";
   return nome ? `${cod} - ${nome}` : cod;
+}
+
+/** Data e hora do vínculo: o minuto importa para conferir contra a Liberação. */
+function fmtDataHora(iso?: string | null): string {
+  if (!iso) return "não informado";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "não informado";
+  return `${d.toLocaleDateString("pt-BR")} ${d.toLocaleTimeString("pt-BR", {
+    hour: "2-digit",
+    minute: "2-digit",
+  })}`;
 }
 
 function fmtData(d?: string | null): string {
@@ -99,13 +126,25 @@ export default function SalaEsperaPage() {
   const [aberto, setAberto] = useState(false);
   const [salvando, setSalvando] = useState(false);
   const [erroForm, setErroForm] = useState<string | null>(null);
+  /**
+   * AS DUAS ABAS (conceito de hospital, decisão do diretor): "Aguardando" é a fila viva, "Vinculadas"
+   * é o histórico de quem já virou admissão. Antes o registro vinculado simplesmente sumia da tela, e
+   * com ele a prova de que o candidato foi anunciado ANTES de aparecer no Pandapé.
+   */
+  const [abaVinculadas, setAbaVinculadas] = useState(false);
+  /** Registro com o livreto do match aberto. */
+  const [vinculando, setVinculando] = useState<Registro | null>(null);
+  const [okMsg, setOkMsg] = useState<string | null>(null);
 
   const carregar = useCallback(async () => {
     if (!token) return;
     setCarregando(true);
     try {
       const [fila, sts] = await Promise.all([
-        apiFetch<Registro[]>("/sala-espera", { token }),
+        apiFetch<Registro[]>(
+          abaVinculadas ? "/sala-espera?recorte=vinculadas" : "/sala-espera",
+          { token },
+        ),
         apiFetch<StatusAtivo[]>("/sala-espera/status/ativos", { token }),
       ]);
       setLinhas(fila);
@@ -116,7 +155,7 @@ export default function SalaEsperaPage() {
     } finally {
       setCarregando(false);
     }
-  }, [token]);
+  }, [token, abaVinculadas]);
 
   useEffect(() => {
     void carregar();
@@ -216,6 +255,28 @@ export default function SalaEsperaPage() {
         subtitle="Candidatos anunciados pelo cliente ou pela Seleção, antes da candidatura no Pandapé."
       />
 
+      {/* ABAS: a fila viva e o histórico do que já foi vinculado. */}
+      <div className="mb-3 flex gap-2">
+        {[
+          { chave: false, rotulo: "Aguardando" },
+          { chave: true, rotulo: "Admissões Vinculadas" },
+        ].map((t) => (
+          <button
+            key={String(t.chave)}
+            type="button"
+            onClick={() => setAbaVinculadas(t.chave)}
+            className={
+              "rounded-full border px-4 py-1.5 text-[13px] font-semibold transition " +
+              (abaVinculadas === t.chave
+                ? "border-[var(--accent)] text-accent"
+                : "border-[var(--border)] text-faint hover:text-text")
+            }
+          >
+            {t.rotulo}
+          </button>
+        ))}
+      </div>
+
       <GlassCard className="mb-3 flex flex-wrap items-center gap-3 px-4 py-3">
         <input
           type="search"
@@ -226,7 +287,7 @@ export default function SalaEsperaPage() {
           aria-label="Buscar na Sala de Espera"
         />
         <span className="text-sm text-faint">
-          {linhas.length} em aberto
+          {linhas.length} {abaVinculadas ? "vinculada(s)" : "em aberto"}
         </span>
         <Button onClick={abrirNovo}>
           <Icon name="plus" className="h-4 w-4" />
@@ -239,18 +300,28 @@ export default function SalaEsperaPage() {
           {erro}
         </p>
       )}
+      {okMsg && (
+        <p className="mb-3 rounded-xl border border-[var(--border)] bg-[rgba(45,138,86,0.1)] px-3 py-2 text-sm text-ok">
+          {okMsg}
+        </p>
+      )}
 
       <GlassCard className="list flex min-h-0 flex-1 flex-col">
         <div className="ea-scroll min-h-0 flex-1 overflow-auto">
-          <div className="min-w-[1180px]">
-            <div className="list-head" style={{ gridTemplateColumns: COLS }}>
+          {/* Piso, não régua: a tabela se ajusta ao espaço disponível e só rola em tela muito
+              estreita, onde qualquer distribuição espremeria alguma coluna. */}
+          <div className="min-w-[880px]">
+            <div
+              className="list-head"
+              style={{ gridTemplateColumns: abaVinculadas ? COLS_VINC : COLS, gap: "10px" }}
+            >
               <span>Candidato</span>
               <span>Cliente</span>
               <span>Cargo</span>
               <span>Telefone</span>
               <span>Recebido Em</span>
               <span>Origem</span>
-              <span>Status</span>
+              <span>{abaVinculadas ? "Vinculado Em" : "Status"}</span>
               <span className="col-fix">Ações</span>
             </div>
 
@@ -260,37 +331,73 @@ export default function SalaEsperaPage() {
               <div className="px-4 py-10 text-center text-sm text-faint">
                 {busca
                   ? "Nenhum registro com esse filtro."
-                  : "Nenhum candidato aguardando. Use Novo Registro para incluir."}
+                  : abaVinculadas
+                    ? "Nenhum registro vinculado ainda. O vínculo acontece pelo botão Vincular Admissão, na aba Aguardando."
+                    : "Nenhum candidato aguardando. Use Novo Registro para incluir."}
               </div>
             ) : (
               filtradas.map((l) => (
-                <div key={l.id} className="row" style={{ gridTemplateColumns: COLS }}>
+                <div
+                  key={l.id}
+                  className="row"
+                  style={{ gridTemplateColumns: abaVinculadas ? COLS_VINC : COLS, gap: "10px" }}
+                >
                   <div className="min-w-0 text-left">
-                    <div className="nm truncate" title={caixaAlta(l.nome)}>
+                    {/* QUEBRA a linha em vez de cortar (§A.20): a linha cresce, o nome fica inteiro. */}
+                    <div className="nm !text-[13.5px] leading-tight break-words" title={caixaAlta(l.nome)}>
                       {caixaAlta(l.nome)}
                     </div>
                   </div>
                   <div
-                    className="meta truncate text-center"
+                    className="meta !text-[12px] leading-tight break-words text-center"
                     title={rotuloCliente(l.codCliente, l.clienteOperacao, l.clienteRazao)}
                   >
                     {rotuloCliente(l.codCliente, l.clienteOperacao, l.clienteRazao)}
                   </div>
-                  <div className="meta truncate text-center" title={l.cargoNome ?? ""}>
+                  <div className="meta !text-[12px] leading-tight break-words text-center" title={l.cargoNome ?? ""}>
                     {l.cargoNome ?? <span className="text-faint/60">—</span>}
                   </div>
-                  <div className="meta text-center">
+                  <div className="meta !text-[12px] text-center">
                     {l.telefone || <span className="text-faint/60">—</span>}
                   </div>
-                  <div className="meta text-center tabular-nums">{fmtData(l.dataRecebimento)}</div>
-                  <div className="meta text-center">{ORIGEM_ROTULO[l.origem] ?? l.origem}</div>
-                  <div className="flex min-w-0 items-center justify-center">
-                    <StatusPill tone="wn" label={l.statusNome} />
+                  <div className="meta !text-[12px] text-center tabular-nums">
+                    {fmtData(l.dataRecebimento)}
                   </div>
-                  <div className="col-fix flex items-center justify-center">
+                  <div className="meta !text-[12px] text-center">
+                    {ORIGEM_ROTULO[l.origem] ?? l.origem}
+                  </div>
+                  <div className="flex min-w-0 items-center justify-center">
+                    {abaVinculadas ? (
+                      <span className="meta tabular-nums">{fmtDataHora(l.vinculadoEm)}</span>
+                    ) : (
+                      /* O pill QUEBRA em vez de vazar por cima da coluna vizinha em tela estreita:
+                         o padrão dele é `whitespace-nowrap`, que é certo em coluna larga e vira
+                         sobreposição quando o espaço aperta (§A.20). */
+                      <StatusPill
+                        tone="wn"
+                        label={l.statusNome}
+                        className="!whitespace-normal text-center leading-tight"
+                      />
+                    )}
+                  </div>
+                  <div className="flex items-center justify-center gap-1.5">
+                    {/* VINCULAR ADMISSÃO: só na fila viva. Na aba Vinculadas o trabalho já foi feito,
+                        e oferecer o botão de novo convidaria a vincular duas vezes (o backend recusa,
+                        mas o certo é a tela não convidar). */}
+                    {!abaVinculadas && (
+                      <Button
+                        variant="secondary"
+                        className="!px-2.5 !py-1.5 text-[12px] whitespace-nowrap"
+                        title={`Vincular ${l.nome} a uma admissão da Liberação`}
+                        aria-label={`Vincular admissão de ${l.nome}`}
+                        onClick={() => setVinculando(l)}
+                      >
+                        Vincular
+                      </Button>
+                    )}
                     <button
                       type="button"
-                      className="grid h-8 w-8 place-items-center rounded-lg text-faint transition hover:bg-[var(--surface-2)] hover:text-accent"
+                      className="grid h-8 w-8 flex-none place-items-center rounded-lg text-faint transition hover:bg-[var(--surface-2)] hover:text-accent"
                       title="Editar registro"
                       aria-label={`Editar ${l.nome}`}
                       onClick={() => abrirEdicao(l)}
@@ -484,6 +591,21 @@ export default function SalaEsperaPage() {
           </div>
         </Modal>
       )}
+      {/* LIVRETO DO MATCH: a Sala de um lado, a fila da Liberação do outro. Vincular NÃO libera. */}
+      {vinculando && (
+        <VincularAdmissaoLivreto
+          registro={vinculando}
+          onFechar={() => setVinculando(null)}
+          onVinculado={(nomeAdmissao) => {
+            setVinculando(null);
+            setOkMsg(
+              `${caixaAlta(vinculando.nome)} vinculado a ${caixaAlta(nomeAdmissao)}. O cliente foi sugerido na admissão; a liberação continua sendo passo à parte, na tela de Liberação.`,
+            );
+            void carregar();
+          }}
+        />
+      )}
+
     </div>
   );
 }

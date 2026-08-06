@@ -8454,3 +8454,74 @@ rótulo da opção.
 ### Gate
 
 1.044 testes verdes, typecheck e lint limpos, backend e frontend rebuildados, portas em 200.
+
+---
+
+## 06/08/2026, Sala de Espera: o match partindo da Sala, e o bug que ele revelou
+
+A tela da Sala existia com cadastro, campos e status, mas sem a peça central: fazer o match com a
+esteira A PARTIR DELA. O match só existia na Liberação, e a pergunta que o time faz na prática é a
+inversa: "este candidato que EU anunciei semana passada já apareceu no Pandapé?".
+
+### O livreto
+
+Botão na linha, e um modal de duas páginas. À esquerda o registro da Sala (nome, cliente com código,
+cargo, status, recebimento, origem, CPF, nascimento, telefone). À direita a fila da Liberação inteira,
+com busca por nome, CPF ou telefone. No meio, uma lombada com um elo que fecha quando há match, e as
+duas páginas acendem juntas.
+
+**O lado direito NÃO filtra por cliente, e isso é regra de domínio, não simplificação:** a admissão
+que chega do Pandapé **nasce sem cliente**, porque o cliente é justamente o que o time atribui na
+liberação. Filtrar por cliente ali esconderia todo mundo. A identificação é NOME + CPF + NASCIMENTO,
+que é o que existe dos dois lados, e quando o CPF bate o par ganha o selo "CPF Confere".
+
+**Duas abas**, conceito de hospital: "Aguardando" e "Admissões Vinculadas". Antes o registro vinculado
+sumia da tela e levava junto a prova de que aquele candidato foi anunciado ANTES de aparecer no
+Pandapé, que é a razão de a Sala existir.
+
+### As duas portas do mesmo vínculo
+
+`vincular()` ganhou `prePreencherAdmissao`, aditivo:
+
+- **porta da Liberação** (padrão): não escreve na admissão, devolve os dados ao formulário aberto, e
+  quem grava é o `liberar()`. Comportamento da onda 3, intacto;
+- **porta da Sala**: não há formulário aberto, então cliente e cargo entram na admissão agora, e SÓ
+  nos campos vazios.
+
+Nenhuma das duas libera, cria frente ou mexe em farol. Provado no banco: farol seguiu
+AGUARDANDO_LIBERACAO e a admissão continuou com ZERO frentes depois do vínculo.
+
+### O bug: gravava no banco e a tela nunca lia
+
+O diretor testou e o cliente não apareceu na Liberação. A fábrica tinha provado a gravação no banco, e
+estava certa: o problema era do outro lado. **`listarAguardandoLiberacao` não devolvia `codCliente`
+nem `cargoId`**, e o `abrirModal` só olhava o vínculo feito na MESMA sessão. Resultado: o
+auto-preenchimento só funcionava se o vínculo tivesse acontecido naquele instante, pela porta da
+Liberação. Pela porta da Sala, nunca.
+
+**Gravar sem exibir é pior que não gravar**, porque dá a impressão de que funcionou. A regra de quem
+vence saiu de dentro da tela para `lib/pre-preenchimento-liberacao.ts`, com teste: vínculo desta
+sessão > o que a admissão já trazia > vazio. Admissão que nunca passou pela Sala abre vazia como
+sempre (§A.26), e isso também é teste.
+
+### Tabela auto-responsiva
+
+As colunas viraram proporcionais com `minmax(0, Nfr)`: encolhem juntas em vez de estourar a largura,
+então a tabela ocupa 100% do espaço em qualquer tela, sem rolagem horizontal como saída. Os pesos vêm
+do conteúdo real (Status é o maior porque o pill mais longo do catálogo é "Aguardando confirmação do
+link"). Nome, cliente e cargo QUEBRAM a linha em vez de cortar, e o pill de status perdeu o
+`whitespace-nowrap`, que era certo em coluna larga e virava sobreposição em tela estreita. Conferido
+em 1280, 1440 e 1600: nada truncado, nada sobreposto, nada cortado.
+
+O botão da linha ficou "Vincular" (rótulo curto, decisão do diretor), com o texto completo no title.
+
+### Esclarecimento da §A.11 (decisão do diretor)
+
+**Travessão como marcador de célula vazia em tabela é PERMITIDO.** A restrição da §A.11 é só contra o
+travessão como SEPARADOR no meio de texto ou frase. Os marcadores da tabela da Sala ficam como estão.
+
+### Gate
+
+1.049 testes no backend (5 novos das duas portas) e 88 no frontend (4 novos da regra de
+pré-preenchimento), typecheck e lint limpos, backend e frontend rebuildados, portas em 200. Três
+cadastros de teste ("Teste 1/2/3 Da Sala") ficam na base a pedido do diretor, para demonstração.
