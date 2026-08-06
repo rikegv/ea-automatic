@@ -33,6 +33,20 @@ const CARDS: { href: string; icon: IconName; title: string; desc: string; codigo
     desc: "Catálogo de clínicas do exame, usado no agendamento.",
   },
   {
+    href: "/admin/sala-espera-status",
+    codigo: "sala-espera-status",
+    icon: "clock",
+    title: "Status Da Sala De Espera",
+    desc: "Mantém a lista de status da Sala e marca quais encerram a fila.",
+  },
+  {
+    href: "/admin/integracao-clientes",
+    codigo: "integracao-clientes",
+    icon: "users",
+    title: "Integração Por Cliente",
+    desc: "Define quais clientes exigem integração na esteira. Todos exigem por padrão.",
+  },
+  {
     href: "/admin/pendencias-cliente",
     codigo: "pendencias-cliente",
     icon: "check",

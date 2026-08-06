@@ -38,9 +38,24 @@ export const STATUS_CONCLUI: Record<FrenteTipo, string> = {
   INTEGRACAO: "REALIZADO",
 };
 
+/**
+ * Status que TAMBÉM concluem a frente, além do terminal principal de `STATUS_CONCLUI`.
+ *
+ * Existe por causa do `DESCONSIDERADA` da INTEGRAÇÃO (decisão do diretor): a admissão concluiu o
+ * onboarding sem passar pela integração, então a frente FECHA (sai da fila, conta como concluída),
+ * mas o terminal "de êxito" continua sendo o `REALIZADO`, que é o que diz que a integração
+ * aconteceu de verdade. Dois sentidos diferentes, dois códigos diferentes.
+ *
+ * Só a INTEGRAÇÃO tem entrada aqui: para as demais frentes o mapa é vazio e `conclui()` responde
+ * exatamente como antes.
+ */
+const CONCLUI_TAMBEM: Partial<Record<FrenteTipo, readonly string[]>> = {
+  INTEGRACAO: ["DESCONSIDERADA"],
+};
+
 /** O status conclui a frente? */
 export function conclui(tipo: FrenteTipo, status: string): boolean {
-  return status === STATUS_CONCLUI[tipo];
+  return status === STATUS_CONCLUI[tipo] || (CONCLUI_TAMBEM[tipo] ?? []).includes(status);
 }
 
 /** O status pertence ao catálogo daquela frente? */

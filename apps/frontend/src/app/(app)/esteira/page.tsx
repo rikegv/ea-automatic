@@ -266,6 +266,11 @@ export default function EsteiraPage() {
   const [agendaIntegracao, setAgendaIntegracao] = useState<EsteiraItem | null>(null);
   const [apresentacaoId, setApresentacaoId] = useState<string | null>(null);
   const [loteAberto, setLoteAberto] = useState(false);
+  /** Confirmação do DESCONSIDERAR. Guarda os ids e os nomes, para o texto dizer sobre quem é. */
+  const [desconsiderar, setDesconsiderar] = useState<{ ids: string[]; nomes: string[] } | null>(
+    null,
+  );
+  const [desconsiderando, setDesconsiderando] = useState(false);
 
   // Dados da frente
   const [data, setData] = useState<EsteiraResp | null>(null);
@@ -1156,6 +1161,19 @@ export default function EsteiraPage() {
               <Icon name="clock" className="h-4 w-4" />
               Agendar em massa ({selecionados.size})
             </Button>
+            <Button
+              variant="secondary"
+              onClick={() =>
+                setDesconsiderar({
+                  ids: [...selecionados],
+                  nomes: itemsVisiveis
+                    .filter((it) => selecionados.has(it.admissaoId))
+                    .map((it) => it.candidatoNome),
+                })
+              }
+            >
+              Desconsiderar ({selecionados.size})
+            </Button>
             <button
               type="button"
               className="text-[13px] text-dim underline-offset-2 hover:underline"
@@ -1695,6 +1713,22 @@ export default function EsteiraPage() {
                         {isIntegracao && (
                           <button
                             type="button"
+                            className="grid h-8 w-8 place-items-center rounded-lg text-faint transition hover:bg-[var(--surface-2)] hover:text-warn"
+                            title="Desconsiderar (concluir sem integração)"
+                            aria-label={`Desconsiderar a integração de ${item.candidatoNome}`}
+                            onClick={() =>
+                              setDesconsiderar({
+                                ids: [item.admissaoId],
+                                nomes: [item.candidatoNome],
+                              })
+                            }
+                          >
+                            <Icon name="x" className="h-[17px] w-[17px]" />
+                          </button>
+                        )}
+                        {isIntegracao && (
+                          <button
+                            type="button"
                             className="grid h-8 w-8 place-items-center rounded-lg text-faint transition hover:bg-[var(--surface-2)] hover:text-accent"
                             title="Agendar integração"
                             aria-label={`Agendar integração de ${item.candidatoNome}`}
@@ -1756,6 +1790,49 @@ export default function EsteiraPage() {
           onClose={() => setApresentacaoId(null)}
         />
       )}
+      {/* CONFIRMAÇÃO do desconsiderar: simples, mas obrigatória, porque a ação CONCLUI a admissão e
+          tira o candidato da fila. Serve à linha (um nome) e ao lote (vários). */}
+      <ConfirmDialog
+        open={Boolean(desconsiderar)}
+        title="Concluir Sem Integração"
+        message={
+          desconsiderar
+            ? desconsiderar.ids.length === 1
+              ? `${caixaAlta(desconsiderar.nomes[0] ?? "")} sai da fila da Integração e a admissão é concluída SEM ter passado por ela. O registro fica no Gerenciador com o status "Concluída Sem Integração".`
+              : `${desconsiderar.ids.length} candidatos saem da fila da Integração e as admissões são concluídas SEM terem passado por ela. Os registros ficam no Gerenciador com o status "Concluída Sem Integração".`
+            : ""
+        }
+        confirmLabel="Desconsiderar"
+        busy={desconsiderando}
+        onConfirm={async () => {
+          if (!desconsiderar) return;
+          setDesconsiderando(true);
+          setActionError(null);
+          try {
+            await apiFetch("/esteira/integracao/desconsiderar", {
+              token,
+              method: "POST",
+              body: { admissaoIds: desconsiderar.ids },
+            });
+            setFlash({
+              tone: "ok",
+              msg:
+                desconsiderar.ids.length === 1
+                  ? "Admissão concluída sem integração."
+                  : `${desconsiderar.ids.length} admissões concluídas sem integração.`,
+            });
+            setSelecionados(new Set());
+            setDesconsiderar(null);
+            void load();
+          } catch (e) {
+            setActionError(e instanceof ApiError ? e.message : "Falha ao desconsiderar.");
+          } finally {
+            setDesconsiderando(false);
+          }
+        }}
+        onCancel={() => setDesconsiderar(null)}
+      />
+
       {loteAberto && (
         <AgendamentoIntegracaoLoteModal
           admissaoIds={[...selecionados]}

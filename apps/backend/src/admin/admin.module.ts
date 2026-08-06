@@ -10,6 +10,8 @@ import { CatalogosService } from "./catalogos/catalogos.service";
 import { ClientesController } from "./clientes/clientes.controller";
 import { ClientesService } from "./clientes/clientes.service";
 import { ClinicasController } from "./clinicas/clinicas.controller";
+import { IntegracaoClientesController } from "./integracao-clientes/integracao-clientes.controller";
+import { IntegracaoClientesService } from "./integracao-clientes/integracao-clientes.service";
 import { PendenciasClienteController } from "./pendencias-cliente/pendencias-cliente.controller";
 import { PendenciasClienteService } from "./pendencias-cliente/pendencias-cliente.service";
 import { ClinicasService } from "./clinicas/clinicas.service";
@@ -40,6 +42,7 @@ import { TiposDocumentoService } from "./tipos-documento/tipos-documento.service
     CargosController,
     MotivosDeclinioController,
     ClinicasController,
+    IntegracaoClientesController,
     PendenciasClienteController,
     EscalasController,
     BeneficiosController,
@@ -56,6 +59,7 @@ import { TiposDocumentoService } from "./tipos-documento/tipos-documento.service
     CargosService,
     MotivosDeclinioService,
     ClinicasService,
+    IntegracaoClientesService,
     PendenciasClienteService,
     EscalasService,
     BeneficiosService,

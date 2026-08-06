@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { STATUS_INTEGRACAO, STATUS_INTEGRACAO_LABEL, FRENTE } from "@ea/shared-types";
+import { FAROL_GLOBAL, STATUS_INTEGRACAO, STATUS_INTEGRACAO_LABEL, FRENTE } from "@ea/shared-types";
 import { kitLiberado, podeAbrirCadastro, type EstadoFrente } from "./frentes";
 import { ORDEM_STATUS, STATUS_CONCLUI, conclui, isReversao, isStatusValido } from "./esteira";
 import { STATUS_INICIAL_FRENTE } from "./admissao";
@@ -87,5 +87,56 @@ describe("catálogo e máquina de estados da INTEGRAÇÃO", () => {
       expect(r).toBeTruthy();
       expect(r[0]).toBe(r[0].toUpperCase());
     }
+  });
+});
+
+/**
+ * DESCONSIDERAR (decisão do diretor, caminho barato): a admissão concluiu o onboarding SEM passar
+ * pela integração. O que estes testes travam é a distinção que sustenta o desenho inteiro.
+ *
+ * `DESCONSIDERADA` CONCLUI a frente, e por isso sai da fila e conta como admissão concluída, mas NÃO
+ * é o terminal de êxito: `REALIZADO` continua sendo o único que diz que a integração aconteceu. Dois
+ * sentidos diferentes, dois códigos diferentes.
+ *
+ * E não nasceu farol novo: o farol vai para `ADMISSAO_CONCLUIDA`, igual a quem realizou. Quem guarda
+ * a diferença é o status da frente, que não tem alcance fora dela, e foi isso que evitou mexer nas
+ * listas de exclusão de farol da Esteira, do Gerenciador e do diagnóstico.
+ */
+describe("desconsiderar: concluída sem integração", () => {
+  it("DESCONSIDERADA conclui a frente (sai da fila, conta como concluída)", () => {
+    expect(conclui("INTEGRACAO", "DESCONSIDERADA")).toBe(true);
+  });
+
+  it("mas NÃO é o terminal de êxito: quem diz que a integração aconteceu é REALIZADO", () => {
+    expect(STATUS_CONCLUI.INTEGRACAO).toBe("REALIZADO");
+    expect(STATUS_CONCLUI.INTEGRACAO).not.toBe("DESCONSIDERADA");
+  });
+
+  it("está no catálogo da frente e não vazou para as outras", () => {
+    expect(STATUS_INTEGRACAO).toContain("DESCONSIDERADA");
+    expect(isStatusValido("INTEGRACAO", "DESCONSIDERADA")).toBe(true);
+    expect(isStatusValido("EXAME", "DESCONSIDERADA")).toBe(false);
+    expect(isStatusValido("CADASTRO_CONTRATO", "DESCONSIDERADA")).toBe(false);
+    expect(isStatusValido("AUDITORIA", "DESCONSIDERADA")).toBe(false);
+  });
+
+  it("NÃO virou farol: o enum de farol segue sem valor novo", () => {
+    expect(FAROL_GLOBAL).not.toContain("DESCONSIDERADA");
+    expect(FAROL_GLOBAL).not.toContain("CONCLUIDA_SEM_INTEGRACAO");
+  });
+
+  it("não mexeu no gate do kit nem no do Cadastro", () => {
+    const comDesconsiderada: EstadoFrente[] = [
+      f("AUDITORIA", true),
+      f("EXAME", true),
+      f("CADASTRO_CONTRATO", true),
+      f("INTEGRACAO", true),
+    ];
+    expect(kitLiberado(comDesconsiderada)).toBe(true);
+    expect(podeAbrirCadastro(comDesconsiderada)).toBe(true);
+  });
+
+  it("tem rótulo em Title Case, e ele diz o que aconteceu", () => {
+    expect(STATUS_INTEGRACAO_LABEL.DESCONSIDERADA).toBe("Concluída Sem Integração");
   });
 });

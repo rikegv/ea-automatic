@@ -1009,7 +1009,9 @@ export class EsteiraService {
       // §A.16 Regra 2 existe para declínio IMPORTADO, que nunca teve essas frentes concluídas.
       let farolIntegracao: "ADMISSAO_CONCLUIDA" | "DECLINOU" | "RESCISAO" | null = null;
       if (tipo === "INTEGRACAO") {
-        if (novo === "REALIZADO") farolIntegracao = "ADMISSAO_CONCLUIDA";
+        // DESCONSIDERADA leva ao MESMO farol de REALIZADO: a admissão está concluída nos dois casos,
+        // e o que os distingue é o status da frente, não o farol (decisão do diretor, caminho barato).
+        if (novo === "REALIZADO" || novo === "DESCONSIDERADA") farolIntegracao = "ADMISSAO_CONCLUIDA";
         else if (novo === "DECLINOU") farolIntegracao = "DECLINOU";
         else if (novo === "RESCISAO") farolIntegracao = "RESCISAO";
       }
@@ -2177,6 +2179,77 @@ export class EsteiraService {
     });
 
     return { agendados: frentes.length, sobrescritos: existentes.length };
+  }
+
+  /**
+   * DESCONSIDERAR: a admissão concluiu o onboarding SEM passar pela integração (decisão do diretor).
+   *
+   * Serve ao botão da linha (um id) e à ação em massa (N ids), pelo MESMO caminho: uma porta só, e
+   * não duas que podem divergir. Transacional, pelo mesmo motivo do agendamento em lote: metade
+   * desconsiderada e metade não deixaria o consultor sem saber quais.
+   *
+   * NÃO É DECLÍNIO e não cria farol novo: o farol vai para `ADMISSAO_CONCLUIDA`, igual a quem
+   * realizou, e quem guarda a diferença é o STATUS da frente, que é por frente e não tem alcance
+   * fora dela. Assim nenhuma lista de exclusão de farol da Esteira, do Gerenciador ou do diagnóstico
+   * precisou ser tocada (§A.26).
+   *
+   * A frente CONCLUI, então some da aba e passa a contar no KPI "Concluído" do Gerenciador, que na
+   * leitura B conta quem terminou o Cadastro e não tem integração PENDENTE.
+   *
+   * A trilha (quem e quando) sai do evento de frente padrão, sem estrutura nova.
+   */
+  async desconsiderarIntegracao(admissaoIds: string[], user: AuthUser) {
+    const ids = [...new Set(admissaoIds)];
+    const frentes = await this.db
+      .select({
+        id: frentesAdmissao.id,
+        admissaoId: frentesAdmissao.admissaoId,
+        status: frentesAdmissao.status,
+        concluida: frentesAdmissao.concluida,
+      })
+      .from(frentesAdmissao)
+      .where(
+        and(eq(frentesAdmissao.tipo, "INTEGRACAO"), inArray(frentesAdmissao.admissaoId, ids)),
+      );
+    if (frentes.length === 0) {
+      throw new BadRequestException("Nenhum dos selecionados está na frente de Integração.");
+    }
+
+    // Já concluídas (realizadas ou desconsideradas antes) ficam de fora: reabrir e refechar só
+    // sujaria a trilha com um evento que não descreve decisão nova.
+    const alvos = frentes.filter((f) => !f.concluida);
+    if (alvos.length === 0) return { desconsiderados: 0, jaConcluidos: frentes.length };
+
+    const agora = new Date();
+    await this.db.transaction(async (tx) => {
+      for (const f of alvos) {
+        await tx
+          .update(frentesAdmissao)
+          .set({
+            status: "DESCONSIDERADA",
+            concluida: true,
+            dataConclusao: agora,
+            responsavelId: user.id,
+            atualizadoEm: agora,
+          })
+          .where(eq(frentesAdmissao.id, f.id));
+        await tx.insert(frenteStatusEventos).values({
+          admissaoId: f.admissaoId,
+          frenteId: f.id,
+          tipo: "INTEGRACAO",
+          deStatus: f.status,
+          paraStatus: "DESCONSIDERADA",
+          reversao: false,
+          autorId: user.id,
+        });
+        await tx
+          .update(admissoes)
+          .set({ farolGlobal: "ADMISSAO_CONCLUIDA", atualizadoEm: agora })
+          .where(eq(admissoes.id, f.admissaoId));
+      }
+    });
+
+    return { desconsiderados: alvos.length, jaConcluidos: frentes.length - alvos.length };
   }
 
   /**

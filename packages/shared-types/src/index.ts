@@ -142,6 +142,10 @@ export const STATUS_INTEGRACAO = [
   "A_AGENDAR",
   "AGENDADO",
   "REALIZADO",
+  // DESCONSIDERADA (decisão do diretor): a pessoa concluiu o onboarding mas NÃO passou pela
+  // integração. NÃO é declínio (ela foi admitida) e NÃO é realizada (a integração não aconteceu).
+  // Conclui a frente, então sai da fila e conta como admissão concluída.
+  "DESCONSIDERADA",
   "DECLINOU",
   "RESCISAO",
 ] as const;
@@ -156,6 +160,7 @@ export const STATUS_INTEGRACAO_LABEL: Record<StatusIntegracao, string> = {
   A_AGENDAR: "A Agendar",
   AGENDADO: "Agendado",
   REALIZADO: "Realizado",
+  DESCONSIDERADA: "Concluída Sem Integração",
   DECLINOU: "Declinou",
   RESCISAO: "Rescisão",
 };

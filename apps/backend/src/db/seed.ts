@@ -4,7 +4,7 @@ import * as argon2 from "argon2";
 // este e faria o `excluded.*` virar uma query solta em vez de um fragmento SQL.
 import { sql as fragmento } from "drizzle-orm";
 import { createDb } from "./client";
-import { frenteStatusCatalogo, tiposDocumento, usuarios } from "./schema";
+import { frenteStatusCatalogo, salaEsperaStatus, tiposDocumento, usuarios } from "./schema";
 
 // 21 tipos de documento da base admissional (§A.3 / A.4 — TipoDocumento).
 const TIPOS_DOCUMENTO: Array<{ codigo: string; nome: string }> = [
@@ -70,6 +70,14 @@ const STATUS_FRENTE: Array<{
   { tipo: "INTEGRACAO", codigo: "AGENDADO", rotulo: "Agendado", conclui: false },
   // REALIZADO conclui: é o fim da esteira, a admissão passa a viver no Gerenciador.
   { tipo: "INTEGRACAO", codigo: "REALIZADO", rotulo: "Realizado", conclui: true },
+  // DESCONSIDERADA: concluiu o onboarding SEM passar pela integração. Também CONCLUI a frente (sai
+  // da fila e conta como admissão concluída), mas não é o terminal de êxito.
+  {
+    tipo: "INTEGRACAO",
+    codigo: "DESCONSIDERADA",
+    rotulo: "Concluída Sem Integração",
+    conclui: true,
+  },
   // Desfechos. NÃO concluem, pelo mesmo motivo do declínio das outras frentes: não falsear êxito.
   { tipo: "INTEGRACAO", codigo: "DECLINOU", rotulo: "Declinou", conclui: false },
   { tipo: "INTEGRACAO", codigo: "RESCISAO", rotulo: "Rescisão", conclui: false },
@@ -120,6 +128,23 @@ async function main(): Promise<void> {
       },
     });
   console.log(`[seed] status por frente: ${STATUS_FRENTE.length}`);
+
+  // 4) Status da SALA DE ESPERA. `encerra` marca o terminal (some da fila ativa), e é o que permite
+  // a lista ser editável sem virar bug: o sistema não deduz pelo nome quem encerra.
+  const STATUS_SALA = [
+    { nome: "Aguardando confirmação do link", encerra: false },
+    { nome: "Aguardando candidatura na vaga", encerra: false },
+    { nome: "Aguardando retorno do candidato", encerra: false },
+    { nome: "Declinou", encerra: true },
+    { nome: "Desistiu", encerra: true },
+  ];
+  await db
+    .insert(salaEsperaStatus)
+    .values(STATUS_SALA.map((x, i) => ({ ...x, ordem: i })))
+    // Só INSERE o que falta: a lista é editável pelo diretor, então converger rótulo/ordem aqui
+    // desfaria a edição dele no próximo deploy.
+    .onConflictDoNothing({ target: salaEsperaStatus.nome });
+  console.log(`[seed] status da sala de espera: ${STATUS_SALA.length}`);
 
   await sql.end();
   console.log("[seed] concluído.");

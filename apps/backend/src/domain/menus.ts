@@ -99,6 +99,8 @@ export const MENUS: MenuDef[] = [
       // Agendamento em massa: move as frentes para AGENDADO, então é mutação de status e se
       // reivindica junto do `mudarStatus`. Sai de graça para o COMUM, que já tem o menu `esteira`.
       "EsteiraController.agendarIntegracaoEmLote",
+      // Desconsiderar conclui a frente e fecha a admissão: é mutação de status, reivindicada junto.
+      "EsteiraController.desconsiderarIntegracao",
       "EsteiraController.relatorioClinicaPreview",
       "EsteiraController.relatorioClinicaCsv",
       "EsteiraController.anexarAso",
@@ -255,6 +257,45 @@ export const MENUS: MenuDef[] = [
       "ClinicasController.reativar",
       "ClinicasController.remove",
     ],
+  },
+  {
+    // SALA DE ESPERA (pré-processo, antes da Liberação). Menu OPERACIONAL.
+    // §A.23: menu novo nasce só para o SUPER_ADMIN; quem enxerga é o diretor que libera.
+    codigo: "sala-espera",
+    rotulo: "Sala De Espera",
+    href: "/sala-espera",
+    grupo: "OPERACAO",
+    ordem: 5,
+    // Só as mutações. As leituras (fila, catálogo de status ativos) ficam abertas, como na esteira:
+    // são dado de trabalho, e a tela de status do Gerencial também as consome.
+    operacoes: [
+      "SalaEsperaController.criar",
+      "SalaEsperaController.atualizar",
+    ],
+  },
+  {
+    // CATÁLOGO DE STATUS DA SALA (Gerencial). Menu SEPARADO do operacional de propósito: manter a
+    // lista de status é administração, operar a fila não, e o diretor libera os dois de forma
+    // independente. §A.23: nasce só para o SUPER_ADMIN.
+    codigo: "sala-espera-status",
+    rotulo: "Status Da Sala De Espera",
+    href: "/admin/sala-espera-status",
+    grupo: "ADMIN",
+    ordem: 26,
+    operacoes: [
+      "SalaEsperaController.criarStatus",
+      "SalaEsperaController.atualizarStatus",
+    ],
+  },
+  {
+    // INTEGRAÇÃO OBRIGATÓRIA POR CLIENTE (onda 5 da frente Integração). Menu do GERENCIAL.
+    // §A.23: nasce só para o SUPER_ADMIN.
+    codigo: "integracao-clientes",
+    rotulo: "Integração Por Cliente",
+    href: "/admin/integracao-clientes",
+    grupo: "ADMIN",
+    ordem: 25,
+    operacoes: ["IntegracaoClientesController.definir"],
   },
   {
     // OBRIGATORIEDADE DE PENDÊNCIAS POR CLIENTE (OST da tela de obrigatoriedade). Menu do GERENCIAL.

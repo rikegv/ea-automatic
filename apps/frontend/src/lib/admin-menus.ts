@@ -16,6 +16,8 @@ export const ADMIN_MENUS = [
   "cargos",
   "escalas",
   "clinicas",
+  "integracao-clientes",
+  "sala-espera-status",
   "pendencias-cliente",
   "motivos-declinio",
   "tarifas",

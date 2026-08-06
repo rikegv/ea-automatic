@@ -21,6 +21,7 @@ import { AgendamentoExameDto } from "./dto/agendamento-exame.dto";
 // Value import (não `import type`): o ValidationPipe precisa da CLASSE em runtime.
 import { AgendamentoIntegracaoDto } from "./dto/agendamento-integracao.dto";
 import { AgendamentoIntegracaoLoteDto } from "./dto/agendamento-integracao-lote.dto";
+import { DesconsiderarIntegracaoDto } from "./dto/desconsiderar-integracao.dto";
 import { DeclinarDto } from "./dto/declinar.dto";
 import { PausarDto } from "./dto/pausar.dto";
 import { PatchStatusDto } from "./dto/patch-status.dto";
@@ -156,6 +157,18 @@ export class EsteiraController {
     // `user` alimenta o autor do evento de status: o lote move as frentes para AGENDADO, e toda
     // transição de frente tem autor na trilha.
     return this.esteira.agendarIntegracaoEmLote(dto, user);
+  }
+
+  /**
+   * DESCONSIDERAR a integração: a admissão concluiu o onboarding sem passar por ela. Serve ao botão
+   * da linha (um id) e à ação em massa (N ids), pelo mesmo caminho.
+   */
+  @Post("integracao/desconsiderar")
+  desconsiderarIntegracao(
+    @Body() dto: DesconsiderarIntegracaoDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.esteira.desconsiderarIntegracao(dto.admissaoIds, user);
   }
 
   /** Ficha de apresentação da integração (modal do olho): contrato e benefícios, só leitura. */
