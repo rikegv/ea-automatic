@@ -8144,3 +8144,101 @@ move status.
 **1.017 testes verdes**, typecheck backend e frontend limpos, lint limpo. Migration 0060 aplicada.
 Backend rebuildado e reiniciado; frontend parado antes do build e subido depois. Três portas em 200.
 Validado pelo diretor na plataforma.
+
+---
+
+## 06/08/2026, Integração onda 5 (fecha a frente) e Sala de Espera ondas 1 e 2
+
+### INTEGRAÇÃO, onda 5: a tela de gestão por cliente
+
+Quais clientes exigem integração. Reusa `cliente_pendencia_config` com a chave `INTEGRACAO`, porque a
+tabela já tem a forma exata e o default `true` entrega o "todos nascem exigindo" sem popular uma linha
+sequer. **Zero migration.** Desmarcar GRAVA a linha; remarcar APAGA, voltando ao default, para não
+encher a tabela de registros que dizem o que o default já diz.
+
+**O 500 do desmarcar, e a lição que ele repete.** O erro real, pego no log e não deduzido, foi
+`there is no unique or exclusion constraint matching the ON CONFLICT specification`. Não tinha nada a
+ver com a chave `INTEGRACAO` ser nova: o unique da tabela é um índice **PARCIAL**
+(`uq_cliente_pendencia (cod_cliente, chave) WHERE cliente_vinculo_id IS NULL`, migration 0056), e o
+`ON CONFLICT` não repetia o predicado.
+
+**Isto já tinha derrubado a tela vizinha uma vez.** O serviço de obrigatoriedade de campos carrega a
+cicatriz em comentário desde então. Copiei a forma do upsert dele e não copiei a defesa. Corrigido com
+`targetWhere` e provado contra o banco, incluindo que a chave `SETOR` da outra tela segue intacta
+(234 linhas).
+
+### DESCONSIDERAR: concluída sem integração
+
+A admissão concluiu o onboarding SEM passar pela integração. Não é declínio (a pessoa foi admitida) e
+não é realizada (a integração não aconteceu). Botão na linha e em massa, pelo MESMO endpoint, com
+confirmação obrigatória.
+
+O ponto de desenho: `DESCONSIDERADA` **conclui** a frente, então sai da fila e conta no KPI
+"Concluído", mas **não é o terminal de êxito**, que segue sendo `REALIZADO`. Dois sentidos, dois
+códigos, e daí o mapa `CONCLUI_TAMBEM` com entrada só para a INTEGRAÇÃO.
+
+**Sem farol novo, e essa foi a economia real.** O levantamento mostrou que um farol próprio teria
+alcance grande (as listas de exclusão de fila e KPI enumeram os terminais à mão, em vários lugares).
+O farol vai para `ADMISSAO_CONCLUIDA`, igual a quem realizou, e quem guarda a diferença é o STATUS da
+frente, que não tem alcance fora dela. Nenhuma lista foi tocada.
+
+### O card do hub, e o furo estrutural que ele expõe
+
+O menu `integracao-clientes` subiu registrado no catálogo, com bypass de super admin funcionando, e
+**mesmo assim não aparecia** para o diretor. Causa: o Menu Gerencial monta os cards de uma **lista
+escrita à mão** em `admin/page.tsx`, que não conversa com o catálogo do backend.
+
+Depois descobriu-se que a **barra lateral tem a mesma estrutura** (`Sidebar.tsx`), o que fez o menu da
+Sala de Espera existir e não aparecer pelo mesmo motivo.
+
+**Um menu novo precisa alcançar QUATRO lugares hoje:** o catálogo do backend (`domain/menus.ts`), as
+rotas do front (`menu-rotas.ts`), a lista de acesso à camada admin (`admin-menus.ts`) e a lista de
+cards da tela (o hub ou a barra). Os três primeiros são fonte única; o quarto é cópia manual. É a
+mesma classe de problema que a §A.23 já resolveu uma vez para a tela de permissões (convergência no
+boot), e o último elo continua aberto. **Candidato a OST**, não corrigido aqui por §A.14.
+
+### SALA DE ESPERA, ondas 1 e 2
+
+O candidato que o cliente ou a Seleção anunciou ANTES de se candidatar no Pandapé, a fase que hoje
+ninguém enxerga.
+
+**Tabela própria, `admissoes` intocada.** O registro não tem CPF obrigatório, e em `admissoes` o
+`candidato_cpf` é NOT NULL apontando para `candidatos`, cuja chave primária é o próprio CPF: não cabe.
+Como consequência, a Sala é INVISÍVEL para Esteira, Gerenciador, KPIs e diagnóstico, que leem
+`admissoes` e não precisam saber que ela existe.
+
+**Catálogo de status editável, com a marca `encerra`** (confirmada pelo diretor no levantamento). Ela
+existe porque a lista é editável: o sistema não pode deduzir pelo nome que "Declinou" encerra e
+"Aguardando retorno" não. Sem a marca, criar status viraria criar bug.
+
+**A fila mostra só o que está em aberto**, e "aberto" tem DUAS condições: status não terminal E
+`admissao_id IS NULL`. A segunda só passa a acontecer na onda 3, mas o filtro já nasce completo:
+deixar para depois seria plantar o vazamento e esperar alguém notar.
+
+**CPF, nascimento e e-mail, opcionais** (ajuste posterior do diretor): servem ao match da onda 3, que
+casa por identidade quando o CPF existe, em vez de casar por nome. O CPF é **validado no dígito quando
+preenchido**: vazio é caso normal (o candidato ainda não se candidatou), mas CPF errado é PIOR que
+ausente, porque o match casaria pela identidade errada. Fica em coluna própria e **não cria linha em
+`candidatos`**: aqui é dado de apoio ao match, não chave de identidade.
+
+### DESIGN SYSTEM: regra permanente de formulário
+
+Registrada no `DESIGN-SYSTEM.md` depois de campo de nome esmagado em modal estreito, e vale para todo
+o sistema, aplicada retroativamente quando cada tela for tocada:
+
+- modal com FORMULÁRIO nasce `max-w-2xl` (o de confirmação, que só tem texto e botões, segue estreito);
+- **nome de pessoa ocupa a linha inteira**: é o campo mais longo de qualquer cadastro;
+- **cliente aparece sempre como "código - nome"** (`0060 - AVL`). Não é enfeite: há quatro "RAIA CAGC"
+  distintas na base, e sem o código o consultor não sabe qual escolheu;
+- botão com largura para o rótulo mais longo, medida no conteúdo.
+
+### Gate
+
+**1.023 testes verdes**, typecheck backend e frontend limpos, lint limpo. Migrations 0061 e 0062
+aplicadas. Backend e frontend rebuildados, três portas em 200. Validado pelo diretor na plataforma.
+
+### Nota de recorte dos commits
+
+Os cinco arquivos de registro de menu (`menus.ts`, `seed.ts`, o hub, `admin-menus` e `menu-rotas`)
+carregam as DUAS frentes, porque as duas escreveram nas mesmas listas e não houve commit entre elas.
+Foram para o commit da Integração; o corte por arquivo não era possível sem edição manual arriscada.
