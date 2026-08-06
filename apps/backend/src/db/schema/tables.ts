@@ -23,6 +23,7 @@ import {
   exigenciaEnum,
   farolGlobalEnum,
   frenteTipoEnum,
+  origemSalaEsperaEnum,
   tipoIntegracaoEnum,
   ncLiberacaoEnum,
   ncStatusEnum,
@@ -1391,4 +1392,77 @@ export const integracaoAgendamento = pgTable("integracao_agendamento", {
   consultorId: uuid("consultor_id").references(() => usuarios.id, { onDelete: "set null" }),
   criadoEm: timestamp("criado_em", { withTimezone: true }).notNull().defaultNow(),
   atualizadoEm: timestamp("atualizado_em", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// ── SALA DE ESPERA (pré-processo, ANTES da Liberação Admissional) ───────────
+
+/**
+ * CATÁLOGO DE STATUS DA SALA DE ESPERA, editável pelo Gerencial (molde de `motivos_declinio`).
+ *
+ * `encerra` é o campo que sustenta a regra da fila: status marcado como terminal TIRA o registro da
+ * lista ativa. Ele existe porque a lista é EDITÁVEL: o sistema não pode deduzir pelo nome que
+ * "Declinou" encerra e "Aguardando retorno" não, e um status novo criado pelo diretor precisa dizer
+ * de que lado está. Sem esta marca, criar status viraria criar bug.
+ */
+export const salaEsperaStatus = pgTable("sala_espera_status", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  nome: varchar("nome", { length: 160 }).notNull().unique(),
+  /** Terminal: some da fila ativa (Declinou, Desistiu e o que o diretor marcar). */
+  encerra: boolean("encerra").notNull().default(false),
+  ativo: boolean("ativo").notNull().default(true),
+  ordem: integer("ordem").notNull().default(0),
+  criadoEm,
+  atualizadoEm,
+});
+
+/**
+ * SALA DE ESPERA: o candidato que o cliente ou a Seleção anunciou, ANTES de ele se candidatar no
+ * Pandapé. É PRÉ-PROCESSO, não admissão.
+ *
+ * NÃO TEM CPF, e é por isso que esta tabela existe separada de `admissoes`: lá o `candidato_cpf` é
+ * NOT NULL e referencia `candidatos`, cuja chave primária é o próprio CPF. Um registro sem CPF não
+ * cabe naquele modelo, e forçá-lo exigiria identidade provisória, que é remédio para histórico
+ * importado, não para uma frente nova.
+ *
+ * Como consequência, a Sala é INVISÍVEL para tudo que já existe: Esteira, Gerenciador, KPIs e
+ * diagnóstico leem `admissoes` e não precisam saber que ela existe.
+ *
+ * `admissaoId` nasce NULL e só é preenchido no MATCH MANUAL da Liberação (onda 3): quando o operador
+ * associa o pré-cadastro à admissão que chegou do Pandapé, o ponteiro é gravado e o registro sai da
+ * fila. `set null` na exclusão para o histórico da Sala sobreviver.
+ */
+export const salaEspera = pgTable("sala_espera", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  nome: varchar("nome", { length: 200 }).notNull(),
+  codCliente: varchar("cod_cliente", { length: 40 })
+    .notNull()
+    .references(() => clientes.codCliente),
+  cargoId: uuid("cargo_id")
+    .notNull()
+    .references(() => cargos.id),
+  telefone: varchar("telefone", { length: 30 }),
+  /**
+   * CPF, nascimento e e-mail: TODOS OPCIONAIS (decisão do diretor). O candidato ainda não se
+   * candidatou, então quase nunca se sabe o CPF na hora do registro; quando se sabe, ele torna o
+   * MATCH da onda 3 confiável, porque casa por identidade em vez de nome.
+   *
+   * O CPF fica em coluna PRÓPRIA e NÃO cria linha em `candidatos`: aqui ele é um dado de apoio ao
+   * match, não a chave de identidade de um candidato do sistema. Guardado sem máscara, como no resto
+   * do sistema, e nunca vai para log (§A.6).
+   */
+  cpf: varchar("cpf", { length: 11 }),
+  dataNascimento: date("data_nascimento"),
+  email: varchar("email", { length: 180 }),
+  /** Quando o pedido chegou por e-mail. É a data do NEGÓCIO aqui, não a de cadastro no sistema. */
+  dataRecebimento: date("data_recebimento").notNull(),
+  origem: origemSalaEsperaEnum("origem").notNull(),
+  statusId: uuid("status_id")
+    .notNull()
+    .references(() => salaEsperaStatus.id),
+  /** Preenchido no match manual da Liberação (onda 3). NULL enquanto o registro está em aberto. */
+  admissaoId: uuid("admissao_id").references(() => admissoes.id, { onDelete: "set null" }),
+  vinculadoEm: timestamp("vinculado_em", { withTimezone: true }),
+  criadoPorId: uuid("criado_por_id").references(() => usuarios.id, { onDelete: "set null" }),
+  criadoEm,
+  atualizadoEm,
 });

@@ -143,3 +143,6 @@ export const statusCadastroBeneficioEnum = pgEnum("status_cadastro_beneficio", [
   "PENDENTE",
   "CADASTRADO",
 ]);
+
+/** De onde veio o pedido da Sala de Espera: o próprio cliente ou a área de Seleção. */
+export const origemSalaEsperaEnum = pgEnum("origem_sala_espera", ["CLIENTE", "SELECAO"]);

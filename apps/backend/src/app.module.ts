@@ -19,6 +19,7 @@ import { SenhaTemporariaGuard } from "./auth/guards/senha-temporaria.guard";
 import { DrizzleModule } from "./db/drizzle.module";
 import { EsteiraModule } from "./esteira/esteira.module";
 import { GerencialModule } from "./gerencial/gerencial.module";
+import { SalaEsperaModule } from "./sala-espera/sala-espera.module";
 import { KitModule } from "./kit/kit.module";
 import { NaoConformidadesModule } from "./nao-conformidades/nao-conformidades.module";
 import { PastasDriveModule } from "./admin/pastas-drive/pastas-drive.module";
@@ -46,6 +47,7 @@ import { VtColetaModule } from "./vt-coleta/vt-coleta.module";
     AdmissoesModule,
     EsteiraModule,
     GerencialModule,
+    SalaEsperaModule,
     NaoConformidadesModule,
     AiModule,
     StagingModule,

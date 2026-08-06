@@ -33,7 +33,15 @@ const OPERACAO: NavDef[] = [
   //
   // A "Análise Gerencial" (casca com dado mock) foi DELETADA nesta OST, por decisão do diretor.
   { href: "/diretoria", icon: "peak", label: "Controle Gerencial", codigo: "diretoria" },
-  // 3º item, com destaque vermelho: é a tela crítica (pré-admissões aguardando liberação).
+  // SALA DE ESPERA: entra AQUI, entre o Controle Gerencial e a Liberação, porque é isso que a
+  // sequência do processo diz. Ela é o passo ANTERIOR à Liberação: o candidato que o cliente ou a
+  // Seleção anunciou e que ainda nem se candidatou no Pandapé.
+  //
+  // Ícone `users` (fila de pessoas), e NÃO o relógio: o `clock` já é da Liberação, o item logo
+  // abaixo, e dois vizinhos com o mesmo desenho se confundem na varredura da barra. Aqui o que
+  // distingue é o sujeito (as pessoas que aguardam), não a espera, que os dois compartilham.
+  { href: "/sala-espera", icon: "users", label: "Sala De Espera", codigo: "sala-espera" },
+  // 4º item, com destaque vermelho: é a tela crítica (pré-admissões aguardando liberação).
   { href: "/liberacao", icon: "clock", label: "Liberação Admissional", codigo: "liberacao", critical: true },
   { href: "/nova", icon: "plus", label: "Nova Admissão", codigo: "nova" },
   { href: "/esteira", icon: "layers", label: "Esteira Admissional", codigo: "esteira" },

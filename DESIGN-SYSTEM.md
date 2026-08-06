@@ -114,3 +114,34 @@ Três blobs em blur, posição fixa, atrás do conteúdo (`z-index:0`, conteúdo
 - Abas independentes (Auditoria, Exame, Cadastro/Contrato); aba ativa = glass + borda.
 - KPIs da frente no topo; lista de candidatos com pills de status.
 - (Lógica funcional é de OST posterior; aqui só o padrão visual.)
+
+---
+
+## Formulários e modais (regra permanente)
+
+Decisão do diretor, depois de campo de nome esmagado em modal estreito. Vale para **todo o sistema,
+daqui para frente**, e é aplicada **retroativamente sempre que uma tela for tocada** por qualquer OST.
+
+### Largura: o campo respira
+
+- Modal com formulário nasce em **`max-w-2xl`** (não `max-w-lg`). Modal de confirmação, que só tem
+  texto e dois botões, continua estreito: a regra é sobre **formulário**, não sobre toda caixa.
+- **Nome de pessoa ocupa a linha inteira.** Nome próprio é o campo mais longo de qualquer cadastro e
+  o que mais sofre com corte; dividir a linha com ele é o erro que originou esta regra.
+- Campos curtos e de mesma natureza (data e horário, CPF e nascimento) podem dividir a linha. Campos
+  de texto livre, não.
+- **Botão de ação não quebra texto.** Caixa com largura para o rótulo mais longo, medida no conteúdo
+  e não no palpite (§A.20 já diz isso para tabela; aqui vale para o botão).
+
+### Cliente aparece SEMPRE com código
+
+Todo lugar que exibe ou seleciona cliente mostra **`código - nome`**, no formato **`0060 - AVL`**.
+
+O motivo é operacional: o time trabalha por código, o mesmo nome de operação se repete entre
+unidades (há quatro "RAIA CAGC" distintas na base), e sem o código o consultor não sabe qual está
+escolhendo. Vale para seletor, tabela, chip de filtro e leitura em modal.
+
+### Onde isso já vale
+
+Sala de Espera (cadastro). As demais telas recebem o ajuste quando forem tocadas, sem OST própria
+para isso: é acabamento, não escopo novo.
