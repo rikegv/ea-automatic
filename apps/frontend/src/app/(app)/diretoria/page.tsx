@@ -193,8 +193,13 @@ export default function ControleGerencialPage() {
       });
     }
     if (filtros.codCliente) {
-      const r = s?.cliente.find((l) => l.chave === filtros.codCliente)?.rotulo ?? filtros.codCliente;
-      itens.push({ campo: "codCliente", texto: `Cliente: ${r}` });
+      // O chip é a leitura do FILTRO ativo, não a apresentação do dado: leva o código pelo mesmo
+      // motivo do seletor, senão o chip de dois clientes homônimos fica idêntico.
+      const r = s?.cliente.find((l) => l.chave === filtros.codCliente)?.rotulo;
+      itens.push({
+        campo: "codCliente",
+        texto: `Cliente: ${r ? `${filtros.codCliente} - ${r}` : filtros.codCliente}`,
+      });
     }
     if (faroisAtivos.length > 0) {
       const r = faroisAtivos.map((f) => ROTULO_FAROL[f] ?? f).join(" + ");
@@ -266,7 +271,14 @@ export default function ControleGerencialPage() {
               placeholder="Todos"
               ariaLabel="Filtrar por cliente"
               menuFit
-              options={(dados?.segmentos.cliente ?? []).map((l) => ({ value: l.chave, label: l.rotulo }))}
+              /* CÓDIGO + NOME só AQUI, na hora de escolher (regra permanente do design system). Há
+                 clientes homônimos na base, e sem o código não dá para saber qual "Soulan" está
+                 sendo filtrada. A APRESENTAÇÃO dos dados (cards, números, tabelas) segue com o nome
+                 puro: `l.rotulo` não é tocado, o código entra só na composição do rótulo da opção. */
+              options={(dados?.segmentos.cliente ?? []).map((l) => ({
+                value: l.chave,
+                label: `${l.chave} - ${l.rotulo}`,
+              }))}
             />
           </FiltroCampo>
           <FiltroCampo label="Farol">
