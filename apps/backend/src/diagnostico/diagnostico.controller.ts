@@ -1,8 +1,9 @@
-import { Body, Controller, Get, Logger, Post } from "@nestjs/common";
+import { Body, Controller, Get, Logger, Param, Post } from "@nestjs/common";
 import type { AuthUser } from "../auth/auth.types";
 import { CurrentUser, Roles } from "../auth/decorators";
 import { AuditoriaService } from "../auditoria/auditoria.service";
 import { ReauditoriaService } from "../reauditoria/reauditoria.service";
+import { PandapeApiService } from "../pandape/pandape-api.service";
 import { PandapeQueueService } from "../pandape/pandape-queue.service";
 import { PandapeSchedulerService } from "../pandape/pandape-scheduler.service";
 import { VtColetaSchedulerService } from "../vt-coleta/vt-coleta-scheduler.service";
@@ -13,6 +14,7 @@ import { sql } from "drizzle-orm";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
 import { DiagnosticoService } from "./diagnostico.service";
+import { FilasDiagnosticoService, type NomeFila } from "./filas.service";
 import {
   AcaoLigarPastaDto,
   AcaoZerarDuplicataDto,
@@ -21,6 +23,8 @@ import {
   AcaoRearquivarDto,
   AcaoRepullDto,
   SchedulerToggleDto,
+  AcaoJobDto,
+  TestarDependenciaDto,
 } from "./diagnostico.dto";
 import { AiClientService } from "../ai/ai-client.service";
 import { idDaPastaUrl, urlDaPasta } from "../ai/drive-routing";
@@ -50,6 +54,8 @@ export class DiagnosticoController {
     private readonly clicksignScheduler: ClicksignSchedulerService,
     private readonly exameScheduler: ExameSchedulerService,
     private readonly ai: AiClientService,
+    private readonly filas: FilasDiagnosticoService,
+    private readonly pandapeApi: PandapeApiService,
   ) {}
 
   /** Snapshot completo (sinais + dependências + última coleta + histórico + alerta). */
@@ -316,6 +322,91 @@ export class DiagnosticoController {
   }
 
   /** Trilha da ação: quem, quando, o quê. §A.6: id de usuário e de admissão, nada de PII. */
+  // ── ONDA 1 do diagnóstico detalhado: as dependências deixam de ser só um rótulo ──────────────
+
+  /**
+   * DETALHE DA FILA: as três (`pandape-sync`, `clicksign-sync`, `vt-coleta-scan`) com a contagem
+   * somada e a LISTA dos jobs falhados, cada um com o motivo real. É o que responde, sem acionar a
+   * fábrica, a pergunta que o card sozinho não respondia: "degradado por causa de quê?".
+   */
+  @Get("filas")
+  filasDetalhe() {
+    return this.filas.estado();
+  }
+
+  /**
+   * QUEM É O ALVO de um job falhado, resolvido na hora. Para o Pandapé, vai à API buscar nome e
+   * vaga do pré-colaborador que não entrou; para os demais, devolve o candidato da admissão.
+   *
+   * §A.6: devolve NOME (aceitável) e vaga, nunca o CPF. O incidente mostrou por que isto precisa
+   * existir: o job era o único rastro de um candidato real, e limpar sem olhar apagaria a pessoa.
+   */
+  @Get("filas/:fila/:jobId/alvo")
+  async alvoDoJob(@Param("fila") fila: NomeFila, @Param("jobId") jobId: string) {
+    const dados = await this.filas.dadosDoJob(fila, jobId);
+    if (fila === "pandape-sync" && dados.idPrecollaborator) {
+      const pc = await this.pandapeApi
+        .getPrecollaborator(String(dados.idPrecollaborator))
+        .catch(() => undefined);
+      if (!pc) {
+        return {
+          tipo: "pandape",
+          id: String(dados.idPrecollaborator),
+          indisponivel: "Não foi possível consultar o Pandapé agora. Tente de novo em instantes.",
+        };
+      }
+      return {
+        tipo: "pandape",
+        id: String(dados.idPrecollaborator),
+        nome: [pc.name, pc.surname].filter(Boolean).join(" ").trim() || "não informado",
+        vaga: pc.vacancyJob ?? "não informada",
+        etapa: pc.currentFolderName ?? "não informada",
+        admissaoPrevista: pc.admissionDate ?? null,
+      };
+    }
+    if (dados.admissaoId) {
+      const [row] = await this.db.execute<{ nome: string; cod_cliente: string | null }>(sql`
+        select c.nome, a.cod_cliente
+          from admissoes a join candidatos c on c.cpf = a.candidato_cpf
+         where a.id = ${String(dados.admissaoId)}::uuid
+      `);
+      return {
+        tipo: "admissao",
+        id: String(dados.admissaoId),
+        nome: row?.nome ?? "não informado",
+        cliente: row?.cod_cliente ?? "não informado",
+      };
+    }
+    return { tipo: "ciclo", id: jobId, nome: "Ciclo automático, sem candidato associado" };
+  }
+
+  /**
+   * LIMPAR o job falhado. DESTRUTIVA: o job costuma ser o único rastro do que ele carregava (§A.26),
+   * então a tela confirma antes e oferece "ver dados do alvo" ao lado. Aqui só se registra e remove.
+   */
+  @Post("acao/limpar-job")
+  async limparJob(@Body() dto: AcaoJobDto, @CurrentUser() user: AuthUser) {
+    this.registrarTrilha(user, "limpar-job", `${dto.fila}/${dto.jobId}`);
+    return this.filas.limparJob(dto.fila, dto.jobId);
+  }
+
+  /** REPROCESSAR o job falhado: volta para a fila com o mesmo payload. Não destrutiva. */
+  @Post("acao/reprocessar-job")
+  async reprocessarJob(@Body() dto: AcaoJobDto, @CurrentUser() user: AuthUser) {
+    this.registrarTrilha(user, "reprocessar-job", `${dto.fila}/${dto.jobId}`);
+    return this.filas.reprocessarJob(dto.fila, dto.jobId);
+  }
+
+  /**
+   * TESTAR AGORA uma dependência, pelo caminho REAL e ignorando o cache de 5 minutos do snapshot.
+   * Existe porque "verificado há 4 minutos" não serve a quem acabou de mexer na credencial.
+   */
+  @Post("acao/testar-dependencia")
+  async testarDependencia(@Body() dto: TestarDependenciaDto, @CurrentUser() user: AuthUser) {
+    this.registrarTrilha(user, "testar-dependencia", dto.nome);
+    return this.diagnostico.testarDependencia(dto.nome);
+  }
+
   private registrarTrilha(user: AuthUser, acao: string, admissaoId: string, tipoId?: string) {
     // Reusa o logger (persistido no journal, consultável). Uma tabela própria seria o passo pleno.
     // Aqui já fica quem disparou (user.id), o quê e quando (o timestamp do log).

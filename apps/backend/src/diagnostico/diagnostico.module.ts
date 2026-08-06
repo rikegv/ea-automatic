@@ -1,13 +1,16 @@
 import { Module } from "@nestjs/common";
 import { AuditoriaModule } from "../auditoria/auditoria.module";
 import { ClicksignModule } from "../clicksign/clicksign.module";
+import { ClicksignQueueModule } from "../clicksign/clicksign-queue.module";
 import { EsteiraModule } from "../esteira/esteira.module";
 import { PandapeModule } from "../pandape/pandape.module";
 import { PandapeQueueModule } from "../pandape/pandape-queue.module";
 import { ReauditoriaModule } from "../reauditoria/reauditoria.module";
 import { VtColetaModule } from "../vt-coleta/vt-coleta.module";
+import { VtColetaQueueModule } from "../vt-coleta/vt-coleta-queue.module";
 import { DiagnosticoController } from "./diagnostico.controller";
 import { DiagnosticoService } from "./diagnostico.service";
+import { FilasDiagnosticoService } from "./filas.service";
 import { ReconciliacaoDriveService } from "./reconciliacao-drive.service";
 
 /**
@@ -20,14 +23,18 @@ import { ReconciliacaoDriveService } from "./reconciliacao-drive.service";
   imports: [
     AuditoriaModule,
     ClicksignModule,
+    // As TRÊS filas: o card do Diagnóstico via só a do Pandapé e ficava verde com job falhado
+    // nas outras duas (bug corrigido em 06/08/2026).
+    ClicksignQueueModule,
     // Traz o ExameSchedulerService (verificador de status do Exame), mesmo papel do VtColetaModule.
     EsteiraModule,
     PandapeModule,
     PandapeQueueModule,
     ReauditoriaModule,
     VtColetaModule,
+    VtColetaQueueModule,
   ],
   controllers: [DiagnosticoController],
-  providers: [DiagnosticoService, ReconciliacaoDriveService],
+  providers: [DiagnosticoService, ReconciliacaoDriveService, FilasDiagnosticoService],
 })
 export class DiagnosticoModule {}

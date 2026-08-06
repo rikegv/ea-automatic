@@ -1,4 +1,5 @@
-import { IsBoolean, IsNotEmpty, IsString, IsUUID } from "class-validator";
+import { IsBoolean, IsIn, IsNotEmpty, IsString, IsUUID } from "class-validator";
+import { FILAS, type NomeFila } from "./filas.service";
 
 /** Ações do Bloco 5, sempre POR ALVO (uma admissão). */
 export class AcaoReauditarDto {
@@ -66,4 +67,25 @@ export class AcaoZerarDuplicataDto {
 export class SchedulerToggleDto {
   @IsBoolean()
   ligado!: boolean;
+}
+
+/**
+ * AÇÃO SOBRE UM JOB FALHADO (onda 1 do diagnóstico detalhado). A fila vem no corpo porque o mesmo
+ * `jobId` pode existir em filas diferentes: sem ela, limpar o job certo seria sorte.
+ */
+export class AcaoJobDto {
+  @IsIn(FILAS as unknown as string[], { message: "Fila desconhecida." })
+  fila!: NomeFila;
+
+  @IsString()
+  @IsNotEmpty({ message: "Informe o job." })
+  jobId!: string;
+}
+
+/** "Testar agora" de UMA dependência: re-checa pelo caminho real, ignorando o cache de 5 minutos. */
+export class TestarDependenciaDto {
+  @IsIn(["Banco de dados", "Fila (BullMQ)", "Vertex AI (auditoria)", "Google Drive", "Pandapé (API)"], {
+    message: "Dependência desconhecida.",
+  })
+  nome!: string;
 }

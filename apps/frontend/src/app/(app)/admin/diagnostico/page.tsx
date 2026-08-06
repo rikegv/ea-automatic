@@ -11,6 +11,7 @@ import { StatusPill } from "@/components/ui/StatusPill";
 import { Modal } from "@/components/ui/Modal";
 import { Icon, type IconName } from "@/components/ui/Icon";
 import { cn } from "@/lib/cn";
+import { DependenciaDrawer } from "@/components/diagnostico/DependenciaDrawer";
 
 interface SinalItem {
   // Sinais por admissão trazem admissaoId + candidato; sinais sem pessoa (coleta de VT) não.
@@ -143,6 +144,8 @@ export default function DiagnosticoPage() {
   const [aviso, setAviso] = useState<string | null>(null);
   // Qual "porta" está aberta no detalhe: um sinal (pela chave), "historico" ou "coleta".
   const [aberto, setAberto] = useState<string | null>(null);
+  /** Dependência aberta no drawer (onda 1). Estado próprio: a porta é o card da faixa 2. */
+  const [depAberta, setDepAberta] = useState<Dependencia | null>(null);
 
   const carregar = useCallback(async () => {
     setCarregando(true);
@@ -353,9 +356,17 @@ export default function DiagnosticoPage() {
           {/* ── FAIXA 2: dependências como indicadores compactos lado a lado ── */}
           <div className="mb-[14px] grid grid-cols-2 gap-[10px] sm:grid-cols-3 xl:grid-cols-5">
             {snap.dependencias.map((d) => (
+              /* CLICÁVEL desde a onda 1: o card diz o estado, o drawer diz o que está acontecendo,
+                 desde quando e o que fazer. Antes disto, "degradado" era um beco sem saída. */
               <GlassCard
                 key={d.nome}
-                className="flex items-center gap-2.5 !px-3.5 !py-3"
+                as="button"
+                onClick={() => setDepAberta(d)}
+                className={cn(
+                  "flex items-center gap-2.5 text-left transition hover:bg-[var(--surface-2)] !px-3.5 !py-3",
+                  (d.estado === "fora" || d.estado === "degradado") &&
+                    "!border-[rgba(214,69,69,0.45)] ring-1 ring-[rgba(214,69,69,0.35)]",
+                )}
                 title={d.detalhe + (d.ultimoErro ? ` (último erro: ${d.ultimoErro})` : "")}
               >
                 <StatusPill tone={TOM_DEP[d.estado]} label={d.estado} />
@@ -536,6 +547,15 @@ export default function DiagnosticoPage() {
             </GlassCard>
           </div>
         </>
+      )}
+
+      {/* ── DETALHE de uma DEPENDÊNCIA: o padrão único de 4 blocos (onda 1) ── */}
+      {depAberta && (
+        <DependenciaDrawer
+          dependencia={depAberta}
+          onClose={() => setDepAberta(null)}
+          onMudou={() => void carregar()}
+        />
       )}
 
       {/* ── DETALHE de um SINAL: lista de afetados + ações por alvo (a porta é o card) ── */}

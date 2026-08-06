@@ -8390,3 +8390,67 @@ só aparece para quem tem o menu. Quem não tem não vê, em vez de ver e tomar 
 
 1.037 testes verdes (14 novos: 5 do vínculo, 9 da trava de tipo de contrato), typecheck e lint
 limpos, backend e frontend rebuildados. Validado pelo diretor na plataforma.
+
+---
+
+## 06/08/2026, Diagnóstico detalhado: o bug das três filas e a onda 1
+
+Nasceu do incidente do mesmo dia: o card "Fila (BullMQ)" dizia DEGRADADO e nada mais, e o diretor
+precisou acionar a fábrica para descobrir que era um job falhado por CPF inválido. O card sabia o
+número e escondia o resto.
+
+### O bug: o card via UMA fila, e existem TRÊS
+
+`diagnostico.service` injetava `PandapeQueueService` e consultava só `pandape-sync`. Job falhado em
+`clicksign-sync` ou em `vt-coleta-scan` deixava o card **verde**: um envelope de assinatura falhando
+em loop não acendia absolutamente nada. Não era limitação de produto, era um alvo que ninguém reviu
+quando a segunda e a terceira fila nasceram.
+
+`FilasDiagnosticoService` passa a somar as três e a listar os jobs falhados de todas elas. Cada fila
+expõe a sua `Queue` por um `filaBull()` (leitura e ação por alvo; quem enfileira continua sendo só os
+métodos nomeados). **Fila que não subiu vira RESSALVA no texto do card**, não silêncio: "sem leitura
+de clicksign-sync" é diferente de "tudo certo".
+
+**Prova.** 7 testes cobrem a soma das três, o job que está SÓ na fila da assinatura, o que está SÓ na
+do VT, a ordenação do mais recente para o mais antigo e a fila indisponível. Ao vivo, reproduzimos o
+job real do incidente (`sync-candidate` do pré-colaborador 406998) e ele apareceu com o motivo
+verdadeiro, "CPF inválido". Os workers são tolerantes por construção (entrada inválida vira no-op,
+não exceção), então forçar falha nas outras duas filas em produção exigiria disparar operação real na
+Clicksign e no GCS: isso NÃO foi feito, e é por isso que a cobertura das três é por teste.
+
+### Onda 1: a dependência deixa de ser um beco sem saída
+
+Os cinco cards da faixa 2 viraram clicáveis e abrem o MESMO drawer de quatro blocos: **o que é**, **o
+que está acontecendo**, **desde quando**, **o que fazer**. O texto é de operação, não de sistema:
+quem lê precisa decidir, não traduzir.
+
+Na Fila, cada job falhado é uma linha com alvo, motivo real, tentativas e há quanto tempo, e três
+ações: **Ver dados do alvo** (resolve na hora quem ficou de fora, indo à API do Pandapé quando é
+candidato), **Reprocessar** e **Limpar job**. A limpeza é destrutiva e **confirma antes** (§A.26),
+dizendo o que se perde e lembrando que, se a causa foi corrigida na origem, o certo é reprocessar. As
+demais dependências têm **Testar agora**, que re-checa pelo caminho real e **invalida o cache** de 5
+minutos, porque "verificado há 4 minutos" não serve a quem acabou de mexer na credencial.
+
+O caso que originou tudo virou isto, na tela: "Candidato do Pandapé 406998, CPF inválido, 1 tentativa,
+falhou em 06/08/2026 16:52", e o "ver dados do alvo" abre "Carlos Eduardo Ramos Sabino, Auxiliar de
+Almoxarifado Hospitalar, admissão prevista 17/08/2026".
+
+**Defeito corrigido na própria validação visual:** a primeira versão limpava o job, esvaziava a lista
+e deixava o cabeçalho dizendo "degradado, falhados 1", porque o pill era o retrato de quando o drawer
+abriu. Quem age precisa VER o efeito da ação, senão age duas vezes. As ações agora re-checam a
+dependência antes de fechar o ciclo.
+
+Ondas 2 a 4 (o "desde quando" persistido, os schedulers e a uniformização dos sinais) seguem
+aprovadas e não foram construídas: a parada aqui é do diretor.
+
+### Controle Gerencial: código do cliente no filtro, e só nele
+
+Há clientes homônimos na base, e o seletor mostrava só o nome: impossível saber qual "Soulan" estava
+sendo filtrada. O seletor e o chip de filtro ativo passam a mostrar **código + nome** (`55865 - PETZ`),
+regra permanente do design system. A APRESENTAÇÃO dos dados não mudou: a tabela de clientes do
+dashboard segue com o nome puro, porque o `rotulo` não foi tocado, o código entra só na composição do
+rótulo da opção.
+
+### Gate
+
+1.044 testes verdes, typecheck e lint limpos, backend e frontend rebuildados, portas em 200.

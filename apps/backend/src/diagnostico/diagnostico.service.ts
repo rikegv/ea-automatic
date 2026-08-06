@@ -3,9 +3,9 @@ import { Inject, Injectable } from "@nestjs/common";
 import { sql } from "drizzle-orm";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
+import { FilasDiagnosticoService } from "./filas.service";
 import { AiClientService } from "../ai/ai-client.service";
 import { PandapeApiService } from "../pandape/pandape-api.service";
-import { PandapeQueueService } from "../pandape/pandape-queue.service";
 import { PandapeSchedulerService } from "../pandape/pandape-scheduler.service";
 import { DrivePastaPaiService } from "../ai/drive-pasta-pai.service";
 import { ReconciliacaoDriveService } from "./reconciliacao-drive.service";
@@ -60,7 +60,7 @@ export class DiagnosticoService {
     @Inject(DRIZZLE) private readonly db: Database,
     private readonly ai: AiClientService,
     private readonly pandapeApi: PandapeApiService,
-    private readonly fila: PandapeQueueService,
+    private readonly filas: FilasDiagnosticoService,
     private readonly scheduler: PandapeSchedulerService,
     private readonly vtColetaScheduler: VtColetaSchedulerService,
     private readonly clicksignScheduler: ClicksignSchedulerService,
@@ -574,7 +574,7 @@ export class DiagnosticoService {
     const agora = new Date().toISOString();
     const [banco, filaSt, vertex, drive, pandape] = await Promise.all([
       this.checarBanco(),
-      this.fila.statusFila(),
+      this.filas.estado(),
       this.ai.readinessVertex(),
       this.ai.readinessDrive(),
       this.pandapeApi.readiness(),
@@ -583,16 +583,27 @@ export class DiagnosticoService {
     const deps: Dependencia[] = [];
     deps.push({ nome: "Banco de dados", estado: banco.ok ? "ok" : "fora", detalhe: banco.detalhe, verificadoEm: agora, ...(banco.erro ? { ultimoErro: banco.erro } : {}) });
 
-    // Fila BullMQ: fora se não subiu; degradado se há jobs falhados; ok caso contrário.
+    // FILA BullMQ, AS TRÊS (correção de 06/08/2026). Antes daqui o card lia só `pandape-sync`, e job
+    // falhado em `clicksign-sync` ou `vt-coleta-scan` deixava a tela VERDE. Fora se NENHUMA subiu;
+    // degradado se há falhado em qualquer uma; ok caso contrário.
     if (!filaSt.disponivel) {
-      deps.push({ nome: "Fila (BullMQ)", estado: "fora", detalhe: "fila indisponível (Redis fora no boot)", verificadoEm: agora, ...(filaSt.erro ? { ultimoErro: filaSt.erro } : {}) });
-    } else {
-      const c = filaSt.contagem!;
-      const degr = c.falhados > 0;
       deps.push({
         nome: "Fila (BullMQ)",
-        estado: degr ? "degradado" : "ok",
-        detalhe: `ativos ${c.ativos}, aguardando ${c.aguardando}, falhados ${c.falhados}, atrasados ${c.atrasados}`,
+        estado: "fora",
+        detalhe: "nenhuma das três filas subiu (Redis fora no boot)",
+        verificadoEm: agora,
+      });
+    } else {
+      const c = filaSt.contagem;
+      const degr = c.falhados > 0;
+      // A fila que não subiu não pode passar por saudável: some ao detalhe em vez de sumir.
+      const ressalva = filaSt.indisponiveis.length
+        ? `, sem leitura de ${filaSt.indisponiveis.join(" e ")}`
+        : "";
+      deps.push({
+        nome: "Fila (BullMQ)",
+        estado: degr || filaSt.indisponiveis.length > 0 ? "degradado" : "ok",
+        detalhe: `ativos ${c.ativos}, aguardando ${c.aguardando}, falhados ${c.falhados}, atrasados ${c.atrasados}${ressalva}`,
         verificadoEm: agora,
       });
     }
@@ -602,6 +613,19 @@ export class DiagnosticoService {
     deps.push({ nome: "Pandapé (API)", estado: pandape.estado, detalhe: pandape.detalhe, verificadoEm: agora });
     this.depsCache = { at: Date.now(), deps };
     return deps;
+  }
+
+  /**
+   * TESTAR AGORA uma dependência (onda 1). Re-checa pelo caminho REAL e **invalida o cache** de 5
+   * minutos, porque quem clica acabou de mexer na credencial e "verificado há 4 minutos" não serve.
+   *
+   * Devolve a `Dependencia` recalculada, no mesmo formato do snapshot: a tela troca o card no lugar,
+   * sem recarregar a página inteira.
+   */
+  async testarDependencia(nome: string): Promise<Dependencia | undefined> {
+    this.depsCache = null;
+    const deps = await this.dependencias();
+    return deps.find((d) => d.nome === nome);
   }
 
   private async checarBanco(): Promise<{ ok: boolean; detalhe: string; erro?: string }> {

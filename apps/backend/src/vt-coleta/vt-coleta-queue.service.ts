@@ -122,4 +122,17 @@ export class VtColetaQueueService implements OnModuleInit, OnModuleDestroy {
       return false;
     }
   }
+
+  /**
+   * A `Queue` crua, para o Diagnóstico inspecionar e agir sobre os jobs FALHADOS (onda 1 do
+   * diagnóstico detalhado). Existe porque o card da fila precisava enxergar as TRÊS filas, e cada
+   * uma guardava a sua atrás de um `private`. `undefined` quando a fila não subiu (Redis fora).
+   *
+   * Leitura e ação por alvo, nunca enfileiramento: quem enfileira são os métodos nomeados acima,
+   * que continuam sendo o único caminho de produção desta fila.
+   */
+  filaBull(): Queue | undefined {
+    return this.queue;
+  }
+
 }
