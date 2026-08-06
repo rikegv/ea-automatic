@@ -741,3 +741,98 @@ describe("PandapeSyncService — dedup por CPF + idVacancy (trava b)", () => {
     expect(opts).toMatchObject({ possivelDuplicata: false });
   });
 });
+
+/**
+ * FALLBACK DO CPF PELO FORMULÁRIO (caso Carlos Eduardo, idPreCollaborator 406998, 06/08/2026).
+ *
+ * O candidato preencheu o CPF errado no CADASTRO, o time corrigiu no FORMULÁRIO do processo
+ * admissional, e os dois campos não conversam: o `Match.cpf` seguiu 00000000000 e o job falhou cinco
+ * vezes com "CPF inválido". Aqui prova-se que o EA passa a olhar o formulário QUANDO, e SOMENTE
+ * quando, o cadastro não fecha o dígito.
+ *
+ * Os CPFs são sintéticos (§A.6). `cpf: undefined` no pré-colaborador reproduz o payload real: a v1
+ * não devolve CPF, ele vem do Match.
+ */
+describe("PandapeSyncService — CPF: cadastro manda, formulário é fallback", () => {
+  const CPF_CADASTRO_OK = "52998224725";
+  const CPF_FORMULARIO = "11144477735";
+  const ZERADO = "00000000000";
+
+  /** `answers[]` como a v1 devolve: lista plana na raiz do pré-colaborador. */
+  function comCpfNoFormulario(valor: string): unknown[] {
+    return [
+      { fieldName: "Nome completo", answer: "FULANO DE TAL", externalName: null },
+      { fieldName: "Número do CPF", answer: valor, externalName: null },
+    ];
+  }
+
+  /** Cenário pronto: cliente/cargo resolvem, então o caminho termina em `admissoes.create`. */
+  function cenario(over: { cpfMatch?: string; answers?: unknown[]; cpfPc?: string }) {
+    const { db } = makeDb();
+    db.query.integracaoPandape.findFirst.mockResolvedValue(undefined);
+    db.query.clientes.findFirst.mockResolvedValue({ codCliente: "C-10" });
+    db.query.cargos.findFirst.mockResolvedValue({ id: "cargo-1" });
+    const api = makeApi({
+      getPrecollaborator: vi
+        .fn()
+        .mockResolvedValue(pc({ cpf: over.cpfPc, nome: undefined, name: "Carlos", surname: "Eduardo Ramos Sabino", answers: over.answers })),
+      getMatch: vi.fn().mockResolvedValue({ idMatch: "M-1", cpf: over.cpfMatch }),
+      getVacancy: vi.fn().mockResolvedValue({
+        idVacancy: "V-1",
+        clienteCnpj: "12345678000190",
+        cargoNome: "Auxiliar de Almoxarifado Hospitalar",
+      }),
+    });
+    return makeService({ db, api });
+  }
+
+  /** O CPF que chegou ao `create`. */
+  function cpfCriado(admissoes: AdmissoesService): string | undefined {
+    const chamada = (admissoes.create as ReturnType<typeof vi.fn>).mock.calls[0];
+    return chamada?.[0]?.candidato?.cpf;
+  }
+
+  it("cadastro INVÁLIDO (zerado) + formulário VÁLIDO → usa o do formulário e cria a admissão", async () => {
+    const { svc, admissoes } = cenario({ cpfMatch: ZERADO, answers: comCpfNoFormulario(CPF_FORMULARIO) });
+    await svc.processarCandidato("PC-1");
+    expect(admissoes.create).toHaveBeenCalledTimes(1);
+    expect(cpfCriado(admissoes)).toBe(CPF_FORMULARIO);
+  });
+
+  it("cadastro com dígito que não fecha + formulário VÁLIDO → usa o do formulário", async () => {
+    const { svc, admissoes } = cenario({ cpfMatch: "12345678900", answers: comCpfNoFormulario(CPF_FORMULARIO) });
+    await svc.processarCandidato("PC-1");
+    expect(cpfCriado(admissoes)).toBe(CPF_FORMULARIO);
+  });
+
+  it("formulário com MÁSCARA → normaliza para 11 dígitos antes de usar", async () => {
+    const { svc, admissoes } = cenario({ cpfMatch: ZERADO, answers: comCpfNoFormulario("111.444.777-35") });
+    await svc.processarCandidato("PC-1");
+    expect(cpfCriado(admissoes)).toBe(CPF_FORMULARIO);
+  });
+
+  it("INVÁLIDO nos DOIS → segue o comportamento de hoje: manda o do cadastro e o create recusa", async () => {
+    const { svc, admissoes } = cenario({ cpfMatch: ZERADO, answers: comCpfNoFormulario("12345678900") });
+    await svc.processarCandidato("PC-1");
+    // Nada de inventar CPF: o valor inválido do cadastro segue adiante e quem recusa continua sendo
+    // a validação do `create` ("CPF inválido"), intocada. A base não é poluída.
+    expect(cpfCriado(admissoes)).toBe(ZERADO);
+  });
+
+  it("§A.26 CAMINHO FELIZ: cadastro VÁLIDO → ignora o formulário e não muda de comportamento", async () => {
+    const { svc, admissoes } = cenario({
+      cpfMatch: CPF_CADASTRO_OK,
+      answers: comCpfNoFormulario(CPF_FORMULARIO),
+    });
+    await svc.processarCandidato("PC-1");
+    expect(admissoes.create).toHaveBeenCalledTimes(1);
+    // O do formulário existe e é válido, e mesmo assim NÃO é usado: quem manda é o cadastro.
+    expect(cpfCriado(admissoes)).toBe(CPF_CADASTRO_OK);
+  });
+
+  it("§A.26 CAMINHO FELIZ: cadastro VÁLIDO e SEM answers no payload → segue igual", async () => {
+    const { svc, admissoes } = cenario({ cpfMatch: CPF_CADASTRO_OK });
+    await svc.processarCandidato("PC-1");
+    expect(cpfCriado(admissoes)).toBe(CPF_CADASTRO_OK);
+  });
+});

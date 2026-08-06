@@ -8525,3 +8525,34 @@ travessão como SEPARADOR no meio de texto ou frase. Os marcadores da tabela da 
 1.049 testes no backend (5 novos das duas portas) e 88 no frontend (4 novos da regra de
 pré-preenchimento), typecheck e lint limpos, backend e frontend rebuildados, portas em 200. Três
 cadastros de teste ("Teste 1/2/3 Da Sala") ficam na base a pedido do diretor, para demonstração.
+
+## 06/08/2026 — CPF do formulário como fallback do cadastro (caso Carlos Eduardo)
+
+**O problema, e ele não era o que parecia.** O candidato Carlos Eduardo Ramos Sabino
+(`IdPreCollaborator` 406998, vaga Auxiliar de Almoxarifado Hospitalar 3505502, admissão 17/08) não
+entrava na esteira. O job falhou cinco vezes com "CPF inválido" (05/08 às 23:17 e 06/08 às 16:52 e
+16:55) e foi limpo à mão pela tela de Diagnóstico. O time corrigiu o CPF no Pandapé e ele continuou
+sem aparecer.
+
+A consulta à API ao vivo mostrou por quê: o CPF certo estava no **formulário do processo admissional**
+(`GET /v1/PreCollaborator/Get` → `answers[]` → "Número do CPF", dígito fechando), enquanto o
+**cadastro do candidato**, que alimenta o `Match.cpf` que o sync lê, seguia `00000000000`. Os dois
+campos não conversam, e não havia como corrigir onde ele preencheu errado.
+
+**O que mudou.** O sync ganhou um FALLBACK, não um caminho novo: quando o CPF do cadastro não fecha o
+dígito (inválido, zerado ou vazio), o `answers[]` é consultado, e o valor de lá só entra se ELE fechar
+o dígito. Cadastro válido segue mandando e o formulário sequer é lido, então o caminho feliz não muda
+(§A.26). Inválido nos dois lados mantém a recusa que já existia: a base nunca recebe CPF inventado.
+
+A extração vive em `pandape/extrair-cpf-formulario.ts`, função pura, no mesmo padrão do
+`extrair-banco.ts`. §A.6: o CPF não é logado em lugar nenhum.
+
+**Reprocessamento.** Re-sync local pelo webhook interno (`POST /api/webhooks/pandape` com o token,
+sem depender do servidor-ponte), e o Carlos entrou: CPF 332.\*\*\*.\*\*\*-06, farol
+`AGUARDANDO_LIBERACAO`, origem PANDAPE, uma linha só em `integracao_pandape`, sem flag de duplicata.
+
+### Gate
+
+1.064 testes no backend (15 novos: 9 da extração e 6 do sync, incluindo os dois que provam o caminho
+feliz intocado), typecheck e lint limpos, backend rebuildado e reiniciado, health em 200 e zero job
+falhado na fila.

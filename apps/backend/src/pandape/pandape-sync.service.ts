@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Worker, type Job } from "bullmq";
+import { isValidCpf, normalizeCpf } from "@ea/shared-types";
 import { and, asc, eq } from "drizzle-orm";
 import type IORedis from "ioredis";
 import type { AuthUser } from "../auth/auth.types";
@@ -26,6 +27,7 @@ import {
   type PandaperPrecollaborator,
 } from "./pandape-api.service";
 import { extrairNomeBanco } from "./extrair-banco";
+import { extrairCpfDoFormulario } from "./extrair-cpf-formulario";
 import type { CandidatoInputDto, SexoValor } from "../admissoes/dto/create-admissao.dto";
 import { PandapeQueueService } from "./pandape-queue.service";
 import { resolverExtensaoDocumento } from "./mime-documento";
@@ -421,7 +423,8 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
    * mínimo (CPF ou nome) — aí a criação adia, sem inventar nada.
    *
    * Origem de cada campo (só o que a API devolve DE FATO):
-   *  - `cpf`      ← Match (11 dígitos, sem pontuação; `normalizeCpf` no `create` é no-op aqui).
+   *  - `cpf`      ← Match (11 dígitos, sem pontuação; `normalizeCpf` no `create` é no-op aqui), com
+   *                 FALLBACK no formulário quando o do Match não fecha o dígito (ver abaixo).
    *  - `nome`     ← PreCollaborator `name` + `surname` (reais); o Match é fallback.
    *  - `email`    ← PreCollaborator (real); Match é fallback.
    *  - `telefone` ← Match (vem "11-987654321", cabe nos 30 do DTO; guardado como veio).
@@ -436,7 +439,15 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
     pc: PandaperPrecollaborator,
     match: PandapeMatch | undefined,
   ): CandidatoInputDto | undefined {
-    const cpf = (pc.cpf ?? match?.cpf ?? "").trim();
+    // CPF: o CADASTRO manda, sempre. Só quando ele NÃO fecha o dígito (inválido, zerado ou vazio) o
+    // formulário do processo admissional é consultado, e ainda assim só entra se ELE fechar. Caso
+    // real que criou a regra: cadastro 00000000000 e formulário com o CPF certo (§ extrair-cpf-
+    // formulario.ts). Cadastro válido → `cpfCadastro` segue INTOCADO, exatamente como vinha antes,
+    // e o `answers[]` sequer é lido (§A.26: o caminho feliz não muda).
+    const cpfCadastro = (pc.cpf ?? match?.cpf ?? "").trim();
+    const cpf = isValidCpf(normalizeCpf(cpfCadastro))
+      ? cpfCadastro
+      : (extrairCpfDoFormulario(pc.answers) ?? cpfCadastro);
     const nome = (
       pc.nome ??
       [pc.name, pc.surname].filter(Boolean).join(" ").trim() ??
@@ -459,7 +470,9 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
   private motivoAdiamento(pc: PandaperPrecollaborator, match: PandapeMatch | undefined): string {
     if (!pc.idMatch) return "pré-colaborador sem idMatch (é a ponte até o CPF, no Match)";
     if (!match) return "Match não retornado pela API (inerte, id inexistente ou falha na chamada)";
-    if (!match.cpf?.trim()) return "Match sem CPF preenchido";
+    // Chegar aqui com o CPF vazio significa que o cadastro não tinha nada E o formulário também não
+    // tinha CPF válido: o fallback já foi tentado antes do adiamento, então o motivo diz os dois.
+    if (!match.cpf?.trim()) return "Match sem CPF preenchido e formulário sem CPF válido";
     return "pré-colaborador sem nome";
   }
 
