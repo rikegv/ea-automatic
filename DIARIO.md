@@ -8242,3 +8242,151 @@ aplicadas. Backend e frontend rebuildados, três portas em 200. Validado pelo di
 Os cinco arquivos de registro de menu (`menus.ts`, `seed.ts`, o hub, `admin-menus` e `menu-rotas`)
 carregam as DUAS frentes, porque as duas escreveram nas mesmas listas e não houve commit entre elas.
 Foram para o commit da Integração; o corte por arquivo não era possível sem edição manual arriscada.
+
+---
+
+## 06/08/2026, incidente: contrato assinado que não saía de "Aguardando Assinatura"
+
+A THAIS HELENA XAVIER DIAS BRUM (AVL, Analista de Customer Service) assinou, a Edilaine assinou, o
+envelope fechou na Clicksign, e a plataforma continuou mostrando "Aguardando Assinatura". Junto, o
+card "Fila (BullMQ)" do Diagnóstico estava DEGRADADO. Dois problemas sem relação nenhuma entre si,
+como o diagnóstico provou antes de qualquer correção.
+
+### O que travou a Thaís: uma abreviação da carga
+
+O tick da Clicksign estava saudável e via o `closed` a cada 5 minutos. Ele desistia no primeiro passo
+do arquivamento, e o log dizia isso desde as 13:07, de 5 em 5 minutos:
+
+```
+WARN Contrato assinado não arquivado: sem pasta-pai do Drive para a admissão 640f7bc6...
+LOG  Ciclo Clicksign concluído: varridas=3, assinados=0, expirados=0, falhas=0.
+```
+
+O `tipo_contrato` dela era **"TERC."**, grafia da carga de 03/08, e o mapa de pastas do Drive tem a
+chave `terceirizado`. O resolver normaliza acento e caixa, não abreviação: "terc." não casa com
+"terceirizado", `resolver` devolve `null`, `arquivarAssinado` devolve `false` e o status **nunca**
+vira ASSINADO. Não é falha da integração, é dado que nunca falou a língua do sistema.
+
+**O repositório já sabia disso.** `db/normaliza-tipo-contrato.ts` existe desde a Onda 3 e o próprio
+comentário dele prevê o caso: "a pasta-pai do Drive já casa por tipo normalizado, e por isso ignora
+TEMP. hoje". O script é dry-run por padrão e **nunca foi rodado com `--aplicar`**. Um normalizador
+escrito e não aplicado não protege ninguém.
+
+**Correção do incidente:** só o dado dela, `TERC.` para `Terceirizado` (a grafia canônica do
+`MAPA_GRAFIAS`, não uma décima quarta grafia). Tick disparado na mão, e o ciclo seguinte fechou:
+`assinados=1`, `clicksign_status=ASSINADO`, contrato arquivado no Drive, kit zerado, ela na aba
+Assinados. **As outras 20 admissões VIVAS com grafia abreviada (TEMP. 17, APREN. 2, ESTA. 1) seguem
+como estão**: aplicar o normalizador em massa é decisão do diretor, não efeito colateral de um
+incidente.
+
+### A fila degradada: um resíduo, não uma pane
+
+`degradado = falhados > 0`, sem janela de tempo (`diagnostico.service.ts`). O card olha **só** a fila
+do Pandapé, e havia **1** job falhado: `cand-406998`, `sync-candidate`, 5 de 5 tentativas, "CPF
+inválido", falhado em 05/08 às 23:18 UTC. Redis no ar, workers rodando, `clicksign-sync` sem nenhuma
+falha. Removido pelo `job.remove()` do próprio BullMQ (mexer no Redis na mão deixaria o hash órfão);
+card verde, alerta apagado.
+
+### O que esse job escondia, e é o achado que importa
+
+Aquele job era o **único rastro** de um candidato real: Carlos Eduardo Ramos Sabino, Auxiliar de
+Almoxarifado Hospitalar, admissão prevista para 17/08. O CPF dele no Pandapé é `00000000000`, então a
+trava de CPF barrou a criação, corretamente. Só que **ninguém foi avisado**: a pré-admissão não
+existe, ele não aparece na Liberação, e o único registro do fato era uma entrada na lista de falhados
+do Redis, com expurgo automático em 5.000 falhas.
+
+O dado dele foi resgatado da API do Pandapé e registrado **fora do repositório**
+(`~/ea-entradas-recusadas/`) antes da limpeza, com o que o time precisa para tratar. Fora do
+repositório de propósito: nome, e-mail e telefone de candidato não vão para o git (§A.6).
+
+**Pendência estrutural registrada:** não existe superfície no sistema para "entrada recusada do
+Pandapé". Enquanto não existir, toda entrada barrada por dado inválido some do mesmo jeito.
+
+### Fechamento do incidente: as 20 vivas, a trava e a hora
+
+**As 20 admissões VIVAS com grafia abreviada foram normalizadas** (17 TEMP., 2 APREN., 1 ESTA.), pelo
+próprio `normaliza-tipo-contrato.ts`, que ganhou a flag **`--vivas`**. A flag é aditiva: sem ela o
+script segue convertendo a base inteira, como sempre fez. O recorte é decisão do diretor, e a razão é
+simples: o que trava operação é a admissão que ainda vai passar pela assinatura; reescrever o
+histórico junto seria mexer em 87 registros que ninguém pediu.
+
+Prova pelo caminho real, rodando o `DrivePastaPaiService.resolver` sobre TODAS as vivas:
+
+```
+OK  Estágio          resolve   2   não resolve 0
+OK  Fopag            resolve  19   não resolve 0
+OK  Interno          resolve   3   não resolve 0
+OK  Jovem Aprendiz   resolve   6   não resolve 0
+OK  Temporário      resolve 145   não resolve 0
+OK  Terceirizado     resolve  11   não resolve 0
+```
+
+186 vivas, nenhuma sem pasta-pai. O caso da Thaís não se repete por grafia.
+
+**A trava de entrada** fecha a porta por onde "TERC." entrou. `domain/tipo-contrato.ts` passou a ser
+a casa do mapa (puro, sem banco, para o DTO poder importar), o script o reexporta, e os QUATRO DTOs
+que gravam o campo (criar, editar, liberar, liberar em lote) usam `@TipoContratoCanonicoDto()`.
+
+A ordem é o ponto: **normaliza ANTES de validar**. Quem manda "TEMP." não toma 400, passa e grava
+"Temporário"; quem manda "PJ" é recusado com a lista do que vale. Vazio segue válido, porque tipo
+ausente é pendência da régua (§A.19), não trava. Nenhum fluxo legítimo depende de string livre: o
+Pandapé não escreve tipo de contrato, e as telas já ofereciam só a lista fixa.
+
+**Fica registrado o que a trava NÃO cobre:** as rotinas de carga (`carga-*.ts`) escrevem direto no
+banco, sem passar por DTO. A próxima carga que trouxer abreviação vai gravá-la de novo. O caminho é
+a carga chamar `normalizarTipoContrato` antes do insert, e isso é decisão do diretor, não efeito
+colateral deste incidente.
+
+**A hora da assinatura** entrou no selo ("Assinou 06/08/2026 12:24"). O dado já vinha completo do
+backend; só a tela mostrava menos do que sabia, e sem o minuto não dá para conferir o que a Clicksign
+devolveu contra o que a plataforma gravou. Foi exatamente essa conferência que o incidente exigiu.
+
+---
+
+## 06/08/2026, Sala de Espera onda 3: o match manual com a Liberação
+
+O elo que faltava entre a Sala e a esteira: o candidato que já esperava na Sala e agora chegou pelo
+Pandapé vira UMA admissão, não duas.
+
+### Um clique na linha, e o caminho se decide sozinho
+
+O botão da fila da Liberação virou **"Liberar Admissão"** e faz tudo em um clique: procura na Sala
+pelo CPF, nome e telefone do candidato; achou alguém, mostra o passo do vínculo; não achou, abre a
+liberação direto. **A primeira tentativa colocou o botão dentro do modal**, com uma justificativa
+técnica real (o `abrirModal` zera cliente e cargo a cada abertura, então o pré-preenchimento feito na
+linha seria apagado). O diretor recusou: o problema era da fábrica resolver, não motivo para mudar o
+que ele pediu.
+
+A solução foi **inverter a ordem, não mexer no que já funcionava**: o vínculo acontece ANTES da
+abertura e entrega cliente e cargo pelo próprio `abrirModal`, que ganhou um parâmetro opcional. Sem
+esse parâmetro cada campo cai no mesmo `""` de sempre, então a liberação sem vínculo é idêntica à de
+antes. O `liberar()` não foi tocado, nem no front nem no backend (§A.26).
+
+### O sistema sugere, o operador confirma
+
+`buscarParaMatch` ordena por confiança: CPF é identidade (selo "CPF confere"), telefone é indício,
+nome é semelhança. Sem nenhuma pista devolve vazio, de propósito: a fila inteira ali seria convite a
+vincular o registro errado. Quem decide é sempre o operador, e "Seguir sem vincular" leva à liberação
+normal.
+
+O vínculo é **transacional**: ponteiro, baixa da fila e trilha na mesma transação, com o `isNull` no
+WHERE segurando a corrida de dois operadores no mesmo registro. Registro já vinculado é recusado, não
+repontado em silêncio: repontar permitiria mover histórico de uma admissão para outra sem ninguém ver.
+
+### O telefone, e o comentário que mentia
+
+O modal devolvia o telefone e a tela ignorava, enquanto um comentário afirmava que "é aplicado pela
+liberação". Não era. O telefone agora é gravado **no backend do vínculo**, e não na liberação, por um
+motivo concreto: o modal de liberação NÃO TEM caixa de telefone, então não havia onde pré-preencher.
+Entra só quando o candidato está sem telefone, com a condição repetida no WHERE, e o que já está
+preenchido nunca é sobrescrito.
+
+### Quem pode vincular
+
+Opção A do diretor: a operação é reivindicada pelo menu `sala-espera`, e o botão do passo do vínculo
+só aparece para quem tem o menu. Quem não tem não vê, em vez de ver e tomar 403.
+
+### Gate
+
+1.037 testes verdes (14 novos: 5 do vínculo, 9 da trava de tipo de contrato), typecheck e lint
+limpos, backend e frontend rebuildados. Validado pelo diretor na plataforma.

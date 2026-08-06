@@ -12,6 +12,7 @@ import {
 } from "class-validator";
 import { BeneficioAlocadoDto, VagaFolhaInputDto } from "./create-admissao.dto";
 import { OBSERVACAO_LIBERACAO_MAX } from "./observacao-liberacao";
+import { TipoContratoCanonicoDto } from "./tipo-contrato.decorator";
 
 /**
  * Liberação Admissional EM LOTE: aplica os MESMOS valores a N pré-admissões selecionadas.
@@ -39,8 +40,8 @@ export class LiberarEmLoteDto {
   @IsUUID()
   cargoId!: string;
 
-  @IsOptional()
-  @IsString()
+  /** Trava de entrada (incidente de 06/08/2026): normaliza a grafia e recusa o que não existe. */
+  @TipoContratoCanonicoDto()
   tipoContrato?: string;
 
   @IsOptional()

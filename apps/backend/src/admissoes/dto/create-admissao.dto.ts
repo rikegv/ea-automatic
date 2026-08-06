@@ -16,6 +16,7 @@ import {
   ValidateNested,
 } from "class-validator";
 import { normalizarSalarioParaDto, parseValorBR } from "./valor-monetario-br";
+import { TipoContratoCanonicoDto } from "./tipo-contrato.decorator";
 
 /**
  * Mensagens de validação em LINGUAGEM DE GENTE (ajuste do diretor).
@@ -203,9 +204,8 @@ export class CreateAdmissaoDto {
   )
   dataAdmissao?: string;
 
-  @IsOptional()
-  @IsString()
-  @MaxLength(60)
+  /** Trava de entrada (incidente de 06/08/2026): normaliza a grafia e recusa o que não existe. */
+  @TipoContratoCanonicoDto()
   tipoContrato?: string;
 
   @IsOptional()

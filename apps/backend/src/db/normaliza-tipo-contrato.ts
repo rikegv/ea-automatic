@@ -1,7 +1,8 @@
 import "dotenv/config";
-import { eq, sql as drizzleSql } from "drizzle-orm";
+import { and, eq, inArray, sql as drizzleSql } from "drizzle-orm";
 import { createDb } from "./client";
 import { admissoes } from "./schema";
+import { canonicoDe } from "../domain/tipo-contrato";
 
 /**
  * NORMALIZA A GRAFIA DE `admissoes.tipo_contrato` (OST Onda 3, item 7, Bloco 1).
@@ -28,55 +29,28 @@ import { admissoes } from "./schema";
  */
 
 /**
- * A lista canônica é a MESMA do wizard (§A.22 W5): Temporário, Terceirizado, Estágio, Interno,
- * Fopag e Jovem Aprendiz. É a grafia que a tela oferece hoje, então normalizar para ela é fazer o
- * histórico falar a língua que o sistema já fala.
+ * O MAPA MORA EM `domain/tipo-contrato.ts` desde o incidente de 06/08/2026: o DTO da API precisa dele
+ * para validar a entrada e não pode importar este script, que abre conexão com o banco. Aqui ficam só
+ * os reexports, para os importadores existentes (e a linha de comando) seguirem funcionando iguais.
  */
-export const TIPOS_CANONICOS = [
-  "Temporário",
-  "Terceirizado",
-  "Estágio",
-  "Interno",
-  "Fopag",
-  "Jovem Aprendiz",
-] as const;
-export type TipoContratoCanonico = (typeof TIPOS_CANONICOS)[number];
-
-/**
- * De/para das grafias ENCONTRADAS na base. Só entram as inequívocas: a abreviação da carga e a forma
- * canônica que a tela já grava (esta última fica no mapa de propósito, para o script ser idempotente
- * e para o relatório mostrar o total real por tipo).
- *
- * FORA DO MAPA, deliberadamente:
- *  - `NULL` (57 admissões): não tem tipo, e inventar um seria pior que a ausência.
- *  - "ESTA. FOPAG" (5 admissões, todas concluídas): mistura DOIS conceitos (estágio e a folha Fopag)
- *    e só o diretor decide para qual dos dois vai.
- */
-export const MAPA_GRAFIAS: Record<string, TipoContratoCanonico> = {
-  "TEMP.": "Temporário",
-  Temporário: "Temporário",
-  "TERC.": "Terceirizado",
-  Terceirizado: "Terceirizado",
-  "ESTA.": "Estágio",
-  Estágio: "Estágio",
-  "INTER.": "Interno",
-  Interno: "Interno",
-  FOPAG: "Fopag",
-  Fopag: "Fopag",
-  "APREN.": "Jovem Aprendiz",
-  "Jovem Aprendiz": "Jovem Aprendiz",
-};
-
-/** A grafia tem destino canônico? `null` = fora do mapa, não converte. */
-export function canonicoDe(grafia: string | null): TipoContratoCanonico | null {
-  if (grafia === null) return null;
-  return MAPA_GRAFIAS[grafia] ?? null;
-}
+export {
+  TIPOS_CANONICOS,
+  MAPA_GRAFIAS,
+  canonicoDe,
+  type TipoContratoCanonico,
+} from "../domain/tipo-contrato";
 
 async function main(): Promise<void> {
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error("DATABASE_URL não definido (apps/backend/.env)");
   const aplicar = process.argv.includes("--aplicar");
+  /**
+   * `--vivas` restringe a escrita às admissões EM ANDAMENTO (EM_ADMISSAO/BANCO_AGUARDAR). Nasceu do
+   * incidente de 06/08/2026: o que trava operação é a admissão viva que ainda vai passar pela
+   * assinatura, e o diretor decidiu não reescrever o histórico junto. Sem a flag, o comportamento é
+   * o de sempre (a base inteira).
+   */
+  const soVivas = process.argv.includes("--vivas");
 
   const { sql, db } = createDb(url, 1);
   try {
@@ -100,7 +74,10 @@ async function main(): Promise<void> {
     const totalBase = linhas.reduce((s, l) => s + l.total, 0);
     const totalConvertidas = converte.reduce((s, l) => s + l.total, 0);
 
-    console.log(`\n[normaliza-tipo-contrato] MODO: ${aplicar ? "APLICAR" : "DRY-RUN (não escreve)"}`);
+    console.log(
+      `\n[normaliza-tipo-contrato] MODO: ${aplicar ? "APLICAR" : "DRY-RUN (não escreve)"}` +
+        `${soVivas ? " | RECORTE: só admissões VIVAS (EM_ADMISSAO/BANCO_AGUARDAR)" : ""}`,
+    );
     console.log(`[normaliza-tipo-contrato] admissões na base: ${totalBase}\n`);
 
     console.log("CONVERTE (grafia -> canônico):");
@@ -145,15 +122,24 @@ async function main(): Promise<void> {
     let escritas = 0;
     await db.transaction(async (tx) => {
       for (const l of converte) {
+        const alvo = soVivas
+          ? and(
+              eq(admissoes.tipoContrato, l.tipo as string),
+              inArray(admissoes.farolGlobal, ["EM_ADMISSAO", "BANCO_AGUARDAR"]),
+            )
+          : eq(admissoes.tipoContrato, l.tipo as string);
         const r = await tx
           .update(admissoes)
           .set({ tipoContrato: l.destino as string })
-          .where(eq(admissoes.tipoContrato, l.tipo as string));
-        escritas += l.total;
+          .where(alvo);
+        escritas += soVivas ? l.vivas : l.total;
         void r;
       }
     });
-    console.log(`\n[normaliza-tipo-contrato] APLICADO: ${escritas} admissões normalizadas.\n`);
+    console.log(
+      `\n[normaliza-tipo-contrato] APLICADO: ${escritas} admissões normalizadas` +
+        `${soVivas ? " (só as vivas; o histórico ficou como estava)" : ""}.\n`,
+    );
   } finally {
     await sql.end({ timeout: 5 });
   }

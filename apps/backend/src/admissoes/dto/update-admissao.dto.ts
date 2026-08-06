@@ -18,6 +18,7 @@ import {
   VagaFolhaInputDto,
   type SexoValor,
 } from "./create-admissao.dto";
+import { TipoContratoCanonicoDto } from "./tipo-contrato.decorator";
 
 /**
  * Edição dos dados PESSOAIS do candidato (OST-EA-GESTAO-USUARIOS, ajuste de escopo). Nome/e-mail/
@@ -76,9 +77,8 @@ export class UpdateAdmissaoDto {
   @Type(() => BeneficioAlocadoDto)
   pacoteBeneficios?: BeneficioAlocadoDto[];
 
-  @IsOptional()
-  @IsString()
-  @MaxLength(60)
+  /** Trava de entrada (incidente de 06/08/2026): normaliza a grafia e recusa o que não existe. */
+  @TipoContratoCanonicoDto()
   tipoContrato?: string;
 
   @IsOptional()

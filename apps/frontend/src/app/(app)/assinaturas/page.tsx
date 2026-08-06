@@ -152,7 +152,10 @@ function Assinantes({ dados }: { dados: RespAssinantes | undefined }) {
           {caixaAlta(a.nome)}
           {/* §A.24: o status dentro da tag é etiqueta, então vai em title case. */}
           <span className="font-normal opacity-80">
-            {a.assinou ? `Assinou ${formatarData(a.assinadoEm)}` : "Pendente"}
+            {/* HORA junto da data (decisão do diretor, incidente de 06/08/2026): saber o dia não
+                basta para conferir o que a Clicksign devolveu contra o que a plataforma gravou. O
+                dado já vinha completo do backend, só a tela mostrava menos do que sabia. */}
+            {a.assinou ? `Assinou ${formatarDataHoraCurta(a.assinadoEm)}` : "Pendente"}
           </span>
         </span>
       ))}
@@ -223,6 +226,20 @@ function formatarData(iso: string | null | undefined): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "não informado";
   return d.toLocaleDateString("pt-BR");
+}
+
+/**
+ * Data e hora COMPACTAS ("06/08/2026 14:57"), para o selo de quem assinou. Sem o "às" do tooltip: o
+ * selo fica dentro de uma pill ao lado do nome, e cada caractere ali disputa espaço com o próximo.
+ */
+function formatarDataHoraCurta(iso: string | null | undefined): string {
+  if (!iso) return "não informado";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "não informado";
+  return `${d.toLocaleDateString("pt-BR")} ${d.toLocaleTimeString("pt-BR", {
+    hour: "2-digit",
+    minute: "2-digit",
+  })}`;
 }
 
 /** Data e hora em pt-BR, para o tooltip de quem já assinou (o minuto ajuda a conferir a cobrança). */
