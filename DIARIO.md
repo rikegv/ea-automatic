@@ -8639,3 +8639,46 @@ Backend e frontend rebuildados e reiniciados, health 200. Prova visual em
 `~/ost-sala-farol-prints/`, `~/ost-sala-clique-prints/` e `~/ost-6ajustes-prints/`: grupo da Sala no
 card Farol nos dois temas, recorte por situação (AVL 2, Advogada II e Auxiliar de Loja), card da Sala
 clicado com anel e chip, Cadastro reagindo ao filtro, e as barras medidas nos dois temas.
+
+## 07/08/2026 — Pacote 1 gerencial, onda 4 (card Auditoria)
+
+**Commit `82f8a81`, pushado.** Os mesmos quatro arquivos da onda 3.
+
+**O card.** A frente de AUDITORIA entrou no painel entre Cadastro e Exame, que é a ordem do processo.
+Espelha o `segExame`: uma linha por status que EXISTE no recorte, rótulo de `frente_status_catalogo`,
+ordem por contagem, clique filtrando o painel inteiro. No acervo de hoje: Análise Finalizada 1.696,
+Declinou 834, Análise Pendente 14. "Aguardando Reenvio Dos Docs" não aparece porque está zerado, como
+qualquer linha sem dado desde a onda 3.
+
+**O join no `base()`, que era o risco real da onda.** Esta foi a primeira vez que o `base()` mudou
+depois de o painel estar validado, e ele alimenta as 8 consultas: um join que multiplicasse linha
+inflaria TODOS os números ao mesmo tempo e em silêncio. Três provas foram feitas, não herdadas:
+
+1. **Com e sem o join, no MESMO instante**, direto no banco: trabalhadas 2.554, ativos 1.513,
+   declínios 783, clientes distintos 213, cargos 293, aptos 1.679, cadastrados 1.573. Idêntico coluna
+   a coluna. O que garante é o unique `(admissao_id, tipo)`, e o `LEFT` mantém na conta as **10
+   admissões sem frente de auditoria**. O `codigo` do catálogo de AUDITORIA não repete, que era o
+   segundo caminho possível de multiplicação.
+2. **Resposta da API capturada da própria tela**, em três recortes, antes e depois do join.
+3. Testes travando a FORMA do join (LEFT, por tipo, apelido próprio) e que os joins antigos seguem
+   intactos.
+
+**Achado que vale para as próximas comparações:** um dos três recortes divergiu em +1 (trabalhadas
+2.553→2.554, Aguardando Liberação 7→8) e a causa NÃO era o join: uma admissão real entrou às
+14:31:44, entre as duas capturas. A base é VIVA e a operação usa o sistema durante a construção, então
+comparação antes/depois só vale se for no mesmo instante ou se a diferença for explicada no banco.
+
+**Largura (§A.20), decisão medida.** A 6a coluna apertaria a fileira: em partes iguais, Cliente e
+Cargo cairiam de 245px para 202px e o corte de nome subiria de 63 para 155 rótulos a 1600px. A
+fileira passou a repartir a largura (Cliente e Cargo com 258px, os quatro cards de status com o que o
+rótulo pede) e o rótulo dos cards de status passou a QUEBRAR em vez de cortar, a mesma regra que as
+linhas da Sala já seguiam dentro do card de Farol. Cliente e Cargo seguem truncando de propósito, com
+o nome inteiro no `title`: são 213 e 293 linhas, e quebrar dobraria a altura de metade da lista.
+Medido: 51 cortes a 1600px (antes 63), 100 a 1440 (antes 118), 200 a 1280 (antes 226), zero em nome
+de status ou título.
+
+### Gate
+
+1.094 testes no backend (111 arquivos) e 88 no frontend, typecheck e lint limpos. Backend e frontend
+rebuildados e reiniciados, health 200. Prova visual em `~/ost-onda4-auditoria-prints/`: painel a
+1600, 1440 e 1280, card de perto, painel filtrado por Análise Pendente e o outro tema.
