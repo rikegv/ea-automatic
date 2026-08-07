@@ -78,6 +78,21 @@ export interface FiltrosGerencial {
   sala?: boolean;
 }
 
+/**
+ * O CAMPO QUE UMA CONSULTA DEIXA DE FORA do próprio recorte ("nada filtra a si mesmo"). Cada card e
+ * cada gráfico passa o seu; `null` aplica tudo, que é o caso dos KPIs.
+ */
+type CampoDoRecorte =
+  | "dia"
+  | "mes"
+  | "cliente"
+  | "farol"
+  | "contrato"
+  | "auditoria"
+  | "exame"
+  | "cargo"
+  | null;
+
 export interface LinhaSegmento {
   chave: string;
   rotulo: string;
@@ -89,11 +104,59 @@ export class GerencialService {
   constructor(@Inject(DRIZZLE) private readonly db: Database) {}
 
   /**
-   * Condições do recorte. `exceto` deixa de fora o próprio eixo do gráfico que está sendo montado
-   * (ver "um gráfico não filtra a si mesmo").
+   * MULTI-SELEÇÃO (onda 5): a lista de valores de UM campo do recorte.
+   *
+   * A tela manda os escolhidos separados por vírgula, e a limpeza é feita aqui porque a lista é
+   * montada por concatenação: acrescentar e remover deixa vírgula sobrando, e um pedaço vazio viraria
+   * `coluna = ''`, que filtra por nada e some com o painel inteiro. Vazio depois da limpeza significa
+   * SEM FILTRO, não filtro por vazio.
    */
-  private condicoes(f: FiltrosGerencial, exceto: "dia" | "mes" | null = null): SQL[] {
+  private lista(valor?: string): string[] {
+    return (valor ?? "")
+      .split(",")
+      .map((v) => v.trim())
+      .filter(Boolean);
+  }
+
+  /**
+   * OR DENTRO DO CAMPO, que junto com o `and` do `onde()` fecha a regra do painel: dois clientes é
+   * "um ou o outro", cliente com cargo é "os dois ao mesmo tempo".
+   *
+   * ENTRE PARÊNTESES quando há mais de um: sem eles o `or` vazaria para fora e se ligaria ao `and`
+   * dos outros campos, que em SQL tem precedência maior, trazendo linha que o recorte não pediu. Com
+   * UM valor só devolve a igualdade crua, sem parêntese e sem `or`, para o SQL sair idêntico ao de
+   * antes desta onda (§A.26): é assim que a esmagadora maioria dos cliques do painel segue rodando.
+   *
+   * Sem `any()`/`in` com array de propósito, mantendo o que o farol já fazia: o parâmetro seguiria
+   * como texto e o Postgres cobraria o cast, enquanto um OR de igualdades usa o mesmo índice sem
+   * pedir nada em troca.
+   */
+  private ou(valores: string[], monta: (v: string) => SQL): SQL | null {
+    if (valores.length === 0) return null;
+    if (valores.length === 1) return monta(valores[0]);
+    return sql`(${valores.map(monta).reduce((acc, c) => sql`${acc} or ${c}`)})`;
+  }
+
+  /**
+   * Condições do recorte. `exceto` deixa de fora UM campo, o da própria consulta que está sendo
+   * montada, e é o que faz valer a regra "nada filtra a si mesmo": o gráfico de dias mostra os 31 com
+   * o dia escolhido em destaque, e o card de Cliente mostra os clientes com os escolhidos acesos.
+   *
+   * Sem isso o card encolhia para a linha clicada e não sobrava onde clicar para escolher a segunda,
+   * então a multi-seleção com Ctrl (onda 5) simplesmente não teria como acontecer dentro dos cards.
+   * Os KPIs e os gráficos seguem aplicando TUDO, inclusive o campo do card: o número do topo tem de
+   * contar exatamente o recorte, senão a tela se contradiz.
+   */
+  private condicoes(
+    f: FiltrosGerencial,
+    exceto: CampoDoRecorte = null,
+  ): SQL[] {
     const cond: SQL[] = [];
+    /** Acrescenta o recorte de um campo, já com a multi-seleção resolvida. */
+    const campo = (valor: string | undefined, monta: (v: string) => SQL) => {
+      const c = this.ou(this.lista(valor), monta);
+      if (c) cond.push(c);
+    };
     // RECORTE DA SALA (sub-status clicado): o lado das admissões sai INTEIRO, e é de propósito.
     //
     // Quem está na fila da Sala não tem admissão: `sala_espera` nasceu separada justamente porque
@@ -114,36 +177,43 @@ export class GerencialService {
     if (this.recorteDaSala(f)) cond.push(sql`false`);
     if (f.de) cond.push(sql`a.data_admissao >= ${f.de}::date`);
     if (f.ate) cond.push(sql`a.data_admissao <= ${f.ate}::date`);
-    if (f.codCliente) cond.push(sql`a.cod_cliente = ${f.codCliente}`);
-    // Um valor vira igualdade; vários viram um OR entre parênteses. Sem `any()` de propósito: o
-    // parâmetro seguiria como texto e o Postgres cobraria o cast do array, e um OR de igualdades usa
-    // o mesmo índice sem pedir nada em troca.
-    const farois = (f.farol ?? "")
-      .split(",")
-      .map((v) => v.trim())
-      .filter(Boolean);
-    if (farois.length > 0) {
-      const alternativas = farois
-        .map((v) => sql`a.farol_global::text = ${v}`)
-        .reduce((acc, c) => sql`${acc} or ${c}`);
-      cond.push(sql`(${alternativas})`);
+    if (exceto !== "cliente") campo(f.codCliente, (v) => sql`a.cod_cliente = ${v}`);
+    if (exceto !== "farol") campo(f.farol, (v) => sql`a.farol_global::text = ${v}`);
+    // CARD CADASTRO: a exceção da multi-seleção, e ela é do DOMÍNIO, não do código.
+    //
+    // Este card consolida DUAS TRILHAS PARALELAS em colunas diferentes: `CAD:` é a frente de Cadastro
+    // (`fc.status`) e `ASS:` é o estado do envelope na própria admissão (`clicksign_status`, INT-4).
+    // A mesma admissão pode estar nas duas ao mesmo tempo, e é isso que muda a regra.
+    //
+    // REGRA DO DIRETOR: OU dentro da trilha, E entre trilhas. Dentro da trilha os status são
+    // EXCLUSIVOS (ninguém está "a cadastrar" e "cadastrado"), então somar é o certo: A Cadastrar +
+    // Cadastrado = 1.681. Entre trilhas, somar não responderia nada, porque todo assinado já está
+    // cadastrado e a união devolveria 1.573, o mesmo número de só "Cadastrado"; cruzar responde a
+    // pergunta de operação: Cadastrado + Assinado = 1.520, e Cadastrado + Aguardando Assinatura = 0.
+    //
+    // O `and` entre as duas trilhas sai de graça: são duas condições separadas em `cond`, e o
+    // `onde()` já liga tudo por and. Item sem trilha continua sendo descartado, inclusive no meio de
+    // uma lista válida, que é o mesmo cuidado de antes com recorte malformado.
+    const porTrilha: Record<string, string[]> = { CAD: [], ASS: [] };
+    for (const item of this.lista(f.contrato)) {
+      const sep = item.indexOf(":");
+      if (sep < 0) continue;
+      const trilha = item.slice(0, sep);
+      const valor = item.slice(sep + 1);
+      if (valor && porTrilha[trilha]) porTrilha[trilha].push(valor);
     }
-    if (f.contrato) {
-      // `CAD:` lê a frente de Cadastro; `ASS:` lê o estado do envelope na admissão (INT-4).
-      const sep = f.contrato.indexOf(":");
-      const trilha = sep >= 0 ? f.contrato.slice(0, sep) : "";
-      const valor = sep >= 0 ? f.contrato.slice(sep + 1) : "";
-      if (trilha === "CAD" && valor) cond.push(sql`fc.status = ${valor}`);
-      if (trilha === "ASS" && valor) cond.push(sql`a.clicksign_status::text = ${valor}`);
+    if (exceto !== "contrato") {
+      campo(porTrilha.CAD.join(","), (v) => sql`fc.status = ${v}`);
+      campo(porTrilha.ASS.join(","), (v) => sql`a.clicksign_status::text = ${v}`);
     }
     // A SALA DE ESPERA NÃO RECORTA ESTE LADO, e a tentativa anterior mostrou por quê. O card da Sala
     // chegou a recortar as admissões por `cod_cliente in (quem tem gente na Sala)`, e o painel passou
     // a responder com as admissões CONCLUÍDAS daqueles clientes: dado verdadeiro, resposta errada,
     // porque quem clica na Sala quer ver a Sala, não a esteira dos mesmos clientes. A análise da Sala
     // agora vive onde ela é lida, nas linhas da tabela de Farol, e este lado segue intocado (§A.26).
-    if (f.exame) cond.push(sql`fe.status = ${f.exame}`);
-    if (f.auditoria) cond.push(sql`fa.status = ${f.auditoria}`);
-    if (f.cargoId) cond.push(sql`a.cargo_id = ${f.cargoId}`);
+    if (exceto !== "exame") campo(f.exame, (v) => sql`fe.status = ${v}`);
+    if (exceto !== "auditoria") campo(f.auditoria, (v) => sql`fa.status = ${v}`);
+    if (exceto !== "cargo") campo(f.cargoId, (v) => sql`a.cargo_id = ${v}`);
     if (f.dia && exceto !== "dia") {
       cond.push(sql`extract(day from a.data_admissao) = ${f.dia}`);
     }
@@ -155,7 +225,7 @@ export class GerencialService {
   }
 
   /** Monta o `WHERE` do recorte (sempre com pelo menos uma condição verdadeira, para simplificar). */
-  private onde(f: FiltrosGerencial, exceto: "dia" | "mes" | null = null): SQL {
+  private onde(f: FiltrosGerencial, exceto: CampoDoRecorte = null): SQL {
     const cond = this.condicoes(f, exceto);
     if (cond.length === 0) return sql`true`;
     return cond.reduce((acc, c) => sql`${acc} and ${c}`);
@@ -173,7 +243,7 @@ export class GerencialService {
    * saiu idêntica campo a campo. O que sustenta isso é o mesmo unique de sempre, e o LEFT garante
    * que admissão sem frente de auditoria continue na conta (9 do acervo não têm).
    */
-  private base(f: FiltrosGerencial, exceto: "dia" | "mes" | null = null): SQL {
+  private base(f: FiltrosGerencial, exceto: CampoDoRecorte = null): SQL {
     return sql`
       from admissoes a
       left join frentes_admissao fe on fe.admissao_id = a.id and fe.tipo = 'EXAME'
@@ -218,9 +288,16 @@ export class GerencialService {
    */
   private ondeSala(f: FiltrosGerencial): SQL {
     const cond: SQL[] = [];
-    if (f.codCliente) cond.push(sql`s.cod_cliente = ${f.codCliente}`);
-    if (f.cargoId) cond.push(sql`s.cargo_id = ${f.cargoId}`);
-    if (f.salaStatus) cond.push(sql`s.status_id = ${f.salaStatus}`);
+    // A multi-seleção vale aqui também, com as COLUNAS DA SALA: dois clientes escolhidos no painel
+    // recortam a fila da Sala pelos mesmos dois, senão o card e as linhas dela responderiam por um
+    // conjunto diferente do resto da tela.
+    for (const c of [
+      this.ou(this.lista(f.codCliente), (v) => sql`s.cod_cliente = ${v}`),
+      this.ou(this.lista(f.cargoId), (v) => sql`s.cargo_id = ${v}`),
+      this.ou(this.lista(f.salaStatus), (v) => sql`s.status_id = ${v}`),
+    ]) {
+      if (c) cond.push(c);
+    }
     if (cond.length === 0) return sql`true`;
     return cond.reduce((acc, c) => sql`${acc} and ${c}`);
   }
@@ -418,7 +495,7 @@ export class GerencialService {
       select a.cod_cliente as chave,
              coalesce(nullif(cl.nome_operacao, ''), cl.razao_social, a.cod_cliente) as rotulo,
              count(*)::int as total
-      ${this.base(f)} and a.cod_cliente is not null
+      ${this.base(f, "cliente")} and a.cod_cliente is not null
       group by 1, 2 order by 3 desc, 2
     `)) as unknown as LinhaSegmento[];
   }
@@ -426,7 +503,7 @@ export class GerencialService {
   private async segFarol(f: FiltrosGerencial): Promise<LinhaSegmento[]> {
     return (await this.db.execute(sql`
       select a.farol_global::text as chave, a.farol_global::text as rotulo, count(*)::int as total
-      ${this.base(f)}
+      ${this.base(f, "farol")}
       group by 1 order by 3 desc
     `)) as unknown as LinhaSegmento[];
   }
@@ -464,7 +541,7 @@ export class GerencialService {
         count(*) filter (where fc.status = 'CADASTRADO')::int as cadastrado,
         count(*) filter (where a.clicksign_status::text = 'AGUARDANDO_ASSINATURA')::int as aguardando,
         count(*) filter (where a.clicksign_status::text = 'ASSINADO')::int as assinado
-      ${this.base(f)}
+      ${this.base(f, "contrato")}
     `)) as unknown as Array<{
       a_cadastrar: number;
       cadastrado: number;
@@ -501,7 +578,7 @@ export class GerencialService {
       select fa.status as chave,
              coalesce(cata.rotulo, fa.status) as rotulo,
              count(*)::int as total
-      ${this.base(f)} and fa.status is not null
+      ${this.base(f, "auditoria")} and fa.status is not null
       group by 1, 2 order by 3 desc
     `)) as unknown as LinhaSegmento[];
   }
@@ -511,7 +588,7 @@ export class GerencialService {
       select fe.status as chave,
              coalesce(cat.rotulo, fe.status) as rotulo,
              count(*)::int as total
-      ${this.base(f)} and fe.status is not null
+      ${this.base(f, "exame")} and fe.status is not null
       group by 1, 2 order by 3 desc
     `)) as unknown as LinhaSegmento[];
   }
@@ -519,7 +596,7 @@ export class GerencialService {
   private async segCargo(f: FiltrosGerencial): Promise<LinhaSegmento[]> {
     return (await this.db.execute(sql`
       select a.cargo_id::text as chave, cg.nome as rotulo, count(*)::int as total
-      ${this.base(f)} and a.cargo_id is not null
+      ${this.base(f, "cargo")} and a.cargo_id is not null
       group by 1, 2 order by 3 desc, 2
     `)) as unknown as LinhaSegmento[];
   }

@@ -57,6 +57,13 @@ const dosKpis = (c: string[]) => c.find((q) => q.includes("as trabalhadas"))!;
  * não finge.
  */
 const dasAdmissoes = (c: string[]) => c.filter((q) => q.includes("from admissoes a"));
+/**
+ * As consultas de admissão MENOS a do próprio card, identificada pelo que ela projeta. Existe porque
+ * "um card não filtra a si mesmo" (onda 5): a consulta dele deixa de aplicar o próprio campo de
+ * propósito, e cobrá-la junto com as outras acusaria como falha o comportamento decidido.
+ */
+const dasAdmissoesFora = (c: string[], projecao: string) =>
+  dasAdmissoes(c).filter((q) => !q.includes(projecao));
 const daSala = (c: string[]) => c.filter((q) => q.includes("from sala_espera s"));
 
 describe("painel da diretoria: o recorte", () => {
@@ -70,7 +77,11 @@ describe("painel da diretoria: o recorte", () => {
     const { db, consultas } = fakeDb();
     await new GerencialService(db).painel({ codCliente: "0060" });
     expect(dasAdmissoes(consultas).length).toBeGreaterThanOrEqual(8);
-    for (const q of dasAdmissoes(consultas)) expect(q).toContain("a.cod_cliente =");
+    // Menos a consulta do próprio card de Cliente, que desde a onda 5 não se filtra: é o que deixa
+    // as outras opções na tela para o Ctrl escolher a segunda.
+    for (const q of dasAdmissoesFora(consultas, "a.cod_cliente as chave")) {
+      expect(q).toContain("a.cod_cliente =");
+    }
     // A Sala honra o MESMO cliente, com a coluna dela: o recorte vale para o painel inteiro, ainda
     // que a consulta seja outra.
     for (const q of daSala(consultas)) expect(q).toContain("s.cod_cliente =");
@@ -121,8 +132,10 @@ describe("painel da diretoria: o recorte", () => {
     const kpis = dosKpis(consultas);
     expect(kpis.match(/a\.farol_global::text =/g)).toHaveLength(2);
     expect(kpis).toContain("or");
-    // Vale para todas as consultas de admissões, não só para os KPIs.
-    for (const q of dasAdmissoes(consultas)) expect(q).toContain("a.farol_global::text =");
+    // Vale para as consultas de admissões, não só para os KPIs (menos a do próprio card de Farol).
+    for (const q of dasAdmissoesFora(consultas, "a.farol_global::text as rotulo")) {
+      expect(q).toContain("a.farol_global::text =");
+    }
   });
 
   it("farol com um valor só segue como igualdade simples (clique na linha da tabela)", async () => {
@@ -252,6 +265,224 @@ describe("painel da diretoria: card Contrato por status", () => {
 });
 
 /**
+ * MULTI-SELEÇÃO (onda 5): com Ctrl, o usuário escolhe mais de uma condição no MESMO card, e o painel
+ * recarrega com a seleção combinada.
+ *
+ * A regra que sustenta o painel inteiro: **OR DENTRO DO CAMPO, AND ENTRE CAMPOS**. Dois clientes é
+ * "um ou o outro" (somam); um cliente com um cargo é "os dois ao mesmo tempo" (cruzam). Errar isso
+ * não quebra a tela, o que é pior: dá número errado nas 8 consultas ao mesmo tempo e em silêncio,
+ * porque todas herdam do mesmo `condicoes()`.
+ *
+ * Estes testes foram escritos ANTES do código (§A.26), e o terceiro bloco é o mais importante: com
+ * UM valor só, o SQL tem de sair idêntico ao de hoje, porque é assim que 99% dos cliques do painel
+ * continuam funcionando.
+ */
+describe("painel da diretoria: multi-seleção no mesmo card", () => {
+  /** Quantas vezes uma coluna aparece na condição, que é como se enxerga o OR montado. */
+  const vezes = (q: string, coluna: string): number => q.match(new RegExp(coluna.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"))?.length ?? 0;
+
+  const CAMPOS = [
+    { nome: "cliente", filtro: { codCliente: "0060,0071" }, coluna: "a.cod_cliente =", projecao: "a.cod_cliente as chave" },
+    { nome: "cargo", filtro: { cargoId: "cargo-1,cargo-2" }, coluna: "a.cargo_id =", projecao: "a.cargo_id::text as chave" },
+    { nome: "exame", filtro: { exame: "APTO,AGENDADO" }, coluna: "fe.status =", projecao: "coalesce(cat.rotulo" },
+    { nome: "auditoria", filtro: { auditoria: "ANALISE_OK,ANALISE_PENDENTE" }, coluna: "fa.status =", projecao: "coalesce(cata.rotulo" },
+    { nome: "farol", filtro: { farol: "EM_ADMISSAO,DECLINOU" }, coluna: "a.farol_global::text =", projecao: "a.farol_global::text as rotulo" },
+  ];
+
+  for (const c of CAMPOS) {
+    it(`${c.nome}: dois valores viram um OR entre parênteses, nas consultas que aplicam o campo`, async () => {
+      const { db, consultas } = fakeDb();
+      await new GerencialService(db).painel(c.filtro);
+      const alcancadas = dasAdmissoesFora(consultas, c.projecao);
+      expect(alcancadas.length).toBeGreaterThanOrEqual(6);
+      for (const q of alcancadas) {
+        expect(vezes(q, c.coluna)).toBe(2);
+        expect(q).toContain("or");
+        // Entre parênteses, senão o OR vazaria para fora e ligaria com o AND dos outros campos,
+        // trazendo linha que o recorte não pediu.
+        expect(q).toMatch(/\(\s*[a-z]+\.[a-z_:]+.*or.*\)/);
+      }
+    });
+
+    it(`${c.nome}: UM valor só sai igual ao de hoje, sem OR`, async () => {
+      const { db, consultas } = fakeDb();
+      const [campo, valor] = Object.entries(c.filtro)[0] as [string, string];
+      await new GerencialService(db).painel({ [campo]: valor.split(",")[0] });
+      for (const q of dasAdmissoesFora(consultas, c.projecao)) expect(vezes(q, c.coluna)).toBe(1);
+    });
+  }
+
+  it("AND entre campos: a multi-seleção de um card não afrouxa o recorte do outro", async () => {
+    const { db, consultas } = fakeDb();
+    await new GerencialService(db).painel({
+      codCliente: "0060,0071",
+      cargoId: "cargo-1",
+      exame: "APTO,AGENDADO",
+    });
+    const kpis = dosKpis(consultas);
+    expect(vezes(kpis, "a.cod_cliente =")).toBe(2);
+    expect(vezes(kpis, "fe.status =")).toBe(2);
+    expect(vezes(kpis, "a.cargo_id =")).toBe(1);
+    // Três campos, três condições ligadas por and.
+    expect(vezes(kpis, " and ")).toBeGreaterThanOrEqual(2);
+  });
+
+  it("espaço e vírgula sobrando não viram condição vazia (a tela monta a lista concatenando)", async () => {
+    const { db, consultas } = fakeDb();
+    await new GerencialService(db).painel({ codCliente: " 0060 , ,0071, " });
+    expect(vezes(dosKpis(consultas), "a.cod_cliente =")).toBe(2);
+  });
+
+  it("lista só de lixo não filtra nada, em vez de filtrar por vazio", async () => {
+    const { db, consultas } = fakeDb();
+    await new GerencialService(db).painel({ codCliente: " , , " });
+    expect(dosKpis(consultas)).toContain("where true");
+  });
+
+  /**
+   * O CARD CADASTRO É A EXCEÇÃO, e ela é do domínio, não do código: ele consolida DUAS TRILHAS
+   * PARALELAS que vivem em colunas diferentes (a frente `CADASTRO_CONTRATO` e o `clicksign_status`
+   * da admissão), e a mesma admissão pode estar nas duas ao mesmo tempo.
+   *
+   * Regra do diretor: OU dentro da trilha, E entre trilhas. Duas linhas de Cadastro somam, como em
+   * qualquer card; uma de Cadastro com uma de Assinatura CRUZA, e responde "quem já cadastrei e
+   * ainda não assinou". Somar as trilhas devolveria um número que quase não muda (todo assinado já
+   * está cadastrado: 1.573 com ou sem a segunda escolha), ou seja, uma pergunta sem resposta.
+   */
+  describe("card Cadastro, as duas trilhas", () => {
+    it("duas linhas da MESMA trilha somam (OR dentro da trilha)", async () => {
+      const { db, consultas } = fakeDb();
+      await new GerencialService(db).painel({ contrato: "CAD:A_CADASTRAR,CAD:CADASTRADO" });
+      const kpis = dosKpis(consultas);
+      expect(vezes(kpis, "fc.status =")).toBe(2);
+      expect(kpis).toMatch(/\(\s*fc\.status = .*or.*fc\.status = .*\)/);
+      expect(kpis).not.toContain("clicksign_status");
+    });
+
+    it("duas linhas de ASSINATURA também somam entre si", async () => {
+      const { db, consultas } = fakeDb();
+      await new GerencialService(db).painel({
+        contrato: "ASS:AGUARDANDO_ASSINATURA,ASS:ASSINADO",
+      });
+      const kpis = dosKpis(consultas);
+      expect(vezes(kpis, "a.clicksign_status::text =")).toBe(2);
+      expect(kpis).not.toContain("fc.status =");
+    });
+
+    it("uma de cada trilha CRUZA: duas condições separadas, ligadas por and", async () => {
+      const { db, consultas } = fakeDb();
+      await new GerencialService(db).painel({ contrato: "CAD:CADASTRADO,ASS:ASSINADO" });
+      const kpis = dosKpis(consultas);
+      expect(vezes(kpis, "fc.status =")).toBe(1);
+      expect(vezes(kpis, "a.clicksign_status::text =")).toBe(1);
+      // O and é o que separa as trilhas; um OR aqui juntaria os dois conjuntos em vez de cruzá-los.
+      expect(kpis).toMatch(/fc\.status = .* and .*clicksign_status/);
+    });
+
+    it("duas de uma trilha com uma da outra: soma dentro, cruza fora", async () => {
+      const { db, consultas } = fakeDb();
+      await new GerencialService(db).painel({
+        contrato: "CAD:A_CADASTRAR,CAD:CADASTRADO,ASS:ASSINADO",
+      });
+      const kpis = dosKpis(consultas);
+      expect(vezes(kpis, "fc.status =")).toBe(2);
+      expect(vezes(kpis, "a.clicksign_status::text =")).toBe(1);
+      expect(kpis).toMatch(/\(\s*fc\.status = .*or.*\).* and .*clicksign_status/);
+    });
+
+    it("UM valor só segue idêntico ao de hoje, em cada trilha", async () => {
+      for (const [valor, coluna, ausente] of [
+        ["CAD:CADASTRADO", "fc.status =", "clicksign_status"],
+        ["ASS:ASSINADO", "a.clicksign_status::text =", "fc.status ="],
+      ] as const) {
+        const { db, consultas } = fakeDb();
+        await new GerencialService(db).painel({ contrato: valor });
+        expect(vezes(dosKpis(consultas), coluna)).toBe(1);
+        expect(dosKpis(consultas)).not.toContain(ausente);
+      }
+    });
+
+    it("valor sem trilha continua sem virar filtro, mesmo no meio de uma lista válida", async () => {
+      const { db, consultas } = fakeDb();
+      await new GerencialService(db).painel({ contrato: "CADASTRADO,CAD:CADASTRADO" });
+      const kpis = dosKpis(consultas);
+      expect(vezes(kpis, "fc.status =")).toBe(1);
+    });
+  });
+
+  /**
+   * UM CARD NÃO FILTRA A SI MESMO (decisão do diretor na onda 5), pela mesma razão que os dois
+   * GRÁFICOS já não filtravam desde o começo: se o card encolhesse para a linha escolhida, não
+   * sobraria onde clicar para escolher a segunda, e o Ctrl não teria como funcionar.
+   *
+   * A regra é cirúrgica: o card deixa de aplicar O PRÓPRIO campo e continua aplicando TODOS os
+   * outros. Os KPIs e os gráficos seguem aplicando tudo, inclusive o campo do card, senão o número do
+   * topo passaria a contar gente que o recorte excluiu.
+   */
+  describe("um card não filtra a si mesmo", () => {
+    const CARDS = [
+      { nome: "Cliente", acha: "a.cod_cliente as chave", proprio: "a.cod_cliente =", filtro: { codCliente: "0060" } },
+      { nome: "Farol", acha: "a.farol_global::text as rotulo", proprio: "a.farol_global::text =", filtro: { farol: "DECLINOU" } },
+      { nome: "Auditoria", acha: "coalesce(cata.rotulo", proprio: "fa.status =", filtro: { auditoria: "ANALISE_OK" } },
+      { nome: "Exame", acha: "coalesce(cat.rotulo", proprio: "fe.status =", filtro: { exame: "APTO" } },
+      { nome: "Cargo", acha: "a.cargo_id::text as chave", proprio: "a.cargo_id =", filtro: { cargoId: "cargo-1" } },
+      { nome: "Cadastro", acha: "as a_cadastrar", proprio: "fc.status =", filtro: { contrato: "CAD:CADASTRADO" } },
+    ];
+
+    for (const c of CARDS) {
+      it(`${c.nome}: a consulta dele ignora o próprio campo`, async () => {
+        // A comparação é contra a MESMA consulta SEM filtro, e não contra a ausência do texto: o card
+        // de Cadastro projeta `fc.status = 'A_CADASTRAR'` na própria contagem, então procurar o
+        // trecho acusaria uma condição que não existe.
+        const sem = fakeDb();
+        await new GerencialService(sem.db).painel({});
+        const com = fakeDb();
+        await new GerencialService(com.db).painel(c.filtro);
+        const cardSem = sem.consultas.find((q) => q.includes(c.acha))!;
+        const cardCom = com.consultas.find((q) => q.includes(c.acha))!;
+        expect(cardCom).toBeDefined();
+        expect(vezes(cardCom, c.proprio)).toBe(vezes(cardSem, c.proprio));
+        // Mas os KPIs continuam aplicando, senão o número do topo mentiria.
+        expect(vezes(dosKpis(com.consultas), c.proprio)).toBeGreaterThan(
+          vezes(dosKpis(sem.consultas), c.proprio),
+        );
+      });
+
+      it(`${c.nome}: e continua aplicando os filtros dos OUTROS campos`, async () => {
+        const { db, consultas } = fakeDb();
+        await new GerencialService(db).painel({ ...c.filtro, codCliente: "0060", cargoId: "cargo-9" });
+        const doCard = consultas.find((q) => q.includes(c.acha))!;
+        if (c.proprio !== "a.cod_cliente =") expect(doCard).toContain("a.cod_cliente =");
+        if (c.proprio !== "a.cargo_id =") expect(doCard).toContain("a.cargo_id =");
+      });
+    }
+
+    it("os gráficos seguem com a regra deles: não filtram o próprio eixo, filtram o resto", async () => {
+      const { db, consultas } = fakeDb();
+      await new GerencialService(db).painel({ dia: 12, mes: 3, codCliente: "0060" });
+      expect(doGraficoDeDias(consultas)).not.toContain("extract(day from a.data_admissao) =");
+      expect(doGraficoDeDias(consultas)).toContain("a.cod_cliente =");
+      expect(doGraficoDeMeses(consultas)).not.toContain("extract(month from a.data_admissao) =");
+    });
+
+    it("o recorte da Sala continua zerando TODAS as consultas de admissão, inclusive as dos cards", async () => {
+      const { db, consultas } = fakeDb();
+      await new GerencialService(db).painel({ sala: true });
+      for (const q of dasAdmissoes(consultas)) expect(q).toContain("false");
+    });
+  });
+
+  it("a multi-seleção NÃO vaza para as consultas da Sala, que têm coluna própria", async () => {
+    const { db, consultas } = fakeDb();
+    await new GerencialService(db).painel({ codCliente: "0060,0071" });
+    for (const q of daSala(consultas)) {
+      expect(vezes(q, "s.cod_cliente =")).toBe(2);
+      expect(q).not.toContain("a.cod_cliente");
+    }
+  });
+});
+
+/**
  * CARD AUDITORIA (onda 4), o único que precisou MEXER NO `base()` depois do painel validado.
  *
  * O risco desta onda não é o card, é o join: `base()` alimenta as 8 consultas, e um join que
@@ -303,7 +534,8 @@ describe("painel da diretoria: card Auditoria", () => {
   it("clicar numa linha filtra pela frente de AUDITORIA, e alcança o painel inteiro", async () => {
     const { db, consultas } = fakeDb();
     await new GerencialService(db).painel({ auditoria: "ANALISE_PENDENTE" });
-    for (const q of dasAdmissoes(consultas)) expect(q).toContain("fa.status =");
+    // Menos a consulta do próprio card, que não se filtra (onda 5).
+    for (const q of dasAdmissoesFora(consultas, "coalesce(cata.rotulo")) expect(q).toContain("fa.status =");
     // E não se confunde com a frente de Exame, que tem apelido próprio.
     expect(dosKpis(consultas)).not.toContain("fe.status =");
   });
@@ -520,8 +752,9 @@ describe("painel da diretoria: o sub-status da Sala clicado", () => {
   it("DESLIGADO, o SQL das admissões sai idêntico ao de antes (§A.26)", async () => {
     const { db, consultas } = fakeDb();
     await new GerencialService(db).painel({ codCliente: "0060" });
-    for (const q of dasAdmissoes(consultas)) {
-      expect(q).not.toContain("false");
+    for (const q of dasAdmissoes(consultas)) expect(q).not.toContain("false");
+    // O card de Cliente não se filtra (onda 5); todas as outras aplicam o cliente escolhido.
+    for (const q of dasAdmissoesFora(consultas, "a.cod_cliente as chave")) {
       expect(q).toContain("a.cod_cliente =");
     }
     // E as tabelas de cliente e cargo voltam a ser as das admissões.

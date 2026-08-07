@@ -15,14 +15,22 @@ import { cn } from "@/lib/cn";
  * CONTROLE GERENCIAL (OST do dashboard executivo + os 8 ajustes do diretor).
  *
  * UMA PÁGINA, SEM ROLAR. A altura é fechada em `calc(100vh - 68px)` (o respiro do AppShell) e
- * dividida em três faixas proporcionais: KPIs, cinco tabelas e dois gráficos. Quem rola é o CORPO de
- * cada tabela, nunca a página: é assim que 210 clientes e 284 cargos cabem numa tela só.
+ * dividida em três faixas proporcionais: KPIs, seis tabelas e dois gráficos. Quem rola é o CORPO de
+ * cada tabela, nunca a página: é assim que 213 clientes e 293 cargos cabem numa tela só.
  *
  * TUDO É FILTRO E TUDO SE RELACIONA (regra central do diretor). Clicar num CARD DE KPI, numa linha de
  * tabela ou numa coluna de gráfico acrescenta aquele recorte ao filtro, o painel inteiro é recarregado
  * e todos os números passam a falar do mesmo conjunto. Clicar de novo no mesmo item desfaz. Os filtros
  * combinam. O card "Admissões Trabalhadas" é o LIMPAR TUDO: ele representa o conjunto inteiro, então
  * clicar nele zera qualquer recorte (decisão do diretor).
+ *
+ * MULTI-SELEÇÃO COM CTRL (onda 5): com a tecla pressionada, o clique ACRESCENTA em vez de substituir,
+ * e o recorte do card vira a soma das escolhas. A regra que vale no painel inteiro é **OU dentro do
+ * campo, E entre campos**: dois clientes é "um ou o outro", cliente com cargo é "os dois ao mesmo
+ * tempo". A exceção é o card Cadastro, que consolida duas trilhas paralelas (cadastro e assinatura) e
+ * por isso soma dentro da trilha e CRUZA entre trilhas, decisão do diretor com o porquê registrado no
+ * `condicoes()` do backend. No filtro avançado a mesma multi-seleção aparece como etiquetas abaixo de
+ * cada campo.
  *
  * OS FILTROS DE FORMULÁRIO VIVEM NUM MODAL, aberto pelo ícone de filtro no canto superior direito
  * (`FiltroTrigger`, o mesmo componente da Esteira, do Gerenciador e das Não Conformidades). Os
@@ -163,12 +171,25 @@ const TOM_EXAME: Record<string, string> = {
 const MES_CURTO = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
 const fmt = (n: number) => n.toLocaleString("pt-BR");
 
-/** Quebra o filtro de farol (um valor ou vários) na lista de faróis que ele representa. */
-function listaFarol(valor?: string): string[] {
+/**
+ * Quebra um filtro de texto na LISTA de valores que ele representa (multi-seleção, onda 5). Um valor
+ * só continua sendo uma lista de um, então o resto do código não precisa saber a diferença.
+ */
+function lista(valor?: string): string[] {
   return (valor ?? "")
     .split(",")
     .map((v) => v.trim())
     .filter(Boolean);
+}
+
+/**
+ * O TEXTO DO CHIP quando há mais de um escolhido. Até dois, mostra os nomes: é o caso comum e ler
+ * "PETZ + MEIWA" vale mais que ler "2 selecionados". Daí para cima vira contagem, senão o chip cresce
+ * mais que a barra de filtros e empurra a tela (os nomes de cliente chegam a 61 caracteres).
+ */
+function textoDaSelecao(valores: string[], rotuloDe: (v: string) => string): string {
+  if (valores.length <= 2) return valores.map(rotuloDe).join(" + ");
+  return `${valores.length} selecionados`;
 }
 
 export default function ControleGerencialPage() {
@@ -199,18 +220,56 @@ export default function ControleGerencialPage() {
     void carregar();
   }, [carregar]);
 
-  /** Liga/desliga um filtro. Clicar no item já ativo desfaz, que é como se navega sem sair da tela. */
-  const alternar = useCallback((campo: keyof Filtros, valor: string | number | undefined) => {
-    setFiltros((atual) => {
-      const igual = atual[campo] === valor;
-      const novo = { ...atual };
-      if (igual || valor === undefined || valor === "") delete novo[campo];
-      else (novo as Record<string, unknown>)[campo] = valor;
-      // Mês e ano andam juntos: sem o ano, "março" seria março de qualquer ano.
-      if (campo === "mes" && (igual || valor === undefined)) delete novo.ano;
-      return novo;
-    });
-  }, []);
+  /**
+   * Liga e desliga um filtro. Clicar no item já ativo desfaz, que é como se navega sem sair da tela.
+   *
+   * COM `aditivo` (a tecla Ctrl, ou Cmd no Mac), o valor ACRESCENTA à seleção do mesmo campo em vez
+   * de substituir, e clicar de novo tira só ele. É a multi-seleção da onda 5: dois clientes, ou dois
+   * status, viram um recorte só, somado. Sem Ctrl o comportamento é o de sempre, e essa é a parte que
+   * não podia mudar: é assim que a esmagadora maioria dos cliques do painel continua funcionando.
+   *
+   * O `valor` pode trazer MAIS DE UM item já separado por vírgula, porque um card de KPI representa um
+   * conjunto de faróis ("Em Admissão" conta EM_ADMISSAO e BANCO_AGUARDAR). Aí o conjunto inteiro entra
+   * ou sai junto, senão o número do card e o do painel filtrado se contradiriam.
+   *
+   * `dia`, `mes` e `ano` ficam de fora da multi-seleção: são eixos de gráfico, valem número e o mês
+   * anda casado com o ano.
+   */
+  const alternar = useCallback(
+    (campo: keyof Filtros, valor: string | number | undefined, aditivo = false) => {
+      setFiltros((atual) => {
+        const novo = { ...atual };
+        if (campo === "dia" || campo === "mes" || campo === "ano") {
+          const igual = atual[campo] === valor;
+          if (igual || valor === undefined || valor === "") delete novo[campo];
+          else (novo as Record<string, unknown>)[campo] = valor;
+          // Mês e ano andam juntos: sem o ano, "março" seria março de qualquer ano.
+          if (campo === "mes" && (igual || valor === undefined)) delete novo.ano;
+          return novo;
+        }
+
+        const escolhidos = lista(String(valor ?? ""));
+        const atuais = lista(atual[campo] as string | undefined);
+        let final: string[];
+        if (escolhidos.length === 0) {
+          final = [];
+        } else if (aditivo) {
+          const jaDentro = escolhidos.every((v) => atuais.includes(v));
+          final = jaDentro
+            ? atuais.filter((v) => !escolhidos.includes(v))
+            : [...atuais, ...escolhidos.filter((v) => !atuais.includes(v))];
+        } else {
+          const igual =
+            atuais.length === escolhidos.length && escolhidos.every((v) => atuais.includes(v));
+          final = igual ? [] : escolhidos;
+        }
+        if (final.length === 0) delete novo[campo];
+        else (novo as Record<string, unknown>)[campo] = final.join(",");
+        return novo;
+      });
+    },
+    [],
+  );
 
   /**
    * Card da SALA: liga e desliga como os outros, mas o valor é booleano, então não passa pelo
@@ -231,7 +290,33 @@ export default function ControleGerencialPage() {
   const limparTudo = useCallback(() => setFiltros({}), []);
 
   const semFiltro = Object.keys(filtros).length === 0;
-  const faroisAtivos = useMemo(() => listaFarol(filtros.farol), [filtros.farol]);
+  /** A seleção ativa de cada card, já em lista: é o que o card acende e o que o chip resume. */
+  const sel = useMemo(
+    () => ({
+      cliente: lista(filtros.codCliente),
+      farol: lista(filtros.farol),
+      contrato: lista(filtros.contrato),
+      auditoria: lista(filtros.auditoria),
+      exame: lista(filtros.exame),
+      cargo: lista(filtros.cargoId),
+      salaStatus: lista(filtros.salaStatus),
+    }),
+    [filtros],
+  );
+
+  /**
+   * Um card de KPI está ACESO quando TODOS os faróis que ele conta estão no recorte. É por conjunto,
+   * não por igualdade de texto: "Em Admissão" conta dois faróis, e com a multi-seleção a lista pode
+   * trazer também os de outro card. Comparar o texto inteiro apagaria o card assim que um segundo
+   * card entrasse na soma, escondendo do diretor o que ele mesmo acabou de escolher.
+   */
+  const conjuntoAtivo = useCallback(
+    (valores: string) => {
+      const alvo = lista(valores);
+      return alvo.length > 0 && alvo.every((v) => sel.farol.includes(v));
+    },
+    [sel.farol],
+  );
 
   const filtrosAtivos = useMemo(() => {
     const itens: { campo: keyof Filtros; texto: string }[] = [];
@@ -242,49 +327,41 @@ export default function ControleGerencialPage() {
         texto: `Período ${filtros.de ?? "início"} a ${filtros.ate ?? "hoje"}`,
       });
     }
-    if (filtros.codCliente) {
-      // O chip é a leitura do FILTRO ativo, não a apresentação do dado: leva o código pelo mesmo
-      // motivo do seletor, senão o chip de dois clientes homônimos fica idêntico.
-      const r = s?.cliente.find((l) => l.chave === filtros.codCliente)?.rotulo;
-      itens.push({
-        campo: "codCliente",
-        texto: `Cliente: ${r ? `${filtros.codCliente} - ${r}` : filtros.codCliente}`,
-      });
-    }
-    if (faroisAtivos.length > 0) {
-      const r = faroisAtivos.map((f) => ROTULO_FAROL[f] ?? f).join(" + ");
-      itens.push({ campo: "farol", texto: `Farol: ${r}` });
-    }
-    if (filtros.contrato) {
-      const r = s?.contrato.find((l) => l.chave === filtros.contrato)?.rotulo ?? filtros.contrato;
-      // "Cadastro" no chip, para casar com o card e com o campo do filtro (decisão do diretor). O
-      // `campo` continua sendo `contrato`: é a chave técnica que o backend entende, e ela não muda.
-      itens.push({ campo: "contrato", texto: `Cadastro: ${r}` });
-    }
-    if (filtros.auditoria) {
-      const r = s?.auditoria.find((l) => l.chave === filtros.auditoria)?.rotulo ?? filtros.auditoria;
-      itens.push({ campo: "auditoria", texto: `Auditoria: ${r}` });
-    }
-    if (filtros.exame) {
-      const r = s?.exame.find((l) => l.chave === filtros.exame)?.rotulo ?? filtros.exame;
-      itens.push({ campo: "exame", texto: `Exame: ${r}` });
-    }
-    if (filtros.cargoId) {
-      const r = s?.cargo.find((l) => l.chave === filtros.cargoId)?.rotulo ?? "cargo";
-      itens.push({ campo: "cargoId", texto: `Cargo: ${r}` });
-    }
+    /** Um chip por CAMPO, resumindo a seleção inteira dele (um valor ou vários). */
+    const chip = (
+      campo: keyof Filtros,
+      titulo: string,
+      valores: string[],
+      rotuloDe: (v: string) => string,
+    ) => {
+      if (valores.length === 0) return;
+      itens.push({ campo, texto: `${titulo}: ${textoDaSelecao(valores, rotuloDe)}` });
+    };
+
+    // O chip do cliente é a leitura do FILTRO ativo, não a apresentação do dado: leva o código pelo
+    // mesmo motivo do seletor, senão o chip de dois clientes homônimos fica idêntico.
+    chip("codCliente", "Cliente", sel.cliente, (v) => {
+      const r = s?.cliente.find((l) => l.chave === v)?.rotulo;
+      return r ? `${v} - ${r}` : v;
+    });
+    chip("farol", "Farol", sel.farol, (v) => ROTULO_FAROL[v] ?? v);
+    // "Cadastro" no chip, para casar com o card e com o campo do filtro (decisão do diretor). O
+    // `campo` continua sendo `contrato`: é a chave técnica que o backend entende, e ela não muda.
+    chip("contrato", "Cadastro", sel.contrato, (v) => s?.contrato.find((l) => l.chave === v)?.rotulo ?? v);
+    chip("auditoria", "Auditoria", sel.auditoria, (v) => s?.auditoria.find((l) => l.chave === v)?.rotulo ?? v);
+    chip("exame", "Exame", sel.exame, (v) => s?.exame.find((l) => l.chave === v)?.rotulo ?? v);
+    chip("cargoId", "Cargo", sel.cargo, (v) => s?.cargo.find((l) => l.chave === v)?.rotulo ?? "cargo");
     if (filtros.sala) itens.push({ campo: "sala", texto: "Sala De Espera" });
-    if (filtros.salaStatus) {
-      // O rótulo do sub-status vem do próprio recorte: filtrado, o painel devolve só a linha dele.
-      const r = dados?.sala.subStatus.find((l) => l.chave === filtros.salaStatus)?.rotulo;
-      itens.push({ campo: "salaStatus", texto: `Sala: ${r ?? "situação"}` });
-    }
+    // O rótulo do sub-status vem do próprio recorte: filtrado, o painel devolve só as linhas dele.
+    chip("salaStatus", "Sala", sel.salaStatus, (v) => {
+      return dados?.sala.subStatus.find((l) => l.chave === v)?.rotulo ?? "situação";
+    });
     if (filtros.dia) itens.push({ campo: "dia", texto: `Dia ${filtros.dia}` });
     if (filtros.mes) {
       itens.push({ campo: "mes", texto: `${MES_CURTO[filtros.mes - 1]}${filtros.ano ? `/${filtros.ano}` : ""}` });
     }
     return itens;
-  }, [filtros, faroisAtivos, dados]);
+  }, [filtros, sel, dados]);
 
   /** Contagem do badge do ícone: só os filtros que MORAM no modal (o padrão das demais telas). */
   const filtrosModal =
@@ -329,8 +406,8 @@ export default function ControleGerencialPage() {
           </FiltroCampo>
           <FiltroCampo label="Cliente">
             <Select
-              value={filtros.codCliente ?? ""}
-              onChange={(v) => alternar("codCliente", v || undefined)}
+              value=""
+              onChange={(v) => alternar("codCliente", v || undefined, true)}
               placeholder="Todos"
               ariaLabel="Filtrar por cliente"
               menuFit
@@ -344,10 +421,15 @@ export default function ControleGerencialPage() {
               }))}
             />
           </FiltroCampo>
+          <Escolhidos
+            valores={sel.cliente}
+            rotuloDe={(v) => { const r = dados?.segmentos.cliente.find((l) => l.chave === v)?.rotulo; return r ? `${v} - ${r}` : v; }}
+            onRemover={(v) => alternar("codCliente", v, true)}
+          />
           <FiltroCampo label="Farol">
             <Select
-              value={filtros.farol ?? ""}
-              onChange={(v) => alternar("farol", v || undefined)}
+              value=""
+              onChange={(v) => alternar("farol", v || undefined, true)}
               placeholder="Todos"
               ariaLabel="Filtrar por farol"
               menuFit
@@ -358,22 +440,32 @@ export default function ControleGerencialPage() {
               }))}
             />
           </FiltroCampo>
+          <Escolhidos
+            valores={sel.farol}
+            rotuloDe={(v) => ROTULO_FAROL[v] ?? v}
+            onRemover={(v) => alternar("farol", v, true)}
+          />
           {/* "Cadastro" nos três lugares (card, filtro e chip), decisão do diretor. Só o rótulo
               visível muda; a chave do filtro segue `contrato`, que é o que o backend entende. */}
           <FiltroCampo label="Cadastro">
             <Select
-              value={filtros.contrato ?? ""}
-              onChange={(v) => alternar("contrato", v || undefined)}
+              value=""
+              onChange={(v) => alternar("contrato", v || undefined, true)}
               placeholder="Todos"
               ariaLabel="Filtrar por cadastro"
               menuFit
               options={(dados?.segmentos.contrato ?? []).map((l) => ({ value: l.chave, label: l.rotulo }))}
             />
           </FiltroCampo>
+          <Escolhidos
+            valores={sel.contrato}
+            rotuloDe={(v) => dados?.segmentos.contrato.find((l) => l.chave === v)?.rotulo ?? v}
+            onRemover={(v) => alternar("contrato", v, true)}
+          />
           <FiltroCampo label="Auditoria">
             <Select
-              value={filtros.auditoria ?? ""}
-              onChange={(v) => alternar("auditoria", v || undefined)}
+              value=""
+              onChange={(v) => alternar("auditoria", v || undefined, true)}
               placeholder="Todos"
               ariaLabel="Filtrar por auditoria"
               menuFit
@@ -384,10 +476,15 @@ export default function ControleGerencialPage() {
               }))}
             />
           </FiltroCampo>
+          <Escolhidos
+            valores={sel.auditoria}
+            rotuloDe={(v) => dados?.segmentos.auditoria.find((l) => l.chave === v)?.rotulo ?? v}
+            onRemover={(v) => alternar("auditoria", v, true)}
+          />
           <FiltroCampo label="Exame Admissional">
             <Select
-              value={filtros.exame ?? ""}
-              onChange={(v) => alternar("exame", v || undefined)}
+              value=""
+              onChange={(v) => alternar("exame", v || undefined, true)}
               placeholder="Todos"
               ariaLabel="Filtrar por exame"
               menuFit
@@ -398,16 +495,26 @@ export default function ControleGerencialPage() {
               }))}
             />
           </FiltroCampo>
+          <Escolhidos
+            valores={sel.exame}
+            rotuloDe={(v) => dados?.segmentos.exame.find((l) => l.chave === v)?.rotulo ?? v}
+            onRemover={(v) => alternar("exame", v, true)}
+          />
           <FiltroCampo label="Cargo">
             <Select
-              value={filtros.cargoId ?? ""}
-              onChange={(v) => alternar("cargoId", v || undefined)}
+              value=""
+              onChange={(v) => alternar("cargoId", v || undefined, true)}
               placeholder="Todos"
               ariaLabel="Filtrar por cargo"
               menuFit
               options={(dados?.segmentos.cargo ?? []).map((l) => ({ value: l.chave, label: l.rotulo }))}
             />
           </FiltroCampo>
+          <Escolhidos
+            valores={sel.cargo}
+            rotuloDe={(v) => dados?.segmentos.cargo.find((l) => l.chave === v)?.rotulo ?? v}
+            onRemover={(v) => alternar("cargoId", v, true)}
+          />
         </FiltroTrigger>
 
         <ThemeToggle />
@@ -473,8 +580,8 @@ export default function ControleGerencialPage() {
           valor={k?.aguardandoLiberacao}
           rotulo="Aguardando Liberação"
           tom="var(--warn)"
-          selecionado={filtros.farol === KPI_FAROL.aguardandoLiberacao}
-          onClick={() => alternar("farol", KPI_FAROL.aguardandoLiberacao)}
+          selecionado={conjuntoAtivo(KPI_FAROL.aguardandoLiberacao)}
+          onClick={(aditivo) => alternar("farol", KPI_FAROL.aguardandoLiberacao, aditivo)}
           dica="Filtrar as pré-admissões aguardando liberação"
         />
         <Kpi
@@ -482,8 +589,8 @@ export default function ControleGerencialPage() {
           valor={k?.emAdmissao}
           rotulo="Em Admissão"
           tom="var(--accent-vivid)"
-          selecionado={filtros.farol === KPI_FAROL.emAdmissao}
-          onClick={() => alternar("farol", KPI_FAROL.emAdmissao)}
+          selecionado={conjuntoAtivo(KPI_FAROL.emAdmissao)}
+          onClick={(aditivo) => alternar("farol", KPI_FAROL.emAdmissao, aditivo)}
           dica="Filtrar as admissões em andamento"
         />
         <Kpi
@@ -492,8 +599,8 @@ export default function ControleGerencialPage() {
           rotulo="Total De Ativos"
           tom="var(--ok)"
           destaque
-          selecionado={filtros.farol === KPI_FAROL.ativos}
-          onClick={() => alternar("farol", KPI_FAROL.ativos)}
+          selecionado={conjuntoAtivo(KPI_FAROL.ativos)}
+          onClick={(aditivo) => alternar("farol", KPI_FAROL.ativos, aditivo)}
           dica="Filtrar as admissões concluídas"
         />
         <Kpi
@@ -501,8 +608,8 @@ export default function ControleGerencialPage() {
           valor={k?.declinios}
           rotulo="Total De Declínios"
           tom="var(--danger)"
-          selecionado={filtros.farol === KPI_FAROL.declinios}
-          onClick={() => alternar("farol", KPI_FAROL.declinios)}
+          selecionado={conjuntoAtivo(KPI_FAROL.declinios)}
+          onClick={(aditivo) => alternar("farol", KPI_FAROL.declinios, aditivo)}
           // O card é CONSOLIDADO: soma o declínio do fluxo de admissão com o que morreu ainda na
           // Sala de Espera, sem separar a origem (decisão do diretor). O clique continua filtrando
           // o farol DECLINOU, que é a parte que o painel sabe recortar.
@@ -522,14 +629,14 @@ export default function ControleGerencialPage() {
         <Tabela
           titulo="Cliente"
           linhas={dados?.segmentos.cliente ?? []}
-          ativos={filtros.codCliente ? [filtros.codCliente] : []}
-          onClick={(c) => alternar("codCliente", c)}
+          ativos={sel.cliente}
+          onClick={(c, aditivo) => alternar("codCliente", c, aditivo)}
         />
         <Tabela
           titulo="Farol"
           linhas={(dados?.segmentos.farol ?? []).map((l) => ({ ...l, rotulo: ROTULO_FAROL[l.chave] ?? l.rotulo }))}
-          ativos={faroisAtivos}
-          onClick={(c) => alternar("farol", c)}
+          ativos={sel.farol}
+          onClick={(c, aditivo) => alternar("farol", c, aditivo)}
           tons={TOM_FAROL}
           quebraRotulo
           /* A SALA ENTRA AQUI, no mesmo card, e não num bloco à parte (decisão do diretor): a
@@ -543,8 +650,8 @@ export default function ControleGerencialPage() {
             titulo: "Sala De Espera",
             linhas: dados?.sala.subStatus ?? [],
             tom: TOM_SALA,
-            ativos: filtros.salaStatus ? [filtros.salaStatus] : [],
-            onClick: (c) => alternar("salaStatus", c),
+            ativos: sel.salaStatus,
+            onClick: (c, aditivo) => alternar("salaStatus", c, aditivo),
           }}
         />
         <Tabela
@@ -553,8 +660,8 @@ export default function ControleGerencialPage() {
              card mudou; a chave do filtro no backend continua sendo `contrato`. */
           titulo="Cadastro"
           linhas={dados?.segmentos.contrato ?? []}
-          ativos={filtros.contrato ? [filtros.contrato] : []}
-          onClick={(c) => alternar("contrato", c)}
+          ativos={sel.contrato}
+          onClick={(c, aditivo) => alternar("contrato", c, aditivo)}
           quebraRotulo
         />
         {/* AUDITORIA vem antes do Exame, a ordem do processo: as duas frentes nascem juntas (regra 1
@@ -564,24 +671,24 @@ export default function ControleGerencialPage() {
         <Tabela
           titulo="Auditoria"
           linhas={dados?.segmentos.auditoria ?? []}
-          ativos={filtros.auditoria ? [filtros.auditoria] : []}
-          onClick={(c) => alternar("auditoria", c)}
+          ativos={sel.auditoria}
+          onClick={(c, aditivo) => alternar("auditoria", c, aditivo)}
           tons={TOM_AUDITORIA}
           quebraRotulo
         />
         <Tabela
           titulo="Exame Admissional"
           linhas={dados?.segmentos.exame ?? []}
-          ativos={filtros.exame ? [filtros.exame] : []}
-          onClick={(c) => alternar("exame", c)}
+          ativos={sel.exame}
+          onClick={(c, aditivo) => alternar("exame", c, aditivo)}
           tons={TOM_EXAME}
           quebraRotulo
         />
         <Tabela
           titulo="Cargo"
           linhas={dados?.segmentos.cargo ?? []}
-          ativos={filtros.cargoId ? [filtros.cargoId] : []}
-          onClick={(c) => alternar("cargoId", c)}
+          ativos={sel.cargo}
+          onClick={(c, aditivo) => alternar("cargoId", c, aditivo)}
         />
       </div>
 
@@ -614,6 +721,45 @@ export default function ControleGerencialPage() {
           tabela de Farol, junto com os faróis de admissão (decisão do diretor). */}
 
       {carregando && !dados && <div className="text-[12.5px] text-dim">Carregando o painel…</div>}
+    </div>
+  );
+}
+
+/**
+ * O QUE JÁ FOI ESCOLHIDO num campo do filtro avançado, em etiquetas removíveis logo abaixo dele.
+ *
+ * É assim que o modal ganhou multi-seleção SEM TOCAR no `Select` do design system, que é de escolha
+ * única e serve a Esteira, o Gerenciador e as Não Conformidades (§A.26): escolher no seletor
+ * ACRESCENTA à lista, e cada etiqueta tira o seu. Por isso o seletor fica sempre em "Todos", ele
+ * virou a porta de entrada, e quem mostra o estado é esta linha.
+ *
+ * Fica FORA do `FiltroCampo` de propósito: aquele componente é um `<label>`, e botão dentro de label
+ * herda o clique para o controle, o que abriria o seletor a cada tentativa de remover.
+ */
+function Escolhidos({
+  valores,
+  rotuloDe,
+  onRemover,
+}: {
+  valores: string[];
+  rotuloDe: (v: string) => string;
+  onRemover: (v: string) => void;
+}) {
+  if (valores.length === 0) return null;
+  return (
+    <div className="-mt-1 flex flex-wrap gap-1">
+      {valores.map((v) => (
+        <button
+          key={v}
+          type="button"
+          onClick={() => onRemover(v)}
+          title="Remover da seleção"
+          className="flex max-w-full items-center gap-1 rounded-full border border-border bg-surface-2 px-2 py-0.5 text-[11px] text-dim transition hover:border-border-strong hover:text-text"
+        >
+          <span className="min-w-0 truncate">{rotuloDe(v)}</span>
+          <span className="text-[12px] leading-none text-faint">x</span>
+        </button>
+      ))}
     </div>
   );
 }
@@ -738,7 +884,7 @@ function Kpi({
   tom: string;
   destaque?: boolean;
   selecionado: boolean;
-  onClick: () => void;
+  onClick: (aditivo: boolean) => void;
   dica: string;
 }) {
   const anel = selecionado || destaque;
@@ -746,7 +892,7 @@ function Kpi({
     <GlassCard
       as="button"
       type="button"
-      onClick={onClick}
+      onClick={(e: { ctrlKey: boolean; metaKey: boolean }) => onClick(e.ctrlKey || e.metaKey)}
       title={dica}
       aria-pressed={selecionado}
       className={cn(
@@ -811,7 +957,7 @@ function Tabela({
   titulo: string;
   linhas: LinhaSegmento[];
   ativos: string[];
-  onClick: (chave: string) => void;
+  onClick: (chave: string, aditivo: boolean) => void;
   tons?: Record<string, string>;
   /**
    * Rótulo QUEBRA em vez de cortar, nos cards de STATUS (Farol, Cadastro, Auditoria, Exame).
@@ -830,11 +976,15 @@ function Tabela({
     linhas: LinhaSegmento[];
     tom: string;
     ativos: string[];
-    onClick: (chave: string) => void;
+    onClick: (chave: string, aditivo: boolean) => void;
   };
 }) {
   const maior = linhas[0]?.total ?? 1;
   const doGrupo = grupo?.linhas ?? [];
+  // Com seleção ativa, o card mostra a lista INTEIRA (ele não se filtra, onda 5) e apaga o que não
+  // foi escolhido. É a mesma leitura dos dois gráficos, que já faziam isso desde o começo: sem o
+  // contraste, ver "PETZ 615" ao lado de "MEIWA 201" não diria qual dos dois está no recorte.
+  const temSelecao = ativos.length > 0;
   return (
     <GlassCard className="flex min-h-0 flex-col !p-0">
       <div className="flex shrink-0 items-baseline justify-between border-b border-border px-3 py-2">
@@ -855,11 +1005,12 @@ function Tabela({
             <button
               key={l.chave}
               type="button"
-              onClick={() => onClick(l.chave)}
-              title={`${l.rotulo}: ${fmt(l.total)}`}
+              onClick={(e) => onClick(l.chave, e.ctrlKey || e.metaKey)}
+              title={`${l.rotulo}: ${fmt(l.total)}. Ctrl para somar com outra escolha deste card`}
               className={cn(
                 "relative block w-full border-b border-border px-3 py-1.5 text-left transition",
                 selecionado ? "bg-surface-2" : "hover:bg-surface-2",
+                temSelecao && !selecionado && "opacity-45 hover:opacity-90",
               )}
             >
               {/* Mini-barra que DISSOLVE no fim: proporção sem virar bloco de cor. */}
@@ -918,12 +1069,13 @@ function Tabela({
                 <button
                   key={l.chave}
                   type="button"
-                  onClick={() => grupo!.onClick(l.chave)}
+                  onClick={(e) => grupo!.onClick(l.chave, e.ctrlKey || e.metaKey)}
                   aria-pressed={selecionado}
-                  title={`${l.rotulo}: ${fmt(l.total)}. Clique para ver o cliente e o cargo de quem está nesta situação`}
+                  title={`${l.rotulo}: ${fmt(l.total)}. Clique para ver o cliente e o cargo de quem está nesta situação, Ctrl para somar outra`}
                   className={cn(
                     "flex w-full items-start gap-2 border-b border-border px-3 py-1.5 text-left transition",
                     selecionado ? "bg-surface-2" : "hover:bg-surface-2",
+                    grupo!.ativos.length > 0 && !selecionado && "opacity-45 hover:opacity-90",
                   )}
                 >
                   <span
