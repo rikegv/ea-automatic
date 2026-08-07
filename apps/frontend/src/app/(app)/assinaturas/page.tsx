@@ -15,6 +15,8 @@ import { Icon, type IconName } from "@/components/ui/Icon";
 import { Modal } from "@/components/ui/Modal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { GoogleDriveLogo } from "@/components/ui/GoogleDriveLogo";
+import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
+import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
 
 /** Uma linha da tela. Espelha `LinhaAssinatura` do backend (§A.6: sem CPF, sem id de envelope). */
 interface Linha {
@@ -23,6 +25,8 @@ interface Linha {
   cliente: string | null;
   cargo: string | null;
   tipoContrato: string | null;
+  /** Data de admissão (YYYY-MM-DD). Nulável: a admissão pode ainda não ter data (§A.3). */
+  dataAdmissao: string | null;
   clicksignStatus: ClicksignStatus;
   temEnvelope: boolean;
   enviadoEm: string | null;
@@ -229,6 +233,20 @@ function formatarData(iso: string | null | undefined): string {
 }
 
 /**
+ * Data de admissão, que é um `date` puro (YYYY-MM-DD) e NÃO um instante.
+ *
+ * Formata por PARTES de propósito, e não com `new Date()`: a string sem fuso é lida como meia-noite
+ * UTC, e no fuso do Brasil isso volta um dia atrás na tela. É o mesmo cuidado que a Esteira já toma
+ * em `fmtDataAdmissao`. O `formatarData` acima continua sendo o certo para os campos que SÃO
+ * instantes (envio do envelope, anexo do kit).
+ */
+function formatarDataAdmissao(d: string | null | undefined): string {
+  if (!d) return "não informado";
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(d);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : formatarData(d);
+}
+
+/**
  * Data e hora COMPACTAS ("06/08/2026 14:57"), para o selo de quem assinou. Sem o "às" do tooltip: o
  * selo fica dentro de uma pill ao lado do nome, e cada caractere ali disputa espaço com o próximo.
  */
@@ -374,7 +392,7 @@ export default function AssinaturasPage() {
     };
   }, [itens, loading, token]);
 
-  const visiveis = useMemo(() => {
+  const filtradas = useMemo(() => {
     const q = busca.trim().toLowerCase();
     if (!q) return itens;
     return itens.filter((i) =>
@@ -383,6 +401,21 @@ export default function AssinaturasPage() {
         .some((c) => String(c).toLowerCase().includes(q)),
     );
   }, [itens, busca]);
+
+  /**
+   * Ordenação clicável pelo NOME, reusando a peça que as demais tabelas já usam (`useOrdenacao` +
+   * `ColunaOrdenavel`). Client-side, que é honesto aqui: a tela carrega o conjunto inteiro da aba
+   * (teto de 500 no backend, sem paginação), diferente do Gerenciador, que é paginado no servidor e
+   * por isso ficou de fora da peça.
+   *
+   * Sem clique, a lista sai na ordem que o backend mandou (mais recente primeiro), intacta.
+   */
+  const colunasOrdenaveis = useMemo<ColOrd<Linha>[]>(
+    () => [{ chave: "candidato", tipo: "texto", valor: (l) => l.candidato }],
+    [],
+  );
+  const ord = useOrdenacao(colunasOrdenaveis, filtradas);
+  const visiveis = ord.itens;
 
   const naFila = aba === "aptos";
   const selecionaveis = useMemo(() => visiveis.filter((l) => !l.bloqueio), [visiveis]);
@@ -552,7 +585,9 @@ export default function AssinaturasPage() {
   }, [alvoCancelar, token, aba, carregar]);
 
   const ajuda = ABAS.find((a) => a.chave === aba)?.ajuda ?? "";
-  const colunas = naFila ? 7 : 7;
+  // 8 em cada composição depois da entrada da Data adm.: na fila entra a caixa de seleção e sai o
+  // Prazo; nas demais abas é o contrário. O número alimenta o `colSpan` das linhas de vazio.
+  const colunas = naFila ? 8 : 8;
 
   return (
     <>
@@ -638,7 +673,9 @@ export default function AssinaturasPage() {
 
       <GlassCard className="overflow-hidden p-2">
         <div className="ea-scroll overflow-x-auto">
-          <table className="ds-table min-w-[1120px]">
+          {/* A largura mínima subiu junto com a coluna nova: sem isso a tabela espremeria as
+              colunas de texto em vez de rolar na horizontal (§A.20). */}
+          <table className="ds-table min-w-[1240px]">
             <thead>
               <tr>
                 {naFila && (
@@ -652,15 +689,25 @@ export default function AssinaturasPage() {
                     />
                   </th>
                 )}
-                <th className={naFila ? "w-[19%]" : "w-[21%]"}>Candidato</th>
-                <th className={naFila ? "w-[13%]" : "w-[15%]"}>Cliente</th>
-                <th className={naFila ? "w-[12%]" : "w-[13%]"}>Cargo</th>
-                <th className={naFila ? "w-[10%]" : "w-[11%]"}>Contrato</th>
-                <th className={naFila ? "w-[24%]" : "w-[12%]"}>
+                {/* Larguras REBALANCEADAS com a entrada da Data adm.: as duas composições continuam
+                    fechando 100%, sem espremer coluna nenhuma (§A.20). */}
+                <ColunaOrdenavel
+                  as="th"
+                  ord={ord}
+                  chave="candidato"
+                  className={naFila ? "w-[18%]" : "w-[19%]"}
+                >
+                  Candidato
+                </ColunaOrdenavel>
+                <th className={naFila ? "w-[12%]" : "w-[14%]"}>Cliente</th>
+                <th className={naFila ? "w-[11%]" : "w-[12%]"}>Cargo</th>
+                <th className={naFila ? "w-[9%]" : "w-[10%]"}>Contrato</th>
+                <th className={naFila ? "w-[9%]" : "w-[9%]"}>Data adm.</th>
+                <th className={naFila ? "w-[21%]" : "w-[11%]"}>
                   {naFila ? "Situação" : "Assinatura"}
                 </th>
-                {!naFila && <th className="w-[10%]">Prazo</th>}
-                <th className="w-[18%]">Ações</th>
+                {!naFila && <th className="w-[9%]">Prazo</th>}
+                <th className="w-[16%]">Ações</th>
               </tr>
             </thead>
             <tbody>
@@ -704,6 +751,9 @@ export default function AssinaturasPage() {
                       <td className="text-dim">{l.cliente ?? "não informado"}</td>
                       <td className="text-dim">{l.cargo ?? "não informado"}</td>
                       <td className="text-dim">{l.tipoContrato ?? "não informado"}</td>
+                      <td className="text-dim tabular-nums">
+                        {formatarDataAdmissao(l.dataAdmissao)}
+                      </td>
 
                       {naFila ? (
                         <td className="text-[12.5px]">

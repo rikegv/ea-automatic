@@ -756,6 +756,9 @@ export default function EsteiraPage() {
           // agora vai para o seletor de status e para as ações.
           "minmax(130px,0.7fr)",
           COL.cargo,
+          // Data de admissão (bloco do candidato) e, na sequência, a data do AGENDAMENTO. Duas
+          // colunas de data lado a lado de propósito, com rótulos que as separam.
+          COL.data,
           COL.data,
           COL.horario,
           COL.tipoIntegracao,
@@ -785,7 +788,9 @@ export default function EsteiraPage() {
   const gridMin = isExame
     ? "min-w-[1840px]"
     : isIntegracao
-      ? "min-w-[1420px]"
+      ? // +110px com a entrada da Data adm.: o piso acompanha a coluna nova, senão a aba passaria a
+        // espremer em vez de rolar (§A.20).
+        "min-w-[1530px]"
       : "min-w-[1540px]";
 
   function toggleStatusKpi(code: string) {
@@ -1258,6 +1263,14 @@ export default function EsteiraPage() {
                 </ColunaOrdenavel>
                 {isIntegracao ? (
                   <>
+                    {/* DATA DE ADMISSÃO também aqui (decisão do diretor): a aba tem candidatos com a
+                        data preenchida, e ela estava só nas outras três. Fecha o bloco do candidato
+                        (Nome, Cliente, Cargo, Data adm.) antes das colunas do AGENDAMENTO, que são
+                        outra coisa: "Data adm." é a admissão, "Data" é o dia agendado. Reusa a mesma
+                        chave de ordenação `data` das demais abas, sem declarar coluna nova. */}
+                    <ColunaOrdenavel ord={ord} chave="data">
+                      Data adm.
+                    </ColunaOrdenavel>
                     <span>Data</span>
                     <span>Horário</span>
                     <span>Tipo</span>
@@ -1390,6 +1403,12 @@ export default function EsteiraPage() {
                       </div>
                       {isIntegracao ? (
                         <>
+                          {/* Data de admissão, pelo formatador POR PARTES: a coluna é um `date`
+                              (YYYY-MM-DD) e o `new Date()` a mostraria um dia atrás no fuso do
+                              Brasil. Vazio vira "não informado" (§A.11), igual às outras abas, e
+                              não o hífen do agendamento: aqui a falta do dado é pendência, não
+                              "ainda não agendado". */}
+                          <div className="meta text-center">{fmtDataAdmissao(item.dataAdmissao)}</div>
                           {/* Agendamento da integração. Vazio vira HÍFEN discreto (decisão do
                               diretor): o status da linha já diz que falta agendar, então repetir
                               "não informado" em três colunas seria ruído. */}

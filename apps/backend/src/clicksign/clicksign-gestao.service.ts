@@ -45,6 +45,12 @@ export interface LinhaAssinatura {
   cliente: string | null;
   cargo: string | null;
   tipoContrato: string | null;
+  /**
+   * Data de admissão (YYYY-MM-DD), a mesma coluna que a Esteira, o Gerenciador e as Não Conformidades
+   * já mostram. Nulável: a admissão nasce sem data e a de banco (§A.3) pode seguir sem ela, então a
+   * tela trata o vazio em vez de supor que sempre chega preenchida.
+   */
+  dataAdmissao: string | null;
   clicksignStatus: string;
   /** Só a existência do envelope; o id técnico não vai à tela (não acrescenta nada ao operador). */
   temEnvelope: boolean;
@@ -110,6 +116,7 @@ export class ClicksignGestaoService {
         cliente: clientes.nomeOperacao,
         cargo: cargos.nome,
         tipoContrato: admissoes.tipoContrato,
+        dataAdmissao: admissoes.dataAdmissao,
         clicksignStatus: admissoes.clicksignStatus,
         clicksignEnvelopeId: admissoes.clicksignEnvelopeId,
         enviadoEm: admissoes.clicksignEnviadoEm,
@@ -165,6 +172,7 @@ export class ClicksignGestaoService {
         cliente: clientes.nomeOperacao,
         cargo: cargos.nome,
         tipoContrato: admissoes.tipoContrato,
+        dataAdmissao: admissoes.dataAdmissao,
         clicksignStatus: admissoes.clicksignStatus,
         clicksignEnvelopeId: admissoes.clicksignEnvelopeId,
         enviadoEm: admissoes.clicksignEnviadoEm,
@@ -245,6 +253,7 @@ export class ClicksignGestaoService {
     cliente: string | null;
     cargo: string | null;
     tipoContrato: string | null;
+    dataAdmissao: string | null;
     clicksignStatus: string;
     clicksignEnvelopeId: string | null;
     enviadoEm: Date | null;
@@ -261,6 +270,7 @@ export class ClicksignGestaoService {
       cliente: r.cliente,
       cargo: r.cargo,
       tipoContrato: r.tipoContrato,
+      dataAdmissao: r.dataAdmissao,
       clicksignStatus: r.clicksignStatus,
       temEnvelope: Boolean(r.clicksignEnvelopeId),
       enviadoEm: r.enviadoEm ? new Date(r.enviadoEm).toISOString() : null,

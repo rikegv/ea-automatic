@@ -8556,3 +8556,44 @@ sem depender do servidor-ponte), e o Carlos entrou: CPF 332.\*\*\*.\*\*\*-06, fa
 1.064 testes no backend (15 novos: 9 da extração e 6 do sync, incluindo os dois que provam o caminho
 feliz intocado), typecheck e lint limpos, backend rebuildado e reiniciado, health em 200 e zero job
 falhado na fila.
+
+## 07/08/2026 — Pacote 1 gerencial, ondas 1 e 2
+
+**Onda 1, Gerenciador de Assinaturas.** A tela era a única com dados de candidato sem a **data de
+admissão**. O campo entrou nas duas consultas do `clicksign-gestao.service` (a das abas Gestão e
+Assinados e a da fila de disparo), no `paraLinha` e na `LinhaAssinatura`.
+
+Um detalhe que evitou bug silencioso: a data de admissão é um `date` puro (YYYY-MM-DD), e o
+`formatarData` que já existia no arquivo usa `new Date()`, que lê a string como meia-noite UTC e
+mostra **o dia anterior** no fuso do Brasil. Entrou um `formatarDataAdmissao` que formata por partes,
+o mesmo cuidado que a Esteira já tomava. O formatador antigo segue intacto para os campos que são
+instantes de verdade (envio do envelope, anexo do kit).
+
+A **ordenação clicável pelo nome** reusou `useOrdenacao` + `ColunaOrdenavel`, sem peça nova: uma
+coluna declarada e o `<th>` trocado. Client-side é honesto aqui porque a tela carrega o conjunto
+inteiro da aba (teto de 500, sem paginação), diferente do Gerenciador, que é paginado no servidor e
+por isso segue fora da peça.
+
+**Complemento, aba Integração da Esteira.** A data de admissão também faltava lá, e a aba tem
+candidatos com o campo preenchido. A coluna fecha o bloco do candidato (Nome, Cliente, Cargo, Data
+adm.) antes das colunas do AGENDAMENTO, que são outra coisa: "Data adm." é a admissão, "Data" é o dia
+agendado. Reusa a chave de ordenação `data` das demais abas, sem declarar coluna nova.
+
+**Onda 2, Controle Gerencial.** O card "Contrato" virou **"Cadastro"**, e com ele o campo do filtro e
+o chip do filtro ativo: os três dizem a mesma palavra. Só o rótulo visível mudou; a chave técnica do
+filtro continua `contrato`, que é o que o backend entende. **Nem o `base()` nem o `condicoes()` foram
+tocados**, e nenhuma das 8 consultas do painel mudou.
+
+**Larguras (§A.20).** As duas composições da tabela de Assinaturas continuam fechando 100% com a
+coluna a mais, e o piso subiu de 1120 para 1240; na Integração o piso subiu de 1420 para 1530. Nos
+dois casos a tabela ROLA na horizontal em vez de espremer.
+
+*Observação registrada, não é regressão desta entrega:* na Esteira o nome do candidato trunca com
+reticências (com o nome inteiro no `title`, por projeto) porque a soma dos mínimos da grade já
+superava o piso ANTES desta coluna (1.452px contra piso de 1.420). A coluna nova não criou o corte.
+
+### Gate
+
+1.064 testes no backend e 88 no frontend, typecheck e lint limpos, backend e frontend rebuildados e
+reiniciados, portas em 200. Prova visual em `~/ost-pacote1-ondas12-prints/` (13 capturas: data e
+ordenação em Assinaturas a 1600 e 1280, aba Integração a 1600 e 1440, card, filtro e chip do painel).

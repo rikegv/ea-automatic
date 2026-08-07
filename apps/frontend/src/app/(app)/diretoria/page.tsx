@@ -207,7 +207,9 @@ export default function ControleGerencialPage() {
     }
     if (filtros.contrato) {
       const r = s?.contrato.find((l) => l.chave === filtros.contrato)?.rotulo ?? filtros.contrato;
-      itens.push({ campo: "contrato", texto: `Contrato: ${r}` });
+      // "Cadastro" no chip, para casar com o card e com o campo do filtro (decisão do diretor). O
+      // `campo` continua sendo `contrato`: é a chave técnica que o backend entende, e ela não muda.
+      itens.push({ campo: "contrato", texto: `Cadastro: ${r}` });
     }
     if (filtros.exame) {
       const r = s?.exame.find((l) => l.chave === filtros.exame)?.rotulo ?? filtros.exame;
@@ -295,12 +297,14 @@ export default function ControleGerencialPage() {
               }))}
             />
           </FiltroCampo>
-          <FiltroCampo label="Contrato">
+          {/* "Cadastro" nos três lugares (card, filtro e chip), decisão do diretor. Só o rótulo
+              visível muda; a chave do filtro segue `contrato`, que é o que o backend entende. */}
+          <FiltroCampo label="Cadastro">
             <Select
               value={filtros.contrato ?? ""}
               onChange={(v) => alternar("contrato", v || undefined)}
               placeholder="Todos"
-              ariaLabel="Filtrar por contrato"
+              ariaLabel="Filtrar por cadastro"
               menuFit
               options={(dados?.segmentos.contrato ?? []).map((l) => ({ value: l.chave, label: l.rotulo }))}
             />
@@ -436,7 +440,10 @@ export default function ControleGerencialPage() {
           tons={TOM_FAROL}
         />
         <Tabela
-          titulo="Contrato"
+          /* "Cadastro" (decisão do diretor). O CONTEÚDO segue o mesmo: as quatro linhas continuam
+             consolidando a frente de Cadastro e a trilha de assinatura, como antes. Só o rótulo do
+             card mudou; a chave do filtro no backend continua sendo `contrato`. */
+          titulo="Cadastro"
           linhas={dados?.segmentos.contrato ?? []}
           ativos={filtros.contrato ? [filtros.contrato] : []}
           onClick={(c) => alternar("contrato", c)}
