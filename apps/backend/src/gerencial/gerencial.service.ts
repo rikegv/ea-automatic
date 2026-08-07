@@ -46,6 +46,12 @@ export interface FiltrosGerencial {
   contrato?: string;
   /** Status da frente EXAME (APTO, CANCELADO, A_AGENDAR, ASO_PENDENTE, AGENDADO). */
   exame?: string;
+  /**
+   * Status da frente AUDITORIA (ANALISE_PENDENTE, AGUARDA_REENVIO, ANALISE_OK, DECLINOU). A frente
+   * que diz se o documento da pessoa está EM ANÁLISE ou voltou para reenvio, que é o que o card novo
+   * responde.
+   */
+  auditoria?: string;
   cargoId?: string;
   /** Dia do mês (1..31), vindo do clique na coluna do gráfico. */
   dia?: number;
@@ -136,6 +142,7 @@ export class GerencialService {
     // porque quem clica na Sala quer ver a Sala, não a esteira dos mesmos clientes. A análise da Sala
     // agora vive onde ela é lida, nas linhas da tabela de Farol, e este lado segue intocado (§A.26).
     if (f.exame) cond.push(sql`fe.status = ${f.exame}`);
+    if (f.auditoria) cond.push(sql`fa.status = ${f.auditoria}`);
     if (f.cargoId) cond.push(sql`a.cargo_id = ${f.cargoId}`);
     if (f.dia && exceto !== "dia") {
       cond.push(sql`extract(day from a.data_admissao) = ${f.dia}`);
@@ -155,10 +162,16 @@ export class GerencialService {
   }
 
   /**
-   * A base do recorte. Os LEFT JOIN nas frentes de EXAME e de CADASTRO não multiplicam linha: existe
-   * no máximo uma frente por (admissão + tipo), garantido pelo unique `frentes_admissao_admissao_id_
-   * tipo_unique` e conferido no acervo (zero duplicidade). A contagem do painel continua sendo uma
-   * linha por admissão.
+   * A base do recorte. Os LEFT JOIN nas frentes de EXAME, CADASTRO e AUDITORIA não multiplicam
+   * linha: existe no máximo uma frente por (admissão + tipo), garantido pelo unique
+   * `frentes_admissao_admissao_id_tipo_unique` e conferido no acervo (zero duplicidade). A contagem
+   * do painel continua sendo uma linha por admissão.
+   *
+   * A AUDITORIA entrou por último e é a única das três que mexeu no `base()` depois de o painel já
+   * estar validado, então a prova foi feita de novo, não herdada: as 8 consultas foram capturadas da
+   * tela em três recortes (sem filtro, por farol e por cliente) antes e depois do join, e a resposta
+   * saiu idêntica campo a campo. O que sustenta isso é o mesmo unique de sempre, e o LEFT garante
+   * que admissão sem frente de auditoria continue na conta (9 do acervo não têm).
    */
   private base(f: FiltrosGerencial, exceto: "dia" | "mes" | null = null): SQL {
     return sql`
@@ -166,6 +179,8 @@ export class GerencialService {
       left join frentes_admissao fe on fe.admissao_id = a.id and fe.tipo = 'EXAME'
       left join frente_status_catalogo cat on cat.tipo = 'EXAME' and cat.codigo = fe.status
       left join frentes_admissao fc on fc.admissao_id = a.id and fc.tipo = 'CADASTRO_CONTRATO'
+      left join frentes_admissao fa on fa.admissao_id = a.id and fa.tipo = 'AUDITORIA'
+      left join frente_status_catalogo cata on cata.tipo = 'AUDITORIA' and cata.codigo = fa.status
       left join clientes cl on cl.cod_cliente = a.cod_cliente
       left join cargos cg on cg.id = a.cargo_id
       where ${this.onde(f, exceto)}
@@ -185,13 +200,15 @@ export class GerencialService {
    * admissões aptas; somar registros da Sala, que nunca tiveram exame, inflaria o card com gente que
    * o recorte excluiu.
    */
+  private salaRespondeAoRecorte(f: FiltrosGerencial): boolean {
+    return (
+      !f.de && !f.ate && !f.contrato && !f.exame && !f.auditoria && !f.dia && !f.mes
+    );
+  }
+
   /** O painel está recortado PELA SALA, seja pelo card (fila inteira) ou por uma situação dela. */
   private recorteDaSala(f: FiltrosGerencial): boolean {
     return Boolean(f.sala || f.salaStatus);
-  }
-
-  private salaRespondeAoRecorte(f: FiltrosGerencial): boolean {
-    return !f.de && !f.ate && !f.contrato && !f.exame && !f.dia && !f.mes;
   }
 
   /**
@@ -329,17 +346,19 @@ export class GerencialService {
    */
   async painel(f: FiltrosGerencial) {
     const recorteDaSala = this.recorteDaSala(f);
-    const [kpis, cliente, farol, contrato, exame, cargo, porDia, mesAMes, sala] = await Promise.all([
-      this.kpis(f),
-      recorteDaSala ? this.segClienteSala(f) : this.segCliente(f),
-      this.segFarol(f),
-      this.segContrato(f),
-      this.segExame(f),
-      recorteDaSala ? this.segCargoSala(f) : this.segCargo(f),
-      this.seriePorDia(f),
-      this.serieMesAMes(f),
-      this.salaEspera(f),
-    ]);
+    const [kpis, cliente, farol, contrato, auditoria, exame, cargo, porDia, mesAMes, sala] =
+      await Promise.all([
+        this.kpis(f),
+        recorteDaSala ? this.segClienteSala(f) : this.segCliente(f),
+        this.segFarol(f),
+        this.segContrato(f),
+        this.segAuditoria(f),
+        this.segExame(f),
+        recorteDaSala ? this.segCargoSala(f) : this.segCargo(f),
+        this.seriePorDia(f),
+        this.serieMesAMes(f),
+        this.salaEspera(f),
+      ]);
     return {
       // O card de declínios é CONSOLIDADO: declínio do fluxo de admissão mais declínio que morreu
       // ainda na Sala, sem separar a origem na tela. A soma acontece AQUI, na montagem da resposta,
@@ -347,7 +366,9 @@ export class GerencialService {
       // sete consultas do painel não sabem que a Sala existe (§A.26).
       kpis: { ...kpis, declinios: kpis.declinios + this.parcelaDeclinioSala(f, sala.declinios) },
       sala,
-      segmentos: { cliente, farol, contrato, exame, cargo },
+      // A AUDITORIA entra ANTES do Exame, que é a ordem do processo: as duas frentes nascem juntas
+      // (regra 1 do domínio), mas o documento é o que trava a esteira primeiro.
+      segmentos: { cliente, farol, contrato, auditoria, exame, cargo },
       series: { porDia, mesAMes },
       // O ano de referência do comparativo é resolvido pelo RELÓGIO, então em 2027 o painel passa a
       // comparar 2027 com 2026 sozinho, sem tocar em código (decisão do diretor).
@@ -462,6 +483,27 @@ export class GerencialService {
     ]
       .filter((linha) => linha.total > 0)
       .sort((a, b) => b.total - a.total);
+  }
+
+  /**
+   * AUDITORIA por status (onda 4). Espelha o card de Exame: uma linha por status que EXISTE no
+   * recorte, com o rótulo do catálogo `frente_status_catalogo` e ordem por contagem, maior primeiro.
+   *
+   * É este card que responde "quantas pessoas estão com documento em análise ou de volta para
+   * reenvio": são as linhas `ANALISE_PENDENTE` e `AGUARDA_REENVIO`. Status sem ninguém no recorte não
+   * vira linha, como em todos os outros cards, então "reenvio" só aparece quando existir alguém nele.
+   *
+   * O rótulo vem do CATÁLOGO, nunca de lista fixa: quem renomear o status na administração renomeia
+   * aqui junto, e uma lista no código nasceria desatualizada.
+   */
+  private async segAuditoria(f: FiltrosGerencial): Promise<LinhaSegmento[]> {
+    return (await this.db.execute(sql`
+      select fa.status as chave,
+             coalesce(cata.rotulo, fa.status) as rotulo,
+             count(*)::int as total
+      ${this.base(f)} and fa.status is not null
+      group by 1, 2 order by 3 desc
+    `)) as unknown as LinhaSegmento[];
   }
 
   private async segExame(f: FiltrosGerencial): Promise<LinhaSegmento[]> {

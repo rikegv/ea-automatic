@@ -60,6 +60,8 @@ interface Painel {
     cliente: LinhaSegmento[];
     farol: LinhaSegmento[];
     contrato: LinhaSegmento[];
+    /** Frente de AUDITORIA por status (onda 4): quem está com documento em análise ou em reenvio. */
+    auditoria: LinhaSegmento[];
     exame: LinhaSegmento[];
     cargo: LinhaSegmento[];
   };
@@ -79,6 +81,8 @@ interface Filtros {
   farol?: string;
   contrato?: string;
   exame?: string;
+  /** Status da frente de Auditoria (card novo da onda 4). */
+  auditoria?: string;
   cargoId?: string;
   dia?: number;
   mes?: number;
@@ -136,6 +140,17 @@ const TOM_FAROL: Record<string, string> = {
   BANCO_AGUARDAR: "var(--warn)",
   AGUARDANDO_LIBERACAO: "var(--warn)",
   LIBERACAO_RECUSADA: "var(--danger)",
+};
+/**
+ * Cor de cada status da AUDITORIA, na mesma semântica do resto do painel: verde é a análise
+ * fechada, amarelo é o que espera a fábrica (análise pendente), laranja é o que voltou para o
+ * candidato (reenvio, o mais caro de todos) e vermelho é o encerrado sem admissão.
+ */
+const TOM_AUDITORIA: Record<string, string> = {
+  ANALISE_OK: "var(--ok)",
+  ANALISE_PENDENTE: "var(--warn)",
+  AGUARDA_REENVIO: "var(--warn-2)",
+  DECLINOU: "var(--danger)",
 };
 const TOM_EXAME: Record<string, string> = {
   APTO: "var(--ok)",
@@ -246,6 +261,10 @@ export default function ControleGerencialPage() {
       // `campo` continua sendo `contrato`: é a chave técnica que o backend entende, e ela não muda.
       itens.push({ campo: "contrato", texto: `Cadastro: ${r}` });
     }
+    if (filtros.auditoria) {
+      const r = s?.auditoria.find((l) => l.chave === filtros.auditoria)?.rotulo ?? filtros.auditoria;
+      itens.push({ campo: "auditoria", texto: `Auditoria: ${r}` });
+    }
     if (filtros.exame) {
       const r = s?.exame.find((l) => l.chave === filtros.exame)?.rotulo ?? filtros.exame;
       itens.push({ campo: "exame", texto: `Exame: ${r}` });
@@ -273,6 +292,7 @@ export default function ControleGerencialPage() {
     (filtros.codCliente ? 1 : 0) +
     (filtros.farol ? 1 : 0) +
     (filtros.contrato ? 1 : 0) +
+    (filtros.auditoria ? 1 : 0) +
     (filtros.exame ? 1 : 0) +
     (filtros.cargoId ? 1 : 0);
 
@@ -348,6 +368,20 @@ export default function ControleGerencialPage() {
               ariaLabel="Filtrar por cadastro"
               menuFit
               options={(dados?.segmentos.contrato ?? []).map((l) => ({ value: l.chave, label: l.rotulo }))}
+            />
+          </FiltroCampo>
+          <FiltroCampo label="Auditoria">
+            <Select
+              value={filtros.auditoria ?? ""}
+              onChange={(v) => alternar("auditoria", v || undefined)}
+              placeholder="Todos"
+              ariaLabel="Filtrar por auditoria"
+              menuFit
+              options={(dados?.segmentos.auditoria ?? []).map((l) => ({
+                value: l.chave,
+                label: l.rotulo,
+                color: TOM_AUDITORIA[l.chave],
+              }))}
             />
           </FiltroCampo>
           <FiltroCampo label="Exame Admissional">
@@ -476,8 +510,15 @@ export default function ControleGerencialPage() {
         />
       </div>
 
-      {/* ── FAIXA 2: as cinco segmentações ───────────────────────────────────── */}
-      <div className="grid min-h-0 flex-[1.15] grid-cols-5 gap-3">
+      {/* ── FAIXA 2: as seis segmentações ────────────────────────────────────────────────────────
+          LARGURA REPARTIDA, não igual (§A.20), e a razão é medida. Os seis cards dividem ~1.212px
+          na tela de 1600: em partes iguais dá 202px para cada um, e as duas listas de NOME (Cliente
+          e Cargo, com razão social e cargo longos) passariam a cortar 155 rótulos, contra 63 antes
+          do card novo. Os quatro cards de STATUS não precisam da mesma largura: o rótulo mais longo
+          deles tem 27 caracteres, enquanto "PROPARTS COMERCIO DE ARTIGOS ESPORTIVOS E TECNOLOGIA
+          EIRELI" tem 61. Dando o excedente a Cliente e Cargo (258px cada, MAIS que os 245px de
+          antes), o corte cai para 54, ou seja, menos que antes de a onda existir. */}
+      <div className="grid min-h-0 flex-[1.15] grid-cols-[minmax(0,1.35fr)_minmax(0,1.1fr)_minmax(0,0.85fr)_minmax(0,0.85fr)_minmax(0,0.85fr)_minmax(0,1.35fr)] gap-3">
         <Tabela
           titulo="Cliente"
           linhas={dados?.segmentos.cliente ?? []}
@@ -490,6 +531,7 @@ export default function ControleGerencialPage() {
           ativos={faroisAtivos}
           onClick={(c) => alternar("farol", c)}
           tons={TOM_FAROL}
+          quebraRotulo
           /* A SALA ENTRA AQUI, no mesmo card, e não num bloco à parte (decisão do diretor): a
              análise de status do painel fica concentrada num lugar só. As linhas vêm rotuladas
              como grupo próprio porque são de OUTRA natureza: não são farol de admissão, e
@@ -513,6 +555,19 @@ export default function ControleGerencialPage() {
           linhas={dados?.segmentos.contrato ?? []}
           ativos={filtros.contrato ? [filtros.contrato] : []}
           onClick={(c) => alternar("contrato", c)}
+          quebraRotulo
+        />
+        {/* AUDITORIA vem antes do Exame, a ordem do processo: as duas frentes nascem juntas (regra 1
+            do domínio), mas é o documento que trava a esteira primeiro. As linhas que interessam ao
+            diretor são "Análise Pendente" e "Aguardando Reenvio Dos Docs", que é quem está com
+            documento em análise ou de volta com o candidato. */}
+        <Tabela
+          titulo="Auditoria"
+          linhas={dados?.segmentos.auditoria ?? []}
+          ativos={filtros.auditoria ? [filtros.auditoria] : []}
+          onClick={(c) => alternar("auditoria", c)}
+          tons={TOM_AUDITORIA}
+          quebraRotulo
         />
         <Tabela
           titulo="Exame Admissional"
@@ -520,6 +575,7 @@ export default function ControleGerencialPage() {
           ativos={filtros.exame ? [filtros.exame] : []}
           onClick={(c) => alternar("exame", c)}
           tons={TOM_EXAME}
+          quebraRotulo
         />
         <Tabela
           titulo="Cargo"
@@ -749,6 +805,7 @@ function Tabela({
   ativos,
   onClick,
   tons,
+  quebraRotulo,
   grupo,
 }: {
   titulo: string;
@@ -756,6 +813,18 @@ function Tabela({
   ativos: string[];
   onClick: (chave: string) => void;
   tons?: Record<string, string>;
+  /**
+   * Rótulo QUEBRA em vez de cortar, nos cards de STATUS (Farol, Cadastro, Auditoria, Exame).
+   *
+   * Eles têm poucas linhas e um vocabulário fechado, e o nome do status é a informação: ler
+   * "Aguardando Assinat..." é perder justamente o que diferencia a linha. É a mesma regra que as
+   * linhas da Sala já seguem dentro do card de Farol, então não é peça nova, é a existente aplicada
+   * onde ela vale.
+   *
+   * Cliente e Cargo seguem TRUNCANDO, de propósito: são 213 e 293 linhas de nome comprido, e quebrar
+   * ali dobraria a altura de metade da lista. Lá o nome inteiro vive no `title`.
+   */
+  quebraRotulo?: boolean;
   grupo?: {
     titulo: string;
     linhas: LinhaSegmento[];
@@ -802,15 +871,19 @@ function Tabela({
                   background: `linear-gradient(90deg, color-mix(in srgb, ${cor} 24%, transparent), transparent)`,
                 }}
               />
-              <span className="flex items-center gap-2">
+              <span className={cn("flex gap-2", quebraRotulo ? "items-start" : "items-center")}>
                 <span
-                  className="h-1.5 w-1.5 shrink-0 rounded-full"
+                  className={cn(
+                    "h-1.5 w-1.5 shrink-0 rounded-full",
+                    quebraRotulo && "mt-[5px]",
+                  )}
                   style={{ background: cor }}
                   aria-hidden
                 />
                 <span
                   className={cn(
-                    "min-w-0 flex-1 truncate text-[12px]",
+                    "min-w-0 flex-1 text-[12px]",
+                    quebraRotulo ? "leading-tight" : "truncate",
                     selecionado ? "font-semibold text-text" : "text-dim",
                   )}
                 >

@@ -252,6 +252,78 @@ describe("painel da diretoria: card Contrato por status", () => {
 });
 
 /**
+ * CARD AUDITORIA (onda 4), o único que precisou MEXER NO `base()` depois do painel validado.
+ *
+ * O risco desta onda não é o card, é o join: `base()` alimenta as 8 consultas, e um join que
+ * multiplicasse linha inflaria TODOS os números de uma vez, calado. O que impede é o mesmo unique
+ * `(admissao_id, tipo)` que já sustenta EXAME e CADASTRO, e o `LEFT`, que mantém na conta a admissão
+ * sem frente de auditoria. Os testes abaixo travam a FORMA do join; a prova de que nenhum número
+ * mudou foi feita comparando a resposta da API em três recortes, antes e depois (ver DIARIO).
+ */
+describe("painel da diretoria: card Auditoria", () => {
+  it("o join é LEFT, por tipo e com apelido próprio (não multiplica linha nem perde admissão)", async () => {
+    const { db, consultas } = fakeDb();
+    await new GerencialService(db).painel({});
+    for (const q of dasAdmissoes(consultas)) {
+      expect(q).toContain("left join frentes_admissao fa on fa.admissao_id = a.id and fa.tipo = 'AUDITORIA'");
+      expect(q).toContain(
+        "left join frente_status_catalogo cata on cata.tipo = 'AUDITORIA' and cata.codigo = fa.status",
+      );
+    }
+  });
+
+  it("os joins que já existiam seguem intactos, com os mesmos apelidos", async () => {
+    const { db, consultas } = fakeDb();
+    await new GerencialService(db).painel({});
+    const kpis = dosKpis(consultas);
+    expect(kpis).toContain("left join frentes_admissao fe on fe.admissao_id = a.id and fe.tipo = 'EXAME'");
+    expect(kpis).toContain(
+      "left join frentes_admissao fc on fc.admissao_id = a.id and fc.tipo = 'CADASTRO_CONTRATO'",
+    );
+    expect(kpis).toContain("left join clientes cl on cl.cod_cliente = a.cod_cliente");
+    expect(kpis).toContain("left join cargos cg on cg.id = a.cargo_id");
+  });
+
+  it("SEM filtro de auditoria, o recorte segue vazio: o join novo não filtra sozinho", async () => {
+    const { db, consultas } = fakeDb();
+    await new GerencialService(db).painel({});
+    expect(dosKpis(consultas)).toContain("where true");
+    expect(dosKpis(consultas)).not.toContain("fa.status =");
+  });
+
+  it("o card lê o status da frente e o rótulo do CATÁLOGO, ordenando por contagem", async () => {
+    const { db, consultas } = fakeDb();
+    await new GerencialService(db).painel({});
+    const card = consultas.find((q) => q.includes("coalesce(cata.rotulo"))!;
+    expect(card).toContain("fa.status as chave");
+    expect(card).toContain("and fa.status is not null");
+    expect(card).toContain("order by 3 desc");
+  });
+
+  it("clicar numa linha filtra pela frente de AUDITORIA, e alcança o painel inteiro", async () => {
+    const { db, consultas } = fakeDb();
+    await new GerencialService(db).painel({ auditoria: "ANALISE_PENDENTE" });
+    for (const q of dasAdmissoes(consultas)) expect(q).toContain("fa.status =");
+    // E não se confunde com a frente de Exame, que tem apelido próprio.
+    expect(dosKpis(consultas)).not.toContain("fe.status =");
+  });
+
+  it("COMBINA com os demais filtros, como qualquer outro card", async () => {
+    const { db, consultas } = fakeDb();
+    await new GerencialService(db).painel({ auditoria: "AGUARDA_REENVIO", codCliente: "0060" });
+    const kpis = dosKpis(consultas);
+    expect(kpis).toContain("fa.status =");
+    expect(kpis).toContain("a.cod_cliente =");
+  });
+
+  it("a Sala sai da conta quando o recorte é de auditoria, que ela não sabe responder", async () => {
+    const { db, consultas } = fakeDb();
+    await new GerencialService(db).painel({ auditoria: "ANALISE_PENDENTE" });
+    expect(daSala(consultas)).toHaveLength(0);
+  });
+});
+
+/**
  * A SALA DE ESPERA NO PAINEL (onda 3). Três regras sustentam esta parte:
  *
  * 1. É CONSULTA PARALELA: lê `sala_espera`, nunca entra no `base()` (que parte de `admissoes`). O
