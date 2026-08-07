@@ -26,6 +26,8 @@ export class GerencialController {
     @Query("dia") dia?: string,
     @Query("mes") mes?: string,
     @Query("ano") ano?: string,
+    @Query("salaStatus") salaStatus?: string,
+    @Query("sala") sala?: string,
   ) {
     const numero = (v?: string) => {
       const n = Number(v);
@@ -42,6 +44,12 @@ export class GerencialController {
       dia: numero(dia),
       mes: numero(mes),
       ano: numero(ano),
+      // Sub-status da Sala clicado (id do catálogo). Vai como parâmetro para o Postgres, nunca
+      // concatenado no SQL; id inexistente simplesmente não casa e o painel volta vazio.
+      salaStatus: salaStatus || undefined,
+      // Card da Sala clicado. Aceita "1" e "true": a tela serializa o booleano do estado com
+      // `String(v)`.
+      sala: sala === "1" || sala === "true" ? true : undefined,
     };
     return this.gerencial.painel(filtros);
   }

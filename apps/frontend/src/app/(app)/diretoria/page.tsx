@@ -45,6 +45,17 @@ interface Painel {
     ativos: number;
     declinios: number;
   };
+  /**
+   * SALA DE ESPERA (onda 3), consulta paralela: a Sala é tabela à parte de `admissoes`, então vem
+   * fora de `segmentos`. `subStatus` é a fila viva por situação, do MESMO recorte, e é o que a tela
+   * lista como linhas dentro da tabela de Farol.
+   */
+  sala: {
+    pendentes: number;
+    emAdmissao: number;
+    declinios: number;
+    subStatus: LinhaSegmento[];
+  };
   segmentos: {
     cliente: LinhaSegmento[];
     farol: LinhaSegmento[];
@@ -72,6 +83,14 @@ interface Filtros {
   dia?: number;
   mes?: number;
   ano?: number;
+  /**
+   * Sub-status da Sala clicado (id do catálogo), vindo das linhas da Sala dentro da tabela de Farol.
+   * É um recorte da SALA: o painel passa a mostrar quem está naquele status, por cliente e por cargo,
+   * e as tabelas que só as admissões respondem ficam sem dados.
+   */
+  salaStatus?: string;
+  /** Card da Sala clicado: o mesmo recorte, da fila inteira, sem escolher situação. */
+  sala?: boolean;
 }
 
 /** Rótulo de tela de cada farol. Os VALORES são os do enum do sistema, sem invenção. */
@@ -178,6 +197,22 @@ export default function ControleGerencialPage() {
     });
   }, []);
 
+  /**
+   * Card da SALA: liga e desliga como os outros, mas o valor é booleano, então não passa pelo
+   * `alternar` (que compara valor de texto). Clicar recorta o painel pela Sala inteira; a situação
+   * escolhida, se houver, sai junto: escolher a fila toda e uma situação dela ao mesmo tempo é uma
+   * contradição, e o chip da situação ficaria mandando no recorte que o card diz ser da fila inteira.
+   */
+  const alternarSala = useCallback(() => {
+    setFiltros((atual) => {
+      const novo = { ...atual };
+      delete novo.salaStatus;
+      if (atual.sala) delete novo.sala;
+      else novo.sala = true;
+      return novo;
+    });
+  }, []);
+
   const limparTudo = useCallback(() => setFiltros({}), []);
 
   const semFiltro = Object.keys(filtros).length === 0;
@@ -218,6 +253,12 @@ export default function ControleGerencialPage() {
     if (filtros.cargoId) {
       const r = s?.cargo.find((l) => l.chave === filtros.cargoId)?.rotulo ?? "cargo";
       itens.push({ campo: "cargoId", texto: `Cargo: ${r}` });
+    }
+    if (filtros.sala) itens.push({ campo: "sala", texto: "Sala De Espera" });
+    if (filtros.salaStatus) {
+      // O rótulo do sub-status vem do próprio recorte: filtrado, o painel devolve só a linha dele.
+      const r = dados?.sala.subStatus.find((l) => l.chave === filtros.salaStatus)?.rotulo;
+      itens.push({ campo: "salaStatus", texto: `Sala: ${r ?? "situação"}` });
     }
     if (filtros.dia) itens.push({ campo: "dia", texto: `Dia ${filtros.dia}` });
     if (filtros.mes) {
@@ -373,8 +414,8 @@ export default function ControleGerencialPage() {
 
       {erro && <div className="text-[12.5px] text-danger">{erro}</div>}
 
-      {/* ── FAIXA 1: os cinco KPIs, cada um é um filtro ──────────────────────── */}
-      <div className="grid shrink-0 grid-cols-5 gap-3">
+      {/* ── FAIXA 1: os KPIs. Os cinco primeiros são filtro; o da Sala é leitura ── */}
+      <div className="grid shrink-0 grid-cols-6 gap-3">
         <Kpi
           icon="layers"
           valor={k?.trabalhadas}
@@ -384,6 +425,14 @@ export default function ControleGerencialPage() {
           selecionado={semFiltro}
           onClick={limparTudo}
           dica="Selecionar todas as admissões e limpar os filtros"
+        />
+        {/* A SALA vem ANTES da Liberação (decisão do diretor): é a etapa anterior no fluxo, o
+            candidato passa pela Sala e só depois chega à Liberação. */}
+        <KpiSala
+          sala={dados?.sala}
+          temCliente={Boolean(filtros.codCliente)}
+          selecionado={Boolean(filtros.sala)}
+          onClick={alternarSala}
         />
         <Kpi
           icon="clock"
@@ -420,7 +469,10 @@ export default function ControleGerencialPage() {
           tom="var(--danger)"
           selecionado={filtros.farol === KPI_FAROL.declinios}
           onClick={() => alternar("farol", KPI_FAROL.declinios)}
-          dica="Filtrar as admissões declinadas"
+          // O card é CONSOLIDADO: soma o declínio do fluxo de admissão com o que morreu ainda na
+          // Sala de Espera, sem separar a origem (decisão do diretor). O clique continua filtrando
+          // o farol DECLINOU, que é a parte que o painel sabe recortar.
+          dica="Filtrar as admissões declinadas (o número inclui os declínios da Sala de Espera)"
         />
       </div>
 
@@ -438,6 +490,20 @@ export default function ControleGerencialPage() {
           ativos={faroisAtivos}
           onClick={(c) => alternar("farol", c)}
           tons={TOM_FAROL}
+          /* A SALA ENTRA AQUI, no mesmo card, e não num bloco à parte (decisão do diretor): a
+             análise de status do painel fica concentrada num lugar só. As linhas vêm rotuladas
+             como grupo próprio porque são de OUTRA natureza: não são farol de admissão, e
+             misturá-las sem marca faria parecer que o acervo ganhou status novo.
+
+             CLICÁVEIS como qualquer linha do painel: o recorte é pelo sub-status DA SALA, então
+             Cliente e Cargo passam a mostrar quem está naquele status. */
+          grupo={{
+            titulo: "Sala De Espera",
+            linhas: dados?.sala.subStatus ?? [],
+            tom: TOM_SALA,
+            ativos: filtros.salaStatus ? [filtros.salaStatus] : [],
+            onClick: (c) => alternar("salaStatus", c),
+          }}
         />
         <Tabela
           /* "Cadastro" (decisão do diretor). O CONTEÚDO segue o mesmo: as quatro linhas continuam
@@ -488,8 +554,109 @@ export default function ControleGerencialPage() {
         />
       </div>
 
+      {/* A fila da Sala por situação NÃO tem bloco próprio no rodapé: ela vive como linhas dentro da
+          tabela de Farol, junto com os faróis de admissão (decisão do diretor). */}
+
       {carregando && !dados && <div className="text-[12.5px] text-dim">Carregando o painel…</div>}
     </div>
+  );
+}
+
+/**
+ * O KPI DA SALA DE ESPERA: o número de quem aguarda, e também um FILTRO, como os demais cards.
+ *
+ * CLICAR RECORTA O PAINEL PELA SALA, no modo que reflete a Sala: Cliente e Cargo passam a mostrar
+ * quem está na fila, e as situações continuam no card de Farol. O que ele NÃO faz é ligar os dois
+ * lados pelo cliente, que foi a primeira tentativa: o painel respondia com as admissões CONCLUÍDAS
+ * dos clientes que têm gente na Sala, número verdadeiro para pergunta nenhuma. O lado das admissões
+ * fica vazio neste recorte, porque quem aguarda na Sala ainda não tem admissão.
+ *
+ * COR: cinza do sistema (`--dim`), para NÃO se confundir com o amarelo do card da Liberação
+ * (decisão do diretor). Token, nunca cor fixa, então claro e escuro saem de graça.
+ *
+ * O CONTEÚDO MUDA COM O RECORTE:
+ *  - SEM cliente: um número só, o total geral de quem aguarda na Sala;
+ *  - COM cliente: os dois números daquele cliente, quantos já viraram admissão e quantos seguem
+ *    pendentes, que é a leitura que o time usa para agir.
+ *
+ * O card conta SÓ quem aguarda. Declinado, desistente e cancelado ficam fora daqui e vão somar no
+ * card de declínios, que é o lugar deles.
+ */
+const TOM_SALA = "var(--dim)";
+
+function KpiSala({
+  sala,
+  temCliente,
+  selecionado,
+  onClick,
+}: {
+  sala?: Painel["sala"];
+  temCliente: boolean;
+  selecionado: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <GlassCard
+      as="button"
+      type="button"
+      onClick={onClick}
+      aria-pressed={selecionado}
+      className={cn(
+        "flex w-full cursor-pointer items-center gap-3 text-left transition !p-3.5",
+        selecionado && "!border-2",
+        !selecionado && "hover:!border-[var(--border-strong)]",
+      )}
+      style={
+        selecionado
+          ? {
+              borderColor: TOM_SALA,
+              boxShadow: `0 0 0 3px color-mix(in srgb, ${TOM_SALA} 28%, transparent), 0 10px 30px -12px ${TOM_SALA}`,
+            }
+          : undefined
+      }
+      title={
+        temCliente
+          ? "Sala de Espera deste cliente: quantos já viraram admissão e quantos seguem aguardando. Clique para recortar o painel pela Sala"
+          : "Total de candidatos aguardando na Sala de Espera. Clique para recortar o painel pela Sala"
+      }
+    >
+      <div
+        className="grid h-10 w-10 shrink-0 place-items-center rounded-xl transition"
+        style={
+          selecionado
+            ? { background: TOM_SALA, color: "#fff" }
+            : { background: `color-mix(in srgb, ${TOM_SALA} 16%, transparent)`, color: TOM_SALA }
+        }
+      >
+        <Icon name="clock" className="h-5 w-5" />
+      </div>
+      <div className="min-w-0">
+        {/* MESMA tipografia dos outros cinco cards (número 26px bold, rótulo 11.5px em caixa alta):
+            o card é de outra natureza, mas está na mesma fileira, e destoar faria parecer um
+            elemento de segunda categoria em vez de um KPI. */}
+        {temCliente ? (
+          <>
+            <div className="flex items-baseline gap-2.5 font-manrope text-[26px] font-bold leading-none">
+              <span className="text-text">{sala ? fmt(sala.emAdmissao) : "..."}</span>
+              <span className="text-[15px] font-semibold text-faint">/</span>
+              <span style={{ color: TOM_SALA }}>{sala ? fmt(sala.pendentes) : "..."}</span>
+            </div>
+            <div className="mt-1 text-[11.5px] uppercase leading-tight text-dim">
+              Sala: Em Admissão / Pendentes
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="font-manrope text-[26px] font-bold leading-none text-text">
+              {sala ? fmt(sala.pendentes) : "..."}
+            </div>
+            <div className="mt-1 text-[11.5px] uppercase leading-tight text-dim">
+              Sala De Espera
+            </div>
+          </>
+        )}
+      </div>
+    </GlassCard>
   );
 }
 
@@ -570,6 +737,11 @@ function Kpi({
  * Tabela de segmentação: maior para menor, com mini-barra por linha. O corpo rola sozinho, então a
  * lista inteira (210 clientes, 284 cargos) cabe sem a página rolar. `ativos` é uma LISTA porque o
  * farol pode vir de um card de KPI, que seleciona mais de um valor de uma vez.
+ *
+ * `grupo` é o BLOCO DE OUTRA NATUREZA no fim da mesma tabela, hoje usado pela Sala de Espera dentro
+ * do card de Farol. Ele existe para concentrar a análise num lugar só sem mentir sobre a origem do
+ * dado: as linhas ficam sob um rótulo próprio, e são tão clicáveis quanto as de cima (tudo no painel
+ * é filtro), só que o recorte delas é o da Sala, não o da esteira.
  */
 function Tabela({
   titulo,
@@ -577,21 +749,36 @@ function Tabela({
   ativos,
   onClick,
   tons,
+  grupo,
 }: {
   titulo: string;
   linhas: LinhaSegmento[];
   ativos: string[];
   onClick: (chave: string) => void;
   tons?: Record<string, string>;
+  grupo?: {
+    titulo: string;
+    linhas: LinhaSegmento[];
+    tom: string;
+    ativos: string[];
+    onClick: (chave: string) => void;
+  };
 }) {
   const maior = linhas[0]?.total ?? 1;
+  const doGrupo = grupo?.linhas ?? [];
   return (
     <GlassCard className="flex min-h-0 flex-col !p-0">
       <div className="flex shrink-0 items-baseline justify-between border-b border-border px-3 py-2">
         <h3 className="text-[12.5px] font-semibold text-text">{titulo}</h3>
-        <span className="text-[11px] text-faint">{linhas.length}</span>
+        {/* A contagem é de LINHAS na tela, então soma o grupo: o número tem de bater com o que se vê. */}
+        <span className="text-[11px] text-faint">{linhas.length + doGrupo.length}</span>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      {/* `ea-scroll` é a barra de rolagem do sistema (fina, arredondada, nos tokens do tema): sem
+          ela o painel ficava com o tubo branco padrão do navegador, que berra no tema escuro.
+          `overflow-x-hidden` é obrigatório junto do `overflow-y-auto`: pelo CSS, quando um eixo
+          deixa de ser `visible`, o outro vira `auto` sozinho, e era daí que nascia a barra
+          horizontal que não rolava nada (o conteúdo já cabe, e o rótulo longo trunca). */}
+      <div className="ea-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
         {linhas.map((l) => {
           const cor = tons?.[l.chave] ?? "var(--accent-vivid)";
           const selecionado = ativos.includes(l.chave);
@@ -636,8 +823,59 @@ function Tabela({
             </button>
           );
         })}
-        {linhas.length === 0 && (
-          <div className="px-3 py-4 text-[11.5px] text-faint">Sem dados neste recorte.</div>
+        {linhas.length === 0 && doGrupo.length === 0 && (
+          <div className="px-3 py-4 text-[11.5px] text-faint">Sem dados relacionados</div>
+        )}
+
+        {/* O GRUPO DA SALA. Cabeçalho leve marcando a troca de assunto, e as linhas logo abaixo com
+            a mesma gramática visual (bolinha, rótulo, número), no cinza da Sala. */}
+        {doGrupo.length > 0 && (
+          <>
+            <div className="flex items-baseline justify-between gap-2 border-y border-border bg-surface-2 px-3 py-1">
+              <span className="text-[10.5px] font-semibold uppercase tracking-wide text-dim">
+                {grupo?.titulo}
+              </span>
+              <span className="font-manrope text-[11px] font-semibold text-dim">
+                {fmt(doGrupo.reduce((acc, l) => acc + l.total, 0))}
+              </span>
+            </div>
+            {doGrupo.map((l) => {
+              const selecionado = grupo!.ativos.includes(l.chave);
+              return (
+                <button
+                  key={l.chave}
+                  type="button"
+                  onClick={() => grupo!.onClick(l.chave)}
+                  aria-pressed={selecionado}
+                  title={`${l.rotulo}: ${fmt(l.total)}. Clique para ver o cliente e o cargo de quem está nesta situação`}
+                  className={cn(
+                    "flex w-full items-start gap-2 border-b border-border px-3 py-1.5 text-left transition",
+                    selecionado ? "bg-surface-2" : "hover:bg-surface-2",
+                  )}
+                >
+                  <span
+                    className="mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full"
+                    style={{ background: grupo?.tom }}
+                    aria-hidden
+                  />
+                  {/* O rótulo QUEBRA em vez de cortar: os nomes do catálogo são longos ("Aguardando
+                      confirmação do link") e truncar esconderia justamente o que diferencia uma
+                      situação da outra (§A.20). */}
+                  <span
+                    className={cn(
+                      "min-w-0 flex-1 text-[12px] leading-tight",
+                      selecionado ? "font-semibold text-text" : "text-dim",
+                    )}
+                  >
+                    {l.rotulo}
+                  </span>
+                  <span className="shrink-0 font-manrope text-[12.5px] font-semibold text-text">
+                    {fmt(l.total)}
+                  </span>
+                </button>
+              );
+            })}
+          </>
         )}
       </div>
     </GlassCard>

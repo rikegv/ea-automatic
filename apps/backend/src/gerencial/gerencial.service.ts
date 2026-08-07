@@ -53,6 +53,23 @@ export interface FiltrosGerencial {
   mes?: number;
   /** Ano do mês clicado (o gráfico mostra o corrente e o anterior). */
   ano?: number;
+  /**
+   * SUB-STATUS DA SALA DE ESPERA clicado (o `id` do catálogo `sala_espera_status`), vindo das linhas
+   * da Sala dentro da tabela de Farol. É um RECORTE DA SALA: o painel passa a responder quem está
+   * naquele status, por cliente e por cargo, lendo `sala_espera`.
+   *
+   * O lado das admissões fica VAZIO neste recorte, e isso é a correção do erro anterior. A primeira
+   * tentativa recortava as admissões por `cod_cliente in (quem tem gente na Sala)`, e o painel
+   * respondia com as admissões CONCLUÍDAS daqueles clientes: quem clica na fila da Sala quer ver a
+   * fila, não a esteira de quem por acaso divide o cliente com ela.
+   */
+  salaStatus?: string;
+  /**
+   * CARD DA SALA clicado: o mesmo recorte do `salaStatus`, só que da fila INTEIRA, sem escolher
+   * situação. O painel passa a mostrar a composição da Sala (cliente, cargo e as situações), e o lado
+   * das admissões sai, pela mesma razão: quem aguarda na Sala ainda não tem admissão.
+   */
+  sala?: boolean;
 }
 
 export interface LinhaSegmento {
@@ -71,6 +88,24 @@ export class GerencialService {
    */
   private condicoes(f: FiltrosGerencial, exceto: "dia" | "mes" | null = null): SQL[] {
     const cond: SQL[] = [];
+    // RECORTE DA SALA (sub-status clicado): o lado das admissões sai INTEIRO, e é de propósito.
+    //
+    // Quem está na fila da Sala não tem admissão: `sala_espera` nasceu separada justamente porque
+    // aquele registro não cabe em `admissoes` (nem CPF ele tem, §A.3). Então a resposta honesta para
+    // "quantas admissões estão neste sub-status da Sala" é NENHUMA, e o painel diz "sem dados neste
+    // recorte" em vez de inventar vínculo.
+    //
+    // A tentativa anterior inventou: ligou os dois lados pelo cliente (`cod_cliente in (...)`) e
+    // trouxe as admissões CONCLUÍDAS de quem tinha gente na Sala. Por isso a condição aqui é o corte
+    // seco, e não um join: qualquer ponte entre as tabelas volta a responder outra pergunta.
+    //
+    // Quem responde este recorte são `segClienteSala`/`segCargoSala` e o `salaEspera`, que leem
+    // `sala_espera`. As consultas de admissão seguem com o mesmo SQL de sempre, só que sem linha.
+    //
+    // Vale para os dois jeitos de entrar no recorte da Sala: o CARD (a fila inteira) e a LINHA de
+    // sub-status (uma situação). São o mesmo recorte com granularidade diferente, então compartilham
+    // o mesmo corte em vez de cada um inventar o seu.
+    if (this.recorteDaSala(f)) cond.push(sql`false`);
     if (f.de) cond.push(sql`a.data_admissao >= ${f.de}::date`);
     if (f.ate) cond.push(sql`a.data_admissao <= ${f.ate}::date`);
     if (f.codCliente) cond.push(sql`a.cod_cliente = ${f.codCliente}`);
@@ -95,6 +130,11 @@ export class GerencialService {
       if (trilha === "CAD" && valor) cond.push(sql`fc.status = ${valor}`);
       if (trilha === "ASS" && valor) cond.push(sql`a.clicksign_status::text = ${valor}`);
     }
+    // A SALA DE ESPERA NÃO RECORTA ESTE LADO, e a tentativa anterior mostrou por quê. O card da Sala
+    // chegou a recortar as admissões por `cod_cliente in (quem tem gente na Sala)`, e o painel passou
+    // a responder com as admissões CONCLUÍDAS daqueles clientes: dado verdadeiro, resposta errada,
+    // porque quem clica na Sala quer ver a Sala, não a esteira dos mesmos clientes. A análise da Sala
+    // agora vive onde ela é lida, nas linhas da tabela de Farol, e este lado segue intocado (§A.26).
     if (f.exame) cond.push(sql`fe.status = ${f.exame}`);
     if (f.cargoId) cond.push(sql`a.cargo_id = ${f.cargoId}`);
     if (f.dia && exceto !== "dia") {
@@ -132,20 +172,181 @@ export class GerencialService {
     `;
   }
 
-  /** Tudo o que o painel mostra, do MESMO recorte. */
+  /**
+   * A SALA DE ESPERA NO PAINEL: o que ela pode e o que ela NÃO pode responder.
+   *
+   * `sala_espera` é tabela à parte de `admissoes` e só conhece CLIENTE e CARGO. Ela não tem
+   * `data_admissao`, farol, contrato nem exame, então há recortes do painel que ela simplesmente não
+   * sabe responder. Quando um desses está ligado, a Sala fica FORA da conta em vez de entrar
+   * ignorando o filtro: um número que ignora o recorte é pior que um número ausente, porque a tela
+   * afirma que aquilo pertence ao conjunto filtrado quando não pertence.
+   *
+   * Exemplo do estrago que isto evita: com "Exame Admissional = Apto" ligado, o painel mostra só
+   * admissões aptas; somar registros da Sala, que nunca tiveram exame, inflaria o card com gente que
+   * o recorte excluiu.
+   */
+  /** O painel está recortado PELA SALA, seja pelo card (fila inteira) ou por uma situação dela. */
+  private recorteDaSala(f: FiltrosGerencial): boolean {
+    return Boolean(f.sala || f.salaStatus);
+  }
+
+  private salaRespondeAoRecorte(f: FiltrosGerencial): boolean {
+    return !f.de && !f.ate && !f.contrato && !f.exame && !f.dia && !f.mes;
+  }
+
+  /**
+   * Recorte da Sala: só o que ela tem de verdade (cliente, cargo e o próprio sub-status). É por aqui
+   * que os filtros COMBINAM: com a AVL filtrada, clicar num sub-status mostra aquele status dentro da
+   * AVL, porque as duas condições entram na mesma consulta.
+   */
+  private ondeSala(f: FiltrosGerencial): SQL {
+    const cond: SQL[] = [];
+    if (f.codCliente) cond.push(sql`s.cod_cliente = ${f.codCliente}`);
+    if (f.cargoId) cond.push(sql`s.cargo_id = ${f.cargoId}`);
+    if (f.salaStatus) cond.push(sql`s.status_id = ${f.salaStatus}`);
+    if (cond.length === 0) return sql`true`;
+    return cond.reduce((acc, c) => sql`${acc} and ${c}`);
+  }
+
+  /**
+   * CLIENTE e CARGO no recorte da Sala: as mesmas duas tabelas do painel, lidas de `sala_espera` em
+   * vez de `admissoes`. É o que responde "quem está aguardando candidatura, e em qual cliente e cargo".
+   *
+   * Só a fila viva (`encerra = false`, sem admissão vinculada), a mesma régua do card e das linhas:
+   * três leituras que discordassem entre si sobre quem está na fila seriam três respostas para a
+   * mesma pergunta.
+   */
+  private async segClienteSala(f: FiltrosGerencial): Promise<LinhaSegmento[]> {
+    if (!this.salaRespondeAoRecorte(f)) return [];
+    return (await this.db.execute(sql`
+      select s.cod_cliente as chave,
+             coalesce(nullif(cl.nome_operacao, ''), cl.razao_social, s.cod_cliente) as rotulo,
+             count(*)::int as total
+      from sala_espera s
+      join sala_espera_status st on st.id = s.status_id
+      left join clientes cl on cl.cod_cliente = s.cod_cliente
+      where ${this.ondeSala(f)} and st.encerra = false and s.admissao_id is null
+      group by 1, 2 order by 3 desc, 2
+    `)) as unknown as LinhaSegmento[];
+  }
+
+  private async segCargoSala(f: FiltrosGerencial): Promise<LinhaSegmento[]> {
+    if (!this.salaRespondeAoRecorte(f)) return [];
+    return (await this.db.execute(sql`
+      select s.cargo_id::text as chave, cg.nome as rotulo, count(*)::int as total
+      from sala_espera s
+      join sala_espera_status st on st.id = s.status_id
+      left join cargos cg on cg.id = s.cargo_id
+      where ${this.ondeSala(f)} and st.encerra = false and s.admissao_id is null
+      group by 1, 2 order by 3 desc, 2
+    `)) as unknown as LinhaSegmento[];
+  }
+
+  /**
+   * CONSULTA PARALELA da Sala de Espera. NÃO passa pelo `base()` de propósito: aquele parte de
+   * `admissoes` e um registro da Sala sem vínculo não tem admissão para juntar. Ficam duas leituras
+   * independentes, e o painel soma o que faz sentido somar.
+   *
+   * SEM DUPLA CONTAGEM, que é o ponto delicado do card de declínios: registro da Sala com
+   * `admissao_id` preenchido JÁ está contado do lado das admissões (é a mesma pessoa, o mesmo
+   * processo). Por isso `pendentes` e `declinios` exigem `admissao_id is null`. O `emAdmissao` conta
+   * justamente os vinculados, mas ele é informativo da Sala e nunca entra em soma com o lado das
+   * admissões.
+   *
+   * §A.6: só contagens e rótulos de catálogo, nenhum dado pessoal.
+   */
+  private async salaEspera(f: FiltrosGerencial) {
+    const vazio = { pendentes: 0, emAdmissao: 0, declinios: 0, subStatus: [] as LinhaSegmento[] };
+    if (!this.salaRespondeAoRecorte(f)) return vazio;
+
+    const onde = this.ondeSala(f);
+    const [linha] = (await this.db.execute(sql`
+      select
+        count(*) filter (where st.encerra = false and s.admissao_id is null)::int as pendentes,
+        count(*) filter (where s.admissao_id is not null)::int as em_admissao,
+        count(*) filter (where st.encerra = true and s.admissao_id is null)::int as declinios
+      from sala_espera s
+      join sala_espera_status st on st.id = s.status_id
+      where ${onde}
+    `)) as unknown as Array<{ pendentes: number; em_admissao: number; declinios: number }>;
+
+    // DESDOBRAMENTO por sub-status: é o que a tela mostra como LINHAS DENTRO DA TABELA DE FAROL,
+    // junto com os faróis de admissão (decisão do diretor: toda a análise num lugar só). Por isso ele
+    // é lido SEMPRE, e não mais só quando havia um cliente escolhido: as linhas fazem parte da
+    // leitura padrão do painel, não de um desdobramento sob demanda. Respeita o recorte de cliente e
+    // de cargo pelo `ondeSala`, então filtrar um cliente muda as contagens destas linhas.
+    //
+    // Com um FAROL DE ADMISSÃO filtrado, as linhas da Sala saem: a tabela passa a falar de um farol
+    // específico da esteira, e quem aguarda na Sala não está nele. Continuar listando somaria ao card
+    // uma fila que o recorte excluiu. Isto não mexe no card de declínios, que tem regra própria
+    // (`parcelaDeclinioSala`) e segue somando com `farol=DECLINOU`.
+    //
+    // Os rótulos vêm do CATÁLOGO (`sala_espera_status`), nunca de lista fixa: o diretor cria e
+    // renomeia status por tela, e uma lista no código nasceria desatualizada no primeiro cadastro.
+    const subStatus = f.farol
+      ? []
+      : ((await this.db.execute(sql`
+          select st.id::text as chave, st.nome as rotulo, count(*)::int as total
+          from sala_espera s
+          join sala_espera_status st on st.id = s.status_id
+          where ${onde} and st.encerra = false and s.admissao_id is null
+          group by 1, 2 order by 3 desc, 2
+        `)) as unknown as LinhaSegmento[]);
+
+    return {
+      pendentes: Number(linha?.pendentes ?? 0),
+      emAdmissao: Number(linha?.em_admissao ?? 0),
+      declinios: Number(linha?.declinios ?? 0),
+      subStatus,
+    };
+  }
+
+  /**
+   * A parcela da Sala que entra no CARD GERAL DE DECLÍNIOS (decisão do diretor: número consolidado,
+   * sem segmentar a origem na tela).
+   *
+   * Só entra quando o recorte ADMITE declínio. Com o painel filtrado por outro farol (por exemplo
+   * "Admissão Concluída"), somar os declínios da Sala mostraria declínio dentro de um recorte que
+   * pediu justamente o contrário.
+   */
+  private parcelaDeclinioSala(f: FiltrosGerencial, declinios: number): number {
+    const farois = (f.farol ?? "")
+      .split(",")
+      .map((v) => v.trim())
+      .filter(Boolean);
+    if (farois.length > 0 && !farois.includes("DECLINOU")) return 0;
+    return declinios;
+  }
+
+  /**
+   * Tudo o que o painel mostra, do MESMO recorte.
+   *
+   * NO RECORTE DA SALA, duas tabelas trocam de fonte: Cliente e Cargo passam a ser lidas de
+   * `sala_espera`, porque são as duas perguntas que a Sala sabe responder (qual cliente e qual cargo
+   * têm gente naquele status). As demais seguem lendo admissões e vêm vazias, que é a resposta certa
+   * para quem ainda não tem admissão. A troca acontece AQUI, na montagem: nenhuma consulta de
+   * admissão é alterada para isso (§A.26).
+   */
   async painel(f: FiltrosGerencial) {
-    const [kpis, cliente, farol, contrato, exame, cargo, porDia, mesAMes] = await Promise.all([
+    const recorteDaSala = this.recorteDaSala(f);
+    const [kpis, cliente, farol, contrato, exame, cargo, porDia, mesAMes, sala] = await Promise.all([
       this.kpis(f),
-      this.segCliente(f),
+      recorteDaSala ? this.segClienteSala(f) : this.segCliente(f),
       this.segFarol(f),
       this.segContrato(f),
       this.segExame(f),
-      this.segCargo(f),
+      recorteDaSala ? this.segCargoSala(f) : this.segCargo(f),
       this.seriePorDia(f),
       this.serieMesAMes(f),
+      this.salaEspera(f),
     ]);
     return {
-      kpis,
+      // O card de declínios é CONSOLIDADO: declínio do fluxo de admissão mais declínio que morreu
+      // ainda na Sala, sem separar a origem na tela. A soma acontece AQUI, na montagem da resposta,
+      // e não dentro do `kpis()`: assim o `base()` e o `condicoes()` seguem intocados e as outras
+      // sete consultas do painel não sabem que a Sala existe (§A.26).
+      kpis: { ...kpis, declinios: kpis.declinios + this.parcelaDeclinioSala(f, sala.declinios) },
+      sala,
       segmentos: { cliente, farol, contrato, exame, cargo },
       series: { porDia, mesAMes },
       // O ano de referência do comparativo é resolvido pelo RELÓGIO, então em 2027 o painel passa a
@@ -223,8 +424,15 @@ export class GerencialService {
    * própria trilha. No acervo atual são 1.516 admissões nas duas condições, então tratar isso como
    * uma fila única exigiria inventar uma ordem entre trilhas que o processo não tem.
    *
-   * ORDEM FIXA, de processo, e não por contagem: as quatro linhas são um caminho (a cadastrar,
-   * cadastrado, aguardando assinatura, assinado) e ler fora de ordem não ajuda ninguém.
+   * REATIVO COMO OS DEMAIS (ajuste do diretor). As contagens sempre vieram do recorte, mas as quatro
+   * linhas ficavam na tela mesmo zeradas, e o card parecia congelado: filtrar "Admissão Concluída"
+   * fazia Cliente, Cargo e Exame encolherem para o que existe, enquanto o Cadastro seguia exibindo
+   * quatro status, três deles em zero. Agora linha sem dado SAI, e o card fica vazio quando o recorte
+   * não tem cadastro nenhum, com a mesma leitura dos outros.
+   *
+   * ORDEM POR CONTAGEM, maior primeiro (ajuste do diretor), como Cliente e Cargo. O empate mantém a
+   * ordem do processo (a cadastrar, cadastrado, aguardando assinatura, assinado), porque `sort` é
+   * estável: com dois status na mesma contagem, quem vem antes no caminho aparece antes.
    *
    * Uma consulta só, com contagem condicional, sobre o MESMO recorte dos demais cards.
    */
@@ -251,7 +459,9 @@ export class GerencialService {
         total: Number(l?.aguardando ?? 0),
       },
       { chave: "ASS:ASSINADO", rotulo: "Assinado", total: Number(l?.assinado ?? 0) },
-    ];
+    ]
+      .filter((linha) => linha.total > 0)
+      .sort((a, b) => b.total - a.total);
   }
 
   private async segExame(f: FiltrosGerencial): Promise<LinhaSegmento[]> {
