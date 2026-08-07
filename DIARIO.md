@@ -8597,3 +8597,45 @@ superava o piso ANTES desta coluna (1.452px contra piso de 1.420). A coluna nova
 1.064 testes no backend e 88 no frontend, typecheck e lint limpos, backend e frontend rebuildados e
 reiniciados, portas em 200. Prova visual em `~/ost-pacote1-ondas12-prints/` (13 capturas: data e
 ordenação em Assinaturas a 1600 e 1280, aba Integração a 1600 e 1440, card, filtro e chip do painel).
+
+## 07/08/2026 — Pacote 1 gerencial, onda 3 (a Sala de Espera entra no painel)
+
+**Commit `f1afa6e`, pushado.** Quatro arquivos: `gerencial.service.ts`, `gerencial.controller.ts`,
+`gerencial.service.spec.ts` e `diretoria/page.tsx`. O que estava solto de outras frentes (aba
+Inativadas da Sala, status "Canceladas" no seed, `logosoulan.png`) ficou fora, `git add` nominal.
+
+**O que entrou.** O KPI da Sala na fileira de cards (só quem aguarda: quem encerra e quem já virou
+admissão ficam fora), as situações da Sala como LINHAS dentro do card Farol sob o grupo "Sala De
+Espera", lidas do catálogo `sala_espera_status`, e o declínio que morreu na Sala somando no card geral
+de declínios. Card e linhas são CLICÁVEIS e recortam o painel pela Sala: Cliente e Cargo passam a ser
+lidos de `sala_espera`, e o recorte combina com o filtro de cliente.
+
+**O erro que esta onda cometeu e desfez, vale registrar.** A primeira versão do clique recortava as
+admissões por `cod_cliente in (quem tem gente na Sala)`. O painel respondia com as admissões
+CONCLUÍDAS daqueles clientes: dado verdadeiro, pergunta nenhuma. A ponte entre `sala_espera` e
+`admissoes` não existe (o registro da Sala nem CPF tem, §A.3), e inventá-la pelo cliente foi o que
+produziu a resposta errada. A correção é o **corte seco**: no recorte da Sala as consultas de
+admissão seguem com o mesmo SQL de sempre, só que sem linha, e quem responde é uma leitura paralela
+de `sala_espera`. Dois testes travam isso: nenhuma consulta de admissão toca a Sala em recorte nenhum,
+e com o filtro desligado o SQL sai idêntico ao de antes (§A.26).
+
+**Ajustes de apresentação da mesma onda.** Card Cadastro REATIVO (linha zerada no recorte sai da tela;
+ele sempre contou pelo recorte, o que ficava congelado era a exibição) e ordenado por contagem, com o
+empate mantendo a ordem do processo. As tabelas do painel adotaram o `.ea-scroll` que já era o padrão
+das grades do sistema, em vez de um segundo estilo de barra: no tema escuro o thumb passou de branco
+para `rgba(255,255,255,0.14)` sobre trilho transparente. A barra horizontal que não rolava nada saiu
+com `overflow-x: hidden`, e a causa vale ficar registrada: pelo CSS, quando um eixo deixa de ser
+`visible`, o outro vira `auto` sozinho, então `overflow-y-auto` sozinho criava a barra. Estado vazio
+passou a dizer "Sem dados relacionados" (grafia do diretor).
+
+**Regra antiga substituída, não esquecida:** o card Cadastro tinha ORDEM FIXA de processo, decidida e
+documentada antes. O diretor trocou por ordem de contagem; os dois testes que travavam a ordem antiga
+foram reescritos para a regra nova.
+
+### Gate
+
+1.087 testes no backend (111 arquivos) e 88 no frontend, typecheck e lint limpos nos dois apps.
+Backend e frontend rebuildados e reiniciados, health 200. Prova visual em
+`~/ost-sala-farol-prints/`, `~/ost-sala-clique-prints/` e `~/ost-6ajustes-prints/`: grupo da Sala no
+card Farol nos dois temas, recorte por situação (AVL 2, Advogada II e Auxiliar de Loja), card da Sala
+clicado com anel e chip, Cadastro reagindo ao filtro, e as barras medidas nos dois temas.
