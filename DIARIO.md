@@ -8682,3 +8682,62 @@ de status ou título.
 1.094 testes no backend (111 arquivos) e 88 no frontend, typecheck e lint limpos. Backend e frontend
 rebuildados e reiniciados, health 200. Prova visual em `~/ost-onda4-auditoria-prints/`: painel a
 1600, 1440 e 1280, card de perto, painel filtrado por Análise Pendente e o outro tema.
+
+## 07/08/2026 — Pacote 1 gerencial, onda 5 (multi-seleção) e FECHAMENTO do pacote
+
+**Commit `8e25f93`, pushado.** Três arquivos: `gerencial.service.ts`, `gerencial.service.spec.ts` e
+`diretoria/page.tsx`. A controller não mudou nesta onda: a multi-seleção viaja nos mesmos parâmetros
+de sempre, agora com vírgula.
+
+**Testes ANTES do código**, como o diretor pediu para a onda que mexe no `condicoes()`: as asserções
+foram escritas primeiro e rodaram com **8 falhando** (o farol já passava, porque o padrão de lista
+existia nele desde a OST do dashboard). Só então o código entrou. O `gerencial.service.spec.ts` fechou
+com **83 testes**.
+
+**A regra: OU dentro do campo, E entre campos.** O padrão de lista do farol virou peça única (`lista`
++ `ou`) e passou a valer para cliente, cargo, exame, auditoria e as duas trilhas do Cadastro. Com UM
+valor a condição sai CRUA, sem parêntese e sem `or`, textualmente idêntica à de antes: era a trava
+mais importante da onda, porque é assim que a esmagadora maioria dos cliques do painel segue rodando.
+As 8 consultas herdam do mesmo `condicoes()` e não foram tocadas uma a uma.
+
+**Regra do Cadastro (decisão do diretor, com os números na mesa).** O card consolida duas trilhas
+paralelas em colunas diferentes (`fc.status` e `clicksign_status`), e a mesma admissão pode estar nas
+duas. Ficou: **soma dentro da trilha, cruza entre trilhas**. Provado na tela: A Cadastrar + Cadastrado
+= 1.683 (o diretor citou 1.681; a diferença é a base viva, "A Cadastrar" passou de 108 para 110 no
+mesmo dia), Cadastrado + Assinado = **1.520**, Cadastrado + Aguardando Assinatura = 0 (este só no SQL:
+os 2 envelopes que aguardavam foram assinados e a linha sumiu do card). A alternativa, somar as
+trilhas, devolveria 1.573, o MESMO número de só "Cadastrado", ou seja, uma pergunta sem resposta.
+
+**UM CARD NÃO FILTRA A SI MESMO, decisão tomada no meio da onda.** O card filtrado encolhia para a
+linha escolhida (regra da onda 3: linha sem dado sai), então não sobrava onde clicar para escolher a
+segunda e o Ctrl não tinha como funcionar dentro dos cards. O diretor escolheu estender aos cards a
+regra que os DOIS GRÁFICOS já seguiam desde o começo: o `exceto` do `condicoes()` deixou de ser só o
+eixo do gráfico e passou a nomear qualquer campo que se auto-exclui. Consequência visível: filtrado
+por PETZ, o card Cliente mostra os 213 com PETZ aceso e o resto apagado, em vez de mostrar só PETZ.
+Os KPIs e os gráficos seguem aplicando tudo, inclusive o campo do card.
+
+**Filtro avançado sem tocar no `Select` (§A.26).** O seletor do design system é de escolha única e
+serve Esteira, Gerenciador e Não Conformidades. Em vez de alterá-lo, escolher no seletor ACRESCENTA à
+lista e as escolhas viram etiquetas removíveis logo abaixo do campo, fora do `FiltroCampo` (que é um
+`<label>`, e botão dentro de label herda o clique para o controle).
+
+### Gate
+
+1.128 testes no backend (111 arquivos) e 88 no frontend, typecheck e lint limpos. Backend e frontend
+rebuildados e reiniciados, health 200. Prova visual em `~/ost-onda5-multi-prints/`: soma na mesma
+trilha, cruzamento entre trilhas, dois clientes somados (PETZ 615 + MEIWA 201 = 816), campos cruzados
+(816 + Exame Apto = 474), dois cards de KPI somados (1.513 + 783 = 2.296, ambos acesos) e o modal com
+as etiquetas.
+
+### PACOTE 1 FECHADO, as cinco ondas
+
+1. **Onda 1**, Gerenciador de Assinaturas: data de admissão e ordenação por nome (commit anterior).
+2. **Onda 2**, Controle Gerencial: card "Contrato" virou "Cadastro" nos três lugares.
+3. **Onda 3** (`f1afa6e`): a Sala de Espera entra no painel, e o card Cadastro volta a reagir.
+4. **Onda 4** (`82f8a81`): card Auditoria, com o join novo no `base()` provado inofensivo.
+5. **Onda 5** (`8e25f93`): multi-seleção com Ctrl no painel inteiro.
+
+**Aprendizado que fica para as próximas comparações:** a base é VIVA e a operação usa o sistema
+durante a construção. Duas comparações "antes e depois" desta sessão divergiram por dado novo, não por
+regressão (uma admissão criada às 14:31 e dois envelopes assinados durante a tarde). Comparação
+antes/depois só vale se for no MESMO instante ou se a diferença for explicada no banco.
