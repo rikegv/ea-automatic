@@ -9,6 +9,10 @@
  */
 export const ROTA_MENU: { prefixo: string; codigo: string }[] = [
   // Mais específico primeiro (o guard casa por prefixo, primeira correspondência vence).
+  // ALTO VOLUME (onda 1): sem esta linha o guard deixaria QUALQUER autenticado abrir a URL direto,
+  // mesmo sem o menu liberado pelo diretor (§A.23). A escrita já está fechada pelo backend; isto
+  // fecha a porta da tela.
+  { prefixo: "/admin/alto-volume", codigo: "alto-volume" },
   { prefixo: "/admin/clientes", codigo: "clientes" },
   { prefixo: "/admin/cargos", codigo: "cargos" },
   { prefixo: "/admin/clinicas", codigo: "clinicas" },

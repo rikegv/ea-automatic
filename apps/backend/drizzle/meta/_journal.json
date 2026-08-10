@@ -442,6 +442,13 @@
       "when": 1785981368885,
       "tag": "0062_smiling_retro_girl",
       "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1786366802227,
+      "tag": "0063_bouncy_silver_centurion",
+      "breakpoints": true
     }
   ]
 }

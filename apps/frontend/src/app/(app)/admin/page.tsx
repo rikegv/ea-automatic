@@ -11,6 +11,20 @@ import { useAuth } from "@/lib/auth-context";
 // lista completas conforme a OST de padronização.
 const CARDS: { href: string; icon: IconName; title: string; desc: string; codigo: string }[] = [
   {
+    // ALTO VOLUME (onda 1): PRIMEIRO card do Menu Gerencial, por decisão do diretor. A tela é
+    // dedicada e tem volta para cá pelo botão "Menu Gerencial" do layout de administração.
+    //
+    // O card entra AQUI, na lista escrita à mão, porque a grade não é gerada a partir do registro de
+    // menus: registrar o menu em `domain/menus` faz ele existir para o diretor LIBERAR, e é este
+    // card que faz ele ser ENCONTRADO. Foi o buraco do menu Clínicas, que subiu funcionando e
+    // invisível. Os dois passos são necessários, e nenhum substitui o outro.
+    href: "/admin/alto-volume",
+    codigo: "alto-volume",
+    icon: "chart",
+    title: "Alto Volume",
+    desc: "Projetos sazonais por cliente: período, grupos de entrada e vagas por cargo.",
+  },
+  {
     href: "/admin/clientes",
     codigo: "clientes",
     icon: "users",

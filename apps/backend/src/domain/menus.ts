@@ -201,6 +201,35 @@ export const MENUS: MenuDef[] = [
   },
   // ── Administração ─────────────────────────────────────────────────────────
   {
+    // ALTO VOLUME (frente dos projetos sazonais, onda 1). Menu do GERENCIAL, primeiro da lista por
+    // decisão do diretor (o card abre no topo do Menu Gerencial e a tela tem volta para ele).
+    //
+    // §A.23: NASCE SÓ PARA O SUPER_ADMIN. Quem libera para os demais é o diretor, na tela de
+    // permissão de menu. Não aparecer para os outros usuários não é bug.
+    //
+    // A LEITURA (`list`, `obter`) fica FORA das operações de propósito: na onda 2 o modal da
+    // Liberação vai listar os projetos do cliente, e o consultor COMUM não terá este menu. Gatar a
+    // leitura faria o seletor tomar 403, que é exatamente o defeito que já derrubou o dropdown do
+    // Gerador de Kit. Só a ESCRITA é reivindicada.
+    codigo: "alto-volume",
+    rotulo: "Alto Volume",
+    href: "/admin/alto-volume",
+    grupo: "ADMIN",
+    ordem: 19,
+    operacoes: [
+      "AltoVolumeController.create",
+      "AltoVolumeController.update",
+      "AltoVolumeController.reativar",
+      "AltoVolumeController.remove",
+      "AltoVolumeController.criarGrupo",
+      "AltoVolumeController.atualizarGrupo",
+      "AltoVolumeController.removerGrupo",
+      "AltoVolumeController.criarVaga",
+      "AltoVolumeController.atualizarVaga",
+      "AltoVolumeController.removerVaga",
+    ],
+  },
+  {
     codigo: "clientes",
     rotulo: "Clientes",
     href: "/admin/clientes",

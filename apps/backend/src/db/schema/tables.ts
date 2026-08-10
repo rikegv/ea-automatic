@@ -24,6 +24,7 @@ import {
   farolGlobalEnum,
   frenteTipoEnum,
   origemSalaEsperaEnum,
+  origemVinculoProjetoEnum,
   tipoIntegracaoEnum,
   ncLiberacaoEnum,
   ncStatusEnum,
@@ -1466,3 +1467,172 @@ export const salaEspera = pgTable("sala_espera", {
   criadoEm,
   atualizadoEm,
 });
+
+// ── ALTO VOLUME (projetos sazonais de tiro curto) ───────────────────────────
+//
+// O CASO REAL: um cliente abre uma operação de 30 dias com muitas vagas por cargo (Companhia das
+// Letras, Atendente 20, Caixa 15), em grupos que entram em datas diferentes. A esteira sabe conduzir
+// cada admissão, mas ninguém consegue responder "quantas das 20 de Atendente já fecharam, e dá tempo
+// até a data de entrada do grupo 2?". Estas quatro tabelas são a estrutura dessa pergunta.
+//
+// O QUE ELAS **NÃO** FAZEM, e é deliberado: nenhuma coluna nova em `admissoes`, nenhum ALTER em
+// tabela existente. A ligação mora numa tabela de vínculo própria (`admissao_projeto`), então a
+// Esteira, o Gerenciador e o Controle Gerencial seguem lendo exatamente o que liam. O Alto Volume é
+// CONSULTA PARALELA por construção (§A.26): quem quiser o recorte de projeto faz o join; quem não
+// quiser nem sabe que ele existe.
+
+/**
+ * PROJETO de alto volume: um cliente, um período, um nome.
+ *
+ * `data_inicio` e `data_fim` são OBRIGATÓRIAS de propósito, e essa é a única obrigatoriedade dura
+ * daqui. Elas não são enfeite de cadastro: o termômetro de dias restantes e a SUGESTÃO de projeto na
+ * liberação (cliente + data de admissão dentro do período) são calculados a partir delas. Projeto
+ * sem período seria um projeto que não sabe quando acaba, e o Alto Volume existe justamente porque
+ * a data acaba.
+ *
+ * INATIVAR é exclusão lógica (`ativo=false`), mesmo padrão de todo catálogo do sistema: o projeto
+ * encerrado sai das opções da liberação e continua consultável com o histórico inteiro de vínculos.
+ */
+export const projetosAltoVolume = pgTable(
+  "projetos_alto_volume",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    codCliente: varchar("cod_cliente", { length: 40 })
+      .notNull()
+      .references(() => clientes.codCliente),
+    nome: varchar("nome", { length: 160 }).notNull(),
+    dataInicio: date("data_inicio").notNull(),
+    dataFim: date("data_fim").notNull(),
+    ativo: boolean("ativo").notNull().default(true),
+    criadoPorId: uuid("criado_por_id").references(() => usuarios.id, { onDelete: "set null" }),
+    criadoEm,
+    atualizadoEm,
+  },
+  (t) => ({
+    // O MESMO cliente pode ter VÁRIOS projetos ao mesmo tempo (requisito do diretor), então o unique
+    // é do par, nunca do cliente: o que não pode é o mesmo cliente ter dois projetos de mesmo nome,
+    // porque aí o seletor da liberação mostraria duas linhas idênticas.
+    uqProjetoPorCliente: unique("uq_projeto_alto_volume_cliente_nome").on(t.codCliente, t.nome),
+    // Período invertido é erro de digitação, e o banco recusa. Sem isto, "termina antes de começar"
+    // produziria termômetro negativo e sugestão que nunca casa, sem ninguém entender por quê.
+    ckPeriodo: check("ck_projeto_alto_volume_periodo", sql`${t.dataFim} >= ${t.dataInicio}`),
+  }),
+);
+
+/**
+ * GRUPO DE ENTRADA: as várias datas em que as pessoas de um mesmo projeto começam.
+ *
+ * Um projeto de 30 dias raramente admite todo mundo no mesmo dia; ele entra em levas ("Grupo 1" em
+ * 15/09, "Grupo 2" em 22/09). O grupo é a unidade do ALERTA: passada a data de entrada, quantas
+ * daquela leva não concluíram o processo a tempo.
+ *
+ * Projeto SEM nenhum grupo é válido e é o estado inicial de todo projeto recém-criado: as vagas
+ * ficam na cota do projeto inteiro (ver `projeto_vaga_cargo.grupo_id`) e o alerta por grupo
+ * simplesmente não tem o que mostrar. Grupos entram depois, conforme o projeto anda.
+ */
+export const projetoGrupoEntrada = pgTable(
+  "projeto_grupo_entrada",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    projetoId: uuid("projeto_id")
+      .notNull()
+      .references(() => projetosAltoVolume.id, { onDelete: "cascade" }),
+    /** Rótulo humano da leva: "Grupo 1", "Turma De 15/09". É o que aparece no alerta e no seletor. */
+    rotulo: varchar("rotulo", { length: 80 }).notNull(),
+    dataEntrada: date("data_entrada").notNull(),
+    criadoEm,
+    atualizadoEm,
+  },
+  (t) => ({
+    // Duas levas no MESMO dia do MESMO projeto são a mesma leva escrita duas vezes: o alerta
+    // dobraria e as vagas por grupo se dividiriam entre duas linhas que ninguém sabe distinguir.
+    uqGrupoPorData: unique("uq_projeto_grupo_entrada_data").on(t.projetoId, t.dataEntrada),
+  }),
+);
+
+/**
+ * VAGAS POR CARGO: a meta contra a qual o preenchimento é medido (Atendente 20, Caixa 15).
+ *
+ * `grupo_id` NULO é a COTA DO PROJETO INTEIRO; preenchido é a cota daquele grupo de entrada. Os dois
+ * modos convivem na mesma tabela de propósito, porque é assim que o projeto anda na vida real: nasce
+ * com "20 Atendentes" e só depois se descobre que são 12 no grupo 1 e 8 no grupo 2. Fosse tabela
+ * separada, acrescentar grupo a um projeto já cadastrado exigiria migrar linha de um lugar para o
+ * outro. É o mesmo desenho que `regua_documental` usa em `cliente_vinculo_id` (nulo = vale para o
+ * cliente todo).
+ *
+ * O unique cobre os dois modos porque o Postgres trata NULL como distinto em UNIQUE: por isso são
+ * DOIS índices parciais, e não um só. Sem o parcial de `grupo_id IS NULL`, o mesmo cargo poderia ser
+ * cadastrado duas vezes na cota do projeto e a meta dobraria em silêncio.
+ */
+export const projetoVagaCargo = pgTable(
+  "projeto_vaga_cargo",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    projetoId: uuid("projeto_id")
+      .notNull()
+      .references(() => projetosAltoVolume.id, { onDelete: "cascade" }),
+    cargoId: uuid("cargo_id")
+      .notNull()
+      .references(() => cargos.id),
+    grupoId: uuid("grupo_id").references(() => projetoGrupoEntrada.id, { onDelete: "cascade" }),
+    quantidade: integer("quantidade").notNull(),
+    criadoEm,
+    atualizadoEm,
+  },
+  (t) => ({
+    uqVagaDoProjeto: uniqueIndex("uq_projeto_vaga_cargo_projeto")
+      .on(t.projetoId, t.cargoId)
+      .where(sql`${t.grupoId} is null`),
+    uqVagaDoGrupo: uniqueIndex("uq_projeto_vaga_cargo_grupo")
+      .on(t.projetoId, t.cargoId, t.grupoId)
+      .where(sql`${t.grupoId} is not null`),
+    // Vaga zero ou negativa não é meta, é linha que deveria ter sido apagada. Barrado no banco
+    // porque a meta alimenta divisão (o percentual do cilindro) e zero ali vira NaN na tela.
+    ckQuantidade: check("ck_projeto_vaga_cargo_quantidade", sql`${t.quantidade} > 0`),
+  }),
+);
+
+/**
+ * O VÍNCULO admissão -> projeto. É ele, e só ele, que decide quem conta no projeto.
+ *
+ * A REGRA DO DIRETOR, gravada como chave: cliente + data de admissão + período apenas SUGEREM o
+ * projeto ao consultor; quem CONTA é o flag marcado com o projeto escolhido, que é exatamente a
+ * existência desta linha. Sem isso, o projeto pegaria toda admissão do mesmo cliente no mesmo
+ * período, inclusive as que nada têm a ver com ele.
+ *
+ * `admissao_id` é UNIQUE: uma admissão pertence a UM projeto só (decisão do diretor). O unique é a
+ * regra, não uma otimização, e é por isso que ela mora no banco e não na aplicação.
+ *
+ * `grupo_id` é opcional porque o grupo é um refinamento: dá para vincular ao projeto sem dizer a
+ * leva, e a admissão conta no preenchimento total mesmo assim. Só o alerta por data de entrada
+ * precisa do grupo.
+ *
+ * §A.6: a tabela referencia admissão, projeto e usuário por id. Nenhum CPF, nenhum nome, nenhuma URL.
+ */
+export const admissaoProjeto = pgTable(
+  "admissao_projeto",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    admissaoId: uuid("admissao_id")
+      .notNull()
+      .unique()
+      .references(() => admissoes.id, { onDelete: "cascade" }),
+    projetoId: uuid("projeto_id")
+      .notNull()
+      .references(() => projetosAltoVolume.id, { onDelete: "cascade" }),
+    grupoId: uuid("grupo_id").references(() => projetoGrupoEntrada.id, { onDelete: "set null" }),
+    /** LIBERACAO (o flag, caminho normal) ou CORRECAO (conserto posterior). Ver o enum. */
+    origem: origemVinculoProjetoEnum("origem").notNull(),
+    vinculadoPorId: uuid("vinculado_por_id").references(() => usuarios.id, {
+      onDelete: "set null",
+    }),
+    vinculadoEm: timestamp("vinculado_em", { withTimezone: true }).defaultNow().notNull(),
+    criadoEm,
+    atualizadoEm,
+  },
+  (t) => ({
+    // O painel do projeto varre por projeto o tempo todo (preenchimento, comparativo, alerta), e sem
+    // este índice cada carga seria um seq scan na tabela de vínculos inteira.
+    idxPorProjeto: index("idx_admissao_projeto_projeto").on(t.projetoId),
+  }),
+);

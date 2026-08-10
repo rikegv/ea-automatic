@@ -146,3 +146,18 @@ export const statusCadastroBeneficioEnum = pgEnum("status_cadastro_beneficio", [
 
 /** De onde veio o pedido da Sala de Espera: o próprio cliente ou a área de Seleção. */
 export const origemSalaEsperaEnum = pgEnum("origem_sala_espera", ["CLIENTE", "SELECAO"]);
+
+/**
+ * ALTO VOLUME (onda 1): por qual porta a admissão foi ligada ao projeto.
+ *
+ * LIBERACAO é o caminho normal, o flag marcado no ato da liberação (onda 2), que é a FONTE
+ * DEFINITIVA do projeto. CORRECAO é o conserto posterior, quando o consultor liberou sem flag ou
+ * escolheu o projeto errado e alguém puxou a admissão para o projeto certo pela tela do Alto Volume
+ * (onda 3).
+ *
+ * Os dois valem igual para a contagem: o que a origem guarda é a TRILHA de como o vínculo nasceu,
+ * junto de `vinculado_por` e `vinculado_em`. Sem ela, um projeto cheio de correção manual seria
+ * indistinguível de um projeto liberado certo desde o começo, e ninguém saberia onde o processo está
+ * falhando.
+ */
+export const origemVinculoProjetoEnum = pgEnum("origem_vinculo_projeto", ["LIBERACAO", "CORRECAO"]);
