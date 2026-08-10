@@ -12,6 +12,7 @@ import { MultiSelect } from "@/components/ui/MultiSelect";
 import { Icon } from "@/components/ui/Icon";
 import { Modal } from "@/components/ui/Modal";
 import { VincularSalaModal, type Sugestao } from "@/components/liberacao/VincularSalaModal";
+import { BlocoAltoVolume } from "@/components/alto-volume/BlocoAltoVolume";
 import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
 import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
 import {
@@ -22,6 +23,12 @@ import {
 import { criarPrecisaValor } from "@/lib/beneficios";
 import { caixaAlta } from "@/lib/nome";
 import { resolverPrePreenchimento } from "@/lib/pre-preenchimento-liberacao";
+import {
+  projetosDoCliente,
+  sugerirProjetoPorPeriodo,
+  type GrupoDoSeletor,
+  type ProjetoDoSeletor,
+} from "@/lib/alto-volume";
 import {
   isValidCpf,
   ITENS_EPI,
@@ -382,6 +389,19 @@ export default function LiberacaoPage() {
   // Observação LIVRE (Bloco 2): o que não cabe em campo estruturado ("VT possui 6% de desconto").
   // Opcional, não bloqueia e não vira pendência; aparece depois no modal do olho (Bloco 3).
   const [observacao, setObservacao] = useState("");
+  /**
+   * ALTO VOLUME (onda 2). O catálogo de projetos é carregado UMA vez e serve os dois modais; o resto
+   * é escolha por modal.
+   *
+   * `altoVolumeLigado` nasce SEMPRE desligado, inclusive quando o período sugere um projeto. Ligar
+   * sozinho seria escrever um vínculo que ninguém pediu, e o vínculo é a fonte definitiva do projeto:
+   * a sugestão pré-escolhe o projeto DENTRO do bloco e avisa na tela, mas quem liga é o consultor.
+   */
+  const [projetosAv, setProjetosAv] = useState<ProjetoDoSeletor[]>([]);
+  const [avLigado, setAvLigado] = useState(false);
+  const [avProjetoSel, setAvProjetoSel] = useState("");
+  const [avGrupoSel, setAvGrupoSel] = useState("");
+  const [avGrupos, setAvGrupos] = useState<GrupoDoSeletor[]>([]);
   // Pacote de benefícios (REUSA a régua de valor de lib/beneficios): nomes selecionados + valor por nome.
   const [beneficiosSel, setBeneficiosSel] = useState<string[]>([]);
   const [beneficiosValores, setBeneficiosValores] = useState<Record<string, string>>({});
@@ -404,6 +424,12 @@ export default function LiberacaoPage() {
   const [loteDepartamento, setLoteDepartamento] = useState("");
   // Observação LIVRE do LOTE (Bloco 2): mesma regra dos demais campos, o preenchido vale para as N.
   const [loteObservacao, setLoteObservacao] = useState("");
+  // ALTO VOLUME no LOTE: o caso principal da frente, porque projeto sazonal entra em leva. Mesmo
+  // conjunto do individual, e o projeto escolhido vale para TODAS as N, como os demais campos do lote.
+  const [loteAvLigado, setLoteAvLigado] = useState(false);
+  const [loteAvProjetoSel, setLoteAvProjetoSel] = useState("");
+  const [loteAvGrupoSel, setLoteAvGrupoSel] = useState("");
+  const [loteAvGrupos, setLoteAvGrupos] = useState<GrupoDoSeletor[]>([]);
   const [loteBeneficiosSel, setLoteBeneficiosSel] = useState<string[]>([]);
   const [loteBeneficiosValores, setLoteBeneficiosValores] = useState<Record<string, string>>({});
   const [loteErro, setLoteErro] = useState<string | null>(null);
@@ -443,6 +469,30 @@ export default function LiberacaoPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  /**
+   * ALTO VOLUME (onda 2): catálogo de projetos, carregado UMA vez.
+   *
+   * EFEITO PRÓPRIO, DE PROPÓSITO, e não uma sétima chamada no `Promise.all` do `load`: lá qualquer
+   * falha derruba a carga inteira, e a fila de liberação é tela crítica. Aqui a falha cai no
+   * `catch`, a lista fica vazia e o único efeito é o bloco do Alto Volume não aparecer. Uma frente
+   * nova não pode ter poder de derrubar a liberação.
+   *
+   * A leitura do CRUD nasce aberta a qualquer autenticado (onda 1), então o consultor COMUM enxerga
+   * o seletor sem tomar 403, mesmo sem ter o menu do Alto Volume.
+   */
+  useEffect(() => {
+    if (!token) return;
+    let vivo = true;
+    apiFetch<ProjetoDoSeletor[]>("/admin/alto-volume", { token })
+      .then((ps) => {
+        if (vivo) setProjetosAv(ps);
+      })
+      .catch(() => setProjetosAv([]));
+    return () => {
+      vivo = false;
+    };
+  }, [token]);
 
   // Enquanto montado: não aplica resposta que chega depois de sair da tela.
   const montado = useRef(true);
@@ -635,6 +685,13 @@ export default function LiberacaoPage() {
     setPossuiEpi(null);
     setEpiItens([]);
     setEpiOutros("");
+    // ALTO VOLUME (onda 2): zerado a cada candidato, pelo mesmo motivo do vínculo e do uniforme. O
+    // projeto é escolha DESTA admissão, e herdar a do candidato anterior é como um vínculo nasce
+    // errado sem ninguém perceber. A sugestão por período reescolhe sozinha, se for o caso.
+    setAvLigado(false);
+    setAvProjetoSel("");
+    setAvGrupoSel("");
+    setAvGrupos([]);
     setModalErro(null);
   }
   function fecharModal() {
@@ -723,6 +780,11 @@ export default function LiberacaoPage() {
             // SEXO: vai quando há valor (confirmado do Pandapé ou escolhido agora). Em branco não
             // vai, e sexo ausente segue não cobrando Reservista de ninguém.
             sexo: sexo || undefined,
+            // ALTO VOLUME (onda 2): só viaja com o FLAG LIGADO. Desligado manda `undefined`, o
+            // backend não recebe projeto, não valida e não grava vínculo, e a liberação sai byte a
+            // byte igual à de antes desta onda. O grupo é opcional mesmo com o projeto escolhido.
+            projetoId: avLigado ? avProjetoSel || undefined : undefined,
+            grupoEntradaId: avLigado && avProjetoSel ? avGrupoSel || undefined : undefined,
             // UNIFORME: a resposta é obrigatória (o botão nem habilita sem ela). Tamanho só no "sim";
             // o backend também limpa, então "não possui" nunca carrega tamanho de ninguém.
             uniforme: {
@@ -828,12 +890,75 @@ export default function LiberacaoPage() {
   const epiOutrosFaltando = epiItens.includes("OUTROS") && epiOutros.trim() === "";
   /** Cliente de dois contratos exige a escolha; de um contrato só, nem aparece na tela. */
   const exigeVinculo = vinculos.length >= 2;
+
+  // ── ALTO VOLUME (onda 2), individual ──────────────────────────────────────
+  /** Projetos ATIVOS deste cliente. Vazio faz o bloco inteiro sumir, como no seletor de contrato. */
+  const avProjetos = useMemo(
+    () => projetosDoCliente(projetosAv, codCliente),
+    [projetosAv, codCliente],
+  );
+  const avDisponivel = avProjetos.length > 0;
+  /** SUGESTÃO por período: qual projeto cobre a data de admissão digitada. Só sugere. */
+  const avSugerido = useMemo(
+    () => sugerirProjetoPorPeriodo(avProjetos, dataAdmissao),
+    [avProjetos, dataAdmissao],
+  );
+
+  /**
+   * Mantém a escolha COERENTE com o cliente do modal. Trocar o cliente invalida o projeto escolhido
+   * (ele é de outro cliente), e cliente sem projeto tem de DESLIGAR o flag: um flag ligado num bloco
+   * que não está mais na tela travaria o botão de liberar sem o consultor ter como ver o motivo.
+   */
+  useEffect(() => {
+    if (!avDisponivel) {
+      setAvLigado(false);
+      setAvProjetoSel("");
+      setAvGrupoSel("");
+      return;
+    }
+    if (avProjetoSel && !avProjetos.some((p) => p.id === avProjetoSel)) {
+      setAvProjetoSel("");
+      setAvGrupoSel("");
+    }
+  }, [avDisponivel, avProjetos, avProjetoSel]);
+
+  /** A sugestão só PREENCHE o vazio: escolha já feita pelo consultor nunca é sobrescrita. */
+  useEffect(() => {
+    if (!avSugerido) return;
+    setAvProjetoSel((atual) => atual || avSugerido);
+  }, [avSugerido]);
+
+  /** Grupos do projeto escolhido. Falha aqui deixa a lista vazia, e o grupo é opcional mesmo. */
+  useEffect(() => {
+    setAvGrupoSel("");
+    if (!token || !avProjetoSel) {
+      setAvGrupos([]);
+      return;
+    }
+    let vivo = true;
+    apiFetch<{ grupos: GrupoDoSeletor[] }>(
+      `/admin/alto-volume/${encodeURIComponent(avProjetoSel)}`,
+      { token },
+    )
+      .then((p) => {
+        if (vivo) setAvGrupos(p.grupos ?? []);
+      })
+      .catch(() => setAvGrupos([]));
+    return () => {
+      vivo = false;
+    };
+  }, [token, avProjetoSel]);
+
   const podeLiberar =
     Boolean(codCliente && cargoId) &&
     !cpfAlvoInvalido &&
     possuiUniforme !== null &&
     !epiOutrosFaltando &&
-    (!exigeVinculo || Boolean(vinculoSel));
+    (!exigeVinculo || Boolean(vinculoSel)) &&
+    // ALTO VOLUME (onda 2): UM TERMO A MAIS, na forma exata do vínculo logo acima. Com o flag
+    // desligado o termo é `true` e o gate segue com o mesmo significado que tinha; ligado, ele passa
+    // a exigir o projeto, porque flag ligado sem projeto não é vínculo nenhum.
+    (!avLigado || Boolean(avProjetoSel));
 
   // ---------- Liberação em massa ----------
   function abrirLote() {
@@ -850,6 +975,11 @@ export default function LiberacaoPage() {
     setLoteObservacao("");
     setLoteBeneficiosSel([]);
     setLoteBeneficiosValores({});
+    // ALTO VOLUME no lote: zerado a cada abertura, como todo o resto do modal.
+    setLoteAvLigado(false);
+    setLoteAvProjetoSel("");
+    setLoteAvGrupoSel("");
+    setLoteAvGrupos([]);
     setLoteErro(null);
     setLoteAberto(true);
   }
@@ -898,6 +1028,10 @@ export default function LiberacaoPage() {
           pacoteBeneficios: lotePacote.length ? lotePacote : undefined,
           // Observação livre (Bloco 2): a MESMA para todas as N, como os demais campos do lote.
           observacaoLiberacao: loteObservacao.trim() || undefined,
+          // ALTO VOLUME (onda 2): mesma regra do individual, e o projeto vale para TODAS as N.
+          projetoId: loteAvLigado ? loteAvProjetoSel || undefined : undefined,
+          grupoEntradaId:
+            loteAvLigado && loteAvProjetoSel ? loteAvGrupoSel || undefined : undefined,
         },
       });
       setLoteAberto(false);
@@ -981,7 +1115,59 @@ export default function LiberacaoPage() {
   const loteSelecionadasOk = selecionadasObjs.filter(
     (r) => !r.possivelDuplicata && isValidCpf(r.candidatoCpf),
   );
-  const podeLiberarLote = Boolean(loteCodCliente && loteCargoId && loteSelecionadasOk.length > 0);
+  // ── ALTO VOLUME (onda 2), LOTE. Mesmas quatro regras do individual, sobre o cliente do lote. ──
+  const loteAvProjetos = useMemo(
+    () => projetosDoCliente(projetosAv, loteCodCliente),
+    [projetosAv, loteCodCliente],
+  );
+  const loteAvDisponivel = loteAvProjetos.length > 0;
+  const loteAvSugerido = useMemo(
+    () => sugerirProjetoPorPeriodo(loteAvProjetos, loteDataAdmissao),
+    [loteAvProjetos, loteDataAdmissao],
+  );
+
+  useEffect(() => {
+    if (!loteAvDisponivel) {
+      setLoteAvLigado(false);
+      setLoteAvProjetoSel("");
+      setLoteAvGrupoSel("");
+      return;
+    }
+    if (loteAvProjetoSel && !loteAvProjetos.some((p) => p.id === loteAvProjetoSel)) {
+      setLoteAvProjetoSel("");
+      setLoteAvGrupoSel("");
+    }
+  }, [loteAvDisponivel, loteAvProjetos, loteAvProjetoSel]);
+
+  useEffect(() => {
+    if (!loteAvSugerido) return;
+    setLoteAvProjetoSel((atual) => atual || loteAvSugerido);
+  }, [loteAvSugerido]);
+
+  useEffect(() => {
+    setLoteAvGrupoSel("");
+    if (!token || !loteAvProjetoSel) {
+      setLoteAvGrupos([]);
+      return;
+    }
+    let vivo = true;
+    apiFetch<{ grupos: GrupoDoSeletor[] }>(
+      `/admin/alto-volume/${encodeURIComponent(loteAvProjetoSel)}`,
+      { token },
+    )
+      .then((p) => {
+        if (vivo) setLoteAvGrupos(p.grupos ?? []);
+      })
+      .catch(() => setLoteAvGrupos([]));
+    return () => {
+      vivo = false;
+    };
+  }, [token, loteAvProjetoSel]);
+
+  const podeLiberarLote =
+    Boolean(loteCodCliente && loteCargoId && loteSelecionadasOk.length > 0) &&
+    // MESMO termo a mais do individual (§A.26: acrescenta, não muda o que já existia).
+    (!loteAvLigado || Boolean(loteAvProjetoSel));
 
   // Campos da régua unificada §A.19 ainda vazios (hint visual; a fonte autoritativa é o backend, que
   // recalcula o sinalizador ao liberar). Cliente/Cargo não entram: são a trava, já garantidos aqui.
@@ -1385,6 +1571,23 @@ export default function LiberacaoPage() {
                   documental. Escolha o contrato desta admissão.
                 </span>
               </label>
+            )}
+            {/* ALTO VOLUME (onda 2). Só aparece para cliente que TEM projeto ativo, na mesma regra
+                do seletor de contrato logo acima: quem não tem escolha a fazer não é perguntado.
+                Nada aqui muda a liberação de quem não usa o flag. */}
+            {avDisponivel && (
+              <BlocoAltoVolume
+                idAria="liberação individual"
+                ligado={avLigado}
+                onLigado={setAvLigado}
+                projetos={avProjetos}
+                projetoSel={avProjetoSel}
+                onProjeto={setAvProjetoSel}
+                grupos={avGrupos}
+                grupoSel={avGrupoSel}
+                onGrupo={setAvGrupoSel}
+                sugeridoId={avSugerido}
+              />
             )}
             {/* Demais campos obrigatórios (régua unificada §A.19), abaixo de cliente/cargo. Opcionais:
                 o que ficar vazio vira pendência na esteira; SÓ cliente+cargo travam a liberação. */}
@@ -1840,6 +2043,23 @@ export default function LiberacaoPage() {
                 options={cargos.map((c) => ({ value: c.id, label: c.nome }))}
               />
             </label>
+
+            {/* ALTO VOLUME no LOTE (onda 2): o caminho PRINCIPAL da frente, porque projeto sazonal
+                entra em leva. O projeto escolhido vale para TODAS as N, como os demais campos. */}
+            {loteAvDisponivel && (
+              <BlocoAltoVolume
+                idAria="liberação em massa"
+                ligado={loteAvLigado}
+                onLigado={setLoteAvLigado}
+                projetos={loteAvProjetos}
+                projetoSel={loteAvProjetoSel}
+                onProjeto={setLoteAvProjetoSel}
+                grupos={loteAvGrupos}
+                grupoSel={loteAvGrupoSel}
+                onGrupo={setLoteAvGrupoSel}
+                sugeridoId={loteAvSugerido}
+              />
+            )}
 
             {/* MESMOS campos do individual, todos opcionais: o preenchido vale para as N do lote, o
                 vazio vira pendência individual de cada admissão na esteira. */}

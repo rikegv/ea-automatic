@@ -35,10 +35,13 @@ import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
 import {
   admissaoBeneficio,
+  admissaoProjeto,
   admissoes,
   candidatoAlteracoesLog,
   candidatos,
   cargos,
+  projetoGrupoEntrada,
+  projetosAltoVolume,
   beneficiosCatalogo,
   clienteBeneficioPadrao,
   clientes,
@@ -318,6 +321,16 @@ export class AdmissoesService {
       throw new BadRequestException("CPF do substituído inválido");
     }
 
+    // ALTO VOLUME (onda 2) pelo WIZARD. MESMO validador da liberação, fora da transação, e mesma
+    // saída curta: sem flag devolve `null` e a criação segue idêntica à de sempre. O wizard não passa
+    // pelo `aplicarLiberacao`, então o insert precisa existir aqui também; é o preço de a admissão
+    // ter duas portas de nascimento, e cobrir as duas agora é decisão do diretor.
+    const vinculoProjeto = await this.resolverVinculoDeProjeto(
+      dto.codCliente,
+      dto.projetoId,
+      dto.grupoEntradaId,
+    );
+
     const resultado = await this.db.transaction(async (tx) => {
       // b. cliente e cargo precisam existir.
       const cliente = await tx.query.clientes.findFirst({
@@ -474,6 +487,24 @@ export class AdmissoesService {
             estado: "PENDENTE" as const,
           })),
         );
+      }
+
+      // j. ALTO VOLUME (onda 2): o vínculo com o projeto, quando o wizard marcou o flag. Dentro da
+      // MESMA transação da admissão, pelo mesmo motivo do miolo da liberação: os dois nascem juntos
+      // ou nenhum nasce. Sem flag, `vinculoProjeto` é nulo e nada acontece aqui.
+      //
+      // Origem LIBERACAO, e não uma origem própria de wizard: o enum separa o vínculo que nasceu NO
+      // ATO (o caminho normal, seja pela Liberação ou pelo wizard) do conserto POSTERIOR (CORRECAO).
+      // O wizard é ato de entrada, então é LIBERACAO. Criar um terceiro valor exigiria migração e
+      // mexer no enum da onda 1, que já está validado.
+      if (vinculoProjeto) {
+        await tx.insert(admissaoProjeto).values({
+          admissaoId,
+          projetoId: vinculoProjeto.projetoId,
+          grupoId: vinculoProjeto.grupoId,
+          origem: "LIBERACAO",
+          vinculadoPorId: user?.id ?? null,
+        });
       }
 
       return {
@@ -667,6 +698,14 @@ export class AdmissoesService {
       /** BLOCO 5 (item 7): vínculo escolhido. Só é exigido quando o cliente tem 2 ou mais. */
       clienteVinculoId?: string;
       /**
+       * ALTO VOLUME (onda 2), tipo inline 1 de 3. O MESMO par de campos existe no miolo
+       * `aplicarLiberacao` e no `liberarEmLote`: o dto da liberação é tipado inline nos três lugares,
+       * e um campo que entra em dois deles some EM SILÊNCIO no terceiro, sem erro de compilação,
+       * porque o objeto só perde uma propriedade que ninguém declarou. Mexeu aqui, mexe nos três.
+       */
+      projetoId?: string;
+      grupoEntradaId?: string;
+      /**
        * SEXO confirmado ou CORRIGIDO na tela (OST do seletor de sexo). Só na liberação INDIVIDUAL: no
        * lote, um mesmo valor valeria para todo mundo da leva, o que é errado por definição.
        */
@@ -701,6 +740,14 @@ export class AdmissoesService {
     // no único caso em que ela existe. Cliente de um vínculo (233 dos 234) não é perguntado nada.
     const vinculoId = await this.escolherVinculoDaLiberacao(dto.codCliente, dto.clienteVinculoId);
 
+    // ALTO VOLUME (onda 2): valida o projeto ANTES de abrir a transação, junto das demais validações
+    // de entrada. Sem flag devolve `null` na primeira linha e nada aqui muda.
+    const vinculoProjeto = await this.resolverVinculoDeProjeto(
+      dto.codCliente,
+      dto.projetoId,
+      dto.grupoEntradaId,
+    );
+
     // Nome do candidato (sempre presente): o sinalizador exige identidade (nome+cpf) para avaliar a
     // régua; sem o nome real ele cairia em PENDENTE mesmo com tudo preenchido.
     const candidato = await this.db.query.candidatos.findFirst({
@@ -731,6 +778,7 @@ export class AdmissoesService {
         regua,
         user,
         vinculoId,
+        vinculoProjeto,
       });
       return { admissaoId, temRegua: regua.length > 0 };
     });
@@ -766,6 +814,56 @@ export class AdmissoesService {
       throw new BadRequestException("O contrato escolhido não pertence a este cliente.");
     }
     return escolhido;
+  }
+
+  /**
+   * ALTO VOLUME (onda 2): valida o projeto escolhido e devolve o vínculo a gravar, ou `null`.
+   *
+   * `null` QUANDO NÃO HÁ FLAG, e este é o caminho da esmagadora maioria das liberações: sem
+   * `projetoId` a função sai na primeira linha, nada é lido, nada é gravado e a liberação segue
+   * exatamente como sempre seguiu. É a mesma forma do `escolherVinculoDaLiberacao`, que devolve
+   * `null` para o cliente de um vínculo só.
+   *
+   * O que ela recusa, e o motivo de recusar em vez de ignorar: projeto de OUTRO cliente (o vínculo
+   * mentiria sobre a que operação a pessoa pertence), projeto INATIVO (encerrado não recebe gente
+   * nova) e grupo que não é daquele projeto (a leva não existe lá). Em qualquer um dos três, um
+   * vínculo torto é pior que uma liberação que para e explica, porque a contagem do projeto passa a
+   * mentir e ninguém percebe.
+   *
+   * Chamada UMA vez por operação, fora da transação: no individual antes de abrir a tx, no lote
+   * antes do laço (o projeto é o mesmo para as N, como cliente, cargo e régua).
+   */
+  private async resolverVinculoDeProjeto(
+    codCliente: string,
+    projetoId?: string | null,
+    grupoEntradaId?: string | null,
+  ): Promise<{ projetoId: string; grupoId: string | null } | null> {
+    if (!projetoId) return null;
+
+    const projeto = await this.db.query.projetosAltoVolume.findFirst({
+      where: eq(projetosAltoVolume.id, projetoId),
+    });
+    if (!projeto) throw new NotFoundException("Projeto de Alto Volume não encontrado.");
+    if (projeto.codCliente !== codCliente) {
+      throw new BadRequestException(
+        "O projeto de Alto Volume escolhido é de outro cliente. Escolha um projeto deste cliente.",
+      );
+    }
+    if (!projeto.ativo) {
+      throw new BadRequestException(
+        "Este projeto de Alto Volume está inativo. Reative o projeto ou escolha outro antes de liberar.",
+      );
+    }
+
+    if (!grupoEntradaId) return { projetoId, grupoId: null };
+
+    const grupo = await this.db.query.projetoGrupoEntrada.findFirst({
+      where: eq(projetoGrupoEntrada.id, grupoEntradaId),
+    });
+    if (!grupo || grupo.projetoId !== projetoId) {
+      throw new BadRequestException("O grupo de entrada escolhido não pertence a este projeto.");
+    }
+    return { projetoId, grupoId: grupoEntradaId };
   }
 
   /** Régua documental do par (cliente + cargo). Aceita `db` ou `tx` (mesma leitura do `create`). */
@@ -830,14 +928,34 @@ export class AdmissoesService {
         observacaoLiberacao?: string;
         uniforme?: { possui: boolean; camiseta?: string; calca?: string; bota?: string };
         epi?: { possui: boolean; itens?: string[]; outros?: string };
+        /** ALTO VOLUME (onda 2), tipo inline 2 de 3. Ver a nota no dto do `liberar`. */
+        projetoId?: string;
+        grupoEntradaId?: string;
       };
       regua: { tipoDocumentoId: string; exigencia: string }[];
       user: AuthUser;
       /** Vínculo escolhido (item 7). `null` = cliente de um vínculo só, resolve como sempre. */
       vinculoId?: string | null;
+      /**
+       * ALTO VOLUME (onda 2): o vínculo com o projeto, JÁ VALIDADO pelo chamador
+       * (`resolverVinculoDeProjeto`). `null` = liberação sem flag, que é o caminho normal.
+       *
+       * Chega pronto em vez de ser relido do `dto` porque a validação custa duas consultas e o LOTE
+       * chamaria este miolo 50 vezes para revalidar o MESMO projeto. Vale a mesma lógica da régua,
+       * que também é lida uma vez fora e passada pronta.
+       */
+      vinculoProjeto?: { projetoId: string; grupoId: string | null } | null;
     },
   ): Promise<void> {
-    const { adm, candidatoNome, dto, regua, user, vinculoId = null } = params;
+    const {
+      adm,
+      candidatoNome,
+      dto,
+      regua,
+      user,
+      vinculoId = null,
+      vinculoProjeto = null,
+    } = params;
     const admissaoId = adm.id;
     const vf = dto.vagaFolha ?? {};
     const novoTipoContrato = dto.tipoContrato ?? adm.tipoContrato ?? undefined;
@@ -944,6 +1062,24 @@ export class AdmissoesService {
         })),
       );
     }
+
+    // ALTO VOLUME (onda 2): o vínculo com o projeto. PONTO ÚNICO DE GRAVAÇÃO, e é por isso que ele
+    // mora aqui e não no `liberar`: o individual e o LOTE passam os dois por este miolo, então um
+    // insert aqui cobre os dois caminhos sem duplicar regra. Dentro da transação que já existe, de
+    // modo que admissão e vínculo nascem juntos ou não nascem.
+    //
+    // O `if` é a garantia de não-regressão: sem flag não há projeto, não há insert, e a liberação
+    // termina exatamente na linha em que terminava antes desta onda.
+    if (vinculoProjeto) {
+      await tx.insert(admissaoProjeto).values({
+        admissaoId,
+        projetoId: vinculoProjeto.projetoId,
+        grupoId: vinculoProjeto.grupoId,
+        // LIBERACAO: nasceu pelo flag, no ato. CORRECAO fica para o conserto posterior (onda 3).
+        origem: "LIBERACAO",
+        vinculadoPorId: user.id,
+      });
+    }
   }
 
   /**
@@ -986,6 +1122,9 @@ export class AdmissoesService {
       };
       pacoteBeneficios?: { beneficioId: string; valor?: number }[];
       observacaoLiberacao?: string;
+      /** ALTO VOLUME (onda 2), tipo inline 3 de 3. Ver a nota no dto do `liberar`. */
+      projetoId?: string;
+      grupoEntradaId?: string;
     },
     user: AuthUser,
   ): Promise<{
@@ -1022,6 +1161,16 @@ export class AdmissoesService {
       );
     }
 
+    // ALTO VOLUME (onda 2): o projeto é o MESMO para as N, então valida UMA vez, antes do laço, na
+    // companhia de cliente, cargo e régua. Projeto errado barra o lote inteiro sem liberar ninguém,
+    // que é o certo: o consultor escolheu o projeto uma vez, e se ele está errado está errado para
+    // todos. Sem flag, devolve `null` e o laço roda como sempre rodou.
+    const vinculoProjeto = await this.resolverVinculoDeProjeto(
+      dto.codCliente,
+      dto.projetoId,
+      dto.grupoEntradaId,
+    );
+
     const liberadas: { admissaoId: string; candidato: string }[] = [];
     const falhas: { candidato: string; motivo: string }[] = [];
 
@@ -1049,7 +1198,14 @@ export class AdmissoesService {
         if (!isValidCpf(adm.candidatoCpf)) throw new BadRequestException(CPF_INVALIDO_NA_LIBERACAO);
 
         await this.db.transaction(async (tx) => {
-          await this.aplicarLiberacao(tx, { adm, candidatoNome: nome, dto, regua, user });
+          await this.aplicarLiberacao(tx, {
+            adm,
+            candidatoNome: nome,
+            dto,
+            regua,
+            user,
+            vinculoProjeto,
+          });
         });
         // Um job de pull POR ADMISSÃO: liberar 30 de uma vez enfileira 30 jobs, que o limiter da
         // fila serializa sob o teto do Pandapé, em vez de 30 chamadas simultâneas (§A.5).

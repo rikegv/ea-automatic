@@ -69,4 +69,20 @@ export class LiberarEmLoteDto {
     message: `A observação da liberação tem no máximo ${OBSERVACAO_LIBERACAO_MAX} caracteres.`,
   })
   observacaoLiberacao?: string;
+
+  /**
+   * ALTO VOLUME (onda 2), MESMOS campos do individual e MESMA regra do lote: o projeto escolhido
+   * vale para TODAS as N da leva. É o caso PRINCIPAL da frente, porque projeto sazonal entra em
+   * massa, não de um em um.
+   *
+   * Opcional: lote sem Alto Volume não manda o campo e sai idêntico ao de hoje.
+   */
+  @IsOptional()
+  @IsUUID()
+  projetoId?: string;
+
+  /** Grupo de entrada (a leva) dentro do projeto. Opcional, igual ao individual. */
+  @IsOptional()
+  @IsUUID()
+  grupoEntradaId?: string;
 }

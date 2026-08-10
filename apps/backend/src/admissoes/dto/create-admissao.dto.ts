@@ -217,4 +217,23 @@ export class CreateAdmissaoDto {
   @IsOptional()
   @IsBoolean({ message: "Aceite das pendências inválido." })
   aceitePendencias?: boolean;
+
+  /**
+   * ALTO VOLUME (onda 2): o projeto sazonal, quando a admissão nasce pelo WIZARD.
+   *
+   * O wizard é PONTO DE TOQUE SEPARADO, e não esquecimento: ele cria a admissão pelo `create`, que
+   * nunca passa pelo `aplicarLiberacao`. Sem estes dois campos aqui, marcar o flag no wizard não
+   * gravaria nada, em silêncio. A decisão de cobrir os dois caminhos agora é do diretor, para não
+   * refatorar depois.
+   *
+   * Opcionais: criar admissão sem Alto Volume não manda os campos e nada muda.
+   */
+  @IsOptional()
+  @IsUUID()
+  projetoId?: string;
+
+  /** Grupo de entrada (a leva) dentro do projeto. Opcional, igual à liberação. */
+  @IsOptional()
+  @IsUUID()
+  grupoEntradaId?: string;
 }

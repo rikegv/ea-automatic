@@ -93,6 +93,29 @@ export class LiberarAdmissaoDto {
   epi?: EpiInputDto;
 
   /**
+   * ALTO VOLUME (onda 2): o projeto sazonal ao qual esta admissão pertence.
+   *
+   * OPCIONAL, e opcional de verdade: liberação sem Alto Volume não manda o campo e nada muda para
+   * ela. Quem decide é o FLAG da tela, não o período: o período apenas SUGERE o projeto, e a fonte
+   * definitiva do vínculo é a escolha explícita que chega aqui.
+   *
+   * Quem valida se o projeto existe, está ativo e é DESTE cliente é o serviço, que é quem tem o
+   * cliente em mãos. A validação de forma aqui só garante que é um uuid.
+   */
+  @IsOptional()
+  @IsUUID()
+  projetoId?: string;
+
+  /**
+   * Grupo de entrada dentro do projeto (a leva). OPCIONAL mesmo com o projeto escolhido: projeto sem
+   * grupo cadastrado não tem o que perguntar, e projeto com grupos ainda aceita a admissão presa só
+   * ao projeto, sem leva definida.
+   */
+  @IsOptional()
+  @IsUUID()
+  grupoEntradaId?: string;
+
+  /**
    * SEXO DO CANDIDATO (OST do seletor de sexo). É o ÚNICO caminho de escrita depois da criação: até
    * aqui o campo só existia no wizard, e uma admissão que chegava do Pandapé com o sexo errado não
    * tinha onde ser corrigida. Foi o caso real que originou a OST: candidata gravada como MASCULINO,

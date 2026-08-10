@@ -21,6 +21,13 @@ import { Select } from "@/components/ui/Select";
 import { MultiSelect } from "@/components/ui/MultiSelect";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Stepper, type StepDef } from "@/components/nova/Stepper";
+import { BlocoAltoVolume } from "@/components/alto-volume/BlocoAltoVolume";
+import {
+  projetosDoCliente,
+  sugerirProjetoPorPeriodo,
+  type GrupoDoSeletor,
+  type ProjetoDoSeletor,
+} from "@/lib/alto-volume";
 
 // ── Tipos do contrato de API (F6) ──────────────────────────────────────────
 interface Cliente {
@@ -209,6 +216,16 @@ export default function NovaAdmissaoPage() {
   const [reaproveitado, setReaproveitado] = useState(false);
 
   // Confirmação + aceite (W6)
+  /**
+   * ALTO VOLUME (onda 2) no WIZARD. Mesmo bloco da Liberação, e é decisão do diretor cobrir as duas
+   * portas agora, para não ter de refatorar depois: uma admissão criada aqui pertence ao projeto
+   * tanto quanto a que entrou pela Liberação, e sem isto ela ficaria fora da contagem em silêncio.
+   */
+  const [projetosAv, setProjetosAv] = useState<ProjetoDoSeletor[]>([]);
+  const [avLigado, setAvLigado] = useState(false);
+  const [avProjetoSel, setAvProjetoSel] = useState("");
+  const [avGrupoSel, setAvGrupoSel] = useState("");
+  const [avGrupos, setAvGrupos] = useState<GrupoDoSeletor[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [result, setResult] = useState<CreateResult | null>(null);
@@ -292,6 +309,73 @@ export default function NovaAdmissaoPage() {
       .then((r) => setBeneficiosPadraoCliente(r ?? {}))
       .catch(() => setBeneficiosPadraoCliente({}));
   }, [token, cliente]);
+
+  /**
+   * ALTO VOLUME: catálogo de projetos, uma vez. Falha aqui só apaga o bloco da tela, nunca impede
+   * criar admissão, pelo mesmo motivo do carregamento na Liberação.
+   */
+  useEffect(() => {
+    if (!token) return;
+    let vivo = true;
+    apiFetch<ProjetoDoSeletor[]>("/admin/alto-volume", { token })
+      .then((ps) => {
+        if (vivo) setProjetosAv(ps);
+      })
+      .catch(() => setProjetosAv([]));
+    return () => {
+      vivo = false;
+    };
+  }, [token]);
+
+  const avProjetos = useMemo(
+    () => projetosDoCliente(projetosAv, cliente?.codCliente ?? ""),
+    [projetosAv, cliente],
+  );
+  const avDisponivel = avProjetos.length > 0;
+  const avSugerido = useMemo(
+    () => sugerirProjetoPorPeriodo(avProjetos, cand.dataAdmissao),
+    [avProjetos, cand.dataAdmissao],
+  );
+
+  // Coerência com o cliente escolhido, idêntica à da Liberação: trocar o cliente invalida o projeto,
+  // e cliente sem projeto desliga o flag para ele não ficar ligado num bloco que sumiu da tela.
+  useEffect(() => {
+    if (!avDisponivel) {
+      setAvLigado(false);
+      setAvProjetoSel("");
+      setAvGrupoSel("");
+      return;
+    }
+    if (avProjetoSel && !avProjetos.some((p) => p.id === avProjetoSel)) {
+      setAvProjetoSel("");
+      setAvGrupoSel("");
+    }
+  }, [avDisponivel, avProjetos, avProjetoSel]);
+
+  useEffect(() => {
+    if (!avSugerido) return;
+    setAvProjetoSel((atual) => atual || avSugerido);
+  }, [avSugerido]);
+
+  useEffect(() => {
+    setAvGrupoSel("");
+    if (!token || !avProjetoSel) {
+      setAvGrupos([]);
+      return;
+    }
+    let vivo = true;
+    apiFetch<{ grupos: GrupoDoSeletor[] }>(
+      `/admin/alto-volume/${encodeURIComponent(avProjetoSel)}`,
+      { token },
+    )
+      .then((p) => {
+        if (vivo) setAvGrupos(p.grupos ?? []);
+      })
+      .catch(() => setAvGrupos([]));
+    return () => {
+      vivo = false;
+    };
+  }, [token, avProjetoSel]);
 
   // Valor OBRIGATÓRIO (decisão do diretor): quem seleciona VR/VA/AM/Cesta básica/PLR/Auxílio creche
   // tem de dizer quanto. Bloqueia o avanço; o backend revalida pela mesma regra.
@@ -496,6 +580,10 @@ export default function NovaAdmissaoPage() {
           dataAdmissao: cand.dataAdmissao || undefined,
           tipoContrato: vaga.tipoContrato || undefined,
           vagaFolha: hasVaga ? vagaFolha : undefined,
+          // ALTO VOLUME (onda 2): só viaja com o flag ligado, igual à Liberação. Desligado, o POST
+          // sai exatamente como saía antes desta onda.
+          projetoId: avLigado ? avProjetoSel || undefined : undefined,
+          grupoEntradaId: avLigado && avProjetoSel ? avGrupoSel || undefined : undefined,
           aceitePendencias,
         },
       });
@@ -517,6 +605,11 @@ export default function NovaAdmissaoPage() {
 
   function resetWizard() {
     setStep(0);
+    // ALTO VOLUME: zerado junto com o resto. A próxima admissão escolhe o projeto dela.
+    setAvLigado(false);
+    setAvProjetoSel("");
+    setAvGrupoSel("");
+    setAvGrupos([]);
     setClienteQuery("");
     setClienteResults([]);
     setCliente(null);
@@ -1074,6 +1167,24 @@ export default function NovaAdmissaoPage() {
                   tipo de contrato (Jovem Aprendiz).
                 </p>
               </div>
+            )}
+
+            {/* ALTO VOLUME (onda 2) no wizard. Fica NESTA etapa, e não na da vaga, porque a sugestão
+                por período depende da data de admissão, que é digitada logo acima. Só aparece para
+                cliente com projeto ativo, como na Liberação. */}
+            {avDisponivel && (
+              <BlocoAltoVolume
+                idAria="nova admissão"
+                ligado={avLigado}
+                onLigado={setAvLigado}
+                projetos={avProjetos}
+                projetoSel={avProjetoSel}
+                onProjeto={setAvProjetoSel}
+                grupos={avGrupos}
+                grupoSel={avGrupoSel}
+                onGrupo={setAvGrupoSel}
+                sugeridoId={avSugerido}
+              />
             )}
 
             {lookupLoading && <p className="text-sm text-faint">Verificando histórico do CPF…</p>}
