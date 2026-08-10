@@ -8741,3 +8741,85 @@ as etiquetas.
 durante a construção. Duas comparações "antes e depois" desta sessão divergiram por dado novo, não por
 regressão (uma admissão criada às 14:31 e dois envelopes assinados durante a tarde). Comparação
 antes/depois só vale se for no MESMO instante ou se a diferença for explicada no banco.
+
+## 10/08/2026: Alto Volume, onda 1 no ar e commitada
+
+Frente nova. A onda 1 entrega só o CADASTRO do projeto sazonal: um cliente, um período, os grupos de
+entrada e as vagas por cargo. Não liga admissão a projeto, que é a onda 2, pelo flag no ato da
+Liberação.
+
+### O que subiu
+
+**Banco, migração 0063, quatro tabelas.** `projetos_alto_volume` (unique por cliente mais nome, check
+de data_fim maior ou igual a data_inicio), `projeto_grupo_entrada` (unique por data dentro do
+projeto), `projeto_vaga_cargo` (quantidade por cargo, com DOIS índices parciais travando cargo
+repetido, um para a vaga do projeto com grupo nulo e outro para a vaga de grupo, porque um unique
+comum não fecha as duas formas) e `admissao_projeto` (o vínculo da onda 2, unique por admissão, já com
+`origem` LIBERACAO ou CORRECAO, autor e data).
+
+**Por que a origem existe desde já:** ela guarda a trilha de como o vínculo nasceu. Sem ela, um projeto
+cheio de correção manual fica indistinguível de um liberado certo desde o começo, e ninguém descobre
+onde o processo falha.
+
+**Backend `admin/alto-volume`:** CRUD de projeto, grupo e vaga, com inativar e reativar. RBAC na régua
+já fixada depois do incidente da Liberação: **leitura aberta a qualquer autenticado, escrita
+reivindicada pelo menu**. A leitura fica de fora das operações de propósito, porque na onda 2 o modal
+da Liberação vai listar os projetos do cliente e o consultor COMUM não terá este menu, que é do
+Gerencial; gatar a leitura repetiria o 403 que já derrubou o dropdown do Gerador de Kit.
+
+**Frontend:** tela de cadastro aninhado em `/admin/alto-volume`, mais o card no hub. Os dois passos são
+necessários e nenhum substitui o outro: o registro em `domain/menus` faz o menu EXISTIR para o diretor
+liberar, o card faz a tela ser ENCONTRADA. Foi exatamente o buraco do menu Clínicas. A linha em
+`menu-rotas.ts` fecha a URL direta, senão qualquer autenticado abriria a tela sem o menu liberado.
+Menu novo nasce só para o SUPER_ADMIN (§A.23): o diretor enxerga por bypass, e liberar os demais segue
+sendo decisão dele.
+
+### Publicação, e o motivo real de a tela não aparecer
+
+A onda estava com gate verde mas o diretor não achava a tela. O banco já tinha a 0063 e o menu já
+estava na tabela. O que faltava era mais simples: o processo do backend no ar tinha subido às 13:13, de
+um `dist` ANTERIOR ao build das 13:21, então rodava código velho. Backend rebuildado e reiniciado
+(14:59, log de boot com as 12 rotas do `AltoVolumeController` mapeadas e o catálogo de menus convergido
+em 28 registrados) e frontend rebuildado pelo caminho seguro do §A.13 (parar o serviço, backup do
+`.next` bom, buildar, subir), `BUILD_ID` novo às 15:02. O `tsconfig.json` foi conferido intacto depois
+do build, que ele costuma reescrever.
+
+**Segunda causa, que vale registrar:** o `alto-volume` é do grupo ADMIN, então NÃO vira item da barra
+lateral. O caminho é Menu Gerencial e depois o primeiro card. Procurar na barra esquerda não acha, e
+isso não é defeito.
+
+**Portas 200 conferidas no endereço do diretor** (`10.18.117.235:3010`, e também `192.168.1.22:3010`):
+`/login`, `/admin`, `/admin/alto-volume`, `/api/health` e `/api/admin/alto-volume` autenticado como
+SUPER_ADMIN, este último devolvendo o projeto de teste.
+
+**Prova visual (§A.13/§A.20):** card Alto Volume como primeiro do Menu Gerencial e a tela com
+"Temporada De Setembro 2026", 51947 IBEMA Companhia Brasileira De Papel, 01/09/2026 a 30/09/2026,
+2 grupos, 3 cargos, 40 vagas, pill Ativo. Nenhuma coluna esmagada.
+
+### Gate e recorte do commit
+
+Typecheck de backend e frontend limpos, lint limpo nos arquivos da onda, **1.134 testes em 112
+arquivos**, incluindo os 6 do `alto-volume.spec.ts`.
+
+Commit com `git add` nominal, **14 arquivos**. Ficaram DE FORA, soltos no working tree, as alterações
+de outra frente que dividiam a mesma árvore: `sala-espera.controller.ts`, `sala-espera.service.ts`,
+`sala-espera/page.tsx` e o `seed.ts` (status "Canceladas"), mais o `logosoulan.png`. Conferido antes de
+estagiar que `tables.ts` só ACRESCENTA no fim do arquivo (170 linhas, zero removidas) e que `enums.ts`,
+`admin.module.ts` e `_journal.json` não trazem nada de outra sessão.
+
+**Nota sobre o que já estava no ar:** o build do frontend recompila a árvore inteira, então as
+mudanças de Sala de Espera foram junto. Elas já estavam publicadas desde o build anterior (fontes de
+06/08), ou seja, nada novo fora do escopo entrou no ar agora. Vale a regra: em árvore com frentes
+paralelas, o recorte do commit é nominal, mas o do build é a árvore toda.
+
+### Achado de processo, sem correção
+
+O gate da §A.7 casa o **texto** do comando, não o comando. Ele bloqueou duas vezes um `rm` inofensivo
+porque a palavra guardada aparecia na minha própria prosa dentro de um `echo`. É o mesmo achado já
+registrado antes e mantido por decisão do diretor. O reverso continua valendo: `systemctl restart` e
+`pnpm build`, que é o que efetivamente coloca código no ar nesta VM, não são cobertos pela trava.
+
+### Parada
+
+Onda 2 (o flag no ato da Liberação, que é a fonte definitiva do projeto) NÃO foi iniciada, por
+instrução do diretor.
