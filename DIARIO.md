@@ -8918,3 +8918,80 @@ mesma linha de `eslint-disable`. Não corrigido: está fora do escopo da OST (§
 
 Onda 3 (a correção posterior do vínculo, origem `CORRECAO`) NÃO foi iniciada, por instrução do
 diretor.
+
+## 10/08/2026: auditoria da própria fábrica, a pedido do diretor
+
+O diretor pediu para ver como a fábrica está montada hoje. A leitura foi feita nos arquivos reais
+(`.claude/agents/`, `.claude/settings.json`, `scripts/gate-deploy.sh`) e comparada com os serviços no
+ar, não com a documentação. **Nada foi alterado**: a §A.14 vale para a fábrica também, e mexer nos
+agentes é decisão do diretor.
+
+### O retrato
+
+Oito agentes, um arquivo por papel. O **coordenador** é o único com a ferramenta `Agent`, ou seja, o
+único que pode acionar outro agente. **Arquiteto** e **segurança** são os únicos SEM `Edit` e `Write`,
+e isso é desenho: o arquiteto entrega plano, e a segurança devolve APROVADO ou VETADO com
+arquivo:linha, sem consertar. Os outros cinco (backend, frontend, ia, tester, devops) escrevem.
+
+A trava é uma corrente de três elos: `settings.json` registra o hook `PreToolUse` com matcher `Bash`,
+o hook chama `scripts/gate-deploy.sh`, e o script exige flag `.claude/state/READY_*` ao ver um dos
+quatro verbos guardados. Sem flag, `exit 2`.
+
+### Três desvios entre o desenhado e o real, nenhum corrigido
+
+**1. Os oito arquivos de agente estão congelados em 24/06/2026**, todos com a mesma data de
+modificação. Os prompts citam apenas §A.0 a §A.9. **Nenhuma das regras permanentes criadas depois
+está escrita neles**: travessão proibido (§A.11), padrão único de tabela (§A.12), prova visual
+obrigatória (§A.13), escopo fechado (§A.14), title case (§A.24), validou-sobe-e-commita (§A.25) e
+perguntar antes de tocar código validado (§A.26). Elas chegam ao agente só pelo `CLAUDE.md` carregado
+no contexto, não pela definição do papel dele. É uma camada de reforço que hoje não existe.
+
+**2. O gate casa o TEXTO do comando, não o comando.** Nesta mesma sessão ele bloqueou duas vezes um
+`rm` inofensivo porque a palavra guardada aparecia na minha própria prosa dentro de um `echo`. O
+reverso continua valendo: `systemctl restart` e `pnpm build`, que é o que efetivamente coloca código
+no ar nesta VM, não são cobertos. Achado antigo, mantido por decisão do diretor.
+
+**3. Duas portas erradas nos prompts.** O `devops.md` diz que o ai-service usa a **8010**, e ele
+escuta na **8000**. O `frontend.md` diz que o front serve na **3010**, e hoje o Next está na **3020**,
+com o Caddy na 3010 na frente (mudança feita para que publicar frontend não derrube a ingestão do
+webhook). Um agente devops ou frontend que confie no próprio prompt erra de porta.
+
+Detalhe menor no mesmo espírito: o `.claude/README.md` diz que o `settings.json` registra o hook **e**
+o allowlist de permissões, mas o arquivo só tem `$schema` e `hooks`. O allowlist vive no
+`settings.local.json`.
+
+### Por que fica registrado sem correção
+
+Os três são corrigíveis numa passada nos arquivos de agente, mas isso é mudança na constituição da
+fábrica, não implementação de OST. Fica aqui para o diretor decidir quando quiser. O risco de não
+corrigir é concreto no item 1: as regras que mais geraram retrabalho (prova visual, escopo fechado,
+perguntar antes de tocar código validado) são justamente as que não estão escritas no papel de
+nenhum agente.
+
+## 10/08/2026: fechamento do dia, o que foi entregue
+
+Duas ondas do Alto Volume, as duas commitadas e pushadas, mais a auditoria da fábrica.
+
+| Entrega | Commit | Estado |
+|---|---|---|
+| Onda 1, cadastro do projeto sazonal | `9550c57` | Em produção, validada pelo diretor |
+| DIARIO da onda 1 | `090125c` | Registrado |
+| Onda 2, flag na Liberação e no wizard | `0edea98` | Em produção, validada pelo diretor |
+| DIARIO da onda 2 | `6d89013` | Registrado |
+| Auditoria da fábrica | esta entrada | Registrada, sem correção (decisão do diretor) |
+
+**A frente de Alto Volume, onde parou:** o projeto é cadastrável (onda 1) e a admissão já se liga a
+ele no ato da entrada, pela Liberação individual, pela Liberação em lote e pelo wizard (onda 2). O que
+ainda NÃO existe é a **onda 3** (corrigir o vínculo depois, com origem `CORRECAO`, para a admissão que
+foi liberada sem flag ou no projeto errado) e a **onda 4** (a análise: quanto do projeto já foi
+preenchido). O enum `origem_vinculo_projeto` já nasceu com `CORRECAO` desde a onda 1, esperando.
+
+**Base de produção limpa:** nenhum dado de teste sobrou. O único registro de Alto Volume vivo é o
+projeto Temporada De Setembro 2026 (IBEMA, 2 grupos, 3 vagas), que é o de teste aceito pelo diretor na
+onda 1, e a tabela de vínculos está zerada.
+
+**O que segue solto no working tree, sem commit, e não é desta frente:** as alterações de Sala de
+Espera (`sala-espera.controller.ts`, `sala-espera.service.ts`, `sala-espera/page.tsx`) e o `seed.ts`
+com o status "Canceladas", mais o `logosoulan.png`. Elas **já estão rodando em produção** desde um
+build anterior, então são dívida invisível no sentido da §A.25, de uma frente que não foi trabalhada
+nesta sessão. Ficam para quem as validar.
