@@ -8823,3 +8823,98 @@ registrado antes e mantido por decisão do diretor. O reverso continua valendo: 
 
 Onda 2 (o flag no ato da Liberação, que é a fonte definitiva do projeto) NÃO foi iniciada, por
 instrução do diretor.
+
+## 10/08/2026: Alto Volume, onda 2, o flag na Liberação e no wizard
+
+Commit `0edea98`, 10 arquivos. A onda 1 cadastrava o projeto; esta ESCREVE o vínculo entre admissão e
+projeto. É a tela crítica da operação, e a OST veio com §A.26 em caixa alta, então metade do trabalho
+foi provar que nada muda para quem não usa o flag.
+
+### O desenho, e por que cada peça está onde está
+
+**Um ponto único de gravação.** O `INSERT` em `admissao_projeto` mora dentro do `aplicarLiberacao`,
+que é o miolo por onde o individual e o LOTE passam os dois, dentro da transação que já existia.
+Admissão e vínculo nascem juntos ou não nascem. Sem flag não há projeto, não há insert, e a liberação
+termina na linha em que terminava antes.
+
+**O gate ganhou UM TERMO, na forma exata do que já existia** para o vínculo de contrato:
+`(!avLigado || Boolean(avProjetoSel))`. Nenhuma condição existente mudou de significado, e o mesmo
+termo vale no lote.
+
+**A validação roda FORA da transação, uma vez por operação.** No individual antes de abrir a tx, no
+lote antes do laço, na companhia de cliente, cargo e régua. Recusa projeto de outro cliente, projeto
+inativo e grupo que não é do projeto: vínculo torto faz a contagem do projeto mentir sem ninguém
+perceber, e parar e explicar é melhor. No lote, projeto errado barra o lote inteiro **antes** de
+liberar qualquer um, porque o consultor escolheu o projeto uma vez, e errado para um é errado para
+todos.
+
+**A ARMADILHA DOS TRÊS DTOS, que o diretor apontou na própria OST.** O dto da liberação é tipado
+INLINE em três lugares (`liberar`, `aplicarLiberacao`, `liberarEmLote`). Um campo que entra em dois
+deles some **em silêncio** no terceiro: o objeto só perde uma propriedade que ninguém declarou, e o
+TypeScript não acusa nada. Os dois campos entraram nos três, cada um comentado apontando para os
+outros dois. A rede é o teste do lote: faltando em qualquer um, o resultado é zero vínculo em vez de
+três.
+
+**O wizard é ponto de toque à parte, e não esquecimento.** Ele cria pela `create`, que nunca passa
+pelo `aplicarLiberacao`; sem um insert próprio, marcar o flag ali não gravaria nada, calado. Grava
+origem `LIBERACAO`, não uma origem nova: o enum separa o vínculo que nasceu NO ATO do conserto
+POSTERIOR (`CORRECAO`), e o wizard é ato de entrada. Um terceiro valor exigiria migração e mexer no
+enum da onda 1, já validado (§A.26).
+
+**Sugestão por período SUGERE, não decide.** Data de admissão dentro do período de um projeto do
+cliente pré-escolhe o projeto DENTRO do bloco e a tela explica por quê, mas o toggle **nasce sempre
+desligado**. Ligar sozinho gravaria um vínculo que ninguém pediu, e o vínculo é a fonte definitiva.
+Confirmado pelo diretor.
+
+**Detalhe que evita um travamento invisível:** cliente sem projeto faz o bloco sumir da tela, e nesse
+caso o flag é DESLIGADO à força. Um flag ligado num bloco que não está mais visível travaria o botão
+de liberar sem o consultor ter como ver o motivo.
+
+**Carregamento isolado.** O catálogo de projetos carrega em efeito PRÓPRIO nas duas telas, fora do
+`Promise.all` da fila: lá, qualquer falha derrubaria a carga inteira da Liberação. Isolado, a falha só
+apaga o bloco. Frente nova não pode ter poder de derrubar a tela crítica. Confirmado pelo diretor.
+
+**Bloco em componente compartilhado** pelas três telas: triplicar o JSX seria triplicar a chance de o
+vínculo nascer diferente conforme a porta de entrada.
+
+### Gate
+
+Backend **1.154** testes em 113 arquivos (eram 1.134), frontend **97** em 16 (eram 88). Typecheck e
+lint limpos. Dos 29 testes novos, metade não testa o Alto Volume, testa que ele NÃO ACONTECE sem
+flag: individual e lote sem vínculo nenhum, a tabela de projetos **nem consultada** (espião), frentes
+e documentos intactos, e recusa **antes** de abrir transação (`contarTransacoes() === 0`).
+
+Prova visual (§A.13) nos três pontos de toque, com o bloco aparecendo só para cliente com projeto
+ativo e a sugestão funcionando em todos.
+
+**Prova funcional em produção, que nenhum teste de unidade pegaria:** liberação real pela API com o
+flag, e a linha conferida em `admissao_projeto` (projeto certo, origem `LIBERACAO`, autor e data). O
+risco fechado aqui é o `whitelist` do ValidationPipe engolir o campo novo em silêncio, que é
+exatamente a mesma família de falha da armadilha dos três dtos.
+
+### Dado de teste, criado e removido
+
+A fila de liberação estava **vazia**, então não havia como abrir o modal para provar nem para o
+diretor validar. Foram criadas 3 pré-admissões `ZZ TESTE ALTO VOLUME UM/DOIS/TRES` (CPFs de dígito
+válido, origem manual), pelo mesmo espírito do projeto de teste da onda 1.
+
+O diretor **optou por não liberar** as pré-admissões de teste de verdade, para não sujar a esteira,
+confiando na prova de ponta a ponta que a fábrica já tinha feito. Tudo foi removido depois:
+**0 candidatos de teste, 0 admissões de teste, 0 vínculos, fila de volta a 0 e nenhum órfão** em
+`dados_vaga_folha` nem em `frentes_admissao`. O projeto da onda 1 (Temporada De Setembro 2026, 2
+grupos, 3 vagas) ficou intacto.
+
+**Aprendizado para as próximas ondas:** tela que só existe a partir de uma fila não é validável com a
+fila vazia. Ou o dado de teste entra junto (e sai junto, com script de limpeza escrito ANTES), ou a
+prova visual vira promessa.
+
+### Achado de lint, pré-existente
+
+O `nova/page.tsx` acusa `Definition for rule 'react-hooks/exhaustive-deps' was not found`. Provado
+anterior a esta onda rodando o lint sobre a versão em `HEAD`, intocada, onde o mesmo erro aparece na
+mesma linha de `eslint-disable`. Não corrigido: está fora do escopo da OST (§A.14).
+
+### Parada
+
+Onda 3 (a correção posterior do vínculo, origem `CORRECAO`) NÃO foi iniciada, por instrução do
+diretor.
