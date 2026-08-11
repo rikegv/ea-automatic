@@ -2,13 +2,17 @@ import { Body, Controller, Delete, Get, Param, Patch, Post } from "@nestjs/commo
 import type { AuthUser } from "../../auth/auth.types";
 import { CurrentUser } from "../../auth/decorators";
 import { AltoVolumeService } from "./alto-volume.service";
+import { AltoVolumeVinculosService } from "./alto-volume-vinculos.service";
 import {
+  AtualizarVinculoDto,
   CreateGrupoDto,
   CreateProjetoDto,
   CreateVagaDto,
   UpdateGrupoDto,
   UpdateProjetoDto,
   UpdateVagaDto,
+  VincularAdmissaoDto,
+  VincularEmLoteDto,
 } from "./alto-volume.dto";
 
 /**
@@ -29,7 +33,10 @@ import {
  */
 @Controller("admin/alto-volume")
 export class AltoVolumeController {
-  constructor(private readonly altoVolume: AltoVolumeService) {}
+  constructor(
+    private readonly altoVolume: AltoVolumeService,
+    private readonly vinculos: AltoVolumeVinculosService,
+  ) {}
 
   // ── Leitura (aberta a qualquer autenticado) ───────────────────────────────
 
@@ -41,6 +48,42 @@ export class AltoVolumeController {
   @Get(":id")
   obter(@Param("id") id: string) {
     return this.altoVolume.obter(id);
+  }
+
+  // ── Vínculos por correção (onda 3) ────────────────────────────────────────
+  //
+  // ESTAS DUAS LEITURAS SÃO GATADAS POR MENU, ao contrário de `list`/`obter`, e a diferença é
+  // proposital. `list`/`obter` nasceram abertas porque o seletor da Liberação precisa delas na mão
+  // do consultor COMUM; estas devolvem NOME DE CANDIDATO e só servem à conferência do projeto, que é
+  // tela do Gerencial. Aberto onde a operação precisa, fechado onde é PII sem uso operacional (§A.6).
+
+  @Get(":id/vinculos")
+  listarVinculos(@Param("id") id: string) {
+    return this.vinculos.listarVinculos(id);
+  }
+
+  @Get(":id/orfaos")
+  listarOrfaos(@Param("id") id: string) {
+    return this.vinculos.listarOrfaos(id);
+  }
+
+  /** Lote: declarada ANTES de `:id/vinculos` porque o Nest casa na ordem de declaração. */
+  @Post(":id/vinculos/lote")
+  vincularEmLote(
+    @Param("id") id: string,
+    @Body() dto: VincularEmLoteDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.vinculos.vincularEmLote(id, dto, user);
+  }
+
+  @Post(":id/vinculos")
+  vincular(
+    @Param("id") id: string,
+    @Body() dto: VincularAdmissaoDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.vinculos.vincular(id, dto, user);
   }
 
   // ── Escrita de GRUPO e VAGA (rotas literais primeiro) ─────────────────────
@@ -63,6 +106,22 @@ export class AltoVolumeController {
   @Delete("vagas/:vagaId")
   removerVaga(@Param("vagaId") vagaId: string) {
     return this.altoVolume.removerVaga(vagaId);
+  }
+
+  /** Troca o projeto e/ou o grupo de um vínculo já existente (onda 3). */
+  @Patch("vinculos/:vinculoId")
+  atualizarVinculo(
+    @Param("vinculoId") vinculoId: string,
+    @Body() dto: AtualizarVinculoDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.vinculos.atualizarVinculo(vinculoId, dto, user);
+  }
+
+  /** Desvincula a admissão do projeto. A admissão não é tocada: só a linha de vínculo sai. */
+  @Delete("vinculos/:vinculoId")
+  desvincular(@Param("vinculoId") vinculoId: string) {
+    return this.vinculos.desvincular(vinculoId);
   }
 
   // ── Escrita de PROJETO ────────────────────────────────────────────────────

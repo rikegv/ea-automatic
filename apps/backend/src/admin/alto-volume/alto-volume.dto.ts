@@ -1,4 +1,7 @@
 import {
+  ArrayMaxSize,
+  ArrayNotEmpty,
+  IsArray,
   IsBoolean,
   IsDateString,
   IsInt,
@@ -123,4 +126,58 @@ export class UpdateVagaDto {
   @Min(1, { message: "A quantidade de vagas deve ser pelo menos 1." })
   @Max(10000, { message: "Quantidade de vagas acima do limite (10.000 por linha)." })
   quantidade!: number;
+}
+
+// ── Vínculos por correção (onda 3) ──────────────────────────────────────────
+
+/**
+ * VINCULAR uma admissão ao projeto depois do fato (origem `CORRECAO`).
+ *
+ * Só o id da admissão e, opcionalmente, o grupo de entrada. Nada mais entra aqui de propósito: o
+ * projeto vem da rota e o cliente vem do projeto, então não há como o corpo da requisição contradizer
+ * a tela. Nenhum dado pessoal trafega (§A.6), só ids.
+ */
+export class VincularAdmissaoDto {
+  @IsUUID()
+  admissaoId!: string;
+
+  /** Ausente = cota do projeto inteiro, que é o modo padrão do vínculo. */
+  @IsOptional()
+  @IsUUID()
+  grupoId?: string;
+}
+
+/**
+ * ADICIONAR VÁRIAS admissões de uma vez (a seleção múltipla da tela).
+ *
+ * O teto de 500 por chamada não é regra de negócio, é barreira: a maior leva real do Grupo Soulan
+ * não chega perto disso, e um pedido com milhares de ids seria erro de tela, não intenção.
+ */
+export class VincularEmLoteDto {
+  @IsArray()
+  @ArrayNotEmpty({ message: "Selecione pelo menos uma admissão." })
+  @ArrayMaxSize(500, { message: "Selecione no máximo 500 admissões por vez." })
+  @IsUUID(undefined, { each: true })
+  admissaoIds!: string[];
+
+  @IsOptional()
+  @IsUUID()
+  grupoId?: string;
+}
+
+/**
+ * TROCAR o projeto e/ou o grupo de um vínculo existente.
+ *
+ * `grupoId` aceita `null` DE PROPÓSITO, e é o que separa "não mexe no grupo" (campo ausente) de
+ * "tira do grupo" (`null` explícito). `@IsOptional` pula a validação nos dois casos, e o serviço
+ * distingue um do outro por `undefined`. Sem isso, um grupo escolhido por engano não teria desfazer.
+ */
+export class AtualizarVinculoDto {
+  @IsOptional()
+  @IsUUID()
+  projetoId?: string;
+
+  @IsOptional()
+  @IsUUID()
+  grupoId?: string | null;
 }

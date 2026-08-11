@@ -28,7 +28,19 @@ const ESCRITAS = [
   "criarVaga",
   "atualizarVaga",
   "removerVaga",
+  // Onda 3 (vínculo por correção).
+  "vincular",
+  "vincularEmLote",
+  "atualizarVinculo",
+  "desvincular",
 ];
+
+/**
+ * As leituras da ONDA 3 são gatadas por menu, ao contrário de `list`/`obter`. Elas devolvem NOME DE
+ * CANDIDATO e servem só à conferência do projeto: nenhuma tela da operação as consome, então não há
+ * o risco de 403 que obrigou a deixar o cadastro aberto (§A.6).
+ */
+const LEITURAS_DE_VINCULO = ["listarVinculos", "listarOrfaos"];
 
 describe("Alto Volume: classe sem @Roles (a régua que derrubou a Liberação não pode voltar)", () => {
   it("a controller NÃO tem @Roles em classe", () => {
@@ -37,7 +49,7 @@ describe("Alto Volume: classe sem @Roles (a régua que derrubou a Liberação n�
 
   it("nenhum método tem @Roles: quem governa a escrita é o MENU", () => {
     const proto = AltoVolumeController.prototype as unknown as Record<string, unknown>;
-    for (const m of [...ESCRITAS, "list", "obter"]) {
+    for (const m of [...ESCRITAS, ...LEITURAS_DE_VINCULO, "list", "obter"]) {
       expect(Reflect.getMetadata(ROLES_KEY, proto[m] as object), m).toBeUndefined();
     }
   });
@@ -55,9 +67,15 @@ describe("Alto Volume: escrita gated por menu, leitura aberta", () => {
    * o consultor COMUM não tem o menu `alto-volume` (que é do Gerencial). Reivindicar a leitura faria
    * o seletor tomar 403 na cara dele.
    */
-  it("a LEITURA (list/obter) NÃO é reivindicada por menu nenhum", () => {
+  it("a LEITURA DO CADASTRO (list/obter) NÃO é reivindicada por menu nenhum", () => {
     expect(menuDaOperacao("AltoVolumeController", "list")).toBeNull();
     expect(menuDaOperacao("AltoVolumeController", "obter")).toBeNull();
+  });
+
+  it("as leituras de VÍNCULO (onda 3) SÃO gatadas: devolvem nome de candidato", () => {
+    for (const m of LEITURAS_DE_VINCULO) {
+      expect(menuDaOperacao("AltoVolumeController", m), `leitura ${m}`).toBe("alto-volume");
+    }
   });
 });
 

@@ -207,10 +207,15 @@ export const MENUS: MenuDef[] = [
     // §A.23: NASCE SÓ PARA O SUPER_ADMIN. Quem libera para os demais é o diretor, na tela de
     // permissão de menu. Não aparecer para os outros usuários não é bug.
     //
-    // A LEITURA (`list`, `obter`) fica FORA das operações de propósito: na onda 2 o modal da
-    // Liberação vai listar os projetos do cliente, e o consultor COMUM não terá este menu. Gatar a
+    // A LEITURA DO CADASTRO (`list`, `obter`) fica FORA das operações de propósito: na onda 2 o modal
+    // da Liberação lista os projetos do cliente, e o consultor COMUM não tem este menu. Gatar essa
     // leitura faria o seletor tomar 403, que é exatamente o defeito que já derrubou o dropdown do
-    // Gerador de Kit. Só a ESCRITA é reivindicada.
+    // Gerador de Kit.
+    //
+    // AS LEITURAS DE VÍNCULO (onda 3) SÃO A EXCEÇÃO, e entram na lista: `listarVinculos` e
+    // `listarOrfaos` devolvem NOME DE CANDIDATO, servem só à conferência do projeto e não são usadas
+    // por tela nenhuma da operação. Aberto onde a operação precisa, fechado onde é PII sem uso
+    // operacional (§A.6).
     codigo: "alto-volume",
     rotulo: "Alto Volume",
     href: "/admin/alto-volume",
@@ -227,6 +232,12 @@ export const MENUS: MenuDef[] = [
       "AltoVolumeController.criarVaga",
       "AltoVolumeController.atualizarVaga",
       "AltoVolumeController.removerVaga",
+      "AltoVolumeController.listarVinculos",
+      "AltoVolumeController.listarOrfaos",
+      "AltoVolumeController.vincular",
+      "AltoVolumeController.vincularEmLote",
+      "AltoVolumeController.atualizarVinculo",
+      "AltoVolumeController.desvincular",
     ],
   },
   {

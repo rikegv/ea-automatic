@@ -28,6 +28,7 @@ import { Select } from "@/components/ui/Select";
 import { StatusPill } from "@/components/ui/StatusPill";
 import { Pill } from "@/components/ui/Pill";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { Modal } from "@/components/ui/Modal";
 import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
 import { Icon } from "@/components/ui/Icon";
 import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
@@ -70,6 +71,46 @@ interface Detalhe {
   vagas: Vaga[];
 }
 
+/**
+ * VÍNCULO já feito (onda 3): quem conta neste projeto, e a trilha de como o vínculo nasceu.
+ * `origem` é o que diz se veio do flag da Liberação ou de conserto posterior.
+ */
+interface Vinculo {
+  id: string;
+  admissaoId: string;
+  candidatoNome: string;
+  /** Cliente da admissão, sempre exibido com o código na frente (design system). */
+  codCliente: string | null;
+  clienteRazaoSocial: string | null;
+  clienteNomeOperacao: string | null;
+  cargoNome: string | null;
+  dataAdmissao: string | null;
+  grupoId: string | null;
+  /**
+   * Campos que a API CONTINUA devolvendo e a tela NÃO mostra mais (decisão do diretor: farol,
+   * origem e trilha do vínculo são bastidor). Ficam declarados porque o dado existe e é auditável;
+   * quem precisar deles lê o banco ou a rota, não esta tabela.
+   */
+  farolGlobal: string;
+  grupoRotulo: string | null;
+  origem: "LIBERACAO" | "CORRECAO";
+  vinculadoEm: string;
+  vinculadoPorNome: string | null;
+}
+
+/** ADMISSÃO SEM PROJETO: do cliente do projeto, dentro do período dele, e sem vínculo nenhum. */
+interface Orfao {
+  admissaoId: string;
+  candidatoNome: string;
+  codCliente: string | null;
+  clienteRazaoSocial: string | null;
+  clienteNomeOperacao: string | null;
+  cargoNome: string | null;
+  dataAdmissao: string | null;
+  farolGlobal: string;
+  tipoContrato: string | null;
+}
+
 interface Cliente {
   codCliente: string;
   razaoSocial: string;
@@ -107,6 +148,23 @@ function rotuloCliente(
   return `${codCliente} · ${nomeOperacao ?? razaoSocial}`;
 }
 
+/**
+ * O mesmo rótulo para as linhas de admissão, onde os três campos podem vir nulos: a admissão de
+ * pré-liberação nasce sem cliente. Sem cliente, "não informado" (§A.11), nunca um código solto.
+ */
+function rotuloClienteDaLinha(linha: {
+  codCliente: string | null;
+  clienteNomeOperacao: string | null;
+  clienteRazaoSocial: string | null;
+}): string {
+  if (!linha.codCliente) return "não informado";
+  return rotuloCliente(
+    linha.codCliente,
+    linha.clienteNomeOperacao,
+    linha.clienteRazaoSocial ?? linha.codCliente,
+  );
+}
+
 export default function AltoVolumePage() {
   const { token } = useAuth();
 
@@ -137,6 +195,12 @@ export default function AltoVolumePage() {
   const [erroDetalhe, setErroDetalhe] = useState<string | null>(null);
 
   // Formulário do GRUPO de entrada.
+  /**
+   * Grupos de entrada são OPCIONAIS e a maioria dos projetos não usa. A seção some quando o projeto
+   * não tem nenhum, e este estado é a porta de volta: sem ele, o primeiro grupo nunca poderia ser
+   * cadastrado, porque o formulário mora dentro da seção escondida.
+   */
+  const [usarGrupos, setUsarGrupos] = useState(false);
   const [grupoRotulo, setGrupoRotulo] = useState("");
   const [grupoData, setGrupoData] = useState("");
   const [grupoEditando, setGrupoEditando] = useState<string | null>(null);
@@ -149,6 +213,29 @@ export default function AltoVolumePage() {
   const [vagaQtd, setVagaQtd] = useState("");
   const [salvandoVaga, setSalvandoVaga] = useState(false);
   const [confirmarVaga, setConfirmarVaga] = useState<Vaga | null>(null);
+
+  // VÍNCULOS (onda 3): quem já está no projeto e as admissões do período que ficaram sem projeto.
+  const [vinculos, setVinculos] = useState<Vinculo[]>([]);
+  const [orfaos, setOrfaos] = useState<Orfao[]>([]);
+  const [carregandoElos, setCarregandoElos] = useState(false);
+  const [erroElos, setErroElos] = useState<string | null>(null);
+  /** Grupo aplicado ao adicionar. Fica FORA da linha: escolhe-se uma vez e adiciona vários. */
+  const [grupoParaVincular, setGrupoParaVincular] = useState("");
+  const [agindoEm, setAgindoEm] = useState<string | null>(null);
+  const [confirmarDesvinculo, setConfirmarDesvinculo] = useState<Vinculo | null>(null);
+  /** Seleção múltipla da lista "Admissões Sem Projeto" (adicionar em lote). */
+  const [selecionadas, setSelecionadas] = useState<string[]>([]);
+  const [adicionandoLote, setAdicionandoLote] = useState(false);
+  /** Filtro por cliente da lista "Admissões Sem Projeto". Vazio = todos. */
+  const [filtroClienteOrfaos, setFiltroClienteOrfaos] = useState("");
+
+  // Modal da TROCA de projeto/grupo de um vínculo existente.
+  const [trocando, setTrocando] = useState<Vinculo | null>(null);
+  const [trocaProjetoId, setTrocaProjetoId] = useState("");
+  const [trocaGrupoId, setTrocaGrupoId] = useState("");
+  const [trocaGrupos, setTrocaGrupos] = useState<Grupo[]>([]);
+  const [salvandoTroca, setSalvandoTroca] = useState(false);
+  const [erroTroca, setErroTroca] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -193,6 +280,33 @@ export default function AltoVolumePage() {
         setErroDetalhe(e instanceof Error ? e.message : "Erro ao carregar o projeto");
       } finally {
         setCarregandoDetalhe(false);
+      }
+    },
+    [token],
+  );
+
+  /**
+   * As duas listas de vínculo do projeto aberto, buscadas JUNTAS: elas são as duas metades da mesma
+   * pergunta (quem está dentro, quem ficou de fora) e ver uma sem a outra levaria a conclusão errada.
+   */
+  const carregarElos = useCallback(
+    async (id: string) => {
+      setCarregandoElos(true);
+      setErroElos(null);
+      try {
+        const [v, o] = await Promise.all([
+          apiFetch<Vinculo[]>(`/admin/alto-volume/${encodeURIComponent(id)}/vinculos`, { token }),
+          apiFetch<Orfao[]>(`/admin/alto-volume/${encodeURIComponent(id)}/orfaos`, { token }),
+        ]);
+        setVinculos(v);
+        setOrfaos(o);
+        // A seleção morre a cada recarga de propósito: quem já entrou no projeto saiu da lista, e
+        // manter o id marcado faria o próximo lote pedir de novo alguém que já está lá.
+        setSelecionadas([]);
+      } catch (e) {
+        setErroElos(e instanceof Error ? e.message : "Erro ao carregar os vínculos");
+      } finally {
+        setCarregandoElos(false);
       }
     },
     [token],
@@ -315,16 +429,31 @@ export default function AltoVolumePage() {
     if (abertoId === p.id) {
       setAbertoId(null);
       setDetalhe(null);
+      limparElos();
       return;
     }
     setAbertoId(p.id);
     setDetalhe(null);
     limparFormularioGrupo();
     limparFormularioVaga();
-    await carregarDetalhe(p.id);
+    limparElos();
+    setUsarGrupos(false);
+    await Promise.all([carregarDetalhe(p.id), carregarElos(p.id)]);
+  }
+
+  function limparElos() {
+    setVinculos([]);
+    setOrfaos([]);
+    setErroElos(null);
+    setGrupoParaVincular("");
+    setSelecionadas([]);
+    setFiltroClienteOrfaos("");
   }
 
   // ── Grupos de entrada ─────────────────────────────────────────────────────
+
+  /** A seção de grupos aparece se o projeto JÁ usa turmas, ou se pediram para passar a usar. */
+  const mostrarGrupos = (detalhe?.grupos.length ?? 0) > 0 || usarGrupos;
 
   function limparFormularioGrupo() {
     setGrupoEditando(null);
@@ -464,9 +593,184 @@ export default function AltoVolumePage() {
     }
   }
 
+  // ── Vínculos: adicionar ao projeto, trocar de projeto, desvincular (onda 3) ─
+
+  /**
+   * ADICIONA a admissão ao projeto. Grava com origem `CORRECAO`, que é o que distingue o conserto do
+   * flag da Liberação na trilha. A admissão não é tocada: só nasce a linha de vínculo.
+   */
+  async function vincularOrfao(o: Orfao) {
+    if (!abertoId) return;
+    setAgindoEm(o.admissaoId);
+    setErroElos(null);
+    try {
+      await apiFetch(`/admin/alto-volume/${encodeURIComponent(abertoId)}/vinculos`, {
+        method: "POST",
+        token,
+        body: { admissaoId: o.admissaoId, grupoId: grupoParaVincular || undefined },
+      });
+      await carregarElos(abertoId);
+    } catch (e) {
+      setErroElos(e instanceof Error ? e.message : "Erro ao adicionar a admissão ao projeto");
+    } finally {
+      setAgindoEm(null);
+    }
+  }
+
+  /**
+   * ADICIONA as selecionadas de uma vez. Uma chamada só para as N: o backend valida projeto e grupo
+   * uma vez e devolve quem entrou e quem falhou, para a tela dizer o resultado sem adivinhar.
+   */
+  async function adicionarSelecionadas() {
+    if (!abertoId || selecionadas.length === 0) return;
+    setAdicionandoLote(true);
+    setErroElos(null);
+    try {
+      const r = await apiFetch<{ adicionadas: number; falhas: { motivo: string }[] }>(
+        `/admin/alto-volume/${encodeURIComponent(abertoId)}/vinculos/lote`,
+        {
+          method: "POST",
+          token,
+          body: { admissaoIds: selecionadas, grupoId: grupoParaVincular || undefined },
+        },
+      );
+      await carregarElos(abertoId);
+      // As falhas viram aviso, não erro silencioso: quem não entrou continua na lista de baixo.
+      if (r.falhas.length > 0) {
+        setErroElos(
+          `${r.adicionadas} adicionada(s). ${r.falhas.length} não entrou(entraram): ${r.falhas[0].motivo}`,
+        );
+      }
+    } catch (e) {
+      setErroElos(e instanceof Error ? e.message : "Erro ao adicionar as admissões ao projeto");
+    } finally {
+      setAdicionandoLote(false);
+    }
+  }
+
+  async function desvincular() {
+    const v = confirmarDesvinculo;
+    if (!v || !abertoId) return;
+    setAgindoEm(v.id);
+    setErroElos(null);
+    try {
+      await apiFetch(`/admin/alto-volume/vinculos/${encodeURIComponent(v.id)}`, {
+        method: "DELETE",
+        token,
+      });
+      setConfirmarDesvinculo(null);
+      await carregarElos(abertoId);
+    } catch (e) {
+      setConfirmarDesvinculo(null);
+      setErroElos(e instanceof Error ? e.message : "Erro ao desvincular");
+    } finally {
+      setAgindoEm(null);
+    }
+  }
+
+  function abrirTroca(v: Vinculo) {
+    setTrocando(v);
+    setErroTroca(null);
+    setTrocaProjetoId(abertoId ?? "");
+    setTrocaGrupos(detalhe?.grupos ?? []);
+    setTrocaGrupoId(v.grupoId ?? "");
+  }
+
+  /**
+   * Trocar o projeto troca também a lista de grupos: grupo é do projeto, e oferecer os grupos do
+   * projeto de origem levaria direto à recusa do backend ("o grupo não pertence a este projeto").
+   */
+  async function escolherProjetoDaTroca(id: string) {
+    setTrocaProjetoId(id);
+    setTrocaGrupoId("");
+    if (id === abertoId) {
+      setTrocaGrupos(detalhe?.grupos ?? []);
+      return;
+    }
+    try {
+      const d = await apiFetch<Detalhe>(`/admin/alto-volume/${encodeURIComponent(id)}`, { token });
+      setTrocaGrupos(d.grupos);
+    } catch {
+      setTrocaGrupos([]);
+    }
+  }
+
+  async function salvarTroca() {
+    const v = trocando;
+    if (!v || !abertoId) return;
+    setSalvandoTroca(true);
+    setErroTroca(null);
+    try {
+      await apiFetch(`/admin/alto-volume/vinculos/${encodeURIComponent(v.id)}`, {
+        method: "PATCH",
+        token,
+        // `null` é o "tira do grupo" explícito. Mandar ausente manteria o grupo atual.
+        body: { projetoId: trocaProjetoId, grupoId: trocaGrupoId || null },
+      });
+      setTrocando(null);
+      await carregarElos(abertoId);
+    } catch (e) {
+      setErroTroca(e instanceof Error ? e.message : "Erro ao trocar o vínculo");
+    } finally {
+      setSalvandoTroca(false);
+    }
+  }
+
   const podeSalvarProjeto = Boolean(
     (editando || codCliente) && nome.trim() && dataInicio && dataFim,
   );
+  const projetoAberto = useMemo(
+    () => rows.find((p) => p.id === abertoId) ?? null,
+    [rows, abertoId],
+  );
+  /** Projeto inativo não recebe nem perde vínculo: a tela esconde as ações e explica o caminho. */
+  const projetoAtivo = projetoAberto?.ativo ?? false;
+  /** Destinos possíveis da troca: os projetos ATIVOS do MESMO cliente (a regra do backend). */
+  const projetosDoCliente = useMemo(
+    () => rows.filter((p) => p.ativo && p.codCliente === projetoAberto?.codCliente),
+    [rows, projetoAberto],
+  );
+
+  /**
+   * Clientes presentes na lista "Admissões Sem Projeto", para o filtro. Sai da própria lista e não
+   * do catálogo inteiro: filtro que oferece cliente sem nenhuma linha é filtro que só devolve vazio.
+   */
+  const clientesDosOrfaos = useMemo(() => {
+    const mapa = new Map<string, string>();
+    for (const o of orfaos) {
+      if (o.codCliente && !mapa.has(o.codCliente)) {
+        mapa.set(o.codCliente, rotuloClienteDaLinha(o));
+      }
+    }
+    return [...mapa].map(([value, label]) => ({ value, label }));
+  }, [orfaos]);
+
+  const orfaosVisiveis = useMemo(
+    () => (filtroClienteOrfaos ? orfaos.filter((o) => o.codCliente === filtroClienteOrfaos) : orfaos),
+    [orfaos, filtroClienteOrfaos],
+  );
+
+  // "Selecionar todos" opera sobre o que está À VISTA (o filtro), nunca sobre a lista inteira: marcar
+  // em silêncio linha que a pessoa não está vendo é a receita do lote errado.
+  const idsVisiveis = useMemo(() => orfaosVisiveis.map((o) => o.admissaoId), [orfaosVisiveis]);
+  const todosVisiveisMarcados =
+    idsVisiveis.length > 0 && idsVisiveis.every((id) => selecionadas.includes(id));
+
+  function alternarSelecao(admissaoId: string) {
+    setSelecionadas((atual) =>
+      atual.includes(admissaoId)
+        ? atual.filter((id) => id !== admissaoId)
+        : [...atual, admissaoId],
+    );
+  }
+
+  function alternarTodos() {
+    setSelecionadas((atual) =>
+      todosVisiveisMarcados
+        ? atual.filter((id) => !idsVisiveis.includes(id))
+        : [...new Set([...atual, ...idsVisiveis])],
+    );
+  }
   const rotuloGrupo = (id: string | null) =>
     detalhe?.grupos.find((g) => g.id === id)?.rotulo ?? "Projeto Inteiro";
   const totalVagas = detalhe?.vagas.reduce((s, v) => s + v.quantidade, 0) ?? 0;
@@ -692,8 +996,12 @@ export default function AltoVolumePage() {
             <h2 className="text-[17px] font-semibold text-text">
               {detalhe ? detalhe.nome : "Carregando…"}
             </h2>
+            {/* O subtítulo acompanha o que a tela realmente mostra: anunciar "Grupos De Entrada"
+                com a seção escondida seria mandar procurar o que não está lá. */}
             <span className="text-sm text-dim">
-              Grupos De Entrada E Vagas Por Cargo
+              {mostrarGrupos
+                ? "Grupos De Entrada, Vagas Por Cargo E Admissões"
+                : "Vagas Por Cargo E Admissões Do Projeto"}
             </span>
             <button
               type="button"
@@ -719,11 +1027,27 @@ export default function AltoVolumePage() {
           {carregandoDetalhe && !detalhe ? (
             <p className="py-6 text-center text-faint">Carregando o projeto…</p>
           ) : detalhe ? (
-            <div className="grid gap-5 lg:grid-cols-2">
-              {/* ── GRUPOS DE ENTRADA ─────────────────────────────────────── */}
+            <>
+            <div className={`grid gap-5 ${mostrarGrupos ? "lg:grid-cols-2" : ""}`}>
+              {/* ── GRUPOS DE ENTRADA (só quando o projeto usa turmas) ───────
+                  A maioria dos projetos entra de uma vez só, e para esses a seção inteira era
+                  bastidor ocupando metade do painel (decisão do diretor). Ela some quando não há
+                  grupo cadastrado, e volta pelo link "usar grupos de entrada", que é o ÚNICO caminho
+                  para cadastrar o primeiro: escondê-la sem uma porta de volta deixaria o recurso
+                  inalcançável para quem um dia precisar dele. */}
+              {mostrarGrupos && (
               <section>
-                <h3 className="mb-2 text-[13px] font-semibold uppercase tracking-wide text-faint">
+                <h3 className="mb-2 flex flex-wrap items-center gap-2 text-[13px] font-semibold uppercase tracking-wide text-faint">
                   Grupos De Entrada
+                  {detalhe.grupos.length === 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setUsarGrupos(false)}
+                      className="normal-case text-accent hover:underline"
+                    >
+                      não usar grupos
+                    </button>
+                  )}
                 </h3>
                 <form onSubmit={salvarGrupo} className="mb-3 flex flex-wrap gap-2">
                   <input
@@ -801,14 +1125,24 @@ export default function AltoVolumePage() {
                   </table>
                 </div>
               </section>
+              )}
 
               {/* ── VAGAS POR CARGO ───────────────────────────────────────── */}
               <section>
-                <h3 className="mb-2 flex items-center gap-2 text-[13px] font-semibold uppercase tracking-wide text-faint">
+                <h3 className="mb-2 flex flex-wrap items-center gap-2 text-[13px] font-semibold uppercase tracking-wide text-faint">
                   Vagas Por Cargo
                   <span className="normal-case text-dim">
                     total: <span className="font-semibold tabular-nums text-text">{totalVagas}</span>
                   </span>
+                  {!mostrarGrupos && (
+                    <button
+                      type="button"
+                      onClick={() => setUsarGrupos(true)}
+                      className="ml-auto normal-case text-accent hover:underline"
+                    >
+                      usar grupos de entrada
+                    </button>
+                  )}
                 </h3>
                 <form onSubmit={criarVaga} className="mb-3 flex flex-wrap gap-2">
                   <div className="min-w-[170px] flex-1">
@@ -822,21 +1156,24 @@ export default function AltoVolumePage() {
                       options={cargos.map((c) => ({ value: c.id, label: c.nome }))}
                     />
                   </div>
-                  <div className="min-w-[170px] flex-1">
-                    {/* Vazio = cota do PROJETO INTEIRO, que é o modo padrão. Escolher um grupo
-                        transforma a linha na cota daquela leva. */}
-                    <Select
-                      value={vagaGrupoId}
-                      onChange={setVagaGrupoId}
-                      placeholder="Projeto Inteiro"
-                      ariaLabel="Grupo de entrada das vagas"
-                      menuFit
-                      options={[
-                        { value: "", label: "Projeto Inteiro" },
-                        ...detalhe.grupos.map((g) => ({ value: g.id, label: g.rotulo })),
-                      ]}
-                    />
-                  </div>
+                  {/* O seletor de cota só aparece quando existe grupo: sem turma cadastrada ele
+                      teria uma opção só ("Projeto Inteiro"), que é o padrão, e escolher entre uma
+                      opção não é escolha, é ruído (decisão do diretor). */}
+                  {detalhe.grupos.length > 0 && (
+                    <div className="min-w-[170px] flex-1">
+                      <Select
+                        value={vagaGrupoId}
+                        onChange={setVagaGrupoId}
+                        placeholder="Projeto Inteiro"
+                        ariaLabel="Grupo de entrada das vagas"
+                        menuFit
+                        options={[
+                          { value: "", label: "Projeto Inteiro" },
+                          ...detalhe.grupos.map((g) => ({ value: g.id, label: g.rotulo })),
+                        ]}
+                      />
+                    </div>
+                  )}
                   <input
                     required
                     type="number"
@@ -862,7 +1199,9 @@ export default function AltoVolumePage() {
                     <thead>
                       <tr>
                         <th>Cargo</th>
-                        <th className="w-[150px]">Cota</th>
+                        {/* A COTA só faz sentido havendo grupo: sem turma, toda vaga é do projeto
+                            inteiro e a coluna repetiria a mesma pill em todas as linhas. */}
+                        {mostrarGrupos && <th className="w-[150px]">Cota</th>}
                         <th className="w-[110px]">Vagas</th>
                         <th className="w-[110px]">Ações</th>
                       </tr>
@@ -870,7 +1209,7 @@ export default function AltoVolumePage() {
                     <tbody>
                       {detalhe.vagas.length === 0 ? (
                         <tr>
-                          <td colSpan={4} className="py-6 text-center text-faint">
+                          <td colSpan={mostrarGrupos ? 4 : 3} className="py-6 text-center text-faint">
                             Sem vaga cadastrada. Acrescente os cargos e a quantidade de cada um.
                           </td>
                         </tr>
@@ -878,6 +1217,7 @@ export default function AltoVolumePage() {
                         detalhe.vagas.map((v) => (
                           <tr key={v.id}>
                             <td className="font-semibold">{v.cargoNome}</td>
+                            {mostrarGrupos && (
                             <td className="text-center">
                               {/* COTA é CLASSIFICAÇÃO, não status, então usa a `Pill` neutra e NÃO a
                                   `StatusPill`. O ícone dinâmico da §A.12 existe para dizer se algo
@@ -887,6 +1227,7 @@ export default function AltoVolumePage() {
                                 <Pill tone={v.grupoId ? "in" : "nt"}>{rotuloGrupo(v.grupoId)}</Pill>
                               </span>
                             </td>
+                            )}
                             <td className="text-center">
                               {/* Edição EM LINHA da quantidade: é o campo que mais muda enquanto o
                                   projeto anda, e mandar o time abrir um formulário para trocar de 20
@@ -917,9 +1258,367 @@ export default function AltoVolumePage() {
                 </div>
               </section>
             </div>
+
+            {/* ── VÍNCULOS (onda 3): quem conta, e quem deveria contar ─────────
+                As duas tabelas ficam EMPILHADAS e em largura cheia, não lado a lado como grupos e
+                vagas: elas têm muitas colunas (candidato, cargo, data, grupo, farol, trilha) e em
+                meia tela nenhuma delas caberia sem esmagar (§A.20). */}
+            <section className="mt-6 border-t border-[var(--border)] pt-5">
+              <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1">
+                <h3 className="text-[13px] font-semibold uppercase tracking-wide text-faint">
+                  Vínculos Do Projeto
+                </h3>
+                <span className="text-sm text-dim">
+                  quem já está neste projeto, e as admissões do período que ficaram sem projeto
+                </span>
+                <button
+                  type="button"
+                  onClick={() => abertoId && void carregarElos(abertoId)}
+                  disabled={carregandoElos}
+                  className="ml-auto text-sm text-accent hover:underline disabled:opacity-50"
+                >
+                  {carregandoElos ? "atualizando…" : "atualizar"}
+                </button>
+              </div>
+
+              {erroElos && (
+                <p
+                  className="mb-3 rounded-xl border border-[var(--border)] bg-[rgba(214,69,69,0.1)] px-3 py-2 text-sm text-danger"
+                  role="alert"
+                >
+                  {erroElos}
+                </p>
+              )}
+
+              {!projetoAtivo && (
+                <p className="mb-3 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-sm text-dim">
+                  Projeto inativo: os vínculos ficam só de leitura. Reative o projeto para corrigir
+                  quem entra e quem sai dele.
+                </p>
+              )}
+
+              {/* ── ADMISSÕES JÁ NO PROJETO ──────────────────────────────── */}
+              <h4 className="mb-2 flex flex-wrap items-center gap-2 text-[13px] font-semibold text-text">
+                Admissões No Projeto
+                <span className="font-normal text-dim">
+                  total: <span className="font-semibold tabular-nums text-text">{vinculos.length}</span>
+                </span>
+              </h4>
+              <div className="mb-6 overflow-x-auto rounded-xl border border-[var(--border)]">
+                {/* §A.20: as fixas somam menos que a largura útil de propósito, para o nome do
+                    candidato (a coluna que mais varia) ficar com a sobra em vez de quebrar em três
+                    linhas. Abaixo do mínimo a tabela ROLA, nunca esmaga. */}
+                {/* CINCO COLUNAS, e o que saiu daqui é decisão do diretor: farol, origem, trilha do
+                    vínculo e grupo eram BASTIDOR nesta tela. Quem abre este painel quer ligar
+                    candidato ao projeto do cliente, não administrar frente. Os dados continuam
+                    GRAVADOS e consultáveis (a trilha existe para auditoria), só não ocupam a tela. */}
+                <table className="ds-table w-full min-w-[820px] table-fixed">
+                  <thead>
+                    <tr>
+                      <th className="w-[250px]">Candidato</th>
+                      <th className="w-[250px]">Cliente</th>
+                      <th className="w-[200px]">Cargo</th>
+                      <th className="w-[130px]">Data Adm.</th>
+                      <th className="w-[190px]">Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {carregandoElos && vinculos.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="py-6 text-center text-faint">
+                          Carregando…
+                        </td>
+                      </tr>
+                    ) : vinculos.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="py-6 text-center text-faint">
+                          Nenhuma admissão neste projeto ainda. Use a lista de baixo para adicionar.
+                        </td>
+                      </tr>
+                    ) : (
+                      vinculos.map((v) => {
+                        return (
+                          <tr key={v.id}>
+                            <td className="font-semibold">{v.candidatoNome}</td>
+                            <td>{rotuloClienteDaLinha(v)}</td>
+                            <td>{v.cargoNome ?? "não informado"}</td>
+                            <td className="text-center tabular-nums">{fmtData(v.dataAdmissao)}</td>
+                            <td className="whitespace-nowrap text-right">
+                              {projetoAtivo ? (
+                                <>
+                                  <button
+                                    onClick={() => abrirTroca(v)}
+                                    className="text-accent hover:underline"
+                                  >
+                                    trocar
+                                  </button>
+                                  <span className="px-2 text-faint">·</span>
+                                  <button
+                                    onClick={() => setConfirmarDesvinculo(v)}
+                                    disabled={agindoEm === v.id}
+                                    className="text-danger hover:underline disabled:opacity-50"
+                                  >
+                                    desvincular
+                                  </button>
+                                </>
+                              ) : (
+                                <span className="text-faint">projeto inativo</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* ── ADMISSÕES SEM PROJETO ────────────────────────────────────
+                  O nome da seção é o do OPERACIONAL, não o do banco: quem olha a tela pensa em
+                  "admissão que ficou sem projeto", não em órfão de um join (decisão do diretor). */}
+              <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-2">
+                <h4 className="flex flex-wrap items-center gap-2 text-[13px] font-semibold text-text">
+                  Admissões Sem Projeto
+                  <span className="font-normal text-dim">
+                    total: <span className="font-semibold tabular-nums text-text">{orfaos.length}</span>
+                  </span>
+                </h4>
+                {projetoAtivo && detalhe.grupos.length > 0 && (
+                  <label className="ml-auto flex items-center gap-2 text-sm text-dim">
+                    <span className="whitespace-nowrap">Adicionar ao grupo</span>
+                    <div className="min-w-[190px]">
+                      <Select
+                        value={grupoParaVincular}
+                        onChange={setGrupoParaVincular}
+                        placeholder="Projeto Inteiro"
+                        ariaLabel="Grupo de entrada do vínculo"
+                        menuFit
+                        options={[
+                          { value: "", label: "Projeto Inteiro" },
+                          ...detalhe.grupos.map((g) => ({ value: g.id, label: g.rotulo })),
+                        ]}
+                      />
+                    </div>
+                  </label>
+                )}
+              </div>
+              <p className="mb-2 text-sm text-dim">
+                São admissões deste cliente que começam dentro do período do projeto e ainda não
+                entraram em projeto nenhum. Quem já está em outro projeto não aparece aqui: nesse
+                caso, use trocar na linha da pessoa, dentro do projeto em que ela está.
+              </p>
+
+              {/* BARRA DE SELEÇÃO: o filtro por cliente e a ação em lote ficam JUNTOS, logo acima da
+                  tabela, porque um governa o outro. "Selecionar todos" marca só o que o filtro deixa
+                  à vista, e o contador diz exatamente quantas vão entrar. */}
+              <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-2">
+                <label className="flex items-center gap-2 text-sm text-dim">
+                  <span className="whitespace-nowrap">Cliente</span>
+                  <div className="min-w-[260px]">
+                    <Select
+                      value={filtroClienteOrfaos}
+                      onChange={setFiltroClienteOrfaos}
+                      placeholder="Todos Os Clientes"
+                      ariaLabel="Filtrar por cliente"
+                      searchable
+                      menuFit
+                      options={[
+                        { value: "", label: "Todos Os Clientes" },
+                        ...clientesDosOrfaos,
+                      ]}
+                    />
+                  </div>
+                </label>
+                {projetoAtivo && (
+                  <>
+                    <span className="text-sm text-dim">
+                      selecionadas:{" "}
+                      <span className="font-semibold tabular-nums text-text">
+                        {selecionadas.length}
+                      </span>
+                    </span>
+                    <Button
+                      onClick={() => void adicionarSelecionadas()}
+                      disabled={adicionandoLote || selecionadas.length === 0}
+                      className="ml-auto shrink-0 py-2"
+                    >
+                      {adicionandoLote
+                        ? "Adicionando…"
+                        : `Adicionar selecionadas ao projeto (${selecionadas.length})`}
+                    </Button>
+                  </>
+                )}
+              </div>
+
+              <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
+                {/* As MESMAS cinco colunas da lista de cima, mais a caixa de seleção: as duas listas
+                    mostram a mesma pessoa em dois estados, e colunas diferentes fariam a leitura
+                    pular de uma para a outra. */}
+                <table className="ds-table w-full min-w-[880px] table-fixed">
+                  <thead>
+                    <tr>
+                      <th className="w-[54px]">
+                        {projetoAtivo ? (
+                          <input
+                            type="checkbox"
+                            checked={todosVisiveisMarcados}
+                            onChange={alternarTodos}
+                            disabled={idsVisiveis.length === 0}
+                            className="h-4 w-4 accent-[var(--accent)]"
+                            aria-label="Selecionar todos"
+                            title="Selecionar todos"
+                          />
+                        ) : null}
+                      </th>
+                      <th className="w-[240px]">Candidato</th>
+                      <th className="w-[240px]">Cliente</th>
+                      <th className="w-[190px]">Cargo</th>
+                      <th className="w-[130px]">Data Adm.</th>
+                      <th className="w-[230px]">Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {carregandoElos && orfaos.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="py-6 text-center text-faint">
+                          Carregando…
+                        </td>
+                      </tr>
+                    ) : orfaosVisiveis.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="py-6 text-center text-faint">
+                          {filtroClienteOrfaos
+                            ? "Nenhuma admissão sem projeto neste cliente."
+                            : "Nenhuma admissão sem projeto neste período: todo mundo deste cliente que começa entre as datas do projeto já está em algum projeto."}
+                        </td>
+                      </tr>
+                    ) : (
+                      orfaosVisiveis.map((o) => {
+                        const marcada = selecionadas.includes(o.admissaoId);
+                        return (
+                          <tr key={o.admissaoId} className={marcada ? "bg-[var(--surface)]" : ""}>
+                            <td className="text-center">
+                              {projetoAtivo ? (
+                                <input
+                                  type="checkbox"
+                                  checked={marcada}
+                                  onChange={() => alternarSelecao(o.admissaoId)}
+                                  className="h-4 w-4 accent-[var(--accent)]"
+                                  aria-label={`Selecionar ${o.candidatoNome}`}
+                                />
+                              ) : null}
+                            </td>
+                            <td className="font-semibold">{o.candidatoNome}</td>
+                            <td>{rotuloClienteDaLinha(o)}</td>
+                            <td>{o.cargoNome ?? "não informado"}</td>
+                            <td className="text-center tabular-nums">{fmtData(o.dataAdmissao)}</td>
+                            <td className="whitespace-nowrap text-right">
+                              {projetoAtivo ? (
+                                <button
+                                  onClick={() => void vincularOrfao(o)}
+                                  disabled={agindoEm === o.admissaoId}
+                                  className="text-accent hover:underline disabled:opacity-50"
+                                >
+                                  {agindoEm === o.admissaoId
+                                    ? "adicionando…"
+                                    : "adicionar adm ao projeto"}
+                                </button>
+                              ) : (
+                                <span className="text-faint">projeto inativo</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+            </>
           ) : null}
         </GlassCard>
       )}
+
+      {/* TROCA de projeto/grupo de um vínculo. Modal, e não edição em linha, porque a troca precisa
+          de dois seletores dependentes (o grupo depende do projeto escolhido). */}
+      {trocando && (
+        <Modal onClose={() => setTrocando(null)} ariaLabel="Trocar o projeto do vínculo" className="max-w-lg p-5">
+          <h2 className="mb-1 text-[17px] font-semibold text-text">Trocar Projeto Do Vínculo</h2>
+          <p className="mb-4 text-sm text-dim">
+            {trocando.candidatoNome}. A admissão não muda de lugar na esteira: muda só o projeto em
+            que ela conta.
+          </p>
+
+          {erroTroca && (
+            <p
+              className="mb-3 rounded-xl border border-[var(--border)] bg-[rgba(214,69,69,0.1)] px-3 py-2 text-sm text-danger"
+              role="alert"
+            >
+              {erroTroca}
+            </p>
+          )}
+
+          <div className="mb-3">
+            <span className="mb-1 block text-sm text-dim">Projeto</span>
+            <Select
+              value={trocaProjetoId}
+              onChange={(v) => void escolherProjetoDaTroca(v)}
+              placeholder="Projeto"
+              ariaLabel="Projeto de destino"
+              searchable
+              menuFit
+              options={projetosDoCliente.map((p) => ({ value: p.id, label: p.nome }))}
+            />
+            <p className="mt-1 text-xs text-faint">
+              Só projetos ativos do mesmo cliente. Projeto de outro cliente é recusado.
+            </p>
+          </div>
+
+          {/* Grupo só entra no modal quando o projeto de destino tem turmas: no projeto sem grupo o
+              campo teria uma opção só e a troca é apenas de projeto. */}
+          {trocaGrupos.length > 0 && (
+            <div className="mb-5">
+              <span className="mb-1 block text-sm text-dim">Grupo de entrada</span>
+              <Select
+                value={trocaGrupoId}
+                onChange={setTrocaGrupoId}
+                placeholder="Projeto Inteiro"
+                ariaLabel="Grupo de entrada do vínculo"
+                menuFit
+                options={[
+                  { value: "", label: "Projeto Inteiro" },
+                  ...trocaGrupos.map((g) => ({ value: g.id, label: g.rotulo })),
+                ]}
+              />
+            </div>
+          )}
+
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button variant="secondary" onClick={() => setTrocando(null)} disabled={salvandoTroca}>
+              Cancelar
+            </Button>
+            <Button onClick={() => void salvarTroca()} disabled={salvandoTroca || !trocaProjetoId}>
+              {salvandoTroca ? "Salvando…" : "Salvar troca"}
+            </Button>
+          </div>
+        </Modal>
+      )}
+
+      <ConfirmDialog
+        open={Boolean(confirmarDesvinculo)}
+        title="Desvincular Do Projeto"
+        message={
+          confirmarDesvinculo
+            ? `Tirar ${confirmarDesvinculo.candidatoNome} do projeto? A admissão continua exatamente como está na esteira: ela só deixa de contar neste projeto e volta para a lista Admissões Sem Projeto.`
+            : ""
+        }
+        confirmLabel="Desvincular"
+        tone="danger"
+        busy={Boolean(agindoEm)}
+        onConfirm={desvincular}
+        onCancel={() => setConfirmarDesvinculo(null)}
+      />
 
       <ConfirmDialog
         open={Boolean(confirmar)}
