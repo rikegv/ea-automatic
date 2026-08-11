@@ -8995,3 +8995,90 @@ Espera (`sala-espera.controller.ts`, `sala-espera.service.ts`, `sala-espera/page
 com o status "Canceladas", mais o `logosoulan.png`. Elas **já estão rodando em produção** desde um
 build anterior, então são dívida invisível no sentido da §A.25, de uma frente que não foi trabalhada
 nesta sessão. Ficam para quem as validar.
+
+## 11/08/2026: Alto Volume onda 3, o conserto do vínculo e a Bienal
+
+Commit `0e80010`, em produção, validado pelo diretor. A onda 3 fecha o buraco que a onda 2 deixava
+por desenho: o vínculo nasce no flag da Liberação, o flag depende de o consultor lembrar dele na
+hora, e quem esquecia não tinha conserto. A admissão existia, certa na esteira, e não contava em
+projeto nenhum.
+
+### O que foi construído
+
+Um serviço à parte, `alto-volume-vinculos.service.ts`, que escreve em UMA tabela só,
+`admissao_projeto`. Não toca `aplicarLiberacao`, não toca o serviço da onda 1, não altera admissão,
+frente, documento nem farol (§A.26). Cinco rotas: as duas listas do painel, adicionar uma, adicionar
+várias e trocar ou desvincular.
+
+**A lista de admissões sem projeto é o join do preenchimento, negado** (`left join` + `is null`):
+cliente do projeto, data de admissão dentro do período, sem linha de vínculo. Declínio, rescisão e
+pré-admissão ficam fora por §A.16, que é literal sobre fila operacional em qualquer superfície. Prova
+ao vivo disso: no projeto de teste o cliente tinha três admissões no período e a lista mostrou as
+duas concluídas, escondendo a declinada.
+
+**Adicionar em lote** valida projeto e grupo uma vez e confere admissão a admissão. Uma linha ruim
+vira falha com motivo e as demais entram. O contrário seria pior no caso real, que é justamente uma
+leva inteira: uma pessoa já vinculada em outro projeto faria as outras noventa e nove voltarem sem
+explicação.
+
+**A troca é um `update`, não um desvincular seguido de vincular.** Entre os dois a pessoa não
+existiria em projeto nenhum, e é nesse intervalo que ela some da contagem dos dois lados. Trocar de
+projeto zera o grupo, porque grupo pertence ao projeto de onde ela saiu.
+
+**A trilha é regravada na correção.** Um vínculo mexido à mão não é mais o que a liberação gravou, e
+continuar exibindo `LIBERACAO` esconderia exatamente o que interessa saber.
+
+### Três voltas de linguagem e de tela, pedidas pelo diretor
+
+O que foi entregue na primeira versão estava certo e ilegível para quem opera. As correções vieram em
+sequência e cada uma tirou camada:
+
+1. **Nome de banco virou nome de operação.** "Órfãos" virou **Admissões Sem Projeto**, "vincular"
+   virou **adicionar adm ao projeto**. Rota e método continuam `orfaos`/`listarOrfaos`: são contrato
+   entre camadas, e trocá-los mexeria em menu, guard e testes sem mudar nada para quem usa.
+2. **Operacional na linha:** cliente com código nas duas listas, seleção múltipla com selecionar
+   todos, filtro por cliente.
+3. **Bastidor fora.** Farol, origem, trilha do vínculo e grupo saíram das listas, que ficaram com
+   cinco colunas (candidato, cliente, cargo, data, ações). A seção de grupos de entrada some em
+   projeto que não usa turmas, junto com o seletor de cota e a coluna Cota. **O dado continua
+   gravado**: sumiu da tela, não do banco.
+
+**A porta de volta dos grupos foi decisão de implementação, não pedido.** Esconder a seção por
+completo deixaria o recurso inalcançável, porque o formulário que cria o primeiro grupo mora dentro
+dela. Entrou um link "usar grupos de entrada" na seção de vagas; projeto que já tem grupo mostra a
+seção sempre.
+
+### A Bienal, 100 admissões vinculadas
+
+Pedido do diretor, executado pelo endpoint de lote da própria tela, não por SQL. O projeto BIENAL DOS
+LIVROS (cliente 57269, CIA DAS LETRAS, 01/09 a 13/09/2026) existia e estava ativo, sem grupos e sem
+vagas cadastradas, então tudo entrou na cota do projeto inteiro.
+
+**100 vinculadas, zero falhas**, origem `CORRECAO`. O cliente tem 147 admissões: 122 com data dentro
+do período, das quais **22 declínios** ficaram fora por §A.16, e mais **20 com data fora do período**
+(18 concluídas de março a julho e 2 de 03/08) que não entram porque começam antes de 01/09. Se essas
+duas de agosto tiverem de entrar, o caminho é esticar a data de início do projeto.
+
+A trilha das 100 mostra **Harness Visual (QA)** como autor, que é o usuário da fábrica. Foi execução
+de pedido, não ação de consultor, e carimbar o nome de quem não clicou seria mentir na auditoria.
+
+**Prova de que nada além do vínculo foi tocado:** nenhuma admissão do cliente tem `atualizado_em`
+posterior ao horário do lote.
+
+### Achado visual que custou três rodadas
+
+A coluna nova de cliente empurrou "trocar · desvincular" para fora da tela, e a pill "Admissão
+Concluída" invadia a coluna vizinha. Corrigido medindo a largura real do painel no browser
+(`table-fixed` com as larguras somando o que cabe, e coluna de pill dimensionada pelo rótulo mais
+longo, §A.12/§A.20). Fica o método: em tabela apertada, medir no browser em vez de estimar.
+
+### Estado
+
+Gate verde: lint, typecheck, 1.191 testes no backend (36 novos na onda 3) e 97 no frontend. Dado de
+teste da prova visual criado e removido sem resíduo. Em produção sobraram os dois projetos reais
+(Temporada De Setembro 2026 e BIENAL DOS LIVROS) e as 100 vinculações da Bienal.
+
+**Onde a frente parou:** falta a **onda 4**, a análise (quanto do projeto já foi preenchido, o
+termômetro de dias restantes, o alerta por grupo de entrada). Segue solto no working tree, de outra
+frente e sem relação com esta, o que já estava solto ontem: Sala de Espera, `seed.ts` e o
+`logosoulan.png`.
