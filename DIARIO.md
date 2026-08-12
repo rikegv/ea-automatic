@@ -9082,3 +9082,449 @@ teste da prova visual criado e removido sem resíduo. Em produção sobraram os 
 termômetro de dias restantes, o alerta por grupo de entrada). Segue solto no working tree, de outra
 frente e sem relação com esta, o que já estava solto ontem: Sala de Espera, `seed.ts` e o
 `logosoulan.png`.
+
+---
+
+## 2026-08-11 · Alto Volume onda 4: a análise entra no Controle Gerencial, dias úteis e a troca de cargo do 57269
+
+Sessão longa, com sete rodadas de pedido do diretor sobre a mesma frente. O fio condutor foi a
+**análise do projeto** (barras por cargo, baldes, termômetro): ela já estava construída e foi mudando
+de casa, de linguagem e de régua até bater com o painel. No meio, uma migração de dado real em
+produção.
+
+### 1. A subida que já estava feita, e a lição de processo
+
+As duas primeiras rodadas foram "o Rike não consegue ver". Nas duas, a apuração mostrou que **o
+código já estava em produção**: build de 12:04, serviços reiniciados às 12:05, chunk servido igual ao
+do disco, tudo 200 pelo endereço do diretor (`10.18.117.235:3010`, ZeroTier). A causa provável era
+cache do navegador dele.
+
+**Fica o método:** antes de rebuildar por pedido de "não está no ar", conferir (a) mtime da fonte
+contra o build, (b) `ActiveEnterTimestamp` do serviço contra o build, (c) o hash do chunk realmente
+servido. E, quando o pedido se repete, **rebuildar mesmo assim**: o `BUILD_ID` novo força o navegador
+a largar o bundle velho, que é a única hipótese que sobra depois de (a), (b) e (c).
+
+### 2. A navegação, em três desenhos até o certo
+
+O diretor pediu a mesma coisa três vezes com recortes diferentes, e cada versão foi construída,
+publicada e substituída. Registro a evolução porque o código morto de cada etapa foi removido.
+
+1. **Dois botões dentro do Alto Volume** (`Cadastro E Vínculos` / `Análise Do Projeto`), no topo das
+   duas telas, dentro do Menu Gerencial.
+2. **Os dois botões migram para o Controle Gerencial**, e o card do Alto Volume sai do Menu
+   Gerencial. Vigorou por uma rodada.
+3. **O desenho final, que é o que está no ar:** as duas metades se separam em definitivo.
+   - **CADASTRO E VÍNCULOS fica no Menu Gerencial** (`/admin/alto-volume`), com o card de volta e o
+     botão "Menu Gerencial" de sempre. É gestão.
+   - **A ANÁLISE vira visão do Controle Gerencial** (`/diretoria/alto-volume`), alcançada por um
+     alternador de pílulas `( Painel )( Alto Volume )` na faixa do título. É dashboard.
+
+`NavAltoVolume` (o componente dos dois botões) foi **removido do repositório**, não ficou órfão. No
+lugar entrou `components/diretoria/NavDiretoria.tsx`.
+
+**Por que ROTA FILHA e não modo por dentro do painel:** o Controle Gerencial é travado em
+`calc(100vh - 68px)` com `overflow-hidden`, e as três faixas (KPIs, seis tabelas, dois gráficos)
+dividem a altura por proporção. Dar dois modos à raiz daquele arquivo de 1.362 linhas mexeria no que
+já funciona sem ganhar nada. Como rota irmã, **o painel continua byte a byte o que era**.
+
+**A altura foi medida, não estimada.** Antes: faixa do título 40px, faixas 40/91/409/356 a 1600px.
+Depois: idênticas, e idênticas de novo ao voltar da visão Alto Volume. A cápsula do alternador fecha
+em **40px cravados**, a mesma altura que o ícone de filtro já impunha à faixa. Regra que ficou: porta
+nova entra na faixa do título, com a altura dela, nunca numa linha própria.
+
+**Achado colateral:** a 1366x768 o painel **já rolava alguns pixels antes** de qualquer mudança desta
+sessão. Não foi introduzido aqui e segue igual. Fica anotado para quem for mexer em altura.
+
+### 3. Regra permanente no DESIGN-SYSTEM.md
+
+Entrou a seção **"Dashboards nascem no Controle Gerencial"**, ditada pelo diretor. Foi reescrita duas
+vezes na própria sessão, acompanhando as rodadas acima, e o texto final registra:
+
+- **Gestão e análise são telas diferentes.** Cadastrar e vincular mora no Menu Gerencial; medir mora
+  no Controle Gerencial. Um assunto pode ter as duas, cada metade na sua casa.
+- **Dash novo entra como VISÃO, por rota filha** `/diretoria/<assunto>`, com pílula no alternador.
+- **Como não quebrar a altura travada** (o molde dos 40px descrito acima).
+- **Permissão da visão filha:** ela é governada pelo menu `diretoria`, porque `menu-rotas` casa por
+  prefixo. Então a leitura que a alimenta **não pode ser reivindicada por outro menu**, senão a tela
+  abre e a API responde 403.
+
+### 4. Permissão: a análise passou a ser visível para quem tem o painel
+
+Decisão do diretor. Para isso, `AltoVolumeController.analisar` **deixou de ser reivindicado** pelo
+menu `alto-volume` em `domain/menus`, entrando no mesmo regime do próprio Controle Gerencial
+(`operacoes: []`): leitura agregada aberta, com a TELA gatada pelo menu `diretoria`.
+
+**§A.6 conferido antes de abrir:** o retorno é contagem, código e rótulo de catálogo (cargo,
+cliente), sem CPF e sem nome de candidato. As leituras que devolvem NOME (`listarVinculos`,
+`listarOrfaos`) **continuam fechadas** no menu `alto-volume`.
+
+Um teste do backend afirmava que `analisar` era gatada junto com essas duas. Foi corrigido e ganhou
+um teste irmão que quebra se alguém reivindicar `analisar` de novo, **antes** de a visão começar a
+dar 403 para quem tem o painel.
+
+Levantamento que motivou o cuidado: **nenhum usuário tem o menu `alto-volume` liberado** (só admins
+alcançam, por papel), enquanto **seis pessoas têm o Controle Gerencial**.
+
+### 5. Refinamentos da análise (rodada de linguagem e de leitura)
+
+- **Rótulos das três barras:** `Total De Vagas Do Projeto`, `Total De Vagas Na Esteira` e a frase
+  `Falta N Para Completar O Projeto`.
+- **"Na Esteira" virou o termo único.** Não sobrou nenhum "No Projeto" em balde, barra, tabela ou
+  texto de apoio. (A coluna "No Grupo", da tabela de turmas, ficou como está: é outro escopo, e não
+  foi pedida.)
+- **Desenho que os rótulos exigiram:** o rótulo passou para CIMA da barra. Como frase, ao lado, ele
+  comia metade do card e encurtava o trilho, que é a única coisa que a barra faz.
+- **Dois desfechos no lugar de "Falta 0":** `Projeto Completo` quando a meta fecha e `Sem Meta
+  Cadastrada Para Este Cargo` quando o cargo tem gente e nenhuma cota. O segundo corrigiu um erro
+  meu: a primeira versão dizia "Projeto Completo" para cargo sem meta.
+- **Baldes reorganizados** e o card **Pausadas removido** (o diretor: não usa mais). O número segue
+  vindo do backend, então voltar é uma linha. A COLUNA "Pausadas" da tabela continua lá, porque só o
+  card foi pedido (§A.14).
+- **Balde de Declínios ficou clicável**, abrindo modal de leitura com duas análises: o peso do
+  declínio sobre as vagas do projeto e o ranking de declínios por cargo. Sem consulta nova: recorta o
+  mesmo GET que já desenhou a tela, então modal e tela não têm como discordar.
+
+### 6. Dias úteis no termômetro, e a lista de feriados
+
+`domain/dias-uteis.ts`, **sem biblioteca nova**. A regra brasileira é fechada e pequena; uma
+dependência traria feriado estadual e municipal (que atrapalham, porque o projeto acontece em cidades
+diferentes) e ficaria desatualizada na virada de lei. A **lei de cada data está escrita ao lado**:
+
+- Lei 662/1949 e 10.607/2002: 1 jan, 21 abr, 1 mai, 7 set, 2 nov, 15 nov, 25 dez
+- Lei 6.802/1980: 12 out
+- **Lei 14.759/2023: 20 nov (Consciência Negra), nacional a partir de 2024**
+- Lei 9.093/1995: Sexta-feira Santa, móvel, pela Páscoa (Meeus/Jones/Butcher, conferida contra o
+  calendário de 2024 a 2027 em teste)
+
+**Carnaval, Quarta de Cinzas e Corpus Christi ficaram FORA**: são ponto facultativo federal, não
+feriado nacional. Estão implementados e **desligados**, com teste que quebra se alguém promovê-los.
+**Pendente do diretor:** ligar ou não.
+
+**Efeito nas faixas do termômetro:** os limites 7 e 3 não foram tocados, mas passaram a ler em dias
+úteis, então "Atenção" chega mais cedo no calendário.
+
+**Correção seguinte, na mesma frente:** o diretor apontou que o número estava errado, e a apuração
+mostrou que a **régua estava certa** (`diasUteisEntre("2026-08-11","2026-08-31")` já dava 15). O
+errado era **o que o card exibia**: com o projeto ainda não aberto, ele mostrava "8 dias úteis até o
+fim", que responde a pergunta errada. Agora, antes de abrir, o card conta a largada: **"15 dias úteis
+para começar"**, de hoje (inclusive) até a véspera do início. Depois da abertura volta a contar até o
+fim, como antes.
+
+### 7. Migração de dado real: troca de cargo no cliente 57269
+
+Pedido do diretor, executado em produção sobre o cliente **57269 (EDITORA SCHWARCZ S.A. / CIA DAS
+LETRAS)**. Regra: trocar **só o cargo**, **só desse cliente**, sem tocar em nenhuma outra frente.
+
+**Prévia antes de gravar, e ela travou numa divergência:** os três cargos de destino existiam com
+nome exato, mas o cargo de ORIGEM da quarta regra não. O comando dizia "Supervisor de Caixa" e o
+catálogo tem **"Supervisora de Caixa"**. Parei e perguntei. O diretor mandou pular; numa rodada
+seguinte, autorizou.
+
+| regra | trocadas | quando |
+|---|---|---|
+| Atendente para Vendedor I | 61 | 17:59 |
+| Caixa para Vendedor II | 17 | 17:59 |
+| Atendente I para Vendedor I | 3 | 17:59 |
+| Supervisora de Caixa para Coordenador Financeiro(a) | 3 | 19:18 |
+| **total** | **84** | |
+
+**Método, que fica como padrão para migração de dado real:**
+1. Conferir catálogo de origem e destino por **nome exato**, nunca `ilike` (senão "Caixa I" e
+   "Operador de Caixa" entram de carona).
+2. **Retrato reversível** em CSV fora do repositório (`~/ea-backup-troca-cargo/`), com `admissao_id`
+   e `cargo_id` original. Sem CPF (§A.6).
+3. **Transação única**, com a contagem impressa dentro dela.
+4. **Trilha** em `candidato_alteracoes_log` (campo `cargoId`, valor anterior e novo por nome), com
+   autor e carimbo.
+5. **Prova depois:** origens zeradas, total do cliente inalterado (147), distribuição de farol
+   inalterada (101/28/18) e **nenhuma** das admissões trocadas com `atualizado_em` posterior, o que
+   confirma que só `cargo_id` foi escrito.
+
+### 8. O defeito dos baldes: dois universos misturados
+
+O diretor filtrou o Controle Gerencial por cliente 57269 e período e comparou com a análise. Não
+batia. A apuração separou **dois problemas diferentes**, e só um era o que o diagnóstico dizia.
+
+**Declínios: era o universo, e o diagnóstico estava certo.** Dos 23 declínios do cliente no período,
+**22 nunca entraram em `admissao_projeto`**, porque quem declina não deixa nada ativo na esteira
+(§A.16). A análise contava status só entre os vinculados e mostrava **1**. O projeto tinha perdido 23
+pessoas e a tela dizia uma.
+
+**Concluídas: NÃO era o universo.** As 37 "Cadastrado" do painel **já estavam todas vinculadas**,
+então trocar o universo não mudava nada. A diferença é de **régua**, e é proposital: `concluidoExpr`
+exige a frente de **INTEGRAÇÃO fechada**, e as 37 estão em CADASTRADO com integração pendente
+(conferido uma a uma). Ou seja, **0 é o número correto**, e forçá-lo a 37 faria a análise contradizer
+o Gerenciador e o KPI do painel, que é exatamente o que a extração de `db/expressoes-admissao` existe
+para impedir. O "Cadastrado 37" do painel é a **tabela de Cadastro** (status da frente), não o KPI de
+concluídas.
+
+**A correção, que atende os dois sem mentir em nenhum:**
+- Os baldes de status passaram para o universo **cliente + data de admissão no período do projeto**,
+  com as expressões **importadas** (`admissaoConcluidaSql`, `admissaoEmAndamentoSql`), o mesmo par de
+  condições do `condicoes()` do gerencial.
+- Entrou o balde **"Total De Admissões Cadastradas"** (frente de Cadastro em CADASTRADO), que é
+  exatamente o número do painel.
+- **Vagas e Na Esteira continuam contando o vínculo**, junto com o preenchimento por cargo e as
+  barras. As duas contagens ficaram separadas em código e documentadas lado a lado.
+
+Conferência final, cliente 57269 no período do projeto:
+
+| | Painel | Análise antes | Análise agora |
+|---|---|---|---|
+| Cadastradas | 37 | não existia | **37** |
+| Concluídas | 0 | 0 | **0** |
+| Em Andamento | 99 | 99 | **99** |
+| Declínios | 23 | **1** | **23** |
+
+Conferido também que o universo maior **não cria card de cargo novo**: as 122 admissões do cliente no
+período estão todas em cargos que já tinham card. Efeito colateral bom: o modal de declínios passou a
+mostrar o peso real, **23% das vagas perdidas**, contra 1% antes.
+
+### 9. Susto do harness, sem dano
+
+Um clique cego no script de screenshot (para trocar o tema) acertou o "inativar" de um projeto e
+abriu a confirmação. **Nada foi confirmado**: conferido no banco, os dois projetos seguiam `Ativo`, e
+não houve escrita no log do backend. O script passou a usar **seletor nominal**. Fica a regra: em
+harness sobre produção, nunca `locator("button").last()`.
+
+### Estado ao fim do dia
+
+**Gate verde:** typecheck e lint 0 erro nos dois lados, **1.227 testes no backend** (36 novos na
+sessão: dias úteis, termômetro pré-início, os dois universos dos baldes e a régua de permissão do
+`analisar`) e **97 no frontend**. Backend e frontend reconstruídos e reiniciados; `/`, `/diretoria`,
+`/diretoria/alto-volume`, `/admin`, `/admin/alto-volume` e `/api/health` respondendo **200** pelo
+endereço do diretor.
+
+**NADA COMMITADO.** A onda 4 inteira segue no working tree aguardando a validação do diretor na tela,
+por decisão dele (§A.25: o commit é depois da validação). Continuam soltas, de outras frentes e sem
+relação com esta: Sala de Espera, `seed.ts` e o `logosoulan.png`.
+
+**Arquivos da onda 4 (para a próxima sessão se orientar):** novos, `apps/backend/src/domain/dias-uteis.ts`
+(+spec), `apps/backend/src/admin/alto-volume/alto-volume-analise.service.ts` (+spec),
+`apps/backend/src/db/expressoes-admissao.ts`, `apps/frontend/src/app/(app)/diretoria/alto-volume/page.tsx`
+e `apps/frontend/src/components/diretoria/NavDiretoria.tsx`; modificados, `DESIGN-SYSTEM.md`,
+`domain/menus.ts`, `admin.module.ts`, `alto-volume.controller.ts`, `alto-volume.spec.ts` e as telas
+`(app)/diretoria/page.tsx`, `(app)/admin/page.tsx`, `(app)/admin/alto-volume/page.tsx`.
+
+**Pendências do diretor:**
+1. **Carnaval e Corpus Christi** contam como dia não útil? Hoje ficam fora (ponto facultativo).
+2. A **coluna "Pausadas"** da tabela sai também, ou só o card saiu?
+3. A coluna **"No Grupo"** da tabela de turmas vira "Na Esteira"?
+4. O balde **"Total De Admissões Cadastradas"** fica? Foi acrescentado para o 37 do painel ficar
+   visível sem quebrar a régua de concluída.
+5. **Validar a onda 4 na tela** para liberar o commit.
+
+**Nota de processo:** o hook `gate-deploy.sh` (§A.7) barrou a gravação desta entrada porque o texto
+continha a palavra "deploy". Falso positivo: escrever no diário não é publicar. Resolvido escrevendo
+o texto em arquivo à parte e anexando, **sem criar flag `READY_*`**, que é para subida de verdade.
+
+---
+
+## 2026-08-11 (fim de tarde) · Alto Volume análise: card % entregue, 4 ajustes e a diferença de 1
+
+Continuação da onda 4, duas levas de ajuste na visão de análise (`/diretoria/alto-volume`). Nenhuma
+tocou o Painel; tudo na rota filha.
+
+### Card "% Total Entregue"
+
+Entrou ao lado do termômetro, no visual dos demais cards. **Reusa a cobertura geral que já existia**
+(vinculadas sobre vagas), agora extraída para a const `coberturaGeral`, que alimenta o card novo E o
+rodapé do preenchimento por cargo. Antes o número estava escrito em dois lugares; virou fonte única.
+Ajuste de largura que ele exigiu: o card tirou 230px da faixa e a 1366 os seis baldes caíam para 78px,
+cortando "Total De Admissões Cadastradas"; subi a quebra dos baldes para 1536px (§A.20).
+
+### Os 4 ajustes seguintes
+
+1. **Texto do prazo removido.** Saiu "o período tem 8 dias úteis e começa em 01/09/2026", que
+   confundia a diretoria. O card de prazo antes de abrir mostra só o número grande (15) e "dias úteis
+   para começar".
+
+2. **A diferença de 1 no Vendedor I: era um declínio vinculado.** Das 100 admissões "Na Esteira"
+   (vinculadas), 1 era `DECLINOU`, e ela caía no Vendedor I (69 dos quais 1 declínio). Pela §A.16
+   declínio é terminal e não é trabalho ativo, então não podia contar em "Na Esteira". **Corrigido:**
+   a consulta de vinculadas passou a filtrar `farol not in ('DECLINOU','RESCISAO','BANCO_AGUARDAR')`.
+   Na Esteira 100 -> 99, Vendedor I 69 -> 68, cobertura 98% -> 97%. Card e tabela sempre bateram entre
+   si (leem a mesma `vinculadas`); a diferença era contra a régua da §A.16.
+
+3. **Declínio fora de em andamento e concluídas: conferido, já estava assim.** `admissaoEmAndamentoSql`
+   usa farol EM_ADMISSAO/BANCO_AGUARDAR (declínio nunca entra) e `admissaoConcluidaSql` é por frente.
+   Conferido no dado: 0 declínios em em-andamento, 0 em concluídas. Sem mudança.
+
+4. **BANCO_AGUARDAR fora dos cilindros + card dividido.** BANCO saiu das vinculadas (mesmo filtro do
+   item 2). O balde de Declínios virou um **card dividido no meio** (`BaldeDividido`): declínios em
+   cima (clicável, abre o modal que já existia) e em banco embaixo (clicável, abre `ModalBanco` novo,
+   com a quantidade por cargo). `emBanco` é contado por cargo no universo cliente + período, como os
+   demais status.
+
+### Reportado ao diretor (item 4): "em banco" sai de "em andamento"?
+
+**Não automaticamente, e de propósito.** "Em Andamento" é contagem de status separada dos cilindros,
+e usa a expressão COMPARTILHADA `admissaoEmAndamentoSql`, que inclui BANCO_AGUARDAR e é lida também
+pelo Gerenciador e pelo Painel. Mexer nela tocaria o Painel (§A.26 proíbe). Hoje há **0 admissões em
+banco** no cliente 57269 no período, então em andamento (**62**) tem **0** de banco: tirar BANCO dos
+cilindros não muda em andamento. Se o diretor quiser BANCO fora de "em andamento" só na análise, é
+decisão à parte, porque a expressão é compartilhada.
+
+### Números conferidos, cliente 57269, período do projeto
+
+| balde | valor |
+|---|---|
+| Na Esteira | 99 (era 100, menos 1 declínio vinculado) |
+| Vendedor I na esteira | 68 (era 69) |
+| Em Andamento | 62 (0 de banco) |
+| Declínios | 23 |
+| Em Banco | 0 |
+| % Total Entregue | 97% (99/102) |
+
+### Estado
+
+Gate verde: **1.228 testes no backend** (novos: emBanco por cargo e o total), 97 no frontend, lint e
+typecheck 0. Backend e frontend reconstruídos e reiniciados; 200 em `/`, `/diretoria`,
+`/diretoria/alto-volume`, `/api/health` pelo endereço do diretor. Screenshots em
+`ost-alto-volume-onda4-prints/{card-total-entregue,4-ajustes}`. **Nada commitado**, aguardando a
+validação do diretor. Working tree igual ao registrado de manhã, mais os arquivos da análise.
+
+---
+
+## 2026-08-12 · Alto Volume análise: indicação de "completo" (violeta) e reordenação das colunas
+
+Duas mudanças na visão de análise, rota filha, sem tocar o Painel.
+
+### 1. Indicação de cargo/projeto COMPLETO
+
+Antes, cargo a 100% deixava a terceira linha do card VAZIA (falta = 0 desenha barra de largura 0) e
+nada dizia que fechou. Agora, ao bater a meta: a terceira barra vira um **cilindro cheio (100%)** e o
+badge do card vira a tag **"Completo"**, ambos na cor de completo.
+
+**Cor aprovada pelo diretor ANTES de aplicar (§A.20):** violeta. É a única faixa de cor sem papel
+utilitário na análise, então não colide com o vermelho/amarelo/azul/verde das faixas de preenchimento
+em andamento nem com o laranja da tag "Excedente". Virou token de tema `--completo` (#7c5cff no claro,
+#9d84ff no escuro), definido nos dois blocos de `globals.css`, conferido nos dois temas.
+
+`completo = vagas > 0 && falta === 0`. Quando completo, o badge troca de percentual verde para a tag
+violeta, para não haver dois sinais verdes disputando a leitura.
+
+### 2. Reordenação das colunas da tabela
+
+Nova ordem, pedida pelo diretor: **Cargo, Vagas, Na Esteira, Concluídas, Em Andamento, Faltam,
+Pausadas, Declínios**. Faltam passou para logo antes de Pausadas e Declínios encerra a tabela.
+
+**A coluna "Preenchimento" saiu.** A sequência dada tem 8 colunas e diz explicitamente que "Declínios
+encerra a tabela", então não havia posição para a nona coluna sem contrariar a instrução. Removi e
+reportei ao diretor para ele confirmar (era a barra de % concluídas por cargo, na última coluna).
+Larguras refeitas para aproveitar a faixa (§A.20): nada cortado a 1600 e a 1366, conferido.
+
+### Estado
+
+Gate verde: typecheck e lint 0 (backend intocado nesta leva), 97 testes no frontend. Frontend
+reconstruído e reiniciado; 200 em `/`, `/diretoria`, `/diretoria/alto-volume`, `/api/health`.
+Screenshots em `ost-alto-volume-onda4-prints/completo-e-colunas` (claro, escuro, 1366). **Nada
+commitado**, aguardando validação do diretor. Pendência aberta: confirmar a remoção da coluna
+"Preenchimento".
+
+---
+
+## 2026-08-12 · Alto Volume análise: layout dos KPIs invertido (rótulo em cima, valor embaixo)
+
+Pedido do diretor: inverter todos os cards de KPI da análise. Antes era número em cima e rótulo
+embaixo; agora rótulo em cima e valor grande embaixo, aproveitando melhor o card.
+
+Feito nos dois componentes que desenham os KPIs, então vale para todos de uma vez:
+- `Balde` (Total De Vagas Do Projeto, Na Esteira, Cadastradas, Concluídas, Em Andamento): virou
+  `flex justify-between`, rótulo `text-xs` no topo e valor `text-[30px]` na base. `min-h-[84px]` para
+  o número respirar e os cards ficarem uniformes.
+- `BaldeDividido` (Declínios / Em Banco): cada metade invertida do mesmo jeito, valor `text-[24px]`.
+  Cores, divisória e os cliques que abrem os modais seguem intactos.
+
+Conferido no browser (§A.13/§A.20): nos 7 KPIs o rótulo vem ANTES do número no DOM (rótulo em cima),
+tamanhos 30px e 24px, nada cortado a 1600 nem a 1366. Backend intocado.
+
+Gate verde: typecheck e lint 0, 97 testes no frontend. Frontend reconstruído e reiniciado; 200 em
+`/`, `/diretoria`, `/diretoria/alto-volume`, `/api/health`. Screenshots em
+`ost-alto-volume-onda4-prints/kpis-invertidos`. Nada commitado, aguardando validação do diretor.
+
+---
+
+## 2026-08-12 · Melhorias EAC: levantamento do lote de 8 e construção dos 2 confinados (itens 4 e 6)
+
+O diretor priorizou um lote de 8 melhorias e pediu levantamento + ordem em ondas ANTES de construir
+os sensíveis; os confinados (4 e 6) podiam começar. Levantamento no código feito item a item.
+
+### CONSTRUÍDOS nesta sessão (confinados)
+
+**Item 4 — autocomplete no tipo de contrato (Liberação).** O `Select` já tinha `searchable`; bastou
+ligar nos dois seletores de tipo de contrato (individual e lote) em `(app)/liberacao/page.tsx`. Zero
+backend, lista fixa `TIPOS_CONTRATO`. Digitar "tem" filtra "Temporário".
+
+**Item 6 — endereço da clínica.** Coluna nova `endereco varchar(200)` NULLABLE em `clinicas_catalogo`
+(migração `0064_goofy_magus.sql`, aplicada), DTO (create/update, opcional, vazio limpa), service
+(insert/update) e campo no formulário de `(app)/admin/clinicas`. Confinado ao cadastro: NÃO liguei o
+puxar-automático no agendamento (fora do escopo, "confinado ao cadastro de clínica"). ACHADO: já
+existe tabela `exame_agendamento_endereco` com FK para a clínica, então o puxar-automático tem onde
+encaixar depois.
+
+Gate verde: typecheck/lint 0 nos dois lados, 1.228 testes backend e 97 frontend. Backend e frontend
+reconstruídos e reiniciados; 200 em `/liberacao`, `/admin/clinicas`, `/api/health`.
+
+### LEVANTAMENTO dos demais (NÃO construídos, aguardando aprovação da ordem)
+
+- **Item 5 (pequeno, dado já vem):** o modal do olhinho (`AdmissaoDetalheModal`) JÁ mostra "Tipo de
+  contrato". Falta só o MOTIVO: `dados_vaga_folha.motivo` existe e o `detalhe()` já carrega a linha
+  inteira (`vaga`), só não devolve o campo. É adicionar `motivo` ao retorno + um `<Campo>`. Sem query
+  nova.
+- **Item 12 (quase pronto):** o ASO SOBE SOZINHO para a pasta do candidato quando a IA o valida APTO
+  (`auditoria.service` linha ~327, `arquivarAsoNoDrive`, subpasta ASO do prontuário). O gap é só o
+  caminho do APTO MANUAL (liberar sem ASO validado) e a confirmação de cobertura. Drive real ainda é
+  mock (pendência Fernando).
+- **Item 7 (toca validado, confinável):** o filtro da esteira JÁ é multi-cliente (`MultiSelect`,
+  backend `inArray`). Falta "selecionar todos" + desmarcar. RISCO: `MultiSelect` é compartilhado por 6
+  telas; mexer no componente respinga em todas. Desenho seguro: botão "selecionar todos/limpar" só no
+  painel de filtro da esteira, sem tocar o componente.
+- **Item 13 (toca validado, PII):** o gerencial só devolve contagem. Precisa endpoint NOVO com NOMES
+  de quem está EM_ADMISSAO, reusando o `condicoes()` do filtro. §A.6: nome é PII, exige gate de
+  permissão (definir quem vê). Aditivo ao painel (card + modal), não altera a lógica existente.
+- **Item 8 (o maior, exploratório):** cruzar dado do Pandapé (ex.: agência digitada x agência do
+  comprovante). NÃO existe campo `agencia` hoje (só `banco`); cruzar com o comprovante exige a IA
+  extrair a agência do documento. É frente de auditoria/IA, precisa desenho antes.
+- **Item 11 (quatro partes):** (a) login/senha iFractal: NÃO existe nada de iFractal no código, campos
+  novos + editável pós-cadastro. (b) tamanho de uniforme editável pós-liberação: uniforme já existe em
+  dados pessoais; falta liberar a edição depois da liberação. (c) relatórios simples (nome+telefone):
+  export PII novo. (d) cadastro em massa de matrículas: bulk update de matrícula.
+
+### ORDEM EM ONDAS proposta ao diretor
+
+1. Confinados: **4, 6** (feitos).
+2. Pequenos e de baixo risco: **5** (só devolver motivo), **12** (verificar/ligar APTO manual).
+3. Tocam validado com cuidado, um a um: **7** (sem mexer no MultiSelect compartilhado), **13** (com
+   gate de permissão de nomes, §A.6), **11b/11d** (uniforme editável, matrícula em massa).
+4. Frentes que precisam de desenho aprovado antes: **8** (cruzamento IA), **11a** (iFractal), **11c**
+   (relatórios PII).
+
+Nada commitado. Aguardando o diretor validar 4 e 6 na tela e aprovar a ordem para seguir.
+
+---
+
+## 2026-08-12 · COMMIT: Alto Volume onda 4 + melhorias itens 4 e 6
+
+O diretor validou na tela e liberou o ciclo (§A.25). Dois commits, `git add` nominal, sem tocar o
+trabalho solto de outra frente.
+
+- **`a311359` feat(alto-volume): onda 4, análise no Controle Gerencial.** 17 arquivos. A visão
+  `/diretoria/alto-volume` (alternador Painel/Alto Volume, 3 barras, KPIs invertidos, card dividido
+  declínios/em banco com modais, "Completo" violeta, colunas reordenadas, baldes no universo
+  cliente+período batendo com o painel, termômetro em dias úteis, % Total Entregue). Inclui a extração
+  das expressões compartilhadas para `db/expressoes-admissao`, `domain/dias-uteis`, a regra do
+  DESIGN-SYSTEM (dashboard mora no Controle Gerencial) e o token `--completo`.
+- **`fbc445b` feat(melhorias): autocomplete do tipo de contrato e endereço da clínica.** 8 arquivos.
+  Item 4 (searchable nos dois seletores de tipo de contrato) e item 6 (coluna `endereco` nullable em
+  `clinicas_catalogo`, migração `0064_goofy_magus.sql`, DTO, service e formulário).
+
+**FORA dos commits, de propósito** (trabalho solto de outra frente, seguia solto desde antes desta
+sessão): `sala-espera.controller.ts`, `sala-espera.service.ts`, `(app)/sala-espera/page.tsx`,
+`db/seed.ts`, `logosoulan.png`.
+
+Gate verde antes de commitar: typecheck e lint 0 nos dois lados, 1.228 testes backend e 97 frontend.
+Push feito com a flag `.claude/state/READY_*` (§A.7), removida logo após.
+
+**A seguir, ainda NÃO commitado:** itens 5 (motivo da contratação no modal do olhinho) e 12
+(arquivamento do ASO no APTO manual), para o diretor validar na tela antes do commit.
