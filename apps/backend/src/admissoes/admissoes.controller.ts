@@ -46,6 +46,8 @@ export class AdmissoesController {
     @Query("to") to?: string,
     @Query("page") page?: string,
     @Query("pageSize") pageSize?: string,
+    @Query("ordenarPor") ordenarPor?: string,
+    @Query("direcao") direcao?: string,
   ) {
     return this.admissoes.listar({
       q,
@@ -61,6 +63,9 @@ export class AdmissoesController {
       to,
       page: page ? Number(page) : undefined,
       pageSize: pageSize ? Number(pageSize) : undefined,
+      // A coluna é validada no serviço, contra a lista fechada; aqui só a direção é normalizada.
+      ordenarPor,
+      direcao: direcao === "asc" ? "asc" : direcao === "desc" ? "desc" : undefined,
     });
   }
 

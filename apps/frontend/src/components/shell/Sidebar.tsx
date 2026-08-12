@@ -62,6 +62,19 @@ const ASSINATURAS: NavDef = {
   codigo: "assinaturas",
 };
 
+// BENEFÍCIOS (§A.17 etapa 4): a fila de quem tem benefício a cadastrar. Tela de gestão da operação,
+// distinta do CATÁLOGO de benefícios, que vive no Menu Gerencial. Visibilidade pelo menu
+// `beneficios-fila`, que nasce só para o SUPER_ADMIN (§A.23): não aparecer para os demais não é bug.
+//
+// Ícone `tag` (etiqueta do que a pessoa recebe), e não `users` nem `doc`, que já são de vizinhos na
+// barra e se confundiriam na varredura.
+const BENEFICIOS: NavDef = {
+  href: "/beneficios",
+  icon: "tag",
+  label: "Benefícios",
+  codigo: "beneficios-fila",
+};
+
 // Assinante Da Empresa (INT-4) NÃO entra aqui: por decisão do diretor a tela vive SÓ no Menu
 // Gerencial, como sempre foi. Quem tem o menu chega nela pelo card do Gerencial; a barra lateral não
 // ganha item para essa rota.
@@ -158,7 +171,7 @@ export function Sidebar() {
       {/* OST permissão de menu: a barra mostra SÓ os menus que o usuário tem (admin vê tudo por
           bypass). O Gerador de kit deixou de depender de `isAdmin` e passou ao menu `gerador-kit`. */}
       <div className={cn("nav-label", !expanded && "hidden")}>Operação</div>
-      {[...OPERACAO, GERADOR_KIT, ASSINATURAS]
+      {[...OPERACAO, GERADOR_KIT, ASSINATURAS, BENEFICIOS]
         .filter((n) => temMenu(n.codigo))
         .map((n) => (
           <NavItem

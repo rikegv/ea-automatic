@@ -199,6 +199,23 @@ export const MENUS: MenuDef[] = [
     // que aconteceu com o Gerador de Kit). Agora quem governa estas operações é só o menu.
     operacoes: ["AssinanteEmpresaController.*"],
   },
+  {
+    // BENEFÍCIOS (§A.17 etapa 4): a FILA de quem tem benefício a cadastrar, tela de gestão da
+    // operação. Não confundir com o menu `beneficios` da ADMINISTRAÇÃO, que é o CATÁLOGO (criar e
+    // renomear benefício); este é o trabalho por pessoa, e por isso vive em OPERAÇÃO.
+    //
+    // §A.23: NASCE SÓ PARA O SUPER_ADMIN. Quem libera para os demais é o diretor, na tela de
+    // permissão de menu por usuário. Não aparecer para os outros usuários não é bug.
+    //
+    // A OPERAÇÃO é reivindicada de propósito: leitura não reivindicada fica ABERTA a qualquer
+    // autenticado, e esta devolve nome de candidato com cliente e pacote de benefício.
+    codigo: "beneficios-fila",
+    rotulo: "Benefícios",
+    href: "/beneficios",
+    grupo: "OPERACAO",
+    ordem: 10,
+    operacoes: ["BeneficiosFilaController.listar"],
+  },
   // ── Administração ─────────────────────────────────────────────────────────
   {
     // ALTO VOLUME (frente dos projetos sazonais, onda 1). Menu do GERENCIAL, primeiro da lista por

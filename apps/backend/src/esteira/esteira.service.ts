@@ -1054,6 +1054,28 @@ export class EsteiraService {
           .where(eq(admissoes.id, frente.admissaoId));
       }
 
+      /**
+       * ENTRADA NA FILA DE BENEFÍCIOS (§A.17 etapa 4): o Cadastro concluiu, então a pessoa passa a
+       * ser trabalho da tela de Benefícios. Carimbo simples, na MESMA transação da conclusão.
+       *
+       * COLUNA E NÃO FRENTE (decisão do diretor, §A.27): o desenho de menor impacto. A coluna não
+       * entra em régua de conclusão, farol, gate nem KPI, e `frentes_admissao` continua com
+       * exatamente os quatro tipos de sempre. O porquê completo está no schema, ao lado do campo.
+       *
+       * NÃO RETROATIVO e IDEMPOTENTE: só carimba quem passar por AQUI daqui para frente, e só se
+       * ainda não tiver carimbo, então reabrir e concluir o Cadastro de novo preserva a data em que
+       * a pessoa entrou na fila pela primeira vez.
+       *
+       * VALE PARA OS DOIS CAMINHOS, com e sem integração: quem vai para a integração também tem
+       * benefício a cadastrar, e esperar a última etapa atrasaria a fila sem motivo.
+       */
+      if (tipo === "CADASTRO_CONTRATO" && conclui(tipo, novo) && !admissao?.beneficiosEntrouEm) {
+        await tx
+          .update(admissoes)
+          .set({ beneficiosEntrouEm: agora, atualizadoEm: agora })
+          .where(eq(admissoes.id, frente.admissaoId));
+      }
+
       return { upd, gateAberto, cadastroId, nasceuAgora, ncCriada, farolIntegracao };
     });
 
@@ -1061,6 +1083,23 @@ export class EsteiraService {
     // admissão leva a BANCO_AGUARDAR; reverter/concluir pode voltar a EM_ADMISSAO. Pós-tx (estado
     // derivado, não transacional com a mudança de frente).
     await recomputeFarolGlobal(this.db, frente.admissaoId);
+
+    // ARQUIVAMENTO DO ASO NO APTO MANUAL (item 12). O ASO já sobe sozinho quando a I.A o valida; aqui
+    // cobre-se o APTO marcado à mão (Super Admin sem validação da I.A), reusando o mesmo caminho da
+    // auditoria. BEST-EFFORT e PÓS-TX de propósito: é I/O de Drive, não pode entrar na transação nem
+    // derrubar a transição da frente se o Drive falhar. Idempotente (`precisaArquivarDrive` no método)
+    // e no-op quando não há ASO na staging.
+    if (tipo === "EXAME" && result.upd.status === "APTO" && result.upd.concluida) {
+      try {
+        await this.auditoria.arquivarAsoManual(frente.admissaoId);
+      } catch (err) {
+        this.logger.warn(
+          `ASO não arquivado no APTO manual da admissão ${frente.admissaoId}: ${
+            err instanceof Error ? err.message : "erro"
+          }. A frente concluiu; o arquivamento pode ser refeito.`,
+        );
+      }
+    }
 
     return {
       frente: {
@@ -1520,6 +1559,10 @@ export class EsteiraService {
         departamento: vaga?.departamento ?? null,
         setor: vaga?.setor ?? null,
         gestorBp: vaga?.gestorBp ?? null,
+        // MOTIVO DA CONTRATAÇÃO (OST melhorias EAC, item 5): já vinha carregado na linha `vaga`, só
+        // não era devolvido. É o par do tipo de contrato para as temporárias, que o diretor precisa
+        // ver no modal do olho. Sem query nova.
+        motivo: vaga?.motivo ?? null,
       },
       // UNIFORME (OST Onda 3, item 1): vai para o quadro de DADOS PESSOAIS da ficha, porque tamanho
       // é da pessoa, não da folha. `possui: null` = ninguém respondeu (é a pendência).

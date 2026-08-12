@@ -153,6 +153,64 @@ export interface ListarAdmissoesFiltros {
   to?: string;
   page?: number;
   pageSize?: number;
+  /**
+   * ORDENAÇÃO da lista. Coluna fora da lista fechada (`COLUNAS_ORDENAVEIS_GERENCIADOR`) cai na ordem
+   * padrão, em vez de virar erro ou consulta inventada.
+   */
+  ordenarPor?: string;
+  direcao?: "asc" | "desc";
+}
+
+/**
+ * AS COLUNAS QUE O GERENCIADOR ORDENA, lista FECHADA.
+ *
+ * Fechada por dois motivos que andam juntos: nome de coluna vindo da URL é porta de injeção, e uma
+ * URL antiga no favorito de alguém não pode derrubar a tela. O que não está aqui cai na ordem padrão.
+ *
+ * Só entram colunas que são DADO comparável. As colunas de frente (Auditoria, Exame, Cadastro) ficam
+ * de fora porque não vêm desta consulta: elas são carregadas depois, só para as 20 linhas da página, e
+ * ordenar a página por elas seria exatamente a ordem falsa que esta frente veio corrigir.
+ */
+export const COLUNAS_ORDENAVEIS_GERENCIADOR = [
+  "candidato",
+  "cliente",
+  "cargo",
+  "contrato",
+  "dataAdmissao",
+  "status",
+] as const;
+
+/**
+ * A ORDEM da lista do Gerenciador: o que o usuário pediu, ou a ordem padrão de sempre.
+ *
+ * A ORDENAÇÃO É NO BANCO porque a tela é PAGINADA no servidor (20 de 2.574, 129 páginas). Ordenar em
+ * memória ordenaria só as 20 linhas abertas: a primeira linha da tela não seria a primeira da lista, e
+ * ir para a página 2 recomeçaria a sequência do zero. Aqui o `order by` entra antes do `limit`, então
+ * a página 1 é o começo real da ordem e a 2 continua de onde a 1 parou.
+ *
+ * SEM COLUNA ESCOLHIDA, A LISTA SAI IDÊNTICA À DE HOJE (§A.26): a ordem padrão continua
+ * `criado_em desc`, byte a byte o que era. A ordenação é sobreposição por ação do usuário, e não uma
+ * mudança no comportamento de quem só abre a tela.
+ *
+ * `criado_em` DESEMPATA sempre, inclusive na ordem pedida: sem ele, duas admissões de mesmo cliente
+ * (ou mesma data) poderiam trocar de lugar entre a página 1 e a 2, e a mesma pessoa apareceria duas
+ * vezes ou sumiria. Paginação sem desempate estável é assim que se perde linha sem ninguém notar.
+ */
+function ordemDaLista(ordenarPor?: string, direcao?: "asc" | "desc") {
+  const padrao = desc(admissoes.criadoEm);
+  if (!ordenarPor) return [padrao];
+  const coluna = {
+    candidato: candidatos.nome,
+    // O cliente é lido na tela pelo nome de operação, com a razão social como reserva: a ordem segue
+    // o que está escrito na célula, e não o código, que a coluna não mostra.
+    cliente: sql`coalesce(${clientes.nomeOperacao}, ${clientes.razaoSocial}, ${admissoes.codCliente})`,
+    cargo: cargos.nome,
+    contrato: admissoes.tipoContrato,
+    dataAdmissao: admissoes.dataAdmissao,
+    status: admissoes.farolGlobal,
+  }[ordenarPor];
+  if (!coluna) return [padrao];
+  return [direcao === "asc" ? asc(coluna) : desc(coluna), padrao];
 }
 
 const DATA_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -1481,7 +1539,7 @@ export class AdmissoesService {
       .innerJoin(clientes, eq(admissoes.codCliente, clientes.codCliente))
       .innerJoin(cargos, eq(admissoes.cargoId, cargos.id))
       .where(listWhere.length ? and(...listWhere) : undefined)
-      .orderBy(desc(admissoes.criadoEm))
+      .orderBy(...ordemDaLista(filtros.ordenarPor, filtros.direcao))
       .limit(pageSize)
       .offset((page - 1) * pageSize);
 

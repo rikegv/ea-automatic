@@ -193,3 +193,32 @@ baldes, termômetro) subiu como `/admin/alto-volume/analise`, alcançável só p
 tela que o diretor não achava. Terminou separada em duas metades: o **cadastro** (projetos, grupos,
 vagas, vínculos) ficou no Menu Gerencial, e a **análise** virou a visão `Alto Volume` do Controle
 Gerencial em `/diretoria/alto-volume`. Mesmo conteúdo da onda 4, casa diferente.
+
+## Tabela nasce ordenável (regra permanente)
+
+**Toda tabela nova do sistema nasce com a ordenação clicável NATIVA.** Não é item de pedido: se a tela
+tem tabela, o cabeçalho ordena, sem o diretor precisar pedir a cada entrega.
+
+O padrão é único, e a peça já existe: `useOrdenacao` (`lib/ordenacao.ts`) para a lógica e
+`ColunaOrdenavel` (`components/ui/ColunaOrdenavel.tsx`) para o cabeçalho. Serve às duas famílias de
+tabela do sistema sem adaptação: grid (`.list-head > span`, com `as="span"`) e `<table class="ds-table">`
+(com `as="th"`). Ligar uma tabela nova é declarar as colunas e trocar o elemento do cabeçalho.
+
+**Os 3 modos, e o primeiro clique de cada um:**
+- **texto**: A-Z, o segundo clique inverte para Z-A.
+- **data**: mais recente primeiro, o segundo clique inverte.
+- **número**: maior primeiro, o segundo clique inverte.
+
+Sim ou não usa **rank**, nunca texto: ordenar "sim/não" alfabeticamente coloca "Não" na frente e diz o
+contrário do que a coluna pergunta. Colunas que não são dado ficam de fora: ações, controles e
+identificadores opacos não respondem pergunta nenhuma.
+
+**PAGINOU NO SERVIDOR, A ORDENAÇÃO VAI PARA O BACKEND.** Ordenação de cliente só é honesta em tabela que
+carrega o conjunto inteiro. Numa tabela paginada (o Gerenciador, 20 de 2.574; a fila de Benefícios, 50 de
+1.640), ordenar em memória ordena apenas a página aberta: a primeira linha da tela não é a primeira da
+fila, e a ordem mostrada é falsa. Nesses casos a API recebe a coluna e a direção, valida contra uma
+**lista fechada** de colunas (o que também fecha a porta para injeção e faz uma URL antiga cair na ordem
+padrão em vez de derrubar a tela), e o `order by` entra ANTES do `limit`. A tela continua usando o mesmo
+`ColunaOrdenavel`, então a seta, o title e o `aria-sort` ficam idênticos aos das demais.
+
+*(Decisão do diretor. Vale para toda entrega futura, não só para a OST que originou a regra.)*

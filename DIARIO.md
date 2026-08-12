@@ -9531,33 +9531,93 @@ Push feito com a flag `.claude/state/READY_*` (§A.7), removida logo após.
 
 ---
 
-## 2026-08-12 · Alto Volume: a conta que fecha, e o farol que voltou a dizer a verdade
+## 2026-08-12 · Melhorias itens 5 e 12 (construídos, NÃO commitados) + levantamento Benefícios/VT
 
-**Alto Volume, a régua da análise.** Os cards do projeto não fechavam: Concluídas e Em Andamento vinham
-do universo cliente + período e "Faltam" media a distância até as concluídas, então a soma dava 164 num
-projeto de 102 vagas. A régua passou a ser a da META, no universo dos VINCULADOS ao projeto: Em Andamento
-+ Concluídas + Faltam = Total De Vagas, exato. Declínio saiu da matemática e continua à parte, por
-cliente. O card de admissões cadastradas saiu e entrou o de vagas que faltam. Na Bienal: 51 + 48 + 3 = 102.
+### Itens 5 e 12 (aguardando validação do diretor, sem commit)
 
-**A causa raiz da divergência entre as telas.** Em 11/08/2026 às 20:42 a exigência de integração do
-cliente 57269 foi desmarcada. A partir dali a frente INTEGRAÇÃO parou de nascer, e o ÚNICO ponto que
-escrevia `farol_global = ADMISSAO_CONCLUIDA` vivia dentro da transição dessa frente. Os Cadastros
-fechados às 21:09 em diante terminaram a esteira com o farol preso em EM_ADMISSAO: o Gerenciador (que lê
-as FRENTES) contava como concluídas, o Painel (que lê o FAROL) não, e 56 admissões passaram a ser contadas
-duas vezes, 14 delas da Bienal.
+- **Item 5, motivo da contratação no modal do olhinho.** `esteira.detalhe()` passou a devolver
+  `vagaFolha.motivo` (o dado já era carregado na linha `vaga`, só não saía no retorno; ATENÇÃO: há
+  DOIS objetos `vagaFolha` no `detalhe`, o primeiro é input do `pendenciasObrigatorias` e não aceita
+  campo novo, o certo é o de resposta com `endereco`). Modal ganhou `<Campo rotulo="Motivo da
+  contratação">`. Provado na tela: mostra "Aumento de Demanda" ao lado do tipo de contrato.
+- **Item 12, ASO no APTO manual.** Novo método público `AuditoriaService.arquivarAsoManual(id)` que
+  reusa `arquivarAsoNoDrive`, guardado por `precisaArquivarDrive` (idempotente) e no-op sem ASO na
+  staging. A esteira chama best-effort PÓS-TX quando o Exame vai a APTO (`try/catch`, não derruba a
+  transição). §A.26: mexe no `mudarStatus`, o código mais sensível; a chamada é aditiva e não altera
+  a transição. Sem prova visual: Drive real é mock (pendência Fernando); o efeito é o upload de fundo.
 
-**Correção A, na origem.** Concluir o Cadastro para cliente que não exige integração passa a carimbar o
-farol, na mesma transação e pela mesma porta. Nenhuma expressão de contagem foi tocada. Backfill único
-carimbou as 56 já existentes; as 3 com farol de declínio ficaram de fora de propósito, porque carimbar
-"concluída" sobre um desfecho terminal trocaria um erro de contagem por um erro de verdade.
+Gate verde (1.228 backend, 97 frontend), deployado. NÃO commitado por decisão do diretor (valida antes).
 
-**Correção B, na leitura.** "Em andamento" virou `em andamento E não concluída`, numa expressão única
-(`admissaoEmAndamentoExclusivoSql`) que o Gerenciador e o Alto Volume importam. É o cinto de segurança:
-mesmo com um farol atrasado, ninguém é contado duas vezes.
+### Levantamento A) Tela de Benefícios
 
-Depois das duas: Painel Ativos 51 e Gerenciador Concluídas 51 na Bienal, divergência de 14 zerada, e zero
-admissões nos dois baldes na base inteira.
+- **Fontes de benefício (as 2 que a Integração já lê):** ESTRUTURADO em `admissao_beneficio`
+  (admissaoId, beneficioId→`beneficios_catalogo`, valor) e TEXTO ACHATADO em `dados_vaga_folha.beneficios`
+  (só das importadas; a Integração mostra o texto só quando não há estruturado).
+- **Colunas FIXAS, não por cliente.** `beneficios_catalogo` é GLOBAL (sem coluna de cliente): 10
+  benefícios ativos hoje (VT, VR, VA, AM, Odonto, Cesta básica, Auxílio creche, PLR, Seguro de vida,
+  Refeição no local). Cada admissão tem um SUBCONJUNTO via `admissao_beneficio`. Então as colunas são
+  o catálogo ativo (fixo); o que varia por admissão é QUAIS tem, não novas colunas.
+- **Gatilho:** modelar no de Integração (`nasceIntegracao`, esteira.service ~865): a admissão entra
+  quando o CADASTRO_CONTRATO conclui (CADASTRADO), não-retroativo. Já existe o enum
+  `status_cadastro_beneficio` (PENDENTE/CADASTRADO) em `admissoes` (parte 1).
+- **Menu:** já existe `beneficios` (grupo ADMIN) mas é o CRUD do CATÁLOGO (`/admin/beneficios`). A tela
+  de GESTÃO nova precisa de menu PRÓPRIO em OPERAÇÃO, nascendo SUPER_ADMIN (§A.23).
+- **Ponto a decidir com o diretor:** importadas têm benefício como TEXTO, não mapeiam nas colunas
+  por-benefício. E são ~12 colunas (nome, data, cliente, VT, VR + 8), §A.20 largura.
 
-**§A.27 (regra nova).** Investigar a lógica e o impacto ANTES de implantar, e reportar o alcance ao
-diretor quando houver risco. Nasceu deste incidente: uma configuração de um cliente derrubou a contagem
-de três telas porque ninguém verificou quem dependia da frente de integração.
+### Levantamento B) Formulário de VT, estado real (mais avançado que a memória dizia)
+
+- **Formulário interno `/vt`:** tela pronta, DORMENTE por decisão (o candidato preenche no app Firebase,
+  fora da VM). `FORMULARIO_VT` e `CARTAO_TRANSPORTE` no catálogo, roteados para subpasta BENEFICIOS
+  (`ai/drive-routing`), com 0 réguas e 0 documentos (dormentes até ligar a régua por cliente).
+- **Gerador de PDF:** `ai-service/app/vt_pdf.py`, duas versões OPTANTE / NÃO-OPTANTE. Pronto.
+- **Coleta via Firebase/GCS: JÁ COMMITADA E MIGRADA** (commit `2e2d61a`, tabelas `vt_coleta` e
+  `vt_coleta_scheduler_estado` existem). Módulo `vt-coleta` (scheduler 15min + botão manual + gerador
+  de link Ed25519 + livro-razão sem PII), ai-service `routers/coleta_vt.py`. `VT_LINK_PRIVATE_KEY`
+  preenchida; **`VT_COLETA_GCS_BUCKET` VAZIA → coleta INERTE.**
+- **Falta para ativar (infra do diretor):** criar o bucket GCS em `vt-online-soulan`, os grants
+  (Storage Object Admin à SA de runtime, Object Viewer cross-project à `ea-automatic-sa`), lifecycle
+  30d, e informar ao EA o **nome do bucket** (`VT_COLETA_GCS_BUCKET`) e o e-mail da SA de runtime. App
+  Firebase existe em `~/vt-online-soulan` (fora do repo).
+
+**Conclusão para o diretor:** a coluna VT da tela de Benefícios pode nascer como leitura (sim/não pelo
+benefício VT do catálogo); LANÇAR VT por ela depende do bucket GCS (infra) para a coleta sair de inerte.
+
+---
+
+## 2026-08-12 · Benefícios, a ordenação em todas as tabelas e o cruzamento de nomes
+
+**Tela de Benefícios (§A.17 etapa 4).** Menu próprio em OPERAÇÃO, nascido só para o SUPER_ADMIN (§A.23):
+a fila de quem fechou o Cadastro, com VT, VR, VA e AM em colunas de sim ou não, o "+N" dos demais e o
+texto achatado das importadas como célula única quando não há pacote estruturado.
+
+O GATILHO é uma COLUNA, não uma frente. A investigação da §A.27 mostrou que criar um tipo novo em
+`frentes_admissao` não mudaria número nenhum hoje, mas obrigaria a mexer no enum do banco, na união
+`FrenteTipo` e em três mapas totais, e poria uma linha a mais na tabela que TODA consulta de contagem lê,
+segura só enquanto ninguém esquecer o filtro por tipo. O diretor escolheu o desenho de menor impacto:
+`admissoes.beneficios_entrou_em`, carimbada na mesma transação da conclusão do Cadastro. Um teste trava a
+promessa: nenhuma expressão de contagem menciona a coluna.
+
+A FILA É LIDA, não carimbada em massa. Para trazer as ~1.610 já cadastradas, a tela lê a frente de Cadastro
+concluída em vez de um backfill: carimbar todas gravaria uma data de entrada que não aconteceu. Fila com
+1.640 (1.610 concluídas, menos 3 declínios, mais 33 com integração pendente), busca, filtros por cliente,
+com e sem benefício, tipo de pacote, e o modal do valor ao clicar na célula.
+
+**Ordenação clicável em todas as tabelas.** Levantamento das 23 telas com tabela: 15 já tinham, 6 ganharam
+na leva 1 (Sala De Espera, Assinante Da Empresa, Pastas Do Drive, Integração Por Cliente, Status Da Sala
+De Espera e as duas tabelas do Alto Volume) e 2 eram paginadas no servidor. Para essas, a leva 2 levou a
+ordenação para o BACKEND, com lista fechada de colunas e `order by` antes do `limit`: a Benefícios (50 de
+1.640) e o Gerenciador (20 de 2.574). Prova de que é servidor: A-Z traz o primeiro dos 2.574 e a página 2
+continua a sequência da 1, em vez de recomeçar.
+
+**O cruzamento de nomes que atrasou um diagnóstico.** O menu "Esteira Admissional" abre `/esteira`, cujo
+título na tela é "Farol Admissional"; o menu "Gerenciador" abre `/gerenciador`, cujo título é "Esteira
+Admissional". O diretor apontou a falta de ordenação na segunda e a fábrica investigou a primeira. Fica
+registrado para a próxima leitura de print.
+
+**A seta parada estava invisível.** Vivia a 30% da cor de um cabeçalho pequeno e apagado, e por isso as
+tabelas pareciam não ter ordenação. Subiu para 55% no componente compartilhado, o que vale para as 21
+tabelas de uma vez.
+
+**Regra permanente (DESIGN-SYSTEM):** tabela nova nasce ordenável, com os três modos, e paginou no
+servidor a ordenação vai para o backend.

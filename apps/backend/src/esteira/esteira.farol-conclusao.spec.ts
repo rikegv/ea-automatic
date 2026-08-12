@@ -38,6 +38,8 @@ interface Fixtures {
   integracaoExiste?: boolean;
   /** A frente de Cadastro já está concluída (fixture da REVERSÃO). */
   cadastroConcluido?: boolean;
+  /** A admissão já entrou na fila de Benefícios antes (fixture da idempotência do carimbo). */
+  jaNaFilaDeBeneficios?: boolean;
 }
 
 interface Escrita {
@@ -123,6 +125,7 @@ function montar(f: Fixtures) {
           codCliente: f.semCliente ? null : "57269",
           dataAdmissao: "2026-09-01",
           consultorId: null,
+          beneficiosEntrouEm: f.jaNaFilaDeBeneficios ? new Date("2026-08-01T10:00:00Z") : null,
         }),
       },
       frentesAdmissao: {
@@ -219,5 +222,58 @@ describe("os limites do carimbo", () => {
     const ctx = montar({ exigeIntegracao: false, cadastroConcluido: true });
     await concluirCadastro(ctx.svc, "A_CADASTRAR");
     expect(farolGravado(ctx.atualizacoes)).not.toContain("ADMISSAO_CONCLUIDA");
+  });
+});
+
+/**
+ * ENTRADA NA FILA DE BENEFÍCIOS (§A.17 etapa 4), carimbada na mesma transição.
+ *
+ * É COLUNA E NÃO FRENTE (decisão do diretor, §A.27), e a diferença é o que estes testes protegem: o
+ * carimbo não pode virar linha em `frentes_admissao`, porque aquela tabela é lida por toda consulta
+ * de contagem do sistema. Foi esse tipo de dependência escondida que quebrou a contagem da Bienal.
+ */
+describe("carimbo da fila de Benefícios", () => {
+  it("concluir o Cadastro põe a admissão na fila", async () => {
+    const ctx = montar({ exigeIntegracao: false });
+    await concluirCadastro(ctx.svc);
+
+    const carimbos = ctx.atualizacoes
+      .filter((a) => a.tabela === admissoes)
+      .filter((a) => a.valores.beneficiosEntrouEm !== undefined);
+    expect(carimbos).toHaveLength(1);
+    expect(carimbos[0].valores.beneficiosEntrouEm).toBeInstanceOf(Date);
+  });
+
+  /**
+   * VALE PARA OS DOIS CAMINHOS: quem ainda vai para a integração também tem benefício a cadastrar, e
+   * esperar a última etapa da esteira atrasaria a fila sem motivo nenhum.
+   */
+  it("vale também para o cliente que exige integração", async () => {
+    const ctx = montar({ exigeIntegracao: true });
+    await concluirCadastro(ctx.svc);
+    expect(
+      ctx.atualizacoes.some((a) => a.valores.beneficiosEntrouEm !== undefined),
+      "quem vai para a integração também entra na fila",
+    ).toBe(true);
+  });
+
+  it("NÃO cria frente nenhuma: o carimbo é coluna, e frentes_admissao fica como estava", async () => {
+    const ctx = montar({ exigeIntegracao: false });
+    await concluirCadastro(ctx.svc);
+    expect(frentesInseridas(ctx.escritas)).not.toContain("BENEFICIOS");
+    // Cliente sem integração não insere frente alguma nesta transição.
+    expect(frentesInseridas(ctx.escritas)).toHaveLength(0);
+  });
+
+  it("IDEMPOTENTE: quem já entrou não é recarimbado (preserva a data de entrada)", async () => {
+    const ctx = montar({ exigeIntegracao: false, jaNaFilaDeBeneficios: true });
+    await concluirCadastro(ctx.svc);
+    expect(ctx.atualizacoes.some((a) => a.valores.beneficiosEntrouEm !== undefined)).toBe(false);
+  });
+
+  it("NÃO RETROATIVO: reverter o Cadastro não carimba ninguém", async () => {
+    const ctx = montar({ exigeIntegracao: false, cadastroConcluido: true });
+    await concluirCadastro(ctx.svc, "A_CADASTRAR");
+    expect(ctx.atualizacoes.some((a) => a.valores.beneficiosEntrouEm !== undefined)).toBe(false);
   });
 });

@@ -11,6 +11,8 @@ import { Select } from "@/components/ui/Select";
 import { Modal } from "@/components/ui/Modal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Icon } from "@/components/ui/Icon";
+import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
+import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
 
 /**
  * ASSINANTE DA EMPRESA (INT-4, Administração, restrito a Master/Super Admin).
@@ -147,6 +149,18 @@ export default function AssinanteEmpresaPage() {
       return a.codCliente.localeCompare(b.codCliente);
     });
   }, [rows]);
+
+  // Ordenação clicável (§A.12). A ordem de assinatura fica de fora: a célula é uma frase composta
+  // (os nomes por posição), não um valor comparável, e ordenar por ela não responderia pergunta
+  // nenhuma. O grupo PADRÃO é texto vazio, então cai para o fim, que é o comportamento do vazio.
+  const colunasOrd = useMemo<ColOrd<Escopo>[]>(
+    () => [
+      { chave: "escopo", tipo: "texto", valor: (e) => e.clienteNome ?? e.codCliente },
+      { chave: "pessoas", tipo: "numero", valor: (e) => e.pessoas.length },
+    ],
+    [],
+  );
+  const ord = useOrdenacao(colunasOrd, escopos);
 
   const opcoesCliente = useMemo(
     () => [
@@ -299,8 +313,12 @@ export default function AssinanteEmpresaPage() {
           <table className="ds-table min-w-[900px]">
             <thead>
               <tr>
-                <th className="w-[22%]">Aplica-se A</th>
-                <th className="w-[10%]">Pessoas</th>
+                <ColunaOrdenavel as="th" ord={ord} chave="escopo" className="w-[22%]">
+                  Aplica-se A
+                </ColunaOrdenavel>
+                <ColunaOrdenavel as="th" ord={ord} chave="pessoas" className="w-[10%]">
+                  Pessoas
+                </ColunaOrdenavel>
                 <th className="w-[50%]">Ordem De Assinatura</th>
                 <th className="w-[18%]">Ações</th>
               </tr>
@@ -319,7 +337,7 @@ export default function AssinanteEmpresaPage() {
                   </td>
                 </tr>
               ) : (
-                escopos.map((e) => (
+                ord.itens.map((e) => (
                   <tr key={e.codCliente ?? "padrao"}>
                     <td>
                       {e.codCliente === null ? (

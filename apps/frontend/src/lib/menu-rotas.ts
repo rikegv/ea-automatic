@@ -38,6 +38,10 @@ export const ROTA_MENU: { prefixo: string; codigo: string }[] = [
   { prefixo: "/gerenciador", codigo: "gerenciador" },
   { prefixo: "/gerador-kit", codigo: "gerador-kit" },
   { prefixo: "/assinaturas", codigo: "assinaturas" },
+  // BENEFÍCIOS (§A.17 etapa 4): governado pelo menu `beneficios-fila`, que nasce só para o
+  // SUPER_ADMIN (§A.23). Sem esta linha o guard deixaria qualquer autenticado abrir a URL direto, e a
+  // tela devolve nome de candidato com cliente e pacote de benefício.
+  { prefixo: "/beneficios", codigo: "beneficios-fila" },
   // A TELA F9 ANTIGA (§A.15). Saiu do menu mas continuava alcançável por URL, e como não estava
   // mapeada aqui o guard deixava passar qualquer autenticado, sendo que dela se dispara envelope
   // de assinatura. Passa a ser governada pelo mesmo menu que governa a operação no backend

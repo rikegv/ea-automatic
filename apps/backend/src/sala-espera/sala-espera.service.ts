@@ -98,7 +98,9 @@ export class SalaEsperaService {
    * simplesmente desaparecia da tela, e o time perdia a prova de que aquele candidato foi anunciado
    * antes de aparecer no Pandapé, que é a razão de a Sala existir.
    */
-  async listar(recorte: "aguardando" | "vinculadas" | "todos" = "aguardando") {
+  async listar(
+    recorte: "aguardando" | "vinculadas" | "inativadas" | "todos" = "aguardando",
+  ) {
     const base = this.db
       .select({
         id: salaEspera.id,
@@ -127,6 +129,17 @@ export class SalaEsperaService {
       .leftJoin(cargos, eq(cargos.id, salaEspera.cargoId));
 
     if (recorte === "todos") return base.orderBy(asc(salaEspera.dataRecebimento));
+    if (recorte === "inativadas") {
+      // INATIVADAS: status terminal (Declinou, Desistiu, Canceladas) e que NÃO viraram admissão.
+      // A ordem importa: quem foi vinculado é história de sucesso e vive na outra aba, mesmo que o
+      // status tenha ficado terminal depois. Aqui fica o que parou no caminho.
+      //
+      // O critério é `encerra`, do CATÁLOGO, nunca o nome do status: a lista é editável pelo
+      // diretor, e deduzir pelo nome seria plantar o bug do próximo status criado.
+      return base
+        .where(and(eq(salaEsperaStatus.encerra, true), isNull(salaEspera.admissaoId)))
+        .orderBy(desc(salaEspera.atualizadoEm));
+    }
     if (recorte === "vinculadas") {
       // Mais recente primeiro: o vínculo de agora é o que se confere.
       return base.where(isNotNull(salaEspera.admissaoId)).orderBy(desc(salaEspera.vinculadoEm));

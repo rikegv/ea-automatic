@@ -77,6 +77,8 @@ interface AdmissaoDetalhe {
     /** SETOR (OST Onda 2): campo próprio, distinto de Departamento e Centro de custo. */
     setor?: string | null;
     gestorBp?: string | null;
+    /** MOTIVO DA CONTRATAÇÃO (item 5): par do tipo de contrato, importante nas temporárias. */
+    motivo?: string | null;
   };
   /**
    * UNIFORME (OST Onda 3, item 1). Fica em DADOS PESSOAIS, não na folha: tamanho é da pessoa.
@@ -753,6 +755,12 @@ export function AdmissaoDetalheModal({
                 <Campo rotulo="Cargo" valor={data.cargo} />
                 <Campo rotulo="Salário" valor={fmtMoeda(data.vagaFolha.salario)} />
                 <Campo rotulo="Tipo de contrato" valor={data.tipoContrato || "não informado"} />
+                {/* MOTIVO DA CONTRATAÇÃO (item 5): ao lado do tipo de contrato, o par que a diretoria
+                    precisa ver nas temporárias. */}
+                <Campo
+                  rotulo="Motivo da contratação"
+                  valor={data.vagaFolha.motivo || "não informado"}
+                />
                 <Campo rotulo="Data de admissão" valor={fmtDataAdmissao(data.dataAdmissao)} />
                 <Campo rotulo="Matrícula" valor={data.matricula || "não informado"} />
                 <Campo rotulo="Escala" valor={data.vagaFolha.escala || "não informado"} />

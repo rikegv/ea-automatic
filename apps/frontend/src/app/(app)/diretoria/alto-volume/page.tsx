@@ -49,6 +49,8 @@ import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
 import { NavDiretoria } from "@/components/diretoria/NavDiretoria";
+import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
+import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
 
 interface Projeto {
   id: string;
@@ -552,6 +554,42 @@ export default function AltoVolumeAnalisePage() {
     if (!primeiro) setDados(null);
   }
 
+  /**
+   * ORDENAÇÃO CLICÁVEL das DUAS tabelas (§A.12), cada uma com a sua: são listas diferentes, e uma
+   * ordenação só faria clicar numa mexer na outra.
+   *
+   * SÓ ACRESCENTA (§A.26): a ordem padrão continua a que o backend manda (maior meta primeiro nos
+   * cargos, data de entrada nos grupos), e a ordenação é sobreposição por clique do usuário. A linha
+   * de TOTAL não entra na lista ordenada: ela é somatório, e ordenar não a move do rodapé.
+   */
+  const colunasCargo = useMemo<ColOrd<LinhaCargo>[]>(
+    () => [
+      { chave: "cargo", tipo: "texto", valor: (l) => l.cargoNome },
+      { chave: "vagas", tipo: "numero", valor: (l) => l.vagas },
+      { chave: "vinculadas", tipo: "numero", valor: (l) => l.vinculadas },
+      { chave: "concluidas", tipo: "numero", valor: (l) => l.concluidas },
+      { chave: "emAndamento", tipo: "numero", valor: (l) => l.emAndamento },
+      { chave: "faltam", tipo: "numero", valor: (l) => l.faltam },
+      { chave: "pausadas", tipo: "numero", valor: (l) => l.pausadas },
+      { chave: "declinios", tipo: "numero", valor: (l) => l.declinios },
+    ],
+    [],
+  );
+  const ordCargo = useOrdenacao(colunasCargo, dados?.porCargo ?? []);
+
+  const colunasGrupo = useMemo<ColOrd<LinhaGrupo>[]>(
+    () => [
+      { chave: "grupo", tipo: "texto", valor: (g) => g.rotulo },
+      { chave: "entrada", tipo: "data", valor: (g) => g.dataEntrada },
+      { chave: "vagas", tipo: "numero", valor: (g) => g.vagas },
+      { chave: "noGrupo", tipo: "numero", valor: (g) => g.vinculadas },
+      { chave: "concluidas", tipo: "numero", valor: (g) => g.concluidas },
+      { chave: "atrasadas", tipo: "numero", valor: (g) => g.atrasadas },
+    ],
+    [],
+  );
+  const ordGrupo = useOrdenacao(colunasGrupo, dados?.grupos ?? []);
+
   const t = dados?.termometro;
   /** Projeto que ainda não abriu: o termômetro troca a pergunta de "até o fim" para "para começar". */
   const naoIniciou = (t?.diasParaInicio ?? 0) > 0;
@@ -874,18 +912,34 @@ export default function AltoVolumeAnalisePage() {
               <table className="ds-table w-full min-w-[920px] table-fixed">
                 <thead>
                   <tr>
-                    <th className="w-[240px]">Cargo</th>
-                    <th className="w-[110px]">Vagas</th>
-                    <th className="w-[120px]">Na Esteira</th>
-                    <th className="w-[120px]">Concluídas</th>
-                    <th className="w-[140px]">Em Andamento</th>
-                    <th className="w-[120px]">Faltam</th>
-                    <th className="w-[110px]">Pausadas</th>
-                    <th className="w-[110px]">Declínios</th>
+                    <ColunaOrdenavel as="th" ord={ordCargo} chave="cargo" className="w-[240px]">
+                      Cargo
+                    </ColunaOrdenavel>
+                    <ColunaOrdenavel as="th" ord={ordCargo} chave="vagas" className="w-[110px]">
+                      Vagas
+                    </ColunaOrdenavel>
+                    <ColunaOrdenavel as="th" ord={ordCargo} chave="vinculadas" className="w-[120px]">
+                      Na Esteira
+                    </ColunaOrdenavel>
+                    <ColunaOrdenavel as="th" ord={ordCargo} chave="concluidas" className="w-[120px]">
+                      Concluídas
+                    </ColunaOrdenavel>
+                    <ColunaOrdenavel as="th" ord={ordCargo} chave="emAndamento" className="w-[140px]">
+                      Em Andamento
+                    </ColunaOrdenavel>
+                    <ColunaOrdenavel as="th" ord={ordCargo} chave="faltam" className="w-[120px]">
+                      Faltam
+                    </ColunaOrdenavel>
+                    <ColunaOrdenavel as="th" ord={ordCargo} chave="pausadas" className="w-[110px]">
+                      Pausadas
+                    </ColunaOrdenavel>
+                    <ColunaOrdenavel as="th" ord={ordCargo} chave="declinios" className="w-[110px]">
+                      Declínios
+                    </ColunaOrdenavel>
                   </tr>
                 </thead>
                 <tbody>
-                  {dados.porCargo.map((l) => (
+                  {ordCargo.itens.map((l) => (
                     <tr key={l.cargoId ?? "sem-cargo"}>
                       <td className="font-semibold">{l.cargoNome}</td>
                       <td className="text-center tabular-nums">{l.vagas}</td>
@@ -946,16 +1000,28 @@ export default function AltoVolumeAnalisePage() {
                 <table className="ds-table w-full min-w-[760px] table-fixed">
                   <thead>
                     <tr>
-                      <th className="w-[220px]">Grupo</th>
-                      <th className="w-[130px]">Entrada</th>
-                      <th className="w-[100px]">Vagas</th>
-                      <th className="w-[110px]">No Grupo</th>
-                      <th className="w-[110px]">Concluídas</th>
-                      <th className="w-[120px]">Atrasadas</th>
+                      <ColunaOrdenavel as="th" ord={ordGrupo} chave="grupo" className="w-[220px]">
+                        Grupo
+                      </ColunaOrdenavel>
+                      <ColunaOrdenavel as="th" ord={ordGrupo} chave="entrada" className="w-[130px]">
+                        Entrada
+                      </ColunaOrdenavel>
+                      <ColunaOrdenavel as="th" ord={ordGrupo} chave="vagas" className="w-[100px]">
+                        Vagas
+                      </ColunaOrdenavel>
+                      <ColunaOrdenavel as="th" ord={ordGrupo} chave="noGrupo" className="w-[110px]">
+                        No Grupo
+                      </ColunaOrdenavel>
+                      <ColunaOrdenavel as="th" ord={ordGrupo} chave="concluidas" className="w-[110px]">
+                        Concluídas
+                      </ColunaOrdenavel>
+                      <ColunaOrdenavel as="th" ord={ordGrupo} chave="atrasadas" className="w-[120px]">
+                        Atrasadas
+                      </ColunaOrdenavel>
                     </tr>
                   </thead>
                   <tbody>
-                    {dados.grupos.map((g) => (
+                    {ordGrupo.itens.map((g) => (
                       <tr key={g.id}>
                         <td className="font-semibold">{g.rotulo}</td>
                         <td className="text-center tabular-nums">{fmtData(g.dataEntrada)}</td>

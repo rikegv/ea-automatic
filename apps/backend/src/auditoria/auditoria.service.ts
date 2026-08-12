@@ -763,6 +763,37 @@ export class AuditoriaService {
   }
 
   /**
+   * ARQUIVAMENTO DO ASO NO APTO MANUAL (OST melhorias EAC, item 12).
+   *
+   * O ASO já sobe sozinho quando a I.A o valida (passo 4.5). Falta o caminho em que um humano
+   * (Master/Super Admin) marca o Exame como APTO na esteira sem a validação da I.A: ali o ASO fica na
+   * staging e nunca é arquivado. Este método fecha esse buraco REUSANDO `arquivarAsoNoDrive`, sem
+   * duplicar nada.
+   *
+   * IDEMPOTENTE E SEGURO POR CONSTRUÇÃO, porque a esteira o chama BEST-EFFORT depois da transição:
+   *  - `precisaArquivarDrive` já barra o re-arquivamento quando a I.A subiu o ASO antes (não abre
+   *    segunda pasta nem re-sobe).
+   *  - sem ASO na staging (o APTO manual pode não ter documento nenhum), é no-op silencioso.
+   * Nada aqui altera a frente nem o farol: é só o arquivo indo para a pasta do candidato.
+   */
+  async arquivarAsoManual(admissaoId: string): Promise<{ pastaUrl: string } | undefined> {
+    const adm = await this.carregarAdmissao(admissaoId);
+    if (!precisaArquivarDrive(adm.driveAsoUrl)) return undefined; // já arquivado (caminho da I.A).
+
+    const tipo = await this.db.query.tiposDocumento.findFirst({
+      where: eq(tiposDocumento.codigo, "ASO"),
+    });
+    if (!tipo) return undefined;
+
+    // O ASO é arquivo único; pega o da staging se existir. `codigoTipo` na staging é sanitizado, e
+    // "ASO" já é alfanumérico, então casa direto.
+    const aso = (await this.staging.listar(admissaoId)).find((a) => a.codigoTipo === "ASO");
+    if (!aso) return undefined; // APTO manual sem ASO anexado: nada a arquivar.
+
+    return this.arquivarAsoNoDrive(adm, aso.caminho, tipo.codigo, tipo.nome);
+  }
+
+  /**
    * Arquiva os documentos da staging no Drive (INT-2). Resolve a pasta-pai por contrato/cliente; se
    * não resolver, NÃO arquiva (deixa drivePastaUrl null e a staging viva até o TTL), logando sem PII.
    * Em sucesso, grava a URL da pasta (referência, não PII) e expurga a staging da admissão.

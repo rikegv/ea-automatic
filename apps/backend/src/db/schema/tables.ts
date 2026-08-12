@@ -452,6 +452,25 @@ export const admissoes = pgTable(
     statusCadastroBeneficio: statusCadastroBeneficioEnum("status_cadastro_beneficio")
       .notNull()
       .default("PENDENTE"),
+    /**
+     * ENTRADA NA FILA DE BENEFÍCIOS: carimbo do instante em que o Cadastro concluiu (§A.17 etapa 4).
+     * Nulo = nunca entrou; a tela lê exatamente `IS NOT NULL`.
+     *
+     * É COLUNA, e NÃO uma frente em `frentes_admissao` (decisão do diretor sobre o desenho de menor
+     * impacto, §A.27). A frente daria o mesmo comportamento e custaria alcance: valor novo no enum
+     * `frente_tipo`, na união `FrenteTipo` e nos três mapas totais que ela indexa, mais linhas no
+     * catálogo de status e uma linha a mais em `frentes_admissao` para cada admissão. Aquela tabela é
+     * lida por TODA consulta de contagem do sistema, e hoje elas só não erram porque todas filtram
+     * por tipo: bastaria uma futura esquecer o filtro para a conta quebrar em silêncio. Foi
+     * exatamente esse tipo de dependência escondida que quebrou a contagem da Bienal.
+     *
+     * ESTA COLUNA NÃO PARTICIPA DE NADA: não entra em régua de conclusão, farol, gate nem KPI.
+     * Ninguém além da tela de Benefícios a lê, e é isso que a torna segura.
+     *
+     * NÃO RETROATIVA por construção, como a Integração: o carimbo acontece no INSTANTE da transição,
+     * então as admissões que já estavam CADASTRADO nunca passam pelo gatilho e não entram na fila.
+     */
+    beneficiosEntrouEm: timestamp("beneficios_entrou_em", { withTimezone: true }),
     // Origem da admissão (Fase 5 / INT-1): MANUAL (wizard F6) ou PANDAPE (sync). Default MANUAL —
     // admissões anteriores e as criadas pelo wizard permanecem MANUAL sem alteração de chamada.
     origem: origemEnum("origem").notNull().default("MANUAL"),

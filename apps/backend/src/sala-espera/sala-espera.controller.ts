@@ -85,13 +85,16 @@ export class SalaEsperaController {
   }
 
   /**
-   * A fila. `recorte=vinculadas` abre a aba nova (quem já virou admissão), `recorte=todos` mostra
-   * tudo. `todos=1` continua funcionando: era o parâmetro da onda 2 e não se quebra contrato de
+   * A fila em três abas: o padrão é a ativa; `recorte=vinculadas` traz quem virou admissão;
+   * `recorte=inativadas` traz quem parou no caminho (status terminal, sem vínculo). `recorte=todos`
+   * mostra tudo. `todos=1` continua funcionando: era o parâmetro da onda 2 e não se quebra contrato de
    * quem já chama.
    */
   @Get()
   listar(@Query("recorte") recorte?: string, @Query("todos") todos?: string) {
-    if (recorte === "vinculadas" || recorte === "todos") return this.sala.listar(recorte);
+    if (recorte === "vinculadas" || recorte === "inativadas" || recorte === "todos") {
+      return this.sala.listar(recorte);
+    }
     return this.sala.listar(todos === "1" ? "todos" : "aguardando");
   }
 

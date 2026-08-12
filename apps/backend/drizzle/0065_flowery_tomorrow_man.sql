@@ -1,0 +1,1 @@
+ALTER TABLE "admissoes" ADD COLUMN "beneficios_entrou_em" timestamp with time zone;

@@ -8,6 +8,8 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import { Button } from "@/components/ui/Button";
 import { StatusPill } from "@/components/ui/StatusPill";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
+import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
 
 /**
  * PASTAS-PAI DO DRIVE por cliente/contrato (Administração, restrito a Master/Super Admin).
@@ -57,6 +59,19 @@ const ROTULO_ESCOPO: Record<Escopo, string> = { CONTRATO: "Contrato", FOPAG: "Fo
 export default function PastasDrivePage() {
   const { token } = useAuth();
   const [rows, setRows] = useState<PastaDrive[]>([]);
+
+  // Ordenação clicável (§A.12). O ID da pasta e as ações ficam de fora: um é identificador opaco do
+  // Google, o outro é controle. Ativo é RANK (ativa primeiro), não texto.
+  const colunasOrd = useMemo<ColOrd<PastaDrive>[]>(
+    () => [
+      { chave: "escopo", tipo: "texto", valor: (p) => p.escopo },
+      { chave: "chave", tipo: "texto", valor: (p) => p.chave },
+      { chave: "rotulo", tipo: "texto", valor: (p) => p.rotulo },
+      { chave: "ativo", tipo: "status", valor: (p) => (p.ativo ? 0 : 1) },
+    ],
+    [],
+  );
+  const ord = useOrdenacao(colunasOrd, rows);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -351,11 +366,19 @@ export default function PastasDrivePage() {
           <table className="ds-table min-w-[720px]">
             <thead>
               <tr>
-                <th className="w-28">Escopo</th>
-                <th className="w-40">Chave</th>
-                <th>Rótulo</th>
+                <ColunaOrdenavel as="th" ord={ord} chave="escopo" className="w-28">
+                  Escopo
+                </ColunaOrdenavel>
+                <ColunaOrdenavel as="th" ord={ord} chave="chave" className="w-40">
+                  Chave
+                </ColunaOrdenavel>
+                <ColunaOrdenavel as="th" ord={ord} chave="rotulo">
+                  Rótulo
+                </ColunaOrdenavel>
                 <th className="w-56">ID da pasta</th>
-                <th className="w-28">Ativo</th>
+                <ColunaOrdenavel as="th" ord={ord} chave="ativo" className="w-28">
+                  Ativo
+                </ColunaOrdenavel>
                 <th className="w-40">Ações</th>
               </tr>
             </thead>
@@ -373,7 +396,7 @@ export default function PastasDrivePage() {
                   </td>
                 </tr>
               ) : (
-                rows.map((p) => (
+                ord.itens.map((p) => (
                   <tr key={p.id} className={p.ativo ? "" : "opacity-60"}>
                     <td className="text-center">{ROTULO_ESCOPO[p.escopo]}</td>
                     <td className="font-semibold">

@@ -22,6 +22,8 @@ import { Button } from "@/components/ui/Button";
 import { Icon } from "@/components/ui/Icon";
 import { Modal } from "@/components/ui/Modal";
 import { cn } from "@/lib/cn";
+import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
+import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
 
 interface LinhaCliente {
   codCliente: string;
@@ -107,6 +109,19 @@ export default function IntegracaoClientesPage() {
         l.codCliente.toLowerCase().includes(q),
     );
   }, [linhas, busca]);
+
+  // Ordenação clicável (§A.12). "Exige integração" é RANK (quem exige primeiro), não texto: é a
+  // pergunta da tela, e ordenar "sim/não" alfabeticamente responderia ao contrário.
+  const colunas = useMemo<ColOrd<LinhaCliente>[]>(
+    () => [
+      { chave: "codCliente", tipo: "texto", valor: (l) => l.codCliente },
+      { chave: "razaoSocial", tipo: "texto", valor: (l) => l.razaoSocial },
+      { chave: "nomeOperacao", tipo: "texto", valor: (l) => l.nomeOperacao },
+      { chave: "exige", tipo: "status", valor: (l) => (l.exigeIntegracao ? 0 : 1) },
+    ],
+    [],
+  );
+  const ord = useOrdenacao(colunas, filtradas);
 
   const semIntegracao = useMemo(() => linhas.filter((l) => !l.exigeIntegracao).length, [linhas]);
 
@@ -205,10 +220,18 @@ export default function IntegracaoClientesPage() {
               style={{ gridTemplateColumns: "40px 120px minmax(240px,1.4fr) minmax(180px,1fr) 150px" }}
             >
               <span />
-              <span>Código</span>
-              <span>Razão Social</span>
-              <span>Operação</span>
-              <span>Exige Integração</span>
+              <ColunaOrdenavel ord={ord} chave="codCliente">
+                Código
+              </ColunaOrdenavel>
+              <ColunaOrdenavel ord={ord} chave="razaoSocial">
+                Razão Social
+              </ColunaOrdenavel>
+              <ColunaOrdenavel ord={ord} chave="nomeOperacao">
+                Operação
+              </ColunaOrdenavel>
+              <ColunaOrdenavel ord={ord} chave="exige">
+                Exige Integração
+              </ColunaOrdenavel>
             </div>
 
             {carregando ? (
@@ -218,7 +241,7 @@ export default function IntegracaoClientesPage() {
                 Nenhum cliente com esse filtro.
               </div>
             ) : (
-              filtradas.map((l) => (
+              ord.itens.map((l) => (
                 <div
                   key={l.codCliente}
                   className="row"

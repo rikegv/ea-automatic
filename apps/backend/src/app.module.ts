@@ -21,6 +21,7 @@ import { EsteiraModule } from "./esteira/esteira.module";
 import { GerencialModule } from "./gerencial/gerencial.module";
 import { SalaEsperaModule } from "./sala-espera/sala-espera.module";
 import { KitModule } from "./kit/kit.module";
+import { BeneficiosFilaModule } from "./beneficios/beneficios-fila.module";
 import { NaoConformidadesModule } from "./nao-conformidades/nao-conformidades.module";
 import { PastasDriveModule } from "./admin/pastas-drive/pastas-drive.module";
 import { PandapeModule } from "./pandape/pandape.module";
@@ -48,6 +49,7 @@ import { VtColetaModule } from "./vt-coleta/vt-coleta.module";
     EsteiraModule,
     GerencialModule,
     SalaEsperaModule,
+    BeneficiosFilaModule,
     NaoConformidadesModule,
     AiModule,
     StagingModule,

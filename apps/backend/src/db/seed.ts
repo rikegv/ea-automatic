@@ -137,6 +137,10 @@ async function main(): Promise<void> {
     { nome: "Aguardando retorno do candidato", encerra: false },
     { nome: "Declinou", encerra: true },
     { nome: "Desistiu", encerra: true },
+    // CANCELADAS (decisão do diretor): o cadastro errado, ou o registro que não avança e não é
+    // declínio nem desistência do candidato. Terminal como os outros dois, então manda o registro
+    // para a aba Inativadas em vez de sumir da tela.
+    { nome: "Canceladas", encerra: true },
   ];
   await db
     .insert(salaEsperaStatus)

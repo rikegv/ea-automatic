@@ -20,6 +20,8 @@ import { PendenciasModal } from "@/components/gerenciador/PendenciasModal";
 import { farolPill, FAROL_SELECT_OPTIONS } from "@/lib/farol";
 import { caixaAlta } from "@/lib/nome";
 import { pillPendencias } from "@/lib/pendencias-pill";
+import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
+import { DIRECAO_INICIAL, type Direcao, type Ordenacao } from "@/lib/ordenacao";
 
 interface AdmRow {
   admissaoId: string;
@@ -179,6 +181,39 @@ export default function GerenciadorPage() {
     return () => clearTimeout(h);
   }, [candQuery]);
 
+  /**
+   * ORDENAÇÃO SERVIDA PELO BACKEND (leva 2, decisão do diretor).
+   *
+   * A tela é PAGINADA no servidor (20 de 2.574, 129 páginas): ordenar em memória ordenaria só as 20
+   * linhas abertas, e a primeira linha da tela não seria a primeira da lista. Aqui o estado guarda só
+   * a coluna e a direção; quem ordena é a API, com o `order by` antes do `limit`.
+   *
+   * SEM COLUNA ESCOLHIDA, A TELA SAI IDÊNTICA À DE HOJE (§A.26): nenhum parâmetro é enviado e o
+   * backend mantém a ordem padrão de sempre.
+   */
+  const [ordem, setOrdem] = useState<{ chave: string; dir: Direcao } | null>(null);
+
+  /**
+   * O MESMO cabeçalho clicável das demais tabelas. `ColunaOrdenavel` só precisa de `ordem` e
+   * `alternar`, então a tela entrega um objeto com a forma do `useOrdenacao` e ganha a seta, o title
+   * e o `aria-sort` idênticos. `itens` vai vazio: quem ordena aqui é o banco.
+   */
+  const tipoDaColuna = (chave: string): keyof typeof DIRECAO_INICIAL =>
+    chave === "dataAdmissao" ? "data" : chave === "status" ? "status" : "texto";
+  const ord: Ordenacao<AdmRow> = {
+    itens: [],
+    ordem,
+    alternar: (chave: string) => {
+      setOrdem((cur) =>
+        cur && cur.chave === chave
+          ? { chave, dir: cur.dir === "asc" ? "desc" : "asc" }
+          : { chave, dir: DIRECAO_INICIAL[tipoDaColuna(chave)] },
+      );
+      // Trocar a ordem volta para a página 1: continuar na 7 de uma ordem nova não diz nada.
+      setPage(1);
+    },
+  };
+
   const load = useCallback(async () => {
     if (!token) return;
     setLoading(true);
@@ -196,6 +231,10 @@ export default function GerenciadorPage() {
     if (emAndamento) qs.set("emAndamento", "true");
     if (from) qs.set("from", from);
     if (to) qs.set("to", to);
+    if (ordem) {
+      qs.set("ordenarPor", ordem.chave);
+      qs.set("direcao", ordem.dir);
+    }
     qs.set("page", String(page));
     try {
       const resp = await apiFetch<ListResp>(`/admissoes?${qs.toString()}`, { token });
@@ -219,6 +258,7 @@ export default function GerenciadorPage() {
     emAndamento,
     from,
     to,
+    ordem,
     page,
   ]);
 
@@ -521,12 +561,24 @@ export default function GerenciadorPage() {
           <div className="ea-scroll min-h-0 flex-1 overflow-auto">
             <div className={GRID_MIN}>
               <div className="list-head" style={{ gridTemplateColumns: GRID }}>
-                <span>Candidato</span>
-                <span>Cliente</span>
-                <span>Cargo</span>
-                <span>Contrato</span>
-                <span>Data adm.</span>
-                <span>Status</span>
+                <ColunaOrdenavel ord={ord} chave="candidato">
+                  Candidato
+                </ColunaOrdenavel>
+                <ColunaOrdenavel ord={ord} chave="cliente">
+                  Cliente
+                </ColunaOrdenavel>
+                <ColunaOrdenavel ord={ord} chave="cargo">
+                  Cargo
+                </ColunaOrdenavel>
+                <ColunaOrdenavel ord={ord} chave="contrato">
+                  Contrato
+                </ColunaOrdenavel>
+                <ColunaOrdenavel ord={ord} chave="dataAdmissao">
+                  Data adm.
+                </ColunaOrdenavel>
+                <ColunaOrdenavel ord={ord} chave="status">
+                  Status
+                </ColunaOrdenavel>
                 <span>Auditoria</span>
                 <span>Exame</span>
                 <span>Cadastro</span>

@@ -76,8 +76,12 @@ function SetaOrdenacao({ dir }: { dir: "asc" | "desc" | null }) {
       strokeLinecap="round"
       strokeLinejoin="round"
     >
-      <path d="M2 6l3-3 3 3" className={cn(dir === "desc" && "opacity-20", !dir && "opacity-30")} />
-      <path d="M2 8l3 3 3-3" className={cn(dir === "asc" && "opacity-20", !dir && "opacity-30")} />
+      {/* SETA PARADA VISÍVEL (correção do diretor). Ela vivia a 30% da cor de um cabeçalho que já é
+          pequeno, caixa alta e apagado: o resultado era uma marca que ninguém enxergava, e a tela
+          parecia não ter ordenação nenhuma. A 55% ela aparece como convite ao clique sem competir
+          com o rótulo, e a metade ativa continua em cheio, que é o que diz a direção atual. */}
+      <path d="M2 6l3-3 3 3" className={cn(dir === "desc" && "opacity-25", !dir && "opacity-55")} />
+      <path d="M2 8l3 3 3-3" className={cn(dir === "asc" && "opacity-25", !dir && "opacity-55")} />
     </svg>
   );
 }

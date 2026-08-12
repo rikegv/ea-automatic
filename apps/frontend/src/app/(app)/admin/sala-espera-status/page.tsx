@@ -8,7 +8,7 @@
  * terminal tira o registro da fila ativa da Sala.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiFetch, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { PageHead } from "@/components/ui/PageHead";
@@ -16,6 +16,8 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import { Button } from "@/components/ui/Button";
 import { Icon } from "@/components/ui/Icon";
 import { cn } from "@/lib/cn";
+import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
+import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
 
 interface StatusRow {
   id: string;
@@ -72,6 +74,20 @@ export default function SalaEsperaStatusPage() {
   const [salvando, setSalvando] = useState(false);
   const [novo, setNovo] = useState("");
   const [novoEncerra, setNovoEncerra] = useState(false);
+
+  // Ordenação clicável (§A.12). Encerra e Ativo são RANK (o que encerra e o que está ativo primeiro),
+  // não texto: ordenar "sim/não" alfabeticamente colocaria "Não" na frente e diria o contrário do
+  // que a coluna significa. A tela carrega a lista inteira, então ordenar aqui é honesto.
+  const colunas = useMemo<ColOrd<StatusRow>[]>(
+    () => [
+      { chave: "nome", tipo: "texto", valor: (l) => l.nome },
+      { chave: "encerra", tipo: "status", valor: (l) => (l.encerra ? 0 : 1) },
+      { chave: "ativo", tipo: "status", valor: (l) => (l.ativo ? 0 : 1) },
+      { chave: "ordem", tipo: "numero", valor: (l) => l.ordem },
+    ],
+    [],
+  );
+  const ord = useOrdenacao(colunas, linhas);
 
   const carregar = useCallback(async () => {
     if (!token) return;
@@ -165,10 +181,18 @@ export default function SalaEsperaStatusPage() {
         <div className="ea-scroll min-h-0 flex-1 overflow-auto">
           <div className="min-w-[640px]">
             <div className="list-head" style={{ gridTemplateColumns: COLS }}>
-              <span>Status</span>
-              <span>Encerra A Fila</span>
-              <span>Ativo</span>
-              <span>Ordem</span>
+              <ColunaOrdenavel ord={ord} chave="nome">
+                Status
+              </ColunaOrdenavel>
+              <ColunaOrdenavel ord={ord} chave="encerra">
+                Encerra A Fila
+              </ColunaOrdenavel>
+              <ColunaOrdenavel ord={ord} chave="ativo">
+                Ativo
+              </ColunaOrdenavel>
+              <ColunaOrdenavel ord={ord} chave="ordem">
+                Ordem
+              </ColunaOrdenavel>
             </div>
             {carregando ? (
               <div className="px-4 py-10 text-center text-sm text-faint">Carregando…</div>
@@ -177,7 +201,7 @@ export default function SalaEsperaStatusPage() {
                 Nenhum status cadastrado.
               </div>
             ) : (
-              linhas.map((l) => (
+              ord.itens.map((l) => (
                 <div key={l.id} className="row" style={{ gridTemplateColumns: COLS }}>
                   <div className="min-w-0 text-left">
                     <input
