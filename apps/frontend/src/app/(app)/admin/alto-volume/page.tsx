@@ -783,6 +783,7 @@ export default function AltoVolumePage() {
         subtitle="Projetos sazonais de tiro curto: um cliente, um período e as vagas por cargo. Grupos de entrada e vagas podem ser acrescentados conforme o projeto anda."
       />
 
+
       {/* Formulário do projeto: o mesmo cria e edita, padrão dos demais cadastros. */}
       <GlassCard as="form" onSubmit={salvarProjeto} className="mb-5 flex flex-wrap gap-3 p-4">
         {editando && (

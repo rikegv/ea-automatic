@@ -3,6 +3,7 @@ import { AssinanteEmpresaModule } from "../clicksign/assinante-empresa.module";
 import { AltoVolumeController } from "./alto-volume/alto-volume.controller";
 import { AltoVolumeService } from "./alto-volume/alto-volume.service";
 import { AltoVolumeVinculosService } from "./alto-volume/alto-volume-vinculos.service";
+import { AltoVolumeAnaliseService } from "./alto-volume/alto-volume-analise.service";
 import { AssinanteEmpresaController } from "./assinante-empresa/assinante-empresa.controller";
 import { BeneficiosController } from "./beneficios/beneficios.controller";
 import { BeneficiosService } from "./beneficios/beneficios.service";
@@ -61,6 +62,7 @@ import { TiposDocumentoService } from "./tipos-documento/tipos-documento.service
   providers: [
     AltoVolumeService,
     AltoVolumeVinculosService,
+    AltoVolumeAnaliseService,
     ClientesService,
     CargosService,
     MotivosDeclinioService,

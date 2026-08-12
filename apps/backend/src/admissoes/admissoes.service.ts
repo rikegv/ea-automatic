@@ -33,6 +33,7 @@ import {
 } from "drizzle-orm";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
+import { admissaoConcluidaSql, admissaoEmAndamentoSql } from "../db/expressoes-admissao";
 import {
   admissaoBeneficio,
   admissaoProjeto,
@@ -1403,25 +1404,11 @@ export class AdmissoesService {
       base.push(or(...conds)!);
     }
 
-    // "Concluído" = terminou o Cadastro E NÃO tem integração PENDENTE.
-    //
-    // A frente INTEGRAÇÃO entrou como última etapa da esteira, então "cadastro concluído" deixou de
-    // significar "processo terminado" para quem ainda vai passar por ela. Sem a segunda metade desta
-    // expressão, uma admissão viva EM INTEGRAÇÃO contaria como Concluída no Gerenciador enquanto o
-    // time ainda trabalha nela.
-    //
-    // QUEM DECIDE É A PRESENÇA DA FRENTE, e não a configuração do cliente (leitura confirmada pelo
-    // diretor). A diferença não é acadêmica: hoje todos os 235 clientes exigem integração por
-    // default, e nenhuma das 1.555 admissões antigas tem a frente, porque a não retroatividade
-    // impediu. Olhar a configuração do cliente ZERARIA o KPI e reescreveria o passado; olhar a
-    // frente preserva as antigas (que não têm integração pendente) e faz só as novas esperarem.
-    //
-    // Cliente que NÃO exige integração também segue contando no Cadastro: a frente nunca nasce para
-    // ele, então nunca há integração pendente.
-    const concluidoExpr = sql<boolean>`(
-      EXISTS (SELECT 1 FROM frentes_admissao f WHERE f.admissao_id = ${admissoes.id} AND f.tipo = 'CADASTRO_CONTRATO' AND f.concluida = true)
-      AND NOT EXISTS (SELECT 1 FROM frentes_admissao i WHERE i.admissao_id = ${admissoes.id} AND i.tipo = 'INTEGRACAO' AND i.concluida = false)
-    )`;
+    // "Concluído" = terminou o Cadastro E NÃO tem integração PENDENTE. A expressão MUDOU DE CASA na
+    // onda 4 do Alto Volume (decisão do diretor): vive em `db/expressoes-admissao`, para o painel do
+    // projeto contar o mesmo balde que o Gerenciador. O SQL é o mesmo, byte a byte; o motivo de cada
+    // metade está documentado lá.
+    const concluidoExpr = admissaoConcluidaSql;
 
     // "Com pendências obrigatórias" = sinalizador de preenchimento diferente de OK (falta campo-núcleo),
     // MAS quem declinou/rescindiu NUNCA conta como pendência em nenhum card (regra permanente de
@@ -1434,11 +1421,9 @@ export class AdmissoesService {
     // visão geral consultável, §A.19: é ali que a pausada continua encontrável).
     const comPendenciaExpr = sql<boolean>`(${admissoes.sinalizadorPreenchimento} <> 'OK' AND ${admissoes.pausadaEm} IS NULL AND ${admissoes.farolGlobal} NOT IN ('DECLINOU', 'RESCISAO', 'AGUARDANDO_LIBERACAO', 'LIBERACAO_RECUSADA'))`;
 
-    // "Em andamento" = admissão EM ABERTO no geral: nem concluída nem declínio/rescisão. São os faróis
-    // de processo vivo (EM_ADMISSAO, BANCO_AGUARDAR). Numa base histórica dá ~0; o card fica pronto para
-    // quando o EA operar admissões vivas (Bloco A).
-    // PAUSA: "em andamento" é trabalho andando. Pausada, por definição, não está andando.
-    const emAndamentoExpr = sql<boolean>`(${admissoes.farolGlobal} IN ('EM_ADMISSAO', 'BANCO_AGUARDAR') AND ${admissoes.pausadaEm} IS NULL)`;
+    // "Em andamento" = admissão EM ABERTO no geral: nem concluída nem declínio/rescisão. Mesma
+    // mudança de casa do `concluidoExpr`, pelo mesmo motivo: os dois baldes andam juntos.
+    const emAndamentoExpr = admissaoEmAndamentoSql;
 
     // Filtros de status (farol/concluído/pendências/em andamento): só na lista, não nos KPIs (os cards
     // mostram a distribuição do conjunto base e funcionam como botão de filtro, §A.12).

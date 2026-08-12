@@ -8,6 +8,7 @@ import { FiltroTrigger, FiltroCampo } from "@/components/ui/FiltroTrigger";
 import { Icon, type IconName } from "@/components/ui/Icon";
 import { Select } from "@/components/ui/Select";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
+import { NavDiretoria } from "@/components/diretoria/NavDiretoria";
 import { deveCompararAnos } from "@/lib/comparativo-anual";
 import { cn } from "@/lib/cn";
 
@@ -382,6 +383,13 @@ export default function ControleGerencialPage() {
         <h1 className="mr-auto min-w-0 truncate text-[21px] font-semibold leading-tight text-text">
           Controle Gerencial
         </h1>
+
+        {/* ALTERNADOR DE VISÃO: Painel (esta tela, intocada) e Alto Volume (página filha). Entra
+            NESTA faixa, e não numa linha própria, pela altura travada: a faixa já tem 40px por causa
+            do ícone de filtro e a cápsula fecha nos mesmos 40px, então KPIs, tabelas e gráficos não
+            perdem um pixel. Sem gate próprio: as duas visões são governadas pelo menu `diretoria`,
+            então quem chega até aqui já pode ver as duas. */}
+        <NavDiretoria />
 
         <FiltroTrigger count={filtrosModal} onLimpar={limparTudo} className="!h-10 !w-10">
           <FiltroCampo label="Período">

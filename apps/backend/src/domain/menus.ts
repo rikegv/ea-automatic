@@ -232,6 +232,13 @@ export const MENUS: MenuDef[] = [
       "AltoVolumeController.criarVaga",
       "AltoVolumeController.atualizarVaga",
       "AltoVolumeController.removerVaga",
+      // `analisar` NÃO entra aqui, e a ausência é deliberada. A ANÁLISE deixou de ser tela do Menu
+      // Gerencial e virou página filha do Controle Gerencial (decisão do diretor: dashboard mora no
+      // painel), então quem tem o painel liberado tem de conseguir ler os números. Fica no mesmo
+      // regime do próprio Controle Gerencial, que é `operacoes: []`: leitura agregada, aberta, com a
+      // TELA gatada pelo menu `diretoria` no guard de rota. §A.6 conferido, o retorno é contagem,
+      // código e rótulo de catálogo (cargo, cliente), sem CPF e sem nome de candidato. As leituras
+      // que DEVOLVEM NOME (`listarVinculos`, `listarOrfaos`) seguem fechadas logo abaixo.
       "AltoVolumeController.listarVinculos",
       "AltoVolumeController.listarOrfaos",
       "AltoVolumeController.vincular",

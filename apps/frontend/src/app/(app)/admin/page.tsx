@@ -18,11 +18,15 @@ const CARDS: { href: string; icon: IconName; title: string; desc: string; codigo
     // menus: registrar o menu em `domain/menus` faz ele existir para o diretor LIBERAR, e é este
     // card que faz ele ser ENCONTRADO. Foi o buraco do menu Clínicas, que subiu funcionando e
     // invisível. Os dois passos são necessários, e nenhum substitui o outro.
+    //
+    // SÓ O CADASTRO mora aqui. A ANÁLISE do projeto (barras por cargo, baldes, termômetro) saiu desta
+    // tela e virou visão do Controle Gerencial (`/diretoria/alto-volume`), pela regra de que dashboard
+    // mora no painel. Aqui é gestão: cadastrar projeto, grupos, vagas e vincular admissões.
     href: "/admin/alto-volume",
     codigo: "alto-volume",
-    icon: "chart",
+    icon: "layers",
     title: "Alto Volume",
-    desc: "Projetos sazonais por cliente: período, grupos de entrada e vagas por cargo.",
+    desc: "Projetos sazonais por cliente: período, grupos de entrada, vagas por cargo e vínculos.",
   },
   {
     href: "/admin/clientes",

@@ -3,6 +3,7 @@ import type { AuthUser } from "../../auth/auth.types";
 import { CurrentUser } from "../../auth/decorators";
 import { AltoVolumeService } from "./alto-volume.service";
 import { AltoVolumeVinculosService } from "./alto-volume-vinculos.service";
+import { AltoVolumeAnaliseService } from "./alto-volume-analise.service";
 import {
   AtualizarVinculoDto,
   CreateGrupoDto,
@@ -36,6 +37,7 @@ export class AltoVolumeController {
   constructor(
     private readonly altoVolume: AltoVolumeService,
     private readonly vinculos: AltoVolumeVinculosService,
+    private readonly analise: AltoVolumeAnaliseService,
   ) {}
 
   // ── Leitura (aberta a qualquer autenticado) ───────────────────────────────
@@ -60,6 +62,15 @@ export class AltoVolumeController {
   @Get(":id/vinculos")
   listarVinculos(@Param("id") id: string) {
     return this.vinculos.listarVinculos(id);
+  }
+
+  /**
+   * ANÁLISE do projeto (onda 4): preenchimento por cargo, baldes, termômetro e alerta por grupo.
+   * Leitura agregada, sem PII, gatada pelo mesmo menu das demais leituras de painel.
+   */
+  @Get(":id/analise")
+  analisar(@Param("id") id: string) {
+    return this.analise.analise(id);
   }
 
   @Get(":id/orfaos")

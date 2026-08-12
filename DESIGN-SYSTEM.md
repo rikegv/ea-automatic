@@ -145,3 +145,51 @@ escolhendo. Vale para seletor, tabela, chip de filtro e leitura em modal.
 
 Sala de Espera (cadastro). As demais telas recebem o ajuste quando forem tocadas, sem OST própria
 para isso: é acabamento, não escopo novo.
+
+---
+
+## Dashboards nascem no Controle Gerencial (regra permanente)
+
+Decisão do diretor. **TODO dashboard do sistema nasce DENTRO do Controle Gerencial.** Nenhum dash
+nasce como tela solta ou avulsa: o Controle Gerencial é a casa dos dashboards. Vale daqui para frente
+para qualquer dash novo, sem OST que precise repetir a regra.
+
+**O que conta como dash:** tela cuja entrega é LEITURA agregada (indicador, gráfico, medidor, painel
+de acompanhamento). Se a tela responde "como está indo" em vez de "o que eu faço agora", é dash.
+
+**O que a regra proíbe na prática:**
+- Criar rota de dash sem porta de entrada, alcançável só por quem sabe o endereço.
+- Pendurar um dash em item próprio de menu lateral porque ficou sem lugar.
+- Espalhar painel de indicador por telas de cadastro, que existem para escrever, não para medir.
+
+**GESTÃO E ANÁLISE SÃO TELAS DIFERENTES, e a separação é a regra.** Cadastrar, editar e vincular é
+GESTÃO, e mora no **Menu Gerencial**. Medir é ANÁLISE, e mora no **Controle Gerencial**. Um assunto
+pode ter as duas, e nesse caso ele aparece nos dois lugares, cada metade na sua casa. Misturar as duas
+na mesma tela é o que faz o dash sumir dentro de um formulário.
+
+**Como o dash entra no painel: como VISÃO, por rota filha.** O Controle Gerencial tem um alternador de
+pílulas na faixa do título (`components/diretoria/NavDiretoria.tsx`): `Painel` é `/diretoria`, e cada
+dash novo é `/diretoria/<assunto>`. Cada visão é uma ROTA, nunca um estado guardado: a raiz do painel
+não ganha modos por dentro, então o dash de KPIs, tabelas e gráficos continua sendo byte a byte a tela
+validada que sempre foi. Quem diz qual pílula acende é `usePathname`, com igualdade exata (prefixo
+acenderia `Painel` junto com a filha). A visão filha repete a MESMA faixa de título (título, pílulas,
+tema), e é isso que faz trocar de pílula parecer trocar de visão, e não sair para outra tela.
+
+**Como não quebrar a altura travada:** o painel é `calc(100vh - 68px)` com `overflow-hidden`, e as três
+faixas de baixo (KPIs, seis tabelas, dois gráficos) dividem por proporção o que sobra. Pixel novo de
+altura sai do bolso delas. Por isso o alternador vive na faixa do título, que já tem **40px** ditados
+pelo ícone de filtro, e a cápsula fecha nos mesmos **40px cravados**. Toda pílula nova segue o molde:
+**na faixa do título, com a altura dela, nunca numa linha própria.** Na visão filha, onde o ícone de
+filtro do painel não se aplica, reserve o lugar dele (40px) para o alternador não escorregar na troca.
+
+**Permissão da visão filha:** ela é governada pelo menu `diretoria`, porque `menu-rotas` casa por
+prefixo. Então a leitura que a alimenta **não pode ser reivindicada por outro menu** em
+`domain/menus`, senão a tela abre e a API responde 403 para quem tem o painel. Leitura agregada sem PII
+fica aberta, no mesmo regime do próprio painel (`operacoes: []`); leitura que devolve nome de pessoa
+continua fechada no menu dela (§A.6).
+
+**Precedente que originou a regra, e como ele terminou:** a análise do Alto Volume (barras por cargo,
+baldes, termômetro) subiu como `/admin/alto-volume/analise`, alcançável só por link de texto, e virou
+tela que o diretor não achava. Terminou separada em duas metades: o **cadastro** (projetos, grupos,
+vagas, vínculos) ficou no Menu Gerencial, e a **análise** virou a visão `Alto Volume` do Controle
+Gerencial em `/diretoria/alto-volume`. Mesmo conteúdo da onda 4, casa diferente.

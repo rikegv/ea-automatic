@@ -31,6 +31,10 @@
   /* laranja "aguardando reenvio", distinto do amarelo de "análise pendente" (2C item 7) */
   --warn-2: #ea580c;
   --danger: #d64545;
+  /* violeta de "COMPLETO" (Alto Volume, aprovado pelo diretor): cargo/projeto com 100% das vagas.
+     É a única faixa de cor sem significado utilitário na análise, então não colide com o vermelho,
+     amarelo, azul e verde das faixas de preenchimento em andamento. */
+  --completo: #7c5cff;
   --r: 20px;
 
   /* derivados temáticos */
@@ -79,6 +83,8 @@
   --warn: #f5c451;
   --warn-2: #f97316;
   --danger: #ff6b6b;
+  /* violeta de "COMPLETO", tom mais claro para o fundo escuro (mesmo papel do bloco claro). */
+  --completo: #9d84ff;
 
   --body-bg: var(--bg);
   --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.06);

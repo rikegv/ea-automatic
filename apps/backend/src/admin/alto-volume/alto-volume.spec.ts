@@ -42,6 +42,15 @@ const ESCRITAS = [
  */
 const LEITURAS_DE_VINCULO = ["listarVinculos", "listarOrfaos"];
 
+/**
+ * A ANÁLISE é leitura AGREGADA e fica ABERTA, ao contrário das duas acima. Ela devolve contagem,
+ * código e rótulo de catálogo (cargo, cliente), sem CPF e sem nome de candidato, e a tela que a
+ * consome deixou de ser do Menu Gerencial: virou a visão "Alto Volume" do Controle Gerencial
+ * (`/diretoria/alto-volume`), governada pelo menu `diretoria` no guard de rota. Reivindicá-la para
+ * `alto-volume` faria quem tem o painel liberado tomar 403 dentro da própria tela.
+ */
+const LEITURA_AGREGADA = ["analisar"];
+
 describe("Alto Volume: classe sem @Roles (a régua que derrubou a Liberação não pode voltar)", () => {
   it("a controller NÃO tem @Roles em classe", () => {
     expect(Reflect.getMetadata(ROLES_KEY, AltoVolumeController)).toBeUndefined();
@@ -49,7 +58,7 @@ describe("Alto Volume: classe sem @Roles (a régua que derrubou a Liberação n�
 
   it("nenhum método tem @Roles: quem governa a escrita é o MENU", () => {
     const proto = AltoVolumeController.prototype as unknown as Record<string, unknown>;
-    for (const m of [...ESCRITAS, ...LEITURAS_DE_VINCULO, "list", "obter"]) {
+    for (const m of [...ESCRITAS, ...LEITURAS_DE_VINCULO, ...LEITURA_AGREGADA, "list", "obter"]) {
       expect(Reflect.getMetadata(ROLES_KEY, proto[m] as object), m).toBeUndefined();
     }
   });
@@ -75,6 +84,16 @@ describe("Alto Volume: escrita gated por menu, leitura aberta", () => {
   it("as leituras de VÍNCULO (onda 3) SÃO gatadas: devolvem nome de candidato", () => {
     for (const m of LEITURAS_DE_VINCULO) {
       expect(menuDaOperacao("AltoVolumeController", m), `leitura ${m}`).toBe("alto-volume");
+    }
+  });
+
+  /**
+   * Se alguém reivindicar `analisar` para o menu `alto-volume` de novo, este teste quebra ANTES de a
+   * visão "Alto Volume" do Controle Gerencial começar a responder 403 para quem tem o painel.
+   */
+  it("a ANÁLISE (visão do Controle Gerencial) é leitura agregada e NÃO é reivindicada por menu", () => {
+    for (const m of LEITURA_AGREGADA) {
+      expect(menuDaOperacao("AltoVolumeController", m), `leitura ${m}`).toBeNull();
     }
   });
 });
