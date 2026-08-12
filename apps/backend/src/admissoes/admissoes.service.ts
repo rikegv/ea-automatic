@@ -33,7 +33,7 @@ import {
 } from "drizzle-orm";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
-import { admissaoConcluidaSql, admissaoEmAndamentoSql } from "../db/expressoes-admissao";
+import { admissaoConcluidaSql, admissaoEmAndamentoExclusivoSql } from "../db/expressoes-admissao";
 import {
   admissaoBeneficio,
   admissaoProjeto,
@@ -1421,9 +1421,13 @@ export class AdmissoesService {
     // visão geral consultável, §A.19: é ali que a pausada continua encontrável).
     const comPendenciaExpr = sql<boolean>`(${admissoes.sinalizadorPreenchimento} <> 'OK' AND ${admissoes.pausadaEm} IS NULL AND ${admissoes.farolGlobal} NOT IN ('DECLINOU', 'RESCISAO', 'AGUARDANDO_LIBERACAO', 'LIBERACAO_RECUSADA'))`;
 
-    // "Em andamento" = admissão EM ABERTO no geral: nem concluída nem declínio/rescisão. Mesma
-    // mudança de casa do `concluidoExpr`, pelo mesmo motivo: os dois baldes andam juntos.
-    const emAndamentoExpr = admissaoEmAndamentoSql;
+    // "Em andamento" = admissão EM ABERTO que ainda NÃO concluiu. Mesma mudança de casa do
+    // `concluidoExpr`, pelo mesmo motivo: os dois baldes andam juntos.
+    //
+    // EXCLUSIVO desde a correção do diretor: o balde deixou de ser só o farol e passou a excluir quem
+    // já concluiu, senão a mesma admissão aparecia em "Admissões Em Andamento" E em "Admissões
+    // Concluídas" (eram 56). O motivo completo está em `db/expressoes-admissao`.
+    const emAndamentoExpr = admissaoEmAndamentoExclusivoSql;
 
     // Filtros de status (farol/concluído/pendências/em andamento): só na lista, não nos KPIs (os cards
     // mostram a distribuição do conjunto base e funcionam como botão de filtro, §A.12).

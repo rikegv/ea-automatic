@@ -862,11 +862,39 @@ export class EsteiraService {
     // transição, então as admissões que já estão `CADASTRADO` nunca passam por aqui e não voltam
     // para a esteira. Se uma delas for reaberta e concluir de novo, aí sim entra, porque passou pelo
     // gatilho.
-    const nasceIntegracao =
+    const fechaCadastroSemIntegracaoExistente =
       tipo === "CADASTRO_CONTRATO" &&
       conclui(tipo, novo) &&
-      !irmas.some((f) => f.tipo === "INTEGRACAO") &&
+      !irmas.some((f) => f.tipo === "INTEGRACAO");
+    const clienteExige =
+      fechaCadastroSemIntegracaoExistente &&
       (await clienteExigeIntegracao(this.db, admissao?.codCliente));
+    const nasceIntegracao = fechaCadastroSemIntegracaoExistente && clienteExige;
+
+    /**
+     * CONCLUSÃO SEM INTEGRAÇÃO: o Cadastro fecha, o cliente NÃO exige integração, e a esteira ACABOU
+     * ali. O farol tem de dizer isso.
+     *
+     * O DEFEITO QUE ISTO CORRIGE (causa raiz apurada, com hora): o carimbo de `ADMISSAO_CONCLUIDA`
+     * morava só na transição da INTEGRAÇÃO (abaixo). Quando a integração do cliente 57269 foi
+     * desmarcada em 11/08/2026 às 20:42, a frente parou de nascer e o carimbo deixou de ser
+     * alcançado: os Cadastros fechados às 21:09 em diante terminaram a esteira com o farol preso em
+     * EM_ADMISSAO. O Gerenciador (que lê as FRENTES) já os contava como concluídos e o Painel (que lê
+     * o FAROL) não, e as duas telas passaram a divergir em 14 admissões da Bienal.
+     *
+     * A DEPENDÊNCIA ESTAVA INVERTIDA: o farol de conclusão passou a depender de uma frente que o
+     * cliente dispensou. Aqui ele volta a depender do que de fato aconteceu, o fim da esteira.
+     *
+     * NÃO MEXE EM NENHUMA EXPRESSÃO DE CONTAGEM (§A.26): conserta o DADO na origem, e o SQL do Painel
+     * e do Gerenciador continua byte a byte o que era. É por isso que as três telas passam a bater
+     * sem que nenhuma delas seja reescrita.
+     *
+     * ADMISSÃO SEM CLIENTE fica de fora das DUAS pontas. `clienteExigeIntegracao` devolve `false`
+     * para cliente nulo com o sentido de "não há regra a aplicar", que não é o mesmo que "o cliente
+     * dispensou": carimbar conclusão a partir de uma ausência de cadastro seria adivinhar.
+     */
+    const concluiSemIntegracao =
+      fechaCadastroSemIntegracaoExistente && Boolean(admissao?.codCliente) && !clienteExige;
 
     const result = await this.db.transaction(async (tx) => {
       const concl = conclui(tipo, novo);
@@ -1008,6 +1036,10 @@ export class EsteiraService {
       // Exame e Cadastro; carimbar "Declinou" nelas apagaria trabalho que aconteceu de verdade. O
       // §A.16 Regra 2 existe para declínio IMPORTADO, que nunca teve essas frentes concluídas.
       let farolIntegracao: "ADMISSAO_CONCLUIDA" | "DECLINOU" | "RESCISAO" | null = null;
+      // FIM DA ESTEIRA SEM INTEGRAÇÃO: mesmo carimbo, mesma transação, pelo motivo escrito lá em
+      // cima. Entra pela mesma porta do `farolIntegracao` de propósito, para os dois caminhos de
+      // conclusão gravarem o farol do MESMO jeito e no MESMO lugar.
+      if (concluiSemIntegracao) farolIntegracao = "ADMISSAO_CONCLUIDA";
       if (tipo === "INTEGRACAO") {
         // DESCONSIDERADA leva ao MESMO farol de REALIZADO: a admissão está concluída nos dois casos,
         // e o que os distingue é o status da frente, não o farol (decisão do diretor, caminho barato).

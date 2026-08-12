@@ -9,11 +9,12 @@ import { AltoVolumeAnaliseService } from "./alto-volume-analise.service";
  * O QUE ESTES TESTES PROTEGEM. Painel de contagem erra em silêncio: ninguém vê stack trace, vê um
  * número plausível e errado. Os casos abaixo são os três jeitos de esse erro nascer aqui.
  *
- * 1. O TOTAL não ser a soma das linhas (a tela se contradizendo com ela mesma).
- * 2. Um cargo SUMIR da lista, e são justamente os dois casos que pedem ação: cargo com vaga e
+ * 1. A CONTA NÃO FECHAR na meta: Em Andamento + Concluídas + Faltam tem de dar o Total De Vagas do
+ *    projeto, exato, na linha e no total. É a régua do diretor e a primeira asserção do arquivo.
+ * 2. O TOTAL não ser a soma das linhas (a tela se contradizendo com ela mesma).
+ * 3. Um cargo SUMIR da lista, e são justamente os dois casos que pedem ação: cargo com vaga e
  *    ninguém vinculado (é o que falta contratar) e cargo com gente e sem vaga (erro de cadastro).
- * 3. "Faltam" medir contra quem está vinculado em vez de contra a META, que faria o projeto parecer
- *    completo assim que todo mundo entrasse na esteira, antes de qualquer admissão fechar.
+ * 4. Declínio voltar para dentro da matemática das vagas, somando ou subtraindo da meta.
  *
  * O termômetro tem bateria própria porque ele é conta de data, e conta de data erra em borda: o dia
  * exato do fim, o projeto que ainda não começou e o prazo vencido.
@@ -37,28 +38,29 @@ const PROJETO_OK: Row = {
 interface Cenario {
   projeto?: Row | null;
   vagas?: Row[];
-  /** Vínculo com o projeto: responde só "Na Esteira" e o preenchimento da meta. */
-  vinculadas?: Row[];
-  /** Status no universo cliente + período, o MESMO recorte do Controle Gerencial. */
+  /** Status no universo do PROJETO: os vinculados em `admissao_projeto`, onde a conta fecha. */
   status?: Row[];
+  /** Declínios no universo cliente + período, FORA da matemática das vagas. */
+  declinios?: Row[];
   grupos?: Row[];
 }
 
 /**
  * Fake do Drizzle por FILA DE RESULTADOS: a análise dispara cinco leituras em ordem conhecida
- * (projeto, vagas por cargo, vínculos por cargo, status por cargo, grupos), e cada `await` consome a
- * próxima. O encadeamento devolve sempre o mesmo objeto, que é "thenable" como o construtor do
- * Drizzle.
+ * (projeto, vagas por cargo, status dos vinculados, declínios do cliente no período, grupos), e cada
+ * `await` consome a próxima. O encadeamento devolve sempre o mesmo objeto, que é "thenable" como o
+ * construtor do Drizzle.
  *
- * A leitura de STATUS é separada da de VÍNCULO de propósito, e é o coração da correção: declínio não
- * é vinculado (§A.16), então contar status entre os vinculados escondia o que o projeto perdeu.
+ * A leitura de DECLÍNIO é separada da de status de propósito, e é o que sobrou da correção anterior:
+ * declínio não é vinculado (§A.16), então contá-lo entre os vinculados escondia o que o projeto
+ * perdeu. Ele segue no recorte maior, agora fora da conta da meta.
  */
 function montar(cen: Cenario = {}) {
   const fila: unknown[][] = [
     cen.projeto === null ? [] : [cen.projeto ?? PROJETO_OK],
     cen.vagas ?? [],
-    cen.vinculadas ?? [],
     cen.status ?? [],
+    cen.declinios ?? [],
     cen.grupos ?? [],
   ];
   let i = 0;
@@ -75,39 +77,102 @@ function montar(cen: Cenario = {}) {
 
 const HOJE = new Date("2026-09-05T12:00:00Z");
 
-describe("análise: os totais são a soma das linhas", () => {
+describe("análise: a conta fecha no total de vagas do projeto", () => {
+  /**
+   * A RÉGUA DO DIRETOR, com a diretoria olhando: Em Andamento + Concluídas + Faltam = a meta. É a
+   * asserção que a frente inteira existe para sustentar, e por isso ela vem antes de qualquer outra.
+   */
+  it("Em Andamento + Concluídas + Faltam = Total De Vagas, exato", async () => {
+    const ctx = montar({
+      vagas: [
+        { cargoId: "c1", cargoNome: "Vendedor I", vagas: 66 },
+        { cargoId: "c2", cargoNome: "Vendedor II", vagas: 25 },
+      ],
+      status: [
+        {
+          cargoId: "c1",
+          cargoNome: "Vendedor I",
+          vinculadas: 68,
+          concluidas: 30,
+          cadastradas: 30,
+          emAndamento: 38,
+          pausadas: 0,
+          emBanco: 0,
+        },
+        {
+          cargoId: "c2",
+          cargoNome: "Vendedor II",
+          vinculadas: 22,
+          concluidas: 13,
+          cadastradas: 13,
+          emAndamento: 9,
+          pausadas: 0,
+          emBanco: 0,
+        },
+      ],
+    });
+
+    const r = await ctx.service.analise(PROJETO, HOJE);
+    const { vagas, concluidas, emAndamento, faltam } = r.totais;
+
+    expect(concluidas + emAndamento + faltam, "a conta tem de fechar na meta").toBe(vagas);
+    expect(vagas).toBe(91);
+    expect(faltam).toBe(1);
+  });
+
+  /**
+   * CARGO COM MAIS GENTE DO QUE VAGA é o caso real da Bienal (68 ativos para 66 vagas do Vendedor I),
+   * e é onde a conta quebraria em silêncio: travando a linha em zero, a coluna Faltam somaria mais do
+   * que o resto real da meta e deixaria de bater com o total logo abaixo dela.
+   */
+  it("cargo estourado devolve negativo, e a coluna continua somando o total", async () => {
+    const ctx = montar({
+      vagas: [
+        { cargoId: "c1", cargoNome: "Vendedor I", vagas: 66 },
+        { cargoId: "c2", cargoNome: "Faxineiro(a)", vagas: 4 },
+      ],
+      status: [
+        { cargoId: "c1", cargoNome: "Vendedor I", vinculadas: 68, concluidas: 30, cadastradas: 30, emAndamento: 38, pausadas: 0, emBanco: 0 },
+        { cargoId: "c2", cargoNome: "Faxineiro(a)", vinculadas: 2, concluidas: 1, cadastradas: 1, emAndamento: 1, pausadas: 0, emBanco: 0 },
+      ],
+    });
+
+    const r = await ctx.service.analise(PROJETO, HOJE);
+
+    expect(r.porCargo.find((l) => l.cargoNome === "Vendedor I")?.faltam).toBe(-2);
+    expect(r.totais.faltam).toBe(r.porCargo.reduce((s, l) => s + l.faltam, 0));
+    expect(r.totais.concluidas + r.totais.emAndamento + r.totais.faltam).toBe(r.totais.vagas);
+  });
+
   it("soma vagas, vinculadas e cada balde", async () => {
     const ctx = montar({
       vagas: [
         { cargoId: "c1", cargoNome: "Atendente", vagas: 57 },
         { cargoId: "c2", cargoNome: "Caixa", vagas: 15 },
       ],
-      vinculadas: [
-        { cargoId: "c1", cargoNome: "Atendente", vinculadas: 50 },
-        { cargoId: "c2", cargoNome: "Caixa", vinculadas: 15 },
-      ],
       status: [
         {
           cargoId: "c1",
           cargoNome: "Atendente",
+          vinculadas: 50,
           concluidas: 40,
           cadastradas: 45,
           emAndamento: 7,
           pausadas: 2,
-          declinios: 1,
           emBanco: 3,
         },
         {
           cargoId: "c2",
           cargoNome: "Caixa",
+          vinculadas: 15,
           concluidas: 15,
           cadastradas: 15,
           emAndamento: 0,
           pausadas: 0,
-          declinios: 0,
           emBanco: 0,
         },
       ],
+      declinios: [{ cargoId: "c1", cargoNome: "Atendente", declinios: 1 }],
     });
 
     const r = await ctx.service.analise(PROJETO, HOJE);
@@ -121,26 +186,27 @@ describe("análise: os totais são a soma das linhas", () => {
       pausadas: 2,
       declinios: 1,
       emBanco: 3,
-      faltam: 17,
+      faltam: 10,
       percentual: 76,
     });
     expect(r.totais.vagas).toBe(r.porCargo.reduce((s, l) => s + l.vagas, 0));
     expect(r.totais.concluidas).toBe(r.porCargo.reduce((s, l) => s + l.concluidas, 0));
+    expect(r.totais.concluidas + r.totais.emAndamento + r.totais.faltam).toBe(r.totais.vagas);
   });
 
   it("PAUSADA tem balde próprio e não vira em andamento", async () => {
     const ctx = montar({
       vagas: [{ cargoId: "c1", cargoNome: "Atendente", vagas: 10 }],
-      vinculadas: [{ cargoId: "c1", cargoNome: "Atendente", vinculadas: 10 }],
       status: [
         {
           cargoId: "c1",
           cargoNome: "Atendente",
+          vinculadas: 10,
           concluidas: 0,
           cadastradas: 0,
           emAndamento: 6,
           pausadas: 4,
-          declinios: 0,
+          emBanco: 0,
         },
       ],
     });
@@ -149,46 +215,42 @@ describe("análise: os totais são a soma das linhas", () => {
 
     expect(r.totais.pausadas).toBe(4);
     expect(r.totais.emAndamento).toBe(6);
+    // Pausada não anda e não fechou, então ela fica dentro do que ainda falta preencher.
+    expect(r.totais.faltam).toBe(4);
   });
 });
 
 /**
- * O DEFEITO QUE ORIGINOU A SEPARAÇÃO DOS UNIVERSOS (achado do diretor, conferido contra o Controle
- * Gerencial filtrado por cliente e período). O caso real da Bienal: 23 declínios do cliente no
- * período, dos quais 22 NUNCA entraram em `admissao_projeto`, porque quem declina não deixa nada
- * ativo na esteira (§A.16). A análise contava status entre os vinculados e mostrava UM declínio: o
- * projeto tinha perdido 23 pessoas e a tela dizia que tinha perdido uma.
+ * DECLÍNIO FORA DA MATEMÁTICA (decisão do diretor), e ainda no recorte cliente + período.
+ *
+ * O caso real da Bienal: 23 declínios do cliente no período, dos quais 22 NUNCA entraram em
+ * `admissao_projeto`, porque quem declina não deixa nada ativo na esteira (§A.16). Contá-lo entre os
+ * vinculados mostrava UM declínio, e somá-lo à meta faria a conta das vagas passar do total. Ele é
+ * informação separada: a vaga que a pessoa declinou continua aberta e já está contada em "Faltam".
  */
-describe("análise: os baldes de status são do universo cliente + período, não do vínculo", () => {
-  it("declínio NÃO vinculado conta no balde (era o buraco: 23 viravam 1)", async () => {
+describe("análise: declínio é informação separada, não entra na conta das vagas", () => {
+  it("os 23 declínios do cliente aparecem no card sem mexer na meta", async () => {
     const ctx = montar({
       vagas: [{ cargoId: "c1", cargoNome: "Vendedor I", vagas: 66 }],
-      // Só 1 dos 23 declínios está vinculado ao projeto, como na base real.
-      vinculadas: [{ cargoId: "c1", cargoNome: "Vendedor I", vinculadas: 70 }],
       status: [
-        {
-          cargoId: "c1",
-          cargoNome: "Vendedor I",
-          concluidas: 0,
-          cadastradas: 37,
-          emAndamento: 99,
-          pausadas: 0,
-          declinios: 23,
-        },
+        { cargoId: "c1", cargoNome: "Vendedor I", vinculadas: 40, concluidas: 10, cadastradas: 10, emAndamento: 30, pausadas: 0, emBanco: 0 },
       ],
+      // Só 1 dos 23 declínios está vinculado ao projeto, como na base real.
+      declinios: [{ cargoId: "c1", cargoNome: "Vendedor I", declinios: 23 }],
     });
 
     const r = await ctx.service.analise(PROJETO, HOJE);
 
-    expect(r.totais.declinios, "o balde tem de contar os 23, não só o vinculado").toBe(23);
-    // O vínculo segue respondendo o Na Esteira, sem ser contaminado pelo universo maior.
-    expect(r.totais.vinculadas).toBe(70);
+    expect(r.totais.declinios, "o card tem de contar os 23, não só o vinculado").toBe(23);
+    // A meta não sente o declínio: nem soma nem subtrai, e a conta segue fechando.
     expect(r.totais.vagas).toBe(66);
+    expect(r.totais.faltam).toBe(26);
+    expect(r.totais.concluidas + r.totais.emAndamento + r.totais.faltam).toBe(r.totais.vagas);
   });
 
   /**
-   * EM BANCO por cargo alimenta o card dividido e o modal (decisão do diretor). Vem do mesmo universo
-   * cliente + período dos demais status, então o total é a soma das linhas, como todo o resto.
+   * EM BANCO por cargo alimenta o card dividido e o modal (decisão do diretor). Vem do universo do
+   * projeto, como todo o resto dos status, então o total é a soma das linhas.
    */
   it("EM BANCO é contado por cargo, para o card dividido e o modal", async () => {
     const ctx = montar({
@@ -197,8 +259,8 @@ describe("análise: os baldes de status são do universo cliente + período, nã
         { cargoId: "c2", cargoNome: "Caixa", vagas: 15 },
       ],
       status: [
-        { cargoId: "c1", cargoNome: "Vendedor I", concluidas: 0, cadastradas: 0, emAndamento: 5, pausadas: 0, declinios: 2, emBanco: 4 },
-        { cargoId: "c2", cargoNome: "Caixa", concluidas: 0, cadastradas: 0, emAndamento: 3, pausadas: 0, declinios: 0, emBanco: 1 },
+        { cargoId: "c1", cargoNome: "Vendedor I", vinculadas: 5, concluidas: 0, cadastradas: 0, emAndamento: 5, pausadas: 0, emBanco: 4 },
+        { cargoId: "c2", cargoNome: "Caixa", vinculadas: 3, concluidas: 0, cadastradas: 0, emAndamento: 3, pausadas: 0, emBanco: 1 },
       ],
     });
 
@@ -210,23 +272,23 @@ describe("análise: os baldes de status são do universo cliente + período, nã
   });
 
   /**
-   * CADASTRADAS e CONCLUÍDAS são baldes diferentes: "concluída" exige a frente de INTEGRAÇÃO fechada,
-   * e as 37 da Bienal estão cadastradas esperando integração. Se alguém igualar as duas, o número de
-   * concluídas do projeto passa a discordar do Gerenciador e do KPI do painel.
+   * CADASTRADAS e CONCLUÍDAS são baldes diferentes: "concluída" exige a frente de INTEGRAÇÃO fechada.
+   * O card de cadastradas saiu da tela por decisão do diretor, mas o número continua vindo, e igualar
+   * os dois faria as concluídas do projeto discordarem do Gerenciador e do KPI do painel.
    */
   it("CADASTRADAS é balde próprio e não vira concluída", async () => {
     const ctx = montar({
       vagas: [{ cargoId: "c1", cargoNome: "Vendedor I", vagas: 66 }],
-      vinculadas: [{ cargoId: "c1", cargoNome: "Vendedor I", vinculadas: 70 }],
       status: [
         {
           cargoId: "c1",
           cargoNome: "Vendedor I",
+          vinculadas: 40,
           concluidas: 0,
           cadastradas: 37,
-          emAndamento: 99,
+          emAndamento: 40,
           pausadas: 0,
-          declinios: 23,
+          emBanco: 0,
         },
       ],
     });
@@ -250,15 +312,16 @@ describe("análise: nenhum cargo some da lista", () => {
 
   it("cargo COM gente e SEM vaga cadastrada aparece (erro de cadastro à vista)", async () => {
     const ctx = montar({
-      vinculadas: [
+      status: [
         {
           cargoId: "c7",
           cargoNome: "Faxineiro(a)",
           vinculadas: 3,
           concluidas: 1,
+          cadastradas: 1,
           emAndamento: 2,
           pausadas: 0,
-          declinios: 0,
+          emBanco: 0,
         },
       ],
     });
@@ -268,20 +331,31 @@ describe("análise: nenhum cargo some da lista", () => {
     expect(r.porCargo[0]).toMatchObject({ cargoNome: "Faxineiro(a)", vagas: 0, vinculadas: 3 });
     // Sem meta não há percentual: zero é honesto, NaN vazaria como largura inválida no cilindro.
     expect(r.porCargo[0].percentual).toBe(0);
-    expect(r.porCargo[0].faltam).toBe(0);
+    // Sem meta, os três já estão "além da meta": a linha é erro de cadastro, e o negativo diz isso.
+    expect(r.porCargo[0].faltam).toBe(-3);
+  });
+
+  it("cargo que só tem DECLÍNIO aparece, sem meta e sem gente ativa", async () => {
+    const ctx = montar({ declinios: [{ cargoId: "c8", cargoNome: "Repositor", declinios: 4 }] });
+
+    const r = await ctx.service.analise(PROJETO, HOJE);
+
+    expect(r.porCargo[0]).toMatchObject({ cargoNome: "Repositor", vagas: 0, vinculadas: 0, declinios: 4 });
+    expect(r.totais.declinios).toBe(4);
   });
 
   it("admissão SEM cargo vira linha própria em vez de ser descartada", async () => {
     const ctx = montar({
-      vinculadas: [
+      status: [
         {
           cargoId: null,
           cargoNome: null,
           vinculadas: 2,
           concluidas: 0,
+          cadastradas: 0,
           emAndamento: 2,
           pausadas: 0,
-          declinios: 0,
+          emBanco: 0,
         },
       ],
     });
@@ -307,42 +381,26 @@ describe("análise: nenhum cargo some da lista", () => {
   });
 });
 
-describe('análise: "faltam" é contra a META, não contra o vínculo', () => {
-  it("57 vinculados e nenhuma concluída ainda faltam 57", async () => {
+describe('análise: "faltam" é o RESTO da meta', () => {
+  /**
+   * A MUDANÇA DE RÉGUA em uma asserção: antes, 57 vinculados sem nenhuma conclusão ainda "faltavam
+   * 57", e o card somava 57 + 57 contra uma meta de 57. Quem já está andando ocupa a vaga, então o
+   * que falta é zero, e o preenchimento (concluídas sobre a meta) continua em 0% dizendo que ninguém
+   * fechou ainda. São duas perguntas diferentes, e agora cada uma responde a sua.
+   */
+  it("57 em andamento contra 57 vagas não falta ninguém, e o preenchimento segue em zero", async () => {
     const ctx = montar({
       vagas: [{ cargoId: "c1", cargoNome: "Atendente", vagas: 57 }],
-      vinculadas: [
+      status: [
         {
           cargoId: "c1",
           cargoNome: "Atendente",
           vinculadas: 57,
           concluidas: 0,
+          cadastradas: 0,
           emAndamento: 57,
           pausadas: 0,
-          declinios: 0,
-        },
-      ],
-    });
-
-    const r = await ctx.service.analise(PROJETO, HOJE);
-
-    expect(r.porCargo[0].faltam).toBe(57);
-    expect(r.porCargo[0].percentual).toBe(0);
-  });
-
-  it("mais concluídas que vagas não vira número negativo", async () => {
-    const ctx = montar({
-      vagas: [{ cargoId: "c1", cargoNome: "Atendente", vagas: 5 }],
-      vinculadas: [{ cargoId: "c1", cargoNome: "Atendente", vinculadas: 7 }],
-      status: [
-        {
-          cargoId: "c1",
-          cargoNome: "Atendente",
-          concluidas: 7,
-          cadastradas: 7,
-          emAndamento: 0,
-          pausadas: 0,
-          declinios: 0,
+          emBanco: 0,
         },
       ],
     });
@@ -350,7 +408,15 @@ describe('análise: "faltam" é contra a META, não contra o vínculo', () => {
     const r = await ctx.service.analise(PROJETO, HOJE);
 
     expect(r.porCargo[0].faltam).toBe(0);
-    expect(r.porCargo[0].percentual).toBe(140);
+    expect(r.porCargo[0].percentual).toBe(0);
+  });
+
+  it("meta vazia ainda falta a meta inteira", async () => {
+    const ctx = montar({ vagas: [{ cargoId: "c1", cargoNome: "Atendente", vagas: 57 }] });
+
+    const r = await ctx.service.analise(PROJETO, HOJE);
+
+    expect(r.porCargo[0].faltam).toBe(57);
   });
 });
 

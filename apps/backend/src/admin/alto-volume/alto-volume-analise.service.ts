@@ -2,7 +2,10 @@ import { Inject, Injectable, NotFoundException } from "@nestjs/common";
 import { asc, eq, sql } from "drizzle-orm";
 import type { Database } from "../../db/client";
 import { DRIZZLE } from "../../db/drizzle.module";
-import { admissaoConcluidaSql, admissaoEmAndamentoSql } from "../../db/expressoes-admissao";
+import {
+  admissaoConcluidaSql,
+  admissaoEmAndamentoExclusivoSql,
+} from "../../db/expressoes-admissao";
 import { diasUteisEntre } from "../../domain/dias-uteis";
 import {
   admissaoProjeto,
@@ -85,8 +88,9 @@ export class AltoVolumeAnaliseService {
         pausadas: acc.pausadas + l.pausadas,
         declinios: acc.declinios + l.declinios,
         emBanco: acc.emBanco + l.emBanco,
+        faltam: acc.faltam + l.faltam,
       }),
-      { vagas: 0, vinculadas: 0, concluidas: 0, cadastradas: 0, emAndamento: 0, pausadas: 0, declinios: 0, emBanco: 0 },
+      { vagas: 0, vinculadas: 0, concluidas: 0, cadastradas: 0, emAndamento: 0, pausadas: 0, declinios: 0, emBanco: 0, faltam: 0 },
     );
 
     return {
@@ -94,7 +98,6 @@ export class AltoVolumeAnaliseService {
       termometro: this.termometro(projeto.dataInicio, projeto.dataFim, hoje),
       totais: {
         ...totais,
-        faltam: Math.max(0, totais.vagas - totais.concluidas),
         percentual: percentual(totais.concluidas, totais.vagas),
       },
       porCargo,
@@ -105,56 +108,88 @@ export class AltoVolumeAnaliseService {
   }
 
   /**
-   * STATUS POR CARGO no universo do PAINEL: cliente do projeto + data de admissão dentro do período.
+   * STATUS POR CARGO no universo do PROJETO: quem está VINCULADO em `admissao_projeto`, e só.
    *
-   * O DEFEITO QUE ISTO CORRIGE (achado do diretor, conferido contra o Controle Gerencial filtrado por
-   * 57269 e o período): os baldes de status contavam só entre os VINCULADOS, e declínio não é
-   * vinculado. Pela §A.16 quem declina não deixa nada ativo na esteira, então 22 dos 23 declínios do
-   * cliente no período nunca entraram em `admissao_projeto` e o balde mostrava 1. O projeto perdeu 23
-   * pessoas e a tela dizia que tinha perdido uma.
+   * A RÉGUA É A DA META (decisão do diretor, com a diretoria olhando a Bienal): TOTAL DE VAGAS DO
+   * PROJETO = Em Andamento + Concluídas + Faltam. Para essa conta fechar, os três baldes têm de
+   * falar do MESMO conjunto de pessoas, e esse conjunto é o do projeto. Contar status por cliente +
+   * período trazia gente que não é do projeto e a soma passava do total da meta: na Bienal, 51
+   * concluídas + 62 em andamento + 51 "faltam" davam 164 contra 102 vagas, e era exatamente o que
+   * não fechava na tela.
    *
-   * AS DUAS CONTAGENS RESPONDEM PERGUNTAS DIFERENTES, e é por isso que convivem:
-   *  - VÍNCULO (`admissao_projeto`) responde "quem estamos contando neste projeto": alimenta o Na
-   *    Esteira e o preenchimento da meta. Declínio fica fora de propósito.
-   *  - CLIENTE + PERÍODO responde "o que aconteceu com a operação deste cliente nesta janela":
-   *    alimenta os baldes de status, exatamente como o Controle Gerencial responde. É a realidade,
-   *    inclusive o que se perdeu.
-   * Misturar as duas foi o erro; separá-las é a correção.
+   * DECLÍNIO SAIU DA MATEMÁTICA (mesma decisão) e por isso tem consulta própria, logo abaixo, ainda
+   * no recorte cliente + período: ele não soma nem subtrai da meta, é informação separada de quanto
+   * o cliente perdeu na janela. Nada mudou no que o card e o modal de declínios mostram.
    *
-   * MESMO RECORTE DO PAINEL, para os dois números não divergirem: `cod_cliente` e
-   * `data_admissao BETWEEN início AND fim`, o mesmo par de condições do `condicoes()` do gerencial. E
-   * as MESMAS expressões (`admissaoConcluidaSql`, `admissaoEmAndamentoSql`), importadas e não
-   * copiadas, pelo motivo escrito em `db/expressoes-admissao`.
+   * OS BALDES SÃO EXCLUSIVOS ENTRE SI, e sem isso a conta não fecharia por um motivo silencioso:
+   * "concluída" olha as frentes e "em andamento" olha o farol, então uma admissão de farol
+   * EM_ADMISSAO com o Cadastro fechado cai nos DOIS. Na Bienal eram 14 pessoas nessa situação, 14 a
+   * mais na soma. A exclusão vive em `admissaoEmAndamentoExclusivoSql`, a MESMA que o Gerenciador
+   * passou a usar nos cards: um balde só, contado de um jeito só, nas duas telas.
+   *
+   * As expressões continuam sendo as MESMAS do Gerenciador (`admissaoConcluidaSql`,
+   * `admissaoEmAndamentoExclusivoSql`), importadas e não copiadas, pelo motivo escrito em
+   * `db/expressoes-admissao`: o que muda aqui é o UNIVERSO, nunca a definição de cada balde.
+   *
+   * VINCULADAS (o "Na Esteira") sai desta mesma consulta, com o filtro que sempre teve: terminais e
+   * banco fora, porque nenhum dos dois é trabalho ativo na esteira.
    *
    * CADASTRADAS é balde à parte de CONCLUÍDAS, e a diferença não é detalhe: "concluída" exige a
    * frente de INTEGRAÇÃO fechada (a última etapa da esteira), enquanto "cadastrada" é a frente de
-   * Cadastro em CADASTRADO. Hoje, na Bienal, são 0 e 37: as 37 estão cadastradas e ainda esperando
-   * integração. O painel mostra as 37 na tabela de Cadastro, e sem este balde a análise pareceria
-   * estar escondendo trabalho que já foi feito.
+   * Cadastro em CADASTRADO. Ela fica fora da conta da meta, como todo balde que não seja os três.
    */
-  private statusPorCargo(codCliente: string, dataInicio: string, dataFim: string) {
+  private statusPorCargoVinculados(projetoId: string) {
     return this.db
       .select({
         cargoId: admissoes.cargoId,
         cargoNome: cargos.nome,
+        // TERMINAIS E BANCO FORA (decisão do diretor + §A.16): declínio e rescisão são desfecho
+        // encerrado, e "em banco" é admissão parada esperando, não preenchimento de vaga.
+        vinculadas: sql<number>`count(*) filter (
+          where ${admissoes.farolGlobal} not in ('DECLINOU', 'RESCISAO', 'BANCO_AGUARDAR')
+        )::int`,
         concluidas: sql<number>`count(*) filter (where ${admissaoConcluidaSql})::int`,
         cadastradas: sql<number>`count(*) filter (where exists (
           select 1 from frentes_admissao fc
           where fc.admissao_id = ${admissoes.id} and fc.tipo = 'CADASTRO_CONTRATO' and fc.status = 'CADASTRADO'
         ))::int`,
-        emAndamento: sql<number>`count(*) filter (where ${admissaoEmAndamentoSql})::int`,
+        emAndamento: sql<number>`count(*) filter (where ${admissaoEmAndamentoExclusivoSql})::int`,
         // PAUSADA continua contada (o dado alimenta a tabela), mesmo sem balde próprio na tela.
         pausadas: sql<number>`count(*) filter (where ${admissoes.pausadaEm} is not null)::int`,
-        declinios: sql<number>`count(*) filter (where ${admissoes.farolGlobal} in ('DECLINOU', 'RESCISAO'))::int`,
-        // EM BANCO (decisão do diretor): admissão de banco não é preenchimento (sai dos cilindros,
-        // ver `preenchimentoPorCargo`), então ganha contagem própria para o card dividido. Mesmo
-        // universo dos demais status (cliente + período), para o card ler tudo do mesmo recorte.
         emBanco: sql<number>`count(*) filter (where ${admissoes.farolGlobal} = 'BANCO_AGUARDAR')::int`,
+      })
+      .from(admissaoProjeto)
+      .innerJoin(admissoes, eq(admissoes.id, admissaoProjeto.admissaoId))
+      .leftJoin(cargos, eq(cargos.id, admissoes.cargoId))
+      .where(eq(admissaoProjeto.projetoId, projetoId))
+      .groupBy(admissoes.cargoId, cargos.nome);
+  }
+
+  /**
+   * DECLÍNIOS POR CARGO, fora da matemática das vagas: cliente do projeto + data de admissão dentro
+   * do período, o mesmo recorte do Controle Gerencial.
+   *
+   * POR QUE ELE FICA NO RECORTE MAIOR (achado do diretor, conferido contra o painel filtrado por
+   * 57269 e o período): quem declina não deixa nada ativo na esteira (§A.16), então 22 dos 23
+   * declínios do cliente nunca entraram em `admissao_projeto`. Contá-lo entre os vinculados mostrava
+   * UM declínio: o projeto tinha perdido 23 pessoas e a tela dizia que tinha perdido uma.
+   *
+   * É INFORMAÇÃO SEPARADA, e não um balde da meta: declínio não soma nem subtrai do total de vagas,
+   * porque a vaga que a pessoa declinou continua aberta e já está contada em "Faltam". Misturar as
+   * duas leituras foi o que quebrou a conta; separá-las é o que a fecha.
+   */
+  private declinioPorCargo(codCliente: string, dataInicio: string, dataFim: string) {
+    return this.db
+      .select({
+        cargoId: admissoes.cargoId,
+        cargoNome: cargos.nome,
+        declinios: sql<number>`count(*)::int`,
       })
       .from(admissoes)
       .leftJoin(cargos, eq(cargos.id, admissoes.cargoId))
       .where(
         sql`${admissoes.codCliente} = ${codCliente}
+            and ${admissoes.farolGlobal} in ('DECLINOU', 'RESCISAO')
             and ${admissoes.dataAdmissao} >= ${dataInicio}::date
             and ${admissoes.dataAdmissao} <= ${dataFim}::date`,
       )
@@ -171,8 +206,9 @@ export class AltoVolumeAnaliseService {
    * SQL cru e juntar resultados em memória, o merge é o que preserva a fonte única.
    *
    * CADA CONSULTA RESPONDE UMA PERGUNTA, e o merge não as confunde: as VAGAS vêm do cadastro do
-   * projeto (a meta), as VINCULADAS vêm de `admissao_projeto` (o Na Esteira) e os STATUS vêm do
-   * universo cliente + período (a realidade, igual à do painel). Ver `statusPorCargo` para o porquê.
+   * projeto (a meta), as VINCULADAS e os STATUS vêm de `admissao_projeto` (o universo do projeto, o
+   * único em que a conta fecha na meta) e os DECLÍNIOS vêm do recorte cliente + período, fora da
+   * matemática. Ver `statusPorCargoVinculados` e `declinioPorCargo` para o porquê de cada um.
    *
    * O MERGE É UMA UNIÃO, não uma interseção, e isso é regra de tela: cargo com vaga e ninguém
    * vinculado é a linha MAIS importante (é o que falta contratar), e cargo com gente vinculada e
@@ -188,7 +224,7 @@ export class AltoVolumeAnaliseService {
     dataInicio: string,
     dataFim: string,
   ) {
-    const [vagas, vinculadas, status] = await Promise.all([
+    const [vagas, vinculados, declinios] = await Promise.all([
       this.db
         .select({
           cargoId: projetoVagaCargo.cargoId,
@@ -199,29 +235,8 @@ export class AltoVolumeAnaliseService {
         .leftJoin(cargos, eq(cargos.id, projetoVagaCargo.cargoId))
         .where(eq(projetoVagaCargo.projetoId, projetoId))
         .groupBy(projetoVagaCargo.cargoId, cargos.nome),
-      // VÍNCULO: quem foi ligado ao projeto e está ATIVO na esteira. Responde "Na Esteira" e o
-      // preenchimento da meta, e SOMENTE isso. Não responde status, pelo motivo do bloco abaixo.
-      //
-      // TERMINAIS E BANCO FORA (decisão do diretor + §A.16): declínio e rescisão são desfecho
-      // encerrado, e "em banco" (BANCO_AGUARDAR) é admissão parada esperando, não preenchimento de
-      // vaga. Nenhum dos dois é trabalho ativo na esteira, então nenhum conta no cilindro. O declínio
-      // vinculado era exatamente a diferença de 1 que o diretor via no Vendedor I: uma admissão
-      // declinada seguia contada como "Na Esteira".
-      this.db
-        .select({
-          cargoId: admissoes.cargoId,
-          cargoNome: cargos.nome,
-          vinculadas: sql<number>`count(*)::int`,
-        })
-        .from(admissaoProjeto)
-        .innerJoin(admissoes, eq(admissoes.id, admissaoProjeto.admissaoId))
-        .leftJoin(cargos, eq(cargos.id, admissoes.cargoId))
-        .where(
-          sql`${admissaoProjeto.projetoId} = ${projetoId}
-              and ${admissoes.farolGlobal} not in ('DECLINOU', 'RESCISAO', 'BANCO_AGUARDAR')`,
-        )
-        .groupBy(admissoes.cargoId, cargos.nome),
-      this.statusPorCargo(codCliente, dataInicio, dataFim),
+      this.statusPorCargoVinculados(projetoId),
+      this.declinioPorCargo(codCliente, dataInicio, dataFim),
     ]);
 
     const linhas = new Map<
@@ -264,16 +279,16 @@ export class AltoVolumeAnaliseService {
     };
 
     for (const v of vagas) pegar(v.cargoId, v.cargoNome).vagas = Number(v.vagas);
-    for (const l of vinculadas) pegar(l.cargoId, l.cargoNome).vinculadas = Number(l.vinculadas);
-    for (const s of status) {
+    for (const s of vinculados) {
       const linha = pegar(s.cargoId, s.cargoNome);
+      linha.vinculadas = Number(s.vinculadas);
       linha.concluidas = Number(s.concluidas);
       linha.cadastradas = Number(s.cadastradas);
       linha.emAndamento = Number(s.emAndamento);
       linha.pausadas = Number(s.pausadas);
-      linha.declinios = Number(s.declinios);
       linha.emBanco = Number(s.emBanco);
     }
+    for (const d of declinios) pegar(d.cargoId, d.cargoNome).declinios = Number(d.declinios);
 
     return [...linhas.values()]
       // Maior meta primeiro: é a ordem em que o time olha o projeto (o cargo que domina a leva vem
@@ -281,9 +296,18 @@ export class AltoVolumeAnaliseService {
       .sort((a, b) => b.vagas - a.vagas || a.cargoNome.localeCompare(b.cargoNome, "pt-BR"))
       .map((l) => ({
         ...l,
-        // "Faltam" é contra a META, não contra quem está vinculado: o projeto precisa de 57
-        // Atendentes fechados, e ter 57 vinculados não fecha nenhuma vaga sozinho.
-        faltam: Math.max(0, l.vagas - l.concluidas),
+        /**
+         * A CONTA FECHA NO TOTAL DE VAGAS (régua do diretor): Em Andamento + Concluídas + Faltam = a
+         * meta, exato, na linha e no total. "Faltam" é o RESTO da meta, e não mais a distância até
+         * as concluídas: quem já está andando dentro do projeto não é vaga a preencher.
+         *
+         * SEM TRAVA EM ZERO, e é o que faz a conta fechar SEMPRE. Um cargo pode ter mais gente do
+         * que vaga (na Bienal, Vendedor I tem 68 ativos para 66), e negativo aqui é a informação
+         * certa: são pessoas ALÉM da meta, e a tela mostra isso com esse nome. Travar em zero
+         * devolveria um total maior que o resto real (5 em vez de 3 na Bienal), e a coluna deixaria
+         * de somar o total logo abaixo dela.
+         */
+        faltam: l.vagas - l.concluidas - l.emAndamento,
         percentual: percentual(l.concluidas, l.vagas),
       }));
   }

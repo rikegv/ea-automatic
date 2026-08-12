@@ -648,40 +648,51 @@ export default function AltoVolumeAnalisePage() {
               </div>
 
               <p className="mb-3 text-xs text-faint">
-                vagas e esteira contam o que está vinculado ao projeto. cadastradas, concluídas, em
-                andamento e declínios contam o cliente {dados.projeto.codCliente} no período do
-                projeto, o mesmo recorte do painel
+                a conta fecha no total de vagas: em andamento + concluídas + faltam ={" "}
+                {dados.totais.vagas}. tudo conta quem está vinculado a este projeto. declínios ficam
+                fora da conta e contam o cliente {dados.projeto.codCliente} no período, como
+                informação separada
               </p>
 
-              {/* BALDES, e eles leem DOIS universos diferentes de propósito (correção do diretor):
-                  os dois primeiros são do PROJETO (meta cadastrada e quem foi vinculado), e os de
-                  status são do CLIENTE + PERÍODO, o mesmo recorte do Controle Gerencial. Declínio não
-                  é vinculado (§A.16), então contá-lo entre os vinculados escondia o que o projeto
-                  perdeu. O card "Pausadas" saiu por decisão do diretor: a operação não usa mais o
-                  estado. O número continua vindo do backend, então voltar é uma linha. */}
-              {/* SEIS COLUNAS só a partir de 1536px. O card "% Total Entregue" tirou 230px da faixa,
-                  e a 1366 as seis colunas caíam para 78px cada, cortando "Total De Admissões
-                  Cadastradas" no meio (§A.20). Abaixo disso, três colunas em duas linhas. */}
+              {/* BALDES DO PROJETO (régua do diretor): TODOS leem o mesmo universo, os vinculados a
+                  este projeto, e é isso que faz a conta fechar na meta. Em Andamento + Concluídas +
+                  Faltam = Total De Vagas Do Projeto, exato.
+
+                  DECLÍNIO FICA FORA DA MATEMÁTICA (mesma decisão) e segue no recorte cliente +
+                  período: ele não soma nem subtrai da meta, porque a vaga que a pessoa declinou
+                  continua aberta e já está contada em Faltam. Contá-lo entre os vinculados também
+                  esconderia o que o projeto perdeu (§A.16, 22 dos 23 declínios nunca foram
+                  vinculados). O card e o modal continuam iguais.
+
+                  O card "Total De Admissões Cadastradas" saiu por decisão do diretor. O número
+                  continua vindo do backend, então voltar é uma linha. O card "Pausadas" saiu antes,
+                  pelo mesmo caminho: a operação não usa mais o estado. */}
+              {/* SEIS COLUNAS só a partir de 1536px, porque o card "% Total Entregue" tirou 230px da
+                  faixa e a 1366 as seis caíam para 78px cada, cortando rótulo no meio (§A.20).
+                  Abaixo disso, três colunas em duas linhas. */}
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 2xl:grid-cols-6">
                 <Balde rotulo="Total De Vagas Do Projeto" valor={dados.totais.vagas} />
                 <Balde rotulo="Total De Vagas Na Esteira" valor={dados.totais.vinculadas} />
-                {/* CADASTRADAS é a frente de Cadastro em CADASTRADO, o mesmo número que o painel
-                    mostra na tabela de Cadastro. CONCLUÍDAS exige a INTEGRAÇÃO fechada, que é a
-                    última etapa da esteira, então as duas não são a mesma pergunta e cada uma tem
-                    balde próprio. */}
-                <Balde
-                  rotulo="Total De Admissões Cadastradas"
-                  valor={dados.totais.cadastradas}
-                  cor="var(--accent-2)"
-                  dica="Frente de Cadastro em CADASTRADO, o mesmo número da tabela de Cadastro do painel"
-                />
                 <Balde
                   rotulo="Total De Admissões Concluídas"
                   valor={dados.totais.concluidas}
                   cor="var(--ok)"
                   dica="Cadastro concluído e sem integração pendente, a mesma régua do Gerenciador"
                 />
-                <Balde rotulo="Total Em Andamento" valor={dados.totais.emAndamento} cor="var(--accent)" />
+                <Balde
+                  rotulo="Total Em Andamento"
+                  valor={dados.totais.emAndamento}
+                  cor="var(--accent)"
+                  dica="Vinculadas em processo vivo que ainda não concluíram"
+                />
+                {/* FALTAM ganhou card próprio: é a terceira parcela da conta, e sem ele a soma que o
+                    diretor confere ficaria só na tabela. */}
+                <Balde
+                  rotulo="Total De Vagas Que Faltam"
+                  valor={dados.totais.faltam}
+                  cor="var(--warn)"
+                  dica="Total de vagas menos as concluídas e as que estão em andamento"
+                />
                 {/* CARD DIVIDIDO NO MEIO (decisão do diretor): declínios em cima, em banco embaixo.
                     Os dois são desfechos que saem do preenchimento (§A.16 para declínio, decisão do
                     diretor para banco), e cada metade abre o próprio modal. Só abre a metade que tem
@@ -881,7 +892,20 @@ export default function AltoVolumeAnalisePage() {
                       <td className="text-center tabular-nums">{l.vinculadas}</td>
                       <td className="text-center font-semibold tabular-nums">{l.concluidas}</td>
                       <td className="text-center tabular-nums">{l.emAndamento}</td>
-                      <td className="text-center font-semibold tabular-nums">{l.faltam}</td>
+                      {/* NEGATIVO É INFORMAÇÃO, não defeito: o cargo tem mais gente do que vaga, e é
+                          por não travar em zero que a coluna soma exatamente o total abaixo dela. O
+                          título diz em palavras o que o sinal diz em número. */}
+                      <td
+                        className="text-center font-semibold tabular-nums"
+                        style={l.faltam < 0 ? { color: "var(--accent)" } : undefined}
+                        title={
+                          l.faltam < 0
+                            ? `${-l.faltam} além da meta deste cargo`
+                            : undefined
+                        }
+                      >
+                        {l.faltam}
+                      </td>
                       <td className="text-center tabular-nums">{l.pausadas}</td>
                       <td className="text-center tabular-nums">{l.declinios}</td>
                     </tr>

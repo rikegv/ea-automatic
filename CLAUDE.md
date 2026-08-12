@@ -682,3 +682,34 @@ pega isso, porque o elo quebrado não tinha teste.
 Complementa a §A.14 (escopo fechado, só o que a OST pede): a §A.14 trata do que NÃO está na OST, esta
 trata do que ESTÁ na OST mas alcança o que já foi validado. Na menor dúvida, PARE e pergunte.
 *(Decisão do diretor.)*
+
+## A.27: Investigar a lógica e o impacto ANTES de implantar (regra permanente)
+
+**Todo pedido do diretor, seja AJUSTE ou FUNCIONALIDADE NOVA, começa pela investigação do impacto, não
+pela implementação.** Antes de construir qualquer coisa, a fábrica levanta:
+
+- **Quem depende do que vai ser mexido:** que outras telas, frentes, contagens, consultas, filas ou
+  rotinas leem aquele dado, aquela coluna, aquela expressão ou aquele serviço.
+- **O que pode quebrar como efeito colateral**, mesmo que não pareça relacionado. O teste é de
+  ALCANCE, não de tema: um dado escrito num lugar é lido em outros três.
+- **Se muda o comportamento de algo já validado**, ainda que a mudança pareça interna.
+
+**Havendo risco, o impacto é REPORTADO ao diretor ANTES de construir.** Não é pedir permissão para
+trabalhar: é mostrar o que a mudança alcança, para o diretor decidir com o mapa na mão.
+
+**O objetivo é EVITAR RETRABALHO.** Está se gastando tempo demais consertando o que não precisaria ter
+sido mexido, ou o que foi mexido sem que ninguém olhasse o alcance. Corrigir depois custa mais do que
+investigar antes, e custa na hora errada, com a operação parada e a diretoria olhando.
+
+**O caso real que originou a regra (11/08/2026, 20:42).** Desmarcar a exigência de integração de UM
+cliente quebrou a contagem de TRÊS telas ao mesmo tempo (Painel, Gerenciador e a análise do Alto
+Volume), porque ninguém verificou que o carimbo do farol `ADMISSAO_CONCLUIDA` dependia da frente de
+INTEGRAÇÃO nascer. Sem a frente, o farol nunca era escrito: as admissões terminavam a esteira presas em
+EM_ADMISSAO, o Gerenciador as contava como concluídas pelas frentes, o Painel não as contava pelo farol,
+e 56 admissões passaram a ser contadas duas vezes. A investigação do impacto levaria minutos; o conserto
+levou uma frente inteira, com a diretoria olhando.
+
+Complementa a §A.14 (escopo fechado) e a §A.26 (mexeu em código validado, pergunta antes): a §A.14 trata
+do que NÃO está na OST, a §A.26 do que ESTÁ na OST e alcança código validado, e esta trata de **mapear o
+alcance antes de escrever a primeira linha**, inclusive quando o pedido parece isolado. Vale para todo
+ajuste e toda implantação daqui para frente. *(Decisão do diretor.)*

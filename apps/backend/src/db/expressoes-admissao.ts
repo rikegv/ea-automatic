@@ -48,3 +48,21 @@ export const admissaoConcluidaSql = sql<boolean>`(
  * tem balde próprio (decisão do diretor) em vez de sumir da conta.
  */
 export const admissaoEmAndamentoSql = sql<boolean>`(${admissoes.farolGlobal} IN ('EM_ADMISSAO', 'BANCO_AGUARDAR') AND ${admissoes.pausadaEm} IS NULL)`;
+
+/**
+ * "EM ANDAMENTO" EXCLUSIVO: anda E ainda NÃO concluiu. É o balde que os CARDS usam.
+ *
+ * POR QUE ELE EXISTE (correção pedida pelo diretor, com a diretoria olhando): os dois baldes leem
+ * fontes diferentes, "em andamento" olha o FAROL e "concluída" olha as FRENTES. Uma admissão que
+ * fechou o Cadastro enquanto o farol ainda não virou satisfaz OS DOIS, e a MESMA pessoa era contada
+ * duas vezes em cards que a tela apresenta como opostos. Eram 56 admissões, 14 delas nascidas numa
+ * única noite.
+ *
+ * CONCLUÍDA MANDA. Entre "terminou" e "está andando", quem terminou não está mais andando: o
+ * desfecho é o estado mais forte, e é o que o usuário espera ler.
+ *
+ * NÃO SUBSTITUI a correção do farol (`esteira.service`, conclusão sem integração), que conserta o
+ * dado na origem. Este é o cinto de segurança da LEITURA: enquanto qualquer farol estiver atrasado
+ * por qualquer motivo, os cards continuam sem contar ninguém duas vezes.
+ */
+export const admissaoEmAndamentoExclusivoSql = sql<boolean>`(${admissaoEmAndamentoSql} AND NOT ${admissaoConcluidaSql})`;

@@ -9528,3 +9528,36 @@ Push feito com a flag `.claude/state/READY_*` (§A.7), removida logo após.
 
 **A seguir, ainda NÃO commitado:** itens 5 (motivo da contratação no modal do olhinho) e 12
 (arquivamento do ASO no APTO manual), para o diretor validar na tela antes do commit.
+
+---
+
+## 2026-08-12 · Alto Volume: a conta que fecha, e o farol que voltou a dizer a verdade
+
+**Alto Volume, a régua da análise.** Os cards do projeto não fechavam: Concluídas e Em Andamento vinham
+do universo cliente + período e "Faltam" media a distância até as concluídas, então a soma dava 164 num
+projeto de 102 vagas. A régua passou a ser a da META, no universo dos VINCULADOS ao projeto: Em Andamento
++ Concluídas + Faltam = Total De Vagas, exato. Declínio saiu da matemática e continua à parte, por
+cliente. O card de admissões cadastradas saiu e entrou o de vagas que faltam. Na Bienal: 51 + 48 + 3 = 102.
+
+**A causa raiz da divergência entre as telas.** Em 11/08/2026 às 20:42 a exigência de integração do
+cliente 57269 foi desmarcada. A partir dali a frente INTEGRAÇÃO parou de nascer, e o ÚNICO ponto que
+escrevia `farol_global = ADMISSAO_CONCLUIDA` vivia dentro da transição dessa frente. Os Cadastros
+fechados às 21:09 em diante terminaram a esteira com o farol preso em EM_ADMISSAO: o Gerenciador (que lê
+as FRENTES) contava como concluídas, o Painel (que lê o FAROL) não, e 56 admissões passaram a ser contadas
+duas vezes, 14 delas da Bienal.
+
+**Correção A, na origem.** Concluir o Cadastro para cliente que não exige integração passa a carimbar o
+farol, na mesma transação e pela mesma porta. Nenhuma expressão de contagem foi tocada. Backfill único
+carimbou as 56 já existentes; as 3 com farol de declínio ficaram de fora de propósito, porque carimbar
+"concluída" sobre um desfecho terminal trocaria um erro de contagem por um erro de verdade.
+
+**Correção B, na leitura.** "Em andamento" virou `em andamento E não concluída`, numa expressão única
+(`admissaoEmAndamentoExclusivoSql`) que o Gerenciador e o Alto Volume importam. É o cinto de segurança:
+mesmo com um farol atrasado, ninguém é contado duas vezes.
+
+Depois das duas: Painel Ativos 51 e Gerenciador Concluídas 51 na Bienal, divergência de 14 zerada, e zero
+admissões nos dois baldes na base inteira.
+
+**§A.27 (regra nova).** Investigar a lógica e o impacto ANTES de implantar, e reportar o alcance ao
+diretor quando houver risco. Nasceu deste incidente: uma configuração de um cliente derrubou a contagem
+de três telas porque ninguém verificou quem dependia da frente de integração.
