@@ -1638,6 +1638,7 @@ export default function LiberacaoPage() {
                   onChange={setTipoContrato}
                   placeholder="Selecione…"
                   ariaLabel="Tipo de contrato"
+                  searchable
                   options={[
                     OPCAO_EM_BRANCO,
                     ...TIPOS_CONTRATO.map((t) => ({ value: t, label: t })),
@@ -2086,6 +2087,7 @@ export default function LiberacaoPage() {
               <label className="grid gap-1.5">
                 <span className="ds-label">Tipo de contrato</span>
                 <Select
+                  searchable
                   value={loteTipoContrato}
                   onChange={setLoteTipoContrato}
                   placeholder="Selecione…"

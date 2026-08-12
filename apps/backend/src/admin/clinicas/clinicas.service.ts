@@ -42,9 +42,10 @@ export class ClinicasService {
           : "Já existe uma clínica inativa com esse nome. Reative em vez de criar outra.",
       );
     }
+    const endereco = dto.endereco?.trim();
     const [row] = await this.db
       .insert(clinicasCatalogo)
-      .values({ nome, fornecedor: dto.fornecedor.trim() })
+      .values({ nome, fornecedor: dto.fornecedor.trim(), endereco: endereco || null })
       .returning();
     return row;
   }
@@ -65,6 +66,8 @@ export class ClinicasService {
       .set({
         ...(nome !== undefined ? { nome } : {}),
         ...(dto.fornecedor !== undefined ? { fornecedor: dto.fornecedor.trim() } : {}),
+        // String vazia LIMPA o endereço (vira null); ausente não toca no campo.
+        ...(dto.endereco !== undefined ? { endereco: dto.endereco.trim() || null } : {}),
         ...(dto.ativo !== undefined ? { ativo: dto.ativo } : {}),
       })
       .where(eq(clinicasCatalogo.id, id))

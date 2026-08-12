@@ -1,9 +1,9 @@
 import { IsBoolean, IsOptional, IsString, MaxLength, MinLength } from "class-validator";
 
 /**
- * DTOs do catálogo de CLÍNICAS (OST Onda 2, item 4). SÓ O NOME, por decisão do diretor: nada de
- * endereço, telefone ou contato. Se um dia precisar de mais, entra como campo novo, não como texto
- * empilhado dentro do nome.
+ * DTOs do catálogo de CLÍNICAS. Nasceu só com o nome; ganhou fornecedor (OST do fornecedor por
+ * clínica) e agora o ENDEREÇO (OST melhorias EAC, item 6), que o agendamento do exame puxa
+ * automaticamente. Cada dado novo entra como campo próprio, nunca empilhado no nome.
  */
 export class CreateClinicaDto {
   @IsString()
@@ -21,6 +21,15 @@ export class CreateClinicaDto {
   @MinLength(1)
   @MaxLength(60)
   fornecedor!: string;
+
+  /**
+   * ENDEREÇO da clínica (item 6). OPCIONAL: o agendamento puxa quando existe, e clínica sem endereço
+   * segue válida (as já cadastradas não têm). Preenchido conforme cada clínica é editada.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  endereco?: string;
 }
 
 export class UpdateClinicaDto {
@@ -35,6 +44,12 @@ export class UpdateClinicaDto {
   @MinLength(1)
   @MaxLength(60)
   fornecedor?: string;
+
+  /** Endereço (item 6). String vazia é permitida para LIMPAR o endereço de uma clínica. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  endereco?: string;
 
   @IsOptional()
   @IsBoolean()

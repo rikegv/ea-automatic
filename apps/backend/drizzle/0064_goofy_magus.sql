@@ -1,0 +1,1 @@
+ALTER TABLE "clinicas_catalogo" ADD COLUMN "endereco" varchar(200);

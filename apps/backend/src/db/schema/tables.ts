@@ -300,6 +300,13 @@ export const clinicasCatalogo = pgTable("clinicas_catalogo", {
    * OST é justamente poder cadastrar fornecedor novo sem migração.
    */
   fornecedor: varchar("fornecedor", { length: 60 }),
+  /**
+   * ENDEREÇO da clínica (OST melhorias EAC, item 6): quando o agendamento do exame subir, puxa este
+   * endereço automaticamente em vez de o consultor redigitar. NULLABLE de propósito: as clínicas já
+   * cadastradas não têm endereço e não podem virar inválidas por causa de uma coluna nova; o campo é
+   * preenchido conforme cada clínica é editada. §A.6: dado de fornecedor, não de pessoa.
+   */
+  endereco: varchar("endereco", { length: 200 }),
   ativo: boolean("ativo").notNull().default(true),
   criadoEm,
 });

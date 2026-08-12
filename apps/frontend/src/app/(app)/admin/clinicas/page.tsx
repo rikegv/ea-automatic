@@ -35,6 +35,7 @@ import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
 interface Clinica {
   id: string;
   nome: string;
+  endereco: string | null;
   /** Fornecedor da clínica: o agendamento DERIVA daqui, por endereço. */
   fornecedor: string | null;
   ativo: boolean;
@@ -49,6 +50,7 @@ export default function ClinicasPage() {
   const [error, setError] = useState<string | null>(null);
   const [nome, setNome] = useState("");
   const [fornecedor, setFornecedor] = useState("");
+  const [endereco, setEndereco] = useState("");
   const [saving, setSaving] = useState(false);
   const [filtro, setFiltro] = useState<Filtro>("ativos");
   const [busca, setBusca] = useState("");
@@ -104,6 +106,7 @@ export default function ClinicasPage() {
     setEditando(c.id);
     setNome(c.nome);
     setFornecedor(c.fornecedor ?? "");
+    setEndereco(c.endereco ?? "");
     setError(null);
     if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -112,6 +115,7 @@ export default function ClinicasPage() {
     setEditando(null);
     setNome("");
     setFornecedor("");
+    setEndereco("");
     setError(null);
   }
 
@@ -124,14 +128,15 @@ export default function ClinicasPage() {
         await apiFetch(`/admin/clinicas/${encodeURIComponent(editando)}`, {
           method: "PATCH",
           token,
-          body: { nome, fornecedor },
+          body: { nome, fornecedor, endereco },
         });
       } else {
-        await apiFetch("/admin/clinicas", { method: "POST", token, body: { nome, fornecedor } });
+        await apiFetch("/admin/clinicas", { method: "POST", token, body: { nome, fornecedor, endereco } });
       }
       setEditando(null);
       setNome("");
       setFornecedor("");
+      setEndereco("");
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Erro ao salvar");
@@ -197,6 +202,13 @@ export default function ClinicasPage() {
           value={fornecedor}
           onChange={(e) => setFornecedor(e.target.value)}
           className="ds-input w-[200px]"
+        />
+        {/* ENDEREÇO (item 6): opcional, o agendamento do exame puxa daqui quando existe. */}
+        <input
+          placeholder="Endereço da clínica"
+          value={endereco}
+          onChange={(e) => setEndereco(e.target.value)}
+          className="ds-input flex-1"
         />
         <Button type="submit" disabled={saving} className="shrink-0 py-2.5">
           {saving ? "Salvando…" : editando ? "Salvar alterações" : "Adicionar"}
