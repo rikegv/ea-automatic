@@ -186,12 +186,75 @@ describe("análise: a conta fecha no total de vagas do projeto", () => {
       pausadas: 2,
       declinios: 1,
       emBanco: 3,
-      faltam: 10,
+      // 72 - 65: a meta menos quem está na esteira (régua única, 13/08/2026). Era 10 pela conta
+      // antiga (`vagas - concluídas - em andamento`), que ignorava pausada e banco e por isso
+      // divergia do número que o card de cada cargo desenhava.
+      faltam: 7,
       percentual: 76,
     });
     expect(r.totais.vagas).toBe(r.porCargo.reduce((s, l) => s + l.vagas, 0));
     expect(r.totais.concluidas).toBe(r.porCargo.reduce((s, l) => s + l.concluidas, 0));
-    expect(r.totais.concluidas + r.totais.emAndamento + r.totais.faltam).toBe(r.totais.vagas);
+    // A IDENTIDADE DA TELA: "Na Esteira + Faltam = Total de Vagas", agora por construção.
+    expect(r.totais.vinculadas + r.totais.faltam).toBe(r.totais.vagas);
+  });
+
+  /**
+   * A EXIGÊNCIA DO DIRETOR, no caso REAL que a expôs (Bienal, print de 13/08/2026): o card grande do
+   * topo dizia "Faltam 4" enquanto os cards por cargo somavam 6 (3 + 1 + 2), e "Concluídas 98" era
+   * MAIOR que "Na Esteira 96", o que é impossível por definição.
+   *
+   * Eram duas causas somadas, e este teste trava as duas: (a) o topo e o card faziam contas
+   * DIFERENTES para o mesmo número, e (b) "Concluídas" não filtrava farol, então quem fechou o
+   * Cadastro e depois declinou entrava em Concluídas e saía do Na Esteira.
+   *
+   * A fixture reproduz a base real: Vendedor I com 63 na esteira para 66 vagas, Vendedor II com 24
+   * para 25 e Faxineiro com 2 para 4. O `concluidas` que chega aqui já vem filtrado pela consulta
+   * (é o que a correção do serviço faz), então o teste mede o que a tela lê.
+   */
+  it("o Faltam do topo é a soma dos Falta dos cargos, e Concluídas nunca passa Na Esteira", async () => {
+    const ctx = montar({
+      vagas: [
+        { cargoId: "c1", cargoNome: "Vendedor I", vagas: 66 },
+        { cargoId: "c2", cargoNome: "Vendedor II", vagas: 25 },
+        { cargoId: "c3", cargoNome: "Faxineiro(a)", vagas: 4 },
+        { cargoId: "c4", cargoNome: "Coordenador Financeiro(a)", vagas: 3 },
+        { cargoId: "c5", cargoNome: "Assistente de Marketing", vagas: 2 },
+        { cargoId: "c6", cargoNome: "Coordenador Comercial", vagas: 2 },
+      ],
+      status: [
+        { cargoId: "c1", cargoNome: "Vendedor I", vinculadas: 63, concluidas: 63, cadastradas: 63, emAndamento: 0, pausadas: 0, emBanco: 0 },
+        { cargoId: "c2", cargoNome: "Vendedor II", vinculadas: 24, concluidas: 24, cadastradas: 24, emAndamento: 0, pausadas: 0, emBanco: 0 },
+        { cargoId: "c3", cargoNome: "Faxineiro(a)", vinculadas: 2, concluidas: 2, cadastradas: 2, emAndamento: 0, pausadas: 0, emBanco: 0 },
+        { cargoId: "c4", cargoNome: "Coordenador Financeiro(a)", vinculadas: 3, concluidas: 3, cadastradas: 3, emAndamento: 0, pausadas: 0, emBanco: 0 },
+        { cargoId: "c5", cargoNome: "Assistente de Marketing", vinculadas: 2, concluidas: 2, cadastradas: 2, emAndamento: 0, pausadas: 0, emBanco: 0 },
+        { cargoId: "c6", cargoNome: "Coordenador Comercial", vinculadas: 2, concluidas: 2, cadastradas: 2, emAndamento: 0, pausadas: 0, emBanco: 0 },
+      ],
+      declinios: [{ cargoId: "c1", cargoNome: "Vendedor I", declinios: 26 }],
+    });
+
+    const r = await ctx.service.analise(PROJETO, HOJE);
+    const porCargo = (nome: string) => r.porCargo.find((l) => l.cargoNome === nome)!;
+
+    // O que cada card mostra, um a um.
+    expect(porCargo("Vendedor I").faltam).toBe(3);
+    expect(porCargo("Vendedor II").faltam).toBe(1);
+    expect(porCargo("Faxineiro(a)").faltam).toBe(2);
+
+    // A EXIGÊNCIA: topo igual à soma dos cards, sem exceção.
+    expect(r.totais.faltam, "o topo tem de ser a soma dos cards").toBe(
+      r.porCargo.reduce((s, l) => s + l.faltam, 0),
+    );
+    expect(r.totais.faltam).toBe(6);
+
+    // Concluída é subconjunto de quem está na esteira, no total e em cada cargo.
+    expect(r.totais.concluidas).toBeLessThanOrEqual(r.totais.vinculadas);
+    for (const l of r.porCargo) expect(l.concluidas).toBeLessThanOrEqual(l.vinculadas);
+
+    // E a conta da tela fecha: 96 na esteira + 6 faltam = 102 vagas.
+    expect(r.totais.vinculadas + r.totais.faltam).toBe(r.totais.vagas);
+    expect(r.totais.vagas).toBe(102);
+    // Declínio segue fora da matemática: 26 no card, zero de efeito na meta.
+    expect(r.totais.declinios).toBe(26);
   });
 
   it("PAUSADA tem balde próprio e não vira em andamento", async () => {
@@ -215,8 +278,24 @@ describe("análise: a conta fecha no total de vagas do projeto", () => {
 
     expect(r.totais.pausadas).toBe(4);
     expect(r.totais.emAndamento).toBe(6);
-    // Pausada não anda e não fechou, então ela fica dentro do que ainda falta preencher.
-    expect(r.totais.faltam).toBe(4);
+    /**
+     * A PAUSADA MUDOU DE LADO EM "FALTAM", e este `expect` existe para que a mudança seja VISÍVEL e
+     * não silenciosa. Pela conta antiga (`vagas - concluídas - em andamento`) ela caía no que falta
+     * preencher, e o número era 4. Pela régua única (`vagas - na esteira`, decisão de 13/08/2026)
+     * ela OCUPA a vaga, porque está na esteira, e o número é 0.
+     *
+     * As duas leituras são defensáveis: pausada não está andando, mas a vaga também não está livre
+     * para outra pessoa. O balde próprio de "Pausadas" continua existindo e mostrando as 4, então a
+     * informação não sumiu da tela, só deixou de ser contada como vaga a preencher.
+     *
+     * CONSEQUÊNCIA ESTRUTURAL: com pausada ou banco no projeto, "Em Andamento + Concluídas + Faltam"
+     * deixa de fechar na meta (aqui dá 6, não 10), porque a pausada não está em nenhum dos dois
+     * primeiros baldes. Quem fecha SEMPRE agora é "Na Esteira + Faltam = Vagas". Pendente de palavra
+     * do diretor: hoje nenhum projeto real tem pausada ou banco vinculado, então nada disso aparece
+     * em tela; se ele preferir a leitura antiga, a pausada precisa de tratamento explícito na régua.
+     */
+    expect(r.totais.faltam).toBe(0);
+    expect(r.totais.vinculadas + r.totais.faltam).toBe(r.totais.vagas);
   });
 });
 

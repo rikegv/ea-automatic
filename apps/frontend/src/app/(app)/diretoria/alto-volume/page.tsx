@@ -369,8 +369,14 @@ function ModalDeclinios({
  */
 function BarrasDoCargo({ linha }: { linha: LinhaCargo }) {
   const { vagas, vinculadas } = linha;
-  const falta = Math.max(0, vagas - vinculadas);
-  const excedente = Math.max(0, vinculadas - vagas);
+  // O NÚMERO VEM DO BACKEND, não é recalculado aqui (correção de 13/08/2026). Este card fazia a
+  // própria conta (`vagas - vinculadas`) enquanto o topo e a tabela usavam outra, e as duas leituras
+  // do MESMO número discordavam na tela: os cards somavam 6 e o topo dizia 4. Agora existe uma régua
+  // só, no serviço, e o card apenas a apresenta. O `Math.max` que sobrou não é régua, é exibição:
+  // acima da meta o card diz "Excedente +N" em vez de um "Falta" negativo, e é o mesmo `faltam` do
+  // topo com o sinal trocado.
+  const falta = Math.max(0, linha.faltam);
+  const excedente = Math.max(0, -linha.faltam);
   const cobertura = percentualDe(vinculadas, vagas);
   // COMPLETO: a meta foi batida (todas as vagas na esteira). Antes desta marca a terceira linha
   // ficava VAZIA (falta = 0 desenha barra de largura 0) e nada dizia que o cargo fechou. Agora ela

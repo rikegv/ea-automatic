@@ -148,7 +148,21 @@ export class AltoVolumeAnaliseService {
         vinculadas: sql<number>`count(*) filter (
           where ${admissoes.farolGlobal} not in ('DECLINOU', 'RESCISAO', 'BANCO_AGUARDAR')
         )::int`,
-        concluidas: sql<number>`count(*) filter (where ${admissaoConcluidaSql})::int`,
+        // O MESMO FILTRO DE FAROL DO "NA ESTEIRA", e é a correção de 13/08/2026. Sem ele, os dois
+        // baldes liam fontes diferentes sobre a MESMA pessoa: "concluída" olha as FRENTES e não
+        // filtra farol, "na esteira" olha o FAROL. Quem fechou o Cadastro e DEPOIS declinou entrava
+        // num e saía do outro, e a tela mostrava Concluídas (98) MAIOR que Na Esteira (96), que é
+        // impossível por definição. Era uma admissão da Bienal, declinada no dia, e a varredura em
+        // todos os projetos não achou outra.
+        //
+        // A EXPRESSÃO COMPARTILHADA NÃO MUDA (§A.26): `admissaoConcluidaSql` é a mesma do Painel e do
+        // Gerenciador, e continua intacta. O que muda é o UNIVERSO desta tela, que é o do projeto e
+        // já excluía terminais e banco em toda parte, menos aqui. Coerente com a §A.16: declínio não
+        // deixa nada ativo, e a vaga que a pessoa declinou volta a ser vaga a preencher.
+        concluidas: sql<number>`count(*) filter (
+          where ${admissaoConcluidaSql}
+            and ${admissoes.farolGlobal} not in ('DECLINOU', 'RESCISAO', 'BANCO_AGUARDAR')
+        )::int`,
         cadastradas: sql<number>`count(*) filter (where exists (
           select 1 from frentes_admissao fc
           where fc.admissao_id = ${admissoes.id} and fc.tipo = 'CADASTRO_CONTRATO' and fc.status = 'CADASTRADO'
@@ -297,17 +311,31 @@ export class AltoVolumeAnaliseService {
       .map((l) => ({
         ...l,
         /**
-         * A CONTA FECHA NO TOTAL DE VAGAS (régua do diretor): Em Andamento + Concluídas + Faltam = a
-         * meta, exato, na linha e no total. "Faltam" é o RESTO da meta, e não mais a distância até
-         * as concluídas: quem já está andando dentro do projeto não é vaga a preencher.
+         * "FALTAM" É A META MENOS QUEM ESTÁ NA ESTEIRA, e passou a ser calculado UMA vez, aqui.
          *
-         * SEM TRAVA EM ZERO, e é o que faz a conta fechar SEMPRE. Um cargo pode ter mais gente do
-         * que vaga (na Bienal, Vendedor I tem 68 ativos para 66), e negativo aqui é a informação
-         * certa: são pessoas ALÉM da meta, e a tela mostra isso com esse nome. Travar em zero
-         * devolveria um total maior que o resto real (5 em vez de 3 na Bienal), e a coluna deixaria
-         * de somar o total logo abaixo dela.
+         * ANTES ERAM DUAS CONTAS PARA O MESMO NÚMERO, e elas discordavam na tela (achado do diretor,
+         * 13/08/2026): o topo e a tabela faziam `vagas - concluídas - em andamento`, enquanto o CARD
+         * de cada cargo fazia `vagas - na esteira` por conta própria, no frontend. Na Bienal isso
+         * apareceu como topo dizendo 4 e os cards somando 6 (3 + 1 + 2). Duas leituras do mesmo
+         * número, com réguas diferentes, na mesma tela.
+         *
+         * A RÉGUA CERTA É A DO CARD (decisão do diretor), e é a que responde a pergunta de verdade:
+         * vaga preenchida é vaga com GENTE na esteira, esteja essa pessoa concluída ou ainda andando.
+         * Como efeito, "Na Esteira + Faltam = Total de Vagas" passa a ser identidade, e não
+         * coincidência: os dois lados saem do mesmo conjunto.
+         *
+         * A CONTA DA META CONTINUA FECHANDO (Em Andamento + Concluídas + Faltam = vagas), porque
+         * "Concluídas" ganhou o MESMO filtro de farol do "Na Esteira" (ver `statusPorCargoVinculados`),
+         * então concluídas + em andamento é exatamente quem está na esteira. Sem esse par, uma
+         * declinada com o Cadastro fechado contava como vaga preenchida e sumia do Na Esteira ao
+         * mesmo tempo, que foi o "Concluídas 98 maior que Na Esteira 96" do mesmo print.
+         *
+         * SEM TRAVA EM ZERO, decisão mantida da onda 4: um cargo pode ter mais gente do que vaga, e
+         * negativo aqui é a informação certa (gente ALÉM da meta). Travar em zero devolveria um total
+         * maior que o resto real e a coluna deixaria de somar o total logo abaixo dela. O card exibe
+         * esse mesmo número como a tag "Excedente", em vez de um "Falta" negativo.
          */
-        faltam: l.vagas - l.concluidas - l.emAndamento,
+        faltam: l.vagas - l.vinculadas,
         percentual: percentual(l.concluidas, l.vagas),
       }));
   }
