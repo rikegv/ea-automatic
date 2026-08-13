@@ -762,7 +762,7 @@ function RegistrarNc3Modal({
 
       {!sel ? (
         <div className="relative">
-          <span className="ds-label">Candidato (em Cadastro)</span>
+          <span className="ds-label">Nome (em Cadastro)</span>
           <input
             className="ds-input"
             placeholder="Buscar por nome ou CPF…"

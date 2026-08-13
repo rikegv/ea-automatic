@@ -146,6 +146,8 @@ interface EsteiraItem {
   pausadaEm?: string | null;
   /** Farol da admissão: só a tag "Banco, Aguardar" da coluna Status o consome. */
   farolGlobal?: string | null;
+  /** Matrícula: só a aba CADASTRO desenha a coluna. */
+  matricula?: string | null;
 }
 interface EsteiraResp {
   items: EsteiraItem[];
@@ -685,6 +687,9 @@ export default function EsteiraPage() {
     () => [
       { chave: "contrato", tipo: "texto", valor: (i) => i.tipoContrato },
       { chave: "candidato", tipo: "texto", valor: (i) => i.candidatoNome },
+      // Matrícula: só a aba Cadastro desenha a coluna, mas declarar aqui é inofensivo e mantém a
+      // lista de colunas num lugar só.
+      { chave: "matricula", tipo: "texto", valor: (i) => i.matricula },
       { chave: "cliente", tipo: "texto", valor: (i) => i.clienteOperacao || i.clienteRazao },
       { chave: "cargo", tipo: "texto", valor: (i) => i.cargoNome },
       { chave: "data", tipo: "data", valor: (i) => i.dataAdmissao },
@@ -730,6 +735,8 @@ export default function EsteiraPage() {
     // ditada pelo CONTEÚDO mais longo ("Temporário") mais a seta de ordenação (~13px), não mais pelo
     // título. Medido no browser: 112px cobre o conteúdo com folga; eram 148px.
     contrato: "112px",
+    // Cabe o cabeçalho "MATRÍCULA" com a seta de ordenação e o vazio ("não informado", §A.11).
+    matricula: "130px",
     data: "110px",
     status: "210px",
     pend: "168px",
@@ -778,6 +785,9 @@ export default function EsteiraPage() {
       : [
           isExame ? "40px" : null,
           COL.contrato,
+          // MATRÍCULA só na aba CADASTRO (decisão do diretor): é lá que a importação acontece, e o
+          // time precisa ver quem já foi importado. Vem ANTES do nome, como na tela de Benefícios.
+          isCadastro ? COL.matricula : null,
           COL.cand,
           COL.cli,
           COL.cargo,
@@ -797,7 +807,11 @@ export default function EsteiraPage() {
       ? // +110px com a entrada da Data adm.: o piso acompanha a coluna nova, senão a aba passaria a
         // espremer em vez de rolar (§A.20).
         "min-w-[1530px]"
-      : "min-w-[1540px]";
+      : // +130px na aba Cadastro, com a entrada da Matrícula: o piso acompanha a coluna nova, senão
+        // a aba passaria a espremer em vez de rolar (§A.20).
+        isCadastro
+        ? "min-w-[1670px]"
+        : "min-w-[1540px]";
 
   function toggleStatusKpi(code: string) {
     setStatusFiltro((cur) => (cur.includes(code) ? cur.filter((c) => c !== code) : [...cur, code]));
@@ -1321,6 +1335,13 @@ export default function EsteiraPage() {
                     Contrato
                   </ColunaOrdenavel>
                 )}
+                {/* MATRÍCULA (decisão do diretor): só na aba CADASTRO, que é onde a importação
+                    acontece, e ANTES do nome, como na tela de Benefícios. */}
+                {isCadastro && (
+                  <ColunaOrdenavel ord={ord} chave="matricula">
+                    Matrícula
+                  </ColunaOrdenavel>
+                )}
                 <ColunaOrdenavel ord={ord} chave="candidato">
                   Nome
                 </ColunaOrdenavel>
@@ -1444,7 +1465,20 @@ export default function EsteiraPage() {
                           {item.tipoContrato || "não informado"}
                         </div>
                       )}
-                      {/* Coluna Candidato: SÓ o nome (§A.12). A origem Pandapé fica no detalhe (olho),
+                      {/* MATRÍCULA (decisão do diretor): só na aba CADASTRO, antes do nome. É o número
+                          que a folha usa, e é por ele que o time confere quem já foi importado. */}
+                      {isCadastro && (
+                        <div
+                          className={cn(
+                            "meta truncate text-center tabular-nums",
+                            !item.matricula && "text-faint",
+                          )}
+                          title={item.matricula || "não informado"}
+                        >
+                          {item.matricula || "não informado"}
+                        </div>
+                      )}
+                      {/* Coluna Nome: SÓ o nome (§A.12). A origem Pandapé fica no detalhe (olho),
                           não colada ao nome na tabela. */}
                       <div className="min-w-0 text-left">
                         {/* §A.20: o `truncate` estava num <span>, que é INLINE, e em elemento

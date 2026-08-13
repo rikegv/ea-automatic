@@ -558,17 +558,19 @@ export default function BeneficiosPage() {
                     disabled={selecionaveis.length === 0}
                   />
                 </th>
+                {/* MATRÍCULA ABRE A LINHA (decisão do diretor): é o número pelo qual a folha chama a
+                    pessoa, e o time confere por ele antes do nome. É a mesma matrícula que a
+                    importação da frente de Cadastro grava; aqui é só leitura. */}
+                <ColunaOrdenavel as="th" ord={ord} chave="matricula" className="w-[9%]">
+                  Matrícula
+                </ColunaOrdenavel>
+                {/* "NOME", e não "Candidato" (decisão do diretor): quem está nesta fila já foi
+                    admitido, é funcionário. Vale para todo rótulo de coluna e campo do sistema. */}
                 <ColunaOrdenavel as="th" ord={ord} chave="candidato" className="w-[13%]">
-                  Candidato
+                  Nome
                 </ColunaOrdenavel>
                 <ColunaOrdenavel as="th" ord={ord} chave="dataAdmissao" className="w-[9%]">
                   Data adm.
-                </ColunaOrdenavel>
-                {/* MATRÍCULA (decisão do diretor): a mesma que a importação da frente de Cadastro
-                    grava. Só leitura aqui, para o time conferir o pacote ao lado do número que a
-                    folha usa. */}
-                <ColunaOrdenavel as="th" ord={ord} chave="matricula" className="w-[9%]">
-                  Matrícula
                 </ColunaOrdenavel>
                 <ColunaOrdenavel as="th" ord={ord} chave="cliente" className="w-[12%]">
                   Cliente
@@ -630,11 +632,11 @@ export default function BeneficiosPage() {
                             />
                           ) : null}
                         </td>
-                        <td className="font-semibold">{caixaAlta(l.candidato)}</td>
-                        <td className="text-center tabular-nums">{fmtData(l.dataAdmissao)}</td>
                         <td className="text-center tabular-nums">
                           {l.matricula ?? <span className="text-faint">não informado</span>}
                         </td>
+                        <td className="font-semibold">{caixaAlta(l.candidato)}</td>
+                        <td className="text-center tabular-nums">{fmtData(l.dataAdmissao)}</td>
                         {/* CENTRALIZADO para casar com o cabeçalho (§A.12): a coluna era o único
                             ponto em que título e conteúdo apontavam para lados diferentes. */}
                         <td className="text-center">{rotuloCliente(l.codCliente, l.cliente)}</td>

@@ -1316,7 +1316,7 @@ export default function AltoVolumePage() {
                 <table className="ds-table w-full min-w-[820px] table-fixed">
                   <thead>
                     <tr>
-                      <th className="w-[250px]">Candidato</th>
+                      <th className="w-[250px]">Nome</th>
                       <th className="w-[250px]">Cliente</th>
                       <th className="w-[200px]">Cargo</th>
                       <th className="w-[130px]">Data Adm.</th>
@@ -1471,7 +1471,7 @@ export default function AltoVolumePage() {
                           />
                         ) : null}
                       </th>
-                      <th className="w-[240px]">Candidato</th>
+                      <th className="w-[240px]">Nome</th>
                       <th className="w-[240px]">Cliente</th>
                       <th className="w-[190px]">Cargo</th>
                       <th className="w-[130px]">Data Adm.</th>

@@ -503,12 +503,12 @@ export default function SalaEsperaPage() {
             {/* Nome ocupa a LINHA INTEIRA (design system): é o campo mais longo do cadastro e o
                 que mais sofre com corte. */}
             <label className="block">
-              <span className="mb-1 block text-xs font-medium text-faint">Nome do candidato</span>
+              <span className="mb-1 block text-xs font-medium text-faint">Nome</span>
               <input
                 value={form.nome}
                 onChange={(e) => setForm({ ...form, nome: e.target.value })}
                 className="ds-input w-full"
-                aria-label="Nome do candidato"
+                aria-label="Nome"
               />
             </label>
 

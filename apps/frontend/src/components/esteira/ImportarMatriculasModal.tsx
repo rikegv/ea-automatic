@@ -159,7 +159,7 @@ export function ImportarMatriculasModal({
               <table className="ds-table w-full">
                 <thead>
                   <tr>
-                    <th className="w-[38%]">Candidato</th>
+                    <th className="w-[38%]">Nome</th>
                     <th className="w-[20%]">CPF</th>
                     <th className="w-[21%]">Matrícula atual</th>
                     <th className="w-[21%]">Vai ficar</th>

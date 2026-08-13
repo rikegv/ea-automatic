@@ -285,6 +285,9 @@ export class EsteiraService {
         sinalizador: admissoes.sinalizadorPreenchimento,
         // PAUSA: vai no item para a coluna Status renderizar a tag "Pausada" (Bloco 5).
         pausadaEm: admissoes.pausadaEm,
+        // MATRÍCULA: vai no item para a coluna da aba CADASTRO, que é onde a importação acontece e
+        // onde o time confere quem já foi importado. As outras abas não a desenham.
+        matricula: admissoes.matricula,
         // FAROL: vai no item para a coluna Status renderizar a tag "Banco, Aguardar", pelo mesmo
         // desenho da pausa (correção do bug de 13/08/2026). A coluna continua dizendo o status da
         // FRENTE, que é a pergunta da Esteira; o farol de banco entra como tag ao lado, porque é
@@ -367,6 +370,7 @@ export class EsteiraService {
         origem: r.origem,
         sinalizador: r.sinalizador,
         pausadaEm: r.pausadaEm,
+        matricula: r.matricula,
         farolGlobal: r.farolGlobal,
         // Sobe no BASE (antes ia só nas abas Auditoria e Exame): é o que alinha o pill da coluna
         // "Pendências Obrigatórias" com o badge que abre a lista, em TODAS as abas.
