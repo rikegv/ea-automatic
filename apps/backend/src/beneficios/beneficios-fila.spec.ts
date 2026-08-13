@@ -279,6 +279,13 @@ describe("ordenação servida pelo banco", () => {
     expect(sql).toContain("admissao_beneficio");
   });
 
+  /** A coluna do farol dos benefícios: a seta ordena pelo mesmo enum que a pill mostra. */
+  it("STATUS ordena pelo estágio do pacote", async () => {
+    expect(await ordemDe({ ordenarPor: "status", direcao: "asc" })).toContain(
+      "status_cadastro_beneficio",
+    );
+  });
+
   it("OUTROS ordena pela quantidade fora dos quatro, que é o número do +N", async () => {
     const sql = await ordemDe({ ordenarPor: "outros", direcao: "desc" });
     expect(sql).toContain("count(*)");

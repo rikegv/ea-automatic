@@ -715,6 +715,19 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
         // BLOCO B/C: a coleta NÃO se perde. O documento já foi gravado como AGUARDANDO_AUDITORIA
         // antes da chamada da IA (ver `auditarConjunto`), então a falha aqui deixa só a AUDITORIA
         // pendente, visível na régua, reprocessável. §A.6: sem nome/URL.
+        //
+        // A MARCA DO ARQUIVO É GRAVADA MESMO ASSIM (correção do bug de 13/08/2026). "Já baixei este
+        // byte" e "já tenho veredito" eram a MESMA informação, e é o que abria a janela do acúmulo:
+        // sem marca, o ciclo de 12 minutos rebaixava e regravava tudo de novo, indefinidamente,
+        // enquanto a I.A não fechasse. Agora a marca conta o download; o veredito continua pendente
+        // em `documentos_admissao` (AGUARDANDO_AUDITORIA), que é quem manda a auditoria ser
+        // retentada. Falhar ao gravar a marca não derruba o ciclo: é registro de otimização, não o
+        // dado do processo.
+        try {
+          await this.registrarArquivosColetados(admissaoId, tipo.id, hashes, tamanhos);
+        } catch {
+          this.logger.warn("Marca de arquivo coletado não gravada após falha de auditoria.");
+        }
         const msg = err instanceof Error ? err.message : "erro";
         this.logger.warn(
           `Documento coletado do Pandapé mas auditoria falhou (fica AGUARDANDO_AUDITORIA, ` +

@@ -142,7 +142,30 @@ export const cartaoVtEnum = pgEnum("cartao_vt", ["BILHETE_UNICO", "CARTAO_TOP", 
 export const statusCadastroBeneficioEnum = pgEnum("status_cadastro_beneficio", [
   "PENDENTE",
   "CADASTRADO",
+  // OS DOIS ESTÁGIOS DA TELA DE BENEFÍCIOS (§A.17 etapa 4, decisão do diretor). O pacote inteiro
+  // caminha junto: é UM status por admissão, não um por benefício, porque a pergunta da operação é
+  // "os benefícios desta pessoa já foram calculados?" e não "o VR já foi?".
+  "AGUARDANDO_CALCULO",
+  "BENEFICIO_CALCULADO",
+  // ÓRFÃO: o terceiro estágio existiu por uma versão e o diretor decidiu por DOIS. Fica no enum
+  // porque Postgres não remove valor sem recriar o tipo, e fora da sequência porque ninguém deve
+  // voltar a usá-lo. Nenhuma linha o usa.
+  "FINALIZADO",
 ]);
+
+/**
+ * A SEQUÊNCIA, na ordem em que a fila anda. Vive aqui, ao lado do enum, para a régua do botão, a do
+ * lote e a do backend lerem a MESMA fonte: dois lugares diferentes divergiriam no primeiro ajuste.
+ *
+ * SÃO DOIS ESTÁGIOS (decisão do diretor), e o segundo ENCERRA: quem é marcado como calculado sai da
+ * fila de trabalho e passa a viver na aba de Finalizados. O caminho é de ida e VOLTA: reverter traz
+ * a pessoa de volta para a fila, e é o mesmo endpoint, com o destino invertido.
+ *
+ * `PENDENTE`, `CADASTRADO` e `FINALIZADO` são valores órfãos do enum e ficam fora daqui: nenhuma
+ * linha os usa, e ninguém deve voltar a usá-los.
+ */
+export const SEQUENCIA_BENEFICIO = ["AGUARDANDO_CALCULO", "BENEFICIO_CALCULADO"] as const;
+export type StatusBeneficio = (typeof SEQUENCIA_BENEFICIO)[number];
 
 /** De onde veio o pedido da Sala de Espera: o próprio cliente ou a área de Seleção. */
 export const origemSalaEsperaEnum = pgEnum("origem_sala_espera", ["CLIENTE", "SELECAO"]);

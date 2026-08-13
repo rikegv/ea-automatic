@@ -57,7 +57,9 @@ export type FarolGlobal = (typeof FAROL_GLOBAL)[number];
 /** Rótulos de exibição do farol global (UI). */
 export const FAROL_GLOBAL_LABEL: Record<FarolGlobal, string> = {
   EM_ADMISSAO: "Em Admissão",
-  BANCO_AGUARDAR: "Banco-Aguardar",
+  // "Banco, Aguardar" (correção do bug de 13/08/2026): é como o Controle Gerencial já escrevia e
+  // como a operação fala. O rótulo é único para as três telas dizerem a mesma coisa.
+  BANCO_AGUARDAR: "Banco, Aguardar",
   ADMISSAO_CONCLUIDA: "Admissão Concluída",
   DECLINOU: "Declinou",
   RESCISAO: "Rescisão",

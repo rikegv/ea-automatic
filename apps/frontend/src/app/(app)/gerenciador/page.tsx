@@ -192,6 +192,7 @@ export default function GerenciadorPage() {
    * backend mantém a ordem padrão de sempre.
    */
   const [ordem, setOrdem] = useState<{ chave: string; dir: Direcao } | null>(null);
+  /** Modal da importação de matrículas (item 11d). */
 
   /**
    * O MESMO cabeçalho clicável das demais tabelas. `ColunaOrdenavel` só precisa de `ordem` e
@@ -438,6 +439,7 @@ export default function GerenciadorPage() {
                 <Icon name="x" className="h-4 w-4" /> Limpar filtro
               </button>
             )}
+
             <FiltroTrigger count={filtrosModal} onLimpar={limparFiltros}>
               <FiltroCampo label="Cliente">
                 <MultiSelect
@@ -813,6 +815,7 @@ export default function GerenciadorPage() {
         onConfirm={confirmarDelete}
         onCancel={() => setDelRow(null)}
       />
+
     </>
   );
 }

@@ -182,12 +182,43 @@ describe("dedup por arquivo — regras puras", () => {
     ).toBe("BAIXAR");
   });
 
-  it("INCONFORME e AGUARDANDO_AUDITORIA nunca ficam presos na trava", () => {
-    for (const estadoAtual of ["INCONFORME", "AGUARDANDO_AUDITORIA"]) {
-      expect(
-        decidirColeta({ estadoAtual, hashesConhecidos: 1, arquivosNoPandape: 1, reprocessar: false }),
-      ).toBe("BAIXAR");
-    }
+  /**
+   * AGUARDANDO_AUDITORIA continua sempre baixando: ali não há veredito, e a coleta é o caminho de
+   * retentar a I.A.
+   */
+  it("AGUARDANDO_AUDITORIA nunca fica preso na trava", () => {
+    expect(
+      decidirColeta({
+        estadoAtual: "AGUARDANDO_AUDITORIA",
+        hashesConhecidos: 1,
+        arquivosNoPandape: 1,
+        reprocessar: false,
+      }),
+    ).toBe("BAIXAR");
+  });
+
+  /**
+   * INCONFORME SAIU do "sempre baixa" (correção do bug de 13/08/2026). Documento reprovado JÁ tem
+   * veredito: ele só volta à coleta se a pessoa REENVIAR, que é o mesmo critério do ENTREGUE. Com a
+   * regra antiga, as 108 admissões reprovadas do acervo rebaixavam tudo a cada 12 minutos, para
+   * sempre, sem nada ter mudado do outro lado.
+   */
+  it("INCONFORME sem arquivo novo PULA, e volta a baixar quando o acervo cresce", () => {
+    const base = { estadoAtual: "INCONFORME", hashesConhecidos: 4, reprocessar: false };
+    expect(decidirColeta({ ...base, arquivosNoPandape: 4 })).toBe("PULAR_SEM_BAIXAR");
+    expect(decidirColeta({ ...base, arquivosNoPandape: 5 })).toBe("BAIXAR");
+  });
+
+  /**
+   * INCONFORME SEM MARCA (registro do fluxo antigo) segue o MESMO empate do ENTREGUE: o pull normal
+   * pula, porque sem marca não há como saber se o que está no Pandapé é novo, e quem desempata é a
+   * VARREDURA. Vale registrar que este é um limite conhecido e declarado, herdado do ENTREGUE, e não
+   * um efeito colateral desta correção.
+   */
+  it("INCONFORME do fluxo ANTIGO (sem marca): pull normal pula, REPROCESSO baixa", () => {
+    const base = { estadoAtual: "INCONFORME", hashesConhecidos: 0, arquivosNoPandape: 4 };
+    expect(decidirColeta({ ...base, reprocessar: false })).toBe("PULAR_SEM_BAIXAR");
+    expect(decidirColeta({ ...base, reprocessar: true })).toBe("BAIXAR");
   });
 
   it("ENTREGUE do fluxo ANTIGO (sem marca): pull normal pula, REPROCESSO baixa", () => {
@@ -347,7 +378,15 @@ describe("dedup por arquivo — pull do Pandapé", () => {
     expect(resumo.tipos[0]).toMatchObject({ acao: "PULADO_VALIDACAO_HUMANA" });
   });
 
-  it("auditoria que FALHA não grava marca (o ciclo seguinte tenta de novo)", async () => {
+  /**
+   * A MARCA CONTA O DOWNLOAD, NÃO O VEREDITO (correção do bug de 13/08/2026).
+   *
+   * Antes, auditoria que falhava não deixava marca, e o ciclo de 12 minutos rebaixava e REGRAVAVA os
+   * mesmos bytes na staging a cada volta: uma candidata com 4 páginas de CTPS terminou com 104
+   * arquivos. Agora o download fica marcado; quem manda a auditoria ser retentada é o estado
+   * AGUARDANDO_AUDITORIA do documento, não a ausência da marca.
+   */
+  it("auditoria que FALHA grava a marca do arquivo, e o documento fica pendente", async () => {
     const { db, marcas } = makeDb();
     vi.stubGlobal("fetch", fetchPorUrl({ [URL_A]: "arquivo-a" }));
     const { svc, auditoria } = makeService(db, form([URL_A]));
@@ -355,7 +394,7 @@ describe("dedup por arquivo — pull do Pandapé", () => {
 
     const resumo = await svc.puxarDocumentosDaAdmissao(ADMISSAO, PRECOLLAB);
 
-    expect(marcas).toHaveLength(0);
+    expect(marcas).toHaveLength(1);
     expect(resumo.tipos[0]).toMatchObject({ acao: "FALHA" });
   });
 });

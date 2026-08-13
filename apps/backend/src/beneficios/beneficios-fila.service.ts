@@ -1,4 +1,4 @@
-import { Inject, Injectable } from "@nestjs/common";
+import { BadRequestException, Inject, Injectable, NotFoundException } from "@nestjs/common";
 import { and, asc, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
@@ -10,6 +10,8 @@ import {
   clientes,
   dadosVagaFolha,
 } from "../db/schema";
+import { SEQUENCIA_BENEFICIO, type StatusBeneficio } from "../db/schema/enums";
+import { recalcularSinalizadorDaAdmissao } from "../regua/sinalizador.repo";
 
 /**
  * BENEFÍCIOS (§A.17 etapa 4): a fila de quem tem benefício a cadastrar.
@@ -94,9 +96,14 @@ export class BeneficiosFilaService {
     if (!chave) return null;
     if (chave === "candidato") return sql`${candidatos.nome}`;
     if (chave === "dataAdmissao") return sql`${admissoes.dataAdmissao}`;
+    if (chave === "matricula") return sql`${admissoes.matricula}`;
     if (chave === "cliente")
       return sql`coalesce(${clientes.nomeOperacao}, ${clientes.razaoSocial}, ${admissoes.codCliente})`;
     if (chave === "entrouEm") return BeneficiosFilaService.ENTROU_EM;
+    // STATUS: a coluna do farol dos benefícios. Ordena pelo MESMO enum que a pill mostra, então a
+    // seta e a etiqueta nunca discordam. Sem esta linha a seta existiria e não ordenaria nada, que é
+    // pior do que não ter seta.
+    if (chave === "status") return sql`${admissoes.statusCadastroBeneficio}`;
     if ((BeneficiosFilaService.PRINCIPAIS as readonly string[]).includes(chave)) {
       const id = idPorSigla.get(chave);
       // Sigla que não existe mais no catálogo (renomeada) não vira ordem inventada: cai no padrão.
@@ -138,6 +145,22 @@ export class BeneficiosFilaService {
 
     const where: SQL[] = [BeneficiosFilaService.NA_FILA];
 
+    /**
+     * A ABA É O PRÓPRIO STATUS (decisão do diretor), sem marcação extra: a Fila de Trabalho é quem
+     * ainda aguarda cálculo, e Finalizados é quem já foi calculado. Marcar como calculado tira a
+     * pessoa da fila por construção, e não por alguém lembrar de esconder a linha.
+     *
+     * TODOS existe para o KPI do topo: clicar no total mostra os dois estágios juntos, que é o que o
+     * número diz. Sem ele, o card total levaria a uma lista menor que ele mesmo.
+     */
+    const filtroDeAba =
+      filtros.aba === "FINALIZADOS"
+        ? eq(admissoes.statusCadastroBeneficio, "BENEFICIO_CALCULADO")
+        : filtros.aba === "TODOS"
+          ? inArray(admissoes.statusCadastroBeneficio, [...SEQUENCIA_BENEFICIO])
+          : eq(admissoes.statusCadastroBeneficio, "AGUARDANDO_CALCULO");
+    where.push(filtroDeAba);
+
     if (filtros.q?.trim()) {
       // Busca por NOME do candidato ou por CLIENTE (código, nome de operação ou razão social), que é
       // como o time procura: ou pela pessoa, ou pela operação em que ela entrou.
@@ -169,6 +192,19 @@ export class BeneficiosFilaService {
     if (filtros.pacote === "IMPORTADO") where.push(sql`NOT EXISTS (${existeQualquerBeneficio()})`);
 
     const condicao = and(...where)!;
+    /**
+     * OS KPIs contam o mesmo recorte de busca e filtros, MENOS o filtro de aba: eles são a leitura de
+     * cima da fila e servem de botão para escolher a aba. Fossem calculados COM a aba, o card
+     * "Calculados" mostraria zero enquanto a pessoa estivesse na fila de aguardando, e clicar nele
+     * não levaria a lugar nenhum.
+     */
+    const semAba = and(
+      ...where.filter((c) => c !== filtroDeAba),
+      // O universo dos KPIs é o dos DOIS estágios, o mesmo da aba TODOS: assim o total é sempre a
+      // soma dos outros dois cards, e um valor órfão de enum não infla o total sem aparecer em lugar
+      // nenhum. Era exatamente o que acontecia com a admissão presa no estágio removido.
+      inArray(admissoes.statusCadastroBeneficio, [...SEQUENCIA_BENEFICIO]),
+    )!;
 
     /**
      * ORDENAÇÃO NO BANCO, e não na tela (decisão do diretor, leva 2).
@@ -187,16 +223,21 @@ export class BeneficiosFilaService {
       : // Padrão: mais recente primeiro, que é quem o time ainda não lançou.
         [desc(BeneficiosFilaService.ENTROU_EM), desc(admissoes.criadoEm)];
 
-    const [linhas, [contagem], listaClientes] = await Promise.all([
+    const [linhas, [contagem], listaClientes, [kpi]] = await Promise.all([
       this.db
         .select({
           admissaoId: admissoes.id,
           candidato: candidatos.nome,
           dataAdmissao: admissoes.dataAdmissao,
           codCliente: admissoes.codCliente,
+          // MATRÍCULA (decisão do diretor): a mesma que a importação grava. Só LEITURA aqui; quem
+          // edita é a frente de Cadastro. Vem da consulta que já existia, sem leitura nova.
+          matricula: admissoes.matricula,
           clienteRazaoSocial: clientes.razaoSocial,
           clienteNomeOperacao: clientes.nomeOperacao,
           entrouEm: BeneficiosFilaService.ENTROU_EM,
+          /** O estágio em que o pacote desta pessoa está: é ele que decide o botão da linha. */
+          status: admissoes.statusCadastroBeneficio,
           /**
            * O TEXTO ACHATADO das importadas (`dados_vaga_folha.beneficios`), que é o fallback da
            * linha. A base tem as duas formas: o pacote estruturado das admissões novas e este texto
@@ -232,6 +273,20 @@ export class BeneficiosFilaService {
         .leftJoin(clientes, eq(clientes.codCliente, admissoes.codCliente))
         .where(BeneficiosFilaService.NA_FILA)
         .orderBy(asc(admissoes.codCliente)),
+      this.db
+        .select({
+          total: sql<number>`count(*)::int`,
+          aguardando: sql<number>`count(*) filter (
+            where ${admissoes.statusCadastroBeneficio} = 'AGUARDANDO_CALCULO'
+          )::int`,
+          calculados: sql<number>`count(*) filter (
+            where ${admissoes.statusCadastroBeneficio} = 'BENEFICIO_CALCULADO'
+          )::int`,
+        })
+        .from(admissoes)
+        .innerJoin(candidatos, eq(candidatos.cpf, admissoes.candidatoCpf))
+        .leftJoin(clientes, eq(clientes.codCliente, admissoes.codCliente))
+        .where(semAba),
     ]);
 
     const ids = linhas.map((l) => l.admissaoId);
@@ -239,6 +294,7 @@ export class BeneficiosFilaService {
       ? await this.db
           .select({
             admissaoId: admissaoBeneficio.admissaoId,
+            beneficioId: admissaoBeneficio.beneficioId,
             nome: beneficiosCatalogo.nome,
             valor: admissaoBeneficio.valor,
           })
@@ -248,10 +304,10 @@ export class BeneficiosFilaService {
           .orderBy(asc(beneficiosCatalogo.nome))
       : [];
 
-    const porAdmissao = new Map<string, { nome: string; valor: string | null }[]>();
+    const porAdmissao = new Map<string, { beneficioId: string; nome: string; valor: string | null }[]>();
     for (const p of pacotes) {
       const lista = porAdmissao.get(p.admissaoId) ?? [];
-      lista.push({ nome: p.nome, valor: p.valor });
+      lista.push({ beneficioId: p.beneficioId, nome: p.nome, valor: p.valor });
       porAdmissao.set(p.admissaoId, lista);
     }
 
@@ -262,9 +318,11 @@ export class BeneficiosFilaService {
         admissaoId: l.admissaoId,
         candidato: l.candidato,
         dataAdmissao: l.dataAdmissao,
+        matricula: l.matricula,
         codCliente: l.codCliente,
         cliente: l.clienteNomeOperacao || l.clienteRazaoSocial || null,
         entrouEm: l.entrouEm,
+        status: l.status,
         /** As quatro colunas fixas da linha, sempre presentes, sempre na mesma ordem. */
         principais: Object.fromEntries(
           BeneficiosFilaService.PRINCIPAIS.map((s) => [s, siglas.has(s)]),
@@ -288,6 +346,16 @@ export class BeneficiosFilaService {
           .filter((b) => !BeneficiosFilaService.PRINCIPAIS.includes(sigla(b.nome) as never))
           .map((b) => ({ nome: b.nome, valor: b.valor })),
         /**
+         * O PACOTE INTEIRO com os ids do catálogo, que é o que o modal de edição precisa para salvar.
+         * As outras três formas (principais, valores, outros) são de LEITURA da tabela; esta é a de
+         * ESCRITA, e vem da mesma consulta, sem leitura nova.
+         */
+        pacote: pacote.map((b) => ({
+          beneficioId: b.beneficioId,
+          nome: b.nome,
+          valor: b.valor,
+        })),
+        /**
          * IMPORTADA: só quando NÃO há pacote estruturado. A ordem importa, porque o estruturado é o
          * dado bom e o texto é o resto do que a planilha deixou; mostrar os dois faria a linha dizer
          * a mesma coisa duas vezes, de dois jeitos diferentes.
@@ -303,6 +371,15 @@ export class BeneficiosFilaService {
       page,
       pageSize,
       totalPages: Math.max(1, Math.ceil(total / pageSize)),
+      /**
+       * OS TRÊS NÚMEROS DO TOPO: o total da fila e a divisão por estágio. Cada um é botão de filtro
+       * na tela, e por isso somam: total = aguardando + calculados.
+       */
+      kpis: {
+        total: Number(kpi?.total ?? 0),
+        aguardando: Number(kpi?.aguardando ?? 0),
+        calculados: Number(kpi?.calculados ?? 0),
+      },
       /** A tela desenha uma coluna por sigla, na ordem que o serviço manda. */
       principais: [...BeneficiosFilaService.PRINCIPAIS],
       clientes: listaClientes
@@ -313,19 +390,112 @@ export class BeneficiosFilaService {
         })),
     };
   }
-}
 
-export const COLUNAS_ORDENAVEIS = [
-  "candidato",
-  "dataAdmissao",
-  "cliente",
-  "entrouEm",
-  "VT",
-  "VR",
-  "VA",
-  "AM",
-  "outros",
-] as const;
+  /**
+   * AVANÇA O ESTÁGIO de uma ou de VÁRIAS admissões, numa transação só.
+   *
+   * A RÉGUA É A SEQUÊNCIA, e ela vale igual no clique da linha e no lote: só muda quem está no OUTRO
+   * estágio. Quem já está no destino fica como está, e a resposta diz quantas andaram e quantas
+   * ficaram, em vez de o time achar que marcou 10 tendo marcado 7.
+   *
+   * VAI E VOLTA (decisão do diretor): são dois estágios, então o mesmo endpoint marca como calculado
+   * e REVERTE para aguardando. Reverter traz a pessoa de volta para a fila de trabalho, que é o
+   * conserto de quem clicou errado ou de quem precisa recalcular.
+   *
+   * TUDO OU NADA: uma transação única. No lote, ou as N andam, ou nenhuma anda.
+   *
+   * §A.26: escreve UMA coluna, `status_cadastro_beneficio`, que nenhuma outra tela lê. Não toca
+   * frente, farol, régua nem KPI: é o mesmo isolamento que tornou a expansão do enum segura.
+   */
+  async avancar(ids: string[], para: string) {
+    if (!ids.length) throw new BadRequestException("Nenhuma admissão selecionada.");
+    if (!(SEQUENCIA_BENEFICIO as readonly string[]).includes(para)) {
+      throw new BadRequestException("Estágio inválido.");
+    }
+    const destino = para as StatusBeneficio;
+    // Com dois estágios, a origem é sempre "o outro": marcar vem de aguardando, reverter vem de
+    // calculado. A régua sai da SEQUENCIA, e não de um `if` escrito à mão que envelhece sozinho.
+    const origem = SEQUENCIA_BENEFICIO.find((s) => s !== destino)!;
+
+    return this.db.transaction(async (tx) => {
+      const alvos = await tx
+        .select({ id: admissoes.id })
+        .from(admissoes)
+        .where(
+          and(
+            inArray(admissoes.id, ids),
+            eq(admissoes.statusCadastroBeneficio, origem),
+          ),
+        );
+      if (alvos.length) {
+        await tx
+          .update(admissoes)
+          .set({ statusCadastroBeneficio: destino, atualizadoEm: new Date() })
+          .where(
+            inArray(
+              admissoes.id,
+              alvos.map((a) => a.id),
+            ),
+          );
+      }
+      return { avancadas: alvos.length, ignoradas: ids.length - alvos.length, status: destino };
+    });
+  }
+
+  /**
+   * EDITA O PACOTE de benefícios da admissão, gravando NO CADASTRO DO CANDIDATO.
+   *
+   * A TELA NÃO É FONTE PARALELA (decisão do diretor): o pacote mora em `admissao_beneficio`, que é o
+   * mesmo lugar que o wizard e o Gerenciador escrevem e que a régua de pendências lê. Editar aqui é
+   * editar lá, e não manter uma cópia que um dia discorda.
+   *
+   * SUBSTITUI O CONJUNTO INTEIRO (apaga e regrava) em vez de casar item a item: o payload da tela é
+   * o pacote COMPLETO, então diferença de conjunto é o que o usuário acabou de decidir. Tirar um
+   * benefício é tão legítimo quanto acrescentar, e uma atualização item a item deixaria órfão o que
+   * saiu da lista.
+   *
+   * O SINALIZADOR É REGRAVADO NA MESMA TRANSAÇÃO, com a régua VIVA (`regua/sinalizador.repo`), pelo
+   * motivo escrito lá: sem isso a coluna "Pendências Obrig." enxergaria o benefício novo na hora e o
+   * KPI continuaria dizendo o contrário sobre a mesma admissão. O diretor está ciente de que editar
+   * corrige o KPI de pendências das admissões editadas, que é o número verdadeiro.
+   */
+  async editarPacote(admissaoId: string, itens: { beneficioId: string; valor?: number | null }[]) {
+    const adm = await this.db.query.admissoes.findFirst({
+      where: eq(admissoes.id, admissaoId),
+    });
+    if (!adm) throw new NotFoundException("Admissão não encontrada.");
+
+    // Benefício inexistente no catálogo é recusado ANTES da transação: o banco recusaria pela chave
+    // estrangeira, mas com uma mensagem que não diz nada a quem está na tela.
+    const ids = itens.map((i) => i.beneficioId);
+    if (ids.length) {
+      const existentes = await this.db
+        .select({ id: beneficiosCatalogo.id })
+        .from(beneficiosCatalogo)
+        .where(inArray(beneficiosCatalogo.id, ids));
+      if (existentes.length !== new Set(ids).size) {
+        throw new BadRequestException("Benefício inexistente no catálogo.");
+      }
+    }
+
+    await this.db.transaction(async (tx) => {
+      await tx.delete(admissaoBeneficio).where(eq(admissaoBeneficio.admissaoId, admissaoId));
+      if (itens.length) {
+        await tx.insert(admissaoBeneficio).values(
+          itens.map((i) => ({
+            admissaoId,
+            beneficioId: i.beneficioId,
+            // O valor é opcional: benefício sem valor cadastrado é estado real (o VT hoje é assim).
+            valor: i.valor === undefined || i.valor === null ? null : i.valor.toFixed(2),
+          })),
+        );
+      }
+      await recalcularSinalizadorDaAdmissao(tx as never, admissaoId);
+    });
+
+    return { admissaoId, itens: itens.length };
+  }
+}
 
 export interface FiltrosBeneficios {
   /** Busca por nome do candidato ou por cliente (código, operação ou razão social). */
@@ -337,6 +507,8 @@ export interface FiltrosBeneficios {
   sem?: string[];
   /** ESTRUTURADO = tem pacote no catálogo; IMPORTADO = só tem o texto da planilha. */
   pacote?: "ESTRUTURADO" | "IMPORTADO";
+  /** FILA (aguardando cálculo), FINALIZADOS (calculado) ou TODOS. Ausente = fila de trabalho. */
+  aba?: "FILA" | "FINALIZADOS" | "TODOS";
   /** Coluna da ordenação. Fora da lista fechada, cai na ordem padrão. */
   ordenarPor?: string;
   direcao?: "asc" | "desc";

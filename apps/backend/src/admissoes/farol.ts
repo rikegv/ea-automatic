@@ -27,6 +27,9 @@ export async function recomputeFarolGlobal(
 
   const novo = deriveFarolGlobal({
     atual: adm.farolGlobal,
+    // A marcação de banco entra na derivação (correção do bug): sem ela, o recompute desfazia a
+    // escolha do usuário no instante seguinte à gravação.
+    isBanco: adm.isBanco,
     auditoriaConcluida: frentes.some((f) => f.tipo === "AUDITORIA" && f.concluida),
     exameApto: frentes.some((f) => f.tipo === "EXAME" && f.concluida),
     temDataAdmissao: Boolean(adm.dataAdmissao),

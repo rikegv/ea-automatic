@@ -444,14 +444,25 @@ export const admissoes = pgTable(
     sinalizadorPreenchimento: sinalizadorEnum("sinalizador_preenchimento")
       .notNull()
       .default("PENDENTE"),
-    // Status do cadastro do pacote de benefícios (§A.17 etapa 4). POR CANDIDATO, não por benefício.
-    // Toda admissão nasce PENDENTE; a tela de Benefícios (OST seguinte) é quem marca CADASTRADO.
-    // ATENÇÃO: as admissões que já existiam herdaram PENDENTE pelo default, inclusive as concluídas
-    // e as de declínio. Nenhuma tela lê este campo ainda; quem for consumi-lo precisa decidir o
-    // recorte (provavelmente só admissões vivas, como manda a §A.16).
+    /**
+     * Status do cadastro do pacote de benefícios (§A.17 etapa 4). POR CANDIDATO, não por benefício:
+     * a pergunta da operação é "os benefícios desta pessoa já foram calculados?", e o pacote inteiro
+     * caminha junto.
+     *
+     * TRÊS ESTÁGIOS (decisão do diretor): AGUARDANDO_CALCULO -> BENEFICIO_CALCULADO -> FINALIZADO.
+     * Toda admissão nasce no primeiro, e é isso que o default diz. FINALIZADO tira a pessoa da fila
+     * de trabalho e a manda para a aba de Finalizados: a aba É o status, sem marcação extra.
+     *
+     * `PENDENTE` e `CADASTRADO` são os valores antigos, órfãos depois da migração das linhas. Ficam
+     * no enum porque Postgres não remove valor sem recriar o tipo, e fora da `SEQUENCIA_BENEFICIO`
+     * porque ninguém deve voltar a usá-los.
+     *
+     * SÓ A TELA DE BENEFÍCIOS LÊ ESTE CAMPO. Ele não entra em régua de conclusão, farol, gate nem
+     * KPI de nenhuma outra tela, e é isso que torna a expansão dos valores segura (§A.27).
+     */
     statusCadastroBeneficio: statusCadastroBeneficioEnum("status_cadastro_beneficio")
       .notNull()
-      .default("PENDENTE"),
+      .default("AGUARDANDO_CALCULO"),
     /**
      * ENTRADA NA FILA DE BENEFÍCIOS: carimbo do instante em que o Cadastro concluiu (§A.17 etapa 4).
      * Nulo = nunca entrou; a tela lê exatamente `IS NOT NULL`.

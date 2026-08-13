@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { extname, join, resolve } from "node:path";
 import { Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
@@ -44,6 +44,20 @@ export class StagingService {
   /**
    * Grava o buffer do multipart em disco e devolve o caminho. O buffer é referenciado só aqui e
    * descartado pelo GC ao fim do handler (nunca persistido em banco — §A.6).
+   *
+   * MESMO CONTEÚDO NÃO VIRA ARQUIVO NOVO (correção do bug de 13/08/2026). Antes de gravar, o
+   * conteúdo é comparado com o que já existe na pasta da admissão para AQUELE tipo: batendo, devolve
+   * o caminho do arquivo que já está lá.
+   *
+   * O DEFEITO QUE ISTO TRAVA: a marca que evita rebaixar do Pandapé só era gravada quando a
+   * auditoria da I.A concluía. Enquanto ela não fechava, o ciclo de 12 minutos rebaixava os mesmos
+   * bytes e caía aqui, que gravava um arquivo novo a cada volta. Uma candidata que enviou 4 páginas
+   * de CTPS terminou com 104 arquivos, 26 cópias de cada, e 241 MB de staging. Com esta comparação,
+   * a mesma falha de auditoria repetida 26 vezes deixa 4 arquivos.
+   *
+   * COMPARA O CONTEÚDO, e não o nome nem o tamanho: nome tem UUID (sempre diferente) e tamanho igual
+   * não é conteúdo igual. O custo é ler os arquivos daquele tipo, que são poucos (um documento tem
+   * frente, verso e algumas páginas), e só acontece na gravação.
    */
   async salvar(
     admissaoId: string,
@@ -54,11 +68,41 @@ export class StagingService {
   ): Promise<string> {
     const dir = this.caminho(admissaoId);
     await mkdir(dir, { recursive: true });
+
+    const jaExiste = await this.mesmoConteudo(admissaoId, codigoTipo, file.buffer);
+    if (jaExiste) return jaExiste;
+
     const ext = extname(file.originalname) || "";
     const nome = `${this.sanitizar(codigoTipo)}__${randomUUID()}${ext}`;
     const caminho = join(dir, nome);
     await writeFile(caminho, file.buffer);
     return caminho;
+  }
+
+  /**
+   * O caminho de um arquivo do MESMO tipo com o MESMO conteúdo, se já houver um na staging desta
+   * admissão. `null` quando é conteúdo inédito.
+   *
+   * Arquivo ilegível (apagado pelo purge no meio da conferência) é ignorado em vez de derrubar a
+   * gravação: a coleta não pode falhar por causa de um vizinho que sumiu.
+   */
+  private async mesmoConteudo(
+    admissaoId: string,
+    codigoTipo: string,
+    buffer: Buffer,
+  ): Promise<string | null> {
+    const alvo = this.sanitizar(codigoTipo);
+    const hashNovo = createHash("sha256").update(buffer).digest("hex");
+    for (const a of await this.listar(admissaoId)) {
+      if (a.codigoTipo !== alvo) continue;
+      try {
+        const atual = await readFile(a.caminho);
+        if (createHash("sha256").update(atual).digest("hex") === hashNovo) return a.caminho;
+      } catch {
+        continue;
+      }
+    }
+    return null;
   }
 
   /** Grava um PDF-mãe de kit na pasta de kits e devolve o caminho. */

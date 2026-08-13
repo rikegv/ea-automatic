@@ -67,9 +67,9 @@ import { FRENTES_AO_NASCER } from "../domain/frentes";
 import { PandapeQueueService } from "../pandape/pandape-queue.service";
 import { recomputeFarolGlobal } from "./farol";
 import { pendenciasObrigatorias } from "../domain/admissao";
-import { CHAVES_PENDENCIA } from "../domain/pendencia-config";
 import { pendenciasObrigatoriasSet } from "../regua/pendencias-lote";
 import { configDoCliente } from "../regua/pendencia-config.repo";
+import { recalcularSinalizadorDaAdmissao } from "../regua/sinalizador.repo";
 import {
   filtroClienteOuVinculo,
   preferirVinculo,
@@ -79,6 +79,8 @@ import { exigeEscolhaDeVinculo } from "../domain/vinculo";
 import type { AuthUser } from "../auth/auth.types";
 import type { CandidatoInputDto, CreateAdmissaoDto } from "./dto/create-admissao.dto";
 import type { UpdateAdmissaoDto } from "./dto/update-admissao.dto";
+import type { AtualizarUniformeDto } from "./dto/atualizar-uniforme.dto";
+import { ehCabecalho, ehXlsx, lerPlanilhaMatriculas, lerXlsxMatriculas } from "./matriculas-import";
 
 /**
  * Teto de pré-admissões por lote de liberação (decisão do diretor). Acima disso a chamada é barrada:
@@ -2033,6 +2035,247 @@ export class AdmissoesService {
    * frentes fechadas não troca: a partir dali o processo terminou, e mexer no cliente reescreveria
    * história.
    */
+  /**
+   * ATUALIZA O UNIFORME depois da liberação (melhoria EAC, item 11b).
+   *
+   * O PROBLEMA QUE ISTO RESOLVE: os tamanhos eram escritos num lugar só, o `aplicarLiberacao`. Quem
+   * errava o tamanho, ou recebia a informação depois (que é o caso comum, porque o candidato mede
+   * depois), não tinha por onde corrigir: a admissão ficava com o dado errado até o fim.
+   *
+   * O BLOCO INTEIRO, E NÃO SÓ OS TRÊS TAMANHOS. `possui` e os tamanhos são um conjunto: o
+   * normalizador `colunasUniformeEpi` limpa os tamanhos quando a resposta é "não possui", e é ele que
+   * garante que não sobre "camiseta M" em quem respondeu que não tem uniforme. Reusar o normalizador
+   * da liberação é o que mantém as duas portas escrevendo a MESMA forma de dado.
+   *
+   * O SINALIZADOR É REGRAVADO NA MESMA TRANSAÇÃO (§A.27), e não é detalhe: a régua cobra a pendência
+   * UNIFORME enquanto a resposta for nula, então responder aqui muda a contagem de pendências. Sem o
+   * recálculo, a COLUNA "Pendências Obrig." (régua viva) enxergaria a resposta na hora e o KPI (enum
+   * gravado) continuaria dizendo o contrário sobre a MESMA admissão. Usa
+   * `recalcularSinalizadorDaAdmissao`, o mesmo do Gerenciador e da tela de Benefícios, e NUNCA o
+   * `sinalizadorApenas`, que recalcula com payload parcial e marcaria cinco itens preenchidos como
+   * pendentes.
+   *
+   * TRILHA CAMPO A CAMPO, no mesmo `candidato_alteracoes_log` do Gerenciador: só o que MUDOU vira
+   * linha, com quem e quando. §A.6: valores de tamanho e a resposta, sem PII.
+   *
+   * EPI FICA DE FORA (regra 3): a OST pediu uniforme.
+   */
+  async atualizarUniforme(id: string, dto: AtualizarUniformeDto, user?: AuthUser) {
+    const adm = await this.db.query.admissoes.findFirst({ where: eq(admissoes.id, id) });
+    if (!adm) throw new NotFoundException("Admissão não encontrada");
+    const vaga = await this.db.query.dadosVagaFolha.findFirst({
+      where: eq(dadosVagaFolha.admissaoId, id),
+    });
+    if (!vaga) {
+      throw new BadRequestException(
+        "Esta admissão ainda não tem dados de vaga. Libere a admissão antes de editar o uniforme.",
+      );
+    }
+
+    // O MESMO normalizador da liberação, então "não possui" limpa os tamanhos aqui igual a lá. O EPI
+    // vai ausente de propósito: `colunasUniformeEpi` devolve as colunas dele zeradas, e por isso elas
+    // NÃO entram no `set` abaixo, para esta porta não apagar o EPI que a liberação gravou.
+    const cols = colunasUniformeEpi({ uniforme: dto.uniforme });
+
+    await this.db.transaction(async (tx) => {
+      const logs: { campo: string; valorAnterior: string | null; valorNovo: string | null }[] = [];
+      const str = (v: unknown) => (v === null || v === undefined ? null : String(v));
+      const registrar = (campo: string, anterior: unknown, novo: unknown) => {
+        const a = str(anterior);
+        const n = str(novo);
+        if (a !== n) logs.push({ campo, valorAnterior: a, valorNovo: n });
+      };
+      registrar("possuiUniforme", vaga.possuiUniforme, cols.possuiUniforme);
+      registrar("uniformeCamiseta", vaga.uniformeCamiseta, cols.uniformeCamiseta);
+      registrar("uniformeCalca", vaga.uniformeCalca, cols.uniformeCalca);
+      registrar("uniformeBota", vaga.uniformeBota, cols.uniformeBota);
+
+      await tx
+        .update(dadosVagaFolha)
+        .set({
+          possuiUniforme: cols.possuiUniforme,
+          uniformeCamiseta: cols.uniformeCamiseta,
+          uniformeCalca: cols.uniformeCalca,
+          uniformeBota: cols.uniformeBota,
+        })
+        .where(eq(dadosVagaFolha.admissaoId, id));
+
+      if (logs.length) {
+        await tx.insert(candidatoAlteracoesLog).values(
+          logs.map((l) => ({
+            admissaoId: id,
+            campo: l.campo,
+            valorAnterior: l.valorAnterior,
+            valorNovo: l.valorNovo,
+            autorId: user?.id ?? null,
+          })),
+        );
+      }
+
+      await recalcularSinalizadorDaAdmissao(tx as never, id);
+    });
+
+    return { admissaoId: id, uniforme: dto.uniforme };
+  }
+
+  /**
+   * PRÉVIA DA IMPORTAÇÃO DE MATRÍCULAS (melhoria EAC, item 11d): lê a planilha e diz o que vai
+   * acontecer, SEM gravar nada.
+   *
+   * DUAS ETAPAS, e a primeira não escreve: importação que grava direto é importação que ninguém
+   * confere, e o estrago aparece depois. Aqui o time vê linha a linha quem casou, qual matrícula
+   * está lá hoje e quem ficou de fora, e só então confirma.
+   *
+   * CASA POR CPF, e só entre as admissões VIVAS. O CPF pode ter N admissões (§A.3 regra 6): hoje
+   * nenhum tem duas VIVAS ao mesmo tempo, mas quando tiver, a linha não é adivinhada, vai para a
+   * lista de não casadas com o motivo. Chutar qual das duas recebe a matrícula seria o pior desfecho
+   * possível numa importação em massa.
+   *
+   * §A.6: a prévia devolve nome (é o que permite conferir que a matrícula é da pessoa certa) e o CPF
+   * que veio na planilha, sem log.
+   */
+  async previaMatriculas(arquivo: Buffer) {
+    // XLSX ou CSV, decidido pelos MAGIC BYTES e não pela extensão (§A.27: extensão é o que o
+    // navegador disse, magic byte é o que o arquivo é). A regra sobre as células é a mesma nos dois.
+    const linhas = (
+      ehXlsx(arquivo)
+        ? await lerXlsxMatriculas(arquivo)
+        : lerPlanilhaMatriculas(arquivo.toString("utf8"))
+    ).filter((l) => !ehCabecalho(l));
+
+    const casaram: {
+      admissaoId: string;
+      cpf: string;
+      candidato: string;
+      matriculaAtual: string | null;
+      matricula: string;
+    }[] = [];
+    const naoCasaram: { linha: number; cpf: string | null; matricula: string | null; motivo: string }[] =
+      [];
+
+    const cpfs = [...new Set(linhas.map((l) => l.cpf).filter((c): c is string => Boolean(c)))];
+    const vivas = cpfs.length
+      ? await this.db
+          .select({
+            id: admissoes.id,
+            cpf: admissoes.candidatoCpf,
+            matricula: admissoes.matricula,
+            nome: candidatos.nome,
+          })
+          .from(admissoes)
+          .innerJoin(candidatos, eq(candidatos.cpf, admissoes.candidatoCpf))
+          .where(
+            and(
+              inArray(admissoes.candidatoCpf, cpfs),
+              inArray(admissoes.farolGlobal, ["EM_ADMISSAO", "BANCO_AGUARDAR"]),
+            ),
+          )
+      : [];
+
+    const porCpf = new Map<string, typeof vivas>();
+    for (const v of vivas) porCpf.set(v.cpf, [...(porCpf.get(v.cpf) ?? []), v]);
+
+    for (const l of linhas) {
+      if (!l.cpf) {
+        naoCasaram.push({ ...l, motivo: "Linha sem CPF válido (11 dígitos)." });
+        continue;
+      }
+      if (!l.matricula) {
+        naoCasaram.push({ ...l, motivo: "Linha sem matrícula." });
+        continue;
+      }
+      const achadas = porCpf.get(l.cpf) ?? [];
+      if (achadas.length === 0) {
+        naoCasaram.push({ ...l, motivo: "CPF sem admissão ativa no sistema." });
+        continue;
+      }
+      if (achadas.length > 1) {
+        naoCasaram.push({
+          ...l,
+          motivo: "CPF com mais de uma admissão ativa. Lance a matrícula pela ficha.",
+        });
+        continue;
+      }
+      const a = achadas[0];
+      casaram.push({
+        admissaoId: a.id,
+        cpf: l.cpf,
+        candidato: a.nome,
+        matriculaAtual: a.matricula,
+        matricula: l.matricula,
+      });
+    }
+
+    return { casaram, naoCasaram, total: linhas.length };
+  }
+
+  /**
+   * APLICA as matrículas confirmadas na prévia, numa transação só.
+   *
+   * REUSA A ESCRITA E A TRILHA do Gerenciador: mesma coluna, mesmo `candidato_alteracoes_log`, campo
+   * a campo, com o autor. Quem olhar a trilha de uma admissão não distingue "veio da planilha" de
+   * "alguém digitou", e é assim que tem de ser: o que importa é quem mudou o quê e quando.
+   *
+   * SÓ GRAVA O QUE MUDOU: matrícula igual à que já está lá não vira linha de trilha nem update.
+   *
+   * TUDO OU NADA: a transação é única. As linhas que não casaram já foram separadas na prévia e nem
+   * chegam aqui, então o lote que roda é o lote que o time conferiu.
+   */
+  async aplicarMatriculas(
+    itens: { admissaoId: string; matricula: string }[],
+    user?: AuthUser,
+  ) {
+    if (!itens.length) throw new BadRequestException("Nenhuma matrícula para aplicar.");
+
+    return this.db.transaction(async (tx) => {
+      const atuais = await tx
+        .select({ id: admissoes.id, matricula: admissoes.matricula })
+        .from(admissoes)
+        .where(
+          inArray(
+            admissoes.id,
+            itens.map((i) => i.admissaoId),
+          ),
+        );
+      const porId = new Map(atuais.map((a) => [a.id, a.matricula]));
+
+      let gravadas = 0;
+      let semMudanca = 0;
+      const logs: {
+        admissaoId: string;
+        campo: string;
+        valorAnterior: string | null;
+        valorNovo: string | null;
+        autorId: string | null;
+      }[] = [];
+
+      for (const item of itens) {
+        if (!porId.has(item.admissaoId)) continue;
+        const anterior = porId.get(item.admissaoId) ?? null;
+        const nova = item.matricula.trim() || null;
+        if (anterior === nova) {
+          semMudanca++;
+          continue;
+        }
+        await tx
+          .update(admissoes)
+          .set({ matricula: nova, atualizadoEm: new Date() })
+          .where(eq(admissoes.id, item.admissaoId));
+        logs.push({
+          admissaoId: item.admissaoId,
+          campo: "matricula",
+          valorAnterior: anterior,
+          valorNovo: nova,
+          autorId: user?.id ?? null,
+        });
+        gravadas++;
+      }
+
+      if (logs.length) await tx.insert(candidatoAlteracoesLog).values(logs);
+      return { gravadas, semMudanca, ignoradas: itens.length - gravadas - semMudanca };
+    });
+  }
+
   async trocarCliente(
     id: string,
     dto: { codCliente: string; cargoId: string },
@@ -2341,33 +2584,12 @@ export class AdmissoesService {
    * da troca de cliente, quando a obrigatoriedade pode ter mudado.
    */
   private async recalcularSinalizadorDaAdmissao(id: string): Promise<void> {
-    const adm = await this.db.query.admissoes.findFirst({ where: eq(admissoes.id, id) });
-    if (!adm) return;
-    const cand = await this.db.query.candidatos.findFirst({
-      where: eq(candidatos.cpf, adm.candidatoCpf),
-    });
-    const vaga = await this.db.query.dadosVagaFolha.findFirst({
-      where: eq(dadosVagaFolha.admissaoId, id),
-    });
-    const temPend = (await pendenciasObrigatoriasSet(this.db, [id])).has(id);
-    const sinalizador = calcSinalizadorPreenchimento(
-      {
-        candidato: { nome: cand?.nome, cpf: cand?.cpf },
-        codCliente: adm.codCliente,
-        cargoId: adm.cargoId,
-        dataAdmissao: adm.dataAdmissao,
-        tipoContrato: adm.tipoContrato,
-        vagaFolha: { salario: vaga?.salario },
-      },
-      // A régua completa já foi avaliada por `pendenciasObrigatoriasSet` (que consulta a config do
-      // cliente); aqui o cálculo só precisa concordar com ela.
-      temPend ? undefined : new Set(CHAVES_PENDENCIA),
-    );
-    await this.db
-      .update(admissoes)
-      .set({ sinalizadorPreenchimento: sinalizador as "PENDENTE", atualizadoEm: new Date() })
-      .where(eq(admissoes.id, id));
+    // MUDOU DE CASA (§A.17 etapa 4): o corpo vive em `regua/sinalizador.repo`, porque a tela de
+    // Benefícios passou a precisar do MESMO recálculo ao editar o pacote. O comportamento é o de
+    // sempre; copiar a régua para lá seria a divergência garantida na primeira mudança de regra.
+    await recalcularSinalizadorDaAdmissao(this.db, id);
   }
+
 
   async editar(id: string, dto: UpdateAdmissaoDto, user?: AuthUser) {
     // OST ajustes, item 1: a edição pelo Gerenciador NÃO trava por valor de benefício em falta. O
@@ -2527,7 +2749,29 @@ export class AdmissoesService {
       // farolGlobal: só loga se veio no dto (ação direta do usuário). O recompute automático pós-
       // transação (recomputeFarolGlobal) é do sistema e NÃO gera log de usuário (OST).
       const novoFarol = (dto.farolGlobal as FarolGlobal) ?? adm.farolGlobal;
-      const novoIsBanco = dto.isBanco === undefined ? adm.isBanco : dto.isBanco;
+      /**
+       * O SELETOR DE STATUS E A MARCA DE BANCO ANDAM JUNTOS (correção do bug de 13/08/2026).
+       *
+       * Escolher "Banco, Aguardar" no seletor é dizer "esta admissão é de banco", então a marca
+       * acompanha; escolher "Em Admissão" é dizer o contrário, e a marca sai. Sem isso, os dois
+       * campos brigavam: o usuário escolhia o farol, o recompute olhava a marca (que continuava
+       * desmarcada) e devolvia EM_ADMISSAO no instante seguinte, que é exatamente o bug relatado.
+       *
+       * Os demais faróis (declínio, rescisão, concluída) NÃO tocam a marca: são desfechos, e o fato
+       * de a admissão ter sido de banco é histórico dela, não algo que o desfecho apague.
+       */
+      const isBancoPeloFarol =
+        dto.farolGlobal === "BANCO_AGUARDAR"
+          ? true
+          : dto.farolGlobal === "EM_ADMISSAO"
+            ? false
+            : undefined;
+      const novoIsBanco =
+        dto.isBanco !== undefined
+          ? dto.isBanco
+          : isBancoPeloFarol !== undefined
+            ? isBancoPeloFarol
+            : adm.isBanco;
       // REATIVAÇÃO = reverso COMPLETO do declínio (OST): a admissão estava em DECLINOU/RESCISAO e
       // volta a um farol ativo. Não basta trocar o farol: o motivo é limpo e as frentes voltam ao
       // estado inicial de admissão viva (Auditoria "Análise Pendente", Exame "A Agendar"), senão a

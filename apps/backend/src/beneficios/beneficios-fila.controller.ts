@@ -1,5 +1,6 @@
-import { Controller, Get, Query } from "@nestjs/common";
+import { Body, Controller, Get, Param, Patch, Post, Query } from "@nestjs/common";
 import { parseMulti } from "../common/parse-multi";
+import { AvancarBeneficioDto, EditarPacoteDto } from "./beneficios-fila.dto";
 import { BeneficiosFilaService } from "./beneficios-fila.service";
 
 /**
@@ -23,6 +24,7 @@ export class BeneficiosFilaController {
     @Query("com") com?: string,
     @Query("sem") sem?: string,
     @Query("pacote") pacote?: string,
+    @Query("aba") aba?: string,
     @Query("ordenarPor") ordenarPor?: string,
     @Query("direcao") direcao?: string,
     @Query("page") page?: string,
@@ -38,11 +40,28 @@ export class BeneficiosFilaController {
       // Valor fora do par conhecido é IGNORADO em vez de virar erro: filtro é conveniência de tela,
       // e uma URL antiga no favorito de alguém não pode derrubar a lista.
       pacote: pacote === "ESTRUTURADO" || pacote === "IMPORTADO" ? pacote : undefined,
+      // Aba desconhecida cai na fila de trabalho, que é a tela que o time abre para trabalhar.
+      aba: aba === "FINALIZADOS" ? "FINALIZADOS" : aba === "TODOS" ? "TODOS" : "FILA",
       // A coluna é validada no serviço, contra a lista fechada; aqui só a direção é normalizada.
       ordenarPor,
       direcao: direcao === "asc" ? "asc" : direcao === "desc" ? "desc" : undefined,
       page: page ? Number(page) : undefined,
       pageSize: pageSize ? Number(pageSize) : undefined,
     });
+  }
+
+  /**
+   * AVANÇA O ESTÁGIO de uma ou de várias admissões. O MESMO endpoint serve o clique da linha e o
+   * lote, porque a regra é a mesma: um id ou N ids, a régua da sequência decide quem anda.
+   */
+  @Post("avancar")
+  avancar(@Body() dto: AvancarBeneficioDto) {
+    return this.fila.avancar(dto.ids ?? [], dto.para);
+  }
+
+  /** Edita o pacote de benefícios da admissão, gravando no cadastro do candidato. */
+  @Patch(":admissaoId/pacote")
+  editarPacote(@Param("admissaoId") admissaoId: string, @Body() dto: EditarPacoteDto) {
+    return this.fila.editarPacote(admissaoId, dto.itens ?? []);
   }
 }

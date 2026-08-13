@@ -7,6 +7,8 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import { FiltroTrigger, FiltroCampo } from "@/components/ui/FiltroTrigger";
 import { Icon, type IconName } from "@/components/ui/Icon";
 import { Select } from "@/components/ui/Select";
+import { Modal } from "@/components/ui/Modal";
+import { Button } from "@/components/ui/Button";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
 import { NavDiretoria } from "@/components/diretoria/NavDiretoria";
 import { deveCompararAnos } from "@/lib/comparativo-anual";
@@ -199,6 +201,8 @@ export default function ControleGerencialPage() {
   const [filtros, setFiltros] = useState<Filtros>({});
   const [erro, setErro] = useState<string | null>(null);
   const [carregando, setCarregando] = useState(true);
+  /** Modal do "ver nomes" do card Em Admissão (melhoria EAC, item 13). */
+  const [verNomes, setVerNomes] = useState(false);
 
   const carregar = useCallback(async () => {
     if (!token) return;
@@ -600,6 +604,7 @@ export default function ControleGerencialPage() {
           selecionado={conjuntoAtivo(KPI_FAROL.emAdmissao)}
           onClick={(aditivo) => alternar("farol", KPI_FAROL.emAdmissao, aditivo)}
           dica="Filtrar as admissões em andamento"
+          verNomes={() => setVerNomes(true)}
         />
         <Kpi
           icon="check"
@@ -729,6 +734,10 @@ export default function ControleGerencialPage() {
           tabela de Farol, junto com os faróis de admissão (decisão do diretor). */}
 
       {carregando && !dados && <div className="text-[12.5px] text-dim">Carregando o painel…</div>}
+
+      {/* Leitura sobre leitura: o modal não muda nada na tela, só mostra QUEM está por trás do
+          número que o card acabou de dizer. */}
+      {verNomes && <ModalNomes filtros={filtros} onClose={() => setVerNomes(false)} />}
     </div>
   );
 }
@@ -885,6 +894,7 @@ function Kpi({
   selecionado,
   onClick,
   dica,
+  verNomes,
 }: {
   icon: IconName;
   valor?: number;
@@ -894,6 +904,8 @@ function Kpi({
   selecionado: boolean;
   onClick: (aditivo: boolean) => void;
   dica: string;
+  /** Só o card que tem lista por trás recebe (item 13). Sem ele, o card é o de sempre. */
+  verNomes?: () => void;
 }) {
   const anel = selecionado || destaque;
   return (
@@ -938,6 +950,30 @@ function Kpi({
             Trabalhadas") não cabia numa linha e vinha cortado, o que a §A.20 proíbe. Aqui ele
             quebra em duas linhas em vez de sumir. */}
         <div className="mt-1 text-[11.5px] uppercase leading-tight text-dim">{rotulo}</div>
+        {/* VER NOMES (item 13). É um `span` com papel de botão, e não um `<button>`, porque o card
+            INTEIRO já é um botão (o filtro) e botão dentro de botão é marcação inválida. O clique
+            para de propagar, senão abrir a lista também trocaria o filtro da tela. */}
+        {verNomes && (
+          <span
+            role="button"
+            tabIndex={0}
+            title="Ver os nomes das pessoas em admissão neste recorte"
+            onClick={(e) => {
+              e.stopPropagation();
+              verNomes();
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                e.stopPropagation();
+                verNomes();
+              }
+            }}
+            className="mt-1 inline-block cursor-pointer text-[12px] font-semibold text-accent underline-offset-2 hover:underline"
+          >
+            ver nomes
+          </span>
+        )}
       </div>
     </GlassCard>
   );
@@ -1366,5 +1402,105 @@ function GraficoMes({
         })}
       </div>
     </GlassCard>
+  );
+}
+
+/**
+ * OS NOMES por trás do card "Em Admissão" (melhoria EAC, item 13).
+ *
+ * ACOMPANHA O FILTRO DA TELA por construção: manda os MESMOS parâmetros que o painel mandou, e o
+ * backend reusa o `condicoes()` que desenhou os cards. Sem isso, a lista e o número que a pessoa
+ * acabou de ler poderiam discordar, que é o defeito clássico de "abrir o detalhe" com régua própria.
+ *
+ * §A.6: a leitura devolve nome, cliente e cargo, sem CPF e sem contato, e nada disso é logado. A
+ * operação é reivindicada pelo menu `diretoria` (§A.23): quem tem o Controle Gerencial vê.
+ */
+/** Data no formato do sistema. §A.11: vazio é "sem data", nunca o glifo. */
+function fmtData(iso: string): string {
+  const [a, m, d] = iso.slice(0, 10).split("-");
+  return `${d}/${m}/${a}`;
+}
+
+function ModalNomes({ filtros, onClose }: { filtros: Filtros; onClose: () => void }) {
+  const { token } = useAuth();
+  const [dados, setDados] = useState<{
+    items: { candidato: string; cliente: string | null; cargo: string | null; dataAdmissao: string | null }[];
+    total: number;
+    page: number;
+    totalPages: number;
+  } | null>(null);
+  const [pagina, setPagina] = useState(1);
+  const [erro, setErro] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!token) return;
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(filtros)) {
+      if (v !== undefined && v !== "") q.set(k, String(v));
+    }
+    q.set("page", String(pagina));
+    apiFetch<typeof dados>(`/gerencial/nomes?${q.toString()}`, { token })
+      .then(setDados)
+      .catch((e) => setErro(e instanceof ApiError ? e.message : "Falha ao carregar os nomes."));
+  }, [token, filtros, pagina]);
+
+  return (
+    <Modal onClose={onClose} className="max-w-2xl" ariaLabel="Pessoas Em Admissão">
+      <h2 className="mb-1 text-[19px] font-semibold text-text">Pessoas Em Admissão</h2>
+      <p className="mb-4 text-sm text-dim">
+        {dados ? `${dados.total} pessoa(s) no recorte atual do painel` : "carregando..."}
+      </p>
+
+      {erro && (
+        <p className="mb-3 rounded-xl border border-[var(--border)] bg-[rgba(214,69,69,0.1)] px-3 py-2 text-sm text-danger">
+          {erro}
+        </p>
+      )}
+
+      <div className="ea-scroll flex max-h-[52vh] flex-col gap-1.5 overflow-y-auto">
+        {(dados?.items ?? []).map((p, i) => (
+          <div
+            key={`${p.candidato}-${i}`}
+            className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2"
+          >
+            <span className="font-semibold text-text">{p.candidato}</span>
+            <span className="text-[13px] text-dim">{p.cliente ?? "não informado"}</span>
+            <span className="text-[13px] text-faint">{p.cargo ?? "não informado"}</span>
+            <span className="ml-auto text-[13px] tabular-nums text-dim">
+              {p.dataAdmissao ? fmtData(p.dataAdmissao) : "sem data"}
+            </span>
+          </div>
+        ))}
+        {dados && dados.items.length === 0 && (
+          <p className="py-6 text-center text-sm text-faint">
+            Nenhuma pessoa em admissão neste recorte.
+          </p>
+        )}
+      </div>
+
+      {dados && dados.totalPages > 1 && (
+        <div className="mt-3 flex items-center gap-2">
+          <span className="text-[12.5px] text-faint">
+            página {dados.page} de {dados.totalPages}
+          </span>
+          <div className="ml-auto flex items-center gap-2">
+            <Button
+              onClick={() => setPagina((p) => Math.max(1, p - 1))}
+              disabled={dados.page <= 1}
+              className="px-3 py-1.5 text-[13px]"
+            >
+              Anterior
+            </Button>
+            <Button
+              onClick={() => setPagina((p) => Math.min(dados.totalPages, p + 1))}
+              disabled={dados.page >= dados.totalPages}
+              className="px-3 py-1.5 text-[13px]"
+            >
+              Próxima
+            </Button>
+          </div>
+        </div>
+      )}
+    </Modal>
   );
 }

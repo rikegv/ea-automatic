@@ -465,6 +465,73 @@ export class GerencialService {
    * Consequência aceita: os cards deixam de fechar a soma de `trabalhadas`, que já não fechava
    * (RESCISAO nunca teve card). `trabalhadas` é o total do recorte, não a soma dos outros quatro.
    */
+  /**
+   * OS NOMES por trás do card "Em Admissão" (melhoria EAC, item 13).
+   *
+   * O CARD DIZ QUANTOS, e a pergunta seguinte é sempre QUEM. Até aqui o número era um beco: para
+   * saber os nomes, a pessoa saía do painel e ia refazer o mesmo recorte no Gerenciador, na mão.
+   *
+   * REUSA O `base()` E O `onde()`, e é isso que faz o modal acompanhar o filtro ativo por
+   * construção: se a tela está filtrada por cliente e período, a lista vem daquele recorte, sem
+   * régua nova para divergir do número que a pessoa acabou de ler. Acrescenta APENAS o recorte de
+   * farol do card (EM_ADMISSAO e BANCO_AGUARDAR), o mesmo par que o KPI conta.
+   *
+   * PAGINADO, e não "todos de uma vez": são 120 pessoas hoje e podem ser milhares, e o modal existe
+   * para consultar, não para exportar.
+   *
+   * §A.6: nome e o mínimo para identificar de quem se fala (cliente e cargo, que são catálogo). Sem
+   * CPF, sem contato e sem documento. Os nomes NÃO são logados em lugar nenhum.
+   */
+  async nomesEmAdmissao(f: FiltrosGerencial, page = 1, pageSize = 50) {
+    const p = Math.max(1, Math.floor(page));
+    const tamanho = Math.min(200, Math.max(1, Math.floor(pageSize)));
+    const offset = (p - 1) * tamanho;
+
+    const [linhas, [contagem]] = await Promise.all([
+      // O NOME vem por SUBCONSULTA e não por join, e não é preferência: `base()` já termina no
+      // `where`, então qualquer `join` escrito aqui cairia DEPOIS dele e o Postgres recusaria. A
+      // alternativa seria mexer no `base()`, que é compartilhado pelas oito consultas do painel
+      // validado (§A.26). A subconsulta é correlacionada por CPF, que é a chave da tabela.
+      this.db.execute(sql`
+        select (select nome from candidatos c where c.cpf = a.candidato_cpf) as candidato,
+               coalesce(nullif(cl.nome_operacao, ''), cl.razao_social, a.cod_cliente) as cliente,
+               cg.nome as cargo,
+               a.data_admissao as data_admissao,
+               a.farol_global::text as farol
+        ${this.base(f)} and a.farol_global in ('EM_ADMISSAO','BANCO_AGUARDAR')
+        order by 1 asc
+        limit ${tamanho} offset ${offset}
+      `) as unknown as Promise<
+        Array<{
+          candidato: string;
+          cliente: string | null;
+          cargo: string | null;
+          data_admissao: string | null;
+          farol: string;
+        }>
+      >,
+      this.db.execute(sql`
+        select count(*)::int as total
+        ${this.base(f)} and a.farol_global in ('EM_ADMISSAO','BANCO_AGUARDAR')
+      `) as unknown as Promise<Array<{ total: number }>>,
+    ]);
+
+    const total = Number(contagem?.total ?? 0);
+    return {
+      items: linhas.map((l) => ({
+        candidato: l.candidato,
+        cliente: l.cliente,
+        cargo: l.cargo,
+        dataAdmissao: l.data_admissao,
+        farol: l.farol,
+      })),
+      total,
+      page: p,
+      pageSize: tamanho,
+      totalPages: Math.max(1, Math.ceil(total / tamanho)),
+    };
+  }
+
   private async kpis(f: FiltrosGerencial) {
     const [row] = (await this.db.execute(sql`
       select

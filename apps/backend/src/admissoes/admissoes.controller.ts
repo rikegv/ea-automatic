@@ -1,4 +1,17 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from "@nestjs/common";
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UploadedFile,
+  UseInterceptors,
+} from "@nestjs/common";
+import { FileInterceptor } from "@nestjs/platform-express";
 import { CurrentUser, Roles } from "../auth/decorators";
 import type { AuthUser } from "../auth/auth.types";
 import { parseMulti } from "../common/parse-multi";
@@ -9,6 +22,8 @@ import { LiberarEmLoteDto } from "./dto/liberar-lote.dto";
 import { TrocarClienteDto } from "./dto/trocar-cliente.dto";
 import { CorrigirCpfDto } from "./dto/corrigir-cpf.dto";
 import { UpdateAdmissaoDto } from "./dto/update-admissao.dto";
+import { AtualizarUniformeDto } from "./dto/atualizar-uniforme.dto";
+import { AplicarMatriculasDto } from "./dto/aplicar-matriculas.dto";
 
 // Operacional do wizard (F6/F11) e do Gerenciador (F10/F7). Autenticado, sem restrição de papel
 // (esteira/gerenciador são coletivos — §A.3), EXCETO a deleção, que é destrutiva (Master/Super Admin).
@@ -122,6 +137,32 @@ export class AdmissoesController {
   }
 
   /** F10 — edita vaga/folha + contrato/data/matrícula/farol (não toca CPF/cod_cliente). */
+  /**
+   * PRÉVIA da importação de matrículas (melhoria EAC, item 11d).
+   *
+   * DECLARADA ANTES do `@Patch(":id")`, pelo mesmo motivo do `liberar-lote`: o Nest casa rotas na
+   * ordem de declaração, e o `:id` engoliria "matriculas" como se fosse um id de admissão. Foi
+   * exatamente o que aconteceu na primeira tentativa, e o erro que aparecia era o do DTO errado. Recebe a planilha e devolve o que
+   * VAI acontecer, sem gravar nada: quem casou, com a matrícula que está lá hoje, e quem ficou de
+   * fora com o motivo.
+   *
+   * O ARQUIVO NÃO É PERSISTIDO (§A.6): é lido em memória e descartado ao fim da requisição, no mesmo
+   * princípio do documento efêmero (§A.3 regra 7).
+   */
+  @Post("matriculas/previa")
+  @UseInterceptors(FileInterceptor("file"))
+  previaMatriculas(@UploadedFile() file?: Express.Multer.File) {
+    if (!file?.buffer?.length) throw new BadRequestException("Envie a planilha.");
+    // O BUFFER vai inteiro: quem decide se é xlsx ou csv é o serviço, pelos magic bytes.
+    return this.admissoes.previaMatriculas(file.buffer);
+  }
+
+  /** Aplica as matrículas conferidas na prévia, em lote transacional com trilha. */
+  @Patch("matriculas")
+  aplicarMatriculas(@Body() dto: AplicarMatriculasDto, @CurrentUser() user: AuthUser) {
+    return this.admissoes.aplicarMatriculas(dto.itens ?? [], user);
+  }
+
   @Patch(":id")
   editar(@Param("id") id: string, @Body() dto: UpdateAdmissaoDto, @CurrentUser() user: AuthUser) {
     return this.admissoes.editar(id, dto, user);
@@ -144,6 +185,26 @@ export class AdmissoesController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.admissoes.trocarCliente(id, dto, user);
+  }
+
+  /**
+   * ATUALIZA O UNIFORME depois da liberação (melhoria EAC, item 11b).
+   *
+   * ROTA PRÓPRIA e não campo no `@Patch(":id")` genérico, pelo mesmo critério da troca de cliente: a
+   * escrita tem efeito colateral próprio (regravar o sinalizador, porque uniforme entra na régua de
+   * pendências) e um payload que só ela usa.
+   *
+   * SEM `@Roles`, ao contrário da troca de cliente: corrigir tamanho de camiseta é trabalho de
+   * consultor, é o que a operação faz o dia inteiro, e a trilha registra quem mudou o quê. O gate é o
+   * MENU `esteira`, onde a operação está reivindicada, porque a edição vive no modal daquela tela.
+   */
+  @Patch(":id/uniforme")
+  atualizarUniforme(
+    @Param("id") id: string,
+    @Body() dto: AtualizarUniformeDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.admissoes.atualizarUniforme(id, dto, user);
   }
 
   /**

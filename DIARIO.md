@@ -9621,3 +9621,47 @@ tabelas de uma vez.
 
 **Regra permanente (DESIGN-SYSTEM):** tabela nova nasce ordenável, com os três modos, e paginou no
 servidor a ordenação vai para o backend.
+
+---
+
+## 2026-08-13 · Benefícios em operação, as melhorias EAC e dois bugs de produção
+
+**Benefícios, etapa 2.** A fila ganhou CRUD de estágio: dois status por admissão (Aguardando Cálculo e
+Benefício Calculado), botão de ícone que alterna nos dois sentidos, ação em massa transacional sobre a
+página filtrada, e edição do pacote que grava no CADASTRO do candidato (`admissao_beneficio`), com o
+sinalizador regravado na mesma transação para a coluna de pendências e o KPI não discordarem. Três KPIs
+clicáveis no topo somam por construção, e a coluna Status virou o farol dos benefícios, na mesma pill do
+Farol Admissional. A coluna Matrícula entrou por último, só leitura.
+
+O terceiro estágio ("Finalizado") existiu por uma versão e o diretor decidiu por dois; a migration `0068`
+trouxe de volta quem tinha ficado nele, que sem isso sumiria das duas abas.
+
+**Melhorias EAC (itens 7, 13, 11b, 11d).** Botão "selecionar todos os clientes" na Esteira, que destrava o
+"todos menos um". Card "Em Admissão" do Controle Gerencial com "ver nomes", reusando o `condicoes()` do
+painel (a lista acompanha o filtro por construção) e com a operação reivindicada pelo menu `diretoria`,
+porque devolve nome. Uniforme editável na ficha da Esteira depois da liberação, com trilha campo a campo.
+Importação de matrículas por planilha (xlsx ou csv), em duas etapas: a prévia mostra quem casou e quem não,
+e só então grava, em lote transacional com a mesma trilha do Gerenciador. O botão vive na frente de
+CADASTRO, que é onde o time opera, e as operações migraram para o menu `esteira` junto com ele.
+
+O item 11b encolheu no levantamento: o CARGO já era editável na ficha, pelo fluxo de troca de cliente e
+cargo, que resolve o par e barra quem não tem régua documental. Criar um campo de cargo solto furaria essa
+trava, então ficou como estava.
+
+**Bug 1: "Banco, Aguardar" não mudava o status.** `BANCO_AGUARDAR` não estava em `FAROL_MANUAL`, e o
+recompute que roda logo depois de gravar recalculava pela regra automática e devolvia `EM_ADMISSAO`. A
+escolha durava o tempo da transação. Agora quem manda é a marca `is_banco`, que já existia para dizer
+"admissão de banco": o seletor e a marca andam juntos, a regra automática do §A.3 continua valendo para
+quem não está marcado, e nenhuma contagem se moveu (as duas telas já contavam os dois faróis juntos).
+
+**Bug 2: 104 arquivos de uma candidata que enviou 4.** A marca que evita rebaixar do Pandapé só era gravada
+quando a auditoria da I.A concluía; enquanto ela não fechava, o ciclo de 12 minutos rebaixava os mesmos
+bytes e regravava tudo na staging. Foram 26 ciclos × 4 páginas de CTPS. Três correções: a staging não
+regrava conteúdo que já está lá, a marca passou a contar o download e não o veredito, e `INCONFORME` saiu
+do "sempre rebaixa" (só volta à coleta se o acervo do Pandapé crescer), o que corta o rebaixe de 108
+admissões a cada 12 minutos. A limpeza tirou 134 cópias de 12 admissões, e os conteúdos distintos ficaram
+os mesmos, 15 antes e 15 depois no caso dela.
+
+**Correção que apareceu de brinde:** o recálculo compartilhado do sinalizador apagava o sinal de documento
+INCONFORME em qualquer edição de campo. A regra "documento inconforme domina" entrou na peça compartilhada
+e passou a valer para os três caminhos que a chamam.

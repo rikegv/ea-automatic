@@ -21,6 +21,7 @@ import { FiltroTrigger, FiltroCampo } from "@/components/ui/FiltroTrigger";
 import { MultiSelect } from "@/components/ui/MultiSelect";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AdmissaoDetalheModal } from "@/components/esteira/AdmissaoDetalheModal";
+import { ImportarMatriculasModal } from "@/components/esteira/ImportarMatriculasModal";
 import { clicksignPill } from "@/lib/clicksign";
 import { caixaAlta } from "@/lib/nome";
 import { pillPendencias } from "@/lib/pendencias-pill";
@@ -143,6 +144,8 @@ interface EsteiraItem {
   contratoAssinadoDriveUrl?: string | null;
   /** PAUSA: instante da pausa (null = não pausada). Alimenta a tag na coluna Status. */
   pausadaEm?: string | null;
+  /** Farol da admissão: só a tag "Banco, Aguardar" da coluna Status o consome. */
+  farolGlobal?: string | null;
 }
 interface EsteiraResp {
   items: EsteiraItem[];
@@ -260,6 +263,9 @@ export default function EsteiraPage() {
   const rota = ABAS[aba].rota;
   const isExame = rota === "exame";
   const isCadastro = rota === "cadastro";
+  /** Importação de matrículas (item 11d), só na frente de Cadastro. */
+  const [importando, setImportando] = useState(false);
+  const [flashImport, setFlashImport] = useState<string | null>(null);
   const isAuditoria = rota === "auditoria";
   const isIntegracao = rota === "integracao";
   // Modais da aba INTEGRAÇÃO. Estado próprio, sem tocar nos modais existentes das outras abas.
@@ -919,6 +925,34 @@ export default function EsteiraPage() {
                 Limpar filtro
               </button>
             )}
+            {/* IMPORTAR MATRÍCULAS (melhoria EAC, item 11d): fica na FRENTE DE CADASTRO, que é onde o
+              time recebe a planilha da folha e lança as matrículas. Saiu do Gerenciador (decisão do
+              diretor): o botão passa a viver onde o trabalho acontece. Só a aba Cadastro o mostra. */}
+            {isCadastro && flashImport && (
+              <span
+                className="flex-none rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[12.5px] text-ok"
+                role="status"
+              >
+                {flashImport}
+              </span>
+            )}
+            {isCadastro && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setImportando(true)}
+                  aria-label="Importar matrículas de uma planilha"
+                  title="Importar matrículas de uma planilha (xlsx ou csv)"
+                  className="flex-none rounded-xl border border-[var(--border)] bg-[var(--surface)] p-2 text-dim transition hover:border-[var(--accent)] hover:text-text"
+                >
+                  <ExcelLogo className="h-5 w-5" />
+                </button>
+                <div
+                  aria-hidden="true"
+                  className="h-6 w-px flex-none bg-[color-mix(in_srgb,var(--border-strong)_70%,transparent)]"
+                />
+              </>
+            )}
             {/* Bloco E: "Gerar Relatório Clínica" movido para o topo, ao lado do filtro, na aba Exame.
               Mesmo padrão premium do ícone do Drive (ExcelLogo). Função 100% preservada (dispara
               gerarRelatorioClinica sobre a seleção). Divisória delicada entre o Excel e o filtro. */}
@@ -953,6 +987,41 @@ export default function EsteiraPage() {
                   options={clienteOptions}
                   placeholder="Todos os clientes"
                 />
+                {/* SELECIONAR TODOS (decisão do diretor). Nenhum cliente marcado JÁ significa todos,
+                    então o botão não existe para isso: ele MATERIALIZA a lista inteira, e é o que
+                    destrava o "todos MENOS um", que hoje não dá para pedir. Depois de preencher, o
+                    diretor desmarca o que não quer.
+       
+                    FICA AQUI, na tela, e NÃO dentro do `MultiSelect`: aquele componente é usado por
+                    seis telas (Esteira, Gerenciador, Liberação, Não Conformidades, Nova Admissão e
+                    Benefícios), e mexer nele para atender uma arrastaria as outras cinco junto
+                    (§A.26). */}
+                <div className="mt-2 flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setCodClientes(clienteOptions.map((o) => o.value))}
+                    disabled={
+                      clienteOptions.length === 0 || codClientes.length === clienteOptions.length
+                    }
+                    className="text-[12.5px] font-semibold text-accent underline-offset-2 transition hover:underline disabled:opacity-40 disabled:no-underline"
+                  >
+                    Selecionar todos os clientes
+                  </button>
+                  {codClientes.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setCodClientes([])}
+                      className="text-[12.5px] text-dim underline-offset-2 transition hover:text-text hover:underline"
+                    >
+                      Limpar
+                    </button>
+                  )}
+                  <span className="ml-auto text-[12px] text-faint">
+                    {codClientes.length > 0
+                      ? `${codClientes.length} de ${clienteOptions.length}`
+                      : `${clienteOptions.length} disponíveis`}
+                  </span>
+                </div>
               </FiltroCampo>
 
               <FiltroCampo label="Status">
@@ -1452,6 +1521,14 @@ export default function EsteiraPage() {
                             frente. Não é coluna nova nem substitui o status real: a frente continua
                             dizendo onde parou, a tag diz que está parada. */}
                         {item.pausadaEm && <StatusPill tone="wn" label="Pausada" />}
+                        {/* BANCO, AGUARDAR (correção do bug): mesmo desenho da pausa, e pelo mesmo
+                            motivo. A coluna Status responde "onde a FRENTE parou", que é a pergunta
+                            da Esteira; o farol de banco é outra informação, e some sozinha quando a
+                            admissão volta a andar. Sem esta tag, a admissão marcada como banco era
+                            indistinguível de qualquer outra na fila. */}
+                        {item.farolGlobal === "BANCO_AGUARDAR" && (
+                          <StatusPill tone="nt" label="Banco, Aguardar" />
+                        )}
                         {/* OST B1 / Bloco 6: contador de progresso da régua OBRIGATÓRIA (é o que
                             trava o fluxo). Formato "9/10 aprovados": cabe na coluna sem competir com
                             a pill, e diz de imediato quanto falta. Verde quando fecha. */}
@@ -1921,6 +1998,17 @@ export default function EsteiraPage() {
           busy={actingId === dialog.frenteId}
           onConfirm={(l) => doPatch(dialog.frenteId, dialog.status, true, l, true)}
           onCancel={() => setDialog(null)}
+        />
+      )}
+
+      {importando && (
+        <ImportarMatriculasModal
+          onClose={() => setImportando(false)}
+          onAplicado={async (msg) => {
+            setImportando(false);
+            setFlashImport(msg);
+            await load();
+          }}
         />
       )}
 

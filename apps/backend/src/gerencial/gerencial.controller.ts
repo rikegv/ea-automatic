@@ -55,4 +55,53 @@ export class GerencialController {
     };
     return this.gerencial.painel(filtros);
   }
+
+  /**
+   * OS NOMES do card "Em Admissão" (melhoria EAC, item 13). Mesmos parâmetros do painel, então o
+   * modal acompanha o filtro que a tela já aplicou.
+   *
+   * §A.23: esta operação é REIVINDICADA pelo menu `diretoria` em `domain/menus`. Sem isso ela ficaria
+   * ABERTA a qualquer autenticado, porque operação não reivindicada não passa pelo guard, e esta
+   * devolve NOME de pessoa. Quem tem o Controle Gerencial vê (decisão do diretor).
+   */
+  @Get("nomes")
+  nomes(
+    @Query("de") de?: string,
+    @Query("ate") ate?: string,
+    @Query("codCliente") codCliente?: string,
+    @Query("farol") farol?: string,
+    @Query("contrato") contrato?: string,
+    @Query("exame") exame?: string,
+    @Query("auditoria") auditoria?: string,
+    @Query("cargoId") cargoId?: string,
+    @Query("dia") dia?: string,
+    @Query("mes") mes?: string,
+    @Query("ano") ano?: string,
+    @Query("salaStatus") salaStatus?: string,
+    @Query("sala") sala?: string,
+    @Query("page") page?: string,
+  ) {
+    const numero = (v?: string) => {
+      const n = Number(v);
+      return Number.isFinite(n) && n > 0 ? n : undefined;
+    };
+    return this.gerencial.nomesEmAdmissao(
+      {
+        de: de || undefined,
+        ate: ate || undefined,
+        codCliente: codCliente || undefined,
+        farol: farol || undefined,
+        contrato: contrato || undefined,
+        exame: exame || undefined,
+        auditoria: auditoria || undefined,
+        cargoId: cargoId || undefined,
+        dia: numero(dia),
+        mes: numero(mes),
+        ano: numero(ano),
+        salaStatus: salaStatus || undefined,
+        sala: sala === "1" || sala === "true" ? true : undefined,
+      },
+      numero(page) ?? 1,
+    );
+  }
 }

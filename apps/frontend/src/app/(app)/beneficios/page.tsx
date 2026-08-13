@@ -6,10 +6,14 @@ import { caixaAlta } from "@/lib/nome";
 import { PageHead } from "@/components/ui/PageHead";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Icon } from "@/components/ui/Icon";
+import { StatusPill } from "@/components/ui/StatusPill";
 import { MultiSelect } from "@/components/ui/MultiSelect";
 import { Select } from "@/components/ui/Select";
 import { FiltroTrigger, FiltroCampo } from "@/components/ui/FiltroTrigger";
 import { Modal } from "@/components/ui/Modal";
+import { Button } from "@/components/ui/Button";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { cn } from "@/lib/cn";
 import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
 import { DIRECAO_INICIAL, type Direcao, type Ordenacao } from "@/lib/ordenacao";
 
@@ -37,13 +41,19 @@ interface Linha {
   admissaoId: string;
   candidato: string;
   dataAdmissao: string | null;
+  /** Matrícula da admissão, a mesma que a importação grava. Só leitura nesta tela. */
+  matricula: string | null;
   codCliente: string | null;
   cliente: string | null;
   entrouEm: string | null;
+  /** Estágio do pacote: decide o botão da linha e a aba em que ela vive. */
+  status: "AGUARDANDO_CALCULO" | "BENEFICIO_CALCULADO";
   principais: Record<string, boolean>;
   /** Valor cadastrado de cada um dos quatro principais. Nulo = tem o benefício, sem valor. */
   valores: Record<string, string | null>;
   outros: { nome: string; valor: string | null }[];
+  /** O pacote com os ids do catálogo: é o que o modal de edição carrega e salva. */
+  pacote: { beneficioId: string; nome: string; valor: string | null }[];
   /** Texto achatado da importada. Preenchido SÓ quando não há pacote estruturado. */
   textoImportado: string | null;
 }
@@ -57,6 +67,8 @@ interface Resposta {
   /** As siglas das colunas fixas, na ordem que o backend manda. */
   principais: string[];
   clientes: { codCliente: string; nome: string }[];
+  /** Os três números do topo, no MESMO recorte de busca e filtros, sem o filtro de aba. */
+  kpis: { total: number; aguardando: number; calculados: number };
 }
 
 function fmtData(iso?: string | null): string {
@@ -114,6 +126,61 @@ function CelulaBeneficio({ tem, onVer }: { tem: boolean; onVer?: () => void }) {
   );
 }
 
+/**
+ * AS DUAS ABAS (decisão do diretor). A Fila de Trabalho é quem ainda aguarda cálculo e vive limpa:
+ * marcar como calculado tira a pessoa dali e a manda para Finalizados. A aba É o status, sem
+ * marcação extra. TODOS não é aba: é o destino do KPI do total, que mostra os dois estágios juntos.
+ */
+const ABAS = [
+  { chave: "FILA" as const, rotulo: "Fila De Trabalho" },
+  { chave: "FINALIZADOS" as const, rotulo: "Finalizados" },
+];
+
+/**
+ * O FAROL DOS BENEFÍCIOS: a coluna STATUS diz o ESTADO, na mesma pill do Farol Admissional que o time
+ * já lê todo dia (`StatusPill`, com o ícone dinâmico da §A.12). Vermelho é o que falta calcular,
+ * verde é o que já está calculado. É informativa e não clica: quem age é a coluna de Ações.
+ */
+const STATUS_PILL: Record<string, { tom: "dg" | "ok"; rotulo: string }> = {
+  AGUARDANDO_CALCULO: { tom: "dg", rotulo: "Benefício Não Calculado" },
+  BENEFICIO_CALCULADO: { tom: "ok", rotulo: "Benefício Calculado" },
+};
+
+/**
+ * A RÉGUA DA AÇÃO, que é um TOGGLE (decisão do diretor): são dois estágios, então o mesmo lugar marca
+ * como calculado e reverte.
+ *
+ * O BOTÃO É ÍCONE, SEM TEXTO (correção do diretor). Ele dizia "Benefício Calculado" em vermelho, e
+ * lido de relance parecia AFIRMAR que o benefício já estava calculado, quando era o botão PARA
+ * calcular. Agora a divisão é limpa: a coluna Status diz o ESTADO (pill), a coluna Ações diz o que
+ * FAZER (ícone), e o title escreve a ação por extenso.
+ */
+const ACAO: Record<
+  string,
+  { para: string; titulo: string; rotuloLote: string; cor: string; icone: "check" | "refresh" }
+> = {
+  AGUARDANDO_CALCULO: {
+    para: "BENEFICIO_CALCULADO",
+    titulo: "Marcar como calculado",
+    rotuloLote: "Marcar Calculado De Todos",
+    // Verde: o ícone é a ação de CONCLUIR o cálculo, e verde é o que o sistema usa para concluir.
+    cor: "var(--ok)",
+    icone: "check",
+  },
+  BENEFICIO_CALCULADO: {
+    para: "AGUARDANDO_CALCULO",
+    titulo: "Reverter para Benefício Não Calculado, trazendo de volta para a fila",
+    rotuloLote: "Reverter Todos",
+    cor: "var(--warn)",
+    icone: "refresh",
+  },
+};
+
+const STATUS_ROTULO: Record<string, string> = {
+  AGUARDANDO_CALCULO: "Aguardando Cálculo",
+  BENEFICIO_CALCULADO: "Benefício Calculado",
+};
+
 const PACOTE_OPCOES = [
   { value: "", label: "Todos" },
   { value: "ESTRUTURADO", label: "Com Pacote Estruturado" },
@@ -141,6 +208,22 @@ export default function BeneficiosPage() {
   const [ordem, setOrdem] = useState<{ chave: string; dir: Direcao } | null>(null);
   /** Célula clicada: abre o modal com o valor cadastrado daquele benefício. */
   const [detalhe, setDetalhe] = useState<{ linha: Linha; sigla: string | null } | null>(null);
+  const [aba, setAba] = useState<"FILA" | "FINALIZADOS" | "TODOS">("FILA");
+  /** Ids marcados. Vive por PÁGINA: trocar de página ou de filtro limpa, para o lote nunca surpreender. */
+  const [selecao, setSelecao] = useState<Set<string>>(new Set());
+  const [confirmarLote, setConfirmarLote] = useState<{ para: string; rotulo: string; n: number } | null>(null);
+  const [agindo, setAgindo] = useState(false);
+  const [flash, setFlash] = useState<string | null>(null);
+  /** Linha em edição: abre o modal do pacote. */
+  const [editando, setEditando] = useState<Linha | null>(null);
+  /** Catálogo de benefícios ATIVOS, para o modal oferecer o que existe. Carregado uma vez. */
+  const [catalogo, setCatalogo] = useState<{ id: string; nome: string }[]>([]);
+
+  useEffect(() => {
+    apiFetch<{ id: string; nome: string }[]>("/catalogos/beneficios")
+      .then(setCatalogo)
+      .catch(() => setCatalogo([]));
+  }, []);
 
   useEffect(() => {
     const t = setTimeout(() => setQ(busca), 350);
@@ -150,7 +233,16 @@ export default function BeneficiosPage() {
   /** Mudar QUALQUER filtro volta para a primeira página: página 7 de um recorte novo não existe. */
   useEffect(() => {
     setPage(1);
-  }, [q, codCliente, com, sem, pacote, ordem]);
+  }, [q, codCliente, com, sem, pacote, ordem, aba]);
+
+  /**
+   * TROCAR DE PÁGINA, DE FILTRO OU DE ABA LIMPA A SELEÇÃO. Sem isso, "selecionar todos" na página 1 e
+   * depois agir na página 3 aplicaria o lote a gente que a pessoa não está vendo, que é o pior jeito
+   * de uma ação em massa errar.
+   */
+  useEffect(() => {
+    setSelecao(new Set());
+  }, [q, codCliente, com, sem, pacote, ordem, aba, page]);
 
   /**
    * O MESMO CABEÇALHO CLICÁVEL das demais tabelas, com a ordenação indo para a API.
@@ -163,7 +255,16 @@ export default function BeneficiosPage() {
    * compartilhado: texto começa em A-Z, data na mais recente e número no maior.
    */
   const tipoDaColuna = (chave: string) =>
-    chave === "dataAdmissao" ? "data" : chave === "outros" ? "numero" : chave.length === 2 ? "status" : "texto";
+    chave === "matricula"
+      ? "texto"
+      : chave === "dataAdmissao"
+      ? "data"
+      : chave === "outros"
+        ? "numero"
+        : // As quatro siglas e a coluna Status são presença/estado: ordenam por rank, não por texto.
+          chave.length === 2 || chave === "status"
+          ? "status"
+          : "texto";
   const ord: Ordenacao<Linha> = {
     itens: [],
     ordem,
@@ -184,6 +285,7 @@ export default function BeneficiosPage() {
     if (com.length) p.set("com", com.join(","));
     if (sem.length) p.set("sem", sem.join(","));
     if (pacote) p.set("pacote", pacote);
+    p.set("aba", aba);
     if (ordem) {
       p.set("ordenarPor", ordem.chave);
       p.set("direcao", ordem.dir);
@@ -196,13 +298,42 @@ export default function BeneficiosPage() {
     } finally {
       setCarregando(false);
     }
-  }, [q, codCliente, com, sem, pacote, ordem, page]);
+  }, [q, codCliente, com, sem, pacote, ordem, aba, page]);
 
   useEffect(() => {
     void carregar();
   }, [carregar]);
 
 
+
+  /**
+   * AVANÇA O ESTÁGIO. O MESMO caminho serve o clique da linha (um id) e o lote (N ids), porque a
+   * régua é a mesma e mora no backend: só anda quem está no estágio anterior.
+   */
+  async function avancar(ids: string[], para: string) {
+    setAgindo(true);
+    setErro(null);
+    try {
+      const r = await apiFetch<{ avancadas: number; ignoradas: number }>("/beneficios-fila/avancar", {
+        method: "POST",
+        body: { ids, para },
+      });
+      // A resposta diz quantas ANDARAM e quantas ficaram: sem isso o time acha que finalizou 10
+      // quando finalizou 7, e é justamente no lote que essa diferença aparece.
+      setFlash(
+        r.ignoradas > 0
+          ? `${r.avancadas} atualizada(s). ${r.ignoradas} já estava(m) em outro estágio.`
+          : `${r.avancadas} atualizada(s).`,
+      );
+      setSelecao(new Set());
+      await carregar();
+    } catch (e) {
+      setErro(e instanceof Error ? e.message : "Falha ao atualizar o estágio.");
+    } finally {
+      setAgindo(false);
+      setConfirmarLote(null);
+    }
+  }
 
   function limparFiltros() {
     setCodCliente([]);
@@ -212,8 +343,10 @@ export default function BeneficiosPage() {
   }
 
   const siglas = dados?.principais ?? ["VT", "VR", "VA", "AM"];
-  /** Candidato, Data adm., Cliente, as quatro siglas e a coluna do "+N". */
-  const colunas = 3 + siglas.length + 1;
+  /** Seleção, Candidato, Data adm., Matrícula, Cliente, Status, Ações, as siglas e o "+N". */
+  const colunas = 5 + siglas.length + 2;
+  /** Todas as linhas da página são selecionáveis: os dois estágios têm ação (marcar ou reverter). */
+  const selecionaveis = dados?.items ?? [];
   const filtrosAtivos = codCliente.length + com.length + sem.length + (pacote ? 1 : 0);
 
   // As opções do seletor de cliente vêm da fila INTEIRA (o backend as monta assim), então filtrar por
@@ -235,6 +368,60 @@ export default function BeneficiosPage() {
         title="Benefícios"
         subtitle="Quem fechou o Cadastro e tem benefício a lançar, com o pacote de cada pessoa."
       />
+
+      {/* KPIs CLICÁVEIS (decisão do diretor): os três números do topo são o resumo E o filtro. Eles
+          contam o mesmo recorte de busca e filtros, sem o filtro de aba, então somam por construção:
+          total = não calculados + calculados. Clicar troca a visão, e a selecionada fica destacada. */}
+      <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+        {(
+          [
+            { chave: "TODOS" as const, rotulo: "Total Na Esteira De Benefícios", valor: dados?.kpis.total, cor: undefined },
+            { chave: "FILA" as const, rotulo: `Não Calculados, ${STATUS_ROTULO.AGUARDANDO_CALCULO}`, valor: dados?.kpis.aguardando, cor: "var(--danger)" },
+            { chave: "FINALIZADOS" as const, rotulo: `Calculados, ${STATUS_ROTULO.BENEFICIO_CALCULADO}`, valor: dados?.kpis.calculados, cor: "var(--ok)" },
+          ]
+        ).map((k) => (
+          <button
+            key={k.chave}
+            type="button"
+            onClick={() => setAba(k.chave)}
+            aria-pressed={aba === k.chave}
+            title="Clique para ver estes registros na tabela"
+            className={cn(
+              "flex min-h-[84px] flex-col justify-between rounded-xl border px-3.5 py-3 text-left transition",
+              aba === k.chave
+                ? "border-[var(--accent)] bg-[var(--surface-2)]"
+                : "border-[var(--border)] bg-[var(--surface)] hover:bg-[var(--surface-2)]",
+            )}
+          >
+            <span className="text-xs leading-snug text-dim">{k.rotulo}</span>
+            <span
+              className="text-[30px] font-semibold leading-none tabular-nums"
+              style={{ color: k.cor }}
+            >
+              {k.valor ?? 0}
+            </span>
+          </button>
+        ))}
+      </div>
+
+      {/* ABAS. A Fila de Trabalho é quem aguarda cálculo; Finalizados guarda quem já foi calculado. */}
+      <div className="mb-4 flex items-center gap-2">
+        {ABAS.map((a) => (
+          <button
+            key={a.chave}
+            type="button"
+            onClick={() => setAba(a.chave)}
+            className={cn(
+              "rounded-xl border px-3.5 py-2 text-sm font-semibold transition",
+              aba === a.chave
+                ? "border-[var(--accent)] bg-[var(--surface-2)] text-text"
+                : "border-[var(--border)] bg-[var(--surface)] text-dim hover:text-text",
+            )}
+          >
+            {a.rotulo}
+          </button>
+        ))}
+      </div>
 
       {/* BUSCA E FILTROS na mesma faixa, no padrão das demais telas de gestão: o campo de texto ocupa
           a largura e o ícone de filtro fica na ponta, com o badge de filtros ativos. */}
@@ -288,6 +475,49 @@ export default function BeneficiosPage() {
         </FiltroTrigger>
       </div>
 
+      {/* AÇÃO EM MASSA. Só aparece com alguém marcado, e o rótulo diz EXATAMENTE o que foi marcado:
+          a página filtrada, não a fila inteira. É a diferença entre finalizar 20 e finalizar 1.640. */}
+      {selecao.size > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-[var(--accent)] bg-[var(--surface-2)] px-3 py-2.5">
+          <span className="text-sm text-text">
+            {selecao.size} selecionada(s) nesta página
+          </span>
+          {(["AGUARDANDO_CALCULO", "BENEFICIO_CALCULADO"] as const).map((de) => {
+            const passo = ACAO[de];
+            if (!passo) return null;
+            const alvos = (dados?.items ?? []).filter(
+              (l) => selecao.has(l.admissaoId) && l.status === de,
+            );
+            if (!alvos.length) return null;
+            return (
+              <Button
+                key={de}
+                onClick={() =>
+                  setConfirmarLote({ para: passo.para, rotulo: passo.rotuloLote, n: alvos.length })
+                }
+                disabled={agindo}
+                className="px-3 py-2 text-[13px]"
+              >
+                {passo.rotuloLote} ({alvos.length})
+              </Button>
+            );
+          })}
+          <button
+            type="button"
+            onClick={() => setSelecao(new Set())}
+            className="ml-auto text-[13px] text-dim underline-offset-2 hover:text-text hover:underline"
+          >
+            Limpar seleção
+          </button>
+        </div>
+      )}
+
+      {flash && (
+        <p className="mb-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-ok">
+          {flash}
+        </p>
+      )}
+
       {erro && (
         <p
           className="mb-5 rounded-xl border border-[var(--border)] bg-[rgba(214,69,69,0.1)] px-3 py-2 text-sm text-danger"
@@ -303,20 +533,58 @@ export default function BeneficiosPage() {
               larguras somam 100%: o nome e o cliente ficam com a folga, porque são o que se lê.
               1000px é o teto que ainda CABE a 1366 com a barra lateral aberta (§A.20): acima disso a
               coluna Outros nascia fora da tela, e a fila é lida justamente por ela. */}
-          <table className="ds-table min-w-[1000px]">
+          {/* `w-full` com as larguras em PORCENTAGEM: a tabela ocupa o espaço disponível e as colunas
+              crescem junto, em vez de sobrar faixa vazia à direita. O mínimo continua existindo para
+              a tabela rolar em telas estreitas, em vez de espremer (§A.20). O mínimo subiu para 1340px
+              com a entrada das colunas Status e Matrícula: é onde todos os títulos ainda cabem
+              inteiros no cabeçalho. Abaixo disso a tabela ROLA, que é o comportamento pedido, em vez
+              de truncar o título da coluna (§A.20). */}
+          <table className="ds-table w-full min-w-[1340px] table-fixed">
             <thead>
               <tr>
-                <ColunaOrdenavel as="th" ord={ord} chave="candidato" className="w-[24%]">
+                {/* SELEÇÃO. O "todos" marca a PÁGINA FILTRADA, e o title diz isso com todas as
+                    letras: quem marca precisa saber que não marcou os 1.640. */}
+                <th className="w-[3%]">
+                  <input
+                    type="checkbox"
+                    aria-label="Selecionar todas as admissões desta página"
+                    title="Seleciona as admissões desta página, não a fila inteira"
+                    checked={selecionaveis.length > 0 && selecao.size === selecionaveis.length}
+                    onChange={(e) =>
+                      setSelecao(
+                        e.target.checked ? new Set(selecionaveis.map((l) => l.admissaoId)) : new Set(),
+                      )
+                    }
+                    disabled={selecionaveis.length === 0}
+                  />
+                </th>
+                <ColunaOrdenavel as="th" ord={ord} chave="candidato" className="w-[13%]">
                   Candidato
                 </ColunaOrdenavel>
-                <ColunaOrdenavel as="th" ord={ord} chave="dataAdmissao" className="w-[11%]">
+                <ColunaOrdenavel as="th" ord={ord} chave="dataAdmissao" className="w-[9%]">
                   Data adm.
                 </ColunaOrdenavel>
-                <ColunaOrdenavel as="th" ord={ord} chave="cliente" className="w-[25%]">
+                {/* MATRÍCULA (decisão do diretor): a mesma que a importação da frente de Cadastro
+                    grava. Só leitura aqui, para o time conferir o pacote ao lado do número que a
+                    folha usa. */}
+                <ColunaOrdenavel as="th" ord={ord} chave="matricula" className="w-[9%]">
+                  Matrícula
+                </ColunaOrdenavel>
+                <ColunaOrdenavel as="th" ord={ord} chave="cliente" className="w-[12%]">
                   Cliente
                 </ColunaOrdenavel>
+                {/* STATUS junto das INFORMATIVAS (decisão do diretor), antes das ações: o consultor
+                    bate o olho e vê o farol dos benefícios sem clicar em nada. Ordena pelo mesmo
+                    enum que a pill mostra, então seta e etiqueta nunca discordam. */}
+                <ColunaOrdenavel as="th" ord={ord} chave="status" className="w-[15%]">
+                  Status
+                </ColunaOrdenavel>
+                {/* AÇÕES NO CENTRO (decisão do diretor): na ponta direita ficava escondida, e é a
+                    coluna que a pessoa usa a cada linha. Vem logo depois do Cliente, que é onde o
+                    olho já está quando decide agir. */}
+                <th className="w-[7%]">Ações</th>
                 {siglas.map((s) => (
-                  <ColunaOrdenavel key={s} as="th" ord={ord} chave={s} className="w-[8%]">
+                  <ColunaOrdenavel key={s} as="th" ord={ord} chave={s} className="w-[6%]">
                     {s}
                   </ColunaOrdenavel>
                 ))}
@@ -345,9 +613,65 @@ export default function BeneficiosPage() {
                   return (
                     <Fragment key={l.admissaoId}>
                       <tr>
+                        <td className="text-center">
+                          {ACAO[l.status] ? (
+                            <input
+                              type="checkbox"
+                              aria-label={`Selecionar ${l.candidato}`}
+                              checked={selecao.has(l.admissaoId)}
+                              onChange={(e) =>
+                                setSelecao((atual) => {
+                                  const proximo = new Set(atual);
+                                  if (e.target.checked) proximo.add(l.admissaoId);
+                                  else proximo.delete(l.admissaoId);
+                                  return proximo;
+                                })
+                              }
+                            />
+                          ) : null}
+                        </td>
                         <td className="font-semibold">{caixaAlta(l.candidato)}</td>
                         <td className="text-center tabular-nums">{fmtData(l.dataAdmissao)}</td>
-                        <td>{rotuloCliente(l.codCliente, l.cliente)}</td>
+                        <td className="text-center tabular-nums">
+                          {l.matricula ?? <span className="text-faint">não informado</span>}
+                        </td>
+                        {/* CENTRALIZADO para casar com o cabeçalho (§A.12): a coluna era o único
+                            ponto em que título e conteúdo apontavam para lados diferentes. */}
+                        <td className="text-center">{rotuloCliente(l.codCliente, l.cliente)}</td>
+                        <td className="overflow-hidden text-center">
+                          <span className="inline-flex max-w-full justify-center">
+                            <StatusPill
+                              tone={STATUS_PILL[l.status].tom}
+                              label={STATUS_PILL[l.status].rotulo}
+                            />
+                          </span>
+                        </td>
+                        <td>
+                          <div className="flex items-center justify-center gap-1.5">
+                            {ACAO[l.status] && (
+                              <button
+                                type="button"
+                                onClick={() => avancar([l.admissaoId], ACAO[l.status].para)}
+                                disabled={agindo}
+                                title={ACAO[l.status].titulo}
+                                aria-label={ACAO[l.status].titulo}
+                                style={{ color: ACAO[l.status].cor, borderColor: ACAO[l.status].cor }}
+                                className="grid h-8 w-8 flex-none place-items-center rounded-lg border transition hover:bg-[var(--surface-2)] disabled:opacity-40"
+                              >
+                                <Icon name={ACAO[l.status].icone} className="h-4 w-4" />
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => setEditando(l)}
+                              title="Editar os benefícios no cadastro do candidato"
+                              aria-label="Editar os benefícios"
+                              className="grid h-8 w-8 flex-none place-items-center rounded-lg border border-[var(--border)] text-dim transition hover:border-[var(--accent)] hover:text-text"
+                            >
+                              <Icon name="pen" className="h-4 w-4" />
+                            </button>
+                          </div>
+                        </td>
                         {l.textoImportado ? (
                           /* IMPORTADA: o texto da planilha ocupa a faixa inteira dos benefícios, em
                              vez de fingir quatro colunas de sim ou não que ninguém apurou. */
@@ -422,6 +746,41 @@ export default function BeneficiosPage() {
         )}
       </GlassCard>
 
+      {/* CONFIRMAÇÃO DO LOTE, com a CONTAGEM: ação em massa sem número é como assinar em branco. */}
+      {confirmarLote && (
+        <ConfirmDialog
+          open
+          title={confirmarLote.rotulo}
+          message={`Esta ação vai atualizar ${confirmarLote.n} admissão(ões) selecionada(s) nesta página. As que já estiverem em outro estágio ficam como estão.`}
+          confirmLabel={confirmarLote.rotulo}
+          busy={agindo}
+          onCancel={() => setConfirmarLote(null)}
+          onConfirm={() =>
+            avancar(
+              (dados?.items ?? [])
+                .filter(
+                  (l) => selecao.has(l.admissaoId) && ACAO[l.status]?.para === confirmarLote.para,
+                )
+                .map((l) => l.admissaoId),
+              confirmarLote.para,
+            )
+          }
+        />
+      )}
+
+      {editando && (
+        <ModalPacote
+          linha={editando}
+          catalogo={catalogo}
+          onClose={() => setEditando(null)}
+          onSalvo={async (msg) => {
+            setEditando(null);
+            setFlash(msg);
+            await carregar();
+          }}
+        />
+      )}
+
       {/* MODAL DO VALOR (decisão do diretor). Leitura sobre leitura: não busca nada, só recorta o que
           a linha já trouxe. Uma célula clicada mostra aquele benefício; o "+N" mostra os demais. */}
       {detalhe && (
@@ -479,5 +838,130 @@ function ValorDoBeneficio({ sigla, valor }: { sigla: string; valor: string | nul
         ? "O valor do VT ainda não é cadastrado no sistema. Ele passa a vir do formulário de vale-transporte quando essa etapa for ligada."
         : "Este benefício está no pacote da pessoa, mas não tem valor cadastrado."}
     </p>
+  );
+}
+
+/**
+ * EDIÇÃO DO PACOTE, e ela grava NO CADASTRO DO CANDIDATO (`admissao_beneficio`), que é a fonte única.
+ * A tela de Benefícios não vira fonte paralela: editar aqui é editar lá, e o backend regrava o
+ * sinalizador na MESMA transação, para a coluna "Pendências Obrig." e o KPI não discordarem.
+ *
+ * O PAYLOAD É O PACOTE COMPLETO, não um delta: desmarcar é tão legítimo quanto marcar, e o backend
+ * substitui o conjunto inteiro. Valor é opcional, porque benefício sem valor cadastrado é estado
+ * real (o VT hoje é assim).
+ */
+function ModalPacote({
+  linha,
+  catalogo,
+  onClose,
+  onSalvo,
+}: {
+  linha: Linha;
+  catalogo: { id: string; nome: string }[];
+  onClose: () => void;
+  onSalvo: (mensagem: string) => void | Promise<void>;
+}) {
+  const [itens, setItens] = useState<Record<string, { marcado: boolean; valor: string }>>(() => {
+    const inicial: Record<string, { marcado: boolean; valor: string }> = {};
+    for (const c of catalogo) {
+      const atual = linha.pacote.find((p) => p.beneficioId === c.id);
+      inicial[c.id] = { marcado: Boolean(atual), valor: atual?.valor ?? "" };
+    }
+    return inicial;
+  });
+  const [salvando, setSalvando] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+
+  const marcados = Object.values(itens).filter((i) => i.marcado).length;
+
+  async function salvar() {
+    setSalvando(true);
+    setErro(null);
+    try {
+      const payload = Object.entries(itens)
+        .filter(([, v]) => v.marcado)
+        .map(([beneficioId, v]) => ({
+          beneficioId,
+          // Campo vazio vira null (benefício sem valor), e não zero: zero seria um valor cadastrado.
+          valor: v.valor.trim() === "" ? null : Number(v.valor.replace(",", ".")),
+        }));
+      await apiFetch(`/beneficios-fila/${linha.admissaoId}/pacote`, {
+        method: "PATCH",
+        body: { itens: payload },
+      });
+      await onSalvo(`Benefícios de ${caixaAlta(linha.candidato)} atualizados no cadastro.`);
+    } catch (e) {
+      setErro(e instanceof Error ? e.message : "Falha ao salvar os benefícios.");
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  return (
+    <Modal onClose={onClose} className="max-w-lg" ariaLabel="Editar os benefícios">
+      <h2 className="mb-1 text-[17px] font-semibold text-text">Editar Benefícios</h2>
+      <p className="mb-1 text-sm text-dim">{caixaAlta(linha.candidato)}</p>
+      <p className="mb-4 text-[12.5px] text-faint">
+        o que for salvo aqui grava no cadastro do candidato, que é a fonte única
+      </p>
+
+      {erro && (
+        <p className="mb-3 rounded-xl border border-[var(--border)] bg-[rgba(214,69,69,0.1)] px-3 py-2 text-sm text-danger">
+          {erro}
+        </p>
+      )}
+
+      <div className="ea-scroll mb-4 flex max-h-[46vh] flex-col gap-1.5 overflow-y-auto">
+        {catalogo.map((c) => {
+          const item = itens[c.id] ?? { marcado: false, valor: "" };
+          return (
+            <label
+              key={c.id}
+              className="flex items-center gap-3 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2"
+            >
+              <input
+                type="checkbox"
+                checked={item.marcado}
+                onChange={(e) =>
+                  setItens((atual) => ({
+                    ...atual,
+                    [c.id]: { ...item, marcado: e.target.checked },
+                  }))
+                }
+              />
+              <span className="min-w-0 flex-1 truncate text-sm text-text">{c.nome}</span>
+              <input
+                type="text"
+                inputMode="decimal"
+                value={item.valor}
+                onChange={(e) =>
+                  setItens((atual) => ({ ...atual, [c.id]: { ...item, valor: e.target.value } }))
+                }
+                disabled={!item.marcado}
+                placeholder="valor"
+                aria-label={`Valor de ${c.nome}`}
+                className="h-9 w-28 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 text-right text-sm text-text outline-none transition placeholder:text-faint focus:border-[var(--accent)] disabled:opacity-40"
+              />
+            </label>
+          );
+        })}
+      </div>
+
+      <div className="flex items-center gap-3">
+        <span className="text-[12.5px] text-faint">{marcados} benefício(s) no pacote</span>
+        <div className="ml-auto flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl border border-[var(--border)] px-3 py-2 text-sm text-dim transition hover:text-text"
+          >
+            Cancelar
+          </button>
+          <Button onClick={salvar} disabled={salvando} className="px-4 py-2">
+            {salvando ? "Salvando…" : "Salvar no cadastro"}
+          </Button>
+        </div>
+      </div>
+    </Modal>
   );
 }

@@ -58,8 +58,11 @@ export const MENUS: MenuDef[] = [
     href: "/diretoria",
     grupo: "OPERACAO",
     ordem: 1,
-    // Leitura agregada, sem operação própria de escrita.
-    operacoes: [],
+    // A LEITURA DOS NOMES é reivindicada (melhoria EAC, item 13). O painel em si é contagem e segue
+    // aberto, mas `nomes` devolve NOME de pessoa: operação não reivindicada não passa pelo guard e
+    // ficaria alcançável por qualquer autenticado pela URL. Quem tem o Controle Gerencial vê
+    // (decisão do diretor, §A.23/§A.6).
+    operacoes: ["GerencialController.nomes"],
   },
   {
     codigo: "liberacao",
@@ -109,6 +112,16 @@ export const MENUS: MenuDef[] = [
       "ReauditoriaController.reauditar",
       "ReauditoriaController.validarPorHumano",
       "ReauditoriaController.descartar",
+      // UNIFORME editável no modal do olho (melhoria EAC, item 11b). Fica no menu da ESTEIRA porque é
+      // lá que a edição vive, e sai de graça para o COMUM, que já tem este menu: corrigir tamanho é
+      // trabalho de consultor, com a trilha registrando quem mudou.
+      "AdmissoesController.atualizarUniforme",
+      // IMPORTAÇÃO DE MATRÍCULAS (item 11d): o botão vive na frente de CADASTRO, então o menu que a
+      // governa é este. A PRÉVIA também é reivindicada, e não só a gravação: ela lê a planilha e
+      // devolve NOME de candidato, e operação não reivindicada fica aberta a qualquer autenticado
+      // (§A.23/§A.6).
+      "AdmissoesController.previaMatriculas",
+      "AdmissoesController.aplicarMatriculas",
     ],
   },
   {
@@ -132,6 +145,10 @@ export const MENUS: MenuDef[] = [
     ordem: 6,
     // Só a MUTAÇÃO (editar). listar/obter ficam abertos (dado de trabalho, também usados por Análise);
     // deletar segue @Roles admin.
+    //
+    // A IMPORTAÇÃO DE MATRÍCULAS MUDOU DE MENU junto com o botão: ela vive na frente de Cadastro
+    // (decisão do diretor), então as operações passaram para o menu `esteira`. Deixá-las aqui daria
+    // 403 para quem tem a Esteira e não tem o Gerenciador, que é justamente o time de cadastro.
     operacoes: ["AdmissoesController.editar"],
   },
   {
@@ -214,7 +231,13 @@ export const MENUS: MenuDef[] = [
     href: "/beneficios",
     grupo: "OPERACAO",
     ordem: 10,
-    operacoes: ["BeneficiosFilaController.listar"],
+    // A LEITURA e as ESCRITAS da tela, todas reivindicadas: operação não reivindicada fica ABERTA a
+    // qualquer autenticado, e aqui há escrita no cadastro do candidato (§A.23/§A.6).
+    operacoes: [
+      "BeneficiosFilaController.listar",
+      "BeneficiosFilaController.avancar",
+      "BeneficiosFilaController.editarPacote",
+    ],
   },
   // ── Administração ─────────────────────────────────────────────────────────
   {

@@ -2,7 +2,13 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { ClicksignStatus, Origem } from "@ea/shared-types";
-import { ROTULO_ITEM_EPI, type ItemEpi } from "@ea/shared-types";
+import {
+  ROTULO_ITEM_EPI,
+  TAMANHOS_BOTA,
+  TAMANHOS_CALCA,
+  TAMANHOS_CAMISETA,
+  type ItemEpi,
+} from "@ea/shared-types";
 import { Select } from "@/components/ui/Select";
 import { apiFetch, apiOpenInline, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
@@ -323,6 +329,22 @@ export function AdmissaoDetalheModal({
    * `PATCH /admissoes/:id/corrigir-cpf` (item 9). Toda trava (fase, régua do par, dígito do CPF,
    * colisão) continua no backend, que é a autoridade: a tela só mostra o que ele responde.
    */
+  /**
+   * EDIÇÃO DO UNIFORME (melhoria EAC, item 11b). O tamanho chega depois da liberação (o candidato
+   * mede depois), e até aqui não havia por onde corrigir: a admissão ficava com o dado errado.
+   *
+   * A ESCRITA É DAQUI, do modal em que a pessoa já está trabalhando (decisão do diretor). O backend
+   * regrava o sinalizador na mesma transação, então a coluna de pendências e o KPI continuam
+   * concordando; a tela só recarrega a ficha depois de salvar.
+   */
+  const [uniformeAberto, setUniformeAberto] = useState(false);
+  const [uniPossui, setUniPossui] = useState<"sim" | "nao">("sim");
+  const [uniCamiseta, setUniCamiseta] = useState("");
+  const [uniCalca, setUniCalca] = useState("");
+  const [uniBota, setUniBota] = useState("");
+  const [uniErro, setUniErro] = useState<string | null>(null);
+  const [salvandoUniforme, setSalvandoUniforme] = useState(false);
+
   const [trocaAberta, setTrocaAberta] = useState(false);
   const [trocaCodCliente, setTrocaCodCliente] = useState("");
   const [trocaCargoId, setTrocaCargoId] = useState("");
@@ -502,6 +524,43 @@ export function AdmissaoDetalheModal({
       return (e.data as { message?: string }).message ?? e.message;
     }
     return e instanceof Error ? e.message : padrao;
+  }
+
+  /** Abre o editor já com o que está gravado, para a pessoa corrigir e não redigitar. */
+  function abrirUniforme() {
+    setUniPossui(data?.uniforme?.possui === false ? "nao" : "sim");
+    setUniCamiseta(data?.uniforme?.camiseta ?? "");
+    setUniCalca(data?.uniforme?.calca ?? "");
+    setUniBota(data?.uniforme?.bota ?? "");
+    setUniErro(null);
+    setUniformeAberto(true);
+  }
+
+  async function salvarUniforme() {
+    setSalvandoUniforme(true);
+    setUniErro(null);
+    try {
+      await apiFetch(`/admissoes/${admissaoId}/uniforme`, {
+        method: "PATCH",
+        token,
+        body: {
+          uniforme: {
+            possui: uniPossui === "sim",
+            // Campo vazio vai AUSENTE, e não como string vazia: o DTO valida contra o catálogo, e
+            // "" não é tamanho. Quem não escolheu segue sem tamanho gravado.
+            camiseta: uniPossui === "sim" && uniCamiseta ? uniCamiseta : undefined,
+            calca: uniPossui === "sim" && uniCalca ? uniCalca : undefined,
+            bota: uniPossui === "sim" && uniBota ? uniBota : undefined,
+          },
+        },
+      });
+      setUniformeAberto(false);
+      carregar(); // recarrega a ficha: o tamanho novo aparece na hora.
+    } catch (e) {
+      setUniErro(e instanceof ApiError ? e.message : "Falha ao salvar o uniforme.");
+    } finally {
+      setSalvandoUniforme(false);
+    }
   }
 
   async function trocarClienteCargo() {
@@ -739,6 +798,94 @@ export function AdmissaoDetalheModal({
                   </>
                 )}
               </div>
+
+              {/* EDIÇÃO DO UNIFORME (item 11b). O tamanho costuma chegar DEPOIS da liberação, e até
+                  aqui não havia por onde corrigir. Fica fechado por padrão: a ficha continua sendo de
+                  leitura, e a edição é um passo deliberado. */}
+              {!uniformeAberto ? (
+                <button
+                  type="button"
+                  onClick={abrirUniforme}
+                  className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-[12.5px] font-semibold text-dim transition hover:border-[var(--accent)] hover:text-text"
+                >
+                  <Icon name="pen" className="h-3.5 w-3.5" />
+                  Editar uniforme
+                </button>
+              ) : (
+                <div className="mt-3 rounded-xl border border-[var(--accent)] bg-[var(--surface-2)] p-3">
+                  {uniErro && (
+                    <p className="mb-2 text-[12.5px] text-danger" role="alert">
+                      {uniErro}
+                    </p>
+                  )}
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    <label className="flex flex-col gap-1 text-[12px] text-dim">
+                      Possui uniforme
+                      <Select
+                        value={uniPossui}
+                        onChange={(v) => setUniPossui(v === "nao" ? "nao" : "sim")}
+                        ariaLabel="Possui uniforme"
+                        options={[
+                          { value: "sim", label: "Sim" },
+                          { value: "nao", label: "Não" },
+                        ]}
+                      />
+                    </label>
+                    {/* Os tamanhos só existem para quem POSSUI: responder "não" limpa os três no
+                        backend, pelo mesmo normalizador da liberação. */}
+                    <label className="flex flex-col gap-1 text-[12px] text-dim">
+                      Camiseta
+                      <Select
+                        value={uniCamiseta}
+                        onChange={setUniCamiseta}
+                        disabled={uniPossui !== "sim"}
+                        ariaLabel="Tamanho da camiseta"
+                        placeholder="Tamanho"
+                        options={TAMANHOS_CAMISETA.map((t) => ({ value: t, label: t }))}
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-[12px] text-dim">
+                      Calça
+                      <Select
+                        value={uniCalca}
+                        onChange={setUniCalca}
+                        disabled={uniPossui !== "sim"}
+                        ariaLabel="Tamanho da calça"
+                        placeholder="Tamanho"
+                        options={TAMANHOS_CALCA.map((t) => ({ value: t, label: t }))}
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-[12px] text-dim">
+                      Bota
+                      <Select
+                        value={uniBota}
+                        onChange={setUniBota}
+                        disabled={uniPossui !== "sim"}
+                        ariaLabel="Tamanho da bota"
+                        placeholder="Tamanho"
+                        options={TAMANHOS_BOTA.map((t) => ({ value: t, label: t }))}
+                      />
+                    </label>
+                  </div>
+                  <div className="mt-3 flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setUniformeAberto(false)}
+                      className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-[12.5px] text-dim transition hover:text-text"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={salvarUniforme}
+                      disabled={salvandoUniforme}
+                      className="rounded-lg border border-[var(--accent)] px-3 py-1.5 text-[12.5px] font-semibold text-accent transition hover:bg-[var(--surface)] disabled:opacity-40"
+                    >
+                      {salvandoUniforme ? "Salvando…" : "Salvar uniforme"}
+                    </button>
+                  </div>
+                </div>
+              )}
             </Bloco>
 
             {/* BLOCO 2 — Trabalho e cadastro */}

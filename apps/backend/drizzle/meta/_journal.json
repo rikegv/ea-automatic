@@ -463,6 +463,27 @@
       "when": 1786546158316,
       "tag": "0065_flowery_tomorrow_man",
       "breakpoints": true
+    },
+    {
+      "idx": 66,
+      "version": "7",
+      "when": 1786571316685,
+      "tag": "0066_status_beneficio_valores",
+      "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1786571337728,
+      "tag": "0067_status_beneficio_migra_linhas",
+      "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1786571337729,
+      "tag": "0068_beneficio_dois_estagios",
+      "breakpoints": true
     }
   ]
 }

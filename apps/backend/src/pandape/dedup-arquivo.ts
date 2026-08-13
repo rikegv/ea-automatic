@@ -10,8 +10,23 @@ import { createHash } from "node:crypto";
  * §A.6: nada aqui toca nome de arquivo ou URL do Pandapé. O digest é irreversível e não é PII.
  */
 
-/** Estado de documento que força nova tentativa de coleta/auditoria, independente de marca. */
-const ESTADOS_SEMPRE_REPROCESSA = new Set(["INCONFORME", "AGUARDANDO_AUDITORIA"]);
+/**
+ * Estado que força nova tentativa de coleta, independente de marca.
+ *
+ * SÓ `AGUARDANDO_AUDITORIA` (correção do bug de 13/08/2026): ali o veredito não existe, e a coleta é
+ * o caminho de retentar a I.A. `INCONFORME` SAIU daqui: documento reprovado já tem veredito, e ele
+ * só precisa de coleta nova se a pessoa REENVIAR algo, que é o mesmo critério do `ENTREGUE`. Com o
+ * inconforme na lista, as 108 admissões reprovadas do acervo rebaixavam todos os arquivos do Pandapé
+ * a cada 12 minutos, para sempre, sem nada mudar do outro lado.
+ */
+const ESTADOS_SEMPRE_REPROCESSA = new Set(["AGUARDANDO_AUDITORIA"]);
+
+/**
+ * Estados cujo rebaixe depende de o acervo do Pandapé ter CRESCIDO além das marcas: só chegou coisa
+ * nova se o total de anexos passou do que já foi baixado. `ENTREGUE` sempre foi assim; `INCONFORME`
+ * passou a ser, pelo motivo acima.
+ */
+const ESTADOS_SO_COM_ARQUIVO_NOVO = new Set(["ENTREGUE", "INCONFORME"]);
 
 /** O que fazer com um TIPO de documento antes de gastar download. */
 export type AcaoColeta = "PULAR_SEM_BAIXAR" | "BAIXAR";
@@ -30,14 +45,15 @@ export interface ContextoColeta {
 /**
  * Decide se o tipo precisa ser baixado. A ordem das regras é o contrato:
  *
- *  1. INCONFORME / AGUARDANDO_AUDITORIA sempre baixam: documento reprovado pode ser reenviado, e
- *     auditoria que não completou tem de ser retentada (a coleta fica gravada, §A.6/desacoplamento).
+ *  1. AGUARDANDO_AUDITORIA sempre baixa: a auditoria que não completou tem de ser retentada, e a
+ *     coleta é o caminho dela (a marca fica gravada mesmo assim, §A.6/desacoplamento).
  *  2. **Acervo idêntico ao já marcado** (mesma quantidade, com pelo menos uma marca) → PULA SEM
  *     BAIXAR. É esta regra que torna o ciclo repetido barato e que dá idempotência ao REPROCESSO:
  *     rodar a varredura duas vezes não baixa nem re-audita o que já está íntegro.
  *  3. REPROCESSO → baixa (é o caminho do passivo: o que está gravado veio do fluxo antigo).
- *  4. Tipo já ENTREGUE → pula, EXCETO quando o acervo do Pandapé cresceu além das marcas: aí chegou
- *     arquivo novo e o conjunto precisa ser rebaixado para receber novo veredito.
+ *  4. Tipo já ENTREGUE ou INCONFORME → pula, EXCETO quando o acervo do Pandapé cresceu além das
+ *     marcas: aí chegou arquivo novo e o conjunto precisa ser rebaixado para receber novo veredito.
+ *     Os dois têm veredito; o que os faz voltar à fila é o candidato reenviar, não o relógio.
  *  5. Caso restante (PENDENTE, ou tipo inédito) → baixa.
  *
  * DOIS LIMITES CONHECIDOS, declarados de propósito, ambos por não podermos persistir nada derivado
@@ -55,7 +71,7 @@ export function decidirColeta(ctx: ContextoColeta): AcaoColeta {
     return "PULAR_SEM_BAIXAR";
   }
   if (ctx.reprocessar) return "BAIXAR";
-  if (ctx.estadoAtual === "ENTREGUE") {
+  if (ctx.estadoAtual && ESTADOS_SO_COM_ARQUIVO_NOVO.has(ctx.estadoAtual)) {
     const podeTerArquivoNovo = ctx.hashesConhecidos > 0 && ctx.arquivosNoPandape > ctx.hashesConhecidos;
     if (!podeTerArquivoNovo) return "PULAR_SEM_BAIXAR";
   }

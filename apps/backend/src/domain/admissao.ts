@@ -208,6 +208,12 @@ const FAROL_MANUAL: ReadonlySet<FarolGlobal> = new Set<FarolGlobal>([
 
 /** Entrada da derivação automática do farol global. */
 export interface FarolInput {
+  /**
+   * A admissão está marcada como DE BANCO (`admissoes.is_banco`)? Marcada, o farol é
+   * `BANCO_AGUARDAR` enquanto durar a marcação: é decisão explícita do usuário, e não algo que a
+   * automação derive. Ver o porquê em `deriveFarolGlobal`.
+   */
+  isBanco?: boolean | null;
   /** Farol atual (preserva os estados manuais e a escolha de ADMISSAO_CONCLUIDA). */
   atual: FarolGlobal;
   /** AUDITORIA concluída (status ANALISE_OK). */
@@ -226,6 +232,24 @@ export interface FarolInput {
  */
 export function deriveFarolGlobal(i: FarolInput): FarolGlobal {
   if (FAROL_MANUAL.has(i.atual)) return i.atual;
+  /**
+   * A MARCAÇÃO DE BANCO MANDA (correção do bug de 13/08/2026).
+   *
+   * O DEFEITO: o diretor marcava a admissão como banco (pelo seletor de status ou pelo campo
+   * "Admissão de banco") e o status voltava para "Em Admissão" sozinho. A causa era esta função:
+   * `BANCO_AGUARDAR` não está em `FAROL_MANUAL`, então QUALQUER recompute (e o `editar` chama um
+   * logo depois de gravar) recalculava pela regra automática, que exige auditoria concluída, exame
+   * apto e nenhuma data. Não batendo os três, o resultado era `EM_ADMISSAO`, e a escolha do diretor
+   * durava o tempo da transação.
+   *
+   * A CORREÇÃO NÃO FOI TORNAR O FAROL MANUAL, de propósito: pôr `BANCO_AGUARDAR` em `FAROL_MANUAL`
+   * congelaria a derivação também para quem chega nele automaticamente, e a regra do §A.3 ("ao
+   * preencher a data, volta a EM_ADMISSAO") deixaria de valer. O que manda agora é a FLAG
+   * `is_banco`, que é o campo que já existia para dizer "esta admissão é de banco": enquanto ela
+   * estiver marcada, o farol é `BANCO_AGUARDAR`, e desmarcá-la devolve a admissão ao fluxo normal.
+   * Estado explícito do usuário, e não um farol que a automação teima em reescrever.
+   */
+  if (i.isBanco) return "BANCO_AGUARDAR";
   if (i.auditoriaConcluida && i.exameApto && !i.temDataAdmissao) return "BANCO_AGUARDAR";
   return "EM_ADMISSAO";
 }

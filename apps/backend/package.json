@@ -45,6 +45,7 @@
     "cookie-parser": "^1.4.7",
     "csv-parse": "^7.0.0",
     "drizzle-orm": "^0.38.3",
+    "exceljs": "^4.4.0",
     "ioredis": "5.10.1",
     "postgres": "^3.4.5",
     "reflect-metadata": "^0.2.2",
