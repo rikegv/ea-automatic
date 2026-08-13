@@ -1101,7 +1101,7 @@ export class EsteiraService {
     // e no-op quando não há ASO na staging.
     if (tipo === "EXAME" && result.upd.status === "APTO" && result.upd.concluida) {
       try {
-        await this.auditoria.arquivarAsoManual(frente.admissaoId);
+        await this.auditoria.arquivarAso(frente.admissaoId);
       } catch (err) {
         this.logger.warn(
           `ASO não arquivado no APTO manual da admissão ${frente.admissaoId}: ${
@@ -1865,6 +1865,43 @@ export class EsteiraService {
     // está e o consultor reenvia.
     const aptoAuto = asoValidado ? await this.concluirExamePorAso(admissaoId, user) : undefined;
 
+    // ARQUIVAMENTO DO ASO NO PRONTUÁRIO (correção do bug de 13/08/2026). Este era o buraco: o ASO
+    // validado pela I.A concluía a frente e ficava só na staging, esperando um TTL de 48h que o
+    // apagava. A crença registrada no item 12 era de que a I.A já arquivava sozinha, e arquivava
+    // mesmo, só que no OUTRO caminho: o passo 4.5 vive em `auditarConjunto`, a auditoria da RÉGUA.
+    // O ASO da operação sobe aqui, pelo `classificarAso`, que classifica e não arquiva. Medido na
+    // base: 186 admissões APTAS com ASO validado, `drive_aso_url` nulo em todas.
+    //
+    // MESMO MÉTODO DO APTO MANUAL, de propósito: um gatilho novo com regra própria é a divergência
+    // garantida na primeira mudança. `arquivarAso` é idempotente (`precisaArquivarDrive`), no-op sem
+    // ASO na staging, e remove o arquivo da staging ao subir, então o fechamento da régua não
+    // reenvia o mesmo ASO.
+    //
+    // A CONDIÇÃO É O APTO, não o veredito, espelhando a regra do diretor ("no APTO o ASO vai para o
+    // prontuário"). Cobre as duas ordens em que a operação faz isso: ASO primeiro e a frente
+    // concluindo agora (`aptoAuto`), e frente já APTA de antes com o ASO chegando depois, caso em
+    // que `concluirExamePorAso` devolve `undefined` por já estar concluída e o arquivamento ficaria
+    // de fora se a condição olhasse só a transição.
+    //
+    // BEST-EFFORT E FORA DE TRANSAÇÃO, igual ao caminho manual: é I/O de Drive e não pode derrubar
+    // um upload de ASO que já está gravado e julgado. A CONSULTA da frente também entra no `try`,
+    // e não na condição do `if`: ela é parte do mesmo esforço opcional, e um erro de leitura ali
+    // derrubaria o upload pelo motivo mais bobo possível.
+    if (asoValidado) {
+      try {
+        if (aptoAuto !== undefined || (await this.exameConcluidoApto(admissaoId))) {
+          await this.auditoria.arquivarAso(admissaoId);
+        }
+      } catch (err) {
+        // §A.6: só o id da admissão, nunca nome, CPF ou caminho de arquivo.
+        this.logger.warn(
+          `ASO não arquivado no APTO da I.A (admissão ${admissaoId}): ${
+            err instanceof Error ? err.message : "erro"
+          }. A frente concluiu; o arquivamento pode ser refeito.`,
+        );
+      }
+    }
+
     return {
       ok: true,
       aso: { nome, registradoEm },
@@ -1877,6 +1914,21 @@ export class EsteiraService {
       ...(sinalizador ? { sinalizador } : {}),
       ...(aptoAuto ? { aptoAuto } : {}),
     };
+  }
+
+  /**
+   * A frente EXAME desta admissão já está APTA e concluída? SOMENTE LEITURA.
+   *
+   * Serve à ordem inversa do fluxo do ASO: exame marcado APTO à mão primeiro (sem documento) e o
+   * ASO chegando depois. Nesse caso `concluirExamePorAso` não devolve transição (a frente já estava
+   * concluída, e ele é idempotente de propósito), então sem esta consulta o arquivamento não
+   * aconteceria justamente na admissão que já passou pelo APTO.
+   */
+  private async exameConcluidoApto(admissaoId: string): Promise<boolean> {
+    const frente = await this.db.query.frentesAdmissao.findFirst({
+      where: and(eq(frentesAdmissao.admissaoId, admissaoId), eq(frentesAdmissao.tipo, "EXAME")),
+    });
+    return frente?.status === "APTO" && Boolean(frente.concluida);
   }
 
   /**

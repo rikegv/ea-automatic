@@ -763,20 +763,32 @@ export class AuditoriaService {
   }
 
   /**
-   * ARQUIVAMENTO DO ASO NO APTO MANUAL (OST melhorias EAC, item 12).
+   * ARQUIVAMENTO DO ASO NO PRONTUÁRIO, PELOS DOIS CAMINHOS DO APTO.
    *
-   * O ASO já sobe sozinho quando a I.A o valida (passo 4.5). Falta o caminho em que um humano
-   * (Master/Super Admin) marca o Exame como APTO na esteira sem a validação da I.A: ali o ASO fica na
-   * staging e nunca é arquivado. Este método fecha esse buraco REUSANDO `arquivarAsoNoDrive`, sem
-   * duplicar nada.
+   * Nasceu para o APTO MANUAL (OST melhorias EAC, item 12) partindo de uma premissa que a base
+   * desmentiu: a de que "o ASO já sobe sozinho quando a I.A o valida (passo 4.5)". O passo 4.5 vive
+   * em `auditarConjunto`, que é o caminho da RÉGUA (tela de Auditoria). O ASO da operação real não
+   * passa por ali: ele sobe na aba EXAME (`EsteiraService.anexarAso`), que chama `classificarAso`,
+   * um classificador que de propósito não arquiva nada. Resultado medido em 13/08/2026: 186
+   * admissões APTAS com ASO validado pela I.A e `drive_aso_url` nulo em TODAS, ou seja, nenhum ASO
+   * jamais chegou à subpasta ASO do prontuário por este caminho.
    *
-   * IDEMPOTENTE E SEGURO POR CONSTRUÇÃO, porque a esteira o chama BEST-EFFORT depois da transição:
-   *  - `precisaArquivarDrive` já barra o re-arquivamento quando a I.A subiu o ASO antes (não abre
-   *    segunda pasta nem re-sobe).
+   * Por isso o método deixou de ser "do APTO manual" e passou a ser o ponto ÚNICO de arquivamento do
+   * ASO, chamado pelos dois caminhos que levam a frente EXAME a APTO:
+   *  - `mudarStatus`, quando um humano marca APTO na esteira;
+   *  - `anexarAso`, quando o veredito da I.A conclui a frente sozinho (transição pós-ASO).
+   *
+   * IDEMPOTENTE E SEGURO POR CONSTRUÇÃO, porque os dois o chamam BEST-EFFORT depois da transição:
+   *  - `precisaArquivarDrive` barra o re-arquivamento (não abre segunda pasta nem re-sobe);
    *  - sem ASO na staging (o APTO manual pode não ter documento nenhum), é no-op silencioso.
    * Nada aqui altera a frente nem o farol: é só o arquivo indo para a pasta do candidato.
+   *
+   * NÃO DUPLICA COM O FECHAMENTO DA RÉGUA, e o encaixe já existia esperando este gatilho:
+   * `arquivarAsoNoDrive` remove o ASO da staging ao subir, então o lote do fechamento não o
+   * reenvia, e `completarStagingParaArquivamento` já exclui o ASO dos faltantes quando
+   * `drive_aso_url` está gravado, então o Pandapé também não é chamado para rebaixá-lo.
    */
-  async arquivarAsoManual(admissaoId: string): Promise<{ pastaUrl: string } | undefined> {
+  async arquivarAso(admissaoId: string): Promise<{ pastaUrl: string } | undefined> {
     const adm = await this.carregarAdmissao(admissaoId);
     if (!precisaArquivarDrive(adm.driveAsoUrl)) return undefined; // já arquivado (caminho da I.A).
 

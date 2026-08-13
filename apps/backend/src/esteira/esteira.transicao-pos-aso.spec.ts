@@ -122,6 +122,9 @@ function montar(f: Fixtures) {
         }),
       },
       tiposDocumento: { findFirst: async () => ({ id: "tipo-aso", codigo: "ASO" }) },
+      // Lido pelo arquivamento do ASO, para cobrir a ordem inversa (frente já APTA, ASO chegando
+      // depois), em que não há transição nova para servir de gatilho.
+      frentesAdmissao: { findFirst: async () => irmas.find((i) => i.tipo === "EXAME") },
       // Lido pelo caminho de falha da I.A, para devolver à tela o motivo que a rotina de falha
       // acabou de gravar (o consultor precisa saber por que o ASO não foi julgado).
       documentosAdmissao: {
@@ -149,6 +152,8 @@ function montar(f: Fixtures) {
     // exatamente o alarme que o diretor pediu (recalcular o sinalizador não pode criar gatilho de
     // conclusão nem de arquivamento).
     sinalizadorApenas: vi.fn(async () => "INCONFORMIDADE"),
+    // O arquivamento do ASO no prontuário. É o mesmo método do APTO manual, de propósito.
+    arquivarAso: vi.fn(async () => ({ pastaUrl: "https://drive.google.com/drive/folders/xyz" })),
   };
 
   const svc = new EsteiraService(exec as never, {} as never, auditoria as never);
@@ -339,6 +344,90 @@ describe("o veredito da I.A vira estado e motivo do documento", () => {
   });
 
   it("a coleta é gravada ANTES da I.A, e sem fingir veredito", async () => {
+    const { svc, escritas } = montar({ status: "AGENDADO", vereditoIa: "INCONFORME" });
+
+    await svc.anexarAso(ADMISSAO_ID, ARQUIVO);
+
+    const coleta = escritas.find((e) => e.tabela === documentosAdmissao)?.valores;
+    // AGUARDANDO_AUDITORIA, não ENTREGUE: o arquivo chegou, o veredito ainda não.
+    expect(coleta).toMatchObject({ estado: "AGUARDANDO_AUDITORIA" });
+    expect(coleta?.observacao).toContain("1234 bytes");
+  });
+});
+
+/**
+ * O ASO VAI PARA O PRONTUÁRIO NO APTO (bug de produção, 13/08/2026).
+ *
+ * O ASO validado pela I.A concluía a frente e ficava só na staging, onde o TTL de 48h o apagava.
+ * A crença registrada no item 12 era de que "a I.A já arquiva sozinha", e arquiva mesmo, mas no
+ * caminho da RÉGUA (`auditarConjunto`, passo 4.5), que não é por onde o ASO da operação sobe: ele
+ * sobe aqui, pelo `classificarAso`, que classifica e não arquiva. A medição na base fechou o
+ * diagnóstico: 186 admissões APTAS com ASO validado, `drive_aso_url` nulo em TODAS as 186.
+ *
+ * O item 12 não tinha teste nenhum, e é por isso que a metade que faltava passou despercebida.
+ * Estes `it` cobrem as duas ordens em que a operação chega ao APTO e, principalmente, os limites:
+ * ASO reprovado e exame CANCELADO não arquivam nada.
+ */
+describe("arquivamento do ASO no prontuário", () => {
+  it("ASO validado que conclui a frente vai para o prontuário", async () => {
+    const { svc, auditoria } = montar({ status: "AGENDADO", vereditoIa: "VALIDADO" });
+
+    const r = (await svc.anexarAso(ADMISSAO_ID, ARQUIVO)) as Record<string, unknown>;
+
+    expect(r.aptoAuto).toMatchObject({ para: "APTO" });
+    expect(auditoria.arquivarAso).toHaveBeenCalledWith(ADMISSAO_ID);
+  });
+
+  it("ORDEM INVERSA: frente já APTA de antes, ASO chegando depois, também arquiva", async () => {
+    // Aqui não há transição nova (`concluirExamePorAso` é idempotente e devolve undefined), então
+    // sem a consulta da frente o arquivamento ficaria de fora justamente de quem já passou do APTO.
+    const { svc, auditoria } = montar({ status: "APTO", concluida: true });
+
+    const r = (await svc.anexarAso(ADMISSAO_ID, ARQUIVO)) as Record<string, unknown>;
+
+    expect(r).not.toHaveProperty("aptoAuto");
+    expect(auditoria.arquivarAso).toHaveBeenCalledWith(ADMISSAO_ID);
+  });
+
+  it("ASO reprovado NÃO vai para o prontuário", async () => {
+    const { svc, auditoria } = montar({ status: "AGENDADO", vereditoIa: "INCONFORME" });
+
+    await svc.anexarAso(ADMISSAO_ID, ARQUIVO);
+
+    expect(auditoria.arquivarAso).not.toHaveBeenCalled();
+  });
+
+  it("I.A indisponível NÃO arquiva (sem veredito não há APTO)", async () => {
+    const { svc, auditoria } = montar({ status: "AGENDADO", iaFalha: true });
+
+    await svc.anexarAso(ADMISSAO_ID, ARQUIVO);
+
+    expect(auditoria.arquivarAso).not.toHaveBeenCalled();
+  });
+
+  it("exame CANCELADO não arquiva: a frente não está APTA", async () => {
+    const { svc, auditoria } = montar({ status: "CANCELADO" });
+
+    await svc.anexarAso(ADMISSAO_ID, ARQUIVO);
+
+    expect(auditoria.arquivarAso).not.toHaveBeenCalled();
+  });
+
+  it("falha no Drive NÃO derruba o upload já gravado e julgado", async () => {
+    const { svc, auditoria } = montar({ status: "AGENDADO", vereditoIa: "VALIDADO" });
+    auditoria.arquivarAso.mockRejectedValueOnce(new Error("Drive fora do ar"));
+
+    const r = (await svc.anexarAso(ADMISSAO_ID, ARQUIVO)) as Record<string, unknown>;
+
+    // A frente concluiu e o veredito está gravado: o arquivamento é consequência, não condição.
+    expect(r.ok).toBe(true);
+    expect(r.asoValidado).toBe(true);
+    expect(r.aptoAuto).toMatchObject({ para: "APTO" });
+  });
+});
+
+describe("a coleta do ASO", () => {
+  it("é gravada ANTES da I.A, e sem fingir veredito", async () => {
     const { svc, escritas } = montar({ status: "AGENDADO", vereditoIa: "INCONFORME" });
 
     await svc.anexarAso(ADMISSAO_ID, ARQUIVO);
