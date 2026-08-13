@@ -9740,3 +9740,42 @@ teste da pausada, para não ser silencioso.
 **Também nesta sessão, aguardando o diretor:** a carga única dos ASOs (`db/carga-aso-prontuario.ts`,
 escrito e com dry-run reportado, 15 admissões, nenhuma sem rota de pasta) segue sem executar, porque
 é escrita no Drive real e o próprio pedido pôs o dry-run como ponto de conferência.
+
+---
+
+## 13/08/2026 (noite, 2) — Alto Volume: banco não consome vaga, e agora está visível e travado
+
+**Commit `c7c6d77`**, frontend no ar (rebuild e restart, health conferido) e em `origin/main`.
+
+**O levantamento mudou o tamanho do trabalho.** A OST pedia "corrigir a régua" porque a sessão
+anterior descreveu que banco e pausada ocupavam a vaga. A investigação mostrou que a MATEMÁTICA já
+estava certa desde sempre: o "Na Esteira" que alimenta a conta exclui `BANCO_AGUARDAR` junto com os
+terminais, então banco nunca consumiu vaga, e o modal de banco já dizia isso por escrito. O erro
+estava na descrição que a fábrica deu ao diretor, não no código. O trabalho virou deixar visível e
+travar, em vez de corrigir conta.
+
+**O discriminador é o FAROL, não a flag.** Das 6 admissões em banco da base, 5 têm a marca
+`is_banco` do usuário e 1 chegou lá pela regra automática (Auditoria ok, Exame apto e sem data de
+admissão). Filtrar pela flag perderia essa.
+
+**Nenhum número mudou em tela**, e havia motivo: o único projeto cadastrado (a Bienal) tem ZERO
+admissões em banco vinculadas, e zero pausadas. A regra nunca era exercitada, que é exatamente por
+que ela pôde ser descrita errada sem nada quebrar.
+
+**O que entrou:** a quebra "N ativos, M em banco" sob o número do card "Total De Vagas Na Esteira",
+com o número grande continuando a ser só quem consome vaga (somar o banco ali faria o percentual de
+cobertura contar como coberta uma vaga sem dono, o oposto da regra). E a trava em dois níveis: uma
+fixture que TEM banco e pausada de verdade, e um teste que renderiza o SQL da consulta e exige a
+exclusão de banco e terminais de quem consome vaga. A trava foi provada por mutação: tirando
+`BANCO_AGUARDAR` do filtro, o teste quebra.
+
+**Decisão do diretor registrada:** banco é RESERVA e não é dono de vaga, então a vaga volta a
+faltar; pausada é o candidato DAQUELA vaga, só parado, e a vaga não está livre para outra pessoa,
+então consome. O teste trava as duas, inclusive que `pausada_em` não entra no filtro.
+
+**Medição §A.26:** nenhuma linha de serviço foi tocada nesta onda, e o backend sequer reiniciou (no
+ar desde 19:34 UTC, antes das duas medições). Painel idêntico. O Gerenciador variou 1 em "com
+pendências", e a variação foi rastreada até uma admissão preenchida às 20:14, entre as duas
+medições: base viva, não efeito da mudança.
+
+**Segue aguardando o diretor:** a carga única dos 15 ASOs, com dry-run reportado e não executada.
