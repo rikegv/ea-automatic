@@ -9779,3 +9779,39 @@ pendências", e a variação foi rastreada até uma admissão preenchida às 20:
 medições: base viva, não efeito da mudança.
 
 **Segue aguardando o diretor:** a carga única dos 15 ASOs, com dry-run reportado e não executada.
+
+---
+
+## 13/08/2026 (noite, 3) — Carga dos ASOs executada: 11 prontuários completados
+
+**Executada com autorização do diretor.** Runner `db/carga-aso-prontuario.ts` (commit `dba42b5`),
+rodado com `--aplicar`. **11 arquivados, 0 falhas, 0 pulados.**
+
+**A conferência no Drive entrou antes da escrita**, e foi a condição para o diretor liberar. A carga
+olha, admissão por admissão, se a subpasta ASO do prontuário já tem documento, e tem três saídas:
+sobe (subpasta vazia), vincula sem subir nada (documento salvo à mão pelo time) ou pula (sem rota de
+pasta ou Drive mudo na conferência). A checagem por md5 que o arquivamento já fazia não bastava
+aqui: ela só reconhece o arquivo idêntico, e o mesmo ASO reexportado tem outros bytes, o que criaria
+uma segunda cópia. A régua é por presença.
+
+**A conferência foi provada nos dois sentidos** antes de valer como prova: controle positivo numa
+pasta que tinha ASO devolveu subpasta encontrada com 1 arquivo, e controle negativo numa pasta
+inexistente devolveu não encontrada. Sem isso, "nenhuma estava lá" poderia ser cegueira.
+
+**Antes e depois das 11:** `drive_aso_url` nula em 11 e agora gravada em 11, com 11 URLs distintas;
+staging com 11 ASOs e agora zero; subpasta ASO no Drive com 1 documento em cada uma das 11,
+conferido pela leitura real. Idempotência: as 10 que já tinham prontuário receberam o ASO na MESMA
+pasta (zero segundas pastas), a de contrato Terceirizado abriu a pasta agora, e rodar o runner de
+novo devolve "nada a fazer".
+
+**O custo da espera ficou medido.** Eram 15 no primeiro dry-run e 11 quatro horas depois: 4 perderam
+o ASO para o TTL de 48h da staging nesse intervalo. A conferência confirmou que esses 4 não têm
+subpasta ASO no Drive, ou seja, os documentos se perderam de fato, sem nunca ter chegado ao
+prontuário.
+
+**Achado lateral, registrado e não tocado:** a admissão `c720fe8e` tem prontuário no Drive e o link
+NÃO está gravado no banco. É caso da reconciliação automática, fora do escopo desta carga.
+
+**§A.6:** o nome do candidato entrou só para montar o nome da pasta (chave de busca no Drive,
+exceção já registrada do prontuário) e não foi impresso em relatório nem em log; tudo saiu por id de
+admissão.
