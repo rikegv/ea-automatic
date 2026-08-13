@@ -140,6 +140,30 @@ class LocalizarPastaResponse(_CamelModel):
     duplicatas: list[str] = Field(default_factory=list)
 
 
+class InspecionarSubpastaRequest(_CamelModel):
+    """A subpasta do prontuário já tem documento? SOMENTE LEITURA, não cria pasta nenhuma.
+
+    Existe para a carga de ASO conferir o Drive ANTES de subir: documento salvo à mão pelo time não
+    pode ser sobrescrito nem duplicado por rotina em lote.
+    """
+
+    parent_folder_id: str
+    pasta_nome: str
+    # Chave de `SUBPASTA_NOME` (ASO, ADMISSAO, BENEFICIOS, DOCUMENTOS_PESSOAIS).
+    subpasta: str
+
+
+class InspecionarSubpastaResponse(_CamelModel):
+    """Estado da subpasta. Sem PII: só ids, contagens e booleanos (§A.6)."""
+
+    pasta_encontrada: bool = False
+    pasta_id: str | None = None
+    pasta_url: str | None = None
+    subpasta_encontrada: bool = False
+    subpasta_id: str | None = None
+    arquivos: int = 0
+
+
 class ValidarPastaResponse(_CamelModel):
     """Veredito da checagem read-only. `motivo` NUNCA contém PII (§A.6); o folderId não é PII."""
 

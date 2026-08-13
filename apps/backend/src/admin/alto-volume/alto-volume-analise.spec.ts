@@ -324,7 +324,10 @@ describe("análise: a conta fecha no total de vagas do projeto", () => {
     const render = (expr: unknown) =>
       new PgDialect().sqlToQuery(expr as never).sql.replace(/\s+/g, " ");
     // A consulta de status por cargo é a que carrega `vinculadas` e `concluidas`.
-    const selects = ctx.db.select.mock.calls
+    // O fake declara `select` sem parâmetros, então `mock.calls` chega tipado como tupla vazia. O
+    // cast é só para alcançar o argumento REAL que o serviço passou, que é o objeto de colunas.
+    const chamadas = ctx.db.select.mock.calls as unknown as unknown[][];
+    const selects = chamadas
       .map((c) => c[0] as Record<string, unknown> | undefined)
       .filter((s): s is Record<string, unknown> => Boolean(s && "vinculadas" in s));
     expect(selects.length, "a consulta de status por cargo tem de existir").toBeGreaterThan(0);

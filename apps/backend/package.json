@@ -28,7 +28,8 @@
     "db:seed:menus": "tsx src/db/seed-menus.ts",
     "db:seed:drive-pasta-pai": "tsx src/db/seed-drive-pasta-pai.ts",
     "db:destrava-aguardando": "tsx src/db/destrava-aguardando-auditoria.ts",
-    "db:rearquiva-drive": "tsx src/db/rearquiva-drive.ts"
+    "db:rearquiva-drive": "tsx src/db/rearquiva-drive.ts",
+    "db:carga-aso-prontuario": "tsx src/db/carga-aso-prontuario.ts"
   },
   "dependencies": {
     "@ea/shared-types": "workspace:*",

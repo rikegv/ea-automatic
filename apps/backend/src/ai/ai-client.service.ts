@@ -304,6 +304,63 @@ export class AiClientService {
    * ai-service inerte/mock viram `{ valido: false, motivo }`, para a tela mostrar a causa e NÃO
    * salvar. §A.6: só envia o `folderId` (identificador, não PII).
    */
+  /**
+   * A SUBPASTA do prontuário já tem documento? SOMENTE LEITURA, não cria nada.
+   *
+   * Insumo da carga de ASO: rotina em lote não pode passar por cima do que o time salvou à mão. A
+   * checagem por md5 que o arquivamento já faz não cobre este caso, porque ela só reconhece o
+   * arquivo IDÊNTICO, e o mesmo ASO reexportado tem outros bytes.
+   *
+   * NUNCA LANÇA, no mesmo desenho de `localizarPastaDrive`: indisponibilidade vira
+   * `{ pastaEncontrada: false }`, e quem chama decide o que fazer com a dúvida. Na carga, dúvida
+   * significa NÃO subir.
+   */
+  async inspecionarSubpastaDrive(
+    parentFolderId: string,
+    pastaNome: string,
+    subpasta: string,
+  ): Promise<{
+    pastaEncontrada: boolean;
+    pastaUrl?: string;
+    subpastaEncontrada: boolean;
+    arquivos: number;
+    indisponivel?: boolean;
+  }> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 90_000);
+    try {
+      const res = await fetch(`${this.baseUrl}/drive/inspecionar-subpasta`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Internal-Token": this.token },
+        body: JSON.stringify({ parentFolderId, pastaNome, subpasta }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        this.logger.warn(`ai-service /drive/inspecionar-subpasta respondeu HTTP ${res.status}`);
+        return { pastaEncontrada: false, subpastaEncontrada: false, arquivos: 0, indisponivel: true };
+      }
+      const body = (await res.json()) as {
+        pastaEncontrada?: boolean;
+        pastaUrl?: string;
+        subpastaEncontrada?: boolean;
+        arquivos?: number;
+      };
+      return {
+        pastaEncontrada: Boolean(body.pastaEncontrada),
+        pastaUrl: body.pastaUrl,
+        subpastaEncontrada: Boolean(body.subpastaEncontrada),
+        arquivos: body.arquivos ?? 0,
+      };
+    } catch (err) {
+      this.logger.warn(
+        `Falha ao inspecionar subpasta no Drive: ${err instanceof Error ? err.name : "erro"}`,
+      );
+      return { pastaEncontrada: false, subpastaEncontrada: false, arquivos: 0, indisponivel: true };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async validarPastaDrive(folderId: string): Promise<{ valido: boolean; motivo?: string }> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 15_000);

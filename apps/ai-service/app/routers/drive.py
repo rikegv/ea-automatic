@@ -17,6 +17,8 @@ from app.drive import SUBPASTA_NOME
 from app.schemas import (
     ArquivamentoDrive,
     ArquivarRequest,
+    InspecionarSubpastaRequest,
+    InspecionarSubpastaResponse,
     LocalizarPastaRequest,
     LocalizarPastaResponse,
     ValidarPastaRequest,
@@ -316,4 +318,76 @@ def localizar_pasta(
         pasta_url=f"https://drive.google.com/drive/folders/{escolhida['id']}",
         arquivos=escolhida.get("arquivos", 0),
         duplicatas=[p["id"] for p in ordenadas[1:]],
+    )
+
+
+@router.post(
+    "/inspecionar-subpasta",
+    response_model=InspecionarSubpastaResponse,
+    response_model_by_alias=True,
+)
+def inspecionar_subpasta(
+    req: InspecionarSubpastaRequest, _: None = Depends(require_internal_token)
+) -> InspecionarSubpastaResponse:
+    """A subpasta do prontuário já tem documento? SOMENTE LEITURA: não cria pasta nem sobe nada.
+
+    POR QUE EXISTE: a carga de ASO precisa saber, ANTES de subir, se o time já salvou aquele
+    documento à mão no Drive. A regra da casa é que rotina em lote NUNCA passa por cima de trabalho
+    humano, e a checagem por md5 que o arquivamento já faz não basta aqui: ela só reconhece o arquivo
+    IDÊNTICO, e o mesmo ASO reexportado ou escaneado de novo tem outros bytes, o que criaria uma
+    segunda cópia na subpasta em vez de respeitar a primeira.
+
+    USA `_pastas_com_nome`, e não `buscar_ou_criar_pasta`, DE PROPÓSITO: a segunda CRIA a subpasta
+    quando não acha, e uma consulta jamais pode deixar rastro no Drive.
+
+    A pasta do prontuário é resolvida com a MESMA régua do arquivamento e do `localizar-pasta` (as
+    variantes de nome e a pasta mais completa primeiro), para não responder sobre uma pasta antiga
+    quando existe uma mais cheia.
+
+    §A.6: entra nome de pasta (que carrega o nome do candidato, exceção já registrada do prontuário)
+    e sai só id, booleano e contagem. Nada é logado.
+    """
+    settings = get_settings()
+    if settings.drive_mock:
+        return InspecionarSubpastaResponse(pasta_encontrada=False)
+
+    nome_sub = SUBPASTA_NOME.get(req.subpasta)
+    if not nome_sub:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Subpasta desconhecida: {req.subpasta}",
+        )
+
+    service = drive.get_drive_service()
+    candidatas: dict[str, dict] = {}
+    for forma in drive.variantes_do_nome(req.pasta_nome):
+        for p in drive._pastas_com_nome(service, forma, req.parent_folder_id):  # noqa: SLF001
+            candidatas[p["id"]] = p
+    if not candidatas:
+        return InspecionarSubpastaResponse(pasta_encontrada=False)
+
+    for p in candidatas.values():
+        p["arquivos"] = drive.contar_arquivos(service, p["id"])
+    escolhida = sorted(
+        candidatas.values(), key=lambda p: (-p.get("arquivos", 0), p.get("createdTime", ""))
+    )[0]
+
+    subpastas = drive._pastas_com_nome(service, nome_sub, escolhida["id"])  # noqa: SLF001
+    if not subpastas:
+        return InspecionarSubpastaResponse(
+            pasta_encontrada=True,
+            pasta_id=escolhida["id"],
+            pasta_url=f"https://drive.google.com/drive/folders/{escolhida['id']}",
+        )
+
+    # Mais de uma subpasta com o mesmo nome é anomalia rara; somar todas evita responder "vazia"
+    # olhando só uma delas e subir uma cópia por cima do que está na outra.
+    arquivos = sum(drive.contar_arquivos(service, s["id"]) for s in subpastas)
+    return InspecionarSubpastaResponse(
+        pasta_encontrada=True,
+        pasta_id=escolhida["id"],
+        pasta_url=f"https://drive.google.com/drive/folders/{escolhida['id']}",
+        subpasta_encontrada=True,
+        subpasta_id=subpastas[0]["id"],
+        arquivos=arquivos,
     )
