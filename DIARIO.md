@@ -9704,3 +9704,39 @@ pasta. Seis testes novos cobrem os limites (reprovado, I.A fora, exame cancelado
 recuperáveis por carga única; passados 48h, o TTL os apaga. A correção só age em ASO novo. Também
 segue registrado que ASO reenviado DEPOIS de arquivado não sobe de novo (guarda de idempotência
 herdada do desenho), o que só afeta correção de ASO já aprovado.
+
+---
+
+## 13/08/2026 (noite) — Alto Volume: uma régua só para o "Faltam"
+
+**Commit `b07e711`**, no ar (`ea-backend` e `ea-frontend` reiniciados, health conferido) e em
+`origin/main`.
+
+**Dois defeitos, uma raiz.** O print da Bienal mostrava o card do topo dizendo "Faltam 4" enquanto
+os cards por cargo somavam 6 (3 + 1 + 2), e "Concluídas 98" maior que "Na Esteira 96", que é
+impossível por definição. A causa é a mesma nos dois: o MESMO número calculado em dois lugares com
+contas diferentes. O topo e a tabela faziam `vagas - concluídas - em andamento`; o card de cada
+cargo fazia `vagas - na esteira`, por conta própria, no frontend. E "Concluídas" olhava as frentes
+sem filtrar farol, enquanto "Na Esteira" olha o farol, então quem fechou o Cadastro e depois
+declinou entrava num balde e saía do outro. Era uma admissão só, declinada no mesmo dia; a varredura
+em todos os projetos não achou outra.
+
+**A correção.** "Faltam" passou a ser `vagas - na esteira`, calculado uma única vez no serviço, e o
+card apenas exibe esse número. "Concluídas" ganhou o mesmo filtro de farol do "Na Esteira", coerente
+com a §A.16. Como efeito, "Na Esteira + Faltam = Total de Vagas" virou identidade, e não
+coincidência.
+
+**Antes e depois, medidos na API:** topo 4 vira 6 e bate com a soma dos cards; concluídas 98 vira 96
+e deixa de passar o Na Esteira; a conta fecha em 102. Painel e Gerenciador foram medidos antes e
+depois e vieram idênticos, porque as expressões compartilhadas não foram tocadas: o que mudou é o
+universo desta tela.
+
+**Aberto, decisão do diretor.** Com pausada ou banco vinculado ao projeto, a pausada passa a OCUPAR
+a vaga em vez de contar como vaga a preencher, e a soma "em andamento + concluídas + faltam" deixa
+de fechar na meta (quem fecha sempre passa a ser "na esteira + faltam"). Nenhum projeto real tem
+pausada ou banco vinculado hoje, então nada disso aparece em tela. O efeito está documentado no
+teste da pausada, para não ser silencioso.
+
+**Também nesta sessão, aguardando o diretor:** a carga única dos ASOs (`db/carga-aso-prontuario.ts`,
+escrito e com dry-run reportado, 15 admissões, nenhuma sem rota de pasta) segue sem executar, porque
+é escrita no Drive real e o próprio pedido pôs o dry-run como ponto de conferência.
