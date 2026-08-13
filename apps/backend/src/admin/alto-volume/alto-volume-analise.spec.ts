@@ -1,5 +1,6 @@
 import "reflect-metadata";
 import { NotFoundException } from "@nestjs/common";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it, vi } from "vitest";
 import { AltoVolumeAnaliseService } from "./alto-volume-analise.service";
 
@@ -255,6 +256,90 @@ describe("análise: a conta fecha no total de vagas do projeto", () => {
     expect(r.totais.vagas).toBe(102);
     // Declínio segue fora da matemática: 26 no card, zero de efeito na meta.
     expect(r.totais.declinios).toBe(26);
+  });
+
+  /**
+   * BANCO NÃO CONSOME VAGA, PAUSADA CONSOME (decisão do diretor, 13/08/2026).
+   *
+   * A distinção não é de estado, é de POSSE DA VAGA. Quem está em banco é reserva: não é dono de
+   * vaga nenhuma, então a vaga dele volta a faltar e ele fica visível fora da conta, do mesmo jeito
+   * que o declínio. Quem está pausado é o dono DAQUELA vaga, só parado: a vaga não está livre para
+   * outra pessoa, então ela segue consumida.
+   *
+   * ESTA FIXTURE TEM BANCO E PAUSADA DE VERDADE, e é o ponto do teste: nenhuma fixture tinha banco,
+   * então a regra nunca era exercitada e a contagem podia mudar de lado sem quebrar nada. Foi
+   * exatamente o que aconteceu na sessão que originou esta OST, em que a régua foi descrita errada.
+   *
+   * O `vinculadas` que chega aqui já é o de quem CONSOME (a consulta exclui `BANCO_AGUARDAR` junto
+   * com os terminais); o teste de SQL logo abaixo trava esse filtro na origem.
+   */
+  it("banco fica fora da conta e pausada fica dentro", async () => {
+    const ctx = montar({
+      vagas: [{ cargoId: "c1", cargoNome: "Vendedor I", vagas: 20 }],
+      status: [
+        {
+          cargoId: "c1",
+          cargoNome: "Vendedor I",
+          // 12 consomem vaga: 8 concluídas + 1 andando + 3 pausadas.
+          vinculadas: 12,
+          concluidas: 8,
+          cadastradas: 8,
+          emAndamento: 1,
+          pausadas: 3,
+          // 5 em banco, vivas e vinculadas, mas sem vaga.
+          emBanco: 5,
+        },
+      ],
+    });
+
+    const r = await ctx.service.analise(PROJETO, HOJE);
+
+    // O BANCO NÃO ENCOSTA NO "FALTAM": 20 vagas menos os 12 que consomem, e não menos 17.
+    expect(r.totais.faltam, "banco não pode consumir vaga").toBe(8);
+    // A IDENTIDADE DO DIRETOR: ativos + faltam = total, com banco em cima da mesa.
+    expect(r.totais.vinculadas + r.totais.faltam).toBe(r.totais.vagas);
+    // O banco continua visível, com número próprio: fora da conta não é fora da tela.
+    expect(r.totais.emBanco).toBe(5);
+    // A pausada continua contada como quem ocupa a vaga (está dentro de `vinculadas`) e mantém o
+    // balde próprio, então ela não some nem vira "em andamento".
+    expect(r.totais.pausadas).toBe(3);
+    expect(r.totais.emAndamento).toBe(1);
+    // E concluída nunca passa de quem consome vaga.
+    expect(r.totais.concluidas).toBeLessThanOrEqual(r.totais.vinculadas);
+  });
+
+  /**
+   * A REGRA NA ORIGEM, e não só na aritmética: a fixture acima recebe `vinculadas` pronto, então
+   * quem garante que o banco não entrou nesse número é o FILTRO da consulta. Este teste lê o SQL que
+   * o serviço monta e exige o recorte, para a regra não poder ser afrouxada sem quebrar nada.
+   *
+   * O DISCRIMINADOR É O FAROL, não a flag `is_banco`: das 6 admissões em banco da base, 1 chegou lá
+   * pela regra automática (Auditoria ok, Exame apto e sem data de admissão) e não tem a marca do
+   * usuário. Filtrar pela flag perderia essa.
+   */
+  it("a consulta exclui BANCO_AGUARDAR de quem consome vaga, e não exclui pausada", async () => {
+    const ctx = montar({ vagas: [], status: [] });
+    await ctx.service.analise(PROJETO, HOJE);
+
+    const render = (expr: unknown) =>
+      new PgDialect().sqlToQuery(expr as never).sql.replace(/\s+/g, " ");
+    // A consulta de status por cargo é a que carrega `vinculadas` e `concluidas`.
+    const selects = ctx.db.select.mock.calls
+      .map((c) => c[0] as Record<string, unknown> | undefined)
+      .filter((s): s is Record<string, unknown> => Boolean(s && "vinculadas" in s));
+    expect(selects.length, "a consulta de status por cargo tem de existir").toBeGreaterThan(0);
+
+    const vinculadas = render(selects[0].vinculadas);
+    const concluidas = render(selects[0].concluidas);
+
+    // Quem consome vaga exclui banco e os dois terminais.
+    for (const fora of ["BANCO_AGUARDAR", "DECLINOU", "RESCISAO"]) {
+      expect(vinculadas, `${fora} não pode consumir vaga`).toContain(fora);
+      expect(concluidas, `${fora} não pode contar como concluída`).toContain(fora);
+    }
+    // PAUSADA NÃO É EXCLUÍDA: a vaga tem dono, só parado. Se alguém puser `pausada_em` no filtro de
+    // quem consome, este teste quebra, que é o alarme desejado.
+    expect(vinculadas, "pausada consome vaga").not.toContain("pausada_em");
   });
 
   it("PAUSADA tem balde próprio e não vira em andamento", async () => {

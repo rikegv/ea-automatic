@@ -716,7 +716,25 @@ export default function AltoVolumeAnalisePage() {
                   Abaixo disso, três colunas em duas linhas. */}
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 2xl:grid-cols-6">
                 <Balde rotulo="Total De Vagas Do Projeto" valor={dados.totais.vagas} />
-                <Balde rotulo="Total De Vagas Na Esteira" valor={dados.totais.vinculadas} />
+                {/* A QUEBRA ATIVO x BANCO (decisão do diretor, 13/08/2026). O número grande é o de
+                    quem CONSOME vaga, e continua sendo só os ativos: somar o banco aqui faria o
+                    percentual de cobertura contar como vaga coberta quem não é dono de vaga nenhuma,
+                    o oposto da regra. O banco entra na linha de apoio, visível e fora da conta, do
+                    mesmo jeito que o declínio já fica.
+                    BANCO É RESERVA: o candidato não é dono da vaga, então a vaga volta a faltar.
+                    PAUSADA CONSOME: é o candidato DAQUELA vaga, só parado, e a vaga não está livre
+                    para outra pessoa, por isso ela segue dentro do número grande.
+                    Exibição pura: os dois números já vinham do backend, nada aqui recalcula régua.
+                    TEXTO CURTO POR CAUSA DA LARGURA (§A.20): o balde ocupa um sexto da faixa, e a
+                    frase inteira ("em processamento ativo", "aguardando em banco") quebrava em
+                    quatro linhas e empurrava o número para fora do alinhamento dos vizinhos. A frase
+                    completa fica na dica, onde há espaço. */}
+                <Balde
+                  rotulo="Total De Vagas Na Esteira"
+                  valor={dados.totais.vinculadas}
+                  quebra={`${dados.totais.vinculadas} ativos, ${dados.totais.emBanco} em banco`}
+                  dica={`${dados.totais.vinculadas} em processamento ativo e ${dados.totais.emBanco} aguardando em banco. O banco fica visível mas fora da conta das vagas: quem está em banco não é dono de vaga, então a vaga volta a faltar`}
+                />
                 <Balde
                   rotulo="Total De Admissões Concluídas"
                   valor={dados.totais.concluidas}
@@ -1075,6 +1093,7 @@ function Balde({
   cor,
   onClick,
   dica,
+  quebra,
 }: {
   rotulo: string;
   valor: number;
@@ -1082,12 +1101,21 @@ function Balde({
   /** Só o balde que tem leitura por trás recebe clique. Sem `onClick` ele continua um bloco de texto. */
   onClick?: () => void;
   dica?: string;
+  /**
+   * Linha curta sob o número, para o balde dizer DE QUE é feito o próprio total. Existe por causa do
+   * banco: o número grande conta só quem consome vaga, e sem esta linha não havia como o diretor ver
+   * que há gente vinculada e viva fora da conta. Texto de apoio, não título (§A.24).
+   */
+  quebra?: string;
 }) {
   const conteudo = (
     <div className="flex flex-1 flex-col justify-between gap-1.5">
       <div className="text-xs leading-snug text-dim">{rotulo}</div>
-      <div className="text-[30px] font-semibold leading-none tabular-nums" style={{ color: cor }}>
-        {valor}
+      <div>
+        <div className="text-[30px] font-semibold leading-none tabular-nums" style={{ color: cor }}>
+          {valor}
+        </div>
+        {quebra && <div className="mt-1.5 text-[11px] leading-snug text-faint">{quebra}</div>}
       </div>
     </div>
   );
