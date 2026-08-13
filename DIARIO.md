@@ -9665,3 +9665,42 @@ os mesmos, 15 antes e 15 depois no caso dela.
 **Correção que apareceu de brinde:** o recálculo compartilhado do sinalizador apagava o sinal de documento
 INCONFORME em qualquer edição de campo. A regra "documento inconforme domina" entrou na peça compartilhada
 e passou a valer para os três caminhos que a chamam.
+
+---
+
+## 13/08/2026 — Colunas de identificação e o ASO que nunca chegava ao prontuário
+
+**Commits:** `4cb0711` (colunas e rótulo NOME) e `64d706b` (correção do ASO). Ambos no ar
+(`ea-backend` e `ea-frontend` reiniciados, health conferido) e em `origin/main`.
+
+**Colunas de identificação (OST de Benefícios/Cadastro, itens 1 a 3).** A Matrícula passou a ser a
+primeira coluna de dado na tela de Benefícios e ganhou lugar na aba CADASTRO da Esteira, nos dois
+casos ANTES do Nome, porque é por ela que a folha localiza a pessoa. O rótulo "Candidato" e
+"Nome do Candidato" virou "NOME" nos cinco lugares em que era rótulo: as duas tabelas do Alto
+Volume, o modal de importação de matrículas, o filtro das Não Conformidades e a Sala de Espera.
+Só rótulo, nenhum dado ou filtro mudou de nome. Prova visual nas duas telas, sem cabeçalho
+truncado (§A.13/§A.20).
+
+**Bug de produção: o ASO não ia para o prontuário no APTO.** Medição que fechou o diagnóstico: 186
+admissões com EXAME APTO e ASO validado pela I.A, `drive_aso_url` nulo em TODAS as 186, e zero
+admissões com ASO arquivado na base inteira. O arquivo ficava na staging até o TTL de 48h apagá-lo.
+
+A causa raiz é uma premissa errada registrada no item 12 das Melhorias, que dizia "o ASO já sobe
+sozinho quando a I.A o valida". Sobe mesmo, mas no OUTRO caminho: o arquivamento automático vive em
+`auditarConjunto`, que é a auditoria da RÉGUA, da tela de Auditoria. O ASO da operação sobe pela aba
+EXAME, que chama `classificarAso`, um classificador que de propósito não arquiva. O item 12 fechou o
+APTO MANUAL e deixou o APTO DA I.A, que é o caminho dominante, sem gatilho nenhum. Não havia teste
+cobrindo aquele item, e é por isso que a metade que faltava passou.
+
+A correção foi uma chamada, no mesmo método do APTO manual, porque toda a canalização já existia
+esperando por ela: roteamento por contrato e cliente, subpasta ASO, âncora da pasta do prontuário e
+o interlock que já excluía o ASO do rebaixe do Pandapé quando a URL estava gravada. Cobre as duas
+ordens da operação, inclusive a frente já APTA com o ASO chegando depois, em que não há transição
+nova para servir de gatilho. Provado ao vivo com candidato de teste de dados fictícios, removido em
+seguida: URL gravada, log de arquivamento, staging esvaziada e segundo envio sem abrir segunda
+pasta. Seis testes novos cobrem os limites (reprovado, I.A fora, exame cancelado, falha de Drive).
+
+**Aberto, decisão do diretor:** 16 ASOs de admissões já APTAS continuam vivos na staging e são
+recuperáveis por carga única; passados 48h, o TTL os apaga. A correção só age em ASO novo. Também
+segue registrado que ASO reenviado DEPOIS de arquivado não sobe de novo (guarda de idempotência
+herdada do desenho), o que só afeta correção de ASO já aprovado.
