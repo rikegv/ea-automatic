@@ -565,6 +565,33 @@ export default function ClientesPage() {
   );
 }
 
+/** Rótulo da periodicidade para LEITURA, derivado da mesma lista que a edição usa. */
+const ROTULO_PERIODICIDADE: Record<string, string> = Object.fromEntries(
+  OPCOES_PERIODICIDADE.map((o) => [o.valor, o.rotulo]),
+);
+
+const NAO_INFORMADO = <span className="text-faint">não informado</span>;
+
+/**
+ * Camada de pagamento do benefício em LEITURA (§A.17 etapa 4). Cliente sem regra cadastrada mostra
+ * "não informado", a mesma régua da coluna da tela de Benefícios. Zero é valor válido em
+ * `diasPrimeiroCredito` (crédito no mesmo dia), então o teste é contra null/undefined e nunca falsy.
+ */
+function periodicidadeLeitura(c: Cliente) {
+  if (!c.periodicidadeBeneficio) return NAO_INFORMADO;
+  return ROTULO_PERIODICIDADE[c.periodicidadeBeneficio] ?? c.periodicidadeBeneficio;
+}
+
+function diaPagamentoLeitura(c: Cliente) {
+  if (c.diaPagamentoBeneficio == null) return NAO_INFORMADO;
+  return `dia ${c.diaPagamentoBeneficio}`;
+}
+
+function diasPrimeiroCreditoLeitura(c: Cliente) {
+  if (c.diasPrimeiroCredito == null) return NAO_INFORMADO;
+  return c.diasPrimeiroCredito === 1 ? "1 dia" : `${c.diasPrimeiroCredito} dias`;
+}
+
 function cnpjVinculoLabel(c: Cliente) {
   if (c.cnpjVinculo) return <span className="font-mono">{c.cnpjVinculo}</span>;
   return <span className="text-faint">pendente</span>;
@@ -663,6 +690,11 @@ function FragmentRow({
                   {c.nomeOperacao ?? <span className="text-faint">não informado</span>}
                 </Ficha>
                 <Ficha rotulo="Status">{c.ativo ? "Ativo" : "Inativo"}</Ficha>
+                {/* Camada de pagamento do benefício, VISÍVEL sem entrar em editar: é o que está
+                    cadastrado para o cliente, só leitura. A edição continua no formulário do topo. */}
+                <Ficha rotulo="Periodicidade do benefício">{periodicidadeLeitura(c)}</Ficha>
+                <Ficha rotulo="Dia do pagamento">{diaPagamentoLeitura(c)}</Ficha>
+                <Ficha rotulo="Dias até o 1º crédito">{diasPrimeiroCreditoLeitura(c)}</Ficha>
               </div>
             </div>
           </td>
