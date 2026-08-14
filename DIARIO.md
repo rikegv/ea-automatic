@@ -9815,3 +9815,86 @@ NÃO está gravado no banco. É caso da reconciliação automática, fora do esc
 **§A.6:** o nome do candidato entrou só para montar o nome da pasta (chave de busca no Drive,
 exceção já registrada do prontuário) e não foi impresso em relatório nem em log; tudo saiu por id de
 admissão.
+
+---
+
+## 13/08/2026 — FECHAMENTO DO DIA (ler primeiro na próxima sessão)
+
+Entrada de handoff: o estado real de cada frente ao fim do dia, para a sessão seguinte começar sem
+reconstruir contexto. Working tree limpo (só o `logosoulan.png` solto, que não é da fábrica) e tudo
+abaixo está em `origin/main`.
+
+### 1. O que subiu hoje, em ordem
+
+| Hash | O que é |
+|---|---|
+| `a7c2f16` | Benefícios etapa 2 (fila em operação), melhorias EAC 7, 13, 11b e 11d, os dois bugs de produção ("Banco, Aguardar" que não mudava o status e os 104 arquivos da coleta do Pandapé) e a correção de brinde do sinalizador INCONFORME |
+| `4cb0711` | Colunas de identificação: Matrícula antes do Nome em Benefícios, "Candidato" virou "Nome" em todo o sistema, coluna Matrícula na aba Cadastro |
+| `64d706b` | Bug do ASO que nunca chegava ao prontuário no APTO da I.A |
+| `ee2fb12` | Diário dos dois acima |
+| `b07e711` | Alto Volume: régua única do "Faltam" e "Concluídas" dentro da esteira (Bienal: topo 4 contra cards 6, e concluídas 98 maior que esteira 96) |
+| `c6d8588` | Diário do acima |
+| `c7c6d77` | Alto Volume: quebra ativo x banco no card e a trava da régua em teste |
+| `11b0269` | Diário do acima |
+| `dba42b5` | Carga dos ASOs com conferência no Drive antes de subir, e o endpoint read-only `/drive/inspecionar-subpasta` |
+| `fd53728` | Diário da carga executada (11 ASOs) |
+| `4f1dca9` | Camada de pagamento por cliente (onda 1 da fila de Benefícios) |
+
+### 2. Estado de cada frente
+
+**No ar e VALIDADO pelo diretor:** as colunas de identificação, a correção do ASO no APTO, as duas
+correções do Alto Volume (régua única e quebra ativo x banco) e a carga dos 11 ASOs, que ele liberou
+depois de ver o dry-run com a conferência.
+
+**No ar AGUARDANDO validação:** a **camada de pagamento por cliente** (`4f1dca9`). É o primeiro item
+de amanhã. Para conferir na tela: o cliente **REDE D'OR, código 54916**, está cadastrado como
+exemplo (a cada 15 dias, dia 20, 5 dias até o 1º crédito), e as linhas dele na tela de Benefícios
+mostram a data calculada, enquanto o 57328 (sem regra) mostra "não informado" nas duas colunas.
+
+**Não construído, por sequência:** onda 2 (modal de Principais Informações) e onda 3 (formulário de
+VT).
+
+### 3. A fila de amanhã, nesta ordem
+
+1. **O diretor valida a camada de pagamento** na tela.
+2. **Onda 2, modal "Principais Informações".** A fábrica LEVANTA e REPORTA o desenho antes de
+   construir (§A.27): onde as regras de benefício do cliente moram (campo de texto por cliente? lista
+   de regras? por benefício ou geral?), quem cadastra e onde, e como a linha exibe. O ícone da linha
+   abre o modal com as regras daquele cliente ("VT sem desconto em folha", "VR descontado 10%", "AM
+   sem coparticipação").
+3. **Onda 3, formulário de VT.** Bloqueada em INFRA, não em código: depende de o diretor criar o
+   bucket GCS e devolver o nome do bucket e o e-mail da service account de runtime. Só então a
+   fábrica liga o formulário, que hoje está dormente.
+
+### 4. RÉGUA OFICIAL DO ALTO VOLUME (fechada, não reabrir)
+
+Quatro rodadas no mesmo dia chegaram a esta régua. Ela é a decisão do diretor e fica registrada para
+não voltar a ser discutida:
+
+- **ATIVOS + FALTAM = TOTAL DE VAGAS.** "Faltam" é `vagas - ativos`, calculado UMA vez no serviço e
+  usado na exibição e na ordenação. O card por cargo não recalcula nada, só exibe.
+- **BANCO É RESERVA e NÃO consome vaga.** Quem está em banco não é dono de vaga, então a vaga volta
+  a faltar. Fica visível fora da conta, como quebra sob o número do card ("N ativos, M em banco") e
+  no card próprio, do mesmo jeito que o declínio.
+- **PAUSADA CONSOME a vaga.** É o candidato DAQUELA vaga, só parado: a vaga não está livre para
+  outra pessoa.
+- **CONCLUÍDAS nunca passa de ATIVOS:** o balde de concluídas usa o mesmo filtro de farol do "na
+  esteira", então quem fechou o Cadastro e depois declinou não conta como vaga preenchida.
+- **O discriminador do banco é o FAROL `BANCO_AGUARDAR`**, nunca a flag `is_banco`: das 6 admissões
+  em banco da base, 1 chegou lá pela regra automática e não tem a marca do usuário.
+- Tudo isso está travado em teste, inclusive por leitura do SQL gerado, e a trava foi provada por
+  mutação.
+
+### 5. Pendências anotadas, sem mexer (o diretor decide quando)
+
+- **`c720fe8e`**: tem prontuário no Drive e o link NÃO está gravado no banco. Caso de reconciliação
+  automática.
+- **4 ASOs perdidos para o TTL** da staging entre o primeiro dry-run e a liberação da carga.
+  Conferido no Drive: não têm subpasta ASO. Se forem necessários, o caminho é rebaixar do Pandapé.
+- **Resíduos do farol A+B**: 3 declinadas que o Gerenciador conta como concluída, 2 inversas e 13 sem
+  cliente.
+- **18 admissões com enum de benefício desatualizado.**
+- **Rótulo "Somente leitura"** na ficha do olho da Esteira.
+- **Cruzamento de nomes das duas esteiras.**
+- Decisões do Painel ainda em aberto: somar RESCISAO nos declínios (55) e tirar pausadas do Em
+  Andamento (1).
