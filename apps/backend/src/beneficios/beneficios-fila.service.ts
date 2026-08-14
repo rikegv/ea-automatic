@@ -72,6 +72,30 @@ export class BeneficiosFilaService {
   )`;
 
   /**
+   * DATA DO 1º CRÉDITO do benefício: `data de admissão + (dias do cliente - 1)`, em DIAS CORRIDOS.
+   *
+   * A REGRA CONTA O PRÓPRIO DIA DA ADMISSÃO (decisão do diretor): admissão em 13/08 num cliente de 5
+   * dias conta 13, 14, 15, 16, 17 e credita em 17/08, e não em 18/08. É de onde vem o `- 1`. O
+   * `greatest(..., 0)` faz 0 e 1 caírem na própria data de admissão, que é o "crédito no mesmo dia".
+   *
+   * DECLARADA UMA VEZ, como o `ENTROU_EM`, porque a coluna EXIBE e a seta ORDENA pelo mesmo número.
+   * Uma segunda cópia para a ordenação divergiria na primeira mudança de regra, e a lista passaria a
+   * ser ordenada por um critério diferente do que a célula mostra. Foi exatamente a divergência que
+   * o Alto Volume acabou de pagar caro.
+   *
+   * NULA QUANDO FALTA DADO, e nunca um chute: sem data de admissão ou sem a regra do cliente não há
+   * primeiro crédito calculável, e a tela diz "não informado" (§A.11) em vez de inventar uma data.
+   * O `::date` é o que mantém a saída como data pura, sem hora.
+   */
+  private static readonly PRIMEIRO_CREDITO = sql<string | null>`(
+    case
+      when ${admissoes.dataAdmissao} is null or ${clientes.diasPrimeiroCredito} is null then null
+      else (${admissoes.dataAdmissao}::date
+            + greatest(${clientes.diasPrimeiroCredito} - 1, 0) * interval '1 day')::date
+    end
+  )`;
+
+  /**
    * A CONDIÇÃO DA FILA, escrita uma vez: Cadastro concluído e processo não encerrado.
    *
    * §A.16: quem declinou ou rescindiu não deixa trabalho ativo em fila nenhuma. O histórico continua
@@ -100,6 +124,10 @@ export class BeneficiosFilaService {
     if (chave === "cliente")
       return sql`coalesce(${clientes.nomeOperacao}, ${clientes.razaoSocial}, ${admissoes.codCliente})`;
     if (chave === "entrouEm") return BeneficiosFilaService.ENTROU_EM;
+    // A MESMA expressão que a célula mostra, não uma cópia: é o que garante que a seta ordene pelo
+    // número escrito na linha. Periodicidade ordena pelo enum, que é o que a coluna exibe.
+    if (chave === "primeiroCredito") return BeneficiosFilaService.PRIMEIRO_CREDITO;
+    if (chave === "periodicidade") return sql`${clientes.periodicidadeBeneficio}`;
     // STATUS: a coluna do farol dos benefícios. Ordena pelo MESMO enum que a pill mostra, então a
     // seta e a etiqueta nunca discordam. Sem esta linha a seta existiria e não ordenaria nada, que é
     // pior do que não ter seta.
@@ -235,6 +263,11 @@ export class BeneficiosFilaService {
           matricula: admissoes.matricula,
           clienteRazaoSocial: clientes.razaoSocial,
           clienteNomeOperacao: clientes.nomeOperacao,
+          // ── Camada de pagamento (§A.17 etapa 4). LEITURA PURA: os dois saem do cadastro do
+          // cliente e não entram em régua, farol, gate nem KPI nenhum.
+          /** Só informativa: a tela exibe o rótulo cadastrado, sem cálculo (decisão do diretor). */
+          periodicidade: clientes.periodicidadeBeneficio,
+          primeiroCredito: BeneficiosFilaService.PRIMEIRO_CREDITO,
           entrouEm: BeneficiosFilaService.ENTROU_EM,
           /** O estágio em que o pacote desta pessoa está: é ele que decide o botão da linha. */
           status: admissoes.statusCadastroBeneficio,
@@ -321,6 +354,10 @@ export class BeneficiosFilaService {
         matricula: l.matricula,
         codCliente: l.codCliente,
         cliente: l.clienteNomeOperacao || l.clienteRazaoSocial || null,
+        // Camada de pagamento: o enum cru e a data calculada. O rótulo de tela sai de
+        // `ROTULO_PERIODICIDADE`, para o texto ter um dono só.
+        periodicidade: l.periodicidade,
+        primeiroCredito: l.primeiroCredito,
         entrouEm: l.entrouEm,
         status: l.status,
         /** As quatro colunas fixas da linha, sempre presentes, sempre na mesma ordem. */

@@ -8,6 +8,7 @@ import {
   pgTable,
   primaryKey,
   serial,
+  smallint,
   text,
   timestamp,
   unique,
@@ -25,6 +26,7 @@ import {
   frenteTipoEnum,
   origemSalaEsperaEnum,
   origemVinculoProjetoEnum,
+  periodicidadeBeneficioEnum,
   tipoIntegracaoEnum,
   ncLiberacaoEnum,
   ncStatusEnum,
@@ -103,6 +105,23 @@ export const clientes = pgTable("clientes", {
   beneficiosPadrao: text("beneficios_padrao"),
   escalaPadrao: text("escala_padrao"),
   enderecoPadrao: text("endereco_padrao"),
+  // ── Camada de pagamento do benefício (§A.17 etapa 4). Moram AQUI, e não em
+  // `cliente_pendencia_config`, porque aquela tabela é chave e valor BOOLEANO (só diz se algo é
+  // obrigatório) e estes são valores tipados. São atributos de valor único do cliente, exatamente o
+  // perfil dos `*_padrao` logo acima.
+  //
+  // NASCEM NULAS, SEM DEFAULT, de propósito: cliente sem regra cadastrada não deve fingir que tem
+  // uma. A tela mostra "não informado" e não calcula nada para ele.
+  /** Só informativa: a tela exibe o rótulo e NÃO calcula nada a partir dela (decisão do diretor). */
+  periodicidadeBeneficio: periodicidadeBeneficioEnum("periodicidade_beneficio"),
+  /** Dia âncora do pagamento recorrente (1 a 31). Cadastro, sem cálculo derivado. */
+  diaPagamentoBeneficio: smallint("dia_pagamento_beneficio"),
+  /**
+   * Dias CORRIDOS da admissão até o primeiro crédito, contando o próprio dia da admissão. É o ÚNICO
+   * campo desta camada que entra em cálculo: a data do 1º crédito é `data_admissao + (dias - 1)`,
+   * com piso em zero, então 0 e 1 caem na própria data de admissão.
+   */
+  diasPrimeiroCredito: smallint("dias_primeiro_credito"),
   ativo: boolean("ativo").notNull().default(true),
   criadoEm,
   atualizadoEm,

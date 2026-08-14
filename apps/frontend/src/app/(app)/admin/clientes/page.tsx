@@ -15,6 +15,11 @@ interface Cliente {
   cnpj: string | null;
   razaoSocial: string;
   nomeOperacao: string | null;
+  // ── Camada de pagamento do benefício (§A.17 etapa 4). Nascem nulas: cliente sem regra cadastrada
+  // não finge ter uma, e a tela de Benefícios mostra "não informado" para ele.
+  periodicidadeBeneficio: "CADA_5_DIAS" | "CADA_15_DIAS" | "MENSAL" | null;
+  diaPagamentoBeneficio: number | null;
+  diasPrimeiroCredito: number | null;
   ativo: boolean;
   // Vínculo cliente ↔ entidade Soulan empregadora (resolvido no backend).
   empresaVinculo?: string | null;
@@ -38,7 +43,24 @@ interface AdmissaoAfetada {
   farol: string;
 }
 
-const EMPTY = { codCliente: "", cnpj: "", razaoSocial: "", nomeOperacao: "" };
+const EMPTY = {
+  codCliente: "",
+  cnpj: "",
+  razaoSocial: "",
+  nomeOperacao: "",
+  // Guardadas como TEXTO no formulário (o input devolve string) e convertidas só no envio: campo
+  // vazio vira `null`, que é como o admin APAGA uma regra cadastrada por engano.
+  periodicidadeBeneficio: "",
+  diaPagamentoBeneficio: "",
+  diasPrimeiroCredito: "",
+};
+
+/** Os rótulos da periodicidade, os mesmos que a tela de Benefícios exibe. */
+const OPCOES_PERIODICIDADE = [
+  { valor: "CADA_5_DIAS", rotulo: "a cada 5 dias" },
+  { valor: "CADA_15_DIAS", rotulo: "a cada 15 dias" },
+  { valor: "MENSAL", rotulo: "uma vez por mês" },
+];
 type Filtro = "ativos" | "inativos" | "todos";
 
 // Tipos de serviço para o filtro (rótulos exibidos ↔ valor cru de `tipoServico`).
@@ -157,6 +179,9 @@ export default function ClientesPage() {
       cnpj: c.cnpj ?? "",
       razaoSocial: c.razaoSocial,
       nomeOperacao: c.nomeOperacao ?? "",
+      periodicidadeBeneficio: c.periodicidadeBeneficio ?? "",
+      diaPagamentoBeneficio: c.diaPagamentoBeneficio?.toString() ?? "",
+      diasPrimeiroCredito: c.diasPrimeiroCredito?.toString() ?? "",
     });
     setVinculoOriginal(c.vinculoOpcaoId ?? null);
     setVinculoSel(c.vinculoOpcaoId ?? "");
@@ -186,6 +211,15 @@ export default function ClientesPage() {
             razaoSocial: form.razaoSocial,
             cnpj: form.cnpj || undefined,
             nomeOperacao: form.nomeOperacao || undefined,
+            // NULL E NÃO `undefined`: `undefined` some do JSON e o campo ficaria como estava, o que
+            // tornaria impossível LIMPAR uma regra. Mandando null, o admin apaga o que cadastrou
+            // errado. Zero é valor válido em `diasPrimeiroCredito` (crédito no mesmo dia), por isso
+            // a comparação é com string vazia e não com falsy.
+            periodicidadeBeneficio: form.periodicidadeBeneficio || null,
+            diaPagamentoBeneficio:
+              form.diaPagamentoBeneficio === "" ? null : Number(form.diaPagamentoBeneficio),
+            diasPrimeiroCredito:
+              form.diasPrimeiroCredito === "" ? null : Number(form.diasPrimeiroCredito),
           },
         });
         // TROCA de vínculo (adicional) só quando o usuário mudou a opção selecionada.
@@ -314,6 +348,53 @@ export default function ClientesPage() {
           onChange={(e) => setForm({ ...form, nomeOperacao: e.target.value })}
           className="ds-input"
         />
+        {/* CAMADA DE PAGAMENTO DO BENEFÍCIO, só na EDIÇÃO (§A.17 etapa 4): é regra que se define
+            para um cliente que já existe, e o cadastro inicial continua com os campos de sempre.
+            Os três são opcionais e podem ser LIMPOS deixando o campo vazio. */}
+        {editando && (
+          <div className="grid gap-3 sm:col-span-5 sm:grid-cols-3">
+            <label className="grid gap-1">
+              <span className="ds-label">Periodicidade do benefício</span>
+              <select
+                value={form.periodicidadeBeneficio}
+                onChange={(e) => setForm({ ...form, periodicidadeBeneficio: e.target.value })}
+                className="ds-input"
+              >
+                <option value="">não informado</option>
+                {OPCOES_PERIODICIDADE.map((o) => (
+                  <option key={o.valor} value={o.valor}>
+                    {o.rotulo}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="grid gap-1">
+              <span className="ds-label">Dia do pagamento</span>
+              <input
+                type="number"
+                min={1}
+                max={31}
+                placeholder="não informado"
+                value={form.diaPagamentoBeneficio}
+                onChange={(e) => setForm({ ...form, diaPagamentoBeneficio: e.target.value })}
+                className="ds-input"
+              />
+            </label>
+            <label className="grid gap-1">
+              <span className="ds-label">Dias até o 1º crédito</span>
+              <input
+                type="number"
+                min={0}
+                max={60}
+                placeholder="não informado"
+                title="Dias corridos contando o próprio dia da admissão. Zero credita no mesmo dia."
+                value={form.diasPrimeiroCredito}
+                onChange={(e) => setForm({ ...form, diasPrimeiroCredito: e.target.value })}
+                className="ds-input"
+              />
+            </label>
+          </div>
+        )}
         {editando && (
           <label className="grid gap-1 sm:col-span-5">
             <span className="ds-label">Vínculo (empresa Soulan / tipo)</span>

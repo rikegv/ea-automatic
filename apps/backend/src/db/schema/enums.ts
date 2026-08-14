@@ -184,3 +184,16 @@ export const origemSalaEsperaEnum = pgEnum("origem_sala_espera", ["CLIENTE", "SE
  * falhando.
  */
 export const origemVinculoProjetoEnum = pgEnum("origem_vinculo_projeto", ["LIBERACAO", "CORRECAO"]);
+
+/**
+ * PERIODICIDADE DO PAGAMENTO DO BENEFÍCIO, por cliente (§A.17 etapa 4, camada de pagamento).
+ *
+ * É informação de CADASTRO, exibida como está: a tela de Benefícios mostra o texto e não calcula
+ * nada a partir dela (decisão do diretor, que tirou de propósito o pedaço com cálculo). Quem calcula
+ * é `dias_primeiro_credito`, campo separado.
+ */
+export const periodicidadeBeneficioEnum = pgEnum("periodicidade_beneficio", [
+  "CADA_5_DIAS",
+  "CADA_15_DIAS",
+  "MENSAL",
+]);

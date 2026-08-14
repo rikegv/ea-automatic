@@ -45,6 +45,13 @@ interface Linha {
   matricula: string | null;
   codCliente: string | null;
   cliente: string | null;
+  /**
+   * CAMADA DE PAGAMENTO, vinda do cadastro do CLIENTE (§A.17 etapa 4). Leitura pura: nenhuma das
+   * duas entra em régua, contagem ou farol.
+   */
+  periodicidade: "CADA_5_DIAS" | "CADA_15_DIAS" | "MENSAL" | null;
+  /** Já calculada no backend (admissão + dias do cliente). A tela só formata. */
+  primeiroCredito: string | null;
   entrouEm: string | null;
   /** Estágio do pacote: decide o botão da linha e a aba em que ela vive. */
   status: "AGUARDANDO_CALCULO" | "BENEFICIO_CALCULADO";
@@ -70,6 +77,17 @@ interface Resposta {
   /** Os três números do topo, no MESMO recorte de busca e filtros, sem o filtro de aba. */
   kpis: { total: number; aguardando: number; calculados: number };
 }
+
+/**
+ * O TEXTO DE CADA PERIODICIDADE. Só exibição: esta coluna é informativa e não alimenta cálculo
+ * nenhum (decisão do diretor, que tirou o cálculo daqui de propósito). Quem calcula é a coluna do
+ * primeiro crédito, a partir dos dias cadastrados no cliente.
+ */
+const ROTULO_PERIODICIDADE: Record<string, string> = {
+  CADA_5_DIAS: "a cada 5 dias",
+  CADA_15_DIAS: "a cada 15 dias",
+  MENSAL: "uma vez por mês",
+};
 
 function fmtData(iso?: string | null): string {
   if (!iso) return "não informado";
@@ -257,7 +275,7 @@ export default function BeneficiosPage() {
   const tipoDaColuna = (chave: string) =>
     chave === "matricula"
       ? "texto"
-      : chave === "dataAdmissao"
+      : chave === "dataAdmissao" || chave === "primeiroCredito"
       ? "data"
       : chave === "outros"
         ? "numero"
@@ -539,7 +557,7 @@ export default function BeneficiosPage() {
               com a entrada das colunas Status e Matrícula: é onde todos os títulos ainda cabem
               inteiros no cabeçalho. Abaixo disso a tabela ROLA, que é o comportamento pedido, em vez
               de truncar o título da coluna (§A.20). */}
-          <table className="ds-table w-full min-w-[1340px] table-fixed">
+          <table className="ds-table w-full min-w-[1620px] table-fixed">
             <thead>
               <tr>
                 {/* SELEÇÃO. O "todos" marca a PÁGINA FILTRADA, e o title diz isso com todas as
@@ -561,36 +579,46 @@ export default function BeneficiosPage() {
                 {/* MATRÍCULA ABRE A LINHA (decisão do diretor): é o número pelo qual a folha chama a
                     pessoa, e o time confere por ele antes do nome. É a mesma matrícula que a
                     importação da frente de Cadastro grava; aqui é só leitura. */}
-                <ColunaOrdenavel as="th" ord={ord} chave="matricula" className="w-[9%]">
+                <ColunaOrdenavel as="th" ord={ord} chave="matricula" className="w-[8%]">
                   Matrícula
                 </ColunaOrdenavel>
                 {/* "NOME", e não "Candidato" (decisão do diretor): quem está nesta fila já foi
                     admitido, é funcionário. Vale para todo rótulo de coluna e campo do sistema. */}
-                <ColunaOrdenavel as="th" ord={ord} chave="candidato" className="w-[13%]">
+                <ColunaOrdenavel as="th" ord={ord} chave="candidato" className="w-[11%]">
                   Nome
                 </ColunaOrdenavel>
-                <ColunaOrdenavel as="th" ord={ord} chave="dataAdmissao" className="w-[9%]">
+                <ColunaOrdenavel as="th" ord={ord} chave="dataAdmissao" className="w-[8%]">
                   Data adm.
                 </ColunaOrdenavel>
-                <ColunaOrdenavel as="th" ord={ord} chave="cliente" className="w-[12%]">
+                <ColunaOrdenavel as="th" ord={ord} chave="cliente" className="w-[10%]">
                   Cliente
+                </ColunaOrdenavel>
+                {/* CAMADA DE PAGAMENTO, as duas juntas e logo depois do Cliente, porque as duas
+                    SAEM do cadastro dele: a periodicidade é o texto cadastrado, e a data é a única
+                    conta desta camada. Quem não tem regra cadastrada mostra "não informado" nas
+                    duas, em vez de um traço ou de uma data chutada (§A.11). */}
+                <ColunaOrdenavel as="th" ord={ord} chave="periodicidade" className="w-[9%]">
+                  Periodicidade
+                </ColunaOrdenavel>
+                <ColunaOrdenavel as="th" ord={ord} chave="primeiroCredito" className="w-[9%]">
+                  1º crédito
                 </ColunaOrdenavel>
                 {/* STATUS junto das INFORMATIVAS (decisão do diretor), antes das ações: o consultor
                     bate o olho e vê o farol dos benefícios sem clicar em nada. Ordena pelo mesmo
                     enum que a pill mostra, então seta e etiqueta nunca discordam. */}
-                <ColunaOrdenavel as="th" ord={ord} chave="status" className="w-[15%]">
+                <ColunaOrdenavel as="th" ord={ord} chave="status" className="w-[10%]">
                   Status
                 </ColunaOrdenavel>
                 {/* AÇÕES NO CENTRO (decisão do diretor): na ponta direita ficava escondida, e é a
                     coluna que a pessoa usa a cada linha. Vem logo depois do Cliente, que é onde o
                     olho já está quando decide agir. */}
-                <th className="w-[7%]">Ações</th>
+                <th className="w-[6%]">Ações</th>
                 {siglas.map((s) => (
-                  <ColunaOrdenavel key={s} as="th" ord={ord} chave={s} className="w-[6%]">
+                  <ColunaOrdenavel key={s} as="th" ord={ord} chave={s} className="w-[5%]">
                     {s}
                   </ColunaOrdenavel>
                 ))}
-                <ColunaOrdenavel as="th" ord={ord} chave="outros" className="w-[8%]">
+                <ColunaOrdenavel as="th" ord={ord} chave="outros" className="w-[6%]">
                   Outros
                 </ColunaOrdenavel>
               </tr>
@@ -640,6 +668,23 @@ export default function BeneficiosPage() {
                         {/* CENTRALIZADO para casar com o cabeçalho (§A.12): a coluna era o único
                             ponto em que título e conteúdo apontavam para lados diferentes. */}
                         <td className="text-center">{rotuloCliente(l.codCliente, l.cliente)}</td>
+                        <td className="text-center">
+                          {l.periodicidade ? (
+                            ROTULO_PERIODICIDADE[l.periodicidade]
+                          ) : (
+                            <span className="text-faint">não informado</span>
+                          )}
+                        </td>
+                        <td
+                          className="text-center tabular-nums"
+                          title="Data de admissão mais os dias até o primeiro crédito cadastrados no cliente, contando o próprio dia da admissão"
+                        >
+                          {l.primeiroCredito ? (
+                            fmtData(l.primeiroCredito)
+                          ) : (
+                            <span className="text-faint">não informado</span>
+                          )}
+                        </td>
                         <td className="overflow-hidden text-center">
                           <span className="inline-flex max-w-full justify-center">
                             <StatusPill

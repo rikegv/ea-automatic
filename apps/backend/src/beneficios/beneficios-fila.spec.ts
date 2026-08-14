@@ -320,3 +320,52 @@ describe("valores dos quatro principais", () => {
     expect(r.items[0].valores.AM, "não tem o benefício").toBeNull();
   });
 });
+
+/**
+ * CAMADA DE PAGAMENTO POR CLIENTE (§A.17 etapa 4, onda 1).
+ *
+ * Dois campos com naturezas opostas de propósito, e o teste guarda a diferença:
+ *  - PERIODICIDADE é só informativa. Sai do cadastro do cliente e chega à linha como está, sem
+ *    cálculo nenhum. Foi o diretor que cortou o cálculo daqui.
+ *  - DATA DO 1º CRÉDITO é o único cálculo, e conta o PRÓPRIO DIA da admissão: 13/08 num cliente de
+ *    5 dias credita em 17/08 (13, 14, 15, 16, 17), não em 18/08. Zero e um caem na própria data.
+ *
+ * A expressão é declarada UMA vez e serve exibição e ordenação, então o teste de SQL abaixo é o que
+ * impede a seta de ordenar por um critério diferente do que a célula mostra.
+ */
+describe("camada de pagamento por cliente", () => {
+  it("a periodicidade chega à linha como está, sem cálculo", async () => {
+    const r = await montarSvc([{ ...PESSOA, periodicidade: "CADA_15_DIAS" }]).listar();
+    expect(r.items[0].periodicidade).toBe("CADA_15_DIAS");
+  });
+
+  it("cliente sem regra cadastrada devolve nulo, e a tela decide o texto", async () => {
+    const r = await montarSvc([{ ...PESSOA, periodicidade: null, primeiroCredito: null }]).listar();
+    expect(r.items[0].periodicidade).toBeNull();
+    expect(r.items[0].primeiroCredito).toBeNull();
+  });
+
+  it("a data do 1º crédito chega à linha", async () => {
+    const r = await montarSvc([{ ...PESSOA, primeiroCredito: "2026-08-17" }]).listar();
+    expect(r.items[0].primeiroCredito).toBe("2026-08-17");
+  });
+
+  /**
+   * A REGRA NO SQL, que é onde ela realmente vive. Sem isto, o cálculo só seria conferido pelo que o
+   * fake devolve, ou seja, não seria conferido.
+   */
+  it("o SQL conta o próprio dia da admissão e nunca inventa data", async () => {
+    const { svc, wheres } = montar([PESSOA]);
+    await svc.listar({ ordenarPor: "primeiroCredito", direcao: "asc" });
+    // A expressão da ordenação é a MESMA da exibição; renderizada, tem de carregar a regra inteira.
+    const rendered = sqlDoWhere(
+      (BeneficiosFilaService as unknown as { PRIMEIRO_CREDITO: unknown }).PRIMEIRO_CREDITO,
+    );
+    // `- 1` é o que faz o dia da admissão contar; `greatest(..., 0)` é o piso de "mesmo dia".
+    expect(rendered).toContain("- 1");
+    expect(rendered).toContain("greatest");
+    // Sem data de admissão ou sem regra do cliente, o resultado é NULO, nunca uma data chutada.
+    expect(rendered).toContain("is null");
+    expect(wheres.length).toBeGreaterThan(0);
+  });
+});

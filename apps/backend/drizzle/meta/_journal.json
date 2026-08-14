@@ -484,6 +484,13 @@
       "when": 1786571337729,
       "tag": "0068_beneficio_dois_estagios",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1786665416412,
+      "tag": "0069_camada_pagamento_beneficio",
+      "breakpoints": true
     }
   ]
 }
