@@ -58,4 +58,10 @@ bash scripts/deploy-local.sh
   ajusta na instalação. O que roda de fato vive em `~/.config/systemd/user/` (fora do repo).
 - O backend lê `apps/backend/.env` (via `WorkingDirectory`). O `.env` **não é versionado** (segredos).
 - CORS/OriginGuard: `ALLOWED_ORIGINS` no `.env` controla quais origens fazem login (hoje inclui
-  `http://10.18.117.235:3010`, sem wildcard).
+  `http://10.18.117.235:3010` e `http://192.168.1.22:3010`, sem wildcard).
+  **Endereço novo de acesso exige entrada nova aqui.** O Caddy escuta em `:3010` em todas as
+  interfaces, então qualquer IP da VM já responde; o que barra é o OriginGuard, que compara a
+  `Origin` por igualdade exata. O sintoma é login correto recusado com "Origin não permitida"
+  (403 antes de conferir a senha). Aconteceu com a VPN nova em 17/08/2026: o time recebeu
+  `http://192.168.1.22:3010` e não conseguia entrar. Adicionar SÓ o endereço confirmado, nunca
+  faixa nem wildcard (§A.6).
