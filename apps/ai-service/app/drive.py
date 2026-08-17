@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import threading
 from datetime import UTC, datetime
 from functools import lru_cache
 
@@ -44,8 +45,51 @@ SUBPASTA_NOME: dict[str, str] = {
 }
 
 
-@lru_cache
+# Cache do cliente do Drive POR THREAD. NÃO trocar por um cache global (era `@lru_cache`).
+#
+# O DEFEITO QUE ISTO CORRIGE, medido contra o Drive real. O cliente do Google carrega um `httplib2.Http`
+# por baixo, e `httplib2` NÃO é thread-safe: ele guarda a conexão aberta no próprio objeto. Os endpoints
+# deste serviço são síncronos, então o FastAPI os atende num POOL DE THREADS, e um cache global fazia
+# todas elas dividirem a MESMA conexão. Dois arquivamentos ao mesmo tempo (o que acontece o tempo todo:
+# dois consultores fechando régua, a reconciliação rodando junto, o ASO subindo em paralelo) embaralhavam
+# a conversa com o Google e as threads perdedoras ficavam paradas até estourar o timeout padrão de 60s,
+# vindo `TimeoutError`. Sonda com 4 threads: com o cache global, 3 das 4 falharam em 60,1s; com o cache
+# por thread, 4 de 4 responderam em 1,4s. Foi o que deixou o caso de 17/08/2026 (13 arquivos JÁ no
+# Drive) sem link gravado no EA, e o que produziu as 12 mortes na resolução da pasta desde 20/07.
+#
+# Custo: um cliente por thread do pool (dezenas, não milhares), cada um com sua conexão. Comportamento de
+# uma chamada sozinha é idêntico ao de antes; o que muda é só deixar de compartilhar.
+_local = threading.local()
+
+
 def get_drive_service():  # noqa: ANN201 - tipo do client é dinâmico
+    svc = getattr(_local, "service", None)
+    if svc is None:
+        svc = _construir_drive_service()
+        _local.service = svc
+    return svc
+
+
+def renovar_drive_service():  # noqa: ANN201 - tipo do client é dinâmico
+    """Joga fora o cliente desta thread e devolve um novo, com conexão limpa.
+
+    Existe para a RETENTATIVA: o modo de falha que sobrou depois do cache por thread é a conexão que
+    ficou inutilizável (o Google fechou do lado dele, a rede caiu no meio). Retentar com o MESMO
+    cliente repetiria o erro; retentar com um novo é o que realmente muda a tentativa.
+    """
+    _local.service = _construir_drive_service()
+    return _local.service
+
+
+@lru_cache
+def _credenciais_drive():  # noqa: ANN202 - tipo do client é dinâmico
+    """Credencial da service account, lida do disco UMA vez (o arquivo não muda em execução).
+
+    Separada do cliente de propósito: o que não pode ser compartilhado entre threads é a CONEXÃO
+    (o `httplib2.Http` dentro do cliente), não a credencial, e reler o JSON a cada thread seria I/O
+    de disco à toa. Cada cliente recebe uma CÓPIA (`with_scopes`), para não dividir o estado de
+    refresh do token.
+    """
     settings = get_settings()
     creds = service_account.Credentials.from_service_account_file(
         str(settings.credentials_path), scopes=_DRIVE_SCOPES
@@ -54,6 +98,11 @@ def get_drive_service():  # noqa: ANN201 - tipo do client é dinâmico
     # pura não tem quota de armazenamento. Em Shared Drive a SA pura basta.
     if settings.drive_delegated_subject:
         creds = creds.with_subject(settings.drive_delegated_subject)
+    return creds
+
+
+def _construir_drive_service():  # noqa: ANN202 - tipo do client é dinâmico
+    creds = _credenciais_drive().with_scopes(_DRIVE_SCOPES)
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
 

@@ -11,6 +11,7 @@ import { VtColetaQueueModule } from "../vt-coleta/vt-coleta-queue.module";
 import { DiagnosticoController } from "./diagnostico.controller";
 import { DiagnosticoService } from "./diagnostico.service";
 import { FilasDiagnosticoService } from "./filas.service";
+import { ReconciliacaoDriveSchedulerService } from "./reconciliacao-drive-scheduler.service";
 import { ReconciliacaoDriveService } from "./reconciliacao-drive.service";
 
 /**
@@ -35,6 +36,12 @@ import { ReconciliacaoDriveService } from "./reconciliacao-drive.service";
     VtColetaQueueModule,
   ],
   controllers: [DiagnosticoController],
-  providers: [DiagnosticoService, ReconciliacaoDriveService, FilasDiagnosticoService],
+  providers: [
+    DiagnosticoService,
+    ReconciliacaoDriveService,
+    // Faz a reconciliação rodar sozinha, em vez de depender de alguém abrir esta tela.
+    ReconciliacaoDriveSchedulerService,
+    FilasDiagnosticoService,
+  ],
 })
 export class DiagnosticoModule {}

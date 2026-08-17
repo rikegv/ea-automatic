@@ -38,6 +38,80 @@ def _mock_slug(pasta_nome: str) -> str:
     return hashlib.sha256(pasta_nome.encode("utf-8")).hexdigest()[:8]
 
 
+def _causa_provavel(exc: Exception) -> str:
+    """Diz a causa REAL da falha, em vez de chutar sempre a mesma.
+
+    POR QUE ESTE TEXTO EXISTE. A mensagem antiga era única para toda exceção: "a conta que o sistema usa
+    não enxerga essa pasta-pai, ou o id está errado". Para um `TimeoutError` isso é falso, e falso do
+    jeito mais caro possível: mandava conferir cadastro de pasta que estava certo, enquanto a causa real
+    (conexão disputada entre threads) seguia intocada. O diretor chegou a alocar endereço de pasta à mão
+    por causa dessa frase. Erro do Google (`HttpError`) continua apontando para permissão e id, que é
+    onde ele de fato costuma estar. §A.6: nenhum nome de pessoa entra aqui.
+    """
+    if isinstance(exc, HttpError):
+        return (
+            "Causa provável: a conta que o sistema usa não enxerga essa pasta-pai, ou o id está errado. "
+            "Verifique o cadastro da pasta-pai e o acesso da conta."
+        )
+    if isinstance(exc, TimeoutError):
+        return (
+            "Causa provável: o Drive não respondeu no tempo limite (indisponibilidade ou pico de "
+            "concorrência). O cadastro da pasta-pai NÃO está em questão, e a próxima tentativa "
+            "costuma passar."
+        )
+    return (
+        "Causa provável: falha de comunicação com o Drive. O cadastro da pasta-pai NÃO está em "
+        "questão; se o erro insistir, avise a TI."
+    )
+
+
+def _resolver_pasta(service, req: ArquivarRequest):  # noqa: ANN001, ANN201 - client dinâmico
+    """Resolve a pasta do prontuário, com UMA retentativa em conexão nova. Devolve o service em uso.
+
+    A RETENTATIVA É A CORREÇÃO DE UM DESEQUILÍBRIO. O upload de cada arquivo já tolerava falha desde a
+    OST de produção: soluço do Google não derruba o lote, a pasta e o link são preservados, e a próxima
+    tentativa completa. A RESOLUÇÃO da pasta não tinha nada disso: qualquer exceção, inclusive um
+    `TimeoutError` transitório, virava 502 seco. E 502 aqui é o pior desfecho possível, porque o backend
+    só grava `drive_pasta_url` quando a resposta chega: o EA perdia o link de uma pasta que muitas vezes
+    JÁ EXISTIA no Drive, cheia de documentos, e alguém tinha de ligar as duas pontas à mão.
+
+    Retenta com um cliente NOVO (`renovar_drive_service`), não com o mesmo: o modo de falha residual é a
+    conexão inutilizável, e repetir nela repetiria o erro. Uma vez só, no mesmo espírito do upload: erro
+    que persiste é erro de verdade, e aí o 502 é a resposta honesta.
+    """
+    for tentativa in (1, 2):
+        try:
+            # ÂNCORA PRIMEIRO (OST da duplicação, decisão do diretor). Se a admissão já tem pasta
+            # gravada, vai direto nela pelo ID: quem tem link não procura, e quem não procura não cria
+            # uma segunda. É isto que fecha a corrida entre duas execuções simultâneas. A busca por nome
+            # só acontece na PRIMEIRA vez, ou se a pasta ancorada tiver sumido do Drive.
+            ancorada = drive.abrir_pasta_por_id(service, req.pasta_id) if req.pasta_id else None
+            if ancorada:
+                return service, ancorada["id"], True, []
+            if req.pasta_id:
+                logger.warning(
+                    "Pasta ancorada não encontrada no Drive (id=%s): caindo na busca por nome. "
+                    "Ela pode ter sido apagada ou movida para a lixeira.",
+                    req.pasta_id,
+                )
+            pasta_func_id, pasta_ja_existia, extras = drive.resolver_pasta_do_funcionario(
+                service, req.pasta_nome, req.parent_folder_id
+            )
+            return service, pasta_func_id, pasta_ja_existia, [p["id"] for p in extras]
+        except Exception as exc:  # noqa: BLE001
+            if tentativa == 2:
+                raise
+            motivo = drive.motivo_http(exc) if isinstance(exc, HttpError) else type(exc).__name__
+            logger.warning(
+                "Resolução da pasta do funcionário falhou (%s). parentFolderId=%s. Retentando uma "
+                "vez com conexão nova.",
+                motivo,
+                req.parent_folder_id,
+            )
+            service = drive.renovar_drive_service()
+    raise AssertionError("inalcançável")  # pragma: no cover
+
+
 @router.post("/arquivar", response_model=ArquivamentoDrive, response_model_by_alias=True)
 def arquivar(req: ArquivarRequest, _: None = Depends(require_internal_token)) -> ArquivamentoDrive:
     settings = get_settings()
@@ -55,42 +129,25 @@ def arquivar(req: ArquivarRequest, _: None = Depends(require_internal_token)) ->
 
     service = drive.get_drive_service()
 
-    duplicatas: list[str] = []
     try:
-        # ÂNCORA PRIMEIRO (OST da duplicação, decisão do diretor). Se a admissão já tem pasta
-        # gravada, vai direto nela pelo ID: quem tem link não procura, e quem não procura não cria
-        # uma segunda. É isto que fecha a corrida entre duas execuções simultâneas. A busca por nome
-        # só acontece na PRIMEIRA vez, ou se a pasta ancorada tiver sumido do Drive.
-        ancorada = drive.abrir_pasta_por_id(service, req.pasta_id) if req.pasta_id else None
-        if ancorada:
-            pasta_func_id, pasta_ja_existia = ancorada["id"], True
-        else:
-            if req.pasta_id:
-                logger.warning(
-                    "Pasta ancorada não encontrada no Drive (id=%s): caindo na busca por nome. "
-                    "Ela pode ter sido apagada ou movida para a lixeira.",
-                    req.pasta_id,
-                )
-            pasta_func_id, pasta_ja_existia, extras = drive.resolver_pasta_do_funcionario(
-                service, req.pasta_nome, req.parent_folder_id
-            )
-            duplicatas = [p["id"] for p in extras]
+        service, pasta_func_id, pasta_ja_existia, duplicatas = _resolver_pasta(service, req)
     except Exception as exc:  # noqa: BLE001
         # Este caminho subia um 502 MUDO: nem log, nem motivo. Descoberto na troca de credencial,
         # quando a identidade nova não enxergava a pasta-pai e a única informação disponível era
         # "502 Bad Gateway". §A.6: motivo do Google e id da pasta-pai (id não é PII), nunca o nome.
         motivo = drive.motivo_http(exc) if isinstance(exc, HttpError) else type(exc).__name__
         logger.error(
-            "Falha ao resolver a pasta do funcionário (%s). parentFolderId=%s. Causa provável: a "
-            "conta que o sistema usa não enxerga essa pasta-pai, ou o id está errado.",
+            "Falha ao resolver a pasta do funcionário (%s), já com a retentativa. parentFolderId=%s. "
+            "%s",
             motivo,
             req.parent_folder_id,
+            _causa_provavel(exc),
         )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=(
                 f"Não foi possível abrir ou criar a pasta do funcionário no Drive ({motivo}). "
-                "Verifique se a conta do sistema tem acesso à pasta de destino."
+                f"{_causa_provavel(exc)}"
             ),
         ) from exc
     if pasta_ja_existia:
