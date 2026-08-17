@@ -9898,3 +9898,115 @@ não voltar a ser discutida:
 - **Cruzamento de nomes das duas esteiras.**
 - Decisões do Painel ainda em aberto: somar RESCISAO nos declínios (55) e tirar pausadas do Em
   Andamento (1).
+
+---
+
+## 17/08/2026 — Duas frentes de bug: a pasta que não nascia no Drive, e o login negado na VPN nova
+
+Sessão de dois bugs de produção independentes, os dois com causa raiz diferente da hipótese inicial.
+Ambos no ar e commitados no mesmo dia.
+
+### 1. Drive: prontuário existia e o EA não sabia (commit `799dbaf`)
+
+**O sintoma relatado.** "Vira e mexe preciso alocar o endereço da pasta à mão." Caso do dia: uma
+admissão de contrato Temporário (id `9eb90f8e`) sem pasta no Drive, mesmo com o Temporário já mapeado.
+
+**A hipótese estava errada, e vale registrar por quê.** Suspeitou-se de mapeamento faltando por par
+contrato+cliente. Não é: o escopo `CONTRATO` da tabela `drive_pasta_pai` é chaveado **só pelo tipo de
+contrato**, global para qualquer cliente. Só o **Fopag** resolve por cliente, com herança pela empresa
+do vínculo. Cliente novo não exige cadastro novo fora do Fopag. Prova operacional: outras duas
+admissões Temporário arquivaram normalmente na mesma pasta-pai minutos depois da que falhou.
+
+**A causa raiz real, reproduzida contra o Drive.** O `ai-service` guardava **um único cliente do
+Google em cache global** (`@lru_cache`). Ele carrega um `httplib2.Http`, que **não é thread-safe**, e
+os endpoints síncronos são atendidos num **pool de threads**: dois arquivamentos simultâneos dividiam
+a mesma conexão, e as threads perdedoras ficavam paradas até o timeout padrão de 60s, vindo
+`TimeoutError`. Sonda com 4 threads e cliente quente:
+
+| Cenário | Resultado |
+|---|---|
+| Sequencial, 1 chamada | 1,9s |
+| 4 threads dividindo UM cliente | **3 de 4 falham**, `TimeoutError` em 60,1s |
+| 4 threads, um cliente cada | **4 de 4 OK**, 1,3s |
+
+Medida do estrago: **12 mortes na resolução da pasta desde 20/07**, 11 delas sob a pasta-pai do
+Temporário, que é simplesmente o contrato da maioria das admissões vivas (58 de 97). Não era defeito
+de cadastro daquela pasta.
+
+**Por que virava pasta perdida.** O upload de cada arquivo já tolerava falha desde a OST de produção,
+mas a **resolução da pasta não tinha retentativa nenhuma**: qualquer exceção virava 502 seco, e o
+backend só grava `drive_pasta_url` quando a resposta chega. A pasta nascia no Drive, os arquivos
+subiam, e o link se perdia. Somou-se o timeout de 120s do cliente do backend, que desistia enquanto o
+`ai-service` ainda trabalhava.
+
+**A correção, três camadas.** (1) cache do cliente **por thread** (`threading.local`), com a
+credencial ainda lida uma vez e copiada por cliente, então o que deixa de ser compartilhado é só a
+conexão; (2) **uma retentativa** na resolução da pasta, em conexão nova; (3)
+`ReconciliacaoDriveSchedulerService`, `setInterval` in-process no molde do `StagingPurgeService`,
+cadência de 10 min com 2 min de espera inicial, porque a reconciliação já sabia consertar sozinha e o
+único gatilho era alguém abrir a tela de Diagnóstico.
+
+**Mais: o log mentia.** Para toda exceção, inclusive `TimeoutError`, o texto dizia que a conta não
+enxergava a pasta-pai ou o id estava errado. Foi essa frase que mandou o diretor conferir mapeamento
+correto e alocar endereço à mão. Agora separa erro do Google (permissão e id) de timeout e falha de
+comunicação (cadastro não está em questão).
+
+**Prova em produção.** Com tudo no ar, o agendador ligou **sozinho**, no primeiro ciclo, a admissão
+`9eb90f8e` à pasta que já existia no Drive com 13 arquivos, sem ninguém abrir tela. Régua fechada sem
+pasta e pendência de arquivamento foram **de 1 para 0**. Validado na tela pelo diretor.
+
+**Achado paralelo, não corrigido:** o runner `pnpm db:rearquiva-drive` **não sobe**, quebra no
+bootstrap com `AiClientService` recebendo `config` indefinido (injeção do Nest sob `tsx`). Defeito
+pré-existente, fora do escopo da OST. Por isso a admissão `9eb90f8e` foi resolvida pela reconciliação,
+não pelo runner. Fica anotado.
+
+**Observação anotada, não mexida:** `gcs.py` guarda o cliente do GCS no mesmo padrão de cache global.
+Biblioteca diferente e risco bem menor que o do `httplib2`, mas é a mesma classe de problema.
+
+**Lint pré-existente:** `ruff` acusa 1 erro em `drive.py` (um `f` sobrando em string sem interpolação,
+na função de readiness), anterior a esta frente. Não corrigido por §A.14.
+
+### 2. VPN nova: login negado por origem não listada (commit `d7a1998`)
+
+**O sintoma.** O Fernando abriu uma VPN nova e passou ao time `http://192.168.1.22:3010/login`. O EA
+respondia "ACESSO NEGADO / Origin não permitida" com login e senha corretos. O endereço antigo
+(`http://10.18.117.235:3010`) funcionava, e os dois são a mesma VM (`192.168.1.22` é o eth0 interno,
+`10.18.117.235` é a interface ZeroTier).
+
+**Causa.** O `OriginGuard` compara a `Origin` com `ALLOWED_ORIGINS` por **igualdade exata**, e o
+endereço novo não estava lá. O guard só cobra origem em método mutante **sem Bearer**, e o login é
+exatamente isso: POST sem token, porque o token ainda não existe. Daí o **403 antes de a senha ser
+conferida**, que faz credencial certa parecer errada.
+
+**Descartado no diagnóstico:** o Caddy escuta em `:3010` em todas as interfaces, sem filtro por host
+(por isso a tela de login carregava e só o POST morria); não há `enableCors` no backend, então o
+`OriginGuard` é o único filtro de origem; e o `/api` é servido same-origin com o backend em loopback,
+então a VPN nova alcançar ou não outro host é irrelevante. Era só a lista.
+
+**Correção.** Adicionado **só** `http://192.168.1.22:3010`, sem wildcard nem faixa. Conferido depois
+de subir: as duas origens legítimas passam o guard (401, credencial), enquanto `192.168.1.99:3010`
+(vizinho da mesma faixa) e um host externo seguem em **403**. Login real pelo endereço novo validado
+na tela, com a `Origin` verdadeira do browser. O `.env` real não é versionado; foram commitados o
+`.env.example` e o `infra/systemd/README.md`, com o sintoma escrito.
+
+**Regra que fica:** endereço novo de acesso exige entrada nova em `ALLOWED_ORIGINS`. O sintoma é
+sempre o mesmo, login correto recusado com "Origin não permitida".
+
+### 3. MARCADOR DE ACOMPANHAMENTO (pedido do diretor): a frente do Drive só se confirma com o tempo
+
+A correção do Drive **não tem confirmação definitiva hoje**. A prova existente é a sonda, os testes e
+o caso do dia resolvido sozinho, mas o defeito é de **concorrência**, então a confirmação real é
+estatística: só se sabe que funcionou de vez **se parar de aparecer admissão sem pasta**.
+
+**Como acompanhar, nos próximos dias:**
+
+- Sinal de alerta: aparecer admissão viva com **régua fechada e sem pasta**, ou com
+  `drive_falha_motivo` preenchido, sem que a reconciliação resolva no ciclo seguinte.
+- Onde olhar: card "Arquivamento No Drive Falhou" no Diagnóstico, e os logs do `ai-service` por
+  `TimeoutError` ou "Falha ao resolver a pasta do funcionário".
+- **Voltando a aparecer, REABRIR a frente.** Duas pistas a checar primeiro: se o `TimeoutError`
+  voltou (aí a raiz não estava só no cliente compartilhado) e se o timeout de 120s do
+  `AiClientService` está cortando lote grande antes de o `ai-service` terminar, que é o segundo
+  fator identificado no diagnóstico e **não foi mexido** nesta frente.
+- Estado de partida para comparação, em 17/08/2026 após a correção: **régua fechada sem pasta = 0**,
+  **pendência de arquivamento = 0**.
