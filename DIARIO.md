@@ -10010,3 +10010,87 @@ estatística: só se sabe que funcionou de vez **se parar de aparecer admissão 
   fator identificado no diagnóstico e **não foi mexido** nesta frente.
 - Estado de partida para comparação, em 17/08/2026 após a correção: **régua fechada sem pasta = 0**,
   **pendência de arquivamento = 0**.
+
+---
+
+## 18/08/2026: relatório exportável do Gerenciador (item 11c), mais o acúmulo do working tree
+
+Sessão de uma frente nova (item 11c) que terminou levando junto duas frentes validadas que estavam
+soltas no working tree, por autorização do diretor. Três commits, recorte nominal (§A.14/§A.21).
+
+### 1. Item 11c: relatório exportável de candidatos em xlsx (commit `86fc36e`)
+
+**O que o diretor pediu.** Relatório com nome e telefone, colunas escolhíveis pelo consultor,
+reusando os filtros que já existem no Gerenciador. Formato xlsx (exceljs já estava no projeto).
+Aberto a TODOS os usuários autenticados, SEM restrição de papel e SEM trilha de exportação (decisão
+dele: a operação precisa funcionar aberta).
+
+**O que entrou.** Botão "Exportar" no Gerenciador, ao lado do filtro, abrindo o seletor de colunas:
+25 colunas do cadastro em três grupos (candidato, admissão, vaga/folha), nome e telefone já marcados,
+com "Marcar todas" e "Voltar ao padrão". O arquivo sai com cabeçalho congelado, filtro automático,
+data em formato brasileiro, salário como NÚMERO (o time soma na planilha), matrícula e CPF como texto
+(o zero à esquerda da folha sobrevive) e célula sem dado vazia, que é o que deixa o filtro do Excel
+separar "sem telefone" de "com telefone".
+
+**A decisão técnica que importa, e o porquê.** O recorte tinha de ser o da tela, e o montador de
+condições do Gerenciador vivia INLINE dentro de `admissoes.service.listar`, que também alimenta os
+KPIs. As duas saídas eram copiar as condições (régua paralela) ou extrair. O diretor escolheu
+EXTRAIR: nasceu `admissoes/admissoes-filtros.ts`, chamado pela lista e pelo relatório, com o SQL
+movido byte a byte. Com duas cópias, o primeiro filtro ajustado de um lado só faria o arquivo trazer
+conjunto diferente do que está na tela, e a divergência apareceria DENTRO do arquivo, onde ninguém
+confere. A ordenação do relatório leva `id` de desempate: a lista pagina por `criado_em` e a carga
+gravou milhares de admissões no mesmo instante, então sem o desempate um conjunto grande sairia com
+linha repetida e linha faltando.
+
+**§A.6, decisão do diretor na abertura da frente.** Banco, agência, conta e CPF do substituído ficam
+FORA das colunas oferecidas. O schema já marcava esses campos como exibíveis só na ficha da própria
+admissão, nunca em superfície coletiva, e relatório baixável é a superfície coletiva por definição.
+Teto de 20 mil linhas com recado na tela, nunca corte silencioso (a base inteira hoje passa folgada).
+
+**Leitura pura (§A.26/§A.27):** não escreve nada, não recalcula régua, farol nem contagem.
+
+**Prova (§A.13), com o sistema no ar.** Tela sem filtro: 2.615 na tela, 2.615 linhas no arquivo. Tela
+filtrada pelo card de pendências mais busca: 13 na tela, 13 no arquivo. Exportação com as 25 colunas
+marcadas: 102 na tela, 102 no arquivo, sem nenhum dado bancário. Prints e os dois xlsx de exemplo em
+`~/ost-relatorio-exportavel-prints/`. Validado pelo diretor na tela.
+
+### 2. Benefícios, onda 2: regras por cliente e ficha em modo leitura (commit `3450cea`)
+
+Frente que já estava validada e solta no working tree. Tabela `cliente_beneficio_regra` (1 para N por
+cliente, chave por sigla, texto livre por decisão do diretor) com CRUD próprio, alimentando o modal
+"Principais Informações" da tela de Benefícios: a regra escrita que o time precisa ter à mão ao
+lançar. As duas operações entraram no menu de quem cadastra e consulta, então quem não tem o menu não
+lê as regras. A ficha da admissão ganhou `somenteLeitura`, que esconde as seis ações de escrita e
+nasce `false`: Esteira, Gerenciador e Não Conformidades seguem idênticas. Entrou com teste de
+componente (§A.26) cujo primeiro caso monta o modal SEM a prop e quebra se as ações sumirem das três
+telas de hoje; para ele rodar, o vitest do frontend ganhou o alias `@/`. Migration 0070.
+
+### 3. Item 8: dados bancários digitados e aviso de divergência (commit `143e0dc`)
+
+Também validado e solto no working tree; a 0070 do Benefícios encadeia com as migrations dele, então
+o diretor autorizou commitar junto. A regra de auditoria "os dados bancários devem coincidir com os
+informados no cadastro" estava cadastrada desde sempre e era LETRA MORTA: a IA recebia só nome e CPF
+e não tinha contra o que comparar, e o consultor abria o Pandapé para conferir à mão o que já chegava
+no payload. O extrator passou a guardar agência e conta junto do nome do banco, a ficha mostra os três
+para conferência (exibição, não edição) e a auditoria do comprovante compara os dois lados.
+Divergência é AVISO e nunca bloqueio (§A.3 regra 5): o documento segue o veredito das regras e a régua
+fecha. `divergencia_bancaria` guarda RÓTULOS de campo, jamais valores (§A.6), e é reescrito a cada
+auditoria, então some sozinho quando o dado é corrigido. Campo vazio é caso normal, não divergência.
+Migrations 0071 e 0072.
+
+### Gate e estado
+
+Verde antes do push: **1.398 testes do backend** (129 arquivos), **99 do frontend** (17 arquivos,
+já com o teste de componente novo), **140 do ai-service**, mais **14 testes novos** do gerador do
+xlsx. Typecheck de backend e frontend limpos, eslint limpo sobre todos os arquivos tocados. Deploy
+local feito antes da validação (build mais restart dos serviços systemd, health conferido), que é o
+que permitiu a prova visual.
+
+**Achado que fica aberto, fora do escopo desta OST (§A.14):** `packages/shared-types/src/cpf.spec.ts`
+está VERMELHO desde antes desta sessão. Ele espera três frentes (`AUDITORIA`, `EXAME`,
+`CADASTRO_CONTRATO`) e o sistema tem quatro desde que a INTEGRACAO entrou; o teste nunca foi
+atualizado. É conserto de uma linha, não toquei por não estar na OST. Consequência prática: o
+`pnpm test` do pacote `shared-types` falha, e quem rodar o gate pelo agregado vai tropeçar nisso sem
+que seja regressão.
+
+**Não commitado de propósito:** `logosoulan.png`, solto na raiz e sem OST que o reivindique.
