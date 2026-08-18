@@ -16,6 +16,10 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { cn } from "@/lib/cn";
 import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
 import { DIRECAO_INICIAL, type Direcao, type Ordenacao } from "@/lib/ordenacao";
+// A MESMA ficha da Esteira, reusada e não recriada (decisão do diretor). O componente é o mesmo que a
+// Esteira, o Gerenciador e as Não Conformidades já montam; nada nele foi alterado por esta tela.
+import { AdmissaoDetalheModal } from "@/components/esteira/AdmissaoDetalheModal";
+import { RegrasClienteModal } from "@/components/beneficios/RegrasClienteModal";
 
 /**
  * BENEFÍCIOS (§A.17 etapa 4): a fila de quem tem benefício a cadastrar.
@@ -234,6 +238,13 @@ export default function BeneficiosPage() {
   const [flash, setFlash] = useState<string | null>(null);
   /** Linha em edição: abre o modal do pacote. */
   const [editando, setEditando] = useState<Linha | null>(null);
+  /** Admissão com a FICHA aberta (o olho). Só o id: a ficha busca o resto por conta própria. */
+  const [viewId, setViewId] = useState<string | null>(null);
+  /**
+   * Cliente com as REGRAS abertas (a lâmpada). Guarda o CÓDIGO DO CLIENTE, e não a linha: a regra é
+   * do cliente, então duas pessoas do mesmo cliente abrem exatamente o mesmo conteúdo.
+   */
+  const [regrasCliente, setRegrasCliente] = useState<{ cod: string; rotulo: string } | null>(null);
   /** Catálogo de benefícios ATIVOS, para o modal oferecer o que existe. Carregado uma vez. */
   const [catalogo, setCatalogo] = useState<{ id: string; nome: string }[]>([]);
 
@@ -557,7 +568,7 @@ export default function BeneficiosPage() {
               com a entrada das colunas Status e Matrícula: é onde todos os títulos ainda cabem
               inteiros no cabeçalho. Abaixo disso a tabela ROLA, que é o comportamento pedido, em vez
               de truncar o título da coluna (§A.20). */}
-          <table className="ds-table w-full min-w-[1620px] table-fixed">
+          <table className="ds-table w-full min-w-[1780px] table-fixed">
             <thead>
               <tr>
                 {/* SELEÇÃO. O "todos" marca a PÁGINA FILTRADA, e o title diz isso com todas as
@@ -584,13 +595,13 @@ export default function BeneficiosPage() {
                 </ColunaOrdenavel>
                 {/* "NOME", e não "Candidato" (decisão do diretor): quem está nesta fila já foi
                     admitido, é funcionário. Vale para todo rótulo de coluna e campo do sistema. */}
-                <ColunaOrdenavel as="th" ord={ord} chave="candidato" className="w-[11%]">
+                <ColunaOrdenavel as="th" ord={ord} chave="candidato" className="w-[10%]">
                   Nome
                 </ColunaOrdenavel>
-                <ColunaOrdenavel as="th" ord={ord} chave="dataAdmissao" className="w-[8%]">
+                <ColunaOrdenavel as="th" ord={ord} chave="dataAdmissao" className="w-[7%]">
                   Data adm.
                 </ColunaOrdenavel>
-                <ColunaOrdenavel as="th" ord={ord} chave="cliente" className="w-[10%]">
+                <ColunaOrdenavel as="th" ord={ord} chave="cliente" className="w-[9%]">
                   Cliente
                 </ColunaOrdenavel>
                 {/* CAMADA DE PAGAMENTO, as duas juntas e logo depois do Cliente, porque as duas
@@ -600,21 +611,31 @@ export default function BeneficiosPage() {
                 <ColunaOrdenavel as="th" ord={ord} chave="periodicidade" className="w-[9%]">
                   Periodicidade
                 </ColunaOrdenavel>
-                <ColunaOrdenavel as="th" ord={ord} chave="primeiroCredito" className="w-[9%]">
+                <ColunaOrdenavel as="th" ord={ord} chave="primeiroCredito" className="w-[8%]">
                   1º crédito
                 </ColunaOrdenavel>
                 {/* STATUS junto das INFORMATIVAS (decisão do diretor), antes das ações: o consultor
                     bate o olho e vê o farol dos benefícios sem clicar em nada. Ordena pelo mesmo
                     enum que a pill mostra, então seta e etiqueta nunca discordam. */}
-                <ColunaOrdenavel as="th" ord={ord} chave="status" className="w-[10%]">
+                {/* 12% e não 10%: em 10% a coluna dava 162px para uma pill de 172px, e
+                    "Benefício Não Calculado" era cortada na borda (§A.20). 11% ainda faltava 2px,
+                    medido na tela, então a régua aqui é a MEDIDA e não a conta.
+                    OS 2% VÊM DAS QUATRO COLUNAS DE SIGLA (5% para 4,5% cada), e não de Matrícula e
+                    Periodicidade: tirar delas fazia caber a pill e passava a truncar os DOIS
+                    cabeçalhos, trocando um corte por outro. As siglas mostram "Sim" ou "Não" sob um
+                    título de duas letras, e são as únicas com folga que sobra depois de tudo. */}
+                <ColunaOrdenavel as="th" ord={ord} chave="status" className="w-[12%]">
                   Status
                 </ColunaOrdenavel>
                 {/* AÇÕES NO CENTRO (decisão do diretor): na ponta direita ficava escondida, e é a
                     coluna que a pessoa usa a cada linha. Vem logo depois do Cliente, que é onde o
                     olho já está quando decide agir. */}
-                <th className="w-[6%]">Ações</th>
+                {/* 8% e não 6%: com o olho a coluna passou a ter TRÊS botões, e 6% os espremia
+                    (§A.20). Os 2% saem das duas colunas de data, que sobravam largura para um
+                    dd/mm/aaaa; o total das colunas segue o mesmo. */}
+                <th className="w-[10%]">Ações</th>
                 {siglas.map((s) => (
-                  <ColunaOrdenavel key={s} as="th" ord={ord} chave={s} className="w-[5%]">
+                  <ColunaOrdenavel key={s} as="th" ord={ord} chave={s} className="w-[4.5%]">
                     {s}
                   </ColunaOrdenavel>
                 ))}
@@ -717,6 +738,38 @@ export default function BeneficiosPage() {
                             >
                               <Icon name="pen" className="h-4 w-4" />
                             </button>
+                            {/* FICHA DA ADMISSÃO (o mesmo olho da Esteira). O time de benefícios vê os
+                                dados da admissão sem trocar de tela. A ficha é a MESMA, sem variação
+                                própria desta tela: uma ficha diferente por tela é como as leituras
+                                voltam a divergir. */}
+                            <button
+                              type="button"
+                              onClick={() => setViewId(l.admissaoId)}
+                              title="Ver ficha da admissão"
+                              aria-label={`Ver ficha de ${l.candidato}`}
+                              className="grid h-8 w-8 flex-none place-items-center rounded-lg border border-[var(--border)] text-dim transition hover:border-[var(--accent)] hover:text-text"
+                            >
+                              <Icon name="eye" className="h-4 w-4" />
+                            </button>
+                            {/* PRINCIPAIS INFORMAÇÕES: as regras de benefício do CLIENTE. Abre pelo
+                                código do cliente da linha, então todas as pessoas do mesmo cliente
+                                mostram o mesmo conteúdo. Linha sem cliente não tem o que abrir. */}
+                            {l.codCliente && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setRegrasCliente({
+                                    cod: l.codCliente!,
+                                    rotulo: rotuloCliente(l.codCliente, l.cliente),
+                                  })
+                                }
+                                title="Principais informações: as regras de benefício deste cliente"
+                                aria-label={`Principais informações do cliente ${rotuloCliente(l.codCliente, l.cliente)}`}
+                                className="grid h-8 w-8 flex-none place-items-center rounded-lg border border-[var(--border)] text-dim transition hover:border-[var(--accent)] hover:text-text"
+                              >
+                                <Icon name="bulb" className="h-4 w-4" />
+                              </button>
+                            )}
                           </div>
                         </td>
                         {l.textoImportado ? (
@@ -859,6 +912,26 @@ export default function BeneficiosPage() {
             </ul>
           )}
         </Modal>
+      )}
+
+      {/* FICHA DA ADMISSÃO, o mesmo componente da Esteira. As props do ASO ficam de fora de
+          propósito, são da aba Exame da Esteira; sem elas o bloco do veredito da I.A não aparece.
+          `somenteLeitura` (decisão do diretor): aqui o time CONSULTA a admissão, quem a opera é a
+          Esteira. As telas que já usavam este modal não passam a prop e seguem com as ações. */}
+      {viewId && (
+        <AdmissaoDetalheModal
+          admissaoId={viewId}
+          somenteLeitura
+          onClose={() => setViewId(null)}
+        />
+      )}
+
+      {regrasCliente && (
+        <RegrasClienteModal
+          codCliente={regrasCliente.cod}
+          clienteRotulo={regrasCliente.rotulo}
+          onClose={() => setRegrasCliente(null)}
+        />
       )}
     </>
   );

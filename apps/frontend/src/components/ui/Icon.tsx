@@ -33,7 +33,8 @@ export type IconName =
   | "logout"
   | "sun"
   | "moon"
-  | "refresh";
+  | "refresh"
+  | "bulb";
 
 const PATHS: Record<IconName, JSX.Element> = {
   home: <path d="M3 10l9-7 9 7v9a2 2 0 0 1-2 2h-3v-7H8v7H5a2 2 0 0 1-2-2z" />,
@@ -162,6 +163,15 @@ const PATHS: Record<IconName, JSX.Element> = {
     <>
       <path d="M21 12a9 9 0 1 1-2.64-6.36" />
       <path d="M21 3v6h-6" />
+    </>
+  ),
+  // Lâmpada: as regras de benefício do cliente (o "Principais Informações"). Adição pura ao conjunto,
+  // no mesmo traço e no mesmo viewBox dos demais; nenhum ícone existente muda.
+  bulb: (
+    <>
+      <path d="M9 18h6" />
+      <path d="M10 21h4" />
+      <path d="M12 3a6 6 0 0 0-3.6 10.8c.5.4.8.9.9 1.5l.1.7h5.2l.1-.7c.1-.6.4-1.1.9-1.5A6 6 0 0 0 12 3z" />
     </>
   ),
 };

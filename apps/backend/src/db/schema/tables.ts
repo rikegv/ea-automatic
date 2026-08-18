@@ -157,6 +157,39 @@ export const clienteBeneficioPadrao = pgTable(
   }),
 );
 
+// ── ClienteBeneficioRegra: as REGRAS de benefício do cliente (onda 2) ───────
+// A regra escrita que o time de benefícios precisa ter à mão ao lançar: "VT sem desconto em folha",
+// "VR descontado 10%", "AM sem coparticipação". É do CLIENTE, então vale igual para todas as pessoas
+// dele; a tela lê pelo `cod_cliente` da linha e nunca pela admissão.
+//
+// TABELA PRÓPRIA, e não coluna em `clientes` como a camada de pagamento: aquela são três valores de
+// valor ÚNICO por cliente, e esta é 1 para N (um cliente, uma regra por benefício). O desenho é o do
+// `cliente_beneficio_padrao` logo acima, com a mesma chave estável por SIGLA.
+//
+// `beneficio` guarda a sigla ("VT", "VR", "VA", "AM"), mais "OUTROS" para o que não é dos quatro
+// principais e "GERAL" para a nota do cliente inteiro. Texto LIVRE (decisão do diretor): lista
+// fechada engessaria a primeira exceção que aparecesse.
+//
+// §A.6: política comercial do cliente, sem PII e sem CPF. Nada aqui entra em farol, contagem ou KPI.
+export const clienteBeneficioRegra = pgTable(
+  "cliente_beneficio_regra",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    codCliente: text("cod_cliente")
+      .notNull()
+      .references(() => clientes.codCliente, { onDelete: "cascade" }),
+    beneficio: varchar("beneficio", { length: 10 }).notNull(),
+    texto: text("texto").notNull(),
+    criadoEm,
+    atualizadoEm,
+  },
+  // Uma regra por (cliente + benefício): a gravação é um upsert por esta chave, então salvar duas
+  // vezes corrige em vez de duplicar.
+  (t) => ({
+    uq: uniqueIndex("uq_cliente_beneficio_regra").on(t.codCliente, t.beneficio),
+  }),
+);
+
 // ── Cargo (catálogo próprio) ────────────────────────────────────────────────
 export const cargos = pgTable("cargos", {
   id: uuid("id").defaultRandom().primaryKey(),

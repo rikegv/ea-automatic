@@ -5,11 +5,14 @@ import {
   IsIn,
   IsNumber,
   IsOptional,
+  IsString,
   IsUUID,
+  MaxLength,
   Min,
   ValidateNested,
 } from "class-validator";
 import { SEQUENCIA_BENEFICIO } from "../db/schema/enums";
+import { CHAVES_REGRA_BENEFICIO } from "../domain/regras-beneficio";
 
 /**
  * AVANÇAR O ESTÁGIO (§A.17 etapa 4). Um id ou N: o clique da linha e o lote falam o mesmo contrato,
@@ -50,4 +53,30 @@ export class EditarPacoteDto {
   @ValidateNested({ each: true })
   @Type(() => ItemPacoteDto)
   itens!: ItemPacoteDto[];
+}
+
+/** Uma regra de benefício do cliente: a chave (sigla, OUTROS ou GERAL) e o texto livre. */
+export class RegraBeneficioDto {
+  @IsIn([...CHAVES_REGRA_BENEFICIO])
+  beneficio!: string;
+
+  /**
+   * Texto LIVRE (decisão do diretor). O teto de 2.000 é só sanidade de payload, não régua de escrita:
+   * cabe qualquer regra real com folga. Texto vazio significa APAGAR a regra, e é tratado no serviço.
+   */
+  @IsString()
+  @MaxLength(2000)
+  texto!: string;
+}
+
+/**
+ * SALVAR AS REGRAS DO CLIENTE. O payload é a lista COMPLETA das regras dele, e não um delta: é o
+ * mesmo contrato do pacote acima, pelo mesmo motivo. Chave ausente ou com texto vazio é regra
+ * APAGADA, que é como o time desfaz o que cadastrou errado.
+ */
+export class SalvarRegrasBeneficioDto {
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => RegraBeneficioDto)
+  regras!: RegraBeneficioDto[];
 }

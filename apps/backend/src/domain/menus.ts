@@ -237,6 +237,15 @@ export const MENUS: MenuDef[] = [
       "BeneficiosFilaController.listar",
       "BeneficiosFilaController.avancar",
       "BeneficiosFilaController.editarPacote",
+      // REGRAS DE BENEFÍCIO POR CLIENTE (onda 2), o modal "Principais Informações". Ficam no menu de
+      // quem cadastra e consulta a regra, que é este time (decisão do diretor).
+      //
+      // A LEITURA entra junto da escrita, e não fica aberta: operação não reivindicada é alcançável
+      // por qualquer autenticado, e esta devolve a política comercial do cliente. Consequência a
+      // registrar: quem NÃO tem este menu não lê as regras, inclusive de outra tela que venha a
+      // querer mostrá-las.
+      "RegrasBeneficioController.listar",
+      "RegrasBeneficioController.salvar",
     ],
   },
   // ── Administração ─────────────────────────────────────────────────────────

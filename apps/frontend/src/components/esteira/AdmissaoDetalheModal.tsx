@@ -279,6 +279,7 @@ export function AdmissaoDetalheModal({
   asoEstado,
   asoMotivo,
   asoTipoDocumentoId,
+  somenteLeitura = false,
   onClose,
 }: {
   admissaoId: string;
@@ -290,6 +291,19 @@ export function AdmissaoDetalheModal({
   asoMotivo?: string | null;
   /** Tipo ASO, para abrir o arquivo pelas mesmas rotas dos documentos da régua. */
   asoTipoDocumentoId?: string | null;
+  /**
+   * FICHA SEM AS AÇÕES DE ESCRITA (decisão do diretor, onda 2 dos Benefícios). Esconde as seis ações
+   * do modal: editar uniforme, reenviar por correção, trocar cliente e cargo, corrigir CPF, marcar a
+   * troca como revisada e as duas do formulário de VT. O que sobra é a ficha lida.
+   *
+   * NASCE `false`, e é por isso que ela não muda nada no que já existe: a Esteira, o Gerenciador e as
+   * Não Conformidades não passam a prop, então continuam com as ações exatamente como estavam. Quem
+   * pede o modo leitura é só a tela de Benefícios, onde o time consulta o dado e não opera a admissão.
+   *
+   * ESCONDER NÃO É AUTORIZAR: a autoridade continua no `@Roles` e no `MenuGuard` de cada rota. Isto é
+   * conveniência de tela, pelo mesmo critério que o `isAdmin` já usa aqui.
+   */
+  somenteLeitura?: boolean;
   onClose: () => void;
 }) {
   // `isAdmin` (MASTER ou SUPER_ADMIN) governa a VISIBILIDADE das correções. A autoridade continua
@@ -702,16 +716,21 @@ export function AdmissaoDetalheModal({
                   Revise os DOCUMENTOS já coletados e o prontuário: a régua documental do novo par pode
                   exigir outros documentos, e o que foi coletado antes pode não servir.
                 </p>
-                <div className="mt-2 flex justify-end">
-                  <Button
-                    variant="secondary"
-                    className="!py-1.5 !text-[12.5px]"
-                    disabled={revisando}
-                    onClick={() => setConfirmandoRevisao(true)}
-                  >
-                    {revisando ? "Registrando…" : "Revisado"}
-                  </Button>
-                </div>
+                {/* O AVISO permanece no modo leitura, só o botão sai: quem consulta precisa SABER que
+                    houve troca (muda a leitura da ficha inteira), mas quem dá por revisado é o
+                    consultor que confere os documentos, na tela dele. */}
+                {!somenteLeitura && (
+                  <div className="mt-2 flex justify-end">
+                    <Button
+                      variant="secondary"
+                      className="!py-1.5 !text-[12.5px]"
+                      disabled={revisando}
+                      onClick={() => setConfirmandoRevisao(true)}
+                    >
+                      {revisando ? "Registrando…" : "Revisado"}
+                    </Button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -732,7 +751,7 @@ export function AdmissaoDetalheModal({
             {/* CORREÇÕES DE MASTER (OST Onda 3, item 1, parte 3). Só MASTER/SUPER_ADMIN VÊ, e o
                 `@Roles` das duas rotas é quem de fato barra o consultor comum. São as interfaces dos
                 motores dos itens 8 e 9, que já existiam e só não tinham botão. */}
-            {isAdmin && (
+            {isAdmin && !somenteLeitura && (
               <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border)] px-3 py-2">
                 <span className="text-[11px] uppercase tracking-wide text-faint">Correções</span>
                 <div className="ml-auto flex flex-wrap gap-2">
@@ -802,7 +821,7 @@ export function AdmissaoDetalheModal({
               {/* EDIÇÃO DO UNIFORME (item 11b). O tamanho costuma chegar DEPOIS da liberação, e até
                   aqui não havia por onde corrigir. Fica fechado por padrão: a ficha continua sendo de
                   leitura, e a edição é um passo deliberado. */}
-              {!uniformeAberto ? (
+              {somenteLeitura ? null : !uniformeAberto ? (
                 <button
                   type="button"
                   onClick={abrirUniforme}
@@ -1121,7 +1140,7 @@ export function AdmissaoDetalheModal({
                       Contrato assinado no Drive
                     </a>
                   )}
-                  {temEnvelopeReenviavel(data.clicksignStatus) && (
+                  {temEnvelopeReenviavel(data.clicksignStatus) && !somenteLeitura && (
                     <button
                       type="button"
                       className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-[12.5px] font-semibold text-dim transition hover:bg-[var(--surface-2)] hover:text-accent disabled:opacity-60"
@@ -1154,7 +1173,10 @@ export function AdmissaoDetalheModal({
               )}
             </Bloco>
 
-            {/* Formulário de VT (§A.17): gerar o link do candidato + buscar o formulário preenchido. */}
+            {/* Formulário de VT (§A.17): gerar o link do candidato + buscar o formulário preenchido.
+                O bloco INTEIRO sai no modo leitura: as duas ações dele são escrita (gerar link e
+                enfileirar busca), e sem elas sobraria um bloco com um texto e nenhum botão. */}
+            {!somenteLeitura && (
             <Bloco titulo="Formulário de VT">
               <p className="mb-3 text-[12.5px] text-dim">
                 Gere o link para o candidato preencher o vale-transporte pelo celular e envie a ele,
@@ -1239,6 +1261,7 @@ export function AdmissaoDetalheModal({
                 </p>
               )}
             </Bloco>
+            )}
 
             {/* Trilha de passagem (S3) — auditoria, preservada. */}
             {data.passagens.length > 0 && (
