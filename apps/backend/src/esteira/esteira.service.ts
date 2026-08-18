@@ -77,6 +77,7 @@ import {
 } from "../domain/esteira";
 import { STATUS_INICIAL_FRENTE } from "../domain/admissao";
 import { clienteExigeIntegracao } from "./integracao-obrigatoria.repo";
+import { nascerCadastroEIntegracao } from "./nascimento-cadastro";
 import type { AgendamentoIntegracaoDto } from "./dto/agendamento-integracao.dto";
 import type { AgendamentoIntegracaoLoteDto } from "./dto/agendamento-integracao-lote.dto";
 import type { AgendamentoExameDto } from "./dto/agendamento-exame.dto";
@@ -181,6 +182,25 @@ export class EsteiraService {
         "RESCISAO",
         "AGUARDANDO_LIBERACAO",
         "LIBERACAO_RECUSADA",
+        /**
+         * BANCO_AGUARDAR SAI **SÓ** DA INTEGRAÇÃO (item 2 da OST dos 3 ajustes, decisão do diretor).
+         *
+         * O RECORTE É DELIBERADO e não é meio-caminho. Integração é AGENDAMENTO com hora marcada:
+         * marcar a integração de quem está no banco é marcar uma reunião para uma data que ninguém
+         * sabe se existe. Nas outras três frentes o trabalho CONTINUA durante o banco (documento
+         * chega, exame acontece, cadastro se prepara), e é exatamente por isso que a correção de
+         * 13/08/2026 acrescentou a tag "Banco, Aguardar" na coluna Status em vez de esconder a linha.
+         *
+         * ALCANCE PROVADO (§A.26): estender a exclusão às outras abas tiraria da fila aberta 2 na
+         * Auditoria, 8 no Exame e 3 no Cadastro, derrubando os KPIs junto e desfazendo aquela
+         * correção. Painel, Gerenciador e Alto Volume não são tocados em nenhum dos casos, porque
+         * leem farol e as expressões compartilhadas, nunca esta fila.
+         *
+         * DECLÍNIO E RESCISÃO **JÁ** saíam de todas as abas por esta mesma lista, carimbados de onde
+         * for: o botão da Esteira e o lápis do Gerenciador gravam o farol, e a Integração lê o mesmo
+         * filtro das outras três. O único desfecho que faltava sair era o banco.
+         */
+        ...(tipo === "INTEGRACAO" ? (["BANCO_AGUARDAR"] as const) : []),
       ]),
     ];
     if (filtros.codCliente?.length) {
@@ -876,8 +896,27 @@ export class EsteiraService {
       tipo === "CADASTRO_CONTRATO" &&
       conclui(tipo, novo) &&
       !irmas.some((f) => f.tipo === "INTEGRACAO");
+
+    /**
+     * O GATE DO CADASTRO VAI ABRIR NESTA TRANSIÇÃO? (item 1 da OST dos 3 ajustes)
+     *
+     * Calculado AQUI FORA, e não só dentro da transação, porque agora ele decide também se a
+     * Integração nasce, e a decisão precisa da leitura de `clienteExigeIntegracao`, que é consulta
+     * pura e não tem por que ocupar a transação. É a MESMA conta que o `gateAberto` refaz lá dentro,
+     * a partir das MESMAS `irmas`: nada aqui depende de estado que só existe na transação.
+     */
+    const gateVaiAbrir =
+      podeAbrirCadastro(
+        irmas.map((f) =>
+          f.id === frenteId ? { tipo, concluida: conclui(tipo, novo) } : { tipo: f.tipo, concluida: f.concluida },
+        ),
+      ) && !cadastroExistente;
+
+    // Uma leitura só, servindo aos DOIS gatilhos: o nascimento junto com o Cadastro (regra nova) e o
+    // nascimento na conclusão (caminho antigo, mantido para as admissões que já têm Cadastro aberto
+    // e nunca passaram pelo gatilho novo).
     const clienteExige =
-      fechaCadastroSemIntegracaoExistente &&
+      (fechaCadastroSemIntegracaoExistente || gateVaiAbrir) &&
       (await clienteExigeIntegracao(this.db, admissao?.codCliente));
     const nasceIntegracao = fechaCadastroSemIntegracaoExistente && clienteExige;
 
@@ -958,25 +997,23 @@ export class EsteiraService {
 
       let cadastroId = cadastroExistente?.id ?? null;
       let nasceuAgora = false;
-      // Nascimento lazy: só cria se ainda não existe (preserva o trabalho da frente existente).
+      // Nascimento lazy: só cria se ainda não existe (preserva o trabalho da frente existente). A
+      // INTEGRAÇÃO nasce JUNTO, pela porta única (`nascerCadastroEIntegracao`), na MESMA transação:
+      // ou as duas frentes existem, ou nenhuma.
       if (gateAberto && !cadastroExistente) {
-        const [novoCad] = await tx
-          .insert(frentesAdmissao)
-          .values({
-            admissaoId: frente.admissaoId,
-            tipo: "CADASTRO_CONTRATO",
-            status: "A_CADASTRAR",
-            concluida: false,
-            dataInicio: agora,
-          })
-          .returning({ id: frentesAdmissao.id });
-        cadastroId = novoCad.id;
+        const nascidas = await nascerCadastroEIntegracao(tx, {
+          admissaoId: frente.admissaoId,
+          agora,
+          exigeIntegracao: clienteExige,
+        });
+        cadastroId = nascidas.cadastroId;
         nasceuAgora = true;
       }
 
-      // Nascimento lazy da INTEGRAÇÃO, na MESMA transação da conclusão do Cadastro: ou as duas
-      // coisas acontecem, ou nenhuma. `onConflictDoNothing` fecha a corrida de dois cliques
-      // simultâneos, já que existe unique por (admissão + tipo).
+      // CAMINHO ANTIGO, mantido de propósito: a Integração nascendo na CONCLUSÃO do Cadastro. Não é
+      // redundância com o bloco acima, é a ponte para quem já tem o Cadastro aberto de antes desta
+      // OST e nunca passou pelo gatilho novo. Some sozinho quando não sobrar Cadastro dessa safra.
+      // `onConflictDoNothing` fecha a corrida de dois cliques simultâneos (unique por admissão+tipo).
       if (nasceIntegracao) {
         await tx
           .insert(frentesAdmissao)
@@ -1981,6 +2018,14 @@ export class EsteiraService {
       ),
     );
     const precisaNascerCadastro = gateAberto && !irmas.some((f) => f.tipo === "CADASTRO_CONTRATO");
+    // Item 1 da OST dos 3 ajustes: nascendo o Cadastro, nasce a Integração junto. Leitura fora da
+    // transação, no mesmo padrão do caminho manual.
+    const adm = precisaNascerCadastro
+      ? await this.db.query.admissoes.findFirst({ where: eq(admissoes.id, admissaoId) })
+      : null;
+    const exigeIntegracao = precisaNascerCadastro
+      ? await clienteExigeIntegracao(this.db, adm?.codCliente)
+      : false;
 
     const agora = new Date();
     await this.db.transaction(async (tx) => {
@@ -1997,15 +2042,10 @@ export class EsteiraService {
         reversao: false,
         autorId: user?.id ?? null,
       });
-      // Nascimento lazy do Cadastro (regra 3), igual ao caminho manual: só cria se não existe.
+      // Nascimento lazy do Cadastro (regra 3) E da Integração (item 1), igual ao caminho manual:
+      // mesma porta única, só cria o que não existe.
       if (precisaNascerCadastro) {
-        await tx.insert(frentesAdmissao).values({
-          admissaoId,
-          tipo: "CADASTRO_CONTRATO",
-          status: "A_CADASTRAR",
-          concluida: false,
-          dataInicio: agora,
-        });
+        await nascerCadastroEIntegracao(tx, { admissaoId, agora, exigeIntegracao });
       }
     });
     await recomputeFarolGlobal(this.db, admissaoId);

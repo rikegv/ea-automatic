@@ -10,6 +10,27 @@ import { LiberarAdmissaoDto } from "./dto/liberar-admissao.dto";
 import { LiberarEmLoteDto } from "./dto/liberar-lote.dto";
 
 /**
+ * Fake do `select()` do Drizzle com DUAS respostas, e o que as distingue é o JOIN.
+ *
+ * A liberação faz duas leituras por `select`: a RÉGUA do par (sem join) e a TRAVA DE CPF DUPLICADO
+ * (item 3 da OST dos 3 ajustes, que usa leftJoin em cliente e cargo). O fake devolve as linhas da
+ * régua na consulta sem join e VAZIO na com join, que é o cenário destes testes: nenhum outro CPF
+ * vivo, então a trava não dispara e o caminho medido segue sendo o de sempre.
+ */
+function selectFake(linhasRegua: unknown[]) {
+  return () => ({
+    from: () => {
+      const comJoin: { leftJoin: () => typeof comJoin; where: () => Promise<unknown[]> } = {
+        leftJoin: () => comJoin,
+        where: async () => [],
+      };
+      return { ...comJoin, where: async () => linhasRegua };
+    },
+  });
+}
+
+
+/**
  * ALTO VOLUME (onda 2): o flag da Liberação.
  *
  * O QUE ESTES TESTES PROTEGEM, e é por isso que eles existem antes de qualquer outra coisa: a
@@ -71,9 +92,7 @@ function montar(cen: Cenario = {}) {
     })),
     // A régua do par é lida DENTRO da transação no individual (`lerReguaDoPar` aceita db ou tx), e
     // FORA dela no lote. As duas leituras têm de devolver a mesma coisa, senão o fake mente.
-    select: vi.fn(() => ({
-      from: () => ({ where: async () => [{ tipoDocumentoId: "td1", exigencia: "OBRIGATORIO" }] }),
-    })),
+    select: vi.fn(selectFake([{ tipoDocumentoId: "td1", exigencia: "OBRIGATORIO" }])),
   };
 
   const ids = cen.admissoes ?? ["a1"];
@@ -107,9 +126,7 @@ function montar(cen: Cenario = {}) {
       },
     },
     // Régua do par: uma linha obrigatória, para o lote não cair na barra de "par sem régua".
-    select: vi.fn(() => ({
-      from: () => ({ where: async () => [{ tipoDocumentoId: "td1", exigencia: "OBRIGATORIO" }] }),
-    })),
+    select: vi.fn(selectFake([{ tipoDocumentoId: "td1", exigencia: "OBRIGATORIO" }])),
     transaction: async (fn: (t: typeof tx) => Promise<unknown>) => {
       transacoes += 1;
       return fn(tx);

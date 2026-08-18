@@ -97,7 +97,12 @@ function montar(opts: {
     },
     values: (valores: Record<string, unknown>) => {
       lista.push({ tabela, valores });
-      return { onConflictDoUpdate: async () => undefined };
+      // `onConflictDoNothing().returning()` é o que o nascimento de frentes usa
+      // (`esteira/nascimento-cadastro`), chamado pela auto-conclusão da Auditoria.
+      return {
+        onConflictDoUpdate: async () => undefined,
+        onConflictDoNothing: () => ({ returning: async () => [{ id: "frente-nova" }] }),
+      };
     },
   });
   const tx = { update: vi.fn(registrar(updates)), insert: vi.fn(registrar([])) };

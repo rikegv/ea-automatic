@@ -1,6 +1,7 @@
 import { Type } from "class-transformer";
 import {
   IsArray,
+  IsBoolean,
   IsIn,
   IsOptional,
   IsString,
@@ -128,4 +129,14 @@ export class LiberarAdmissaoDto {
   @IsOptional()
   @IsIn(SEXO_VALORES as unknown as string[], { message: "Selecione um sexo válido." })
   sexo?: SexoValor;
+
+  /**
+   * ACEITE do alerta de CPF DUPLICADO (item 3 da OST dos 3 ajustes). A liberação individual passou a
+   * consultar AO VIVO se o CPF já tem admissão em andamento e devolve 409 `needsConfirmation` quando
+   * tem. A tela mostra as admissões vivas e reenvia com este campo quando o consultor confirma que
+   * não é duplicata. Ausente vale como "não confirmou", que é o estado de quem nunca viu o alerta.
+   */
+  @IsOptional()
+  @IsBoolean()
+  aceiteDuplicidade?: boolean;
 }

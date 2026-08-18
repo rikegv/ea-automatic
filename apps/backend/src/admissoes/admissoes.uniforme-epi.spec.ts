@@ -112,6 +112,26 @@ describe("DTO da liberação: catálogo fechado", () => {
   });
 });
 
+/**
+ * Fake do `select()` do Drizzle com DUAS respostas, e a distinção é o JOIN.
+ *
+ * A liberação faz duas leituras por `select`: a RÉGUA do par (sem join) e a TRAVA DE CPF DUPLICADO
+ * (item 3 da OST dos 3 ajustes, com leftJoin em cliente e cargo). O fake devolve as linhas da régua
+ * na consulta sem join e VAZIO na consulta com join, que é o cenário destes testes: nenhum outro
+ * CPF vivo, então a trava não dispara e o caminho medido continua sendo o de sempre.
+ */
+function selectFake(linhasRegua: unknown[]) {
+  return () => ({
+    from: () => {
+      const comJoin: { leftJoin: () => typeof comJoin; where: () => Promise<unknown[]> } = {
+        leftJoin: () => comJoin,
+        where: async () => [],
+      };
+      return { ...comJoin, where: async () => linhasRegua };
+    },
+  });
+}
+
 /** Fake mínimo do Drizzle para o caminho da liberação individual. */
 function montar() {
   const atualizados: Record<string, unknown>[] = [];
@@ -124,7 +144,7 @@ function montar() {
     })),
     insert: vi.fn(() => ({ values: async () => undefined })),
     // A régua do par é lida DENTRO da transação (`lerReguaDoPar` aceita db ou tx).
-    select: vi.fn(() => ({ from: () => ({ where: async () => [] }) })),
+    select: vi.fn(selectFake([])),
   };
   const db = {
     query: {
@@ -145,7 +165,7 @@ function montar() {
       integracaoPandape: { findFirst: async () => null },
       beneficiosCatalogo: { findMany: async () => [] },
     },
-    select: vi.fn(() => ({ from: () => ({ where: async () => [] }) })),
+    select: vi.fn(selectFake([])),
     transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
   };
   return { db, atualizados, service: new AdmissoesService(db as never) };

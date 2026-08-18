@@ -30,12 +30,14 @@ import {
   type ProjetoDoSeletor,
 } from "@/lib/alto-volume";
 import {
+  FAROL_GLOBAL_LABEL,
   isValidCpf,
   ITENS_EPI,
   ROTULO_ITEM_EPI,
   TAMANHOS_BOTA,
   TAMANHOS_CALCA,
   TAMANHOS_CAMISETA,
+  type FarolGlobal,
   type ItemEpi,
 } from "@ea/shared-types";
 
@@ -407,6 +409,15 @@ export default function LiberacaoPage() {
   const [beneficiosValores, setBeneficiosValores] = useState<Record<string, string>>({});
   const [liberando, setLiberando] = useState(false);
   const [modalErro, setModalErro] = useState<string | null>(null);
+  /**
+   * ALERTA DE CPF DUPLICADO (item 3 da OST dos 3 ajustes). O backend consulta AO VIVO se o CPF já
+   * tem admissão em andamento e devolve 409 `needsConfirmation` com a lista. Não é erro: é decisão
+   * do consultor, então vira painel de confirmação e não mensagem vermelha.
+   */
+  const [dupAviso, setDupAviso] = useState<{
+    message: string;
+    vivas: { cliente: string; cargo: string; situacao: string }[];
+  } | null>(null);
   // LIBERAÇÃO EM MASSA: ids selecionados na aba Aguardando, modal do lote e relatório final.
   const [selecionados, setSelecionados] = useState<string[]>([]);
   const [loteAberto, setLoteAberto] = useState(false);
@@ -693,9 +704,11 @@ export default function LiberacaoPage() {
     setAvGrupoSel("");
     setAvGrupos([]);
     setModalErro(null);
+    setDupAviso(null);
   }
   function fecharModal() {
     if (liberando) return;
+    setDupAviso(null);
     setAlvo(null);
   }
 
@@ -746,10 +759,15 @@ export default function LiberacaoPage() {
     });
   }
 
-  async function liberar() {
+  /**
+   * `aceiteDuplicidade` só vem `true` no REENVIO, depois de o consultor ler o painel de duplicidade
+   * e confirmar. A primeira tentativa nunca o manda, senão a trava do backend nasceria morta.
+   */
+  async function liberar(aceiteDuplicidade = false) {
     if (!alvo || !codCliente || !cargoId) return;
     setLiberando(true);
     setModalErro(null);
+    setDupAviso(null);
     setError(null);
     setOkMsg(null);
     try {
@@ -780,6 +798,8 @@ export default function LiberacaoPage() {
             // SEXO: vai quando há valor (confirmado do Pandapé ou escolhido agora). Em branco não
             // vai, e sexo ausente segue não cobrando Reservista de ninguém.
             sexo: sexo || undefined,
+            // Só viaja no reenvio confirmado; `false` fica de fora para não sujar o payload.
+            aceiteDuplicidade: aceiteDuplicidade || undefined,
             // ALTO VOLUME (onda 2): só viaja com o FLAG LIGADO. Desligado manda `undefined`, o
             // backend não recebe projeto, não valida e não grava vínculo, e a liberação sai byte a
             // byte igual à de antes desta onda. O grupo é opcional mesmo com o projeto escolhido.
@@ -815,12 +835,28 @@ export default function LiberacaoPage() {
       await load();
       refreshBadge(); // saiu da fila: badge cai na hora.
     } catch (e) {
-      const msg =
+      // DUPLICIDADE DE CPF: não é falha, é pergunta. Abre o painel de confirmação em vez do erro.
+      const data =
         e instanceof ApiError && typeof e.data === "object" && e.data
-          ? ((e.data as { message?: string }).message ?? e.message)
-          : e instanceof Error
-            ? e.message
-            : "Erro ao liberar";
+          ? (e.data as {
+              message?: string;
+              reason?: string;
+              vivas?: { cliente: string; cargo: string; situacao: string }[];
+            })
+          : null;
+      if (data?.reason === "cpfDuplicado") {
+        setDupAviso({
+          message: data.message ?? "Já existe admissão em andamento para este CPF.",
+          vivas: data.vivas ?? [],
+        });
+        setLiberando(false);
+        return;
+      }
+      const msg = data
+        ? (data.message ?? (e as ApiError).message)
+        : e instanceof Error
+          ? e.message
+          : "Erro ao liberar";
       setModalErro(msg);
     } finally {
       setLiberando(false);
@@ -1924,6 +1960,32 @@ export default function LiberacaoPage() {
             </p>
           )}
 
+          {/* CPF DUPLICADO (item 3): pergunta, não erro. Amarelo de aviso, com as admissões vivas
+              que o backend achou AO VIVO, para o consultor decidir com o contexto na mão. */}
+          {dupAviso && (
+            <div
+              className="mt-4 rounded-xl border border-[rgba(201,138,18,0.4)] bg-[rgba(201,138,18,0.1)] px-3 py-2.5 text-[13px] text-warn"
+              role="alert"
+            >
+              <div className="eyebrow !mb-1">Possível Duplicata De CPF</div>
+              <p>{dupAviso.message}</p>
+              {dupAviso.vivas.length > 0 && (
+                <ul className="mt-2 list-disc space-y-0.5 pl-4">
+                  {dupAviso.vivas.map((v, i) => (
+                    <li key={i}>
+                      {v.cliente}, {v.cargo}:{" "}
+                      {FAROL_GLOBAL_LABEL[v.situacao as FarolGlobal] ?? v.situacao}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="mt-2">
+                Se for a mesma pessoa numa vaga nova, pode confirmar e liberar. Se for duplicata,
+                cancele e recuse a pré-admissão.
+              </p>
+            </div>
+          )}
+
           <div className="mt-6 flex items-center justify-between gap-3">
             {/* Recusar: visível a todos, ATIVO só para Master/Super Admin (o backend também barra por
                 @Roles). Consultor comum vê desabilitado. */}
@@ -1941,10 +2003,14 @@ export default function LiberacaoPage() {
                 Cancelar
               </Button>
               <Button
-                onClick={() => void liberar()}
+                onClick={() => void liberar(Boolean(dupAviso))}
                 disabled={!podeLiberar || liberando || acaoRecusa}
               >
-                {liberando ? "Liberando…" : "Liberar"}
+                {liberando
+                  ? "Liberando…"
+                  : dupAviso
+                    ? "Confirmar e liberar"
+                    : "Liberar"}
               </Button>
             </div>
           </div>

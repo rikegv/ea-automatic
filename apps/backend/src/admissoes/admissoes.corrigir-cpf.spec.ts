@@ -5,6 +5,27 @@ import { admissoes, candidatoAlteracoesLog, candidatos } from "../db/schema";
 import type { AuthUser } from "../auth/auth.types";
 
 /**
+ * Fake do `select()` do Drizzle com DUAS respostas, e o que as distingue é o JOIN.
+ *
+ * A liberação faz duas leituras por `select`: a RÉGUA do par (sem join) e a TRAVA DE CPF DUPLICADO
+ * (item 3 da OST dos 3 ajustes, que usa leftJoin em cliente e cargo). O fake devolve as linhas da
+ * régua na consulta sem join e VAZIO na com join, que é o cenário destes testes: nenhum outro CPF
+ * vivo, então a trava não dispara e o caminho medido segue sendo o de sempre.
+ */
+function selectFake(linhasRegua: unknown[]) {
+  return () => ({
+    from: () => {
+      const comJoin: { leftJoin: () => typeof comJoin; where: () => Promise<unknown[]> } = {
+        leftJoin: () => comJoin,
+        where: async () => [],
+      };
+      return { ...comJoin, where: async () => linhasRegua };
+    },
+  });
+}
+
+
+/**
  * ITEM 9 — CPF ERRADO DO PANDAPÉ.
  *
  * Frente A: o dígito verificador é conferido na LIBERAÇÃO (individual e lote), que é a porta de
@@ -150,7 +171,7 @@ describe("liberar (item 9, Frente A)", () => {
           candidatos: { findFirst: vi.fn().mockResolvedValue({ nome: "Fulano", cpf }) },
           beneficiosCatalogo: { findMany: vi.fn().mockResolvedValue([]) },
         },
-        select: vi.fn(() => ({ from: () => ({ where: async () => [] }) })),
+        select: vi.fn(selectFake([])),
         transaction: async () => {
           transacoes.n += 1;
           return { admissaoId: ADM_ID, temRegua: false };

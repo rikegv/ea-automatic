@@ -37,6 +37,8 @@ import { DrivePastaPaiService } from "../ai/drive-pasta-pai.service";
 import { recomputeFarolGlobal } from "../admissoes/farol";
 import { calcSinalizadorPreenchimento } from "../domain/admissao";
 import { podeAbrirCadastro } from "../domain/frentes";
+import { clienteExigeIntegracao } from "../esteira/integracao-obrigatoria.repo";
+import { nascerCadastroEIntegracao } from "../esteira/nascimento-cadastro";
 import {
   ESTADO_AGUARDANDO_AUDITORIA,
   estadoDocumentoDeAuditoria,
@@ -665,6 +667,17 @@ export class AuditoriaService {
       return { status: auditoria?.status ?? "ANALISE_OK", gateAberto };
     }
 
+    // Item 1: nascendo o Cadastro, nasce a Integração junto (só para cliente que exige). Leitura
+    // FORA da transação, no mesmo padrão dos demais caminhos.
+    const precisaNascerCadastro =
+      gateAberto && !frentes.some((f) => f.tipo === "CADASTRO_CONTRATO");
+    const alvo = precisaNascerCadastro
+      ? await this.db.query.admissoes.findFirst({ where: eq(admissoes.id, admissaoId) })
+      : null;
+    const exigeIntegracao = precisaNascerCadastro
+      ? await clienteExigeIntegracao(this.db, alvo?.codCliente)
+      : false;
+
     await this.db.transaction(async (tx) => {
       const agora = new Date();
       await tx
@@ -680,15 +693,11 @@ export class AuditoriaService {
         reversao: false,
         autorId: user.id,
       });
-      // Nascimento lazy do Cadastro quando o gate abre (regra 3) e ainda não existe.
-      if (gateAberto && !frentes.some((f) => f.tipo === "CADASTRO_CONTRATO")) {
-        await tx.insert(frentesAdmissao).values({
-          admissaoId,
-          tipo: "CADASTRO_CONTRATO",
-          status: "A_CADASTRAR",
-          concluida: false,
-          dataInicio: agora,
-        });
+      // Nascimento lazy do Cadastro quando o gate abre (regra 3) e ainda não existe. A INTEGRAÇÃO
+      // nasce junto (item 1 da OST dos 3 ajustes), pela MESMA porta única dos outros dois caminhos:
+      // este é justamente o caminho que a §A.26 conta ter quebrado calado por ser esquecido.
+      if (precisaNascerCadastro) {
+        await nascerCadastroEIntegracao(tx, { admissaoId, agora, exigeIntegracao });
       }
     });
 

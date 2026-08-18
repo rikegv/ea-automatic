@@ -104,7 +104,12 @@ function makeDb() {
     insert: vi.fn(() => ({
       values: (v: Record<string, unknown>) => {
         inserts.push(v);
-        return Promise.resolve(undefined);
+        // `onConflictDoNothing().returning()` é o que o nascimento de frentes usa
+        // (`esteira/nascimento-cadastro`), chamado pela auto-conclusão da Auditoria.
+        return {
+          onConflictDoNothing: () => ({ returning: async () => [{ id: "frente-nova" }] }),
+          then: (r: (v: unknown) => unknown) => Promise.resolve(undefined).then(r),
+        };
       },
     })),
   };
@@ -122,6 +127,7 @@ function makeDb() {
         inserts.push(v);
         return {
           onConflictDoUpdate: async () => undefined,
+          onConflictDoNothing: () => ({ returning: async () => [{ id: "frente-nova" }] }),
         };
       },
     })),

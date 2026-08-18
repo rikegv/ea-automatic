@@ -79,7 +79,7 @@ import { parseBeneficiosPadrao } from "../domain/beneficios";
 import { FRENTES_AO_NASCER } from "../domain/frentes";
 import { PandapeQueueService } from "../pandape/pandape-queue.service";
 import { recomputeFarolGlobal } from "./farol";
-import { pendenciasObrigatorias } from "../domain/admissao";
+import { FAROIS_VIVOS, pendenciasObrigatorias } from "../domain/admissao";
 import { pendenciasObrigatoriasSet } from "../regua/pendencias-lote";
 import { configDoCliente } from "../regua/pendencia-config.repo";
 import { recalcularSinalizadorDaAdmissao } from "../regua/sinalizador.repo";
@@ -771,6 +771,11 @@ export class AdmissoesService {
        * lote, um mesmo valor valeria para todo mundo da leva, o que é errado por definição.
        */
       sexo?: "MASCULINO" | "FEMININO";
+      /**
+       * ACEITE do alerta de CPF duplicado (item 3 da OST dos 3 ajustes). Só chega preenchido quando
+       * o consultor já viu o 409 com a lista e confirmou que NÃO é duplicata.
+       */
+      aceiteDuplicidade?: boolean;
     },
     user: AuthUser,
   ): Promise<{ admissaoId: string; temRegua: boolean }> {
@@ -780,6 +785,7 @@ export class AdmissoesService {
       throw new ConflictException("Esta admissão não está aguardando liberação.");
     }
     if (!isValidCpf(adm.candidatoCpf)) throw new BadRequestException(CPF_INVALIDO_NA_LIBERACAO);
+    await this.travarDuplicidadeDeCpf(adm.id, adm.candidatoCpf, dto.aceiteDuplicidade);
     // UNIFORME (OST Onda 3, item 1): a RESPOSTA é obrigatória para liberar individualmente. Ter
     // uniforme não bloqueia nada; não ter respondido, sim. A trava mora aqui, e NÃO no miolo
     // compartilhado, porque o LOTE segue a regra dos demais campos (o que vai em branco vira
@@ -847,6 +853,73 @@ export class AdmissoesService {
     // Pull do acervo do Pandapé: FORA da transação e sem poder derrubá-la (ver o método).
     await this.enfileirarPullDocumentos(admissaoId);
     return resultado;
+  }
+
+  /**
+   * TRAVA DE CPF DUPLICADO NA LIBERAÇÃO INDIVIDUAL (item 3 da OST dos 3 ajustes, decisão do diretor).
+   *
+   * O QUE ELA CONSERTA. O lote já recusava duplicata desde sempre, mas lendo a COLUNA
+   * `possivel_duplicata`, que é uma FOTO tirada na entrada do Pandapé (`pandape-sync.service`). A
+   * liberação INDIVIDUAL não tinha trava nenhuma: validava dígito do CPF, farol e uniforme, e
+   * liberava. A tela mostrava a tag "Possível duplicata" e o botão funcionava do mesmo jeito.
+   *
+   * POR QUE A CONTA É AO VIVO, e não a coluna. A foto tem dois furos que a coluna nunca fecha:
+   * pré-admissão que não veio do Pandapé nunca recebe a marca, e duplicata que nasce DEPOIS da foto
+   * deixa a marca em `false` para sempre. Consultando na hora, a resposta é sobre o estado de agora,
+   * que é o único que importa no instante de liberar.
+   *
+   * BLOQUEIO COM ACEITE, e não bloqueio seco. Candidato PODE ter N admissões (§A.3), e uma segunda
+   * vaga legítima em outro cliente é caso real, não erro. Bloquear seco impediria trabalho correto;
+   * deixar passar calado é o que está acontecendo hoje. O aceite explícito é o mesmo padrão de
+   * `needsConfirmation` que a Esteira já usa na reversão de status e na sobreposição de agendamento.
+   *
+   * NÃO TOCA NO LOTE. Lá a trava por coluna continua exatamente como está, e continua mandando a
+   * duplicata para o tratamento individual, que agora é o lugar onde a decisão de fato acontece.
+   *
+   * §A.6: a mensagem NÃO repete o CPF (é a chave de identidade, e o consultor já o vê na tela). Sai
+   * só o contexto de que ele precisa para decidir: cliente, cargo e situação de cada admissão viva.
+   */
+  private async travarDuplicidadeDeCpf(
+    admissaoId: string,
+    cpf: string,
+    aceite?: boolean,
+  ): Promise<void> {
+    if (aceite) return;
+    const outras = await this.db
+      .select({
+        clienteRazao: clientes.razaoSocial,
+        clienteOperacao: clientes.nomeOperacao,
+        cargoNome: cargos.nome,
+        farolGlobal: admissoes.farolGlobal,
+      })
+      .from(admissoes)
+      .leftJoin(clientes, eq(clientes.codCliente, admissoes.codCliente))
+      .leftJoin(cargos, eq(cargos.id, admissoes.cargoId))
+      .where(
+        and(
+          eq(admissoes.candidatoCpf, normalizeCpf(cpf)),
+          ne(admissoes.id, admissaoId),
+          // FAROL VIVO, e nada além dele: admissão concluída ou declinada do passado é HISTÓRICO, e
+          // §A.3 regra 6 diz que o reaproveitamento por CPF é o comportamento esperado. Alertar
+          // sobre elas viraria ruído em cima de quase toda readmissão.
+          inArray(admissoes.farolGlobal, [...FAROIS_VIVOS]),
+        ),
+      );
+    if (outras.length === 0) return;
+
+    throw new ConflictException({
+      needsConfirmation: true,
+      reason: "cpfDuplicado",
+      vivas: outras.map((o) => ({
+        cliente: o.clienteOperacao ?? o.clienteRazao ?? "não informado",
+        cargo: o.cargoNome ?? "não informado",
+        situacao: o.farolGlobal,
+      })),
+      message:
+        outras.length === 1
+          ? "Já existe uma admissão em andamento para este CPF. Confirme que não é duplicata antes de liberar."
+          : `Já existem ${outras.length} admissões em andamento para este CPF. Confirme que não é duplicata antes de liberar.`,
+    });
   }
 
   /**
