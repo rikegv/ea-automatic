@@ -27,6 +27,11 @@ import { triarConjunto } from "./conteudo-documento";
 import { idDaPastaUrl, montarNomePasta, resolveSubpasta } from "../ai/drive-routing";
 import { duplicatasAcesas } from "../ai/drive-duplicatas";
 import { filtrarPorSexo } from "../domain/documentos-por-sexo";
+import {
+  cadastroBancarioParaAuditoria,
+  divergenciasReconhecidas,
+  TIPO_COMPROVANTE_BANCARIO,
+} from "../domain/cadastro-bancario";
 import { TravaPorChave } from "../domain/trava-por-chave";
 import { DrivePastaPaiService } from "../ai/drive-pasta-pai.service";
 import { recomputeFarolGlobal } from "../admissoes/farol";
@@ -127,6 +132,13 @@ export class AuditoriaService {
         // Sexo do candidato: condiciona a exigência do Reservista. O arquivamento passou a precisar
         // dele pelo mesmo motivo que a régua (OST do seletor de sexo), ver `tiposExigidosPorSexo`.
         candidatoSexo: candidatos.sexo,
+        // DADOS BANCÁRIOS DIGITADOS (melhorias EAC, item 8). Só viajam para a auditoria do
+        // comprovante bancário, e é o que finalmente dá conteúdo à regra "Os dados bancários devem
+        // coincidir com os informados no cadastro", cadastrada desde sempre e até aqui letra morta:
+        // a IA recebia nome e CPF e nada mais, então não tinha contra o que comparar.
+        candidatoBanco: candidatos.banco,
+        candidatoAgencia: candidatos.agencia,
+        candidatoConta: candidatos.conta,
         clienteOperacao: clientes.nomeOperacao,
       })
       .from(admissoes)
@@ -285,12 +297,20 @@ export class AuditoriaService {
         camposConferidos: [],
       };
     } else {
+      // Dados bancários digitados: só viajam quando o tipo É o comprovante bancário e o candidato
+      // preencheu alguma coisa. É o que tira do papel a regra de coincidência (§A.6, minimização).
+      const cadastroBancario = cadastroBancarioParaAuditoria(tipo.codigo, {
+        banco: adm.candidatoBanco ?? undefined,
+        agencia: adm.candidatoAgencia ?? undefined,
+        conta: adm.candidatoConta ?? undefined,
+      });
       try {
         resultado = await this.auditarComRetentativa({
           stagingPaths: stagingAuditaveis,
           tipoDocumentoCodigo: tipo.codigo,
           tipoDocumentoNome: tipo.nome,
           candidato: { nome: adm.candidatoNome, cpf: adm.candidatoCpf },
+          ...(cadastroBancario ? { cadastroBancario } : {}),
           regras: regras.map((r) => ({ descricaoRegra: r.descricaoRegra })),
         });
       } catch (err) {
@@ -314,6 +334,28 @@ export class AuditoriaService {
         target: [documentosAdmissao.admissaoId, documentosAdmissao.tipoDocumentoId],
         set: { estado, observacao, atualizadoEm: new Date() },
       });
+
+    // 4.3) DIVERGÊNCIA BANCÁRIA (melhorias EAC, item 8): o comprovante bancário é o único tipo que
+    // traz cadastro para comparar, e o que a IA apontou vira AVISO na admissão. Reescrito a cada
+    // auditoria deste tipo, inclusive para LIMPAR: corrigido o dado e reauditado o documento, o aviso
+    // some sozinho, sem ninguém precisar baixar nada à mão. Não toca estado de documento, régua,
+    // farol nem KPI (§A.3 regra 5: marca, não impede).
+    if (tipo.codigo === TIPO_COMPROVANTE_BANCARIO) {
+      const divergencias = divergenciasReconhecidas(resultado.divergenciasCadastro);
+      await this.db
+        .update(admissoes)
+        .set({
+          divergenciaBancaria: divergencias.length ? divergencias.join(",") : null,
+          atualizadoEm: agora,
+        })
+        .where(eq(admissoes.id, admissaoId));
+      // §A.6: RÓTULO do campo divergente, jamais o valor de qualquer um dos lados, nem o CPF.
+      if (divergencias.length) {
+        this.logger.log(
+          `Divergência bancária apontada pela auditoria (admissão ${admissaoId}): ${divergencias.join(", ")}.`,
+        );
+      }
+    }
 
     // 4.4) ASO → o veredito da IA governa o gate de APTO da esteira (§ OST modal): VALIDADO (apto)
     // destrava; INCONFORME/PENDENTE mantém travado. É a I.A que valida, não um flag manual.

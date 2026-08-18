@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extrairNomeBanco } from "./extrair-banco";
+import { extrairDadosBancarios, extrairNomeBanco } from "./extrair-banco";
 
 /**
  * Fixtures no FORMATO REAL da API (conferido ao vivo em 29/07/2026). Os valores de banco são os que
@@ -56,5 +56,58 @@ describe("extrairNomeBanco", () => {
   it("tolera variação de caixa no rótulo do campo", () => {
     const form = { ...FORM_BANCARIO, answers: [{ fieldName: "nome do banco", answer: "NUBANK" }] };
     expect(extrairNomeBanco([form])).toBe("NUBANK");
+  });
+});
+
+/**
+ * Melhorias EAC, item 8: agência e conta deixaram de ser descartadas. Os números abaixo são
+ * FICTÍCIOS; o que importa é o rótulo do campo, conferido contra a API real em 17/08/2026.
+ */
+describe("extrairDadosBancarios", () => {
+  it("lê os três campos do formulário de Conta Bancária", () => {
+    expect(extrairDadosBancarios([FORM_BANCARIO])).toEqual({
+      banco: "BANCO DO BRASIL",
+      agencia: "0000-0",
+      conta: "00000-0",
+    });
+  });
+
+  it("os três são OPCIONAIS: devolve só o que veio, sem inventar chave", () => {
+    const soBanco = {
+      ...FORM_BANCARIO,
+      answers: [{ fieldName: "Nome do Banco", answer: "NUBANK" }],
+    };
+    expect(extrairDadosBancarios([soBanco])).toEqual({ banco: "NUBANK" });
+  });
+
+  it("formulário bancário VAZIO devolve objeto vazio (caso normal, não erro)", () => {
+    expect(extrairDadosBancarios([{ ...FORM_BANCARIO, answers: [] }])).toEqual({});
+  });
+
+  it("sem formulário bancário nenhum, também objeto vazio", () => {
+    expect(extrairDadosBancarios([{ name: "RG", answers: [] }])).toEqual({});
+    expect(extrairDadosBancarios(undefined)).toEqual({});
+  });
+
+  it("NÃO normaliza: traço e zero à esquerda chegam como o candidato digitou", () => {
+    const form = {
+      ...FORM_BANCARIO,
+      answers: [
+        { fieldName: "Agencia com dígito(se houver)", answer: " 0001-2 " },
+        { fieldName: "Conta bancária com dígito(se houver)", answer: "000123-4" },
+      ],
+    };
+    expect(extrairDadosBancarios([form])).toEqual({ agencia: "0001-2", conta: "000123-4" });
+  });
+
+  it("campo em branco não vira string vazia no cadastro", () => {
+    const form = {
+      ...FORM_BANCARIO,
+      answers: [
+        { fieldName: "Nome do Banco", answer: "ITAU" },
+        { fieldName: "Agencia com dígito(se houver)", answer: "   " },
+      ],
+    };
+    expect(extrairDadosBancarios([form])).toEqual({ banco: "ITAU" });
   });
 });

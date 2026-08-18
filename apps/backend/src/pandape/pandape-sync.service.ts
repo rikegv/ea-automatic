@@ -26,7 +26,7 @@ import {
   type PandapeMatch,
   type PandaperPrecollaborator,
 } from "./pandape-api.service";
-import { extrairNomeBanco } from "./extrair-banco";
+import { extrairDadosBancarios } from "./extrair-banco";
 import { extrairCpfDoFormulario } from "./extrair-cpf-formulario";
 import type { CandidatoInputDto, SexoValor } from "../admissoes/dto/create-admissao.dto";
 import { PandapeQueueService } from "./pandape-queue.service";
@@ -747,34 +747,39 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Grava o NOME DO BANCO informado pelo candidato no formulário do Pandapé (OST do banco no modal).
+   * Grava os DADOS BANCÁRIOS informados pelo candidato no formulário do Pandapé (melhorias EAC,
+   * item 8; nasceu como só o nome do banco, na OST do banco no modal).
    *
-   * Não sobrescreve com vazio: se o payload não trouxer o campo, o que já estava fica. Falha aqui
-   * NUNCA derruba o pull, porque isto é enriquecimento de ficha, não parte do fluxo documental.
+   * NÃO SOBRESCREVE COM VAZIO, e isto é campo a campo, não do bloco inteiro: os três são opcionais no
+   * Pandapé ("se houver" no rótulo), então um payload que traz só o banco não pode apagar a agência
+   * que já estava gravada. Falha aqui NUNCA derruba o pull, porque isto é enriquecimento de ficha,
+   * não parte do fluxo documental.
    *
-   * §A.6: `banco` é o nome da instituição, dado de baixa sensibilidade e exibido na ficha por decisão
-   * do diretor. Agência e conta, que vêm no MESMO formulário, não são lidas nem persistidas em lugar
-   * nenhum: quem as valida é a auditoria do comprovante pela IA, intocada por esta entrega.
+   * §A.6: agência e conta são dado sensível. O log diz QUE gravou e QUAIS campos vieram, por rótulo,
+   * nunca o valor de nenhum deles e nunca o CPF de quem é.
    */
   private async gravarBancoDoCandidato(
     admissaoId: string,
     formularios: PandapeFormulario[],
   ): Promise<void> {
     try {
-      const banco = extrairNomeBanco(formularios);
-      if (!banco) return;
+      const dados = extrairDadosBancarios(formularios);
+      const campos = Object.keys(dados) as Array<keyof typeof dados>;
+      if (campos.length === 0) return;
       const adm = await this.db.query.admissoes.findFirst({
         where: eq(admissoes.id, admissaoId),
       });
       if (!adm?.candidatoCpf) return;
       await this.db
         .update(candidatos)
-        .set({ banco })
+        .set(dados)
         .where(eq(candidatos.cpf, adm.candidatoCpf));
-      // §A.6: o log diz QUE gravou, nunca o nome do banco junto de quem é (nem CPF).
-      this.logger.log("Nome do banco do candidato atualizado a partir do formulário do Pandapé.");
+      // §A.6: RÓTULO dos campos que vieram, jamais o valor de qualquer um deles.
+      this.logger.log(
+        `Dados bancários do candidato atualizados pelo formulário do Pandapé (campos: ${campos.join(", ")}).`,
+      );
     } catch {
-      this.logger.warn("Não foi possível gravar o nome do banco do candidato (pull segue normal).");
+      this.logger.warn("Não foi possível gravar os dados bancários do candidato (pull segue normal).");
     }
   }
 

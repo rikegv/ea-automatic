@@ -25,6 +25,12 @@ export interface AuditarDocumentoPayload {
   tipoDocumentoNome: string;
   candidato: { nome: string; cpf: string };
   regras: Array<{ descricaoRegra: string }>;
+  /**
+   * Dados bancários DIGITADOS, para a IA conferir contra o comprovante (melhorias EAC, item 8).
+   * Ausente em quase toda auditoria: só o comprovante bancário o recebe, e só com os campos que o
+   * candidato preencheu. Quem decide é `cadastroBancarioParaAuditoria` (§A.6, minimização).
+   */
+  cadastroBancario?: { banco?: string; agencia?: string; conta?: string };
 }
 
 /** Um arquivo a arquivar no Drive: caminho na staging, nome final e subpasta de destino. */

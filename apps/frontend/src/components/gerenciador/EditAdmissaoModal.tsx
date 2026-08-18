@@ -43,6 +43,14 @@ interface CandidatoEdit {
   dataNascimento: string | null;
   /** SEXO: corrigível aqui porque admissão já liberada não passa mais pela tela de Liberação. */
   sexo: string | null;
+  /**
+   * Dados bancários DIGITADOS pelo candidato no Pandapé (melhorias EAC, item 8). Exibidos, não
+   * editados: existem para o consultor conferir contra o comprovante sem abrir o Pandapé. Os três são
+   * opcionais lá, então nulo é caso normal.
+   */
+  banco: string | null;
+  agencia: string | null;
+  conta: string | null;
 }
 interface ExameInfo {
   data: string | null;
@@ -80,6 +88,8 @@ interface AdmissaoEdit {
   origem: Origem;
   vagaFolha: VagaFolha;
   candidato: CandidatoEdit;
+  /** Aviso pronto de divergência bancária (item 8), ou null quando não há. Texto vem do backend. */
+  divergenciaBancaria: string | null;
   /** Blob legado (2.066 importadas). Presente => o modal edita a STRING, como sempre fez. */
   beneficiosLegado: string | null;
   /** Pacote ESTRUTURADO (§A.17 etapa 4): o modo novo, quando não há blob. */
@@ -611,6 +621,37 @@ export function EditAdmissaoModal({
                     valor={data.clienteOperacao || data.clienteRazao || "não informado"}
                   />
                   <CampoView rotulo="Cargo (não editável)" valor={data.cargoNome || "não informado"} />
+                </div>
+              )}
+              {/*
+                DADOS BANCÁRIOS DIGITADOS pelo candidato (melhorias EAC, item 8). Existem aqui para o
+                consultor conferir contra o comprovante SEM abrir o Pandapé, que é o trabalho manual
+                que esta entrega tira do caminho. Exibição, não edição: o valor é o que a pessoa
+                digitou lá, e é justamente isso que a auditoria compara.
+
+                Só no formulário INTEIRO: o modo "preencher pendências" (`camposFiltro`) mostra só o
+                que está faltando, e dado bancário não é campo de pendência.
+              */}
+              {!camposFiltro && (
+                <div className="mb-3">
+                  <div className="mb-1.5 text-[11px] uppercase tracking-wide text-faint">
+                    Dados bancários informados pelo candidato
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <CampoView rotulo="Banco" valor={data.candidato.banco || "não informado"} />
+                    <CampoView rotulo="Agência" valor={data.candidato.agencia || "não informado"} />
+                    <CampoView rotulo="Conta" valor={data.candidato.conta || "não informado"} />
+                  </div>
+                  {/*
+                    AVISO, não bloqueio (§A.3 regra 5). A divergência não reprova o documento nem
+                    trava a régua: quase sempre é erro de digitação do candidato, e quem decide o que
+                    fazer é a pessoa que está olhando os dois lados.
+                  */}
+                  {data.divergenciaBancaria && (
+                    <p className="mt-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-[12.5px] text-text">
+                      {data.divergenciaBancaria}
+                    </p>
+                  )}
                 </div>
               )}
               <div className="grid gap-3 sm:grid-cols-2">

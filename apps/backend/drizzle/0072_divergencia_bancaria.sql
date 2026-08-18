@@ -1,0 +1,1 @@
+ALTER TABLE "admissoes" ADD COLUMN "divergencia_bancaria" text;

@@ -27,6 +27,19 @@ class RegraIn(_CamelModel):
     descricao_regra: str
 
 
+class CadastroBancarioIn(_CamelModel):
+    """Dados bancários DIGITADOS pelo candidato, para a IA conferir contra o comprovante.
+
+    Só chega na auditoria do comprovante bancário, e só com os campos que o candidato preencheu (os
+    três são opcionais no Pandapé). O backend é quem decide o que mandar; aqui só se recebe.
+    §A.6: transita em memória, nunca é logado.
+    """
+
+    banco: str | None = None
+    agencia: str | None = None
+    conta: str | None = None
+
+
 class AuditoriaRequest(_CamelModel):
     # Auditoria por CONJUNTO: 1 ou mais arquivos do MESMO documento (frente e verso, páginas),
     # auditados numa única chamada para UM veredito. O backend garante a lista não vazia.
@@ -35,6 +48,8 @@ class AuditoriaRequest(_CamelModel):
     tipo_documento_nome: str
     candidato: CandidatoIn
     regras: list[RegraIn] = Field(default_factory=list)
+    # Ausente na esmagadora maioria das auditorias: só o comprovante bancário o recebe.
+    cadastro_bancario: CadastroBancarioIn | None = None
 
 
 class ResultadoAuditoria(_CamelModel):
@@ -44,6 +59,9 @@ class ResultadoAuditoria(_CamelModel):
     status: AuditoriaStatus
     motivo: str
     campos_conferidos: list[str] = Field(default_factory=list)
+    # Campos do cadastro que não conferem com o documento. Separado do `status` de propósito: é AVISO,
+    # não reprovação (ver o comentário em shared-types). RÓTULOS, nunca valores (§A.6).
+    divergencias_cadastro: list[str] = Field(default_factory=list)
 
 
 # ── Drive ──────────────────────────────────────────────────────────────────

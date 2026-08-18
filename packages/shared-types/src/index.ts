@@ -266,6 +266,19 @@ export interface ResultadoAuditoria {
   status: AuditoriaStatus;
   motivo: string;
   camposConferidos: string[];
+  /**
+   * Campos do cadastro que NÃO conferem com o documento (melhorias EAC, item 8). Só vem na auditoria
+   * do comprovante bancário, e só quando o cadastro foi enviado para comparação.
+   *
+   * SEPARADO DO `status` DE PROPÓSITO, e é o que faz este aviso não bloquear. Divergência entre o que
+   * o candidato digitou e o que está no comprovante não torna o documento inválido: o comprovante
+   * pode estar perfeito e o erro ser de digitação, que é a hipótese mais provável. O documento segue
+   * o veredito das regras (VALIDADO continua VALIDADO, a régua fecha) e a divergência vira AVISO,
+   * fiel à regra 5 do domínio (§A.3): sinalizador marca, nunca impede.
+   *
+   * §A.6: RÓTULOS de campo ("agencia", "conta"), jamais os valores de qualquer um dos lados.
+   */
+  divergenciasCadastro?: string[];
 }
 
 /** Regra de auditoria configurável pelo admin (Master/Super Admin) por tipo de documento. */

@@ -300,10 +300,26 @@ export const candidatos = pgTable("candidatos", {
   // É TEXTO LIVRE digitado por ele ("NUBANK", "BANCO DO BRASIL", "Nu Pagamentos S.A."), não um código
   // normalizado: entra como INFORMAÇÃO A MAIS na ficha, nunca como regra de negócio.
   //
-  // §A.6: guarda SÓ o nome da instituição. Agência e conta vêm no mesmo formulário do Pandapé e são
-  // deliberadamente NÃO persistidas: quem valida esses dados é a auditoria do comprovante pela IA,
-  // que continua exatamente como está, e retê-los aqui seria dado sensível sem uso.
   banco: varchar("banco", { length: 120 }),
+  // AGÊNCIA e CONTA digitadas pelo candidato, do MESMO formulário do Pandapé (melhorias EAC, item 8).
+  //
+  // MUDANÇA DELIBERADA DE POSTURA, e vale registrar porque o comentário anterior dizia o contrário.
+  // Antes o extrator lia só o nome do banco e descartava estes dois "por construção", com o argumento
+  // de que reter dado sensível sem uso não se justifica. O USO agora existe: a regra de auditoria
+  // "Os dados bancários devem coincidir com os informados no cadastro" está cadastrada desde sempre e
+  // era LETRA MORTA, porque a IA recebia só nome e CPF e não tinha contra o que comparar. Sem estas
+  // duas colunas não há como terminar a regra, e o consultor continua abrindo o Pandapé para conferir
+  // à mão o que já chegou no payload.
+  //
+  // TEXTO LIVRE, exatamente como o candidato digitou, e o rótulo do campo no Pandapé diz "(se
+  // houver)": os dois são OPCIONAIS lá. Vazio é caso NORMAL (numa amostra de 5 candidatos, 3 tinham o
+  // formulário bancário inteiro em branco), nunca divergência.
+  //
+  // §A.6: dado sensível, com minimização a valer. Nunca entra em log, em motivo de auditoria, em
+  // export ou em qualquer superfície coletiva; só é exibido na ficha da própria admissão, para quem
+  // já tem acesso a ela.
+  agencia: varchar("agencia", { length: 20 }),
+  conta: varchar("conta", { length: 30 }),
   criadoEm,
   atualizadoEm,
 });
@@ -534,6 +550,20 @@ export const admissoes = pgTable(
      * então as admissões que já estavam CADASTRADO nunca passam pelo gatilho e não entram na fila.
      */
     beneficiosEntrouEm: timestamp("beneficios_entrou_em", { withTimezone: true }),
+    /**
+     * DIVERGÊNCIA BANCÁRIA apontada pela IA (melhorias EAC, item 8): quais campos do cadastro não
+     * conferiram com o comprovante. CSV de RÓTULOS ("agencia", "agencia,conta"), nulo quando não há.
+     *
+     * RÓTULO E NUNCA VALOR (§A.6). Guardar aqui o número do comprovante ou o número digitado seria
+     * duplicar dado sensível para dizer uma coisa que o rótulo já diz. Quem precisa comparar os dois
+     * lados abre a ficha, que mostra o digitado, e o comprovante, que está no Drive.
+     *
+     * NÃO É ESTADO DE DOCUMENTO e não entra em régua, farol, KPI nem fila. É aviso ao consultor: o
+     * documento segue o veredito das regras e a régua fecha normalmente (§A.3 regra 5, o sinalizador
+     * marca e nunca impede). Reescrito a cada auditoria do comprovante: some sozinho quando o dado é
+     * corrigido e o documento reauditado.
+     */
+    divergenciaBancaria: text("divergencia_bancaria"),
     // Origem da admissão (Fase 5 / INT-1): MANUAL (wizard F6) ou PANDAPE (sync). Default MANUAL —
     // admissões anteriores e as criadas pelo wizard permanecem MANUAL sem alteração de chamada.
     origem: origemEnum("origem").notNull().default("MANUAL"),

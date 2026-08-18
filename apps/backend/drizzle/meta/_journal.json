@@ -498,6 +498,20 @@
       "when": 1786717530710,
       "tag": "0070_regras_beneficio_cliente",
       "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1786993328775,
+      "tag": "0071_dados_bancarios_digitados",
+      "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1786993637223,
+      "tag": "0072_divergencia_bancaria",
+      "breakpoints": true
     }
   ]
 }

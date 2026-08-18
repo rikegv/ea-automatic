@@ -99,6 +99,10 @@ def auditar_documento(
             candidato_nome=req.candidato.nome,
             candidato_cpf=req.candidato.cpf,
             regras=regras,
+            # Só vem preenchido no comprovante bancário; o backend é quem decide (§A.6, minimização).
+            cadastro_bancario=(
+                req.cadastro_bancario.model_dump(exclude_none=True) if req.cadastro_bancario else None
+            ),
         )
     except ErroVertex as erro:
         # OST B1 / Bloco 1: o Vertex já foi retentado com backoff quando o erro era transitório. Aqui
@@ -117,4 +121,5 @@ def auditar_documento(
         status=status,
         motivo=resultado["motivo"],
         campos_conferidos=resultado["camposConferidos"],
+        divergencias_cadastro=resultado.get("divergenciasCadastro", []),
     )
