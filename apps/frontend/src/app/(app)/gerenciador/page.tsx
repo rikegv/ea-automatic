@@ -17,6 +17,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AdmissaoDetalheModal } from "@/components/esteira/AdmissaoDetalheModal";
 import { EditAdmissaoModal } from "@/components/gerenciador/EditAdmissaoModal";
 import { PendenciasModal } from "@/components/gerenciador/PendenciasModal";
+import { ExportarRelatorioModal } from "@/components/gerenciador/ExportarRelatorioModal";
 import { farolPill, FAROL_SELECT_OPTIONS } from "@/lib/farol";
 import { caixaAlta } from "@/lib/nome";
 import { pillPendencias } from "@/lib/pendencias-pill";
@@ -160,6 +161,8 @@ export default function GerenciadorPage() {
   const [pendRow, setPendRow] = useState<AdmRow | null>(null);
   const [delRow, setDelRow] = useState<AdmRow | null>(null);
   const [deleting, setDeleting] = useState(false);
+  /** Relatório exportável (item 11c): seletor de colunas + download do xlsx. */
+  const [exportando, setExportando] = useState(false);
 
   // catálogos de cargos e clientes (uma vez)
   useEffect(() => {
@@ -215,18 +218,22 @@ export default function GerenciadorPage() {
     },
   };
 
-  const load = useCallback(async () => {
-    if (!token) return;
-    setLoading(true);
-    setLoadError(null);
+  /**
+   * O RECORTE DA TELA EM QUERY STRING, MONTADO UMA VEZ SÓ (item 11c).
+   *
+   * A lista e o RELATÓRIO EXPORTÁVEL leem daqui: é o que garante que o arquivo baixado traga
+   * exatamente o que o consultor está vendo. Duas montagens separadas divergiriam no primeiro
+   * filtro novo, e a divergência apareceria só dentro do arquivo, onde ninguém confere.
+   * `page` fica de fora de propósito: a lista acrescenta a página, o relatório leva o conjunto todo.
+   */
+  const filtrosQs = useCallback(() => {
     const qs = new URLSearchParams();
     if (q) qs.set("q", q);
     if (codClientes.length) qs.set("codCliente", codClientes.join(","));
     if (cargoIds.length) qs.set("cargoId", cargoIds.join(","));
     if (tipoContratos.length) qs.set("tipoContrato", tipoContratos.join(","));
     if (farol.length) qs.set("farol", farol.join(","));
-    if (sinalizadores.length)
-      qs.set("sinalizador", valoresDoFiltroSinal(sinalizadores).join(","));
+    if (sinalizadores.length) qs.set("sinalizador", valoresDoFiltroSinal(sinalizadores).join(","));
     if (concluido) qs.set("concluido", "true");
     if (comPendencias) qs.set("comPendencias", "true");
     if (emAndamento) qs.set("emAndamento", "true");
@@ -236,18 +243,8 @@ export default function GerenciadorPage() {
       qs.set("ordenarPor", ordem.chave);
       qs.set("direcao", ordem.dir);
     }
-    qs.set("page", String(page));
-    try {
-      const resp = await apiFetch<ListResp>(`/admissoes?${qs.toString()}`, { token });
-      setData(resp);
-    } catch (e) {
-      setData(null);
-      setLoadError(e instanceof ApiError ? e.message : "Falha ao carregar as admissões.");
-    } finally {
-      setLoading(false);
-    }
+    return qs;
   }, [
-    token,
     q,
     codClientes,
     cargoIds,
@@ -260,8 +257,24 @@ export default function GerenciadorPage() {
     from,
     to,
     ordem,
-    page,
   ]);
+
+  const load = useCallback(async () => {
+    if (!token) return;
+    setLoading(true);
+    setLoadError(null);
+    const qs = filtrosQs();
+    qs.set("page", String(page));
+    try {
+      const resp = await apiFetch<ListResp>(`/admissoes?${qs.toString()}`, { token });
+      setData(resp);
+    } catch (e) {
+      setData(null);
+      setLoadError(e instanceof ApiError ? e.message : "Falha ao carregar as admissões.");
+    } finally {
+      setLoading(false);
+    }
+  }, [token, filtrosQs, page]);
 
   useEffect(() => {
     load();
@@ -439,6 +452,16 @@ export default function GerenciadorPage() {
                 <Icon name="x" className="h-4 w-4" /> Limpar filtro
               </button>
             )}
+
+            {/* Relatório exportável (item 11c): abre o seletor de colunas. Leva o recorte da tela. */}
+            <button
+              type="button"
+              className="btn-secondary inline-flex items-center gap-1.5 px-3 py-2 text-[13px]"
+              onClick={() => setExportando(true)}
+              title="Exportar a lista filtrada em Excel"
+            >
+              <Icon name="download" className="h-4 w-4" /> Exportar
+            </button>
 
             <FiltroTrigger count={filtrosModal} onLimpar={limparFiltros}>
               <FiltroCampo label="Cliente">
@@ -798,6 +821,18 @@ export default function GerenciadorPage() {
             setEditFiltro(undefined);
             setFlash(msg);
             void load();
+          }}
+        />
+      )}
+      {exportando && (
+        <ExportarRelatorioModal
+          filtrosQs={filtrosQs()}
+          totalFiltrado={data?.total ?? 0}
+          temFiltro={temFiltro}
+          onClose={() => setExportando(false)}
+          onExportado={(msg) => {
+            setExportando(false);
+            setFlash(msg);
           }}
         />
       )}

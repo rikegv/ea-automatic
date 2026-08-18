@@ -449,3 +449,82 @@ export function ehTamanhoBota(v: string): boolean {
 export function ehItemEpi(v: string): v is ItemEpi {
   return (ITENS_EPI as readonly string[]).includes(v);
 }
+
+// ── Relatório exportável de candidatos (melhorias EAC, item 11c) ────────────
+/**
+ * O CATÁLOGO DE COLUNAS DO RELATÓRIO, ÚNICO PARA OS DOIS LADOS.
+ *
+ * O consultor marca o que quer levar e o arquivo sai só com o marcado. A lista mora aqui, e não em
+ * cada app, porque ela é ao mesmo tempo o que a tela desenha e o que o backend aceita: com duas
+ * cópias, uma coluna marcada na tela sairia em branco na planilha (ou seria recusada) no primeiro
+ * ajuste feito de um lado só.
+ *
+ * §A.6 (minimização): BANCO, AGÊNCIA e CONTA do candidato e o CPF do substituído ficam DE FORA de
+ * propósito. O schema marca esses campos como exibíveis só na ficha da própria admissão, nunca em
+ * superfície coletiva, e um relatório baixável é a superfície coletiva por definição. Decisão
+ * confirmada pelo diretor ao abrir o item 11c.
+ */
+export const GRUPOS_COLUNA_RELATORIO = ["CANDIDATO", "ADMISSAO", "FOLHA"] as const;
+export type GrupoColunaRelatorio = (typeof GRUPOS_COLUNA_RELATORIO)[number];
+
+/** Rótulo do grupo no seletor de colunas (§A.24: título em title case). */
+export const ROTULO_GRUPO_COLUNA_RELATORIO: Record<GrupoColunaRelatorio, string> = {
+  CANDIDATO: "Dados Do Candidato",
+  ADMISSAO: "Dados Da Admissão",
+  FOLHA: "Dados De Vaga E Folha",
+};
+
+export interface ColunaRelatorio {
+  /** Chave técnica: o que a tela envia e o backend valida. */
+  chave: string;
+  /** Cabeçalho da coluna na planilha e rótulo da caixa de seleção. */
+  rotulo: string;
+  grupo: GrupoColunaRelatorio;
+  /** Largura da coluna no xlsx, em caracteres. */
+  largura: number;
+}
+
+export const COLUNAS_RELATORIO: readonly ColunaRelatorio[] = [
+  { chave: "nome", rotulo: "Nome", grupo: "CANDIDATO", largura: 32 },
+  { chave: "cpf", rotulo: "CPF", grupo: "CANDIDATO", largura: 14 },
+  { chave: "telefone", rotulo: "Telefone", grupo: "CANDIDATO", largura: 16 },
+  { chave: "email", rotulo: "E-mail", grupo: "CANDIDATO", largura: 28 },
+  { chave: "dataNascimento", rotulo: "Data De Nascimento", grupo: "CANDIDATO", largura: 18 },
+  { chave: "sexo", rotulo: "Sexo", grupo: "CANDIDATO", largura: 12 },
+  { chave: "codCliente", rotulo: "Código Do Cliente", grupo: "ADMISSAO", largura: 16 },
+  { chave: "cliente", rotulo: "Cliente", grupo: "ADMISSAO", largura: 30 },
+  { chave: "cargo", rotulo: "Cargo", grupo: "ADMISSAO", largura: 26 },
+  { chave: "tipoContrato", rotulo: "Tipo De Contrato", grupo: "ADMISSAO", largura: 18 },
+  { chave: "matricula", rotulo: "Matrícula", grupo: "ADMISSAO", largura: 14 },
+  { chave: "dataAdmissao", rotulo: "Data De Admissão", grupo: "ADMISSAO", largura: 18 },
+  { chave: "status", rotulo: "Status", grupo: "ADMISSAO", largura: 20 },
+  { chave: "origem", rotulo: "Origem", grupo: "ADMISSAO", largura: 12 },
+  { chave: "criadoEm", rotulo: "Criada Em", grupo: "ADMISSAO", largura: 18 },
+  { chave: "salario", rotulo: "Salário", grupo: "FOLHA", largura: 14 },
+  { chave: "beneficios", rotulo: "Benefícios", grupo: "FOLHA", largura: 30 },
+  { chave: "escala", rotulo: "Escala", grupo: "FOLHA", largura: 24 },
+  { chave: "setor", rotulo: "Setor", grupo: "FOLHA", largura: 20 },
+  { chave: "departamento", rotulo: "Departamento", grupo: "FOLHA", largura: 22 },
+  { chave: "centroCusto", rotulo: "Centro De Custo", grupo: "FOLHA", largura: 18 },
+  { chave: "gestorBp", rotulo: "Gestor BP", grupo: "FOLHA", largura: 24 },
+  { chave: "motivo", rotulo: "Motivo Da Contratação", grupo: "FOLHA", largura: 24 },
+  { chave: "tempoContrato", rotulo: "Tempo De Contrato", grupo: "FOLHA", largura: 18 },
+  { chave: "endereco", rotulo: "Endereço", grupo: "FOLHA", largura: 40 },
+];
+
+/** As colunas já marcadas quando o consultor abre o seletor (o pedido original do item 11c). */
+export const COLUNAS_RELATORIO_PADRAO: readonly string[] = ["nome", "telefone"];
+
+export function ehColunaRelatorio(chave: string): boolean {
+  return COLUNAS_RELATORIO.some((c) => c.chave === chave);
+}
+
+/**
+ * Filtra o que veio da tela contra o catálogo e devolve na ORDEM CANÔNICA (a do catálogo), sem
+ * repetição. A ordem das colunas do arquivo não depende, então, da ordem em que as caixas foram
+ * marcadas: duas exportações do mesmo conjunto saem sempre iguais.
+ */
+export function normalizarColunasRelatorio(pedidas: readonly string[]): string[] {
+  const querida = new Set(pedidas);
+  return COLUNAS_RELATORIO.filter((c) => querida.has(c.chave)).map((c) => c.chave);
+}

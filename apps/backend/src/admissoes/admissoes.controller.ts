@@ -8,10 +8,13 @@ import {
   Patch,
   Post,
   Query,
+  Res,
+  StreamableFile,
   UploadedFile,
   UseInterceptors,
 } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
+import type { Response } from "express";
 import { CurrentUser, Roles } from "../auth/decorators";
 import type { AuthUser } from "../auth/auth.types";
 import { parseMulti } from "../common/parse-multi";
@@ -82,6 +85,59 @@ export class AdmissoesController {
       ordenarPor,
       direcao: direcao === "asc" ? "asc" : direcao === "desc" ? "desc" : undefined,
     });
+  }
+
+  /**
+   * RELATÓRIO EXPORTÁVEL DE CANDIDATOS EM XLSX (melhorias EAC, item 11c).
+   *
+   * MESMOS PARÂMETROS DE FILTRO DO `listar` acima, de propósito: a tela reaproveita a query string
+   * que já monta para a lista e acrescenta só `colunas`, então o arquivo sai com o recorte que está
+   * na tela. `page`/`pageSize` não entram, o arquivo leva o conjunto filtrado inteiro.
+   *
+   * ABERTO A TODO USUÁRIO AUTENTICADO (decisão do diretor): exportar é operação, não administração.
+   * Sem trilha de exportação, também por decisão do diretor. Vem ANTES de @Get(":id").
+   */
+  @Get("relatorio")
+  async relatorio(
+    @Res({ passthrough: true }) res: Response,
+    @Query("colunas") colunas?: string,
+    @Query("q") q?: string,
+    @Query("codCliente") codCliente?: string,
+    @Query("cargoId") cargoId?: string,
+    @Query("tipoContrato") tipoContrato?: string,
+    @Query("farol") farol?: string,
+    @Query("sinalizador") sinalizador?: string,
+    @Query("concluido") concluido?: string,
+    @Query("comPendencias") comPendencias?: string,
+    @Query("emAndamento") emAndamento?: string,
+    @Query("from") from?: string,
+    @Query("to") to?: string,
+    @Query("ordenarPor") ordenarPor?: string,
+    @Query("direcao") direcao?: string,
+  ): Promise<StreamableFile> {
+    const { buffer, nomeArquivo } = await this.admissoes.exportarRelatorio(
+      {
+        q,
+        codCliente: parseMulti(codCliente),
+        cargoId: parseMulti(cargoId),
+        tipoContrato: parseMulti(tipoContrato),
+        farol: parseMulti(farol),
+        sinalizador: parseMulti(sinalizador),
+        concluido: concluido === "true",
+        comPendencias: comPendencias === "true",
+        emAndamento: emAndamento === "true",
+        from,
+        to,
+        ordenarPor,
+        direcao: direcao === "asc" ? "asc" : direcao === "desc" ? "desc" : undefined,
+      },
+      parseMulti(colunas) ?? [],
+    );
+    res.set({
+      "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "Content-Disposition": `attachment; filename="${nomeArquivo}"`,
+    });
+    return new StreamableFile(buffer);
   }
 
   @Get("candidato/:cpf")

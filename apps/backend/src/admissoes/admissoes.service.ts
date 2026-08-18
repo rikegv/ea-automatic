@@ -10,8 +10,10 @@ import {
 } from "@nestjs/common";
 import {
   beneficioExigeValor,
+  FAROL_GLOBAL_LABEL,
   isValidCpf,
   ITENS_EPI,
+  normalizarColunasRelatorio,
   normalizeCpf,
   type FarolGlobal,
 } from "@ea/shared-types";
@@ -21,12 +23,9 @@ import {
   count,
   desc,
   eq,
-  gte,
-  ilike,
   inArray,
   isNotNull,
   isNull,
-  lte,
   ne,
   or,
   sql,
@@ -34,6 +33,20 @@ import {
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
 import { admissaoConcluidaSql, admissaoEmAndamentoExclusivoSql } from "../db/expressoes-admissao";
+import {
+  comPendenciaSql,
+  condicoesDoFiltro,
+  whereDoFiltro,
+  type ListarAdmissoesFiltros,
+} from "./admissoes-filtros";
+import {
+  fmtDataHoraRelatorio,
+  fmtDataRelatorio,
+  gerarXlsxRelatorio,
+  nomeArquivoRelatorio,
+  numeroDoSalario,
+  type LinhaRelatorio,
+} from "./relatorio-export";
 import {
   admissaoBeneficio,
   admissaoProjeto,
@@ -76,6 +89,7 @@ import {
   vinculosDoCliente,
 } from "../regua/vinculo.repo";
 import { exigeEscolhaDeVinculo } from "../domain/vinculo";
+import { avisoDivergenciaBancaria, divergenciasReconhecidas } from "../domain/cadastro-bancario";
 import type { AuthUser } from "../auth/auth.types";
 import type { CandidatoInputDto, CreateAdmissaoDto } from "./dto/create-admissao.dto";
 import type { UpdateAdmissaoDto } from "./dto/update-admissao.dto";
@@ -140,28 +154,9 @@ function colunasUniformeEpi(i: UniformeEpiInput) {
 /** Transação do Drizzle, derivada do próprio `Database` (não depende do dialeto importado). */
 type DbTransaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
-export interface ListarAdmissoesFiltros {
-  q?: string;
-  // Multi-select (Bloco B): OU dentro do mesmo filtro (inArray). Vazio/ausente = sem filtro.
-  codCliente?: string[];
-  cargoId?: string[];
-  tipoContrato?: string[];
-  farol?: string[];
-  sinalizador?: string[];
-  concluido?: boolean;
-  comPendencias?: boolean;
-  emAndamento?: boolean;
-  from?: string;
-  to?: string;
-  page?: number;
-  pageSize?: number;
-  /**
-   * ORDENAÇÃO da lista. Coluna fora da lista fechada (`COLUNAS_ORDENAVEIS_GERENCIADOR`) cai na ordem
-   * padrão, em vez de virar erro ou consulta inventada.
-   */
-  ordenarPor?: string;
-  direcao?: "asc" | "desc";
-}
+// Os filtros do Gerenciador moraram aqui até o item 11c; agora vivem junto do montador de condições
+// que a lista e o relatório exportável compartilham. Reexportado para não mudar quem já importava.
+export type { ListarAdmissoesFiltros };
 
 /**
  * AS COLUNAS QUE O GERENCIADOR ORDENA, lista FECHADA.
@@ -215,7 +210,12 @@ function ordemDaLista(ordenarPor?: string, direcao?: "asc" | "desc") {
   return [direcao === "asc" ? asc(coluna) : desc(coluna), padrao];
 }
 
-const DATA_RE = /^\d{4}-\d{2}-\d{2}$/;
+/**
+ * TETO DO RELATÓRIO EXPORTÁVEL (item 11c). Acima disso a exportação recusa com recado, em vez de
+ * cortar em silêncio: arquivo truncado sem aviso é pior que arquivo nenhum. A base inteira de hoje
+ * (pouco mais de 2 mil admissões) cabe folgada.
+ */
+const TETO_LINHAS_RELATORIO = 20000;
 
 /**
  * Opções de criação por origem (Fase 5 / INT-1). A sync do Pandapé reusa `create` SEM duplicar
@@ -1433,36 +1433,11 @@ export class AdmissoesService {
     const page = Math.max(1, Math.floor(filtros.page ?? 1));
     const pageSize = Math.min(100, Math.max(1, Math.floor(filtros.pageSize ?? 20)));
 
-    // Filtros base (compartilhados pela lista e pelos KPIs).
-    const base = [];
-    if (filtros.codCliente?.length) base.push(inArray(admissoes.codCliente, filtros.codCliente));
-    if (filtros.cargoId?.length) base.push(inArray(admissoes.cargoId, filtros.cargoId));
-    if (filtros.tipoContrato?.length)
-      base.push(inArray(admissoes.tipoContrato, filtros.tipoContrato));
-    if (filtros.sinalizador?.length) {
-      base.push(inArray(admissoes.sinalizadorPreenchimento, filtros.sinalizador as "PENDENTE"[]));
-    }
-    if (filtros.from) {
-      if (!DATA_RE.test(filtros.from)) throw new BadRequestException("from inválido (YYYY-MM-DD)");
-      base.push(gte(admissoes.dataAdmissao, filtros.from));
-    }
-    if (filtros.to) {
-      if (!DATA_RE.test(filtros.to)) throw new BadRequestException("to inválido (YYYY-MM-DD)");
-      base.push(lte(admissoes.dataAdmissao, filtros.to));
-    }
-    const q = filtros.q?.trim();
-    if (q) {
-      // Busca rápida (Bloco C): NOME, CPF e CLIENTE (razão/operação/código), tudo num campo só.
-      const cpfDigits = normalizeCpf(q);
-      const conds = [
-        ilike(candidatos.nome, `%${q}%`),
-        ilike(clientes.razaoSocial, `%${q}%`),
-        ilike(clientes.nomeOperacao, `%${q}%`),
-        ilike(clientes.codCliente, `%${q}%`),
-      ];
-      if (cpfDigits.length >= 3) conds.push(ilike(candidatos.cpf, `%${cpfDigits}%`));
-      base.push(or(...conds)!);
-    }
+    // O RECORTE VIVE EM `admissoes-filtros` (item 11c): a lista e o RELATÓRIO EXPORTÁVEL chamam a
+    // MESMA função, então o arquivo baixado nunca mostra um conjunto diferente do que está na tela.
+    // O SQL é o de sempre, byte a byte; só mudou de casa. `base` = filtros de conjunto (os KPIs
+    // contam sobre ele, §A.12); `listWhere` = base + filtros de status, que valem só para as linhas.
+    const { base, listWhere } = condicoesDoFiltro(filtros);
 
     // "Concluído" = terminou o Cadastro E NÃO tem integração PENDENTE. A expressão MUDOU DE CASA na
     // onda 4 do Alto Volume (decisão do diretor): vive em `db/expressoes-admissao`, para o painel do
@@ -1470,16 +1445,9 @@ export class AdmissoesService {
     // metade está documentado lá.
     const concluidoExpr = admissaoConcluidaSql;
 
-    // "Com pendências obrigatórias" = sinalizador de preenchimento diferente de OK (falta campo-núcleo),
-    // MAS quem declinou/rescindiu NUNCA conta como pendência em nenhum card (regra permanente de
-    // importação, §A.3/Regra 2): pendência é de quem está no processo; o declínio saiu. Fica só como
-    // histórico. Mesma exclusão por farol que a Esteira aplica nas filas operacionais.
-    // PAUSA (OST admissão pausada, ponto 6 dos 6): pausada também não conta como pendência. Mesmo
-    // princípio do declínio, motivo diferente: o declínio saiu do processo, a pausada está no
-    // processo mas não vai ser trabalhada agora, e cobrar pendência dela é mandar o time gastar
-    // esforço no que está parado por decisão. Some da CONTAGEM, não da lista (o Gerenciador é a
-    // visão geral consultável, §A.19: é ali que a pausada continua encontrável).
-    const comPendenciaExpr = sql<boolean>`(${admissoes.sinalizadorPreenchimento} <> 'OK' AND ${admissoes.pausadaEm} IS NULL AND ${admissoes.farolGlobal} NOT IN ('DECLINOU', 'RESCISAO', 'AGUARDANDO_LIBERACAO', 'LIBERACAO_RECUSADA'))`;
+    // "Com pendências obrigatórias": ver o comentário completo em `admissoes-filtros`, onde a
+    // expressão passou a morar (declínio e pausa nunca contam como pendência em card nenhum).
+    const comPendenciaExpr = comPendenciaSql;
 
     // "Em andamento" = admissão EM ABERTO que ainda NÃO concluiu. Mesma mudança de casa do
     // `concluidoExpr`, pelo mesmo motivo: os dois baldes andam juntos.
@@ -1488,27 +1456,6 @@ export class AdmissoesService {
     // já concluiu, senão a mesma admissão aparecia em "Admissões Em Andamento" E em "Admissões
     // Concluídas" (eram 56). O motivo completo está em `db/expressoes-admissao`.
     const emAndamentoExpr = admissaoEmAndamentoExclusivoSql;
-
-    // Filtros de status (farol/concluído/pendências/em andamento): só na lista, não nos KPIs (os cards
-    // mostram a distribuição do conjunto base e funcionam como botão de filtro, §A.12).
-    const listWhere = [...base];
-    // PAUSA (OST da pausa, correção do diretor): "Admissão Pausada" entrou como mais uma opção do
-    // MESMO seletor de status, então ela também chega aqui como filtro. Não é valor do enum
-    // `farol_global` (é flag paralela), então é traduzida: marcar só "Pausada" filtra pela flag;
-    // marcar junto de outros status vira OU, que é o comportamento que o multi-select promete.
-    if (filtros.farol?.length) {
-      const querPausadas = filtros.farol.includes("PAUSADA");
-      const faroisReais = filtros.farol.filter((f) => f !== "PAUSADA") as FarolGlobal[];
-      const condicoes = [
-        ...(faroisReais.length ? [inArray(admissoes.farolGlobal, faroisReais)] : []),
-        ...(querPausadas ? [isNotNull(admissoes.pausadaEm)] : []),
-      ];
-      if (condicoes.length === 1) listWhere.push(condicoes[0]);
-      else if (condicoes.length > 1) listWhere.push(or(...condicoes)!);
-    }
-    if (filtros.concluido) listWhere.push(concluidoExpr);
-    if (filtros.comPendencias) listWhere.push(comPendenciaExpr);
-    if (filtros.emAndamento) listWhere.push(emAndamentoExpr);
 
     const [{ total }] = await this.db
       .select({ total: count() })
@@ -1625,6 +1572,117 @@ export class AdmissoesService {
     };
   }
 
+  /**
+   * RELATÓRIO EXPORTÁVEL DE CANDIDATOS (melhorias EAC, item 11c).
+   *
+   * O consultor marca as colunas que quer e baixa o xlsx do que está na tela. LEITURA PURA: não
+   * escreve nada, não recalcula régua, farol nem contagem, e por isso não alcança nenhuma outra
+   * superfície (§A.26/§A.27).
+   *
+   * O RECORTE É O DA TELA, não um novo: os filtros chegam nos mesmos parâmetros do Gerenciador e
+   * passam pelo MESMO `condicoesDoFiltro` que a lista usa (inclusive os joins internos, que
+   * descartam a pré-admissão sem cliente/cargo exatamente como a lista descarta). O que muda é só a
+   * paginação, que aqui não existe: o arquivo leva o conjunto filtrado inteiro, não a página aberta.
+   *
+   * ORDEM: a mesma da tela, com `id` de desempate. A lista pagina por `criado_em`, e a carga gravou
+   * milhares de admissões no mesmo instante; sem o desempate, um conjunto grande sairia com linha
+   * repetida e linha faltando, e ninguém confere 2.000 linhas para descobrir isso.
+   */
+  async exportarRelatorio(filtros: ListarAdmissoesFiltros, colunasPedidas: string[]) {
+    const colunas = normalizarColunasRelatorio(colunasPedidas);
+    if (!colunas.length) {
+      throw new BadRequestException("Marque pelo menos uma coluna para gerar o relatório.");
+    }
+
+    const { listWhere } = condicoesDoFiltro(filtros);
+    const linhas = await this.db
+      .select({
+        nome: candidatos.nome,
+        cpf: candidatos.cpf,
+        telefone: candidatos.telefone,
+        email: candidatos.email,
+        dataNascimento: candidatos.dataNascimento,
+        sexo: candidatos.sexo,
+        codCliente: admissoes.codCliente,
+        clienteOperacao: clientes.nomeOperacao,
+        clienteRazao: clientes.razaoSocial,
+        cargo: cargos.nome,
+        tipoContrato: admissoes.tipoContrato,
+        matricula: admissoes.matricula,
+        dataAdmissao: admissoes.dataAdmissao,
+        farolGlobal: admissoes.farolGlobal,
+        pausadaEm: admissoes.pausadaEm,
+        origem: admissoes.origem,
+        criadoEm: admissoes.criadoEm,
+        salario: dadosVagaFolha.salario,
+        beneficios: dadosVagaFolha.beneficios,
+        escala: dadosVagaFolha.escala,
+        setor: dadosVagaFolha.setor,
+        departamento: dadosVagaFolha.departamento,
+        centroCusto: dadosVagaFolha.centroCusto,
+        gestorBp: dadosVagaFolha.gestorBp,
+        motivo: dadosVagaFolha.motivo,
+        tempoContrato: dadosVagaFolha.tempoContrato,
+        endereco: dadosVagaFolha.endereco,
+      })
+      .from(admissoes)
+      .innerJoin(candidatos, eq(admissoes.candidatoCpf, candidatos.cpf))
+      .innerJoin(clientes, eq(admissoes.codCliente, clientes.codCliente))
+      .innerJoin(cargos, eq(admissoes.cargoId, cargos.id))
+      .leftJoin(dadosVagaFolha, eq(dadosVagaFolha.admissaoId, admissoes.id))
+      .where(whereDoFiltro(listWhere))
+      .orderBy(...ordemDaLista(filtros.ordenarPor, filtros.direcao), asc(admissoes.id))
+      .limit(TETO_LINHAS_RELATORIO + 1);
+
+    // TETO EXPLÍCITO, com recado (nada de corte silencioso): passar de 20 mil linhas é sinal de
+    // filtro esquecido, e o arquivo mudo levaria o time a trabalhar sobre um recorte que ele não
+    // pediu. A base inteira hoje cabe folgada abaixo do teto.
+    if (linhas.length > TETO_LINHAS_RELATORIO) {
+      throw new BadRequestException(
+        `O relatório passaria de ${TETO_LINHAS_RELATORIO} linhas. Refine os filtros da tela e exporte de novo.`,
+      );
+    }
+
+    const dados: LinhaRelatorio[] = linhas.map((l) => ({
+      nome: l.nome,
+      cpf: l.cpf,
+      telefone: l.telefone,
+      email: l.email,
+      dataNascimento: fmtDataRelatorio(l.dataNascimento),
+      sexo: l.sexo === "MASCULINO" ? "Masculino" : l.sexo === "FEMININO" ? "Feminino" : null,
+      codCliente: l.codCliente,
+      // O cliente sai como está escrito na tela: nome de operação, com a razão social de reserva.
+      cliente: l.clienteOperacao || l.clienteRazao,
+      cargo: l.cargo,
+      tipoContrato: l.tipoContrato,
+      matricula: l.matricula,
+      dataAdmissao: fmtDataRelatorio(l.dataAdmissao),
+      // "Admissão Pausada" é FLAG paralela, não valor do farol, e na tela ela ganha a tag do Status.
+      // O relatório repete a leitura da tela, senão a pausada sairia como "Em Admissão".
+      status: l.pausadaEm
+        ? "Admissão Pausada"
+        : (FAROL_GLOBAL_LABEL[l.farolGlobal] ?? l.farolGlobal),
+      origem: l.origem === "PANDAPE" ? "Pandapé" : "Manual",
+      criadoEm: fmtDataHoraRelatorio(l.criadoEm),
+      salario: numeroDoSalario(l.salario),
+      beneficios: l.beneficios,
+      escala: l.escala,
+      setor: l.setor,
+      departamento: l.departamento,
+      centroCusto: l.centroCusto,
+      gestorBp: l.gestorBp,
+      motivo: l.motivo,
+      tempoContrato: l.tempoContrato,
+      endereco: l.endereco,
+    }));
+
+    return {
+      buffer: await gerarXlsxRelatorio(colunas, dados),
+      nomeArquivo: nomeArquivoRelatorio(new Date()),
+      linhas: dados.length,
+    };
+  }
+
   /** F10 — campos editáveis de uma admissão (prefill do formulário de edição). */
   async obter(id: string) {
     const adm = await this.db.query.admissoes.findFirst({ where: eq(admissoes.id, id) });
@@ -1737,7 +1795,24 @@ export class AdmissoesService {
         // SEXO: o lápis passou a corrigir, então precisa vir preenchido para não parecer vazio e o
         // consultor não gravar por cima sem querer.
         sexo: candidato?.sexo ?? null,
+        // DADOS BANCÁRIOS DIGITADOS pelo candidato no Pandapé (melhorias EAC, item 8). Vêm para o
+        // lápis EXIBIR, para o consultor conferir contra o comprovante sem abrir o Pandapé. Os três
+        // são opcionais lá, então nulo é caso normal e a tela mostra "não informado".
+        banco: candidato?.banco ?? null,
+        agencia: candidato?.agencia ?? null,
+        conta: candidato?.conta ?? null,
       },
+      /**
+       * AVISO de divergência bancária (melhorias EAC, item 8), já em texto pronto para a tela. Nulo
+       * quando não há divergência, que é o caso normal.
+       *
+       * O texto é montado no BACKEND de propósito: o dado guardado é rótulo de campo ("agencia"), e
+       * transformar rótulo em frase na tela espalharia a mesma regra por cada superfície que
+       * mostrasse o aviso. §A.6: o texto diz QUAL campo diverge, nunca o valor de nenhum lado.
+       */
+      divergenciaBancaria: avisoDivergenciaBancaria(
+        divergenciasReconhecidas((adm.divergenciaBancaria ?? "").split(",")),
+      ),
       vagaFolha: {
         salario: vaga?.salario ?? null,
         beneficios: vaga?.beneficios ?? null,
