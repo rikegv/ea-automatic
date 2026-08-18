@@ -764,6 +764,10 @@ export default function EsteiraPage() {
         // seletor de status vive na própria coluna Status, porque aqui ele é o avanço.
         [
           "40px",
+          // Contrato entra aqui (OST da coluna na Integração), na MESMA largura e na MESMA posição
+          // das outras abas. 112px é medida de browser, não estimativa: cobre "Temporário", o
+          // vazio "não informado" e a seta de ordenação, com folga (§A.20).
+          COL.contrato,
           COL.cand,
           // Cliente ENXUTO nesta aba (§A.20): o nome de operação é curto e sobrava espaço, que
           // agora vai para o seletor de status e para as ações.
@@ -804,9 +808,12 @@ export default function EsteiraPage() {
   const gridMin = isExame
     ? "min-w-[1840px]"
     : isIntegracao
-      ? // +110px com a entrada da Data adm.: o piso acompanha a coluna nova, senão a aba passaria a
-        // espremer em vez de rolar (§A.20).
-        "min-w-[1530px]"
+      ? // +110px com a Data adm. e +112px com o Contrato: o piso acompanha CADA coluna nova, senão a
+        // aba passaria a espremer em vez de rolar (§A.20). Nenhuma coluna existente cedeu largura:
+        // nesta aba não sobra folga real (Nome e Cliente já truncam, e as quatro do agendamento
+        // precisam caber data, hora, "Presencial" e nome de gente), então tirar de uma para dar à
+        // outra só trocaria de lugar o problema que a §A.20 proíbe.
+        "min-w-[1642px]"
       : // +130px na aba Cadastro, com a entrada da Matrícula: o piso acompanha a coluna nova, senão
         // a aba passaria a espremer em vez de rolar (§A.20).
         isCadastro
@@ -1330,11 +1337,13 @@ export default function EsteiraPage() {
                 {/* OST do espaço horizontal: "Tipo de contrato" virou "Contrato" e "Candidato"
                     virou "Nome". Rótulos mais curtos liberam largura de cabeçalho, que é o que
                     empurrava as últimas colunas para fora da área visível. */}
-                {!isIntegracao && (
-                  <ColunaOrdenavel ord={ord} chave="contrato">
-                    Contrato
-                  </ColunaOrdenavel>
-                )}
+                {/* Contrato vale nas QUATRO abas (OST da coluna na Integração). A aba da Integração
+                    era a única sem ela, e o time precisa do tipo de contrato na hora de conduzir a
+                    integração. Mesma posição, mesmo rótulo e mesma ordenação das outras três, que é
+                    o que a §A.12 pede de uma máscara única. */}
+                <ColunaOrdenavel ord={ord} chave="contrato">
+                  Contrato
+                </ColunaOrdenavel>
                 {/* MATRÍCULA (decisão do diretor): só na aba CADASTRO, que é onde a importação
                     acontece, e ANTES do nome, como na tela de Benefícios. */}
                 {isCadastro && (
@@ -1454,17 +1463,15 @@ export default function EsteiraPage() {
                       {/* Tipo de contrato: PRIMEIRA coluna de conteúdo (OST ajustes, item 5a). Vazio =
                           "não informado" (§A.11), em tom apagado para bater o olho em quem está sem o
                           dado. */}
-                      {!isIntegracao && (
-                        <div
-                          className={cn(
-                            "meta truncate text-center",
-                            !item.tipoContrato && "text-faint",
-                          )}
-                          title={item.tipoContrato || "não informado"}
-                        >
-                          {item.tipoContrato || "não informado"}
-                        </div>
-                      )}
+                      <div
+                        className={cn(
+                          "meta truncate text-center",
+                          !item.tipoContrato && "text-faint",
+                        )}
+                        title={item.tipoContrato || "não informado"}
+                      >
+                        {item.tipoContrato || "não informado"}
+                      </div>
                       {/* MATRÍCULA (decisão do diretor): só na aba CADASTRO, antes do nome. É o número
                           que a folha usa, e é por ele que o time confere quem já foi importado. */}
                       {isCadastro && (
