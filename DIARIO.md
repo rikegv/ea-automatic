@@ -10094,3 +10094,79 @@ atualizado. É conserto de uma linha, não toquei por não estar na OST. Consequ
 que seja regressão.
 
 **Não commitado de propósito:** `logosoulan.png`, solto na raiz e sem OST que o reivindique.
+
+---
+
+## 2026-08-18 — Integração nascendo com o Cadastro, banco fora da fila, CPF duplicado na liberação e a coluna Contrato
+
+Duas OSTs validadas na tela pelo diretor e commitadas na sequência. Ambas mexem na aba INTEGRAÇÃO,
+mas por motivos diferentes, então foram dois commits com recorte nominal.
+
+### 1. OST dos 3 ajustes (commit `01b9dd1`)
+
+**Item 1, a Integração passa a nascer JUNTO com o Cadastro.** Antes ela só nascia quando alguém
+carimbava "Cadastrado". A regra nova mora em `esteira/nascimento-cadastro.ts`, porta única para o
+nascimento das duas frentes. O motivo de ser função e não linha repetida: o Cadastro nasce em **três**
+lugares (status manual na Esteira, auto-conclusão da Auditoria pela I.A e conclusão do Exame pelo
+ASO), e escrever a Integração à mão nos três é exatamente o defeito que originou a §A.26. Cliente que
+não exige integração segue fechando no Cadastro, e o carimbo `concluiSemIntegracao` (a correção de
+11/08) continua alcançável: o caminho antigo ficou no lugar como ponte para os Cadastros abertos de
+antes desta OST. `db/backfill-integracao-no-cadastro.ts` trouxe as **8** admissões que já estavam no
+Cadastro; é idempotente (segunda execução devolveu "Nada a fazer") e deixa de fora quem já concluiu o
+Cadastro, senão 1.611 admissões concluídas voltariam para a esteira.
+
+**Item 2, e aqui a investigação derrubou a premissa do pedido.** O enunciado dizia que status
+decisório não tirava a pessoa da Integração. Levantamento (§A.27): **declínio e rescisão JÁ saíam**,
+carimbados de onde fosse, pelo filtro de farol que a `listar` aplica às quatro abas; a base confirmou
+com zero frentes de Integração em farol de declínio. Não era bug, **era falta de teste**, e agora tem
+teste cobrindo as quatro abas. O que de fato faltava sair era o **BANCO**, e ele saiu **só da
+Integração**, por decisão do diretor: integração é agendamento com hora marcada, e marcar quem está
+no banco é marcar reunião para uma data que ninguém sabe se existe. Nas outras três frentes o
+trabalho continua durante o banco, e foi por isso que a correção de 13/08 pôs a tag "Banco, Aguardar"
+em vez de esconder a linha. O pedido original ("mesmo filtro em todas as frentes") tiraria 2 da
+Auditoria, 8 do Exame e 3 do Cadastro, mudando contagem já validada, então o recorte foi levado ao
+diretor antes de construir e ele escolheu o de menor alcance. O caso pontual do cliente Garrett saiu
+da Integração **pela regra**, sem edição de dado: farol e frente seguem como estavam.
+
+**Item 3, CPF duplicado na liberação.** Pedido de verificação que virou correção. O **lote** recusava
+duplicata desde sempre, lendo a coluna `possivel_duplicata`; a liberação **individual** não tinha
+trava nenhuma, só a tag amarela na tela, e o botão liberava. A checagem passou a ser **ao vivo**,
+porque a coluna é uma foto tirada na entrada do Pandapé: pré-admissão de outra origem nunca recebe a
+marca, e duplicata que nasce depois fica em `false` para sempre. **Bloqueio com aceite explícito**, e
+não bloqueio seco, porque candidato pode ter N admissões (§A.3 regra 6). O 409 devolve cliente, cargo
+e situação das vivas, nunca o CPF (§A.6). O lote não foi tocado.
+
+**Prova de contagem, antes e depois:** concluídas 1712 -> 1712, em andamento 55 -> 55, em andamento
+exclusivo 55 -> 55, em banco 11 -> 11, base do Alto Volume 1763 -> 1763, filas de Auditoria 15 -> 15,
+Exame 43 -> 43 e Cadastro 9 -> 9. Só a fila da Integração mudou, de 6 para 11 (menos 1 que saiu pelo
+banco, mais 6 do backfill; os outros 2 do backfill estão em banco e por isso não aparecem).
+
+### 2. OST da coluna Contrato na Integração (commit `cc8174c`)
+
+A coluna existia nas outras três abas e estava **explicitamente desligada** só na Integração. Agora
+vale nas quatro, mesma posição, mesmo rótulo e mesma ordenação (§A.12). O dado já vinha no payload e
+a coluna já estava declarada em `colunasOrdenaveis`: nada de backend mudou. Largura de 112px, a mesma
+já medida no browser nas outras abas, e o piso de rolagem subiu de 1530px para 1642px acompanhando a
+coluna nova. **Nenhuma coluna cedeu largura**, e foi decisão medida: Nome e Cliente já truncam, e as
+quatro do agendamento precisam caber data, hora, "Presencial" e nome de gente, então tirar de uma
+para dar à outra só mudaria de lugar o esmagamento que a §A.20 proíbe.
+
+### Gate e estado
+
+Verde antes do push: **1.418 testes do backend** (132 arquivos, **20 novos** nesta leva) e **99 do
+frontend**. Typecheck de backend e frontend limpos, eslint limpo sobre os 17 arquivos tocados. Deploy
+local feito antes da validação (build mais restart dos serviços systemd, health conferido). Prova
+visual (§A.13/§A.20) conferida em Esteira nas quatro abas, Gerenciador, Painel e Liberação, e a aba
+Integração ainda em **duas larguras** (1600px e 1920px) e nos **dois extremos da rolagem**, para
+provar que nada esmaga nem corta.
+
+**Fora do escopo, registrado e não tocado (§A.14):** a aba Integração usa **travessão** nas células
+vazias de Data, Horário, Tipo e Consultor, o que viola a §A.11. É código anterior a estas OSTs e não
+estava na lista de nenhuma delas. O correto seria "não informado". Fica anotado para uma OST própria.
+
+**Ainda em pé do registro anterior:** `packages/shared-types/src/cpf.spec.ts` segue **vermelho**,
+esperando três frentes quando o sistema tem quatro desde que a INTEGRACAO entrou. Continua sendo
+conserto de uma linha e continua fora de escopo.
+
+**Não commitado de propósito:** `logosoulan.png` e `docs/ARQUITETURA-ATRACAO-SELECAO.md`, soltos e
+sem OST que os reivindique.
