@@ -10170,3 +10170,158 @@ conserto de uma linha e continua fora de escopo.
 
 **Não commitado de propósito:** `logosoulan.png` e `docs/ARQUITETURA-ATRACAO-SELECAO.md`, soltos e
 sem OST que os reivindique.
+
+---
+
+## 20/08/2026 — Alocação manual no Alto Volume, limpeza da fila do Cadastro e a fundação da segmentação de área
+
+Sessão de retomada, depois de uma queda no meio da anterior. **A primeira coisa que a retomada
+descobriu foi que o alinhamento estava defasado:** duas das três frentes pedidas como "a construir"
+**já estavam construídas e no ar**, deixadas pela sessão que caiu. Isso foi provado antes de escrever
+qualquer linha, e não presumido: os serviços systemd subiram 20:45:55 do dia 18, **depois** da última
+edição de arquivo (20:43:45); o build do Next continha o chunk `alto-volume/admissao`; e a rota nova
+respondia **401** (existe, barrada pelo guard) enquanto uma rota inventada respondia **404**. Nada foi
+reconstruído por cima.
+
+### 1. Alocar e desalocar admissão no Alto Volume, pela ficha (commit `7e63ac2`)
+
+**O buraco que fechou.** O vínculo `admissao_projeto` só nascia num momento específico do fluxo, a
+liberação. Passado esse ponto, não havia como dizer "esta admissão também entra no projeto X". A tela
+do projeto não resolvia porque ela só **oferece** quem cai no recorte dela (mesmo cliente **e** data
+de admissão dentro do período): quem tinha data vazia ou fora da janela ficava inalcançável.
+
+**Encaixe escolhido: a ficha (olhinho)**, ao lado de "Trocar cliente e cargo" e "Corrigir CPF", e não
+o Gerenciador. Motivo: o Gerenciador não tem onde mostrar **em qual projeto a admissão já está**, que
+é a informação que evita o clique errado. A leitura nova (`GET /admin/alto-volume/admissao/:id`)
+inverte a pergunta do sistema: em vez de "quem falta neste projeto", responde "em que projeto esta
+admissão está, e em quais poderia estar".
+
+**Nenhuma regra nova (§A.26).** A escrita reusa `vincular`/`desvincular`, as mesmas rotas da tela do
+projeto, com as mesmas cinco recusas. A sugestão de projeto reusa `sugerirProjetoPorPeriodo`, a mesma
+função da Liberação. Os projetos oferecidos são os **ativos do cliente**, sem filtro de período: o
+período fica à vista para quem decide mas não recusa, porque filtrar aqui reproduziria o buraco que a
+frente existe para fechar.
+
+**Contra a contagem dupla, duas camadas:** a ficha **mostra** onde a admissão já está antes de
+qualquer clique (evita o erro), e o `unique` de `admissao_id` **recusa** o segundo vínculo com 409
+(impede o erro). Confirmado ao vivo, a segunda tentativa devolve "Esta admissão já está neste
+projeto."
+
+**Prova de régua no projeto BIENAL DOS LIVROS, ao vivo, nos dois sentidos:**
+
+| momento | vagas | vinculadas | emAndamento | faltam | fecha? |
+|---|---|---|---|---|---|
+| antes | 102 | 94 | 0 | 8 | 94+8=102 |
+| vinculando 1 | 102 | 95 | 1 | 7 | 95+7=102 |
+| desvinculando | 102 | 94 | 0 | 8 | 94+8=102 |
+
+Por cargo, Vendedor I foi de 61+5 para 62+4 sobre 66 vagas. **A base voltou exatamente ao estado
+original** (100 vínculos). A admissão não é tocada em nenhum dos dois sentidos: segue na esteira como
+estava, e só a contagem daquele projeto muda.
+
+§A.6: a leitura devolve rótulos de catálogo, código de cliente e o nome de quem vinculou. Nenhum CPF
+e nenhum nome de candidato, porque quem abriu a ficha já está olhando a pessoa.
+
+### 2. Cadastro concluído sai da fila, mesmo com assinatura pendente (commit `82e61d0`)
+
+A aba Cadastro listava admissão cujo cadastro já tinha acabado, só porque o contrato ainda não fora
+assinado. Agora a aba tem **uma régua só**, a mesma das outras três: concluiu, sai.
+
+**A ressalva desfeita era da INT-4** e está registrada como decisão anterior do diretor na §A.5:
+`concluida = true` com `clicksign_status` em AGUARDANDO_ASSINATURA ou CANCELADO continuava na fila.
+Ela nasceu quando a assinatura **não tinha tela própria**. Hoje tem, a Gestão Das Assinaturas do
+Ass.Click, e repetir a linha aqui duplicava o acompanhamento no lugar errado. **A §A.5 do CLAUDE.md
+foi corrigida no mesmo commit**, porque estava afirmando o contrário do que o código passou a fazer.
+
+**Alcance levantado antes de mexer (§A.27):** a condição vivia apenas em `itensWhere`, que alimenta
+uma única consulta, a listagem de itens da aba. Os KPIs usam `kpiWhere`, que nunca teve a cláusula de
+clicksign e já filtra `concluida = false` explicitamente, então **nenhum card muda de número**. Na
+prática a mudança **corrige uma incoerência**: a fila listava 2 linhas que o card "Total na fila" não
+contava. Painel, Gerenciador e Alto Volume leem farol e `db/expressoes-admissao`, jamais esta fila. O
+frontend não precisou ser tocado.
+
+Quem tem cadastro **de verdade** em aberto não foi levado junto: a garantia é o próprio
+`concluida = false`, e o spec cobre isso nos quatro estados de envelope. Volume real afetado: **2
+admissões**. Conferido na tela, a aba passou a mostrar **6 na fila, todas "A Cadastrar"**, com 1729 em
+"Cadastrado" fora da fila.
+
+### 3. A "regressão" da Integração NÃO existia (nenhum commit, decisão do diretor)
+
+Pedido como conserto urgente, virou investigação que **derrubou a premissa**. A porta única
+`nascerCadastroEIntegracao` está intacta e **os três caminhos a chamam**: status manual
+(`esteira.service.ts:1007`), auto-conclusão da Auditoria (`auditoria.service.ts:700`) e ASO
+(`esteira.service.ts:2051`). `git log 01b9dd1..HEAD` sobre esses diretórios volta **vazio**: nenhum
+commit posterior tocou neles. O spec dos três caminhos passa 4/4. O backfill, rodado, retorna **0**.
+
+As 7 admissões com Cadastro aberto se explicam inteiras, e por **duas decisões já validadas**, não
+por defeito:
+
+| clientes | farol | frente Integração | cliente exige? | por que não aparece |
+|---|---|---|---|---|
+| 51726 (2), 54925 (1) | EM_ADMISSAO | não nasceu | **não** | config do cliente, correto |
+| 55880 (2) | BANCO_AGUARDAR | nasceu | sim | filtro esconde da aba |
+| 57328, 982 | EM_ADMISSAO | nasceu | sim | aparecem normalmente |
+
+1. **`esteira.service.ts:203` exclui `BANCO_AGUARDAR` só da aba Integração.** Foi o próprio commit
+   `01b9dd1`, cuja mensagem é literalmente "integração nasce com o cadastro, **banco sai da fila**". O
+   item 1 daquela OST criou a frente e o item 2 da mesma OST a escondeu. É coerente: banco não tem
+   data de admissão, não há o que integrar; ao preencher a data o farol volta a EM_ADMISSAO e a linha
+   reaparece sozinha.
+2. **23 clientes com `cliente_pendencia_config.chave='INTEGRACAO'` e `obrigatorio=false`**,
+   desmarcados entre 11/08 e 18/08. Para eles a porta única corretamente não cria a frente.
+
+**Reportado ao diretor antes de construir (§A.27) e ele fechou como esclarecido, sem mexer em
+código.** Foi a decisão certa: a §A.27 nasceu justamente porque desmarcar essa mesma flag de **um**
+cliente quebrou a contagem de **três** telas e duplicou 56 admissões.
+
+### 4. Segmentação de área, a fundação do módulo de A&S (commit `713b33a`)
+
+Estava solta no working tree, validada, e foi commitada como frente própria. O **papel** deixou de
+significar "vê tudo" e passou a significar "manda na minha área": o papel diz **quanto** o usuário
+manda, a área diz **onde**.
+
+**A área nunca concede, só limita.** É um teto por cima da permissão de menu que já existia. Foi essa
+propriedade que tornou a virada segura: com todo usuário em [ADM] e todo menu em [ADM], a interseção
+é uma **identidade** e ninguém perdeu um único menu. A segmentação só passa a morder quando o diretor
+cadastrar o primeiro usuário de A&S.
+
+As duas migrations são **atômicas de propósito, com o backfill dentro do mesmo arquivo**: se a tabela
+nascesse vazia, todo usuário cairia no fail-closed entre a migration e o backfill e o sistema ficaria
+mudo para todo mundo nessa janela. A `0074` ainda faz o NOT NULL em três tempos, porque `menus` já
+tinha 29 linhas.
+
+**A fonte da autorização do menu saiu do código e veio para o banco:** a tabela manda, o código diz
+apenas com que áreas o menu **nasce**. Antes, marcar um menu para as duas áreas exigia a fábrica e
+uma subida de versão; agora é o diretor, pela tela `/admin/menu-areas` (só SUPER_ADMIN), com prévia
+de impacto antes de salvar, recusa de área vazia e o Início protegido. Área vazia é recusada **no
+banco por CHECK**, não só na tela: regra de acesso que vive só na aplicação é regra que um script
+contorna sem querer.
+
+`isAdmin` foi **preservado de propósito** (§A.26): ele governa duas coisas diferentes e só uma passou
+a depender de área. Visibilidade de MENU virou assunto do `temMenu`; visibilidade de RECURSO sem
+relação com menu (correções de Master no modal da Esteira, alerta de Diagnóstico) é PAPEL, e papel
+não mudou. Trocá-lo em bloco quebraria telas já validadas. A §A.23 permanece intacta: isto
+**registra e limita, nunca distribui**.
+
+### Gate, estado e o que fica aberto
+
+Verde no que foi commitado: **backend 135 arquivos / 1473 testes**, **frontend 17 / 102**, typecheck
+limpo dos dois lados, eslint limpo sobre `apps/backend/src` e `apps/frontend/src`. Prova visual
+(§A.13) conferida na ficha (modal de alocação sem vínculo, com vínculo e a confirmação de desvínculo)
+e na aba Cadastro. O código já estava no ar desde o dia 18, então não houve build novo nesta sessão;
+health de backend e frontend conferido em 200.
+
+**Vermelho pré-existente, NÃO tocado (§A.14):** `packages/shared-types/src/cpf.spec.ts` segue
+falhando, esperando três frentes quando o sistema tem quatro desde que a INTEGRACAO entrou. É o mesmo
+registro da entrada anterior, continua sendo conserto de uma linha e continua fora do escopo de
+qualquer OST desta sessão. **Vale uma OST própria, e ela é barata.**
+
+**Fora do escopo, registrado e não tocado (§A.14):** a aba **Exame** também usa travessão em célula
+vazia, além da Integração já registrada, e a coluna "Pendências Obrig." da Esteira aparece cortada na
+borda direita em 1600px (§A.11 e §A.20). Ambos são código anterior a estas OSTs.
+
+**Não commitado de propósito:** `logosoulan.png` e `docs/ARQUITETURA-ATRACAO-SELECAO.md`, que seguem
+sem OST que os reivindique, e `apps/backend/src/esteira/nascimento-cadastro.tres-caminhos.spec.ts`,
+um guarda de regressão escrito durante a investigação do item 3. Ele passa 4/4 e é útil, mas o item 3
+terminou sem mudança de código, então ele não pertence a nenhuma das três frentes commitadas. Fica
+solto esperando o diretor decidir se entra.
