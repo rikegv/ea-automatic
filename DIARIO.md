@@ -10441,3 +10441,120 @@ foram reportadas antes de construir (§A.27):
 descontinuado acontece nas etapas 1 e 2, em 2 a 3 semanas**; o resto é ganho sobre base funcionando.
 A etapa 4 (WhatsApp) é a única com dependência **fora** do alcance da fábrica, porque a plataforma de
 WhatsApp do grupo é o CentraAtend.
+
+---
+
+## 20/08/2026 (noite): Portal do candidato e integração com o GI, investigados e PAUSADOS
+
+Frente de **consulta de viabilidade**, sem uma linha de código. Duas perguntas do diretor: dá para
+abrir um portal público para o candidato entregar documento, e dá para substituir o webhook do
+PandaPé que alimenta a folha. **Nada foi construído; a frente está PAUSADA aguardando o fornecedor do
+GI responder ao e-mail do diretor.**
+
+Tudo em `docs/PARECER-PORTAL-DOCUMENTOS-CANDIDATO.md`, cinco partes.
+
+### Parte 1, o portal: o projeto já resolveu isso uma vez, sem abrir porta
+
+O EA hoje não tem nenhuma porta para a internet. O portal exigiria a primeira.
+
+**O achado foi que existem dois caminhos, e o projeto já escolheu o segundo antes.** Para o VT foi
+escrito um pacote de vhost com allowlist de caminhos (`ea-bridge-fernando/vt-soulanrh.conf`), e ele
+**nunca foi aplicado**: o que foi ao ar foi um **app externo** que confere o link assinado offline e
+deposita num bucket, com o EA apenas **buscando** depois. O EA continua tão fechado quanto é hoje.
+
+A decisão que separa os dois caminhos é de negócio, não técnica: **o candidato precisa saber na hora
+se o documento foi aceito?** Se sim, precisa de porta; se pode saber depois, não precisa.
+
+**Três pegadinhas levantadas para a reunião de segurança:** hoje **não existe limite de tamanho de
+upload** configurado (nunca importou, o sistema é interno); **não existe verificação de vírus em
+nenhum ponto**; e o arquivo **hoje é gravado em disco** por 48h, então o requisito "não retém" exige
+trocar o transporte entre backend e ai-service para memória. É mudança contida, porque a peça que
+fala com a IA já recebe conteúdo, não caminho.
+
+### Parte 2 e 3, a API do GI: mapeamento completo antes de decidir
+
+Regra do diretor, nascida do erro do PandaPé (olhou-se só o pedaço que interessava e o resto
+surpreendeu depois): **mapear a API inteira**. Foram 435 endereços, 55 áreas, 3.707 campos, lidos da
+especificação pública sem credencial.
+
+**Avisos que saíram do mapa:** a API expõe **o ERP inteiro**, não só RH (contas a receber, títulos,
+notas, movimentação bancária), e tem **106 endereços de exclusão**. E a documentação é fraca onde mais
+importa: **zero listas de valores**, 127 descrições em 3.707 campos, e os campos obrigatórios são
+marcações automáticas do banco, não regra de negócio.
+
+### Parte 4 e 5, com credencial: o que a leitura provou, e o que eu concluí errado
+
+O diretor liberou credencial **só para leitura**. Cumprido: GET e, depois de liberação explícita, o
+`GetAllJson` (POST de consulta). Nenhuma escrita.
+
+**Duas descobertas de segurança que precisam virar exigência:**
+1. **A credencial NÃO é de leitura.** O token traz, no próprio conteúdo, `Get`, `Add`, `Update`,
+   `Delete` e `SemFiltro`. A restrição foi cumprida por disciplina, não por impedimento.
+2. **É base de produção** (127 empresas reais do grupo), **sem ambiente de teste conhecido**. Enquanto
+   não existir, teste de gravação é gravação na folha real.
+
+Operacional, e economiza horas: a API está atrás de **Cloudflare** e recusa quem não manda
+identificação de navegador (`403, error code: 1010`); e o **token dura 2 horas**, o que a documentação
+não diz.
+
+**O ERRO QUE EU COMETI, e a lição.** Concluí, nas Partes 3 e 4, que a superfície de integração do
+PandaPé era a área de Seleção (`FuncionarioSelecao`), porque existe lá um campo `statusGIPandaPe` e
+porque o cadastro oficial responde 403. Os dois indícios eram verdadeiros e **a conclusão era errada**:
+o 403 é escopo da NOSSA credencial, não desenho da integração.
+
+> **Lição de método, para a próxima API: 403 diz o que EU não posso ver, não diz o que o sistema faz.**
+> Tratar limite de permissão como evidência de arquitetura foi o erro. O aviso de correção está no topo
+> da Parte 3 do parecer, para ninguém levar a versão errada a uma reunião.
+
+**O fluxo real, comprovado pelos logs de webhook que o diretor trouxe:** o PandaPé posta em
+`giinterno.gi.app.br/WebhooksPandaPe/Soulan/`, **host e caminho privados, fora da API pública**. É um
+receptor que o GI construiu sob medida. **Não há webhook para aproveitar:** quando nós alimentarmos o
+GI, será pela API pública, contrato diferente.
+
+E a diferença entre a tela e a API se explicou: a tela que mostra dezenas de pessoas é o **Cadastro de
+Funcionários** (tabela `Funcionario`, **403 para nós**), enquanto a pré-admissão tem **1 registro só**,
+sem rastro de origem, confirmado por duas formas de consulta.
+
+### O achado que reposiciona o projeto
+
+Lido na API do PandaPé, em dois candidatos reais: a etapa de admissão tem **23 formulários, e só 5 têm
+dado digitado** (27 a 28 campos). Os outros 18 são **slots de anexo**. RG, CTPS, PIS, título de
+eleitor, reservista e escolaridade chegam ao GI **como imagem, nunca como número**.
+
+Só que o registro de pré-admissão do GI tem `rg`, `orgaoRG`, `carteiraTrabalho`, `tituloEleitor`,
+`filiacaoNomePai`, `filiacaoNomeMae`, `raca`, `grauInstrucao` **preenchidos**. Ou seja: **alguém no GI
+abre os documentos e transcreve à mão.**
+
+**Isso muda o valor da frente.** Replicar o PandaPé replicaria a digitação manual. O portal com a IA
+extraindo os números entregaria esses campos **já preenchidos**: deixa de ser substituição do PandaPé
+e vira **melhoria do processo da folha**.
+
+**E o escopo encolheu duas vezes:**
+- Dos 27 campos que o PandaPé digita, o EA **já tem quase todos**. Falta **Estado Civil, Telefone Fixo
+  e o sobrenome separado**.
+- A pré-admissão **não exige** cargo, horário nem centro de custo (vazios no registro real), então o
+  de/para pesado (5.454 cargos, 4.074 horários, 12.590 centros de custo) **saiu do caminho crítico**.
+  Sobra empresa, cliente e banco.
+
+### Em aberto com o fornecedor, e por que a frente pausa aqui
+
+Oito perguntas registradas na Parte 5, lideradas por: **qual o conteúdo exato que o receptor
+`WebhooksPandaPe` recebe hoje**, **os dados caem mesmo no `Funcionario`** (basta conceder leitura nessa
+tabela para a mesma credencial e uma consulta resolve), **quem transcreve os números dos documentos**,
+a **tabela de significados dos códigos**, e **se existe ambiente de teste**.
+
+A rodada seguinte de investigação fica **em espera de propósito**: o retorno do fornecedor
+provavelmente traz a especificação pronta, e investigar antes seria refazer trabalho.
+
+### Higiene de credencial (§A.6)
+
+O token gerado foi guardado em arquivo restrito, **nunca exibido**, e **destruído** ao fim da análise,
+junto com todo cache local (incluindo o identificador de pré-colaborador usado no cruzamento). O
+`gi-cred.txt` vive **fora do repositório** e o diretor o remove da VM. **Nenhum arquivo do repositório
+referencia a credencial, e nenhuma linha de código do EA fala com o GI**: esta frente é, até aqui, só
+investigação e documento. Nenhum dado pessoal foi extraído das duas APIs: as medições são contagens,
+taxas de preenchimento e **rótulos** de campo.
+
+Uma varredura que puxaria tabelas financeiras inteiras foi **interrompida por decisão própria**: era
+leitura permitida, mas carga desnecessária sobre o ERP de produção de um terceiro, sem ganho para o
+parecer.
