@@ -1,4 +1,5 @@
 import {
+  ArrayNotEmpty,
   ArrayUnique,
   IsArray,
   IsBoolean,
@@ -9,10 +10,12 @@ import {
   MaxLength,
   MinLength,
 } from "class-validator";
-import { PAPEL, type Papel } from "@ea/shared-types";
+import { AREA, PAPEL, type Area, type Papel } from "@ea/shared-types";
 
-// Papéis atribuíveis pela administração de usuários (todos os do RBAC — §A.3).
+// Papéis atribuíveis pela administração de usuários (todos os do RBAC, §A.3).
 const PAPEIS = PAPEL as unknown as string[];
+// Áreas atribuíveis (segmentação do módulo de A&S).
+const AREAS = AREA as unknown as string[];
 
 export class CriarUsuarioDto {
   @IsString()
@@ -26,6 +29,19 @@ export class CriarUsuarioDto {
 
   @IsIn(PAPEIS)
   papel!: Papel;
+
+  /**
+   * ÁREAS do novo usuário. OBRIGATÓRIO e com pelo menos uma, porque ninguém pode nascer sem área: o
+   * sistema é fail-closed, e um usuário sem área entraria numa tela em branco sem entender por quê.
+   *
+   * LISTA porque o modelo suporta HÍBRIDO desde o primeiro dia (requisito do diretor), mesmo que hoje
+   * cada pessoa seja cadastrada com uma área só.
+   */
+  @IsArray()
+  @ArrayNotEmpty()
+  @ArrayUnique()
+  @IsIn(AREAS, { each: true })
+  areas!: Area[];
 }
 
 export class AtualizarUsuarioDto {
@@ -76,4 +92,22 @@ export class DefinirMenusDto {
   @IsString({ each: true })
   @MaxLength(60, { each: true })
   conhecidos?: string[];
+
+  /**
+   * ÁREAS do usuário, salvas no MESMO envio da marcação de menu porque é a área que RECORTA os menus:
+   * mandá-las em requisições separadas deixaria uma janela em que a marcação é avaliada contra a área
+   * errada, e o resultado dependeria da ordem de chegada.
+   *
+   * OPCIONAL na forma: uma tela antiga, que ainda não conhece o campo, continua salvando só os menus e
+   * as áreas ficam como estão. É o mesmo cuidado do `conhecidos`, que nasceu de a tela desatualizada
+   * apagar em silêncio o que não conhecia.
+   *
+   * VAZIO É DIFERENTE DE AUSENTE, e a diferença é intencional: ausente preserva, vazio é o diretor
+   * dizendo "este usuário fica sem área" (fail-closed, ele passa a ver só o Início).
+   */
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @IsIn(AREAS, { each: true })
+  areas?: Area[];
 }

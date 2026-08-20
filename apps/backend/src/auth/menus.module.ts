@@ -1,4 +1,5 @@
 import { Global, Module } from "@nestjs/common";
+import { MenuAreasService } from "./menu-areas.service";
 import { MenusCatalogoService } from "./menus-catalogo.service";
 import { MenusService } from "./menus.service";
 
@@ -11,7 +12,9 @@ import { MenusService } from "./menus.service";
 @Module({
   // `MenusCatalogoService` converge a TABELA de menus a partir do registro em código no boot, para
   // menu novo nascer listável na tela de liberação. Registra, NUNCA concede acesso (§A.23).
-  providers: [MenusService, MenusCatalogoService],
-  exports: [MenusService, MenusCatalogoService],
+  // `MenuAreasService` é a FONTE da autorização por área (tabela + cache). Global junto dos demais
+  // porque os DOIS guards globais o consomem, além do `/auth/me` e da tela do diretor.
+  providers: [MenusService, MenusCatalogoService, MenuAreasService],
+  exports: [MenusService, MenusCatalogoService, MenuAreasService],
 })
 export class MenusModule {}

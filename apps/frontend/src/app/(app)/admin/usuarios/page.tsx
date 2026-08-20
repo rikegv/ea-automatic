@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
-import type { Papel } from "@ea/shared-types";
+import { AREA, AREA_LABEL, type Area, type Papel } from "@ea/shared-types";
 import { apiFetch, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { PageHead } from "@/components/ui/PageHead";
@@ -22,6 +22,8 @@ interface Usuario {
   papel: Papel;
   ativo: boolean;
   criadoEm: string;
+  /** Áreas do usuário. VAZIO é estado real e visível: vira a tag "Sem Área" (fail-closed). */
+  areas?: Area[];
 }
 
 const PAPEL_ROTULO: Record<Papel, string> = {
@@ -40,7 +42,15 @@ const PAPEL_OPTIONS = [
   { value: "SUPER_ADMIN", label: "Super Admin" },
 ];
 
-const EMPTY = { nome: "", email: "", papel: "COMUM" as Papel };
+// NINGUÉM NASCE SEM ÁREA (decisão do diretor): o formulário já vem com a Admissão marcada, que é a
+// área de todo mundo hoje. Sem isso, o usuário novo entraria num sistema mudo pelo fail-closed.
+const EMPTY = { nome: "", email: "", papel: "COMUM" as Papel, areas: ["ADM"] as Area[] };
+
+// Ordenação da coluna Área: quem está sem área primeiro, porque é o estado que pede ação.
+function rankArea(areas?: Area[]): number {
+  if (!areas || areas.length === 0) return 0;
+  return areas.length === 1 ? (areas[0] === "ADM" ? 1 : 2) : 3;
+}
 
 function fmtData(d?: string | null): string {
   if (!d) return "não informado";
@@ -149,6 +159,8 @@ export default function UsuariosPage() {
       { chave: "nome", tipo: "texto", valor: (u) => u.nome },
       { chave: "email", tipo: "texto", valor: (u) => u.email },
       { chave: "papel", tipo: "status", valor: (u) => PAPEL_RANK[u.papel] },
+      // Ordena por RANK e não pelo texto: "Sem Área" primeiro, porque é o estado que pede ação.
+      { chave: "area", tipo: "status", valor: (u) => rankArea(u.areas) },
       { chave: "status", tipo: "status", valor: (u) => (u.ativo ? 0 : 1) },
       { chave: "criadoEm", tipo: "data", valor: (u) => u.criadoEm },
     ],
@@ -165,7 +177,12 @@ export default function UsuariosPage() {
       const r = await apiFetch<{ usuario: Usuario; senhaTemporaria: string }>("/admin/usuarios", {
         method: "POST",
         token,
-        body: { nome: form.nome.trim(), email: form.email.trim(), papel: form.papel },
+        body: {
+          nome: form.nome.trim(),
+          email: form.email.trim(),
+          papel: form.papel,
+          areas: form.areas,
+        },
       });
       setForm(EMPTY);
       setSenhaGerada(r.senhaTemporaria);
@@ -282,9 +299,43 @@ export default function UsuariosPage() {
             options={PAPEL_OPTIONS}
           />
         </div>
+        {/* ÁREA na criação: é o que impede alguém de nascer sem área e cair no fail-closed. Caixas e
+            não um Select porque o modelo é LISTA (o usuário híbrido atende as duas frentes). */}
+        <div>
+          <span className="ds-label">Área</span>
+          <div className="flex flex-wrap gap-2 pt-1">
+            {AREA.map((a) => (
+              <label
+                key={a}
+                className={
+                  "flex cursor-pointer items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-[13px] transition " +
+                  (form.areas.includes(a)
+                    ? "bg-[var(--surface-2)] text-text"
+                    : "text-dim hover:bg-[var(--surface-2)]")
+                }
+              >
+                <input
+                  type="checkbox"
+                  checked={form.areas.includes(a)}
+                  onChange={() =>
+                    setForm({
+                      ...form,
+                      areas: form.areas.includes(a)
+                        ? form.areas.filter((x) => x !== a)
+                        : [...form.areas, a],
+                    })
+                  }
+                  className="h-4 w-4 flex-none accent-[var(--accent)]"
+                />
+                {AREA_LABEL[a]}
+              </label>
+            ))}
+          </div>
+        </div>
         <Button
           type="submit"
-          disabled={saving || !form.nome.trim() || !form.email.trim()}
+          // Sem área o botão não habilita: o backend recusa, e barrar aqui explica antes de errar.
+          disabled={saving || !form.nome.trim() || !form.email.trim() || form.areas.length === 0}
           className="py-2.5"
         >
           {saving ? "Criando…" : "Criar usuário"}
@@ -313,28 +364,31 @@ export default function UsuariosPage() {
               <ColunaOrdenavel as="th" ord={ord} chave="email">
                 E-mail
               </ColunaOrdenavel>
-              <ColunaOrdenavel as="th" ord={ord} chave="papel" className="w-[170px]">
+              <ColunaOrdenavel as="th" ord={ord} chave="papel" className="w-[150px]">
                 Papel
               </ColunaOrdenavel>
-              <ColunaOrdenavel as="th" ord={ord} chave="status" className="w-[120px]">
+              <ColunaOrdenavel as="th" ord={ord} chave="area" className="w-[190px]">
+                Área
+              </ColunaOrdenavel>
+              <ColunaOrdenavel as="th" ord={ord} chave="status" className="w-[110px]">
                 Status
               </ColunaOrdenavel>
               <ColunaOrdenavel as="th" ord={ord} chave="criadoEm" className="w-[135px]">
                 Criado em
               </ColunaOrdenavel>
-              <th className="w-[180px]" />
+              <th className="w-[170px]" />
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={6} className="py-8 text-center text-faint">
+                <td colSpan={7} className="py-8 text-center text-faint">
                   Carregando usuários…
                 </td>
               </tr>
             ) : rows.length === 0 ? (
               <tr>
-                <td colSpan={6} className="py-8 text-center text-faint">
+                <td colSpan={7} className="py-8 text-center text-faint">
                   Nenhum usuário cadastrado.
                 </td>
               </tr>
@@ -381,6 +435,25 @@ export default function UsuariosPage() {
                       ) : (
                         <span className="text-[13.5px] text-text">{PAPEL_ROTULO[u.papel]}</span>
                       )}
+                    </td>
+                    {/* ÁREA: só LEITURA aqui, para o diretor auditar de relance quem está em quê sem
+                        abrir um modal por pessoa. A edição vive no modal de permissão, junto dos
+                        menus que ela governa. O Super Admin está acima da segmentação. */}
+                    <td className="align-top">
+                      <div className="flex flex-wrap gap-1">
+                        {u.papel === "SUPER_ADMIN" ? (
+                          <Pill tone="ok">Todas As Áreas</Pill>
+                        ) : !u.areas || u.areas.length === 0 ? (
+                          // O estado que torna o fail-closed seguro em vez de silencioso.
+                          <Pill tone="wn">Sem Área</Pill>
+                        ) : (
+                          u.areas.map((a) => (
+                            <Pill key={a} tone="nt">
+                              {AREA_LABEL[a]}
+                            </Pill>
+                          ))
+                        )}
+                      </div>
                     </td>
                     <td className="align-top">
                       <Pill tone={u.ativo ? "ok" : "nt"}>{u.ativo ? "Ativo" : "Inativo"}</Pill>

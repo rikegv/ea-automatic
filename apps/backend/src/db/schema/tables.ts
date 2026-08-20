@@ -18,6 +18,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import {
+  areaEnum,
   cartaoVtEnum,
   clicksignStatusEnum,
   estadoDocumentoEnum,
@@ -58,6 +59,41 @@ export const usuarios = pgTable("usuarios", {
   atualizadoEm,
 });
 
+/**
+ * ÁREA DO USUÁRIO (segmentação do módulo de A&S). Um usuário pode ter MAIS DE UMA área.
+ *
+ * LISTA E NÃO COLUNA ÚNICA em `usuarios`, e isso é requisito do diretor, não zelo: hoje cada Master
+ * é cadastrado com UMA área só, mas o modelo precisa suportar o HÍBRIDO (a pessoa que atende as duas
+ * frentes) sem migração de dado depois. Coluna única exigiria refazer a tabela, os guards e a tela
+ * no dia em que o primeiro híbrido aparecesse.
+ *
+ * ESPELHA `usuario_menus` DE PROPÓSITO: mesma forma (par usuário + valor, chave composta), mesma
+ * forma de ler e de salvar. Quem já entende a permissão de menu entende esta tabela sem aprender
+ * conceito novo.
+ *
+ * AUSÊNCIA DE LINHA É FAIL-CLOSED (decisão do diretor): usuário sem nenhuma área enxerga apenas o
+ * Início. O oposto (sem área = vê tudo) seria fail-open, e o primeiro Master de A&S cadastrado sem
+ * área veria o módulo de Admissão inteiro EM SILÊNCIO. Erro invisível é pior que erro visível, e a
+ * §A.23 já fixou o princípio ("menu que não aparece não é bug, é o diretor não ter liberado").
+ *
+ * O SUPER_ADMIN NÃO DEPENDE DESTA TABELA: está acima da segmentação, como no bypass de menu. É o que
+ * garante que nenhum erro de área seja irrecuperável, porque o diretor sempre entra e conserta.
+ *
+ * §A.6: id de usuário e um rótulo de área. Nenhuma PII.
+ */
+export const usuarioAreas = pgTable(
+  "usuario_areas",
+  {
+    usuarioId: uuid("usuario_id")
+      .notNull()
+      .references(() => usuarios.id, { onDelete: "cascade" }),
+    area: areaEnum("area").notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.usuarioId, t.area] }),
+  }),
+);
+
 // ── Menus + permissão de menu por usuário (OST permissão de menu) ───────────
 // Catálogo de MENUS em TABELA, no mesmo padrão de `frente_status_catalogo`: seed por
 // `onConflictDoUpdate` a partir do registro em código (`domain/menus.ts`), então a TELA de
@@ -71,6 +107,27 @@ export const menus = pgTable("menus", {
   grupo: varchar("grupo", { length: 20 }).notNull(), // OPERACAO | ADMIN
   ordem: integer("ordem").notNull(),
   ativo: boolean("ativo").notNull().default(true),
+  /**
+   * ÁREAS que enxergam este menu. A TABELA É A FONTE DA VERDADE da autorização por área; o registro
+   * em código (`domain/menus.ts`) diz apenas com que áreas o menu NASCE.
+   *
+   * POR QUE A FONTE MUDOU DE LUGAR: enquanto a área morava só em código, marcar um menu para as duas
+   * áreas exigia a fábrica e uma subida de versão. O diretor precisa marcar sozinho (o caso real é o
+   * dashboard de Alto Volume, que interessa aos dois times), e a tela dele escreve aqui.
+   *
+   * A REGRA QUE PROTEGE ISSO, e ela vive no convergedor do boot (`MenusCatalogoService`): esta coluna
+   * é gravada SÓ NO INSERT e fica FORA do `set` do conflito, exatamente como o `codigo`. Rótulo,
+   * rota, grupo e ordem são APRESENTAÇÃO e seguem convergindo do código a cada boot; ÁREA é
+   * AUTORIZAÇÃO e nunca é sobrescrita, senão a próxima subida apagaria as marcações do diretor em
+   * silêncio, que é a pior falha possível num controle de acesso.
+   *
+   * NOT NULL com backfill do carimbo de código na própria migration: no dia um a tabela repete
+   * exatamente o que o código dizia, então a troca de fonte é uma identidade e ninguém perde acesso.
+   *
+   * Vetor de texto e não de enum por limitação do drizzle-kit com arrays de enum; os valores são
+   * validados na escrita (`MenuAreasService`) e o conteúdo é sempre `ADM` e/ou `AS`.
+   */
+  areas: text("areas").array().notNull(),
 });
 
 // Associação USUÁRIO x MENU. A ausência de linha para um par (usuário, menu) significa "sem esse

@@ -10,6 +10,9 @@ import {
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import type { Request, Response } from "express";
+import { AREA } from "@ea/shared-types";
+import { TODOS_CODIGOS_MENU, filtrarMenusPorPapel } from "../domain/menus";
+import { MenuAreasService } from "./menu-areas.service";
 import { UsersService } from "../users/users.service";
 import { AuthService } from "./auth.service";
 import { MenusService } from "./menus.service";
@@ -27,6 +30,7 @@ export class AuthController {
     private readonly users: UsersService,
     private readonly config: ConfigService,
     private readonly menus: MenusService,
+    private readonly menuAreas: MenuAreasService,
   ) {}
 
   @Public()
@@ -59,18 +63,54 @@ export class AuthController {
     return { ok: true };
   }
 
-  // Liberado a quem tem senha temporária: o front lê user.senhaTemporaria para redirecionar à troca.
-  // Devolve também os MENUS do usuário (OST permissão de menu), que a sidebar e o guard de rota do
-  // front consomem. MASTER/SUPER_ADMIN recebem `todos: true` (bypass) em vez da lista, para a tela
-  // nunca depender de marcação e o admin ver tudo mesmo sem configuração.
+  /**
+   * Liberado a quem tem senha temporária: o front lê user.senhaTemporaria para redirecionar à troca.
+   * Devolve os MENUS do usuário (OST permissão de menu), que a sidebar e o guard de rota consomem.
+   *
+   * A SEGMENTAÇÃO DE ÁREA É RESOLVIDA AQUI, NO BACKEND, e a lista já sai RECORTADA. Foi a escolha de
+   * desenho mais importante desta parte: a alternativa era mandar as áreas cruas e o front cruzar com
+   * um mapa `menu -> áreas` próprio, ou seja, a regra de autorização escrita DUAS vezes, em dois
+   * repositórios, livre para divergir. Divergência em permissão não é inconsistência de tela, é falha
+   * de segurança. Assim o front não sabe o que é área: ele recebe códigos e os mostra.
+   *
+   * QUEM RECEBE O QUÊ:
+   *  - SUPER_ADMIN: `todos: true`. Está acima da segmentação, não depende de marcação nem de área.
+   *  - MASTER: a lista de TODOS os menus das áreas dele. Deixou de ser `todos: true`, porque o papel
+   *    deixou de significar "vê tudo" e passou a significar "manda na minha área".
+   *  - COMUM: os menus marcados, cortados pelas áreas dele.
+   *
+   * O `MENU_SEMPRE_VISIVEL` NÃO é aplicado aqui, e a ausência é deliberada (§A.14). Ele é código
+   * declarado e nunca consumido: ligá-lo agora daria o Início a um COMUM que hoje não tem menu
+   * nenhum, ou seja, mudaria o comportamento no ar de um usuário real sem a OST pedir. A virada de
+   * área tinha de ser IDENTIDADE, e é. Se o diretor quiser corrigir a barra vazia, é decisão dele, em
+   * OST própria.
+   *
+   * `areas` viaja junto só como INFORMAÇÃO (a tela mostra a área de quem está logado); a autorização
+   * não depende dela do lado do front.
+   */
   @PermiteSenhaTemporaria()
   @Get("me")
   async me(@CurrentUser() user: AuthUser) {
-    const admin = user.papel === "MASTER" || user.papel === "SUPER_ADMIN";
-    const menus = admin
-      ? { todos: true as const, codigos: [] as string[] }
-      : { todos: false as const, codigos: [...(await this.menus.codigosDoUsuario(user.id))] };
-    return { user, menus };
+    if (user.papel === "SUPER_ADMIN") {
+      return { user, menus: { todos: true as const, codigos: [] as string[] }, areas: [...AREA] };
+    }
+
+    const { codigos, areas } = await this.menus.permissaoDoUsuario(user.id);
+    const base = user.papel === "MASTER" ? TODOS_CODIGOS_MENU : [...codigos];
+
+    return {
+      user,
+      // DOIS TETOS, e os dois entram: a ÁREA (o menu pertence ao que a pessoa faz?) e o PAPEL (o
+      // menu é exclusivo do SUPER_ADMIN?). O segundo é o que tira a tela de Usuários da barra do
+      // Master, que já tomava 403 nela e não tinha por que enxergá-la.
+      menus: {
+        todos: false as const,
+        // O TETO DE ÁREA vem da TABELA (fonte viva): o menu que o diretor acabou de remarcar já entra
+        // ou sai daqui na carga seguinte da tela, sem restart e sem o usuário relogar.
+        codigos: filtrarMenusPorPapel(await this.menuAreas.filtrar(base, areas), user.papel),
+      },
+      areas: [...areas],
+    };
   }
 
   /**

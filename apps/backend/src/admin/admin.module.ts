@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { AssinanteEmpresaModule } from "../clicksign/assinante-empresa.module";
+import { MenuAreasController } from "./menu-areas/menu-areas.controller";
 import { AltoVolumeController } from "./alto-volume/alto-volume.controller";
 import { AltoVolumeService } from "./alto-volume/alto-volume.service";
 import { AltoVolumeVinculosService } from "./alto-volume/alto-volume-vinculos.service";
@@ -58,6 +59,7 @@ import { TiposDocumentoService } from "./tipos-documento/tipos-documento.service
     RegrasController,
     KitTiposController,
     KitRegrasController,
+    MenuAreasController,
   ],
   providers: [
     AltoVolumeService,

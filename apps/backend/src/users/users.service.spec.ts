@@ -18,10 +18,15 @@ function makeDb() {
   let insertRow: Record<string, unknown> = {};
   let updateRow: Record<string, unknown> = {};
   let selectRows: Record<string, unknown>[] = [];
+  // Linhas de `usuario_areas` (segmentação de área): o `listar` faz duas leituras, a projeção pública
+  // com `orderBy` e as áreas sem `orderBy`. O dublê atende as duas formas do mesmo `from`.
+  let areaRows: Record<string, unknown>[] = [];
 
   const db = {
     query: { usuarios: { findFirst } },
-    select: vi.fn(() => ({ from: () => ({ orderBy: async () => selectRows }) })),
+    select: vi.fn(() => ({
+      from: () => Object.assign(Promise.resolve(areaRows), { orderBy: async () => selectRows }),
+    })),
     insert: vi.fn(() => ({
       values: (v: Record<string, unknown>) => {
         capturas.insertValues = v;
@@ -50,6 +55,7 @@ function makeDb() {
     setInsertRow: (r: Record<string, unknown>) => (insertRow = r),
     setUpdateRow: (r: Record<string, unknown>) => (updateRow = r),
     setSelectRows: (r: Record<string, unknown>[]) => (selectRows = r),
+    setAreaRows: (r: Record<string, unknown>[]) => (areaRows = r),
   };
 }
 
@@ -71,7 +77,7 @@ describe("UsersService (OST — gestão de usuários)", () => {
     h.setInsertRow(ROW);
     const svc = new UsersService(h.db as never);
 
-    const r = await svc.criar({ nome: "Fulano", email: "Fulano@EA.local", papel: "COMUM" });
+    const r = await svc.criar({ nome: "Fulano", email: "Fulano@EA.local", papel: "COMUM", areas: ["ADM"] });
 
     expect(r.senhaTemporaria.length).toBeGreaterThanOrEqual(12);
     expect(h.capturas.insertValues?.senhaTemporaria).toBe(true);
@@ -89,18 +95,42 @@ describe("UsersService (OST — gestão de usuários)", () => {
     h.findFirst.mockResolvedValue({ id: "outro" });
     const svc = new UsersService(h.db as never);
     await expect(
-      svc.criar({ nome: "X", email: "dup@ea.local", papel: "MASTER" }),
+      svc.criar({ nome: "X", email: "dup@ea.local", papel: "MASTER", areas: ["ADM"] }),
     ).rejects.toBeInstanceOf(ConflictException);
   });
 
   it("listar: projeta só campos públicos (nunca senhaHash)", async () => {
     const h = makeDb();
     h.setSelectRows([{ ...ROW, senhaHash: "NAO_DEVE_VAZAR" }]);
+    h.setAreaRows([{ usuarioId: "u-1", area: "ADM" }]);
     const svc = new UsersService(h.db as never);
     const lista = await svc.listar();
     expect(lista).toHaveLength(1);
     expect(lista[0]).not.toHaveProperty("senhaHash");
     expect(lista[0].criadoEm).toBe("2026-01-01T00:00:00.000Z");
+    expect(lista[0].areas).toEqual(["ADM"]);
+  });
+
+  it("listar: usuário SEM área vem com lista vazia, e é o estado que a tela mostra como Sem Área", async () => {
+    const h = makeDb();
+    h.setSelectRows([ROW]);
+    h.setAreaRows([]); // ninguém cadastrado em área nenhuma
+    const svc = new UsersService(h.db as never);
+    const lista = await svc.listar();
+    // Vazio, e NÃO ausente: o fail-closed só é seguro porque este estado é visível na tabela.
+    expect(lista[0].areas).toEqual([]);
+  });
+
+  it("listar: usuário HÍBRIDO traz as duas áreas (o modelo suporta desde o primeiro dia)", async () => {
+    const h = makeDb();
+    h.setSelectRows([ROW]);
+    h.setAreaRows([
+      { usuarioId: "u-1", area: "ADM" },
+      { usuarioId: "u-1", area: "AS" },
+    ]);
+    const svc = new UsersService(h.db as never);
+    const lista = await svc.listar();
+    expect(lista[0].areas).toEqual(["ADM", "AS"]);
   });
 
   it("resetarSenha: nova senha temporária, seta flag=true, retorna senha em claro (hash casa)", async () => {

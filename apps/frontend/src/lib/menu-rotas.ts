@@ -28,6 +28,10 @@ export const ROTA_MENU: { prefixo: string; codigo: string }[] = [
   { prefixo: "/admin/kit-regras", codigo: "kit-regras" },
   { prefixo: "/admin/regras", codigo: "regras" },
   { prefixo: "/admin/usuarios", codigo: "usuarios" },
+  // ÁREA POR MENU: sem esta linha o guard deixaria qualquer autenticado abrir a URL direto, e a tela
+  // ESCREVE a fonte da autorização por área. O backend já barra as operações (@Roles SUPER_ADMIN);
+  // isto fecha a porta da tela.
+  { prefixo: "/admin/menu-areas", codigo: "menu-areas" },
   { prefixo: "/admin/pastas-drive", codigo: "pastas-drive" },
   { prefixo: "/admin/assinante-empresa", codigo: "assinante-empresa" },
   { prefixo: "/admin/diagnostico", codigo: "diagnostico" },

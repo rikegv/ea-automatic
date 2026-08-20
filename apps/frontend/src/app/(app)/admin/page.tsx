@@ -145,6 +145,13 @@ const CARDS: { href: string; icon: IconName; title: string; desc: string; codigo
     title: "Usuários",
     desc: "Cadastro, papéis, acesso e reset de senha.",
   },
+  {
+    href: "/admin/menu-areas",
+    codigo: "menu-areas",
+    icon: "layers",
+    title: "Área Por Menu",
+    desc: "Quais áreas enxergam cada menu do sistema.",
+  },
 ];
 
 /** Normaliza para busca: minúsculas, sem acento (mesmo comportamento das outras buscas). */

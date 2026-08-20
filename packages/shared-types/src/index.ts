@@ -7,6 +7,29 @@
 export const PAPEL = ["COMUM", "MASTER", "SUPER_ADMIN"] as const;
 export type Papel = (typeof PAPEL)[number];
 
+// ── Áreas do sistema (segmentação do módulo de A&S) ────────────────────────
+/**
+ * ÁREA é a segunda dimensão da permissão, ao lado do PAPEL, e as duas respondem perguntas
+ * diferentes: o papel diz QUANTO o usuário manda, a área diz ONDE ele manda.
+ *
+ * O papel deixou de significar "vê tudo" e passou a significar "manda na minha área": um MASTER de
+ * A&S manda no módulo de A&S e não enxerga a Admissão, e vice-versa. O SUPER_ADMIN fica ACIMA da
+ * segmentação e não depende de área nenhuma, que é a mesma proteção que o bypass de menu já tinha
+ * (ninguém consegue se trancar fora do próprio sistema).
+ *
+ * A ÁREA NUNCA CONCEDE, SÓ LIMITA. Ela é um TETO aplicado por cima da permissão de menu que já
+ * existia, nunca uma fonte de acesso novo. É essa propriedade que tornou a virada segura: com todo
+ * usuário em [ADM] e todo menu em [ADM], o filtro é uma identidade e ninguém perdeu nada.
+ */
+export const AREA = ["ADM", "AS"] as const;
+export type Area = (typeof AREA)[number];
+
+/** Rótulos de exibição das áreas (UI, §A.24 title case). */
+export const AREA_LABEL: Record<Area, string> = {
+  ADM: "Admissão",
+  AS: "Atração E Seleção",
+};
+
 // ── Gestão de usuários (OST-EA-GESTAO-USUARIOS — restrito Master/Super Admin) ───────────────
 /** Item da listagem/administração de usuários. NUNCA carrega senhaHash (§A.6). */
 export interface UsuarioListItem {
@@ -16,6 +39,11 @@ export interface UsuarioListItem {
   papel: Papel;
   ativo: boolean;
   criadoEm: string;
+  /**
+   * ÁREAS do usuário (segmentação do módulo de A&S). Lista VAZIA é um estado real e visível: é o
+   * usuário sem área, que enxerga só o Início (fail-closed) e recebe a tag "Sem Área" na tabela.
+   */
+  areas?: Area[];
 }
 
 /** Resposta da criação/reset de usuário: a senha temporária em claro só trafega UMA vez. */

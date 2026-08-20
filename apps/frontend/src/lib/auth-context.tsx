@@ -9,7 +9,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { Papel } from "@ea/shared-types";
+import type { Area, Papel } from "@ea/shared-types";
 import {
   apiFetch,
   definirTokenDaSessao,
@@ -53,7 +53,17 @@ export interface SessionUser {
   senhaTemporaria: boolean;
 }
 
-/** Menus do usuário (OST permissão de menu). `todos:true` = admin (bypass), vê tudo. */
+/**
+ * Menus do usuário (OST permissão de menu). `todos:true` só para o SUPER_ADMIN, que está acima da
+ * segmentação de área.
+ *
+ * A LISTA JÁ VEM RECORTADA PELA ÁREA (segmentação do módulo de A&S): o backend resolve a interseção
+ * entre as áreas do usuário e as do menu e devolve só o que ele enxerga. O front NÃO recalcula isso,
+ * de propósito: a regra de autorização escrita nos dois lados divergiria, e divergência em permissão
+ * é falha de segurança, não inconsistência de tela.
+ *
+ * Para o MASTER, `todos` deixou de ser `true`: ele recebe a lista dos menus DAS ÁREAS DELE.
+ */
 export interface MenusSessao {
   todos: boolean;
   codigos: string[];
@@ -65,11 +75,26 @@ interface AuthState {
   loading: boolean;
   /** null enquanto não carregou (chamada a /auth/me). */
   menus: MenusSessao | null;
+  /** Áreas do usuário logado. INFORMATIVO (a tela exibe); a autorização vem recortada em `menus`. */
+  areas: Area[];
 }
 
 interface AuthContextValue extends AuthState {
+  /**
+   * MASTER ou SUPER_ADMIN. NÃO MUDOU com a segmentação de área, e a preservação é deliberada: este
+   * booleano governa DUAS coisas diferentes no sistema, e só uma delas passou a depender de área.
+   *
+   *  1. visibilidade de MENU e guard de rota: passou a ser assunto do `temMenu` abaixo;
+   *  2. visibilidade de RECURSO, sem relação com menu: as correções de Master no modal da Esteira e o
+   *     alerta de Diagnóstico. Isso é PAPEL, e papel não mudou.
+   *
+   * Trocá-lo em bloco quebraria o item 2 em telas já validadas (§A.26). Quem decide menu usa
+   * `temMenu`; quem decide recurso continua aqui.
+   */
   isAdmin: boolean;
-  /** true se o usuário pode ver/usar o menu de `codigo` (admin sempre; senão pela lista). */
+  /** SUPER_ADMIN: o único acima da segmentação de área. */
+  isSuperAdmin: boolean;
+  /** true se o usuário pode ver/usar o menu de `codigo` (já considerando papel, marcação e ÁREA). */
   temMenu: (codigo: string) => boolean;
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -82,7 +107,13 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 type LoginResponse = { accessToken: string; user: SessionUser };
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<AuthState>({ user: null, token: null, loading: true, menus: null });
+  const [state, setState] = useState<AuthState>({
+    user: null,
+    token: null,
+    loading: true,
+    menus: null,
+    areas: [],
+  });
 
   // Espelha o token corrente num ref para os callbacks estáveis (deps []) sempre lerem o valor
   // atual, sem fechar sobre um `state` defasado. Necessário no `trocarSenha` (senha temporária).
@@ -102,9 +133,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           token,
           loading: false,
           menus: atual.menus,
+          areas: atual.areas,
         })),
       aoExpirar: () => {
-        setState({ user: null, token: null, loading: false, menus: null });
+        setState({ user: null, token: null, loading: false, menus: null, areas: [] });
         if (typeof window !== "undefined" && window.location.pathname !== "/login") {
           window.location.assign("/login");
         }
@@ -116,8 +148,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Restaura a sessão pelo refresh token (cookie httpOnly) ao montar.
   useEffect(() => {
     apiFetch<LoginResponse>("/auth/refresh", { method: "POST" })
-      .then((r) => setState({ user: r.user, token: r.accessToken, loading: false, menus: null }))
-      .catch(() => setState({ user: null, token: null, loading: false, menus: null }));
+      .then((r) =>
+        setState({ user: r.user, token: r.accessToken, loading: false, menus: null, areas: [] }),
+      )
+      .catch(() => setState({ user: null, token: null, loading: false, menus: null, areas: [] }));
   }, []);
 
   /**
@@ -153,12 +187,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       method: "POST",
       body: { email, password },
     });
-    setState({ user: r.user, token: r.accessToken, loading: false, menus: null });
+    setState({ user: r.user, token: r.accessToken, loading: false, menus: null, areas: [] });
   }, []);
 
   const logout = useCallback(async () => {
     await apiFetch("/auth/logout", { method: "POST" }).catch(() => undefined);
-    setState({ user: null, token: null, loading: false, menus: null });
+    setState({ user: null, token: null, loading: false, menus: null, areas: [] });
   }, []);
 
   const trocarSenha = useCallback(async (senhaAtual: string, novaSenha: string) => {
@@ -169,10 +203,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       body: { senhaAtual, novaSenha },
       token: tokenRef.current ?? undefined,
     });
-    setState({ user: r.user, token: r.accessToken, loading: false, menus: null });
+    setState({ user: r.user, token: r.accessToken, loading: false, menus: null, areas: [] });
   }, []);
 
   const isAdmin = state.user?.papel === "MASTER" || state.user?.papel === "SUPER_ADMIN";
+  const isSuperAdmin = state.user?.papel === "SUPER_ADMIN";
 
   // Carrega os MENUS do usuário assim que há sessão (OST permissão de menu). O login/refresh só
   // trazem o `user`; os menus vêm do /auth/me. Recarrega quando o usuário muda (troca de conta).
@@ -180,9 +215,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const uid = state.user?.id;
     if (!uid || !state.token) return;
     let vivo = true;
-    apiFetch<{ menus: MenusSessao }>("/auth/me", { token: state.token })
+    apiFetch<{ menus: MenusSessao; areas?: Area[] }>("/auth/me", { token: state.token })
       .then((r) => {
-        if (vivo && r?.menus) setState((atual) => ({ ...atual, menus: r.menus }));
+        if (vivo && r?.menus)
+          setState((atual) => ({ ...atual, menus: r.menus, areas: r.areas ?? [] }));
       })
       .catch(() => undefined);
     return () => {
@@ -190,17 +226,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [state.user?.id, state.token]);
 
+  /**
+   * O BYPASS AQUI É SÓ DO SUPER_ADMIN, e não mais do admin em geral. É a tradução exata do backend: o
+   * MASTER deixou de ver tudo e passou a ver os menus da área dele, que já chegam prontos em
+   * `state.menus.codigos`. Nada de área é calculado nesta função.
+   */
   const temMenu = useCallback(
     (codigo: string): boolean => {
-      if (isAdmin) return true; // bypass, coerente com o backend.
+      if (isSuperAdmin) return true; // acima da segmentação, coerente com o backend.
       if (!state.menus) return false; // ainda carregando: não mostra a mais.
       return state.menus.todos || state.menus.codigos.includes(codigo);
     },
-    [isAdmin, state.menus],
+    [isSuperAdmin, state.menus],
   );
 
   return (
-    <AuthContext.Provider value={{ ...state, isAdmin, temMenu, login, logout, trocarSenha }}>
+    <AuthContext.Provider
+      value={{ ...state, isAdmin, isSuperAdmin, temMenu, login, logout, trocarSenha }}
+    >
       {children}
     </AuthContext.Provider>
   );

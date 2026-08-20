@@ -8,15 +8,24 @@ import { menuDaRota } from "@/lib/menu-rotas";
 
 /** Guarda de sessão + casca da aplicação para todas as rotas autenticadas. */
 export default function AppLayout({ children }: { children: ReactNode }) {
-  const { user, loading, menus, isAdmin, temMenu } = useAuth();
+  const { user, loading, menus, isSuperAdmin, temMenu } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
 
   // OST permissão de menu: a tela desta rota é governada por algum menu que o usuário NÃO tem?
-  // Espera os menus carregarem (evita bloquear no piscar inicial). Admin nunca é bloqueado.
+  // Espera os menus carregarem (evita bloquear no piscar inicial).
+  //
+  // O BYPASS AQUI É SÓ DO SUPER_ADMIN, e não mais do admin em geral. Era `!isAdmin`, de quando o
+  // Master recebia `todos: true` e a lista dele não significava nada; com a segmentação de área o
+  // `/auth/me` passou a devolver a lista REAL do Master, então `temMenu` já responde certo para ele
+  // e o bypass virou um furo: o Master digitava `/admin/usuarios`, a tela abria e só então o backend
+  // barrava tudo com 403. É a tradução exata do backend, onde só o SUPER_ADMIN escapa.
+  //
+  // O que isto NÃO faz: tirar menu de ninguém. A lista do Master continua sendo todos os menus da
+  // área dele; o que ele deixa de alcançar por URL é exatamente o que o backend já recusava.
   const menuDaTela = menuDaRota(pathname);
   const bloqueadoPorMenu =
-    !isAdmin && !!menuDaTela && !!menus && !temMenu(menuDaTela);
+    !isSuperAdmin && !!menuDaTela && !!menus && !temMenu(menuDaTela);
 
   useEffect(() => {
     if (loading) return;

@@ -1,3 +1,5 @@
+import type { Area } from "@ea/shared-types";
+
 /**
  * REGISTRO DOS MENUS e o mapa OPERAÇÃO -> MENU (OST permissão de menu por usuário).
  *
@@ -22,6 +24,16 @@
 
 export type GrupoMenu = "OPERACAO" | "ADMIN";
 
+/**
+ * ÁREA DE NASCIMENTO de um menu que não declara `areas`.
+ *
+ * É TAMBÉM A DIREÇÃO SEGURA. Um menu de A&S criado sem declarar `areas` nasce em ADM e simplesmente
+ * NÃO APARECE para o time de A&S: erro visível, que alguém reporta em cinco minutos. O default oposto
+ * (nascer em "todas as áreas") faria o menu novo aparecer para quem não devia, EM SILÊNCIO, que é a
+ * falha que ninguém percebe.
+ */
+export const AREA_PADRAO_DO_MENU: Area[] = ["ADM"];
+
 export interface MenuDef {
   /** Slug estável, chave em `menus` e em `usuario_menus`. */
   codigo: string;
@@ -30,6 +42,21 @@ export interface MenuDef {
   href: string;
   grupo: GrupoMenu;
   ordem: number;
+  /**
+   * ÁREAS COM QUE ESTE MENU NASCE. Não é a autorização vigente.
+   *
+   * A FONTE DA AUTORIZAÇÃO É A TABELA `menus.areas`, escrita pela tela do diretor e lida pelos guards
+   * (ver `MenuAreasService`). Este campo é consumido UMA vez, no INSERT do convergedor de boot, e
+   * nunca mais: a partir daí quem manda é o banco.
+   *
+   * Foi por isso que a fonte mudou de lugar: marcar um menu para as duas áreas (o caso real é o
+   * dashboard de Alto Volume, que interessa aos dois times) não pode depender da fábrica e de uma
+   * subida de versão.
+   *
+   * LISTA, não valor único, porque um menu pode servir às duas áreas. OMITIR equivale a `["ADM"]`
+   * (ver `AREA_PADRAO_DO_MENU`). Menu de A&S DEVE declarar `["AS"]` para nascer só lá.
+   */
+  areas?: Area[];
   /**
    * Operações que este menu libera, como `Controller.handler`. `Controller.*` reivindica TODOS os
    * handlers daquela controller. Vazio = menu só de navegação (sem operação de backend própria; as
@@ -44,7 +71,18 @@ export interface MenuDef {
  */
 export const MENUS: MenuDef[] = [
   // ── Operação ──────────────────────────────────────────────────────────────
-  { codigo: "inicio", rotulo: "Início", href: "/", grupo: "OPERACAO", ordem: 0, operacoes: [] },
+  {
+    codigo: "inicio",
+    rotulo: "Início",
+    href: "/",
+    grupo: "OPERACAO",
+    ordem: 0,
+    operacoes: [],
+    // O ÚNICO MENU DAS DUAS ÁREAS na fundação, e tem de ser: carimbado só como ADM, o Início sumiria
+    // da barra do time de A&S mesmo depois de o diretor liberar os menus deles, porque a área é um
+    // teto que se aplica DEPOIS da marcação. É a home; ela não pode pertencer a uma frente só.
+    areas: ["ADM", "AS"],
+  },
   {
     // CONTROLE GERENCIAL (OST do dashboard executivo, ajustes do diretor). Menu NOVO: nasce só para o
     // SUPER_ADMIN e o diretor libera quem enxerga (§A.23). O CÓDIGO segue `diretoria` de propósito,
@@ -495,15 +533,37 @@ export const MENUS: MenuDef[] = [
     operacoes: ["PastasDriveController.*"],
   },
   {
+    // ÁREA POR MENU: a tela onde o diretor decide que áreas enxergam cada menu.
+    //
+    // EXCLUSIVA DO SUPER_ADMIN, e por um motivo mais forte que a régua de sempre: ela escreve a FONTE
+    // DA AUTORIZAÇÃO POR ÁREA. Quem a alcança redefine o que cada time enxerga no sistema inteiro, sem
+    // tocar em usuário nenhum. Por isso entra também em `MENUS_SOMENTE_SUPER_ADMIN`, que a tira até da
+    // barra lateral dos demais, e não só das operações.
+    //
+    // `operacoes: []` pelo mesmo motivo de `usuarios` e `diagnostico`: a controller é `@Roles`
+    // SUPER_ADMIN, então marcá-la para outra pessoa não concederia nada (fail-closed no RolesGuard).
+    codigo: "menu-areas",
+    rotulo: "Área Por Menu",
+    href: "/admin/menu-areas",
+    grupo: "ADMIN",
+    ordem: 32,
+    operacoes: [],
+  },
+  {
     codigo: "usuarios",
     rotulo: "Usuários",
     href: "/admin/usuarios",
     grupo: "ADMIN",
     ordem: 29,
-    // A tela de USUÁRIOS (que é a própria tela de configuração de menus) segue restrita a
-    // MASTER/SUPER_ADMIN pelo `@Roles` da controller (Bloco 4). Por isso NÃO é reivindicada por menu:
-    // marcar "usuarios" para um COMUM não concederia gestão de usuários (fail-closed pelo RolesGuard),
-    // e delegar a configuração de menus a um não-admin seria escalonamento de privilégio.
+    // A tela de USUÁRIOS (que é a própria tela de configuração de menus) é restrita ao SUPER_ADMIN
+    // pelo `@Roles` da controller. Por isso NÃO é reivindicada por menu: marcar "usuarios" para um
+    // COMUM não concederia gestão de usuários (fail-closed pelo RolesGuard), e delegar a configuração
+    // de menus a um não-admin seria escalonamento de privilégio.
+    //
+    // A RESTRIÇÃO APERTOU na segmentação de área (decisão do diretor): era MASTER + SUPER_ADMIN, e
+    // passou a SUPER_ADMIN só. O motivo é a porta dos fundos: esta é a tela onde as ÁREAS são
+    // cadastradas, então um Master que a alcançasse poderia se conceder a área que quisesse e a
+    // segmentação inteira viraria decorativa.
     operacoes: [],
   },
 ];
@@ -514,19 +574,117 @@ export const MENU_SEMPRE_VISIVEL = new Set<string>(["inicio"]);
 /** Todos os códigos de menu. */
 export const TODOS_CODIGOS_MENU = MENUS.map((m) => m.codigo);
 
+// ── SEGMENTAÇÃO POR ÁREA ────────────────────────────────────────────────────
+//
+// A REGRA, em uma frase: o usuário enxerga um menu quando há INTERSEÇÃO entre as áreas dele e as do
+// menu. O SUPER_ADMIN está acima disso e nunca é filtrado.
+//
+// A ÁREA NUNCA CONCEDE, SÓ LIMITA. Ela é um TETO aplicado por cima da permissão de menu que já
+// existia: quem não tinha o menu continua sem ele, e quem tinha só o perde se estiver fora da área.
+// É essa propriedade que tornou a virada segura, e é ela que precisa ser preservada em qualquer
+// mudança futura aqui. No dia da virada, todo usuário é [ADM] e todo menu é [ADM]: interseção sempre
+// não vazia, ninguém perde nada.
+
+/**
+ * Áreas com que um menu NASCE, aplicando o default de `AREA_PADRAO_DO_MENU`.
+ *
+ * NÃO É A AUTORIZAÇÃO VIGENTE. Quem responde "este menu é de que área HOJE" é o `MenuAreasService`,
+ * que lê a tabela. Esta função é consumida no INSERT do convergedor e nos testes de nascimento.
+ */
+export function areasDeNascimento(menu: MenuDef): Area[] {
+  return menu.areas && menu.areas.length > 0 ? menu.areas : AREA_PADRAO_DO_MENU;
+}
+
+/** Índice `codigo -> áreas de NASCIMENTO`, para o convergedor semear menu novo. */
+export const AREAS_DE_NASCIMENTO: Map<string, Area[]> = new Map(
+  MENUS.map((m) => [m.codigo, areasDeNascimento(m)]),
+);
+
+/**
+ * Há interseção entre dois conjuntos de área? É a regra de visibilidade inteira, em uma linha.
+ *
+ * PURA DE PROPÓSITO: quem BUSCA as áreas (a tabela, via cache) fica no serviço, e a REGRA fica aqui,
+ * testável sem banco. Conjunto vazio de qualquer lado devolve `false`, que é o fail-closed: usuário
+ * sem área não vê nada, e menu sem área não é visto por ninguém.
+ */
+export function temIntersecao(a: Iterable<Area>, b: Iterable<Area>): boolean {
+  const outro = new Set(b);
+  for (const x of a) if (outro.has(x)) return true;
+  return false;
+}
+
+/**
+ * ÁREA DAS SUPERFÍCIES QUE SÓ O `@Roles` PROTEGE, e é a correção do buraco que o levantamento achou.
+ *
+ * O SISTEMA TEM DUAS AUTORIZAÇÕES INDEPENDENTES: o `MenuGuard`, por operação derivada do menu, e o
+ * `RolesGuard`, por papel puro. Filtrar área só no primeiro deixaria 12 superfícies de fora, porque
+ * elas são gatadas por `@Roles` e NENHUM menu as reivindica: as controllers inteiras de Usuários e
+ * Diagnóstico, mais handlers soltos de admissão, não conformidade, cliente e catálogos.
+ *
+ * A CONSEQUÊNCIA, se ficassem de fora: um Master de A&S alcançaria a tela de Usuários pela API,
+ * cadastraria a si mesmo na área ADM e a segmentação inteira viraria decorativa, no exato ponto em
+ * que precisa ser dura.
+ *
+ * ESTE MAPA COBRE SÓ O QUE O MENU NÃO COBRE. Quando a operação é reivindicada por um menu, a área sai
+ * do menu (fonte única). Este mapa é a segunda tentativa, por controller, e o default é ADM.
+ */
+export const AREA_POR_CONTROLLER: Map<string, Area[]> = new Map([
+  // Controllers inteiras sob `@Roles`, que nenhum menu reivindica (`operacoes: []`).
+  ["UsersController", ["ADM"] as Area[]],
+  ["DiagnosticoController", ["ADM"] as Area[]],
+  // Handlers soltos sob `@Roles` dentro de controllers cujo menu não os reivindica: trocarCliente,
+  // corrigirCpf, recusar, reativarRecusada e deletar (admissões); decidirLiberacao (não
+  // conformidades); removerVinculo (clientes); addMotivo/addBeneficio/addEscala (catálogos). Todos
+  // pertencem à Admissão, então a marcação por controller já resolve os três casos.
+  ["AdmissoesController", ["ADM"] as Area[]],
+  ["NaoConformidadesController", ["ADM"] as Area[]],
+  ["ClientesController", ["ADM"] as Area[]],
+  ["CatalogosController", ["ADM"] as Area[]],
+]);
+
 /**
  * PADRÃO DO COMUM (decisão do diretor, 24/07/2026): o consultor COMUM enxerga TODO o grupo OPERAÇÃO
  * por padrão (os 8 menus, INCLUINDO o Gerador de kit), e a Administração fica como concessão pontual,
  * usuário a usuário. Isto INVERTE o grandfather original, que dava só "o que o papel já via" (Operação
  * MENOS o Gerador de kit): aquele recorte vinha INTERROMPENDO a operação (cliente e cargo sumindo na
  * Liberação, Gerador de kit indisponível). Administração NUNCA entra no padrão do COMUM.
+ *
+ * A SEGUNDA TRAVA DA §A.23 MORA AQUI: o filtro é "grupo OPERACAO **e** área de NASCIMENTO ADM".
+ *
+ * NASCIMENTO, e não a área vigente da tabela, de propósito: esta lista é uma constante de módulo,
+ * consumida por scripts de carga que rodam fora do processo do backend. Amarrá-la ao nascimento a
+ * torna estável e fail-closed: um menu que nasceu de A&S nunca entra no padrão do COMUM, mesmo que o
+ * diretor depois o marque também como ADM. Conceder em massa é a operação que precisa ser conservadora.
+ *
+ * A primeira trava é os menus de A&S nascerem em GRUPO PRÓPRIO, nunca em OPERACAO. Esta é a de
+ * reserva, e existe porque a primeira depende de disciplina humana: se um dia alguém criar um menu de
+ * A&S no grupo OPERACAO por engano, o `backfill-menus-comum` continuará não o entregando a ninguém.
+ * Uma trava sozinha protege enquanto todo mundo lembra; duas protegem por construção.
+ *
+ * É exatamente o incidente que originou a §A.23, com o alcance ampliado: lá um backfill concedeu dois
+ * menus a três usuários como efeito colateral; aqui ele entregaria o módulo de A&S inteiro a TODO
+ * consultor COMUM.
  */
-export const MENUS_PADRAO_COMUM = MENUS.filter((m) => m.grupo === "OPERACAO").map((m) => m.codigo);
+export const MENUS_PADRAO_COMUM = MENUS.filter(
+  (m) => m.grupo === "OPERACAO" && areasDeNascimento(m).includes("ADM"),
+).map((m) => m.codigo);
 
-/** Códigos que um papel recebe por PADRÃO. Admin recebe todos (tem bypass no guard; é por coerência). */
+/**
+ * Códigos que um papel recebe por PADRÃO, pelo PAPEL apenas.
+ *
+ * NÃO RECORTA POR ÁREA, e a ausência é o ponto: a área vigente mora na TABELA, e esta é uma função
+ * pura de módulo, que não alcança o banco. Quem aplica o teto de área é o `MenuAreasService`, sobre o
+ * resultado desta função (ver `/auth/me` e a criação de usuário). Recortar aqui por um mapa de código
+ * criaria a SEGUNDA FONTE de autorização que esta frente existiu para eliminar.
+ *
+ * O MASTER recebe todos os menus porque manda na área dele, e é o teto de área aplicado depois que
+ * transforma "todos" em "todos os da minha área". O SUPER_ADMIN recebe tudo e não é recortado.
+ */
 export function codigosPadraoDoPapel(papel: string): string[] {
-  if (papel === "MASTER" || papel === "SUPER_ADMIN") return TODOS_CODIGOS_MENU;
-  return MENUS_PADRAO_COMUM;
+  if (papel === "SUPER_ADMIN") return TODOS_CODIGOS_MENU;
+  // `filtrarMenusPorPapel` tira o que é exclusivo do SUPER_ADMIN (hoje, a tela de Usuários).
+  const base = papel === "MASTER" ? TODOS_CODIGOS_MENU : MENUS_PADRAO_COMUM;
+  return filtrarMenusPorPapel(base, papel);
 }
 
 /**
@@ -536,7 +694,36 @@ export function codigosPadraoDoPapel(papel: string): string[] {
  * (`definirMenusDoUsuario`) e a tela de configuração os desabilita para COMUM. Já ficam fora do padrão
  * por construção (padrão = só Operação, e estes são Administração).
  */
-export const MENUS_BLOQUEADOS_COMUM = new Set<string>(["diagnostico", "usuarios"]);
+export const MENUS_BLOQUEADOS_COMUM = new Set<string>(["diagnostico", "usuarios", "menu-areas"]);
+
+/**
+ * MENUS QUE SÓ O SUPER_ADMIN ENXERGA, e o "enxerga" é literal: o menu nem entra na lista que o
+ * `/auth/me` devolve, então a barra lateral e o Menu Gerencial não desenham o card.
+ *
+ * POR QUE ISTO EXISTE (decisão do diretor). A tela de Usuários já era exclusiva do SUPER_ADMIN no
+ * backend (`@Roles("SUPER_ADMIN")` na controller), mas continuava APARECENDO para o Master, que
+ * abria e tomava 403 em tudo o que tentasse. Mostrar a porta e trancá-la é pior do que não mostrar
+ * a porta: vira chamado, e ensina que o sistema está quebrado quando ele está apenas correto.
+ *
+ * NÃO SUBSTITUI A TRAVA DO BACKEND, e essa distinção é o ponto todo. O `@Roles` continua onde
+ * estava e continua sendo a autoridade; isto é a camada de UX que para de oferecer o que o backend
+ * não vai conceder. Esconder sem trancar seria segurança por obscuridade; trancar sem esconder é o
+ * que estava incomodando. As duas coisas juntas é o certo.
+ *
+ * É CONJUNTO E NÃO FLAG NO `MenuDef` de propósito: o par com `MENUS_BLOQUEADOS_COMUM` deixa as duas
+ * regras de visibilidade por papel lado a lado, no mesmo lugar onde já se procura por elas.
+ */
+export const MENUS_SOMENTE_SUPER_ADMIN = new Set<string>(["usuarios", "menu-areas"]);
+
+/**
+ * Remove do conjunto os menus restritos ao SUPER_ADMIN. Aplicado ao RESULTADO, e não à origem, para
+ * valer igual nos três caminhos: o Master (que recebe todos os menus da área), o COMUM (que recebe
+ * os marcados) e uma marcação antiga que porventura tenha gravado `usuarios` para alguém.
+ */
+export function filtrarMenusPorPapel(codigos: Iterable<string>, papel: string): string[] {
+  if (papel === "SUPER_ADMIN") return [...codigos];
+  return [...codigos].filter((c) => !MENUS_SOMENTE_SUPER_ADMIN.has(c));
+}
 
 /**
  * Índice reverso `Controller.handler` -> menu, mais o conjunto de controllers com `*`. Construído uma

@@ -29,3 +29,30 @@ describe("ADMIN_MENUS: lista única de quem abre a camada /admin", () => {
     expect(new Set(ADMIN_MENUS).size).toBe(ADMIN_MENUS.length);
   });
 });
+
+/**
+ * A TELA DE USUÁRIOS ESCONDIDA DE QUEM NÃO É SUPER_ADMIN (decisão do diretor).
+ *
+ * Quem faz o corte é o BACKEND: o `/auth/me` deixou de mandar `usuarios` na lista de quem não é
+ * SUPER_ADMIN, e a tela só desenha o que a lista traz. O risco que estes testes travam é o efeito
+ * colateral, não a regra: perder UM menu administrativo não pode fechar a porta da camada inteira.
+ */
+describe("Usuários fora da lista: a camada de administração continua aberta", () => {
+  /** Master de hoje: todos os menus administrativos MENOS `usuarios`. */
+  const temMenuMaster = (c: string) => ADMIN_MENUS.includes(c as never) && c !== "usuarios";
+
+  it("o Master que perdeu só `usuarios` continua entrando na administração", () => {
+    expect(podeAbrirAdministracao(temMenuMaster)).toBe(true);
+    // E o card de Usuários some, porque a tela filtra por `temMenu`.
+    expect(temMenuMaster("usuarios")).toBe(false);
+  });
+
+  it("quem tem SÓ `usuarios` (o Super Admin, na prática) abre a administração", () => {
+    expect(podeAbrirAdministracao((c) => c === "usuarios")).toBe(true);
+  });
+
+  it("`usuarios` continua na lista de menus que abrem a camada", () => {
+    // Tirá-lo daqui faria o Super Admin sem outro menu administrativo perder a própria porta.
+    expect([...ADMIN_MENUS]).toContain("usuarios");
+  });
+});

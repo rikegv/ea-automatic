@@ -512,6 +512,20 @@
       "when": 1786993637223,
       "tag": "0072_divergencia_bancaria",
       "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1787067519767,
+      "tag": "0073_segmentacao_area_usuario",
+      "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1787082281775,
+      "tag": "0074_area_do_menu_na_tabela",
+      "breakpoints": true
     }
   ]
 }

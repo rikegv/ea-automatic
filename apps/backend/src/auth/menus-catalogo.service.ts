@@ -3,7 +3,8 @@ import { sql as fragmento } from "drizzle-orm";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
 import { menus } from "../db/schema";
-import { MENUS } from "../domain/menus";
+import { AREAS_DE_NASCIMENTO, MENUS, areasDeNascimento } from "../domain/menus";
+import { MenuAreasService } from "./menu-areas.service";
 
 /**
  * CONVERGÊNCIA DO CATÁLOGO DE MENUS NO BOOT (OST do menu Clínicas invisível).
@@ -32,7 +33,10 @@ import { MENUS } from "../domain/menus";
 export class MenusCatalogoService implements OnModuleInit {
   private readonly logger = new Logger("MenusCatalogoService");
 
-  constructor(@Inject(DRIZZLE) private readonly db: Database) {}
+  constructor(
+    @Inject(DRIZZLE) private readonly db: Database,
+    private readonly menuAreas: MenuAreasService,
+  ) {}
 
   async onModuleInit(): Promise<void> {
     try {
@@ -52,6 +56,18 @@ export class MenusCatalogoService implements OnModuleInit {
   /**
    * Alinha a tabela ao registro em código. Devolve os códigos que ENTRARAM agora (para o log dizer o
    * que mudou, em vez de repetir o total a cada restart).
+   *
+   * A DIVISÃO QUE GOVERNA ESTE MÉTODO, e é a regra mais importante do arquivo:
+   *
+   *   APRESENTAÇÃO (rótulo, rota, grupo, ordem) CONVERGE do código a cada boot. Renomear um menu ou
+   *   mudar a ordem é trabalho da fábrica, e tem de valer sozinho ao subir.
+   *
+   *   AUTORIZAÇÃO (áreas) NÃO CONVERGE. `areas` é gravada SÓ NO INSERT e fica FORA do `set` do
+   *   conflito, exatamente como o `codigo`. A fonte da área é a TABELA, escrita pela tela do diretor;
+   *   deixá-la no `set` faria a próxima subida apagar todas as marcações dele EM SILÊNCIO, que é a
+   *   pior falha possível num controle de acesso: ninguém percebe até alguém não conseguir trabalhar.
+   *
+   * Ou seja: o código diz com que áreas o menu NASCE, e nunca mais opina.
    */
   async convergir(): Promise<string[]> {
     const existentes = new Set(
@@ -62,13 +78,15 @@ export class MenusCatalogoService implements OnModuleInit {
     await this.db
       .insert(menus)
       .values(
-        MENUS.map(({ codigo, rotulo, href, grupo, ordem }) => ({
-          codigo,
-          rotulo,
-          href,
-          grupo,
-          ordem,
+        MENUS.map((m) => ({
+          codigo: m.codigo,
+          rotulo: m.rotulo,
+          href: m.href,
+          grupo: m.grupo,
+          ordem: m.ordem,
           ativo: true,
+          // NASCIMENTO: vale só para a linha que entra agora. No conflito, `areas` fica de fora.
+          areas: areasDeNascimento(m),
         })),
       )
       .onConflictDoUpdate({
@@ -79,8 +97,16 @@ export class MenusCatalogoService implements OnModuleInit {
           grupo: fragmento`excluded.grupo`,
           ordem: fragmento`excluded.ordem`,
           ativo: fragmento`true`,
+          // `areas` AUSENTE DE PROPÓSITO. Ver a nota do método: é o que impede a subida de apagar as
+          // marcações do diretor. Não acrescente esta linha.
         },
       });
+
+    // Rede de segurança para linha antiga que tenha ficado sem carimbo (base migrada à mão, script de
+    // carga). Só preenche o que está VAZIO, nunca por cima do que o diretor marcou.
+    await this.menuAreas.semear(AREAS_DE_NASCIMENTO);
+    // O catálogo mudou de tamanho: derruba o cache de área para o menu novo já valer nesta subida.
+    this.menuAreas.invalidar();
     return novos;
   }
 }

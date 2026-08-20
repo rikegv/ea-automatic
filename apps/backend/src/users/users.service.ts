@@ -8,10 +8,15 @@ import {
 } from "@nestjs/common";
 import * as argon2 from "argon2";
 import { asc, eq } from "drizzle-orm";
-import type { CriarUsuarioResposta, ResetSenhaResposta, UsuarioListItem } from "@ea/shared-types";
+import type {
+  Area,
+  CriarUsuarioResposta,
+  ResetSenhaResposta,
+  UsuarioListItem,
+} from "@ea/shared-types";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
-import { usuarios } from "../db/schema";
+import { usuarioAreas, usuarios } from "../db/schema";
 import { gerarSenhaTemporaria } from "./senha-temporaria.util";
 import type { AtualizarUsuarioDto, CriarUsuarioDto } from "./users.dto";
 
@@ -39,10 +44,28 @@ export class UsersService {
 
   // ── Administração de usuários (OST-EA-GESTAO-USUARIOS — Master/Super Admin) ──────────────
 
-  /** Lista todos os usuários (sem senhaHash). */
+  /**
+   * Lista todos os usuários (sem senhaHash), com as ÁREAS de cada um.
+   *
+   * AS ÁREAS VÊM NA LISTA, e não só no modal, porque é o que dá ao diretor a auditoria de relance:
+   * quem está em quê, sem abrir um modal por pessoa. É também onde o estado "Sem Área" fica visível,
+   * que é a condição para o fail-closed ser seguro em vez de virar "sumiu e ninguém sabe por quê".
+   *
+   * DUAS CONSULTAS E UM MERGE em vez de um join com agregação: a lista tem dezenas de linhas, não
+   * milhares, e o merge em memória evita o `group by` sobre a projeção pública inteira.
+   */
   async listar(): Promise<UsuarioListItem[]> {
-    const rows = await this.db.select(LIST_COLUMNS).from(usuarios).orderBy(asc(usuarios.nome));
-    return rows.map(toListItem);
+    const [rows, areas] = await Promise.all([
+      this.db.select(LIST_COLUMNS).from(usuarios).orderBy(asc(usuarios.nome)),
+      this.db.select().from(usuarioAreas),
+    ]);
+    const porUsuario = new Map<string, Area[]>();
+    for (const a of areas) {
+      const atual = porUsuario.get(a.usuarioId);
+      if (atual) atual.push(a.area);
+      else porUsuario.set(a.usuarioId, [a.area]);
+    }
+    return rows.map((r) => ({ ...toListItem(r), areas: porUsuario.get(r.id) ?? [] }));
   }
 
   /**

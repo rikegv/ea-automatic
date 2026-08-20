@@ -3,6 +3,16 @@ import { pgEnum } from "drizzle-orm/pg-core";
 /** RBAC (CLAUDE.md §A.3): Comum (consultor) · Master · Super Admin. */
 export const papelEnum = pgEnum("papel", ["COMUM", "MASTER", "SUPER_ADMIN"]);
 
+/**
+ * ÁREA DO SISTEMA (segmentação do módulo de A&S): ADM (Admissão) · AS (Atração E Seleção).
+ *
+ * ENUM e não tabela de catálogo, e isso é decisão de desenho: o carimbo de área dos MENUS vive em
+ * código (`domain/menus.ts`), junto das operações que cada menu reivindica. Área nova exigiria subir
+ * versão de qualquer jeito para carimbar os menus dela, então um catálogo editável prometeria uma
+ * flexibilidade que não existe e ainda abriria a porta para uma área órfã, sem menu nenhum.
+ */
+export const areaEnum = pgEnum("area_sistema", ["ADM", "AS"]);
+
 /** Farol global da admissão (§A.3). EM_ADMISSAO (inicial) · BANCO_AGUARDAR (Aud=ok & Exame=apto &
  * sem data_admissao; unifica o antigo BANCO_PAUSADA) · ADMISSAO_CONCLUIDA (etapas + contrato
  * assinado) · DECLINOU · RESCISAO. */

@@ -25,6 +25,7 @@ export const ADMIN_MENUS = [
   "kit-regras",
   "regras",
   "usuarios",
+  "menu-areas",
   "assinante-empresa",
 ] as const;
 

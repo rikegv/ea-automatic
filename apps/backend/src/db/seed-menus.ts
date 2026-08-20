@@ -2,7 +2,7 @@ import "dotenv/config";
 import { sql as fragmento } from "drizzle-orm";
 import { createDb } from "./client";
 import { menus, usuarios, usuarioMenus } from "./schema";
-import { MENUS, codigosPadraoDoPapel } from "../domain/menus";
+import { MENUS, areasDeNascimento, codigosPadraoDoPapel } from "../domain/menus";
 
 /**
  * ATENÇÃO (§A.23): o passo (1) daqui é catálogo e PODE rodar no deploy (menu novo precisa existir na
@@ -40,13 +40,16 @@ async function main(): Promise<void> {
     // 1) Catálogo de menus (converge).
     await db
       .insert(menus)
-      .values(MENUS.map(({ codigo, rotulo, href, grupo, ordem }) => ({
-        codigo,
-        rotulo,
-        href,
-        grupo,
-        ordem,
+      .values(MENUS.map((m) => ({
+        codigo: m.codigo,
+        rotulo: m.rotulo,
+        href: m.href,
+        grupo: m.grupo,
+        ordem: m.ordem,
         ativo: true,
+        // NASCIMENTO, e só no insert: `areas` fica fora do `set` do conflito, igual ao convergedor do
+        // boot. A fonte da área é a TABELA, escrita pela tela do diretor, e um seed jamais a sobrescreve.
+        areas: areasDeNascimento(m),
       })))
       .onConflictDoUpdate({
         target: menus.codigo,
