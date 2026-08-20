@@ -241,8 +241,14 @@ email) → `PATCH .../{id}` status `running`. O `clicksign_envelope_id` é grava
   `contrato_assinado_drive_url` e marca `clicksign_status = ASSINADO`. A URL da Clicksign **nunca é
   persistida nem logada** (§A.6). Dependência externa com custo, já em uso hoje.
 - Indicador de status do envelope (`AGUARDANDO_ASSINATURA`/`ASSINADO`/`CANCELADO`) na ficha e na aba
-  Cadastro da Esteira; **"Aguardando assinatura" permanece visível na fila** (trabalho em andamento,
-  embora a frente Cadastro já esteja em INTEGRAÇÃO). Link do contrato assinado reusa o logo do Drive.
+  Cadastro da Esteira. **Cadastro concluído SAI da fila da aba Cadastro, mesmo com a assinatura
+  pendente** (decisão do diretor, 20/08/2026): a aba passa a ter UMA régua só, a mesma das outras
+  três, concluiu e sai. *(Antes constava o contrário: "Aguardando assinatura" permanecia visível na
+  fila. Aquela ressalva era da INT-4, de quando a assinatura não tinha tela própria; hoje tem, a
+  **Gestão Das Assinaturas** do Ass.Click, e repetir a linha aqui só poluía a fila de quem faz
+  cadastro com gente cujo cadastro já acabou.)* A admissão **não some do sistema**: segue no
+  Ass.Click, no Gerenciador, na busca por candidato da própria aba e no filtro explícito pelo status
+  de conclusão. O que muda é só a fila padrão. Link do contrato assinado reusa o logo do Drive.
 - **Reenvio por correção:** cancelar o envelope errado, corrigir no EA, regerar kit (F9), novo
   envelope. *Nota de sandbox: envelope em `running` não tem cancelamento programático nesta conta
   (DELETE só em `draft`); o cancelamento é **best-effort** e o estado autoritativo é o EA

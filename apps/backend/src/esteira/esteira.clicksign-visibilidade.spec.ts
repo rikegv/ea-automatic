@@ -5,7 +5,17 @@ import { EsteiraService } from "./esteira.service";
 import { admissoes, frentesAdmissao } from "../db/schema";
 
 /**
- * REGRESSÃO INT-4 — visibilidade na fila do Cadastro (§A.4/§A.5).
+ * VISIBILIDADE NA FILA DO CADASTRO: uma régua só, a de sempre (item 2 da OST dos 3 itens).
+ *
+ * O QUE MUDOU. Este arquivo nasceu guardando a regra da INT-4: Cadastro CONCLUÍDO com o envelope em
+ * AGUARDANDO_ASSINATURA ou CANCELADO PERMANECIA na fila, porque o contrato ainda não estava
+ * assinado. O diretor tirou essa ressalva: a assinatura tem tela própria (gestão do Ass.Click), e
+ * repetir aquele trabalho na fila do Cadastro polui quem faz cadastro com gente cujo cadastro já
+ * acabou. O teste segue no mesmo lugar e com o mesmo mecanismo, agora provando a regra NOVA e,
+ * principalmente, que o `clicksignStatus` deixou de decidir visibilidade em QUALQUER aba.
+ *
+ * O que NÃO mudou, e o teste continua cobrindo: a busca por candidato revela concluídas (inclusive
+ * as assinadas), e Auditoria e Exame seguem intocadas.
  *
  * O filtro de "some quando concluída" é aplicado pelo Postgres via a cláusula WHERE que o
  * `EsteiraService.listar` monta. Sem banco real, capturamos a árvore de condições REAL que o serviço
@@ -97,33 +107,36 @@ function rowCadastro(concluida: boolean, clicksign: string): Map<unknown, unknow
   ]);
 }
 
-describe("EsteiraService.listar — visibilidade do Cadastro por clicksignStatus (REGRESSÃO INT-4)", () => {
+describe("EsteiraService.listar — fila do Cadastro: concluída sai, qualquer que seja o clicksignStatus", () => {
   afterEach(() => vi.clearAllMocks());
 
-  it("CADASTRO sem busca: AGUARDANDO_ASSINATURA e CANCELADO concluídos PERMANECEM; ASSINADO some", async () => {
+  it("CADASTRO sem busca: concluída SOME nos quatro estados de envelope", async () => {
     const { svc, captured } = montar();
     await svc.listar("cadastro", {});
     const where = captured[0];
 
-    // (a) concluída (CADASTRADO) aguardando assinatura → trabalho em andamento, aparece sem q.
-    // A regra olha `concluida` + `clicksign_status`, nunca o código do status: por isso a
-    // reorganização da 0026 (INTEGRACAO → CADASTRADO) não muda nada aqui.
-    expect(avalia(where, rowCadastro(true, "AGUARDANDO_ASSINATURA"))).toBe(true);
-    // (b) concluída + envelope CANCELADO (à espera de reenvio) → aparece sem q.
-    expect(avalia(where, rowCadastro(true, "CANCELADO"))).toBe(true);
-    // (c) concluída + ASSINADO → item finalizado some da fila principal.
+    // O CASO DO PEDIDO: cadastro concluído com assinatura pendente sai da fila do Cadastro. Ele
+    // continua na gestão de assinaturas do Ass.Click, que é onde esse trabalho é acompanhado.
+    expect(avalia(where, rowCadastro(true, "AGUARDANDO_ASSINATURA"))).toBe(false);
+    // Envelope CANCELADO, à espera de reenvio: mesma régua, também sai.
+    expect(avalia(where, rowCadastro(true, "CANCELADO"))).toBe(false);
+    // Os dois que já saíam continuam saindo (a mudança não inverteu nada).
     expect(avalia(where, rowCadastro(true, "ASSINADO"))).toBe(false);
-    // concluída sem envelope (SEM_ENVELOPE) → finalizada comum, também some.
     expect(avalia(where, rowCadastro(true, "SEM_ENVELOPE"))).toBe(false);
-    // não concluída → sempre aparece (pendente normal da frente).
-    expect(avalia(where, rowCadastro(false, "SEM_ENVELOPE"))).toBe(true);
+    // NÃO concluída aparece SEMPRE, também nos quatro estados: cadastro de verdade em aberto não é
+    // tocado por esta OST, e é justamente o que não podia ser levado junto.
+    for (const envelope of ["AGUARDANDO_ASSINATURA", "CANCELADO", "ASSINADO", "SEM_ENVELOPE"]) {
+      expect(avalia(where, rowCadastro(false, envelope))).toBe(true);
+    }
   });
 
-  it("CADASTRO com busca (q): revela até concluída+ASSINADO (busca avançada não esconde)", async () => {
+  it("CADASTRO com busca (q): revela as concluídas, inclusive a que aguarda assinatura", async () => {
     const { svc, captured } = montar();
     await svc.listar("cadastro", { q: "maria" });
     const where = captured[0];
     expect(avalia(where, rowCadastro(true, "ASSINADO"))).toBe(true);
+    // A que saiu da fila por esta OST continua a UM passo de distância: a busca a traz de volta.
+    expect(avalia(where, rowCadastro(true, "AGUARDANDO_ASSINATURA"))).toBe(true);
   });
 
   it("AUDITORIA inalterada: concluída SOME (clicksignStatus NÃO a mantém na fila)", async () => {

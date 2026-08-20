@@ -236,24 +236,27 @@ export class EsteiraService {
     // marcados seja o de conclusão para revelar as concluídas.
     const filtraStatusConclui = Boolean(filtros.status?.includes(STATUS_CONCLUI[tipo]));
     if (!buscandoCandidato && !filtraStatusConclui) {
-      const naoConcluida = eq(frentesAdmissao.concluida, false);
-      if (tipo === "CADASTRO_CONTRATO") {
-        // INT-4: "Aguardando assinatura" (e "Cancelado", à espera de reenvio) é trabalho EM
-        // ANDAMENTO mesmo com o Cadastro concluído (CADASTRADO) — o contrato ainda não foi
-        // assinado/arquivado. Mantém na fila principal sem depender da busca (igual a qualquer
-        // pendente da frente); só some quando ASSINADO/SEM_ENVELOPE.
-        //
-        // Repare que a regra depende de `concluida` + `clicksign_status`, NUNCA do código do status:
-        // por isso a reorganização (0026) não a afeta. O contrato vive no Clicksign, não na frente.
-        itensWhere.push(
-          or(
-            naoConcluida,
-            inArray(admissoes.clicksignStatus, ["AGUARDANDO_ASSINATURA", "CANCELADO"]),
-          )!,
-        );
-      } else {
-        itensWhere.push(naoConcluida);
-      }
+      /**
+       * CADASTRO CONCLUÍDO SAI DA FILA, mesmo com assinatura pendente (item 2 da OST dos 3 itens,
+       * decisão do diretor). A aba passa a ter UMA régua só, a mesma das outras três: concluiu, sai.
+       *
+       * O QUE ESTA LINHA DESFEZ, e por que a troca é deliberada. A regra anterior era da INT-4:
+       * `concluida = true` com `clicksign_status` em AGUARDANDO_ASSINATURA ou CANCELADO continuava
+       * na fila, porque o contrato ainda não estava assinado. Ela nasceu quando a assinatura não
+       * tinha tela própria. Hoje tem: a gestão das assinaturas do Ass.Click é o lugar onde esse
+       * trabalho é acompanhado, e repetir a linha aqui só polui a fila de quem faz CADASTRO com
+       * gente cujo cadastro já acabou.
+       *
+       * A ADMISSÃO NÃO SOME DO SISTEMA: ela continua na gestão de assinaturas, no Gerenciador e na
+       * busca por candidato desta mesma aba (a busca revela concluídas, como sempre revelou), e o
+       * filtro explícito pelo status de conclusão também a traz de volta. O que muda é só a FILA
+       * padrão.
+       *
+       * ALCANCE (§A.27): esta condição vive apenas em `itensWhere`. Os KPIs usam `kpiWhere`, que
+       * nunca a teve, então nenhum card muda de número. Painel, Gerenciador e Alto Volume leem farol
+       * e as expressões compartilhadas (`db/expressoes-admissao`), jamais esta fila.
+       */
+      itensWhere.push(eq(frentesAdmissao.concluida, false));
     }
     // PAUSA nos ITENS: mesmo mecanismo da frente concluída, três caminhos e nenhum inventado.
     //  - filtro "Pausadas" ligado → mostra SÓ as pausadas (é o card clicável, §A.12);
