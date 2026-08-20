@@ -21,9 +21,50 @@ import { GoogleDriveLogo } from "@/components/ui/GoogleDriveLogo";
 import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { farolPill } from "@/lib/farol";
+import { sugerirProjetoPorPeriodo } from "@/lib/alto-volume";
 import { caixaAlta } from "@/lib/nome";
 import { clicksignPill, temEnvelopeReenviavel } from "@/lib/clicksign";
 import { Bloco } from "@/components/ui/Bloco";
+
+/**
+ * ALOCAÇÃO EM ALTO VOLUME, como `GET /admin/alto-volume/admissao/:id` devolve (item 3).
+ *
+ * `vinculo` nulo = a admissão não está em projeto nenhum. `projetos` são os ATIVOS do cliente dela,
+ * com o período à vista: o período informa a escolha, não a recusa (uma admissão pode entrar num
+ * projeto mesmo com a data fora da janela, e é justamente esse o caso que a tela do projeto não
+ * alcançava).
+ */
+interface Alocacao {
+  admissao: {
+    id: string;
+    codCliente: string | null;
+    clienteRazaoSocial: string | null;
+    clienteNomeOperacao: string | null;
+    cargoNome: string | null;
+    dataAdmissao: string | null;
+    farolGlobal: string;
+  };
+  vinculo: {
+    id: string;
+    projetoId: string;
+    projetoNome: string;
+    projetoAtivo: boolean;
+    grupoId: string | null;
+    grupoRotulo: string | null;
+    origem: string;
+    vinculadoEm: string;
+    vinculadoPorNome: string | null;
+  } | null;
+  projetos: {
+    id: string;
+    codCliente: string;
+    ativo: boolean;
+    nome: string;
+    dataInicio: string;
+    dataFim: string;
+    grupos: { id: string; rotulo: string }[];
+  }[];
+}
 
 interface FrenteDetalhe {
   tipo: string;
@@ -292,9 +333,9 @@ export function AdmissaoDetalheModal({
   /** Tipo ASO, para abrir o arquivo pelas mesmas rotas dos documentos da régua. */
   asoTipoDocumentoId?: string | null;
   /**
-   * FICHA SEM AS AÇÕES DE ESCRITA (decisão do diretor, onda 2 dos Benefícios). Esconde as seis ações
-   * do modal: editar uniforme, reenviar por correção, trocar cliente e cargo, corrigir CPF, marcar a
-   * troca como revisada e as duas do formulário de VT. O que sobra é a ficha lida.
+   * FICHA SEM AS AÇÕES DE ESCRITA (decisão do diretor, onda 2 dos Benefícios). Esconde as ações do
+   * modal: editar uniforme, reenviar por correção, trocar cliente e cargo, corrigir CPF, alocar em
+   * Alto Volume, marcar a troca como revisada e as duas do formulário de VT. O que sobra é a ficha lida.
    *
    * NASCE `false`, e é por isso que ela não muda nada no que já existe: a Esteira, o Gerenciador e as
    * Não Conformidades não passam a prop, então continuam com as ações exatamente como estavam. Quem
@@ -308,7 +349,7 @@ export function AdmissaoDetalheModal({
 }) {
   // `isAdmin` (MASTER ou SUPER_ADMIN) governa a VISIBILIDADE das correções. A autoridade continua
   // sendo o `@Roles` das rotas: esconder o botão é conveniência, não segurança.
-  const { token, isAdmin } = useAuth();
+  const { token, isAdmin, temMenu } = useAuth();
   const [data, setData] = useState<AdmissaoDetalhe | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -371,6 +412,23 @@ export function AdmissaoDetalheModal({
   const [corrigindoCpf, setCorrigindoCpf] = useState(false);
   const [clientes, setClientes] = useState<{ codCliente: string; razaoSocial: string; nomeOperacao: string | null }[]>([]);
   const [cargos, setCargos] = useState<{ id: string; nome: string }[]>([]);
+
+  /**
+   * ALOCAR EM ALTO VOLUME (item 3 da OST dos 3 itens): vincular ou desvincular a admissão de um
+   * projeto de Alto Volume A QUALQUER MOMENTO, e não só no flag da Liberação.
+   *
+   * O estado nasce vazio e só é carregado quando o modal abre: quem abre a ficha para outra coisa
+   * não paga a consulta. `alocacao` traz o vínculo ATUAL junto dos projetos oferecidos, e é por isso
+   * que a tela consegue dizer onde a admissão já está ANTES de qualquer clique, que é a garantia de
+   * ninguém duplicar sem querer (o `unique` de `admissao_id` é a trava final, esta é a que informa).
+   */
+  const [alocAberta, setAlocAberta] = useState(false);
+  const [alocacao, setAlocacao] = useState<Alocacao | null>(null);
+  const [alocProjetoId, setAlocProjetoId] = useState("");
+  const [alocGrupoId, setAlocGrupoId] = useState("");
+  const [alocErro, setAlocErro] = useState<string | null>(null);
+  const [alocSalvando, setAlocSalvando] = useState(false);
+  const [confirmarDesvinculo, setConfirmarDesvinculo] = useState(false);
 
   // Catálogos só quando a troca é aberta: quem só olha a ficha não paga duas listas grandes.
   useEffect(() => {
@@ -577,6 +635,78 @@ export function AdmissaoDetalheModal({
     }
   }
 
+  /**
+   * Carrega a alocação quando o modal do Alto Volume abre, e recarrega depois de cada escrita.
+   *
+   * A SUGESTÃO DE PROJETO reaproveita `sugerirProjetoPorPeriodo`, a MESMA função que a Liberação usa
+   * (§A.19: régua nova aqui seria uma segunda regra para o mesmo número). Ela só SUGERE: o projeto
+   * pré-selecionado pode ser trocado, e data fora de qualquer período simplesmente não sugere nada,
+   * deixando a escolha em branco em vez de chutar.
+   */
+  const carregarAlocacao = useCallback(async () => {
+    setAlocErro(null);
+    try {
+      const r = await apiFetch<Alocacao>(`/admin/alto-volume/admissao/${admissaoId}`, { token });
+      setAlocacao(r);
+      setAlocProjetoId(
+        r.vinculo?.projetoId ?? sugerirProjetoPorPeriodo(r.projetos, r.admissao.dataAdmissao),
+      );
+      setAlocGrupoId(r.vinculo?.grupoId ?? "");
+    } catch (e) {
+      setAlocErro(mensagemDoErro(e, "Não foi possível carregar os projetos de Alto Volume."));
+    }
+  }, [admissaoId, token]);
+
+  useEffect(() => {
+    if (!alocAberta) return;
+    void carregarAlocacao();
+  }, [alocAberta, carregarAlocacao]);
+
+  /**
+   * VINCULA a admissão ao projeto escolhido. Chama a MESMA rota da tela do projeto
+   * (`POST /admin/alto-volume/:id/vinculos`), com as mesmas recusas do backend: projeto inativo,
+   * admissão de outro cliente, grupo de outro projeto e, principalmente, admissão que já está em
+   * outro projeto. Nada de regra nova nesta tela.
+   */
+  async function vincularAltoVolume() {
+    if (!alocProjetoId) return;
+    setAlocSalvando(true);
+    setAlocErro(null);
+    try {
+      await apiFetch(`/admin/alto-volume/${alocProjetoId}/vinculos`, {
+        method: "POST",
+        token,
+        body: { admissaoId, ...(alocGrupoId ? { grupoId: alocGrupoId } : {}) },
+      });
+      await carregarAlocacao();
+    } catch (e) {
+      setAlocErro(mensagemDoErro(e, "Não foi possível vincular a admissão ao projeto."));
+    } finally {
+      setAlocSalvando(false);
+    }
+  }
+
+  /**
+   * DESVINCULA. A admissão NÃO é tocada: só a linha de vínculo sai, e ela segue na esteira
+   * exatamente como estava. O que muda é só a contagem daquele projeto.
+   */
+  async function desvincularAltoVolume() {
+    const vinculoId = alocacao?.vinculo?.id;
+    if (!vinculoId) return;
+    setAlocSalvando(true);
+    setAlocErro(null);
+    try {
+      await apiFetch(`/admin/alto-volume/vinculos/${vinculoId}`, { method: "DELETE", token });
+      setConfirmarDesvinculo(false);
+      await carregarAlocacao();
+    } catch (e) {
+      setConfirmarDesvinculo(false);
+      setAlocErro(mensagemDoErro(e, "Não foi possível desvincular a admissão do projeto."));
+    } finally {
+      setAlocSalvando(false);
+    }
+  }
+
   async function trocarClienteCargo() {
     if (!trocaCodCliente || !trocaCargoId) return;
     setTrocando(true);
@@ -777,6 +907,22 @@ export function AdmissaoDetalheModal({
                   >
                     Corrigir CPF
                   </Button>
+                  {/* ALOCAR EM ALTO VOLUME (item 3). Gatado por `temMenu("alto-volume")` e NÃO por
+                      papel: a escrita do vínculo é reivindicada por aquele menu no backend, então
+                      quem não o tem tomaria 403 num botão visível. Quem enxerga o botão é decisão do
+                      diretor pela tela de permissão de menu (§A.23), não desta tela. */}
+                  {temMenu("alto-volume") && (
+                    <Button
+                      variant="secondary"
+                      className="!py-1.5 !text-[12.5px]"
+                      onClick={() => {
+                        setAlocErro(null);
+                        setAlocAberta(true);
+                      }}
+                    >
+                      Alocar em Alto Volume
+                    </Button>
+                  )}
                 </div>
               </div>
             )}
@@ -1469,6 +1615,158 @@ export function AdmissaoDetalheModal({
           </div>
         </Modal>
       )}
+
+      {/* ALOCAR EM ALTO VOLUME (item 3). A tela responde três perguntas na ordem em que elas
+          aparecem: em que projeto esta admissão JÁ está, em quais ela poderia estar, e o que
+          acontece se sair. O vínculo atual vem primeiro justamente para ninguém alocar duas vezes. */}
+      {alocAberta && (
+        <Modal
+          onClose={() => !alocSalvando && setAlocAberta(false)}
+          ariaLabel="Alocar em Alto Volume"
+          className="max-w-[560px] p-6"
+        >
+          <div className="mb-5">
+            <div className="eyebrow !mb-1">Alto Volume</div>
+            <h2 className="font-display text-xl font-bold">Alocar Em Alto Volume</h2>
+            <p className="mt-1 text-[13px] text-dim">
+              {caixaAlta(data?.candidato.nome ?? "")}
+              {alocacao?.admissao.cargoNome ? `, ${alocacao.admissao.cargoNome}` : ""}. Vincular põe
+              a admissão na contagem do projeto; desvincular tira. A admissão em si não muda: ela
+              segue na esteira exatamente como está.
+            </p>
+          </div>
+
+          {!alocacao ? (
+            <p className="text-sm text-dim">Carregando…</p>
+          ) : (
+            <div className="grid gap-4">
+              {/* ONDE ELA JÁ ESTÁ. Bloco fixo, mesmo quando vazio: "não está em nenhum projeto" é
+                  resposta, e some da tela seria deixar a pergunta no ar. */}
+              <div className="rounded-xl border border-[var(--border)] px-3 py-2.5">
+                <div className="text-[11px] uppercase tracking-wide text-faint">Projeto atual</div>
+                {alocacao.vinculo ? (
+                  <>
+                    <p className="mt-1 text-[13.5px] font-semibold text-text">
+                      {alocacao.vinculo.projetoNome}
+                      {alocacao.vinculo.grupoRotulo ? ` · ${alocacao.vinculo.grupoRotulo}` : ""}
+                      {alocacao.vinculo.projetoAtivo ? "" : " (inativo)"}
+                    </p>
+                    <p className="mt-0.5 text-[12.5px] text-dim">
+                      Vinculada em {fmtData(alocacao.vinculo.vinculadoEm)}
+                      {alocacao.vinculo.vinculadoPorNome
+                        ? ` por ${alocacao.vinculo.vinculadoPorNome}`
+                        : ""}
+                      {alocacao.vinculo.origem === "LIBERACAO"
+                        ? ", pela liberação"
+                        : ", por correção"}
+                      .
+                    </p>
+                  </>
+                ) : (
+                  <p className="mt-1 text-[13.5px] text-text">
+                    Esta admissão não está em nenhum projeto de Alto Volume.
+                  </p>
+                )}
+              </div>
+
+              {alocacao.projetos.length === 0 ? (
+                <p className="text-[13px] text-dim">
+                  O cliente desta admissão não tem projeto de Alto Volume ativo. Cadastre o projeto
+                  em Alto Volume antes de alocar.
+                </p>
+              ) : (
+                <>
+                  <label className="grid gap-1.5">
+                    <span className="ds-label">Projeto</span>
+                    <Select
+                      value={alocProjetoId}
+                      onChange={(v) => {
+                        setAlocProjetoId(v);
+                        // Grupo é DO projeto: trocar de projeto sem limpar o grupo mandaria a turma
+                        // de um projeto para dentro de outro, e o backend recusaria com razão.
+                        setAlocGrupoId("");
+                      }}
+                      placeholder="Selecione o projeto…"
+                      ariaLabel="Projeto de Alto Volume"
+                      menuFit
+                      options={alocacao.projetos.map((p) => ({
+                        value: p.id,
+                        // `date` puro (YYYY-MM-DD): formata por partes, senão o fuso negativo joga o dia para trás.
+                        label: `${p.nome} (${fmtDataAdmissao(p.dataInicio)} a ${fmtDataAdmissao(p.dataFim)})`,
+                      }))}
+                    />
+                  </label>
+                  {(alocacao.projetos.find((p) => p.id === alocProjetoId)?.grupos.length ?? 0) >
+                    0 && (
+                    <label className="grid gap-1.5">
+                      <span className="ds-label">Grupo de entrada (opcional)</span>
+                      <Select
+                        value={alocGrupoId}
+                        onChange={setAlocGrupoId}
+                        placeholder="Sem grupo, conta no projeto inteiro"
+                        ariaLabel="Grupo de entrada"
+                        menuFit
+                        options={(
+                          alocacao.projetos.find((p) => p.id === alocProjetoId)?.grupos ?? []
+                        ).map((g) => ({ value: g.id, label: g.rotulo }))}
+                      />
+                    </label>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
+          {alocErro && (
+            <p
+              className="mt-4 rounded-xl border border-[var(--border)] bg-[rgba(214,69,69,0.1)] px-3 py-2 text-sm text-danger"
+              role="alert"
+            >
+              {alocErro}
+            </p>
+          )}
+
+          <div className="mt-6 flex flex-wrap justify-end gap-3">
+            {alocacao?.vinculo && (
+              <Button
+                variant="secondary"
+                onClick={() => setConfirmarDesvinculo(true)}
+                disabled={alocSalvando}
+              >
+                Desvincular
+              </Button>
+            )}
+            <Button
+              variant="secondary"
+              onClick={() => setAlocAberta(false)}
+              disabled={alocSalvando}
+            >
+              Fechar
+            </Button>
+            {!alocacao?.vinculo && (alocacao?.projetos.length ?? 0) > 0 && (
+              <Button
+                onClick={() => void vincularAltoVolume()}
+                disabled={!alocProjetoId || alocSalvando}
+              >
+                {alocSalvando ? "Vinculando…" : "Vincular ao projeto"}
+              </Button>
+            )}
+          </div>
+        </Modal>
+      )}
+
+      <ConfirmDialog
+        open={confirmarDesvinculo}
+        title="Confirmar Desvínculo"
+        message={`Tirar ${caixaAlta(data?.candidato.nome ?? "esta admissão")} do projeto ${
+          alocacao?.vinculo?.projetoNome ?? ""
+        }? A admissão continua exatamente como está na esteira: ela só deixa de contar neste projeto.`}
+        confirmLabel="Sim, desvincular"
+        tone="danger"
+        busy={alocSalvando}
+        onConfirm={() => void desvincularAltoVolume()}
+        onCancel={() => setConfirmarDesvinculo(false)}
+      />
 
       <ConfirmDialog
         open={duplaCorrecaoMsg !== null}

@@ -47,6 +47,24 @@ export class AltoVolumeController {
     return this.altoVolume.list();
   }
 
+  /**
+   * ALOCAÇÃO DE UMA ADMISSÃO EM ALTO VOLUME, lida da FICHA (item 3 da OST dos 3 itens).
+   *
+   * DECLARADA ANTES de `@Get(":id")` porque o Nest casa na ordem de declaração. São dois segmentos
+   * (`admissao/:admissaoId`) contra um de `:id`, então não haveria colisão de qualquer forma; a
+   * ordem fica pela mesma disciplina que o resto do controller já segue.
+   *
+   * FORA DAS OPERAÇÕES DO MENU, no mesmo regime de `analisar` e pelo mesmo motivo: o retorno é
+   * rótulo de catálogo (projeto, grupo, cargo), código de cliente e a trilha do vínculo. NENHUM nome
+   * de candidato e nenhum CPF, ao contrário de `listarVinculos`/`listarOrfaos`, que por isso seguem
+   * fechadas. A ESCRITA (`vincular`, `desvincular`) continua reivindicada pelo menu `alto-volume`,
+   * intacta: quem pode alocar é decisão do diretor (§A.23), e esta leitura não concede nada.
+   */
+  @Get("admissao/:admissaoId")
+  alocacaoDaAdmissao(@Param("admissaoId") admissaoId: string) {
+    return this.vinculos.alocacaoDaAdmissao(admissaoId);
+  }
+
   @Get(":id")
   obter(@Param("id") id: string) {
     return this.altoVolume.obter(id);

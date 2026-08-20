@@ -5,7 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { and, asc, eq, gte, isNull, lte, notInArray } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNull, lte, notInArray } from "drizzle-orm";
 import type { AuthUser } from "../../auth/auth.types";
 import type { Database } from "../../db/client";
 import { DRIZZLE } from "../../db/drizzle.module";
@@ -167,6 +167,121 @@ export class AltoVolumeVinculosService {
         ),
       )
       .orderBy(asc(admissoes.dataAdmissao), asc(candidatos.nome));
+  }
+
+  /**
+   * ALOCAÇÃO DE UMA ADMISSÃO, vista DA FICHA (OST dos 3 itens, item 3).
+   *
+   * O QUE ESTA LEITURA RESOLVE. A onda 3 já sabia vincular e desvincular, mas só de dentro da tela do
+   * projeto, e a tela do projeto só OFERECE quem cai no recorte dela (mesmo cliente E data de
+   * admissão dentro do período, ver `listarOrfaos`). Quem ficou fora desse recorte (data de admissão
+   * vazia, ou fora do período, ou o consultor que está olhando a ficha e não o projeto) não tinha por
+   * onde entrar no projeto. Esta leitura inverte o sentido da pergunta: em vez de "quem falta neste
+   * projeto", ela responde "em que projeto esta admissão está, e em quais ela poderia estar".
+   *
+   * NENHUMA REGRA NOVA (§A.19/§A.26). A escrita continua sendo `vincular`/`desvincular`, intactas,
+   * com as mesmas cinco recusas: é por elas que o vínculo passa, venha da tela do projeto ou da
+   * ficha. Aqui só se LÊ. O `unique` de `admissao_id` continua sendo a garantia final de que ninguém
+   * conta duas vezes, e `vinculo` já vem preenchido justamente para a tela mostrar onde a admissão
+   * está antes de qualquer clique.
+   *
+   * PROJETOS OFERECIDOS: os ATIVOS do cliente da admissão, sem filtro de período. O período fica à
+   * vista (`dataInicio`/`dataFim`) para quem decide, mas não recusa: a admissão vinculada conta no
+   * projeto pela régua de `admissao_projeto`, que nunca olhou data de admissão (ver
+   * `alto-volume-analise.service`). Filtrar por período aqui reproduziria o buraco que esta leitura
+   * existe para fechar. Cliente sem projeto ativo devolve lista vazia, e a tela diz isso.
+   *
+   * §A.6: devolve id de admissão, código de cliente, rótulos de catálogo (projeto, grupo, cargo) e o
+   * nome do USUÁRIO que vinculou (trilha). Nenhum CPF, e nenhum nome de candidato: quem abriu a ficha
+   * já está olhando a pessoa, esta leitura não precisa repetir a identificação dela.
+   */
+  async alocacaoDaAdmissao(admissaoId: string) {
+    const [admissao] = await this.db
+      .select({
+        id: admissoes.id,
+        codCliente: admissoes.codCliente,
+        clienteRazaoSocial: clientes.razaoSocial,
+        clienteNomeOperacao: clientes.nomeOperacao,
+        cargoNome: cargos.nome,
+        dataAdmissao: admissoes.dataAdmissao,
+        farolGlobal: admissoes.farolGlobal,
+      })
+      .from(admissoes)
+      .leftJoin(clientes, eq(clientes.codCliente, admissoes.codCliente))
+      .leftJoin(cargos, eq(cargos.id, admissoes.cargoId))
+      .where(eq(admissoes.id, admissaoId));
+    if (!admissao) throw new NotFoundException("Admissão não encontrada");
+
+    const [vinculo] = await this.db
+      .select({
+        id: admissaoProjeto.id,
+        projetoId: admissaoProjeto.projetoId,
+        projetoNome: projetosAltoVolume.nome,
+        projetoAtivo: projetosAltoVolume.ativo,
+        grupoId: admissaoProjeto.grupoId,
+        grupoRotulo: projetoGrupoEntrada.rotulo,
+        origem: admissaoProjeto.origem,
+        vinculadoEm: admissaoProjeto.vinculadoEm,
+        vinculadoPorNome: usuarios.nome,
+      })
+      .from(admissaoProjeto)
+      .innerJoin(projetosAltoVolume, eq(projetosAltoVolume.id, admissaoProjeto.projetoId))
+      .leftJoin(projetoGrupoEntrada, eq(projetoGrupoEntrada.id, admissaoProjeto.grupoId))
+      .leftJoin(usuarios, eq(usuarios.id, admissaoProjeto.vinculadoPorId))
+      .where(eq(admissaoProjeto.admissaoId, admissaoId));
+
+    // Admissão ainda sem cliente (pré-admissão) não tem projeto a oferecer: projeto é POR cliente.
+    const projetos = admissao.codCliente
+      ? await this.db
+          .select({
+            id: projetosAltoVolume.id,
+            // `codCliente` e `ativo` saem juntos, e não são enfeite: a ficha reaproveita o
+            // `sugerirProjetoPorPeriodo`/`projetosDoCliente` que a Liberação já usa (§A.19, regra
+            // única), e essas duas funções pedem os dois campos. Sem eles a tela teria de recriar a
+            // sugestão por período por conta própria, que é exatamente a régua paralela a evitar.
+            codCliente: projetosAltoVolume.codCliente,
+            ativo: projetosAltoVolume.ativo,
+            nome: projetosAltoVolume.nome,
+            dataInicio: projetosAltoVolume.dataInicio,
+            dataFim: projetosAltoVolume.dataFim,
+          })
+          .from(projetosAltoVolume)
+          .where(
+            and(
+              eq(projetosAltoVolume.codCliente, admissao.codCliente),
+              eq(projetosAltoVolume.ativo, true),
+            ),
+          )
+          .orderBy(asc(projetosAltoVolume.dataInicio), asc(projetosAltoVolume.nome))
+      : [];
+
+    // Grupos de entrada de cada projeto oferecido, numa consulta só: a tela precisa deles para o
+    // segundo seletor, e N consultas por projeto seria N vezes a mesma varredura.
+    const grupos = projetos.length
+      ? await this.db
+          .select({
+            id: projetoGrupoEntrada.id,
+            projetoId: projetoGrupoEntrada.projetoId,
+            rotulo: projetoGrupoEntrada.rotulo,
+          })
+          .from(projetoGrupoEntrada)
+          .where(
+            inArray(
+              projetoGrupoEntrada.projetoId,
+              projetos.map((p) => p.id),
+            ),
+          )
+          .orderBy(asc(projetoGrupoEntrada.rotulo))
+      : [];
+
+    return {
+      admissao,
+      vinculo: vinculo ?? null,
+      projetos: projetos.map((p) => ({
+        ...p,
+        grupos: grupos.filter((g) => g.projetoId === p.id).map((g) => ({ id: g.id, rotulo: g.rotulo })),
+      })),
+    };
   }
 
   // ── Escrita ───────────────────────────────────────────────────────────────

@@ -3,7 +3,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
- * FICHA DA ADMISSÃO: a prop `somenteLeitura` esconde as SEIS ações de escrita, e só quando é pedida.
+ * FICHA DA ADMISSÃO: a prop `somenteLeitura` esconde as SETE ações de escrita, e só quando é pedida.
  *
  * POR QUE ESTE TESTE EXISTE (§A.26). A prop entrou para a tela de BENEFÍCIOS, mas o componente é o
  * mesmo que a ESTEIRA, o GERENCIADOR e as NÃO CONFORMIDADES montam. Se o padrão da prop virasse
@@ -58,13 +58,17 @@ vi.mock("@/lib/api", async () => {
 
 // isAdmin true: sem ele o bloco "Correções" (trocar cliente e corrigir CPF) nem seria renderizado, e
 // o teste passaria por falta de permissão em vez de por causa da prop.
+//
+// `temMenu` devolve true pelo mesmo motivo: "Alocar em Alto Volume" é gatado pelo menu `alto-volume`
+// (§A.23, quem enxerga é decisão do diretor), e um `temMenu` falso esconderia a ação por permissão
+// em vez de pela prop, que é justamente a confusão que este arquivo existe para não deixar acontecer.
 vi.mock("@/lib/auth-context", () => ({
-  useAuth: () => ({ token: "t", isAdmin: true, usuario: null }),
+  useAuth: () => ({ token: "t", isAdmin: true, usuario: null, temMenu: () => true }),
 }));
 
 import { AdmissaoDetalheModal } from "./AdmissaoDetalheModal";
 
-/** As seis ações de escrita, pelo rótulo com que aparecem na tela. */
+/** As SETE ações de escrita, pelo rótulo com que aparecem na tela. */
 const ACOES = [
   /editar uniforme/i,
   /reenviar por correção/i,
@@ -72,6 +76,8 @@ const ACOES = [
   /corrigir cpf/i,
   /^revisado$/i,
   /gerar link do vt/i,
+  // Item 3 da OST dos 3 itens: alocar a admissão num projeto de Alto Volume a qualquer momento.
+  /alocar em alto volume/i,
 ];
 
 describe("AdmissaoDetalheModal, prop somenteLeitura", () => {
@@ -81,7 +87,7 @@ describe("AdmissaoDetalheModal, prop somenteLeitura", () => {
   // PORTAL em `document.body`, sobrevive ao segundo, e o teste acusaria botão escondido como visível.
   afterEach(() => cleanup());
 
-  it("SEM a prop (Esteira, Gerenciador, Não Conformidades) mantém as seis ações", async () => {
+  it("SEM a prop (Esteira, Gerenciador, Não Conformidades) mantém as sete ações", async () => {
     render(<AdmissaoDetalheModal admissaoId="adm-1" onClose={() => {}} />);
     await waitFor(() => expect(screen.getByText(/dados pessoais/i)).toBeTruthy());
     for (const acao of ACOES) {
@@ -89,7 +95,7 @@ describe("AdmissaoDetalheModal, prop somenteLeitura", () => {
     }
   });
 
-  it("COM a prop (Benefícios) esconde as seis, e a ficha continua legível", async () => {
+  it("COM a prop (Benefícios) esconde as sete, e a ficha continua legível", async () => {
     render(<AdmissaoDetalheModal admissaoId="adm-1" somenteLeitura onClose={() => {}} />);
     await waitFor(() => expect(screen.getByText(/dados pessoais/i)).toBeTruthy());
     for (const acao of ACOES) {
