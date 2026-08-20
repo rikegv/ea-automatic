@@ -1,0 +1,41 @@
+# EA AUTOMATIC — infraestrutura de HOMOLOGAÇÃO.
+#
+# Arquivo SEPARADO de propósito (§A.26): `docker-compose.yml` é infra de produção e não é tocado.
+# Projeto Docker próprio (`ea-automatic-homolog`), container próprio, volume próprio, porta própria.
+#
+# POR QUE EXISTE UM REDIS SÓ PARA A HOMOLOGAÇÃO, e não é luxo:
+# o nome da fila BullMQ (`pandape-sync`, `clicksign-sync`, ...), o prefixo (`ea:bull`) e o índice do
+# banco Redis (db 1) são CONSTANTES no código, não variáveis de ambiente. Se a homologação apontasse
+# para o `ea-redis` de produção, os workers dela entrariam nas MESMAS filas e passariam a CONSUMIR
+# JOBS DE PRODUÇÃO, processando-os contra o banco de homologação. A produção pararia de processar sem
+# ninguém entender por quê, que é exatamente o efeito colateral que esta frente não pode ter.
+# `REDIS_HOST`/`REDIS_PORT` SÃO lidos do ambiente, então trocar a INSTÂNCIA resolve sem tocar código.
+name: ea-automatic-homolog
+
+services:
+  ea-redis-homolog:
+    image: redis:7-alpine
+    container_name: ea-redis-homolog
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    ports:
+      # loopback-only, porta própria (6381). Não colide com ea-redis (6380) nem infra-redis-1 (6379).
+      - "127.0.0.1:6381:6379"
+    volumes:
+      - ea-redisdata-homolog:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    networks:
+      - ea-net-homolog
+
+volumes:
+  ea-redisdata-homolog:
+    name: ea-redisdata-homolog
+
+networks:
+  ea-net-homolog:
+    name: ea-automatic-homolog

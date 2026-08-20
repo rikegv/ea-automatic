@@ -10325,3 +10325,119 @@ sem OST que os reivindique, e `apps/backend/src/esteira/nascimento-cadastro.tres
 um guarda de regressão escrito durante a investigação do item 3. Ele passa 4/4 e é útil, mas o item 3
 terminou sem mudança de código, então ele não pertence a nenhuma das três frentes commitadas. Fica
 solto esperando o diretor decidir se entra.
+
+---
+
+## 20/08/2026 (tarde): ambiente de HOMOLOGAÇÃO do A&S, e a variável vazia que apontava para produção
+
+Abertura da frente grande de **Atração e Seleção**. Regra de ouro fixada pelo diretor: **nada do A&S
+pode impactar o EA em produção**, então constrói-se em homologação e só depois se vira a chave. A
+primeira coisa investigada foi se homologação existia. **Não existia.**
+
+### O falso positivo que quase virou armadilha
+
+As unidades `ea-harness-*` (portas 3098/3099) parecem um segundo ambiente e **não são**. O
+`proxy-origem.mjs` encaminha para `127.0.0.1:3011`, que é o backend **de produção**: o harness lê e
+**escreve no banco de produção**. Ele é um visualizador de frontend para tirar print (§A.13), e serve
+ao oposto do que a frente pedia. Usá-lo como homologação teria violado a regra de ouro no primeiro
+dia. Fica registrado no `infra/homolog/README.md` para ninguém confundir de novo.
+
+### O que foi construído
+
+Ambiente completo, **zero Fernando** (tudo em loopback e ZeroTier, o mesmo regime da produção; nenhum
+DNS, vhost ou certificado, porque isso encostaria nele):
+
+| | Produção | Homologação |
+|---|---|---|
+| Código | `ea-automatic` (main) | `ea-homolog` (branch `homolog`) |
+| Banco | `ea_automatic` | `ea_automatic_homolog`, clone anonimizado, mesmo container |
+| Redis | `ea-redis` 6380 | `ea-redis-homolog` **6381** |
+| Backend | 127.0.0.1:3011 | 127.0.0.1:**3111** |
+| Frontend | Caddy 0.0.0.0:3010 | 0.0.0.0:**3120** |
+
+**Redis próprio não é luxo, é a diferença entre isolar e quebrar a produção.** O nome da fila BullMQ,
+o prefixo `ea:bull` e o índice do banco Redis são **constantes no código**, não variáveis de ambiente.
+Compartilhar o `ea-redis` faria os workers da homologação entrarem nas MESMAS filas e passarem a
+**consumir jobs de produção**, processando-os contra o banco de homologação. A produção pararia de
+processar sem ninguém entender por quê. `REDIS_HOST`/`REDIS_PORT` **são** lidos do ambiente, então
+trocar a instância resolveu sem tocar uma linha de código.
+
+### O APRENDIZADO da sessão: variável VAZIA não desliga integração, ela cai no serviço REAL
+
+Este é o achado que merece ficar. A intuição era "deixa a credencial em branco e a integração nasce
+inerte", que é o padrão do projeto (§A.5). **Para a credencial vale; para a URL não.** Conferido linha
+a linha:
+
+| Variável vazia | Onde o código cai |
+|---|---|
+| `AI_SERVICE_URL` | `http://localhost:8000`, o ai-service **DE PRODUÇÃO**, nesta mesma VM, com a service account real e escrita no Drive |
+| `PANDAPE_API_BASE_URL` | `https://api.pandape.com.br`, a API real |
+| `PANDAPE_TOKEN_URL` | o login real do Pandapé |
+| `CLICKSIGN_API_BASE_URL` | `https://sandbox.clicksign.com/api/v3`, a conta real |
+| `VT_LINK_BASE_URL` | o app de VT real |
+
+E o agravante: **a reconciliação do Drive é o único agendador SEM liga/desliga.** Ela dispara sozinha
+2 minutos após o boot e a cada 10 minutos, sem flag no banco que a segure. Uma homologação com
+`AI_SERVICE_URL` em branco teria mandado arquivo para o Drive **de verdade**, sem ninguém pedir.
+
+A correção virou a **terceira camada** da neutralização, e é de rede, não de configuração: todas essas
+URLs apontam para `127.0.0.1:9` (porta discard, nada escutando). Qualquer chamada que escape das duas
+primeiras camadas morre em ECONNREFUSED. As três camadas, nenhuma dependendo de disciplina humana:
+
+1. **Banco:** `ligado = false` nos quatro `*_scheduler_estado`.
+2. **Credencial:** tokens e ids de pasta vazios.
+3. **Rede:** buraco negro em `127.0.0.1:9`.
+
+**Regra que sai daqui, e vale para qualquer ambiente futuro:** desligar integração por variável vazia
+só é seguro depois de conferir o `??` do outro lado. Onde houver default, o desligamento tem de ser
+explícito.
+
+### Anonimização (§A.6)
+
+`infra/homolog/anonimizar.sql`, com guard que **recusa rodar** fora de `ea_automatic_homolog`.
+Substitui CPF, nome, e-mail, telefone, nascimento e dados bancários do candidato; a sala de espera; o
+CPF de substituição; os signatários; o endereço residencial do formulário de VT; a trilha de
+alterações do candidato; o texto livre digitado por humano; a matrícula da folha; e a identidade dos
+usuários internos, com senha única de homologação (clonar o hash faria a senha real do time abrir um
+ambiente de postura mais fraca).
+
+**Os CPFs sintéticos são VÁLIDOS**, com dígito verificador correto, e isso é requisito, não capricho:
+`isValidCpf` governa tela, exportação e o mascaramento do Clicksign, então CPF inválido faria a
+homologação se comportar diferente da produção justamente nas bordas que interessa testar. Os 48
+provisórios (`PROV…`) continuam **não numéricos** de propósito, preservando o comportamento que o
+sistema já tem para essa classe.
+
+**Preservado de propósito:** cliente, cargo, datas, status, farol, papel, área e marcação de menu. Joga-se
+fora a pessoa, não o processo. O script **aborta** se sobrar PII: FK quebrada, nome real, CPF fora do
+mapa, e-mail real ou agendador ligado derrubam a criação do ambiente. Verificação, não confiança.
+
+### Provas
+
+Saúde 200 nos quatro serviços. **Produção intacta:** mesmas contagens (2653 admissões, 2611
+candidatos, 238 clientes) e `ea-backend`/`ea-frontend` **sem restart desde 18/08** (o clone é
+`pg_dump`, leitura pura). Escrita na homologação não aparece na produção. O backend de homologação tem
+**um único destino de rede: 127.0.0.1**. Disparo manual de agendador recusado com `{"ligado":false}`,
+enquanto na produção seguem ligados. **Zero CPFs e zero nomes em comum** entre os dois bancos, e os
+2563 CPFs sintéticos passam no `isValidCpf` real, sem duplicata. Prova visual (§A.13): Gerenciador da
+homologação renderizado, KPIs calculando, candidatos como "CANDIDATO 647 HOMOLOG".
+
+### Desenho da Fatia 1 validado, e duas divergências achadas na conferência dos campos
+
+O diretor validou `docs/DESENHO-AS-FATIA1-VAGA.md` e respondeu as 6 perguntas em aberto. Ao conferir a
+lista de campos que ele mandou contra o desenho, apareceram **duas premissas que não se sustentam** e
+foram reportadas antes de construir (§A.27):
+
+1. **Não existe lista de escolaridade na base de candidatos.** O que existe é o TIPO DE DOCUMENTO
+   `COMPROVANTE_ESCOLARIDADE`, da régua documental. "Escolaridade" aparece no sistema como
+   **documento**, não como grau de instrução. Não há o que reusar; a lista precisa nascer.
+2. **O CARGO sumiu da lista de campos.** A régua documental resolve por `(cod_cliente, cargo_id)` e a
+   migração da meta do Alto Volume depende de a vaga ter cargo. Sem ele, a ponte para a Admissão
+   (etapa 6) não fecha.
+
+### Estimativa por etapa
+
+`docs/ESTIMATIVA-AS-POR-ETAPA.md`, para a apresentação à diretoria. Etapas 1 a 6 em **33 a 52 dias
+úteis (7 a 10 semanas)**, com a leitura que importa: **a substituição do sistema de seleção
+descontinuado acontece nas etapas 1 e 2, em 2 a 3 semanas**; o resto é ganho sobre base funcionando.
+A etapa 4 (WhatsApp) é a única com dependência **fora** do alcance da fábrica, porque a plataforma de
+WhatsApp do grupo é o CentraAtend.
