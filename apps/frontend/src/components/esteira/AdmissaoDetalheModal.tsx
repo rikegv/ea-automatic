@@ -262,8 +262,20 @@ function fmtData(d?: string | null): string {
   const dt = new Date(d);
   return Number.isNaN(+dt) ? "não informado" : dt.toLocaleDateString("pt-BR");
 }
-// Data de admissão é um `date` (YYYY-MM-DD), formata por partes p/ não sofrer fuso.
-function fmtDataAdmissao(d?: string | null): string {
+/**
+ * DATA PURA (`date` do Postgres, "YYYY-MM-DD"): formata POR PARTES, nunca por `new Date()`.
+ *
+ * POR QUE ISTO NÃO É PREFERÊNCIA DE ESTILO. `new Date("1995-05-31")` é parseado como MEIA-NOITE UTC;
+ * exibido em UTC-3 (Brasil), volta um dia e vira "30/05/1995". Para um `timestamp` o parse está
+ * certo, porque ali o instante existe de verdade. Para uma data pura não existe instante nenhum: o
+ * dia é o dado, e qualquer conversão de fuso só pode estragá-lo.
+ *
+ * Antes chamava `fmtDataAdmissao`, nome herdado do primeiro uso. Ele já servia exame, previsão de
+ * ASO e período de projeto, e agora serve a data de NASCIMENTO, que é onde o desvio de um dia doeu:
+ * a ficha mostrava um dia a menos que a edição para a MESMA pessoa. Use este para todo `date`, e
+ * `fmtData` só para `timestamp`.
+ */
+function fmtDataPura(d?: string | null): string {
   if (!d) return "não informado";
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(d);
   return m ? `${m[3]}/${m[2]}/${m[1]}` : fmtData(d);
@@ -936,7 +948,7 @@ export function AdmissaoDetalheModal({
                 <Campo rotulo="E-mail" valor={data.candidato.email || "não informado"} />
                 <Campo
                   rotulo="Data de nascimento"
-                  valor={fmtData(data.candidato.dataNascimento)}
+                  valor={fmtDataPura(data.candidato.dataNascimento)}
                 />
                 {/* Banco informado pelo candidato no formulário do Pandapé. É TEXTO LIVRE dele
                     ("NUBANK", "BANCO DO BRASIL"), então aparece como veio. Informação a mais: a
@@ -1073,7 +1085,7 @@ export function AdmissaoDetalheModal({
                   rotulo="Motivo da contratação"
                   valor={data.vagaFolha.motivo || "não informado"}
                 />
-                <Campo rotulo="Data de admissão" valor={fmtDataAdmissao(data.dataAdmissao)} />
+                <Campo rotulo="Data de admissão" valor={fmtDataPura(data.dataAdmissao)} />
                 <Campo rotulo="Matrícula" valor={data.matricula || "não informado"} />
                 <Campo rotulo="Escala" valor={data.vagaFolha.escala || "não informado"} />
                 {/* Os três que faltavam no modal. Centro de custo e gestor BP são, inclusive,
@@ -1099,7 +1111,7 @@ export function AdmissaoDetalheModal({
             <Bloco titulo="Exame admissional">
               {data.exame ? (
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                  <Campo rotulo="Data" valor={fmtDataAdmissao(data.exame.data)} />
+                  <Campo rotulo="Data" valor={fmtDataPura(data.exame.data)} />
                   <Campo
                     rotulo="Horário"
                     valor={
@@ -1134,7 +1146,7 @@ export function AdmissaoDetalheModal({
                   <Campo rotulo="Valor do exame" valor={fmtMoeda(data.exame.valor)} />
                   <Campo
                     rotulo="Previsão do ASO"
-                    valor={fmtDataAdmissao(data.exame.previsaoAso)}
+                    valor={fmtDataPura(data.exame.previsaoAso)}
                   />
                 </div>
               ) : (
@@ -1692,7 +1704,7 @@ export function AdmissaoDetalheModal({
                       options={alocacao.projetos.map((p) => ({
                         value: p.id,
                         // `date` puro (YYYY-MM-DD): formata por partes, senão o fuso negativo joga o dia para trás.
-                        label: `${p.nome} (${fmtDataAdmissao(p.dataInicio)} a ${fmtDataAdmissao(p.dataFim)})`,
+                        label: `${p.nome} (${fmtDataPura(p.dataInicio)} a ${fmtDataPura(p.dataFim)})`,
                       }))}
                     />
                   </label>
