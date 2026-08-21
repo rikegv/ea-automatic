@@ -69,6 +69,48 @@ function farolIntegracaoClasse(item: {
   return "bg-[color-mix(in_srgb,var(--danger)_8%,transparent)]";
 }
 
+/**
+ * Um intervalo de datas (de/até), com o mínimo e o máximo se travando um no outro.
+ *
+ * EXISTE PARA NÃO REPETIR O MARKUP três vezes: a aba do Exame tem dois intervalos e a da Integração
+ * também, e cada um deles precisa do mesmo par de travas (a data final não pode ser anterior à
+ * inicial). Repetido à mão, o dia em que alguém ajustasse uma trava esqueceria as outras.
+ */
+function IntervaloData({
+  de,
+  ate,
+  setDe,
+  setAte,
+  rotulo,
+}: {
+  de: string;
+  ate: string;
+  setDe: (v: string) => void;
+  setAte: (v: string) => void;
+  rotulo: string;
+}) {
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      <input
+        type="date"
+        className="ds-input"
+        aria-label={`Data de ${rotulo} inicial`}
+        value={de}
+        max={ate || undefined}
+        onChange={(e) => setDe(e.target.value)}
+      />
+      <input
+        type="date"
+        className="ds-input"
+        aria-label={`Data de ${rotulo} final`}
+        value={ate}
+        min={de || undefined}
+        onChange={(e) => setAte(e.target.value)}
+      />
+    </div>
+  );
+}
+
 /** Rótulo de tela da modalidade da integração (§A.24: tag em Title Case). */
 const TIPO_INTEGRACAO_ROTULO: Record<string, string> = {
   ONLINE: "Online",
@@ -165,12 +207,6 @@ interface EsteiraResp {
     pausadas: number;
   };
   statusCatalogo: StatusCat[];
-}
-interface ClienteLite {
-  codCliente: string;
-  razaoSocial: string;
-  nomeOperacao?: string | null;
-  cnpj?: string | null;
 }
 
 // Status que sempre denotam fim negativo da frente (tom de inconformidade).
@@ -287,10 +323,35 @@ export default function EsteiraPage() {
 
   // Filtros (F7), agora no modal premium (Bloco B): cliente e status multi-select.
   const [codClientes, setCodClientes] = useState<string[]>([]);
-  const [clientes, setClientes] = useState<ClienteLite[]>([]);
   const [statusFiltro, setStatusFiltro] = useState<string[]>([]);
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
+  /**
+   * TRÊS INTERVALOS COM NOME PRÓPRIO, no lugar do antigo "Período" (que filtrava por quando a
+   * admissão entrou no sistema, sob um rótulo que não dizia isso). Cada aba oferece os que fazem
+   * sentido nela: Auditoria e Cadastro só a data de admissão; Exame soma a data do exame;
+   * Integração soma a data de integração. Quando dois estão ativos, eles AFUNILAM.
+   */
+  const [admissaoDe, setAdmissaoDe] = useState("");
+  const [admissaoAte, setAdmissaoAte] = useState("");
+  const [exameDe, setExameDe] = useState("");
+  const [exameAte, setExameAte] = useState("");
+  const [integracaoDe, setIntegracaoDe] = useState("");
+  const [integracaoAte, setIntegracaoAte] = useState("");
+
+  /**
+   * FILTROS POR COLUNA (OST dos filtros da Integração), aplicados NO CLIENTE.
+   *
+   * POR QUE NO CLIENTE e não no backend, ao contrário dos filtros de data: a aba carrega o conjunto
+   * inteiro (não é paginada), e os KPIs contam A FILA, não o recorte que o time está olhando. Mandar
+   * estes filtros ao backend faria os cards mudarem de número a cada texto digitado, e os KPIs das
+   * quatro abas são justamente o que a §A.27 mandou não mexer. As datas vão ao backend porque
+   * mudam a fila de verdade; estes só recortam o que já está na tela.
+   */
+  const [fContrato, setFContrato] = useState("");
+  const [fNome, setFNome] = useState("");
+  const [fCargo, setFCargo] = useState("");
+  const [fHorario, setFHorario] = useState("");
+  const [fTipoInteg, setFTipoInteg] = useState("");
+  const [fConsultor, setFConsultor] = useState("");
   // Busca por candidato (item 3), nome ou CPF; revela também concluídos (item 1).
   const [candQuery, setCandQuery] = useState("");
   const [candDebounced, setCandDebounced] = useState("");
@@ -347,8 +408,12 @@ export default function EsteiraPage() {
     const qs = new URLSearchParams();
     if (codClientes.length) qs.set("codCliente", codClientes.join(","));
     if (statusFiltro.length) qs.set("status", statusFiltro.join(","));
-    if (from) qs.set("from", from);
-    if (to) qs.set("to", to);
+    if (admissaoDe) qs.set("admissaoDe", admissaoDe);
+    if (admissaoAte) qs.set("admissaoAte", admissaoAte);
+    if (exameDe) qs.set("exameDe", exameDe);
+    if (exameAte) qs.set("exameAte", exameAte);
+    if (integracaoDe) qs.set("integracaoDe", integracaoDe);
+    if (integracaoAte) qs.set("integracaoAte", integracaoAte);
     if (candDebounced) qs.set("q", candDebounced);
     if (soPausadas) qs.set("pausadas", "1");
     const suffix = qs.toString() ? `?${qs.toString()}` : "";
@@ -361,7 +426,20 @@ export default function EsteiraPage() {
     } finally {
       setLoading(false);
     }
-  }, [token, rota, codClientes, statusFiltro, from, to, candDebounced, soPausadas]);
+  }, [
+    token,
+    rota,
+    codClientes,
+    statusFiltro,
+    admissaoDe,
+    admissaoAte,
+    exameDe,
+    exameAte,
+    integracaoDe,
+    integracaoAte,
+    candDebounced,
+    soPausadas,
+  ]);
 
   useEffect(() => {
     load();
@@ -379,45 +457,61 @@ export default function EsteiraPage() {
     setAba(i);
   }
 
-  // ── Catálogo de clientes (carrega todos uma vez p/ o multi-select do modal) ──
+  // ── Catálogos do modal ──────────────────────────────────────────────────────
+  // O catálogo de CLIENTES saiu daqui: as opções do filtro passaram a vir da FILA (só os clientes
+  // que aparecem na tela agora), então buscar os 227 do cadastro virou uma chamada sem consumidor.
   useEffect(() => {
     if (!token) return;
-    apiFetch<ClienteLite[]>("/catalogos/clientes", { token })
-      .then(setClientes)
-      .catch(() => setClientes([]));
     // Motivos de declínio (OST item 3): o MESMO catálogo do modal do lápis e da admin.
     apiFetch<{ id: string; nome: string }[]>("/catalogos/motivos-declinio", { token })
       .then(setMotivosDeclinio)
       .catch(() => setMotivosDeclinio([]));
   }, [token]);
 
-  const clienteOptions = useMemo(
-    () =>
-      clientes.map((c) => ({
-        value: c.codCliente,
-        label: c.nomeOperacao || c.razaoSocial,
-      })),
-    [clientes],
-  );
-  const statusOptions = useMemo(
-    () => (data?.statusCatalogo ?? []).map((c) => ({ value: c.codigo, label: c.rotulo })),
-    [data],
-  );
-
   function limparFiltros() {
     setCodClientes([]);
     setStatusFiltro([]);
-    setFrom("");
-    setTo("");
+    setAdmissaoDe("");
+    setAdmissaoAte("");
+    setExameDe("");
+    setExameAte("");
+    setIntegracaoDe("");
+    setIntegracaoAte("");
+    setFContrato("");
+    setFNome("");
+    setFCargo("");
+    setFHorario("");
+    setFTipoInteg("");
+    setFConsultor("");
     setCandQuery("");
   }
   const temFiltro = Boolean(
-    codClientes.length || statusFiltro.length || from || to || candQuery || soPendencias,
+    codClientes.length ||
+      statusFiltro.length ||
+      admissaoDe ||
+      admissaoAte ||
+      exameDe ||
+      exameAte ||
+      integracaoDe ||
+      integracaoAte ||
+      fContrato ||
+      fNome ||
+      fCargo ||
+      fHorario ||
+      fTipoInteg ||
+      fConsultor ||
+      candQuery ||
+      soPendencias,
   );
   // Contagem de filtros ATIVOS do modal (badge do gatilho): cliente, status, período. A busca rápida
   // (candQuery) vive fora do modal, na barra do cabeçalho, e NÃO entra no badge do gatilho.
   const filtroCount =
-    (codClientes.length ? 1 : 0) + (statusFiltro.length ? 1 : 0) + (from || to ? 1 : 0);
+    (codClientes.length ? 1 : 0) +
+    (statusFiltro.length ? 1 : 0) +
+    (admissaoDe || admissaoAte ? 1 : 0) +
+    (exameDe || exameAte ? 1 : 0) +
+    (integracaoDe || integracaoAte ? 1 : 0) +
+    [fContrato, fNome, fCargo, fHorario, fTipoInteg, fConsultor].filter(Boolean).length;
 
   // ── PATCH de status (avanço/reversão/aceite) ────────────────────────────────
   const doPatch = useCallback(
@@ -674,8 +768,108 @@ export default function EsteiraPage() {
       })
       .map((x) => x.it);
   }, [data]);
-  // Filtro do card "Com Pendências Obrigatórias" (§A.12): mostra só quem tem campo obrigatório pendente.
-  const itemsFiltrados = soPendencias ? items.filter((it) => it.temPendencias) : items;
+  /**
+   * OPÇÕES DOS FILTROS: só os valores que EXISTEM NA FILA ATUAL (decisão do diretor).
+   *
+   * O QUE ISTO CONSERTA: os filtros de coluna eram campo livre, e digitar diferente do que está
+   * gravado (um acento, uma maiúscula, um espaço a mais) devolvia zero sem explicar por quê. Lista
+   * de opções acaba com a adivinhação: o time escolhe, e o que ele escolhe existe.
+   *
+   * A LISTA SAI DA FILA, NÃO DO CATÁLOGO. O cadastro inteiro tem 227 clientes, e oferecer todos
+   * encheria o filtro de opções que dão zero resultado, que é o mesmo problema por outro caminho.
+   *
+   * AS OPÇÕES VÊM DE `items`, a fila ANTES dos filtros de coluna. Se viessem da lista já filtrada,
+   * escolher "Temporário" esvaziaria as opções de cargo que não fossem de temporário, e não haveria
+   * como trocar de ideia sem limpar tudo.
+   */
+  const opcoesDaFila = useMemo(() => {
+    const distintos = (
+      pega: (i: EsteiraItem) => string | null | undefined,
+      rotulo?: (v: string) => string,
+    ) => {
+      const vistos = new Map<string, string>();
+      for (const i of items) {
+        const v = pega(i);
+        if (v) vistos.set(v, rotulo ? rotulo(v) : v);
+      }
+      return [...vistos.entries()]
+        .map(([value, label]) => ({ value, label }))
+        .sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
+    };
+    return {
+      contrato: distintos((i) => i.tipoContrato),
+      cargo: distintos((i) => i.cargoNome),
+      consultor: distintos((i) => i.integracao?.consultorNome),
+      tipoIntegracao: distintos(
+        (i) => i.integracao?.tipo,
+        (v) => TIPO_INTEGRACAO_ROTULO[v] ?? v,
+      ),
+      // Cliente casa pelo CÓDIGO (é ele que vai ao backend), mas mostra o nome da operação.
+      cliente: (() => {
+        const vistos = new Map<string, string>();
+        for (const i of items) {
+          if (i.codCliente) vistos.set(i.codCliente, i.clienteOperacao || i.clienteRazao);
+        }
+        return [...vistos.entries()]
+          .map(([value, label]) => ({ value, label }))
+          .sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
+      })(),
+      status: new Set(items.map((i) => i.status)),
+    };
+  }, [items]);
+
+  const clienteOptions = opcoesDaFila.cliente;
+  /**
+   * STATUS: os presentes na fila, MAIS o status de conclusão, sempre.
+   *
+   * O DE CONCLUSÃO NÃO PODE SAIR DA LISTA, e é a exceção que a regra da fila pede. Concluído some
+   * da fila por construção, então ele nunca estaria entre os "presentes"; e filtrar explicitamente
+   * por ele é justamente o caminho documentado para REVELAR os concluídos. Tirá-lo da lista
+   * apagaria essa porta sem que ninguém percebesse.
+   */
+  const statusOptions = useMemo(() => {
+    const catalogo = data?.statusCatalogo ?? [];
+    if (catalogo.length === 0) return [];
+    const conclui = catalogo[catalogo.length - 1]?.codigo;
+    return catalogo
+      .filter((c) => opcoesDaFila.status.has(c.codigo) || c.codigo === conclui)
+      .map((c) => ({ value: c.codigo, label: c.rotulo }));
+  }, [data, opcoesDaFila]);
+
+  /**
+   * RECORTE NO CLIENTE: o card "Com Pendências Obrigatórias" (§A.12) e os filtros por coluna.
+   *
+   * TEXTO CASA POR "CONTÉM", sem diferenciar maiúscula nem acento, que é como a pessoa digita: quem
+   * procura "temporario" está procurando "Temporário", e exigir o acento transformaria o filtro numa
+   * adivinhação. Campo vazio não filtra nada.
+   *
+   * O ITEM SEM O DADO SAI quando o filtro daquela coluna está ativo. É a mesma regra dos intervalos
+   * de data: sem consultor definido, o candidato não pode casar com uma busca por consultor.
+   */
+  const itemsFiltrados = useMemo(() => {
+    const norm = (v: string | null | undefined) =>
+      (v ?? "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase();
+    const contem = (valor: string | null | undefined, alvo: string) =>
+      !alvo.trim() || norm(valor).includes(norm(alvo));
+
+    return items.filter((it) => {
+      if (soPendencias && !it.temPendencias) return false;
+      // OS FILTROS DE LISTA casam por IGUALDADE: o valor veio da própria fila, então comparar por
+      // "contém" só criaria falso positivo (um cargo que é prefixo de outro casaria com os dois).
+      if (fContrato && it.tipoContrato !== fContrato) return false;
+      if (fCargo && it.cargoNome !== fCargo) return false;
+      if (fConsultor && (it.integracao?.consultorNome ?? "") !== fConsultor) return false;
+      if (fTipoInteg && it.integracao?.tipo !== fTipoInteg) return false;
+      // NOME e HORÁRIO seguem por "contém": nome é busca, não categoria, e o horário o time procura
+      // por prefixo ("09" para a manhã inteira).
+      if (!contem(it.candidatoNome, fNome)) return false;
+      if (!contem(it.integracao?.horario, fHorario)) return false;
+      return true;
+    });
+  }, [items, soPendencias, fContrato, fNome, fCargo, fHorario, fConsultor, fTipoInteg]);
   const statusCatalogo = data?.statusCatalogo ?? [];
 
   // Ordenação clicável do Farol (OST visual, fase 3). A lógica é compartilhada (`useOrdenacao`),
@@ -693,6 +887,22 @@ export default function EsteiraPage() {
       { chave: "cliente", tipo: "texto", valor: (i) => i.clienteOperacao || i.clienteRazao },
       { chave: "cargo", tipo: "texto", valor: (i) => i.cargoNome },
       { chave: "data", tipo: "data", valor: (i) => i.dataAdmissao },
+      // COLUNAS DA INTEGRAÇÃO (OST dos filtros e ordenação). Só a aba de Integração as desenha, mas
+      // declará-las aqui é inofensivo e mantém a lista de colunas num lugar só, como já se fez com
+      // a matrícula. Tipo e consultor ordenam ALFABETICAMENTE pelo rótulo que a tela mostra, e não
+      // pelo valor cru do enum: ordenar por "ONLINE"/"PRESENCIAL" daria a mesma ordem por acidente,
+      // mas quebraria no dia em que um rótulo novo entrasse fora da ordem alfabética do enum.
+      { chave: "dataIntegracao", tipo: "data", valor: (i) => i.integracao?.data ?? null },
+      // Horário é "HH:MM": ordenar como TEXTO já dá a ordem cronológica correta, e evita inventar um
+      // tipo novo só para cinco caracteres.
+      { chave: "horario", tipo: "texto", valor: (i) => i.integracao?.horario ?? null },
+      {
+        chave: "tipoIntegracao",
+        tipo: "texto",
+        valor: (i) =>
+          i.integracao?.tipo ? (TIPO_INTEGRACAO_ROTULO[i.integracao.tipo] ?? i.integracao.tipo) : null,
+      },
+      { chave: "consultor", tipo: "texto", valor: (i) => i.integracao?.consultorNome ?? null },
       { chave: "status", tipo: "status", valor: (i) => catMap.get(i.status)?.ordem ?? null },
       { chave: "pendencias", tipo: "status", valor: (i) => RANK_SINAL[i.sinalizador] ?? null },
     ],
@@ -936,7 +1146,7 @@ export default function EsteiraPage() {
             />
             {/* Botão discreto: só aparece quando há filtro ativo que o Limpar zera (cliente/status/busca/
               período). Mesma cobertura da função limparFiltros. */}
-            {Boolean(codClientes.length || statusFiltro.length || from || to || candQuery) && (
+            {Boolean(temFiltro || candQuery) && (
               <button
                 type="button"
                 onClick={limparFiltros}
@@ -1055,26 +1265,105 @@ export default function EsteiraPage() {
                 />
               </FiltroCampo>
 
-              <FiltroCampo label="Período">
-                <div className="grid grid-cols-2 gap-2">
-                  <input
-                    type="date"
-                    className="ds-input"
-                    aria-label="Data inicial"
-                    value={from}
-                    max={to || undefined}
-                    onChange={(e) => setFrom(e.target.value)}
-                  />
-                  <input
-                    type="date"
-                    className="ds-input"
-                    aria-label="Data final"
-                    value={to}
-                    min={from || undefined}
-                    onChange={(e) => setTo(e.target.value)}
-                  />
-                </div>
+              {/* DATAS COM NOME PRÓPRIO. O rótulo "Período" saiu: ele filtrava por quando a
+                  admissão entrou no sistema, e quem marcava um intervalo esperando a data de
+                  admissão via um resultado que não batia com nada, sem ter como descobrir por quê.
+                  Data de Admissão em cima; a data da FRENTE (exame ou integração) embaixo, e só na
+                  aba que a tem. */}
+              <FiltroCampo label="Data de Admissão">
+                <IntervaloData
+                  de={admissaoDe}
+                  ate={admissaoAte}
+                  setDe={setAdmissaoDe}
+                  setAte={setAdmissaoAte}
+                  rotulo="admissão"
+                />
               </FiltroCampo>
+
+              {isExame && (
+                <FiltroCampo label="Data do Exame">
+                  <IntervaloData
+                    de={exameDe}
+                    ate={exameAte}
+                    setDe={setExameDe}
+                    setAte={setExameAte}
+                    rotulo="exame"
+                  />
+                </FiltroCampo>
+              )}
+
+              {isIntegracao && (
+                <>
+                  <FiltroCampo label="Data de Integração">
+                    <IntervaloData
+                      de={integracaoDe}
+                      ate={integracaoAte}
+                      setDe={setIntegracaoDe}
+                      setAte={setIntegracaoAte}
+                      rotulo="integração"
+                    />
+                  </FiltroCampo>
+
+                  {/* AS DEMAIS COLUNAS VIRAM FILTRO (decisão do diretor). Recorte no cliente, sobre
+                      a fila já carregada: os KPIs continuam contando A FILA, não o que está sendo
+                      olhado. Cliente e Status já eram filtros e continuam vindo do backend. */}
+                  {/* LISTA, NÃO TEXTO LIVRE (decisão do diretor). Digitar tinha de acertar acento,
+                      caixa e espaço para achar; escolher não erra. As opções são só as que existem
+                      na fila atual. */}
+                  <FiltroCampo label="Contrato">
+                    <Select
+                      value={fContrato}
+                      onChange={setFContrato}
+                      options={opcoesDaFila.contrato}
+                      placeholder="Todos os contratos"
+                      ariaLabel="Filtrar por tipo de contrato"
+                    />
+                  </FiltroCampo>
+                  <FiltroCampo label="Nome Do Candidato">
+                    <input
+                      className="ds-input"
+                      placeholder="Parte do nome"
+                      value={fNome}
+                      onChange={(e) => setFNome(e.target.value)}
+                    />
+                  </FiltroCampo>
+                  <FiltroCampo label="Cargo">
+                    <Select
+                      value={fCargo}
+                      onChange={setFCargo}
+                      options={opcoesDaFila.cargo}
+                      placeholder="Todos os cargos"
+                      ariaLabel="Filtrar por cargo"
+                    />
+                  </FiltroCampo>
+                  <FiltroCampo label="Horário Da Integração">
+                    <input
+                      className="ds-input"
+                      placeholder="Ex.: 09:30"
+                      value={fHorario}
+                      onChange={(e) => setFHorario(e.target.value)}
+                    />
+                  </FiltroCampo>
+                  <FiltroCampo label="Tipo De Integração">
+                    <Select
+                      value={fTipoInteg}
+                      onChange={setFTipoInteg}
+                      options={opcoesDaFila.tipoIntegracao}
+                      placeholder="Todos os tipos"
+                      ariaLabel="Filtrar por tipo de integração"
+                    />
+                  </FiltroCampo>
+                  <FiltroCampo label="Consultor">
+                    <Select
+                      value={fConsultor}
+                      onChange={setFConsultor}
+                      options={opcoesDaFila.consultor}
+                      placeholder="Todos os consultores"
+                      ariaLabel="Filtrar por consultor"
+                    />
+                  </FiltroCampo>
+                </>
+              )}
             </FiltroTrigger>
           </div>
         </div>
@@ -1370,10 +1659,21 @@ export default function EsteiraPage() {
                     <ColunaOrdenavel ord={ord} chave="data">
                       Data adm.
                     </ColunaOrdenavel>
-                    <span>Data</span>
-                    <span>Horário</span>
-                    <span>Tipo</span>
-                    <span>Consultor</span>
+                    {/* "Data" virou "Data de Agendamento" (decisão do diretor): ao lado de
+                        "Data adm." o rótulo curto não dizia de qual data se tratava. É o MESMO campo
+                        do filtro "Data de Integração", com um nome só na tela. */}
+                    <ColunaOrdenavel ord={ord} chave="dataIntegracao">
+                      Data de Agendamento
+                    </ColunaOrdenavel>
+                    <ColunaOrdenavel ord={ord} chave="horario">
+                      Horário
+                    </ColunaOrdenavel>
+                    <ColunaOrdenavel ord={ord} chave="tipoIntegracao">
+                      Tipo
+                    </ColunaOrdenavel>
+                    <ColunaOrdenavel ord={ord} chave="consultor">
+                      Consultor
+                    </ColunaOrdenavel>
                     <ColunaOrdenavel ord={ord} chave="status">
                       Status
                     </ColunaOrdenavel>

@@ -14,10 +14,10 @@ import {
   desc,
   eq,
   gte,
+  lte,
   ilike,
   inArray,
   isNotNull,
-  lt,
   notInArray,
   or,
   sql,
@@ -97,8 +97,17 @@ export interface EsteiraFiltros {
   // Multi-select (Bloco B): OU dentro do mesmo filtro (inArray). Vazio/ausente = sem filtro.
   codCliente?: string[];
   status?: string[];
-  from?: string;
-  to?: string;
+  /**
+   * Três intervalos com NOME PRÓPRIO, no lugar do antigo `from`/`to` (que filtrava por `criadoEm` sob
+   * o rótulo genérico "Período"). Cada aba oferece os que fazem sentido nela; quando dois estão
+   * ativos, eles AFUNILAM.
+   */
+  admissaoDe?: string;
+  admissaoAte?: string;
+  exameDe?: string;
+  exameAte?: string;
+  integracaoDe?: string;
+  integracaoAte?: string;
   /** Busca por candidato (nome ou CPF) — F7. Quando presente, REVELA também as frentes já
    * concluídas (que somem da fila principal — item 1 da 2C) e as PAUSADAS. */
   q?: string;
@@ -206,15 +215,59 @@ export class EsteiraService {
     if (filtros.codCliente?.length) {
       clientePeriodo.push(inArray(admissoes.codCliente, filtros.codCliente));
     }
-    if (filtros.from) {
-      if (!DATA_RE.test(filtros.from)) throw new BadRequestException("from inválido (YYYY-MM-DD)");
-      clientePeriodo.push(gte(admissoes.criadoEm, new Date(`${filtros.from}T00:00:00`)));
+    /**
+     * FILTROS DE DATA (OST dos filtros da Esteira). Três intervalos, cada um com nome próprio na
+     * tela, e nenhum deles chamado "Período".
+     *
+     * O QUE ISTO CONSERTOU: o filtro anterior se chamava "Período" e filtrava por `criadoEm`, ou
+     * seja, QUANDO A ADMISSÃO ENTROU NO SISTEMA. Quem marcava um intervalo esperando a data em que a
+     * pessoa é admitida via um resultado que não batia com nada, e não tinha como descobrir por quê:
+     * o rótulo não dizia qual data ele olhava. O `criadoEm` saiu como opção de filtro.
+     *
+     * OS DOIS INTERVALOS AFUNILAM (E lógico), nas abas que têm dois. "Admitido em X e com exame em
+     * Y" é a pergunta real do time; filtros independentes devolveriam a união e trariam gente que
+     * não satisfaz nenhuma das duas metades.
+     *
+     * QUEM NÃO TEM DATA DE ADMISSÃO NÃO SOME DA LISTA. Sem filtro, aparece normal, com a data vazia
+     * (são 14 hoje, as de banco entram nessa categoria por definição). Só fica de fora quando o
+     * filtro de data de admissão está ATIVO, e aí é o comportamento natural de um intervalo: sem
+     * data, não há como estar dentro dele. O mesmo vale para exame e integração.
+     */
+    const intervalo = (de: string | undefined, ate: string | undefined, rotulo: string) => {
+      if (de && !DATA_RE.test(de)) {
+        throw new BadRequestException(`${rotulo}: data inicial inválida (YYYY-MM-DD)`);
+      }
+      if (ate && !DATA_RE.test(ate)) {
+        throw new BadRequestException(`${rotulo}: data final inválida (YYYY-MM-DD)`);
+      }
+      return { de, ate };
+    };
+
+    // DATA DE ADMISSÃO: coluna `date` pura, comparada como texto ISO. Sem `new Date()` no caminho,
+    // que é o que desloca o dia em fuso negativo (mesma armadilha da ficha, commit d3b658d).
+    const adm = intervalo(filtros.admissaoDe, filtros.admissaoAte, "Data de admissão");
+    if (adm.de) clientePeriodo.push(gte(admissoes.dataAdmissao, adm.de));
+    if (adm.ate) clientePeriodo.push(lte(admissoes.dataAdmissao, adm.ate));
+
+    // DATA DO EXAME e DATA DE INTEGRAÇÃO vivem em tabelas próprias, com `admissao_id` ÚNICO. Por
+    // isso EXISTS, e não join: um join a mais na consulta principal mudaria o plano dela para todas
+    // as abas, inclusive as que nem oferecem esses filtros.
+    const ex = intervalo(filtros.exameDe, filtros.exameAte, "Data do exame");
+    if (ex.de || ex.ate) {
+      clientePeriodo.push(
+        sql`EXISTS (SELECT 1 FROM exame_agendamento ea WHERE ea.admissao_id = ${admissoes.id}
+              ${ex.de ? sql`AND ea.data >= ${ex.de}` : sql``}
+              ${ex.ate ? sql`AND ea.data <= ${ex.ate}` : sql``})`,
+      );
     }
-    if (filtros.to) {
-      if (!DATA_RE.test(filtros.to)) throw new BadRequestException("to inválido (YYYY-MM-DD)");
-      const toEnd = new Date(`${filtros.to}T00:00:00`);
-      toEnd.setDate(toEnd.getDate() + 1);
-      clientePeriodo.push(lt(admissoes.criadoEm, toEnd));
+
+    const integ = intervalo(filtros.integracaoDe, filtros.integracaoAte, "Data de integração");
+    if (integ.de || integ.ate) {
+      clientePeriodo.push(
+        sql`EXISTS (SELECT 1 FROM integracao_agendamento ia WHERE ia.admissao_id = ${admissoes.id}
+              ${integ.de ? sql`AND ia.data >= ${integ.de}` : sql``}
+              ${integ.ate ? sql`AND ia.data <= ${integ.ate}` : sql``})`,
+      );
     }
 
     // Busca por candidato (nome ou CPF) — F7. Revela também as concluídas (ver abaixo).
@@ -270,13 +323,37 @@ export class EsteiraService {
     }
 
     if (q) {
-      // Busca rápida (Bloco C): NOME, CPF e CLIENTE (razão/operação/código).
+      /**
+       * BUSCA RÁPIDA: varre TODAS as colunas da tela, não só nome, CPF e cliente.
+       *
+       * O QUE FALTAVA, e era o caso que o diretor deu: digitar "Temporário" não trazia nada, porque
+       * o tipo de contrato é uma coluna visível e não era pesquisável. O mesmo valia para cargo,
+       * status, e as colunas próprias da Integração (tipo e consultor). Uma busca que não cobre o
+       * que a tela mostra ensina o time a não usar a busca.
+       *
+       * STATUS ENTRA COMO TEXTO (`::text`): a coluna é enum, e sem o cast o `ilike` não se aplica.
+       * Casa pelo valor cru (AGENDADO, A_AGENDAR), que é o que o time digita ao procurar por status.
+       *
+       * TIPO e CONSULTOR da integração vêm por EXISTS, pela mesma razão dos filtros de data: eles
+       * vivem em `integracao_agendamento`, e um join a mais mudaria o plano da consulta para as
+       * quatro abas.
+       */
       const cpfDigits = normalizeCpf(q);
       const conds = [
         ilike(candidatos.nome, `%${q}%`),
         ilike(clientes.razaoSocial, `%${q}%`),
         ilike(clientes.nomeOperacao, `%${q}%`),
         ilike(clientes.codCliente, `%${q}%`),
+        ilike(cargos.nome, `%${q}%`),
+        ilike(admissoes.tipoContrato, `%${q}%`),
+        ilike(admissoes.matricula, `%${q}%`),
+        sql`${frentesAdmissao.status}::text ILIKE ${`%${q}%`}`,
+        sql`EXISTS (SELECT 1 FROM integracao_agendamento ia
+              LEFT JOIN usuarios u ON u.id = ia.consultor_id
+              WHERE ia.admissao_id = ${admissoes.id}
+                AND (ia.tipo::text ILIKE ${`%${q}%`}
+                     OR ia.horario ILIKE ${`%${q}%`}
+                     OR u.nome ILIKE ${`%${q}%`}))`,
       ];
       if (cpfDigits.length >= 3) conds.push(ilike(candidatos.cpf, `%${cpfDigits}%`));
       itensWhere.push(or(...conds)!);
