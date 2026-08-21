@@ -87,6 +87,11 @@ class ArquivamentoDrive(_CamelModel):
 
     pasta_url: str
     arquivados: int
+    # Ids dos arquivos CRIADOS nesta chamada, na ordem em que subiram. Existe para quem precisa do
+    # link do arquivo (a coleta de VT grava a URL para a tela de Benefícios abrir o formulário).
+    # Arquivo ignorado por já estar no destino NÃO entra: ele não foi criado agora. §A.6: id do
+    # Drive não é dado pessoal; o nome do arquivo, que carrega o nome do candidato, não sai daqui.
+    arquivos_ids: list[str] = []
     # Quantos arquivos foram PULADOS por já estarem no destino com o mesmo conteúdo (checar antes de
     # subir). Zero é o caso normal; maior que zero significa que a duplicação foi evitada.
     ignorados: int = 0
@@ -134,6 +139,27 @@ class BaixarColetaVtRequest(_CamelModel):
 
 class BaixarColetaVtResponse(_CamelModel):
     staging_path: str
+
+
+class DadosColetaVtRequest(_CamelModel):
+    bucket: str
+    # Nome do objeto do PDF (o `id` de /coleta-vt/listar). O JSON irmão é derivado DAQUI, no
+    # servidor, trocando a extensão: o nome carrega o nome do candidato e não trafega montado
+    # pelo backend (§A.6).
+    id: str
+
+
+class DadosColetaVtResponse(_CamelModel):
+    """Campos estruturados do formulário, lidos do JSON irmão do PDF.
+
+    `encontrado=False` é o caso NORMAL de todo formulário anterior ao JSON irmão: o PDF é arquivado
+    do mesmo jeito, só não há valores para a tela somar. Nunca é erro.
+    """
+
+    encontrado: bool = False
+    # Cru, como o app externo gravou. A validação de forma é feita no backend, junto com a escrita,
+    # para não haver duas régua de validação do mesmo dado.
+    dados: dict | None = None
 
 
 # ── Validação de pasta-pai do Drive (read-only, antes de o EA cadastrar o id) ─

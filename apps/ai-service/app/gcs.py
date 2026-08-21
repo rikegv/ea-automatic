@@ -77,3 +77,20 @@ def baixar_objeto_para_staging(bucket: str, name: str) -> str:
     client = get_storage_client()
     conteudo = client.bucket(bucket).blob(name).download_as_bytes()
     return escrever_staging(conteudo, ".pdf")
+
+def ler_objeto_texto(bucket: str, name: str) -> str | None:
+    """Lê UM objeto pequeno como texto. SOMENTE LEITURA. `None` quando o objeto não existe.
+
+    NÃO PASSA PELA STAGING, ao contrário do PDF, e a diferença é proposital: a staging existe para o
+    BINÁRIO do documento, que é grande, é efêmero e tem TTL (§A.6). O JSON irmão do formulário é um
+    punhado de campos que vão direto para o banco; escrevê-lo em disco só criaria mais uma cópia de
+    dado pessoal para expurgar depois.
+
+    Objeto ausente é ESTADO NORMAL, não erro: todo formulário anterior ao JSON irmão continua sendo
+    só PDF, e o arquivamento desses segue funcionando sem os campos estruturados.
+    """
+    client = get_storage_client()
+    blob = client.bucket(bucket).blob(name)
+    if not blob.exists():
+        return None
+    return blob.download_as_bytes().decode("utf-8", errors="replace")

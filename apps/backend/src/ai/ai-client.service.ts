@@ -407,6 +407,17 @@ export class AiClientService {
     return this.post<{ arquivos: ItemColetaVt[] }>("/coleta-vt/listar", { bucket });
   }
 
+  /**
+   * Campos estruturados do formulário, do JSON IRMÃO do PDF no bucket (§A.17).
+   *
+   * Recebe o `id` do PDF; a troca de extensão acontece no ai-service, porque o nome do objeto
+   * carrega o nome do candidato e não é montado aqui (§A.6). `encontrado: false` é o caso normal de
+   * todo formulário anterior a esta frente, e NUNCA impede o arquivamento do PDF.
+   */
+  dadosColetaVt(bucket: string, id: string): Promise<{ encontrado: boolean; dados: unknown }> {
+    return this.post<{ encontrado: boolean; dados: unknown }>("/coleta-vt/dados", { bucket, id });
+  }
+
   /** Baixa UM objeto do bucket coletivo para a staging e devolve o caminho. O binário não trafega aqui. */
   baixarColetaVt(bucket: string, id: string): Promise<{ stagingPath: string }> {
     return this.post<{ stagingPath: string }>("/coleta-vt/baixar", { bucket, id });

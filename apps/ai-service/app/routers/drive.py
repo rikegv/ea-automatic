@@ -159,6 +159,10 @@ def arquivar(req: ArquivarRequest, _: None = Depends(require_internal_token)) ->
     md5_no_destino: dict[str, set[str]] = {}
     arquivados = 0
     ignorados = 0
+    # Ids dos arquivos que SUBIRAM NESTA CHAMADA, na ordem em que subiram. Arquivo ignorado (já
+    # estava no destino com o mesmo conteúdo) não entra: ele não foi criado agora, e quem guarda a
+    # URL já a guardou na primeira vez, porque o ledger da coleta é único por (md5, origem).
+    ids_enviados: list[str] = []
     # Falhas por arquivo: NÃO abortam o lote, viram contagem na resposta (ver o except do laço).
     falhas: list[str] = []
     for indice, arq in enumerate(req.arquivos):
@@ -208,12 +212,14 @@ def arquivar(req: ArquivarRequest, _: None = Depends(require_internal_token)) ->
             continue
 
         try:
-            drive.subir_arquivo(
+            novo_id = drive.subir_arquivo(
                 service,
                 conteudo=conteudo,
                 nome_final=arq.nome_final,
                 parent_id=subpasta_cache[arq.subpasta],
             )
+            if novo_id:
+                ids_enviados.append(novo_id)
             arquivados += 1
             # O que acabou de subir passa a contar como "já está lá": dois arquivos IDÊNTICOS dentro
             # do MESMO lote (a staging tem isso) sobem uma vez só.
@@ -256,12 +262,14 @@ def arquivar(req: ArquivarRequest, _: None = Depends(require_internal_token)) ->
                     )
                     arquivados += 1
                     continue
-                drive.subir_arquivo(
+                novo_id = drive.subir_arquivo(
                     service,
                     conteudo=conteudo,
                     nome_final=arq.nome_final,
                     parent_id=subpasta_cache[arq.subpasta],
                 )
+                if novo_id:
+                    ids_enviados.append(novo_id)
                 arquivados += 1
                 md5_no_destino[arq.subpasta].add(md5_local)
             except Exception as exc2:  # noqa: BLE001
@@ -312,6 +320,7 @@ def arquivar(req: ArquivarRequest, _: None = Depends(require_internal_token)) ->
     return ArquivamentoDrive(
         pasta_url=pasta_url,
         arquivados=arquivados,
+        arquivos_ids=ids_enviados,
         ignorados=ignorados,
         pasta_ja_existia=pasta_ja_existia,
         duplicatas=duplicatas,

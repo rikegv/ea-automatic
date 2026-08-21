@@ -12,6 +12,7 @@ import { Select } from "@/components/ui/Select";
 import { FiltroTrigger, FiltroCampo } from "@/components/ui/FiltroTrigger";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
+import { GoogleDriveLogo } from "@/components/ui/GoogleDriveLogo";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { cn } from "@/lib/cn";
 import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
@@ -62,6 +63,21 @@ interface Linha {
   principais: Record<string, boolean>;
   /** Valor cadastrado de cada um dos quatro principais. Nulo = tem o benefício, sem valor. */
   valores: Record<string, string | null>;
+  /**
+   * O QUE O CANDIDATO PREENCHEU NO FORMULÁRIO DE VT, resumido, mais o link do arquivo no Drive.
+   *
+   * As duas metades são independentes e uma existe sem a outra: os VALORES chegam pelo JSON irmão do
+   * app externo, o ARQUIVO chega pelo arquivamento no Drive. `null` no bloco inteiro = não há nem um
+   * nem outro, e a célula volta a dizer a frase de sempre.
+   */
+  vt?: {
+    optante: boolean | null;
+    totalIda: string | null;
+    totalVolta: string | null;
+    totalDia: string | null;
+    cartao: string | null;
+    formularioUrl: string | null;
+  } | null;
   outros: { nome: string; valor: string | null }[];
   /** O pacote com os ids do catálogo: é o que o modal de edição carrega e salva. */
   pacote: { beneficioId: string; nome: string; valor: string | null }[];
@@ -128,14 +144,26 @@ function fmtValor(valor: string | null): string | null {
  * mostrar de quem não tem o benefício. Célula sem clique continua sendo texto, sem borda nem cursor
  * prometendo uma ação que não existe.
  */
-function CelulaBeneficio({ tem, onVer }: { tem: boolean; onVer?: () => void }) {
+function CelulaBeneficio({
+  tem,
+  sigla,
+  onVer,
+}: {
+  tem: boolean;
+  sigla: string;
+  onVer?: () => void;
+}) {
+  // O VT deixou de mostrar só um valor: a célula abre o RESUMO do formulário (ida, volta, cartão) e o
+  // acesso ao arquivo. Prometer "o valor cadastrado" ali passou a ser mentira, e tooltip que mente é
+  // pior que tooltip nenhum, porque o usuário confia nele para decidir se clica.
+  const titulo = sigla === "VT" ? "Ver o resumo do formulário" : "Ver o valor cadastrado";
   return (
     <td className="text-center">
       {tem ? (
         <button
           type="button"
           onClick={onVer}
-          title="Ver o valor cadastrado"
+          title={titulo}
           className="inline-flex items-center gap-1 rounded-lg px-1.5 py-0.5 text-[13px] font-semibold text-ok transition hover:bg-[var(--surface-2)]"
         >
           <Icon name="check" className="h-4 w-4" />
@@ -787,6 +815,7 @@ export default function BeneficiosPage() {
                             {siglas.map((s) => (
                               <CelulaBeneficio
                                 key={s}
+                                sigla={s}
                                 tem={Boolean(l.principais[s])}
                                 onVer={() => setDetalhe({ linha: l, sigla: s })}
                               />
@@ -886,15 +915,23 @@ export default function BeneficiosPage() {
       {detalhe && (
         <Modal
           onClose={() => setDetalhe(null)}
-          className="max-w-sm"
+          // O modal do VT é MAIS LARGO porque o conteúdo dele é uma linha só, e uma linha só que
+          // quebra em três deixa de ser uma linha. Os demais seguem estreitos, como estavam.
+          className={detalhe.sigla === "VT" && detalhe.linha.vt ? "max-w-xl" : "max-w-sm"}
           ariaLabel={detalhe.sigla ? `Valor do ${detalhe.sigla}` : "Demais benefícios"}
         >
           <h2 className="mb-1 text-[17px] font-semibold text-text">
-            {detalhe.sigla ? `Valor Do ${detalhe.sigla}` : "Demais Benefícios"}
+            {detalhe.sigla === "VT" && detalhe.linha.vt
+              ? "Vale-Transporte"
+              : detalhe.sigla
+                ? `Valor Do ${detalhe.sigla}`
+                : "Demais Benefícios"}
           </h2>
           <p className="mb-4 text-sm text-dim">{caixaAlta(detalhe.linha.candidato)}</p>
 
-          {detalhe.sigla ? (
+          {detalhe.sigla === "VT" && detalhe.linha.vt ? (
+            <ResumoVt vt={detalhe.linha.vt} />
+          ) : detalhe.sigla ? (
             <ValorDoBeneficio sigla={detalhe.sigla} valor={detalhe.linha.valores?.[detalhe.sigla] ?? null} />
           ) : (
             <ul className="flex flex-col gap-2">
@@ -934,6 +971,105 @@ export default function BeneficiosPage() {
         />
       )}
     </>
+  );
+}
+
+/**
+ * O QUE O CANDIDATO PREENCHEU NO VT, EM UMA LINHA SÓ (item 2 da OST), mais o acesso ao arquivo.
+ *
+ * UMA LINHA É O PEDIDO, e ela é literal: "Ida R$ X · Volta R$ Y · Bilhete Único". Quem abre a
+ * célula quer saber quanto a pessoa gasta e com o quê, não ler um formulário inteiro. O total do
+ * dia entra ao lado porque é a soma que vai para a folha, e deixá-lo de fora obrigaria a conta de
+ * cabeça toda vez.
+ *
+ * AS DUAS METADES SÃO INDEPENDENTES, e é por isso que cada uma tem o seu "não tem". Os valores
+ * chegam pelo JSON irmão do app externo; o arquivo chega pelo arquivamento no Drive. Formulário
+ * antigo tem arquivo e não tem valores; formulário interno tem valores e não tem arquivo. Mostrar
+ * um zero no lugar de "não informado" faria a tela afirmar que a pessoa não gasta nada, que é
+ * diferente de ainda não saber (§A.11: marcador de vazio é "não informado", nunca o glifo).
+ *
+ * NÃO-OPTANTE tem linha própria: ele recusou o vale, e "Ida R$ 0,00" leria como erro de cadastro.
+ */
+export function ResumoVt({
+  vt,
+}: {
+  vt: {
+    optante: boolean | null;
+    totalIda: string | null;
+    totalVolta: string | null;
+    totalDia: string | null;
+    cartao: string | null;
+    formularioUrl: string | null;
+  };
+}) {
+  const temValores = vt.optante !== null;
+
+  return (
+    <div className="flex flex-col gap-4">
+      {!temValores ? (
+        <p className="text-sm text-dim">
+          O formulário foi recebido e arquivado, mas os valores preenchidos não chegaram ao sistema.
+          Abra o formulário para conferir o que o candidato declarou.
+        </p>
+      ) : vt.optante === false ? (
+        <p className="text-sm text-text">
+          O candidato <strong className="font-semibold">não optou</strong> pelo vale-transporte.
+        </p>
+      ) : (
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-3">
+          <Parcela rotulo="Ida" valor={vt.totalIda} />
+          <span className="text-faint">·</span>
+          <Parcela rotulo="Volta" valor={vt.totalVolta} />
+          <span className="text-faint">·</span>
+          <Parcela rotulo="Dia" valor={vt.totalDia} destaque />
+          {vt.cartao ? (
+            <>
+              <span className="text-faint">·</span>
+              <span className="text-[15px] font-semibold text-text">{vt.cartao}</span>
+            </>
+          ) : null}
+        </div>
+      )}
+
+      {vt.formularioUrl ? (
+        <a
+          href={vt.formularioUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="btn-secondary inline-flex items-center justify-center gap-2 self-start px-4 py-2"
+        >
+          <GoogleDriveLogo className="h-4 w-4" />
+          Ver Formulário
+        </a>
+      ) : (
+        <p className="text-[13px] text-faint">
+          O arquivo do formulário ainda não foi arquivado no Drive.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Uma parcela do resumo. `null` vira "não informado", nunca R$ 0,00 (§A.11). */
+function Parcela({
+  rotulo,
+  valor,
+  destaque = false,
+}: {
+  rotulo: string;
+  valor: string | null;
+  destaque?: boolean;
+}) {
+  const formatado = fmtValor(valor);
+  return (
+    <span className="text-[15px] text-dim">
+      {rotulo}{" "}
+      <strong
+        className={`font-semibold tabular-nums ${destaque ? "text-[17px] text-text" : "text-text"}`}
+      >
+        {formatado ?? "não informado"}
+      </strong>
+    </span>
   );
 }
 

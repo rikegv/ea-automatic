@@ -1169,6 +1169,12 @@ export const vtColeta = pgTable(
     // O FORMULARIO_VT estava na régua da admissão casada? (true = deu baixa; false = só arquivou;
     // null = não casou). Registro do porquê a baixa aconteceu ou não.
     vtNaRegua: boolean("vt_na_regua"),
+    // Link do ARQUIVO no Drive, gravado no arquivamento. É o que faz a tela de Benefícios abrir o
+    // formulário direto, em vez de mandar alguém procurar no Drive (o diretor não achou a pasta).
+    // §A.6 permite persistir referência do Drive, como já se faz com `contrato_assinado_drive_url`;
+    // o que nunca entra em banco é URL externa de terceiro (Pandapé, download do Clicksign).
+    // Nulo é estado real: arquivamento antigo, ou arquivo que já estava no destino e não subiu agora.
+    driveUrl: text("drive_url"),
     arquivadoEm: timestamp("arquivado_em", { withTimezone: true }),
     criadoEm,
     atualizadoEm,

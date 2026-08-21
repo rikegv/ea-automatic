@@ -19,8 +19,11 @@ import {
   tiposDocumento,
   usuarios,
   vtColeta,
+  formulariosVt,
+  formularioVtConducoes,
 } from "../db/schema";
 import { montarNomePasta, resolvePastaPaiId } from "../ai/drive-routing";
+import { interpretarFormularioVt } from "../domain/formulario-vt-coletado";
 import {
   agregarCiclo,
   type ResumoItemColeta,
@@ -41,6 +44,19 @@ const CODIGO_VT = "FORMULARIO_VT";
 
 /** Origem da fonte da coleta, parte da chave de idempotência do ledger (par com o md5). */
 const ORIGEM = "GCS";
+
+/**
+ * Link de ABRIR o arquivo no Drive, a partir do id que o arquivamento devolveu.
+ *
+ * MONTADO A PARTIR DO ID, e não pedido ao Google: é o mesmo padrão que o módulo do Drive já usa para
+ * a URL de pasta, e evita uma ida a mais à API só para ler um link cuja forma é fixa.
+ *
+ * Devolve `undefined` (e não `null`) quando não há id, porque essa distinção é o que preserva a URL
+ * já gravada no reprocessamento: `null` apagaria o link, `undefined` mantém.
+ */
+function urlDoArquivoNoDrive(fileId: string | undefined): string | undefined {
+  return fileId ? `https://drive.google.com/file/d/${fileId}/view` : undefined;
+}
 
 /** Observação gravada na baixa do documento (§A.11: sem travessão). */
 const OBSERVACAO_BAIXA_VT = "Recebido via coleta de formulário de VT";
@@ -269,7 +285,7 @@ export class VtColetaService implements OnModuleInit, OnModuleDestroy {
 
     // `item.id` (nome do objeto) é PII e transitório: usado SÓ aqui, para a baixa; nunca persistido.
     const { stagingPath } = await this.ai.baixarColetaVt(this.bucketColetivo(), item.id);
-    await this.ai.arquivarDrive({
+    const arquivamento = await this.ai.arquivarDrive({
       parentFolderId,
       pastaNome: montarNomePasta(adm.candidatoNome, adm.clienteOperacao),
       arquivos: [
@@ -280,6 +296,10 @@ export class VtColetaService implements OnModuleInit, OnModuleDestroy {
         },
       ],
     });
+
+    // CAMPOS ESTRUTURADOS, do JSON irmão. Depois do arquivamento e NUNCA antes: o PDF no Drive é a
+    // entrega que não pode falhar, e nada aqui pode impedi-la.
+    await this.gravarFormularioColetado(adm.id, item.id);
 
     // Baixa SÓ se o VT está na régua (cliente+cargo) da admissão. Fora da régua: apenas arquivado,
     // sem criar pendência/documento (decisão do diretor).
@@ -296,6 +316,10 @@ export class VtColetaService implements OnModuleInit, OnModuleDestroy {
       admissaoId: adm.id,
       vtNaRegua,
       arquivadoEm: new Date(),
+      // LINK DO ARQUIVO, e não o da pasta: é ele que faz o botão da tela de Benefícios abrir o
+      // formulário. `undefined` quando o arquivamento não criou nada agora (o conteúdo já estava no
+      // destino), e aí o upsert PRESERVA a URL que a primeira passada gravou.
+      driveUrl: urlDoArquivoNoDrive(arquivamento.arquivosIds?.[0]),
     });
     this.logger.log(
       `Coleta de VT: arquivo casado e arquivado (admissão ${adm.id}, baixa=${deuBaixa ? "sim" : "não"}).`,
@@ -457,6 +481,105 @@ export class VtColetaService implements OnModuleInit, OnModuleDestroy {
    * Upsert do ledger pela chave (md5, origem). §A.6: grava só md5/origem/status/admissão, NUNCA
    * CPF/nome/nome-de-objeto (o nome do objeto no bucket contém NOME+CPF e jamais é persistido).
    */
+  /**
+   * Grava os campos estruturados do formulário (JSON irmão) em `formularios_vt` + conduções.
+   *
+   * NUNCA DERRUBA O ARQUIVAMENTO. Todo o corpo vive num try/catch que só loga: o PDF no Drive é a
+   * entrega essencial, e os valores são o enfeite que a tela de Benefícios soma. Um JSON ausente
+   * (todo o acervo anterior a esta frente), corrompido ou incompleto vira uma linha de log e o ciclo
+   * segue. Foi assim que a frente pôde entrar sem parar a coleta que já rodava.
+   *
+   * SUBSTITUI O PACOTE INTEIRO, e não faz merge: `formularios_vt` é único por admissão, e o reenvio
+   * do formulário é uma DECLARAÇÃO NOVA do candidato, não um remendo na anterior. As conduções
+   * antigas são apagadas antes das novas entrarem, senão o itinerário viraria a soma de duas
+   * declarações e o total deixaria de bater com as linhas.
+   *
+   * §A.6: nada aqui é logado além do id da admissão (que não é dado pessoal). Endereço e itinerário
+   * vão para o banco, que é o destino legítimo deles, e nunca para o log.
+   */
+  private async gravarFormularioColetado(admissaoId: string, objetoPdf: string): Promise<void> {
+    try {
+      const { encontrado, dados } = await this.ai.dadosColetaVt(this.bucketColetivo(), objetoPdf);
+      if (!encontrado) return;
+
+      const form = interpretarFormularioVt(dados);
+      if (!form) {
+        this.logger.warn(
+          `Coleta de VT: JSON irmão fora do formato esperado (admissão ${admissaoId}); ` +
+            `PDF arquivado, campos estruturados NÃO gravados.`,
+        );
+        return;
+      }
+
+      await this.db.transaction(async (tx) => {
+        const [linha] = await tx
+          .insert(formulariosVt)
+          .values({
+            admissaoId,
+            optante: form.optante,
+            cep: form.cep,
+            logradouro: form.logradouro,
+            numero: form.numero,
+            complemento: form.complemento,
+            bairro: form.bairro,
+            cidade: form.cidade,
+            uf: form.uf,
+            totalIda: form.totalIda,
+            totalVolta: form.totalVolta,
+            totalDia: form.totalDia,
+            cienteEm: form.cienteEm,
+          })
+          .onConflictDoUpdate({
+            target: formulariosVt.admissaoId,
+            set: {
+              optante: form.optante,
+              cep: form.cep,
+              logradouro: form.logradouro,
+              numero: form.numero,
+              complemento: form.complemento,
+              bairro: form.bairro,
+              cidade: form.cidade,
+              uf: form.uf,
+              totalIda: form.totalIda,
+              totalVolta: form.totalVolta,
+              totalDia: form.totalDia,
+              cienteEm: form.cienteEm,
+              atualizadoEm: new Date(),
+            },
+          })
+          .returning({ id: formulariosVt.id });
+
+        await tx
+          .delete(formularioVtConducoes)
+          .where(eq(formularioVtConducoes.formularioId, linha.id));
+        if (form.conducoes.length > 0) {
+          await tx.insert(formularioVtConducoes).values(
+            form.conducoes.map((c) => ({
+              formularioId: linha.id,
+              sentido: c.sentido,
+              ordem: c.ordem,
+              cidade: c.cidade,
+              tipoTransporte: c.tipoTransporte,
+              cartao: c.cartao,
+              cartaoOutro: c.cartaoOutro,
+              valor: c.valor,
+            })),
+          );
+        }
+      });
+
+      this.logger.log(
+        `Coleta de VT: campos estruturados gravados (admissão ${admissaoId}, ` +
+          `${form.conducoes.length} condução(ões)).`,
+      );
+    } catch (erro) {
+      this.logger.warn(
+        `Coleta de VT: falha ao gravar os campos estruturados (admissão ${admissaoId}): ` +
+          `${erro instanceof Error ? erro.name : "erro desconhecido"}. O PDF segue arquivado.`,
+      );
+    }
+  }
+
   async upsertLedger(
     chave: string,
     dados: {
@@ -464,6 +587,8 @@ export class VtColetaService implements OnModuleInit, OnModuleDestroy {
       admissaoId?: string | null;
       vtNaRegua?: boolean | null;
       arquivadoEm?: Date | null;
+      /** Link do arquivo no Drive. AUSENTE (undefined) preserva o que já está gravado; ver abaixo. */
+      driveUrl?: string | null;
     },
   ): Promise<void> {
     const agora = new Date();
@@ -474,6 +599,7 @@ export class VtColetaService implements OnModuleInit, OnModuleDestroy {
       admissaoId: dados.admissaoId ?? null,
       vtNaRegua: dados.vtNaRegua ?? null,
       arquivadoEm: dados.arquivadoEm ?? null,
+      driveUrl: dados.driveUrl ?? null,
     };
     await this.db
       .insert(vtColeta)
@@ -485,6 +611,11 @@ export class VtColetaService implements OnModuleInit, OnModuleDestroy {
           admissaoId: linha.admissaoId,
           vtNaRegua: linha.vtNaRegua,
           arquivadoEm: linha.arquivadoEm,
+          // A URL SÓ É SOBRESCRITA QUANDO VEIO UMA NOVA. O reprocessamento do mesmo arquivo (mesmo
+          // md5, mesma origem) não sobe nada de novo, porque o destino já tem o conteúdo, então o
+          // arquivamento não devolve id. Regravar `null` aqui apagaria o link que a primeira passada
+          // guardou, e o botão da tela de Benefícios morreria sozinho no segundo ciclo do scheduler.
+          ...(dados.driveUrl === undefined ? {} : { driveUrl: linha.driveUrl }),
           atualizadoEm: agora,
         },
       });

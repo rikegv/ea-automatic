@@ -526,6 +526,13 @@
       "when": 1787082281775,
       "tag": "0074_area_do_menu_na_tabela",
       "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1787261725289,
+      "tag": "0075_url_do_vt_no_drive",
+      "breakpoints": true
     }
   ]
 }

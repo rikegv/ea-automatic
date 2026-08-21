@@ -8,7 +8,9 @@ listar os objetos do bucket e baixar um objeto para a staging efêmera.
 o CPF extraído no servidor.
 """
 
+import json
 import logging
+import re
 
 from fastapi import APIRouter, Depends
 
@@ -18,6 +20,8 @@ from app.drive import extrair_cpf_do_nome
 from app.schemas import (
     BaixarColetaVtRequest,
     BaixarColetaVtResponse,
+    DadosColetaVtRequest,
+    DadosColetaVtResponse,
     ItemColetaVt,
     ListarColetaVtRequest,
     ListarColetaVtResponse,
@@ -51,3 +55,34 @@ def coleta_vt_baixar(
 ) -> BaixarColetaVtResponse:
     staging_path = gcs.baixar_objeto_para_staging(req.bucket, req.id)
     return BaixarColetaVtResponse(staging_path=staging_path)
+
+
+@router.post("/dados", response_model=DadosColetaVtResponse, response_model_by_alias=True)
+def coleta_vt_dados(
+    req: DadosColetaVtRequest, _: None = Depends(require_internal_token)
+) -> DadosColetaVtResponse:
+    """Campos estruturados do formulário, do JSON IRMÃO do PDF (mesmo nome, extensão .json).
+
+    POR QUE O JSON VIAJA PELO BUCKET, e não por uma chamada do app ao EA: o app externo roda no
+    Firebase e o EA é loopback atrás da VPN, inalcançável de fora. O bucket já é o transporte que
+    funciona para o PDF; o JSON pega carona nele, sem abrir nenhuma porta de entrada no EA.
+
+    O NOME DO JSON É DERIVADO AQUI, no servidor, a partir do nome do PDF. O backend manda o `id` que
+    já conhece e nunca monta nome de objeto, que carrega o nome do candidato (§A.6).
+
+    Objeto ausente devolve `encontrado=False`, não 404: é o estado normal de todo formulário anterior
+    a esta frente, e o arquivamento do PDF não pode depender disso.
+    """
+    nome_json = re.sub(r"\.pdf$", "", req.id, flags=re.IGNORECASE) + ".json"
+    bruto = gcs.ler_objeto_texto(req.bucket, nome_json)
+    if bruto is None:
+        return DadosColetaVtResponse(encontrado=False)
+    try:
+        dados = json.loads(bruto)
+    except json.JSONDecodeError:
+        # JSON corrompido não derruba o arquivamento do PDF: vira "não encontrado" e fica no log.
+        logger.warning("JSON irmão do formulário de VT ilegível; seguindo só com o PDF.")
+        return DadosColetaVtResponse(encontrado=False)
+    if not isinstance(dados, dict):
+        return DadosColetaVtResponse(encontrado=False)
+    return DadosColetaVtResponse(encontrado=True, dados=dados)
