@@ -1,0 +1,14 @@
+# Firebase Cloud Functions (Python, 2nd gen) runtime dependencies.
+firebase-functions>=0.4.2
+firebase-admin>=6.5.0
+
+# Token verification (EdDSA / Ed25519). PyJWT drives the check; cryptography is the backend.
+PyJWT[crypto]>=2.8.0
+cryptography>=42.0.0
+
+# PDF composition (replica of the EA ai-service vt_pdf.py).
+reportlab>=4.0.0
+
+# Google Cloud Storage upload with Application Default Credentials (runtime service account).
+# The runtime SA writes to a bucket in its own project (native storage, no JSON key).
+google-cloud-storage>=2.16.0

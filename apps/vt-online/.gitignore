@@ -1,0 +1,20 @@
+# Firebase
+.firebase/
+firebase-debug.log
+*-debug.log
+.runtimeconfig.json
+
+# Python functions runtime
+functions/venv/
+functions/__pycache__/
+functions/**/__pycache__/
+functions/.pytest_cache/
+*.pyc
+
+# Env with real values (never commit the bucket name or anything sensitive)
+functions/.env
+functions/.env.*
+!functions/.env.example
+
+# OS
+.DS_Store
