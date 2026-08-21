@@ -10654,3 +10654,81 @@ dois eventos a 2 horas um do outro). Guarda dupla no UPDATE: id exato e `drive_u
 registro real foi tocado.
 
 **Não commitado de propósito:** `logosoulan.png`, que segue sem OST que o reivindique.
+
+---
+
+## 21/08/2026 (tarde) — Onda 2 do VT: reenvio com histórico, solicitações e o órfão tratável
+
+Fecha a frente do VT. Commit `1bea70d`, mais o `77b1958` que trouxe o app do Firebase para o
+repositório.
+
+### O que mudou de premissa
+
+O VT era um documento de uma vez só: reenviar SOBRESCREVIA o anterior, e quem já tinha sido admitido
+nem conseguia reenviar (a coleta recusava com `SEM_ADMISSAO`). A vida real desmentiu as duas coisas.
+O VT é justamente o dado que continua mudando DEPOIS da admissão, e cada mudança é uma **declaração
+nova** da pessoa, não um remendo na anterior: apagar a antiga apagava a prova do que ela declarou
+quando assinou o contrato.
+
+### As quatro decisões que valem registro
+
+**1. A régua do VT virou LOCAL, e a global não foi tocada.** `admissaoOperavelSql()` é a régua de
+todos os automáticos (scheduler, filas, Pandapé); afrouxá-la para resolver o VT afrouxaria tudo
+junto. A régua nova aceita `ADMISSAO_CONCLUIDA` e segue recusando declínio, rescisão e pausada.
+
+**2. A baixa na régua virou condicional, e é ela que impede a reabertura.** Aceitar o VT não reabre
+nada por si só; o perigo estava no efeito colateral: `darBaixaVt` chama `aplicarPosVeredito`, que
+recalcula sinalizador e progresso e, se a régua obrigatória fechar, **conclui a Auditoria sozinha,
+abre o gate do Cadastro e reavalia o farol**. Numa admissão encerrada isso mexeria em frente e farol
+de quem só queria corrigir o endereço. E não era teórico: o `FORMULARIO_VT` está em **70 réguas**
+(eram 0 na investigação anterior, alguém configurou no meio do caminho).
+
+**3. "Respondida" aponta para um FATO, não para um clique.** A solicitação se fecha quando a
+declaração chega, apontando para a versão que respondeu. Um booleano dependeria de alguém lembrar de
+marcar, e a primeira vez que ninguém marcasse a fila passaria a mentir para sempre.
+
+**4. A dispensa do sinal é PERSISTENTE.** A varredura reavalia os mesmos registros a cada ciclo, e
+uma dispensa em memória ou em sessão reapareceria no ciclo seguinte, sem ter resolvido nada. Painel
+que apita para sempre é painel que o time aprende a ignorar, inclusive quando aponta algo real.
+
+### Migrações
+
+`0076` multi-versão (cai o unique, entra o índice por admissão e data) · `0077` `solicitacoes_vt`
+(tabela e não coluna: a mesma pessoa é solicitada várias vezes) · `0078` URL por versão (casar versão
+com arquivo por proximidade de timestamp quebraria no dia em que dois envios caíssem no mesmo ciclo)
+· `0079` dispensa do sinal.
+
+### §A.6 no VT órfão
+
+Nome e CPF do órfão são **lidos do bucket na hora e nunca persistidos**. Guardá-los criaria cadastro
+de alguém que o sistema não conhece, que é o oposto da minimização. Mostrá-los numa tela autenticada
+de quem já opera o bucket não acrescenta exposição, e é o que transforma um digest inútil em algo
+tratável. A decisão anterior (só o prefixo do md5) estava certa para o alerta e errada para a ação.
+
+### Prova ponta a ponta
+
+Contra o app publicado: solicitação registrada, formulário reenviado no celular com valores
+diferentes, **duas versões no banco com a antiga preservada** (R$ 15,80 vigente, R$ 10,80 anterior),
+pedido fechado pela chegada da declaração, e **farol e as três frentes intactos**, com `baixa=não` no
+log. O "Resolver sinal" levou o alerta de 1 para 0 e ele **não voltou** depois de um ciclo completo.
+
+Gate: backend 1.491 testes, frontend 110, ai-service 148, função do Firebase 17.
+
+### BACKLOG registrado (não construir sem o diretor acionar)
+
+**1. Onda 3, cadastro de transporte, cartões e cidades.** Tela no menu gerencial para o time
+cadastrar as opções sem depender de código, refletindo no app do candidato. **Parada por decisão do
+diretor** (21/08): ele prioriza o A&S e volta depois. Pista já levantada que muda o desenho: o app do
+Firebase **já lê as tarifas de um arquivo estático próprio** (`public/tarifas.json`), separado do
+banco do EA, então a ponte provavelmente é a mesma que resolveu o VT (o EA publica, o app consome),
+e não uma chamada do app ao EA, que é inalcançável de fora.
+
+**2. Nome fixo do arquivo no bucket.** A função nomeia o objeto de forma determinística
+(`NOME CPF.pdf`), então **cada reenvio SOBRESCREVE o objeto anterior no bucket**. O histórico no
+Drive fica íntegro (cada versão é arquivada com o seu próprio arquivo e a sua URL), mas um registro
+antigo do ledger fica sem objeto correspondente, e o painel passa a mostrá-lo como "Arquivo Sumiu".
+Guardar cada envio separado no bucket é **OST futura**: exige mexer no nome do objeto na função, que
+é outro deploy.
+
+**3. Vermelho pré-existente, não tocado (§A.14):** `packages/shared-types/src/cpf.spec.ts` segue
+falhando, esperando três frentes quando o sistema tem quatro. Mesmo registro das entradas anteriores.
