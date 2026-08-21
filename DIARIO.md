@@ -10732,3 +10732,59 @@ Guardar cada envio separado no bucket é **OST futura**: exige mexer no nome do 
 
 **3. Vermelho pré-existente, não tocado (§A.14):** `packages/shared-types/src/cpf.spec.ts` segue
 falhando, esperando três frentes quando o sistema tem quatro. Mesmo registro das entradas anteriores.
+
+---
+
+## 21/08/2026 (fim do dia) — Filtros, ordenação e busca na Esteira
+
+Commit `4abe694`. Ajuste de tela pedido para a Integração que acabou consertando um filtro quebrado
+nas quatro abas.
+
+### O filtro de data não estava quebrado: ele filtrava outra coisa
+
+O sintoma relatado foi "o filtro de data de admissão não filtra nada". A causa: o filtro se chamava
+**"Período"** e filtrava por `criadoEm`, ou seja, **quando a admissão entrou no sistema**. Quem
+marcava um intervalo esperando a data em que a pessoa é admitida via um resultado que não batia com
+nada, e o rótulo genérico não permitia descobrir por quê.
+
+Agora são **três intervalos com nome próprio**: Auditoria e Cadastro filtram por Data de Admissão;
+Exame soma Data do Exame; Integração soma Data de Integração. Nas abas com dois, eles **afunilam**.
+O `criadoEm` saiu como opção de filtro.
+
+**Quem não tem data de admissão não some** (14 hoje, as de banco por definição): sem filtro aparece
+normal, e só fica de fora com o filtro ativo, que é o comportamento natural de um intervalo.
+
+### A lição de método: como se prova que um KPI não mudou
+
+A primeira comparação depois da mudança acusou diferença no Exame (`ASO_PENDENTE` de 6 para 12). Em
+vez de aceitar "deve ser o relógio", o teste que decidiu foi **guardar a alteração, recompilar com o
+código ANTIGO e medir de novo**: ele devolveu os mesmos números. A variação era do relógio
+(`ASO_PENDENTE` é derivado de "a hora do exame já passou", recalculado a cada requisição) somada aos
+schedulers que escrevem em segundo plano.
+
+**A prova que fecha o caso é o TOTAL, não a distribuição.** Filtro só REMOVE linha: se o novo tivesse
+vazado para o caso sem filtro, o total cairia. Os totais ficaram idênticos em todas as medições,
+inclusive na do código antigo: **11 / 33 / 15 / 20**. Fica como método para a próxima vez que uma
+mudança de filtro precisar ser provada inofensiva.
+
+### Filtros de coluna: lista, e tirada da FILA
+
+Os filtros de coluna nasceram como texto livre e o diretor derrubou na hora certa: digitar exigia
+acertar acento, caixa e espaço, e errar devolvia zero sem explicar. Viraram lista, e a lista sai da
+**fila atual**, não do catálogo. O tamanho do ganho: o cadastro tem **11 valores distintos** de tipo
+de contrato, boa parte lixo histórico da importação (`TEMP.`, `APREN.`, `ESTA. FOPAG`), e a lista
+oferece os **4** que existem na fila. O filtro de Cliente deixou de listar os 227 do cadastro, e a
+chamada que os buscava saiu junto, sem consumidor.
+
+**Exceção deliberada no Status:** o status de CONCLUSÃO nunca está na fila (concluído some dela por
+construção), e filtrar por ele é o caminho documentado para REVELAR os concluídos. Aplicar a regra ao
+pé da letra apagaria essa porta sem ninguém perceber, então ele fica sempre disponível.
+
+### Onde cada filtro vive, e por quê
+
+**Data vai ao backend** porque muda a fila de verdade. **Coluna filtra no cliente** porque só recorta
+o que já está na tela: os KPIs contam A FILA, não o recorte que está sendo olhado, e mandar os
+filtros de coluna ao backend faria os cards mudarem de número a cada escolha. A aba não é paginada,
+então o recorte no cliente é exato.
+
+Gate: backend 1.491 testes, frontend 110, typecheck e lint limpos.
