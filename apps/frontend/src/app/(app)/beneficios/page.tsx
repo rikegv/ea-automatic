@@ -42,6 +42,32 @@ import { RegrasClienteModal } from "@/components/beneficios/RegrasClienteModal";
  * existe no banco, dormente, esperando essa etapa.
  */
 
+/** Uma versão anterior do formulário, para o histórico do modal. */
+interface VersaoVt {
+  id: string;
+  enviadoEm: string;
+  totalDia: string;
+  formularioUrl: string | null;
+}
+
+/**
+ * O bloco de VT de uma linha: a declaração VIGENTE, quantas já houve, e as anteriores.
+ *
+ * `versoes` é 0 quando existe só o arquivo, sem os valores (todo formulário anterior ao JSON irmão),
+ * e é 1 para quem nunca reenviou. É esse número que a tela usa para decidir se vale desenhar o
+ * histórico: com uma versão só não há o que comparar.
+ */
+interface VtDaLinha {
+  optante: boolean | null;
+  totalIda: string | null;
+  totalVolta: string | null;
+  totalDia: string | null;
+  cartao: string | null;
+  formularioUrl: string | null;
+  versoes: number;
+  anteriores: VersaoVt[];
+}
+
 interface Linha {
   admissaoId: string;
   candidato: string;
@@ -70,14 +96,7 @@ interface Linha {
    * app externo, o ARQUIVO chega pelo arquivamento no Drive. `null` no bloco inteiro = não há nem um
    * nem outro, e a célula volta a dizer a frase de sempre.
    */
-  vt?: {
-    optante: boolean | null;
-    totalIda: string | null;
-    totalVolta: string | null;
-    totalDia: string | null;
-    cartao: string | null;
-    formularioUrl: string | null;
-  } | null;
+  vt?: VtDaLinha | null;
   outros: { nome: string; valor: string | null }[];
   /** O pacote com os ids do catálogo: é o que o modal de edição carrega e salva. */
   pacote: { beneficioId: string; nome: string; valor: string | null }[];
@@ -263,6 +282,83 @@ export default function BeneficiosPage() {
   const [selecao, setSelecao] = useState<Set<string>>(new Set());
   const [confirmarLote, setConfirmarLote] = useState<{ para: string; rotulo: string; n: number } | null>(null);
   const [agindo, setAgindo] = useState(false);
+  const [pedindoLote, setPedindoLote] = useState(false);
+  const [pedindoVt, setPedindoVt] = useState(false);
+  const [linkVt, setLinkVt] = useState<{ link: string; expiraEm: string } | null>(null);
+  const [linkCopiado, setLinkCopiado] = useState(false);
+
+  /**
+   * Pede um VT novo para UMA pessoa e devolve o link para a tela.
+   *
+   * REGISTRA a solicitação (quem pediu, quando), ao contrário do "Gerar link do VT" da ficha, que
+   * continua existindo e continua sem rastro. Os dois caminhos convivem por decisão do diretor, e a
+   * diferença é esta chamada.
+   */
+  async function solicitarVt(admissaoId: string) {
+    setPedindoVt(true);
+    setLinkCopiado(false);
+    try {
+      const r = await apiFetch<{ link: string; expiraEm: string }>(
+        `/vt-coleta/admissao/${admissaoId}/solicitar`,
+        { method: "POST", body: {} },
+      );
+      setLinkVt(r);
+    } catch (e) {
+      setFlash(e instanceof Error ? e.message : "Não foi possível gerar o link.");
+    } finally {
+      setPedindoVt(false);
+    }
+  }
+
+  /**
+   * Gera os links de VT das pessoas marcadas e BAIXA o relatório (nome, CPF, link, validade).
+   *
+   * O SISTEMA NÃO ENVIA o link (decisão do diretor): ele não tem canal com o candidato. O relatório
+   * é o insumo para o time disparar pelo canal que já usa, e cada linha gerada aqui REGISTRA a
+   * solicitação, ao contrário do "Gerar link do VT" da ficha, que segue sem rastro.
+   *
+   * CSV com separador PONTO E VÍRGULA e BOM: é o que o Excel em português abre em colunas no duplo
+   * clique. Com vírgula ele joga tudo numa coluna só, e sem BOM come os acentos.
+   */
+  async function baixarLinksVt() {
+    setPedindoLote(true);
+    try {
+      const r = await apiFetch<{
+        itens: { nome: string; cpf: string; link: string; expiraEm: string }[];
+        falhas: { nome: string | null; motivo: string }[];
+      }>("/vt-coleta/solicitar-lote", {
+        method: "POST",
+        body: { admissaoIds: [...selecao] },
+      });
+
+      const linhas = [
+        ["Nome", "CPF", "Link do formulário", "Link expira em"],
+        ...r.itens.map((i) => [i.nome, i.cpf, i.link, fmtDataHoraVt(i.expiraEm)]),
+      ];
+      // Aspas dobradas dentro do campo: nome com aspas quebraria a coluna.
+      const csv = linhas
+        .map((l) => l.map((c) => `"${String(c ?? "").replace(/"/g, '""')}"`).join(";"))
+        .join("\r\n");
+      const url = URL.createObjectURL(new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `links-vt-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+
+      setFlash(
+        r.falhas.length
+          ? `${r.itens.length} link(s) gerado(s). ${r.falhas.length} sem link: ${r.falhas
+              .map((f) => f.nome ?? "sem nome")
+              .join(", ")}.`
+          : `${r.itens.length} link(s) gerado(s) e baixados.`,
+      );
+    } catch (e) {
+      setFlash(e instanceof Error ? e.message : "Não foi possível gerar os links.");
+    } finally {
+      setPedindoLote(false);
+    }
+  }
   const [flash, setFlash] = useState<string | null>(null);
   /** Linha em edição: abre o modal do pacote. */
   const [editando, setEditando] = useState<Linha | null>(null);
@@ -539,6 +635,17 @@ export default function BeneficiosPage() {
           <span className="text-sm text-text">
             {selecao.size} selecionada(s) nesta página
           </span>
+          {/* PEDIDO EM LOTE (decisão do diretor): pedir para trinta pessoas seria abrir trinta
+              fichas. Gera os links e BAIXA o relatório com nome, CPF e link; o envio ao funcionário
+              continua sendo do time, pelo canal que ele já usa. */}
+          <Button
+            variant="secondary"
+            onClick={() => void baixarLinksVt()}
+            disabled={pedindoLote}
+            className="px-3 py-2 text-[13px]"
+          >
+            {pedindoLote ? "Gerando…" : "Baixar Links De VT"}
+          </Button>
           {(["AGUARDANDO_CALCULO", "BENEFICIO_CALCULADO"] as const).map((de) => {
             const passo = ACAO[de];
             if (!passo) return null;
@@ -914,14 +1021,19 @@ export default function BeneficiosPage() {
           a linha já trouxe. Uma célula clicada mostra aquele benefício; o "+N" mostra os demais. */}
       {detalhe && (
         <Modal
-          onClose={() => setDetalhe(null)}
+          onClose={() => {
+            setDetalhe(null);
+            // O link some com o modal: deixá-lo no estado faria o link de uma pessoa reaparecer
+            // dentro da ficha de outra, e alguém mandaria a credencial errada.
+            setLinkVt(null);
+          }}
           // O modal do VT é MAIS LARGO porque o conteúdo dele é uma linha só, e uma linha só que
           // quebra em três deixa de ser uma linha. Os demais seguem estreitos, como estavam.
-          className={detalhe.sigla === "VT" && detalhe.linha.vt ? "max-w-xl" : "max-w-sm"}
+          className={detalhe.sigla === "VT" ? "max-w-xl" : "max-w-sm"}
           ariaLabel={detalhe.sigla ? `Valor do ${detalhe.sigla}` : "Demais benefícios"}
         >
           <h2 className="mb-1 text-[17px] font-semibold text-text">
-            {detalhe.sigla === "VT" && detalhe.linha.vt
+            {detalhe.sigla === "VT"
               ? "Vale-Transporte"
               : detalhe.sigla
                 ? `Valor Do ${detalhe.sigla}`
@@ -929,8 +1041,60 @@ export default function BeneficiosPage() {
           </h2>
           <p className="mb-4 text-sm text-dim">{caixaAlta(detalhe.linha.candidato)}</p>
 
-          {detalhe.sigla === "VT" && detalhe.linha.vt ? (
-            <ResumoVt vt={detalhe.linha.vt} />
+          {detalhe.sigla === "VT" ? (
+            <div className="flex flex-col gap-4">
+              {detalhe.linha.vt ? (
+                <ResumoVt vt={detalhe.linha.vt} />
+              ) : (
+                <p className="text-sm text-dim">
+                  Esta pessoa ainda não enviou o formulário de vale-transporte.
+                </p>
+              )}
+
+              {/* SOLICITAR NOVO VT. Vale para admissão em andamento e concluída: o VT continua
+                  mudando depois da admissão (mudou de endereço, mudou a linha, a passagem subiu). */}
+              <div className="border-t border-[var(--border)] pt-3">
+                <Button
+                  variant="secondary"
+                  onClick={() => void solicitarVt(detalhe.linha.admissaoId)}
+                  disabled={pedindoVt}
+                  className="px-3 py-2 text-[13px]"
+                >
+                  {pedindoVt ? "Gerando…" : "Solicitar Novo VT"}
+                </Button>
+                <p className="mt-2 text-[12px] text-dim">
+                  Gera um link para a pessoa preencher de novo. O envio é seu: o sistema não manda o
+                  link, ele fica registrado em seu nome.
+                </p>
+
+                {linkVt && (
+                  <div className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-3">
+                    <div className="flex items-center gap-2">
+                      <input
+                        readOnly
+                        value={linkVt.link}
+                        className="min-w-0 flex-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-[12.5px] text-text"
+                        aria-label="Link do formulário de VT"
+                      />
+                      <button
+                        type="button"
+                        className="flex-none rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-[12.5px] font-semibold text-text hover:bg-[var(--surface-2)]"
+                        onClick={() => {
+                          void navigator.clipboard.writeText(linkVt.link).then(() => {
+                            setLinkCopiado(true);
+                          });
+                        }}
+                      >
+                        {linkCopiado ? "Copiado" : "Copiar"}
+                      </button>
+                    </div>
+                    <p className="mt-2 text-[12px] text-dim">
+                      Expira em {fmtDataHoraVt(linkVt.expiraEm)}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
           ) : detalhe.sigla ? (
             <ValorDoBeneficio sigla={detalhe.sigla} valor={detalhe.linha.valores?.[detalhe.sigla] ?? null} />
           ) : (
@@ -990,18 +1154,7 @@ export default function BeneficiosPage() {
  *
  * NÃO-OPTANTE tem linha própria: ele recusou o vale, e "Ida R$ 0,00" leria como erro de cadastro.
  */
-export function ResumoVt({
-  vt,
-}: {
-  vt: {
-    optante: boolean | null;
-    totalIda: string | null;
-    totalVolta: string | null;
-    totalDia: string | null;
-    cartao: string | null;
-    formularioUrl: string | null;
-  };
-}) {
+export function ResumoVt({ vt }: { vt: VtDaLinha }) {
   const temValores = vt.optante !== null;
 
   return (
@@ -1046,8 +1199,60 @@ export function ResumoVt({
           O arquivo do formulário ainda não foi arquivado no Drive.
         </p>
       )}
+
+      {/* HISTÓRICO. Só aparece quando existe o que comparar: com uma declaração só, um bloco
+          "Envios Anteriores" vazio faria a tela prometer um histórico que não há. */}
+      {vt.anteriores.length > 0 ? (
+        <div className="border-t border-[var(--border)] pt-3">
+          <div className="mb-2 flex items-baseline justify-between gap-3">
+            <span className="text-[11px] uppercase tracking-wide text-faint">Envios Anteriores</span>
+            <span className="text-[12px] text-dim">
+              {vt.versoes} envios no total
+            </span>
+          </div>
+          <ul className="flex flex-col gap-1.5">
+            {vt.anteriores.map((v) => (
+              <li
+                key={v.id}
+                className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-[13px]"
+              >
+                <span className="text-dim">{fmtDataHoraVt(v.enviadoEm)}</span>
+                <span className="flex items-baseline gap-3">
+                  <span className="tabular-nums text-text">{fmtValor(v.totalDia) ?? "não informado"}</span>
+                  {/* Cada versão abre o SEU documento, não o mais recente: é a declaração daquela
+                      data que a pessoa assinou. */}
+                  {v.formularioUrl ? (
+                    <a
+                      href={v.formularioUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 font-semibold text-accent hover:underline"
+                    >
+                      <GoogleDriveLogo className="h-3.5 w-3.5" />
+                      Ver
+                    </a>
+                  ) : (
+                    <span className="text-faint">sem arquivo</span>
+                  )}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
     </div>
   );
+}
+
+/** Data e hora do envio, formatada por partes até o dia para não sofrer fuso no `date` puro. */
+function fmtDataHoraVt(iso: string): string {
+  if (!iso) return "não informado";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "não informado";
+  return `${d.toLocaleDateString("pt-BR")} às ${d.toLocaleTimeString("pt-BR", {
+    hour: "2-digit",
+    minute: "2-digit",
+  })}`;
 }
 
 /** Uma parcela do resumo. `null` vira "não informado", nunca R$ 0,00 (§A.11). */

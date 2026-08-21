@@ -19,6 +19,8 @@ import { ResumoVt } from "./page";
  */
 
 const BASE = {
+  versoes: 1,
+  anteriores: [],
   optante: true,
   totalIda: "4.70",
   totalVolta: "4.70",
@@ -66,6 +68,8 @@ describe("ResumoVt", () => {
     render(
       <ResumoVt
         vt={{
+          versoes: 0,
+          anteriores: [],
           optante: null,
           totalIda: null,
           totalVolta: null,
@@ -79,6 +83,36 @@ describe("ResumoVt", () => {
     expect(screen.queryByText(/R\$/)).toBeNull();
     // O arquivo continua alcançável: é o que salva o acervo antigo, que é só PDF.
     expect(screen.getByRole("link", { name: /ver formulário/i })).toBeTruthy();
+  });
+
+  it("com UMA versão só, não desenha histórico: não há o que comparar", () => {
+    render(<ResumoVt vt={BASE} />);
+    expect(screen.queryByText(/envios anteriores/i)).toBeNull();
+  });
+
+  it("com REENVIO, lista as versões anteriores, cada uma com a SUA data, valor e documento", () => {
+    render(
+      <ResumoVt
+        vt={{
+          ...BASE,
+          versoes: 3,
+          anteriores: [
+            { id: "v2", enviadoEm: "2026-07-10T14:30:00.000Z", totalDia: "8.80", formularioUrl: "https://drive/v2" },
+            { id: "v1", enviadoEm: "2026-03-02T09:00:00.000Z", totalDia: "7.60", formularioUrl: null },
+          ],
+        }}
+      />,
+    );
+    expect(screen.getByText(/envios anteriores/i)).toBeTruthy();
+    expect(screen.getByText(/3 envios no total/i)).toBeTruthy();
+    // Cada versão leva o SEU valor, e não o da vigente.
+    expect(screen.getByText("R$ 8,80")).toBeTruthy();
+    expect(screen.getByText("R$ 7,60")).toBeTruthy();
+    // A versão com arquivo abre o dela; a sem arquivo não oferece link morto.
+    const vers = screen.getAllByRole("link", { name: /^ver$/i }) as HTMLAnchorElement[];
+    expect(vers).toHaveLength(1);
+    expect(vers[0].href).toBe("https://drive/v2");
+    expect(screen.getByText(/sem arquivo/i)).toBeTruthy();
   });
 
   it("sem arquivo: diz que ainda não foi arquivado, e não oferece botão morto", () => {

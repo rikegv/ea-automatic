@@ -1,14 +1,13 @@
 import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Worker, type Job } from "bullmq";
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import type IORedis from "ioredis";
 import { AiClientService, type ItemColetaVt } from "../ai/ai-client.service";
 import { AuditoriaService } from "../auditoria/auditoria.service";
 import type { AuthUser } from "../auth/auth.types";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
-import { admissaoOperavelSql } from "../db/admissao-filtros";
 import { admissaoOperavel } from "../domain/admissao";
 import {
   admissoes,
@@ -38,11 +37,21 @@ import {
   type ScanAdmissaoJobData,
 } from "./vt-coleta.queue";
 import { VtColetaSchedulerService } from "./vt-coleta-scheduler.service";
+import { SolicitacaoVtService } from "./solicitacao-vt.service";
 
 /** Código do tipo de documento do formulário de VT (§A.17). */
 const CODIGO_VT = "FORMULARIO_VT";
 
 /** Origem da fonte da coleta, parte da chave de idempotência do ledger (par com o md5). */
+/**
+ * Faróis que ACEITAM um formulário de VT (régua local desta frente, OST do reenvio).
+ *
+ * Inclui `ADMISSAO_CONCLUIDA` porque o VT continua mudando depois da admissão. NÃO inclui `DECLINOU`
+ * nem `RESCISAO`: quem encerrou não preenche VT (§A.16). É a mesma lista que a identificação do
+ * candidato já usava no `/vt`, então os dois lados do formulário passam a concordar.
+ */
+const FAROIS_ACEITOS_VT = ["EM_ADMISSAO", "BANCO_AGUARDAR", "ADMISSAO_CONCLUIDA"] as const;
+
 const ORIGEM = "GCS";
 
 /**
@@ -74,6 +83,8 @@ interface AdmissaoMatch {
   tipoContrato: string | null;
   candidatoNome: string;
   clienteOperacao: string | null;
+  /** Farol no momento do casamento. Decide a BAIXA na régua, nunca o casamento em si. */
+  farolGlobal: string;
 }
 
 /** Resumo devolvido pela varredura direcionada (o "buscar VT" da ficha). */
@@ -110,6 +121,7 @@ export class VtColetaService implements OnModuleInit, OnModuleDestroy {
     private readonly ai: AiClientService,
     private readonly auditoria: AuditoriaService,
     private readonly scheduler: VtColetaSchedulerService,
+    private readonly solicitacao: SolicitacaoVtService,
   ) {}
 
   // ── Worker lifecycle (consumidor) ─────────────────────────────────────────
@@ -297,15 +309,35 @@ export class VtColetaService implements OnModuleInit, OnModuleDestroy {
       ],
     });
 
+    // A URL do arquivo que acabou de subir, calculada UMA vez: ela serve a dois destinos, a VERSÃO
+    // do formulário (o documento da declaração) e o ledger (o registro do arquivamento).
+    const urlDoArquivo = urlDoArquivoNoDrive(arquivamento.arquivosIds?.[0]);
+
     // CAMPOS ESTRUTURADOS, do JSON irmão. Depois do arquivamento e NUNCA antes: o PDF no Drive é a
     // entrega que não pode falhar, e nada aqui pode impedi-la.
-    await this.gravarFormularioColetado(adm.id, item.id);
+    await this.gravarFormularioColetado(adm.id, item.id, urlDoArquivo);
 
     // Baixa SÓ se o VT está na régua (cliente+cargo) da admissão. Fora da régua: apenas arquivado,
     // sem criar pendência/documento (decisão do diretor).
     let vtNaRegua = false;
     let deuBaixa = false;
-    if (tipoVt && (await this.vtEstaNaRegua(adm.codCliente, adm.cargoId, tipoVt.id))) {
+    // ADMISSÃO CONCLUÍDA ARQUIVA E GRAVA, MAS NÃO DÁ BAIXA NA RÉGUA (decisão do diretor, OST do
+    // reenvio). Este `if` é o que impede que aceitar o VT reabra a admissão.
+    //
+    // O RISCO CONCRETO, e ele não é teórico: `darBaixaVt` grava o documento como ENTREGUE e chama
+    // `aplicarPosVeredito`, que recalcula o sinalizador e o progresso da régua e, se a régua
+    // obrigatória fechar, CONCLUI A AUDITORIA sozinha, abre o gate do Cadastro e reavalia o farol.
+    // Numa admissão já encerrada isso mexeria em frente e farol de quem só queria corrigir o
+    // endereço. O `FORMULARIO_VT` está hoje em 70 réguas, então o gatilho está armado de verdade.
+    //
+    // Admissão VIVA segue dando baixa como sempre deu: ali a régua ainda está em curso e fechar o
+    // documento é exatamente o que se espera.
+    const admissaoViva = adm.farolGlobal !== "ADMISSAO_CONCLUIDA";
+    if (
+      admissaoViva &&
+      tipoVt &&
+      (await this.vtEstaNaRegua(adm.codCliente, adm.cargoId, tipoVt.id))
+    ) {
       vtNaRegua = true;
       await this.darBaixaVt(adm.id, tipoVt.id);
       deuBaixa = true;
@@ -319,7 +351,7 @@ export class VtColetaService implements OnModuleInit, OnModuleDestroy {
       // LINK DO ARQUIVO, e não o da pasta: é ele que faz o botão da tela de Benefícios abrir o
       // formulário. `undefined` quando o arquivamento não criou nada agora (o conteúdo já estava no
       // destino), e aí o upsert PRESERVA a URL que a primeira passada gravou.
-      driveUrl: urlDoArquivoNoDrive(arquivamento.arquivosIds?.[0]),
+      driveUrl: urlDoArquivo,
     });
     this.logger.log(
       `Coleta de VT: arquivo casado e arquivado (admissão ${adm.id}, baixa=${deuBaixa ? "sim" : "não"}).`,
@@ -369,12 +401,32 @@ export class VtColetaService implements OnModuleInit, OnModuleDestroy {
         tipoContrato: admissoes.tipoContrato,
         candidatoNome: candidatos.nome,
         clienteOperacao: clientes.nomeOperacao,
+        farolGlobal: admissoes.farolGlobal,
       })
       .from(admissoes)
       .innerJoin(candidatos, eq(candidatos.cpf, admissoes.candidatoCpf))
       .leftJoin(clientes, eq(clientes.codCliente, admissoes.codCliente))
-      // PAUSA (ponto 2 dos 6): admissão pausada sai do casamento da coleta de VT.
-      .where(and(eq(admissoes.candidatoCpf, cpf), admissaoOperavelSql()));
+      // RÉGUA PRÓPRIA DO VT, e não a `admissaoOperavelSql()` global (OST do reenvio).
+      //
+      // O QUE MUDOU E POR QUÊ: a régua global exige farol VIVO, e por isso um VT reenviado por quem
+      // já foi admitido voltava como SEM_ADMISSAO. Mas o VT é justamente o dado que continua mudando
+      // DEPOIS da admissão: muda o endereço, muda a linha, a passagem sobe. Recusar aquele envio era
+      // recusar a correção de um benefício que a pessoa recebe todo mês.
+      //
+      // A GLOBAL NÃO FOI TOCADA de propósito: ela é a régua de todos os automáticos (scheduler,
+      // filas, Pandapé), e afrouxá-la para resolver o VT afrouxaria tudo junto. Aqui a régua é local:
+      // aceita EM_ADMISSAO, BANCO_AGUARDAR e ADMISSAO_CONCLUIDA, e segue recusando DECLINOU e
+      // RESCISAO (quem declinou não preenche VT, §A.16) e admissão PAUSADA.
+      //
+      // Aceitar não é reabrir: o que protege a admissão concluída é a baixa condicional em
+      // `processarMatch`. Ver o comentário de lá, que é onde o risco real mora.
+      .where(
+        and(
+          eq(admissoes.candidatoCpf, cpf),
+          inArray(admissoes.farolGlobal, [...FAROIS_ACEITOS_VT]),
+          isNull(admissoes.pausadaEm),
+        ),
+      );
     return rows.map((r) => ({
       id: r.id,
       codCliente: r.codCliente,
@@ -382,6 +434,7 @@ export class VtColetaService implements OnModuleInit, OnModuleDestroy {
       tipoContrato: r.tipoContrato,
       candidatoNome: r.candidatoNome,
       clienteOperacao: r.clienteOperacao,
+      farolGlobal: r.farolGlobal,
     }));
   }
 
@@ -489,15 +542,19 @@ export class VtColetaService implements OnModuleInit, OnModuleDestroy {
    * (todo o acervo anterior a esta frente), corrompido ou incompleto vira uma linha de log e o ciclo
    * segue. Foi assim que a frente pôde entrar sem parar a coleta que já rodava.
    *
-   * SUBSTITUI O PACOTE INTEIRO, e não faz merge: `formularios_vt` é único por admissão, e o reenvio
-   * do formulário é uma DECLARAÇÃO NOVA do candidato, não um remendo na anterior. As conduções
-   * antigas são apagadas antes das novas entrarem, senão o itinerário viraria a soma de duas
-   * declarações e o total deixaria de bater com as linhas.
+   * CADA ENVIO É UMA VERSÃO NOVA, e nada é sobrescrito (OST do reenvio). O reenvio do formulário é
+   * uma DECLARAÇÃO NOVA do candidato, não um remendo na anterior: ele mudou de endereço, de linha,
+   * ou a passagem subiu. O VIGENTE é o mais recente e os anteriores ficam consultáveis, cada um com
+   * as suas conduções e o seu PDF.
    *
    * §A.6: nada aqui é logado além do id da admissão (que não é dado pessoal). Endereço e itinerário
    * vão para o banco, que é o destino legítimo deles, e nunca para o log.
    */
-  private async gravarFormularioColetado(admissaoId: string, objetoPdf: string): Promise<void> {
+  private async gravarFormularioColetado(
+    admissaoId: string,
+    objetoPdf: string,
+    driveUrl: string | undefined,
+  ): Promise<void> {
     try {
       const { encontrado, dados } = await this.ai.dadosColetaVt(this.bucketColetivo(), objetoPdf);
       if (!encontrado) return;
@@ -511,7 +568,11 @@ export class VtColetaService implements OnModuleInit, OnModuleDestroy {
         return;
       }
 
-      await this.db.transaction(async (tx) => {
+      const idDaVersao = await this.db.transaction(async (tx) => {
+        // UMA VERSÃO NOVA POR ENVIO (OST do reenvio). Aqui havia um `onConflictDoUpdate` no
+        // `admissao_id`, que sobrescrevia o formulário anterior porque a coluna era UNIQUE. O unique
+        // caiu (migração 0076) e cada envio passa a ser a sua própria linha, com as suas conduções e
+        // o seu PDF. As conduções não precisam mais ser apagadas antes: elas são filhas DESTA versão.
         const [linha] = await tx
           .insert(formulariosVt)
           .values({
@@ -528,30 +589,12 @@ export class VtColetaService implements OnModuleInit, OnModuleDestroy {
             totalVolta: form.totalVolta,
             totalDia: form.totalDia,
             cienteEm: form.cienteEm,
-          })
-          .onConflictDoUpdate({
-            target: formulariosVt.admissaoId,
-            set: {
-              optante: form.optante,
-              cep: form.cep,
-              logradouro: form.logradouro,
-              numero: form.numero,
-              complemento: form.complemento,
-              bairro: form.bairro,
-              cidade: form.cidade,
-              uf: form.uf,
-              totalIda: form.totalIda,
-              totalVolta: form.totalVolta,
-              totalDia: form.totalDia,
-              cienteEm: form.cienteEm,
-              atualizadoEm: new Date(),
-            },
+            // O PDF DESTA versão. `undefined` quando nada subiu agora (o conteúdo já estava no
+            // destino), e aí a versão nasce sem link em vez de herdar o de outra declaração.
+            driveUrl: driveUrl ?? null,
           })
           .returning({ id: formulariosVt.id });
 
-        await tx
-          .delete(formularioVtConducoes)
-          .where(eq(formularioVtConducoes.formularioId, linha.id));
         if (form.conducoes.length > 0) {
           await tx.insert(formularioVtConducoes).values(
             form.conducoes.map((c) => ({
@@ -566,7 +609,13 @@ export class VtColetaService implements OnModuleInit, OnModuleDestroy {
             })),
           );
         }
+        return linha.id;
       });
+
+      // O PEDIDO QUE ESPERAVA ESTA RESPOSTA se fecha aqui, e não por clique de ninguém: a chegada da
+      // declaração É a resposta. Fora da transação de propósito, porque é trilha e não pode fazer a
+      // gravação do formulário voltar atrás.
+      await this.solicitacao.marcarRespondida(admissaoId, idDaVersao);
 
       this.logger.log(
         `Coleta de VT: campos estruturados gravados (admissão ${admissaoId}, ` +
@@ -651,7 +700,8 @@ export class VtColetaService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** Nome do bucket coletivo do GCS (env). Vazio/ausente → integração inerte. */
-  private bucketColetivo(): string {
+  /** Público para o serviço de VT órfão, que precisa do mesmo bucket para agir sobre o arquivo. */
+  bucketColetivo(): string {
     return (this.config.get<string>("VT_COLETA_GCS_BUCKET") ?? "").trim();
   }
 }

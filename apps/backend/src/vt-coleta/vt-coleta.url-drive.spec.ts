@@ -41,6 +41,9 @@ function montar(arquivosIds: string[] | undefined) {
       marcarInicioCiclo: vi.fn().mockResolvedValue(undefined),
       registrarCiclo: vi.fn().mockResolvedValue(undefined),
     } as never,
+    // Serviço de SOLICITAÇÃO: duplo mínimo. Fechar o pedido é trilha, não a entrega, então o que
+    // importa nestes testes é que a gravação do formulário não dependa dele para acontecer.
+    { marcarRespondida: vi.fn().mockResolvedValue(undefined) } as never,
   );
   const upsertLedger = vi.spyOn(svc, "upsertLedger").mockResolvedValue(undefined);
   vi.spyOn(svc as never, "carregarTipoVt" as never).mockResolvedValue({

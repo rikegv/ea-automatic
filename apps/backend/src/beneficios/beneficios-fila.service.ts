@@ -52,6 +52,30 @@ import { rotuloCartao } from "../domain/formulario-vt-coletado";
  * O bloco de VT de UMA linha. Todos os campos são nuláveis porque as duas metades (os valores e o
  * arquivo) chegam por caminhos independentes, e uma existe sem a outra.
  */
+/**
+ * Data para o front, tolerante ao que vier.
+ *
+ * O driver devolve `Date` para `timestamptz`, mas nem toda origem devolve: um harness de teste, uma
+ * consulta crua ou um driver diferente entregam string, e um `.toISOString()` direto quebra a
+ * listagem INTEIRA da tela por causa de um campo de histórico. Uma data ausente vira string vazia e
+ * o front simplesmente não desenha aquela linha do histórico.
+ */
+function isoDe(v: unknown): string {
+  if (v instanceof Date) return v.toISOString();
+  if (typeof v === "string" || typeof v === "number") {
+    const d = new Date(v);
+    return Number.isNaN(d.getTime()) ? "" : d.toISOString();
+  }
+  return "";
+}
+
+interface VersaoVt {
+  id: string;
+  enviadoEm: string;
+  totalDia: string;
+  formularioUrl: string | null;
+}
+
 interface VtDaLinha {
   optante: boolean | null;
   totalIda: string | null;
@@ -59,6 +83,15 @@ interface VtDaLinha {
   totalDia: string | null;
   cartao: string | null;
   formularioUrl: string | null;
+  /** Quantas declarações a pessoa já fez. 1 = nunca reenviou; 0 = só existe arquivo, sem valores. */
+  versoes: number;
+  /**
+   * As versões ANTERIORES à vigente, da mais nova para a mais velha, no máximo 5.
+   *
+   * A vigente NÃO entra aqui de propósito: ela já é a linha de cima do modal, e repeti-la faria a
+   * mesma declaração aparecer duas vezes na mesma tela, que é a leitura errada de "o que mudou".
+   */
+  anteriores: VersaoVt[];
 }
 
 @Injectable()
@@ -579,7 +612,7 @@ export class BeneficiosFilaService {
     const saida = new Map<string, VtDaLinha>();
     if (ids.length === 0) return saida;
 
-    const [formularios, arquivos] = await Promise.all([
+    const [versoes, arquivos] = await Promise.all([
       this.db
         .select({
           id: formulariosVt.id,
@@ -588,9 +621,14 @@ export class BeneficiosFilaService {
           totalIda: formulariosVt.totalIda,
           totalVolta: formulariosVt.totalVolta,
           totalDia: formulariosVt.totalDia,
+          driveUrl: formulariosVt.driveUrl,
+          criadoEm: formulariosVt.criadoEm,
         })
         .from(formulariosVt)
-        .where(inArray(formulariosVt.admissaoId, ids)),
+        .where(inArray(formulariosVt.admissaoId, ids))
+        // DA MAIS NOVA PARA A MAIS VELHA, e a ordem é o contrato desta função: a primeira de cada
+        // admissão É a vigente, e as seguintes já saem na ordem em que o histórico as mostra.
+        .orderBy(desc(formulariosVt.criadoEm)),
       this.db
         .select({
           admissaoId: vtColeta.admissaoId,
@@ -601,7 +639,14 @@ export class BeneficiosFilaService {
         .orderBy(asc(vtColeta.arquivadoEm)),
     ]);
 
-    const conducoes = formularios.length
+    // Conduções SÓ das vigentes: o cartão exibido é o da declaração que vale hoje, e puxar as
+    // conduções de todas as versões carregaria o histórico inteiro de itinerário para mostrar um
+    // rótulo. As versões anteriores aparecem por data e total, que é o que a tela precisa delas.
+    const vigentePorAdmissao = new Map<string, (typeof versoes)[number]>();
+    for (const v of versoes) if (!vigentePorAdmissao.has(v.admissaoId)) vigentePorAdmissao.set(v.admissaoId, v);
+    const idsVigentes = [...vigentePorAdmissao.values()].map((v) => v.id);
+
+    const conducoes = idsVigentes.length
       ? await this.db
           .select({
             formularioId: formularioVtConducoes.formularioId,
@@ -609,31 +654,37 @@ export class BeneficiosFilaService {
             cartaoOutro: formularioVtConducoes.cartaoOutro,
           })
           .from(formularioVtConducoes)
-          .where(
-            inArray(
-              formularioVtConducoes.formularioId,
-              formularios.map((f) => f.id),
-            ),
-          )
+          .where(inArray(formularioVtConducoes.formularioId, idsVigentes))
       : [];
 
-    for (const f of formularios) {
-      saida.set(f.admissaoId, {
-        optante: f.optante,
-        totalIda: f.totalIda,
-        totalVolta: f.totalVolta,
-        totalDia: f.totalDia,
-        cartao: rotuloCartao(conducoes.filter((c) => c.formularioId === f.id) as never),
-        formularioUrl: null,
+    for (const [admissaoId, vigente] of vigentePorAdmissao) {
+      const todas = versoes.filter((v) => v.admissaoId === admissaoId);
+      saida.set(admissaoId, {
+        optante: vigente.optante,
+        totalIda: vigente.totalIda,
+        totalVolta: vigente.totalVolta,
+        totalDia: vigente.totalDia,
+        cartao: rotuloCartao(conducoes.filter((c) => c.formularioId === vigente.id) as never),
+        formularioUrl: vigente.driveUrl,
+        versoes: todas.length,
+        // As 5 ANTERIORES à vigente (por isso o slice começa em 1).
+        anteriores: todas.slice(1, 6).map((v) => ({
+          id: v.id,
+          enviadoEm: isoDe(v.criadoEm),
+          totalDia: v.totalDia,
+          formularioUrl: v.driveUrl,
+        })),
       });
     }
-    // Depois dos formulários: a ordenação por data CRESCENTE faz a coleta mais recente sobrescrever
-    // as anteriores, que é o link que interessa.
+
+    // FALLBACK do link, e só do link. Vale para quem tem ARQUIVO e não tem versão com URL: todo
+    // formulário arquivado antes da coluna por versão existir, e o acervo que chegou por outro
+    // caminho. A ordenação crescente faz a coleta mais recente sobrescrever as anteriores.
     for (const a of arquivos) {
       if (!a.admissaoId || !a.driveUrl) continue;
       const atual = saida.get(a.admissaoId);
       if (atual) {
-        atual.formularioUrl = a.driveUrl;
+        if (!atual.formularioUrl) atual.formularioUrl = a.driveUrl;
       } else {
         saida.set(a.admissaoId, {
           optante: null,
@@ -642,6 +693,8 @@ export class BeneficiosFilaService {
           totalDia: null,
           cartao: null,
           formularioUrl: a.driveUrl,
+          versoes: 0,
+          anteriores: [],
         });
       }
     }

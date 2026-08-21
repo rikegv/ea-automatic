@@ -141,6 +141,28 @@ class BaixarColetaVtResponse(_CamelModel):
     staging_path: str
 
 
+class OrfaosColetaVtRequest(_CamelModel):
+    bucket: str
+
+
+class ItemOrfaoVt(_CamelModel):
+    """Quem é o dono de um formulário que não casou. Leitura TRANSIENTE, nunca persistida (§A.6)."""
+
+    # Nome do OBJETO no bucket. O backend já o recebe em `/listar` (é o handle para baixar o
+    # arquivo), e sem ele o casamento manual não teria sobre o que agir.
+    id: str
+    md5: str | None = None
+    cpf: str | None = None
+    # Nome que a PESSOA preencheu no app, extraído do nome do objeto. É o que permite ao time
+    # reconhecer de quem é o formulário quando o CPF não casa com ninguém.
+    nome: str | None = None
+    criado_em: str | None = None
+
+
+class OrfaosColetaVtResponse(_CamelModel):
+    arquivos: list[ItemOrfaoVt] = []
+
+
 class DadosColetaVtRequest(_CamelModel):
     bucket: str
     # Nome do objeto do PDF (o `id` de /coleta-vt/listar). O JSON irmão é derivado DAQUI, no

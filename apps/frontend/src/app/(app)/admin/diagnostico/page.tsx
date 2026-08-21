@@ -7,6 +7,7 @@ import { useAuth } from "@/lib/auth-context";
 import { PageHead } from "@/components/ui/PageHead";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Button } from "@/components/ui/Button";
+import { PainelVtOrfaos } from "@/components/admin/PainelVtOrfaos";
 import { StatusPill } from "@/components/ui/StatusPill";
 import { Modal } from "@/components/ui/Modal";
 import { Icon, type IconName } from "@/components/ui/Icon";
@@ -568,7 +569,12 @@ export default function DiagnosticoPage() {
             </div>
             <StatusPill tone={sinalAberto.total > 0 ? "wn" : "ok"} label={String(sinalAberto.total)} />
           </div>
-          {sinalAberto.total === 0 ? (
+          {/* O VT ÓRFÃO tem painel PRÓPRIO: a lista genérica mostra um digest e um rótulo, e com isso
+              ninguém consegue agir. Ali o time vê de quem é o formulário, por que não casou, e casa
+              à mão quando o automático não resolve. */}
+          {sinalAberto.chave === "drive-vt-sem-casar" ? (
+            <PainelVtOrfaos />
+          ) : sinalAberto.total === 0 ? (
             <p className="py-6 text-center text-[13px] text-faint">Nenhuma ocorrência. Estado saudável.</p>
           ) : (
             <div className="max-h-[55vh] space-y-1.5 overflow-y-auto pr-1">
