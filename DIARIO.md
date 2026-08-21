@@ -10558,3 +10558,99 @@ taxas de preenchimento e **rótulos** de campo.
 Uma varredura que puxaria tabelas financeiras inteiras foi **interrompida por decisão própria**: era
 leitura permitida, mas carga desnecessária sobre o ERP de produção de um terceiro, sem ganho para o
 parecer.
+
+---
+
+## 21/08/2026 — Frente do VT fechada: o formulário do candidato vira dado no EA
+
+Três frentes commitadas hoje, mais uma que a investigação derrubou antes de virar código.
+
+### 1. Data de nascimento divergente (commit `d3b658d`)
+
+Chegou como "corrijam a data errada" e terminou **sem um único registro alterado no
+banco**. A ficha (olhinho) mostrava um dia a MENOS que a edição (lápis) para a mesma pessoa, e a
+conclusão do diretor era que o dado estava errado.
+
+**A raiz era o formatador.** A ficha usava `new Date("1995-05-31")`, que o JavaScript parseia como
+meia-noite UTC; renderizado em UTC-3, volta um dia. A edição mostrava a string crua, e por isso
+sempre esteve certa. A prova mais forte de qual das duas mentia é que a ficha era a **única fora do
+padrão**: Sala de Espera, Liberação e o livreto de vínculo já formatavam por partes, e o próprio
+arquivo da ficha já tinha o formatador correto, usado para data de admissão e exame.
+
+Tracei os três caminhos de ESCRITA e nenhum desloca: carga lê CSV como texto puro, Pandapé fatia a
+string, entrada manual usa `input type="date"`. E a fonte é única: o cruzamento entre `sala_espera` e
+`candidatos` acusa **zero** divergência.
+
+**Por que não era cosmético:** o VT identifica o candidato por CPF mais data de nascimento e compara
+string com string. Uma ficha que mostra um dia a menos faz o RH ditar o dia errado e o candidato
+tomar "Dados não encontrados" sem que nada pareça quebrado. Testado ao vivo: com a data guardada, a
+identificação devolve 201 e entra.
+
+Atingia **todos os 2.459 candidatos com data de nascimento**. Teste de regressão com o fuso fixado em
+America/Sao_Paulo de propósito: em UTC o código velho passaria e o teste daria falsa cobertura.
+
+### 2. A pasta do Drive que "sumiu" (nenhum commit, decisão do diretor)
+
+Pedido: renomear a subpasta BENEFÍCIOS, "onde os formulários ficam ATÉ serem transferidos pra pasta
+do funcionário". **O Drive real contradisse a premissa.** Confirmei nos arquivos: a pasta BENEFÍCIOS
+fica DENTRO da pasta do próprio funcionário, que é o destino final. Não existe transferência
+pendente, e direto embaixo de "Temporário" só há pastas de pessoas.
+
+Renomear teria três problemas: não é uma pasta e sim uma por funcionário; arrastaria o Cartão de
+Transporte junto; e a busca de pasta casa POR NOME, então as BENEFÍCIOS existentes deixariam de ser
+encontradas e o sistema criaria uma segunda ao lado, separando os arquivos. O diretor escolheu **não
+renomear e resolver na tela**, que é o que a frente 3 entrega.
+
+### 3. A frente do VT (commit `aa242de`)
+
+O app externo gerava o PDF, jogava no bucket e **descartava todo o resto**: o EA recebia um arquivo,
+nenhum número, e nem guardava onde o arquivo tinha ido parar.
+
+**O transporte escolhido, e por quê:** a função roda no Firebase e o EA é loopback atrás da VPN,
+inalcançável de fora (foi o motivo do pivô para o bucket quando a frente nasceu). Em vez de abrir
+porta de entrada no EA, a função passou a gravar um **JSON irmão do PDF no mesmo bucket**, e a
+coleta, que já varre esse bucket, lê os dois. Nenhuma porta nova.
+
+Entrou: o `subir_arquivo` devolvendo o id do arquivo (que já era pedido ao Google e jogado fora);
+`/coleta-vt/dados`; a migração `0075` com `vt_coleta.drive_url`; a função pura
+`interpretarFormularioVt`; e a coluna VT da tela de Benefícios com a linha resumida e o botão.
+
+**Duas decisões que parecem detalhe e não são.** A URL só é sobrescrita quando vem uma nova: o
+scheduler varre em ciclo, na segunda passada nada sobe e o arquivamento não devolve id, então
+regravar nulo apagaria o link e o botão morreria sozinho no ciclo seguinte. E a gravação dos campos
+estruturados vive num try que só loga, porque o PDF no Drive é a entrega que não pode falhar.
+
+**Prova ponta a ponta**, contra o app publicado e o Drive real: formulário preenchido no celular
+(390px), CEP resolvido pelo ViaCEP, tarifa sugerida pela tabela (R$ 5,40), os três avisos, PDF e JSON
+irmão no bucket, coleta gravando 2 conduções e a URL sozinha, e a tela abrindo "Ida R$ 5,40 · Volta
+R$ 5,40 · Dia R$ 10,80 · Bilhete Único" com o botão abrindo o PDF de 50 KB.
+
+**O achado que muda a ordem de operação:** a coleta recusa admissão encerrada (`SEM_ADMISSAO`), e
+está certa. Caminhei a esteira inteira antes de mandar o formulário e o envio foi recusado; refiz na
+ordem real (coletar com a admissão viva, concluir depois) e passou de primeira. Na operação, **o VT é
+coletado enquanto a admissão está viva**, e quando ela chega em Benefícios os valores já estão lá.
+
+### 4. Guarda dos três caminhos (commit `0b41b41`)
+
+Teste estático que trava os três caminhos que fazem o Cadastro e a Integração nascerem pela porta
+única. O nome engana e vale registrar: "nascimento-cadastro" é o nascimento da FRENTE, nada a ver com
+data de nascimento.
+
+### Gate, publicação e o que fica aberto
+
+Verde: **backend 1.491 testes**, **frontend 108**, **ai-service 148**, **função do Firebase 17**.
+Typecheck limpo; eslint limpo fora dos 2 erros de config pré-existentes. Backend, frontend e
+ai-service reiniciados; função e hosting do Firebase publicados (`enviarVt` atualizada).
+
+**O app do Firebase NÃO TEM VERSIONAMENTO.** `~/vt-online-soulan` não é repositório git: o código que
+está em produção existe só no disco desta VM. Ficou registrado para decisão do diretor.
+
+**Vermelho pré-existente, não tocado (§A.14):** `packages/shared-types/src/cpf.spec.ts` segue
+falhando, esperando três frentes quando o sistema tem quatro. Mesmo registro das entradas anteriores.
+
+**Escrita em dado de teste, autorizada:** as 2 coletas antigas da admissão de teste receberam a URL
+do Drive por casamento de instante (menos de 1 segundo entre o arquivo e o carimbo do ledger, com os
+dois eventos a 2 horas um do outro). Guarda dupla no UPDATE: id exato e `drive_url IS NULL`. Nenhum
+registro real foi tocado.
+
+**Não commitado de propósito:** `logosoulan.png`, que segue sem OST que o reivindique.
