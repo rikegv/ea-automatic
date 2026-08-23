@@ -40,6 +40,11 @@ export interface UsuarioListItem {
   ativo: boolean;
   criadoEm: string;
   /**
+   * PAPEL DE A&S (frente 1, 22/08): CONSULTOR ou RECRUITER. `null` para quem não trabalha em A&S,
+   * que é o estado de todo mundo que já estava cadastrado antes deste campo existir.
+   */
+  papelAs?: PapelAs | null;
+  /**
    * ÁREAS do usuário (segmentação do módulo de A&S). Lista VAZIA é um estado real e visível: é o
    * usuário sem área, que enxerga só o Início (fail-closed) e recebe a tag "Sem Área" na tabela.
    */
@@ -555,4 +560,881 @@ export function ehColunaRelatorio(chave: string): boolean {
 export function normalizarColunasRelatorio(pedidas: readonly string[]): string[] {
   const querida = new Set(pedidas);
   return COLUNAS_RELATORIO.filter((c) => querida.has(c.chave)).map((c) => c.chave);
+}
+
+// ── A&S / Central de Vagas (onda 1) ────────────────────────────────────────
+/**
+ * VOCABULÁRIO DA VAGA, em um lugar só. Backend valida o DTO com estas listas e o frontend monta os
+ * seletores com estes mesmos rótulos: duas cópias divergiriam no primeiro ajuste, e o sintoma seria
+ * um valor aceito pela tela e recusado pela API.
+ *
+ * Os valores espelham os enums do banco (`vaga_natureza`, `vaga_vinculo`, `vaga_status`,
+ * `vaga_sazonalidade`, `vaga_escolaridade`), que por sua vez espelham a base real de gestão de vaga.
+ */
+export const VAGA_NATUREZA = [
+  "EFETIVA",
+  "TEMPORARIA",
+  "REPOSICAO_EFETIVA",
+  "TERCEIRA",
+  "ESTAGIO",
+  "VAGA_BANCO",
+] as const;
+export type VagaNatureza = (typeof VAGA_NATUREZA)[number];
+
+/** Rótulos como a operação fala (§A.24: tag em title case). */
+export const VAGA_NATUREZA_LABEL: Record<VagaNatureza, string> = {
+  EFETIVA: "Efetiva",
+  TEMPORARIA: "Temporária",
+  REPOSICAO_EFETIVA: "Reposição Efetiva",
+  TERCEIRA: "Terceira",
+  ESTAGIO: "Estágio",
+  VAGA_BANCO: "Vaga Banco",
+};
+
+export const VAGA_VINCULO = [
+  // EFETIVO e PJ na frente porque é assim que o formulário de abertura pergunta ("( )Efetivo
+  // ( )Pessoa Jurídica (PJ)( )Temporário..."). A ordem aqui é só de exibição; no banco o enum
+  // acrescenta no fim, que é o que `ALTER TYPE ADD VALUE` permite.
+  "EFETIVO",
+  "PJ",
+  "TEMPORARIO",
+  "TERCEIRIZADO",
+  "ESTAGIO",
+  "INTERNO",
+  "FOPAG",
+  "JOVEM_APRENDIZ",
+] as const;
+export type VagaVinculo = (typeof VAGA_VINCULO)[number];
+
+export const VAGA_VINCULO_LABEL: Record<VagaVinculo, string> = {
+  EFETIVO: "Efetivo",
+  PJ: "Pessoa Jurídica (PJ)",
+  TEMPORARIO: "Temporário",
+  TERCEIRIZADO: "Terceirizado",
+  ESTAGIO: "Estágio",
+  INTERNO: "Interno",
+  FOPAG: "Fopag",
+  JOVEM_APRENDIZ: "Jovem Aprendiz",
+};
+
+export const VAGA_STATUS = ["ABERTA", "ENTREGUE", "FECHADA", "CANCELADA", "VAGA_BANCO"] as const;
+export type VagaStatus = (typeof VAGA_STATUS)[number];
+
+export const VAGA_STATUS_LABEL: Record<VagaStatus, string> = {
+  ABERTA: "Aberta",
+  ENTREGUE: "Entregue",
+  FECHADA: "Fechada",
+  CANCELADA: "Cancelada",
+  VAGA_BANCO: "Vaga Banco",
+};
+
+export const VAGA_SAZONALIDADE = ["OPERACAO_PADRAO", "SAZONAL"] as const;
+export type VagaSazonalidade = (typeof VAGA_SAZONALIDADE)[number];
+
+export const VAGA_SAZONALIDADE_LABEL: Record<VagaSazonalidade, string> = {
+  OPERACAO_PADRAO: "Operação Padrão",
+  SAZONAL: "Sazonal",
+};
+
+export const VAGA_ESCOLARIDADE = [
+  "FUNDAMENTAL_INCOMPLETO",
+  "FUNDAMENTAL_COMPLETO",
+  "MEDIO_INCOMPLETO",
+  "MEDIO_COMPLETO",
+  "TECNICO",
+  "SUPERIOR_INCOMPLETO",
+  "SUPERIOR_COMPLETO",
+  "POS_GRADUACAO",
+] as const;
+export type VagaEscolaridade = (typeof VAGA_ESCOLARIDADE)[number];
+
+export const VAGA_ESCOLARIDADE_LABEL: Record<VagaEscolaridade, string> = {
+  FUNDAMENTAL_INCOMPLETO: "Fundamental Incompleto",
+  FUNDAMENTAL_COMPLETO: "Fundamental Completo",
+  MEDIO_INCOMPLETO: "Médio Incompleto",
+  MEDIO_COMPLETO: "Médio Completo",
+  TECNICO: "Técnico",
+  SUPERIOR_INCOMPLETO: "Superior Incompleto",
+  SUPERIOR_COMPLETO: "Superior Completo",
+  POS_GRADUACAO: "Pós-graduação",
+};
+
+export const VAGA_MODELO_TRABALHO = ["PRESENCIAL", "HOME_OFFICE", "HIBRIDO"] as const;
+export type VagaModeloTrabalho = (typeof VAGA_MODELO_TRABALHO)[number];
+
+export const VAGA_MODELO_TRABALHO_LABEL: Record<VagaModeloTrabalho, string> = {
+  PRESENCIAL: "Presencial",
+  HOME_OFFICE: "Home Office",
+  HIBRIDO: "Híbrido",
+};
+
+export const VAGA_TIPO_SUBSTITUICAO = [
+  "FERIAS",
+  "LICENCA_MATERNIDADE",
+  "AUXILIO_DOENCA",
+  "SUBSTITUICAO",
+] as const;
+export type VagaTipoSubstituicao = (typeof VAGA_TIPO_SUBSTITUICAO)[number];
+
+export const VAGA_TIPO_SUBSTITUICAO_LABEL: Record<VagaTipoSubstituicao, string> = {
+  FERIAS: "Férias",
+  LICENCA_MATERNIDADE: "Licença Maternidade",
+  AUXILIO_DOENCA: "Auxílio Doença",
+  SUBSTITUICAO: "Substituição",
+};
+
+export const VAGA_GENERO = ["INDIFERENTE", "MASCULINO", "FEMININO"] as const;
+export type VagaGenero = (typeof VAGA_GENERO)[number];
+
+export const VAGA_GENERO_LABEL: Record<VagaGenero, string> = {
+  INDIFERENTE: "Indiferente",
+  MASCULINO: "Masculino",
+  FEMININO: "Feminino",
+};
+
+/**
+ * TESTES aplicados no processo, seleção múltipla. Lista fechada do formulário de papel, mais o campo
+ * "outro" em texto, que é como o formulário resolve o que a lista não cobre.
+ */
+export const VAGA_TESTES = ["EXCEL", "REDACAO", "LOGICA", "INGLES", "PSICOMETRICO"] as const;
+export type VagaTeste = (typeof VAGA_TESTES)[number];
+
+export const VAGA_TESTE_LABEL: Record<VagaTeste, string> = {
+  EXCEL: "Excel",
+  REDACAO: "Redação",
+  LOGICA: "Lógica",
+  INGLES: "Inglês",
+  PSICOMETRICO: "Psicométrico",
+};
+
+/**
+ * TEMPO DE CONTRATO: a mesma lista de dias que a Nova Admissão já usa (§A.22), mais "Indeterminado",
+ * que é o que o formulário de vaga escreve quando o contrato é por prazo aberto.
+ */
+export const VAGA_TEMPO_CONTRATO = [
+  "30",
+  "60",
+  "90",
+  "120",
+  "150",
+  "180",
+  "210",
+  "240",
+  "270",
+  "INDETERMINADO",
+] as const;
+export type VagaTempoContrato = (typeof VAGA_TEMPO_CONTRATO)[number];
+
+export function rotuloTempoContrato(v: string): string {
+  return v === "INDETERMINADO" ? "Indeterminado" : `${v} dias`;
+}
+
+/**
+ * PAPEL DE A&S da pessoa: os dois lados da vaga. Fixo por usuário, e separado do `Papel` do RBAC.
+ * `null` é o estado de quem não trabalha em A&S, que é a maioria de quem já está cadastrado.
+ */
+export const PAPEL_AS = ["CONSULTOR", "RECRUITER"] as const;
+export type PapelAs = (typeof PAPEL_AS)[number];
+
+export const PAPEL_AS_LABEL: Record<PapelAs, string> = {
+  CONSULTOR: "Consultor",
+  RECRUITER: "Recruiter",
+};
+
+/** O lado OPOSTO ao de quem abre a vaga: é o que a trilha pede, porque o outro é carimbado sozinho. */
+export function contraparteDe(papel: PapelAs): PapelAs {
+  return papel === "CONSULTOR" ? "RECRUITER" : "CONSULTOR";
+}
+
+// ── Regiões de abordagem, nível Brasil (item 7 da OST de 22/08) ────────────────
+//
+// MORA AQUI DENTRO, e não num arquivo próprio, por uma razão de RUNTIME que custou uma queda.
+//
+// Este pacote é consumido de DUAS formas diferentes, e elas exigem coisas opostas de um
+// `export * from "./outro-arquivo"`:
+//   1. O BACKEND, em produção, carrega `dist/index.js` como ESM de verdade (o package.json diz
+//      "type": "module"). O Node ESM EXIGE a extensão `.js` no caminho relativo, senão morre com
+//      ERR_MODULE_NOT_FOUND no boot.
+//   2. O FRONTEND resolve o pacote PELO FONTE, por path alias, e o webpack do Next NÃO mapeia
+//      `./x.js` para `./x.ts`. Com a extensão, a build do frontend falha com "Module not found".
+//
+// Escrever com extensão quebrava o frontend; escrever sem quebrava o backend NO PRÓXIMO RESTART, e
+// esse é o detalhe traiçoeiro: o processo já no ar continuava servindo normalmente, então o defeito
+// ficou invisível até alguém reiniciar. Um arquivo só não tem esse problema, e o pacote sempre foi
+// de arquivo único: o arquivo separado é que era a exceção.
+/** O valor que representa "o que a lista não cobre". Ao escolher, a tela abre o campo de texto. */
+export const REGIAO_OUTRAS = "Outras";
+
+export interface UfOpcao {
+  /** Sigla, e a chave de tudo: é o que a vaga grava em `regiao_estado`. */
+  uf: string;
+  nome: string;
+}
+
+/** As 27 unidades da federação (26 estados e o Distrito Federal), em ordem alfabética de nome. */
+export const UFS: UfOpcao[] = [
+  { uf: "AC", nome: "Acre" },
+  { uf: "AL", nome: "Alagoas" },
+  { uf: "AP", nome: "Amapá" },
+  { uf: "AM", nome: "Amazonas" },
+  { uf: "BA", nome: "Bahia" },
+  { uf: "CE", nome: "Ceará" },
+  { uf: "DF", nome: "Distrito Federal" },
+  { uf: "ES", nome: "Espírito Santo" },
+  { uf: "GO", nome: "Goiás" },
+  { uf: "MA", nome: "Maranhão" },
+  { uf: "MT", nome: "Mato Grosso" },
+  { uf: "MS", nome: "Mato Grosso do Sul" },
+  { uf: "MG", nome: "Minas Gerais" },
+  { uf: "PA", nome: "Pará" },
+  { uf: "PB", nome: "Paraíba" },
+  { uf: "PR", nome: "Paraná" },
+  { uf: "PE", nome: "Pernambuco" },
+  { uf: "PI", nome: "Piauí" },
+  { uf: "RJ", nome: "Rio de Janeiro" },
+  { uf: "RN", nome: "Rio Grande do Norte" },
+  { uf: "RS", nome: "Rio Grande do Sul" },
+  { uf: "RO", nome: "Rondônia" },
+  { uf: "RR", nome: "Roraima" },
+  { uf: "SC", nome: "Santa Catarina" },
+  { uf: "SP", nome: "São Paulo" },
+  { uf: "SE", nome: "Sergipe" },
+  { uf: "TO", nome: "Tocantins" },
+];
+
+/**
+ * AS REGIÕES DE CADA UF. A ordem dentro de cada estado é deliberada: a CAPITAL e a região
+ * metropolitana dela vêm primeiro, porque são a maioria das vagas, e depois os demais polos em
+ * ordem de porte. "Outras" fecha sempre.
+ */
+export const REGIOES_POR_UF: Record<string, string[]> = {
+  AC: [
+    "Rio Branco",
+    "Região Metropolitana de Rio Branco",
+    "Cruzeiro do Sul",
+    "Sena Madureira",
+    "Tarauacá",
+    "Feijó",
+    "Brasileia e Xapuri",
+    "Plácido de Castro",
+    REGIAO_OUTRAS,
+  ],
+  AL: [
+    "Maceió",
+    "Região Metropolitana de Maceió",
+    "Arapiraca",
+    "Palmeira dos Índios",
+    "União dos Palmares",
+    "São Miguel dos Campos",
+    "Penedo",
+    "Santana do Ipanema",
+    "Delmiro Gouveia",
+    REGIAO_OUTRAS,
+  ],
+  AP: [
+    "Macapá",
+    "Santana",
+    "Laranjal do Jari",
+    "Porto Grande",
+    "Mazagão",
+    "Oiapoque",
+    REGIAO_OUTRAS,
+  ],
+  AM: [
+    "Manaus",
+    "Região Metropolitana de Manaus",
+    "Manacapuru",
+    "Itacoatiara",
+    "Parintins",
+    "Coari",
+    "Tefé",
+    "Tabatinga",
+    "Humaitá",
+    "Lábrea",
+    REGIAO_OUTRAS,
+  ],
+  BA: [
+    "Salvador",
+    "Região Metropolitana de Salvador",
+    "Feira de Santana",
+    "Vitória da Conquista",
+    "Ilhéus e Itabuna",
+    "Juazeiro",
+    "Barreiras",
+    "Santo Antônio de Jesus",
+    "Jequié",
+    "Alagoinhas",
+    "Teixeira de Freitas",
+    "Guanambi",
+    "Irecê",
+    "Paulo Afonso",
+    REGIAO_OUTRAS,
+  ],
+  CE: [
+    "Fortaleza",
+    "Região Metropolitana de Fortaleza",
+    "Caucaia",
+    "Maracanaú",
+    "Sobral",
+    "Juazeiro do Norte e Crato",
+    "Iguatu",
+    "Quixadá",
+    "Limoeiro do Norte",
+    "Itapipoca",
+    REGIAO_OUTRAS,
+  ],
+  DF: [
+    "Brasília (Plano Piloto)",
+    "Águas Claras",
+    "Guará",
+    "Taguatinga",
+    "Ceilândia",
+    "Samambaia",
+    "Gama e Santa Maria",
+    "Sobradinho",
+    "Planaltina",
+    "Núcleo Bandeirante e Riacho Fundo",
+    "Entorno do DF",
+    REGIAO_OUTRAS,
+  ],
+  ES: [
+    "Vitória",
+    "Região Metropolitana da Grande Vitória",
+    "Vila Velha",
+    "Serra",
+    "Cariacica e Viana",
+    "Guarapari",
+    "Cachoeiro de Itapemirim",
+    "Linhares",
+    "Aracruz",
+    "Colatina",
+    "São Mateus",
+    REGIAO_OUTRAS,
+  ],
+  GO: [
+    "Goiânia",
+    "Região Metropolitana de Goiânia",
+    "Aparecida de Goiânia",
+    "Anápolis",
+    "Luziânia e Entorno do DF",
+    "Águas Lindas de Goiás",
+    "Rio Verde",
+    "Itumbiara",
+    "Catalão",
+    "Jataí",
+    "Caldas Novas",
+    "Uruaçu e Porangatu",
+    REGIAO_OUTRAS,
+  ],
+  MA: [
+    "São Luís",
+    "Região Metropolitana de São Luís",
+    "São José de Ribamar",
+    "Imperatriz",
+    "Caxias",
+    "Timon",
+    "Codó",
+    "Bacabal",
+    "Santa Inês",
+    "Açailândia",
+    "Balsas",
+    REGIAO_OUTRAS,
+  ],
+  MT: [
+    "Cuiabá",
+    "Região Metropolitana do Vale do Rio Cuiabá",
+    "Várzea Grande",
+    "Rondonópolis",
+    "Sinop",
+    "Sorriso",
+    "Lucas do Rio Verde",
+    "Tangará da Serra",
+    "Primavera do Leste",
+    "Cáceres",
+    "Barra do Garças",
+    "Alta Floresta",
+    REGIAO_OUTRAS,
+  ],
+  MS: [
+    "Campo Grande",
+    "Dourados",
+    "Três Lagoas",
+    "Corumbá",
+    "Ponta Porã",
+    "Naviraí",
+    "Nova Andradina",
+    "Aquidauana",
+    REGIAO_OUTRAS,
+  ],
+  MG: [
+    "Belo Horizonte",
+    "Região Metropolitana de Belo Horizonte",
+    "Contagem",
+    "Betim",
+    "Uberlândia",
+    "Uberaba",
+    "Juiz de Fora",
+    "Montes Claros",
+    "Divinópolis",
+    "Ipatinga e Vale do Aço",
+    "Governador Valadares",
+    "Sete Lagoas",
+    "Varginha",
+    "Poços de Caldas",
+    "Pouso Alegre",
+    "Patos de Minas",
+    "Barbacena",
+    "Teófilo Otoni",
+    REGIAO_OUTRAS,
+  ],
+  PA: [
+    "Belém",
+    "Região Metropolitana de Belém",
+    "Ananindeua",
+    "Marituba",
+    "Castanhal",
+    "Abaetetuba",
+    "Santarém",
+    "Marabá",
+    "Parauapebas",
+    "Tucuruí",
+    "Altamira",
+    "Redenção",
+    "Paragominas",
+    REGIAO_OUTRAS,
+  ],
+  PB: [
+    "João Pessoa",
+    "Região Metropolitana de João Pessoa",
+    "Santa Rita e Bayeux",
+    "Campina Grande",
+    "Guarabira",
+    "Patos",
+    "Sousa e Cajazeiras",
+    REGIAO_OUTRAS,
+  ],
+  PR: [
+    "Curitiba",
+    "Região Metropolitana de Curitiba",
+    "São José dos Pinhais",
+    "Londrina",
+    "Maringá",
+    "Ponta Grossa",
+    "Cascavel",
+    "Foz do Iguaçu",
+    "Toledo",
+    "Guarapuava",
+    "Paranaguá e Litoral",
+    "Apucarana",
+    "Campo Mourão",
+    "Umuarama",
+    "Pato Branco",
+    "Francisco Beltrão",
+    REGIAO_OUTRAS,
+  ],
+  PE: [
+    "Recife",
+    "Região Metropolitana do Recife",
+    "Jaboatão dos Guararapes",
+    "Olinda",
+    "Paulista",
+    "Cabo de Santo Agostinho",
+    "Caruaru",
+    "Vitória de Santo Antão",
+    "Garanhuns",
+    "Petrolina",
+    "Serra Talhada",
+    "Salgueiro",
+    REGIAO_OUTRAS,
+  ],
+  PI: [
+    "Teresina",
+    "Região Integrada da Grande Teresina",
+    "Parnaíba",
+    "Picos",
+    "Floriano",
+    "Piripiri",
+    "Campo Maior",
+    "São Raimundo Nonato",
+    REGIAO_OUTRAS,
+  ],
+  RJ: [
+    "Rio de Janeiro (capital)",
+    "Zona Sul (RJ)",
+    "Zona Norte (RJ)",
+    "Zona Oeste (RJ)",
+    "Centro (RJ)",
+    "Barra da Tijuca",
+    "Baixada Fluminense (Nova Iguaçu, Duque de Caxias, Belford Roxo)",
+    "Niterói e São Gonçalo",
+    "Região dos Lagos (Cabo Frio, Búzios)",
+    "Macaé e Rio das Ostras",
+    "Campos dos Goytacazes",
+    "Volta Redonda e Barra Mansa",
+    "Petrópolis e Região Serrana",
+    "Angra dos Reis e Costa Verde",
+    REGIAO_OUTRAS,
+  ],
+  RN: [
+    "Natal",
+    "Região Metropolitana de Natal",
+    "Parnamirim",
+    "São Gonçalo do Amarante",
+    "Mossoró",
+    "Caicó",
+    "Currais Novos",
+    "Açu",
+    "Pau dos Ferros",
+    REGIAO_OUTRAS,
+  ],
+  RS: [
+    "Porto Alegre",
+    "Região Metropolitana de Porto Alegre",
+    "Canoas",
+    "Gravataí e Alvorada",
+    "Novo Hamburgo e São Leopoldo",
+    "Caxias do Sul e Serra Gaúcha",
+    "Pelotas",
+    "Rio Grande",
+    "Santa Maria",
+    "Passo Fundo",
+    "Santa Cruz do Sul e Lajeado",
+    "Ijuí e Santo Ângelo",
+    "Uruguaiana e Fronteira Oeste",
+    "Bagé",
+    REGIAO_OUTRAS,
+  ],
+  RO: [
+    "Porto Velho",
+    "Ji-Paraná",
+    "Ariquemes",
+    "Vilhena",
+    "Cacoal",
+    "Rolim de Moura",
+    "Jaru",
+    "Guajará-Mirim",
+    REGIAO_OUTRAS,
+  ],
+  RR: [
+    "Boa Vista",
+    "Rorainópolis",
+    "Caracaraí",
+    "Mucajaí",
+    "Alto Alegre",
+    "Pacaraima",
+    REGIAO_OUTRAS,
+  ],
+  SC: [
+    "Florianópolis",
+    "Região Metropolitana de Florianópolis",
+    "São José e Palhoça",
+    "Joinville",
+    "Blumenau",
+    "Itajaí e Balneário Camboriú",
+    "Brusque",
+    "Jaraguá do Sul",
+    "Criciúma",
+    "Tubarão",
+    "Chapecó",
+    "Lages",
+    "Caçador e Videira",
+    REGIAO_OUTRAS,
+  ],
+  /**
+   * SÃO PAULO: o recorte JÁ VALIDADO pelo diretor, copiado sem alteração (§A.14). Não acrescentar
+   * polos do interior aqui sem pedido: "Interior de SP" é a linha que o diretor aprovou para cobrir
+   * tudo que está fora da Grande SP.
+   */
+  SP: [
+    "São Paulo capital",
+    "Zona Norte",
+    "Zona Sul",
+    "Zona Leste",
+    "Zona Oeste",
+    "Centro",
+    "ABC (Santo André, São Bernardo, São Caetano, Diadema)",
+    "Guarulhos",
+    "Osasco, Barueri e Alphaville",
+    "Grande SP (demais)",
+    "Interior de SP",
+    REGIAO_OUTRAS,
+  ],
+  SE: [
+    "Aracaju",
+    "Região Metropolitana de Aracaju",
+    "Nossa Senhora do Socorro",
+    "Lagarto",
+    "Itabaiana",
+    "Estância",
+    "Propriá",
+    REGIAO_OUTRAS,
+  ],
+  TO: [
+    "Palmas",
+    "Araguaína",
+    "Gurupi",
+    "Porto Nacional",
+    "Paraíso do Tocantins",
+    "Colinas do Tocantins",
+    "Dianópolis",
+    REGIAO_OUTRAS,
+  ],
+};
+
+/** Nome da UF pela sigla. Sigla desconhecida devolve a própria sigla, nunca quebra a exibição. */
+export function nomeDaUf(uf: string): string {
+  return UFS.find((u) => u.uf === uf)?.nome ?? uf;
+}
+
+/**
+ * As regiões de uma UF. UF vazia ou desconhecida devolve lista VAZIA, e é o que faz a segunda lista
+ * nascer fechada enquanto ninguém escolheu o estado.
+ */
+export function regioesDaUf(uf: string | null | undefined): string[] {
+  if (!uf) return [];
+  return REGIOES_POR_UF[uf] ?? [];
+}
+
+/**
+ * A régua que a tela e o backend precisam responder igual: a região escolhida pertence mesmo à UF?
+ *
+ * Existe porque a tela é encadeada e o corpo do POST não é: quem trocar o estado depois de marcar as
+ * regiões, ou montar a requisição na mão, mandaria região de um estado com a sigla de outro. Aqui a
+ * combinação é conferida antes de gravar.
+ */
+export function regiaoPertenceAUf(uf: string, regiao: string): boolean {
+  return regioesDaUf(uf).includes(regiao);
+}
+
+
+/**
+ * TEMPO DE CONTRATO SÓ EXISTE EM CONTRATO COM PRAZO (item 2 da OST de 22/08).
+ *
+ * Perguntar "quantos dias dura?" numa vaga EFETIVA é perguntar o que não tem resposta, e o campo
+ * ficava lá, vazio, em toda vaga efetiva. Nos três vínculos abaixo o prazo é da natureza do
+ * contrato: temporário tem prazo por lei, estágio e jovem aprendiz têm termo com vigência.
+ *
+ * A RÉGUA VIVE AQUI, e não num `if` na tela, porque as duas pontas precisam responder igual: a tela
+ * decide se DESENHA o campo, o service decide se GRAVA o valor. Quem trocar o vínculo depois de
+ * escolher o tempo não deixa para trás um prazo órfão de um vínculo que não tem prazo.
+ */
+export const VINCULOS_COM_TEMPO_CONTRATO = ["TEMPORARIO", "ESTAGIO", "JOVEM_APRENDIZ"] as const;
+
+export function exigeTempoContrato(vinculo: string | null | undefined): boolean {
+  return (VINCULOS_COM_TEMPO_CONTRATO as readonly string[]).includes(vinculo ?? "");
+}
+
+/**
+ * O VALOR SENTINELA DAS LISTAS COM ESCAPE. Escolher esta opção abre o campo de texto ao lado, e o
+ * que a pessoa escrever é o que fica gravado na vaga.
+ *
+ * POR QUE UM SENTINELA, e não deixar a lista vazia significar "outro": vazio é "ninguém respondeu",
+ * que é estado diferente de "respondeu algo que a lista não tinha". Misturar os dois apagaria a
+ * diferença entre a vaga incompleta e a vaga com resposta fora do catálogo.
+ */
+export const OPCAO_OUTROS = "Outros";
+export const OPCAO_OUTRA = "Outra";
+export const OPCAO_OUTRO = "Outro";
+
+/**
+ * IDIOMAS EXIGIDOS, seleção MÚLTIPLA (item 6, valores aprovados pelo diretor).
+ *
+ * Era caixa de texto: "inglês avançado", "Inglês/Espanhol", "ingles basico" eram três grafias da
+ * mesma exigência e nenhuma delas filtrável. Em lista, a vaga que pede inglês é achável.
+ */
+export const VAGA_IDIOMAS = [
+  "Inglês",
+  "Espanhol",
+  "Francês",
+  "Italiano",
+  "Alemão",
+  "Mandarim",
+  "Libras",
+  OPCAO_OUTROS,
+] as const;
+
+/** FAIXA ETÁRIA pretendida, seleção única. "Indiferente" é resposta, não ausência de resposta. */
+export const VAGA_FAIXA_ETARIA = [
+  "Indiferente",
+  "18 a 25 anos",
+  "18 a 30 anos",
+  "20 a 40 anos",
+  "25 a 40 anos",
+  "30 a 50 anos",
+  "Acima de 40 anos",
+  OPCAO_OUTRA,
+] as const;
+
+/**
+ * ETAPAS DO PROCESSO SELETIVO COM A EMPRESA, seleção MÚLTIPLA. A ordem da lista é a ordem em que as
+ * etapas costumam acontecer, e não alfabética, porque é assim que o time lê o processo.
+ */
+export const VAGA_ETAPAS_PS = [
+  "Entrevista com RH",
+  "Entrevista com o gestor",
+  "Entrevista técnica",
+  "Dinâmica de grupo",
+  "Teste prático",
+  "Painel",
+  "Entrevista final com a diretoria",
+  OPCAO_OUTRA,
+] as const;
+
+/** DETALHE DO HÍBRIDO, seleção única. Só aparece quando o modelo de trabalho é HIBRIDO. */
+export const VAGA_DETALHE_HIBRIDO = [
+  "1 dia presencial",
+  "2 dias presenciais",
+  "3 dias presenciais",
+  "4 dias presenciais",
+  OPCAO_OUTRO,
+] as const;
+
+/**
+ * HORÁRIO E ESCALA: o valor sentinela do escape (item 5). O catálogo de escalas é o
+ * `escalas_catalogo` que a Liberação já usa, servido por `/catalogos/escalas`, e ele NÃO é tocado
+ * por esta frente. Quem escolher esta opção escreve a escala à mão, e o que for escrito FICA NA
+ * VAGA: não entra no catálogo, de propósito (decisão do diretor).
+ */
+export const ESCALA_OUTRA = "Outra escala";
+
+/**
+ * LEITURA DE VOLTA DE UMA LISTA COM ESCAPE.
+ *
+ * A vaga grava UM texto só, seja ele uma opção da lista ou o que a pessoa escreveu no escape. Ao
+ * reabrir a vaga (ficha, clonagem), é preciso decidir qual dos dois controles recebe o valor: se o
+ * texto está na lista, ele é a opção escolhida; se não está, ele é o escape preenchido.
+ *
+ * É o que faz a CLONAGEM devolver a vaga do jeito que ela foi preenchida, em vez de perder o que
+ * estava fora do catálogo.
+ */
+export function separarOpcaoEscape(
+  valor: string | null | undefined,
+  opcoes: readonly string[],
+  sentinela: string,
+): { opcao: string; texto: string } {
+  const v = valor?.trim() ?? "";
+  if (!v) return { opcao: "", texto: "" };
+  if (opcoes.includes(v) && v !== sentinela) return { opcao: v, texto: "" };
+  return { opcao: sentinela, texto: v };
+}
+
+/**
+ * Item da listagem da Central de Vagas. Traz cargo e cliente JÁ RESOLVIDOS em nome, porque é o que a
+ * tela mostra; devolver só os ids obrigaria a tela a cruzar duas listas para escrever uma linha.
+ *
+ * `codCliente` nulo é estado REAL e esperado (a vaga sem cliente vinculado), exibido como
+ * "não informado" (§A.11), nunca como traço.
+ */
+export interface VagaListItem {
+  id: string;
+  codigo: string;
+  nomeDivulgacao: string;
+  cargoId: string;
+  cargoNome: string;
+  codCliente: string | null;
+  clienteNome: string | null;
+  natureza: VagaNatureza;
+  vinculo: VagaVinculo | null;
+  status: VagaStatus;
+  sazonalidade: VagaSazonalidade;
+  posicoes: number;
+  escolaridade: VagaEscolaridade | null;
+  /**
+   * OS DOIS SALÁRIOS DO FORMULÁRIO: com que valor a vaga abriu e com que valor ela fechou. Forma
+   * canônica do `numeric` ("2500.00"); a tela formata em pt-BR na exibição.
+   */
+  salarioAbertura: string | null;
+  salarioFechamento: string | null;
+  /**
+   * Benefícios selecionados do cadastro de benefícios (a mesma fonte da tela de Benefícios), cada um
+   * com o SEU valor. `valor` nulo é benefício que não tem valor a informar, não é zero.
+   */
+  beneficios: { id: string; nome: string; valor: string | null }[];
+  dataAbertura: string;
+  dataLimite: string | null;
+  abertoPorNome: string | null;
+  criadoEm: string;
+
+  // ── Abertura (passos 1 a 4) ──────────────────────────────────────────────
+  // CENTRO DE CUSTO SAIU DA TRILHA (item 4 da OST de 22/08) e por isso saiu daqui: a coluna
+  // `vagas.centro_custo` continua no banco, dormente, porque apagar coluna é destrutivo e o campo
+  // pode voltar. Nada mais lê nem escreve nela.
+  solicitanteNome: string | null;
+  solicitanteTelefone: string | null;
+  solicitanteEmail: string | null;
+  dataSolicitacao: string | null;
+  dataAlinhamento: string | null;
+  envioShortlist: string | null;
+  /** Os dois lados da vaga, já resolvidos em nome: um veio de quem abriu, o outro foi escolhido. */
+  consultorNome: string | null;
+  recruiterNome: string | null;
+  tempoContrato: string | null;
+  motivo: string | null;
+  justificativaMotivo: string | null;
+  tipoSubstituicao: VagaTipoSubstituicao | null;
+  substituidoNome: string | null;
+  /**
+   * CPF DE QUEM SERÁ SUBSTITUÍDO, em dígitos ("12345678901"); a tela aplica a máscara na exibição.
+   *
+   * ELE PERSISTE, e isso é decisão do diretor (22/08), diferente do CPF de substituição da ADMISSÃO
+   * (`dados_vaga_folha.substituido_cpf`), que tem expurgo em 48h pela regra 10 da §A.3. Aqui a
+   * exigência é legal e continuada: o time de cadastro do ADM precisa do número para a folha e o
+   * eSocial. §A.6 continua valendo no resto: nunca vai para log, nunca sai em exportação.
+   *
+   * O EXPURGO DA ADMISSÃO NÃO FOI TOCADO por esta frente: são tabelas e regras diferentes.
+   */
+  substituidoCpf: string | null;
+  localTrabalho: string | null;
+  /** UF escolhida no passo 4 (item 7). Comanda quais regiões a segunda lista oferece. */
+  regiaoEstado: string | null;
+  /** Regiões marcadas DENTRO da UF acima. Lista fechada por estado, seleção múltipla. */
+  regioes: string[];
+  /** O que a lista de regiões não cobriu, escrito à mão. Só existe com "Outras" marcada. */
+  regioesOutras: string | null;
+  /** Escala escolhida no catálogo `escalas_catalogo`, ou o texto livre de "Outra escala". */
+  horarioEscala: string | null;
+  modeloTrabalho: VagaModeloTrabalho | null;
+  detalheHibrido: string | null;
+  confidencial: boolean;
+  divulgarEmpresa: boolean;
+
+  // ── Requisitos (passo 5) ─────────────────────────────────────────────────
+  faixaEtaria: string | null;
+  genero: VagaGenero;
+  /** Idiomas marcados na lista fechada. "Outros" leva o texto para `idiomasOutros`. */
+  idiomas: string[];
+  idiomasOutros: string | null;
+  /** Segue TEXTO ABERTO por decisão do diretor: é o campo mais colado na realidade de cada cliente. */
+  cursosConhecimentos: string | null;
+  testes: string[];
+  testesOutro: string | null;
+  experiencia: string | null;
+  atribuicoes: string | null;
+  perfilComportamental: string | null;
+  ambiente: string | null;
+  /** Etapas marcadas na lista fechada. "Outra" leva o texto para `etapasPsOutra`. */
+  etapasPs: string[];
+  etapasPsOutra: string | null;
+  observacoes: string | null;
+
+  // ── Fechamento (preenchido só na ação Fechar Vaga) ───────────────────────
+  dataFechamento: string | null;
+  vagasFechadas: number | null;
+  dataPrevistaInicio: string | null;
+  /** Intenção declarada no fechamento. Registra, não liga nada na esteira (frente separada). */
+  enviarParaAdmissao: boolean;
+}
+
+/**
+ * CONTEXTO DE A&S de quem está com a tela aberta, servido junto das opções da trilha.
+ *
+ * A tela precisa saber DUAS coisas antes de desenhar o passo 3: qual lado a pessoa ocupa (para dizer
+ * "você entra como Recruiter") e quem são as pessoas do lado oposto (para o seletor). Quem não tem
+ * papel de A&S recebe `papelAs: null`, e a trilha explica em vez de mostrar um seletor vazio.
+ */
+export interface VagaContextoAs {
+  papelAs: PapelAs | null;
+  nome: string;
+  /** Pessoas do lado OPOSTO, ativas. Vazio quando ninguém foi marcado ainda. */
+  contraparte: { id: string; nome: string }[];
 }

@@ -27,6 +27,9 @@ describe("normalizeCpf", () => {
 describe("vocabulário de domínio", () => {
   it("expõe papéis e frentes esperados", () => {
     expect(PAPEL).toContain("COMUM");
-    expect(FRENTE).toEqual(["AUDITORIA", "EXAME", "CADASTRO_CONTRATO"]);
+    // A INTEGRAÇÃO é a QUARTA frente, e entrou depois que esta linha foi escrita: a asserção ficou
+    // parada em três e o teste passou a acusar vermelho no `main` sem que nada estivesse quebrado.
+    // Alinhada com a realidade atual, por autorização explícita do diretor (22/08).
+    expect(FRENTE).toEqual(["AUDITORIA", "EXAME", "CADASTRO_CONTRATO", "INTEGRACAO"]);
   });
 });
