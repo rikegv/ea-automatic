@@ -79,6 +79,14 @@ const BENEFICIOS: NavDef = {
 // Gerencial, como sempre foi. Quem tem o menu chega nela pelo card do Gerencial; a barra lateral não
 // ganha item para essa rota.
 
+// ATRAÇÃO E SELEÇÃO: grupo PRÓPRIO na barra, e não mais um item dentro de Operação. A barra passa a
+// servir dois times, e o grupo é o que separa visualmente o módulo de Admissão do de A&S para quem
+// um dia tiver as duas áreas. Visibilidade pelo menu `as-vagas`, que nasce só para o SUPER_ADMIN
+// (§A.23): não aparecer para os demais não é bug, é o diretor ainda não ter liberado.
+const SELECAO: NavDef[] = [
+  { href: "/as/vagas", icon: "table", label: "Central De Vagas", codigo: "as-vagas" },
+];
+
 const PAPEL_ROTULO: Record<Papel, string> = {
   SUPER_ADMIN: "Super Admin",
   MASTER: "Master",
@@ -182,6 +190,24 @@ export function Sidebar() {
             badge={n.href === "/liberacao" ? liberacaoCount : 0}
           />
         ))}
+
+      {/* Atração e Seleção: a seção só existe para quem tem ao menos um menu do grupo, então ela não
+          abre um cabeçalho órfão sobre uma lista vazia para o time da Admissão. */}
+      {SELECAO.some((n) => temMenu(n.codigo)) && (
+        <>
+          <div className="nav-sep" />
+          <div className={cn("nav-label", !expanded && "hidden")}>Atração e Seleção</div>
+          {SELECAO.filter((n) => temMenu(n.codigo)).map((n) => (
+            <NavItem
+              key={n.href}
+              {...n}
+              active={isActive(pathname, n.href)}
+              expanded={expanded}
+              badge={0}
+            />
+          ))}
+        </>
+      )}
 
       {/* Administração: o card "Menu Gerencial" aparece para admin OU para quem tem ao menos um menu
           administrativo (ex.: a consultora de auditoria com Regras + Régua). */}

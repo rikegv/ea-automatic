@@ -54,6 +54,10 @@ export const ROTA_MENU: { prefixo: string; codigo: string }[] = [
   // CONTROLE GERENCIAL: governado pelo menu `diretoria`, que nasce só para o SUPER_ADMIN (§A.23). Sem
   // esta linha o guard deixaria qualquer autenticado abrir a URL direto.
   { prefixo: "/diretoria", codigo: "diretoria" },
+  // CENTRAL DE VAGAS (A&S, onda 1): governada pelo menu `as-vagas`, que nasce só para o SUPER_ADMIN
+  // (§A.23). Sem esta linha o guard deixaria qualquer autenticado abrir a URL direto, mesmo com o
+  // módulo de A&S liberado a ninguém. O backend já barra as operações; isto fecha a porta da tela.
+  { prefixo: "/as/vagas", codigo: "as-vagas" },
 ];
 
 /**

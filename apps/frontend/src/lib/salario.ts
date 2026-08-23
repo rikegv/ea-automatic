@@ -18,3 +18,20 @@ export function salarioParaCampo(v: string | null | undefined): string {
   if (Number.isNaN(n)) return String(v);
   return n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
+
+/**
+ * MÁSCARA de moeda pt-BR: a PRIMEIRA barreira do campo de valor. Guarda só os dígitos e formata como
+ * centavos, então valor inválido (letra, "R$" solto, pontuação torta) nem chega a ser digitado.
+ * Ex.: "250000" vira "2.500,00". A normalização do backend (`valor-monetario-br`) é a barreira final.
+ *
+ * A GÊMEA DELA VIVE NA TELA DE LIBERAÇÃO e não foi movida para cá de propósito (§A.26): aquele campo
+ * é código validado e em uso, e mexer nele para economizar cinco linhas seria arriscar uma frente
+ * que já funciona por conta de outra. Quando a Liberação for aberta por motivo próprio, ela passa a
+ * importar daqui e a duplicação morre.
+ */
+export function maskMoedaBR(raw: string): string {
+  const digitos = raw.replace(/\D/g, "");
+  if (!digitos) return "";
+  const n = Number(digitos) / 100;
+  return n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}

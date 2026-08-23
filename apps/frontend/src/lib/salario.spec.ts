@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { salarioParaCampo } from "./salario";
+import { maskMoedaBR, salarioParaCampo } from "./salario";
 
 /**
  * PROVA PEDIDA NA OST: o salário NÃO "desconfigura" no modal.
@@ -53,5 +53,20 @@ describe("salarioParaCampo", () => {
 
   it("valor não numérico volta como veio, sem virar NaN na tela", () => {
     expect(salarioParaCampo("a combinar")).toBe("a combinar");
+  });
+});
+
+describe("maskMoedaBR (campo de valor da vaga, §A.11 sem travessão nas mensagens)", () => {
+  it("formata os dígitos como centavos", () => {
+    expect(maskMoedaBR("250000")).toBe("2.500,00");
+  });
+
+  it("descarta o que não é dígito, então letra e R$ nem entram no campo", () => {
+    expect(maskMoedaBR("R$ 2.500,00")).toBe("2.500,00");
+    expect(maskMoedaBR("abc")).toBe("");
+  });
+
+  it("campo vazio continua vazio (não vira 0,00 sozinho)", () => {
+    expect(maskMoedaBR("")).toBe("");
   });
 });

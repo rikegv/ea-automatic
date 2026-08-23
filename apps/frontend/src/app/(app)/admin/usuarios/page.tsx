@@ -1,7 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
-import { AREA, AREA_LABEL, type Area, type Papel } from "@ea/shared-types";
+import {
+  AREA,
+  AREA_LABEL,
+  PAPEL_AS,
+  PAPEL_AS_LABEL,
+  type Area,
+  type Papel,
+  type PapelAs,
+} from "@ea/shared-types";
 import { apiFetch, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { PageHead } from "@/components/ui/PageHead";
@@ -22,6 +30,11 @@ interface Usuario {
   papel: Papel;
   ativo: boolean;
   criadoEm: string;
+  /**
+   * PAPEL DE A&S: Consultor ou Recruiter, o lado da vaga que a pessoa ocupa. `null` é o estado de
+   * quem não trabalha em A&S, que é a maioria, e vira a tag "Sem Papel De A&S".
+   */
+  papelAs?: PapelAs | null;
   /** Áreas do usuário. VAZIO é estado real e visível: vira a tag "Sem Área" (fail-closed). */
   areas?: Area[];
 }
@@ -42,9 +55,32 @@ const PAPEL_OPTIONS = [
   { value: "SUPER_ADMIN", label: "Super Admin" },
 ];
 
+/**
+ * PAPEL DE A&S no seletor. O valor vazio é opção de verdade, não placeholder: é como se tira o papel
+ * de quem saiu da frente de vagas, e é o estado em que quase todo mundo fica.
+ */
+const PAPEL_AS_OPTIONS = [
+  { value: "", label: "Sem papel de A&S" },
+  ...PAPEL_AS.map((p) => ({ value: p, label: PAPEL_AS_LABEL[p] })),
+];
+
+// Ordenação da coluna Papel De A&S: quem tem lado primeiro, sem papel por último, porque a coluna
+// existe para achar as pessoas da frente de vagas no meio da lista inteira.
+const PAPEL_AS_RANK: Record<string, number> = { CONSULTOR: 0, RECRUITER: 1 };
+function rankPapelAs(p?: PapelAs | null): number {
+  return p ? PAPEL_AS_RANK[p] : 2;
+}
+
 // NINGUÉM NASCE SEM ÁREA (decisão do diretor): o formulário já vem com a Admissão marcada, que é a
 // área de todo mundo hoje. Sem isso, o usuário novo entraria num sistema mudo pelo fail-closed.
-const EMPTY = { nome: "", email: "", papel: "COMUM" as Papel, areas: ["ADM"] as Area[] };
+const EMPTY = {
+  nome: "",
+  email: "",
+  papel: "COMUM" as Papel,
+  areas: ["ADM"] as Area[],
+  // Vazio de propósito: o papel de A&S se concede a quem entra na frente de vagas, não a todo mundo.
+  papelAs: "" as "" | PapelAs,
+};
 
 // Ordenação da coluna Área: quem está sem área primeiro, porque é o estado que pede ação.
 function rankArea(areas?: Area[]): number {
@@ -125,7 +161,12 @@ export default function UsuariosPage() {
 
   // Edição inline
   const [editId, setEditId] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState({ nome: "", email: "", papel: "COMUM" as Papel });
+  const [editForm, setEditForm] = useState({
+    nome: "",
+    email: "",
+    papel: "COMUM" as Papel,
+    papelAs: "" as "" | PapelAs,
+  });
   const [busyId, setBusyId] = useState<string | null>(null);
 
   // ConfirmDialogs
@@ -159,6 +200,7 @@ export default function UsuariosPage() {
       { chave: "nome", tipo: "texto", valor: (u) => u.nome },
       { chave: "email", tipo: "texto", valor: (u) => u.email },
       { chave: "papel", tipo: "status", valor: (u) => PAPEL_RANK[u.papel] },
+      { chave: "papelAs", tipo: "status", valor: (u) => rankPapelAs(u.papelAs) },
       // Ordena por RANK e não pelo texto: "Sem Área" primeiro, porque é o estado que pede ação.
       { chave: "area", tipo: "status", valor: (u) => rankArea(u.areas) },
       { chave: "status", tipo: "status", valor: (u) => (u.ativo ? 0 : 1) },
@@ -182,6 +224,8 @@ export default function UsuariosPage() {
           email: form.email.trim(),
           papel: form.papel,
           areas: form.areas,
+          // Vazio não vai como string vazia: o backend espera ausente ou um dos dois papéis.
+          papelAs: form.papelAs || undefined,
         },
       });
       setForm(EMPTY);
@@ -196,7 +240,7 @@ export default function UsuariosPage() {
 
   function iniciarEdicao(u: Usuario) {
     setEditId(u.id);
-    setEditForm({ nome: u.nome, email: u.email, papel: u.papel });
+    setEditForm({ nome: u.nome, email: u.email, papel: u.papel, papelAs: u.papelAs ?? "" });
   }
 
   async function salvarEdicao(id: string) {
@@ -207,7 +251,13 @@ export default function UsuariosPage() {
       await apiFetch(`/admin/usuarios/${id}`, {
         method: "PATCH",
         token,
-        body: { nome: editForm.nome.trim(), email: editForm.email.trim(), papel: editForm.papel },
+        body: {
+          nome: editForm.nome.trim(),
+          email: editForm.email.trim(),
+          papel: editForm.papel,
+          // NULL LIMPA o papel; por isso o vazio vira `null` e não `undefined`, que preservaria.
+          papelAs: editForm.papelAs || null,
+        },
       });
       setEditId(null);
       await load();
@@ -267,7 +317,7 @@ export default function UsuariosPage() {
       <GlassCard
         as="form"
         onSubmit={criar}
-        className="mb-5 grid gap-3 p-4 md:grid-cols-[1fr_1fr_200px_auto] md:items-end"
+        className="mb-5 grid gap-3 p-4 md:grid-cols-[1fr_1fr_180px_190px_auto] md:items-end"
       >
         <div>
           <span className="ds-label">Nome</span>
@@ -297,6 +347,17 @@ export default function UsuariosPage() {
             onChange={(v) => setForm({ ...form, papel: v as Papel })}
             ariaLabel="Papel do novo usuário"
             options={PAPEL_OPTIONS}
+          />
+        </div>
+        {/* PAPEL DE A&S: campo NOVO e independente do Papel ao lado. Um responde o que a pessoa pode
+            fazer no sistema, este responde que lado da vaga ela ocupa na frente de A&S. */}
+        <div>
+          <span className="ds-label">Papel De A&S</span>
+          <Select
+            value={form.papelAs}
+            onChange={(v) => setForm({ ...form, papelAs: v as "" | PapelAs })}
+            ariaLabel="Papel de A&S do novo usuário"
+            options={PAPEL_AS_OPTIONS}
           />
         </div>
         {/* ÁREA na criação: é o que impede alguém de nascer sem área e cair no fail-closed. Caixas e
@@ -355,193 +416,221 @@ export default function UsuariosPage() {
 
       {/* ── Lista de usuários ──────────────────────────────────────────── */}
       <GlassCard className="overflow-hidden p-2">
-        <table className="ds-table">
-          <thead>
-            <tr>
-              <ColunaOrdenavel as="th" ord={ord} chave="nome">
-                Nome
-              </ColunaOrdenavel>
-              <ColunaOrdenavel as="th" ord={ord} chave="email">
-                E-mail
-              </ColunaOrdenavel>
-              <ColunaOrdenavel as="th" ord={ord} chave="papel" className="w-[150px]">
-                Papel
-              </ColunaOrdenavel>
-              <ColunaOrdenavel as="th" ord={ord} chave="area" className="w-[190px]">
-                Área
-              </ColunaOrdenavel>
-              <ColunaOrdenavel as="th" ord={ord} chave="status" className="w-[110px]">
-                Status
-              </ColunaOrdenavel>
-              <ColunaOrdenavel as="th" ord={ord} chave="criadoEm" className="w-[135px]">
-                Criado em
-              </ColunaOrdenavel>
-              <th className="w-[170px]" />
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
+        {/* A COLUNA NOVA APERTOU A TABELA, então ela passa a rolar na horizontal em vez de espremer
+            (§A.20): com oito colunas no espaço de sete, o campo de nome da edição inline ficava com
+            uns 120px e cortava o que a pessoa estava digitando. Rolar é o que a §A.13 manda fazer no
+            lugar de encolher. */}
+        <div className="overflow-x-auto">
+          <table className="ds-table min-w-[1280px]">
+            <thead>
               <tr>
-                <td colSpan={7} className="py-8 text-center text-faint">
-                  Carregando usuários…
-                </td>
+                <ColunaOrdenavel as="th" ord={ord} chave="nome">
+                  Nome
+                </ColunaOrdenavel>
+                <ColunaOrdenavel as="th" ord={ord} chave="email">
+                  E-mail
+                </ColunaOrdenavel>
+                <ColunaOrdenavel as="th" ord={ord} chave="papel" className="w-[150px]">
+                  Papel
+                </ColunaOrdenavel>
+                <ColunaOrdenavel as="th" ord={ord} chave="area" className="w-[190px]">
+                  Área
+                </ColunaOrdenavel>
+                <ColunaOrdenavel as="th" ord={ord} chave="papelAs" className="w-[205px]">
+                  Papel De A&S
+                </ColunaOrdenavel>
+                <ColunaOrdenavel as="th" ord={ord} chave="status" className="w-[110px]">
+                  Status
+                </ColunaOrdenavel>
+                <ColunaOrdenavel as="th" ord={ord} chave="criadoEm" className="w-[135px]">
+                  Criado em
+                </ColunaOrdenavel>
+                <th className="w-[170px]" />
               </tr>
-            ) : rows.length === 0 ? (
-              <tr>
-                <td colSpan={7} className="py-8 text-center text-faint">
-                  Nenhum usuário cadastrado.
-                </td>
-              </tr>
-            ) : (
-              ord.itens.map((u) => {
-                const editando = editId === u.id;
-                const busy = busyId === u.id;
-                const ehAtual = atual?.id === u.id;
-                return (
-                  <tr key={u.id}>
-                    <td className="align-top">
-                      {editando ? (
-                        <input
-                          className="ds-input !py-2"
-                          value={editForm.nome}
-                          onChange={(e) => setEditForm({ ...editForm, nome: e.target.value })}
-                          aria-label="Nome"
-                        />
-                      ) : (
-                        <span className="text-text">{u.nome}</span>
-                      )}
-                    </td>
-                    <td className="align-top">
-                      {editando ? (
-                        <input
-                          type="email"
-                          className="ds-input !py-2"
-                          value={editForm.email}
-                          onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
-                          aria-label="E-mail"
-                        />
-                      ) : (
-                        <span className="text-dim">{u.email}</span>
-                      )}
-                    </td>
-                    <td className="align-top">
-                      {editando ? (
-                        <Select
-                          value={editForm.papel}
-                          onChange={(v) => setEditForm({ ...editForm, papel: v as Papel })}
-                          ariaLabel="Papel"
-                          options={PAPEL_OPTIONS}
-                        />
-                      ) : (
-                        <span className="text-[13.5px] text-text">{PAPEL_ROTULO[u.papel]}</span>
-                      )}
-                    </td>
-                    {/* ÁREA: só LEITURA aqui, para o diretor auditar de relance quem está em quê sem
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr>
+                  <td colSpan={8} className="py-8 text-center text-faint">
+                    Carregando usuários…
+                  </td>
+                </tr>
+              ) : rows.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="py-8 text-center text-faint">
+                    Nenhum usuário cadastrado.
+                  </td>
+                </tr>
+              ) : (
+                ord.itens.map((u) => {
+                  const editando = editId === u.id;
+                  const busy = busyId === u.id;
+                  const ehAtual = atual?.id === u.id;
+                  return (
+                    <tr key={u.id}>
+                      <td className="align-top">
+                        {editando ? (
+                          <input
+                            className="ds-input !py-2"
+                            value={editForm.nome}
+                            onChange={(e) => setEditForm({ ...editForm, nome: e.target.value })}
+                            aria-label="Nome"
+                          />
+                        ) : (
+                          <span className="text-text">{u.nome}</span>
+                        )}
+                      </td>
+                      <td className="align-top">
+                        {editando ? (
+                          <input
+                            type="email"
+                            className="ds-input !py-2"
+                            value={editForm.email}
+                            onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
+                            aria-label="E-mail"
+                          />
+                        ) : (
+                          <span className="text-dim">{u.email}</span>
+                        )}
+                      </td>
+                      <td className="align-top">
+                        {editando ? (
+                          <Select
+                            value={editForm.papel}
+                            onChange={(v) => setEditForm({ ...editForm, papel: v as Papel })}
+                            ariaLabel="Papel"
+                            options={PAPEL_OPTIONS}
+                          />
+                        ) : (
+                          <span className="text-[13.5px] text-text">{PAPEL_ROTULO[u.papel]}</span>
+                        )}
+                      </td>
+                      {/* ÁREA: só LEITURA aqui, para o diretor auditar de relance quem está em quê sem
                         abrir um modal por pessoa. A edição vive no modal de permissão, junto dos
                         menus que ela governa. O Super Admin está acima da segmentação. */}
-                    <td className="align-top">
-                      <div className="flex flex-wrap gap-1">
-                        {u.papel === "SUPER_ADMIN" ? (
-                          <Pill tone="ok">Todas As Áreas</Pill>
-                        ) : !u.areas || u.areas.length === 0 ? (
-                          // O estado que torna o fail-closed seguro em vez de silencioso.
-                          <Pill tone="wn">Sem Área</Pill>
-                        ) : (
-                          u.areas.map((a) => (
-                            <Pill key={a} tone="nt">
-                              {AREA_LABEL[a]}
-                            </Pill>
-                          ))
-                        )}
-                      </div>
-                    </td>
-                    <td className="align-top">
-                      <Pill tone={u.ativo ? "ok" : "nt"}>{u.ativo ? "Ativo" : "Inativo"}</Pill>
-                    </td>
-                    <td className="align-top text-[13px] text-dim">{fmtData(u.criadoEm)}</td>
-                    <td className="align-top text-right">
-                      <div className="flex items-center justify-end gap-1.5">
+                      <td className="align-top">
+                        <div className="flex flex-wrap gap-1">
+                          {u.papel === "SUPER_ADMIN" ? (
+                            <Pill tone="ok">Todas As Áreas</Pill>
+                          ) : !u.areas || u.areas.length === 0 ? (
+                            // O estado que torna o fail-closed seguro em vez de silencioso.
+                            <Pill tone="wn">Sem Área</Pill>
+                          ) : (
+                            u.areas.map((a) => (
+                              <Pill key={a} tone="nt">
+                                {AREA_LABEL[a]}
+                              </Pill>
+                            ))
+                          )}
+                        </div>
+                      </td>
+                      {/* PAPEL DE A&S: tag na leitura e seletor na edição, o mesmo par que a coluna
+                        Papel já usa. "Sem Papel De A&S" é estado normal, não pendência, então a tag
+                        é neutra e não amarela: quem não trabalha em A&S não tem nada a resolver. */}
+                      <td className="align-top">
                         {editando ? (
-                          <>
-                            <button
-                              type="button"
-                              disabled={busy || !editForm.nome.trim() || !editForm.email.trim()}
-                              onClick={() => salvarEdicao(u.id)}
-                              className="grid h-8 w-8 place-items-center rounded-lg text-ok transition hover:bg-[var(--surface-2)] disabled:opacity-50"
-                              title="Salvar"
-                              aria-label="Salvar usuário"
-                            >
-                              <Icon name="check" className="h-[18px] w-[18px]" />
-                            </button>
-                            <button
-                              type="button"
-                              disabled={busy}
-                              onClick={() => setEditId(null)}
-                              className="grid h-8 w-8 place-items-center rounded-lg text-dim transition hover:bg-[var(--surface-2)]"
-                              title="Cancelar"
-                              aria-label="Cancelar edição"
-                            >
-                              <Icon name="x" className="h-[18px] w-[18px]" />
-                            </button>
-                          </>
+                          <Select
+                            value={editForm.papelAs}
+                            onChange={(v) =>
+                              setEditForm({ ...editForm, papelAs: v as "" | PapelAs })
+                            }
+                            ariaLabel="Papel de A&S"
+                            options={PAPEL_AS_OPTIONS}
+                          />
+                        ) : u.papelAs ? (
+                          <Pill tone="in">{PAPEL_AS_LABEL[u.papelAs]}</Pill>
                         ) : (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() => iniciarEdicao(u)}
-                              className="grid h-8 w-8 place-items-center rounded-lg text-dim transition hover:bg-[var(--surface-2)] hover:text-accent"
-                              title="Editar"
-                              aria-label="Editar usuário"
-                            >
-                              <Icon name="pen" className="h-[17px] w-[17px]" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setConfigAlvo(u)}
-                              className="grid h-8 w-8 place-items-center rounded-lg text-dim transition hover:bg-[var(--surface-2)] hover:text-accent"
-                              title="Configurar menus de acesso"
-                              aria-label="Configurar menus de acesso"
-                            >
-                              <Icon name="layers" className="h-[17px] w-[17px]" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setResetAlvo(u)}
-                              className="grid h-8 w-8 place-items-center rounded-lg text-dim transition hover:bg-[var(--surface-2)] hover:text-accent"
-                              title="Resetar Senha"
-                              aria-label="Resetar Senha"
-                            >
-                              <Icon name="clock" className="h-[17px] w-[17px]" />
-                            </button>
-                            <button
-                              type="button"
-                              disabled={ehAtual}
-                              onClick={() => setToggleAlvo(u)}
-                              className="grid h-8 w-8 place-items-center rounded-lg text-dim transition hover:bg-[var(--surface-2)] hover:text-danger disabled:cursor-not-allowed disabled:opacity-40"
-                              title={
-                                ehAtual
-                                  ? "Você não pode desativar a própria conta"
-                                  : u.ativo
-                                    ? "Desativar (bloquear login)"
-                                    : "Reativar"
-                              }
-                              aria-label={u.ativo ? "Desativar usuário" : "Reativar usuário"}
-                            >
-                              <Icon
-                                name={u.ativo ? "logout" : "check"}
-                                className="h-[17px] w-[17px]"
-                              />
-                            </button>
-                          </>
+                          <Pill tone="nt">Sem Papel De A&S</Pill>
                         )}
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
+                      </td>
+                      <td className="align-top">
+                        <Pill tone={u.ativo ? "ok" : "nt"}>{u.ativo ? "Ativo" : "Inativo"}</Pill>
+                      </td>
+                      <td className="align-top text-[13px] text-dim">{fmtData(u.criadoEm)}</td>
+                      <td className="align-top text-right">
+                        <div className="flex items-center justify-end gap-1.5">
+                          {editando ? (
+                            <>
+                              <button
+                                type="button"
+                                disabled={busy || !editForm.nome.trim() || !editForm.email.trim()}
+                                onClick={() => salvarEdicao(u.id)}
+                                className="grid h-8 w-8 place-items-center rounded-lg text-ok transition hover:bg-[var(--surface-2)] disabled:opacity-50"
+                                title="Salvar"
+                                aria-label="Salvar usuário"
+                              >
+                                <Icon name="check" className="h-[18px] w-[18px]" />
+                              </button>
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => setEditId(null)}
+                                className="grid h-8 w-8 place-items-center rounded-lg text-dim transition hover:bg-[var(--surface-2)]"
+                                title="Cancelar"
+                                aria-label="Cancelar edição"
+                              >
+                                <Icon name="x" className="h-[18px] w-[18px]" />
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => iniciarEdicao(u)}
+                                className="grid h-8 w-8 place-items-center rounded-lg text-dim transition hover:bg-[var(--surface-2)] hover:text-accent"
+                                title="Editar"
+                                aria-label="Editar usuário"
+                              >
+                                <Icon name="pen" className="h-[17px] w-[17px]" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfigAlvo(u)}
+                                className="grid h-8 w-8 place-items-center rounded-lg text-dim transition hover:bg-[var(--surface-2)] hover:text-accent"
+                                title="Configurar menus de acesso"
+                                aria-label="Configurar menus de acesso"
+                              >
+                                <Icon name="layers" className="h-[17px] w-[17px]" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setResetAlvo(u)}
+                                className="grid h-8 w-8 place-items-center rounded-lg text-dim transition hover:bg-[var(--surface-2)] hover:text-accent"
+                                title="Resetar Senha"
+                                aria-label="Resetar Senha"
+                              >
+                                <Icon name="clock" className="h-[17px] w-[17px]" />
+                              </button>
+                              <button
+                                type="button"
+                                disabled={ehAtual}
+                                onClick={() => setToggleAlvo(u)}
+                                className="grid h-8 w-8 place-items-center rounded-lg text-dim transition hover:bg-[var(--surface-2)] hover:text-danger disabled:cursor-not-allowed disabled:opacity-40"
+                                title={
+                                  ehAtual
+                                    ? "Você não pode desativar a própria conta"
+                                    : u.ativo
+                                      ? "Desativar (bloquear login)"
+                                      : "Reativar"
+                                }
+                                aria-label={u.ativo ? "Desativar usuário" : "Reativar usuário"}
+                              >
+                                <Icon
+                                  name={u.ativo ? "logout" : "check"}
+                                  className="h-[17px] w-[17px]"
+                                />
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
       </GlassCard>
 
       {/* Ativar / desativar (soft delete = bloqueio de login, preserva histórico) */}

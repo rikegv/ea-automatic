@@ -24,6 +24,8 @@ export type IconName =
   | "right"
   | "tag"
   | "eye"
+  | "copy"
+  | "lock"
   | "x"
   | "filter"
   | "trash"
@@ -113,6 +115,24 @@ const PATHS: Record<IconName, JSX.Element> = {
     <>
       <path d="M20 12l-8 8-9-9V3h8z" />
       <circle cx="7.5" cy="7.5" r="1.5" fill="currentColor" />
+    </>
+  ),
+  /**
+   * COPIAR (duas folhas sobrepostas): a ação de CLONAR. Acrescentado para a Central de Vagas, e
+   * ACRESCENTAR É TUDO O QUE ELE FAZ: entrar com uma chave nova neste mapa não altera nenhum ícone
+   * existente nem quem já os usa.
+   */
+  copy: (
+    <>
+      <rect x="9" y="9" width="11" height="11" rx="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </>
+  ),
+  /** CADEADO FECHANDO: a ação de FECHAR VAGA. Mesma natureza aditiva do `copy` acima. */
+  lock: (
+    <>
+      <rect x="3" y="11" width="18" height="10" rx="2" />
+      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
     </>
   ),
   eye: (

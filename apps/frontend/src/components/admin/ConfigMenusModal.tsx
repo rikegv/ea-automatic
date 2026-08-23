@@ -135,7 +135,13 @@ export function ConfigMenusModal({
     }
   }, [usuario.id, token, sel, areas, catalogo, onClose]);
 
-  const rotuloGrupo: Record<string, string> = { OPERACAO: "Operação", ADMIN: "Administração" };
+  // SELECAO entra com o grupo novo do módulo de A&S: sem o rótulo, a tela do diretor mostraria o
+  // código cru "SELECAO" como cabeçalho da seção.
+  const rotuloGrupo: Record<string, string> = {
+    OPERACAO: "Operação",
+    ADMIN: "Administração",
+    SELECAO: "Atração e Seleção",
+  };
 
   return (
     <Modal onClose={() => onClose(false)} className="max-w-lg" ariaLabel="Configurar menus do usuário">
