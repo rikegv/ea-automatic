@@ -207,3 +207,133 @@ export const periodicidadeBeneficioEnum = pgEnum("periodicidade_beneficio", [
   "CADA_15_DIAS",
   "MENSAL",
 ]);
+
+// ── A&S / CENTRAL DE VAGAS (onda 1) ─────────────────────────────────────────
+// Os quatro enums abaixo nascem do RETRATO da base real de gestão de vaga (2.363 linhas com código),
+// conferido contra os dados antes de virar código (§A.27). Não são vocabulário inventado: cada valor
+// existe na operação hoje, e o de/para com a base é uma identidade, não uma tradução.
+
+/**
+ * NATUREZA da vaga: o que a vaga É. São os 6 valores da coluna "Tipo de Vaga" da base
+ * (Efetiva 1.365 · Temporária 822 · Reposição Efetiva 73 · Terceira 64 · Estágio 36 · Vaga Banco 3).
+ *
+ * SEPARADA DO VÍNCULO de propósito (decisão do diretor, 21/08). São duas taxonomias diferentes: a
+ * natureza descreve a VAGA (é efetiva? é reposição?), o vínculo descreve a CONTRATAÇÃO. Só "Estágio"
+ * coincide nas duas listas; forçar uma na outra faria a importação escolher sozinha em 2.363 linhas.
+ *
+ * VAGA_BANCO AQUI É DA SELEÇÃO: o cliente pede para conduzir o processo e deixar candidatos
+ * aguardando chamada. NÃO tem relação com o "banco" da Admissão (`admissoes.is_banco`), que é estado
+ * do candidato na esteira. Mundos separados, nunca cruzar.
+ */
+export const vagaNaturezaEnum = pgEnum("vaga_natureza", [
+  "EFETIVA",
+  "TEMPORARIA",
+  "REPOSICAO_EFETIVA",
+  "TERCEIRA",
+  "ESTAGIO",
+  "VAGA_BANCO",
+]);
+
+/**
+ * VÍNCULO da contratação: os mesmos 6 valores de `tipo_contrato` da Admissão (§A.22), para vaga e
+ * admissão falarem a mesma língua no dia em que se encontrarem.
+ *
+ * NASCE VAZIO (nulável) e é assim de propósito: a coluna NÃO EXISTE na base de vagas. Preencher na
+ * importação seria adivinhar o vínculo de 2.363 linhas. Vazio é honesto e visível.
+ *
+ * Vocabulário compartilhado, tabela NÃO: `admissoes.tipo_contrato` é texto livre e carrega a sujeira
+ * da carga histórica (`TEMP.`, `ESTA. FOPAG`, `APREN.`). A vaga nasce com enum limpo, sem FK.
+ */
+export const vagaVinculoEnum = pgEnum("vaga_vinculo", [
+  "TEMPORARIO",
+  "TERCEIRIZADO",
+  "ESTAGIO",
+  "INTERNO",
+  "FOPAG",
+  "JOVEM_APRENDIZ",
+  // EFETIVO e PJ entram em 22/08 (decisão do diretor): o formulário de abertura de vaga tem os dois
+  // ("( )Efetivo ( )Pessoa Jurídica (PJ)") e sem eles a vaga efetiva não tinha como ser registrada.
+  // Entram no FIM da lista porque `ALTER TYPE ... ADD VALUE` acrescenta, nunca reordena, e a ordem
+  // do enum no banco é a ordem de criação.
+  "EFETIVO",
+  "PJ",
+]);
+
+/** MODELO DE TRABALHO da vaga (bloco de condições do formulário de abertura). */
+export const vagaModeloTrabalhoEnum = pgEnum("vaga_modelo_trabalho", [
+  "PRESENCIAL",
+  "HOME_OFFICE",
+  "HIBRIDO",
+]);
+
+/**
+ * TIPO DE SUBSTITUIÇÃO (bloco "Dados da Contratação"). Só faz sentido quando o motivo é Substituição,
+ * e é o serviço que garante isso, não o banco: a régua de "qual campo se aplica" muda com o catálogo
+ * de motivos, que é editável pela administração.
+ */
+export const vagaTipoSubstituicaoEnum = pgEnum("vaga_tipo_substituicao", [
+  "FERIAS",
+  "LICENCA_MATERNIDADE",
+  "AUXILIO_DOENCA",
+  "SUBSTITUICAO",
+]);
+
+/** GÊNERO pedido no bloco de requisitos. Nasce INDIFERENTE, que é o que a maioria dos formulários traz. */
+export const vagaGeneroEnum = pgEnum("vaga_genero", ["INDIFERENTE", "MASCULINO", "FEMININO"]);
+
+/**
+ * PAPEL DE A&S DA PESSOA (frente 1 da OST de 22/08): CONSULTOR ou RECRUITER, fixo por usuário.
+ *
+ * É ATRIBUTO NOVO E SEPARADO do `papel` do RBAC (COMUM/MASTER/SUPER_ADMIN), que continua intocado:
+ * um responde "o que a pessoa pode fazer no sistema", este responde "que lado da vaga ela ocupa".
+ * NULÁVEL, porque quem não trabalha em A&S não tem lado nenhum, e é isso que preserva os usuários
+ * que já existem em produção sem tocar em nenhum deles.
+ */
+export const papelAsEnum = pgEnum("papel_as", ["CONSULTOR", "RECRUITER"]);
+
+/**
+ * STATUS da vaga: os 5 valores da base, mantidos como a operação fala
+ * (Fechada 1.564 · Cancelada 460 · Aberta 198 · Entregue 126 · Vaga Banco 15).
+ *
+ * ENTREGUE e FECHADA NÃO SÃO COLAPSADAS em um "ENCERRADA" (decisão do diretor): entregue é
+ * preenchida, fechada é encerrada, e juntar as duas apagaria justamente o indicador de sucesso da
+ * vaga. Regra geral: sempre que der para manter o status da base, manter.
+ *
+ * VAGA_BANCO aparece nos DOIS eixos (aqui e na natureza) porque aparece nos dois na base. A
+ * classificação autoritativa é a NATUREZA; o status guarda a palavra da base para as 15 linhas que a
+ * usam ali, em vez de inventar um status que a operação não escreveu.
+ */
+export const vagaStatusEnum = pgEnum("vaga_status", [
+  "ABERTA",
+  "ENTREGUE",
+  "FECHADA",
+  "CANCELADA",
+  "VAGA_BANCO",
+]);
+
+/**
+ * SAZONAL ou OPERAÇÃO PADRÃO. NÃO EXISTE na base: toda vaga importada nascerá OPERACAO_PADRAO e a
+ * marcação de sazonal é manual depois (decisão do diretor). Derivar do tipo de vaga parecia esperto
+ * e classificaria errado 2.363 linhas que ninguém auditaria.
+ *
+ * É o discriminador da `data_limite`: sazonal EXIGE data limite, e isso é travado por CHECK no banco.
+ */
+export const vagaSazonalidadeEnum = pgEnum("vaga_sazonalidade", ["OPERACAO_PADRAO", "SAZONAL"]);
+
+/**
+ * ESCOLARIDADE exigida na vaga. LISTA NOVA (decisão do diretor): não existia nada equivalente no
+ * sistema, e o que havia era o tipo de documento "Comprovante de Escolaridade", que é outra coisa.
+ *
+ * NULÁVEL: vaga sem exigência de escolaridade é caso real, e a tela mostra "não informado" (§A.11).
+ * Enum e não catálogo editável porque a lista é fechada e estável; valor novo é migração deliberada.
+ */
+export const vagaEscolaridadeEnum = pgEnum("vaga_escolaridade", [
+  "FUNDAMENTAL_INCOMPLETO",
+  "FUNDAMENTAL_COMPLETO",
+  "MEDIO_INCOMPLETO",
+  "MEDIO_COMPLETO",
+  "TECNICO",
+  "SUPERIOR_INCOMPLETO",
+  "SUPERIOR_COMPLETO",
+  "POS_GRADUACAO",
+]);

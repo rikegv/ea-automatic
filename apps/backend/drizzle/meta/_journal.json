@@ -526,6 +526,34 @@
       "when": 1787082281775,
       "tag": "0074_area_do_menu_na_tabela",
       "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1787339215811,
+      "tag": "0075_vagas_central_as",
+      "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "7",
+      "when": 1787348934995,
+      "tag": "0076_puzzling_blizzard",
+      "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "7",
+      "when": 1787360710935,
+      "tag": "0077_many_mikhail_rasputin",
+      "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "7",
+      "when": 1787433700606,
+      "tag": "0078_vagas_listas_e_regioes",
+      "breakpoints": true
     }
   ]
 }

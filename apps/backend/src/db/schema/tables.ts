@@ -29,6 +29,15 @@ import {
   origemVinculoProjetoEnum,
   periodicidadeBeneficioEnum,
   tipoIntegracaoEnum,
+  papelAsEnum,
+  vagaEscolaridadeEnum,
+  vagaGeneroEnum,
+  vagaModeloTrabalhoEnum,
+  vagaTipoSubstituicaoEnum,
+  vagaNaturezaEnum,
+  vagaSazonalidadeEnum,
+  vagaStatusEnum,
+  vagaVinculoEnum,
   ncLiberacaoEnum,
   ncStatusEnum,
   ncTipoEnum,
@@ -55,6 +64,15 @@ export const usuarios = pgTable("usuarios", {
   // Senha temporária (OST-EA-GESTAO-USUARIOS): true logo após criação/reset pelo admin. Enquanto
   // true, o SenhaTemporariaGuard exige a troca no primeiro acesso antes de liberar as demais rotas.
   senhaTemporaria: boolean("senha_temporaria").notNull().default(false),
+  /**
+   * PAPEL DE A&S (frente 1 da OST de 22/08): CONSULTOR ou RECRUITER, fixo por pessoa.
+   *
+   * COLUNA NOVA E NULÁVEL, e nada mais muda nesta tabela. Não entra no JWT, não entra em guard
+   * nenhum e não tem relação com o `papel` do RBAC logo acima: quem administra o sistema continua
+   * sendo decidido lá. Aqui é só o lado da vaga que a pessoa ocupa, e NULL é o estado normal de
+   * quem não trabalha em A&S, que é a maioria de quem está em produção hoje.
+   */
+  papelAs: papelAsEnum("papel_as"),
   criadoEm,
   atualizadoEm,
 });
@@ -1810,5 +1828,264 @@ export const admissaoProjeto = pgTable(
     // O painel do projeto varre por projeto o tempo todo (preenchimento, comparativo, alerta), e sem
     // este índice cada carga seria um seq scan na tabela de vínculos inteira.
     idxPorProjeto: index("idx_admissao_projeto_projeto").on(t.projetoId),
+  }),
+);
+
+// ── A&S / CENTRAL DE VAGAS (onda 1) ─────────────────────────────────────────
+/**
+ * VAGA: a abertura, e a LINHA é a identidade (decisão do diretor, 21/08).
+ *
+ * A DECISÃO QUE GOVERNA ESTA TABELA: o EA gera `id` PRÓPRIO por vaga, e o `codigo` é ATRIBUTO DE
+ * ORIGEM, pesquisável e REPETÍVEL, nunca chave. Na base real, o mesmo código aparece em várias
+ * linhas (o campeão tem 356), e cada linha é uma ABERTURA daquela vaga recorrente. Fundir por código
+ * apagaria o histórico de aberturas; por isso não há unique em `codigo`, e não deve haver.
+ *
+ * A AMARRAÇÃO É CÓDIGO -> CARGO, e vive na aplicação, não no banco: um código corresponde a UM único
+ * cargo, então N linhas com o mesmo código e o mesmo cargo é CORRETO, e o mesmo código apontando para
+ * cargos diferentes é preenchimento furado. A trava vale DO CADASTRO NOVO PARA FRENTE (a tela impede
+ * criar/editar vaga com código já usado por outro cargo) e NÃO retroage na importação, que entra com
+ * o cargo que veio e marca a linha para revisão. Um unique no banco impediria exatamente isso.
+ *
+ * ISOLAMENTO (mantido da Fatia 1): nenhuma FK para `admissoes`, nenhuma coluna nova em `admissoes`.
+ * O módulo de A&S nasce paralelo, e é essa disciplina que deixou o Alto Volume nascer sem quebrar
+ * Esteira, Gerenciador e Controle Gerencial.
+ *
+ * §A.6: vaga não tem dado pessoal. `aberto_por_id` é usuário interno do EA, não candidato.
+ */
+export const vagas = pgTable(
+  "vagas",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    /**
+     * Código de ORIGEM da vaga (o número do Pandapé, ou a família `SL...`). REPETÍVEL de propósito.
+     * Digitado à mão na vaga nova: o gerador automático foi descartado pelo diretor.
+     */
+    codigo: varchar("codigo", { length: 40 }).notNull(),
+    /** Cargo do catálogo. OBRIGATÓRIO. O seletor SUGERE e não bloqueia (a lista inteira é alcançável). */
+    cargoId: uuid("cargo_id")
+      .notNull()
+      .references(() => cargos.id),
+    /** O título como a vaga é divulgada, distinto do cargo técnico do catálogo. */
+    nomeDivulgacao: varchar("nome_divulgacao", { length: 200 }).notNull(),
+    /**
+     * NULÁVEL, e isso é decisão de desenho, não descuido: na base real só 31 de 164 clientes casaram
+     * com o cadastro do EA (o CNPJ vem 100% vazio e a base usa nome comercial contra razão social).
+     * Vaga sem cliente resolvido ENTRA, marcada para vínculo manual, em vez de travar a importação
+     * ou de inventar um `cod_cliente`.
+     */
+    codCliente: varchar("cod_cliente", { length: 40 }).references(() => clientes.codCliente),
+    natureza: vagaNaturezaEnum("natureza").notNull(),
+    /** Nasce VAZIO: a coluna não existe na base e preencher seria adivinhar. */
+    vinculo: vagaVinculoEnum("vinculo"),
+    status: vagaStatusEnum("status").notNull().default("ABERTA"),
+    sazonalidade: vagaSazonalidadeEnum("sazonalidade").notNull().default("OPERACAO_PADRAO"),
+    /** Meta de contratações. Inteiro, e a ocupação é sempre DERIVADA, nunca armazenada. */
+    posicoes: integer("posicoes").notNull().default(1),
+    escolaridade: vagaEscolaridadeEnum("escolaridade"),
+    /**
+     * OS DOIS SALÁRIOS DO FORMULÁRIO (decisão do diretor, 21/08). O formulário de vaga tem "Salário
+     * Abertura" (no bloco de abertura) e "Salário Fechamento" (no bloco de fechamento), e eles
+     * DIVERGEM na vida real: a vaga abre num valor e fecha em outro, e essa diferença é o próprio
+     * indicador de negociação da vaga. Guardar um campo só apagaria o dado que interessa.
+     *
+     * `numeric(12,2)`, o mesmo tipo do salário da admissão, e nuláveis: a vaga abre sem salário
+     * definido, e o de fechamento só existe depois que ela fecha.
+     */
+    salarioAbertura: numeric("salario_abertura", { precision: 12, scale: 2 }),
+    salarioFechamento: numeric("salario_fechamento", { precision: 12, scale: 2 }),
+    dataAbertura: date("data_abertura").notNull(),
+    /**
+     * DATA LIMITE DE QUALQUER VAGA (correção do diretor, 21/08). Era amarrada à vaga SAZONAL por um
+     * CHECK; a amarração foi retirada porque toda natureza de vaga pode ter prazo. Continua nulável:
+     * vaga sem prazo é caso normal, e a de abertura é que segue obrigatória.
+     */
+    dataLimite: date("data_limite"),
+    /** Quem abriu: usuário do EA, carimbado pelo backend a partir da sessão, nunca digitado. */
+    abertoPorId: uuid("aberto_por_id").references(() => usuarios.id, { onDelete: "set null" }),
+
+    // ── PASSO 1, identificação ────────────────────────────────────────────────────────────────
+    /**
+     * DORMENTE desde a OST de 22/08 (item 4): o diretor tirou o Centro de custo da abertura, então
+     * a trilha não pergunta, o DTO não aceita e a listagem não devolve mais este campo.
+     *
+     * A COLUNA FICA, e isso é escolha: `DROP COLUMN` é destrutivo e irreversível, e o campo pode
+     * voltar. Enquanto não voltar, ela só guarda o que as vagas antigas já tinham.
+     */
+    centroCusto: varchar("centro_custo", { length: 80 }),
+
+    // ── PASSO 2, quem pediu ───────────────────────────────────────────────────────────────────
+    solicitanteNome: varchar("solicitante_nome", { length: 200 }),
+    solicitanteTelefone: varchar("solicitante_telefone", { length: 40 }),
+    solicitanteEmail: varchar("solicitante_email", { length: 180 }),
+    dataSolicitacao: date("data_solicitacao"),
+    dataAlinhamento: date("data_alinhamento"),
+    envioShortlist: date("envio_shortlist"),
+
+    /**
+     * OS DOIS LADOS DA VAGA (frente 2 da OST de 22/08). Um é carimbado pelo backend a partir do papel
+     * de A&S de quem abriu, o outro é escolhido na trilha. Nunca os dois digitados, nunca os dois
+     * automáticos: é sempre um automático e uma contraparte.
+     *
+     * `set null` nos dois: a vaga sobrevive à desativação da pessoa, sem apagar o resto do registro.
+     */
+    consultorId: uuid("consultor_id").references(() => usuarios.id, { onDelete: "set null" }),
+    recruiterId: uuid("recruiter_id").references(() => usuarios.id, { onDelete: "set null" }),
+
+    // ── PASSO 3, contratação ──────────────────────────────────────────────────────────────────
+    /** Lista de dias (30 a 270) mais "Indeterminado". Texto porque é o mesmo formato de `dados_vaga_folha`. */
+    tempoContrato: varchar("tempo_contrato", { length: 40 }),
+    /**
+     * NOME do motivo, escolhido do catálogo `motivos_contratacao`, e não FK: é exatamente o que a
+     * admissão faz em `dados_vaga_folha.motivo`. Assim inativar um motivo no catálogo não trava a
+     * vaga antiga nem exige `restrict`.
+     */
+    motivo: varchar("motivo", { length: 200 }),
+    justificativaMotivo: text("justificativa_motivo"),
+    tipoSubstituicao: vagaTipoSubstituicaoEnum("tipo_substituicao"),
+    /** Nome de quem será substituído. Só é pedido quando o motivo da contratação é Substituição. */
+    substituidoNome: varchar("substituido_nome", { length: 200 }),
+    /**
+     * CPF DE QUEM SERÁ SUBSTITUÍDO, e ele PERSISTE (decisão batida do diretor, 22/08).
+     *
+     * ISTO REVERTE O DESENHO ANTERIOR, que deixava o CPF fora da vaga com o argumento de que, sem
+     * assinatura de contrato, não haveria gatilho de expurgo e o dado ficaria retido para sempre.
+     * O diretor decidiu o contrário e pelo motivo certo: a retenção aqui é EXIGÊNCIA LEGAL e
+     * continuada, não incidental. O time de cadastro do ADM precisa do número do substituído para
+     * a folha e o eSocial, e perdê-lo em 48h quebraria o cadastro.
+     *
+     * NÃO CONFUNDIR COM `dados_vaga_folha.substituido_cpf`, da ADMISSÃO, que segue com o TTL de 48h
+     * da regra 10 da §A.3, intacto: são tabelas diferentes, com gatilhos e finalidades diferentes.
+     * Esta frente não encostou no `expurgo.service`.
+     *
+     * §A.6 continua valendo em tudo o mais: 11 dígitos sem máscara, nunca escrito em log, nunca
+     * exportado, e a rota inteira do módulo é fechada pelo menu `as-vagas`.
+     */
+    substituidoCpf: varchar("substituido_cpf", { length: 11 }),
+
+    // ── PASSO 4, condições ────────────────────────────────────────────────────────────────────
+    localTrabalho: text("local_trabalho"),
+    /**
+     * REGIÃO DE ABORDAGEM, NÍVEL BRASIL (item 7 da OST de 22/08), em duas colunas encadeadas.
+     *
+     * A UF comanda: escolhido o estado, `regioes` só aceita região daquele estado (a régua é
+     * `regiaoPertenceAUf`, no shared-types, conferida no service antes de gravar). Antes disto,
+     * `regioes` era UMA caixa de texto livre, e "zona leste", "ZL" e "leste de SP" eram três dados
+     * diferentes para a mesma coisa.
+     *
+     * ARRAY, e não string com vírgula, pelo mesmo motivo de `testes`: a seleção é múltipla e a
+     * pergunta que interessa é "quais vagas abordam a Baixada Fluminense", que em array se responde
+     * sem varrer texto.
+     */
+    regiaoEstado: varchar("regiao_estado", { length: 2 }),
+    regioes: text("regioes").array(),
+    /** O que a lista de regiões não cobriu, escrito à mão. Não entra em catálogo nenhum. */
+    regioesOutras: varchar("regioes_outras", { length: 200 }),
+    /**
+     * HORÁRIO E ESCALA (item 5 da OST de 22/08): passou de caixa de texto a lista do cadastro que já
+     * existe, o `escalas_catalogo` da Liberação, servido por `/catalogos/escalas` (só as ativas).
+     *
+     * CONTINUA `text` DE PROPÓSITO, e não vira FK: o catálogo está sujo (153 ativas, com duplicatas
+     * de caixa e placeholders como "A DEFINIR"), e a limpeza dele é frente futura do diretor. Uma FK
+     * agora amarraria a vaga a linhas que vão ser fundidas. Além disso a opção "Outra escala" grava
+     * texto que NÃO entra no catálogo, por decisão do diretor, e texto livre não cabe em FK.
+     */
+    horarioEscala: text("horario_escala"),
+    modeloTrabalho: vagaModeloTrabalhoEnum("modelo_trabalho"),
+    detalheHibrido: varchar("detalhe_hibrido", { length: 200 }),
+    /** Padrões que vêm do formulário de papel: confidencial nasce não, divulgar empresa nasce sim. */
+    confidencial: boolean("confidencial").notNull().default(false),
+    divulgarEmpresa: boolean("divulgar_empresa").notNull().default(true),
+
+    // ── PASSO 5, requisitos ───────────────────────────────────────────────────────────────────
+    faixaEtaria: varchar("faixa_etaria", { length: 80 }),
+    genero: vagaGeneroEnum("genero").notNull().default("INDIFERENTE"),
+    /** Lista fechada, seleção múltipla (item 6). "Outros" leva o texto para `idiomas_outros`. */
+    idiomas: text("idiomas").array(),
+    idiomasOutros: varchar("idiomas_outros", { length: 160 }),
+    /** SEGUE TEXTO ABERTO por decisão do diretor: é o campo mais colado na realidade de cada cliente. */
+    cursosConhecimentos: text("cursos_conhecimentos"),
+    /**
+     * TESTES APLICADOS como ARRAY de texto, não como coluna por teste nem como string com vírgula:
+     * a seleção é múltipla e a lista pode crescer, e array é o que permite perguntar "quais vagas
+     * pedem Excel" sem varrer texto.
+     */
+    testes: text("testes").array(),
+    testesOutro: varchar("testes_outro", { length: 160 }),
+    experiencia: text("experiencia"),
+    atribuicoes: text("atribuicoes"),
+    perfilComportamental: text("perfil_comportamental"),
+    ambiente: text("ambiente"),
+    /** Lista fechada, seleção múltipla (item 6). "Outra" leva o texto para `etapas_ps_outra`. */
+    etapasPs: text("etapas_ps").array(),
+    etapasPsOutra: varchar("etapas_ps_outra", { length: 160 }),
+    observacoes: text("observacoes"),
+
+    // ── FECHAMENTO (frente 4): preenchido só na ação Fechar Vaga, nunca na abertura ───────────
+    dataFechamento: date("data_fechamento"),
+    /** Nº de vagas fechadas. A trava "não passa das posições" é do serviço, com mensagem de gente. */
+    vagasFechadas: integer("vagas_fechadas"),
+    dataPrevistaInicio: date("data_prevista_inicio"),
+    /**
+     * A INTENÇÃO declarada no fechamento, quando o consultor escolhe "finalizar e enviar para
+     * admissão". Fica REGISTRADA e não liga nada: a ponte com a esteira é frente separada, a última
+     * do planejamento. Guardar a intenção agora é o que permite, no dia da ponte, saber quais vagas
+     * pediram passagem sem precisar perguntar de novo.
+     */
+    enviarParaAdmissao: boolean("enviar_para_admissao").notNull().default(false),
+
+    criadoEm,
+    atualizadoEm,
+  },
+  (t) => ({
+    // Busca por código é o caminho natural de quem trabalha com a base (o código é o que a operação
+    // decora). ÍNDICE COMUM, NÃO UNIQUE, e a escolha é deliberada: a trava de duplicidade vive no
+    // CADASTRO (`vagas.service`), porque a base histórica da onda 3 traz códigos repetidos e um
+    // unique no banco faria a importação inteira falhar em vez de marcar a linha para revisão.
+    idxCodigo: index("idx_vagas_codigo").on(t.codigo),
+    idxCliente: index("idx_vagas_cod_cliente").on(t.codCliente),
+    idxCargo: index("idx_vagas_cargo").on(t.cargoId),
+    idxStatus: index("idx_vagas_status").on(t.status),
+    idxAbertura: index("idx_vagas_data_abertura").on(t.dataAbertura),
+    // Meta zero ou negativa não é meta, é linha que deveria ter sido apagada (mesmo check de
+    // `projeto_vaga_cargo`, e pelo mesmo motivo: a meta entra em divisão na tela).
+    ckPosicoes: check("ck_vagas_posicoes", sql`${t.posicoes} > 0`),
+    // O CHECK `ck_vagas_limite_sazonal` (data limite obrigatória na vaga SAZONAL) foi REMOVIDO na
+    // correção de 21/08: a amarração era engano, a data limite vale para qualquer natureza de vaga.
+  }),
+);
+
+/**
+ * BENEFÍCIOS DA VAGA (correção do diretor, 21/08): o formulário de abertura traz "Benefícios:
+ * ( )VT ( )VA ( )VR ( )AM ...", e a vaga passa a SELECIONAR do catálogo que já existe
+ * (`beneficios_catalogo`, a mesma fonte da tela de Benefícios) em vez de guardar texto livre.
+ *
+ * POR QUE UMA TABELA DE LIGAÇÃO, e não uma coluna de texto: foi exatamente a coluna de texto
+ * (`dados_vaga_folha.beneficios`) que produziu 2.066 blobs que ninguém consegue filtrar nem contar.
+ * O mesmo desenho de `admissao_beneficio`, pelo mesmo motivo.
+ *
+ * CASCADE na vaga (o vínculo não sobrevive à vaga) e RESTRICT no catálogo (apagar um benefício não
+ * pode evaporar em silêncio o que já foi selecionado). §A.6: só vínculo, sem PII.
+ */
+export const vagaBeneficio = pgTable(
+  "vaga_beneficio",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    vagaId: uuid("vaga_id")
+      .notNull()
+      .references(() => vagas.id, { onDelete: "cascade" }),
+    beneficioId: uuid("beneficio_id")
+      .notNull()
+      .references(() => beneficiosCatalogo.id, { onDelete: "restrict" }),
+    /**
+     * VALOR do benefício nesta vaga (decisão do diretor, 22/08), no espelho exato de
+     * `admissao_beneficio.valor`. NULÁVEL de propósito: benefício sem valor (Seguro de vida) é só
+     * concedido ou não, e forçar zero ali seria inventar um número que ninguém informou.
+     */
+    valor: numeric("valor", { precision: 12, scale: 2 }),
+    criadoEm,
+  },
+  (t) => ({
+    uqVagaBeneficio: unique("uq_vaga_beneficio").on(t.vagaId, t.beneficioId),
+    idxVaga: index("idx_vaga_beneficio_vaga").on(t.vagaId),
   }),
 );
