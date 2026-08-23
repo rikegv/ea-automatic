@@ -4,6 +4,7 @@ import { APP_GUARD } from "@nestjs/core";
 import { JwtModule } from "@nestjs/jwt";
 import { ThrottlerGuard, ThrottlerModule } from "@nestjs/throttler";
 import { AdminModule } from "./admin/admin.module";
+import { AsModule } from "./as/as.module";
 import { AdmissoesModule } from "./admissoes/admissoes.module";
 import { AiModule } from "./ai/ai.module";
 import { AuditoriaModule } from "./auditoria/auditoria.module";
@@ -44,6 +45,8 @@ import { VtColetaModule } from "./vt-coleta/vt-coleta.module";
     AuthModule,
     MenusModule,
     AdminModule,
+    // ATRAÇÃO E SELEÇÃO (Central de Vagas): módulo novo e isolado, sem dependência da Admissão.
+    AsModule,
     PastasDriveModule,
     AdmissoesModule,
     EsteiraModule,

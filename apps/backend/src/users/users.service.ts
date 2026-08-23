@@ -26,6 +26,9 @@ const LIST_COLUMNS = {
   nome: usuarios.nome,
   email: usuarios.email,
   papel: usuarios.papel,
+  // PAPEL DE A&S: entra na projeção pública porque a tela de usuários mostra o lado da vaga que a
+  // pessoa ocupa. Continua fora de qualquer decisão de acesso: quem manda no acesso é `papel`.
+  papelAs: usuarios.papelAs,
   ativo: usuarios.ativo,
   criadoEm: usuarios.criadoEm,
 } as const;
@@ -86,6 +89,8 @@ export class UsersService {
         email,
         senhaHash,
         papel: dto.papel,
+        // Ausente vira NULL, que é o estado de quem não trabalha em A&S (a maioria).
+        papelAs: dto.papelAs ?? null,
         ativo: true,
         senhaTemporaria: true,
       })
@@ -129,6 +134,9 @@ export class UsersService {
       patch.email = email;
     }
     if (dto.papel !== undefined) patch.papel = dto.papel;
+    // AUSENTE PRESERVA, NULL LIMPA: o `!== undefined` é o que separa "não mexa" de "tire o papel".
+    // Trocar por um `if (dto.papelAs)` apagaria o papel toda vez que a tela salvasse só o nome.
+    if (dto.papelAs !== undefined) patch.papelAs = dto.papelAs ?? null;
     if (dto.ativo !== undefined) patch.ativo = dto.ativo;
 
     const [row] = await this.db
@@ -181,6 +189,7 @@ function toListItem(row: {
   nome: string;
   email: string;
   papel: UsuarioListItem["papel"];
+  papelAs: UsuarioListItem["papelAs"];
   ativo: boolean;
   criadoEm: Date;
 }): UsuarioListItem {
@@ -189,6 +198,7 @@ function toListItem(row: {
     nome: row.nome,
     email: row.email,
     papel: row.papel,
+    papelAs: row.papelAs ?? null,
     ativo: row.ativo,
     criadoEm: row.criadoEm.toISOString(),
   };

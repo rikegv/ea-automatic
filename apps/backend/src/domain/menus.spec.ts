@@ -23,7 +23,7 @@ describe("registro de menus", () => {
     for (const m of MENUS) {
       expect(m.rotulo.length).toBeGreaterThan(0);
       expect(m.href.startsWith("/")).toBe(true);
-      expect(["OPERACAO", "ADMIN"]).toContain(m.grupo);
+      expect(["OPERACAO", "ADMIN", "SELECAO"]).toContain(m.grupo);
     }
   });
 });
@@ -144,10 +144,27 @@ describe("segmentação por área: o NASCIMENTO (a fonte viva é a tabela, testa
   //
   // Os casos de visibilidade vigente vivem agora em `auth/menu-areas.service.spec.ts`.
 
-  it("IDENTIDADE DA VIRADA: todo menu de hoje NASCE na área ADM", () => {
+  it("IDENTIDADE DA VIRADA: todo menu da ADMISSÃO NASCE na área ADM", () => {
     // É o carimbo que a migration copiou para a tabela, então ele é a prova de que a troca de fonte
     // foi uma identidade. Se algum menu deixar de nascer em ADM sem decisão do diretor, quebra aqui.
-    for (const m of MENUS) expect(areasDeNascimento(m)).toContain("ADM");
+    //
+    // O RECORTE MUDOU quando o PRIMEIRO menu de A&S nasceu (Central de Vagas): o caso dizia "todo
+    // menu de hoje", e "hoje" era o dia da virada, quando o módulo de A&S ainda não existia. O que a
+    // virada provou continua travado aqui, agora pelo grupo: menu do módulo de Admissão nasce em ADM.
+    // Menu de A&S vive em grupo próprio (SELECAO) e é coberto pelo caso logo abaixo.
+    for (const m of MENUS.filter((x) => x.grupo !== "SELECAO")) {
+      expect(areasDeNascimento(m)).toContain("ADM");
+    }
+  });
+
+  it("menu de A&S NASCE só na área AS, em grupo próprio, e fora do padrão do COMUM", () => {
+    // As três travas da §A.23 sobre o mesmo menu: área AS (não aparece para quem é da Admissão),
+    // grupo SELECAO (fora do filtro `grupo === "OPERACAO"` de qualquer backfill) e ausência do padrão
+    // do COMUM (ninguém recebe o módulo de A&S por concessão em massa).
+    const central = MENUS.find((m) => m.codigo === "as-vagas")!;
+    expect(central.grupo).toBe("SELECAO");
+    expect(areasDeNascimento(central)).toEqual(["AS"]);
+    expect(MENUS_PADRAO_COMUM).not.toContain("as-vagas");
   });
 
   it("o Início NASCE nas DUAS áreas: ninguém encara uma barra lateral vazia", () => {

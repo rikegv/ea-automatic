@@ -10,12 +10,14 @@ import {
   MaxLength,
   MinLength,
 } from "class-validator";
-import { AREA, PAPEL, type Area, type Papel } from "@ea/shared-types";
+import { AREA, PAPEL, PAPEL_AS, type Area, type Papel, type PapelAs } from "@ea/shared-types";
 
 // Papéis atribuíveis pela administração de usuários (todos os do RBAC, §A.3).
 const PAPEIS = PAPEL as unknown as string[];
 // Áreas atribuíveis (segmentação do módulo de A&S).
 const AREAS = AREA as unknown as string[];
+// PAPEL DE A&S: o lado da vaga que a pessoa ocupa. Nada a ver com o RBAC acima.
+const PAPEIS_AS = PAPEL_AS as unknown as string[];
 
 export class CriarUsuarioDto {
   @IsString()
@@ -42,6 +44,15 @@ export class CriarUsuarioDto {
   @ArrayUnique()
   @IsIn(AREAS, { each: true })
   areas!: Area[];
+
+  /**
+   * PAPEL DE A&S (Consultor ou Recruiter), OPCIONAL, e essa é a diferença que mais importa em relação
+   * à área logo acima: ninguém pode nascer sem área, e quase todo mundo nasce sem papel de A&S,
+   * porque só quem trabalha na frente de vagas ocupa um lado. Ausente é o estado normal.
+   */
+  @IsOptional()
+  @IsIn(PAPEIS_AS)
+  papelAs?: PapelAs;
 }
 
 export class AtualizarUsuarioDto {
@@ -63,6 +74,15 @@ export class AtualizarUsuarioDto {
   @IsOptional()
   @IsBoolean()
   ativo?: boolean;
+
+  /**
+   * PAPEL DE A&S. `null` LIMPA o papel (a pessoa saiu da frente de vagas), e é por isso que o
+   * `@IsOptional` importa aqui: ele deixa o `null` passar sem cair no `@IsIn`, enquanto AUSENTE
+   * continua significando "não mexa neste campo". Ausente preserva, null limpa, valor troca.
+   */
+  @IsOptional()
+  @IsIn(PAPEIS_AS)
+  papelAs?: PapelAs | null;
 }
 
 /** Conjunto de menus marcados para um usuário (OST permissão de menu). Códigos inválidos são

@@ -22,7 +22,16 @@ import type { Area } from "@ea/shared-types";
  * `menus`, então o menu novo aparece sem deploy da tela.
  */
 
-export type GrupoMenu = "OPERACAO" | "ADMIN";
+/**
+ * GRUPOS DA BARRA LATERAL. `SELECAO` é o terceiro, e nasce com a Central de Vagas (A&S).
+ *
+ * GRUPO PRÓPRIO, e não um item a mais em "Operação", porque a barra passa a servir a DOIS times: o
+ * grupo é o que separa visualmente o módulo de Admissão do de Atração e Seleção para quem, um dia,
+ * tiver as duas áreas. E tem um efeito de segurança de graça: `MENUS_PADRAO_COMUM` filtra por
+ * `grupo === "OPERACAO"`, então menu em grupo novo fica DUPLAMENTE fora de qualquer backfill futuro
+ * (§A.23, a armadilha que concedeu menu a três usuários sem ninguém pedir).
+ */
+export type GrupoMenu = "OPERACAO" | "ADMIN" | "SELECAO";
 
 /**
  * ÁREA DE NASCIMENTO de um menu que não declara `areas`.
@@ -565,6 +574,30 @@ export const MENUS: MenuDef[] = [
     // cadastradas, então um Master que a alcançasse poderia se conceder a área que quisesse e a
     // segmentação inteira viraria decorativa.
     operacoes: [],
+  },
+  // ── Atração e Seleção ─────────────────────────────────────────────────────
+  {
+    /**
+     * CENTRAL DE VAGAS (A&S, onda 1). Primeiro menu do módulo de Atração e Seleção.
+     *
+     * NASCE EM `areas: ["AS"]` e isso é obrigatório: sem declarar, o default é ADM (ver
+     * `AREA_PADRAO_DO_MENU`) e o menu simplesmente não apareceria para o time de A&S.
+     *
+     * QUEM ENXERGA É DECISÃO DO DIRETOR (§A.23). O convergedor do boot REGISTRA o menu no catálogo
+     * (para ele existir e ser selecionável na tela de liberação) e para por aí; nenhuma concessão
+     * acontece aqui. Não aparecer para os demais usuários não é bug.
+     *
+     * A CONTROLLER INTEIRA é reivindicada, LEITURA INCLUÍDA, diferente dos catálogos da Admissão. É
+     * deliberado: enquanto o módulo é novo e liberado a ninguém, ele precisa ser invisível E inerte,
+     * inclusive pela URL da API.
+     */
+    codigo: "as-vagas",
+    rotulo: "Central De Vagas",
+    href: "/as/vagas",
+    grupo: "SELECAO",
+    ordem: 40,
+    areas: ["AS"],
+    operacoes: ["VagasController.*"],
   },
 ];
 
