@@ -297,6 +297,38 @@ export class ClicksignSyncService implements OnModuleInit, OnModuleDestroy {
       })
       .where(eq(admissoes.id, admissaoId));
     this.logger.log(`Envelope Clicksign ativado (admissão ${admissaoId}).`);
+
+    /**
+     * PASSO 5: CHAMA A PESSOA PARA ASSINAR. Ativar o envelope só o deixa pronto; é este POST que
+     * dispara o e-mail. Sem ele o contrato ficava `running`, correto e parado, e o funcionário nunca
+     * era chamado. Foi o que aconteceu com 106 contratos em 24/08/2026.
+     *
+     * DEPOIS DO UPDATE, NUNCA ANTES. Se esta chamada rodasse antes de gravar o `clicksignEnvelopeId`
+     * e falhasse, o job cairia no backoff e reentraria em `criarEnvelope` com o banco ainda limpo: a
+     * guarda de "já tem envelope vivo" não veria nada e um SEGUNDO envelope nasceria, órfão. Gravar
+     * primeiro torna a retentativa inofensiva.
+     *
+     * NÃO LANÇA, pelo mesmo motivo. O envelope já existe e já está ativo; derrubar o job aqui não
+     * desfaz nada e ainda arrisca duplicar. Então a falha vira ERRO no log, nomeando a admissão, e o
+     * contrato fica notificável de novo (o envelope segue de pé, é só repetir o passo 5).
+     *
+     * O balde deste endpoint é 1 por minuto POR ENVELOPE, então retentar aqui dentro não ajudaria:
+     * um 429 só liberaria na virada do minuto, tempo demais para segurar um job da fila.
+     */
+    try {
+      const r = await this.api.notificarEnvelope(env.id);
+      this.logger.log(
+        `Solicitação de assinatura enviada (admissão ${admissaoId}): ` +
+          `${r?.notificados ?? 0} de ${r?.total ?? 0} signatário(s) do grupo atual.`,
+      );
+    } catch {
+      // §A.6: só o id da admissão, nunca o do envelope, nome ou e-mail.
+      this.logger.error(
+        `CONTRATO ATIVO MAS NÃO NOTIFICADO (admissão ${admissaoId}): o envelope foi criado e ativado, ` +
+          "mas a solicitação de assinatura não saiu. O candidato NÃO foi chamado para assinar; " +
+          "reenvie a notificação para esta admissão.",
+      );
+    }
   }
 
   // ── (b) Tick: varre os envelopes aguardando assinatura ───────────────────

@@ -28,6 +28,7 @@ describe("ClicksignApiService — inércia sem token (§A.5)", () => {
       svc.criarRequirement("e", { documentId: "d", signerId: "s" }),
     ).resolves.toBeUndefined();
     await expect(svc.ativarEnvelope("e")).resolves.toBeUndefined();
+    await expect(svc.notificarEnvelope("e")).resolves.toBeUndefined();
     // `cancelarEnvelope` passou a devolver SE o provedor aceitou. Inerte nunca cancela nada, então
     // false, que é o mesmo que a tela precisa saber: a notificação não saiu.
     await expect(svc.cancelarEnvelope("e")).resolves.toBe(false);
@@ -88,6 +89,43 @@ describe("ClicksignApiService — shapes confirmados no sandbox", () => {
     expect(body.data.attributes.documentation).toBe("111.444.777-35");
     // O CPF cru jamais aparece no corpo enviado.
     expect((init as RequestInit).body).not.toContain("11144477735");
+  });
+
+  /**
+   * Shape levantado contra a PRODUÇÃO em 25/08/2026: o POST devolve 201 com
+   * `data.attributes.summary[] = [{ signer_id, notified }]`. Com grupos sequenciais o summary traz
+   * só o grupo corrente (o funcionário), não todos os signatários do envelope.
+   */
+  it("notificarEnvelope manda o corpo JSON:API e conta quem foi notificado", async () => {
+    const svc = new ClicksignApiService(
+      config({ CLICKSIGN_API_TOKEN: "tok", CLICKSIGN_API_BASE_URL: "https://x/api/v3" }),
+    );
+    const spy = comFetch({
+      data: {
+        type: "notifications",
+        attributes: {
+          summary: [
+            { signer_id: "s-1", notified: true },
+            { signer_id: "s-2", notified: false },
+          ],
+        },
+      },
+    });
+
+    await expect(svc.notificarEnvelope("env-1")).resolves.toEqual({ notificados: 1, total: 2 });
+
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe("https://x/api/v3/envelopes/env-1/notifications");
+    expect((init as RequestInit).method).toBe("POST");
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({
+      data: { type: "notifications", attributes: {} },
+    });
+  });
+
+  it("notificarEnvelope sem summary devolve zero, em vez de estourar", async () => {
+    const svc = new ClicksignApiService(config({ CLICKSIGN_API_TOKEN: "tok" }));
+    comFetch({ data: { attributes: {} } });
+    await expect(svc.notificarEnvelope("env-1")).resolves.toEqual({ notificados: 0, total: 0 });
   });
 
   it("criarEnvelope devolve {id} a partir de data.id", async () => {

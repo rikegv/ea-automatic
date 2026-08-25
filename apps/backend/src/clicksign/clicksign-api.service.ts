@@ -45,6 +45,23 @@ import { ConfigService } from "@nestjs/config";
  *       resp 200: data.attributes.status="running"
  *       (PATCH só aceita status writable "draft"|"running" — ver cancelarEnvelope.)
  *
+ *  5b) notificarEnvelope → POST /envelopes/{id}/notifications
+ *       body:  data.type="notifications", attributes:{}
+ *       resp 201: data.attributes.summary[] = [{ signer_id, notified }]
+ *
+ *       ATIVAR NÃO NOTIFICA. São dois passos distintos na v3, e a falta deste era a causa de
+ *       "o funcionário não recebeu o contrato": o envelope ficava `running`, válido e esperando,
+ *       sem ninguém ter sido chamado para assinar. Medido em 25/08/2026 contra a produção: o
+ *       envelope ativado há 34s tinha zero notificação, e esta chamada devolveu `notified: true`.
+ *
+ *       Notifica os signatários do GRUPO CORRENTE, não todos: com grupos sequenciais, o `summary`
+ *       traz só o funcionário (grupo 1); a empresa é chamada pela Clicksign quando chegar a vez.
+ *
+ *       BALDE PRÓPRIO, e apertado: `x-rate-limit: 1` numa janela de 60s, POR ENVELOPE (medido:
+ *       duas chamadas seguidas no MESMO envelope dão 429, em envelopes DIFERENTES dão 201). O teto
+ *       global de 50 req/10s continua valendo por cima. Ou seja: repetir o mesmo envelope dentro do
+ *       minuto é impossível, e reenvio em massa é limitado só pelo teto global.
+ *
  *  6) consultarStatus → GET /envelopes/{id}
  *       resp 200: data.attributes.status ∈ {draft, running, closed, canceled}
  *
@@ -226,6 +243,27 @@ export class ClicksignApiService {
     await this.req("PATCH", `/envelopes/${enc(envId)}`, {
       data: { id: envId, type: "envelopes", attributes: { status: "running" } },
     });
+  }
+
+  /**
+   * (5b) DISPARA A SOLICITAÇÃO DE ASSINATURA por e-mail. É o passo que faltava: ativar deixa o
+   * envelope pronto, esta chamada é que chama a pessoa para assinar.
+   *
+   * Devolve quantos signatários a Clicksign diz ter notificado, para o chamador poder afirmar o que
+   * de fato aconteceu em vez de supor. Inerte → undefined. LANÇA em erro HTTP, como as demais; quem
+   * chama decide se aquilo derruba o fluxo (no `criarEnvelope` não derruba, ver lá).
+   */
+  async notificarEnvelope(
+    envId: string,
+  ): Promise<{ notificados: number; total: number } | undefined> {
+    if (this.inerte()) return undefined;
+    const data = await this.req<{
+      data?: { attributes?: { summary?: { signer_id?: string; notified?: boolean }[] } };
+    }>("POST", `/envelopes/${enc(envId)}/notifications`, {
+      data: { type: "notifications", attributes: {} },
+    });
+    const resumo = data?.data?.attributes?.summary ?? [];
+    return { notificados: resumo.filter((s) => s.notified).length, total: resumo.length };
   }
 
   /**

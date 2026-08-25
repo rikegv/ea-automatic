@@ -40,8 +40,12 @@ const REPRESENTANTE: AssinanteEmpresa = {
 };
 
 /** Monta o service com a Clicksign toda mockada e o kit presente na staging. */
-function montar(over: { assinantes?: AssinanteEmpresa[] } = {}) {
+function montar(
+  over: { assinantes?: AssinanteEmpresa[]; notificarFalha?: boolean } = {},
+) {
   let seqSigner = 0;
+  // ORDEM REAL das chamadas, para provar que a notificação vem depois de gravar o envelope no banco.
+  const ordem: string[] = [];
   const api = {
     estaAtivo: () => true,
     criarEnvelope: vi.fn().mockResolvedValue({ id: "env-1" }),
@@ -50,7 +54,15 @@ function montar(over: { assinantes?: AssinanteEmpresa[] } = {}) {
       .fn()
       .mockImplementation(async () => ({ id: `sig-${++seqSigner}` })),
     criarRequirement: vi.fn().mockResolvedValue(undefined),
-    ativarEnvelope: vi.fn().mockResolvedValue(undefined),
+    ativarEnvelope: vi.fn().mockImplementation(async () => {
+      ordem.push("ativar");
+    }),
+    // Passo 5 da v3: ativar não notifica, esta chamada é que chama a pessoa para assinar.
+    notificarEnvelope: vi.fn().mockImplementation(async () => {
+      ordem.push("notificar");
+      if (over.notificarFalha) throw new Error("Clicksign HTTP 429");
+      return { notificados: 1, total: 1 };
+    }),
   };
 
   const adm = {
@@ -78,6 +90,7 @@ function montar(over: { assinantes?: AssinanteEmpresa[] } = {}) {
   const update = vi.fn().mockImplementation(() => ({
     set: (v: Record<string, unknown>) => {
       setCalls.push(v);
+      if (v.clicksignEnvelopeId) ordem.push("gravar-envelope");
       return { where: () => Promise.resolve(undefined) };
     },
   }));
@@ -101,7 +114,10 @@ function montar(over: { assinantes?: AssinanteEmpresa[] } = {}) {
   const warn = vi
     .spyOn((svc as unknown as { logger: { warn: (m: string) => void } }).logger, "warn")
     .mockImplementation(() => undefined);
-  return { svc, api, assinantes, setCalls, warn };
+  const erro = vi
+    .spyOn((svc as unknown as { logger: { error: (m: string) => void } }).logger, "error")
+    .mockImplementation(() => undefined);
+  return { svc, api, assinantes, setCalls, warn, erro, ordem };
 }
 
 /**
@@ -129,6 +145,38 @@ vi.mock("node:fs", async (orig) => {
 vi.mock("node:fs/promises", async (orig) => {
   const real = (await orig()) as Record<string, unknown>;
   return { ...real, readFile: async () => kitNoDisco };
+});
+
+/**
+ * PASSO 5 DA V3: ativar o envelope NÃO notifica ninguém. Sem esta chamada o contrato fica `running`,
+ * correto e parado, e o funcionário nunca é chamado para assinar. Foi a causa de 106 contratos
+ * pendentes em 24/08/2026, e a Clicksign confirmou ao vivo devolvendo `notified: true` só quando o
+ * `POST /notifications` aconteceu, 34 segundos depois da ativação.
+ */
+describe("criarEnvelope chama a pessoa para assinar (passo 5)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("notifica o envelope depois de ativar", async () => {
+    const { svc, api } = montar();
+    await svc.criarEnvelope("adm-1", "/staging/kit.pdf");
+    expect(api.notificarEnvelope).toHaveBeenCalledWith("env-1");
+  });
+
+  it("GRAVA o envelope no banco ANTES de notificar (senão a retentativa duplicaria)", async () => {
+    // A guarda de "já tem envelope vivo" lê o banco. Notificar antes de gravar significaria que uma
+    // falha ali derrubaria o job com o banco limpo, e a retentativa criaria um SEGUNDO envelope.
+    const { svc, ordem } = montar();
+    await svc.criarEnvelope("adm-1", "/staging/kit.pdf");
+    expect(ordem).toEqual(["ativar", "gravar-envelope", "notificar"]);
+  });
+
+  it("falha ao notificar NÃO derruba o job, e grita no log", async () => {
+    // O envelope já existe e já está ativo: lançar aqui não desfaz nada e ainda arrisca duplicar.
+    const { svc, erro, setCalls } = montar({ notificarFalha: true });
+    await expect(svc.criarEnvelope("adm-1", "/staging/kit.pdf")).resolves.toBeUndefined();
+    expect(setCalls.some((s) => s.clicksignStatus === "AGUARDANDO_ASSINATURA")).toBe(true);
+    expect(erro).toHaveBeenCalledWith(expect.stringContaining("NÃO NOTIFICADO"));
+  });
 });
 
 describe("criarEnvelope monta os DOIS signatários com papel e ordem corretos", () => {
