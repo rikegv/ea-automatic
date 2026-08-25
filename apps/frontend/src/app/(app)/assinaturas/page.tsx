@@ -40,6 +40,11 @@ interface Linha {
   fase: FaseEnvelope;
   /** Há kit anexado para o olho abrir? Some quando o envelope é ASSINADO (vai ao prontuário). */
   temKit: boolean;
+  /** Painel guardado ("X de Y assinaram"), vindo da lista. Alimentado pelo tick, lido do banco. */
+  assinantes?: AssinanteStatus[];
+  resumo?: { total: number; assinaram: number; pendentes: number };
+  /** ISO da última atualização do painel. `null` = ainda não varrido. */
+  painelEm?: string | null;
 }
 
 type FaseEnvelope = "NAO_ENVIADO" | "ENVIADO" | "ASSINADO" | "ENCERRADO";
@@ -120,7 +125,15 @@ function AcaoIcone({
  * Pendente vem PRIMEIRO (a ordenação vem pronta do backend), porque a tela existe para cobrar quem
  * está devendo, não para celebrar quem já assinou.
  */
-function Assinantes({ dados }: { dados: RespAssinantes | undefined }) {
+function Assinantes({
+  dados,
+  onAtualizar,
+  atualizando,
+}: {
+  dados: RespAssinantes | undefined;
+  onAtualizar: () => void;
+  atualizando: boolean;
+}) {
   if (!dados) {
     return <span className="text-[12px] text-faint">Consultando os assinantes…</span>;
   }
@@ -134,6 +147,24 @@ function Assinantes({ dados }: { dados: RespAssinantes | undefined }) {
   const { total, assinaram, pendentes } = dados.resumo;
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+      {/* FRESCOR EXPLÍCITO. O painel vem do banco, alimentado pelo ciclo do tick, então pode estar
+          alguns minutos atrasado. Dizer há quanto tempo foi atualizado é o que impede alguém de ler
+          isto como tempo real; quem precisa do exato agora tem o botão ao lado. */}
+      <span className="inline-flex items-center gap-1 text-[11.5px] text-faint">
+        <span title={dados.atualizadoEm ? formatarDataHora(dados.atualizadoEm) : undefined}>
+          {haQuantoTempo(dados.atualizadoEm)}
+        </span>
+        <button
+          type="button"
+          onClick={onAtualizar}
+          disabled={atualizando}
+          title="Consultar a Clicksign agora, só deste candidato"
+          aria-label="Atualizar assinantes deste candidato"
+          className="grid h-5 w-5 flex-none place-items-center rounded text-faint transition hover:bg-[var(--surface-2)] hover:text-accent disabled:opacity-40"
+        >
+          <Icon name="refresh" className={cn("h-3 w-3", atualizando && "animate-spin")} />
+        </button>
+      </span>
       <span
         className={cn(
           "text-[12px] font-semibold",
@@ -197,14 +228,16 @@ interface AssinanteStatus {
 interface RespAssinantes {
   assinantes: AssinanteStatus[];
   resumo: { total: number; assinaram: number; pendentes: number };
+  /** ISO da última atualização do painel. `null` = ainda não varrido pelo tick. */
+  atualizadoEm?: string | null;
   /** Preenchido quando não deu para consultar (sem envelope, integração inerte, provedor fora). */
   indisponivel?: string;
 }
 
-/** Quantas linhas consultam assinantes ao mesmo tempo (ver o efeito que busca em segundo plano). */
-const LOTE_ASSINANTES = 4;
+/** Painel vazio, para linha ainda não varrida. */
+const VAZIO = { total: 0, assinaram: 0, pendentes: 0 };
 
-type Aba = "aptos" | "abertos" | "assinados";
+type Aba = "aptos" | "abertos" | "encerrados" | "assinados";
 
 // Ordem definida pelo diretor: a fila de trabalho primeiro, depois o acompanhamento, depois o
 // histórico. É a ordem do fluxo real: dispara, acompanha, arquiva.
@@ -266,6 +299,27 @@ function formatarDataHoraCurta(iso: string | null | undefined): string {
   })}`;
 }
 
+/**
+ * Há quanto tempo o painel foi atualizado, em texto curto.
+ *
+ * Existe para a tela NÃO se passar por tempo real. O painel vem do banco, alimentado pelo ciclo do
+ * tick, e omitir isso faria o operador cobrar alguém por uma assinatura que já entrou há um minuto.
+ */
+function haQuantoTempo(iso: string | null | undefined): string {
+  if (!iso) return "ainda não atualizado";
+  const ms = Date.now() - new Date(iso).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return "atualizado agora";
+  const min = Math.floor(ms / 60_000);
+  if (min < 1) return "atualizado agora";
+  if (min === 1) return "atualizado há 1 minuto";
+  if (min < 60) return `atualizado há ${min} minutos`;
+  const h = Math.floor(min / 60);
+  if (h === 1) return "atualizado há 1 hora";
+  if (h < 24) return `atualizado há ${h} horas`;
+  const d = Math.floor(h / 24);
+  return d === 1 ? "atualizado ontem" : `atualizado há ${d} dias`;
+}
+
 /** Data e hora em pt-BR, para o tooltip de quem já assinou (o minuto ajuda a conferir a cobrança). */
 function formatarDataHora(iso: string | null | undefined): string {
   if (!iso) return "não informado";
@@ -325,6 +379,8 @@ export default function AssinaturasPage() {
 
   // QUEM JÁ ASSINOU E QUEM ESTÁ DEVENDO, por linha. `undefined` = ainda buscando.
   const [assinantes, setAssinantes] = useState<Record<string, RespAssinantes | undefined>>({});
+  /** Id da linha sendo consultada ao vivo pelo botão de atualizar. */
+  const [atualizando, setAtualizando] = useState<string | null>(null);
 
   const carregar = useCallback(
     async (qual: Aba) => {
@@ -353,50 +409,46 @@ export default function AssinaturasPage() {
   /**
    * Busca os assinantes das linhas QUE TÊM ENVELOPE, depois que a lista chegou.
    *
-   * Em segundo plano e por linha, de propósito. Cada linha custa duas chamadas à Clicksign (a lista
-   * de assinantes e os eventos, ver o backend), então embutir isso na consulta da lista deixaria a
-   * tela inteira esperando o provedor e empurraria o limite de requisições da conta. Assim a tabela
-   * aparece na hora e cada linha completa sozinha.
+   * O PAINEL VEM DA LISTA, não da Clicksign. Antes esta tela consultava o provedor linha por linha
+   * (2 requisições cada, 220 numa aba de 110), e isso gerava centenas de 429 antes do limitador e
+   * 60 segundos de espera depois dele. O painel agora é guardado pelo tick e chega junto da lista,
+   * então a tabela abre completa e instantânea, sem tocar a rede externa.
    *
-   * A CONCORRÊNCIA É LIMITADA (`LOTE_ASSINANTES`) pelo mesmo motivo: uma aba com muitos envelopes
-   * dispararia dezenas de chamadas simultâneas ao provedor. Falha de uma linha não contamina as
-   * outras: o backend responde 200 com o motivo, e a linha mostra o motivo.
+   * Este efeito só SEMEIA o mapa local com o que o backend mandou. A consulta ao vivo continua
+   * existindo, mas sob demanda, no botão de atualizar de cada linha.
    */
   useEffect(() => {
-    if (!token || loading) return;
-    const alvos = itens.filter((i) => i.temEnvelope).map((i) => i.admissaoId);
-    if (alvos.length === 0) return;
-    let vivo = true;
+    if (itens.length === 0) return;
+    setAssinantes(
+      Object.fromEntries(
+        itens.map((i) => [
+          i.admissaoId,
+          { assinantes: i.assinantes ?? [], resumo: i.resumo ?? VAZIO, atualizadoEm: i.painelEm ?? null },
+        ]),
+      ),
+    );
+  }, [itens]);
 
-    void (async () => {
-      for (let i = 0; i < alvos.length; i += LOTE_ASSINANTES) {
-        if (!vivo) return;
-        const fatia = alvos.slice(i, i + LOTE_ASSINANTES);
-        const respostas = await Promise.all(
-          fatia.map(async (id) => {
-            try {
-              return [id, await apiFetch<RespAssinantes>(`/clicksign/${id}/assinantes`, { token })] as const;
-            } catch {
-              return [
-                id,
-                {
-                  assinantes: [],
-                  resumo: { total: 0, assinaram: 0, pendentes: 0 },
-                  indisponivel: "Não foi possível consultar os assinantes agora.",
-                },
-              ] as const;
-            }
-          }),
-        );
-        if (!vivo) return;
-        setAssinantes((atual) => ({ ...atual, ...Object.fromEntries(respostas) }));
+  /**
+   * ATUALIZAR UMA LINHA AO VIVO. Para quem precisa do exato agora e não pode esperar o próximo ciclo
+   * do tick. Custa 2 requisições, de UMA pessoa, e o resultado é guardado no banco pelo backend, para
+   * o ciclo seguinte não repetir o trabalho.
+   */
+  const atualizarLinha = useCallback(
+    async (l: Linha) => {
+      if (!token) return;
+      setAtualizando(l.admissaoId);
+      try {
+        const r = await apiFetch<RespAssinantes>(`/clicksign/${l.admissaoId}/assinantes`, { token });
+        setAssinantes((atual) => ({ ...atual, [l.admissaoId]: r }));
+      } catch {
+        setError("Não foi possível consultar os assinantes na Clicksign agora.");
+      } finally {
+        setAtualizando(null);
       }
-    })();
-
-    return () => {
-      vivo = false;
-    };
-  }, [itens, loading, token]);
+    },
+    [token],
+  );
 
   const filtradas = useMemo(() => {
     const q = busca.trim().toLowerCase();
@@ -878,7 +930,11 @@ export default function AssinaturasPage() {
                     {l.temEnvelope && (
                       <tr>
                         <td colSpan={colunas} className="pt-0 pb-3 pl-4 align-top">
-                          <Assinantes dados={assinantes[l.admissaoId]} />
+                          <Assinantes
+                            dados={assinantes[l.admissaoId]}
+                            atualizando={atualizando === l.admissaoId}
+                            onAtualizar={() => void atualizarLinha(l)}
+                          />
                         </td>
                       </tr>
                     )}

@@ -10,16 +10,24 @@
  */
 
 /**
- * CADÊNCIA: 5 minutos. O desenho original (§A.5) previa 1 minuto por causa da janela curta da URL do
- * arquivo assinado (S3 presigned, ~5 min), mas essa URL é obtida e consumida DENTRO do mesmo ciclo
- * (`arquivarAssinado` baixa síncrono), então a cadência não precisa correr atrás dela: ela só define
- * quanto tempo um contrato assinado leva para aparecer no Drive.
+ * CADÊNCIA: 2 minutos (decisão do diretor, 25/08/2026). Era 5.
  *
- * 5 min é o equilíbrio: contra o teto da Clicksign (sandbox ~20 req/10s, prod 50 req/10s) sobra
- * folga enorme, e o custo de um ciclo é 1 consulta por envelope ABERTO, não por admissão. Com a base
- * atual (zero envelope) o ciclo é uma query local e nada mais.
+ * O QUE MUDOU. O ciclo deixou de servir só para arquivar assinado e marcar expirado: ele agora
+ * alimenta o PAINEL DE ASSINATURA que a tela de gestão lê ("X de Y assinaram", em todas as linhas).
+ * Antes a tela perguntava isso à Clicksign a cada abertura, 2 requisições por linha, 220 numa aba de
+ * 110. Com o painel guardado, a cadência do tick virou o ATRASO MÁXIMO do que o operador vê, e 5
+ * minutos era tempo demais para uma tela de cobrança.
+ *
+ * POR QUE 2 E NÃO 1. O ciclo custa 1 consulta por envelope aberto (~106 hoje), e o `/events` só é
+ * chamado quando o `modified` do envelope mudou, então em regime o custo real é bem menor. A 2
+ * minutos isso fica muito abaixo do teto de 50 req/10s, e ainda sobra balde para a tela e o disparo,
+ * que dividem o mesmo limite. A 1 minuto a folga encolheria sem ganho perceptível: ninguém percebe a
+ * diferença entre 60 e 120 segundos de atraso numa assinatura que leva horas.
+ *
+ * A URL do assinado (S3 presigned, ~5 min) nunca dependeu desta cadência: ela é obtida e consumida
+ * DENTRO do mesmo ciclo (`arquivarAssinado` baixa síncrono).
  */
-export const INTERVALO_MS = 5 * 60 * 1000;
+export const INTERVALO_MS = 2 * 60 * 1000;
 
 /**
  * SCHEDULER PARADO: sem ciclo bem-sucedido há mais de 30 min (6 cadências). Tolera cadências perdidas

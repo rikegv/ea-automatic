@@ -330,6 +330,53 @@ export class ClicksignApiService {
     }
   }
 
+  /**
+   * (6b) Status + carimbo `modified` + SIGNATÁRIOS, numa requisição só.
+   *
+   * O `?include=signers` do JSON:API (testado contra a produção em 25/08/2026) traz o elenco de
+   * assinantes DENTRO da resposta que o tick já fazia. Custo zero: o tick deixa de precisar de um
+   * `GET /signers` separado para montar o painel de "quem assinou, quem falta".
+   *
+   * O `modified` é o DETECTOR DE MUDANÇA. Num envelope assinado ele coincide com o instante do
+   * último evento (medido: `modified` 14:38:14 = `document_closed` 14:38:14). Igual ao do ciclo
+   * anterior significa que ninguém assinou nada, e aí o `/events`, que é a chamada extra, é poupado.
+   *
+   * `include=events` NÃO é aceito pela API (HTTP 400) e o `include=requirements` não relaciona
+   * requisito com signatário, então quem assinou continua vindo do `/events`. Ambos verificados.
+   */
+  async consultarEnvelopeComSignatarios(envId: string): Promise<
+    | {
+        status: string;
+        modified: string | null;
+        signers: Array<{ id: string; nome: string; grupo: number | null }>;
+      }
+    | undefined
+  > {
+    if (this.inerte()) return undefined;
+    const data = await this.req<{
+      data?: { attributes?: { status?: string; modified?: string } };
+      included?: Array<{
+        id?: string;
+        type?: string;
+        attributes?: { name?: string; group?: number | null };
+      }>;
+    }>("GET", `/envelopes/${enc(envId)}?include=signers`);
+
+    const status = data?.data?.attributes?.status;
+    if (typeof status !== "string") return undefined;
+
+    const signers = (data?.included ?? [])
+      .filter((i) => i.type === "signers" && typeof i.id === "string" && i.id.length > 0)
+      .map((i) => ({
+        id: i.id as string,
+        nome: (i.attributes?.name ?? "").trim(),
+        grupo: typeof i.attributes?.group === "number" ? i.attributes.group : null,
+      }));
+
+    const modified = data?.data?.attributes?.modified;
+    return { status, modified: typeof modified === "string" ? modified : null, signers };
+  }
+
   /** (6) Consulta o status do envelope. Inerte → undefined. */
   async consultarStatus(envId: string): Promise<{ status: string } | undefined> {
     if (this.inerte()) return undefined;

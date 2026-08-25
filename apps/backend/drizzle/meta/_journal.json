@@ -568,6 +568,13 @@
       "when": 1787321659926,
       "tag": "0080_carimbo_da_notificacao_clicksign",
       "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "7",
+      "when": 1787321660926,
+      "tag": "0081_panorama_de_assinatura_no_ea",
+      "breakpoints": true
     }
   ]
 }

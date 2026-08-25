@@ -39,12 +39,30 @@ interface AdmRow {
   clienteOperacao: string;
 }
 
-function montar(opts: { selectResults: unknown[]; status?: string; url?: string }) {
+function montar(opts: {
+  selectResults: unknown[];
+  status?: string;
+  url?: string;
+  /** `modified` do envelope: detector de mudança do painel. */
+  modified?: string | null;
+}) {
+  // O tick passou a usar `consultarEnvelopeComSignatarios`: o mesmo GET de antes, agora com
+  // `?include=signers`, que traz o elenco de assinantes de graça para alimentar o painel da tela.
   const consultarStatus = vi
     .fn()
-    .mockResolvedValue(opts.status ? { status: opts.status } : undefined);
+    .mockResolvedValue(
+      opts.status ? { status: opts.status, modified: opts.modified ?? null, signers: [] } : undefined,
+    );
   const obterUrlAssinado = vi.fn().mockResolvedValue(opts.url);
-  const api = { estaAtivo: () => true, consultarStatus, obterUrlAssinado };
+  // O painel é conveniência de leitura e NÃO pode alterar o que o ciclo decide; devolver lista vazia
+  // aqui mantém estes testes focados no que eles provam: arquivar, cancelar e expirar.
+  const listarEventosAssinatura = vi.fn().mockResolvedValue([]);
+  const api = {
+    estaAtivo: () => true,
+    consultarEnvelopeComSignatarios: consultarStatus,
+    listarEventosAssinatura,
+    obterUrlAssinado,
+  };
 
   const setCalls: Record<string, unknown>[] = [];
   const update = vi.fn().mockImplementation(() => ({
@@ -103,7 +121,25 @@ function montar(opts: { selectResults: unknown[]; status?: string; url?: string 
   const warn = vi
     .spyOn((svc as unknown as { logger: { warn: (m: string) => void } }).logger, "warn")
     .mockImplementation(() => undefined);
-  return { svc, api, consultarStatus, obterUrlAssinado, setCalls, staging, ai, log, warn };
+  /**
+   * O tick passou a gravar TAMBÉM o painel de assinatura ("X de Y assinaram"), que a tela lê em vez
+   * de consultar a Clicksign. Isso é conveniência de LEITURA e não decide nada do ciclo, então estes
+   * testes olham só os writes de DECISÃO (status do envelope, URL do assinado). O painel tem
+   * asserção própria, no fim do arquivo.
+   */
+  const decisoes = () => setCalls.filter((s) => s.clicksignAssinantes === undefined);
+  return {
+    svc,
+    api,
+    consultarStatus,
+    obterUrlAssinado,
+    setCalls,
+    decisoes,
+    staging,
+    ai,
+    log,
+    warn,
+  };
 }
 
 function admRow(over: Partial<AdmRow> = {}): AdmRow {
@@ -162,14 +198,14 @@ describe("ClicksignSyncService.processarTick — ciclo de verificação (INT-4 /
 
   it("envelope 'canceled' → marca CANCELADO; NÃO baixa nem arquiva", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
-    const { svc, obterUrlAssinado, setCalls, ai } = montar({
+    const { svc, obterUrlAssinado, decisoes, ai } = montar({
       selectResults: [[{ id: "adm-1", envelopeId: "env-1" }]],
       status: "canceled",
     });
 
     await svc.processarTick();
 
-    expect(setCalls).toEqual([expect.objectContaining({ clicksignStatus: "CANCELADO" })]);
+    expect(decisoes()).toEqual([expect.objectContaining({ clicksignStatus: "CANCELADO" })]);
     expect(obterUrlAssinado).not.toHaveBeenCalled();
     expect(ai.arquivarDrive).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
@@ -177,14 +213,14 @@ describe("ClicksignSyncService.processarTick — ciclo de verificação (INT-4 /
 
   it("envelope 'running' → no-op (não persiste, não baixa)", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
-    const { svc, obterUrlAssinado, setCalls, ai } = montar({
+    const { svc, obterUrlAssinado, decisoes, ai } = montar({
       selectResults: [[{ id: "adm-1", envelopeId: "env-1" }]],
       status: "running",
     });
 
     await svc.processarTick();
 
-    expect(setCalls).toEqual([]);
+    expect(decisoes()).toEqual([]);
     expect(obterUrlAssinado).not.toHaveBeenCalled();
     expect(ai.arquivarDrive).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
@@ -193,14 +229,14 @@ describe("ClicksignSyncService.processarTick — ciclo de verificação (INT-4 /
   it("'running' PASSADO DO PRAZO → marca EXPIRADO (o registro não fica AGUARDANDO para sempre)", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     const enviadoEm = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000);
-    const { svc, setCalls, ai } = montar({
+    const { svc, decisoes, ai } = montar({
       selectResults: [[{ id: "adm-1", envelopeId: "env-1", enviadoEm }]],
       status: "running",
     });
 
     await svc.processarTick();
 
-    expect(setCalls).toEqual([expect.objectContaining({ clicksignStatus: "EXPIRADO" })]);
+    expect(decisoes()).toEqual([expect.objectContaining({ clicksignStatus: "EXPIRADO" })]);
     expect(ai.arquivarDrive).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
   });
@@ -227,14 +263,14 @@ describe("ClicksignSyncService.processarTick — ciclo de verificação (INT-4 /
   });
 
   it("'running' SEM carimbo de envio → segue aguardando (fail-safe do envelope antigo)", async () => {
-    const { svc, setCalls } = montar({
+    const { svc, decisoes } = montar({
       selectResults: [[{ id: "adm-1", envelopeId: "env-1", enviadoEm: null }]],
       status: "running",
     });
 
     await svc.processarTick();
 
-    expect(setCalls).toEqual([]);
+    expect(decisoes()).toEqual([]);
   });
 
   it("sem pasta-pai do Drive (resolvePastaPaiId null) → NÃO arquiva e NÃO marca ASSINADO (próximo ciclo)", async () => {
@@ -257,5 +293,72 @@ describe("ClicksignSyncService.processarTick — ciclo de verificação (INT-4 /
     const w = logsConcat(warn);
     expect(w).not.toContain("11144477735");
     expect(w).not.toContain("amazonaws");
+  });
+});
+
+/**
+ * PAINEL DE ASSINATURA. A aba de gestão mostra "X de Y assinaram" em TODAS as linhas, e isso é o que
+ * o diretor usa. Antes a tela montava esse painel consultando a Clicksign linha por linha (2
+ * requisições × 110 = 220 por abertura, 60s de espera depois do limitador). Agora o tick guarda, e a
+ * tela lê. Estes testes travam o que torna isso barato e honesto.
+ */
+describe("ClicksignSyncService.processarTick — painel de assinatura guardado", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("grava o painel e o carimbo `modified` na primeira varredura", async () => {
+    const { svc, setCalls } = montar({
+      selectResults: [[{ id: "adm-1", envelopeId: "env-1" }], [admRow({})]],
+      status: "running",
+    });
+
+    await svc.processarTick();
+
+    const painel = setCalls.find((s) => s.clicksignAssinantes !== undefined);
+    expect(painel).toBeDefined();
+    expect(painel?.clicksignAssinantesEm).toBeInstanceOf(Date);
+  });
+
+  it("PULA o /events quando o `modified` não mudou e o painel já existe", async () => {
+    // É o que torna o custo quase zero em regime: entre dois ciclos, quase nada muda.
+    const { svc, api, setCalls } = montar({
+      selectResults: [
+        [{ id: "adm-1", envelopeId: "env-1", modificadoAntes: "2026-08-25T10:00:00Z", painelAtual: [] }],
+        [admRow({})],
+      ],
+      status: "running",
+      modified: "2026-08-25T10:00:00Z",
+    });
+
+    await svc.processarTick();
+
+    expect(api.listarEventosAssinatura).not.toHaveBeenCalled();
+    expect(setCalls.find((s) => s.clicksignAssinantes !== undefined)).toBeUndefined();
+  });
+
+  it("CONSULTA o /events quando o `modified` mudou (alguém mexeu no envelope)", async () => {
+    const { svc, api } = montar({
+      selectResults: [
+        [{ id: "adm-1", envelopeId: "env-1", modificadoAntes: "2026-08-25T10:00:00Z", painelAtual: [] }],
+        [admRow({})],
+      ],
+      status: "running",
+      modified: "2026-08-25T11:30:00Z",
+    });
+
+    await svc.processarTick();
+
+    expect(api.listarEventosAssinatura).toHaveBeenCalledWith("env-1");
+  });
+
+  it("falha ao montar o painel NÃO derruba a varredura", async () => {
+    // Painel é conveniência de leitura; arquivar assinado e marcar expirado é que é o trabalho.
+    const { svc, api, decisoes } = montar({
+      selectResults: [[{ id: "adm-1", envelopeId: "env-1" }], [admRow({})]],
+      status: "canceled",
+    });
+    api.listarEventosAssinatura.mockRejectedValueOnce(new Error("Clicksign HTTP 500"));
+
+    await expect(svc.processarTick()).resolves.toBeUndefined();
+    expect(decisoes()).toEqual([expect.objectContaining({ clicksignStatus: "CANCELADO" })]);
   });
 });

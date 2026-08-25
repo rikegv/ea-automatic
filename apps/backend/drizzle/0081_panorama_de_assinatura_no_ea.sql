@@ -1,0 +1,32 @@
+-- PANORAMA DE ASSINATURA GUARDADO NO EA (quem assinou, quem falta).
+--
+-- O PROBLEMA. A aba Gestão Das Assinaturas mostra "X de Y assinaram" em TODAS as linhas, e isso é o
+-- que o diretor usa o tempo todo. Para montar esse painel, a tela consultava a Clicksign AO VIVO em
+-- cada abertura: 2 requisições por linha (`/signers` + `/events`), 220 no total. Antes do limitador
+-- isso gerava centenas de 429; depois dele, virou 60 segundos de espera. As duas versões são ruins, e
+-- a causa é a mesma: perguntar de novo, a cada abertura, o que já se sabia.
+--
+-- A SOLUÇÃO NÃO É CACHEAR SÓ QUEM RESOLVEU. Essa foi a hipótese inicial e a aritmética a derrubou: a
+-- aba tem 106 pendentes para 4 cancelados, então guardar só os resolvidos economizaria menos de 4%.
+-- O que resolve é guardar o painel INTEIRO e deixar quem já varre alimentá-lo.
+--
+-- QUEM ALIMENTA: o tick do cron, que já percorre todos os envelopes pendentes de minuto em minuto.
+-- Ele passa a pedir `?include=signers` no GET que já fazia (custo zero) e só chama `/events` quando o
+-- `modified` do envelope mudou desde o ciclo anterior. Em regime, quase nada muda entre dois ciclos,
+-- então o acréscimo tende a zero.
+--
+-- §A.6, O PONTO SENSÍVEL. O `/events` devolve e-mail, CPF, IP e geolocalização do signatário. NADA
+-- disso entra aqui. O jsonb guarda exclusivamente o `AssinanteStatus` do domínio: nome, se assinou,
+-- quando assinou e a ordem. Nome é dado de trabalho, como no resto da esteira; o resto é descartado
+-- no cliente e nunca chega ao banco.
+--
+-- É CACHE, E ASSUME ISSO. Nulo significa "ainda não varrido", não "sem assinantes", e a tela mostra o
+-- instante da última atualização em vez de fingir tempo real. Perder estas colunas não perde
+-- informação nenhuma: o próximo ciclo do tick reconstrói tudo a partir da Clicksign.
+ALTER TABLE "admissoes" ADD COLUMN "clicksign_assinantes" jsonb;--> statement-breakpoint
+ALTER TABLE "admissoes" ADD COLUMN "clicksign_assinantes_em" timestamp with time zone;--> statement-breakpoint
+-- Carimbo `modified` do envelope na Clicksign, como o provedor devolve (string ISO). É o detector de
+-- mudança: igual ao do ciclo anterior significa que nada aconteceu e o `/events` pode ser poupado.
+-- Guardado como texto de propósito, para comparar exatamente o que veio, sem risco de perder precisão
+-- na conversão de data.
+ALTER TABLE "admissoes" ADD COLUMN "clicksign_envelope_modified" varchar(40);

@@ -4,6 +4,7 @@ import {
   date,
   index,
   integer,
+  jsonb,
   numeric,
   pgTable,
   primaryKey,
@@ -694,6 +695,27 @@ export const admissoes = pgTable(
      * existir. O que se cobra é a interseção com `AGUARDANDO_ASSINATURA` + envelope presente.
      */
     clicksignNotificadoEm: timestamp("clicksign_notificado_em", { withTimezone: true }),
+    /**
+     * PANORAMA DE ASSINATURA (quem assinou, quem falta), alimentado pelo tick e LIDO pela tela.
+     *
+     * Antes a tela montava isso consultando a Clicksign ao vivo, 2 requisições por linha, 220 por
+     * abertura. Guardar o painel troca "perguntar de novo o que já se sabia" por uma leitura de
+     * banco, e o painel completo, que é o que o diretor usa, continua inteiro.
+     *
+     * §A.6: guarda SÓ o `AssinanteStatus` do domínio (nome, assinou, quando, ordem). O `/events` da
+     * Clicksign devolve e-mail, CPF, IP e geolocalização, e nada disso é persistido.
+     *
+     * É CACHE: nulo é "ainda não varrido", não "sem assinantes", e o próximo ciclo do tick
+     * reconstrói tudo. Por isso a tela mostra o instante da atualização em vez de fingir tempo real.
+     */
+    clicksignAssinantes: jsonb("clicksign_assinantes"),
+    clicksignAssinantesEm: timestamp("clicksign_assinantes_em", { withTimezone: true }),
+    /**
+     * `modified` do envelope como a Clicksign devolve. Detector de mudança: igual ao do ciclo
+     * anterior significa que ninguém assinou nada, e o `/events` pode ser poupado. Texto, para
+     * comparar exatamente o que veio.
+     */
+    clicksignEnvelopeModified: varchar("clicksign_envelope_modified", { length: 40 }),
     // KIT PRONTO PARA ASSINATURA (fila de disparo em lote). O consultor clica "Enviar para
     // assinatura" no Gerador de Kit e o kit daquele funcionário é materializado na staging DA
     // ADMISSÃO; aqui fica a REFERÊNCIA (caminho no disco efêmero) e o instante do envio.
