@@ -304,6 +304,12 @@ export const papelAsEnum = pgEnum("papel_as", ["CONSULTOR", "RECRUITER"]);
  * usam ali, em vez de inventar um status que a operação não escreveu.
  */
 export const vagaStatusEnum = pgEnum("vaga_status", [
+  /**
+   * RASCUNHO é o estado ANTERIOR à publicação (OST de 25/08): a vaga salva pela metade, para o
+   * consultor continuar depois. NÃO VEIO DA BASE, e por isso não tem contagem na lista acima: é
+   * estado novo, que só nasce pela trilha. Nenhuma linha importada vira rascunho.
+   */
+  "RASCUNHO",
   "ABERTA",
   "ENTREGUE",
   "FECHADA",

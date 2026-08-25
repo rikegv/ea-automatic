@@ -554,6 +554,27 @@
       "when": 1787433700606,
       "tag": "0078_vagas_listas_e_regioes",
       "breakpoints": true
+    },
+    {
+      "idx": 79,
+      "version": "7",
+      "when": 1787616766840,
+      "tag": "0079_vaga_rascunho",
+      "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "7",
+      "when": 1787616841205,
+      "tag": "0080_vaga_rascunho_campos",
+      "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "7",
+      "when": 1787678246069,
+      "tag": "0081_vaga_posicoes_oficiais_e_banco",
+      "breakpoints": true
     }
   ]
 }

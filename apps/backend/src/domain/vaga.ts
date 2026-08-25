@@ -72,6 +72,11 @@ export function ladosDaVaga(
  *
  * O nº de vagas fechadas é quantas posições foram preenchidas de fato, então ele cabe dentro da meta
  * e nunca acima dela. Vazio (ninguém informou) não é erro: só o número maior que a meta é.
+ *
+ * ESTA FUNÇÃO CONTINUA SENDO A PRIMITIVA de UM lado só, e é de propósito: com os dois contadores da
+ * vaga (25/08) quem o serviço chama é a `excessoDePosicoes` logo abaixo, que aplica esta mesma régua
+ * duas vezes, uma por lado. Manter a primitiva separada é o que deixa a régua de "cabe na meta"
+ * escrita e testada em um lugar só, em vez de copiada para o oficial e para o banco.
  */
 export function vagasFechadasExcedemPosicoes(
   vagasFechadas: number | null | undefined,
@@ -79,4 +84,66 @@ export function vagasFechadasExcedemPosicoes(
 ): boolean {
   if (vagasFechadas === null || vagasFechadas === undefined) return false;
   return vagasFechadas > posicoes;
+}
+
+/** Os dois lados do contador da vaga, do jeito que a vaga os guarda. */
+export interface ContadoresDaVaga {
+  /** Meta de contratações de verdade. Nula no rascunho, e aí não há teto a exceder. */
+  posicoesOficiais: number | null | undefined;
+  /** Meta do excedente aprovado que fica reservado. Zero é resposta, não lacuna. */
+  posicoesBanco: number | null | undefined;
+}
+
+/** O que foi preenchido de fato, um número por lado. Vazio é "ninguém informou", não zero. */
+export interface FechamentoDaVaga {
+  vagasFechadas: number | null | undefined;
+  vagasFechadasBanco: number | null | undefined;
+}
+
+/** Qual lado estourou e por quanto, para a mensagem falar do contador certo. */
+export interface ExcessoDePosicoes {
+  lado: "OFICIAIS" | "BANCO";
+  meta: number;
+  informado: number;
+}
+
+/**
+ * A TRAVA DO FECHAMENTO COM OS DOIS CONTADORES (decisão do diretor, 25/08).
+ *
+ * OS DOIS LADOS SÃO CONFERIDOS SEPARADAMENTE, e essa é a regra inteira: sobrar vaga no banco não
+ * autoriza estourar o oficial, e sobrar no oficial não autoriza estourar o banco. Somar as duas metas
+ * e comparar com a soma das contagens passaria "12 oficiais e 1 banco" numa vaga de 10 oficiais e 10
+ * de banco, que é exatamente a contratação a mais que a trava existe para impedir.
+ *
+ * A ORDEM DA CONFERÊNCIA É OFICIAL PRIMEIRO porque é o lado que representa contratação de verdade:
+ * quando os dois estouram, o erro que a pessoa lê é o que custa mais caro.
+ *
+ * META NULA (rascunho) NÃO TEM TETO A EXCEDER: ausência de meta não é meta zero, e recusar o
+ * fechamento por causa dela inventaria uma trava que ninguém configurou. META DE BANCO AUSENTE, essa
+ * sim, VALE ZERO: a coluna é NOT NULL DEFAULT 0 no banco, então "sem banco" é uma resposta, e fechar
+ * uma posição de banco numa vaga que não reservou nenhuma é excesso legítimo.
+ *
+ * Devolve `null` quando está tudo dentro da meta, ou o lado que estourou. Não monta a mensagem: quem
+ * escreve para a pessoa é o serviço, que é quem sabe falar HTTP.
+ */
+export function excessoDePosicoes(
+  fechamento: FechamentoDaVaga,
+  contadores: ContadoresDaVaga,
+): ExcessoDePosicoes | null {
+  const { posicoesOficiais, posicoesBanco } = contadores;
+
+  if (
+    posicoesOficiais !== null &&
+    posicoesOficiais !== undefined &&
+    vagasFechadasExcedemPosicoes(fechamento.vagasFechadas, posicoesOficiais)
+  ) {
+    return { lado: "OFICIAIS", meta: posicoesOficiais, informado: fechamento.vagasFechadas! };
+  }
+
+  const metaBanco = posicoesBanco ?? 0;
+  if (vagasFechadasExcedemPosicoes(fechamento.vagasFechadasBanco, metaBanco)) {
+    return { lado: "BANCO", meta: metaBanco, informado: fechamento.vagasFechadasBanco! };
+  }
+
+  return null;
 }

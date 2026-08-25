@@ -617,16 +617,110 @@ export const VAGA_VINCULO_LABEL: Record<VagaVinculo, string> = {
   JOVEM_APRENDIZ: "Jovem Aprendiz",
 };
 
-export const VAGA_STATUS = ["ABERTA", "ENTREGUE", "FECHADA", "CANCELADA", "VAGA_BANCO"] as const;
+/**
+ * OS ESTADOS DA VAGA, com o RASCUNHO na frente porque ele é o PRIMEIRO da vida dela.
+ *
+ * RASCUNHO é a vaga que ainda não nasceu para o time: existe, guarda o que já foi preenchido e não
+ * cobra obrigatório nenhum. ABERTA é a vaga publicada, e é dela para frente que valem entrega,
+ * fechamento e cancelamento. A passagem de um para o outro é o PUBLICAR, e é lá, e só lá, que a
+ * régua dos obrigatórios cobra (`vagaPendencias`).
+ */
+export const VAGA_STATUS = [
+  "RASCUNHO",
+  "ABERTA",
+  "ENTREGUE",
+  "FECHADA",
+  "CANCELADA",
+  "VAGA_BANCO",
+] as const;
 export type VagaStatus = (typeof VAGA_STATUS)[number];
 
 export const VAGA_STATUS_LABEL: Record<VagaStatus, string> = {
+  RASCUNHO: "Rascunho",
   ABERTA: "Aberta",
   ENTREGUE: "Entregue",
   FECHADA: "Fechada",
   CANCELADA: "Cancelada",
   VAGA_BANCO: "Vaga Banco",
 };
+
+/**
+ * A RÉGUA DOS OBRIGATÓRIOS DA VAGA, declarada UMA VEZ e lida pelos dois lados.
+ *
+ * POR QUE AQUI, e não uma lista na tela e outra no service: a tela precisa da régua para desenhar o
+ * asterisco vermelho e para listar o que falta na hora de publicar; o backend precisa da MESMA régua
+ * para recusar a publicação de um corpo montado fora da tela. Duas cópias divergem no primeiro campo
+ * que alguém acrescentar, e a divergência aparece como "a tela deixou publicar e o servidor recusou".
+ *
+ * O QUE ESTÁ AQUI É A RÉGUA DE HOJE, e ela não mudou nesta frente (decisão do diretor, 25/08): os
+ * itens 1 a 4 da OST tratam de COMO e QUANDO cobrar, não de O QUE cobrar. Acrescentar um campo
+ * obrigatório no futuro é acrescentar UMA linha nesta lista, e o asterisco, a trava do publicar e a
+ * mensagem do servidor passam a contá-lo juntos, sem tocar em mais nada.
+ *
+ * `passo` é 0-based, como o estado da trilha; `passoRotulo` é o nome do passo como o Stepper mostra.
+ * `ancora` é o id do campo na tela, e é o que faz o item da lista de pendências ser CLICÁVEL: clicar
+ * leva ao passo e põe o cursor no campo.
+ */
+export interface VagaPendencia {
+  campo: string;
+  rotulo: string;
+  /** Artigo do rótulo, para a frase sair em português: "falta o Código", "falta a Data de abertura". */
+  artigo: "o" | "a";
+  passo: number;
+  passoRotulo: string;
+  ancora: string;
+}
+
+export const VAGA_OBRIGATORIOS: readonly VagaPendencia[] = [
+  { campo: "codigo", rotulo: "Código da vaga", artigo: "o", passo: 0, passoRotulo: "A Vaga", ancora: "vaga-codigo" },
+  { campo: "nomeDivulgacao", rotulo: "Nome de divulgação", artigo: "o", passo: 0, passoRotulo: "A Vaga", ancora: "vaga-nome-divulgacao" },
+  { campo: "cargoId", rotulo: "Cargo", artigo: "o", passo: 0, passoRotulo: "A Vaga", ancora: "vaga-cargo" },
+  // OS DOIS CONTADORES DA VAGA (25/08): só o OFICIAL é obrigatório. O de banco nasce zero e zero é
+  // resposta legítima (a maioria das vagas não reserva excedente), então cobrá-lo aqui transformaria
+  // o estado normal da vaga em pendência de publicação.
+  { campo: "posicoesOficiais", rotulo: "Nº de posições oficiais", artigo: "o", passo: 0, passoRotulo: "A Vaga", ancora: "vaga-posicoes-oficiais" },
+  { campo: "natureza", rotulo: "Natureza", artigo: "a", passo: 0, passoRotulo: "A Vaga", ancora: "vaga-natureza" },
+  { campo: "sazonalidade", rotulo: "Sazonalidade", artigo: "a", passo: 0, passoRotulo: "A Vaga", ancora: "vaga-sazonalidade" },
+  { campo: "status", rotulo: "Status", artigo: "o", passo: 0, passoRotulo: "A Vaga", ancora: "vaga-status" },
+  { campo: "dataAbertura", rotulo: "Data de abertura", artigo: "a", passo: 1, passoRotulo: "Quem Pediu", ancora: "vaga-data-abertura" },
+];
+
+/**
+ * O que a régua precisa ler. Aceita o nº de posições como número (backend) ou texto (campo da tela).
+ */
+export interface VagaCamposObrigatorios {
+  codigo?: string | null;
+  nomeDivulgacao?: string | null;
+  cargoId?: string | null;
+  posicoesOficiais?: number | string | null;
+  natureza?: string | null;
+  sazonalidade?: string | null;
+  status?: string | null;
+  dataAbertura?: string | null;
+}
+
+/**
+ * O que falta para a vaga poder ser PUBLICADA, na ordem da trilha.
+ *
+ * DEVOLVE A LISTA INTEIRA, nunca o primeiro que falhou: quem preenche 38 campos não pode descobrir
+ * as pendências uma por uma, com uma volta ao servidor entre cada duas.
+ *
+ * `posicoesOficiais` tem régua própria porque zero não é "preenchido": vaga com zero posição oficial
+ * não é vaga. O contador de BANCO não entra na régua: lá zero é o estado normal, não uma lacuna.
+ */
+export function vagaPendencias(v: VagaCamposObrigatorios): VagaPendencia[] {
+  const vazio = (x: unknown) => x === null || x === undefined || String(x).trim() === "";
+  return VAGA_OBRIGATORIOS.filter((p) => {
+    const valor = (v as Record<string, unknown>)[p.campo];
+    if (p.campo === "posicoesOficiais") return vazio(valor) || Number(valor) <= 0;
+    return vazio(valor);
+  });
+}
+
+/** A pendência escrita como o time lê: "Passo 1 · A Vaga: falta o Código da vaga" (§A.11). */
+export function textoPendencia(p: VagaPendencia): string {
+  return `Passo ${p.passo + 1} · ${p.passoRotulo}: falta ${p.artigo} ${p.rotulo}`;
+}
 
 export const VAGA_SAZONALIDADE = ["OPERACAO_PADRAO", "SAZONAL"] as const;
 export type VagaSazonalidade = (typeof VAGA_SAZONALIDADE)[number];
@@ -1327,17 +1421,37 @@ export function separarOpcaoEscape(
  */
 export interface VagaListItem {
   id: string;
-  codigo: string;
-  nomeDivulgacao: string;
-  cargoId: string;
-  cargoNome: string;
+  /**
+   * O NÚMERO DO PROCESSO SELETIVO. Nulo é estado REAL da vaga em RASCUNHO, que ainda não tem número:
+   * a listagem mostra "não informado" (§A.11). Da publicação em diante ele existe, porque a régua
+   * dos obrigatórios (`vagaPendencias`) não deixa publicar sem ele.
+   */
+  codigo: string | null;
+  /**
+   * OS CAMPOS QUE O RASCUNHO PODE NÃO TER AINDA (OST de 25/08): nome de divulgação, cargo, natureza,
+   * nº de posições e data de abertura nascem NULÁVEIS porque a vaga salva pela metade é um estado
+   * legítimo. Obrigatórios eles continuam sendo, e a régua (`vagaPendencias`) não deixa PUBLICAR sem
+   * eles: o que mudou foi o momento da cobrança. A tela mostra "não informado" (§A.11).
+   */
+  nomeDivulgacao: string | null;
+  cargoId: string | null;
+  cargoNome: string | null;
   codCliente: string | null;
   clienteNome: string | null;
-  natureza: VagaNatureza;
+  natureza: VagaNatureza | null;
   vinculo: VagaVinculo | null;
   status: VagaStatus;
   sazonalidade: VagaSazonalidade;
-  posicoes: number;
+  /**
+   * OS DOIS CONTADORES DA VAGA (decisão do diretor, 25/08), cada um com a sua META aqui e a sua
+   * CONTAGEM no bloco de fechamento: oficiais são as contratações de verdade, banco é o excedente
+   * aprovado que fica reservado. É o par que deixa a tela dizer "6 de 10 Oficiais, 3 de 10 Banco".
+   *
+   * OFICIAIS é nulável (o rascunho pode não ter meta ainda) e BANCO não é: vaga sem banco tem banco
+   * ZERO, não banco "não informado". A assimetria é a mesma da coluna do banco de dados.
+   */
+  posicoesOficiais: number | null;
+  posicoesBanco: number;
   escolaridade: VagaEscolaridade | null;
   /**
    * OS DOIS SALÁRIOS DO FORMULÁRIO: com que valor a vaga abriu e com que valor ela fechou. Forma
@@ -1350,7 +1464,7 @@ export interface VagaListItem {
    * com o SEU valor. `valor` nulo é benefício que não tem valor a informar, não é zero.
    */
   beneficios: { id: string; nome: string; valor: string | null }[];
-  dataAbertura: string;
+  dataAbertura: string | null;
   dataLimite: string | null;
   abertoPorNome: string | null;
   criadoEm: string;
@@ -1419,7 +1533,13 @@ export interface VagaListItem {
 
   // ── Fechamento (preenchido só na ação Fechar Vaga) ───────────────────────
   dataFechamento: string | null;
+  /**
+   * A CONTAGEM, um número por meta. `vagasFechadas` conta as posições OFICIAIS preenchidas (é o que
+   * ela sempre contou, por isso não mudou de nome) e `vagasFechadasBanco` conta as de banco. Nulo é
+   * "ninguém informou", que é o estado de toda vaga ainda aberta, e não zero preenchidas.
+   */
   vagasFechadas: number | null;
+  vagasFechadasBanco: number | null;
   dataPrevistaInicio: string | null;
   /** Intenção declarada no fechamento. Registra, não liga nada na esteira (frente separada). */
   enviarParaAdmissao: boolean;

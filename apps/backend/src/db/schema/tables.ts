@@ -1859,14 +1859,23 @@ export const vagas = pgTable(
     /**
      * Código de ORIGEM da vaga (o número do Pandapé, ou a família `SL...`). REPETÍVEL de propósito.
      * Digitado à mão na vaga nova: o gerador automático foi descartado pelo diretor.
+     *
+     * NULÁVEL DESDE O RASCUNHO (OST de 25/08). A vaga salva pela metade pode ainda não ter número, e
+     * gravar string vazia no lugar seria inventar um código que ninguém digitou: o mesmo motivo pelo
+     * qual os textos opcionais desta tabela guardam NULL em vez de "". A régua dos obrigatórios
+     * (`vagaPendencias`, no shared-types) é quem garante que a vaga PUBLICADA sempre tem um.
      */
-    codigo: varchar("codigo", { length: 40 }).notNull(),
-    /** Cargo do catálogo. OBRIGATÓRIO. O seletor SUGERE e não bloqueia (a lista inteira é alcançável). */
-    cargoId: uuid("cargo_id")
-      .notNull()
-      .references(() => cargos.id),
-    /** O título como a vaga é divulgada, distinto do cargo técnico do catálogo. */
-    nomeDivulgacao: varchar("nome_divulgacao", { length: 200 }).notNull(),
+    codigo: varchar("codigo", { length: 40 }),
+    /**
+     * Cargo do catálogo. O seletor SUGERE e não bloqueia (a lista inteira é alcançável).
+     *
+     * NULÁVEL DESDE O RASCUNHO (OST de 25/08), como o código e pelo mesmo motivo. Obrigatório ele
+     * continua sendo: a régua (`vagaPendencias`) não deixa PUBLICAR sem cargo. O que mudou foi o
+     * momento da cobrança, não a régua.
+     */
+    cargoId: uuid("cargo_id").references(() => cargos.id),
+    /** O título como a vaga é divulgada, distinto do cargo técnico do catálogo. Nulável no rascunho. */
+    nomeDivulgacao: varchar("nome_divulgacao", { length: 200 }),
     /**
      * NULÁVEL, e isso é decisão de desenho, não descuido: na base real só 31 de 164 clientes casaram
      * com o cadastro do EA (o CNPJ vem 100% vazio e a base usa nome comercial contra razão social).
@@ -1874,13 +1883,40 @@ export const vagas = pgTable(
      * ou de inventar um `cod_cliente`.
      */
     codCliente: varchar("cod_cliente", { length: 40 }).references(() => clientes.codCliente),
-    natureza: vagaNaturezaEnum("natureza").notNull(),
+    /** Nulável no rascunho; obrigatória para publicar, pela régua do domínio. */
+    natureza: vagaNaturezaEnum("natureza"),
     /** Nasce VAZIO: a coluna não existe na base e preencher seria adivinhar. */
     vinculo: vagaVinculoEnum("vinculo"),
     status: vagaStatusEnum("status").notNull().default("ABERTA"),
     sazonalidade: vagaSazonalidadeEnum("sazonalidade").notNull().default("OPERACAO_PADRAO"),
-    /** Meta de contratações. Inteiro, e a ocupação é sempre DERIVADA, nunca armazenada. */
-    posicoes: integer("posicoes").notNull().default(1),
+    /**
+     * OS DOIS CONTADORES DA VAGA (decisão do diretor, 25/08): a vaga deixa de ter UMA meta e passa a
+     * ter DUAS, cada uma com a sua contagem própria. OFICIAIS são as contratações de verdade; BANCO é
+     * o excedente aprovado que fica reservado (o caso Blue Skies: 10 oficiais e 10 de banco).
+     *
+     * POR QUE `posicoes` FOI RENOMEADA em vez de ganhar uma coluna nova ao lado: com dois contadores,
+     * o nome `posicoes` deixa de responder a pergunta que ele parece responder ("posições do quê?"),
+     * e é exatamente essa ambiguidade que produz contagem errada seis meses depois. O dado existente
+     * MIGRA SEM MENTIR: as posições gravadas até hoje são contratações de verdade, porque o banco não
+     * existia como contador, então `posicoes` vira `posicoes_oficiais` com o mesmo número, e o banco
+     * nasce ZERO em todas elas, que é a verdade (nenhuma vaga antiga reservou excedente).
+     *
+     * O momento também pesou: a base histórica de vagas (onda 3, 2.363 linhas) AINDA NÃO FOI
+     * IMPORTADA e a Central de Vagas só existe em homologação. Renomear agora custa 11 linhas de
+     * homologação; renomear depois da importação custaria a base inteira.
+     *
+     * OFICIAIS é NULÁVEL no rascunho (a vaga salva pela metade pode não ter meta ainda) e mantém o
+     * CHECK `> 0`, agora com o nome novo: NULL é ausência, e ausência não é zero.
+     *
+     * BANCO é NOT NULL DEFAULT 0, e a assimetria é deliberada: vaga sem banco não é vaga com banco
+     * "não informado", é vaga com banco ZERO. Zero é resposta, não lacuna, e por isso o CHECK dele é
+     * `>= 0` e não `> 0`.
+     *
+     * A OCUPAÇÃO CONTINUA SENDO OUTRA COISA: aqui mora a META. A contagem de preenchidas vive em
+     * `vagas_fechadas` / `vagas_fechadas_banco`, mais abaixo.
+     */
+    posicoesOficiais: integer("posicoes_oficiais").default(1),
+    posicoesBanco: integer("posicoes_banco").notNull().default(0),
     escolaridade: vagaEscolaridadeEnum("escolaridade"),
     /**
      * OS DOIS SALÁRIOS DO FORMULÁRIO (decisão do diretor, 21/08). O formulário de vaga tem "Salário
@@ -1893,7 +1929,8 @@ export const vagas = pgTable(
      */
     salarioAbertura: numeric("salario_abertura", { precision: 12, scale: 2 }),
     salarioFechamento: numeric("salario_fechamento", { precision: 12, scale: 2 }),
-    dataAbertura: date("data_abertura").notNull(),
+    /** Nulável no rascunho; obrigatória para publicar, pela régua do domínio. */
+    dataAbertura: date("data_abertura"),
     /**
      * DATA LIMITE DE QUALQUER VAGA (correção do diretor, 21/08). Era amarrada à vaga SAZONAL por um
      * CHECK; a amarração foi retirada porque toda natureza de vaga pode ter prazo. Continua nulável:
@@ -2022,8 +2059,20 @@ export const vagas = pgTable(
 
     // ── FECHAMENTO (frente 4): preenchido só na ação Fechar Vaga, nunca na abertura ───────────
     dataFechamento: date("data_fechamento"),
-    /** Nº de vagas fechadas. A trava "não passa das posições" é do serviço, com mensagem de gente. */
+    /**
+     * A CONTAGEM, um número para cada meta (par de `posicoes_oficiais` / `posicoes_banco`).
+     *
+     * `vagas_fechadas` NÃO FOI RENOMEADA de propósito, ao contrário de `posicoes`: ela sempre contou
+     * contratação de verdade, então continua significando exatamente o que significava, e o número
+     * novo entra ao lado com nome explícito. Renomear as duas pontas ao mesmo tempo trocaria o
+     * vocabulário do fechamento inteiro sem nenhum ganho de clareza.
+     *
+     * A trava "não passa das posições" é do serviço, com mensagem de gente, e agora ela olha OS DOIS
+     * LADOS separadamente (`excessoDePosicoes`, em `domain/vaga.ts`): estourar o banco não é
+     * desculpa para estourar o oficial, e vice-versa.
+     */
     vagasFechadas: integer("vagas_fechadas"),
+    vagasFechadasBanco: integer("vagas_fechadas_banco"),
     dataPrevistaInicio: date("data_prevista_inicio"),
     /**
      * A INTENÇÃO declarada no fechamento, quando o consultor escolhe "finalizar e enviar para
@@ -2047,8 +2096,13 @@ export const vagas = pgTable(
     idxStatus: index("idx_vagas_status").on(t.status),
     idxAbertura: index("idx_vagas_data_abertura").on(t.dataAbertura),
     // Meta zero ou negativa não é meta, é linha que deveria ter sido apagada (mesmo check de
-    // `projeto_vaga_cargo`, e pelo mesmo motivo: a meta entra em divisão na tela).
-    ckPosicoes: check("ck_vagas_posicoes", sql`${t.posicoes} > 0`),
+    // `projeto_vaga_cargo`, e pelo mesmo motivo: a meta entra em divisão na tela). O CHECK antigo
+    // `ck_vagas_posicoes` é o MESMO, renomeado junto com a coluna, para o nome do check não continuar
+    // apontando para uma coluna que não existe mais.
+    ckPosicoesOficiais: check("ck_vagas_posicoes_oficiais", sql`${t.posicoesOficiais} > 0`),
+    // O BANCO ACEITA ZERO, e é a diferença que importa entre os dois checks: zero banco é o estado
+    // normal da maioria das vagas, não uma linha defeituosa.
+    ckPosicoesBanco: check("ck_vagas_posicoes_banco", sql`${t.posicoesBanco} >= 0`),
     // O CHECK `ck_vagas_limite_sazonal` (data limite obrigatória na vaga SAZONAL) foi REMOVIDO na
     // correção de 21/08: a amarração era engano, a data limite vale para qualquer natureza de vaga.
   }),

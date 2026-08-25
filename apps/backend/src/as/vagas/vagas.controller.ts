@@ -1,7 +1,7 @@
-import { Body, Controller, Get, Param, Post } from "@nestjs/common";
+import { Body, Controller, Get, Param, Patch, Post } from "@nestjs/common";
 import { CurrentUser } from "../../auth/decorators";
 import type { AuthUser } from "../../auth/auth.types";
-import { CreateVagaDto, FecharVagaDto } from "./vagas.dto";
+import { CreateVagaDto, EditarPosicoesVagaDto, FecharVagaDto } from "./vagas.dto";
 import { VagasService } from "./vagas.service";
 
 /**
@@ -40,6 +40,32 @@ export class VagasController {
   @Post()
   create(@Body() dto: CreateVagaDto, @CurrentUser() user: AuthUser) {
     return this.vagas.create(dto, user.id);
+  }
+
+  /**
+   * CONTINUAR O RASCUNHO, e PUBLICAR quando ele estiver pronto (OST de 25/08).
+   *
+   * PATCH e não POST porque é a MESMA vaga sendo completada, não uma nova. Só rascunho entra: vaga
+   * já publicada é recusada com conflito pelo service, que é quem tem o estado para decidir.
+   *
+   * O CORPO É O MESMO DA CRIAÇÃO (`CreateVagaDto`): a trilha é a mesma tela, mandando os mesmos
+   * campos. É o `status` do corpo que diz se é para continuar rascunho ou publicar.
+   */
+  @Patch(":id")
+  atualizar(@Param("id") id: string, @Body() dto: CreateVagaDto) {
+    return this.vagas.atualizar(id, dto);
+  }
+
+  /**
+   * EDITAR SÓ OS DOIS CONTADORES (decisão do diretor, 25/08: "continuam editáveis depois").
+   *
+   * ROTA PRÓPRIA, e não o PATCH da trilha, pelo mesmo motivo do corpo próprio: a vaga publicada não
+   * volta para a trilha de abertura. Aqui se escreve o par de posições e mais nada, e é o service que
+   * recusa a vaga já encerrada, porque é ele que tem o estado para decidir.
+   */
+  @Patch(":id/posicoes")
+  editarPosicoes(@Param("id") id: string, @Body() dto: EditarPosicoesVagaDto) {
+    return this.vagas.editarPosicoes(id, dto);
   }
 
   /**

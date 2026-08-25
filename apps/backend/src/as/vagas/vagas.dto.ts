@@ -12,7 +12,6 @@ import {
   Matches,
   MaxLength,
   Min,
-  MinLength,
   ValidateNested,
 } from "class-validator";
 import { Type } from "class-transformer";
@@ -67,22 +66,32 @@ export class VagaBeneficioDto {
  * editável e a autoria deixaria de ser trilha.
  *
  * Os campos de FECHAMENTO também não estão aqui: são da ação Fechar Vaga, momento diferente.
+ *
+ * POR QUE OS OBRIGATÓRIOS SÃO `@IsOptional()` AQUI (OST de 25/08): o MESMO corpo serve para SALVAR
+ * RASCUNHO e para PUBLICAR, e no rascunho nada é cobrado. Quem cobra é a régua única do domínio
+ * (`vagaPendencias`, no shared-types), chamada no service SÓ quando o status pedido não é RASCUNHO.
+ *
+ * ISSO NÃO AFROUXA A PUBLICAÇÃO. O `@IsString`/`@IsUUID`/`@IsISO8601` continua conferindo o FORMATO
+ * de tudo que vier preenchido, e a régua confere a PRESENÇA na hora de publicar, com a lista inteira
+ * do que falta em vez de um erro por vez. O que saiu do DTO foi só a exigência de estar presente,
+ * porque ela deixou de valer no momento em que o DTO chega.
  */
 export class CreateVagaDto {
   // ── PASSO 1, a vaga ───────────────────────────────────────────────────────
   /** Código do PROCESSO SELETIVO, único no sistema. Normalizado (trim + caixa alta) no service. */
+  @IsOptional()
   @IsString()
-  @MinLength(1)
   @MaxLength(40)
-  codigo!: string;
+  codigo?: string;
 
+  @IsOptional()
   @IsUUID()
-  cargoId!: string;
+  cargoId?: string;
 
+  @IsOptional()
   @IsString()
-  @MinLength(1)
   @MaxLength(200)
-  nomeDivulgacao!: string;
+  nomeDivulgacao?: string;
 
   /** NULÁVEL: vaga sem cliente vinculado é estado real e não trava nada. */
   @IsOptional()
@@ -94,8 +103,9 @@ export class CreateVagaDto {
   // DTO deixa de aceitá-lo de propósito, então corpo antigo com `centroCusto` é rejeitado pelo
   // `forbidNonWhitelisted` em vez de gravar em silêncio um campo que a trilha não pergunta mais.
 
+  @IsOptional()
   @IsIn(VAGA_NATUREZA as unknown as string[])
-  natureza!: VagaNatureza;
+  natureza?: VagaNatureza;
 
   @IsOptional()
   @IsIn(VAGA_STATUS as unknown as string[])
@@ -105,10 +115,24 @@ export class CreateVagaDto {
   @IsIn(VAGA_SAZONALIDADE as unknown as string[])
   sazonalidade?: VagaSazonalidade;
 
+  /**
+   * OS DOIS CONTADORES DA VAGA (decisão do diretor, 25/08). OFICIAIS aceita a partir de 1, porque
+   * vaga com zero contratação não é vaga; BANCO aceita ZERO, porque não reservar excedente é o
+   * estado normal da maioria das vagas. É a mesma assimetria dos dois CHECK do banco de dados.
+   *
+   * O NOME ANTIGO `posicoes` DEIXA DE SER ACEITO de propósito: com `forbidNonWhitelisted`, um corpo
+   * montado fora da tela com o campo velho é RECUSADO com mensagem, em vez de gravar em silêncio uma
+   * vaga sem meta oficial nenhuma.
+   */
   @IsOptional()
   @IsInt()
   @Min(1)
-  posicoes?: number;
+  posicoesOficiais?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  posicoesBanco?: number;
 
   // ── PASSO 2, quem pediu ───────────────────────────────────────────────────
   @IsOptional()
@@ -134,8 +158,9 @@ export class CreateVagaDto {
   @IsISO8601()
   dataAlinhamento?: string;
 
+  @IsOptional()
   @IsISO8601()
-  dataAbertura!: string;
+  dataAbertura?: string;
 
   /** Vale em QUALQUER natureza de vaga (correção de 21/08). Segue opcional. */
   @IsOptional()
@@ -346,6 +371,28 @@ export class CreateVagaDto {
 }
 
 /**
+ * DTO DA EDIÇÃO DOS DOIS CONTADORES (decisão do diretor, 25/08: "continuam editáveis depois").
+ *
+ * CORPO PRÓPRIO, MINÚSCULO, E NÃO O `CreateVagaDto`: a vaga publicada NÃO volta para a trilha de
+ * abertura (decisão anterior, preservada), então reaproveitar o corpo da trilha aqui abriria a vaga
+ * inteira para edição livre de tabela, que é outra decisão e ninguém pediu (§A.14/§A.26). Este corpo
+ * escreve DUAS colunas e mais nenhuma.
+ *
+ * OS DOIS SÃO OBRIGATÓRIOS porque a edição é do PAR: mandar só um deles deixaria a tela decidir em
+ * silêncio se o outro foi zerado ou preservado, e é exatamente esse tipo de silêncio que faz o
+ * contador mentir depois.
+ */
+export class EditarPosicoesVagaDto {
+  @IsInt()
+  @Min(1)
+  posicoesOficiais!: number;
+
+  @IsInt()
+  @Min(0)
+  posicoesBanco!: number;
+}
+
+/**
  * DTO do FECHAMENTO (frente 4). Momento diferente da abertura, então DTO diferente: aqui não se
  * edita nada da vaga, só se registra como ela terminou.
  */
@@ -353,11 +400,20 @@ export class FecharVagaDto {
   @IsISO8601()
   dataFechamento!: string;
 
-  /** A trava "não passa das posições" é do service, que conhece a meta da vaga. */
+  /**
+   * UMA CONTAGEM PARA CADA META (os dois contadores, 25/08): `vagasFechadas` são as posições
+   * OFICIAIS preenchidas, `vagasFechadasBanco` são as de banco. A trava "não passa das posições" é
+   * do service, que conhece as metas da vaga, e confere os dois lados SEPARADAMENTE.
+   */
   @IsOptional()
   @IsInt()
   @Min(0)
   vagasFechadas?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  vagasFechadasBanco?: number;
 
   @IsOptional()
   @Transform(({ value }) => normalizarSalarioParaDto(value))

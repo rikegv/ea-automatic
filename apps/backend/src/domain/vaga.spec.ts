@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   codigoJaUsado,
+  excessoDePosicoes,
   ladosDaVaga,
   normalizarCodigoVaga,
   vagasFechadasExcedemPosicoes,
@@ -74,5 +75,84 @@ describe("vagasFechadasExcedemPosicoes", () => {
   it("não informar quantas fecharam não é erro", () => {
     expect(vagasFechadasExcedemPosicoes(null, 2)).toBe(false);
     expect(vagasFechadasExcedemPosicoes(undefined, 2)).toBe(false);
+  });
+});
+
+/**
+ * OS DOIS CONTADORES DA VAGA (decisão do diretor, 25/08).
+ *
+ * O QUE ESTES TESTES PROTEGEM: que os lados sejam conferidos SEPARADAMENTE. A tentação natural, na
+ * hora de dar manutenção, é somar as metas e comparar com a soma das contagens, e é justamente isso
+ * que deixaria passar a contratação a mais que a trava existe para impedir.
+ */
+describe("excessoDePosicoes (os dois contadores da vaga)", () => {
+  const BLUE_SKIES = { posicoesOficiais: 10, posicoesBanco: 10 };
+
+  it("passa quando os dois lados cabem na sua meta", () => {
+    expect(
+      excessoDePosicoes({ vagasFechadas: 6, vagasFechadasBanco: 3 }, BLUE_SKIES),
+    ).toBeNull();
+  });
+
+  it("passa quando cada lado fecha exatamente a sua meta", () => {
+    expect(
+      excessoDePosicoes({ vagasFechadas: 10, vagasFechadasBanco: 10 }, BLUE_SKIES),
+    ).toBeNull();
+  });
+
+  it("NÃO DEIXA O BANCO COBRIR O OFICIAL: sobra no banco não autoriza contratar a mais", () => {
+    // 12 + 1 = 13 cabe nas 20 posições somadas, e é exatamente por isso que somar seria errado.
+    expect(excessoDePosicoes({ vagasFechadas: 12, vagasFechadasBanco: 1 }, BLUE_SKIES)).toEqual({
+      lado: "OFICIAIS",
+      meta: 10,
+      informado: 12,
+    });
+  });
+
+  it("NÃO DEIXA O OFICIAL COBRIR O BANCO, pelo mesmo motivo, no sentido contrário", () => {
+    expect(excessoDePosicoes({ vagasFechadas: 1, vagasFechadasBanco: 12 }, BLUE_SKIES)).toEqual({
+      lado: "BANCO",
+      meta: 10,
+      informado: 12,
+    });
+  });
+
+  it("com os dois estourados, acusa o OFICIAL primeiro (é o que custa mais caro)", () => {
+    expect(excessoDePosicoes({ vagasFechadas: 11, vagasFechadasBanco: 11 }, BLUE_SKIES)?.lado).toBe(
+      "OFICIAIS",
+    );
+  });
+
+  it("VAGA SEM BANCO NÃO ACEITA FECHAMENTO DE BANCO: zero é resposta, não lacuna", () => {
+    expect(
+      excessoDePosicoes(
+        { vagasFechadas: 1, vagasFechadasBanco: 1 },
+        { posicoesOficiais: 3, posicoesBanco: 0 },
+      ),
+    ).toEqual({ lado: "BANCO", meta: 0, informado: 1 });
+  });
+
+  it("meta de banco ausente vale ZERO (a coluna é NOT NULL DEFAULT 0 no banco)", () => {
+    expect(
+      excessoDePosicoes(
+        { vagasFechadas: 1, vagasFechadasBanco: 1 },
+        { posicoesOficiais: 3, posicoesBanco: null },
+      ),
+    ).toEqual({ lado: "BANCO", meta: 0, informado: 1 });
+  });
+
+  it("META OFICIAL NULA (rascunho) NÃO TEM TETO: ausência de meta não é meta zero", () => {
+    expect(
+      excessoDePosicoes(
+        { vagasFechadas: 99, vagasFechadasBanco: 0 },
+        { posicoesOficiais: null, posicoesBanco: 0 },
+      ),
+    ).toBeNull();
+  });
+
+  it("não informar quantas fecharam, de nenhum lado, continua não sendo erro", () => {
+    expect(
+      excessoDePosicoes({ vagasFechadas: null, vagasFechadasBanco: undefined }, BLUE_SKIES),
+    ).toBeNull();
   });
 });

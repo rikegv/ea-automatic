@@ -1,7 +1,19 @@
-import { BadRequestException, ConflictException, Inject, Injectable } from "@nestjs/common";
-import { and, asc, desc, eq, inArray, isNotNull } from "drizzle-orm";
+import {
+  BadRequestException,
+  ConflictException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from "@nestjs/common";
+import { and, asc, desc, eq, inArray, isNotNull, ne } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
-import type { PapelAs, VagaContextoAs, VagaListItem } from "@ea/shared-types";
+import type {
+  PapelAs,
+  VagaCamposObrigatorios,
+  VagaContextoAs,
+  VagaListItem,
+  VagaStatus,
+} from "@ea/shared-types";
 import {
   OPCAO_OUTRA,
   OPCAO_OUTROS,
@@ -12,6 +24,8 @@ import {
   nomeDaUf,
   normalizeCpf,
   regiaoPertenceAUf,
+  textoPendencia,
+  vagaPendencias,
 } from "@ea/shared-types";
 import type { Database } from "../../db/client";
 import { DRIZZLE } from "../../db/drizzle.module";
@@ -29,9 +43,10 @@ import {
   codigoJaUsado,
   ladosDaVaga,
   normalizarCodigoVaga,
-  vagasFechadasExcedemPosicoes,
+  excessoDePosicoes,
+  type ExcessoDePosicoes,
 } from "../../domain/vaga";
-import type { CreateVagaDto, FecharVagaDto } from "./vagas.dto";
+import type { CreateVagaDto, EditarPosicoesVagaDto, FecharVagaDto } from "./vagas.dto";
 
 /**
  * CENTRAL DE VAGAS (A&S): a vaga nasce pela trilha de abertura e termina pela ação de fechar.
@@ -58,9 +73,13 @@ export class VagasService {
   /**
    * Lista as vagas com cargo, cliente, autor e os dois lados JÁ RESOLVIDOS em nome.
    *
-   * LEFT JOIN em cliente, autor, consultor e recruiter porque todos são nuláveis por desenho: INNER
-   * JOIN sumiria em silêncio com a vaga sem cliente vinculado, que é justamente a que precisa
-   * aparecer para alguém vincular.
+   * LEFT JOIN em TODOS os vínculos (cargo, cliente, autor, consultor e recruiter) porque todos são
+   * nuláveis por desenho: INNER JOIN sumiria em silêncio com a vaga sem cliente vinculado, que é
+   * justamente a que precisa aparecer para alguém vincular.
+   *
+   * O CARGO ENTROU NESSA LISTA COM O RASCUNHO (OST de 25/08), e isto não é detalhe de estilo: com o
+   * `innerJoin` que estava aqui, o rascunho salvo antes de escolher o cargo SUMIRIA da listagem, e
+   * quem salvasse para continuar depois não teria como voltar nele.
    */
   async list(): Promise<VagaListItem[]> {
     const consultor = alias(usuarios, "consultor");
@@ -78,7 +97,7 @@ export class VagasService {
         recruiterNome: recruiter.nome,
       })
       .from(vagas)
-      .innerJoin(cargos, eq(cargos.id, vagas.cargoId))
+      .leftJoin(cargos, eq(cargos.id, vagas.cargoId))
       .leftJoin(clientes, eq(clientes.codCliente, vagas.codCliente))
       .leftJoin(autor, eq(autor.id, vagas.abertoPorId))
       .leftJoin(consultor, eq(consultor.id, vagas.consultorId))
@@ -101,7 +120,8 @@ export class VagasService {
       vinculo: v.vinculo,
       status: v.status,
       sazonalidade: v.sazonalidade,
-      posicoes: v.posicoes,
+      posicoesOficiais: v.posicoesOficiais,
+      posicoesBanco: v.posicoesBanco,
       escolaridade: v.escolaridade,
       salarioAbertura: v.salarioAbertura,
       salarioFechamento: v.salarioFechamento,
@@ -152,6 +172,7 @@ export class VagasService {
 
       dataFechamento: v.dataFechamento,
       vagasFechadas: v.vagasFechadas,
+      vagasFechadasBanco: v.vagasFechadasBanco,
       dataPrevistaInicio: v.dataPrevistaInicio,
       enviarParaAdmissao: v.enviarParaAdmissao,
     }));
@@ -180,8 +201,11 @@ export class VagasService {
       enderecoPadrao: string | null;
       escalaPadrao: string | null;
       /**
-       * O SOLICITANTE HERDADO (item 1 da OST de 22/08): quem pediu a ÚLTIMA vaga deste cliente.
-       * Cliente sem vaga anterior vem com os três nulos, e o passo 2 nasce em branco.
+       * O SOLICITANTE HERDADO (item 1 da OST de 22/08): quem pediu a última vaga deste cliente EM QUE
+       * ALGUÉM PREENCHEU O CONTATO (correção de 25/08, ver o comentário da consulta abaixo).
+       *
+       * Cliente sem vaga anterior, ou com vagas anteriores todas sem contato, vem com os três nulos, e
+       * o passo 2 nasce em branco. Isso NÃO é falha da herança: é não haver o que herdar.
        */
       solicitanteNome: string | null;
       solicitanteTelefone: string | null;
@@ -266,6 +290,18 @@ export class VagasService {
        * 2 são cliques seguidos, e uma chamada por troca de cliente faria o formulário piscar. É a
        * mesma decisão que já trouxe `enderecoPadrao` e `escalaPadrao` para cá.
        *
+       * A ÚLTIMA VAGA **QUE TEM** SOLICITANTE, e não simplesmente a última (correção de 25/08).
+       *
+       * O `isNotNull(solicitanteNome)` no filtro é a correção inteira, e ela conserta um defeito que
+       * ainda não tinha aparecido na base: sem ele, bastava alguém abrir UMA vaga daquele cliente sem
+       * preencher o contato para a herança MORRER PARA SEMPRE naquele cliente, apesar de existir a
+       * vaga anterior com o contato certo logo atrás. A vaga mais nova ganhava o `DISTINCT ON` e
+       * respondia "não tem solicitante", e nada na tela dizia que havia um.
+       *
+       * TELEFONE E E-MAIL SEGUEM O NOME, da MESMA vaga, mesmo quando estão vazios: são o contato de
+       * UMA pessoa, e catar cada pedaço da vaga em que ele estiver preenchido montaria um contato que
+       * nunca existiu, com o nome de um solicitante e o telefone de outro.
+       *
        * §A.6: nome, telefone e e-mail são de CONTATO DO CLIENTE (a pessoa que pediu a vaga), não de
        * candidato. É o mesmo dado que a vaga já mostra na listagem.
        */
@@ -277,7 +313,7 @@ export class VagasService {
           solicitanteEmail: vagas.solicitanteEmail,
         })
         .from(vagas)
-        .where(isNotNull(vagas.codCliente))
+        .where(and(isNotNull(vagas.codCliente), isNotNull(vagas.solicitanteNome)))
         .orderBy(asc(vagas.codCliente), desc(vagas.criadoEm)),
       this.db
         .select({ nome: escalasCatalogo.nome })
@@ -337,28 +373,28 @@ export class VagasService {
     return { papelAs, nome: eu?.nome ?? "", contraparte: pessoas };
   }
 
+  /**
+   * ABRIR A VAGA, nos DOIS estados em que ela pode nascer (OST de 25/08).
+   *
+   * RASCUNHO é a vaga salva pela metade, para continuar depois: ela grava o que houver e NÃO cobra
+   * obrigatório nenhum. ABERTA é a vaga publicada, e é só aí que a régua cobra.
+   *
+   * UM CAMINHO SÓ para os dois, e isso é deliberado: uma rota "criar rascunho" separada duplicaria as
+   * validações de formato, de benefício, de região e de CPF, e as duas cópias divergiriam na primeira
+   * correção feita em uma delas. O que muda entre os dois estados é UMA linha, `travaObrigatorios`.
+   */
   async create(dto: CreateVagaDto, abertoPorId: string): Promise<VagaListItem> {
-    const codigo = normalizarCodigoVaga(dto.codigo);
-    if (!codigo) throw new BadRequestException("O código da vaga é obrigatório.");
+    const status = dto.status ?? "ABERTA";
+    const campos = this.camposDaTrilha(dto, status);
+    this.travaObrigatorios(campos, status);
 
-    // A DATA LIMITE não depende mais da sazonalidade (correção de 21/08): vale em qualquer vaga e
-    // segue opcional. Só a data de ABERTURA é obrigatória, e quem exige é o DTO.
-    const dataLimite = dto.dataLimite?.trim() || null;
-
-    await this.travaDuplicidadeDeCodigo(codigo);
+    await this.travaDuplicidadeDeCodigo(campos.codigo, null);
     const beneficios = await this.validaBeneficios(dto.beneficios ?? []);
-    const regiao = this.validaRegioes(dto.regiaoEstado, dto.regioes, dto.regioesOutras);
-    const substituidoCpf = this.validaCpfSubstituido(dto.substituidoCpf);
 
-    // OS DOIS LADOS DA VAGA, pela régua do domínio. Quem não tem papel de A&S não abre vaga: sem
-    // isso a vaga nasceria sem lado nenhum e ninguém saberia de quem ela é.
-    const eu = await this.db.query.usuarios.findFirst({ where: eq(usuarios.id, abertoPorId) });
-    if (!eu?.papelAs) {
-      throw new BadRequestException(
-        "Seu usuário ainda não tem papel de A&S (Consultor ou Recruiter). Peça ao administrador para definir o papel antes de abrir uma vaga.",
-      );
-    }
-    const lados = ladosDaVaga(eu.papelAs, abertoPorId, dto.contraparteId);
+    // OS DOIS LADOS DA VAGA, pela régua do domínio. Quem não tem papel de A&S não abre vaga, nem em
+    // rascunho: sem isso a vaga nasceria sem lado nenhum e ninguém saberia de quem ela é. Isto NÃO é
+    // campo do formulário, é autoria, e por isso a régua do rascunho não o alcança.
+    const lados = await this.ladosDeQuemAbre(abertoPorId, dto.contraparteId);
 
     // TRANSAÇÃO porque são duas escritas: a vaga e os benefícios dela. Sem ela, uma falha no segundo
     // insert deixaria a vaga gravada sem os benefícios que o consultor marcou, em silêncio.
@@ -366,71 +402,10 @@ export class VagasService {
       const [row] = await tx
         .insert(vagas)
         .values({
-          codigo,
-          cargoId: dto.cargoId,
-          nomeDivulgacao: dto.nomeDivulgacao.trim(),
-          codCliente: dto.codCliente?.trim() || null,
-          natureza: dto.natureza,
-          vinculo: dto.vinculo ?? null,
-          status: dto.status ?? "ABERTA",
-          sazonalidade: dto.sazonalidade ?? "OPERACAO_PADRAO",
-          posicoes: dto.posicoes ?? 1,
-          escolaridade: dto.escolaridade ?? null,
-          salarioAbertura: dto.salarioAbertura ?? null,
-          dataAbertura: dto.dataAbertura,
-          dataLimite,
+          ...campos,
           abertoPorId,
-
-          solicitanteNome: texto(dto.solicitanteNome),
-          solicitanteTelefone: texto(dto.solicitanteTelefone),
-          solicitanteEmail: texto(dto.solicitanteEmail),
-          dataSolicitacao: data(dto.dataSolicitacao),
-          dataAlinhamento: data(dto.dataAlinhamento),
-          envioShortlist: data(dto.envioShortlist),
-
           consultorId: lados.consultorId,
           recruiterId: lados.recruiterId,
-          /**
-           * TEMPO DE CONTRATO SÓ EM VÍNCULO COM PRAZO (item 2). A tela esconde o campo fora dos três
-           * vínculos, mas quem GRAVA é aqui: sem esta linha, trocar o vínculo depois de escolher o
-           * tempo deixaria um prazo órfão gravado numa vaga efetiva, invisível na tela e presente no
-           * banco. Mesma decisão já tomada para `detalheHibrido` fora do modelo híbrido.
-           */
-          tempoContrato: exigeTempoContrato(dto.vinculo) ? texto(dto.tempoContrato) : null,
-          motivo: texto(dto.motivo),
-          justificativaMotivo: texto(dto.justificativaMotivo),
-          tipoSubstituicao: dto.tipoSubstituicao ?? null,
-          substituidoNome: texto(dto.substituidoNome),
-          substituidoCpf,
-
-          localTrabalho: texto(dto.localTrabalho),
-          regiaoEstado: regiao.uf,
-          regioes: regiao.regioes,
-          regioesOutras: regiao.outras,
-          horarioEscala: texto(dto.horarioEscala),
-          modeloTrabalho: dto.modeloTrabalho ?? null,
-          // O detalhe do híbrido só existe no híbrido: guardá-lo depois de a pessoa trocar o modelo
-          // deixaria na vaga uma frase que a tela nem mostra mais.
-          detalheHibrido: dto.modeloTrabalho === "HIBRIDO" ? texto(dto.detalheHibrido) : null,
-          confidencial: dto.confidencial ?? false,
-          divulgarEmpresa: dto.divulgarEmpresa ?? true,
-
-          faixaEtaria: texto(dto.faixaEtaria),
-          genero: dto.genero ?? "INDIFERENTE",
-          idiomas: dto.idiomas?.length ? dto.idiomas : null,
-          // O escape só sobrevive se "Outros" estiver marcado: guardar o texto de um escape que a
-          // pessoa desmarcou deixaria na vaga um idioma que a tela não mostra mais.
-          idiomasOutros: dto.idiomas?.includes(OPCAO_OUTROS) ? texto(dto.idiomasOutros) : null,
-          cursosConhecimentos: texto(dto.cursosConhecimentos),
-          testes: dto.testes?.length ? dto.testes : null,
-          testesOutro: texto(dto.testesOutro),
-          experiencia: texto(dto.experiencia),
-          atribuicoes: texto(dto.atribuicoes),
-          perfilComportamental: texto(dto.perfilComportamental),
-          ambiente: texto(dto.ambiente),
-          etapasPs: dto.etapasPs?.length ? dto.etapasPs : null,
-          etapasPsOutra: dto.etapasPs?.includes(OPCAO_OUTRA) ? texto(dto.etapasPsOutra) : null,
-          observacoes: texto(dto.observacoes),
         })
         .returning({ id: vagas.id });
 
@@ -444,9 +419,265 @@ export class VagasService {
       return row.id;
     });
 
-    const criada = (await this.list()).find((v) => v.id === id);
-    if (!criada) throw new BadRequestException("Vaga criada, mas não encontrada na listagem.");
-    return criada;
+    return this.devolverVaga(id, "Vaga criada, mas não encontrada na listagem.");
+  }
+
+  /**
+   * CONTINUAR O RASCUNHO, e PUBLICAR quando ele estiver pronto (OST de 25/08).
+   *
+   * SÓ RASCUNHO ENTRA AQUI. Vaga publicada não volta para a trilha por este caminho: ela já está na
+   * mão do time, já pode ter sido divulgada, e reabri-la para edição livre é outra decisão, que o
+   * diretor não pediu (§A.14). Quem tenta recebe conflito com o motivo, não um erro genérico.
+   *
+   * PUBLICAR É ESTA MESMA ROTA com `status` diferente de RASCUNHO: é o momento em que a régua dos
+   * obrigatórios passa a valer, e ela vale sobre o CORPO INTEIRO que a trilha mandou, não sobre o que
+   * estava gravado antes. Assim a tela e o servidor conferem exatamente a mesma coisa.
+   *
+   * A AUTORIA NÃO TROCA DE MÃO: `abertoPorId` fica como estava, e os dois lados são recalculados a
+   * partir do PAPEL DE QUEM ABRIU, não de quem está editando. Um rascunho aberto por outra pessoa não
+   * muda de dono porque alguém entrou nele para completar um campo.
+   */
+  async atualizar(id: string, dto: CreateVagaDto): Promise<VagaListItem> {
+    const atual = await this.db.query.vagas.findFirst({ where: eq(vagas.id, id) });
+    if (!atual) throw new NotFoundException("Vaga não encontrada.");
+    if (atual.status !== "RASCUNHO") {
+      throw new ConflictException(
+        "Esta vaga já foi publicada e não volta para a trilha de abertura. Recarregue a página.",
+      );
+    }
+
+    const status = dto.status ?? "RASCUNHO";
+    const campos = this.camposDaTrilha(dto, status);
+    this.travaObrigatorios(campos, status);
+
+    await this.travaDuplicidadeDeCodigo(campos.codigo, id);
+    const beneficios = await this.validaBeneficios(dto.beneficios ?? []);
+    const lados = await this.ladosDeQuemAbre(atual.abertoPorId, dto.contraparteId);
+
+    // OS BENEFÍCIOS SÃO SUBSTITUÍDOS, não mesclados: a trilha manda a lista COMPLETA do que está
+    // marcado, então o que sumiu da lista foi desmarcado pela pessoa. Mesclar deixaria no banco um
+    // benefício que a tela não mostra mais e ninguém conseguiria tirar.
+    await this.db.transaction(async (tx) => {
+      await tx
+        .update(vagas)
+        .set({
+          ...campos,
+          consultorId: lados.consultorId,
+          recruiterId: lados.recruiterId,
+          atualizadoEm: new Date(),
+        })
+        .where(eq(vagas.id, id));
+
+      await tx.delete(vagaBeneficio).where(eq(vagaBeneficio.vagaId, id));
+      if (beneficios.length > 0) {
+        await tx
+          .insert(vagaBeneficio)
+          .values(beneficios.map((b) => ({ vagaId: id, beneficioId: b.beneficioId, valor: b.valor })));
+      }
+    });
+
+    return this.devolverVaga(id, "Vaga salva, mas não encontrada na listagem.");
+  }
+
+  /**
+   * O CORPO DA TRILHA VIRANDO COLUNAS, uma vez só, para a criação e para a continuação do rascunho.
+   *
+   * TODA A HIGIENE DE CAMPO MORA AQUI: escape que só sobrevive com a opção marcada, tempo de contrato
+   * que só existe em vínculo com prazo, região conferida contra a UF, CPF com dígito conferido. Antes
+   * de existir a continuação do rascunho isto vivia dentro do `create`; duplicá-lo no `atualizar`
+   * teria feito o rascunho e a publicação limparem coisas diferentes.
+   */
+  private camposDaTrilha(dto: CreateVagaDto, status: VagaStatus) {
+    // A DATA LIMITE não depende mais da sazonalidade (correção de 21/08): vale em qualquer vaga e
+    // segue opcional. A data de ABERTURA é obrigatória para PUBLICAR, e quem cobra é a régua.
+    const regiao = this.validaRegioes(dto.regiaoEstado, dto.regioes, dto.regioesOutras);
+    const codigoLimpo = dto.codigo ? normalizarCodigoVaga(dto.codigo) : "";
+
+    return {
+      // Código em branco é ausência, não string vazia: o rascunho pode ainda não ter número.
+      codigo: codigoLimpo || null,
+      cargoId: dto.cargoId ?? null,
+      nomeDivulgacao: texto(dto.nomeDivulgacao),
+      codCliente: dto.codCliente?.trim() || null,
+      natureza: dto.natureza ?? null,
+      vinculo: dto.vinculo ?? null,
+      status,
+      sazonalidade: dto.sazonalidade ?? "OPERACAO_PADRAO",
+      // OS DOIS CONTADORES (25/08). O oficial ausente é NULL (rascunho sem meta), o de banco ausente
+      // é ZERO: a coluna é NOT NULL DEFAULT 0 e "sem banco" é resposta, não lacuna.
+      posicoesOficiais: dto.posicoesOficiais ?? null,
+      posicoesBanco: dto.posicoesBanco ?? 0,
+      escolaridade: dto.escolaridade ?? null,
+      salarioAbertura: dto.salarioAbertura ?? null,
+      dataAbertura: data(dto.dataAbertura),
+      dataLimite: data(dto.dataLimite),
+
+      solicitanteNome: texto(dto.solicitanteNome),
+      solicitanteTelefone: texto(dto.solicitanteTelefone),
+      solicitanteEmail: texto(dto.solicitanteEmail),
+      dataSolicitacao: data(dto.dataSolicitacao),
+      dataAlinhamento: data(dto.dataAlinhamento),
+      envioShortlist: data(dto.envioShortlist),
+
+      /**
+       * TEMPO DE CONTRATO SÓ EM VÍNCULO COM PRAZO (item 2). A tela esconde o campo fora dos três
+       * vínculos, mas quem GRAVA é aqui: sem esta linha, trocar o vínculo depois de escolher o tempo
+       * deixaria um prazo órfão gravado numa vaga efetiva, invisível na tela e presente no banco.
+       * Mesma decisão já tomada para `detalheHibrido` fora do modelo híbrido.
+       */
+      tempoContrato: exigeTempoContrato(dto.vinculo) ? texto(dto.tempoContrato) : null,
+      motivo: texto(dto.motivo),
+      justificativaMotivo: texto(dto.justificativaMotivo),
+      tipoSubstituicao: dto.tipoSubstituicao ?? null,
+      substituidoNome: texto(dto.substituidoNome),
+      /**
+       * §A.6: o CPF do substituído é dado pessoal e é tratado como tal TAMBÉM NO RASCUNHO. O número
+       * nunca volta na mensagem de erro, nunca vai para log e a rota inteira segue fechada pelo menu
+       * `as-vagas`. O rascunho afrouxa a régua dos OBRIGATÓRIOS, nunca a de dado sensível.
+       *
+       * O QUE O RASCUNHO AFROUXA, e só isto: a CONFERÊNCIA DO DÍGITO. No rascunho o número entra como
+       * está, porque "salva o que tiver" inclui o CPF digitado pela metade, e recusar o rascunho
+       * inteiro por causa de um dígito faltando faria o consultor perder os outros 37 campos. NA
+       * PUBLICAÇÃO o dígito é conferido, e é lá que o CPF errado é barrado: nenhum CPF inválido chega
+       * a uma vaga publicada.
+       */
+      substituidoCpf: this.validaCpfSubstituido(dto.substituidoCpf, status === "RASCUNHO"),
+
+      localTrabalho: texto(dto.localTrabalho),
+      regiaoEstado: regiao.uf,
+      regioes: regiao.regioes,
+      regioesOutras: regiao.outras,
+      horarioEscala: texto(dto.horarioEscala),
+      modeloTrabalho: dto.modeloTrabalho ?? null,
+      // O detalhe do híbrido só existe no híbrido: guardá-lo depois de a pessoa trocar o modelo
+      // deixaria na vaga uma frase que a tela nem mostra mais.
+      detalheHibrido: dto.modeloTrabalho === "HIBRIDO" ? texto(dto.detalheHibrido) : null,
+      confidencial: dto.confidencial ?? false,
+      divulgarEmpresa: dto.divulgarEmpresa ?? true,
+
+      faixaEtaria: texto(dto.faixaEtaria),
+      genero: dto.genero ?? "INDIFERENTE",
+      idiomas: dto.idiomas?.length ? dto.idiomas : null,
+      // O escape só sobrevive se "Outros" estiver marcado: guardar o texto de um escape que a pessoa
+      // desmarcou deixaria na vaga um idioma que a tela não mostra mais.
+      idiomasOutros: dto.idiomas?.includes(OPCAO_OUTROS) ? texto(dto.idiomasOutros) : null,
+      cursosConhecimentos: texto(dto.cursosConhecimentos),
+      testes: dto.testes?.length ? dto.testes : null,
+      testesOutro: texto(dto.testesOutro),
+      experiencia: texto(dto.experiencia),
+      atribuicoes: texto(dto.atribuicoes),
+      perfilComportamental: texto(dto.perfilComportamental),
+      ambiente: texto(dto.ambiente),
+      etapasPs: dto.etapasPs?.length ? dto.etapasPs : null,
+      etapasPsOutra: dto.etapasPs?.includes(OPCAO_OUTRA) ? texto(dto.etapasPsOutra) : null,
+      observacoes: texto(dto.observacoes),
+    };
+  }
+
+  /**
+   * A RÉGUA DOS OBRIGATÓRIOS, COBRADA SÓ NO PUBLICAR (itens 2 a 4 da OST de 25/08).
+   *
+   * A MESMA FUNÇÃO QUE A TELA USA (`vagaPendencias`, no shared-types). Duas cópias da régua acabariam
+   * em "a tela deixou publicar e o servidor recusou", que é o pior dos dois mundos: o trabalho já
+   * feito e a mensagem chegando do lado errado.
+   *
+   * A MENSAGEM LISTA TUDO DE UMA VEZ, com o passo e o nome do campo, porque quem preenche 38 campos
+   * não pode descobrir as pendências uma por uma. A tela já barra antes de chegar aqui; esta trava é
+   * para o corpo montado fora dela, e é a autoridade.
+   */
+  private travaObrigatorios(campos: VagaCamposObrigatorios, status: VagaStatus): void {
+    if (status === "RASCUNHO") return;
+    const pendencias = vagaPendencias(campos);
+    if (pendencias.length === 0) return;
+
+    throw new BadRequestException(
+      "A vaga não pode ser publicada com campo obrigatório em branco. " +
+        pendencias.map(textoPendencia).join("; ") +
+        ". Salve como rascunho ou preencha o que falta.",
+    );
+  }
+
+  /**
+   * OS DOIS LADOS DA VAGA a partir de quem a abriu, com a régua do domínio.
+   *
+   * O PAPEL É LIDO DO BANCO na hora, e não do token, pela mesma razão do `contextoAs`: quem trocou de
+   * lado hoje de manhã abre a vaga da tarde já do lado certo.
+   */
+  private async ladosDeQuemAbre(
+    abertoPorId: string | null,
+    contraparteId: string | null | undefined,
+  ): Promise<{ consultorId: string | null; recruiterId: string | null }> {
+    if (!abertoPorId) return { consultorId: null, recruiterId: null };
+    const eu = await this.db.query.usuarios.findFirst({ where: eq(usuarios.id, abertoPorId) });
+    if (!eu?.papelAs) {
+      throw new BadRequestException(
+        "Seu usuário ainda não tem papel de A&S (Consultor ou Recruiter). Peça ao administrador para definir o papel antes de abrir uma vaga.",
+      );
+    }
+    return ladosDaVaga(eu.papelAs, abertoPorId, contraparteId);
+  }
+
+  /** A vaga recém-escrita, relida pela listagem, que é a forma que a tela conhece. */
+  private async devolverVaga(id: string, seSumir: string): Promise<VagaListItem> {
+    const vaga = (await this.list()).find((v) => v.id === id);
+    if (!vaga) throw new BadRequestException(seSumir);
+    return vaga;
+  }
+
+  /**
+   * EDITAR SÓ OS DOIS CONTADORES (decisão do diretor, 25/08: "continuam editáveis depois").
+   *
+   * CAMINHO ESTREITO DE PROPÓSITO. A vaga publicada continua NÃO voltando para a trilha de abertura,
+   * como estava decidido: esta rota escreve DUAS colunas e mais nenhuma. Foi assim para atender o
+   * "editáveis depois" sem transformar a vaga publicada numa linha de tabela editável, que é outra
+   * decisão e não foi pedida (§A.14/§A.26).
+   *
+   * VAGA ENCERRADA NÃO ENTRA. Depois do fechamento a meta já foi confrontada com a contagem, e mexer
+   * nela ali reescreveria a história do processo: uma vaga que fechou 3 de 3 viraria "3 de 1" com uma
+   * edição, e o indicador de entrega passaria a mentir sobre um processo terminado.
+   *
+   * A RÉGUA DOS DOIS LADOS VALE AQUI TAMBÉM, e não é redundância: baixar a meta abaixo do que já foi
+   * contado é a mesma inconsistência que a trava do fechamento existe para impedir, chegando pela
+   * outra ponta.
+   */
+  async editarPosicoes(id: string, dto: EditarPosicoesVagaDto): Promise<VagaListItem> {
+    const vaga = await this.db.query.vagas.findFirst({ where: eq(vagas.id, id) });
+    if (!vaga) throw new NotFoundException("Vaga não encontrada.");
+    if (vaga.status === "FECHADA" || vaga.status === "ENTREGUE" || vaga.status === "CANCELADA") {
+      throw new ConflictException(
+        "Esta vaga já foi encerrada: as posições não mudam depois do fechamento. Recarregue a página.",
+      );
+    }
+
+    const excesso = excessoDePosicoes(
+      { vagasFechadas: vaga.vagasFechadas, vagasFechadasBanco: vaga.vagasFechadasBanco },
+      { posicoesOficiais: dto.posicoesOficiais, posicoesBanco: dto.posicoesBanco },
+    );
+    if (excesso) throw new BadRequestException(this.mensagemDeExcesso(excesso));
+
+    await this.db
+      .update(vagas)
+      .set({
+        posicoesOficiais: dto.posicoesOficiais,
+        posicoesBanco: dto.posicoesBanco,
+        atualizadoEm: new Date(),
+      })
+      .where(eq(vagas.id, id));
+
+    return this.devolverVaga(id, "Posições salvas, mas a vaga não foi encontrada na listagem.");
+  }
+
+  /**
+   * A FRASE DO EXCESSO, escrita uma vez só para os dois caminhos que podem produzi-lo (o fechamento e
+   * a edição das posições). A régua é do domínio; aqui só se fala português com quem está na tela.
+   */
+  private mensagemDeExcesso(excesso: ExcessoDePosicoes): string {
+    const meta =
+      excesso.lado === "OFICIAIS"
+        ? `${excesso.meta} ${excesso.meta === 1 ? "posição oficial" : "posições oficiais"}`
+        : `${excesso.meta} ${excesso.meta === 1 ? "posição de banco" : "posições de banco"}`;
+    const contagem = excesso.lado === "OFICIAIS" ? "vagas fechadas" : "vagas fechadas de banco";
+    return `A vaga tem ${meta}: o número de ${contagem} não pode ser maior que isso.`;
   }
 
   /**
@@ -464,21 +695,39 @@ export class VagasService {
     if (vaga.status !== "ABERTA") {
       throw new ConflictException("Esta vaga já foi fechada. Recarregue a página.");
     }
-    if (vagasFechadasExcedemPosicoes(dto.vagasFechadas, vaga.posicoes)) {
-      throw new BadRequestException(
-        `A vaga tem ${vaga.posicoes} ${vaga.posicoes === 1 ? "posição" : "posições"}: o número de vagas fechadas não pode ser maior que isso.`,
-      );
-    }
+    /**
+     * A TRAVA DOS DOIS CONTADORES (25/08), com os lados conferidos SEPARADAMENTE: sobra no banco não
+     * autoriza contratar a mais no oficial. A régua é a do domínio (`excessoDePosicoes`); aqui só se
+     * escreve a frase que a pessoa lê, porque quem sabe falar HTTP é o serviço.
+     *
+     * A META PODE SER NULA (rascunho), e aí não há teto a exceder. Vaga em rascunho nem chega aqui,
+     * porque a trava de status acima só deixa passar a ABERTA, mas o tipo é honesto sobre a coluna.
+     */
+    const excesso = excessoDePosicoes(
+      { vagasFechadas: dto.vagasFechadas, vagasFechadasBanco: dto.vagasFechadasBanco },
+      { posicoesOficiais: vaga.posicoesOficiais, posicoesBanco: vaga.posicoesBanco },
+    );
+    if (excesso) throw new BadRequestException(this.mensagemDeExcesso(excesso));
 
     await this.db
       .update(vagas)
       .set({
         dataFechamento: dto.dataFechamento,
         vagasFechadas: dto.vagasFechadas ?? null,
+        vagasFechadasBanco: dto.vagasFechadasBanco ?? null,
         salarioFechamento: dto.salarioFechamento ?? null,
         dataPrevistaInicio: data(dto.dataPrevistaInicio),
         enviarParaAdmissao: dto.enviarParaAdmissao ?? false,
-        status: (dto.vagasFechadas ?? 0) > 0 ? "ENTREGUE" : "FECHADA",
+        /**
+         * ENTREGUE quando ALGUMA posição foi preenchida, dos dois lados. O lado do banco entra na
+         * conta porque ele é posição preenchida de verdade, e chamar de FECHADA uma vaga que entregou
+         * três pessoas para o banco apagaria justamente o indicador de sucesso que o vocabulário de
+         * status preserva de propósito.
+         *
+         * ISTO NÃO MUDA NENHUM FECHAMENTO QUE JÁ FUNCIONAVA: sem banco reservado, a contagem de banco
+         * é zero e a regra devolve exatamente o que devolvia antes.
+         */
+        status: (dto.vagasFechadas ?? 0) + (dto.vagasFechadasBanco ?? 0) > 0 ? "ENTREGUE" : "FECHADA",
         atualizadoEm: new Date(),
       })
       .where(eq(vagas.id, id));
@@ -494,16 +743,29 @@ export class VagasService {
    * Lê só os códigos iguais ao digitado, não a tabela inteira: é a informação mínima que a régua
    * precisa, e mantém a checagem barata mesmo com a base importada dentro.
    */
-  private async travaDuplicidadeDeCodigo(codigo: string): Promise<void> {
+  private async travaDuplicidadeDeCodigo(
+    codigo: string | null,
+    ignorarVagaId: string | null,
+  ): Promise<void> {
+    // SEM CÓDIGO NÃO HÁ DUPLICIDADE. O rascunho pode ainda não ter número, e cobrar unicidade de uma
+    // ausência barraria todos os rascunhos sem código a partir do segundo.
+    if (!codigo) return;
+
     const existentes = await this.db
       .select({ codigo: vagas.codigo })
       .from(vagas)
-      .where(eq(vagas.codigo, codigo));
+      .where(
+        // A PRÓPRIA VAGA FICA DE FORA quando o rascunho é salvo de novo: sem isto, o segundo
+        // "Salvar Rascunho" acusaria o código do próprio rascunho como duplicado dele mesmo.
+        ignorarVagaId
+          ? and(eq(vagas.codigo, codigo), ne(vagas.id, ignorarVagaId))
+          : eq(vagas.codigo, codigo),
+      );
 
     if (
       !codigoJaUsado(
         codigo,
-        existentes.map((e) => e.codigo),
+        existentes.map((e) => e.codigo ?? ""),
       )
     ) {
       return;
@@ -565,12 +827,17 @@ export class VagasService {
    * VALIDAR O DÍGITO é o que separa "o time do ADM tem o número" de "o time do ADM tem onze dígitos
    * quaisquer". Um CPF errado só aparece no dia do eSocial, tarde demais para corrigir na origem.
    *
+   * `parcial` é o RASCUNHO: o número entra como está, sem conferência de dígito, porque o rascunho
+   * guarda o que houver. Ele continua limitado aos 11 dígitos da coluna, então um campo digitado pela
+   * metade não vira lixo de tamanho arbitrário no banco. A conferência volta a valer na publicação.
+   *
    * §A.6: a mensagem de erro NÃO REPETE O NÚMERO. Ela diz que o CPF não confere e para por aí, senão
    * o dado pessoal viajaria na resposta de erro e, dali, para qualquer log de cliente HTTP.
    */
-  private validaCpfSubstituido(bruto: string | null | undefined): string | null {
+  private validaCpfSubstituido(bruto: string | null | undefined, parcial = false): string | null {
     const digitos = bruto ? normalizeCpf(bruto) : "";
     if (!digitos) return null;
+    if (parcial) return digitos.slice(0, 11);
     if (!isValidCpf(digitos)) {
       throw new BadRequestException(
         "O CPF do substituído não confere. Confira os dígitos e informe de novo.",

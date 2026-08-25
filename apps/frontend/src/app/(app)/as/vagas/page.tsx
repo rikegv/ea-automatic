@@ -21,7 +21,7 @@
  * §A.11 (sem travessão), §A.12 (máscara única de tabela), §A.24 (title case em título e tag).
  */
 
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   ESCALA_OUTRA,
   OPCAO_OUTRA,
@@ -59,8 +59,11 @@ import {
   regioesDaUf,
   rotuloTempoContrato,
   separarOpcaoEscape,
+  textoPendencia,
+  vagaPendencias,
   type VagaContextoAs,
   type VagaListItem,
+  type VagaPendencia,
   type VagaStatus,
 } from "@ea/shared-types";
 import { apiFetch } from "@/lib/api";
@@ -115,6 +118,9 @@ const MOTIVO_SUBSTITUICAO = "Substituição";
  * vermelho; fechada é encerramento neutro; vaga banco é estado próprio, em azul.
  */
 const TOM_STATUS: Record<VagaStatus, PillTone> = {
+  // RASCUNHO é neutro de propósito: não é trabalho em andamento (a vaga nem foi publicada) nem
+  // êxito nem encerramento. É a vaga que ainda não começou.
+  RASCUNHO: "nt",
   ABERTA: "wn",
   ENTREGUE: "ok",
   FECHADA: "nt",
@@ -137,6 +143,30 @@ function moedaBr(v: string | null): string {
 }
 
 const HOJE = () => new Date().toISOString().slice(0, 10);
+
+/**
+ * COMO A VAGA É CHAMADA EM UMA FRASE (rótulo de acessibilidade e de `title`).
+ *
+ * O CÓDIGO É O NOME DELA quando existe. O rascunho pode ainda não ter número, e aí vale o nome de
+ * divulgação; sem os dois, a frase diz "sem código", que é honesto, em vez de "vaga undefined".
+ */
+function rotuloDaVaga(v: VagaListItem): string {
+  return v.codigo ?? v.nomeDivulgacao ?? "sem código";
+}
+
+/**
+ * UM CONTADOR ESCRITO COMO O DIRETOR PEDIU: "6 de 10 Oficiais, 3 de 10 Banco".
+ *
+ * O "X DE Y" SÓ APARECE QUANDO O X EXISTE. Enquanto a vaga está aberta ninguém contou nada ainda, e
+ * escrever "0 de 10" ali seria afirmar que zero posições foram preenchidas, o que o sistema não sabe:
+ * a contagem só nasce no fechamento. Sem contagem, a célula mostra a META, que é o que existe.
+ *
+ * META AUSENTE mostra "não informado" (§A.11), nunca um traço, e acontece só no rascunho.
+ */
+function textoContador(lado: string, meta: number | null, fechadas: number | null): string {
+  if (meta === null) return `${lado}: não informado`;
+  return fechadas === null ? `${lado}: ${meta}` : `${lado}: ${fechadas} de ${meta}`;
+}
 
 /**
  * MÁSCARA DE CPF, a mesma do wizard de Nova Admissão. O campo mostra "123.456.789-01" e o que viaja
@@ -179,7 +209,13 @@ interface FormVaga {
   natureza: string;
   status: string;
   sazonalidade: string;
-  posicoes: string;
+  /**
+   * OS DOIS CONTADORES DA VAGA (decisão do diretor, 25/08): oficiais são as contratações de verdade,
+   * banco é o excedente aprovado que fica reservado. Texto, como todo campo numérico da trilha, para
+   * o input controlado aceitar o campo vazio enquanto a pessoa digita.
+   */
+  posicoesOficiais: string;
+  posicoesBanco: string;
 
   solicitanteNome: string;
   solicitanteTelefone: string;
@@ -247,7 +283,9 @@ const FORM_VAZIO = (): FormVaga => ({
   natureza: "EFETIVA",
   status: "ABERTA",
   sazonalidade: "OPERACAO_PADRAO",
-  posicoes: "1",
+  posicoesOficiais: "1",
+  // BANCO NASCE ZERO: a maioria das vagas não reserva excedente, e zero é resposta, não lacuna.
+  posicoesBanco: "0",
 
   solicitanteNome: "",
   solicitanteTelefone: "",
@@ -297,19 +335,53 @@ const FORM_VAZIO = (): FormVaga => ({
   observacoes: "",
 });
 
-/** Rótulo de campo, no padrão do DS. */
+/**
+ * O ASTERISCO VERMELHO DO OBRIGATÓRIO (item 1 da OST de 25/08).
+ *
+ * POR QUE UM ELEMENTO, e não " *" escrito dentro do rótulo como estava antes: dentro da string ele é
+ * cinza como o resto do rótulo e não salta aos olhos, que é justamente o que o diretor pediu. Fora
+ * dela ele ganha a cor de alerta do DS e o leitor de tela ganha "obrigatório" por extenso, em vez de
+ * ler um asterisco solto no meio da frase.
+ */
+function Obrigatorio() {
+  return (
+    <span className="text-danger" aria-hidden>
+      {" *"}
+    </span>
+  );
+}
+
+/**
+ * Rótulo de campo, no padrão do DS.
+ *
+ * O `id` VAI NO CONTÊINER, e não no input, e isso é deliberado: é o alvo do salto vindo da lista de
+ * pendências do publicar (item 4). Saltar para o contêiner deixa o RÓTULO visível junto do campo,
+ * enquanto saltar para o input sozinho encostaria o campo no topo da área rolante, sem o nome dele.
+ * Quem recebe o foco continua sendo o controle de dentro (ver `irParaPendencia`).
+ */
 function Campo({
   rotulo,
   children,
   largo = false,
+  obrigatorio = false,
+  id,
 }: {
   rotulo: string;
   children: React.ReactNode;
   largo?: boolean;
+  obrigatorio?: boolean;
+  id?: string;
 }) {
   return (
-    <label className={largo ? "flex flex-col gap-1.5 md:col-span-2" : "flex flex-col gap-1.5"}>
-      <span className="text-[12.5px] text-dim">{rotulo}</span>
+    <label
+      id={id}
+      className={largo ? "flex flex-col gap-1.5 md:col-span-2" : "flex flex-col gap-1.5"}
+    >
+      <span className="text-[12.5px] text-dim">
+        {rotulo}
+        {obrigatorio && <Obrigatorio />}
+        {obrigatorio && <span className="sr-only"> (obrigatório)</span>}
+      </span>
       {children}
     </label>
   );
@@ -320,14 +392,25 @@ function CampoSelect({
   rotulo,
   children,
   largo = false,
+  obrigatorio = false,
+  id,
 }: {
   rotulo: string;
   children: React.ReactNode;
   largo?: boolean;
+  obrigatorio?: boolean;
+  id?: string;
 }) {
   return (
-    <div className={largo ? "flex flex-col gap-1.5 md:col-span-2" : "flex flex-col gap-1.5"}>
-      <span className="text-[12.5px] text-dim">{rotulo}</span>
+    <div
+      id={id}
+      className={largo ? "flex flex-col gap-1.5 md:col-span-2" : "flex flex-col gap-1.5"}
+    >
+      <span className="text-[12.5px] text-dim">
+        {rotulo}
+        {obrigatorio && <Obrigatorio />}
+        {obrigatorio && <span className="sr-only"> (obrigatório)</span>}
+      </span>
       {children}
     </div>
   );
@@ -362,6 +445,28 @@ export default function CentralDeVagasPage() {
   );
   const [testes, setTestes] = useState<string[]>([]);
   const [confirmarDescarte, setConfirmarDescarte] = useState(false);
+  /**
+   * O RASCUNHO EM EDIÇÃO (item 3). Nulo é abertura nova; com id, a trilha CONTINUA aquela vaga, e o
+   * salvamento vira PATCH em vez de POST. Sem isto, cada "Salvar Rascunho" criaria um rascunho novo
+   * e o consultor terminaria com quatro cópias da mesma vaga na listagem.
+   */
+  const [editandoId, setEditandoId] = useState<string | null>(null);
+  /**
+   * O QUE FALTOU NA TENTATIVA DE PUBLICAR (item 4). Vazio é "nada pendente" OU "ainda não tentou": o
+   * painel só aparece depois de a pessoa clicar em publicar, porque acusar pendência no passo 1 de
+   * uma trilha recém-aberta seria gritar antes de ela ter tido chance de preencher.
+   */
+  const [pendencias, setPendencias] = useState<VagaPendencia[]>([]);
+  /**
+   * A ÁREA ROLANTE DA TRILHA. Existe por um defeito PEGO NA PROVA VISUAL (§A.13): o painel de
+   * pendências nasceu no fim do miolo, e no passo 5, que é longo, ele ficava ABAIXO DA DOBRA. Quem
+   * clicava em publicar via a tela não fazer nada, sem saber que a resposta estava lá embaixo.
+   *
+   * A correção tem duas partes: o painel subiu para o TOPO do passo, e o miolo volta ao topo quando
+   * ele aparece. Só uma das duas não bastaria: com o painel no topo e a área rolada para baixo, a
+   * pessoa continuaria olhando para o meio do formulário.
+   */
+  const mioloRef = useRef<HTMLDivElement | null>(null);
 
   /** Item 8: a vaga completa vive num modal, aberto pelo olho da linha. Null = modal fechado. */
   const [verAlvo, setVerAlvo] = useState<VagaListItem | null>(null);
@@ -372,11 +477,25 @@ export default function CentralDeVagasPage() {
   const [erroFechar, setErroFechar] = useState<string | null>(null);
   const [fechForm, setFechForm] = useState({
     dataFechamento: HOJE(),
+    /** Uma contagem para cada meta (os dois contadores, 25/08): oficiais e banco. */
     vagasFechadas: "",
+    vagasFechadasBanco: "",
     salarioFechamento: "",
     dataPrevistaInicio: "",
     enviarParaAdmissao: false,
   });
+
+  /**
+   * EDITAR SÓ OS DOIS CONTADORES DEPOIS (decisão do diretor, 25/08: "continuam editáveis depois").
+   *
+   * MODAL PRÓPRIO, E NÃO A TRILHA REABERTA: a vaga publicada continua não voltando para a trilha de
+   * abertura, como já estava decidido. Aqui se corrige o par de números, que é o que foi pedido, sem
+   * transformar a vaga publicada num formulário de 38 campos aberto para edição livre.
+   */
+  const [posAlvo, setPosAlvo] = useState<VagaListItem | null>(null);
+  const [salvandoPos, setSalvandoPos] = useState(false);
+  const [erroPos, setErroPos] = useState<string | null>(null);
+  const [posForm, setPosForm] = useState({ oficiais: "", banco: "" });
 
   const set = <K extends keyof FormVaga>(campo: K, valor: FormVaga[K]) =>
     setForm((f) => ({ ...f, [campo]: valor }));
@@ -410,7 +529,21 @@ export default function CentralDeVagasPage() {
     setTestes([]);
     setStep(0);
     setErroForm(null);
+    setPendencias([]);
+    setEditandoId(null);
     setAberto(true);
+  }
+
+  /**
+   * CONTINUAR UM RASCUNHO (item 3): a mesma trilha, com a vaga de volta dentro dela.
+   *
+   * A DIFERENÇA PARA O CLONE, e é toda a diferença: aqui o CÓDIGO VOLTA e o `editandoId` é marcado,
+   * então o salvamento ATUALIZA aquela vaga em vez de criar outra. No clone o código nasce vazio e
+   * uma vaga nova é criada, porque cada processo seletivo tem o número dele.
+   */
+  function continuarRascunho(v: VagaListItem) {
+    preencherTrilhaCom(v, { manterCodigo: true });
+    setEditandoId(v.id);
   }
 
   /**
@@ -429,26 +562,43 @@ export default function CentralDeVagasPage() {
    * devolver a vaga do jeito que ela foi preenchida, em vez de perder o que estava fora da lista.
    */
   function clonarVaga(v: VagaListItem) {
+    preencherTrilhaCom(v, { manterCodigo: false });
+    setEditandoId(null);
+  }
+
+  /** A trilha recebendo uma vaga de volta. Usada pelo clone (sem código) e pelo rascunho (com). */
+  function preencherTrilhaCom(v: VagaListItem, { manterCodigo }: { manterCodigo: boolean }) {
     const escala = separarOpcaoEscape(v.horarioEscala, opcoes.escalas, ESCALA_OUTRA);
     const faixa = separarOpcaoEscape(v.faixaEtaria, VAGA_FAIXA_ETARIA, OPCAO_OUTRA);
     const hibrido = separarOpcaoEscape(v.detalheHibrido, VAGA_DETALHE_HIBRIDO, OPCAO_OUTRO);
 
     setForm({
       ...FORM_VAZIO(),
-      // O código NÃO vem: é o número do processo seletivo, e cada abertura tem o seu.
-      codigo: "",
-      cargoId: v.cargoId,
-      nomeDivulgacao: v.nomeDivulgacao,
+      // No CLONE o código NÃO vem: é o número do processo seletivo, e cada abertura tem o seu. No
+      // RASCUNHO ele volta, porque é a MESMA vaga sendo continuada.
+      codigo: manterCodigo ? (v.codigo ?? "") : "",
+      cargoId: v.cargoId ?? "",
+      nomeDivulgacao: v.nomeDivulgacao ?? "",
       codCliente: v.codCliente ?? "",
-      natureza: v.natureza,
+      natureza: v.natureza ?? "EFETIVA",
+      // SEMPRE "ABERTA", nos dois casos. No clone porque a abertura é nova; no rascunho porque o
+      // seletor guarda o status que a vaga terá AO PUBLICAR, e "Rascunho" não é opção dele: rascunho
+      // é o botão de salvar, não uma escolha de status.
       status: "ABERTA",
       sazonalidade: v.sazonalidade,
-      posicoes: String(v.posicoes),
+      posicoesOficiais: v.posicoesOficiais === null ? "" : String(v.posicoesOficiais),
+      posicoesBanco: String(v.posicoesBanco),
 
       solicitanteNome: v.solicitanteNome ?? "",
       solicitanteTelefone: v.solicitanteTelefone ?? "",
       solicitanteEmail: v.solicitanteEmail ?? "",
-      dataAbertura: HOJE(),
+      dataSolicitacao: v.dataSolicitacao ?? "",
+      dataAlinhamento: v.dataAlinhamento ?? "",
+      // O rascunho volta com a data que ele tinha, inclusive VAZIA. O clone é abertura nova, e nasce
+      // com hoje: copiar a data de abertura da vaga antiga dataria a vaga nova no passado.
+      dataAbertura: manterCodigo ? (v.dataAbertura ?? "") : HOJE(),
+      dataLimite: manterCodigo ? (v.dataLimite ?? "") : "",
+      envioShortlist: manterCodigo ? (v.envioShortlist ?? "") : "",
 
       vinculo: v.vinculo ?? "",
       tempoContrato: v.tempoContrato ?? "",
@@ -496,6 +646,7 @@ export default function CentralDeVagasPage() {
     setVerAlvo(null);
     setStep(0);
     setErroForm(null);
+    setPendencias([]);
     setAberto(true);
   }
 
@@ -554,54 +705,101 @@ export default function CentralDeVagasPage() {
     );
   }
 
-  const passo1Completo =
-    form.codigo.trim() !== "" &&
-    form.nomeDivulgacao.trim() !== "" &&
-    form.cargoId !== "" &&
-    Number(form.posicoes) > 0 &&
-    form.dataAbertura !== "";
+  /**
+   * O QUE FALTA PARA PUBLICAR, CALCULADO O TEMPO TODO (itens 1 a 4 da OST de 25/08).
+   *
+   * A MESMA FUNÇÃO DO BACKEND (`vagaPendencias`, no shared-types), sobre o formulário em memória. É
+   * ela que responde às três perguntas da tela com uma resposta só: quais campos ganham asterisco,
+   * se o publicar pode seguir e o que listar quando ele não puder.
+   */
+  const pendenciasAgora = useMemo(
+    () =>
+      vagaPendencias({
+        codigo: form.codigo,
+        nomeDivulgacao: form.nomeDivulgacao,
+        cargoId: form.cargoId,
+        posicoesOficiais: form.posicoesOficiais,
+        natureza: form.natureza,
+        sazonalidade: form.sazonalidade,
+        status: form.status,
+        dataAbertura: form.dataAbertura,
+      }),
+    [form],
+  );
 
-  async function salvar(e: FormEvent) {
-    e.preventDefault();
-    /**
-     * A TRILHA SÓ GRAVA NO ÚLTIMO PASSO, e esta guarda existe por um defeito real, pego na prova
-     * visual: clicar "Continuar" no passo 4 ABRIA A VAGA sem passar pelos requisitos.
-     *
-     * O motivo é sutil e vale registrar. O rodapé trocava o MESMO botão entre "Continuar"
-     * (type=button) e "Abrir Vaga" (type=submit). O React trata os dois como o mesmo nó, então
-     * atualizava o atributo `type` durante o próprio clique; o navegador só decide a ação padrão
-     * DEPOIS de despachar o evento, e a essa altura o botão já era submit. A vaga nascia com os
-     * passos 1 a 4 e o passo 5 em branco, sem ninguém perceber.
-     *
-     * A correção tem duas camadas: `key` diferente em cada botão (o nó é trocado, não atualizado) e
-     * esta guarda, que é a que não depende de detalhe de reconciliação.
-     */
-    if (step !== STEPS.length - 1) return;
+  /**
+   * CLICAR NA PENDÊNCIA E CAIR NO CAMPO (item 4, o pedido literal do diretor).
+   *
+   * Troca o passo e, no quadro seguinte, rola até o campo e põe o cursor nele. O `requestAnimationFrame`
+   * não é enfeite: no mesmo quadro do `setStep` o campo do outro passo AINDA NÃO EXISTE no DOM (a
+   * trilha só monta os campos do passo atual), então `getElementById` voltaria nulo e o salto não
+   * aconteceria. Esperar um quadro é esperar o React montar o passo novo.
+   *
+   * O FOCO VAI NO CONTROLE, o rolar vai no CONTÊINER: assim o rótulo do campo fica visível junto,
+   * em vez de o campo encostar no topo da área rolante sem o nome dele.
+   */
+  function irParaPendencia(p: VagaPendencia) {
+    setStep(p.passo);
+    requestAnimationFrame(() => {
+      const alvo = document.getElementById(p.ancora);
+      if (!alvo) return;
+      alvo.scrollIntoView({ block: "center", behavior: "smooth" });
+      const controle = alvo.querySelector<HTMLElement>("input, textarea, button");
+      controle?.focus({ preventScroll: true });
+    });
+  }
+
+  /**
+   * O ÚNICO CAMINHO DE ESCRITA DA TRILHA, nos dois destinos.
+   *
+   * RASCUNHO não cobra nada e grava o que houver. PUBLICAR passa pela régua ANTES de sair da tela: se
+   * faltar campo obrigatório, a lista INTEIRA aparece no rodapé, clicável, e nenhuma chamada é feita.
+   * O backend confere a mesma régua e é a autoridade; esta trava aqui é para a pessoa não descobrir a
+   * pendência depois de uma ida ao servidor.
+   *
+   * POST OU PATCH pelo `editandoId`: continuar um rascunho ATUALIZA aquela vaga, nunca cria outra.
+   */
+  async function enviar(publicar: boolean) {
+    if (salvando) return;
     setErroForm(null);
+
+    if (publicar) {
+      if (pendenciasAgora.length > 0) {
+        setPendencias(pendenciasAgora);
+        mioloRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+        return;
+      }
+      setPendencias([]);
+    }
+
     setSalvando(true);
     try {
       const marcados = Object.entries(beneficios)
         .filter(([, v]) => v.marcado)
         .map(([id, v]) => ({ beneficioId: id, valor: v.valor.trim() || undefined }));
-      await apiFetch("/as/vagas", {
-        method: "POST",
+      await apiFetch(editandoId ? `/as/vagas/${editandoId}` : "/as/vagas", {
+        method: editandoId ? "PATCH" : "POST",
         token,
         body: {
-          codigo: form.codigo,
-          cargoId: form.cargoId,
-          nomeDivulgacao: form.nomeDivulgacao,
+          codigo: form.codigo || undefined,
+          cargoId: form.cargoId || undefined,
+          nomeDivulgacao: form.nomeDivulgacao || undefined,
           codCliente: form.codCliente || undefined,
-          natureza: form.natureza,
-          status: form.status,
+          natureza: form.natureza || undefined,
+          status: publicar ? form.status : "RASCUNHO",
           sazonalidade: form.sazonalidade,
-          posicoes: Number(form.posicoes) || 1,
+          posicoesOficiais:
+            Number(form.posicoesOficiais) > 0 ? Number(form.posicoesOficiais) : undefined,
+          // ZERO É VALOR AQUI, não ausência: o `undefined` fica só para o campo em branco, senão
+          // apagar o número do banco não teria como ser gravado.
+          posicoesBanco: form.posicoesBanco === "" ? undefined : Number(form.posicoesBanco),
 
           solicitanteNome: form.solicitanteNome || undefined,
           solicitanteTelefone: form.solicitanteTelefone || undefined,
           solicitanteEmail: form.solicitanteEmail || undefined,
           dataSolicitacao: form.dataSolicitacao || undefined,
           dataAlinhamento: form.dataAlinhamento || undefined,
-          dataAbertura: form.dataAbertura,
+          dataAbertura: form.dataAbertura || undefined,
           dataLimite: form.dataLimite || undefined,
           envioShortlist: form.envioShortlist || undefined,
 
@@ -674,12 +872,78 @@ export default function CentralDeVagasPage() {
     }
   }
 
+  async function salvar(e: FormEvent) {
+    e.preventDefault();
+    /**
+     * A TRILHA SÓ PUBLICA NO ÚLTIMO PASSO, e esta guarda existe por um defeito real, pego na prova
+     * visual: clicar "Continuar" no passo 4 ABRIA A VAGA sem passar pelos requisitos.
+     *
+     * O motivo é sutil e vale registrar. O rodapé trocava o MESMO botão entre "Continuar"
+     * (type=button) e "Abrir Vaga" (type=submit). O React trata os dois como o mesmo nó, então
+     * atualizava o atributo `type` durante o próprio clique; o navegador só decide a ação padrão
+     * DEPOIS de despachar o evento, e a essa altura o botão já era submit. A vaga nascia com os
+     * passos 1 a 4 e o passo 5 em branco, sem ninguém perceber.
+     *
+     * A correção tem duas camadas: `key` diferente em cada botão (o nó é trocado, não atualizado) e
+     * esta guarda, que é a que não depende de detalhe de reconciliação. Ela vale MAIS agora que a
+     * navegação é livre: Enter num campo do passo 1 não pode publicar a vaga.
+     */
+    if (step !== STEPS.length - 1) return;
+    await enviar(true);
+  }
+
+  function abrirPosicoes(v: VagaListItem) {
+    setPosAlvo(v);
+    setErroPos(null);
+    setPosForm({
+      oficiais: v.posicoesOficiais === null ? "" : String(v.posicoesOficiais),
+      banco: String(v.posicoesBanco),
+    });
+  }
+
+  async function confirmarPosicoes(e: FormEvent) {
+    e.preventDefault();
+    if (!posAlvo || salvandoPos) return;
+    setErroPos(null);
+
+    const oficiais = Number(posForm.oficiais);
+    const banco = Number(posForm.banco);
+    // A MESMA RÉGUA DO BACKEND, aqui só para não gastar uma ida ao servidor com o que a tela já sabe:
+    // vaga sem contratação não é vaga, e banco negativo não existe.
+    if (!Number.isInteger(oficiais) || oficiais < 1) {
+      setErroPos("O nº de posições oficiais precisa ser um número inteiro a partir de 1.");
+      return;
+    }
+    if (!Number.isInteger(banco) || banco < 0) {
+      setErroPos("O nº de posições de banco precisa ser um número inteiro, zero ou mais.");
+      return;
+    }
+
+    setSalvandoPos(true);
+    try {
+      await apiFetch(`/as/vagas/${posAlvo.id}/posicoes`, {
+        method: "PATCH",
+        token,
+        body: { posicoesOficiais: oficiais, posicoesBanco: banco },
+      });
+      setPosAlvo(null);
+      await carregar();
+    } catch (err) {
+      setErroPos(err instanceof Error ? err.message : "Erro ao salvar as posições da vaga");
+    } finally {
+      setSalvandoPos(false);
+    }
+  }
+
   function abrirFechamento(v: VagaListItem) {
     setFecharAlvo(v);
     setErroFechar(null);
     setFechForm({
       dataFechamento: HOJE(),
-      vagasFechadas: String(v.posicoes),
+      // CADA CONTAGEM NASCE NA SUA META, que é o caso mais comum (a vaga fechou o que abriu) e o que
+      // dá menos digitação. A meta oficial pode ser nula no rascunho, e aí o campo nasce vazio.
+      vagasFechadas: v.posicoesOficiais === null ? "" : String(v.posicoesOficiais),
+      vagasFechadasBanco: String(v.posicoesBanco),
       salarioFechamento: salarioParaCampo(v.salarioAbertura),
       dataPrevistaInicio: "",
       enviarParaAdmissao: false,
@@ -699,9 +963,30 @@ export default function CentralDeVagasPage() {
      * continua sendo a autoridade; aqui ela só evita a ida ao servidor, com a frase que o time lê.
      */
     const fechadas = fechForm.vagasFechadas === "" ? null : Number(fechForm.vagasFechadas);
-    if (fechadas !== null && fechadas > fecharAlvo.posicoes) {
+    const fechadasBanco =
+      fechForm.vagasFechadasBanco === "" ? null : Number(fechForm.vagasFechadasBanco);
+
+    /**
+     * OS DOIS LADOS CONFERIDOS SEPARADAMENTE (os dois contadores, 25/08), a mesma régua do domínio
+     * (`excessoDePosicoes`): sobra no banco não autoriza contratar a mais no oficial.
+     *
+     * A META OFICIAL PODE SER NULA (coluna nulável desde o rascunho). Sem meta não há teto a exceder,
+     * e o fechamento segue: a vaga publicada sempre tem meta, porque a régua não deixa publicar sem
+     * ela. A meta de BANCO nunca é nula, e zero significa "esta vaga não reservou excedente".
+     */
+    if (
+      fechadas !== null &&
+      fecharAlvo.posicoesOficiais !== null &&
+      fechadas > fecharAlvo.posicoesOficiais
+    ) {
       setErroFechar(
-        `A vaga tem ${fecharAlvo.posicoes} ${fecharAlvo.posicoes === 1 ? "posição" : "posições"}: o número de vagas fechadas não pode ser maior que isso.`,
+        `A vaga tem ${fecharAlvo.posicoesOficiais} ${fecharAlvo.posicoesOficiais === 1 ? "posição oficial" : "posições oficiais"}: o número de vagas fechadas não pode ser maior que isso.`,
+      );
+      return;
+    }
+    if (fechadasBanco !== null && fechadasBanco > fecharAlvo.posicoesBanco) {
+      setErroFechar(
+        `A vaga tem ${fecharAlvo.posicoesBanco} ${fecharAlvo.posicoesBanco === 1 ? "posição de banco" : "posições de banco"}: o número de vagas fechadas de banco não pode ser maior que isso.`,
       );
       return;
     }
@@ -714,6 +999,7 @@ export default function CentralDeVagasPage() {
         body: {
           dataFechamento: fechForm.dataFechamento,
           vagasFechadas: fechadas ?? undefined,
+          vagasFechadasBanco: fechadasBanco ?? undefined,
           salarioFechamento: fechForm.salarioFechamento || undefined,
           dataPrevistaInicio: fechForm.dataPrevistaInicio || undefined,
           enviarParaAdmissao: fechForm.enviarParaAdmissao,
@@ -778,15 +1064,17 @@ export default function CentralDeVagasPage() {
               §A.12/§A.20: cabeçalhos centralizados, larguras proporcionais, sem coluna esmagada.
               Com 8 colunas em vez de 13, cada uma cabe sem apertar e a tabela não rola mais na
               horizontal na largura normal da tela. */}
-          <table className="ds-table min-w-[880px]">
+          <table className="ds-table min-w-[960px]">
             <thead>
               <tr>
                 <th className="w-[9%] text-center">Código</th>
-                <th className="w-[24%] text-center">Vaga</th>
-                <th className="w-[16%] text-center">Cliente</th>
-                <th className="w-[16%] text-center">Cargo Da Vaga</th>
-                <th className="w-[11%] text-center">Vínculo</th>
-                <th className="w-[7%] text-center">Posições</th>
+                <th className="w-[21%] text-center">Vaga</th>
+                <th className="w-[15%] text-center">Cliente</th>
+                <th className="w-[14%] text-center">Cargo Da Vaga</th>
+                <th className="w-[10%] text-center">Vínculo</th>
+                {/* §A.20: a coluna ganhou espaço porque passou a carregar DOIS contadores, um por
+                    linha. Com os 7% de antes, "Oficiais: 6 de 10" quebraria no meio da palavra. */}
+                <th className="w-[14%] text-center">Posições</th>
                 <th className="w-[9%] text-center">Status</th>
                 <th className="w-[8%] text-center">Ações</th>
               </tr>
@@ -807,14 +1095,31 @@ export default function CentralDeVagasPage() {
               ) : (
                 rows.map((v) => (
                   <tr key={v.id}>
-                    <td className="text-center font-mono text-[12.5px]">{v.codigo}</td>
-                    <td className="font-semibold">{v.nomeDivulgacao}</td>
+                    {/* O RASCUNHO PODE NÃO TER PREENCHIDO ESTAS COLUNAS AINDA, e a célula vazia diz
+                        "não informado" (§A.11), nunca um traço nem um espaço em branco que o leitor
+                        confunde com erro de carregamento. */}
+                    <td className="text-center font-mono text-[12.5px]">
+                      {v.codigo ?? "não informado"}
+                    </td>
+                    <td className="font-semibold">{v.nomeDivulgacao ?? "não informado"}</td>
                     <td className="text-center">{v.clienteNome ?? "não informado"}</td>
-                    <td className="text-center">{v.cargoNome}</td>
+                    <td className="text-center">{v.cargoNome ?? "não informado"}</td>
                     <td className="text-center">
                       {v.vinculo ? VAGA_VINCULO_LABEL[v.vinculo] : "não informado"}
                     </td>
-                    <td className="text-center">{v.posicoes}</td>
+                    {/* OS DOIS CONTADORES NA MESMA COLUNA, um por linha: o oficial em cima, com o
+                        peso do texto normal, e o banco embaixo, mais discreto, porque é o excedente
+                        reservado e não a contratação de verdade. */}
+                    <td className="text-center">
+                      <div className="flex flex-col items-center gap-0.5 leading-tight">
+                        <span className="whitespace-nowrap">
+                          {textoContador("Oficiais", v.posicoesOficiais, v.vagasFechadas)}
+                        </span>
+                        <span className="whitespace-nowrap text-[12px] text-dim">
+                          {textoContador("Banco", v.posicoesBanco, v.vagasFechadasBanco)}
+                        </span>
+                      </div>
+                    </td>
                     <td className="text-center">
                       <span className="inline-flex justify-center">
                         <StatusPill
@@ -832,17 +1137,45 @@ export default function CentralDeVagasPage() {
                           <button
                             type="button"
                             title="Fechar vaga"
-                            aria-label={`Fechar a vaga ${v.codigo}`}
+                            aria-label={`Fechar a vaga ${rotuloDaVaga(v)}`}
                             onClick={() => abrirFechamento(v)}
                             className="rounded-lg border border-transparent p-2 text-dim transition hover:border-[var(--border)] hover:text-accent"
                           >
                             <Icon name="lock" className="h-4 w-4" />
                           </button>
                         )}
+                        {/* EDITAR AS POSIÇÕES (os dois contadores, 25/08): aparece na vaga que
+                            ainda está viva e fora do rascunho. No RASCUNHO os dois campos já são
+                            editados na própria trilha, e na vaga ENCERRADA a meta não muda mais,
+                            porque ela já foi confrontada com a contagem do fechamento. */}
+                        {(v.status === "ABERTA" || v.status === "VAGA_BANCO") && (
+                          <button
+                            type="button"
+                            title="Editar as posições da vaga"
+                            aria-label={`Editar as posições da vaga ${rotuloDaVaga(v)}`}
+                            onClick={() => abrirPosicoes(v)}
+                            className="rounded-lg border border-transparent p-2 text-dim transition hover:border-[var(--border)] hover:text-accent"
+                          >
+                            <Icon name="users" className="h-4 w-4" />
+                          </button>
+                        )}
+                        {/* CONTINUAR O RASCUNHO (item 3): só o rascunho tem lápis, porque só ele
+                            volta para a trilha. Vaga publicada não é editada por aqui. */}
+                        {v.status === "RASCUNHO" && (
+                          <button
+                            type="button"
+                            title="Continuar o rascunho"
+                            aria-label={`Continuar o rascunho da vaga ${rotuloDaVaga(v)}`}
+                            onClick={() => continuarRascunho(v)}
+                            className="rounded-lg border border-transparent p-2 text-dim transition hover:border-[var(--border)] hover:text-accent"
+                          >
+                            <Icon name="pen" className="h-4 w-4" />
+                          </button>
+                        )}
                         <button
                           type="button"
                           title="Ver a vaga completa"
-                          aria-label={`Ver a vaga ${v.codigo} completa`}
+                          aria-label={`Ver a vaga ${rotuloDaVaga(v)} completa`}
                           onClick={() => setVerAlvo(v)}
                           className="rounded-lg border border-transparent p-2 text-dim transition hover:border-[var(--border)] hover:text-accent"
                         >
@@ -851,7 +1184,7 @@ export default function CentralDeVagasPage() {
                         <button
                           type="button"
                           title="Clonar a vaga"
-                          aria-label={`Clonar a vaga ${v.codigo}`}
+                          aria-label={`Clonar a vaga ${rotuloDaVaga(v)}`}
                           onClick={() => clonarVaga(v)}
                           className="rounded-lg border border-transparent p-2 text-dim transition hover:border-[var(--border)] hover:text-accent"
                         >
@@ -883,7 +1216,40 @@ export default function CentralDeVagasPage() {
             </div>
 
             {/* MIOLO ROLANDO: só os campos do passo atual. */}
-            <div className="ea-scroll flex-1 overflow-y-auto px-6 py-5">
+            <div ref={mioloRef} className="ea-scroll flex-1 overflow-y-auto px-6 py-5">
+              {/*
+                O QUE FALTA PARA PUBLICAR (item 4): a lista INTEIRA, cada linha com o passo e o nome
+                do campo, e cada linha CLICÁVEL para cair direto nele. Aparece só depois de a pessoa
+                tentar publicar, e some sozinha assim que ela preenche o que faltava.
+              */}
+              {pendencias.length > 0 && pendenciasAgora.length > 0 && (
+                <div
+                  className="mb-5 rounded-xl border border-[var(--border)] bg-[rgba(214,69,69,0.1)] px-3 py-3"
+                  role="alert"
+                >
+                  <p className="mb-2 text-sm font-semibold text-danger">
+                    Falta preencher para publicar a vaga
+                  </p>
+                  <ul className="flex flex-col gap-1">
+                    {pendenciasAgora.map((pendencia) => (
+                      <li key={pendencia.campo}>
+                        <button
+                          type="button"
+                          onClick={() => irParaPendencia(pendencia)}
+                          className="text-left text-sm text-danger underline decoration-dotted underline-offset-4 transition hover:decoration-solid"
+                        >
+                          {textoPendencia(pendencia)}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="mt-2 text-[12.5px] text-dim">
+                    Clique no item para ir ao campo. Se ainda não tem a informação, salve como
+                    rascunho e volte depois.
+                  </p>
+                </div>
+              )}
+
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 {step === 0 && (
                   <>
@@ -893,15 +1259,13 @@ export default function CentralDeVagasPage() {
                         value={form.codCliente}
                         onChange={escolherCliente}
                         options={optClientes}
-                        searchable
                         placeholder="Sem cliente vinculado"
                         ariaLabel="Cliente da vaga"
                       />
                     </CampoSelect>
 
-                    <Campo rotulo="Código da vaga *">
+                    <Campo rotulo="Código da vaga" obrigatorio id="vaga-codigo">
                       <input
-                        required
                         value={form.codigo}
                         onChange={(e) => set("codigo", e.target.value)}
                         placeholder="Ex.: 511805"
@@ -909,9 +1273,8 @@ export default function CentralDeVagasPage() {
                       />
                     </Campo>
 
-                    <Campo rotulo="Nome de divulgação *" largo>
+                    <Campo rotulo="Nome de divulgação" largo obrigatorio id="vaga-nome-divulgacao">
                       <input
-                        required
                         value={form.nomeDivulgacao}
                         onChange={(e) => set("nomeDivulgacao", e.target.value)}
                         placeholder="Como a vaga é anunciada"
@@ -919,7 +1282,7 @@ export default function CentralDeVagasPage() {
                       />
                     </Campo>
 
-                    <CampoSelect rotulo="Cargo *">
+                    <CampoSelect rotulo="Cargo" obrigatorio id="vaga-cargo">
                       {/* O seletor SUGERE e não bloqueia: o catálogo inteiro fica alcançável pela busca. */}
                       <Select
                         value={form.cargoId}
@@ -931,18 +1294,34 @@ export default function CentralDeVagasPage() {
                       />
                     </CampoSelect>
 
-                    <Campo rotulo="Nº de posições *">
+                    {/* OS DOIS CONTADORES DA VAGA (decisão do diretor, 25/08), lado a lado no passo
+                        em que a vaga é dimensionada: OFICIAIS são as contratações de verdade, BANCO é
+                        o excedente aprovado que fica reservado (o caso Blue Skies, 10 e 10).
+
+                        SÓ O OFICIAL É OBRIGATÓRIO: vaga sem contratação não é vaga, mas vaga sem
+                        banco é a maioria delas, e cobrar o banco transformaria o estado normal em
+                        pendência de publicação. */}
+                    <Campo rotulo="Nº de posições oficiais" obrigatorio id="vaga-posicoes-oficiais">
                       <input
-                        required
                         type="number"
                         min={1}
-                        value={form.posicoes}
-                        onChange={(e) => set("posicoes", e.target.value)}
+                        value={form.posicoesOficiais}
+                        onChange={(e) => set("posicoesOficiais", e.target.value)}
                         className="ds-input"
                       />
                     </Campo>
 
-                    <CampoSelect rotulo="Natureza *">
+                    <Campo rotulo="Nº de posições de banco" id="vaga-posicoes-banco">
+                      <input
+                        type="number"
+                        min={0}
+                        value={form.posicoesBanco}
+                        onChange={(e) => set("posicoesBanco", e.target.value)}
+                        className="ds-input"
+                      />
+                    </Campo>
+
+                    <CampoSelect rotulo="Natureza" obrigatorio id="vaga-natureza">
                       <Select
                         value={form.natureza}
                         onChange={(v) => set("natureza", v)}
@@ -954,7 +1333,7 @@ export default function CentralDeVagasPage() {
                       />
                     </CampoSelect>
 
-                    <CampoSelect rotulo="Sazonalidade *">
+                    <CampoSelect rotulo="Sazonalidade" obrigatorio id="vaga-sazonalidade">
                       <Select
                         value={form.sazonalidade}
                         onChange={(v) => set("sazonalidade", v)}
@@ -966,11 +1345,16 @@ export default function CentralDeVagasPage() {
                       />
                     </CampoSelect>
 
-                    <CampoSelect rotulo="Status *">
+                    <CampoSelect rotulo="Status" obrigatorio id="vaga-status">
                       <Select
                         value={form.status}
                         onChange={(v) => set("status", v)}
-                        options={VAGA_STATUS.map((s) => ({
+                        /*
+                          RASCUNHO FICA DE FORA DA LISTA (item 3): ele é o BOTÃO "Salvar Rascunho",
+                          não uma escolha de status. Oferecê-lo aqui criaria dois caminhos para o
+                          mesmo estado, e o segundo publicaria uma vaga chamando-a de rascunho.
+                        */
+                        options={VAGA_STATUS.filter((s) => s !== "RASCUNHO").map((s) => ({
                           value: s,
                           label: VAGA_STATUS_LABEL[s],
                         }))}
@@ -1025,9 +1409,8 @@ export default function CentralDeVagasPage() {
                       />
                     </Campo>
 
-                    <Campo rotulo="Data de abertura *">
+                    <Campo rotulo="Data de abertura" obrigatorio id="vaga-data-abertura">
                       <input
-                        required
                         type="date"
                         value={form.dataAbertura}
                         onChange={(e) => set("dataAbertura", e.target.value)}
@@ -1655,22 +2038,34 @@ export default function CentralDeVagasPage() {
                 Passo {step + 1} de {STEPS.length}
               </span>
 
-              {step < STEPS.length - 1 ? (
-                <Button
-                  key="continuar"
-                  type="button"
-                  onClick={() => setStep((s) => s + 1)}
-                  // SÓ O PASSO 1 TRAVA. Do passo 2 em diante ninguém fica preso: o consultor recebe a
-                  // vaga do cliente pela metade, e a tela não pode ser mais exigente que a vida real.
-                  disabled={step === 0 && !passo1Completo}
-                >
-                  Continuar
+              <div className="flex items-center gap-3">
+                {/*
+                  SALVAR RASCUNHO EM QUALQUER PASSO (item 3): a vaga que o consultor ainda não tem
+                  como completar sai da cabeça dele e entra no sistema, sem cobrar nada.
+                */}
+                <Button type="button" variant="secondary" onClick={() => void enviar(false)} disabled={salvando}>
+                  {salvando ? "Salvando…" : "Salvar Rascunho"}
                 </Button>
-              ) : (
-                <Button key="abrir" type="submit" disabled={salvando || !passo1Completo}>
-                  {salvando ? "Abrindo…" : "Abrir Vaga"}
-                </Button>
-              )}
+
+                {step < STEPS.length - 1 ? (
+                  <Button key="continuar" type="button" onClick={() => setStep((s) => s + 1)}>
+                    {/*
+                      NAVEGAÇÃO LIVRE (item 2, mudança de regra do diretor): NENHUM passo trava o
+                      avanço, nem o passo 1. A trava dos obrigatórios saiu daqui e foi para o
+                      publicar, que é o momento em que ela significa alguma coisa.
+                    */}
+                    Continuar
+                  </Button>
+                ) : (
+                  <Button key="abrir" type="submit" disabled={salvando}>
+                    {salvando
+                      ? "Publicando…"
+                      : editandoId
+                        ? "Publicar Vaga"
+                        : "Abrir Vaga"}
+                  </Button>
+                )}
+              </div>
             </div>
           </form>
         </Modal>
@@ -1690,6 +2085,72 @@ export default function CentralDeVagasPage() {
         onCancel={() => setConfirmarDescarte(false)}
       />
 
+      {/* ── EDITAR AS POSIÇÕES ────────────────────────────────────────────── */}
+      {posAlvo && (
+        <Modal
+          onClose={() => setPosAlvo(null)}
+          className="max-w-[480px] p-6"
+          ariaLabel="Editar as posições da vaga"
+        >
+          <form onSubmit={confirmarPosicoes}>
+            <div className="mb-5">
+              <div className="eyebrow !mb-1">Atração e Seleção</div>
+              <h2 className="text-lg font-semibold text-text">Editar Posições</h2>
+              <p className="mt-1 text-[12.5px] text-dim">
+                {posAlvo.nomeDivulgacao ?? "não informado"}, código{" "}
+                {posAlvo.codigo ?? "não informado"}. Oficiais são as contratações de verdade, banco é
+                o excedente aprovado que fica reservado.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <Campo rotulo="Nº de posições oficiais" obrigatorio>
+                <input
+                  type="number"
+                  min={1}
+                  value={posForm.oficiais}
+                  onChange={(e) => setPosForm({ ...posForm, oficiais: e.target.value })}
+                  className="ds-input"
+                />
+              </Campo>
+
+              <Campo rotulo="Nº de posições de banco">
+                <input
+                  type="number"
+                  min={0}
+                  value={posForm.banco}
+                  onChange={(e) => setPosForm({ ...posForm, banco: e.target.value })}
+                  className="ds-input"
+                />
+              </Campo>
+            </div>
+
+            {erroPos && (
+              <p
+                className="mt-4 rounded-xl border border-[var(--border)] bg-[rgba(214,69,69,0.1)] px-3 py-2 text-sm text-danger"
+                role="alert"
+              >
+                {erroPos}
+              </p>
+            )}
+
+            <div className="mt-6 flex justify-end gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => setPosAlvo(null)}
+                disabled={salvandoPos}
+              >
+                Cancelar
+              </Button>
+              <Button type="submit" disabled={salvandoPos}>
+                {salvandoPos ? "Salvando…" : "Salvar posições"}
+              </Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
       {/* ── FECHAR VAGA ───────────────────────────────────────────────────── */}
       {fecharAlvo && (
         <Modal
@@ -1702,13 +2163,18 @@ export default function CentralDeVagasPage() {
               <div className="eyebrow !mb-1">Atração e Seleção</div>
               <h2 className="text-lg font-semibold text-text">Fechar Vaga</h2>
               <p className="mt-1 text-[12.5px] text-dim">
-                {fecharAlvo.nomeDivulgacao}, código {fecharAlvo.codigo}, com {fecharAlvo.posicoes}{" "}
-                {fecharAlvo.posicoes === 1 ? "posição" : "posições"}.
+                {fecharAlvo.nomeDivulgacao}, código {fecharAlvo.codigo}, com{" "}
+                {fecharAlvo.posicoesOficiais ?? "não informado"}{" "}
+                {fecharAlvo.posicoesOficiais === 1 ? "posição oficial" : "posições oficiais"}
+                {fecharAlvo.posicoesBanco > 0
+                  ? ` e ${fecharAlvo.posicoesBanco} ${fecharAlvo.posicoesBanco === 1 ? "posição de banco" : "posições de banco"}`
+                  : ""}
+                .
               </p>
             </div>
 
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              <Campo rotulo="Data do fechamento *">
+              <Campo rotulo="Data do fechamento" obrigatorio>
                 <input
                   required
                   type="date"
@@ -1729,6 +2195,22 @@ export default function CentralDeVagasPage() {
                   className="ds-input"
                 />
               </Campo>
+
+              {/* O FECHAMENTO DO BANCO SÓ APARECE NA VAGA QUE RESERVOU BANCO. Com meta zero, o campo
+                  seria um controle que só sabe recusar o que a pessoa digitar nele. */}
+              {fecharAlvo.posicoesBanco > 0 && (
+                <Campo rotulo="Nº de vagas fechadas de banco">
+                  <input
+                    type="number"
+                    min={0}
+                    value={fechForm.vagasFechadasBanco}
+                    onChange={(e) =>
+                      setFechForm({ ...fechForm, vagasFechadasBanco: e.target.value })
+                    }
+                    className="ds-input"
+                  />
+                </Campo>
+              )}
 
               <Campo rotulo="Salário de fechamento">
                 <div className="relative">
@@ -1824,14 +2306,17 @@ export default function CentralDeVagasPage() {
             <div className="flex-none border-b border-[var(--border)] px-6 pb-4 pt-6">
               <div className="eyebrow !mb-1">Atração e Seleção</div>
               <div className="flex flex-wrap items-center gap-3">
-                <h2 className="text-lg font-semibold text-text">{verAlvo.nomeDivulgacao}</h2>
+                <h2 className="text-lg font-semibold text-text">
+                  {verAlvo.nomeDivulgacao ?? "Vaga Sem Nome De Divulgação"}
+                </h2>
                 <StatusPill
                   tone={TOM_STATUS[verAlvo.status]}
                   label={VAGA_STATUS_LABEL[verAlvo.status]}
                 />
               </div>
               <p className="mt-1 text-[12.5px] text-dim">
-                Código {verAlvo.codigo}. Aberta em {dataBr(verAlvo.dataAbertura)} por{" "}
+                Código {verAlvo.codigo ?? "não informado"}. Aberta em{" "}
+                {dataBr(verAlvo.dataAbertura)} por{" "}
                 {verAlvo.abertoPorNome ?? "não informado"}.
               </p>
             </div>
@@ -1840,12 +2325,22 @@ export default function CentralDeVagasPage() {
               <BlocoFicha titulo="A Vaga">
                 <Linha rotulo="Cliente" valor={verAlvo.clienteNome} />
                 <Linha rotulo="Cargo da vaga" valor={verAlvo.cargoNome} />
-                <Linha rotulo="Natureza" valor={VAGA_NATUREZA_LABEL[verAlvo.natureza]} />
+                <Linha
+                  rotulo="Natureza"
+                  valor={verAlvo.natureza ? VAGA_NATUREZA_LABEL[verAlvo.natureza] : null}
+                />
                 <Linha
                   rotulo="Vínculo"
                   valor={verAlvo.vinculo ? VAGA_VINCULO_LABEL[verAlvo.vinculo] : null}
                 />
-                <Linha rotulo="Posições" valor={String(verAlvo.posicoes)} />
+                {/* OS DOIS CONTADORES, cada um na sua linha: a ficha é onde a vaga é lida inteira. */}
+                <Linha
+                  rotulo="Posições oficiais"
+                  valor={
+                    verAlvo.posicoesOficiais === null ? null : String(verAlvo.posicoesOficiais)
+                  }
+                />
+                <Linha rotulo="Posições de banco" valor={String(verAlvo.posicoesBanco)} />
                 <Linha
                   rotulo="Sazonalidade"
                   valor={VAGA_SAZONALIDADE_LABEL[verAlvo.sazonalidade]}
@@ -1985,6 +2480,14 @@ export default function CentralDeVagasPage() {
                   <Linha
                     rotulo="Vagas fechadas"
                     valor={verAlvo.vagasFechadas === null ? null : String(verAlvo.vagasFechadas)}
+                  />
+                  <Linha
+                    rotulo="Vagas fechadas de banco"
+                    valor={
+                      verAlvo.vagasFechadasBanco === null
+                        ? null
+                        : String(verAlvo.vagasFechadasBanco)
+                    }
                   />
                   <Linha
                     rotulo="Salário de fechamento"
