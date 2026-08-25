@@ -10788,3 +10788,125 @@ filtros de coluna ao backend faria os cards mudarem de número a cada escolha. A
 então o recorte no cliente é exato.
 
 Gate: backend 1.491 testes, frontend 110, typecheck e lint limpos.
+
+---
+
+## 25/08/2026: as duas linhas voltam a ser uma, e a prova de que nada se mexeu
+
+O módulo de Atração e Seleção vivia na branch `homolog` desde 20/08 e o ADM vivia na `main`. Nada que
+precisasse dos dois ao mesmo tempo podia existir, e a frente do Banco de Talentos parou exatamente
+aí: o flag de banco, a trava do cadastro e a ponte da vaga com a admissão dependem das duas metades
+no mesmo lugar.
+
+### O que estava separado, em números
+
+| | |
+|---|---:|
+| Commits que a `homolog` tinha e a `main` não | 5, e mais 2 commitados nesta sessão |
+| Commits que a `main` tinha e a `homolog` não | **20** |
+| Dias separadas | 5 |
+
+A homologação não estava só adiantada, estava **atrasada**, e nesse ritmo (4 commits de produção por
+dia) ela deixaria de servir para validar qualquer coisa.
+
+### O código juntou sozinho. O conflito era a numeração
+
+`db/schema/tables.ts` e `shared-types/src/index.ts` são os dois arquivos que as duas linhas tocaram, e
+os dois **auto-mesclaram**: cada lado acrescentou em lugar diferente, nenhum conflito de lógica.
+
+O conflito real eram **sete colisões de migration**, 0075 a 0081, com as duas linhas usando os mesmos
+números para coisas completamente diferentes (VT e Clicksign de um lado, vaga do outro). E a colisão
+do 0081 nasceu **no mesmo dia**, nas duas branches, o que mediu o custo do adiamento melhor que
+qualquer argumento: cerca de 1,4 colisão por dia.
+
+**As sete do A&S viraram UMA migration consolidada** (`0082_as_central_de_vagas.sql`), com o conteúdo
+das sete na ordem original. As da `main` não foram tocadas: já estavam aplicadas no banco real.
+
+**Consolidar em vez de renumerar sete** é a decisão que vale registro. Renumerar exigiria reconstruir
+sete snapshots à mão, e **um snapshot que descreve o schema errado faz a PRÓXIMA migration nascer
+errada**, meses depois, longe da causa. Como as sete nunca foram aplicadas em produção, não havia
+histórico a preservar. A prova de que a consolidada faz o mesmo: o schema resultante foi comparado
+contra o banco que as sete originais construíram, **68 colunas contra 68, idêntico**.
+
+**Dívida anterior encontrada no caminho:** a `main` referencia as migrations 0080 e 0081 no journal
+mas **nunca commitou os snapshots das duas**. Os arquivos de mesmo nome que estavam na branch de
+junção eram os do A&S, descrevendo outra coisa, e saíram por isso.
+
+### A prova A/B, e o defeito de método que ela pegou primeiro
+
+O diretor pediu que a validação não dependesse só de olho humano. O método adotado: rodar **o código
+de antes e o código de depois sobre o mesmo clone da produção, parado**. Qualquer diferença só pode
+ter vindo da junção.
+
+**Antes de comparar códigos diferentes, rodei a mesma coleta duas vezes no mesmo código e no mesmo
+banco.** Tinha de dar idêntico. Não deu:
+
+```
+gerencial.segmentos.exame[3].total = 28  ->  29
+gerencial.segmentos.exame[5].total = 9   ->  8
+```
+
+**Causa: o agendador de exames escreve sozinho**, movendo status de frente conforme o tempo passa. A
+base "congelada" não estava congelada, o próprio sistema sob teste a alterava enquanto eu media.
+Desliguei os quatro agendadores no clone, o controle ficou estável, e só então a comparação foi feita.
+
+**Sem esse controle, dois números teriam dançado na comparação final e a junção teria sido barrada por
+um motivo que não é a junção.** É o inverso do erro que se costuma temer: não um falso "passou", um
+falso "reprovou".
+
+**E um erro meu que o próprio método pegou:** na primeira coleta, as quatro abas da Esteira
+responderam **HTTP 400 nos dois lados**, porque escrevi a rota em maiúscula e ela é minúscula. Dois
+lados batendo em 400 teria passado por "bate", **provando nada sobre a superfície mais importante**.
+Corrigido, o total de indicadores subiu de 1.847 para 2.822.
+
+**Resultado: 2.822 de 2.822 batem exatamente. Zero diferença.**
+
+### Os 12 números que se moveram em produção, e por que nenhum foi a junção
+
+A foto da produção viva antes (19:23:23Z) e depois (19:25:36Z) da subida **não deu igual**, e era
+esperado: a produção está viva. Cada número movido foi rastreado no log de auditoria.
+
+| O que mudou | Causa |
+|---|---|
+| Cadastro `A_CADASTRAR` 20 para 19, `CADASTRADO` 1764 para 1765 | uma consultora moveu um cadastro, 19:23:40 |
+| Exame `AGENDADO` 10 para 9, `AGUARDANDO_ASO` 28 para 29 | o agendador de exames, 19:25:06. O mesmo que o controle pegou |
+| Clicksign `AGUARDANDO` 55 para 53, `CANCELADO` 5 para 7 | 2 envelopes cancelados, 19:23:39 e 19:23:43 |
+| Pendências obrigatórias 279 para 278, e os sinalizadores | consequência do cadastro acima |
+| **`menus` 30 para 31** | **a junção.** O único número que a subida mexeu |
+
+O que fecha o argumento: as tabelas de trilha cresceram **+2 e +2**. A junção não escreve nelas, então
+o crescimento é assinatura de gente trabalhando.
+
+### O que entrou em produção, e o que deliberadamente não entrou
+
+| Mudança | Estado |
+|---|---|
+| `vagas` e `vaga_beneficio` | criadas **vazias** |
+| `usuarios.papel_as` | criada **nula em todos** |
+| Menu Central De Vagas | **registrado**, grupo `SELECAO`, área `AS` |
+| Usuários que receberam o menu | **0** |
+
+**Registrar não é liberar** (§A.23). Os 3 Super Admins enxergam pelo bypass de papel; os outros 16
+usuários não veem nada novo. As vagas de teste da homologação **não foram para produção**: a Central
+de Vagas nasce vazia, como tem de ser.
+
+Janela sem frontend: **1min26s**, pelo motivo já conhecido de que compilar o Next com o serviço de pé
+clobbera o `.next` e serve 500.
+
+### Junto com a junção, dois commits de A&S que estavam pendentes
+
+- **Rascunho de vaga e os dois contadores de posição.** `posicoes` virou `posicoes_oficiais` e
+  `posicoes_banco` nasceu ao lado, com `vagas_fechadas_banco` para cada meta ter contagem própria.
+  A régua **confere os dois lados separadamente**: somar as metas passaria "12 oficiais e 1 banco"
+  numa vaga de 10 e 10, que é a contratação a mais que a trava existe para impedir. Renomear em vez de
+  acrescentar foi decisão de momento: custou 11 linhas de homologação, e depois da importação da base
+  histórica (2.363 vagas) custaria a base inteira.
+- **O seletor premium do A&S**, um `Combobox` novo em vez de consertar o `Select` do DS, que é
+  importado por 19 arquivos. A prova visual pegou dois defeitos que nenhum teste pegaria: o Esc
+  vazando para o modal (fechar a lista perguntava se queria descartar a vaga inteira) e o cursor do
+  teclado invisível no tema claro.
+
+Gate: typecheck backend e frontend limpos, **140 arquivos de teste, 1.555 testes**, prova A/B
+2.822 de 2.822, e validação do diretor na tela em produção.
+
+**Com a junção fechada, o Banco de Talentos fica destravado.**
