@@ -1,5 +1,11 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import { RitmoClicksign, ehRotaNotificacao } from "../domain/clicksign-rate";
+
+/** Espera `ms`. Isolado para o limitador continuar puro (ele decide quanto; quem chama é que dorme). */
+function dormir(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, Math.max(0, ms)));
+}
 
 /**
  * Cliente JSON:API v3 da Clicksign (INT-4 / F9, §A.5). Usa o `fetch` global do Node 20 (sem axios).
@@ -96,6 +102,17 @@ export class ClicksignApiService {
   private avisouInerte = false;
   private static readonly TIMEOUT_MS = 60_000;
   private static readonly CT = "application/vnd.api+json";
+
+  /**
+   * RITMO ÚNICO PARA TODA A CLICKSIGN. Fica aqui, e não na fila, porque `req` é o funil por onde
+   * passam os TRÊS consumidores do balde: a tela de gestão, o disparo de envelope e o tick do cron.
+   * Um limitador só na fila cobriria apenas o disparo, e eram justamente os outros dois que geravam
+   * os 4.960 erros 429 medidos em 25/08/2026.
+   */
+  private readonly ritmo = new RitmoClicksign();
+
+  /** Corrente que serializa a decisão do limitador entre chamadas concorrentes. */
+  private fila: Promise<void> = Promise.resolve();
 
   constructor(config: ConfigService) {
     this.baseUrl = (
@@ -408,10 +425,71 @@ export class ClicksignApiService {
     path: string,
     body?: unknown,
   ): Promise<T | undefined> {
+    // PRIMEIRA TENTATIVA + UMA retentativa, exclusiva do 429 e cronometrada pelo `x-rate-limit-reset`.
+    // Só uma: se a janela seguinte também estiver cheia, o problema é de volume e quem resolve é a
+    // fila (backoff do BullMQ), não um laço aqui segurando a conexão.
+    for (let tentativa = 0; ; tentativa++) {
+      await this.respeitarRitmo();
+      const res = await this.enviar(method, path, body);
+
+      const notificacao = ehRotaNotificacao(path);
+      this.ritmo.alimentar(
+        Date.now(),
+        { remaining: res.headers.get("x-rate-limit-remaining"), reset: res.headers.get("x-rate-limit-reset") },
+        notificacao,
+      );
+
+      if (res.status === 429 && tentativa === 0 && !notificacao) {
+        // O balde do `notifications` é 1 por minuto POR ENVELOPE: um 429 ali só libera na virada do
+        // minuto, tempo demais para segurar. Aquele caso sobe para o chamador decidir.
+        const espera = this.ritmo.esperaDo429(Date.now(), res.headers.get("x-rate-limit-reset"));
+        this.logger.warn(
+          `Clicksign 429 em ${method}: aguardando ${Math.round(espera / 1000)}s até a virada da janela.`,
+        );
+        await dormir(espera);
+        continue;
+      }
+
+      if (!res.ok) {
+        this.logger.error(`Clicksign respondeu HTTP ${res.status} em ${method} (rota de envelope)`);
+        throw new Error(`Clicksign HTTP ${res.status}`);
+      }
+      if (res.status === 204) return undefined;
+      return (await res.json()) as T;
+    }
+  }
+
+  /**
+   * Segura a requisição até caber na janela. Serializa a DECISÃO com uma corrente de promessas: sem
+   * isso, as chamadas concorrentes da tela (4 linhas × 2 GETs) perguntariam ao limitador ao mesmo
+   * tempo, todas ouviriam "pode ir" e o teto não valeria nada.
+   *
+   * O `notifications` NÃO é isento aqui: ele consome o balde global como qualquer requisição. Dele
+   * são ignorados só os HEADERS de resposta (ver `alimentar`), que falam do balde próprio.
+   */
+  private async respeitarRitmo(): Promise<void> {
+    const minhaVez = this.fila.then(async () => {
+      for (;;) {
+        const espera = this.ritmo.aguardar(Date.now());
+        if (espera <= 0) return;
+        await dormir(espera);
+      }
+    });
+    // A corrente nunca rejeita, senão uma falha travaria todas as chamadas seguintes.
+    this.fila = minhaVez.catch(() => undefined);
+    await minhaVez;
+  }
+
+  /** O fetch em si, com timeout. Separado para o `req` cuidar só de ritmo e retentativa. */
+  private async enviar(
+    method: "GET" | "POST" | "PATCH" | "DELETE",
+    path: string,
+    body?: unknown,
+  ): Promise<Response> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), ClicksignApiService.TIMEOUT_MS);
     try {
-      const res = await fetch(`${this.baseUrl}${path}`, {
+      return await fetch(`${this.baseUrl}${path}`, {
         method,
         headers: {
           Authorization: this.token, // token CRU, sem "Bearer"
@@ -421,12 +499,6 @@ export class ClicksignApiService {
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: controller.signal,
       });
-      if (!res.ok) {
-        this.logger.error(`Clicksign respondeu HTTP ${res.status} em ${method} (rota de envelope)`);
-        throw new Error(`Clicksign HTTP ${res.status}`);
-      }
-      if (res.status === 204) return undefined;
-      return (await res.json()) as T;
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
         this.logger.error("Chamada à Clicksign excedeu o tempo limite");
