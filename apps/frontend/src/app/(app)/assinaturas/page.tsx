@@ -476,8 +476,27 @@ export default function AssinaturasPage() {
    * Sem clique, a lista sai na ordem que o backend mandou (mais recente primeiro), intacta.
    */
   const colunasOrdenaveis = useMemo<ColOrd<Linha>[]>(
-    () => [{ chave: "candidato", tipo: "texto", valor: (l) => l.candidato }],
-    [],
+    () => [
+      { chave: "candidato", tipo: "texto", valor: (l) => l.candidato },
+      { chave: "cliente", tipo: "texto", valor: (l) => l.cliente },
+      { chave: "cargo", tipo: "texto", valor: (l) => l.cargo },
+      { chave: "contrato", tipo: "texto", valor: (l) => l.tipoContrato },
+      { chave: "dataAdmissao", tipo: "data", valor: (l) => l.dataAdmissao },
+      /**
+       * SITUAÇÃO ordena por coisas diferentes conforme a aba, porque a coluna mostra coisas
+       * diferentes: na fila é o bloqueio (apta na frente, bloqueada depois, que é a ordem de quem
+       * trabalha a fila); nas demais é QUANTOS FALTAM assinar, que é a pergunta que a tela responde.
+       */
+      {
+        chave: "situacao",
+        tipo: "numero",
+        valor: (l) => (aba === "aptos" ? (l.bloqueio ? 1 : 0) : (l.resumo?.pendentes ?? 0)),
+      },
+      // Prazo é derivado do envio, então ordenar por um é ordenar pelo outro. Usa a data de envio,
+      // que é o dado real; o "X dia(s)" da tela é só a apresentação dela.
+      { chave: "prazo", tipo: "data", valor: (l) => l.enviadoEm },
+    ],
+    [aba],
   );
   const ord = useOrdenacao(colunasOrdenaveis, filtradas);
   const visiveis = ord.itens;
@@ -767,14 +786,26 @@ export default function AssinaturasPage() {
                 >
                   Candidato
                 </ColunaOrdenavel>
-                <th className={naFila ? "w-[12%]" : "w-[14%]"}>Cliente</th>
-                <th className={naFila ? "w-[11%]" : "w-[12%]"}>Cargo</th>
-                <th className={naFila ? "w-[9%]" : "w-[10%]"}>Contrato</th>
-                <th className={naFila ? "w-[9%]" : "w-[9%]"}>Data adm.</th>
-                <th className={naFila ? "w-[21%]" : "w-[11%]"}>
+                <ColunaOrdenavel as="th" ord={ord} chave="cliente" className={naFila ? "w-[12%]" : "w-[14%]"}>
+                  Cliente
+                </ColunaOrdenavel>
+                <ColunaOrdenavel as="th" ord={ord} chave="cargo" className={naFila ? "w-[11%]" : "w-[12%]"}>
+                  Cargo
+                </ColunaOrdenavel>
+                <ColunaOrdenavel as="th" ord={ord} chave="contrato" className={naFila ? "w-[9%]" : "w-[10%]"}>
+                  Contrato
+                </ColunaOrdenavel>
+                <ColunaOrdenavel as="th" ord={ord} chave="dataAdmissao" className="w-[9%]">
+                  Data adm.
+                </ColunaOrdenavel>
+                <ColunaOrdenavel as="th" ord={ord} chave="situacao" className={naFila ? "w-[21%]" : "w-[11%]"}>
                   {naFila ? "Situação" : "Assinatura"}
-                </th>
-                {!naFila && <th className="w-[9%]">Prazo</th>}
+                </ColunaOrdenavel>
+                {!naFila && (
+                  <ColunaOrdenavel as="th" ord={ord} chave="prazo" className="w-[9%]">
+                    Prazo
+                  </ColunaOrdenavel>
+                )}
                 <th className="w-[16%]">Ações</th>
               </tr>
             </thead>
