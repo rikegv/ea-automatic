@@ -170,6 +170,20 @@ describe("criarEnvelope chama a pessoa para assinar (passo 5)", () => {
     expect(ordem).toEqual(["ativar", "gravar-envelope", "notificar"]);
   });
 
+  it("CARIMBA clicksignNotificadoEm quando a Clicksign confirma o envio", async () => {
+    // O carimbo é o que transforma "ativo e não notificado" numa consulta ao banco (migração 0080),
+    // em vez de depender de alguém ler o log.
+    const { svc, setCalls } = montar();
+    await svc.criarEnvelope("adm-1", "/staging/kit.pdf");
+    expect(setCalls.some((s) => s.clicksignNotificadoEm instanceof Date)).toBe(true);
+  });
+
+  it("NÃO carimba quando a notificação falha (senão o relatório mentiria)", async () => {
+    const { svc, setCalls } = montar({ notificarFalha: true });
+    await svc.criarEnvelope("adm-1", "/staging/kit.pdf");
+    expect(setCalls.some((s) => s.clicksignNotificadoEm !== undefined)).toBe(false);
+  });
+
   it("falha ao notificar NÃO derruba o job, e grita no log", async () => {
     // O envelope já existe e já está ativo: lançar aqui não desfaz nada e ainda arrisca duplicar.
     const { svc, erro, setCalls } = montar({ notificarFalha: true });

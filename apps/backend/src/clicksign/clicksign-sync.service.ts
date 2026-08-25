@@ -317,6 +317,12 @@ export class ClicksignSyncService implements OnModuleInit, OnModuleDestroy {
      */
     try {
       const r = await this.api.notificarEnvelope(env.id);
+      // CARIMBA SÓ COM CONFIRMAÇÃO DA CLICKSIGN. É o que transforma "contrato ativo e não notificado"
+      // numa consulta ao banco em vez de uma leitura de log (ver a migração 0080).
+      await this.db
+        .update(admissoes)
+        .set({ clicksignNotificadoEm: new Date(), atualizadoEm: new Date() })
+        .where(eq(admissoes.id, admissaoId));
       this.logger.log(
         `Solicitação de assinatura enviada (admissão ${admissaoId}): ` +
           `${r?.notificados ?? 0} de ${r?.total ?? 0} signatário(s) do grupo atual.`,

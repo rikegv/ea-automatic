@@ -227,7 +227,23 @@ documento está válido.
 header `Authorization: <CLICKSIGN_API_TOKEN>`). Criação do envelope: `POST /envelopes` (draft) →
 `POST .../documents` (PDF base64 inline) → `POST .../signers` (nome completo + e-mail + **CPF
 mascarado** `000.000.000-00`, dígito validado) → `POST .../requirements` (agree/sign + provide_evidence/
-email) → `PATCH .../{id}` status `running`. O `clicksign_envelope_id` é gravado na admissão.
+email) → `PATCH .../{id}` status `running` → **`POST .../{id}/notifications`**. O
+`clicksign_envelope_id` é gravado na admissão.
+- **O pipeline tem CINCO passos, não quatro. Ativar NÃO notifica.** O `PATCH status=running` só deixa
+  o envelope pronto; quem dispara o e-mail que chama a pessoa para assinar é o
+  `POST /envelopes/{id}/notifications`. Enquanto essa chamada faltou, o contrato ficava `running`,
+  válido e parado, e o funcionário nunca era chamado: **106 contratos em 24/08/2026**, dos quais uma
+  amostra de 24 mostrou 23 que ninguém sequer abriu. Medido contra a produção, não deduzido (envelope
+  ativado havia 34s tinha zero notificação; a Clicksign devolveu `notified: true` só no passo 5).
+  **A ORDEM É `ativar → gravar o envelope no banco → notificar`**: a guarda de "já tem envelope vivo"
+  lê o banco, então notificar antes de gravar faria uma falha virar envelope duplicado na retentativa.
+  Falha ao notificar **não derruba o job** (o envelope já existe; lançar não desfaz e arrisca duplicar):
+  vira ERRO no log e fica visível no carimbo `clicksign_notificado_em`.
+- **Rate limit, medido em produção (25/08/2026):** teto global **50 requisições por janela FIXA de 10s**
+  (`x-rate-limit`, `x-rate-limit-remaining`, `x-rate-limit-reset` vêm em toda resposta). O
+  `notifications` tem **balde próprio: 1 chamada por janela de 60s, POR ENVELOPE** (repetir o mesmo
+  envelope dá 429; envelopes diferentes na mesma janela dão 201). Três consumidores dividem o balde
+  global: a tela de gestão, o disparo e o tick do cron.
 - Acompanhamento por **verificação periódica (cron-pull)** — *modelo adotado em substituição ao
   webhook originalmente previsto, mesma decisão da Fase 5 (Pandapé): sem exposição pública.* Job
   por cron na VM dispara `POST /internal/clicksign/tick` (guard `X-Internal-Token`) **a cada 1 min,

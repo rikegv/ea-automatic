@@ -680,6 +680,20 @@ export const admissoes = pgTable(
     // o envelope passa do prazo sem fechar nem ser cancelado. Nulo em quem nunca teve envelope (e nas
     // 1.486 admissões ASSINADO vindas da carga, §A.16 regra 1, que nunca passaram pela Clicksign).
     clicksignEnviadoEm: timestamp("clicksign_enviado_em", { withTimezone: true }),
+    /**
+     * Instante em que a SOLICITAÇÃO DE ASSINATURA saiu (passo 5 da v3, `POST .../notifications`).
+     *
+     * É DIFERENTE de `clicksignEnviadoEm`, e a distinção é justamente o bug que originou a coluna:
+     * ativar o envelope não chama ninguém. Um contrato pode estar ATIVO (enviadoEm preenchido) e o
+     * funcionário nunca ter sido notificado (este campo nulo), que foi o estado de 106 contratos em
+     * 24/08/2026. Com os dois carimbos, "ativo e não notificado" vira uma consulta em vez de uma
+     * leitura de log.
+     *
+     * NULO NÃO É ERRO por si só: é nulo em quem nunca teve envelope, nas admissões da carga (§A.16
+     * regra 1, que nunca passaram pela Clicksign) e em quem foi notificado ANTES desta coluna
+     * existir. O que se cobra é a interseção com `AGUARDANDO_ASSINATURA` + envelope presente.
+     */
+    clicksignNotificadoEm: timestamp("clicksign_notificado_em", { withTimezone: true }),
     // KIT PRONTO PARA ASSINATURA (fila de disparo em lote). O consultor clica "Enviar para
     // assinatura" no Gerador de Kit e o kit daquele funcionário é materializado na staging DA
     // ADMISSÃO; aqui fica a REFERÊNCIA (caminho no disco efêmero) e o instante do envio.
