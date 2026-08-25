@@ -251,7 +251,14 @@ const ABAS: { chave: Aba; rotulo: string; ajuda: string }[] = [
   {
     chave: "abertos",
     rotulo: "Gestão Das Assinaturas",
-    ajuda: "Envelopes que ainda pedem trabalho: aguardando assinatura, cancelados ou expirados.",
+    ajuda: "Assinaturas VIVAS, aguardando quem falta assinar. Cancelados e expirados moram na aba própria.",
+  },
+  {
+    chave: "encerrados",
+    rotulo: "Cancelados E Expirados",
+    ajuda:
+      "Envelopes encerrados SEM assinatura: cancelados pelo consultor ou vencidos pelo prazo de 30 dias. " +
+      "Saíram da Gestão porque processo encerrado não é trabalho de fila.",
   },
   {
     chave: "assinados",
