@@ -343,6 +343,16 @@ export type DriveSubpasta = (typeof DRIVE_SUBPASTA)[number];
 export interface ArquivamentoDrive {
   pastaUrl: string;
   arquivados: number;
+  /**
+   * Ids dos arquivos CRIADOS nesta chamada, na ordem em que subiram. Serve a quem precisa do link do
+   * ARQUIVO (a coleta de VT grava a URL para a tela de Benefícios abrir o formulário), e não só o da
+   * pasta. Arquivo ignorado por já estar no destino NÃO entra: ele não foi criado agora.
+   *
+   * Por que o id vem do upload e não de uma busca por nome depois: a mesma pessoa pode ter DOIS
+   * arquivos de mesmo nome na mesma pasta (o candidato reenvia o formulário), e a busca não saberia
+   * qual dos dois é o desta vez.
+   */
+  arquivosIds?: string[];
   /** Arquivos PULADOS por já estarem no destino com o mesmo conteúdo (checar antes de subir). */
   ignorados?: number;
   /** A pasta do prontuário já existia e foi reutilizada, em vez de criada agora. */

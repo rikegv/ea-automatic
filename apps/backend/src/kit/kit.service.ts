@@ -188,7 +188,28 @@ export class KitService {
 
     await this.db
       .update(admissoes)
-      .set({ kitAssinaturaPath: stagingPath, kitAssinaturaEm: new Date(), atualizadoEm: new Date() })
+      .set({
+        kitAssinaturaPath: stagingPath,
+        kitAssinaturaEm: new Date(),
+        /**
+         * REPÕE NA FILA, e é o que faz esta resposta ser verdadeira.
+         *
+         * A fila "Prontos para solicitar" lista por `clicksign_status = SEM_ENVELOPE` (ver
+         * `ClicksignGestaoService.listarAptos`). Enquanto esta linha não existia, anexar o kit
+         * gravava só o caminho: uma admissão que estivesse CANCELADO ou EXPIRADO de um envio
+         * anterior respondia 201, a tela confirmava "entrou na fila de assinatura com o kit
+         * anexado" e o candidato continuava fora. Foi exatamente isso que aconteceu em produção,
+         * treze reenvios seguidos confirmados na tela sem nenhum efeito.
+         *
+         * SÓ quando NÃO há envelope. Com envelope vivo (AGUARDANDO_ASSINATURA) o status pertence
+         * ao envelope, e zerá-lo aqui deixaria um envelope órfão na Clicksign, ainda circulando
+         * por e-mail, com o EA dizendo que não existe. A condição vai no próprio UPDATE para
+         * decidir sobre a linha que está sendo gravada, sem depender de uma leitura anterior.
+         */
+        clicksignStatus: sql`case when ${admissoes.clicksignEnvelopeId} is null
+          then 'SEM_ENVELOPE'::clicksign_status else ${admissoes.clicksignStatus} end`,
+        atualizadoEm: new Date(),
+      })
       .where(eq(admissoes.id, alvo.id));
 
     // §A.6: log sem CPF. O nome do candidato é dado de trabalho, como no resto da esteira.

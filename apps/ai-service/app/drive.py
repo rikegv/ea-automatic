@@ -422,8 +422,16 @@ _LIMITE_RESUMABLE = 4 * 1024 * 1024
 _CHUNK = 4 * 1024 * 1024
 
 
-def subir_arquivo(service, *, conteudo: bytes, nome_final: str, parent_id: str) -> None:
-    """Sobe UM arquivo. Arquivo grande vai em pedaços (resumable), e é isso que fecha o timeout.
+def subir_arquivo(service, *, conteudo: bytes, nome_final: str, parent_id: str) -> str:
+    """Sobe UM arquivo e DEVOLVE o id dele no Drive.
+
+    O ID JÁ ERA PEDIDO (`fields="id"`) e era JOGADO FORA. Devolvê-lo é aditivo: quem chamava sem usar
+    o retorno continua idêntico. Quem precisa do link do arquivo (a coleta de VT, que grava a URL
+    para a tela de Benefícios abrir o formulário) deixa de depender de procurar o arquivo pelo NOME
+    depois, busca que seria ambígua justamente onde mais importa: a mesma pessoa pode ter dois
+    arquivos de mesmo nome na mesma pasta (acontece hoje, no reenvio do formulário).
+
+    Sobe UM arquivo. Arquivo grande vai em pedaços (resumable), e é isso que fecha o timeout.
 
     O DEFEITO QUE ISTO CORRIGE. O envio era sempre um POST ÚNICO (`resumable=False`): o arquivo
     inteiro numa requisição só. Com arquivo grande, a leitura da resposta estourava o timeout do
@@ -449,11 +457,11 @@ def subir_arquivo(service, *, conteudo: bytes, nome_final: str, parent_id: str) 
         supportsAllDrives=True,
     )
     if not grande:
-        requisicao.execute()
-        return
+        return str(requisicao.execute().get("id", ""))
     resposta = None
     while resposta is None:
         _progresso, resposta = requisicao.next_chunk()
+    return str((resposta or {}).get("id", ""))
 
 
 def readiness_drive() -> dict:

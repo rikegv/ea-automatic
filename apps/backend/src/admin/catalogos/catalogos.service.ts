@@ -210,6 +210,11 @@ export class CatalogosService {
         id: clinicasCatalogo.id,
         nome: clinicasCatalogo.nome,
         fornecedor: clinicasCatalogo.fornecedor,
+        // ENDEREÇO CADASTRADO (migração 0064), para o agendamento PRÉ-PREENCHER ao escolher a
+        // clínica. Ele já existia no cadastro e não saía daqui, então a tela não tinha como
+        // oferecer o que o time já havia cadastrado. Nulo é comum: a maioria das clínicas ainda
+        // está sem endereço, e nesse caso o campo simplesmente nasce vazio, como hoje.
+        endereco: clinicasCatalogo.endereco,
       })
       .from(clinicasCatalogo)
       .where(eq(clinicasCatalogo.ativo, true))

@@ -198,6 +198,46 @@ export class ExameSchedulerService implements OnModuleInit, OnModuleDestroy {
           eq(frentesAdmissao.tipo, "EXAME"),
           eq(frentesAdmissao.concluida, false),
           inArray(frentesAdmissao.status, [...STATUS_GOVERNADOS]),
+          /**
+           * A MARCA MANUAL DE "AGUARDANDO RESULTADO" É RESPEITADA: o verificador não encosta numa
+           * frente que uma PESSOA pôs em `AGUARDANDO_ASO`.
+           *
+           * O DEFEITO QUE ISTO CORRIGE, medido na trilha: o time marcava "Aguardando Resultado" e em
+           * menos de uma hora o ciclo revertia para `ASO_PENDENTE`. Aconteceu duas vezes com a mesma
+           * frente (20/08 19:06 e 21/08 14:28, revertidas 19:45 e 15:21), e 5 vezes num único ciclo.
+           *
+           * A RAIZ É SEMÂNTICA, não um erro de conta. O mesmo status significa duas coisas: para o
+           * verificador, "a previsão do ASO é posterior à data do exame", que só vale ANTES do exame;
+           * para o time, "o exame já foi, aguardo o resultado". Como a regra do atraso é avaliada
+           * primeiro, todo mundo sem ASO depois do exame vira `ASO_PENDENTE`, e a marca humana era
+           * atropelada por construção.
+           *
+           * A DISTINÇÃO JÁ EXISTIA NO DADO, e por isso não houve coluna nova nem migração:
+           * `frente_status_eventos` grava o autor na mudança manual e NULO na do verificador.
+           *
+           * O RECORTE É ESTREITO DE PROPÓSITO: só protege quem está EM `AGUARDANDO_ASO` por evento
+           * MANUAL. Um `AGENDADO` manual (que é como todo agendamento nasce) segue governado, senão
+           * o verificador deixaria de trabalhar em toda a fila. Quem nunca foi marcado à mão continua
+           * indo para `ASO_PENDENTE` normalmente: o caminho dele não muda em nada.
+           *
+           * O REAGENDAMENTO DERRUBA A MARCA sozinho (decisão do diretor), sem regra extra: remarcar
+           * chama `marcarExameAgendado`, que move a frente para `AGENDADO` e grava um evento NOVO.
+           * A marca antiga deixa de ser o último evento e a frente volta a ser governada. O ASO
+           * chegando encerra pelo outro lado (a frente vira APTO e sai do conjunto governado).
+           */
+          sql`NOT (
+            ${frentesAdmissao.status} = 'AGUARDANDO_ASO'
+            AND EXISTS (
+              SELECT 1 FROM frente_status_eventos ev
+              WHERE ev.frente_id = ${frentesAdmissao.id}
+                AND ev.autor_id IS NOT NULL
+                AND ev.para_status = 'AGUARDANDO_ASO'
+                AND ev.criado_em = (
+                  SELECT MAX(ev2.criado_em) FROM frente_status_eventos ev2
+                  WHERE ev2.frente_id = ${frentesAdmissao.id}
+                )
+            )
+          )`,
         ),
       );
 

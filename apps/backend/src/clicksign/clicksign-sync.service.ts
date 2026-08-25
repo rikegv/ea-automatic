@@ -32,6 +32,7 @@ import { recomputeFarolGlobal } from "../admissoes/farol";
 import type { EstadoFrente } from "../domain/frentes";
 import { kitLiberado } from "../domain/frentes";
 import { validarPdfKit } from "../domain/pdf-kit";
+import { montarAssinantes } from "../domain/clicksign-assinantes";
 import { KitService } from "../kit/kit.service";
 import { StagingService } from "../staging/staging.service";
 import { criarConexaoRedis } from "../pandape/pandape.queue";
@@ -297,6 +298,44 @@ export class ClicksignSyncService implements OnModuleInit, OnModuleDestroy {
       })
       .where(eq(admissoes.id, admissaoId));
     this.logger.log(`Envelope Clicksign ativado (admissão ${admissaoId}).`);
+
+    /**
+     * PASSO 5: CHAMA A PESSOA PARA ASSINAR. Ativar o envelope só o deixa pronto; é este POST que
+     * dispara o e-mail. Sem ele o contrato ficava `running`, correto e parado, e o funcionário nunca
+     * era chamado. Foi o que aconteceu com 106 contratos em 24/08/2026.
+     *
+     * DEPOIS DO UPDATE, NUNCA ANTES. Se esta chamada rodasse antes de gravar o `clicksignEnvelopeId`
+     * e falhasse, o job cairia no backoff e reentraria em `criarEnvelope` com o banco ainda limpo: a
+     * guarda de "já tem envelope vivo" não veria nada e um SEGUNDO envelope nasceria, órfão. Gravar
+     * primeiro torna a retentativa inofensiva.
+     *
+     * NÃO LANÇA, pelo mesmo motivo. O envelope já existe e já está ativo; derrubar o job aqui não
+     * desfaz nada e ainda arrisca duplicar. Então a falha vira ERRO no log, nomeando a admissão, e o
+     * contrato fica notificável de novo (o envelope segue de pé, é só repetir o passo 5).
+     *
+     * O balde deste endpoint é 1 por minuto POR ENVELOPE, então retentar aqui dentro não ajudaria:
+     * um 429 só liberaria na virada do minuto, tempo demais para segurar um job da fila.
+     */
+    try {
+      const r = await this.api.notificarEnvelope(env.id);
+      // CARIMBA SÓ COM CONFIRMAÇÃO DA CLICKSIGN. É o que transforma "contrato ativo e não notificado"
+      // numa consulta ao banco em vez de uma leitura de log (ver a migração 0080).
+      await this.db
+        .update(admissoes)
+        .set({ clicksignNotificadoEm: new Date(), atualizadoEm: new Date() })
+        .where(eq(admissoes.id, admissaoId));
+      this.logger.log(
+        `Solicitação de assinatura enviada (admissão ${admissaoId}): ` +
+          `${r?.notificados ?? 0} de ${r?.total ?? 0} signatário(s) do grupo atual.`,
+      );
+    } catch {
+      // §A.6: só o id da admissão, nunca o do envelope, nome ou e-mail.
+      this.logger.error(
+        `CONTRATO ATIVO MAS NÃO NOTIFICADO (admissão ${admissaoId}): o envelope foi criado e ativado, ` +
+          "mas a solicitação de assinatura não saiu. O candidato NÃO foi chamado para assinar; " +
+          "reenvie a notificação para esta admissão.",
+      );
+    }
   }
 
   // ── (b) Tick: varre os envelopes aguardando assinatura ───────────────────
@@ -332,6 +371,10 @@ export class ClicksignSyncService implements OnModuleInit, OnModuleDestroy {
         id: admissoes.id,
         envelopeId: admissoes.clicksignEnvelopeId,
         enviadoEm: admissoes.clicksignEnviadoEm,
+        // Painel: o detector de mudança e a existência do painel vêm JUNTO, para não custar um
+        // SELECT por envelope. A varredura já lê estas linhas; ler duas colunas a mais é de graça.
+        modificadoAntes: admissoes.clicksignEnvelopeModified,
+        painelAtual: admissoes.clicksignAssinantes,
       })
       .from(admissoes)
       .where(
@@ -346,7 +389,12 @@ export class ClicksignSyncService implements OnModuleInit, OnModuleDestroy {
     for (const p of pendentes) {
       if (!p.envelopeId) continue;
       try {
-        resumos.push(await this.processarEnvelope(p.id, p.envelopeId, p.enviadoEm));
+        resumos.push(
+          await this.processarEnvelope(p.id, p.envelopeId, p.enviadoEm, {
+            modificadoAntes: p.modificadoAntes,
+            temPainel: p.painelAtual !== null && p.painelAtual !== undefined,
+          }),
+        );
       } catch (err) {
         // Um envelope com erro não derruba a varredura dos demais; o tick volta no próximo ciclo.
         resumos.push({ falha: true });
@@ -377,13 +425,72 @@ export class ClicksignSyncService implements OnModuleInit, OnModuleDestroy {
    * O prazo é o último recurso, para o registro não ficar AGUARDANDO para sempre quando a Clicksign
    * não devolve estado terminal (ela mantém `running` depois do `deadline_at`).
    */
+  /**
+   * Guarda "quem assinou, quem falta" na própria admissão, para a tela LER em vez de PERGUNTAR.
+   *
+   * O DETECTOR DE MUDANÇA é o que torna isto barato. Os signatários vêm de graça no GET que o tick já
+   * faz (`?include=signers`), mas saber QUEM assinou exige o `/events`, que é uma requisição a mais.
+   * Como o `modified` do envelope muda quando alguém assina, comparar com o do ciclo anterior diz se
+   * vale a pena perguntar. Em regime quase nada muda entre dois ciclos, então o custo tende a zero.
+   *
+   * O painel é regravado ainda que só o elenco mude (um signatário adicionado), porque o "de Y" da
+   * tela vem dele.
+   *
+   * §A.6: o `/events` devolve e-mail, CPF, IP e geolocalização. Só o `AssinanteStatus` do domínio
+   * (nome, assinou, quando, ordem) é persistido; o resto morre no cliente.
+   *
+   * NÃO LANÇA: painel é conveniência de leitura, e falhar aqui não pode derrubar a varredura, que tem
+   * trabalho mais importante a fazer (arquivar assinado, marcar expirado).
+   */
+  private async atualizarPainelAssinatura(
+    admissaoId: string,
+    envelopeId: string,
+    signers: Array<{ id: string; nome: string; grupo: number | null }>,
+    modified: string | null,
+    atual: { modificadoAntes: string | null; temPainel: boolean },
+  ): Promise<void> {
+    try {
+      // Nada mudou no envelope E o painel já existe: não há o que perguntar nem o que gravar.
+      const inalterado = modified !== null && atual.modificadoAntes === modified && atual.temPainel;
+      if (inalterado) return;
+
+      const eventos = await this.api.listarEventosAssinatura(envelopeId);
+      const painel = montarAssinantes(signers, eventos);
+
+      await this.db
+        .update(admissoes)
+        .set({
+          clicksignAssinantes: painel,
+          clicksignAssinantesEm: new Date(),
+          clicksignEnvelopeModified: modified,
+          atualizadoEm: new Date(),
+        })
+        .where(eq(admissoes.id, admissaoId));
+    } catch {
+      // §A.6: só o id da admissão, nunca nome, e-mail ou id de envelope.
+      this.logger.warn(
+        `Painel de assinatura não atualizado nesta passada (admissão ${admissaoId}). ` +
+          "A tela mostra o último conhecido; o próximo ciclo tenta de novo.",
+      );
+    }
+  }
+
   private async processarEnvelope(
     admissaoId: string,
     envelopeId: string,
     enviadoEm: Date | null,
+    painel: { modificadoAntes: string | null; temPainel: boolean } = {
+      modificadoAntes: null,
+      temPainel: false,
+    },
   ): Promise<ResumoEnvelope> {
-    const r = await this.api.consultarStatus(envelopeId);
+    const r = await this.api.consultarEnvelopeComSignatarios(envelopeId);
     if (!r) return {};
+
+    // PAINEL DE ASSINATURA: alimentado aqui, lido pela tela. Antes a tela perguntava isso à Clicksign
+    // a cada abertura (2 requisições × 110 linhas = 220), o que virou 60s de espera depois do
+    // limitador. Aqui sai quase de graça, porque os signatários vieram no mesmo GET.
+    await this.atualizarPainelAssinatura(admissaoId, envelopeId, r.signers, r.modified, painel);
 
     if (r.status === "canceled") {
       await this.db

@@ -19,7 +19,11 @@ import { FileInterceptor } from "@nestjs/platform-express";
 import { CurrentUser, Public } from "../auth/decorators";
 import type { AuthUser } from "../auth/auth.types";
 import { InternalTokenGuard } from "../pandape/internal-token.guard";
-import { ClicksignGestaoService } from "./clicksign-gestao.service";
+import {
+  ABAS_ASSINATURA,
+  ClicksignGestaoService,
+  type AbaAssinatura,
+} from "./clicksign-gestao.service";
 import { ClicksignSchedulerService } from "./clicksign-scheduler.service";
 import { ClicksignSyncService } from "./clicksign-sync.service";
 
@@ -29,8 +33,9 @@ interface ReenviarCorrecaoBody {
 }
 
 /** Abas válidas da tela de gerenciamento de assinatura. */
-const ABAS = ["abertos", "assinados", "aptos"] as const;
-type Aba = (typeof ABAS)[number];
+// Espelha `ABAS_ASSINATURA` do serviço, que é a fonte: aba nova entra lá e a validação segue junto.
+const ABAS = ABAS_ASSINATURA;
+type Aba = AbaAssinatura;
 
 /**
  * Rotas da assinatura Clicksign (INT-4 / F9).

@@ -1,0 +1,20 @@
+-- CARIMBO DA SOLICITAÇÃO DE ASSINATURA (passo 5 da Clicksign v3).
+--
+-- O PROBLEMA QUE ISTO RESOLVE: ativar o envelope (PATCH status=running) NÃO notifica ninguém. São
+-- dois passos distintos, e enquanto o EA executava só o primeiro, o contrato ficava ATIVO e a pessoa
+-- nunca era chamada para assinar. Aconteceu com 106 contratos em 24/08/2026 e só apareceu porque os
+-- colaboradores reclamaram: do lado do sistema, tudo dizia "aguardando assinatura", que era verdade e
+-- ao mesmo tempo escondia que ninguém tinha sido avisado.
+--
+-- POR QUE UMA COLUNA E NÃO O LOG: com o passo 5 já no fluxo, uma falha na notificação vira ERRO no
+-- log. Log é bom para investigar e péssimo para cobrar: ninguém varre log todo dia, e ele rola. Com o
+-- carimbo, "contrato ativo e não notificado" vira uma consulta que qualquer um roda a qualquer hora.
+--
+-- ADITIVA E NULÁVEL DE PROPÓSITO. Nada que já grava muda, nenhuma leitura existente quebra, e não há
+-- backfill mentiroso: NULO significa "não sabemos que saiu", que é a verdade tanto para quem nunca
+-- teve envelope quanto para quem foi notificado antes desta coluna existir. Quem preenche é só o
+-- caminho novo, quando a Clicksign confirma o envio.
+--
+-- É DIFERENTE de `clicksign_enviado_em`, que marca a ATIVAÇÃO e é a base do prazo de 30 dias. Os dois
+-- juntos é que contam a história: ativado quando, chamado para assinar quando.
+ALTER TABLE "admissoes" ADD COLUMN "clicksign_notificado_em" timestamp with time zone;

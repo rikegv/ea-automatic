@@ -28,6 +28,7 @@ describe("ClicksignApiService — inércia sem token (§A.5)", () => {
       svc.criarRequirement("e", { documentId: "d", signerId: "s" }),
     ).resolves.toBeUndefined();
     await expect(svc.ativarEnvelope("e")).resolves.toBeUndefined();
+    await expect(svc.notificarEnvelope("e")).resolves.toBeUndefined();
     // `cancelarEnvelope` passou a devolver SE o provedor aceitou. Inerte nunca cancela nada, então
     // false, que é o mesmo que a tela precisa saber: a notificação não saiu.
     await expect(svc.cancelarEnvelope("e")).resolves.toBe(false);
@@ -58,11 +59,24 @@ describe("ClicksignApiService — inércia sem token (§A.5)", () => {
 describe("ClicksignApiService — shapes confirmados no sandbox", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  /** Captura a chamada fetch e devolve uma resposta JSON:API mockada. */
-  function comFetch(json: unknown, status = 201) {
+  /**
+   * Captura a chamada fetch e devolve uma resposta JSON:API mockada.
+   *
+   * O `headers` é obrigatório: o limitador de ritmo lê `x-rate-limit-remaining` e
+   * `x-rate-limit-reset` de TODA resposta (`domain/clicksign-rate`). Sem eles o mock não pareceria
+   * uma Response de verdade. Os valores padrão simulam folga confortável, para estes testes de shape
+   * não virarem testes de espera; o ritmo tem os próprios testes.
+   */
+  function comFetch(json: unknown, status = 201, rate: Record<string, string> = {}) {
+    const headers = new Headers({
+      "x-rate-limit": "50",
+      "x-rate-limit-remaining": "49",
+      ...rate,
+    });
     return vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: status >= 200 && status < 300,
       status,
+      headers,
       json: async () => json,
     } as unknown as Response);
   }
@@ -88,6 +102,106 @@ describe("ClicksignApiService — shapes confirmados no sandbox", () => {
     expect(body.data.attributes.documentation).toBe("111.444.777-35");
     // O CPF cru jamais aparece no corpo enviado.
     expect((init as RequestInit).body).not.toContain("11144477735");
+  });
+
+  /**
+   * Shape levantado contra a PRODUÇÃO em 25/08/2026: o POST devolve 201 com
+   * `data.attributes.summary[] = [{ signer_id, notified }]`. Com grupos sequenciais o summary traz
+   * só o grupo corrente (o funcionário), não todos os signatários do envelope.
+   */
+  it("notificarEnvelope manda o corpo JSON:API e conta quem foi notificado", async () => {
+    const svc = new ClicksignApiService(
+      config({ CLICKSIGN_API_TOKEN: "tok", CLICKSIGN_API_BASE_URL: "https://x/api/v3" }),
+    );
+    const spy = comFetch({
+      data: {
+        type: "notifications",
+        attributes: {
+          summary: [
+            { signer_id: "s-1", notified: true },
+            { signer_id: "s-2", notified: false },
+          ],
+        },
+      },
+    });
+
+    await expect(svc.notificarEnvelope("env-1")).resolves.toEqual({ notificados: 1, total: 2 });
+
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe("https://x/api/v3/envelopes/env-1/notifications");
+    expect((init as RequestInit).method).toBe("POST");
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({
+      data: { type: "notifications", attributes: {} },
+    });
+  });
+
+  it("notificarEnvelope sem summary devolve zero, em vez de estourar", async () => {
+    const svc = new ClicksignApiService(config({ CLICKSIGN_API_TOKEN: "tok" }));
+    comFetch({ data: { attributes: {} } });
+    await expect(svc.notificarEnvelope("env-1")).resolves.toEqual({ notificados: 0, total: 0 });
+  });
+
+  /**
+   * O 429 era tratado como erro genérico e caía no backoff cego de 5s do BullMQ, que pode recair na
+   * MESMA janela cheia. Agora a espera é cronometrada pelo `x-rate-limit-reset` do provedor, dentro
+   * do próprio cliente, e a chamada se recupera sozinha sem gastar tentativa da fila.
+   */
+  /** Resposta 429 com os headers de rate, para os testes de retentativa. */
+  function resposta429(resetSeg: number): Response {
+    return {
+      ok: false,
+      status: 429,
+      headers: new Headers({
+        "x-rate-limit-remaining": "0",
+        "x-rate-limit-reset": String(resetSeg),
+      }),
+      json: async () => ({}),
+    } as unknown as Response;
+  }
+
+  it("429 retenta UMA vez esperando o reset do provedor, e a segunda resposta vale", async () => {
+    // Timers falsos: a espera real é de segundos e o que importa provar é o COMPORTAMENTO, não a
+    // paciência da suíte. Sem isto o teste dormiria de verdade a cada execução.
+    vi.useFakeTimers();
+    try {
+      const svc = new ClicksignApiService(config({ CLICKSIGN_API_TOKEN: "tok" }));
+      const spy = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValueOnce(resposta429(Math.floor(Date.now() / 1000) + 6))
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          headers: new Headers({ "x-rate-limit-remaining": "49" }),
+          json: async () => ({ data: { attributes: { status: "running" } } }),
+        } as unknown as Response);
+
+      const promessa = svc.consultarStatus("env-1");
+      await vi.advanceTimersByTimeAsync(20_000);
+      await expect(promessa).resolves.toEqual({ status: "running" });
+      expect(spy).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("429 PERSISTENTE não vira laço infinito: retenta uma vez e lança", async () => {
+    // A recuperação é do cliente; a insistência é da fila. Sem este limite, uma janela cronicamente
+    // cheia seguraria a conexão para sempre em vez de devolver o problema para o backoff do BullMQ.
+    vi.useFakeTimers();
+    try {
+      const svc = new ClicksignApiService(config({ CLICKSIGN_API_TOKEN: "tok" }));
+      const spy = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(resposta429(Math.floor(Date.now() / 1000) + 6));
+
+      const promessa = svc.consultarStatus("env-1");
+      const capturado = promessa.catch((e: Error) => e);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await expect(capturado).resolves.toMatchObject({ message: "Clicksign HTTP 429" });
+      expect(spy).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("criarEnvelope devolve {id} a partir de data.id", async () => {

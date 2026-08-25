@@ -77,3 +77,49 @@ def baixar_objeto_para_staging(bucket: str, name: str) -> str:
     client = get_storage_client()
     conteudo = client.bucket(bucket).blob(name).download_as_bytes()
     return escrever_staging(conteudo, ".pdf")
+
+def ler_objeto_texto(bucket: str, name: str) -> str | None:
+    """Lê UM objeto pequeno como texto. SOMENTE LEITURA. `None` quando o objeto não existe.
+
+    NÃO PASSA PELA STAGING, ao contrário do PDF, e a diferença é proposital: a staging existe para o
+    BINÁRIO do documento, que é grande, é efêmero e tem TTL (§A.6). O JSON irmão do formulário é um
+    punhado de campos que vão direto para o banco; escrevê-lo em disco só criaria mais uma cópia de
+    dado pessoal para expurgar depois.
+
+    Objeto ausente é ESTADO NORMAL, não erro: todo formulário anterior ao JSON irmão continua sendo
+    só PDF, e o arquivamento desses segue funcionando sem os campos estruturados.
+    """
+    client = get_storage_client()
+    blob = client.bucket(bucket).blob(name)
+    if not blob.exists():
+        return None
+    return blob.download_as_bytes().decode("utf-8", errors="replace")
+
+
+def listar_objetos_com_nome(bucket: str) -> list[dict]:
+    """Como `listar_objetos`, mas DEVOLVE o nome do objeto e a hora em que ele chegou.
+
+    EXISTE SÓ PARA O DIAGNÓSTICO DO ÓRFÃO, e o nome é o ponto: quando um formulário não casa com
+    nenhuma admissão, o único jeito de saber DE QUEM ele é está no nome do objeto (NOME + CPF), que
+    é justamente o que o resto desta frente nunca deixa sair daqui.
+
+    §A.6, e a diferença é o que torna isto aceitável: o nome é LIDO NA HORA e devolvido para uma tela
+    autenticada, e NÃO é persistido em lugar nenhum. Guardar nome e CPF de quem não está na base
+    seria criar cadastro de alguém que o sistema não conhece; mostrar na tela de quem já tem acesso
+    ao bucket não acrescenta exposição nenhuma. Nada aqui é logado.
+    """
+    client = get_storage_client()
+    itens: list[dict] = []
+    for blob in client.list_blobs(bucket):
+        md5_hex: str | None = None
+        if blob.md5_hash:
+            md5_hex = binascii.hexlify(base64.b64decode(blob.md5_hash)).decode("ascii")
+        itens.append(
+            {
+                "name": blob.name,
+                "md5": md5_hex,
+                "contentType": blob.content_type,
+                "criadoEm": blob.time_created.isoformat() if blob.time_created else None,
+            }
+        )
+    return itens

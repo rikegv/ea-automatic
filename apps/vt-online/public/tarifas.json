@@ -1,0 +1,92 @@
+[
+  {
+    "cidade": "Arujá",
+    "tipoTransporte": "Ônibus municipal",
+    "valor": 6.0
+  },
+  {
+    "cidade": "Barueri",
+    "tipoTransporte": "Ônibus municipal",
+    "valor": 6.1
+  },
+  {
+    "cidade": "Carapicuíba",
+    "tipoTransporte": "Ônibus municipal",
+    "valor": 6.1
+  },
+  {
+    "cidade": "Ferraz de Vasconcelos",
+    "tipoTransporte": "Ônibus municipal",
+    "valor": 6.0
+  },
+  {
+    "cidade": "Guararema",
+    "tipoTransporte": "Ônibus municipal",
+    "valor": 0.0
+  },
+  {
+    "cidade": "Intermunicipal",
+    "tipoTransporte": "EMTU (maior valor comum)",
+    "valor": 12.0
+  },
+  {
+    "cidade": "Itapevi",
+    "tipoTransporte": "Ônibus municipal",
+    "valor": 6.1
+  },
+  {
+    "cidade": "Itaquaquecetuba",
+    "tipoTransporte": "Ônibus municipal",
+    "valor": 6.3
+  },
+  {
+    "cidade": "Jandira",
+    "tipoTransporte": "Ônibus municipal",
+    "valor": 6.1
+  },
+  {
+    "cidade": "Mogi das Cruzes",
+    "tipoTransporte": "Ônibus municipal",
+    "valor": 5.5
+  },
+  {
+    "cidade": "Osasco",
+    "tipoTransporte": "Ônibus municipal",
+    "valor": 6.1
+  },
+  {
+    "cidade": "Poá",
+    "tipoTransporte": "Ônibus municipal",
+    "valor": 6.0
+  },
+  {
+    "cidade": "Santa Isabel",
+    "tipoTransporte": "Ônibus municipal",
+    "valor": 0.0
+  },
+  {
+    "cidade": "Suzano",
+    "tipoTransporte": "Ônibus municipal",
+    "valor": 6.0
+  },
+  {
+    "cidade": "São Paulo",
+    "tipoTransporte": "CPTM / Trem",
+    "valor": 5.4
+  },
+  {
+    "cidade": "São Paulo",
+    "tipoTransporte": "Integração ônibus + metrô/trem",
+    "valor": 9.38
+  },
+  {
+    "cidade": "São Paulo",
+    "tipoTransporte": "Metrô",
+    "valor": 5.4
+  },
+  {
+    "cidade": "São Paulo",
+    "tipoTransporte": "Ônibus municipal (SPTrans)",
+    "valor": 5.3
+  }
+]

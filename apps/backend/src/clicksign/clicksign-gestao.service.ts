@@ -67,10 +67,37 @@ export interface LinhaAssinatura {
   fase: FaseEnvelope;
   /** Há kit anexado para o olho abrir? Some quando o envelope é ASSINADO (vai para o prontuário). */
   temKit: boolean;
+  /**
+   * PAINEL DE ASSINATURA guardado ("X de Y assinaram"), lido do banco e alimentado pelo tick.
+   * Vazio quando a admissão ainda não foi varrida; a tela trata isso como "aguardando primeira
+   * leitura", nunca como "ninguém assina este documento".
+   */
+  assinantes: AssinanteStatus[];
+  resumo: { total: number; assinaram: number; pendentes: number };
+  /** ISO da última atualização do painel. `null` = nunca varrido. Vai à tela como "atualizado há X". */
+  painelEm: string | null;
 }
 
-/** Status que representam trabalho EM ABERTO na assinatura (a aba principal da tela). */
-const STATUS_ABERTOS = ["AGUARDANDO_ASSINATURA", "CANCELADO", "EXPIRADO"] as const;
+/**
+ * Status por aba.
+ *
+ * A SEPARAÇÃO É DELIBERADA (decisão do diretor). Antes a aba de gestão juntava aguardando, cancelado
+ * e expirado sob o rótulo "envelopes que ainda pedem trabalho", mas cancelado e expirado NÃO pedem
+ * trabalho na fila: estão encerrados sem assinatura. Misturados, poluíam a fila de quem acompanha
+ * assinatura viva com gente cujo processo acabou.
+ *
+ * Cancelado e expirado ficam JUNTOS numa aba só porque são o mesmo desfecho do ponto de vista de
+ * quem opera (envelope encerrado sem assinatura, exige reenvio se a pessoa ainda vier), e porque
+ * expirado tem zero registros hoje: uma aba própria nasceria permanentemente vazia.
+ */
+const STATUS_ABERTOS = ["AGUARDANDO_ASSINATURA"] as const;
+
+/** Encerrados sem assinatura: cancelados pelo consultor ou vencidos pelo prazo de 30 dias. */
+const STATUS_ENCERRADOS = ["CANCELADO", "EXPIRADO"] as const;
+
+/** As abas da tela. Espelhada no controller (validação) e na tela (rótulos). */
+export const ABAS_ASSINATURA = ["aptos", "abertos", "encerrados", "assinados"] as const;
+export type AbaAssinatura = (typeof ABAS_ASSINATURA)[number];
 
 /**
  * GERENCIAMENTO DE ASSINATURA (INT-4, menu "assinaturas"). Camada de LEITURA da tela + a ação de
@@ -95,19 +122,29 @@ export class ClicksignGestaoService {
 
   /**
    * Lista as admissões de UMA aba:
-   *  - `abertos`: têm envelope em estado que ainda pede trabalho (aguardando, cancelado, expirado);
-   *  - `assinados`: contrato fechado e arquivado no Drive (histórico consultável);
    *  - `aptos`: SEM envelope e com o gate F12 fechado (as 3 frentes concluídas), ou seja, prontas
-   *    para o consultor solicitar a assinatura. É esta aba que dá destino à ação "solicitar".
+   *    para o consultor solicitar a assinatura. É esta aba que dá destino à ação "solicitar";
+   *  - `abertos`: assinatura VIVA, só `AGUARDANDO_ASSINATURA`. É fila de acompanhamento;
+   *  - `encerrados`: cancelados e expirados, encerrados SEM assinatura (decisão do diretor: saíram
+   *    de `abertos`, porque processo encerrado não é trabalho de fila);
+   *  - `assinados`: contrato fechado e arquivado no Drive (histórico consultável).
    *
    * Admissão PAUSADA fica fora de `aptos` (não se dispara envelope de admissão pausada, mesma regra
    * do `criarEnvelope`), mas permanece em `abertos`: o envelope dela existe e continua sendo assunto.
+   *
+   * O PAINEL DE ASSINATURA VEM JUNTO, lido da própria admissão. Antes a tela pedia isso à Clicksign
+   * linha por linha (2 requisições × 110 = 220 por abertura, 60s de espera depois do limitador).
+   * Agora é uma coluna a mais no SELECT que já acontecia, e a tela abre sem tocar a rede externa.
    */
-  async listar(aba: "abertos" | "assinados" | "aptos"): Promise<{ itens: LinhaAssinatura[] }> {
+  async listar(aba: AbaAssinatura): Promise<{ itens: LinhaAssinatura[] }> {
     if (aba === "aptos") return { itens: await this.listarAptos() };
 
     const status =
-      aba === "assinados" ? (["ASSINADO"] as const) : STATUS_ABERTOS;
+      aba === "assinados"
+        ? (["ASSINADO"] as const)
+        : aba === "encerrados"
+          ? STATUS_ENCERRADOS
+          : STATUS_ABERTOS;
 
     const rows = await this.db
       .select({
@@ -123,6 +160,9 @@ export class ClicksignGestaoService {
         contratoAssinadoDriveUrl: admissoes.contratoAssinadoDriveUrl,
         origem: admissoes.origem,
         kitPath: admissoes.kitAssinaturaPath,
+        // PAINEL GUARDADO: vem junto da lista, e é o que faz a tela abrir sem falar com a Clicksign.
+        painel: admissoes.clicksignAssinantes,
+        painelEm: admissoes.clicksignAssinantesEm,
       })
       .from(admissoes)
       .innerJoin(candidatos, eq(admissoes.candidatoCpf, candidatos.cpf))
@@ -260,9 +300,17 @@ export class ClicksignGestaoService {
     contratoAssinadoDriveUrl: string | null;
     origem: string;
     kitPath?: string | null;
+    painel?: unknown;
+    painelEm?: Date | null;
   }): LinhaAssinatura {
     const temKit = Boolean(r.kitPath);
+    // O jsonb chega como `unknown`: só vira painel se for mesmo uma lista. Dado corrompido ou de
+    // formato antigo degrada para painel vazio, que a tela sabe mostrar, em vez de quebrar a lista.
+    const assinantes = Array.isArray(r.painel) ? (r.painel as AssinanteStatus[]) : [];
     return {
+      assinantes,
+      resumo: resumoAssinaturas(assinantes),
+      painelEm: r.painelEm ? new Date(r.painelEm).toISOString() : null,
       fase: faseEnvelope(r.clicksignStatus, temKit),
       temKit,
       admissaoId: r.admissaoId,
@@ -415,12 +463,45 @@ export class ClicksignGestaoService {
         : "best-effort";
     }
 
+    /**
+     * CANCELADO é HISTÓRICO DE ENVELOPE, então só vale quando houve envelope. Sem envelope, o
+     * registro volta a SEM_ENVELOPE, a mesma regra que o `trocarKit` logo abaixo já aplicava.
+     *
+     * Por que isto era um alçapão: gravar CANCELADO numa admissão que nunca teve envelope a tirava
+     * das TRÊS abas de uma vez. A fila exige SEM_ENVELOPE, a aba Abertos exige envelope existente e
+     * a de assinados exige ASSINADO. O candidato sumia da tela inteira sem caminho de volta, e
+     * reenviar o kit não o trazia porque o envio não mexia no status.
+     */
+    const temEnvelope = Boolean(alvo.clicksignEnvelopeId);
+
+    /**
+     * SEM ENVELOPE, cancelar é TIRAR DA FILA (decisão do diretor). Não existe documento a cancelar,
+     * então o que a ação faz de fato é desanexar o kit e devolver a admissão ao estado de quem
+     * ainda não tem kit. Sem desanexar, a linha voltaria a `SEM_ENVELOPE` COM kit e continuaria na
+     * fila: o botão não faria nada e o aviso mentiria de novo, invertendo o sentido.
+     *
+     * COM ENVELOPE nada muda em relação ao que já rodava: grava CANCELADO, mantém o kit anexado e
+     * o cancelamento best-effort na Clicksign (que notifica o funcionário) segue exatamente igual.
+     */
     await this.db
       .update(admissoes)
-      .set({ clicksignStatus: "CANCELADO", atualizadoEm: new Date() })
+      .set({
+        clicksignStatus: temEnvelope ? "CANCELADO" : "SEM_ENVELOPE",
+        ...(temEnvelope ? {} : { kitAssinaturaPath: null, kitAssinaturaEm: null }),
+        atualizadoEm: new Date(),
+      })
       .where(eq(admissoes.id, admissaoId));
 
-    return { ok: true, status: "CANCELADO", fase: alvo.fase, clicksign };
+    if (!temEnvelope && alvo.kitPath) {
+      await this.staging.removerArquivo(alvo.kitPath).catch(() => undefined);
+    }
+
+    return {
+      ok: true,
+      status: temEnvelope ? "CANCELADO" : "SEM_ENVELOPE",
+      fase: alvo.fase,
+      clicksign,
+    };
   }
 
   /**
@@ -547,6 +628,7 @@ export class ClicksignGestaoService {
   async assinantes(admissaoId: string): Promise<{
     assinantes: AssinanteStatus[];
     resumo: { total: number; assinaram: number; pendentes: number };
+    atualizadoEm?: string | null;
     indisponivel?: string;
   }> {
     const vazio = { assinantes: [], resumo: { total: 0, assinaram: 0, pendentes: 0 } };
@@ -569,7 +651,29 @@ export class ClicksignGestaoService {
         this.api.listarEventosAssinatura(adm.envelopeId),
       ]);
       const assinantes = montarAssinantes(signers, eventos);
-      return { assinantes, resumo: resumoAssinaturas(assinantes) };
+
+      // O que foi buscado ao vivo vira o painel guardado: quem clicou em atualizar já pagou a
+      // consulta, e seria desperdício o próximo ciclo do tick perguntar de novo a mesma coisa.
+      // Em try próprio: falhar ao GUARDAR não pode virar "não foi possível CONSULTAR", que é outra
+      // história e mandaria o operador procurar problema onde não há.
+      try {
+        await this.db
+          .update(admissoes)
+          .set({
+            clicksignAssinantes: assinantes,
+            clicksignAssinantesEm: new Date(),
+            atualizadoEm: new Date(),
+          })
+          .where(eq(admissoes.id, admissaoId));
+      } catch {
+        this.logger.warn(`Painel consultado ao vivo mas não guardado (admissão ${admissaoId}).`);
+      }
+
+      return {
+        assinantes,
+        resumo: resumoAssinaturas(assinantes),
+        atualizadoEm: new Date().toISOString(),
+      };
     } catch {
       // §A.6: o log leva o id da admissão (referência interna), nunca o do envelope nem nome.
       this.logger.warn(

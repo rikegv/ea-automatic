@@ -222,7 +222,10 @@ export class VtService {
     const totalVolta = somaDe("VOLTA");
 
     return this.db.transaction(async (tx) => {
-      await tx.delete(formulariosVt).where(eq(formulariosVt.admissaoId, admissaoId));
+      // INSERT PURO, sem apagar o anterior (OST do reenvio). Aqui havia um `delete` por admissão: o
+      // reenvio sobrescrevia o formulário antigo. Cada envio é uma DECLARAÇÃO NOVA do funcionário,
+      // não uma correção da anterior, e apagar a antiga apagava a prova do que ele declarou quando
+      // assinou o contrato. O VIGENTE passa a ser o mais recente; os anteriores ficam consultáveis.
       const [form] = await tx
         .insert(formulariosVt)
         .values({
@@ -266,8 +269,12 @@ export class VtService {
    * trafega, não é gravado (§A.6, coerente com "documento é efêmero").
    */
   async documento(admissaoId: string) {
+    // O MAIS RECENTE, explicitamente. Com várias versões por admissão, um `findFirst` sem ordem
+    // devolve QUALQUER uma, e o defeito apareceria como um endereço antigo ressurgindo no PDF sem
+    // ninguém entender por quê.
     const form = await this.db.query.formulariosVt.findFirst({
       where: eq(formulariosVt.admissaoId, admissaoId),
+      orderBy: (t, { desc: d }) => [d(t.criadoEm)],
     });
     if (!form) throw new NotFoundException("Formulário de VT ainda não foi enviado.");
 

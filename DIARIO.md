@@ -10325,3 +10325,466 @@ sem OST que os reivindique, e `apps/backend/src/esteira/nascimento-cadastro.tres
 um guarda de regressão escrito durante a investigação do item 3. Ele passa 4/4 e é útil, mas o item 3
 terminou sem mudança de código, então ele não pertence a nenhuma das três frentes commitadas. Fica
 solto esperando o diretor decidir se entra.
+
+---
+
+## 20/08/2026 (tarde): ambiente de HOMOLOGAÇÃO do A&S, e a variável vazia que apontava para produção
+
+Abertura da frente grande de **Atração e Seleção**. Regra de ouro fixada pelo diretor: **nada do A&S
+pode impactar o EA em produção**, então constrói-se em homologação e só depois se vira a chave. A
+primeira coisa investigada foi se homologação existia. **Não existia.**
+
+### O falso positivo que quase virou armadilha
+
+As unidades `ea-harness-*` (portas 3098/3099) parecem um segundo ambiente e **não são**. O
+`proxy-origem.mjs` encaminha para `127.0.0.1:3011`, que é o backend **de produção**: o harness lê e
+**escreve no banco de produção**. Ele é um visualizador de frontend para tirar print (§A.13), e serve
+ao oposto do que a frente pedia. Usá-lo como homologação teria violado a regra de ouro no primeiro
+dia. Fica registrado no `infra/homolog/README.md` para ninguém confundir de novo.
+
+### O que foi construído
+
+Ambiente completo, **zero Fernando** (tudo em loopback e ZeroTier, o mesmo regime da produção; nenhum
+DNS, vhost ou certificado, porque isso encostaria nele):
+
+| | Produção | Homologação |
+|---|---|---|
+| Código | `ea-automatic` (main) | `ea-homolog` (branch `homolog`) |
+| Banco | `ea_automatic` | `ea_automatic_homolog`, clone anonimizado, mesmo container |
+| Redis | `ea-redis` 6380 | `ea-redis-homolog` **6381** |
+| Backend | 127.0.0.1:3011 | 127.0.0.1:**3111** |
+| Frontend | Caddy 0.0.0.0:3010 | 0.0.0.0:**3120** |
+
+**Redis próprio não é luxo, é a diferença entre isolar e quebrar a produção.** O nome da fila BullMQ,
+o prefixo `ea:bull` e o índice do banco Redis são **constantes no código**, não variáveis de ambiente.
+Compartilhar o `ea-redis` faria os workers da homologação entrarem nas MESMAS filas e passarem a
+**consumir jobs de produção**, processando-os contra o banco de homologação. A produção pararia de
+processar sem ninguém entender por quê. `REDIS_HOST`/`REDIS_PORT` **são** lidos do ambiente, então
+trocar a instância resolveu sem tocar uma linha de código.
+
+### O APRENDIZADO da sessão: variável VAZIA não desliga integração, ela cai no serviço REAL
+
+Este é o achado que merece ficar. A intuição era "deixa a credencial em branco e a integração nasce
+inerte", que é o padrão do projeto (§A.5). **Para a credencial vale; para a URL não.** Conferido linha
+a linha:
+
+| Variável vazia | Onde o código cai |
+|---|---|
+| `AI_SERVICE_URL` | `http://localhost:8000`, o ai-service **DE PRODUÇÃO**, nesta mesma VM, com a service account real e escrita no Drive |
+| `PANDAPE_API_BASE_URL` | `https://api.pandape.com.br`, a API real |
+| `PANDAPE_TOKEN_URL` | o login real do Pandapé |
+| `CLICKSIGN_API_BASE_URL` | `https://sandbox.clicksign.com/api/v3`, a conta real |
+| `VT_LINK_BASE_URL` | o app de VT real |
+
+E o agravante: **a reconciliação do Drive é o único agendador SEM liga/desliga.** Ela dispara sozinha
+2 minutos após o boot e a cada 10 minutos, sem flag no banco que a segure. Uma homologação com
+`AI_SERVICE_URL` em branco teria mandado arquivo para o Drive **de verdade**, sem ninguém pedir.
+
+A correção virou a **terceira camada** da neutralização, e é de rede, não de configuração: todas essas
+URLs apontam para `127.0.0.1:9` (porta discard, nada escutando). Qualquer chamada que escape das duas
+primeiras camadas morre em ECONNREFUSED. As três camadas, nenhuma dependendo de disciplina humana:
+
+1. **Banco:** `ligado = false` nos quatro `*_scheduler_estado`.
+2. **Credencial:** tokens e ids de pasta vazios.
+3. **Rede:** buraco negro em `127.0.0.1:9`.
+
+**Regra que sai daqui, e vale para qualquer ambiente futuro:** desligar integração por variável vazia
+só é seguro depois de conferir o `??` do outro lado. Onde houver default, o desligamento tem de ser
+explícito.
+
+### Anonimização (§A.6)
+
+`infra/homolog/anonimizar.sql`, com guard que **recusa rodar** fora de `ea_automatic_homolog`.
+Substitui CPF, nome, e-mail, telefone, nascimento e dados bancários do candidato; a sala de espera; o
+CPF de substituição; os signatários; o endereço residencial do formulário de VT; a trilha de
+alterações do candidato; o texto livre digitado por humano; a matrícula da folha; e a identidade dos
+usuários internos, com senha única de homologação (clonar o hash faria a senha real do time abrir um
+ambiente de postura mais fraca).
+
+**Os CPFs sintéticos são VÁLIDOS**, com dígito verificador correto, e isso é requisito, não capricho:
+`isValidCpf` governa tela, exportação e o mascaramento do Clicksign, então CPF inválido faria a
+homologação se comportar diferente da produção justamente nas bordas que interessa testar. Os 48
+provisórios (`PROV…`) continuam **não numéricos** de propósito, preservando o comportamento que o
+sistema já tem para essa classe.
+
+**Preservado de propósito:** cliente, cargo, datas, status, farol, papel, área e marcação de menu. Joga-se
+fora a pessoa, não o processo. O script **aborta** se sobrar PII: FK quebrada, nome real, CPF fora do
+mapa, e-mail real ou agendador ligado derrubam a criação do ambiente. Verificação, não confiança.
+
+### Provas
+
+Saúde 200 nos quatro serviços. **Produção intacta:** mesmas contagens (2653 admissões, 2611
+candidatos, 238 clientes) e `ea-backend`/`ea-frontend` **sem restart desde 18/08** (o clone é
+`pg_dump`, leitura pura). Escrita na homologação não aparece na produção. O backend de homologação tem
+**um único destino de rede: 127.0.0.1**. Disparo manual de agendador recusado com `{"ligado":false}`,
+enquanto na produção seguem ligados. **Zero CPFs e zero nomes em comum** entre os dois bancos, e os
+2563 CPFs sintéticos passam no `isValidCpf` real, sem duplicata. Prova visual (§A.13): Gerenciador da
+homologação renderizado, KPIs calculando, candidatos como "CANDIDATO 647 HOMOLOG".
+
+### Desenho da Fatia 1 validado, e duas divergências achadas na conferência dos campos
+
+O diretor validou `docs/DESENHO-AS-FATIA1-VAGA.md` e respondeu as 6 perguntas em aberto. Ao conferir a
+lista de campos que ele mandou contra o desenho, apareceram **duas premissas que não se sustentam** e
+foram reportadas antes de construir (§A.27):
+
+1. **Não existe lista de escolaridade na base de candidatos.** O que existe é o TIPO DE DOCUMENTO
+   `COMPROVANTE_ESCOLARIDADE`, da régua documental. "Escolaridade" aparece no sistema como
+   **documento**, não como grau de instrução. Não há o que reusar; a lista precisa nascer.
+2. **O CARGO sumiu da lista de campos.** A régua documental resolve por `(cod_cliente, cargo_id)` e a
+   migração da meta do Alto Volume depende de a vaga ter cargo. Sem ele, a ponte para a Admissão
+   (etapa 6) não fecha.
+
+### Estimativa por etapa
+
+`docs/ESTIMATIVA-AS-POR-ETAPA.md`, para a apresentação à diretoria. Etapas 1 a 6 em **33 a 52 dias
+úteis (7 a 10 semanas)**, com a leitura que importa: **a substituição do sistema de seleção
+descontinuado acontece nas etapas 1 e 2, em 2 a 3 semanas**; o resto é ganho sobre base funcionando.
+A etapa 4 (WhatsApp) é a única com dependência **fora** do alcance da fábrica, porque a plataforma de
+WhatsApp do grupo é o CentraAtend.
+
+---
+
+## 20/08/2026 (noite): Portal do candidato e integração com o GI, investigados e PAUSADOS
+
+Frente de **consulta de viabilidade**, sem uma linha de código. Duas perguntas do diretor: dá para
+abrir um portal público para o candidato entregar documento, e dá para substituir o webhook do
+PandaPé que alimenta a folha. **Nada foi construído; a frente está PAUSADA aguardando o fornecedor do
+GI responder ao e-mail do diretor.**
+
+Tudo em `docs/PARECER-PORTAL-DOCUMENTOS-CANDIDATO.md`, cinco partes.
+
+### Parte 1, o portal: o projeto já resolveu isso uma vez, sem abrir porta
+
+O EA hoje não tem nenhuma porta para a internet. O portal exigiria a primeira.
+
+**O achado foi que existem dois caminhos, e o projeto já escolheu o segundo antes.** Para o VT foi
+escrito um pacote de vhost com allowlist de caminhos (`ea-bridge-fernando/vt-soulanrh.conf`), e ele
+**nunca foi aplicado**: o que foi ao ar foi um **app externo** que confere o link assinado offline e
+deposita num bucket, com o EA apenas **buscando** depois. O EA continua tão fechado quanto é hoje.
+
+A decisão que separa os dois caminhos é de negócio, não técnica: **o candidato precisa saber na hora
+se o documento foi aceito?** Se sim, precisa de porta; se pode saber depois, não precisa.
+
+**Três pegadinhas levantadas para a reunião de segurança:** hoje **não existe limite de tamanho de
+upload** configurado (nunca importou, o sistema é interno); **não existe verificação de vírus em
+nenhum ponto**; e o arquivo **hoje é gravado em disco** por 48h, então o requisito "não retém" exige
+trocar o transporte entre backend e ai-service para memória. É mudança contida, porque a peça que
+fala com a IA já recebe conteúdo, não caminho.
+
+### Parte 2 e 3, a API do GI: mapeamento completo antes de decidir
+
+Regra do diretor, nascida do erro do PandaPé (olhou-se só o pedaço que interessava e o resto
+surpreendeu depois): **mapear a API inteira**. Foram 435 endereços, 55 áreas, 3.707 campos, lidos da
+especificação pública sem credencial.
+
+**Avisos que saíram do mapa:** a API expõe **o ERP inteiro**, não só RH (contas a receber, títulos,
+notas, movimentação bancária), e tem **106 endereços de exclusão**. E a documentação é fraca onde mais
+importa: **zero listas de valores**, 127 descrições em 3.707 campos, e os campos obrigatórios são
+marcações automáticas do banco, não regra de negócio.
+
+### Parte 4 e 5, com credencial: o que a leitura provou, e o que eu concluí errado
+
+O diretor liberou credencial **só para leitura**. Cumprido: GET e, depois de liberação explícita, o
+`GetAllJson` (POST de consulta). Nenhuma escrita.
+
+**Duas descobertas de segurança que precisam virar exigência:**
+1. **A credencial NÃO é de leitura.** O token traz, no próprio conteúdo, `Get`, `Add`, `Update`,
+   `Delete` e `SemFiltro`. A restrição foi cumprida por disciplina, não por impedimento.
+2. **É base de produção** (127 empresas reais do grupo), **sem ambiente de teste conhecido**. Enquanto
+   não existir, teste de gravação é gravação na folha real.
+
+Operacional, e economiza horas: a API está atrás de **Cloudflare** e recusa quem não manda
+identificação de navegador (`403, error code: 1010`); e o **token dura 2 horas**, o que a documentação
+não diz.
+
+**O ERRO QUE EU COMETI, e a lição.** Concluí, nas Partes 3 e 4, que a superfície de integração do
+PandaPé era a área de Seleção (`FuncionarioSelecao`), porque existe lá um campo `statusGIPandaPe` e
+porque o cadastro oficial responde 403. Os dois indícios eram verdadeiros e **a conclusão era errada**:
+o 403 é escopo da NOSSA credencial, não desenho da integração.
+
+> **Lição de método, para a próxima API: 403 diz o que EU não posso ver, não diz o que o sistema faz.**
+> Tratar limite de permissão como evidência de arquitetura foi o erro. O aviso de correção está no topo
+> da Parte 3 do parecer, para ninguém levar a versão errada a uma reunião.
+
+**O fluxo real, comprovado pelos logs de webhook que o diretor trouxe:** o PandaPé posta em
+`giinterno.gi.app.br/WebhooksPandaPe/Soulan/`, **host e caminho privados, fora da API pública**. É um
+receptor que o GI construiu sob medida. **Não há webhook para aproveitar:** quando nós alimentarmos o
+GI, será pela API pública, contrato diferente.
+
+E a diferença entre a tela e a API se explicou: a tela que mostra dezenas de pessoas é o **Cadastro de
+Funcionários** (tabela `Funcionario`, **403 para nós**), enquanto a pré-admissão tem **1 registro só**,
+sem rastro de origem, confirmado por duas formas de consulta.
+
+### O achado que reposiciona o projeto
+
+Lido na API do PandaPé, em dois candidatos reais: a etapa de admissão tem **23 formulários, e só 5 têm
+dado digitado** (27 a 28 campos). Os outros 18 são **slots de anexo**. RG, CTPS, PIS, título de
+eleitor, reservista e escolaridade chegam ao GI **como imagem, nunca como número**.
+
+Só que o registro de pré-admissão do GI tem `rg`, `orgaoRG`, `carteiraTrabalho`, `tituloEleitor`,
+`filiacaoNomePai`, `filiacaoNomeMae`, `raca`, `grauInstrucao` **preenchidos**. Ou seja: **alguém no GI
+abre os documentos e transcreve à mão.**
+
+**Isso muda o valor da frente.** Replicar o PandaPé replicaria a digitação manual. O portal com a IA
+extraindo os números entregaria esses campos **já preenchidos**: deixa de ser substituição do PandaPé
+e vira **melhoria do processo da folha**.
+
+**E o escopo encolheu duas vezes:**
+- Dos 27 campos que o PandaPé digita, o EA **já tem quase todos**. Falta **Estado Civil, Telefone Fixo
+  e o sobrenome separado**.
+- A pré-admissão **não exige** cargo, horário nem centro de custo (vazios no registro real), então o
+  de/para pesado (5.454 cargos, 4.074 horários, 12.590 centros de custo) **saiu do caminho crítico**.
+  Sobra empresa, cliente e banco.
+
+### Em aberto com o fornecedor, e por que a frente pausa aqui
+
+Oito perguntas registradas na Parte 5, lideradas por: **qual o conteúdo exato que o receptor
+`WebhooksPandaPe` recebe hoje**, **os dados caem mesmo no `Funcionario`** (basta conceder leitura nessa
+tabela para a mesma credencial e uma consulta resolve), **quem transcreve os números dos documentos**,
+a **tabela de significados dos códigos**, e **se existe ambiente de teste**.
+
+A rodada seguinte de investigação fica **em espera de propósito**: o retorno do fornecedor
+provavelmente traz a especificação pronta, e investigar antes seria refazer trabalho.
+
+### Higiene de credencial (§A.6)
+
+O token gerado foi guardado em arquivo restrito, **nunca exibido**, e **destruído** ao fim da análise,
+junto com todo cache local (incluindo o identificador de pré-colaborador usado no cruzamento). O
+`gi-cred.txt` vive **fora do repositório** e o diretor o remove da VM. **Nenhum arquivo do repositório
+referencia a credencial, e nenhuma linha de código do EA fala com o GI**: esta frente é, até aqui, só
+investigação e documento. Nenhum dado pessoal foi extraído das duas APIs: as medições são contagens,
+taxas de preenchimento e **rótulos** de campo.
+
+Uma varredura que puxaria tabelas financeiras inteiras foi **interrompida por decisão própria**: era
+leitura permitida, mas carga desnecessária sobre o ERP de produção de um terceiro, sem ganho para o
+parecer.
+
+---
+
+## 21/08/2026 — Frente do VT fechada: o formulário do candidato vira dado no EA
+
+Três frentes commitadas hoje, mais uma que a investigação derrubou antes de virar código.
+
+### 1. Data de nascimento divergente (commit `d3b658d`)
+
+Chegou como "corrijam a data errada" e terminou **sem um único registro alterado no
+banco**. A ficha (olhinho) mostrava um dia a MENOS que a edição (lápis) para a mesma pessoa, e a
+conclusão do diretor era que o dado estava errado.
+
+**A raiz era o formatador.** A ficha usava `new Date("1995-05-31")`, que o JavaScript parseia como
+meia-noite UTC; renderizado em UTC-3, volta um dia. A edição mostrava a string crua, e por isso
+sempre esteve certa. A prova mais forte de qual das duas mentia é que a ficha era a **única fora do
+padrão**: Sala de Espera, Liberação e o livreto de vínculo já formatavam por partes, e o próprio
+arquivo da ficha já tinha o formatador correto, usado para data de admissão e exame.
+
+Tracei os três caminhos de ESCRITA e nenhum desloca: carga lê CSV como texto puro, Pandapé fatia a
+string, entrada manual usa `input type="date"`. E a fonte é única: o cruzamento entre `sala_espera` e
+`candidatos` acusa **zero** divergência.
+
+**Por que não era cosmético:** o VT identifica o candidato por CPF mais data de nascimento e compara
+string com string. Uma ficha que mostra um dia a menos faz o RH ditar o dia errado e o candidato
+tomar "Dados não encontrados" sem que nada pareça quebrado. Testado ao vivo: com a data guardada, a
+identificação devolve 201 e entra.
+
+Atingia **todos os 2.459 candidatos com data de nascimento**. Teste de regressão com o fuso fixado em
+America/Sao_Paulo de propósito: em UTC o código velho passaria e o teste daria falsa cobertura.
+
+### 2. A pasta do Drive que "sumiu" (nenhum commit, decisão do diretor)
+
+Pedido: renomear a subpasta BENEFÍCIOS, "onde os formulários ficam ATÉ serem transferidos pra pasta
+do funcionário". **O Drive real contradisse a premissa.** Confirmei nos arquivos: a pasta BENEFÍCIOS
+fica DENTRO da pasta do próprio funcionário, que é o destino final. Não existe transferência
+pendente, e direto embaixo de "Temporário" só há pastas de pessoas.
+
+Renomear teria três problemas: não é uma pasta e sim uma por funcionário; arrastaria o Cartão de
+Transporte junto; e a busca de pasta casa POR NOME, então as BENEFÍCIOS existentes deixariam de ser
+encontradas e o sistema criaria uma segunda ao lado, separando os arquivos. O diretor escolheu **não
+renomear e resolver na tela**, que é o que a frente 3 entrega.
+
+### 3. A frente do VT (commit `aa242de`)
+
+O app externo gerava o PDF, jogava no bucket e **descartava todo o resto**: o EA recebia um arquivo,
+nenhum número, e nem guardava onde o arquivo tinha ido parar.
+
+**O transporte escolhido, e por quê:** a função roda no Firebase e o EA é loopback atrás da VPN,
+inalcançável de fora (foi o motivo do pivô para o bucket quando a frente nasceu). Em vez de abrir
+porta de entrada no EA, a função passou a gravar um **JSON irmão do PDF no mesmo bucket**, e a
+coleta, que já varre esse bucket, lê os dois. Nenhuma porta nova.
+
+Entrou: o `subir_arquivo` devolvendo o id do arquivo (que já era pedido ao Google e jogado fora);
+`/coleta-vt/dados`; a migração `0075` com `vt_coleta.drive_url`; a função pura
+`interpretarFormularioVt`; e a coluna VT da tela de Benefícios com a linha resumida e o botão.
+
+**Duas decisões que parecem detalhe e não são.** A URL só é sobrescrita quando vem uma nova: o
+scheduler varre em ciclo, na segunda passada nada sobe e o arquivamento não devolve id, então
+regravar nulo apagaria o link e o botão morreria sozinho no ciclo seguinte. E a gravação dos campos
+estruturados vive num try que só loga, porque o PDF no Drive é a entrega que não pode falhar.
+
+**Prova ponta a ponta**, contra o app publicado e o Drive real: formulário preenchido no celular
+(390px), CEP resolvido pelo ViaCEP, tarifa sugerida pela tabela (R$ 5,40), os três avisos, PDF e JSON
+irmão no bucket, coleta gravando 2 conduções e a URL sozinha, e a tela abrindo "Ida R$ 5,40 · Volta
+R$ 5,40 · Dia R$ 10,80 · Bilhete Único" com o botão abrindo o PDF de 50 KB.
+
+**O achado que muda a ordem de operação:** a coleta recusa admissão encerrada (`SEM_ADMISSAO`), e
+está certa. Caminhei a esteira inteira antes de mandar o formulário e o envio foi recusado; refiz na
+ordem real (coletar com a admissão viva, concluir depois) e passou de primeira. Na operação, **o VT é
+coletado enquanto a admissão está viva**, e quando ela chega em Benefícios os valores já estão lá.
+
+### 4. Guarda dos três caminhos (commit `0b41b41`)
+
+Teste estático que trava os três caminhos que fazem o Cadastro e a Integração nascerem pela porta
+única. O nome engana e vale registrar: "nascimento-cadastro" é o nascimento da FRENTE, nada a ver com
+data de nascimento.
+
+### Gate, publicação e o que fica aberto
+
+Verde: **backend 1.491 testes**, **frontend 108**, **ai-service 148**, **função do Firebase 17**.
+Typecheck limpo; eslint limpo fora dos 2 erros de config pré-existentes. Backend, frontend e
+ai-service reiniciados; função e hosting do Firebase publicados (`enviarVt` atualizada).
+
+**O app do Firebase NÃO TEM VERSIONAMENTO.** `~/vt-online-soulan` não é repositório git: o código que
+está em produção existe só no disco desta VM. Ficou registrado para decisão do diretor.
+
+**Vermelho pré-existente, não tocado (§A.14):** `packages/shared-types/src/cpf.spec.ts` segue
+falhando, esperando três frentes quando o sistema tem quatro. Mesmo registro das entradas anteriores.
+
+**Escrita em dado de teste, autorizada:** as 2 coletas antigas da admissão de teste receberam a URL
+do Drive por casamento de instante (menos de 1 segundo entre o arquivo e o carimbo do ledger, com os
+dois eventos a 2 horas um do outro). Guarda dupla no UPDATE: id exato e `drive_url IS NULL`. Nenhum
+registro real foi tocado.
+
+**Não commitado de propósito:** `logosoulan.png`, que segue sem OST que o reivindique.
+
+---
+
+## 21/08/2026 (tarde) — Onda 2 do VT: reenvio com histórico, solicitações e o órfão tratável
+
+Fecha a frente do VT. Commit `1bea70d`, mais o `77b1958` que trouxe o app do Firebase para o
+repositório.
+
+### O que mudou de premissa
+
+O VT era um documento de uma vez só: reenviar SOBRESCREVIA o anterior, e quem já tinha sido admitido
+nem conseguia reenviar (a coleta recusava com `SEM_ADMISSAO`). A vida real desmentiu as duas coisas.
+O VT é justamente o dado que continua mudando DEPOIS da admissão, e cada mudança é uma **declaração
+nova** da pessoa, não um remendo na anterior: apagar a antiga apagava a prova do que ela declarou
+quando assinou o contrato.
+
+### As quatro decisões que valem registro
+
+**1. A régua do VT virou LOCAL, e a global não foi tocada.** `admissaoOperavelSql()` é a régua de
+todos os automáticos (scheduler, filas, Pandapé); afrouxá-la para resolver o VT afrouxaria tudo
+junto. A régua nova aceita `ADMISSAO_CONCLUIDA` e segue recusando declínio, rescisão e pausada.
+
+**2. A baixa na régua virou condicional, e é ela que impede a reabertura.** Aceitar o VT não reabre
+nada por si só; o perigo estava no efeito colateral: `darBaixaVt` chama `aplicarPosVeredito`, que
+recalcula sinalizador e progresso e, se a régua obrigatória fechar, **conclui a Auditoria sozinha,
+abre o gate do Cadastro e reavalia o farol**. Numa admissão encerrada isso mexeria em frente e farol
+de quem só queria corrigir o endereço. E não era teórico: o `FORMULARIO_VT` está em **70 réguas**
+(eram 0 na investigação anterior, alguém configurou no meio do caminho).
+
+**3. "Respondida" aponta para um FATO, não para um clique.** A solicitação se fecha quando a
+declaração chega, apontando para a versão que respondeu. Um booleano dependeria de alguém lembrar de
+marcar, e a primeira vez que ninguém marcasse a fila passaria a mentir para sempre.
+
+**4. A dispensa do sinal é PERSISTENTE.** A varredura reavalia os mesmos registros a cada ciclo, e
+uma dispensa em memória ou em sessão reapareceria no ciclo seguinte, sem ter resolvido nada. Painel
+que apita para sempre é painel que o time aprende a ignorar, inclusive quando aponta algo real.
+
+### Migrações
+
+`0076` multi-versão (cai o unique, entra o índice por admissão e data) · `0077` `solicitacoes_vt`
+(tabela e não coluna: a mesma pessoa é solicitada várias vezes) · `0078` URL por versão (casar versão
+com arquivo por proximidade de timestamp quebraria no dia em que dois envios caíssem no mesmo ciclo)
+· `0079` dispensa do sinal.
+
+### §A.6 no VT órfão
+
+Nome e CPF do órfão são **lidos do bucket na hora e nunca persistidos**. Guardá-los criaria cadastro
+de alguém que o sistema não conhece, que é o oposto da minimização. Mostrá-los numa tela autenticada
+de quem já opera o bucket não acrescenta exposição, e é o que transforma um digest inútil em algo
+tratável. A decisão anterior (só o prefixo do md5) estava certa para o alerta e errada para a ação.
+
+### Prova ponta a ponta
+
+Contra o app publicado: solicitação registrada, formulário reenviado no celular com valores
+diferentes, **duas versões no banco com a antiga preservada** (R$ 15,80 vigente, R$ 10,80 anterior),
+pedido fechado pela chegada da declaração, e **farol e as três frentes intactos**, com `baixa=não` no
+log. O "Resolver sinal" levou o alerta de 1 para 0 e ele **não voltou** depois de um ciclo completo.
+
+Gate: backend 1.491 testes, frontend 110, ai-service 148, função do Firebase 17.
+
+### BACKLOG registrado (não construir sem o diretor acionar)
+
+**1. Onda 3, cadastro de transporte, cartões e cidades.** Tela no menu gerencial para o time
+cadastrar as opções sem depender de código, refletindo no app do candidato. **Parada por decisão do
+diretor** (21/08): ele prioriza o A&S e volta depois. Pista já levantada que muda o desenho: o app do
+Firebase **já lê as tarifas de um arquivo estático próprio** (`public/tarifas.json`), separado do
+banco do EA, então a ponte provavelmente é a mesma que resolveu o VT (o EA publica, o app consome),
+e não uma chamada do app ao EA, que é inalcançável de fora.
+
+**2. Nome fixo do arquivo no bucket.** A função nomeia o objeto de forma determinística
+(`NOME CPF.pdf`), então **cada reenvio SOBRESCREVE o objeto anterior no bucket**. O histórico no
+Drive fica íntegro (cada versão é arquivada com o seu próprio arquivo e a sua URL), mas um registro
+antigo do ledger fica sem objeto correspondente, e o painel passa a mostrá-lo como "Arquivo Sumiu".
+Guardar cada envio separado no bucket é **OST futura**: exige mexer no nome do objeto na função, que
+é outro deploy.
+
+**3. Vermelho pré-existente, não tocado (§A.14):** `packages/shared-types/src/cpf.spec.ts` segue
+falhando, esperando três frentes quando o sistema tem quatro. Mesmo registro das entradas anteriores.
+
+---
+
+## 21/08/2026 (fim do dia) — Filtros, ordenação e busca na Esteira
+
+Commit `4abe694`. Ajuste de tela pedido para a Integração que acabou consertando um filtro quebrado
+nas quatro abas.
+
+### O filtro de data não estava quebrado: ele filtrava outra coisa
+
+O sintoma relatado foi "o filtro de data de admissão não filtra nada". A causa: o filtro se chamava
+**"Período"** e filtrava por `criadoEm`, ou seja, **quando a admissão entrou no sistema**. Quem
+marcava um intervalo esperando a data em que a pessoa é admitida via um resultado que não batia com
+nada, e o rótulo genérico não permitia descobrir por quê.
+
+Agora são **três intervalos com nome próprio**: Auditoria e Cadastro filtram por Data de Admissão;
+Exame soma Data do Exame; Integração soma Data de Integração. Nas abas com dois, eles **afunilam**.
+O `criadoEm` saiu como opção de filtro.
+
+**Quem não tem data de admissão não some** (14 hoje, as de banco por definição): sem filtro aparece
+normal, e só fica de fora com o filtro ativo, que é o comportamento natural de um intervalo.
+
+### A lição de método: como se prova que um KPI não mudou
+
+A primeira comparação depois da mudança acusou diferença no Exame (`ASO_PENDENTE` de 6 para 12). Em
+vez de aceitar "deve ser o relógio", o teste que decidiu foi **guardar a alteração, recompilar com o
+código ANTIGO e medir de novo**: ele devolveu os mesmos números. A variação era do relógio
+(`ASO_PENDENTE` é derivado de "a hora do exame já passou", recalculado a cada requisição) somada aos
+schedulers que escrevem em segundo plano.
+
+**A prova que fecha o caso é o TOTAL, não a distribuição.** Filtro só REMOVE linha: se o novo tivesse
+vazado para o caso sem filtro, o total cairia. Os totais ficaram idênticos em todas as medições,
+inclusive na do código antigo: **11 / 33 / 15 / 20**. Fica como método para a próxima vez que uma
+mudança de filtro precisar ser provada inofensiva.
+
+### Filtros de coluna: lista, e tirada da FILA
+
+Os filtros de coluna nasceram como texto livre e o diretor derrubou na hora certa: digitar exigia
+acertar acento, caixa e espaço, e errar devolvia zero sem explicar. Viraram lista, e a lista sai da
+**fila atual**, não do catálogo. O tamanho do ganho: o cadastro tem **11 valores distintos** de tipo
+de contrato, boa parte lixo histórico da importação (`TEMP.`, `APREN.`, `ESTA. FOPAG`), e a lista
+oferece os **4** que existem na fila. O filtro de Cliente deixou de listar os 227 do cadastro, e a
+chamada que os buscava saiu junto, sem consumidor.
+
+**Exceção deliberada no Status:** o status de CONCLUSÃO nunca está na fila (concluído some dela por
+construção), e filtrar por ele é o caminho documentado para REVELAR os concluídos. Aplicar a regra ao
+pé da letra apagaria essa porta sem ninguém perceber, então ele fica sempre disponível.
+
+### Onde cada filtro vive, e por quê
+
+**Data vai ao backend** porque muda a fila de verdade. **Coluna filtra no cliente** porque só recorta
+o que já está na tela: os KPIs contam A FILA, não o recorte que está sendo olhado, e mandar os
+filtros de coluna ao backend faria os cards mudarem de número a cada escolha. A aba não é paginada,
+então o recorte no cliente é exato.
+
+Gate: backend 1.491 testes, frontend 110, typecheck e lint limpos.

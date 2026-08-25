@@ -185,11 +185,23 @@ export function avisoDaFase(fase: FaseEnvelope, acao: "cancelar" | "trocar"): st
       ? " Depois disso, envie o kit novo pelo Gerador de Kit."
       : "";
   switch (fase) {
+    /**
+     * O TEXTO ANTIGO ENGANOU EM PRODUÇÃO. Ele dizia "vai cancelar o envelope atual, que ainda NÃO
+     * foi enviado. Ninguém é notificado.", e lia como ação inofensiva: sem envelope, sem e-mail,
+     * sem consequência. A consequência real é a mais dura da tela, porque é aqui que o candidato
+     * SAI da fila de disparo. Quem não é notificado é o funcionário; o consultor perde o kit.
+     *
+     * A instrução do kit novo entra nos DOIS casos nesta fase (e não só no `fim` do trocar), porque
+     * em ambos o kit é descartado e voltar exige o Gerador de Kit.
+     */
     case "NAO_ENVIADO":
-      return (
-        "Esta ação vai cancelar o envelope atual, que ainda NÃO foi enviado. Ninguém é notificado." +
-        fim
-      );
+      return acao === "trocar"
+        ? "Este candidato ainda não tem envelope na Clicksign, então ninguém é notificado. O kit " +
+            "anexado é descartado e ele sai da fila de assinatura." +
+            fim
+        : "Este candidato ainda não tem envelope na Clicksign, então ninguém é notificado. Mas ele " +
+            "SAI da fila de assinatura e o kit anexado é descartado. Para voltar, será preciso " +
+            "gerar e enviar o kit de novo pelo Gerador de Kit.";
     case "ENVIADO":
       return (
         "Esta ação vai cancelar o envelope em andamento na Clicksign e notificar o funcionário." + fim

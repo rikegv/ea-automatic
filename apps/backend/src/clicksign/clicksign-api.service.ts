@@ -1,5 +1,11 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import { RitmoClicksign, ehRotaNotificacao } from "../domain/clicksign-rate";
+
+/** Espera `ms`. Isolado para o limitador continuar puro (ele decide quanto; quem chama é que dorme). */
+function dormir(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, Math.max(0, ms)));
+}
 
 /**
  * Cliente JSON:API v3 da Clicksign (INT-4 / F9, §A.5). Usa o `fetch` global do Node 20 (sem axios).
@@ -45,6 +51,23 @@ import { ConfigService } from "@nestjs/config";
  *       resp 200: data.attributes.status="running"
  *       (PATCH só aceita status writable "draft"|"running" — ver cancelarEnvelope.)
  *
+ *  5b) notificarEnvelope → POST /envelopes/{id}/notifications
+ *       body:  data.type="notifications", attributes:{}
+ *       resp 201: data.attributes.summary[] = [{ signer_id, notified }]
+ *
+ *       ATIVAR NÃO NOTIFICA. São dois passos distintos na v3, e a falta deste era a causa de
+ *       "o funcionário não recebeu o contrato": o envelope ficava `running`, válido e esperando,
+ *       sem ninguém ter sido chamado para assinar. Medido em 25/08/2026 contra a produção: o
+ *       envelope ativado há 34s tinha zero notificação, e esta chamada devolveu `notified: true`.
+ *
+ *       Notifica os signatários do GRUPO CORRENTE, não todos: com grupos sequenciais, o `summary`
+ *       traz só o funcionário (grupo 1); a empresa é chamada pela Clicksign quando chegar a vez.
+ *
+ *       BALDE PRÓPRIO, e apertado: `x-rate-limit: 1` numa janela de 60s, POR ENVELOPE (medido:
+ *       duas chamadas seguidas no MESMO envelope dão 429, em envelopes DIFERENTES dão 201). O teto
+ *       global de 50 req/10s continua valendo por cima. Ou seja: repetir o mesmo envelope dentro do
+ *       minuto é impossível, e reenvio em massa é limitado só pelo teto global.
+ *
  *  6) consultarStatus → GET /envelopes/{id}
  *       resp 200: data.attributes.status ∈ {draft, running, closed, canceled}
  *
@@ -79,6 +102,17 @@ export class ClicksignApiService {
   private avisouInerte = false;
   private static readonly TIMEOUT_MS = 60_000;
   private static readonly CT = "application/vnd.api+json";
+
+  /**
+   * RITMO ÚNICO PARA TODA A CLICKSIGN. Fica aqui, e não na fila, porque `req` é o funil por onde
+   * passam os TRÊS consumidores do balde: a tela de gestão, o disparo de envelope e o tick do cron.
+   * Um limitador só na fila cobriria apenas o disparo, e eram justamente os outros dois que geravam
+   * os 4.960 erros 429 medidos em 25/08/2026.
+   */
+  private readonly ritmo = new RitmoClicksign();
+
+  /** Corrente que serializa a decisão do limitador entre chamadas concorrentes. */
+  private fila: Promise<void> = Promise.resolve();
 
   constructor(config: ConfigService) {
     this.baseUrl = (
@@ -229,6 +263,27 @@ export class ClicksignApiService {
   }
 
   /**
+   * (5b) DISPARA A SOLICITAÇÃO DE ASSINATURA por e-mail. É o passo que faltava: ativar deixa o
+   * envelope pronto, esta chamada é que chama a pessoa para assinar.
+   *
+   * Devolve quantos signatários a Clicksign diz ter notificado, para o chamador poder afirmar o que
+   * de fato aconteceu em vez de supor. Inerte → undefined. LANÇA em erro HTTP, como as demais; quem
+   * chama decide se aquilo derruba o fluxo (no `criarEnvelope` não derruba, ver lá).
+   */
+  async notificarEnvelope(
+    envId: string,
+  ): Promise<{ notificados: number; total: number } | undefined> {
+    if (this.inerte()) return undefined;
+    const data = await this.req<{
+      data?: { attributes?: { summary?: { signer_id?: string; notified?: boolean }[] } };
+    }>("POST", `/envelopes/${enc(envId)}/notifications`, {
+      data: { type: "notifications", attributes: {} },
+    });
+    const resumo = data?.data?.attributes?.summary ?? [];
+    return { notificados: resumo.filter((s) => s.notified).length, total: resumo.length };
+  }
+
+  /**
    * (8) Cancela o envelope. Devolve se o provedor ACEITOU de fato.
    *
    * Por que o retorno importa: a tela informa ao consultor se o funcionário foi ou não notificado. Um
@@ -273,6 +328,53 @@ export class ClicksignApiService {
       );
       return false;
     }
+  }
+
+  /**
+   * (6b) Status + carimbo `modified` + SIGNATÁRIOS, numa requisição só.
+   *
+   * O `?include=signers` do JSON:API (testado contra a produção em 25/08/2026) traz o elenco de
+   * assinantes DENTRO da resposta que o tick já fazia. Custo zero: o tick deixa de precisar de um
+   * `GET /signers` separado para montar o painel de "quem assinou, quem falta".
+   *
+   * O `modified` é o DETECTOR DE MUDANÇA. Num envelope assinado ele coincide com o instante do
+   * último evento (medido: `modified` 14:38:14 = `document_closed` 14:38:14). Igual ao do ciclo
+   * anterior significa que ninguém assinou nada, e aí o `/events`, que é a chamada extra, é poupado.
+   *
+   * `include=events` NÃO é aceito pela API (HTTP 400) e o `include=requirements` não relaciona
+   * requisito com signatário, então quem assinou continua vindo do `/events`. Ambos verificados.
+   */
+  async consultarEnvelopeComSignatarios(envId: string): Promise<
+    | {
+        status: string;
+        modified: string | null;
+        signers: Array<{ id: string; nome: string; grupo: number | null }>;
+      }
+    | undefined
+  > {
+    if (this.inerte()) return undefined;
+    const data = await this.req<{
+      data?: { attributes?: { status?: string; modified?: string } };
+      included?: Array<{
+        id?: string;
+        type?: string;
+        attributes?: { name?: string; group?: number | null };
+      }>;
+    }>("GET", `/envelopes/${enc(envId)}?include=signers`);
+
+    const status = data?.data?.attributes?.status;
+    if (typeof status !== "string") return undefined;
+
+    const signers = (data?.included ?? [])
+      .filter((i) => i.type === "signers" && typeof i.id === "string" && i.id.length > 0)
+      .map((i) => ({
+        id: i.id as string,
+        nome: (i.attributes?.name ?? "").trim(),
+        grupo: typeof i.attributes?.group === "number" ? i.attributes.group : null,
+      }));
+
+    const modified = data?.data?.attributes?.modified;
+    return { status, modified: typeof modified === "string" ? modified : null, signers };
   }
 
   /** (6) Consulta o status do envelope. Inerte → undefined. */
@@ -370,10 +472,71 @@ export class ClicksignApiService {
     path: string,
     body?: unknown,
   ): Promise<T | undefined> {
+    // PRIMEIRA TENTATIVA + UMA retentativa, exclusiva do 429 e cronometrada pelo `x-rate-limit-reset`.
+    // Só uma: se a janela seguinte também estiver cheia, o problema é de volume e quem resolve é a
+    // fila (backoff do BullMQ), não um laço aqui segurando a conexão.
+    for (let tentativa = 0; ; tentativa++) {
+      await this.respeitarRitmo();
+      const res = await this.enviar(method, path, body);
+
+      const notificacao = ehRotaNotificacao(path);
+      this.ritmo.alimentar(
+        Date.now(),
+        { remaining: res.headers.get("x-rate-limit-remaining"), reset: res.headers.get("x-rate-limit-reset") },
+        notificacao,
+      );
+
+      if (res.status === 429 && tentativa === 0 && !notificacao) {
+        // O balde do `notifications` é 1 por minuto POR ENVELOPE: um 429 ali só libera na virada do
+        // minuto, tempo demais para segurar. Aquele caso sobe para o chamador decidir.
+        const espera = this.ritmo.esperaDo429(Date.now(), res.headers.get("x-rate-limit-reset"));
+        this.logger.warn(
+          `Clicksign 429 em ${method}: aguardando ${Math.round(espera / 1000)}s até a virada da janela.`,
+        );
+        await dormir(espera);
+        continue;
+      }
+
+      if (!res.ok) {
+        this.logger.error(`Clicksign respondeu HTTP ${res.status} em ${method} (rota de envelope)`);
+        throw new Error(`Clicksign HTTP ${res.status}`);
+      }
+      if (res.status === 204) return undefined;
+      return (await res.json()) as T;
+    }
+  }
+
+  /**
+   * Segura a requisição até caber na janela. Serializa a DECISÃO com uma corrente de promessas: sem
+   * isso, as chamadas concorrentes da tela (4 linhas × 2 GETs) perguntariam ao limitador ao mesmo
+   * tempo, todas ouviriam "pode ir" e o teto não valeria nada.
+   *
+   * O `notifications` NÃO é isento aqui: ele consome o balde global como qualquer requisição. Dele
+   * são ignorados só os HEADERS de resposta (ver `alimentar`), que falam do balde próprio.
+   */
+  private async respeitarRitmo(): Promise<void> {
+    const minhaVez = this.fila.then(async () => {
+      for (;;) {
+        const espera = this.ritmo.aguardar(Date.now());
+        if (espera <= 0) return;
+        await dormir(espera);
+      }
+    });
+    // A corrente nunca rejeita, senão uma falha travaria todas as chamadas seguintes.
+    this.fila = minhaVez.catch(() => undefined);
+    await minhaVez;
+  }
+
+  /** O fetch em si, com timeout. Separado para o `req` cuidar só de ritmo e retentativa. */
+  private async enviar(
+    method: "GET" | "POST" | "PATCH" | "DELETE",
+    path: string,
+    body?: unknown,
+  ): Promise<Response> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), ClicksignApiService.TIMEOUT_MS);
     try {
-      const res = await fetch(`${this.baseUrl}${path}`, {
+      return await fetch(`${this.baseUrl}${path}`, {
         method,
         headers: {
           Authorization: this.token, // token CRU, sem "Bearer"
@@ -383,12 +546,6 @@ export class ClicksignApiService {
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: controller.signal,
       });
-      if (!res.ok) {
-        this.logger.error(`Clicksign respondeu HTTP ${res.status} em ${method} (rota de envelope)`);
-        throw new Error(`Clicksign HTTP ${res.status}`);
-      }
-      if (res.status === 204) return undefined;
-      return (await res.json()) as T;
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
         this.logger.error("Chamada à Clicksign excedeu o tempo limite");

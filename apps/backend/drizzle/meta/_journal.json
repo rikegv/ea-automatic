@@ -530,50 +530,57 @@
     {
       "idx": 75,
       "version": "7",
-      "when": 1787339215811,
-      "tag": "0075_vagas_central_as",
+      "when": 1787261725289,
+      "tag": "0075_url_do_vt_no_drive",
       "breakpoints": true
     },
     {
       "idx": 76,
       "version": "7",
-      "when": 1787348934995,
-      "tag": "0076_puzzling_blizzard",
+      "when": 1787316124706,
+      "tag": "0076_vt_multiversao",
       "breakpoints": true
     },
     {
       "idx": 77,
       "version": "7",
-      "when": 1787360710935,
-      "tag": "0077_many_mikhail_rasputin",
+      "when": 1787316183358,
+      "tag": "0077_solicitacoes_vt",
       "breakpoints": true
     },
     {
       "idx": 78,
       "version": "7",
-      "when": 1787433700606,
-      "tag": "0078_vagas_listas_e_regioes",
+      "when": 1787317323299,
+      "tag": "0078_url_por_versao_do_vt",
       "breakpoints": true
     },
     {
       "idx": 79,
       "version": "7",
-      "when": 1787616766840,
-      "tag": "0079_vaga_rascunho",
+      "when": 1787321658926,
+      "tag": "0079_dispensar_sinal_vt_orfao",
       "breakpoints": true
     },
     {
       "idx": 80,
       "version": "7",
-      "when": 1787616841205,
-      "tag": "0080_vaga_rascunho_campos",
+      "when": 1787321659926,
+      "tag": "0080_carimbo_da_notificacao_clicksign",
       "breakpoints": true
     },
     {
       "idx": 81,
       "version": "7",
-      "when": 1787678246069,
-      "tag": "0081_vaga_posicoes_oficiais_e_banco",
+      "when": 1787321660926,
+      "tag": "0081_panorama_de_assinatura_no_ea",
+      "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1787321660927,
+      "tag": "0082_as_central_de_vagas",
       "breakpoints": true
     }
   ]

@@ -1,0 +1,15 @@
+-- LINK DO FORMULÁRIO DE VT NO DRIVE, gravado no arquivamento.
+--
+-- O PROBLEMA QUE ISTO FECHA: o formulário era arquivado no Drive e o EA não guardava onde. O único
+-- rastro era `vt_coleta.arquivado_em`, ou seja, "foi arquivado" sem dizer "aqui". Quem precisava do
+-- documento tinha de caçar pasta a pasta no Drive, e o diretor não achou. Com a URL gravada, a tela
+-- de Benefícios abre o formulário direto, no botão.
+--
+-- ADITIVA E NULÁVEL, de propósito. Nulo é ESTADO REAL, não falta de dado: arquivamento anterior a
+-- esta coluna, e também o caso em que o arquivo já estava no destino e não subiu agora (o ledger é
+-- único por (md5, origem), então a linha que existe já guardou a URL na primeira vez). Uma coluna
+-- NOT NULL exigiria inventar valor para as linhas antigas.
+--
+-- §A.6: persistir REFERÊNCIA do Drive é o padrão já adotado (`contrato_assinado_drive_url`). O que
+-- nunca entra em banco nem em log é URL externa de terceiro (Pandapé, download do Clicksign).
+ALTER TABLE "vt_coleta" ADD COLUMN "drive_url" text;

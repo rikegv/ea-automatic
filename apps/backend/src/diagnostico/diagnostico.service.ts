@@ -283,6 +283,10 @@ export class DiagnosticoService {
     const rows = (await this.db.execute(sql`
       SELECT md5, status FROM vt_coleta
       WHERE status IN ('SEM_ADMISSAO', 'MULTIPLO', 'NOME_FORA_PADRAO')
+        -- DISPENSADO NÃO CONTA. O botão "Resolver sinal" grava esta marca, e é ela que impede o
+        -- alerta de voltar no ciclo seguinte. Sem este filtro aqui, o painel pararia de listar o
+        -- item mas o BADGE continuaria acusando, que é a pior das duas telas: apita e não mostra.
+        AND sinal_dispensado_em IS NULL
     `)) as unknown as Array<{ md5: string | null; status: string }>;
     const rotulo: Record<string, string> = {
       SEM_ADMISSAO: "sem admissão viva para o CPF",

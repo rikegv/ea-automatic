@@ -67,6 +67,9 @@ function montar(
     ai as never,
     auditoria as never,
     scheduler as never,
+    // Serviço de SOLICITAÇÃO: duplo mínimo. Fechar o pedido é trilha, não a entrega, então o que
+    // importa aqui é que a gravação do formulário não dependa dele para acontecer.
+    { marcarRespondida: vi.fn().mockResolvedValue(undefined) } as never,
   );
   return { svc, ai, scheduler, auditoria };
 }

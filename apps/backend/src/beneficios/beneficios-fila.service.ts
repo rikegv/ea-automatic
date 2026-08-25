@@ -1,5 +1,5 @@
 import { BadRequestException, Inject, Injectable, NotFoundException } from "@nestjs/common";
-import { and, asc, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, sql, type SQL } from "drizzle-orm";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
 import {
@@ -9,9 +9,13 @@ import {
   candidatos,
   clientes,
   dadosVagaFolha,
+  formulariosVt,
+  formularioVtConducoes,
+  vtColeta,
 } from "../db/schema";
 import { SEQUENCIA_BENEFICIO, type StatusBeneficio } from "../db/schema/enums";
 import { recalcularSinalizadorDaAdmissao } from "../regua/sinalizador.repo";
+import { rotuloCartao } from "../domain/formulario-vt-coletado";
 
 /**
  * BENEFÍCIOS (§A.17 etapa 4): a fila de quem tem benefício a cadastrar.
@@ -44,6 +48,52 @@ import { recalcularSinalizadorDaAdmissao } from "../regua/sinalizador.repo";
  * §A.6: nome do candidato e código de cliente (é uma tela de gestão que precisa dizer DE QUEM é o
  * benefício), sem CPF, sem contato e sem documento.
  */
+/**
+ * O bloco de VT de UMA linha. Todos os campos são nuláveis porque as duas metades (os valores e o
+ * arquivo) chegam por caminhos independentes, e uma existe sem a outra.
+ */
+/**
+ * Data para o front, tolerante ao que vier.
+ *
+ * O driver devolve `Date` para `timestamptz`, mas nem toda origem devolve: um harness de teste, uma
+ * consulta crua ou um driver diferente entregam string, e um `.toISOString()` direto quebra a
+ * listagem INTEIRA da tela por causa de um campo de histórico. Uma data ausente vira string vazia e
+ * o front simplesmente não desenha aquela linha do histórico.
+ */
+function isoDe(v: unknown): string {
+  if (v instanceof Date) return v.toISOString();
+  if (typeof v === "string" || typeof v === "number") {
+    const d = new Date(v);
+    return Number.isNaN(d.getTime()) ? "" : d.toISOString();
+  }
+  return "";
+}
+
+interface VersaoVt {
+  id: string;
+  enviadoEm: string;
+  totalDia: string;
+  formularioUrl: string | null;
+}
+
+interface VtDaLinha {
+  optante: boolean | null;
+  totalIda: string | null;
+  totalVolta: string | null;
+  totalDia: string | null;
+  cartao: string | null;
+  formularioUrl: string | null;
+  /** Quantas declarações a pessoa já fez. 1 = nunca reenviou; 0 = só existe arquivo, sem valores. */
+  versoes: number;
+  /**
+   * As versões ANTERIORES à vigente, da mais nova para a mais velha, no máximo 5.
+   *
+   * A vigente NÃO entra aqui de propósito: ela já é a linha de cima do modal, e repeti-la faria a
+   * mesma declaração aparecer duas vezes na mesma tela, que é a leitura errada de "o que mudou".
+   */
+  anteriores: VersaoVt[];
+}
+
 @Injectable()
 export class BeneficiosFilaService {
   constructor(@Inject(DRIZZLE) private readonly db: Database) {}
@@ -337,6 +387,10 @@ export class BeneficiosFilaService {
           .orderBy(asc(beneficiosCatalogo.nome))
       : [];
 
+    // FORMULÁRIO DE VT em LOTE, junto com os pacotes: a tela lista dezenas de pessoas, e uma ida ao
+    // banco por linha é exatamente o que esta função já evita nos pacotes.
+    const vtPorAdmissao = await this.carregarVtEmLote(ids);
+
     const porAdmissao = new Map<string, { beneficioId: string; nome: string; valor: string | null }[]>();
     for (const p of pacotes) {
       const lista = porAdmissao.get(p.admissaoId) ?? [];
@@ -397,6 +451,13 @@ export class BeneficiosFilaService {
          * dado bom e o texto é o resto do que a planilha deixou; mostrar os dois faria a linha dizer
          * a mesma coisa duas vezes, de dois jeitos diferentes.
          */
+        /**
+         * O QUE O CANDIDATO PREENCHEU NO FORMULÁRIO DE VT, resumido, mais o link do arquivo.
+         *
+         * `null` quando não há nem formulário nem arquivo, e aí a célula volta a dizer a frase de
+         * sempre. A tela mostra o que tem e não finge o que falta.
+         */
+        vt: vtPorAdmissao.get(l.admissaoId) ?? null,
         textoImportado: pacote.length === 0 ? (l.beneficiosTexto ?? null) : null,
       };
     });
@@ -532,6 +593,114 @@ export class BeneficiosFilaService {
 
     return { admissaoId, itens: itens.length };
   }
+
+  /**
+   * FORMULÁRIO DE VT das admissões listadas, em três consultas, não em três POR LINHA.
+   *
+   * SÃO DUAS FONTES INDEPENDENTES, e a independência é o ponto:
+   *  - `formularios_vt` (+ conduções) traz os VALORES, e chega pelo JSON irmão do app externo;
+   *  - `vt_coleta.drive_url` traz o ARQUIVO, e chega pelo arquivamento no Drive.
+   *
+   * Existe um sem o outro NOS DOIS SENTIDOS: o formulário interno gera o PDF sob demanda e não
+   * arquiva nada, e todo o acervo anterior ao JSON irmão é só arquivo. Exigir os dois esconderia
+   * metade do que já existe, então a linha nasce com o que houver e a tela desenha o que recebeu.
+   *
+   * O LINK É O DA COLETA MAIS RECENTE que tenha URL: o candidato pode reenviar o formulário, e o
+   * que vale é o último que ele mandou.
+   */
+  private async carregarVtEmLote(ids: string[]): Promise<Map<string, VtDaLinha>> {
+    const saida = new Map<string, VtDaLinha>();
+    if (ids.length === 0) return saida;
+
+    const [versoes, arquivos] = await Promise.all([
+      this.db
+        .select({
+          id: formulariosVt.id,
+          admissaoId: formulariosVt.admissaoId,
+          optante: formulariosVt.optante,
+          totalIda: formulariosVt.totalIda,
+          totalVolta: formulariosVt.totalVolta,
+          totalDia: formulariosVt.totalDia,
+          driveUrl: formulariosVt.driveUrl,
+          criadoEm: formulariosVt.criadoEm,
+        })
+        .from(formulariosVt)
+        .where(inArray(formulariosVt.admissaoId, ids))
+        // DA MAIS NOVA PARA A MAIS VELHA, e a ordem é o contrato desta função: a primeira de cada
+        // admissão É a vigente, e as seguintes já saem na ordem em que o histórico as mostra.
+        .orderBy(desc(formulariosVt.criadoEm)),
+      this.db
+        .select({
+          admissaoId: vtColeta.admissaoId,
+          driveUrl: vtColeta.driveUrl,
+        })
+        .from(vtColeta)
+        .where(and(inArray(vtColeta.admissaoId, ids), isNotNull(vtColeta.driveUrl)))
+        .orderBy(asc(vtColeta.arquivadoEm)),
+    ]);
+
+    // Conduções SÓ das vigentes: o cartão exibido é o da declaração que vale hoje, e puxar as
+    // conduções de todas as versões carregaria o histórico inteiro de itinerário para mostrar um
+    // rótulo. As versões anteriores aparecem por data e total, que é o que a tela precisa delas.
+    const vigentePorAdmissao = new Map<string, (typeof versoes)[number]>();
+    for (const v of versoes) if (!vigentePorAdmissao.has(v.admissaoId)) vigentePorAdmissao.set(v.admissaoId, v);
+    const idsVigentes = [...vigentePorAdmissao.values()].map((v) => v.id);
+
+    const conducoes = idsVigentes.length
+      ? await this.db
+          .select({
+            formularioId: formularioVtConducoes.formularioId,
+            cartao: formularioVtConducoes.cartao,
+            cartaoOutro: formularioVtConducoes.cartaoOutro,
+          })
+          .from(formularioVtConducoes)
+          .where(inArray(formularioVtConducoes.formularioId, idsVigentes))
+      : [];
+
+    for (const [admissaoId, vigente] of vigentePorAdmissao) {
+      const todas = versoes.filter((v) => v.admissaoId === admissaoId);
+      saida.set(admissaoId, {
+        optante: vigente.optante,
+        totalIda: vigente.totalIda,
+        totalVolta: vigente.totalVolta,
+        totalDia: vigente.totalDia,
+        cartao: rotuloCartao(conducoes.filter((c) => c.formularioId === vigente.id) as never),
+        formularioUrl: vigente.driveUrl,
+        versoes: todas.length,
+        // As 5 ANTERIORES à vigente (por isso o slice começa em 1).
+        anteriores: todas.slice(1, 6).map((v) => ({
+          id: v.id,
+          enviadoEm: isoDe(v.criadoEm),
+          totalDia: v.totalDia,
+          formularioUrl: v.driveUrl,
+        })),
+      });
+    }
+
+    // FALLBACK do link, e só do link. Vale para quem tem ARQUIVO e não tem versão com URL: todo
+    // formulário arquivado antes da coluna por versão existir, e o acervo que chegou por outro
+    // caminho. A ordenação crescente faz a coleta mais recente sobrescrever as anteriores.
+    for (const a of arquivos) {
+      if (!a.admissaoId || !a.driveUrl) continue;
+      const atual = saida.get(a.admissaoId);
+      if (atual) {
+        if (!atual.formularioUrl) atual.formularioUrl = a.driveUrl;
+      } else {
+        saida.set(a.admissaoId, {
+          optante: null,
+          totalIda: null,
+          totalVolta: null,
+          totalDia: null,
+          cartao: null,
+          formularioUrl: a.driveUrl,
+          versoes: 0,
+          anteriores: [],
+        });
+      }
+    }
+    return saida;
+  }
+
 }
 
 export interface FiltrosBeneficios {

@@ -63,6 +63,15 @@ export interface GerarKitPayload {
  * TRANSITÓRIO só para a baixa: contém NOME+CPF, então nunca é persistido nem logado (§A.6). `cpf` é
  * null quando o nome está fora do padrão; `md5` é o digest hex do objeto.
  */
+/** Um objeto do bucket com o DONO identificado. Só para o diagnóstico do órfão; nunca persistido. */
+export interface ItemOrfaoVt {
+  id: string;
+  md5: string | null;
+  cpf: string | null;
+  nome: string | null;
+  criadoEm: string | null;
+}
+
 export interface ItemColetaVt {
   id: string;
   md5: string | null;
@@ -405,6 +414,28 @@ export class AiClientService {
    */
   listarColetaVt(bucket: string): Promise<{ arquivos: ItemColetaVt[] }> {
     return this.post<{ arquivos: ItemColetaVt[] }>("/coleta-vt/listar", { bucket });
+  }
+
+  /**
+   * Campos estruturados do formulário, do JSON IRMÃO do PDF no bucket (§A.17).
+   *
+   * Recebe o `id` do PDF; a troca de extensão acontece no ai-service, porque o nome do objeto
+   * carrega o nome do candidato e não é montado aqui (§A.6). `encontrado: false` é o caso normal de
+   * todo formulário anterior a esta frente, e NUNCA impede o arquivamento do PDF.
+   */
+  dadosColetaVt(bucket: string, id: string): Promise<{ encontrado: boolean; dados: unknown }> {
+    return this.post<{ encontrado: boolean; dados: unknown }>("/coleta-vt/dados", { bucket, id });
+  }
+
+  /**
+   * Dono e hora de chegada de cada objeto do bucket, para o diagnóstico do VT ÓRFÃO.
+   *
+   * Diferente de `listarColetaVt`, que devolve só o CPF: quando o formulário NÃO casa, o CPF sozinho
+   * não resolve, porque ele é justamente o que não encontra ninguém. §A.6: leitura TRANSIENTE, o
+   * retorno não é persistido nem logado em lugar nenhum.
+   */
+  orfaosColetaVt(bucket: string): Promise<{ arquivos: ItemOrfaoVt[] }> {
+    return this.post<{ arquivos: ItemOrfaoVt[] }>("/coleta-vt/orfaos", { bucket });
   }
 
   /** Baixa UM objeto do bucket coletivo para a staging e devolve o caminho. O binário não trafega aqui. */

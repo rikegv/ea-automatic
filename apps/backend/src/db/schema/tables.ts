@@ -4,6 +4,7 @@ import {
   date,
   index,
   integer,
+  jsonb,
   numeric,
   pgTable,
   primaryKey,
@@ -698,6 +699,41 @@ export const admissoes = pgTable(
     // o envelope passa do prazo sem fechar nem ser cancelado. Nulo em quem nunca teve envelope (e nas
     // 1.486 admissões ASSINADO vindas da carga, §A.16 regra 1, que nunca passaram pela Clicksign).
     clicksignEnviadoEm: timestamp("clicksign_enviado_em", { withTimezone: true }),
+    /**
+     * Instante em que a SOLICITAÇÃO DE ASSINATURA saiu (passo 5 da v3, `POST .../notifications`).
+     *
+     * É DIFERENTE de `clicksignEnviadoEm`, e a distinção é justamente o bug que originou a coluna:
+     * ativar o envelope não chama ninguém. Um contrato pode estar ATIVO (enviadoEm preenchido) e o
+     * funcionário nunca ter sido notificado (este campo nulo), que foi o estado de 106 contratos em
+     * 24/08/2026. Com os dois carimbos, "ativo e não notificado" vira uma consulta em vez de uma
+     * leitura de log.
+     *
+     * NULO NÃO É ERRO por si só: é nulo em quem nunca teve envelope, nas admissões da carga (§A.16
+     * regra 1, que nunca passaram pela Clicksign) e em quem foi notificado ANTES desta coluna
+     * existir. O que se cobra é a interseção com `AGUARDANDO_ASSINATURA` + envelope presente.
+     */
+    clicksignNotificadoEm: timestamp("clicksign_notificado_em", { withTimezone: true }),
+    /**
+     * PANORAMA DE ASSINATURA (quem assinou, quem falta), alimentado pelo tick e LIDO pela tela.
+     *
+     * Antes a tela montava isso consultando a Clicksign ao vivo, 2 requisições por linha, 220 por
+     * abertura. Guardar o painel troca "perguntar de novo o que já se sabia" por uma leitura de
+     * banco, e o painel completo, que é o que o diretor usa, continua inteiro.
+     *
+     * §A.6: guarda SÓ o `AssinanteStatus` do domínio (nome, assinou, quando, ordem). O `/events` da
+     * Clicksign devolve e-mail, CPF, IP e geolocalização, e nada disso é persistido.
+     *
+     * É CACHE: nulo é "ainda não varrido", não "sem assinantes", e o próximo ciclo do tick
+     * reconstrói tudo. Por isso a tela mostra o instante da atualização em vez de fingir tempo real.
+     */
+    clicksignAssinantes: jsonb("clicksign_assinantes"),
+    clicksignAssinantesEm: timestamp("clicksign_assinantes_em", { withTimezone: true }),
+    /**
+     * `modified` do envelope como a Clicksign devolve. Detector de mudança: igual ao do ciclo
+     * anterior significa que ninguém assinou nada, e o `/events` pode ser poupado. Texto, para
+     * comparar exatamente o que veio.
+     */
+    clicksignEnvelopeModified: varchar("clicksign_envelope_modified", { length: 40 }),
     // KIT PRONTO PARA ASSINATURA (fila de disparo em lote). O consultor clica "Enviar para
     // assinatura" no Gerador de Kit e o kit daquele funcionário é materializado na staging DA
     // ADMISSÃO; aqui fica a REFERÊNCIA (caminho no disco efêmero) e o instante do envio.
@@ -1187,7 +1223,23 @@ export const vtColeta = pgTable(
     // O FORMULARIO_VT estava na régua da admissão casada? (true = deu baixa; false = só arquivou;
     // null = não casou). Registro do porquê a baixa aconteceu ou não.
     vtNaRegua: boolean("vt_na_regua"),
+    // Link do ARQUIVO no Drive, gravado no arquivamento. É o que faz a tela de Benefícios abrir o
+    // formulário direto, em vez de mandar alguém procurar no Drive (o diretor não achou a pasta).
+    // §A.6 permite persistir referência do Drive, como já se faz com `contrato_assinado_drive_url`;
+    // o que nunca entra em banco é URL externa de terceiro (Pandapé, download do Clicksign).
+    // Nulo é estado real: arquivamento antigo, ou arquivo que já estava no destino e não subiu agora.
+    driveUrl: text("drive_url"),
     arquivadoEm: timestamp("arquivado_em", { withTimezone: true }),
+    // SINAL DISPENSADO: o diretor viu o órfão e decidiu não tratar agora. O alerta some e NÃO volta.
+    //
+    // DISPENSAR NÃO É TRATAR, e a diferença importa: o arquivo continua no bucket, o formulário
+    // continua sem dono, e o registro continua aqui. O que muda é só a visibilidade do alerta. Sem
+    // esta marca o sinal reapareceria a cada ciclo e o diretor não teria como limpar a tela do que
+    // ele já decidiu não fazer, que é o que transforma um painel de alerta em ruído ignorado.
+    sinalDispensadoEm: timestamp("sinal_dispensado_em", { withTimezone: true }),
+    sinalDispensadoPorId: uuid("sinal_dispensado_por_id").references(() => usuarios.id, {
+      onDelete: "set null",
+    }),
     criadoEm,
     atualizadoEm,
   },
@@ -1438,18 +1490,28 @@ export const clienteVinculos = pgTable(
 );
 
 // ── Formulário de VT (self-service do candidato, §A.17 etapa 2) ─────────────
-// O candidato preenche o próprio vale-transporte pelo celular. UM formulário por admissão
-// (unique em `admissao_id`): reenvio sobrescreve o anterior, o kit compõe um documento só.
+// O candidato preenche o próprio vale-transporte pelo celular.
+//
+// VÁRIOS FORMULÁRIOS POR ADMISSÃO, um por ENVIO. Antes era um só (unique em `admissao_id`) e o
+// reenvio SOBRESCREVIA o anterior. A vida real desmentiu a premissa: o funcionário muda de
+// endereço, muda de linha, a passagem sobe, e cada uma dessas é uma DECLARAÇÃO NOVA dele, não uma
+// correção da anterior. Apagar a antiga apagava a prova do que ele havia declarado quando assinou.
+//
+// O VIGENTE É O MAIS RECENTE (`criado_em` desc), e os anteriores ficam consultáveis, cada um com o
+// seu PDF no Drive (`vt_coleta.drive_url`, que já era uma linha por arquivo). Quem lê "o formulário
+// da pessoa" tem de pedir o mais recente EXPLICITAMENTE: sem `order by`, o Postgres devolve
+// qualquer um, e o bug apareceria como um valor antigo ressurgindo sem explicação.
 //
 // §A.6: o endereço residencial é PII, gravado por necessidade real (o documento oficial de VT
 // exige o endereço do beneficiário) e por minimização não guardamos nada além do necessário.
 // A identificação (CPF + data de nascimento) é CREDENCIAL de acesso: nunca é logada e não é
 // duplicada aqui: o vínculo é pela admissão, e o CPF já vive em `candidatos`.
-export const formulariosVt = pgTable("formularios_vt", {
+export const formulariosVt = pgTable(
+  "formularios_vt",
+  {
   id: uuid("id").defaultRandom().primaryKey(),
   admissaoId: uuid("admissao_id")
     .notNull()
-    .unique()
     .references(() => admissoes.id, { onDelete: "cascade" }),
   // OPTANTE preenche itinerários; NÃO-OPTANTE gera o documento de recusa (nenhuma condução).
   optante: boolean("optante").notNull(),
@@ -1468,9 +1530,72 @@ export const formulariosVt = pgTable("formularios_vt", {
   // Aceite dos 3 avisos ("Estou ciente das informações passadas"): trilha de responsabilização,
   // no mesmo espírito do aceite de dupla correção (§A.6).
   cienteEm: timestamp("ciente_em", { withTimezone: true }).notNull(),
+  // PDF DESTA VERSÃO no Drive. Cada envio gera o seu arquivo, e o histórico precisa abrir o
+  // documento CERTO de cada linha, não o mais recente de todos.
+  //
+  // POR QUE A URL MORA AQUI e não é deduzida de `vt_coleta`: as duas tabelas só se relacionam por
+  // admissão e horário, e casar versão com arquivo por proximidade de timestamp funcionaria até o
+  // dia em que dois envios caíssem no mesmo ciclo. Guardar o link na própria versão torna a ligação
+  // um fato, não uma inferência.
+  //
+  // NULO É ESTADO REAL: o formulário interno (`/vt`) gera o PDF sob demanda e não arquiva nada, e
+  // todas as versões anteriores a esta coluna nasceram sem link.
+  driveUrl: text("drive_url"),
   criadoEm,
   atualizadoEm,
-});
+  },
+  (t) => ({
+    // Busca do VIGENTE e do histórico da pessoa: sempre por admissão, sempre do mais novo para o
+    // mais velho. Sem este índice, cada abertura da tela de Benefícios varreria a tabela inteira
+    // por linha listada.
+    idxAdmissaoRecente: index("idx_formularios_vt_admissao_recente").on(t.admissaoId, t.criadoEm),
+  }),
+);
+
+// ── Solicitação de novo VT (o time pede, o funcionário responde) ────────────
+// O time dispara um link para o funcionário preencher (ou refazer) o VT, e ESTA TABELA É O RASTRO
+// de quem pediu. Sem ela não há como responder "quem mandou este link?", porque o gerador de link
+// não gravava nada: o controller recebia o usuário e o descartava.
+//
+// POR QUE UMA TABELA E NÃO UMA COLUNA NA ADMISSÃO: a mesma pessoa é solicitada mais de uma vez ao
+// longo do tempo (mudou de endereço em março, mudou de linha em agosto), e uma coluna guardaria só
+// a última, apagando justamente a sequência que explica por que existem N versões do formulário.
+//
+// RESPONDIDA é derivada de um FATO, não de um clique: aponta para a VERSÃO do formulário que chegou
+// depois do pedido. Um booleano "respondida" dependeria de alguém lembrar de marcar, e a primeira
+// vez que ninguém marcasse a fila mentiria para sempre.
+//
+// §A.6: nada de CPF, nome ou o token do link aqui. O vínculo é pela admissão, e o link não é
+// persistido nem logado (ele é credencial de acesso do candidato).
+export const solicitacoesVt = pgTable(
+  "solicitacoes_vt",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    admissaoId: uuid("admissao_id")
+      .notNull()
+      .references(() => admissoes.id, { onDelete: "cascade" }),
+    // Quem pediu. ON DELETE SET NULL: desligar o usuário não apaga o rastro do pedido dele.
+    solicitadoPorId: uuid("solicitado_por_id").references(() => usuarios.id, {
+      onDelete: "set null",
+    }),
+    solicitadoEm: timestamp("solicitado_em", { withTimezone: true }).notNull().defaultNow(),
+    // Validade do link gerado, copiada do token. Serve para a tela dizer "expirou, peça de novo"
+    // sem precisar abrir o token (que não é guardado).
+    expiraEm: timestamp("expira_em", { withTimezone: true }),
+    // A VERSÃO do formulário que respondeu a este pedido. Nulo = ainda não respondida.
+    respondidaPorFormularioId: uuid("respondida_por_formulario_id").references(
+      () => formulariosVt.id,
+      { onDelete: "set null" },
+    ),
+    respondidaEm: timestamp("respondida_em", { withTimezone: true }),
+    criadoEm,
+    atualizadoEm,
+  },
+  (t) => ({
+    // "Os pedidos desta pessoa, do mais novo para o mais velho", que é como a tela pergunta.
+    idxAdmissao: index("idx_solicitacoes_vt_admissao").on(t.admissaoId, t.solicitadoEm),
+  }),
+);
 
 // Uma linha por condução declarada (ex.: ônibus + metrô na ida = 2 linhas com sentido IDA).
 // `valor` é SNAPSHOT: a tarifa vem sugerida de `tarifas_transporte`, mas o candidato pode ajustar,

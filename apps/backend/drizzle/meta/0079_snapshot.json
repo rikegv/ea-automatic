@@ -1,6 +1,6 @@
 {
-  "id": "2d633b2b-ff5d-4393-9043-0e63358676c2",
-  "prevId": "3171b456-d073-4f32-b3eb-3728bb284394",
+  "id": "30ec61ad-fb2b-4870-a115-f742fd6b6d4d",
+  "prevId": "4397aaa5-8907-4fa0-9d5a-57db36634ebf",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -3134,6 +3134,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "drive_url": {
+          "name": "drive_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "criado_em": {
           "name": "criado_em",
           "type": "timestamp with time zone",
@@ -3149,7 +3155,29 @@
           "default": "now()"
         }
       },
-      "indexes": {},
+      "indexes": {
+        "idx_formularios_vt_admissao_recente": {
+          "name": "idx_formularios_vt_admissao_recente",
+          "columns": [
+            {
+              "expression": "admissao_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "criado_em",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
       "foreignKeys": {
         "formularios_vt_admissao_id_admissoes_id_fk": {
           "name": "formularios_vt_admissao_id_admissoes_id_fk",
@@ -3166,15 +3194,7 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "formularios_vt_admissao_id_unique": {
-          "name": "formularios_vt_admissao_id_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "admissao_id"
-          ]
-        }
-      },
+      "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -5215,6 +5235,139 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.solicitacoes_vt": {
+      "name": "solicitacoes_vt",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "admissao_id": {
+          "name": "admissao_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "solicitado_por_id": {
+          "name": "solicitado_por_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "solicitado_em": {
+          "name": "solicitado_em",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "expira_em": {
+          "name": "expira_em",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "respondida_por_formulario_id": {
+          "name": "respondida_por_formulario_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "respondida_em": {
+          "name": "respondida_em",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "criado_em": {
+          "name": "criado_em",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "atualizado_em": {
+          "name": "atualizado_em",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "idx_solicitacoes_vt_admissao": {
+          "name": "idx_solicitacoes_vt_admissao",
+          "columns": [
+            {
+              "expression": "admissao_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "solicitado_em",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "solicitacoes_vt_admissao_id_admissoes_id_fk": {
+          "name": "solicitacoes_vt_admissao_id_admissoes_id_fk",
+          "tableFrom": "solicitacoes_vt",
+          "tableTo": "admissoes",
+          "columnsFrom": [
+            "admissao_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "solicitacoes_vt_solicitado_por_id_usuarios_id_fk": {
+          "name": "solicitacoes_vt_solicitado_por_id_usuarios_id_fk",
+          "tableFrom": "solicitacoes_vt",
+          "tableTo": "usuarios",
+          "columnsFrom": [
+            "solicitado_por_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "solicitacoes_vt_respondida_por_formulario_id_formularios_vt_id_fk": {
+          "name": "solicitacoes_vt_respondida_por_formulario_id_formularios_vt_id_fk",
+          "tableFrom": "solicitacoes_vt",
+          "tableTo": "formularios_vt",
+          "columnsFrom": [
+            "respondida_por_formulario_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.tarifas_transporte": {
       "name": "tarifas_transporte",
       "schema": "",
@@ -5502,13 +5655,6 @@
           "notNull": true,
           "default": false
         },
-        "papel_as": {
-          "name": "papel_as",
-          "type": "papel_as",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": false
-        },
         "criado_em": {
           "name": "criado_em",
           "type": "timestamp with time zone",
@@ -5538,641 +5684,6 @@
       },
       "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.vaga_beneficio": {
-      "name": "vaga_beneficio",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "vaga_id": {
-          "name": "vaga_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "beneficio_id": {
-          "name": "beneficio_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "valor": {
-          "name": "valor",
-          "type": "numeric(12, 2)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "criado_em": {
-          "name": "criado_em",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "idx_vaga_beneficio_vaga": {
-          "name": "idx_vaga_beneficio_vaga",
-          "columns": [
-            {
-              "expression": "vaga_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "vaga_beneficio_vaga_id_vagas_id_fk": {
-          "name": "vaga_beneficio_vaga_id_vagas_id_fk",
-          "tableFrom": "vaga_beneficio",
-          "tableTo": "vagas",
-          "columnsFrom": [
-            "vaga_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "vaga_beneficio_beneficio_id_beneficios_catalogo_id_fk": {
-          "name": "vaga_beneficio_beneficio_id_beneficios_catalogo_id_fk",
-          "tableFrom": "vaga_beneficio",
-          "tableTo": "beneficios_catalogo",
-          "columnsFrom": [
-            "beneficio_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "uq_vaga_beneficio": {
-          "name": "uq_vaga_beneficio",
-          "nullsNotDistinct": false,
-          "columns": [
-            "vaga_id",
-            "beneficio_id"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.vagas": {
-      "name": "vagas",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "codigo": {
-          "name": "codigo",
-          "type": "varchar(40)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "cargo_id": {
-          "name": "cargo_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "nome_divulgacao": {
-          "name": "nome_divulgacao",
-          "type": "varchar(200)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "cod_cliente": {
-          "name": "cod_cliente",
-          "type": "varchar(40)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "natureza": {
-          "name": "natureza",
-          "type": "vaga_natureza",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "vinculo": {
-          "name": "vinculo",
-          "type": "vaga_vinculo",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "status": {
-          "name": "status",
-          "type": "vaga_status",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'ABERTA'"
-        },
-        "sazonalidade": {
-          "name": "sazonalidade",
-          "type": "vaga_sazonalidade",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'OPERACAO_PADRAO'"
-        },
-        "posicoes": {
-          "name": "posicoes",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 1
-        },
-        "escolaridade": {
-          "name": "escolaridade",
-          "type": "vaga_escolaridade",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "salario_abertura": {
-          "name": "salario_abertura",
-          "type": "numeric(12, 2)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "salario_fechamento": {
-          "name": "salario_fechamento",
-          "type": "numeric(12, 2)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "data_abertura": {
-          "name": "data_abertura",
-          "type": "date",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "data_limite": {
-          "name": "data_limite",
-          "type": "date",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "aberto_por_id": {
-          "name": "aberto_por_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "centro_custo": {
-          "name": "centro_custo",
-          "type": "varchar(80)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "solicitante_nome": {
-          "name": "solicitante_nome",
-          "type": "varchar(200)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "solicitante_telefone": {
-          "name": "solicitante_telefone",
-          "type": "varchar(40)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "solicitante_email": {
-          "name": "solicitante_email",
-          "type": "varchar(180)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "data_solicitacao": {
-          "name": "data_solicitacao",
-          "type": "date",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "data_alinhamento": {
-          "name": "data_alinhamento",
-          "type": "date",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "envio_shortlist": {
-          "name": "envio_shortlist",
-          "type": "date",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "consultor_id": {
-          "name": "consultor_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "recruiter_id": {
-          "name": "recruiter_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "tempo_contrato": {
-          "name": "tempo_contrato",
-          "type": "varchar(40)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "motivo": {
-          "name": "motivo",
-          "type": "varchar(200)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "justificativa_motivo": {
-          "name": "justificativa_motivo",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "tipo_substituicao": {
-          "name": "tipo_substituicao",
-          "type": "vaga_tipo_substituicao",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "substituido_nome": {
-          "name": "substituido_nome",
-          "type": "varchar(200)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "substituido_cpf": {
-          "name": "substituido_cpf",
-          "type": "varchar(11)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "local_trabalho": {
-          "name": "local_trabalho",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "regiao_estado": {
-          "name": "regiao_estado",
-          "type": "varchar(2)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "regioes": {
-          "name": "regioes",
-          "type": "text[]",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "regioes_outras": {
-          "name": "regioes_outras",
-          "type": "varchar(200)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "horario_escala": {
-          "name": "horario_escala",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "modelo_trabalho": {
-          "name": "modelo_trabalho",
-          "type": "vaga_modelo_trabalho",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "detalhe_hibrido": {
-          "name": "detalhe_hibrido",
-          "type": "varchar(200)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "confidencial": {
-          "name": "confidencial",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "divulgar_empresa": {
-          "name": "divulgar_empresa",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": true
-        },
-        "faixa_etaria": {
-          "name": "faixa_etaria",
-          "type": "varchar(80)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "genero": {
-          "name": "genero",
-          "type": "vaga_genero",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'INDIFERENTE'"
-        },
-        "idiomas": {
-          "name": "idiomas",
-          "type": "text[]",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "idiomas_outros": {
-          "name": "idiomas_outros",
-          "type": "varchar(160)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "cursos_conhecimentos": {
-          "name": "cursos_conhecimentos",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "testes": {
-          "name": "testes",
-          "type": "text[]",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "testes_outro": {
-          "name": "testes_outro",
-          "type": "varchar(160)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "experiencia": {
-          "name": "experiencia",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "atribuicoes": {
-          "name": "atribuicoes",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "perfil_comportamental": {
-          "name": "perfil_comportamental",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "ambiente": {
-          "name": "ambiente",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "etapas_ps": {
-          "name": "etapas_ps",
-          "type": "text[]",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "etapas_ps_outra": {
-          "name": "etapas_ps_outra",
-          "type": "varchar(160)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "observacoes": {
-          "name": "observacoes",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "data_fechamento": {
-          "name": "data_fechamento",
-          "type": "date",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "vagas_fechadas": {
-          "name": "vagas_fechadas",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "data_prevista_inicio": {
-          "name": "data_prevista_inicio",
-          "type": "date",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "enviar_para_admissao": {
-          "name": "enviar_para_admissao",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "criado_em": {
-          "name": "criado_em",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "atualizado_em": {
-          "name": "atualizado_em",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "idx_vagas_codigo": {
-          "name": "idx_vagas_codigo",
-          "columns": [
-            {
-              "expression": "codigo",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "idx_vagas_cod_cliente": {
-          "name": "idx_vagas_cod_cliente",
-          "columns": [
-            {
-              "expression": "cod_cliente",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "idx_vagas_cargo": {
-          "name": "idx_vagas_cargo",
-          "columns": [
-            {
-              "expression": "cargo_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "idx_vagas_status": {
-          "name": "idx_vagas_status",
-          "columns": [
-            {
-              "expression": "status",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "idx_vagas_data_abertura": {
-          "name": "idx_vagas_data_abertura",
-          "columns": [
-            {
-              "expression": "data_abertura",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "vagas_cargo_id_cargos_id_fk": {
-          "name": "vagas_cargo_id_cargos_id_fk",
-          "tableFrom": "vagas",
-          "tableTo": "cargos",
-          "columnsFrom": [
-            "cargo_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "vagas_cod_cliente_clientes_cod_cliente_fk": {
-          "name": "vagas_cod_cliente_clientes_cod_cliente_fk",
-          "tableFrom": "vagas",
-          "tableTo": "clientes",
-          "columnsFrom": [
-            "cod_cliente"
-          ],
-          "columnsTo": [
-            "cod_cliente"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "vagas_aberto_por_id_usuarios_id_fk": {
-          "name": "vagas_aberto_por_id_usuarios_id_fk",
-          "tableFrom": "vagas",
-          "tableTo": "usuarios",
-          "columnsFrom": [
-            "aberto_por_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        },
-        "vagas_consultor_id_usuarios_id_fk": {
-          "name": "vagas_consultor_id_usuarios_id_fk",
-          "tableFrom": "vagas",
-          "tableTo": "usuarios",
-          "columnsFrom": [
-            "consultor_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        },
-        "vagas_recruiter_id_usuarios_id_fk": {
-          "name": "vagas_recruiter_id_usuarios_id_fk",
-          "tableFrom": "vagas",
-          "tableTo": "usuarios",
-          "columnsFrom": [
-            "recruiter_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "ck_vagas_posicoes": {
-          "name": "ck_vagas_posicoes",
-          "value": "\"vagas\".\"posicoes\" > 0"
-        }
-      },
       "isRLSEnabled": false
     },
     "public.vt_coleta": {
@@ -6216,9 +5727,27 @@
           "primaryKey": false,
           "notNull": false
         },
+        "drive_url": {
+          "name": "drive_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "arquivado_em": {
           "name": "arquivado_em",
           "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "sinal_dispensado_em": {
+          "name": "sinal_dispensado_em",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "sinal_dispensado_por_id": {
+          "name": "sinal_dispensado_por_id",
+          "type": "uuid",
           "primaryKey": false,
           "notNull": false
         },
@@ -6245,6 +5774,19 @@
           "tableTo": "admissoes",
           "columnsFrom": [
             "admissao_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "vt_coleta_sinal_dispensado_por_id_usuarios_id_fk": {
+          "name": "vt_coleta_sinal_dispensado_por_id_usuarios_id_fk",
+          "tableFrom": "vt_coleta",
+          "tableTo": "usuarios",
+          "columnsFrom": [
+            "sinal_dispensado_por_id"
           ],
           "columnsTo": [
             "id"
@@ -6478,14 +6020,6 @@
         "CORRECAO"
       ]
     },
-    "public.papel_as": {
-      "name": "papel_as",
-      "schema": "public",
-      "values": [
-        "CONSULTOR",
-        "RECRUITER"
-      ]
-    },
     "public.papel": {
       "name": "papel",
       "schema": "public",
@@ -6560,94 +6094,6 @@
         "INTERNO",
         "FOPAG",
         "APRENDIZ"
-      ]
-    },
-    "public.vaga_escolaridade": {
-      "name": "vaga_escolaridade",
-      "schema": "public",
-      "values": [
-        "FUNDAMENTAL_INCOMPLETO",
-        "FUNDAMENTAL_COMPLETO",
-        "MEDIO_INCOMPLETO",
-        "MEDIO_COMPLETO",
-        "TECNICO",
-        "SUPERIOR_INCOMPLETO",
-        "SUPERIOR_COMPLETO",
-        "POS_GRADUACAO"
-      ]
-    },
-    "public.vaga_genero": {
-      "name": "vaga_genero",
-      "schema": "public",
-      "values": [
-        "INDIFERENTE",
-        "MASCULINO",
-        "FEMININO"
-      ]
-    },
-    "public.vaga_modelo_trabalho": {
-      "name": "vaga_modelo_trabalho",
-      "schema": "public",
-      "values": [
-        "PRESENCIAL",
-        "HOME_OFFICE",
-        "HIBRIDO"
-      ]
-    },
-    "public.vaga_natureza": {
-      "name": "vaga_natureza",
-      "schema": "public",
-      "values": [
-        "EFETIVA",
-        "TEMPORARIA",
-        "REPOSICAO_EFETIVA",
-        "TERCEIRA",
-        "ESTAGIO",
-        "VAGA_BANCO"
-      ]
-    },
-    "public.vaga_sazonalidade": {
-      "name": "vaga_sazonalidade",
-      "schema": "public",
-      "values": [
-        "OPERACAO_PADRAO",
-        "SAZONAL"
-      ]
-    },
-    "public.vaga_status": {
-      "name": "vaga_status",
-      "schema": "public",
-      "values": [
-        "RASCUNHO",
-        "ABERTA",
-        "ENTREGUE",
-        "FECHADA",
-        "CANCELADA",
-        "VAGA_BANCO"
-      ]
-    },
-    "public.vaga_tipo_substituicao": {
-      "name": "vaga_tipo_substituicao",
-      "schema": "public",
-      "values": [
-        "FERIAS",
-        "LICENCA_MATERNIDADE",
-        "AUXILIO_DOENCA",
-        "SUBSTITUICAO"
-      ]
-    },
-    "public.vaga_vinculo": {
-      "name": "vaga_vinculo",
-      "schema": "public",
-      "values": [
-        "TEMPORARIO",
-        "TERCEIRIZADO",
-        "ESTAGIO",
-        "INTERNO",
-        "FOPAG",
-        "JOVEM_APRENDIZ",
-        "EFETIVO",
-        "PJ"
       ]
     }
   },

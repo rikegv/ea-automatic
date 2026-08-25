@@ -37,10 +37,18 @@ describe("faseEnvelope: detecção a partir do status e do kit", () => {
 });
 
 describe("avisoDaFase: o texto acompanha a consequência", () => {
-  it("NAO_ENVIADO deixa explícito que ninguém é notificado", () => {
+  /**
+   * O texto desta fase mudou depois de enganar em produção. O antigo ("ainda NÃO foi enviado.
+   * Ninguém é notificado.") era verdadeiro e mesmo assim induzia ao erro, porque só falava do que
+   * NÃO acontece. O teste agora exige as duas metades: ninguém é notificado (segue verdade) E o
+   * candidato sai da fila, que é a consequência que o consultor precisa enxergar antes de clicar.
+   */
+  it("NAO_ENVIADO diz que ninguém é notificado E que o candidato SAI da fila", () => {
     const a = avisoDaFase("NAO_ENVIADO", "cancelar");
-    expect(a).toMatch(/ainda NÃO foi enviado/);
-    expect(a).toMatch(/Ninguém é notificado/);
+    expect(a).toMatch(/ninguém é notificado/i);
+    expect(a).toMatch(/SAI da fila de assinatura/);
+    expect(a).toMatch(/kit anexado é descartado/);
+    expect(a).toMatch(/Gerador de Kit/);
   });
 
   it("ENVIADO avisa que o funcionário é notificado", () => {

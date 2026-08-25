@@ -1,0 +1,15 @@
+-- CADA VERSÃO DO FORMULÁRIO CARREGA O SEU PRÓPRIO PDF.
+--
+-- O PROBLEMA QUE ISTO FECHA: com o histórico (migração 0076), o modal passa a listar as últimas
+-- versões, e cada linha precisa abrir o documento DAQUELA versão, não o mais recente de todos.
+-- `formularios_vt` e `vt_coleta` só se relacionam por admissão e horário, então casar versão com
+-- arquivo por proximidade de timestamp funcionaria até o dia em que dois envios caíssem no mesmo
+-- ciclo da varredura, e aí o histórico passaria a mostrar o PDF de outra declaração.
+--
+-- Guardar o link na PRÓPRIA versão transforma a ligação num fato gravado, não numa inferência.
+--
+-- ADITIVA E NULÁVEL. Nulo é estado real e não falta de dado: o formulário interno (`/vt`) gera o PDF
+-- sob demanda e não arquiva nada no Drive, e toda versão anterior a esta coluna nasceu sem link.
+-- `vt_coleta.drive_url` continua existindo e não é substituída: lá é o registro do ARQUIVAMENTO
+-- (o que a varredura fez com cada objeto do bucket), aqui é o documento DA DECLARAÇÃO.
+ALTER TABLE "formularios_vt" ADD COLUMN "drive_url" text;
