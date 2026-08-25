@@ -76,6 +76,7 @@ import { Modal } from "@/components/ui/Modal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Select } from "@/components/ui/Select";
 import { MultiSelect } from "@/components/ui/MultiSelect";
+import { Combobox } from "@/components/ui/Combobox";
 import { Icon } from "@/components/ui/Icon";
 import { StatusPill } from "@/components/ui/StatusPill";
 import { Stepper, type StepDef } from "@/components/nova/Stepper";
@@ -1255,10 +1256,19 @@ export default function CentralDeVagasPage() {
                   <>
                     <CampoSelect rotulo="Cliente" largo>
                       {/* NULÁVEL de propósito: vaga sem cliente vinculado entra e não trava nada. */}
-                      <Select
+                      {/*
+                        PRIMEIRO CAMPO NO SELETOR PREMIUM DO A&S (Combobox). É o campo certo para
+                        estrear: a lista de clientes é a mais longa da trilha, então ele exercita
+                        busca por digitação, navegação por teclado e o botão de limpar de uma vez.
+                        Os demais seletores da trilha seguem no Select do DS até o diretor aprovar
+                        este visual.
+                      */}
+                      <Combobox
                         value={form.codCliente}
                         onChange={escolherCliente}
                         options={optClientes}
+                        searchable
+                        limpavel
                         placeholder="Sem cliente vinculado"
                         ariaLabel="Cliente da vaga"
                       />
