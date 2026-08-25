@@ -51,10 +51,16 @@ type FaseEnvelope = "NAO_ENVIADO" | "ENVIADO" | "ASSINADO" | "ENCERRADO";
  */
 function avisoDaFase(fase: FaseEnvelope, acao: "cancelar" | "trocar"): string {
   const fim = acao === "trocar" ? " Depois disso, envie o kit novo pelo Gerador de Kit." : "";
+  // O texto antigo ("ainda NÃO foi enviado. Ninguém é notificado.") lia como inofensivo e escondia a
+  // consequência mais dura da tela: é aqui que o candidato SAI da fila de disparo e o kit é perdido.
   if (fase === "NAO_ENVIADO")
-    return (
-      "Esta ação vai cancelar o envelope atual, que ainda NÃO foi enviado. Ninguém é notificado." + fim
-    );
+    return acao === "trocar"
+      ? "Este candidato ainda não tem envelope na Clicksign, então ninguém é notificado. O kit " +
+          "anexado é descartado e ele sai da fila de assinatura." +
+          fim
+      : "Este candidato ainda não tem envelope na Clicksign, então ninguém é notificado. Mas ele " +
+          "SAI da fila de assinatura e o kit anexado é descartado. Para voltar, será preciso " +
+          "gerar e enviar o kit de novo pelo Gerador de Kit.";
   if (fase === "ENVIADO")
     return (
       "Esta ação vai cancelar o envelope em andamento na Clicksign e notificar o funcionário." + fim
@@ -567,12 +573,15 @@ export default function AssinaturasPage() {
         { token, method: "POST" },
       );
       setFlash(
-        `Documento de ${caixaAlta(alvoCancelar.candidato)} cancelado no EA` +
-          (r.clicksign === "cancelado"
-            ? " e na Clicksign."
-            : r.clicksign === "best-effort"
-              ? ". A Clicksign não aceitou o cancelamento programático nesta conta; o estado que vale é o do EA."
-              : " (não havia envelope na Clicksign)."),
+        r.clicksign === "sem-envelope"
+          ? // Sem envelope o resultado NÃO é "documento cancelado", é o candidato fora da fila com
+            // o kit descartado. Dizer "cancelado" aqui repetiria o engano do aviso antigo.
+            `${caixaAlta(alvoCancelar.candidato)} saiu da fila de assinatura e o kit foi ` +
+              "descartado. Para voltar, envie o kit de novo pelo Gerador de Kit."
+          : `Documento de ${caixaAlta(alvoCancelar.candidato)} cancelado no EA` +
+            (r.clicksign === "cancelado"
+              ? " e na Clicksign."
+              : ". A Clicksign não aceitou o cancelamento programático nesta conta; o estado que vale é o do EA."),
       );
       setAlvoCancelar(null);
       await carregar(aba);

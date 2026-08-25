@@ -415,12 +415,45 @@ export class ClicksignGestaoService {
         : "best-effort";
     }
 
+    /**
+     * CANCELADO é HISTÓRICO DE ENVELOPE, então só vale quando houve envelope. Sem envelope, o
+     * registro volta a SEM_ENVELOPE, a mesma regra que o `trocarKit` logo abaixo já aplicava.
+     *
+     * Por que isto era um alçapão: gravar CANCELADO numa admissão que nunca teve envelope a tirava
+     * das TRÊS abas de uma vez. A fila exige SEM_ENVELOPE, a aba Abertos exige envelope existente e
+     * a de assinados exige ASSINADO. O candidato sumia da tela inteira sem caminho de volta, e
+     * reenviar o kit não o trazia porque o envio não mexia no status.
+     */
+    const temEnvelope = Boolean(alvo.clicksignEnvelopeId);
+
+    /**
+     * SEM ENVELOPE, cancelar é TIRAR DA FILA (decisão do diretor). Não existe documento a cancelar,
+     * então o que a ação faz de fato é desanexar o kit e devolver a admissão ao estado de quem
+     * ainda não tem kit. Sem desanexar, a linha voltaria a `SEM_ENVELOPE` COM kit e continuaria na
+     * fila: o botão não faria nada e o aviso mentiria de novo, invertendo o sentido.
+     *
+     * COM ENVELOPE nada muda em relação ao que já rodava: grava CANCELADO, mantém o kit anexado e
+     * o cancelamento best-effort na Clicksign (que notifica o funcionário) segue exatamente igual.
+     */
     await this.db
       .update(admissoes)
-      .set({ clicksignStatus: "CANCELADO", atualizadoEm: new Date() })
+      .set({
+        clicksignStatus: temEnvelope ? "CANCELADO" : "SEM_ENVELOPE",
+        ...(temEnvelope ? {} : { kitAssinaturaPath: null, kitAssinaturaEm: null }),
+        atualizadoEm: new Date(),
+      })
       .where(eq(admissoes.id, admissaoId));
 
-    return { ok: true, status: "CANCELADO", fase: alvo.fase, clicksign };
+    if (!temEnvelope && alvo.kitPath) {
+      await this.staging.removerArquivo(alvo.kitPath).catch(() => undefined);
+    }
+
+    return {
+      ok: true,
+      status: temEnvelope ? "CANCELADO" : "SEM_ENVELOPE",
+      fase: alvo.fase,
+      clicksign,
+    };
   }
 
   /**
