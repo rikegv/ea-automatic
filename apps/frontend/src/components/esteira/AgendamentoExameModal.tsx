@@ -88,7 +88,9 @@ export function AgendamentoExameModal({
   const [enderecos, setEnderecos] = useState<EnderecoForm[]>([
     { clinicaId: "", local: "", horario: "" },
   ]);
-  const [clinicas, setClinicas] = useState<{ id: string; nome: string; fornecedor: string | null }[]>([]);
+  const [clinicas, setClinicas] = useState<
+    { id: string; nome: string; fornecedor: string | null; endereco: string | null }[]
+  >([]);
   // Novos (decisão do diretor): valor do exame e previsão do ASO (informada pela clínica). Opcionais.
   const [valor, setValor] = useState("");
   const [previsaoAso, setPrevisaoAso] = useState("");
@@ -101,9 +103,10 @@ export function AgendamentoExameModal({
   useEffect(() => {
     if (!token) return;
     let vivo = true;
-    apiFetch<{ id: string; nome: string; fornecedor: string | null }[]>("/catalogos/clinicas", {
-      token,
-    })
+    apiFetch<{ id: string; nome: string; fornecedor: string | null; endereco: string | null }[]>(
+      "/catalogos/clinicas",
+      { token },
+    )
       .then((lista) => {
         if (vivo) setClinicas(lista);
       })
@@ -337,7 +340,33 @@ export function AgendamentoExameModal({
                           value={e.clinicaId}
                           onChange={(v) =>
                             setEnderecos((cur) =>
-                              cur.map((x, k) => (k === i ? { ...x, clinicaId: v } : x)),
+                              cur.map((x, k) => {
+                                if (k !== i) return x;
+                                /**
+                                 * ESCOLHER A CLÍNICA SUGERE O ENDEREÇO CADASTRADO (decisão do
+                                 * diretor). O dado já existia no cadastro (migração 0064) e não
+                                 * chegava aqui, então o consultor redigitava o que o sistema já
+                                 * sabia.
+                                 *
+                                 * É SUGESTÃO, NÃO TRAVA: o campo continua editável, porque a
+                                 * clínica pode atender em outro endereço naquele dia.
+                                 *
+                                 * E NÃO PISA EM EDIÇÃO MANUAL: só preenche quando o campo está
+                                 * VAZIO ou quando o que está ali é exatamente o endereço da clínica
+                                 * anterior (ou seja, foi o próprio sistema que pôs). Se o consultor
+                                 * digitou algo, aquilo fica: sobrescrever seria apagar a informação
+                                 * que ele tem e o cadastro não tem.
+                                 */
+                                const anterior = clinicas.find((c) => c.id === x.clinicaId);
+                                const nova = clinicas.find((c) => c.id === v);
+                                const podeSugerir =
+                                  !x.local.trim() || x.local.trim() === (anterior?.endereco ?? "").trim();
+                                return {
+                                  ...x,
+                                  clinicaId: v,
+                                  local: podeSugerir ? (nova?.endereco ?? "") : x.local,
+                                };
+                              }),
                             )
                           }
                           ariaLabel={`Clínica do endereço ${i + 1}`}
