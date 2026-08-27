@@ -10,6 +10,7 @@ import {
 } from "@nestjs/common";
 import {
   beneficioExigeValor,
+  CLICKSIGN_STATUS_LABEL,
   FAROL_GLOBAL_LABEL,
   isValidCpf,
   ITENS_EPI,
@@ -30,6 +31,7 @@ import {
   or,
   sql,
 } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
 import { admissaoConcluidaSql, admissaoEmAndamentoExclusivoSql } from "../db/expressoes-admissao";
@@ -45,12 +47,22 @@ import {
   gerarXlsxRelatorio,
   nomeArquivoRelatorio,
   numeroDoSalario,
+  simNao,
   type LinhaRelatorio,
 } from "./relatorio-export";
+import {
+  beneficiosDoRelatorio,
+  frentesDoRelatorio,
+  vtDoRelatorio,
+} from "./relatorio-agregados";
 import {
   admissaoBeneficio,
   admissaoProjeto,
   admissoes,
+  clienteVinculos,
+  clinicasCatalogo,
+  entidadesSoulan,
+  integracaoAgendamento,
   candidatoAlteracoesLog,
   candidatos,
   cargos,
@@ -79,8 +91,12 @@ import { parseBeneficiosPadrao } from "../domain/beneficios";
 import { FRENTES_AO_NASCER } from "../domain/frentes";
 import { PandapeQueueService } from "../pandape/pandape-queue.service";
 import { recomputeFarolGlobal } from "./farol";
+import { ReguaCompletudeService } from "../regua/regua-completude.service";
 import { FAROIS_VIVOS, pendenciasObrigatorias } from "../domain/admissao";
-import { pendenciasObrigatoriasSet } from "../regua/pendencias-lote";
+import {
+  pendenciasObrigatoriasPorAdmissao,
+  pendenciasObrigatoriasSet,
+} from "../regua/pendencias-lote";
 import { configDoCliente } from "../regua/pendencia-config.repo";
 import { recalcularSinalizadorDaAdmissao } from "../regua/sinalizador.repo";
 import {
@@ -218,6 +234,38 @@ function ordemDaLista(ordenarPor?: string, direcao?: "asc" | "desc") {
 const TETO_LINHAS_RELATORIO = 20000;
 
 /**
+ * DOIS APELIDOS DA MESMA TABELA `usuarios` no relatório exportável.
+ *
+ * A linha tem DUAS pessoas diferentes: o consultor que GEROU a admissão e o consultor que conduz a
+ * INTEGRAÇÃO. Sem apelido, o segundo `leftJoin` em `usuarios` colidiria com o primeiro e o Postgres
+ * recusaria a consulta. (O responsável de cada frente é uma terceira pessoa e vive no agregado das
+ * frentes, que faz o seu próprio join.)
+ */
+const consultorAdmissao = alias(usuarios, "consultor_admissao");
+const consultorIntegracao = alias(usuarios, "consultor_integracao");
+
+/**
+ * Rótulos de enum que só o relatório precisa escrever por extenso. Escrever o código cru
+ * ("AGUARDANDO_CALCULO") numa planilha que a diretoria abre é entregar trabalho pela metade.
+ * §A.24: são TAGS, então title case.
+ */
+const ROTULO_STATUS_BENEFICIO: Record<string, string> = {
+  PENDENTE: "Pendente",
+  CADASTRADO: "Cadastrado",
+  AGUARDANDO_CALCULO: "Aguardando Cálculo",
+  BENEFICIO_CALCULADO: "Benefício Calculado",
+  FINALIZADO: "Finalizado",
+};
+
+const ROTULO_SINALIZADOR: Record<string, string> = {
+  PENDENTE: "Pendente",
+  PARCIAL: "Parcial",
+  OK: "Completo",
+  INCONFORMIDADE: "Inconformidade",
+  COMPETENCIAS: "Competências",
+};
+
+/**
  * Opções de criação por origem (Fase 5 / INT-1). A sync do Pandapé reusa `create` SEM duplicar
  * lógica: marca `origem`, anexa a linha de IntegraçãoPandapé na MESMA transação e desativa o
  * bloqueio por aceite (regra 5 — não-bloqueio: a sync não pode travar por campos pendentes).
@@ -249,6 +297,11 @@ export class AdmissoesService {
     // Scripts de carga e testes constroem o service sem fila, e a liberação segue funcionando igual
     // (sem fila, o pull simplesmente não é enfileirado e a liberação não é afetada).
     @Optional() private readonly pandapeQueue?: PandapeQueueService,
+    // OPCIONAL pelo mesmo motivo da fila: os scripts de carga e os testes constroem este service
+    // com `new AdmissoesService(db)`, e exigir a régua no construtor quebraria todos eles de uma
+    // vez. Sem ela, a única coisa que muda é a coluna "Documentos Obrigatórios Pendentes" do
+    // relatório, que sai vazia; nada mais no service a consulta.
+    @Optional() private readonly reguaCompletude?: ReguaCompletudeService,
   ) {}
 
   /**
@@ -1670,6 +1723,7 @@ export class AdmissoesService {
     const { listWhere } = condicoesDoFiltro(filtros);
     const linhas = await this.db
       .select({
+        id: admissoes.id,
         nome: candidatos.nome,
         cpf: candidatos.cpf,
         telefone: candidatos.telefone,
@@ -1697,12 +1751,93 @@ export class AdmissoesService {
         motivo: dadosVagaFolha.motivo,
         tempoContrato: dadosVagaFolha.tempoContrato,
         endereco: dadosVagaFolha.endereco,
+        // ── Uniforme e EPI ──────────────────────────────────────────────────
+        possuiUniforme: dadosVagaFolha.possuiUniforme,
+        uniformeCamiseta: dadosVagaFolha.uniformeCamiseta,
+        uniformeCalca: dadosVagaFolha.uniformeCalca,
+        uniformeBota: dadosVagaFolha.uniformeBota,
+        possuiEpi: dadosVagaFolha.possuiEpi,
+        epiItens: dadosVagaFolha.epiItens,
+        epiOutros: dadosVagaFolha.epiOutros,
+        // ── Substituição (SEM o CPF do substituído, §A.3 regra 10) ──────────
+        substituidoNome: dadosVagaFolha.substituidoNome,
+        substituicaoExpurgarEm: dadosVagaFolha.substituicaoExpurgarEm,
+        // ── Cliente ─────────────────────────────────────────────────────────
+        clienteCnpj: clientes.cnpj,
+        clienteEmpresaGrupo: clientes.empresaGrupo,
+        clienteRegiao: clientes.regiao,
+        clienteDescricaoRegiao: clientes.descricaoRegiao,
+        clienteBeneficiosPadrao: clientes.beneficiosPadrao,
+        clienteEscalaPadrao: clientes.escalaPadrao,
+        clienteEnderecoPadrao: clientes.enderecoPadrao,
+        clientePeriodicidadeBeneficio: clientes.periodicidadeBeneficio,
+        clienteDiaPagamentoBeneficio: clientes.diaPagamentoBeneficio,
+        clienteDiasPrimeiroCredito: clientes.diasPrimeiroCredito,
+        // ── Vínculo e entidade Soulan ───────────────────────────────────────
+        vinculoEmpresaCodigo: clienteVinculos.empresaCodigo,
+        vinculoTipoServico: clienteVinculos.tipoServico,
+        vinculoFilial: clienteVinculos.filial,
+        vinculoFopag: clienteVinculos.isFopag,
+        vinculoEntidade: entidadesSoulan.nome,
+        vinculoEntidadeCnpj: entidadesSoulan.cnpj,
+        // ── Benefícios (o pacote estruturado vem do agregado) ───────────────
+        statusCadastroBeneficio: admissoes.statusCadastroBeneficio,
+        beneficiosEntrouEm: admissoes.beneficiosEntrouEm,
+        // ── Exame ───────────────────────────────────────────────────────────
+        exameData: exameAgendamento.data,
+        exameHorario: exameAgendamento.horario,
+        exameClinicaCatalogo: clinicasCatalogo.nome,
+        exameClinicaTexto: exameAgendamento.nomeClinica,
+        exameFornecedor: exameAgendamento.fornecedor,
+        exameLocal: exameAgendamento.local,
+        exameValor: exameAgendamento.valor,
+        examePrevisaoAso: exameAgendamento.previsaoAso,
+        exameReagendamentos: exameAgendamento.reagendamentos,
+        asoValidado: admissoes.asoValidado,
+        // ── Integração ──────────────────────────────────────────────────────
+        integracaoData: integracaoAgendamento.data,
+        integracaoHorario: integracaoAgendamento.horario,
+        integracaoTipo: integracaoAgendamento.tipo,
+        integracaoConsultor: consultorIntegracao.nome,
+        // ── Assinatura ──────────────────────────────────────────────────────
+        clicksignStatus: admissoes.clicksignStatus,
+        clicksignEnviadoEm: admissoes.clicksignEnviadoEm,
+        clicksignNotificadoEm: admissoes.clicksignNotificadoEm,
+        clicksignEnvelopeId: admissoes.clicksignEnvelopeId,
+        contratoAssinadoDriveUrl: admissoes.contratoAssinadoDriveUrl,
+        kitAssinaturaEm: admissoes.kitAssinaturaEm,
+        // ── Controle ────────────────────────────────────────────────────────
+        isBanco: admissoes.isBanco,
+        sinalizadorPreenchimento: admissoes.sinalizadorPreenchimento,
+        pausaMotivo: admissoes.pausaMotivo,
+        motivoDeclinio: motivosDeclinio.nome,
+        consultor: consultorAdmissao.nome,
+        divergenciaBancaria: admissoes.divergenciaBancaria,
+        possivelDuplicata: admissoes.possivelDuplicata,
+        observacaoLiberacao: admissoes.observacaoLiberacao,
+        recusadoEm: admissoes.recusadoEm,
+        idVacancy: admissoes.idVacancy,
+        drivePastaUrl: admissoes.drivePastaUrl,
+        driveAsoUrl: admissoes.driveAsoUrl,
+        atualizadoEm: admissoes.atualizadoEm,
       })
       .from(admissoes)
       .innerJoin(candidatos, eq(admissoes.candidatoCpf, candidatos.cpf))
       .innerJoin(clientes, eq(admissoes.codCliente, clientes.codCliente))
       .innerJoin(cargos, eq(admissoes.cargoId, cargos.id))
       .leftJoin(dadosVagaFolha, eq(dadosVagaFolha.admissaoId, admissoes.id))
+      // TODOS os `leftJoin` abaixo são 1 PARA 1 ou N PARA 1 (o vínculo, a entidade, a clínica, o
+      // motivo e os dois usuários são referências da própria linha; exame e integração têm
+      // `unique` em `admissao_id`). Nenhum deles multiplica a linha, e é por isso que eles podem
+      // vir aqui enquanto frentes, benefícios e VT, que são 1 PARA N, ficam nos agregados.
+      .leftJoin(clienteVinculos, eq(clienteVinculos.id, admissoes.clienteVinculoId))
+      .leftJoin(entidadesSoulan, eq(entidadesSoulan.id, clienteVinculos.entidadeId))
+      .leftJoin(exameAgendamento, eq(exameAgendamento.admissaoId, admissoes.id))
+      .leftJoin(clinicasCatalogo, eq(clinicasCatalogo.id, exameAgendamento.clinicaId))
+      .leftJoin(integracaoAgendamento, eq(integracaoAgendamento.admissaoId, admissoes.id))
+      .leftJoin(consultorIntegracao, eq(consultorIntegracao.id, integracaoAgendamento.consultorId))
+      .leftJoin(motivosDeclinio, eq(motivosDeclinio.id, admissoes.motivoDeclinioId))
+      .leftJoin(consultorAdmissao, eq(consultorAdmissao.id, admissoes.consultorId))
       .where(whereDoFiltro(listWhere))
       .orderBy(...ordemDaLista(filtros.ordenarPor, filtros.direcao), asc(admissoes.id))
       .limit(TETO_LINHAS_RELATORIO + 1);
@@ -1716,38 +1851,189 @@ export class AdmissoesService {
       );
     }
 
-    const dados: LinhaRelatorio[] = linhas.map((l) => ({
-      nome: l.nome,
-      cpf: l.cpf,
-      telefone: l.telefone,
-      email: l.email,
-      dataNascimento: fmtDataRelatorio(l.dataNascimento),
-      sexo: l.sexo === "MASCULINO" ? "Masculino" : l.sexo === "FEMININO" ? "Feminino" : null,
-      codCliente: l.codCliente,
-      // O cliente sai como está escrito na tela: nome de operação, com a razão social de reserva.
-      cliente: l.clienteOperacao || l.clienteRazao,
-      cargo: l.cargo,
-      tipoContrato: l.tipoContrato,
-      matricula: l.matricula,
-      dataAdmissao: fmtDataRelatorio(l.dataAdmissao),
-      // "Admissão Pausada" é FLAG paralela, não valor do farol, e na tela ela ganha a tag do Status.
-      // O relatório repete a leitura da tela, senão a pausada sairia como "Em Admissão".
-      status: l.pausadaEm
-        ? "Admissão Pausada"
-        : (FAROL_GLOBAL_LABEL[l.farolGlobal] ?? l.farolGlobal),
-      origem: l.origem === "PANDAPE" ? "Pandapé" : "Manual",
-      criadoEm: fmtDataHoraRelatorio(l.criadoEm),
-      salario: numeroDoSalario(l.salario),
-      beneficios: l.beneficios,
-      escala: l.escala,
-      setor: l.setor,
-      departamento: l.departamento,
-      centroCusto: l.centroCusto,
-      gestorBp: l.gestorBp,
-      motivo: l.motivo,
-      tempoContrato: l.tempoContrato,
-      endereco: l.endereco,
-    }));
+    /**
+     * OS AGREGADOS, e SÓ OS QUE FORAM MARCADOS.
+     *
+     * Cada bloco 1 PARA N custa uma consulta a mais sobre o conjunto filtrado inteiro, e não faz
+     * sentido pagar por ela quando o consultor marcou só nome e telefone. A condição por bloco é o
+     * que mantém a exportação de sempre exatamente com o custo de sempre: sem coluna do bloco
+     * marcada, a consulta não acontece.
+     */
+    const ids = linhas.map((l) => l.id);
+    const querBloco = (prefixos: string[]) =>
+      colunas.some((c) => prefixos.some((p) => c === p || c.startsWith(p)));
+
+    const [frentes, pacoteBeneficios, vt, pendPorAdm, docsPendentes] = await Promise.all([
+      querBloco(["frente"])
+        ? frentesDoRelatorio(this.db, ids)
+        : Promise.resolve(new Map<string, Record<string, { rotulo: string; concluidaEm: Date | null; responsavel: string | null }>>()),
+      // A coluna "Benefícios" (grupo Folha) agora É o pacote estruturado, então ela também puxa.
+      querBloco(["beneficios"])
+        ? beneficiosDoRelatorio(this.db, ids)
+        : Promise.resolve(new Map<string, string>()),
+      querBloco(["vt"]) ? vtDoRelatorio(this.db, ids) : Promise.resolve(new Map()),
+      colunas.includes("pendenciasObrigatorias")
+        ? pendenciasObrigatoriasPorAdmissao(this.db, ids)
+        : Promise.resolve(new Map<string, string[]>()),
+      // Sem a régua injetada (scripts e testes constroem o service sem ela), a coluna sai vazia em
+      // vez de derrubar a exportação inteira.
+      colunas.includes("docsObrigatoriosPendentes") && this.reguaCompletude
+        ? this.reguaCompletude.obrigatoriosPendentesCountMap(ids)
+        : Promise.resolve(new Map<string, number>()),
+    ]);
+
+    const dados: LinhaRelatorio[] = linhas.map((l) => {
+      const f = frentes.get(l.id) ?? {};
+      const v = vt.get(l.id);
+      return {
+        nome: l.nome,
+        cpf: l.cpf,
+        telefone: l.telefone,
+        email: l.email,
+        dataNascimento: fmtDataRelatorio(l.dataNascimento),
+        sexo: l.sexo === "MASCULINO" ? "Masculino" : l.sexo === "FEMININO" ? "Feminino" : null,
+        codCliente: l.codCliente,
+        // O cliente sai como está escrito na tela: nome de operação, com a razão social de reserva.
+        cliente: l.clienteOperacao || l.clienteRazao,
+        cargo: l.cargo,
+        tipoContrato: l.tipoContrato,
+        matricula: l.matricula,
+        dataAdmissao: fmtDataRelatorio(l.dataAdmissao),
+        // "Admissão Pausada" é FLAG paralela, não valor do farol, e na tela ela ganha a tag do
+        // Status. O relatório repete a leitura da tela, senão a pausada sairia como "Em Admissão".
+        status: l.pausadaEm
+          ? "Admissão Pausada"
+          : (FAROL_GLOBAL_LABEL[l.farolGlobal] ?? l.farolGlobal),
+        origem: l.origem === "PANDAPE" ? "Pandapé" : "Manual",
+        criadoEm: fmtDataHoraRelatorio(l.criadoEm),
+        salario: numeroDoSalario(l.salario),
+        // O BENEFÍCIO REAL (§ item 4 da OST): o pacote estruturado, o mesmo da tela de Benefícios.
+        // O texto livre legado entra de RESERVA, e não por comodidade: as admissões da carga
+        // histórica só têm ele, e trocar a fonte sem reserva esvaziaria a coluna para milhares de
+        // linhas que hoje a preenchem. Quem quer o texto legado explicitamente marca a coluna
+        // própria dele, no grupo Benefícios.
+        beneficios: pacoteBeneficios.get(l.id) ?? l.beneficios,
+        escala: l.escala,
+        setor: l.setor,
+        departamento: l.departamento,
+        centroCusto: l.centroCusto,
+        gestorBp: l.gestorBp,
+        motivo: l.motivo,
+        tempoContrato: l.tempoContrato,
+        endereco: l.endereco,
+        // ── Uniforme e EPI ────────────────────────────────────────────────
+        possuiUniforme: simNao(l.possuiUniforme),
+        uniformeCamiseta: l.uniformeCamiseta,
+        uniformeCalca: l.uniformeCalca,
+        uniformeBota: l.uniformeBota,
+        possuiEpi: simNao(l.possuiEpi),
+        epiItens: l.epiItens,
+        epiOutros: l.epiOutros,
+        // ── Substituição ──────────────────────────────────────────────────
+        substituidoNome: l.substituidoNome,
+        substituicaoExpurgarEm: fmtDataHoraRelatorio(l.substituicaoExpurgarEm),
+        // ── Cliente ───────────────────────────────────────────────────────
+        clienteCnpj: l.clienteCnpj,
+        clienteRazaoSocial: l.clienteRazao,
+        clienteNomeOperacao: l.clienteOperacao,
+        clienteEmpresaGrupo: l.clienteEmpresaGrupo,
+        clienteRegiao: l.clienteRegiao,
+        clienteDescricaoRegiao: l.clienteDescricaoRegiao,
+        clienteBeneficiosPadrao: l.clienteBeneficiosPadrao,
+        clienteEscalaPadrao: l.clienteEscalaPadrao,
+        clienteEnderecoPadrao: l.clienteEnderecoPadrao,
+        clientePeriodicidadeBeneficio: l.clientePeriodicidadeBeneficio,
+        clienteDiaPagamentoBeneficio: l.clienteDiaPagamentoBeneficio,
+        clienteDiasPrimeiroCredito: l.clienteDiasPrimeiroCredito,
+        // ── Vínculo ───────────────────────────────────────────────────────
+        vinculoEmpresaCodigo: l.vinculoEmpresaCodigo,
+        vinculoTipoServico: l.vinculoTipoServico,
+        vinculoFilial: l.vinculoFilial,
+        vinculoFopag: simNao(l.vinculoFopag),
+        vinculoEntidade: l.vinculoEntidade,
+        vinculoEntidadeCnpj: l.vinculoEntidadeCnpj,
+        // ── Benefícios ────────────────────────────────────────────────────
+        beneficiosTextoLivre: l.beneficios,
+        statusCadastroBeneficio: ROTULO_STATUS_BENEFICIO[l.statusCadastroBeneficio] ?? l.statusCadastroBeneficio,
+        beneficiosEntrouEm: fmtDataHoraRelatorio(l.beneficiosEntrouEm),
+        // ── Frentes ───────────────────────────────────────────────────────
+        frenteAuditoria: f.AUDITORIA?.rotulo ?? null,
+        frenteAuditoriaConcluidaEm: fmtDataHoraRelatorio(f.AUDITORIA?.concluidaEm),
+        frenteAuditoriaResponsavel: f.AUDITORIA?.responsavel ?? null,
+        frenteExame: f.EXAME?.rotulo ?? null,
+        frenteExameConcluidaEm: fmtDataHoraRelatorio(f.EXAME?.concluidaEm),
+        frenteExameResponsavel: f.EXAME?.responsavel ?? null,
+        frenteCadastro: f.CADASTRO_CONTRATO?.rotulo ?? null,
+        frenteCadastroConcluidaEm: fmtDataHoraRelatorio(f.CADASTRO_CONTRATO?.concluidaEm),
+        frenteCadastroResponsavel: f.CADASTRO_CONTRATO?.responsavel ?? null,
+        frenteIntegracao: f.INTEGRACAO?.rotulo ?? null,
+        frenteIntegracaoConcluidaEm: fmtDataHoraRelatorio(f.INTEGRACAO?.concluidaEm),
+        frenteIntegracaoResponsavel: f.INTEGRACAO?.responsavel ?? null,
+        // ── Exame ─────────────────────────────────────────────────────────
+        exameData: fmtDataRelatorio(l.exameData),
+        exameHorario: l.exameHorario,
+        // A clínica do CATÁLOGO na frente, com o texto livre de reserva: agendamento antigo só tem
+        // o texto, e a clínica inativada continua legível por ele.
+        exameClinica: l.exameClinicaCatalogo ?? l.exameClinicaTexto,
+        exameFornecedor: l.exameFornecedor,
+        exameLocal: l.exameLocal,
+        exameValor: numeroDoSalario(l.exameValor),
+        examePrevisaoAso: fmtDataRelatorio(l.examePrevisaoAso),
+        exameReagendamentos: l.exameReagendamentos,
+        asoValidado: simNao(l.asoValidado),
+        // ── Integração ────────────────────────────────────────────────────
+        integracaoData: fmtDataRelatorio(l.integracaoData),
+        integracaoHorario: l.integracaoHorario,
+        integracaoTipo:
+          l.integracaoTipo === "ONLINE"
+            ? "Online"
+            : l.integracaoTipo === "PRESENCIAL"
+              ? "Presencial"
+              : null,
+        integracaoConsultor: l.integracaoConsultor,
+        // ── Assinatura ────────────────────────────────────────────────────
+        clicksignStatus: CLICKSIGN_STATUS_LABEL[l.clicksignStatus] ?? l.clicksignStatus,
+        clicksignEnviadoEm: fmtDataHoraRelatorio(l.clicksignEnviadoEm),
+        clicksignNotificadoEm: fmtDataHoraRelatorio(l.clicksignNotificadoEm),
+        clicksignEnvelopeId: l.clicksignEnvelopeId,
+        contratoAssinadoDriveUrl: l.contratoAssinadoDriveUrl,
+        kitAssinaturaEm: fmtDataHoraRelatorio(l.kitAssinaturaEm),
+        // ── Controle ──────────────────────────────────────────────────────
+        isBanco: simNao(l.isBanco),
+        sinalizadorPreenchimento:
+          ROTULO_SINALIZADOR[l.sinalizadorPreenchimento] ?? l.sinalizadorPreenchimento,
+        // A LISTA vem da régua única (`pendenciasObrigatorias`), a mesma do pill do Gerenciador e
+        // do modal. Zero pendência sai como célula VAZIA, e não com um texto de "nenhuma": vazio é
+        // o que deixa o filtro do Excel separar quem tem de quem não tem (§A.11 também proíbe o
+        // travessão como marcador).
+        pendenciasObrigatorias: pendPorAdm.get(l.id)?.join("; ") || null,
+        docsObrigatoriosPendentes: docsPendentes.get(l.id) ?? null,
+        pausadaEm: fmtDataHoraRelatorio(l.pausadaEm),
+        pausaMotivo: l.pausaMotivo,
+        motivoDeclinio: l.motivoDeclinio,
+        consultor: l.consultor,
+        divergenciaBancaria: l.divergenciaBancaria,
+        possivelDuplicata: simNao(l.possivelDuplicata),
+        observacaoLiberacao: l.observacaoLiberacao,
+        recusadoEm: fmtDataHoraRelatorio(l.recusadoEm),
+        idVacancy: l.idVacancy,
+        drivePastaUrl: l.drivePastaUrl,
+        driveAsoUrl: l.driveAsoUrl,
+        atualizadoEm: fmtDataHoraRelatorio(l.atualizadoEm),
+        // ── Formulário de VT ──────────────────────────────────────────────
+        vtOptante: simNao(v?.optante),
+        vtCep: v?.cep ?? null,
+        vtLogradouro: v?.logradouro ?? null,
+        vtNumero: v?.numero ?? null,
+        vtComplemento: v?.complemento ?? null,
+        vtBairro: v?.bairro ?? null,
+        vtCidade: v?.cidade ?? null,
+        vtUf: v?.uf ?? null,
+        vtTotalIda: numeroDoSalario(v?.totalIda),
+        vtTotalVolta: numeroDoSalario(v?.totalVolta),
+        vtTotalDia: numeroDoSalario(v?.totalDia),
+      };
+    });
 
     return {
       buffer: await gerarXlsxRelatorio(colunas, dados),

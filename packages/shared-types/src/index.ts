@@ -502,12 +502,29 @@ export function ehItemEpi(v: string): v is ItemEpi {
  * cópias, uma coluna marcada na tela sairia em branco na planilha (ou seria recusada) no primeiro
  * ajuste feito de um lado só.
  *
- * §A.6 (minimização): BANCO, AGÊNCIA e CONTA do candidato e o CPF do substituído ficam DE FORA de
- * propósito. O schema marca esses campos como exibíveis só na ficha da própria admissão, nunca em
- * superfície coletiva, e um relatório baixável é a superfície coletiva por definição. Decisão
- * confirmada pelo diretor ao abrir o item 11c.
+ * §A.6 (minimização): BANCO, AGÊNCIA e CONTA do candidato e o CPF do substituído continuam DE FORA
+ * de propósito, e a decisão foi REAFIRMADA pelo diretor ao abrir todos os demais campos. O schema
+ * marca esses quatro como exibíveis só na ficha da própria admissão, nunca em superfície coletiva,
+ * e um relatório baixável é a superfície coletiva por definição. Todo o resto do que está cadastrado
+ * é marcável; o PII que já saía (CPF do candidato, e-mail, telefone, nascimento) sai exatamente
+ * como saía, sem afrouxar nada.
  */
-export const GRUPOS_COLUNA_RELATORIO = ["CANDIDATO", "ADMISSAO", "FOLHA"] as const;
+export const GRUPOS_COLUNA_RELATORIO = [
+  "CANDIDATO",
+  "ADMISSAO",
+  "FOLHA",
+  "UNIFORME",
+  "SUBSTITUICAO",
+  "CLIENTE",
+  "VINCULO",
+  "BENEFICIOS",
+  "FRENTES",
+  "EXAME",
+  "INTEGRACAO",
+  "ASSINATURA",
+  "CONTROLE",
+  "VT",
+] as const;
 export type GrupoColunaRelatorio = (typeof GRUPOS_COLUNA_RELATORIO)[number];
 
 /** Rótulo do grupo no seletor de colunas (§A.24: título em title case). */
@@ -515,6 +532,17 @@ export const ROTULO_GRUPO_COLUNA_RELATORIO: Record<GrupoColunaRelatorio, string>
   CANDIDATO: "Dados Do Candidato",
   ADMISSAO: "Dados Da Admissão",
   FOLHA: "Dados De Vaga E Folha",
+  UNIFORME: "Uniforme E EPI",
+  SUBSTITUICAO: "Substituição",
+  CLIENTE: "Empresa E Cliente",
+  VINCULO: "Vínculo E Entidade Soulan",
+  BENEFICIOS: "Benefícios",
+  FRENTES: "Frentes Da Esteira",
+  EXAME: "Exame",
+  INTEGRACAO: "Integração",
+  ASSINATURA: "Assinatura",
+  CONTROLE: "Controle Da Admissão",
+  VT: "Formulário De VT",
 };
 
 export interface ColunaRelatorio {
@@ -528,12 +556,14 @@ export interface ColunaRelatorio {
 }
 
 export const COLUNAS_RELATORIO: readonly ColunaRelatorio[] = [
+  // ── Candidato ──────────────────────────────────────────────────────────────
   { chave: "nome", rotulo: "Nome", grupo: "CANDIDATO", largura: 32 },
   { chave: "cpf", rotulo: "CPF", grupo: "CANDIDATO", largura: 14 },
   { chave: "telefone", rotulo: "Telefone", grupo: "CANDIDATO", largura: 16 },
   { chave: "email", rotulo: "E-mail", grupo: "CANDIDATO", largura: 28 },
   { chave: "dataNascimento", rotulo: "Data De Nascimento", grupo: "CANDIDATO", largura: 18 },
   { chave: "sexo", rotulo: "Sexo", grupo: "CANDIDATO", largura: 12 },
+  // ── Admissão ───────────────────────────────────────────────────────────────
   { chave: "codCliente", rotulo: "Código Do Cliente", grupo: "ADMISSAO", largura: 16 },
   { chave: "cliente", rotulo: "Cliente", grupo: "ADMISSAO", largura: 30 },
   { chave: "cargo", rotulo: "Cargo", grupo: "ADMISSAO", largura: 26 },
@@ -543,8 +573,14 @@ export const COLUNAS_RELATORIO: readonly ColunaRelatorio[] = [
   { chave: "status", rotulo: "Status", grupo: "ADMISSAO", largura: 20 },
   { chave: "origem", rotulo: "Origem", grupo: "ADMISSAO", largura: 12 },
   { chave: "criadoEm", rotulo: "Criada Em", grupo: "ADMISSAO", largura: 18 },
+  // ── Vaga e folha ───────────────────────────────────────────────────────────
   { chave: "salario", rotulo: "Salário", grupo: "FOLHA", largura: 14 },
-  { chave: "beneficios", rotulo: "Benefícios", grupo: "FOLHA", largura: 30 },
+  // A coluna "Benefícios" passou a ler o PACOTE ESTRUTURADO (`admissao_beneficio`), o mesmo que a
+  // tela de Benefícios usa, com o valor de cada um. Antes ela levava o TEXTO LIVRE legado, que é
+  // outro campo: o benefício real da pessoa nunca tinha saído no relatório. O texto legado
+  // continua marcável na sua própria coluna (`beneficiosTextoLivre`), então nada se perdeu, e a
+  // admissão importada, que só tem o texto, cai nele automaticamente.
+  { chave: "beneficios", rotulo: "Benefícios", grupo: "FOLHA", largura: 40 },
   { chave: "escala", rotulo: "Escala", grupo: "FOLHA", largura: 24 },
   { chave: "setor", rotulo: "Setor", grupo: "FOLHA", largura: 20 },
   { chave: "departamento", rotulo: "Departamento", grupo: "FOLHA", largura: 22 },
@@ -553,9 +589,216 @@ export const COLUNAS_RELATORIO: readonly ColunaRelatorio[] = [
   { chave: "motivo", rotulo: "Motivo Da Contratação", grupo: "FOLHA", largura: 24 },
   { chave: "tempoContrato", rotulo: "Tempo De Contrato", grupo: "FOLHA", largura: 18 },
   { chave: "endereco", rotulo: "Endereço", grupo: "FOLHA", largura: 40 },
+  // ── Uniforme e EPI ─────────────────────────────────────────────────────────
+  { chave: "possuiUniforme", rotulo: "Possui Uniforme", grupo: "UNIFORME", largura: 16 },
+  { chave: "uniformeCamiseta", rotulo: "Tamanho De Camiseta", grupo: "UNIFORME", largura: 20 },
+  { chave: "uniformeCalca", rotulo: "Tamanho De Calça", grupo: "UNIFORME", largura: 18 },
+  { chave: "uniformeBota", rotulo: "Tamanho De Bota", grupo: "UNIFORME", largura: 18 },
+  { chave: "possuiEpi", rotulo: "Possui EPI", grupo: "UNIFORME", largura: 14 },
+  { chave: "epiItens", rotulo: "Itens De EPI", grupo: "UNIFORME", largura: 28 },
+  { chave: "epiOutros", rotulo: "EPI Outros", grupo: "UNIFORME", largura: 24 },
+  // ── Substituição ───────────────────────────────────────────────────────────
+  // O CPF do substituído NÃO entra (decisão do diretor, mantida): §A.3 regra 10, retenção mínima
+  // com expurgo automático em 48h. Só o nome e a data prevista do expurgo.
+  { chave: "substituidoNome", rotulo: "Nome Do Substituído", grupo: "SUBSTITUICAO", largura: 30 },
+  {
+    chave: "substituicaoExpurgarEm",
+    rotulo: "Expurgo Do CPF Previsto Para",
+    grupo: "SUBSTITUICAO",
+    largura: 26,
+  },
+  // ── Empresa e cliente ──────────────────────────────────────────────────────
+  { chave: "clienteCnpj", rotulo: "CNPJ Do Cliente", grupo: "CLIENTE", largura: 20 },
+  { chave: "clienteRazaoSocial", rotulo: "Razão Social", grupo: "CLIENTE", largura: 34 },
+  { chave: "clienteNomeOperacao", rotulo: "Nome De Operação", grupo: "CLIENTE", largura: 30 },
+  { chave: "clienteEmpresaGrupo", rotulo: "Empresa Do Grupo", grupo: "CLIENTE", largura: 24 },
+  { chave: "clienteRegiao", rotulo: "Região", grupo: "CLIENTE", largura: 16 },
+  { chave: "clienteDescricaoRegiao", rotulo: "Descrição Da Região", grupo: "CLIENTE", largura: 28 },
+  { chave: "clienteBeneficiosPadrao", rotulo: "Benefícios Padrão", grupo: "CLIENTE", largura: 40 },
+  { chave: "clienteEscalaPadrao", rotulo: "Escala Padrão", grupo: "CLIENTE", largura: 24 },
+  { chave: "clienteEnderecoPadrao", rotulo: "Endereço Padrão", grupo: "CLIENTE", largura: 40 },
+  {
+    chave: "clientePeriodicidadeBeneficio",
+    rotulo: "Periodicidade Do Benefício",
+    grupo: "CLIENTE",
+    largura: 24,
+  },
+  {
+    chave: "clienteDiaPagamentoBeneficio",
+    rotulo: "Dia De Pagamento Do Benefício",
+    grupo: "CLIENTE",
+    largura: 28,
+  },
+  {
+    chave: "clienteDiasPrimeiroCredito",
+    rotulo: "Dias Para O 1º Crédito",
+    grupo: "CLIENTE",
+    largura: 22,
+  },
+  // ── Vínculo e entidade Soulan ──────────────────────────────────────────────
+  { chave: "vinculoEmpresaCodigo", rotulo: "Empresa Soulan", grupo: "VINCULO", largura: 18 },
+  { chave: "vinculoTipoServico", rotulo: "Tipo De Serviço", grupo: "VINCULO", largura: 20 },
+  { chave: "vinculoFilial", rotulo: "Filial", grupo: "VINCULO", largura: 14 },
+  { chave: "vinculoFopag", rotulo: "Fopag", grupo: "VINCULO", largura: 12 },
+  { chave: "vinculoEntidade", rotulo: "Entidade", grupo: "VINCULO", largura: 30 },
+  { chave: "vinculoEntidadeCnpj", rotulo: "CNPJ Da Entidade", grupo: "VINCULO", largura: 20 },
+  // ── Benefícios ─────────────────────────────────────────────────────────────
+  {
+    chave: "beneficiosTextoLivre",
+    rotulo: "Benefícios (Texto Livre)",
+    grupo: "BENEFICIOS",
+    largura: 40,
+  },
+  {
+    chave: "statusCadastroBeneficio",
+    rotulo: "Status Do Cadastro Do Benefício",
+    grupo: "BENEFICIOS",
+    largura: 28,
+  },
+  {
+    chave: "beneficiosEntrouEm",
+    rotulo: "Entrou Na Fila De Benefícios Em",
+    grupo: "BENEFICIOS",
+    largura: 28,
+  },
+  // ── Frentes da esteira ─────────────────────────────────────────────────────
+  { chave: "frenteAuditoria", rotulo: "Status Auditoria", grupo: "FRENTES", largura: 24 },
+  {
+    chave: "frenteAuditoriaConcluidaEm",
+    rotulo: "Auditoria Concluída Em",
+    grupo: "FRENTES",
+    largura: 22,
+  },
+  {
+    chave: "frenteAuditoriaResponsavel",
+    rotulo: "Responsável Auditoria",
+    grupo: "FRENTES",
+    largura: 26,
+  },
+  { chave: "frenteExame", rotulo: "Status Exame", grupo: "FRENTES", largura: 20 },
+  { chave: "frenteExameConcluidaEm", rotulo: "Exame Concluído Em", grupo: "FRENTES", largura: 22 },
+  { chave: "frenteExameResponsavel", rotulo: "Responsável Exame", grupo: "FRENTES", largura: 26 },
+  { chave: "frenteCadastro", rotulo: "Status Cadastro", grupo: "FRENTES", largura: 22 },
+  {
+    chave: "frenteCadastroConcluidaEm",
+    rotulo: "Cadastro Concluído Em",
+    grupo: "FRENTES",
+    largura: 22,
+  },
+  {
+    chave: "frenteCadastroResponsavel",
+    rotulo: "Responsável Cadastro",
+    grupo: "FRENTES",
+    largura: 26,
+  },
+  { chave: "frenteIntegracao", rotulo: "Status Integração", grupo: "FRENTES", largura: 22 },
+  {
+    chave: "frenteIntegracaoConcluidaEm",
+    rotulo: "Integração Concluída Em",
+    grupo: "FRENTES",
+    largura: 22,
+  },
+  {
+    chave: "frenteIntegracaoResponsavel",
+    rotulo: "Responsável Integração",
+    grupo: "FRENTES",
+    largura: 26,
+  },
+  // ── Exame ──────────────────────────────────────────────────────────────────
+  { chave: "exameData", rotulo: "Data Do Exame", grupo: "EXAME", largura: 16 },
+  { chave: "exameHorario", rotulo: "Horário Do Exame", grupo: "EXAME", largura: 16 },
+  { chave: "exameClinica", rotulo: "Clínica", grupo: "EXAME", largura: 30 },
+  { chave: "exameFornecedor", rotulo: "Fornecedor Do Exame", grupo: "EXAME", largura: 20 },
+  { chave: "exameLocal", rotulo: "Local Do Exame", grupo: "EXAME", largura: 36 },
+  { chave: "exameValor", rotulo: "Valor Do Exame", grupo: "EXAME", largura: 16 },
+  { chave: "examePrevisaoAso", rotulo: "Previsão Do ASO", grupo: "EXAME", largura: 18 },
+  { chave: "exameReagendamentos", rotulo: "Reagendamentos", grupo: "EXAME", largura: 16 },
+  { chave: "asoValidado", rotulo: "ASO Validado", grupo: "EXAME", largura: 14 },
+  // ── Integração ─────────────────────────────────────────────────────────────
+  { chave: "integracaoData", rotulo: "Data Da Integração", grupo: "INTEGRACAO", largura: 20 },
+  { chave: "integracaoHorario", rotulo: "Horário Da Integração", grupo: "INTEGRACAO", largura: 20 },
+  { chave: "integracaoTipo", rotulo: "Tipo De Integração", grupo: "INTEGRACAO", largura: 18 },
+  {
+    chave: "integracaoConsultor",
+    rotulo: "Consultor Da Integração",
+    grupo: "INTEGRACAO",
+    largura: 26,
+  },
+  // ── Assinatura ─────────────────────────────────────────────────────────────
+  { chave: "clicksignStatus", rotulo: "Status Da Assinatura", grupo: "ASSINATURA", largura: 22 },
+  {
+    chave: "clicksignEnviadoEm",
+    rotulo: "Enviado Para Assinatura Em",
+    grupo: "ASSINATURA",
+    largura: 26,
+  },
+  { chave: "clicksignNotificadoEm", rotulo: "Notificado Em", grupo: "ASSINATURA", largura: 20 },
+  { chave: "clicksignEnvelopeId", rotulo: "Envelope", grupo: "ASSINATURA", largura: 24 },
+  {
+    chave: "contratoAssinadoDriveUrl",
+    rotulo: "Contrato Assinado",
+    grupo: "ASSINATURA",
+    largura: 44,
+  },
+  { chave: "kitAssinaturaEm", rotulo: "Kit Gerado Em", grupo: "ASSINATURA", largura: 20 },
+  // ── Controle da admissão ───────────────────────────────────────────────────
+  { chave: "isBanco", rotulo: "Admissão De Banco", grupo: "CONTROLE", largura: 18 },
+  {
+    chave: "sinalizadorPreenchimento",
+    rotulo: "Sinalizador De Preenchimento",
+    grupo: "CONTROLE",
+    largura: 26,
+  },
+  {
+    chave: "pendenciasObrigatorias",
+    rotulo: "Pendências Obrigatórias",
+    grupo: "CONTROLE",
+    largura: 44,
+  },
+  {
+    chave: "docsObrigatoriosPendentes",
+    rotulo: "Documentos Obrigatórios Pendentes",
+    grupo: "CONTROLE",
+    largura: 30,
+  },
+  { chave: "pausadaEm", rotulo: "Pausada Em", grupo: "CONTROLE", largura: 20 },
+  { chave: "pausaMotivo", rotulo: "Motivo Da Pausa", grupo: "CONTROLE", largura: 36 },
+  { chave: "motivoDeclinio", rotulo: "Motivo Do Declínio", grupo: "CONTROLE", largura: 28 },
+  { chave: "consultor", rotulo: "Consultor Responsável", grupo: "CONTROLE", largura: 26 },
+  { chave: "divergenciaBancaria", rotulo: "Divergência Bancária", grupo: "CONTROLE", largura: 24 },
+  { chave: "possivelDuplicata", rotulo: "Possível Duplicata", grupo: "CONTROLE", largura: 18 },
+  {
+    chave: "observacaoLiberacao",
+    rotulo: "Observação Da Liberação",
+    grupo: "CONTROLE",
+    largura: 40,
+  },
+  { chave: "recusadoEm", rotulo: "Recusada Em", grupo: "CONTROLE", largura: 20 },
+  { chave: "idVacancy", rotulo: "Id Da Vaga No Pandapé", grupo: "CONTROLE", largura: 22 },
+  {
+    chave: "drivePastaUrl",
+    rotulo: "Pasta Do Prontuário No Drive",
+    grupo: "CONTROLE",
+    largura: 44,
+  },
+  { chave: "driveAsoUrl", rotulo: "ASO No Drive", grupo: "CONTROLE", largura: 44 },
+  { chave: "atualizadoEm", rotulo: "Atualizada Em", grupo: "CONTROLE", largura: 20 },
+  // ── Formulário de VT ───────────────────────────────────────────────────────
+  // Endereço RESIDENCIAL do candidato: entra por decisão do diretor (quem exporta já tem acesso ao
+  // dado na ficha). Sai sempre do formulário MAIS RECENTE da admissão, nunca de um antigo.
+  { chave: "vtOptante", rotulo: "Optante De VT", grupo: "VT", largura: 16 },
+  { chave: "vtCep", rotulo: "CEP", grupo: "VT", largura: 12 },
+  { chave: "vtLogradouro", rotulo: "Logradouro", grupo: "VT", largura: 36 },
+  { chave: "vtNumero", rotulo: "Número", grupo: "VT", largura: 12 },
+  { chave: "vtComplemento", rotulo: "Complemento", grupo: "VT", largura: 20 },
+  { chave: "vtBairro", rotulo: "Bairro", grupo: "VT", largura: 24 },
+  { chave: "vtCidade", rotulo: "Cidade", grupo: "VT", largura: 22 },
+  { chave: "vtUf", rotulo: "UF", grupo: "VT", largura: 8 },
+  { chave: "vtTotalIda", rotulo: "VT Total Ida", grupo: "VT", largura: 14 },
+  { chave: "vtTotalVolta", rotulo: "VT Total Volta", grupo: "VT", largura: 14 },
+  { chave: "vtTotalDia", rotulo: "VT Total Dia", grupo: "VT", largura: 14 },
 ];
 
-/** As colunas já marcadas quando o consultor abre o seletor (o pedido original do item 11c). */
 export const COLUNAS_RELATORIO_PADRAO: readonly string[] = ["nome", "telefone"];
 
 export function ehColunaRelatorio(chave: string): boolean {

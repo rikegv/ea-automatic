@@ -42,12 +42,39 @@ export function numeroDoSalario(valor?: string | number | null): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/**
+ * Booleano na planilha: "Sim" / "Não", e VAZIO quando ninguém respondeu.
+ *
+ * Os três estados importam e não podem virar dois. `possui_uniforme` nulo é "ninguém respondeu",
+ * que é justamente o que abre a pendência obrigatória; escrever "Não" ali diria que a pessoa
+ * respondeu que não tem, e o relatório passaria a mentir sobre o motivo da pendência.
+ */
+export function simNao(valor?: boolean | null): string | null {
+  if (valor === null || valor === undefined) return null;
+  return valor ? "Sim" : "Não";
+}
+
 /** Nome do arquivo baixado. Data no nome para o time não sobrescrever o relatório da semana passada. */
 export function nomeArquivoRelatorio(agora: Date): string {
   const dois = (n: number) => String(n).padStart(2, "0");
   const dia = `${agora.getFullYear()}-${dois(agora.getMonth() + 1)}-${dois(agora.getDate())}`;
   return `relatorio-candidatos-${dia}.xlsx`;
 }
+
+/**
+ * Colunas que o Excel NÃO pode tratar como número, sob pena de comer o zero à esquerda.
+ * (Matrícula e CPF já eram; o CEP entrou com o bloco do formulário de VT.)
+ */
+const COLUNAS_TEXTO = ["matricula", "cpf", "vtCep"] as const;
+
+/** Colunas de dinheiro: número de verdade, com máscara, para continuarem somáveis na planilha. */
+const COLUNAS_MOEDA = [
+  "salario",
+  "exameValor",
+  "vtTotalIda",
+  "vtTotalVolta",
+  "vtTotalDia",
+] as const;
 
 /**
  * Gera o xlsx com as colunas marcadas, na ordem canônica do catálogo.
@@ -74,17 +101,18 @@ export async function gerarXlsxRelatorio(
     const row = ws.addRow(
       Object.fromEntries(defs.map((c) => [c.chave, linha[c.chave] ?? null])) as LinhaRelatorio,
     );
-    // Matrícula e CPF são TEXTO: os dois têm zero à esquerda na folha, e o Excel come o zero se a
-    // célula for numérica. Só toca a célula quando a coluna foi marcada (chave inexistente é erro
-    // no ExcelJS, não célula vazia).
-    for (const chave of ["matricula", "cpf"]) {
+    // Matrícula, CPF e CEP são TEXTO: os três têm zero à esquerda na vida real, e o Excel come o
+    // zero se a célula for numérica. Só toca a célula quando a coluna foi marcada (chave
+    // inexistente é erro no ExcelJS, não célula vazia).
+    for (const chave of COLUNAS_TEXTO) {
       if (!defs.some((c) => c.chave === chave)) continue;
       const cell = row.getCell(chave);
       if (cell.value !== null && cell.value !== undefined) cell.numFmt = "@";
     }
-    if (defs.some((c) => c.chave === "salario")) {
-      const salario = row.getCell("salario");
-      if (typeof salario.value === "number") salario.numFmt = "#,##0.00";
+    for (const chave of COLUNAS_MOEDA) {
+      if (!defs.some((c) => c.chave === chave)) continue;
+      const cell = row.getCell(chave);
+      if (typeof cell.value === "number") cell.numFmt = "#,##0.00";
     }
   }
   // Filtro automático na faixa preenchida: o consultor recorta ainda mais o arquivo sem pedir nada.

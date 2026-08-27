@@ -56,6 +56,21 @@ export function ExportarRelatorioModal({
   const [marcadas, setMarcadas] = useState<string[]>([...COLUNAS_RELATORIO_PADRAO]);
   const [gerando, setGerando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
+  /**
+   * GRUPOS ABERTOS. São 113 colunas em 14 grupos, e a lista toda aberta vira uma rolagem que o
+   * consultor percorre sem achar nada. Abertos ao entrar ficam SÓ os grupos que já têm coluna
+   * marcada, que ao abrir o modal são os do padrão: quem só quer nome e telefone vê duas caixas,
+   * quem quer o resto abre o bloco que precisa.
+   */
+  const [abertos, setAbertos] = useState<string[]>(() =>
+    Array.from(
+      new Set(
+        COLUNAS_RELATORIO.filter((c) => COLUNAS_RELATORIO_PADRAO.includes(c.chave)).map(
+          (c) => c.grupo as string,
+        ),
+      ),
+    ),
+  );
 
   const porGrupo = useMemo(
     () =>
@@ -65,6 +80,25 @@ export function ExportarRelatorioModal({
       })),
     [],
   );
+
+  function alternarGrupo(grupo: string) {
+    setAbertos((cur) => (cur.includes(grupo) ? cur.filter((g) => g !== grupo) : [...cur, grupo]));
+  }
+
+  /**
+   * "Marcar tudo do grupo" é um INTERRUPTOR: com o grupo inteiro marcado, o mesmo botão desmarca.
+   * Não mexe em nada fora do grupo, então marcar Frentes não apaga o que já estava marcado em
+   * Candidato.
+   */
+  function alternarTudoDoGrupo(grupo: string) {
+    setErro(null);
+    const chaves = COLUNAS_RELATORIO.filter((c) => c.grupo === grupo).map((c) => c.chave);
+    setMarcadas((cur) =>
+      chaves.every((k) => cur.includes(k))
+        ? cur.filter((k) => !chaves.includes(k))
+        : [...cur, ...chaves.filter((k) => !cur.includes(k))],
+    );
+  }
 
   function alternar(chave: string) {
     setErro(null);
@@ -97,7 +131,7 @@ export function ExportarRelatorioModal({
   }
 
   return (
-    <Modal onClose={onClose} className="max-w-2xl" ariaLabel="Exportar Relatório">
+    <Modal onClose={onClose} className="max-w-3xl" ariaLabel="Exportar Relatório">
       <div className="mb-4 flex items-start gap-3">
         <span className="grid h-10 w-10 flex-none place-items-center rounded-full bg-[var(--surface-1)]">
           <ExcelLogo className="h-5 w-5" />
@@ -123,6 +157,7 @@ export function ExportarRelatorioModal({
             onClick={() => {
               setErro(null);
               setMarcadas(todasMarcadas ? [] : COLUNAS_RELATORIO.map((c) => c.chave));
+              if (!todasMarcadas) setAbertos([...GRUPOS_COLUNA_RELATORIO]);
             }}
           >
             {todasMarcadas ? "Desmarcar todas" : "Marcar todas"}
@@ -133,6 +168,15 @@ export function ExportarRelatorioModal({
             onClick={() => {
               setErro(null);
               setMarcadas([...COLUNAS_RELATORIO_PADRAO]);
+              setAbertos(
+                Array.from(
+                  new Set(
+                    COLUNAS_RELATORIO.filter((c) =>
+                      COLUNAS_RELATORIO_PADRAO.includes(c.chave),
+                    ).map((c) => c.grupo as string),
+                  ),
+                ),
+              );
             }}
           >
             Voltar ao padrão
@@ -140,33 +184,67 @@ export function ExportarRelatorioModal({
         </div>
       </div>
 
-      <div className="ea-scroll max-h-[46vh] space-y-4 overflow-auto pr-1">
-        {porGrupo.map(({ grupo, colunas }) => (
-          <section key={grupo}>
-            <h4 className="mb-2 text-[12px] font-bold uppercase tracking-wide text-faint">
-              {ROTULO_GRUPO_COLUNA_RELATORIO[grupo]}
-            </h4>
-            <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-              {colunas.map((c) => {
-                const marcada = marcadas.includes(c.chave);
-                return (
-                  <label
-                    key={c.chave}
-                    className="flex cursor-pointer items-center gap-2.5 rounded-lg border border-[var(--border)] px-3 py-2 text-[13.5px] transition hover:bg-[var(--surface-2)]"
-                  >
-                    <input
-                      type="checkbox"
-                      className="h-4 w-4 flex-none accent-[var(--accent)]"
-                      checked={marcada}
-                      onChange={() => alternar(c.chave)}
-                    />
-                    <span className="truncate">{c.rotulo}</span>
-                  </label>
-                );
-              })}
-            </div>
-          </section>
-        ))}
+      <div className="ea-scroll max-h-[52vh] space-y-2 overflow-auto pr-1">
+        {porGrupo.map(({ grupo, colunas }) => {
+          const aberto = abertos.includes(grupo);
+          const noGrupo = colunas.filter((c) => marcadas.includes(c.chave)).length;
+          const todasDoGrupo = noGrupo === colunas.length;
+          return (
+            <section
+              key={grupo}
+              className="overflow-hidden rounded-xl border border-[var(--border)]"
+            >
+              <div className="flex items-center gap-2 bg-[var(--surface-1)] px-3 py-2">
+                <button
+                  type="button"
+                  className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                  onClick={() => alternarGrupo(grupo)}
+                  aria-expanded={aberto}
+                >
+                  <Icon
+                    name="right"
+                    className={`h-4 w-4 flex-none text-faint transition-transform ${aberto ? "rotate-90" : ""}`}
+                  />
+                  <span className="truncate text-[13px] font-bold">
+                    {ROTULO_GRUPO_COLUNA_RELATORIO[grupo]}
+                  </span>
+                  <span className="flex-none text-[12px] text-faint">
+                    {noGrupo} de {colunas.length}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary flex-none px-2.5 py-1 text-[12px]"
+                  onClick={() => alternarTudoDoGrupo(grupo)}
+                >
+                  {todasDoGrupo ? "Desmarcar grupo" : "Marcar grupo"}
+                </button>
+              </div>
+              {aberto && (
+                <div className="grid grid-cols-1 gap-1.5 p-2.5 sm:grid-cols-2">
+                  {colunas.map((c) => {
+                    const marcada = marcadas.includes(c.chave);
+                    return (
+                      <label
+                        key={c.chave}
+                        className="flex cursor-pointer items-center gap-2.5 rounded-lg border border-[var(--border)] px-3 py-2 text-[13.5px] transition hover:bg-[var(--surface-2)]"
+                        title={c.rotulo}
+                      >
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 flex-none accent-[var(--accent)]"
+                          checked={marcada}
+                          onChange={() => alternar(c.chave)}
+                        />
+                        <span className="truncate">{c.rotulo}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+          );
+        })}
       </div>
 
       {erro && (

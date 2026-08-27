@@ -33,7 +33,28 @@ export async function pendenciasObrigatoriasSet(
   db: Database,
   admissaoIds: string[],
 ): Promise<Set<string>> {
-  if (admissaoIds.length === 0) return new Set();
+  const mapa = await pendenciasObrigatoriasPorAdmissao(db, admissaoIds);
+  const set = new Set<string>();
+  for (const [id, pend] of mapa) if (pend.length > 0) set.add(id);
+  return set;
+}
+
+/**
+ * A MESMA régua, devolvendo QUAIS pendências faltam em vez de só "tem ou não tem".
+ *
+ * O `Set` acima virou um envelope fino em volta desta função, e essa direção é deliberada: quem
+ * precisa da LISTA (a coluna "Pendências Obrigatórias" do relatório) e quem precisa do SIM/NÃO (o
+ * pill do Gerenciador, os KPIs da Esteira) leem o MESMO cálculo. Uma segunda régua para listar
+ * recriaria exatamente a divergência que esta função foi escrita para eliminar (§A.19), com o
+ * agravante de a planilha e a tela discordarem sobre a mesma admissão.
+ *
+ * Devolve uma entrada por admissão pedida, inclusive as sem pendência (lista vazia).
+ */
+export async function pendenciasObrigatoriasPorAdmissao(
+  db: Database,
+  admissaoIds: string[],
+): Promise<Map<string, string[]>> {
+  if (admissaoIds.length === 0) return new Map();
 
   const linhas = await db
     .select({
@@ -67,7 +88,7 @@ export async function pendenciasObrigatoriasSet(
   // página inteira. Cliente sem config volta "tudo obrigatório", o comportamento de sempre.
   const configs = await configPorCliente(db, linhas.map((l) => l.codCliente));
 
-  const set = new Set<string>();
+  const mapa = new Map<string, string[]>();
   for (const l of linhas) {
     const pend = pendenciasObrigatorias({
       codCliente: l.codCliente,
@@ -87,9 +108,9 @@ export async function pendenciasObrigatoriasSet(
       temBeneficioEstruturado: beneficioSet.has(l.id),
       possuiUniforme: l.possuiUniforme,
     }, doMapa(configs, l.codCliente));
-    if (pend.length > 0) set.add(l.id);
+    mapa.set(l.id, pend);
   }
-  return set;
+  return mapa;
 }
 
 /** Admissões de banco cujo Termo de Banco já está ENTREGUE (§A.3: é a pendência própria do banco). */
