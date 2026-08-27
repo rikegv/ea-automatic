@@ -29,6 +29,7 @@ import { DRIZZLE } from "../db/drizzle.module";
 import { naoPausada } from "../db/admissao-filtros";
 import {
   admissaoBeneficio,
+  admissaoIfractal,
   beneficiosCatalogo,
   admissoes,
   candidatoAlteracoesLog,
@@ -70,6 +71,7 @@ import { configDoCliente } from "../regua/pendencia-config.repo";
 import { filtroClienteOuVinculo } from "../regua/vinculo.repo";
 import {
   conclui,
+  ehStatusDinamico,
   isReversao,
   isStatusValido,
   reversaoDerrubaCadastro,
@@ -91,7 +93,15 @@ const ROTA_PARA_TIPO: Record<string, FrenteTipo> = {
   cadastro: "CADASTRO_CONTRATO",
   // Última etapa da esteira (decisão do diretor). A rota é genérica, então a aba entra aqui.
   integracao: "INTEGRACAO",
+  // A 5ª aba. Entra pela mesma rota genérica, e por isso não precisou de endpoint próprio.
+  ifractal: "IFRACTAL",
 };
+
+/** Credencial do iFractal de uma admissão, como a aba a exibe. */
+interface IfractalResumo {
+  login: string | null;
+  senha: string | null;
+}
 
 export interface EsteiraFiltros {
   // Multi-select (Bloco B): OU dentro do mesmo filtro (inArray). Vazio/ausente = sem filtro.
@@ -164,7 +174,9 @@ export class EsteiraService {
   resolverTipo(frente: string): FrenteTipo {
     const tipo = ROTA_PARA_TIPO[frente];
     if (!tipo) {
-      throw new BadRequestException("Frente inválida (use auditoria | exame | cadastro)");
+      throw new BadRequestException(
+        "Frente inválida (use auditoria | exame | cadastro | integracao | ifractal)",
+      );
     }
     return tipo;
   }
@@ -394,6 +406,9 @@ export class EsteiraService {
         // outra informação e some quando a admissão volta a andar.
         farolGlobal: admissoes.farolGlobal,
         asoValidado: admissoes.asoValidado,
+        // Herdado do CLIENTE, para a coluna Tipo De Marcação da aba iFractal. Vem no select base
+        // porque o join com `clientes` já existe: não custa consulta nova.
+        tipoMarcacao: clientes.tipoMarcacao,
       })
       .from(frentesAdmissao)
       .innerJoin(admissoes, eq(frentesAdmissao.admissaoId, admissoes.id))
@@ -424,6 +439,13 @@ export class EsteiraService {
       tipo === "INTEGRACAO"
         ? await this.integracaoMap(admissaoIds)
         : new Map<string, IntegracaoResumo>();
+    // Credencial e tipo de marcação da aba IFRACTAL. Mesma disciplina das demais: só a aba do
+    // iFractal paga esta consulta. §A.6: a senha vem para a TELA de quem já tem acesso à admissão,
+    // e não entra em log nenhum no caminho.
+    const ifractalMap =
+      tipo === "IFRACTAL"
+        ? await this.ifractalMap(admissaoIds)
+        : new Map<string, IfractalResumo>();
     const pendSet =
       tipo === "AUDITORIA"
         ? await this.reguaCompletude.obrigatoriosPendentesSet(admissaoIds)
@@ -504,6 +526,17 @@ export class EsteiraService {
         // status da linha já diz que falta agendar (decisão do diretor).
         return { ...base, integracao: integracaoMap.get(r.admissaoId) ?? null };
       }
+      if (tipo === "IFRACTAL") {
+        // `tipoMarcacao` é HERDADO do cliente (leitura, nunca cópia): mudar no cadastro do cliente
+        // muda em todas as admissões dele no mesmo instante, que é o comportamento pedido.
+        const cred = ifractalMap.get(r.admissaoId);
+        return {
+          ...base,
+          tipoMarcacao: r.tipoMarcacao,
+          ifractalLogin: cred?.login ?? null,
+          ifractalSenha: cred?.senha ?? null,
+        };
+      }
       if (tipo === "AUDITORIA") {
         return {
           ...base,
@@ -569,20 +602,36 @@ export class EsteiraService {
     // APTO. Uma consulta só, feita apenas nas abas que exibem o card (Cadastro e Exame); a Auditoria
     // não paga a query. `cadastrados` mantém o nome por compatibilidade com a tela do Cadastro, e
     // `aptas` é o mesmo número lido pela aba do Exame.
-    let cadastrados = 0;
-    let aptas = 0;
-    let realizadas = 0;
-    if (tipo === "CADASTRO_CONTRATO" || tipo === "EXAME" || tipo === "INTEGRACAO") {
-      const [linha] = await this.db
-        .select({ n: count() })
-        .from(frentesAdmissao)
-        .innerJoin(admissoes, eq(frentesAdmissao.admissaoId, admissoes.id))
-        .where(and(...kpiWhere, eq(frentesAdmissao.concluida, true)));
-      const concluidas = linha?.n ?? 0;
-      if (tipo === "CADASTRO_CONTRATO") cadastrados = concluidas;
-      else if (tipo === "EXAME") aptas = concluidas;
-      else realizadas = concluidas;
-    }
+    /**
+     * O TOTAL JÁ REALIZADO DA FRENTE, agora nas CINCO abas.
+     *
+     * POR QUE O CARD EXISTE: `porStatus` conta só frente EM ANDAMENTO (`concluida = false`), porque
+     * concluir tira da fila. O efeito colateral é que o trabalho FEITO desaparece da tela: a
+     * admissão sai da lista e não sobra número nenhum dizendo quantas passaram por ali. Era o que
+     * Cadastro ("Cadastrado") e Exame ("Aptas") já resolviam, e o que faltava nas outras três.
+     *
+     * UMA CONSULTA SÓ, a mesma de sempre, agora sem o `if` por tipo. Ela é um `count` sobre a
+     * própria frente (`kpiWhere` já carrega `eq(frentesAdmissao.tipo, tipo)` no `clientePeriodo`),
+     * então **não há como contar em dobro**: uma admissão tem no máximo uma frente de cada tipo,
+     * garantido pelo unique `(admissao_id, tipo)`. Herda também a exclusão de declínio e rescisão
+     * (§A.16) e a de pausadas, exatamente como os cards que já existiam.
+     *
+     * A generalização custa UMA consulta a mais nas abas Auditoria e iFractal, que antes não a
+     * pagavam. É um `count` indexado sobre a mesma condição que os outros KPIs já varrem.
+     *
+     * Os três nomes antigos continuam saindo na resposta: a tela do Cadastro lê `cadastrados` e a do
+     * Exame lê `aptas` há tempo, e renomeá-los aqui só criaria trabalho de tela sem ganho nenhum.
+     */
+    const [linhaConcluidas] = await this.db
+      .select({ n: count() })
+      .from(frentesAdmissao)
+      .innerJoin(admissoes, eq(frentesAdmissao.admissaoId, admissoes.id))
+      .where(and(...kpiWhere, eq(frentesAdmissao.concluida, true)));
+    const concluidasFrente = linhaConcluidas?.n ?? 0;
+
+    const cadastrados = tipo === "CADASTRO_CONTRATO" ? concluidasFrente : 0;
+    const aptas = tipo === "EXAME" ? concluidasFrente : 0;
+    const realizadas = tipo === "INTEGRACAO" ? concluidasFrente : 0;
 
     // CARD "ADMISSÕES EM INTEGRAÇÃO" (decisão do diretor). Conta quem está NA frente agora, ou seja,
     // com a integração ainda ABERTA: é o trabalho que a aba tem pela frente, e não o acumulado.
@@ -612,7 +661,19 @@ export class EsteiraService {
 
     return {
       items,
-      kpis: { porStatus, total, comPendencias, cadastrados, aptas, realizadas, emIntegracao, pausadas },
+      kpis: {
+        porStatus,
+        total,
+        comPendencias,
+        cadastrados,
+        aptas,
+        realizadas,
+        // O MESMO número dos três acima, sem o recorte por aba: é o que os cards de Auditoria e de
+        // iFractal leem. Sai em toda aba, então a tela escolhe se desenha o card, e não o backend.
+        concluidasFrente,
+        emIntegracao,
+        pausadas,
+      },
       statusCatalogo,
     };
   }
@@ -773,9 +834,21 @@ export class EsteiraService {
 
     const tipo = frente.tipo;
     const novo = dto.status;
-    if (!isStatusValido(tipo, novo)) {
+
+    /**
+     * VALIDADE E CONCLUSÃO: do CÓDIGO para as quatro frentes de sempre, do BANCO para o iFractal.
+     *
+     * O iFractal é a única frente com catálogo de status EDITÁVEL pelo time (renomeia, acrescenta,
+     * escolhe qual conclui), então perguntar a `isStatusValido`/`conclui`, que leem mapas fixos,
+     * recusaria em silêncio todo status que alguém criasse na tela. `dinamico` é nulo para as
+     * outras quatro, e nesse caso NADA muda: o caminho é byte a byte o de antes.
+     */
+    const dinamico = ehStatusDinamico(tipo) ? await this.catalogoDinamico(tipo) : null;
+    const statusValido = dinamico ? dinamico.codigos.has(novo) : isStatusValido(tipo, novo);
+    if (!statusValido) {
       throw new BadRequestException(`Status inválido para a frente ${tipo}`);
     }
+    const concluiNovo = dinamico ? dinamico.concluintes.has(novo) : conclui(tipo, novo);
 
     // Admissão (consultor autor + par cliente/cargo) — base da atribuição das NC (Via 1).
     const admissao = await this.db.query.admissoes.findFirst({
@@ -1026,7 +1099,8 @@ export class EsteiraService {
       fechaCadastroSemIntegracaoExistente && Boolean(admissao?.codCliente) && !clienteExige;
 
     const result = await this.db.transaction(async (tx) => {
-      const concl = conclui(tipo, novo);
+      // Já resolvido lá em cima: do catálogo do banco no iFractal, das regras puras nas demais.
+      const concl = concluiNovo;
       const agora = new Date();
 
       const [upd] = await tx
@@ -2030,6 +2104,70 @@ export class EsteiraService {
       // Sinalizador já recalculado, para a tela refletir a inconformidade sem recarregar por fora.
       ...(sinalizador ? { sinalizador } : {}),
       ...(aptoAuto ? { aptoAuto } : {}),
+    };
+  }
+
+  /**
+   * Login e senha do iFractal das admissões da página, em UMA consulta.
+   *
+   * Admissão sem linha ainda (ninguém preencheu) simplesmente não entra no mapa, e a tela mostra os
+   * campos vazios para o consultor preencher. §A.6: a senha nunca é logada aqui nem adiante.
+   */
+  private async ifractalMap(admissaoIds: string[]): Promise<Map<string, IfractalResumo>> {
+    const mapa = new Map<string, IfractalResumo>();
+    if (admissaoIds.length === 0) return mapa;
+    const linhas = await this.db
+      .select({
+        admissaoId: admissaoIfractal.admissaoId,
+        login: admissaoIfractal.login,
+        senha: admissaoIfractal.senha,
+      })
+      .from(admissaoIfractal)
+      .where(inArray(admissaoIfractal.admissaoId, admissaoIds));
+    for (const l of linhas) mapa.set(l.admissaoId, { login: l.login, senha: l.senha });
+    return mapa;
+  }
+
+  /**
+   * GRAVA login e senha do iFractal (upsert por admissão).
+   *
+   * Aditivo e reversível: não mexe em status de frente, farol, régua nem contagem nenhuma. Campo
+   * vazio grava NULL, para "apagar o que digitei errado" ser possível sem apagar a linha.
+   *
+   * §A.6: a senha NÃO entra em log e NÃO entra na trilha de alteração de campo. O que se registra é
+   * que a credencial foi preenchida, nunca o valor.
+   */
+  async salvarIfractal(admissaoId: string, dto: { login?: string | null; senha?: string | null }) {
+    const login = dto.login?.trim() || null;
+    const senha = dto.senha?.trim() || null;
+    const agora = new Date();
+    await this.db
+      .insert(admissaoIfractal)
+      .values({ admissaoId, login, senha })
+      .onConflictDoUpdate({
+        target: admissaoIfractal.admissaoId,
+        set: { login, senha, atualizadoEm: agora },
+      });
+    return { ok: true, login, senha };
+  }
+
+  /**
+   * O CATÁLOGO DE STATUS DE UMA FRENTE DINÂMICA, lido do banco.
+   *
+   * Só o iFractal passa por aqui (`FRENTES_STATUS_DINAMICO`). Devolve os códigos aceitos e quais
+   * concluem a frente, que são as duas únicas perguntas que a mudança de status faz. Uma consulta
+   * por chamada, e nenhuma para as outras quatro frentes.
+   */
+  private async catalogoDinamico(
+    tipo: FrenteTipo,
+  ): Promise<{ codigos: Set<string>; concluintes: Set<string> }> {
+    const linhas = await this.db
+      .select({ codigo: frenteStatusCatalogo.codigo, conclui: frenteStatusCatalogo.conclui })
+      .from(frenteStatusCatalogo)
+      .where(eq(frenteStatusCatalogo.tipo, tipo));
+    return {
+      codigos: new Set(linhas.map((l) => l.codigo)),
+      concluintes: new Set(linhas.filter((l) => l.conclui).map((l) => l.codigo)),
     };
   }
 

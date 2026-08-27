@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { TIPO_MARCACAO_LABEL, type TipoMarcacao } from "@ea/shared-types";
 import type { ClicksignStatus, Origem } from "@ea/shared-types";
 import { apiFetch, apiUpload, apiDownloadPost, apiOpenInline, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
@@ -46,6 +47,9 @@ const ABAS = [
   // INTEGRAÇÃO, a ÚLTIMA etapa da esteira (decisão do diretor). Entra depois do Cadastro porque é
   // isso que a sequência diz: auditoria e exame em paralelo, depois cadastro, depois integração.
   { label: "INTEGRAÇÃO", rota: "integracao", icone: "users" },
+  // IFRACTAL, a 5ª, ao lado da Integração: é a credencial do sistema de PONTO, controle do time de
+  // Ponto que corre em paralelo ao fim da esteira e não segura a conclusão da admissão.
+  { label: "IFRACTAL", rota: "ifractal", icone: "clock" },
 ] as const;
 
 /**
@@ -126,6 +130,10 @@ interface StatusCat {
 interface EsteiraItem {
   admissaoId: string;
   frenteId: string;
+  /** Só na aba IFRACTAL. `tipoMarcacao` é HERDADO do cliente (leitura, nunca cópia). */
+  tipoMarcacao?: TipoMarcacao | null;
+  ifractalLogin?: string | null;
+  ifractalSenha?: string | null;
   /** Agendamento da INTEGRAÇÃO. Só vem na aba da integração, e é null enquanto ninguém agendou. */
   integracao?: {
     data: string | null;
@@ -201,6 +209,8 @@ interface EsteiraResp {
     total: number;
     comPendencias: number;
     cadastrados: number;
+    /** Total JÁ CONCLUÍDO da frente aberta. Alimenta os cards de "realizado" das cinco abas. */
+    concluidasFrente: number;
     /** Aba EXAME: quantas frentes já estão APTO (concluídas). Alimenta o card "Aptas". */
     aptas: number;
     /** PAUSA (OST admissão pausada): quantas desta frente estão pausadas. Card clicável. */
@@ -306,6 +316,87 @@ export default function EsteiraPage() {
   const [flashImport, setFlashImport] = useState<string | null>(null);
   const isAuditoria = rota === "auditoria";
   const isIntegracao = rota === "integracao";
+  const isIfractal = rota === "ifractal";
+  /** Rascunho de login/senha por admissão, para a linha editar sem recarregar a lista inteira. */
+  const [credEdit, setCredEdit] = useState<Record<string, { login: string; senha: string }>>({});
+  const [credSalvando, setCredSalvando] = useState<string | null>(null);
+  /**
+   * FILTROS DA ABA IFRACTAL (§A.30, escolha do diretor), todos MÚLTIPLOS (§A.28).
+   *
+   * Só os TRÊS que faltavam: Cliente, Status e Data De Admissão já são filtros comuns a todas as
+   * abas e não precisam de estado próprio. Recorte no cliente, sobre a fila já carregada, no mesmo
+   * desenho dos filtros de coluna da aba Integração: os KPIs continuam contando A FILA.
+   */
+  const [fMatricula, setFMatricula] = useState<string[]>([]);
+  const [fNomeIf, setFNomeIf] = useState<string[]>([]);
+  const [fMarcacao, setFMarcacao] = useState<string[]>([]);
+
+  /**
+   * O rascunho da linha, com o que veio do servidor de reserva.
+   *
+   * Rascunho por admissão, e não um estado só: duas linhas editadas em sequência não podem
+   * compartilhar campo, senão digitar na segunda sobrescreveria a primeira na tela.
+   */
+  function credDe(item: EsteiraItem) {
+    return (
+      credEdit[item.admissaoId] ?? {
+        login: item.ifractalLogin ?? "",
+        senha: item.ifractalSenha ?? "",
+      }
+    );
+  }
+
+  function setCred(item: EsteiraItem, patch: { login?: string; senha?: string }) {
+    setCredEdit((cur) => ({
+      ...cur,
+      [item.admissaoId]: { ...credDe(item), ...patch },
+    }));
+  }
+
+  /**
+   * Grava no BLUR, não a cada tecla: uma chamada por campo terminado, em vez de uma por letra.
+   * Não recarrega a lista, porque a resposta não muda mais nada na tela e o recarregamento
+   * devolveria o cursor para o começo do campo seguinte.
+   *
+   * §A.6: nada do que sai daqui é logado, nem no sucesso nem no erro.
+   */
+  async function salvarCred(item: EsteiraItem) {
+    const atual = credDe(item);
+    const igual =
+      (atual.login || null) === (item.ifractalLogin ?? null) &&
+      (atual.senha || null) === (item.ifractalSenha ?? null);
+    if (igual) return;
+    setCredSalvando(item.admissaoId);
+    try {
+      await apiFetch(`/esteira/ifractal/${item.admissaoId}`, {
+        method: "PUT",
+        token,
+        body: { login: atual.login || null, senha: atual.senha || null },
+      });
+      // Reflete no item carregado, para o rascunho e a lista pararem de divergir sem recarregar.
+      setData((cur) =>
+        cur
+          ? {
+              ...cur,
+              items: cur.items.map((i) =>
+                i.admissaoId === item.admissaoId
+                  ? { ...i, ifractalLogin: atual.login || null, ifractalSenha: atual.senha || null }
+                  : i,
+              ),
+            }
+          : cur,
+      );
+    } catch {
+      setFlash({ msg: "Falha ao salvar a credencial do iFractal. Tente de novo.", tone: "wn" });
+    } finally {
+      setCredSalvando(null);
+    }
+  }
+
+  /** Rótulo do tipo de marcação herdado do cliente. NOT NULL no banco: nunca cai no vazio. */
+  function rotuloMarcacao(item: EsteiraItem) {
+    return item.tipoMarcacao ? TIPO_MARCACAO_LABEL[item.tipoMarcacao] : "não informado";
+  }
   // Modais da aba INTEGRAÇÃO. Estado próprio, sem tocar nos modais existentes das outras abas.
   const [agendaIntegracao, setAgendaIntegracao] = useState<EsteiraItem | null>(null);
   const [apresentacaoId, setApresentacaoId] = useState<string | null>(null);
@@ -483,6 +574,9 @@ export default function EsteiraPage() {
     setFHorario("");
     setFTipoInteg("");
     setFConsultor("");
+    setFMatricula([]);
+    setFNomeIf([]);
+    setFMarcacao([]);
     setCandQuery("");
   }
   const temFiltro = Boolean(
@@ -500,6 +594,9 @@ export default function EsteiraPage() {
       fHorario ||
       fTipoInteg ||
       fConsultor ||
+      fMatricula.length ||
+      fNomeIf.length ||
+      fMarcacao.length ||
       candQuery ||
       soPendencias,
   );
@@ -511,7 +608,10 @@ export default function EsteiraPage() {
     (admissaoDe || admissaoAte ? 1 : 0) +
     (exameDe || exameAte ? 1 : 0) +
     (integracaoDe || integracaoAte ? 1 : 0) +
-    [fContrato, fNome, fCargo, fHorario, fTipoInteg, fConsultor].filter(Boolean).length;
+    [fContrato, fNome, fCargo, fHorario, fTipoInteg, fConsultor].filter(Boolean).length +
+    // Os três da aba iFractal são LISTAS, então contam por `length` e não por `Boolean` (array
+    // vazio é truthy: incluí-los na linha acima faria o contador marcar filtro que ninguém pôs).
+    [fMatricula, fNomeIf, fMarcacao].filter((f) => f.length > 0).length;
 
   // ── PATCH de status (avanço/reversão/aceite) ────────────────────────────────
   const doPatch = useCallback(
@@ -799,6 +899,15 @@ export default function EsteiraPage() {
     return {
       contrato: distintos((i) => i.tipoContrato),
       cargo: distintos((i) => i.cargoNome),
+      // ── Colunas da aba IFRACTAL escolhidas como filtro pelo diretor (§A.30) ──
+      // Matrícula, Nome e Tipo De Marcação. Cliente, Status e Data De Admissão já eram filtros de
+      // todas as abas e continuam servindo a esta. LOGIN e SENHA ficam de fora por decisão dele.
+      matricula: distintos((i) => i.matricula),
+      nome: distintos((i) => i.candidatoNome),
+      tipoMarcacao: distintos(
+        (i) => i.tipoMarcacao,
+        (v) => TIPO_MARCACAO_LABEL[v as TipoMarcacao] ?? v,
+      ),
       consultor: distintos((i) => i.integracao?.consultorNome),
       tipoIntegracao: distintos(
         (i) => i.integracao?.tipo,
@@ -863,13 +972,22 @@ export default function EsteiraPage() {
       if (fCargo && it.cargoNome !== fCargo) return false;
       if (fConsultor && (it.integracao?.consultorNome ?? "") !== fConsultor) return false;
       if (fTipoInteg && it.integracao?.tipo !== fTipoInteg) return false;
+      // ── ABA IFRACTAL: os três filtros de coluna escolhidos pelo diretor (§A.30) ──
+      // MÚLTIPLOS (§A.28): lista vazia significa "todos", e é por isso que o `length` vem antes.
+      if (fMatricula.length && !(it.matricula && fMatricula.includes(it.matricula))) return false;
+      if (fNomeIf.length && !fNomeIf.includes(it.candidatoNome)) return false;
+      if (fMarcacao.length && !(it.tipoMarcacao && fMarcacao.includes(it.tipoMarcacao))) return false;
       // NOME e HORÁRIO seguem por "contém": nome é busca, não categoria, e o horário o time procura
       // por prefixo ("09" para a manhã inteira).
       if (!contem(it.candidatoNome, fNome)) return false;
       if (!contem(it.integracao?.horario, fHorario)) return false;
       return true;
     });
-  }, [items, soPendencias, fContrato, fNome, fCargo, fHorario, fConsultor, fTipoInteg]);
+  }, [items, soPendencias, fContrato, fNome, fCargo, fHorario, fConsultor, fTipoInteg,
+    fMatricula,
+    fNomeIf,
+    fMarcacao,
+  ]);
   const statusCatalogo = data?.statusCatalogo ?? [];
 
   // Ordenação clicável do Farol (OST visual, fase 3). A lógica é compartilhada (`useOrdenacao`),
@@ -903,6 +1021,17 @@ export default function EsteiraPage() {
           i.integracao?.tipo ? (TIPO_INTEGRACAO_ROTULO[i.integracao.tipo] ?? i.integracao.tipo) : null,
       },
       { chave: "consultor", tipo: "texto", valor: (i) => i.integracao?.consultorNome ?? null },
+      // COLUNAS DA ABA IFRACTAL (§A.29: toda tabela nasce ordenável). Mesma disciplina das da
+      // Integração: declaradas aqui, desenhadas só na aba delas. O tipo de marcação ordena pelo
+      // RÓTULO que a tela mostra, e não pelo valor cru do enum, pelo mesmo motivo do tipo de
+      // integração logo acima.
+      {
+        chave: "tipoMarcacao",
+        tipo: "texto",
+        valor: (i) => (i.tipoMarcacao ? TIPO_MARCACAO_LABEL[i.tipoMarcacao] : null),
+      },
+      { chave: "ifractalLogin", tipo: "texto", valor: (i) => i.ifractalLogin ?? null },
+      { chave: "ifractalSenha", tipo: "texto", valor: (i) => i.ifractalSenha ?? null },
       { chave: "status", tipo: "status", valor: (i) => catMap.get(i.status)?.ordem ?? null },
       { chave: "pendencias", tipo: "status", valor: (i) => RANK_SINAL[i.sinalizador] ?? null },
     ],
@@ -918,7 +1047,20 @@ export default function EsteiraPage() {
   // de status: depois deles ainda vem o card "Com Pendências Obrigatórias" (§A.12), e era ELE que
   // deixava o "Declinou" no meio. Por isso o card de declínio é separado aqui e renderizado depois
   // do de pendências. Só a Auditoria tem DECLINOU no catálogo; nas outras abas nada é renderizado.
-  const kpiStatus = statusCatalogo.filter((c) => !c.conclui && c.codigo !== "DECLINOU");
+  /**
+   * Os cards de status EM ANDAMENTO. O concluinte sai (tem card próprio de "realizado") e o
+   * "Declinou" sai daqui para ser sempre o ÚLTIMO da fileira.
+   *
+   * RESCISÃO SAI DA INTEGRAÇÃO (decisão do diretor). Ela é um valor do catálogo daquela frente, e
+   * por isso ganhava card automaticamente; a aba não a quer. O recorte é só da Integração: onde
+   * `RESCISAO` existir em outra frente, o card segue como estava.
+   */
+  const kpiStatus = statusCatalogo.filter(
+    (c) =>
+      !c.conclui &&
+      c.codigo !== "DECLINOU" &&
+      !(isIntegracao && c.codigo === "RESCISAO"),
+  );
   const kpiDeclinio = statusCatalogo.find((c) => c.codigo === "DECLINOU");
   // Máscara única de tabela (§A.12): colunas REALMENTE separadas, com min-width por coluna para o
   // conteúdo NUNCA cortar/sobrepor; o container rola na horizontal (overflow-x) em vez de esmagar.
@@ -968,7 +1110,28 @@ export default function EsteiraPage() {
   // Candidato. Só na Esteira; o Gerenciador não muda. O checkbox do Exame segue como afordância à
   // esquerda de tudo.
   const gridCols = (
-    isIntegracao
+    isIfractal
+      ? // Composição própria (decisão do diretor): Matrícula, Cliente, Nome, Data adm., Tipo de
+        // Marcação, Login e Senha. Saem Contrato, Cargo e Pendências Obrigatórias, que não são a
+        // pergunta desta aba, e o seletor de status vive na própria coluna Status, como na
+        // Integração.
+        [
+          COL.matricula,
+          COL.cli,
+          COL.cand,
+          COL.data,
+          // "Reconhecimento Facial" é o rótulo mais longo: medida de conteúdo, não estimativa.
+          "170px",
+          // Login e Senha: campos de digitação, precisam de espaço real para o texto.
+          "minmax(170px,1fr)",
+          "minmax(150px,0.8fr)",
+          // STATUS: era 240px de piso e o rótulo comprimia dentro do seletor. "Pendente De Envio"
+          // mais a seta pedem mais, e o catálogo é EDITÁVEL, então o piso tem de aguentar rótulo
+          // que ainda nem existe. Medida de conteúdo com folga, não estimativa (§A.20).
+          "minmax(300px,1.4fr)",
+          COL.acoes,
+        ]
+      : isIntegracao
       ? // A aba da INTEGRAÇÃO tem composição própria (decisão do diretor): sai "Contrato", saem as
         // pendências obrigatórias e a coluna de avanço, e entram os três campos do agendamento. O
         // seletor de status vive na própria coluna Status, porque aqui ele é o avanço.
@@ -1015,7 +1178,10 @@ export default function EsteiraPage() {
     .filter(Boolean)
     .join(" ");
   // Piso de largura: abaixo dele o container rola na horizontal em vez de esmagar as colunas (§A.12).
-  const gridMin = isExame
+  const gridMin = isIfractal
+    ? // Soma dos pisos das nove colunas com folga, para a aba ROLAR em vez de espremer (§A.20).
+      "min-w-[1640px]"
+    : isExame
     ? "min-w-[1840px]"
     : isIntegracao
       ? // +110px com a Data adm. e +112px com o Contrato: o piso acompanha CADA coluna nova, senão a
@@ -1039,6 +1205,50 @@ export default function EsteiraPage() {
    * MESMO card em duas posições: os status comuns no meio e o "Declinou" depois do card de
    * pendências, como último da fileira. Duas cópias do JSX divergiriam na primeira alteração.
    */
+  /**
+   * O CARD DE "TOTAL REALIZADO" da aba aberta, ou `null` nas duas que já têm o seu.
+   *
+   * Um lugar só, e não três blocos de JSX iguais: os três cards diferem apenas em rótulo, título e
+   * qual status o clique filtra. Três cópias divergiriam no primeiro ajuste de estilo.
+   */
+  const cardRealizado = (() => {
+    const def = isAuditoria
+      ? { rotulo: "Auditorias Finalizadas", codigo: "ANALISE_OK", dica: "as auditorias finalizadas" }
+      : isIntegracao
+        ? { rotulo: "Integrações Realizadas", codigo: "REALIZADO", dica: "as integrações realizadas" }
+        : isIfractal
+          ? {
+              rotulo: "Logins Finalizados",
+              // Do CATÁLOGO, porque a lista de status do iFractal é editável pelo time.
+              codigo: statusCatalogo.find((c) => c.conclui)?.codigo ?? "",
+              dica: "os logins finalizados",
+            }
+          : null;
+    // Exame e Cadastro já têm o card próprio acima; sem status concluinte não há o que filtrar.
+    if (!def || !def.codigo) return null;
+    const ativo = statusFiltro.includes(def.codigo);
+    return (
+      <GlassCard
+        as="button"
+        className={cn(
+          "fk text-left transition hover:bg-[var(--surface-2)]",
+          ativo && "!border-[var(--accent)] ring-1 ring-[var(--accent)]",
+        )}
+        onClick={() => toggleStatusKpi(def.codigo)}
+        aria-pressed={ativo}
+        title={ativo ? "Remover filtro" : `Filtrar só ${def.dica}`}
+      >
+        <div className="num" style={{ color: TONE_VAR.ok }}>
+          {loading && !data ? "…" : (data?.kpis.concluidasFrente ?? 0)}
+        </div>
+        <div className="lbl flex items-center gap-1.5">
+          {def.rotulo}
+          {ativo && <Icon name="check" className="h-3 w-3 text-accent" />}
+        </div>
+      </GlassCard>
+    );
+  })();
+
   function cardStatus(c: StatusCat) {
     const color = TONE_VAR[statusTone(c.codigo, c)];
     const ativo = statusFiltro.includes(c.codigo);
@@ -1280,6 +1490,42 @@ export default function EsteiraPage() {
                 />
               </FiltroCampo>
 
+              {/* ── ABA IFRACTAL: as colunas que o diretor escolheu como filtro (§A.30) ──
+                  Só as TRÊS que faltavam. Cliente, Status e Data De Admissão já estão acima e valem
+                  para todas as abas. LOGIN e SENHA ficam de fora por decisão dele: ninguém procura
+                  uma pessoa filtrando por credencial. Todos MÚLTIPLOS (§A.28). */}
+              {isIfractal && (
+                <>
+                  <FiltroCampo label="Matrícula">
+                    <MultiSelect
+                      ariaLabel="Filtrar por matrícula"
+                      values={fMatricula}
+                      onChange={setFMatricula}
+                      options={opcoesDaFila.matricula}
+                      placeholder="Todas as matrículas"
+                    />
+                  </FiltroCampo>
+                  <FiltroCampo label="Nome Do Funcionário">
+                    <MultiSelect
+                      ariaLabel="Filtrar por nome"
+                      values={fNomeIf}
+                      onChange={setFNomeIf}
+                      options={opcoesDaFila.nome}
+                      placeholder="Todos os nomes"
+                    />
+                  </FiltroCampo>
+                  <FiltroCampo label="Tipo De Marcação">
+                    <MultiSelect
+                      ariaLabel="Filtrar por tipo de marcação"
+                      values={fMarcacao}
+                      onChange={setFMarcacao}
+                      options={opcoesDaFila.tipoMarcacao}
+                      placeholder="Todos os tipos"
+                    />
+                  </FiltroCampo>
+                </>
+              )}
+
               {isExame && (
                 <FiltroCampo label="Data do Exame">
                   <IntervaloData
@@ -1404,6 +1650,11 @@ export default function EsteiraPage() {
             </div>
           </GlassCard>
           {kpiStatus.map((c) => cardStatus(c))}
+          {/* ORDEM DOS KPIs DA INTEGRAÇÃO (decisão do diretor): Total, A Agendar, Agendado,
+              Integrações Realizadas, Com Pendências Obrigatórias, Declinou. O card de "realizado"
+              entra AQUI, antes das pendências, e por isso é renderizado em dois pontos: nas outras
+              abas ele segue depois, onde o diretor já aprovou. */}
+          {isIntegracao && cardRealizado}
           {/* Item 9 / §A.12: admissões com campos obrigatórios pendentes. Clicável = filtro (toggle),
             mostra só quem tem pendência obrigatória nesta frente. */}
           <GlassCard
@@ -1430,7 +1681,11 @@ export default function EsteiraPage() {
           </GlassCard>
           {/* PAUSA (OST admissão pausada, Bloco 4). Este card é o que impede a pausada de virar
               admissão fantasma: ela some da fila e das outras contagens, e fica aqui, a um clique.
-              Clicável como filtro (§A.12), igual aos demais. */}
+              Clicável como filtro (§A.12), igual aos demais.
+
+              FORA DA INTEGRAÇÃO (decisão do diretor): admissão pausada não chega àquela frente, e
+              card que sempre marca zero só ocupa espaço. */}
+          {!isIntegracao && (
           <GlassCard
             as="button"
             className={cn(
@@ -1451,6 +1706,7 @@ export default function EsteiraPage() {
               {soPausadas && <Icon name="check" className="h-3 w-3 text-accent" />}
             </div>
           </GlassCard>
+          )}
           {/* KPI "Cadastrado" (aba Cadastro, decisão do diretor): quantas JÁ foram cadastradas. Vem
               de `kpis.cadastrados`, e não de `porStatus`, porque este último só conta frente EM
               ANDAMENTO (concluida=false) — "Cadastrado" é o status concluinte e ali daria sempre 0.
@@ -1511,6 +1767,18 @@ export default function EsteiraPage() {
               </div>
             </GlassCard>
           )}
+          {/* ── CARDS DE "TOTAL REALIZADO" das três frentes que ainda não tinham ──────────
+              MESMA mecânica dos cards "Cadastrado" e "Aptas" acima, e pelo mesmo motivo: concluir
+              TIRA da fila, então sem este número o trabalho feito some da tela. O valor vem de
+              `kpis.concluidasFrente` (um `count` sobre a própria frente concluída, sem chance de
+              contar em dobro) e clicar filtra pelo status de conclusão, que é o que reexpõe as
+              concluídas na lista (`filtraStatusConclui` no backend).
+
+              O ALVO DO CLIQUE É O STATUS CONCLUINTE DE CADA FRENTE, e no iFractal ele vem do
+              CATÁLOGO, não de uma constante: aquela lista é editável pelo time, então fixar
+              "FINALIZADO" aqui deixaria o card mudo no dia em que alguém marcasse outro status como
+              concluinte. */}
+          {!isIntegracao && cardRealizado}
           {/* Declínio SEMPRE o último card da fileira (decisão do diretor) — por isso vem DEPOIS do
               card de pendências, e não junto dos demais status. */}
           {kpiDeclinio && cardStatus(kpiDeclinio)}
@@ -1630,9 +1898,11 @@ export default function EsteiraPage() {
                     era a única sem ela, e o time precisa do tipo de contrato na hora de conduzir a
                     integração. Mesma posição, mesmo rótulo e mesma ordenação das outras três, que é
                     o que a §A.12 pede de uma máscara única. */}
-                <ColunaOrdenavel ord={ord} chave="contrato">
-                  Contrato
-                </ColunaOrdenavel>
+                {!isIfractal && (
+                  <ColunaOrdenavel ord={ord} chave="contrato">
+                    Contrato
+                  </ColunaOrdenavel>
+                )}
                 {/* MATRÍCULA (decisão do diretor): só na aba CADASTRO, que é onde a importação
                     acontece, e ANTES do nome, como na tela de Benefícios. */}
                 {isCadastro && (
@@ -1640,6 +1910,37 @@ export default function EsteiraPage() {
                     Matrícula
                   </ColunaOrdenavel>
                 )}
+                {isIfractal ? (
+                  <>
+                    {/* Ordem pedida pelo diretor: Matrícula, Cliente, Nome, Data adm., Tipo de
+                        Marcação, Login e Senha. Todas ordenáveis (§A.29). */}
+                    <ColunaOrdenavel ord={ord} chave="matricula">
+                      Matrícula
+                    </ColunaOrdenavel>
+                    <ColunaOrdenavel ord={ord} chave="cliente">
+                      Cliente
+                    </ColunaOrdenavel>
+                    <ColunaOrdenavel ord={ord} chave="candidato">
+                      Nome
+                    </ColunaOrdenavel>
+                    <ColunaOrdenavel ord={ord} chave="data">
+                      Data adm.
+                    </ColunaOrdenavel>
+                    <ColunaOrdenavel ord={ord} chave="tipoMarcacao">
+                      Tipo De Marcação
+                    </ColunaOrdenavel>
+                    <ColunaOrdenavel ord={ord} chave="ifractalLogin">
+                      Login
+                    </ColunaOrdenavel>
+                    <ColunaOrdenavel ord={ord} chave="ifractalSenha">
+                      Senha
+                    </ColunaOrdenavel>
+                    <ColunaOrdenavel ord={ord} chave="status">
+                      Status
+                    </ColunaOrdenavel>
+                  </>
+                ) : (
+                  <>
                 <ColunaOrdenavel ord={ord} chave="candidato">
                   Nome
                 </ColunaOrdenavel>
@@ -1692,6 +1993,8 @@ export default function EsteiraPage() {
                     <span>
                       {isExame ? "ASO / Avanço" : isAuditoria ? "Avanço / Auditoria" : "Avanço"}
                     </span>
+                  </>
+                )}
                   </>
                 )}
                 <span className="col-fix">Ações</span>
@@ -1760,6 +2063,93 @@ export default function EsteiraPage() {
                           />
                         </div>
                       )}
+                      {isIfractal ? (
+                        <>
+                          {/* A ORDEM É A PEDIDA PELO DIRETOR: Matrícula, Cliente, Nome, Data adm.,
+                              Tipo De Marcação, Login e Senha. Saem Contrato, Cargo, Pendências
+                              Obrigatórias e a coluna de Avanço, que não são a pergunta desta aba: o
+                              seletor de status vive na própria coluna Status, como na Integração. */}
+                          <div
+                            className={cn(
+                              "meta truncate text-center tabular-nums",
+                              !item.matricula && "text-faint",
+                            )}
+                            title={item.matricula || "não informado"}
+                          >
+                            {item.matricula || "não informado"}
+                          </div>
+                          <div className="min-w-0 text-center">
+                            <div
+                              className="meta truncate text-text"
+                              title={item.clienteOperacao || item.clienteRazao}
+                            >
+                              {item.clienteOperacao || item.clienteRazao}
+                            </div>
+                          </div>
+                          <div className="min-w-0 text-left">
+                            <div className="nm truncate" title={caixaAlta(item.candidatoNome)}>
+                              {caixaAlta(item.candidatoNome)}
+                            </div>
+                          </div>
+                          <div className="meta text-center">{fmtDataAdmissao(item.dataAdmissao)}</div>
+                          {/* HERDADO do cliente: a coluna é NOT NULL, então nunca fica vazia. */}
+                          <div className="meta truncate text-center" title={rotuloMarcacao(item)}>
+                            {rotuloMarcacao(item)}
+                          </div>
+                          {/* LOGIN e SENHA editáveis direto na linha: é o trabalho da aba, e obrigar
+                              a abrir um modal para dois campos de texto só somaria cliques.
+                              §A.6: a senha aparece porque é DESCARTÁVEL (o iFractal força a troca no
+                              primeiro acesso), decisão registrada do diretor. Ela NUNCA é logada. */}
+                          <div className="min-w-0">
+                            <input
+                              className="ds-input h-8 w-full text-[13px]"
+                              placeholder="login"
+                              aria-label={`Login do iFractal de ${item.candidatoNome}`}
+                              value={credDe(item).login}
+                              onChange={(e) => setCred(item, { login: e.target.value })}
+                              onBlur={() => salvarCred(item)}
+                            />
+                          </div>
+                          <div className="flex min-w-0 items-center gap-1">
+                            <input
+                              className="ds-input h-8 w-full text-[13px]"
+                              placeholder="senha"
+                              aria-label={`Senha do iFractal de ${item.candidatoNome}`}
+                              value={credDe(item).senha}
+                              onChange={(e) => setCred(item, { senha: e.target.value })}
+                              onBlur={() => salvarCred(item)}
+                            />
+                            {credSalvando === item.admissaoId && (
+                              <Icon name="refresh" className="h-3.5 w-3.5 flex-none text-faint" />
+                            )}
+                          </div>
+                          {/* Status: o seletor É a coluna, e a lista vem do catálogo GERENCIÁVEL que
+                              o backend devolve, não de uma lista fixa aqui. Status criado no menu
+                              gerencial aparece neste seletor sem precisar publicar a tela de novo.
+                              
+                              `Select` DO DESIGN SYSTEM, e não o `<select>` nativo: o nativo herda o
+                              tema do sistema operacional e abre a lista em cinza e azul do browser,
+                              fora do desenho do EA. É o mesmo componente que as outras abas usam na
+                              coluna de Avanço. `menuFit` deixa a LISTA ABERTA crescer até o maior
+                              rótulo, para status de nome longo não sair cortado numa coluna estreita. */}
+                          <div className="flex min-w-0 items-center">
+                            <Select
+                              className="w-full"
+                              menuFit
+                              ariaLabel={`Status do iFractal de ${item.candidatoNome}`}
+                              disabled={actingId === item.frenteId}
+                              value={item.status}
+                              onChange={(novo) => doPatch(item.frenteId, novo, false)}
+                              options={(data?.statusCatalogo ?? []).map((c) => ({
+                                value: c.codigo,
+                                label: c.rotulo,
+                                color: TONE_VAR[statusTone(c.codigo, c)],
+                              }))}
+                            />
+                          </div>
+                        </>
+                      ) : (
+                        <>
                       {/* Tipo de contrato: PRIMEIRA coluna de conteúdo (OST ajustes, item 5a). Vazio =
                           "não informado" (§A.11), em tom apagado para bater o olho em quem está sem o
                           dado. */}
@@ -2126,6 +2516,9 @@ export default function EsteiraPage() {
                             </div>
                           )}
                       </div>
+
+                        </>
+                      )}
 
                       {/* Coluna AÇÕES: prontuário no Drive (se houver) + olho + editar. */}
                       <div className="col-fix flex items-center justify-center gap-0.5">

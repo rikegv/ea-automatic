@@ -20,6 +20,20 @@ export const ORDEM_STATUS: Record<FrenteTipo, string[]> = {
   EXAME: [...STATUS_EXAME],
   CADASTRO_CONTRATO: [...STATUS_CADASTRO_CONTRATO],
   INTEGRACAO: [...STATUS_INTEGRACAO],
+  /**
+   * VAZIO DE PROPÓSITO, e esta é a linha mais importante do arquivo para a frente do iFractal.
+   *
+   * O catálogo de status do iFractal é GERENCIÁVEL pelo time (renomeia, acrescenta, escolhe qual
+   * conclui), então a lista vive na TABELA `frente_status_catalogo`, não aqui. Deixar a semente
+   * escrita neste mapa criaria uma segunda verdade que envelheceria no primeiro rename, e as
+   * funções puras deste arquivo passariam a recusar um status que a tela oferece.
+   *
+   * Consequência deliberada: `isStatusValido` e `isReversao` respondem `false` para IFRACTAL, e o
+   * serviço da Esteira NÃO os consulta para esta frente. Ele resolve validade e conclusão lendo o
+   * catálogo do banco (`catalogoDinamico`). `isReversao` falso também é o comportamento pedido: no
+   * iFractal o consultor move livre, em qualquer direção, sem alerta de recuo.
+   */
+  IFRACTAL: [],
 };
 
 /**
@@ -36,6 +50,10 @@ export const STATUS_CONCLUI: Record<FrenteTipo, string> = {
   CADASTRO_CONTRATO: "CADASTRADO",
   // Concluir a INTEGRAÇÃO é o FIM da esteira: a admissão passa a viver no Gerenciador.
   INTEGRACAO: "REALIZADO",
+  // SEMENTE, não verdade: quem conclui a frente do iFractal é a coluna `conclui` do catálogo no
+  // banco, que o time edita. Este valor existe porque o mapa é TOTAL e serve de referência do que
+  // o seed grava; nenhum caminho de código do iFractal o consulta.
+  IFRACTAL: "FINALIZADO",
 };
 
 /**
@@ -54,6 +72,19 @@ const CONCLUI_TAMBEM: Partial<Record<FrenteTipo, readonly string[]>> = {
 };
 
 /** O status conclui a frente? */
+/**
+ * FRENTES CUJO CATÁLOGO DE STATUS VIVE NO BANCO, e não neste arquivo.
+ *
+ * Quem estiver aqui NÃO passa por `isStatusValido`/`conclui`: o serviço da Esteira resolve pelo
+ * `frente_status_catalogo`. A lista existe para o desvio ser explícito e pesquisável, em vez de um
+ * `if (tipo === "IFRACTAL")` solto no meio do serviço.
+ */
+export const FRENTES_STATUS_DINAMICO: readonly FrenteTipo[] = ["IFRACTAL"];
+
+export function ehStatusDinamico(tipo: FrenteTipo): boolean {
+  return FRENTES_STATUS_DINAMICO.includes(tipo);
+}
+
 export function conclui(tipo: FrenteTipo, status: string): boolean {
   return status === STATUS_CONCLUI[tipo] || (CONCLUI_TAMBEM[tipo] ?? []).includes(status);
 }

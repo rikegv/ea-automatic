@@ -39,6 +39,22 @@ export const frenteTipoEnum = pgEnum("frente_tipo", [
   // Última etapa da esteira (decisão do diretor). Nasce quando o Cadastro conclui, e só para
   // cliente que exige integração.
   "INTEGRACAO",
+  /**
+   * IFRACTAL, a 5ª frente (sistema de ponto externo). Nasce junto do Cadastro, pela mesma porta.
+   *
+   * NÃO ENTRA em `admissaoConcluidaSql` (decisão do diretor): a admissão termina com Auditoria,
+   * Exame, Cadastro e Integração, e o iFractal é controle administrativo POSTERIOR, do time de
+   * Ponto. Incluí-lo moveria Painel, Gerenciador e Alto Volume de uma vez, que é o defeito da §A.27.
+   */
+  "IFRACTAL",
+]);
+
+/** Como o cliente marca ponto no iFractal. Herdado por toda admissão dele. */
+export const tipoMarcacaoEnum = pgEnum("tipo_marcacao", [
+  "CARTAO",
+  "BIOMETRIA",
+  "RECONHECIMENTO_FACIAL",
+  "APLICATIVO",
 ]);
 
 /** Modalidade da integração agendada. */

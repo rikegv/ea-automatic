@@ -21,6 +21,10 @@ export const ADMIN_MENUS = [
   "pendencias-cliente",
   "motivos-declinio",
   "tarifas",
+  // O INVERSO do caso `assinante-empresa` do comentário acima: a TELA do iFractal vive FORA de
+  // `/admin` (é gestão, não catálogo), mas o CARD dela mora no hub. Quem tiver só este menu precisa
+  // conseguir abrir a camada para chegar ao card, senão o menu ficaria liberado e inalcançável.
+  "ifractal",
   "regua",
   "kit-regras",
   "regras",

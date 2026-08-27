@@ -2,7 +2,7 @@
  * Regras puras da criação de Admissão (CLAUDE.md §A.3 / F5 / F6). Sem dependência de DB —
  * testáveis isoladamente. Complementam `frentes.ts` (nascimento paralelo e gate do Cadastro).
  */
-import type { FarolGlobal } from "@ea/shared-types";
+import { STATUS_IFRACTAL_INICIAL, type FarolGlobal } from "@ea/shared-types";
 import {
   exigido,
   ROTULO_PENDENCIA,
@@ -26,6 +26,9 @@ export const STATUS_INICIAL_FRENTE: Record<FrenteTipo, string> = {
   EXAME: "A_AGENDAR",
   CADASTRO_CONTRATO: "A_CADASTRAR",
   INTEGRACAO: "A_AGENDAR",
+  // O catálogo do iFractal é GERENCIÁVEL (o time renomeia e acrescenta), então o que é estável aqui
+  // é o CÓDIGO do status de nascimento, não o rótulo que a tela mostra.
+  IFRACTAL: STATUS_IFRACTAL_INICIAL,
 };
 
 /** Entrada do cálculo do sinalizador — espelha os campos-núcleo do wizard (F6). */

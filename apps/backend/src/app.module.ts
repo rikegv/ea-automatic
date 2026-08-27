@@ -19,6 +19,7 @@ import { DiagnosticoModule } from "./diagnostico/diagnostico.module";
 import { SenhaTemporariaGuard } from "./auth/guards/senha-temporaria.guard";
 import { DrizzleModule } from "./db/drizzle.module";
 import { EsteiraModule } from "./esteira/esteira.module";
+import { IfractalModule } from "./ifractal/ifractal.module";
 import { GerencialModule } from "./gerencial/gerencial.module";
 import { SalaEsperaModule } from "./sala-espera/sala-espera.module";
 import { KitModule } from "./kit/kit.module";
@@ -50,6 +51,7 @@ import { VtColetaModule } from "./vt-coleta/vt-coleta.module";
     PastasDriveModule,
     AdmissoesModule,
     EsteiraModule,
+    IfractalModule,
     GerencialModule,
     SalaEsperaModule,
     BeneficiosFilaModule,

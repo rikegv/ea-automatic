@@ -24,6 +24,7 @@ export const ROTA_MENU: { prefixo: string; codigo: string }[] = [
   { prefixo: "/admin/beneficios", codigo: "beneficios" },
   { prefixo: "/admin/motivos-declinio", codigo: "motivos-declinio" },
   { prefixo: "/admin/tarifas", codigo: "tarifas" },
+  { prefixo: "/ifractal", codigo: "ifractal" },
   { prefixo: "/admin/regua", codigo: "regua" },
   { prefixo: "/admin/kit-regras", codigo: "kit-regras" },
   { prefixo: "/admin/regras", codigo: "regras" },

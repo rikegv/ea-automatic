@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { apiFetch } from "@/lib/api";
+import { TIPO_MARCACAO, TIPO_MARCACAO_LABEL, type TipoMarcacao } from "@ea/shared-types";
 import { useAuth } from "@/lib/auth-context";
 import { PageHead } from "@/components/ui/PageHead";
 import { GlassCard } from "@/components/ui/GlassCard";
@@ -20,6 +21,9 @@ interface Cliente {
   periodicidadeBeneficio: "CADA_5_DIAS" | "CADA_15_DIAS" | "MENSAL" | null;
   diaPagamentoBeneficio: number | null;
   diasPrimeiroCredito: number | null;
+  // Tipo de marcação de ponto no iFractal. NOT NULL no banco (default APLICATIVO): sempre vem
+  // preenchido, ao contrário dos três campos de benefício acima.
+  tipoMarcacao: TipoMarcacao;
   ativo: boolean;
   // Vínculo cliente ↔ entidade Soulan empregadora (resolvido no backend).
   empresaVinculo?: string | null;
@@ -53,6 +57,9 @@ const EMPTY = {
   periodicidadeBeneficio: "",
   diaPagamentoBeneficio: "",
   diasPrimeiroCredito: "",
+  // Nasce no mesmo default do banco: o formulário de cliente NOVO já vem em Aplicativo, que é o
+  // caso majoritário, e o time troca a minoria.
+  tipoMarcacao: "APLICATIVO" as TipoMarcacao,
 };
 
 /** Os rótulos da periodicidade, os mesmos que a tela de Benefícios exibe. */
@@ -181,6 +188,7 @@ export default function ClientesPage() {
       nomeOperacao: c.nomeOperacao ?? "",
       periodicidadeBeneficio: c.periodicidadeBeneficio ?? "",
       diaPagamentoBeneficio: c.diaPagamentoBeneficio?.toString() ?? "",
+      tipoMarcacao: c.tipoMarcacao ?? ("APLICATIVO" as TipoMarcacao),
       diasPrimeiroCredito: c.diasPrimeiroCredito?.toString() ?? "",
     });
     setVinculoOriginal(c.vinculoOpcaoId ?? null);
@@ -215,6 +223,7 @@ export default function ClientesPage() {
             // tornaria impossível LIMPAR uma regra. Mandando null, o admin apaga o que cadastrou
             // errado. Zero é valor válido em `diasPrimeiroCredito` (crédito no mesmo dia), por isso
             // a comparação é com string vazia e não com falsy.
+            tipoMarcacao: form.tipoMarcacao,
             periodicidadeBeneficio: form.periodicidadeBeneficio || null,
             diaPagamentoBeneficio:
               form.diaPagamentoBeneficio === "" ? null : Number(form.diaPagamentoBeneficio),
@@ -351,6 +360,28 @@ export default function ClientesPage() {
         {/* CAMADA DE PAGAMENTO DO BENEFÍCIO, só na EDIÇÃO (§A.17 etapa 4): é regra que se define
             para um cliente que já existe, e o cadastro inicial continua com os campos de sempre.
             Os três são opcionais e podem ser LIMPOS deixando o campo vazio. */}
+        <label className="grid gap-1 sm:col-span-2">
+          <span className="ds-label">Tipo de marcação</span>
+          <select
+            value={form.tipoMarcacao}
+            onChange={(e) =>
+              setForm({ ...form, tipoMarcacao: e.target.value as TipoMarcacao })
+            }
+            className="ds-input"
+          >
+            {TIPO_MARCACAO.map((t) => (
+              <option key={t} value={t}>
+                {TIPO_MARCACAO_LABEL[t]}
+              </option>
+            ))}
+          </select>
+          {/* SEM opção "não informado", ao contrário dos campos de benefício: a coluna é NOT NULL e
+              todo cliente marca ponto de alguma forma. Toda admissão do cliente herda este valor. */}
+          <span className="text-[12px] text-faint">
+            Herdado por todas as admissões deste cliente no iFractal.
+          </span>
+        </label>
+
         {editando && (
           <div className="grid gap-3 sm:col-span-5 sm:grid-cols-3">
             <label className="grid gap-1">
@@ -695,6 +726,13 @@ function FragmentRow({
                 <Ficha rotulo="Periodicidade do benefício">{periodicidadeLeitura(c)}</Ficha>
                 <Ficha rotulo="Dia do pagamento">{diaPagamentoLeitura(c)}</Ficha>
                 <Ficha rotulo="Dias até o 1º crédito">{diasPrimeiroCreditoLeitura(c)}</Ficha>
+                {/* Tipo de marcação do iFractal, VISÍVEL na expansão pelo mesmo motivo dos três
+                    campos de benefício acima: é consulta rápida, e obrigar a abrir o editar para
+                    ver um valor de leitura é clique a mais sem ganho. A edição segue no formulário
+                    do topo. NOT NULL no banco, então nunca cai no "não informado". */}
+                <Ficha rotulo="Tipo de marcação">
+                  {TIPO_MARCACAO_LABEL[c.tipoMarcacao] ?? c.tipoMarcacao}
+                </Ficha>
               </div>
             </div>
           </td>

@@ -523,6 +523,25 @@ export const MENUS: MenuDef[] = [
     operacoes: ["RegrasController.*"],
   },
   {
+    /**
+     * MENU GERENCIAL DO IFRACTAL (frente iFractal). Gestão das admissões no sistema de ponto e o
+     * gerenciamento da lista de status.
+     *
+     * §A.23: NASCE SÓ PARA O SUPER_ADMIN. O convergedor de boot REGISTRA o menu no catálogo, para
+     * ele existir e ser selecionável, e para por aí. Quem enxerga é decisão do diretor, na tela de
+     * liberação de menu por usuário. Não aparecer para os demais NÃO é defeito.
+     */
+    codigo: "ifractal",
+    rotulo: "iFractal",
+    href: "/ifractal",
+    grupo: "ADMIN",
+    ordem: 26,
+    // A tela de gestão E o CRUD da lista de status vivem no mesmo controller, então uma entrada só.
+    // A ABA da Esteira NÃO entra aqui: ela é servida pela rota genérica da Esteira e pertence ao
+    // menu `esteira`, que o time do ADM já tem.
+    operacoes: ["IfractalController.*"],
+  },
+  {
     codigo: "diagnostico",
     rotulo: "Diagnóstico Do Sistema",
     href: "/admin/diagnostico",

@@ -1,3 +1,4 @@
+import { TIPO_MARCACAO, type TipoMarcacao } from "@ea/shared-types";
 import {
   IsBoolean,
   IsIn,
@@ -85,4 +86,15 @@ export class UpdateClienteDto {
   @Min(0)
   @Max(60)
   diasPrimeiroCredito?: number | null;
+
+  /**
+   * TIPO DE MARCAÇÃO DE PONTO no iFractal. Toda admissão do cliente herda.
+   *
+   * NÃO ACEITA NULL, ao contrário dos três campos acima: a coluna é NOT NULL com default
+   * `APLICATIVO`, porque não existe cliente que não marque ponto de alguma forma. Não mandar o campo
+   * é não mexer; mandar um dos quatro valores troca.
+   */
+  @IsOptional()
+  @IsIn(TIPO_MARCACAO)
+  tipoMarcacao?: TipoMarcacao;
 }

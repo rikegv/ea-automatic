@@ -11,6 +11,7 @@ import {
 import {
   beneficioExigeValor,
   CLICKSIGN_STATUS_LABEL,
+  TIPO_MARCACAO_LABEL,
   FAROL_GLOBAL_LABEL,
   isValidCpf,
   ITENS_EPI,
@@ -57,6 +58,7 @@ import {
 } from "./relatorio-agregados";
 import {
   admissaoBeneficio,
+  admissaoIfractal,
   admissaoProjeto,
   admissoes,
   clienteVinculos,
@@ -1773,6 +1775,12 @@ export class AdmissoesService {
         clientePeriodicidadeBeneficio: clientes.periodicidadeBeneficio,
         clienteDiaPagamentoBeneficio: clientes.diaPagamentoBeneficio,
         clienteDiasPrimeiroCredito: clientes.diasPrimeiroCredito,
+        // ── iFractal ────────────────────────────────────────────────────────
+        // Tipo de marcação HERDADO do cliente (leitura, nunca cópia) e a credencial da tabela
+        // própria. O join é 1 para 1 (`unique` em admissao_id), então não multiplica linha.
+        ifractalTipoMarcacao: clientes.tipoMarcacao,
+        ifractalLogin: admissaoIfractal.login,
+        ifractalSenha: admissaoIfractal.senha,
         // ── Vínculo e entidade Soulan ───────────────────────────────────────
         vinculoEmpresaCodigo: clienteVinculos.empresaCodigo,
         vinculoTipoServico: clienteVinculos.tipoServico,
@@ -1838,6 +1846,7 @@ export class AdmissoesService {
       .leftJoin(consultorIntegracao, eq(consultorIntegracao.id, integracaoAgendamento.consultorId))
       .leftJoin(motivosDeclinio, eq(motivosDeclinio.id, admissoes.motivoDeclinioId))
       .leftJoin(consultorAdmissao, eq(consultorAdmissao.id, admissoes.consultorId))
+      .leftJoin(admissaoIfractal, eq(admissaoIfractal.admissaoId, admissoes.id))
       .where(whereDoFiltro(listWhere))
       .orderBy(...ordemDaLista(filtros.ordenarPor, filtros.direcao), asc(admissoes.id))
       .limit(TETO_LINHAS_RELATORIO + 1);
@@ -1864,7 +1873,7 @@ export class AdmissoesService {
       colunas.some((c) => prefixos.some((p) => c === p || c.startsWith(p)));
 
     const [frentes, pacoteBeneficios, vt, pendPorAdm, docsPendentes] = await Promise.all([
-      querBloco(["frente"])
+      querBloco(["frente", "ifractalStatus"])
         ? frentesDoRelatorio(this.db, ids)
         : Promise.resolve(new Map<string, Record<string, { rotulo: string; concluidaEm: Date | null; responsavel: string | null }>>()),
       // A coluna "Benefícios" (grupo Folha) agora É o pacote estruturado, então ela também puxa.
@@ -2032,6 +2041,13 @@ export class AdmissoesService {
         vtTotalIda: numeroDoSalario(v?.totalIda),
         vtTotalVolta: numeroDoSalario(v?.totalVolta),
         vtTotalDia: numeroDoSalario(v?.totalDia),
+        // ── iFractal ──────────────────────────────────────────────────────
+        // O status sai do MESMO agregado de frentes das demais colunas, então o rótulo é o que o
+        // catálogo gerenciável diz hoje: renomear um status na tela renomeia na planilha também.
+        ifractalLogin: l.ifractalLogin,
+        ifractalSenha: l.ifractalSenha,
+        ifractalTipoMarcacao: TIPO_MARCACAO_LABEL[l.ifractalTipoMarcacao] ?? l.ifractalTipoMarcacao,
+        ifractalStatus: f.IFRACTAL?.rotulo ?? null,
       };
     });
 

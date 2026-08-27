@@ -86,6 +86,25 @@ const CARDS: { href: string; icon: IconName; title: string; desc: string; codigo
     desc: "Catálogo de motivos de declínio da admissão.",
   },
   {
+    /**
+     * O CARD É O QUE FAZ O MENU EXISTIR PARA O USUÁRIO, e essa foi a lição desta entrega.
+     *
+     * O menu novo foi registrado no catálogo do backend pelo convergedor de boot, e mesmo assim não
+     * apareceu para o SUPER_ADMIN: a barra lateral não lista os menus administrativos um a um, ela
+     * mostra UM card "Menu Gerencial" que abre esta tela, e é ESTA lista que desenha os itens.
+     * Registrar no backend e parar por aí deixa o menu existindo, liberável e invisível, que é o
+     * mesmo sintoma que a §A.23 registra para o `clinicas` em 29/07/2026.
+     *
+     * A rota é `/ifractal`, e não `/admin/ifractal`, porque a tela é de GESTÃO e não de catálogo,
+     * mas o card mora aqui porque é daqui que o time chega nela.
+     */
+    href: "/ifractal",
+    codigo: "ifractal",
+    icon: "clock",
+    title: "iFractal",
+    desc: "Gestão do cadastro no sistema de ponto e a lista de status da frente.",
+  },
+  {
     href: "/admin/tarifas",
     codigo: "tarifas",
     icon: "table",

@@ -3,6 +3,7 @@ import type { EstadoFrente } from "./frentes";
 import { podeAbrirCadastro } from "./frentes";
 import {
   conclui,
+  ehStatusDinamico,
   isReversao,
   isStatusValido,
   ORDEM_STATUS,
@@ -32,7 +33,22 @@ describe("conclui() / isStatusValido() (§A.3 status por frente)", () => {
       // INTEGRAÇÃO, a última etapa (decisão do diretor). Concluir aqui é o FIM da esteira: a
       // admissão passa a viver no Gerenciador.
       INTEGRACAO: "REALIZADO",
+      // IFRACTAL é SEMENTE, não verdade: quem conclui a frente do iFractal é a coluna `conclui` do
+      // catálogo no banco, que o time edita pela tela do menu gerencial. A entrada existe porque o
+      // mapa é TOTAL, e nenhum caminho de código do iFractal a consulta.
+      IFRACTAL: "FINALIZADO",
     });
+  });
+
+  it("o iFractal NÃO responde pelas réguas de código: a lista dele vive no banco", () => {
+    // A consequência deliberada de `ORDEM_STATUS.IFRACTAL` ser vazio. Se um dia alguém escrever a
+    // semente naquele mapa, este teste cai e a pessoa lê o porquê antes de criar a segunda verdade.
+    expect(ehStatusDinamico("IFRACTAL")).toBe(true);
+    expect(ehStatusDinamico("AUDITORIA")).toBe(false);
+    expect(isStatusValido("IFRACTAL", "FINALIZADO")).toBe(false);
+    expect(isStatusValido("IFRACTAL", "NAO_CADASTRADO")).toBe(false);
+    // Sem ordem em código, mover status no iFractal nunca caracteriza recuo: é o "move livre" pedido.
+    expect(isReversao("IFRACTAL", "FINALIZADO", "NAO_CADASTRADO")).toBe(false);
   });
 
   it("isStatusValido reconhece só os status da própria frente", () => {

@@ -45,7 +45,7 @@ describe("nascerCadastroEIntegracao", () => {
       exigeIntegracao: true,
     });
 
-    expect(inseridos.map((i) => i.tipo)).toEqual(["CADASTRO_CONTRATO", "INTEGRACAO"]);
+    expect(inseridos.map((i) => i.tipo)).toEqual(["CADASTRO_CONTRATO", "INTEGRACAO", "IFRACTAL"]);
     expect(r.integracaoNasceu).toBe(true);
     expect(r.cadastroId).toBe("f-CADASTRO_CONTRATO");
   });
@@ -70,7 +70,7 @@ describe("nascerCadastroEIntegracao", () => {
     });
   });
 
-  it("cliente que NÃO exige: nasce SÓ o Cadastro, e a Integração não é sequer tentada", async () => {
+  it("cliente que NÃO exige: a Integração não é tentada, mas o iFractal nasce assim mesmo", async () => {
     const { tx, inseridos } = montar();
 
     const r = await nascerCadastroEIntegracao(tx as never, {
@@ -79,12 +79,15 @@ describe("nascerCadastroEIntegracao", () => {
       exigeIntegracao: false,
     });
 
-    expect(inseridos.map((i) => i.tipo)).toEqual(["CADASTRO_CONTRATO"]);
+    expect(inseridos.map((i) => i.tipo)).toEqual(["CADASTRO_CONTRATO", "IFRACTAL"]);
     expect(r.integracaoNasceu).toBe(false);
     // É esta metade que mantém o carimbo `concluiSemIntegracao` alcançável na conclusão do Cadastro.
+    // O IFRACTAL NÃO TEM ESSA METADE, de propósito: nasce para TODOS os clientes, porque todo
+    // cliente marca ponto de alguma forma. É a diferença deliberada para com a Integração.
+    expect(r.ifractalNasceu).toBe(true);
   });
 
-  it("as duas frentes usam `onConflictDoNothing`: dois cliques simultâneos não duplicam", async () => {
+  it("as três frentes usam `onConflictDoNothing`: dois cliques simultâneos não duplicam", async () => {
     const { tx } = montar({ conflita: true });
 
     const r = await nascerCadastroEIntegracao(tx as never, {
@@ -120,6 +123,6 @@ describe("nascerCadastroEIntegracao", () => {
     for (const alvo of alvos) {
       expect(alvo).toEqual([frentesAdmissao.admissaoId, frentesAdmissao.tipo]);
     }
-    expect(alvos).toHaveLength(2);
+    expect(alvos).toHaveLength(3);
   });
 });

@@ -158,6 +158,46 @@ export const STATUS_EXAME_ESPERA_ASO = ["AGUARDANDO_ASO", "ASO_PENDENTE"] as con
  *
  * A ORDEM importa: `ORDEM_STATUS` (domain/esteira.ts) deriva daqui e define o que é reversão.
  */
+/**
+ * TIPO DE MARCAÇÃO DE PONTO do cliente (frente iFractal). O cliente escolhe, e TODA admissão dele
+ * herda: é atributo do contrato com o cliente, não da pessoa.
+ *
+ * NASCE `APLICATIVO` PARA TODOS, e isso é decisão do diretor, não default preguiçoso: o aplicativo é
+ * o caso majoritário, e o time ajusta depois a minoria que usa cartão ou biometria. Coluna NOT NULL
+ * com default, então nenhum cliente existente fica sem resposta nem exige backfill à parte.
+ */
+export const TIPO_MARCACAO = ["CARTAO", "BIOMETRIA", "RECONHECIMENTO_FACIAL", "APLICATIVO"] as const;
+export type TipoMarcacao = (typeof TIPO_MARCACAO)[number];
+
+/** §A.24: é tag, então title case. */
+export const TIPO_MARCACAO_LABEL: Record<TipoMarcacao, string> = {
+  CARTAO: "Cartão",
+  BIOMETRIA: "Biometria",
+  RECONHECIMENTO_FACIAL: "Reconhecimento Facial",
+  APLICATIVO: "Aplicativo",
+};
+
+/**
+ * OS STATUS DE NASCIMENTO DA FRENTE IFRACTAL, e SÓ de nascimento.
+ *
+ * LEIA ISTO ANTES DE USAR: ao contrário das outras quatro frentes, o iFractal tem catálogo de status
+ * **GERENCIÁVEL** (decisão do diretor). O time renomeia, acrescenta e escolhe qual status conclui a
+ * frente, pela tela do menu gerencial. A FONTE DA VERDADE É A TABELA `frente_status_catalogo`, e
+ * esta lista é consumida UMA vez, no seed, e nunca mais.
+ *
+ * É por isso que `ORDEM_STATUS.IFRACTAL` fica VAZIO no domínio: nenhuma régua de código deve fingir
+ * que sabe a lista de uma frente cuja lista o usuário edita.
+ */
+export const STATUS_IFRACTAL_SEMENTE = [
+  { codigo: "NAO_CADASTRADO", rotulo: "Não Cadastrado", ordem: 1, conclui: false },
+  { codigo: "CADASTRADO", rotulo: "Cadastrado", ordem: 2, conclui: false },
+  { codigo: "PENDENTE_DE_ENVIO", rotulo: "Pendente De Envio", ordem: 3, conclui: false },
+  { codigo: "FINALIZADO", rotulo: "Finalizado", ordem: 4, conclui: true },
+] as const;
+
+/** O status em que toda frente iFractal nasce. Renomeável na tela; o CÓDIGO é que é estável. */
+export const STATUS_IFRACTAL_INICIAL = "NAO_CADASTRADO";
+
 export const STATUS_CADASTRO_CONTRATO = ["A_CADASTRAR", "CADASTRADO"] as const;
 export type StatusCadastroContrato = (typeof STATUS_CADASTRO_CONTRATO)[number];
 
@@ -524,6 +564,7 @@ export const GRUPOS_COLUNA_RELATORIO = [
   "ASSINATURA",
   "CONTROLE",
   "VT",
+  "IFRACTAL",
 ] as const;
 export type GrupoColunaRelatorio = (typeof GRUPOS_COLUNA_RELATORIO)[number];
 
@@ -543,6 +584,7 @@ export const ROTULO_GRUPO_COLUNA_RELATORIO: Record<GrupoColunaRelatorio, string>
   ASSINATURA: "Assinatura",
   CONTROLE: "Controle Da Admissão",
   VT: "Formulário De VT",
+  IFRACTAL: "iFractal",
 };
 
 export interface ColunaRelatorio {
@@ -797,6 +839,14 @@ export const COLUNAS_RELATORIO: readonly ColunaRelatorio[] = [
   { chave: "vtTotalIda", rotulo: "VT Total Ida", grupo: "VT", largura: 14 },
   { chave: "vtTotalVolta", rotulo: "VT Total Volta", grupo: "VT", largura: 14 },
   { chave: "vtTotalDia", rotulo: "VT Total Dia", grupo: "VT", largura: 14 },
+  // ── iFractal ───────────────────────────────────────────────────────────────
+  // A SENHA sai em texto, por decisão do diretor: ela é DESCARTÁVEL (o iFractal a envia ao
+  // funcionário e força a troca no primeiro acesso), então não é credencial durável. Como todas as
+  // outras, a coluna nasce DESMARCADA: só deixa o sistema se alguém marcar. §A.6: em log, nunca.
+  { chave: "ifractalLogin", rotulo: "Login iFractal", grupo: "IFRACTAL", largura: 24 },
+  { chave: "ifractalSenha", rotulo: "Senha iFractal", grupo: "IFRACTAL", largura: 20 },
+  { chave: "ifractalTipoMarcacao", rotulo: "Tipo De Marcação", grupo: "IFRACTAL", largura: 24 },
+  { chave: "ifractalStatus", rotulo: "Status iFractal", grupo: "IFRACTAL", largura: 22 },
 ];
 
 export const COLUNAS_RELATORIO_PADRAO: readonly string[] = ["nome", "telefone"];

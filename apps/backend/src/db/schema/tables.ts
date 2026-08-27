@@ -47,6 +47,7 @@ import {
   sentidoVtEnum,
   sexoEnum,
   sinalizadorEnum,
+  tipoMarcacaoEnum,
   statusCadastroBeneficioEnum,
   tipoServicoEnum,
 } from "./enums";
@@ -198,6 +199,16 @@ export const clientes = pgTable("clientes", {
    * com piso em zero, então 0 e 1 caem na própria data de admissão.
    */
   diasPrimeiroCredito: smallint("dias_primeiro_credito"),
+  /**
+   * TIPO DE MARCAÇÃO DE PONTO no iFractal (frente iFractal). Atributo do CLIENTE, herdado por toda
+   * admissão dele: é o contrato com o cliente que define como aquele time bate ponto, não a pessoa.
+   *
+   * NOT NULL COM DEFAULT `APLICATIVO`, e não nullable como os demais campos de padrão do cliente.
+   * A diferença é decisão do diretor: aqui não existe "cliente sem resposta", porque todo cliente
+   * marca ponto de alguma forma. O aplicativo é o caso majoritário, então todos nascem nele e o time
+   * ajusta a minoria. O default também poupa o backfill dos 228 clientes existentes.
+   */
+  tipoMarcacao: tipoMarcacaoEnum("tipo_marcacao").notNull().default("APLICATIVO"),
   ativo: boolean("ativo").notNull().default(true),
   criadoEm,
   atualizadoEm,
@@ -1712,6 +1723,38 @@ export const integracaoAgendamento = pgTable("integracao_agendamento", {
   consultorId: uuid("consultor_id").references(() => usuarios.id, { onDelete: "set null" }),
   criadoEm: timestamp("criado_em", { withTimezone: true }).notNull().defaultNow(),
   atualizadoEm: timestamp("atualizado_em", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * CREDENCIAL DO IFRACTAL POR ADMISSÃO (frente iFractal).
+ *
+ * TABELA PRÓPRIA, espelhando `exame_agendamento` e `integracao_agendamento`, e deliberadamente NÃO
+ * colunas em `frentes_admissao`: aquela tabela é genérica e é lida por toda consulta de contagem do
+ * sistema. Dado específico de uma frente mora na tabela da frente.
+ *
+ * §A.6, E A DECISÃO ESTÁ REGISTRADA. A `senha` fica em TEXTO, legível, por decisão consciente do
+ * diretor: ela é DESCARTÁVEL, o iFractal a envia ao funcionário e força a troca no primeiro acesso,
+ * então não é credencial durável e não há o que proteger a longo prazo. Hash não serviria (o time
+ * precisa LER para repassar) e criptografia reversível traria chave, custódia e rotação para guardar
+ * um dado que expira no primeiro login.
+ *
+ * O QUE CONTINUA VALENDO, mesmo assim, e não é negociável: a senha **NUNCA** entra em log, em
+ * mensagem de erro ou em trilha de alteração. Ela aparece na tela de quem já tem acesso à admissão e
+ * na coluna da extração, que nasce desmarcada.
+ *
+ * `tipo_marcacao` NÃO é copiado para cá: é HERDADO do cliente por leitura (`clientes.tipo_marcacao`).
+ * Copiar criaria duas verdades, e mudar o tipo no cliente deixaria as admissões antigas mentindo.
+ */
+export const admissaoIfractal = pgTable("admissao_ifractal", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  admissaoId: uuid("admissao_id")
+    .notNull()
+    .unique()
+    .references(() => admissoes.id, { onDelete: "cascade" }),
+  login: varchar("login", { length: 120 }),
+  senha: varchar("senha", { length: 120 }),
+  criadoEm,
+  atualizadoEm,
 });
 
 // ── SALA DE ESPERA (pré-processo, ANTES da Liberação Admissional) ───────────

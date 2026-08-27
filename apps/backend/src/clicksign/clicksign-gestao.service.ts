@@ -196,10 +196,28 @@ export class ClicksignGestaoService {
    * saber por que o candidato não chega.
    */
   private async listarAptos(): Promise<LinhaAssinatura[]> {
+    /**
+     * AS TRÊS FRENTES DO GATE, NOMEADAS.
+     *
+     * A contagem era `count(*) filter (where concluida)`, CEGA AO TIPO, e o gate abaixo compara com
+     * `>= 3`. Acertava por acidente: as frentes possíveis eram quatro e a Integração só nascia junto
+     * do Cadastro, então "três concluídas" só acontecia com as três certas.
+     *
+     * O ACIDENTE ACABA COM QUALQUER FRENTE NOVA. A do iFractal nasce junto do Cadastro e o consultor
+     * a move livre até concluir; uma admissão com Auditoria + Exame + iFractal fechadas e o Cadastro
+     * ainda ABERTO passaria a somar três e a atravessar este gate. É o mesmo tipo de dependência
+     * escondida que quebrou a contagem da Bienal (§A.27).
+     *
+     * Nomear os três tipos blinda contra TODA frente futura, não só contra a do iFractal: o gate
+     * passa a contar o que ele sempre quis dizer, em vez de contar linhas e torcer.
+     */
     const concluidas = this.db
       .select({
         admissaoId: frentesAdmissao.admissaoId,
-        qtd: sql<number>`count(*) filter (where ${frentesAdmissao.concluida})`.as("qtd"),
+        qtd: sql<number>`count(*) filter (
+          where ${frentesAdmissao.concluida}
+            and ${frentesAdmissao.tipo} in ('AUDITORIA', 'EXAME', 'CADASTRO_CONTRATO')
+        )`.as("qtd"),
       })
       .from(frentesAdmissao)
       .groupBy(frentesAdmissao.admissaoId)
@@ -235,7 +253,8 @@ export class ClicksignGestaoService {
           // O QUE PÕE NA FILA: kit anexado pelo Gerador de Kit. Sem isto não há o que disparar.
           isNotNull(admissoes.kitAssinaturaPath),
           // As 3 frentes concluídas seguem exigidas (gate F12), agora como defesa e não como régua
-          // de entrada: quem tem kit anexado já passou pelo gate no envio.
+          // de entrada: quem tem kit anexado já passou pelo gate no envio. A contagem acima nomeia
+          // os três tipos, então este `>= 3` só fecha com AUDITORIA, EXAME e CADASTRO_CONTRATO.
           sql`${concluidas.qtd} >= 3`,
         ),
       )

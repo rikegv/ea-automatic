@@ -20,6 +20,7 @@ import { parseMulti } from "../common/parse-multi";
 import { AgendamentoExameDto } from "./dto/agendamento-exame.dto";
 // Value import (não `import type`): o ValidationPipe precisa da CLASSE em runtime.
 import { AgendamentoIntegracaoDto } from "./dto/agendamento-integracao.dto";
+import { SalvarIfractalDto } from "./dto/ifractal.dto";
 import { AgendamentoIntegracaoLoteDto } from "./dto/agendamento-integracao-lote.dto";
 import { DesconsiderarIntegracaoDto } from "./dto/desconsiderar-integracao.dto";
 import { DeclinarDto } from "./dto/declinar.dto";
@@ -200,6 +201,18 @@ export class EsteiraController {
   ) {
     // `user` alimenta o autor do evento de status: salvar move a frente, e toda transição tem autor.
     return this.esteira.salvarAgendamentoIntegracao(admissaoId, dto, user);
+  }
+
+  /**
+   * Grava login e senha do iFractal da admissão (aba IFRACTAL).
+   *
+   * SEM `@Roles`, como a edição de uniforme: preencher a credencial de ponto é trabalho do time do
+   * ADM inteiro, não privilégio de administração. A rota continua atrás do `JwtAuthGuard` global e
+   * do guard de menu, como toda rota da Esteira.
+   */
+  @Put("ifractal/:admissaoId")
+  salvarIfractal(@Param("admissaoId") admissaoId: string, @Body() dto: SalvarIfractalDto) {
+    return this.esteira.salvarIfractal(admissaoId, dto);
   }
 
   /** Agendamento do exame (modal) — devolve o registro atual ou null. */
