@@ -12,6 +12,7 @@ import {
   admissoes,
   cargos,
   clientes,
+  dadosVagaFolha,
   projetoGrupoEntrada,
   projetoVagaCargo,
   projetosAltoVolume,
@@ -70,9 +71,20 @@ export class AltoVolumeAnaliseService {
       .where(eq(projetosAltoVolume.id, projetoId));
     if (!projeto) throw new NotFoundException("Projeto de Alto Volume não encontrado.");
 
-    const [porCargo, grupos] = await Promise.all([
+    // A LEITURA DE LOJAS / UNIDADES ENTRA POR ÚLTIMO no `Promise.all`, e a posição não é estética:
+    // ela mantém a ORDEM das consultas que já existiam (projeto, vagas, status, declínios, grupos)
+    // exatamente como estava. Consulta nova no meio da fila não mudaria o resultado em produção, mas
+    // remontaria a ordem em que o teste desta análise devolve cada resultado.
+    const [porCargo, grupos, porCentroCusto, matriz] = await Promise.all([
       this.preenchimentoPorCargo(projetoId, projeto.codCliente, projeto.dataInicio, projeto.dataFim),
       this.alertaPorGrupo(projetoId),
+      this.quadroPorCentroCusto(
+        projetoId,
+        projeto.codCliente,
+        projeto.dataInicio,
+        projeto.dataFim,
+      ),
+      this.matrizCargoPorLoja(projetoId, projeto.codCliente, projeto.dataInicio, projeto.dataFim),
     ]);
 
     // Os totais saem da SOMA das linhas por cargo, e não de uma consulta própria. Não é economia de
@@ -104,6 +116,14 @@ export class AltoVolumeAnaliseService {
       // Projeto sem turma devolve lista vazia, e a tela não desenha a seção: alerta por data de
       // entrada sem data de entrada não tem o que dizer.
       grupos,
+      porCentroCusto,
+      /**
+       * A MATRIZ CARGO x LOJA (cruzamento clicável, 27/08). Ela NÃO é uma terceira contagem: é a
+       * MESMA consulta dos dois quadros, com o `group by` nos DOIS eixos em vez de num só. Somar a
+       * matriz por cargo devolve `porCargo`, somar por loja devolve `porCentroCusto`, e é isso que
+       * garante que clicar numa linha não faça aparecer número que a tela não mostrava antes.
+       */
+      matriz,
     };
   }
 
@@ -338,6 +358,334 @@ export class AltoVolumeAnaliseService {
         faltam: l.vagas - l.vinculadas,
         percentual: percentual(l.concluidas, l.vagas),
       }));
+  }
+
+  /**
+   * ─ LOJAS / UNIDADES: O QUADRO COMPLETO POR STATUS (evolução pedida em 27/08) ─────────────────
+   *
+   * POR QUE O DADO VEM DE `centro_custo` E O RÓTULO DIZ "LOJA / UNIDADE", e isto NÃO é um rótulo
+   * errado a ser "corrigido" um dia (explicação do diretor, 25/08/2026): existe cliente que é UM
+   * CNPJ e UM código só, com VÁRIAS LOJAS. O sistema não deixa cadastrar o mesmo cliente duas vezes
+   * (código e CNPJ são únicos, §A.3), então a operação passou a escrever o nome de cada loja no
+   * campo CENTRO DE CUSTO. Na prática o centro de custo virou "a loja ou unidade daquele cliente",
+   * e é isso que a diretoria lê no painel. O campo continua sendo `dados_vaga_folha.centro_custo`;
+   * quem muda é só o nome na tela, que diz o que o número significa para quem olha.
+   *
+   * ┌─ ZERO CONTA PARALELA (§A.16/§A.27, exigência do diretor) ──────────────────────────────────┐
+   * │ Cada balde desta tabela é a MESMA expressão do quadro de Cargos, importada e não copiada:   │
+   * │ `admissaoConcluidaSql` e `admissaoEmAndamentoExclusivoSql` são as do Gerenciador e do        │
+   * │ Painel, e o filtro de farol dos terminais e do banco é o mesmo do "Na Esteira". A ÚNICA      │
+   * │ diferença entre esta consulta e a `statusPorCargoVinculados` é o `group by`: lá é o cargo,   │
+   * │ aqui é o centro de custo. Nenhuma régua nova entrou no sistema por causa deste quadro.       │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * `vagas` CONTINUA SENDO O "NA ESTEIRA", e o nome não mudou de propósito: é o número que o
+   * cilindro sempre desenhou e é ele que sustenta a PROVA que já existia, de que a soma das lojas é
+   * idêntica ao balde "Total De Vagas Na Esteira" do topo. As colunas novas entram ao lado dele,
+   * sem tocar nessa identidade.
+   *
+   * `total` É O UNIVERSO INTEIRO DO PROJETO NAQUELA LOJA (decisão do diretor, 27/08: "tudo que o
+   * projeto tem na loja"): a MESMA consulta, sem o filtro de farol. Ele é `na esteira + em banco +
+   * os terminais que estão vinculados`, e por isso a linha fecha sozinha, sem nenhum número vindo de
+   * outro recorte.
+   *
+   * `faltam` É `total - vagas`, a MESMA forma do quadro de Cargos (lá é `meta - vinculadas`): o que
+   * a loja tem menos o que está andando. Não há meta cadastrada por loja em lugar nenhum do sistema
+   * (`projeto_vaga_cargo` é por CARGO), e inventar um rateio da meta seria exatamente a conta
+   * paralela que a §A.16 proíbe, então a referência é o universo da própria loja.
+   *
+   * ┌─ O DECLÍNIO FICA FORA DA MATEMÁTICA, COMO NO QUADRO DE CARGOS, E O MOTIVO É O MESMO ───────┐
+   * │ Quem declina não deixa nada ativo na esteira (§A.16), então a maioria dos declínios NUNCA    │
+   * │ entrou em `admissao_projeto`. Medido na base: a Bienal tem 32 declínios no recorte           │
+   * │ cliente + período e apenas 10 terminais vinculados ao projeto. Contá-los dentro do `total`   │
+   * │ misturaria dois universos na mesma linha e a soma deixaria de fechar.                        │
+   * │                                                                                             │
+   * │ Por isso `declinios` vem do recorte cliente + período, como em `declinioPorCargo`, e é       │
+   * │ INFORMAÇÃO AO LADO, que não soma no `total` nem no `faltam`. A tela diz isso em palavras.    │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * CENTRO DE CUSTO VAZIO É CASO REAL e não é descartado: em branco, só espaço ou nulo caem todos na
+   * mesma chave (`null`), que a tela mostra como "não informado" (§A.11). Descartar a linha faria a
+   * lista somar menos que o balde do topo sem explicar por quê. Ela vai para o FIM da lista, e não
+   * para o topo do ranking: ausência de dado não é a loja que mais contrata.
+   *
+   * §A.6: contagem por rótulo de centro de custo. Nenhum nome, nenhum CPF.
+   */
+  private async quadroPorCentroCusto(
+    projetoId: string,
+    codCliente: string,
+    dataInicio: string,
+    dataFim: string,
+  ) {
+    const [status, declinios] = await Promise.all([
+      this.statusPorCentroCustoVinculados(projetoId),
+      this.declinioPorCentroCusto(codCliente, dataInicio, dataFim),
+    ]);
+
+    const linhas = new Map<
+      string,
+      {
+        centroCusto: string | null;
+        total: number;
+        vagas: number;
+        concluidas: number;
+        emAndamento: number;
+        pausadas: number;
+        emBanco: number;
+        declinios: number;
+      }
+    >();
+    // A chave é o rótulo, e o nulo tem chave própria em vez de virar texto: uma loja chamada
+    // literalmente "nao-informado" não pode se fundir com a linha de ausência de dado.
+    const chave = (c: string | null) => (c === null ? "\u0000sem-centro-custo" : c);
+    const pegar = (centroCusto: string | null) => {
+      const k = chave(centroCusto);
+      const atual = linhas.get(k);
+      if (atual) return atual;
+      const novo = {
+        centroCusto,
+        total: 0,
+        vagas: 0,
+        concluidas: 0,
+        emAndamento: 0,
+        pausadas: 0,
+        emBanco: 0,
+        declinios: 0,
+      };
+      linhas.set(k, novo);
+      return novo;
+    };
+
+    for (const s of status) {
+      const linha = pegar(s.centroCusto ?? null);
+      linha.total = Number(s.total);
+      linha.vagas = Number(s.vagas);
+      linha.concluidas = Number(s.concluidas);
+      linha.emAndamento = Number(s.emAndamento);
+      linha.pausadas = Number(s.pausadas);
+      linha.emBanco = Number(s.emBanco);
+    }
+    /*
+     * O MERGE É UMA UNIÃO, a mesma regra do quadro de Cargos: loja que só aparece nos declínios
+     * (ninguém vinculado, gente que declinou) entra na lista com os baldes em zero. Sumir dali seria
+     * esconder justamente a loja que perdeu todo mundo.
+     */
+    for (const d of declinios) pegar(d.centroCusto ?? null).declinios = Number(d.declinios);
+
+    return [...linhas.values()]
+      .map((l) => ({
+        ...l,
+        // A MESMA FORMA DO QUADRO DE CARGOS (`meta - vinculadas`), aplicada ao universo da loja.
+        // Sem trava em zero, pela mesma razão registrada lá: o número tem de somar a coluna.
+        faltam: l.total - l.vagas,
+      }))
+      .sort((a, b) => {
+        // Não informado por último, sempre: é o único critério que não é volume.
+        if (a.centroCusto === null) return 1;
+        if (b.centroCusto === null) return -1;
+        // Maior primeiro, e empate pelo nome, para a ordem não dançar entre duas cargas (a mesma
+        // regra de desempate do preenchimento por cargo). O critério é o "na esteira", que é o que
+        // o cilindro desenha: a ordem da lista tem de ser a ordem das barras.
+        return b.vagas - a.vagas || a.centroCusto.localeCompare(b.centroCusto, "pt-BR");
+      });
+  }
+
+  /**
+   * OS BALDES POR LOJA no universo do PROJETO: os vinculados em `admissao_projeto`, e só.
+   *
+   * É A IRMÃ EXATA DE `statusPorCargoVinculados`, com o mesmo universo, os mesmos filtros e as
+   * mesmas expressões compartilhadas. O que muda é o `group by` e o join do anexo de folha, que é
+   * onde o centro de custo mora.
+   */
+  private statusPorCentroCustoVinculados(projetoId: string) {
+    // `nullif(btrim(...), '')` junta o nulo e o texto em branco na MESMA chave. Sem isso, um cadastro
+    // com um espaço solto viraria uma "loja" própria, chamada nada, ao lado da linha de não informado.
+    const rotulo = sql<string | null>`nullif(btrim(${dadosVagaFolha.centroCusto}), '')`;
+    return this.db
+      .select({
+        centroCusto: rotulo,
+        // O UNIVERSO INTEIRO DA LOJA NO PROJETO, sem filtro de farol: é o `total` da linha.
+        total: sql<number>`count(*)::int`,
+        // TERMINAIS E BANCO FORA (decisão do diretor + §A.16): o mesmo filtro do "Na Esteira" por
+        // cargo. É este número que o cilindro desenha e que soma o balde do topo.
+        vagas: sql<number>`count(*) filter (
+          where ${admissoes.farolGlobal} not in ('DECLINOU', 'RESCISAO', 'BANCO_AGUARDAR')
+        )::int`,
+        // O MESMO PAR DE CONDIÇÕES DO QUADRO DE CARGOS: a expressão compartilhada mais o filtro de
+        // farol, sem o qual "concluídas" poderia passar de "na esteira" na mesma linha.
+        concluidas: sql<number>`count(*) filter (
+          where ${admissaoConcluidaSql}
+            and ${admissoes.farolGlobal} not in ('DECLINOU', 'RESCISAO', 'BANCO_AGUARDAR')
+        )::int`,
+        emAndamento: sql<number>`count(*) filter (where ${admissaoEmAndamentoExclusivoSql})::int`,
+        pausadas: sql<number>`count(*) filter (where ${admissoes.pausadaEm} is not null)::int`,
+        emBanco: sql<number>`count(*) filter (where ${admissoes.farolGlobal} = 'BANCO_AGUARDAR')::int`,
+      })
+      .from(admissaoProjeto)
+      .innerJoin(admissoes, eq(admissoes.id, admissaoProjeto.admissaoId))
+      // LEFT JOIN, e não inner: admissão sem anexo de folha ainda é vaga do projeto e conta. Com
+      // inner join ela sumiria da lista e a soma ficaria abaixo do balde do topo, em silêncio.
+      .leftJoin(dadosVagaFolha, eq(dadosVagaFolha.admissaoId, admissoes.id))
+      .where(eq(admissaoProjeto.projetoId, projetoId))
+      .groupBy(rotulo);
+  }
+
+  /**
+   * DECLÍNIOS POR LOJA, fora da matemática, no recorte cliente + período.
+   *
+   * É A IRMÃ EXATA DE `declinioPorCargo`, pelo mesmo motivo escrito lá: quem declina não deixa nada
+   * ativo na esteira (§A.16) e por isso quase nunca chegou a `admissao_projeto`. Medido na base: 32
+   * declínios do cliente na janela contra 10 terminais vinculados ao projeto. Buscá-los entre os
+   * vinculados mostraria menos de um terço do que o cliente perdeu naquela loja.
+   */
+  private declinioPorCentroCusto(codCliente: string, dataInicio: string, dataFim: string) {
+    const rotulo = sql<string | null>`nullif(btrim(${dadosVagaFolha.centroCusto}), '')`;
+    return this.db
+      .select({ centroCusto: rotulo, declinios: sql<number>`count(*)::int` })
+      .from(admissoes)
+      .leftJoin(dadosVagaFolha, eq(dadosVagaFolha.admissaoId, admissoes.id))
+      .where(
+        sql`${admissoes.codCliente} = ${codCliente}
+            and ${admissoes.farolGlobal} in ('DECLINOU', 'RESCISAO')
+            and ${admissoes.dataAdmissao} >= ${dataInicio}::date
+            and ${admissoes.dataAdmissao} <= ${dataFim}::date`,
+      )
+      .groupBy(rotulo);
+  }
+
+  /**
+   * ─ A MATRIZ CARGO x LOJA: o cruzamento clicável (pedido do diretor, 27/08) ────────────────────
+   *
+   * A PERGUNTA QUE ELA RESPONDE, nos dois sentidos: "deste CARGO, quantos em cada LOJA?" e "nesta
+   * LOJA, quais CARGOS?". Os dois quadros que já existem não conseguem responder isso porque cada um
+   * agrupa por UM eixo: somam o mesmo conjunto de gente por recortes diferentes, e cruzá-los na tela
+   * exigiria adivinhar a interseção.
+   *
+   * ┌─ ELA NÃO É UMA TERCEIRA CONTAGEM (§A.16/§A.27) ────────────────────────────────────────────┐
+   * │ É a MESMA consulta dos dois quadros, com o `group by` nos DOIS eixos em vez de num só, e com │
+   * │ as MESMAS expressões compartilhadas (`admissaoConcluidaSql`,                                 │
+   * │ `admissaoEmAndamentoExclusivoSql`) e o MESMO filtro de farol. Como consequência aritmética:   │
+   * │ somar a matriz por cargo devolve `porCargo`, e somar por loja devolve `porCentroCusto`.      │
+   * │ Clicar numa linha nunca faz aparecer número que a tela não mostrava antes de clicar.         │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * O DECLÍNIO CRUZA PELO MESMO CAMINHO das irmãs: recorte cliente + período, fora da matemática,
+   * porque quem declina quase nunca chegou a `admissao_projeto` (§A.16). Ele cruza cargo x loja
+   * porque as duas informações moram na admissão e no anexo de folha.
+   *
+   * A META (`projeto_vaga_cargo`) NÃO ENTRA AQUI, e não é esquecimento: ela é cadastrada por CARGO
+   * no projeto inteiro e não existe por loja em lugar nenhum do sistema. Por isso a matriz carrega
+   * só os baldes de STATUS, que são os que cruzam de verdade, e a tela diz em palavras o que
+   * acontece com a coluna de meta quando o cruzamento por loja está ligado.
+   *
+   * §A.6: contagem por id de cargo e rótulo de centro de custo. Nenhum nome, nenhum CPF.
+   */
+  private async matrizCargoPorLoja(
+    projetoId: string,
+    codCliente: string,
+    dataInicio: string,
+    dataFim: string,
+  ) {
+    const rotulo = sql<string | null>`nullif(btrim(${dadosVagaFolha.centroCusto}), '')`;
+
+    const [status, declinios] = await Promise.all([
+      this.db
+        .select({
+          cargoId: admissoes.cargoId,
+          cargoNome: cargos.nome,
+          centroCusto: rotulo,
+          total: sql<number>`count(*)::int`,
+          vagas: sql<number>`count(*) filter (
+            where ${admissoes.farolGlobal} not in ('DECLINOU', 'RESCISAO', 'BANCO_AGUARDAR')
+          )::int`,
+          concluidas: sql<number>`count(*) filter (
+            where ${admissaoConcluidaSql}
+              and ${admissoes.farolGlobal} not in ('DECLINOU', 'RESCISAO', 'BANCO_AGUARDAR')
+          )::int`,
+          emAndamento: sql<number>`count(*) filter (where ${admissaoEmAndamentoExclusivoSql})::int`,
+          pausadas: sql<number>`count(*) filter (where ${admissoes.pausadaEm} is not null)::int`,
+          emBanco: sql<number>`count(*) filter (where ${admissoes.farolGlobal} = 'BANCO_AGUARDAR')::int`,
+        })
+        .from(admissaoProjeto)
+        .innerJoin(admissoes, eq(admissoes.id, admissaoProjeto.admissaoId))
+        .leftJoin(cargos, eq(cargos.id, admissoes.cargoId))
+        .leftJoin(dadosVagaFolha, eq(dadosVagaFolha.admissaoId, admissoes.id))
+        .where(eq(admissaoProjeto.projetoId, projetoId))
+        .groupBy(admissoes.cargoId, cargos.nome, rotulo),
+      this.db
+        .select({
+          cargoId: admissoes.cargoId,
+          cargoNome: cargos.nome,
+          centroCusto: rotulo,
+          declinios: sql<number>`count(*)::int`,
+        })
+        .from(admissoes)
+        .leftJoin(cargos, eq(cargos.id, admissoes.cargoId))
+        .leftJoin(dadosVagaFolha, eq(dadosVagaFolha.admissaoId, admissoes.id))
+        .where(
+          sql`${admissoes.codCliente} = ${codCliente}
+              and ${admissoes.farolGlobal} in ('DECLINOU', 'RESCISAO')
+              and ${admissoes.dataAdmissao} >= ${dataInicio}::date
+              and ${admissoes.dataAdmissao} <= ${dataFim}::date`,
+        )
+        .groupBy(admissoes.cargoId, cargos.nome, rotulo),
+    ]);
+
+    // A CHAVE É O PAR, e o nulo de cada eixo tem marca própria: cargo ausente e loja ausente são
+    // estados reais e diferentes, e fundi-los em texto criaria uma célula que não existe.
+    const linhas = new Map<
+      string,
+      {
+        cargoId: string | null;
+        cargoNome: string;
+        centroCusto: string | null;
+        total: number;
+        vagas: number;
+        concluidas: number;
+        emAndamento: number;
+        pausadas: number;
+        emBanco: number;
+        declinios: number;
+      }
+    >();
+    const chave = (c: string | null, l: string | null) =>
+      `${c ?? "\u0000sem-cargo"}\u0001${l ?? "\u0000sem-centro-custo"}`;
+    const pegar = (cargoId: string | null, cargoNome: string | null, centroCusto: string | null) => {
+      const k = chave(cargoId, centroCusto);
+      const atual = linhas.get(k);
+      if (atual) return atual;
+      const novo = {
+        cargoId,
+        cargoNome: cargoNome ?? "não informado",
+        centroCusto,
+        total: 0,
+        vagas: 0,
+        concluidas: 0,
+        emAndamento: 0,
+        pausadas: 0,
+        emBanco: 0,
+        declinios: 0,
+      };
+      linhas.set(k, novo);
+      return novo;
+    };
+
+    for (const s of status) {
+      const l = pegar(s.cargoId, s.cargoNome, s.centroCusto ?? null);
+      l.total = Number(s.total);
+      l.vagas = Number(s.vagas);
+      l.concluidas = Number(s.concluidas);
+      l.emAndamento = Number(s.emAndamento);
+      l.pausadas = Number(s.pausadas);
+      l.emBanco = Number(s.emBanco);
+    }
+    // UNIÃO, como nos dois quadros: o par que só aparece nos declínios é o cargo que aquela loja
+    // perdeu inteiro, e é a célula mais importante do cruzamento.
+    for (const d of declinios) {
+      pegar(d.cargoId, d.cargoNome, d.centroCusto ?? null).declinios = Number(d.declinios);
+    }
+
+    return [...linhas.values()].map((l) => ({ ...l, faltam: l.total - l.vagas }));
   }
 
   /**

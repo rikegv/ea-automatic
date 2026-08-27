@@ -43,6 +43,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { GlassCard } from "@/components/ui/GlassCard";
+import { Icon } from "@/components/ui/Icon";
+import { cn } from "@/lib/cn";
 import { Select } from "@/components/ui/Select";
 import { Pill } from "@/components/ui/Pill";
 import { Modal } from "@/components/ui/Modal";
@@ -90,6 +92,69 @@ interface LinhaGrupo {
   entrou: boolean;
 }
 
+/**
+ * LOJAS / UNIDADES: uma linha por centro de custo, com a quantidade de vagas do projeto naquela loja.
+ *
+ * O RÓTULO DIZ "LOJA / UNIDADE" E O DADO VEM DE CENTRO DE CUSTO, e isto é deliberado, NÃO é um nome
+ * errado a ser "corrigido" numa próxima passada (explicação do diretor, 25/08/2026): existe cliente
+ * que é UM CNPJ e UM código só, com VÁRIAS LOJAS. Como o sistema não deixa cadastrar o mesmo cliente
+ * duas vezes, a operação passou a escrever o nome de cada loja no campo CENTRO DE CUSTO, e na prática
+ * ele virou "a loja ou unidade daquele cliente". O campo continua sendo `dados_vaga_folha.centro_custo`;
+ * o rótulo é que diz o que o número significa para quem lê o painel.
+ *
+ * `centroCusto` NULO é o "não informado" (§A.11), e vem do backend já no fim da lista.
+ *
+ * ─ O QUADRO COMPLETO POR STATUS (evolução de 27/08) ──────────────────────────────────────────
+ *
+ * `vagas` CONTINUA SENDO O "NA ESTEIRA", e o nome não mudou de propósito: é o número que o cilindro
+ * sempre desenhou e é ele que sustenta a prova de que a soma das lojas é idêntica ao balde
+ * "Total De Vagas Na Esteira" do topo da tela.
+ *
+ * `total` é o universo INTEIRO do projeto naquela loja (na esteira + em banco + os terminais que
+ * estão vinculados), e `faltam` é `total - vagas`, a mesma forma que o quadro de Cargos usa
+ * (`meta - vinculadas`).
+ *
+ * `declinios` vem de OUTRO recorte (cliente + período), como no quadro de Cargos e pelo mesmo
+ * motivo: quem declina quase nunca chegou a `admissao_projeto` (§A.16). Ele é informação ao lado e
+ * NÃO soma no total nem no faltam, e a tela diz isso em palavras.
+ */
+interface LinhaCentroCusto {
+  centroCusto: string | null;
+  vagas: number;
+  total: number;
+  concluidas: number;
+  emAndamento: number;
+  faltam: number;
+  pausadas: number;
+  emBanco: number;
+  declinios: number;
+}
+
+/**
+ * UMA CÉLULA DA MATRIZ CARGO x LOJA: o cruzamento clicável (27/08).
+ *
+ * Ela NÃO é uma terceira contagem: é a mesma leitura dos dois quadros, agrupada pelos DOIS eixos.
+ * Somar por cargo devolve o quadro de cargos, somar por loja devolve o quadro de lojas, e é isso que
+ * garante que clicar numa linha nunca faça aparecer número que a tela não mostrava antes.
+ *
+ * A META NÃO ESTÁ AQUI porque ela é cadastrada por CARGO no projeto inteiro (`projeto_vaga_cargo`) e
+ * não existe por loja em lugar nenhum do sistema. A matriz carrega só os baldes de STATUS, que são
+ * os que cruzam de verdade.
+ */
+interface CelulaMatriz {
+  cargoId: string | null;
+  cargoNome: string;
+  centroCusto: string | null;
+  total: number;
+  vagas: number;
+  concluidas: number;
+  emAndamento: number;
+  faltam: number;
+  pausadas: number;
+  emBanco: number;
+  declinios: number;
+}
+
 interface Analise {
   projeto: {
     id: string;
@@ -124,6 +189,19 @@ interface Analise {
   };
   porCargo: LinhaCargo[];
   grupos: LinhaGrupo[];
+  /**
+   * Vagas por loja / unidade, no MESMO recorte do balde "Total De Vagas Na Esteira": vinculados ao
+   * projeto, terminais e banco fora (§A.16). A soma desta lista é aquele número, por construção.
+   *
+   * OPCIONAL DE PROPÓSITO, e isto é cinto de segurança de deploy, não desleixo de tipo: frontend e
+   * backend sobem em passos separados, e por alguns minutos a tela nova conversa com o serviço
+   * antigo, que ainda não manda este campo. Sem o opcional (e sem o `?? []` que o acompanha na tela),
+   * a página inteira caía em "Application error", levando junto os gráficos que já funcionavam. Um
+   * indicador novo pode nascer vazio por um minuto; o painel não pode apagar.
+   */
+  porCentroCusto?: LinhaCentroCusto[];
+  /** A matriz do cruzamento clicável. Opcional pelo mesmo motivo do quadro: backend antigo no ar. */
+  matriz?: CelulaMatriz[];
 }
 
 function fmtData(iso?: string | null): string {
@@ -561,6 +639,128 @@ export default function AltoVolumeAnalisePage() {
   }
 
   /**
+   * ─ O CRUZAMENTO CLICÁVEL: a linha vira filtro (pedido do diretor, 27/08) ─────────────────────
+   *
+   * COMO ELE LÊ: clicar num CARGO faz o quadro de LOJAS mostrar aquele cargo por loja; clicar numa
+   * LOJA faz o quadro de CARGOS mostrar aquela loja por cargo. Clicar de novo na mesma linha
+   * desfaz. Nunca há dois cruzamentos ligados ao mesmo tempo: escolher de um lado desliga o outro,
+   * porque "Vendedor na Loja Sul" é uma célula, não um recorte, e a tela não é uma tabela dinâmica.
+   *
+   * ELE ATUALIZA SÓ AS TABELAS, e é essa a exigência: os KPIs, o termômetro, as barras por cargo e o
+   * alerta por grupo continuam falando do PROJETO INTEIRO. Um cruzamento que mexesse no topo faria o
+   * diretor achar que o projeto encolheu ao clicar numa linha.
+   *
+   * NADA É BUSCADO DE NOVO: o cruzamento recorta a MATRIZ que já veio no mesmo GET que desenhou a
+   * tela. Sem requisição nova, sem instante diferente, e sem chance de os dois quadros discordarem.
+   */
+  const [cruzamento, setCruzamento] = useState<
+    { tipo: "cargo"; id: string | null; rotulo: string } | { tipo: "loja"; centroCusto: string | null; rotulo: string } | null
+  >(null);
+  const matriz = useMemo(() => dados?.matriz ?? [], [dados]);
+
+  /** Soma um punhado de células da matriz num único conjunto de baldes. */
+  const somar = useCallback(
+    (celulas: CelulaMatriz[]) =>
+      celulas.reduce(
+        (a, c) => ({
+          total: a.total + c.total,
+          vagas: a.vagas + c.vagas,
+          concluidas: a.concluidas + c.concluidas,
+          emAndamento: a.emAndamento + c.emAndamento,
+          faltam: a.faltam + c.faltam,
+          pausadas: a.pausadas + c.pausadas,
+          emBanco: a.emBanco + c.emBanco,
+          declinios: a.declinios + c.declinios,
+        }),
+        { total: 0, vagas: 0, concluidas: 0, emAndamento: 0, faltam: 0, pausadas: 0, emBanco: 0, declinios: 0 },
+      ),
+    [],
+  );
+
+  /**
+   * O QUADRO DE LOJAS: o de sempre, ou o recorte de um cargo. Quando um cargo está escolhido, cada
+   * linha é aquele cargo NAQUELA loja, com os mesmos baldes e a mesma ordem (maior na esteira
+   * primeiro, não informado no fim).
+   */
+  const lojas = useMemo<LinhaCentroCusto[]>(() => {
+    const base = dados?.porCentroCusto ?? [];
+    if (cruzamento?.tipo !== "cargo") return base;
+    const porLoja = new Map<string, CelulaMatriz[]>();
+    for (const c of matriz.filter((m) => m.cargoId === cruzamento.id)) {
+      const k = c.centroCusto ?? "\u0000";
+      porLoja.set(k, [...(porLoja.get(k) ?? []), c]);
+    }
+    return [...porLoja.values()]
+      .map((cels) => ({ centroCusto: cels[0].centroCusto, ...somar(cels) }))
+      .sort((a, b) => {
+        if (a.centroCusto === null) return 1;
+        if (b.centroCusto === null) return -1;
+        return b.vagas - a.vagas || a.centroCusto.localeCompare(b.centroCusto, "pt-BR");
+      });
+  }, [dados, cruzamento, matriz, somar]);
+
+  /**
+   * O QUADRO DE CARGOS: o de sempre, ou o recorte de uma loja.
+   *
+   * A COLUNA "VAGAS" (a META) FICA NULA no recorte por loja, e isso é honestidade, não lacuna: a
+   * meta é cadastrada por CARGO no projeto inteiro (`projeto_vaga_cargo`) e NÃO existe por loja em
+   * lugar nenhum do sistema. Repetir a meta do projeto em cada loja diria que a Loja Sul sozinha tem
+   * as 66 vagas de Vendedor, e ratear a meta seria inventar número (§A.16). A célula mostra
+   * "não informado" (§A.11) e a tela explica em uma linha.
+   *
+   * "FALTAM" no recorte passa a ser `total - na esteira`, a mesma régua do quadro de lojas, porque é
+   * o universo da loja que está em cena e não a meta do projeto.
+   */
+  const cargosVisiveis = useMemo<LinhaCargo[]>(() => {
+    const base = dados?.porCargo ?? [];
+    if (cruzamento?.tipo !== "loja") return base;
+    const porCargo = new Map<string, CelulaMatriz[]>();
+    for (const c of matriz.filter((m) => m.centroCusto === cruzamento.centroCusto)) {
+      const k = c.cargoId ?? "\u0000";
+      porCargo.set(k, [...(porCargo.get(k) ?? []), c]);
+    }
+    return [...porCargo.values()]
+      .map((cels) => {
+        const b = somar(cels);
+        return {
+          cargoId: cels[0].cargoId,
+          cargoNome: cels[0].cargoNome,
+          // META AUSENTE no recorte por loja: ver a nota acima. `NaN` seria pior; nulo é o estado.
+          vagas: null as unknown as number,
+          vinculadas: b.vagas,
+          concluidas: b.concluidas,
+          cadastradas: 0,
+          emAndamento: b.emAndamento,
+          pausadas: b.pausadas,
+          declinios: b.declinios,
+          emBanco: b.emBanco,
+          faltam: b.faltam,
+          percentual: 0,
+        } as LinhaCargo;
+      })
+      .sort((a, b) => b.vinculadas - a.vinculadas || a.cargoNome.localeCompare(b.cargoNome, "pt-BR"));
+  }, [dados, cruzamento, matriz, somar]);
+
+  /** Liga ou desliga o cruzamento. Clicar na linha já escolhida desfaz (toggle). */
+  const alternarCruzamento = useCallback(
+    (alvo: NonNullable<typeof cruzamento>) =>
+      setCruzamento((atual) => {
+        if (!atual || atual.tipo !== alvo.tipo) return alvo;
+        const mesmo =
+          alvo.tipo === "cargo"
+            ? atual.tipo === "cargo" && atual.id === alvo.id
+            : atual.tipo === "loja" && atual.centroCusto === alvo.centroCusto;
+        return mesmo ? null : alvo;
+      }),
+    [],
+  );
+  /**
+   * Escala das barras de loja / unidade: a MAIOR loja enche a barra e as demais se comparam com ela.
+   * Escalar pelo total do projeto achataria todas contra zero num cliente com muitas lojas, que é
+   * justamente o cliente para quem este indicador existe.
+   */
+  const maiorLoja = useMemo(() => lojas.reduce((m, l) => Math.max(m, l.vagas), 0), [lojas]);
+  /**
    * ORDENAÇÃO CLICÁVEL das DUAS tabelas (§A.12), cada uma com a sua: são listas diferentes, e uma
    * ordenação só faria clicar numa mexer na outra.
    *
@@ -581,7 +781,29 @@ export default function AltoVolumeAnalisePage() {
     ],
     [],
   );
-  const ordCargo = useOrdenacao(colunasCargo, dados?.porCargo ?? []);
+  const ordCargo = useOrdenacao(colunasCargo, cargosVisiveis);
+
+  /**
+   * O RODAPÉ DO QUADRO DE CARGOS SEGUE O RECORTE. Sem cruzamento ele é idêntico aos baldes do topo
+   * (a soma das linhas por cargo SEMPRE foi o total, por construção do backend); com a loja
+   * escolhida ele passa a somar só as linhas visíveis, senão o "Total" contradiria a tabela logo
+   * acima dele, que é o defeito que a §A.27 existe para evitar.
+   */
+  const totaisCargo = useMemo(
+    () =>
+      cargosVisiveis.reduce(
+        (a, l) => ({
+          vinculadas: a.vinculadas + l.vinculadas,
+          concluidas: a.concluidas + l.concluidas,
+          emAndamento: a.emAndamento + l.emAndamento,
+          faltam: a.faltam + l.faltam,
+          pausadas: a.pausadas + l.pausadas,
+          declinios: a.declinios + l.declinios,
+        }),
+        { vinculadas: 0, concluidas: 0, emAndamento: 0, faltam: 0, pausadas: 0, declinios: 0 },
+      ),
+    [cargosVisiveis],
+  );
 
   const colunasGrupo = useMemo<ColOrd<LinhaGrupo>[]>(
     () => [
@@ -596,11 +818,58 @@ export default function AltoVolumeAnalisePage() {
   );
   const ordGrupo = useOrdenacao(colunasGrupo, dados?.grupos ?? []);
 
+  /**
+   * §A.29: a tabela de lojas nasce ORDENÁVEL, com a mesma peça das outras duas desta tela. A ordem
+   * padrão continua a do backend (maior na esteira primeiro, não informado no fim), e o clique é
+   * sobreposição. A linha de TOTAL fica fora da lista ordenada: ela é somatório e não sai do rodapé.
+   */
+  const colunasLoja = useMemo<ColOrd<LinhaCentroCusto>[]>(
+    () => [
+      { chave: "loja", tipo: "texto", valor: (l) => l.centroCusto },
+      { chave: "total", tipo: "numero", valor: (l) => l.total },
+      { chave: "vagas", tipo: "numero", valor: (l) => l.vagas },
+      { chave: "concluidas", tipo: "numero", valor: (l) => l.concluidas },
+      { chave: "emAndamento", tipo: "numero", valor: (l) => l.emAndamento },
+      { chave: "faltam", tipo: "numero", valor: (l) => l.faltam },
+      { chave: "pausadas", tipo: "numero", valor: (l) => l.pausadas },
+      { chave: "declinios", tipo: "numero", valor: (l) => l.declinios },
+    ],
+    [],
+  );
+
   const t = dados?.termometro;
   /** Projeto que ainda não abriu: o termômetro troca a pergunta de "até o fim" para "para começar". */
   const naoIniciou = (t?.diasParaInicio ?? 0) > 0;
   /** Cobertura geral: o card "% Total Entregue" e o rodapé das barras leem esta MESMA conta. */
   const coberturaGeral = percentualDe(dados?.totais.vinculadas ?? 0, dados?.totais.vagas ?? 0);
+  /** Lojas / unidades, com o `?? []` que segura a tela quando o backend ainda é o da versão anterior. */
+  const ordLoja = useOrdenacao(colunasLoja, lojas);
+  /**
+   * O RODAPÉ DA TABELA DE LOJAS SAI DA SOMA DAS LINHAS, e não dos baldes do topo, por um motivo que
+   * a §A.27 já cobrou uma vez: o `total` e o `faltam` por loja são do universo da loja, e o balde do
+   * topo é da meta cadastrada por cargo. Somar as linhas é o que garante que o rodapé seja o
+   * somatório do que está acima dele, e não um número de outra régua parecido o bastante para
+   * ninguém desconfiar.
+   *
+   * A ÚNICA COLUNA QUE TAMBÉM BATE COM O TOPO É "NA ESTEIRA", e isso é a prova que já existia: a
+   * soma dela é o balde "Total De Vagas Na Esteira". A tela mostra as duas na mesma linha.
+   */
+  const totalLojas = useMemo(
+    () =>
+      lojas.reduce(
+        (acc, l) => ({
+          total: acc.total + l.total,
+          vagas: acc.vagas + l.vagas,
+          concluidas: acc.concluidas + l.concluidas,
+          emAndamento: acc.emAndamento + l.emAndamento,
+          faltam: acc.faltam + l.faltam,
+          pausadas: acc.pausadas + l.pausadas,
+          declinios: acc.declinios + l.declinios,
+        }),
+        { total: 0, vagas: 0, concluidas: 0, emAndamento: 0, faltam: 0, pausadas: 0, declinios: 0 },
+      ),
+    [lojas],
+  );
 
   return (
     <>
@@ -926,6 +1195,47 @@ export default function AltoVolumeAnalisePage() {
             )}
           </GlassCard>
 
+          {/* ── O AVISO DO CRUZAMENTO ───────────────────────────────────────
+              Ele existe porque o cruzamento é INVISÍVEL de outro jeito: as duas tabelas passam a
+              mostrar números menores e nada na tela diria por quê. A faixa nomeia o recorte em curso
+              e traz o botão de desfazer, além do clique de novo na linha.
+
+              ELA FICA ACIMA DAS DUAS TABELAS, e não dentro de uma delas, porque o recorte vale para
+              o par: escolher um cargo muda o quadro de lojas, escolher uma loja muda o de cargos. */}
+          {cruzamento && (
+            <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-[var(--accent)] bg-[var(--sico)] px-3.5 py-2.5">
+              <Icon name="filter" className="h-4 w-4 flex-none text-accent" />
+              <span className="text-sm text-text">
+                {cruzamento.tipo === "cargo" ? (
+                  <>
+                    Mostrando <strong>{cruzamento.rotulo}</strong> por loja / unidade. O quadro de
+                    lojas abaixo conta só este cargo.
+                  </>
+                ) : (
+                  <>
+                    Mostrando os cargos de <strong>{cruzamento.rotulo}</strong>. O quadro de cargos
+                    abaixo conta só esta loja.
+                  </>
+                )}
+              </span>
+              {/* A META NÃO CRUZA, e a faixa diz isso na hora em que o recorte por loja liga, em vez
+                  de deixar o diretor descobrir pela célula vazia. */}
+              {cruzamento.tipo === "loja" && (
+                <span className="text-[12px] text-dim">
+                  A coluna Vagas fica sem número: a meta do projeto é cadastrada por cargo, não por
+                  loja.
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={() => setCruzamento(null)}
+                className="ml-auto rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-[12.5px] text-dim transition hover:border-[var(--border-strong)] hover:text-text"
+              >
+                Desfazer cruzamento
+              </button>
+            </div>
+          )}
+
           {/* ── TABELA POR CARGO ────────────────────────────────────────── */}
           <GlassCard className="mb-5 overflow-hidden p-2">
             <div className="overflow-x-auto">
@@ -963,10 +1273,47 @@ export default function AltoVolumeAnalisePage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {ordCargo.itens.map((l) => (
-                    <tr key={l.cargoId ?? "sem-cargo"}>
-                      <td className="font-semibold">{l.cargoNome}</td>
-                      <td className="text-center tabular-nums">{l.vagas}</td>
+                  {ordCargo.itens.map((l) => {
+                    const ativo = cruzamento?.tipo === "cargo" && cruzamento.id === l.cargoId;
+                    return (
+                    <tr
+                      key={l.cargoId ?? "sem-cargo"}
+                      onClick={() =>
+                        alternarCruzamento({ tipo: "cargo", id: l.cargoId, rotulo: l.cargoNome })
+                      }
+                      className={cn(
+                        "cursor-pointer transition",
+                        ativo && "bg-[var(--sico)]",
+                      )}
+                      title={
+                        ativo
+                          ? "Clique de novo para desfazer o cruzamento."
+                          : `Ver ${l.cargoNome} por loja / unidade`
+                      }
+                    >
+                      <td className="font-semibold">
+                        <span className="inline-flex items-center gap-1.5">
+                          {ativo && <Icon name="filter" className="h-3.5 w-3.5 flex-none text-accent" />}
+                          {l.cargoNome}
+                        </span>
+                      </td>
+                      {/* A META SOME NO RECORTE POR LOJA e a célula diz por quê: ela é cadastrada por
+                          CARGO no projeto inteiro e não existe por loja. Repetir aqui a meta do
+                          projeto afirmaria que aquela loja sozinha tem todas as vagas do cargo. */}
+                      <td
+                        className="text-center tabular-nums"
+                        title={
+                          l.vagas === null
+                            ? "A meta é cadastrada por cargo no projeto inteiro, não por loja."
+                            : undefined
+                        }
+                      >
+                        {l.vagas === null ? (
+                          <span className="text-[12px] text-faint">não informado</span>
+                        ) : (
+                          l.vagas
+                        )}
+                      </td>
                       <td className="text-center tabular-nums">{l.vinculadas}</td>
                       <td className="text-center font-semibold tabular-nums">{l.concluidas}</td>
                       <td className="text-center tabular-nums">{l.emAndamento}</td>
@@ -987,26 +1334,174 @@ export default function AltoVolumeAnalisePage() {
                       <td className="text-center tabular-nums">{l.pausadas}</td>
                       <td className="text-center tabular-nums">{l.declinios}</td>
                     </tr>
-                  ))}
+                    );
+                  })}
+                  {/* O RODAPÉ SEGUE O RECORTE: com o cruzamento ligado ele soma as linhas visíveis,
+                      e não os baldes do projeto, senão o total contradiria a tabela acima dele. */}
                   <tr className="bg-[var(--surface)]">
                     <td className="font-semibold">Total</td>
-                    <td className="text-center font-semibold tabular-nums">{dados.totais.vagas}</td>
                     <td className="text-center font-semibold tabular-nums">
-                      {dados.totais.vinculadas}
+                      {cruzamento?.tipo === "loja" ? (
+                        <span className="text-[12px] text-faint">não informado</span>
+                      ) : (
+                        dados.totais.vagas
+                      )}
                     </td>
                     <td className="text-center font-semibold tabular-nums">
-                      {dados.totais.concluidas}
+                      {totaisCargo.vinculadas}
                     </td>
                     <td className="text-center font-semibold tabular-nums">
-                      {dados.totais.emAndamento}
+                      {totaisCargo.concluidas}
                     </td>
-                    <td className="text-center font-semibold tabular-nums">{dados.totais.faltam}</td>
-                    <td className="text-center font-semibold tabular-nums">{dados.totais.pausadas}</td>
-                    <td className="text-center font-semibold tabular-nums">{dados.totais.declinios}</td>
+                    <td className="text-center font-semibold tabular-nums">
+                      {totaisCargo.emAndamento}
+                    </td>
+                    <td className="text-center font-semibold tabular-nums">{totaisCargo.faltam}</td>
+                    <td className="text-center font-semibold tabular-nums">{totaisCargo.pausadas}</td>
+                    <td className="text-center font-semibold tabular-nums">{totaisCargo.declinios}</td>
                   </tr>
                 </tbody>
               </table>
             </div>
+          </GlassCard>
+
+          {/* ── LOJAS / UNIDADES: O QUADRO COMPLETO POR STATUS ─────────────── */}
+          {/* EVOLUÇÃO DO INDICADOR QUE JÁ ESTAVA AQUI (pedido do diretor, 27/08), e não uma seção
+              nova: o card continua ABAIXO da tabela por cargo e ACIMA dos grupos, e nenhum outro
+              gráfico da tela mudou de lugar, de tamanho ou de conteúdo (§A.26).
+
+              A LISTA DE BARRAS VIROU TABELA, no molde exato do quadro de Cargos, E O CILINDRO FICOU:
+              ele passou a morar DENTRO da coluna da loja, embaixo do nome. Era a peça que respondia
+              "qual loja concentra a leva" antes de alguém ler número nenhum, e trocá-la por mais uma
+              coluna de dígitos teria custado a leitura comparativa que o diretor aprovou. */}
+          <GlassCard className="mb-5 overflow-hidden p-2">
+            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-2 pb-2 pt-1">
+              <h3 className="text-[13px] font-semibold uppercase tracking-wide text-faint">
+                Lojas / Unidades
+              </h3>
+              <span
+                className="text-sm text-dim"
+                title="O campo é o centro de custo da admissão. Cliente com um CNPJ só e várias lojas usa esse campo para escrever o nome de cada loja, então ele diz a loja ou unidade daquele cliente."
+              >
+                o mesmo quadro do cargo, agrupado por loja. o dado é o centro de custo da admissão
+              </span>
+              {/* O TOTAL FICA À VISTA de propósito: ele é o mesmo número do balde "Total De Vagas Na
+                  Esteira" lá em cima, e ver os dois na mesma tela é o que mostra que o recorte é um
+                  só. É a prova que já existia, e as colunas novas não a tocaram. */}
+              <span className="ml-auto text-sm text-dim">
+                total na esteira:{" "}
+                <span className="font-semibold tabular-nums text-text">{dados.totais.vinculadas}</span>
+              </span>
+            </div>
+
+            {lojas.length === 0 ? (
+              <p className="py-8 text-center text-faint">
+                Nenhuma admissão na esteira vinculada a este projeto, então não há loja ou unidade a
+                somar.
+              </p>
+            ) : (
+              <div className="overflow-x-auto">
+                {/* ORDEM DAS COLUNAS: a MESMA do quadro de Cargos, para as duas tabelas se lerem
+                    igual. A coluna da loja é mais larga que a de cargo porque carrega o cilindro e o
+                    peso embaixo do nome; as colunas de número repetem as larguras de lá (§A.12/§A.20)
+                    e a tabela rola na horizontal abaixo do mínimo, em vez de espremer. */}
+                <table className="ds-table w-full min-w-[980px] table-fixed">
+                  <thead>
+                    <tr>
+                      <ColunaOrdenavel as="th" ord={ordLoja} chave="loja" className="w-[280px]">
+                        Loja / Unidade
+                      </ColunaOrdenavel>
+                      {/* §A.20, DEFEITO PEGO NA PROVA VISUAL: "TOTAL DE VAGAS" saiu cortado como
+                          "TOTAL DE ...", porque o `ColunaOrdenavel` põe o rótulo num `truncate` e
+                          numa coluna de 110px o texto não cabe em uma linha. O `whitespace-normal`
+                          devolve ao rótulo o direito de quebrar em duas linhas, que é leitura;
+                          reticências no nome da coluna é supressão, que é o que a regra proíbe. */}
+                      <ColunaOrdenavel as="th" ord={ordLoja} chave="total" className="w-[130px]">
+                        <span className="whitespace-normal">Total De Vagas</span>
+                      </ColunaOrdenavel>
+                      <ColunaOrdenavel as="th" ord={ordLoja} chave="vagas" className="w-[120px]">
+                        Na Esteira
+                      </ColunaOrdenavel>
+                      <ColunaOrdenavel as="th" ord={ordLoja} chave="concluidas" className="w-[120px]">
+                        Concluídas
+                      </ColunaOrdenavel>
+                      <ColunaOrdenavel
+                        as="th"
+                        ord={ordLoja}
+                        chave="emAndamento"
+                        className="w-[140px]"
+                      >
+                        Em Andamento
+                      </ColunaOrdenavel>
+                      <ColunaOrdenavel as="th" ord={ordLoja} chave="faltam" className="w-[110px]">
+                        Faltam
+                      </ColunaOrdenavel>
+                      <ColunaOrdenavel as="th" ord={ordLoja} chave="pausadas" className="w-[110px]">
+                        Pausadas
+                      </ColunaOrdenavel>
+                      <ColunaOrdenavel as="th" ord={ordLoja} chave="declinios" className="w-[110px]">
+                        Declínios
+                      </ColunaOrdenavel>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ordLoja.itens.map((l) => (
+                      <LinhaLoja
+                        key={l.centroCusto ?? "nao-informado"}
+                        linha={l}
+                        maior={maiorLoja}
+                        total={dados.totais.vinculadas}
+                        ativo={
+                          cruzamento?.tipo === "loja" && cruzamento.centroCusto === l.centroCusto
+                        }
+                        onClick={() =>
+                          alternarCruzamento({
+                            tipo: "loja",
+                            centroCusto: l.centroCusto,
+                            rotulo: l.centroCusto ?? "não informado",
+                          })
+                        }
+                      />
+                    ))}
+                    <tr className="bg-[var(--surface)]">
+                      <td className="font-semibold">Total</td>
+                      <td className="text-center font-semibold tabular-nums">{totalLojas.total}</td>
+                      {/* ESTA CÉLULA É A PROVA: ela é a soma das linhas E é o balde do topo, e o
+                          título diz isso para quem passar o mouse conferindo. */}
+                      <td
+                        className="text-center font-semibold tabular-nums"
+                        title="A soma das lojas é o mesmo número do balde Total De Vagas Na Esteira, no topo da tela: os dois saem do mesmo filtro."
+                      >
+                        {totalLojas.vagas}
+                      </td>
+                      <td className="text-center font-semibold tabular-nums">
+                        {totalLojas.concluidas}
+                      </td>
+                      <td className="text-center font-semibold tabular-nums">
+                        {totalLojas.emAndamento}
+                      </td>
+                      <td className="text-center font-semibold tabular-nums">{totalLojas.faltam}</td>
+                      <td className="text-center font-semibold tabular-nums">
+                        {totalLojas.pausadas}
+                      </td>
+                      <td className="text-center font-semibold tabular-nums">
+                        {totalLojas.declinios}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* A NOTA DO DECLÍNIO FICA NA TELA, e não só no código: a coluna vem de outro recorte e
+                não soma no Total, exatamente como no quadro de Cargos. Sem a frase, alguém somaria as
+                colunas na mão, veria que não fecha e abriria um chamado. */}
+            <p className="px-2 pb-1 pt-2.5 text-[12px] text-faint">
+              Total De Vagas é tudo que o projeto tem na loja: Na Esteira mais em banco mais os
+              encerrados vinculados. Faltam é Total menos Na Esteira. Declínios vem do recorte do
+              cliente no período, o mesmo do quadro de Cargos, e por isso é informação ao lado: não
+              soma no Total nem em Faltam.
+            </p>
           </GlassCard>
 
           {/* ── ALERTA POR GRUPO (só para projeto que usa turmas) ────────── */}
@@ -1192,6 +1687,112 @@ function BaldeDividido({ cima, baixo }: { cima: MeioBalde; baixo: MeioBalde }) {
       {meio(cima, true)}
       {meio(baixo, false)}
     </div>
+  );
+}
+
+/**
+ * Uma loja / unidade como LINHA DE TABELA: o nome com o cilindro embaixo, e os baldes por status.
+ *
+ * ┌─ O CILINDRO FICOU, E ELE MUDOU DE LUGAR, NÃO DE PAPEL (pedido do diretor, 27/08) ──────────┐
+ * │ A seção era uma lista de barras e virou tabela, no molde do quadro de Cargos. A barra podia  │
+ * │ ter virado só mais uma coluna de número, e teria custado a leitura que o diretor aprovou:    │
+ * │ comprimento responde "qual loja concentra a leva" antes de alguém ler dígito nenhum. Ela     │
+ * │ passou a morar DENTRO da primeira coluna, embaixo do nome, onde continua comparando as lojas │
+ * │ entre si sem disputar espaço com os sete números da direita.                                 │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * A ESCALA DA BARRA É O "NA ESTEIRA", e não o total da loja: é o mesmo número que a barra sempre
+ * desenhou e o mesmo que soma o balde do topo. Trocar a medida por baixo do pano mudaria o que a
+ * barra diz sem que ninguém tivesse pedido.
+ *
+ * NÃO INFORMADO (centro de custo em branco) é caso real e fica visível, com o número certo, em tom
+ * neutro e no fim da lista: ele conta para o total, mas não é uma loja e não disputa o ranking.
+ */
+function LinhaLoja({
+  linha,
+  maior,
+  total,
+  ativo,
+  onClick,
+}: {
+  linha: LinhaCentroCusto;
+  /** Maior loja da lista: a escala comum das barras. */
+  maior: number;
+  /** Total na esteira do projeto, para o peso de cada loja. */
+  total: number;
+  /** Esta loja é a do cruzamento em curso? */
+  ativo: boolean;
+  onClick: () => void;
+}) {
+  const naoInformado = linha.centroCusto === null;
+  const rotulo = naoInformado ? "não informado" : linha.centroCusto!;
+  const peso = percentualDe(linha.vagas, total);
+  // Piso de 3% para valor não nulo, o mesmo das barras por cargo: 1 vaga contra 300 desenharia uma
+  // barra invisível, e a linha mentiria dizendo que não há ninguém naquela loja.
+  const largura = linha.vagas <= 0 ? 0 : Math.max(3, Math.round((linha.vagas / Math.max(1, maior)) * 100));
+  const cor = naoInformado ? "var(--faint)" : "var(--accent)";
+
+  return (
+    <tr
+      onClick={onClick}
+      className={cn("cursor-pointer transition", ativo && "bg-[var(--sico)]")}
+      title={ativo ? "Clique de novo para desfazer o cruzamento." : `Ver os cargos de ${rotulo}`}
+    >
+      <td>
+        <div className="flex items-baseline gap-2">
+          {ativo && <Icon name="filter" className="h-3.5 w-3.5 flex-none text-accent" />}
+          <span
+            className={`min-w-0 flex-1 truncate text-sm font-semibold ${naoInformado ? "text-faint" : "text-text"}`}
+            title={rotulo}
+          >
+            {rotulo}
+          </span>
+          {/* Peso no projeto: 8 vagas numa leva de 20 é outra história que 8 numa leva de 300.
+              `whitespace-nowrap` porque a mesma frase estava quebrando em duas linhas em umas
+              colunas e não em outras, e a lista ficava com as linhas em alturas diferentes (§A.20). */}
+          <span className="shrink-0 whitespace-nowrap text-[11px] tabular-nums text-faint">
+            {total > 0 ? `${peso}% do projeto` : "sem vínculo"}
+          </span>
+        </div>
+        <div className="mt-1.5 h-[10px] w-full overflow-hidden rounded-full" style={{ background: TRILHO }}>
+          {largura > 0 && (
+            <div
+              className="h-full rounded-full"
+              style={{
+                width: `${largura}%`,
+                background: `linear-gradient(90deg, color-mix(in srgb, ${cor} 45%, transparent), ${cor})`,
+              }}
+            />
+          )}
+        </div>
+      </td>
+      <td className="text-center tabular-nums">{linha.total}</td>
+      <td className="text-center tabular-nums">{linha.vagas}</td>
+      <td className="text-center font-semibold tabular-nums">{linha.concluidas}</td>
+      <td className="text-center tabular-nums">{linha.emAndamento}</td>
+      {/* NEGATIVO É INFORMAÇÃO, não defeito, e é a MESMA regra da coluna Faltam do quadro de Cargos:
+          não travar em zero é o que faz a coluna somar exatamente o total abaixo dela. */}
+      <td
+        className="text-center font-semibold tabular-nums"
+        style={linha.faltam < 0 ? { color: "var(--accent)" } : undefined}
+        title={
+          linha.faltam < 0
+            ? `${-linha.faltam} além do que esta loja tem no projeto`
+            : `${linha.faltam} desta loja fora da esteira: ${linha.emBanco} em banco e o restante encerrado`
+        }
+      >
+        {linha.faltam}
+      </td>
+      <td className="text-center tabular-nums">{linha.pausadas}</td>
+      {/* O DECLÍNIO É DE OUTRO RECORTE (cliente + período), como no quadro de Cargos: ele não soma no
+          Total desta linha, e o título diz isso a quem passar o mouse conferindo a conta. */}
+      <td
+        className="text-center tabular-nums"
+        title="Declínios e rescisões do cliente no período do projeto, nesta loja. Vem do mesmo recorte do quadro de Cargos e não soma no Total De Vagas."
+      >
+        {linha.declinios}
+      </td>
+    </tr>
   );
 }
 

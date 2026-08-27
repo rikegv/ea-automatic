@@ -44,12 +44,19 @@ interface Cenario {
   /** Declínios no universo cliente + período, FORA da matemática das vagas. */
   declinios?: Row[];
   grupos?: Row[];
+  /** Lojas / unidades: os baldes por `centro_custo`, no universo do PROJETO (os vinculados). */
+  centroCusto?: Row[];
+  /** Declínios por loja, no recorte cliente + período, FORA da matemática (como no quadro de cargos). */
+  centroCustoDeclinios?: Row[];
+  /** A matriz cargo x loja do cruzamento clicável: baldes e, depois, declínios. */
+  matriz?: Row[];
+  matrizDeclinios?: Row[];
 }
 
 /**
- * Fake do Drizzle por FILA DE RESULTADOS: a análise dispara cinco leituras em ordem conhecida
- * (projeto, vagas por cargo, status dos vinculados, declínios do cliente no período, grupos), e cada
- * `await` consome a próxima. O encadeamento devolve sempre o mesmo objeto, que é "thenable" como o
+ * Fake do Drizzle por FILA DE RESULTADOS: a análise dispara nove leituras em ordem conhecida
+ * (projeto, vagas por cargo, status dos vinculados, declínios do cliente no período, grupos, os
+ * baldes por loja e os declínios por loja), e cada `await` consome a próxima. O encadeamento devolve sempre o mesmo objeto, que é "thenable" como o
  * construtor do Drizzle.
  *
  * A leitura de DECLÍNIO é separada da de status de propósito, e é o que sobrou da correção anterior:
@@ -63,6 +70,18 @@ function montar(cen: Cenario = {}) {
     cen.status ?? [],
     cen.declinios ?? [],
     cen.grupos ?? [],
+    // LOJAS / UNIDADES entra no FIM da fila porque a consulta entra no fim do `Promise.all`. A ordem
+    // das cinco leituras anteriores fica intacta, e é por isso que nenhum teste que já existia muda.
+    //
+    // SÃO DUAS LEITURAS, e não uma, desde o quadro completo por status (27/08): os BALDES saem do
+    // universo do projeto e os DECLÍNIOS saem do recorte cliente + período, exatamente como no
+    // quadro de cargos, porque quem declina quase nunca chegou a `admissao_projeto` (§A.16).
+    cen.centroCusto ?? [],
+    cen.centroCustoDeclinios ?? [],
+    // A MATRIZ entra por último, e são DUAS leituras pelo mesmo motivo do quadro de lojas: os
+    // baldes saem do universo do projeto e os declínios do recorte cliente + período.
+    cen.matriz ?? [],
+    cen.matrizDeclinios ?? [],
   ];
   let i = 0;
 
@@ -668,5 +687,337 @@ describe("análise: guarda", () => {
   it("projeto inexistente é 404", async () => {
     const ctx = montar({ projeto: null });
     await expect(ctx.service.analise(PROJETO, HOJE)).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+/**
+ * LOJAS / UNIDADES (o centro de custo com o nome que a operação usa).
+ *
+ * O QUE ESTES TESTES PROTEGEM, e é o mesmo risco do resto do arquivo: painel de contagem erra em
+ * silêncio. Aqui o erro nasceria de dois jeitos, e os dois estão cobertos.
+ *
+ * 1. A LISTA NÃO SOMAR O BALDE DO TOPO. O indicador usa o MESMO recorte do "Na Esteira" (vinculados
+ *    ao projeto, terminais e banco fora), então a soma das lojas é, por construção, o total de vagas
+ *    na esteira. Divergiu, é porque alguém mexeu no recorte de um dos dois lados.
+ * 2. O NÃO INFORMADO SUBIR NO RANKING. Centro de custo vazio é caso real e frequente; deixá-lo no
+ *    topo faria a leitura de relance dizer que a maior loja do projeto é a que não tem nome.
+ */
+describe("lojas / unidades por centro de custo", () => {
+  /** Uma linha de baldes por loja, com os campos que a consulta devolve. */
+  const loja = (
+    centroCusto: string | null,
+    v: Partial<{
+      total: number;
+      vagas: number;
+      concluidas: number;
+      emAndamento: number;
+      pausadas: number;
+      emBanco: number;
+    }> = {},
+  ) => ({
+    centroCusto,
+    total: v.total ?? v.vagas ?? 0,
+    vagas: v.vagas ?? 0,
+    concluidas: v.concluidas ?? 0,
+    emAndamento: v.emAndamento ?? 0,
+    pausadas: v.pausadas ?? 0,
+    emBanco: v.emBanco ?? 0,
+  });
+
+  it("ordena por volume na esteira, com o não informado sempre por último", async () => {
+    const ctx = montar({
+      centroCusto: [
+        loja(null, { vagas: 58 }),
+        loja("LOJA MORUMBI", { vagas: 7 }),
+        loja("LOJA IBIRAPUERA", { vagas: 25 }),
+        loja("LOJA TATUAPÉ", { vagas: 11 }),
+      ],
+    });
+
+    const r = await ctx.service.analise(PROJETO, HOJE);
+
+    expect(r.porCentroCusto.map((l) => l.centroCusto)).toEqual([
+      "LOJA IBIRAPUERA",
+      "LOJA TATUAPÉ",
+      "LOJA MORUMBI",
+      null,
+    ]);
+    expect(r.porCentroCusto.map((l) => l.vagas)).toEqual([25, 11, 7, 58]);
+  });
+
+  it("empate de volume desempata pelo nome, para a ordem não dançar entre duas cargas", async () => {
+    const ctx = montar({
+      centroCusto: [loja("LOJA SANTANA", { vagas: 4 }), loja("LOJA CENTRO", { vagas: 4 })],
+    });
+
+    const r = await ctx.service.analise(PROJETO, HOJE);
+
+    expect(r.porCentroCusto.map((l) => l.centroCusto)).toEqual(["LOJA CENTRO", "LOJA SANTANA"]);
+  });
+
+  /**
+   * A PROVA QUE JÁ EXISTIA, e que o quadro completo NÃO pode quebrar (exigência do diretor): a soma
+   * da coluna "Na Esteira" das lojas é o mesmo número do balde do topo. É a identidade que mostra
+   * que os dois números saem do mesmo filtro de farol, e ela sobrevive intacta às colunas novas.
+   */
+  it("a soma das lojas é o mesmo número do balde Total De Vagas Na Esteira", async () => {
+    const ctx = montar({
+      status: [
+        { cargoId: "c1", cargoNome: "Vendedor I", vagas: 0, vinculadas: 30, concluidas: 10, cadastradas: 12, emAndamento: 20, pausadas: 0, emBanco: 3 },
+        { cargoId: "c2", cargoNome: "Caixa", vagas: 0, vinculadas: 12, concluidas: 4, cadastradas: 5, emAndamento: 8, pausadas: 0, emBanco: 1 },
+      ],
+      centroCusto: [loja("LOJA CENTRO", { vagas: 30 }), loja(null, { vagas: 12 })],
+    });
+
+    const r = await ctx.service.analise(PROJETO, HOJE);
+
+    const somaLojas = r.porCentroCusto.reduce((acc, l) => acc + l.vagas, 0);
+    expect(somaLojas).toBe(r.totais.vinculadas);
+  });
+
+  it("projeto sem nenhum vínculo devolve lista vazia (a tela não desenha a seção)", async () => {
+    const ctx = montar();
+    const r = await ctx.service.analise(PROJETO, HOJE);
+    expect(r.porCentroCusto).toEqual([]);
+  });
+
+  /**
+   * ─ O QUADRO COMPLETO POR STATUS (evolução de 27/08) ──────────────────────────────────────────
+   */
+
+  it("cada balde da loja é o mesmo balde do quadro de cargos, só agrupado por centro de custo", async () => {
+    const ctx = montar({
+      centroCusto: [
+        loja("LOJA CENTRO", {
+          total: 34,
+          vagas: 25,
+          concluidas: 12,
+          emAndamento: 13,
+          pausadas: 2,
+          emBanco: 3,
+        }),
+      ],
+      centroCustoDeclinios: [{ centroCusto: "LOJA CENTRO", declinios: 6 }],
+    });
+
+    const [l] = (await ctx.service.analise(PROJETO, HOJE)).porCentroCusto;
+
+    expect(l).toMatchObject({
+      centroCusto: "LOJA CENTRO",
+      total: 34,
+      vagas: 25,
+      concluidas: 12,
+      emAndamento: 13,
+      pausadas: 2,
+      emBanco: 3,
+      declinios: 6,
+    });
+  });
+
+  /**
+   * A CONTA DA LINHA FECHA SOZINHA: "faltam" é `total - na esteira`, a mesma forma que o quadro de
+   * cargos usa (`meta - vinculadas`). Não existe meta cadastrada por loja no sistema, então a
+   * referência é o universo da própria loja, e não um rateio inventado da meta do projeto (§A.16).
+   */
+  it("faltam é o total da loja menos quem está na esteira, sem trava em zero", async () => {
+    const ctx = montar({
+      centroCusto: [
+        loja("LOJA CENTRO", { total: 34, vagas: 25 }),
+        // Loja com mais gente andando do que o universo contado é impossível por construção, mas a
+        // ausência de trava é a mesma decisão do quadro de cargos: o número tem de somar a coluna.
+        loja("LOJA SANTANA", { total: 4, vagas: 4 }),
+      ],
+    });
+
+    const r = await ctx.service.analise(PROJETO, HOJE);
+
+    expect(r.porCentroCusto.map((l) => l.faltam)).toEqual([9, 0]);
+  });
+
+  /**
+   * O DECLÍNIO NÃO ENTRA NA MATEMÁTICA, e este teste é o que impede alguém de somá-lo ao total um
+   * dia: ele vem de OUTRO universo (cliente + período), porque quem declina quase nunca chegou a
+   * `admissao_projeto` (§A.16). Medido na Bienal: 32 declínios do cliente contra 10 vinculados.
+   */
+  it("o declínio é informação ao lado: não soma no total nem no faltam", async () => {
+    const ctx = montar({
+      centroCusto: [loja("LOJA CENTRO", { total: 34, vagas: 25 })],
+      centroCustoDeclinios: [{ centroCusto: "LOJA CENTRO", declinios: 32 }],
+    });
+
+    const [l] = (await ctx.service.analise(PROJETO, HOJE)).porCentroCusto;
+
+    expect(l.declinios).toBe(32);
+    expect(l.total).toBe(34);
+    expect(l.faltam).toBe(9);
+  });
+
+  /**
+   * O MERGE É UMA UNIÃO, a mesma regra do quadro de cargos: a loja que só aparece nos declínios é
+   * justamente a que perdeu todo mundo, e sumir dali seria esconder o pior caso da leva.
+   */
+  it("loja que só tem declínio entra na lista, com os baldes em zero", async () => {
+    const ctx = montar({
+      centroCusto: [loja("LOJA CENTRO", { total: 10, vagas: 10 })],
+      centroCustoDeclinios: [
+        { centroCusto: "LOJA CENTRO", declinios: 1 },
+        { centroCusto: "LOJA PERDIDA", declinios: 7 },
+      ],
+    });
+
+    const r = await ctx.service.analise(PROJETO, HOJE);
+    const perdida = r.porCentroCusto.find((l) => l.centroCusto === "LOJA PERDIDA");
+
+    expect(perdida).toMatchObject({ total: 0, vagas: 0, declinios: 7, faltam: 0 });
+  });
+
+  /**
+   * O NULO TEM CHAVE PRÓPRIA, e não vira texto: uma loja chamada literalmente "não informado" não
+   * pode se fundir com a linha de ausência de dado, senão duas coisas diferentes viram uma só.
+   */
+  it("a loja sem centro de custo não se funde com uma loja de nome parecido", async () => {
+    const ctx = montar({
+      centroCusto: [loja(null, { total: 5, vagas: 5 }), loja("não informado", { total: 2, vagas: 2 })],
+    });
+
+    const r = await ctx.service.analise(PROJETO, HOJE);
+
+    expect(r.porCentroCusto).toHaveLength(2);
+    // A de nome real fica no ranking; a de dado ausente vai para o fim, sempre.
+    expect(r.porCentroCusto.map((l) => l.centroCusto)).toEqual(["não informado", null]);
+  });
+});
+
+/**
+ * ─ A MATRIZ CARGO x LOJA (cruzamento clicável, 27/08) ────────────────────────────────────────
+ *
+ * A garantia que importa é ARITMÉTICA, e é ela que impede o cruzamento de virar uma terceira
+ * contagem: somar a matriz por um eixo tem de devolver exatamente o quadro daquele eixo.
+ */
+describe("matriz cargo x loja: o cruzamento clicável", () => {
+  // Tipagem do helper de teste (correção pontual autorizada para destravar o gate). O
+  // comportamento é o mesmo: mesmos campos, mesmos defaults, mesma aritmética.
+  type ValoresCel = {
+    total?: number;
+    vagas?: number;
+    concluidas?: number;
+    emAndamento?: number;
+    pausadas?: number;
+    emBanco?: number;
+  };
+  // `null` é caso REAL e testado logo abaixo ("cargo nulo e loja nula são pares distintos"):
+  // admissão sem cargo resolvido e sem centro de custo informado. O tipo acompanha o dado.
+  const cel = (
+    cargoId: string | null,
+    cargoNome: string | null,
+    centroCusto: string | null,
+    v: ValoresCel = {},
+  ) => ({
+    cargoId,
+    cargoNome,
+    centroCusto,
+    total: v.total ?? v.vagas ?? 0,
+    vagas: v.vagas ?? 0,
+    concluidas: v.concluidas ?? 0,
+    emAndamento: v.emAndamento ?? 0,
+    pausadas: v.pausadas ?? 0,
+    emBanco: v.emBanco ?? 0,
+  });
+
+  it("devolve uma linha por PAR cargo e loja, com faltam calculado igual aos quadros", async () => {
+    const ctx = montar({
+      matriz: [
+        cel("c1", "Vendedor I", "LOJA CENTRO", { total: 12, vagas: 10, concluidas: 8 }),
+        cel("c1", "Vendedor I", "LOJA SUL", { total: 5, vagas: 5, concluidas: 2 }),
+        cel("c2", "Caixa", "LOJA CENTRO", { total: 4, vagas: 3, concluidas: 3 }),
+      ],
+    });
+
+    const { matriz } = await ctx.service.analise(PROJETO, HOJE);
+
+    expect(matriz).toHaveLength(3);
+    expect(matriz.find((m) => m.cargoId === "c1" && m.centroCusto === "LOJA CENTRO")).toMatchObject({
+      total: 12,
+      vagas: 10,
+      concluidas: 8,
+      faltam: 2,
+    });
+  });
+
+  /**
+   * A PROVA DO CRUZAMENTO: somar a matriz por CARGO tem de dar o quadro de cargos, e somar por LOJA
+   * tem de dar o quadro de lojas. Se um dia alguém mudar a régua de um dos três sem mudar os outros,
+   * é este teste que quebra, e ele diz exatamente qual eixo saiu de linha.
+   */
+  it("somada por cargo bate com o quadro de cargos, e por loja com o quadro de lojas", async () => {
+    const ctx = montar({
+      status: [
+        { cargoId: "c1", cargoNome: "Vendedor I", vagas: 0, vinculadas: 15, concluidas: 10, cadastradas: 0, emAndamento: 5, pausadas: 0, emBanco: 0 },
+      ],
+      centroCusto: [
+        { centroCusto: "LOJA CENTRO", total: 16, vagas: 13, concluidas: 11, emAndamento: 2, pausadas: 0, emBanco: 0 },
+        { centroCusto: "LOJA SUL", total: 5, vagas: 5, concluidas: 2, emAndamento: 3, pausadas: 0, emBanco: 0 },
+      ],
+      matriz: [
+        cel("c1", "Vendedor I", "LOJA CENTRO", { total: 12, vagas: 10, concluidas: 8, emAndamento: 2 }),
+        cel("c1", "Vendedor I", "LOJA SUL", { total: 5, vagas: 5, concluidas: 2, emAndamento: 3 }),
+        cel("c2", "Caixa", "LOJA CENTRO", { total: 4, vagas: 3, concluidas: 3, emAndamento: 0 }),
+      ],
+    });
+
+    const r = await ctx.service.analise(PROJETO, HOJE);
+
+    // Por CARGO: o Vendedor I da matriz soma o Vendedor I do quadro de cargos.
+    const vendedorNaMatriz = r.matriz
+      .filter((m) => m.cargoId === "c1")
+      .reduce((a, m) => a + m.vagas, 0);
+    const vendedorNoQuadro = r.porCargo.find((l) => l.cargoId === "c1");
+    expect(vendedorNoQuadro).toBeDefined();
+    expect(vendedorNaMatriz).toBe(vendedorNoQuadro!.vinculadas);
+
+    // Por LOJA: a Loja Centro da matriz soma a Loja Centro do quadro de lojas.
+    const centroNaMatriz = r.matriz
+      .filter((m) => m.centroCusto === "LOJA CENTRO")
+      .reduce((a, m) => a + m.vagas, 0);
+    const centroNoQuadro = r.porCentroCusto.find((l) => l.centroCusto === "LOJA CENTRO");
+    expect(centroNoQuadro).toBeDefined();
+    expect(centroNaMatriz).toBe(centroNoQuadro!.vagas);
+  });
+
+  it("o declínio cruza pelos dois eixos e continua fora da matemática do total", async () => {
+    const ctx = montar({
+      matriz: [cel("c1", "Vendedor I", "LOJA CENTRO", { total: 10, vagas: 10 })],
+      matrizDeclinios: [
+        { cargoId: "c1", cargoNome: "Vendedor I", centroCusto: "LOJA CENTRO", declinios: 7 },
+        { cargoId: "c2", cargoNome: "Caixa", centroCusto: "LOJA PERDIDA", declinios: 3 },
+      ],
+    });
+
+    const { matriz } = await ctx.service.analise(PROJETO, HOJE);
+
+    const vendedorCentro = matriz.find((m) => m.cargoId === "c1" && m.centroCusto === "LOJA CENTRO");
+    expect(vendedorCentro).toMatchObject({ total: 10, vagas: 10, declinios: 7, faltam: 0 });
+    // O par que só existe nos declínios entra na matriz: é o cargo que aquela loja perdeu inteiro.
+    expect(matriz.find((m) => m.centroCusto === "LOJA PERDIDA")).toMatchObject({
+      cargoNome: "Caixa",
+      total: 0,
+      declinios: 3,
+    });
+  });
+
+  it("cargo nulo e loja nula são pares distintos, e nenhum se funde com o outro", async () => {
+    const ctx = montar({
+      matriz: [
+        cel(null, null, null, { total: 3, vagas: 3 }),
+        cel(null, null, "LOJA CENTRO", { total: 2, vagas: 2 }),
+        cel("c1", "Vendedor I", null, { total: 4, vagas: 4 }),
+      ],
+    });
+
+    const { matriz } = await ctx.service.analise(PROJETO, HOJE);
+
+    expect(matriz).toHaveLength(3);
+    expect(matriz.filter((m) => m.cargoId === null)).toHaveLength(2);
+    expect(matriz.filter((m) => m.centroCusto === null)).toHaveLength(2);
   });
 });
