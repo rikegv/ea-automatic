@@ -1,0 +1,24 @@
+-- REENTRADA EM VAGA JA ENCERRADA (A&S, ajuste do diretor).
+--
+-- O PROBLEMA: `uq_as_candidaturas_candidato_vaga` era um UNIQUE SIMPLES em (candidato_id, vaga_id).
+-- Ele nao sabia distinguir "esta pessoa ESTA nesta vaga" de "esta pessoa ESTEVE nesta vaga", entao
+-- impedia QUALQUER segunda candidatura do mesmo par, inclusive depois de encerrada. Consequencia
+-- real, vista na prova: quem foi descartado em marco nao volta se a vaga reabrir em agosto.
+--
+-- A TROCA: unique PARCIAL, restrito as situacoes VIVAS (ATIVO, APROVADO, CONTRATADO). Assim N linhas
+-- ENCERRADAS (DESCARTADO, DESISTIU) convivem no historico, e SO UMA VIVA existe por par pessoa/vaga.
+-- A duplicata acidental (o duplo clique) continua barrada pelo BANCO, que e onde ela precisa ser
+-- barrada: a consulta do service perde a corrida entre dois cliques simultaneos.
+--
+-- O CONJUNTO VIVO E O MESMO DA REGUA DE OCUPACAO (`domain/candidatura.ts`), e o predicado do indice
+-- e construido a partir dele no schema drizzle, nao digitado a mao. APROVADO e CONTRATADO consomem
+-- posicao; ATIVO esta em selecao. Situacao nova nasce VIVA (fail-closed): entra protegida pela trava
+-- ate alguem decidir que ela encerra o processo.
+--
+-- UNIQUE PARCIAL NAO E TECNICA NOVA NESTA TABELA: `uq_as_candidatos_cpf` (WHERE cpf IS NOT NULL) e
+-- `uq_as_candidaturas_id_match_pandape` ja sao assim desde a 0083.
+--
+-- A BASE SOBREVIVE: o indice novo e MAIS FRACO que o antigo (cobre um subconjunto das linhas), entao
+-- toda linha que passava no unique simples passa no parcial. Nenhum dado e tocado, nada e apagado.
+ALTER TABLE "as_candidaturas" DROP CONSTRAINT IF EXISTS "uq_as_candidaturas_candidato_vaga";--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "uq_as_candidaturas_viva" ON "as_candidaturas" USING btree ("candidato_id","vaga_id") WHERE "as_candidaturas"."situacao" in ('ATIVO', 'APROVADO', 'CONTRATADO');

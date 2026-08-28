@@ -18,8 +18,13 @@ import {
   varchar,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
+import { SITUACOES_VIVAS } from "../../domain/candidatura";
 import {
   areaEnum,
+  asCandidatoOrigemEnum,
+  asContatoTipoEnum,
+  candidaturaEtapaEnum,
+  candidaturaSituacaoEnum,
   cartaoVtEnum,
   clicksignStatusEnum,
   estadoDocumentoEnum,
@@ -2051,6 +2056,18 @@ export const vagas = pgTable(
      * ou de inventar um `cod_cliente`.
      */
     codCliente: varchar("cod_cliente", { length: 40 }).references(() => clientes.codCliente),
+    /**
+     * O `IdVacancy` DA VAGA NO PANDAPÉ (ponte puxada da onda 4, Central de Candidatos).
+     *
+     * ESTA COLUNA SÓ GUARDA. Não existe varredura, não existe chamada de API e nada a preenche
+     * sozinho: quem digita é a trilha da vaga. Guardar o código agora é o que permite, no dia da
+     * ponte, casar a vaga do EA com a do ATS sem ter de perguntar o número de novo.
+     *
+     * ÍNDICE COMUM, NÃO UNIQUE, pelo mesmo motivo de `codigo`: a base histórica (onda 3) ainda vai
+     * entrar, e um unique aqui faria a importação inteira falhar em vez de marcar a linha para
+     * revisão. §A.6: é código de vaga, não dado de pessoa.
+     */
+    idVacancyPandape: varchar("id_vacancy_pandape", { length: 40 }),
     /** Nulável no rascunho; obrigatória para publicar, pela régua do domínio. */
     natureza: vagaNaturezaEnum("natureza"),
     /** Nasce VAZIO: a coluna não existe na base e preencher seria adivinhar. */
@@ -2263,6 +2280,7 @@ export const vagas = pgTable(
     idxCargo: index("idx_vagas_cargo").on(t.cargoId),
     idxStatus: index("idx_vagas_status").on(t.status),
     idxAbertura: index("idx_vagas_data_abertura").on(t.dataAbertura),
+    idxIdVacancyPandape: index("idx_vagas_id_vacancy_pandape").on(t.idVacancyPandape),
     // Meta zero ou negativa não é meta, é linha que deveria ter sido apagada (mesmo check de
     // `projeto_vaga_cargo`, e pelo mesmo motivo: a meta entra em divisão na tela). O CHECK antigo
     // `ck_vagas_posicoes` é o MESMO, renomeado junto com a coluna, para o nome do check não continuar
@@ -2309,5 +2327,296 @@ export const vagaBeneficio = pgTable(
   (t) => ({
     uqVagaBeneficio: unique("uq_vaga_beneficio").on(t.vagaId, t.beneficioId),
     idxVaga: index("idx_vaga_beneficio_vaga").on(t.vagaId),
+  }),
+);
+
+// ── CENTRAL DE CANDIDATOS (A&S, onda 1) ─────────────────────────────────────
+//
+// TRÊS TABELAS E UMA PONTE. A pessoa (`as_candidatos`), a ligação dela com uma vaga
+// (`as_candidaturas`) e o histórico do que aconteceu naquela ligação (`as_contatos`). A ponte com a
+// esteira (`admissao_id`) nasce nula e NÃO é usada nesta onda.
+//
+// §A.6, E ESTA É A DIFERENÇA QUE IMPORTA: `as_candidatos` é a PRIMEIRA tabela do sistema que guarda
+// dado pessoal de quem AINDA NÃO É FUNCIONÁRIO. Em `candidatos` (Admissão) a pessoa já entrou num
+// processo formal; aqui ela pode nunca passar da triagem, e mesmo assim o nome, o telefone e às
+// vezes o CPF ficam gravados. Por isso: CPF opcional, retorno de lista sem identificador direto,
+// busca por CPF só no CORPO da requisição e expurgo por retenção.
+
+/**
+ * A PESSOA do funil de seleção.
+ *
+ * A CHAVE É O `id`, NÃO O CPF, e isto é a diferença central em relação a `candidatos` (Admissão),
+ * onde o CPF É a chave. O motivo é operacional: candidato de seleção muitas vezes ainda não deu o
+ * CPF, e exigi-lo produziria uma de duas coisas ruins, o time inventando número para conseguir
+ * salvar, ou a pessoa simplesmente não sendo cadastrada. O precedente já existe no próprio sistema:
+ * a Sala de Espera nasceu assim, com `cpf` nulável.
+ *
+ * O DEDUP CONTINUA EXISTINDO, e é o UNIQUE PARCIAL (`where cpf is not null`) que o sustenta: dois
+ * cadastros com o mesmo CPF são barrados pelo banco, e mil cadastros sem CPF convivem sem se
+ * atrapalhar. Um unique comum trataria todos os NULL como colidentes em alguns bancos e, no
+ * Postgres, permitiria o duplicado sem CPF, que é o comportamento que se quer, mas sem o dedup do
+ * lado preenchido ficar explícito. O parcial diz exatamente a regra que se quer: quando há CPF, ele
+ * é único. Mesmo tratamento para `id_candidate_pandape`, pela mesma razão.
+ */
+export const asCandidatos = pgTable(
+  "as_candidatos",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    /** O único obrigatório. Sem nome não há pessoa a acompanhar. */
+    nome: varchar("nome", { length: 200 }).notNull(),
+    /**
+     * 11 dígitos, SEM máscara, e OPCIONAL. Validado pelo dígito verificador quando preenchido
+     * (`isValidCpf`, do shared-types, o mesmo validador do resto do sistema, nunca um segundo).
+     *
+     * §A.6: nunca em log, nunca em mensagem de erro, nunca em URL nem em query string, e fora do
+     * retorno de LISTA. Sai só na ficha de um candidato.
+     */
+    cpf: varchar("cpf", { length: 11 }),
+    email: varchar("email", { length: 180 }),
+    telefone: varchar("telefone", { length: 40 }),
+    dataNascimento: date("data_nascimento"),
+    cidade: varchar("cidade", { length: 120 }),
+    uf: varchar("uf", { length: 2 }),
+    origem: asCandidatoOrigemEnum("origem").notNull().default("MANUAL"),
+    /**
+     * O id da PESSOA no Pandapé, reservado para a onda 4. Nasce vazio e nada o preenche hoje: não há
+     * varredura e não há chamada de API nesta onda. Unique parcial, como o CPF.
+     */
+    idCandidatePandape: varchar("id_candidate_pandape", { length: 40 }),
+    /** Quem cadastrou, da SESSÃO e nunca do corpo: é trilha, não campo de formulário. */
+    criadoPorId: uuid("criado_por_id").references(() => usuarios.id, { onDelete: "set null" }),
+    /**
+     * CARIMBO DO EXPURGO POR RETENÇÃO (decisão do diretor): candidato DESCARTADO tem os
+     * identificadores diretos descartados 2 anos depois; candidato de BANCO não expira.
+     *
+     * A LINHA NÃO É APAGADA, e isso é deliberado: apagar levaria junto as candidaturas e o histórico
+     * das vagas, e a contagem de posições de processos passados passaria a mentir. O que se descarta
+     * é o que identifica a pessoa (CPF, e-mail, telefone, nascimento e o id do ATS), no mesmo
+     * espírito do `ExpurgoService` da Admissão, que nula o CPF do substituído e preserva a linha.
+     * Preenchido = já expurgado, e o varredor não volta nela.
+     */
+    anonimizadoEm: timestamp("anonimizado_em", { withTimezone: true }),
+    criadoEm,
+    atualizadoEm,
+  },
+  (t) => ({
+    // O DEDUP, e a razão de ele ser PARCIAL: quando há CPF, ele é único; sem CPF, ninguém colide.
+    uqCpf: uniqueIndex("uq_as_candidatos_cpf")
+      .on(t.cpf)
+      .where(sql`${t.cpf} is not null`),
+    uqPandape: uniqueIndex("uq_as_candidatos_id_candidate_pandape")
+      .on(t.idCandidatePandape)
+      .where(sql`${t.idCandidatePandape} is not null`),
+    // Busca por nome é o caminho natural de quem trabalha na tela (buscar por CPF é a exceção).
+    idxNome: index("idx_as_candidatos_nome").on(t.nome),
+    idxOrigem: index("idx_as_candidatos_origem").on(t.origem),
+  }),
+);
+
+/**
+ * A LISTA DAS SITUAÇÕES VIVAS, em SQL, para o predicado do índice parcial de `as_candidaturas`.
+ *
+ * `sql.raw` PORQUE ISTO É UM PEDAÇO DE DDL, não um valor: parâmetro de bind (`$1`) não existe dentro
+ * da definição de um índice. Os valores vêm de `SITUACOES_VIVAS`, uma constante de código derivada do
+ * enum, e nunca de entrada de usuário, então não há concatenação de dado externo aqui.
+ */
+const SITUACOES_VIVAS_SQL = sql.raw(SITUACOES_VIVAS.map((s) => `'${s}'`).join(", "));
+
+/**
+ * A LIGAÇÃO candidato x vaga. Tabela PRÓPRIA, e não um `vaga_id` dentro do candidato, porque a MESMA
+ * PESSOA PODE ESTAR EM VÁRIAS VAGAS ao mesmo tempo, que é o normal de quem trabalha com volume.
+ *
+ * UNIQUE PARCIAL `(candidato_id, vaga_id)` SOBRE AS SITUAÇÕES VIVAS: a mesma pessoa não tem duas
+ * candidaturas VIVAS na MESMA vaga. Sem ele, um duplo clique cria duas linhas e a contagem de
+ * posições ocupadas passa a mentir, que é exatamente o número que o resto do módulo usa para decidir
+ * se ainda cabe alguém. PARCIAL, e não simples, porque candidatura ENCERRADA no passado não é
+ * duplicata: é histórico, e a pessoa pode voltar quando a vaga reabrir.
+ *
+ * A OCUPAÇÃO NÃO MORA AQUI NEM EM LUGAR NENHUM: ela é DERIVADA contando as linhas com situação
+ * APROVADO ou CONTRATADO. É a mesma decisão que a vaga já tinha tomado com os contadores dela, e
+ * pelo mesmo motivo: guardar um contador é ter dois números que discordam.
+ */
+export const asCandidaturas = pgTable(
+  "as_candidaturas",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    candidatoId: uuid("candidato_id")
+      .notNull()
+      .references(() => asCandidatos.id, { onDelete: "cascade" }),
+    /**
+     * RESTRICT na vaga, e CASCADE no candidato logo acima, e a assimetria é deliberada: apagar um
+     * candidato leva junto as candidaturas dele (é a mesma pessoa saindo do sistema), mas apagar uma
+     * vaga que tem gente dentro faria as candidaturas evaporarem em silêncio, junto com a contagem
+     * de quem foi aprovado nela.
+     */
+    vagaId: uuid("vaga_id")
+      .notNull()
+      .references(() => vagas.id, { onDelete: "restrict" }),
+    etapa: candidaturaEtapaEnum("etapa").notNull().default("CAPTACAO"),
+    situacao: candidaturaSituacaoEnum("situacao").notNull().default("ATIVO"),
+    /** Por que saiu. Texto livre: o vocabulário de descarte é da operação e ainda está se formando. */
+    motivoDescarte: text("motivo_descarte"),
+    /** O id do match no Pandapé, reservado para a onda 4. Unique parcial, como o CPF do candidato. */
+    idMatchPandape: varchar("id_match_pandape", { length: 40 }),
+    alocadoEm: timestamp("alocado_em", { withTimezone: true }).defaultNow().notNull(),
+    alocadoPorId: uuid("alocado_por_id").references(() => usuarios.id, { onDelete: "set null" }),
+    /**
+     * QUANDO FALAMOS COM ESTA PESSOA PELA ÚLTIMA VEZ, e é PERGUNTA DIFERENTE de `atualizado_em`.
+     * `atualizado_em` responde "quando esta candidatura andou" (etapa, situação, saída); esta coluna
+     * responde "quando houve contato". Juntar as duas num campo só perderia uma das respostas: uma
+     * candidatura movida de etapa hoje, com a última ligação há duas semanas, tem de contar as duas
+     * coisas, e é a segunda que diz se a pessoa está esfriando.
+     *
+     * CARIMBO DESNORMALIZADO, e a razão é a listagem: a alternativa seria um `max(ocorrido_em)` de
+     * `as_contatos` por linha, e com 200 linhas na tela isso é uma consulta por linha. O carimbo mata
+     * o N+1 e é o motivo de a coluna existir.
+     *
+     * NASCE NULA, e nula quer dizer "nunca houve contato registrado", que é diferente de zero. Ela é
+     * escrita SÓ pelo registro de contato, na MESMA TRANSAÇÃO do insert em `as_contatos`, e SÓ PARA
+     * FRENTE: contato retroativo (a ligação de ontem digitada hoje) não puxa o carimbo para trás.
+     */
+    ultimoContatoEm: timestamp("ultimo_contato_em", { withTimezone: true }),
+    /**
+     * A PONTE FUTURA COM A ESTEIRA. Nasce NULA e NÃO É USADA nesta onda: nenhuma admissão nasce
+     * daqui, nenhuma frente é criada, nada é lido. A coluna existe agora para que, no dia da ponte,
+     * a ligação já tenha onde morar. Sem FK de propósito enquanto ninguém a escreve, para a Central
+     * de Candidatos não passar a depender do módulo da Admissão antes da hora.
+     */
+    admissaoId: uuid("admissao_id"),
+    criadoEm,
+    atualizadoEm,
+  },
+  (t) => ({
+    /**
+     * A TRAVA 3, no banco e não só na tela: duplo clique não vira duas linhas.
+     *
+     * UNIQUE PARCIAL, RESTRITO ÀS SITUAÇÕES VIVAS, e essa é a correção do ajuste do diretor. Antes
+     * era um unique SIMPLES em (candidato, vaga), e ele não sabia distinguir "esta pessoa ESTÁ nesta
+     * vaga" de "esta pessoa ESTEVE nesta vaga": quem foi descartado em março não voltava se a vaga
+     * reabrisse em agosto. Com o predicado, N linhas ENCERRADAS (`DESCARTADO`, `DESISTIU`) convivem e
+     * SÓ UMA VIVA existe por par pessoa/vaga. A duplicata acidental continua barrada pelo banco, que
+     * é onde ela precisa ser barrada: a consulta do service perde a corrida entre dois cliques.
+     *
+     * O PREDICADO É DERIVADO DO DOMÍNIO (`SITUACOES_VIVAS`), e não digitado aqui. É o MESMO conjunto
+     * que a régua de ocupação usa, e escrevê-lo à mão no schema criaria a segunda lista que diverge
+     * da primeira no dia em que uma situação nova entrar no vocabulário.
+     *
+     * UNIQUE PARCIAL NÃO É TÉCNICA NOVA NESTA TABELA: `uq_as_candidatos_cpf` e
+     * `uq_as_candidaturas_id_match_pandape` logo abaixo já são assim.
+     */
+    uqCandidaturaViva: uniqueIndex("uq_as_candidaturas_viva")
+      .on(t.candidatoId, t.vagaId)
+      .where(sql`${t.situacao} in (${SITUACOES_VIVAS_SQL})`),
+    uqMatchPandape: uniqueIndex("uq_as_candidaturas_id_match_pandape")
+      .on(t.idMatchPandape)
+      .where(sql`${t.idMatchPandape} is not null`),
+    // A CONTAGEM DE OCUPAÇÃO é a consulta mais quente do módulo (ela roda dentro da transação de
+    // toda aprovação, com a linha da vaga travada), então o índice é por (vaga, situação).
+    idxVagaSituacao: index("idx_as_candidaturas_vaga_situacao").on(t.vagaId, t.situacao),
+    idxCandidato: index("idx_as_candidaturas_candidato").on(t.candidatoId),
+  }),
+);
+
+/**
+ * O HISTÓRICO, pendurado na CANDIDATURA e não na pessoa, e isso é decisão de desenho.
+ *
+ * "Liguei e ele não atendeu" só faz sentido DENTRO de um processo: é sobre aquela vaga, naquela
+ * etapa. Pendurado na pessoa, o histórico de três vagas simultâneas vira uma lista embaralhada em
+ * que ninguém sabe de qual processo cada linha fala, e o dado perde justamente o que o tornava útil.
+ *
+ * §A.6: `resumo` é texto do PROCESSO, não da pessoa. Nada aqui é identificador direto.
+ */
+export const asContatos = pgTable(
+  "as_contatos",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    candidaturaId: uuid("candidatura_id")
+      .notNull()
+      .references(() => asCandidaturas.id, { onDelete: "cascade" }),
+    tipo: asContatoTipoEnum("tipo").notNull(),
+    resumo: text("resumo").notNull(),
+    /**
+     * QUANDO ACONTECEU, que é diferente de quando foi digitado (`criado_em`). Ligação de ontem
+     * registrada hoje é o caso normal, e achatar as duas datas apagaria a ordem real dos fatos.
+     */
+    ocorridoEm: timestamp("ocorrido_em", { withTimezone: true }).defaultNow().notNull(),
+    registradoPorId: uuid("registrado_por_id").references(() => usuarios.id, {
+      onDelete: "set null",
+    }),
+    criadoEm,
+  },
+  (t) => ({
+    idxCandidatura: index("idx_as_contatos_candidatura").on(t.candidaturaId),
+  }),
+);
+
+/**
+ * O HISTÓRICO DE ETAPAS DA CANDIDATURA (bug 1 da validação do diretor).
+ *
+ * POR QUE ELA EXISTE. `as_candidaturas.etapa` é UMA coluna que o `moverEtapa` SOBRESCREVE: por onde a
+ * pessoa passou nunca ficou registrado, nem para quem está vivo nem para quem saiu. Esta tabela é o
+ * que torna a peça P1 honesta: a etapa ATUAL sai da leitura viva do funil (deixa de ser mostrada e
+ * deixa de casar no filtro quando a candidatura encerrou), e o CAMINHO fica guardado aqui.
+ *
+ * ┌─ TRÊS TIPOS DE EVENTO NUMA TABELA SÓ, e o tipo é DERIVADO, nunca guardado ──────────────────┐
+ * │   ENTRADA    `etapaDe` nula e `situacao` nula. A candidatura nasceu naquela etapa.           │
+ * │   MOVIMENTO  `etapaDe` preenchida, `situacao` nula. Andou de uma etapa para outra.           │
+ * │   DESFECHO   `situacao` preenchida. Encerrou (ou foi aprovada) ESTANDO em `etapaPara`.       │
+ * │                                                                                              │
+ * │ Uma coluna `tipo` seria um TERCEIRO dado podendo discordar dos dois primeiros, e é a mesma    │
+ * │ recusa que o módulo já faz ao nunca guardar contador de ocupação (`ocupacaoDaVaga` deriva).   │
+ * │ A derivação mora em `domain/candidatura-historico.ts`.                                       │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * `etapaPara` É NOT NULL INCLUSIVE NO DESFECHO, e é ele que faz a frase "descartado na Triagem"
+ * existir: o desfecho é gravado com a etapa em que a pessoa ESTAVA quando a decisão foi tomada.
+ *
+ * `motivo` REPETE o `motivoDescarte` da candidatura de propósito. A candidatura guarda o motivo do
+ * desfecho ATUAL (um só, sobrescrito numa reentrada); o histórico guarda o motivo DAQUELE evento,
+ * que continua verdadeiro depois. §A.6: texto do PROCESSO, mesma natureza do `motivoDescarte` que já
+ * existe, e não identificador de pessoa.
+ *
+ * SET NULL NO AUTOR e CASCADE na candidatura: usuário removido não apaga o evento (o que aconteceu
+ * continua tendo acontecido, perde-se só o nome de quem fez), mas o histórico não sobrevive à
+ * candidatura, que é a mesma regra do `asContatos` logo acima.
+ */
+export const asCandidaturaEtapas = pgTable(
+  "as_candidatura_etapas",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    candidaturaId: uuid("candidatura_id")
+      .notNull()
+      .references(() => asCandidaturas.id, { onDelete: "cascade" }),
+    /** Nula na ENTRADA (a candidatura nasceu ali) e no DESFECHO gravado sem movimento. */
+    etapaDe: candidaturaEtapaEnum("etapa_de"),
+    /** Onde a candidatura ficou, ou onde o desfecho aconteceu. Nunca nula. */
+    etapaPara: candidaturaEtapaEnum("etapa_para").notNull(),
+    /** Preenchida SÓ no desfecho. É ela que distingue "andou" de "encerrou". */
+    situacao: candidaturaSituacaoEnum("situacao"),
+    /**
+     * A TROCA DE VAGA (item 5 do diretor), o quarto tipo de evento. Preenchidas SÓ quando um Master
+     * corrige a vaga da candidatura, mantendo a mesma linha e a mesma etapa.
+     *
+     * `vagaPara` PREENCHIDA É O QUE MARCA A TROCA, do mesmo jeito que `situacao` marca o desfecho: o
+     * tipo continua derivado, nunca guardado.
+     *
+     * SET NULL nas duas: se a vaga sumir, o EVENTO continua existindo (a troca aconteceu) e perde só
+     * o ponteiro. Perder o evento seria pior, e na prática a vaga com candidatura já é protegida
+     * pelo RESTRICT em `asCandidaturas.vagaId`.
+     */
+    vagaDe: uuid("vaga_de").references(() => vagas.id, { onDelete: "set null" }),
+    vagaPara: uuid("vaga_para").references(() => vagas.id, { onDelete: "set null" }),
+    motivo: text("motivo"),
+    porId: uuid("por_id").references(() => usuarios.id, { onDelete: "set null" }),
+    /**
+     * QUANDO ACONTECEU. Separado de `criadoEm` pela mesma razão do `asContatos`: são perguntas
+     * diferentes, e a semente do backfill grava aqui o `alocado_em` da candidatura, que é passado.
+     */
+    ocorridoEm: timestamp("ocorrido_em", { withTimezone: true }).defaultNow().notNull(),
+    criadoEm,
+  },
+  (t) => ({
+    /** (candidatura, quando): é exatamente a consulta que a linha do tempo da ficha faz. */
+    idxCandidatura: index("idx_as_candidatura_etapas_candidatura").on(t.candidaturaId, t.ocorridoEm),
   }),
 );

@@ -584,6 +584,27 @@
       "breakpoints": true
     },
     {
+      "idx": 83,
+      "version": "7",
+      "when": 1787321661927,
+      "tag": "0083_as_central_de_candidatos",
+      "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "7",
+      "when": 1787321662927,
+      "tag": "0084_as_ultimo_contato_na_candidatura",
+      "breakpoints": true
+    },
+    {
+      "idx": 85,
+      "version": "7",
+      "when": 1787321663927,
+      "tag": "0085_as_reentrada_em_vaga_encerrada",
+      "breakpoints": true
+    },
+    {
       "idx": 86,
       "version": "7",
       "when": 1787321660928,
@@ -595,6 +616,20 @@
       "version": "7",
       "when": 1787500000000,
       "tag": "0087_exame_liberado_sem_aso",
+      "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "7",
+      "when": 1787931350975,
+      "tag": "0088_as_historico_de_etapas",
+      "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1787945891611,
+      "tag": "0089_as_troca_de_vaga_no_historico",
       "breakpoints": true
     }
   ]
