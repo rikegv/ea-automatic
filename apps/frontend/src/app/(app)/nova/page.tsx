@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { isValidCpf, normalizeCpf, type ExigenciaDocumento } from "@ea/shared-types";
 import { apiFetch, ApiError } from "@/lib/api";
+import { calcIdade, ehMenorDeIdade } from "@/lib/idade";
 import { cn } from "@/lib/cn";
 import { useAuth } from "@/lib/auth-context";
 import { PageHead } from "@/components/ui/PageHead";
@@ -138,15 +139,6 @@ function formatRegiao(regiao?: string | null, descricao?: string | null): string
   const partes = [regiao?.trim(), descricao?.trim()].filter(Boolean);
   return partes.length ? partes.join(", ") : "não informado";
 }
-function calcIdade(nasc: string): number | null {
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(nasc);
-  if (!m) return null;
-  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
-  const hoje = new Date();
-  let idade = hoje.getFullYear() - y;
-  if (hoje.getMonth() + 1 < mo || (hoje.getMonth() + 1 === mo && hoje.getDate() < d)) idade--;
-  return idade;
-}
 
 const EXIGENCIA_LABEL: Record<ExigenciaDocumento, string> = {
   OBRIGATORIO: "Obrigatório",
@@ -236,7 +228,9 @@ export default function NovaAdmissaoPage() {
   const cpfTouched = cpfDigits.length > 0;
   const cpfValid = isValidCpf(cand.cpf);
   const idade = useMemo(() => calcIdade(cand.dataNascimento), [cand.dataNascimento]);
-  const menorIdade = idade !== null && idade < 18;
+  // `ehMenorDeIdade` é a MESMA expressão que morava aqui (`idade !== null && idade < 18`), agora em
+  // `lib/idade.ts` para o cadastro de candidato do A&S usar a mesma régua (ajuste 5, §A.26).
+  const menorIdade = ehMenorDeIdade(idade);
   const ehSubstituicao = vaga.motivo === MOTIVO_SUBSTITUICAO;
 
   // Item 4: valor efetivo do benefício = o que o consultor digitou; se intocado, o padrão do cliente.

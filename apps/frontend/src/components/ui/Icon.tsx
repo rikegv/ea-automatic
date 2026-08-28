@@ -36,7 +36,9 @@ export type IconName =
   | "sun"
   | "moon"
   | "refresh"
-  | "bulb";
+  | "bulb"
+  | "phone"
+  | "undo";
 
 const PATHS: Record<IconName, JSX.Element> = {
   home: <path d="M3 10l9-7 9 7v9a2 2 0 0 1-2 2h-3v-7H8v7H5a2 2 0 0 1-2-2z" />,
@@ -187,6 +189,37 @@ const PATHS: Record<IconName, JSX.Element> = {
   ),
   // Lâmpada: as regras de benefício do cliente (o "Principais Informações"). Adição pura ao conjunto,
   // no mesmo traço e no mesmo viewBox dos demais; nenhum ícone existente muda.
+  /**
+   * TELEFONE, para a ação REGISTRAR CONTATO (correção do diretor, 27/08).
+   *
+   * A ação usava o LÁPIS, que no resto do sistema significa EDITAR (é o que ele faz no rascunho da
+   * vaga, no Gerador De Kit e na barra lateral). Quem via o lápis na linha do candidato entendia
+   * "editar candidato", e não "anotar que falei com a pessoa". O telefone diz o que a ação é.
+   *
+   * ACRÉSCIMO PURO ao catálogo (§A.26): nenhum ícone existente mudou de traçado, de nome ou de uso.
+   * O `pen` continua exatamente onde estava em todas as outras telas.
+   *
+   * O traçado é o mesmo vocabulário dos demais: contorno de 1 traço, sem preenchimento, herdando
+   * `currentColor` e a espessura do componente.
+   */
+  phone: (
+    <path d="M15.8 21A13.8 13.8 0 0 1 3 8.2 2.2 2.2 0 0 1 5.2 6h1.9a1.4 1.4 0 0 1 1.4 1.2l.5 2.4a1.4 1.4 0 0 1-.5 1.4l-1 .8a11 11 0 0 0 4.7 4.7l.8-1a1.4 1.4 0 0 1 1.4-.5l2.4.5a1.4 1.4 0 0 1 1.2 1.4v1.9A2.2 2.2 0 0 1 15.8 21z" />
+  ),
+  /**
+   * SETA DE RETORNO, para a ação TRAZER DE VOLTA (bug 2 do diretor).
+   *
+   * NÃO É O `refresh`, e a diferença é de significado: `refresh` é o círculo fechado de "recarregar",
+   * e esta ação não recarrega nada, ela traz uma pessoa de volta para o processo. Também não é a
+   * `left`, que é navegação. A seta que volta sobre um arco diz retorno, que é o que a ação faz.
+   *
+   * ACRÉSCIMO PURO ao catálogo (§A.26): nenhum ícone existente mudou de traçado, de nome ou de uso.
+   */
+  undo: (
+    <>
+      <path d="M3 8h10a6 6 0 0 1 0 12H8" />
+      <path d="M7 4 3 8l4 4" />
+    </>
+  ),
   bulb: (
     <>
       <path d="M9 18h6" />

@@ -65,8 +65,10 @@ import {
   type VagaListItem,
   type VagaPendencia,
   type VagaStatus,
+  type AsCandidaturaPendente,
+  type AsVagaFechamentoBloqueado,
 } from "@ea/shared-types";
-import { apiFetch } from "@/lib/api";
+import { ApiError, apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { maskMoedaBR, salarioParaCampo } from "@/lib/salario";
 import { PageHead } from "@/components/ui/PageHead";
@@ -77,10 +79,16 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Select } from "@/components/ui/Select";
 import { MultiSelect } from "@/components/ui/MultiSelect";
 import { Combobox } from "@/components/ui/Combobox";
-import { Icon } from "@/components/ui/Icon";
+import { FiltroTrigger, FiltroCampo } from "@/components/ui/FiltroTrigger";
+import { Icon, type IconName } from "@/components/ui/Icon";
 import { StatusPill } from "@/components/ui/StatusPill";
+import { TOM_STATUS_VAGA } from "@/lib/as-candidatos-visual";
+import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
+import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
+import { cn } from "@/lib/cn";
 import { Stepper, type StepDef } from "@/components/nova/Stepper";
-import type { PillTone } from "@/components/ui/Pill";
+import { CandidatosPendentesModal } from "@/components/as/vagas/CandidatosPendentesModal";
+import { CandidatosDaVagaModal } from "@/components/as/vagas/CandidatosDaVagaModal";
 
 interface OpcaoCliente {
   codCliente: string;
@@ -118,16 +126,10 @@ const MOTIVO_SUBSTITUICAO = "Substituição";
  * da vaga (check verde); aberta é trabalho em andamento (exclamação amarela); cancelada é o X
  * vermelho; fechada é encerramento neutro; vaga banco é estado próprio, em azul.
  */
-const TOM_STATUS: Record<VagaStatus, PillTone> = {
-  // RASCUNHO é neutro de propósito: não é trabalho em andamento (a vaga nem foi publicada) nem
-  // êxito nem encerramento. É a vaga que ainda não começou.
-  RASCUNHO: "nt",
-  ABERTA: "wn",
-  ENTREGUE: "ok",
-  FECHADA: "nt",
-  CANCELADA: "dg",
-  VAGA_BANCO: "in",
-};
+// O MAPA SUBIU PARA `lib/as-candidatos-visual.ts` (ajuste 4), sem alterar um valor sequer: o resumo
+// da vaga passou a aparecer também dentro da Central de Candidatos, e duas cópias fariam a mesma
+// vaga ganhar cores diferentes em duas telas. O nome local fica, e todas as leituras seguem iguais.
+const TOM_STATUS = TOM_STATUS_VAGA;
 
 /** Data ISO (yyyy-mm-dd) no formato brasileiro, sem passar por fuso (a string já é a data). */
 function dataBr(iso: string | null): string {
@@ -156,17 +158,198 @@ function rotuloDaVaga(v: VagaListItem): string {
 }
 
 /**
- * UM CONTADOR ESCRITO COMO O DIRETOR PEDIU: "6 de 10 Oficiais, 3 de 10 Banco".
+ * A RECUSA DO FECHAMENTO POR CANDIDATO PENDENTE, reconhecida pelo CORPO e não pelo texto.
  *
- * O "X DE Y" SÓ APARECE QUANDO O X EXISTE. Enquanto a vaga está aberta ninguém contou nada ainda, e
- * escrever "0 de 10" ali seria afirmar que zero posições foram preenchidas, o que o sistema não sabe:
- * a contagem só nasce no fechamento. Sem contagem, a célula mostra a META, que é o que existe.
- *
- * META AUSENTE mostra "não informado" (§A.11), nunca um traço, e acontece só no rascunho.
+ * O backend responde 409 com `{ reason: "candidatosPendentes", pendentes: [...] }`, no mesmo espírito
+ * do `needsConfirmation` que a Esteira já usa: um objeto para a tela CONSUMIR. Casar por frase seria
+ * frágil (a mensagem muda no singular e no plural, e mudaria de novo em qualquer ajuste de texto).
  */
-function textoContador(lado: string, meta: number | null, fechadas: number | null): string {
-  if (meta === null) return `${lado}: não informado`;
-  return fechadas === null ? `${lado}: ${meta}` : `${lado}: ${fechadas} de ${meta}`;
+function fechamentoBloqueado(err: unknown): AsVagaFechamentoBloqueado | null {
+  if (!(err instanceof ApiError) || err.status !== 409) return null;
+  const corpo = err.data as Partial<AsVagaFechamentoBloqueado> | undefined;
+  if (corpo?.reason !== "candidatosPendentes" || !Array.isArray(corpo.pendentes)) return null;
+  return corpo as AsVagaFechamentoBloqueado;
+}
+
+/*
+ * O `textoContador` MORAVA AQUI e saiu com o cilindro (OST de 27/08). Ele escrevia a célula de
+ * Posições como texto ("Oficiais: 6 de 10"), e essa célula passou a ser desenhada pelo
+ * `CilindroMeta`, logo abaixo. Nenhuma outra tela o chamava, então ele saiu inteiro em vez de ficar
+ * como peça morta; o que ele dizia em palavras (a diferença entre "ninguém contou ainda" e "zero
+ * preenchidas", e o "não informado" da meta nula) continua dito, agora no `title` do cilindro.
+ */
+
+/** Trilho do cilindro: a mesma hairline tonal que o painel de Alto Volume usa nas barras dele. */
+const TRILHO_POSICOES = "color-mix(in srgb, var(--text) 9%, transparent)";
+
+/**
+ * ─ QUANTAS POSIÇÕES JÁ ESTÃO PREENCHIDAS, e este é O PONTO DE COSTURA DA ALOCAÇÃO ─────────────
+ *
+ * HOJE a única contagem que existe é a do FECHAMENTO (`vagasFechadas` / `vagasFechadasBanco`), que
+ * só nasce quando alguém fecha a vaga. Enquanto a vaga está aberta ela é nula, e nulo aqui vira
+ * ZERO de propósito: o cilindro precisa de um número para desenhar, e "ninguém contou ainda" e
+ * "ninguém preenchido ainda" desenham a mesma barra vazia. A diferença entre os dois continua
+ * dita em palavras, no `title` da célula.
+ *
+ * QUANDO A ALOCAÇÃO LIGAR, O CILINDRO ENCHE SOZINHO, e a mudança é DESTA FUNÇÃO, de lugar nenhum
+ * mais. A Central de Candidatos já sabe quem ocupa posição (`consomePosicao`: APROVADO e
+ * CONTRATADO, em `domain/candidatura.ts`), e o que falta é o número chegar até aqui: basta
+ * `VagaListItem` passar a trazer o par de contagens de ocupação e esta função preferi-lo ao
+ * fechamento. Nenhuma linha da tabela, do cabeçalho ou da ordenação muda junto, porque todas leem
+ * daqui.
+ *
+ * A ORDEM DA PREFERÊNCIA JÁ ESTÁ ESCRITA para o dia da virada: ocupação real primeiro, contagem de
+ * fechamento depois. A vaga encerrada continua mostrando o que foi contado no fechamento, que é o
+ * número autoritativo dela, e a vaga viva passa a mostrar quem já está dentro.
+ */
+function preenchidas(v: VagaListItem, lado: "oficial" | "banco"): number {
+  const doFechamento = lado === "oficial" ? v.vagasFechadas : v.vagasFechadasBanco;
+  return doFechamento ?? 0;
+}
+
+/**
+ * ─ O CILINDRO DE UMA META (item da OST de 27/08) ──────────────────────────────────────────────
+ *
+ * A coluna Posições era texto solto ("Oficiais: 2, Banco: 0") e virou DOIS cilindros do MESMO
+ * tamanho, um por meta. O tamanho igual não é detalhe: é o que deixa comparar oficial e banco de
+ * relance, e é por isso que o cilindro de banco é desenhado mesmo quando a meta é zero.
+ *
+ * O NÚMERO FICA NO FIM DO CILINDRO, alinhado à borda direita do trilho, na linha do rótulo: dentro
+ * de uma coluna estreita, empilhar rótulo, barra e número em três alturas dobraria a altura de toda
+ * linha da tabela sem acrescentar leitura (§A.20).
+ *
+ * META ATINGIDA FICA VERDE E DIZ O NOME, dentro da própria barra cheia, que é onde sobra espaço
+ * exatamente quando ela enche. O verde é o `--ok` do sistema, o mesmo das pills de êxito.
+ *
+ * META ZERO não desenha barra cheia nem vazia: "esta vaga não reservou banco" não é meta cumprida
+ * nem meta pendente, e pintar de verde diria que alguma coisa foi entregue. Ela mostra o traço
+ * apagado e o número zero.
+ *
+ * META NULA (só no rascunho) mostra "não informado" (§A.11), sem cilindro: não há meta a encher.
+ */
+function CilindroMeta({
+  rotulo,
+  meta,
+  feitas,
+  contado,
+}: {
+  rotulo: string;
+  meta: number | null;
+  feitas: number;
+  /** A contagem já aconteceu? Falso é vaga aberta, em que ninguém contou nada ainda. */
+  contado: boolean;
+}) {
+  if (meta === null) {
+    return (
+      <div className="flex items-baseline justify-between gap-1.5">
+        <span className="text-[11px] uppercase tracking-wide text-faint">{rotulo}</span>
+        <span className="text-[11px] text-faint">não informado</span>
+      </div>
+    );
+  }
+
+  const cheia = meta > 0 && feitas >= meta;
+  const pct = meta > 0 ? Math.min(100, Math.round((feitas / meta) * 100)) : 0;
+  // Piso de 6% para preenchimento não nulo: 1 de 40 desenharia uma lasca invisível, e a barra
+  // mentiria dizendo que não entrou ninguém. O mesmo piso das barras de loja do Alto Volume.
+  const largura = feitas <= 0 ? 0 : Math.max(6, pct);
+  const cor = cheia ? "var(--ok)" : "var(--accent)";
+
+  return (
+    <div
+      title={
+        meta === 0
+          ? `${rotulo}: esta vaga não reservou posições.`
+          : contado
+            ? `${rotulo}: ${feitas} de ${meta} preenchidas, ${pct}% da meta.`
+            : `${rotulo}: meta de ${meta}. A contagem de preenchimento ainda não existe para esta vaga.`
+      }
+    >
+      <div className="flex items-baseline justify-between gap-1.5">
+        <span className="text-[11px] uppercase tracking-wide text-faint">{rotulo}</span>
+        <span
+          className="whitespace-nowrap text-[11.5px] font-semibold tabular-nums"
+          style={{ color: cheia ? "var(--ok)" : "var(--text)" }}
+        >
+          {feitas} / {meta}
+        </span>
+      </div>
+      <div
+        className="relative mt-0.5 h-[14px] w-full overflow-hidden rounded-full"
+        style={{ background: TRILHO_POSICOES }}
+        role="progressbar"
+        aria-valuenow={feitas}
+        aria-valuemin={0}
+        aria-valuemax={meta}
+        aria-label={`${rotulo}: ${feitas} de ${meta}`}
+      >
+        {largura > 0 && (
+          <div
+            className="h-full rounded-full transition-[width] duration-500"
+            style={{
+              width: `${largura}%`,
+              background: `linear-gradient(90deg, color-mix(in srgb, ${cor} 45%, transparent), ${cor})`,
+            }}
+          />
+        )}
+        {/* O RÓTULO DE META ATINGIDA MORA DENTRO DA BARRA CHEIA, que é justamente quando há 100% da
+            largura disponível para ele. Em branco sobre o verde, ele lê nos dois temas sem depender
+            de token de texto. `pointer-events-none` para não roubar o `title` da célula. */}
+        {cheia && (
+          <span className="pointer-events-none absolute inset-0 grid place-items-center text-[9px] font-bold uppercase tracking-wide text-white">
+            Meta Atingida
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * OS ESTADOS EM QUE A VAGA JÁ TERMINOU. A vaga encerrada tem `dataFechamento` escrita pela ação de
+ * fechar, e é ela que CONGELA o contador de dias (decisão do diretor, 27/08).
+ *
+ * CANCELADA entra na lista porque ela É um encerramento, mesmo que hoje nenhuma rota escreva esse
+ * status: quando a ação de cancelar existir, o contador já vai congelar sozinho, sem ninguém ter de
+ * lembrar de voltar aqui.
+ */
+const STATUS_ENCERRADOS: VagaStatus[] = ["ENTREGUE", "FECHADA", "CANCELADA"];
+
+/**
+ * ─ HÁ QUANTOS DIAS A VAGA ESTÁ ABERTA (item 1 da OST de 27/08) ───────────────────────────────
+ *
+ * O CONTADOR CONGELA NO FECHAMENTO (decisão do diretor): a vaga ABERTA conta da abertura até HOJE e
+ * sobe um a cada dia; a vaga ENCERRADA conta da abertura até a data de fechamento e para ali. Em vez
+ * de uma coluna que esvazia assim que o processo termina, o número vira o TEMPO DE ATENDIMENTO
+ * daquela vaga, que é comparável entre vagas e por isso vale a ordenação.
+ *
+ * SEM DATA DE ABERTURA NÃO HÁ CONTA, e isso é o rascunho: a coluna devolve `null`, a célula escreve
+ * "não informado" (§A.11) e o `useOrdenacao` manda a linha para o fim nas duas direções.
+ *
+ * A CONTA É EM DIAS DE CALENDÁRIO, feita em UTC sobre a data pura (`yyyy-mm-dd`), sem hora e sem
+ * fuso. Passar por `new Date(iso)` local faria a virada do horário de verão devolver 41,96 dias e o
+ * arredondamento oscilar de um dia conforme a máquina de quem abre a tela.
+ *
+ * ENCERRAMENTO ANTES DA ABERTURA (dado torto vindo da carga) devolveria negativo; o piso em zero
+ * mantém a coluna legível sem inventar número.
+ */
+function diasEmAberto(v: VagaListItem): number | null {
+  if (!v.dataAbertura) return null;
+  const encerrada = STATUS_ENCERRADOS.includes(v.status);
+  const fim = encerrada ? v.dataFechamento : HOJE();
+  // Vaga encerrada SEM data de fechamento é dado incompleto, e contar até hoje mentiria que ela
+  // segue aberta. Sem o fim, não há conta.
+  if (!fim) return null;
+  const ini = Date.parse(`${v.dataAbertura.slice(0, 10)}T00:00:00Z`);
+  const fimMs = Date.parse(`${fim.slice(0, 10)}T00:00:00Z`);
+  if (Number.isNaN(ini) || Number.isNaN(fimMs)) return null;
+  return Math.max(0, Math.round((fimMs - ini) / 86_400_000));
+}
+
+/** O número de dias como o time lê. `null` vira "não informado" (§A.11), nunca traço nem vazio. */
+function textoDias(dias: number | null): string {
+  if (dias === null) return "não informado";
+  return dias === 1 ? "1 dia" : `${dias} dias`;
 }
 
 /**
@@ -435,6 +618,41 @@ export default function CentralDeVagasPage() {
   const [loading, setLoading] = useState(true);
   const [erroLista, setErroLista] = useState<string | null>(null);
 
+  /**
+   * ─ OS FILTROS DA TELA (item 2 da OST de 27/08), TODOS DE MÚLTIPLA SELEÇÃO (§A.28) ────────────
+   *
+   * NASCEM MÚLTIPLOS, e não "simples agora, múltiplos depois": a régua de um valor só se espalha
+   * pela consulta, pelo estado e pela contagem dos cards, e desfazer isso custa mais do que nascer
+   * certo. Cada um é uma LISTA, e lista vazia é "todos".
+   *
+   * ELES RODAM NO CLIENTE, e isso é honesto aqui: `GET /as/vagas` devolve a lista INTEIRA, sem
+   * paginação no servidor, então filtrar em memória filtra o conjunto todo e não uma página. É a
+   * mesma leitura que autorizou a ordenação client-side desta tela.
+   *
+   * O SELETOR É O `Combobox` NO MODO MÚLTIPLO, que já existia e nunca tinha sido usado: chips no
+   * gatilho, caixas de marcação na lista, busca por digitação, teclado completo e botão de limpar.
+   * Nenhuma linha dele foi alterada por esta frente (§A.26): a tela só passou a consumir o modo que
+   * o componente já oferecia.
+   *
+   * A DATA DE ABERTURA É UM PERÍODO, e período não é seleção múltipla: são duas pontas, De e Até, o
+   * mesmo par que o Gerenciador já usa em "Período". Marcar datas soltas numa lista responderia a
+   * outra pergunta ("abriu exatamente nestes dias") e não à que o time faz ("abriu neste intervalo").
+   */
+  const [busca, setBusca] = useState("");
+  const [fClientes, setFClientes] = useState<string[]>([]);
+  const [fCargos, setFCargos] = useState<string[]>([]);
+  const [fStatus, setFStatus] = useState<string[]>([]);
+  const [fVinculos, setFVinculos] = useState<string[]>([]);
+  const [abertaDe, setAbertaDe] = useState("");
+  const [abertaAte, setAbertaAte] = useState("");
+
+  /**
+   * O CARD ATIVO (item 3 da OST). "total" é o estado de repouso, e cada outro valor é um STATUS do
+   * catálogo: o card não tem régua própria, ele filtra pela mesma coluna que a pill da linha mostra.
+   * Clicar no card já ativo volta para o Total, que é o toggle do §A.12.
+   */
+  const [cardAtivo, setCardAtivo] = useState<VagaStatus | "total">("total");
+
   // ── Trilha de abertura ────────────────────────────────────────────────────
   const [aberto, setAberto] = useState(false);
   const [step, setStep] = useState(0);
@@ -471,11 +689,19 @@ export default function CentralDeVagasPage() {
 
   /** Item 8: a vaga completa vive num modal, aberto pelo olho da linha. Null = modal fechado. */
   const [verAlvo, setVerAlvo] = useState<VagaListItem | null>(null);
+  /** A vaga cujos candidatos vinculados estão sendo consultados (item 6, sentido vaga para pessoa). */
+  const [candidatosAlvo, setCandidatosAlvo] = useState<VagaListItem | null>(null);
 
   // ── Fechar vaga ───────────────────────────────────────────────────────────
   const [fecharAlvo, setFecharAlvo] = useState<VagaListItem | null>(null);
   const [fechando, setFechando] = useState(false);
   const [erroFechar, setErroFechar] = useState<string | null>(null);
+  /**
+   * OS CANDIDATOS QUE SEGURAM O FECHAMENTO. Não é uma mensagem, é uma LISTA: o backend recusa com
+   * 409 estruturado (`reason: "candidatosPendentes"`) e manda quem está em seleção, para o consultor
+   * tratar cada um sem sair da tela. Null = ninguém segurando, ou ainda não se tentou fechar.
+   */
+  const [pendentesFech, setPendentesFech] = useState<AsCandidaturaPendente[] | null>(null);
   const [fechForm, setFechForm] = useState({
     dataFechamento: HOJE(),
     /** Uma contagem para cada meta (os dois contadores, 25/08): oficiais e banco. */
@@ -523,6 +749,34 @@ export default function CentralDeVagasPage() {
   useEffect(() => {
     if (token) void carregar();
   }, [token, carregar]);
+
+  /**
+   * A CHEGADA VINDA DA FICHA DO CANDIDATO (item 6 do diretor, sentido pessoa para vaga).
+   *
+   * O botão "Ver vaga" da ficha manda para `/as/vagas?vaga=CODIGO`, e este efeito abre o descritivo
+   * completo daquela linha assim que a lista chega. É o MESMO modal do olhinho (`setVerAlvo`), e não
+   * uma segunda tela: uma cópia do descritivo envelheceria no primeiro campo novo que a vaga
+   * ganhasse.
+   *
+   * RODA UMA VEZ SÓ (`abriuPelaUrl`), senão fechar o modal com o parâmetro ainda na URL o reabriria
+   * na hora, e a tela ficaria presa. O parâmetro é LIMPO da barra de endereço depois de usado, para
+   * um F5 não trazer o modal de volta.
+   *
+   * CÓDIGO NÃO ENCONTRADO NÃO É ERRO: a vaga pode ter sido cancelada ou estar fora do recorte de
+   * área do usuário. A tela abre normalmente, sem modal e sem alarme.
+   *
+   * §A.6: o que trafega na URL é o CÓDIGO DA VAGA, dado de processo. Nada da pessoa vem junto.
+   */
+  const [abriuPelaUrl, setAbriuPelaUrl] = useState(false);
+  useEffect(() => {
+    if (abriuPelaUrl || rows.length === 0) return;
+    const codigo = new URLSearchParams(window.location.search).get("vaga");
+    if (!codigo) return;
+    setAbriuPelaUrl(true);
+    const alvo = rows.find((v) => v.codigo === codigo);
+    if (alvo) setVerAlvo(alvo);
+    window.history.replaceState({}, "", window.location.pathname);
+  }, [rows, abriuPelaUrl]);
 
   function abrirTrilha() {
     setForm(FORM_VAZIO());
@@ -939,6 +1193,7 @@ export default function CentralDeVagasPage() {
   function abrirFechamento(v: VagaListItem) {
     setFecharAlvo(v);
     setErroFechar(null);
+    setPendentesFech(null);
     setFechForm({
       dataFechamento: HOJE(),
       // CADA CONTAGEM NASCE NA SUA META, que é o caso mais comum (a vaga fechou o que abriu) e o que
@@ -951,8 +1206,18 @@ export default function CentralDeVagasPage() {
     });
   }
 
-  async function confirmarFechamento(e: FormEvent) {
+  function confirmarFechamento(e: FormEvent) {
     e.preventDefault();
+    void enviarFechamento();
+  }
+
+  /**
+   * O ENVIO DO FECHAMENTO, separado do `submit` do formulário porque ele é disparado de DOIS lugares:
+   * o botão do formulário e, depois que a fila de pendentes zera, o botão do modal de pendentes. O
+   * corpo é o mesmo nos dois casos, e é o que já estava preenchido: reabrir o formulário para a
+   * pessoa redigitar o que ela acabou de digitar seria perder o preenchimento por nada.
+   */
+  async function enviarFechamento() {
     if (!fecharAlvo) return;
     setErroFechar(null);
 
@@ -1007,9 +1272,22 @@ export default function CentralDeVagasPage() {
         },
       });
       setFecharAlvo(null);
+      setPendentesFech(null);
       await carregar();
     } catch (err) {
-      setErroFechar(err instanceof Error ? err.message : "Erro ao fechar a vaga");
+      /**
+       * A RECUSA POR CANDIDATO PENDENTE NÃO É UMA FRASE, É UMA FILA. O 409 vem estruturado, com a
+       * lista de quem está em seleção, e a tela abre o modal para tratar cada um ali mesmo. Sem
+       * isso, o consultor leria "há 3 candidatos pendentes", sairia daqui para descobrir quem são e
+       * voltaria. As demais recusas seguem exibindo a mensagem do backend, como sempre.
+       */
+      const bloqueio = fechamentoBloqueado(err);
+      if (bloqueio) {
+        setPendentesFech(bloqueio.pendentes);
+        setErroFechar(null);
+      } else {
+        setErroFechar(err instanceof Error ? err.message : "Erro ao fechar a vaga");
+      }
     } finally {
       setFechando(false);
     }
@@ -1024,6 +1302,185 @@ export default function CentralDeVagasPage() {
     [opcoes.clientes],
   );
 
+  /**
+   * ─ A CADEIA DA TELA, e a ORDEM DELA IMPORTA ───────────────────────────────────────────────────
+   *
+   *   rows (o que o backend mandou)
+   *     → filtradas  (o modal de filtros)
+   *     → kpis       (a conta dos cards, sobre o RECORTE FILTRADO)
+   *     → visiveis   (o card ativo)
+   *     → ord.itens  (a ordenação clicável)
+   *
+   * OS CARDS CONTAM O QUE O FILTRO DEIXOU PASSAR, e não a base inteira. Filtrar por um cliente e ver
+   * "Abertas: 312" ao lado de uma lista de 4 linhas seria o card contradizendo a tabela na mesma
+   * tela. A conta é do recorte; o Total do card é o total DO RECORTE.
+   *
+   * O CARD FICA DEPOIS DA CONTA, de propósito: se ele entrasse antes, escolher "Abertas" zeraria
+   * todos os outros cards e não haveria como voltar clicando, porque o card de destino mostraria
+   * zero. Contando antes, os cards continuam sendo o mapa e o card ativo é só o recorte da tabela.
+   *
+   * A ORDENAÇÃO ENVOLVE O FIM DA CADEIA, e é isso que faz filtro e ordenação CONVIVEREM: trocar de
+   * filtro só troca a lista que entra no `useOrdenacao`, e a coluna escolhida continua de pé porque
+   * ela mora no estado do hook, não na lista.
+   */
+  const filtradas = useMemo(() => {
+    const termo = busca
+      .trim()
+      .normalize("NFD")
+      .replace(/\p{Diacritic}/gu, "")
+      .toLowerCase();
+    const setClientes = new Set(fClientes);
+    const setCargos = new Set(fCargos);
+    const setStatus = new Set(fStatus);
+    const setVinculos = new Set(fVinculos);
+
+    return rows.filter((v) => {
+      // A BUSCA COBRE CÓDIGO E NOME DE DIVULGAÇÃO, que são os dois jeitos de a vaga ser chamada: o
+      // recruiter procura pelo número do processo, o consultor procura pelo nome do anúncio.
+      if (termo) {
+        const alvo = `${v.codigo ?? ""} ${v.nomeDivulgacao ?? ""}`
+          .normalize("NFD")
+          .replace(/\p{Diacritic}/gu, "")
+          .toLowerCase();
+        if (!alvo.includes(termo)) return false;
+      }
+      // LISTA VAZIA É "TODOS". Sem isso, a tela abriria com a tabela vazia esperando alguém marcar
+      // alguma coisa em cada um dos cinco filtros.
+      if (setClientes.size && !(v.codCliente && setClientes.has(v.codCliente))) return false;
+      if (setCargos.size && !(v.cargoId && setCargos.has(v.cargoId))) return false;
+      if (setStatus.size && !setStatus.has(v.status)) return false;
+      if (setVinculos.size && !(v.vinculo && setVinculos.has(v.vinculo))) return false;
+      /*
+       * O PERÍODO COMPARA STRING COM STRING, e isso é proposital: `dataAbertura` é `yyyy-mm-dd`, uma
+       * data pura, e nessa forma a ordem alfabética É a ordem cronológica. Converter para `Date`
+       * traria fuso para dentro de uma comparação que não tem hora, e a vaga aberta no dia da ponta
+       * cairia fora do intervalo por três horas de diferença.
+       *
+       * A VAGA SEM DATA (rascunho) SAI quando há período escolhido: quem pergunta "abriu entre estas
+       * datas" não está pedindo as que ainda não abriram.
+       */
+      if (abertaDe || abertaAte) {
+        const d = v.dataAbertura?.slice(0, 10);
+        if (!d) return false;
+        if (abertaDe && d < abertaDe) return false;
+        if (abertaAte && d > abertaAte) return false;
+      }
+      return true;
+    });
+  }, [rows, busca, fClientes, fCargos, fStatus, fVinculos, abertaDe, abertaAte]);
+
+  /**
+   * A CONTA DOS CARDS (item 3 da OST). SETE cards, e nenhum estado do catálogo fica sem número
+   * (decisão do diretor, 27/08, a mesma da Central de Candidatos): a soma dos seis estados fecha
+   * exatamente com o Total, então quem olha a linha sabe que não sobrou vaga escondida em lugar
+   * nenhum. Sem os cards de Rascunho e Vaga Banco, a soma não bateria e o rascunho, que é justamente
+   * a vaga que alguém deixou pela metade, seria o único estado invisível da tela.
+   *
+   * A CONTA É PELO CATÁLOGO (`VAGA_STATUS`), não por uma lista escrita à mão aqui: status novo no
+   * catálogo nasce contado, sem ninguém ter de lembrar de voltar neste bloco.
+   */
+  const kpis = useMemo(() => {
+    const conta = Object.fromEntries(VAGA_STATUS.map((st) => [st, 0])) as Record<VagaStatus, number>;
+    for (const v of filtradas) conta[v.status] += 1;
+    return { total: filtradas.length, porStatus: conta };
+  }, [filtradas]);
+
+  const doCard = useMemo(
+    () => (cardAtivo === "total" ? filtradas : filtradas.filter((v) => v.status === cardAtivo)),
+    [filtradas, cardAtivo],
+  );
+
+  const filtrosAtivos =
+    (busca.trim() ? 1 : 0) +
+    (fClientes.length ? 1 : 0) +
+    (fCargos.length ? 1 : 0) +
+    (fStatus.length ? 1 : 0) +
+    (fVinculos.length ? 1 : 0) +
+    (abertaDe || abertaAte ? 1 : 0);
+
+  const limparFiltros = useCallback(() => {
+    setBusca("");
+    setFClientes([]);
+    setFCargos([]);
+    setFStatus([]);
+    setFVinculos([]);
+    setAbertaDe("");
+    setAbertaAte("");
+  }, []);
+
+  /**
+   * ─ §A.29: A ORDENAÇÃO CLICÁVEL, com a MESMA peça do resto do sistema ─────────────────────────
+   *
+   * `useOrdenacao` + `ColunaOrdenavel`, os mesmos da Integração, da Gestão Das Assinaturas e da
+   * Central de Candidatos. Nada de ordenação escrita à mão nesta tela.
+   *
+   * Sem clique, a lista sai EXATAMENTE como o backend mandou; a ordenação é sobreposição por ação do
+   * usuário, e o desempate é a posição original, então linhas de valor igual não embaralham a cada
+   * clique. Client-side é honesto aqui: a tela carrega a lista inteira de `GET /as/vagas`, sem
+   * paginação no servidor.
+   *
+   * CÓDIGO É TEXTO, mas ordena como gente espera: o comparador usa `numeric: true`, então o código 9
+   * vem antes do 10 em vez de depois, que é o que a ordem alfabética crua faria.
+   *
+   * STATUS ORDENA PELO CATÁLOGO (`VAGA_STATUS`), que está na ordem da VIDA da vaga: rascunho, aberta,
+   * entregue, fechada, cancelada, banco. Pelo rótulo, "Aberta" viria depois de nada e "Rascunho" iria
+   * para o fim, e a coluna deixaria de contar a história do processo.
+   *
+   * POSIÇÕES ORDENA PELA META OFICIAL, e só por ela (ver a nota no cabeçalho da coluna).
+   *
+   * O RASCUNHO PODE NÃO TER NADA DISSO PREENCHIDO, e todo campo nulo é devolvido como nulo: o
+   * `useOrdenacao` manda vazio para o FIM nas duas direções, então inverter a seta nunca traz um
+   * bloco de "não informado" para o topo empurrando a vaga de verdade para baixo.
+   */
+  const colunasOrdenaveis = useMemo<ColOrd<VagaListItem>[]>(
+    () => [
+      { chave: "codigo", tipo: "texto", valor: (v) => v.codigo },
+      { chave: "vaga", tipo: "texto", valor: (v) => v.nomeDivulgacao },
+      { chave: "cliente", tipo: "texto", valor: (v) => v.clienteNome },
+      { chave: "cargo", tipo: "texto", valor: (v) => v.cargoNome },
+      // Vínculo ordena pelo RÓTULO, e não pelo catálogo: a lista de vínculos não é um fluxo, é um
+      // conjunto de tipos, e quem procura "Efetivo" procura pela letra E.
+      {
+        chave: "vinculo",
+        tipo: "texto",
+        valor: (v) => (v.vinculo ? VAGA_VINCULO_LABEL[v.vinculo] : null),
+      },
+      /**
+       * POSIÇÕES ORDENA PELA META OFICIAL (`posicoesOficiais`), das maiores para as menores no
+       * primeiro clique. A célula carrega DOIS números, e só um deles pode mandar na ordem:
+       *  - o OFICIAL é a contratação de verdade, e o BANCO é excedente reservado, então ordenar pelo
+       *    banco colocaria na frente da fila vaga que talvez não contrate ninguém;
+       *  - a META existe em toda vaga publicada, enquanto a CONTAGEM (`vagasFechadas`) só nasce no
+       *    fechamento: ordenar por ela deixaria quase a lista toda vazia e a ordem seria inútil;
+       *  - a meta está À VISTA na célula ("Oficiais: 10" ou "Oficiais: 6 de 10"), então a ordem que
+       *    aparece na tela é conferível pelo que a tela mostra, e não por um número derivado que
+       *    ninguém vê.
+       * Rascunho sem meta devolve nulo e cai no fim, nas duas direções.
+       */
+      { chave: "posicoes", tipo: "numero", valor: (v) => v.posicoesOficiais },
+      { chave: "status", tipo: "status", valor: (v) => VAGA_STATUS.indexOf(v.status) },
+      /**
+       * AS DUAS COLUNAS DE TEMPO (item 1 da OST de 27/08), e cada uma ordena pelo SEU dado, não uma
+       * pela outra: a data ordena pela data (`tipo: "data"`, a mais recente no primeiro clique) e os
+       * dias ordenam pelo NÚMERO (`tipo: "numero"`, o maior no primeiro clique, que é o que se
+       * procura numa fila). Elas parecem intercambiáveis e não são: entre uma vaga aberta ontem e
+       * uma encerrada há um ano depois de 400 dias em aberto, a data põe a de ontem no topo e os
+       * dias põem a de 400. São duas perguntas diferentes, e por isso duas colunas.
+       *
+       * `dataAbertura` NUNCA passa por `new Date` aqui: o `useOrdenacao` compara a string
+       * `yyyy-mm-dd` por `Date.parse`, e nessa forma canônica a ordem já é a cronológica.
+       *
+       * Rascunho sem data e vaga encerrada sem data de fechamento devolvem nulo, e o `useOrdenacao`
+       * manda vazio para o FIM nas duas direções.
+       */
+      { chave: "abertura", tipo: "data", valor: (v) => v.dataAbertura },
+      { chave: "dias", tipo: "numero", valor: (v) => diasEmAberto(v) },
+    ],
+    [],
+  );
+  const ord = useOrdenacao(colunasOrdenaveis, doCard);
+  const visiveis = ord.itens;
+
   const ladoOposto = contexto.papelAs ? contraparteDe(contexto.papelAs) : null;
 
   return (
@@ -1035,14 +1492,111 @@ export default function CentralDeVagasPage() {
       />
 
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        {/* A CONTAGEM SEGUE O RECORTE, e não a base. Antes ela dizia sempre "2.106 vagas
+            cadastradas", inclusive com a tabela mostrando 4 linhas depois de um filtro: a frase
+            contradiz a tela. Com filtro aplicado ela diz quantas o filtro deixou passar, e de
+            quantas, para o total da base continuar à vista. */}
         <p className="text-sm text-dim">
           {loading
             ? "Carregando as vagas."
-            : `${rows.length} ${rows.length === 1 ? "vaga cadastrada" : "vagas cadastradas"}.`}
+            : visiveis.length === rows.length
+              ? `${rows.length} ${rows.length === 1 ? "vaga cadastrada" : "vagas cadastradas"}.`
+              : `${visiveis.length} de ${rows.length} ${rows.length === 1 ? "vaga" : "vagas"}, pelo recorte atual.`}
         </p>
-        <Button onClick={abrirTrilha} className="py-2.5">
-          Abrir vaga
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            type="search"
+            className="ds-input w-72 rounded-full"
+            placeholder="Buscar por código ou nome da vaga"
+            aria-label="Buscar por código ou nome da vaga"
+            value={busca}
+            onChange={(e) => setBusca(e.target.value)}
+          />
+          {/* §A.28: O MODAL DE FILTROS (item 2), o mesmo gatilho e o mesmo modal da Esteira, do
+              Gerenciador, das Não Conformidades e da Central de Candidatos. Nenhum componente novo
+              de filtro nasceu nesta frente: a tela consome o padrão que já existe. */}
+          <FiltroTrigger count={filtrosAtivos} onLimpar={limparFiltros}>
+            <FiltroCampo label="Cliente">
+              <Combobox
+                multiple
+                value={fClientes}
+                onChange={setFClientes}
+                options={optClientes}
+                placeholder="Todos"
+                ariaLabel="Cliente"
+                searchable
+                limpavel
+              />
+            </FiltroCampo>
+            <FiltroCampo label="Cargo Da Vaga">
+              <Combobox
+                multiple
+                value={fCargos}
+                onChange={setFCargos}
+                options={optCargos}
+                placeholder="Todos"
+                ariaLabel="Cargo da vaga"
+                searchable
+                limpavel
+              />
+            </FiltroCampo>
+            <FiltroCampo label="Status">
+              <Combobox
+                multiple
+                value={fStatus}
+                onChange={setFStatus}
+                options={VAGA_STATUS.map((st) => ({ value: st, label: VAGA_STATUS_LABEL[st] }))}
+                placeholder="Todos"
+                ariaLabel="Status"
+                limpavel
+              />
+            </FiltroCampo>
+            <FiltroCampo label="Vínculo">
+              <Combobox
+                multiple
+                value={fVinculos}
+                onChange={setFVinculos}
+                options={VAGA_VINCULO.map((vi) => ({
+                  value: vi,
+                  label: VAGA_VINCULO_LABEL[vi],
+                }))}
+                placeholder="Todos"
+                ariaLabel="Vínculo"
+                limpavel
+              />
+            </FiltroCampo>
+            {/* O PERÍODO É O MESMO PAR DE PONTAS DO GERENCIADOR: `max` numa e `min` na outra, para o
+                próprio calendário impedir um intervalo invertido em vez de a tela ter de explicar
+                depois que não veio nada porque o "de" é maior que o "até". */}
+            <FiltroCampo label="Data De Abertura">
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  type="date"
+                  className="ds-input"
+                  aria-label="Aberta a partir de"
+                  value={abertaDe}
+                  max={abertaAte || undefined}
+                  onChange={(e) => setAbertaDe(e.target.value)}
+                />
+                <input
+                  type="date"
+                  className="ds-input"
+                  aria-label="Aberta até"
+                  value={abertaAte}
+                  min={abertaDe || undefined}
+                  onChange={(e) => setAbertaAte(e.target.value)}
+                />
+              </div>
+              <p className="mt-1 text-[11.5px] text-faint">
+                Com um período escolhido, a vaga em rascunho fica de fora: ela ainda não tem data de
+                abertura.
+              </p>
+            </FiltroCampo>
+          </FiltroTrigger>
+          <Button onClick={abrirTrilha} className="py-2.5">
+            Abrir vaga
+          </Button>
+        </div>
       </div>
 
       {erroLista && (
@@ -1053,6 +1607,53 @@ export default function CentralDeVagasPage() {
           {erroLista}
         </p>
       )}
+
+      {/* ── A LINHA DE KPIs DA CENTRAL DE VAGAS (item 3 da OST de 27/08) ─────────────────────
+          O MESMO VISUAL DAS OUTRAS TELAS: card de vidro, ícone acima, número grande e rótulo, e
+          TODO card é clicável como filtro em toggle (§A.12), com o clique no card ativo voltando
+          para o Total.
+
+          A ORDEM É A DA VIDA DA VAGA, da esquerda para a direita: Total, o que ainda não nasceu
+          (Rascunho), o que está em pé (Abertas, Vaga Banco) e os três desfechos (Entregues,
+          Fechadas, Canceladas). Lida em linha, ela conta o processo, que é o que a ordem alfabética
+          esconderia.
+
+          A COR SEPARA O QUE COBRA DO QUE JÁ PASSOU: Abertas em atenção, porque é a fila viva de
+          quem trabalha nesta tela; Entregues em êxito; Canceladas em alerta; Rascunho e Fechadas
+          neutros, porque nem cobram nem comemoram. */}
+      <div className="mb-[18px] grid grid-cols-2 gap-[12px] sm:grid-cols-4 xl:grid-cols-7">
+        <Kpi id="total" rotulo="Total De Vagas" valor={kpis.total} icone="layers" />
+        <Kpi id="RASCUNHO" rotulo="Rascunhos" valor={kpis.porStatus.RASCUNHO} icone="pen" />
+        <Kpi
+          id="ABERTA"
+          rotulo="Abertas"
+          valor={kpis.porStatus.ABERTA}
+          icone="clock"
+          tom="var(--warn)"
+        />
+        <Kpi
+          id="VAGA_BANCO"
+          rotulo="Vaga Banco"
+          valor={kpis.porStatus.VAGA_BANCO}
+          icone="folder"
+          tom="var(--accent)"
+        />
+        <Kpi
+          id="ENTREGUE"
+          rotulo="Entregues"
+          valor={kpis.porStatus.ENTREGUE}
+          icone="check"
+          tom="var(--ok)"
+        />
+        <Kpi id="FECHADA" rotulo="Fechadas" valor={kpis.porStatus.FECHADA} icone="lock" />
+        <Kpi
+          id="CANCELADA"
+          rotulo="Canceladas"
+          valor={kpis.porStatus.CANCELADA}
+          icone="x"
+          tom="var(--danger)"
+        />
+      </div>
 
       <GlassCard className="overflow-hidden p-2">
         <div className="overflow-x-auto">
@@ -1065,41 +1666,98 @@ export default function CentralDeVagasPage() {
               §A.12/§A.20: cabeçalhos centralizados, larguras proporcionais, sem coluna esmagada.
               Com 8 colunas em vez de 13, cada uma cabe sem apertar e a tabela não rola mais na
               horizontal na largura normal da tela. */}
-          <table className="ds-table min-w-[960px]">
+          {/* §A.20 (item 4 da OST de 27/08): AS LARGURAS FORAM REDISTRIBUÍDAS, e não espremidas para
+              caber duas colunas a mais. As dez porcentagens somam 100 e o piso subiu de 960px para
+              1220px, MEDIDO no browser e não estimado: é a soma das larguras mínimas reais das dez
+              colunas depois de os três rótulos longos ganharem quebra de linha, e é a largura em que
+              a linha mais cheia (quatro botões de ação, "Pessoa Jurídica (PJ)" e "Oficiais: 6 de 10")
+              cabe sem nenhum texto cortado. Numa tela de 1600px a tabela INTEIRA aparece sem rolagem
+              lateral, coluna de Ações incluída, que é o defeito que a prova visual pegou no primeiro
+              corte. Acima desse piso ela ESTICA: as porcentagens repartem a tela toda em vez de
+              deixar folga sobrando de um lado e coluna apertada do outro, que é o aproveitamento
+              pedido. Abaixo dele a tabela ROLA na horizontal, como manda o §A.12, em vez de espremer. */}
+          <table className="ds-table min-w-[1220px]">
             <thead>
               <tr>
-                <th className="w-[9%] text-center">Código</th>
-                <th className="w-[21%] text-center">Vaga</th>
-                <th className="w-[15%] text-center">Cliente</th>
-                <th className="w-[14%] text-center">Cargo Da Vaga</th>
-                <th className="w-[10%] text-center">Vínculo</th>
+                {/* §A.29: o cabeçalho ordena por clique. O `<th>` é o mesmo de antes, com a mesma
+                    largura e a mesma divisória do §A.12: o que entra dentro dele é o botão com a
+                    seta. Ações fica de fora, porque não há o que comparar entre botões. */}
+                <ColunaOrdenavel as="th" ord={ord} chave="codigo" className="w-[8%] text-center">
+                  Código
+                </ColunaOrdenavel>
+                <ColunaOrdenavel as="th" ord={ord} chave="vaga" className="w-[13%] text-center">
+                  Vaga
+                </ColunaOrdenavel>
+                <ColunaOrdenavel as="th" ord={ord} chave="cliente" className="w-[11%] text-center">
+                  Cliente
+                </ColunaOrdenavel>
+                {/* §A.20, MEDIDO NO BROWSER E NÃO ESTIMADO: o `ColunaOrdenavel` põe o rótulo num
+                    `truncate`, que é `white-space: nowrap`, então "CARGO DA VAGA" numa linha só
+                    exigia 150px de largura MÍNIMA e empurrava a tabela inteira para além da tela.
+                    O `whitespace-normal` devolve ao rótulo o direito de quebrar: em tela larga ele
+                    continua numa linha só, e quando aperta ele vira duas linhas em vez de roubar
+                    espaço das colunas de dado. Duas linhas de cabeçalho é leitura; rótulo cortado
+                    com reticências é supressão, que é o que a regra proíbe. */}
+                <ColunaOrdenavel as="th" ord={ord} chave="cargo" className="w-[10%] text-center">
+                  <span className="whitespace-normal">Cargo Da Vaga</span>
+                </ColunaOrdenavel>
+                <ColunaOrdenavel as="th" ord={ord} chave="vinculo" className="w-[9%] text-center">
+                  Vínculo
+                </ColunaOrdenavel>
                 {/* §A.20: a coluna ganhou espaço porque passou a carregar DOIS contadores, um por
-                    linha. Com os 7% de antes, "Oficiais: 6 de 10" quebraria no meio da palavra. */}
-                <th className="w-[14%] text-center">Posições</th>
-                <th className="w-[9%] text-center">Status</th>
-                <th className="w-[8%] text-center">Ações</th>
+                    linha. Com os 7% de antes, "Oficiais: 6 de 10" quebraria no meio da palavra.
+                    Ela ordena pela META OFICIAL, a de cima: o banco é excedente reservado e não
+                    manda na fila (a justificativa inteira está em `colunasOrdenaveis`). */}
+                {/* §A.20: a coluna subiu de 10% para 14% porque passou a carregar DOIS cilindros
+                    com rótulo e contagem, e não mais duas linhas de texto. Abaixo disso a barra
+                    ficava curta demais para o preenchimento ser comparável de relance, que é a
+                    única coisa que um cilindro faz melhor que um número. */}
+                <ColunaOrdenavel as="th" ord={ord} chave="posicoes" className="w-[14%] text-center">
+                  Posições
+                </ColunaOrdenavel>
+                <ColunaOrdenavel as="th" ord={ord} chave="status" className="w-[8%] text-center">
+                  Status
+                </ColunaOrdenavel>
+                {/* AS DUAS COLUNAS DE TEMPO (item 1), com a mesma quebra de rótulo do Cargo e pelo
+                    mesmo motivo medido: em uma linha só, "DATA DE ABERTURA" pedia 169px e
+                    "DIAS EM ABERTO" pedia 151px de largura MÍNIMA, e os dois juntos eram o que
+                    empurrava a coluna Ações para fora da tela. Quebrando, elas pedem o tamanho do
+                    dado que carregam ("01/06/2026" e "não informado"), que é o justo. */}
+                <ColunaOrdenavel as="th" ord={ord} chave="abertura" className="w-[8%] text-center">
+                  <span className="whitespace-normal">Data De Abertura</span>
+                </ColunaOrdenavel>
+                <ColunaOrdenavel as="th" ord={ord} chave="dias" className="w-[8%] text-center">
+                  <span className="whitespace-normal">Dias Em Aberto</span>
+                </ColunaOrdenavel>
+                <th className="w-[11%] text-center">Ações</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={8} className="py-8 text-center text-faint">
+                  <td colSpan={10} className="py-8 text-center text-faint">
                     Carregando…
                   </td>
                 </tr>
-              ) : rows.length === 0 ? (
+              ) : visiveis.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-8 text-center text-faint">
-                    Nenhuma vaga cadastrada ainda. Use o botão Abrir vaga.
+                  <td colSpan={10} className="py-8 text-center text-faint">
+                    {rows.length === 0
+                      ? "Nenhuma vaga cadastrada ainda. Use o botão Abrir vaga."
+                      : "Nenhuma vaga corresponde ao filtro aplicado. Ajuste os filtros ou limpe todos."}
                   </td>
                 </tr>
               ) : (
-                rows.map((v) => (
+                visiveis.map((v) => (
                   <tr key={v.id}>
                     {/* O RASCUNHO PODE NÃO TER PREENCHIDO ESTAS COLUNAS AINDA, e a célula vazia diz
                         "não informado" (§A.11), nunca um traço nem um espaço em branco que o leitor
                         confunde com erro de carregamento. */}
-                    <td className="text-center font-mono text-[12.5px]">
+                    {/* §A.20: o código NÃO QUEBRA. A coluna é estreita e o cabeçalho passou a
+                        dividir o espaço com a seta de ordenação (§A.29); sem o `nowrap`, um código
+                        com hífen ("PS-2026-001") partia em duas linhas no meio do número. Com ele,
+                        a coluna pede a largura de que precisa e a tabela tira a folga de quem tem. */}
+                    <td className="whitespace-nowrap text-center font-mono text-[12.5px]">
                       {v.codigo ?? "não informado"}
                     </td>
                     <td className="font-semibold">{v.nomeDivulgacao ?? "não informado"}</td>
@@ -1108,17 +1766,24 @@ export default function CentralDeVagasPage() {
                     <td className="text-center">
                       {v.vinculo ? VAGA_VINCULO_LABEL[v.vinculo] : "não informado"}
                     </td>
-                    {/* OS DOIS CONTADORES NA MESMA COLUNA, um por linha: o oficial em cima, com o
-                        peso do texto normal, e o banco embaixo, mais discreto, porque é o excedente
-                        reservado e não a contratação de verdade. */}
-                    <td className="text-center">
-                      <div className="flex flex-col items-center gap-0.5 leading-tight">
-                        <span className="whitespace-nowrap">
-                          {textoContador("Oficiais", v.posicoesOficiais, v.vagasFechadas)}
-                        </span>
-                        <span className="whitespace-nowrap text-[12px] text-dim">
-                          {textoContador("Banco", v.posicoesBanco, v.vagasFechadasBanco)}
-                        </span>
+                    {/* OS DOIS CILINDROS, um por meta, do MESMO tamanho: o oficial em cima, porque
+                        é a contratação de verdade, e o banco embaixo, que é o excedente reservado.
+                        O texto solto que morava aqui ("Oficiais: 2, Banco: 0") virou barra de meta
+                        que enche, e a régua de preenchimento mora em `preenchidas`, uma função só. */}
+                    <td>
+                      <div className="flex flex-col gap-1.5">
+                        <CilindroMeta
+                          rotulo="Oficiais"
+                          meta={v.posicoesOficiais}
+                          feitas={preenchidas(v, "oficial")}
+                          contado={v.vagasFechadas !== null}
+                        />
+                        <CilindroMeta
+                          rotulo="Banco"
+                          meta={v.posicoesBanco}
+                          feitas={preenchidas(v, "banco")}
+                          contado={v.vagasFechadasBanco !== null}
+                        />
                       </div>
                     </td>
                     <td className="text-center">
@@ -1127,6 +1792,31 @@ export default function CentralDeVagasPage() {
                           tone={TOM_STATUS[v.status]}
                           label={VAGA_STATUS_LABEL[v.status]}
                         />
+                      </span>
+                    </td>
+                    {/* DATA DE ABERTURA (item 1). `nowrap` porque "25/08/2026" numa coluna de 8%
+                        quebraria em duas linhas no meio do ano. Rascunho sem data escreve
+                        "não informado" (§A.11), como as demais colunas da linha. */}
+                    <td className="whitespace-nowrap text-center">{dataBr(v.dataAbertura)}</td>
+                    {/* DIAS EM ABERTO (item 1), CONGELADO no fechamento (decisão do diretor).
+                        A vaga VIVA (aberta ou de banco) tem o número em destaque, porque é o dela
+                        que sobe todo dia e é por ele que a fila é priorizada; a vaga ENCERRADA
+                        mostra o mesmo número em tom discreto, já que ali ele é histórico e não
+                        cobrança. A frase inteira fica no `title`, para quem passa o mouse. */}
+                    <td className="text-center">
+                      <span
+                        className={
+                          STATUS_ENCERRADOS.includes(v.status) ? "text-dim" : "font-semibold"
+                        }
+                        title={
+                          v.dataAbertura === null
+                            ? "A vaga ainda não tem data de abertura."
+                            : STATUS_ENCERRADOS.includes(v.status)
+                              ? `Ficou aberta por ${textoDias(diasEmAberto(v))}, da abertura até o fechamento.`
+                              : `Aberta há ${textoDias(diasEmAberto(v))}, contando até hoje.`
+                        }
+                      >
+                        {textoDias(diasEmAberto(v))}
                       </span>
                     </td>
                     {/* AÇÕES SÓ EM ÍCONE, sem texto. Cada uma leva `title` e `aria-label` com a
@@ -1181,6 +1871,20 @@ export default function CentralDeVagasPage() {
                           className="rounded-lg border border-transparent p-2 text-dim transition hover:border-[var(--border)] hover:text-accent"
                         >
                           <Icon name="eye" className="h-4 w-4" />
+                        </button>
+                        {/* VER CANDIDATOS VINCULADOS (item 6 do diretor): a ponte da Central de
+                            Vagas para a Central de Candidatos, no sentido vaga para pessoa. Lê a
+                            MESMA rota do painel da vaga que a outra tela já usa, e por isso não
+                            devolve CPF nenhum (§A.6). O ícone `filter` é o mesmo da Central De
+                            Candidatos na barra lateral: o funil já é o símbolo daquela tela. */}
+                        <button
+                          type="button"
+                          title="Ver os candidatos vinculados"
+                          aria-label={`Ver os candidatos vinculados à vaga ${rotuloDaVaga(v)}`}
+                          onClick={() => setCandidatosAlvo(v)}
+                          className="rounded-lg border border-transparent p-2 text-dim transition hover:border-[var(--border)] hover:text-accent"
+                        >
+                          <Icon name="filter" className="h-4 w-4" />
                         </button>
                         <button
                           type="button"
@@ -2162,7 +2866,9 @@ export default function CentralDeVagasPage() {
       )}
 
       {/* ── FECHAR VAGA ───────────────────────────────────────────────────── */}
-      {fecharAlvo && (
+      {/* Com a fila de pendentes aberta, o formulário sai da frente e o preenchimento FICA no
+          estado: cancelar a fila devolve o formulário como estava, sem redigitar nada. */}
+      {fecharAlvo && !pendentesFech && (
         <Modal
           onClose={() => setFecharAlvo(null)}
           className="max-w-[560px] p-6"
@@ -2309,7 +3015,29 @@ export default function CentralDeVagasPage() {
         </Modal>
       )}
 
+      {/* ── OS CANDIDATOS QUE SEGURAM O FECHAMENTO ────────────────────────── */}
+      {fecharAlvo && pendentesFech && (
+        <CandidatosPendentesModal
+          vagaRotulo={fecharAlvo.nomeDivulgacao ?? rotuloDaVaga(fecharAlvo)}
+          pendentes={pendentesFech}
+          token={token}
+          fechando={fechando}
+          onClose={() => setPendentesFech(null)}
+          onTratou={() => void carregar()}
+          onFecharVaga={() => void enviarFechamento()}
+        />
+      )}
+
       {/* ── VER A VAGA COMPLETA (item 8) ──────────────────────────────────── */}
+      {candidatosAlvo && (
+        <CandidatosDaVagaModal
+          vagaId={candidatosAlvo.id}
+          vagaRotulo={rotuloDaVaga(candidatosAlvo)}
+          token={token}
+          onClose={() => setCandidatosAlvo(null)}
+        />
+      )}
+
       {verAlvo && (
         <Modal onClose={() => setVerAlvo(null)} className="max-w-[900px] p-0" ariaLabel="Ver a vaga">
           <div className="flex max-h-[86vh] flex-col">
@@ -2530,6 +3258,55 @@ export default function CentralDeVagasPage() {
       )}
     </>
   );
+
+  /**
+   * O CARD DE INDICADOR, QUE É O PRÓPRIO FILTRO (§A.12), na mesma forma da Central de Candidatos:
+   * ícone acima, número grande, rótulo embaixo, e o card ativo com a borda de destaque mais o
+   * check. Clicar no card ativo volta para o Total, que é o toggle pedido pela regra.
+   *
+   * É UMA FUNÇÃO DENTRO DO COMPONENTE, e não um componente à parte, porque ela lê `cardAtivo` e
+   * `loading` do estado da tela. Extrair para fora obrigaria a passar os dois em cada um dos sete
+   * cards, sem ganho nenhum: ela não é reusada por outra tela.
+   */
+  function Kpi({
+    id,
+    rotulo,
+    valor,
+    icone,
+    tom,
+  }: {
+    id: VagaStatus | "total";
+    rotulo: string;
+    valor: number;
+    icone: IconName;
+    tom?: string;
+  }) {
+    const ativo = cardAtivo === id;
+    return (
+      <GlassCard
+        as="button"
+        className={cn(
+          "fk !px-4 !py-3.5 text-left transition hover:bg-[var(--surface-2)]",
+          ativo && "!border-[var(--accent)] ring-1 ring-[var(--accent)]",
+        )}
+        onClick={() => setCardAtivo(ativo ? "total" : id)}
+        aria-pressed={ativo}
+      >
+        <div className="mb-0.5 flex items-center justify-between">
+          <Icon
+            name={icone}
+            className="h-4 w-4 opacity-70"
+            style={tom ? { color: tom } : undefined}
+          />
+          {ativo && <Icon name="check" className="h-3 w-3 text-accent" />}
+        </div>
+        <div className="num" style={tom ? { color: tom } : undefined}>
+          {loading ? "…" : valor}
+        </div>
+        <div className="lbl">{rotulo}</div>
+      </GlassCard>
+    );
+  }
 }
 
 /** Bloco da ficha da vaga: um assunto por bloco, os mesmos cinco da trilha. */
