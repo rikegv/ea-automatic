@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { EsteiraService } from "./esteira.service";
-import { documentosAdmissao, frentesAdmissao } from "../db/schema";
+import { admissoes, documentosAdmissao, frentesAdmissao } from "../db/schema";
 
 /**
  * TRANSIÇÃO PÓS-ASO — a rede que faltava (incidente de 31/07/2026).
@@ -34,6 +34,10 @@ interface Fixtures {
   auditoriaConcluida?: boolean;
   /** Já existe frente CADASTRO_CONTRATO (nascimento lazy não repete)? */
   cadastroExiste?: boolean;
+  /** O Cadastro existente já CONCLUIU? (só acontece com o Exame liberado sem ASO.) */
+  cadastroConcluido?: boolean;
+  /** Existe frente INTEGRACAO ainda ABERTA? */
+  integracaoPendente?: boolean;
   /** Veredito da I.A sobre o ASO anexado. */
   vereditoIa?: "VALIDADO" | "INCONFORME";
   /** A I.A estoura (indisponível)? */
@@ -67,7 +71,17 @@ function montar(f: Fixtures) {
           {
             id: "frente-cadastro-1",
             tipo: "CADASTRO_CONTRATO",
-            status: "A_CADASTRAR",
+            status: f.cadastroConcluido ? "CADASTRADO" : "A_CADASTRAR",
+            concluida: f.cadastroConcluido ?? false,
+          },
+        ]
+      : []),
+    ...(f.integracaoPendente
+      ? [
+          {
+            id: "frente-integracao-1",
+            tipo: "INTEGRACAO",
+            status: "A_AGENDAR",
             concluida: false,
           },
         ]
@@ -436,5 +450,109 @@ describe("a coleta do ASO", () => {
     // AGUARDANDO_AUDITORIA, não ENTREGUE: o arquivo chegou, o veredito ainda não.
     expect(coleta).toMatchObject({ estado: "AGUARDANDO_AUDITORIA" });
     expect(coleta?.observacao).toContain("1234 bytes");
+  });
+});
+
+/**
+ * O FECHAMENTO DO "LIBERADO PARA CADASTRO SEM ASO" (OST do ADM).
+ *
+ * A admissão foi liberada JUSTAMENTE porque o ASO não existia. Quando ele chega, é este caminho que
+ * a tira do limbo, e são estes testes que provam que ele funciona ponta a ponta.
+ *
+ * O SEGUNDO BLOCO é a peça que evita o defeito da Bienal (§A.27): o carimbo `ADMISSAO_CONCLUIDA` foi
+ * SEGURADO lá atrás, quando a Integração fechou com o Exame ainda aberto. Se ninguém o recolocasse
+ * aqui, a admissão terminaria a esteira inteira sem farol de conclusão, e Painel e Gerenciador
+ * divergiriam em silêncio.
+ */
+describe("liberado sem ASO: o ASO chegando fecha o Exame de verdade", () => {
+  it("LIBERADO_SEM_ASO vira APTO e conclui a frente", async () => {
+    const { svc, atualizacoes } = montar({ status: "LIBERADO_SEM_ASO" });
+
+    const r = (await svc.anexarAso(ADMISSAO_ID, ARQUIVO)) as Record<string, unknown>;
+
+    expect(r.aptoAuto).toMatchObject({ de: "LIBERADO_SEM_ASO", para: "APTO" });
+    expect(atualizacoes).toContainEqual(
+      expect.objectContaining({
+        tabela: frentesAdmissao,
+        valores: expect.objectContaining({ status: "APTO", concluida: true }),
+      }),
+    );
+  });
+
+  it("o ASO é arquivado no prontuário, como em qualquer outro caminho do APTO", async () => {
+    const { svc, auditoria } = montar({ status: "LIBERADO_SEM_ASO" });
+    await svc.anexarAso(ADMISSAO_ID, ARQUIVO);
+    expect(auditoria.arquivarAso).toHaveBeenCalledWith(ADMISSAO_ID);
+  });
+
+  it("RECARIMBA o farol de conclusão quando o Cadastro já fechou e não há integração pendente", async () => {
+    const { svc, atualizacoes } = montar({
+      status: "LIBERADO_SEM_ASO",
+      cadastroExiste: true,
+      cadastroConcluido: true,
+    });
+
+    await svc.anexarAso(ADMISSAO_ID, ARQUIVO);
+
+    expect(atualizacoes).toContainEqual(
+      expect.objectContaining({
+        tabela: admissoes,
+        valores: expect.objectContaining({ farolGlobal: "ADMISSAO_CONCLUIDA" }),
+      }),
+    );
+  });
+
+  it("NÃO recarimba quando a INTEGRAÇÃO ainda está aberta (a esteira não acabou)", async () => {
+    const { svc, atualizacoes } = montar({
+      status: "LIBERADO_SEM_ASO",
+      cadastroExiste: true,
+      cadastroConcluido: true,
+      integracaoPendente: true,
+    });
+
+    await svc.anexarAso(ADMISSAO_ID, ARQUIVO);
+
+    expect(atualizacoes).not.toContainEqual(
+      expect.objectContaining({
+        tabela: admissoes,
+        valores: expect.objectContaining({ farolGlobal: "ADMISSAO_CONCLUIDA" }),
+      }),
+    );
+  });
+
+  it("NÃO recarimba quando o Cadastro ainda está ABERTO", async () => {
+    const { svc, atualizacoes } = montar({
+      status: "LIBERADO_SEM_ASO",
+      cadastroExiste: true,
+      cadastroConcluido: false,
+    });
+
+    await svc.anexarAso(ADMISSAO_ID, ARQUIVO);
+
+    expect(atualizacoes).not.toContainEqual(
+      expect.objectContaining({
+        tabela: admissoes,
+        valores: expect.objectContaining({ farolGlobal: "ADMISSAO_CONCLUIDA" }),
+      }),
+    );
+  });
+
+  it("NÃO recarimba quem NUNCA foi liberado sem ASO (o recorte é estreito)", async () => {
+    // Um exame em espera com o Cadastro concluído não existe pelo caminho normal, mas a guarda é
+    // por status justamente para nenhum farol alheio ser reescrito por este caminho.
+    const { svc, atualizacoes } = montar({
+      status: "ASO_PENDENTE",
+      cadastroExiste: true,
+      cadastroConcluido: true,
+    });
+
+    await svc.anexarAso(ADMISSAO_ID, ARQUIVO);
+
+    expect(atualizacoes).not.toContainEqual(
+      expect.objectContaining({
+        tabela: admissoes,
+        valores: expect.objectContaining({ farolGlobal: "ADMISSAO_CONCLUIDA" }),
+      }),
+    );
   });
 });

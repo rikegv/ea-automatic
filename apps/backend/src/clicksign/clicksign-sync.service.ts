@@ -677,10 +677,17 @@ export class ClicksignSyncService implements OnModuleInit, OnModuleDestroy {
 
   /** Carrega o estado das frentes da admissão (para o gate F9). */
   private async carregarFrentes(admissaoId: string): Promise<EstadoFrente[]> {
+    // O STATUS acompanha o bit desde a OST "Liberado Para Cadastro Sem ASO": o gate reconhece o
+    // EXAME liberado sem ASO pelo status, não pelo `concluida`. Uma leitura a mais no mesmo SELECT;
+    // o pipeline do envelope abaixo continua byte a byte o que era.
     const rows = await this.db
-      .select({ tipo: frentesAdmissao.tipo, concluida: frentesAdmissao.concluida })
+      .select({
+        tipo: frentesAdmissao.tipo,
+        status: frentesAdmissao.status,
+        concluida: frentesAdmissao.concluida,
+      })
       .from(frentesAdmissao)
       .where(eq(frentesAdmissao.admissaoId, admissaoId));
-    return rows.map((r) => ({ tipo: r.tipo, concluida: r.concluida }));
+    return rows.map((r) => ({ tipo: r.tipo, concluida: r.concluida, status: r.status }));
   }
 }

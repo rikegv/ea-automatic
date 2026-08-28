@@ -3,6 +3,7 @@ import type { EstadoFrente } from "./frentes";
 import { podeAbrirCadastro } from "./frentes";
 import {
   conclui,
+  desfazLiberacaoSemAso,
   ehStatusDinamico,
   isReversao,
   isStatusValido,
@@ -73,11 +74,16 @@ describe("conclui() / isStatusValido() (§A.3 status por frente)", () => {
     ]);
     // Os dois status de espera do ASO entraram na OST Onda 2, entre Agendado e Apto: descrevem a
     // espera pelo ASO e NÃO concluem. O APTO segue sendo o único concluinte da frente.
+    //
+    // O LIBERADO_SEM_ASO entrou depois (OST do ADM), no último degrau antes do Apto: ele destrava o
+    // avanço no meio da espera, sem concluir. A POSIÇÃO é o que define reversão, e é por isso que
+    // ela é afirmada aqui e não só no catálogo do banco.
     expect(ORDEM_STATUS.EXAME).toEqual([
       "A_AGENDAR",
       "AGENDADO",
       "AGUARDANDO_ASO",
       "ASO_PENDENTE",
+      "LIBERADO_SEM_ASO",
       "APTO",
       "CANCELADO",
     ]);
@@ -91,6 +97,21 @@ describe("isReversao() — recuo de etapa (F8)", () => {
     expect(isReversao("AUDITORIA", "ANALISE_OK", "ANALISE_PENDENTE")).toBe(true);
     expect(isReversao("EXAME", "APTO", "A_AGENDAR")).toBe(true);
     expect(isReversao("CADASTRO_CONTRATO", "CADASTRADO", "A_CADASTRAR")).toBe(true);
+  });
+
+  it("liberar sem ASO é AVANÇO, e voltar dali é RECUO", () => {
+    // A liberação vem depois da espera e antes do apto: sair da espera para ela é andar, e voltar
+    // dela para o agendamento é recuar, com o alerta de reversão que a frente já tem.
+    expect(isReversao("EXAME", "ASO_PENDENTE", "LIBERADO_SEM_ASO")).toBe(false);
+    expect(isReversao("EXAME", "LIBERADO_SEM_ASO", "APTO")).toBe(false);
+    expect(isReversao("EXAME", "LIBERADO_SEM_ASO", "AGENDADO")).toBe(true);
+    expect(isReversao("EXAME", "APTO", "LIBERADO_SEM_ASO")).toBe(true);
+  });
+
+  it("liberar sem ASO NÃO conclui a frente", () => {
+    // O par do teste acima, e o que sustenta a frente inteira: quem conclui o EXAME é só o APTO.
+    expect(conclui("EXAME", "LIBERADO_SEM_ASO")).toBe(false);
+    expect(conclui("EXAME", "APTO")).toBe(true);
   });
 
   it("avançar ou repetir não é reversão", () => {
@@ -155,5 +176,41 @@ describe("reversaoDerrubaCadastro() — alerta de reabrir pendência", () => {
     expect(reversaoDerrubaCadastro("CADASTRO_CONTRATO", "CADASTRADO", "A_CADASTRAR", true)).toBe(
       false,
     );
+  });
+});
+
+/**
+ * DESFAZER A LIBERAÇÃO SEM ASO TAMBÉM ALERTA (ajuste final da OST, decisão do diretor).
+ *
+ * O alerta de reversão existe para uma coisa: o gate do Cadastro FECHAR debaixo de um candidato que
+ * já está sendo trabalhado. Enquanto a regra testava `conclui(de)`, ela cobria só o recuo do APTO, e
+ * o recuo da liberação passava em silêncio, numa admissão que pode já ter cadastrado, integrado e
+ * ido para a assinatura. É o mesmo perigo pela mesma porta.
+ */
+describe("reversaoDerrubaCadastro() com a liberação sem ASO", () => {
+  it("ALERTA ao voltar de Liberado Sem ASO para Agendado (o gate fecha)", () => {
+    expect(reversaoDerrubaCadastro("EXAME", "LIBERADO_SEM_ASO", "AGENDADO", true)).toBe(true);
+  });
+
+  it("NÃO alerta se o Cadastro nem chegou a abrir", () => {
+    expect(reversaoDerrubaCadastro("EXAME", "LIBERADO_SEM_ASO", "AGENDADO", false)).toBe(false);
+  });
+
+  it("NÃO alerta indo do liberado para o APTO: o ASO chegou e o gate segue aberto", () => {
+    expect(reversaoDerrubaCadastro("EXAME", "LIBERADO_SEM_ASO", "APTO", true)).toBe(false);
+  });
+
+  it("NÃO alerta indo do APTO para o liberado: o gate também segue aberto", () => {
+    // Trocar de status com o gate aberto dos dois lados não derruba nada. O alerta é sobre FECHAR.
+    expect(reversaoDerrubaCadastro("EXAME", "APTO", "LIBERADO_SEM_ASO", true)).toBe(false);
+  });
+
+  it("o recado sabe QUAL dos dois recuos aconteceu", () => {
+    // "Reabre pendência" descreve o recuo do APTO e não serve para o recuo da liberação, onde o que
+    // se perde é o direito de avançar, não um documento.
+    expect(desfazLiberacaoSemAso("EXAME", "LIBERADO_SEM_ASO", "AGENDADO")).toBe(true);
+    expect(desfazLiberacaoSemAso("EXAME", "LIBERADO_SEM_ASO", "APTO")).toBe(false);
+    expect(desfazLiberacaoSemAso("EXAME", "APTO", "AGENDADO")).toBe(false);
+    expect(desfazLiberacaoSemAso("AUDITORIA", "ANALISE_OK", "ANALISE_PENDENTE")).toBe(false);
   });
 });

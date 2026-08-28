@@ -589,6 +589,13 @@
       "when": 1787321660928,
       "tag": "0086_frente_ifractal",
       "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1787500000000,
+      "tag": "0087_exame_liberado_sem_aso",
+      "breakpoints": true
     }
   ]
 }

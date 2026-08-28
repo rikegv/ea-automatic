@@ -303,6 +303,12 @@ type DialogState = {
   frenteId: string;
   status: string;
   message: string;
+  /**
+   * O motivo cru que o backend devolveu. O `kind` escolhe QUAL diálogo abre; o motivo permite ao
+   * diálogo já aberto ajustar o título quando o mesmo `kind` cobre dois casos, que é o caso do
+   * recuo da liberação sem ASO dentro do alerta de reversão.
+   */
+  reason?: string;
 } | null;
 
 export default function EsteiraPage() {
@@ -665,6 +671,8 @@ export default function EsteiraPage() {
           // aptoSemAsoSuperAdmin = gate APTO por papel (só SUPER_ADMIN pode autorizar liberar Apto
           // sem ASO validado, diálogo de confirmação); auditoriaIncompleta = aceite com Via 1/2;
           // passagem = aceite de pendências (S3); reversao = reabrir cadastro.
+          // `reversaoLiberacaoSemAso` cai no MESMO diálogo pelo default: é o recuo que desfaz a
+          // liberação sem ASO, e o que muda é só o título, que o motivo carrega até lá.
           const kind =
             reason === "aptoSemAsoSuperAdmin"
               ? "aptoSemAsoSuperAdmin"
@@ -673,7 +681,7 @@ export default function EsteiraPage() {
                 : reason === "passagemComPendencia"
                   ? "passagem"
                   : "reversao";
-          setDialog({ kind, frenteId, status, message: e.message });
+          setDialog({ kind, frenteId, status, message: e.message, reason });
         } else {
           setDialog(null);
           setActionError(e instanceof ApiError ? e.message : "Falha ao mudar o status.");
@@ -1169,7 +1177,12 @@ export default function EsteiraPage() {
           COL.cli,
           COL.cargo,
           COL.data,
-          COL.status,
+          // STATUS: a aba do EXAME precisa de mais que as outras desde o status "Liberado Para
+          // Cadastro Sem ASO". A pill do rótulo mede ~226px com o ícone e o respiro, e nos 210px das
+          // demais abas ela atravessava a divisória e entrava na coluna de pendências. Medida no
+          // browser, não estimada (§A.20). As outras abas não pagam a largura: o rótulo mais longo
+          // delas continua cabendo em 210px.
+          isExame ? "248px" : COL.status,
           COL.pend,
           avanco,
           COL.acoes,
@@ -1182,7 +1195,9 @@ export default function EsteiraPage() {
     ? // Soma dos pisos das nove colunas com folga, para a aba ROLAR em vez de espremer (§A.20).
       "min-w-[1640px]"
     : isExame
-    ? "min-w-[1840px]"
+    ? // +38px com a coluna de status mais larga (o rótulo "Liberado Para Cadastro Sem ASO"): o piso
+      // acompanha a coluna, senão a aba passaria a espremer em vez de rolar (§A.20).
+      "min-w-[1878px]"
     : isIntegracao
       ? // +110px com a Data adm. e +112px com o Contrato: o piso acompanha CADA coluna nova, senão a
         // aba passaria a espremer em vez de rolar (§A.20). Nenhuma coluna existente cedeu largura:
@@ -2689,7 +2704,12 @@ export default function EsteiraPage() {
       />
       <ConfirmDialog
         open={dialog?.kind === "reversao"}
-        title="Reabrir Pendência"
+        /**
+         * O TÍTULO SEGUE O CASO. O diálogo é o mesmo dos dois recuos, mas "Reabrir Pendência"
+         * descreve o recuo de uma frente concluída e contradiria o corpo quando o que se desfaz é a
+         * liberação sem ASO (§A.24: título em Title Case).
+         */
+        title={dialog?.reason === "reversaoLiberacaoSemAso" ? "Desfazer Liberação" : "Reabrir Pendência"}
         message={dialog?.message ?? ""}
         confirmLabel="Confirmar reversão"
         tone="danger"

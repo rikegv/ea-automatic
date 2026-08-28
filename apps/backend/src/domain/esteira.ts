@@ -3,7 +3,12 @@
  * isoladamente. Complementam `frentes.ts` (gate contínuo do Cadastro, regra 3) cobrindo a
  * operação de status por frente e a reversão (recuo de etapa) com alerta.
  */
-import { STATUS_CADASTRO_CONTRATO, STATUS_EXAME, STATUS_INTEGRACAO } from "@ea/shared-types";
+import {
+  STATUS_CADASTRO_CONTRATO,
+  STATUS_EXAME,
+  STATUS_EXAME_LIBERADO_SEM_ASO,
+  STATUS_INTEGRACAO,
+} from "@ea/shared-types";
 import { podeAbrirCadastro, type EstadoFrente, type FrenteTipo } from "./frentes";
 
 /**
@@ -107,9 +112,31 @@ export function isReversao(tipo: FrenteTipo, de: string, para: string): boolean 
 }
 
 /**
- * A reversão derruba um Cadastro já aberto? Verdadeiro quando uma frente concluinte (AUDITORIA ou
- * EXAME) sai do seu status terminal — recuando o gate — enquanto o Cadastro estava aberto. É o
+ * O status ABRE O GATE do Cadastro? É a mesma pergunta que `podeAbrirCadastro` faz sobre a frente,
+ * aqui em cima de um status solto.
+ *
+ * Existe por causa do "Liberado Para Cadastro Sem ASO": a AUDITORIA abre o gate concluindo, e o
+ * EXAME abre de DUAS formas, concluindo ou sendo liberado. Uma função só, para o alerta de reversão
+ * abaixo e o gate de verdade não poderem discordar sobre o que é "estar liberado".
+ */
+function abreGate(tipo: FrenteTipo, status: string): boolean {
+  if (tipo === "EXAME" && status === STATUS_EXAME_LIBERADO_SEM_ASO) return true;
+  return conclui(tipo, status);
+}
+
+/**
+ * A reversão derruba um Cadastro já aberto? Verdadeiro quando uma frente que sustentava o gate
+ * (AUDITORIA ou EXAME) deixa de sustentá-lo, recuando o gate, enquanto o Cadastro estava aberto. É o
  * gatilho do alerta de confirmação (reabrir pendência num candidato já em cadastro).
+ *
+ * DESFAZER A LIBERAÇÃO SEM ASO ENTRA AQUI (decisão do diretor, ajuste final da OST). Antes o teste
+ * era `conclui(de)`, e o status liberado não conclui: voltar dele para "Agendado" fechava o gate EM
+ * SILÊNCIO, numa admissão que podia já estar cadastrada, integrada e com o contrato em assinatura.
+ * O alerta que o APTO sempre teve passa a valer para ele, que é o mesmo perigo pela mesma porta.
+ *
+ * O QUE **NÃO** ALERTA, e é o outro lado da mesma régua: ir do liberado para o APTO (o ASO chegou) e
+ * do APTO para o liberado não avisam nada, porque o gate continua aberto nos dois. O alerta é sobre
+ * FECHAR o gate, não sobre trocar de status.
  *
  * `cadastroAbertoAgora` deve ser derivado de `podeAbrirCadastro(frentes)` ANTES da mudança.
  */
@@ -121,10 +148,18 @@ export function reversaoDerrubaCadastro(
 ): boolean {
   return (
     (tipo === "AUDITORIA" || tipo === "EXAME") &&
-    conclui(tipo, de) &&
-    !conclui(tipo, para) &&
+    abreGate(tipo, de) &&
+    !abreGate(tipo, para) &&
     cadastroAbertoAgora
   );
+}
+
+/**
+ * A transição está DESFAZENDO a liberação sem ASO? Serve ao recado do alerta, que precisa dizer o
+ * que de fato aconteceu: "reabrir pendência" descreve o recuo do APTO, não este caso.
+ */
+export function desfazLiberacaoSemAso(tipo: FrenteTipo, de: string, para: string): boolean {
+  return tipo === "EXAME" && de === STATUS_EXAME_LIBERADO_SEM_ASO && !abreGate(tipo, para);
 }
 
 /** Reexporta o gate puro para quem opera a esteira (estado da regra 3). */

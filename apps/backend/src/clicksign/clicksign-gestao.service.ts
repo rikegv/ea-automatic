@@ -12,6 +12,7 @@ import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import type { AuthUser } from "../auth/auth.types";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
+import { STATUS_EXAME_LIBERADO_SEM_ASO } from "@ea/shared-types";
 import { naoPausada } from "../db/admissao-filtros";
 import {
   admissoes,
@@ -214,9 +215,23 @@ export class ClicksignGestaoService {
     const concluidas = this.db
       .select({
         admissaoId: frentesAdmissao.admissaoId,
+        /**
+         * O EXAME CONTA TAMBÉM QUANDO ESTÁ LIBERADO SEM ASO (decisão do diretor: o contrato TEM de
+         * sair). É a MESMA regra do gate do Cadastro (`exameLiberaAvanco`), aqui em SQL porque a
+         * contagem é feita no banco; a definição de "liberado" continua uma só, e o código do status
+         * vem da constante compartilhada, não de uma string escrita à mão.
+         *
+         * SÓ O EXAME ganha a exceção: Auditoria e Cadastro seguem exigindo conclusão de verdade.
+         */
         qtd: sql<number>`count(*) filter (
-          where ${frentesAdmissao.concluida}
-            and ${frentesAdmissao.tipo} in ('AUDITORIA', 'EXAME', 'CADASTRO_CONTRATO')
+          where ${frentesAdmissao.tipo} in ('AUDITORIA', 'EXAME', 'CADASTRO_CONTRATO')
+            and (
+              ${frentesAdmissao.concluida}
+              or (
+                ${frentesAdmissao.tipo} = 'EXAME'
+                and ${frentesAdmissao.status} = ${STATUS_EXAME_LIBERADO_SEM_ASO}
+              )
+            )
         )`.as("qtd"),
       })
       .from(frentesAdmissao)

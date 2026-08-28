@@ -336,3 +336,77 @@ describe("Gate (b): APTO exige ASO anexado e validado pela I.A", () => {
 
 // `dadosVagaFolha` é importado para o roteamento do db falso ficar explícito no arquivo.
 void dadosVagaFolha;
+
+/**
+ * GATE (c): LIBERADO PARA CADASTRO SEM ASO exige previsão do ASO POSTERIOR à data de admissão.
+ *
+ * Bloqueio DURO, sem aceite e sem bypass, e sem controle por papel: qualquer consultor libera
+ * (decisão do diretor). A regra pura está coberta em `domain/exame-liberacao.spec.ts`; aqui prova-se
+ * que o SERVIÇO a aplica de verdade, com o recado chegando à tela.
+ *
+ * A admissão da fixture tem `dataAdmissao = 2026-08-01`.
+ */
+describe("Gate (c): liberar sem ASO exige previsão posterior à admissão", () => {
+  it("trava quando NÃO há previsão do ASO no agendamento", () => {
+    // Caso mais comum da base: a previsão é opcional, então a maior parte da fila não a tem.
+    return (async () => {
+      const { svc } = montar({ agendamento: AGENDAMENTO_COMPLETO, enderecos: [ENDERECO_COMPLETO] });
+      const err = await capturar(
+        svc.mudarStatus(FRENTE_ID, { status: "LIBERADO_SEM_ASO" } as never, user("COMUM")),
+      );
+      expect(err?.reason).toBe("liberacaoSemAsoBloqueada");
+      expect(err?.needsConfirmation).toBe(false);
+      expect(String(err?.message)).toContain("previsão do ASO");
+    })();
+  });
+
+  it("trava quando a previsão é ANTERIOR à data de admissão, mostrando as duas datas", async () => {
+    const { svc } = montar({
+      agendamento: { ...AGENDAMENTO_COMPLETO, previsaoAso: "2026-07-28" },
+      enderecos: [ENDERECO_COMPLETO],
+    });
+    const err = await capturar(
+      svc.mudarStatus(FRENTE_ID, { status: "LIBERADO_SEM_ASO" } as never, user("COMUM")),
+    );
+    expect(err?.reason).toBe("liberacaoSemAsoBloqueada");
+    expect(String(err?.message)).toContain("28/07/2026");
+    expect(String(err?.message)).toContain("01/08/2026");
+  });
+
+  it("PASSA com a previsão posterior, e QUALQUER consultor libera (sem controle por papel)", async () => {
+    const { svc } = montar({
+      agendamento: { ...AGENDAMENTO_COMPLETO, previsaoAso: "2026-08-05" },
+      enderecos: [ENDERECO_COMPLETO],
+    });
+    const err = await capturar(
+      svc.mudarStatus(FRENTE_ID, { status: "LIBERADO_SEM_ASO" } as never, user("COMUM")),
+    );
+    expect(err?.reason).toBeUndefined();
+  });
+
+  it("NÃO conclui a frente, e é isso que a mantém na fila do Exame", async () => {
+    // A alternativa recusada era carimbar `concluida = true`. Este teste é o que impede alguém de
+    // "simplificar" para lá depois: a admissão avança, mas o Exame continua aberto.
+    const { svc, inseridos } = montar({
+      agendamento: { ...AGENDAMENTO_COMPLETO, previsaoAso: "2026-08-05" },
+      enderecos: [ENDERECO_COMPLETO],
+    });
+    await svc.mudarStatus(FRENTE_ID, { status: "LIBERADO_SEM_ASO" } as never, user("COMUM"));
+    const atualizacoes = inseridos.filter((i) => i.tabela === frentesAdmissao);
+    // A gravação da própria frente NUNCA marca concluída para este status.
+    for (const a of atualizacoes) {
+      const v = a.valores as { concluida?: boolean; status?: string };
+      if (v.status === "LIBERADO_SEM_ASO") expect(v.concluida).not.toBe(true);
+    }
+  });
+
+  it("NÃO gera não conformidade: liberar sem ASO é regra de operação, não exceção", async () => {
+    // Diferente do APTO sem ASO (NC-2), que é uma exceção autorizada por Master ou Super Admin.
+    const { svc, inseridos } = montar({
+      agendamento: { ...AGENDAMENTO_COMPLETO, previsaoAso: "2026-08-05" },
+      enderecos: [ENDERECO_COMPLETO],
+    });
+    await svc.mudarStatus(FRENTE_ID, { status: "LIBERADO_SEM_ASO" } as never, user("COMUM"));
+    expect(inseridos.filter((i) => i.tabela === naoConformidades)).toHaveLength(0);
+  });
+});

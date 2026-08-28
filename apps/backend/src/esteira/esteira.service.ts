@@ -22,7 +22,12 @@ import {
   or,
   sql,
 } from "drizzle-orm";
-import { normalizeCpf, TERMO_APTO_SEM_ASO, type Papel } from "@ea/shared-types";
+import {
+  normalizeCpf,
+  STATUS_EXAME_LIBERADO_SEM_ASO,
+  TERMO_APTO_SEM_ASO,
+  type Papel,
+} from "@ea/shared-types";
 import type { AuthUser } from "../auth/auth.types";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
@@ -63,7 +68,11 @@ import { auditoriaParada, horasParado } from "../domain/auditoria-parada";
 import { equivalentesDoSlot } from "../domain/documentos-equivalentes";
 import { recomputeFarolGlobal } from "../admissoes/farol";
 import type { FrenteTipo } from "../domain/frentes";
-import { podeAbrirCadastro } from "../domain/frentes";
+import {
+  bloqueioLiberacaoSemAso,
+  mensagemBloqueioLiberacao,
+} from "../domain/exame-liberacao";
+import { podeAbrirCadastro, type EstadoFrente } from "../domain/frentes";
 import { AuditoriaService } from "../auditoria/auditoria.service";
 import { ReguaCompletudeService } from "../regua/regua-completude.service";
 import { pendenciasObrigatoriasSet } from "../regua/pendencias-lote";
@@ -71,6 +80,7 @@ import { configDoCliente } from "../regua/pendencia-config.repo";
 import { filtroClienteOuVinculo } from "../regua/vinculo.repo";
 import {
   conclui,
+  desfazLiberacaoSemAso,
   ehStatusDinamico,
   isReversao,
   isStatusValido,
@@ -144,6 +154,15 @@ const STATUS_EXAME_APTO_POR_ASO: readonly string[] = [
   "AGENDADO",
   "AGUARDANDO_ASO",
   "ASO_PENDENTE",
+  /**
+   * LIBERADO PARA CADASTRO SEM ASO entra, e é a linha que fecha o ciclo daquela OST.
+   *
+   * A admissão foi liberada JUSTAMENTE porque o ASO ainda não existia. Quando ele chega, é este
+   * caminho que a tira do limbo: conclui o Exame em APTO, tira da fila, arquiva o documento no
+   * prontuário e devolve a admissão à contagem de concluídas. Sem o status nesta lista, o ASO
+   * validado não faria nada e a admissão ficaria liberada para sempre.
+   */
+  STATUS_EXAME_LIBERADO_SEM_ASO,
 ];
 
 /**
@@ -800,6 +819,9 @@ export class EsteiraService {
       .select({
         admissaoId: frentesAdmissao.admissaoId,
         tipo: frentesAdmissao.tipo,
+        // O STATUS entra no gate (OST "Liberado Para Cadastro Sem ASO"): o EXAME libera o avanço
+        // concluído OU liberado sem ASO, e a segunda metade só é visível pelo status.
+        status: frentesAdmissao.status,
         concluida: frentesAdmissao.concluida,
       })
       .from(frentesAdmissao)
@@ -809,10 +831,10 @@ export class EsteiraService {
           inArray(frentesAdmissao.tipo, ["AUDITORIA", "EXAME"]),
         ),
       );
-    const porAdmissao = new Map<string, { tipo: FrenteTipo; concluida: boolean }[]>();
+    const porAdmissao = new Map<string, EstadoFrente[]>();
     for (const f of frentes) {
       const lista = porAdmissao.get(f.admissaoId) ?? [];
-      lista.push({ tipo: f.tipo, concluida: f.concluida });
+      lista.push({ tipo: f.tipo, concluida: f.concluida, status: f.status });
       porAdmissao.set(f.admissaoId, lista);
     }
     for (const id of admissaoIds) {
@@ -856,17 +878,26 @@ export class EsteiraService {
     });
 
     // Estado das frentes da admissão ANTES da mudança (para o gate e o alerta).
+    //
+    // O STATUS entra no select (OST "Liberado Para Cadastro Sem ASO"): o gate do Cadastro passou a
+    // reconhecer o EXAME liberado sem ASO, e essa metade da regra só existe no status. Sem ele o
+    // gate leria só o bit `concluida` e a admissão liberada não avançaria (fail-closed).
     const irmas = await this.db
       .select({
         id: frentesAdmissao.id,
         tipo: frentesAdmissao.tipo,
+        status: frentesAdmissao.status,
         concluida: frentesAdmissao.concluida,
       })
       .from(frentesAdmissao)
       .where(eq(frentesAdmissao.admissaoId, frente.admissaoId));
 
     const cadastroExistente = irmas.find((f) => f.tipo === "CADASTRO_CONTRATO") ?? null;
-    const estadoAntes = irmas.map((f) => ({ tipo: f.tipo, concluida: f.concluida }));
+    const estadoAntes = irmas.map((f) => ({
+      tipo: f.tipo,
+      concluida: f.concluida,
+      status: f.status,
+    }));
     const cadastroAbertoAgora = Boolean(cadastroExistente) && podeAbrirCadastro(estadoAntes);
 
     // No-op: status igual ao atual — devolve o estado corrente sem escrever.
@@ -894,10 +925,33 @@ export class EsteiraService {
       reversaoDerrubaCadastro(tipo, frente.status, novo, cadastroAbertoAgora) &&
       !dto.confirmar
     ) {
+      const desfazLiberacao = desfazLiberacaoSemAso(tipo, frente.status, novo);
       throw new ConflictException({
         needsConfirmation: true,
-        reason: "reversao",
-        message: "Isso reabre pendência num candidato já em cadastro — confirma?",
+        /**
+         * MOTIVO PRÓPRIO para o recuo da liberação, e o diálogo é o MESMO (decisão do diretor: mesmo
+         * molde do alerta do APTO). O motivo separado existe só para a tela poder dar um TÍTULO
+         * honesto: "Reabrir Pendência" descreve o recuo do APTO e contradiz o corpo neste caso, e um
+         * alerta que se contradiz é pior que alerta nenhum. O front cai no mesmo diálogo por default,
+         * então nenhum caminho novo nasce aqui.
+         */
+        reason: desfazLiberacao ? "reversaoLiberacaoSemAso" : "reversao",
+        /**
+         * DOIS RECADOS, um alerta só (decisão do diretor: o mesmo molde do alerta do APTO).
+         *
+         * O texto de sempre descreve o recuo de uma frente CONCLUÍDA, e não serve para o recuo da
+         * liberação sem ASO: ali não há pendência sendo reaberta, há uma admissão que estava
+         * LIBERADA para avançar e deixa de estar, podendo já ter cadastrado, integrado e ido para a
+         * assinatura. Dizer "reabre pendência" naquele caso seria descrever a coisa errada, e o
+         * consultor confirmaria sem saber o que está desfazendo.
+         *
+         * §A.11: os dois textos usam ponto e vírgula, nenhum travessão (o antigo tinha um, corrigido
+         * aqui com autorização do diretor).
+         */
+        message: desfazLiberacao
+          ? "Isso desfaz a liberação sem ASO. A admissão deixa de estar liberada para avançar, " +
+            "mesmo que já esteja em cadastro ou com o contrato em assinatura. Confirma?"
+          : "Isso reabre pendência num candidato já em cadastro. Confirma?",
       });
     }
 
@@ -929,6 +983,28 @@ export class EsteiraService {
         });
       }
     }
+    // (a.3) LIBERADO PARA CADASTRO SEM ASO exige PREVISÃO DO ASO POSTERIOR À DATA DE ADMISSÃO.
+    //
+    // Bloqueio DURO, sem aceite e sem bypass, no mesmo molde dos dois gates acima. O sentido da
+    // regra está em `domain/exame-liberacao.ts`: liberar sem ASO existe para quem começa a trabalhar
+    // antes de o documento ficar pronto; com o ASO previsto para antes, não há janela a cobrir.
+    //
+    // QUALQUER CONSULTOR LIBERA (decisão do diretor): sem controle por papel, ao contrário do APTO
+    // sem ASO. A admissão continua visível na fila do Exame para todos, e a trilha do evento de
+    // frente já registra quem marcou e quando, que é a transparência pedida.
+    if (tipo === "EXAME" && novo === STATUS_EXAME_LIBERADO_SEM_ASO) {
+      const previsao = await this.previsaoAsoDe(frente.admissaoId);
+      const entrada = { dataAdmissao: admissao?.dataAdmissao, previsaoAso: previsao };
+      const motivo = bloqueioLiberacaoSemAso(entrada);
+      if (motivo) {
+        throw new ConflictException({
+          needsConfirmation: false,
+          reason: "liberacaoSemAsoBloqueada",
+          message: mensagemBloqueioLiberacao(motivo, entrada),
+        });
+      }
+    }
+
     // (b) APTO exige ASO ANEXADO e VALIDADO PELA I.A (apto). A validação é da I.A (não flag manual):
     // `asoValidado` vem do veredito da I.A ao anexar/auditar o ASO. Controle por PAPEL:
     //   • COMUM (consultor): trava DURA — só um aviso, SEM opção de liberar sem ASO.
@@ -1061,7 +1137,12 @@ export class EsteiraService {
     const gateVaiAbrir =
       podeAbrirCadastro(
         irmas.map((f) =>
-          f.id === frenteId ? { tipo, concluida: conclui(tipo, novo) } : { tipo: f.tipo, concluida: f.concluida },
+          f.id === frenteId
+            ? // A frente que está mudando entra com o status NOVO: é assim que "Liberado Para
+              // Cadastro Sem ASO" abre o gate na PRÓPRIA transição que o marca, sem exigir um
+              // segundo clique.
+              { tipo, concluida: conclui(tipo, novo), status: novo }
+            : { tipo: f.tipo, concluida: f.concluida, status: f.status },
         ),
       ) && !cadastroExistente;
 
@@ -1145,7 +1226,9 @@ export class EsteiraService {
 
       // Recalcula o gate com o estado pós-mudança.
       const estadoDepois = irmas.map((f) =>
-        f.id === frenteId ? { tipo, concluida: concl } : { tipo: f.tipo, concluida: f.concluida },
+        f.id === frenteId
+          ? { tipo, concluida: concl, status: novo }
+          : { tipo: f.tipo, concluida: f.concluida, status: f.status },
       );
       const gateAberto = podeAbrirCadastro(estadoDepois);
 
@@ -1247,6 +1330,54 @@ export class EsteiraService {
         if (novo === "REALIZADO" || novo === "DESCONSIDERADA") farolIntegracao = "ADMISSAO_CONCLUIDA";
         else if (novo === "DECLINOU") farolIntegracao = "DECLINOU";
         else if (novo === "RESCISAO") farolIntegracao = "RESCISAO";
+      }
+      /**
+       * O CARIMBO DE CONCLUSÃO ESPERA O ASO (D1 cirúrgica, decisão do diretor).
+       *
+       * A admissão liberada sem ASO chega ao fim da trilha com o Exame ainda aberto: ela cadastra,
+       * integra e assina. Sem esta guarda, a conclusão da Integração carimbaria `ADMISSAO_CONCLUIDA`
+       * e o Painel passaria a contá-la como concluída sem o documento, que é exatamente o que a
+       * regra proíbe. A expressão `admissaoConcluidaSql` já a exclui pelo lado das FRENTES; aqui se
+       * fecha o lado do FAROL, que é a outra fonte que as telas leem.
+       *
+       * SÓ O `ADMISSAO_CONCLUIDA` espera. Declínio e rescisão são desfecho e continuam sendo
+       * gravados na hora: quem declinou não fica preso esperando um ASO que não vem mais.
+       *
+       * QUEM CARIMBA DEPOIS é o `concluirExamePorAso`, no instante em que o ASO fecha o Exame. Sem
+       * aquele par, esta guarda sozinha seria o defeito da Bienal (§A.27): farol nunca escrito,
+       * Gerenciador contando pelas frentes e Painel não contando pelo farol.
+       */
+      // O estado do EXAME DEPOIS desta transição, e não antes: quando é o próprio Exame que está
+      // mudando, olhar `irmas` responderia sobre o passado e a guarda abaixo barraria justamente a
+      // transição que a desfaz.
+      const exameDepois = irmas
+        .map((f) => (f.id === frenteId ? { tipo, status: novo, concluida: concl } : f))
+        .find((f) => f.tipo === "EXAME");
+      const exameLiberadoDepois = exameDepois?.status === STATUS_EXAME_LIBERADO_SEM_ASO;
+      if (farolIntegracao === "ADMISSAO_CONCLUIDA" && exameLiberadoDepois) {
+        farolIntegracao = null;
+      }
+
+      /**
+       * O RECARIMBO PELO CAMINHO MANUAL (achado na prova em homologação, e não deduzido).
+       *
+       * O fechamento pelo ASO validado pela I.A tem o seu recarimbo em `concluirExamePorAso`. Só que
+       * ele NÃO é o único caminho: Master e Super Admin fecham o Exame em APTO na tela, e a operação
+       * usa isso. Uma admissão liberada sem ASO que fosse fechada assim terminaria a esteira inteira
+       * SEM farol de conclusão, porque o carimbo da Integração já tinha passado e sido segurado.
+       * Gerenciador contando pelas frentes, Painel não contando pelo farol: o defeito da Bienal
+       * (§A.27) entrando pela outra porta.
+       *
+       * A CONDIÇÃO É A MESMA das duas outras pontas (`admissaoConcluidaSql` e o recarimbo da I.A):
+       * o Cadastro fechado e nenhuma integração pendente. E é ESTREITA: só quem estava no status
+       * liberado passa por aqui, então nenhum farol alheio é reescrito.
+       */
+      const fechaExameLiberado =
+        tipo === "EXAME" && concl && frente.status === STATUS_EXAME_LIBERADO_SEM_ASO;
+      if (!farolIntegracao && fechaExameLiberado) {
+        const cadastroFechado = irmas.some((f) => f.tipo === "CADASTRO_CONTRATO" && f.concluida);
+        const integracaoPendente = irmas.some((f) => f.tipo === "INTEGRACAO" && !f.concluida);
+        if (cadastroFechado && !integracaoPendente) farolIntegracao = "ADMISSAO_CONCLUIDA";
       }
       if (farolIntegracao) {
         await tx
@@ -2172,6 +2303,20 @@ export class EsteiraService {
   }
 
   /**
+   * A PREVISÃO DO ASO desta admissão (a data que a clínica informou no agendamento). SOMENTE LEITURA.
+   *
+   * Devolve `null` quando não há agendamento ou quando a previsão não foi preenchida, que são casos
+   * diferentes para a operação mas iguais para a trava: sem previsão não há comparação possível.
+   */
+  private async previsaoAsoDe(admissaoId: string): Promise<string | null> {
+    const [linha] = await this.db
+      .select({ previsaoAso: exameAgendamento.previsaoAso })
+      .from(exameAgendamento)
+      .where(eq(exameAgendamento.admissaoId, admissaoId));
+    return linha?.previsaoAso ?? null;
+  }
+
+  /**
    * A frente EXAME desta admissão já está APTA e concluída? SOMENTE LEITURA.
    *
    * Serve à ordem inversa do fluxo do ASO: exame marcado APTO à mão primeiro (sem documento) e o
@@ -2231,8 +2376,9 @@ export class EsteiraService {
     const gateAberto = podeAbrirCadastro(
       irmas.map((f) =>
         f.tipo === "EXAME"
-          ? { tipo: f.tipo, concluida: true }
-          : { tipo: f.tipo, concluida: f.concluida },
+          ? // O EXAME entra JÁ como APTO concluído: é a transição que este método está fazendo.
+            { tipo: f.tipo, concluida: true, status: "APTO" }
+          : { tipo: f.tipo, concluida: f.concluida, status: f.status },
       ),
     );
     const precisaNascerCadastro = gateAberto && !irmas.some((f) => f.tipo === "CADASTRO_CONTRATO");
@@ -2245,12 +2391,39 @@ export class EsteiraService {
       ? await clienteExigeIntegracao(this.db, adm?.codCliente)
       : false;
 
+    /**
+     * O ASO CHEGOU DEPOIS DE A ADMISSÃO TER SIDO LIBERADA SEM ELE: falta recolocar o farol.
+     *
+     * O caminho normal carimba `ADMISSAO_CONCLUIDA` na conclusão da Integração (ou do Cadastro, para
+     * cliente que não a exige). A admissão liberada sem ASO passa por ali com o Exame aberto, e o
+     * carimbo é SEGURADO de propósito (ver a guarda em `mudarStatus`). Se ninguém o recolocasse
+     * agora, ela terminaria a esteira inteira sem farol de conclusão: o Gerenciador a contaria pelas
+     * frentes, o Painel não a contaria pelo farol, e as duas telas divergiriam. É o defeito da
+     * Bienal (§A.27), e esta é a peça que o evita.
+     *
+     * A CONDIÇÃO É ESTREITA: só recarimba quem estava EXATAMENTE no status liberado e cujo Cadastro
+     * já fechou sem Integração pendente, que é a mesma régua de `admissaoConcluidaSql`. Nenhuma
+     * outra admissão passa por aqui, então nenhum farol existente é reescrito.
+     */
+    const eraLiberadaSemAso = frente.status === STATUS_EXAME_LIBERADO_SEM_ASO;
+    const cadastroFechado = irmas.some((f) => f.tipo === "CADASTRO_CONTRATO" && f.concluida);
+    const integracaoPendente = irmas.some((f) => f.tipo === "INTEGRACAO" && !f.concluida);
+    const recarimbaConclusao = eraLiberadaSemAso && cadastroFechado && !integracaoPendente;
+
     const agora = new Date();
     await this.db.transaction(async (tx) => {
       await tx
         .update(frentesAdmissao)
         .set({ status: "APTO", concluida: true, dataConclusao: agora, atualizadoEm: agora })
         .where(eq(frentesAdmissao.id, frente.id));
+      if (recarimbaConclusao) {
+        // Mesma transação da conclusão do Exame: ou as duas coisas acontecem, ou nenhuma. O farol
+        // fica em `FAROL_MANUAL`, então o `recomputeFarolGlobal` logo abaixo o preserva.
+        await tx
+          .update(admissoes)
+          .set({ farolGlobal: "ADMISSAO_CONCLUIDA", atualizadoEm: agora })
+          .where(eq(admissoes.id, admissaoId));
+      }
       await tx.insert(frenteStatusEventos).values({
         admissaoId,
         frenteId: frente.id,
@@ -2825,6 +2998,11 @@ export class EsteiraService {
    * O que NÃO é sobrescrito, de propósito:
    *  - frente CONCLUÍDA (APTO): reagendar não desconclui exame que já terminou;
    *  - CANCELADO: é decisão humana de encerrar, não pode ser desfeita por um salvamento;
+   *  - **LIBERADO PARA CADASTRO SEM ASO**: também é decisão humana, e desfazê-la aqui seria pior que
+   *    perder um status. A liberação é o que sustenta a admissão já cadastrada, integrada e com o
+   *    contrato em assinatura; um reagendamento de exame a jogaria de volta em AGENDADO, FECHANDO o
+   *    gate por baixo de trabalho que já aconteceu. Quem desfaz a liberação é o consultor, na tela,
+   *    com o alerta de reversão;
    *  - quem já está em AGENDADO: não gera evento repetido na trilha.
    * Os dois status de espera do ASO (AGUARDANDO_ASO, ASO_PENDENTE) VOLTAM para AGENDADO, que é o
    * ponto do reagendamento.
@@ -2846,7 +3024,12 @@ export class EsteiraService {
         and(eq(frentesAdmissao.admissaoId, admissaoId), eq(frentesAdmissao.tipo, "EXAME")),
       );
     if (!frente) return undefined;
-    if (frente.concluida || frente.status === "CANCELADO" || frente.status === "AGENDADO") {
+    if (
+      frente.concluida ||
+      frente.status === "CANCELADO" ||
+      frente.status === STATUS_EXAME_LIBERADO_SEM_ASO ||
+      frente.status === "AGENDADO"
+    ) {
       return undefined;
     }
 

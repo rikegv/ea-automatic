@@ -1,4 +1,5 @@
 import { sql } from "drizzle-orm";
+import { STATUS_EXAME_LIBERADO_SEM_ASO } from "@ea/shared-types";
 import { admissoes } from "./schema";
 
 /**
@@ -35,9 +36,27 @@ import { admissoes } from "./schema";
  * Cliente que NÃO exige integração também segue contando no Cadastro: a frente nunca nasce para ele,
  * então nunca há integração pendente.
  */
+/**
+ * A TERCEIRA METADE, do "Liberado Para Cadastro Sem ASO" (decisão do diretor, D1 cirúrgica).
+ *
+ * O status novo destrava o avanço da admissão sem concluir o Exame: ela cadastra, integra e assina
+ * com o ASO ainda pendente. Sem esta linha ela passaria a contar como CONCLUÍDA no Painel, no
+ * Gerenciador e no Alto Volume assim que o Cadastro fechasse, e o diretor foi explícito: enquanto o
+ * ASO não sobe, a admissão NÃO está concluída.
+ *
+ * O RECORTE É CIRÚRGICO DE PROPÓSITO, e a alternativa foi medida antes de ser recusada. Exigir "o
+ * EXAME concluído" nesta expressão seria a regra mais óbvia e mexeria no PASSADO: 3 admissões da base
+ * (exames CANCELADO, faróis DECLINOU e RESCISAO, contratos já assinados) sairiam da conta, e a
+ * expressão é a mesma que três telas leem. Excluindo APENAS o status novo, que não existe em nenhuma
+ * linha no dia em que sobe, o número não se move: 1749 antes, 1749 depois.
+ *
+ * O CASO SE DESFAZ SOZINHO: quando o ASO chega, a frente vira APTO, o status deixa de ser o liberado
+ * e a admissão entra na conta pela regra de sempre, sem nada a corrigir à mão.
+ */
 export const admissaoConcluidaSql = sql<boolean>`(
       EXISTS (SELECT 1 FROM frentes_admissao f WHERE f.admissao_id = ${admissoes.id} AND f.tipo = 'CADASTRO_CONTRATO' AND f.concluida = true)
       AND NOT EXISTS (SELECT 1 FROM frentes_admissao i WHERE i.admissao_id = ${admissoes.id} AND i.tipo = 'INTEGRACAO' AND i.concluida = false)
+      AND NOT EXISTS (SELECT 1 FROM frentes_admissao e WHERE e.admissao_id = ${admissoes.id} AND e.tipo = 'EXAME' AND e.status = ${STATUS_EXAME_LIBERADO_SEM_ASO})
     )`;
 
 /**

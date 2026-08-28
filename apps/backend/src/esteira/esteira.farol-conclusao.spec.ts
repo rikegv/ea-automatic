@@ -40,11 +40,34 @@ interface Fixtures {
   cadastroConcluido?: boolean;
   /** A admissão já entrou na fila de Benefícios antes (fixture da idempotência do carimbo). */
   jaNaFilaDeBeneficios?: boolean;
+  /** O EXAME está LIBERADO SEM ASO (frente aberta) em vez de APTO concluído. */
+  exameLiberadoSemAso?: boolean;
 }
 
 interface Escrita {
   tabela: unknown;
   valores: Record<string, unknown>;
+}
+
+/**
+ * O ID que a consulta procura, garimpado do `where` que o drizzle monta.
+ *
+ * O fake não interpreta SQL: ele varre o objeto do `where` atrás do primeiro valor que pareça um id
+ * de frente. É o suficiente para o harness escolher a frente certa, e evita reescrever o db falso.
+ */
+function alvoDaConsulta(args?: { where?: unknown }): string | undefined {
+  const vistos = new Set<unknown>();
+  const busca = (v: unknown): string | undefined => {
+    if (typeof v === "string") return v.startsWith("frente-") ? v : undefined;
+    if (!v || typeof v !== "object" || vistos.has(v)) return undefined;
+    vistos.add(v);
+    for (const item of Object.values(v as Record<string, unknown>)) {
+      const achado = busca(item);
+      if (achado) return achado;
+    }
+    return undefined;
+  };
+  return busca(args?.where);
 }
 
 function montar(f: Fixtures) {
@@ -59,7 +82,14 @@ function montar(f: Fixtures) {
       concluida: f.cadastroConcluido ?? false,
     },
     { id: "frente-auditoria-1", tipo: "AUDITORIA", status: "ANALISE_OK", concluida: true },
-    { id: "frente-exame-1", tipo: "EXAME", status: "APTO", concluida: true },
+    f.exameLiberadoSemAso
+      ? {
+          id: "frente-exame-1",
+          tipo: "EXAME",
+          status: "LIBERADO_SEM_ASO",
+          concluida: false,
+        }
+      : { id: "frente-exame-1", tipo: "EXAME", status: "APTO", concluida: true },
     ...(f.integracaoExiste
       ? [{ id: "frente-integracao-1", tipo: "INTEGRACAO", status: "A_AGENDAR", concluida: false }]
       : []),
@@ -128,14 +158,40 @@ function montar(f: Fixtures) {
           beneficiosEntrouEm: f.jaNaFilaDeBeneficios ? new Date("2026-08-01T10:00:00Z") : null,
         }),
       },
-      frentesAdmissao: {
+      // O gate do APTO consulta o tipo de documento ASO (`docEntregueSet`). Só entra em cena nos
+      // testes que fecham o EXAME na tela; para os do Cadastro nunca é chamado.
+      tiposDocumento: { findFirst: async () => ({ id: "tipo-aso", codigo: "ASO" }) },
+      // Vaga COMPLETA: zera `pendenciasObrigatorias` e tira o aceite de passagem do caminho, para o
+      // teste medir o CARIMBO e não o aceite. Mesmo molde do `esteira.gates-exame.spec.ts`.
+      dadosVagaFolha: {
         findFirst: async () => ({
-          id: FRENTE_CADASTRO_ID,
-          admissaoId: ADMISSAO_ID,
-          tipo: "CADASTRO_CONTRATO",
-          status: f.cadastroConcluido ? "CADASTRADO" : "A_CADASTRAR",
-          concluida: f.cadastroConcluido ?? false,
+          salario: "2000.00",
+          beneficios: "VR",
+          escala: "6x1",
+          centroCusto: "CC-1",
+          setor: "Operações",
+          gestorBp: "Fulano",
+          possuiUniforme: true,
         }),
+      },
+      frentesAdmissao: {
+        /**
+         * A frente ALVO da transição, resolvida pelo mesmo id das irmãs.
+         *
+         * Devolvia sempre o Cadastro, porque era a única frente que este arquivo movia. Passou a
+         * resolver pela lista quando entraram os testes do Exame fechando uma admissão liberada:
+         * fixar o Cadastro fazia o serviço recusar o status "APTO" como inválido para ele, e o
+         * teste morria antes de chegar ao que estava medindo.
+         */
+        findFirst: async (args?: { where?: unknown }) => {
+          const alvo = alvoDaConsulta(args);
+          const achada = irmas.find((i) => i.id === alvo);
+          return {
+            ...(achada ?? irmas[0]),
+            admissaoId: ADMISSAO_ID,
+            dataConclusao: null,
+          };
+        },
       },
     },
   } as Record<string, unknown>;
@@ -275,5 +331,87 @@ describe("carimbo da fila de Benefícios", () => {
     const ctx = montar({ exigeIntegracao: false, cadastroConcluido: true });
     await concluirCadastro(ctx.svc, "A_CADASTRAR");
     expect(ctx.atualizacoes.some((a) => a.valores.beneficiosEntrouEm !== undefined)).toBe(false);
+  });
+});
+
+/**
+ * O CARIMBO ESPERA O ASO (D1 cirúrgica, OST "Liberado Para Cadastro Sem ASO").
+ *
+ * A admissão liberada sem ASO chega ao fim da trilha com o Exame ABERTO: cadastra, integra e assina.
+ * Carimbar `ADMISSAO_CONCLUIDA` ali diria que ela concluiu sem o documento, e o diretor foi
+ * explícito: enquanto o ASO não sobe, ela NÃO está concluída.
+ *
+ * Este bloco é a METADE do par. A outra metade está em `esteira.transicao-pos-aso.spec.ts`, que
+ * prova o recarimbo quando o ASO chega. As duas juntas são o que impede o defeito da Bienal, farol
+ * nunca escrito e telas divergindo.
+ */
+describe("o farol de conclusão espera o ASO da admissão liberada", () => {
+  it("NÃO carimba ADMISSAO_CONCLUIDA com o Exame liberado sem ASO", async () => {
+    const ctx = montar({ exigeIntegracao: false, exameLiberadoSemAso: true });
+
+    await concluirCadastro(ctx.svc);
+
+    expect(farolGravado(ctx.atualizacoes)).not.toContain("ADMISSAO_CONCLUIDA");
+  });
+
+  it("com o Exame APTO de verdade, carimba como sempre carimbou", async () => {
+    // O contraprova do teste acima: a guarda é sobre o status liberado, e só sobre ele.
+    const ctx = montar({ exigeIntegracao: false });
+    await concluirCadastro(ctx.svc);
+    expect(farolGravado(ctx.atualizacoes)).toContain("ADMISSAO_CONCLUIDA");
+  });
+
+  it("a fila de Benefícios NÃO espera: o Cadastro fechou, o benefício já pode ser lançado", async () => {
+    // Recorte deliberado. O que espera o ASO é o FAROL de conclusão; a entrada na fila de
+    // benefícios responde a outra pergunta ("já dá para lançar?"), e a resposta é sim.
+    const ctx = montar({ exigeIntegracao: false, exameLiberadoSemAso: true });
+    await concluirCadastro(ctx.svc);
+    expect(ctx.atualizacoes.some((a) => a.valores.beneficiosEntrouEm !== undefined)).toBe(true);
+  });
+});
+
+/**
+ * O RECARIMBO PELO CAMINHO MANUAL (achado na prova em homologação, não deduzido).
+ *
+ * O fechamento pelo ASO da I.A tem o recarimbo coberto em `esteira.transicao-pos-aso.spec.ts`. Mas
+ * Master e Super Admin fecham o Exame em APTO NA TELA, e a operação usa isso. Sem esta ponta, a
+ * admissão liberada terminaria a esteira sem farol de conclusão, e Painel e Gerenciador divergiriam.
+ */
+describe("fechar o Exame na tela recarimba a admissão liberada", () => {
+  it("APTO manual, com Cadastro e Integração fechados, carimba ADMISSAO_CONCLUIDA", async () => {
+    const ctx = montar({
+      exigeIntegracao: false,
+      exameLiberadoSemAso: true,
+      cadastroConcluido: true,
+    });
+
+    await ctx.svc.mudarStatus(
+      "frente-exame-1",
+      { status: "APTO", confirmar: true, aceitePassagem: true } as never,
+      USER,
+    );
+
+    expect(farolGravado(ctx.atualizacoes)).toContain("ADMISSAO_CONCLUIDA");
+  });
+
+  it("NÃO carimba se o Cadastro ainda está aberto", async () => {
+    const ctx = montar({ exigeIntegracao: false, exameLiberadoSemAso: true });
+    await ctx.svc.mudarStatus(
+      "frente-exame-1",
+      { status: "APTO", confirmar: true, aceitePassagem: true } as never,
+      USER,
+    );
+    expect(farolGravado(ctx.atualizacoes)).not.toContain("ADMISSAO_CONCLUIDA");
+  });
+
+  it("NÃO carimba quem NUNCA foi liberado sem ASO (recorte estreito)", async () => {
+    // Exame em espera comum fechando em APTO: caminho de sempre, nenhum carimbo novo aqui.
+    const ctx = montar({ exigeIntegracao: false, cadastroConcluido: true });
+    await ctx.svc.mudarStatus(
+      "frente-exame-1",
+      { status: "APTO", confirmar: true, aceitePassagem: true } as never,
+      USER,
+    );
+    expect(farolGravado(ctx.atualizacoes)).not.toContain("ADMISSAO_CONCLUIDA");
   });
 });

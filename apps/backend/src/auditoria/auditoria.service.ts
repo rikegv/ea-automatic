@@ -655,10 +655,13 @@ export class AuditoriaService {
       .where(eq(frentesAdmissao.admissaoId, admissaoId));
 
     const auditoria = frentes.find((f) => f.tipo === "AUDITORIA");
+    // O STATUS VAI JUNTO (OST "Liberado Para Cadastro Sem ASO"): o gate passou a reconhecer o EXAME
+    // liberado sem ASO, e ele só o vê se o status chegar. Sem esta linha a I.A fecharia a Auditoria
+    // de uma admissão já liberada e o Cadastro não nasceria, que é o caminho fail-closed.
     const estadoDepois = frentes.map((f) =>
       f.tipo === "AUDITORIA"
-        ? { tipo: f.tipo, concluida: true }
-        : { tipo: f.tipo, concluida: f.concluida },
+        ? { tipo: f.tipo, concluida: true, status: f.status }
+        : { tipo: f.tipo, concluida: f.concluida, status: f.status },
     );
     const gateAberto = podeAbrirCadastro(estadoDepois);
 

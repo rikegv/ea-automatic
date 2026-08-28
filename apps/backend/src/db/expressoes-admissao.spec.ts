@@ -22,6 +22,10 @@ import {
 const render = (expr: Parameters<PgDialect["sqlToQuery"]>[0]) =>
   new PgDialect().sqlToQuery(expr).sql.replace(/\s+/g, " ");
 
+/** Os parâmetros LIGADOS da expressão (o que sai como `$1`, `$2`, e não no texto do SQL). */
+const params = (expr: Parameters<PgDialect["sqlToQuery"]>[0]) =>
+  new PgDialect().sqlToQuery(expr).params;
+
 describe("em andamento EXCLUSIVO", () => {
   it("é o em andamento MAIS a negação do concluída (não pode contar ninguém duas vezes)", () => {
     const exclusivo = render(admissaoEmAndamentoExclusivoSql);
@@ -78,5 +82,40 @@ describe("as definições de cada balde continuam sendo as de sempre", () => {
     expect(s).toContain("pausada_em");
     // Pausada não está andando: ela tem balde próprio, e some daqui de propósito.
     expect(s).toContain("IS NULL");
+  });
+});
+
+/**
+ * O "LIBERADO PARA CADASTRO SEM ASO" NÃO CONTA COMO CONCLUÍDA (D1 cirúrgica, decisão do diretor).
+ *
+ * A admissão liberada sem ASO cadastra, integra e assina com o Exame ainda aberto. Sem a terceira
+ * metade da expressão ela apareceria como concluída no Painel, no Gerenciador e no Alto Volume sem o
+ * documento, que é justamente o que a regra proíbe.
+ *
+ * O RECORTE É CIRÚRGICO, e este teste também protege isso: a expressão exclui APENAS o status novo,
+ * e NÃO passou a exigir "Exame concluído". A régua ampla teria mexido no passado (3 admissões da
+ * base sairiam da conta); a cirúrgica não move uma linha no dia em que sobe.
+ */
+describe("liberado sem ASO fica fora da contagem de concluídas", () => {
+  it("a expressão exclui o status LIBERADO_SEM_ASO da frente EXAME", () => {
+    const s = render(admissaoConcluidaSql);
+    expect(s).toContain("EXAME");
+    // O código do status entra como PARÂMETRO LIGADO, não interpolado no texto: vem da constante
+    // compartilhada e o driver o envia à parte. Por isso a asserção é sobre os params, e não sobre
+    // a string, que traz `$1` no lugar.
+    expect(params(admissaoConcluidaSql)).toContain("LIBERADO_SEM_ASO");
+  });
+
+  it("NÃO exige Exame concluído: o recorte é pelo status, não pela frente inteira", () => {
+    // A diferença entre as duas réguas é o que separa "não move nada" de "reescreve o passado".
+    const s = render(admissaoConcluidaSql);
+    expect(s).not.toContain("e.tipo = 'EXAME' AND e.concluida = true");
+    expect(s).not.toMatch(/EXAME[^)]*concluida = true/);
+  });
+
+  it("o balde de EM ANDAMENTO continua sem saber do status novo", () => {
+    // Em andamento olha o FAROL, e a liberação não mexe em farol: a admissão segue EM_ADMISSAO,
+    // que é onde ela tem de estar enquanto o ASO não chega.
+    expect(render(admissaoEmAndamentoSql)).not.toContain("LIBERADO_SEM_ASO");
   });
 });

@@ -34,8 +34,20 @@ import { createDb } from "./client";
  */
 const DRY = process.env.RECUPERA_DRY === "1";
 
-/** Estados do EXAME recuperáveis. Espelha `STATUS_EXAME_APTO_POR_ASO` (esteira.service.ts). */
-const RECUPERAVEIS = ["A_AGENDAR", "AGENDADO", "AGUARDANDO_ASO", "ASO_PENDENTE"];
+/**
+ * Estados do EXAME recuperáveis. Espelha `STATUS_EXAME_APTO_POR_ASO` (esteira.service.ts).
+ *
+ * `LIBERADO_SEM_ASO` entra junto, pelo mesmo motivo de lá: a admissão foi liberada porque o ASO não
+ * existia, e quem já tem o ASO validado tem de concluir o Exame. Manter a lista espelhada é o que
+ * impede o script de recuperação de deixar para trás justamente o caso que a OST criou.
+ */
+const RECUPERAVEIS = [
+  "A_AGENDAR",
+  "AGENDADO",
+  "AGUARDANDO_ASO",
+  "ASO_PENDENTE",
+  "LIBERADO_SEM_ASO",
+];
 
 /** Faróis fora da esteira viva: declínio/rescisão e pré-admissão não são recuperados (§A.16). */
 const FAROIS_FORA = ["DECLINOU", "RESCISAO", "AGUARDANDO_LIBERACAO", "LIBERACAO_RECUSADA"];

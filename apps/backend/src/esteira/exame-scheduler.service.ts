@@ -24,7 +24,14 @@ import { INTERVALO_MS, type EstadoScheduler } from "../domain/scheduler-exame";
 
 const CHAVE = "exame";
 
-/** Status de onde o verificador PODE mover. Fora daqui ele não encosta. */
+/**
+ * Status de onde o verificador PODE mover. Fora daqui ele não encosta.
+ *
+ * A LISTA É POR INCLUSÃO, e é o que blinda o "Liberado Para Cadastro Sem ASO" sem uma linha de
+ * exceção: status novo só passa a ser governado se alguém o escrever aqui de propósito. O liberado
+ * NÃO entra, e não pode entrar: mover uma admissão liberada para ASO_PENDENTE fecharia o gate do
+ * Cadastro depois de a admissão já ter cadastrado, integrado e ido para a assinatura.
+ */
 const STATUS_GOVERNADOS = ["AGENDADO", "AGUARDANDO_ASO", "ASO_PENDENTE"] as const;
 
 /**
@@ -43,6 +50,11 @@ const STATUS_GOVERNADOS = ["AGENDADO", "AGUARDANDO_ASO", "ASO_PENDENTE"] as cons
  * O QUE ELE NÃO TOCA, de propósito:
  *  - frente CONCLUÍDA ou CANCELADA: decisão humana, e APTO é o fim da linha;
  *  - status fora de `STATUS_GOVERNADOS` (A_AGENDAR não tem data para julgar);
+ *  - **LIBERADO PARA CADASTRO SEM ASO**, pelo mesmo motivo da marca manual de "aguardando
+ *    resultado" logo abaixo, e com consequência mais pesada: é decisão humana que já destravou o
+ *    Cadastro, a Integração e a assinatura. O ciclo de hora em hora reescrevendo aquele status para
+ *    ASO_PENDENTE fecharia o gate por baixo de trabalho concluído, e em menos de uma hora. Ele fica
+ *    FORA de `STATUS_GOVERNADOS`, que é a lista por inclusão: o verificador só move o que está nela;
  *  - admissão NÃO OPERÁVEL (`admissaoOperavel`): encerrada ou PAUSADA. Marcar de atrasada quem está
  *    pausado por decisão seria cobrar trabalho que o próprio diretor mandou parar.
  *

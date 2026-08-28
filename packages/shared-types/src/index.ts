@@ -130,12 +130,24 @@ export type StatusAuditoria = (typeof STATUS_AUDITORIA)[number];
  *
  * O `APTO` NÃO muda e continua sendo o único que conclui a frente e abre o gate do Cadastro (decisão
  * do diretor: "Apto - Exame Finalizado" é o APTO que já existe, não um status novo).
+ *
+ * OST "Liberado Para Cadastro Sem ASO": entra um TERCEIRO status que não conclui, e ele é diferente
+ * dos dois de espera. Os dois descrevem a espera; este DESTRAVA o avanço no meio dela, porque o
+ * cliente precisa da pessoa trabalhando antes de o ASO ficar pronto. A admissão anda até o fim da
+ * trilha (Cadastro, Integração, kit e assinatura) e CONTINUA na fila do Exame até o ASO subir.
+ *
+ * Quem enxerga esse "liberado" é o GATE (`podeAbrirCadastro`), NÃO o bit `concluida`: o bit responde
+ * também "saiu da fila?" e "a frente terminou?", e a resposta a essas duas continua sendo não.
+ *
+ * A POSIÇÃO NO ARRAY É A ORDEM OPERACIONAL, e ela define o que é reversão (`ORDEM_STATUS`): entre
+ * ASO_PENDENTE e APTO, porque liberar é o último degrau antes do apto, e voltar dali é recuo.
  */
 export const STATUS_EXAME = [
   "A_AGENDAR",
   "AGENDADO",
   "AGUARDANDO_ASO",
   "ASO_PENDENTE",
+  "LIBERADO_SEM_ASO",
   "APTO",
   "CANCELADO",
 ] as const;
@@ -143,6 +155,15 @@ export type StatusExame = (typeof STATUS_EXAME)[number];
 
 /** Os dois status de espera do ASO: automáticos, derivados pelo scheduler, nunca concluem a frente. */
 export const STATUS_EXAME_ESPERA_ASO = ["AGUARDANDO_ASO", "ASO_PENDENTE"] as const;
+
+/**
+ * O status que LIBERA O AVANÇO sem concluir o Exame (OST "Liberado Para Cadastro Sem ASO").
+ *
+ * Constante e não literal solta: ele é lido pelo gate, pela trava da data, pela blindagem do
+ * scheduler, pela whitelist do ASO e pela expressão de admissão concluída. Cinco lugares com a mesma
+ * string escrita à mão divergiriam no primeiro rename.
+ */
+export const STATUS_EXAME_LIBERADO_SEM_ASO = "LIBERADO_SEM_ASO";
 
 /**
  * Cadastro/Contrato tem DOIS status: "A Cadastrar" e "Cadastrado" (concluinte).

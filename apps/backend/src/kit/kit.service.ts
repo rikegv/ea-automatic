@@ -168,8 +168,17 @@ export class KitService {
     if (ehPausada(alvo.pausadaEm)) {
       throw new ConflictException("Admissão pausada: retome a admissão para enviar à assinatura.");
     }
+    // O STATUS entra no gate (OST "Liberado Para Cadastro Sem ASO", decisão do diretor: o contrato
+    // TEM de sair). `kitLiberado` reusa `podeAbrirCadastro`, que reconhece o EXAME liberado sem ASO;
+    // ele só o enxerga se o status vier junto. É a ÚNICA mudança do lado da assinatura: o pipeline
+    // do envelope (os cinco passos, a ordem ativar/gravar/notificar, o balde de 1 por 60s, o teto de
+    // 50 por 10s, o tick e o download do assinado) não é tocado em nenhuma linha.
     const frentes = await this.db
-      .select({ tipo: frentesAdmissao.tipo, concluida: frentesAdmissao.concluida })
+      .select({
+        tipo: frentesAdmissao.tipo,
+        status: frentesAdmissao.status,
+        concluida: frentesAdmissao.concluida,
+      })
       .from(frentesAdmissao)
       .where(eq(frentesAdmissao.admissaoId, alvo.id));
     if (!kitLiberado(frentes)) {
@@ -303,9 +312,15 @@ export class KitService {
       );
     }
 
-    // Gate F9: as 3 frentes (AUDITORIA + EXAME + CADASTRO_CONTRATO) precisam estar concluídas.
+    // Gate F9: as 3 frentes (AUDITORIA + EXAME + CADASTRO_CONTRATO) precisam estar concluídas, e o
+    // EXAME conta também como liberado quando está em "Liberado Para Cadastro Sem ASO" (mesma regra
+    // do gate do Cadastro, resolvida em `podeAbrirCadastro`). Daí o status no select.
     const frentes = await this.db
-      .select({ tipo: frentesAdmissao.tipo, concluida: frentesAdmissao.concluida })
+      .select({
+        tipo: frentesAdmissao.tipo,
+        status: frentesAdmissao.status,
+        concluida: frentesAdmissao.concluida,
+      })
       .from(frentesAdmissao)
       .where(eq(frentesAdmissao.admissaoId, admissaoId));
     if (!kitLiberado(frentes)) {
