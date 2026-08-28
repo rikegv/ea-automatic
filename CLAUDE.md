@@ -735,3 +735,110 @@ Complementa a §A.14 (escopo fechado) e a §A.26 (mexeu em código validado, per
 do que NÃO está na OST, a §A.26 do que ESTÁ na OST e alcança código validado, e esta trata de **mapear o
 alcance antes de escrever a primeira linha**, inclusive quando o pedido parece isolado. Vale para todo
 ajuste e toda implantação daqui para frente. *(Decisão do diretor.)*
+
+## A.28: Todo filtro é de MÚLTIPLA seleção (regra permanente)
+
+**Todo filtro do sistema aceita VÁRIOS valores ao mesmo tempo**, nunca um só. Filtrar por dois ou três
+clientes juntos, por duas etapas, por dois status, é o comportamento padrão e não um recurso especial.
+
+- **Filtro NOVO já nasce múltiplo.** Não existe "começa simples e depois vira múltiplo": a régua de
+  um valor só se espalha pela consulta, pelo estado da tela e pela URL, e desfazer isso depois custa
+  mais do que nascer certo.
+- **Filtro que JÁ EXISTE é convertido**, na ordem que o diretor aprovar. A conversão toca produção
+  validada, então vale a §A.26: levanta-se a lista, mostra-se o alcance, e só então se mexe.
+- **UM componente só, reusado.** Nada de um seletor múltiplo por tela. Onde já houver múltipla
+  seleção funcionando, é nela que se padroniza; onde não houver, cria-se **uma** e todas passam a
+  puxar dali. Duas implementações do mesmo filtro divergem no primeiro ajuste.
+- **O backend acompanha.** Filtro múltiplo que a tela oferece e a consulta ignora é pior que filtro
+  nenhum, porque mente. O parâmetro vira lista (o padrão `parseMulti` que a Esteira já usa) e a
+  cláusula vira `IN`.
+
+*(Decisão do diretor. Vale para toda entrega futura, não só para a OST que a originou.)*
+
+## A.31: SÓ o que a OST pede, e o que falta se PROPÕE (regra permanente, reforço da §A.14)
+
+**A fábrica constrói exatamente o que a OST pede, e nada além.** Não acrescenta KPI, card, coluna,
+tela, filtro, campo ou recurso que o diretor não pediu, por mais sensato que pareça.
+
+- **Achou que falta algo? PROPÕE e espera o aval.** A proposta é uma linha no relatório de entrega,
+  não uma tela construída "para o diretor ver e decidir depois". Construir primeiro e perguntar
+  depois transfere para ele o trabalho de desfazer.
+- **Ler o CLAUDE.md ANTES de cada frente**, e seguir as regras que já estão escritas. Elas existem
+  porque cada uma custou um retrabalho.
+- **Cada sessão trabalha só na SUA frente**, sem decidir escopo por conta própria. Escopo é do
+  diretor.
+
+**Os dois casos que originaram o reforço**, ambos da frente do iFractal:
+- o **menu gerencial** nasceu espelhando a tela da Esteira, listando admissões que ninguém pediu ali,
+  e teve de ser refeito do zero;
+- os **KPIs da Integração** ganharam cards que não estavam na OST, e a aba teve de ser reajustada.
+
+**Por que a regra dói mais do que parece:** o que a fábrica acrescenta sozinha não é neutro. Ocupa
+tela, entra na validação, vira dívida e, quando está errado, custa uma frente inteira para desfazer,
+na hora errada. A §A.14 já dizia "só o que a OST pede"; esta repete porque a violação voltou por
+outra porta, a de "melhorar" em vez de a de "renomear". *(Decisão do diretor.)*
+
+## A.30: Quais colunas viram filtro é ESCOLHA DO DIRETOR (regra permanente)
+
+**Ao criar uma tela com tabela, a fábrica TRAZ A LISTA das colunas e o diretor escolhe quais viram
+filtro.** Não é espelho automático de todas as colunas, e não é escolha da fábrica: é uma pergunta
+feita antes de construir, respondida caso a caso.
+
+- **A fábrica pergunta ANTES**, com a lista das colunas na mão. Construir o filtro e depois descobrir
+  quais sobram é retrabalho, que é o que a §A.27 existe para evitar.
+- **Nem toda coluna vira filtro.** Campo de credencial (LOGIN, SENHA) não vira: ninguém procura uma
+  pessoa filtrando por senha. Campo de identificação e de classificação (matrícula, cliente, nome,
+  data, tipo, status) normalmente vira, e é por isso que a lista é oferecida, não adivinhada.
+- **Todo filtro escolhido é MULTISELECT** (§A.28, mantida sem exceção), pelo mesmo componente
+  compartilhado.
+- **Coluna nova numa tela existente reabre a pergunta**, em uma linha: "esta vira filtro?".
+
+**Por que a regra é esta e não o espelho automático:** filtro é como se acha a linha numa tabela de
+milhares, então coluna de busca sem filtro custa caro na operação. Mas encher a barra de filtros que
+ninguém usa custa também, em tela e em ruído, e a fábrica não tem como saber por qual campo o time
+procura de verdade. Quem sabe é quem opera. *(Decisão do diretor, ajustando a primeira redação desta
+regra, que dizia "espelho de todas as colunas".)*
+
+**Escolha vigente da tela do iFractal:** viram filtro Matrícula, Cliente, Nome, Data De Admissão,
+Tipo De Marcação e Status. NÃO viram Login e Senha.
+
+## A.29: Toda tabela tem ordenação clicável no cabeçalho (regra permanente)
+
+**Toda tabela do sistema ordena por clique no cabeçalho da coluna**: alfabética A a Z e Z a A, por
+data, por número. Já era prática na Integração e na Gestão Das Assinaturas; passa a ser **regra**.
+
+- **Reusar `useOrdenacao` e `ColunaOrdenavel`**, que já existem. Não criar componente novo, não
+  escrever ordenação à mão na tela: um jeito só de ordenar no sistema inteiro.
+- **Tabela nova nasce ordenável.** Entregar tabela sem ordenação é entrega incompleta, e não item de
+  backlog.
+- Complementa a §A.12 (máscara única de tabela) e a §A.20 (larguras e prova anti-esmagamento): a
+  ordenação faz parte da mesma identidade, e a prova visual dela entra na mesma screenshot.
+
+*(Decisão do diretor, após a Central de Vagas e a Central de Candidatos nascerem sem ordenação.)*
+
+## A.32: AMBIENTE ÚNICO de homologação, e o diretor valida num lugar só (regra permanente)
+
+**Todo trabalho em validação aparece no ambiente ÚNICO de homologação, a porta 3120
+(`http://10.18.117.235:3120`).** Uma frente, uma sessão, um endereço. O diretor abre 3120 e enxerga
+tudo o que está esperando o olho dele, sem escolher porta e sem escolher link.
+
+- **A fábrica NÃO sobe ambiente separado** para mostrar uma frente. Nem "só para esta OST", nem "só
+  para não misturar com a outra sessão", nem "só por hoje".
+- **A fábrica NÃO manda o diretor para outra porta.** Mandar outro link é a forma que o erro toma na
+  prática: ele chega numa tela que não tem a frente da outra sessão, conclui que sumiu, e a validação
+  vira depuração de ambiente.
+- **Se algum motivo técnico REALMENTE exigir outro ambiente, a fábrica AVISA E EXPLICA ANTES**, diz o
+  que exige, por quanto tempo e o que fica onde. Nunca despacha o link e pronto. O aviso é obrigatório
+  mesmo quando o outro ambiente parece óbvio para quem construiu.
+- **Sessões simultâneas convivem no MESMO 3120.** Homologação é compartilhada por construção: é ela
+  que faz o impacto cruzado entre frentes aparecer antes de a operação encontrá-lo, que é justamente o
+  que a §A.26 e a §A.27 existem para pegar. Ambiente separado por sessão esconde a colisão até o merge.
+
+**Produção continua sendo a 3010, e não é ambiente de validação.** A régua da §A.13 (prova visual) e
+da §A.25 (validou, sobe e commita) não muda: a validação acontece na 3120, a publicação acontece
+depois.
+
+**O caso que originou a regra (27/08/2026):** uma frente foi publicada numa porta 3130 avulsa e o
+diretor foi mandado para lá. A tela que ele abriu não continha o trabalho das outras sessões de A&S,
+e o tempo da validação foi gasto entendendo qual endereço mostrava o quê, em vez de olhando a
+entrega. *(Decisão do diretor.)*
