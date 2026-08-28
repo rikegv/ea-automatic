@@ -59,6 +59,12 @@ export const ROTA_MENU: { prefixo: string; codigo: string }[] = [
   // (§A.23). Sem esta linha o guard deixaria qualquer autenticado abrir a URL direto, mesmo com o
   // módulo de A&S liberado a ninguém. O backend já barra as operações; isto fecha a porta da tela.
   { prefixo: "/as/vagas", codigo: "as-vagas" },
+  // CENTRAL DE CANDIDATOS (A&S, onda 1): governada pelo menu `as-candidatos`, que nasce só para o
+  // SUPER_ADMIN (§A.23). Vale com peso extra aqui, porque esta é a primeira tela do sistema com dado
+  // pessoal de quem AINDA NÃO É FUNCIONÁRIO: enquanto o menu estiver liberado a ninguém, ela precisa
+  // ser invisível E inalcançável, inclusive por quem digitar a URL. O backend já barra as operações;
+  // isto fecha a porta da tela.
+  { prefixo: "/as/candidatos", codigo: "as-candidatos" },
 ];
 
 /**

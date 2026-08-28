@@ -81,10 +81,29 @@ const BENEFICIOS: NavDef = {
 
 // ATRAÇÃO E SELEÇÃO: grupo PRÓPRIO na barra, e não mais um item dentro de Operação. A barra passa a
 // servir dois times, e o grupo é o que separa visualmente o módulo de Admissão do de A&S para quem
-// um dia tiver as duas áreas. Visibilidade pelo menu `as-vagas`, que nasce só para o SUPER_ADMIN
-// (§A.23): não aparecer para os demais não é bug, é o diretor ainda não ter liberado.
+// um dia tiver as duas áreas. Visibilidade pelos menus `as-vagas` e `as-candidatos`, que nascem só
+// para o SUPER_ADMIN (§A.23): não aparecer para os demais não é bug, é o diretor ainda não ter
+// liberado.
 const SELECAO: NavDef[] = [
   { href: "/as/vagas", icon: "table", label: "Central De Vagas", codigo: "as-vagas" },
+  /**
+   * CENTRAL DE CANDIDATOS: a entrada estava FALTANDO na barra (achado de 27/08).
+   *
+   * A tela existia, a rota existia e o menu `as-candidatos` já estava registrado no catálogo, mas
+   * este array nunca ganhou a linha: o resultado é que a única forma de chegar na tela era colar a
+   * URL. É o mesmo buraco do `clinicas` em 29/07 (§A.23), com a diferença de que lá faltava o
+   * registro e aqui faltava o item de navegação.
+   *
+   * §A.23 CONTINUA VALENDO E NADA FOI CONCEDIDO A NINGUÉM: quem decide a visibilidade é o `codigo`,
+   * e `as-candidatos` nasce só para o SUPER_ADMIN. Acrescentar a linha aqui não libera o menu para
+   * usuário nenhum, só faz o item aparecer para quem JÁ tem permissão de ver a tela. Não aparecer
+   * para os demais segue não sendo bug.
+   *
+   * ÍCONE `filter`, que é o FUNIL: é a tela do funil de seleção, a ponto de a própria página ter um
+   * funil como marca d'água. `users` já é da Sala De Espera e `table` já é do Gerenciador e da
+   * Central De Vagas, então nenhum dos dois distinguiria a linha na varredura da barra.
+   */
+  { href: "/as/candidatos", icon: "filter", label: "Central De Candidatos", codigo: "as-candidatos" },
 ];
 
 const PAPEL_ROTULO: Record<Papel, string> = {
