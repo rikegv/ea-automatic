@@ -855,8 +855,12 @@
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    color: var(--faint);
-    font-weight: 600;
+    /* O MESMO REALCE DO `.ds-table thead th` (decisão do diretor, 27/08): as duas famílias de
+       tabela do sistema compartilham a máscara (§A.12), então o cabeçalho das tabelas em grade
+       sobe junto com o das tabelas de `<table>`. Manter só uma das duas realçada seria o mesmo
+       que ter duas máscaras. */
+    color: var(--dim);
+    font-weight: 700;
     /* Padrão único de tabela (§A.12): títulos de coluna centralizados. */
     text-align: center;
     /* Cabeçalho CONGELADO (OST ajustes visuais, fase 2c): a primeira linha gruda no topo da área de
@@ -921,8 +925,20 @@
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    color: var(--faint);
-    font-weight: 600;
+    /* ─ O TÍTULO DE COLUNA REALÇADO (decisão do diretor, 27/08) ────────────────────────────
+       O cabeçalho vivia em `--faint`, a cor mais apagada da paleta, com peso 600: sobre o fundo
+       claro ele já pedia esforço, e no TEMA ESCURO (`--faint: #5d6f86` sobre `--table-head-bg:
+       #1a2331`) ele praticamente encostava no fundo. Subir para `--dim` mais peso 700 devolve o
+       contraste sem competir com o dado da célula, que continua em `--text`.
+
+       A MUDANÇA É AQUI, NO ESTILO COMPARTILHADO, e não numa tela só: a §A.12 manda o sistema ter
+       UMA máscara visual de tabela, então cabeçalho realçado em uma tela e apagado nas outras
+       seria criar a segunda máscara. Vale para as 22 tabelas de `ds-table` e, junto com o bloco
+       do `.list-head` mais abaixo, para as 7 em grade. É mudança de PESO e COR do texto: nenhuma
+       largura, nenhum alinhamento e nenhuma estrutura foram tocados, então o §A.20 de cada tela
+       continua valendo como estava. */
+    color: var(--dim);
+    font-weight: 700;
     padding: 12px 16px;
     /* Cabeçalho CONGELADO (OST ajustes visuais, fase 2c), mesma regra das tabelas de grid
        (`.list-head`): uma máscara única de tabela no sistema (§A.12). O sticky vai no `th` porque

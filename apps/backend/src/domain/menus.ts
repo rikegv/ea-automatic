@@ -632,6 +632,33 @@ export const MENUS: MenuDef[] = [
     areas: ["AS"],
     operacoes: ["VagasController.*"],
   },
+  {
+    /**
+     * CENTRAL DE CANDIDATOS (A&S, onda 1). Segundo menu do módulo de Atração e Seleção.
+     *
+     * §A.23, E AQUI ELA VALE COM PESO EXTRA: o menu NASCE SÓ PARA O SUPER_ADMIN. O convergedor do
+     * boot REGISTRA o menu no catálogo (para ele existir e ser selecionável na tela de liberação) e
+     * PARA POR AÍ: nenhuma concessão acontece aqui, nenhum seed é rodado, e não aparecer para os
+     * demais usuários NÃO é bug. Quem libera quem enxerga é o diretor.
+     *
+     * A CONTROLLER INTEIRA é reivindicada, LEITURA INCLUÍDA, como a `VagasController`. O motivo é o
+     * mesmo, com uma agravante: esta é a primeira superfície do sistema com dado pessoal de quem
+     * AINDA NÃO É FUNCIONÁRIO. Enquanto o módulo estiver liberado a ninguém, ele precisa ser
+     * invisível E inerte, inclusive pela URL da API.
+     *
+     * `areas: ["AS"]` é obrigatório: sem declarar, o default é ADM (`AREA_PADRAO_DO_MENU`) e o menu
+     * simplesmente não apareceria para o time de A&S. E o grupo `SELECAO`, além de separar a barra,
+     * é a segunda trava da §A.23: `MENUS_PADRAO_COMUM` filtra por `grupo === "OPERACAO"`, então este
+     * menu fica fora de qualquer backfill futuro por construção.
+     */
+    codigo: "as-candidatos",
+    rotulo: "Central De Candidatos",
+    href: "/as/candidatos",
+    grupo: "SELECAO",
+    ordem: 41,
+    areas: ["AS"],
+    operacoes: ["CandidatosController.*"],
+  },
 ];
 
 /** Menus sempre visíveis, independentemente de configuração (a home nunca some). */

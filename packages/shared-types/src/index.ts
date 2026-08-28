@@ -1762,6 +1762,12 @@ export interface VagaListItem {
   cargoNome: string | null;
   codCliente: string | null;
   clienteNome: string | null;
+  /**
+   * O `IdVacancy` DA VAGA NO PANDAPÉ (ponte puxada da onda 4). Hoje ele só é GUARDADO: nenhuma
+   * varredura e nenhuma chamada de API existem nesta onda. Guardar o código agora é o que permite,
+   * no dia da ponte, casar a vaga do EA com a do ATS sem ter de perguntar de novo.
+   */
+  idVacancyPandape: string | null;
   natureza: VagaNatureza | null;
   vinculo: VagaVinculo | null;
   status: VagaStatus;
@@ -1881,4 +1887,332 @@ export interface VagaContextoAs {
   nome: string;
   /** Pessoas do lado OPOSTO, ativas. Vazio quando ninguém foi marcado ainda. */
   contraparte: { id: string; nome: string }[];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CENTRAL DE CANDIDATOS (A&S, onda 1)
+//
+// O vocabulário do funil de seleção, em um lugar só, porque backend e tela precisam responder a
+// mesma coisa. As REGRAS do funil (o que avança para onde, o que consome posição) NÃO moram aqui:
+// moram em `apps/backend/src/domain/candidatura.ts`, puras e testadas, no mesmo espírito de
+// `domain/vaga.ts`. Aqui ficam só a lista de valores, os rótulos e a forma do que trafega.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * DE ONDE O CANDIDATO VEIO. `PANDAPE` é reservado para a onda 4 (a varredura do ATS), e hoje só a
+ * coluna existe: nenhuma chamada de API é feita nesta onda.
+ */
+export const AS_CANDIDATO_ORIGEM = ["PANDAPE", "MANUAL", "INDICACAO", "BANCO_TALENTOS"] as const;
+export type AsCandidatoOrigem = (typeof AS_CANDIDATO_ORIGEM)[number];
+
+export const AS_CANDIDATO_ORIGEM_LABEL: Record<AsCandidatoOrigem, string> = {
+  PANDAPE: "Pandapé",
+  MANUAL: "Cadastro Manual",
+  INDICACAO: "Indicação",
+  BANCO_TALENTOS: "Banco De Talentos",
+};
+
+/**
+ * AS ETAPAS DO FUNIL, NA ORDEM. A ordem desta lista é a ordem do funil, e é dela que o domínio
+ * deriva o que avança para onde.
+ *
+ * `ENTREVISTA_CLIENTE` É OPCIONAL, e isso não é exceção de borda: pular de `ENTREVISTA_SOULAN`
+ * direto para `APROVACAO` é caminho legítimo, e boa parte dos processos faz exatamente isso. Quem
+ * modela esse pulo explicitamente é `AVANCOS_PERMITIDOS`, no domínio.
+ */
+export const CANDIDATURA_ETAPAS = [
+  "CAPTACAO",
+  "TRIAGEM",
+  "ENTREVISTA_SOULAN",
+  "ENTREVISTA_CLIENTE",
+  "APROVACAO",
+] as const;
+export type CandidaturaEtapa = (typeof CANDIDATURA_ETAPAS)[number];
+
+export const CANDIDATURA_ETAPA_LABEL: Record<CandidaturaEtapa, string> = {
+  CAPTACAO: "Captação",
+  TRIAGEM: "Triagem",
+  ENTREVISTA_SOULAN: "Entrevista Soulan",
+  ENTREVISTA_CLIENTE: "Entrevista Cliente",
+  APROVACAO: "Aprovação",
+};
+
+/**
+ * A SITUAÇÃO DA CANDIDATURA, que é coisa DIFERENTE da etapa: a etapa diz onde a pessoa está no
+ * funil, a situação diz se o processo dela segue vivo, terminou bem ou terminou.
+ *
+ * SÓ `APROVADO` E `CONTRATADO` CONSOMEM POSIÇÃO. `ATIVO` é gente em seleção, que não ocupa nada, e
+ * `DESCARTADO`/`DESISTIU` estão fora da conta: nunca somam nem subtraem.
+ */
+export const CANDIDATURA_SITUACOES = [
+  "ATIVO",
+  "APROVADO",
+  "DESCARTADO",
+  "DESISTIU",
+  "CONTRATADO",
+] as const;
+export type CandidaturaSituacao = (typeof CANDIDATURA_SITUACOES)[number];
+
+export const CANDIDATURA_SITUACAO_LABEL: Record<CandidaturaSituacao, string> = {
+  ATIVO: "Em Seleção",
+  APROVADO: "Aprovado",
+  DESCARTADO: "Descartado",
+  DESISTIU: "Desistiu",
+  CONTRATADO: "Contratado",
+};
+
+/**
+ * A SAÍDA SEM ÊXITO, e a régua de quem AINDA ESTÁ NO PROCESSO. Sobe para o vocabulário compartilhado
+ * porque a TELA passou a precisar dela: desde a peça P1 do bug 1, a Central de Candidatos mostra a
+ * etapa só enquanto a candidatura está viva, e o filtro de etapa só alcança quem está vivo.
+ *
+ * UMA DEFINIÇÃO SÓ, E É ESTA. O domínio do backend (`domain/candidatura.ts`) DELEGA para cá em vez
+ * de manter a lista dele: duas cópias da mesma régua divergem no primeiro dia em que alguém
+ * acrescentar uma situação nova em uma delas, e esta régua decide quem ocupa posição de vaga.
+ *
+ * A DERIVAÇÃO É FAIL-CLOSED, e a direção importa: `candidaturaViva` é o COMPLEMENTO de
+ * `ehSaidaSemExito`, então situação nova nasce VIVA, isto é, protegida pela trava de duplicata, até
+ * alguém decidir explicitamente que ela encerra o processo. O caminho contrário faria a situação
+ * nova nascer "encerrada" em silêncio.
+ */
+export function ehSaidaSemExito(s: CandidaturaSituacao): boolean {
+  return s === "DESCARTADO" || s === "DESISTIU";
+}
+
+/** Esta candidatura ainda ocupa lugar no processo? Complemento exato de `ehSaidaSemExito`. */
+export function candidaturaViva(s: CandidaturaSituacao): boolean {
+  return !ehSaidaSemExito(s);
+}
+
+/** O que se registra no histórico de uma candidatura. Texto livre fica no resumo, não aqui. */
+export const AS_CONTATO_TIPO = [
+  "LIGACAO",
+  "WHATSAPP",
+  "EMAIL",
+  "ENTREVISTA",
+  "OBSERVACAO",
+] as const;
+export type AsContatoTipo = (typeof AS_CONTATO_TIPO)[number];
+
+export const AS_CONTATO_TIPO_LABEL: Record<AsContatoTipo, string> = {
+  LIGACAO: "Ligação",
+  WHATSAPP: "WhatsApp",
+  EMAIL: "E-mail",
+  ENTREVISTA: "Entrevista",
+  OBSERVACAO: "Observação",
+};
+
+/**
+ * A LINHA DA LISTA DE CANDIDATOS, e ela é DELIBERADAMENTE POBRE (§A.6, minimização).
+ *
+ * O QUE NÃO ESTÁ AQUI: CPF, e-mail, telefone e data de nascimento. A lista é a superfície que mais
+ * circula (fica na tela, entra em captura de tela, seria a primeira a virar exportação), e nada nela
+ * precisa do número. Quem responde "com CPF ou sem" é `temCpf`, um booleano; o número em si só sai
+ * na FICHA de um candidato, que é o único lugar com uso legítimo para ele.
+ */
+export interface AsCandidatoListItem {
+  id: string;
+  nome: string;
+  origem: AsCandidatoOrigem;
+  cidade: string | null;
+  uf: string | null;
+  /** Tem CPF cadastrado? O booleano responde à tela sem o número trafegar. */
+  temCpf: boolean;
+  /** Em quantas vagas esta pessoa está, contando só as candidaturas vivas ou já aprovadas. */
+  candidaturasAtivas: number;
+  criadoEm: string;
+}
+
+/**
+ * A FICHA de um candidato: o ÚNICO lugar em que os dados de contato e o CPF trafegam.
+ *
+ * `anonimizadoEm` preenchido quer dizer que a retenção venceu e os identificadores diretos já foram
+ * descartados (ver o expurgo por retenção). A linha continua existindo para o histórico das vagas
+ * não sumir junto.
+ */
+export interface AsCandidatoFicha {
+  id: string;
+  nome: string;
+  cpf: string | null;
+  email: string | null;
+  telefone: string | null;
+  dataNascimento: string | null;
+  cidade: string | null;
+  uf: string | null;
+  origem: AsCandidatoOrigem;
+  criadoEm: string;
+  anonimizadoEm: string | null;
+  candidaturas: AsCandidaturaItem[];
+}
+
+/** Uma candidatura como as telas a enxergam: a pessoa, a vaga e onde ela está no funil. */
+export interface AsCandidaturaItem {
+  id: string;
+  candidatoId: string;
+  candidatoNome: string;
+  vagaId: string;
+  vagaCodigo: string | null;
+  vagaNome: string | null;
+  etapa: CandidaturaEtapa;
+  situacao: CandidaturaSituacao;
+  motivoDescarte: string | null;
+  alocadoEm: string;
+  alocadoPorNome: string | null;
+  /**
+   * QUANDO ESTA CANDIDATURA ANDOU: etapa, situação, saída. NÃO se move com o registro de contato, e
+   * é por isso que `ultimoContatoEm` existe ao lado dela em vez de no lugar dela.
+   */
+  atualizadoEm: string;
+  /**
+   * QUANDO FALAMOS COM ESTA PESSOA PELA ÚLTIMA VEZ. Nulo quer dizer que nenhum contato foi
+   * registrado, que é diferente de zero e diferente de "não andou".
+   *
+   * SÓ ANDA PARA FRENTE: contato retroativo (a ligação de ontem digitada hoje) entra no histórico no
+   * lugar certo da linha do tempo, mas não puxa este carimbo para trás.
+   */
+  ultimoContatoEm: string | null;
+}
+
+/**
+ * A RECUSA DO ENCERRAMENTO DA VAGA, quando ainda há candidato por tratar.
+ *
+ * É o corpo do 409, no mesmo espírito do `needsConfirmation` que a Esteira já usa: um objeto que a
+ * tela CONSOME, e não uma frase que ela teria de interpretar. A diferença para os casos de aceite é
+ * `needsConfirmation: false`: aqui não existe "confirmar mesmo assim". A vaga não fecha com gente em
+ * seleção dentro, e o caminho é tratar cada pendente.
+ *
+ * A LISTA VEM JUNTO porque é ela que faz o modal existir: sem os nomes e as etapas, a tela só
+ * conseguiria dizer "tem gente pendente" e mandar a pessoa procurar quem é.
+ *
+ * §A.6: nome, etapa e o id da candidatura. Sem CPF, sem contato, sem identificador direto.
+ */
+export interface AsVagaFechamentoBloqueado {
+  needsConfirmation: false;
+  reason: "candidatosPendentes";
+  message: string;
+  pendentes: AsCandidaturaPendente[];
+}
+
+/** Um candidato que ainda está EM SELEÇÃO na vaga que se tentou encerrar. */
+export interface AsCandidaturaPendente {
+  candidaturaId: string;
+  candidatoId: string;
+  candidatoNome: string;
+  etapa: CandidaturaEtapa;
+}
+
+/**
+ * A RECUSA DA PRIMEIRA TENTATIVA DE REENTRADA, quando a pessoa JÁ TEVE candidatura ENCERRADA
+ * naquela vaga.
+ *
+ * `needsConfirmation: true`, E A DIFERENÇA PARA `AsVagaFechamentoBloqueado` É EXATAMENTE ESSA: lá o
+ * campo é `false` porque não existe "confirmar mesmo assim" (a vaga não fecha com gente em seleção
+ * dentro, ponto). Aqui existe: a reentrada é legítima, o consultor só precisa saber que está
+ * repetindo um processo que já terminou. O campo diz a verdade sobre o que a tela pode oferecer.
+ *
+ * O QUE A TELA FAZ COM ISSO: mostra a mensagem, o "Estou Ciente" e reenvia a MESMA alocação com
+ * `cienteReentrada: true`. Sem o flag, o backend recusa de novo.
+ *
+ * §A.6: `anterior` traz situação, data e motivo do processo anterior. Sem CPF, sem contato, sem
+ * identificador direto. O motivo é texto do PROCESSO ("perfil não aderente"), não ficha da pessoa.
+ */
+export interface AsReentradaPrecisaCiencia {
+  needsConfirmation: true;
+  reason: "reentradaAposEncerramento";
+  message: string;
+  anterior: AsCandidaturaEncerrada;
+}
+
+/** O processo anterior daquela pessoa NAQUELA vaga: como terminou, quando e por quê. */
+export interface AsCandidaturaEncerrada {
+  situacao: Extract<CandidaturaSituacao, "DESCARTADO" | "DESISTIU">;
+  /**
+   * QUANDO O PROCESSO ANTERIOR FOI ENCERRADO. Vem do carimbo de atualização da candidatura, que é o
+   * momento em que a saída foi registrada, e nulo quando não há carimbo.
+   */
+  encerradaEm: string | null;
+  /** Por que saiu. Nulo quando ninguém escreveu: motivo é opcional no registro da saída. */
+  motivo: string | null;
+}
+
+/**
+ * OS TRÊS TIPOS DE EVENTO da linha do tempo de etapas. DERIVADO no backend a partir de `etapaDe` e
+ * `situacao`, nunca guardado em coluna: uma coluna `tipo` seria um terceiro dado capaz de discordar
+ * dos dois que a produzem.
+ */
+export type AsTipoEventoEtapa = "ENTRADA" | "MOVIMENTO" | "TROCA_VAGA" | "DESFECHO";
+
+/**
+ * UM EVENTO DA LINHA DO TEMPO DE ETAPAS da candidatura (bug 1 da validação do diretor).
+ *
+ * POR QUE ELE EXISTE: `AsCandidaturaItem.etapa` é o RETRATO ATUAL, e ele some da leitura viva quando
+ * a candidatura encerra. Este item é a MEMÓRIA do caminho, e é ele que sustenta a frase "descartado
+ * na Triagem" depois de a etapa sair da tela.
+ *
+ * §A.6: `motivo` é texto do PROCESSO, mesma natureza do `motivoDescarte` que já existe. Não há PII
+ * aqui, e `porNome` é o autor da decisão, não o candidato.
+ */
+export interface AsCandidaturaEtapaItem {
+  id: string;
+  candidaturaId: string;
+  /** Nula na ENTRADA (nasceu ali) e no DESFECHO (que não move, encerra onde está). */
+  etapaDe: CandidaturaEtapa | null;
+  /** Onde ficou, ou onde o desfecho aconteceu. Nunca nula. */
+  etapaPara: CandidaturaEtapa;
+  /** Preenchida SÓ no desfecho. É ela que distingue "andou" de "encerrou". */
+  situacao: CandidaturaSituacao | null;
+  motivo: string | null;
+  porNome: string | null;
+  /**
+   * A TROCA DE VAGA (item 5 do diretor). Preenchidas SÓ quando um Master corrige a vaga da
+   * candidatura, mantendo a mesma linha e a mesma etapa. `vagaPara` preenchida é o que marca o
+   * evento como troca, e é dela que o `tipo` é derivado.
+   */
+  vagaDe: string | null;
+  vagaPara: string | null;
+  /** O nome de divulgação de cada vaga, com o código como reserva. Nulo se a vaga foi apagada. */
+  vagaDeRotulo: string | null;
+  vagaParaRotulo: string | null;
+  ocorridoEm: string;
+  tipo: AsTipoEventoEtapa;
+}
+
+/** Uma linha do histórico da candidatura. Sem PII: o resumo é do processo, não da pessoa. */
+export interface AsContatoItem {
+  id: string;
+  candidaturaId: string;
+  tipo: AsContatoTipo;
+  resumo: string;
+  ocorridoEm: string;
+  registradoPorNome: string | null;
+  criadoEm: string;
+}
+
+/**
+ * A OCUPAÇÃO DE UMA VAGA, sempre DERIVADA e nunca armazenada (a mesma decisão que a vaga já tomou
+ * com os contadores). Guardar um contador de ocupadas seria ter dois números que discordam no dia em
+ * que uma aprovação for desfeita.
+ */
+export interface AsOcupacaoVaga {
+  vagaId: string;
+  posicoesOficiais: number | null;
+  /** APROVADO + CONTRATADO. É a única coisa que consome posição. */
+  ocupadas: number;
+  /** Posições oficiais menos ocupadas, com piso em zero. Nulo quando a vaga não tem meta definida. */
+  livres: number | null;
+  /** Candidaturas ATIVAS. Aparecem na conta da tela e NÃO consomem posição. */
+  emSelecao: number;
+  /** DESCARTADO + DESISTIU. Nunca somam nem subtraem, e ficam aqui só para a tela poder mostrar. */
+  fora: number;
+  /**
+   * Mais ocupadas do que posições. Acontece quando a vaga DIMINUI depois de aprovar, e o sistema
+   * NÃO desfaz aprovação nenhuma: mostra o excedente e deixa a correção para gente.
+   */
+  excedida: boolean;
+}
+
+/** O painel de uma vaga: a ocupação derivada mais quem está nela. */
+export interface AsPainelVaga {
+  ocupacao: AsOcupacaoVaga;
+  candidaturas: AsCandidaturaItem[];
 }

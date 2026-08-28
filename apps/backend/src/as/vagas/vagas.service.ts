@@ -8,6 +8,7 @@ import {
 import { and, asc, desc, eq, inArray, isNotNull, ne } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type {
+  AsVagaFechamentoBloqueado,
   PapelAs,
   VagaCamposObrigatorios,
   VagaContextoAs,
@@ -15,6 +16,7 @@ import type {
   VagaStatus,
 } from "@ea/shared-types";
 import {
+  CANDIDATURA_ETAPAS,
   OPCAO_OUTRA,
   OPCAO_OUTROS,
   REGIAO_OUTRAS,
@@ -30,6 +32,8 @@ import {
 import type { Database } from "../../db/client";
 import { DRIZZLE } from "../../db/drizzle.module";
 import {
+  asCandidatos,
+  asCandidaturas,
   beneficiosCatalogo,
   cargos,
   clientes,
@@ -39,6 +43,7 @@ import {
   vagaBeneficio,
   vagas,
 } from "../../db/schema";
+import { pendentesDeTratamento } from "../../domain/candidatura";
 import {
   codigoJaUsado,
   ladosDaVaga,
@@ -116,6 +121,7 @@ export class VagasService {
       // O rótulo do cliente no sistema é sempre "código - nome de operação" (padrão do wizard); sem
       // nome de operação cadastrado, cai na razão social, que é o que existe.
       clienteNome: v.codCliente ? (l.clienteOperacao ?? l.clienteRazao ?? null) : null,
+      idVacancyPandape: v.idVacancyPandape,
       natureza: v.natureza,
       vinculo: v.vinculo,
       status: v.status,
@@ -499,6 +505,8 @@ export class VagasService {
       cargoId: dto.cargoId ?? null,
       nomeDivulgacao: texto(dto.nomeDivulgacao),
       codCliente: dto.codCliente?.trim() || null,
+      // A PONTE DO PANDAPÉ (onda 4): guarda o código e mais nada. Nenhuma chamada de API.
+      idVacancyPandape: texto(dto.idVacancyPandape),
       natureza: dto.natureza ?? null,
       vinculo: dto.vinculo ?? null,
       status,
@@ -688,6 +696,13 @@ export class VagasService {
    *
    * `enviarParaAdmissao` REGISTRA A INTENÇÃO e não liga nada: a ponte com a esteira é frente
    * separada. Nenhuma admissão, frente ou documento nasce daqui.
+   *
+   * AS DUAS TRAVAS DO FECHAMENTO, NESTA ORDEM, e as duas são independentes:
+   *   TRAVA 5 (nova, ajuste do diretor): TODO CANDIDATO DA VAGA TEM DE ESTAR TRATADO.
+   *   TRAVA DOS DOIS CONTADORES (25/08, intocada): a contagem informada não passa da meta.
+   * A 5 vem primeiro porque ela fala do PROCESSO (tem gente pendurada no funil), enquanto a outra
+   * fala dos NÚMEROS digitados no formulário de fechamento. Recusar pelos números uma vaga que nem
+   * podia ser fechada mandaria a pessoa corrigir o campo errado.
    */
   async fechar(id: string, dto: FecharVagaDto): Promise<VagaListItem> {
     const vaga = await this.db.query.vagas.findFirst({ where: eq(vagas.id, id) });
@@ -695,6 +710,11 @@ export class VagasService {
     if (vaga.status !== "ABERTA") {
       throw new ConflictException("Esta vaga já foi fechada. Recarregue a página.");
     }
+
+    // TRAVA 5: candidato ainda EM SELEÇÃO segura o fechamento. Guarda ACRESCENTADA aqui, ANTES da
+    // trava dos dois contadores, que continua exatamente como estava.
+    await this.travaCandidatosPendentes(id);
+
     /**
      * A TRAVA DOS DOIS CONTADORES (25/08), com os lados conferidos SEPARADAMENTE: sobra no banco não
      * autoriza contratar a mais no oficial. A régua é a do domínio (`excessoDePosicoes`); aqui só se
@@ -735,6 +755,68 @@ export class VagasService {
     const fechada = (await this.list()).find((v) => v.id === id);
     if (!fechada) throw new BadRequestException("Vaga fechada, mas não encontrada na listagem.");
     return fechada;
+  }
+
+  /**
+   * A TRAVA 5: A VAGA SÓ ENCERRA COM TODOS OS CANDIDATOS TRATADOS (ajuste do diretor).
+   *
+   * TRATADO É TER RECEBIDO UMA DECISÃO: `APROVADO`, `CONTRATADO`, `DESCARTADO` ou `DESISTIU`. SÓ
+   * `ATIVO` é pendente. A régua é do domínio (`pendentesDeTratamento`, em `domain/candidatura`), e
+   * NÃO é reescrita aqui: uma segunda lista de situações neste arquivo divergiria da primeira no dia
+   * em que o vocabulário mudasse.
+   *
+   * O QUE ELA IMPEDE: a vaga fechar deixando gente PENDURADA no funil, sem ninguém nunca ter dito o
+   * que aconteceu com ela. Quem foi entrevistado e nunca soube do resultado some junto com a vaga.
+   *
+   * POR QUE A RECUSA DEVOLVE A LISTA, e não só a frase: para a tela abrir o modal e o consultor
+   * tratar cada pendente ALI MESMO. Só com "há 3 candidatos pendentes", a tela teria de mandar a
+   * pessoa procurar quem são, em outra tela, e voltar. O corpo estruturado é o mesmo espírito do
+   * `needsConfirmation` da Esteira, com `needsConfirmation: false`: aqui NÃO existe "confirmar mesmo
+   * assim", porque não é aceite de pendência, é bloqueio.
+   *
+   * ORDEM DA LISTA: pela etapa do funil, do fim para o começo. Quem está na Aprovação é o mais caro
+   * de esquecer e é o primeiro que o consultor precisa decidir; quem está na Captação é o descarte
+   * em massa que ele faz por último.
+   *
+   * §A.6: sai o id da candidatura, o id e o NOME do candidato e a etapa. Sem CPF, sem contato, sem
+   * identificador direto, e a consulta não chega a SELECIONAR o CPF, mesmo tendo a tabela no join.
+   */
+  private async travaCandidatosPendentes(vagaId: string): Promise<void> {
+    const linhas = await this.db
+      .select({
+        candidaturaId: asCandidaturas.id,
+        candidatoId: asCandidaturas.candidatoId,
+        candidatoNome: asCandidatos.nome,
+        etapa: asCandidaturas.etapa,
+        situacao: asCandidaturas.situacao,
+      })
+      .from(asCandidaturas)
+      .innerJoin(asCandidatos, eq(asCandidatos.id, asCandidaturas.candidatoId))
+      .where(eq(asCandidaturas.vagaId, vagaId))
+      .orderBy(asc(asCandidatos.nome));
+
+    const pendentes = pendentesDeTratamento(linhas);
+    if (pendentes.length === 0) return;
+
+    const ordenados = [...pendentes].sort(
+      (a, b) => CANDIDATURA_ETAPAS.indexOf(b.etapa) - CANDIDATURA_ETAPAS.indexOf(a.etapa),
+    );
+
+    const corpo: AsVagaFechamentoBloqueado = {
+      needsConfirmation: false,
+      reason: "candidatosPendentes",
+      message:
+        pendentes.length === 1
+          ? "Esta vaga ainda tem 1 candidato em seleção. Trate esse candidato (aprovar, contratar, descartar ou registrar desistência) antes de encerrar a vaga."
+          : `Esta vaga ainda tem ${pendentes.length} candidatos em seleção. Trate cada um (aprovar, contratar, descartar ou registrar desistência) antes de encerrar a vaga.`,
+      pendentes: ordenados.map((p) => ({
+        candidaturaId: p.candidaturaId,
+        candidatoId: p.candidatoId,
+        candidatoNome: p.candidatoNome,
+        etapa: p.etapa,
+      })),
+    };
+    throw new ConflictException(corpo);
   }
 
   /**

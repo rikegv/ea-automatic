@@ -359,3 +359,51 @@ export const vagaEscolaridadeEnum = pgEnum("vaga_escolaridade", [
   "SUPERIOR_COMPLETO",
   "POS_GRADUACAO",
 ]);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CENTRAL DE CANDIDATOS (A&S, onda 1). Enums espelhados do vocabulário do shared-types
+// (`AS_CANDIDATO_ORIGEM`, `CANDIDATURA_ETAPAS`, `CANDIDATURA_SITUACOES`, `AS_CONTATO_TIPO`), que é a
+// fonte única lida pela tela e pelos DTOs. Aqui é o mesmo vocabulário do lado do banco.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** De onde a pessoa veio. `PANDAPE` é a coluna reservada para a onda 4; nada a alimenta hoje. */
+export const asCandidatoOrigemEnum = pgEnum("as_candidato_origem", [
+  "PANDAPE",
+  "MANUAL",
+  "INDICACAO",
+  "BANCO_TALENTOS",
+]);
+
+/**
+ * ETAPA do funil de seleção. A ordem dos valores é a ordem do funil, e `ENTREVISTA_CLIENTE` fica no
+ * meio mesmo sendo OPCIONAL: quem sabe que dá para pulá-la é a régua do domínio
+ * (`AVANCOS_PERMITIDOS`, em `domain/candidatura.ts`), não o enum.
+ */
+export const candidaturaEtapaEnum = pgEnum("candidatura_etapa", [
+  "CAPTACAO",
+  "TRIAGEM",
+  "ENTREVISTA_SOULAN",
+  "ENTREVISTA_CLIENTE",
+  "APROVACAO",
+]);
+
+/**
+ * SITUAÇÃO da candidatura, coisa diferente da etapa: a etapa diz ONDE a pessoa está, a situação diz
+ * se o processo dela segue vivo. Só `APROVADO` e `CONTRATADO` consomem posição da vaga.
+ */
+export const candidaturaSituacaoEnum = pgEnum("candidatura_situacao", [
+  "ATIVO",
+  "APROVADO",
+  "DESCARTADO",
+  "DESISTIU",
+  "CONTRATADO",
+]);
+
+/** O que se registra no histórico de uma candidatura. */
+export const asContatoTipoEnum = pgEnum("as_contato_tipo", [
+  "LIGACAO",
+  "WHATSAPP",
+  "EMAIL",
+  "ENTREVISTA",
+  "OBSERVACAO",
+]);

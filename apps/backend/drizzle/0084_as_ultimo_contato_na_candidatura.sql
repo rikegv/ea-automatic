@@ -1,0 +1,17 @@
+-- A DATA DO ULTIMO CONTATO DE VERDADE (A&S, ajuste 1 da onda 1).
+--
+-- O PROBLEMA QUE ESTA COLUNA RESOLVE: a listagem mostrava `as_candidaturas.atualizado_em`, que se
+-- move com etapa e com saida e NAO se move com o registro de contato (o insert em `as_contatos` nao
+-- tocava a candidatura). A coluna de "ultimo contato" mostrava, portanto, outra coisa.
+--
+-- POR QUE CARIMBO DESNORMALIZADO, e nao um `max(ocorrido_em)` de `as_contatos`: a alternativa seria
+-- uma consulta por LINHA da listagem, e com 200 linhas sao 200 consultas. O carimbo mata o N+1, e e
+-- por isso que a coluna existe.
+--
+-- `atualizado_em` FICA COMO ESTA. Sao duas perguntas diferentes ("quando esta candidatura andou" e
+-- "quando falamos com esta pessoa"), e juntar as duas num campo so perde uma das respostas.
+--
+-- NASCE NULA, inclusive nas linhas ja existentes, e nula quer dizer "nenhum contato registrado".
+-- NAO ha backfill a partir de `as_contatos` de proposito: o backfill correto seria
+-- `max(ocorrido_em)`, mas em homologacao a tabela esta vazia e inventar historia nao ajuda ninguem.
+ALTER TABLE "as_candidaturas" ADD COLUMN "ultimo_contato_em" timestamp with time zone;
