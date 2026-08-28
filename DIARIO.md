@@ -11615,3 +11615,81 @@ por dado nenhum.
    pertence à outra linha de trabalho, e trazê-lo para cá misturaria de novo o que este dia separou.
 3. **A ponte com o Pandapé** existe como coluna e não como código: `vagas.id_vacancy_pandape` é
    guardada e nunca lida. O de/para de etapas continua sendo insumo do diretor.
+
+---
+
+## 28/08/2026 (noite): a Central de Candidatos entra em produção, e o carimbo que quase a impediu
+
+Publicação autorizada pelo diretor depois da validação no 3120. A frente de A&S saiu da branch e
+entrou na `main`, com as 5 migrations aplicadas e os serviços reiniciados. **O menu continua
+liberado a ninguém** (§A.23): a tela existe e o time não a vê até o diretor liberar por perfil.
+
+### O achado que teria quebrado a subida, e por que ele não aparece em teste nenhum
+
+Antes de rodar o migrator, a conferência do journal mostrou um problema que **não é de código, é de
+relógio**. O drizzle não aplica migration por número: ele aplica quando
+`ultimo_aplicado.created_at < migration.when`, e nada mais.
+
+Produção já tinha a `0087` do Exame, carimbada em **1787500000000**. As migrations de A&S nasceram
+numa linha paralela, dias antes:
+
+| Migration | Carimbo | O que aconteceria |
+|---|---:|---|
+| 0083 (as_candidatos, as_candidaturas, as_contatos) | 1787321661927 | **pulada**, é menor que a 0087 |
+| 0084 (último contato) | 1787321662927 | **pulada** |
+| 0085 (unique parcial da reentrada) | 1787321663927 | **pulada** |
+| 0088 (histórico de etapas) | 1787931350975 | aplicaria, e **falharia** ao referenciar `as_candidaturas` |
+| 0089 (troca de vaga) | 1787945891611 | não chegaria a rodar |
+
+O resultado seria uma subida abortada com a transação revertida. **Nenhum teste pegaria isso**, e a
+homologação também não: lá as cinco já estavam aplicadas antes da reconciliação do journal, então
+o migrator nunca precisou decidir. O defeito só existe para um banco que **já passou da 0087**, que
+é exatamente e apenas a produção.
+
+**Base nova continua correta, e isso importa para o futuro:** um banco vazio não tem
+`ultimo_aplicado`, então TODAS as entradas rodam na ordem do array, que é a numérica. Por isso o
+journal commitado **não foi alterado**: mexer no `when` faria o drizzle querer reaplicar as três na
+homologação, onde o `CREATE TABLE` falharia. O journal está certo; quem precisava de conserto era
+uma base específica.
+
+**O conserto** foi um script de uso único que imita a semântica do drizzle: divide por
+`--> statement-breakpoint`, executa na ordem, grava no ledger o `sha256` do arquivo com o
+`folderMillis` do journal, tudo numa transação, e **recusa rodar se o banco alvo não for
+`ea_automatic`**. Depois dele, o migrator normal aplicou a 0088 e a 0089 sozinho. Produção fechou
+com **90 migrations**, as mesmas 90 do journal.
+
+### A prova da §A.27: o ADM não se moveu
+
+Quinze medidas tiradas **antes de tocar em qualquer coisa** e de novo **depois do restart**:
+
+| Medida | Antes | Depois |
+|---|---:|---:|
+| Admissões | 2.773 | **2.773** |
+| Candidatos | 2.731 | **2.731** |
+| Farol concluída · em admissão · banco | 1.776 · 59 · 28 | **idênticos** |
+| Farol declínio · rescisão | 838 · 55 | **idênticos** |
+| Frentes concluídas (Auditoria · Exame · Cadastro · Integração · iFractal) | 1.863 · 1.823 · 1.813 · 154 · 0 | **idênticas** |
+| Frentes, total | 7.592 | **7.592** |
+
+**Diferença zero**, e ela é estrutural, não sorte: a Central de Candidatos vive em tabelas `as_*`
+próprias e não escreve uma linha nas tabelas da admissão.
+
+### O recorte, e as duas dívidas que saíram do limbo junto
+
+A `main` recebeu **42 arquivos e 9.432 linhas** de A&S, em quatro commits de código mais o diário.
+Nenhum arquivo de ADM foi alterado pelo merge, o que era o risco: a worktree carregava 23 cópias
+velhas de frentes já em produção, e elas foram descartadas ainda no commit da branch.
+
+Aproveitando a janela, dois commits **só de documentação**, sem uma linha de código:
+
+- **`6d84dfd`**, o `CLAUDE.md` com as regras §A.28 a §A.32, que viviam só na árvore de trabalho e
+  corriam o mesmo risco que o A&S corria.
+- **`d3a91dc`**, as seis entradas de diário de 23 a 28/08 que esperavam desde o recorte adiado de
+  27/08. O motivo do adiamento era não arrastar o A&S para produção junto com o diário; quando o
+  A&S ganhou branch própria, o motivo deixou de existir.
+
+### Estado
+
+Produção no ar: proxy, frontend, backend e ai-service ativos, `/login` e `/api/health` em 200. As
+duas centrais abrem, a Esteira mantém as cinco abas do ADM, e o catálogo registrou `as-candidatos`
+como menu novo com **zero concessões**, como manda a §A.23.
