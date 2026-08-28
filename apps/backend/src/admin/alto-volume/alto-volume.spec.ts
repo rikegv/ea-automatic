@@ -28,12 +28,22 @@ const ESCRITAS = [
   "criarVaga",
   "atualizarVaga",
   "removerVaga",
-  // Onda 3 (vínculo por correção).
-  "vincular",
+  // Onda 3 (vínculo por correção), o que sobrou fechado: as duas ações da TELA do Alto Volume.
   "vincularEmLote",
   "atualizarVinculo",
-  "desvincular",
 ];
+
+/**
+ * ALOCAR E DESALOCAR PELA FICHA são a EXCEÇÃO entre as escritas, por decisão do diretor (28/08/2026):
+ * abertas a QUALQUER autenticado, como o resto do trabalho.
+ *
+ * POR QUE ESTE TESTE EXISTE, e não é formalidade: reivindicar estas duas de volta para o menu
+ * `alto-volume` reproduz exatamente o defeito que a decisão corrigiu. O menu é do Gerencial e nasce
+ * só para o SUPER_ADMIN (§A.23), então o consultor COMUM tomava 403 para corrigir a alocação, embora
+ * já alocasse no ato pela Liberação e pelo wizard (insert de origem LIBERACAO, dentro de
+ * `liberar`/`criar`, sem menu). Se alguém fechar de novo, quebra aqui antes de ir ao ar.
+ */
+const ALOCACAO_PELA_FICHA = ["vincular", "desvincular"];
 
 /**
  * As leituras da ONDA 3 são gatadas por menu, ao contrário de `list`/`obter`. Elas devolvem NOME DE
@@ -58,7 +68,14 @@ describe("Alto Volume: classe sem @Roles (a régua que derrubou a Liberação n�
 
   it("nenhum método tem @Roles: quem governa a escrita é o MENU", () => {
     const proto = AltoVolumeController.prototype as unknown as Record<string, unknown>;
-    for (const m of [...ESCRITAS, ...LEITURAS_DE_VINCULO, ...LEITURA_AGREGADA, "list", "obter"]) {
+    for (const m of [
+      ...ESCRITAS,
+      ...ALOCACAO_PELA_FICHA,
+      ...LEITURAS_DE_VINCULO,
+      ...LEITURA_AGREGADA,
+      "list",
+      "obter",
+    ]) {
       expect(Reflect.getMetadata(ROLES_KEY, proto[m] as object), m).toBeUndefined();
     }
   });
@@ -68,6 +85,22 @@ describe("Alto Volume: escrita gated por menu, leitura aberta", () => {
   it("TODA escrita é reivindicada pelo menu alto-volume", () => {
     for (const m of ESCRITAS) {
       expect(menuDaOperacao("AltoVolumeController", m), `escrita ${m}`).toBe("alto-volume");
+    }
+  });
+
+  it("alocar e desalocar PELA FICHA ficam abertas: é trabalho de qualquer consultor", () => {
+    for (const m of ALOCACAO_PELA_FICHA) {
+      expect(menuDaOperacao("AltoVolumeController", m), `alocação ${m}`).toBeNull();
+    }
+  });
+
+  /**
+   * O RECORTE É O PONTO: soltar a alocação NÃO pode soltar o cadastro junto. Se alguém tirar do menu
+   * uma operação a mais, este teste quebra.
+   */
+  it("soltar a alocação não solta o cadastro: as demais escritas seguem fechadas", () => {
+    for (const m of ["create", "update", "remove", "criarGrupo", "criarVaga", "vincularEmLote"]) {
+      expect(menuDaOperacao("AltoVolumeController", m), `ainda fechada: ${m}`).toBe("alto-volume");
     }
   });
 

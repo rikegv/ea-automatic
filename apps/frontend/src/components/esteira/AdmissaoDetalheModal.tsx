@@ -361,7 +361,7 @@ export function AdmissaoDetalheModal({
 }) {
   // `isAdmin` (MASTER ou SUPER_ADMIN) governa a VISIBILIDADE das correções. A autoridade continua
   // sendo o `@Roles` das rotas: esconder o botão é conveniência, não segurança.
-  const { token, isAdmin, temMenu } = useAuth();
+  const { token, isAdmin } = useAuth();
   const [data, setData] = useState<AdmissaoDetalhe | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -890,51 +890,63 @@ export function AdmissaoDetalheModal({
               </div>
             )}
 
-            {/* CORREÇÕES DE MASTER (OST Onda 3, item 1, parte 3). Só MASTER/SUPER_ADMIN VÊ, e o
-                `@Roles` das duas rotas é quem de fato barra o consultor comum. São as interfaces dos
-                motores dos itens 8 e 9, que já existiam e só não tinham botão. */}
-            {isAdmin && !somenteLeitura && (
+            {/* CORREÇÕES. O BLOCO ABRE PARA QUALQUER USUÁRIO (decisão do diretor, 28/08/2026), e o
+                que era `isAdmin` no contêiner desceu para os BOTÕES que de fato são de Master.
+                Antes o bloco inteiro só renderizava para MASTER/SUPER_ADMIN, e era essa a segunda
+                trava da alocação: mesmo com a permissão do backend solta, o consultor COMUM não via
+                o botão porque o contêiner não existia para ele.
+                O RECORTE É O PONTO (§A.26): "Trocar cliente e cargo" e "Corrigir CPF" continuam
+                gatadas por `isAdmin` uma a uma, porque as rotas das duas são `@Roles` MASTER no
+                backend. Abrir o bloco sem descer o gate poria dois botões de 403 na cara do
+                consultor. SÓ A ALOCAÇÃO foi liberada, que é o que a OST pediu. */}
+            {!somenteLeitura && (
               <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border)] px-3 py-2">
                 <span className="text-[11px] uppercase tracking-wide text-faint">Correções</span>
                 <div className="ml-auto flex flex-wrap gap-2">
-                  <Button
-                    variant="secondary"
-                    className="!py-1.5 !text-[12.5px]"
-                    onClick={() => {
-                      setTrocaErro(null);
-                      setTrocaAberta(true);
-                    }}
-                  >
-                    Trocar cliente e cargo
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    className="!py-1.5 !text-[12.5px]"
-                    onClick={() => {
-                      setCpfErro(null);
-                      setCpfDuplicado(null);
-                      setCpfNovo("");
-                      setCpfAberto(true);
-                    }}
-                  >
-                    Corrigir CPF
-                  </Button>
-                  {/* ALOCAR EM ALTO VOLUME (item 3). Gatado por `temMenu("alto-volume")` e NÃO por
-                      papel: a escrita do vínculo é reivindicada por aquele menu no backend, então
-                      quem não o tem tomaria 403 num botão visível. Quem enxerga o botão é decisão do
-                      diretor pela tela de permissão de menu (§A.23), não desta tela. */}
-                  {temMenu("alto-volume") && (
-                    <Button
-                      variant="secondary"
-                      className="!py-1.5 !text-[12.5px]"
-                      onClick={() => {
-                        setAlocErro(null);
-                        setAlocAberta(true);
-                      }}
-                    >
-                      Alocar em Alto Volume
-                    </Button>
+                  {isAdmin && (
+                    <>
+                      <Button
+                        variant="secondary"
+                        className="!py-1.5 !text-[12.5px]"
+                        onClick={() => {
+                          setTrocaErro(null);
+                          setTrocaAberta(true);
+                        }}
+                      >
+                        Trocar cliente e cargo
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        className="!py-1.5 !text-[12.5px]"
+                        onClick={() => {
+                          setCpfErro(null);
+                          setCpfDuplicado(null);
+                          setCpfNovo("");
+                          setCpfAberto(true);
+                        }}
+                      >
+                        Corrigir CPF
+                      </Button>
+                    </>
                   )}
+                  {/* ALOCAR EM ALTO VOLUME (item 3). SEM GATE, para qualquer usuário autenticado,
+                      por decisão do diretor (28/08/2026). Era gatado por `temMenu("alto-volume")`
+                      porque o backend reivindicava a escrita para aquele menu, e o resultado prático
+                      era o consultor COMUM sem conseguir alocar: o menu é do Gerencial e nasce só
+                      para o SUPER_ADMIN (§A.23). Só que ele JÁ ALOCA no ato, pela Liberação e pelo
+                      wizard, onde o bloco de Alto Volume nunca teve gate. As duas escritas da ficha
+                      (`vincular`, `desvincular`) saíram do menu no backend, então o botão não some
+                      nem toma 403. O CADASTRO do Alto Volume continua fechado pelo menu. */}
+                  <Button
+                    variant="secondary"
+                    className="!py-1.5 !text-[12.5px]"
+                    onClick={() => {
+                      setAlocErro(null);
+                      setAlocAberta(true);
+                    }}
+                  >
+                    Alocar em Alto Volume
+                  </Button>
                 </div>
               </div>
             )}

@@ -337,10 +337,24 @@ export const MENUS: MenuDef[] = [
       // que DEVOLVEM NOME (`listarVinculos`, `listarOrfaos`) seguem fechadas logo abaixo.
       "AltoVolumeController.listarVinculos",
       "AltoVolumeController.listarOrfaos",
-      "AltoVolumeController.vincular",
+      // ALOCAR E DESALOCAR PELA FICHA FICAM FORA, e a ausência é decisão do diretor (28/08/2026),
+      // não descuido. `vincular` e `desvincular` são a ação do botão "Alocar em Alto Volume" da ficha
+      // da admissão, e ela é liberada para QUALQUER usuário autenticado.
+      //
+      // POR QUE ESTAVAM FECHADAS E ISSO ERA UM DEFEITO DE OPERAÇÃO: o menu `alto-volume` é do
+      // Gerencial e nasceu só para o SUPER_ADMIN (§A.23), então o consultor COMUM não tinha como
+      // alocar depois do fato. Só que ele JÁ ALOCA no ato, pela Liberação e pelo wizard (o insert de
+      // origem LIBERACAO mora dentro de `liberar`/`criar`, que não são reivindicados por menu
+      // nenhum). Alocar na entrada era liberado, corrigir depois era 403, e é pelo caminho da
+      // CORREÇÃO que a operação de verdade passa.
+      //
+      // §A.6 CONFERIDO: as duas escrevem só em `admissao_projeto` (admissão, frente, documento e
+      // farol seguem intocados) e não devolvem PII. As LEITURAS que devolvem NOME de candidato
+      // (`listarVinculos`, `listarOrfaos`) continuam fechadas logo acima, e com elas o resto do
+      // cadastro. `vincularEmLote` e `atualizarVinculo` também seguem fechadas: são ações da TELA do
+      // Alto Volume, que é do Gerencial, e nenhuma delas é alcançável pela ficha.
       "AltoVolumeController.vincularEmLote",
       "AltoVolumeController.atualizarVinculo",
-      "AltoVolumeController.desvincular",
     ],
   },
   {
