@@ -10910,3 +10910,593 @@ Gate: typecheck backend e frontend limpos, **140 arquivos de teste, 1.555 testes
 2.822 de 2.822, e validação do diretor na tela em produção.
 
 **Com a junção fechada, o Banco de Talentos fica destravado.**
+
+---
+
+## 23/08/2026: volume processado pela IA, para o slide de investimento do Soul Talent
+
+Levantamento pedido pela diretoria: quanto a IA já processou desde o início do uso, para dividir o
+valor faturado pelo volume e achar o custo unitário. Nada construído, só medição.
+
+### Os dois números, e por qual régua
+
+| Métrica | Volume | Período medido |
+|---|---:|---|
+| **Documentos auditados (candidato x tipo)** | **2.666** | 22/07 a 22/08/2026 |
+| Arquivos lidos pela IA | 3.518 | idem |
+| Chamadas de auditoria ao Gemini | 2.953 (2.943 OK, 10 falhas 503) | 23/07 a 22/08 |
+| Candidatos com prontuário auditado | 257 | idem |
+| **Kits montados pela IA** | **85** (77 pelo motor novo em 46 lotes, 8 pelo fluxo antigo) | 24/07 a 21/08 |
+
+**A escolha de contar por DOCUMENTO e não por arquivo** é a decisão que vale registro. A auditoria da
+IA é **por conjunto**: um documento chega em vários arquivos (CTPS deu 573 arquivos para 215
+documentos; RG e CPF vêm frente e verso). "Documento" é a unidade da régua documental e a unidade que
+o negócio entende. Contar por arquivo infla 32% sem representar mais trabalho feito.
+
+Nos kits, contar **por funcionário e não por lote** pelo motivo espelhado: o lote é operacional (o
+operador sobe N PDFs de uma vez), o kit é o produto (um PDF por pessoa). 66 lotes subestimaria.
+
+### A ressalva que muda o cálculo, e que foi reportada junto
+
+Os R$ 152,27 cobrem **dois meses**, incluindo o desenvolvimento e teste (o motor entrou em 30/06, há
+erro de chamada registrado desde 08/07). Mas o volume contável **só começa em 22/07**: antes disso o
+`ea-ai-service` rodava fora do systemd, **sem log de acesso**, e as admissões de teste daquele período
+foram substituídas pela carga da base real. Esse consumo está na fatura e não está no volume.
+
+Efeito prático: o custo unitário sai **superestimado**, ou seja, é teto seguro. R$ 0,057 por documento
+e R$ 0,59 por prontuário completo, os dois já com o teste embutido.
+
+### Onde os números foram buscados, para a próxima vez não redescobrir
+
+- **Documentos:** `documento_arquivos_coletados` no banco. A marca só é gravada DEPOIS de a auditoria
+  concluir, então "tem marca" equivale a "passou pela IA". Zero candidato de teste: os 3.518 arquivos
+  são 100% de admissões que entraram pelo Pandapé.
+- **Chamadas:** `journalctl --user -u ea-ai-service`, contando `POST /auditoria/documento`.
+- **Kits:** não há persistência. Os jobs do motor vivem em memória com TTL de 2h, e o histórico da F9
+  antiga é um array em memória que morre no restart. O número saiu de pares distintos (job, índice)
+  nos downloads do journal, mais o log `Kit enviado à fila de assinatura` do backend (56 eventos, 54
+  admissões distintas), cruzado com os 52 envelopes do banco.
+
+**Fica o registro de que kit gerado não deixa rastro em banco.** Se o volume de kit virar indicador
+recorrente, isso precisa de uma linha de trilha, senão a próxima medição vai depender de journal, que
+tem retenção limitada.
+
+---
+
+## 24/08/2026: A&S Central de Candidatos, investigação da API e o fluxo padrão
+
+Frente seguinte do Soul Talent, depois da Central de Vagas. **Nada construído, nada commitado**: a
+OST era estudo e desenho para o diretor lapidar. Cinco documentos em `docs/`.
+
+### Método: NÃO se conectou ao Pandapé, e isso foi escolha
+
+A ordem foi "não se conectar, não usar credencial, não puxar dado real". Havia dúvida se o **swagger
+público** cabia nessa proibição, e a §A.14 manda parar na dúvida em vez de decidir sozinho. Então
+nenhuma requisição saiu, nem à API, nem ao swagger.
+
+O que sustentou o relatório foi mais forte que documentação pública: **quatro investigações
+anteriores feitas ao vivo com credencial real** (30/06, 01/07 duas, 02/07), com HTTP anotado endpoint
+a endpoint, mais o cliente de produção. Sobraram três lacunas, todas nomeadas, que uma leitura
+autorizada fecha numa sessão.
+
+### Entrega 1: dá para puxar candidato, e a credencial não é o problema
+
+`GET /v2/matches?IdVacancy=&IdVacancyFolder=&Page=&PageSize=` entrega CPF, nome, contato,
+nascimento, endereço, **etapa** e carimbos de tempo, provado ao vivo com 253 candidatos numa vaga. O
+perfil completo (`/v2/matches/{idMatch}`) traz experiências, formação, idiomas, skills e pretensão
+salarial. **A credencial OAuth já está configurada e funcionando.**
+
+**Candidato solto não existe na API:** a listagem é sempre por vaga (sem `IdVacancy` a chamada é 400).
+Isso é bom, porque é exatamente o modelo do funil por vaga que o negócio pede.
+
+### O achado que ninguém tinha notado: a ponte de vaga não existe
+
+**O EA não sabe qual vaga da Central de Vagas corresponde a qual vaga do Pandapé.** Os códigos da
+base são 522020, 700123, SL0042; os identificadores do Pandapé observados ao vivo são 847, 850,
+61814. Numerações diferentes, ordens de grandeza diferentes, e o documento de importação da base não
+cita o Pandapé uma única vez.
+
+**Por que custa caro:** sem a ponte, a varredura não pode ser escopada nas 198 vagas ABERTAS do EA e
+cai nas 907 ativas do Pandapé, cerca de 1.800 chamadas por ciclo. O teto é **1.000 requisições a cada
+5 minutos e é COMPARTILHADO com o webhook do G.Infor que alimenta a folha**. Com a ponte, a varredura
+custa um quinto e cabe com folga; sem ela, vira rotina diária em vez de tempo real. Três saídas
+registradas no documento, com recomendação.
+
+### Entrega 2 e o rumo: o fluxo padrão, decidido pelo diretor
+
+O diretor bateu os três pontos que travavam:
+
+1. **A trava é por APROVAÇÃO, não por entrada.** O funil aceita 40 numa vaga de 10; trava no 11º
+   aprovado. Foi a recomendação e o motivo é aritmético: travar a entrada em 10 significa que o time
+   só pode olhar 10 pessoas para escolher 10, ou seja, não pode escolher.
+2. **O fluxo é da plataforma, fixo e próprio.** As etapas do Pandapé não se aplicam. Nenhum nome de
+   etapa vindo de fora entra como etapa, nunca.
+3. **Captação antes de Triagem**, e **Entrevista Cliente opcional**.
+
+Fluxo final: `Captação → Triagem → Entrevista Soulan → Entrevista Cliente (opcional) → Aprovação`,
+com o pulo Soulan para Aprovação como caminho **legítimo**, e três saídas de qualquer etapa
+(Descartado, Desistiu, Contratado).
+
+**Entrevista Cliente sem flag na vaga, de propósito.** Uma flag "esta vaga tem entrevista com
+cliente" seria campo novo em código validado no dia anterior (§A.26) e a vida real fura a flag: o
+cliente que "não entrevista" entrevista os dois finalistas quando fica na dúvida. A transição
+legítima cobre os dois mundos sem tocar em nada.
+
+**A trava exige `SELECT ... FOR UPDATE` na vaga.** Dois consultores aprovando o 10º e o 11º ao mesmo
+tempo, cada um contando 9 ocupadas, e a vaga fecha com 11. Contagem antes do insert não impede: entre
+contar e gravar cabe a outra transação. Funciona em toda demonstração e falha na primeira sexta-feira
+movimentada.
+
+### A pergunta que a padronização total abriu, e segue aberta
+
+Se as etapas do Pandapé são ignoradas, **por onde entra quem lá já estava em Finalistas?** Numa vaga
+com 253 inscritos, jogar todo mundo em Captação sem contexto obriga a triar do zero gente que o
+cliente já entrevistou.
+
+Proposta: separar **etapa** de **contexto**. A etapa é sempre Captação, decidida pelo Soul Talent; o
+nome da pasta do Pandapé vira etiqueta cinza no card ("No Pandapé: Finalistas") que não decide nada,
+não conta em nada e não entra em relatório nenhum. Não é mistura de fluxo, é a mesma natureza do
+badge de origem que a admissão já tem. **Aguardando o diretor escolher** entre isso e um de/para de
+entrada.
+
+### Fechar Vaga: o impacto não estava onde parecia
+
+O diretor autorizou tocar a tela validada em 23/08 (§A.26) para o nº de vagas fechadas vir sugerido
+pela contagem de aprovados. A investigação de impacto (§A.27) encontrou duas coisas:
+
+**1. O campo já vem pré-preenchido hoje**, com as POSIÇÕES da vaga (`page.tsx:682`). A melhoria não
+cria a sugestão, **troca a fonte**. Isso muda o tamanho do risco: acrescentar sugestão a campo vazio
+não altera nada; trocar a fonte de um valor já preenchido altera o que acontece quando o operador
+aceita o padrão, que é a maioria dos cliques.
+
+**2. Esse número decide o STATUS da vaga.** `status: (vagasFechadas ?? 0) > 0 ? "ENTREGUE" :
+"FECHADA"`. Hoje a sugestão é sempre 1 ou mais, então aceitar o padrão **sempre** fecha ENTREGUE. Com
+a contagem real, vaga sem ninguém aprovado passa a fechar FECHADA. Provavelmente **corrige** um falso
+positivo, mas mexe no indicador de sucesso da vaga, que o diretor mandou explicitamente não colapsar.
+**Não implementado, aguardando o ok.**
+
+Sub-caso: as 2.363 vagas importadas não têm funil, contariam zero e fechariam todas FECHADA.
+Recomendação registrada: regra dupla (conta quando há funil, mantém o comportamento atual quando não
+há), com o texto de apoio dizendo de onde o número veio.
+
+**Lacuna encontrada no caminho: o método `fechar` não tem teste nenhum.** O que está coberto são os 5
+testes da função pura `vagasFechadasExcedemPosicoes`. A derivação ENTREGUE versus FECHADA, que é
+exatamente o que a mudança alcança, está descoberta. Entra com teste junto.
+
+**Sequenciamento:** a sugestão depende de `as_candidaturas`, que não existe. É o **último** passo da
+frente, não um ajuste avulso.
+
+### Os documentos
+
+| Arquivo | O que é |
+|---|---|
+| `docs/INVESTIGACAO-API-PANDAPE-CANDIDATOS.md` | O que a API entrega de candidato, limites, e o caminho da ponte |
+| `docs/DESENHO-AS-CENTRAL-CANDIDATOS.md` | O desenho completo: três tabelas, telas, ficha, §A.6 |
+| `docs/DESENHO-AS-FLUXO-PADRAO-CANDIDATO.md` | O fluxo padrão final, com as três decisões aplicadas |
+| `docs/INVESTIGACAO-IMPACTO-FECHAR-VAGA-SUGESTAO.md` | O impacto da sugestão no Fechar Vaga |
+| `docs/DESENHO-AS-IMPORTACAO-VAGAS.md` | Da frente anterior, ainda não commitado |
+
+### Para retomar amanhã
+
+**Aguardando o diretor, nesta ordem:**
+
+1. Confirmar as cinco etapas na ordem, com Entrevista Cliente opcional e sem flag na vaga.
+2. Escolher a entrada do Pandapé: Captação com etiqueta de contexto (recomendado) ou de/para.
+3. Fechar Vaga: ok para mexer no ENTREGUE versus FECHADA, e regra dupla ou sempre a contagem.
+
+**Liberado para construir assim que 1 e 2 saírem** (não depende do Pandapé): as três tabelas, a tela,
+o cadastro manual, a alocação e a trava de aprovação.
+
+**Passo seguinte, em paralelo:** a ponte código da vaga do EA com a vaga do Pandapé, e a leitura
+autorizada da API para fechar as três lacunas (inventário de campos do perfil completo, campo de
+origem do candidato, currículo como arquivo).
+
+**Ainda pendente do lado do Pandapé:** o aval do time de Operações deles para usar `GET /v2/matches`
+em produção, pedido registrado por eles em 01/07/2026, e o de/para das etapas se o caminho escolhido
+for o de/para.
+
+### Nota de sessão
+
+Também saiu no período a atualização do painel executivo da diretoria (fase atual, entregas e bugs do
+período), e ela apontou que a Central de Vagas está em **homologação**, não em produção: os 5 commits
+de 23/08 vivem no branch `homolog`, que não foi mergeado na `main` nem empurrado ao remoto.
+
+---
+
+## 26/08/2026: o super admin da homologação, e o re-clone que o apaga toda vez
+
+O diretor não conseguia validar a onda 1 do A&S. O diagnóstico dele estava certo na conclusão, e
+faltava uma peça na causa: ele estava logado como `consultor.as@homolog.local`, papel COMUM, e por
+isso via a Central de Vagas e mais nada. O que ele pediu foi o super admin de homologação
+funcionando, porque é ele que enxerga tudo pelo bypass de papel, sem depender de liberação de menu
+(§A.23). Só homologação, produção intocada.
+
+### O que estava acontecendo
+
+O banco de homologação foi **reclonado em 25/08/2026 às 20:09**. O clone faz duas coisas que, juntas,
+apagam o acesso do diretor:
+
+1. **`anonimizar.sql` renomeia TODOS os usuários** para `usuarioNN@homolog.local`. A conta pessoal
+   dele (`henrique.vieira@soulan.com.br`, que era SUPER_ADMIN com `papel_as = CONSULTOR`) **deixou de
+   existir sob o e-mail dele**. Não foi desativada nem rebaixada: foi renomeada.
+2. **`senha-homolog.mjs` grava uma senha única** (`HML_SENHA`) em todos os usuários clonados. A senha
+   daquela rodada **não ficou registrada em lugar nenhum**: não está no repositório, não está no
+   `infra/.env`, não está no histórico do shell. É passada por variável de ambiente na linha de
+   comando e some com o processo.
+
+O banco tinha quatro contas SUPER_ADMIN (`usuario01`, `04`, `05`, `08`), sendo a `usuario01` ainda por
+cima inativa, e **nenhuma das quatro com senha conhecida**. Testadas com a senha do clone anterior
+(`homolog2026`, que a sessão de 23/08 usava): 401 nas quatro. O `consultor.as@homolog.local` foi
+criado à mão depois do clone, é COMUM, e por isso era o único login vivo. Daí a sensação de "o super
+admin não funciona": ele não existia mais como conta alcançável.
+
+A conferência do próprio `anonimizar.sql` prova o desenho: `SELECT count(*) FROM usuarios WHERE email
+NOT LIKE '%@homolog.local'` aborta o clone se sobrar e-mail real. A renomeação é intencional e correta
+pela §A.6. O que faltava era alguém recriar o acesso depois.
+
+Medido, não deduzido: os 23 usuários clonados compartilham **o mesmo** hash (`4ea4ee0d…`), diferente
+dos hashes de produção. A senha foi trocada de fato; só ninguém a guardou.
+
+### O conserto
+
+Conta de super admin dedicada, criada **fora do fluxo do clone**, casando com o `EA_ADMIN_EMAIL` que
+já estava no `.env` de homologação:
+
+- **`admin@homolog.local`** · SUPER_ADMIN · ativo · `senha_temporaria = false` (sem modal de troca
+  forçada bloqueando a validação).
+- Senha aleatória de 20 caracteres, entregue em **`~/SENHA-HOMOLOG-SUPERADMIN.txt`, modo 0600**, na
+  VM. **Nunca passou pelo chat.**
+- URL: `http://10.18.117.235:3120`, já presente no `ALLOWED_ORIGINS` da homologação.
+
+### A prova (§A.13)
+
+Login real no browser, três telas abertas sem redirecionar. Screenshots em
+`~/ost-superadmin-homolog-prints/`:
+
+| Tela | Resultado |
+|---|---|
+| Início | Menu completo pelo bypass de papel, sem liberação nenhuma |
+| `/as/vagas` Central De Vagas | 3 vagas, cabeçalhos ordenáveis, nada esmagado |
+| `/as/candidatos` Central De Candidatos | 12 cards de KPI, tabela completa, **marca d'água de funil visível** |
+| `/diretoria/alto-volume` | Controle Gerencial, Bienal Dos Livros, 99%, preenchimento por cargo |
+
+Na API, com o token dessa conta: `as/vagas`, `as/candidatos/vaga/:id`, `admin/alto-volume`,
+`admin/usuarios` e o catálogo de menus, todos HTTP 200.
+
+**Nota de harness:** os dois modais globais (Diagnóstico Do Sistema e Liberação Admissional) reabrem a
+cada recarga porque a supressão do "Estou ciente" vive num `useRef`, que o remount zera. Clicar não
+resolve numa corrida com `page.goto`. O que funcionou foi responder `/api/diagnostico/alerta` e
+`/api/admissoes/aguardando-liberacao/contagem` com "nada aceso" via `page.route`: é ruído de captura,
+não a tela sob validação.
+
+### Três coisas encontradas no caminho, nenhuma implementada
+
+**1. Não existe link para a Central de Candidatos na barra lateral.** O menu está registrado no
+catálogo (`as-candidatos`, rótulo "Central De Candidatos", href `/as/candidatos`, grupo SELECAO, área
+AS), a linha está na tabela `menus` da homologação, e o guard de rota está no `menu-rotas.ts`. Mas o
+array `SELECAO` do `Sidebar.tsx` tem **só** a Central De Vagas, e não há link para `/as/candidatos` em
+nenhum outro lugar do frontend (a página de vagas não tem um `router.push` sequer). Hoje só se chega
+**digitando a URL**. Não é permissão faltando, é o item da barra que nunca foi criado. Uma linha para
+consertar, mas mexe em código já validado da onda 1: **§A.26, aguardando o aval.**
+
+**2. O `admin@homolog.local` está sem `papel_as`.** Enxerga tudo, mas **não abre vaga**:
+`ladosDeQuemAbre` barra com "Seu usuário ainda não tem papel de A&S". Se a validação inclui cadastrar
+vaga, falta decidir se ele entra como Consultor ou Recruiter, porque a escolha decide em qual lado da
+vaga ele fica carimbado. **Aguardando a decisão do diretor.**
+
+**3. A conta morre no próximo `clonar.sh`**, que dá `DROP DATABASE`. O conserto de hoje é pontual, não
+estrutural. O `clonar.sh` poderia recriar o super admin ao final (o `EA_ADMIN_EMAIL` e o
+`EA_ADMIN_PASSWORD` já existem no `.env`, e é exatamente o que o `seed.ts` faz no passo 1), fechando o
+buraco de vez. Fora do que foi pedido hoje: **aguardando o aval.**
+
+### Estado
+
+Acesso consertado e provado na tela. Produção não foi aberta em momento nenhum: a única leitura fora
+da homologação foi um `md5(senha_hash)` para comparar se as senhas tinham sido trocadas de fato, sem
+expor e-mail nem hash. Nada commitado nesta sessão, porque nada de código foi alterado: o conserto foi
+um `INSERT ... ON CONFLICT DO UPDATE` no banco de homologação.
+
+Memória atualizada (`ea-homolog-login-visual`): o registro anterior dizia que a conta pessoal do
+diretor abria a homologação, o que deixou de ser verdade no re-clone de 25/08.
+
+---
+
+## 27/08/2026: a 5ª frente iFractal, o total já realizado nas abas e o quadro por loja
+
+Três frentes fecharam no mesmo dia e **já estão em produção**, validadas na tela e commitadas: os
+hashes são `18b747c` (iFractal + KPIs de total realizado) e `4980be8` (quadro de Lojas no Alto
+Volume). Este registro é o passo 6 da §A.25, escrito depois do deploy.
+
+### 1. iFractal, a 5ª frente da Esteira (`18b747c`)
+
+Cadastro do **login e senha do sistema de ponto** por funcionário admitido, controle do time de
+Ponto. O que entrou:
+
+| Peça | O que é |
+|---|---|
+| **Tipo de marcação no cliente** | Enum `tipo_marcacao` (CARTAO · BIOMETRIA · RECONHECIMENTO_FACIAL · APLICATIVO), NOT NULL **default APLICATIVO**, migration **0086**. A admissão herda por leitura, sem cópia. |
+| **5ª frente na Esteira** | Nasce junto do Cadastro pela **porta única** (`nascerCadastroEIntegracao`), herdando os três gatilhos sem tocar nenhum dos três caminhos (§A.26). Diferente da Integração, nasce para **todos** os clientes: todo cliente marca ponto de alguma forma. |
+| **Menu gerencial** | Tabela única com modal de status, na régua da §A.12/§A.29 (ordenação clicável, larguras conferidas). |
+| **Filtros** | 6 filtros, todos **multiselect** (§A.28), pelo componente compartilhado. |
+| **Extração** | +4 colunas novas, o arquivo passa a 117. |
+| **Backfill** | 56 admissões vivas que já haviam atravessado o gate antes da OST: **54 EM_ADMISSAO + 2 BANCO_AGUARDAR**. Idempotente e transacional, só insere linha em `frentes_admissao` no status inicial. Fora dele, por §A.16: declínio, rescisão e pré-admissão. |
+
+**O desenho, e é o coração dele: o iFractal NÃO entra em gate nenhum.** Não abre frente, não libera
+kit e sobretudo **não entra em `admissaoConcluidaSql`**. A admissão termina a esteira sem esperar o
+iFractal, e Painel, Gerenciador e Alto Volume não se movem por causa dele. É controle posterior à
+esteira. Isso está **coberto por teste** (`ifractal-alcance.spec.ts`), que lê o código-fonte e
+reprova se alguma sessão futura pendurar o iFractal naquela expressão.
+
+**A migration pulou de propósito para 0086**, e não 0083: as 0083 a 0085 estão sendo escritas pela
+frente de A&S na worktree de homologação e ainda não subiram. Pular a faixa evita colisão quando as
+duas linhas se encontrarem. Dentro dela, a armadilha que a 0059 já tinha enfrentado: `ALTER TYPE ...
+ADD VALUE` acrescenta o valor mas **não permite usá-lo na mesma transação**, então as linhas de
+`frente_status_catalogo` com tipo `IFRACTAL` são gravadas fora dela, pelo convergedor de boot
+(`IfractalStatusService`).
+
+**O catálogo de status é editável pelo time** (renomear, acrescentar, escolher qual conclui) e vive
+na tabela, não no código. `ORDEM_STATUS.IFRACTAL` fica **vazio de propósito**: semente no mapa criaria
+uma segunda verdade que envelheceria no primeiro rename. O **código** do status é estável e não muda
+ao renomear, senão as admissões já naquele status apontariam para o nada.
+
+**§A.6:** a senha do iFractal é **descartável** (o próprio iFractal força a troca no primeiro acesso),
+fica legível por decisão do diretor e **nunca entra em log**.
+
+### 2. O gate cego da assinatura, corrigido junto e por necessidade
+
+Achado no caminho, dentro do alcance da própria frente (§A.27). O `clicksign-gestao` contava
+`count(*) filter (where concluida) >= 3` **sem filtrar por tipo**, e acertava por acidente: enquanto
+só existiam três frentes elegíveis, qualquer três serviam. Medido na base: **22 admissões furariam o
+gate** assim que o iFractal fosse finalizado nelas, liberando assinatura sem a esteira completa.
+
+Passa a **nomear** AUDITORIA, EXAME e CADASTRO_CONTRATO, o que blinda contra toda frente futura.
+Contagem antes e depois: **1762 e 1762**, nenhuma admissão muda hoje. A correção é preventiva, não
+corretiva.
+
+### 3. KPIs de total já realizado (mesmo commit `18b747c`)
+
+**Concluir tira da fila**, e o efeito colateral era o trabalho feito sumir da tela. Cadastro e Exame
+já tinham o card de realizado; Auditoria, Integração e iFractal não. A contagem que já existia sai do
+`if` por tipo e passa a valer para as cinco abas:
+
+- **Auditorias Finalizadas** (código `ANALISE_OK`)
+- **Integrações Realizadas** (código `REALIZADO`), com a **ordem dos 6 KPIs ajustada** na aba
+- **Logins Finalizados**, no iFractal
+
+**Não conta em dobro por construção:** é um `count` sobre a própria frente, e o unique
+`(admissao_id, tipo)` garante uma frente de cada tipo por admissão. Medido nas cinco abas: concluídas
+e admissões distintas batem exatamente.
+
+### 4. Quadro de Lojas no Alto Volume (`4980be8`)
+
+O Alto Volume mostrava o quadro por cargo e não dizia em **qual loja** a vaga está. Entra o quadro por
+loja (centro de custo) e a **matriz que cruza os dois eixos, clicável** para recortar a análise.
+
+**A garantia que sustenta o cruzamento é aritmética e está coberta em teste:** somar a matriz por um
+eixo devolve exatamente o quadro daquele eixo. É o que impede o cruzamento de virar uma **terceira**
+contagem divergente das duas que já existem, que é como esse tipo de tela costuma quebrar.
+
+Cargo nulo e loja nula são pares **distintos** e não se fundem: admissão sem cargo resolvido e sem
+centro de custo informado são casos reais da base, e agrupá-los esconderia justamente o que a
+diretoria quer ver.
+
+### 5. Rastreabilidade: o quadro de Lojas subiu com o gate vermelho de outra sessão
+
+Registro para não se perder. O quadro de Lojas tinha sido **entregue por outra sessão com o gate
+VERMELHO**: o arquivo de teste `alto-volume-analise.spec.ts` carregava **12 erros de `tsc`** (helper
+`cel` sem tipos, `v = {}` inferido como objeto vazio, dois `find` que podem devolver undefined), o
+que travava a publicação pela §A.25.
+
+**Corrigido nesta subida, com autorização explícita do diretor, e SÓ a tipagem:** os três parâmetros
+ganham tipo (com `| null`, que é caso real testado logo abaixo) e os dois `find` passam por
+`toBeDefined()` antes do acesso. **Nenhuma linha de comportamento foi tocada**: os mesmos campos, os
+mesmos defaults, a mesma aritmética. `toBeDefined()` em vez de `?.` de propósito, porque o opcional
+silenciaria o achado e a asserção passaria comparando com undefined.
+
+### 6. Contagens conferidas (§A.27)
+
+**O iFractal não mexeu em nenhuma contagem**, que era exatamente o risco a afastar:
+
+| Medida | Antes | Depois |
+|---|---|---|
+| Admissões concluídas | 1759 | **1759, idêntico** |
+| As 4 frentes originais | intactas | **intactas** |
+| Gate da assinatura (aptos) | 1762 | **1762** |
+
+A única variação observada no período foi **EM_ANDAMENTO de 111 para 110**, e ela **não é do deploy**:
+foi um **declínio da operação às 20:16**, movimento real de negócio registrado pela própria esteira.
+
+### Estado
+
+As três frentes estão **em produção**, validadas na tela e commitadas (`18b747c`, `4980be8`).
+
+**Este registro do diário NÃO foi commitado, por decisão do diretor (opção 2).** Motivo: o `DIARIO.md`
+e o `CLAUDE.md` carregam trabalho não commitado de **outra sessão** (288 linhas de diário e as regras
+§A.28 e §A.29 no CLAUDE.md), e commitar agora arrastaria a frente de A&S para produção, que é
+justamente o que o diretor não quer. O registro fica **escrito e no working tree**, esperando o
+recorte de escopo (§A.14) da sessão que for fechar o A&S.
+
+---
+
+## 28/08/2026: a admissão começa a trabalhar antes do ASO, e o Exame continua cobrando o documento
+
+Frente do ADM, em produção no commit **`c060c06`**. Regra nova de operação: o cliente precisa da
+pessoa trabalhando antes de o ASO ficar pronto, então entra o status **"Liberado Para Cadastro Sem
+ASO"**, que destrava o avanço (Cadastro, Integração, kit e assinatura) **sem concluir** a frente
+EXAME. A admissão anda até o fim da trilha e **continua na fila do Exame** até o ASO subir.
+
+### O caminho que NÃO foi seguido, e por que a investigação salvou a frente
+
+O desenho inicial do diretor era o status **herdar o carimbo do APTO** para o avanço, evitando tocar
+na Clicksign. A investigação mostrou que não dá, e o motivo é estrutural: `frentes_admissao.concluida`
+é **UM BIT que responde a TRÊS perguntas** de uma vez.
+
+| Pergunta | Quem lê | Resposta que o pedido exige |
+|---|---|---|
+| O gate pode abrir? | `podeAbrirCadastro`, `kitLiberado`, fila do Ass.Click | **sim** |
+| Saiu da fila de trabalho? | fila da aba Exame, KPIs, card "Aptas" | **não** |
+| A frente terminou? | fechamento pelo ASO, arquivamento no Drive, extração, farol | **não** |
+
+Carimbar o bit responderia **sim às três**: tiraria a admissão da fila do Exame, zeraria o card do
+status novo, contaria a liberada no card "Aptas" e, o pior, `concluirExamePorAso` começa com
+`if (frente.concluida) return undefined`, então **o ASO chegando NUNCA fecharia o Exame** e a admissão
+ficaria presa para sempre, sem nem ser arquivada no prontuário. Nove leitores passariam a mentir, dois
+deles em silêncio.
+
+O caminho adotado (**Caminho 1**) é o oposto: quem aprende o status novo é o **GATE**, não o carimbo.
+Nasceu `exameLiberaAvanco`, e `podeAbrirCadastro` passou a perguntar a ela. Como `kitLiberado` **reusa**
+o gate, o contrato passou a sair **sem uma peça nova**, que era a exigência da segunda decisão do
+diretor ("o contrato TEM que sair").
+
+### O que subiu, peça a peça
+
+| Peça | O que é |
+|---|---|
+| **Status no catálogo** | Migration **0087**, molde da 0048. **Sem mudança de schema**: `frentes_admissao.status` é varchar com catálogo, então acrescentar status é um INSERT, com `conclui = false` e ordem 8 entre ASO Pendente e Apto |
+| **Gate** | `EstadoFrente` ganhou `status`, os **11 pontos de leitura** atualizados juntos, **fail-closed**: quem não passar o status recebe o comportamento antigo, que BARRA |
+| **Trava da data** | Só libera com a previsão do ASO **posterior** à data de admissão. Bloqueio duro, sem aceite, no molde do gate do AGENDADO. Regra pura em `domain/exame-liberacao.ts`; qualquer consultor libera |
+| **Blindagem** | O scheduler de hora em hora fica fora do status e o reagendamento parou de sobrescrevê-lo. Sem as duas, a liberação durava menos de uma hora |
+| **Kit e Clicksign** | **Quatro leituras de banco**, nada além (os dois `select` do kit, o `carregarFrentes` do sync, e o "ou o Exame está liberado" na contagem do `listarAptos`) |
+| **ASO fechando** | O status entra na whitelist `STATUS_EXAME_APTO_POR_ASO`, e o carimbo do farol, **segurado** enquanto o Exame está liberado, é recolocado quando o Exame fecha |
+| **D1 cirúrgica** | `admissaoConcluidaSql` exclui **apenas** o status novo |
+| **Card** | "Liberado Para Cadastro Sem ASO" na aba Exame, e "Aptas" sem contar a liberada |
+
+### O achado da prova, que só apareceu porque a prova foi feita ao vivo
+
+O recarimbo do farol tinha sido escrito **só no caminho da I.A** (`concluirExamePorAso`). Só que Master
+e Super Admin fecham o Exame em APTO **na tela**, e a operação usa isso. Uma admissão liberada fechada
+por ali terminaria a esteira inteira **sem farol de conclusão**: o Gerenciador a contaria pelas frentes,
+o Painel não a contaria pelo farol, e as duas telas divergiriam em silêncio. É exatamente o defeito da
+Bienal (§A.27), entrando por outra porta. Corrigido nos **dois** caminhos, com teste em cada um.
+
+Foi encontrado porque a prova em homologação fechou o Exame pela tela e o farol **não virou**. Nenhum
+teste teria pego: o elo que faltava não tinha teste, que é a própria lição da §A.26.
+
+### Os dois ajustes finais, pedidos na validação
+
+- **O travessão do modal de reversão** (§A.11): a frase "reabre pendência num candidato já em cadastro"
+  terminava com travessão antes do "confirma?", e passou a terminar com **ponto**, seguido de
+  "**Confirma?**". Era anterior a esta frente; o diretor autorizou corrigir junto.
+- **Desfazer a liberação passou a avisar.** Voltar de "Liberado" para "Agendado" fechava o gate **em
+  silêncio**, numa admissão que podia já estar cadastrada, integrada e com o contrato em assinatura. A
+  regra do alerta deixou de perguntar "a frente concluiu?" e passa a perguntar "**a frente sustentava o
+  gate?**" (`abreGate`), cobrindo os dois recuos. O título da tela acompanha o caso ("Desfazer
+  Liberação"), porque um alerta que se contradiz é pior que alerta nenhum. **Não alerta** ir do liberado
+  para o APTO nem do APTO para o liberado: o gate segue aberto nos dois, e o alerta é sobre FECHAR.
+
+### As provas em produção (§A.27)
+
+**1. Nenhuma contagem se moveu.** Medido antes e depois do deploy, no banco de produção:
+
+| Medida | Antes | Depois |
+|---|---|---|
+| Admissões concluídas | 1773 | **1773** |
+| Farol ADMISSAO_CONCLUIDA · EM_ADMISSAO · BANCO_AGUARDAR | 1761 · 66 · 33 | **idênticos** |
+| Frentes concluídas (Auditoria · Exame · Cadastro · Integração · iFractal) | 1861 · 1818 · 1804 · 141 · 0 | **idênticas** |
+| Admissões no status novo | 0 | **0** |
+
+A D1 cirúrgica é o que garante isso: a expressão exclui **só** o status novo, que não existe em nenhuma
+linha no dia da subida. A régua ampla ("exigir Exame concluído") teria mexido no passado.
+
+**2. O pipeline do envelope da Clicksign, intacto.** `clicksign-api.service.ts`, onde vivem os cinco
+passos, o `POST /notifications`, o balde de 1 por 60s e o teto de 50 por 10s, **não aparece no commit**
+(último commit dele segue sendo o `74e23b9`). O commit tocou 3 arquivos daquela área, e o diff inteiro
+do `clicksign-sync` são 7 linhas úteis: o `select` passou a trazer o status e o `map` a devolvê-lo.
+Muda **quem entra na fila**, não **como o envelope é feito**. Há teste que lê o código-fonte e reprova
+quem mexer na ordem ativar, gravar, notificar.
+
+**3. O ciclo do ASO.** Provado **ponta a ponta em homologação**, com dado real clonado: liberou (as
+frentes de Cadastro, Integração e iFractal nasceram, Exame em `LIBERADO_SEM_ASO` com `concluida=false`),
+o gate da assinatura passou a contar **3 onde antes contava 2** (o contrato sai), o Cadastro concluiu, a
+esteira terminou e o **farol continuou EM_ADMISSAO**; o ASO chegou, o Exame virou APTO e o farol virou
+**ADMISSAO_CONCLUIDA**. **Em produção o ciclo NÃO foi executado ao vivo**, de propósito: liberar uma
+admissão real dispararia envelope de assinatura para uma pessoa real, e isso é decisão do diretor, não
+da fábrica. O que foi medido em produção é somente leitura.
+
+**A base real, hoje, para dimensionar:** 55 admissões vivas com Exame aberto, das quais **7 elegíveis**
+pela trava (6 já com Auditoria concluída, que avançariam na hora), **22 bloqueadas** pela regra da data e
+**26 bloqueadas por falta da previsão do ASO**, que é campo opcional no agendamento. Este último número é
+o efeito colateral conhecido da trava: para liberar, o time precisa preencher a previsão.
+
+### Estado
+
+Produção no ar: backend, frontend, proxy e ai-service ativos, `/api/health` 200, `/login` 200. Migration
+0087 aplicada pelo migrator (84 para 85), catálogo do Exame com o status novo e `conclui = false`.
+Commit `c060c06` empurrado para `origin/main`. **A&S não subiu**: a frente viveu na worktree isolada
+`ost/exame-liberado-sem-aso`, saída da `main`, e o merge foi fast-forward de um commit só, sem nenhum
+arquivo de A&S.
+
+**Este registro não foi commitado**, pelo mesmo motivo da entrada de 27/08: o `DIARIO.md` e o
+`CLAUDE.md` carregam trabalho não commitado de outra sessão, e commitar arrastaria o A&S para produção.
+
+---
+
+## 28/08/2026: alocar candidato no Alto Volume deixa de ser privilégio de Master
+
+Chamado da operação: no Alto Volume, só MASTER e SUPER_ADMIN conseguiam alocar candidato. O time
+comum estava travado. Investigação primeiro (§A.27), correção depois.
+
+### A causa, em duas camadas, e a de baixo era a que enganava
+
+1. **Backend, permissão por menu.** `AltoVolumeController.vincular` e `desvincular` estavam na lista
+   de `operacoes` do menu `alto-volume` (`domain/menus.ts`). Esse menu é do Gerencial e **nasce só
+   para o SUPER_ADMIN** (§A.23). O `MenuGuard` então soltava SUPER_ADMIN (bypass total), soltava
+   MASTER (manda na área inteira) e barrava o COMUM. No banco: **1 dos 14 consultores ativos** tinha
+   o menu marcado.
+2. **Frontend, contêiner de Master.** O botão morava **dentro do bloco "Correções"**, que só
+   renderizava com `isAdmin`. Soltar apenas a camada 1 não teria resolvido nada: o consultor
+   continuaria sem enxergar o botão.
+
+**Que era acidente, e não regra, o próprio sistema mostrava.** O consultor comum **já aloca** em
+Alto Volume no ato, pela Liberação e pelo wizard: lá o bloco de Alto Volume nunca teve gate, e o
+insert de origem `LIBERACAO` mora dentro de `liberar`/`criar`, que não são reivindicados por menu
+nenhum. Alocar na entrada era liberado, corrigir depois era 403. E a operação real vive no caminho
+bloqueado: **144 vínculos por CORRECAO contra 14 por LIBERACAO**.
+
+### O recorte, que é o ponto da entrega
+
+| Ação | Antes | Agora |
+|---|---|---|
+| Alocar em Alto Volume (ficha) | Master e Super Admin | **qualquer autenticado** |
+| Desvincular (mesmo modal) | Master e Super Admin | **qualquer autenticado** |
+| Trocar cliente e cargo | Master | Master, inalterado |
+| Corrigir CPF | Master | Master, inalterado |
+| Cadastro de projeto, grupos e vagas | menu `alto-volume` | inalterado |
+| Vincular em lote, trocar vínculo | menu `alto-volume` | inalterado |
+| Listar vínculos e órfãos (nome de candidato) | menu `alto-volume` | inalterado |
+
+O bloco "Correções" abriu para o consultor **por decisão do diretor**, mas o `isAdmin` **desceu do
+contêiner para os dois botões** que são mesmo de Master, cujas rotas são `@Roles` MASTER no backend.
+Abrir o bloco sem descer o gate poria dois botões de 403 na cara do consultor, que é exatamente o
+defeito que já derrubou o dropdown do Gerador de Kit. O consultor vê o bloco só com a alocação; o
+Master vê a tela idêntica à de ontem.
+
+### Impacto medido antes de mexer (§A.26/§A.27)
+
+O vínculo escreve **só em `admissao_projeto`** (um único insert), sem tocar admissão, frente,
+documento nem farol. A tabela é lida **apenas** pelas superfícies do Alto Volume: os três serviços da
+frente, o insert da liberação e a visão do Controle Gerencial. **Esteira, Gerenciador, KPIs de
+pendência e contagem de concluídas não a leem**, então nenhuma contagem se move. A proteção contra
+vínculo duplo segue de pé, conferida no banco: `admissao_projeto_admissao_id_unique UNIQUE
+(admissao_id)`, mais a recusa explícita do serviço quando a admissão já está em outro projeto.
+
+### Gate e publicação
+
+Typecheck limpo nos dois apps, lint limpo nos arquivos tocados, **1.629 testes backend** e **116
+frontend** verdes. Somados **4 testes de regressão** que travam o recorte: quebram se refecharem a
+alocação, se subirem o `isAdmin` de volta para o contêiner, ou se soltarem as correções de Master
+junto com ela.
+
+Commit `de5885a` empurrado para `origin/main`, publicado por `scripts/deploy-local.sh`. **Sem
+migration**: é permissão, não schema. Produção no ar, backend `/api/health` 200, `/login` 200 pelo
+proxy (3010) e direto (3020), boot limpo com o catálogo de 32 menus convergido.
+
+**A&S não subiu, conferido antes do build:** a produção já estava buildada no HEAD do `main`
+(c060c06), a Central de Candidatos e os ajustes de Vagas vivem na branch `homolog`, e o build de
+produção saiu com `/as/vagas` (que já estava no ar) e **sem** rota de candidatos. A homologação
+seguiu ativa e intocada.
+
+**Pendente:** validação do diretor em produção com login comum.
+
+**Este registro não foi commitado**, pelo mesmo motivo das entradas de 27 e 28/08: o `DIARIO.md` e o
+`CLAUDE.md` carregam trabalho não commitado de outra sessão, e commitar arrastaria o A&S.
