@@ -99,6 +99,18 @@ export class CreateVagaDto {
   @MaxLength(40)
   codCliente?: string;
 
+  /**
+   * O `IdVacancy` DA VAGA NO PANDAPÉ (ponte puxada da onda 4 da Central de Candidatos).
+   *
+   * SÓ GUARDA O CÓDIGO. Não existe varredura, não existe chamada de API, nada é buscado com ele:
+   * quem digita é a trilha. Guardar agora é o que permite, no dia da ponte, casar a vaga do EA com a
+   * do ATS sem ter de perguntar o número de novo.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  idVacancyPandape?: string;
+
   // CENTRO DE CUSTO SAIU DA ABERTURA (item 4 da OST de 22/08). Não é campo omitido por engano: o
   // DTO deixa de aceitá-lo de propósito, então corpo antigo com `centroCusto` é rejeitado pelo
   // `forbidNonWhitelisted` em vez de gravar em silêncio um campo que a trilha não pergunta mais.
