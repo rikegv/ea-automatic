@@ -10910,3 +10910,121 @@ Gate: typecheck backend e frontend limpos, **140 arquivos de teste, 1.555 testes
 2.822 de 2.822, e validação do diretor na tela em produção.
 
 **Com a junção fechada, o Banco de Talentos fica destravado.**
+
+---
+
+## 28/08/2026: a Central de Candidatos sai do limbo, e a seleção passa a caber no EA
+
+Frente de A&S validada pelo diretor na homologação e **commitada**, depois de dias vivendo só como
+arquivo solto na worktree. São **4 commits** sobre a base já sincronizada com a produção: `bb8794e`
+(modelo de dados), `f0e8931` (backend), `55462ad` (tela) e `ca5bc7b` (barra lateral). **Não subiu
+para produção**, e isso é decisão do diretor, não pendência técnica.
+
+### Por que este registro começa pelo risco, e não pela funcionalidade
+
+O trabalho passou dias como **4.503 linhas não commitadas**, numa worktree que também servia o
+ambiente de homologação. Um `git checkout` errado, um `restore` distraído ou um re-clone apagariam a
+frente inteira, sem cópia em lugar nenhum. **Não havia rede.** Tirar disso é o que este dia fez, e o
+resto do texto é consequência.
+
+### A ordem da operação, e por que ela NÃO foi a da §A.25 ao pé da letra
+
+A régua manda gate verde antes do commit. O gate estava **vermelho por herança**: 12 erros de `tsc`
+em `alto-volume-analise.spec.ts`, que a `main` **já havia corrigido** em `4980be8` e que a worktree
+de A&S, cinco commits atrás, ainda carregava. Consertar exigia o merge; o merge exigia árvore limpa;
+limpar a árvore exigia commitar ou guardar as 4.503 linhas.
+
+O caminho escolhido foi **guardar, mergear, devolver, então commitar**, e a razão de não commitar
+antes é técnica: o estado intermediário **não compilava**, por um motivo instrutivo. O
+`shared-types` da worktree já conhecia a frente `IFRACTAL`, mas o `domain/frentes.ts` dela era o
+anterior ao iFractal. Tipo novo sem o código que o sustenta são **59 erros de meia-frente**, que é
+exatamente o que o diretor mandou não deixar acontecer. Commitar ali teria gravado na história um
+commit que não constrói.
+
+**O que a §A.25 protege continua protegido:** nada saiu para o remoto antes do verde. O gate existe
+para não publicar quebrado, e publicar é o push.
+
+### A separação que evitou o estrago de verdade
+
+A worktree carregava **duas linhas de trabalho misturadas**, e essa foi a parte delicada: 23
+arquivos de ADM (iFractal, quadro de Lojas, extração do Gerenciador, Exame liberado sem ASO) em
+**cópias velhas**, anteriores às correções que a `main` fez em cima delas.
+
+Commitar aquilo teria sido pior do que perder: a história ganharia uma versão **regredida** de
+trabalho que já está em produção, e o merge seguinte teria de escolher entre duas versões da mesma
+frente sem ninguém saber qual era a boa.
+
+A classificação foi arquivo por arquivo, comparando a cópia da worktree com a da `main`:
+
+| Situação | Quantos | O que foi feito |
+|---|---:|---|
+| Idêntico ao que a `main` já tem | 16 | descartado, a `main` é a autoridade |
+| Difere, e a `main` é mais nova | 7 | descartado, era a versão pré-correção |
+| **Misto** (A&S e ADM no mesmo arquivo) | 2 | **mantido**, e o merge reconciliou |
+| A&S puro | 12 modificados e 25 novos | mantido, é a frente |
+
+Os dois mistos eram `domain/menus.ts` e o `shared-types`. **O merge resolveu os dois sozinho**, e o
+único conflito do dia foi outro.
+
+### O conflito único: o journal das migrations
+
+As duas linhas numeraram migrations em paralelo. A `main` tinha `0086` e `0087`; o A&S tinha `0083`
+a `0085`, `0088` e `0089`, mais uma cópia do `0086`. O journal do drizzle é uma **lista ordenada**, e
+o merge não tem como saber que `0087` entra no meio.
+
+Resolvido por **união pela tag**, com o `0086` entrando uma vez só e o `idx` reindexado. A ordem é
+**numérica, e não pelo carimbo `when`**: as duas linhas correram ao mesmo tempo, então o relógio de
+uma não ordena a outra. Conferido nos dois sentidos: nenhuma entrada sem arquivo `.sql`, nenhum
+`.sql` fora do journal.
+
+**A faixa pulada em 27/08 pagou-se aqui.** O iFractal saltou de `0085` para `0086` de propósito,
+prevendo este encontro. Sem aquele salto, duas migrations diferentes teriam nascido com o mesmo
+número, e o conflito seria de conteúdo, não de ordem.
+
+### O que a frente entrega
+
+**A régua, e ela é a mesma decisão repetida em dois lugares: derivar em vez de guardar.** A ocupação
+da vaga conta as linhas APROVADO e CONTRATADO toda vez que alguém pergunta, e o tipo de cada evento
+do histórico sai da combinação dos campos que o produzem. Um contador salvo seria um segundo número;
+uma coluna `tipo` seria um terceiro dado capaz de discordar dos dois primeiros.
+
+Consequência prática, que apareceu na frente da troca de vaga: **não havia contagem a atualizar**.
+Mudar a vaga da candidatura já deixa as duas vagas certas na leitura seguinte, sem ninguém
+decrementar a origem nem incrementar o destino.
+
+**As cinco travas**, e a que se costuma errar é a quarta: dois consultores aprovando o 10º e o 11º
+ao mesmo tempo. Ela não é uma régua, é o **lugar** onde a contagem acontece, dentro da transação e
+com a linha da VAGA travada. Contar antes do insert responde sobre o passado.
+
+**Os dois caminhos de volta, que o diretor não queria duplicados:**
+
+- **Trazer De Volta**, na linha encerrada, para qualquer consultor: RECOMEÇA, criando processo novo.
+- **Trocar Vaga**, na linha viva, só Master e Super Admin: CORRIGE, mantendo linha e etapa.
+
+Um duplica, o outro mantém, e eles **nunca aparecem juntos na mesma linha**. A reentrada já existia
+inteira e era **inalcançável**: a única porta era o botão de alocar, cuja lista exclui quem tem
+candidatura viva. Faltava a porta, não a regra.
+
+**O descartado saiu do funil**, que era o defeito mais caro: a etapa congelava no último lugar e a
+tela desenhava quem já havia saído dentro do processo. Em troca, o caminho passou a ser gravado,
+porque tirar a etapa da tela sem ter onde guardar por onde a pessoa passou seria trocar dado errado
+por dado nenhum.
+
+### O gate, depois do merge
+
+| Verificação | Resultado |
+|---|---|
+| Typecheck backend | **0 erros** (os 12 herdados morreram com o merge) |
+| Typecheck frontend | **0 erros** |
+| Lint | limpo; 3 avisos de regra não encontrada são pré-existentes e idênticos aos da `main` |
+| Testes backend | **1.687 passando**, 145 arquivos |
+| Testes frontend | **140 passando**, 20 arquivos |
+
+### O que fica pendente, e é decisão do diretor
+
+1. **A Central de Candidatos não vai para produção**, por escolha dele. O código está commitado e no
+   remoto; a subida é conversa separada.
+2. **O `CLAUDE.md` segue não commitado** na worktree de produção, com as regras §A.28 a §A.32. Ele
+   pertence à outra linha de trabalho, e trazê-lo para cá misturaria de novo o que este dia separou.
+3. **A ponte com o Pandapé** existe como coluna e não como código: `vagas.id_vacancy_pandape` é
+   guardada e nunca lida. O de/para de etapas continua sendo insumo do diretor.
