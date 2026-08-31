@@ -11693,3 +11693,93 @@ Aproveitando a janela, dois commits **só de documentação**, sem uma linha de 
 Produção no ar: proxy, frontend, backend e ai-service ativos, `/login` e `/api/health` em 200. As
 duas centrais abrem, a Esteira mantém as cinco abas do ADM, e o catálogo registrou `as-candidatos`
 como menu novo com **zero concessões**, como manda a §A.23.
+
+---
+
+## 2026-08-31 — IDENTIDADE SOUOPERAÇÕES EM PRODUÇÃO (logos por acesso, nome, tela inicial, favicon)
+
+Sessão do ADM. Validado pelo diretor na homologação (3120) e autorizado para produção. No ar em
+`0007c33`.
+
+### O que subiu
+
+- **O nome.** "EA Automatic" virou **SOUOperações**, junto e sem espaço, em todo texto que chega ao
+  usuário: aba do navegador, login, troca de senha, rodapés, e nos títulos de serviço do backend e do
+  ai-service. A grafia é a do próprio logo, com O maiúsculo em Operações, e foi conferida contra a
+  arte, não contra a memória de ninguém.
+- **Os logos por acesso.** Super admin vê Operações, área AS vê Talent, área ADM vê Adm, as duas veem
+  os dois lado a lado, e quem não tem área cai em Operações. Nada disso concede acesso: a régua lê o
+  que o `/auth/me` já autoriza (§A.23).
+- **A tela inicial**, reformada: saudação por horário mais **um card por tela liberada**, no lugar dos
+  três atalhos fixos. O Radar Da Esteira saiu.
+- **Favicon e ícones** do símbolo novo. **CSS órfão** do Radar removido, 169 linhas.
+
+### As três rodadas da névoa, que é o que essa frente tem de aprendizado
+
+A leitura inicial, escrita no código, era que os logos do SOU são "arte clara, desenhada para fundo
+escuro". Medido no arquivo, **isso vale só para METADE da arte**: o monograma é prateado, mas o
+logotipo embaixo traz "Operações"/"Talent"/"Adm" em **cinza chumbo, canal máximo 56 a 71 de 255**.
+Sobre névoa escura, o chumbo some, e era o sintoma que o diretor relatou.
+
+Inverter a névoa para **branca** consertou o texto e criou o problema oposto: o monograma prateado,
+de miolo quase branco, sumiu no branco. Gritou no **SOU Talent**, cujo "ST" tem contorno fino e quase
+nenhuma sombra, ao contrário do "SOU" do Operações, que se segura pelo relevo pesado.
+
+O acerto foi a névoa **cinza-azulada**: clara o bastante para o chumbo ler, escura o bastante para o
+prateado ganhar borda, e a mesma para as duas marcas. O **símbolo** da barra recolhida ficou com
+névoa PRÓPRIA e escura, porque ele não tem logotipo: é arte clara pura, e a necessidade dele é o
+inverso da do lockup.
+
+**Registro de um erro meu, para não se repetir:** eu reportei ao diretor que o arquivo-fonte do
+SOUTalent estava danificado e que ele precisaria subir outro. Estava errado. O arquivo é o único dos
+quatro que **já vinha com recorte pronto** (canal alfa), e a minha rotina fez `convert("RGB")` em
+cima, jogando o alfa fora e expondo o lixo dos pixels transparentes. O borrão era meu. A rotina
+passou a detectar recorte existente e respeitá-lo, e foi isso que devolveu a proporção entre Talent
+e Adm, de **27% de diferença para 3%**.
+
+### A lista de destinos saiu da barra lateral
+
+`lib/navegacao.ts` passou a ser a fonte única: a barra e a tela inicial leem a **mesma** lista. "Se a
+barra mostra X, a home mostra o card de X" virou verdade **por construção**, não por alguém lembrar
+de atualizar dois lugares. É o caminho que o `admin-menus.ts` já tinha aberto aqui pelo mesmo motivo.
+De quebra, cabeçalho de grupo sem itens deixou de ser desenhado: quem só faz A&S via a palavra
+"OPERAÇÃO" sozinha sobre o vazio, com um separador solto abaixo do logo.
+
+### A prova das contagens, e por que ela NÃO é "idênticas"
+
+Gate verde antes de subir: **154 frontend + 1.687 backend + 148 ai-service = 1.989 testes**, mais
+typecheck e lint, rodados na homologação e repetidos na árvore de produção.
+
+Medi as contagens do ADM antes e depois, e **elas diferem**. A diferença não é do que subiu, é de
+**operação viva**, e o método de provar isso fica registrado porque vai servir de novo:
+
+| Delta | Carimbo | O que era |
+|---|---|---|
+| `AGUARDANDO_LIBERACAO` 6 para 7 | 18:55:54, origem PANDAPE | webhook trouxe uma pré-admissão |
+| `EXAME A_AGENDAR` 43 para 41, `AGENDADO` 6 para 8 | 19:03:33 | consultor agendou dois exames |
+
+**O que NÃO mudou é o que importa**: total de frentes por tipo, `ADMISSAO_CONCLUIDA` (1.777),
+`DECLINOU` (839), `RESCISAO` (55), `BANCO_AGUARDAR` (28) e o total de EXAME (2.763, o movimento foi
+interno entre status). E a prova direta: **zero escritas** em `frentes_admissao`, `admissoes` e
+`documentos_admissao` na janela exata do restart (19:09:30 a 19:10:00). A base escreve **6 a 14 vezes
+por hora** o dia inteiro, então "contagem idêntica" seria um resultado suspeito, não tranquilizador.
+
+### Estado
+
+Produção no ar: proxy, frontend, backend e ai-service ativos; `/login` e `/api/health` em **200** no
+ingress. Aba do navegador lê **SOUOperações**, a tela inicial monta os 13 cards, e Esteira,
+Gerenciador, Central De Vagas e Central De Candidatos respondem 200 sem quebra. A&S intacto.
+
+**Esperado, não é bug:** como os 24 usuários são área ADM hoje, todos veem **SOU Adm** (menos o super
+admin, que vê SOUOperações). O SOU Talent e o lockup duplo só aparecem quando o diretor marcar alguém
+com área AS. O restart derrubou as sessões, então todo mundo reloga e vê a marca nova.
+
+### Commits
+
+- `72ceb76` o nome SOUOperações, junto e sem espaço
+- `df95712` os logos por acesso, a névoa, a tela inicial e a fonte única de navegação
+- `0007c33` merge de `homolog` em `main`
+
+**O termo da dupla correção mudou só daqui para a frente.** Os aceites já gravados guardam o texto
+com o nome antigo, e é assim que tem de ser: aquele log é registro histórico do que a pessoa declarou
+naquele dia (§A.6). Nenhuma migration toca os registros.
