@@ -20,8 +20,8 @@ const manrope = Manrope({
 });
 
 export const metadata: Metadata = {
-  title: "EA AUTOMATIC",
-  description: "Esteira admissional do Grupo Soulan",
+  title: "SOUOperações",
+  description: "Plataforma de operações do Grupo Soulan: atração, seleção e admissão.",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

@@ -54,13 +54,18 @@ import { ClicksignSchedulerService } from "./clicksign-scheduler.service";
 
 /**
  * Termo de ciência da DUPLA CORREÇÃO (§A.5 / §A.6). Bloqueio ativo com aceite explícito: o consultor
- * declara que corrigiu no EA Automatic E diretamente no G.I — porque o envio Pandapé→G.I é único e
- * irreversível, não se corrige pelo Pandapé. É controle por responsabilização, não verificação
- * técnica; o aceite vira log permanente e consultável (duplaCorrecaoAceites).
+ * declara que corrigiu no SOUOperações E diretamente no G.I, porque o envio Pandapé para G.I é
+ * único e irreversível e não se corrige pelo Pandapé. É controle por responsabilização, não
+ * verificação técnica; o aceite vira log permanente e consultável (duplaCorrecaoAceites).
+ *
+ * O NOME MUDOU SÓ DAQUI PARA A FRENTE (troca de identidade, decisão do diretor). Os aceites JÁ
+ * GRAVADOS guardam o texto com o nome antigo, e é assim que tem de ser: o log de aceite é registro
+ * histórico do que a pessoa declarou NAQUELE dia, e reescrever o passado destruiria justamente o
+ * valor de auditoria que este termo existe para ter.
  */
 export const TERMO_DUPLA_CORRECAO =
-  "Declaro que corrigi os dados no EA Automatic E diretamente no G.I. Estou ciente de que o envio " +
-  "Pandapé → G.I é único e irreversível — a correção não pode ser feita pelo Pandapé.";
+  "Declaro que corrigi os dados no SOUOperações E diretamente no G.I. Estou ciente de que o envio " +
+  "Pandapé para G.I é único e irreversível: a correção não pode ser feita pelo Pandapé.";
 import {
   CLICKSIGN_QUEUE,
   CLICKSIGN_WORKER_OPTIONS,

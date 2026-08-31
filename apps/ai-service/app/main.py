@@ -1,5 +1,5 @@
 """
-FastAPI do motor de IA do EA AUTOMATIC (CLAUDE.md §A.2 / INT-3).
+FastAPI do motor de IA do SOUOperações (CLAUDE.md §A.2 / INT-3).
 
 Fase 4: auditoria documental incremental por IA (F2), arquivamento no Drive (INT-2) e
 gerador de kit (F9). Vertex AI / Gemini autenticado por service account (`ea-v2-automatic`).
@@ -18,7 +18,7 @@ from app.routers import auditoria, coleta_vt, drive, kit, vt
 # Fail-fast no boot: valida o ambiente (ex.: DRIVE_MOCK proibido em produção) antes de servir.
 get_settings()
 
-app = FastAPI(title="EA AUTOMATIC — AI Service", version="0.1.0")
+app = FastAPI(title="SOUOperações, AI Service", version="0.1.0")
 
 app.include_router(auditoria.router)
 app.include_router(coleta_vt.router)

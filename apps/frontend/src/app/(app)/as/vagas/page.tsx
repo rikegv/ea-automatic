@@ -1488,7 +1488,7 @@ export default function CentralDeVagasPage() {
       <PageHead
         eyebrow="Atração e Seleção"
         title="Central De Vagas"
-        subtitle="Cada linha é uma abertura de vaga, com identificador próprio do EA. O código é o número do processo seletivo, digitado à mão e único no sistema: cada nova abertura, mesmo do mesmo cliente e do mesmo cargo, tem o seu."
+        subtitle="Cada linha é uma abertura de vaga, com identificador próprio do SOUOperações. O código é o número do processo seletivo, digitado à mão e único no sistema: cada nova abertura, mesmo do mesmo cliente e do mesmo cargo, tem o seu."
       />
 
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">

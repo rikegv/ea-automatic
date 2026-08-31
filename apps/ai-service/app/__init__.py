@@ -1,1 +1,1 @@
-"""EA AUTOMATIC — ai-service (motor de IA isolado)."""
+"""SOUOperações, ai-service (motor de IA isolado)."""

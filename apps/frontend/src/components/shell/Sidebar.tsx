@@ -6,105 +6,23 @@ import type { Papel } from "@ea/shared-types";
 import { useAuth } from "@/lib/auth-context";
 import { podeAbrirAdministracao } from "@/lib/admin-menus";
 import { cn } from "@/lib/cn";
-import { LogoEA } from "@/components/ui/LogoEA";
+import { LogoSou } from "@/components/ui/LogoSou";
 import { NavItem } from "@/components/ui/NavItem";
 import { useLiberacaoCount } from "./LiberacaoAlerta";
 import { useDiagnosticoAlerta } from "./DiagnosticoAlerta";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
 import { Button } from "@/components/ui/Button";
-import { Icon, type IconName } from "@/components/ui/Icon";
-
-interface NavDef {
-  href: string;
-  icon: IconName;
-  label: string;
-  /** Código do menu (OST permissão de menu): a visibilidade segue `temMenu(codigo)`. */
-  codigo: string;
-  /** Faixa vermelha premium (tela crítica / principal indicador). */
-  critical?: boolean;
-}
-
-const OPERACAO: NavDef[] = [
-  { href: "/", icon: "home", label: "Início", codigo: "inicio" },
-  // CONTROLE GERENCIAL (OST do dashboard executivo). Item NOVO: como todo menu novo, ele só aparece
-  // para quem tem o código `diretoria`, e o código nasce concedido apenas ao SUPER_ADMIN (§A.23).
-  // Quem libera para os demais é o diretor, na tela de permissão de menu. O código continua
-  // `diretoria` mesmo com o rótulo novo: é a chave das liberações já concedidas.
-  //
-  // A "Análise Gerencial" (casca com dado mock) foi DELETADA nesta OST, por decisão do diretor.
-  { href: "/diretoria", icon: "peak", label: "Controle Gerencial", codigo: "diretoria" },
-  // SALA DE ESPERA: entra AQUI, entre o Controle Gerencial e a Liberação, porque é isso que a
-  // sequência do processo diz. Ela é o passo ANTERIOR à Liberação: o candidato que o cliente ou a
-  // Seleção anunciou e que ainda nem se candidatou no Pandapé.
-  //
-  // Ícone `users` (fila de pessoas), e NÃO o relógio: o `clock` já é da Liberação, o item logo
-  // abaixo, e dois vizinhos com o mesmo desenho se confundem na varredura da barra. Aqui o que
-  // distingue é o sujeito (as pessoas que aguardam), não a espera, que os dois compartilham.
-  { href: "/sala-espera", icon: "users", label: "Sala De Espera", codigo: "sala-espera" },
-  // 4º item, com destaque vermelho: é a tela crítica (pré-admissões aguardando liberação).
-  { href: "/liberacao", icon: "clock", label: "Liberação Admissional", codigo: "liberacao", critical: true },
-  { href: "/nova", icon: "plus", label: "Nova Admissão", codigo: "nova" },
-  { href: "/esteira", icon: "layers", label: "Esteira Admissional", codigo: "esteira" },
-  { href: "/nao-conformidades", icon: "alert", label: "Não Conformidades", codigo: "nao-conformidades" },
-  { href: "/gerenciador", icon: "table", label: "Gerenciador", codigo: "gerenciador" },
-];
-
-// Gerador de kit (motor de extração, OST): tela própria. Visibilidade agora pelo menu `gerador-kit`
-// (OST permissão de menu), não mais só por `isAdmin`. Continua na navegação principal.
-const GERADOR_KIT: NavDef = { href: "/gerador-kit", icon: "pen", label: "Gerador De Kit", codigo: "gerador-kit" };
-
-// Gerenciamento de assinatura (INT-4): fila dos envelopes da Clicksign e as ações de gestão
-// (solicitar, cancelar, reenviar por correção). Visibilidade pelo menu `assinaturas`.
-const ASSINATURAS: NavDef = {
-  href: "/assinaturas",
-  icon: "doc",
-  label: "Ass. Click",
-  codigo: "assinaturas",
-};
-
-// BENEFÍCIOS (§A.17 etapa 4): a fila de quem tem benefício a cadastrar. Tela de gestão da operação,
-// distinta do CATÁLOGO de benefícios, que vive no Menu Gerencial. Visibilidade pelo menu
-// `beneficios-fila`, que nasce só para o SUPER_ADMIN (§A.23): não aparecer para os demais não é bug.
-//
-// Ícone `tag` (etiqueta do que a pessoa recebe), e não `users` nem `doc`, que já são de vizinhos na
-// barra e se confundiriam na varredura.
-const BENEFICIOS: NavDef = {
-  href: "/beneficios",
-  icon: "tag",
-  label: "Benefícios",
-  codigo: "beneficios-fila",
-};
-
-// Assinante Da Empresa (INT-4) NÃO entra aqui: por decisão do diretor a tela vive SÓ no Menu
-// Gerencial, como sempre foi. Quem tem o menu chega nela pelo card do Gerencial; a barra lateral não
-// ganha item para essa rota.
-
-// ATRAÇÃO E SELEÇÃO: grupo PRÓPRIO na barra, e não mais um item dentro de Operação. A barra passa a
-// servir dois times, e o grupo é o que separa visualmente o módulo de Admissão do de A&S para quem
-// um dia tiver as duas áreas. Visibilidade pelos menus `as-vagas` e `as-candidatos`, que nascem só
-// para o SUPER_ADMIN (§A.23): não aparecer para os demais não é bug, é o diretor ainda não ter
-// liberado.
-const SELECAO: NavDef[] = [
-  { href: "/as/vagas", icon: "table", label: "Central De Vagas", codigo: "as-vagas" },
-  /**
-   * CENTRAL DE CANDIDATOS: a entrada estava FALTANDO na barra (achado de 27/08).
-   *
-   * A tela existia, a rota existia e o menu `as-candidatos` já estava registrado no catálogo, mas
-   * este array nunca ganhou a linha: o resultado é que a única forma de chegar na tela era colar a
-   * URL. É o mesmo buraco do `clinicas` em 29/07 (§A.23), com a diferença de que lá faltava o
-   * registro e aqui faltava o item de navegação.
-   *
-   * §A.23 CONTINUA VALENDO E NADA FOI CONCEDIDO A NINGUÉM: quem decide a visibilidade é o `codigo`,
-   * e `as-candidatos` nasce só para o SUPER_ADMIN. Acrescentar a linha aqui não libera o menu para
-   * usuário nenhum, só faz o item aparecer para quem JÁ tem permissão de ver a tela. Não aparecer
-   * para os demais segue não sendo bug.
-   *
-   * ÍCONE `filter`, que é o FUNIL: é a tela do funil de seleção, a ponto de a própria página ter um
-   * funil como marca d'água. `users` já é da Sala De Espera e `table` já é do Gerenciador e da
-   * Central De Vagas, então nenhum dos dois distinguiria a linha na varredura da barra.
-   */
-  { href: "/as/candidatos", icon: "filter", label: "Central De Candidatos", codigo: "as-candidatos" },
-];
+import { Icon } from "@/components/ui/Icon";
+// A LISTA DE DESTINOS MORA EM `lib/navegacao`, e não mais aqui: a TELA INICIAL monta os cards
+// dela a partir da MESMA lista, então barra e home não têm como discordar sobre o que a pessoa
+// enxerga. Ver o cabeçalho daquele arquivo. A régua de permissão não mudou: continua `temMenu`.
+import {
+  OPERACAO,
+  GERADOR_KIT,
+  ASSINATURAS,
+  BENEFICIOS,
+  SELECAO,
+} from "@/lib/navegacao";
 
 const PAPEL_ROTULO: Record<Papel, string> = {
   SUPER_ADMIN: "Super Admin",
@@ -154,6 +72,18 @@ export function Sidebar() {
   // Fixado = sempre expandido. Desafixado = recolhido; expande ao passar o mouse (temporário).
   const expanded = pinned || hovering;
 
+  // Itens de Operação que ESTA pessoa vê. Calculado antes porque o cabeçalho do grupo depende
+  // de haver algum: filtrar duas vezes deixaria as duas decisões livres para divergir.
+  const operacaoVisivel = [...OPERACAO, GERADOR_KIT, ASSINATURAS, BENEFICIOS].filter((n) =>
+    temMenu(n.codigo),
+  );
+  const temSelecao = SELECAO.some((n) => temMenu(n.codigo));
+  const temAdministracao = isAdmin || podeAbrirAdministracao(temMenu);
+  // O SEPARADOR É DIVISOR ENTRE GRUPOS, então só existe se veio grupo antes dele. Sem isto, o
+  // consultor só de A&S abriria a barra com um risco solto logo abaixo do logo.
+  const temAlgoAcimaDeSelecao = operacaoVisivel.length > 0;
+  const temAlgoAcimaDeAdministracao = temAlgoAcimaDeSelecao || temSelecao;
+
   const name = user ? displayName(user.email) : "não informado";
   const initial = name.charAt(0).toUpperCase() || "?";
   const papel = user ? PAPEL_ROTULO[user.papel] : "";
@@ -181,40 +111,53 @@ export function Sidebar() {
         expanded ? "w-[248px] p-[22px_16px]" : "w-[76px] p-[22px_12px]",
       )}
     >
-      {/* Topo: logo oficial do EA + botão recolher/fixar (setas). Expandido mostra o logo completo
-          (símbolo + "EA AUTOMATIC"); recolhido mostra só o símbolo, empilhado sobre o botão. */}
+      {/* Topo: o logo do SOU + botão recolher/fixar (setas). Qual logo aparece depende do ACESSO da
+          pessoa (ver LogoSou): quem só faz A&S vê SOU Talent, quem só faz admissão vê SOU Adm, quem
+          faz os dois vê os dois lado a lado, e o super admin vê SOUOperações. Recolhido mostra só
+          o símbolo, que é neutro e serve a qualquer acesso. */}
       {expanded ? (
-        <div className="mb-[18px] flex items-center justify-between">
-          <LogoEA variant="full" className="ml-0.5" />
+        <div className="mb-[18px] flex items-center gap-1">
+          {/* ESPAÇADOR ESPELHO do botão de recolher (ajuste do diretor: o logo estava travado no
+              canto esquerdo). Centrar o logo com o botão sozinho na linha exigiria tirá-lo do fluxo,
+              e aí o lockup duplo (SOU Talent + SOU Adm, o mais largo) passaria por baixo dele. Com
+              um espelho de 32px do outro lado, o logo centra no espaço que sobra e nada se cruza. */}
+          <span aria-hidden className="h-8 w-8 flex-none" />
+          <LogoSou variant="full" className="min-w-0 flex-1" />
           {toggleBtn}
         </div>
       ) : (
         <div className="mb-[18px] flex flex-col items-center gap-2">
-          <LogoEA variant="symbol" />
+          <LogoSou variant="symbol" />
           {toggleBtn}
         </div>
       )}
 
       {/* OST permissão de menu: a barra mostra SÓ os menus que o usuário tem (admin vê tudo por
-          bypass). O Gerador de kit deixou de depender de `isAdmin` e passou ao menu `gerador-kit`. */}
-      <div className={cn("nav-label", !expanded && "hidden")}>Operação</div>
-      {[...OPERACAO, GERADOR_KIT, ASSINATURAS, BENEFICIOS]
-        .filter((n) => temMenu(n.codigo))
-        .map((n) => (
-          <NavItem
-            key={n.href}
-            {...n}
-            active={isActive(pathname, n.href)}
-            expanded={expanded}
-            badge={n.href === "/liberacao" ? liberacaoCount : 0}
-          />
-        ))}
+          bypass). O Gerador de kit deixou de depender de `isAdmin` e passou ao menu `gerador-kit`.
+
+          O CABEÇALHO SÓ APARECE SE SOBROU ITEM, igual ao grupo de Atração e Seleção logo abaixo.
+          Antes ele era desenhado sempre, então quem não tem NENHUM menu de Operação (o consultor
+          só de A&S) via a palavra "OPERAÇÃO" sozinha sobre o vazio, com o separador. */}
+      {operacaoVisivel.length > 0 && (
+        <>
+          <div className={cn("nav-label", !expanded && "hidden")}>Operação</div>
+          {operacaoVisivel.map((n) => (
+            <NavItem
+              key={n.href}
+              {...n}
+              active={isActive(pathname, n.href)}
+              expanded={expanded}
+              badge={n.href === "/liberacao" ? liberacaoCount : 0}
+            />
+          ))}
+        </>
+      )}
 
       {/* Atração e Seleção: a seção só existe para quem tem ao menos um menu do grupo, então ela não
           abre um cabeçalho órfão sobre uma lista vazia para o time da Admissão. */}
-      {SELECAO.some((n) => temMenu(n.codigo)) && (
+      {temSelecao && (
         <>
-          <div className="nav-sep" />
+          {temAlgoAcimaDeSelecao && <div className="nav-sep" />}
           <div className={cn("nav-label", !expanded && "hidden")}>Atração e Seleção</div>
           {SELECAO.filter((n) => temMenu(n.codigo)).map((n) => (
             <NavItem
@@ -230,9 +173,9 @@ export function Sidebar() {
 
       {/* Administração: o card "Menu Gerencial" aparece para admin OU para quem tem ao menos um menu
           administrativo (ex.: a consultora de auditoria com Regras + Régua). */}
-      {(isAdmin || podeAbrirAdministracao(temMenu)) && (
+      {temAdministracao && (
         <>
-          <div className="nav-sep" />
+          {temAlgoAcimaDeAdministracao && <div className="nav-sep" />}
           <div className={cn("nav-label", !expanded && "hidden")}>Administração</div>
           <NavItem
             href="/admin"
