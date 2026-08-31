@@ -73,7 +73,7 @@ function avisoDaFase(fase: FaseEnvelope, acao: "cancelar" | "trocar"): string {
   if (fase === "ASSINADO")
     return (
       "Esta ação vai cancelar um envelope JÁ ASSINADO e notificar o funcionário. O contrato deixa de " +
-      "valer no EA." + fim
+      "valer no SOUOperações." + fim
     );
   return "Este envelope já está encerrado (cancelado ou expirado). Não há o que cancelar." + fim;
 }
@@ -626,7 +626,7 @@ export default function AssinaturasPage() {
           (r.clicksign === "cancelado"
             ? ", envelope cancelado na Clicksign."
             : r.clicksign === "best-effort"
-              ? ". A Clicksign não aceitou o cancelamento programático; o EA está cancelado."
+              ? ". A Clicksign não aceitou o cancelamento programático; o SOUOperações está cancelado."
               : ".") +
           " Envie o kit novo pelo Gerador de Kit.",
       );
@@ -659,7 +659,7 @@ export default function AssinaturasPage() {
           : `Documento de ${caixaAlta(alvoCancelar.candidato)} cancelado no EA` +
             (r.clicksign === "cancelado"
               ? " e na Clicksign."
-              : ". A Clicksign não aceitou o cancelamento programático nesta conta; o estado que vale é o do EA."),
+              : ". A Clicksign não aceitou o cancelamento programático nesta conta; o estado que vale é o do SOUOperações."),
       );
       setAlvoCancelar(null);
       await carregar(aba);
@@ -937,7 +937,7 @@ export default function AssinaturasPage() {
                             l.fase === "NAO_ENVIADO") && (
                             <AcaoIcone
                               icone="x"
-                              titulo="Cancelar o documento no EA e na Clicksign"
+                              titulo="Cancelar o documento no SOUOperações e na Clicksign"
                               disabled={rodando}
                               perigo
                               onClick={() => setAlvoCancelar(l)}

@@ -1393,7 +1393,7 @@ export const exameSchedulerEstado = pgTable("exame_scheduler_estado", {
 
 // ── DuplaCorrecaoAceites: trilha de aceite da dupla correção (INT-4 / §A.5 / §A.6) ───────────
 // Log de auditoria SENSÍVEL, permanente e consultável (§A.6): no reenvio por correção de um
-// contrato, o consultor aceita explicitamente que corrigiu no EA Automatic E diretamente no G.I
+// contrato, o consultor aceita explicitamente que corrigiu no SOUOperações E diretamente no G.I
 // (controle por responsabilização, não verificação técnica). Guarda autor, termo de ciência e
 // data — sem CPF nem URL (§A.6). Aditivo: nunca atualizado, só inserido.
 export const duplaCorrecaoAceites = pgTable(

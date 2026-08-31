@@ -64,11 +64,11 @@ export default function TrocarSenhaPage() {
       </div>
       <main className="relative z-[1] flex min-h-screen items-center justify-center p-6">
         <GlassCard as="form" onSubmit={onSubmit} className="w-full max-w-[400px] p-[40px_36px]">
-          {/* Logo oficial (mesmo /logo-ea.png do login e da sidebar). Sombra esfumaçada por
+          {/* Logo oficial (o mesmo /sou-operacoes.png do login: antes de entrar, a marca é a guarda-chuva). Sombra esfumaçada por
               drop-shadow, no espírito do login. */}
           <img
-            src="/logo-ea.png"
-            alt="EA Automatic"
+            src="/sou-operacoes.png"
+            alt="SOUOperações"
             className="mx-auto mb-2 h-20 w-auto object-contain [filter:drop-shadow(0_0_24px_rgba(34,176,219,0.42))_drop-shadow(0_10px_20px_rgba(0,0,0,0.45))]"
           />
           <p className="mb-[26px] mt-[18px] text-sm text-dim">

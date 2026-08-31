@@ -265,7 +265,7 @@ def test_pasta_nova_recebe_marca_de_origem_na_descricao(monkeypatch):
     criadas = [b for b in fake.corpos_criados if b.get("mimeType", "").endswith("folder")]
     assert criadas, "alguma pasta foi criada"
     for body in criadas:
-        assert body["description"].startswith("Criada automaticamente pelo EA Automatic em ")
+        assert body["description"].startswith("Criada automaticamente pelo SOUOperações em ")
         assert "—" not in body["description"], "§A.11: sem travessão"
     # O NOME segue intocado: é a chave do reaproveitamento.
     assert criadas[0]["name"] == "Fulano — OP"
@@ -293,4 +293,4 @@ def test_texto_da_marca_de_origem():
     from app.drive import descricao_de_criacao
 
     txt = descricao_de_criacao(datetime(2026, 7, 23, tzinfo=UTC))
-    assert txt == "Criada automaticamente pelo EA Automatic em 23/07/2026."
+    assert txt == "Criada automaticamente pelo SOUOperações em 23/07/2026."

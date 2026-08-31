@@ -144,7 +144,7 @@ def descricao_de_criacao(agora: datetime | None = None) -> str:
     é marcado retroativamente. §A.6: o texto não tem nome de pessoa nem qualquer dado do candidato.
     """
     d = agora or datetime.now(UTC)
-    return f"Criada automaticamente pelo EA Automatic em {d.strftime('%d/%m/%Y')}."
+    return f"Criada automaticamente pelo SOUOperações em {d.strftime('%d/%m/%Y')}."
 
 
 def _pastas_com_nome(service, nome: str, parent_id: str) -> list[dict]:

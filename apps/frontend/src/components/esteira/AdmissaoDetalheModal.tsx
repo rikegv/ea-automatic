@@ -1492,7 +1492,7 @@ export function AdmissaoDetalheModal({
       </Modal>
 
       {/* Aceite de dupla correção (§A.5 INT-4), bloqueio ativo: origem Pandapé exige ciência de
-        que a correção foi feita no EA Automatic E diretamente no G.I. */}
+        que a correção foi feita no SOUOperações E diretamente no G.I. */}
       {/* A revisão da troca FICA REGISTRADA com o nome de quem clicou, então a tela diz isso ANTES
         de confirmar. O aviso sai da ficha; o que aconteceu permanece no histórico. */}
       <ConfirmDialog

@@ -75,7 +75,7 @@ const COPY: Record<string, { oQueE: string; oQueFazer: string }> = {
   },
   "Pandapé (API)": {
     oQueE:
-      "A porta de entrada dos candidatos. Fora do ar, candidato novo não entra sozinho no EA e a fila de Liberação para de crescer.",
+      "A porta de entrada dos candidatos. Fora do ar, candidato novo não entra sozinho no SOUOperações e a fila de Liberação para de crescer.",
     oQueFazer:
       "Confira as credenciais do OAuth2 no ambiente. Depois de mexer, use Testar agora. Enquanto estiver fora, dá para cadastrar pelo Nova Admissão.",
   },

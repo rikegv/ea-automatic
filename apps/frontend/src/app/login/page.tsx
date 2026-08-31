@@ -69,20 +69,20 @@ export default function LoginPage() {
             <div className="relative">
               {/* Logo estático em public/, dimensionado por altura (w-auto); <img> puro é fiel à referência. */}
               <img
-                src="/logo-ea.png"
-                alt="Logo EA Automatic"
+                src="/sou-operacoes.png"
+                alt="SOUOperações"
                 className="mb-8 h-44 w-auto animate-float object-contain [filter:drop-shadow(0_0_32px_rgba(34,176,219,0.45))_drop-shadow(0_12px_24px_rgba(0,0,0,0.5))] md:h-64"
               />
               <h1 className="font-display text-3xl font-extrabold leading-[1.05] tracking-tight text-white md:text-[2.6rem]">
                 Bem-vindo ao
                 <br />
                 <span className="bg-gradient-to-r from-[#22B0DB] via-[#22B0DB] to-[#AAD12F] bg-clip-text text-transparent">
-                  EA Automatic
+                  SOUOperações
                 </span>
               </h1>
               <p className="mt-5 max-w-sm text-sm leading-relaxed text-white/55">
-                Gestão inteligente da esteira admissional: cadastro, auditoria documental por IA,
-                assinatura eletrônica e arquivamento, tudo em um só painel.
+                Atração, seleção e admissão num só lugar: da vaga aberta ao contrato assinado,
+                com auditoria documental por IA e arquivamento automático.
               </p>
             </div>
           </section>
@@ -300,7 +300,7 @@ export default function LoginPage() {
         </div>
 
         <p className="mt-8 text-center text-xs font-medium text-slate-400">
-          &copy; 2026 EA Automatic · Todos os direitos reservados. By Grupo Soulan · V.1 2026
+          &copy; 2026 SOUOperações · Todos os direitos reservados. By Grupo Soulan · V.1 2026
         </p>
       </main>
     </div>
