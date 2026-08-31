@@ -1,39 +1,36 @@
 "use client";
 
+/**
+ * A TELA INICIAL, REFORMADA (decisão do diretor).
+ *
+ * ┌─ O QUE ELA É AGORA ─────────────────────────────────────────────────────────────────────────┐
+ * │ Saudação por horário + UM CARD PARA CADA DESTINO QUE A PESSOA TEM LIBERADO. É o espelho da   │
+ * │ barra lateral em forma de painel: mesmos grupos, mesma ordem, mesma régua de permissão.      │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * O RADAR DA ESTEIRA SAIU DAQUI. Era 100% mock: os três insights eram texto chumbado no componente
+ * ("cliente Testetestando", "14 clientes / 59 admissões", "pico 16/07"), nunca leram o banco, e a
+ * geração real estava adiada para a Fase 6. Nunca foi usado e não há previsão de uso.
+ *
+ * ┌─ POR QUE OS CARDS VÊM DE `lib/navegacao`, e não de uma lista escrita aqui ───────────────────┐
+ * │ Uma lista própria nesta tela seria a SEGUNDA lista de navegação do sistema, e duas listas    │
+ * │ divergem no primeiro menu novo: a barra mostraria a tela e a home não, ou o contrário. Como  │
+ * │ as duas leem `gruposDeNavegacao`, "se a barra mostra X, a home mostra o card de X" é         │
+ * │ verdade POR CONSTRUÇÃO, não por alguém lembrar de atualizar os dois lugares.                 │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * §A.23: NADA AQUI CONCEDE ACESSO. A tela só desenha o que `temMenu` já autoriza; quem libera menu
+ * é o diretor. E esta rota (`/`) segue sendo a ÚNICA não governada por menu (ver `menu-rotas.ts`),
+ * que é o que a mantém segura como porto seguro de quem é barrado em outra tela: ela nunca bloqueia
+ * ninguém, então redirecionar para cá não pode virar laço.
+ */
+
 import Link from "next/link";
 import { useAuth } from "@/lib/auth-context";
 import { PageHead } from "@/components/ui/PageHead";
 import { GlassCard } from "@/components/ui/GlassCard";
-import { RadarBanner } from "@/components/home/RadarBanner";
-import { Icon, type IconName } from "@/components/ui/Icon";
-
-interface QuickCard {
-  href: string;
-  icon: IconName;
-  title: string;
-  desc: string;
-}
-
-const CARDS: QuickCard[] = [
-  {
-    href: "/nova",
-    icon: "plus",
-    title: "Nova Admissão",
-    desc: "Cadastrar candidato em três etapas: cliente, vaga e dados pessoais.",
-  },
-  {
-    href: "/esteira",
-    icon: "layers",
-    title: "Esteira Admissional",
-    desc: "Faróis de auditoria, exame e cadastro: operação por frente.",
-  },
-  {
-    href: "/gerenciador",
-    icon: "table",
-    title: "Gerenciador",
-    desc: "Todas as admissões em tabela, com filtros e busca global.",
-  },
-];
+import { Icon } from "@/components/ui/Icon";
+import { gruposDeNavegacao } from "@/lib/navegacao";
 
 /** Saudação por horário: leve, sem dependência de dados reais nesta fase. */
 function saudacao(): string {
@@ -50,35 +47,45 @@ function primeiroNome(email: string): string {
 }
 
 export default function HomePage() {
-  const { user } = useAuth();
+  const { user, temMenu, isAdmin } = useAuth();
   const nome = user ? primeiroNome(user.email) : "";
+
+  // `incluirInicio: false`: um card "Início" aqui seria um link para a página em que a pessoa já
+  // está. Na barra lateral o Início continua aparecendo normalmente.
+  const grupos = gruposDeNavegacao(temMenu, isAdmin, { incluirInicio: false });
 
   return (
     <>
       <PageHead
         eyebrow="Painel inicial"
         title={`${saudacao()}, ${nome}`}
-        subtitle="O que está acontecendo na esteira agora."
+        subtitle="Suas telas liberadas, em um lugar só."
       />
 
-      <RadarBanner />
-
-      {/* A fileira fecha com o número de cards que existem: são três, então são três colunas no
-          xl. Com cinco colunas sobravam duas vagas vazias desde a remoção do menu antigo. */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        {CARDS.map((c) => (
-          <GlassCard key={c.href} as={Link} href={c.href} className="qcard block">
-            <div className="q-ico">
-              <Icon name={c.icon} />
-            </div>
-            <span className="arr">
-              <Icon name="arr" width={18} height={18} />
-            </span>
-            <h3>{c.title}</h3>
-            <p>{c.desc}</p>
-          </GlassCard>
-        ))}
-      </div>
+      {grupos.map((g) => (
+        <section key={g.titulo} className="mb-7 last:mb-0">
+          {/* O TÍTULO DO GRUPO REPETE O DA BARRA (Operação, Atração e Seleção, Administração):
+              quem trabalha nas duas frentes reconhece o mesmo recorte nos dois lugares. Quem só tem
+              uma delas nem vê o cabeçalho da outra, porque o grupo vazio não é montado. */}
+          <h2 className="mb-3 px-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-faint">
+            {g.titulo}
+          </h2>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {g.itens.map((n) => (
+              <GlassCard key={n.href} as={Link} href={n.href} className="qcard block">
+                <div className="q-ico">
+                  <Icon name={n.icon} />
+                </div>
+                <span className="arr">
+                  <Icon name="arr" width={18} height={18} />
+                </span>
+                <h3>{n.label}</h3>
+                <p>{n.descricao}</p>
+              </GlassCard>
+            ))}
+          </div>
+        </section>
+      ))}
     </>
   );
 }

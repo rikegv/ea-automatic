@@ -3,7 +3,7 @@
 @tailwind utilities;
 
 /* ============================================================================
-   EA AUTOMATIC - Design System (DESIGN-SYSTEM.md)
+   SOUOperações, Design System (DESIGN-SYSTEM.md)
    Tokens dos DOIS temas. CLARO é o padrão (:root); ESCURO via [data-theme="dark"].
    As classes de componente abaixo são portadas 1:1 dos protótipos aprovados
    (prototipo-claro.html / prototipo-escuro.html). Reproduzem, não reinterpretam.
@@ -190,27 +190,89 @@
   }
 
 
-  /* Fundo NÉVOA do logo da sidebar (OST logo sidebar): halo cinza difuso e esfumaçado atrás do
-     logo branco, para dar contraste SEM placa sólida nem borda dura. Concentração mais escura no
-     centro, dissolvendo nas bordas (radial + blur). Tema-aware: no escuro fica sutil (o branco já
-     contrasta). Ver LogoEA.tsx. */
-  .logo-ea-mist {
+  /*
+   * FUNDO DO LOGO DA BARRA LATERAL, e ele ACOMPANHA O TEMA (ajuste do diretor).
+   *
+   * ┌─ POR QUE A NÉVOA INVERTEU DE TOM ───────────────────────────────────────────────────────────┐
+   * │ A versão anterior era ESCURA nos dois temas, partindo da leitura de que os logos do SOU são │
+   * │ "arte clara, desenhada para fundo escuro". Medido no arquivo, isso vale só para METADE da   │
+   * │ arte: o monograma 3D é prateado com contorno escuro, mas o LOGOTIPO abaixo dele é "SOU" em  │
+   * │ azul forte e "Operações" em CINZA CHUMBO (canal máximo ~56-71 de 255). Sobre névoa escura o │
+   * │ chumbo sobre o escuro some, que é exatamente o "quase não se lê o nome" relatado.           │
+   * │ Logo: a arte pede fundo CLARO, e a névoa passa a ser clara nos dois temas, variando de      │
+   * │ INTENSIDADE conforme o tema, em vez de ser uma placa escura fixa.                           │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * Continua sendo um HALO que se dissolve, nunca a placa sólida de borda dura que foi rejeitada:
+   * radial + blur, com o miolo cobrindo o logo e as bordas terminando em transparente.
+   */
+  .logo-sou-mist {
+    /* TEMA CLARO: névoa com TOM, e não branca.
+       A branca de antes partia de metade da arte: acertava o logotipo em chumbo, que pede fundo
+       claro, e esquecia o MONOGRAMA, que é prateado de miolo quase branco. Sobre branco no branco
+       ele sumia, e no SOU Talent isso é gritante, porque o "ST" tem contorno fino e quase nenhuma
+       sombra, ao contrário do "SOU" do Operações, que se segura pelo relevo pesado.
+       Um cinza-azulado suave resolve os dois de uma vez: continua claro o bastante para o chumbo
+       ler com folga, e escuro o bastante para o prateado ter borda. Medido nas duas marcas. */
     background: radial-gradient(
-      64% 62% at 50% 54%,
-      rgba(30, 38, 52, 0.85) 0%,
-      rgba(68, 78, 96, 0.54) 32%,
-      rgba(128, 140, 160, 0.24) 58%,
-      transparent 84%
+      72% 92% at 50% 48%,
+      rgba(182, 199, 220, 0.95) 0%,
+      rgba(192, 208, 227, 0.78) 58%,
+      rgba(206, 220, 236, 0.3) 80%,
+      transparent 100%
     );
-    filter: blur(6px);
-    border-radius: 50%;
+    border-radius: 22px;
+    filter: blur(10px);
   }
-  :root[data-theme="dark"] .logo-ea-mist {
+
+  /* TEMA ESCURO: aqui a névoa TRABALHA. A barra é quase preta (--surface 5% sobre --bg #07111f) e
+     é onde o "Operações" em cinza chumbo desapareceria. O halo claro devolve o fundo para o qual a
+     arte foi desenhada, mais presente que no claro justamente porque o contraste a vencer é maior. */
+  :root[data-theme="dark"] .logo-sou-mist {
+    /* Intensidade medida na tela, não estimada: a 0.9 o halo virava uma NUVEM BRANCA acesa sobre a
+       barra escura (a placa rejeitada, só que clara); a 0.4 o "Operações" em chumbo voltava a
+       sumir. 0.62 é o ponto em que a palavra lê e o halo ainda se dissolve na barra. */
     background: radial-gradient(
-      66% 64% at 50% 55%,
-      rgba(255, 255, 255, 0.24) 0%,
-      rgba(255, 255, 255, 0.1) 44%,
-      transparent 80%
+      66% 84% at 50% 48%,
+      rgba(226, 235, 246, 0.62) 0%,
+      rgba(214, 227, 242, 0.42) 56%,
+      rgba(200, 216, 236, 0.14) 80%,
+      transparent 100%
+    );
+  }
+
+  /*
+   * O SÍMBOLO (barra recolhida) TEM A NECESSIDADE OPOSTA, e por isso tem névoa própria.
+   *
+   * O lockup completo carrega o logotipo em cinza chumbo, que é o que pede fundo claro. O símbolo
+   * NÃO tem logotipo: é só o monograma, branco com contorno azul, arte clara pura. Sobre a névoa
+   * clara do tema claro ele fica branco no branco e some. Aqui a névoa ESCURA continua certa, que é
+   * o mecanismo já aprovado antes desta OST; o que mudou foi só a leitura do lockup, não a dele.
+   */
+  .logo-sou-mist-simbolo {
+    /* AZUL-MARINHO DISCRETO, não o quase-preto de antes. Medido na tela: a 0.94 o halo era a mancha
+       escura que o diretor reprovou no tema claro; a 0.42 o monograma continua lendo (o contorno
+       azul e o relevo prateado é que o carregam) e o fundo vira um sopro, não uma placa. */
+    background: radial-gradient(
+      56% 60% at 50% 46%,
+      rgba(13, 43, 69, 0.42) 0%,
+      rgba(20, 54, 84, 0.24) 52%,
+      rgba(28, 64, 96, 0.08) 78%,
+      transparent 100%
+    );
+    border-radius: 22px;
+    filter: blur(9px);
+  }
+
+  /* No escuro o monograma branco já lê sozinho sobre a barra: a névoa só o descola do vidro, sem
+     virar mancha. */
+  :root[data-theme="dark"] .logo-sou-mist-simbolo {
+    background: radial-gradient(
+      72% 70% at 50% 50%,
+      rgba(0, 0, 0, 0.72) 0%,
+      rgba(0, 0, 0, 0.5) 50%,
+      rgba(0, 0, 0, 0.2) 78%,
+      transparent 100%
     );
   }
 
@@ -584,157 +646,6 @@
   .bar-wrap small {
     font-size: 11px;
     color: var(--faint);
-  }
-
-  /* ---- banner / carrossel ---- */
-  .banner {
-    position: relative;
-    padding: 30px 32px;
-    min-height: 150px;
-    overflow: hidden;
-  }
-  .b-eyebrow {
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    color: var(--accent);
-    font-weight: 600;
-    margin-bottom: 14px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .b-eyebrow .live {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: var(--accent);
-    box-shadow: 0 0 0 0 rgba(34, 176, 219, 0.6);
-    animation: ea-pulse 2s infinite;
-  }
-  @keyframes ea-pulse {
-    0% {
-      box-shadow: 0 0 0 0 rgba(34, 176, 219, 0.55);
-    }
-    70% {
-      box-shadow: 0 0 0 9px rgba(34, 176, 219, 0);
-    }
-    100% {
-      box-shadow: 0 0 0 0 rgba(34, 176, 219, 0);
-    }
-  }
-  .slides {
-    position: relative;
-    min-height: 64px;
-  }
-  .slide {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: flex-start;
-    gap: 16px;
-    opacity: 0;
-    transform: translateX(16px);
-    transition:
-      opacity 0.5s,
-      transform 0.5s;
-    pointer-events: none;
-  }
-  .slide.on {
-    opacity: 1;
-    transform: translateX(0);
-    pointer-events: auto;
-  }
-  .slide .s-ico {
-    width: 46px;
-    height: 46px;
-    border-radius: 13px;
-    flex: none;
-    display: grid;
-    place-items: center;
-    border: 1px solid var(--border);
-    background: var(--sico);
-  }
-  .slide .s-ico svg {
-    width: 23px;
-    height: 23px;
-    color: var(--accent);
-  }
-  .slide .s-ico.warn {
-    background: var(--sico-warn);
-  }
-  .slide .s-ico.warn svg {
-    color: var(--warn);
-  }
-  .slide .s-ico.peak {
-    background: var(--sico-peak);
-  }
-  .slide .s-ico.peak svg {
-    color: var(--accent-2);
-  }
-  .slide .s-txt {
-    font-size: 16.5px;
-    line-height: 1.55;
-    font-weight: 500;
-    color: var(--text);
-    font-family: var(--font-manrope), "Manrope", sans-serif;
-    max-width: 760px;
-  }
-  .slide .s-txt b {
-    color: var(--accent);
-    font-weight: 700;
-  }
-  .b-foot {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-top: 18px;
-  }
-  .dots {
-    display: flex;
-    gap: 7px;
-  }
-  .dots .d {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: var(--faint);
-    opacity: 0.5;
-    cursor: pointer;
-    transition: 0.2s;
-    border: none;
-    padding: 0;
-  }
-  .dots .d.on {
-    background: var(--accent);
-    opacity: 1;
-    width: 22px;
-    border-radius: 4px;
-  }
-  .b-nav {
-    display: flex;
-    gap: 8px;
-  }
-  .b-nav button {
-    width: 34px;
-    height: 34px;
-    border-radius: 10px;
-    border: 1px solid var(--border);
-    background: var(--surface);
-    color: var(--dim);
-    cursor: pointer;
-    display: grid;
-    place-items: center;
-    transition: 0.18s;
-  }
-  .b-nav button:hover {
-    color: var(--text);
-    background: var(--surface-2);
-    border-color: var(--border-strong);
-  }
-  .b-nav button svg {
-    width: 17px;
-    height: 17px;
   }
 
   /* ---- abas (esteira) ---- */
