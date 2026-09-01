@@ -11900,3 +11900,80 @@ rate limit e ritmo do tick ficaram como estavam. Só o ponto do arquivamento.
 Typecheck 0, lint 0, **1697 testes passando** (146 arquivos), contra 1689 antes: mais 8, todos da
 regra. Guarda conferida no `dist` que está rodando, backend reiniciado às 15:13:52 UTC com health 200
 e o scheduler de volta no ar.
+
+---
+
+## 01/09/2026 (noite) — Lojas e Unidades: cadastro, importação com IA e vínculo em produção
+
+Etapas 1, 2 e 3 do cenário 1 do `docs/DESENHO-LOJAS-UNIDADES.md`, validadas pelo diretor em
+homologação e publicadas. Commit `7a16c70`.
+
+### O problema que ela resolve
+
+Existe cliente que é UM CNPJ e UM código com VÁRIAS lojas. Como o sistema não deixa cadastrar o mesmo
+cliente duas vezes (código e CNPJ únicos, §A.3), a operação passou a escrever o nome de cada loja no
+campo CENTRO DE CUSTO. Medido antes de começar: **1.358 admissões** com o campo preenchido, **435
+valores distintos**, que viram **424** só normalizando caixa e espaço. Seis clientes concentram 170
+desses valores (DIA 60, CRM 46, HAOC 27, Proparts 15, Garrett 14, Meiwa 8).
+
+### O que subiu
+
+**Etapa 1, o cadastro.** `cliente_lojas`, filha do cliente, com nome, endereço e código, e **sem
+CNPJ**: a loja compartilha o da mãe. Índice único sobre o nome NORMALIZADO, não sobre o cru, para o
+catálogo não nascer com a duplicata que o texto livre criou. Inativar é exclusão lógica: a loja sai da
+lista principal e vive atrás do botão "Mostrar Inativas", num modal com a reativação. Escrita ABERTA a
+qualquer autenticado (decisão do diretor na Q3, contra a recomendação inicial da fábrica), travada por
+`lojas-escrita-aberta.spec.ts`, porque "aberto" é a ausência de uma reivindicação de menu e ausência
+não se defende sozinha.
+
+**Etapa 2, a importação com IA.** Router `planilha.py` no `ai-service`, espelhando o `auditoria.py`
+inclusive na tradução de família de erro (quota 429, credencial 503). A IA lê **cabeçalho e quinze
+linhas**, nunca a planilha inteira, e devolve os ÍNDICES das colunas; o código aplica nas até 2.000
+linhas. Cada coluna é seletor editável e a prévia recalcula sem chamar a IA de novo. Com o Vertex fora
+a importação funciona igual, com mapeamento manual.
+
+**Etapa 3, o vínculo.** `admissoes.loja_id`, nula em todas as 2.785, com seletor na liberação
+(individual e em lote, uma loja POR LINHA), no wizard e no editar, e exibição no olhinho.
+
+### Dois achados que só apareceram construindo
+
+1. **O `/api/api/` duplicado.** O componente novo chamava `apiFetch("/api/admin/...")` e o `apiFetch`
+   já monta o prefixo: o cadastro parecia salvar, dava erro e sumia ao atualizar. O gate passou verde
+   porque `tsc` não olha dentro de template string e o controle que pegaria isso é a prova visual
+   (§A.13), que naquele dia não rodou por falta de credencial de homologação. Virou
+   `api-prefixo.spec.ts`, que varre o fonte inteiro do frontend e tem um caso provando que detecta a
+   linha real do defeito.
+2. **O separador da planilha.** Copiar o `delimiter: [",", ";"]` da importação de matrículas quebra
+   aqui: endereço tem vírgula, e "Av. Roque Petroni Jr, 1089" era partido no meio, em silêncio. Lá é
+   inofensivo porque CPF não tem vírgula. Passou a detectar o separador pela primeira linha.
+
+### A invariante que o banco não expressa
+
+A chave estrangeira garante que a loja EXISTE, não que ela seja do cliente certo, e declarar isso
+exigiria uma composta com `cod_cliente`, que em `admissoes` é nulável. A regra vive em
+`validarLojaDoCliente`, atravessada pelos QUATRO caminhos de escrita. Provado em produção: a mesma
+loja aceita no CRM (200) e recusada em admissão de outro cliente (400). Trocar o cliente **limpa** a
+loja, pelo mesmo motivo.
+
+### Provas do deploy
+
+- **Contagens IDÊNTICAS antes e depois** (§A.27): farol, os cinco tipos de frente, concluídas por
+  tipo, sinalizador, Clicksign e totais. `diff` limpo, zero linhas de diferença.
+- **Migrations 0090 e 0091** aplicadas limpas; `loja_id` nula nas 2.785.
+- **IA viva em produção**: `POST /planilha/mapear-colunas` devolveu 401 sem token e 200 com token,
+  mapeando certo um cabeçalho fora de ordem (`COD | UNIDADE | CIDADE | LOGRADOURO COMPLETO`), com
+  confiança ALTA. Cabeçalho vazio devolve 422 controlado, não 500.
+- **Clicksign intocada**: `git diff` sobre `clicksign/` vazio, e o tick seguiu rodando após o restart.
+- Gate: typecheck 0, lint 0, **1726** testes no backend, **148** no `ai-service`, **156** no frontend.
+- Serviços em 200: backend 3011, ai-service 8000, produção 3010.
+
+### Não subiu, por decisão do diretor
+
+Etapa 4 (Alto Volume por loja e filtros nas telas): o painel continua agrupando por centro de custo.
+Etapa 5 (regra dura): a loja **não é obrigatória** ainda, e ninguém trava no teste. A&S e cenário 2
+(grupo CAGC) seguem fora.
+
+### Limpeza
+
+As 5 lojas de teste do harness saíram da homologação (`Loja Morumbi`, `Loja Paulista`, `PDV Morumbi`,
+`PDV Centro`, `PDV Campinas`). As **15 reais** que o diretor importou na validação ficaram intactas.
