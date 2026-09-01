@@ -372,6 +372,13 @@ export const MENUS: MenuDef[] = [
       "ClientesController.opcoesVinculo",
       "ClientesController.reativar",
       "ClientesController.remove",
+      // LOJAS DO CLIENTE (cenário 1, etapa 1): NENHUMA operação do `LojasController` é reivindicada
+      // aqui, e a ausência é DELIBERADA, não esquecimento. Decisão do diretor (Q3, 01/09/2026):
+      // cadastrar e importar loja é trabalho de QUALQUER consultor autenticado, não privilégio de
+      // Master e Super Admin. Reivindicar a escrita por este menu fecharia o cadastro para o perfil
+      // COMUM, que é justamente quem opera a liberação e sabe em qual loja a pessoa vai trabalhar.
+      // O `JwtAuthGuard` global continua exigindo sessão; o que não há é reivindicação de menu.
+      // Ver `lojas-escrita-aberta.spec.ts`, que quebra se alguém reivindicar isso um dia sem pedido.
     ],
   },
   {

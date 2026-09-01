@@ -112,6 +112,8 @@ interface AdmissaoDetalhe {
   };
   cliente: { codCliente: string; razaoSocial: string; operacao: string | null };
   cargo: string;
+  /** LOJA / UNIDADE (etapa 3). Nula é o caso normal: a maioria dos clientes não tem lojas. */
+  lojaNome?: string | null;
   // BLOCO 2: salário/escala/endereço da folha (endereço = o da admissão).
   vagaFolha: {
     salario: string | null;
@@ -1107,6 +1109,9 @@ export function AdmissaoDetalheModal({
                   rotulo="Centro de custo"
                   valor={data.vagaFolha.centroCusto || "não informado"}
                 />
+                {/* LOJA / UNIDADE (etapa 3). Fica ao lado do centro de custo e SEPARADA dele: o
+                    centro de custo é campo de folha, a loja é onde a pessoa trabalha. */}
+                <Campo rotulo="Loja / Unidade" valor={data.lojaNome || "não informado"} />
                 <Campo rotulo="Gestor BP" valor={data.vagaFolha.gestorBp || "não informado"} />
                 <Campo
                   rotulo="Departamento"

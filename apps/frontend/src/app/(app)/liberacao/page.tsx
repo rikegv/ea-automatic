@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch, ApiError } from "@/lib/api";
+import { LojasDoLote, SeletorLoja } from "@/components/admin/SeletorLoja";
 import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/cn";
 import { PageHead } from "@/components/ui/PageHead";
@@ -348,6 +349,10 @@ export default function LiberacaoPage() {
   const [salaVinculada, setSalaVinculada] = useState<string | null>(null);
   const [buscandoSala, setBuscandoSala] = useState<string | null>(null);
   const [codCliente, setCodCliente] = useState("");
+  // LOJA (etapa 3): individual, um valor; no LOTE, um por admissão (Q9). Quem limpa ao trocar
+  // de cliente é o próprio `SeletorLoja`, para a regra viver num lugar só.
+  const [lojaId, setLojaId] = useState<string | undefined>(undefined);
+  const [lojasDoLote, setLojasDoLote] = useState<Record<string, string | undefined>>({});
   const [cargoId, setCargoId] = useState("");
   // Campos obrigatórios (régua unificada §A.19), todos opcionais na liberação — só cliente+cargo travam.
   const [salario, setSalario] = useState("");
@@ -780,6 +785,8 @@ export default function LiberacaoPage() {
           body: {
             codCliente,
             cargoId,
+            // LOJA (etapa 3): só vai quando o cliente tem lojas e uma foi escolhida.
+            lojaId: lojaId || undefined,
             tipoContrato: tipoContrato || undefined,
             dataAdmissao: dataAdmissao || undefined,
             vagaFolha: {
@@ -1050,6 +1057,12 @@ export default function LiberacaoPage() {
           admissaoIds: loteSelecionadasOk.map((x) => x.admissaoId),
           codCliente: loteCodCliente,
           cargoId: loteCargoId,
+          // LOJA POR LINHA (Q9): a ÚNICA coisa do lote que não é um valor só para todos. Vão só os
+          // pares preenchidos; quem ficou sem loja segue como pendência individual, igual a qualquer
+          // campo em branco do lote.
+          lojasPorAdmissao: loteSelecionadasOk
+            .map((x) => ({ admissaoId: x.admissaoId, lojaId: lojasDoLote[x.admissaoId] }))
+            .filter((x): x is { admissaoId: string; lojaId: string } => Boolean(x.lojaId)),
           // O preenchido vale para TODAS as N; o vazio segue como pendência individual de cada uma.
           tipoContrato: loteTipoContrato || undefined,
           dataAdmissao: loteDataAdmissao || undefined,
@@ -1731,6 +1744,10 @@ export default function LiberacaoPage() {
                   onChange={(e) => setCentroCusto(e.target.value)}
                 />
               </label>
+              {/* LOJA / UNIDADE (etapa 3). Aparece SÓ quando o cliente tem lojas cadastradas; some
+                  para os demais, que é a maioria. O centro de custo continua ao lado e SEPARADO: são
+                  coisas distintas, e a loja é que passa a responder "onde a pessoa trabalha". */}
+              <SeletorLoja codCliente={codCliente} value={lojaId} onChange={setLojaId} />
               <label className="grid gap-1.5">
                 <span className="ds-label">Gestor / BP</span>
                 <input
@@ -2219,6 +2236,24 @@ export default function LiberacaoPage() {
                 />
               </label>
             </div>
+
+            {/* LOJA POR LINHA (Q9, decisão do diretor). É a ÚNICA coisa deste modal que NÃO é um
+                valor só para todos: o mesmo lote costuma ter gente de lojas diferentes, e obrigar um
+                lote por loja transformaria a liberação em massa em individual disfarçada. Some
+                inteiro quando o cliente não tem lojas, que é a maioria. */}
+            {loteCodCliente && loteSelecionadasOk.length > 0 && (
+              <LojasDoLote
+                codCliente={loteCodCliente}
+                pessoas={loteSelecionadasOk.map((x) => ({
+                  admissaoId: x.admissaoId,
+                  nome: x.candidatoNome,
+                }))}
+                valores={lojasDoLote}
+                onChange={(admissaoId, lojaId) =>
+                  setLojasDoLote((atual) => ({ ...atual, [admissaoId]: lojaId }))
+                }
+              />
+            )}
 
             {/* Benefícios: MESMA régua de valor do individual, pré-preenchidos pela memória do par
                 cliente+cargo (o pacote costuma ser o mesmo para todas do lote), editáveis. */}

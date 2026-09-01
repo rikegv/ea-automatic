@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/Button";
 import { Pill, type PillTone } from "@/components/ui/Pill";
 import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
 import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
+import { LojasDoCliente } from "@/components/admin/LojasDoCliente";
 
 interface Cliente {
   codCliente: string;
@@ -150,7 +151,19 @@ export default function ClientesPage() {
       if (filtro === "ativos" && !c.ativo) return false;
       if (filtro === "inativos" && c.ativo) return false;
       if (filtroTipo && c.tipoServico !== filtroTipo) return false;
-      if (q && !(c.razaoSocial.toLowerCase().includes(q) || c.codCliente.toLowerCase().includes(q)))
+      // A busca casa os TRÊS: razão social, código e NOME DE OPERAÇÃO (pedido do diretor,
+      // 01/09/2026). O nome de operação entrou porque é por ele que o time procura na maioria das
+      // vezes: a razão social do CRM é "NIBS PARTICIPACOES S.A.", e ninguém digita isso para achar o
+      // CRM. É `nomeOperacao ?? ""` porque a coluna é nulável e cliente sem operação não pode sumir
+      // da busca por causa disso.
+      if (
+        q &&
+        !(
+          c.razaoSocial.toLowerCase().includes(q) ||
+          c.codCliente.toLowerCase().includes(q) ||
+          (c.nomeOperacao ?? "").toLowerCase().includes(q)
+        )
+      )
         return false;
       if (soPendencia && !temPendencia(c)) return false;
       return true;
@@ -734,6 +747,10 @@ function FragmentRow({
                   {TIPO_MARCACAO_LABEL[c.tipoMarcacao] ?? c.tipoMarcacao}
                 </Ficha>
               </div>
+              {/* CATÁLOGO DE LOJAS do cliente (cenário 1, etapa 1). Fica na ficha, e não em tela
+                  própria, porque a loja não existe fora do cliente. Carrega sob demanda: só quando
+                  esta ficha abre. */}
+              <LojasDoCliente codCliente={c.codCliente} />
             </div>
           </td>
         </tr>

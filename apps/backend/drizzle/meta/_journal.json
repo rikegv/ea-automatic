@@ -631,6 +631,20 @@
       "when": 1787945891611,
       "tag": "0089_as_troca_de_vaga_no_historico",
       "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "7",
+      "when": 1788032291611,
+      "tag": "0090_lojas_unidades",
+      "breakpoints": true
+    },
+    {
+      "idx": 91,
+      "version": "7",
+      "when": 1788035891611,
+      "tag": "0091_admissao_loja",
+      "breakpoints": true
     }
   ]
 }

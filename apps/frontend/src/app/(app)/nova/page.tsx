@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { isValidCpf, normalizeCpf, type ExigenciaDocumento } from "@ea/shared-types";
 import { apiFetch, ApiError } from "@/lib/api";
+import { SeletorLoja } from "@/components/admin/SeletorLoja";
 import { calcIdade, ehMenorDeIdade } from "@/lib/idade";
 import { cn } from "@/lib/cn";
 import { useAuth } from "@/lib/auth-context";
@@ -172,6 +173,8 @@ export default function NovaAdmissaoPage() {
   const [clienteResults, setClienteResults] = useState<Cliente[]>([]);
   const [clienteSearching, setClienteSearching] = useState(false);
   const [cliente, setCliente] = useState<Cliente | null>(null);
+  // LOJA (etapa 3): quem limpa ao trocar de cliente é o próprio `SeletorLoja`.
+  const [lojaId, setLojaId] = useState<string | undefined>(undefined);
 
   // Etapa 2: cargo + régua + folha
   // Item 1 (TRAVA): só cargos com régua cadastrada para o cliente. Sem régua = trava, nunca catálogo.
@@ -561,6 +564,8 @@ export default function NovaAdmissaoPage() {
         token,
         body: {
           codCliente: cliente.codCliente,
+          // LOJA (etapa 3): só vai quando o cliente tem lojas e uma foi escolhida.
+          lojaId: lojaId || undefined,
           cargoId,
           pacoteBeneficios: pacoteBeneficios.length ? pacoteBeneficios : undefined,
           candidato: {
@@ -1037,6 +1042,13 @@ export default function NovaAdmissaoPage() {
                     onChange={(e) => setVaga({ ...vaga, centroCusto: e.target.value })}
                   />
                 </Field>
+                {/* LOJA / UNIDADE (etapa 3). Some quando o cliente não tem lojas, que é a maioria.
+                    Fica ao lado do centro de custo e SEPARADO dele: são coisas distintas. */}
+                <SeletorLoja
+                  codCliente={cliente?.codCliente}
+                  value={lojaId}
+                  onChange={setLojaId}
+                />
                 <Field label="Departamento">
                   <input
                     className="ds-input"

@@ -57,6 +57,7 @@ import {
   vtDoRelatorio,
 } from "./relatorio-agregados";
 import {
+  clienteLojas,
   admissaoBeneficio,
   admissaoIfractal,
   admissaoProjeto,
@@ -110,6 +111,7 @@ import { exigeEscolhaDeVinculo } from "../domain/vinculo";
 import { avisoDivergenciaBancaria, divergenciasReconhecidas } from "../domain/cadastro-bancario";
 import type { AuthUser } from "../auth/auth.types";
 import type { CandidatoInputDto, CreateAdmissaoDto } from "./dto/create-admissao.dto";
+import { lojaDaLinhaDoLote, validarLojaDoCliente } from "./loja-da-admissao";
 import type { UpdateAdmissaoDto } from "./dto/update-admissao.dto";
 import type { AtualizarUniformeDto } from "./dto/atualizar-uniforme.dto";
 import { ehCabecalho, ehXlsx, lerPlanilhaMatriculas, lerXlsxMatriculas } from "./matriculas-import";
@@ -383,6 +385,10 @@ export class AdmissoesService {
     // deve abrir transação nem criar nada.
     await this.validarValoresDoPacote(dto.pacoteBeneficios);
 
+    // LOJA do cliente (etapa 3): a chave estrangeira garante que a loja existe, não que ela seja
+    // DESTE cliente. Validado antes da transação, pelo mesmo motivo da linha acima.
+    await validarLojaDoCliente(this.db, dto.codCliente, dto.lojaId);
+
     // a.1 W6 — campos obrigatórios. NÃO impede (F4/regra 5), mas exige ACEITE EXPLÍCITO quando há
     // pendências. O log permanente do aceite por passagem é da esteira (S3, marco 3).
     const vf = dto.vagaFolha ?? {};
@@ -520,6 +526,9 @@ export class AdmissoesService {
           candidatoCpf: cpf,
           codCliente: dto.codCliente,
           cargoId: dto.cargoId,
+          // LOJA (cenário 1, etapa 3): só existe quando o cliente tem lojas cadastradas. Já validada
+          // acima contra o cliente desta admissão (`validarLojaDoCliente`).
+          lojaId: dto.lojaId ?? null,
           tipoContrato: dto.tipoContrato ?? null,
           dataAdmissao: dto.dataAdmissao ?? null,
           // Consultor que gerou a admissão (Fase 2C) — base da atribuição de NC (Via 1).
@@ -793,6 +802,8 @@ export class AdmissoesService {
     dto: {
       codCliente: string;
       cargoId: string;
+      /** LOJA (etapa 3), tipo inline. Ver a nota do Alto Volume: mexeu aqui, mexe nos três. */
+      lojaId?: string;
       tipoContrato?: string;
       dataAdmissao?: string;
       vagaFolha?: {
@@ -856,6 +867,11 @@ export class AdmissoesService {
     if (!cliente) throw new NotFoundException("Cliente não encontrado");
     const cargo = await this.db.query.cargos.findFirst({ where: eq(cargos.id, dto.cargoId) });
     if (!cargo) throw new NotFoundException("Cargo não encontrado");
+
+    // LOJA (etapa 3): antes da transação, com as demais validações de entrada. A chave
+    // estrangeira garante que a loja existe; esta função garante que ela é DESTE cliente e
+    // está ativa.
+    await validarLojaDoCliente(this.db, dto.codCliente, dto.lojaId);
 
     // BLOCO 5 (item 7): o cliente que trabalha com MAIS DE UM contrato exige a escolha de qual. Não
     // é o `tipo_contrato` virando obrigatório para todo mundo: é uma escolha entre opções concretas,
@@ -1099,6 +1115,8 @@ export class AdmissoesService {
       dto: {
         codCliente: string;
         cargoId: string;
+        /** LOJA (etapa 3), tipo inline. Mexeu aqui, mexe nos três. */
+        lojaId?: string;
         tipoContrato?: string;
         dataAdmissao?: string;
         vagaFolha?: {
@@ -1185,6 +1203,9 @@ export class AdmissoesService {
       .set({
         codCliente: dto.codCliente,
         cargoId: dto.cargoId,
+        // LOJA (etapa 3): no individual vem do seletor; no lote vem do par daquela linha. Já
+        // validada contra o cliente antes de a transação abrir.
+        lojaId: dto.lojaId ?? null,
         tipoContrato: novoTipoContrato ?? null,
         dataAdmissao: novaDataAdmissao ?? null,
         farolGlobal: "EM_ADMISSAO",
@@ -1295,6 +1316,8 @@ export class AdmissoesService {
     dto: {
       codCliente: string;
       cargoId: string;
+      /** LOJA (etapa 3), tipo inline. Ver a nota do Alto Volume: mexeu aqui, mexe nos três. */
+      lojaId?: string;
       tipoContrato?: string;
       dataAdmissao?: string;
       vagaFolha?: {
@@ -1314,6 +1337,12 @@ export class AdmissoesService {
       /** ALTO VOLUME (onda 2), tipo inline 3 de 3. Ver a nota no dto do `liberar`. */
       projetoId?: string;
       grupoEntradaId?: string;
+      /**
+       * LOJA POR LINHA (Q9). A única coisa do lote que NÃO é um valor só para todos: o mesmo lote
+       * costuma ter gente de lojas diferentes. Admissão fora da lista fica sem loja, como qualquer
+       * campo em branco do lote.
+       */
+      lojasPorAdmissao?: { admissaoId: string; lojaId: string }[];
     },
     user: AuthUser,
   ): Promise<{
@@ -1386,11 +1415,17 @@ export class AdmissoesService {
         // inteiro, ela falha sozinha e aparece nominalmente no relatório final.
         if (!isValidCpf(adm.candidatoCpf)) throw new BadRequestException(CPF_INVALIDO_NA_LIBERACAO);
 
+        // LOJA POR LINHA (Q9): cada admissão recebe a SUA loja. A validação é por linha e fica
+        // DENTRO do try de propósito: loja errada numa pessoa derruba só aquela linha, que aparece
+        // nominalmente no relatório final, em vez de abortar o lote inteiro.
+        const lojaDaLinha = lojaDaLinhaDoLote(dto.lojasPorAdmissao, admissaoId);
+        await validarLojaDoCliente(this.db, dto.codCliente, lojaDaLinha);
+
         await this.db.transaction(async (tx) => {
           await this.aplicarLiberacao(tx, {
             adm,
             candidatoNome: nome,
-            dto,
+            dto: { ...dto, lojaId: lojaDaLinha },
             regua,
             user,
             vinculoProjeto,
@@ -2076,6 +2111,11 @@ export class AdmissoesService {
     const cargo = adm.cargoId
       ? await this.db.query.cargos.findFirst({ where: eq(cargos.id, adm.cargoId) })
       : undefined;
+    // LOJA (etapa 3): o modal de edição precisa do id para pré-selecionar o seletor, e o do olho
+    // precisa do NOME para exibir. Nula é o caso normal (cliente sem lojas, ou admissão anterior).
+    const loja = adm.lojaId
+      ? await this.db.query.clienteLojas.findFirst({ where: eq(clienteLojas.id, adm.lojaId) })
+      : undefined;
     const agendamento = await this.db.query.exameAgendamento.findFirst({
       where: eq(exameAgendamento.admissaoId, id),
     });
@@ -2143,6 +2183,9 @@ export class AdmissoesService {
       // O par (cliente + cargo) alimenta a sugestão de pacote do modal de pendências (§A.17 etapa 4).
       codCliente: adm.codCliente,
       cargoId: adm.cargoId,
+      // LOJA (etapa 3): o id pré-seleciona o seletor no lápis, o nome é o que o olho mostra.
+      lojaId: adm.lojaId,
+      lojaNome: loja?.nome ?? null,
       // Nomes p/ o BLOCO 2 (exibição; cliente/cargo não são editáveis no lápis — identidade §A.3).
       clienteRazao: cliente?.razaoSocial ?? null,
       clienteOperacao: cliente?.nomeOperacao ?? null,
@@ -2795,6 +2838,12 @@ export class AdmissoesService {
         .set({
           codCliente: cliente.codCliente,
           cargoId: cargo.id,
+          // LOJA LIMPA NA TROCA DE CLIENTE (etapa 3, decisão do diretor). A loja pertence ao cliente
+          // ANTIGO: mantê-la deixaria uma admissão do DIA apontando para uma loja do CRM, que é
+          // exatamente a contaminação que `validarLojaDoCliente` impede em todos os outros caminhos.
+          // Zerar aqui é o que mantém a invariante verdadeira depois da troca, e a loja nova é
+          // escolhida pelo olhinho ou pelo editar, que é onde a pessoa sabe qual é.
+          lojaId: null,
           // Ponteiro do cliente ANTIGO: some na troca. Hoje é nulo em toda a base, mas deixá-lo
           // apontando para o vínculo antigo seria uma bomba armada para quando ele passar a ser usado.
           clienteVinculoId: null,
@@ -3048,6 +3097,11 @@ export class AdmissoesService {
     // mantém a exigência — fora do escopo desta OST.)
     const adm = await this.db.query.admissoes.findFirst({ where: eq(admissoes.id, id) });
     if (!adm) throw new NotFoundException("Admissão não encontrada");
+
+    // LOJA (etapa 3): validada contra o cliente ATUAL da admissão, antes de a transação abrir. O
+    // editar não troca cliente (isso é a rota `trocar-cliente`, que limpa a loja), então o
+    // cliente aqui é sempre o de `adm`.
+    await validarLojaDoCliente(this.db, adm.codCliente, dto.lojaId);
     const candidato = await this.db.query.candidatos.findFirst({
       where: eq(candidatos.cpf, adm.candidatoCpf),
     });
@@ -3307,6 +3361,10 @@ export class AdmissoesService {
         .set({
           tipoContrato: novoTipoContrato,
           dataAdmissao: novaDataAdmissao,
+          // LOJA (etapa 3): é por aqui que o EDITAR e o OLHINHO corrigem admissão sem loja ou com a
+          // loja errada. `undefined` mantém (salvar outro campo não pode apagar a loja de ninguém,
+          // mesma régua do sexo); `null` explícito limpa. Validada antes da transação.
+          lojaId: dto.lojaId === undefined ? undefined : dto.lojaId,
           matricula: novaMatricula,
           farolGlobal: novoFarol,
           motivoDeclinioId: novoMotivoDeclinio,

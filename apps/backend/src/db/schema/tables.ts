@@ -472,6 +472,72 @@ export const clinicasCatalogo = pgTable("clinicas_catalogo", {
 });
 
 /**
+ * LOJAS E UNIDADES DE UM CLIENTE (cenário 1 do desenho `docs/DESENHO-LOJAS-UNIDADES.md`).
+ *
+ * O CASO REAL: existe cliente que é UM CNPJ e UM código, com VÁRIAS LOJAS. O sistema não deixa
+ * cadastrar o mesmo cliente duas vezes (código e CNPJ são únicos, §A.3), então a operação passou a
+ * escrever o nome de cada loja no campo CENTRO DE CUSTO. Seis clientes fizeram isso, somando 170
+ * nomes distintos em texto livre, dos quais 11 são a mesma loja escrita de outro jeito.
+ *
+ * A LOJA NÃO TEM CNPJ, e é isso que a separa do cenário 2 (onde cada loja já é um cliente próprio).
+ * Ela COMPARTILHA o CNPJ da mãe, e por isso não toca contrato, faturamento nem assinatura: o
+ * pipeline da Clicksign resolve o assinante por `cod_cliente` e nunca por CNPJ (verificado).
+ * Ela é NOME mais ENDEREÇO, para ANÁLISE, e não é dado contábil.
+ *
+ * POR QUE TABELA PRÓPRIA e não uma coluna em `dados_vaga_folha`: a loja é atributo do CLIENTE,
+ * reutilizado por N admissões e N vagas, mantido como catálogo. Repetir o nome por admissão seria
+ * recriar exatamente o texto livre que esta frente veio eliminar.
+ *
+ * INATIVAR É EXCLUSÃO LÓGICA, como nos demais catálogos: loja fechada sai das opções de escolha sem
+ * apagar o histórico de quem foi admitido nela.
+ *
+ * §A.6: nome de loja e endereço de estabelecimento. Nenhum dado pessoal.
+ */
+export const clienteLojas = pgTable(
+  "cliente_lojas",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    codCliente: varchar("cod_cliente", { length: 40 })
+      .notNull()
+      .references(() => clientes.codCliente, { onDelete: "cascade" }),
+    nome: varchar("nome", { length: 200 }).notNull(),
+    /**
+     * Metade da definição de loja (nome mais endereço), mas NULLABLE: o endereço não existe em lugar
+     * nenhum hoje e a migração do legado nasce só com os nomes. A tela cobra; a importação permite
+     * vazio, para o time completar depois sem travar a carga.
+     */
+    endereco: text("endereco"),
+    /** O código que o cliente usa internamente, quando existe. Serve de chave alternativa na importação. */
+    codigoExterno: varchar("codigo_externo", { length: 60 }),
+    ativo: boolean("ativo").notNull().default(true),
+    criadoEm,
+    atualizadoEm,
+  },
+  (t) => ({
+    /**
+     * UNIQUE SOBRE O NOME NORMALIZADO, e não sobre o nome cru, porque o cru deixaria "Loja Centro" e
+     * "LOJA CENTRO " conviverem como duas lojas. É exatamente a duplicata que o texto livre produziu
+     * no centro de custo (435 valores que viram 424 só normalizando caixa e espaço), e o catálogo não
+     * pode nascer com o mesmo defeito.
+     *
+     * A MESMA EXPRESSÃO é usada pelas duas importações para casar nome, então o que o banco considera
+     * duplicado e o que a importação considera o mesmo nome são, por construção, a mesma coisa.
+     *
+     * CAIXA E ESPAÇO, SEM ACENTO REMOVIDO, e isso é escolha medida: as duplicatas reais do centro de
+     * custo são de caixa e de espaço à direita, e tirar acento exigiria a extensão `unaccent`, que
+     * NÃO está instalada no banco. Instalar extensão é mudança de escopo que ninguém pediu (§A.14) e
+     * o ganho seria marginal. "Loja Sé" e "Loja Se" ficam como duas lojas, e a prévia da importação
+     * mostra as duas para o time decidir.
+     */
+    uqNomePorCliente: uniqueIndex("uq_cliente_loja_nome").on(
+      t.codCliente,
+      sql`upper(btrim(regexp_replace(${t.nome}, '\\s+', ' ', 'g')))`,
+    ),
+    idxCliente: index("idx_cliente_lojas_cliente").on(t.codCliente),
+  }),
+);
+
+/**
  * OBRIGATORIEDADE DE PENDÊNCIA POR CLIENTE (OST da tela de gestão de obrigatoriedade).
  *
  * Guarda o que está DESLIGADO, não o que está ligado, e essa escolha é o coração do desenho:
@@ -571,6 +637,26 @@ export const admissoes = pgTable(
     // farol AGUARDANDO_LIBERACAO é excluído de todas as filas/KPIs.
     codCliente: varchar("cod_cliente", { length: 40 }).references(() => clientes.codCliente),
     cargoId: uuid("cargo_id").references(() => cargos.id),
+    /**
+     * LOJA / UNIDADE do cliente onde a pessoa trabalha (cenário 1, etapa 3). NULLABLE e
+     * `ON DELETE SET NULL`, e as duas coisas são desenho:
+     *
+     * NULLABLE porque a maioria dos clientes NÃO tem lojas, e para eles a admissão fica no nome do
+     * cliente, como sempre foi. Cobrar loja de quem não tem loja é o oposto do que a régua faz.
+     *
+     * `SET NULL` e não `CASCADE`: apagar uma loja não pode levar a admissão junto. Na prática o
+     * catálogo INATIVA em vez de apagar, então este caminho é a última rede.
+     *
+     * MORA AQUI, e não em `dados_vaga_folha`: a loja é propriedade da ADMISSÃO, lida por Esteira,
+     * Gerenciador, Alto Volume e liberação, telas que hoje não tocam a folha. Em `dados_vaga_folha`
+     * ela custaria um join a mais em cada uma delas.
+     *
+     * INVARIANTE QUE O BANCO NÃO EXPRESSA: a loja tem de ser do MESMO cliente da admissão. Não há
+     * como declarar isso numa chave estrangeira simples (seria preciso uma composta com
+     * `cod_cliente`, que aqui é nulável), então quem garante é o serviço, num ponto só
+     * (`validarLojaDoCliente`), atravessado por TODOS os caminhos de escrita.
+     */
+    lojaId: uuid("loja_id").references(() => clienteLojas.id, { onDelete: "set null" }),
     // Consultor que GEROU a admissão (Fase 2C): associado às não conformidades que ela vier a gerar
     // (Via 1 — penaliza o consultor). Nullable: admissões anteriores à 2C não têm autor registrado.
     consultorId: uuid("consultor_id").references(() => usuarios.id),

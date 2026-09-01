@@ -304,3 +304,29 @@ class DocumentoVtRequest(_CamelModel):
     total_ida: float = 0
     total_volta: float = 0
     total_dia: float = 0
+
+
+# ── Planilha de LOJAS: mapeamento de colunas por IA (cenário 1, etapa 2) ────
+class PlanilhaMapearRequest(_CamelModel):
+    """O que o backend manda: só o CABEÇALHO e uma AMOSTRA, nunca a planilha inteira.
+
+    Quinze linhas bastam para reconhecer uma coluna; as outras 1.985 não acrescentam informação e
+    custariam tokens. §A.6: nada disto é persistido nem logado.
+    """
+
+    cabecalho: list[str]
+    amostra: list[list[str]] = []
+
+
+class MapeamentoColunas(_CamelModel):
+    """O que a IA devolve: ÍNDICE de cada coluna (base 0) ou nulo quando aquilo não existe.
+
+    Índice e não nome, porque o nome pode vir vazio, repetido ou com acento, e é pelo índice que o
+    backend aplica o mapeamento nas linhas todas.
+    """
+
+    coluna_nome: int | None = None
+    coluna_endereco: int | None = None
+    coluna_codigo: int | None = None
+    confianca: str = "BAIXA"
+    observacao: str = ""

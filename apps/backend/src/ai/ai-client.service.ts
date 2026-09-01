@@ -274,6 +274,51 @@ export class AiClientService {
    * pendência. NUNCA lança: indisponibilidade vira `{ encontrada: false }`, e a reconciliação
    * simplesmente não conclui nada naquele ciclo, sem apagar aviso nenhum por engano.
    */
+  /**
+   * MAPEAMENTO DE COLUNAS DA PLANILHA DE LOJAS (cenário 1, etapa 2).
+   *
+   * Manda só o CABEÇALHO e uma AMOSTRA, nunca o arquivo: a tarefa da IA é dizer QUAIS COLUNAS são o
+   * quê, e quem aplica o mapeamento nas até 2.000 linhas é o backend. Isso deixa a importação
+   * determinística e a chamada barata.
+   *
+   * NUNCA LANÇA. Falha, quota estourada, credencial ruim ou serviço fora devolvem `null`, e o
+   * chamador abre o modal com o mapeamento VAZIO para o consultor escolher as colunas na mão. A IA
+   * ACELERA, não habilita: uma quota estourada não pode virar "não dá para cadastrar loja hoje".
+   *
+   * §A.6: loga só o status HTTP. Nada do conteúdo da planilha entra em log.
+   */
+  async mapearColunasPlanilha(
+    cabecalho: string[],
+    amostra: string[][],
+  ): Promise<{
+    colunaNome: number | null;
+    colunaEndereco: number | null;
+    colunaCodigo: number | null;
+    confianca: "ALTA" | "MEDIA" | "BAIXA";
+    observacao: string;
+  } | null> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 45_000);
+    try {
+      const res = await fetch(`${this.baseUrl}/planilha/mapear-colunas`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Internal-Token": this.token },
+        body: JSON.stringify({ cabecalho, amostra }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        this.logger.warn(`ai-service /planilha/mapear-colunas respondeu HTTP ${res.status}`);
+        return null;
+      }
+      return (await res.json()) as Awaited<ReturnType<AiClientService["mapearColunasPlanilha"]>>;
+    } catch {
+      this.logger.warn("ai-service /planilha/mapear-colunas indisponível; mapeamento manual.");
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async localizarPastaDrive(
     parentFolderId: string,
     pastaNome: string,

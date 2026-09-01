@@ -873,3 +873,27 @@ o kit CRU. **Dez admissões** foram arquivadas sem assinatura, marcadas ASSINADO
 apagado e saíram da fila. Nove foram descobertas por varredura e recuperadas em 01/09; a décima caiu
 na fresta entre a varredura e a subida da correção, e só apareceu porque se mediu de novo. Nenhum
 alarme tocou em nenhuma delas. *(Decisão do diretor.)*
+
+## A.34: SEMPRE dizer QUEM está trabalhando e em QUE (regra permanente)
+
+**Todo pulso da fábrica declara, explicitamente, qual agente está executando e qual tarefa.** Sem
+isso o diretor não tem como distinguir "a fábrica está produzindo" de "a fábrica parou", e foi
+exatamente esse o problema: a tela dele mostrava parada enquanto o retorno dizia que a construção
+seguia.
+
+- **Formato obrigatório no pulso:** quem executa (o agente, ou o coordenador diretamente) e a tarefa
+  em curso. Quando houver fila, dizer o que já terminou, o que está em execução e o que falta.
+- **NUNCA afirmar que algo está "em andamento" quando o turno terminou.** Entre um turno e outro
+  **nada roda sozinho**. "Vou seguir", "sigo com", "está rodando em segundo plano" só podem ser
+  ditos quando existe, de fato, processo em segundo plano (comando em background ou agente
+  despachado), e nesse caso o pulso diz **qual** e **como conferir**. Intenção não é execução, e
+  descrever uma como a outra é relatório falso.
+- **Trabalho terminado no turno se declara no passado**, com a prova. Trabalho que ainda não começou
+  se declara como próximo passo, no futuro, sem fingir simultaneidade.
+- **O gatilho do erro é conhecido: DUAS OSTs ao mesmo tempo.** Quando chega demanda nova no meio de
+  uma frente, o coordenador se perde entre responder a nova e executar a antiga, e a antiga fica
+  parada enquanto o texto sugere que anda. Nesse caso o pulso diz, na primeira linha, **qual das duas
+  está sendo executada agora e qual está na fila**.
+
+*(Decisão do diretor, após o retorno das 13 perguntas afirmar que a etapa 1 seguia em construção
+enquanto a fábrica estava parada.)*

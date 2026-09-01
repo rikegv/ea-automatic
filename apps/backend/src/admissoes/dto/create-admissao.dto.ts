@@ -1,20 +1,5 @@
 import { Transform, Type } from "class-transformer";
-import {
-  ArrayMaxSize,
-  IsArray,
-  IsBoolean,
-  IsDateString,
-  IsIn,
-  IsNumber,
-  IsOptional,
-  IsString,
-  IsUUID,
-  Matches,
-  MaxLength,
-  Min,
-  MinLength,
-  ValidateNested,
-} from "class-validator";
+import { ArrayMaxSize, IsArray, IsBoolean, IsDateString, IsIn, IsNumber, IsOptional, IsString, IsUUID, Matches, MaxLength, Min, MinLength, ValidateNested } from "class-validator";
 import { normalizarSalarioParaDto, parseValorBR } from "./valor-monetario-br";
 import { TipoContratoCanonicoDto } from "./tipo-contrato.decorator";
 
@@ -92,6 +77,7 @@ export class VagaFolhaInputDto {
   @IsString()
   @MaxLength(80)
   centroCusto?: string;
+
 
   /**
    * SETOR (OST Onda 2). Campo PRÓPRIO, distinto de Departamento e Centro de Custo: a operação usa os
@@ -192,6 +178,17 @@ export class CreateAdmissaoDto {
 
   @IsUUID(undefined, { message: "Selecione um cargo válido." })
   cargoId!: string;
+
+  /**
+   * LOJA / UNIDADE do cliente (cenário 1, etapa 3). Mora AQUI, na admissão, e NÃO em
+   * `VagaFolhaInputDto`: a loja é onde a pessoa trabalha, propriedade da admissão, e a coluna vive
+   * em `admissoes`. Opcional na FORMA porque a maioria dos clientes não tem lojas e para eles o
+   * campo nem aparece na tela. Quem valida que a loja é DESTE cliente é o serviço
+   * (`validarLojaDoCliente`): a chave estrangeira sozinha só garante que ela existe.
+   */
+  @IsOptional()
+  @IsUUID()
+  lojaId?: string;
 
   @ValidateNested()
   @Type(() => CandidatoInputDto)

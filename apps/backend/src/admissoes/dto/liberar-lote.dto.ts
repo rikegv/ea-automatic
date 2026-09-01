@@ -24,6 +24,15 @@ import { TipoContratoCanonicoDto } from "./tipo-contrato.decorator";
  *
  * Teto de 50 por lote (decisão do diretor), validado aqui e de novo no service.
  */
+/** Um par `admissão -> loja` do lote. Ver `lojasPorAdmissao` em `LiberarEmLoteDto`. */
+export class LojaPorAdmissaoDto {
+  @IsUUID()
+  admissaoId!: string;
+
+  @IsUUID()
+  lojaId!: string;
+}
+
 export class LiberarEmLoteDto {
   @IsArray()
   @ArrayNotEmpty()
@@ -39,6 +48,24 @@ export class LiberarEmLoteDto {
 
   @IsUUID()
   cargoId!: string;
+
+  /**
+   * LOJA POR LINHA (cenário 1, etapa 3, decisão do diretor na Q9).
+   *
+   * É a ÚNICA exceção à regra do lote. Todo o resto (`cargoId`, `tipoContrato`, salário, projeto) é
+   * um valor só aplicado às N selecionadas, porque o caso real é N pessoas do mesmo cliente e cargo.
+   * A LOJA não: o mesmo lote costuma ter gente de lojas diferentes, e obrigar o consultor a liberar
+   * um lote por loja transformaria a liberação em massa em liberação individual disfarçada.
+   *
+   * Por isso vem como PARES `admissaoId -> lojaId`, e não como um campo escalar. Admissão que não
+   * aparecer na lista fica SEM loja, que é o mesmo desfecho de qualquer campo em branco no lote:
+   * vira pendência individual na esteira, não bloqueia (regra 5).
+   */
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => LojaPorAdmissaoDto)
+  lojasPorAdmissao?: LojaPorAdmissaoDto[];
 
   /** Trava de entrada (incidente de 06/08/2026): normaliza a grafia e recusa o que não existe. */
   @TipoContratoCanonicoDto()

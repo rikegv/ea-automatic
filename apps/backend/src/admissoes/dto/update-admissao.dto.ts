@@ -8,6 +8,7 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  ValidateIf,
   MaxLength,
   ValidateNested,
 } from "class-validator";
@@ -76,6 +77,19 @@ export class UpdateAdmissaoDto {
   @ValidateNested({ each: true })
   @Type(() => BeneficioAlocadoDto)
   pacoteBeneficios?: BeneficioAlocadoDto[];
+
+  /**
+   * LOJA / UNIDADE (cenário 1, etapa 3). É por aqui que o EDITAR do Gerenciador e o OLHINHO corrigem
+   * admissão que veio sem loja ou com a loja errada.
+   *
+   * `null` LIMPA o vínculo, e ausente não mexe. A distinção importa: "tirar a loja desta admissão" e
+   * "não estou falando de loja agora" são coisas diferentes, e um campo que só aceitasse string
+   * tornaria a primeira impossível pela tela.
+   */
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsUUID()
+  lojaId?: string | null;
 
   /** Trava de entrada (incidente de 06/08/2026): normaliza a grafia e recusa o que não existe. */
   @TipoContratoCanonicoDto()

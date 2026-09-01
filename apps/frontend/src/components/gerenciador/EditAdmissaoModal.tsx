@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { AuditoriaStatus, Origem, ResultadoAuditoria } from "@ea/shared-types";
 import { apiFetch, apiUpload, ApiError } from "@/lib/api";
+import { SeletorLoja } from "@/components/admin/SeletorLoja";
 import { useAuth } from "@/lib/auth-context";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
@@ -71,6 +72,8 @@ interface AdmissaoEdit {
   admissaoId: string;
   codCliente: string;
   cargoId: string;
+  /** LOJA atual (etapa 3). `null` = sem loja, ou cliente que não tem lojas cadastradas. */
+  lojaId?: string | null;
   // Nomes p/ o BLOCO 2 (exibição, não editáveis — identidade §A.3).
   clienteRazao: string | null;
   clienteOperacao: string | null;
@@ -230,6 +233,8 @@ export function EditAdmissaoModal({
   const [tipoContrato, setTipoContrato] = useState("");
   const [dataAdmissao, setDataAdmissao] = useState("");
   const [matricula, setMatricula] = useState("");
+  // LOJA (etapa 3): `null` é "sem loja" e é valor válido; `undefined` nunca chega ao corpo.
+  const [lojaId, setLojaId] = useState<string | null>(null);
   // Seletor de status. O valor pode ser um farol REAL ou o pseudo-valor PAUSADA (ver lib/farol):
   // a pausa é flag paralela no banco, e este é o único ponto onde ela vira "mais um status" na tela.
   const [farol, setFarol] = useState("EM_ADMISSAO");
@@ -309,6 +314,7 @@ export function EditAdmissaoModal({
         setTipoContrato(s(r.tipoContrato));
         setDataAdmissao(s(r.dataAdmissao).slice(0, 10));
         setMatricula(s(r.matricula));
+        setLojaId(r.lojaId ?? null);
         setFarolReal(r.farolGlobal);
         setPausadaEm(r.pausadaEm ?? null);
         setPausaMotivo(r.pausaMotivo ?? "");
@@ -422,6 +428,9 @@ export function EditAdmissaoModal({
           // date string"), undefined é aceito. Mesmo tratamento do wizard (nova/page.tsx).
           tipoContrato,
           dataAdmissao: dataAdmissao || undefined,
+          // LOJA (etapa 3): `null` LIMPA o vínculo, um id troca. Nunca `undefined` aqui, porque a
+          // tela sempre sabe o estado atual do campo.
+          lojaId,
           matricula,
           // PAUSA: quando o status escolhido é "Pausada", o farol NÃO é tocado (envia o real). A
           // pausa é flag paralela justamente para o farol seguir derivando por baixo; sobrescrevê-lo
@@ -714,6 +723,18 @@ export function EditAdmissaoModal({
                     />
                   </Campo>
                 )}
+                {/* LOJA / UNIDADE (etapa 3): é por aqui que se CORRIGE admissão que veio sem loja ou
+                    com a loja errada. Some quando o cliente não tem lojas. O cliente NÃO muda por
+                    este modal (trocar cliente é rota própria, e ela limpa a loja), então o seletor
+                    nunca precisa lidar com troca aqui. */}
+                <Campo rotulo="Loja / Unidade">
+                  <SeletorLoja
+                    codCliente={data?.codCliente}
+                    value={lojaId ?? undefined}
+                    onChange={(v) => setLojaId(v ?? null)}
+                    compacto
+                  />
+                </Campo>
                 {mostra("departamento") && (
                   <Campo rotulo="Departamento">
                     <input

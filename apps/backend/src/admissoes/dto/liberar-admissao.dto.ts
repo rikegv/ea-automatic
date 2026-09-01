@@ -1,15 +1,5 @@
 import { Type } from "class-transformer";
-import {
-  IsArray,
-  IsBoolean,
-  IsIn,
-  IsOptional,
-  IsString,
-  IsUUID,
-  MaxLength,
-  MinLength,
-  ValidateNested,
-} from "class-validator";
+import { IsArray, IsBoolean, IsIn, IsOptional, IsString, IsUUID, MaxLength, MinLength, ValidateNested } from "class-validator";
 import {
   BeneficioAlocadoDto,
   SEXO_VALORES,
@@ -35,6 +25,16 @@ export class LiberarAdmissaoDto {
 
   @IsUUID()
   cargoId!: string;
+
+  /**
+   * LOJA / UNIDADE do cliente (cenário 1, etapa 3). Opcional na FORMA: a maioria dos clientes não
+   * tem lojas, e para eles o campo nem aparece na tela. Quem valida que a loja é DESTE cliente é o
+   * serviço (`validarLojaDoCliente`), porque a chave estrangeira sozinha só garante que ela existe.
+   */
+  @IsOptional()
+  @IsUUID()
+  lojaId?: string;
+
 
   /** Trava de entrada (incidente de 06/08/2026): normaliza a grafia e recusa o que não existe. */
   @TipoContratoCanonicoDto()

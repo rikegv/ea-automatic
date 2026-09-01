@@ -33,6 +33,7 @@ import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
 import { naoPausada } from "../db/admissao-filtros";
 import {
+  clienteLojas,
   admissaoBeneficio,
   admissaoIfractal,
   beneficiosCatalogo,
@@ -1666,6 +1667,9 @@ export class EsteiraService {
         clienteOperacao: clientes.nomeOperacao,
         cargoId: admissoes.cargoId,
         cargoNome: cargos.nome,
+        // LOJA (etapa 3): o NOME, que é o que a ficha mostra. `leftJoin` porque a maioria das
+        // admissões não tem loja, e um innerJoin aqui apagaria todas elas do modal.
+        lojaNome: clienteLojas.nome,
         // Motivo do declínio (Fase 2): nome do catálogo, quando a admissão tem motivo vinculado.
         motivoDeclinio: motivosDeclinio.nome,
       })
@@ -1673,6 +1677,7 @@ export class EsteiraService {
       .innerJoin(candidatos, eq(admissoes.candidatoCpf, candidatos.cpf))
       .innerJoin(clientes, eq(admissoes.codCliente, clientes.codCliente))
       .innerJoin(cargos, eq(admissoes.cargoId, cargos.id))
+      .leftJoin(clienteLojas, eq(admissoes.lojaId, clienteLojas.id))
       .leftJoin(motivosDeclinio, eq(admissoes.motivoDeclinioId, motivosDeclinio.id))
       .where(eq(admissoes.id, admissaoId));
 
@@ -1876,6 +1881,8 @@ export class EsteiraService {
         operacao: adm.clienteOperacao,
       },
       cargo: adm.cargoNome,
+      // LOJA (etapa 3): nula é o caso normal (cliente sem lojas), e a ficha mostra "não informado".
+      lojaNome: adm.lojaNome ?? null,
       // BLOCO 2: dados da folha (endereço = o da admissão, decisão do diretor).
       //
       // CENTRO DE CUSTO, DEPARTAMENTO e GESTOR BP entram aqui (OST dos três bugs do modal do olho).
