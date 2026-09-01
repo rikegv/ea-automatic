@@ -72,9 +72,11 @@ function dormir(ms: number): Promise<void> {
  *       resp 200: data.attributes.status ∈ {draft, running, closed, canceled}
  *
  *  7) obterUrlAssinado → GET /envelopes/{id}/documents
- *       resp 200: data[].links.files.original = URL S3 PRESIGNED (X-Amz-Expires=300 → ~5min).
- *       Após o envelope fechar (closed), `files.original` aponta o PDF finalizado/assinado. Baixar
- *       SÍNCRONO no mesmo ciclo; a URL NUNCA é persistida nem logada (§A.6).
+ *       resp 200: data[].links.files.signed = URL S3 PRESIGNED (X-Amz-Expires=300 → ~5min) do PDF
+ *       ASSINADO. `files.original` é o kit CRU e NÃO serve, nem depois do close: quem arquiva o
+ *       original como "Contrato Assinado" arquiva um documento sem assinatura (provado byte a byte).
+ *       O `signed` só aparece um instante depois do `closed`; sem ele, não arquiva e tenta no próximo
+ *       ciclo. Baixar SÍNCRONO no mesmo ciclo; a URL NUNCA é persistida nem logada (§A.6).
  *
  *  9) listarSigners → GET /envelopes/{id}/signers
  *       resp 200: data[].id, data[].attributes.{ name, group, refusable, ... }
@@ -447,19 +449,28 @@ export class ClicksignApiService {
   }
 
   /**
-   * (7) Obtém a URL do documento assinado (S3 presigned, ~5min). Inerte → undefined. A URL é
-   * RETORNADA para download imediato pelo chamador — NUNCA é logada nem persistida (§A.6).
+   * (7) Obtém a URL do documento ASSINADO (S3 presigned, ~5min). Inerte → undefined. A URL é
+   * RETORNADA para download imediato pelo chamador, NUNCA é logada nem persistida (§A.6).
+   *
+   * SÓ O `signed`, SEM FALLBACK. Havia aqui um `?? files.original`, com o comentário de que "após o
+   * close, o original é o PDF finalizado". É FALSO, provado byte a byte: o `original` é o kit CRU,
+   * sem o log de assinatura da Clicksign, e o `signed` demora um instante para ficar pronto depois do
+   * `closed`. O fallback fazia essa ausência momentânea virar dano permanente: o kit sem assinatura
+   * subia ao Drive nomeado "Contrato Assinado", a admissão virava ASSINADO, a cópia local era apagada
+   * e ela saía da fila. Nove admissões arquivaram o documento errado assim, entre 25 e 28/08/2026.
+   *
+   * Sem o `signed`, devolve undefined: o chamador NÃO arquiva, NÃO marca ASSINADO e o registro fica
+   * em AGUARDANDO_ASSINATURA para o próximo ciclo tentar de novo. Ausência momentânea vira nova
+   * tentativa, não dano.
    */
   async obterUrlAssinado(envId: string): Promise<string | undefined> {
     if (this.inerte()) return undefined;
     const data = await this.req<{
-      data?: Array<{ links?: { files?: { signed?: string; original?: string } } }>;
+      data?: Array<{ links?: { files?: { signed?: string } } }>;
     }>("GET", `/envelopes/${enc(envId)}/documents`);
     const docs = data?.data;
     if (!Array.isArray(docs) || docs.length === 0) return undefined;
-    const files = docs[0]?.links?.files;
-    // Prefere `signed` se a conta expuser; senão `original` (que, após o close, é o PDF finalizado).
-    return files?.signed ?? files?.original ?? undefined;
+    return docs[0]?.links?.files?.signed ?? undefined;
   }
 
   /**

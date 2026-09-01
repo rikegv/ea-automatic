@@ -216,15 +216,30 @@ describe("ClicksignApiService — shapes confirmados no sandbox", () => {
     await expect(svc.consultarStatus("env-1")).resolves.toEqual({ status: "running" });
   });
 
-  it("obterUrlAssinado lê data[0].links.files.original e NÃO loga a URL", async () => {
+  it("obterUrlAssinado lê data[0].links.files.signed e NÃO loga a URL", async () => {
     const svc = new ClicksignApiService(config({ CLICKSIGN_API_TOKEN: "tok" }));
-    const url = "https://s3/contrato.pdf?X-Amz-Expires=300";
-    comFetch({ data: [{ links: { files: { original: url } } }] }, 200);
+    const url = "https://s3/contrato-assinado.pdf?X-Amz-Expires=300";
+    comFetch({ data: [{ links: { files: { signed: url } } }] }, 200);
     const errSpy = vi
       .spyOn((svc as unknown as { logger: { error: (m: string) => void } }).logger, "error")
       .mockImplementation(() => undefined);
 
     await expect(svc.obterUrlAssinado("env-1")).resolves.toBe(url);
     for (const c of errSpy.mock.calls) expect(String(c[0])).not.toContain("s3");
+  });
+
+  /**
+   * REGRESSÃO DO DANO PERMANENTE. Havia aqui um `?? files.original`: quando o `signed` demorava um
+   * instante para ficar pronto depois do `closed`, o pipeline arquivava o kit CRU no Drive nomeado
+   * "Contrato Assinado", marcava ASSINADO, apagava a cópia local e tirava a admissão da fila. Nove
+   * admissões perderam o contrato assim entre 25 e 28/08/2026. Sem `signed`, o certo é undefined,
+   * que o chamador lê como "não arquiva, tenta no próximo ciclo".
+   */
+  it("obterUrlAssinado NÃO cai no `original` quando o `signed` ainda não existe", async () => {
+    const svc = new ClicksignApiService(config({ CLICKSIGN_API_TOKEN: "tok" }));
+    const cru = "https://s3/kit-cru.pdf?X-Amz-Expires=300";
+    comFetch({ data: [{ links: { files: { original: cru } } }] }, 200);
+
+    await expect(svc.obterUrlAssinado("env-1")).resolves.toBeUndefined();
   });
 });

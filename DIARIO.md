@@ -11783,3 +11783,65 @@ com área AS. O restart derrubou as sessões, então todo mundo reloga e vê a m
 **O termo da dupla correção mudou só daqui para a frente.** Os aceites já gravados guardam o texto
 com o nome antigo, e é assim que tem de ser: aquele log é registro histórico do que a pessoa declarou
 naquele dia (§A.6). Nenhuma migration toca os registros.
+
+---
+
+## 01/09/2026 — Clicksign: o fallback que arquivava contrato sem assinatura, e as 9 recuperadas
+
+Bug vivo em produção, corrigido no mesmo dia. Detalhe técnico completo em
+`docs/INVESTIGACAO-CLICKSIGN-FALLBACK-ORIGINAL.md`.
+
+### O que era
+
+`obterUrlAssinado` fazia `files.signed ?? files.original`. O comentário dizia que "após o close, o
+`original` é o PDF finalizado", e isso é **falso**: o `original` é o kit CRU, sem o log de assinatura.
+O `signed` leva alguns segundos para a Clicksign gerar depois do envelope fechar.
+
+O dano não era o download errado, era a cascata que vinha depois como se estivesse tudo certo:
+arquivava no Drive com o nome "Contrato Assinado", marcava `ASSINADO`, apagava a cópia local do kit e
+tirava a admissão da fila. **Ausência de poucos segundos virava dano permanente e silencioso**, porque
+do ponto de vista do sistema nada tinha falhado.
+
+### A sequência executada
+
+1. **Pausa do tick** pelo toggle persistido `clicksign_scheduler_estado.ligado = false`, que o
+   scheduler relê a cada ciclo (vale sem deploy). Fila BullMQ conferida vazia: nenhum `poll-tick`
+   esperando. Nenhum ciclo rodou entre 08:31 e 08:44, com a cadência de 2 min: pausa provada, e ela
+   sobreviveu ao restart do backend.
+2. **Correção**, só no ponto do arquivamento. `obterUrlAssinado` devolve **só o `signed`**; sem ele,
+   `undefined`, e o `arquivarAssinado` já tratava isso como "não arquiva, fica em AGUARDANDO, tenta no
+   próximo ciclo". Os cinco passos do envelope, o balde de rate limit, as notificações e o ritmo do
+   tick **não foram tocados**. Dois testes de regressão novos.
+3. **Recuperação das 9**: baixado o `signed` real, conferido que carrega o log de assinatura, e
+   substituído o conteúdo do arquivo no Drive **pelo mesmo file id**, com `keepRevisionForever`. O
+   link da ficha continua valendo, a versão anterior fica no histórico, nada foi apagado.
+4. **Tick religado**, ciclo às 08:44:35, 4 envelopes varridos, 0 falhas.
+
+### Prova
+
+Gate verde antes de subir: typecheck 0, lint 0, **1689 testes passando** (145 arquivos). Nas 9, o
+sha256 do arquivo rebaixado do Drive é idêntico ao que a Clicksign serviu. A varredura independente que
+tinha encontrado o problema, rodada de novo, devolveu `ASSINADO_OK: 9, SEM_ASSINATURA: 0`. As páginas
+subiram exatamente `+2` em todas: são as do log de assinatura que o kit cru não tinha.
+
+Os 4 envelopes que estavam aguardando ficaram intactos durante a pausa e voltaram para a fila normal.
+
+### O gatilho, medido e não cravado
+
+Sete das nove foram arquivadas entre 18 e 59 segundos depois da última assinatura: é a corrida, direta.
+Duas não: uma com 30 min de folga e outra com **13 dias** (assinada em 12/08, arquivada em 25/08 às
+18:12, na cauda da primeira varredura do scheduler novo, que naquele minuto arquivou cerca de 170
+admissões). O `signed` dessa existia havia duas semanas, então "ainda não renderizou" não explica. A
+hipótese de comportamento da API sob rajada **não está provada** e fica anotada, não afirmada.
+
+O pedido do diretor falava em 5 casos que a corrida não explicaria; a medição encontra 2. Registrado
+como divergência aberta, provavelmente por corte diferente (janela contra o `updated` do envelope em vez
+de contra a última assinatura).
+
+### Aberto
+
+**Não há teto de tentativas.** O `envelopeExpirado` só é avaliado quando o envelope **não** está
+`closed`, então um `closed` cujo `signed` nunca aparecesse retentaria para sempre, visível só no log de
+warn. Custo por ciclo é de uma requisição, e o `signed` medido aparece em segundos, então é risco de
+diagnóstico e não de carga. **Proposta aguardando aval** (§A.31): contar os ciclos sem `signed` e
+marcar na tela de diagnóstico acima de um limiar. Não construído.

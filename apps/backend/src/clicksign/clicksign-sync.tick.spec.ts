@@ -196,6 +196,42 @@ describe("ClicksignSyncService.processarTick — ciclo de verificação (INT-4 /
     expect(logsConcat(warn)).not.toContain("amazonaws");
   });
 
+  /**
+   * REGRESSÃO DO DANO PERMANENTE (§A.5). O `signed` só fica pronto um instante depois do `closed`, e o
+   * pipeline caía num `?? files.original` que é o kit CRU: subia ao Drive como "Contrato Assinado",
+   * marcava ASSINADO, apagava a cópia local e tirava a admissão da fila. Nove admissões perderam o
+   * contrato assim entre 25 e 28/08/2026.
+   *
+   * O certo é NÃO FAZER NADA e devolver o registro ao próximo ciclo. Este teste prova as cinco
+   * abstenções de uma vez: não baixa, não arquiva, não marca ASSINADO, não apaga o kit local e não
+   * grava a URL do Drive. `url: undefined` é exatamente o que `obterUrlAssinado` devolve hoje quando a
+   * Clicksign só expõe o `original`.
+   */
+  it("envelope 'closed' SEM o PDF assinado pronto → não arquiva nada e segue na fila", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    const { svc, obterUrlAssinado, setCalls, ai, staging, warn } = montar({
+      selectResults: [[{ id: "adm-1", envelopeId: "env-1" }], [admRow()]],
+      status: "closed",
+      url: undefined,
+    });
+
+    await svc.processarTick();
+
+    expect(obterUrlAssinado).toHaveBeenCalledWith("env-1");
+    // Nada de download, nada de Drive: o kit cru não chega nem a ser buscado.
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(ai.arquivarDrive).not.toHaveBeenCalled();
+    // Nada de ASSINADO, nada de URL de pasta: a admissão continua AGUARDANDO_ASSINATURA.
+    expect(setCalls.find((c) => c.clicksignStatus === "ASSINADO")).toBeUndefined();
+    expect(setCalls.find((c) => c.contratoAssinadoDriveUrl !== undefined)).toBeUndefined();
+    // E o kit local sobrevive: é ele que o reenvio por correção usa se a assinatura nunca vier.
+    expect(setCalls.find((c) => c.kitAssinaturaPath === null)).toBeUndefined();
+    expect(staging.removerArquivo).not.toHaveBeenCalled();
+    // O motivo fica no log, para o ciclo preso ser diagnosticável.
+    expect(logsConcat(warn)).toContain("ainda não está pronto");
+  });
+
   it("envelope 'canceled' → marca CANCELADO; NÃO baixa nem arquiva", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     const { svc, obterUrlAssinado, decisoes, ai } = montar({

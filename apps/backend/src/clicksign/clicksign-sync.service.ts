@@ -548,9 +548,15 @@ export class ClicksignSyncService implements OnModuleInit, OnModuleDestroy {
       return false;
     }
 
+    // SÓ o `signed`. Sem ele, NÃO arquiva nada: o `original` é o kit cru e arquivá-lo como "Contrato
+    // Assinado" é dano permanente (ver `obterUrlAssinado`). Fica em AGUARDANDO e o próximo ciclo
+    // tenta de novo, até o assinado existir de verdade.
     const url = await this.api.obterUrlAssinado(envelopeId);
     if (!url) {
-      this.logger.warn(`Envelope closed sem URL de documento assinado (admissão ${admissaoId}).`);
+      this.logger.warn(
+        `Envelope closed mas o PDF assinado ainda não está pronto na Clicksign (admissão ${admissaoId}). ` +
+          `Nada arquivado; segue em AGUARDANDO_ASSINATURA para o próximo ciclo.`,
+      );
       return false;
     }
 
