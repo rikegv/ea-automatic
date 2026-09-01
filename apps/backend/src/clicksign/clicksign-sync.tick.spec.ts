@@ -17,6 +17,26 @@ vi.mock("../admissoes/farol", () => ({
 const S3_URL = "https://s3.sa-east-1.amazonaws.com/clicksign/contrato.pdf?X-Amz-Expires=300";
 const DRIVE_URL = "https://drive.google.com/drive/folders/PASTA_PRONTUARIO";
 
+/**
+ * Os DOIS binários que a Clicksign serve, como a guarda do arquivamento (§A.33) os enxerga. O
+ * assinado traz o dicionário `/Sig` que ela grava ao fechar o envelope; o kit cru não traz nada.
+ * Antes destes fixtures os testes baixavam 8 bytes vazios, o que passava porque nada era conferido.
+ */
+const PDF_ASSINADO = Buffer.from(
+  "%PDF-1.7\n9 0 obj\n<</Type/Sig/ByteRange [0 840 8420 1200]" +
+    "/Reference[<</TransformMethod/DocMDP>>]/Name(Clicksign)>>\nendobj\n%%EOF\n",
+);
+const PDF_KIT_CRU = Buffer.from("%PDF-1.7\n1 0 obj\n<</Type/Catalog>>\nendobj\n%%EOF\n");
+
+/** Resposta de download da URL S3, com o corpo escolhido pelo teste. */
+function respostaComPdf(pdf: Buffer): Response {
+  return {
+    ok: true,
+    status: 200,
+    arrayBuffer: async () => pdf.buffer.slice(pdf.byteOffset, pdf.byteOffset + pdf.byteLength),
+  } as unknown as Response;
+}
+
 /** Builder thenable que ignora a query e resolve um resultado fixo (db.select sem Postgres real). */
 function selectChain<T>(result: T) {
   const b: Record<string, unknown> = {};
@@ -165,11 +185,9 @@ describe("ClicksignSyncService.processarTick — ciclo de verificação (INT-4 /
   afterEach(() => vi.restoreAllMocks());
 
   it("envelope 'closed' → baixa síncrono, arquiva no Drive, marca ASSINADO + URL da PASTA do Drive", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({
-      ok: true,
-      status: 200,
-      arrayBuffer: async () => new ArrayBuffer(8),
-    } as unknown as Response);
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(respostaComPdf(PDF_ASSINADO));
 
     const { svc, obterUrlAssinado, setCalls, ai, log, warn } = montar({
       selectResults: [[{ id: "adm-1", envelopeId: "env-1" }], [admRow()]],
@@ -232,6 +250,50 @@ describe("ClicksignSyncService.processarTick — ciclo de verificação (INT-4 /
     expect(logsConcat(warn)).toContain("ainda não está pronto");
   });
 
+  /**
+   * A REGRA DURA (§A.33): PROIBIDO ARQUIVAR CONTRATO SEM ASSINATURA, sob qualquer condição.
+   *
+   * O teste acima cobre a ausência da URL. Este cobre o caso pior e mais insidioso: a URL EXISTE, o
+   * download dá 200, e mesmo assim o que veio no corpo é o kit CRU. Foi assim que dez admissões
+   * perderam o contrato: nada falhava, o binário é que era o errado.
+   *
+   * Aqui a única defesa é a guarda olhar os BYTES. Se alguém, um dia, reintroduzir qualquer caminho
+   * que devolva o `original` (um fallback "de segurança", um cache, um retry que pega o ativo
+   * errado), este teste quebra antes de chegar em produção. É o que torna a regra inviolável por
+   * código, e não por disciplina.
+   */
+  it("REGRA DURA: baixou o kit CRU em vez do assinado → guarda RECUSA e nada é arquivado", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(respostaComPdf(PDF_KIT_CRU));
+
+    const { svc, setCalls, ai, staging } = montar({
+      selectResults: [[{ id: "adm-1", envelopeId: "env-1" }], [admRow()]],
+      status: "closed",
+      url: S3_URL,
+    });
+    const erro = vi
+      .spyOn((svc as unknown as { logger: { error: (m: string) => void } }).logger, "error")
+      .mockImplementation(() => undefined);
+
+    await svc.processarTick();
+
+    // O download chegou a acontecer (a guarda é depois dele, é o binário que ela julga)...
+    expect(fetchSpy).toHaveBeenCalledWith(S3_URL);
+    // ...e a partir daí NADA: nem staging, nem Drive.
+    expect(staging.salvar).not.toHaveBeenCalled();
+    expect(ai.arquivarDrive).not.toHaveBeenCalled();
+    // Nem ASSINADO, nem URL de pasta gravada.
+    expect(setCalls.find((s) => s.clicksignStatus === "ASSINADO")).toBeUndefined();
+    expect(setCalls.find((s) => s.contratoAssinadoDriveUrl !== undefined)).toBeUndefined();
+    // E o kit local SOBREVIVE: é ele que o reenvio por correção usa.
+    expect(setCalls.find((s) => s.kitAssinaturaPath === null)).toBeUndefined();
+    expect(staging.removerArquivo).not.toHaveBeenCalled();
+    // A recusa é ERRO no log (não warn): é anomalia, alguém tem de olhar. Sem PII, sem URL.
+    const e = logsConcat(erro);
+    expect(e).toContain("RECUSADO");
+    expect(e).not.toContain("11144477735");
+    expect(e).not.toContain("amazonaws");
+  });
+
   it("envelope 'canceled' → marca CANCELADO; NÃO baixa nem arquiva", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     const { svc, obterUrlAssinado, decisoes, ai } = montar({
@@ -279,11 +341,9 @@ describe("ClicksignSyncService.processarTick — ciclo de verificação (INT-4 /
 
   it("'closed' vencido ainda ARQUIVA: o prazo só decide depois de closed/canceled", async () => {
     // Assinado no último dia, ciclo rodou depois do vencimento. Expirar aqui perderia o contrato.
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({
-      ok: true,
-      status: 200,
-      arrayBuffer: async () => new ArrayBuffer(8),
-    } as unknown as Response);
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(respostaComPdf(PDF_ASSINADO));
     const enviadoEm = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000);
     const { svc, setCalls } = montar({
       selectResults: [[{ id: "adm-1", envelopeId: "env-1", enviadoEm }], [admRow()]],

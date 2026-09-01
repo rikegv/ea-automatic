@@ -842,3 +842,34 @@ depois.
 diretor foi mandado para lá. A tela que ele abriu não continha o trabalho das outras sessões de A&S,
 e o tempo da validação foi gasto entendendo qual endereço mostrava o quê, em vez de olhando a
 entrega. *(Decisão do diretor.)*
+
+## A.33: PROIBIDO arquivar contrato SEM ASSINATURA (regra permanente)
+
+**O sistema NUNCA, sob NENHUMA circunstância, arquiva no Drive um contrato sem assinatura.** Não é
+preferência de implementação, é regra: um documento sem assinatura arquivado como "Contrato Assinado"
+é dano permanente e silencioso, porque do ponto de vista do sistema nada falhou.
+
+- **Verificar ANTES de arquivar.** O binário prestes a subir é conferido: ele é o assinado de verdade
+  (o `signed` da Clicksign, com o dicionário de assinatura digital) ou não é. Não sendo, o sistema
+  **não arquiva, não marca ASSINADO, não apaga a cópia local do kit, não tira a admissão da fila** e
+  **retenta no ciclo seguinte**. Abster-se é o comportamento seguro; arquivar errado é irreversível.
+- **A guarda é explícita e mora no código**, não na disciplina de quem edita: `verificarContratoAssinado`
+  (`domain/contrato-assinado.ts`), chamada em `arquivarAssinado` (`clicksign-sync.service.ts`) logo
+  após o download e **antes de qualquer efeito**. Violada a guarda, o arquivamento é **bloqueado** e
+  registrado como **ERRO** no log (sem PII, sem URL, §A.6). Nunca deixa passar.
+- **O critério é ESTRUTURAL, medido contra a produção (01/09/2026):** o PDF assinado carrega
+  `/ByteRange` e `/Name(Clicksign)`, que são a assinatura digital em si; o kit cru não carrega nenhum
+  dos dois (3 de 3 envelopes reais, nas duas classes). Texto de página seria sinal frágil, porque há
+  kit com página em imagem.
+- **Travado em TESTE.** `contrato-assinado.spec.ts` (o critério) e o teste da regra dura em
+  `clicksign-sync.tick.spec.ts` (o pipeline recusa o kit cru mesmo com download 200 e URL válida).
+  Qualquer caminho futuro que volte a entregar o não-assinado ao arquivamento **quebra o teste antes
+  de chegar em produção**. A regra é inviolável por código, não por lembrança.
+- **A ausência do fallback não basta.** O `?? files.original` foi removido no commit `3e10ddd`, e
+  ainda assim a guarda existe: fallback some numa refatoração, guarda com teste não.
+
+**O caso que originou a regra (25 a 28/08/2026):** `obterUrlAssinado` caía em `files.original`, que é
+o kit CRU. **Dez admissões** foram arquivadas sem assinatura, marcadas ASSINADO, tiveram o kit local
+apagado e saíram da fila. Nove foram descobertas por varredura e recuperadas em 01/09; a décima caiu
+na fresta entre a varredura e a subida da correção, e só apareceu porque se mediu de novo. Nenhum
+alarme tocou em nenhuma delas. *(Decisão do diretor.)*

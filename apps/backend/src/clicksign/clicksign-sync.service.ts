@@ -32,6 +32,7 @@ import { recomputeFarolGlobal } from "../admissoes/farol";
 import type { EstadoFrente } from "../domain/frentes";
 import { kitLiberado } from "../domain/frentes";
 import { validarPdfKit } from "../domain/pdf-kit";
+import { verificarContratoAssinado } from "../domain/contrato-assinado";
 import { montarAssinantes } from "../domain/clicksign-assinantes";
 import { KitService } from "../kit/kit.service";
 import { StagingService } from "../staging/staging.service";
@@ -570,6 +571,20 @@ export class ClicksignSyncService implements OnModuleInit, OnModuleDestroy {
         return false;
       }
       buffer = Buffer.from(await res.arrayBuffer());
+
+      // GUARDA DE ARQUIVAMENTO (§A.33): o binário é conferido ANTES de qualquer efeito. Contrato sem
+      // assinatura não sobe ao Drive sob nenhuma condição, nem que um caminho futuro volte a entregar
+      // o kit cru aqui. Recusar é o comportamento SEGURO: nada arquivado, nada marcado, kit local
+      // intacto, admissão na fila, e o próximo ciclo tenta de novo.
+      const veredicto = verificarContratoAssinado(buffer);
+      if (!veredicto.ok) {
+        this.logger.error(
+          `GUARDA: arquivamento RECUSADO, o PDF não é o contrato assinado (${veredicto.motivo}). ` +
+            `Admissão ${admissaoId} segue em AGUARDANDO_ASSINATURA; nada foi arquivado nem apagado.`,
+        );
+        return false;
+      }
+
       stagingPath = await this.staging.salvar(admissaoId, "CONTRATO_ASSINADO", {
         buffer,
         originalname: "contrato_assinado.pdf",

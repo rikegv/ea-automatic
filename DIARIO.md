@@ -11845,3 +11845,58 @@ de contra a última assinatura).
 warn. Custo por ciclo é de uma requisição, e o `signed` medido aparece em segundos, então é risco de
 diagnóstico e não de carga. **Proposta aguardando aval** (§A.31): contar os ciclos sem `signed` e
 marcar na tela de diagnóstico acima de um limiar. Não construído.
+
+---
+
+## 01/09/2026 (tarde) — O décimo contrato, e a regra dura contra arquivar sem assinatura
+
+Continuação da entrada da manhã. O diretor pediu o retrato do estado, e medir de novo achou uma
+décima vítima do fallback. Recuperada, e a regra virou guarda com teste.
+
+### O décimo caso
+
+Ao recontar os contratos do Drive, apareceu um arquivado em **31/08 às 21:11 UTC**, ou seja **depois**
+da varredura que encontrou os 9 (31/08 19:54) e **antes** de a correção subir (01/09 08:38). Caiu na
+fresta. Nunca esteve na lista dos 9 porque a varredura já tinha passado.
+
+Provado antes de mexer: 55 páginas, **zero ocorrências de "clicksign" nos bytes crus**, revisão única
+no Drive, e o envelope `closed` com o ativo `signed` disponível na Clicksign.
+
+Recuperado pelo mesmo caminho seguro: baixado o `signed`, conferido que carrega a assinatura,
+conteúdo substituído **no mesmo file id** com `keepRevisionForever`. Resultado `RECUPERADO`, sha do
+arquivo rebaixado do Drive **idêntico** ao que a Clicksign serviu, páginas 55 → 57 (o `+2` do log de
+assinatura, o mesmo padrão das outras 9). Nada apagado, versão anterior no histórico.
+
+**Varredura completa depois disso: 193 contratos, `SEM_ASSINATURA: 0`.** A contagem é zero.
+
+### A regra dura (§A.33): proibido arquivar contrato sem assinatura
+
+O diretor impôs como regra permanente. A remoção do fallback (commit `3e10ddd`) tirou a causa, mas a
+ausência de um fallback é disciplina, e disciplina se perde numa refatoração. Agora há guarda.
+
+- **`domain/contrato-assinado.ts`**, novo: `verificarContratoAssinado(bytes)` julga o BINÁRIO e
+  devolve veredicto com motivo curto e sem PII.
+- **Critério ESTRUTURAL, medido contra a produção**, comparando os dois ativos (`original` e `signed`)
+  de três envelopes reais: o assinado carrega `/ByteRange` e `/Name(Clicksign)`, que são a assinatura
+  digital em si; o kit cru não carrega nenhum dos dois. 3 de 3 nas duas classes. Texto de página seria
+  frágil, porque há kit com página em imagem.
+- **Chamada em `arquivarAssinado`**, logo após o download e **antes de qualquer efeito**. Recusou:
+  não arquiva, não marca ASSINADO, não apaga o kit local, não tira da fila, e o ciclo seguinte tenta
+  de novo. A recusa é **ERRO** no log, não warn: é anomalia, alguém tem de olhar.
+- **Travado em teste**: 7 casos no domínio (aceita o assinado, recusa o kit cru, recusa assinatura de
+  outro emissor, recusa não-PDF, recusa vazio, tolera espaçamento, acha a marca em meio a binário) e
+  1 no pipeline, o que importa: **download 200, URL válida, e mesmo assim o corpo é o kit cru**. Foi
+  exatamente essa a forma do dano. Quem reintroduzir qualquer caminho que entregue o não-assinado
+  quebra o teste antes de produção.
+- **Dois testes existentes ajustados**: baixavam `ArrayBuffer(8)`, 8 bytes vazios, que passavam porque
+  nada era conferido. Agora usam um PDF assinado de verdade. Ajuste obrigatório da guarda, registrado
+  aqui por causa da §A.26.
+
+**Não foi tocado nada do resto do pipeline**: envelope, os cinco passos, envio, notificações, balde de
+rate limit e ritmo do tick ficaram como estavam. Só o ponto do arquivamento.
+
+### Prova
+
+Typecheck 0, lint 0, **1697 testes passando** (146 arquivos), contra 1689 antes: mais 8, todos da
+regra. Guarda conferida no `dist` que está rodando, backend reiniciado às 15:13:52 UTC com health 200
+e o scheduler de volta no ar.
