@@ -5,13 +5,14 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { and, asc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import type { AuthUser } from "../../auth/auth.types";
 import type { Database } from "../../db/client";
 import { DRIZZLE } from "../../db/drizzle.module";
 import {
   admissaoProjeto,
   cargos,
+  clienteLojas,
   clientes,
   projetoGrupoEntrada,
   projetoVagaCargo,
@@ -21,10 +22,17 @@ import type {
   CreateGrupoDto,
   CreateProjetoDto,
   CreateVagaDto,
+  RemoverVagasEmLoteDto,
   UpdateGrupoDto,
   UpdateProjetoDto,
   UpdateVagaDto,
 } from "./alto-volume.dto";
+import {
+  conferirDistribuicao,
+  metaDoCargo,
+  motivoCotasAntes,
+  totalDistribuido,
+} from "./meta-detalhamento";
 
 /**
  * CADASTRO DE ALTO VOLUME (onda 1): projetos sazonais, seus grupos de entrada e as vagas por cargo.
@@ -120,12 +128,18 @@ export class AltoVolumeService {
       .select({
         id: projetoVagaCargo.id,
         cargoId: projetoVagaCargo.cargoId,
+        // LOJA da cota (meta por loja). Nulo = a linha vale para o cargo no projeto inteiro. O NOME
+        // vem junto para a tela não precisar de uma segunda busca só para desenhar a linha.
+        lojaId: projetoVagaCargo.lojaId,
+        lojaNome: clienteLojas.nome,
         cargoNome: cargos.nome,
         grupoId: projetoVagaCargo.grupoId,
         quantidade: projetoVagaCargo.quantidade,
       })
       .from(projetoVagaCargo)
       .innerJoin(cargos, eq(cargos.id, projetoVagaCargo.cargoId))
+      // LEFT: a cota sem loja é o caso normal, e um inner apagaria todas as metas não detalhadas.
+      .leftJoin(clienteLojas, eq(clienteLojas.id, projetoVagaCargo.lojaId))
       .where(eq(projetoVagaCargo.projetoId, id))
       .orderBy(asc(cargos.nome));
 
@@ -322,7 +336,7 @@ export class AltoVolumeService {
   // ── Vagas por cargo ───────────────────────────────────────────────────────
 
   async criarVaga(projetoId: string, dto: CreateVagaDto) {
-    await this.exigirProjeto(projetoId);
+    const projeto = await this.exigirProjeto(projetoId);
 
     const cargo = await this.db.query.cargos.findFirst({ where: eq(cargos.id, dto.cargoId) });
     if (!cargo) throw new NotFoundException("Cargo não encontrado");
@@ -339,20 +353,47 @@ export class AltoVolumeService {
       }
     }
 
-    const existente = await this.db.query.projetoVagaCargo.findFirst({
-      where: and(
-        eq(projetoVagaCargo.projetoId, projetoId),
-        eq(projetoVagaCargo.cargoId, dto.cargoId),
-        dto.grupoId
-          ? eq(projetoVagaCargo.grupoId, dto.grupoId)
-          : isNull(projetoVagaCargo.grupoId),
-      ),
-    });
+    // A LOJA precisa ser deste cliente, pelo mesmo motivo da admissão: a chave estrangeira garante
+    // que ela existe, não que ela seja do cliente do projeto. Cota pendurada na loja de outro cliente
+    // inflaria o quadro de um projeto com a unidade de outro, e nada acusaria.
+    if (dto.lojaId) {
+      const loja = await this.db.query.clienteLojas.findFirst({
+        where: eq(clienteLojas.id, dto.lojaId),
+      });
+      if (!loja) throw new NotFoundException("Loja não encontrada");
+      if (loja.codCliente !== projeto.codCliente) {
+        throw new BadRequestException("A loja escolhida não pertence ao cliente deste projeto.");
+      }
+    }
+
+    // TODAS as linhas deste cargo neste projeto: é sobre elas que a invariante do detalhamento único
+    // decide, e é delas que sai a meta do cargo.
+    const doCargo = await this.db
+      .select({
+        id: projetoVagaCargo.id,
+        lojaId: projetoVagaCargo.lojaId,
+        grupoId: projetoVagaCargo.grupoId,
+        quantidade: projetoVagaCargo.quantidade,
+      })
+      .from(projetoVagaCargo)
+      .where(
+        and(
+          eq(projetoVagaCargo.projetoId, projetoId),
+          eq(projetoVagaCargo.cargoId, dto.cargoId),
+        ),
+      );
+
+    const existente = doCargo.find(
+      (l) =>
+        (l.grupoId ?? null) === (dto.grupoId ?? null) && (l.lojaId ?? null) === (dto.lojaId ?? null),
+    );
     if (existente) {
       throw new ConflictException(
-        dto.grupoId
-          ? `Este cargo já tem vagas cadastradas neste grupo (${existente.quantidade}). Edite a quantidade em vez de cadastrar outra linha.`
-          : `Este cargo já tem vagas cadastradas no projeto (${existente.quantidade}). Edite a quantidade em vez de cadastrar outra linha.`,
+        dto.lojaId
+          ? `Esta loja já tem vagas deste cargo (${existente.quantidade}). Edite a quantidade em vez de cadastrar outra linha.`
+          : dto.grupoId
+            ? `Este cargo já tem vagas cadastradas neste grupo (${existente.quantidade}). Edite a quantidade em vez de cadastrar outra linha.`
+            : `Este cargo já tem vagas cadastradas no projeto (${existente.quantidade}). Edite a quantidade em vez de cadastrar outra linha.`,
       );
     }
 
@@ -362,10 +403,90 @@ export class AltoVolumeService {
         projetoId,
         cargoId: dto.cargoId,
         grupoId: dto.grupoId ?? null,
+        lojaId: dto.lojaId ?? null,
         quantidade: dto.quantidade,
       })
       .returning();
     return row;
+  }
+
+  /**
+   * DETALHAR UM CARGO POR LOJA, numa transação. É a ação que a tela chama quando o diretor distribui
+   * a meta entre as lojas.
+   *
+   * SUBSTITUI, não soma (decisão 1 do diretor): a linha geral do cargo é APAGADA na mesma transação
+   * em que as cotas entram. É por isso que a meta do cargo, que continua sendo a soma das linhas,
+   * passa a valer o total distribuído sem nenhum código especial no cálculo.
+   *
+   * Lista VAZIA desfaz o detalhamento: apaga as cotas e o cargo volta a não ter meta, pronto para
+   * receber a linha única de novo.
+   */
+  async detalharVagasPorLoja(
+    projetoId: string,
+    cargoId: string,
+    cotas: { lojaId: string; quantidade: number }[],
+  ) {
+    const projeto = await this.exigirProjeto(projetoId);
+
+    const lojas = await this.db
+      .select({ id: clienteLojas.id, codCliente: clienteLojas.codCliente })
+      .from(clienteLojas)
+      .where(eq(clienteLojas.codCliente, projeto.codCliente));
+    const validas = new Set(lojas.map((l) => l.id));
+    for (const c of cotas) {
+      if (!validas.has(c.lojaId)) {
+        throw new BadRequestException("Uma das lojas não pertence ao cliente deste projeto.");
+      }
+    }
+    // Duas cotas para a mesma loja seriam duas linhas somando na mesma unidade, e o unique parcial
+    // do banco pegaria, mas com erro que o time não entende.
+    if (new Set(cotas.map((c) => c.lojaId)).size !== cotas.length) {
+      throw new BadRequestException("A mesma loja aparece duas vezes na distribuição.");
+    }
+
+    // A META DO CARGO, que é o total a repartir. Sai das linhas SEM loja, que é o que a regra A
+    // define como o número fixo.
+    const linhasDoCargo = await this.db
+      .select({ lojaId: projetoVagaCargo.lojaId, quantidade: projetoVagaCargo.quantidade })
+      .from(projetoVagaCargo)
+      .where(
+        and(eq(projetoVagaCargo.projetoId, projetoId), eq(projetoVagaCargo.cargoId, cargoId)),
+      );
+    const meta = metaDoCargo(linhasDoCargo);
+
+    // A TRAVA DOS DOIS LADOS (regra A): a soma tem de fechar EXATAMENTE o total do cargo. Nem menos
+    // (sobrou vaga sem loja) nem mais (prometeu mais do que o projeto tem). Loja com zero é válida.
+    const problema = conferirDistribuicao(meta, cotas);
+    if (problema) throw new BadRequestException(problema);
+
+    return this.db.transaction(async (tx) => {
+      // Fora só as COTAS antigas. A linha geral do cargo FICA: na regra A ela é o total fixo, e as
+      // lojas repartem dentro dele. Apagá-la (como fazia a regra anterior) deixaria o cargo sem meta.
+      await tx
+        .delete(projetoVagaCargo)
+        .where(
+          and(
+            eq(projetoVagaCargo.projetoId, projetoId),
+            eq(projetoVagaCargo.cargoId, cargoId),
+            isNotNull(projetoVagaCargo.lojaId),
+          ),
+        );
+      // LOJA COM ZERO é decisão válida ("aqui não contrata"), mas não vira LINHA: o `check
+      // quantidade > 0` do banco a recusaria, e uma cota de zero não acrescenta informação ao
+      // quadro. A trava já conferiu a soma com ela incluída, que é onde o zero importa.
+      const gravaveis = cotas.filter((c) => c.quantidade > 0);
+      if (gravaveis.length === 0) return { cotas: 0, meta, distribuido: totalDistribuido(cotas) };
+      await tx.insert(projetoVagaCargo).values(
+        gravaveis.map((c) => ({
+          projetoId,
+          cargoId,
+          grupoId: null,
+          lojaId: c.lojaId,
+          quantidade: c.quantidade,
+        })),
+      );
+      return { cotas: gravaveis.length, meta, distribuido: totalDistribuido(cotas) };
+    });
   }
 
   async atualizarVaga(vagaId: string, dto: UpdateVagaDto) {
@@ -383,12 +504,102 @@ export class AltoVolumeService {
    * não o vínculo. Apagar "Caixa 15" não desliga ninguém do projeto, só tira a meta daquele cargo,
    * e o cargo volta a não ser medido. As admissões vinculadas continuam onde estavam.
    */
+  /**
+   * REMOVE VÁRIAS linhas de vagas de uma vez (peça 3 do pacote de usabilidade).
+   *
+   * POR QUE EXISTE: distribuir um cargo por loja cria uma linha POR LOJA, então um cargo em quinze
+   * lojas vira dezesseis linhas. Desfazer isso clicando "remover" dezesseis vezes, cada uma com sua
+   * confirmação, é o retrabalho que esta rota corta.
+   *
+   * UMA LINHA RUIM NÃO DERRUBA O LOTE, a mesma régua do lote de vínculos: ela volta em `falhas` com
+   * o motivo em texto, e as outras saem. O contrário faria uma linha já apagada por outra aba
+   * cancelar a remoção das quinze restantes.
+   *
+   * A TRAVA DA META (regra A, §A.27) É RESPEITADA AQUI, e ela é de ORDEM, não de seleção. Apagar a
+   * linha GERAL de um cargo que ainda tem cotas de loja deixaria as cotas órfãs: o cargo ficaria sem
+   * meta e as lojas continuariam prometendo vagas de um cargo que não está mais no projeto, e o
+   * painel da diretoria leria isso como plano. Então a linha geral SÓ SAI depois que as cotas
+   * saírem, em outra operação. Selecionar as duas juntas NÃO burla a ordem: as cotas saem, a linha
+   * do cargo fica, e o clique seguinte a remove. O lote NUNCA apaga o que não foi selecionado.
+   */
+  async removerVagasEmLote(projetoId: string, dto: RemoverVagasEmLoteDto) {
+    await this.exigirProjeto(projetoId);
+
+    // Ids repetidos viram um só: o mesmo clique duplo que o lote de vínculos já previa.
+    const ids = [...new Set(dto.vagaIds)];
+
+    // TODAS as linhas do projeto, e não só as selecionadas: é preciso enxergar as cotas que FICARAM
+    // de fora da seleção para decidir se a linha geral pode sair.
+    const doProjeto = await this.db
+      .select({
+        id: projetoVagaCargo.id,
+        cargoId: projetoVagaCargo.cargoId,
+        lojaId: projetoVagaCargo.lojaId,
+        grupoId: projetoVagaCargo.grupoId,
+      })
+      .from(projetoVagaCargo)
+      .where(eq(projetoVagaCargo.projetoId, projetoId));
+    const porId = new Map(doProjeto.map((v) => [v.id, v]));
+
+    const aprovadas: string[] = [];
+    const falhas: { vagaId: string; motivo: string }[] = [];
+
+    for (const vagaId of ids) {
+      const linha = porId.get(vagaId);
+      if (!linha) {
+        falhas.push({ vagaId, motivo: "Linha de vagas não encontrada neste projeto." });
+        continue;
+      }
+      if (!linha.lojaId) {
+        // A ORDEM É OBRIGATÓRIA (decisão do diretor): cota primeiro, linha do cargo depois. NÃO
+        // basta selecionar as duas juntas. Contar as cotas que EXISTEM, e não as que ficariam de
+        // fora da seleção, é o que fecha a porta do "remover tudo junto": num lote único não há como
+        // garantir a ordem entre as linhas, e a tela ficaria ensinando um caminho que o banco não
+        // faz. Removidas as cotas, a linha do cargo sai no clique seguinte.
+        const cotas = doProjeto.filter((v) => v.cargoId === linha.cargoId && v.lojaId).length;
+        if (cotas > 0) {
+          falhas.push({ vagaId, motivo: motivoCotasAntes(cotas) });
+          continue;
+        }
+      }
+      aprovadas.push(vagaId);
+    }
+
+    if (aprovadas.length > 0) {
+      await this.db.delete(projetoVagaCargo).where(inArray(projetoVagaCargo.id, aprovadas));
+    }
+
+    return { removidas: aprovadas.length, falhas };
+  }
+
+  /**
+   * REMOVE UMA linha de vagas.
+   *
+   * A MESMA TRAVA DO LOTE VALE AQUI, e a ausência dela era um buraco: a remoção uma a uma apagava a
+   * linha geral de um cargo distribuído por loja sem perguntar nada, deixando as cotas órfãs. Sem
+   * esta guarda, o caminho individual seria a porta aberta ao lado da porta fechada.
+   */
   async removerVaga(vagaId: string) {
-    const [row] = await this.db
-      .delete(projetoVagaCargo)
-      .where(eq(projetoVagaCargo.id, vagaId))
-      .returning({ id: projetoVagaCargo.id });
-    if (!row) throw new NotFoundException("Linha de vagas não encontrada");
+    const linha = await this.db.query.projetoVagaCargo.findFirst({
+      where: eq(projetoVagaCargo.id, vagaId),
+    });
+    if (!linha) throw new NotFoundException("Linha de vagas não encontrada");
+
+    if (!linha.lojaId) {
+      const cotas = await this.db
+        .select({ id: projetoVagaCargo.id })
+        .from(projetoVagaCargo)
+        .where(
+          and(
+            eq(projetoVagaCargo.projetoId, linha.projetoId),
+            eq(projetoVagaCargo.cargoId, linha.cargoId),
+            isNotNull(projetoVagaCargo.lojaId),
+          ),
+        );
+      if (cotas.length > 0) throw new BadRequestException(motivoCotasAntes(cotas.length));
+    }
+
+    await this.db.delete(projetoVagaCargo).where(eq(projetoVagaCargo.id, vagaId));
     return { ok: true };
   }
 

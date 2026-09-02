@@ -11977,3 +11977,191 @@ Etapa 5 (regra dura): a loja **não é obrigatória** ainda, e ninguém trava no
 
 As 5 lojas de teste do harness saíram da homologação (`Loja Morumbi`, `Loja Paulista`, `PDV Morumbi`,
 `PDV Centro`, `PDV Campinas`). As **15 reais** que o diretor importou na validação ficaram intactas.
+
+---
+
+## 02/09/2026, Lojas e Unidades: da produção à meta por loja, e o centro de custo que não era loja
+
+Dia longo, três frentes encadeadas. **Parte está em produção, parte está em homologação esperando
+validação, e o registro separa as duas com cuidado porque a diferença importa para quem retomar.**
+
+### O QUE ESTÁ EM PRODUÇÃO
+
+**Etapas 1, 2 e 3 do cenário 1, commit `7a16c70`**, mais o runner da carga em `4c9fec0`.
+
+- **Etapa 1, cadastro.** `cliente_lojas` filha do cliente, sem CNPJ (a loja compartilha o da mãe),
+  índice único sobre o nome NORMALIZADO. Bloco na ficha do cliente, com o botão "Mostrar Inativas"
+  abrindo o modal de reativação: loja inativada sai da lista principal e o histórico segue legível.
+- **Etapa 2, importação com IA.** Router `planilha.py` no `ai-service`. A IA lê **cabeçalho e quinze
+  linhas**, devolve os índices das colunas, e o **código** aplica nas até 2.000. Modal com cada coluna
+  editável, prévia recalculando sem chamar a IA de novo, e caminho manual quando o Vertex está fora.
+  **Confirmado vivo em produção**: 401 sem token, 200 com token, mapeando certo um cabeçalho fora de
+  ordem, confiança ALTA. Custo medido: **cerca de 600 tokens por importação**, uma chamada só.
+- **Etapa 3, vínculo.** `admissoes.loja_id` com seletor na liberação (individual e em lote, **uma loja
+  por linha**), no wizard e no editar, e exibição no olhinho. A guarda `validarLojaDoCliente`
+  atravessa os quatro caminhos de escrita, e a troca de cliente **limpa** a loja.
+- **Carga CPF para loja, rodada em produção.** 19 CPFs da base do diretor, **20 admissões vinculadas**
+  (uma pessoa com duas admissões recebeu nas duas), 8 nomes de loja resolvidos por ele na prévia. As
+  contagens de farol, frentes, sinalizador e Clicksign ficaram **idênticas**; só a dimensão de análise
+  foi preenchida. O arquivo com CPF foi apagado com `shred` e a pasta removida (§A.6).
+
+Estado da produção hoje: **15 lojas cadastradas, 20 admissões vinculadas**, e a coluna `loja_id` em
+`projeto_vaga_cargo` **não existe** (a migration `0092` não subiu).
+
+### O QUE ESTÁ EM HOMOLOGAÇÃO, NÃO COMMITADO
+
+**Etapa 4, peça 1, e a meta por loja.** Tudo na 3120, aguardando a validação do diretor.
+
+- **O Alto Volume passou a agrupar por LOJA**, e não mais pelo texto do centro de custo. Três
+  consultas e duas agregações trocaram de fonte; os baldes ficaram idênticos. O ganho foi medido no
+  dado real: o agrupamento antigo **partia a mesma loja em duas linhas** (KOP Cidade São Paulo
+  aparecia como "CIDADE SP" com 4 e "640545" com 2, porque metade tinha código e metade tinha nome).
+- **META POR LOJA** (`docs/DESENHO-META-POR-LOJA.md`): `projeto_vaga_cargo` ganhou `loja_id` nulável,
+  o mesmo movimento do `grupo_id` que já existia. A tela do projeto ganhou "detalhar por loja", e a
+  soma das cotas **substitui** a meta do cargo, que deixa de ser digitável.
+- **"Faltam" mudou de significado**, e essa era a razão da frente: era `total - na esteira` (quem
+  saiu) e passou a ser `meta - na esteira` (falta contratar), a mesma conta do quadro de cargos.
+- **A invariante que impede meta inflada** vive em `meta-detalhamento.ts`, com 12 testes: um cargo usa
+  UM nível por vez. Ela resolve um risco que **já existia antes da loja**, entre a meta do projeto e a
+  meta por grupo. E como `preenchimentoPorCargo` já somava, ele **não precisou mudar de fórmula**.
+
+Gate desta parte: typecheck 0, lint 0, **1741 testes no backend** e 156 no frontend.
+
+### A INVESTIGAÇÃO DO CENTRO DE CUSTO, e uma decisão REVERTIDA
+
+A fábrica vinha repetindo, desde o desenho, que "a operação escrevia o nome da loja no campo centro de
+custo". Isso saiu de um comentário do código de 25/08, e **ninguém tinha olhado os valores**. O diretor
+questionou, a medição foi feita, e a história estava errada:
+
+- **854 preenchimentos são só número contra 507 com letra.** No CRM: **133 numéricos contra 12 com
+  texto**, com valores como `650030`, `650010`, `640540`. No HAOC: 175 de 178 numéricos, `81400`
+  repetido 91 vezes.
+- Por cliente: **126 usam exclusivamente código numérico**, 44 só texto, 22 misturam.
+- O campo **não alimenta integração nenhuma**: nem kit, nem Clicksign, nem iFractal, nem Pandapé, nem
+  IA. Dentro do EA ele é gravado, exibido e cobrado, e nada mais.
+
+**Decisão revertida:** a fábrica havia oferecido desligar a obrigatoriedade do `CENTRO_CUSTO` no CRM
+como parte da frente. **Não se desliga.** Loja e centro de custo são coisas separadas, cobradas cada
+uma pelo seu motivo: a loja é a unidade física para análise, o centro de custo é código contábil que
+126 clientes usam de verdade e que o EA carrega para alguém usar fora dele. Fica em aberto para a
+operação responder se alguém lança esse código em outro sistema; se sim, o campo é essencial e o
+assunto se encerra.
+
+Isso não enfraquece a virada do Alto Volume, reforça: o agrupamento antigo não misturava só grafias,
+misturava **código com nome com lixo com vazio** (no CRM havia `loja` e `kope` como valores).
+
+### PONTO DE RETOMADA
+
+1. **O diretor valida na 3120**: Controle Gerencial, Alto Volume, cliente 56842 CRM, projeto
+   **TESTE Lojas CRM (cenário de validação)**. Confere o quadro por loja com a coluna **Meta**, o
+   **Faltam** novo, o **Sem Loja** e o cruzamento cargo x loja. Para mexer na meta: Menu Gerencial,
+   Alto Volume, abrir o projeto, "detalhar por loja".
+2. **Depois da validação, seguir para a peça 3 da etapa 4**: a sexta checagem no vínculo de pessoa ao
+   projeto, que **avisa e não bloqueia** quando a loja da pessoa não tem meta naquele projeto, e faz a
+   inconsistência aparecer no quadro ("N pessoas em lojas sem meta"). **Não iniciada.**
+3. **Publicar o conjunto da etapa 4** (Alto Volume por loja, meta por loja e a checagem), incluindo a
+   migration `0092`, seguindo a §A.25.
+
+### CENÁRIO DE TESTE NA HOMOLOGAÇÃO, a remover depois
+
+O projeto "TESTE Lojas CRM (cenário de validação)", as metas de cargo dele, 34 vínculos de admissão e
+26 vínculos de loja foram criados pela fábrica para a validação. **As 15 lojas reais que o diretor
+importou estão intactas.** Remover quando a validação terminar.
+
+### O QUE FICOU FORA, por decisão do diretor
+
+Etapa 5 (a regra dura de obrigatoriedade da loja), o A&S (campo de loja na abertura de vaga) e o
+cenário 2 (grupo CAGC, com o nome já definido). Nenhum deles foi iniciado.
+
+---
+
+## 02/09/2026, a etapa 4 sobe: Alto Volume por loja, meta por loja e o pacote de usabilidade
+
+O registro anterior deste mesmo dia separava o que estava em produção do que esperava validação.
+**O diretor validou e autorizou: o que estava em homologação subiu.** Commit único, porque é uma
+frente só, entregue em peças que só fazem sentido juntas.
+
+### O EIXO NOVO: LOJA
+
+O quadro do Alto Volume agrupava por `dados_vaga_folha.centro_custo`, e a coluna se chamava
+"Loja / Unidade" porque não havia onde guardar loja. Agora agrupa por `admissoes.loja_id`, o campo de
+verdade. Os quatro consumidores mudaram juntos, e há teste de identidade para cada um: a matriz por
+eixo tem de bater com o quadro daquele eixo, sempre.
+
+**A investigação que mudou o rumo:** foi medindo que se descobriu que o centro de custo **não era**
+loja improvisada. Dos valores em produção, 854 são numéricos contra 507 de texto, e 126 clientes usam
+exclusivamente código numérico. São dados diferentes, e a obrigatoriedade do centro de custo
+**continua de pé**, decisão revertida ainda na investigação, antes de qualquer código.
+
+### META POR LOJA (migration 0092)
+
+`projeto_vaga_cargo` ganhou `loja_id` nulável, com FK em **cascade** e os uniques parciais refeitos
+para os quatro casos (cargo, cargo+grupo, cargo+loja, cargo+grupo+loja). É o mesmo movimento que o
+`grupo_id` já fazia: coluna nulável mais unique parcial, e não tabela nova, porque meta em duas
+tabelas obrigaria toda consulta a somar duas fontes.
+
+**A regra A, decisão do diretor:** o cargo tem um total FIXO e as lojas repartem esse total, somando
+**exatamente** ele. Nem 18 nem 25 num cargo de 20. Loja com zero é válida, significa "aqui não
+contrata". A trava mora em `meta-detalhamento.ts`, domínio puro, com teste próprio.
+
+**A consequência que quase passou (§A.27).** Com a regra anterior a linha geral do cargo era APAGADA
+ao detalhar, então `preenchimentoPorCargo` podia somar tudo. Com a regra A a linha geral CONVIVE com
+as cotas, e somar as duas daria 40 num cargo de 20: meta inflada, percentual errado, termômetro
+errado. A meta do cargo passou a somar **só as linhas sem loja**.
+
+**Aditiva e sem backfill:** nenhum projeto existente ganhou meta por loja. Conferido em produção
+depois de subir: 24 cargos com meta, **zero** com distribuição por loja, **zero** violando a regra A.
+
+### AS DUAS TABELAS, E O QUE ELAS CONSERTARAM
+
+Loja com meta e ninguém alocado **sumia do quadro**, porque as linhas nasciam das pessoas. Agora são
+duas tabelas: a do **plano** (toda loja com meta, com ou sem gente) e a **Fora Do Plano** (quem está
+sem meta ou sem loja), que só aparece quando há caso. A coluna **Faltam** virou meta menos na
+esteira, que é o que significa falta contratar.
+
+### O PACOTE DE USABILIDADE
+
+- **Ver Pessoas**: modal por loja, nas duas tabelas, com nome, cargo, data e o andamento de Auditoria,
+  Exame e Cadastro. Os rótulos saem do **mesmo catálogo que a Esteira lê**, então não têm como
+  divergir. Frente que ainda não nasceu diz "não começou", que é diferente de pendente. **Sem CPF.**
+- **Linhas recolhíveis** nas quatro tabelas do painel do projeto, pelo mesmo gesto da ficha do
+  cliente. Medido: a página caiu de **7.415 px** de rolagem para **1.240 px** com tudo recolhido, e os
+  totais seguem visíveis no título.
+- **Seleção múltipla com ação em massa**: remover linhas de vagas, trocar de projeto e desvincular em
+  Admissões No Projeto, e a confirmação que faltava no vincular em massa. Erro numa linha não derruba
+  o lote, e nenhum lote toca o que não foi selecionado nem o que é de outro projeto.
+- **Busca por candidato** nas duas listas de gente. O "selecionar todos" passou a sair da lista **já
+  filtrada**: sem isso, buscar um nome e clicar em "todos" marcaria em silêncio as 119 pessoas.
+- **Trava didática**: excluir a linha de um cargo distribuído por loja abre um modal que **ensina a
+  ordem** (primeiro as cotas, depois o cargo) em vez de recusar com um aviso técnico. A ordem é
+  obrigatória, e selecionar tudo junto **não burla**: as cotas saem, a linha do cargo fica.
+
+### DOIS ACHADOS DE SEGURANÇA, CORRIGIDOS NO CAMINHO
+
+- O **"Ver Pessoas"** devolve nome de candidato e nasceu **sem menu nenhum**: qualquer autenticado o
+  alcançava pela URL. Passou a pertencer ao menu **Controle Gerencial**, que é quem abre a tela.
+  Reivindicá-lo para o Alto Volume daria 403 dentro do próprio painel, e há teste travando os dois
+  lados.
+- A remoção **uma a uma** de linha de vagas **nunca teve guarda**: apagava a linha do cargo
+  distribuído sem perguntar, deixando as cotas órfãs. Agora tem a mesma trava do lote.
+
+### §A.35, REGRA NOVA
+
+Nenhum seletor do sistema usa o `<select>` cru: ele abre o dropdown do sistema operacional, que não
+obedece ao tema. Vale para o que é novo e para o que for tocado. A regra nasceu do seletor de loja,
+que repetiu em 01/09 o mesmo erro que o do iFractal já tinha custado.
+
+### O QUE FICOU DE FORA, POR DECISÃO
+
+A checagem que avisaria vínculo em loja sem meta (as duas tabelas já mostram quem está fora do
+plano), a loja na abertura de vaga do A&S e o cenário 2 (grupo CAGC).
+
+### GATE E PROVAS
+
+Typecheck 0 nos dois apps, lint limpo nos arquivos da frente, **1.779 testes em 153 arquivos**.
+Migration 0092 aplicada limpa em produção: coluna nulável, os quatro uniques parciais, FK em cascade,
+24 linhas preservadas. Serviços em 200 nas três portas. As contagens do ADM ficaram **idênticas**
+antes e depois, com uma diferença explicada: uma frente de Auditoria fechou 35 segundos depois da
+foto e **seis minutos antes** de o código novo subir, ou seja, foi a operação viva sob o código
+antigo. A carga do CRM seguiu intacta, **20 admissões com loja e 15 lojas**. Clicksign, Pandapé e
+iFractal não foram tocados.

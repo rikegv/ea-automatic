@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { apiFetch } from "@/lib/api";
+import { Select } from "@/components/ui/Select";
 
 /**
  * SELETOR DE LOJA / UNIDADE (cenário 1, etapa 3). UM componente, usado nos QUATRO pontos onde a loja
@@ -92,21 +93,25 @@ export function SeletorLoja({
   // REGRA 1: cliente sem lojas não pergunta nada.
   if (!codCliente || (!carregando && lojas.length === 0)) return null;
 
+  /**
+   * O `Select` DO DESIGN SYSTEM, e não o `<select>` nativo (§A.35). O nativo herda o dropdown do
+   * sistema operacional, que no tema escuro vem cinza e destoa de toda a tela, e não tem busca:
+   * cliente com 60 lojas obrigaria a rolar a lista inteira até achar. O `Select` já traz o campo de
+   * busca sozinho a partir de 8 opções, e `searchable` o força aqui porque a lista de lojas cresce.
+   */
   const select = (
-    <select
-      className="ds-input"
+    <Select
       value={value ?? ""}
+      onChange={(v) => onChange(v || undefined)}
+      options={[
+        { value: "", label: "Sem loja definida" },
+        ...lojas.map((l) => ({ value: l.id, label: l.nome })),
+      ]}
+      placeholder={carregando ? "carregando lojas" : "Sem loja definida"}
       disabled={disabled || carregando}
-      onChange={(e) => onChange(e.target.value || undefined)}
-      aria-label={label}
-    >
-      <option value="">{carregando ? "carregando lojas" : "Sem loja definida"}</option>
-      {lojas.map((l) => (
-        <option key={l.id} value={l.id}>
-          {l.nome}
-        </option>
-      ))}
-    </select>
+      ariaLabel={label}
+      searchable
+    />
   );
 
   if (compacto) return select;

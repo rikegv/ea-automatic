@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { apiUpload, apiFetch } from "@/lib/api";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
+import { Select } from "@/components/ui/Select";
 
 /**
  * IMPORTAÇÃO DE LOJAS POR PLANILHA, com a IA lendo o cabeçalho (cenário 1, etapa 2).
@@ -190,19 +191,26 @@ export function ImportarLojasModal({
               {CAMPOS.map((c) => (
                 <label key={c.chave} className="grid gap-1">
                   <span className="ds-label">{c.rotulo}</span>
-                  <select
-                    className="ds-input"
-                    value={previa.mapeamento[c.chave] ?? ""}
-                    aria-label={`Coluna de ${c.rotulo}`}
-                    onChange={(e) => void corrigirColuna(c.chave, e.target.value)}
-                  >
-                    <option value="">não existe na planilha</option>
-                    {previa.colunas.map((nome, i) => (
-                      <option key={i} value={i}>
-                        {nome || `coluna ${i + 1}`}
-                      </option>
-                    ))}
-                  </select>
+                  {/* §A.35: o `Select` do design system, nunca o nativo. Aqui a busca importa de
+                      verdade: planilha larga tem dezenas de colunas, e achar "LOGRADOURO COMPLETO"
+                      rolando a lista é o atrito que o modal existe para evitar. */}
+                  <Select
+                    value={
+                      previa.mapeamento[c.chave] === null
+                        ? ""
+                        : String(previa.mapeamento[c.chave])
+                    }
+                    onChange={(v) => void corrigirColuna(c.chave, v)}
+                    options={[
+                      { value: "", label: "não existe na planilha" },
+                      ...previa.colunas.map((nome, i) => ({
+                        value: String(i),
+                        label: nome || `coluna ${i + 1}`,
+                      })),
+                    ]}
+                    ariaLabel={`Coluna de ${c.rotulo}`}
+                    searchable
+                  />
                 </label>
               ))}
             </div>

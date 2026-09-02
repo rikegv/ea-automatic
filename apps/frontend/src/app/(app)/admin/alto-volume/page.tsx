@@ -20,6 +20,7 @@
 
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { apiFetch } from "@/lib/api";
+import type { LojaAtiva } from "@/components/admin/SeletorLoja";
 import { useAuth } from "@/lib/auth-context";
 import { PageHead } from "@/components/ui/PageHead";
 import { GlassCard } from "@/components/ui/GlassCard";
@@ -30,6 +31,7 @@ import { Pill } from "@/components/ui/Pill";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Modal } from "@/components/ui/Modal";
 import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
+import { TituloRecolhivel } from "@/components/ui/TituloRecolhivel";
 import { Icon } from "@/components/ui/Icon";
 import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
 
@@ -60,6 +62,9 @@ interface Vaga {
   cargoNome: string;
   /** Nulo = cota do projeto inteiro; preenchido = cota daquele grupo de entrada. */
   grupoId: string | null;
+  /** Nulo = a meta vale para o cargo no projeto inteiro; preenchido = é a cota daquela loja. */
+  lojaId: string | null;
+  lojaNome: string | null;
   quantidade: number;
 }
 
@@ -213,6 +218,30 @@ export default function AltoVolumePage() {
   const [vagaQtd, setVagaQtd] = useState("");
   const [salvandoVaga, setSalvandoVaga] = useState(false);
   const [confirmarVaga, setConfirmarVaga] = useState<Vaga | null>(null);
+  /** Seleção múltipla da tabela "Vagas Por Cargo" (remoção em lote, peça 3). */
+  const [vagasSelecionadas, setVagasSelecionadas] = useState<string[]>([]);
+  const [removendoLote, setRemovendoLote] = useState(false);
+  const [confirmarVagasLote, setConfirmarVagasLote] = useState(false);
+  /** Confirmação do vínculo em massa: entrar com cem pessoas num projeto é ação definitiva. */
+  const [confirmarVinculoLote, setConfirmarVinculoLote] = useState(false);
+  /** Cargos que o modal didático está explicando. Vazio = modal fechado. */
+  const [ensinarOrdem, setEnsinarOrdem] = useState<string[]>([]);
+  /** Seleção múltipla da tabela "Admissões No Projeto" (trocar e desvincular em massa). */
+  const [vinculosSelecionados, setVinculosSelecionados] = useState<string[]>([]);
+  const [agindoLoteVinculos, setAgindoLoteVinculos] = useState(false);
+  const [confirmarDesvinculoLote, setConfirmarDesvinculoLote] = useState(false);
+  const [trocaLoteAberta, setTrocaLoteAberta] = useState(false);
+  // DETALHAR POR LOJA (docs/DESENHO-META-POR-LOJA.md): o cargo que está sendo distribuído, as lojas
+  // ativas do cliente e a quantidade por loja. A soma vira a meta do cargo (decisão 1: SUBSTITUI).
+  const [detalharCargo, setDetalharCargo] = useState<{
+    id: string;
+    nome: string;
+    /** O TOTAL FIXO do cargo (regra A): é ele que as lojas repartem, e não o contrário. */
+    total: number;
+  } | null>(null);
+  const [lojasDoCliente, setLojasDoCliente] = useState<LojaAtiva[]>([]);
+  const [cotas, setCotas] = useState<Record<string, string>>({});
+  const [salvandoCotas, setSalvandoCotas] = useState(false);
 
   // VÍNCULOS (onda 3): quem já está no projeto e as admissões do período que ficaram sem projeto.
   const [vinculos, setVinculos] = useState<Vinculo[]>([]);
@@ -223,9 +252,26 @@ export default function AltoVolumePage() {
   const [grupoParaVincular, setGrupoParaVincular] = useState("");
   const [agindoEm, setAgindoEm] = useState<string | null>(null);
   const [confirmarDesvinculo, setConfirmarDesvinculo] = useState<Vinculo | null>(null);
+  /* SEÇÕES RECOLHÍVEIS do painel do projeto (§A.20 de leitura, não de largura): o painel empilha
+     quatro tabelas, e a de "Admissões No Projeto" sozinha passa de cem linhas num projeto real, o
+     que empurra tudo o que vem depois para fora da tela. Recolher é só APRESENTAÇÃO: nenhuma conta,
+     nenhum total e nenhum filtro dependem destes estados.
+     "Admissões No Projeto" nasce RECOLHIDA por ser a longa, e o total continua visível no título,
+     que informa mais do que cem linhas roladas. As outras três nascem abertas, como já eram. */
+  const [secGrupos, setSecGrupos] = useState(true);
+  const [secVagas, setSecVagas] = useState(true);
+  const [secNoProjeto, setSecNoProjeto] = useState(false);
+  const [secSemProjeto, setSecSemProjeto] = useState(true);
+
   /** Seleção múltipla da lista "Admissões Sem Projeto" (adicionar em lote). */
   const [selecionadas, setSelecionadas] = useState<string[]>([]);
   const [adicionandoLote, setAdicionandoLote] = useState(false);
+  /* BUSCA POR CANDIDATO nas duas listas de gente (peça 4). São DOIS campos e não um: as tabelas são
+     independentes, e um campo só faria a busca de uma esconder linha da outra sem explicação.
+     §A.6: filtra em memória, sobre o que a tela já recebeu. O nome digitado NÃO vai para a URL nem
+     para log, e CPF não entra na busca porque não é o que a pessoa tem na cabeça ao procurar. */
+  const [buscaVinculos, setBuscaVinculos] = useState("");
+  const [buscaOrfaos, setBuscaOrfaos] = useState("");
   /** Filtro por cliente da lista "Admissões Sem Projeto". Vazio = todos. */
   const [filtroClienteOrfaos, setFiltroClienteOrfaos] = useState("");
 
@@ -454,6 +500,10 @@ export default function AltoVolumePage() {
 
   /** A seção de grupos aparece se o projeto JÁ usa turmas, ou se pediram para passar a usar. */
   const mostrarGrupos = (detalhe?.grupos.length ?? 0) > 0 || usarGrupos;
+  // A coluna de LOJA só aparece quando este projeto tem algum cargo detalhado. Projeto sem
+  // detalhamento fica visualmente idêntico ao de antes, que é a decisão 4 (sem backfill) refletida
+  // na tela: quem não usa não vê.
+  const mostrarLojas = (detalhe?.vagas.some((v) => v.lojaId) ?? false);
 
   function limparFormularioGrupo() {
     setGrupoEditando(null);
@@ -554,6 +604,64 @@ export default function AltoVolumePage() {
   }
 
   /** Edição em linha da quantidade: sai do campo com valor novo e válido, salva. */
+  /**
+   * ABRE o detalhamento por loja de um cargo. Busca as lojas ATIVAS do cliente pela MESMA rota que os
+   * seletores da etapa 3 já usam (`/lojas/ativas`), sem componente novo e sem lógica duplicada.
+   *
+   * As cotas já cadastradas vêm pré-preenchidas, então reabrir o modal mostra o que está valendo, e
+   * não um formulário em branco que faria o diretor redigitar tudo para mudar uma loja.
+   */
+  async function abrirDetalhamento(cargoId: string, cargoNome: string, total: number) {
+    if (!detalhe) return;
+    setDetalharCargo({ id: cargoId, nome: cargoNome, total });
+    setCotas(
+      Object.fromEntries(
+        detalhe.vagas
+          .filter((v) => v.cargoId === cargoId && v.lojaId)
+          .map((v) => [v.lojaId!, String(v.quantidade)]),
+      ),
+    );
+    try {
+      setLojasDoCliente(
+        await apiFetch<LojaAtiva[]>(
+          `/admin/clientes/${encodeURIComponent(detalhe.codCliente)}/lojas/ativas`,
+        ),
+      );
+    } catch {
+      setLojasDoCliente([]);
+    }
+  }
+
+  /**
+   * GRAVA a distribuição. Manda TODAS as cotas de uma vez porque o backend SUBSTITUI a meta do cargo
+   * numa transação (decisão 1): mandar uma a uma deixaria o cargo com dois níveis de meta no meio do
+   * caminho. Lista vazia desfaz o detalhamento e o cargo volta a aceitar meta única.
+   */
+  async function salvarDetalhamento() {
+    if (!detalharCargo || !abertoId) return;
+    const lista = Object.entries(cotas)
+      .map(([lojaId, v]) => ({ lojaId, quantidade: Number(v) }))
+      .filter((c) => Number.isInteger(c.quantidade) && c.quantidade > 0);
+    setSalvandoCotas(true);
+    try {
+      await apiFetch(`/admin/alto-volume/${abertoId}/cargos/${detalharCargo.id}/lojas`, {
+        method: "POST",
+        body: { cotas: lista },
+      });
+      setDetalharCargo(null);
+      await carregarDetalhe(abertoId);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Não foi possível salvar a distribuição.");
+    } finally {
+      setSalvandoCotas(false);
+    }
+  }
+
+  /** O que já foi repartido. Mostrado ao vivo, contra o total do cargo. */
+  const somaCotas = Object.values(cotas).reduce((acc, v) => acc + (Number(v) || 0), 0);
+  /** Negativo falta, positivo excede, zero fecha. */
+  const diferencaCotas = somaCotas - (detalharCargo?.total ?? 0);
+
   async function salvarQuantidade(v: Vaga, valor: string) {
     const n = Number(valor);
     if (!Number.isInteger(n) || n < 1 || n === v.quantidade) return;
@@ -645,6 +753,93 @@ export default function AltoVolumePage() {
       setErroElos(e instanceof Error ? e.message : "Erro ao adicionar as admissões ao projeto");
     } finally {
       setAdicionandoLote(false);
+    }
+  }
+
+  const vinculosVisiveis = useMemo(() => {
+    const q = buscaVinculos.trim().toLowerCase();
+    if (!q) return vinculos;
+    return vinculos.filter((v) => (v.candidatoNome ?? "").toLowerCase().includes(q));
+  }, [vinculos, buscaVinculos]);
+
+  // "Selecionar todas" opera sobre o que está À VISTA, então sai da lista JÁ FILTRADA: é o que
+  // permite buscar, marcar os que apareceram e agir em massa só neles.
+  const idsVinculos = useMemo(() => vinculosVisiveis.map((v) => v.id), [vinculosVisiveis]);
+  const todosVinculosMarcados =
+    idsVinculos.length > 0 && idsVinculos.every((id) => vinculosSelecionados.includes(id));
+
+  function alternarVinculo(id: string) {
+    setVinculosSelecionados((atual) =>
+      atual.includes(id) ? atual.filter((x) => x !== id) : [...atual, id],
+    );
+  }
+
+  function alternarTodosVinculos() {
+    // Opera sobre o que está À VISTA, a mesma régua das outras tabelas.
+    setVinculosSelecionados(todosVinculosMarcados ? [] : idsVinculos);
+  }
+
+  /**
+   * TROCA os selecionados de projeto de uma vez. Destino e grupo são os mesmos para todos, então
+   * vão UMA vez no corpo; o backend confere linha a linha e devolve quem foi e quem falhou.
+   */
+  async function trocarSelecionados() {
+    if (!abertoId || vinculosSelecionados.length === 0 || !trocaProjetoId) return;
+    setAgindoLoteVinculos(true);
+    setErroTroca(null);
+    try {
+      const r = await apiFetch<{ movidos: number; falhas: { motivo: string }[] }>(
+        `/admin/alto-volume/${encodeURIComponent(abertoId)}/vinculos/lote/trocar`,
+        {
+          method: "POST",
+          token,
+          body: {
+            vinculoIds: vinculosSelecionados,
+            projetoDestinoId: trocaProjetoId,
+            grupoId: trocaGrupoId || undefined,
+          },
+        },
+      );
+      setTrocaLoteAberta(false);
+      setVinculosSelecionados([]);
+      await carregarElos(abertoId);
+      await load();
+      if (r.falhas.length > 0) {
+        setErroElos(
+          `${r.movidos} movida(s). ${r.falhas.length} não foi(foram): ${r.falhas[0].motivo}`,
+        );
+      }
+    } catch (e) {
+      setErroTroca(e instanceof Error ? e.message : "Erro ao trocar as admissões de projeto");
+    } finally {
+      setAgindoLoteVinculos(false);
+    }
+  }
+
+  /** TIRA os selecionados do projeto. A admissão não é tocada: continua na esteira. */
+  async function desvincularSelecionados() {
+    if (!abertoId || vinculosSelecionados.length === 0) return;
+    setAgindoLoteVinculos(true);
+    setErroElos(null);
+    try {
+      const r = await apiFetch<{ removidos: number; falhas: { motivo: string }[] }>(
+        `/admin/alto-volume/${encodeURIComponent(abertoId)}/vinculos/lote/desvincular`,
+        { method: "POST", token, body: { vinculoIds: vinculosSelecionados } },
+      );
+      setConfirmarDesvinculoLote(false);
+      setVinculosSelecionados([]);
+      await carregarElos(abertoId);
+      await load();
+      if (r.falhas.length > 0) {
+        setErroElos(
+          `${r.removidos} desvinculada(s). ${r.falhas.length} não saiu(saíram): ${r.falhas[0].motivo}`,
+        );
+      }
+    } catch (e) {
+      setConfirmarDesvinculoLote(false);
+      setErroElos(e instanceof Error ? e.message : "Erro ao desvincular as selecionadas");
+    } finally {
+      setAgindoLoteVinculos(false);
     }
   }
 
@@ -745,10 +940,17 @@ export default function AltoVolumePage() {
     return [...mapa].map(([value, label]) => ({ value, label }));
   }, [orfaos]);
 
-  const orfaosVisiveis = useMemo(
-    () => (filtroClienteOrfaos ? orfaos.filter((o) => o.codCliente === filtroClienteOrfaos) : orfaos),
-    [orfaos, filtroClienteOrfaos],
-  );
+  /* A BUSCA ENTRA NO MESMO MEMO do filtro de cliente, e não num filtro por fora, porque é dele que
+     sai o `idsVisiveis` do "selecionar todos". Filtrar em outro lugar faria o "todos" marcar linha
+     que a pessoa não está vendo, que é exatamente o que a régua desta tela proíbe. */
+  const orfaosVisiveis = useMemo(() => {
+    const q = buscaOrfaos.trim().toLowerCase();
+    return orfaos.filter((o) => {
+      if (filtroClienteOrfaos && o.codCliente !== filtroClienteOrfaos) return false;
+      if (q && !(o.candidatoNome ?? "").toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [orfaos, filtroClienteOrfaos, buscaOrfaos]);
 
   // "Selecionar todos" opera sobre o que está À VISTA (o filtro), nunca sobre a lista inteira: marcar
   // em silêncio linha que a pessoa não está vendo é a receita do lote errado.
@@ -762,6 +964,74 @@ export default function AltoVolumePage() {
         ? atual.filter((id) => id !== admissaoId)
         : [...atual, admissaoId],
     );
+  }
+
+  /* SELEÇÃO MÚLTIPLA DAS LINHAS DE VAGAS (peça 3). O MESMO gesto da lista de órfãos logo acima:
+     caixa por linha, caixa de "todos" no cabeçalho, contador e ação em massa. Um cargo distribuído
+     em quinze lojas vira dezesseis linhas, e desfazer isso uma a uma, com uma confirmação cada, é o
+     retrabalho que esta seleção corta. */
+  const idsVagas = useMemo(() => (detalhe?.vagas ?? []).map((v) => v.id), [detalhe]);
+  const todasVagasMarcadas = idsVagas.length > 0 && idsVagas.every((id) => vagasSelecionadas.includes(id));
+
+  function alternarVaga(vagaId: string) {
+    setVagasSelecionadas((atual) =>
+      atual.includes(vagaId) ? atual.filter((id) => id !== vagaId) : [...atual, vagaId],
+    );
+  }
+
+  function alternarTodasVagas() {
+    setVagasSelecionadas(todasVagasMarcadas ? [] : idsVagas);
+  }
+
+  /**
+   * REMOVE as linhas selecionadas de uma vez. O backend confere linha a linha e devolve quem saiu e
+   * quem falhou, então uma linha travada (cargo com cota de loja fora da seleção) não cancela as
+   * outras.
+   */
+  /* A ORDEM OBRIGATÓRIA, do lado da tela (decisão do diretor). Cargo com vaga distribuída por loja
+     não tem a linha do cargo removida enquanto as cotas existirem: primeiro as cotas, depois o
+     cargo. O backend recusa de qualquer jeito; a tela existe para ENSINAR o caminho antes, em vez de
+     devolver uma recusa depois do clique. */
+  const cargosComCota = useMemo(
+    () => new Set((detalhe?.vagas ?? []).filter((v) => v.lojaId).map((v) => v.cargoId)),
+    [detalhe],
+  );
+  const linhaTravada = (v: Vaga) => !v.lojaId && cargosComCota.has(v.cargoId);
+
+  /** Os cargos travados dentro da seleção atual, para o modal dizer QUAIS são. */
+  const travadasSelecionadas = useMemo(
+    () =>
+      (detalhe?.vagas ?? [])
+        .filter((v) => vagasSelecionadas.includes(v.id) && !v.lojaId && cargosComCota.has(v.cargoId))
+        .map((v) => v.cargoNome),
+    [detalhe, vagasSelecionadas, cargosComCota],
+  );
+
+  async function removerVagasSelecionadas() {
+    if (!abertoId || vagasSelecionadas.length === 0) return;
+    setRemovendoLote(true);
+    setErroDetalhe(null);
+    try {
+      const r = await apiFetch<{ removidas: number; falhas: { motivo: string }[] }>(
+        `/admin/alto-volume/${encodeURIComponent(abertoId)}/vagas/lote/remover`,
+        { method: "POST", token, body: { vagaIds: vagasSelecionadas } },
+      );
+      setConfirmarVagasLote(false);
+      setVagasSelecionadas([]);
+      await carregarDetalhe(abertoId);
+      await load();
+      // As falhas viram aviso, não silêncio: a linha que não saiu continua na tabela, selecionável.
+      if (r.falhas.length > 0) {
+        setErroDetalhe(
+          `${r.removidas} removida(s). ${r.falhas.length} não saiu(saíram): ${r.falhas[0].motivo}`,
+        );
+      }
+    } catch (e) {
+      setConfirmarVagasLote(false);
+      setErroDetalhe(e instanceof Error ? e.message : "Erro ao remover as linhas selecionadas");
+    } finally {
+      setRemovendoLote(false);
+    }
   }
 
   function alternarTodos() {
@@ -1039,7 +1309,13 @@ export default function AltoVolumePage() {
               {mostrarGrupos && (
               <section>
                 <h3 className="mb-2 flex flex-wrap items-center gap-2 text-[13px] font-semibold uppercase tracking-wide text-faint">
-                  Grupos De Entrada
+                  <TituloRecolhivel
+                    aberto={secGrupos}
+                    onToggle={() => setSecGrupos((v) => !v)}
+                    rotuloAcessivel="Grupos De Entrada"
+                  >
+                    Grupos De Entrada
+                  </TituloRecolhivel>
                   {detalhe.grupos.length === 0 && (
                     <button
                       type="button"
@@ -1050,6 +1326,8 @@ export default function AltoVolumePage() {
                     </button>
                   )}
                 </h3>
+                {secGrupos && (
+                  <>
                 <form onSubmit={salvarGrupo} className="mb-3 flex flex-wrap gap-2">
                   <input
                     required
@@ -1125,13 +1403,21 @@ export default function AltoVolumePage() {
                     </tbody>
                   </table>
                 </div>
+                  </>
+                )}
               </section>
               )}
 
               {/* ── VAGAS POR CARGO ───────────────────────────────────────── */}
               <section>
                 <h3 className="mb-2 flex flex-wrap items-center gap-2 text-[13px] font-semibold uppercase tracking-wide text-faint">
-                  Vagas Por Cargo
+                  <TituloRecolhivel
+                    aberto={secVagas}
+                    onToggle={() => setSecVagas((v) => !v)}
+                    rotuloAcessivel="Vagas Por Cargo"
+                  >
+                    Vagas Por Cargo
+                  </TituloRecolhivel>
                   <span className="normal-case text-dim">
                     total: <span className="font-semibold tabular-nums text-text">{totalVagas}</span>
                   </span>
@@ -1145,6 +1431,8 @@ export default function AltoVolumePage() {
                     </button>
                   )}
                 </h3>
+                {secVagas && (
+                  <>
                 <form onSubmit={criarVaga} className="mb-3 flex flex-wrap gap-2">
                   <div className="min-w-[170px] flex-1">
                     <Select
@@ -1195,28 +1483,92 @@ export default function AltoVolumePage() {
                   </Button>
                 </form>
 
+                {/* BARRA DA AÇÃO EM MASSA: só aparece com algo selecionado, para não ocupar tela
+                    no uso normal, que é olhar as vagas. */}
+                {vagasSelecionadas.length > 0 && (
+                  <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-2">
+                    <span className="text-sm text-dim">
+                      selecionadas:{" "}
+                      <span className="font-semibold tabular-nums text-text">
+                        {vagasSelecionadas.length}
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setVagasSelecionadas([])}
+                      className="text-sm text-accent hover:underline"
+                    >
+                      limpar seleção
+                    </button>
+                    {/* O design system tem primário e secundário, não tem "perigo". A ação
+                        destrutiva usa o secundário com o texto em vermelho, como já fazem os
+                        "remover" das linhas, em vez de inventar uma terceira variante. */}
+                    <Button
+                      variant="secondary"
+                      onClick={() =>
+                        travadasSelecionadas.length > 0
+                          ? setEnsinarOrdem(travadasSelecionadas)
+                          : setConfirmarVagasLote(true)
+                      }
+                      disabled={removendoLote}
+                      className="ml-auto shrink-0 py-2 text-danger"
+                    >
+                      {removendoLote
+                        ? "Removendo…"
+                        : `Remover selecionadas (${vagasSelecionadas.length})`}
+                    </Button>
+                  </div>
+                )}
+
                 <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
-                  <table className="ds-table min-w-[460px]">
+                  <table className="ds-table min-w-[520px]">
                     <thead>
                       <tr>
+                        {/* A caixa de "todos" opera sobre as linhas À VISTA, a mesma régua da lista
+                            de órfãos: marcar em silêncio o que a pessoa não vê é a receita do lote
+                            errado. Aqui a tabela não tem filtro, então "à vista" é a tabela toda. */}
+                        <th className="w-[46px]">
+                          <input
+                            type="checkbox"
+                            checked={todasVagasMarcadas}
+                            onChange={alternarTodasVagas}
+                            disabled={idsVagas.length === 0}
+                            className="h-4 w-4 accent-[var(--accent)]"
+                            aria-label="Selecionar todas as linhas de vagas"
+                            title="Selecionar todas"
+                          />
+                        </th>
                         <th>Cargo</th>
                         {/* A COTA só faz sentido havendo grupo: sem turma, toda vaga é do projeto
                             inteiro e a coluna repetiria a mesma pill em todas as linhas. */}
                         {mostrarGrupos && <th className="w-[150px]">Cota</th>}
+                        {mostrarLojas && <th className="w-[220px]">Loja</th>}
                         <th className="w-[110px]">Vagas</th>
-                        <th className="w-[110px]">Ações</th>
+                        <th className="w-[190px]">Ações</th>
                       </tr>
                     </thead>
                     <tbody>
                       {detalhe.vagas.length === 0 ? (
                         <tr>
-                          <td colSpan={mostrarGrupos ? 4 : 3} className="py-6 text-center text-faint">
+                          <td colSpan={4 + (mostrarGrupos ? 1 : 0) + (mostrarLojas ? 1 : 0)} className="py-6 text-center text-faint">
                             Sem vaga cadastrada. Acrescente os cargos e a quantidade de cada um.
                           </td>
                         </tr>
                       ) : (
                         detalhe.vagas.map((v) => (
-                          <tr key={v.id}>
+                          <tr
+                            key={v.id}
+                            className={vagasSelecionadas.includes(v.id) ? "bg-[var(--surface)]" : ""}
+                          >
+                            <td className="text-center">
+                              <input
+                                type="checkbox"
+                                checked={vagasSelecionadas.includes(v.id)}
+                                onChange={() => alternarVaga(v.id)}
+                                className="h-4 w-4 accent-[var(--accent)]"
+                                aria-label={`Selecionar ${v.cargoNome}${v.lojaNome ? ` em ${v.lojaNome}` : ""}`}
+                              />
+                            </td>
                             <td className="font-semibold">{v.cargoNome}</td>
                             {mostrarGrupos && (
                             <td className="text-center">
@@ -1228,6 +1580,11 @@ export default function AltoVolumePage() {
                                 <Pill tone={v.grupoId ? "in" : "nt"}>{rotuloGrupo(v.grupoId)}</Pill>
                               </span>
                             </td>
+                            )}
+                            {mostrarLojas && (
+                              <td className="text-center">
+                                {v.lojaNome ?? <span className="text-faint">projeto inteiro</span>}
+                              </td>
                             )}
                             <td className="text-center">
                               {/* Edição EM LINHA da quantidade: é o campo que mais muda enquanto o
@@ -1244,8 +1601,29 @@ export default function AltoVolumePage() {
                               />
                             </td>
                             <td className="whitespace-nowrap text-right">
+                              {/* DETALHAR POR LOJA: só aparece na linha do projeto inteiro. Numa
+                                  cota de loja o botão não faria sentido, e numa cota de grupo o
+                                  detalhamento é o outro eixo (decisão 2: um por vez). */}
+                              {!v.lojaId && !v.grupoId && (
+                                <>
+                                  <button
+                                    onClick={() => void abrirDetalhamento(v.cargoId, v.cargoNome, v.quantidade)}
+                                    className="text-accent hover:underline"
+                                  >
+                                    distribuir por loja
+                                  </button>
+                                  <span className="px-2 text-faint">·</span>
+                                </>
+                              )}
+                              {/* A ORDEM ANTES DA CONFIRMAÇÃO: linha de cargo com distribuição por
+                                  loja abre o modal que ENSINA o caminho, e não a caixa de confirmar
+                                  uma remoção que o backend recusaria. */}
                               <button
-                                onClick={() => setConfirmarVaga(v)}
+                                onClick={() =>
+                                  linhaTravada(v)
+                                    ? setEnsinarOrdem([v.cargoNome])
+                                    : setConfirmarVaga(v)
+                                }
                                 className="text-danger hover:underline"
                               >
                                 remover
@@ -1257,6 +1635,8 @@ export default function AltoVolumePage() {
                     </tbody>
                   </table>
                 </div>
+                  </>
+                )}
               </section>
             </div>
 
@@ -1300,11 +1680,86 @@ export default function AltoVolumePage() {
 
               {/* ── ADMISSÕES JÁ NO PROJETO ──────────────────────────────── */}
               <h4 className="mb-2 flex flex-wrap items-center gap-2 text-[13px] font-semibold text-text">
-                Admissões No Projeto
+                <TituloRecolhivel
+                  aberto={secNoProjeto}
+                  onToggle={() => setSecNoProjeto((v) => !v)}
+                  rotuloAcessivel="Admissões No Projeto"
+                >
+                  Admissões No Projeto
+                </TituloRecolhivel>
                 <span className="font-normal text-dim">
                   total: <span className="font-semibold tabular-nums text-text">{vinculos.length}</span>
                 </span>
               </h4>
+              {secNoProjeto && (
+                <>
+              {/* BUSCA POR CANDIDATO. Fica ACIMA da barra de seleção porque é ela que governa o
+                  que a barra alcança: busca primeiro, marca depois. */}
+              {vinculos.length > 0 && (
+                <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-2">
+                  <input
+                    value={buscaVinculos}
+                    onChange={(e) => setBuscaVinculos(e.target.value)}
+                    placeholder="Buscar candidato pelo nome"
+                    aria-label="Buscar candidato nas admissões do projeto"
+                    className="ds-input h-auto w-auto min-w-[18rem] py-1.5"
+                  />
+                  {buscaVinculos.trim() && (
+                    <span className="text-sm text-dim">
+                      <span className="font-semibold tabular-nums text-text">
+                        {vinculosVisiveis.length}
+                      </span>{" "}
+                      de {vinculos.length}
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {/* BARRA DA AÇÃO EM MASSA: só aparece com algo selecionado. As duas ações da linha
+                  (trocar e desvincular) são as mesmas daqui, para o gesto em massa não ser um
+                  poder novo, e sim o mesmo trabalho feito de uma vez. */}
+              {vinculosSelecionados.length > 0 && (
+                <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-2">
+                  <span className="text-sm text-dim">
+                    selecionadas:{" "}
+                    <span className="font-semibold tabular-nums text-text">
+                      {vinculosSelecionados.length}
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setVinculosSelecionados([])}
+                    className="text-sm text-accent hover:underline"
+                  >
+                    limpar seleção
+                  </button>
+                  <Button
+                    variant="secondary"
+                    onClick={() => {
+                      setErroTroca(null);
+                      setTrocaProjetoId("");
+                      setTrocaGrupoId("");
+                      setTrocaGrupos([]);
+                      setTrocaLoteAberta(true);
+                    }}
+                    disabled={agindoLoteVinculos}
+                    className="ml-auto shrink-0 py-2"
+                  >
+                    {`Trocar de projeto (${vinculosSelecionados.length})`}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    onClick={() => setConfirmarDesvinculoLote(true)}
+                    disabled={agindoLoteVinculos}
+                    className="shrink-0 py-2 text-danger"
+                  >
+                    {agindoLoteVinculos
+                      ? "Processando…"
+                      : `Desvincular (${vinculosSelecionados.length})`}
+                  </Button>
+                </div>
+              )}
+
               <div className="mb-6 overflow-x-auto rounded-xl border border-[var(--border)]">
                 {/* §A.20: as fixas somam menos que a largura útil de propósito, para o nome do
                     candidato (a coluna que mais varia) ficar com a sobra em vez de quebrar em três
@@ -1313,9 +1768,22 @@ export default function AltoVolumePage() {
                     vínculo e grupo eram BASTIDOR nesta tela. Quem abre este painel quer ligar
                     candidato ao projeto do cliente, não administrar frente. Os dados continuam
                     GRAVADOS e consultáveis (a trilha existe para auditoria), só não ocupam a tela. */}
-                <table className="ds-table w-full min-w-[820px] table-fixed">
+                <table className="ds-table w-full min-w-[874px] table-fixed">
                   <thead>
                     <tr>
+                      <th className="w-[54px]">
+                        {projetoAtivo ? (
+                          <input
+                            type="checkbox"
+                            checked={todosVinculosMarcados}
+                            onChange={alternarTodosVinculos}
+                            disabled={idsVinculos.length === 0}
+                            className="h-4 w-4 accent-[var(--accent)]"
+                            aria-label="Selecionar todas as admissões do projeto"
+                            title="Selecionar todas"
+                          />
+                        ) : null}
+                      </th>
                       <th className="w-[250px]">Nome</th>
                       <th className="w-[250px]">Cliente</th>
                       <th className="w-[200px]">Cargo</th>
@@ -1326,20 +1794,38 @@ export default function AltoVolumePage() {
                   <tbody>
                     {carregandoElos && vinculos.length === 0 ? (
                       <tr>
-                        <td colSpan={5} className="py-6 text-center text-faint">
+                        <td colSpan={6} className="py-6 text-center text-faint">
                           Carregando…
                         </td>
                       </tr>
                     ) : vinculos.length === 0 ? (
                       <tr>
-                        <td colSpan={5} className="py-6 text-center text-faint">
+                        <td colSpan={6} className="py-6 text-center text-faint">
                           Nenhuma admissão neste projeto ainda. Use a lista de baixo para adicionar.
                         </td>
                       </tr>
+                    ) : vinculosVisiveis.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="py-6 text-center text-faint">
+                          Nenhum candidato com esse nome neste projeto.
+                        </td>
+                      </tr>
                     ) : (
-                      vinculos.map((v) => {
+                      vinculosVisiveis.map((v) => {
+                        const marcada = vinculosSelecionados.includes(v.id);
                         return (
-                          <tr key={v.id}>
+                          <tr key={v.id} className={marcada ? "bg-[var(--surface)]" : ""}>
+                            <td className="text-center">
+                              {projetoAtivo ? (
+                                <input
+                                  type="checkbox"
+                                  checked={marcada}
+                                  onChange={() => alternarVinculo(v.id)}
+                                  className="h-4 w-4 accent-[var(--accent)]"
+                                  aria-label={`Selecionar ${v.candidatoNome}`}
+                                />
+                              ) : null}
+                            </td>
                             <td className="font-semibold">{v.candidatoNome}</td>
                             <td>{rotuloClienteDaLinha(v)}</td>
                             <td>{v.cargoNome ?? "não informado"}</td>
@@ -1373,13 +1859,21 @@ export default function AltoVolumePage() {
                   </tbody>
                 </table>
               </div>
+                </>
+              )}
 
               {/* ── ADMISSÕES SEM PROJETO ────────────────────────────────────
                   O nome da seção é o do OPERACIONAL, não o do banco: quem olha a tela pensa em
                   "admissão que ficou sem projeto", não em órfão de um join (decisão do diretor). */}
               <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-2">
                 <h4 className="flex flex-wrap items-center gap-2 text-[13px] font-semibold text-text">
-                  Admissões Sem Projeto
+                  <TituloRecolhivel
+                    aberto={secSemProjeto}
+                    onToggle={() => setSecSemProjeto((v) => !v)}
+                    rotuloAcessivel="Admissões Sem Projeto"
+                  >
+                    Admissões Sem Projeto
+                  </TituloRecolhivel>
                   <span className="font-normal text-dim">
                     total: <span className="font-semibold tabular-nums text-text">{orfaos.length}</span>
                   </span>
@@ -1403,6 +1897,8 @@ export default function AltoVolumePage() {
                   </label>
                 )}
               </div>
+              {secSemProjeto && (
+                <>
               <p className="mb-2 text-sm text-dim">
                 São admissões deste cliente que começam dentro do período do projeto e ainda não
                 entraram em projeto nenhum. Quem já está em outro projeto não aparece aqui: nesse
@@ -1413,6 +1909,15 @@ export default function AltoVolumePage() {
                   tabela, porque um governa o outro. "Selecionar todos" marca só o que o filtro deixa
                   à vista, e o contador diz exatamente quantas vão entrar. */}
               <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-2">
+                {/* A BUSCA CONVIVE COM O FILTRO DE CLIENTE: os dois estreitam a mesma lista, e é
+                    dessa lista que o "selecionar todos" e a ação em massa saem. */}
+                <input
+                  value={buscaOrfaos}
+                  onChange={(e) => setBuscaOrfaos(e.target.value)}
+                  placeholder="Buscar candidato pelo nome"
+                  aria-label="Buscar candidato nas admissões sem projeto"
+                  className="ds-input h-auto w-auto min-w-[16rem] py-1.5"
+                />
                 <label className="flex items-center gap-2 text-sm text-dim">
                   <span className="whitespace-nowrap">Cliente</span>
                   <div className="min-w-[260px]">
@@ -1439,7 +1944,7 @@ export default function AltoVolumePage() {
                       </span>
                     </span>
                     <Button
-                      onClick={() => void adicionarSelecionadas()}
+                      onClick={() => setConfirmarVinculoLote(true)}
                       disabled={adicionandoLote || selecionadas.length === 0}
                       className="ml-auto shrink-0 py-2"
                     >
@@ -1488,9 +1993,11 @@ export default function AltoVolumePage() {
                     ) : orfaosVisiveis.length === 0 ? (
                       <tr>
                         <td colSpan={6} className="py-6 text-center text-faint">
-                          {filtroClienteOrfaos
-                            ? "Nenhuma admissão sem projeto neste cliente."
-                            : "Nenhuma admissão sem projeto neste período: todo mundo deste cliente que começa entre as datas do projeto já está em algum projeto."}
+                          {buscaOrfaos.trim()
+                            ? "Nenhum candidato com esse nome nesta lista."
+                            : filtroClienteOrfaos
+                              ? "Nenhuma admissão sem projeto neste cliente."
+                              : "Nenhuma admissão sem projeto neste período: todo mundo deste cliente que começa entre as datas do projeto já está em algum projeto."}
                         </td>
                       </tr>
                     ) : (
@@ -1535,10 +2042,97 @@ export default function AltoVolumePage() {
                   </tbody>
                 </table>
               </div>
+                </>
+              )}
             </section>
             </>
           ) : null}
         </GlassCard>
+      )}
+
+      {/* DETALHAR A META DE UM CARGO POR LOJA. Modal, e não edição em linha, porque distribuir é uma
+          operação só: o diretor mexe em várias lojas e o backend SUBSTITUI a meta do cargo numa
+          transação. Salvar cota a cota deixaria o cargo com dois níveis de meta no meio do caminho. */}
+      {detalharCargo && (
+        <Modal
+          onClose={() => setDetalharCargo(null)}
+          ariaLabel="Detalhar meta por loja"
+          className="max-w-xl p-5"
+        >
+          <h2 className="mb-1 text-[17px] font-semibold text-text">Distribuir Por Loja</h2>
+          <p className="mb-4 text-sm text-dim">
+            {detalharCargo.nome}, {detalharCargo.total} vaga
+            {detalharCargo.total === 1 ? "" : "s"}. Reparta esse total entre as lojas: a soma tem de
+            fechar exatamente {detalharCargo.total}. Loja com zero é válida, quer dizer que ali não
+            se contrata. Deixe tudo em branco para desfazer a distribuição.
+          </p>
+
+          {lojasDoCliente.length === 0 ? (
+            <p className="text-sm text-dim">
+              Este cliente ainda não tem loja cadastrada. Cadastre as lojas na tela do cliente antes
+              de distribuir a meta.
+            </p>
+          ) : (
+            <div className="max-h-[380px] overflow-auto rounded-xl border border-[var(--border)]">
+              <table className="ds-table w-full text-sm">
+                <thead>
+                  <tr>
+                    <th className="text-center">Loja</th>
+                    <th className="w-[120px] text-center">Vagas</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {lojasDoCliente.map((l) => (
+                    <tr key={l.id}>
+                      <td className="font-semibold">{l.nome}</td>
+                      <td className="text-center">
+                        <input
+                          type="number"
+                          min={0}
+                          step={1}
+                          value={cotas[l.id] ?? ""}
+                          onChange={(e) => setCotas({ ...cotas, [l.id]: e.target.value })}
+                          className="ds-input w-[90px] py-1 text-center tabular-nums"
+                          aria-label={`Vagas em ${l.nome}`}
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <div className="mt-4 flex items-center justify-between gap-3">
+            {/* O ESTADO DA DISTRIBUIÇÃO, ao vivo. Mostrar os dois números e a diferença é o que
+                evita a pessoa somar na mão para descobrir por que o botão não libera. */}
+            <span className="text-sm">
+              <span className="text-dim">Distribuído </span>
+              <strong className="text-text tabular-nums">{somaCotas}</strong>
+              <span className="text-dim"> de {detalharCargo.total}</span>
+              {diferencaCotas !== 0 && (
+                <span className="ml-2 text-[var(--danger)]">
+                  {diferencaCotas < 0
+                    ? `faltam ${-diferencaCotas}`
+                    : `excede ${diferencaCotas}`}
+                </span>
+              )}
+            </span>
+            <div className="flex gap-2">
+              <Button variant="secondary" onClick={() => setDetalharCargo(null)}>
+                Cancelar
+              </Button>
+              {/* Só libera quando fecha, ou quando está tudo em branco (o desfazer). A trava do
+                  backend é a que vale; esta é para o botão não prometer o que vai ser recusado. */}
+              <Button
+                onClick={() => void salvarDetalhamento()}
+                disabled={salvandoCotas || (somaCotas > 0 && diferencaCotas !== 0)}
+              >
+                Salvar Distribuição
+              </Button>
+            </div>
+          </div>
+        </Modal>
       )}
 
       {/* TROCA de projeto/grupo de um vínculo. Modal, e não edição em linha, porque a troca precisa
@@ -1605,6 +2199,171 @@ export default function AltoVolumePage() {
           </div>
         </Modal>
       )}
+
+      {/* MODAL DIDÁTICO DA ORDEM (decisão do diretor). NÃO é um aviso: é a tela ensinando o caminho.
+          Aparece ANTES de qualquer tentativa, tanto na remoção de uma linha quanto na do lote, e não
+          tem botão de "remover assim mesmo", porque a ordem é obrigatória. Quem opera não precisa
+          saber o que é uma cota órfã: precisa saber o que fazer primeiro. */}
+      {ensinarOrdem.length > 0 && (
+        <Modal
+          onClose={() => setEnsinarOrdem([])}
+          ariaLabel="Como remover um cargo distribuído por loja"
+          className="max-w-lg p-5"
+        >
+          <h2 className="mb-1 text-[17px] font-semibold text-text">
+            Primeiro As Lojas, Depois O Cargo
+          </h2>
+          <p className="mb-4 text-sm text-dim">
+            {ensinarOrdem.length === 1
+              ? `O cargo "${ensinarOrdem[0]}" tem vagas distribuídas por loja.`
+              : `${ensinarOrdem.length} cargos selecionados têm vagas distribuídas por loja: ${ensinarOrdem.join(", ")}.`}{" "}
+            Excluir a linha do cargo agora deixaria as lojas sem meta e bagunçaria os indicadores do
+            painel.
+          </p>
+
+          <div className="mb-5 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-4">
+            <span className="ds-label">Como Fazer</span>
+            <ol className="mt-2 grid gap-2 text-sm text-text">
+              <li className="flex gap-2">
+                <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-[var(--accent)] text-[11px] font-semibold text-white">
+                  1
+                </span>
+                <span>
+                  Remova primeiro a distribuição por loja, que são as linhas do mesmo cargo com o
+                  nome de uma loja na coluna Loja.
+                </span>
+              </li>
+              <li className="flex gap-2">
+                <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-[var(--accent)] text-[11px] font-semibold text-white">
+                  2
+                </span>
+                <span>Depois exclua a linha do cargo, a que aparece como projeto inteiro.</span>
+              </li>
+            </ol>
+          </div>
+
+          <div className="flex justify-end">
+            <Button onClick={() => setEnsinarOrdem([])}>Entendi</Button>
+          </div>
+        </Modal>
+      )}
+
+      {/* TROCA EM MASSA. Modal próprio, e não o da linha, porque aqui não há um candidato para
+          nomear: o que importa é o destino e quantas pessoas vão nele. */}
+      {trocaLoteAberta && (
+        <Modal
+          onClose={() => setTrocaLoteAberta(false)}
+          ariaLabel="Trocar o projeto das selecionadas"
+          className="max-w-lg p-5"
+        >
+          <h2 className="mb-1 text-[17px] font-semibold text-text">Trocar Projeto Das Selecionadas</h2>
+          <p className="mb-4 text-sm text-dim">
+            {vinculosSelecionados.length} admissão(ões). Elas não mudam de lugar na esteira: muda só
+            o projeto em que contam.
+          </p>
+
+          {erroTroca && (
+            <p
+              className="mb-3 rounded-xl border border-[var(--border)] bg-[rgba(214,69,69,0.1)] px-3 py-2 text-sm text-danger"
+              role="alert"
+            >
+              {erroTroca}
+            </p>
+          )}
+
+          <div className="mb-3">
+            <span className="mb-1 block text-sm text-dim">Projeto de destino</span>
+            {/* §A.35: o Select do design system, com busca. A lista de projetos do cliente cresce a
+                cada temporada, e rolar até achar é o atrito que a busca elimina. */}
+            <Select
+              value={trocaProjetoId}
+              onChange={(v) => void escolherProjetoDaTroca(v)}
+              placeholder="Projeto"
+              ariaLabel="Projeto de destino"
+              searchable
+              menuFit
+              options={projetosDoCliente.map((p) => ({ value: p.id, label: p.nome }))}
+            />
+            <p className="mt-1 text-xs text-faint">
+              Só projetos ativos do mesmo cliente. Quem for de outro cliente não vai, e volta avisada
+              na mesma tela.
+            </p>
+          </div>
+
+          {trocaGrupos.length > 0 && (
+            <div className="mb-5">
+              <span className="mb-1 block text-sm text-dim">Grupo de entrada</span>
+              <Select
+                value={trocaGrupoId}
+                onChange={setTrocaGrupoId}
+                placeholder="Projeto Inteiro"
+                ariaLabel="Grupo de entrada do destino"
+                menuFit
+                options={[
+                  { value: "", label: "Projeto Inteiro" },
+                  ...trocaGrupos.map((g) => ({ value: g.id, label: g.rotulo })),
+                ]}
+              />
+            </div>
+          )}
+
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button
+              variant="secondary"
+              onClick={() => setTrocaLoteAberta(false)}
+              disabled={agindoLoteVinculos}
+            >
+              Cancelar
+            </Button>
+            <Button
+              onClick={() => void trocarSelecionados()}
+              disabled={agindoLoteVinculos || !trocaProjetoId}
+            >
+              {agindoLoteVinculos
+                ? "Movendo…"
+                : `Mover ${vinculosSelecionados.length} para o projeto`}
+            </Button>
+          </div>
+        </Modal>
+      )}
+
+      <ConfirmDialog
+        open={confirmarDesvinculoLote}
+        title="Desvincular As Selecionadas"
+        message={`Tirar ${vinculosSelecionados.length} admissão(ões) deste projeto? Elas continuam exatamente como estão na esteira: só deixam de contar aqui, e voltam para a lista Admissões Sem Projeto.`}
+        confirmLabel="Desvincular"
+        tone="danger"
+        busy={agindoLoteVinculos}
+        onConfirm={() => void desvincularSelecionados()}
+        onCancel={() => setConfirmarDesvinculoLote(false)}
+      />
+
+      {/* CONFIRMAÇÃO DAS DUAS AÇÕES EM MASSA. Ação definitiva pede confirmação, e em lote pede mais:
+          o estrago de um clique errado é multiplicado pelo tamanho da seleção. As duas frases dizem
+          o NÚMERO e o que acontece depois, não só "tem certeza?". */}
+      <ConfirmDialog
+        open={confirmarVagasLote}
+        title="Remover Linhas Selecionadas"
+        message={`Remover ${vagasSelecionadas.length} linha(s) de vagas deste projeto? Isto apaga a meta dessas linhas, não desliga ninguém do projeto.`}
+        confirmLabel="Remover"
+        tone="danger"
+        busy={removendoLote}
+        onConfirm={() => void removerVagasSelecionadas()}
+        onCancel={() => setConfirmarVagasLote(false)}
+      />
+
+      <ConfirmDialog
+        open={confirmarVinculoLote}
+        title="Adicionar Selecionadas Ao Projeto"
+        message={`Adicionar ${selecionadas.length} admissão(ões) a este projeto? Elas passam a contar nas metas e no painel. Quem já estiver em outro projeto não entra, e volta avisada na mesma tela.`}
+        confirmLabel="Adicionar"
+        busy={adicionandoLote}
+        onConfirm={() => {
+          setConfirmarVinculoLote(false);
+          void adicionarSelecionadas();
+        }}
+        onCancel={() => setConfirmarVinculoLote(false)}
+      />
 
       <ConfirmDialog
         open={Boolean(confirmarDesvinculo)}

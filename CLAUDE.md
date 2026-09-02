@@ -897,3 +897,27 @@ seguia.
 
 *(Decisão do diretor, após o retorno das 13 perguntas afirmar que a etapa 1 seguia em construção
 enquanto a fábrica estava parada.)*
+
+## A.35: TODO seletor usa o design system, e busca quando a lista é longa (regra permanente)
+
+**Nenhuma caixa de seleção do sistema usa o `<select>` cru do navegador.** Todo seletor usa o
+**`Select` do design system**, e ganha **campo de busca** quando a lista tem muitas opções.
+
+- **O nativo está proibido.** O `<select>` do HTML abre o dropdown do SISTEMA OPERACIONAL, que não
+  obedece ao tema do EA: no modo escuro vem cinza, no claro vem azul, e em qualquer um deles destoa
+  de toda a tela ao redor. Não é preferência estética, é a única parte da interface que o sistema não
+  controla.
+- **A busca não é opcional em lista longa.** O `Select` já abre com campo de busca sozinho a partir de
+  8 opções, e aceita `searchable` para forçar. Cliente com 60 lojas, catálogo de cargos, lista de
+  clientes: sem busca, a pessoa rola até achar, e rolar até achar é o atrito que a tela existe para
+  eliminar.
+- **Vale para o que é NOVO e para o que for TOCADO.** Nenhuma entrega futura introduz `<select>` cru,
+  e todo seletor nativo encontrado no caminho de uma OST é convertido junto, sem virar item de
+  backlog.
+- **Onde o nativo ainda é aceitável:** `<input type="date">` e afins, que são controles do navegador
+  com comportamento próprio, e não listas de opção.
+
+**Os dois casos que originaram a regra:** o seletor do iFractal nasceu nativo e precisou ser refeito,
+e o **seletor de loja** (etapa 3 da frente de Lojas) repetiu o mesmo erro em 01/09/2026, com fundo
+cinza e sem busca, mesmo com o `Select` do design system pronto e em uso em dezenas de telas. A
+segunda vez é o que transforma um descuido em regra. *(Decisão do diretor.)*

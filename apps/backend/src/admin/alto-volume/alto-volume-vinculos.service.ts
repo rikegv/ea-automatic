@@ -21,6 +21,8 @@ import {
 } from "../../db/schema";
 import type {
   AtualizarVinculoDto,
+  DesvincularEmLoteDto,
+  TrocarVinculosEmLoteDto,
   VincularAdmissaoDto,
   VincularEmLoteDto,
 } from "./alto-volume.dto";
@@ -461,6 +463,113 @@ export class AltoVolumeVinculosService {
    * de ser filtrado em toda contagem da onda 4, e o primeiro lugar que esquecesse o filtro contaria
    * gente que não é do projeto. A admissão não é tocada: segue na esteira, intacta.
    */
+  /**
+   * TROCA VÁRIOS vínculos para outro projeto de uma vez.
+   *
+   * AS MESMAS TRAVAS DA TROCA INDIVIDUAL, e nenhuma a menos: projeto de destino ATIVO, admissão do
+   * mesmo cliente do destino, grupo pertencente ao destino. O que muda é ONDE cada uma roda. Destino
+   * e grupo são os mesmos para as N, então são validados UMA vez, antes do laço, como o lote de
+   * vínculos já fazia; o que é por linha (o vínculo existir, ser deste projeto, a admissão ser do
+   * cliente do destino) é conferido item a item.
+   *
+   * SÓ MOVE O QUE FOI SELECIONADO, e só de DENTRO deste projeto: um id de vínculo de outro projeto
+   * falha em vez de ser movido, senão a tela de um projeto mexeria no de outro sem mostrar.
+   *
+   * UMA LINHA RUIM NÃO DERRUBA O LOTE, a régua de sempre: volta em `falhas` com o motivo, e as
+   * demais são movidas no mesmo `update`.
+   */
+  async trocarEmLote(projetoId: string, dto: TrocarVinculosEmLoteDto, user: AuthUser) {
+    await this.exigirProjeto(projetoId);
+    const destino = await this.exigirProjetoAtivo(dto.projetoDestinoId);
+    const grupoId = dto.grupoId ?? null;
+    await this.exigirGrupoDoProjeto(grupoId, dto.projetoDestinoId);
+
+    if (dto.projetoDestinoId === projetoId) {
+      throw new BadRequestException("Escolha um projeto diferente do atual.");
+    }
+
+    const ids = [...new Set(dto.vinculoIds)];
+    const aprovados: string[] = [];
+    const falhas: { vinculoId: string; motivo: string }[] = [];
+
+    for (const vinculoId of ids) {
+      const atual = await this.db.query.admissaoProjeto.findFirst({
+        where: eq(admissaoProjeto.id, vinculoId),
+      });
+      if (!atual) {
+        falhas.push({ vinculoId, motivo: "Vínculo não encontrado." });
+        continue;
+      }
+      if (atual.projetoId !== projetoId) {
+        falhas.push({ vinculoId, motivo: "Este vínculo não é deste projeto." });
+        continue;
+      }
+      const admissao = await this.db.query.admissoes.findFirst({
+        where: eq(admissoes.id, atual.admissaoId),
+      });
+      if (!admissao) {
+        falhas.push({ vinculoId, motivo: "Admissão não encontrada." });
+        continue;
+      }
+      if (admissao.codCliente !== destino.codCliente) {
+        falhas.push({
+          vinculoId,
+          motivo: "Esta admissão é de outro cliente. O projeto de destino só recebe admissões do cliente dele.",
+        });
+        continue;
+      }
+      aprovados.push(vinculoId);
+    }
+
+    if (aprovados.length > 0) {
+      await this.db
+        .update(admissaoProjeto)
+        .set({
+          projetoId: dto.projetoDestinoId,
+          // GRUPO NÃO ATRAVESSA A TROCA, a mesma regra da troca individual: grupo é do projeto, e
+          // manter o antigo apontaria a leva de um projeto dentro de outro.
+          grupoId,
+          origem: "CORRECAO" as const,
+          vinculadoPorId: user.id,
+          vinculadoEm: new Date(),
+          atualizadoEm: new Date(),
+        })
+        .where(inArray(admissaoProjeto.id, aprovados));
+    }
+
+    return { movidos: aprovados.length, falhas };
+  }
+
+  /**
+   * DESVINCULA VÁRIOS de uma vez: tira do projeto, e NÃO toca na admissão.
+   *
+   * A promessa da §A.26 continua de pé aqui, e é o que este método precisa provar: a escrita é numa
+   * tabela só, `admissao_projeto`. Admissão, frente, documento e farol seguem exatamente como estão,
+   * então quem sai do projeto continua na esteira, e volta para a lista Admissões Sem Projeto.
+   *
+   * SÓ DESVINCULA O QUE FOI SELECIONADO, e só de DENTRO deste projeto, pelo mesmo motivo da troca.
+   */
+  async desvincularEmLote(projetoId: string, dto: DesvincularEmLoteDto) {
+    await this.exigirProjeto(projetoId);
+
+    const ids = [...new Set(dto.vinculoIds)];
+    const doProjeto = await this.db
+      .select({ id: admissaoProjeto.id })
+      .from(admissaoProjeto)
+      .where(and(eq(admissaoProjeto.projetoId, projetoId), inArray(admissaoProjeto.id, ids)));
+    const validos = new Set(doProjeto.map((v) => v.id));
+
+    const falhas = ids
+      .filter((id) => !validos.has(id))
+      .map((vinculoId) => ({ vinculoId, motivo: "Vínculo não encontrado neste projeto." }));
+
+    if (validos.size > 0) {
+      await this.db.delete(admissaoProjeto).where(inArray(admissaoProjeto.id, [...validos]));
+    }
+
+    return { removidos: validos.size, falhas };
+  }
+
   async desvincular(vinculoId: string) {
     const [row] = await this.db
       .delete(admissaoProjeto)

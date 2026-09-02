@@ -645,6 +645,13 @@
       "when": 1788035891611,
       "tag": "0091_admissao_loja",
       "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "7",
+      "when": 1788039491611,
+      "tag": "0092_meta_por_loja",
+      "breakpoints": true
     }
   ]
 }

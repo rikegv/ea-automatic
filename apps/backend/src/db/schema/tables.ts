@@ -2028,17 +2028,40 @@ export const projetoVagaCargo = pgTable(
       .notNull()
       .references(() => cargos.id),
     grupoId: uuid("grupo_id").references(() => projetoGrupoEntrada.id, { onDelete: "cascade" }),
+    /**
+     * META POR LOJA (docs/DESENHO-META-POR-LOJA.md). É o MESMO movimento do `grupo_id` acima, num
+     * eixo diferente: nulo = a meta vale para o cargo no projeto inteiro; preenchido = é a cota
+     * daquela loja.
+     *
+     * `CASCADE` e não `SET NULL`, ao contrário de `admissoes.loja_id`: uma linha de meta que perde a
+     * loja não vira "meta geral", vira número somando no lugar errado. Apagar a loja apaga a cota
+     * dela, e a meta do cargo (que é a soma) se ajusta sozinha.
+     *
+     * A INVARIANTE QUE O BANCO NÃO EXPRESSA (decisão 1 do diretor): para um mesmo cargo, ou existe a
+     * linha geral OU existem linhas por loja, NUNCA as duas. Sem isso a meta do cargo somaria a linha
+     * geral com as cotas e ficaria inflada, e o percentual de todos os quadros mentiria junto. É
+     * `exigirDetalhamentoUnico` quem garante, num ponto só, com teste.
+     */
+    lojaId: uuid("loja_id").references(() => clienteLojas.id, { onDelete: "cascade" }),
     quantidade: integer("quantidade").notNull(),
     criadoEm,
     atualizadoEm,
   },
   (t) => ({
+    // Os QUATRO níveis possíveis, cada um com o seu unique parcial. Os dois primeiros já existiam; os
+    // dois de loja seguem exatamente o mesmo molde.
     uqVagaDoProjeto: uniqueIndex("uq_projeto_vaga_cargo_projeto")
       .on(t.projetoId, t.cargoId)
-      .where(sql`${t.grupoId} is null`),
+      .where(sql`${t.grupoId} is null and ${t.lojaId} is null`),
     uqVagaDoGrupo: uniqueIndex("uq_projeto_vaga_cargo_grupo")
       .on(t.projetoId, t.cargoId, t.grupoId)
-      .where(sql`${t.grupoId} is not null`),
+      .where(sql`${t.grupoId} is not null and ${t.lojaId} is null`),
+    uqVagaDaLoja: uniqueIndex("uq_projeto_vaga_cargo_loja")
+      .on(t.projetoId, t.cargoId, t.lojaId)
+      .where(sql`${t.grupoId} is null and ${t.lojaId} is not null`),
+    uqVagaDoGrupoLoja: uniqueIndex("uq_projeto_vaga_cargo_grupo_loja")
+      .on(t.projetoId, t.cargoId, t.grupoId, t.lojaId)
+      .where(sql`${t.grupoId} is not null and ${t.lojaId} is not null`),
     // Vaga zero ou negativa não é meta, é linha que deveria ter sido apagada. Barrado no banco
     // porque a meta alimenta divisão (o percentual do cilindro) e zero ali vira NaN na tela.
     ckQuantidade: check("ck_projeto_vaga_cargo_quantidade", sql`${t.quantidade} > 0`),

@@ -45,9 +45,11 @@ interface Cenario {
   declinios?: Row[];
   grupos?: Row[];
   /** Lojas / unidades: os baldes por `centro_custo`, no universo do PROJETO (os vinculados). */
-  centroCusto?: Row[];
+  loja?: Row[];
   /** Declínios por loja, no recorte cliente + período, FORA da matemática (como no quadro de cargos). */
-  centroCustoDeclinios?: Row[];
+  lojaDeclinios?: Row[];
+  /** A META por loja (`projeto_vaga_cargo` com `loja_id`). Vazia = projeto sem detalhamento. */
+  lojaMeta?: Row[];
   /** A matriz cargo x loja do cruzamento clicável: baldes e, depois, declínios. */
   matriz?: Row[];
   matrizDeclinios?: Row[];
@@ -76,8 +78,12 @@ function montar(cen: Cenario = {}) {
     // SÃO DUAS LEITURAS, e não uma, desde o quadro completo por status (27/08): os BALDES saem do
     // universo do projeto e os DECLÍNIOS saem do recorte cliente + período, exatamente como no
     // quadro de cargos, porque quem declina quase nunca chegou a `admissao_projeto` (§A.16).
-    cen.centroCusto ?? [],
-    cen.centroCustoDeclinios ?? [],
+    cen.loja ?? [],
+    cen.lojaDeclinios ?? [],
+    // A META por loja entra como TERCEIRA leitura do quadro, no mesmo `Promise.all`. Vazia por
+    // padrão: os testes anteriores descrevem projetos sem detalhamento, e neles a coluna de meta
+    // nasce nula, que é justamente o comportamento que a decisão do diretor pediu.
+    cen.lojaMeta ?? [],
     // A MATRIZ entra por último, e são DUAS leituras pelo mesmo motivo do quadro de lojas: os
     // baldes saem do universo do projeto e os declínios do recorte cliente + período.
     cen.matriz ?? [],
@@ -705,7 +711,7 @@ describe("análise: guarda", () => {
 describe("lojas / unidades por centro de custo", () => {
   /** Uma linha de baldes por loja, com os campos que a consulta devolve. */
   const loja = (
-    centroCusto: string | null,
+    loja: string | null,
     v: Partial<{
       total: number;
       vagas: number;
@@ -715,7 +721,7 @@ describe("lojas / unidades por centro de custo", () => {
       emBanco: number;
     }> = {},
   ) => ({
-    centroCusto,
+    loja,
     total: v.total ?? v.vagas ?? 0,
     vagas: v.vagas ?? 0,
     concluidas: v.concluidas ?? 0,
@@ -726,7 +732,7 @@ describe("lojas / unidades por centro de custo", () => {
 
   it("ordena por volume na esteira, com o não informado sempre por último", async () => {
     const ctx = montar({
-      centroCusto: [
+      loja: [
         loja(null, { vagas: 58 }),
         loja("LOJA MORUMBI", { vagas: 7 }),
         loja("LOJA IBIRAPUERA", { vagas: 25 }),
@@ -736,23 +742,23 @@ describe("lojas / unidades por centro de custo", () => {
 
     const r = await ctx.service.analise(PROJETO, HOJE);
 
-    expect(r.porCentroCusto.map((l) => l.centroCusto)).toEqual([
+    expect(r.porLoja.map((l) => l.loja)).toEqual([
       "LOJA IBIRAPUERA",
       "LOJA TATUAPÉ",
       "LOJA MORUMBI",
       null,
     ]);
-    expect(r.porCentroCusto.map((l) => l.vagas)).toEqual([25, 11, 7, 58]);
+    expect(r.porLoja.map((l) => l.vagas)).toEqual([25, 11, 7, 58]);
   });
 
   it("empate de volume desempata pelo nome, para a ordem não dançar entre duas cargas", async () => {
     const ctx = montar({
-      centroCusto: [loja("LOJA SANTANA", { vagas: 4 }), loja("LOJA CENTRO", { vagas: 4 })],
+      loja: [loja("LOJA SANTANA", { vagas: 4 }), loja("LOJA CENTRO", { vagas: 4 })],
     });
 
     const r = await ctx.service.analise(PROJETO, HOJE);
 
-    expect(r.porCentroCusto.map((l) => l.centroCusto)).toEqual(["LOJA CENTRO", "LOJA SANTANA"]);
+    expect(r.porLoja.map((l) => l.loja)).toEqual(["LOJA CENTRO", "LOJA SANTANA"]);
   });
 
   /**
@@ -766,28 +772,28 @@ describe("lojas / unidades por centro de custo", () => {
         { cargoId: "c1", cargoNome: "Vendedor I", vagas: 0, vinculadas: 30, concluidas: 10, cadastradas: 12, emAndamento: 20, pausadas: 0, emBanco: 3 },
         { cargoId: "c2", cargoNome: "Caixa", vagas: 0, vinculadas: 12, concluidas: 4, cadastradas: 5, emAndamento: 8, pausadas: 0, emBanco: 1 },
       ],
-      centroCusto: [loja("LOJA CENTRO", { vagas: 30 }), loja(null, { vagas: 12 })],
+      loja: [loja("LOJA CENTRO", { vagas: 30 }), loja(null, { vagas: 12 })],
     });
 
     const r = await ctx.service.analise(PROJETO, HOJE);
 
-    const somaLojas = r.porCentroCusto.reduce((acc, l) => acc + l.vagas, 0);
+    const somaLojas = r.porLoja.reduce((acc, l) => acc + l.vagas, 0);
     expect(somaLojas).toBe(r.totais.vinculadas);
   });
 
   it("projeto sem nenhum vínculo devolve lista vazia (a tela não desenha a seção)", async () => {
     const ctx = montar();
     const r = await ctx.service.analise(PROJETO, HOJE);
-    expect(r.porCentroCusto).toEqual([]);
+    expect(r.porLoja).toEqual([]);
   });
 
   /**
    * ─ O QUADRO COMPLETO POR STATUS (evolução de 27/08) ──────────────────────────────────────────
    */
 
-  it("cada balde da loja é o mesmo balde do quadro de cargos, só agrupado por centro de custo", async () => {
+  it("cada balde da loja é o mesmo balde do quadro de cargos, só agrupado por loja", async () => {
     const ctx = montar({
-      centroCusto: [
+      loja: [
         loja("LOJA CENTRO", {
           total: 34,
           vagas: 25,
@@ -797,13 +803,13 @@ describe("lojas / unidades por centro de custo", () => {
           emBanco: 3,
         }),
       ],
-      centroCustoDeclinios: [{ centroCusto: "LOJA CENTRO", declinios: 6 }],
+      lojaDeclinios: [{ loja: "LOJA CENTRO", declinios: 6 }],
     });
 
-    const [l] = (await ctx.service.analise(PROJETO, HOJE)).porCentroCusto;
+    const [l] = (await ctx.service.analise(PROJETO, HOJE)).porLoja;
 
     expect(l).toMatchObject({
-      centroCusto: "LOJA CENTRO",
+      loja: "LOJA CENTRO",
       total: 34,
       vagas: 25,
       concluidas: 12,
@@ -819,19 +825,93 @@ describe("lojas / unidades por centro de custo", () => {
    * cargos usa (`meta - vinculadas`). Não existe meta cadastrada por loja no sistema, então a
    * referência é o universo da própria loja, e não um rateio inventado da meta do projeto (§A.16).
    */
-  it("faltam é o total da loja menos quem está na esteira, sem trava em zero", async () => {
+  /**
+   * O QUE MUDOU COM A META POR LOJA. Antes `faltam` era `total - na esteira`, ou seja QUEM SAIU, com
+   * o mesmo rótulo de uma coluna que, duas tabelas acima, significava quanto falta contratar. Agora
+   * `faltam` é `meta - na esteira` nos dois quadros, e o número antigo continua existindo com o nome
+   * certo: `foraDaEsteira`.
+   */
+  it("SEM meta cadastrada, faltam é NULO e não zero: ninguém definiu meta aqui", async () => {
     const ctx = montar({
-      centroCusto: [
-        loja("LOJA CENTRO", { total: 34, vagas: 25 }),
-        // Loja com mais gente andando do que o universo contado é impossível por construção, mas a
-        // ausência de trava é a mesma decisão do quadro de cargos: o número tem de somar a coluna.
-        loja("LOJA SANTANA", { total: 4, vagas: 4 }),
+      loja: [loja("LOJA CENTRO", { total: 34, vagas: 25 }), loja("LOJA SANTANA", { total: 4, vagas: 4 })],
+      // lojaMeta vazio: projeto sem detalhamento por loja, que é o estado de todos os projetos que
+      // já existem (decisão do diretor: sem backfill).
+    });
+
+    const r = await ctx.service.analise(PROJETO, HOJE);
+
+    // Zero diria "não falta ninguém". Nulo diz "não há meta", que é a verdade.
+    expect(r.porLoja.map((l) => l.faltam)).toEqual([null, null]);
+    // E quem saiu continua contado, com o nome certo.
+    expect(r.porLoja.map((l) => l.foraDaEsteira)).toEqual([9, 0]);
+  });
+
+  it("COM meta, faltam é meta menos na esteira, a MESMA conta do quadro de cargos", async () => {
+    const ctx = montar({
+      loja: [loja("LOJA CENTRO", { total: 34, vagas: 25 }), loja("LOJA SANTANA", { total: 4, vagas: 4 })],
+      lojaMeta: [
+        { loja: "LOJA CENTRO", meta: 30 },
+        { loja: "LOJA SANTANA", meta: 4 },
       ],
     });
 
     const r = await ctx.service.analise(PROJETO, HOJE);
 
-    expect(r.porCentroCusto.map((l) => l.faltam)).toEqual([9, 0]);
+    expect(r.porLoja.map((l) => l.meta)).toEqual([30, 4]);
+    // 30 de meta com 25 andando: faltam 5. 4 com 4: meta batida, zero.
+    expect(r.porLoja.map((l) => l.faltam)).toEqual([5, 0]);
+  });
+
+  it("meta batida com folga devolve NEGATIVO, sem trava em zero", async () => {
+    // A mesma decisão do quadro de cargos: gente ALÉM da meta é a informação certa, e travar em zero
+    // faria a coluna deixar de somar o rodapé.
+    const ctx = montar({
+      loja: [loja("LOJA CENTRO", { total: 34, vagas: 25 })],
+      lojaMeta: [{ loja: "LOJA CENTRO", meta: 20 }],
+    });
+
+    const r = await ctx.service.analise(PROJETO, HOJE);
+
+    expect(r.porLoja[0]?.faltam).toBe(-5);
+  });
+
+  it("a linha SEM LOJA nunca tem meta: não existe meta para nenhuma loja", async () => {
+    const ctx = montar({
+      loja: [loja(null, { total: 12, vagas: 10 })],
+      lojaMeta: [{ loja: "LOJA CENTRO", meta: 30 }],
+    });
+
+    const r = await ctx.service.analise(PROJETO, HOJE);
+    const semLoja = r.porLoja.find((l) => l.loja === null);
+
+    expect(semLoja?.meta).toBeNull();
+    expect(semLoja?.faltam).toBeNull();
+    // Mas o "quem saiu" dela continua contado.
+    expect(semLoja?.foraDaEsteira).toBe(2);
+  });
+
+  /**
+   * A CORREÇÃO DO DIRETOR (02/09/2026): a loja que recebeu meta e ainda não tem ninguém alocado
+   * SOME do quadro se as linhas nascerem só de quem tem gente vinculada. O diretor distribuía 20
+   * entre quatro lojas e via três, e a que faltava era justamente a que mais precisa de atenção.
+   */
+  it("loja COM META e ZERO pessoas APARECE no quadro, com os baldes em zero", async () => {
+    const ctx = montar({
+      // Ninguém vinculado em lugar nenhum: `loja` vazio de propósito.
+      loja: [],
+      lojaMeta: [
+        { loja: "LOJA CENTRO", meta: 12 },
+        { loja: "LOJA SANTANA", meta: 8 },
+      ],
+    });
+
+    const r = await ctx.service.analise(PROJETO, HOJE);
+
+    expect(r.porLoja.map((l) => l.loja).sort()).toEqual(["LOJA CENTRO", "LOJA SANTANA"]);
+    const centro = r.porLoja.find((l) => l.loja === "LOJA CENTRO");
+    expect(centro).toMatchObject({ meta: 12, total: 0, vagas: 0, concluidas: 0 });
+    // E o "faltam" diz a verdade: os 12 ainda estão todos por contratar.
+    expect(centro?.faltam).toBe(12);
   });
 
   /**
@@ -841,15 +921,18 @@ describe("lojas / unidades por centro de custo", () => {
    */
   it("o declínio é informação ao lado: não soma no total nem no faltam", async () => {
     const ctx = montar({
-      centroCusto: [loja("LOJA CENTRO", { total: 34, vagas: 25 })],
-      centroCustoDeclinios: [{ centroCusto: "LOJA CENTRO", declinios: 32 }],
+      loja: [loja("LOJA CENTRO", { total: 34, vagas: 25 })],
+      lojaDeclinios: [{ loja: "LOJA CENTRO", declinios: 32 }],
     });
 
-    const [l] = (await ctx.service.analise(PROJETO, HOJE)).porCentroCusto;
+    const [l] = (await ctx.service.analise(PROJETO, HOJE)).porLoja;
 
     expect(l.declinios).toBe(32);
     expect(l.total).toBe(34);
-    expect(l.faltam).toBe(9);
+    // O declínio não entra na conta do que falta contratar: sem meta cadastrada, `faltam` é nulo
+    // mesmo com 32 declínios ao lado. Antes esta linha esperava 9, que era `total - na esteira`.
+    expect(l.faltam).toBeNull();
+    expect(l.foraDaEsteira).toBe(9);
   });
 
   /**
@@ -858,17 +941,19 @@ describe("lojas / unidades por centro de custo", () => {
    */
   it("loja que só tem declínio entra na lista, com os baldes em zero", async () => {
     const ctx = montar({
-      centroCusto: [loja("LOJA CENTRO", { total: 10, vagas: 10 })],
-      centroCustoDeclinios: [
-        { centroCusto: "LOJA CENTRO", declinios: 1 },
-        { centroCusto: "LOJA PERDIDA", declinios: 7 },
+      loja: [loja("LOJA CENTRO", { total: 10, vagas: 10 })],
+      lojaDeclinios: [
+        { loja: "LOJA CENTRO", declinios: 1 },
+        { loja: "LOJA PERDIDA", declinios: 7 },
       ],
     });
 
     const r = await ctx.service.analise(PROJETO, HOJE);
-    const perdida = r.porCentroCusto.find((l) => l.centroCusto === "LOJA PERDIDA");
+    const perdida = r.porLoja.find((l) => l.loja === "LOJA PERDIDA");
 
-    expect(perdida).toMatchObject({ total: 0, vagas: 0, declinios: 7, faltam: 0 });
+    // Sem meta e sem ninguém vinculado, faltam é nulo: a loja perdeu todo mundo, e o que sobra a
+    // dizer é o declínio, não uma meta que ninguém cadastrou.
+    expect(perdida).toMatchObject({ total: 0, vagas: 0, declinios: 7, faltam: null, foraDaEsteira: 0 });
   });
 
   /**
@@ -877,14 +962,14 @@ describe("lojas / unidades por centro de custo", () => {
    */
   it("a loja sem centro de custo não se funde com uma loja de nome parecido", async () => {
     const ctx = montar({
-      centroCusto: [loja(null, { total: 5, vagas: 5 }), loja("não informado", { total: 2, vagas: 2 })],
+      loja: [loja(null, { total: 5, vagas: 5 }), loja("não informado", { total: 2, vagas: 2 })],
     });
 
     const r = await ctx.service.analise(PROJETO, HOJE);
 
-    expect(r.porCentroCusto).toHaveLength(2);
+    expect(r.porLoja).toHaveLength(2);
     // A de nome real fica no ranking; a de dado ausente vai para o fim, sempre.
-    expect(r.porCentroCusto.map((l) => l.centroCusto)).toEqual(["não informado", null]);
+    expect(r.porLoja.map((l) => l.loja)).toEqual(["não informado", null]);
   });
 });
 
@@ -910,12 +995,12 @@ describe("matriz cargo x loja: o cruzamento clicável", () => {
   const cel = (
     cargoId: string | null,
     cargoNome: string | null,
-    centroCusto: string | null,
+    loja: string | null,
     v: ValoresCel = {},
   ) => ({
     cargoId,
     cargoNome,
-    centroCusto,
+    loja,
     total: v.total ?? v.vagas ?? 0,
     vagas: v.vagas ?? 0,
     concluidas: v.concluidas ?? 0,
@@ -936,7 +1021,7 @@ describe("matriz cargo x loja: o cruzamento clicável", () => {
     const { matriz } = await ctx.service.analise(PROJETO, HOJE);
 
     expect(matriz).toHaveLength(3);
-    expect(matriz.find((m) => m.cargoId === "c1" && m.centroCusto === "LOJA CENTRO")).toMatchObject({
+    expect(matriz.find((m) => m.cargoId === "c1" && m.loja === "LOJA CENTRO")).toMatchObject({
       total: 12,
       vagas: 10,
       concluidas: 8,
@@ -954,9 +1039,9 @@ describe("matriz cargo x loja: o cruzamento clicável", () => {
       status: [
         { cargoId: "c1", cargoNome: "Vendedor I", vagas: 0, vinculadas: 15, concluidas: 10, cadastradas: 0, emAndamento: 5, pausadas: 0, emBanco: 0 },
       ],
-      centroCusto: [
-        { centroCusto: "LOJA CENTRO", total: 16, vagas: 13, concluidas: 11, emAndamento: 2, pausadas: 0, emBanco: 0 },
-        { centroCusto: "LOJA SUL", total: 5, vagas: 5, concluidas: 2, emAndamento: 3, pausadas: 0, emBanco: 0 },
+      loja: [
+        { loja: "LOJA CENTRO", total: 16, vagas: 13, concluidas: 11, emAndamento: 2, pausadas: 0, emBanco: 0 },
+        { loja: "LOJA SUL", total: 5, vagas: 5, concluidas: 2, emAndamento: 3, pausadas: 0, emBanco: 0 },
       ],
       matriz: [
         cel("c1", "Vendedor I", "LOJA CENTRO", { total: 12, vagas: 10, concluidas: 8, emAndamento: 2 }),
@@ -977,9 +1062,9 @@ describe("matriz cargo x loja: o cruzamento clicável", () => {
 
     // Por LOJA: a Loja Centro da matriz soma a Loja Centro do quadro de lojas.
     const centroNaMatriz = r.matriz
-      .filter((m) => m.centroCusto === "LOJA CENTRO")
+      .filter((m) => m.loja === "LOJA CENTRO")
       .reduce((a, m) => a + m.vagas, 0);
-    const centroNoQuadro = r.porCentroCusto.find((l) => l.centroCusto === "LOJA CENTRO");
+    const centroNoQuadro = r.porLoja.find((l) => l.loja === "LOJA CENTRO");
     expect(centroNoQuadro).toBeDefined();
     expect(centroNaMatriz).toBe(centroNoQuadro!.vagas);
   });
@@ -988,17 +1073,17 @@ describe("matriz cargo x loja: o cruzamento clicável", () => {
     const ctx = montar({
       matriz: [cel("c1", "Vendedor I", "LOJA CENTRO", { total: 10, vagas: 10 })],
       matrizDeclinios: [
-        { cargoId: "c1", cargoNome: "Vendedor I", centroCusto: "LOJA CENTRO", declinios: 7 },
-        { cargoId: "c2", cargoNome: "Caixa", centroCusto: "LOJA PERDIDA", declinios: 3 },
+        { cargoId: "c1", cargoNome: "Vendedor I", loja: "LOJA CENTRO", declinios: 7 },
+        { cargoId: "c2", cargoNome: "Caixa", loja: "LOJA PERDIDA", declinios: 3 },
       ],
     });
 
     const { matriz } = await ctx.service.analise(PROJETO, HOJE);
 
-    const vendedorCentro = matriz.find((m) => m.cargoId === "c1" && m.centroCusto === "LOJA CENTRO");
+    const vendedorCentro = matriz.find((m) => m.cargoId === "c1" && m.loja === "LOJA CENTRO");
     expect(vendedorCentro).toMatchObject({ total: 10, vagas: 10, declinios: 7, faltam: 0 });
     // O par que só existe nos declínios entra na matriz: é o cargo que aquela loja perdeu inteiro.
-    expect(matriz.find((m) => m.centroCusto === "LOJA PERDIDA")).toMatchObject({
+    expect(matriz.find((m) => m.loja === "LOJA PERDIDA")).toMatchObject({
       cargoNome: "Caixa",
       total: 0,
       declinios: 3,
@@ -1018,6 +1103,6 @@ describe("matriz cargo x loja: o cruzamento clicável", () => {
 
     expect(matriz).toHaveLength(3);
     expect(matriz.filter((m) => m.cargoId === null)).toHaveLength(2);
-    expect(matriz.filter((m) => m.centroCusto === null)).toHaveLength(2);
+    expect(matriz.filter((m) => m.loja === null)).toHaveLength(2);
   });
 });

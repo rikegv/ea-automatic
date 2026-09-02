@@ -1,5 +1,5 @@
 import { Inject, Injectable, NotFoundException } from "@nestjs/common";
-import { asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Database } from "../../db/client";
 import { DRIZZLE } from "../../db/drizzle.module";
 import {
@@ -10,9 +10,12 @@ import { diasUteisEntre } from "../../domain/dias-uteis";
 import {
   admissaoProjeto,
   admissoes,
+  candidatos,
   cargos,
+  clienteLojas,
   clientes,
-  dadosVagaFolha,
+  frenteStatusCatalogo,
+  frentesAdmissao,
   projetoGrupoEntrada,
   projetoVagaCargo,
   projetosAltoVolume,
@@ -75,10 +78,10 @@ export class AltoVolumeAnaliseService {
     // ela mantém a ORDEM das consultas que já existiam (projeto, vagas, status, declínios, grupos)
     // exatamente como estava. Consulta nova no meio da fila não mudaria o resultado em produção, mas
     // remontaria a ordem em que o teste desta análise devolve cada resultado.
-    const [porCargo, grupos, porCentroCusto, matriz] = await Promise.all([
+    const [porCargo, grupos, porLoja, matriz] = await Promise.all([
       this.preenchimentoPorCargo(projetoId, projeto.codCliente, projeto.dataInicio, projeto.dataFim),
       this.alertaPorGrupo(projetoId),
-      this.quadroPorCentroCusto(
+      this.quadroPorLoja(
         projetoId,
         projeto.codCliente,
         projeto.dataInicio,
@@ -116,11 +119,11 @@ export class AltoVolumeAnaliseService {
       // Projeto sem turma devolve lista vazia, e a tela não desenha a seção: alerta por data de
       // entrada sem data de entrada não tem o que dizer.
       grupos,
-      porCentroCusto,
+      porLoja,
       /**
        * A MATRIZ CARGO x LOJA (cruzamento clicável, 27/08). Ela NÃO é uma terceira contagem: é a
        * MESMA consulta dos dois quadros, com o `group by` nos DOIS eixos em vez de num só. Somar a
-       * matriz por cargo devolve `porCargo`, somar por loja devolve `porCentroCusto`, e é isso que
+       * matriz por cargo devolve `porCargo`, somar por loja devolve `porLoja`, e é isso que
        * garante que clicar numa linha não faça aparecer número que a tela não mostrava antes.
        */
       matriz,
@@ -267,7 +270,18 @@ export class AltoVolumeAnaliseService {
         })
         .from(projetoVagaCargo)
         .leftJoin(cargos, eq(cargos.id, projetoVagaCargo.cargoId))
-        .where(eq(projetoVagaCargo.projetoId, projetoId))
+        /**
+         * SÓ AS LINHAS SEM LOJA, e este filtro é a peça que impede a meta de inflar (§A.27).
+         *
+         * Com a regra A (02/09/2026) a linha geral do cargo CONVIVE com as cotas por loja: o cargo
+         * tem 20 e as lojas repartem esses 20. Somar as duas visões daria 40 num cargo de 20, e o
+         * número errado não ficaria numa célula: ele entra no percentual do cilindro, no termômetro
+         * e no "faltam" do topo, e só apareceria semanas depois sem ninguém saber de onde veio.
+         *
+         * As cotas por GRUPO de entrada continuam somando aqui, porque elas têm `loja_id` nulo: o
+         * eixo de turmas não mudou de comportamento.
+         */
+        .where(and(eq(projetoVagaCargo.projetoId, projetoId), isNull(projetoVagaCargo.lojaId)))
         .groupBy(projetoVagaCargo.cargoId, cargos.nome),
       this.statusPorCargoVinculados(projetoId),
       this.declinioPorCargo(codCliente, dataInicio, dataFim),
@@ -411,21 +425,26 @@ export class AltoVolumeAnaliseService {
    *
    * §A.6: contagem por rótulo de centro de custo. Nenhum nome, nenhum CPF.
    */
-  private async quadroPorCentroCusto(
+  private async quadroPorLoja(
     projetoId: string,
     codCliente: string,
     dataInicio: string,
     dataFim: string,
   ) {
-    const [status, declinios] = await Promise.all([
-      this.statusPorCentroCustoVinculados(projetoId),
-      this.declinioPorCentroCusto(codCliente, dataInicio, dataFim),
+    const [status, declinios, metas] = await Promise.all([
+      this.statusPorLojaVinculados(projetoId),
+      this.declinioPorLoja(codCliente, dataInicio, dataFim),
+      this.metaPorLoja(projetoId),
     ]);
+    // A meta por NOME de loja, que é a mesma chave do quadro. `null` = este cargo/loja não foi
+    // detalhado, e a célula fica VAZIA na tela em vez de zero.
+    const metaDe = new Map(metas.map((m) => [m.loja, Number(m.meta)]));
+
 
     const linhas = new Map<
       string,
       {
-        centroCusto: string | null;
+        loja: string | null;
         total: number;
         vagas: number;
         concluidas: number;
@@ -437,13 +456,13 @@ export class AltoVolumeAnaliseService {
     >();
     // A chave é o rótulo, e o nulo tem chave própria em vez de virar texto: uma loja chamada
     // literalmente "nao-informado" não pode se fundir com a linha de ausência de dado.
-    const chave = (c: string | null) => (c === null ? "\u0000sem-centro-custo" : c);
-    const pegar = (centroCusto: string | null) => {
-      const k = chave(centroCusto);
+    const chave = (c: string | null) => (c === null ? "\u0000sem-loja" : c);
+    const pegar = (loja: string | null) => {
+      const k = chave(loja);
       const atual = linhas.get(k);
       if (atual) return atual;
       const novo = {
-        centroCusto,
+        loja,
         total: 0,
         vagas: 0,
         concluidas: 0,
@@ -456,8 +475,18 @@ export class AltoVolumeAnaliseService {
       return novo;
     };
 
+    /**
+     * TODA LOJA COM META ENTRA NO QUADRO, mesmo sem ninguém alocado ainda (correção do diretor,
+     * 02/09/2026). Antes as linhas nasciam só de quem tinha gente vinculada, então uma loja que
+     * recebeu 5 vagas no planejamento e ainda não tem ninguém SUMIA da tela: o diretor distribuía 20
+     * entre quatro lojas e via três. Justamente a loja que mais precisa de atenção, a vazia, era a
+     * que não aparecia. Semear as linhas com as metas ANTES dos baldes resolve, e os baldes só
+     * preenchem o que já existe.
+     */
+    for (const m of metas) if (m.loja) pegar(m.loja);
+
     for (const s of status) {
-      const linha = pegar(s.centroCusto ?? null);
+      const linha = pegar(s.loja ?? null);
       linha.total = Number(s.total);
       linha.vagas = Number(s.vagas);
       linha.concluidas = Number(s.concluidas);
@@ -470,23 +499,42 @@ export class AltoVolumeAnaliseService {
      * (ninguém vinculado, gente que declinou) entra na lista com os baldes em zero. Sumir dali seria
      * esconder justamente a loja que perdeu todo mundo.
      */
-    for (const d of declinios) pegar(d.centroCusto ?? null).declinios = Number(d.declinios);
+    for (const d of declinios) pegar(d.loja ?? null).declinios = Number(d.declinios);
 
     return [...linhas.values()]
-      .map((l) => ({
-        ...l,
-        // A MESMA FORMA DO QUADRO DE CARGOS (`meta - vinculadas`), aplicada ao universo da loja.
-        // Sem trava em zero, pela mesma razão registrada lá: o número tem de somar a coluna.
-        faltam: l.total - l.vagas,
-      }))
+      .map((l) => {
+        // META da loja. `null` quando o cargo não foi detalhado por loja neste projeto: a coluna
+        // fica VAZIA, e não zero, porque zero diria "não falta ninguém" e a verdade é "ninguém
+        // definiu meta aqui" (decisão do diretor). A linha "Sem Loja" nunca tem meta: não existe
+        // meta para nenhuma loja.
+        const meta = l.loja === null ? null : (metaDe.get(l.loja) ?? null);
+        return {
+          ...l,
+          meta,
+          /**
+           * FALTAM = META menos NA ESTEIRA, a MESMA conta do quadro de cargos (`meta - vinculadas`).
+           * É a mudança que fez esta frente existir: antes era `total - na esteira`, que contava quem
+           * SAIU e não quem falta contratar, com o mesmo rótulo de uma coluna que significava outra
+           * coisa duas tabelas acima.
+           *
+           * Sem meta, sem faltam: `null`, não zero, pelo mesmo motivo da meta.
+           *
+           * SEM TRAVA EM ZERO, pela razão já registrada no quadro de cargos: negativo é a informação
+           * certa (gente ALÉM da meta) e travar faria a coluna deixar de somar o rodapé.
+           */
+          faltam: meta === null ? null : meta - l.vagas,
+          /** Quem saiu da esteira: o número que a coluna Faltam carregava antes, com o nome certo. */
+          foraDaEsteira: l.total - l.vagas,
+        };
+      })
       .sort((a, b) => {
         // Não informado por último, sempre: é o único critério que não é volume.
-        if (a.centroCusto === null) return 1;
-        if (b.centroCusto === null) return -1;
+        if (a.loja === null) return 1;
+        if (b.loja === null) return -1;
         // Maior primeiro, e empate pelo nome, para a ordem não dançar entre duas cargas (a mesma
         // regra de desempate do preenchimento por cargo). O critério é o "na esteira", que é o que
         // o cilindro desenha: a ordem da lista tem de ser a ordem das barras.
-        return b.vagas - a.vagas || a.centroCusto.localeCompare(b.centroCusto, "pt-BR");
+        return b.vagas - a.vagas || a.loja.localeCompare(b.loja, "pt-BR");
       });
   }
 
@@ -497,13 +545,13 @@ export class AltoVolumeAnaliseService {
    * mesmas expressões compartilhadas. O que muda é o `group by` e o join do anexo de folha, que é
    * onde o centro de custo mora.
    */
-  private statusPorCentroCustoVinculados(projetoId: string) {
+  private statusPorLojaVinculados(projetoId: string) {
     // `nullif(btrim(...), '')` junta o nulo e o texto em branco na MESMA chave. Sem isso, um cadastro
     // com um espaço solto viraria uma "loja" própria, chamada nada, ao lado da linha de não informado.
-    const rotulo = sql<string | null>`nullif(btrim(${dadosVagaFolha.centroCusto}), '')`;
+    const rotulo = sql<string | null>`nullif(btrim(${clienteLojas.nome}), '')`;
     return this.db
       .select({
-        centroCusto: rotulo,
+        loja: rotulo,
         // O UNIVERSO INTEIRO DA LOJA NO PROJETO, sem filtro de farol: é o `total` da linha.
         total: sql<number>`count(*)::int`,
         // TERMINAIS E BANCO FORA (decisão do diretor + §A.16): o mesmo filtro do "Na Esteira" por
@@ -523,11 +571,122 @@ export class AltoVolumeAnaliseService {
       })
       .from(admissaoProjeto)
       .innerJoin(admissoes, eq(admissoes.id, admissaoProjeto.admissaoId))
-      // LEFT JOIN, e não inner: admissão sem anexo de folha ainda é vaga do projeto e conta. Com
-      // inner join ela sumiria da lista e a soma ficaria abaixo do balde do topo, em silêncio.
-      .leftJoin(dadosVagaFolha, eq(dadosVagaFolha.admissaoId, admissoes.id))
+      // LEFT JOIN, e não inner: admissão SEM LOJA ainda é vaga do projeto e conta. Com inner join
+      // ela sumiria da lista e a soma ficaria abaixo do balde do topo, em silêncio. Hoje a maioria
+      // não tem loja, então este left join é o que sustenta a linha "Sem Loja".
+      .leftJoin(clienteLojas, eq(clienteLojas.id, admissoes.lojaId))
       .where(eq(admissaoProjeto.projetoId, projetoId))
       .groupBy(rotulo);
+  }
+
+  /**
+   * AS PESSOAS DE UMA LOJA no projeto (pedido do diretor, 02/09/2026): quem está ali, com a data de
+   * admissão e o estado das TRÊS frentes que interessam a quem acompanha a contratação.
+   *
+   * SÓ AUDITORIA, EXAME E CADASTRO (decisão do diretor). Integração e iFractal ficam de fora: elas
+   * acontecem depois de a pessoa já estar contratada, e o painel de Alto Volume é sobre encher a
+   * vaga, não sobre o que vem depois.
+   *
+   * O RÓTULO VEM DO `frenteStatusCatalogo`, o MESMO que a Esteira usa. Traduzir código para texto
+   * aqui criaria um segundo dicionário, e no dia em que a operação renomear um status a Esteira
+   * mostraria o nome novo e este modal o antigo.
+   *
+   * `loja` NULA é a consulta da linha "Sem Loja": quem está no projeto sem loja vinculada.
+   *
+   * §A.6: nome e data de admissão são o que a tela precisa para o diretor reconhecer a pessoa. CPF
+   * NÃO sai daqui.
+   */
+  async pessoasDaLoja(projetoId: string, loja: string | null) {
+    const linhas = await this.db
+      .select({
+        admissaoId: admissoes.id,
+        nome: candidatos.nome,
+        dataAdmissao: admissoes.dataAdmissao,
+        farol: admissoes.farolGlobal,
+        cargo: cargos.nome,
+      })
+      .from(admissaoProjeto)
+      .innerJoin(admissoes, eq(admissoes.id, admissaoProjeto.admissaoId))
+      .innerJoin(candidatos, eq(candidatos.cpf, admissoes.candidatoCpf))
+      .leftJoin(cargos, eq(cargos.id, admissoes.cargoId))
+      .leftJoin(clienteLojas, eq(clienteLojas.id, admissoes.lojaId))
+      .where(
+        and(
+          eq(admissaoProjeto.projetoId, projetoId),
+          loja === null ? isNull(admissoes.lojaId) : eq(clienteLojas.nome, loja),
+        ),
+      )
+      .orderBy(asc(candidatos.nome));
+
+    if (linhas.length === 0) return [];
+
+    const ids = linhas.map((l) => l.admissaoId);
+    const frentes = await this.db
+      .select({
+        admissaoId: frentesAdmissao.admissaoId,
+        tipo: frentesAdmissao.tipo,
+        status: frentesAdmissao.status,
+        concluida: frentesAdmissao.concluida,
+        rotulo: frenteStatusCatalogo.rotulo,
+      })
+      .from(frentesAdmissao)
+      .leftJoin(
+        frenteStatusCatalogo,
+        and(
+          eq(frenteStatusCatalogo.tipo, frentesAdmissao.tipo),
+          eq(frenteStatusCatalogo.codigo, frentesAdmissao.status),
+        ),
+      )
+      .where(
+        and(
+          inArray(frentesAdmissao.admissaoId, ids),
+          inArray(frentesAdmissao.tipo, ["AUDITORIA", "EXAME", "CADASTRO_CONTRATO"]),
+        ),
+      );
+
+    const porAdmissao = new Map<string, Record<string, { rotulo: string; concluida: boolean }>>();
+    for (const f of frentes) {
+      const atual = porAdmissao.get(f.admissaoId) ?? {};
+      // Sem linha no catálogo, mostra o CÓDIGO cru em vez de vazio: status novo sem rótulo
+      // cadastrado é problema de catálogo, e esconder deixaria a célula mentindo de branco.
+      atual[f.tipo] = { rotulo: f.rotulo ?? f.status, concluida: f.concluida };
+      porAdmissao.set(f.admissaoId, atual);
+    }
+
+    return linhas.map((l) => ({
+      admissaoId: l.admissaoId,
+      nome: l.nome,
+      cargo: l.cargo,
+      dataAdmissao: l.dataAdmissao,
+      farol: l.farol,
+      // A frente que NÃO NASCEU (o Cadastro só abre com Auditoria e Exame concluídas, regra 3) vem
+      // nula, e a tela mostra que ela ainda não começou, que é diferente de estar pendente.
+      frentes: {
+        AUDITORIA: porAdmissao.get(l.admissaoId)?.AUDITORIA ?? null,
+        EXAME: porAdmissao.get(l.admissaoId)?.EXAME ?? null,
+        CADASTRO_CONTRATO: porAdmissao.get(l.admissaoId)?.CADASTRO_CONTRATO ?? null,
+      },
+    }));
+  }
+
+  /**
+   * A META POR LOJA (docs/DESENHO-META-POR-LOJA.md): quantas vagas o projeto definiu para cada loja.
+   *
+   * É a IRMÃ da meta por cargo, lendo a MESMA tabela (`projeto_vaga_cargo`), só que agrupando pela
+   * loja em vez de pelo cargo. Cargo sem detalhamento não aparece aqui, e é isso que faz a coluna
+   * nascer VAZIA em vez de zero nos projetos que ninguém detalhou: zero diria "não falta ninguém", e
+   * a verdade é "ninguém definiu meta aqui".
+   */
+  private metaPorLoja(projetoId: string) {
+    return this.db
+      .select({
+        loja: clienteLojas.nome,
+        meta: sql<number>`sum(${projetoVagaCargo.quantidade})::int`,
+      })
+      .from(projetoVagaCargo)
+      .innerJoin(clienteLojas, eq(clienteLojas.id, projetoVagaCargo.lojaId))
+      .where(eq(projetoVagaCargo.projetoId, projetoId))
+      .groupBy(clienteLojas.nome);
   }
 
   /**
@@ -538,12 +697,12 @@ export class AltoVolumeAnaliseService {
    * declínios do cliente na janela contra 10 terminais vinculados ao projeto. Buscá-los entre os
    * vinculados mostraria menos de um terço do que o cliente perdeu naquela loja.
    */
-  private declinioPorCentroCusto(codCliente: string, dataInicio: string, dataFim: string) {
-    const rotulo = sql<string | null>`nullif(btrim(${dadosVagaFolha.centroCusto}), '')`;
+  private declinioPorLoja(codCliente: string, dataInicio: string, dataFim: string) {
+    const rotulo = sql<string | null>`nullif(btrim(${clienteLojas.nome}), '')`;
     return this.db
-      .select({ centroCusto: rotulo, declinios: sql<number>`count(*)::int` })
+      .select({ loja: rotulo, declinios: sql<number>`count(*)::int` })
       .from(admissoes)
-      .leftJoin(dadosVagaFolha, eq(dadosVagaFolha.admissaoId, admissoes.id))
+      .leftJoin(clienteLojas, eq(clienteLojas.id, admissoes.lojaId))
       .where(
         sql`${admissoes.codCliente} = ${codCliente}
             and ${admissoes.farolGlobal} in ('DECLINOU', 'RESCISAO')
@@ -565,7 +724,7 @@ export class AltoVolumeAnaliseService {
    * │ É a MESMA consulta dos dois quadros, com o `group by` nos DOIS eixos em vez de num só, e com │
    * │ as MESMAS expressões compartilhadas (`admissaoConcluidaSql`,                                 │
    * │ `admissaoEmAndamentoExclusivoSql`) e o MESMO filtro de farol. Como consequência aritmética:   │
-   * │ somar a matriz por cargo devolve `porCargo`, e somar por loja devolve `porCentroCusto`.      │
+   * │ somar a matriz por cargo devolve `porCargo`, e somar por loja devolve `porLoja`.      │
    * │ Clicar numa linha nunca faz aparecer número que a tela não mostrava antes de clicar.         │
    * └────────────────────────────────────────────────────────────────────────────────────────────┘
    *
@@ -586,14 +745,14 @@ export class AltoVolumeAnaliseService {
     dataInicio: string,
     dataFim: string,
   ) {
-    const rotulo = sql<string | null>`nullif(btrim(${dadosVagaFolha.centroCusto}), '')`;
+    const rotulo = sql<string | null>`nullif(btrim(${clienteLojas.nome}), '')`;
 
     const [status, declinios] = await Promise.all([
       this.db
         .select({
           cargoId: admissoes.cargoId,
           cargoNome: cargos.nome,
-          centroCusto: rotulo,
+          loja: rotulo,
           total: sql<number>`count(*)::int`,
           vagas: sql<number>`count(*) filter (
             where ${admissoes.farolGlobal} not in ('DECLINOU', 'RESCISAO', 'BANCO_AGUARDAR')
@@ -609,19 +768,19 @@ export class AltoVolumeAnaliseService {
         .from(admissaoProjeto)
         .innerJoin(admissoes, eq(admissoes.id, admissaoProjeto.admissaoId))
         .leftJoin(cargos, eq(cargos.id, admissoes.cargoId))
-        .leftJoin(dadosVagaFolha, eq(dadosVagaFolha.admissaoId, admissoes.id))
+        .leftJoin(clienteLojas, eq(clienteLojas.id, admissoes.lojaId))
         .where(eq(admissaoProjeto.projetoId, projetoId))
         .groupBy(admissoes.cargoId, cargos.nome, rotulo),
       this.db
         .select({
           cargoId: admissoes.cargoId,
           cargoNome: cargos.nome,
-          centroCusto: rotulo,
+          loja: rotulo,
           declinios: sql<number>`count(*)::int`,
         })
         .from(admissoes)
         .leftJoin(cargos, eq(cargos.id, admissoes.cargoId))
-        .leftJoin(dadosVagaFolha, eq(dadosVagaFolha.admissaoId, admissoes.id))
+        .leftJoin(clienteLojas, eq(clienteLojas.id, admissoes.lojaId))
         .where(
           sql`${admissoes.codCliente} = ${codCliente}
               and ${admissoes.farolGlobal} in ('DECLINOU', 'RESCISAO')
@@ -638,7 +797,7 @@ export class AltoVolumeAnaliseService {
       {
         cargoId: string | null;
         cargoNome: string;
-        centroCusto: string | null;
+        loja: string | null;
         total: number;
         vagas: number;
         concluidas: number;
@@ -649,15 +808,15 @@ export class AltoVolumeAnaliseService {
       }
     >();
     const chave = (c: string | null, l: string | null) =>
-      `${c ?? "\u0000sem-cargo"}\u0001${l ?? "\u0000sem-centro-custo"}`;
-    const pegar = (cargoId: string | null, cargoNome: string | null, centroCusto: string | null) => {
-      const k = chave(cargoId, centroCusto);
+      `${c ?? "\u0000sem-cargo"}\u0001${l ?? "\u0000sem-loja"}`;
+    const pegar = (cargoId: string | null, cargoNome: string | null, loja: string | null) => {
+      const k = chave(cargoId, loja);
       const atual = linhas.get(k);
       if (atual) return atual;
       const novo = {
         cargoId,
         cargoNome: cargoNome ?? "não informado",
-        centroCusto,
+        loja,
         total: 0,
         vagas: 0,
         concluidas: 0,
@@ -671,7 +830,7 @@ export class AltoVolumeAnaliseService {
     };
 
     for (const s of status) {
-      const l = pegar(s.cargoId, s.cargoNome, s.centroCusto ?? null);
+      const l = pegar(s.cargoId, s.cargoNome, s.loja ?? null);
       l.total = Number(s.total);
       l.vagas = Number(s.vagas);
       l.concluidas = Number(s.concluidas);
@@ -682,7 +841,7 @@ export class AltoVolumeAnaliseService {
     // UNIÃO, como nos dois quadros: o par que só aparece nos declínios é o cargo que aquela loja
     // perdeu inteiro, e é a célula mais importante do cruzamento.
     for (const d of declinios) {
-      pegar(d.cargoId, d.cargoNome, d.centroCusto ?? null).declinios = Number(d.declinios);
+      pegar(d.cargoId, d.cargoNome, d.loja ?? null).declinios = Number(d.declinios);
     }
 
     return [...linhas.values()].map((l) => ({ ...l, faltam: l.total - l.vagas }));

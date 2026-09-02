@@ -1,4 +1,13 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post } from "@nestjs/common";
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+} from "@nestjs/common";
 import type { AuthUser } from "../../auth/auth.types";
 import { CurrentUser } from "../../auth/decorators";
 import { AltoVolumeService } from "./alto-volume.service";
@@ -9,11 +18,15 @@ import {
   CreateGrupoDto,
   CreateProjetoDto,
   CreateVagaDto,
+  DetalharPorLojaDto,
   UpdateGrupoDto,
   UpdateProjetoDto,
   UpdateVagaDto,
   VincularAdmissaoDto,
   VincularEmLoteDto,
+  RemoverVagasEmLoteDto,
+  TrocarVinculosEmLoteDto,
+  DesvincularEmLoteDto,
 } from "./alto-volume.dto";
 
 /**
@@ -91,6 +104,20 @@ export class AltoVolumeController {
     return this.analise.analise(id);
   }
 
+  /**
+   * AS PESSOAS DE UMA LOJA no projeto, para o modal "Ver Pessoas" das duas tabelas do painel.
+   *
+   * A LOJA VAI POR QUERY e não por rota, porque o valor é o NOME dela (que é a chave do quadro) e
+   * pode ter barra, espaço e acento. `loja` ausente é a linha "Sem Loja": quem está no projeto sem
+   * loja vinculada.
+   *
+   * §A.6: devolve nome, cargo, data e o estado das frentes. CPF não sai daqui.
+   */
+  @Get(":id/lojas/pessoas")
+  pessoasDaLoja(@Param("id") id: string, @Query("loja") loja?: string) {
+    return this.analise.pessoasDaLoja(id, loja && loja.length > 0 ? loja : null);
+  }
+
   @Get(":id/orfaos")
   listarOrfaos(@Param("id") id: string) {
     return this.vinculos.listarOrfaos(id);
@@ -127,14 +154,57 @@ export class AltoVolumeController {
     return this.altoVolume.removerGrupo(grupoId);
   }
 
+  /**
+   * DETALHA um cargo por loja: recebe a distribuição inteira e SUBSTITUI a meta daquele cargo.
+   *
+   * Lista vazia desfaz o detalhamento. Vai tudo de uma vez porque a operação é distribuir, não criar
+   * cota a cota: parcial deixaria o cargo com dois níveis de meta no meio do caminho.
+   */
+  @Post(":id/cargos/:cargoId/lojas")
+  detalharPorLoja(
+    @Param("id") id: string,
+    @Param("cargoId") cargoId: string,
+    @Body() dto: DetalharPorLojaDto,
+  ) {
+    return this.altoVolume.detalharVagasPorLoja(id, cargoId, dto.cotas);
+  }
+
   @Patch("vagas/:vagaId")
   atualizarVaga(@Param("vagaId") vagaId: string, @Body() dto: UpdateVagaDto) {
     return this.altoVolume.atualizarVaga(vagaId, dto);
   }
 
+  /**
+   * REMOVER VÁRIAS linhas de vagas. É `POST` e não `DELETE` porque leva a lista no corpo, e corpo em
+   * `DELETE` não atravessa proxy de forma confiável. Mesmo desenho do lote de vínculos logo acima.
+   */
+  @Post(":id/vagas/lote/remover")
+  removerVagasEmLote(@Param("id") id: string, @Body() dto: RemoverVagasEmLoteDto) {
+    return this.altoVolume.removerVagasEmLote(id, dto);
+  }
+
   @Delete("vagas/:vagaId")
   removerVaga(@Param("vagaId") vagaId: string) {
     return this.altoVolume.removerVaga(vagaId);
+  }
+
+  /**
+   * TROCAR e DESVINCULAR EM MASSA (peça 4 do pacote). São `POST` pelo mesmo motivo do lote de vagas:
+   * levam a lista no corpo. O `:id` é o projeto de ORIGEM, e é ele que delimita o que o lote pode
+   * tocar: a tela de um projeto não mexe no vínculo de outro.
+   */
+  @Post(":id/vinculos/lote/trocar")
+  trocarVinculosEmLote(
+    @Param("id") id: string,
+    @Body() dto: TrocarVinculosEmLoteDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.vinculos.trocarEmLote(id, dto, user);
+  }
+
+  @Post(":id/vinculos/lote/desvincular")
+  desvincularEmLote(@Param("id") id: string, @Body() dto: DesvincularEmLoteDto) {
+    return this.vinculos.desvincularEmLote(id, dto);
   }
 
   /** Troca o projeto e/ou o grupo de um vínculo já existente (onda 3). */

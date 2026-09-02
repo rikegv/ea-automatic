@@ -109,7 +109,15 @@ export const MENUS: MenuDef[] = [
     // aberto, mas `nomes` devolve NOME de pessoa: operação não reivindicada não passa pelo guard e
     // ficaria alcançável por qualquer autenticado pela URL. Quem tem o Controle Gerencial vê
     // (decisão do diretor, §A.23/§A.6).
-    operacoes: ["GerencialController.nomes"],
+    operacoes: [
+      "GerencialController.nomes",
+      // MESMO MOTIVO da linha acima, e o mesmo defeito quase repetido: o modal "Ver Pessoas" do
+      // quadro por loja devolve NOME de candidato. O painel do Alto Volume (`analisar`) é contagem e
+      // segue aberto; esta leitura NÃO é, então quem tem o Controle Gerencial vê, e mais ninguém.
+      // Reivindicar para `alto-volume` daria 403 dentro da própria tela, que é o erro que a nota do
+      // `analisar` documenta.
+      "AltoVolumeController.pessoasDaLoja",
+    ],
   },
   {
     codigo: "liberacao",
@@ -328,6 +336,10 @@ export const MENUS: MenuDef[] = [
       "AltoVolumeController.criarVaga",
       "AltoVolumeController.atualizarVaga",
       "AltoVolumeController.removerVaga",
+      // Remoção EM LOTE das linhas de vagas (peça 3 do pacote de usabilidade). Escrita é escrita:
+      // fica no mesmo regime da remoção uma a uma logo acima, senão o lote seria a porta aberta ao
+      // lado da porta fechada.
+      "AltoVolumeController.removerVagasEmLote",
       // `analisar` NÃO entra aqui, e a ausência é deliberada. A ANÁLISE deixou de ser tela do Menu
       // Gerencial e virou página filha do Controle Gerencial (decisão do diretor: dashboard mora no
       // painel), então quem tem o painel liberado tem de conseguir ler os números. Fica no mesmo
@@ -355,6 +367,11 @@ export const MENUS: MenuDef[] = [
       // Alto Volume, que é do Gerencial, e nenhuma delas é alcançável pela ficha.
       "AltoVolumeController.vincularEmLote",
       "AltoVolumeController.atualizarVinculo",
+      // TROCAR e DESVINCULAR EM MASSA, no mesmo regime das duas acima: são ações da TELA do Alto
+      // Volume, não da ficha da admissão. `desvincular` uma a uma fica aberta porque é o botão da
+      // ficha; o lote não é alcançável por lá, então não herda a exceção.
+      "AltoVolumeController.trocarVinculosEmLote",
+      "AltoVolumeController.desvincularEmLote",
     ],
   },
   {

@@ -28,9 +28,12 @@ const ESCRITAS = [
   "criarVaga",
   "atualizarVaga",
   "removerVaga",
+  "removerVagasEmLote",
   // Onda 3 (vínculo por correção), o que sobrou fechado: as duas ações da TELA do Alto Volume.
   "vincularEmLote",
   "atualizarVinculo",
+  "trocarVinculosEmLote",
+  "desvincularEmLote",
 ];
 
 /**
@@ -61,6 +64,17 @@ const LEITURAS_DE_VINCULO = ["listarVinculos", "listarOrfaos"];
  */
 const LEITURA_AGREGADA = ["analisar"];
 
+/**
+ * A LEITURA QUE DEVOLVE NOME (o modal "Ver Pessoas" do quadro por loja) é reivindicada pelo menu
+ * `diretoria`, e NÃO pelo `alto-volume`.
+ *
+ * Os dois lados importam. Sem reivindicação nenhuma, a rota ficaria alcançável por qualquer
+ * autenticado pela URL, devolvendo nome de candidato: é o mesmo defeito que `GerencialController.nomes`
+ * já corrigiu. Reivindicada para `alto-volume`, quem tem o Controle Gerencial liberado tomaria 403
+ * DENTRO do painel, que é o defeito que a nota do `analisar` documenta. O menu certo é o da tela.
+ */
+const LEITURA_COM_NOME = ["pessoasDaLoja"];
+
 describe("Alto Volume: classe sem @Roles (a régua que derrubou a Liberação não pode voltar)", () => {
   it("a controller NÃO tem @Roles em classe", () => {
     expect(Reflect.getMetadata(ROLES_KEY, AltoVolumeController)).toBeUndefined();
@@ -73,6 +87,7 @@ describe("Alto Volume: classe sem @Roles (a régua que derrubou a Liberação n�
       ...ALOCACAO_PELA_FICHA,
       ...LEITURAS_DE_VINCULO,
       ...LEITURA_AGREGADA,
+      ...LEITURA_COM_NOME,
       "list",
       "obter",
     ]) {
@@ -124,6 +139,15 @@ describe("Alto Volume: escrita gated por menu, leitura aberta", () => {
    * Se alguém reivindicar `analisar` para o menu `alto-volume` de novo, este teste quebra ANTES de a
    * visão "Alto Volume" do Controle Gerencial começar a responder 403 para quem tem o painel.
    */
+  it("a leitura que devolve NOME é reivindicada pelo menu da TELA (diretoria), nunca aberta", () => {
+    for (const m of LEITURA_COM_NOME) {
+      // Não pode ser do `alto-volume`: daria 403 dentro do próprio painel.
+      expect(menuDaOperacao("AltoVolumeController", m), `nome ${m}`).not.toBe("alto-volume");
+      // E não pode ser aberta: é nome de pessoa.
+      expect(menuDaOperacao("AltoVolumeController", m), `nome ${m}`).toBe("diretoria");
+    }
+  });
+
   it("a ANÁLISE (visão do Controle Gerencial) é leitura agregada e NÃO é reivindicada por menu", () => {
     for (const m of LEITURA_AGREGADA) {
       expect(menuDaOperacao("AltoVolumeController", m), `leitura ${m}`).toBeNull();

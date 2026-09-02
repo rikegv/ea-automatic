@@ -1,3 +1,4 @@
+import { Type } from "class-transformer";
 import {
   ArrayMaxSize,
   ArrayNotEmpty,
@@ -12,6 +13,7 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateNested,
 } from "class-validator";
 
 /**
@@ -111,6 +113,17 @@ export class CreateVagaDto {
   grupoId?: string;
 
   /**
+   * `lojaId` preenchido = esta linha é a COTA daquela loja (meta por loja). Ausente = a meta vale
+   * para o cargo no projeto inteiro, como sempre foi.
+   *
+   * Um cargo usa UM nível por vez (decisões 1 e 2 do diretor): quem garante é
+   * `conflitoDeDetalhamento` no serviço, porque a regra é entre linhas e nenhum `check` a expressa.
+   */
+  @IsOptional()
+  @IsUUID()
+  lojaId?: string;
+
+  /**
    * Teto de 10.000 por linha: não é regra de negócio, é barreira contra dígito repetido sem querer.
    * O maior projeto real do Grupo Soulan não chega perto disso, e uma meta de 200.000 vagas
    * quebraria a escala de todo cilindro da tela sem ninguém entender por quê.
@@ -153,6 +166,20 @@ export class VincularAdmissaoDto {
  * O teto de 500 por chamada não é regra de negócio, é barreira: a maior leva real do Grupo Soulan
  * não chega perto disso, e um pedido com milhares de ids seria erro de tela, não intenção.
  */
+/**
+ * REMOVER VÁRIAS linhas de vagas de uma vez (peça 3 do pacote de usabilidade).
+ *
+ * O teto de 200 é o mesmo raciocínio do lote de vínculos: um projeto real não tem duzentos cargos, e
+ * um número maior que isso é engano de tela, não uso.
+ */
+export class RemoverVagasEmLoteDto {
+  @IsArray()
+  @ArrayNotEmpty({ message: "Selecione pelo menos uma linha de vagas." })
+  @ArrayMaxSize(200, { message: "Selecione no máximo 200 linhas por vez." })
+  @IsUUID(undefined, { each: true })
+  vagaIds!: string[];
+}
+
 export class VincularEmLoteDto {
   @IsArray()
   @ArrayNotEmpty({ message: "Selecione pelo menos uma admissão." })
@@ -163,6 +190,38 @@ export class VincularEmLoteDto {
   @IsOptional()
   @IsUUID()
   grupoId?: string;
+}
+
+/**
+ * TROCAR VÁRIOS vínculos de projeto de uma vez.
+ *
+ * `projetoDestinoId` é OBRIGATÓRIO aqui, ao contrário da troca individual: em massa a ação existe
+ * para MOVER a leva, e um lote sem destino seria um lote que não faz nada. O grupo continua
+ * opcional, e sem ele os vínculos caem na cota do projeto inteiro do destino, que é o mesmo
+ * comportamento da troca individual quando o projeto muda.
+ */
+export class TrocarVinculosEmLoteDto {
+  @IsArray()
+  @ArrayNotEmpty({ message: "Selecione pelo menos uma admissão." })
+  @ArrayMaxSize(500, { message: "Selecione no máximo 500 admissões por vez." })
+  @IsUUID(undefined, { each: true })
+  vinculoIds!: string[];
+
+  @IsUUID()
+  projetoDestinoId!: string;
+
+  @IsOptional()
+  @IsUUID()
+  grupoId?: string;
+}
+
+/** DESVINCULAR vários de uma vez: tira do projeto, não toca na admissão. */
+export class DesvincularEmLoteDto {
+  @IsArray()
+  @ArrayNotEmpty({ message: "Selecione pelo menos uma admissão." })
+  @ArrayMaxSize(500, { message: "Selecione no máximo 500 admissões por vez." })
+  @IsUUID(undefined, { each: true })
+  vinculoIds!: string[];
 }
 
 /**
@@ -180,4 +239,39 @@ export class AtualizarVinculoDto {
   @IsOptional()
   @IsUUID()
   grupoId?: string | null;
+}
+
+/**
+ * DETALHAR UM CARGO POR LOJA: a distribuição inteira de uma vez.
+ *
+ * Vai tudo junto, e não uma cota por chamada, porque a operação é "distribuir 10 vagas entre 3
+ * lojas", não "criar uma cota". Mandar de uma vez é o que permite ao serviço SUBSTITUIR a meta antiga
+ * numa transação: cotas parciais deixariam o cargo com dois níveis no meio do caminho.
+ *
+ * Lista VAZIA desfaz o detalhamento e devolve o cargo ao estado de meta única.
+ */
+export class CotaLojaDto {
+  @IsUUID()
+  lojaId!: string;
+
+  /**
+   * ZERO É VÁLIDO AQUI, e só aqui (decisão do diretor): a loja entra na distribuição com zero para
+   * dizer "nesta não se contrata", e as outras cobrem o total. A linha de meta normal continua
+   * exigindo pelo menos 1, porque lá zero seria uma meta que não existe.
+   *
+   * A cota de zero é conferida na soma e depois DESCARTADA na gravação: o `check quantidade > 0` do
+   * banco a recusaria, e uma linha de zero não acrescenta nada ao quadro.
+   */
+  @IsInt({ message: "A quantidade de vagas deve ser um número inteiro." })
+  @Min(0, { message: "A quantidade de vagas não pode ser negativa." })
+  @Max(10000, { message: "Quantidade de vagas acima do limite (10.000 por linha)." })
+  quantidade!: number;
+}
+
+export class DetalharPorLojaDto {
+  @IsArray()
+  @ArrayMaxSize(200, { message: "Máximo de 200 lojas por cargo." })
+  @ValidateNested({ each: true })
+  @Type(() => CotaLojaDto)
+  cotas!: CotaLojaDto[];
 }
