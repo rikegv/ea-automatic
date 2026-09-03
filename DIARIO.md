@@ -12541,3 +12541,58 @@ começar. Clicksign e Pandapé não foram tocados.
 Typecheck 0 nos dois apps, lint limpo, **1.805 testes no backend** (157 arquivos) e **156 no
 frontend**. Serviços em 200: backend 3011, frontend 3020, produção 3010 e ai-service 8000. O build do
 frontend rodou com o serviço parado.
+
+## 03/09/2026 (noite, 3), o apelido do cliente vira o nome do grupo
+
+Terceira subida do dia, e ela fecha o ciclo que começou de manhã com nove grafias para o mesmo CAGC.
+
+### A DECISÃO
+
+O `nome_operacao` é texto livre, e cada pessoa escreveu do seu jeito. **Vinculado a um grupo, o
+apelido deixa de ser opinião e passa a ser o nome do grupo**, na mesma transação em que o vínculo é
+gravado e as admissões são carimbadas. Trocar de grupo leva o apelido junto.
+
+**Desvincular não restaura**, e é decisão consciente do diretor: quem sai mantém o texto que está, e
+ele ajusta no editar do cliente. Guardar um "apelido de antes" criaria um campo que ninguém mais
+leria e que divergiria do que está na tela. O modal passou a dizer isso, em vez de deixar a pessoa
+descobrir depois.
+
+### O ALCANCE, LEVANTADO ANTES (§A.26)
+
+O apelido mora em UMA coluna, e os usos que existem são **busca por texto** (`ilike %q%`) no
+Gerenciador, na Esteira, nas não conformidades e nos catálogos. **Nenhum resolve identidade pelo
+apelido.** Trocar o texto muda o que se lê e o que a busca acha, que é o efeito desejado, e nada mais.
+
+### O BACKFILL EM PRODUÇÃO
+
+Prévia conferida antes de gravar, e o de/para era exatamente a bagunça esperada: **36 clientes
+`CAGC CORIFEU`** e **1 `CAGC CAMP.`**, todos virando o nome do grupo. Nenhum cliente fora dos grupos,
+nenhum nome estranho. **37 apelidos trocados**, os outros 45 membros já estavam certos.
+
+Depois: **zero clientes com a grafia antiga** e os 6 grupos com **100% dos CNPJs padronizados**
+(53, 11, 7, 6, 3 e 2). O runner é idempotente pelo `is distinct from`, então rodar de novo não
+reescreve linha nenhuma.
+
+### A COLUNA GRUPO NÃO VOLTA
+
+Decisão do diretor, e ela ficou coerente: com o apelido sendo o nome do grupo, a coluna Cliente do
+Gerenciador já mostra "RAIA CAGC CORIFEU", e uma coluna ao lado repetiria a mesma palavra na mesma
+linha. O **filtro** por grupo, que lê o carimbo, continua sendo o corte exato. A diferença entre os
+dois é sutil e importa: a busca por texto acha pelo apelido, o filtro acha pelo carimbo.
+
+### §A.27, COM DUAS DIFERENÇAS RASTREADAS
+
+Das 30 medidas, 28 idênticas. Duas se moveram, trocando entre si: `sinalizador PARCIAL` caiu de 462
+para 461 e `INCONFORMIDADE` subiu de 88 para 89. **Não foi o deploy.** As duas admissões envolvidas
+são dos clientes 56002 e 521, editadas às **20:50:24** e **20:54:40**, entre a foto (20:49:18) e o
+restart (20:54:47), e **nenhum dos dois está entre os 37 apelidos trocados**. Foi a operação
+trabalhando, sete segundos antes do restart.
+
+Trocar texto não move número: o sinalizador deriva dos campos da admissão, não do apelido do cliente.
+Clicksign e Pandapé não foram tocados.
+
+### GATE E ESTADO
+
+Typecheck 0 nos dois apps, lint limpo, **1.805 testes no backend** e **156 no frontend**. Serviços em
+200: backend 3011, frontend 3020, produção 3010 e ai-service 8000. Sem migration: é código mais o
+runner. O build do frontend rodou com o serviço parado.
