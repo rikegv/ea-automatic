@@ -80,6 +80,7 @@ import {
   tiposDocumento,
   frenteStatusCatalogo,
   frentesAdmissao,
+  gruposCliente,
   integracaoPandape,
   motivosDeclinio,
   reguaDocumental,
@@ -196,6 +197,9 @@ export const COLUNAS_ORDENAVEIS_GERENCIADOR = [
   "contrato",
   "dataAdmissao",
   "status",
+  // GRUPO (cenário 2, etapa 4): ordena pelo NOME do grupo, que é o que a célula mostra. Quem não tem
+  // grupo fica junto no fim, e não espalhado, porque `null` ordena em bloco.
+  "grupo",
 ] as const;
 
 /**
@@ -226,6 +230,7 @@ function ordemDaLista(ordenarPor?: string, direcao?: "asc" | "desc") {
     contrato: admissoes.tipoContrato,
     dataAdmissao: admissoes.dataAdmissao,
     status: admissoes.farolGlobal,
+    grupo: gruposCliente.nome,
   }[ordenarPor];
   if (!coluna) return [padrao];
   return [direcao === "asc" ? asc(coluna) : desc(coluna), padrao];
@@ -1663,6 +1668,10 @@ export class AdmissoesService {
         sinalizador: admissoes.sinalizadorPreenchimento,
         // PAUSA: alimenta a tag "Pausada" na coluna Status do Gerenciador (Bloco 5).
         pausadaEm: admissoes.pausadaEm,
+        // GRUPO (cenário 2, etapa 4): o nome do grupo CARIMBADO na admissão. Vem por `leftJoin`, e
+        // não por subconsulta, pelo motivo já pago duas vezes: subconsulta correlacionada na lista do
+        // select sai sem qualificar a tabela e devolve número errado em silêncio.
+        grupoNome: gruposCliente.nome,
         concluido: concluidoExpr,
         criadoEm: admissoes.criadoEm,
       })
@@ -1670,6 +1679,9 @@ export class AdmissoesService {
       .innerJoin(candidatos, eq(admissoes.candidatoCpf, candidatos.cpf))
       .innerJoin(clientes, eq(admissoes.codCliente, clientes.codCliente))
       .innerJoin(cargos, eq(admissoes.cargoId, cargos.id))
+      // LEFT e não INNER: a esmagadora maioria das admissões não tem grupo, e um inner join aqui
+      // sumiria com elas da tela. Grupo é dimensão de leitura, não recorte de quem existe.
+      .leftJoin(gruposCliente, eq(gruposCliente.id, admissoes.grupoClienteId))
       .where(listWhere.length ? and(...listWhere) : undefined)
       .orderBy(...ordemDaLista(filtros.ordenarPor, filtros.direcao))
       .limit(pageSize)

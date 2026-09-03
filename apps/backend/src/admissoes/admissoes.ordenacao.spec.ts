@@ -112,6 +112,9 @@ describe("a lista de colunas é fechada", () => {
       "contrato",
       "dataAdmissao",
       "status",
+      // GRUPO (cenário 2, etapa 4): entrou porque VEM DESTA CONSULTA, pelo `leftJoin` da coluna, e
+      // não depois como as colunas de frente. É a régua deste teste, não uma exceção a ela.
+      "grupo",
     ]);
     // Auditoria, Exame e Cadastro são carregadas depois, só para as 20 linhas da página: ordenar por
     // elas seria exatamente a ordem falsa que esta frente veio corrigir.

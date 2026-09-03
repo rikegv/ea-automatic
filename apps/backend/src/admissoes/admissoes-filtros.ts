@@ -22,6 +22,12 @@ export interface ListarAdmissoesFiltros {
   // Multi-select (Bloco B): OU dentro do mesmo filtro (inArray). Vazio/ausente = sem filtro.
   codCliente?: string[];
   cargoId?: string[];
+  /**
+   * GRUPO DE CLIENTE (cenário 2, etapa 4). Filtra pelo CARIMBO da admissão, e não pelo grupo de hoje
+   * do cliente: é o que faz "as 164 do Corifeu" continuarem 164 quando uma loja mudar de grupo.
+   * Entra no `base`, junto de cliente e cargo, porque é filtro de CONJUNTO: os KPIs contam sobre ele.
+   */
+  grupoClienteId?: string[];
   tipoContrato?: string[];
   farol?: string[];
   sinalizador?: string[];
@@ -69,6 +75,9 @@ export function condicoesDoFiltro(filtros: ListarAdmissoesFiltros): {
   const base: SQL[] = [];
   if (filtros.codCliente?.length) base.push(inArray(admissoes.codCliente, filtros.codCliente));
   if (filtros.cargoId?.length) base.push(inArray(admissoes.cargoId, filtros.cargoId));
+  if (filtros.grupoClienteId?.length) {
+    base.push(inArray(admissoes.grupoClienteId, filtros.grupoClienteId));
+  }
   if (filtros.tipoContrato?.length) base.push(inArray(admissoes.tipoContrato, filtros.tipoContrato));
   if (filtros.sinalizador?.length) {
     base.push(inArray(admissoes.sinalizadorPreenchimento, filtros.sinalizador as "PENDENTE"[]));

@@ -30,6 +30,13 @@ interface AdmRow {
   codCliente: string;
   clienteOperacao: string | null;
   clienteRazao: string;
+  /**
+   * GRUPO carimbado na admissão (cenário 2). A API continua enviando, e a COLUNA saiu da tabela por
+   * decisão do diretor: enquanto o `nome_operacao` do cliente não for substituído pelo nome do grupo,
+   * Cliente e Grupo diriam quase a mesma coisa em duas colunas. O FILTRO por grupo continua, que é o
+   * que responde "quantas são do Corifeu". A coluna volta quando a substituição acontecer.
+   */
+  grupoNome?: string | null;
   cargoNome: string;
   tipoContrato: string | null;
   dataAdmissao: string | null;
@@ -65,6 +72,11 @@ interface ClienteLite {
   codCliente: string;
   razaoSocial: string;
   nomeOperacao?: string | null;
+}
+interface GrupoLite {
+  id: string;
+  nome: string;
+  ativo: boolean;
 }
 interface CargoLite {
   id: string;
@@ -143,6 +155,8 @@ export default function GerenciadorPage() {
   const [clientes, setClientes] = useState<ClienteLite[]>([]);
   const [cargoIds, setCargoIds] = useState<string[]>([]);
   const [cargos, setCargos] = useState<CargoLite[]>([]);
+  const [grupoIds, setGrupoIds] = useState<string[]>([]);
+  const [grupos, setGrupos] = useState<GrupoLite[]>([]);
   const [tipoContratos, setTipoContratos] = useState<string[]>([]);
   const [farol, setFarol] = useState<string[]>([]);
   const [sinalizadores, setSinalizadores] = useState<string[]>([]);
@@ -173,6 +187,11 @@ export default function GerenciadorPage() {
     apiFetch<ClienteLite[]>("/catalogos/clientes", { token })
       .then(setClientes)
       .catch(() => setClientes([]));
+    // GRUPOS (cenário 2, etapa 4). Leitura aberta a quem está autenticado, como os demais catálogos:
+    // a ESCRITA é que é reivindicada pelo menu `clientes`.
+    apiFetch<GrupoLite[]>("/admin/grupos-cliente", { token })
+      .then(setGrupos)
+      .catch(() => setGrupos([]));
   }, [token]);
 
   // debounce da busca global
@@ -231,6 +250,7 @@ export default function GerenciadorPage() {
     if (q) qs.set("q", q);
     if (codClientes.length) qs.set("codCliente", codClientes.join(","));
     if (cargoIds.length) qs.set("cargoId", cargoIds.join(","));
+    if (grupoIds.length) qs.set("grupoClienteId", grupoIds.join(","));
     if (tipoContratos.length) qs.set("tipoContrato", tipoContratos.join(","));
     if (farol.length) qs.set("farol", farol.join(","));
     if (sinalizadores.length) qs.set("sinalizador", valoresDoFiltroSinal(sinalizadores).join(","));
@@ -248,6 +268,7 @@ export default function GerenciadorPage() {
     q,
     codClientes,
     cargoIds,
+    grupoIds,
     tipoContratos,
     farol,
     sinalizadores,
@@ -293,6 +314,7 @@ export default function GerenciadorPage() {
     setQ("");
     setCodClientes([]);
     setCargoIds([]);
+    setGrupoIds([]);
     setTipoContratos([]);
     setFarol([]);
     setSinalizadores([]);
@@ -307,6 +329,7 @@ export default function GerenciadorPage() {
     q ||
     codClientes.length ||
     cargoIds.length ||
+    grupoIds.length ||
     tipoContratos.length ||
     farol.length ||
     sinalizadores.length ||
@@ -321,6 +344,7 @@ export default function GerenciadorPage() {
   const filtrosModal =
     (codClientes.length ? 1 : 0) +
     (cargoIds.length ? 1 : 0) +
+    (grupoIds.length ? 1 : 0) +
     (tipoContratos.length ? 1 : 0) +
     (farol.length ? 1 : 0) +
     (sinalizadores.length ? 1 : 0) +
@@ -378,6 +402,15 @@ export default function GerenciadorPage() {
     [clientes],
   );
   const cargoOpts = useMemo(() => cargos.map((c) => ({ value: c.id, label: c.nome })), [cargos]);
+  /*
+   * SÓ GRUPO ATIVO ENTRA NO SELETOR (decisão do diretor). Inativar um grupo o tira das ESCOLHAS, e
+   * não do histórico: as admissões já carimbadas continuam mostrando o nome dele na coluna, porque o
+   * carimbo é o grupo da época. Esconder as duas coisas juntas apagaria história que aconteceu.
+   */
+  const grupoOpts = useMemo(
+    () => grupos.filter((g) => g.ativo).map((g) => ({ value: g.id, label: g.nome })),
+    [grupos],
+  );
   const contratoOpts = useMemo(
     () => (data?.tiposContrato ?? []).map((t) => ({ value: t, label: t })),
     [data],
@@ -480,6 +513,15 @@ export default function GerenciadorPage() {
                   options={cargoOpts}
                   placeholder="Todos"
                   ariaLabel="Cargo"
+                />
+              </FiltroCampo>
+              <FiltroCampo label="Grupo">
+                <MultiSelect
+                  values={grupoIds}
+                  onChange={resetPage(setGrupoIds)}
+                  options={grupoOpts}
+                  placeholder="Todos"
+                  ariaLabel="Grupo de cliente"
                 />
               </FiltroCampo>
               <FiltroCampo label="Contrato">

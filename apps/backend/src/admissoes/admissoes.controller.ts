@@ -54,6 +54,7 @@ export class AdmissoesController {
     @Query("q") q?: string,
     @Query("codCliente") codCliente?: string,
     @Query("cargoId") cargoId?: string,
+    @Query("grupoClienteId") grupoClienteId?: string,
     @Query("tipoContrato") tipoContrato?: string,
     @Query("farol") farol?: string,
     @Query("sinalizador") sinalizador?: string,
@@ -71,6 +72,9 @@ export class AdmissoesController {
       q,
       codCliente: parseMulti(codCliente),
       cargoId: parseMulti(cargoId),
+      // GRUPO (cenário 2, etapa 4): múltiplo desde o nascimento (§A.28), pelo mesmo `parseMulti` dos
+      // demais. Vazio ou ausente = sem filtro, como todos os outros.
+      grupoClienteId: parseMulti(grupoClienteId),
       tipoContrato: parseMulti(tipoContrato),
       farol: parseMulti(farol),
       sinalizador: parseMulti(sinalizador),
