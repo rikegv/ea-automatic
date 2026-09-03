@@ -12462,3 +12462,82 @@ rodou com o serviço **parado**, porque buildar com ele no ar derruba a 3010.
 
 **Fora, por decisão do diretor:** substituir o nome de operação pelo nome do grupo, a coluna Grupo e
 a etapa 5 (coluna Projeto nas frentes de trabalho).
+
+## 03/09/2026 (noite, 2), o grupo vira eixo de leitura da operação, e vincular passa a carimbar
+
+Segunda subida do dia. Duas frentes encadeadas, as duas do cenário 2, as duas em produção.
+
+### A TABELA CLIENTE PARA DE REPARTIR A RAIA
+
+O Controle Gerencial tinha **218 linhas** na tabela Cliente, e **82 delas eram CNPJs da Raia** com um
+punhado cada (11, 8, 7, 7, 6...), somando 220 admissões. Repartidos assim, empurravam para baixo
+clientes que importam e não respondiam nada sozinhos: **o Corifeu, com 164, não aparecia em lugar
+nenhum do painel**. Agora aparece em 6º, à frente de Garrett e DIA.
+
+**Não é tabela nova ao lado: é a mesma tabela deixando de repartir o que é um só.** Cliente com grupo
+é absorvido na linha do grupo, cliente sem grupo continua igual. 218 viram **142**, as 82 viram **6**,
+e a conta fecha. O total da tabela não muda.
+
+**O filtro de Grupo é ADIÇÃO, nunca substituição** (decisão do diretor, e é o ponto que mais importa
+na frente): o filtro de Cliente continua inteiro, e os dois se somam. O grupo junta os CNPJs num
+número só; o cliente vai num CNPJ específico. Há teste travando a convivência.
+
+**Onde a leitura por grupo NÃO foi:** o Alto Volume, por decisão medida na investigação anterior, e a
+Sala de Espera, que não tem carimbo.
+
+### O EFEITO CRUZADO QUE EU MESMO CRIEI, ACHADO MEDINDO
+
+Na primeira versão, filtrar o Corifeu mostrava **67 declínios**: 35 do grupo e **32 da Sala de Espera
+inteira**, que não tem nada com aquele grupo. Quem está na fila da Sala não tem admissão, então não
+tem carimbo. Ela entrou na régua que aquele arquivo já aplicava a período, exame e cadastro: **com
+filtro de grupo ligado, fica fora da conta**, em vez de entrar ignorando o recorte. Voltou a 35, o
+mesmo número do Gerenciador, e está travado em teste com a medição escrita dentro dele.
+
+### VINCULAR UM CNPJ PASSOU A CARIMBAR AS ADMISSÕES
+
+Defeito encontrado pelo diretor: **criar um grupo e ticar os CNPJs não aparecia em lugar nenhum**. As
+duas telas leem o CARIMBO, e o backfill só alcançou os grupos que existiam no dia em que rodou. O
+grupo nascia certo e invisível. E o caso não é de uma vez só: cliente novo entra sem grupo, a
+admissão conclui, e o grupo é criado depois.
+
+**A convergência é por CNPJ e usa a MESMA função dos outros quatro caminhos** (`carimboDoGrupo`, a do
+wizard, da liberação, da troca de cliente e do Pandapé): depois de gravar a associação, o carimbo das
+admissões de cada CNPJ tocado passa a ser o que ela responde. Um caminho resolve entra, troca, sai e
+o que já estava mas nunca foi carimbado. Ela ganhou só a leitura pela transação em curso, porque a
+associação ainda não está commitada na hora do carimbo.
+
+**O "grupo da época" continua valendo como princípio:** o que ele descreve é o que acontece SOZINHO, e
+nenhuma rotina automática reescreve carimbo. Trocar de grupo é ação humana, com prévia dizendo
+quantas admissões se movem.
+
+**A prévia mostra o alcance**, porque "entra 1 CNPJ" e "entram 164 admissões" são frases diferentes
+para o mesmo clique. O aviso do rodapé foi reescrito: o antigo afirmava que salvar não mexia em
+admissão, e passou a mexer.
+
+Provado ao vivo com a **PROPARTS**, que tem 4 CNPJs: prévia 38, salvou, 38 carimbadas (33 concluídas),
+a tabela do painel foi de 140 para 137 linhas com PROPARTS=38 no lugar de 26+4+4+4, o Gerenciador
+filtrou 38, a troca moveu 4 para outro grupo e desvincular devolveu tudo. As 22 medidas de contagem
+ficaram idênticas em todo o vaivém.
+
+### O QUE SUBIU, E AS PROVAS EM PRODUÇÃO
+
+**Sem migration:** as tabelas do grupo e a coluna do carimbo já estavam lá da leva anterior. É código.
+
+**Os 6 grupos da Raia não foram tocados:** seguem com 220 admissões carimbadas (164, 24, 17, 10, 3,
+2). Os grupos de teste da homologação (PROPARTS, uma Olímpia) **não sobem**, porque são dados de lá.
+
+**Pelo serviço real, contra a produção:** filtrando o Corifeu, Farol 129 e 35, Cadastro 129 e 129,
+Auditoria 129 e 35, Exame 129 e 35, Cargo 164, o gráfico somando 164, e a tabela Cliente seguindo com
+142 linhas para dar como trocar de grupo. A Sala aparece zerada no recorte, como decidido.
+
+**§A.27, com uma diferença explicada.** Das 32 medidas, 31 saíram idênticas. A única que se moveu foi
+`CADASTRO_CONTRATO concluídas`, de 1.844 para 1.845, e o relógio explica: a foto foi às **19:59:35**,
+o cadastro foi concluído às **20:01:28** com o sistema inteiro no ar, e o frontend só parou para o
+build às **20:03:17**. Foi a operação viva sob o código antigo, dois minutos antes de o deploy
+começar. Clicksign e Pandapé não foram tocados.
+
+### GATE E ESTADO
+
+Typecheck 0 nos dois apps, lint limpo, **1.805 testes no backend** (157 arquivos) e **156 no
+frontend**. Serviços em 200: backend 3011, frontend 3020, produção 3010 e ai-service 8000. O build do
+frontend rodou com o serviço parado.
