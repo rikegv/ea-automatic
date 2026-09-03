@@ -14,6 +14,7 @@ import type {
   CriarGrupoClienteDto,
   DefinirMembrosDto,
 } from "./grupos-cliente.dto";
+import { carimboDoGrupo } from "../../admissoes/grupo-da-admissao";
 import { efeitosDaGravacao, nomeGrupoNormalizado, resumoDosEfeitos } from "./grupo-cliente";
 
 /**
@@ -183,11 +184,29 @@ export class GruposClienteService {
 
     const efeitos = efeitosDaGravacao(grupoId, codClientes, membrosAtuais);
     const rotulos = await this.rotulosDe(efeitos.map((e) => e.codCliente));
+    /*
+     * QUANTAS ADMISSÕES CADA LINHA MOVE. Salvar o grupo carimba as admissões dos CNPJs afetados, e
+     * quem confirma precisa ver o tamanho disso ANTES: "entra 1 CNPJ" e "entram 164 admissões" são
+     * frases muito diferentes para o mesmo clique.
+     */
+    const porCliente = await this.admissoesPorCliente(efeitos.map((e) => e.codCliente));
+    const soma = (tipo: string) =>
+      efeitos.filter((e) => e.efeito === tipo).reduce((a, e) => a + (porCliente.get(e.codCliente) ?? 0), 0);
 
     return {
       grupo: { id: grupo.id, nome: grupo.nome },
-      resumo: resumoDosEfeitos(efeitos),
-      efeitos: efeitos.map((e) => ({ ...e, ...rotulos.get(e.codCliente) })),
+      resumo: {
+        ...resumoDosEfeitos(efeitos),
+        // ENTRA e TROCA carimbam; SAI descarimba. JA_ESTA não aparece porque não muda nada para
+        // quem confirma, embora a gravação convirja o carimbo dele também (ver `definirMembros`).
+        admissoesACarimbar: soma("ENTRA") + soma("TROCA"),
+        admissoesADescarimbar: soma("SAI"),
+      },
+      efeitos: efeitos.map((e) => ({
+        ...e,
+        ...rotulos.get(e.codCliente),
+        admissoes: porCliente.get(e.codCliente) ?? 0,
+      })),
     };
   }
 
@@ -198,8 +217,25 @@ export class GruposClienteService {
    * grupo é uma linha atualizada e nunca duas linhas convivendo. Numa transação, porque a saída de
    * quem foi desmarcado e a entrada dos novos são a MESMA decisão do consultor.
    *
-   * NÃO ENCOSTA EM ADMISSÃO. As admissões carimbadas ficam como estão, inclusive as do grupo de onde
-   * o CNPJ está saindo: é exatamente para isso que o carimbo existe.
+   * E CARIMBA AS ADMISSÕES DO CNPJ, no mesmo instante (decisão do diretor, e ela mudou a regra
+   * anterior deste método, que não encostava em admissão).
+   *
+   * POR QUE MUDOU: o cadastro está sendo MONTADO agora, e as admissões nunca tiveram grupo. Sem o
+   * carimbo ao vincular, criar um grupo e ticar os CNPJs não aparecia em lugar nenhum: nem no
+   * Controle Gerencial, nem no Gerenciador, porque as duas telas leem o carimbo. O backfill só
+   * alcançou os grupos que existiam no dia em que rodou. E o caso segue acontecendo: cliente novo
+   * sem grupo, admissão conclui, e o grupo é criado depois.
+   *
+   * O "GRUPO DA ÉPOCA" CONTINUA VALENDO COMO PRINCÍPIO. O que ele descreve é o que acontece SOZINHO:
+   * nenhuma rotina automática reescreve carimbo. Trocar um CNPJ de grupo de propósito é ação humana,
+   * consciente, com prévia dizendo quantas admissões se movem, e é disciplina de quem administra o
+   * cadastro, não trava do sistema.
+   *
+   * A CONVERGÊNCIA É POR CNPJ, e usa a MESMA função que o wizard, a liberação, a troca de cliente e
+   * o Pandapé usam (`carimboDoGrupo`): para cada CNPJ tocado, o carimbo das admissões dele passa a
+   * ser o que aquela função responde depois da gravação. Isso resolve os quatro casos de uma vez
+   * (entra, troca, sai e o que já estava mas nunca foi carimbado) sem uma segunda régua para
+   * divergir da primeira.
    */
   async definirMembros(grupoId: string, dto: DefinirMembrosDto) {
     const previa = await this.previaMembros(grupoId, dto);
@@ -227,8 +263,32 @@ export class GruposClienteService {
             set: { grupoId },
           });
       }
+
+      /*
+       * O CARIMBO, DEPOIS DA ASSOCIAÇÃO E DENTRO DA MESMA TRANSAÇÃO. A ordem importa: `carimboDoGrupo`
+       * lê `grupo_cliente_membros`, então ela precisa enxergar o que acabou de ser escrito, e por isso
+       * recebe o `tx` e não o `db`. Se a transação falhar, vínculo e carimbo voltam juntos.
+       *
+       * TOCA SÓ O QUE MUDA (`is distinct from`), então salvar o mesmo grupo duas vezes não reescreve
+       * 164 linhas de novo, e o `atualizado_em` das admissões não é movido à toa.
+       */
+      const tocados = [...new Set([...codClientes, ...saindo])];
+      for (const cod of tocados) {
+        const grupoDoCnpj = await carimboDoGrupo(tx, cod);
+        await tx
+          .update(admissoes)
+          .set({ grupoClienteId: grupoDoCnpj })
+          .where(
+            and(
+              eq(admissoes.codCliente, cod),
+              sql`${admissoes.grupoClienteId} is distinct from ${grupoDoCnpj}`,
+            ),
+          );
+      }
     });
 
+    // As contagens da prévia são o que a tela devolve como aviso: são as MESMAS que acabaram de
+    // acontecer, porque a gravação seguiu exatamente o que ela previu.
     return { ...previa.resumo, total: codClientes.length };
   }
 
@@ -257,6 +317,24 @@ export class GruposClienteService {
       const faltando = codClientes.filter((c) => !set.has(c));
       throw new BadRequestException(`Cliente não encontrado: ${faltando.slice(0, 5).join(", ")}.`);
     }
+  }
+
+  /**
+   * QUANTAS ADMISSÕES CADA CNPJ TEM, em UMA consulta.
+   *
+   * Alimenta a prévia, que é onde quem administra o cadastro vê o alcance do clique antes de
+   * confirmar. Uma consulta por CNPJ viraria N+1 numa tela que lista 226 deles.
+   *
+   * §A.6: código de cliente e contagem. Nenhum dado pessoal.
+   */
+  private async admissoesPorCliente(codClientes: string[]): Promise<Map<string, number>> {
+    if (codClientes.length === 0) return new Map();
+    const linhas = await this.db
+      .select({ codCliente: admissoes.codCliente, n: sql<number>`count(*)::int` })
+      .from(admissoes)
+      .where(inArray(admissoes.codCliente, codClientes))
+      .groupBy(admissoes.codCliente);
+    return new Map(linhas.map((l) => [l.codCliente as string, Number(l.n)]));
   }
 
   private async rotulosDe(codClientes: string[]) {

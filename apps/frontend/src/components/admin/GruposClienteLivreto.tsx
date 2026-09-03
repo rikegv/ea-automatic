@@ -45,6 +45,8 @@ interface ClienteDoCatalogo {
 
 interface Efeito {
   codCliente: string;
+  /** Quantas admissões deste CNPJ o salvar vai carimbar (ou descarimbar). */
+  admissoes: number;
   efeito: "ENTRA" | "TROCA" | "JA_ESTA" | "SAI";
   deGrupoNome?: string;
   razaoSocial?: string;
@@ -53,7 +55,15 @@ interface Efeito {
 
 interface Previa {
   grupo: { id: string; nome: string };
-  resumo: { entram: number; trocam: number; saem: number; jaEstao: number };
+  resumo: {
+    entram: number;
+    trocam: number;
+    saem: number;
+    jaEstao: number;
+    /** O ALCANCE REAL do clique: "entra 1 CNPJ" e "entram 164 admissões" são frases diferentes. */
+    admissoesACarimbar: number;
+    admissoesADescarimbar: number;
+  };
   efeitos: Efeito[];
 }
 
@@ -178,16 +188,31 @@ export function GruposClienteLivreto({ onFechar }: { onFechar: () => void }) {
     setOcupado(true);
     setErro(null);
     try {
-      const r = await apiFetch<{ entram: number; trocam: number; saem: number; total: number }>(
+      const r = await apiFetch<{
+        entram: number;
+        trocam: number;
+        saem: number;
+        total: number;
+        admissoesACarimbar: number;
+        admissoesADescarimbar: number;
+      }>(
         `/admin/grupos-cliente/${grupoId}/membros`,
         { method: "POST", body: { codClientes: [...marcados] } },
       );
       setPrevia(null);
       await carregar();
+      // O aviso diz o que ACONTECEU com as admissões, e não só com os CNPJs: é o número que a
+      // pessoa vai procurar no painel um segundo depois.
       setAviso(
         `Grupo salvo com ${r.total} CNPJ${r.total === 1 ? "" : "s"}.` +
           (r.trocam > 0 ? ` ${r.trocam} veio(vieram) de outro grupo.` : "") +
-          (r.saem > 0 ? ` ${r.saem} saiu(saíram) do grupo.` : ""),
+          (r.saem > 0 ? ` ${r.saem} saiu(saíram) do grupo.` : "") +
+          (r.admissoesACarimbar > 0
+            ? ` ${r.admissoesACarimbar} admissão(ões) entrou(entraram) no grupo.`
+            : "") +
+          (r.admissoesADescarimbar > 0
+            ? ` ${r.admissoesADescarimbar} ficou(ficaram) sem grupo.`
+            : ""),
       );
     } catch (e) {
       setPrevia(null);
@@ -454,10 +479,29 @@ export function GruposClienteLivreto({ onFechar }: { onFechar: () => void }) {
           className="max-w-lg p-5"
         >
           <h2 className="mb-1 text-[17px] font-semibold text-text">Confirmar {previa.grupo.nome}</h2>
-          <p className="mb-3 text-sm text-dim">
+          <p className="mb-2 text-sm text-dim">
             {previa.resumo.entram} entra(m), {previa.resumo.trocam} vem(vêm) de outro grupo,{" "}
             {previa.resumo.saem} sai(saem) e fica(m) sem grupo, {previa.resumo.jaEstao} já estava(m).
           </p>
+          {/* O ALCANCE EM ADMISSÕES, em destaque: é o número que muda no painel e no Gerenciador
+              assim que o Salvar for clicado. */}
+          {(previa.resumo.admissoesACarimbar > 0 || previa.resumo.admissoesADescarimbar > 0) && (
+            <p className="mb-3 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-[12.5px] text-text">
+              {previa.resumo.admissoesACarimbar > 0 && (
+                <>
+                  <span className="font-semibold">{previa.resumo.admissoesACarimbar}</span> admissão(ões)
+                  entra(m) no grupo {previa.grupo.nome}.
+                </>
+              )}
+              {previa.resumo.admissoesACarimbar > 0 && previa.resumo.admissoesADescarimbar > 0 && " "}
+              {previa.resumo.admissoesADescarimbar > 0 && (
+                <>
+                  <span className="font-semibold">{previa.resumo.admissoesADescarimbar}</span>{" "}
+                  admissão(ões) fica(m) sem grupo.
+                </>
+              )}
+            </p>
+          )}
 
           {previa.efeitos.filter((e) => e.efeito !== "JA_ESTA").length > 0 && (
             <div className="mb-4 max-h-[260px] overflow-auto rounded-xl border border-[var(--border)]">
@@ -475,6 +519,7 @@ export function GruposClienteLivreto({ onFechar }: { onFechar: () => void }) {
                       {e.efeito === "ENTRA" && "entra no grupo"}
                       {e.efeito === "TROCA" && `SAI de ${e.deGrupoNome} e entra em ${previa.grupo.nome}`}
                       {e.efeito === "SAI" && "sai do grupo e fica sem grupo"}
+                      {e.admissoes > 0 && `, com ${e.admissoes} admissão(ões)`}
                     </span>
                   </div>
                 ))}
@@ -482,8 +527,10 @@ export function GruposClienteLivreto({ onFechar }: { onFechar: () => void }) {
           )}
 
           <p className="mb-4 text-[12px] text-faint">
-            As admissões que já foram carimbadas continuam no grupo em que aconteceram. Mudar o
-            agrupamento não reescreve histórico.
+            Salvar carimba as admissões dos CNPJs acima, as concluídas junto com as vivas, e elas
+            aparecem no grupo na hora, no Controle Gerencial e no Gerenciador. Quem sai fica sem
+            grupo. Nenhuma rotina automática mexe nisso depois: o carimbo só muda quando alguém
+            altera o agrupamento aqui.
           </p>
 
           <div className="flex justify-end gap-2">

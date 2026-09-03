@@ -3,6 +3,18 @@ import type { Database } from "../db/client";
 import { grupoClienteMembros } from "../db/schema";
 
 /**
+ * QUEM EXECUTA A CONSULTA: o banco ou uma transação em curso, no mesmo padrão de
+ * `esteira/nascimento-cadastro.ts`.
+ *
+ * A transação passou a ser necessária quando o livreto de grupos começou a carimbar as admissões no
+ * mesmo instante em que grava o vínculo: ali a associação ainda não está commitada, então ler pelo
+ * `db` devolveria o grupo ANTIGO e o carimbo sairia errado. É a mesma função, lendo por quem está
+ * escrevendo.
+ */
+type DbTransaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
+export type ExecutorDeLeitura = Database | DbTransaction;
+
+/**
  * O CARIMBO DO GRUPO NA ADMISSÃO (cenário 2, etapa 3), NUM PONTO SÓ.
  *
  * O grupo da admissão é DERIVADO do cliente no momento em que a admissão é gravada, e daí em diante
@@ -27,7 +39,7 @@ import { grupoClienteMembros } from "../db/schema";
  * §A.6: só código de cliente e id técnico do grupo. Nenhum dado pessoal.
  */
 export async function carimboDoGrupo(
-  db: Database,
+  db: ExecutorDeLeitura,
   codCliente: string | null | undefined,
 ): Promise<string | null> {
   // Admissão sem cliente é o caso da pré-admissão do Pandapé, que nasce em AGUARDANDO_LIBERACAO.
