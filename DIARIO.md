@@ -12657,3 +12657,69 @@ Typecheck 0 nos dois apps, lint limpo nos oito arquivos, **1.805 testes no backe
 passou a incluir "projeto", com o motivo escrito nela. Sem migration: a coluna lê de uma tabela que já
 existia. Serviços em 200: backend 3011, frontend 3020, produção 3010 e ai-service 8000, com o build do
 frontend rodando com o serviço parado.
+
+## 03/09/2026, ENCERRAMENTO DO DIA: o estado, e por onde retomar
+
+Registro de fechamento. **Tudo que foi construído hoje está em produção, commitado e empurrado.**
+Nada da fábrica ficou solto no working tree.
+
+### O QUE SUBIU HOJE, EM ORDEM
+
+| Hora | Hash | O que é |
+|---|---|---|
+| 15:17 | `7d49b5e` | Cenário 2, etapas 1 a 3: cadastro de grupos, livreto, migration 0093 e o carimbo nos quatro caminhos |
+| 17:43 | `1a60d2e` | **Correção de bug em produção**: o iFractal repetia o total da base (96) em todas as 247 linhas |
+| 17:43 | `d75d7fb` | Correção preventiva: o contador de candidaturas ativas da Central de Candidatos |
+| 17:43 | `9023998` | Etapa 4: filtro por grupo no Gerenciador |
+| 20:07 | `a8f4fb5` | Controle Gerencial: a tabela Cliente unifica por grupo, e o grupo filtra o painel inteiro |
+| 20:07 | `7302475` | Vincular um CNPJ carimba as admissões na hora; desvincular descarimba |
+| 20:55 | `ad91721` | O apelido do cliente passa a ser o nome do grupo, mais o backfill de 37 apelidos |
+| 23:48 | `7238471` | Etapa 5: coluna e filtro de projeto nas cinco telas |
+
+Mais quatro commits de diário (`8400a61`, `b1fad75`, `0c62c43`, `a739675`). O remoto está em
+**`a739675`**, e a árvore local não tem nada à frente nem atrás dele.
+
+*(As lojas, a meta por loja e o pacote de usabilidade do Alto Volume subiram em 01 e 02/09, e estão
+registrados nas entradas daqueles dias.)*
+
+### O ESTADO, MEDIDO NO FECHAMENTO
+
+**Serviços, todos em 200:** produção (3010), backend (3011), frontend (3020), ai-service (8000) e
+homologação (3120). Os seis serviços systemd ativos, e os três containers (banco e os dois Redis)
+saudáveis.
+
+**Produção:** 2.799 admissões, 247 clientes, **6 grupos com 82 vínculos e 220 admissões carimbadas**,
+177 admissões em projeto, 15 lojas com 21 admissões vinculadas. Faróis: 1.815 concluídas, 844
+declínios, 55 rescisões, 40 em admissão, 34 em banco, 11 recusadas. **Zero clientes com a grafia
+antiga do CAGC**, que era o defeito que abriu a frente de manhã.
+
+**Working tree:** nada da fábrica solto. Os 16 arquivos não rastreados são documentos de frentes de
+outras sessões (A&S, investigações, planos), que não são desta linha de trabalho e continuam onde
+estavam.
+
+### O QUE FICA PENDENTE
+
+1. **O cabeçalho "Data de Agendamento" trunca na aba Integração.** Ajuste menor de largura, e não é
+   da coluna nova: aquela coluna tem 110px fixos desde antes. Aguarda a palavra do diretor.
+2. **§A.36, as duas pendências registradas:** o `<select>` nativo do Tipo De Marcação na tela de
+   Clientes (corrigir quando a tela for trabalhada) e o gerenciamento do tipo de marcação no menu
+   iFractal, que hoje só tem o dos status.
+3. **A coluna Grupo no Gerenciador**, tirada por decisão do diretor quando o apelido virou o nome do
+   grupo. A API continua enviando o dado, então ela volta em uma linha se ele quiser.
+4. **O teto de tentativas do tick da Clicksign** (registrado em 01/09): um envelope `closed` cujo
+   `signed` nunca aparecesse retentaria para sempre, visível só no log. Proposta feita, não
+   construída.
+5. **Acesso de produção:** a credencial do super admin no `.env` não autentica, então as provas do dia
+   saíram instanciando os serviços reais contra o banco. Resetar a conta é decisão do diretor, não da
+   fábrica.
+
+### POR ONDE RETOMAR
+
+A frente do cenário 2 está **fechada de ponta a ponta**: cadastro, migração do legado, carimbo,
+leitura por grupo no Gerenciador e no Controle Gerencial, apelido padronizado e a coluna de projeto.
+O próximo passo natural não é dela: é a §A.18, item 2, **ligar o motor da esteira**, com as admissões
+vivas entrando pelo webhook do Pandapé. A tela de Gestão de Pendências Obrigatórias (§A.19) vem
+depois disso, de propósito.
+
+Para o diretor validar o dia inteiro: **3010**, Controle Gerencial, Gerenciador, Esteira e a tela de
+Clientes com o botão Cadastrar Grupos.
