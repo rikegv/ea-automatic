@@ -66,6 +66,16 @@ const dasAdmissoesFora = (c: string[], projecao: string) =>
   dasAdmissoes(c).filter((q) => !q.includes(projecao));
 const daSala = (c: string[]) => c.filter((q) => q.includes("from sala_espera s"));
 
+/**
+ * COMO SE RECONHECE A CONSULTA DO CARD CLIENTE, depois da unificação por grupo (cenário 2).
+ *
+ * Ela projetava `a.cod_cliente as chave`, e passou a projetar um `case`: linha de grupo sai como
+ * `GRUPO:<id>`, linha de cliente sai como o código puro, na MESMA tabela. O marcador mudou de lugar,
+ * o comportamento testado não: o card continua sendo o único que não se filtra, e todas as outras
+ * consultas continuam aplicando o cliente escolhido.
+ */
+const PROJECAO_CARD_CLIENTE = "'GRUPO:' || a.grupo_cliente_id";
+
 describe("painel da diretoria: o recorte", () => {
   it("sem filtro, nenhuma consulta recorta nada", async () => {
     const { db, consultas } = fakeDb();
@@ -79,7 +89,7 @@ describe("painel da diretoria: o recorte", () => {
     expect(dasAdmissoes(consultas).length).toBeGreaterThanOrEqual(8);
     // Menos a consulta do próprio card de Cliente, que desde a onda 5 não se filtra: é o que deixa
     // as outras opções na tela para o Ctrl escolher a segunda.
-    for (const q of dasAdmissoesFora(consultas, "a.cod_cliente as chave")) {
+    for (const q of dasAdmissoesFora(consultas, PROJECAO_CARD_CLIENTE)) {
       expect(q).toContain("a.cod_cliente =");
     }
     // A Sala honra o MESMO cliente, com a coluna dela: o recorte vale para o painel inteiro, ainda
@@ -277,12 +287,49 @@ describe("painel da diretoria: card Contrato por status", () => {
  * UM valor só, o SQL tem de sair idêntico ao de hoje, porque é assim que 99% dos cliques do painel
  * continuam funcionando.
  */
+describe("painel da diretoria: o grupo de cliente (cenário 2)", () => {
+  it("o grupo entra em TODAS as consultas, MENOS na do card Cliente", async () => {
+    // A tabela Cliente carrega as duas dimensões depois da unificação, então "nada filtra a si
+    // mesmo" vale para ela nos dois sentidos: filtrar por grupo não pode deixá-la com uma linha só,
+    // senão não haveria como trocar de grupo.
+    const { db, consultas } = fakeDb();
+    await new GerencialService(db).painel({ grupoClienteId: "g-1" });
+    for (const q of dasAdmissoesFora(consultas, PROJECAO_CARD_CLIENTE)) {
+      expect(q).toContain("a.grupo_cliente_id =");
+    }
+    const cardCliente = dasAdmissoes(consultas).find((q) => q.includes(PROJECAO_CARD_CLIENTE))!;
+    expect(cardCliente).toBeDefined();
+    expect(cardCliente).not.toContain("a.grupo_cliente_id =");
+  });
+
+  it("grupo e cliente CONVIVEM: o filtro de CNPJ individual não foi substituído", async () => {
+    // Decisão do diretor, e é o ponto que mais importa nesta frente: o grupo é ADIÇÃO. Quem quiser
+    // um CNPJ específico continua filtrando por cliente, e os dois recortes se somam.
+    const { db, consultas } = fakeDb();
+    await new GerencialService(db).painel({ grupoClienteId: "g-1", codCliente: "0060" });
+    const kpis = dosKpis(consultas);
+    expect(kpis).toContain("a.grupo_cliente_id =");
+    expect(kpis).toContain("a.cod_cliente =");
+  });
+
+  it("a tabela Cliente unifica: linha de grupo sai prefixada, linha de CNPJ sai crua", async () => {
+    const { db, consultas } = fakeDb();
+    await new GerencialService(db).painel({});
+    const cardCliente = dasAdmissoes(consultas).find((q) => q.includes(PROJECAO_CARD_CLIENTE))!;
+    // O `case` é o que faz a MESMA tabela responder pelas duas dimensões.
+    expect(cardCliente).toContain("when a.grupo_cliente_id is not null");
+    expect(cardCliente).toContain("else a.cod_cliente end as chave");
+    // E o rótulo da linha de grupo é o NOME do grupo, não o código do CNPJ.
+    expect(cardCliente).toContain("then gr.nome");
+  });
+});
+
 describe("painel da diretoria: multi-seleção no mesmo card", () => {
   /** Quantas vezes uma coluna aparece na condição, que é como se enxerga o OR montado. */
   const vezes = (q: string, coluna: string): number => q.match(new RegExp(coluna.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"))?.length ?? 0;
 
   const CAMPOS = [
-    { nome: "cliente", filtro: { codCliente: "0060,0071" }, coluna: "a.cod_cliente =", projecao: "a.cod_cliente as chave" },
+    { nome: "cliente", filtro: { codCliente: "0060,0071" }, coluna: "a.cod_cliente =", projecao: PROJECAO_CARD_CLIENTE },
     { nome: "cargo", filtro: { cargoId: "cargo-1,cargo-2" }, coluna: "a.cargo_id =", projecao: "a.cargo_id::text as chave" },
     { nome: "exame", filtro: { exame: "APTO,AGENDADO" }, coluna: "fe.status =", projecao: "coalesce(cat.rotulo" },
     { nome: "auditoria", filtro: { auditoria: "ANALISE_OK,ANALISE_PENDENTE" }, coluna: "fa.status =", projecao: "coalesce(cata.rotulo" },
@@ -421,7 +468,7 @@ describe("painel da diretoria: multi-seleção no mesmo card", () => {
    */
   describe("um card não filtra a si mesmo", () => {
     const CARDS = [
-      { nome: "Cliente", acha: "a.cod_cliente as chave", proprio: "a.cod_cliente =", filtro: { codCliente: "0060" } },
+      { nome: "Cliente", acha: PROJECAO_CARD_CLIENTE, proprio: "a.cod_cliente =", filtro: { codCliente: "0060" } },
       { nome: "Farol", acha: "a.farol_global::text as rotulo", proprio: "a.farol_global::text =", filtro: { farol: "DECLINOU" } },
       { nome: "Auditoria", acha: "coalesce(cata.rotulo", proprio: "fa.status =", filtro: { auditoria: "ANALISE_OK" } },
       { nome: "Exame", acha: "coalesce(cat.rotulo", proprio: "fe.status =", filtro: { exame: "APTO" } },
@@ -674,6 +721,17 @@ describe("painel da diretoria: a Sala de Espera", () => {
     expect(r.kpis.declinios).toBe(10);
   });
 
+  it("filtrando por GRUPO, a Sala sai da conta inteira (ela não sabe responder por grupo)", async () => {
+    // MEDIDO em produção antes da correção: filtrando o RAIA CAGC CORIFEU, o card de declínios
+    // mostrava 67, sendo 35 do grupo e 32 da Sala INTEIRA, que não tem nada com aquele grupo. A Sala
+    // não tem carimbo (quem está na fila ainda não tem admissão), então ela entra na mesma régua do
+    // período e do exame: fica de fora, em vez de entrar ignorando o recorte.
+    const { db, consultas } = comContagens(4, 2, 3);
+    const r = await new GerencialService(db).painel({ grupoClienteId: "g-1" });
+    expect(daSala(consultas)).toHaveLength(0);
+    expect(r.kpis.declinios).toBe(7);
+  });
+
   it("filtrando OUTRO farol, a parcela da Sala NÃO entra (o recorte pediu o contrário)", async () => {
     const { db } = comContagens(4, 2, 3);
     const r = await new GerencialService(db).painel({ farol: "ADMISSAO_CONCLUIDA" });
@@ -754,11 +812,11 @@ describe("painel da diretoria: o sub-status da Sala clicado", () => {
     await new GerencialService(db).painel({ codCliente: "0060" });
     for (const q of dasAdmissoes(consultas)) expect(q).not.toContain("false");
     // O card de Cliente não se filtra (onda 5); todas as outras aplicam o cliente escolhido.
-    for (const q of dasAdmissoesFora(consultas, "a.cod_cliente as chave")) {
+    for (const q of dasAdmissoesFora(consultas, PROJECAO_CARD_CLIENTE)) {
       expect(q).toContain("a.cod_cliente =");
     }
     // E as tabelas de cliente e cargo voltam a ser as das admissões.
-    expect(dasAdmissoes(consultas).some((q) => q.includes("a.cod_cliente as chave"))).toBe(true);
+    expect(dasAdmissoes(consultas).some((q) => q.includes(PROJECAO_CARD_CLIENTE))).toBe(true);
     expect(dasAdmissoes(consultas).some((q) => q.includes("a.cargo_id::text as chave"))).toBe(true);
   });
 });

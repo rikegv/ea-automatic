@@ -84,10 +84,28 @@ interface Painel {
 }
 
 /** Os filtros que o painel entende. Todos opcionais e combináveis. */
+/**
+ * A CHAVE DA LINHA DA TABELA CLIENTE carrega a DIMENSÃO, no mesmo padrão do card de Cadastro
+ * (`CAD:`/`ASS:`): linha de grupo vem como `GRUPO:<id>`, linha de cliente vem como o código puro.
+ *
+ * É o que permite a MESMA tabela unificar sem perder o clique: linha de grupo filtra por grupo,
+ * linha de cliente filtra por cliente, e os dois filtros continuam existindo lado a lado. Código de
+ * cliente nunca contém dois-pontos, então a distinção não tem como colidir.
+ */
+const PREFIXO_GRUPO = "GRUPO:";
+const ehLinhaDeGrupo = (chave: string) => chave.startsWith(PREFIXO_GRUPO);
+const idDoGrupo = (chave: string) => chave.slice(PREFIXO_GRUPO.length);
+
 interface Filtros {
   de?: string;
   ate?: string;
   codCliente?: string;
+  /**
+   * GRUPO DE CLIENTE (cenário 2). ADIÇÃO, nunca substituição: o grupo junta os CNPJs da Raia num
+   * número só, e o filtro de Cliente continua servindo para ir num CNPJ específico. Os dois convivem
+   * e se somam, como todos os campos deste painel.
+   */
+  grupoClienteId?: string;
   /** Um farol, ou vários separados por vírgula quando o recorte vem de um card de KPI. */
   farol?: string;
   contrato?: string;
@@ -299,6 +317,7 @@ export default function ControleGerencialPage() {
   const sel = useMemo(
     () => ({
       cliente: lista(filtros.codCliente),
+      grupo: lista(filtros.grupoClienteId),
       farol: lista(filtros.farol),
       contrato: lista(filtros.contrato),
       auditoria: lista(filtros.auditoria),
@@ -437,6 +456,28 @@ export default function ControleGerencialPage() {
             valores={sel.cliente}
             rotuloDe={(v) => { const r = dados?.segmentos.cliente.find((l) => l.chave === v)?.rotulo; return r ? `${v} - ${r}` : v; }}
             onRemover={(v) => alternar("codCliente", v, true)}
+          />
+          {/* GRUPO: filtro PRÓPRIO, ao lado do de Cliente e sem tocá-lo. As opções saem da própria
+              tabela Cliente, que é de onde saem as opções de todos os filtros desta tela, então o
+              seletor mostra os grupos que existem no recorte atual. */}
+          <FiltroCampo label="Grupo">
+            <Select
+              value=""
+              onChange={(v) => alternar("grupoClienteId", v || undefined, true)}
+              placeholder="Todos"
+              ariaLabel="Filtrar por grupo de cliente"
+              menuFit
+              options={(dados?.segmentos.cliente ?? [])
+                .filter((l) => ehLinhaDeGrupo(l.chave))
+                .map((l) => ({ value: idDoGrupo(l.chave), label: l.rotulo }))}
+            />
+          </FiltroCampo>
+          <Escolhidos
+            valores={sel.grupo}
+            rotuloDe={(v) =>
+              dados?.segmentos.cliente.find((l) => l.chave === `${PREFIXO_GRUPO}${v}`)?.rotulo ?? v
+            }
+            onRemover={(v) => alternar("grupoClienteId", v, true)}
           />
           <FiltroCampo label="Farol">
             <Select
@@ -642,8 +683,14 @@ export default function ControleGerencialPage() {
         <Tabela
           titulo="Cliente"
           linhas={dados?.segmentos.cliente ?? []}
-          ativos={sel.cliente}
-          onClick={(c, aditivo) => alternar("codCliente", c, aditivo)}
+          /* Os ATIVOS somam as duas dimensões da mesma tabela: o CNPJ escolhido continua aceso pela
+             chave dele, e o grupo escolhido acende pela chave prefixada. */
+          ativos={[...sel.cliente, ...sel.grupo.map((id) => `${PREFIXO_GRUPO}${id}`)]}
+          onClick={(c, aditivo) =>
+            ehLinhaDeGrupo(c)
+              ? alternar("grupoClienteId", idDoGrupo(c), aditivo)
+              : alternar("codCliente", c, aditivo)
+          }
         />
         <Tabela
           titulo="Farol"

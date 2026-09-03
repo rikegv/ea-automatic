@@ -29,6 +29,15 @@ export interface FiltrosGerencial {
   ate?: string;
   codCliente?: string;
   /**
+   * GRUPO DE CLIENTE (cenário 2): filtra pelo CARIMBO da admissão (`grupo_cliente_id`), e não pelo
+   * grupo de hoje do cliente. Aceita vários, separados por vírgula, como os demais.
+   *
+   * Ele CONVIVE com o `codCliente`, não o substitui: o grupo junta os CNPJs da Raia num número só, e
+   * o filtro de cliente continua servindo para ir num CNPJ específico. Os dois ligados ao mesmo tempo
+   * se somam por `and`, que é a régua de todos os campos deste painel.
+   */
+  grupoClienteId?: string;
+  /**
    * Farol. Aceita UM valor (clique na linha da tabela Farol) ou uma LISTA separada por vírgula
    * (clique num card de KPI). A lista existe porque um KPI é um CONJUNTO de faróis (em admissão =
    * EM_ADMISSAO + BANCO_AGUARDAR), e o card tem de filtrar exatamente o que ele conta, senão o
@@ -178,6 +187,14 @@ export class GerencialService {
     if (f.de) cond.push(sql`a.data_admissao >= ${f.de}::date`);
     if (f.ate) cond.push(sql`a.data_admissao <= ${f.ate}::date`);
     if (exceto !== "cliente") campo(f.codCliente, (v) => sql`a.cod_cliente = ${v}`);
+    /*
+     * O GRUPO SAI DO RECORTE JUNTO COM O CLIENTE, e não por descuido: depois da unificação, a tabela
+     * Cliente carrega as DUAS dimensões (linha de grupo e linha de CNPJ solto). "Nada filtra a si
+     * mesmo" vale para a tabela inteira: se o grupo escolhido continuasse valendo aqui, clicar no
+     * Corifeu deixaria a tabela com uma linha só e não haveria como trocar de grupo, que é
+     * exatamente o beco que esta regra existe para evitar.
+     */
+    if (exceto !== "cliente") campo(f.grupoClienteId, (v) => sql`a.grupo_cliente_id = ${v}`);
     if (exceto !== "farol") campo(f.farol, (v) => sql`a.farol_global::text = ${v}`);
     // CARD CADASTRO: a exceção da multi-seleção, e ela é do DOMÍNIO, não do código.
     //
@@ -252,6 +269,7 @@ export class GerencialService {
       left join frentes_admissao fa on fa.admissao_id = a.id and fa.tipo = 'AUDITORIA'
       left join frente_status_catalogo cata on cata.tipo = 'AUDITORIA' and cata.codigo = fa.status
       left join clientes cl on cl.cod_cliente = a.cod_cliente
+      left join grupos_cliente gr on gr.id = a.grupo_cliente_id
       left join cargos cg on cg.id = a.cargo_id
       where ${this.onde(f, exceto)}
     `;
@@ -272,7 +290,18 @@ export class GerencialService {
    */
   private salaRespondeAoRecorte(f: FiltrosGerencial): boolean {
     return (
-      !f.de && !f.ate && !f.contrato && !f.exame && !f.auditoria && !f.dia && !f.mes
+      !f.de && !f.ate && !f.contrato && !f.exame && !f.auditoria && !f.dia && !f.mes &&
+      // GRUPO (cenário 2): a Sala não sabe responder por grupo, e a regra acima resolve o caso.
+      //
+      // O grupo da admissão é um CARIMBO, e quem está na fila da Sala ainda não tem admissão para
+      // carimbar. Derivar pelo cliente de hoje seria outra régua dentro da mesma tela, e o diretor
+      // decidiu que a Sala NÃO é unificada por grupo.
+      //
+      // MEDIDO, e é por isso que esta linha existe: sem ela, filtrar o RAIA CAGC CORIFEU somava os
+      // 32 declínios da Sala inteira ao card, que passava a mostrar 67 no lugar de 35. Número que
+      // ignora o recorte é pior que número ausente, que é exatamente o que este método já dizia
+      // para período, exame, auditoria e cadastro.
+      !f.grupoClienteId
     );
   }
 
@@ -557,10 +586,36 @@ export class GerencialService {
     };
   }
 
+  /**
+   * A TABELA CLIENTE, UNIFICADA POR GRUPO (cenário 2, Controle Gerencial).
+   *
+   * O PROBLEMA QUE ELA RESOLVE, medido na produção: a tabela tinha 218 linhas, e 82 delas eram CNPJs
+   * da Raia com um punhado cada (11, 8, 7, 7, 6...), somando 220 admissões. Repartidos assim, eles
+   * empurravam para baixo clientes que importam e não respondiam nada sozinhos. Unificados, viram 6
+   * linhas, a tabela cai para 142, e o Corifeu aparece em 6º lugar do painel, com 164.
+   *
+   * NÃO É TABELA NOVA AO LADO: é a MESMA tabela deixando de repartir o que é um só. Cliente que
+   * pertence a grupo é absorvido na linha do grupo; cliente sem grupo continua exatamente como
+   * estava, com o nome dele. O total da tabela não muda, só a forma: as 6 linhas somam as mesmas 220
+   * das 82 que substituem.
+   *
+   * A CHAVE CARREGA A DIMENSÃO, no mesmo padrão que o card de Cadastro já usa (`CAD:`/`ASS:`): linha
+   * de grupo sai como `GRUPO:<id>`, linha de cliente sai como o código puro, que é o que sempre foi.
+   * Sem o prefixo, a tela não teria como saber qual dos dois filtros acionar no clique, e um código
+   * de cliente nunca contém dois-pontos.
+   *
+   * O CARIMBO É A FONTE (`a.grupo_cliente_id`), e não o vínculo de hoje do cliente: é o que faz o
+   * número do trimestre passado continuar o mesmo depois que uma loja trocar de grupo.
+   */
   private async segCliente(f: FiltrosGerencial): Promise<LinhaSegmento[]> {
     return (await this.db.execute(sql`
-      select a.cod_cliente as chave,
-             coalesce(nullif(cl.nome_operacao, ''), cl.razao_social, a.cod_cliente) as rotulo,
+      select case when a.grupo_cliente_id is not null
+                  then 'GRUPO:' || a.grupo_cliente_id::text
+                  else a.cod_cliente end as chave,
+             case when a.grupo_cliente_id is not null
+                  then gr.nome
+                  else coalesce(nullif(cl.nome_operacao, ''), cl.razao_social, a.cod_cliente)
+             end as rotulo,
              count(*)::int as total
       ${this.base(f, "cliente")} and a.cod_cliente is not null
       group by 1, 2 order by 3 desc, 2
