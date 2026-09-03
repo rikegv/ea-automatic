@@ -74,6 +74,26 @@ import type {
  *   5. GUARD DE ÁREA cobrindo tudo: a controller inteira é reivindicada pelo menu `as-candidatos`,
  *      leitura incluída, e o menu nasce só para o SUPER_ADMIN (§A.23).
  */
+/**
+ * O ID DO CANDIDATO, QUALIFICADO À MÃO, para uso DENTRO de subconsulta correlacionada.
+ *
+ * O PORQUÊ, MEDIDO E NÃO DEDUZIDO. Numa consulta de UMA tabela só, o drizzle renderiza a coluna
+ * interpolada de formas diferentes conforme o lugar:
+ *   - no WHERE, ele QUALIFICA: `where "as_candidaturas"."candidato_id" = "as_candidatos"."id"`, e a
+ *     correlação funciona (foi assim que os filtros por vaga e "sem candidatura" sempre funcionaram);
+ *   - na LISTA DO SELECT, ele NÃO qualifica: `where "candidato_id" = "id"`. Dentro da subconsulta os
+ *     dois nomes resolvem contra `as_candidaturas`, a comparação vira `candidato_id = id` da própria
+ *     tabela, nunca casa, e o contador dá SEMPRE ZERO. Medido: uma pessoa com candidatura ATIVA
+ *     aparecia com 0.
+ *
+ * É o mesmo defeito do livreto de grupos e da tela do iFractal, os dois na lista do select (lá o
+ * contador exibia o TOTAL DA BASE em todas as linhas, porque a comparação virava sempre verdadeira).
+ *
+ * Qualificar à mão vale para os três pontos, e não só para o quebrado: um filtro que hoje está certo
+ * por causa de um detalhe de renderização não é um filtro que se possa confiar amanhã.
+ */
+const ID_DO_CANDIDATO = sql`${asCandidatos}.${sql.identifier("id")}`;
+
 @Injectable()
 export class CandidatosService {
   constructor(@Inject(DRIZZLE) private readonly db: Database) {}
@@ -206,7 +226,7 @@ export class CandidatosService {
     if (dto.vagaId) {
       filtros.push(
         sql`exists (select 1 from ${asCandidaturas}
-                    where ${asCandidaturas.candidatoId} = ${asCandidatos.id}
+                    where ${asCandidaturas.candidatoId} = ${ID_DO_CANDIDATO}
                       and ${asCandidaturas.vagaId} = ${dto.vagaId})`,
       );
     }
@@ -237,7 +257,7 @@ export class CandidatosService {
     if (dto.semCandidatura) {
       filtros.push(
         sql`not exists (select 1 from ${asCandidaturas}
-                         where ${asCandidaturas.candidatoId} = ${asCandidatos.id})`,
+                         where ${asCandidaturas.candidatoId} = ${ID_DO_CANDIDATO})`,
       );
     }
 
@@ -253,7 +273,7 @@ export class CandidatosService {
         criadoEm: asCandidatos.criadoEm,
         candidaturasAtivas: sql<number>`(
           select count(*)::int from ${asCandidaturas}
-           where ${asCandidaturas.candidatoId} = ${asCandidatos.id}
+           where ${asCandidaturas.candidatoId} = ${ID_DO_CANDIDATO}
              and ${asCandidaturas.situacao} in ('ATIVO', 'APROVADO', 'CONTRATADO'))`,
       })
       .from(asCandidatos)
