@@ -449,6 +449,12 @@ decisão 3 (importação B alcançando o histórico), o quadro passa a somar as 
 
 ## 4. Cenário 2: grupo de CNPJs por nome (caso Raia, CAGC Corifeu)
 
+> **SUPERADO POR `DESENHO-CENARIO-2-GRUPO.md` (02/09/2026).** O desenho completo do cenário 2 vive
+> lá, com os números medidos na produção de hoje. **Esta seção ficou desatualizada em UM ponto que
+> muda o modelo:** aqui a recomendação era **derivar** o grupo pelo join a partir do cliente, e o
+> diretor decidiu **CARIMBAR** o grupo na admissão, para que uma loja que troque de grupo não leve a
+> história junto. Vale o carimbo. O resto desta seção segue de pé como registro do raciocínio.
+
 *Construção posterior, por decisão do diretor. Desenhado para não se perder.*
 
 O inverso do cenário 1. Cada loja **já é um cliente separado**, com CNPJ próprio e código próprio. O

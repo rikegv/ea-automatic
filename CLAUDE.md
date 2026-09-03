@@ -921,3 +921,18 @@ enquanto a fábrica estava parada.)*
 e o **seletor de loja** (etapa 3 da frente de Lojas) repetiu o mesmo erro em 01/09/2026, com fundo
 cinza e sem busca, mesmo com o `Select` do design system pronto e em uso em dezenas de telas. A
 segunda vez é o que transforma um descuido em regra. *(Decisão do diretor.)*
+
+## A.36 — Pendências registradas da tela de Clientes e do menu iFractal (não construir agora)
+
+Duas pendências levantadas na frente do cenário 2 (grupos de cliente), **registradas para o gatilho
+certo** e explicitamente **fora do escopo daquela OST** (§A.31: propõe, não constrói).
+
+- **O seletor de Tipo De Marcação, na tela de Clientes, é `<select>` nativo e viola a §A.35.** Ele é
+  anterior à regra e não foi tocado. **Corrigir QUANDO essa tela for trabalhada**, junto da OST que a
+  alcançar, e não como ajuste avulso.
+- **Falta o gerenciamento do TIPO DE MARCAÇÃO no menu iFractal.** Hoje o menu tem só o gerenciamento
+  dos **status**; o tipo de marcação é editado na ficha do cliente e não tem catálogo próprio no menu.
+  **Quando o menu iFractal for trabalhado**, acrescentar lá o gerenciamento do tipo de marcação. As
+  duas coisas são ligadas: é o mesmo dado, escrito na tela de Clientes e consumido pelo iFractal.
+
+*(Registro solicitado pelo diretor.)*

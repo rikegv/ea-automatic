@@ -493,6 +493,67 @@ export const clinicasCatalogo = pgTable("clinicas_catalogo", {
  *
  * §A.6: nome de loja e endereço de estabelecimento. Nenhum dado pessoal.
  */
+/**
+ * GRUPO DE CLIENTES (cenário 2, o caso Raia/CAGC). `docs/DESENHO-CENARIO-2-GRUPO.md`.
+ *
+ * O INVERSO do `cliente_lojas`. Lá a loja vive DENTRO de um cliente; aqui cada loja JÁ É um cliente
+ * com CNPJ próprio, e o que falta é a camada por cima: um nome que diga que aqueles 53 códigos são o
+ * mesmo CAGC Corifeu. A Raia tem 98 códigos na mesma razão social, e achar a farmácia certa hoje é
+ * procurar entre 98 linhas iguais.
+ *
+ * O GRUPO É EIXO DE LEITURA, nunca meta nem projeto (decisão do diretor). Ele serve para filtrar,
+ * agrupar e analisar: escolher "CAGC Corifeu" no painel e ver as 164 admissões sem se importar de
+ * quantos CNPJs elas vieram.
+ */
+export const gruposCliente = pgTable(
+  "grupos_cliente",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    nome: varchar("nome", { length: 200 }).notNull(),
+    /** Livre, para o time explicar o recorte administrativo que o grupo representa. */
+    descricao: text("descricao"),
+    ativo: boolean("ativo").notNull().default(true),
+    criadoEm,
+    atualizadoEm,
+  },
+  (t) => ({
+    /**
+     * A MESMA NORMALIZAÇÃO do nome das lojas, e reusar aqui não é economia: é o que impede o grupo de
+     * nascer com o defeito que ele veio consertar. Hoje o CAGC vive no apelido do cliente em NOVE
+     * grafias, e `CAGC CORIFEU` convive com `CAGC CORIFEU ` (espaço à direita) como se fossem dois.
+     * Caixa e espaço, sem remover acento, porque a extensão `unaccent` não está instalada.
+     */
+    uqNome: uniqueIndex("uq_grupo_cliente_nome").on(
+      sql`upper(btrim(regexp_replace(${t.nome}, '\s+', ' ', 'g')))`,
+    ),
+  }),
+);
+
+/**
+ * QUEM PERTENCE A QUAL GRUPO.
+ *
+ * A CHAVE PRIMÁRIA É O `cod_cliente` SOZINHO, e não o par `(grupo_id, cod_cliente)`. É isto que
+ * transforma "uma loja em UM grupo só" (decisão do diretor) em regra do BANCO em vez de disciplina de
+ * código: com o par como chave, nada impediria o mesmo CNPJ de existir em dois grupos, e a soma por
+ * grupo passaria a contar a mesma farmácia duas vezes sem ninguém perceber. É o mesmo desenho do
+ * unique de `admissao_projeto`, que garante uma admissão em um projeto só.
+ *
+ * Trocar de grupo é, por consequência, um UPSERT nessa chave: sai de um, entra no outro, e duplicar
+ * não é um estado que o banco aceite representar.
+ *
+ * A CHAVE É O `cod_cliente` E NÃO O CNPJ, e isso foi medido: um CNPJ da Raia
+ * (`61.585.865/0453-33`) está cadastrado em DOIS códigos de cliente diferentes.
+ */
+export const grupoClienteMembros = pgTable("grupo_cliente_membros", {
+  codCliente: varchar("cod_cliente", { length: 40 })
+    .primaryKey()
+    .references(() => clientes.codCliente, { onDelete: "cascade" }),
+  grupoId: uuid("grupo_id")
+    .notNull()
+    .references(() => gruposCliente.id, { onDelete: "cascade" }),
+  criadoEm,
+});
+
 export const clienteLojas = pgTable(
   "cliente_lojas",
   {
@@ -657,6 +718,23 @@ export const admissoes = pgTable(
      * (`validarLojaDoCliente`), atravessado por TODOS os caminhos de escrita.
      */
     lojaId: uuid("loja_id").references(() => clienteLojas.id, { onDelete: "set null" }),
+    /**
+     * O GRUPO DA ÉPOCA (cenário 2). CARIMBO, não derivação, e a diferença é o ponto inteiro da
+     * decisão do diretor: derivar pelo cliente mostraria sempre o grupo de HOJE, então no dia em que
+     * uma farmácia sai do CAGC Corifeu e vai para o Centro Oeste, as 122 admissões que aconteceram
+     * sob Corifeu migrariam junto, em silêncio, e o relatório do trimestre passado passaria a dar
+     * outro número. O carimbo congela o que aconteceu.
+     *
+     * CARIMBA O ID, e não o nome: renomear o grupo é a mesma entidade mudando de nome, e vale para
+     * trás (decisão do diretor). `restrict` porque histórico não pode ficar sem nome; grupo não se
+     * apaga, se inativa.
+     *
+     * NULÁVEL, e a ausência NÃO é pendência: a esmagadora maioria dos clientes não pertence a grupo
+     * nenhum, e tratar isso como falta encheria a fila com milhares de casos que não são trabalho.
+     */
+    grupoClienteId: uuid("grupo_cliente_id").references(() => gruposCliente.id, {
+      onDelete: "restrict",
+    }),
     // Consultor que GEROU a admissão (Fase 2C): associado às não conformidades que ela vier a gerar
     // (Via 1 — penaliza o consultor). Nullable: admissões anteriores à 2C não têm autor registrado.
     consultorId: uuid("consultor_id").references(() => usuarios.id),

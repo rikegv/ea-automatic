@@ -111,6 +111,7 @@ import { exigeEscolhaDeVinculo } from "../domain/vinculo";
 import { avisoDivergenciaBancaria, divergenciasReconhecidas } from "../domain/cadastro-bancario";
 import type { AuthUser } from "../auth/auth.types";
 import type { CandidatoInputDto, CreateAdmissaoDto } from "./dto/create-admissao.dto";
+import { carimboDoGrupo } from "./grupo-da-admissao";
 import { lojaDaLinhaDoLote, validarLojaDoCliente } from "./loja-da-admissao";
 import type { UpdateAdmissaoDto } from "./dto/update-admissao.dto";
 import type { AtualizarUniformeDto } from "./dto/atualizar-uniforme.dto";
@@ -389,6 +390,11 @@ export class AdmissoesService {
     // DESTE cliente. Validado antes da transação, pelo mesmo motivo da linha acima.
     await validarLojaDoCliente(this.db, dto.codCliente, dto.lojaId);
 
+    // GRUPO (cenário 2, etapa 3): carimbo derivado do cliente AGORA, no nascimento. Lido fora da
+    // transação pelo mesmo motivo da loja acima, e por um ponto só (`carimboDoGrupo`). Este caminho
+    // serve o wizard E o Pandapé quando o de/para resolve cliente, porque os dois entram por aqui.
+    const grupoClienteIdCriacao = await carimboDoGrupo(this.db, dto.codCliente);
+
     // a.1 W6 — campos obrigatórios. NÃO impede (F4/regra 5), mas exige ACEITE EXPLÍCITO quando há
     // pendências. O log permanente do aceite por passagem é da esteira (S3, marco 3).
     const vf = dto.vagaFolha ?? {};
@@ -529,6 +535,9 @@ export class AdmissoesService {
           // LOJA (cenário 1, etapa 3): só existe quando o cliente tem lojas cadastradas. Já validada
           // acima contra o cliente desta admissão (`validarLojaDoCliente`).
           lojaId: dto.lojaId ?? null,
+          // GRUPO (cenário 2, etapa 3): o grupo da ÉPOCA. Null quando o cliente não é membro, que é
+          // o caso da maioria e não é pendência.
+          grupoClienteId: grupoClienteIdCriacao,
           tipoContrato: dto.tipoContrato ?? null,
           dataAdmissao: dto.dataAdmissao ?? null,
           // Consultor que gerou a admissão (Fase 2C) — base da atribuição de NC (Via 1).
@@ -712,6 +721,10 @@ export class AdmissoesService {
           candidatoCpf: cpf,
           codCliente: null,
           cargoId: null,
+          // GRUPO (cenário 2, etapa 3): NÃO se carimba aqui, e a ausência é deliberada. Esta é a
+          // entrada do Pandapé sem de/para: nasce sem cliente, e o grupo deriva do cliente. O
+          // carimbo acontece na LIBERAÇÃO, quando o consultor escolhe o cliente. O outro caminho do
+          // Pandapé (de/para resolvido) entra pelo `create`, que carimba no nascimento.
           farolGlobal: "AGUARDANDO_LIBERACAO",
           sinalizadorPreenchimento: "PENDENTE",
           origem: "PANDAPE",
@@ -1198,11 +1211,18 @@ export class AdmissoesService {
       possuiUniforme: uniformeEpi.possuiUniforme,
     });
 
+    // GRUPO (cenário 2, etapa 3): a pré-admissão nasceu SEM cliente, então é aqui que ela ganha o
+    // carimbo, no mesmo instante em que o cliente é escrito. Individual e LOTE passam por este
+    // miolo, então os dois carimbam sem código repetido. A leitura usa `this.db` pelo mesmo motivo
+    // da loja no lote: é uma consulta pequena numa tabela que a transação não toca.
+    const grupoClienteIdLiberacao = await carimboDoGrupo(this.db, dto.codCliente);
+
     await tx
       .update(admissoes)
       .set({
         codCliente: dto.codCliente,
         cargoId: dto.cargoId,
+        grupoClienteId: grupoClienteIdLiberacao,
         // LOJA (etapa 3): no individual vem do seletor; no lote vem do par daquela linha. Já
         // validada contra o cliente antes de a transação abrir.
         lojaId: dto.lojaId ?? null,
@@ -2838,6 +2858,11 @@ export class AdmissoesService {
         .set({
           codCliente: cliente.codCliente,
           cargoId: cargo.id,
+          // GRUPO REESCRITO (cenário 2, etapa 3): este é o ÚNICO caminho que reescreve o carimbo, e
+          // reescrever é o certo aqui. Trocar o cliente é dizer que a admissão nunca foi daquele
+          // cliente, então o grupo antigo era do cliente errado. Fica null quando o cliente novo não
+          // é membro de grupo nenhum, pelo mesmo motivo da loja logo abaixo.
+          grupoClienteId: await carimboDoGrupo(this.db, cliente.codCliente),
           // LOJA LIMPA NA TROCA DE CLIENTE (etapa 3, decisão do diretor). A loja pertence ao cliente
           // ANTIGO: mantê-la deixaria uma admissão do DIA apontando para uma loja do CRM, que é
           // exatamente a contaminação que `validarLojaDoCliente` impede em todos os outros caminhos.

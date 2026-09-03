@@ -652,6 +652,13 @@
       "when": 1788039491611,
       "tag": "0092_meta_por_loja",
       "breakpoints": true
+    },
+    {
+      "idx": 93,
+      "version": "7",
+      "when": 1788043091611,
+      "tag": "0093_grupo_cliente",
+      "breakpoints": true
     }
   ]
 }

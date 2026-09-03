@@ -12165,3 +12165,223 @@ antes e depois, com uma diferença explicada: uma frente de Auditoria fechou 35 
 foto e **seis minutos antes** de o código novo subir, ou seja, foi a operação viva sob o código
 antigo. A carga do CRM seguiu intacta, **20 admissões com loja e 15 lojas**. Clicksign, Pandapé e
 iFractal não foram tocados.
+
+---
+
+## 03/09/2026, o cenário 2 nasce: o grupo que junta CNPJs espalhados num nome só
+
+Dia de uma frente só, do desenho ao runner da migração. **Etapa 1 validada pelo diretor e parada na
+homologação; etapa 2 rodou até a prévia e espera resposta dele. Nada commitado, nada gravado.**
+
+### O PROBLEMA, MEDIDO ANTES DE DESENHAR
+
+A Raia Drogasil tem **98 códigos de cliente com a mesma razão social**, cada farmácia com CNPJ
+próprio. Achar a loja certa é procurar entre 98 linhas iguais. O agrupamento administrativo que a
+operação já usa, o **CAGC**, existe hoje **escrito à mão no apelido do cliente**, em **nove grafias**:
+`CAGC CORIFEU ` (com espaço à direita, 33 códigos), `CAGC CORIFEU` (3) e `RAIA CAGC CORIFEU` (17) são
+quase certamente o mesmo grupo repartido em três, somando **53 códigos e 164 admissões**. Enquanto
+isso for texto livre, cada leitura por grupo dá um número diferente.
+
+Dois achados que mudaram o desenho, e nenhum estava na conversa: **os 82 códigos com CAGC são todos
+da Raia**, e **16 códigos da Raia não têm CAGC no apelido** (`RAIA`, `RAIA OLIMPIA`, um com o apelido
+vazio). Esses 16 são o ponto cego de qualquer semeadura automática, e a decisão foi **não tentar
+adivinhar**. Um terceiro achado, pequeno e com consequência de modelo: **um CNPJ da Raia está
+cadastrado em dois códigos de cliente**, então a chave do vínculo tem de ser o `cod_cliente`.
+
+### O DESENHO (`docs/DESENHO-CENARIO-2-GRUPO.md`)
+
+Documento completo, aprovado pelo diretor, com as onze perguntas em aberto e a recomendação de cada.
+Ele **substitui a seção 4 do desenho antigo num ponto que muda o modelo**: lá a recomendação era
+DERIVAR o grupo pelo cliente, e o diretor decidiu **CARIMBAR**. A seção velha ganhou um aviso para
+ninguém seguir a versão superada.
+
+**Por que o carimbo, e a decisão do diretor está certa:** derivar mostra sempre o grupo de HOJE. No
+dia em que uma farmácia sai do CAGC Corifeu e vai para o Centro Oeste, as 122 admissões que
+aconteceram sob Corifeu migrariam junto, em silêncio, e o relatório do trimestre passado passaria a
+dar outro número. O carimbo congela o que aconteceu.
+
+### ETAPA 1, CONSTRUÍDA E VALIDADA (parada na homologação)
+
+**Migration 0093.** `grupos_cliente` e `grupo_cliente_membros`, mais `admissoes.grupo_cliente_id`
+nulável com `restrict`.
+
+**A REGRA MORA NO BANCO, não na disciplina de código.** A chave primária de `grupo_cliente_membros` é
+o **`cod_cliente` sozinho**, e não o par com o grupo. É isto que faz "uma loja em UM grupo só" ser
+impossível de violar: com a chave no par, o mesmo CNPJ poderia estar em dois grupos e a soma do
+painel contaria a mesma farmácia duas vezes sem quebrar nada. Trocar de grupo virou, por
+consequência, um upsert nessa chave. É o mesmo desenho do unique de `admissao_projeto`.
+
+**O livreto**, no formato da Sala de Espera: à esquerda o grupo, no meio a lombada, à direita os 226
+CNPJs com busca por código, razão social ou apelido, para ticar. Tem "ticar os N à vista" (só o que a
+busca mostra, nunca a lista inteira) e "ver só os ticados".
+
+**A troca é avisada antes, não depois.** A linha mostra "Hoje Em CAGC Corifeu" antes de ticar e "Sai
+De CAGC Corifeu" depois; a confirmação lista linha a linha "SAI de X e entra em Y", com o resumo dos
+quatro efeitos. A prévia é calculada no **servidor**, porque o grupo de um CNPJ pode ter mudado com a
+tela aberta.
+
+**A grafia não escapa.** Criar `  cagc   CORIFEU ` com o `CAGC Corifeu` existente é recusado. É a
+mesma normalização do catálogo de lojas, e é o que impede o grupo de nascer com o defeito das nove
+grafias que ele veio consertar.
+
+**Sem menu novo, por decisão do diretor.** O botão "Cadastrar Grupos" vive DENTRO da tela de
+Clientes, e a escrita é reivindicada pelo menu `clientes`: quem administra cliente administra grupo.
+Há teste travando os dois lados, porque menu novo nasceria invisível para todos (§A.23) e leitura
+reivindicada faria a ficha do cliente tomar 403 de quem só consulta. Na ficha, o grupo aparece **em
+leitura**, com link para o livreto: um segundo lugar de edição criaria duas telas capazes de divergir.
+
+**Dois defeitos pegos pela prova visual**, nenhum por teste: a lista escrevia "0 admissãoões no
+histórico", e as ações principais estavam como texto sublinhado. Os botões viraram botão de verdade,
+com o gradiente do design system, e o Salvar ficou mais largo que o Fechar para a hierarquia ser
+visível antes de ler os rótulos.
+
+### ETAPA 2, RODADA ATÉ A PRÉVIA (nada gravado)
+
+`carga-grupos-cagc.ts`, no molde da carga de lojas: prévia obrigatória, e **mesmo com `APLICAR=1` ele
+não funde grafia por conta própria**. A fusão é uma RESOLUÇÃO que o diretor passa por arquivo; grafia
+sem resolução não é gravada.
+
+**O runner nunca:** adivinha o ambíguo (`CAGC CAMP. ` pode ser Campinas ou Campo Grande, e um código
+com uma admissão não vale um chute que ninguém vai auditar), inventa grupo para quem não tem, toca o
+`nome_operacao`, ou carimba admissão.
+
+**UM DEFEITO GRAVE PEGO NA PRIMEIRA RODADA, e por olhar o número, não por teste:** a prévia devolveu
+**147 mil admissões** no Corifeu e exatos **2.781 para cada cliente**, numa base com 2.790 no total.
+A contagem por cliente tinha virado sempre-verdadeira na montagem do SQL. Trocada por agregação
+explícita, os números passaram a bater com o desenho: 82 códigos, 220 admissões, 53 códigos e 164
+admissões no Corifeu, 16 sem grupo. **Um número absurdo na cara foi o que salvou; se a divergência
+fosse de 5%, teria passado.**
+
+A prévia rodou contra a PRODUÇÃO, que é onde o legado está, e as tabelas do grupo ainda não existem
+lá. O runner detecta e segue em modo prévia, em vez de falhar, e **recusa gravar** num banco sem elas.
+
+### O QUE FICOU PENDENTE DO DIRETOR
+
+1. **`CAGC CAMP. ` é Campinas ou Campo Grande?** Se for Campinas, funde com o `CAGC Campinas` e vira
+   um grupo de 2 códigos; se for Campo Grande, são dois grupos de 1.
+2. **O nome final de cada um dos 7 grupos** (a sugestão é o Title Case da tabela da prévia).
+3. **Os 16 sem grupo**, para atribuir na tela quando quiser.
+
+### ESTADO NO FIM DO DIA
+
+**Nada commitado.** O `HEAD` segue em `ff46b3e`, que é a publicação do Alto Volume por loja de ontem.
+Solto no working tree: a migration 0093, o módulo `grupos-cliente`, o runner, os dois componentes do
+frontend, o desenho do cenário 2 e as edições em `tables.ts`, `menus.ts`, `admin.module.ts` e na tela
+de Clientes.
+
+**Homologação (3120):** etapa 1 no ar, com a migration aplicada. O grupo "CAGC CORIFEU TESTE" com 15
+CNPJs, criado pelo diretor na validação, **ficou intacto**; o grupo que a fábrica criou para a prova
+visual foi removido.
+
+**Produção (3010):** não recebeu nada do cenário 2. Segue com o Alto Volume por loja de ontem.
+
+**A sequência para retomar:** as respostas do diretor destravam a gravação da etapa 2, que precisa da
+etapa 1 no ar em produção antes. Depois vêm a etapa 3 (carimbo, com a função única nos quatro pontos
+de escrita) e a etapa 4 (filtro, coluna e quadro por grupo).
+
+## 03/09/2026 (tarde), o cenário 2 sai do desenho: os 6 grupos gravados e o carimbo nos quatro pontos
+
+Continuação da entrada da manhã, que ficou desatualizada em um ponto: lá as etapas 1 e 2 estavam
+paradas esperando resposta do diretor, e **nada estava gravado**. As respostas vieram, e as etapas 1,
+2 e 3 foram executadas e validadas na homologação. **Commitadas ao fim do dia; produção NÃO recebeu
+nada, por decisão do diretor** (ele quer a etapa 4 e um ajuste antes de subir).
+
+### AS RESPOSTAS QUE DESTRAVARAM
+
+`CAGC CAMP.` é **Campinas**, então funde com o `CAGC Campinas` e vira um grupo de 2 códigos. Os nomes
+saíram em **CAIXA ALTA, no padrão `RAIA CAGC + LUGAR`**, escolha do diretor sobre a lista que a
+fábrica levou com as grafias, os códigos e as admissões de cada um. Sete grafias no legado viraram
+**seis grupos**.
+
+### O QUE FOI GRAVADO, E O QUE ELE CONFERIU ANTES
+
+| Grupo | Códigos | Admissões |
+|---|---:|---:|
+| RAIA CAGC CORIFEU | 53 | 164 |
+| RAIA CAGC FREI CANECA | 11 | 24 |
+| RAIA CAGC RIB. PRETO | 7 | 10 |
+| RAIA CAGC CENTRO OESTE | 6 | 17 |
+| RAIA CAGC BH | 3 | 3 |
+| RAIA CAGC CAMPINAS | 2 | 2 |
+
+**82 vínculos, 220 admissões**, e o diretor aprovou a prévia antes de qualquer escrita. O grupo de
+teste que ele criou na validação **zerou e foi excluído**: os 15 CNPJs migraram para o Corifeu, que é
+o comportamento correto de uma loja em um grupo só.
+
+### A LIMPEZA DO APELIDO, E O QUE ELA REVELOU DA HOMOLOGAÇÃO
+
+`limpa-apelido-cliente.ts` tirou o sufixo `F.A` de **20 apelidos** e aparou o espaço à direita de
+outros **14**. Duas descobertas no caminho:
+
+1. **O `F.A` existia SÓ na homologação.** A produção tem zero. A limpeza aproximou as duas bases em
+   vez de afastá-las, e foi por isso que a lista levada ao diretor saiu da PRODUÇÃO, que é onde o
+   legado a migrar de verdade está.
+2. **O aparo de espaço começou fora do escopo e foi devolvido a ele.** A primeira versão aparava os
+   14 junto, o que a OST não pedia; foi restringida ao sufixo, reportada como proposta, e o diretor
+   então autorizou o aparo em todos. Regra dele: espaço à direita não é texto, é lixo.
+
+**Um relatório falso do próprio runner, corrigido:** a conferência final imprimiu "Restantes sujos:
+1" num banco limpo. Dentro de template literal do JS o `\s` perde a barra, então o padrão que chegou
+ao Postgres não era o escrito. Trocado por `rtrim` e `like`, que não têm escape para errar.
+
+### A ETAPA 3: O CARIMBO, NUM PONTO SÓ
+
+`carimboDoGrupo` (`admissoes/grupo-da-admissao.ts`), irmã de `validarLojaDoCliente` e no mesmo molde.
+Os **quatro caminhos** de escrita do cliente chamam ela, e os quatro foram provados AO VIVO na
+homologação, não por leitura de código: wizard (`create`), liberação (o miolo que serve individual e
+lote), troca de cliente (o **único** caminho que reescreve o carimbo) e Pandapé (com de/para entra
+pelo `create`; sem de/para nasce sem cliente e carimba na liberação). Cliente sem grupo fica nulo, e
+isso **não é pendência**.
+
+**Por que uma função e não quatro trechos:** é exatamente assim que o elo pós-ASO se quebrou (§A.26).
+Um dos caminhos deixa de fazer o que os outros fazem, nenhum teste cobre a costura, e o defeito
+aparece quando uma admissão real trava na operação.
+
+**Decisão registrada: o carimbo segue o VÍNCULO, não o `ativo` do grupo.** Inativar esconde o grupo
+dos filtros; não desfaz o fato de que aquele CNPJ pertence a ele. Carimbar só grupo ativo deixaria um
+buraco silencioso no histórico, que nenhum backfill futuro perceberia.
+
+**Backfill: 220 admissões carimbadas**, exatamente as dos 82 códigos. **2.511 não foram tocadas**,
+porque o cliente não tem grupo. O runner só toca carimbo nulo, então não reescreve o grupo da época e
+pode rodar de novo sem efeito.
+
+**§A.27, nenhuma contagem se moveu.** Vinte e duas medidas antes e depois, com `diff`: a única linha
+diferente é a dimensão nova, `adm_com_grupo 0 → 220`. Admissões 2.731, clientes 238, os sete faróis,
+as cinco frentes concluídas e os quatro sinalizadores, idênticos. As quatro admissões de prova e os
+três candidatos sintéticos foram apagados, então a base voltou ao ponto de partida.
+
+### O DEFEITO DA ETAPA 1 QUE O CARIMBO REVELOU NO MINUTO SEGUINTE
+
+O livreto mostrava **"0 admissões no histórico"** para um grupo com 164. Não era o carimbo: era o
+contador da etapa 1. A subconsulta saía do drizzle **sem qualificar a tabela**,
+`select count(*) from "admissoes" where "grupo_cliente_id" = "id"`, e dentro dela os dois nomes
+resolvem contra `admissoes`: a comparação virava `admissoes.grupo_cliente_id = admissoes.id`, sempre
+falsa, e o número era **sempre zero**.
+
+**Ficou invisível porque, até o backfill, zero era a resposta certa.** O `membros`, ao lado, escapou
+por sorte: `grupo_cliente_membros` não tem coluna `id`, então o nome caiu na tabela de fora e
+correlacionou certo. É a mesma família do defeito das 147 mil admissões da prévia, da manhã. Trocado
+por `left join` com `count(distinct)`, que sai qualificado. Varredura no backend: o padrão de
+subconsulta com tabela interpolada **só existia nesses dois pontos**.
+
+### DOIS AJUSTES E DUAS PENDÊNCIAS REGISTRADAS
+
+O placeholder do livreto passou a sugerir `RAIA CAGC CORIFEU`, coerente com o padrão dos nomes. E
+nasceu a **§A.36**: o `<select>` nativo do Tipo De Marcação na tela de Clientes (§A.35, corrigir
+quando a tela for trabalhada) e a falta do **gerenciamento do tipo de marcação no menu iFractal**, que
+hoje só tem o dos status. Registradas, não construídas (§A.31).
+
+### ACESSO DA HOMOLOGAÇÃO
+
+A senha do `admin@homolog.local` não autenticava mais (rotacionada em 31/08). Foi **resetada para uma
+temporária com troca obrigatória no primeiro login**, entregue no arquivo de sempre da VM, com
+permissão 600, nunca no chat. A prova visual da fábrica rodou pela conta de harness dela, sem tocar a
+conta do diretor. O harness também precisou das bibliotecas do Chrome, que tinham desaparecido da
+máquina, baixadas de novo sem sudo e fora do repositório.
+
+### GATE E ESTADO
+
+Typecheck 0 nos dois apps, lint limpo nos arquivos da frente, **1.798 testes no backend** e **156 no
+frontend**. Homologação (3120) rebuildada e reiniciada, health 200. **Produção segue em `ff46b3e`,
+sem uma linha do cenário 2.** O caminho de validação é Menu Gerencial, cartão Clientes, botão
+Cadastrar Grupos: a contagem por grupo aparece na lista da esquerda.

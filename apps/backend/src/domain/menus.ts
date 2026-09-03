@@ -382,6 +382,14 @@ export const MENUS: MenuDef[] = [
     ordem: 20,
     // GET de LISTA fica FORA (catálogo, leitura aberta). Só escrita e leituras de edição.
     operacoes: [
+      // GRUPOS DE CLIENTE (cenário 2): a escrita é reivindicada por ESTE menu, e não por um menu
+      // novo, por decisão do diretor. O grupo mora dentro da tela de Clientes, e quem administra
+      // cliente administra grupo. A LEITURA fica fora, como o resto do catálogo: a ficha do cliente
+      // mostra o grupo, e reivindicá-la faria a ficha tomar 403 de quem só consulta.
+      "GruposClienteController.criar",
+      "GruposClienteController.atualizar",
+      "GruposClienteController.previaMembros",
+      "GruposClienteController.definirMembros",
       "ClientesController.create",
       "ClientesController.update",
       "ClientesController.definirVinculo",

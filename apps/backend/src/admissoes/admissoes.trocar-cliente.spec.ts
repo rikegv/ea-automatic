@@ -7,6 +7,7 @@ import {
   cargos,
   clientes,
   frentesAdmissao,
+  grupoClienteMembros,
   reguaDocumental,
 } from "../db/schema";
 import type { AuthUser } from "../auth/auth.types";
@@ -63,6 +64,9 @@ function makeDb(
       if (tabela === cargos) return [{ id: "cargo-novo", nome: "Auxiliar de Produção" }];
       // Régua documental do par NOVO: `n = 0` significa par sem régua, que a troca barra.
       if (tabela === reguaDocumental) return [{ n: temRegua ? 12 : 0 }];
+      // GRUPO do cliente NOVO (cenário 2, etapa 3): a troca reescreve o carimbo, então este fake
+      // precisa responder de qual grupo o cliente novo é membro.
+      if (tabela === grupoClienteMembros) return [{ grupoId: "grupo-do-cliente-novo" }];
       return [];
     };
     b.where = () => Promise.resolve(linhas());
@@ -131,6 +135,16 @@ describe("trocarCliente", () => {
       trocaClientePor: MASTER.id,
     });
     expect(troca?.valores.trocaClienteEm).toBeInstanceOf(Date);
+  });
+
+  it("REESCREVE o carimbo do grupo, porque o grupo era do cliente errado", async () => {
+    // É o ÚNICO caminho do sistema que reescreve `grupo_cliente_id`. Trocar o cliente é dizer que a
+    // admissão nunca foi daquele cliente, então o grupo carimbado também era o errado.
+    const { db, updates } = makeDb(EM_ANDAMENTO);
+    const svc = new AdmissoesService(db as never);
+    await svc.trocarCliente(ADM_ID, novo, MASTER);
+    const daAdmissao = updates.find((u) => u.tabela === admissoes);
+    expect(daAdmissao?.valores.grupoClienteId).toBe("grupo-do-cliente-novo");
   });
 
   it("registra os DOIS eventos no histórico, com o de/para legível", async () => {

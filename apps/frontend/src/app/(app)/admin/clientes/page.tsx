@@ -11,6 +11,8 @@ import { Pill, type PillTone } from "@/components/ui/Pill";
 import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
 import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
 import { LojasDoCliente } from "@/components/admin/LojasDoCliente";
+import { GrupoDoCliente } from "@/components/admin/GrupoDoCliente";
+import { GruposClienteLivreto } from "@/components/admin/GruposClienteLivreto";
 
 interface Cliente {
   codCliente: string;
@@ -113,6 +115,10 @@ export default function ClientesPage() {
   const [editando, setEditando] = useState<string | null>(null);
   // codCliente com a ficha (linha) expandida.
   const [expandido, setExpandido] = useState<string | null>(null);
+  /* O livreto dos GRUPOS (cenário 2). Vive DENTRO da tela de Clientes, e não num menu novo: quem
+     administra cliente administra grupo (decisão do diretor), e um menu novo nasceria invisível
+     para todo mundo até ser liberado um a um (§A.23). */
+  const [gruposAberto, setGruposAberto] = useState(false);
   // Opções de vínculo (cacheadas no mount) e a opção escolhida no select da edição.
   const [opcoesVinculo, setOpcoesVinculo] = useState<VinculoOpcao[]>([]);
   const [vinculoSel, setVinculoSel] = useState<string>("");
@@ -476,6 +482,12 @@ export default function ClientesPage() {
 
       {/* Filtros da lista: status (ativos/inativos/todos) + tipo, busca e pendência (E lógico). */}
       <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
+        {/* CADASTRAR GRUPOS: o cenário 2 mora aqui, ao lado dos filtros de cliente, porque o grupo é
+            uma camada por cima dos clientes que esta tela já administra. */}
+        <Button onClick={() => setGruposAberto(true)} className="px-4 py-1.5 text-[13px]">
+          Cadastrar Grupos
+        </Button>
+        <span aria-hidden className="mx-1 h-5 w-px bg-[var(--border)]" />
         {(["ativos", "inativos", "todos"] as Filtro[]).map((f) => (
           <button
             key={f}
@@ -597,6 +609,7 @@ export default function ClientesPage() {
                       onEditar={() => iniciarEdicao(c)}
                       onInativar={() => inativar(c)}
                       onReativar={() => reativar(c)}
+                      onAbrirGrupos={() => setGruposAberto(true)}
                     />
                   );
                 })
@@ -605,6 +618,8 @@ export default function ClientesPage() {
           </table>
         </div>
       </GlassCard>
+
+      {gruposAberto && <GruposClienteLivreto onFechar={() => setGruposAberto(false)} />}
     </>
   );
 }
@@ -653,6 +668,7 @@ function FragmentRow({
   onEditar,
   onInativar,
   onReativar,
+  onAbrirGrupos,
 }: {
   c: Cliente;
   aberto: boolean;
@@ -660,6 +676,8 @@ function FragmentRow({
   onEditar: () => void;
   onInativar: () => void;
   onReativar: () => void;
+  /** Abre o livreto de grupos a partir da ficha, para não existir um segundo lugar de edição. */
+  onAbrirGrupos: () => void;
 }) {
   return (
     <>
@@ -751,6 +769,10 @@ function FragmentRow({
                   própria, porque a loja não existe fora do cliente. Carrega sob demanda: só quando
                   esta ficha abre. */}
               <LojasDoCliente codCliente={c.codCliente} />
+              {/* O GRUPO do cenário 2, em leitura. Cenário 1 (lojas) e cenário 2 (grupo) convivem na
+                  mesma ficha e respondem perguntas diferentes: a loja diz em qual unidade DESTE
+                  cliente a pessoa trabalha, o grupo diz de qual regional este CNPJ faz parte. */}
+              <GrupoDoCliente codCliente={c.codCliente} onAbrirGrupos={onAbrirGrupos} />
             </div>
           </td>
         </tr>
