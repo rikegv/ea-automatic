@@ -12385,3 +12385,80 @@ Typecheck 0 nos dois apps, lint limpo nos arquivos da frente, **1.798 testes no 
 frontend**. Homologação (3120) rebuildada e reiniciada, health 200. **Produção segue em `ff46b3e`,
 sem uma linha do cenário 2.** O caminho de validação é Menu Gerencial, cartão Clientes, botão
 Cadastrar Grupos: a contagem por grupo aparece na lista da esquerda.
+
+## 03/09/2026 (noite), o cenário 2 em produção, e dois contadores que mentiam há dias
+
+Dia fechado com três coisas no ar: as duas correções de contagem e a leitura por grupo. **Produção
+recebeu tudo; o gate passou verde antes.**
+
+### O DEFEITO QUE APARECEU CAÇANDO OUTRO
+
+Ao varrer o padrão que causou o "0 admissões" do livreto (entrada da tarde), encontrei o MESMO
+descuido em outra frente, **com número errado visível em produção há dias**: a tela de gestão do
+iFractal mostrava **96 admissões para TODOS os 247 clientes**. 96 é o total de frentes iFractal da
+base inteira, repetido linha a linha.
+
+**A régua, medida e não deduzida.** O drizzle omite a qualificação da tabela quando a consulta não
+tem join, e só na lista do `select`; no `where` ele qualifica. Daí os três desfechos que encontrei:
+
+| Onde | O que a comparação virava | Efeito |
+|---|---|---|
+| Livreto de grupos | `grupo_id = id` da própria tabela | sempre ZERO |
+| iFractal | `a.cod_cliente = a.cod_cliente` | sempre VERDADEIRO, o total em toda linha |
+| Central de Candidatos, contador | `candidato_id = id` | sempre ZERO |
+| Central de Candidatos, os dois filtros | qualificado, no `where` | **corretos desde sempre** |
+
+**Correção de rota minha, registrada:** eu havia dito ao diretor que os três pontos da Central de
+Candidatos estavam quebrados. Medindo o SQL gerado, só o contador estava. E a varredura anterior, que
+eu havia dado como completa, tinha rodado no diretório errado: o `ugrep` avisou "No such file or
+directory" e eu li o vazio como ausência. Refeita, ela encontrou o iFractal.
+
+Os dois consertos viraram `left join` com `count`, que sai qualificado por construção. Prova contra a
+produção com um SQL de referência à mão como terceiro juiz: antes, **um único valor** (96) em 247
+linhas; depois, **26/18/10/6/5/3/2/1/0**, zero divergência, e a soma das linhas dá exatamente 96.
+
+### A ETAPA 4 MUDOU DE ENDEREÇO, E O MOTIVO FOI MEDIDO
+
+O desenho pedia a leitura por grupo no Alto Volume. A investigação de impacto (§A.27) mostrou que ela
+não cabe lá: **todo projeto é de UM cliente só**, então o grupo dentro de um projeto seria sempre uma
+linha. E pior, medido: **zero das 220 admissões carimbadas está em algum projeto**, e nenhum dos 6
+grupos tem cliente com projeto. A tela mostraria ZERO exatamente no exemplo que o diretor deu.
+
+Levado o mapa, ele decidiu: a leitura vai **só no Gerenciador**, que já lista todas as admissões com
+filtro e KPI. Nada foi construído no Alto Volume.
+
+**A coluna Grupo foi construída, validada e retirada**, também por decisão dele: enquanto o
+`nome_operacao` não for substituído pelo nome do grupo, Cliente e Grupo dizem quase a mesma coisa em
+duas colunas. O filtro, que é o que responde a pergunta, ficou. A API continua enviando o dado, então
+a coluna volta em uma linha quando a substituição acontecer.
+
+### O QUE SUBIU, E AS PROVAS
+
+**Migration 0093 aplicada limpa:** 94 migrations, coluna nulável, FK em `restrict`, 2.797 admissões
+preservadas. O journal estava coerente (o carimbo da 0093 é maior que o da última aplicada), então o
+migrator aplicou só ela, sem o conserto manual que a subida da Central de Candidatos exigiu em 28/08.
+
+**Os dados do cenário 2 em produção:** 34 apelidos limpos (aqui só espaço à direita, o sufixo `F.A`
+existia apenas na homologação), **6 grupos criados, 82 vínculos** e **220 admissões carimbadas**.
+2.577 não foram tocadas, porque o cliente não tem grupo.
+
+**§A.27, as 29 medidas do ADM idênticas antes e depois**, com `diff` limpo: admissões 2.797, farol,
+as cinco frentes (total e concluídas), sinalizador, Clicksign, lojas e vínculos de projeto. A única
+dimensão que se moveu é a nova. Clicksign e Pandapé não foram tocados, conferido por `git status` nas
+duas pastas.
+
+**Pelo serviço real, contra a produção:** o Gerenciador sem filtro devolve 2.787, e filtrando
+RAIA CAGC CORIFEU devolve **164**, com os KPIs recalculados sobre o grupo (129 concluídas + 35
+declínios). O carimbo por grupo fecha: 164, 24, 17, 10, 3, 2.
+
+### GATE E ESTADO
+
+Typecheck 0 nos dois apps, lint limpo, **1.798 testes no backend** e **156 no frontend**. Uma falha
+apareceu no caminho e era a esperada: o teste que tranca a lista fechada de colunas ordenáveis, que
+passou a ter "grupo". A trava foi ajustada, com o motivo escrito nela.
+
+Serviços em 200: backend 3011, frontend 3020, produção 3010 e ai-service 8000. O build do frontend
+rodou com o serviço **parado**, porque buildar com ele no ar derruba a 3010.
+
+**Fora, por decisão do diretor:** substituir o nome de operação pelo nome do grupo, a coluna Grupo e
+a etapa 5 (coluna Projeto nas frentes de trabalho).
