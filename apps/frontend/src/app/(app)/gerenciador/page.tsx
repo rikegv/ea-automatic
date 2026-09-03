@@ -37,6 +37,11 @@ interface AdmRow {
    * que responde "quantas são do Corifeu". A coluna volta quando a substituição acontecer.
    */
   grupoNome?: string | null;
+  /**
+   * PROJETO de Alto Volume (etapa 5). `null` = fora de projeto, e a tela escreve MATRIZ, que é o
+   * nome que a operação dá para isso.
+   */
+  projetoNome?: string | null;
   cargoNome: string;
   tipoContrato: string | null;
   dataAdmissao: string | null;
@@ -136,8 +141,8 @@ function frenteTone(f?: { status: string; concluida: boolean }): PillTone {
 // esmagar. As de texto (Candidato/Cliente/Cargo/Contrato) têm piso em px (nunca truncam "AJUDANTE
 // GERAL" nem o nome) e crescem em `fr`; as de status têm largura para o rótulo mais longo.
 const GRID =
-  "minmax(232px,1.8fr) minmax(168px,1.2fr) minmax(190px,1.1fr) minmax(120px,0.9fr) 108px 160px 200px 140px 150px 160px 100px";
-const GRID_MIN = "min-w-[1880px]";
+  "minmax(232px,1.8fr) minmax(168px,1.2fr) minmax(176px,1fr) minmax(190px,1.1fr) minmax(120px,0.9fr) 108px 160px 200px 140px 150px 160px 100px";
+const GRID_MIN = "min-w-[2056px]";
 
 export default function GerenciadorPage() {
   const { token, isAdmin } = useAuth();
@@ -157,6 +162,8 @@ export default function GerenciadorPage() {
   const [cargos, setCargos] = useState<CargoLite[]>([]);
   const [grupoIds, setGrupoIds] = useState<string[]>([]);
   const [grupos, setGrupos] = useState<GrupoLite[]>([]);
+  const [projetoIds, setProjetoIds] = useState<string[]>([]);
+  const [projetos, setProjetos] = useState<{ id: string; nome: string }[]>([]);
   const [tipoContratos, setTipoContratos] = useState<string[]>([]);
   const [farol, setFarol] = useState<string[]>([]);
   const [sinalizadores, setSinalizadores] = useState<string[]>([]);
@@ -192,6 +199,11 @@ export default function GerenciadorPage() {
     apiFetch<GrupoLite[]>("/admin/grupos-cliente", { token })
       .then(setGrupos)
       .catch(() => setGrupos([]));
+    // PROJETOS (etapa 5): catálogo estável para o filtro, e não derivado da página carregada, que
+    // encolheria a lista assim que o primeiro projeto fosse escolhido.
+    apiFetch<{ id: string; nome: string }[]>("/admin/alto-volume", { token })
+      .then((ps) => setProjetos(ps.map((p) => ({ id: p.id, nome: p.nome }))))
+      .catch(() => setProjetos([]));
   }, [token]);
 
   // debounce da busca global
@@ -251,6 +263,7 @@ export default function GerenciadorPage() {
     if (codClientes.length) qs.set("codCliente", codClientes.join(","));
     if (cargoIds.length) qs.set("cargoId", cargoIds.join(","));
     if (grupoIds.length) qs.set("grupoClienteId", grupoIds.join(","));
+    if (projetoIds.length) qs.set("projetoId", projetoIds.join(","));
     if (tipoContratos.length) qs.set("tipoContrato", tipoContratos.join(","));
     if (farol.length) qs.set("farol", farol.join(","));
     if (sinalizadores.length) qs.set("sinalizador", valoresDoFiltroSinal(sinalizadores).join(","));
@@ -269,6 +282,7 @@ export default function GerenciadorPage() {
     codClientes,
     cargoIds,
     grupoIds,
+    projetoIds,
     tipoContratos,
     farol,
     sinalizadores,
@@ -315,6 +329,7 @@ export default function GerenciadorPage() {
     setCodClientes([]);
     setCargoIds([]);
     setGrupoIds([]);
+    setProjetoIds([]);
     setTipoContratos([]);
     setFarol([]);
     setSinalizadores([]);
@@ -330,6 +345,7 @@ export default function GerenciadorPage() {
     codClientes.length ||
     cargoIds.length ||
     grupoIds.length ||
+    projetoIds.length ||
     tipoContratos.length ||
     farol.length ||
     sinalizadores.length ||
@@ -345,6 +361,7 @@ export default function GerenciadorPage() {
     (codClientes.length ? 1 : 0) +
     (cargoIds.length ? 1 : 0) +
     (grupoIds.length ? 1 : 0) +
+    (projetoIds.length ? 1 : 0) +
     (tipoContratos.length ? 1 : 0) +
     (farol.length ? 1 : 0) +
     (sinalizadores.length ? 1 : 0) +
@@ -407,6 +424,16 @@ export default function GerenciadorPage() {
    * não do histórico: as admissões já carimbadas continuam mostrando o nome dele na coluna, porque o
    * carimbo é o grupo da época. Esconder as duas coisas juntas apagaria história que aconteceu.
    */
+  /** MATRIZ vem primeiro: é a resposta mais provável, e é metade da pergunta do filtro. */
+  const projetoOpts = useMemo(
+    () => [
+      { value: "MATRIZ", label: "MATRIZ" },
+      ...projetos
+        .map((p) => ({ value: p.id, label: p.nome }))
+        .sort((a, b) => a.label.localeCompare(b.label, "pt-BR")),
+    ],
+    [projetos],
+  );
   const grupoOpts = useMemo(
     () => grupos.filter((g) => g.ativo).map((g) => ({ value: g.id, label: g.nome })),
     [grupos],
@@ -513,6 +540,15 @@ export default function GerenciadorPage() {
                   options={cargoOpts}
                   placeholder="Todos"
                   ariaLabel="Cargo"
+                />
+              </FiltroCampo>
+              <FiltroCampo label="Projeto">
+                <MultiSelect
+                  values={projetoIds}
+                  onChange={resetPage(setProjetoIds)}
+                  options={projetoOpts}
+                  placeholder="Todos"
+                  ariaLabel="Projeto de alto volume"
                 />
               </FiltroCampo>
               <FiltroCampo label="Grupo">
@@ -634,6 +670,10 @@ export default function GerenciadorPage() {
                 <ColunaOrdenavel ord={ord} chave="cliente">
                   Cliente
                 </ColunaOrdenavel>
+                {/* PROJETO (etapa 5): de qual projeto de Alto Volume a admissão é, ou MATRIZ. */}
+                <ColunaOrdenavel ord={ord} chave="projeto">
+                  Projeto
+                </ColunaOrdenavel>
                 <ColunaOrdenavel ord={ord} chave="cargo">
                   Cargo
                 </ColunaOrdenavel>
@@ -699,6 +739,14 @@ export default function GerenciadorPage() {
                         >
                           {r.clienteOperacao || r.clienteRazao}
                         </div>
+                      </div>
+                      {/* MATRIZ não é dado faltando: é o nome do que existe fora de projeto, então
+                          vem no mesmo tom das demais células. */}
+                      <div
+                        className="meta truncate text-center"
+                        title={r.projetoNome || "MATRIZ"}
+                      >
+                        {r.projetoNome || "MATRIZ"}
                       </div>
                       <div className="meta truncate text-center" title={r.cargoNome}>
                         {r.cargoNome}

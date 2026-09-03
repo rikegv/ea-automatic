@@ -200,6 +200,8 @@ export const COLUNAS_ORDENAVEIS_GERENCIADOR = [
   // GRUPO (cenário 2, etapa 4): ordena pelo NOME do grupo, que é o que a célula mostra. Quem não tem
   // grupo fica junto no fim, e não espalhado, porque `null` ordena em bloco.
   "grupo",
+  // PROJETO (etapa 5): mesma régua do grupo, e vem desta consulta pelo `leftJoin`, não depois.
+  "projeto",
 ] as const;
 
 /**
@@ -231,6 +233,7 @@ function ordemDaLista(ordenarPor?: string, direcao?: "asc" | "desc") {
     dataAdmissao: admissoes.dataAdmissao,
     status: admissoes.farolGlobal,
     grupo: gruposCliente.nome,
+    projeto: projetosAltoVolume.nome,
   }[ordenarPor];
   if (!coluna) return [padrao];
   return [direcao === "asc" ? asc(coluna) : desc(coluna), padrao];
@@ -1672,6 +1675,12 @@ export class AdmissoesService {
         // não por subconsulta, pelo motivo já pago duas vezes: subconsulta correlacionada na lista do
         // select sai sem qualificar a tabela e devolve número errado em silêncio.
         grupoNome: gruposCliente.nome,
+        /*
+         * PROJETO (etapa 5): o nome do projeto de Alto Volume, ou null. A tela escreve "MATRIZ" no
+         * null, que é o rótulo que a operação usa para quem não é de projeto. `admissao_projeto` tem
+         * unique em `admissao_id`, então o left join não multiplica linha.
+         */
+        projetoNome: projetosAltoVolume.nome,
         concluido: concluidoExpr,
         criadoEm: admissoes.criadoEm,
       })
@@ -1682,6 +1691,8 @@ export class AdmissoesService {
       // LEFT e não INNER: a esmagadora maioria das admissões não tem grupo, e um inner join aqui
       // sumiria com elas da tela. Grupo é dimensão de leitura, não recorte de quem existe.
       .leftJoin(gruposCliente, eq(gruposCliente.id, admissoes.grupoClienteId))
+      .leftJoin(admissaoProjeto, eq(admissaoProjeto.admissaoId, admissoes.id))
+      .leftJoin(projetosAltoVolume, eq(projetosAltoVolume.id, admissaoProjeto.projetoId))
       .where(listWhere.length ? and(...listWhere) : undefined)
       .orderBy(...ordemDaLista(filtros.ordenarPor, filtros.direcao))
       .limit(pageSize)

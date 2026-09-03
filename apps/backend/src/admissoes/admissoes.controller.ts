@@ -55,6 +55,7 @@ export class AdmissoesController {
     @Query("codCliente") codCliente?: string,
     @Query("cargoId") cargoId?: string,
     @Query("grupoClienteId") grupoClienteId?: string,
+    @Query("projetoId") projetoId?: string,
     @Query("tipoContrato") tipoContrato?: string,
     @Query("farol") farol?: string,
     @Query("sinalizador") sinalizador?: string,
@@ -75,6 +76,9 @@ export class AdmissoesController {
       // GRUPO (cenário 2, etapa 4): múltiplo desde o nascimento (§A.28), pelo mesmo `parseMulti` dos
       // demais. Vazio ou ausente = sem filtro, como todos os outros.
       grupoClienteId: parseMulti(grupoClienteId),
+      // PROJETO (etapa 5): múltiplo como os demais. `MATRIZ` viaja como valor e é interpretado nos
+      // filtros, onde ele vira a ausência de vínculo.
+      projetoId: parseMulti(projetoId),
       tipoContrato: parseMulti(tipoContrato),
       farol: parseMulti(farol),
       sinalizador: parseMulti(sinalizador),

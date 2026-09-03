@@ -21,6 +21,7 @@ import {
   notInArray,
   or,
   sql,
+  type SQL,
 } from "drizzle-orm";
 import {
   normalizeCpf,
@@ -40,6 +41,7 @@ import {
   admissoes,
   candidatoAlteracoesLog,
   candidatos,
+  admissaoProjeto,
   cargos,
   clientes,
   motivosDeclinio,
@@ -52,6 +54,7 @@ import {
   frenteStatusCatalogo,
   frenteStatusEventos,
   frentesAdmissao,
+  projetosAltoVolume,
   naoConformidades,
   passagemAceites,
   reguaDocumental,
@@ -117,6 +120,12 @@ interface IfractalResumo {
 export interface EsteiraFiltros {
   // Multi-select (Bloco B): OU dentro do mesmo filtro (inArray). Vazio/ausente = sem filtro.
   codCliente?: string[];
+  /**
+   * PROJETO DE ALTO VOLUME (etapa 5). Aceita vários, e o valor especial `MATRIZ` significa "sem
+   * projeto nenhum": é o caso da esmagadora maioria, e sem ele não haveria como perguntar "quem NÃO
+   * é de projeto?", que é metade da pergunta.
+   */
+  projetoId?: string[];
   status?: string[];
   /**
    * Três intervalos com NOME PRÓPRIO, no lugar do antigo `from`/`to` (que filtrava por `criadoEm` sob
@@ -246,6 +255,35 @@ export class EsteiraService {
     ];
     if (filtros.codCliente?.length) {
       clientePeriodo.push(inArray(admissoes.codCliente, filtros.codCliente));
+    }
+    /*
+     * PROJETO (etapa 5). Entra junto do cliente, no filtro COMPARTILHADO por itens e KPIs: é filtro
+     * de conjunto, então os cards contam sobre ele, como já contam sobre o cliente.
+     *
+     * `EXISTS` e não join, pelo mesmo motivo já registrado para exame e integração: um join a mais
+     * na consulta principal mudaria o plano dela para todas as abas. `admissao_projeto` tem unique em
+     * `admissao_id`, então o EXISTS responde sim ou não, nunca duplica linha.
+     *
+     * MATRIZ é a AUSÊNCIA de vínculo, e por isso é `NOT EXISTS`. Escolher MATRIZ junto de projetos é
+     * OU, que é o que o multi-select promete: "os deste projeto MAIS os que não são de projeto".
+     */
+    if (filtros.projetoId?.length) {
+      const ids = filtros.projetoId.filter((v) => v !== "MATRIZ");
+      const querMatriz = filtros.projetoId.includes("MATRIZ");
+      const condicoes: SQL[] = [];
+      if (ids.length > 0) {
+        condicoes.push(
+          sql`EXISTS (SELECT 1 FROM admissao_projeto ap WHERE ap.admissao_id = ${admissoes.id}
+                AND ap.projeto_id IN (${sql.join(ids.map((id) => sql`${id}::uuid`), sql`, `)}))`,
+        );
+      }
+      if (querMatriz) {
+        condicoes.push(
+          sql`NOT EXISTS (SELECT 1 FROM admissao_projeto ap WHERE ap.admissao_id = ${admissoes.id})`,
+        );
+      }
+      if (condicoes.length === 1) clientePeriodo.push(condicoes[0]);
+      else if (condicoes.length > 1) clientePeriodo.push(or(...condicoes)!);
     }
     /**
      * FILTROS DE DATA (OST dos filtros da Esteira). Três intervalos, cada um com nome próprio na
@@ -429,12 +467,23 @@ export class EsteiraService {
         // Herdado do CLIENTE, para a coluna Tipo De Marcação da aba iFractal. Vem no select base
         // porque o join com `clientes` já existe: não custa consulta nova.
         tipoMarcacao: clientes.tipoMarcacao,
+        /*
+         * PROJETO (etapa 5): o nome do projeto de Alto Volume a que a admissão pertence, ou nulo. A
+         * tela mostra "MATRIZ" no nulo, e o rótulo mora LÁ, não aqui: o backend responde o fato (não
+         * tem projeto), a tela dá o nome que a operação usa para isso.
+         *
+         * LEFT JOIN e não subconsulta: `admissao_projeto` tem unique em `admissao_id`, então não
+         * multiplica linha, e é a forma que sai qualificada por construção.
+         */
+        projetoNome: projetosAltoVolume.nome,
       })
       .from(frentesAdmissao)
       .innerJoin(admissoes, eq(frentesAdmissao.admissaoId, admissoes.id))
       .innerJoin(candidatos, eq(admissoes.candidatoCpf, candidatos.cpf))
       .innerJoin(clientes, eq(admissoes.codCliente, clientes.codCliente))
       .innerJoin(cargos, eq(admissoes.cargoId, cargos.id))
+      .leftJoin(admissaoProjeto, eq(admissaoProjeto.admissaoId, admissoes.id))
+      .leftJoin(projetosAltoVolume, eq(projetosAltoVolume.id, admissaoProjeto.projetoId))
       .where(and(...itensWhere))
       .orderBy(asc(admissoes.criadoEm));
 
@@ -513,6 +562,9 @@ export class EsteiraService {
         sinalizador: r.sinalizador,
         pausadaEm: r.pausadaEm,
         matricula: r.matricula,
+        // PROJETO (etapa 5): nome do projeto de Alto Volume, ou null. A tela escreve "MATRIZ" no
+        // null, que é o rótulo que a operação usa para quem não é de projeto.
+        projetoNome: r.projetoNome,
         farolGlobal: r.farolGlobal,
         // Sobe no BASE (antes ia só nas abas Auditoria e Exame): é o que alinha o pill da coluna
         // "Pendências Obrigatórias" com o badge que abre a lista, em TODAS as abas.

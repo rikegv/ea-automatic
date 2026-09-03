@@ -82,6 +82,7 @@ export class EsteiraController {
   listar(
     @Param("frente") frente: string,
     @Query("codCliente") codCliente?: string,
+    @Query("projetoId") projetoId?: string,
     @Query("status") status?: string,
     @Query("admissaoDe") admissaoDe?: string,
     @Query("admissaoAte") admissaoAte?: string,
@@ -94,6 +95,9 @@ export class EsteiraController {
   ) {
     return this.esteira.listar(frente, {
       codCliente: parseMulti(codCliente),
+      // PROJETO (etapa 5): múltiplo desde o nascimento (§A.28), pelo mesmo `parseMulti` dos demais.
+      // O valor `MATRIZ` viaja como qualquer outro e é interpretado no serviço.
+      projetoId: parseMulti(projetoId),
       status: parseMulti(status),
       admissaoDe,
       admissaoAte,

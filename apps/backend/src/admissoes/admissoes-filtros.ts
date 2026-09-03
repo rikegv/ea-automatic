@@ -28,6 +28,13 @@ export interface ListarAdmissoesFiltros {
    * Entra no `base`, junto de cliente e cargo, porque é filtro de CONJUNTO: os KPIs contam sobre ele.
    */
   grupoClienteId?: string[];
+  /**
+   * PROJETO DE ALTO VOLUME (etapa 5). Aceita vários, e o valor especial `MATRIZ` significa "sem
+   * projeto nenhum": é o caso da esmagadora maioria, e sem ele não haveria como perguntar "quem NÃO
+   * é de projeto?", que é metade da pergunta. Entra no `base`, junto de cliente, cargo e grupo,
+   * porque é filtro de CONJUNTO: os KPIs contam sobre ele.
+   */
+  projetoId?: string[];
   tipoContrato?: string[];
   farol?: string[];
   sinalizador?: string[];
@@ -77,6 +84,29 @@ export function condicoesDoFiltro(filtros: ListarAdmissoesFiltros): {
   if (filtros.cargoId?.length) base.push(inArray(admissoes.cargoId, filtros.cargoId));
   if (filtros.grupoClienteId?.length) {
     base.push(inArray(admissoes.grupoClienteId, filtros.grupoClienteId));
+  }
+  /*
+   * PROJETO: `EXISTS` sobre `admissao_projeto`, que tem unique em `admissao_id` e por isso responde
+   * sim ou não sem duplicar linha. MATRIZ é a AUSÊNCIA de vínculo, então é `NOT EXISTS`, e escolher
+   * MATRIZ junto de projetos é OU, que é o que o multi-select promete.
+   */
+  if (filtros.projetoId?.length) {
+    const ids = filtros.projetoId.filter((v) => v !== "MATRIZ");
+    const querMatriz = filtros.projetoId.includes("MATRIZ");
+    const condicoes: SQL[] = [];
+    if (ids.length > 0) {
+      condicoes.push(
+        sql`EXISTS (SELECT 1 FROM admissao_projeto ap WHERE ap.admissao_id = ${admissoes.id}
+              AND ap.projeto_id IN (${sql.join(ids.map((id) => sql`${id}::uuid`), sql`, `)}))`,
+      );
+    }
+    if (querMatriz) {
+      condicoes.push(
+        sql`NOT EXISTS (SELECT 1 FROM admissao_projeto ap WHERE ap.admissao_id = ${admissoes.id})`,
+      );
+    }
+    if (condicoes.length === 1) base.push(condicoes[0]);
+    else if (condicoes.length > 1) base.push(or(...condicoes)!);
   }
   if (filtros.tipoContrato?.length) base.push(inArray(admissoes.tipoContrato, filtros.tipoContrato));
   if (filtros.sinalizador?.length) {

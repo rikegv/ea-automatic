@@ -115,6 +115,9 @@ describe("a lista de colunas é fechada", () => {
       // GRUPO (cenário 2, etapa 4): entrou porque VEM DESTA CONSULTA, pelo `leftJoin` da coluna, e
       // não depois como as colunas de frente. É a régua deste teste, não uma exceção a ela.
       "grupo",
+      // PROJETO (etapa 5): entra pela MESMA régua, e pelo mesmo motivo. `admissao_projeto` tem unique
+      // em `admissao_id`, então o join não multiplica linha e a ordem é a da consulta paginada.
+      "projeto",
     ]);
     // Auditoria, Exame e Cadastro são carregadas depois, só para as 20 linhas da página: ordenar por
     // elas seria exatamente a ordem falsa que esta frente veio corrigir.

@@ -130,6 +130,11 @@ interface StatusCat {
 interface EsteiraItem {
   admissaoId: string;
   frenteId: string;
+  /**
+   * PROJETO de Alto Volume (etapa 5). `null` = a admissão não está em projeto nenhum, e a tela
+   * escreve MATRIZ, que é o nome que a operação dá para isso.
+   */
+  projetoNome?: string | null;
   /** Só na aba IFRACTAL. `tipoMarcacao` é HERDADO do cliente (leitura, nunca cópia). */
   tipoMarcacao?: TipoMarcacao | null;
   ifractalLogin?: string | null;
@@ -420,6 +425,15 @@ export default function EsteiraPage() {
 
   // Filtros (F7), agora no modal premium (Bloco B): cliente e status multi-select.
   const [codClientes, setCodClientes] = useState<string[]>([]);
+  const [projetoIds, setProjetoIds] = useState<string[]>([]);
+  /**
+   * O CATÁLOGO DE PROJETOS vem do endpoint do Alto Volume, e NÃO dos itens da fila.
+   *
+   * Derivar da fila (como fazem contrato e cargo) encolheria a lista assim que o primeiro projeto
+   * fosse escolhido, e não haveria como acrescentar o segundo sem limpar o filtro. A leitura da
+   * lista de projetos é aberta a quem está autenticado, como os demais catálogos.
+   */
+  const [projetos, setProjetos] = useState<{ id: string; nome: string }[]>([]);
   const [statusFiltro, setStatusFiltro] = useState<string[]>([]);
   /**
    * TRÊS INTERVALOS COM NOME PRÓPRIO, no lugar do antigo "Período" (que filtrava por quando a
@@ -504,6 +518,7 @@ export default function EsteiraPage() {
     setLoadError(null);
     const qs = new URLSearchParams();
     if (codClientes.length) qs.set("codCliente", codClientes.join(","));
+    if (projetoIds.length) qs.set("projetoId", projetoIds.join(","));
     if (statusFiltro.length) qs.set("status", statusFiltro.join(","));
     if (admissaoDe) qs.set("admissaoDe", admissaoDe);
     if (admissaoAte) qs.set("admissaoAte", admissaoAte);
@@ -527,6 +542,7 @@ export default function EsteiraPage() {
     token,
     rota,
     codClientes,
+    projetoIds,
     statusFiltro,
     admissaoDe,
     admissaoAte,
@@ -567,6 +583,7 @@ export default function EsteiraPage() {
 
   function limparFiltros() {
     setCodClientes([]);
+    setProjetoIds([]);
     setStatusFiltro([]);
     setAdmissaoDe("");
     setAdmissaoAte("");
@@ -587,6 +604,7 @@ export default function EsteiraPage() {
   }
   const temFiltro = Boolean(
     codClientes.length ||
+    projetoIds.length ||
       statusFiltro.length ||
       admissaoDe ||
       admissaoAte ||
@@ -610,6 +628,7 @@ export default function EsteiraPage() {
   // (candQuery) vive fora do modal, na barra do cabeçalho, e NÃO entra no badge do gatilho.
   const filtroCount =
     (codClientes.length ? 1 : 0) +
+    (projetoIds.length ? 1 : 0) +
     (statusFiltro.length ? 1 : 0) +
     (admissaoDe || admissaoAte ? 1 : 0) +
     (exameDe || exameAte ? 1 : 0) +
@@ -890,6 +909,30 @@ export default function EsteiraPage() {
    * escolher "Temporário" esvaziaria as opções de cargo que não fossem de temporário, e não haveria
    * como trocar de ideia sem limpar tudo.
    */
+  /* Catálogo de projetos para o filtro (etapa 5). Uma vez, como os demais catálogos. */
+  useEffect(() => {
+    if (!token) return;
+    apiFetch<{ id: string; nome: string }[]>("/admin/alto-volume", { token })
+      .then((ps) => setProjetos(ps.map((p) => ({ id: p.id, nome: p.nome }))))
+      .catch(() => setProjetos([]));
+  }, [token]);
+
+  /**
+   * AS OPÇÕES DO FILTRO DE PROJETO: os projetos do catálogo mais MATRIZ.
+   *
+   * MATRIZ vem PRIMEIRO e é a resposta mais provável: quase toda admissão está fora de projeto, e
+   * "quem não é de projeto" é metade da pergunta que este filtro existe para responder.
+   */
+  const projetoOptions = useMemo(
+    () => [
+      { value: "MATRIZ", label: "MATRIZ" },
+      ...projetos
+        .map((p) => ({ value: p.id, label: p.nome }))
+        .sort((a, b) => a.label.localeCompare(b.label, "pt-BR")),
+    ],
+    [projetos],
+  );
+
   const opcoesDaFila = useMemo(() => {
     const distintos = (
       pega: (i: EsteiraItem) => string | null | undefined,
@@ -1012,6 +1055,9 @@ export default function EsteiraPage() {
       { chave: "matricula", tipo: "texto", valor: (i) => i.matricula },
       { chave: "cliente", tipo: "texto", valor: (i) => i.clienteOperacao || i.clienteRazao },
       { chave: "cargo", tipo: "texto", valor: (i) => i.cargoNome },
+      // PROJETO (etapa 5): ordena pelo texto que a célula mostra, e quem não tem projeto ordena por
+      // "MATRIZ", junto, em vez de espalhado como o vazio ficaria.
+      { chave: "projeto", tipo: "texto", valor: (i) => i.projetoNome || "MATRIZ" },
       { chave: "data", tipo: "data", valor: (i) => i.dataAdmissao },
       // COLUNAS DA INTEGRAÇÃO (OST dos filtros e ordenação). Só a aba de Integração as desenha, mas
       // declará-las aqui é inofensivo e mantém a lista de colunas num lugar só, como já se fez com
@@ -1098,6 +1144,9 @@ export default function EsteiraPage() {
     // Cabe o cabeçalho "MATRÍCULA" com a seta de ordenação e o vazio ("não informado", §A.11).
     matricula: "130px",
     data: "110px",
+    // PROJETO (etapa 5): cabe "MATRIZ" e o nome de projeto mais longo da base ("Temporada De
+    // Setembro 2026" mede 168px), com a seta de ordenação. Medida de conteúdo, não estimativa.
+    projeto: "minmax(176px,1fr)",
     status: "210px",
     pend: "168px",
     acoes: "120px",
@@ -1154,6 +1203,9 @@ export default function EsteiraPage() {
           // agora vai para o seletor de status e para as ações.
           "minmax(130px,0.7fr)",
           COL.cargo,
+          // PROJETO (etapa 5): mesma posição das outras abas, para a máscara continuar única
+          // (§A.12). Esta aba já é a mais larga, então a coluna entra no piso, não no aperto.
+          COL.projeto,
           // Data de admissão (bloco do candidato) e, na sequência, a data do AGENDAMENTO. Duas
           // colunas de data lado a lado de propósito, com rótulos que as separam.
           COL.data,
@@ -1176,6 +1228,9 @@ export default function EsteiraPage() {
           COL.cand,
           COL.cli,
           COL.cargo,
+          // PROJETO (etapa 5): só nas três abas padrão. A Integração e o iFractal têm composição
+          // própria, decidida pelo diretor, e não foram tocadas.
+          COL.projeto,
           COL.data,
           // STATUS: a aba do EXAME precisa de mais que as outras desde o status "Liberado Para
           // Cadastro Sem ASO". A pill do rótulo mede ~226px com o ícone e o respiro, e nos 210px das
@@ -1195,21 +1250,24 @@ export default function EsteiraPage() {
     ? // Soma dos pisos das nove colunas com folga, para a aba ROLAR em vez de espremer (§A.20).
       "min-w-[1640px]"
     : isExame
-    ? // +38px com a coluna de status mais larga (o rótulo "Liberado Para Cadastro Sem ASO"): o piso
-      // acompanha a coluna, senão a aba passaria a espremer em vez de rolar (§A.20).
-      "min-w-[1878px]"
+    ? // +38px com a coluna de status mais larga (o rótulo "Liberado Para Cadastro Sem ASO") e +176px
+      // com a coluna PROJETO: o piso acompanha CADA coluna, senão a aba passaria a espremer em vez
+      // de rolar (§A.20).
+      "min-w-[2054px]"
     : isIntegracao
       ? // +110px com a Data adm. e +112px com o Contrato: o piso acompanha CADA coluna nova, senão a
         // aba passaria a espremer em vez de rolar (§A.20). Nenhuma coluna existente cedeu largura:
         // nesta aba não sobra folga real (Nome e Cliente já truncam, e as quatro do agendamento
         // precisam caber data, hora, "Presencial" e nome de gente), então tirar de uma para dar à
         // outra só trocaria de lugar o problema que a §A.20 proíbe.
-        "min-w-[1642px]"
+        // +176px com a coluna PROJETO: o piso acompanha a coluna nova, senão a aba passaria a
+        // espremer em vez de rolar (§A.20).
+        "min-w-[1818px]"
       : // +130px na aba Cadastro, com a entrada da Matrícula: o piso acompanha a coluna nova, senão
         // a aba passaria a espremer em vez de rolar (§A.20).
         isCadastro
-        ? "min-w-[1670px]"
-        : "min-w-[1540px]";
+        ? "min-w-[1846px]"
+        : "min-w-[1716px]";
 
   function toggleStatusKpi(code: string) {
     setStatusFiltro((cur) => (cur.includes(code) ? cur.filter((c) => c !== code) : [...cur, code]));
@@ -1435,6 +1493,17 @@ export default function EsteiraPage() {
               </>
             )}
             <FiltroTrigger count={filtroCount} onLimpar={limparFiltros}>
+              {/* PROJETO (etapa 5): de qual projeto de Alto Volume a admissão é, com MATRIZ para
+                  quem não é de projeto nenhum. Múltiplo, no mesmo componente dos demais. */}
+              <FiltroCampo label="Projeto">
+                <MultiSelect
+                  ariaLabel="Filtrar por projeto"
+                  values={projetoIds}
+                  onChange={setProjetoIds}
+                  options={projetoOptions}
+                  placeholder="Todos os projetos"
+                />
+              </FiltroCampo>
               <FiltroCampo label="Cliente">
                 <MultiSelect
                   ariaLabel="Filtrar por cliente"
@@ -1965,6 +2034,12 @@ export default function EsteiraPage() {
                 <ColunaOrdenavel ord={ord} chave="cargo">
                   Cargo
                 </ColunaOrdenavel>
+                {/* PROJETO (etapa 5): de qual projeto de Alto Volume a admissão é. Vale para as
+                    QUATRO abas da esteira; o iFractal tem composição própria e fica fora (ele nem
+                    passa por aqui, é o outro ramo). */}
+                <ColunaOrdenavel ord={ord} chave="projeto">
+                  Projeto
+                </ColunaOrdenavel>
                 {isIntegracao ? (
                   <>
                     {/* DATA DE ADMISSÃO também aqui (decisão do diretor): a aba tem candidatos com a
@@ -2215,6 +2290,16 @@ export default function EsteiraPage() {
                       </div>
                       <div className="meta truncate text-center" title={item.cargoNome}>
                         {item.cargoNome}
+                      </div>
+                      {/* PROJETO (etapa 5): o projeto de Alto Volume da admissão, ou MATRIZ. MATRIZ
+                          não é dado faltando, é o nome do que existe fora de projeto, então vem no
+                          mesmo tom das demais células e não em cinza de vazio. Vale para as quatro
+                          abas, na mesma posição. */}
+                      <div
+                        className="meta truncate text-center"
+                        title={item.projetoNome || "MATRIZ"}
+                      >
+                        {item.projetoNome || "MATRIZ"}
                       </div>
                       {isIntegracao ? (
                         <>
