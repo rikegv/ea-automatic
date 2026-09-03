@@ -217,8 +217,9 @@ export class GruposClienteService {
    * grupo é uma linha atualizada e nunca duas linhas convivendo. Numa transação, porque a saída de
    * quem foi desmarcado e a entrada dos novos são a MESMA decisão do consultor.
    *
-   * E CARIMBA AS ADMISSÕES DO CNPJ, no mesmo instante (decisão do diretor, e ela mudou a regra
-   * anterior deste método, que não encostava em admissão).
+   * E CARIMBA AS ADMISSÕES DO CNPJ, no mesmo instante, E TROCA O APELIDO DO CLIENTE PELO NOME DO
+   * GRUPO (decisões do diretor, e elas mudaram a regra anterior deste método, que não encostava em
+   * admissão nem em cliente).
    *
    * POR QUE MUDOU: o cadastro está sendo MONTADO agora, e as admissões nunca tiveram grupo. Sem o
    * carimbo ao vincular, criar um grupo e ticar os CNPJs não aparecia em lugar nenhum: nem no
@@ -282,6 +283,30 @@ export class GruposClienteService {
             and(
               eq(admissoes.codCliente, cod),
               sql`${admissoes.grupoClienteId} is distinct from ${grupoDoCnpj}`,
+            ),
+          );
+      }
+
+      /*
+       * O APELIDO DO CLIENTE PASSA A SER O NOME DO GRUPO (decisão do diretor).
+       *
+       * POR QUÊ: o `nome_operacao` é texto livre, e cada pessoa escreveu do seu jeito. Foram NOVE
+       * grafias para o mesmo CAGC, e é isso que fazia cada leitura por texto dar um número diferente.
+       * Vinculado ao grupo, o apelido deixa de ser opinião e passa a ser o nome do grupo, igual em
+       * todas as telas que o mostram.
+       *
+       * SÓ QUEM ESTÁ NO GRUPO. Quem SAI mantém o apelido que estava, e o diretor ajusta na mão no
+       * editar do cliente: o nome original não é preservado em lugar nenhum, e isso é decisão
+       * consciente dele. Restaurar exigiria guardar um "apelido de antes" que ninguém mais leria.
+       */
+      if (codClientes.length > 0) {
+        await tx
+          .update(clientes)
+          .set({ nomeOperacao: previa.grupo.nome })
+          .where(
+            and(
+              inArray(clientes.codCliente, codClientes),
+              sql`${clientes.nomeOperacao} is distinct from ${previa.grupo.nome}`,
             ),
           );
       }

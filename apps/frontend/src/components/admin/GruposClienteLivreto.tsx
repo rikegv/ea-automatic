@@ -528,9 +528,10 @@ export function GruposClienteLivreto({ onFechar }: { onFechar: () => void }) {
 
           <p className="mb-4 text-[12px] text-faint">
             Salvar carimba as admissões dos CNPJs acima, as concluídas junto com as vivas, e elas
-            aparecem no grupo na hora, no Controle Gerencial e no Gerenciador. Quem sai fica sem
-            grupo. Nenhuma rotina automática mexe nisso depois: o carimbo só muda quando alguém
-            altera o agrupamento aqui.
+            aparecem no grupo na hora, no Controle Gerencial e no Gerenciador. O nome de operação de
+            cada um passa a ser {previa.grupo.nome}, que é o que padroniza as grafias. Quem sai fica
+            sem grupo e mantém o nome que está, para você ajustar no editar do cliente. Nenhuma
+            rotina automática mexe nisso depois: só muda quando alguém altera o agrupamento aqui.
           </p>
 
           <div className="flex justify-end gap-2">
