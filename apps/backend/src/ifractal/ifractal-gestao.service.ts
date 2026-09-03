@@ -1,5 +1,5 @@
 import { Inject, Injectable, NotFoundException } from "@nestjs/common";
-import { asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { type TipoMarcacao } from "@ea/shared-types";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
@@ -42,13 +42,32 @@ export class IfractalGestaoService {
         nomeOperacao: clientes.nomeOperacao,
         tipoMarcacao: clientes.tipoMarcacao,
         ativo: clientes.ativo,
-        admissoesNaFrente: sql<number>`(
-          select count(*)::int from ${frentesAdmissao} f
-           join ${admissoes} a on a.id = f.admissao_id
-          where f.tipo = 'IFRACTAL' and a.cod_cliente = ${clientes.codCliente}
-        )`,
+        /*
+         * A CONTAGEM SAI DE LEFT JOIN COM `count`, e NÃO de subconsulta correlacionada. A primeira
+         * versão usava subconsulta, e o SQL saía SEM QUALIFICAR a tabela de fora:
+         * `where f.tipo = 'IFRACTAL' and a.cod_cliente = "cod_cliente"`. Dentro da subconsulta esse
+         * nome resolve contra `admissoes`, então a condição virava `a.cod_cliente = a.cod_cliente`,
+         * SEMPRE VERDADEIRA, e cada cliente exibia o TOTAL DA BASE: 96 em todas as 238 linhas, medido
+         * em produção, quando o certo era 0 para a maioria.
+         *
+         * O drizzle só omite a qualificação quando a consulta não tem join, que era exatamente o caso
+         * aqui. Com o join declarado no builder, ele qualifica tudo e o defeito não tem como voltar.
+         */
+        admissoesNaFrente: sql<number>`count(${frentesAdmissao.id})::int`,
       })
       .from(clientes)
+      .leftJoin(admissoes, eq(admissoes.codCliente, clientes.codCliente))
+      .leftJoin(
+        frentesAdmissao,
+        and(eq(frentesAdmissao.admissaoId, admissoes.id), eq(frentesAdmissao.tipo, "IFRACTAL")),
+      )
+      .groupBy(
+        clientes.codCliente,
+        clientes.razaoSocial,
+        clientes.nomeOperacao,
+        clientes.tipoMarcacao,
+        clientes.ativo,
+      )
       .orderBy(asc(clientes.razaoSocial));
 
     const items = linhas.map((l) => ({
