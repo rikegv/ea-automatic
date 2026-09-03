@@ -12596,3 +12596,64 @@ Clicksign e Pandapé não foram tocados.
 Typecheck 0 nos dois apps, lint limpo, **1.805 testes no backend** e **156 no frontend**. Serviços em
 200: backend 3011, frontend 3020, produção 3010 e ai-service 8000. Sem migration: é código mais o
 runner. O build do frontend rodou com o serviço parado.
+
+## 03/09/2026 (noite, 4), a etapa 5: de qual projeto é cada admissão
+
+Quarta subida do dia, e a última da frente do cenário 2.
+
+### O QUE ENTROU
+
+**Coluna e filtro de PROJETO nas cinco telas onde a operação trabalha:** as quatro abas da Esteira
+(Auditoria, Exame, Cadastro e Integração) e o Gerenciador. O **iFractal fica de fora**, por decisão
+do diretor: ele tem composição de colunas própria.
+
+**MATRIZ é o nome do que existe fora de projeto**, e não um vazio. A esmagadora maioria das admissões
+não está em projeto nenhum, então a célula diz MATRIZ no mesmo tom das demais, e o filtro oferece
+MATRIZ como PRIMEIRA opção: "quem não é de projeto" é metade da pergunta que o filtro responde.
+
+**O catálogo do filtro vem do endpoint do Alto Volume**, e não dos itens carregados. Derivar da tela
+encolheria as opções assim que o primeiro projeto fosse escolhido, e não haveria como somar o segundo
+sem limpar o filtro.
+
+### LEITURA PURA (§A.27)
+
+A coluna sai de `admissao_projeto` por `left join`, e aquela tabela tem unique em `admissao_id`, então
+não multiplica linha. O filtro é `EXISTS`, e MATRIZ é `NOT EXISTS`. As **31 medidas** da produção
+saíram **idênticas** antes e depois, com `diff` limpo: é código, não toca dado, e desta vez o
+intervalo não pegou nenhuma escrita da operação.
+
+### AS PROVAS EM PRODUÇÃO, PELOS SERVIÇOS REAIS
+
+| Tela | Total | Bienal Dos Livros | MATRIZ |
+|---|---:|---:|---:|
+| Gerenciador | 2.789 | 122 | 2.612 |
+| Auditoria | 21 | 1 | 17 |
+| Exame | 41 | 7 | 31 |
+| Cadastro | 11 | 0 | 6 |
+| Integração | 18 | 0 | 15 |
+
+No Gerenciador, Bienal mais MATRIZ devolve **2.734**, a soma exata dos dois. As sobras das abas são
+dos outros projetos: a produção tem **13 projetos com vínculo**, do Bienal (122) ao Atendimento
+Sazonal (34) e aos KOP com um ou dois cada, e a coluna mostra todos.
+
+### DUAS CORREÇÕES DE ROTA MINHAS, NA VALIDAÇÃO
+
+- **A aba Integração pareceu vazia e não estava:** meu token de sessão tinha expirado, e o script leu
+  o erro 401 como lista vazia. Com sessão nova eram 32 na homologação, o mesmo número que o banco
+  dava. Número que vem de ferramenta quebrada mente igual a número errado.
+- **A primeira prova visual fotografou a mesma aba três vezes**, porque a aba é estado da tela e não
+  rota. Refeita clicando em cada uma.
+
+### UMA COISA VISTA E NÃO TOCADA (§A.31)
+
+Na aba Integração, o cabeçalho **"Data de Agendamento" trunca**. Não é da coluna nova: aquela coluna
+tem 110px fixos desde antes, e o título não cabe nessa largura em resolução nenhuma. Registrado para
+o diretor decidir.
+
+### GATE E ESTADO
+
+Typecheck 0 nos dois apps, lint limpo nos oito arquivos, **1.805 testes no backend** (157 arquivos) e
+**156 no frontend**. Um ajuste esperado: a trava da lista fechada de colunas ordenáveis do Gerenciador
+passou a incluir "projeto", com o motivo escrito nela. Sem migration: a coluna lê de uma tabela que já
+existia. Serviços em 200: backend 3011, frontend 3020, produção 3010 e ai-service 8000, com o build do
+frontend rodando com o serviço parado.
