@@ -35,6 +35,13 @@ export interface ListarAdmissoesFiltros {
    * porque é filtro de CONJUNTO: os KPIs contam sobre ele.
    */
   projetoId?: string[];
+  /**
+   * LOJA / UNIDADE. Aceita várias, mais DOIS valores especiais que não são loja nenhuma:
+   * `MATRIZ` (o cliente não tem loja cadastrada, caso normal) e `ALOCAR_LOJA` (o cliente tem lojas e
+   * esta admissão não foi alocada, pendência). Entra no `base`, junto de cliente, cargo, grupo e
+   * projeto, porque é filtro de CONJUNTO: os KPIs contam sobre ele.
+   */
+  lojaId?: string[];
   tipoContrato?: string[];
   farol?: string[];
   sinalizador?: string[];
@@ -105,6 +112,30 @@ export function condicoesDoFiltro(filtros: ListarAdmissoesFiltros): {
         sql`NOT EXISTS (SELECT 1 FROM admissao_projeto ap WHERE ap.admissao_id = ${admissoes.id})`,
       );
     }
+    if (condicoes.length === 1) base.push(condicoes[0]);
+    else if (condicoes.length > 1) base.push(or(...condicoes)!);
+  }
+  /*
+   * LOJA: três formas de condição, uma por desfecho da coluna. Id de loja é `IN` direto sobre a
+   * chave estrangeira; MATRIZ e ALOCAR_LOJA nascem do MESMO `loja_id IS NULL`, separados por o
+   * cliente ter ou não loja ATIVA cadastrada. A régua de "ativa" é a mesma do seletor da liberação:
+   * cliente cujas lojas foram todas inativadas não tem onde alocar, então ele é MATRIZ.
+   * Os três combinam por OU, que é o que o multi-select promete.
+   */
+  if (filtros.lojaId?.length) {
+    const ids = filtros.lojaId.filter((v) => v !== "MATRIZ" && v !== "ALOCAR_LOJA");
+    const querMatriz = filtros.lojaId.includes("MATRIZ");
+    const querAlocar = filtros.lojaId.includes("ALOCAR_LOJA");
+    const temLojaAtiva = sql`EXISTS (SELECT 1 FROM cliente_lojas cl
+          WHERE cl.cod_cliente = ${admissoes.codCliente} AND cl.ativo = true)`;
+    const condicoes: SQL[] = [];
+    if (ids.length > 0) {
+      condicoes.push(
+        sql`${admissoes.lojaId} IN (${sql.join(ids.map((id) => sql`${id}::uuid`), sql`, `)})`,
+      );
+    }
+    if (querMatriz) condicoes.push(sql`(${admissoes.lojaId} IS NULL AND NOT ${temLojaAtiva})`);
+    if (querAlocar) condicoes.push(sql`(${admissoes.lojaId} IS NULL AND ${temLojaAtiva})`);
     if (condicoes.length === 1) base.push(condicoes[0]);
     else if (condicoes.length > 1) base.push(or(...condicoes)!);
   }

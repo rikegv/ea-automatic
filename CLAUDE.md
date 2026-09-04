@@ -791,7 +791,10 @@ feita antes de construir, respondida caso a caso.
   data, tipo, status) normalmente vira, e é por isso que a lista é oferecida, não adivinhada.
 - **Todo filtro escolhido é MULTISELECT** (§A.28, mantida sem exceção), pelo mesmo componente
   compartilhado.
-- **Coluna nova numa tela existente reabre a pergunta**, em uma linha: "esta vira filtro?".
+- ~~**Coluna nova numa tela existente reabre a pergunta**, em uma linha: "esta vira filtro?".~~
+  **SUPERADO pela §A.37** (decisão do diretor, frente da coluna de Loja): coluna nova numa tela que já
+  existe **nasce com filtro junto**, sem perguntar. A escolha do diretor continua valendo para a tela
+  NOVA, que é o caso desta seção.
 
 **Por que a regra é esta e não o espelho automático:** filtro é como se acha a linha numa tabela de
 milhares, então coluna de busca sem filtro custa caro na operação. Mas encher a barra de filtros que
@@ -936,3 +939,25 @@ certo** e explicitamente **fora do escopo daquela OST** (§A.31: propõe, não c
   duas coisas são ligadas: é o mesmo dado, escrito na tela de Clientes e consumido pelo iFractal.
 
 *(Registro solicitado pelo diretor.)*
+
+## A.37: COLUNA NOVA NASCE COM FILTRO JUNTO (regra permanente)
+
+**Toda coluna nova numa tela com tabela nasce com o seu FILTRO na mesma entrega.** Não é item
+separado, não é fase 2, não é pergunta: coluna e filtro sobem juntos, sempre.
+
+- **O filtro é MULTISELECT** (§A.28, sem exceção), pelo componente compartilhado do design system, com
+  busca quando a lista é longa (§A.35).
+- **A coluna também nasce ORDENÁVEL** (§A.29), pelo `useOrdenacao`/`ColunaOrdenavel` que já existem.
+  Coluna nova = célula + ordenação + filtro, as três coisas, de uma vez.
+- **Os valores especiais da coluna viram opções do filtro.** Quando a célula mostra um rótulo que não
+  é um registro do catálogo (o "MATRIZ" do projeto e da loja, o "ALOCAR LOJA" da loja), esse rótulo é
+  uma opção do filtro como qualquer outra: sem ele não dá para perguntar "quem NÃO é de projeto" nem
+  "de quem falta escolher a loja", que costuma ser metade da pergunta que a coluna criou.
+- **O catálogo do filtro vem de um ENDPOINT, nunca das linhas carregadas.** Derivar as opções da
+  página encolhe a lista assim que o primeiro valor é escolhido, e não há como somar o segundo sem
+  limpar o filtro.
+
+**Relação com a §A.30, que trata de caso diferente e continua valendo:** a §A.30 é sobre uma tela
+NOVA, em que a fábrica traz a lista das colunas e o diretor escolhe quais viram filtro (senha e login
+não viram). Esta trata da coluna ACRESCENTADA a uma tela que já existe: ali não se pergunta, nasce com
+filtro. *(Decisão do diretor, na frente da coluna de Loja.)*

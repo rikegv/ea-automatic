@@ -118,6 +118,10 @@ describe("a lista de colunas é fechada", () => {
       // PROJETO (etapa 5): entra pela MESMA régua, e pelo mesmo motivo. `admissao_projeto` tem unique
       // em `admissao_id`, então o join não multiplica linha e a ordem é a da consulta paginada.
       "projeto",
+      // LOJA: entra pela MESMA régua. `admissoes.loja_id` é chave estrangeira direta, então o
+      // `leftJoin` da coluna não multiplica linha, e a ordenação é por RÓTULO (nome da loja, ALOCAR
+      // LOJA ou MATRIZ), que é o que a célula mostra.
+      "loja",
     ]);
     // Auditoria, Exame e Cadastro são carregadas depois, só para as 20 linhas da página: ordenar por
     // elas seria exatamente a ordem falsa que esta frente veio corrigir.

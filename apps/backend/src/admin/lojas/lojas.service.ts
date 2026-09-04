@@ -61,6 +61,39 @@ export class LojasService {
       .orderBy(asc(clienteLojas.nome));
   }
 
+  /**
+   * O CATÁLOGO GLOBAL DE LOJAS ATIVAS, de TODOS os clientes, para o filtro de Loja da Esteira e do
+   * Gerenciador.
+   *
+   * POR QUE ELE EXISTE, se já há `listAtivas` por cliente: as duas telas filtram por loja SEM ter um
+   * cliente escolhido (o filtro de cliente é opcional e múltiplo), então não há `codCliente` para
+   * pendurar a rota nested. Buscar loja a loja, um cliente por vez, seria uma chamada por cliente da
+   * base só para montar um seletor.
+   *
+   * O CATÁLOGO E NÃO OS ITENS DA TELA, pelo mesmo motivo já registrado no filtro de projeto: derivar
+   * as opções da página carregada encolheria a lista assim que a primeira loja fosse escolhida, e não
+   * haveria como somar a segunda sem limpar o filtro.
+   *
+   * VEM O NOME DO CLIENTE JUNTO porque nome de loja só é único DENTRO do cliente: o índice do banco é
+   * `(cod_cliente, nome normalizado)`. Duas lojas "Loja Centro" de clientes diferentes são legítimas,
+   * e sem o cliente ao lado a pessoa escolheria no escuro.
+   *
+   * §A.6: nome de loja e de cliente. Nenhum dado pessoal.
+   */
+  listarTodasAtivas() {
+    return this.db
+      .select({
+        id: clienteLojas.id,
+        nome: clienteLojas.nome,
+        codCliente: clienteLojas.codCliente,
+        clienteNome: sql<string>`coalesce(${clientes.nomeOperacao}, ${clientes.razaoSocial})`,
+      })
+      .from(clienteLojas)
+      .innerJoin(clientes, eq(clientes.codCliente, clienteLojas.codCliente))
+      .where(eq(clienteLojas.ativo, true))
+      .orderBy(asc(clienteLojas.nome));
+  }
+
   /** Só as ATIVAS: é o que alimenta seletor de tela. Loja inativa não vira opção nova. */
   listAtivas(codCliente: string) {
     return this.db

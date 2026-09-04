@@ -17,6 +17,7 @@ import { ClientesService } from "./clientes/clientes.service";
 import { ClinicasController } from "./clinicas/clinicas.controller";
 import { GruposClienteController } from "./grupos-cliente/grupos-cliente.controller";
 import { LojasController } from "./lojas/lojas.controller";
+import { LojasCatalogoController } from "./lojas/lojas-catalogo.controller";
 import { IntegracaoClientesController } from "./integracao-clientes/integracao-clientes.controller";
 import { IntegracaoClientesService } from "./integracao-clientes/integracao-clientes.service";
 import { PendenciasClienteController } from "./pendencias-cliente/pendencias-cliente.controller";
@@ -54,6 +55,9 @@ import { TiposDocumentoService } from "./tipos-documento/tipos-documento.service
     ClinicasController,
     GruposClienteController,
     LojasController,
+    // Catálogo global de lojas ativas (só leitura), que alimenta o filtro de Loja da Esteira e do
+    // Gerenciador. Rota separada porque a de escrita é aninhada no cliente, e continua sendo.
+    LojasCatalogoController,
     IntegracaoClientesController,
     PendenciasClienteController,
     EscalasController,

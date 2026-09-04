@@ -83,6 +83,7 @@ export class EsteiraController {
     @Param("frente") frente: string,
     @Query("codCliente") codCliente?: string,
     @Query("projetoId") projetoId?: string,
+    @Query("lojaId") lojaId?: string,
     @Query("status") status?: string,
     @Query("admissaoDe") admissaoDe?: string,
     @Query("admissaoAte") admissaoAte?: string,
@@ -98,6 +99,10 @@ export class EsteiraController {
       // PROJETO (etapa 5): múltiplo desde o nascimento (§A.28), pelo mesmo `parseMulti` dos demais.
       // O valor `MATRIZ` viaja como qualquer outro e é interpretado no serviço.
       projetoId: parseMulti(projetoId),
+      // LOJA: múltiplo como os demais (§A.28). Os valores `MATRIZ` e `ALOCAR_LOJA` viajam como
+      // qualquer outro e são interpretados no serviço, onde viram ausência de loja com e sem
+      // catálogo de lojas no cliente.
+      lojaId: parseMulti(lojaId),
       status: parseMulti(status),
       admissaoDe,
       admissaoAte,

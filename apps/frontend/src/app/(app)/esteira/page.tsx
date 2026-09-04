@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { TIPO_MARCACAO_LABEL, type TipoMarcacao } from "@ea/shared-types";
 import type { ClicksignStatus, Origem } from "@ea/shared-types";
 import { apiFetch, apiUpload, apiDownloadPost, apiOpenInline, ApiError } from "@/lib/api";
+import { opcoesDeLoja, rotuloDaLoja, type LojaCatalogo } from "@/lib/loja";
 import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/cn";
 import { GlassCard } from "@/components/ui/GlassCard";
@@ -135,6 +136,13 @@ interface EsteiraItem {
    * escreve MATRIZ, que é o nome que a operação dá para isso.
    */
   projetoNome?: string | null;
+  /**
+   * LOJA / UNIDADE do cliente onde a pessoa trabalha. `null` tem DOIS significados, e por isso
+   * `clienteTemLojas` vem junto: cliente sem catálogo de lojas é MATRIZ (o normal, não é pendência),
+   * cliente COM catálogo e sem loja escolhida é ALOCAR LOJA (falta escolher). Ver `rotuloDaLoja`.
+   */
+  lojaNome?: string | null;
+  clienteTemLojas?: boolean;
   /** Só na aba IFRACTAL. `tipoMarcacao` é HERDADO do cliente (leitura, nunca cópia). */
   tipoMarcacao?: TipoMarcacao | null;
   ifractalLogin?: string | null;
@@ -434,6 +442,9 @@ export default function EsteiraPage() {
    * lista de projetos é aberta a quem está autenticado, como os demais catálogos.
    */
   const [projetos, setProjetos] = useState<{ id: string; nome: string }[]>([]);
+  const [lojaIds, setLojaIds] = useState<string[]>([]);
+  /** O catálogo global de lojas ativas, pelo mesmo motivo do de projetos logo acima. */
+  const [lojas, setLojas] = useState<LojaCatalogo[]>([]);
   const [statusFiltro, setStatusFiltro] = useState<string[]>([]);
   /**
    * TRÊS INTERVALOS COM NOME PRÓPRIO, no lugar do antigo "Período" (que filtrava por quando a
@@ -519,6 +530,7 @@ export default function EsteiraPage() {
     const qs = new URLSearchParams();
     if (codClientes.length) qs.set("codCliente", codClientes.join(","));
     if (projetoIds.length) qs.set("projetoId", projetoIds.join(","));
+    if (lojaIds.length) qs.set("lojaId", lojaIds.join(","));
     if (statusFiltro.length) qs.set("status", statusFiltro.join(","));
     if (admissaoDe) qs.set("admissaoDe", admissaoDe);
     if (admissaoAte) qs.set("admissaoAte", admissaoAte);
@@ -543,6 +555,7 @@ export default function EsteiraPage() {
     rota,
     codClientes,
     projetoIds,
+    lojaIds,
     statusFiltro,
     admissaoDe,
     admissaoAte,
@@ -584,6 +597,7 @@ export default function EsteiraPage() {
   function limparFiltros() {
     setCodClientes([]);
     setProjetoIds([]);
+    setLojaIds([]);
     setStatusFiltro([]);
     setAdmissaoDe("");
     setAdmissaoAte("");
@@ -605,6 +619,7 @@ export default function EsteiraPage() {
   const temFiltro = Boolean(
     codClientes.length ||
     projetoIds.length ||
+      lojaIds.length ||
       statusFiltro.length ||
       admissaoDe ||
       admissaoAte ||
@@ -629,6 +644,7 @@ export default function EsteiraPage() {
   const filtroCount =
     (codClientes.length ? 1 : 0) +
     (projetoIds.length ? 1 : 0) +
+    (lojaIds.length ? 1 : 0) +
     (statusFiltro.length ? 1 : 0) +
     (admissaoDe || admissaoAte ? 1 : 0) +
     (exameDe || exameAte ? 1 : 0) +
@@ -923,6 +939,17 @@ export default function EsteiraPage() {
    * MATRIZ vem PRIMEIRO e é a resposta mais provável: quase toda admissão está fora de projeto, e
    * "quem não é de projeto" é metade da pergunta que este filtro existe para responder.
    */
+  /* Catálogo de lojas ativas para o filtro. Uma vez, como os demais catálogos. */
+  useEffect(() => {
+    if (!token) return;
+    apiFetch<LojaCatalogo[]>("/admin/lojas", { token })
+      .then(setLojas)
+      .catch(() => setLojas([]));
+  }, [token]);
+
+  /** As opções de loja, do arquivo compartilhado com o Gerenciador: uma régua só (§A.28). */
+  const lojaOptions = useMemo(() => opcoesDeLoja(lojas), [lojas]);
+
   const projetoOptions = useMemo(
     () => [
       { value: "MATRIZ", label: "MATRIZ" },
@@ -1058,6 +1085,10 @@ export default function EsteiraPage() {
       // PROJETO (etapa 5): ordena pelo texto que a célula mostra, e quem não tem projeto ordena por
       // "MATRIZ", junto, em vez de espalhado como o vazio ficaria.
       { chave: "projeto", tipo: "texto", valor: (i) => i.projetoNome || "MATRIZ" },
+      // LOJA: ordena pelo RÓTULO que a célula mostra, e não pelo nome cru, senão MATRIZ e ALOCAR
+      // LOJA (ambos sem loja) cairiam no mesmo balde e a ordenação juntaria os dois grupos que a
+      // coluna existe para separar.
+      { chave: "loja", tipo: "texto", valor: (i) => rotuloDaLoja(i.lojaNome, i.clienteTemLojas) },
       { chave: "data", tipo: "data", valor: (i) => i.dataAdmissao },
       // COLUNAS DA INTEGRAÇÃO (OST dos filtros e ordenação). Só a aba de Integração as desenha, mas
       // declará-las aqui é inofensivo e mantém a lista de colunas num lugar só, como já se fez com
@@ -1147,6 +1178,11 @@ export default function EsteiraPage() {
     // PROJETO (etapa 5): cabe "MATRIZ" e o nome de projeto mais longo da base ("Temporada De
     // Setembro 2026" mede 168px), com a seta de ordenação. Medida de conteúdo, não estimativa.
     projeto: "minmax(176px,1fr)",
+    // LOJA: 196px e não os 176 do projeto porque nome de loja é mais longo (o maior da base, "BC
+    // CAMPINAS PARQUE D PEDRO SHOPPING", mede 35 caracteres contra os 26 do maior projeto). 232px e
+    // não 196: nos 196 aquele nome truncava, e §A.20 não aceita célula cortada. Cabe também
+    // "ALOCAR LOJA" inteiro, que é o rótulo que não pode truncar: ele é a pendência.
+    loja: "minmax(232px,1fr)",
     status: "210px",
     pend: "168px",
     acoes: "120px",
@@ -1203,6 +1239,9 @@ export default function EsteiraPage() {
           // agora vai para o seletor de status e para as ações.
           "minmax(130px,0.7fr)",
           COL.cargo,
+          // LOJA: colada em Cliente/Cargo e antes do projeto, mesma posição em TODAS as abas, para a
+          // máscara continuar única (§A.12).
+          COL.loja,
           // PROJETO (etapa 5): mesma posição das outras abas, para a máscara continuar única
           // (§A.12). Esta aba já é a mais larga, então a coluna entra no piso, não no aperto.
           COL.projeto,
@@ -1228,6 +1267,8 @@ export default function EsteiraPage() {
           COL.cand,
           COL.cli,
           COL.cargo,
+          // LOJA: mesma posição da outra composição, logo antes do projeto (§A.12).
+          COL.loja,
           // PROJETO (etapa 5): só nas três abas padrão. A Integração e o iFractal têm composição
           // própria, decidida pelo diretor, e não foram tocadas.
           COL.projeto,
@@ -1250,10 +1291,10 @@ export default function EsteiraPage() {
     ? // Soma dos pisos das nove colunas com folga, para a aba ROLAR em vez de espremer (§A.20).
       "min-w-[1640px]"
     : isExame
-    ? // +38px com a coluna de status mais larga (o rótulo "Liberado Para Cadastro Sem ASO") e +176px
-      // com a coluna PROJETO: o piso acompanha CADA coluna, senão a aba passaria a espremer em vez
-      // de rolar (§A.20).
-      "min-w-[2054px]"
+    ? // +38px com a coluna de status mais larga (o rótulo "Liberado Para Cadastro Sem ASO"), +176px
+      // com a coluna PROJETO e +196px com a coluna LOJA: o piso acompanha CADA coluna, senão a aba
+      // passaria a espremer em vez de rolar (§A.20).
+      "min-w-[2286px]"
     : isIntegracao
       ? // +110px com a Data adm. e +112px com o Contrato: o piso acompanha CADA coluna nova, senão a
         // aba passaria a espremer em vez de rolar (§A.20). Nenhuma coluna existente cedeu largura:
@@ -1262,12 +1303,12 @@ export default function EsteiraPage() {
         // outra só trocaria de lugar o problema que a §A.20 proíbe.
         // +176px com a coluna PROJETO: o piso acompanha a coluna nova, senão a aba passaria a
         // espremer em vez de rolar (§A.20).
-        "min-w-[1818px]"
+        "min-w-[2050px]"
       : // +130px na aba Cadastro, com a entrada da Matrícula: o piso acompanha a coluna nova, senão
         // a aba passaria a espremer em vez de rolar (§A.20).
         isCadastro
-        ? "min-w-[1846px]"
-        : "min-w-[1716px]";
+        ? "min-w-[2078px]"
+        : "min-w-[1948px]";
 
   function toggleStatusKpi(code: string) {
     setStatusFiltro((cur) => (cur.includes(code) ? cur.filter((c) => c !== code) : [...cur, code]));
@@ -1493,6 +1534,18 @@ export default function EsteiraPage() {
               </>
             )}
             <FiltroTrigger count={filtroCount} onLimpar={limparFiltros}>
+              {/* LOJA: em qual unidade do cliente a pessoa trabalha, com MATRIZ (o cliente não tem
+                  lojas cadastradas) e ALOCAR LOJA (tem, e falta escolher) como opções próprias.
+                  Múltiplo e com busca, no mesmo componente dos demais (§A.28/§A.35). */}
+              <FiltroCampo label="Loja">
+                <MultiSelect
+                  ariaLabel="Filtrar por loja"
+                  values={lojaIds}
+                  onChange={setLojaIds}
+                  options={lojaOptions}
+                  placeholder="Todas as lojas"
+                />
+              </FiltroCampo>
               {/* PROJETO (etapa 5): de qual projeto de Alto Volume a admissão é, com MATRIZ para
                   quem não é de projeto nenhum. Múltiplo, no mesmo componente dos demais. */}
               <FiltroCampo label="Projeto">
@@ -2034,6 +2087,11 @@ export default function EsteiraPage() {
                 <ColunaOrdenavel ord={ord} chave="cargo">
                   Cargo
                 </ColunaOrdenavel>
+                {/* LOJA: em qual unidade do cliente a pessoa trabalha. Vale para as QUATRO abas,
+                    na mesma posição; o iFractal tem composição própria e fica fora. */}
+                <ColunaOrdenavel ord={ord} chave="loja">
+                  Loja
+                </ColunaOrdenavel>
                 {/* PROJETO (etapa 5): de qual projeto de Alto Volume a admissão é. Vale para as
                     QUATRO abas da esteira; o iFractal tem composição própria e fica fora (ele nem
                     passa por aqui, é o outro ramo). */}
@@ -2290,6 +2348,15 @@ export default function EsteiraPage() {
                       </div>
                       <div className="meta truncate text-center" title={item.cargoNome}>
                         {item.cargoNome}
+                      </div>
+                      {/* LOJA: o nome da loja, MATRIZ (o cliente não tem lojas cadastradas) ou
+                          ALOCAR LOJA (tem, e ninguém escolheu ainda). Nenhum dos três é vazio, então
+                          todos vêm no mesmo tom das demais células. Vale para as quatro abas. */}
+                      <div
+                        className="meta truncate text-center"
+                        title={rotuloDaLoja(item.lojaNome, item.clienteTemLojas)}
+                      >
+                        {rotuloDaLoja(item.lojaNome, item.clienteTemLojas)}
                       </div>
                       {/* PROJETO (etapa 5): o projeto de Alto Volume da admissão, ou MATRIZ. MATRIZ
                           não é dado faltando, é o nome do que existe fora de projeto, então vem no

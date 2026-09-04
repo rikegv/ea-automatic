@@ -202,6 +202,10 @@ export const COLUNAS_ORDENAVEIS_GERENCIADOR = [
   "grupo",
   // PROJETO (etapa 5): mesma régua do grupo, e vem desta consulta pelo `leftJoin`, não depois.
   "projeto",
+  // LOJA: ordena pelo RÓTULO que a célula mostra, e não pelo nome da loja, senão MATRIZ e ALOCAR
+  // LOJA (ambos sem loja, ambos `null`) cairiam no mesmo balde e a ordenação juntaria os dois
+  // grupos que a coluna existe para separar. Ver `rotuloDaLoja`.
+  "loja",
 ] as const;
 
 /**
@@ -220,6 +224,21 @@ export const COLUNAS_ORDENAVEIS_GERENCIADOR = [
  * (ou mesma data) poderiam trocar de lugar entre a página 1 e a 2, e a mesma pessoa apareceria duas
  * vezes ou sumiria. Paginação sem desempate estável é assim que se perde linha sem ninguém notar.
  */
+/**
+ * O RÓTULO DA COLUNA LOJA, em SQL, para a ordenação clicável (§A.29) ordenar pelo que a pessoa lê.
+ *
+ * A célula tem três desfechos e só um deles é um nome de loja; os outros dois nascem do MESMO `null`
+ * em `loja_id`, separados por o cliente ter ou não catálogo de lojas. Ordenar por `cliente_lojas.nome`
+ * cru colocaria "o cliente não usa loja" e "falta escolher a loja" no mesmo bloco, que é exatamente a
+ * distinção que a coluna existe para mostrar.
+ *
+ * A EXPRESSÃO É A MESMA RÉGUA DO FILTRO E DA CÉLULA (loja ativa do próprio cliente), de propósito: se
+ * as três divergissem, a tela ordenaria por um critério, filtraria por outro e escreveria um terceiro.
+ */
+const rotuloDaLoja = sql`coalesce(${clienteLojas.nome}, CASE WHEN EXISTS (
+    SELECT 1 FROM cliente_lojas cl WHERE cl.cod_cliente = ${admissoes.codCliente} AND cl.ativo = true
+  ) THEN 'ALOCAR LOJA' ELSE 'MATRIZ' END)`;
+
 function ordemDaLista(ordenarPor?: string, direcao?: "asc" | "desc") {
   const padrao = desc(admissoes.criadoEm);
   if (!ordenarPor) return [padrao];
@@ -234,6 +253,7 @@ function ordemDaLista(ordenarPor?: string, direcao?: "asc" | "desc") {
     status: admissoes.farolGlobal,
     grupo: gruposCliente.nome,
     projeto: projetosAltoVolume.nome,
+    loja: rotuloDaLoja,
   }[ordenarPor];
   if (!coluna) return [padrao];
   return [direcao === "asc" ? asc(coluna) : desc(coluna), padrao];
@@ -1681,6 +1701,14 @@ export class AdmissoesService {
          * unique em `admissao_id`, então o left join não multiplica linha.
          */
         projetoNome: projetosAltoVolume.nome,
+        /*
+         * LOJA: o nome da loja, ou nulo. `clienteTemLojas` vai junto porque NULO SOZINHO NÃO DIZ
+         * NADA: pode ser "este cliente não usa loja" (MATRIZ, o normal) ou "usa e ninguém escolheu"
+         * (ALOCAR LOJA, pendência). O backend responde os dois fatos, a tela dá o nome de cada caso.
+         */
+        lojaNome: clienteLojas.nome,
+        clienteTemLojas: sql<boolean>`EXISTS (SELECT 1 FROM cliente_lojas cl
+          WHERE cl.cod_cliente = ${admissoes.codCliente} AND cl.ativo = true)`,
         concluido: concluidoExpr,
         criadoEm: admissoes.criadoEm,
       })
@@ -1693,6 +1721,9 @@ export class AdmissoesService {
       .leftJoin(gruposCliente, eq(gruposCliente.id, admissoes.grupoClienteId))
       .leftJoin(admissaoProjeto, eq(admissaoProjeto.admissaoId, admissoes.id))
       .leftJoin(projetosAltoVolume, eq(projetosAltoVolume.id, admissaoProjeto.projetoId))
+      // LEFT e não INNER: a maioria das admissões não tem loja, e um inner join sumiria com elas da
+      // tela. Loja é dimensão de leitura, não recorte de quem existe.
+      .leftJoin(clienteLojas, eq(clienteLojas.id, admissoes.lojaId))
       .where(listWhere.length ? and(...listWhere) : undefined)
       .orderBy(...ordemDaLista(filtros.ordenarPor, filtros.direcao))
       .limit(pageSize)

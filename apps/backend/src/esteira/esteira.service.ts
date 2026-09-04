@@ -126,6 +126,18 @@ export interface EsteiraFiltros {
    * é de projeto?", que é metade da pergunta.
    */
   projetoId?: string[];
+  /**
+   * LOJA / UNIDADE do cliente onde a pessoa trabalha. Aceita vários, e DOIS valores especiais que
+   * não são loja nenhuma, mas são o que a coluna mostra quando não há loja escolhida:
+   *
+   * `MATRIZ` = o cliente NÃO tem loja cadastrada, então a admissão fica no nome do cliente, como
+   * sempre foi. É o caso da esmagadora maioria e NÃO é pendência.
+   *
+   * `ALOCAR_LOJA` = o cliente TEM lojas cadastradas e esta admissão não foi alocada em nenhuma. É
+   * pendência: falta escolher. Distinguir os dois é o ponto inteiro do filtro, porque sem isso
+   * "sem loja" juntaria quem não precisa de loja com quem está esperando alguém escolher uma.
+   */
+  lojaId?: string[];
   status?: string[];
   /**
    * Três intervalos com NOME PRÓPRIO, no lugar do antigo `from`/`to` (que filtrava por `criadoEm` sob
@@ -281,6 +293,44 @@ export class EsteiraService {
         condicoes.push(
           sql`NOT EXISTS (SELECT 1 FROM admissao_projeto ap WHERE ap.admissao_id = ${admissoes.id})`,
         );
+      }
+      if (condicoes.length === 1) clientePeriodo.push(condicoes[0]);
+      else if (condicoes.length > 1) clientePeriodo.push(or(...condicoes)!);
+    }
+    /*
+     * LOJA. Entra junto do cliente e do projeto, no filtro COMPARTILHADO por itens e KPIs: é filtro
+     * de conjunto, então os cards contam sobre ele, como já contam sobre o cliente.
+     *
+     * TRÊS FORMAS DE CONDIÇÃO, porque a coluna tem três casos e o filtro tem de saber perguntar
+     * cada um deles:
+     *  - id de loja: `loja_id IN (...)`, direto, que a `admissoes.loja_id` é chave estrangeira;
+     *  - `MATRIZ`: sem loja E o cliente não tem loja ativa cadastrada (`NOT EXISTS`);
+     *  - `ALOCAR_LOJA`: sem loja E o cliente TEM loja ativa cadastrada (`EXISTS`).
+     *
+     * O `EXISTS` olha `cliente_lojas` do MESMO cliente e só as ATIVAS, que é a mesma régua do
+     * seletor da liberação (`listAtivas`): cliente cujas lojas foram todas inativadas não tem onde
+     * alocar, então cobrar dele "alocar loja" seria cobrar o impossível, e ele é MATRIZ.
+     *
+     * Os três combinam por OU, que é o que o multi-select promete: "os da Loja Centro MAIS os que
+     * ainda precisam de loja".
+     */
+    if (filtros.lojaId?.length) {
+      const ids = filtros.lojaId.filter((v) => v !== "MATRIZ" && v !== "ALOCAR_LOJA");
+      const querMatriz = filtros.lojaId.includes("MATRIZ");
+      const querAlocar = filtros.lojaId.includes("ALOCAR_LOJA");
+      const temLojaAtiva = sql`EXISTS (SELECT 1 FROM cliente_lojas cl
+            WHERE cl.cod_cliente = ${admissoes.codCliente} AND cl.ativo = true)`;
+      const condicoes: SQL[] = [];
+      if (ids.length > 0) {
+        condicoes.push(
+          sql`${admissoes.lojaId} IN (${sql.join(ids.map((id) => sql`${id}::uuid`), sql`, `)})`,
+        );
+      }
+      if (querMatriz) {
+        condicoes.push(sql`(${admissoes.lojaId} IS NULL AND NOT ${temLojaAtiva})`);
+      }
+      if (querAlocar) {
+        condicoes.push(sql`(${admissoes.lojaId} IS NULL AND ${temLojaAtiva})`);
       }
       if (condicoes.length === 1) clientePeriodo.push(condicoes[0]);
       else if (condicoes.length > 1) clientePeriodo.push(or(...condicoes)!);
@@ -476,6 +526,19 @@ export class EsteiraService {
          * multiplica linha, e é a forma que sai qualificada por construção.
          */
         projetoNome: projetosAltoVolume.nome,
+        /*
+         * LOJA: o nome da loja onde a pessoa trabalha, ou nulo. Junto dele vai `clienteTemLojas`,
+         * porque NULO SOZINHO NÃO DIZ NADA: pode ser "este cliente não usa loja" (MATRIZ, normal) ou
+         * "este cliente usa e ninguém escolheu ainda" (ALOCAR LOJA, pendência). São desfechos
+         * opostos, e sem o segundo campo a tela teria de adivinhar qual dos dois está vendo.
+         *
+         * O RÓTULO MORA NA TELA, não aqui: o backend responde os fatos (não tem loja; o cliente tem
+         * lojas), e a tela dá o nome que a operação usa para cada combinação. Mesmo desenho do
+         * projeto, logo acima.
+         */
+        lojaNome: clienteLojas.nome,
+        clienteTemLojas: sql<boolean>`EXISTS (SELECT 1 FROM cliente_lojas cl
+          WHERE cl.cod_cliente = ${admissoes.codCliente} AND cl.ativo = true)`,
       })
       .from(frentesAdmissao)
       .innerJoin(admissoes, eq(frentesAdmissao.admissaoId, admissoes.id))
@@ -484,6 +547,9 @@ export class EsteiraService {
       .innerJoin(cargos, eq(admissoes.cargoId, cargos.id))
       .leftJoin(admissaoProjeto, eq(admissaoProjeto.admissaoId, admissoes.id))
       .leftJoin(projetosAltoVolume, eq(projetosAltoVolume.id, admissaoProjeto.projetoId))
+      // LEFT e não INNER: a esmagadora maioria das admissões não tem loja, e um inner join aqui
+      // sumiria com elas da fila. Loja é dimensão de leitura, não recorte de quem existe.
+      .leftJoin(clienteLojas, eq(clienteLojas.id, admissoes.lojaId))
       .where(and(...itensWhere))
       .orderBy(asc(admissoes.criadoEm));
 
@@ -565,6 +631,10 @@ export class EsteiraService {
         // PROJETO (etapa 5): nome do projeto de Alto Volume, ou null. A tela escreve "MATRIZ" no
         // null, que é o rótulo que a operação usa para quem não é de projeto.
         projetoNome: r.projetoNome,
+        // LOJA: o nome, mais o fato de o cliente ter lojas. A tela escreve o nome, "ALOCAR LOJA" ou
+        // "MATRIZ" a partir dos dois, porque nulo sozinho não distingue pendência de normalidade.
+        lojaNome: r.lojaNome,
+        clienteTemLojas: r.clienteTemLojas,
         farolGlobal: r.farolGlobal,
         // Sobe no BASE (antes ia só nas abas Auditoria e Exame): é o que alinha o pill da coluna
         // "Pendências Obrigatórias" com o badge que abre a lista, em TODAS as abas.

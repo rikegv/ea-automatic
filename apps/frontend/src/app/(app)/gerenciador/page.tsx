@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Origem } from "@ea/shared-types";
 import { apiFetch, ApiError } from "@/lib/api";
+import { opcoesDeLoja, rotuloDaLoja, type LojaCatalogo } from "@/lib/loja";
 import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/cn";
 import { PageHead } from "@/components/ui/PageHead";
@@ -42,6 +43,13 @@ interface AdmRow {
    * nome que a operação dá para isso.
    */
   projetoNome?: string | null;
+  /**
+   * LOJA / UNIDADE do cliente onde a pessoa trabalha. `null` tem DOIS significados, e é por isso que
+   * `clienteTemLojas` vem junto: cliente sem catálogo de lojas é MATRIZ (normal, não é pendência) e
+   * cliente COM catálogo e sem loja escolhida é ALOCAR LOJA (falta escolher). Ver `rotuloDaLoja`.
+   */
+  lojaNome?: string | null;
+  clienteTemLojas?: boolean;
   cargoNome: string;
   tipoContrato: string | null;
   dataAdmissao: string | null;
@@ -141,8 +149,13 @@ function frenteTone(f?: { status: string; concluida: boolean }): PillTone {
 // esmagar. As de texto (Candidato/Cliente/Cargo/Contrato) têm piso em px (nunca truncam "AJUDANTE
 // GERAL" nem o nome) e crescem em `fr`; as de status têm largura para o rótulo mais longo.
 const GRID =
-  "minmax(232px,1.8fr) minmax(168px,1.2fr) minmax(176px,1fr) minmax(190px,1.1fr) minmax(120px,0.9fr) 108px 160px 200px 140px 150px 160px 100px";
-const GRID_MIN = "min-w-[2056px]";
+  "minmax(232px,1.8fr) minmax(168px,1.2fr) minmax(232px,1fr) minmax(176px,1fr) minmax(190px,1.1fr) minmax(120px,0.9fr) 108px 160px 200px 140px 150px 160px 100px";
+// +232px com a coluna LOJA, e o piso acompanha (§A.20): mais que os 176 do projeto porque nome de
+// loja é mais longo (o maior da base, "BC CAMPINAS PARQUE D PEDRO SHOPPING", mede 35 caracteres
+// contra os 26 do maior projeto), e nos 196px da primeira tentativa aquele nome truncava, que a
+// §A.20 não aceita. Medida de conteúdo, não estimativa. Nenhuma coluna existente cedeu
+// largura para a nova caber: a tabela rola, como manda a régua.
+const GRID_MIN = "min-w-[2288px]";
 
 export default function GerenciadorPage() {
   const { token, isAdmin } = useAuth();
@@ -164,6 +177,8 @@ export default function GerenciadorPage() {
   const [grupos, setGrupos] = useState<GrupoLite[]>([]);
   const [projetoIds, setProjetoIds] = useState<string[]>([]);
   const [projetos, setProjetos] = useState<{ id: string; nome: string }[]>([]);
+  const [lojaIds, setLojaIds] = useState<string[]>([]);
+  const [lojas, setLojas] = useState<LojaCatalogo[]>([]);
   const [tipoContratos, setTipoContratos] = useState<string[]>([]);
   const [farol, setFarol] = useState<string[]>([]);
   const [sinalizadores, setSinalizadores] = useState<string[]>([]);
@@ -204,6 +219,11 @@ export default function GerenciadorPage() {
     apiFetch<{ id: string; nome: string }[]>("/admin/alto-volume", { token })
       .then((ps) => setProjetos(ps.map((p) => ({ id: p.id, nome: p.nome }))))
       .catch(() => setProjetos([]));
+    // LOJAS: catálogo global de ativas, pelo mesmo motivo do de projetos. Derivar das linhas
+    // carregadas encolheria a lista assim que a primeira loja fosse escolhida.
+    apiFetch<LojaCatalogo[]>("/admin/lojas", { token })
+      .then(setLojas)
+      .catch(() => setLojas([]));
   }, [token]);
 
   // debounce da busca global
@@ -264,6 +284,7 @@ export default function GerenciadorPage() {
     if (cargoIds.length) qs.set("cargoId", cargoIds.join(","));
     if (grupoIds.length) qs.set("grupoClienteId", grupoIds.join(","));
     if (projetoIds.length) qs.set("projetoId", projetoIds.join(","));
+    if (lojaIds.length) qs.set("lojaId", lojaIds.join(","));
     if (tipoContratos.length) qs.set("tipoContrato", tipoContratos.join(","));
     if (farol.length) qs.set("farol", farol.join(","));
     if (sinalizadores.length) qs.set("sinalizador", valoresDoFiltroSinal(sinalizadores).join(","));
@@ -283,6 +304,7 @@ export default function GerenciadorPage() {
     cargoIds,
     grupoIds,
     projetoIds,
+    lojaIds,
     tipoContratos,
     farol,
     sinalizadores,
@@ -330,6 +352,7 @@ export default function GerenciadorPage() {
     setCargoIds([]);
     setGrupoIds([]);
     setProjetoIds([]);
+    setLojaIds([]);
     setTipoContratos([]);
     setFarol([]);
     setSinalizadores([]);
@@ -346,6 +369,7 @@ export default function GerenciadorPage() {
     cargoIds.length ||
     grupoIds.length ||
     projetoIds.length ||
+    lojaIds.length ||
     tipoContratos.length ||
     farol.length ||
     sinalizadores.length ||
@@ -362,6 +386,7 @@ export default function GerenciadorPage() {
     (cargoIds.length ? 1 : 0) +
     (grupoIds.length ? 1 : 0) +
     (projetoIds.length ? 1 : 0) +
+    (lojaIds.length ? 1 : 0) +
     (tipoContratos.length ? 1 : 0) +
     (farol.length ? 1 : 0) +
     (sinalizadores.length ? 1 : 0) +
@@ -434,6 +459,8 @@ export default function GerenciadorPage() {
     ],
     [projetos],
   );
+  /** As opções de loja, do arquivo compartilhado com a Esteira: uma régua só (§A.28). */
+  const lojaOpts = useMemo(() => opcoesDeLoja(lojas), [lojas]);
   const grupoOpts = useMemo(
     () => grupos.filter((g) => g.ativo).map((g) => ({ value: g.id, label: g.nome })),
     [grupos],
@@ -540,6 +567,18 @@ export default function GerenciadorPage() {
                   options={cargoOpts}
                   placeholder="Todos"
                   ariaLabel="Cargo"
+                />
+              </FiltroCampo>
+              {/* LOJA: em qual unidade do cliente a pessoa trabalha, com MATRIZ (cliente sem
+                  lojas) e ALOCAR LOJA (tem lojas, falta escolher) como opções próprias. Múltiplo e
+                  com busca, no mesmo componente dos demais (§A.28/§A.35). */}
+              <FiltroCampo label="Loja">
+                <MultiSelect
+                  values={lojaIds}
+                  onChange={resetPage(setLojaIds)}
+                  options={lojaOpts}
+                  placeholder="Todas"
+                  ariaLabel="Loja ou unidade"
                 />
               </FiltroCampo>
               <FiltroCampo label="Projeto">
@@ -670,6 +709,11 @@ export default function GerenciadorPage() {
                 <ColunaOrdenavel ord={ord} chave="cliente">
                   Cliente
                 </ColunaOrdenavel>
+                {/* LOJA: em qual unidade do cliente a pessoa trabalha. Fica colada em Cliente
+                    porque é o desdobramento dele, e ordena pelo rótulo que a célula mostra. */}
+                <ColunaOrdenavel ord={ord} chave="loja">
+                  Loja
+                </ColunaOrdenavel>
                 {/* PROJETO (etapa 5): de qual projeto de Alto Volume a admissão é, ou MATRIZ. */}
                 <ColunaOrdenavel ord={ord} chave="projeto">
                   Projeto
@@ -739,6 +783,15 @@ export default function GerenciadorPage() {
                         >
                           {r.clienteOperacao || r.clienteRazao}
                         </div>
+                      </div>
+                      {/* LOJA: o nome da loja, MATRIZ (o cliente não usa loja) ou ALOCAR LOJA (usa
+                          e falta escolher). Nenhum dos três é vazio, então todos vêm no mesmo tom
+                          das demais células. */}
+                      <div
+                        className="meta truncate text-center"
+                        title={rotuloDaLoja(r.lojaNome, r.clienteTemLojas)}
+                      >
+                        {rotuloDaLoja(r.lojaNome, r.clienteTemLojas)}
                       </div>
                       {/* MATRIZ não é dado faltando: é o nome do que existe fora de projeto, então
                           vem no mesmo tom das demais células. */}

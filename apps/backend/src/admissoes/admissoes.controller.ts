@@ -56,6 +56,7 @@ export class AdmissoesController {
     @Query("cargoId") cargoId?: string,
     @Query("grupoClienteId") grupoClienteId?: string,
     @Query("projetoId") projetoId?: string,
+    @Query("lojaId") lojaId?: string,
     @Query("tipoContrato") tipoContrato?: string,
     @Query("farol") farol?: string,
     @Query("sinalizador") sinalizador?: string,
@@ -79,6 +80,9 @@ export class AdmissoesController {
       // PROJETO (etapa 5): múltiplo como os demais. `MATRIZ` viaja como valor e é interpretado nos
       // filtros, onde ele vira a ausência de vínculo.
       projetoId: parseMulti(projetoId),
+      // LOJA: múltiplo como os demais (§A.28). `MATRIZ` e `ALOCAR_LOJA` viajam como valor e são
+      // interpretados nos filtros, onde viram ausência de loja com e sem catálogo no cliente.
+      lojaId: parseMulti(lojaId),
       tipoContrato: parseMulti(tipoContrato),
       farol: parseMulti(farol),
       sinalizador: parseMulti(sinalizador),
