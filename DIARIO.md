@@ -12723,3 +12723,80 @@ depois disso, de propósito.
 
 Para o diretor validar o dia inteiro: **3010**, Controle Gerencial, Gerenciador, Esteira e a tela de
 Clientes com o botão Cadastrar Grupos.
+
+## 04/09/2026, a loja de cada admissão, e o "ALOCAR LOJA" que era um vazio
+
+Primeira subida do dia. Complementa a coluna de projeto de ontem: agora a operação vê, na mesma
+linha, de qual **projeto** e de qual **loja** é cada admissão.
+
+### O QUE ENTROU
+
+**Coluna e filtro de LOJA nas cinco telas:** as quatro abas da Esteira (Auditoria, Exame, Cadastro e
+Integração) e o Gerenciador. O **iFractal fica de fora da coluna**, pela mesma decisão do diretor que
+valeu para o projeto: ele tem composição de colunas própria.
+
+**"SEM LOJA" ERAM DOIS CASOS OPOSTOS, E O VAZIO ESCONDIA ISSO.** É o miolo da frente:
+
+- o cliente **não tem loja cadastrada**: a admissão fica no nome do cliente, como sempre foi. São
+  **2.587 das 2.790** da base, não é pendência, e a célula diz **MATRIZ**;
+- o cliente **tem lojas** e ninguém escolheu uma: falta alocar. São **181**, é pendência de
+  preenchimento, e a célula diz **ALOCAR LOJA** para que ela apareça em vez de se esconder atrás de
+  um traço.
+
+Fundir os dois num "não informado" apagaria exatamente a diferença que a coluna existe para expor.
+Por isso o backend responde os **dois fatos** (o nome da loja, e se o cliente tem catálogo de lojas),
+e o rótulo mora na tela, num arquivo só (`lib/loja.ts`), compartilhado pelas duas telas.
+
+**A régua é "loja ATIVA do próprio cliente"**, a mesma do seletor da liberação: cliente cujas lojas
+foram todas inativadas não tem onde alocar, então ele é MATRIZ e não pendência. A mesma expressão
+serve a célula, ao filtro e à ordenação, senão a tela ordenaria por um critério, filtraria por outro
+e escreveria um terceiro.
+
+**A ORDENAÇÃO É PELO RÓTULO, não pelo nome da loja.** Ordenar por `cliente_lojas.nome` cru jogaria
+MATRIZ e ALOCAR LOJA no mesmo balde, porque os dois nascem do mesmo `loja_id` nulo, e juntaria os dois
+grupos que a coluna existe para separar.
+
+**Endpoint novo, só leitura: `GET /admin/lojas`**, o catálogo global de lojas ativas. Ele existe
+porque as lojas só eram alcançáveis aninhadas em `admin/clientes/:cod/lojas`, e as duas telas filtram
+por loja **sem** ter um cliente escolhido. O nome do cliente vem junto no rótulo, porque nome de loja
+só é único DENTRO do cliente: duas "Loja Centro" de clientes diferentes são legítimas.
+
+### LEITURA PURA (§A.27)
+
+A coluna sai de `cliente_lojas` por `left join` sobre `admissoes.loja_id`, que é chave estrangeira
+direta e não multiplica linha. O filtro é `IN` para as lojas e `IS NULL` mais `EXISTS`/`NOT EXISTS`
+para os dois casos especiais. Nada escreve.
+
+**As medidas da produção mudaram no intervalo, e não foi o deploy.** O total do Gerenciador ficou
+igual (**2.790** antes e depois), mas as filas se moveram. A causa está registrada em
+`frente_status_eventos`, com autor e horário: **cinco ações de duas consultoras** enquanto o deploy
+rodava, entre 17h55 e 18h11. Uma auditoria concluída às 18h06 e um exame que virou APTO às 18h08
+abriram o gate do Cadastro da mesma admissão (regra 3), que é a fila subindo de 15 para 16. Vale o
+registro: **medir "antes e depois" com a operação trabalhando exige olhar o log de eventos**, senão a
+movimentação normal do dia passa por regressão do deploy.
+
+### AS PROVAS EM PRODUÇÃO, PELOS SERVIÇOS REAIS
+
+| Tela | Total | MATRIZ | ALOCAR LOJA | Nas lojas |
+|---|---:|---:|---:|---:|
+| Gerenciador | 2.790 | 2.587 | 181 | 22 |
+| Auditoria | 15 | 13 | 0 | 2 |
+| Exame | 32 | 29 | 0 | 3 |
+| Cadastro | 16 | 16 | 0 | 0 |
+| Integração | 23 | 20 | 0 | 3 |
+
+Todas fecham: total = MATRIZ + ALOCAR LOJA + lojas, e os três escolhidos juntos devolvem o total de
+volta, que é o que o multi-select promete.
+
+### REGRA NOVA: §A.37, COLUNA NOVA NASCE COM FILTRO JUNTO
+
+Registrada a pedido do diretor. Coluna nova numa tela que já existe sobe com o **filtro multiselect**
+e com a **ordenação** na mesma entrega, sem perguntar, e os rótulos especiais da coluna (o MATRIZ, o
+ALOCAR LOJA) viram opções do filtro. Conciliada com a §A.30, que trata de tela NOVA e continua
+valendo: lá o diretor escolhe quais colunas viram filtro.
+
+### GATE
+
+Typecheck 0 nos dois apps, lint limpo, **1.805 testes no backend** e **163 no frontend**. Serviços em
+200: backend 3011, frontend 3020 e ingress 3010. **Sem migration**: lê de `admissoes.loja_id` e
+`cliente_lojas`, que já existiam. O build do frontend rodou com o serviço parado.
