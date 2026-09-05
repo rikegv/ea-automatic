@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { CAMPO_NUMERO_CPF, extrairCpfDoFormulario } from "./extrair-cpf-formulario";
+import {
+  CAMPO_NUMERO_CPF,
+  ehCampoDeCpfDoTitular,
+  extrairCpfDoFormulario,
+} from "./extrair-cpf-formulario";
 
 /**
  * Fallback do CPF pelo formulário do processo admissional (caso Carlos Eduardo, 06/08/2026).
@@ -75,5 +79,77 @@ describe("extrairCpfDoFormulario", () => {
       { fieldName: CAMPO_NUMERO_CPF, answer: CPF_VALIDO_2 },
     );
     expect(extrairCpfDoFormulario(lista)).toBe(CPF_VALIDO_2);
+  });
+  /**
+   * CASO ZELDA (idPreCollaborator 421114, 05/09/2026). O formulário trazia DOIS campos de CPF do
+   * titular: "CPF" (válido, na posição 4) e "Número do CPF" (inválido, na 23), diferindo em um único
+   * dígito. O Pandapé NÃO deixa editar o preenchimento do candidato, então o conserto tinha de ser
+   * aqui: a régua antiga olhava só o rótulo exato "Número do CPF", achava o inválido e o job morria.
+   */
+  it("CASO ZELDA: acha o válido no campo 'CPF' quando o 'Número do CPF' não fecha o dígito", () => {
+    const lista = answers(
+      { fieldName: "Nome Completo", answer: "FULANO DE TAL" },
+      { fieldName: "CPF", answer: CPF_VALIDO },
+      { fieldName: "Data de Admissão", answer: "11/09/2026" },
+      { fieldName: CAMPO_NUMERO_CPF, answer: "12345678900" },
+    );
+    expect(extrairCpfDoFormulario(lista)).toBe(CPF_VALIDO);
+  });
+
+  it("fica com o PRIMEIRO válido quando os dois rótulos fecham o dígito", () => {
+    const lista = answers(
+      { fieldName: "CPF", answer: CPF_VALIDO },
+      { fieldName: CAMPO_NUMERO_CPF, answer: CPF_VALIDO_2 },
+    );
+    expect(extrairCpfDoFormulario(lista)).toBe(CPF_VALIDO);
+  });
+
+  it("aceita as variações de rótulo do titular, com acento, caixa e abreviação", () => {
+    for (const rotulo of ["CPF", "cpf", " Nº do CPF ", "Numero do CPF", "CPF do candidato"]) {
+      expect(ehCampoDeCpfDoTitular(rotulo)).toBe(true);
+    }
+  });
+
+  /**
+   * A recusa é a metade que importa: CPF de terceiro no formulário criaria a admissão NA PESSOA
+   * ERRADA, que é dano pior do que o job falhar. A régua é allowlist, então rótulo desconhecido
+   * também é recusado, mesmo sem estar na lista de qualificadores.
+   */
+  it("RECUSA CPF de terceiro, mesmo válido e mesmo aparecendo primeiro", () => {
+    for (const rotulo of [
+      "CPF do dependente",
+      "CPF do cônjuge",
+      "CPF do responsável",
+      "CPF da mãe",
+      "CPF do pai",
+      "CPF de emergência",
+      "CPF da empresa",
+    ]) {
+      expect(ehCampoDeCpfDoTitular(rotulo)).toBe(false);
+      expect(extrairCpfDoFormulario(answers({ fieldName: rotulo, answer: CPF_VALIDO }))).toBe(
+        undefined,
+      );
+    }
+  });
+
+  it("RECUSA rótulo com palavra desconhecida (allowlist, não blocklist)", () => {
+    expect(ehCampoDeCpfDoTitular("CPF do avalista")).toBe(false);
+    expect(ehCampoDeCpfDoTitular("CPF anterior da vaga antiga")).toBe(false);
+    expect(ehCampoDeCpfDoTitular("Comprovante de CPF anexado")).toBe(false);
+  });
+
+  it("RECUSA rótulo que nem fala de CPF, mesmo com CPF válido no valor", () => {
+    expect(ehCampoDeCpfDoTitular("Número do RG")).toBe(false);
+    expect(ehCampoDeCpfDoTitular("Número do PIS")).toBe(false);
+    expect(ehCampoDeCpfDoTitular(undefined)).toBe(false);
+    expect(ehCampoDeCpfDoTitular(42)).toBe(false);
+  });
+
+  it("PULA o de terceiro e segue até o do titular", () => {
+    const lista = answers(
+      { fieldName: "CPF do dependente", answer: CPF_VALIDO_2 },
+      { fieldName: "CPF", answer: CPF_VALIDO },
+    );
+    expect(extrairCpfDoFormulario(lista)).toBe(CPF_VALIDO);
   });
 });
