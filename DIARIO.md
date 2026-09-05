@@ -12800,3 +12800,98 @@ valendo: lá o diretor escolhe quais colunas viram filtro.
 Typecheck 0 nos dois apps, lint limpo, **1.805 testes no backend** e **163 no frontend**. Serviços em
 200: backend 3011, frontend 3020 e ingress 3010. **Sem migration**: lê de `admissoes.loja_id` e
 `cliente_lojas`, que já existiam. O build do frontend rodou com o serviço parado.
+
+---
+
+## 05/09/2026 (noite) — ADM PANDAPÉ: o candidato que não puxava, e o Reprocessar que não respondia
+
+**Sessão do ADM. Duas frentes ligadas, na ordem em que o diretor pediu: primeiro o diagnóstico do
+caso, depois a correção de fundo e o feedback do botão.**
+
+### O CASO, MEDIDO E NÃO DEDUZIDO
+
+Uma candidata de vaga de Vendedor de Loja, admissão prevista para 11/09, não entrava no EA. O
+diretor corrigiu o CPF no Pandapé e clicou em **Reprocessar** na tela de Diagnóstico, sem efeito e
+sem resposta. §A.6: aqui só o `idPreCollaborator`, que é id do ATS e não atributo da pessoa.
+
+O job existia e estava falhando: fila `pandape-sync`, job `cand-421114`, tipo `sync-candidate`,
+`failedReason` **"CPF inválido"**, **6 tentativas**, a última às 12:42:04 UTC daquele dia, com stack
+de um build mais novo que as cinco primeiras. Era o clique do diretor: o botão rodou e falhou de
+novo. No banco, zero linhas para a candidata. Nunca entrou.
+
+**A hipótese do cache está descartada, por código e por medição.** O job carrega só o id; o
+`processarCandidato` chama `PreCollaborator/Get` e `Match/Get` **na hora, toda vez**, e a única coisa
+cacheada no `PandapeApiService` é o `access_token`. O Reprocessar **já buscava** o dado atualizado.
+
+**A causa real: o EA olhava dois lugares e o CPF certo estava num terceiro.** Consultando a API ao
+vivo, o payload tinha `PreCollaborator.cpf` vazio, `Match.cpf` zerado (inválido), o campo de
+formulário **"Número do CPF" inválido** e o campo **"CPF" VÁLIDO**. Os dois campos do formulário
+diferiam em **um único dígito, na sétima posição**. O `extrairCpfDoFormulario` comparava o rótulo por
+igualdade exata com "Número do CPF", achava o inválido, ignorava o válido, e o job morria.
+
+**O destrave proposto na primeira volta era impossível, e o diretor corrigiu a premissa:** o Pandapé
+**não permite editar o preenchimento do candidato**. Não havia conserto na origem. A única saída era
+o EA aprender a achar o CPF válido onde ele estivesse.
+
+### A (`a3ba367`) — O EXTRATOR ACHA O CPF ONDE ELE ESTIVER
+
+Régua por palavra, com o rótulo sem acento e sem caixa: tem de falar de "cpf", **recusa** se citar
+terceiro (dependente, cônjuge, responsável, pai, mãe, emergência e outros), é **allowlist** (rótulo
+com palavra desconhecida é recusado por padrão), e fica com o **primeiro que fecha o dígito**.
+Continua sendo fallback, só entra quando o cadastro não fecha, e só aceita CPF que feche.
+Suite de 8 para **16 testes**, com os 8 originais do caso Carlos Eduardo preservados.
+
+**A candidata entrou pelo caminho real**, não por script avulso: reprocessando o job `cand-421114`
+depois que a A subiu. Saiu de `failed`, rodou 12s, completou, e nasceu **pré-admissão em
+AGUARDANDO_LIBERACAO**, com o `integracao_pandape` gravado. Não foi para a esteira porque a vaga não
+resolve cliente e cargo no de/para (§A.9), que é o comportamento correto.
+
+### B (`1adf371`) — O REPROCESSAR ESPERA E RESPONDE, NAS TRÊS FILAS
+
+O botão devolvia `{reenfileirado: true}` no instante do clique e a tela não lia nem isso. Como a
+lista mostra **apenas falhados**, e o `retry()` acabara de tirar o job de "falhado", a lista ficava
+vazia e **parecia sucesso**. Onze segundos depois o job falhava de novo e ninguém via.
+
+Agora o serviço acompanha o job com **teto de 25 segundos** e responde em três estados: **Puxou**
+(dizendo onde a admissão caiu, Liberação ou esteira), **Não Puxou** (com o motivo real traduzido; só
+CPF inválido, cota 429 e falha de rede, o resto cai no `failedReason` cru), e **Em Processamento**
+(estourou o teto ainda rodando). O teto existe porque os três workers têm concorrência 1 e limiter.
+
+**Vale para as três filas**, porque `reprocessarJob` é um método só (§A.26): Pandapé, Clicksign e VT,
+com teste cobrindo as três. Na tela o botão diz "Aguardando o resultado" enquanto espera, e a
+resposta **rola até a vista**: um defeito achado na prova visual, porque o job some da lista, ela
+encolhe e o banner ficava acima da dobra, repetindo o problema que a entrega corrige.
+
+### C (`6062d3d`) — O BLOCO "O QUE O PANDAPÉ DEVOLVE AGORA"
+
+O drawer passa a mostrar cada origem de CPF com o seu estado, e se o EA lê aquela origem. Campo de
+terceiro **aparece**, marcado como não lido e **nunca em verde**, mesmo válido. **Estende o `/alvo`
+que já existia** em vez de abrir rota nova, porque o teto de cota do Pandapé é compartilhado com o
+webhook que alimenta a folha (§A.5). §A.6: o número nunca sai, e há teste que falha se vazar.
+
+**D (escape manual, digitar o CPF na tela) o diretor decidiu NÃO fazer.**
+
+### HOMOLOGAÇÃO, E O QUE FOI DESFEITO
+
+A homologação tem o Pandapé **inerte de propósito**, sem credencial, então o bloco C não teria o que
+desenhar. Para a validação, subiu um **stub local com dados 100% sintéticos** (CPFs de teste, nomes
+inventados, no formato do caso real) e o `.env` da homologação apontou para ele. **Removido e
+restaurado ao estado original** ao fim da sessão. Nenhum dado sintético tocou produção.
+
+### GATE E PROVAS
+
+Typecheck 0 nos dois apps, lint limpo nos 10 arquivos, **1.836 testes no backend** (159 arquivos) e
+**163 no frontend** (24 arquivos). O módulo Diagnóstico foi de 11 para **42 testes**.
+
+Serviços em 200: backend 3011, frontend 3010 e ingress. O build do frontend rodou **com o serviço
+parado** (janela de 80 segundos, 22:07:39 a 22:08:59, fora do horário de operação).
+
+**§A.27, nada mudou de contagem**, como tinha de ser numa entrega de diagnóstico: `admissoes` 2.803,
+`candidatos` 2.762, `integracao_pandape` 412, e todos os faróis idênticos antes e depois. As três
+filas de produção subiram com zero job falhado, worker e scheduler ativos.
+
+### PARA A PRÓXIMA SESSÃO
+
+A candidata está **aguardando liberação**: falta atribuir cliente e cargo para ela nascer na esteira.
+Fica registrado que o **de/para vaga→cliente segue pendente** (§A.9), e é ele que faria admissões do
+Pandapé nascerem direto na esteira em vez de parar na Liberação.
