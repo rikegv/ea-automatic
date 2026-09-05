@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { apiFetch, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { Modal } from "@/components/ui/Modal";
@@ -41,6 +41,21 @@ interface AlvoResolvido {
   cliente?: string;
   admissaoPrevista?: string | null;
   indisponivel?: string;
+}
+
+/**
+ * BLOCO B: o desfecho REAL do reprocessamento. Três estados, nunca dois: voltar para a fila não é
+ * sucesso, e era exatamente isso que a tela dizia sem querer (caso Zelda, 05/09/2026).
+ */
+interface ResultadoReprocesso {
+  fila: string;
+  jobId: string;
+  nome: string;
+  desfecho: "CONCLUIDO" | "FALHOU" | "EM_PROCESSAMENTO";
+  motivo?: string;
+  motivoLegivel?: string;
+  mensagem: string;
+  esperouSegundos: number;
 }
 
 /**
@@ -139,6 +154,22 @@ export function DependenciaDrawer({
   const [alvos, setAlvos] = useState<Record<string, AlvoResolvido>>({});
   /** Job aguardando confirmação da limpeza (§A.26: destrutiva não acontece em um clique). */
   const [confirmarLimpeza, setConfirmarLimpeza] = useState<JobFalhado | null>(null);
+  /**
+   * O desfecho do ÚLTIMO reprocessamento, mostrado FORA do card do job de propósito: quando o
+   * reprocesso dá certo, o job some da lista (que é só de falhados) e o card desapareceria levando a
+   * resposta junto. Era esse sumiço que a tela lia como sucesso, calada.
+   */
+  const [resultado, setResultado] = useState<ResultadoReprocesso | null>(null);
+  const bannerRef = useRef<HTMLDivElement | null>(null);
+
+  /**
+   * TRAZ A RESPOSTA PARA A VISTA. Quando o reprocesso dá certo, o job SAI da lista, a lista encolhe e
+   * o banner pode acabar acima da dobra: a pessoa clicaria e continuaria sem ver resposta, que é o
+   * defeito inteiro que esta entrega existe para corrigir. Rolar até ele fecha o ciclo do clique.
+   */
+  useEffect(() => {
+    if (resultado) bannerRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [resultado]);
 
   const ehFila = dep.nome === "Fila (BullMQ)";
   const copy = COPY[dep.nome] ?? { oQueE: dep.nome, oQueFazer: "Sem ação disponível nesta tela." };
@@ -205,15 +236,22 @@ export function DependenciaDrawer({
     }
   }
 
+  /**
+   * O REPROCESSAR AGORA ESPERA. A chamada só volta quando o job termina, ou quando o teto de 25s do
+   * backend estoura, e a resposta traz o desfecho de verdade. Enquanto isso o botão diz que está
+   * aguardando, senão a tela parece travada.
+   */
   async function agirNoJob(j: JobFalhado, rota: "limpar-job" | "reprocessar-job") {
     setEmVoo(`${rota}:${j.jobId}`);
     setErro(null);
+    if (rota === "reprocessar-job") setResultado(null);
     try {
-      await apiFetch(`/diagnostico/acao/${rota}`, {
+      const r = await apiFetch<ResultadoReprocesso>(`/diagnostico/acao/${rota}`, {
         method: "POST",
         token,
         body: { fila: j.fila, jobId: j.jobId },
       });
+      if (rota === "reprocessar-job" && r?.desfecho) setResultado(r);
       setConfirmarLimpeza(null);
       await carregarFilas();
       await recarregarDep();
@@ -260,6 +298,36 @@ export function DependenciaDrawer({
                 </p>
               ) : null}
               {ehFila && carregando && <p className="text-faint">Lendo as filas…</p>}
+
+              {/*
+                O DESFECHO DO REPROCESSAMENTO, em destaque e fora do card do job. Verde só quando
+                puxou de verdade; amarelo quando o job voltou para a fila e ainda roda; vermelho com o
+                motivo real quando não puxou. Nunca os três viram "sucesso".
+              */}
+              {resultado && (
+                <div
+                  ref={bannerRef}
+                  className={`rounded-xl border px-3 py-2.5 text-[13px] ${
+                    resultado.desfecho === "CONCLUIDO"
+                      ? "border-ok/40 bg-ok/10 text-ok"
+                      : resultado.desfecho === "FALHOU"
+                        ? "border-danger/40 bg-danger/10 text-danger"
+                        : "border-warn/40 bg-warn/10 text-warn"
+                  }`}
+                >
+                  <div className="font-semibold">
+                    {resultado.desfecho === "CONCLUIDO"
+                      ? "Puxou"
+                      : resultado.desfecho === "FALHOU"
+                        ? "Não Puxou"
+                        : "Em Processamento"}
+                  </div>
+                  <p className="mt-0.5">{resultado.mensagem}</p>
+                  <p className="mt-1 text-[11.5px] opacity-80">
+                    {resultado.fila} · {resultado.nome}, acompanhado por {resultado.esperouSegundos}s
+                  </p>
+                </div>
+              )}
               {jobs.map((j) => {
                 const alvo = alvos[j.jobId];
                 return (
@@ -295,6 +363,7 @@ export function DependenciaDrawer({
                                 {new Date(alvo.admissaoPrevista).toLocaleDateString("pt-BR")}
                               </div>
                             )}
+
                           </>
                         )}
                       </div>
@@ -309,13 +378,19 @@ export function DependenciaDrawer({
                       >
                         Ver dados do alvo
                       </Button>
+                      {/*
+                        O botão espera o desfecho (até 25s). Sem dizer isso, a tela parece travada e
+                        alguém clica de novo, que era metade do problema.
+                      */}
                       <Button
                         variant="secondary"
                         className="!px-2.5 !py-1 text-[12px]"
                         disabled={emVoo !== null}
                         onClick={() => void agirNoJob(j, "reprocessar-job")}
                       >
-                        Reprocessar
+                        {emVoo === `reprocessar-job:${j.jobId}`
+                          ? "Aguardando o resultado…"
+                          : "Reprocessar"}
                       </Button>
                       {/* DESTRUTIVA: confirma antes (§A.26). O job é o único rastro do que carregava. */}
                       <Button

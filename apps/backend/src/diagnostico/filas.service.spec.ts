@@ -31,6 +31,37 @@ function filaFake(contagem: Partial<Record<string, number>>, falhados: JobFake[]
   };
 }
 
+/**
+ * Fila que devolve o MESMO job em cada checagem, com o estado percorrendo um roteiro. É assim que o
+ * worker se comporta de verdade: waiting, active, e então o desfecho.
+ */
+function filaComRoteiro(roteiro: (string | null)[], motivo?: string) {
+  let passo = 0;
+  const job = {
+    id: "job-1",
+    name: "sync-candidate",
+    data: { idPrecollaborator: "421114" },
+    failedReason: "",
+    retry: vi.fn(async () => {
+      job.failedReason = "";
+    }),
+    getState: vi.fn(async () => roteiro[Math.min(passo, roteiro.length - 1)] ?? "waiting"),
+  };
+  return {
+    ...filaFake({}),
+    getJob: vi.fn(async () => {
+      const estado = roteiro[Math.min(passo, roteiro.length - 1)];
+      passo += 1;
+      if (estado === null) return undefined;
+      if (estado === "failed" && motivo) job.failedReason = motivo;
+      return job;
+    }),
+  };
+}
+
+/** Teto e cadência curtos: a suite prova a REGRA, não a paciência de 25 segundos. */
+const RAPIDO = { tetoMs: 120, intervaloMs: 10 };
+
 function servico(opts: {
   pandape?: ReturnType<typeof filaFake> | undefined;
   clicksign?: ReturnType<typeof filaFake> | undefined;
@@ -158,5 +189,64 @@ describe("FilasDiagnosticoService", () => {
     const r = await servico({}).estado();
     expect(r.disponivel).toBe(false);
     expect(r.indisponiveis).toHaveLength(3);
+  });
+});
+
+describe("FilasDiagnosticoService.reprocessarJob", () => {
+  /**
+   * O DEFEITO QUE ESTES TESTES SEGURAM (caso Zelda, 05/09/2026). O método devolvia
+   * `{reenfileirado: true}` no instante do clique. Como a tela lista SÓ falhados, e o `retry()` acabara
+   * de tirar o job de "falhado", a lista recarregada ficava vazia e PARECIA sucesso. Onze segundos
+   * depois o job falhava de novo e ninguém via. Voltar para a fila NÃO é sucesso.
+   */
+  it("PUXOU: o job completou, e o desfecho diz CONCLUIDO", async () => {
+    const r = await servico({
+      pandape: filaComRoteiro(["waiting", "active", "completed"]) as never,
+    }).reprocessarJob("pandape-sync", "job-1", RAPIDO);
+    expect(r.desfecho).toBe("CONCLUIDO");
+    expect(r.motivo).toBeUndefined();
+  });
+
+  it("PUXOU: job removido pelo removeOnComplete também é CONCLUIDO, não erro", async () => {
+    const r = await servico({
+      pandape: filaComRoteiro(["waiting", null]) as never,
+    }).reprocessarJob("pandape-sync", "job-1", RAPIDO);
+    expect(r.desfecho).toBe("CONCLUIDO");
+  });
+
+  it("NÃO PUXOU: falhou de novo, e o motivo REAL volta para a tela", async () => {
+    const r = await servico({
+      pandape: filaComRoteiro(["waiting", "active", "failed"], "CPF inválido") as never,
+    }).reprocessarJob("pandape-sync", "job-1", RAPIDO);
+    expect(r.desfecho).toBe("FALHOU");
+    expect(r.motivo).toBe("CPF inválido");
+  });
+
+  it("EM PROCESSAMENTO: estourou o teto ainda rodando, e NÃO finge sucesso", async () => {
+    const r = await servico({
+      pandape: filaComRoteiro(["active"]) as never,
+    }).reprocessarJob("pandape-sync", "job-1", RAPIDO);
+    expect(r.desfecho).toBe("EM_PROCESSAMENTO");
+    expect(r.motivo).toBeUndefined();
+  });
+
+  it("NÃO lê como falha nova o eco da falha antiga (failed sem motivo segue esperando)", async () => {
+    const r = await servico({
+      pandape: filaComRoteiro(["failed", "active", "completed"]) as never,
+    }).reprocessarJob("pandape-sync", "job-1", RAPIDO);
+    expect(r.desfecho).toBe("CONCLUIDO");
+  });
+
+  /** §A.26: o método é UM só para as três filas. Quebrar uma quebraria as três. */
+  it("vale para as TRÊS filas, porque o método é compartilhado", async () => {
+    const clicksign = await servico({
+      clicksign: filaComRoteiro(["active", "failed"], "429 Too Many Requests") as never,
+    }).reprocessarJob("clicksign-sync", "job-1", RAPIDO);
+    expect(clicksign.desfecho).toBe("FALHOU");
+
+    const vt = await servico({
+      vt: filaComRoteiro(["active", "completed"]) as never,
+    }).reprocessarJob("vt-coleta-scan", "job-1", RAPIDO);
+    expect(vt.desfecho).toBe("CONCLUIDO");
   });
 });

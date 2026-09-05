@@ -3,6 +3,7 @@ import type { Job, Queue } from "bullmq";
 import { ClicksignQueueService } from "../clicksign/clicksign-queue.service";
 import { PandapeQueueService } from "../pandape/pandape-queue.service";
 import { VtColetaQueueService } from "../vt-coleta/vt-coleta-queue.service";
+import type { DesfechoReprocesso } from "./motivo-reprocesso";
 
 /**
  * AS TRÊS FILAS DO SISTEMA, vistas como uma só pelo Diagnóstico.
@@ -49,6 +50,22 @@ export interface JobFalhado {
   horas: number | null;
 }
 
+/**
+ * O RESULTADO DO REPROCESSAMENTO, com o desfecho REAL. O `{reenfileirado: true}` de antes não era
+ * resposta: era o recibo de ter empurrado o job de volta para a fila, que a tela lia como sucesso.
+ */
+export interface ResultadoReprocesso {
+  fila: NomeFila;
+  jobId: string;
+  /** Tipo do job (`sync-candidate`, `criar-envelope`, `scan-tick`, ...), para a tela dar contexto. */
+  nome: string;
+  desfecho: DesfechoReprocesso;
+  /** `failedReason` cru do BullMQ, presente só quando FALHOU. Já é legível e não carrega PII. */
+  motivo?: string;
+  /** Quanto tempo o acompanhamento esperou, em segundos, para a tela ser honesta sobre o teto. */
+  esperouSegundos: number;
+}
+
 export interface EstadoFilas {
   /** false quando NENHUMA fila subiu (Redis fora no boot). */
   disponivel: boolean;
@@ -61,6 +78,11 @@ export interface EstadoFilas {
 @Injectable()
 export class FilasDiagnosticoService {
   private readonly logger = new Logger("FilasDiagnostico");
+
+  /** Teto do acompanhamento do reprocesso. Segura a conexão HTTP por no máximo isto. */
+  private static readonly TETO_ESPERA_MS = 25_000;
+  /** Cadência das checagens de estado. Barato: é um HGET no Redis local. */
+  private static readonly INTERVALO_MS = 1_000;
 
   constructor(
     private readonly pandape: PandapeQueueService,
@@ -166,15 +188,66 @@ export class FilasDiagnosticoService {
   }
 
   /**
-   * REPROCESSA o job falhado (`job.retry()`): ele volta para a fila e o worker tenta de novo, com o
-   * mesmo payload. Não destrutiva, e é o caminho certo quando a causa foi corrigida fora do EA (o
-   * CPF arrumado no Pandapé, por exemplo).
+   * REPROCESSA o job falhado e ESPERA o desfecho. Não destrutiva.
+   *
+   * O `job.retry()` devolve na hora, porque só empurra o job de volta para a fila: quem trabalha é o
+   * worker, depois. A versão anterior parava aqui e respondia `{reenfileirado: true}`, e era esse o
+   * defeito, porque a tela lista APENAS falhados e a lista recarregada ficava vazia, com cara de
+   * sucesso. Aqui o método acompanha o job até ele terminar e devolve o que de fato aconteceu.
+   *
+   * O TETO DE 25 SEGUNDOS não é estética: os três workers têm concorrência 1 e limiter, então o job
+   * reprocessado pode ficar atrás de outro na fila, e há job que roda por minutos (`scheduler-tick`
+   * do Pandapé, `scan-tick` do VT). Estourado o teto, a resposta é EM_PROCESSAMENTO, que é verdade,
+   * e não um sucesso inventado. Medido em produção: o `sync-candidate` da Zelda fechou em 12s.
+   *
+   * COMPARTILHADO PELAS TRÊS FILAS (§A.26): Pandapé, Clicksign e VT usam este mesmo método. Nada aqui
+   * é específico de uma delas; o que muda por fila é só quanto tempo o job leva, e isso o teto cobre.
    */
-  async reprocessarJob(fila: NomeFila, jobId: string): Promise<{ reenfileirado: true }> {
+  async reprocessarJob(
+    fila: NomeFila,
+    jobId: string,
+    /** Só a suite mexe nisto: o caminho de produção usa o teto real de 25s. */
+    opts: { tetoMs?: number; intervaloMs?: number } = {},
+  ): Promise<ResultadoReprocesso> {
+    const tetoMs = opts.tetoMs ?? FilasDiagnosticoService.TETO_ESPERA_MS;
+    const intervaloMs = opts.intervaloMs ?? FilasDiagnosticoService.INTERVALO_MS;
+    const q = this.fila(fila);
+    if (!q) throw new NotFoundException(`Fila ${fila} indisponível.`);
     const job = await this.buscarJob(fila, jobId);
+    const nome = job.name;
     await job.retry();
-    this.logger.log(`Job falhado reenfileirado: ${fila}/${jobId}.`);
-    return { reenfileirado: true };
+    this.logger.log(`Job falhado reenfileirado: ${fila}/${jobId}. Acompanhando o desfecho.`);
+
+    const inicio = Date.now();
+    const segundos = () => Math.round((Date.now() - inicio) / 1000);
+
+    while (Date.now() - inicio < tetoMs) {
+      await new Promise((r) => setTimeout(r, intervaloMs));
+      const atual = await q.getJob(jobId);
+      // Sumiu do Redis: o `removeOnComplete` levou. Só quem completa é removido, então é sucesso.
+      if (!atual) return { fila, jobId, nome, desfecho: "CONCLUIDO", esperouSegundos: segundos() };
+
+      const estado = await atual.getState();
+      if (estado === "completed") {
+        return { fila, jobId, nome, desfecho: "CONCLUIDO", esperouSegundos: segundos() };
+      }
+      // O `retry()` apaga `failedReason` junto com o estado antigo (script `reprocessJob` do BullMQ),
+      // então "falhado COM motivo" é necessariamente a falha NOVA, nunca o eco da anterior.
+      if (estado === "failed" && atual.failedReason) {
+        this.logger.warn(`Reprocesso falhou de novo: ${fila}/${jobId}.`);
+        return {
+          fila,
+          jobId,
+          nome,
+          desfecho: "FALHOU",
+          motivo: atual.failedReason,
+          esperouSegundos: segundos(),
+        };
+      }
+    }
+
+    this.logger.log(`Reprocesso ainda rodando após o teto: ${fila}/${jobId}.`);
+    return { fila, jobId, nome, desfecho: "EM_PROCESSAMENTO", esperouSegundos: segundos() };
   }
 
   /** O `data` cru do job, para quem vai resolver quem é o alvo. */

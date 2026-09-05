@@ -16,6 +16,11 @@ import { DRIZZLE } from "../db/drizzle.module";
 import { DiagnosticoService } from "./diagnostico.service";
 import { FilasDiagnosticoService, type NomeFila } from "./filas.service";
 import {
+  mensagemDoReprocesso,
+  traduzirMotivo,
+  type DestinoDoReprocesso,
+} from "./motivo-reprocesso";
+import {
   AcaoLigarPastaDto,
   AcaoZerarDuplicataDto,
   AcaoZerarPendenciaDto,
@@ -391,10 +396,55 @@ export class DiagnosticoController {
   }
 
   /** REPROCESSAR o job falhado: volta para a fila com o mesmo payload. Não destrutiva. */
+  /**
+   * REPROCESSA e RESPONDE O DESFECHO (bloco B). O serviço acompanha o job por até 25s; aqui a
+   * resposta ganha a frase que a tela mostra e, no caso do Pandapé, ONDE a admissão caiu.
+   *
+   * A conexão HTTP fica segura por até 25 segundos. É ação de Master, um alvo por vez, disparada à
+   * mão: não há caminho onde isso escale.
+   */
   @Post("acao/reprocessar-job")
   async reprocessarJob(@Body() dto: AcaoJobDto, @CurrentUser() user: AuthUser) {
     this.registrarTrilha(user, "reprocessar-job", `${dto.fila}/${dto.jobId}`);
-    return this.filas.reprocessarJob(dto.fila, dto.jobId);
+    // O `data` é lido ANTES: depois do reprocesso o job pode já ter saído do Redis (removeOnComplete).
+    const dados = await this.filas
+      .dadosDoJob(dto.fila, dto.jobId)
+      .catch((): Record<string, unknown> => ({}));
+    const r = await this.filas.reprocessarJob(dto.fila, dto.jobId);
+    const destino =
+      r.desfecho === "CONCLUIDO"
+        ? await this.destinoDoPandape(dto.fila, dados.idPrecollaborator)
+        : undefined;
+    return {
+      ...r,
+      ...(destino ? { destino } : {}),
+      ...(r.motivo && traduzirMotivo(r.motivo) ? { motivoLegivel: traduzirMotivo(r.motivo) } : {}),
+      mensagem: mensagemDoReprocesso({ desfecho: r.desfecho, motivo: r.motivo, destino }),
+    };
+  }
+
+  /**
+   * ONDE A ADMISSÃO CAIU depois de um reprocesso bem-sucedido do Pandapé. Sem isto a mensagem diria
+   * só "sucesso" e o operador teria de caçar o candidato entre a Liberação e a Esteira.
+   *
+   * §A.6: consulta por `id_precollaborator`, que é id do ATS, e devolve só o LUGAR. Nome e CPF não
+   * saem daqui.
+   */
+  private async destinoDoPandape(
+    fila: NomeFila,
+    idPrecollaborator: unknown,
+  ): Promise<DestinoDoReprocesso | undefined> {
+    if (fila !== "pandape-sync" || !idPrecollaborator) return undefined;
+    const linhas = await this.db.execute<{ cod_cliente: string | null }>(sql`
+      select a.cod_cliente
+        from integracao_pandape ip
+        join admissoes a on a.id = ip.admissao_id
+       where ip.id_precollaborator = ${String(idPrecollaborator)}
+       limit 1
+    `);
+    const linha = Array.isArray(linhas) ? linhas[0] : undefined;
+    if (!linha) return "NADA";
+    return linha.cod_cliente ? "ESTEIRA" : "LIBERACAO";
   }
 
   /**
