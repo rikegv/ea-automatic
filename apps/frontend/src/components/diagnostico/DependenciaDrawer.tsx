@@ -32,6 +32,17 @@ interface EstadoFilas {
   jobs: JobFalhado[];
   indisponiveis: string[];
 }
+/**
+ * BLOCO C: o estado de cada origem de CPF do pré-colaborador, como o Pandapé devolve AGORA. O NÚMERO
+ * nunca vem (§A.6): vem o rótulo do campo, se ele fecha o dígito, e se o EA olha para ele.
+ */
+interface EstadoCampoCpf {
+  origem: string;
+  estado: "válido" | "inválido" | "ausente";
+  lidoPeloEa: boolean;
+  observacao?: string;
+}
+
 interface AlvoResolvido {
   tipo: string;
   id: string;
@@ -41,6 +52,8 @@ interface AlvoResolvido {
   cliente?: string;
   admissaoPrevista?: string | null;
   indisponivel?: string;
+  cpf?: EstadoCampoCpf[];
+  cpfResumo?: string;
 }
 
 /**
@@ -364,6 +377,50 @@ export function DependenciaDrawer({
                               </div>
                             )}
 
+                            {/*
+                              BLOCO C: o que o Pandapé devolve AGORA, por origem de CPF. Sem o número
+                              (§A.6): só onde ele está, se fecha o dígito e se o EA olha para ali. É o
+                              que responde "por que não puxa" sem ninguém abrir o Redis.
+                            */}
+                            {alvo.cpf?.length ? (
+                              <div className="mt-2 border-t border-[var(--border)] pt-2">
+                                <div className="mb-1 font-semibold text-text">
+                                  O Que O Pandapé Devolve Agora
+                                </div>
+                                <ul className="space-y-1">
+                                  {alvo.cpf.map((c, i) => (
+                                    <li key={`${c.origem}:${i}`} className="flex flex-wrap gap-x-2">
+                                      <span className="text-dim">{c.origem}:</span>
+                                      {/*
+                                        Campo que o EA NÃO lê nunca sai verde, mesmo válido: verde ali
+                                        seria sinal de que dá para usar, e é justamente o contrário.
+                                      */}
+                                      <span
+                                        className={
+                                          !c.lidoPeloEa
+                                            ? "font-semibold text-faint"
+                                            : c.estado === "válido"
+                                              ? "font-semibold text-ok"
+                                              : c.estado === "inválido"
+                                                ? "font-semibold text-danger"
+                                                : "font-semibold text-faint"
+                                        }
+                                      >
+                                        {c.estado}
+                                      </span>
+                                      {!c.lidoPeloEa && (
+                                        <span className="text-faint">
+                                          (o EA não lê: {c.observacao ?? "campo recusado"})
+                                        </span>
+                                      )}
+                                    </li>
+                                  ))}
+                                </ul>
+                                {alvo.cpfResumo && (
+                                  <p className="mt-1.5 text-dim">{alvo.cpfResumo}</p>
+                                )}
+                              </div>
+                            ) : null}
                           </>
                         )}
                       </div>

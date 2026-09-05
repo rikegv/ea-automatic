@@ -20,6 +20,7 @@ import {
   traduzirMotivo,
   type DestinoDoReprocesso,
 } from "./motivo-reprocesso";
+import { estadoDosCamposDeCpf, resumoDosCamposDeCpf } from "./estado-cpf-pandape";
 import {
   AcaoLigarPastaDto,
   AcaoZerarDuplicataDto,
@@ -360,6 +361,14 @@ export class DiagnosticoController {
           indisponivel: "Não foi possível consultar o Pandapé agora. Tente de novo em instantes.",
         };
       }
+      // BLOCO C: "o que o Pandapé devolve AGORA". O Match entra AQUI, na chamada que já existia, e
+      // não numa rota nova: o teto de cota do Pandapé é compartilhado com o webhook que alimenta a
+      // folha (§A.5), então consultar duas vezes o mesmo alvo seria gasto sem ganho. §A.6: só o
+      // estado de cada origem sai daqui, nunca o número.
+      const match = pc.idMatch
+        ? await this.pandapeApi.getMatch(String(pc.idMatch)).catch(() => undefined)
+        : undefined;
+      const cpf = estadoDosCamposDeCpf(pc, match);
       return {
         tipo: "pandape",
         id: String(dados.idPrecollaborator),
@@ -367,6 +376,8 @@ export class DiagnosticoController {
         vaga: pc.vacancyJob ?? "não informada",
         etapa: pc.currentFolderName ?? "não informada",
         admissaoPrevista: pc.admissionDate ?? null,
+        cpf,
+        cpfResumo: resumoDosCamposDeCpf(cpf),
       };
     }
     if (dados.admissaoId) {
