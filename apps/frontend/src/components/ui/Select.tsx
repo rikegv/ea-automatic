@@ -3,6 +3,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/cn";
+import { calcularPosicaoPopover, type PosicaoPopover } from "@/lib/popover-posicao";
 import { Icon } from "./Icon";
 
 export interface SelectOption {
@@ -60,7 +61,7 @@ export function Select({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [adding, setAdding] = useState(false);
-  const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null);
+  const [pos, setPos] = useState<PosicaoPopover | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const selected = options.find((o) => o.value === value);
@@ -72,12 +73,17 @@ export function Select({
     return options.filter((o) => norm(o.label).includes(q));
   }, [options, query]);
 
-  // Posiciona o popover a partir do botão (position fixed).
+  /**
+   * Posiciona o popover a partir do botão (position fixed), com a régua de
+   * `lib/popover-posicao`: ela decide o lado (para baixo, ou invertido para cima quando embaixo não
+   * cabe) e o TETO DE ALTURA, que é o que impede o menu de passar da borda da janela. O mesmo
+   * cálculo serve o `MultiSelect`: duas cópias divergiriam no primeiro ajuste.
+   */
   const reposicionar = () => {
     const el = triggerRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
-    setPos({ top: r.bottom + 6, left: r.left, width: r.width });
+    setPos(calcularPosicaoPopover(r, { largura: window.innerWidth, altura: window.innerHeight }));
   };
 
   useLayoutEffect(() => {
@@ -137,6 +143,14 @@ export function Select({
     }
   }
 
+  /**
+   * `top` OU `bottom`, nunca os dois. Abrindo para baixo, o menu é preso pelo TOPO e cresce para
+   * baixo; invertido, é preso pelo RODAPÉ e cresce para cima sozinho, sem ninguém precisar medir a
+   * altura dele antes de desenhar (que exigiria um segundo passe de render, com o menu piscando na
+   * posição errada no primeiro).
+   */
+  const posicaoVertical = pos ? (pos.paraCima ? { bottom: pos.bottom } : { top: pos.top }) : {};
+
   return (
     <div className={cn("relative", className)}>
       <button
@@ -170,18 +184,40 @@ export function Select({
           <div
             ref={menuRef}
             role="listbox"
+            /*
+              FLEX EM COLUNA porque o teto de altura agora é do POPOVER INTEIRO, e não da lista: o
+              campo de busca e o botão de adicionar ficam fixos, e é a lista que encolhe e rola por
+              dentro quando o espaço aperta. Sem isto, apertar o teto cortaria a busca junto.
+            */
             className={cn(
-              "glass fixed z-[60] overflow-hidden p-1.5 !bg-[var(--surface-2)]",
-              menuFit && "w-max max-w-[min(92vw,560px)]",
+              "glass fixed z-[60] flex flex-col overflow-hidden p-1.5 !bg-[var(--surface-2)]",
+              menuFit && "w-max",
             )}
+            /*
+              `top` OU `bottom`, nunca os dois: a régua devolve um deles conforme o lado escolhido.
+              O `maxWidth` substitui o antigo `max-w-[min(92vw,560px)]` do modo `menuFit` porque ele
+              é MEDIDO (a borda direita real, descontada a posição do menu) em vez de estimado, e
+              deixar os dois brigando faria a classe vencer a conta em uma tela e perder na outra.
+            */
             style={
               menuFit
-                ? { top: pos.top, left: pos.left, minWidth: pos.width }
-                : { top: pos.top, left: pos.left, width: pos.width }
+                ? {
+                    ...posicaoVertical,
+                    left: pos.left,
+                    minWidth: pos.largura,
+                    maxWidth: Math.min(pos.larguraMax, 560),
+                    maxHeight: pos.alturaMax,
+                  }
+                : {
+                    ...posicaoVertical,
+                    left: pos.left,
+                    width: pos.largura,
+                    maxHeight: pos.alturaMax,
+                  }
             }
           >
             {comBusca && (
-              <div className="px-1 pb-1.5">
+              <div className="flex-none px-1 pb-1.5">
                 <input
                   autoFocus
                   className="ds-input !py-2 text-[13px]"
@@ -194,7 +230,10 @@ export function Select({
                 />
               </div>
             )}
-            <div className="max-h-60 overflow-auto">
+            {/* `min-h-0` é o que deixa a lista ENCOLHER dentro do flex; sem ele o filho
+                mantém a altura do conteúdo e estoura o teto do popover em silêncio. O `max-h-60`
+                fica: em tela com espaço, o menu continua exatamente do tamanho de antes. */}
+            <div className="max-h-60 min-h-0 flex-1 overflow-auto">
               {filtradas.length === 0 && !podeAdicionar ? (
                 <div className="px-3 py-2 text-[13px] text-faint">Nenhum resultado.</div>
               ) : (
@@ -230,7 +269,7 @@ export function Select({
             {podeAdicionar && (
               <button
                 type="button"
-                className="mt-1 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[13px] text-accent transition hover:bg-[var(--surface-2)] disabled:opacity-50"
+                className="mt-1 flex w-full flex-none items-center gap-2 rounded-lg px-3 py-2 text-left text-[13px] text-accent transition hover:bg-[var(--surface-2)] disabled:opacity-50"
                 disabled={adding}
                 onClick={adicionar}
               >

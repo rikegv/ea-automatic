@@ -54,7 +54,6 @@ export const TOM_STATUS_VAGA: Record<VagaStatus, PillTone> = {
   ENTREGUE: "ok",
   FECHADA: "nt",
   CANCELADA: "dg",
-  VAGA_BANCO: "in",
 };
 
 /** O tom de um status de vaga. Forma de função, para casar com `tomDaEtapa` e `tomDaSituacao`. */

@@ -106,6 +106,8 @@ interface Opcoes {
   clientes: OpcaoCliente[];
   beneficios: { id: string; nome: string; exigeValor: boolean }[];
   motivos: string[];
+  /** Os consultores de A&S, para o filtro da coluna do item 16. Vem do endpoint, não das linhas. */
+  consultores: { id: string; nome: string }[];
   /** O cadastro de escalas do menu gerencial (item 5), servido pelo próprio módulo de A&S. */
   escalas: string[];
 }
@@ -120,6 +122,17 @@ const STEPS: StepDef[] = [
 ];
 
 const MOTIVO_SUBSTITUICAO = "Substituição";
+
+/**
+ * O SENTINELA DA VAGA SEM CONSULTOR, no filtro da coluna nova (item 16, 07/09).
+ *
+ * Vazio no filtro significa "todos" (é a régua desta tela inteira), então a vaga SEM consultor
+ * precisa de um valor próprio para poder ser pedida. Sem ele, "quem ainda não tem responsável" seria
+ * a única pergunta que a coluna cria e o filtro não sabe responder (§A.37).
+ *
+ * O texto começa com dois-pontos de propósito: nenhum uuid pode colidir com ele.
+ */
+const SEM_CONSULTOR = ":sem-consultor";
 
 /**
  * TOM DA PILL POR STATUS (§A.12: o ícone acompanha o estado real, nunca é fixo). Entregue é o êxito
@@ -608,6 +621,7 @@ export default function CentralDeVagasPage() {
     clientes: [],
     beneficios: [],
     motivos: [],
+    consultores: [],
     escalas: [],
   });
   const [contexto, setContexto] = useState<VagaContextoAs>({
@@ -643,6 +657,9 @@ export default function CentralDeVagasPage() {
   const [fCargos, setFCargos] = useState<string[]>([]);
   const [fStatus, setFStatus] = useState<string[]>([]);
   const [fVinculos, setFVinculos] = useState<string[]>([]);
+  // ITEM 16 (07/09): o filtro da coluna nova. §A.37, coluna nova nasce com filtro junto, e §A.28,
+  // todo filtro é de múltipla seleção. Casa por ID, nunca por nome (ver `consultorId`).
+  const [fConsultores, setFConsultores] = useState<string[]>([]);
   const [abertaDe, setAbertaDe] = useState("");
   const [abertaAte, setAbertaAte] = useState("");
 
@@ -907,7 +924,8 @@ export default function CentralDeVagasPage() {
 
   /** Fechar por engano não pode custar 38 campos: com rascunho na mão, pergunta antes de descartar. */
   function pedirParaSair() {
-    const vazio = JSON.stringify(form) === JSON.stringify({ ...FORM_VAZIO(), dataAbertura: form.dataAbertura });
+    const vazio =
+      JSON.stringify(form) === JSON.stringify({ ...FORM_VAZIO(), dataAbertura: form.dataAbertura });
     if (vazio && testes.length === 0 && Object.keys(beneficios).length === 0) {
       setAberto(false);
       return;
@@ -1079,11 +1097,7 @@ export default function CentralDeVagasPage() {
           regioesOutras: form.regioes.includes(REGIAO_OUTRAS)
             ? form.regioesOutras || undefined
             : undefined,
-          horarioEscala: comEscape(
-            form.horarioEscalaOpcao,
-            form.horarioEscalaOutra,
-            ESCALA_OUTRA,
-          ),
+          horarioEscala: comEscape(form.horarioEscalaOpcao, form.horarioEscalaOutra, ESCALA_OUTRA),
           modeloTrabalho: form.modeloTrabalho || undefined,
           detalheHibrido: comEscape(
             form.detalheHibridoOpcao,
@@ -1301,6 +1315,22 @@ export default function CentralDeVagasPage() {
     () => opcoes.clientes.map((c) => ({ value: c.codCliente, label: c.rotulo })),
     [opcoes.clientes],
   );
+  /**
+   * AS OPÇÕES DO FILTRO DE CONSULTOR VÊM DO ENDPOINT (`opcoes.consultores`), NUNCA DAS LINHAS
+   * CARREGADAS, e o §A.37 é explícito quanto a isto: derivadas das linhas, elas encolheriam assim
+   * que o primeiro consultor fosse escolhido, e não haveria como somar o segundo sem limpar o filtro.
+   *
+   * "SEM CONSULTOR" É UMA OPÇÃO, e não uma lacuna: a vaga aberta por um recruiter que ainda não
+   * escolheu o outro lado fica sem consultor, e "de quem falta definir o responsável" é exatamente
+   * metade da pergunta que esta coluna cria (§A.37, os valores especiais viram opção do filtro).
+   */
+  const optConsultores = useMemo(
+    () => [
+      { value: SEM_CONSULTOR, label: "Sem Consultor" },
+      ...opcoes.consultores.map((c) => ({ value: c.id, label: c.nome })),
+    ],
+    [opcoes.consultores],
+  );
 
   /**
    * ─ A CADEIA DA TELA, e a ORDEM DELA IMPORTA ───────────────────────────────────────────────────
@@ -1333,6 +1363,7 @@ export default function CentralDeVagasPage() {
     const setCargos = new Set(fCargos);
     const setStatus = new Set(fStatus);
     const setVinculos = new Set(fVinculos);
+    const setConsultores = new Set(fConsultores);
 
     return rows.filter((v) => {
       // A BUSCA COBRE CÓDIGO E NOME DE DIVULGAÇÃO, que são os dois jeitos de a vaga ser chamada: o
@@ -1350,6 +1381,9 @@ export default function CentralDeVagasPage() {
       if (setCargos.size && !(v.cargoId && setCargos.has(v.cargoId))) return false;
       if (setStatus.size && !setStatus.has(v.status)) return false;
       if (setVinculos.size && !(v.vinculo && setVinculos.has(v.vinculo))) return false;
+      // O consultor casa por ID; a vaga sem consultor responde pelo sentinela, para "sem responsável"
+      // ser uma pergunta que o filtro sabe responder.
+      if (setConsultores.size && !setConsultores.has(v.consultorId ?? SEM_CONSULTOR)) return false;
       /*
        * O PERÍODO COMPARA STRING COM STRING, e isso é proposital: `dataAbertura` é `yyyy-mm-dd`, uma
        * data pura, e nessa forma a ordem alfabética É a ordem cronológica. Converter para `Date`
@@ -1367,20 +1401,27 @@ export default function CentralDeVagasPage() {
       }
       return true;
     });
-  }, [rows, busca, fClientes, fCargos, fStatus, fVinculos, abertaDe, abertaAte]);
+  }, [rows, busca, fClientes, fCargos, fStatus, fVinculos, fConsultores, abertaDe, abertaAte]);
 
   /**
-   * A CONTA DOS CARDS (item 3 da OST). SETE cards, e nenhum estado do catálogo fica sem número
-   * (decisão do diretor, 27/08, a mesma da Central de Candidatos): a soma dos seis estados fecha
+   * A CONTA DOS CARDS (item 3 da OST). SEIS cards, e nenhum estado do catálogo fica sem número
+   * (decisão do diretor, 27/08, a mesma da Central de Candidatos): a soma dos CINCO estados fecha
    * exatamente com o Total, então quem olha a linha sabe que não sobrou vaga escondida em lugar
-   * nenhum. Sem os cards de Rascunho e Vaga Banco, a soma não bateria e o rascunho, que é justamente
-   * a vaga que alguém deixou pela metade, seria o único estado invisível da tela.
+   * nenhum. Sem o card de Rascunho, a soma não bateria e o rascunho, que é justamente a vaga que
+   * alguém deixou pela metade, seria o único estado invisível da tela.
+   *
+   * ERAM SETE ATÉ 07/09: o card "Vaga Banco" saiu junto com o STATUS que ele contava (item 8 do mapa
+   * do time). O que NÃO saiu é o CONTADOR de banco, que segue na coluna Posições, no segundo
+   * cilindro de cada linha: são coisas diferentes com o mesmo nome.
    *
    * A CONTA É PELO CATÁLOGO (`VAGA_STATUS`), não por uma lista escrita à mão aqui: status novo no
    * catálogo nasce contado, sem ninguém ter de lembrar de voltar neste bloco.
    */
   const kpis = useMemo(() => {
-    const conta = Object.fromEntries(VAGA_STATUS.map((st) => [st, 0])) as Record<VagaStatus, number>;
+    const conta = Object.fromEntries(VAGA_STATUS.map((st) => [st, 0])) as Record<
+      VagaStatus,
+      number
+    >;
     for (const v of filtradas) conta[v.status] += 1;
     return { total: filtradas.length, porStatus: conta };
   }, [filtradas]);
@@ -1396,6 +1437,7 @@ export default function CentralDeVagasPage() {
     (fCargos.length ? 1 : 0) +
     (fStatus.length ? 1 : 0) +
     (fVinculos.length ? 1 : 0) +
+    (fConsultores.length ? 1 : 0) +
     (abertaDe || abertaAte ? 1 : 0);
 
   const limparFiltros = useCallback(() => {
@@ -1404,6 +1446,7 @@ export default function CentralDeVagasPage() {
     setFCargos([]);
     setFStatus([]);
     setFVinculos([]);
+    setFConsultores([]);
     setAbertaDe("");
     setAbertaAte("");
   }, []);
@@ -1459,6 +1502,12 @@ export default function CentralDeVagasPage() {
        */
       { chave: "posicoes", tipo: "numero", valor: (v) => v.posicoesOficiais },
       { chave: "status", tipo: "status", valor: (v) => VAGA_STATUS.indexOf(v.status) },
+      /**
+       * CONSULTOR ORDENA PELO NOME (item 16, 07/09), que é o que a célula mostra, e não pelo id, que
+       * ninguém vê: ordenar por uuid daria uma ordem estável e sem sentido nenhum na tela.
+       * A vaga sem consultor devolve nulo e o `useOrdenacao` a manda para o fim nas duas direções.
+       */
+      { chave: "consultor", tipo: "texto", valor: (v) => v.consultorNome },
       /**
        * AS DUAS COLUNAS DE TEMPO (item 1 da OST de 27/08), e cada uma ordena pelo SEU dado, não uma
        * pela outra: a data ordena pela data (`tipo: "data"`, a mais recente no primeiro clique) e os
@@ -1568,6 +1617,20 @@ export default function CentralDeVagasPage() {
             {/* O PERÍODO É O MESMO PAR DE PONTAS DO GERENCIADOR: `max` numa e `min` na outra, para o
                 próprio calendário impedir um intervalo invertido em vez de a tela ter de explicar
                 depois que não veio nada porque o "de" é maior que o "até". */}
+            {/* ITEM 16 (07/09): o filtro da coluna nova, §A.37. Mesmo `Combobox` múltiplo dos
+                demais campos deste modal, com busca: nenhum componente de filtro nasceu aqui. */}
+            <FiltroCampo label="Consultor Responsável">
+              <Combobox
+                multiple
+                value={fConsultores}
+                onChange={setFConsultores}
+                options={optConsultores}
+                placeholder="Todos"
+                ariaLabel="Consultor responsável"
+                searchable
+                limpavel
+              />
+            </FiltroCampo>
             <FiltroCampo label="Data De Abertura">
               <div className="grid grid-cols-2 gap-2">
                 <input
@@ -1614,14 +1677,14 @@ export default function CentralDeVagasPage() {
           para o Total.
 
           A ORDEM É A DA VIDA DA VAGA, da esquerda para a direita: Total, o que ainda não nasceu
-          (Rascunho), o que está em pé (Abertas, Vaga Banco) e os três desfechos (Entregues,
-          Fechadas, Canceladas). Lida em linha, ela conta o processo, que é o que a ordem alfabética
+          (Rascunho), o que está em pé (Abertas) e os três desfechos (Entregues, Fechadas,
+          Canceladas). Lida em linha, ela conta o processo, que é o que a ordem alfabética
           esconderia.
 
           A COR SEPARA O QUE COBRA DO QUE JÁ PASSOU: Abertas em atenção, porque é a fila viva de
           quem trabalha nesta tela; Entregues em êxito; Canceladas em alerta; Rascunho e Fechadas
           neutros, porque nem cobram nem comemoram. */}
-      <div className="mb-[18px] grid grid-cols-2 gap-[12px] sm:grid-cols-4 xl:grid-cols-7">
+      <div className="mb-[18px] grid grid-cols-2 gap-[12px] sm:grid-cols-4 xl:grid-cols-6">
         <Kpi id="total" rotulo="Total De Vagas" valor={kpis.total} icone="layers" />
         <Kpi id="RASCUNHO" rotulo="Rascunhos" valor={kpis.porStatus.RASCUNHO} icone="pen" />
         <Kpi
@@ -1630,13 +1693,6 @@ export default function CentralDeVagasPage() {
           valor={kpis.porStatus.ABERTA}
           icone="clock"
           tom="var(--warn)"
-        />
-        <Kpi
-          id="VAGA_BANCO"
-          rotulo="Vaga Banco"
-          valor={kpis.porStatus.VAGA_BANCO}
-          icone="folder"
-          tom="var(--accent)"
         />
         <Kpi
           id="ENTREGUE"
@@ -1666,6 +1722,21 @@ export default function CentralDeVagasPage() {
               §A.12/§A.20: cabeçalhos centralizados, larguras proporcionais, sem coluna esmagada.
               Com 8 colunas em vez de 13, cada uma cabe sem apertar e a tabela não rola mais na
               horizontal na largura normal da tela. */}
+          {/* §A.20, REMEDIDO NO BROWSER EM 07/09, com a coluna do Consultor (item 16) dentro.
+              O piso subiu de 1220px para 1430px, e o número não é escolhido, é o MÍNIMO QUE O
+              CONTEÚDO EXIGE: com a folha de estilo aberta e o `min-width` zerado, a tabela ainda
+              mede 1430px. A coluna nova responde por 135px desse total.
+
+              O QUE A MEDIÇÃO TAMBÉM MOSTROU, e vale registrar porque contradiz o comentário abaixo:
+              a tabela JÁ NÃO CABIA em 1600px ANTES desta frente. Numa tela de 1600px o espaço útil
+              é 1254px (o menu lateral come 265px), e com DEZ colunas a tabela já pedia 1295px, ou
+              seja, 41px a mais. A linha que estoura é a da vaga ABERTA, a única com CINCO botões de
+              ação: a coluna Ações sozinha pede 219px. Com onze colunas, a sobra virou 176px.
+
+              ELA ROLA NA HORIZONTAL, como o §A.12 manda ("rola em vez de espremer"), e nenhum texto
+              é cortado nem truncado: tudo é alcançável. A partir de ~1790px de janela ela aparece
+              inteira sem rolagem. Encurtar a tabela de volta a uma tela só exigiria tirar coluna ou
+              apertar os botões de ação, que é decisão do diretor e não da fábrica (§A.31). */}
           {/* §A.20 (item 4 da OST de 27/08): AS LARGURAS FORAM REDISTRIBUÍDAS, e não espremidas para
               caber duas colunas a mais. As dez porcentagens somam 100 e o piso subiu de 960px para
               1220px, MEDIDO no browser e não estimado: é a soma das larguras mínimas reais das dez
@@ -1676,19 +1747,19 @@ export default function CentralDeVagasPage() {
               corte. Acima desse piso ela ESTICA: as porcentagens repartem a tela toda em vez de
               deixar folga sobrando de um lado e coluna apertada do outro, que é o aproveitamento
               pedido. Abaixo dele a tabela ROLA na horizontal, como manda o §A.12, em vez de espremer. */}
-          <table className="ds-table min-w-[1220px]">
+          <table className="ds-table min-w-[1430px]">
             <thead>
               <tr>
                 {/* §A.29: o cabeçalho ordena por clique. O `<th>` é o mesmo de antes, com a mesma
                     largura e a mesma divisória do §A.12: o que entra dentro dele é o botão com a
                     seta. Ações fica de fora, porque não há o que comparar entre botões. */}
-                <ColunaOrdenavel as="th" ord={ord} chave="codigo" className="w-[8%] text-center">
+                <ColunaOrdenavel as="th" ord={ord} chave="codigo" className="w-[7%] text-center">
                   Código
                 </ColunaOrdenavel>
-                <ColunaOrdenavel as="th" ord={ord} chave="vaga" className="w-[13%] text-center">
+                <ColunaOrdenavel as="th" ord={ord} chave="vaga" className="w-[12%] text-center">
                   Vaga
                 </ColunaOrdenavel>
-                <ColunaOrdenavel as="th" ord={ord} chave="cliente" className="w-[11%] text-center">
+                <ColunaOrdenavel as="th" ord={ord} chave="cliente" className="w-[10%] text-center">
                   Cliente
                 </ColunaOrdenavel>
                 {/* §A.20, MEDIDO NO BROWSER E NÃO ESTIMADO: o `ColunaOrdenavel` põe o rótulo num
@@ -1698,10 +1769,10 @@ export default function CentralDeVagasPage() {
                     continua numa linha só, e quando aperta ele vira duas linhas em vez de roubar
                     espaço das colunas de dado. Duas linhas de cabeçalho é leitura; rótulo cortado
                     com reticências é supressão, que é o que a regra proíbe. */}
-                <ColunaOrdenavel as="th" ord={ord} chave="cargo" className="w-[10%] text-center">
+                <ColunaOrdenavel as="th" ord={ord} chave="cargo" className="w-[9%] text-center">
                   <span className="whitespace-normal">Cargo Da Vaga</span>
                 </ColunaOrdenavel>
-                <ColunaOrdenavel as="th" ord={ord} chave="vinculo" className="w-[9%] text-center">
+                <ColunaOrdenavel as="th" ord={ord} chave="vinculo" className="w-[8%] text-center">
                   Vínculo
                 </ColunaOrdenavel>
                 {/* §A.20: a coluna ganhou espaço porque passou a carregar DOIS contadores, um por
@@ -1712,11 +1783,32 @@ export default function CentralDeVagasPage() {
                     com rótulo e contagem, e não mais duas linhas de texto. Abaixo disso a barra
                     ficava curta demais para o preenchimento ser comparável de relance, que é a
                     única coisa que um cilindro faz melhor que um número. */}
-                <ColunaOrdenavel as="th" ord={ord} chave="posicoes" className="w-[14%] text-center">
+                <ColunaOrdenavel as="th" ord={ord} chave="posicoes" className="w-[13%] text-center">
                   Posições
                 </ColunaOrdenavel>
-                <ColunaOrdenavel as="th" ord={ord} chave="status" className="w-[8%] text-center">
+                <ColunaOrdenavel as="th" ord={ord} chave="status" className="w-[7%] text-center">
                   Status
+                </ColunaOrdenavel>
+                {/* ITEM 16 DO MAPA DO TIME (07/09): O CONSULTOR RESPONSÁVEL.
+                    O dado JÁ VIAJAVA para a tela (`consultorNome`, resolvido em nome no backend) e
+                    só aparecia no modal do olho: aqui ele passa a ser coluna, com ordenação (§A.29)
+                    e filtro (§A.37), como toda coluna nova.
+
+                    ENTRA DEPOIS DO STATUS de propósito: lida em linha, a tabela passa a dizer "esta
+                    vaga está assim, e é de fulano", que é a pergunta que o time faz na fila. Antes
+                    do Status, ela separaria o Status das colunas de tempo, que são o par que o
+                    §A.20 já tinha ajustado junto.
+
+                    O rótulo quebra em duas linhas pelo mesmo motivo medido de Cargo e das datas: em
+                    uma linha só, "CONSULTOR RESPONSÁVEL" pede largura mínima grande demais e empurra
+                    a tabela inteira para fora da tela. */}
+                <ColunaOrdenavel
+                  as="th"
+                  ord={ord}
+                  chave="consultor"
+                  className="w-[10%] text-center"
+                >
+                  <span className="whitespace-normal">Consultor Responsável</span>
                 </ColunaOrdenavel>
                 {/* AS DUAS COLUNAS DE TEMPO (item 1), com a mesma quebra de rótulo do Cargo e pelo
                     mesmo motivo medido: em uma linha só, "DATA DE ABERTURA" pedia 169px e
@@ -1726,22 +1818,22 @@ export default function CentralDeVagasPage() {
                 <ColunaOrdenavel as="th" ord={ord} chave="abertura" className="w-[8%] text-center">
                   <span className="whitespace-normal">Data De Abertura</span>
                 </ColunaOrdenavel>
-                <ColunaOrdenavel as="th" ord={ord} chave="dias" className="w-[8%] text-center">
+                <ColunaOrdenavel as="th" ord={ord} chave="dias" className="w-[7%] text-center">
                   <span className="whitespace-normal">Dias Em Aberto</span>
                 </ColunaOrdenavel>
-                <th className="w-[11%] text-center">Ações</th>
+                <th className="w-[10%] text-center">Ações</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={10} className="py-8 text-center text-faint">
+                  <td colSpan={11} className="py-8 text-center text-faint">
                     Carregando…
                   </td>
                 </tr>
               ) : visiveis.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="py-8 text-center text-faint">
+                  <td colSpan={11} className="py-8 text-center text-faint">
                     {rows.length === 0
                       ? "Nenhuma vaga cadastrada ainda. Use o botão Abrir vaga."
                       : "Nenhuma vaga corresponde ao filtro aplicado. Ajuste os filtros ou limpe todos."}
@@ -1794,6 +1886,10 @@ export default function CentralDeVagasPage() {
                         />
                       </span>
                     </td>
+                    {/* O CONSULTOR (item 16). A vaga aberta por um recruiter que ainda não escolheu
+                        o outro lado fica sem consultor, e a célula diz "não informado" (§A.11), como
+                        todas as outras desta tabela, nunca um traço. */}
+                    <td className="text-center">{v.consultorNome ?? "não informado"}</td>
                     {/* DATA DE ABERTURA (item 1). `nowrap` porque "25/08/2026" numa coluna de 8%
                         quebraria em duas linhas no meio do ano. Rascunho sem data escreve
                         "não informado" (§A.11), como as demais colunas da linha. */}
@@ -1838,8 +1934,12 @@ export default function CentralDeVagasPage() {
                         {/* EDITAR AS POSIÇÕES (os dois contadores, 25/08): aparece na vaga que
                             ainda está viva e fora do rascunho. No RASCUNHO os dois campos já são
                             editados na própria trilha, e na vaga ENCERRADA a meta não muda mais,
-                            porque ela já foi confrontada com a contagem do fechamento. */}
-                        {(v.status === "ABERTA" || v.status === "VAGA_BANCO") && (
+                            porque ela já foi confrontada com a contagem do fechamento.
+
+                            O `|| VAGA_BANCO` saiu em 07/09 junto com o status (item 8): ABERTA é
+                            agora o único estado vivo fora do rascunho. Os DOIS contadores, oficial
+                            e banco, continuam sendo editados por este mesmo botão. */}
+                        {v.status === "ABERTA" && (
                           <button
                             type="button"
                             title="Editar as posições da vaga"
@@ -1907,11 +2007,7 @@ export default function CentralDeVagasPage() {
 
       {/* ── TRILHA DE ABERTURA ────────────────────────────────────────────── */}
       {aberto && (
-        <Modal
-          onClose={pedirParaSair}
-          className="max-w-[1100px] p-0"
-          ariaLabel="Abrir vaga"
-        >
+        <Modal onClose={pedirParaSair} className="max-w-[1100px] p-0" ariaLabel="Abrir vaga">
           <form onSubmit={salvar} className="flex max-h-[86vh] flex-col">
             {/* TOPO FIXO: título e Stepper nunca saem da vista, então a pessoa sempre sabe onde está. */}
             <div className="flex-none border-b border-[var(--border)] px-6 pb-4 pt-6">
@@ -2132,9 +2228,18 @@ export default function CentralDeVagasPage() {
                       />
                     </Campo>
 
-                    {/* DATA LIMITE EM QUALQUER VAGA (correção de 21/08): a amarração com a vaga
-                        sazonal foi removida, qualquer natureza pode ter prazo. */}
-                    <Campo rotulo="Data limite">
+                    {/* ITEM 19 DO MAPA DO TIME (07/09): "Data limite" virou "Previsão de entrega",
+                        que é como a operação chama o prazo. SÓ O RÓTULO MUDOU: a coluna do banco
+                        segue `data_limite` de propósito, porque renomear coluna é migração
+                        destrutiva por um ganho de zero.
+
+                        MINÚSCULA NO "entrega" porque isto é RÓTULO DE CAMPO, e não título nem tag
+                        (§A.24): os vizinhos são "Data de abertura" e "Data de solicitação", e uma
+                        maiúscula sozinha no meio da coluna leria como erro de digitação.
+
+                        PRAZO EM QUALQUER VAGA (correção de 21/08): a amarração com a vaga sazonal
+                        foi removida, qualquer natureza pode ter prazo. */}
+                    <Campo rotulo="Previsão de entrega">
                       <input
                         type="date"
                         value={form.dataLimite}
@@ -2589,7 +2694,10 @@ export default function CentralDeVagasPage() {
                       <Select
                         value={form.genero}
                         onChange={(v) => set("genero", v)}
-                        options={VAGA_GENERO.map((g) => ({ value: g, label: VAGA_GENERO_LABEL[g] }))}
+                        options={VAGA_GENERO.map((g) => ({
+                          value: g,
+                          label: VAGA_GENERO_LABEL[g],
+                        }))}
                         ariaLabel="Gênero"
                       />
                     </CampoSelect>
@@ -2640,9 +2748,7 @@ export default function CentralDeVagasPage() {
                               checked={testes.includes(t)}
                               onChange={(e) =>
                                 setTestes((atual) =>
-                                  e.target.checked
-                                    ? [...atual, t]
-                                    : atual.filter((x) => x !== t),
+                                  e.target.checked ? [...atual, t] : atual.filter((x) => x !== t),
                                 )
                               }
                             />
@@ -2757,7 +2863,12 @@ export default function CentralDeVagasPage() {
                   SALVAR RASCUNHO EM QUALQUER PASSO (item 3): a vaga que o consultor ainda não tem
                   como completar sai da cabeça dele e entra no sistema, sem cobrar nada.
                 */}
-                <Button type="button" variant="secondary" onClick={() => void enviar(false)} disabled={salvando}>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => void enviar(false)}
+                  disabled={salvando}
+                >
                   {salvando ? "Salvando…" : "Salvar Rascunho"}
                 </Button>
 
@@ -2772,11 +2883,7 @@ export default function CentralDeVagasPage() {
                   </Button>
                 ) : (
                   <Button key="abrir" type="submit" disabled={salvando}>
-                    {salvando
-                      ? "Publicando…"
-                      : editandoId
-                        ? "Publicar Vaga"
-                        : "Abrir Vaga"}
+                    {salvando ? "Publicando…" : editandoId ? "Publicar Vaga" : "Abrir Vaga"}
                   </Button>
                 )}
               </div>
@@ -2812,8 +2919,8 @@ export default function CentralDeVagasPage() {
               <h2 className="text-lg font-semibold text-text">Editar Posições</h2>
               <p className="mt-1 text-[12.5px] text-dim">
                 {posAlvo.nomeDivulgacao ?? "não informado"}, código{" "}
-                {posAlvo.codigo ?? "não informado"}. Oficiais são as contratações de verdade, banco é
-                o excedente aprovado que fica reservado.
+                {posAlvo.codigo ?? "não informado"}. Oficiais são as contratações de verdade, banco
+                é o excedente aprovado que fica reservado.
               </p>
             </div>
 
@@ -3039,7 +3146,11 @@ export default function CentralDeVagasPage() {
       )}
 
       {verAlvo && (
-        <Modal onClose={() => setVerAlvo(null)} className="max-w-[900px] p-0" ariaLabel="Ver a vaga">
+        <Modal
+          onClose={() => setVerAlvo(null)}
+          className="max-w-[900px] p-0"
+          ariaLabel="Ver a vaga"
+        >
           <div className="flex max-h-[86vh] flex-col">
             <div className="flex-none border-b border-[var(--border)] px-6 pb-4 pt-6">
               <div className="eyebrow !mb-1">Atração e Seleção</div>
@@ -3053,9 +3164,8 @@ export default function CentralDeVagasPage() {
                 />
               </div>
               <p className="mt-1 text-[12.5px] text-dim">
-                Código {verAlvo.codigo ?? "não informado"}. Aberta em{" "}
-                {dataBr(verAlvo.dataAbertura)} por{" "}
-                {verAlvo.abertoPorNome ?? "não informado"}.
+                Código {verAlvo.codigo ?? "não informado"}. Aberta em {dataBr(verAlvo.dataAbertura)}{" "}
+                por {verAlvo.abertoPorNome ?? "não informado"}.
               </p>
             </div>
 
@@ -3088,7 +3198,9 @@ export default function CentralDeVagasPage() {
                 {exigeTempoContrato(verAlvo.vinculo) && (
                   <Linha
                     rotulo="Tempo de contrato"
-                    valor={verAlvo.tempoContrato ? rotuloTempoContrato(verAlvo.tempoContrato) : null}
+                    valor={
+                      verAlvo.tempoContrato ? rotuloTempoContrato(verAlvo.tempoContrato) : null
+                    }
                   />
                 )}
               </BlocoFicha>
@@ -3101,7 +3213,7 @@ export default function CentralDeVagasPage() {
                 <Linha rotulo="Recruiter" valor={verAlvo.recruiterNome} />
                 <Linha rotulo="Data de solicitação" valor={dataBr(verAlvo.dataSolicitacao)} />
                 <Linha rotulo="Data de alinhamento" valor={dataBr(verAlvo.dataAlinhamento)} />
-                <Linha rotulo="Data limite" valor={dataBr(verAlvo.dataLimite)} />
+                <Linha rotulo="Previsão de entrega" valor={dataBr(verAlvo.dataLimite)} />
                 <Linha rotulo="Envio da shortlist" valor={dataBr(verAlvo.envioShortlist)} />
               </BlocoFicha>
 
@@ -3136,7 +3248,9 @@ export default function CentralDeVagasPage() {
                   valor={
                     verAlvo.beneficios.length
                       ? verAlvo.beneficios
-                          .map((b) => (b.valor ? `${b.nome}: ${salarioParaCampo(b.valor)}` : b.nome))
+                          .map((b) =>
+                            b.valor ? `${b.nome}: ${salarioParaCampo(b.valor)}` : b.nome,
+                          )
                           .join(", ")
                       : null
                   }
@@ -3184,11 +3298,7 @@ export default function CentralDeVagasPage() {
                   rotulo="Idiomas"
                   valor={listaEmTexto(verAlvo.idiomas, verAlvo.idiomasOutros, OPCAO_OUTROS)}
                 />
-                <Linha
-                  rotulo="Cursos e conhecimentos"
-                  valor={verAlvo.cursosConhecimentos}
-                  largo
-                />
+                <Linha rotulo="Cursos e conhecimentos" valor={verAlvo.cursosConhecimentos} largo />
                 <Linha
                   rotulo="Testes"
                   valor={listaEmTexto(

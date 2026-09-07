@@ -248,6 +248,9 @@ export const vagaNaturezaEnum = pgEnum("vaga_natureza", [
   "TERCEIRA",
   "ESTAGIO",
   "VAGA_BANCO",
+  // 07/09 (item 6 do mapa do time). Entra no FIM porque `ALTER TYPE ... ADD VALUE` acrescenta e
+  // nunca reordena: a ordem aqui é a do BANCO, e a de exibição mora em `VAGA_NATUREZA`.
+  "REPOSICAO",
 ]);
 
 /**
@@ -330,6 +333,14 @@ export const vagaStatusEnum = pgEnum("vaga_status", [
   "ENTREGUE",
   "FECHADA",
   "CANCELADA",
+  /**
+   * DORMENTE desde 07/09 (item 8 do mapa do time): o STATUS "Vaga Banco" saiu da lista oferecida
+   * (`VAGA_STATUS`, no shared-types) e nada mais o escreve nem o lê. Fica aqui porque o Postgres não
+   * remove valor de enum. ZERO linhas o usavam em produção e em homologação quando saiu.
+   *
+   * NÃO CONFUNDIR com o CONTADOR de banco (`posicoes_banco`, `vagas_fechadas_banco`), que é outra
+   * coisa, segue vivo e não foi tocado.
+   */
   "VAGA_BANCO",
 ]);
 
@@ -354,10 +365,21 @@ export const vagaEscolaridadeEnum = pgEnum("vaga_escolaridade", [
   "FUNDAMENTAL_COMPLETO",
   "MEDIO_INCOMPLETO",
   "MEDIO_COMPLETO",
+  /**
+   * DORMENTE desde 07/09 (item 3 do mapa do time). Saiu da lista OFERECIDA pela tela
+   * (`VAGA_ESCOLARIDADE`), porque virou Técnico Incompleto/Cursando/Completo, e continua aqui só
+   * porque o Postgres não remove valor de enum. ZERO vagas o usavam quando saiu.
+   */
   "TECNICO",
   "SUPERIOR_INCOMPLETO",
   "SUPERIOR_COMPLETO",
   "POS_GRADUACAO",
+  // 07/09 (itens 3 e 4). No FIM, pela mesma razão da natureza: o enum do banco é append-only.
+  "TECNICO_INCOMPLETO",
+  "TECNICO_COMPLETO",
+  "MEDIO_CURSANDO",
+  "TECNICO_CURSANDO",
+  "SUPERIOR_CURSANDO",
 ]);
 
 // ─────────────────────────────────────────────────────────────────────────────

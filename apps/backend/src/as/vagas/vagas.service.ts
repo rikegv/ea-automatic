@@ -47,6 +47,8 @@ import { pendentesDeTratamento } from "../../domain/candidatura";
 import {
   codigoJaUsado,
   ladosDaVaga,
+  statusVivoDaVaga,
+  escolaridadeVivaDaVaga,
   normalizarCodigoVaga,
   excessoDePosicoes,
   type ExcessoDePosicoes,
@@ -124,11 +126,14 @@ export class VagasService {
       idVacancyPandape: v.idVacancyPandape,
       natureza: v.natureza,
       vinculo: v.vinculo,
-      status: v.status,
+      // O status dormente "VAGA_BANCO" é traduzido na ENTRADA (item 8, 07/09): a régua e o porquê
+      // estão em `statusVivoDaVaga`. Hoje ela nunca dispara, porque nenhuma linha usa o valor.
+      status: statusVivoDaVaga(v.status),
       sazonalidade: v.sazonalidade,
       posicoesOficiais: v.posicoesOficiais,
       posicoesBanco: v.posicoesBanco,
-      escolaridade: v.escolaridade,
+      // Traduzida na ENTRADA, como o status: o "TECNICO" solto virou Técnico Completo (item 3).
+      escolaridade: escolaridadeVivaDaVaga(v.escolaridade),
       salarioAbertura: v.salarioAbertura,
       salarioFechamento: v.salarioFechamento,
       beneficios: porVaga.get(v.id) ?? [],
@@ -143,6 +148,12 @@ export class VagasService {
       dataSolicitacao: v.dataSolicitacao,
       dataAlinhamento: v.dataAlinhamento,
       envioShortlist: v.envioShortlist,
+      /**
+       * O ID VIAJA JUNTO DO NOME (item 16, 07/09) porque o FILTRO casa por ID. Por nome, dois
+       * consultores homônimos viram um só no filtro, e o time acabaria olhando a fila de outra
+       * pessoa achando que é a sua. O nome continua sendo o que a coluna MOSTRA.
+       */
+      consultorId: v.consultorId,
       consultorNome: l.consultorNome,
       recruiterNome: l.recruiterNome,
       tempoContrato: v.tempoContrato,
@@ -238,6 +249,23 @@ export class VagasService {
      * diretor: esta frente não deduplica nada, só oferece o que está lá.
      */
     escalas: string[];
+    /**
+     * OS CONSULTORES DE A&S, para o FILTRO da coluna "Consultor Responsável" (item 16 do mapa do
+     * time, 07/09).
+     *
+     * §A.37 MANDA O CATÁLOGO VIR DE UM ENDPOINT, e não das linhas já carregadas na tela, e a razão é
+     * prática: derivando das linhas, a lista de opções ENCOLHE assim que o primeiro consultor é
+     * escolhido (a tela passa a mostrar só as vagas dele), e não há como somar o segundo sem limpar o
+     * filtro antes. Vindo daqui, a lista é sempre a mesma.
+     *
+     * A LISTA É DE QUEM TEM PAPEL DE CONSULTOR, não de quem já aparece em alguma vaga: consultor
+     * recém-marcado aparece no filtro antes de abrir a primeira vaga, e a lista não muda conforme o
+     * recorte da tela.
+     *
+     * §A.6: id e NOME, de um USUÁRIO do sistema. Nenhum dado de candidato, nenhum CPF, nenhum
+     * contato. É o mesmo par que o `contextoAs` já devolve para o seletor da trilha.
+     */
+    consultores: { id: string; nome: string }[];
   }> {
     const [
       listaCargos,
@@ -246,6 +274,7 @@ export class VagasService {
       listaMotivos,
       ultimoSolicitante,
       listaEscalas,
+      listaConsultores,
     ] = await Promise.all([
       this.db
         .select({ id: cargos.id, nome: cargos.nome })
@@ -326,6 +355,14 @@ export class VagasService {
         .from(escalasCatalogo)
         .where(eq(escalasCatalogo.ativo, true))
         .orderBy(asc(escalasCatalogo.nome)),
+      // SÓ OS ATIVOS COM PAPEL DE CONSULTOR. Quem foi desativado não é oferecido em filtro novo, pela
+      // mesma régua dos demais catálogos daqui; a vaga antiga dele continua mostrando o nome na
+      // coluna, porque a coluna lê a vaga e não esta lista.
+      this.db
+        .select({ id: usuarios.id, nome: usuarios.nome })
+        .from(usuarios)
+        .where(and(eq(usuarios.ativo, true), eq(usuarios.papelAs, "CONSULTOR")))
+        .orderBy(asc(usuarios.nome)),
     ]);
 
     const solicitantePorCliente = new Map(
@@ -351,6 +388,7 @@ export class VagasService {
       beneficios: listaBeneficios,
       motivos: listaMotivos.map((m) => m.nome),
       escalas: listaEscalas.map((e) => e.nome),
+      consultores: listaConsultores,
     };
   }
 

@@ -5,6 +5,8 @@
  * service consomem daqui; nenhuma delas reimplementa a régua por conta própria.
  */
 
+import type { VagaEscolaridade, VagaStatus } from "@ea/shared-types";
+
 /**
  * NORMALIZAÇÃO DO CÓDIGO. Aparar espaço e subir a caixa é o mínimo para o mesmo código digitado de
  * duas formas ("sl123" e "SL123 ") não virar dois códigos diferentes.
@@ -146,4 +148,47 @@ export function excessoDePosicoes(
   }
 
   return null;
+}
+
+/**
+ * O STATUS DORMENTE, LIDO DE VOLTA (item 8 do mapa do time, 07/09).
+ *
+ * "VAGA_BANCO" saiu da lista de status (`VAGA_STATUS`, no shared-types) e nada mais o escreve: o DTO
+ * valida contra aquela lista, então nenhuma vaga nova pode nascer com ele. O valor, porém, CONTINUA
+ * no enum do Postgres, porque `ALTER TYPE ... DROP VALUE` não existe.
+ *
+ * POR QUE UMA CONVERSÃO EXPLÍCITA, e não um `as VagaStatus` na hora de montar a listagem: o cast
+ * calaria o compilador e deixaria o valor cru chegar à tela, onde `VAGA_STATUS_LABEL[status]` daria
+ * `undefined` (pill sem texto) e a contagem dos cards faria `undefined + 1`, ou seja, um KPI escrito
+ * NaN. O jeito de uma linha esquecida não derrubar a tela é traduzi-la na entrada, uma vez só.
+ *
+ * TRADUZ PARA "ABERTA" porque era isso que a vaga de banco era: uma vaga VIVA que reservava posições
+ * excedentes. O que dizia quantas eram nunca foi o status, e sim o CONTADOR `posicoes_banco`, que
+ * segue existindo e não foi tocado. Nenhuma informação se perde na tradução.
+ *
+ * HOJE ELA NUNCA DISPARA: ZERO linhas usavam o status quando ele saiu, conferido em produção e em
+ * homologação. Ela existe para o caso de uma linha antiga aparecer, não para o caso comum.
+ */
+export function statusVivoDaVaga(status: string): VagaStatus {
+  return status === "VAGA_BANCO" ? "ABERTA" : (status as VagaStatus);
+}
+
+/**
+ * A ESCOLARIDADE DORMENTE, LIDA DE VOLTA (item 3 do mapa do time, 07/09). Mesma história do status
+ * acima, e por isso o mesmo tratamento, em vez de um cast.
+ *
+ * O "TECNICO" solto saiu da lista oferecida quando ela ganhou Técnico Incompleto, Cursando e
+ * Completo: mantê-lo daria TRÊS opções de Técnico na tela, com o consultor adivinhando qual usar.
+ *
+ * TRADUZ PARA "TECNICO_COMPLETO" porque era isso que a exigência dizia: vaga que pedia "Técnico"
+ * pedia o curso técnico CONCLUÍDO. Traduzir para o incompleto afrouxaria uma exigência que ninguém
+ * afrouxou, e é o erro que custa caro dos dois: melhor manter a régua onde ela estava.
+ *
+ * ZERO vagas usavam o valor quando ele saiu, conferido nos dois bancos. Isto é rede, não caminho.
+ */
+export function escolaridadeVivaDaVaga(
+  escolaridade: string | null,
+): VagaEscolaridade | null {
+  if (escolaridade === null) return null;
+  return escolaridade === "TECNICO" ? "TECNICO_COMPLETO" : (escolaridade as VagaEscolaridade);
 }

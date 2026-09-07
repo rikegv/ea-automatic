@@ -3,6 +3,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/cn";
+import { calcularPosicaoPopover, type PosicaoPopover } from "@/lib/popover-posicao";
 import { Icon } from "./Icon";
 
 export interface MultiOption {
@@ -42,7 +43,7 @@ export function MultiSelect({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [adding, setAdding] = useState(false);
-  const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null);
+  const [pos, setPos] = useState<PosicaoPopover | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -52,11 +53,17 @@ export function MultiSelect({
     return q ? options.filter((o) => norm(o.label).includes(q)) : options;
   }, [options, query]);
 
+  /**
+   * A MESMA RÉGUA DO `Select` (`lib/popover-posicao`), e é de propósito que ela é uma só: o defeito
+   * corrigido aqui (menu sempre para baixo, sem teto pela borda da janela) era IDÊNTICO nos dois
+   * componentes, porque um foi escrito copiando o outro. Duas cópias da correção divergiriam do
+   * mesmo jeito no primeiro ajuste.
+   */
   const reposicionar = () => {
     const el = triggerRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
-    setPos({ top: r.bottom + 6, left: r.left, width: r.width });
+    setPos(calcularPosicaoPopover(r, { largura: window.innerWidth, altura: window.innerHeight }));
   };
   useLayoutEffect(() => {
     if (open) reposicionar();
@@ -156,10 +163,17 @@ export function MultiSelect({
             ref={menuRef}
             role="listbox"
             aria-multiselectable="true"
-            className="glass fixed z-[60] overflow-hidden p-1.5 !bg-[var(--surface-2)]"
-            style={{ top: pos.top, left: pos.left, width: pos.width }}
+            /* FLEX EM COLUNA: o teto de altura é do popover inteiro, e quem encolhe e rola por
+               dentro é a lista. A busca fica sempre visível no topo. */
+            className="glass fixed z-[60] flex flex-col overflow-hidden p-1.5 !bg-[var(--surface-2)]"
+            style={{
+              ...(pos.paraCima ? { bottom: pos.bottom } : { top: pos.top }),
+              left: pos.left,
+              width: pos.largura,
+              maxHeight: pos.alturaMax,
+            }}
           >
-            <div className="px-1 pb-1.5">
+            <div className="flex-none px-1 pb-1.5">
               <input
                 autoFocus
                 className="ds-input !py-2 text-[13px]"
@@ -168,7 +182,9 @@ export function MultiSelect({
                 onChange={(e) => setQuery(e.target.value)}
               />
             </div>
-            <div className="max-h-60 overflow-auto">
+            {/* `min-h-0` deixa a lista encolher dentro do flex; o `max-h-60` fica para o menu
+                continuar do mesmo tamanho de antes quando há espaço de sobra. */}
+            <div className="max-h-60 min-h-0 flex-1 overflow-auto">
               {filtradas.length === 0 && !podeAdicionar ? (
                 <div className="px-3 py-2 text-[13px] text-faint">Nenhum resultado.</div>
               ) : (
@@ -202,7 +218,7 @@ export function MultiSelect({
             {podeAdicionar && (
               <button
                 type="button"
-                className="mt-1 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[13px] text-accent transition hover:bg-[var(--surface)] disabled:opacity-50"
+                className="mt-1 flex w-full flex-none items-center gap-2 rounded-lg px-3 py-2 text-left text-[13px] text-accent transition hover:bg-[var(--surface)] disabled:opacity-50"
                 disabled={adding}
                 onClick={adicionar}
               >

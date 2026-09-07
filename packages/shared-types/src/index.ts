@@ -898,6 +898,11 @@ export function normalizarColunasRelatorio(pedidas: readonly string[]): string[]
 export const VAGA_NATUREZA = [
   "EFETIVA",
   "TEMPORARIA",
+  // ITEM 6 DO MAPA DO TIME (07/09): "Reposição" faltava, e `REPOSICAO_EFETIVA` NÃO a cobria. Aquela
+  // é a reposição de uma posição EFETIVA, recorte que a base importada já usa; esta é a reposição
+  // sem recorte, que é como o time fala na maioria das vezes. As duas convivem, e o consultor
+  // escolhe a que descreve a vaga. A ordem aqui é só de exibição; no banco o enum acrescenta no fim.
+  "REPOSICAO",
   "REPOSICAO_EFETIVA",
   "TERCEIRA",
   "ESTAGIO",
@@ -909,6 +914,7 @@ export type VagaNatureza = (typeof VAGA_NATUREZA)[number];
 export const VAGA_NATUREZA_LABEL: Record<VagaNatureza, string> = {
   EFETIVA: "Efetiva",
   TEMPORARIA: "Temporária",
+  REPOSICAO: "Reposição",
   REPOSICAO_EFETIVA: "Reposição Efetiva",
   TERCEIRA: "Terceira",
   ESTAGIO: "Estágio",
@@ -936,7 +942,10 @@ export const VAGA_VINCULO_LABEL: Record<VagaVinculo, string> = {
   TEMPORARIO: "Temporário",
   TERCEIRIZADO: "Terceirizado",
   ESTAGIO: "Estágio",
-  INTERNO: "Interno",
+  // ITEM 7 DO MAPA DO TIME (07/09). O VALOR JÁ EXISTIA, com o rótulo "Interno", e por isso o time
+  // não o achava: ele procura por "Vaga Interna". Nenhum valor novo nasceu aqui, e nenhuma linha
+  // gravada mudou: só o nome que aparece na lista passou a ser o nome que a operação usa.
+  INTERNO: "Interno (Vaga Interna)",
   FOPAG: "Fopag",
   JOVEM_APRENDIZ: "Jovem Aprendiz",
 };
@@ -949,14 +958,21 @@ export const VAGA_VINCULO_LABEL: Record<VagaVinculo, string> = {
  * fechamento e cancelamento. A passagem de um para o outro é o PUBLICAR, e é lá, e só lá, que a
  * régua dos obrigatórios cobra (`vagaPendencias`).
  */
-export const VAGA_STATUS = [
-  "RASCUNHO",
-  "ABERTA",
-  "ENTREGUE",
-  "FECHADA",
-  "CANCELADA",
-  "VAGA_BANCO",
-] as const;
+/**
+ * ITEM 8 DO MAPA DO TIME (07/09): "VAGA_BANCO" SAIU DA LISTA DE STATUS.
+ *
+ * O QUE SAIU, E O QUE NÃO SAIU, porque a confusão entre as duas coisas é fácil e cara:
+ *   SAIU:      o STATUS "Vaga Banco", um estado da vaga inteira, que o consultor escolhia à mão no
+ *              formulário de abertura ao lado de Aberta, Entregue e Fechada.
+ *   CONTINUA:  o CONTADOR `posicoesBanco`/`vagasFechadasBanco`, que é o excedente aprovado que fica
+ *              reservado (o caso Blue Skies, 10 e 10) e nada tem a ver com o status. A coluna
+ *              "Posições" da listagem segue com os dois cilindros, Oficiais e Banco.
+ *
+ * O VALOR CONTINUA NO ENUM DO POSTGRES, dormente, porque `ALTER TYPE ... DROP VALUE` não existe.
+ * Isso não deixa ponta solta: ZERO linhas usavam o status (conferido em produção e em homologação
+ * antes da remoção), e o DTO valida contra ESTA lista, então nenhuma linha nova pode nascer com ele.
+ */
+export const VAGA_STATUS = ["RASCUNHO", "ABERTA", "ENTREGUE", "FECHADA", "CANCELADA"] as const;
 export type VagaStatus = (typeof VAGA_STATUS)[number];
 
 export const VAGA_STATUS_LABEL: Record<VagaStatus, string> = {
@@ -965,7 +981,6 @@ export const VAGA_STATUS_LABEL: Record<VagaStatus, string> = {
   ENTREGUE: "Entregue",
   FECHADA: "Fechada",
   CANCELADA: "Cancelada",
-  VAGA_BANCO: "Vaga Banco",
 };
 
 /**
@@ -1054,13 +1069,36 @@ export const VAGA_SAZONALIDADE_LABEL: Record<VagaSazonalidade, string> = {
   SAZONAL: "Sazonal",
 };
 
+/**
+ * ESCOLARIDADE (itens 3 e 4 do mapa do time, 07/09).
+ *
+ * A ORDEM É A DA ESCADA, do menor nível para o maior, e DENTRO de cada nível é a da vida de quem
+ * estuda: INCOMPLETO (parou), CURSANDO (está estudando), COMPLETO (terminou). Lida de cima para
+ * baixo, a lista conta a trajetória, que é como o consultor procura.
+ *
+ * "CURSANDO" NÃO É "INCOMPLETO", e esta é a distinção inteira do item 4: incompleto é quem PAROU,
+ * cursando é quem ESTÁ estudando. A vaga de estágio exige o segundo, e até aqui a lista só sabia
+ * dizer o primeiro. Os dois convivem, porque os dois existem.
+ *
+ * SÃO TRÊS NÍVEIS COM CURSANDO (Médio, Técnico e Superior), que são os que têm estagiário de
+ * verdade. Acrescentar Pós Cursando, no dia em que aparecer, é uma linha aqui e uma na migration.
+ *
+ * O "TECNICO" SOLTO SAIU DA LISTA (item 3). Ele era o único nível sem completo/incompleto, e mantê-lo
+ * ao lado dos dois novos deixaria TRÊS opções de Técnico na tela, com o consultor tendo de adivinhar
+ * qual escolher. O valor segue DORMENTE no enum do Postgres (não há `DROP VALUE`), e isso não deixa
+ * ponta solta: ZERO vagas o usavam, conferido em produção e em homologação antes da remoção.
+ */
 export const VAGA_ESCOLARIDADE = [
   "FUNDAMENTAL_INCOMPLETO",
   "FUNDAMENTAL_COMPLETO",
   "MEDIO_INCOMPLETO",
+  "MEDIO_CURSANDO",
   "MEDIO_COMPLETO",
-  "TECNICO",
+  "TECNICO_INCOMPLETO",
+  "TECNICO_CURSANDO",
+  "TECNICO_COMPLETO",
   "SUPERIOR_INCOMPLETO",
+  "SUPERIOR_CURSANDO",
   "SUPERIOR_COMPLETO",
   "POS_GRADUACAO",
 ] as const;
@@ -1070,9 +1108,13 @@ export const VAGA_ESCOLARIDADE_LABEL: Record<VagaEscolaridade, string> = {
   FUNDAMENTAL_INCOMPLETO: "Fundamental Incompleto",
   FUNDAMENTAL_COMPLETO: "Fundamental Completo",
   MEDIO_INCOMPLETO: "Médio Incompleto",
+  MEDIO_CURSANDO: "Médio Cursando",
   MEDIO_COMPLETO: "Médio Completo",
-  TECNICO: "Técnico",
+  TECNICO_INCOMPLETO: "Técnico Incompleto",
+  TECNICO_CURSANDO: "Técnico Cursando",
+  TECNICO_COMPLETO: "Técnico Completo",
   SUPERIOR_INCOMPLETO: "Superior Incompleto",
+  SUPERIOR_CURSANDO: "Superior Cursando",
   SUPERIOR_COMPLETO: "Superior Completo",
   POS_GRADUACAO: "Pós-graduação",
 };
@@ -1624,7 +1666,6 @@ export function regiaoPertenceAUf(uf: string, regiao: string): boolean {
   return regioesDaUf(uf).includes(regiao);
 }
 
-
 /**
  * TEMPO DE CONTRATO SÓ EXISTE EM CONTRATO COM PRAZO (item 2 da OST de 22/08).
  *
@@ -1810,6 +1851,12 @@ export interface VagaListItem {
   dataAlinhamento: string | null;
   envioShortlist: string | null;
   /** Os dois lados da vaga, já resolvidos em nome: um veio de quem abriu, o outro foi escolhido. */
+  /**
+   * O ID DO CONSULTOR (item 16 do mapa do time, 07/09), ao lado do nome que a coluna mostra. Ele
+   * existe para o FILTRO casar por identidade, e não por texto: dois consultores de mesmo nome
+   * viveriam como um só num filtro por nome.
+   */
+  consultorId: string | null;
   consultorNome: string | null;
   recruiterNome: string | null;
   tempoContrato: string | null;
