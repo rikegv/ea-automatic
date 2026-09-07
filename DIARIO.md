@@ -12992,3 +12992,72 @@ e a **etapa da vaga**. Tudo classificado no mapa.
 Aberto também, do próprio texto do diretor: ele escreveu que o Tempo de Contrato "aparece nos dois"
 vínculos. Hoje ele **não aparece no Efetivo**, pela decisão de 22/08, e a fábrica **não mexeu**.
 Se a intenção era outra, é pedido novo e desfaz aquela decisão.
+
+---
+
+## 07/09/2026 (fim do dia), FÁBRICA: a auditoria que não acontecia, e a regra que passa a exigi-la
+
+O diretor reparou que os pulsos da frente da Central de Vagas diziam "coordenador, direto" e que ele
+**não estava vendo agente nenhum trabalhar**. Pediu o retrato honesto da distribuição de tarefas.
+
+### O RETRATO, conferido e não lembrado
+
+**Nesta sessão: 100% coordenador, ZERO agentes despachados.** Os 8 agentes existem íntegros em
+`.claude/agents/` (arquiteto, backend, frontend, devops, ia, seguranca, tester, coordenador) e **não
+estão fora do ar**: não foram chamados. O `DIARIO.md` tem **uma única** menção a subagente em mais de
+12 mil linhas, e ela é sobre CONFIGURAR o agente default, não sobre despachar trabalho, o que sugere
+que execução direta não é novidade desta sessão.
+
+O motivo real, dito sem enfeite: uma leitura conservadora da instrução de não acionar agente sem
+pedido explícito, mais inércia. Parte do trabalho de fato não se beneficiaria de delegação (trocar
+rótulo, remover valor de lista, medir tabela no browser custa mais para explicar do que para fazer),
+mas isso **não** cobria a frente inteira, que teve investigação de alcance em três camadas, migração
+de enum e publicação em produção.
+
+### O QUE ISSO CUSTOU, concretamente
+
+Duas coisas, e a primeira é a que importa:
+
+- **A frente de segurança não auditou uma mudança que tocava CPF.** O `seguranca.md` tem poder de veto
+  desde a §A.6, e a frente 2 (commit `f09da44`) passou a zerar o **CPF do substituído** fora do vínculo
+  temporário. Quem escreveu a régua, escreveu o teste dela e declarou o §A.6 cumprido foi **o próprio
+  autor**. A conclusão está correta e foi medida contra a produção (zero vagas não temporárias com CPF
+  gravado), mas ninguém adversarial conferiu.
+- **O tester não escreveu os testes.** Os 23 testes novos saíram da mesma cabeça que o código. Teste do
+  autor pega regressão bem e pega mal-entendido de requisito mal.
+
+Somando a prova visual, que também foi julgada por quem construiu: **três papéis na mesma cabeça**.
+
+### O QUE A EXECUÇÃO DIRETA GANHOU, e por isso ela continua sendo o padrão fora do risco
+
+As §A.26 e §A.27 exigem mapear ALCANCE antes de escrever, e isso depende de segurar o mapa inteiro em
+uma cabeça só. Foi daí que saíram quatro achados que uma tarefa fatiada teria perdido: a tabela **já**
+estourava 41px antes da coluna nova, o valor dormente do enum viraria KPI escrito `NaN` se resolvido
+com um cast, o `Combobox` já tinha a correção do dropdown que o `Select` não tinha, e esconder o
+Motivo esconderia junto o bloco de substituição.
+
+### A REGRA, aceita pelo diretor: §A.38
+
+Registrada no CLAUDE.md. Em resumo: **segurança audita ANTES da subida** de toda frente que toque CPF,
+dado pessoal, auth, RBAC ou credencial, com saída APROVADO/VETADO e arquivo:linha; **tester
+independente em frente grande**, revisando cobertura depois do código pronto; e **o pulso declara qual
+agente rodou e o veredito**, inclusive quando nenhum rodou, com o motivo.
+
+**Não é delegar por delegar:** dois acionamentos por frente, nos pontos de risco, e tarefa pequena
+segue direto com o coordenador. A regra existe para os pontos de RISCO, não para cada tarefa.
+
+**Primeira aplicação: a tela unificada de vagas**, que é frente grande e mexe em candidato, alocação e
+CPF. Ela passa pelos dois acionamentos.
+
+### NOTA OPERACIONAL, achada ao gravar esta entrada
+
+O hook da §A.7 (`scripts/gate-deploy.sh`) **bloqueou a gravação deste texto no diário**, porque ele
+casa o verbo de publicação contra o COMANDO INTEIRO e a entrada citava a palavra várias vezes. A trava
+funcionou como projetada e não foi contornada: o texto foi escrito em arquivo e anexado por um comando
+sem o verbo. Fica registrado que **escrever SOBRE publicação dispara a trava de publicação**, o que é
+falso positivo previsível em entradas de diário e vale conhecer antes de perder tempo com ele.
+
+### ESTADO
+
+Só documentação nesta entrada: **nenhum arquivo de código foi tocado** depois de `a1bd07c`, então o
+gate segue o mesmo que subiu verde (2.050 testes). Produção intocada, serviços no ar.

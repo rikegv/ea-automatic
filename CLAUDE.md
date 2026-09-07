@@ -961,3 +961,51 @@ separado, não é fase 2, não é pergunta: coluna e filtro sobem juntos, sempre
 NOVA, em que a fábrica traz a lista das colunas e o diretor escolhe quais viram filtro (senha e login
 não viram). Esta trata da coluna ACRESCENTADA a uma tela que já existe: ali não se pergunta, nasce com
 filtro. *(Decisão do diretor, na frente da coluna de Loja.)*
+
+## A.38: AUDITORIA POR AGENTE nos pontos de RISCO, e o pulso diz quem rodou (regra permanente)
+
+**Frente que toca CPF, dado pessoal, auth, RBAC ou credencial NÃO sobe para produção sem a auditoria
+do agente `seguranca`.** E **frente grande não fecha sem um `tester` que não seja o autor** revisando a
+cobertura. O pulso declara, em toda frente, **qual agente rodou e qual foi o veredito**.
+
+**1. SEGURANÇA AUDITA ANTES DO DEPLOY.** O gatilho é o TEMA, não o tamanho: CPF ou qualquer dado
+pessoal, autenticação, RBAC, credencial. O agente `seguranca` (`.claude/agents/seguranca.md`) tem
+**poder de veto** desde a §A.6, e o que muda aqui é que ele passa a ser **acionado de fato**, antes do
+deploy, e não depois. A saída dele é **APROVADO ou VETADO, com arquivo:linha**. Vetado, não sobe.
+
+**Não vale o autor declarar o §A.6 cumprido.** É esse o ponto inteiro da regra: quem escreveu a régua
+não é quem confere se ela fecha, porque ele confere contra a mesma suposição que usou para escrever. A
+auditoria é **adversarial**: o `seguranca` tenta PROVAR a violação, e na dúvida veta e pede evidência.
+
+**2. TESTER INDEPENDENTE EM FRENTE GRANDE.** Depois do código pronto, um `tester` que **não** escreveu
+o código revisa a cobertura. **Teste do próprio autor pega REGRESSÃO bem e pega MAL-ENTENDIDO DE
+REQUISITO mal**, porque codifica exatamente a suposição que gerou o código: se o autor entendeu a
+regra errado, o teste dele passa com a regra errada dentro. O tester devolve os GAPS, não conserta.
+
+**3. O PULSO DECLARA QUEM RODOU E O VEREDITO** (§A.34 aplicada a sério). Em toda frente: qual agente
+foi acionado, o que ele respondeu, e **quando nenhum foi acionado, dizer isso também**, com o motivo.
+Dizer quem NÃO trabalhou é tão obrigatório quanto dizer quem trabalhou: foi justamente a ausência
+dessa linha que fez a distribuição de tarefa virar pergunta do diretor em vez de informação do pulso.
+
+**ISTO NÃO É DELEGAR POR DELEGAR, e o limite é firme.** Tarefa pequena (rótulo, valor de lista, largura
+de coluna, medição no browser) o coordenador faz **direto**, sem overhead: explicar a tarefa a um agente
+custa mais do que fazê-la, e handoff perde contexto, que é a origem documentada da própria §A.26. A
+régua é **DOIS acionamentos por frente**, nos pontos de risco, e não um agente por tarefa.
+
+**O que a execução direta ganha, e por isso ela continua sendo o padrão fora do risco:** as §A.26 e
+§A.27 exigem mapear ALCANCE antes de escrever, e isso depende de segurar o mapa inteiro em uma cabeça
+só. Na frente da Central de Vagas (07/09) foi daí que saíram quatro achados que uma tarefa fatiada
+teria perdido: a tabela já estourava 41px ANTES da coluna nova, o valor dormente do enum viraria KPI
+escrito `NaN` se tivesse sido resolvido com um cast, o `Combobox` já tinha a correção do dropdown que
+o `Select` não tinha, e esconder o Motivo esconderia junto o bloco de substituição.
+
+**O caso que originou a regra (07/09/2026).** O diretor reparou que os pulsos diziam "coordenador,
+direto" e que ele **não estava vendo agente nenhum trabalhar**. Estava certo: a frente inteira da
+Central de Vagas foi executada pelo coordenador, incluindo uma mudança que **tocava o CPF do
+substituído**, e o §A.6 foi declarado cumprido **pelo próprio autor**, com o teste dele, sem o
+`seguranca` olhar. A conclusão estava correta e foi medida contra a produção, mas ninguém adversarial
+conferiu, e três papéis (autor, testador e auditor) ficaram na mesma cabeça. *(Decisão do diretor,
+sobre proposta do coordenador.)*
+
+**Primeira aplicação:** a **tela unificada de vagas**, que é frente grande e mexe em candidato,
+alocação e CPF. Ela passa pelos dois acionamentos.
