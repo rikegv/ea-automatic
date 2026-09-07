@@ -16,8 +16,9 @@
   visual das entregas). A fábrica nunca se autoconcede acesso.
 - **Autonomia do coordenador.** Durante a construção, o coordenador tem autonomia total **dentro
   do escopo deste documento**. Resolve correções, problemas técnicos e decisões de implementação
-  no loop, articulando os agentes. **Escala ao diretor em um único caso: quando a demanda foge
-  deste documento** (exemplo: alterar uma regra da IA de validação).
+  no loop, **DESPACHANDO para os agentes especialistas (§A.39) e orquestrando o retorno deles**.
+  **Escala ao diretor em um único caso: quando a demanda foge deste documento** (exemplo: alterar
+  uma regra da IA de validação).
 - **Validação visual obrigatória.** Funcionalidade com interface para antes de despachar para
   segurança/tester; teste verde de agente não substitui a aprovação visual do diretor.
 
@@ -1009,3 +1010,87 @@ sobre proposta do coordenador.)*
 
 **Primeira aplicação:** a **tela unificada de vagas**, que é frente grande e mexe em candidato,
 alocação e CPF. Ela passa pelos dois acionamentos.
+
+## A.39: A FÁBRICA OPERA DISTRIBUÍDA, cada agente na sua frente (regra permanente)
+
+**O coordenador ORQUESTRA, não constrói tudo.** Cada agente executa a frente dele e REPORTA ao
+coordenador, que consolida e leva ao diretor. Este é o desenho original da fábrica (§A.0), e esta
+seção existe para que ele deixe de depender de interpretação.
+
+**POR QUE A REGRA PRECISOU SER ESCRITA.** A §A.0 DESCREVIA a fábrica ("articulando os agentes") em
+vez de INSTRUIR o despacho, e como gatilho isso é ambíguo. Em 07/09/2026 o coordenador leu uma
+cláusula com exceção ("não acione agente a menos que o usuário, um CLAUDE.md ou uma skill peçam")
+como se fosse proibição, e executou sozinho uma frente inteira, auditoria de CPF incluída. Não havia
+conflito de regras: havia leitura equivocada de uma ambiguidade. A emenda da §A.0 e esta seção
+tornam o pedido EXPLÍCITO, que é o único conserto que sobrevive à próxima sessão.
+
+### O FLUXO, em sete passos
+
+1. **O COORDENADOR INVESTIGA O ALCANCE PRIMEIRO** (§A.26/§A.27) e monta o mapa: quem depende do que
+   vai ser mexido, o que pode quebrar de lado, o que encosta em código já validado.
+2. **DECIDE o recorte e QUEM executa.**
+3. **DESPACHA com briefing, e o MAPA VAI JUNTO.**
+4. **Os agentes constroem na sua camada e REPORTAM** ao coordenador.
+5. **O COORDENADOR CONSOLIDA CONFERINDO**, e então despacha a AUDITORIA: `seguranca` e `tester`.
+6. **A VALIDAÇÃO VISUAL (§A.13) FICA COM O COORDENADOR.** Julgar a tela é dele, e não se delega.
+7. **O PULSO DIZ QUEM FEZ O QUÊ E QUAL FOI O VEREDITO** (§A.34/§A.38), inclusive quando nenhum
+   agente foi acionado, com o motivo.
+
+### O PASSO 1 É OBRIGATÓRIO, e é ele que separa DISTRIBUIR de FATIAR
+
+**O agente nasce sem o contexto do coordenador: cada despacho é uma cabeça nova.** Despachar antes de
+ter o mapa de alcance é picar a tarefa e perder exatamente o que a §A.26 e a §A.27 existem para pegar.
+
+Na frente da Central de Vagas (07/09) foi de segurar o mapa inteiro que saíram quatro achados que uma
+tarefa fatiada teria perdido: a tabela **já** estourava 41px antes da coluna nova, o valor dormente do
+enum viraria KPI escrito `NaN` se tivesse sido resolvido com um cast, o `Combobox` já tinha a correção
+do dropdown que o `Select` não tinha, e esconder o Motivo esconderia junto o bloco de substituição.
+**Investigação primeiro, despacho depois, sempre.**
+
+### O PASSO 4 TAMBÉM: CONSOLIDAR É CONFERIR, NÃO CARIMBAR
+
+O coordenador lê o que o agente devolveu e **verifica**. Coordenador que repassa o retorno cru não
+acrescentou revisão, acrescentou um intermediário, e o diretor passa a receber a palavra de quem
+construiu com uma assinatura a mais no meio.
+
+### QUEM ENTRA QUANDO
+
+| agente | ferramentas | quando entra |
+|---|---|---|
+| **arquiteto** | leitura, **sem escrita** | desenha a estratégia e o modelo. Entrega PLANO, nunca código |
+| **backend** | leitura + escrita | NestJS, Drizzle, migrations, filas, guards |
+| **frontend** | leitura + escrita | Next, telas, §A.12/§A.20/§A.29/§A.35 |
+| **devops** | leitura + escrita | Docker, CI, gate, serviços |
+| **ia** | leitura + escrita | `ai-service`, Vertex/Gemini |
+| **seguranca** | leitura, **sem escrita** | audita e **VETA** CPF, dado pessoal, auth, RBAC, credencial (§A.6/§A.38) |
+| **tester** | leitura + escrita | cobertura independente em frente grande (§A.38) |
+
+**O `arquiteto` e o `seguranca` NÃO TÊM PODER DE ESCRITA, e isso é desenho, não limitação.** Quem
+audita não conserta o que auditou, e quem desenha não implementa o próprio desenho sem alguém no meio.
+
+### O LIMITE: tarefa pequena o coordenador faz DIRETO
+
+Rótulo, valor de lista, largura de coluna, medição no browser: **coordenador, sem despachar**.
+Explicar a tarefa a um agente custa mais do que fazê-la, e o handoff perde contexto, que é a origem
+documentada da própria §A.26. A distribuição é para **trabalho de verdade** (construir uma frente,
+auditar, testar), nunca para cada microtarefa.
+
+### DONO ÚNICO DO ARQUIVO COMPARTILHADO
+
+**Arquivo que mais de uma camada toca tem UM dono por frente, e o dono é o COORDENADOR.** Vale em
+primeiro lugar para `packages/shared-types/src/index.ts`, que backend e frontend leem e escrevem, e
+que já é sensível por ser arquivo único (`export *` para outro arquivo quebra um dos dois lados).
+
+**Dois agentes escrevendo o mesmo arquivo se sobrescrevem em silêncio**, e o segundo a gravar apaga o
+primeiro sem que nada falhe. Esse é o modo de falha prático da operação distribuída, e a trava é de
+processo: o coordenador escreve o vocabulário compartilhado, e os agentes o consomem.
+
+### A §A.38 VIRA CONSEQUÊNCIA DO MODELO, NÃO REMENDO
+
+Operando distribuído, a auditoria independente **acontece por construção**: quem audita já é outra
+cabeça, porque quem construiu foi outro agente. A §A.38 deixa de ser uma exceção que o coordenador
+precisa lembrar de ligar e passa a ser o passo 5 do fluxo. E, se alguém esquecer, o passo 7 denuncia,
+porque o pulso é obrigado a dizer quem rodou.
+
+*(Decisão do diretor, 07/09/2026, no realinhamento da operação da fábrica. Primeira aplicação: a tela
+unificada de vagas.)*
