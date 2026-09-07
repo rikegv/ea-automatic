@@ -13061,3 +13061,134 @@ falso positivo previsível em entradas de diário e vale conhecer antes de perde
 
 Só documentação nesta entrada: **nenhum arquivo de código foi tocado** depois de `a1bd07c`, então o
 gate segue o mesmo que subiu verde (2.050 testes). Produção intocada, serviços no ar.
+
+---
+
+## 07/09/2026 (encerramento), A&S: a fábrica volta a operar distribuída, e o desenho da tela unificada
+
+Continuação direta da entrada anterior. Aquela registrou a §A.38 (auditoria por agente); esta registra
+o **realinhamento de raiz** da operação e a **primeira frente rodando no modelo novo**.
+
+### 1. A CONTRADIÇÃO QUE NÃO EXISTIA (§A.0 emendada, §A.39 nova) · commit `175670e`
+
+O diretor pediu a volta ao conceito original: cada agente na sua frente, todos reportando ao
+coordenador, que orquestra. A investigação da suposta contradição achou outra coisa.
+
+**A instrução do harness diz, textual:** *"não use a ferramenta de agentes a menos que o USUÁRIO, um
+CLAUDE.md ou uma skill peçam"*. A exceção **nomeia exatamente as duas fontes que mandam aqui**. Não
+havia hierarquia a resolver: houve **leitura equivocada de uma cláusula com exceção como se fosse
+proibição**, e a entrada anterior foi generosa ao chamar isso de "tensão". O nome certo é erro de
+leitura do coordenador.
+
+**O que era de fato ambíguo é a §A.0**, que DESCREVIA a fábrica ("articulando os agentes") em vez de
+INSTRUIR o despacho. Como gatilho, descrição não sobrevive à próxima sessão. Duas peças subiram:
+
+- **Emenda na §A.0:** "articulando os agentes" virou **"DESPACHANDO para os agentes especialistas
+  (§A.39) e orquestrando o retorno deles"**.
+- **Nova §A.39**, com o fluxo de sete passos e as travas que o sustentam: o **passo 1 obrigatório**
+  (investigar o alcance ANTES de despachar, que é o que separa distribuir de fatiar, porque o agente
+  nasce sem o contexto do coordenador); o **passo 4 obrigatório** (consolidar é CONFERIR, não
+  carimbar); a tabela de quem entra quando, com os grants reais (**`arquiteto` e `seguranca` não têm
+  poder de escrita, e isso é desenho**: quem audita não conserta o que auditou); o limite mantido da
+  tarefa pequena; e o **DONO ÚNICO do arquivo compartilhado**, que é o coordenador, valendo primeiro
+  para `shared-types/index.ts`, porque dois agentes escrevendo o mesmo arquivo se sobrescrevem em
+  silêncio e o segundo apaga o primeiro sem que nada falhe. A §A.38 passa a ser **consequência** do
+  modelo (o passo 5), não remendo.
+
+### 2. PRIMEIRA FRENTE NO MODELO NOVO: a tela unificada de vagas
+
+**Escopo A, tudo junto**, e o diretor entregou o conceito e o modelo de fechamento **já fechados**: a
+vaga conta POSIÇÕES e não linhas; só fecha quando TODAS as posições forem finalizadas, com o Master
+podendo FORÇAR; "finalizar posição" mantém o candidato no funil marcado como ALOCADO; e a contagem vem
+da **derivada** (`ocupacaoDaVaga`), nunca do número digitado. Uma fonte só, o que resolve os bugs 11,
+12 e 13.
+
+**Passo 1, COORDENADOR:** mapa de alcance em `docs/MAPA-ALCANCE-TELA-UNIFICADA-VAGAS.md`, com seis
+pontos de alcance. **Passo 3, agente `arquiteto` despachado com o mapa junto**, entregando
+`docs/DESENHO-AS-TELA-UNIFICADA-VAGAS.md` (962 linhas, plano e não código, zero travessões, `git
+status` limpo fora do doc). **Passo 4, COORDENADOR consolidou CONFERINDO**, e as verificações estão
+abaixo porque conferir sem registrar é carimbar com passos extras.
+
+### 3. O QUE O COORDENADOR CONFERIU DO TRABALHO DO ARQUITETO
+
+- **Único escritor de `vagas.status = 'ENTREGUE'`:** `vagas.service.ts:806`. Os outros 40 resultados
+  do grep são o `estado` de DOCUMENTO, outro enum. Confere.
+- **O índice parcial:** `pg_indexes` devolve `WHERE (situacao = ANY (ARRAY['ATIVO','APROVADO',
+  'CONTRATADO']))`. Os três valores estão **compilados dentro do predicado**, e acrescentar valor ao
+  enum **não** o atualiza. Confere, e é o ponto mais caro do plano.
+- **"Quem consome posição" escrito QUATRO vezes:** `consomePosicao` (domínio) mais `candidatos.service`
+  `:277` (SQL cru), `:633` e `:781`. Confere.
+- **MenuGuard:** `if (user.papel === "MASTER") return true;` e a mensagem do 403 literal. Confere.
+- **Referências de linha:** `preenchidas` em `:219`, os dois `contado` em `:1872` e `:1878`, a trava
+  `situacao !== "ATIVO"` em `:451`, `admissao_id` com 0 linhas. Todas batem.
+
+### 4. O ARQUITETO CORRIGIU DUAS COISAS DO MAPA DO COORDENADOR, e estava certo nas duas
+
+Fica registrado porque é a prova de que o modelo distribuído pagou na primeira frente:
+
+1. O mapa dizia que `fechar()` marca ENTREGUE "assim que uma posição é preenchida". **Impreciso:** não
+   existe "preencher posição" hoje, e ENTREGUE só é escrito no clique "Fechar vaga". O que é verdade e
+   é pior: **o formulário pré-preenche a contagem com a meta cheia** (`as/vagas/page.tsx:1216`), então
+   quase todo fechamento vira ENTREGUE. Consequência de desenho: **NÃO mexer** em
+   `STATUS_QUE_NAO_RECEBEM`, porque com o gate novo a vaga só chega a ENTREGUE no fim de verdade, e
+   afrouxar a lista trocaria um defeito visível por um invisível.
+2. O mapa dizia que o usuário sem `as-candidatos` receberia "lista vazia sem erro visível". **Errado
+   na forma:** recebe um **403 barulhento** com mensagem própria, e **MASTER passa sem a marcação**, o
+   que restringe o problema ao COMUM.
+
+### 5. O ACHADO NOVO, que não estava no mapa
+
+**A régua "quem consome posição" está escrita quatro vezes, três delas em SQL cru dentro do service.**
+Hoje concordam por coincidência, não por construção. Se `ALOCADO` entrar em `consomePosicao` e essas
+três linhas ficarem, a **leitura** da tela e a **trava** passam a dar números diferentes, e a vaga
+aceita aprovações a mais **em silêncio**. É o mesmo defeito dos bugs 11 a 13 chegando por outra porta.
+
+### 6. AS ESCOLHAS DO DESENHO
+
+- **`ALOCADO` entra como valor do enum**, não como coluna nem tabela. O argumento decisivo: o
+  `domain/candidatura.ts` foi escrito **esperando uma situação nova**, com fail-closed armado (situação
+  nova nasce VIVA e nasce PENDENTE, e a vaga não fecha até alguém decidir o que ela significa). Uma
+  coluna passaria **por baixo** dessa rede: nada quebraria, nenhum teste cairia.
+- **A migration tem de ser DOIS arquivos**, e isso foi MEDIDO, não deduzido: o erro
+  `unsafe use of new value "ALOCADO" of enum type` foi reproduzido em banco de rascunho no próprio
+  `ea-db` (PostgreSQL 16.14). O migrador do drizzle envolve cada arquivo numa transação.
+- **`fechar()` precisa virar transacional com `FOR UPDATE`.** Enquanto o número era digitado não havia
+  corrida; decidindo por contagem de candidaturas, há.
+- **O `forcar` do Master é autorizado por papel DENTRO do service**, nunca por `@Roles` na rota, que
+  barraria o fechamento normal do COMUM. Padrão idêntico já existe em `esteira.service.ts:1138-1155`.
+
+**A JANELA É AGORA:** produção tem **0 candidatos e 0 candidaturas** (3 vagas); homologação tem 2 e 2.
+A onda 3 não foi importada. É o melhor momento possível para mexer no enum e no índice.
+
+### 7. ORDEM DE CONSTRUÇÃO APROVADA NO DESENHO (sete etapas, ainda NÃO construídas)
+
+Etapa **0** vocabulário no `shared-types` (**coordenador**, dono único); **1** régua e as duas
+migrations (**backend**, com `seguranca` na 1ª das 2 passagens); **2** finalizar posição (**backend**);
+**3** o cilindro passa a ler a derivada (**frontend**, entrega pequena e a primeira julgável na tela);
+**4** o modal só leitura (**frontend**); **5** as ações no modal (**frontend**); **6** o fechamento
+derivado e forçado (**backend** e depois **frontend**, por último por ser a que mais alcança código
+validado, §A.26); **7** auditoria com **`seguranca`** (a que veta) e **`tester`** independente.
+O desenho registra que **`devops` e `ia` NÃO entram nesta frente**, com o motivo, como a §A.38 exige.
+
+### 8. ESTADO E POR ONDE RETOMAR AMANHÃ
+
+**Nada foi construído.** O código está exatamente como ficou no deploy de `a1bd07c`: produção no ar,
+serviços em 200, migration `0094` aplicada, 2.050 testes verdes. Homologação também no ar.
+
+**DUAS PERGUNTAS BLOQUEIAM a etapa 0 e são a primeira coisa de amanhã:**
+
+- **P1. O contador de BANCO participa do fechamento?** Homologação tem uma vaga real com 5 oficiais e
+  **20 de banco**: se o banco contar, ela precisa de **25 finalizações** para fechar. **Recomendação
+  do arquiteto, endossada pelo coordenador: só o lado OFICIAL.** Banco é reserva, não entrega.
+- **P2. `ALOCADO` e `CONTRATADO` são a mesma coisa?** Hoje `CONTRATADO` já é saída e já consome
+  posição. **Recomendação: `ALOCADO` = entregue na A&S** (continua no funil), **`CONTRATADO` = virou
+  admissão**, usando `as_candidaturas.admissao_id`, que já existe dormente e tem 0 linhas. Enquanto a
+  ponte com a esteira não existir, os dois ficam oferecidos e a tela precisa dizer a diferença em uma
+  frase.
+
+Outras **oito** perguntas estão na seção 8 do desenho, todas com recomendação, **nenhuma bloqueante**.
+
+**Também aberto, da entrega anterior:** a tabela da Central de Vagas rola na horizontal em 1600px
+(cabe inteira a partir de ~1790px), e encurtar exige tirar coluna ou apertar os ícones de ação, o que é
+decisão do diretor. E o diretor escreveu que o Tempo de Contrato "aparece nos dois" vínculos; hoje ele
+**não aparece no Efetivo**, pela decisão de 22/08, e a fábrica **não mexeu**.
