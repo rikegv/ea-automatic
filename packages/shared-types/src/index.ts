@@ -1666,6 +1666,7 @@ export function regiaoPertenceAUf(uf: string, regiao: string): boolean {
   return regioesDaUf(uf).includes(regiao);
 }
 
+
 /**
  * TEMPO DE CONTRATO SÓ EXISTE EM CONTRATO COM PRAZO (item 2 da OST de 22/08).
  *
@@ -1681,6 +1682,37 @@ export const VINCULOS_COM_TEMPO_CONTRATO = ["TEMPORARIO", "ESTAGIO", "JOVEM_APRE
 
 export function exigeTempoContrato(vinculo: string | null | undefined): boolean {
   return (VINCULOS_COM_TEMPO_CONTRATO as readonly string[]).includes(vinculo ?? "");
+}
+
+/**
+ * MOTIVO DA CONTRATAÇÃO SÓ NO VÍNCULO TEMPORÁRIO (item 1 do mapa do time, decisão do diretor 07/09).
+ *
+ * O QUE FICA CONDICIONAL: "Motivo da contratação", "Justificativa do motivo" e o bloco inteiro de
+ * SUBSTITUIÇÃO que o motivo abre (tipo de substituição, nome e CPF do substituído). Em qualquer
+ * outro vínculo, esses campos não aparecem na trilha e não são gravados.
+ *
+ * O QUE **NÃO** MUDA: o TEMPO DE CONTRATO, que tem régua própria (`exigeTempoContrato`, três
+ * vínculos) e não foi tocado. São perguntas diferentes: uma é "por que estamos contratando", a outra
+ * é "por quanto tempo". São duas funções, e não uma, exatamente para que mexer numa não mexa na
+ * outra por descuido.
+ *
+ * É UM VÍNCULO SÓ, e por isso não há lista: `VINCULOS_COM_TEMPO_CONTRATO` tem três valores porque
+ * estágio e jovem aprendiz também têm prazo, mas o motivo é pergunta do temporário e de mais
+ * ninguém. Escrever uma lista de um item sugeriria que outros vínculos entram depois.
+ *
+ * ISTO NÃO CRIA OBRIGATORIEDADE NENHUMA: `motivo` nunca esteve em `VAGA_OBRIGATORIOS`, então a
+ * régua do publicar (`vagaPendencias`) não muda em nada. O campo era opcional e continua opcional,
+ * dentro do temporário.
+ *
+ * A RÉGUA VIVE AQUI pelo mesmo motivo da irmã acima: a tela decide se DESENHA, o service decide se
+ * GRAVA. Sem a segunda metade, trocar o vínculo depois de preencher o motivo deixaria para trás um
+ * motivo órfão numa vaga efetiva, invisível na tela e presente no banco. No caso do CPF do
+ * substituído isso seria pior que desarrumação: seria dado pessoal guardado sem necessidade (§A.6).
+ */
+export const VINCULO_COM_MOTIVO = "TEMPORARIO";
+
+export function exigeMotivoContratacao(vinculo: string | null | undefined): boolean {
+  return vinculo === VINCULO_COM_MOTIVO;
 }
 
 /**

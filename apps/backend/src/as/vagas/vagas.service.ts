@@ -21,6 +21,7 @@ import {
   OPCAO_OUTROS,
   REGIAO_OUTRAS,
   contraparteDe,
+  exigeMotivoContratacao,
   exigeTempoContrato,
   isValidCpf,
   nomeDaUf,
@@ -572,10 +573,25 @@ export class VagasService {
        * Mesma decisão já tomada para `detalheHibrido` fora do modelo híbrido.
        */
       tempoContrato: exigeTempoContrato(dto.vinculo) ? texto(dto.tempoContrato) : null,
-      motivo: texto(dto.motivo),
-      justificativaMotivo: texto(dto.justificativaMotivo),
-      tipoSubstituicao: dto.tipoSubstituicao ?? null,
-      substituidoNome: texto(dto.substituidoNome),
+      /**
+       * MOTIVO, JUSTIFICATIVA E SUBSTITUIÇÃO SÓ NO VÍNCULO TEMPORÁRIO (item 1, decisão do diretor
+       * 07/09). A tela esconde os campos fora do temporário; quem GRAVA é aqui, pela mesma razão
+       * escrita no `tempoContrato` logo acima: sem esta metade, quem preenchesse o motivo e depois
+       * trocasse o vínculo para Efetivo deixaria um motivo órfão no banco, invisível na trilha.
+       *
+       * NO CPF DO SUBSTITUÍDO ISSO É MAIS QUE ARRUMAÇÃO, É §A.6: dado pessoal que a vaga não precisa
+       * mais não fica guardado. A minimização acontece na gravação, não na exibição.
+       *
+       * O `tempoContrato` acima NÃO ENTRA nesta condição, e é de propósito: ele tem régua própria e
+       * três vínculos (`exigeTempoContrato`), e some junto seria mudar uma decisão de 22/08 que
+       * ninguém pediu para mudar.
+       */
+      motivo: exigeMotivoContratacao(dto.vinculo) ? texto(dto.motivo) : null,
+      justificativaMotivo: exigeMotivoContratacao(dto.vinculo)
+        ? texto(dto.justificativaMotivo)
+        : null,
+      tipoSubstituicao: exigeMotivoContratacao(dto.vinculo) ? (dto.tipoSubstituicao ?? null) : null,
+      substituidoNome: exigeMotivoContratacao(dto.vinculo) ? texto(dto.substituidoNome) : null,
       /**
        * §A.6: o CPF do substituído é dado pessoal e é tratado como tal TAMBÉM NO RASCUNHO. O número
        * nunca volta na mensagem de erro, nunca vai para log e a rota inteira segue fechada pelo menu
@@ -587,7 +603,9 @@ export class VagasService {
        * PUBLICAÇÃO o dígito é conferido, e é lá que o CPF errado é barrado: nenhum CPF inválido chega
        * a uma vaga publicada.
        */
-      substituidoCpf: this.validaCpfSubstituido(dto.substituidoCpf, status === "RASCUNHO"),
+      substituidoCpf: exigeMotivoContratacao(dto.vinculo)
+        ? this.validaCpfSubstituido(dto.substituidoCpf, status === "RASCUNHO")
+        : null,
 
       localTrabalho: texto(dto.localTrabalho),
       regiaoEstado: regiao.uf,

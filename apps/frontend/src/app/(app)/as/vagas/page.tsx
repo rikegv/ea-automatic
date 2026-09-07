@@ -54,6 +54,7 @@ import {
   VAGA_VINCULO,
   VAGA_VINCULO_LABEL,
   contraparteDe,
+  exigeMotivoContratacao,
   exigeTempoContrato,
   nomeDaUf,
   regioesDaUf,
@@ -2338,72 +2339,93 @@ export default function CentralDeVagasPage() {
                       </CampoSelect>
                     )}
 
-                    <CampoSelect rotulo="Motivo da contratação">
-                      <Select
-                        value={form.motivo}
-                        onChange={(v) => set("motivo", v)}
-                        options={[
-                          { value: "", label: "não informado" },
-                          ...opcoes.motivos.map((m) => ({ value: m, label: m })),
-                        ]}
-                        ariaLabel="Motivo da contratação"
-                      />
-                    </CampoSelect>
+                    {/* ITEM 1 DO MAPA DO TIME (decisão do diretor, 07/09): MOTIVO, JUSTIFICATIVA E
+                        SUBSTITUIÇÃO SÓ NO VÍNCULO TEMPORÁRIO.
 
-                    <Campo rotulo="Justificativa do motivo">
-                      <input
-                        value={form.justificativaMotivo}
-                        onChange={(e) => set("justificativaMotivo", e.target.value)}
-                        placeholder="Ex.: demanda de pedidos"
-                        className="ds-input"
-                      />
-                    </Campo>
+                        Fora do temporário estes campos não têm resposta, e ficavam na tela pedindo
+                        uma: "por que estamos contratando" é pergunta do contrato por prazo, e o
+                        time preenchia "Aumento de demanda" em vaga efetiva só para não deixar em
+                        branco. A régua é a mesma do backend (`exigeMotivoContratacao`), que também
+                        ZERA os campos na gravação: esconder na tela sem zerar no servidor deixaria
+                        motivo órfão numa vaga efetiva, e, no CPF do substituído, dado pessoal
+                        guardado sem necessidade (§A.6).
 
-                    {/* O bloco de substituição NASCE ESCONDIDO e abre sozinho: campo que não se
-                        aplica não ocupa espaço na tela. */}
-                    {form.motivo === MOTIVO_SUBSTITUICAO && (
+                        ISTO NÃO TORNA NADA OBRIGATÓRIO: `motivo` nunca esteve em
+                        `VAGA_OBRIGATORIOS`, então a régua do publicar não mudou. Era opcional e
+                        segue opcional, dentro do temporário.
+
+                        O TEMPO DE CONTRATO, logo acima, NÃO ENTRA aqui: ele tem régua própria
+                        (`exigeTempoContrato`, três vínculos) e continua aparecendo como aparecia. */}
+                    {exigeMotivoContratacao(form.vinculo) && (
                       <>
-                        <CampoSelect rotulo="Tipo de substituição">
+                        <CampoSelect rotulo="Motivo da contratação">
                           <Select
-                            value={form.tipoSubstituicao}
-                            onChange={(v) => set("tipoSubstituicao", v)}
+                            value={form.motivo}
+                            onChange={(v) => set("motivo", v)}
                             options={[
                               { value: "", label: "não informado" },
-                              ...VAGA_TIPO_SUBSTITUICAO.map((t) => ({
-                                value: t,
-                                label: VAGA_TIPO_SUBSTITUICAO_LABEL[t],
-                              })),
+                              ...opcoes.motivos.map((m) => ({ value: m, label: m })),
                             ]}
-                            ariaLabel="Tipo de substituição"
+                            ariaLabel="Motivo da contratação"
                           />
                         </CampoSelect>
 
-                        <Campo rotulo="Nome do substituído">
+                        <Campo rotulo="Justificativa do motivo">
                           <input
-                            value={form.substituidoNome}
-                            onChange={(e) => set("substituidoNome", e.target.value)}
+                            value={form.justificativaMotivo}
+                            onChange={(e) => set("justificativaMotivo", e.target.value)}
+                            placeholder="Ex.: demanda de pedidos"
                             className="ds-input"
                           />
                         </Campo>
 
-                        {/* ITEM 3: o CPF abre JUNTO do nome e PERSISTE (decisão do diretor). É
+                        {/* O bloco de substituição NASCE ESCONDIDO e abre sozinho: campo que não se
+                        aplica não ocupa espaço na tela. */}
+                        {form.motivo === MOTIVO_SUBSTITUICAO && (
+                          <>
+                            <CampoSelect rotulo="Tipo de substituição">
+                              <Select
+                                value={form.tipoSubstituicao}
+                                onChange={(v) => set("tipoSubstituicao", v)}
+                                options={[
+                                  { value: "", label: "não informado" },
+                                  ...VAGA_TIPO_SUBSTITUICAO.map((t) => ({
+                                    value: t,
+                                    label: VAGA_TIPO_SUBSTITUICAO_LABEL[t],
+                                  })),
+                                ]}
+                                ariaLabel="Tipo de substituição"
+                              />
+                            </CampoSelect>
+
+                            <Campo rotulo="Nome do substituído">
+                              <input
+                                value={form.substituidoNome}
+                                onChange={(e) => set("substituidoNome", e.target.value)}
+                                className="ds-input"
+                              />
+                            </Campo>
+
+                            {/* ITEM 3: o CPF abre JUNTO do nome e PERSISTE (decisão do diretor). É
                             exigência legal: o time de cadastro do ADM precisa do número para a
                             folha e o eSocial. A máscara é da tela, os 11 dígitos é o que viaja, e
                             quem confere se o dígito fecha é o backend. */}
-                        <Campo rotulo="CPF do substituído">
-                          <input
-                            inputMode="numeric"
-                            value={form.substituidoCpf}
-                            onChange={(e) => set("substituidoCpf", formatCpf(e.target.value))}
-                            placeholder="000.000.000-00"
-                            className="ds-input"
-                          />
-                        </Campo>
+                            <Campo rotulo="CPF do substituído">
+                              <input
+                                inputMode="numeric"
+                                value={form.substituidoCpf}
+                                onChange={(e) => set("substituidoCpf", formatCpf(e.target.value))}
+                                placeholder="000.000.000-00"
+                                className="ds-input"
+                              />
+                            </Campo>
 
-                        <p className="text-[12px] text-faint md:col-span-2">
-                          O CPF do substituído fica guardado na vaga por exigência legal, para o
-                          cadastro do ADM.
-                        </p>
+                            <p className="text-[12px] text-faint md:col-span-2">
+                              O CPF do substituído fica guardado na vaga por exigência legal, para o
+                              cadastro do ADM.
+                            </p>
+                          </>
+                        )}
                       </>
                     )}
                   </>

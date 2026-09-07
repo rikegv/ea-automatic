@@ -7,6 +7,9 @@ import {
   VAGA_ETAPAS_PS,
   VAGA_FAIXA_ETARIA,
   VAGA_IDIOMAS,
+  VAGA_OBRIGATORIOS,
+  VAGA_VINCULO,
+  exigeMotivoContratacao,
   exigeTempoContrato,
   nomeDaUf,
   regiaoPertenceAUf,
@@ -183,3 +186,42 @@ describe("listas do item 6 (valores aprovados pelo diretor)", () => {
   });
 });
 
+describe("exigeMotivoContratacao (item 1, decisão do diretor 07/09)", () => {
+  it("SÓ o temporário pede motivo de contratação", () => {
+    expect(exigeMotivoContratacao("TEMPORARIO")).toBe(true);
+  });
+
+  it("efetivo NÃO pede, que é o relato do time", () => {
+    expect(exigeMotivoContratacao("EFETIVO")).toBe(false);
+  });
+
+  it("nenhum outro vínculo pede, nem os que têm prazo", () => {
+    for (const v of VAGA_VINCULO.filter((x) => x !== "TEMPORARIO")) {
+      expect(exigeMotivoContratacao(v)).toBe(false);
+    }
+  });
+
+  it("vínculo ainda não escolhido não pede (o rascunho abre sem vínculo)", () => {
+    expect(exigeMotivoContratacao(null)).toBe(false);
+    expect(exigeMotivoContratacao(undefined)).toBe(false);
+    expect(exigeMotivoContratacao("")).toBe(false);
+  });
+
+  /**
+   * A GUARDA CONTRA O DESCUIDO MAIS PROVÁVEL: as duas réguas são independentes, e estágio e jovem
+   * aprendiz provam isso. Eles TÊM prazo e NÃO têm motivo. Se algum dia alguém fundir as duas
+   * funções numa só, este teste cai antes de a trilha voltar a perguntar o motivo no estágio.
+   */
+  it("tempo de contrato e motivo são réguas SEPARADAS", () => {
+    for (const v of ["ESTAGIO", "JOVEM_APRENDIZ"] as const) {
+      expect(exigeTempoContrato(v)).toBe(true);
+      expect(exigeMotivoContratacao(v)).toBe(false);
+    }
+    expect(exigeTempoContrato("TEMPORARIO")).toBe(true);
+    expect(exigeMotivoContratacao("TEMPORARIO")).toBe(true);
+  });
+
+  it("o motivo NÃO virou obrigatório: a régua do publicar não mudou", () => {
+    expect(VAGA_OBRIGATORIOS.map((p) => p.campo)).not.toContain("motivo");
+  });
+});
