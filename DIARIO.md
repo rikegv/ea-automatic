@@ -12895,3 +12895,100 @@ filas de produção subiram com zero job falhado, worker e scheduler ativos.
 A candidata está **aguardando liberação**: falta atribuir cliente e cargo para ela nascer na esteira.
 Fica registrado que o **de/para vaga→cliente segue pendente** (§A.9), e é ele que faria admissões do
 Pandapé nascerem direto na esteira em vez de parar na Liberação.
+
+---
+
+## 07/09/2026, A&S CENTRAL DE VAGAS: o menu que sumia no pé da tela, e o motivo que não tinha resposta
+
+O time testou a Central de Vagas em produção e trouxe 22 pontos. A sessão começou por um **MAPA**
+(`docs/MAPA-AS-CENTRAL-DE-VAGAS-PONTOS-DO-TIME.md`, ainda não commitado), com cada item classificado
+em existe / bug / campo faltando / novo, e ONDE mexe. O diretor aprovou o mapa e liberou só os
+**rápidos e seguros** mais o dropdown, deixando para desenho o modelo de posição/fechamento.
+
+### O QUE SUBIU, em dois commits
+
+**`db464be`, frente 1.** O DROPDOWN (item 14) era o de maior alcance e o mais barato. `Select` e
+`MultiSelect` abriam o menu SEMPRE para baixo, em `position: fixed`, sem teto de altura e sem limite
+pela borda da janela: perto do fim da página o menu nascia fora da tela, e rolar não o trazia de
+volta, porque o listener de rolagem o reposicionava de novo para baixo do gatilho. **Medido, não
+deduzido:** mesmo seletor a 56px do pé da tela, produção antiga vazava **260px** para fora da janela
+(só o campo de busca aparecia, nenhuma opção alcançável) e o corrigido vaza **0**. A régua virou
+função pura em `apps/frontend/src/lib/popover-posicao.ts`, com 10 testes, lida pelos dois
+componentes; ela só inverte quando o espaço de baixo é apertado de verdade E o de cima é maior, então
+o seletor no meio da página abre como sempre abriu.
+
+O achado que envergonha: **o remédio já existia na casa.** O `Combobox` (o seletor dos modais de
+filtro) inverte e limita a altura desde que nasceu, com a mesma régua escrita à mão dentro dele.
+`Select` e `MultiSelect` eram os dois únicos seletores do sistema sem ela. O `Combobox` **não foi
+tocado** (§A.14/§A.26): fica a proposta de convergir os três num dia de faxina.
+
+Isso resolveu **de brinde o item 2**, o "campo de cidades não aparece". Não faltava campo nenhum: o
+par "Estado da abordagem" + "Regiões possíveis para abordagem" existe no passo 4 e, para SP, lista
+São Paulo capital, Zona Norte/Sul/Leste, Centro, ABC, Guarulhos, Osasco/Barueri/Alphaville, Grande SP
+e Interior. Era ele que sumia embaixo.
+
+Também na frente 1: **Consultor Responsável** virou coluna (item 16), com ordenação (§A.29) e filtro
+multiselect (§A.28/§A.37) cujas opções vêm de **endpoint**, nunca das linhas carregadas, mais o valor
+"Sem Consultor" para perguntar de quem falta definir o responsável; o filtro casa por **id**, não por
+nome. **Status perdeu "Vaga Banco"** (item 8), e o CONTADOR de banco não foi tocado, segue nos dois
+cilindros da coluna Posições. **Escolaridade** ganhou Técnico Incompleto/Completo e os três Cursando
+(itens 3 e 4), e o "TECNICO" solto saiu da lista oferecida. **Natureza** ganhou "Reposição" ao lado de
+"Reposição Efetiva" (item 6). O vínculo INTERNO virou **"Interno (Vaga Interna)"** (item 7): o valor
+já existia, o time é que não o achava pelo rótulo. E **"Data limite" virou "Previsão de entrega"**
+(item 19), só o rótulo, porque renomear a coluna do banco é migração destrutiva por ganho zero.
+
+Os valores que saíram das listas ficam **dormentes** no enum do Postgres (não há `DROP VALUE`) e são
+traduzidos na LEITURA (`statusVivoDaVaga`, `escolaridadeVivaDaVaga`, em `domain/vaga.ts`). Sem isso um
+cast calaria o compilador e a tela mostraria pill sem texto e KPI escrito `NaN`. **Zero linhas usavam
+qualquer um deles**, conferido em produção e em homologação antes de remover.
+
+**`f09da44`, frente 2.** "Motivo da contratação", "Justificativa" e o bloco de substituição inteiro
+(tipo, nome e **CPF do substituído**) só aparecem no vínculo **TEMPORÁRIO** (item 1). Fora dele o
+campo não tem resposta e ficava na tela pedindo uma: a vaga efetiva acabava com "Aumento de demanda"
+preenchido só para não ficar em branco. Esconder na tela é metade; a outra é o servidor, e os cinco
+campos são **zerados na gravação** fora do temporário. No CPF isso é §A.6, não arrumação: dado pessoal
+não fica guardado sem necessidade. 7 testes provam o caso do corpo cheio chegando com vínculo Efetivo.
+
+**O TEMPO DE CONTRATO NÃO FOI TOCADO**, e é o cuidado principal daquele commit. Ele tem régua própria
+e três vínculos (temporário, estágio, jovem aprendiz), pela decisão de 22/08. São duas funções
+separadas de propósito, e um teste usa o **estágio** para travar a separação: tem prazo, não tem
+motivo. **A régua do publicar não mudou**: `motivo` nunca esteve em `VAGA_OBRIGATORIOS`.
+
+### MIGRATION E DEPLOY
+
+`0094_as_vaga_listas.sql`, **só `ADD VALUE`**: nenhuma linha reescrita, nenhuma coluna alterada.
+Aplicada limpa em produção, 94 para 95 migrations. `vaga_escolaridade` foi de 8 para 13 valores,
+`vaga_natureza` de 6 para 7.
+
+Gate verde antes de subir: typecheck nos três pacotes e **2.050 testes** (1843 backend, 173 frontend,
+34 shared-types). Os 3 erros de lint são pré-existentes e de configuração (`react-hooks/exhaustive-deps`
+não encontrada), em `nova/page.tsx`, `vt/page.tsx` e `Combobox.tsx`, nenhum deles tocado por esta
+sessão. Build do frontend **com o serviço parado**, para não servir 500 pela `.next` sendo reescrita.
+
+**§A.27, nada mudou de contagem**, como tinha de ser numa entrega de campo, rótulo e coluna: as **29
+medidas** de produção saíram idênticas antes e depois. `admissoes` 2.803 (1.829 concluídas, 845
+declínios, 55 rescisões, 34 banco, 26 em admissão, 3 aguardando liberação, 11 recusadas), `candidatos`
+2.762, `clientes` 247, `cliente_lojas` 15, `grupo_cliente_membros` 82, `projetos_alto_volume` 19,
+`admissao_ifractal` 35, admissões com loja 22, envelopes Clicksign 233 e 1.735 assinados,
+`integracao_pandape` 412. **Clicksign e Pandapé não foram tocados**; a carga do CRM, lojas, grupos,
+projeto, coluna Loja e iFractal seguem intactas. Só os dois contadores de enum mudaram, que é a
+migration.
+
+### O QUE FICOU ABERTO
+
+**A tabela da Central de Vagas passou a rolar na horizontal em tela de 1600px.** Medido: o espaço útil
+é 1254px e a tabela pede 1430px; ela cabe inteira a partir de ~1790px. Ela **já não cabia antes desta
+frente** (pedia 1295px com dez colunas), e a linha que estoura é a da vaga ABERTA, a única com cinco
+botões: a coluna Ações sozinha pede 219px. Nada é cortado, ela rola como o §A.12 manda. Encurtar de
+volta a uma tela exigiria tirar coluna ("Dias Em Aberto" é derivável) ou apertar os ícones de ação, e
+**é decisão do diretor** (§A.31), não construída.
+
+Segue para desenho, fora desta entrega: o **modelo de posição/fechamento** (itens 10 a 13, que são um
+defeito só: a tela conta LINHAS e o time conta POSIÇÕES, e o fechamento é evento único e total),
+**cancelar vaga** (o status `CANCELADA` existe e nenhuma rota o escreve), **idioma com nível**,
+**anotações/histórico da vaga**, **comercial/segmento**, **farol de SLA**, **candidatos encaminhados**
+e a **etapa da vaga**. Tudo classificado no mapa.
+
+Aberto também, do próprio texto do diretor: ele escreveu que o Tempo de Contrato "aparece nos dois"
+vínculos. Hoje ele **não aparece no Efetivo**, pela decisão de 22/08, e a fábrica **não mexeu**.
+Se a intenção era outra, é pedido novo e desfaz aquela decisão.
