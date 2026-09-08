@@ -13192,3 +13192,99 @@ Outras **oito** perguntas estão na seção 8 do desenho, todas com recomendaç�
 (cabe inteira a partir de ~1790px), e encurtar exige tirar coluna ou apertar os ícones de ação, o que é
 decisão do diretor. E o diretor escreveu que o Tempo de Contrato "aparece nos dois" vínculos; hoje ele
 **não aparece no Efetivo**, pela decisão de 22/08, e a fábrica **não mexeu**.
+
+---
+
+## 08/09/2026 — VT: o link que "nascia expirado", e o 500 que ninguem via
+
+**Frente URGENTE, com bloqueio de operacao real.** Candidatos relatavam que o link do formulario de
+VT chegava ja expirado, minutos depois de enviado.
+
+### 1. O DIAGNOSTICO: a causa NAO estava no EA
+
+Medido, nao deduzido:
+
+- **relogio do servidor**: `Etc/UTC`, NTP ativo e sincronizado. Sem defasagem.
+- **prazo**: `VT_LINK_TTL_DIAS=7`, correto, calculado na geracao a partir do relogio do servidor e
+  gravado DENTRO do token.
+- **chave**: a publica derivada da privada de producao e identica ao `PUB_HEX` do app VIVO.
+- **token novo**: cunhado com a chave de producao, `exp` = `iat` + 7 dias, verificado `true`.
+- **verificador puro-JS do celular**: 200 de 200 tokens aprovados, forcando o caminho de fallback.
+- **historico**: nenhuma publicacao tocou o VT desde 21/08. O `app.js` no ar era de la, byte a byte
+  igual ao repositorio.
+- **browser real**: link recem-gerado ABRIA normalmente.
+
+**A causa era o proprio app do candidato.** `verificarTokenOffline` comparava `claims.exp` contra
+`Date.now()` **DO APARELHO**, com tolerancia zero, e **bloqueava**. Celular com a data adiantada via
+"expirado" num link legitimo. E o comentario do topo do arquivo ja dizia, desde sempre, que aquela
+verificacao era "so para UX" e que a autoritativa era a do servidor: ela nunca foi so UX.
+
+**Agravante que escondia tudo:** SETE causas distintas compartilhavam UMA frase ("Link invalido ou
+expirado"). Prazo vencido, link truncado no envio, assinatura adulterada, cripto do navegador
+indisponivel, parametro ausente, claim faltando: tudo igual na tela. Ninguem no suporte conseguia
+distinguir, e a fabrica tambem nao, olhando de fora.
+
+### 2. O QUE SUBIU (commit `2a682aa`)
+
+- **`app.js`**: o prazo saiu da porta (servidor decide); "reprovado" separado de "nao consegui
+  verificar"; cinco mensagens distintas + "Link expirado em DD/MM" vinda do servidor. Bug lateral
+  corrigido: a decodificacao da assinatura estava FORA do `try`, e base64 quebrado no fim do link
+  deixava a **tela em branco, sem erro nenhum**.
+- **`vt_token.py` / `main.py`**: `get_unverified_header` entrou no tratamento (token quebrado dava
+  **500**, e o candidato que ja tinha preenchido o formulario inteiro lia "tente de novo" para
+  sempre); recusa passa a carregar `codigo` (EXPIRADO/INVALIDO/AUSENTE), traduzido por dicionario
+  fechado com allowlist; `from None` em todo `raise` (A.6).
+- **`requirements.txt`**: PyJWT pinado em **2.13.0**. A faixa aberta mudou comportamento de producao
+  sozinha, sem uma linha de codigo.
+- **Config, fora do commit por ser ignorada**: `VT_LINK_TTL_DIAS` de **7 para 30** em
+  `apps/backend/.env`, com restart do `ea-backend`. Antes de reiniciar foi conferido que nenhum
+  arquivo do `dist` era mais novo que o processo no ar, para o restart nao publicar trabalho de outra
+  sessao de carona.
+
+### 3. AGENTES E VEREDITOS (A.38/A.39)
+
+- **`frontend`**: construiu o `app.js`. 24 casos de mesa, todos verdes.
+- **`backend`**: construiu as functions. **63 testes** (17 pre-existentes + 46 novos). Achou sozinho
+  um escape que ninguem tinha visto: token com surrogate solto levanta `UnicodeEncodeError`, que
+  **nao** e `InvalidTokenError` e escaparia igual.
+- **`seguranca`**: **APROVADO**, com 4 ressalvas nao bloqueantes, apos **30 entradas hostis** e **15
+  requisicoes HTTP reais**. Refutou que o afrouxamento abrisse caminho: aquele codigo roda no
+  aparelho do atacante, entao nunca foi fronteira de seguranca, e o servidor recusa antes de gerar
+  PDF ou escrever no bucket.
+- **coordenador**: conferiu os dois patches lendo o diff, rodou os testes por conta propria, olhou
+  todas as screenshots e publicou.
+
+### 4. PROVAS CONTRA A PRODUCAO, depois de publicar
+
+- `app.js` no ar: **08/09 19:03:56** (era 21/08), 42.507 bytes (era 37.780), identico ao patch
+  auditado.
+- Os tres casos que davam **500** devolvem **401 INVALIDO**; expirado devolve **EXPIRADO**; sem
+  token devolve **AUSENTE**.
+- **Browser com o relogio 60 dias adiantado: o formulario ABRE.** Era este o bug.
+- As quatro mensagens separadas conferidas na tela, uma a uma.
+
+### 5. CORRECAO DE PREMISSA, registrada porque custou tempo do diretor
+
+A fabrica orientou destravar pela tela de **Beneficios**. **Estava errado para 92% dos casos**: a
+fila de Beneficios exige `CADASTRO_CONTRATO` concluida, e das 25 admissoes vivas sem VT, **23 estao
+antes do cadastro** (Auditoria/Exame). O caminho certo, provado em codigo e na tela, e o
+**"Gerar link do VT" da FICHA**, que nao tem checagem de fase nenhuma e funciona em qualquer etapa,
+aberto pela Esteira, pelo Gerenciador ou por Nao Conformidades. **Pela tela de Beneficios a ficha
+abre em modo LEITURA e o bloco do VT nao aparece**, o que explica a confusao.
+
+### 6. ABERTO, para o diretor decidir
+
+- **O `nascHash` do link NAO e segundo fator.** O CPF viaja no mesmo token, entao a data de
+  nascimento se quebra offline em decimos de segundo. Posse do link = poder de enviar. Com o prazo
+  em 30 dias essa janela quadruplicou, e nao ha revogacao (o `jti` e cunhado e nunca consultado) nem
+  uso unico (cada reenvio SOBRESCREVE o arquivo ja guardado). **Proposta, nao construida:** mover o
+  token da query string para o fragmento da URL, que nao vai para log de servidor.
+- **Ressalva do `seguranca`, nao bloqueante:** pane da cripto na infraestrutura vira "link invalido"
+  para 100% dos candidatos **sem nenhum sinal no log**. Correcao sugerida: uma linha de aviso com
+  texto fixo.
+- **A homologacao NAO gera link de VT**: `VT_LINK_PRIVATE_KEY` esta vazia la. Nao e regressao, e
+  lacuna de configuracao, mas obriga a validar o VT em producao, contra a A.32. Configurar exige
+  chave PROPRIA de homologacao, nunca a de producao, e passa pelo diretor e pelo `seguranca`.
+- **A trava da A.7 funcionou de verdade**, inclusive contra falso positivo: bloqueou duas vezes um
+  comando de LEITURA e a mensagem do proprio commit, por conterem o verbo. Registro porque no
+  CentraAtend ela existia e nao funcionava.
