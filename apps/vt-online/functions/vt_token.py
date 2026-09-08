@@ -27,8 +27,29 @@ PUBLIC_KEY_RAW = bytes.fromhex(
 _REQUIRED_CLAIMS = ("sub", "nome", "cpf", "nascHash", "exp")
 
 
+# Codigos de recusa do token. Sao o CONTRATO com a Cloud Function e com a tela do candidato:
+# quem recusa diz POR QUE recusou, e a tela decide o que oferecer (pedir link novo x reabrir o
+# link). Sem isso, "expirou de verdade" e "assinatura nao fecha" chegavam ao candidato como a
+# mesma frase, e ele tentava de novo para sempre.
+CODIGO_EXPIRADO = "EXPIRADO"   # o prazo do link venceu pelo relogio do servidor
+CODIGO_INVALIDO = "INVALIDO"   # assinatura, formato, alg inesperado ou claim obrigatorio ausente
+CODIGO_AUSENTE = "AUSENTE"     # o token nao veio no corpo do envio, ou nao e string
+
+
 class TokenInvalido(Exception):
-    """Token ausente, malformado, com assinatura invalida, expirado ou com claims faltando."""
+    """Token ausente, malformado, com assinatura invalida, expirado ou com claims faltando.
+
+    Carrega o `codigo` da recusa (EXPIRADO / INVALIDO / AUSENTE) para o chamador so TRADUZIR,
+    sem reinspecionar o token. Continua uma Exception comum, com a mensagem no lugar de sempre:
+    quem ja capturava `TokenInvalido` e lia `str(exc)` nao muda.
+
+    LGPD (§A.6): nem a mensagem nem o `codigo` carregam qualquer pedaco do token, do CPF, do
+    nome ou dos claims. Nada aqui e logado.
+    """
+
+    def __init__(self, mensagem: str, codigo: str = CODIGO_INVALIDO):
+        super().__init__(mensagem)
+        self.codigo = codigo
 
 
 def _public_key() -> Ed25519PublicKey:
@@ -47,11 +68,32 @@ def verificar_token(token: str, *, verificar_exp: bool = True) -> dict:
     o caminho de rejeicao de expiracao e coberto por teste proprio. Em producao fica True.
     """
     if not token or not isinstance(token, str):
-        raise TokenInvalido("token ausente")
+        raise TokenInvalido("token ausente", CODIGO_AUSENTE)
 
-    header = jwt.get_unverified_header(token)
-    if header.get("alg") != "EdDSA":
-        raise TokenInvalido("algoritmo do token inesperado")
+    # A leitura do header fica DENTRO do tratamento. Ela estava fora, e `get_unverified_header`
+    # levanta jwt.DecodeError (subclasse de jwt.InvalidTokenError) em token malformado: 'abc',
+    # 'a.b' ou um token truncado atravessavam esta funcao crus, passavam pelo `except
+    # TokenInvalido` de quem chama e viravam erro 500 no candidato que ja tinha preenchido o
+    # formulario inteiro. O docstring de TokenInvalido sempre prometeu cobrir "malformado";
+    # agora o codigo honra a promessa.
+    #
+    # O `except Exception` final nao e preguica: e rede de seguranca medida. Um token com
+    # surrogate solto (o JSON do corpo aceita "\ud800") faz o PyJWT levantar UnicodeEncodeError,
+    # que NAO e InvalidTokenError e escaparia igual. Nenhum caminho pode voltar a estourar aqui.
+    #
+    # `from None` em todo raise: corta o encadeamento da excecao original, entao nenhum traceback
+    # de biblioteca acompanha a falha carregando pedaco de token (§A.6). O preco e nao ver a causa
+    # original, e ele e barato: a causa util (expirado x invalido) ja vai no `codigo`.
+    try:
+        header = jwt.get_unverified_header(token)
+        algoritmo = header.get("alg")
+    except jwt.InvalidTokenError:
+        raise TokenInvalido("token invalido", CODIGO_INVALIDO) from None
+    except Exception:  # noqa: BLE001
+        raise TokenInvalido("token invalido", CODIGO_INVALIDO) from None
+
+    if algoritmo != "EdDSA":
+        raise TokenInvalido("algoritmo do token inesperado", CODIGO_INVALIDO)
 
     try:
         claims = jwt.decode(
@@ -63,14 +105,17 @@ def verificar_token(token: str, *, verificar_exp: bool = True) -> dict:
                 "require": ["exp"] if verificar_exp else [],
             },
         )
-    except jwt.ExpiredSignatureError as exc:
-        raise TokenInvalido("token expirado") from exc
-    except jwt.InvalidTokenError as exc:
-        raise TokenInvalido("token invalido") from exc
+    except jwt.ExpiredSignatureError:
+        raise TokenInvalido("token expirado", CODIGO_EXPIRADO) from None
+    except jwt.InvalidTokenError:
+        raise TokenInvalido("token invalido", CODIGO_INVALIDO) from None
+    except Exception:  # noqa: BLE001
+        raise TokenInvalido("token invalido", CODIGO_INVALIDO) from None
 
     for claim in _REQUIRED_CLAIMS:
         if not claims.get(claim):
-            raise TokenInvalido(f"claim ausente: {claim}")
+            # A mensagem nomeia o CLAIM (chave fixa do formato), nunca o VALOR dele.
+            raise TokenInvalido(f"claim ausente: {claim}", CODIGO_INVALIDO)
 
     return claims
 

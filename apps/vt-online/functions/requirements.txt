@@ -3,7 +3,9 @@ firebase-functions>=0.4.2
 firebase-admin>=6.5.0
 
 # Token verification (EdDSA / Ed25519). PyJWT drives the check; cryptography is the backend.
-PyJWT[crypto]>=2.8.0
+# PyJWT is PINNED: from 2.10 on it started rejecting a future `iat` on its own, so an open range
+# changes production token behaviour with no code change. 2.13.0 is the version under test here.
+PyJWT[crypto]==2.13.0
 cryptography>=42.0.0
 
 # PDF composition (replica of the EA ai-service vt_pdf.py).

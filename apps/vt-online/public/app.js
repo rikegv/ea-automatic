@@ -3,7 +3,9 @@
  *
  * Fluxo:
  *   1. Le o token da URL (?t=...). Verifica a assinatura Ed25519 OFFLINE com a chave publica
- *      embutida (so para UX). Se invalido/expirado, para com mensagem clara.
+ *      embutida (so para UX). Ela so barra o que da para ter CERTEZA aqui (token ausente, cortado,
+ *      alg errado, assinatura reprovada, claim faltando), cada caso com a sua mensagem. PRAZO e
+ *      cripto indisponivel NAO barram: quem decide isso e o servidor, no envio.
  *   2. Identificacao: o candidato digita CPF + data de nascimento; conferimos o CPF contra o claim
  *      e sha256(`${cpf}|${dataNascimento}`) contra o claim nascHash antes de liberar o formulario.
  *   3. Formulario: endereco (CEP via ViaCEP direto do navegador), optante, conducoes IDA/VOLTA com
@@ -112,32 +114,112 @@
   }
 
   // ── Verificacao do token (offline, UX) ─────────────────────────────────────────
+  /*
+   * Uma mensagem por causa, porque antes eram sete causas e uma frase so: quem atende o candidato
+   * ficava depurando no escuro, sem saber se o link tinha vindo cortado, adulterado ou sem o "?t=".
+   *
+   * A chave e o motivo devolvido por verificarTokenOffline; o valor e o que o candidato le.
+   */
+  const MSG_TOKEN = {
+    AUSENTE:
+      "O endereco aberto nao trouxe a sua credencial de acesso. Abra o link inteiro que o consultor enviou, ou peca outro a ele.",
+    MALFORMADO:
+      "O link chegou cortado ou incompleto. Copie o endereco inteiro da mensagem do consultor, ou peca outro a ele.",
+    ALG:
+      "Este link nao esta no formato que o RH gera. Use o link original enviado pelo consultor, ou peca outro a ele.",
+    ASSINATURA:
+      "Este link foi alterado depois de gerado, entao nao pode ser usado. Peca um novo ao consultor.",
+    CLAIMS:
+      "Este link veio sem os dados necessarios para abrir o formulario. Peca um novo ao consultor.",
+  };
+
+  /*
+   * Devolve { ok: true, claims, assinaturaConferida } ou { ok: false, motivo }.
+   *
+   * O QUE BARRA: so o que da para afirmar aqui, com o que esta na mao. Token ausente, token cortado
+   * ou ilegivel, alg diferente de EdDSA, assinatura CONFERIDA E REPROVADA, claim obrigatorio vazio.
+   *
+   * O QUE NAO BARRA MAIS, e por que:
+   *
+   * 1) PRAZO (exp). Antes, `claims.exp <= Date.now()/1000` fechava o formulario com tolerancia zero,
+   *    comparando o prazo contra o relogio DO APARELHO DO CANDIDATO, que nao e confiavel: celular com
+   *    a data adiantada mostrava "expirado" em link cunhado minutos antes, que o servidor aceitaria.
+   *    Aconteceu em producao. Quem tem o relogio autoritativo e o servidor, e ele ja recusa o token
+   *    vencido no envio (HTTP 401 com codigo EXPIRADO), entao o prazo saiu daqui: o candidato segue,
+   *    preenche, e se o link estiver mesmo vencido a recusa vem do servidor, com a data.
+   *
+   * 2) CRIPTO INDISPONIVEL. Antes, um `catch` unico transformava "nao consegui verificar" em
+   *    "assinatura ruim" e barrava. Sao coisas diferentes: verify() devolver false e prova de link
+   *    adulterado; verify() LANCAR (ou window.Ed25519 nem existir, ou a pagina abrir sem
+   *    crypto.subtle) e ausencia de prova, e ausencia de prova nao pode fechar a porta na cara de
+   *    quem tem um link legitimo. Sem conferir, seguimos: o servidor confere a assinatura de novo.
+   */
   async function verificarTokenOffline(tokenRaw) {
-    const partes = (tokenRaw || "").split(".");
-    if (partes.length !== 3) return null;
-    let header, claims;
+    if (!tokenRaw) return { ok: false, motivo: "AUSENTE" };
+    const partes = String(tokenRaw).split(".");
+    if (partes.length !== 3) return { ok: false, motivo: "MALFORMADO" };
+    let header, claims, sig;
     try {
       header = JSON.parse(bytesToUtf8(b64urlToBytes(partes[0])));
       claims = JSON.parse(bytesToUtf8(b64urlToBytes(partes[1])));
+      // A assinatura tambem e decodificada aqui dentro: base64 quebrado no fim do link fazia o
+      // atob() lancar fora do try e a tela ficava em branco, sem erro nenhum.
+      sig = b64urlToBytes(partes[2]);
     } catch (_e) {
-      return null;
+      return { ok: false, motivo: "MALFORMADO" };
     }
-    if (header.alg !== "EdDSA") return null;
+    if (!header || typeof header !== "object") return { ok: false, motivo: "MALFORMADO" };
+    if (!claims || typeof claims !== "object") return { ok: false, motivo: "MALFORMADO" };
+    if (header.alg !== "EdDSA") return { ok: false, motivo: "ALG" };
 
     const msg = new TextEncoder().encode(partes[0] + "." + partes[1]);
-    const sig = b64urlToBytes(partes[2]);
-    let ok = false;
+    let conferida = false; // conseguimos rodar o verificador?
+    let assinaturaOk = false; // e ele aprovou?
     try {
-      ok = await window.Ed25519.verify(sig, msg, hexToBytes(PUB_HEX));
+      if (window.Ed25519 && typeof window.Ed25519.verify === "function") {
+        assinaturaOk = (await window.Ed25519.verify(sig, msg, hexToBytes(PUB_HEX))) === true;
+        conferida = true;
+      }
     } catch (_e) {
-      ok = false;
+      conferida = false; // cripto do navegador fora do ar: seguimos sem prova, o servidor decide.
     }
-    if (!ok) return null;
+    if (conferida && !assinaturaOk) return { ok: false, motivo: "ASSINATURA" };
 
-    const agora = Math.floor(Date.now() / 1000);
-    if (typeof claims.exp !== "number" || claims.exp <= agora) return null;
-    if (!claims.cpf || !claims.nascHash || !claims.nome) return null;
-    return claims;
+    if (!claims.cpf || !claims.nascHash || !claims.nome) return { ok: false, motivo: "CLAIMS" };
+    return { ok: true, claims: claims, assinaturaConferida: conferida };
+  }
+
+  /*
+   * Data do prazo (DD/MM) a partir do exp que ja lemos do token, so para compor a mensagem do
+   * servidor. Sem exp utilizavel devolve vazio, e a frase sai sem data: "Invalid Date" e "NaN" na
+   * tela do candidato seriam pior que a frase curta.
+   */
+  function dataDoExp(exp) {
+    if (typeof exp !== "number" || !Number.isFinite(exp) || exp <= 0) return "";
+    const d = new Date(exp * 1000);
+    if (Number.isNaN(d.getTime())) return "";
+    const dia = String(d.getDate()).padStart(2, "0");
+    const mes = String(d.getMonth() + 1).padStart(2, "0");
+    return dia + "/" + mes;
+  }
+
+  /*
+   * Mensagem do erro do envio. O servidor e a autoridade: quando ele recusa o token, responde 401
+   * com { ok:false, codigo:"EXPIRADO"|"INVALIDO"|"AUSENTE", erro }. Sem codigo (resposta antiga,
+   * outra falha ou rede), fica o caminho de sempre, com dados.erro e o texto generico.
+   */
+  function mensagemErroEnvio(dados) {
+    const codigo = dados && dados.codigo;
+    if (codigo === "EXPIRADO") {
+      const data = dataDoExp(S.claims && S.claims.exp);
+      return data
+        ? "Link expirado em " + data + ". Peca outro ao consultor."
+        : "Link expirado. Peca outro ao consultor.";
+    }
+    if (codigo === "INVALIDO" || codigo === "AUSENTE") {
+      return "Link invalido ou incompleto. Peca outro ao consultor.";
+    }
+    return (dados && dados.erro) || "Nao foi possivel enviar. Tente de novo.";
   }
 
   // ── Select pesquisavel (espelha o SelectBusca do EA) ────────────────────────────
@@ -879,7 +961,7 @@
         });
         const dados = await resp.json().catch(() => ({}));
         if (!resp.ok || !dados.ok) {
-          throw new Error(dados.erro || "Nao foi possivel enviar. Tente de novo.");
+          throw new Error(mensagemErroEnvio(dados));
         }
         fundo.remove();
         telaEnviado(payload.optante, dados.pdfBase64);
@@ -988,18 +1070,13 @@
   async function iniciar() {
     const params = new URLSearchParams(window.location.search);
     const token = params.get("t");
-    const msgInvalido = "Link invalido ou expirado, peca um novo ao consultor.";
-    if (!token) {
-      telaErro(msgInvalido);
-      return;
-    }
-    const claims = await verificarTokenOffline(token);
-    if (!claims) {
-      telaErro(msgInvalido);
+    const veredito = await verificarTokenOffline(token);
+    if (!veredito.ok) {
+      telaErro(MSG_TOKEN[veredito.motivo] || MSG_TOKEN.MALFORMADO);
       return;
     }
     S.tokenRaw = token;
-    S.claims = claims;
+    S.claims = veredito.claims;
     await carregarTarifas();
     telaIdentificacao();
   }

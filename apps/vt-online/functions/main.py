@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from firebase_functions import https_fn, options
 
 import vt_pdf
-from vt_token import TokenInvalido, conferir_identidade, verificar_token
+from vt_token import CODIGO_INVALIDO, TokenInvalido, conferir_identidade, verificar_token
 
 # ── Configuracao de deploy ────────────────────────────────────────────────────
 # Bucket coletivo do Google Cloud Storage onde os PDFs sao arquivados. O OPERADOR
@@ -301,6 +301,17 @@ def _json(status, obj):
     )
 
 
+# Texto por codigo de recusa do token. O CODIGO e o contrato com a tela (ela decide o que oferecer:
+# pedir um link novo ao consultor x reabrir o link recebido); o TEXTO e o que o candidato le. Antes
+# os tres casos chegavam como a mesma frase, e quem estava com o link vencido tentava para sempre.
+# LGPD (§A.6): as frases sao fixas, sem token, sem CPF, sem nome e sem claim dentro.
+ERRO_TOKEN = {
+    "EXPIRADO": "o prazo deste link venceu, peca um link novo ao consultor",
+    "INVALIDO": "link invalido, peca um link novo ao consultor",
+    "AUSENTE": "link incompleto, abra de novo o link que o consultor enviou",
+}
+
+
 @https_fn.on_request(
     region="us-central1",
     memory=options.MemoryOption.MB_512,
@@ -323,8 +334,13 @@ def enviarVt(req: https_fn.Request) -> https_fn.Response:
     # 1) Token autoritativo (assinatura EdDSA + exp).
     try:
         claims = verificar_token(token)
-    except TokenInvalido:
-        return _json(401, {"ok": False, "erro": "link invalido ou expirado, peca um novo ao consultor"})
+    except TokenInvalido as exc:
+        # So TRADUZ: a razao da recusa ja vem decidida no `codigo` da excecao. O getattr e o
+        # fallback existem para uma TokenInvalido levantada por caminho antigo, sem codigo.
+        codigo = getattr(exc, "codigo", CODIGO_INVALIDO) or CODIGO_INVALIDO
+        if codigo not in ERRO_TOKEN:
+            codigo = CODIGO_INVALIDO
+        return _json(401, {"ok": False, "codigo": codigo, "erro": ERRO_TOKEN[codigo]})
 
     # 2) Payload no formato/limites do DTO do EA.
     try:
