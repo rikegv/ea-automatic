@@ -170,12 +170,12 @@ export function AlocarCandidatoModal({
     : null;
 
   return (
-    <Modal onClose={onClose} className="max-w-[620px] p-0" ariaLabel="Alocar candidato em vaga">
+    <Modal onClose={onClose} className="max-w-[620px] p-0" ariaLabel="Adicionar candidato à vaga">
       <div className="flex max-h-[88vh] flex-col">
         <div className="flex-none border-b border-[var(--border)] px-6 pb-4 pt-6">
           <div className="eyebrow !mb-1">Atração e Seleção</div>
           <h2 className="text-lg font-semibold text-text">
-            {pessoaFixa ? "Trazer De Volta" : "Alocar Candidato Em Vaga"}
+            {pessoaFixa ? "Trazer De Volta" : "Adicionar Candidato À Vaga"}
           </h2>
           <p className="mt-1 text-[12.5px] text-dim">
             {pessoaFixa

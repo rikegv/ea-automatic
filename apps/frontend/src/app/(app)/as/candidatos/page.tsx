@@ -493,7 +493,7 @@ export default function CentralDeCandidatosPage() {
               por CPF, e quem foi cadastrado SEM CPF ficava em beco sem saída: existia na base e não
               entrava em vaga nenhuma. Aqui a escolha é pelo nome, e a alocação vai por id. */}
           <Button variant="secondary" onClick={() => setAlocarAberto(true)} className="py-2.5">
-            Alocar candidato
+            Adicionar à vaga
           </Button>
           <Button onClick={() => setNovoAberto(true)} className="py-2.5">
             Novo candidato
@@ -786,7 +786,7 @@ export default function CentralDeCandidatosPage() {
                             />
                             {/* ─ TRAZER DE VOLTA, e ele aparece SÓ na linha encerrada (bug 2) ────
                                 É a porta que faltava. A reentrada existia inteira no backend e só
-                                era alcançável pelo botão "Alocar candidato", cuja lista exclui quem
+                                era alcançável pelo botão "Adicionar à vaga", cuja lista exclui quem
                                 tem candidatura viva: quem foi descartado numa vaga e segue vivo em
                                 outra não aparecia em lugar nenhum. Agora a ação está onde o gesto
                                 nasce, na linha da pessoa que saiu.

@@ -32,10 +32,27 @@ describe("tomDaSituacao (o ícone acompanha o estado real, §A.12)", () => {
 });
 
 describe("tomDaEtapa e tomDoStatusVaga (o resto do mapa visual segue intacto)", () => {
-  it("a etapa é informação, e só a Aprovação fecha em verde", () => {
-    for (const e of CANDIDATURA_ETAPAS) {
-      expect(tomDaEtapa(e)).toBe(e === "APROVACAO" ? "ok" : "in");
-    }
+  it("toda etapa tem tom, e a Aprovação segue fechando em verde", () => {
+    for (const e of CANDIDATURA_ETAPAS) expect(tomDaEtapa(e)).toBeTruthy();
+    expect(tomDaEtapa("APROVACAO")).toBe("ok");
+  });
+
+  /**
+   * O PONTO DO AJUSTE ERA DISTINGUIR AS ETAPAS, então é a distinção que o teste guarda: se alguém
+   * acrescentar etapa nova repetindo um tom já usado, o funil volta a ter duas etapas com a mesma
+   * cor e o "bater o olho e saber onde a pessoa está" morre em silêncio. Aqui ele morre no gate.
+   */
+  it("cada etapa tem um tom DIFERENTE das outras", () => {
+    const tons = CANDIDATURA_ETAPAS.map((e) => tomDaEtapa(e));
+    expect(new Set(tons).size).toBe(CANDIDATURA_ETAPAS.length);
+  });
+
+  /**
+   * `dg` é recusa (a StatusPill põe o X vermelho nele) e etapa de funil não é julgamento: uma etapa
+   * pintada de vermelho diria que a pessoa foi reprovada por estar nela.
+   */
+  it("nenhuma etapa usa o vermelho de recusa", () => {
+    for (const e of CANDIDATURA_ETAPAS) expect(tomDaEtapa(e)).not.toBe("dg");
   });
 
   it("todo status de vaga tem tom", () => {

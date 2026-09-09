@@ -45,12 +45,46 @@ export function tomDaSituacao(s: CandidaturaSituacao): PillTone {
 }
 
 /**
- * A ETAPA é posição no funil, não julgamento: ela não tem "certo" nem "errado". O azul do sistema
- * (`in`) é o que lê como informação, e a última etapa ganha o verde porque chegar na Aprovação é o
- * fim bom do caminho.
+ * CADA ETAPA COM A SUA COR, e a cor mora em UM MAPA (decisão do diretor).
+ *
+ * Antes eram duas cores para cinco etapas (verde na Aprovação, azul em todo o resto), então bater o
+ * olho não dizia onde a pessoa estava: quatro das cinco etapas do funil eram visualmente a mesma
+ * coisa. Agora cada etapa tem tom próprio, e o tom cresce com o avanço no funil: neutro na entrada,
+ * azul quando o trabalho começa, amarelo e laranja nas entrevistas, verde na Aprovação.
+ *
+ * ─ POR QUE UM `Record` E NÃO UM `if` ────────────────────────────────────────────────────────────
+ *
+ * A LISTA DE ETAPAS VAI MUDAR (o diretor já decidiu a próxima), e é o `Record<CandidaturaEtapa, …>`
+ * que faz a mudança custar uma linha em vez de uma releitura de tela: quem acrescentar etapa nova ao
+ * vocabulário compartilhado tem o TypeScript exigindo a entrada aqui, no lugar certo, e a tela toda
+ * (pill da lista, ficha, painel da vaga, modal de mover) segue lendo daqui sem ser tocada. Cor
+ * espalhada em condicional pelas telas obrigaria a peça seguinte a caçar cada uma.
+ *
+ * ─ A PALETA, e o tom que NÃO se usa ─────────────────────────────────────────────────────────────
+ *
+ * Os tons são os do design system (`PillTone`), sem nenhuma cor escrita à mão, então os dois temas
+ * saem de graça: cada tom já tem o seu par claro/escuro em `globals.css`. `dg` (vermelho) fica DE
+ * FORA de propósito: pela §A.12 ele é recusa, e a `StatusPill` põe o X vermelho nele. Etapa de funil
+ * é posição, não julgamento; pintar uma de vermelho diria que a pessoa foi reprovada por estar nela.
+ * Sobram cinco tons utilizáveis para as cinco etapas de hoje, ou seja, a paleta fecha EXATA e não
+ * sobra tom para uma sexta etapa (ver a nota de entrega).
  */
+export const TOM_ETAPA: Record<CandidaturaEtapa, PillTone> = {
+  /** Entrou na base e ainda não foi trabalhada: neutro, porque nada aconteceu com ela ainda. */
+  CAPTACAO: "nt",
+  /** O trabalho começou, e azul é o tom de informação do sistema. */
+  TRIAGEM: "in",
+  /** Em avaliação dentro de casa. */
+  ENTREVISTA_SOULAN: "wn",
+  /** Em avaliação no cliente, um passo adiante da anterior, e o laranja lê como esse passo. */
+  ENTREVISTA_CLIENTE: "or",
+  /** Fim bom do caminho: verde, como já era antes deste ajuste. */
+  APROVACAO: "ok",
+};
+
+/** O tom de uma etapa do funil. Forma de função, para casar com `tomDaSituacao`. */
 export function tomDaEtapa(e: CandidaturaEtapa): PillTone {
-  return e === "APROVACAO" ? "ok" : "in";
+  return TOM_ETAPA[e];
 }
 
 /**

@@ -358,7 +358,10 @@ export function NovoCandidatoModal({
                 <Combobox
                   value={form.uf}
                   onChange={(v) => set("uf", v)}
-                  options={UFS.map((u) => ({ value: u.uf, label: u.nome, hint: u.uf }))}
+                  /* SÓ A SIGLA na lista e no campo (decisão do diretor): o nome do estado ao
+                     lado de "SP" é repetição num campo de duas letras. Ele não some da BUSCA, vai
+                     em `busca`, que filtra sem aparecer: digitar "São Paulo" ou "SP" acha igual. */
+                  options={UFS.map((u) => ({ value: u.uf, label: u.uf, busca: u.nome }))}
                   placeholder="Selecione a UF"
                   ariaLabel="UF"
                   limpavel
