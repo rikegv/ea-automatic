@@ -11,6 +11,7 @@ import { PainelVtOrfaos } from "@/components/admin/PainelVtOrfaos";
 import { StatusPill } from "@/components/ui/StatusPill";
 import { Modal } from "@/components/ui/Modal";
 import { Icon, type IconName } from "@/components/ui/Icon";
+import { GoogleDriveLogo } from "@/components/ui/GoogleDriveLogo";
 import { cn } from "@/lib/cn";
 import { DependenciaDrawer } from "@/components/diagnostico/DependenciaDrawer";
 
@@ -110,6 +111,18 @@ const TOM_DEP: Record<Dependencia["estado"], "ok" | "dg" | "wn" | "nt"> = {
 };
 
 /** Ícone curto por sinal (linguagem visual dos cards do Menu Gerencial). */
+/**
+ * Sem acento e sem caixa, para "jose" achar "JOSÉ". Mesmo recorte que o `Select` e o `Combobox` já
+ * usam: 2 dos 31 nomes do sinal têm acento, então comparar cru deixaria a busca mentir.
+ */
+function normBusca(s: string): string {
+  return s
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
 const ICONE_SINAL: Record<string, IconName> = {
   "pendente-staging": "layers",
   "regua-sem-pasta": "folder",
@@ -119,6 +132,8 @@ const ICONE_SINAL: Record<string, IconName> = {
   "drive-vt-sem-casar": "doc",
   // Arquivamento no Drive que não concluiu (ou concluiu incompleto), com o motivo real no detalhe.
   "arquivamento-drive-falhou": "folder",
+  // Admissão concluída que nunca teve prontuário criado no Drive: mesma família de pasta.
+  "concluida-sem-prontuario": "folder",
 };
 
 function quando(iso: string | null): string {
@@ -147,6 +162,21 @@ export default function DiagnosticoPage() {
   const [aberto, setAberto] = useState<string | null>(null);
   /** Dependência aberta no drawer (onda 1). Estado próprio: a porta é o card da faixa 2. */
   const [depAberta, setDepAberta] = useState<Dependencia | null>(null);
+  /**
+   * Resultado da geração do prontuário sob demanda. Vive FORA da lista de itens de propósito: a
+   * criação recarrega o snapshot e a admissão sai do sinal na hora, então uma mensagem presa à
+   * linha sumiria junto com ela, levando o link do Drive embora.
+   */
+  const [prontuario, setProntuario] = useState<{
+    ok: boolean;
+    texto: string;
+    pastaUrl?: string;
+  } | null>(null);
+  /**
+   * BUSCA POR NOME dentro do modal do sinal (pedido do diretor). Vive só no "Concluída Sem
+   * Prontuário": é a lista longa da tela, e rolar até achar a pessoa é o atrito que ela elimina.
+   */
+  const [buscaSinal, setBuscaSinal] = useState("");
 
   const carregar = useCallback(async () => {
     setCarregando(true);
@@ -186,6 +216,45 @@ export default function DiagnosticoPage() {
     [token, carregar],
   );
 
+  /**
+   * GERAR PRONTUÁRIO SOB DEMANDA: para a admissão CONCLUÍDA com a régua aberta, que por isso nunca
+   * teve a pasta criada no Drive. Tem resposta própria (link da pasta, guarda anti duplicação,
+   * motivo da recusa), então não passa pelo `acao` genérico, que só despeja o JSON cru.
+   */
+  const criarProntuario = useCallback(
+    async (admissaoId: string) => {
+      setAcaoEmVoo(`criar-prontuario:${admissaoId}`);
+      setAviso(null);
+      setProntuario(null);
+      try {
+        const r = await apiFetch<{ ok: boolean; pastaUrl?: string; jaExistia?: boolean; motivo?: string }>(
+          "/diagnostico/acao/criar-prontuario",
+          { method: "POST", token, body: { admissaoId } },
+        );
+        if (r.ok) {
+          setProntuario({
+            ok: true,
+            texto: r.jaExistia
+              ? "O prontuário já existia no Drive. Nada foi criado de novo, a admissão só foi ligada à pasta."
+              : "Prontuário criado no Drive.",
+            pastaUrl: r.pastaUrl,
+          });
+          await carregar();
+        } else {
+          setProntuario({ ok: false, texto: r.motivo ?? "Não foi possível gerar o prontuário." });
+        }
+      } catch (e) {
+        setProntuario({
+          ok: false,
+          texto: e instanceof ApiError ? e.message : "Falha ao gerar o prontuário.",
+        });
+      } finally {
+        setAcaoEmVoo(null);
+      }
+    },
+    [token, carregar],
+  );
+
   // Sinais de banco (Bloco 1 + Fopag do Bloco 2) na primeira faixa de KPIs. O "scheduler-parado" vem
   // nos sinais (para acender o alerta no backend), mas sai daqui: tem card próprio, mais rico, na
   // Faixa 3 (estado + resultado do último ciclo + controle).
@@ -194,6 +263,19 @@ export default function DiagnosticoPage() {
     [snap],
   );
   const sinalAberto = useMemo(() => sinais.find((s) => s.chave === aberto) ?? null, [sinais, aberto]);
+  /**
+   * A BUSCA aparece só onde foi pedida e só quando serve: lista curta não tem atrito para eliminar,
+   * então o piso de 8 é o mesmo do `Select` do design system, para a tela não ter duas réguas.
+   */
+  const sinalTemBusca =
+    sinalAberto?.chave === "concluida-sem-prontuario" && sinalAberto.itens.length > 8;
+  /** Itens que a lista realmente renderiza. Sem busca ativa, é a lista inteira, intacta. */
+  const itensDoSinal = useMemo(() => {
+    if (!sinalAberto) return [];
+    const termo = normBusca(buscaSinal);
+    if (!sinalTemBusca || !termo) return sinalAberto.itens;
+    return sinalAberto.itens.filter((it) => normBusca(it.candidato ?? "").includes(termo));
+  }, [sinalAberto, buscaSinal, sinalTemBusca]);
 
   // Controle do scheduler (Bloco 5): liga/desliga e disparo manual, sem deploy.
   const acaoScheduler = useCallback(
@@ -561,7 +643,15 @@ export default function DiagnosticoPage() {
 
       {/* ── DETALHE de um SINAL: lista de afetados + ações por alvo (a porta é o card) ── */}
       {sinalAberto && (
-        <Modal onClose={() => setAberto(null)} ariaLabel={sinalAberto.rotulo} className="max-w-2xl">
+        <Modal
+          onClose={() => {
+            setAberto(null);
+            setProntuario(null);
+            setBuscaSinal("");
+          }}
+          ariaLabel={sinalAberto.rotulo}
+          className="max-w-2xl"
+        >
           <div className="mb-3 flex items-center justify-between">
             <div>
               <div className="eyebrow !mb-1">Sinal</div>
@@ -569,6 +659,44 @@ export default function DiagnosticoPage() {
             </div>
             <StatusPill tone={sinalAberto.total > 0 ? "wn" : "ok"} label={String(sinalAberto.total)} />
           </div>
+          {prontuario && (
+            <div
+              className={cn(
+                "mb-3 flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2 text-[12.5px]",
+                prontuario.ok
+                  ? "border-[rgba(46,158,99,0.35)] bg-[rgba(46,158,99,0.08)] text-text"
+                  : "border-[rgba(214,69,69,0.35)] bg-[rgba(214,69,69,0.08)] text-danger",
+              )}
+              role="status"
+            >
+              <Icon name={prontuario.ok ? "check" : "alert"} className="h-4 w-4 shrink-0" />
+              <span className="break-words">{prontuario.texto}</span>
+              {prontuario.pastaUrl && (
+                <a
+                  href={prontuario.pastaUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-[12.5px] font-semibold text-text transition hover:bg-[var(--surface-2)]"
+                  title="Abrir prontuário no Google Drive"
+                >
+                  <GoogleDriveLogo className="h-4 w-4" />
+                  Prontuário no Drive
+                </a>
+              )}
+            </div>
+          )}
+          {/* BUSCA POR NOME. Fora do container que rola, de propósito: dentro dele o campo sumiria
+              da vista assim que a pessoa rolasse a lista, que é justamente quando ela ainda está
+              procurando. */}
+          {sinalTemBusca && (
+            <input
+              className="ds-input mb-3"
+              placeholder="Buscar por nome"
+              value={buscaSinal}
+              onChange={(e) => setBuscaSinal(e.target.value)}
+              aria-label="Buscar funcionário pelo nome"
+            />
+          )}
           {/* O VT ÓRFÃO tem painel PRÓPRIO: a lista genérica mostra um digest e um rótulo, e com isso
               ninguém consegue agir. Ali o time vê de quem é o formulário, por que não casou, e casa
               à mão quando o automático não resolve. */}
@@ -578,7 +706,14 @@ export default function DiagnosticoPage() {
             <p className="py-6 text-center text-[13px] text-faint">Nenhuma ocorrência. Estado saudável.</p>
           ) : (
             <div className="max-h-[55vh] space-y-1.5 overflow-y-auto pr-1">
-              {sinalAberto.itens.map((it, i) => (
+              {/* Lista vazia AQUI só acontece por causa da busca: o caso de sinal sem ocorrência é
+                  tratado antes, pelo total. Dizer isso evita a leitura de que o sinal esvaziou. */}
+              {sinalTemBusca && buscaSinal.trim() !== "" && itensDoSinal.length === 0 && (
+                <p className="py-6 text-center text-[13px] text-faint">
+                  Nenhum nome encontrado para esta busca.
+                </p>
+              )}
+              {itensDoSinal.map((it, i) => (
                 <div key={it.admissaoId ?? it.md5Prefixo ?? i} className="flex flex-wrap items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2">
                   {/* Sinais por admissão mostram o candidato; a coleta de VT identifica pelo prefixo do
                       md5 do objeto no bucket (o admin abre o arquivo no bucket), sem PII (§A.6). */}
@@ -637,6 +772,21 @@ export default function DiagnosticoPage() {
                           }}
                         >
                           Ligar à pasta existente
+                        </Button>
+                      )}
+                      {/* GERAR PRONTUÁRIO: para a admissão CONCLUÍDA cuja pasta NUNCA foi criada,
+                          porque a régua ficou aberta e a completude (que dispara o arquivamento)
+                          não aconteceu. Vive só neste card: em "Régua fechada sem pasta" a régua
+                          já está completa e quem resolve é o "Rearquivar". O backend guarda contra
+                          duplicata e devolve `jaExistia`. */}
+                      {sinalAberto.chave === "concluida-sem-prontuario" && (
+                        <Button
+                          variant="secondary"
+                          className="!py-1 !px-2.5 text-[12px]"
+                          disabled={acaoEmVoo !== null}
+                          onClick={() => void criarProntuario(it.admissaoId!)}
+                        >
+                          {acaoEmVoo === `criar-prontuario:${it.admissaoId}` ? "Gerando…" : "Gerar prontuário"}
                         </Button>
                       )}
                       {/* ZERAR O SINAL DA DUPLICATA: o diretor decidiu conviver com as pastas
@@ -705,6 +855,18 @@ export default function DiagnosticoPage() {
               ))}
             </div>
           )}
+          {/* SAÍDA VISÍVEL. O clique fora deixou de fechar o modal (regra do sistema, em
+              `ui/Modal`), e este painel é só leitura: não tem "Cancelar" nem "Salvar", então sem
+              este botão a única saída de mouse desapareceria junto. */}
+          <div className="mt-5 flex justify-end">
+            <Button variant="secondary" className="px-4 py-2.5" onClick={() => {
+                setAberto(null);
+                setProntuario(null);
+                setBuscaSinal("");
+              }}>
+              Fechar
+            </Button>
+          </div>
         </Modal>
       )}
 
@@ -723,6 +885,14 @@ export default function DiagnosticoPage() {
           <p className="mt-3 rounded-lg border border-[rgba(201,138,18,0.3)] bg-[rgba(201,138,18,0.08)] px-3 py-2 text-[12px] text-warn">
             {snap.ultimaColeta.nota}
           </p>
+          {/* SAÍDA VISÍVEL. O clique fora deixou de fechar o modal (regra do sistema, em
+              `ui/Modal`), e este painel é só leitura: não tem "Cancelar" nem "Salvar", então sem
+              este botão a única saída de mouse desapareceria junto. */}
+          <div className="mt-5 flex justify-end">
+            <Button variant="secondary" className="px-4 py-2.5" onClick={() => setAberto(null)}>
+              Fechar
+            </Button>
+          </div>
         </Modal>
       )}
 
@@ -786,6 +956,14 @@ export default function DiagnosticoPage() {
               }
             >
               {snap.scheduler.ligado ? "Desligar scheduler" : "Ligar scheduler"}
+            </Button>
+          </div>
+          {/* SAÍDA VISÍVEL. O clique fora deixou de fechar o modal (regra do sistema, em
+              `ui/Modal`), e este painel é só leitura: não tem "Cancelar" nem "Salvar", então sem
+              este botão a única saída de mouse desapareceria junto. */}
+          <div className="mt-5 flex justify-end">
+            <Button variant="secondary" className="px-4 py-2.5" onClick={() => setAberto(null)}>
+              Fechar
             </Button>
           </div>
         </Modal>
@@ -862,6 +1040,14 @@ export default function DiagnosticoPage() {
               }
             >
               {snap.clicksign.ligado ? "Desligar scheduler" : "Ligar scheduler"}
+            </Button>
+          </div>
+          {/* SAÍDA VISÍVEL. O clique fora deixou de fechar o modal (regra do sistema, em
+              `ui/Modal`), e este painel é só leitura: não tem "Cancelar" nem "Salvar", então sem
+              este botão a única saída de mouse desapareceria junto. */}
+          <div className="mt-5 flex justify-end">
+            <Button variant="secondary" className="px-4 py-2.5" onClick={() => setAberto(null)}>
+              Fechar
             </Button>
           </div>
         </Modal>
@@ -941,6 +1127,14 @@ export default function DiagnosticoPage() {
               {snap.exame.ligado ? "Desligar verificador" : "Ligar verificador"}
             </Button>
           </div>
+          {/* SAÍDA VISÍVEL. O clique fora deixou de fechar o modal (regra do sistema, em
+              `ui/Modal`), e este painel é só leitura: não tem "Cancelar" nem "Salvar", então sem
+              este botão a única saída de mouse desapareceria junto. */}
+          <div className="mt-5 flex justify-end">
+            <Button variant="secondary" className="px-4 py-2.5" onClick={() => setAberto(null)}>
+              Fechar
+            </Button>
+          </div>
         </Modal>
       )}
 
@@ -1011,6 +1205,14 @@ export default function DiagnosticoPage() {
               {snap.vtColeta.ligado ? "Desligar scheduler" : "Ligar scheduler"}
             </Button>
           </div>
+          {/* SAÍDA VISÍVEL. O clique fora deixou de fechar o modal (regra do sistema, em
+              `ui/Modal`), e este painel é só leitura: não tem "Cancelar" nem "Salvar", então sem
+              este botão a única saída de mouse desapareceria junto. */}
+          <div className="mt-5 flex justify-end">
+            <Button variant="secondary" className="px-4 py-2.5" onClick={() => setAberto(null)}>
+              Fechar
+            </Button>
+          </div>
         </Modal>
       )}
 
@@ -1026,6 +1228,14 @@ export default function DiagnosticoPage() {
                 <span className="text-dim">24h: {h.ultimas24h} · 7 dias: {h.ultimos7d}</span>
               </div>
             ))}
+          </div>
+          {/* SAÍDA VISÍVEL. O clique fora deixou de fechar o modal (regra do sistema, em
+              `ui/Modal`), e este painel é só leitura: não tem "Cancelar" nem "Salvar", então sem
+              este botão a única saída de mouse desapareceria junto. */}
+          <div className="mt-5 flex justify-end">
+            <Button variant="secondary" className="px-4 py-2.5" onClick={() => setAberto(null)}>
+              Fechar
+            </Button>
           </div>
         </Modal>
       )}

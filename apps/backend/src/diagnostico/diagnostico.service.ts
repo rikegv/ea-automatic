@@ -94,6 +94,7 @@ export class DiagnosticoService {
       envelopesExpirados,
       arquivamentoFalhou,
       pastaDuplicada,
+      concluidaSemProntuario,
       estadoScheduler,
       estadoVtColeta,
       estadoClicksign,
@@ -109,6 +110,7 @@ export class DiagnosticoService {
       this.sinalEnvelopesExpirados(),
       this.sinalArquivamentoDriveFalhou(),
       this.sinalPastaDuplicada(),
+      this.sinalConcluidaSemProntuario(),
       this.scheduler.estado(),
       this.vtColetaScheduler.estado(),
       this.clicksignScheduler.estado(),
@@ -126,6 +128,7 @@ export class DiagnosticoService {
       envelopesExpirados,
       arquivamentoFalhou,
       pastaDuplicada,
+      concluidaSemProntuario,
       this.sinalScheduler(parado),
     ];
 
@@ -424,6 +427,57 @@ export class DiagnosticoService {
       rotulo: "Régua fechada sem pasta no Drive",
       total: rows.length,
       itens: rows.map((r) => ({ admissaoId: r.admissao_id, candidato: r.candidato, detalhe: "régua obrigatória completa, prontuário não criado" })),
+    };
+  }
+
+  /**
+   * Sinal CONCLUÍDA SEM PRONTUÁRIO (decisão do diretor). É a população que a ferramenta "criar
+   * prontuário sob demanda" existe para atender e que nenhum card mostrava.
+   *
+   * O RECORTE é o MESMO do runner `db/cria-prontuario-nc1.ts`: farol ADMISSAO_CONCLUIDA, origem
+   * PANDAPE, `drive_pasta_url` nula e não conformidade de tipo NC1. A NC1 é a marca do caminho que
+   * abriu o buraco: alguém concluiu a Auditoria com obrigatório PENDENTE, e o arquivamento no Drive
+   * (que só dispara quando a régua fecha) nunca aconteceu. A admissão terminou concluída, sem pasta,
+   * sem falha registrada e sem sinal em tela nenhuma.
+   *
+   * POR QUE O `regua-sem-pasta` NÃO SERVIA: aquele sinal exige farol VIVO e régua FECHADA, que é o
+   * oposto exato desta população (concluída, régua aberta). Medido na base: 0 de 31 apareciam lá.
+   *
+   * NÃO DEPENDE DE `drive_falha_motivo`, de propósito. Nessas admissões a staging já expirou (TTL
+   * 48h), então o arquivamento tentará re-baixar do Pandapé e pode gravar motivo de falha para o que
+   * não vier, acendendo TAMBÉM o card `arquivamento-drive-falhou`. Acender nos dois é correto; sumir
+   * daqui por causa disso não seria, então o motivo de falha fica fora do filtro.
+   *
+   * O `EXISTS` (e não um JOIN com a tabela de não conformidades) é o que impede a linha de
+   * multiplicar: há mais de uma NC1 por admissão na base, e o JOIN direto contaria a mesma admissão
+   * várias vezes.
+   *
+   * §A.6: nome do candidato para identificar a admissão na tela, como nos sinais irmãos. Nunca CPF,
+   * nunca URL externa.
+   */
+  private async sinalConcluidaSemProntuario(): Promise<Sinal> {
+    const rows = (await this.db.execute(sql`
+      SELECT a.id AS admissao_id, c.nome AS candidato
+        FROM admissoes a
+        JOIN candidatos c ON c.cpf = a.candidato_cpf
+       WHERE a.farol_global = 'ADMISSAO_CONCLUIDA'
+         AND a.origem = 'PANDAPE'
+         AND a.drive_pasta_url IS NULL
+         AND EXISTS (
+           SELECT 1 FROM nao_conformidades nc
+            WHERE nc.admissao_id = a.id AND nc.tipo = 'NC1'
+         )
+       ORDER BY a.atualizado_em DESC
+    `)) as unknown as LinhaAfetada[];
+    return {
+      chave: "concluida-sem-prontuario",
+      rotulo: "Concluída Sem Prontuário",
+      total: rows.length,
+      itens: rows.map((r) => ({
+        admissaoId: r.admissao_id,
+        candidato: r.candidato,
+        detalhe: "concluída sem prontuário no Drive: auditoria fechada com obrigatório pendente",
+      })),
     };
   }
 

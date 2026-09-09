@@ -63,6 +63,19 @@ export class AcaoZerarDuplicataDto {
   admissaoId!: string;
 }
 
+/**
+ * CRIAR O PRONTUÁRIO de uma admissão que fechou a Auditoria À MÃO com obrigatório pendente.
+ *
+ * Existe porque nesse caminho o arquivamento nunca dispara (o gatilho mora dentro do "régua
+ * completa"), e a admissão conclui sem pasta no Drive, sem sinal e sem registro. A ação vive AQUI, na
+ * controller de Diagnóstico, que é MASTER/SUPER_ADMIN por classe: na de Auditoria, aberta ao COMUM,
+ * a ferramenta vazaria para a operação.
+ */
+export class AcaoCriarProntuarioDto {
+  @IsUUID()
+  admissaoId!: string;
+}
+
 /** Bloco 5: liga/desliga o scheduler de re-consulta (sem deploy). */
 export class SchedulerToggleDto {
   @IsBoolean()

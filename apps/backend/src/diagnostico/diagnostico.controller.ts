@@ -22,6 +22,7 @@ import {
 } from "./motivo-reprocesso";
 import { estadoDosCamposDeCpf, resumoDosCamposDeCpf } from "./estado-cpf-pandape";
 import {
+  AcaoCriarProntuarioDto,
   AcaoLigarPastaDto,
   AcaoZerarDuplicataDto,
   AcaoZerarPendenciaDto,
@@ -95,6 +96,27 @@ export class DiagnosticoController {
       pastaUrl: pos.arquivado?.pastaUrl,
       aviso: pos.avisoDrive,
     };
+  }
+
+  /**
+   * CRIAR O PRONTUÁRIO de uma admissão que fechou a Auditoria À MÃO com obrigatório pendente.
+   *
+   * O CASO, medido: fechar a frente pela esteira com documento obrigatório pendente conclui a
+   * Auditoria de verdade, mas o arquivamento no Drive só dispara quando a régua fecha. A admissão
+   * termina concluída, sem pasta, sem falha registrada e sem nada aceso em tela nenhuma.
+   *
+   * MORA AQUI POR SEGURANÇA: esta controller é `@Roles("MASTER","SUPER_ADMIN")` na CLASSE, então o
+   * handler nasce protegido. Na controller de Auditoria, deliberadamente aberta ao COMUM, a
+   * ferramenta vazaria para a operação.
+   *
+   * Reusa `criarProntuarioSobDemanda`, que preserva os arquivos da staging (a régua está aberta,
+   * o binário ainda vai ser auditado) e é anti duplicação por construção: já tendo pasta, devolve
+   * `jaExistia` e não toca no Drive. A trilha (quem, quando) fica em `candidato_alteracoes_log`.
+   */
+  @Post("acao/criar-prontuario")
+  async criarProntuario(@Body() dto: AcaoCriarProntuarioDto, @CurrentUser() user: AuthUser) {
+    this.registrarTrilha(user, "criar-prontuario", dto.admissaoId);
+    return this.auditoria.criarProntuarioSobDemanda(dto.admissaoId, user);
   }
 
   /**

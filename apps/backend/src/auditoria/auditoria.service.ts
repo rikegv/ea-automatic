@@ -6,6 +6,7 @@ import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
 import {
   admissoes,
+  candidatoAlteracoesLog,
   candidatos,
   clientes,
   dadosVagaFolha,
@@ -91,6 +92,32 @@ export interface PosVeredito {
 interface ResultadoArquivamento {
   arquivado?: { pastaUrl: string; pastaJaExistia?: boolean; ignorados?: number };
   /** Por que não concluiu (ou concluiu incompleto). Já gravado em `admissoes.drive_falha_motivo`. */
+  motivo?: string;
+}
+
+/**
+ * Opções do arquivamento. Nascem com UM caso e o default preserva o comportamento de sempre: sem
+ * opção nenhuma, `arquivarNoDrive` faz exatamente o que fazia antes, expurgo da staging incluído.
+ */
+interface OpcoesArquivamento {
+  /**
+   * NÃO expurga a staging depois de subir. Existe para a criação de prontuário SOB DEMANDA, que roda
+   * em admissão com documento obrigatório ainda PENDENTE: ali o binário que está na staging ainda vai
+   * ser auditado, e apagá-lo seria perda irreversível. O fluxo normal (régua fechada) continua
+   * expurgando, porque lá não sobrou documento nenhum para auditar.
+   */
+  preservarStaging?: boolean;
+}
+
+/**
+ * Desfecho da criação de prontuário SOB DEMANDA (ação do Diagnóstico e do backfill). O formato é o
+ * contrato acordado com a tela: `jaExistia` distingue "não fiz nada porque já havia" de "criei", e
+ * `motivo` explica a recusa sem obrigar a tela a interpretar exceção.
+ */
+export interface ProntuarioSobDemanda {
+  ok: boolean;
+  pastaUrl?: string;
+  jaExistia?: boolean;
   motivo?: string;
 }
 
@@ -860,6 +887,107 @@ export class AuditoriaService {
   }
 
   /**
+   * CRIA O PRONTUÁRIO SOB DEMANDA, para a admissão que fechou a Auditoria À MÃO com documento
+   * obrigatório ainda pendente. É a ação da tela de Diagnóstico (restrita a MASTER/SUPER_ADMIN) e o
+   * caminho que o backfill reusa.
+   *
+   * O BURACO QUE ISTO FECHA, medido: o único gatilho de arquivamento é o pós-veredito, e lá ele mora
+   * dentro do `if (progresso.completa)`. Quem conclui a frente pela esteira com obrigatório pendente
+   * conclui de verdade, e o prontuário NUNCA nasce: sem registro de falha, sem sinal, sem nada em
+   * tela nenhuma. São 31 admissões concluídas nessa situação.
+   *
+   * ANTI DUPLICAÇÃO EM DUAS CAMADAS, e nenhuma é opcional:
+   *  1. admissão que JÁ tem pasta volta na hora, sem tocar no Drive (`jaExistia`);
+   *  2. o arquivamento passa pela TRAVA por admissão e pela ÂNCORA do link, que é o que fecha a
+   *     corrida entre duas execuções simultâneas (ver `arquivarNoDrive`).
+   * Por isso rodar duas vezes seguidas não cria duas pastas.
+   *
+   * PRESERVA OS ARQUIVOS (decisão do diretor): aqui a régua está ABERTA, então o binário que está na
+   * staging ainda vai ser auditado, e apagá-lo seria perda irreversível.
+   *
+   * NÃO abre porta nova de escrita de `drive_pasta_url`: quem grava continua sendo o
+   * `arquivarNoDriveSemTrava`, o mesmo escritor do fluxo vivo.
+   */
+  async criarProntuarioSobDemanda(
+    admissaoId: string,
+    user: AuthUser | null,
+  ): Promise<ProntuarioSobDemanda> {
+    let adm: Awaited<ReturnType<AuditoriaService["carregarAdmissao"]>>;
+    try {
+      adm = await this.carregarAdmissao(admissaoId);
+    } catch (err) {
+      // Admissão inexistente, ou ainda sem cliente/cargo: é recusa COM MOTIVO, não erro de servidor.
+      // A tela precisa dizer o porquê, e não mostrar uma falha genérica.
+      if (err instanceof NotFoundException) return { ok: false, motivo: err.message };
+      throw err;
+    }
+
+    // CAMADA 1. `precisaArquivarDrive` é o mesmo predicado do fluxo vivo (link real = arquivado;
+    // placeholder de MOCK = ainda não), então não nasce aqui uma segunda régua do que é "ter pasta".
+    if (!precisaArquivarDrive(adm.drivePastaUrl)) {
+      return { ok: true, jaExistia: true, ...(adm.drivePastaUrl ? { pastaUrl: adm.drivePastaUrl } : {}) };
+    }
+
+    try {
+      // CAMADA 2: trava por admissão e âncora, ambas dentro do `arquivarNoDrive`.
+      const resultado = await this.arquivarNoDrive(adm, { preservarStaging: true });
+      if (!resultado.arquivado) {
+        return { ok: false, motivo: resultado.motivo ?? "O prontuário não foi criado." };
+      }
+      await this.registrarTrilhaProntuario(adm.id, resultado.arquivado.pastaUrl, user);
+      // §A.6: id de admissão e id de autor, nunca nome, CPF ou URL.
+      this.logger.log(
+        `Prontuário criado sob demanda (admissão ${adm.id}), staging PRESERVADA, ` +
+          `por=${user?.id ?? "sistema"}.`,
+      );
+      return {
+        ok: true,
+        pastaUrl: resultado.arquivado.pastaUrl,
+        // O prontuário pode nascer incompleto (é o esperado aqui, a régua está aberta): o motivo sobe
+        // junto para a tela dizer o que faltou, sem transformar isso em recusa.
+        ...(resultado.motivo ? { motivo: resultado.motivo } : {}),
+      };
+    } catch (err) {
+      // Mesmo tratamento do fluxo vivo: motivo gravado na admissão, log sem PII, nada apagado.
+      return { ok: false, motivo: await this.avisoFalhaDrive(err, adm.id) };
+    }
+  }
+
+  /**
+   * TRILHA da criação sob demanda: QUEM gerou e QUANDO, em `candidato_alteracoes_log`, que é a
+   * tabela que o sistema já usa para ação fora do padrão e que a ficha da admissão já renderiza. O
+   * log do serviço rotaciona e o diretor não consegue consultar, então ele não serve de trilha.
+   *
+   * §A.6: grava a referência do DRIVE (o mesmo valor que já vive em `admissoes.drive_pasta_url`, e
+   * cuja persistência é a permitida), nunca URL externa, nome ou CPF. `autor_id` fica nulo quando
+   * quem roda é o sistema (backfill), no que a coluna já prevê.
+   *
+   * FALHAR AQUI NÃO DESFAZ A PASTA, que já existe: vira ERRO no log, no mesmo princípio da
+   * notificação da INT-4. Lançar não desfaria nada e ainda arriscaria uma segunda pasta na
+   * retentativa.
+   */
+  private async registrarTrilhaProntuario(
+    admissaoId: string,
+    pastaUrl: string,
+    user: AuthUser | null,
+  ): Promise<void> {
+    try {
+      await this.db.insert(candidatoAlteracoesLog).values({
+        admissaoId,
+        campo: "prontuario_sob_demanda",
+        valorAnterior: null,
+        valorNovo: pastaUrl,
+        autorId: user?.id ?? null,
+      });
+    } catch (err) {
+      this.logger.error(
+        `Trilha da criação sob demanda NÃO gravada (admissão ${admissaoId}): ` +
+          `${err instanceof Error ? err.message : "erro"}. A pasta foi criada e continua válida.`,
+      );
+    }
+  }
+
+  /**
    * Arquiva os documentos da staging no Drive (INT-2). Resolve a pasta-pai por contrato/cliente; se
    * não resolver, NÃO arquiva (deixa drivePastaUrl null e a staging viva até o TTL), logando sem PII.
    * Em sucesso, grava a URL da pasta (referência, não PII) e expurga a staging da admissão.
@@ -874,18 +1002,20 @@ export class AuditoriaService {
    */
   private async arquivarNoDrive(
     adm: Awaited<ReturnType<AuditoriaService["carregarAdmissao"]>>,
+    opcoes?: OpcoesArquivamento,
   ): Promise<ResultadoArquivamento> {
     // TRAVA POR ADMISSÃO (OST da duplicação, item 4): duas execuções simultâneas da MESMA admissão
     // eram a causa provada das pastas duplicadas. A segunda espera a primeira e, quando chega a vez
     // dela, o link já está gravado e vira âncora. A releitura da admissão dentro da trava é o que
     // torna isso verdade: sem ela, a segunda ainda usaria o `adm` carregado ANTES da espera.
     return this.travaArquivamento.executar(adm.id, async () =>
-      this.arquivarNoDriveSemTrava(await this.carregarAdmissao(adm.id)),
+      this.arquivarNoDriveSemTrava(await this.carregarAdmissao(adm.id), opcoes),
     );
   }
 
   private async arquivarNoDriveSemTrava(
     adm: Awaited<ReturnType<AuditoriaService["carregarAdmissao"]>>,
+    opcoes?: OpcoesArquivamento,
   ): Promise<ResultadoArquivamento> {
     const pastaPaiId = await this.drivePastaPai.resolver(adm.tipoContrato, adm.codCliente);
     if (!pastaPaiId) {
@@ -966,7 +1096,11 @@ export class AuditoriaService {
       .where(eq(admissoes.id, adm.id));
     // A staging só é expurgada quando TUDO subiu: com falha parcial, o que não foi é justamente o
     // que a próxima tentativa precisa reenviar. Expurgar aqui perderia o arquivo de vez.
-    if (!parcial) await this.staging.removerAdmissao(adm.id);
+    //
+    // `preservarStaging` é a segunda guarda, e é decisão do diretor: a criação de prontuário sob
+    // demanda roda em admissão com obrigatório ainda PENDENTE, cujo binário ainda vai ser auditado.
+    // Sem a opção, nada muda no caminho de sempre.
+    if (!parcial && !opcoes?.preservarStaging) await this.staging.removerAdmissao(adm.id);
     // §A.6: contagens e id de admissão, nunca nome de arquivo nem de pessoa. `ignorados` é a medida
     // direta da duplicação EVITADA: a staging guarda uma cópia por auditoria do mesmo documento.
     this.logger.log(
