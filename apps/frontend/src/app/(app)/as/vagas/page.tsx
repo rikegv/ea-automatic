@@ -1914,6 +1914,20 @@ export default function CentralDeVagasPage() {
               corte. Acima desse piso ela ESTICA: as porcentagens repartem a tela toda em vez de
               deixar folga sobrando de um lado e coluna apertada do outro, que é o aproveitamento
               pedido. Abaixo dele a tabela ROLA na horizontal, como manda o §A.12, em vez de espremer. */}
+          {/* §A.20, REMEDIDO NO BROWSER EM 09/09, com o "Gestão Vaga" no lugar do olho.
+              O BOTÃO DE TEXTO CUSTOU 94px NA COLUNA AÇÕES, medido e não estimado: o conteúdo da
+              célula passou de 148px para 242px, e o mínimo da tabela inteira subiu na mesma medida
+              (1262px para 1356px, na base da homologação). Os 94px são da coluna Ações e de mais
+              nada: nenhuma outra célula mudou de conteúdo, e nenhuma mudou de largura mínima.
+
+              O PISO DECLARADO CONTINUA 1430px, e não foi mexido de propósito: ele já é MAIOR que o
+              mínimo medido (1356px), então as porcentagens continuam repartindo a tabela sem
+              nenhuma coluna espremida, e a rolagem lateral desta tela é exatamente a mesma de
+              antes desta mudança. Subir o piso agora só encompridaria a rolagem sem necessidade.
+
+              NENHUMA COLUNA FICOU CORTADA, conferido célula a célula (`scrollWidth` contra
+              `clientWidth` em todos os `th` e `td`, nas duas linhas e nas onze colunas): zero
+              supressão. A prova está nas screenshots dos dois temas. */}
           <table className="ds-table min-w-[1430px]">
             <thead>
               <tr>
@@ -2082,9 +2096,14 @@ export default function CentralDeVagasPage() {
                         {textoDias(diasEmAberto(v))}
                       </span>
                     </td>
-                    {/* AÇÕES SÓ EM ÍCONE, sem texto. Cada uma leva `title` e `aria-label` com a
-                        frase inteira: o ícone é o atalho de quem já conhece a tela, e o rótulo
-                        continua alcançável por quem passa o mouse e por leitor de tela. */}
+                    {/* AS AÇÕES, NA ORDEM DO DIRETOR: cadeado (fechar), posições, rascunho,
+                        clonar, e por último "Gestão Vaga", o ÚNICO com texto.
+
+                        OS ÍCONES CONTINUAM SENDO ÍCONES porque cada um faz uma coisa só e quem usa
+                        a tela todo dia já os conhece; cada um leva `title` e `aria-label` com a
+                        frase inteira, então o rótulo segue alcançável por quem passa o mouse e por
+                        leitor de tela. O que ganhou texto foi o de MAIOR ALCANCE, que era
+                        justamente o mais escondido: o olho. */}
                     <td>
                       <div className="flex items-center justify-center gap-1">
                         {v.status === "ABERTA" && (
@@ -2132,21 +2151,39 @@ export default function CentralDeVagasPage() {
                         )}
                         <button
                           type="button"
-                          title="Ver a vaga completa"
-                          aria-label={`Ver a vaga ${rotuloDaVaga(v)} completa`}
-                          onClick={() => setVerAlvo(v)}
-                          className="rounded-lg border border-transparent p-2 text-dim transition hover:border-[var(--border)] hover:text-accent"
-                        >
-                          <Icon name="eye" className="h-4 w-4" />
-                        </button>
-                        <button
-                          type="button"
                           title="Clonar a vaga"
                           aria-label={`Clonar a vaga ${rotuloDaVaga(v)}`}
                           onClick={() => clonarVaga(v)}
                           className="rounded-lg border border-transparent p-2 text-dim transition hover:border-[var(--border)] hover:text-accent"
                         >
                           <Icon name="copy" className="h-4 w-4" />
+                        </button>
+                        {/* ─ GESTÃO VAGA: O ÚNICO COM TEXTO, E É O PONTO ────────────────
+                            ELE ERA UM OLHO, e o olho é o ícone mais ambíguo desta linha: ele diz
+                            "ver", e o que abre é o painel onde a vaga inteira é TRABALHADA (a
+                            ficha, a trilha, os candidatos, a alocação). Quem não conhecia a tela
+                            não tinha como adivinhar isso a partir de uma pálpebra, e o caminho
+                            principal da tela ficava escondido no ícone mais discreto dela.
+
+                            O COMPORTAMENTO É O MESMO, e de propósito: o mesmo `setVerAlvo(v)`, o
+                            mesmo modal. Mudou o GATILHO, não o destino.
+
+                            É O ÚLTIMO DA SEQUÊNCIA porque é o de maior alcance: os três ícones
+                            antes dele fazem uma coisa cada, e ele abre a vaga toda.
+
+                            AS CORES SÃO TOKEN (`--btn-grad`, o mesmo do `btn-primary`), então o
+                            claro e o escuro saem certos pelo mesmo código. `title` e `aria-label`
+                            continuam, mesmo com o texto à vista: o rótulo curto na tela e a frase
+                            inteira para quem passa o mouse e para o leitor de tela. */}
+                        <button
+                          type="button"
+                          title="Abrir a gestão da vaga"
+                          aria-label={`Abrir a gestão da vaga ${rotuloDaVaga(v)}`}
+                          onClick={() => setVerAlvo(v)}
+                          className="inline-flex flex-none items-center gap-1.5 whitespace-nowrap rounded-lg border border-transparent [background:var(--btn-grad)] px-3 py-2 text-[12.5px] font-bold text-white shadow-[0_8px_18px_-8px_rgba(34,176,219,0.75)] transition hover:brightness-110"
+                        >
+                          <Icon name="eye" className="h-4 w-4 flex-none" />
+                          Gestão Vaga
                         </button>
                       </div>
                     </td>

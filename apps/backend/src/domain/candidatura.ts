@@ -5,8 +5,10 @@ import {
   consomePosicao,
   ehSaidaSemExito,
   finalizaPosicao,
+  POSICAO_LADOS,
   type CandidaturaEtapa,
   type CandidaturaSituacao,
+  type PosicaoLado,
 } from "@ea/shared-types";
 
 /**
@@ -440,8 +442,15 @@ export function vagaRecebeCandidato(status: string): boolean {
  * contra a meta oficial, que era a única que a trava conhecia. Coalescer para OFICIAL é o que faz a
  * régua nova descrever, sem reescrever nada, o que o banco já tem gravado.
  */
-export const POSICAO_LADOS = ["OFICIAL", "BANCO"] as const;
-export type PosicaoLado = (typeof POSICAO_LADOS)[number];
+/*
+ * A LISTA MORA NO VOCABULÁRIO COMPARTILHADO desde que o lado virou palavra de dois lados: a lista
+ * de alocados mostra "oficial ou banco" em cada linha, e o campo subiu ao contrato. Aqui ela é
+ * REEXPORTADA, sem mudar de comportamento, que é o mesmo movimento que `ehSaidaSemExito` já tinha
+ * feito. Duas listas com os mesmos dois valores concordam no dia em que são escritas e divergem na
+ * primeira vez que alguém acrescenta um lado novo em uma só.
+ */
+export { POSICAO_LADOS };
+export type { PosicaoLado };
 
 /**
  * O lado de uma candidatura já gravada. NULO É OFICIAL (ver o bloco acima), e é por isso que a
@@ -449,6 +458,28 @@ export type PosicaoLado = (typeof POSICAO_LADOS)[number];
  */
 export function ladoDaCandidatura(lado: string | null | undefined): PosicaoLado {
   return lado === "BANCO" ? "BANCO" : "OFICIAL";
+}
+
+/**
+ * ─ O LADO COMO ELE ESTÁ GRAVADO, PARA A LEITURA, e o nulo aqui SOBREVIVE ─────────────────────
+ *
+ * ┌─ ELA É A IRMÃ DA `ladoDaCandidatura`, e existe justamente porque não pode ser ela ──────────┐
+ * │ A DE CIMA É PARA A GRAVAÇÃO e coalesce nulo para OFICIAL, com um motivo bom: toda           │
+ * │ candidatura antiga foi aprovada contra a meta oficial, que era a única que a trava conhecia.│
+ * │                                                                                             │
+ * │ NA LEITURA, coalescer MENTE. Quem está no funil sem ocupar posição nenhuma tem nulo aqui, e │
+ * │ transformá-lo em OFICIAL faria a lista de alocados mostrar como entregue quem não entregou  │
+ * │ nada. Nulo é "não ocupa posição", que é diferente de "ocupa a oficial".                     │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * E POR QUE NÃO UM CAST. A coluna é `text` com CHECK (enum do Postgres foi evitado de propósito,
+ * pela armadilha do `ADD VALUE` na mesma transação), então o banco garante o conteúdo e o
+ * TypeScript não sabe disso. Um `as PosicaoLado` calaria o compilador e passaria adiante, intacto,
+ * qualquer valor que um dia entrasse por fora do CHECK. Esta função devolve NULO para o que não
+ * reconhece, que é o pior caso honesto: a tela deixa de afirmar um lado em vez de inventar um.
+ */
+export function ladoGravado(lado: string | null | undefined): PosicaoLado | null {
+  return POSICAO_LADOS.includes(lado as PosicaoLado) ? (lado as PosicaoLado) : null;
 }
 
 /**

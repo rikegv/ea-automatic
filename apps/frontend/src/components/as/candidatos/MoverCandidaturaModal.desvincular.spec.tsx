@@ -47,6 +47,8 @@ const ALOCADO: AsCandidaturaItem = {
   vagaNome: "Vaga de teste",
   etapa: "APROVACAO",
   situacao: "ALOCADO",
+  // Alocado ocupa posição, e esta fixture é a do lado OFICIAL, que é o caso comum.
+  posicaoLado: "OFICIAL",
   motivoDescarte: null,
   alocadoEm: "2026-09-01T12:00:00.000Z",
   alocadoPorNome: "Ana",

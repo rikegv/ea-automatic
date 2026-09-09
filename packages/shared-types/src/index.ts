@@ -2380,7 +2380,93 @@ export interface AsCandidaturaItem {
    * lugar certo da linha do tempo, mas não puxa este carimbo para trás.
    */
   ultimoContatoEm: string | null;
+  /**
+   * DE QUAL LADO DA META esta candidatura ocupa posição: `OFICIAL`, `BANCO`, ou NULO para quem não
+   * ocupa posição nenhuma.
+   *
+   * ┌─ POR QUE ELE SOBE AO CONTRATO AGORA, e o que isso alcança (§A.27) ─────────────────────────┐
+   * │ A LISTA DE CANDIDATOS ALOCADOS pede "posição (oficial/banco)" em cada linha, e o campo      │
+   * │ existia SÓ no banco: o mapeamento do service não o trazia, e o comentário de lá dizia, com  │
+   * │ todas as letras, que acrescentá-lo é mudança de CONTRATO. É esta a mudança.                  │
+   * │                                                                                             │
+   * │ ELE ALCANÇA MAIS DE UMA TELA, e por isso está aqui e não num tipo novo só da lista nova: a  │
+   * │ mesma função monta os itens da Central de Candidatos e do modal de candidatos da vaga. As    │
+   * │ três passam a receber o campo, e nenhuma delas é obrigada a mostrá-lo.                       │
+   * │                                                                                             │
+   * │ NULO NÃO É "OFICIAL POR OMISSÃO". Quem está no funil sem ocupar posição tem nulo aqui, e a  │
+   * │ linha que já saiu pode conservar o lado gravado: quem conta posição é a SITUAÇÃO, nunca este │
+   * │ campo. Ler daqui para contar meta é o erro que a régua de ocupação existe para impedir.      │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   */
+  posicaoLado: PosicaoLado | null;
 }
+
+/**
+ * ─ O LADO DA POSIÇÃO, promovido ao vocabulário compartilhado ───────────────────────────────────
+ *
+ * ELE JÁ EXISTIA, e só no backend (`domain/candidatura.ts`). Enquanto o lado era assunto interno da
+ * gravação, morar lá bastava; a partir do momento em que a LISTA DE ALOCADOS mostra "oficial ou
+ * banco" em cada linha, ele virou palavra que os dois lados falam, e palavra de dois lados mora
+ * aqui (§A.39: o vocabulário compartilhado tem dono único).
+ *
+ * O DOMÍNIO PASSA A REEXPORTAR ESTA CONSTANTE em vez de declarar a sua, que é o mesmo movimento que
+ * `ehSaidaSemExito` já tinha feito. Duas listas com os mesmos dois valores concordam no dia em que
+ * são escritas e divergem na primeira vez que alguém acrescenta um lado novo em uma só.
+ */
+export const POSICAO_LADOS = ["OFICIAL", "BANCO"] as const;
+export type PosicaoLado = (typeof POSICAO_LADOS)[number];
+
+/**
+ * ─ O RESULTADO DE UMA AÇÃO EM MASSA ────────────────────────────────────────────────────────────
+ *
+ * ┌─ A RÉGUA DA CASA, E A DECISÃO DO DIRETOR QUE A CONFIRMOU (09/09) ──────────────────────────┐
+ * │ UMA LINHA RUIM NÃO DERRUBA O LOTE. Ela volta em `falhas` com o motivo, e as demais seguem.  │
+ * │ É o padrão que o Alto Volume já usa, e o diretor o escolheu de novo aqui: lote PARCIAL,     │
+ * │ aloca quem couber e reporta o resto.                                                        │
+ * │                                                                                             │
+ * │ NÃO EXISTE PRÉ-CONFERÊNCIA AUTORITATIVA de "cabe todo mundo?", e isso é desenho, não        │
+ * │ preguiça: qualquer contagem feita antes do laço roda FORA da trava da vaga e mente, porque  │
+ * │ outro consultor pode ocupar a última posição entre a conta e a gravação. A verdade é o       │
+ * │ resultado do lote, sempre.                                                                  │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * §A.6: a falha carrega o ID DA CANDIDATURA e um motivo de PROCESSO. Nunca CPF, nunca o motivo de
+ * descarte anterior de ninguém (numa resposta de trinta linhas isso viraria um relatório de dados
+ * pessoais indo para toast, para área de transferência e para log de cliente). O nome, quando a
+ * tela precisar mostrar, ela já tem em memória.
+ */
+export interface AsResultadoEmMassa {
+  /** Quantas linhas foram efetivadas de fato. */
+  aplicadas: number;
+  falhas: AsFalhaEmMassa[];
+}
+
+export interface AsFalhaEmMassa {
+  /**
+   * O ID DA LINHA QUE FALHOU, e ele NÃO é sempre uma candidatura.
+   *
+   * ┌─ POR QUE O NOME É NEUTRO, e por que `candidaturaId` seria uma armadilha ───────────────────┐
+   * │ TRÊS DAS QUATRO AÇÕES operam sobre candidaturas que já existem, e ali o id é de            │
+   * │ candidatura. A QUARTA, adicionar candidato à vaga, é a que CRIA a candidatura: quando a    │
+   * │ linha falha, a candidatura ainda não existe, e o que falhou foi um CANDIDATO.              │
+   * │                                                                                            │
+   * │ Um campo chamado `candidaturaId` estaria CERTO em três casos e MENTINDO no quarto, que é a │
+   * │ pior forma de errar: quem for cruzar essa lista com a tabela de candidaturas encontra zero │
+   * │ linhas para o caso da adição, e vai procurar o defeito no lugar errado. O nome neutro       │
+   * │ obriga quem lê a perguntar de que ação veio a lista, que é a pergunta certa.                │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   */
+  alvoId: string;
+  /**
+   * A FRASE QUE A TRAVA JÁ PRODUZ, aproveitada inteira. As travas de ocupação distinguem meta
+   * ausente, banco zerado e banco cheio, e reescrever isso aqui criaria uma segunda régua para
+   * dizer a mesma coisa, que é como as duas passam a divergir.
+   */
+  motivo: string;
+}
+
+/** O teto de uma seleção em massa, o mesmo do Alto Volume, para o lote não virar varredura. */
+export const AS_MAXIMO_POR_LOTE = 200;
 
 /**
  * A RECUSA DO ENCERRAMENTO DA VAGA, quando ainda há candidato por tratar.

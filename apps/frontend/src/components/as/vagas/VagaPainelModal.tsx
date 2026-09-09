@@ -85,9 +85,12 @@ import { trilhaDaVaga } from "@/lib/as-vaga-trilha";
 import { fraseDoFechamentoForcado } from "@/lib/as-vaga-fechamento";
 import { fraseDaReducaoDeMeta } from "@/lib/as-vaga-meta";
 import {
+  POSICAO_LADOS,
   podeDecidir,
   podeFinalizarPosicao,
   podeMoverNoFunil,
+  rotuloCurtoDoLado,
+  rotuloDoLado,
   vagaRecebeCandidato,
 } from "@/lib/as-vaga-acoes";
 import { AlocarCandidatoModal } from "@/components/as/candidatos/AlocarCandidatoModal";
@@ -95,6 +98,8 @@ import { NovoCandidatoModal } from "@/components/as/candidatos/NovoCandidatoModa
 import { MoverCandidaturaModal } from "@/components/as/candidatos/MoverCandidaturaModal";
 import { FichaCandidatoModal } from "@/components/as/candidatos/FichaCandidatoModal";
 import { FinalizarPosicaoModal } from "@/components/as/vagas/FinalizarPosicaoModal";
+import { AcoesEmMassaDaVaga } from "@/components/as/vagas/AcoesEmMassaDaVaga";
+import { AdicionarCandidatosEmLoteModal } from "@/components/as/vagas/AdicionarCandidatosEmLoteModal";
 import { cn } from "@/lib/cn";
 
 type Aba = "vaga" | "candidatos" | "alocados";
@@ -104,6 +109,37 @@ const ABAS: { id: Aba; rotulo: string; icone: IconName }[] = [
   { id: "candidatos", rotulo: "Ver Candidatos", icone: "users" },
   { id: "alocados", rotulo: "Ver Candidatos Alocados", icone: "check" },
 ];
+
+/*
+ * ─ AS ABAS COMO BOTÃO DE TRABALHO, E NÃO COMO ENFEITE (decisão do diretor) ────────────────────
+ *
+ * ELAS ERAM O `.tab` DA ESTEIRA, que é discreto de propósito: fundo transparente, texto em tom
+ * apagado, e um retângulo levemente preenchido só na ativa. Numa barra de navegação de página isso
+ * basta, porque a barra fica sempre no mesmo lugar da tela. Dentro deste modal, onde as três abas
+ * são o ÚNICO caminho para o que a caixa tem a oferecer, o mesmo desenho fazia o gesto principal
+ * parecer legenda. Agora as três têm FUNDO e SOMBRA, e ficam CENTRALIZADAS.
+ *
+ * O `.tab` DA ESTEIRA NÃO FOI TOCADO, e isso é deliberado (§A.26): ele é a aba de outras telas já
+ * validadas, e mudá-lo aqui mudaria todas elas de lado. O que existe aqui é uma variação LOCAL,
+ * escrita nos MESMOS TOKENS do design system, então ela acompanha o tema em vez de brigar com ele.
+ *
+ * A DISTINÇÃO ENTRE ATIVA E INATIVA PRECISOU MUDAR DE MECANISMO, e é a consequência direta de todas
+ * ganharem fundo: antes a ativa era "a que tem fundo", e com fundo em todas isso deixaria de
+ * distinguir qualquer coisa. A ativa passa a ser a PREENCHIDA com o gradiente do botão primário
+ * (`--btn-grad`, o mesmo do `btn-primary`), com texto branco e sombra de realce; a inativa é a
+ * superfície elevada (`--surface-2`) com a borda e a sombra de vidro do sistema.
+ *
+ * NENHUMA COR ESCRITA À MÃO: `--btn-grad`, `--surface-2`, `--border`, `--border-strong` e
+ * `--glass-shadow` são declarados nos DOIS temas, então o claro e o escuro saem certos pelo mesmo
+ * código. Fosse um hexadecimal, ele ficaria bom em um tema e errado no outro, que é o defeito que a
+ * regra pede para evitar.
+ */
+const ABA_BASE =
+  "inline-flex items-center gap-2 rounded-xl border px-4 py-2.5 text-[13.5px] font-semibold transition";
+const ABA_ATIVA =
+  "border-transparent [background:var(--btn-grad)] text-white shadow-[0_10px_22px_-8px_rgba(34,176,219,0.65)]";
+const ABA_INATIVA =
+  "border-[var(--border)] bg-[var(--surface-2)] text-dim shadow-[var(--glass-shadow)] hover:border-[var(--border-strong)] hover:text-text";
 
 export function VagaPainelModal({
   vaga,
@@ -138,9 +174,24 @@ export function VagaPainelModal({
    */
   const [alocarAberto, setAlocarAberto] = useState(false);
   const [cadastrarAberto, setCadastrarAberto] = useState(false);
+  const [adicionarLoteAberto, setAdicionarLoteAberto] = useState(false);
   const [fichaId, setFichaId] = useState<string | null>(null);
   const [moverAlvo, setMoverAlvo] = useState<AsCandidaturaItem | null>(null);
   const [finalizarAlvo, setFinalizarAlvo] = useState<AsCandidaturaItem | null>(null);
+
+  /**
+   * ─ A SELEÇÃO MÚLTIPLA (grupo 1), COM O MESMO GESTO DO ALTO VOLUME ────────────────────────────
+   *
+   * IDS, E NÃO OBJETOS. A lista é RELIDA a cada ação (`carregar`), e as instâncias trocam a cada
+   * leitura: guardar objetos deixaria a seleção apontando para fotografias antigas, com etapa e
+   * situação de antes do lote. Guardando o id, a tela reencontra a linha ATUAL na lista atual.
+   *
+   * NADA SOBREVIVE À TROCA DE ABA. As duas abas mostram recortes diferentes das mesmas pessoas, e
+   * uma seleção herdada da outra aba estaria, por definição, fora do que a pessoa está vendo. Marcar
+   * em silêncio linha que ninguém está vendo é a receita do lote errado, e é a mesma régua que o
+   * "selecionar todos" segue.
+   */
+  const [selecionados, setSelecionados] = useState<string[]>([]);
 
   const trilha = trilhaDaVaga(vaga);
   const precisaDaLista = aba === "candidatos" || aba === "alocados";
@@ -180,12 +231,42 @@ export function VagaPainelModal({
     setCadastrarAberto(false);
     setMoverAlvo(null);
     setFinalizarAlvo(null);
+    // A SELEÇÃO MORRE COM A AÇÃO: as linhas que ela apontava acabaram de mudar de estado, e manter
+    // as marcas convidaria a repetir o lote sobre um retrato que já não é o da tela.
+    setSelecionados([]);
     void carregar();
     onMudou();
   }
 
   const lista = candidaturas ?? [];
   const alocados = lista.filter((c) => finalizaPosicao(c.situacao));
+  /**
+   * AS LINHAS MARCADAS, RESOLVIDAS NA LISTA ATUAL. Sai da `lista` inteira (e não do recorte da aba)
+   * porque é ela que tem todo mundo; a seleção já é limpa na troca de aba, então o que está aqui é
+   * sempre o que está à vista.
+   */
+  const selecionadas = lista.filter((c) => selecionados.includes(c.id));
+
+  function alternarSelecao(id: string) {
+    setSelecionados((atual) =>
+      atual.includes(id) ? atual.filter((x) => x !== id) : [...atual, id],
+    );
+  }
+
+  /**
+   * "SELECIONAR TODOS" OPERA SOBRE O QUE ESTÁ À VISTA, nunca sobre a lista inteira: os ids chegam da
+   * própria tabela, já filtrados pela aba e na ordem em que ela está mostrando. Desmarcar tira SÓ os
+   * visíveis, pelo mesmo motivo com o sinal trocado (é a régua do Alto Volume, palavra por palavra).
+   */
+  function alternarTodos(idsVisiveis: string[]) {
+    const todosMarcados =
+      idsVisiveis.length > 0 && idsVisiveis.every((id) => selecionados.includes(id));
+    setSelecionados((atual) =>
+      todosMarcados
+        ? atual.filter((id) => !idsVisiveis.includes(id))
+        : [...new Set([...atual, ...idsVisiveis])],
+    );
+  }
   const titulo = vaga.nomeDivulgacao ?? "Vaga Sem Nome De Divulgação";
   /** A vaga encerrada não recebe candidato novo (trava 2 do backend), então nem oferece o botão. */
   const recebeCandidato = vagaRecebeCandidato(vaga.status);
@@ -285,10 +366,12 @@ export function VagaPainelModal({
           )}
 
           {/* ── AS ABAS ──────────────────────────────────────────────────────
-              O `.tab` do design system, o mesmo da Esteira: um jeito só de trocar de aba no
-              sistema. A contagem só aparece depois de a lista chegar, porque antes disso ela seria
-              um número inventado. */}
-          <div className="mt-4 flex flex-wrap gap-2">
+              CENTRALIZADAS e PREENCHIDAS (decisão do diretor): elas são o caminho para tudo o que
+              este modal oferece, então parecem botão de trabalho. O desenho e o porquê estão em
+              `ABA_BASE`/`ABA_ATIVA`/`ABA_INATIVA`, no topo do arquivo, com os tokens dos dois temas.
+              A contagem só aparece depois de a lista chegar, porque antes disso ela seria um número
+              inventado. */}
+          <div className="mt-4 flex flex-wrap justify-center gap-2">
             {ABAS.map((a) => {
               const conta =
                 candidaturas === null
@@ -302,18 +385,30 @@ export function VagaPainelModal({
                 <button
                   key={a.id}
                   type="button"
-                  className={cn("tab", aba === a.id && "active")}
-                  onClick={() => setAba(a.id)}
+                  className={cn(ABA_BASE, aba === a.id ? ABA_ATIVA : ABA_INATIVA)}
+                  onClick={() => {
+                    setAba(a.id);
+                    // Trocar de aba troca o recorte à vista, e seleção que sobrevive ao recorte é
+                    // seleção invisível. Ver o comentário de `selecionados`.
+                    setSelecionados([]);
+                  }}
                   aria-pressed={aba === a.id}
                 >
-                  <span className="dot" />
-                  <Icon
-                    name={a.icone}
-                    className="mr-1.5 inline h-3.5 w-3.5 flex-none align-middle"
-                  />
+                  <Icon name={a.icone} className="h-3.5 w-3.5 flex-none" />
                   {a.rotulo}
+                  {/* A CONTAGEM SEGUE O FUNDO DA ABA: no gradiente da ativa ela é branca com
+                      transparência, e no fundo claro da inativa ela é o tom apagado de sempre. Um
+                      `text-faint` fixo sumiria por cima do azul, que é o jeito de um número virar
+                      decoração sem ninguém perceber. */}
                   {conta !== null && (
-                    <span className="ml-1.5 tabular-nums text-faint">{conta}</span>
+                    <span
+                      className={cn(
+                        "tabular-nums",
+                        aba === a.id ? "text-white/85" : "text-faint",
+                      )}
+                    >
+                      {conta}
+                    </span>
                   )}
                 </button>
               );
@@ -367,16 +462,65 @@ export function VagaPainelModal({
                       </Button>
                       <Button className="px-3.5 py-2" onClick={() => setAlocarAberto(true)}>
                         <Icon name="users" className="mr-1.5 inline h-3.5 w-3.5 align-middle" />
-                        Alocar candidato
+                        Adicionar à vaga
+                      </Button>
+                      {/* ─ O TERCEIRO CAMINHO: TRAZER VÁRIOS DE UMA VEZ (grupo 1) ──────────────
+                          Ele NÃO substitui o "Adicionar à vaga" ao lado, que continua sendo o
+                          caminho de uma pessoa só, com a pergunta da reentrada e a escolha da vaga.
+                          Este é o de captação em volume: marca-se a lista inteira e o backend
+                          responde quem entrou e quem não entrou.
+
+                          O RÓTULO DIZ "FUNIL" DE PROPÓSITO, e é a separação que o diretor pediu:
+                          este botão NÃO consome posição da meta. Quem entrega a posição é
+                          "Finalizar posição", que só aparece com linhas marcadas, na barra da
+                          seleção, e é a ação que consome. */}
+                      <Button
+                        variant="secondary"
+                        className="px-3.5 py-2"
+                        title="Traz várias pessoas para o funil de uma vez. Não consome posição da meta."
+                        onClick={() => setAdicionarLoteAberto(true)}
+                      >
+                        <Icon name="layers" className="mr-1.5 inline h-3.5 w-3.5 align-middle" />
+                        Adicionar vários ao funil
                       </Button>
                     </div>
                   )}
                 </div>
               )}
 
+              {/* ─ A BARRA DAS AÇÕES EM MASSA ─────────────────────────────────────────────────
+                  SEMPRE MONTADA junto com a lista, nas DUAS abas, e não só quando há seleção: é ela
+                  que guarda o RESULTADO do último lote, e o resultado precisa sobreviver à limpeza
+                  da seleção que acontece logo depois de aplicar. Ela mesma se esconde quando não há
+                  nada marcado.
+
+                  AS AÇÕES OFERECIDAS DEPENDEM DO QUE ESTÁ MARCADO, pelas mesmas réguas dos ícones de
+                  cada linha, então a aba de alocados simplesmente não mostra "Finalizar posição".
+
+                  ─ E ELA NÃO PODE FICAR ATRÁS DO `!carregando`, medido na homologação ─────────────
+                  A primeira versão a montava junto da tabela, dentro do mesmo `!carregando && ...`.
+                  O resultado do lote NUNCA APARECIA: aplicar o lote chama `aposAcao`, que dispara
+                  `carregar()`, e o `carregando` derruba o componente inteiro no mesmo instante em que
+                  ele acabou de guardar o resultado. O estado morre com o desmonte, e a tela volta
+                  como se nada tivesse acontecido, que é exatamente o "toast dizendo pronto" que esta
+                  frente existe para não fazer. Montada sempre, ela atravessa a releitura. */}
+              <AcoesEmMassaDaVaga
+                vaga={vaga}
+                selecionadas={selecionadas}
+                token={token}
+                onLimpar={() => setSelecionados([])}
+                onFeito={aposAcao}
+              />
+
               {!carregando && !erro && candidaturas !== null && (
                 <TabelaCandidaturas
                   itens={aba === "candidatos" ? lista : alocados}
+                  /* A COLUNA DE POSIÇÃO SÓ EXISTE NA ABA DE ALOCADOS (grupo 2), e é o recorte que
+                     lhe dá sentido: lá, todo mundo ocupa uma posição, e a pergunta "oficial ou
+                     banco?" é a que a aba existe para responder. Na lista completa, a esmagadora
+                     maioria das linhas está no funil sem ocupar posição nenhuma, e a coluna seria
+                     uma fileira de "não informado" tomando largura de quem tem texto. */
+                  mostrarPosicao={aba === "alocados"}
                   apoio={
                     aba === "candidatos"
                       ? frasePainel(lista)
@@ -387,6 +531,9 @@ export function VagaPainelModal({
                       ? "Ninguém foi vinculado a esta vaga ainda."
                       : "Ninguém foi marcado como alocado nesta vaga ainda."
                   }
+                  selecionados={selecionados}
+                  onAlternar={alternarSelecao}
+                  onAlternarTodos={alternarTodos}
                   onFicha={(c) => setFichaId(c.candidatoId)}
                   onMover={(c) => setMoverAlvo(c)}
                   onFinalizar={(c) => setFinalizarAlvo(c)}
@@ -432,6 +579,20 @@ export function VagaPainelModal({
           token={token}
           onClose={() => setCadastrarAberto(false)}
           onSalvo={aposAcao}
+        />
+      )}
+
+      {/* ADICIONAR VÁRIOS AO FUNIL: a versão em massa do "Adicionar à vaga", com a lista de quem
+          está disponível na base e a seleção múltipla. Ela NÃO consome posição da meta. */}
+      {adicionarLoteAberto && (
+        <AdicionarCandidatosEmLoteModal
+          vaga={vaga}
+          token={token}
+          onClose={() => setAdicionarLoteAberto(false)}
+          /* NÃO FECHA SOZINHO: quem adicionou trinta pessoas costuma adicionar mais, e o resultado
+             do lote é lido por cima desta mesma caixa. O que ele faz é reler a lista da vaga e
+             avisar a Central de Vagas, que é o que `aposAcao` já garante. */
+          onFeito={aposAcao}
         />
       )}
 
@@ -527,6 +688,10 @@ function TabelaCandidaturas({
   itens,
   apoio,
   vazio,
+  mostrarPosicao,
+  selecionados,
+  onAlternar,
+  onAlternarTodos,
   onFicha,
   onMover,
   onFinalizar,
@@ -534,6 +699,12 @@ function TabelaCandidaturas({
   itens: AsCandidaturaItem[];
   apoio: string;
   vazio: string;
+  /** A coluna do lado da posição (oficial ou banco). Só a aba de alocados a pede (grupo 2). */
+  mostrarPosicao: boolean;
+  selecionados: string[];
+  onAlternar: (id: string) => void;
+  /** Recebe os ids VISÍVEIS, na ordem em que estão sendo mostrados. Ver `alternarTodos`. */
+  onAlternarTodos: (idsVisiveis: string[]) => void;
   /** Abre a ficha da PESSOA (é a única superfície do módulo que mostra CPF, §A.6). */
   onFicha: (c: AsCandidaturaItem) => void;
   onMover: (c: AsCandidaturaItem) => void;
@@ -551,6 +722,20 @@ function TabelaCandidaturas({
    */
   const colunas: ColOrd<AsCandidaturaItem>[] = [
     { chave: "candidato", tipo: "texto", valor: (c) => c.candidatoNome },
+    /*
+     * A POSIÇÃO ORDENA PELO CATÁLOGO (oficial antes de banco), e não pelo rótulo: alfabeticamente
+     * "Posição De Banco" viria antes de "Posição Oficial", desenhando a reserva na frente da meta.
+     * QUEM NÃO OCUPA POSIÇÃO VAI PARA O FIM, pelo mesmo motivo de a célula dizer "não informado":
+     * ausência de posição não é uma posição, e misturá-la na ordem sugeriria que é.
+     */
+    {
+      chave: "posicao",
+      tipo: "status",
+      valor: (c) => {
+        const i = c.posicaoLado ? POSICAO_LADOS.indexOf(c.posicaoLado) : -1;
+        return i === -1 ? POSICAO_LADOS.length : i;
+      },
+    },
     {
       chave: "etapa",
       tipo: "status",
@@ -577,43 +762,140 @@ function TabelaCandidaturas({
     );
   }
 
+  /*
+   * OS IDS VISÍVEIS SAEM DAQUI, e não da lista crua: `ord.itens` é o que a tabela está DESENHANDO,
+   * já com o recorte da aba e a ordenação escolhida. É esse o conjunto sobre o qual o "selecionar
+   * todos" opera, e por isso ele nasce no mesmo lugar que produz as linhas.
+   */
+  const idsVisiveis = ord.itens.map((c) => c.id);
+  const todosVisiveisMarcados =
+    idsVisiveis.length > 0 && idsVisiveis.every((id) => selecionados.includes(id));
+
   return (
     <>
       <p className="mb-3 text-[12.5px] text-dim">{apoio}</p>
       <div className="ea-scroll overflow-x-auto">
-        <table className="ds-table min-w-[860px]">
+        <table className={cn("ds-table", mostrarPosicao ? "min-w-[960px]" : "min-w-[900px]")}>
           <thead>
             <tr>
+              {/* A CAIXA DE "TODOS" FICA NO CABEÇALHO, fora da ordenação: ela não é um critério de
+                  comparação, é um gesto. Largura fixa e pequena, para não tirar espaço de quem
+                  carrega texto (§A.20). */}
+              <th className="w-[44px] text-center">
+                <input
+                  type="checkbox"
+                  checked={todosVisiveisMarcados}
+                  onChange={() => onAlternarTodos(idsVisiveis)}
+                  disabled={idsVisiveis.length === 0}
+                  className="h-4 w-4 accent-[var(--accent)]"
+                  aria-label="Selecionar todos os candidatos à vista"
+                  title="Selecionar todos os que estão à vista"
+                />
+              </th>
               {/* §A.20: as larguras foram redistribuídas para a coluna de Ações caber SEM tirar
                   espaço de quem carrega texto longo. Quem cedeu foram as duas colunas de data, que
                   têm largura de sobra para "08/09/2026 19:12", e a de situação continua com o
-                  rótulo mais longo do vocabulário ("Enviado Para Admissão") sem quebrar. */}
-              <ColunaOrdenavel as="th" ord={ord} chave="candidato" className="w-[24%] text-center">
+                  rótulo mais longo do vocabulário ("Enviado Para Admissão") sem quebrar.
+
+                  COM A COLUNA DE POSIÇÃO (aba de alocados) a distribuição muda, e a largura mínima
+                  da tabela sobe junto: a coluna nova não é espremida entre as outras, ela entra com
+                  espaço próprio e a tabela ROLA se a caixa apertar, nunca esmaga. */}
+              <ColunaOrdenavel
+                as="th"
+                ord={ord}
+                chave="candidato"
+                className={cn("text-center", mostrarPosicao ? "w-[18%] min-w-[150px]" : "w-[22%] min-w-[160px]")}
+              >
                 Candidato
               </ColunaOrdenavel>
-              <ColunaOrdenavel as="th" ord={ord} chave="etapa" className="w-[15%] text-center">
+              {mostrarPosicao && (
+                <ColunaOrdenavel as="th" ord={ord} chave="posicao" className="w-[11%] min-w-[104px] text-center">
+                  Posição
+                </ColunaOrdenavel>
+              )}
+              <ColunaOrdenavel
+                as="th"
+                ord={ord}
+                chave="etapa"
+                className="w-[14%] text-center"
+              >
                 Etapa
               </ColunaOrdenavel>
-              <ColunaOrdenavel as="th" ord={ord} chave="situacao" className="w-[19%] text-center">
+              <ColunaOrdenavel
+                as="th"
+                ord={ord}
+                chave="situacao"
+                className={cn("text-center", mostrarPosicao ? "w-[22%]" : "w-[23%]")}
+              >
                 Situação
               </ColunaOrdenavel>
               {/* Os rótulos das duas colunas de tempo quebram em duas linhas quando aperta, em vez
                   de pedir largura mínima grande e empurrar a tabela para fora (§A.20). */}
-              <ColunaOrdenavel as="th" ord={ord} chave="entrou" className="w-[15%] text-center">
+              <ColunaOrdenavel
+                as="th"
+                ord={ord}
+                chave="entrou"
+                className={cn("text-center", mostrarPosicao ? "w-[13%]" : "w-[14%]")}
+              >
                 <span className="whitespace-normal">Entrou Em</span>
               </ColunaOrdenavel>
-              <ColunaOrdenavel as="th" ord={ord} chave="movimentou" className="w-[15%] text-center">
+              <ColunaOrdenavel
+                as="th"
+                ord={ord}
+                chave="movimentou"
+                className={cn("text-center", mostrarPosicao ? "w-[13%]" : "w-[14%]")}
+              >
                 <span className="whitespace-normal">Última Movimentação</span>
               </ColunaOrdenavel>
               {/* AÇÕES FICA FORA DA ORDENAÇÃO (§A.29): não há o que comparar entre dois grupos de
                   botões, e a mesma exceção já vale na Central de Candidatos. */}
-              <th className="w-[12%] text-center">Ações</th>
+              <th className={mostrarPosicao ? "w-[10%] text-center" : "w-[11%] text-center"}>
+                Ações
+              </th>
             </tr>
           </thead>
           <tbody>
             {ord.itens.map((c) => (
-              <tr key={c.id}>
+              <tr
+                key={c.id}
+                className={selecionados.includes(c.id) ? "bg-[var(--surface)]" : undefined}
+              >
+                <td className="text-center">
+                  <input
+                    type="checkbox"
+                    checked={selecionados.includes(c.id)}
+                    onChange={() => onAlternar(c.id)}
+                    className="h-4 w-4 accent-[var(--accent)]"
+                    aria-label={`Selecionar ${c.candidatoNome}`}
+                  />
+                </td>
                 <td className="font-semibold">{c.candidatoNome}</td>
+                {/* ─ A POSIÇÃO: OFICIAL, BANCO, OU NADA (grupo 2) ────────────────────────────
+                    NULO NÃO É "OFICIAL POR OMISSÃO", e é a armadilha desta coluna: quem está no
+                    funil sem ocupar posição tem nulo aqui, e inventar "Oficial" para ele diria que
+                    a vaga entregou uma posição que ninguém entregou. §A.11: o vazio é a palavra
+                    "não informado", nunca o travessão.
+
+                    QUEM TRADUZ É `rotuloDoLado`, a mesma régua que a ficha do candidato usa, e ela
+                    devolve nulo para valor desconhecido em vez de imprimir o valor cru. Sem ela, um
+                    dia alguém leria "BANCO" em caixa alta no meio de uma tabela em português. */}
+                {mostrarPosicao && (
+                  <td className="text-center">
+                    <span className="inline-flex justify-center">
+                      {rotuloCurtoDoLado(c.posicaoLado) ? (
+                        <StatusPill
+                          tone={c.posicaoLado === "BANCO" ? "in" : "ok"}
+                          label={rotuloCurtoDoLado(c.posicaoLado) as string}
+                          /* O rótulo LONGO fica no `title`: a célula é curta porque a coluna já se
+                             chama Posição, e quem quiser a frase inteira a tem no mouse. */
+                          title={rotuloDoLado(c.posicaoLado) as string}
+                        />
+                      ) : (
+                        <span className="text-faint">não informado</span>
+                      )}
+                    </span>
+                  </td>
+                )}
                 {/* A ETAPA SÓ APARECE ENQUANTO A CANDIDATURA ESTÁ VIVA, a mesma régua da Central de
                     Candidatos: mostrá-la depois do desfecho desenharia o descartado dentro do
                     funil, como se ele ainda estivesse em seleção. */}
@@ -637,10 +919,14 @@ function TabelaCandidaturas({
                     />
                   </span>
                 </td>
-                <td className="whitespace-nowrap text-center tabular-nums">
+                {/* §A.20: a data fica em UMA linha enquanto sobra largura, e passa a quebrar em
+                    duas na aba de alocados, que tem uma coluna a mais. Quebrar "09/09/2026," e
+                    "14:54" custa uma linha de altura; manter tudo em uma só custaria 100px de
+                    largura, e eles sairiam da coluna do nome ou empurrariam Ações para fora. */}
+                <td className={cn("text-center tabular-nums", !mostrarPosicao && "whitespace-nowrap")}>
                   {dataHoraBr(c.alocadoEm)}
                 </td>
-                <td className="whitespace-nowrap text-center tabular-nums">
+                <td className={cn("text-center tabular-nums", !mostrarPosicao && "whitespace-nowrap")}>
                   {dataHoraBr(c.atualizadoEm)}
                 </td>
                 {/* AÇÕES SÓ EM ÍCONE, com o rótulo por extenso em `title` e `aria-label`, na mesma

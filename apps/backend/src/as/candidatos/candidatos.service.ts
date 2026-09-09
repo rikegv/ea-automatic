@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  HttpException,
   Inject,
   Injectable,
   NotFoundException,
@@ -14,9 +15,11 @@ import type {
   AsCandidaturaEncerrada,
   AsCandidaturaItem,
   AsContatoItem,
+  AsFalhaEmMassa,
   AsOcupacaoVaga,
   AsPainelVaga,
   AsReentradaPrecisaCiencia,
+  AsResultadoEmMassa,
   CandidaturaSituacao,
 } from "@ea/shared-types";
 import { isValidCpf, normalizeCpf } from "@ea/shared-types";
@@ -34,6 +37,7 @@ import {
   movimentoPermitido,
   cabeMaisUm,
   decidirAlocacao,
+  ACEITE_REENTRADA,
   ocupacaoDaVaga,
   ocupadasPorLado,
   ACEITE_BANCO_COM_OFICIAIS_ABERTAS,
@@ -44,6 +48,7 @@ import {
   consomePosicao,
   finalizaPosicao,
   ladoDaCandidatura,
+  ladoGravado,
   ocupaPosicao,
   oficiaisAindaAbertas,
   tetoDoLado,
@@ -51,15 +56,20 @@ import {
   type SituacaoQueOcupaPosicao,
 } from "../../domain/candidatura";
 import { ordenarLinhaDoTempo, tipoDoEvento } from "../../domain/candidatura-historico";
+import type { AuthUser } from "../../auth/auth.types";
 import type {
+  AdicionarEmLoteDto,
   AlocarEmVagaDto,
   BuscarCandidatosDto,
   CriarCandidatoDto,
   EditarCandidatoDto,
   FinalizarPosicaoDto,
+  FinalizarPosicaoEmLoteDto,
   MoverEtapaDto,
+  MoverEtapaEmLoteDto,
   RegistrarContatoDto,
   RegistrarSaidaDto,
+  RegistrarSaidaEmLoteDto,
   TrocarVagaDto,
 } from "./candidatos.dto";
 
@@ -402,6 +412,27 @@ export class CandidatosService {
       throw this.reentradaPrecisaCiencia(decisao.anterior);
     }
 
+    /*
+     * ┌─ O ACEITE DE REENTRADA PASSA A SER GRAVADO (decisão do diretor, §A.3 regra 8) ─────────────┐
+     * │ ATÉ AQUI ELE ERA PEDIDO NA TELA, LIDO PARA DECIDIR E JOGADO FORA. `ACEITE_REENTRADA` existe │
+     * │ no domínio desde a migration 0097, e a própria migration anotava que NINGUÉM o escrevia: a  │
+     * │ decisão de trazer de volta quem já tinha saído daquela vaga não deixava rastro nenhum de     │
+     * │ quem decidiu, nem de quando, que é exatamente a pergunta que a regra 8 manda poder responder.│
+     * │                                                                                             │
+     * │ O GATILHO É A GUARDA TER DISPARADO, e não o flag do corpo ter vindo: chega-se a esta linha  │
+     * │ com `REENTRADA` apenas quando existia processo encerrado naquela vaga E a ciência veio       │
+     * │ (sem ela, a linha acima já lançou). Um corpo montado fora da tela que mande a ciência sempre │
+     * │ NÃO produz aceite nenhum em quem entra na vaga pela primeira vez.                            │
+     * │                                                                                             │
+     * │ SEM `aceiteNumero`: aqui não há estado numérico a fotografar (o do banco é "quantas oficiais │
+     * │ estavam abertas"). Quem, quando e qual guarda bastam, e a coluna é nulável de propósito.     │
+     * │                                                                                             │
+     * │ §A.6: um nome de guarda e nada mais. O motivo do encerramento anterior NÃO é copiado para o  │
+     * │ evento novo, ele já está gravado na candidatura antiga, que continua no histórico.           │
+     * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    const aceiteDaReentrada = decisao.tipo === "REENTRADA" ? { aceite: ACEITE_REENTRADA } : {};
+
     let id: string;
     try {
       /*
@@ -427,6 +458,9 @@ export class CandidatosService {
           etapaPara: row.etapa,
           situacao: null,
           porId: alocadoPorId,
+          // NA MESMA TRANSAÇÃO da candidatura: ou a reentrada e o aceite dela existem os dois, ou
+          // não existe nenhum dos dois. Aceite sem o fato que ele autorizou não é trilha.
+          ...aceiteDaReentrada,
         });
 
         return row.id;
@@ -864,6 +898,28 @@ export class CandidatosService {
     if (!c) throw new NotFoundException("Candidatura não encontrada.");
 
     /*
+     * ┌─ QUEM JÁ SAIU NÃO SAI DE NOVO, e esta guarda faltava SÓ NESTE CAMINHO ──────────────────┐
+     * │ O CAMINHO TRAVADO já recusa a repetição (`c.situacao === novaSituacao`) e a linha morta   │
+     * │ (`exigeCandidaturaViva`), e a `moverEtapa`, a `trocarVaga` e a finalização de posição      │
+     * │ perguntam todas por `candidaturaViva`. O desvínculo simples era o único que não perguntava │
+     * │ nada: descartar quem já estava descartado passava, SOBRESCREVIA o `motivo_descarte`        │
+     * │ anterior e carimbava um segundo desfecho na linha do tempo de um processo encerrado.       │
+     * │                                                                                           │
+     * │ EM MASSA ISSO DEIXA DE SER TEÓRICO: uma seleção grande costuma trazer junto quem já saiu,  │
+     * │ e sem esta recusa o lote apagaria em silêncio o motivo real de cada um deles.              │
+     * │                                                                                           │
+     * │ A RÉGUA É `candidaturaViva`, a MESMA fonte dos outros caminhos, e o RECORTE É ESTREITO DE  │
+     * │ PROPÓSITO: só o caminho simples. O avanço para a esteira (`ENVIADO_PARA_ADMISSAO`) segue   │
+     * │ pelo caminho travado com a régua exata de antes, que é decisão pendente do diretor.        │
+     * └───────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    if (!candidaturaViva(c.situacao)) {
+      throw new ConflictException(
+        "Esta candidatura já foi encerrada e não recebe um segundo desfecho. Para trazer a pessoa de volta, aloque-a de novo na vaga.",
+      );
+    }
+
+    /*
      * A SAÍDA E O DESFECHO NO HISTÓRICO, NA MESMA TRANSAÇÃO. `etapaPara` recebe a etapa em que a
      * pessoa ESTAVA (`c.etapa`), e é isso que faz "descartado na Triagem" existir como frase: depois
      * desta gravação a etapa some da leitura viva da tela (peça P1), e sem o evento o lugar onde a
@@ -886,6 +942,228 @@ export class CandidatosService {
     });
 
     return this.candidatura(candidaturaId);
+  }
+
+  // ── AS AÇÕES EM MASSA ─────────────────────────────────────────────────────
+
+  /**
+   * ─ AS QUATRO AÇÕES EM MASSA, e a regra que vale para todas: LOTE PARCIAL ───────────────────────
+   *
+   * ┌─ ELAS NÃO IMPLEMENTAM NADA. Elas CHAMAM as ações individuais, uma por vez ─────────────────┐
+   * │ NENHUM DOS QUATRO MÉTODOS MONTA `update`, conta ocupação ou abre transação. Cada linha       │
+   * │ passa pelo MESMO método que a tela individual chama, com as MESMAS travas, e é isso que faz  │
+   * │ a recusa que o consultor lê no relatório do lote ser letra por letra a mesma da ação de uma  │
+   * │ pessoa só. Um `update ... where id in (...)` seria rápido, elegante, e faria a vaga de 5     │
+   * │ aceitar 30: quem serializa a disputa é a LINHA DA VAGA travada dentro de cada transação, e   │
+   * │ ela só serializa quem passa por ela.                                                         │
+   * │                                                                                             │
+   * │ O LAÇO É SEQUENCIAL (`for...of` com `await`), e isso é requisito de SEGURANÇA, não estilo:   │
+   * │ o pool tem `max = 10` (`db/client.ts`), então trinta transações concorrentes disputando a    │
+   * │ MESMA linha de vaga é starvation de pool com locks segurados. O sintoma não seria o lote     │
+   * │ falhar: seria o backend inteiro parar. `Promise.all` e `map` assíncrono estão proibidos aqui.│
+   * │                                                                                             │
+   * │ UMA TRANSAÇÃO POR LINHA, e NÃO uma para o lote: transação única seguraria o lock da vaga     │
+   * │ durante o lote inteiro (nenhum outro consultor entraria naquela vaga) e mataria o lote        │
+   * │ parcial, porque o erro da linha 17 desfaria as 16 que já tinham dado certo.                  │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * NÃO EXISTE PRÉ-CONFERÊNCIA de "cabe todo mundo?" (decisão do diretor). Qualquer contagem feita
+   * antes do laço roda FORA da trava e responde sobre um instante que já passou: outro consultor pode
+   * ocupar a última posição entre a conta e a gravação. A verdade é o RESULTADO do lote.
+   *
+   * ADICIONAR E FINALIZAR POSIÇÃO SÃO DOIS VERBOS (decisão do diretor), e a diferença é a meta da
+   * vaga: adicionar traz para o funil e NÃO consome posição; finalizar ENTREGA a posição.
+   */
+
+  /**
+   * ADICIONAR CANDIDATOS À VAGA EM MASSA. Cada linha é uma `alocar`, com as travas dela.
+   *
+   * A VAGA É CONFERIDA UMA VEZ, ANTES DO LAÇO, e ela é a ÚNICA coisa conferida antes: vaga encerrada
+   * é um problema DA VAGA, não das linhas, e devolver trinta falhas idênticas dizendo a mesma coisa
+   * não é resultado, é ruído. O pedido inteiro é recusado, e nada é gravado.
+   *
+   * ISSO NÃO É A PRÉ-CONFERÊNCIA PROIBIDA: o que não se pode antecipar é a OCUPAÇÃO (que muda a cada
+   * linha e só é verdade sob a trava). O status da vaga continua sendo conferido POR LINHA também,
+   * dentro da `alocar`, então uma vaga fechada no meio do lote para de receber na linha seguinte.
+   */
+  async adicionarEmLote(
+    vagaId: string,
+    dto: AdicionarEmLoteDto,
+    user: AuthUser,
+  ): Promise<AsResultadoEmMassa> {
+    const vaga = await this.db.query.vagas.findFirst({ where: eq(vagas.id, vagaId) });
+    if (!vaga) throw new NotFoundException("Vaga não encontrada.");
+    if (!vagaRecebeCandidato(vaga.status)) {
+      throw new ConflictException("Esta vaga está Fechada e não recebe candidato novo.");
+    }
+
+    // O ALVO DA FALHA AQUI É O CANDIDATO, e não a candidatura: quando a linha falha, a candidatura
+    // ainda não existe. É por isso que o campo do contrato se chama `alvoId` e não `candidaturaId`.
+    return this.emLote(dto.candidatoIds, (candidatoId) =>
+      this.alocar(candidatoId, { vagaId, cienteReentrada: dto.cienteReentrada }, user.id),
+    );
+  }
+
+  /**
+   * FINALIZAR POSIÇÃO EM MASSA: N posições ENTREGUES, uma transação travada por linha.
+   *
+   * É AQUI QUE A META DA VAGA É CONSUMIDA, e é por isso que este é o método em que o laço sequencial
+   * importa mais: a linha 6 de um lote de 30 numa vaga de 5 só sabe que não cabe porque as 5
+   * anteriores JÁ GRAVARAM. Contar antes do laço responderia "cabem 5" trinta vezes.
+   *
+   * A VAGA DO CORPO, QUANDO VEM, é conferida duas vezes e por motivos diferentes: uma vez ANTES do
+   * laço (vaga encerrada recusa o lote inteiro, um problema só) e uma vez POR LINHA (a candidatura
+   * que não pertence àquela vaga é uma seleção misturada, e a linha é recusada sozinha). Sem o campo,
+   * a vaga de cada linha continua saindo da própria candidatura, sob a trava, como na ação individual.
+   */
+  async finalizarPosicaoEmLote(
+    dto: FinalizarPosicaoEmLoteDto,
+    porId: string,
+  ): Promise<AsResultadoEmMassa> {
+    const daVaga = dto.vagaId;
+    if (daVaga) {
+      const vaga = await this.db.query.vagas.findFirst({ where: eq(vagas.id, daVaga) });
+      if (!vaga) throw new NotFoundException("Vaga não encontrada.");
+      if (!vagaRecebeCandidato(vaga.status)) {
+        throw new ConflictException(
+          "Esta vaga já foi encerrada e não recebe posição nova. Recarregue a página para ver o estado atual da vaga.",
+        );
+      }
+    }
+
+    return this.emLote(dto.candidaturaIds, async (candidaturaId) => {
+      if (daVaga) await this.confirmarQueEDaVaga(candidaturaId, daVaga);
+      await this.finalizarPosicao(
+        candidaturaId,
+        {
+          lado: dto.lado,
+          cienteBancoComOficiaisAbertas: dto.cienteBancoComOficiaisAbertas,
+        },
+        porId,
+      );
+    });
+  }
+
+  /**
+   * DESVINCULAR EM MASSA, e ENVIAR PARA ADMISSÃO em massa: as duas são a mesma `registrarSaida`.
+   *
+   * O MOTIVO É UM SÓ PARA A SELEÇÃO e é gravado em CADA linha, porque é o desfecho comum que originou
+   * o lote. Obrigatório no corpo (§ do ajuste 7): trinta desfechos sem explicação de uma vez só é
+   * exatamente o buraco que a exigência no DTO existe para não abrir.
+   *
+   * `ENVIADO_PARA_ADMISSAO` CONSOME POSIÇÃO e vai pelo caminho travado, linha a linha, como no
+   * individual: quem escolhe a porta é a régua (`ocupaPosicao`), não o nome da situação.
+   */
+  registrarSaidaEmLote(dto: RegistrarSaidaEmLoteDto, porId: string): Promise<AsResultadoEmMassa> {
+    return this.emLote(dto.candidaturaIds, (candidaturaId) =>
+      this.registrarSaida(candidaturaId, { situacao: dto.situacao, motivo: dto.motivo }, porId),
+    );
+  }
+
+  /**
+   * MOVER NO FUNIL EM MASSA, e SÓ isto: `moverEtapa`, N vezes.
+   *
+   * TROCAR DE VAGA NÃO ENTRA AQUI, e a razão não é de escopo, é de RBAC: a troca é
+   * `@Roles("MASTER","SUPER_ADMIN")`, e embutí-la numa ação em massa sem papel exigido abriria um
+   * caminho de COMUM para uma operação de Master, sem erro e sem teste vermelho.
+   */
+  moverEtapaEmLote(dto: MoverEtapaEmLoteDto, porId: string): Promise<AsResultadoEmMassa> {
+    return this.emLote(dto.candidaturaIds, (candidaturaId) =>
+      this.moverEtapa(candidaturaId, { etapa: dto.etapa }, porId),
+    );
+  }
+
+  /**
+   * O LAÇO, EM UM LUGAR SÓ: sequencial, com `try/catch` POR LINHA.
+   *
+   * `aplicadas` CONTA O QUE FOI EFETIVADO, e não o que foi tentado: ele só sobe depois de a ação
+   * individual voltar sem lançar, que é depois de a transação daquela linha ter fechado.
+   *
+   * O ERRO DE UMA LINHA NÃO ABORTA O LOTE (decisão 1 do diretor): a linha volta em `falhas` com o
+   * motivo, e as demais SEGUEM. A linha ruim costuma estar no MEIO da seleção, e uma implementação
+   * que abortasse no primeiro erro faria o consultor descobrir, depois de selecionar trinta pessoas,
+   * que nada foi feito.
+   */
+  private async emLote(
+    alvos: readonly string[],
+    acao: (alvoId: string) => Promise<unknown>,
+  ): Promise<AsResultadoEmMassa> {
+    const falhas: AsFalhaEmMassa[] = [];
+    let aplicadas = 0;
+
+    // `for...of` COM `await`: uma linha por vez, de propósito (ver o cabeçalho da seção).
+    for (const alvoId of alvos) {
+      try {
+        await acao(alvoId);
+        aplicadas += 1;
+      } catch (err) {
+        falhas.push({ alvoId, motivo: this.motivoDaFalha(err) });
+      }
+    }
+
+    return { aplicadas, falhas };
+  }
+
+  /**
+   * ─ O MOTIVO QUE VOLTA NA FALHA, E O QUE ELE NUNCA PODE CARREGAR (§A.6) ────────────────────────
+   *
+   * ┌─ ESTE É O RISCO QUE SÓ EXISTE NO LOTE ─────────────────────────────────────────────────────┐
+   * │ NA AÇÃO INDIVIDUAL, a recusa de reentrada é uma resposta de erro sobre UMA pessoa que o     │
+   * │ consultor acabou de escolher, e ela traz o motivo do descarte anterior de propósito, porque │
+   * │ é com ele na frente que a decisão se toma. EM MASSA, a MESMA frase repetida trinta vezes é  │
+   * │ um RELATÓRIO DE DADO PESSOAL indo para o toast, para a área de transferência e para o log   │
+   * │ de qualquer cliente HTTP no caminho. A falha carrega o ID e um motivo de PROCESSO, e nada    │
+   * │ mais: sem CPF, sem nome, sem o texto livre que alguém escreveu sobre outra pessoa.          │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * A FRASE DA TRAVA É APROVEITADA INTEIRA nos demais casos, e isso é deliberado: as travas de
+   * ocupação distinguem meta ausente, banco zerado e banco cheio, e reescrever isso aqui criaria uma
+   * segunda régua para dizer a mesma coisa, que é como as duas passam a divergir.
+   *
+   * O QUE NÃO É `HttpException` VIRA FRASE GENÉRICA, e essa é a segunda metade da guarda: erro cru de
+   * banco traz o VALOR que violou a restrição (o CPF, no índice de candidato) no texto, e repassá-lo
+   * publicaria o número dentro de um relatório que a tela copia inteiro.
+   */
+  private motivoDaFalha(err: unknown): string {
+    if (!(err instanceof HttpException)) {
+      return "Não foi possível concluir esta linha. Tente de novo.";
+    }
+
+    const corpo = err.getResponse();
+    const razao =
+      typeof corpo === "object" && corpo !== null
+        ? (corpo as { reason?: string }).reason
+        : undefined;
+
+    /*
+     * A ÚNICA RECUSA DO MÓDULO QUE MONTA A FRASE COM TEXTO LIVRE DE ALGUÉM. Ela é reconhecida pelo
+     * `reason` do corpo, e não pelo texto da mensagem: o corpo é contrato (`AsReentradaPrecisaCiencia`),
+     * a frase é redação, e casar por frase quebraria em silêncio na primeira vírgula reescrita.
+     */
+    if (razao === "reentradaAposEncerramento") {
+      return "Esta pessoa já esteve nesta vaga e o processo anterior foi encerrado. Confirme a ciência da reentrada para trazê-la de volta.";
+    }
+
+    return err.message;
+  }
+
+  /**
+   * A LINHA PERTENCE À VAGA QUE A TELA AFIRMOU? Só roda quando o corpo mandou a vaga.
+   *
+   * É UMA CONFERÊNCIA DE PERTENCIMENTO, e NÃO uma contagem: ela não decide se cabe mais um (isso é da
+   * trava, sob o lock, dentro da transação daquela linha). Ela recusa a seleção MISTURADA, que é uma
+   * tela desatualizada ou um corpo montado à mão, e a recusa é da LINHA, não do lote.
+   */
+  private async confirmarQueEDaVaga(candidaturaId: string, vagaId: string): Promise<void> {
+    const c = await this.db.query.asCandidaturas.findFirst({
+      where: eq(asCandidaturas.id, candidaturaId),
+    });
+    if (!c) throw new NotFoundException("Candidatura não encontrada.");
+    if (c.vagaId !== vagaId) {
+      throw new ConflictException(
+        "Esta candidatura não é da vaga selecionada. Recarregue a página e refaça a seleção.",
+      );
+    }
   }
 
   /**
@@ -981,6 +1259,38 @@ export class CandidatosService {
         .where(eq(vagas.id, c.vagaId))
         .for("update");
       if (!vaga) throw new NotFoundException("Vaga não encontrada.");
+
+      /*
+       * ┌─ TRAVA 2, AGORA TAMBÉM AQUI: A VAGA ENCERRADA NÃO RECEBE POSIÇÃO (auditoria, 09/09) ───┐
+       * │ O STATUS JÁ ERA LIDO NESTE `SELECT ... FOR UPDATE` E NINGUÉM O CONFERIA. A `alocar` e a │
+       * │ `trocarVaga` aplicavam `vagaRecebeCandidato`; o CAMINHO TRAVADO, que é por onde passam  │
+       * │ a finalização de posição, a aprovação e o avanço para a esteira, lia o campo e seguia   │
+       * │ adiante. Uma vaga `FECHADA`, `CANCELADA` ou `ENTREGUE` continuava recebendo entrega.    │
+       * │                                                                                        │
+       * │ O DANO NÃO ERA COSMÉTICO, e ele é silencioso: o fechamento CONGELA `vagas_fechadas` e   │
+       * │ `vagas_fechadas_banco` com a contagem do instante em que encerrou, e é esse carimbo que │
+       * │ a vaga encerrada mostra. Toda posição finalizada depois disso move a ocupação DERIVADA  │
+       * │ e não move o carimbo: os dois números passam a discordar, sem nada falhar e sem nada    │
+       * │ avisar, num processo que a operação considera terminado.                                │
+       * │                                                                                        │
+       * │ E O GATE DE MASTER VIRAVA CONTORNÁVEL EM DUAS ETAPAS: o Master força o fechamento com   │
+       * │ posição oficial em aberto (a exceção fica registrada em nome dele, como deve), e depois │
+       * │ despeja-se alocação na vaga já fechada, onde nenhuma trava do fechamento roda de novo.  │
+       * │                                                                                        │
+       * │ A RÉGUA É A MESMA DA `alocar`, importada do domínio e não redigitada: uma segunda lista │
+       * │ de status encerrados neste arquivo divergiria da primeira na correção seguinte.         │
+       * │                                                                                        │
+       * │ AQUI, E NÃO ANTES DA TRANSAÇÃO: o status que decide é o mesmo que a gravação vai usar,  │
+       * │ sob a linha travada. Uma consulta solta antes do lock responderia sobre o instante      │
+       * │ anterior, e é exatamente essa a corrida que o `FOR UPDATE` deste passo existe para      │
+       * │ fechar: o fechamento que chega no meio espera, e quem chegar depois lê a vaga encerrada.│
+       * └────────────────────────────────────────────────────────────────────────────────────────┘
+       */
+      if (!vagaRecebeCandidato(vaga.status)) {
+        throw new ConflictException(
+          "Esta vaga já foi encerrada e não recebe posição nova. Recarregue a página para ver o estado atual da vaga.",
+        );
+      }
 
       /*
        * ── PASSO 3: contar POR LADO, agora que a linha está travada.
@@ -1446,6 +1756,22 @@ export class CandidatosService {
       // O CARIMBO DESNORMALIZADO, e é ele que mata o N+1: a alternativa seria um `max(ocorrido_em)`
       // de `as_contatos` POR LINHA, e com 200 linhas na tela isso é uma consulta por linha.
       ultimoContatoEm: c.ultimoContatoEm ? c.ultimoContatoEm.toISOString() : null,
+      /*
+       * ┌─ O LADO DA POSIÇÃO SOBE CRU, e o "cru" é a parte que importa ──────────────────────────┐
+       * │ A COLUNA VAI COMO ESTÁ NO BANCO, e NÃO por `ladoDaCandidatura()`. Aquele helper existe  │
+       * │ para a GRAVAÇÃO e coalesce nulo para OFICIAL, porque toda candidatura antiga foi        │
+       * │ aprovada contra a meta oficial, que era a única que a trava conhecia.                    │
+       * │                                                                                         │
+       * │ NA LEITURA, coalescer seria MENTIR: quem está no funil sem ocupar posição nenhuma        │
+       * │ apareceria como ocupante do lado oficial, e a lista de alocados passaria a mostrar como  │
+       * │ entregue quem não entregou nada. Nulo aqui quer dizer "não ocupa posição", que é         │
+       * │ diferente de "ocupa a oficial".                                                          │
+       * │                                                                                         │
+       * │ E NINGUÉM CONTA META POR AQUI: quem conta é a SITUAÇÃO, pela régua de ocupação. Este     │
+       * │ campo é para a tela DIZER de que lado a pessoa está, nunca para somar.                   │
+       * └─────────────────────────────────────────────────────────────────────────────────────────┘
+       */
+      posicaoLado: ladoGravado(c.posicaoLado),
     }));
   }
 

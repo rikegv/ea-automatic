@@ -3,14 +3,18 @@ import { CurrentUser, Roles } from "../../auth/decorators";
 import type { AuthUser } from "../../auth/auth.types";
 import { CandidatosService } from "./candidatos.service";
 import {
+  AdicionarEmLoteDto,
   AlocarEmVagaDto,
   BuscarCandidatosDto,
   CriarCandidatoDto,
   EditarCandidatoDto,
   FinalizarPosicaoDto,
+  FinalizarPosicaoEmLoteDto,
   MoverEtapaDto,
+  MoverEtapaEmLoteDto,
   RegistrarContatoDto,
   RegistrarSaidaDto,
+  RegistrarSaidaEmLoteDto,
   TrocarVagaDto,
 } from "./candidatos.dto";
 
@@ -64,6 +68,62 @@ export class CandidatosController {
   @Get("vaga/:vagaId")
   painelVaga(@Param("vagaId", ParseUUIDPipe) vagaId: string) {
     return this.candidatos.painelVaga(vagaId);
+  }
+
+  // ── AS AÇÕES EM MASSA (grupo 1) ───────────────────────────────────────────
+
+  /**
+   * ─ AS QUATRO ROTAS EM MASSA MORAM NESTA CONTROLLER, e isso é RBAC, não organização ────────────
+   *
+   * ┌─ POR QUE NÃO NASCEU UMA CONTROLLER NOVA "PARA NÃO INCHAR O ARQUIVO" ───────────────────────┐
+   * │ O `MenuGuard` resolve o coringa PELO NOME DA CLASSE: o menu `as-candidatos` reivindica      │
+   * │ `"CandidatosController.*"` (`domain/menus`), e OPERAÇÃO NÃO REIVINDICADA PASSA. Uma segunda │
+   * │ classe, portanto, não nasceria protegida: ela nasceria ABERTA a qualquer usuário logado, e  │
+   * │ o que ela oferece é ESCRITA EM MASSA sobre dado pessoal de quem ainda não é funcionário.    │
+   * │ Nada falharia, nenhum teste ficaria vermelho, e a porta estaria aberta.                     │
+   * │                                                                                             │
+   * │ Se um dia uma classe nova for inevitável, ela TEM de entrar nas `operacoes` do menu no       │
+   * │ MESMO commit. Enquanto isso: uma superfície, uma reivindicação, como o cabeçalho já dizia.  │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * OS CAMINHOS `candidaturas/lote/...` VÊM ANTES DE `candidaturas/:id/...`, e o prefixo fixo `lote`
+   * é de propósito: o Nest casa na ordem de declaração, e sem o prefixo próprio um POST em massa
+   * bateria na rota de parâmetro com o id valendo "lote".
+   *
+   * SEM `@Roles`: são as mesmas operações que o consultor já faz uma a uma. A troca de vaga, que é de
+   * Master, NÃO tem versão em massa aqui, e é por isso que "mover no funil em massa" é `moverEtapa` e
+   * só ela: incluir a troca abriria um caminho de COMUM para uma ação que o `@Roles` protege.
+   */
+
+  /**
+   * ADICIONAR CANDIDATOS À VAGA EM MASSA. A VAGA VEM DA ROTA: o lote é sempre de uma vaga só.
+   * Vaga encerrada recusa o pedido INTEIRO; o resto é lote parcial, com as falhas por linha.
+   */
+  @Post("vaga/:vagaId/candidaturas/lote")
+  adicionarEmLote(
+    @Param("vagaId", ParseUUIDPipe) vagaId: string,
+    @Body() dto: AdicionarEmLoteDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.candidatos.adicionarEmLote(vagaId, dto, user);
+  }
+
+  /** FINALIZAR POSIÇÃO EM MASSA: N entregas, uma transação travada por linha. */
+  @Post("candidaturas/lote/finalizar-posicao")
+  finalizarPosicaoEmLote(@Body() dto: FinalizarPosicaoEmLoteDto, @CurrentUser() user: AuthUser) {
+    return this.candidatos.finalizarPosicaoEmLote(dto, user.id);
+  }
+
+  /** DESVINCULAR (e ENVIAR PARA ADMISSÃO) EM MASSA. O motivo é obrigatório, como no individual. */
+  @Post("candidaturas/lote/saida")
+  registrarSaidaEmLote(@Body() dto: RegistrarSaidaEmLoteDto, @CurrentUser() user: AuthUser) {
+    return this.candidatos.registrarSaidaEmLote(dto, user.id);
+  }
+
+  /** MOVER NO FUNIL EM MASSA. PATCH, como a rota individual: é a mesma propriedade que muda. */
+  @Patch("candidaturas/lote/etapa")
+  moverEtapaEmLote(@Body() dto: MoverEtapaEmLoteDto, @CurrentUser() user: AuthUser) {
+    return this.candidatos.moverEtapaEmLote(dto, user.id);
   }
 
   /** Mover de etapa no funil. Não muda a situação: quem chega na Aprovação segue Em Seleção. */

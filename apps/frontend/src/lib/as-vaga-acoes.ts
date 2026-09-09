@@ -25,8 +25,10 @@
 import {
   candidaturaViva,
   finalizaPosicao,
+  POSICAO_LADOS,
   VAGA_STATUS,
   type CandidaturaSituacao,
+  type PosicaoLado,
   type VagaListItem,
   type VagaStatus,
 } from "@ea/shared-types";
@@ -35,18 +37,22 @@ import { preenchidas, vagaEncerrada, type LadoPosicoes, type VagaContagem } from
 // ── OS DOIS LADOS DA META ───────────────────────────────────────────────────
 
 /**
- * OS DOIS LADOS DA POSIÇÃO, o mesmo par que o backend chama de `POSICAO_LADOS`.
+ * OS DOIS LADOS DA POSIÇÃO, agora REEXPORTADOS do vocabulário compartilhado.
  *
- * ELE ESTÁ AQUI E NÃO EM `@ea/shared-types` PORQUE O VOCABULÁRIO COMPARTILHADO NÃO O TEM: o par nasceu
- * em `apps/backend/src/domain/candidatura.ts`, que a tela não pode importar. Está pedido ao coordenador
- * (o dono do arquivo compartilhado, §A.39) que ele suba para lá; enquanto isso, ESTE é o único lugar da
- * tela que escreve os dois valores, e todo o resto do frontend lê daqui.
+ * O PEDIDO QUE ESTAVA ESCRITO AQUI FOI ATENDIDO (09/09): o par subiu para `@ea/shared-types`, porque
+ * deixou de ser assunto interno da gravação no momento em que a lista de alocados passou a mostrar
+ * "oficial ou banco" em cada linha. Com ele lá, a cópia local perdeu a razão de existir, e o backend
+ * (`domain/candidatura.ts`) fez o mesmo movimento no mesmo dia.
+ *
+ * DUAS LISTAS COM OS MESMOS DOIS VALORES concordam no dia em que são escritas e divergem na primeira
+ * vez que alguém acrescenta um lado novo em uma só. Reexportar é o que impede isso, e mantém intacto
+ * quem já lia daqui: todo o resto da tela continua importando deste arquivo.
  *
  * A CORRESPONDÊNCIA COM `LadoPosicoes` (o "oficial"/"banco" minúsculo da régua do cilindro) é feita em
  * `ladoDoCilindro`, uma vez só. Sem ela, cada chamada faria a tradução na mão, e uma delas erraria.
  */
-export const POSICAO_LADOS = ["OFICIAL", "BANCO"] as const;
-export type PosicaoLado = (typeof POSICAO_LADOS)[number];
+export { POSICAO_LADOS };
+export type { PosicaoLado };
 
 /** ETIQUETA, então title case (§A.24). */
 export const POSICAO_LADO_LABEL: Record<PosicaoLado, string> = {
@@ -74,6 +80,32 @@ export function ladoDoCilindro(lado: PosicaoLado): LadoPosicoes {
 export function rotuloDoLado(lado: string | null | undefined): string | null {
   const conhecido = POSICAO_LADOS.find((l) => l === lado);
   return conhecido ? POSICAO_LADO_LABEL[conhecido] : null;
+}
+
+/**
+ * ─ O RÓTULO CURTO DO LADO, para a COLUNA que já se chama "Posição" (grupo 2) ──────────────────
+ *
+ * O LONGO CONTINUA SENDO O LONGO, e os dois existem porque respondem em contextos diferentes. Nos
+ * CARTÕES da finalização, "Posição Oficial" e "Posição De Banco" são a frase inteira da escolha, e
+ * ali o substantivo é necessário. Dentro de uma CÉLULA cujo cabeçalho já diz "Posição", repeti-lo é
+ * dizer a mesma palavra duas vezes e cobrar por isso quase 100px de largura, que saem justamente da
+ * coluna do nome (§A.20).
+ *
+ * NÃO É UMA SEGUNDA RÉGUA, são dois textos da MESMA régua: o catálogo continua sendo `POSICAO_LADOS`
+ * e o valor desconhecido continua devolvendo nulo, exatamente como no rótulo longo. Lado novo entra
+ * pelo mesmo lugar e falta nos dois mapas de uma vez, que é o comportamento que se quer.
+ *
+ * §A.24: é ETIQUETA de pill, então title case.
+ */
+export const POSICAO_LADO_LABEL_CURTO: Record<PosicaoLado, string> = {
+  OFICIAL: "Oficial",
+  BANCO: "Banco",
+};
+
+/** O rótulo curto a partir de um campo solto (`string | null`), na régua do `rotuloDoLado`. */
+export function rotuloCurtoDoLado(lado: string | null | undefined): string | null {
+  const conhecido = POSICAO_LADOS.find((l) => l === lado);
+  return conhecido ? POSICAO_LADO_LABEL_CURTO[conhecido] : null;
 }
 
 /**

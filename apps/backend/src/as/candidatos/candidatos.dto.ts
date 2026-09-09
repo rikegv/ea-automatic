@@ -1,5 +1,8 @@
 import { Transform } from "class-transformer";
 import {
+  ArrayMaxSize,
+  ArrayMinSize,
+  IsArray,
   IsBoolean,
   IsIn,
   IsISO8601,
@@ -12,6 +15,7 @@ import {
 import {
   AS_CANDIDATO_ORIGEM,
   AS_CONTATO_TIPO,
+  AS_MAXIMO_POR_LOTE,
   CANDIDATURA_ETAPAS,
   UFS,
   type AsCandidatoOrigem,
@@ -384,4 +388,151 @@ export class RegistrarContatoDto {
   @IsOptional()
   @IsISO8601()
   ocorridoEm?: string;
+}
+
+/**
+ * ─ OS CORPOS DAS AÇÕES EM MASSA (grupo 1 da A&S) ───────────────────────────────────────────────
+ *
+ * ┌─ POR QUE A RÉGUA MORA AQUI, E NÃO NA TELA ─────────────────────────────────────────────────┐
+ * │ REGRA QUE VIVE APENAS NO NAVEGADOR NÃO É REGRA, e este módulo já pagou por isso uma vez: o  │
+ * │ motivo do desvínculo era exigido só na tela, e qualquer chamada direta à rota gravava        │
+ * │ desfecho sem motivo (ajuste 7 do diretor). EM MASSA o mesmo buraco é multiplicado pelo       │
+ * │ tamanho da seleção, de uma vez só, então a exigência desce para o corpo.                     │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * O TETO É BARREIRA, NÃO REGRA DE NEGÓCIO: seleção com milhares de ids é erro de tela, não intenção.
+ * O número vem de `AS_MAXIMO_POR_LOTE`, a MESMA fonte do Alto Volume, e não é redigitado aqui: o teto
+ * do corpo e o teto do vocabulário divergiriam em silêncio na primeira vez que um dos dois mudasse.
+ *
+ * NÃO EXISTE CORPO QUE ACEITE `alocadoPorId` NEM AUTORIA: quem fez sai da sessão, como em todo o
+ * resto do módulo. Em massa isso importa mais, não menos: uma trilha de trinta linhas assinada por
+ * um campo de formulário não é trilha.
+ */
+
+/** O teto e a forma da lista, iguais nos quatro corpos: uma régua só, aplicada quatro vezes. */
+const LISTA_EM_MASSA = [
+  IsArray(),
+  ArrayMinSize(1, { message: "Selecione pelo menos uma linha." }),
+  ArrayMaxSize(AS_MAXIMO_POR_LOTE, {
+    message: `Selecione no máximo ${AS_MAXIMO_POR_LOTE} linhas por vez.`,
+  }),
+  IsUUID(undefined, { each: true }),
+] as const;
+
+/** Aplica a régua da lista sem repetir os quatro decoradores em cada corpo. */
+const ListaEmMassa = (): PropertyDecorator => (alvo, chave) => {
+  for (const decorar of LISTA_EM_MASSA) decorar(alvo, chave);
+};
+
+/**
+ * ADICIONAR CANDIDATOS À VAGA EM MASSA. É a `alocar`, N vezes, e NÃO consome posição: quem entra no
+ * funil nasce `ATIVO`, e `ATIVO` não ocupa nada. Uma vaga de 10 recebe 40 currículos, que é o normal.
+ *
+ * A VAGA VEM DA ROTA, e não do corpo: o lote é sempre de UMA vaga, e aceitar a vaga por linha
+ * permitiria uma seleção que espalha gente por vagas diferentes sem ninguém perceber.
+ */
+export class AdicionarEmLoteDto {
+  /** Os CANDIDATOS (a pessoa), e não candidaturas: aqui a candidatura ainda não existe. */
+  @ListaEmMassa()
+  candidatoIds!: string[];
+
+  /**
+   * A CIÊNCIA DA REENTRADA, uma para a seleção inteira, como a tela a coleta. O REGISTRO, porém, é
+   * POR LINHA: cada reentrada grava o seu próprio aceite, preso à sua candidatura (§A.3 regra 8), e
+   * quem entra na vaga pela primeira vez não recebe carimbo nenhum.
+   *
+   * `@Transform` porque o corpo pode chegar com `"true"` de um formulário.
+   */
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === "string" ? value === "true" : value))
+  @IsBoolean()
+  cienteReentrada?: boolean;
+}
+
+/**
+ * FINALIZAR POSIÇÃO EM MASSA: N posições da vaga são ENTREGUES, uma transação por linha.
+ *
+ * VERBO SEPARADO DO DE ADICIONAR (decisão do diretor): trazer para o funil e entregar a posição são
+ * dois gestos com consequências diferentes, e o segundo é o que consome a meta da vaga.
+ */
+export class FinalizarPosicaoEmLoteDto {
+  @ListaEmMassa()
+  candidaturaIds!: string[];
+
+  /**
+   * A VAGA DA SELEÇÃO, opcional e CONFERIDA QUANDO VEM (decisão do diretor).
+   *
+   * ELA NÃO É DE ONDE A VAGA SAI: a vaga de cada linha sai da PRÓPRIA candidatura, e é ela que a
+   * trava usa. Este campo é a afirmação da tela sobre o que ela pensa estar fazendo, e serve a duas
+   * coisas: recusar o LOTE INTEIRO quando a vaga não recebe mais candidato (um problema só, da vaga,
+   * que não deve virar trinta falhas idênticas no relatório) e recusar a LINHA cuja candidatura não
+   * pertence àquela vaga, que é uma seleção misturada e não uma intenção.
+   *
+   * OPCIONAL, e não obrigatório, porque a vaga da linha continua sendo a fonte autoritativa: sem o
+   * campo, cada linha é decidida sob a trava da vaga dela, exatamente como na ação individual.
+   */
+  @IsOptional()
+  @IsUUID()
+  vagaId?: string;
+
+  /**
+   * DE QUAL LADO DA META as posições saem. AUSENTE VALE `OFICIAL`, como na ação individual.
+   *
+   * UM LADO PARA A SELEÇÃO INTEIRA: o teto de cada lado continua sendo medido POR LINHA, dentro da
+   * transação, então um lote mandado para a reserva para de entregar quando a reserva enche, e as
+   * demais linhas voltam em `falhas` com a frase do teto daquele lado.
+   */
+  @IsOptional()
+  @IsIn(POSICAO_LADOS as unknown as string[])
+  lado?: PosicaoLado;
+
+  /**
+   * A CIÊNCIA DO AVISO DE BANCO. A tela coleta UMA confirmação; o REGISTRO é N, um por linha, com o
+   * número de oficiais abertas lido DENTRO da transação daquela linha, porque esse número muda a
+   * cada posição entregue. O gatilho do registro continua sendo a guarda ter DISPARADO, nunca o
+   * flag do corpo ter vindo.
+   */
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === "string" ? value === "true" : value))
+  @IsBoolean()
+  cienteBancoComOficiaisAbertas?: boolean;
+}
+
+/**
+ * DESVINCULAR EM MASSA (e ENVIAR PARA ADMISSÃO em massa, que é a terceira saída).
+ *
+ * O MOTIVO É OBRIGATÓRIO NOS TRÊS DESFECHOS, com a MESMA régua do individual: aparado ANTES de
+ * validado, senão `"   "` passa pelo `@MinLength` cru, o service apara na gravação e o motivo chega
+ * NULO ao banco. Em massa, isso seriam trinta desfechos sem explicação de uma vez só.
+ */
+export class RegistrarSaidaEmLoteDto {
+  @ListaEmMassa()
+  candidaturaIds!: string[];
+
+  /**
+   * A LISTA VEM DO DOMÍNIO, como no corpo individual. `ALOCADO` está FORA dela de propósito: alocar
+   * não é sair, consome posição e tem rota própria, com a trava que este caminho não roda.
+   */
+  @IsIn(SITUACOES_DE_SAIDA as unknown as string[])
+  situacao!: SituacaoDeSaida;
+
+  /** UM motivo para a seleção inteira, gravado em cada linha: é o desfecho comum que a originou. */
+  @Transform(({ value }) => (typeof value === "string" ? value.trim() : value))
+  @IsString()
+  @MinLength(2)
+  @MaxLength(500)
+  motivo!: string;
+}
+
+/**
+ * MOVER NO FUNIL EM MASSA. É a `moverEtapa`, N vezes, e SÓ ela: trocar de vaga é operação de MASTER,
+ * com rota própria e `@Roles`, e entrar aqui abriria um caminho de COMUM para uma ação que não é dele.
+ */
+export class MoverEtapaEmLoteDto {
+  @ListaEmMassa()
+  candidaturaIds!: string[];
+
+  /** Só a etapa de DESTINO: de onde cada pessoa sai é o que está gravado nela. */
+  @IsIn(CANDIDATURA_ETAPAS as unknown as string[])
+  etapa!: CandidaturaEtapa;
 }

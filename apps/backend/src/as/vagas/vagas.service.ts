@@ -627,6 +627,37 @@ export class VagasService {
     const lados = await this.ladosDeQuemAbre(atual.abertoPorId, dto.contraparteId);
 
     /*
+     * ┌─ A META NÃO DESCE ABAIXO DO QUE JÁ FOI ENTREGUE, TAMBÉM POR AQUI (auditoria, 09/09) ──────┐
+     * │ A TRAVA EXISTIA NUMA PORTA E FALTAVA NA IRMÃ. `editarPosicoes` recusa baixar a meta abaixo │
+     * │ da ocupação DERIVADA desde a frente dos dois contadores; ESTA rota, que é o outro escritor │
+     * │ de `posicoes_oficiais`, gravava qualquer número. O rascunho RECEBE candidato e pode ter    │
+     * │ posição FINALIZADA (é o mesmo fato que abriu o buraco do rastro), então dava para PUBLICAR │
+     * │ uma vaga com meta 1 tendo 3 pessoas já entregues: um número IMPOSSÍVEL, que faz a ocupação │
+     * │ da tela nascer estourada e o `faltam` do fechamento nascer negativo.                       │
+     * │                                                                                           │
+     * │ ISTO NÃO TRANSFORMA O RASTRO EM TRAVA, e a distinção é a decisão do diretor: BAIXAR a meta │
+     * │ continua PASSANDO e continua sendo do consultor, com `vaga_meta_reducoes` gravado como     │
+     * │ hoje. O que esta linha barra é outra coisa, e não é decisão de negócio nenhuma: meta ABAIXO│
+     * │ do que já foi ENTREGUE. Reduzir de 5 para 3 com 3 entregues passa; para 2, não.            │
+     * │                                                                                           │
+     * │ A RÉGUA É `excessoDePosicoes`, do domínio, com o MESMO insumo da rota irmã (a ocupação     │
+     * │ derivada, não o carimbo `vagas_fechadas`, que na vaga viva é sempre nulo e nunca acusaria  │
+     * │ nada) e a MESMA frase. Uma segunda régua aqui divergiria da primeira na correção seguinte. │
+     * │                                                                                           │
+     * │ ANTES DA ESCRITA E ANTES DO RASTRO: a tentativa recusada não pode deixar meia mudança nem  │
+     * │ uma linha de redução que não aconteceu.                                                    │
+     * └───────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    const ocupacao =
+      (await this.ocupacaoPorVaga([{ id, posicoesOficiais: atual.posicoesOficiais }])).get(id) ??
+      this.ocupacaoVazia(id, atual.posicoesOficiais);
+    const excesso = excessoDePosicoes(
+      { vagasFechadas: ocupacao.finalizadasOficial, vagasFechadasBanco: ocupacao.finalizadasBanco },
+      { posicoesOficiais: campos.posicoesOficiais, posicoesBanco: campos.posicoesBanco },
+    );
+    if (excesso) throw new BadRequestException(this.mensagemDeExcesso(excesso));
+
+    /*
      * O RASTRO É DECIDIDO ANTES DA ESCRITA, pela mesma razão escrita na `editarPosicoes`: depois do
      * `update` o número ANTERIOR não existe mais em lugar nenhum, e quem grava primeiro não tem mais
      * como responder "de quanto para quanto".
