@@ -13288,3 +13288,127 @@ abre em modo LEITURA e o bloco do VT nao aparece**, o que explica a confusao.
 - **A trava da A.7 funcionou de verdade**, inclusive contra falso positivo: bloqueou duas vezes um
   comando de LEITURA e a mensagem do proprio commit, por conterem o verbo. Registro porque no
   CentraAtend ela existia e nao funcionava.
+
+---
+
+## 09/09/2026 — A tela unificada de vagas em PRODUÇÃO: o veto que caiu, e a meta que deixou de encolher em silêncio
+
+**Frente A&S, autorizada pelo diretor depois de validar o fluxo completo na 3120.** Subiu a
+unificação ATUAL (opção A: o funcional agora, as ações em massa e a UX na próxima leva).
+
+### 1. OS TRÊS AJUSTES QUE O DIRETOR PEDIU ANTES DE SUBIR
+
+- **Acesso do harness na homologação, revogado.** O `papel_as` da conta `harness.lojas@homolog.local`
+  voltou de CONSULTOR para NULO, que era o estado anterior à prova. Só esse campo: o `papel` dela é
+  anterior e não foi concedido pela fábrica. As outras duas contas com papel de A&S na homologação
+  ficaram intocadas (§A.23).
+- **O ícone do aviso de rastro.** O `ConfirmDialog` ganhou um terceiro tom, `warn`: exclamação em
+  âmbar no lugar do check azul. `danger` continuaria errado pelo motivo que o próprio código já
+  registrava (baixar a meta é direito do consultor, e vermelho vira acusação), e `default` vestia de
+  SUCESSO um diálogo que ainda pergunta. `default` e `danger` não mudaram, então **nenhuma das 27
+  telas que usam o diálogo mudou de aparência**.
+- **O lixo de prova, apagado depois de CONFERIDO.** Miguel Prova e Ana Prova tinham 1 candidatura
+  cada, as duas na vaga de prova, nenhuma em outra vaga e nenhuma ligada a admissão. Foram os dois
+  candidatos e a vaga `PS-PROVA-023621`, nessa ordem (a FK da candidatura para a VAGA é RESTRICT, a
+  do candidato é CASCADE). Homologação saiu de 3 vagas e 6 candidatos para 2 e 4. **Não** foi apagado
+  o "Candidata De Prova Etapa 5", que não estava na lista do diretor (§A.14).
+
+### 2. A AUDITORIA (§A.38), E O VETO QUE CAIU
+
+**`seguranca`: VETADO → VETADO → APROVADO.** A confirmação final foi adversarial e por ENUMERAÇÃO,
+não por leitura seletiva:
+
+- **As duas portas são as únicas.** `update(vagas)` aparece TRÊS vezes no backend inteiro: as duas
+  que escrevem a meta e o `fechar`, que não toca nos números. Nenhum SQL cru escreve a tabela.
+- **Sete fugas tentadas, sete fechadas:** campo omitido, `null` explícito, a fuga em dois tempos
+  (5 → nulo → 1), meta zero, corpo incompleto, apagar o rastro depois, e **forjar a autoria pelo
+  corpo**, que cai porque o pipe global é `whitelist + forbidNonWhitelisted`: corpo com `porId` é
+  RECUSADO, não ignorado.
+- **A retenção LGPD, provada e não deduzida.** A lista de situações vivas DEIXOU DE SER UMA LISTA:
+  é derivada do complemento de "saída sem êxito". `ALOCADO` entra sozinho, e o candidato alocado
+  **não é anonimizado**. Conferido também no artefato que roda: `ATIVO, APROVADO, ALOCADO,
+  ENVIADO_PARA_ADMISSAO`.
+
+**`tester`: 487 testes verdes nos subconjuntos afetados, e TRÊS gaps que foram fechados antes de
+subir.**
+
+1. **O terceiro desfecho não era testado.** O DTO diz "obrigatório nos TRÊS desfechos", mas o teste
+   derivava de outra régua, com DOIS valores: `ENVIADO_PARA_ADMISSAO` nunca era validado contra o
+   DTO. O perigo era concreto, e estava escrito no arquivo ao lado: o `FinalizarPosicaoDto` justifica
+   não pedir motivo quando o desfecho é bem-sucedido. Quem aplicasse o mesmo raciocínio ao envio para
+   a admissão não encontraria teste nenhum no caminho. Agora o terceiro é DERIVADO, e desfecho novo
+   cai na cobertura sozinho.
+2. **A rota irmã não provava de onde vem o autor.** A porta consertada tinha teste de controller; a
+   porta original, que já gravava o rastro, não. Trocar `user.id` por um campo do corpo faria o
+   rastro nascer anônimo sem nada ficar vermelho.
+3. **Um comentário que virou mentira.** O teste da tela ainda afirmava que o `@MinLength(2)` media a
+   string crua e que o `trim()` da tela era "o único lugar do sistema que recusa o motivo em branco".
+   Falso desde a correção, e era exatamente o texto que autorizaria afrouxar o DTO amanhã. Corrigido,
+   não apagado.
+
+### 3. O GATE, RODADO UMA VEZ SÓ (§A.40)
+
+Typecheck limpo nos três pacotes, lint do backend limpo, frontend com os 3 erros pré-existentes de
+`react-hooks/exhaustive-deps` (falha de configuração da regra, não código novo). **Backend 173
+arquivos / 2069 testes. Frontend 33 / 312.** Tudo verde.
+
+A primeira corrida do gate foi **interrompida de propósito** quando o `tester` voltou: era mais
+barato fechar os gaps e rodar a suíte inteira UMA vez do que rodá-la duas. É a §A.40 aplicada no
+mesmo dia em que foi escrita.
+
+### 4. A JANELA DE PUBLICAÇÃO: 2 MINUTOS E 9 SEGUNDOS
+
+11:54:52 a 11:57:01, com a produção fora do ar de propósito. A ordem e o porquê de cada passo:
+
+1. **parar os dois serviços**, porque a 0095 renomeia `CONTRATADO` para `ENVIADO_PARA_ADMISSAO` e o
+   build antigo não sobrevive ao rename;
+2. **`shared-types` PRIMEIRO**, ressalva R3 da auditoria: o `dist` estava mais velho que o `src`, e
+   backend e frontend compilam contra ele;
+3. **backend**;
+4. **frontend**, sem `BACKEND_ORIGIN` no ambiente (setá-la é o erro que aponta a homologação para a
+   produção);
+5. **migrations 0095 a 0099 DEPOIS dos builds**, de propósito: build que quebra deixa o banco
+   intacto e os serviços antigos voltam;
+6. **subir e medir**.
+
+**Rede de segurança:** dump completo da produção antes das migrations, guardado FORA do diretório
+efêmero, em `~/ea-backup-producao-20260909-antes-as-vagas.dump` (3,4 MB, 447 objetos, conferido com
+`pg_restore -l`). O rename do enum não tem volta pelo serviço, então precisa ter volta pelo banco.
+
+### 5. AS PROVAS CONTRA A PRODUÇÃO, DEPOIS DE SUBIR
+
+- **Migrations: 95 aplicadas viraram 100**, e os objetos existem: `vaga_meta_reducoes`, as 3 colunas
+  `fechamento_forcado_*`, a coluna de lado, as 2 colunas do aceite, e o enum em
+  `ATIVO, APROVADO, ALOCADO, DESCARTADO, DESISTIU, ENVIADO_PARA_ADMISSAO`.
+- **Saúde:** backend 3011, frontend 3020 e ingresso 3010 em **200**, e `/api/health` pelo ingresso
+  em 200. Processos novos: backend às 11:56:48, frontend às 11:56:54.
+- **Boot limpo:** "Nest application successfully started", com Pandapé, Clicksign, VT, Exame e
+  reconciliação do Drive inicializados. **Zero ocorrências de erro ou exceção no log** desde a
+  subida.
+- **Contagens IDÊNTICAS onde não deviam mudar** (§A.27), conferidas por diff antes/depois: 2.817
+  admissões e a distribuição inteira por farol, 248 clientes, 37 usuários, 238 envelopes Clicksign,
+  426 registros de Pandapé, 3 vagas, 0 candidatos, 0 candidaturas.
+- **Cruzados intactos:** 15 lojas de cliente, 24 admissões com loja, a coluna de grupo e a de tipo de
+  marcação do iFractal no lugar.
+- **A consulta que a Central de Vagas faz roda contra os dados reais.** Sem a 0098 ela era 500
+  garantido, pelo join com `fechamento_forcado_por_id`.
+- **As rotas da frente respondem 401**, não 404 nem 500: montadas e guardadas.
+
+### 6. O QUE FICOU ABERTO
+
+- **O fluxo interativo em produção não foi provado pela fábrica**, e o motivo é a §A.23: criar vaga
+  exige conta com papel de A&S, e a fábrica não se autoconcede acesso. Oito contas reais já têm o
+  papel (duas delas MASTER, que é quem força). O fluxo está provado ponta a ponta na 3120, com 64
+  capturas, e validado pelo diretor.
+- **Ressalvas não bloqueantes da auditoria, para a próxima leva:** a rota da trilha não tem a trava
+  de excesso que a rota irmã tem (R1); dá para finalizar posição em vaga já encerrada, sem forjar
+  nem apagar trilha (R2); e o CPF do substituído viaja na listagem de vagas, que é pré-existente e
+  decisão de 22/08, com a rota fechada pelo menu (R5).
+- **Gaps de baixo risco do `tester`:** o repro da segunda porta não chega a FECHAR; a seção "Enviar
+  Para A Admissão" não tem teste de comportamento; e o ramo em que a redução grava `deOficiais` nulo
+  não é percorrido por teste nenhum.
+- **Registrado para a próxima leva, não construído:** as ações em massa (alocar, desvincular com
+  motivo, mover funil, enviar para admissão), o "ver candidatos alocados" completo, os ajustes de UX
+  (botões centralizados, cor forte, "Gestão Vaga" no lugar do olho, editar status) e o item 9 (etapa
+  do candidato).
+
