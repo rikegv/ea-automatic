@@ -21,7 +21,8 @@ import {
   formulariosVt,
   formularioVtConducoes,
 } from "../db/schema";
-import { montarNomePasta, resolvePastaPaiId } from "../ai/drive-routing";
+import { idDaPastaUrl, montarNomePasta } from "../ai/drive-routing";
+import { DrivePastaPaiService } from "../ai/drive-pasta-pai.service";
 import { interpretarFormularioVt } from "../domain/formulario-vt-coletado";
 import {
   agregarCiclo,
@@ -85,6 +86,10 @@ interface AdmissaoMatch {
   clienteOperacao: string | null;
   /** Farol no momento do casamento. Decide a BAIXA na régua, nunca o casamento em si. */
   farolGlobal: string;
+  /** Link da pasta do prontuário já gravado. Serve de ÂNCORA do arquivamento (ver `processarMatch`). */
+  drivePastaUrl: string | null;
+  /** Link da pasta usada pelo ASO. Segunda âncora, quando o prontuário ainda não tem link próprio. */
+  driveAsoUrl: string | null;
 }
 
 /** Resumo devolvido pela varredura direcionada (o "buscar VT" da ficha). */
@@ -122,6 +127,9 @@ export class VtColetaService implements OnModuleInit, OnModuleDestroy {
     private readonly auditoria: AuditoriaService,
     private readonly scheduler: VtColetaSchedulerService,
     private readonly solicitacao: SolicitacaoVtService,
+    // ÚLTIMO ARGUMENTO POSICIONAL de propósito: o `AiModule` é `@Global()` e já exporta este serviço,
+    // então nada muda no módulo da coleta, e anexar no fim mantém a ordem que os testes já usam.
+    private readonly drivePastaPai: DrivePastaPaiService,
   ) {}
 
   // ── Worker lifecycle (consumidor) ─────────────────────────────────────────
@@ -280,7 +288,11 @@ export class VtColetaService implements OnModuleInit, OnModuleDestroy {
   async processarMatch(item: ItemColetaVt, adm: AdmissaoMatch): Promise<ResumoItemColeta> {
     const chave = this.chaveLedger(item);
 
-    const parentFolderId = resolvePastaPaiId(adm.tipoContrato, adm.codCliente);
+    // RESOLVEDOR ÚNICO, O MESMO DA AUDITORIA. Antes daqui saía `resolvePastaPaiId`, que enxergava só
+    // o `.env` e um mapa fixo de 8 chaves Fopag, e por isso o contrato Fopag NUNCA arquivou um VT: os
+    // clientes reais não estavam no mapa. O `resolver` consulta a tabela `drive_pasta_pai`, herda pela
+    // empresa do vínculo e só então cai no mesmo mapa como rede de segurança.
+    const parentFolderId = await this.drivePastaPai.resolver(adm.tipoContrato, adm.codCliente);
     if (!parentFolderId) {
       this.logger.warn(
         `Coleta de VT: sem pasta-pai do Drive para o contrato/cliente da admissão ${adm.id}; arquivo não arquivado.`,
@@ -297,6 +309,11 @@ export class VtColetaService implements OnModuleInit, OnModuleDestroy {
 
     // `item.id` (nome do objeto) é PII e transitório: usado SÓ aqui, para a baixa; nunca persistido.
     const { stagingPath } = await this.ai.baixarColetaVt(this.bucketColetivo(), item.id);
+    // ÂNCORA DA PASTA, igual à da Auditoria. Sem ela o arquivamento acha a pasta do prontuário só pela
+    // BUSCA POR NOME, e o nome é montado com o nome do candidato e a operação do cliente: corrigir um
+    // ou editar o outro faria a coleta criar uma SEGUNDA pasta para a mesma pessoa. Com o link já
+    // gravado em mãos, o arquivamento vai direto no destino e não procura nada.
+    const ancora = idDaPastaUrl(adm.drivePastaUrl) ?? idDaPastaUrl(adm.driveAsoUrl);
     const arquivamento = await this.ai.arquivarDrive({
       parentFolderId,
       pastaNome: montarNomePasta(adm.candidatoNome, adm.clienteOperacao),
@@ -307,6 +324,7 @@ export class VtColetaService implements OnModuleInit, OnModuleDestroy {
           subpasta: "BENEFICIOS",
         },
       ],
+      ...(ancora ? { pastaId: ancora } : {}),
     });
 
     // A URL do arquivo que acabou de subir, calculada UMA vez: ela serve a dois destinos, a VERSÃO
@@ -402,6 +420,9 @@ export class VtColetaService implements OnModuleInit, OnModuleDestroy {
         candidatoNome: candidatos.nome,
         clienteOperacao: clientes.nomeOperacao,
         farolGlobal: admissoes.farolGlobal,
+        // ÂNCORAS do arquivamento (ver `processarMatch`). Referência do Drive, não é PII (§A.6).
+        drivePastaUrl: admissoes.drivePastaUrl,
+        driveAsoUrl: admissoes.driveAsoUrl,
       })
       .from(admissoes)
       .innerJoin(candidatos, eq(candidatos.cpf, admissoes.candidatoCpf))
@@ -435,6 +456,8 @@ export class VtColetaService implements OnModuleInit, OnModuleDestroy {
       candidatoNome: r.candidatoNome,
       clienteOperacao: r.clienteOperacao,
       farolGlobal: r.farolGlobal,
+      drivePastaUrl: r.drivePastaUrl,
+      driveAsoUrl: r.driveAsoUrl,
     }));
   }
 

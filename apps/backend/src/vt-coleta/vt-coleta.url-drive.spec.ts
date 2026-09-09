@@ -1,6 +1,17 @@
 import "reflect-metadata";
 import { describe, expect, it, vi } from "vitest";
+import { resolvePastaPaiId } from "../ai/drive-routing";
 import { VtColetaService } from "./vt-coleta.service";
+
+/**
+ * Duplo do `DrivePastaPaiService`: delega ao fallback PURO (sem tabela e sem env). O que estes
+ * testes medem é a URL do arquivo, não o roteamento, então o resolvedor entra só para responder o
+ * mesmo id de pasta que o mapa em código já respondia.
+ */
+const drivePastaPaiFake = {
+  resolver: async (t: string | null | undefined, c: string | null | undefined) =>
+    resolvePastaPaiId(t, c, {}),
+};
 
 /**
  * A COLETA GRAVA O LINK DO ARQUIVO NO DRIVE (`vt_coleta.drive_url`).
@@ -44,6 +55,7 @@ function montar(arquivosIds: string[] | undefined) {
     // Serviço de SOLICITAÇÃO: duplo mínimo. Fechar o pedido é trilha, não a entrega, então o que
     // importa nestes testes é que a gravação do formulário não dependa dele para acontecer.
     { marcarRespondida: vi.fn().mockResolvedValue(undefined) } as never,
+    drivePastaPaiFake as never,
   );
   const upsertLedger = vi.spyOn(svc, "upsertLedger").mockResolvedValue(undefined);
   vi.spyOn(svc as never, "carregarTipoVt" as never).mockResolvedValue({

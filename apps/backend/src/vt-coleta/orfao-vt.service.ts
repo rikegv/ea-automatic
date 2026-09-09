@@ -172,6 +172,10 @@ export class OrfaoVtService {
         candidatoNome: candidatos.nome,
         clienteOperacao: clientes.nomeOperacao,
         farolGlobal: admissoes.farolGlobal,
+        // ÂNCORAS da pasta do prontuário, exigidas pelo `processarMatch`. O casamento manual arquiva
+        // pelo MESMO caminho do automático, então precisa das mesmas defesas contra pasta duplicada.
+        drivePastaUrl: admissoes.drivePastaUrl,
+        driveAsoUrl: admissoes.driveAsoUrl,
       })
       .from(admissoes)
       .innerJoin(candidatos, eq(candidatos.cpf, admissoes.candidatoCpf))

@@ -1,6 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ItemColetaVt } from "../ai/ai-client.service";
+import { resolvePastaPaiId } from "../ai/drive-routing";
 import { VtColetaService } from "./vt-coleta.service";
+
+/**
+ * Duplo do `DrivePastaPaiService`: delega ao fallback PURO (sem tabela e sem env), no padrão de
+ * `auditoria-desacoplamento.spec.ts`. Preserva exatamente o que esta suíte já asseverava, quando a
+ * coleta resolvia a pasta-pai pelo mapa em código.
+ */
+const drivePastaPaiFake = {
+  resolver: async (t: string | null | undefined, c: string | null | undefined) =>
+    resolvePastaPaiId(t, c, {}),
+};
 
 /**
  * QA do NÚCLEO da coleta de VT (§A.17 etapa 3 / GCS). Foco: o casamento por CPF, a idempotência por
@@ -70,6 +81,7 @@ function montar(
     // Serviço de SOLICITAÇÃO: duplo mínimo. Fechar o pedido é trilha, não a entrega, então o que
     // importa aqui é que a gravação do formulário não dependa dele para acontecer.
     { marcarRespondida: vi.fn().mockResolvedValue(undefined) } as never,
+    drivePastaPaiFake as never,
   );
   return { svc, ai, scheduler, auditoria };
 }
