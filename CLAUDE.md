@@ -1146,3 +1146,32 @@ com três espaços. Os dois teriam chegado à operação. **Auditar mais CEDO, n
 
 *(Decisão do diretor, 09/09/2026, após ele apontar que a fábrica estava lenta demais. O coordenador
 mediu, propôs, e o diretor mandou registrar para não depender de memória de sessão.)*
+
+## A.41: MODAL DE PREENCHIMENTO NÃO FECHA AO CLICAR FORA (regra permanente)
+
+**Nenhum modal do sistema fecha porque alguém clicou fora dele.** O modal de preenchimento fecha
+pelo **"Cancelar"** ou pelo **"Salvar"**, e por mais nada que seja acidente.
+
+**O caso que originou a regra (09/09/2026).** O diretor preenchia o cadastro de candidato, encostou
+fora do painel e o modal fechou **apagando tudo o que ele tinha digitado**. Sem aviso, sem
+confirmação e sem desfazer. O gesto que destrói o trabalho era o mais fácil de fazer sem querer.
+
+- **O padrão mora no componente**, `ui/Modal`, e não em cada tela: o overlay deixou de ter
+  `onClick={onClose}`. São **58 telas** lendo dali, e é o componente que garante que a próxima nasça
+  certa sem ninguém lembrar.
+- **A tecla ESCAPE continua fechando**, e isso é desenho, não esquecimento: Escape é gesto
+  deliberado, ninguém encosta nele sem querer. É a saída de teclado, e ela não pode sumir.
+- **NENHUM MODAL PODE FICAR SEM SAÍDA, e esta é a metade da regra que dá trabalho.** Tirar o clique
+  fora, sozinho, PRENDE o usuário em todo painel que não tem Cancelar nem Salvar. A varredura dos 58
+  usos achou **NOVE** modais assim (7 no Diagnóstico, 1 em Benefícios, 1 na Diretoria), todos de
+  leitura, cuja única saída de mouse era justamente o clique fora. Os nove ganharam **"Fechar"** no
+  rodapé no mesmo commit. **Mexer no fechamento sem varrer os usos é trocar um defeito por outro.**
+- **Modal novo de LEITURA nasce com "Fechar".** Modal novo de PREENCHIMENTO nasce com "Cancelar" e
+  "Salvar". Não existe modal sem saída visível.
+- **Não se acrescenta um "X" no cabeçalho** para resolver o caminho do mouse em modal longo. Foi
+  proposto e recusado: o diretor definiu que o preenchimento fecha por Cancelar ou Salvar, e um "X"
+  seria um terceiro gesto de fechar, fácil de acertar sem querer, que é exatamente o que esta regra
+  existe para eliminar. Em painel longo, a saída de mouse é rolar até o rodapé, e a de teclado é
+  Escape.
+
+*(Decisão do diretor, na validação da tela unificada de vagas.)*
