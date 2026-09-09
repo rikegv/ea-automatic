@@ -1548,6 +1548,14 @@ function ModalNomes({ filtros, onClose }: { filtros: Filtros; onClose: () => voi
           </div>
         </div>
       )}
+          {/* SAÍDA VISÍVEL. O clique fora deixou de fechar o modal (regra do sistema, em
+              `ui/Modal`), e este painel é só leitura: não tem "Cancelar" nem "Salvar", então sem
+              este botão a única saída de mouse desapareceria junto. */}
+          <div className="mt-5 flex justify-end">
+            <Button variant="secondary" className="px-4 py-2.5" onClick={onClose}>
+              Fechar
+            </Button>
+          </div>
     </Modal>
   );
 }

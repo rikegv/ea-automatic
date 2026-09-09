@@ -39,6 +39,18 @@ export interface ComboOption {
   label: string;
   /** Texto de apoio à direita do rótulo (código do cliente, sigla, unidade). */
   hint?: string;
+  /**
+   * TERMOS QUE ACHAM A OPÇÃO SEM APARECER NELA. A busca casa contra rótulo, apoio e este campo,
+   * que não é renderizado em lugar nenhum.
+   *
+   * Existe porque uma coisa é o que a opção MOSTRA e outra é por onde ela é ENCONTRADA, e nem
+   * sempre são o mesmo texto. A UF é o caso: a lista mostra só "SP", porque repetir "São Paulo" ao
+   * lado da sigla polui um campo de duas letras, mas quem digita "São Paulo" precisa continuar
+   * achando. Sem este campo a escolha seria entre poluir a lista ou quebrar a busca.
+   *
+   * Opcional e aditivo: quem não passa nada filtra exatamente como filtrava antes.
+   */
+  busca?: string;
   /** Ponto colorido, para o seletor ler igual às pills de status. */
   color?: string;
   disabled?: boolean;
@@ -188,7 +200,7 @@ export function Combobox(props: ComboboxProps) {
   const filtradas = useMemo(() => {
     const q = norm(query.trim());
     if (!q) return options;
-    return options.filter((o) => norm(`${o.label} ${o.hint ?? ""}`).includes(q));
+    return options.filter((o) => norm(`${o.label} ${o.hint ?? ""} ${o.busca ?? ""}`).includes(q));
   }, [options, query]);
 
   const habilitadas = useMemo(

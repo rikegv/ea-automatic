@@ -11,6 +11,22 @@ export interface SelectOption {
   label: string;
   /** Cor opcional do ponto (status): mantém o seletor com a mesma leitura das pills. */
   color?: string;
+  /**
+   * TEXTO EXTRA QUE A BUSCA ENCONTRA, sem aparecer na opção.
+   *
+   * ┌─ O CASO QUE OBRIGOU ESTE CAMPO, e ele é a UF ──────────────────────────────────────────────┐
+   * │ O diretor pediu que a UF mostrasse SÓ A SIGLA ("SP"), sem repetir "São Paulo". Trocar o     │
+   * │ rótulo pelo nome resolve o que se vê e QUEBRA o que se digita: a busca filtra por `label`,  │
+   * │ então com a sigla no rótulo, procurar por "São Paulo" deixaria de achar o estado.           │
+   * │                                                                                            │
+   * │ Ver uma coisa e procurar por outra é normal em seletor de sigla, e é isso que este campo    │
+   * │ resolve: o rótulo fica curto e a busca continua achando pelo nome inteiro.                  │
+   * │                                                                                            │
+   * │ ELE É OPCIONAL E ADITIVO: nenhum dos seletores que já existem muda de comportamento por     │
+   * │ causa desta linha, porque quem não o informa continua sendo procurado só pelo rótulo.       │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   */
+  busca?: string;
 }
 
 /** Normaliza para busca: minúsculas, sem acento. */
@@ -70,7 +86,9 @@ export function Select({
   const filtradas = useMemo(() => {
     const q = norm(query.trim());
     if (!q) return options;
-    return options.filter((o) => norm(o.label).includes(q));
+    // O RÓTULO E O TEXTO EXTRA, nesta ordem: quem informa `busca` é achado pelos dois, e quem não
+    // informa continua sendo achado só pelo rótulo, exatamente como antes.
+    return options.filter((o) => norm(o.label).includes(q) || norm(o.busca ?? "").includes(q));
   }, [options, query]);
 
   /**

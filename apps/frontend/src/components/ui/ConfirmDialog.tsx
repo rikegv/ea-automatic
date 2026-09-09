@@ -75,7 +75,21 @@ export function ConfirmDialog({
         <Button
           onClick={onConfirm}
           disabled={busy}
-          className={cn("px-4 py-2.5", danger && "!bg-[var(--danger)] !text-white")}
+          /*
+           * ┌─ O VERMELHO DO PERIGO PRECISA DE `background`, NÃO DE `background-color` ───────────┐
+           * │ ISTO ERA UM DEFEITO EM PRODUÇÃO, em dezenas de telas: o botão de perigo saía AZUL.  │
+           * │ A causa é que `.btn-primary` pinta `background: var(--btn-grad)`, que é um          │
+           * │ gradiente, ou seja, uma IMAGEM de fundo. `!bg-[…]` do Tailwind define apenas        │
+           * │ `background-color`, que fica DEBAixo da imagem e nunca aparece.                     │
+           * │                                                                                     │
+           * │ O `!important` não salvava, e é o que enganava quem lesse rápido: ele vencia a      │
+           * │ disputa da propriedade errada. Cor e imagem não competem, elas se empilham.         │
+           * │                                                                                     │
+           * │ `[background:…]` escreve a propriedade CURTA, que substitui a imagem junto com a    │
+           * │ cor. É o mesmo conserto que a barra de ações em massa já tinha precisado.           │
+           * └─────────────────────────────────────────────────────────────────────────────────────┘
+           */
+          className={cn("px-4 py-2.5", danger && "[background:var(--danger)] !text-white")}
         >
           {busy ? "Processando…" : confirmLabel}
         </Button>
