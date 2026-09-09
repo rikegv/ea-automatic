@@ -1,18 +1,24 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Inject,
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { and, asc, desc, eq, inArray, isNotNull, ne } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type {
+  AsOcupacaoVaga,
   AsVagaFechamentoBloqueado,
+  CandidaturaEtapa,
+  CandidaturaSituacao,
+  FecharVagaRecusa,
   PapelAs,
   VagaCamposObrigatorios,
   VagaContextoAs,
   VagaListItem,
+  VagaMetaReducao,
   VagaStatus,
 } from "@ea/shared-types";
 import {
@@ -30,6 +36,7 @@ import {
   textoPendencia,
   vagaPendencias,
 } from "@ea/shared-types";
+import type { AuthUser } from "../../auth/auth.types";
 import type { Database } from "../../db/client";
 import { DRIZZLE } from "../../db/drizzle.module";
 import {
@@ -42,19 +49,49 @@ import {
   motivosContratacao,
   usuarios,
   vagaBeneficio,
+  vagaMetaReducoes,
   vagas,
 } from "../../db/schema";
-import { pendentesDeTratamento } from "../../domain/candidatura";
+import {
+  ocupacaoDaVaga,
+  pendentesDeTratamento,
+  type ItemDeOcupacao,
+} from "../../domain/candidatura";
 import {
   codigoJaUsado,
+  ehStatusDaTrilha,
   ladosDaVaga,
   statusVivoDaVaga,
   escolaridadeVivaDaVaga,
   normalizarCodigoVaga,
   excessoDePosicoes,
   type ExcessoDePosicoes,
+  type VagaStatusDaTrilha,
 } from "../../domain/vaga";
 import type { CreateVagaDto, EditarPosicoesVagaDto, FecharVagaDto } from "./vagas.dto";
+
+/**
+ * O EXECUTOR DENTRO DA TRANSAÇÃO, tipado como a casa já tipa (`admissoes.service`, `esteira`): o
+ * fechamento lê e escreve pelo `tx`, e não pelo `this.db`, para que tudo aconteça sob a mesma linha
+ * de vaga travada.
+ */
+type DbTransaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
+
+/**
+ * UMA CANDIDATURA DA VAGA, do jeito que o fechamento precisa dela: o suficiente para a trava 5
+ * montar a lista de pendentes e para a trava 6 derivar a ocupação. É a MESMA leitura servindo as
+ * duas, e é por isso que a forma é uma só.
+ *
+ * §A.6: nome, sim (a tela precisa dizer QUEM está pendurado no funil); CPF e contato, nunca.
+ */
+interface LinhaDeCandidatura {
+  candidaturaId: string;
+  candidatoId: string;
+  candidatoNome: string;
+  etapa: CandidaturaEtapa;
+  situacao: CandidaturaSituacao;
+  posicaoLado: string | null;
+}
 
 /**
  * CENTRAL DE VAGAS (A&S): a vaga nasce pela trilha de abertura e termina pela ação de fechar.
@@ -88,11 +125,26 @@ export class VagasService {
    * O CARGO ENTROU NESSA LISTA COM O RASCUNHO (OST de 25/08), e isto não é detalhe de estilo: com o
    * `innerJoin` que estava aqui, o rascunho salvo antes de escolher o cargo SUMIRIA da listagem, e
    * quem salvasse para continuar depois não teria como voltar nele.
+   *
+   * A OCUPAÇÃO DERIVADA VAI JUNTO, e ela já mora no TIPO COMPARTILHADO. Havia aqui uma interseção
+   * local (`VagaListItem & { ocupacao }`), temporária por PROCESSO e não por tipagem:
+   * `packages/shared-types` é ARQUIVO DE DONO ÚNICO (§A.39), e o dono é o coordenador. O campo já
+   * trafegava em runtime enquanto o tipo não o declarava; o dono escreveu o campo
+   * (`ocupacao: AsOcupacaoVaga`, em `VagaListItem`), e a interseção saiu. Um tipo só, nada muda em
+   * runtime.
+   *
+   * ELA VEM SEMPRE PREENCHIDA, inclusive na vaga sem candidatura nenhuma (tudo zero). Campo opcional
+   * obrigaria cada leitor a decidir o que fazer com a ausência, e o zero já é a resposta certa: vaga
+   * sem gente dentro tem zero posições entregues.
    */
   async list(): Promise<VagaListItem[]> {
     const consultor = alias(usuarios, "consultor");
     const recruiter = alias(usuarios, "recruiter");
     const autor = alias(usuarios, "autor");
+    // O QUARTO ALIAS DE `usuarios`: quem FORÇOU o fechamento. Ele é nulável duas vezes (a vaga
+    // normal não tem forçamento, e o autor do forçamento vira nulo se o usuário for apagado), então
+    // o join é LEFT como os outros três.
+    const forcadoPor = alias(usuarios, "forcado_por");
 
     const linhas = await this.db
       .select({
@@ -103,6 +155,7 @@ export class VagasService {
         abertoPorNome: autor.nome,
         consultorNome: consultor.nome,
         recruiterNome: recruiter.nome,
+        fechamentoForcadoPorNome: forcadoPor.nome,
       })
       .from(vagas)
       .leftJoin(cargos, eq(cargos.id, vagas.cargoId))
@@ -110,9 +163,16 @@ export class VagasService {
       .leftJoin(autor, eq(autor.id, vagas.abertoPorId))
       .leftJoin(consultor, eq(consultor.id, vagas.consultorId))
       .leftJoin(recruiter, eq(recruiter.id, vagas.recruiterId))
+      .leftJoin(forcadoPor, eq(forcadoPor.id, vagas.fechamentoForcadoPorId))
       .orderBy(desc(vagas.criadoEm));
 
     const porVaga = await this.beneficiosPorVaga(linhas.map((l) => l.v.id));
+    const ocupacoes = await this.ocupacaoPorVaga(
+      linhas.map((l) => ({ id: l.v.id, posicoesOficiais: l.v.posicoesOficiais })),
+    );
+    // UMA CONSULTA PARA A PÁGINA INTEIRA, e não uma por vaga: a listagem não pagina, então buscar o
+    // rastro linha a linha viraria centenas de idas ao banco para responder "vazio" em quase todas.
+    const reducoes = await this.metaReducoesPorVaga(linhas.map((l) => l.v.id));
 
     return linhas.map(({ v, ...l }) => ({
       id: v.id,
@@ -193,6 +253,42 @@ export class VagasService {
       vagasFechadasBanco: v.vagasFechadasBanco,
       dataPrevistaInicio: v.dataPrevistaInicio,
       enviarParaAdmissao: v.enviarParaAdmissao,
+      /*
+       * A OCUPAÇÃO DERIVADA, ao lado dos contadores DIGITADOS do fechamento, e não no lugar deles.
+       *
+       * `vagasFechadas` e `vagasFechadasBanco` continuam exatamente onde estavam, com o mesmo valor:
+       * quem decide se a tela passa a ler a derivada ou o número digitado é outra etapa, e é decisão
+       * do diretor. Aqui a listagem só passa a CARREGAR a resposta derivada, que antes só existia no
+       * painel de uma vaga por vez.
+       */
+      ocupacao: ocupacoes.get(v.id) ?? this.ocupacaoVazia(v.id, v.posicoesOficiais),
+      /**
+       * A TRILHA DO FORÇADO, e ela é NULA na esmagadora maioria das vagas: só existe quando um
+       * Master fechou com posição oficial em aberto.
+       *
+       * O DISCRIMINADOR É A DATA, e não o autor: o autor vira nulo sozinho quando o usuário é
+       * apagado (`on delete set null`), e a trilha continua verdadeira sem ele, dizendo QUANDO e
+       * QUANTAS faltavam. Usar o autor como discriminador faria a exceção desaparecer da tela no dia
+       * em que alguém saísse da empresa.
+       *
+       * `faltavam` VEM DO BANCO E NÃO É RECALCULADO: ele é o carimbo do instante do forçamento, e é
+       * essa a razão de ele estar guardado (o único número derivado que este módulo guarda).
+       */
+      fechamentoForcado: v.fechamentoForcadoEm
+        ? {
+            porNome: l.fechamentoForcadoPorNome ?? null,
+            quandoIso: v.fechamentoForcadoEm.toISOString(),
+            faltavam: v.fechamentoForcadoFaltavam ?? 0,
+          }
+        : null,
+      /**
+       * O RASTRO DA REDUÇÃO DE META, da mais ANTIGA para a mais RECENTE, e VAZIO na esmagadora
+       * maioria das vagas (ninguém mexeu na meta). Ele viaja na LISTAGEM pela mesma razão do
+       * forçamento: a pergunta que ele responde ("esta vaga fechou porque entregou, ou porque
+       * encolheram a meta?") nasce OLHANDO A LISTA, e uma requisição por linha entregaria a
+       * resposta depois da conclusão de quem perguntou.
+       */
+      metaReducoes: reducoes.get(v.id) ?? [],
     }));
   }
 
@@ -429,7 +525,7 @@ export class VagasService {
    * correção feita em uma delas. O que muda entre os dois estados é UMA linha, `travaObrigatorios`.
    */
   async create(dto: CreateVagaDto, abertoPorId: string): Promise<VagaListItem> {
-    const status = dto.status ?? "ABERTA";
+    const status = this.travaStatusDaTrilha(dto.status, "ABERTA");
     const campos = this.camposDaTrilha(dto, status);
     this.travaObrigatorios(campos, status);
 
@@ -481,8 +577,36 @@ export class VagasService {
    * A AUTORIA NÃO TROCA DE MÃO: `abertoPorId` fica como estava, e os dois lados são recalculados a
    * partir do PAPEL DE QUEM ABRIU, não de quem está editando. Um rascunho aberto por outra pessoa não
    * muda de dono porque alguém entrou nele para completar um campo.
+   *
+   * ┌─ ESTA ROTA TAMBÉM ESCREVE A META, E O RASTRO FALTAVA AQUI (veto mantido, 09/09) ───────────┐
+   * │ `posicoes_oficiais` tem DOIS escritores: a rota irmã das posições, que já registra a        │
+   * │ redução desde a auditoria de 09/09, e ESTA, que gravava o número novo em silêncio. O desvio │
+   * │ do gate de Master continuava inteiro pela porta de trás: rascunho com meta 5, alocam-se e   │
+   * │ finalizam-se as posições (o rascunho RECEBE candidato de propósito), e um PATCH com         │
+   * │ `{ posicoesOficiais: 1, status: "ABERTA" }` publicava a vaga com a meta já rebaixada. Do    │
+   * │ lado do fechamento, `faltam` dava zero, a vaga fechava pela porta NORMAL, sem Master, com a │
+   * │ trilha do forçamento em branco e `vaga_meta_reducoes` VAZIA.                                │
+   * │                                                                                            │
+   * │ A RESPOSTA É A MESMA DA ROTA IRMÃ, e é a peça que já existe aplicada na porta que ficou de  │
+   * │ fora: `reducaoDeMeta` decidida ANTES da escrita (depois dela o número anterior não existe   │
+   * │ mais em lugar nenhum) e gravada na MESMA transação. NENHUM `@Roles` novo, NENHUMA trava     │
+   * │ nova: a decisão do diretor é RASTRO, e baixar a meta continua sendo do consultor.           │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
    */
-  async atualizar(id: string, dto: CreateVagaDto): Promise<VagaListItem> {
+  async atualizar(
+    id: string,
+    dto: CreateVagaDto,
+    /**
+     * QUEM EDITOU, DA SESSÃO, para o rastro da redução nascer em nome de alguém.
+     *
+     * OPCIONAL NA ASSINATURA E OBRIGATÓRIO NA PRÁTICA: a única chamada de produção é a da
+     * controller, que passa `user.id` e tem teste próprio para isso (`vagas.rastro-reducao-na-
+     * trilha.spec.ts`). O padrão segue o da coluna no banco (`por_id` é `set null`): sem o autor a
+     * linha ainda diz QUANDO e de quanto para quanto, e perder a LINHA seria muito pior do que
+     * perder o NOME.
+     */
+    autorId: string | null = null,
+  ): Promise<VagaListItem> {
     const atual = await this.db.query.vagas.findFirst({ where: eq(vagas.id, id) });
     if (!atual) throw new NotFoundException("Vaga não encontrada.");
     if (atual.status !== "RASCUNHO") {
@@ -491,13 +615,23 @@ export class VagasService {
       );
     }
 
-    const status = dto.status ?? "RASCUNHO";
-    const campos = this.camposDaTrilha(dto, status);
+    const status = this.travaStatusDaTrilha(dto.status, "RASCUNHO");
+    const campos = {
+      ...this.camposDaTrilha(dto, status),
+      posicoesOficiais: this.metaOficialDaTrilha(dto, atual),
+    };
     this.travaObrigatorios(campos, status);
 
     await this.travaDuplicidadeDeCodigo(campos.codigo, id);
     const beneficios = await this.validaBeneficios(dto.beneficios ?? []);
     const lados = await this.ladosDeQuemAbre(atual.abertoPorId, dto.contraparteId);
+
+    /*
+     * O RASTRO É DECIDIDO ANTES DA ESCRITA, pela mesma razão escrita na `editarPosicoes`: depois do
+     * `update` o número ANTERIOR não existe mais em lugar nenhum, e quem grava primeiro não tem mais
+     * como responder "de quanto para quanto".
+     */
+    const reducao = this.reducaoDeMeta(atual, campos);
 
     // OS BENEFÍCIOS SÃO SUBSTITUÍDOS, não mesclados: a trilha manda a lista COMPLETA do que está
     // marcado, então o que sumiu da lista foi desmarcado pela pessoa. Mesclar deixaria no banco um
@@ -513,6 +647,21 @@ export class VagasService {
         })
         .where(eq(vagas.id, id));
 
+      /*
+       * A MESMA TRANSAÇÃO DA ESCRITA, como na rota irmã: rastro que pode FALTAR quando a escrita deu
+       * certo não é rastro, seria de novo a meta menor sem ninguém para responder por ela.
+       */
+      if (reducao) {
+        await tx.insert(vagaMetaReducoes).values({
+          vagaId: id,
+          deOficiais: reducao.deOficiais,
+          paraOficiais: reducao.paraOficiais,
+          deBanco: reducao.deBanco,
+          paraBanco: reducao.paraBanco,
+          porId: autorId,
+        });
+      }
+
       await tx.delete(vagaBeneficio).where(eq(vagaBeneficio.vagaId, id));
       if (beneficios.length > 0) {
         await tx
@@ -522,6 +671,73 @@ export class VagasService {
     });
 
     return this.devolverVaga(id, "Vaga salva, mas não encontrada na listagem.");
+  }
+
+  /**
+   * ─ A META OFICIAL NA CONTINUAÇÃO DO RASCUNHO: CORPO SEM O CAMPO PRESERVA O NÚMERO ─────────────
+   *
+   * A REGRA DA CASA NESTA ROTA É "O CORPO É COMPLETO": campo ausente é campo LIMPO, e é assim que o
+   * idioma, o escape de "Outros" e o detalhe do híbrido somem quando a pessoa desmarca a opção. A
+   * META OFICIAL É A ÚNICA EXCEÇÃO, e ela não é de conforto: é a condição para o rastro existir.
+   *
+   * APAGAR UMA META QUE EXISTIA NÃO É "DEFINIR", É PERDER INFORMAÇÃO, e é a redução mais completa
+   * que há: com `posicoes_oficiais` nula, `travaPosicoesOficiais` devolve `null` de saída e o
+   * fechamento deixa de ter gate NENHUM, sem Master e sem trilha de forçamento. Pior ainda em dois
+   * passos: 5 vira nulo (silencioso), e depois o nulo vira 1, que o rastro lê como "definir" e não
+   * registra. As quatro posições somem sem uma linha em lugar nenhum.
+   *
+   * E O RASTRO NÃO SABE ESCREVER "VIROU NULO": `vaga_meta_reducoes.para_oficiais` é NOT NULL e
+   * `> 0` por check (0099), de propósito, porque a vaga também recusa meta zero. Registrar o
+   * apagamento exigiria mudar a tabela, que é outra decisão e ninguém pediu (§A.14).
+   *
+   * ENTÃO A META NÃO É APAGADA POR AUSÊNCIA, e isto NÃO é trava: nada é recusado, nenhum papel é
+   * exigido, nenhuma requisição falha. Quem quer BAIXAR a meta manda o número novo, e aí a linha de
+   * rastro nasce. O que deixa de existir é o caminho de perdê-la em silêncio. O único efeito
+   * colateral é que "voltar a não ter meta" deixa de ser possível pela trilha, e isso ninguém pediu:
+   * publicar já exige o campo, e o rascunho continua nascendo sem meta normalmente.
+   *
+   * O BANCO NÃO ENTRA NESTA EXCEÇÃO, e a assimetria é a mesma da tabela e da vaga: `posicoes_banco`
+   * é NOT NULL, ausente vale ZERO, e "sem banco" é RESPOSTA e não lacuna. Baixá-lo a zero é uma
+   * redução de verdade, representável na linha do rastro, e é registrada como tal.
+   */
+  private metaOficialDaTrilha(
+    dto: CreateVagaDto,
+    atual: { posicoesOficiais: number | null },
+  ): number | null {
+    return dto.posicoesOficiais ?? atual.posicoesOficiais ?? null;
+  }
+
+  /**
+   * ─ A TRILHA DE ABERTURA NÃO ENCERRA VAGA (achado bloqueante da auditoria, 08/09) ──────────────
+   *
+   * SÓ `RASCUNHO` E `ABERTA` SAEM DAQUI. Quem quiser terminar a vaga usa a porta do fechamento, que
+   * é onde vivem a trava de todo candidato tratado, a das posições oficiais, o 403 de quem não pode
+   * forçar e a trilha do forçamento. Nenhuma delas rodava quando esta rota gravava o status cru.
+   *
+   * O CENÁRIO ERA ALCANÇÁVEL, e não teórico: o rascunho RECEBE candidato, então um COMUM pegava um
+   * rascunho com gente pendurada, publicava como `FECHADA` e a vaga terminava sem nada rodar, sem
+   * ninguém ser avisado e sem uma linha de trilha dizendo que aquilo aconteceu.
+   *
+   * POR QUE AQUI TAMBÉM, SE O DTO JÁ RECUSA. Porque a autoridade deste módulo é declaradamente o
+   * SERVICE (é o argumento que dispensa o `@Roles` na rota de fechar), e um argumento desses só se
+   * sustenta se a régua estiver onde ele diz que está. O DTO protege a rota HTTP de hoje; esta
+   * linha protege a operação de qualquer chamador que apareça amanhã, inclusive uma rotina de
+   * importação, que não passa por DTO nenhum.
+   *
+   * A LISTA VEM DO DOMÍNIO (`VAGA_STATUS_DA_TRILHA`) e não é redigitada: duas cópias da mesma régua
+   * divergem na primeira correção feita só em uma delas, que é o defeito que este módulo já pagou.
+   */
+  private travaStatusDaTrilha(
+    pedido: string | undefined,
+    padrao: VagaStatusDaTrilha,
+  ): VagaStatusDaTrilha {
+    const status = pedido ?? padrao;
+    if (!ehStatusDaTrilha(status)) {
+      throw new BadRequestException(
+        "Esta tela salva a vaga como rascunho ou publica a vaga aberta, e nada mais. Para encerrar a vaga, use a ação de fechar vaga, que é onde o sistema confere os candidatos pendentes e as posições preenchidas.",
+      );
+    }
+    return status;
   }
 
   /**
@@ -701,10 +917,24 @@ export class VagasService {
    * edição, e o indicador de entrega passaria a mentir sobre um processo terminado.
    *
    * A RÉGUA DOS DOIS LADOS VALE AQUI TAMBÉM, e não é redundância: baixar a meta abaixo do que já foi
-   * contado é a mesma inconsistência que a trava do fechamento existe para impedir, chegando pela
+   * ENTREGUE é a mesma inconsistência que a trava do fechamento existe para impedir, chegando pela
    * outra ponta.
+   *
+   * ┌─ `excessoDePosicoes` NÃO PERDEU A RAZÃO DE EXISTIR: ELE MUDOU DE DONO E DE INSUMO ─────────┐
+   * │ Ele era chamado em DOIS lugares. No `fechar()`, comparando a meta com o número DIGITADO, e  │
+   * │ lá ele morreu junto com o número digitado. AQUI ele fica, e a pergunta continua precisando  │
+   * │ de resposta: "dá para reduzir a meta para 2 se 3 posições já foram ENTREGUES?". O que muda  │
+   * │ é de onde vem a contagem: era `vagas_fechadas` (o carimbo do fechamento, que numa vaga      │
+   * │ ainda VIVA é sempre nulo, e portanto nunca acusava nada), passa a ser a OCUPAÇÃO DERIVADA.  │
+   * │ Com o insumo antigo esta trava não protegia coisa alguma na vaga aberta, que é a única que  │
+   * │ chega aqui.                                                                                │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
    */
-  async editarPosicoes(id: string, dto: EditarPosicoesVagaDto): Promise<VagaListItem> {
+  async editarPosicoes(
+    id: string,
+    dto: EditarPosicoesVagaDto,
+    autorId: string,
+  ): Promise<VagaListItem> {
     const vaga = await this.db.query.vagas.findFirst({ where: eq(vagas.id, id) });
     if (!vaga) throw new NotFoundException("Vaga não encontrada.");
     if (vaga.status === "FECHADA" || vaga.status === "ENTREGUE" || vaga.status === "CANCELADA") {
@@ -713,110 +943,371 @@ export class VagasService {
       );
     }
 
+    // A ENTREGA REAL DA VAGA, pela mesma consulta agregada e pela mesma régua do domínio que a
+    // listagem usa. Uma contagem própria aqui seria mais uma cópia da régua de posição.
+    const ocupacao =
+      (await this.ocupacaoPorVaga([{ id, posicoesOficiais: vaga.posicoesOficiais }])).get(id) ??
+      this.ocupacaoVazia(id, vaga.posicoesOficiais);
+
     const excesso = excessoDePosicoes(
-      { vagasFechadas: vaga.vagasFechadas, vagasFechadasBanco: vaga.vagasFechadasBanco },
+      {
+        vagasFechadas: ocupacao.finalizadasOficial,
+        vagasFechadasBanco: ocupacao.finalizadasBanco,
+      },
       { posicoesOficiais: dto.posicoesOficiais, posicoesBanco: dto.posicoesBanco },
     );
     if (excesso) throw new BadRequestException(this.mensagemDeExcesso(excesso));
 
-    await this.db
-      .update(vagas)
-      .set({
-        posicoesOficiais: dto.posicoesOficiais,
-        posicoesBanco: dto.posicoesBanco,
-        atualizadoEm: new Date(),
-      })
-      .where(eq(vagas.id, id));
+    /*
+     * O RASTRO É DECIDIDO ANTES DA ESCRITA, porque depois dela o número ANTERIOR não existe mais em
+     * lugar nenhum: quem grava primeiro e pergunta depois não tem mais como responder "de quanto
+     * para quanto".
+     */
+    const reducao = this.reducaoDeMeta(vaga, dto);
+
+    /*
+     * ┌─ A MESMA TRANSAÇÃO, e é isto que faz o rastro ser rastro ─────────────────────────────────┐
+     * │ Rastro que pode FALTAR quando a escrita deu certo não é rastro: seria exatamente o estado  │
+     * │ que esta frente existe para eliminar, a meta menor sem ninguém para responder por ela. Um  │
+     * │ `update` e um `insert` soltos admitem a queda entre os dois; dentro da transação, ou as    │
+     * │ duas coisas acontecem, ou nenhuma acontece.                                                │
+     * └────────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    await this.db.transaction(async (tx) => {
+      await tx
+        .update(vagas)
+        .set({
+          posicoesOficiais: dto.posicoesOficiais,
+          posicoesBanco: dto.posicoesBanco,
+          atualizadoEm: new Date(),
+        })
+        .where(eq(vagas.id, id));
+
+      if (reducao) {
+        await tx.insert(vagaMetaReducoes).values({
+          vagaId: id,
+          deOficiais: reducao.deOficiais,
+          paraOficiais: reducao.paraOficiais,
+          deBanco: reducao.deBanco,
+          paraBanco: reducao.paraBanco,
+          porId: autorId,
+        });
+      }
+    });
 
     return this.devolverVaga(id, "Posições salvas, mas a vaga não foi encontrada na listagem.");
   }
 
   /**
-   * A FRASE DO EXCESSO, escrita uma vez só para os dois caminhos que podem produzi-lo (o fechamento e
-   * a edição das posições). A régua é do domínio; aqui só se fala português com quem está na tela.
+   * ─ HOUVE REDUÇÃO? A pergunta que decide se nasce uma linha de rastro ──────────────────────────
+   *
+   * SÓ A REDUÇÃO É REGISTRADA (decisão do diretor). AUMENTAR a meta não contorna gate nenhum: ele
+   * AFASTA o fechamento em vez de aproximá-lo, e registrar aumento encheria a trilha de ruído
+   * justamente no caso inofensivo. Salvar o mesmo par de números também não é evento: é a tela
+   * mandando de volta o que já estava lá.
+   *
+   * QUALQUER UM DOS DOIS LADOS gera a linha, e a linha carrega OS DOIS, porque o gesto é uma
+   * requisição só. Quem baixou apenas o banco sai com `deOficiais === paraOficiais`, e é assim que
+   * a tela lê "esta redução não mexeu no oficial".
+   *
+   * META QUE NÃO EXISTIA NÃO FOI REDUZIDA. Com `posicoesOficiais` nula (rascunho sem meta), passar a
+   * ter meta é DEFINIR, não baixar, e por isso o lado oficial não dispara nada sozinho. Se o gesto
+   * reduzir o BANCO na mesma requisição, a linha nasce por causa do banco e o `deOficiais` vai NULO
+   * para o banco de dados, que é a verdade do que havia antes.
+   *
+   * ┌─ AS DUAS PORTAS QUE ESCREVEM A META USAM ESTA MESMA PERGUNTA (conserto de 09/09) ──────────┐
+   * │ ELA NASCEU PARA A ROTA DAS POSIÇÕES e agora atende também a CONTINUAÇÃO DO RASCUNHO, que   │
+   * │ era o escritor esquecido e por onde o desvio do gate continuava inteiro. Por isso o segundo │
+   * │ parâmetro deixou de ser o DTO daquela rota e passou a ser o PAR DE NÚMEROS: uma segunda     │
+   * │ cópia desta régua divergiria da primeira na correção seguinte, que é o defeito que este     │
+   * │ módulo já pagou várias vezes.                                                              │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
    */
-  private mensagemDeExcesso(excesso: ExcessoDePosicoes): string {
-    const meta =
-      excesso.lado === "OFICIAIS"
-        ? `${excesso.meta} ${excesso.meta === 1 ? "posição oficial" : "posições oficiais"}`
-        : `${excesso.meta} ${excesso.meta === 1 ? "posição de banco" : "posições de banco"}`;
-    const contagem = excesso.lado === "OFICIAIS" ? "vagas fechadas" : "vagas fechadas de banco";
-    return `A vaga tem ${meta}: o número de ${contagem} não pode ser maior que isso.`;
+  private reducaoDeMeta(
+    antes: { posicoesOficiais: number | null; posicoesBanco: number },
+    depois: { posicoesOficiais: number | null; posicoesBanco: number },
+  ): {
+    deOficiais: number | null;
+    paraOficiais: number;
+    deBanco: number;
+    paraBanco: number;
+  } | null {
+    const oficialCaiu =
+      antes.posicoesOficiais !== null &&
+      depois.posicoesOficiais !== null &&
+      depois.posicoesOficiais < antes.posicoesOficiais;
+    const bancoCaiu = depois.posicoesBanco < antes.posicoesBanco;
+    if (!oficialCaiu && !bancoCaiu) return null;
+
+    /**
+     * SEM META OFICIAL DEPOIS, NÃO HÁ LINHA A ESCREVER, e este caso é ESTREITO e sem gate a
+     * contornar: chegar aqui exige a vaga NÃO TER meta oficial nem antes nem depois (a rota das
+     * posições exige o número, e a trilha PRESERVA o que existia, ver `metaOficialDaTrilha`), então
+     * o lado oficial não caiu, o que caiu foi o BANCO, e o banco não segura fechamento nenhum
+     * (`travaPosicoesOficiais` só olha o oficial). A linha não é omitida por escolha: `para_oficiais`
+     * é NOT NULL e `> 0` na tabela, e inventar um zero descreveria um estado que a vaga nunca teve.
+     */
+    if (depois.posicoesOficiais === null) return null;
+
+    return {
+      deOficiais: antes.posicoesOficiais,
+      paraOficiais: depois.posicoesOficiais,
+      deBanco: antes.posicoesBanco,
+      paraBanco: depois.posicoesBanco,
+    };
   }
 
   /**
-   * FECHAR A VAGA (frente 4): o outro momento do processo, e por isso caminho próprio.
+   * A FRASE DO EXCESSO, e ela MUDOU DE ASSUNTO junto com o insumo.
    *
-   * O STATUS que sai daqui é ENTREGUE quando alguma posição foi preenchida e FECHADA quando nenhuma
-   * foi, porque é a distinção que a operação faz e que o vocabulário de status preserva de propósito.
+   * ANTES ELA FALAVA DE "VAGAS FECHADAS", o número digitado no formulário de fechamento. Esse número
+   * deixou de existir como decisão, então a frase que mandava corrigi-lo mandaria a pessoa mexer num
+   * campo que a tela não tem mais. Agora ela fala do que de fato aconteceu: a vaga já ENTREGOU tantas
+   * posições, e a meta não pode ficar abaixo disso.
+   *
+   * O QUE FAZER VEM JUNTO. Quem lê está com o formulário aberto e precisa saber qual número serve, e
+   * não só que o dele não serve.
+   */
+  private mensagemDeExcesso(excesso: ExcessoDePosicoes): string {
+    const entregues =
+      excesso.lado === "OFICIAIS"
+        ? `${excesso.informado} ${excesso.informado === 1 ? "posição oficial" : "posições oficiais"}`
+        : `${excesso.informado} ${excesso.informado === 1 ? "posição de banco" : "posições de banco"}`;
+    const lado = excesso.lado === "OFICIAIS" ? "oficial" : "de banco";
+    return (
+      `Esta vaga já entregou ${entregues}: a meta ${lado} não pode ficar abaixo do que já foi ` +
+      `preenchido. Informe ${excesso.informado} ou mais.`
+    );
+  }
+
+  /**
+   * ─ FECHAR A VAGA: QUEM DIZ QUE ELA ENTREGOU SÃO AS CANDIDATURAS, NÃO O FORMULÁRIO ─────────────
+   *
+   * A RÉGUA É DO DIRETOR: a vaga só fecha quando TODAS as posições OFICIAIS estão preenchidas. O
+   * contador de BANCO não participa do gate, e essa exclusão é o coração da regra: reserva não é
+   * entrega, então vinte pessoas no banco não ajudam a fechar uma vaga com cinco oficiais vazias.
+   *
+   * QUEM CONTA É A DERIVADA (`ocupacao.finalizadasOficial`), a MESMA leitura que enche o cilindro da
+   * tela. É por isso que a tela e a trava não têm como discordar: elas não são duas contas, são a
+   * mesma conta lida duas vezes. O número DIGITADO no formulário deixou de decidir qualquer coisa.
+   *
+   * AS TRÊS TRAVAS, NESTA ORDEM, e as três são independentes:
+   *   VAGA ABERTA: a vaga só fecha uma vez.
+   *   TRAVA 5: TODO CANDIDATO TRATADO. Bloqueio DURO, sem forçar, nem para Master: fechar deixando
+   *     alguém pendurado no funil é autorizar o silêncio com uma pessoa que foi entrevistada.
+   *   TRAVA 6: A VAGA ENTREGOU O QUE PROMETEU. Bloqueio COM aceite de Master, porque acontece de o
+   *     cliente desistir de duas das cinco posições e a vaga precisar encerrar mesmo assim.
+   * A 5 VEM PRIMEIRO porque ela fala do PROCESSO (tem gente esperando resposta) e a 6 fala dos
+   * NÚMEROS. E limpar a 5 NÃO ajuda a passar na 6: descartar quem sobrou não entrega posição nenhuma.
+   *
+   * ┌─ POR QUE ISTO VIROU UMA TRANSAÇÃO COM `SELECT ... FOR UPDATE` NA LINHA DA VAGA ────────────┐
+   * │ ENQUANTO O NÚMERO VINHA DIGITADO NÃO HAVIA CORRIDA A PERDER: o formulário trazia a resposta │
+   * │ pronta. Decidindo por CONTAGEM DE CANDIDATURAS, há: um consultor finaliza a última posição  │
+   * │ no exato instante em que outro fecha a vaga, e o fechamento decide sobre uma fotografia     │
+   * │ velha. Uma consulta solta antes do update responde sobre o PASSADO.                        │
+   * │                                                                                            │
+   * │ A ORDEM É A MESMA DA APROVAÇÃO (`candidatos.service.mudarSituacaoOcupandoPosicao`): abre a  │
+   * │ transação, TRAVA A LINHA DA VAGA, só então conta, decide e grava. A VAGA É O RECURSO        │
+   * │ DISPUTADO NOS DOIS CAMINHOS, então é a linha dela que serializa a disputa e os dois locks   │
+   * │ SE ENXERGAM: a finalização que chegar no meio de um fechamento espera, e quando ela contar, │
+   * │ contará com a vaga já encerrada, caindo na trava de status.                                │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * UMA LEITURA SÓ SERVE AS DUAS TRAVAS. As candidaturas da vaga são lidas UMA VEZ, sob o lock, e a
+   * mesma lista responde "sobrou alguém sem decisão?" (trava 5) e "quantas posições foram
+   * entregues?" (trava 6). Duas consultas responderiam sobre dois instantes.
    *
    * `enviarParaAdmissao` REGISTRA A INTENÇÃO e não liga nada: a ponte com a esteira é frente
    * separada. Nenhuma admissão, frente ou documento nasce daqui.
-   *
-   * AS DUAS TRAVAS DO FECHAMENTO, NESTA ORDEM, e as duas são independentes:
-   *   TRAVA 5 (nova, ajuste do diretor): TODO CANDIDATO DA VAGA TEM DE ESTAR TRATADO.
-   *   TRAVA DOS DOIS CONTADORES (25/08, intocada): a contagem informada não passa da meta.
-   * A 5 vem primeiro porque ela fala do PROCESSO (tem gente pendurada no funil), enquanto a outra
-   * fala dos NÚMEROS digitados no formulário de fechamento. Recusar pelos números uma vaga que nem
-   * podia ser fechada mandaria a pessoa corrigir o campo errado.
    */
-  async fechar(id: string, dto: FecharVagaDto): Promise<VagaListItem> {
-    const vaga = await this.db.query.vagas.findFirst({ where: eq(vagas.id, id) });
-    if (!vaga) throw new BadRequestException("Vaga não encontrada.");
-    if (vaga.status !== "ABERTA") {
-      throw new ConflictException("Esta vaga já foi fechada. Recarregue a página.");
+  async fechar(id: string, dto: FecharVagaDto, user: AuthUser): Promise<VagaListItem> {
+    await this.db.transaction(async (tx) => {
+      // ── A LINHA DA VAGA É TRAVADA ANTES DE QUALQUER CONTAGEM. Daqui até o fim da transação,
+      // nenhuma finalização de posição nesta mesma vaga passa deste ponto.
+      const [vaga] = await tx
+        .select({
+          id: vagas.id,
+          status: vagas.status,
+          posicoesOficiais: vagas.posicoesOficiais,
+        })
+        .from(vagas)
+        .where(eq(vagas.id, id))
+        .for("update");
+      if (!vaga) throw new BadRequestException("Vaga não encontrada.");
+      if (vaga.status !== "ABERTA") {
+        throw new ConflictException("Esta vaga já foi fechada. Recarregue a página.");
+      }
+
+      const linhas = await this.candidaturasDaVaga(tx, id);
+
+      // TRAVA 5: candidato ainda EM SELEÇÃO segura o fechamento, e ninguém força esta.
+      this.travaCandidatosPendentes(linhas);
+
+      /*
+       * A OCUPAÇÃO DERIVADA, pela régua do domínio e sobre a MESMA lista já lida. Somar "quem
+       * entregou posição" aqui seria mais uma cópia da régua que o módulo passou uma frente inteira
+       * eliminando, e é essa cópia que faz a tela e a trava darem números diferentes em silêncio.
+       */
+      const ocupacao = ocupacaoDaVaga(vaga.posicoesOficiais, linhas);
+
+      // TRAVA 6: a vaga entregou as posições OFICIAIS? Devolve o que gravar quando um Master forçou.
+      const forcado = this.travaPosicoesOficiais(vaga.posicoesOficiais, ocupacao, dto, user);
+
+      await tx
+        .update(vagas)
+        .set({
+          dataFechamento: dto.dataFechamento,
+          /**
+           * OS DOIS CONTADORES VIRAM CARIMBO DA DERIVADA, e não morrem: o que morreu foi o número
+           * DIGITADO. Eles gravam `finalizadasOficial` e `finalizadasBanco` do instante do
+           * fechamento, e é o que a tela lê na vaga ENCERRADA (a derivada dela pode mudar depois, e
+           * o histórico de uma vaga terminada não pode).
+           *
+           * NÃO É UM CONTADOR DUPLICADO NO SENTIDO QUE O MÓDULO RECUSA: enquanto a vaga está VIVA
+           * ninguém escreve aqui e a tela lê a derivada. O carimbo nasce no gesto que encerra o
+           * processo, pela mesma razão do `faltavam` do forçado: é a fotografia de um fato.
+           */
+          vagasFechadas: ocupacao.finalizadasOficial,
+          vagasFechadasBanco: ocupacao.finalizadasBanco,
+          salarioFechamento: dto.salarioFechamento ?? null,
+          dataPrevistaInicio: data(dto.dataPrevistaInicio),
+          enviarParaAdmissao: dto.enviarParaAdmissao ?? false,
+          /**
+           * ENTREGUE quando ALGUMA posição foi preenchida, dos dois lados. O lado do banco entra na
+           * conta porque ele é posição preenchida de verdade, e chamar de FECHADA uma vaga que
+           * entregou três pessoas para o banco apagaria justamente o indicador de sucesso que o
+           * vocabulário de status preserva de propósito.
+           *
+           * O QUE MUDOU AQUI É A FONTE, NÃO A REGRA: antes a pergunta era feita ao número digitado,
+           * agora é feita à contagem das candidaturas. Uma vaga que entregou de fato continua saindo
+           * ENTREGUE; a que fecha sem ninguém dentro continua saindo FECHADA.
+           */
+          status: ocupacao.finalizadas > 0 ? "ENTREGUE" : "FECHADA",
+          /**
+           * A TRILHA DO FORÇADO, escrita na MESMA gravação que encerra a vaga: um `update` só, então
+           * não existe o estado de vaga fechada à força sem trilha.
+           */
+          ...(forcado
+            ? {
+                fechamentoForcadoPorId: user.id,
+                fechamentoForcadoEm: new Date(),
+                fechamentoForcadoFaltavam: forcado.faltavam,
+              }
+            : {}),
+          atualizadoEm: new Date(),
+        })
+        .where(eq(vagas.id, id));
+    });
+
+    return this.devolverVaga(id, "Vaga fechada, mas não encontrada na listagem.");
+  }
+
+  /**
+   * ─ A TRAVA 6: A VAGA SÓ FECHA QUANDO ENTREGOU AS POSIÇÕES OFICIAIS ────────────────────────────
+   *
+   * O BANCO NÃO ENTRA NA CONTA, e é o ponto que mais se erra: uma vaga de 5 oficiais com 20 pessoas
+   * entregues ao banco continua devendo as 5. Reserva não é entrega, e somar os dois lados aqui
+   * deixaria fechar uma vaga que não contratou ninguém.
+   *
+   * ┌─ A AUTORIZAÇÃO MORA AQUI, E NUNCA EM `@Roles` NA ROTA ─────────────────────────────────────┐
+   * │ TODO CONSULTOR PRECISA PODER FECHAR UMA VAGA COMPLETA. Só o FORÇAR é de Master, então um    │
+   * │ `@Roles("MASTER","SUPER_ADMIN")` no handler barraria o fechamento NORMAL do COMUM, que é    │
+   * │ regressão silenciosa: a vaga que entregou tudo deixaria de fechar para quem a operou.       │
+   * │                                                                                            │
+   * │ O PADRÃO É O DA LIBERAÇÃO DE APTO SEM ASO (`esteira.service.ts`), idêntico em forma: o      │
+   * │ COMUM leva trava dura SEM opção de forçar, o MASTER confirma e a exceção fica registrada em │
+   * │ NOME DELE. A tela esconder o botão é conveniência; o guard é a autoridade.                  │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * META NULA NÃO TEM TETO A COBRAR: ausência de meta não é meta zero, e recusar o fechamento por
+   * causa dela inventaria uma trava que ninguém configurou. Vaga em rascunho nem chega aqui (só a
+   * ABERTA passa), mas a coluna é nulável e o tipo é honesto sobre isso.
+   *
+   * Devolve `null` quando não houve exceção, ou o que gravar na trilha quando houve.
+   */
+  private travaPosicoesOficiais(
+    meta: number | null,
+    ocupacao: { finalizadasOficial: number },
+    dto: FecharVagaDto,
+    user: AuthUser,
+  ): { faltavam: number } | null {
+    if (meta === null || meta === undefined) return null;
+
+    const faltam = meta - ocupacao.finalizadasOficial;
+    if (faltam <= 0) return null;
+
+    // O PAPEL É RESOLVIDO NO SERVIDOR, e volta no corpo da recusa só para a tela não oferecer ao
+    // COMUM um botão que vai receber 403. Quem decide continua sendo esta função.
+    const podeForcar = user.papel === "MASTER" || user.papel === "SUPER_ADMIN";
+
+    if (!dto.forcar) {
+      /**
+       * A RECUSA É ESTRUTURADA, e não uma frase: a tela precisa dizer "3 de 5" e oferecer o
+       * forçamento a quem pode, sem recontar nada e sem casar por texto de mensagem (é para isso
+       * que `motivo` existe).
+       *
+       * A `message` VIAJA JUNTO porque a mensagem de erro do sistema vem do backend, sempre: sem
+       * ela, qualquer caminho que caia no tratamento genérico mostraria "Conflict" ao consultor.
+       */
+      const corpo: FecharVagaRecusa & { message: string } = {
+        motivo: "POSICOES_OFICIAIS_ABERTAS",
+        faltam,
+        posicoesOficiais: meta,
+        finalizadasOficial: ocupacao.finalizadasOficial,
+        podeForcar,
+        message:
+          faltam === 1
+            ? `Esta vaga tem ${meta} ${meta === 1 ? "posição oficial" : "posições oficiais"} e 1 ainda não foi preenchida. Finalize a posição que falta, ou peça a um Master para encerrar assim mesmo.`
+            : `Esta vaga tem ${meta} posições oficiais e ${faltam} ainda não foram preenchidas. Finalize as posições que faltam, ou peça a um Master para encerrar assim mesmo.`,
+      };
+      throw new ConflictException(corpo);
     }
 
-    // TRAVA 5: candidato ainda EM SELEÇÃO segura o fechamento. Guarda ACRESCENTADA aqui, ANTES da
-    // trava dos dois contadores, que continua exatamente como estava.
-    await this.travaCandidatosPendentes(id);
+    if (!podeForcar) {
+      throw new ForbiddenException(
+        "Encerrar a vaga com posição oficial em aberto é ação de Master. Finalize as posições que faltam, ou peça a um Master para encerrar assim mesmo.",
+      );
+    }
 
-    /**
-     * A TRAVA DOS DOIS CONTADORES (25/08), com os lados conferidos SEPARADAMENTE: sobra no banco não
-     * autoriza contratar a mais no oficial. A régua é a do domínio (`excessoDePosicoes`); aqui só se
-     * escreve a frase que a pessoa lê, porque quem sabe falar HTTP é o serviço.
-     *
-     * A META PODE SER NULA (rascunho), e aí não há teto a exceder. Vaga em rascunho nem chega aqui,
-     * porque a trava de status acima só deixa passar a ABERTA, mas o tipo é honesto sobre a coluna.
-     */
-    const excesso = excessoDePosicoes(
-      { vagasFechadas: dto.vagasFechadas, vagasFechadasBanco: dto.vagasFechadasBanco },
-      { posicoesOficiais: vaga.posicoesOficiais, posicoesBanco: vaga.posicoesBanco },
-    );
-    if (excesso) throw new BadRequestException(this.mensagemDeExcesso(excesso));
+    return { faltavam: faltam };
+  }
 
-    await this.db
-      .update(vagas)
-      .set({
-        dataFechamento: dto.dataFechamento,
-        vagasFechadas: dto.vagasFechadas ?? null,
-        vagasFechadasBanco: dto.vagasFechadasBanco ?? null,
-        salarioFechamento: dto.salarioFechamento ?? null,
-        dataPrevistaInicio: data(dto.dataPrevistaInicio),
-        enviarParaAdmissao: dto.enviarParaAdmissao ?? false,
-        /**
-         * ENTREGUE quando ALGUMA posição foi preenchida, dos dois lados. O lado do banco entra na
-         * conta porque ele é posição preenchida de verdade, e chamar de FECHADA uma vaga que entregou
-         * três pessoas para o banco apagaria justamente o indicador de sucesso que o vocabulário de
-         * status preserva de propósito.
-         *
-         * ISTO NÃO MUDA NENHUM FECHAMENTO QUE JÁ FUNCIONAVA: sem banco reservado, a contagem de banco
-         * é zero e a regra devolve exatamente o que devolvia antes.
-         */
-        status: (dto.vagasFechadas ?? 0) + (dto.vagasFechadasBanco ?? 0) > 0 ? "ENTREGUE" : "FECHADA",
-        atualizadoEm: new Date(),
+  /**
+   * AS CANDIDATURAS DA VAGA, LIDAS UMA VEZ SÓ, e as duas travas do fechamento bebem daqui.
+   *
+   * O LADO DA POSIÇÃO VEM JUNTO porque a ocupação derivada separa OFICIAL de BANCO, e é essa
+   * separação que impede vinte pessoas na reserva de fecharem uma vaga com as oficiais vazias.
+   *
+   * LIDA COM O EXECUTOR DA TRANSAÇÃO (o `tx`), e não com `this.db`: uma leitura por fora do lock
+   * responderia sobre um instante anterior ao da decisão, que é exatamente o defeito que o
+   * `FOR UPDATE` existe para fechar.
+   *
+   * §A.6: sai o id da candidatura, o id e o NOME do candidato, a etapa, a situação e o lado. Sem
+   * CPF, sem contato, e a consulta não chega a SELECIONAR o CPF, mesmo tendo a tabela no join.
+   */
+  private async candidaturasDaVaga(
+    tx: DbTransaction,
+    vagaId: string,
+  ): Promise<LinhaDeCandidatura[]> {
+    return tx
+      .select({
+        candidaturaId: asCandidaturas.id,
+        candidatoId: asCandidaturas.candidatoId,
+        candidatoNome: asCandidatos.nome,
+        etapa: asCandidaturas.etapa,
+        situacao: asCandidaturas.situacao,
+        posicaoLado: asCandidaturas.posicaoLado,
       })
-      .where(eq(vagas.id, id));
-
-    const fechada = (await this.list()).find((v) => v.id === id);
-    if (!fechada) throw new BadRequestException("Vaga fechada, mas não encontrada na listagem.");
-    return fechada;
+      .from(asCandidaturas)
+      .innerJoin(asCandidatos, eq(asCandidatos.id, asCandidaturas.candidatoId))
+      .where(eq(asCandidaturas.vagaId, vagaId))
+      .orderBy(asc(asCandidatos.nome));
   }
 
   /**
    * A TRAVA 5: A VAGA SÓ ENCERRA COM TODOS OS CANDIDATOS TRATADOS (ajuste do diretor).
    *
-   * TRATADO É TER RECEBIDO UMA DECISÃO: `APROVADO`, `CONTRATADO`, `DESCARTADO` ou `DESISTIU`. SÓ
+   * TRATADO É TER RECEBIDO UMA DECISÃO: `APROVADO`, `ENVIADO_PARA_ADMISSAO`, `DESCARTADO` ou `DESISTIU`. SÓ
    * `ATIVO` é pendente. A régua é do domínio (`pendentesDeTratamento`, em `domain/candidatura`), e
    * NÃO é reescrita aqui: uma segunda lista de situações neste arquivo divergiria da primeira no dia
    * em que o vocabulário mudasse.
@@ -834,23 +1325,15 @@ export class VagasService {
    * de esquecer e é o primeiro que o consultor precisa decidir; quem está na Captação é o descarte
    * em massa que ele faz por último.
    *
+   * ELA DEIXOU DE FAZER A PRÓPRIA CONSULTA e passou a RECEBER as linhas, e a mudança não é de
+   * estilo: a leitura agora acontece DENTRO da transação do fechamento, sob a linha da vaga travada,
+   * e serve também a trava 6. Duas consultas responderiam sobre dois instantes diferentes, e a
+   * segunda delas sobre um instante anterior ao da decisão. A régua da trava não mudou uma vírgula.
+   *
    * §A.6: sai o id da candidatura, o id e o NOME do candidato e a etapa. Sem CPF, sem contato, sem
    * identificador direto, e a consulta não chega a SELECIONAR o CPF, mesmo tendo a tabela no join.
    */
-  private async travaCandidatosPendentes(vagaId: string): Promise<void> {
-    const linhas = await this.db
-      .select({
-        candidaturaId: asCandidaturas.id,
-        candidatoId: asCandidaturas.candidatoId,
-        candidatoNome: asCandidatos.nome,
-        etapa: asCandidaturas.etapa,
-        situacao: asCandidaturas.situacao,
-      })
-      .from(asCandidaturas)
-      .innerJoin(asCandidatos, eq(asCandidatos.id, asCandidaturas.candidatoId))
-      .where(eq(asCandidaturas.vagaId, vagaId))
-      .orderBy(asc(asCandidatos.nome));
-
+  private travaCandidatosPendentes(linhas: LinhaDeCandidatura[]): void {
     const pendentes = pendentesDeTratamento(linhas);
     if (pendentes.length === 0) return;
 
@@ -1018,6 +1501,146 @@ export class VagasService {
    * INNER JOIN no catálogo porque o nome do benefício mora lá: a vaga guarda o vínculo e o valor, e é
    * o catálogo que responde como ele se chama hoje.
    */
+  /**
+   * ─ A OCUPAÇÃO DERIVADA DE TODAS AS VAGAS DA LISTAGEM, EM UMA CONSULTA SÓ ──────────────────────
+   *
+   * UMA CONSULTA AGREGADA, E NUNCA UMA POR VAGA. O painel responde por UMA vaga e pode se dar ao
+   * luxo de ler as candidaturas dela; a listagem traz a tabela inteira (`list()` não pagina), então
+   * uma consulta por linha viraria centenas de idas ao banco na tela mais pesada do módulo. É o
+   * mesmo motivo, e o mesmo formato, de `beneficiosPorVaga` logo abaixo: agrupa no banco, monta o
+   * `Map` no Node. O índice `idx_as_candidaturas_vaga_situacao` serve exatamente esta consulta.
+   *
+   * O `group by (vaga, situação, LADO)` DEVOLVE CONTAGENS, E A RÉGUA CONTINUA SENDO A DO DOMÍNIO. As
+   * contagens são expandidas de volta em uma lista de candidaturas e entregues a `ocupacaoDaVaga`,
+   * em vez de a consulta somar "quem consome posição" no SQL. Somar no SQL seria reescrever a régua
+   * pela sexta vez, e é exatamente a cópia que o módulo passou a frente inteira eliminando: no dia
+   * em que uma situação nova entrar, a tela e a trava passariam a dar números diferentes em
+   * silêncio. Uma lista só, e a listagem lê dela.
+   *
+   * ┌─ O LADO ENTROU NO AGRUPAMENTO, E A CONSULTA CONTINUA SENDO UMA SÓ ─────────────────────────┐
+   * │ A separação da entrega em OFICIAL e BANCO não custou uma consulta a mais nem uma consulta   │
+   * │ por vaga: `posicao_lado` é mais uma coluna do MESMO `group by`. O que muda é o número de    │
+   * │ linhas devolvidas (no máximo o dobro, e só nas vagas que de fato usam o banco), não o       │
+   * │ número de idas ao banco, que continua em três para a página inteira.                        │
+   * │                                                                                            │
+   * │ O NULO NÃO É TRATADO AQUI: quem dobra `NULL` em OFICIAL é `ladoDaCandidatura`, dentro do    │
+   * │ domínio, e é por isso que a consulta não escreve um `coalesce`. Um `coalesce` em SQL seria  │
+   * │ a régua do lado copiada para fora do domínio, no mesmo arquivo em que o comentário acima    │
+   * │ explica por que isso já custou caro cinco vezes.                                            │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * §A.6: só `vaga_id`, `situacao`, `posicao_lado` e uma contagem. Nenhum dado de candidato sai
+   * desta consulta, e nenhum dos quatro identifica pessoa.
+   */
+  private async ocupacaoPorVaga(
+    vagasDaPagina: { id: string; posicoesOficiais: number | null }[],
+  ): Promise<Map<string, AsOcupacaoVaga>> {
+    const mapa = new Map<string, AsOcupacaoVaga>();
+    if (vagasDaPagina.length === 0) return mapa;
+
+    const linhas = await this.db
+      .select({
+        vagaId: asCandidaturas.vagaId,
+        situacao: asCandidaturas.situacao,
+        posicaoLado: asCandidaturas.posicaoLado,
+        quantas: sql<number>`count(*)::int`,
+      })
+      .from(asCandidaturas)
+      .where(
+        inArray(
+          asCandidaturas.vagaId,
+          vagasDaPagina.map((v) => v.id),
+        ),
+      )
+      .groupBy(asCandidaturas.vagaId, asCandidaturas.situacao, asCandidaturas.posicaoLado);
+
+    const porVaga = new Map<string, ItemDeOcupacao[]>();
+    for (const l of linhas) {
+      const lista = porVaga.get(l.vagaId) ?? [];
+      // A contagem volta a ser uma lista de candidaturas para o domínio decidir o que cada uma vale.
+      for (let i = 0; i < Number(l.quantas); i++) {
+        lista.push({ situacao: l.situacao, posicaoLado: l.posicaoLado });
+      }
+      porVaga.set(l.vagaId, lista);
+    }
+
+    for (const v of vagasDaPagina) {
+      mapa.set(v.id, {
+        vagaId: v.id,
+        posicoesOficiais: v.posicoesOficiais,
+        ...ocupacaoDaVaga(v.posicoesOficiais, porVaga.get(v.id) ?? []),
+      });
+    }
+    return mapa;
+  }
+
+  /**
+   * A OCUPAÇÃO DE QUEM NÃO TEM NINGUÉM DENTRO. Existe como rede: `ocupacaoPorVaga` já devolve a
+   * linha zerada de toda vaga da página, e esta função só cobre o caso de a listagem chegar aqui com
+   * uma vaga que não passou por lá. Zerada é a resposta certa, e `undefined` obrigaria a tela a
+   * inventar uma.
+   */
+  private ocupacaoVazia(vagaId: string, posicoesOficiais: number | null): AsOcupacaoVaga {
+    return { vagaId, posicoesOficiais, ...ocupacaoDaVaga(posicoesOficiais, []) };
+  }
+
+  /**
+   * ─ O RASTRO DA REDUÇÃO DE META, DE TODAS AS VAGAS DA PÁGINA, EM UMA CONSULTA ──────────────────
+   *
+   * UMA CONSULTA SÓ, pelo mesmo motivo dos benefícios e da ocupação: a listagem não pagina, e uma
+   * ida ao banco por linha responderia "vazio" centenas de vezes na tela mais pesada do módulo.
+   *
+   * `asc(criadoEm)` É A ORDEM DO CONTRATO, da redução mais ANTIGA para a mais RECENTE, e ela não é
+   * estética: a leitura da trilha é "5 para 3, depois 3 para 1". Invertida, ela conta a história de
+   * trás para frente e o encolhimento total fica ilegível. O índice `(vaga_id, criado_em)` serve
+   * exatamente esta consulta.
+   *
+   * O AUTOR VEM POR `leftJoin`, e não por `innerJoin`, exatamente como o autor do fechamento
+   * forçado: o `on delete set null` faz o `por_id` virar nulo quando o usuário é apagado, e um
+   * `innerJoin` sumiria em silêncio com a redução justamente nesse caso. Sem o nome, ela ainda diz
+   * QUANDO e de quanto para quanto.
+   *
+   * `deOficiais` NULO VIRA `paraOficiais` NA LEITURA, e o contrato é honesto sobre isso: nulo é
+   * "não havia meta oficial antes" (rascunho), e o lado oficial não foi REDUZIDO nesse gesto, que é
+   * o mesmo que a tela lê quando os dois números são iguais. O banco guarda a verdade crua; a
+   * tradução acontece aqui, num lugar só.
+   *
+   * §A.6: quatro números, um nome de usuário INTERNO e uma data. Nenhum dado de candidato.
+   */
+  private async metaReducoesPorVaga(vagaIds: string[]): Promise<Map<string, VagaMetaReducao[]>> {
+    const mapa = new Map<string, VagaMetaReducao[]>();
+    if (vagaIds.length === 0) return mapa;
+
+    const linhas = await this.db
+      .select({
+        vagaId: vagaMetaReducoes.vagaId,
+        deOficiais: vagaMetaReducoes.deOficiais,
+        paraOficiais: vagaMetaReducoes.paraOficiais,
+        deBanco: vagaMetaReducoes.deBanco,
+        paraBanco: vagaMetaReducoes.paraBanco,
+        porNome: usuarios.nome,
+        criadoEm: vagaMetaReducoes.criadoEm,
+      })
+      .from(vagaMetaReducoes)
+      .leftJoin(usuarios, eq(usuarios.id, vagaMetaReducoes.porId))
+      .where(inArray(vagaMetaReducoes.vagaId, vagaIds))
+      .orderBy(asc(vagaMetaReducoes.criadoEm));
+
+    for (const l of linhas) {
+      const atual = mapa.get(l.vagaId) ?? [];
+      atual.push({
+        deOficiais: l.deOficiais ?? l.paraOficiais,
+        paraOficiais: l.paraOficiais,
+        deBanco: l.deBanco,
+        paraBanco: l.paraBanco,
+        porNome: l.porNome ?? null,
+        quandoIso: l.criadoEm.toISOString(),
+      });
+      mapa.set(l.vagaId, atual);
+    }
+    return mapa;
+  }
+
   private async beneficiosPorVaga(
     vagaIds: string[],
   ): Promise<Map<string, { id: string; nome: string; valor: string | null }[]>> {

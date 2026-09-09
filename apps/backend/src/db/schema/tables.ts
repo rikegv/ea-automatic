@@ -18,7 +18,7 @@ import {
   varchar,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
-import { SITUACOES_VIVAS } from "../../domain/candidatura";
+import { ACEITES_REGISTRAVEIS, SITUACOES_ENCERRADAS_SEM_EXITO } from "../../domain/candidatura";
 import {
   areaEnum,
   asCandidatoOrigemEnum,
@@ -2454,6 +2454,37 @@ export const vagas = pgTable(
      */
     enviarParaAdmissao: boolean("enviar_para_admissao").notNull().default(false),
 
+    /**
+     * ─ A TRILHA DO FECHAMENTO FORÇADO, escrita SÓ quando um Master fecha com posição em aberto ──
+     *
+     * A RÉGUA DO DIRETOR: a vaga só fecha quando todas as posições OFICIAIS estão preenchidas
+     * (`finalizadasOficial >= posicoes_oficiais`, contado nas candidaturas). O MASTER e o
+     * SUPER_ADMIN podem passar por cima disso, porque acontece de o cliente desistir de duas das
+     * cinco posições e a vaga precisar encerrar assim mesmo. O que não pode é a exceção não deixar
+     * marca: quem forçou, quando, e o que ele estava vendo.
+     *
+     * TRÊS COLUNAS AQUI, E NÃO UMA TABELA DE EVENTO: o forçamento acontece NO MÁXIMO UMA VEZ por
+     * vaga (a vaga só fecha uma vez), então a tabela teria no máximo uma linha por vaga e uma FK
+     * para chegar nela. O resto do fechamento (`data_fechamento`, `salario_fechamento`) já mora
+     * nesta linha. O `passagem_aceites`, que seria o candidato natural a reuso, não serve: ele tem
+     * FK NOT NULL para `admissoes` e `frentes_admissao`, e vaga não é admissão.
+     *
+     * `faltavam` É CONGELADO, e este é o ÚNICO número derivado que este módulo GUARDA. Ele é a razão
+     * da exceção, e é verdadeiro NAQUELE instante: a vaga segue viva, alguém pode ser descartado
+     * depois e a meta pode mudar, então recalcular faria a trilha contar uma história diferente da
+     * que aconteceu. É carimbo histórico de um fato, não contador vivo.
+     *
+     * §A.6: nome de usuário INTERNO (pelo id), data e um número. Nenhum dado de candidato. Quem
+     * faltou é derivável a qualquer momento das candidaturas, e por isso não precisa ser guardado.
+     */
+    fechamentoForcadoPorId: uuid("fechamento_forcado_por_id").references(() => usuarios.id, {
+      // SET NULL, e não RESTRICT: apagar um usuário não pode falhar por causa de uma trilha, e a
+      // trilha não pode sumir junto com ele. Sem o autor, ela ainda diz QUANDO e QUANTAS faltavam.
+      onDelete: "set null",
+    }),
+    fechamentoForcadoEm: timestamp("fechamento_forcado_em", { withTimezone: true }),
+    fechamentoForcadoFaltavam: integer("fechamento_forcado_faltavam"),
+
     criadoEm,
     atualizadoEm,
   },
@@ -2476,6 +2507,20 @@ export const vagas = pgTable(
     // O BANCO ACEITA ZERO, e é a diferença que importa entre os dois checks: zero banco é o estado
     // normal da maioria das vagas, não uma linha defeituosa.
     ckPosicoesBanco: check("ck_vagas_posicoes_banco", sql`${t.posicoesBanco} >= 0`),
+    /**
+     * FORÇAR COM ZERO FALTANDO NÃO EXISTE: se não faltava nada, o fechamento passou pela régua
+     * normal e não é exceção nenhuma. Zero gravado aqui seria uma trilha que descreve um fato que
+     * não aconteceu.
+     *
+     * NÃO EXISTE CHECK DE "TUDO OU NADA" entre as três colunas, e a ausência é deliberada: o autor
+     * vira NULL sozinho quando o usuário é apagado (`on delete set null`), e um check exigindo o
+     * autor junto do carimbo faria o DELETE do usuário FALHAR por causa de uma vaga fechada meses
+     * antes.
+     */
+    ckFechamentoForcadoFaltavam: check(
+      "ck_vagas_fechamento_forcado_faltavam",
+      sql`${t.fechamentoForcadoFaltavam} is null or ${t.fechamentoForcadoFaltavam} > 0`,
+    ),
     // O CHECK `ck_vagas_limite_sazonal` (data limite obrigatória na vaga SAZONAL) foi REMOVIDO na
     // correção de 21/08: a amarração era engano, a data limite vale para qualquer natureza de vaga.
   }),
@@ -2514,6 +2559,90 @@ export const vagaBeneficio = pgTable(
   (t) => ({
     uqVagaBeneficio: unique("uq_vaga_beneficio").on(t.vagaId, t.beneficioId),
     idxVaga: index("idx_vaga_beneficio_vaga").on(t.vagaId),
+  }),
+);
+
+/**
+ * ─ O RASTRO DA REDUÇÃO DE META DA VAGA (achado da auditoria de segurança, 09/09/2026) ───────────
+ *
+ * O QUE ELE FECHA. O gate de Master do fechamento era CONTORNÁVEL SEM TOCAR NO GATE. `fechar()`
+ * recusa quando `posicoes_oficiais - entregues > 0` e só o MASTER força, deixando a trilha das
+ * colunas `fechamento_forcado_*`. Só que a META é editável por uma ROTA IRMÃ
+ * (`PATCH /as/vagas/:id/posicoes`), sem guard de papel: o COMUM baixava a meta até o número já
+ * entregue, a subtração dava ZERO e a vaga fechava pela porta NORMAL, sem Master e com a trilha do
+ * forçamento em branco. A trava de excesso não pegava porque ela só barra `entregues > meta`
+ * (estritamente maior), e IGUALAR passa.
+ *
+ * A DECISÃO DO DIRETOR É RASTRO, E NÃO TRAVA, e a diferença é o desenho inteiro desta tabela: baixar
+ * a meta CONTINUA sendo do consultor (a edição foi liberada a ele em 25/08), porque o cliente
+ * desistir de duas das cinco posições acontece toda semana. O que muda é que o gesto para de ser
+ * invisível. Controle por RESPONSABILIZAÇÃO, o mesmo padrão do aceite de dupla correção da INT-4.
+ *
+ * UMA TABELA, E NÃO COLUNAS NA VAGA COMO NO FORÇAMENTO: o forçamento acontece no máximo UMA VEZ (a
+ * vaga só fecha uma vez) e coube em três colunas; a meta muda quantas vezes quiserem enquanto a vaga
+ * está aberta, e guardar só a última faria quem baixou de 5 para 3 e depois de 3 para 1 aparecer
+ * como quem baixou de 3 para 1. Trilha que apaga o próprio começo não é trilha.
+ *
+ * SÓ A REDUÇÃO ENTRA, e o CHECK garante isso no banco: aumentar a meta AFASTA o fechamento em vez de
+ * aproximá-lo, não contorna gate nenhum, e registrá-lo encheria de ruído justamente o caso
+ * inofensivo. OS DOIS LADOS VIAJAM NA MESMA LINHA porque o gesto é um só: a tela salva o par numa
+ * requisição, e separar por lado inventaria dois eventos onde houve um.
+ *
+ * §A.6: id de vaga, id de usuário INTERNO, uma data e quatro números. Nenhum dado de candidato.
+ */
+export const vagaMetaReducoes = pgTable(
+  "vaga_meta_reducoes",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    /** CASCADE: o rastro é DA vaga e não sobrevive a ela, mesma regra do `vaga_beneficio` acima. */
+    vagaId: uuid("vaga_id")
+      .notNull()
+      .references(() => vagas.id, { onDelete: "cascade" }),
+    /**
+     * A META OFICIAL ANTES, e ela é a ÚNICA nulável das quatro. `vagas.posicoes_oficiais` é nulável
+     * porque o RASCUNHO pode não ter meta ainda, e o rascunho passa por esta rota (só a vaga
+     * ENCERRADA é recusada). Nulo aqui é "não havia meta oficial antes", que não é zero.
+     */
+    deOficiais: integer("de_oficiais"),
+    paraOficiais: integer("para_oficiais").notNull(),
+    /** O banco é NOT NULL na vaga e é NOT NULL aqui: banco vazio é ZERO, não "não informado". */
+    deBanco: integer("de_banco").notNull(),
+    paraBanco: integer("para_banco").notNull(),
+    /**
+     * SET NULL, e não RESTRICT, exatamente como o autor do fechamento forçado: apagar um usuário não
+     * pode FALHAR por causa de uma redução de meses atrás, e o rastro não pode sumir junto com ele.
+     * Sem o autor, ele ainda diz QUANDO e DE QUANTO PARA QUANTO. É por isso que não existe check de
+     * "tudo ou nada" com esta coluna: ele faria o DELETE do usuário quebrar.
+     */
+    porId: uuid("por_id").references(() => usuarios.id, { onDelete: "set null" }),
+    /**
+     * UM TIMESTAMP SÓ. O `as_candidatura_etapas` tem dois porque lá a semente do backfill grava
+     * passado no `ocorrido_em`; aqui não há backfill nem como haver (nenhuma redução anterior foi
+     * registrada em lugar nenhum), então o instante do evento É o da inserção.
+     */
+    criadoEm,
+  },
+  (t) => ({
+    /** (vaga, quando): é a consulta da listagem, que lê o rastro da página inteira de uma vez. */
+    idxVaga: index("idx_vaga_meta_reducoes_vaga").on(t.vagaId, t.criadoEm),
+    /**
+     * LINHA QUE NÃO É REDUÇÃO NÃO EXISTE. Sem este check, um caminho futuro que gravasse toda edição
+     * transformaria o rastro numa lista de "salvei o formulário", e a pergunta que ele responde
+     * ("esta vaga fechou porque entregou, ou porque encolheram a meta?") ficaria enterrada no ruído.
+     */
+    ckHouveReducao: check(
+      "ck_vaga_meta_reducoes_houve_reducao",
+      sql`(${t.deOficiais} is not null and ${t.paraOficiais} < ${t.deOficiais}) or ${t.paraBanco} < ${t.deBanco}`,
+    ),
+    /**
+     * AS MESMAS BORDAS DA VAGA, repetidas de propósito: a meta oficial é sempre maior que zero
+     * (`ck_vagas_posicoes_oficiais`) e a de banco aceita zero (`ck_vagas_posicoes_banco`). Um rastro
+     * que aceitasse números que a vaga recusa descreveria um estado que a vaga nunca teve.
+     */
+    ckNumeros: check(
+      "ck_vaga_meta_reducoes_numeros",
+      sql`(${t.deOficiais} is null or ${t.deOficiais} > 0) and ${t.paraOficiais} > 0 and ${t.deBanco} >= 0 and ${t.paraBanco} >= 0`,
+    ),
   }),
 );
 
@@ -2601,13 +2730,38 @@ export const asCandidatos = pgTable(
 );
 
 /**
- * A LISTA DAS SITUAÇÕES VIVAS, em SQL, para o predicado do índice parcial de `as_candidaturas`.
+ * A LISTA DAS SITUAÇÕES QUE ENCERRAM SEM ÊXITO, em SQL, para o predicado do índice parcial de
+ * `as_candidaturas`. O índice cobre as VIVAS, e ele as descreve PELO COMPLEMENTO.
  *
  * `sql.raw` PORQUE ISTO É UM PEDAÇO DE DDL, não um valor: parâmetro de bind (`$1`) não existe dentro
- * da definição de um índice. Os valores vêm de `SITUACOES_VIVAS`, uma constante de código derivada do
- * enum, e nunca de entrada de usuário, então não há concatenação de dado externo aqui.
+ * da definição de um índice. Os valores vêm de uma constante de código derivada do vocabulário, e
+ * nunca de entrada de usuário, então não há concatenação de dado externo aqui.
+ *
+ * ┌─ POR QUE O COMPLEMENTO, e não a lista positiva das vivas ────────────────────────────────────┐
+ * │ O predicado de um índice parcial guarda os valores COMPILADOS dentro dele, e `ALTER TYPE ...  │
+ * │ ADD VALUE` não o atualiza. Com a lista POSITIVA, toda situação nova nascia FORA da cobertura, │
+ * │ em silêncio, e o banco parava de barrar a segunda linha viva do par pessoa/vaga: exatamente o │
+ * │ que ia acontecer com `ALOCADO`, medido em banco de rascunho antes da correção.                │
+ * │                                                                                               │
+ * │ COM O COMPLEMENTO, A DIREÇÃO SE INVERTE E VIRA FAIL-CLOSED, que é a mesma direção de          │
+ * │ `SITUACOES_VIVAS` (o complemento exato de `ehSaidaSemExito`): situação nova nasce VIVA e,     │
+ * │ portanto, JÁ COBERTA pela trava, sem migration nenhuma.                                       │
+ * │                                                                                               │
+ * │ E É O QUE TORNA A MIGRATION POSSÍVEL EM UMA TRANSAÇÃO SÓ (ver `0095_as_situacao_alocado.sql`, │
+ * │ que mede isto): o predicado não cita nenhum valor RECÉM-CRIADO do enum, e o Postgres recusa    │
+ * │ usar valor de enum na transação em que ele nasceu.                                            │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
  */
-const SITUACOES_VIVAS_SQL = sql.raw(SITUACOES_VIVAS.map((s) => `'${s}'`).join(", "));
+const SITUACOES_ENCERRADAS_SQL = sql.raw(
+  SITUACOES_ENCERRADAS_SEM_EXITO.map((s) => `'${s}'`).join(", "),
+);
+
+/**
+ * OS ACEITES REGISTRÁVEIS, em SQL, DERIVADOS do domínio pelo mesmo caminho da linha acima: o CHECK
+ * do banco e o valor que o service grava saem da MESMA lista. Digitá-la aqui criaria a segunda
+ * lista, que concorda com a primeira por coincidência até a guarda seguinte nascer em uma só.
+ */
+const ACEITES_SQL = sql.raw(ACEITES_REGISTRAVEIS.map((a) => `'${a}'`).join(", "));
 
 /**
  * A LIGAÇÃO candidato x vaga. Tabela PRÓPRIA, e não um `vaga_id` dentro do candidato, porque a MESMA
@@ -2620,7 +2774,7 @@ const SITUACOES_VIVAS_SQL = sql.raw(SITUACOES_VIVAS.map((s) => `'${s}'`).join(",
  * duplicata: é histórico, e a pessoa pode voltar quando a vaga reabrir.
  *
  * A OCUPAÇÃO NÃO MORA AQUI NEM EM LUGAR NENHUM: ela é DERIVADA contando as linhas com situação
- * APROVADO ou CONTRATADO. É a mesma decisão que a vaga já tinha tomado com os contadores dela, e
+ * APROVADO ou ENVIADO_PARA_ADMISSAO. É a mesma decisão que a vaga já tinha tomado com os contadores dela, e
  * pelo mesmo motivo: guardar um contador é ter dois números que discordam.
  */
 export const asCandidaturas = pgTable(
@@ -2670,10 +2824,39 @@ export const asCandidaturas = pgTable(
      * de Candidatos não passar a depender do módulo da Admissão antes da hora.
      */
     admissaoId: uuid("admissao_id"),
+    /**
+     * DE QUAL LADO DA META ESTA POSIÇÃO FOI PREENCHIDA: `OFICIAL` ou `BANCO`.
+     *
+     * A VAGA SEMPRE TEVE DUAS METAS (`posicoes_oficiais` e `posicoes_banco`), e até a finalização de
+     * posição existir ninguém precisava dizer de qual lado uma pessoa entrava: o único jeito de dizer
+     * "preenchi" era o número DIGITADO no fechamento, que já vinha separado nos dois campos. Com a
+     * finalização, a escolha volta a existir e passa a ser do consultor, uma pessoa por vez.
+     *
+     * NASCE NULA, E NULA É `OFICIAL` (`ladoDaCandidatura`, no domínio). Não é lacuna: toda
+     * candidatura que existe hoje foi aprovada contra a meta OFICIAL, que era a única que a trava
+     * conhecia. Coalescer é o que faz a régua nova descrever o que o banco já tem gravado, sem uma
+     * carga que reescreva linha nenhuma.
+     *
+     * ESCRITA SÓ PELA FINALIZAÇÃO DE POSIÇÃO, e por mais nada. A aprovação não escreve (aprovar
+     * reserva, não entrega) e o avanço para a esteira também não: quem foi alocado no banco e depois
+     * avança MANTÉM o lado dele, senão a passagem para a admissão moveria a pessoa de lado em
+     * silêncio e a trava passaria a medi-la contra o teto errado.
+     *
+     * TEXTO COM CHECK, e não enum novo do Postgres, de propósito: valor criado por `ALTER TYPE ...
+     * ADD VALUE` não pode ser usado na mesma transação em que nasce (a armadilha medida na 0095), e
+     * o migrador do drizzle roda TODAS as migrations pendentes numa transação só. Um enum aqui
+     * amarraria a próxima migration que precisasse citar o valor.
+     */
+    posicaoLado: text("posicao_lado"),
     criadoEm,
     atualizadoEm,
   },
   (t) => ({
+    /** O lado é um dos dois, ou ausente (que vale OFICIAL). Guarda de borda, no banco. */
+    ckPosicaoLado: check(
+      "ck_as_candidaturas_posicao_lado",
+      sql`${t.posicaoLado} is null or ${t.posicaoLado} in ('OFICIAL', 'BANCO')`,
+    ),
     /**
      * A TRAVA 3, no banco e não só na tela: duplo clique não vira duas linhas.
      *
@@ -2684,16 +2867,18 @@ export const asCandidaturas = pgTable(
      * SÓ UMA VIVA existe por par pessoa/vaga. A duplicata acidental continua barrada pelo banco, que
      * é onde ela precisa ser barrada: a consulta do service perde a corrida entre dois cliques.
      *
-     * O PREDICADO É DERIVADO DO DOMÍNIO (`SITUACOES_VIVAS`), e não digitado aqui. É o MESMO conjunto
-     * que a régua de ocupação usa, e escrevê-lo à mão no schema criaria a segunda lista que diverge
-     * da primeira no dia em que uma situação nova entrar no vocabulário.
+     * O PREDICADO É DERIVADO DO DOMÍNIO, e não digitado aqui. Ele diz "viva" PELO COMPLEMENTO, isto
+     * é, "tudo que não encerrou sem êxito", que é a mesma definição de `SITUACOES_VIVAS`: escrever a
+     * lista à mão criaria a segunda lista que diverge da primeira no dia em que uma situação nova
+     * entrar no vocabulário. O porquê do complemento em vez da lista positiva está no bloco de
+     * `SITUACOES_ENCERRADAS_SQL`, acima, e ele é o mesmo motivo de fail-closed.
      *
      * UNIQUE PARCIAL NÃO É TÉCNICA NOVA NESTA TABELA: `uq_as_candidatos_cpf` e
      * `uq_as_candidaturas_id_match_pandape` logo abaixo já são assim.
      */
     uqCandidaturaViva: uniqueIndex("uq_as_candidaturas_viva")
       .on(t.candidatoId, t.vagaId)
-      .where(sql`${t.situacao} in (${SITUACOES_VIVAS_SQL})`),
+      .where(sql`${t.situacao} not in (${SITUACOES_ENCERRADAS_SQL})`),
     uqMatchPandape: uniqueIndex("uq_as_candidaturas_id_match_pandape")
       .on(t.idMatchPandape)
       .where(sql`${t.idMatchPandape} is not null`),
@@ -2796,6 +2981,48 @@ export const asCandidaturaEtapas = pgTable(
     motivo: text("motivo"),
     porId: uuid("por_id").references(() => usuarios.id, { onDelete: "set null" }),
     /**
+     * DE QUAL LADO DA META A POSIÇÃO FOI ENTREGUE NESTE EVENTO: `OFICIAL` ou `BANCO`.
+     *
+     * ESCRITA SÓ QUANDO O CONSULTOR ESCOLHEU O LADO (a finalização de posição), e nula em todo o
+     * resto: entrada, movimento de etapa, troca de vaga e os desfechos que não escolhem lado. Ela é
+     * um retrato do EVENTO, e não uma cópia da candidatura: a candidatura diz onde a pessoa está
+     * hoje, esta diz o que foi decidido naquele instante, e é a segunda que o log de aceite precisa.
+     */
+    posicaoLado: text("posicao_lado"),
+    /**
+     * ─ O LOG DO ACEITE: qual guarda foi DESTRAVADA por decisão explícita (§A.3 regra 8, §A.6) ───
+     *
+     * O QUE ELA RESOLVE. O aviso do banco (alocar na reserva com posição oficial em aberto) é uma
+     * guarda que o consultor pode atravessar confirmando. Até aqui a confirmação vinha no corpo,
+     * era LIDA e era JOGADA FORA: a decisão mais cara de desfazer do módulo não deixava rastro
+     * nenhum, e três meses depois ninguém saberia que alguém foi para a reserva com cinco vagas
+     * oficiais abertas, nem quem decidiu isso.
+     *
+     * NULA É O NORMAL. Guarda nenhuma foi destravada, e é assim na esmagadora maioria dos eventos.
+     * Preenchida quer dizer exatamente uma coisa: alguém confirmou e passou por cima de um aviso.
+     *
+     * POR QUE AQUI, E NÃO EM UMA TABELA NOVA. O evento que o aceite autorizou JÁ é gravado nesta
+     * tabela, na MESMA transação da mudança de situação, e já carrega quem (`por_id`) e quando
+     * (`ocorrido_em`). Uma tabela separada admitiria o estado impossível de existir o aceite sem o
+     * evento (ou o inverso), e obrigaria a costurar as duas na leitura para responder a pergunta
+     * mais simples que existe aqui: "o que foi decidido, por quem, e o que ele estava vendo".
+     *
+     * §A.6, E O RECORTE É FIRME: um nome de guarda, um lado e um número. Nenhum dado de candidato,
+     * nenhum CPF, nenhum nome de pessoa, nenhuma URL. Quem é o autor sai do `por_id`, que é usuário
+     * INTERNO, exatamente o mesmo recorte do aceite de dupla correção da INT-4.
+     */
+    aceite: text("aceite"),
+    /**
+     * O ESTADO NO INSTANTE DA DECISÃO, em um número: para o aviso do banco, QUANTAS POSIÇÕES
+     * OFICIAIS ESTAVAM ABERTAS quando o consultor confirmou.
+     *
+     * SEM ELE O LOG NÃO SERVE PARA NADA. "Confirmou o aviso" não é auditável: confirmar com UMA
+     * posição oficial aberta e confirmar com CINCO são decisões diferentes, e é o número que
+     * distingue as duas. É a mesma razão de o próprio aviso levar o número para a tela, em vez de
+     * perguntar "tem certeza?".
+     */
+    aceiteNumero: integer("aceite_numero"),
+    /**
      * QUANDO ACONTECEU. Separado de `criadoEm` pela mesma razão do `asContatos`: são perguntas
      * diferentes, e a semente do backfill grava aqui o `alocado_em` da candidatura, que é passado.
      */
@@ -2805,5 +3032,32 @@ export const asCandidaturaEtapas = pgTable(
   (t) => ({
     /** (candidatura, quando): é exatamente a consulta que a linha do tempo da ficha faz. */
     idxCandidatura: index("idx_as_candidatura_etapas_candidatura").on(t.candidaturaId, t.ocorridoEm),
+    /** O lado é um dos dois, ou ausente. Mesma guarda de borda da coluna irmã na candidatura. */
+    ckPosicaoLado: check(
+      "ck_as_candidatura_etapas_posicao_lado",
+      sql`${t.posicaoLado} is null or ${t.posicaoLado} in ('OFICIAL', 'BANCO')`,
+    ),
+    /**
+     * O ACEITE É UM DOS NOMES CONHECIDOS, ou ausente. Lista fechada de propósito: log de auditoria
+     * com valor livre vira texto que ninguém consegue consultar depois, e a pergunta "quantas vezes
+     * a guarda do banco foi destravada" precisa de um `where` exato.
+     *
+     * `REENTRADA` JÁ ESTÁ PREVISTA E AINDA NÃO É ESCRITA: o outro aceite do módulo vive na `alocar`,
+     * que é código validado e fora do recorte desta OST. O valor fica aqui para que ligar aquele
+     * registro seja uma linha de service, e não uma migration na frente do diretor.
+     */
+    ckAceite: check(
+      "ck_as_candidatura_etapas_aceite",
+      sql`${t.aceite} is null or ${t.aceite} in (${ACEITES_SQL})`,
+    ),
+    /**
+     * ÍNDICE PARCIAL SOBRE OS ACEITES, e é ele que faz o log ser CONSULTÁVEL como a §A.3 regra 8
+     * exige, e não só gravado: a pergunta é sempre "onde houve aceite", nunca "todos os eventos".
+     * Parcial porque a coluna é nula na esmagadora maioria das linhas, e um índice cheio de nulos
+     * custaria escrita em todo movimento de etapa para responder sobre a minoria.
+     */
+    idxAceite: index("idx_as_candidatura_etapas_aceite")
+      .on(t.aceite, t.ocorridoEm)
+      .where(sql`${t.aceite} is not null`),
   }),
 );

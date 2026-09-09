@@ -46,6 +46,7 @@ import {
   VAGA_SAZONALIDADE_LABEL,
   VAGA_STATUS,
   VAGA_STATUS_LABEL,
+  type FecharVagaRecusa,
   VAGA_TEMPO_CONTRATO,
   VAGA_TESTES,
   VAGA_TESTE_LABEL,
@@ -84,12 +85,22 @@ import { FiltroTrigger, FiltroCampo } from "@/components/ui/FiltroTrigger";
 import { Icon, type IconName } from "@/components/ui/Icon";
 import { StatusPill } from "@/components/ui/StatusPill";
 import { TOM_STATUS_VAGA } from "@/lib/as-candidatos-visual";
+import {
+  VAGA_STATUS_ENCERRADOS as STATUS_ENCERRADOS,
+  origemContagem,
+  preenchidas,
+  type OrigemContagem,
+} from "@/lib/as-vagas-ocupacao";
 import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
 import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
 import { cn } from "@/lib/cn";
 import { Stepper, type StepDef } from "@/components/nova/Stepper";
+import { VAGA_STATUS_PUBLICACAO } from "@/lib/as-vaga-acoes";
+import { fechamentoRecusadoPorPosicoes } from "@/lib/as-vaga-fechamento";
+import { avisoDeReducaoDeMeta, avisoDeReducaoNaTrilha } from "@/lib/as-vaga-meta";
 import { CandidatosPendentesModal } from "@/components/as/vagas/CandidatosPendentesModal";
-import { CandidatosDaVagaModal } from "@/components/as/vagas/CandidatosDaVagaModal";
+import { RecusaFechamentoModal } from "@/components/as/vagas/RecusaFechamentoModal";
+import { VagaPainelModal } from "@/components/as/vagas/VagaPainelModal";
 
 interface OpcaoCliente {
   codCliente: string;
@@ -196,30 +207,13 @@ function fechamentoBloqueado(err: unknown): AsVagaFechamentoBloqueado | null {
 /** Trilho do cilindro: a mesma hairline tonal que o painel de Alto Volume usa nas barras dele. */
 const TRILHO_POSICOES = "color-mix(in srgb, var(--text) 9%, transparent)";
 
-/**
- * ─ QUANTAS POSIÇÕES JÁ ESTÃO PREENCHIDAS, e este é O PONTO DE COSTURA DA ALOCAÇÃO ─────────────
- *
- * HOJE a única contagem que existe é a do FECHAMENTO (`vagasFechadas` / `vagasFechadasBanco`), que
- * só nasce quando alguém fecha a vaga. Enquanto a vaga está aberta ela é nula, e nulo aqui vira
- * ZERO de propósito: o cilindro precisa de um número para desenhar, e "ninguém contou ainda" e
- * "ninguém preenchido ainda" desenham a mesma barra vazia. A diferença entre os dois continua
- * dita em palavras, no `title` da célula.
- *
- * QUANDO A ALOCAÇÃO LIGAR, O CILINDRO ENCHE SOZINHO, e a mudança é DESTA FUNÇÃO, de lugar nenhum
- * mais. A Central de Candidatos já sabe quem ocupa posição (`consomePosicao`: APROVADO e
- * CONTRATADO, em `domain/candidatura.ts`), e o que falta é o número chegar até aqui: basta
- * `VagaListItem` passar a trazer o par de contagens de ocupação e esta função preferi-lo ao
- * fechamento. Nenhuma linha da tabela, do cabeçalho ou da ordenação muda junto, porque todas leem
- * daqui.
- *
- * A ORDEM DA PREFERÊNCIA JÁ ESTÁ ESCRITA para o dia da virada: ocupação real primeiro, contagem de
- * fechamento depois. A vaga encerrada continua mostrando o que foi contado no fechamento, que é o
- * número autoritativo dela, e a vaga viva passa a mostrar quem já está dentro.
+/*
+ * A CONTAGEM DE POSIÇÕES PREENCHIDAS SAIU DAQUI e mora em `@/lib/as-vagas-ocupacao` (etapa 3 da
+ * tela unificada de vagas). O `preenchidas` continua sendo a peça única que a coluna lê, e o que
+ * mudou foi o endereço: a régua precisa de teste de unidade, e testá-la aqui dentro obrigaria a
+ * montar a página inteira. A régua em si (vaga viva lê a alocação de agora, vaga encerrada mantém o
+ * número do fechamento, banco continua no número digitado) está documentada no topo daquele arquivo.
  */
-function preenchidas(v: VagaListItem, lado: "oficial" | "banco"): number {
-  const doFechamento = lado === "oficial" ? v.vagasFechadas : v.vagasFechadasBanco;
-  return doFechamento ?? 0;
-}
 
 /**
  * ─ O CILINDRO DE UMA META (item da OST de 27/08) ──────────────────────────────────────────────
@@ -245,13 +239,18 @@ function CilindroMeta({
   rotulo,
   meta,
   feitas,
-  contado,
+  origem,
 }: {
   rotulo: string;
   meta: number | null;
   feitas: number;
-  /** A contagem já aconteceu? Falso é vaga aberta, em que ninguém contou nada ainda. */
-  contado: boolean;
+  /**
+   * DE ONDE VEIO O NÚMERO (`@/lib/as-vagas-ocupacao`), que é o que o `title` precisa dizer: a vaga
+   * viva acompanha as alocações de agora, a encerrada mostra o que foi contado no fechamento, e
+   * `ausente` é a barra vazia de quem nunca teve contagem nenhuma, que não é a mesma barra vazia de
+   * quem contou zero.
+   */
+  origem: OrigemContagem;
 }) {
   if (meta === null) {
     return (
@@ -274,9 +273,11 @@ function CilindroMeta({
       title={
         meta === 0
           ? `${rotulo}: esta vaga não reservou posições.`
-          : contado
-            ? `${rotulo}: ${feitas} de ${meta} preenchidas, ${pct}% da meta.`
-            : `${rotulo}: meta de ${meta}. A contagem de preenchimento ainda não existe para esta vaga.`
+          : origem === "derivada"
+            ? `${rotulo}: ${feitas} de ${meta} preenchidas, ${pct}% da meta. A conta acompanha as alocações desta vaga agora.`
+            : origem === "fechamento"
+              ? `${rotulo}: ${feitas} de ${meta} preenchidas, ${pct}% da meta. O número foi contado no fechamento da vaga e não muda mais.`
+              : `${rotulo}: meta de ${meta}. A contagem de preenchimento ainda não existe para esta vaga.`
       }
     >
       <div className="flex items-baseline justify-between gap-1.5">
@@ -319,15 +320,12 @@ function CilindroMeta({
   );
 }
 
-/**
- * OS ESTADOS EM QUE A VAGA JÁ TERMINOU. A vaga encerrada tem `dataFechamento` escrita pela ação de
- * fechar, e é ela que CONGELA o contador de dias (decisão do diretor, 27/08).
- *
- * CANCELADA entra na lista porque ela É um encerramento, mesmo que hoje nenhuma rota escreva esse
- * status: quando a ação de cancelar existir, o contador já vai congelar sozinho, sem ninguém ter de
- * lembrar de voltar aqui.
+/*
+ * O `STATUS_ENCERRADOS` VEM DE `@/lib/as-vagas-ocupacao`, importado no topo com o mesmo nome de
+ * antes. A lista saiu daqui porque a régua de posições preenchidas passou a depender dela também, e
+ * duas cópias do que é "vaga encerrada" divergiriam no dia em que um status novo aparecesse. Quem
+ * usa a lista nesta tela continua igual: os dias em aberto e o tom da célula de dias.
  */
-const STATUS_ENCERRADOS: VagaStatus[] = ["ENTREGUE", "FECHADA", "CANCELADA"];
 
 /**
  * ─ HÁ QUANTOS DIAS A VAGA ESTÁ ABERTA (item 1 da OST de 27/08) ───────────────────────────────
@@ -707,8 +705,6 @@ export default function CentralDeVagasPage() {
 
   /** Item 8: a vaga completa vive num modal, aberto pelo olho da linha. Null = modal fechado. */
   const [verAlvo, setVerAlvo] = useState<VagaListItem | null>(null);
-  /** A vaga cujos candidatos vinculados estão sendo consultados (item 6, sentido vaga para pessoa). */
-  const [candidatosAlvo, setCandidatosAlvo] = useState<VagaListItem | null>(null);
 
   // ── Fechar vaga ───────────────────────────────────────────────────────────
   const [fecharAlvo, setFecharAlvo] = useState<VagaListItem | null>(null);
@@ -720,6 +716,15 @@ export default function CentralDeVagasPage() {
    * tratar cada um sem sair da tela. Null = ninguém segurando, ou ainda não se tentou fechar.
    */
   const [pendentesFech, setPendentesFech] = useState<AsCandidaturaPendente[] | null>(null);
+  /**
+   * A OUTRA RECUSA DO MESMO BOTÃO: posição OFICIAL ainda aberta.
+   *
+   * ELA VIVE EM ESTADO PRÓPRIO, e não dentro do `erroFechar`, porque não é uma frase: é um corpo com
+   * números e com a resposta de quem pode forçar. Enquanto ela caiu no `erroFechar`, o consultor lia
+   * a recusa como erro seco e não tinha para onde ir, e o Master não tinha como encerrar assim mesmo:
+   * a Etapa 6 inteira não tinha caminho na tela.
+   */
+  const [recusaFech, setRecusaFech] = useState<FecharVagaRecusa | null>(null);
   const [fechForm, setFechForm] = useState({
     dataFechamento: HOJE(),
     /** Uma contagem para cada meta (os dois contadores, 25/08): oficiais e banco. */
@@ -741,6 +746,35 @@ export default function CentralDeVagasPage() {
   const [salvandoPos, setSalvandoPos] = useState(false);
   const [erroPos, setErroPos] = useState<string | null>(null);
   const [posForm, setPosForm] = useState({ oficiais: "", banco: "" });
+  /**
+   * O AVISO DA REDUÇÃO DE META, guardado com os números que ele já validou.
+   *
+   * ELE NÃO BLOQUEIA: a decisão continua sendo do consultor, e a confirmação salva. O que ele impede
+   * é o gesto ser SILENCIOSO, porque baixar a meta até o número já entregue faz a vaga fechar pela
+   * porta normal, sem Master e sem a trilha do forçamento (achado da auditoria, decisão do diretor:
+   * rastro, não trava).
+   *
+   * OS NÚMEROS VIAJAM JUNTO DO TEXTO em vez de serem relidos do formulário na confirmação: o par que
+   * o diálogo descreve tem de ser exatamente o par que vai ao servidor, senão a frase que a pessoa
+   * leu deixa de ser o que ela confirmou.
+   */
+  const [avisoReducao, setAvisoReducao] = useState<{
+    texto: string;
+    oficiais: number;
+    banco: number;
+  } | null>(null);
+  /**
+   * O MESMO AVISO, NA SEGUNDA PORTA DA META: o formulário da trilha.
+   *
+   * A TRILHA TAMBÉM REGRAVA A META, e o backend já registra a redução vinda por ela. Registro sem
+   * aviso é o oposto do que o diretor pediu: a pessoa reduziria a meta salvando o formulário, ficaria
+   * rastreada, e ninguém teria dito a ela.
+   *
+   * O `publicar` VIAJA JUNTO pelo mesmo motivo dos números no irmão: a confirmação precisa refazer o
+   * envio no destino que a pessoa escolheu. Confirmar um aviso aberto pelo "Salvar Rascunho" e a vaga
+   * nascer publicada seria a tela fazendo outra coisa do que foi clicado.
+   */
+  const [avisoTrilha, setAvisoTrilha] = useState<{ texto: string; publicar: boolean } | null>(null);
 
   const set = <K extends keyof FormVaga>(campo: K, valor: FormVaga[K]) =>
     setForm((f) => ({ ...f, [campo]: valor }));
@@ -796,6 +830,24 @@ export default function CentralDeVagasPage() {
     window.history.replaceState({}, "", window.location.pathname);
   }, [rows, abriuPelaUrl]);
 
+  /**
+   * A VAGA ABERTA NO PAINEL ACOMPANHA A LISTA RELIDA (etapa 5).
+   *
+   * `verAlvo` guarda o OBJETO da linha, não o id, então depois de um `carregar()` ele seria o retrato
+   * ANTIGO: a ação escrita dentro do painel atualizaria a tabela atrás e deixaria o cabeçalho do
+   * próprio painel (a trilha, que lê a ocupação) dizendo o número de antes, na mesma tela e ao mesmo
+   * tempo. Aqui ele é reapontado para a linha nova da lista.
+   *
+   * NÃO HÁ LAÇO: depois do `set`, `verAlvo` É o objeto vindo de `rows`, então a comparação por
+   * referência falha na próxima passada e nada mais é gravado. E como a `key` do painel continua
+   * sendo o id, ele NÃO remonta: a aba escolhida e a ordenação da tabela ficam onde estavam.
+   */
+  useEffect(() => {
+    if (!verAlvo) return;
+    const fresca = rows.find((v) => v.id === verAlvo.id);
+    if (fresca && fresca !== verAlvo) setVerAlvo(fresca);
+  }, [rows, verAlvo]);
+
   function abrirTrilha() {
     setForm(FORM_VAZIO());
     setBeneficios({});
@@ -804,6 +856,7 @@ export default function CentralDeVagasPage() {
     setErroForm(null);
     setPendencias([]);
     setEditandoId(null);
+    setAvisoTrilha(null);
     setAberto(true);
   }
 
@@ -920,6 +973,7 @@ export default function CentralDeVagasPage() {
     setStep(0);
     setErroForm(null);
     setPendencias([]);
+    setAvisoTrilha(null);
     setAberto(true);
   }
 
@@ -1032,8 +1086,12 @@ export default function CentralDeVagasPage() {
    * pendência depois de uma ida ao servidor.
    *
    * POST OU PATCH pelo `editandoId`: continuar um rascunho ATUALIZA aquela vaga, nunca cria outra.
+   *
+   * O `jaAvisado` É A VOLTA DA CONFIRMAÇÃO da redução de meta, e não um jeito de pular o aviso: o
+   * único chamador que o passa como verdadeiro é o botão do próprio diálogo, depois de a pessoa ter
+   * lido a frase. Sem ele, confirmar reabriria o mesmo aviso para sempre.
    */
-  async function enviar(publicar: boolean) {
+  async function enviar(publicar: boolean, jaAvisado = false) {
     if (salvando) return;
     setErroForm(null);
 
@@ -1046,6 +1104,51 @@ export default function CentralDeVagasPage() {
       setPendencias([]);
     }
 
+    /**
+     * A META QUE VAI NO CORPO, CALCULADA UMA VEZ SÓ, porque ela é lida por dois: o aviso, que a
+     * descreve para a pessoa, e o envio, que a grava. Duas contas separadas abririam a fresta de
+     * alguém confirmar uma frase e o servidor receber outro número.
+     */
+    const metaEnviada = {
+      oficiais: Number(form.posicoesOficiais) > 0 ? Number(form.posicoesOficiais) : undefined,
+      // ZERO É VALOR AQUI, não ausência: o `undefined` fica só para o campo em branco, senão
+      // apagar o número do banco não teria como ser gravado.
+      banco: form.posicoesBanco === "" ? undefined : Number(form.posicoesBanco),
+    };
+
+    /**
+     * ┌─ A SEGUNDA PORTA DA META TAMBÉM AVISA ──────────────────────────────────────────────────┐
+     * │ O diálogo de posições não é o único lugar que baixa a meta: este formulário a regrava      │
+     * │ junto com os outros campos, e o backend já registra a redução vinda por aqui. Uma porta que │
+     * │ REGISTRA e não AVISA é o oposto do que o diretor pediu, porque a pessoa fica rastreada sem  │
+     * │ que ninguém tenha dito a ela.                                                              │
+     * └────────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * SÓ COM VAGA ANTERIOR, e é o que separa esta porta da irmã: abertura NOVA não tem "de", então o
+     * primeiro preenchimento DEFINE a meta em vez de reduzi-la. Sem `editandoId` não há comparação.
+     *
+     * O "DE" SAI DA LISTA, que é a vaga como ela está GRAVADA, e é contra ela que o servidor compara.
+     * Um retrato tirado na abertura da trilha envelheceria em silêncio.
+     *
+     * A RÉGUA É A MESMA DO DIÁLOGO DE POSIÇÕES (`@/lib/as-vaga-meta`), inclusive o cuidado com o
+     * campo vazio: em branco, o servidor PRESERVA a meta oficial, e avisar de uma "queda para zero"
+     * que não vai acontecer seria um aviso mentindo.
+     */
+    if (!jaAvisado) {
+      const anterior = editandoId ? rows.find((v) => v.id === editandoId) : undefined;
+      const aviso = avisoDeReducaoNaTrilha(
+        anterior ? { oficiais: anterior.posicoesOficiais, banco: anterior.posicoesBanco } : null,
+        metaEnviada,
+      );
+      if (aviso) {
+        setAvisoTrilha({ texto: aviso, publicar });
+        return;
+      }
+    }
+
+    // O DIÁLOGO SAI DA FRENTE QUANDO O SALVAMENTO COMEÇA: o estado de "salvando" e a mensagem de
+    // erro moram no formulário, e uma pergunta por cima esconderia a resposta.
+    setAvisoTrilha(null);
     setSalvando(true);
     try {
       const marcados = Object.entries(beneficios)
@@ -1062,11 +1165,8 @@ export default function CentralDeVagasPage() {
           natureza: form.natureza || undefined,
           status: publicar ? form.status : "RASCUNHO",
           sazonalidade: form.sazonalidade,
-          posicoesOficiais:
-            Number(form.posicoesOficiais) > 0 ? Number(form.posicoesOficiais) : undefined,
-          // ZERO É VALOR AQUI, não ausência: o `undefined` fica só para o campo em branco, senão
-          // apagar o número do banco não teria como ser gravado.
-          posicoesBanco: form.posicoesBanco === "" ? undefined : Number(form.posicoesBanco),
+          posicoesOficiais: metaEnviada.oficiais,
+          posicoesBanco: metaEnviada.banco,
 
           solicitanteNome: form.solicitanteNome || undefined,
           solicitanteTelefone: form.solicitanteTelefone || undefined,
@@ -1165,6 +1265,7 @@ export default function CentralDeVagasPage() {
   function abrirPosicoes(v: VagaListItem) {
     setPosAlvo(v);
     setErroPos(null);
+    setAvisoReducao(null);
     setPosForm({
       oficiais: v.posicoesOficiais === null ? "" : String(v.posicoesOficiais),
       banco: String(v.posicoesBanco),
@@ -1189,6 +1290,39 @@ export default function CentralDeVagasPage() {
       return;
     }
 
+    /**
+     * ┌─ O AVISO ANTES DE CONFIRMAR, E SÓ NA REDUÇÃO ──────────────────────────────────────────┐
+     * │ A auditoria provou que baixar a meta oficial até o número já entregue fecha a vaga pela  │
+     * │ porta NORMAL, sem Master e sem a trilha do forçamento. O diretor decidiu RASTRO, não      │
+     * │ trava: o consultor continua podendo baixar, e passa a saber que aquilo fica registrado.   │
+     * │                                                                                          │
+     * │ AUMENTAR NÃO AVISA NADA. Aumentar afasta o fechamento em vez de aproximá-lo, e avisar no  │
+     * │ caso inofensivo ensinaria o time a fechar o diálogo sem ler, justamente o diálogo que      │
+     * │ existe para ser lido.                                                                     │
+     * └──────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * A RÉGUA E O TEXTO MORAM EM `@/lib/as-vaga-meta`, com teste. Aqui fica só a decisão de abrir o
+     * diálogo, e o nulo é o contrato: sem aviso, salva direto, como sempre salvou.
+     */
+    const aviso = avisoDeReducaoDeMeta(
+      { oficiais: posAlvo.posicoesOficiais, banco: posAlvo.posicoesBanco },
+      { oficiais, banco },
+    );
+    if (aviso) {
+      setAvisoReducao({ texto: aviso, oficiais, banco });
+      return;
+    }
+
+    await salvarPosicoes(oficiais, banco);
+  }
+
+  /**
+   * O ENVIO DAS POSIÇÕES, separado do `submit` porque ele parte de DOIS lugares: o formulário, quando
+   * não houve redução, e a confirmação do aviso, quando houve. O corpo é o mesmo par de números nos
+   * dois caminhos.
+   */
+  async function salvarPosicoes(oficiais: number, banco: number) {
+    if (!posAlvo) return;
     setSalvandoPos(true);
     try {
       await apiFetch(`/as/vagas/${posAlvo.id}/posicoes`, {
@@ -1196,9 +1330,13 @@ export default function CentralDeVagasPage() {
         token,
         body: { posicoesOficiais: oficiais, posicoesBanco: banco },
       });
+      setAvisoReducao(null);
       setPosAlvo(null);
       await carregar();
     } catch (err) {
+      // O DIÁLOGO FECHA NO ERRO e a mensagem aparece no formulário, que é onde a pessoa está
+      // olhando: mantê-lo aberto por cima esconderia a frase que explica a recusa.
+      setAvisoReducao(null);
       setErroPos(err instanceof Error ? err.message : "Erro ao salvar as posições da vaga");
     } finally {
       setSalvandoPos(false);
@@ -1209,6 +1347,7 @@ export default function CentralDeVagasPage() {
     setFecharAlvo(v);
     setErroFechar(null);
     setPendentesFech(null);
+    setRecusaFech(null);
     setFechForm({
       dataFechamento: HOJE(),
       // CADA CONTAGEM NASCE NA SUA META, que é o caso mais comum (a vaga fechou o que abriu) e o que
@@ -1232,7 +1371,7 @@ export default function CentralDeVagasPage() {
    * corpo é o mesmo nos dois casos, e é o que já estava preenchido: reabrir o formulário para a
    * pessoa redigitar o que ela acabou de digitar seria perder o preenchimento por nada.
    */
-  async function enviarFechamento() {
+  async function enviarFechamento(opcoes?: { forcar?: boolean }) {
     if (!fecharAlvo) return;
     setErroFechar(null);
 
@@ -1284,10 +1423,20 @@ export default function CentralDeVagasPage() {
           salarioFechamento: fechForm.salarioFechamento || undefined,
           dataPrevistaInicio: fechForm.dataPrevistaInicio || undefined,
           enviarParaAdmissao: fechForm.enviarParaAdmissao,
+          /**
+           * O `forcar` SÓ VIAJA QUANDO ALGUÉM FORÇOU, e nunca como `false` explícito: o fechamento
+           * normal não é "um forçamento desligado", e mandar a chave em toda requisição faria a
+           * exceção parecer parte do caminho comum de quem lê o tráfego depois.
+           *
+           * ELE NÃO É A AUTORIZAÇÃO, É O PEDIDO. Quem decide se um Master está do outro lado é o
+           * service, que recalcula o papel quando esta chave chega e devolve 403 ao COMUM.
+           */
+          forcar: opcoes?.forcar ? true : undefined,
         },
       });
       setFecharAlvo(null);
       setPendentesFech(null);
+      setRecusaFech(null);
       await carregar();
     } catch (err) {
       /**
@@ -1297,10 +1446,27 @@ export default function CentralDeVagasPage() {
        * voltaria. As demais recusas seguem exibindo a mensagem do backend, como sempre.
        */
       const bloqueio = fechamentoBloqueado(err);
+      /**
+       * A RECUSA POR POSIÇÃO OFICIAL ABERTA, CASADA PELO CAMPO `motivo` e nunca pela mensagem (a
+       * régua e o parser moram em `@/lib/as-vaga-fechamento`, testados). Ela abre o modal que diz o
+       * número real e, para quem pode, oferece o encerramento assim mesmo.
+       *
+       * O 403 NÃO CAI AQUI, E ISSO É DE PROPÓSITO: quando um COMUM chega a mandar `forcar` (tela
+       * desatualizada, papel trocado no meio da sessão), o guard responde 403 e a frase dele aparece
+       * no formulário, como qualquer outra recusa. A tela não tenta adivinhar o papel de novo.
+       */
+      const recusa = fechamentoRecusadoPorPosicoes(err);
       if (bloqueio) {
         setPendentesFech(bloqueio.pendentes);
+        setRecusaFech(null);
+        setErroFechar(null);
+      } else if (recusa) {
+        setRecusaFech(recusa);
         setErroFechar(null);
       } else {
+        // Uma recusa nova fecha o modal do forçamento: deixá-lo aberto por cima esconderia a frase
+        // que explica o que aconteceu de fato.
+        setRecusaFech(null);
         setErroFechar(err instanceof Error ? err.message : "Erro ao fechar a vaga");
       }
     } finally {
@@ -1869,13 +2035,13 @@ export default function CentralDeVagasPage() {
                           rotulo="Oficiais"
                           meta={v.posicoesOficiais}
                           feitas={preenchidas(v, "oficial")}
-                          contado={v.vagasFechadas !== null}
+                          origem={origemContagem(v, "oficial")}
                         />
                         <CilindroMeta
                           rotulo="Banco"
                           meta={v.posicoesBanco}
                           feitas={preenchidas(v, "banco")}
-                          contado={v.vagasFechadasBanco !== null}
+                          origem={origemContagem(v, "banco")}
                         />
                       </div>
                     </td>
@@ -1972,20 +2138,6 @@ export default function CentralDeVagasPage() {
                           className="rounded-lg border border-transparent p-2 text-dim transition hover:border-[var(--border)] hover:text-accent"
                         >
                           <Icon name="eye" className="h-4 w-4" />
-                        </button>
-                        {/* VER CANDIDATOS VINCULADOS (item 6 do diretor): a ponte da Central de
-                            Vagas para a Central de Candidatos, no sentido vaga para pessoa. Lê a
-                            MESMA rota do painel da vaga que a outra tela já usa, e por isso não
-                            devolve CPF nenhum (§A.6). O ícone `filter` é o mesmo da Central De
-                            Candidatos na barra lateral: o funil já é o símbolo daquela tela. */}
-                        <button
-                          type="button"
-                          title="Ver os candidatos vinculados"
-                          aria-label={`Ver os candidatos vinculados à vaga ${rotuloDaVaga(v)}`}
-                          onClick={() => setCandidatosAlvo(v)}
-                          className="rounded-lg border border-transparent p-2 text-dim transition hover:border-[var(--border)] hover:text-accent"
-                        >
-                          <Icon name="filter" className="h-4 w-4" />
                         </button>
                         <button
                           type="button"
@@ -2161,11 +2313,20 @@ export default function CentralDeVagasPage() {
                         value={form.status}
                         onChange={(v) => set("status", v)}
                         /*
-                          RASCUNHO FICA DE FORA DA LISTA (item 3): ele é o BOTÃO "Salvar Rascunho",
-                          não uma escolha de status. Oferecê-lo aqui criaria dois caminhos para o
-                          mesmo estado, e o segundo publicaria uma vaga chamando-a de rascunho.
+                          A LISTA É `VAGA_STATUS_PUBLICACAO`, E A RÉGUA MORA LÁ (`as-vaga-acoes`),
+                          testada. Ela tira três coisas daqui:
+
+                          RASCUNHO (item 3, de antes): é o BOTÃO "Salvar Rascunho", não uma escolha
+                          de status. Dois caminhos para o mesmo estado, e o segundo publicaria uma
+                          vaga chamando-a de rascunho.
+
+                          FECHADA e CANCELADA: esta lista OFERECIA os dois, e era uma porta que
+                          ENCERRAVA A VAGA sem passar por trava nenhuma, nem conferência de posição
+                          oficial, nem papel de Master, nem trilha. A auditoria de segurança vetou a
+                          frente por causa disso. Encerrar a vaga tem UM caminho, o "Fechar Vaga",
+                          que passa pela régua do diretor.
                         */
-                        options={VAGA_STATUS.filter((s) => s !== "RASCUNHO").map((s) => ({
+                        options={VAGA_STATUS_PUBLICACAO.map((s) => ({
                           value: s,
                           label: VAGA_STATUS_LABEL[s],
                         }))}
@@ -2914,6 +3075,35 @@ export default function CentralDeVagasPage() {
         </Modal>
       )}
 
+      {/* ── O AVISO DA REDUÇÃO DE META, NA PORTA DA TRILHA ────────────────
+          O MESMO TEXTO DA OUTRA PORTA, de propósito: é a mesma ação, com a mesma consequência, e
+          duas frases diferentes para o mesmo gesto ensinariam que uma delas é a séria.
+
+          TRANSPARÊNCIA, NÃO ACUSAÇÃO, então `warn` e não `danger`: baixar a meta é direito do
+          consultor, e um diálogo vermelho transformaria operação normal em suspeita. `warn` também
+          não é `default`, porque o check azul do `default` vestia de SUCESSO um aviso que a pessoa
+          ainda pode cancelar (decisão do diretor, 09/09).
+
+          O BOTÃO REPETE O QUE FOI CLICADO ("Publicar Vaga" ou "Salvar Rascunho"): quem confirma está
+          terminando a ação que começou, e um verbo novo aqui sugeriria uma segunda ação que não
+          existe. */}
+      <ConfirmDialog
+        // O `aberto` ENTRA NA GUARDA para o aviso nunca sobreviver ao formulário que o gerou: sem
+        // ele, fechar a trilha com o diálogo aberto deixaria na tela uma pergunta sobre uma vaga que
+        // não está mais em edição.
+        open={aberto && avisoTrilha !== null}
+        title="Reduzir A Meta De Posições?"
+        message={avisoTrilha?.texto ?? ""}
+        confirmLabel={avisoTrilha?.publicar ? "Publicar Vaga" : "Salvar Rascunho"}
+        cancelLabel="Cancelar"
+        tone="warn"
+        busy={salvando}
+        onConfirm={() => {
+          if (avisoTrilha) void enviar(avisoTrilha.publicar, true);
+        }}
+        onCancel={() => setAvisoTrilha(null)}
+      />
+
       <ConfirmDialog
         open={confirmarDescarte}
         title="Descartar Esta Vaga?"
@@ -2994,10 +3184,38 @@ export default function CentralDeVagasPage() {
         </Modal>
       )}
 
+      {/* ── O AVISO DA REDUÇÃO DE META ────────────────────────────────────
+          TRANSPARÊNCIA, NÃO ACUSAÇÃO, e é por isso que ele é `warn` e não `danger`: o consultor
+          TEM o direito de baixar a meta, e um diálogo vermelho transformaria uma operação normal em
+          suspeita. Ele informa o de/para concreto e que a alteração fica registrada, e segue.
+
+          E NÃO É `default`, que era o que estava aqui: o check azul do tom neutro anunciava SUCESSO
+          num diálogo que ainda pergunta, e o ícone tem de seguir o estado real (§A.12). Atenção é
+          exclamação. (Decisão do diretor, 09/09.)
+
+          O RÓTULO DO BOTÃO É O MESMO DO FORMULÁRIO ("Salvar posições"): quem confirma está salvando
+          o que já digitou, e um verbo novo aqui sugeriria uma segunda ação que não existe. */}
+      <ConfirmDialog
+        // O `posAlvo` ENTRA NA GUARDA para o aviso nunca sobreviver ao formulário que o gerou: sem
+        // ele, fechar as posições com o diálogo aberto deixaria uma pergunta na tela sobre uma vaga
+        // que não está mais em edição.
+        open={posAlvo !== null && avisoReducao !== null}
+        title="Reduzir A Meta De Posições?"
+        message={avisoReducao?.texto ?? ""}
+        confirmLabel="Salvar posições"
+        cancelLabel="Cancelar"
+        tone="warn"
+        busy={salvandoPos}
+        onConfirm={() => {
+          if (avisoReducao) void salvarPosicoes(avisoReducao.oficiais, avisoReducao.banco);
+        }}
+        onCancel={() => setAvisoReducao(null)}
+      />
+
       {/* ── FECHAR VAGA ───────────────────────────────────────────────────── */}
       {/* Com a fila de pendentes aberta, o formulário sai da frente e o preenchimento FICA no
           estado: cancelar a fila devolve o formulário como estava, sem redigitar nada. */}
-      {fecharAlvo && !pendentesFech && (
+      {fecharAlvo && !pendentesFech && !recusaFech && (
         <Modal
           onClose={() => setFecharAlvo(null)}
           className="max-w-[560px] p-6"
@@ -3144,6 +3362,19 @@ export default function CentralDeVagasPage() {
         </Modal>
       )}
 
+      {/* ── A VAGA QUE NÃO FECHA COM POSIÇÃO OFICIAL ABERTA ───────────────── */}
+      {/* Mesmo desenho da fila de pendentes: o formulário sai da frente e o preenchimento FICA no
+          estado, então cancelar aqui devolve o formulário como estava, sem redigitar nada. */}
+      {fecharAlvo && recusaFech && (
+        <RecusaFechamentoModal
+          recusa={recusaFech}
+          vagaRotulo={fecharAlvo.nomeDivulgacao ?? rotuloDaVaga(fecharAlvo)}
+          forcando={fechando}
+          onCancelar={() => setRecusaFech(null)}
+          onForcar={() => void enviarFechamento({ forcar: true })}
+        />
+      )}
+
       {/* ── OS CANDIDATOS QUE SEGURAM O FECHAMENTO ────────────────────────── */}
       {fecharAlvo && pendentesFech && (
         <CandidatosPendentesModal
@@ -3157,236 +3388,193 @@ export default function CentralDeVagasPage() {
         />
       )}
 
-      {/* ── VER A VAGA COMPLETA (item 8) ──────────────────────────────────── */}
-      {candidatosAlvo && (
-        <CandidatosDaVagaModal
-          vagaId={candidatosAlvo.id}
-          vagaRotulo={rotuloDaVaga(candidatosAlvo)}
-          token={token}
-          onClose={() => setCandidatosAlvo(null)}
-        />
-      )}
-
+      {/* ── O PAINEL DA VAGA (etapa 4 da tela unificada) ───────────────────
+          O olho abria uma ficha e nada mais. Agora ele abre o painel: a MESMA ficha, mais a trilha
+          (em que pé o processo está e como a vaga terminou) e as abas de quem está nela. A ficha
+          continua escrita AQUI, com os formatadores da própria tela, e entra no painel como
+          conteúdo da aba "A Vaga": o painel decide onde ela aparece, não como ela é escrita. */}
       {verAlvo && (
-        <Modal
+        <VagaPainelModal
+          /* A CHAVE É A VAGA, e ela não é enfeite: o painel guarda em estado a lista de candidatos
+             daquela vaga. Sem a chave, trocar a vaga com o painel aberto (o atalho de URL faz isso)
+             manteria o componente montado e mostraria a lista da vaga ANTERIOR, com o cabeçalho da
+             nova. Com ela, trocar de vaga é montar de novo, e o estado nasce limpo. */
+          key={verAlvo.id}
+          vaga={verAlvo}
+          token={token}
           onClose={() => setVerAlvo(null)}
-          className="max-w-[900px] p-0"
-          ariaLabel="Ver a vaga"
+          /* AS AÇÕES DA ETAPA 5 ESCREVEM, e o que elas escrevem é lido AQUI: o cilindro de posições,
+             os cards e a própria trilha do painel saem de `ocupacao`, que é DERIVADA das
+             candidaturas. Sem esta releitura, entregar uma posição dentro do painel deixaria a
+             tabela atrás dele com o número velho até alguém recarregar a página. */
+          onMudou={() => void carregar()}
         >
-          <div className="flex max-h-[86vh] flex-col">
-            <div className="flex-none border-b border-[var(--border)] px-6 pb-4 pt-6">
-              <div className="eyebrow !mb-1">Atração e Seleção</div>
-              <div className="flex flex-wrap items-center gap-3">
-                <h2 className="text-lg font-semibold text-text">
-                  {verAlvo.nomeDivulgacao ?? "Vaga Sem Nome De Divulgação"}
-                </h2>
-                <StatusPill
-                  tone={TOM_STATUS[verAlvo.status]}
-                  label={VAGA_STATUS_LABEL[verAlvo.status]}
-                />
-              </div>
-              <p className="mt-1 text-[12.5px] text-dim">
-                Código {verAlvo.codigo ?? "não informado"}. Aberta em {dataBr(verAlvo.dataAbertura)}{" "}
-                por {verAlvo.abertoPorNome ?? "não informado"}.
-              </p>
-            </div>
-
-            <div className="ea-scroll flex-1 overflow-y-auto px-6 py-5">
-              <BlocoFicha titulo="A Vaga">
-                <Linha rotulo="Cliente" valor={verAlvo.clienteNome} />
-                <Linha rotulo="Cargo da vaga" valor={verAlvo.cargoNome} />
-                <Linha
-                  rotulo="Natureza"
-                  valor={verAlvo.natureza ? VAGA_NATUREZA_LABEL[verAlvo.natureza] : null}
-                />
-                <Linha
-                  rotulo="Vínculo"
-                  valor={verAlvo.vinculo ? VAGA_VINCULO_LABEL[verAlvo.vinculo] : null}
-                />
-                {/* OS DOIS CONTADORES, cada um na sua linha: a ficha é onde a vaga é lida inteira. */}
-                <Linha
-                  rotulo="Posições oficiais"
-                  valor={
-                    verAlvo.posicoesOficiais === null ? null : String(verAlvo.posicoesOficiais)
-                  }
-                />
-                <Linha rotulo="Posições de banco" valor={String(verAlvo.posicoesBanco)} />
-                <Linha
-                  rotulo="Sazonalidade"
-                  valor={VAGA_SAZONALIDADE_LABEL[verAlvo.sazonalidade]}
-                />
-                {/* Item 2: o tempo de contrato só se mostra onde ele existe, pela mesma régua que
+          <>
+            <BlocoFicha titulo="A Vaga">
+              <Linha rotulo="Cliente" valor={verAlvo.clienteNome} />
+              <Linha rotulo="Cargo da vaga" valor={verAlvo.cargoNome} />
+              <Linha
+                rotulo="Natureza"
+                valor={verAlvo.natureza ? VAGA_NATUREZA_LABEL[verAlvo.natureza] : null}
+              />
+              <Linha
+                rotulo="Vínculo"
+                valor={verAlvo.vinculo ? VAGA_VINCULO_LABEL[verAlvo.vinculo] : null}
+              />
+              {/* OS DOIS CONTADORES, cada um na sua linha: a ficha é onde a vaga é lida inteira. */}
+              <Linha
+                rotulo="Posições oficiais"
+                valor={verAlvo.posicoesOficiais === null ? null : String(verAlvo.posicoesOficiais)}
+              />
+              <Linha rotulo="Posições de banco" valor={String(verAlvo.posicoesBanco)} />
+              <Linha rotulo="Sazonalidade" valor={VAGA_SAZONALIDADE_LABEL[verAlvo.sazonalidade]} />
+              {/* Item 2: o tempo de contrato só se mostra onde ele existe, pela mesma régua que
                     esconde o campo na trilha. */}
-                {exigeTempoContrato(verAlvo.vinculo) && (
-                  <Linha
-                    rotulo="Tempo de contrato"
-                    valor={
-                      verAlvo.tempoContrato ? rotuloTempoContrato(verAlvo.tempoContrato) : null
-                    }
-                  />
-                )}
-              </BlocoFicha>
-
-              <BlocoFicha titulo="Quem Pediu">
-                <Linha rotulo="Solicitante" valor={verAlvo.solicitanteNome} />
-                <Linha rotulo="Telefone" valor={verAlvo.solicitanteTelefone} />
-                <Linha rotulo="E-mail" valor={verAlvo.solicitanteEmail} />
-                <Linha rotulo="Consultor" valor={verAlvo.consultorNome} />
-                <Linha rotulo="Recruiter" valor={verAlvo.recruiterNome} />
-                <Linha rotulo="Data de solicitação" valor={dataBr(verAlvo.dataSolicitacao)} />
-                <Linha rotulo="Data de alinhamento" valor={dataBr(verAlvo.dataAlinhamento)} />
-                <Linha rotulo="Previsão de entrega" valor={dataBr(verAlvo.dataLimite)} />
-                <Linha rotulo="Envio da shortlist" valor={dataBr(verAlvo.envioShortlist)} />
-              </BlocoFicha>
-
-              <BlocoFicha titulo="Contratação">
-                <Linha rotulo="Motivo" valor={verAlvo.motivo} />
-                <Linha rotulo="Justificativa" valor={verAlvo.justificativaMotivo} />
-                {verAlvo.motivo === MOTIVO_SUBSTITUICAO && (
-                  <>
-                    <Linha
-                      rotulo="Tipo de substituição"
-                      valor={
-                        verAlvo.tipoSubstituicao
-                          ? VAGA_TIPO_SUBSTITUICAO_LABEL[verAlvo.tipoSubstituicao]
-                          : null
-                      }
-                    />
-                    <Linha rotulo="Nome do substituído" valor={verAlvo.substituidoNome} />
-                    {/* Item 3: o CPF aparece MASCARADO para leitura. §A.6: a rota inteira do módulo
-                        é fechada pelo menu `as-vagas`, e o número nunca vai para log. */}
-                    <Linha
-                      rotulo="CPF do substituído"
-                      valor={verAlvo.substituidoCpf ? formatCpf(verAlvo.substituidoCpf) : null}
-                    />
-                  </>
-                )}
-              </BlocoFicha>
-
-              <BlocoFicha titulo="Condições">
-                <Linha rotulo="Salário de abertura" valor={moedaBr(verAlvo.salarioAbertura)} />
+              {exigeTempoContrato(verAlvo.vinculo) && (
                 <Linha
-                  rotulo="Benefícios"
-                  valor={
-                    verAlvo.beneficios.length
-                      ? verAlvo.beneficios
-                          .map((b) =>
-                            b.valor ? `${b.nome}: ${salarioParaCampo(b.valor)}` : b.nome,
-                          )
-                          .join(", ")
-                      : null
-                  }
-                  largo
+                  rotulo="Tempo de contrato"
+                  valor={verAlvo.tempoContrato ? rotuloTempoContrato(verAlvo.tempoContrato) : null}
                 />
-                <Linha rotulo="Local de trabalho" valor={verAlvo.localTrabalho} largo />
-                <Linha
-                  rotulo="Estado da abordagem"
-                  valor={verAlvo.regiaoEstado ? nomeDaUf(verAlvo.regiaoEstado) : null}
-                />
-                <Linha
-                  rotulo="Regiões de abordagem"
-                  valor={listaEmTexto(verAlvo.regioes, verAlvo.regioesOutras, REGIAO_OUTRAS)}
-                  largo
-                />
-                <Linha rotulo="Horário e escala" valor={verAlvo.horarioEscala} largo />
-                <Linha
-                  rotulo="Modelo de trabalho"
-                  valor={
-                    verAlvo.modeloTrabalho
-                      ? VAGA_MODELO_TRABALHO_LABEL[verAlvo.modeloTrabalho]
-                      : null
-                  }
-                />
-                {verAlvo.modeloTrabalho === "HIBRIDO" && (
-                  <Linha rotulo="Detalhe do híbrido" valor={verAlvo.detalheHibrido} />
-                )}
-                <Linha rotulo="Vaga confidencial" valor={verAlvo.confidencial ? "Sim" : "Não"} />
-                <Linha
-                  rotulo="Divulgar o nome da empresa"
-                  valor={verAlvo.divulgarEmpresa ? "Sim" : "Não"}
-                />
-              </BlocoFicha>
-
-              <BlocoFicha titulo="Requisitos">
-                <Linha
-                  rotulo="Escolaridade"
-                  valor={
-                    verAlvo.escolaridade ? VAGA_ESCOLARIDADE_LABEL[verAlvo.escolaridade] : null
-                  }
-                />
-                <Linha rotulo="Faixa etária" valor={verAlvo.faixaEtaria} />
-                <Linha rotulo="Gênero" valor={VAGA_GENERO_LABEL[verAlvo.genero]} />
-                <Linha
-                  rotulo="Idiomas"
-                  valor={listaEmTexto(verAlvo.idiomas, verAlvo.idiomasOutros, OPCAO_OUTROS)}
-                />
-                <Linha rotulo="Cursos e conhecimentos" valor={verAlvo.cursosConhecimentos} largo />
-                <Linha
-                  rotulo="Testes"
-                  valor={listaEmTexto(
-                    verAlvo.testes.map((t) => VAGA_TESTE_LABEL[t as keyof typeof VAGA_TESTE_LABEL]),
-                    verAlvo.testesOutro,
-                    "",
-                  )}
-                  largo
-                />
-                <Linha rotulo="Experiência necessária" valor={verAlvo.experiencia} largo />
-                <Linha rotulo="Principais atribuições" valor={verAlvo.atribuicoes} largo />
-                <Linha rotulo="Perfil comportamental" valor={verAlvo.perfilComportamental} largo />
-                <Linha rotulo="Ambiente" valor={verAlvo.ambiente} largo />
-                <Linha
-                  rotulo="Etapas do processo seletivo"
-                  valor={listaEmTexto(verAlvo.etapasPs, verAlvo.etapasPsOutra, OPCAO_OUTRA)}
-                  largo
-                />
-                <Linha rotulo="Observações" valor={verAlvo.observacoes} largo />
-              </BlocoFicha>
-
-              {/* O FECHAMENTO SÓ APARECE NA VAGA FECHADA: numa vaga aberta seria um bloco de
-                  "não informado" repetido quatro vezes, dizendo o óbvio. */}
-              {verAlvo.dataFechamento && (
-                <BlocoFicha titulo="Fechamento">
-                  <Linha rotulo="Data do fechamento" valor={dataBr(verAlvo.dataFechamento)} />
-                  <Linha
-                    rotulo="Vagas fechadas"
-                    valor={verAlvo.vagasFechadas === null ? null : String(verAlvo.vagasFechadas)}
-                  />
-                  <Linha
-                    rotulo="Vagas fechadas de banco"
-                    valor={
-                      verAlvo.vagasFechadasBanco === null
-                        ? null
-                        : String(verAlvo.vagasFechadasBanco)
-                    }
-                  />
-                  <Linha
-                    rotulo="Salário de fechamento"
-                    valor={moedaBr(verAlvo.salarioFechamento)}
-                  />
-                  <Linha
-                    rotulo="Data prevista para início"
-                    valor={dataBr(verAlvo.dataPrevistaInicio)}
-                  />
-                  <Linha
-                    rotulo="Enviar para admissão"
-                    valor={verAlvo.enviarParaAdmissao ? "Sim" : "Não"}
-                  />
-                </BlocoFicha>
               )}
-            </div>
+            </BlocoFicha>
 
-            <div className="flex-none border-t border-[var(--border)] px-6 py-4">
-              <div className="flex justify-end gap-2">
-                <Button type="button" variant="secondary" onClick={() => setVerAlvo(null)}>
-                  Fechar
-                </Button>
-                <Button type="button" onClick={() => clonarVaga(verAlvo)}>
-                  Clonar esta vaga
-                </Button>
-              </div>
-            </div>
-          </div>
-        </Modal>
+            <BlocoFicha titulo="Quem Pediu">
+              <Linha rotulo="Solicitante" valor={verAlvo.solicitanteNome} />
+              <Linha rotulo="Telefone" valor={verAlvo.solicitanteTelefone} />
+              <Linha rotulo="E-mail" valor={verAlvo.solicitanteEmail} />
+              <Linha rotulo="Consultor" valor={verAlvo.consultorNome} />
+              <Linha rotulo="Recruiter" valor={verAlvo.recruiterNome} />
+              <Linha rotulo="Data de solicitação" valor={dataBr(verAlvo.dataSolicitacao)} />
+              <Linha rotulo="Data de alinhamento" valor={dataBr(verAlvo.dataAlinhamento)} />
+              <Linha rotulo="Previsão de entrega" valor={dataBr(verAlvo.dataLimite)} />
+              <Linha rotulo="Envio da shortlist" valor={dataBr(verAlvo.envioShortlist)} />
+            </BlocoFicha>
+
+            <BlocoFicha titulo="Contratação">
+              <Linha rotulo="Motivo" valor={verAlvo.motivo} />
+              <Linha rotulo="Justificativa" valor={verAlvo.justificativaMotivo} />
+              {verAlvo.motivo === MOTIVO_SUBSTITUICAO && (
+                <>
+                  <Linha
+                    rotulo="Tipo de substituição"
+                    valor={
+                      verAlvo.tipoSubstituicao
+                        ? VAGA_TIPO_SUBSTITUICAO_LABEL[verAlvo.tipoSubstituicao]
+                        : null
+                    }
+                  />
+                  <Linha rotulo="Nome do substituído" valor={verAlvo.substituidoNome} />
+                  {/* Item 3: o CPF aparece MASCARADO para leitura. §A.6: a rota inteira do módulo
+                        é fechada pelo menu `as-vagas`, e o número nunca vai para log. */}
+                  <Linha
+                    rotulo="CPF do substituído"
+                    valor={verAlvo.substituidoCpf ? formatCpf(verAlvo.substituidoCpf) : null}
+                  />
+                </>
+              )}
+            </BlocoFicha>
+
+            <BlocoFicha titulo="Condições">
+              <Linha rotulo="Salário de abertura" valor={moedaBr(verAlvo.salarioAbertura)} />
+              <Linha
+                rotulo="Benefícios"
+                valor={
+                  verAlvo.beneficios.length
+                    ? verAlvo.beneficios
+                        .map((b) => (b.valor ? `${b.nome}: ${salarioParaCampo(b.valor)}` : b.nome))
+                        .join(", ")
+                    : null
+                }
+                largo
+              />
+              <Linha rotulo="Local de trabalho" valor={verAlvo.localTrabalho} largo />
+              <Linha
+                rotulo="Estado da abordagem"
+                valor={verAlvo.regiaoEstado ? nomeDaUf(verAlvo.regiaoEstado) : null}
+              />
+              <Linha
+                rotulo="Regiões de abordagem"
+                valor={listaEmTexto(verAlvo.regioes, verAlvo.regioesOutras, REGIAO_OUTRAS)}
+                largo
+              />
+              <Linha rotulo="Horário e escala" valor={verAlvo.horarioEscala} largo />
+              <Linha
+                rotulo="Modelo de trabalho"
+                valor={
+                  verAlvo.modeloTrabalho ? VAGA_MODELO_TRABALHO_LABEL[verAlvo.modeloTrabalho] : null
+                }
+              />
+              {verAlvo.modeloTrabalho === "HIBRIDO" && (
+                <Linha rotulo="Detalhe do híbrido" valor={verAlvo.detalheHibrido} />
+              )}
+              <Linha rotulo="Vaga confidencial" valor={verAlvo.confidencial ? "Sim" : "Não"} />
+              <Linha
+                rotulo="Divulgar o nome da empresa"
+                valor={verAlvo.divulgarEmpresa ? "Sim" : "Não"}
+              />
+            </BlocoFicha>
+
+            <BlocoFicha titulo="Requisitos">
+              <Linha
+                rotulo="Escolaridade"
+                valor={verAlvo.escolaridade ? VAGA_ESCOLARIDADE_LABEL[verAlvo.escolaridade] : null}
+              />
+              <Linha rotulo="Faixa etária" valor={verAlvo.faixaEtaria} />
+              <Linha rotulo="Gênero" valor={VAGA_GENERO_LABEL[verAlvo.genero]} />
+              <Linha
+                rotulo="Idiomas"
+                valor={listaEmTexto(verAlvo.idiomas, verAlvo.idiomasOutros, OPCAO_OUTROS)}
+              />
+              <Linha rotulo="Cursos e conhecimentos" valor={verAlvo.cursosConhecimentos} largo />
+              <Linha
+                rotulo="Testes"
+                valor={listaEmTexto(
+                  verAlvo.testes.map((t) => VAGA_TESTE_LABEL[t as keyof typeof VAGA_TESTE_LABEL]),
+                  verAlvo.testesOutro,
+                  "",
+                )}
+                largo
+              />
+              <Linha rotulo="Experiência necessária" valor={verAlvo.experiencia} largo />
+              <Linha rotulo="Principais atribuições" valor={verAlvo.atribuicoes} largo />
+              <Linha rotulo="Perfil comportamental" valor={verAlvo.perfilComportamental} largo />
+              <Linha rotulo="Ambiente" valor={verAlvo.ambiente} largo />
+              <Linha
+                rotulo="Etapas do processo seletivo"
+                valor={listaEmTexto(verAlvo.etapasPs, verAlvo.etapasPsOutra, OPCAO_OUTRA)}
+                largo
+              />
+              <Linha rotulo="Observações" valor={verAlvo.observacoes} largo />
+            </BlocoFicha>
+
+            {/* O FECHAMENTO SÓ APARECE NA VAGA FECHADA: numa vaga aberta seria um bloco de
+                  "não informado" repetido quatro vezes, dizendo o óbvio. */}
+            {verAlvo.dataFechamento && (
+              <BlocoFicha titulo="Fechamento">
+                <Linha rotulo="Data do fechamento" valor={dataBr(verAlvo.dataFechamento)} />
+                <Linha
+                  rotulo="Vagas fechadas"
+                  valor={verAlvo.vagasFechadas === null ? null : String(verAlvo.vagasFechadas)}
+                />
+                <Linha
+                  rotulo="Vagas fechadas de banco"
+                  valor={
+                    verAlvo.vagasFechadasBanco === null ? null : String(verAlvo.vagasFechadasBanco)
+                  }
+                />
+                <Linha rotulo="Salário de fechamento" valor={moedaBr(verAlvo.salarioFechamento)} />
+                <Linha
+                  rotulo="Data prevista para início"
+                  valor={dataBr(verAlvo.dataPrevistaInicio)}
+                />
+                <Linha
+                  rotulo="Enviar para admissão"
+                  valor={verAlvo.enviarParaAdmissao ? "Sim" : "Não"}
+                />
+              </BlocoFicha>
+            )}
+          </>
+        </VagaPainelModal>
       )}
     </>
   );

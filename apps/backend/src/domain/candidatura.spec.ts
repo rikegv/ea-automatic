@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
   CANDIDATURA_ETAPAS,
+  CANDIDATURA_SITUACAO_AJUDA,
+  CANDIDATURA_SITUACAO_LABEL,
   CANDIDATURA_SITUACOES,
+  SITUACOES_QUE_FINALIZAM_POSICAO,
+  finalizaPosicao,
   type CandidaturaSituacao,
 } from "@ea/shared-types";
 import {
   destinosDeEtapa,
+  SITUACOES_QUE_CONSOMEM_POSICAO,
   SITUACOES_TRATADAS,
   SITUACOES_VIVAS,
   STATUS_QUE_NAO_RECEBEM,
@@ -110,7 +115,7 @@ describe("as saídas, de qualquer etapa", () => {
   it("as três saídas são descarte, desistência e contratação", () => {
     expect(ehSaida("DESCARTADO")).toBe(true);
     expect(ehSaida("DESISTIU")).toBe(true);
-    expect(ehSaida("CONTRATADO")).toBe(true);
+    expect(ehSaida("ENVIADO_PARA_ADMISSAO")).toBe(true);
     expect(ehSaida("ATIVO")).toBe(false);
     expect(ehSaida("APROVADO")).toBe(false);
   });
@@ -118,14 +123,14 @@ describe("as saídas, de qualquer etapa", () => {
   it("só descarte e desistência encerram SEM êxito (contratado é saída que ocupa posição)", () => {
     expect(ehSaidaSemExito("DESCARTADO")).toBe(true);
     expect(ehSaidaSemExito("DESISTIU")).toBe(true);
-    expect(ehSaidaSemExito("CONTRATADO")).toBe(false);
+    expect(ehSaidaSemExito("ENVIADO_PARA_ADMISSAO")).toBe(false);
   });
 });
 
 describe("a régua da ocupação, sempre derivada", () => {
-  it("APROVADO e CONTRATADO consomem posição; o resto não", () => {
+  it("APROVADO e ENVIADO_PARA_ADMISSAO consomem posição; o resto não", () => {
     expect(consomePosicao("APROVADO")).toBe(true);
-    expect(consomePosicao("CONTRATADO")).toBe(true);
+    expect(consomePosicao("ENVIADO_PARA_ADMISSAO")).toBe(true);
     expect(consomePosicao("ATIVO")).toBe(false);
     expect(consomePosicao("DESCARTADO")).toBe(false);
     expect(consomePosicao("DESISTIU")).toBe(false);
@@ -156,7 +161,7 @@ describe("a régua da ocupação, sempre derivada", () => {
 
   it("conta a vaga cheia: 10 posições, 10 ocupadas, zero livres", () => {
     const s: CandidaturaSituacao[] = Array(9).fill("APROVADO");
-    s.push("CONTRATADO");
+    s.push("ENVIADO_PARA_ADMISSAO");
     const o = ocupacaoDaVaga(10, s);
     expect(o.ocupadas).toBe(10);
     expect(o.livres).toBe(0);
@@ -185,7 +190,194 @@ describe("a régua da ocupação, sempre derivada", () => {
 
   it("vaga sem ninguém devolve tudo zerado e todas as posições livres", () => {
     const o = ocupacaoDaVaga(3, []);
-    expect(o).toEqual({ ocupadas: 0, livres: 3, emSelecao: 0, fora: 0, excedida: false });
+    expect(o).toEqual({
+      ocupadas: 0,
+      finalizadas: 0,
+      finalizadasOficial: 0,
+      finalizadasBanco: 0,
+      livres: 3,
+      emSelecao: 0,
+      fora: 0,
+      excedida: false,
+    });
+  });
+
+  /**
+   * ─ OS DOIS NÚMEROS DE POSIÇÃO, e o invariante que os prende um ao outro (etapa 1) ─────────────
+   *
+   * `finalizadas` É A POSIÇÃO ENTREGUE, e `ocupadas` é a posição TOMADA. Não são um contador
+   * duplicado: saem da MESMA leitura, na MESMA função, no MESMO instante, e por isso não têm como
+   * discordar. O que este bloco guarda é o invariante `finalizadas <= ocupadas`, que só se quebra
+   * se alguém redigitar uma das duas listas em vez de derivar uma da outra.
+   */
+  it("`finalizadas` conta só quem ENTREGOU a posição, e `ocupadas` conta quem a TOMOU", () => {
+    const o = ocupacaoDaVaga(10, [
+      "ATIVO",
+      "APROVADO",
+      "APROVADO",
+      "ENVIADO_PARA_ADMISSAO",
+      "DESCARTADO",
+    ]);
+    expect(o.ocupadas).toBe(3);
+    expect(o.finalizadas).toBe(1);
+    expect(o.emSelecao).toBe(1);
+    expect(o.fora).toBe(1);
+  });
+
+  it("`finalizadas <= ocupadas` vale para TODA combinação de situações", () => {
+    for (const a of CANDIDATURA_SITUACOES) {
+      for (const b of CANDIDATURA_SITUACOES) {
+        const o = ocupacaoDaVaga(5, [a, b]);
+        expect(o.finalizadas).toBeLessThanOrEqual(o.ocupadas);
+      }
+    }
+  });
+
+  /**
+   * ─ A SEGUNDA INVARIANTE: `finalizadas === finalizadasOficial + finalizadasBanco` ──────────────
+   *
+   * A VARREDURA É SOBRE SITUAÇÃO **E** LADO, e o lado entra com os QUATRO valores que o banco pode
+   * devolver: `OFICIAL`, `BANCO`, `null` (a coluna nasceu nula, e nulo vale OFICIAL) e um valor
+   * ESTRANHO, que é o caso de alguém escrever pelo psql por cima do CHECK. Nenhum deles pode criar
+   * um terceiro lado nem sumir da soma: se um item entregue não cair em exatamente um dos dois
+   * lados, o total deixa de bater e é este teste que quebra.
+   *
+   * POR QUE ISTO PRECISA DE TESTE, se sai da mesma leitura: porque o dia em que alguém "otimizar"
+   * um dos três números para uma contagem separada (um `count(*) where posicao_lado = 'OFICIAL'`,
+   * por exemplo) é o dia em que a soma para de valer em silêncio, exatamente no caso do lado nulo.
+   */
+  it("`finalizadas === finalizadasOficial + finalizadasBanco` em toda combinação de situação e lado", () => {
+    const lados = ["OFICIAL", "BANCO", null, "SEI_LA"];
+    for (const a of CANDIDATURA_SITUACOES) {
+      for (const b of CANDIDATURA_SITUACOES) {
+        for (const ladoA of lados) {
+          for (const ladoB of lados) {
+            const o = ocupacaoDaVaga(5, [
+              { situacao: a, posicaoLado: ladoA },
+              { situacao: b, posicaoLado: ladoB },
+            ]);
+            expect(o.finalizadasOficial + o.finalizadasBanco).toBe(o.finalizadas);
+            expect(o.finalizadas).toBeLessThanOrEqual(o.ocupadas);
+          }
+        }
+      }
+    }
+  });
+
+  /**
+   * O CASO CONCRETO POR TRÁS DA INVARIANTE, com a vaga real de homologação: 5 oficiais e 20 de
+   * banco. Duas pessoas entregues no banco e uma no oficial dão `finalizadas: 3`, e é a SEPARAÇÃO
+   * que impede o cilindro oficial de mostrar 3 de 5 quando só uma posição oficial foi preenchida.
+   */
+  it("separa a entrega pelo lado de cada candidatura", () => {
+    const o = ocupacaoDaVaga(5, [
+      { situacao: "ALOCADO", posicaoLado: "BANCO" },
+      { situacao: "ALOCADO", posicaoLado: "BANCO" },
+      { situacao: "ALOCADO", posicaoLado: "OFICIAL" },
+      { situacao: "APROVADO", posicaoLado: null },
+      { situacao: "DESCARTADO", posicaoLado: "BANCO" },
+    ]);
+    expect(o.finalizadas).toBe(3);
+    expect(o.finalizadasOficial).toBe(1);
+    expect(o.finalizadasBanco).toBe(2);
+    // O descartado no banco NÃO entra em lado nenhum: quem sai sem êxito nunca entregou posição.
+    expect(o.fora).toBe(1);
+  });
+
+  /**
+   * ─ LIVRES E EXCEDIDA SÃO DO LADO OFICIAL: o terceiro defeito da mesma família ─────────────────
+   *
+   * O CENÁRIO É A VAGA REAL DE HOMOLOGAÇÃO: 5 posições oficiais, 20 de banco, VINTE pessoas
+   * entregues na RESERVA e NENHUMA no oficial. Enquanto `livres` e `excedida` mediam o TOTAL contra
+   * a meta oficial, a tela dizia que a vaga tinha estourado com as CINCO posições oficiais VAZIAS.
+   *
+   * QUEM ESTÁ NA RESERVA NÃO ENCHE E NÃO ESTOURA O CILINDRO OFICIAL. A reserva tem meta própria
+   * (`tetoDoLado`) e é medida contra ela, na trava.
+   */
+  it("vinte na reserva não tiram nenhuma posição oficial nem excedem a vaga", () => {
+    const o = ocupacaoDaVaga(
+      5,
+      Array.from({ length: 20 }, () => ({
+        situacao: "ALOCADO" as const,
+        posicaoLado: "BANCO",
+      })),
+    );
+    expect(o.livres).toBe(5);
+    expect(o.excedida).toBe(false);
+    // E o total NÃO mudou de significado: as vinte continuam tomando posição da vaga.
+    expect(o.ocupadas).toBe(20);
+    expect(o.finalizadasBanco).toBe(20);
+    expect(o.finalizadasOficial).toBe(0);
+  });
+
+  /**
+   * O SIMÉTRICO, QUE NÃO PODE QUEBRAR: a vaga que ENCOLHEU depois de aprovar. Nove aprovados no lado
+   * OFICIAL em oito posições continuam dando zero livres e `excedida = true`, que é comportamento
+   * validado. O sistema não desfaz aprovação nenhuma: mostra o excedente e deixa a correção para
+   * gente.
+   */
+  it("a vaga que encolheu no lado OFICIAL continua excedida", () => {
+    const o = ocupacaoDaVaga(
+      8,
+      Array.from({ length: 9 }, () => ({
+        situacao: "APROVADO" as const,
+        posicaoLado: "OFICIAL",
+      })),
+    );
+    expect(o.livres).toBe(0);
+    expect(o.excedida).toBe(true);
+  });
+
+  /** E o lado NULO conta como oficial aqui também, que é como toda linha de hoje está gravada. */
+  it("o lado nulo estoura a vaga como oficial, porque é o que ele é", () => {
+    const o = ocupacaoDaVaga(2, [
+      { situacao: "APROVADO", posicaoLado: null },
+      { situacao: "APROVADO" },
+      "APROVADO",
+    ]);
+    expect(o.livres).toBe(0);
+    expect(o.excedida).toBe(true);
+  });
+
+  /**
+   * OS DOIS LADOS JUNTOS, que é o caso em que a conta antiga e a nova mais divergem: 4 no oficial e
+   * 10 na reserva de uma vaga de 5 deixam UMA posição oficial livre, e não zero.
+   */
+  it("com gente dos dois lados, só a oficial conta para livres", () => {
+    const o = ocupacaoDaVaga(5, [
+      ...Array.from({ length: 4 }, () => ({ situacao: "APROVADO" as const, posicaoLado: "OFICIAL" })),
+      ...Array.from({ length: 10 }, () => ({ situacao: "ALOCADO" as const, posicaoLado: "BANCO" })),
+    ]);
+    expect(o.ocupadas).toBe(14);
+    expect(o.livres).toBe(1);
+    expect(o.excedida).toBe(false);
+  });
+
+  /**
+   * A FORMA CURTA (só a situação) É A LONGA COM O LADO NULO, e nulo é OFICIAL. É o que mantém de pé
+   * toda chamada e todo teste anteriores a esta separação, sem uma varredura de reescrita.
+   */
+  it("a lista de situações puras é lida como entrega toda OFICIAL", () => {
+    const curta = ocupacaoDaVaga(5, ["ALOCADO", "ENVIADO_PARA_ADMISSAO"]);
+    const longa = ocupacaoDaVaga(5, [
+      { situacao: "ALOCADO" },
+      { situacao: "ENVIADO_PARA_ADMISSAO", posicaoLado: null },
+    ]);
+    expect(curta).toEqual(longa);
+    expect(curta.finalizadasOficial).toBe(2);
+    expect(curta.finalizadasBanco).toBe(0);
+  });
+
+  /**
+   * LIVRES SAI DE `ocupadas`, NÃO DE `finalizadas`, e este teste é quem guarda a escolha: quem foi
+   * aprovado tem a posição RESERVADA antes da entrega. Trocar a base de `livres` para `finalizadas`
+   * mataria a trava 1, e uma vaga de 1 aceitaria uma segunda aprovação com a primeira dentro.
+   */
+  it("aprovado sem entrega ainda ocupa a posição: não sobra livre", () => {
+    const o = ocupacaoDaVaga(1, ["APROVADO"]);
+    expect(o.finalizadas).toBe(0);
+    expect(o.ocupadas).toBe(1);
+    expect(o.livres).toBe(0);
   });
 });
 
@@ -232,17 +424,45 @@ describe("TRAVA 2: alocar em vaga fechada", () => {
  * dito o que aconteceu com ela. Tratado é ter recebido UMA DECISÃO, e não ter dado certo.
  */
 describe("TRAVA 5: encerrar a vaga só com todos os candidatos tratados", () => {
-  it("as quatro situações de decisão contam como tratadas", () => {
+  it("as cinco situações de decisão contam como tratadas", () => {
     for (const s of SITUACOES_TRATADAS) expect(candidaturaTratada(s)).toBe(true);
     expect([...SITUACOES_TRATADAS].sort()).toEqual(
-      ["APROVADO", "CONTRATADO", "DESCARTADO", "DESISTIU"].sort(),
+      ["APROVADO", "ALOCADO", "ENVIADO_PARA_ADMISSAO", "DESCARTADO", "DESISTIU"].sort(),
     );
   });
 
-  it("SÓ `ATIVO` é pendente, e é a única situação de fora da lista", () => {
+  /**
+   * ─ SÓ `ATIVO` FICA PENDENTE, e a etapa 1 é quem fechou isto ─────────────────────────────────
+   *
+   * A ETAPA 0 DEIXOU `ALOCADO` PENDENTE de propósito, pelo fail-closed de `candidaturaTratada`, que
+   * pergunta se a situação ESTÁ NA LISTA em vez de perguntar se ela é diferente de `ATIVO`: situação
+   * nova nasce PENDENTE e segura a vaga até alguém decidir o que ela significa. A etapa 1 decidiu:
+   * ALOCADO é TRATADO, porque alocar é a decisão mais definitiva de todas.
+   *
+   * O QUE ESTE TESTE IMPEDE DE VOLTAR: com `ALOCADO` fora de `SITUACOES_TRATADAS`, cada pessoa
+   * alocada contaria como pendente de tratamento e a vaga NÃO FECHARIA NUNCA pela trava 5,
+   * justamente na vaga que deu certo.
+   *
+   * TRATADO E OCUPAR POSIÇÃO SÃO PERGUNTAS DIFERENTES, e este teste não responde a segunda: se
+   * `ALOCADO` consome ou finaliza posição está em `SITUACOES_QUE_FINALIZAM_POSICAO`, no
+   * `shared-types`, e tem bloco próprio no fim deste arquivo.
+   */
+  it("só `ATIVO` fica pendente: `ALOCADO` é tratado, e é a decisão mais definitiva de todas", () => {
     expect(candidaturaTratada("ATIVO")).toBe(false);
+    expect(candidaturaTratada("ALOCADO")).toBe(true);
     const fora = CANDIDATURA_SITUACOES.filter((s) => !SITUACOES_TRATADAS.includes(s));
     expect(fora).toEqual(["ATIVO"]);
+  });
+
+  /**
+   * A CONSEQUÊNCIA PRÁTICA, dita como a trava 5 a vê: a vaga que entregou fecha.
+   *
+   * Sem a linha da etapa 1 este `expect` seria `false`, e a mensagem que chegaria ao consultor seria
+   * "esta vaga tem candidato pendente" apontando para a pessoa que ele acabou de alocar.
+   */
+  it("uma vaga com gente ALOCADA encerra: alocar não deixa ninguém pendurado", () => {
+    expect(vagaPodeEncerrar(["ALOCADO", "ALOCADO", "DESCARTADO"])).toBe(true);
+    expect(vagaPodeEncerrar(["ALOCADO", "ATIVO"])).toBe(false);
   });
 
   /**
@@ -260,7 +480,7 @@ describe("TRAVA 5: encerrar a vaga só com todos os candidatos tratados", () => 
   });
 
   it("com todo mundo decidido, a vaga encerra", () => {
-    expect(vagaPodeEncerrar(["APROVADO", "CONTRATADO", "DESCARTADO", "DESISTIU"])).toBe(true);
+    expect(vagaPodeEncerrar(["APROVADO", "ENVIADO_PARA_ADMISSAO", "DESCARTADO", "DESISTIU"])).toBe(true);
   });
 
   /**
@@ -294,7 +514,7 @@ describe("TRAVA 5: encerrar a vaga só com todos os candidatos tratados", () => 
   });
 
   it("sem pendente, a lista volta vazia", () => {
-    expect(pendentesDeTratamento([{ situacao: "CONTRATADO" as CandidaturaSituacao }])).toEqual([]);
+    expect(pendentesDeTratamento([{ situacao: "ENVIADO_PARA_ADMISSAO" as CandidaturaSituacao }])).toEqual([]);
   });
 });
 
@@ -310,8 +530,22 @@ function linha(
 }
 
 describe("as situações VIVAS, derivadas e não redigitadas", () => {
-  it("viva é ATIVO, APROVADO e CONTRATADO, e é exatamente o conjunto do índice parcial", () => {
-    expect([...SITUACOES_VIVAS].sort()).toEqual(["APROVADO", "ATIVO", "CONTRATADO"]);
+  /**
+   * `ALOCADO` ENTROU AQUI SEM UMA LINHA DE CÓDIGO, e é o fail-closed funcionando na direção certa:
+   * `SITUACOES_VIVAS` é o complemento de `ehSaidaSemExito`, então situação nova nasce VIVA, isto é,
+   * PROTEGIDA pela trava de duplicata. Alocar não é sair do processo, então esta é a resposta certa.
+   *
+   * ESTE TESTE NÃO OLHA O BANCO, e o índice parcial de lá é uma lista COMPILADA no predicado, que
+   * `ALTER TYPE ... ADD VALUE` não atualiza. Este `expect` passar não prova que o índice cobre
+   * `ALOCADO`: a prova é o `SELECT` em `pg_indexes` depois da migration.
+   */
+  it("viva é ATIVO, APROVADO, ALOCADO e ENVIADO_PARA_ADMISSAO", () => {
+    expect([...SITUACOES_VIVAS].sort()).toEqual([
+      "ALOCADO",
+      "APROVADO",
+      "ATIVO",
+      "ENVIADO_PARA_ADMISSAO",
+    ]);
   });
 
   it("é o COMPLEMENTO EXATO de `ehSaidaSemExito`: toda situação é viva ou encerrada, nunca as duas", () => {
@@ -391,5 +625,133 @@ describe("TRAVA 3: a duplicata, agora só entre as VIVAS", () => {
   it("uma encerrada sozinha e sem carimbo ainda é reentrada, não um caso perdido", () => {
     const d = decidirAlocacao([linha("DESCARTADO", null)]);
     expect(d.tipo === "REENTRADA" && d.anterior.encerradaEm).toBeNull();
+  });
+});
+
+/**
+ * ─ O VOCABULÁRIO DO MODELO DE POSIÇÃO (etapa 0, 08/09) ──────────────────────────────────────────
+ *
+ * ESTE BLOCO NÃO TESTA COMPORTAMENTO, TESTA O CONTRATO. Ele existe porque a régua de "quem consome
+ * posição" estava escrita em QUATRO lugares que concordavam por coincidência, e a etapa 0 a reduziu
+ * a UM. Um contrato sem teste volta a se espalhar na primeira pressa.
+ */
+describe("VOCABULÁRIO: o modelo de posição, com uma fonte só", () => {
+  it("`ALOCADO` e `ENVIADO_PARA_ADMISSAO` existem e são situações SEPARADAS", () => {
+    expect(CANDIDATURA_SITUACOES).toContain("ALOCADO");
+    expect(CANDIDATURA_SITUACOES).toContain("ENVIADO_PARA_ADMISSAO");
+    expect(CANDIDATURA_SITUACOES.filter((s) => s === "ALOCADO")).toHaveLength(1);
+  });
+
+  /**
+   * A PALAVRA "CONTRATADO" SAIU, e o teste guarda a decisão do diretor: ela dava a entender uma
+   * admissão concluída que não está concluída. Se alguém a reintroduzir no vocabulário, este
+   * `expect` cai antes de a palavra chegar à tela.
+   */
+  it('a palavra "CONTRATADO" não volta ao vocabulário', () => {
+    expect(CANDIDATURA_SITUACOES as readonly string[]).not.toContain("CONTRATADO");
+    for (const s of CANDIDATURA_SITUACOES) {
+      expect(CANDIDATURA_SITUACAO_LABEL[s]).not.toMatch(/Contratad/i);
+    }
+  });
+
+  it("todo valor tem rótulo e tem a frase que explica a diferença ao consultor", () => {
+    for (const s of CANDIDATURA_SITUACOES) {
+      expect(CANDIDATURA_SITUACAO_LABEL[s]?.trim()).toBeTruthy();
+      expect(CANDIDATURA_SITUACAO_AJUDA[s]?.trim()).toBeTruthy();
+    }
+  });
+
+  /** §A.11: travessão proibido em qualquer texto que chegue ao usuário. */
+  it("nenhum rótulo nem frase de ajuda usa travessão (§A.11)", () => {
+    for (const s of CANDIDATURA_SITUACOES) {
+      expect(CANDIDATURA_SITUACAO_LABEL[s]).not.toContain("\u2014");
+      expect(CANDIDATURA_SITUACAO_AJUDA[s]).not.toContain("\u2014");
+    }
+  });
+
+  /**
+   * A INVARIANTE QUE SUSTENTA O CILINDRO: tudo que ENTREGA a posição também a TOMA. Sem ela, o
+   * cilindro poderia mostrar mais entregue do que ocupado, que é um número impossível.
+   */
+  it("finalizar posição IMPLICA consumir posição, sempre", () => {
+    for (const s of CANDIDATURA_SITUACOES) {
+      if (finalizaPosicao(s)) expect(consomePosicao(s)).toBe(true);
+    }
+  });
+
+  it("`APROVADO` toma posição sem entregar: reserva o lugar antes da entrega", () => {
+    expect(consomePosicao("APROVADO")).toBe(true);
+    expect(finalizaPosicao("APROVADO")).toBe(false);
+  });
+
+  it("quem está em seleção ou saiu sem êxito não toma nem entrega posição", () => {
+    for (const s of ["ATIVO", "DESCARTADO", "DESISTIU"] as CandidaturaSituacao[]) {
+      expect(consomePosicao(s)).toBe(false);
+      expect(finalizaPosicao(s)).toBe(false);
+    }
+  });
+
+  /**
+   * ─ O ÚNICO PONTO DA ETAPA 1 QUE FICOU PENDENTE, e ele é PENDENTE DE PROPÓSITO ────────────────
+   *
+   * `ALOCADO` AINDA NÃO CONSOME NEM FINALIZA POSIÇÃO, porque a lista que decide isso
+   * (`SITUACOES_QUE_FINALIZAM_POSICAO`) mora no `shared-types`, que é ARQUIVO DO COORDENADOR
+   * (§A.39: dois agentes escrevendo o arquivo compartilhado se sobrescrevem em silêncio, e o
+   * segundo a gravar apaga o primeiro sem que nada falhe). A etapa 1 PEDIU a linha e não a
+   * escreveu.
+   *
+   * A LINHA PEDIDA, exatamente:
+   *   export const SITUACOES_QUE_FINALIZAM_POSICAO: readonly CandidaturaSituacao[] = [
+   *     "ALOCADO",
+   *     "ENVIADO_PARA_ADMISSAO",
+   *   ];
+   *
+   * A LINHA FOI APLICADA PELO COORDENADOR, e o tripwire fez o trabalho dele: falhou no instante
+   * exato da aplicação, apontando para este ponto. O que se segue é o estado NOVO.
+   *
+   * E BASTOU A LINHA, que era a aposta da etapa 1: nada mais precisou mudar para `ALOCADO` passar a
+   * contar em toda parte. As contagens em SQL leem `SITUACOES_QUE_CONSOMEM_POSICAO`, derivada de
+   * `consomePosicao`, e o cilindro lê `finalizadas`, derivada de `finalizaPosicao`. Uma edição, e a
+   * régua inteira acompanhou. É essa propriedade, e não a lista em si, que este bloco protege.
+   *
+   * CONTINUA INOFENSIVO ATÉ A ETAPA 2: nada escreve `ALOCADO` no banco ainda, então não existe linha
+   * em que a conta pudesse errar. A partir da etapa 2 existe, e é por isso que a régua precisava
+   * estar certa ANTES da rota que escreve.
+   */
+  it("`ALOCADO` finaliza E consome posição, pela linha única do shared-types", () => {
+    expect(SITUACOES_QUE_FINALIZAM_POSICAO).toEqual(["ALOCADO", "ENVIADO_PARA_ADMISSAO"]);
+    expect(finalizaPosicao("ALOCADO")).toBe(true);
+    expect(consomePosicao("ALOCADO")).toBe(true);
+  });
+
+  /**
+   * ─ A DERIVAÇÃO, que é o que faz a linha pedida acima bastar sozinha ──────────────────────────
+   *
+   * `SITUACOES_QUE_CONSOMEM_POSICAO` existe porque `inArray` precisa de um ARRAY e não de uma
+   * função, e é ela que as contagens em SQL passaram a ler no lugar das listas escritas à mão. Este
+   * teste afirma que ela é DERIVADA, e não uma segunda lista: para toda situação do vocabulário, o
+   * pertencimento à constante e a resposta de `consomePosicao` são a MESMA coisa.
+   *
+   * O DIA EM QUE ISTO QUEBRAR é o dia em que alguém redigitou a lista, e é exatamente o defeito que
+   * custou cinco cópias desta régua espalhadas pelo módulo.
+   */
+  it("a lista usada pelo SQL é DERIVADA de `consomePosicao`, nunca redigitada", () => {
+    for (const s of CANDIDATURA_SITUACOES) {
+      expect(SITUACOES_QUE_CONSOMEM_POSICAO.includes(s)).toBe(consomePosicao(s));
+    }
+    // Ela CONTÉM tudo que finaliza, mais `APROVADO`, que reserva antes de entregar.
+    for (const s of SITUACOES_QUE_FINALIZAM_POSICAO) {
+      expect(SITUACOES_QUE_CONSOMEM_POSICAO).toContain(s);
+    }
+    expect(SITUACOES_QUE_CONSOMEM_POSICAO).toContain("APROVADO");
+  });
+
+  /**
+   * TODA SITUAÇÃO QUE CONSOME POSIÇÃO É VIVA, e portanto está sob o índice parcial de duplicata.
+   * Se um dia uma delas cair fora de `SITUACOES_VIVAS`, o banco deixaria de barrar a segunda linha
+   * viva do par pessoa/vaga e a contagem de posições passaria a mentir em silêncio.
+   */
+  it("quem consome posição está SEMPRE entre as vivas: a trava do banco não pode perdê-lo", () => {
+    for (const s of SITUACOES_QUE_CONSOMEM_POSICAO) expect(SITUACOES_VIVAS).toContain(s);
   });
 });

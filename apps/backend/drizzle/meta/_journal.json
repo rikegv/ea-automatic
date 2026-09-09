@@ -666,6 +666,41 @@
       "when": 1788046691611,
       "tag": "0094_as_vaga_listas",
       "breakpoints": true
+    },
+    {
+      "idx": 95,
+      "version": "7",
+      "when": 1788050291611,
+      "tag": "0095_as_situacao_alocado",
+      "breakpoints": true
+    },
+    {
+      "idx": 96,
+      "version": "7",
+      "when": 1788053891611,
+      "tag": "0096_as_candidatura_posicao_lado",
+      "breakpoints": true
+    },
+    {
+      "idx": 97,
+      "version": "7",
+      "when": 1788057491611,
+      "tag": "0097_as_log_do_aceite_no_historico",
+      "breakpoints": true
+    },
+    {
+      "idx": 98,
+      "version": "7",
+      "when": 1788061091611,
+      "tag": "0098_as_trilha_do_fechamento_forcado",
+      "breakpoints": true
+    },
+    {
+      "idx": 99,
+      "version": "7",
+      "when": 1788064691611,
+      "tag": "0099_as_rastro_da_reducao_de_meta",
+      "breakpoints": true
     }
   ]
 }

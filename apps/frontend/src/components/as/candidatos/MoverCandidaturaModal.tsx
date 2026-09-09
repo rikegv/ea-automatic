@@ -14,10 +14,36 @@
  * └─────────────────────────────────────────────────────────────────────────────────────────────┘
  *
  * OS DESFECHOS ENTRAM NO MESMO SELETOR, e não em outra caixa: para quem opera, "para onde mando
- * esta pessoa" é UMA pergunta, e Descartado, Desistiu e Contratado são respostas dela tanto quanto
- * Triagem. Eles ficam num GRUPO PRÓPRIO, abaixo do funil, porque são de outra natureza: a etapa é
- * um lugar e se desfaz, o desfecho é uma DECISÃO e encerra o processo. O grupo separado é o que diz
- * isso sem precisar de aviso escrito.
+ * esta pessoa" é UMA pergunta, e Descartado, Desistiu e Enviado Para Admissão são respostas dela
+ * tanto quanto Triagem. Eles ficam ABAIXO do funil, porque são de outra natureza: a etapa é um lugar
+ * e se desfaz, o desfecho é uma DECISÃO. A separação é o que diz isso sem precisar de aviso escrito.
+ *
+ * ─ DESVINCULAR COM MOTIVO (decisão do diretor) ───────────────────────────────────────────────
+ *
+ * O MECANISMO FICA, A APRESENTAÇÃO MUDA. Descartado e Desistiu sempre tiraram a pessoa da vaga e
+ * sempre exigiram motivo; o que a tela chamava de "encerrar o processo" é, para quem opera,
+ * DESVINCULAR o candidato da vaga. Os dois passam a viver na seção "Desvincular Da Vaga", e a
+ * escolha entre eles passa a ser o MOTIVO de a pessoa ter saído, detalhado no texto livre.
+ *
+ * ENVIAR PARA A ADMISSÃO NÃO É DESVINCULAR, e por isso saiu do agrupamento para uma seção própria:
+ * é o desfecho bem-sucedido, a pessoa continua ocupando a posição da vaga e avança para a esteira.
+ * Ele não mudou em nada, nem no rótulo nem na frase (§A.14).
+ *
+ * NENHUM CAMINHO NOVO FOI ABERTO: mesma rota (`registrarSaida`), mesmo motivo obrigatório e mesmo
+ * efeito na conta de posições. Um botão "desvincular" ao lado do que já fazia isso seria um segundo
+ * caminho para o mesmo efeito, que é como duas regras para a mesma coisa começam a divergir.
+ *
+ * ─ O QUE A ETAPA 5 MUDOU AQUI, e por que era urgente ─────────────────────────────────────────
+ *
+ * ESTE MODAL CHAMAVA DE ENCERRADO QUEM NÃO ESTÁ. A régua era `situacao === "ATIVO"`, então quem
+ * estivesse APROVADO ou ALOCADO recebia "esta candidatura já foi encerrada como Alocado e não se move
+ * mais no funil", o oposto exato do modelo: o alocado PREENCHE a posição e CONTINUA no funil. O
+ * defeito estava dormente só porque ninguém era alocado ainda; no dia em que o botão de entregar
+ * posição passou a funcionar, ele viraria texto errado na tela.
+ *
+ * E "REGISTRAR CONTRATAÇÃO" VIROU "ENVIAR PARA ADMISSÃO" (decisão do diretor), no rótulo e em tudo
+ * ao redor. A diferença entre os dois estados vizinhos é dita pela frase de
+ * `CANDIDATURA_SITUACAO_AJUDA`, consumida do vocabulário compartilhado e nunca reescrita aqui.
  *
  * O DESFECHO NÃO DISPARA NO CLIQUE. Clicar num card de etapa move na hora, porque mover é reversível
  * (basta clicar em outra etapa). Clicar num desfecho ABRE o campo de motivo e espera a confirmação,
@@ -48,7 +74,10 @@ import { useState } from "react";
 import {
   CANDIDATURA_ETAPAS,
   CANDIDATURA_ETAPA_LABEL,
+  CANDIDATURA_SITUACAO_AJUDA,
   CANDIDATURA_SITUACAO_LABEL,
+  ehSaidaSemExito,
+  finalizaPosicao,
   type AsCandidaturaItem,
   type CandidaturaEtapa,
 } from "@ea/shared-types";
@@ -64,9 +93,25 @@ import {
   registrarSaida,
 } from "@/lib/as-candidatos";
 import { tomDaEtapa, tomDaSituacao } from "@/lib/as-candidatos-visual";
+import { podeAprovar, podeMoverNoFunil } from "@/lib/as-vaga-acoes";
 import { cn } from "@/lib/cn";
 
-type Saida = "DESCARTADO" | "DESISTIU" | "CONTRATADO";
+type Saida = "DESCARTADO" | "DESISTIU" | "ENVIADO_PARA_ADMISSAO";
+
+/** As duas saídas que TIRAM a pessoa da vaga, e que passam a se apresentar como desvínculo. */
+type Desvinculo = "DESCARTADO" | "DESISTIU";
+
+/**
+ * A RÉGUA CONTINUA SENDO A DO VOCABULÁRIO COMPARTILHADO: esta função só ENSINA AO TYPESCRIPT o que
+ * `ehSaidaSemExito` já decide, para o compilador saber que o card do desvínculo nunca recebe o envio
+ * para a admissão. Nenhuma lista nova, nenhuma segunda definição de quem encerra o processo.
+ */
+function ehDesvinculo(sa: Saida): sa is Desvinculo {
+  return ehSaidaSemExito(sa);
+}
+
+/** Os três desfechos, na ordem em que aparecem. Encerramentos primeiro, avanço por último. */
+const SAIDAS: Saida[] = ["DESCARTADO", "DESISTIU", "ENVIADO_PARA_ADMISSAO"];
 
 export function MoverCandidaturaModal({
   candidatura,
@@ -86,7 +131,34 @@ export function MoverCandidaturaModal({
 
   /** A etapa clicada enquanto a requisição não volta: só ela mostra o estado de espera, não a grade toda. */
   const [movendoPara, setMovendoPara] = useState<CandidaturaEtapa | null>(null);
-  const viva = candidatura.situacao === "ATIVO";
+  /*
+   * ┌─ A RÉGUA DE QUEM SE MOVE, E O ERRO QUE ELA CORRIGE ────────────────────────────────────────┐
+   * │ ERA `situacao === "ATIVO"`, E ISSO FAZIA A TELA CHAMAR DE ENCERRADO QUEM NÃO ESTÁ. Quem     │
+   * │ estivesse APROVADO ou ALOCADO lia "esta candidatura já foi encerrada como Alocado e não se  │
+   * │ move mais no funil", que é o oposto exato do modelo: o alocado PREENCHE a posição e         │
+   * │ CONTINUA no funil, e o aprovado nem desfecho teve.                                          │
+   * │                                                                                            │
+   * │ SÃO DUAS PERGUNTAS DIFERENTES, e o defeito foi tratá-las como uma:                          │
+   * │   `ehSaidaSemExito`   o processo desta pessoa ACABOU? (descartado, desistiu)                │
+   * │   `podeMoverNoFunil`  ela anda de etapa AGORA? (o alocado anda: a régua é `candidaturaViva`, │
+   * │                       espelhando a trava do backend, e mora em `as-vaga-acoes`)             │
+   * │                                                                                            │
+   * │ NENHUMA LISTA NOVA: a primeira é do vocabulário compartilhado, lida também pelo backend.    │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   */
+  const encerrada = ehSaidaSemExito(candidatura.situacao);
+  const moveNoFunil = podeMoverNoFunil(candidatura.situacao);
+  /** Os desfechos que fazem sentido oferecer AGORA: todos, menos o estado em que a pessoa já está. */
+  const saidasOferecidas = SAIDAS.filter((sa) => sa !== candidatura.situacao);
+  /**
+   * OS DOIS GRUPOS, separados pela MESMA régua do vocabulário compartilhado (`ehSaidaSemExito`), e
+   * não por uma lista escrita aqui. Desvincular e enviar para a admissão são de naturezas opostas:
+   * um TIRA a pessoa da vaga e libera a posição, o outro a mantém ocupando a posição e a avança para
+   * a esteira. Uma segunda lista nesta tela divergiria da régua no dia em que uma situação nova
+   * entrasse, e divergiria justamente na conta de posições.
+   */
+  const desvinculosOferecidos = saidasOferecidas.filter(ehDesvinculo);
+  const envioOferecido = saidasOferecidas.filter((sa) => !ehDesvinculo(sa));
 
   /**
    * ┌─ NENHUMA AÇÃO DE ESTADO EXECUTA EM UM CLIQUE SÓ (decisão do diretor, 27/08) ───────────────┐
@@ -116,6 +188,26 @@ export function MoverCandidaturaModal({
     falha: string;
   } | null>(null);
 
+  /**
+   * ─ TROCAR DE CARD LIMPA O MOTIVO, e isso é integridade do histórico, não zelo de tela ─────────
+   *
+   * A CAIXA DE MOTIVO É UMA SÓ para os dois cards do desvínculo (e para o envio), de propósito: dois
+   * campos dariam duas regras de obrigatoriedade para divergir. O preço disso é que o ESTADO também é
+   * um só, e sem esta limpeza o texto escrito em "Descartado Pela Seleção" continuava no campo ao
+   * clicar em "Desistiu Do Processo", pronto para ser enviado CARIMBADO COM A OUTRA SITUAÇÃO.
+   *
+   * O DANO SERIA SILENCIOSO E PERMANENTE: o motivo é o que o histórico do candidato vai mostrar daqui
+   * a seis meses para quem nunca participou do processo, e um desfecho explicado pelo motivo do outro
+   * é histórico falso, gravado sem nada falhar.
+   *
+   * FECHAR O CARD TAMBÉM LIMPA, pelo mesmo motivo: reabrir o card devolve o campo em branco, em vez de
+   * ressuscitar um texto que o consultor já tinha abandonado.
+   */
+  function alternarSaida(sa: Saida) {
+    setSaidaAberta((atual) => (atual === sa ? null : sa));
+    setMotivo("");
+  }
+
   /** Não executa: PERGUNTA. Quem chama descreve a ação, e o diálogo é quem dispara. */
   function pedirConfirmacao(c: NonNullable<typeof confirmacao>) {
     setErro(null);
@@ -142,6 +234,57 @@ export function MoverCandidaturaModal({
     }
   }
 
+  /**
+   * A CAIXA DO MOTIVO, UMA SÓ, usada pelos dois grupos.
+   *
+   * ELA APARECE DENTRO DO GRUPO DO CARD ABERTO, e é por isso que virou função em vez de ficar solta
+   * no fim da seção: com os desfechos em dois grupos, uma caixa fixa embaixo apareceria longe do
+   * card clicado (ou, pior, duplicada). Duplicar o JSX daria dois campos de motivo com duas regras
+   * de obrigatoriedade para divergir.
+   *
+   * O MOTIVO É OBRIGATÓRIO NOS DOIS GRUPOS, e a tela é a PRIMEIRA barreira: o `@MinLength(2)` do DTO
+   * continua sendo a segunda. Afrouxar aqui deixaria o histórico nascer com buraco justamente nos
+   * eventos que mais precisam de explicação.
+   */
+  function caixaDeMotivo(sa: Saida) {
+    return (
+      <div className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-4">
+        <label className="flex flex-col gap-1.5">
+          <span className="text-[12.5px] text-dim">
+            Motivo
+            <span className="ml-1 text-danger">*</span>
+          </span>
+          <textarea
+            className="ds-input min-h-[70px] resize-y"
+            value={motivo}
+            onChange={(e) => setMotivo(e.target.value)}
+            placeholder={SAIDA_PLACEHOLDER[sa]}
+          />
+        </label>
+        <div className="mt-3 flex justify-end">
+          <Button
+            className="px-4 py-2.5"
+            disabled={ocupado || motivo.trim().length < 2}
+            onClick={() =>
+              pedirConfirmacao({
+                titulo: `${SAIDA_TITULO[sa]}?`,
+                mensagem: SAIDA_FRASE(sa, candidatura.candidatoNome),
+                rotulo: SAIDA_ACAO[sa],
+                // OS DESFECHOS SÃO "danger" e o movimento de etapa não é: desvincular e enviar para
+                // a admissão não se desfazem clicando em outro lugar, mover se desfaz.
+                tone: "danger",
+                acao: () => registrarSaida(candidatura.id, sa, motivo.trim(), token),
+                falha: SAIDA_FALHA[sa],
+              })
+            }
+          >
+            {SAIDA_ACAO[sa]}
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <Modal onClose={onClose} className="max-w-[760px] p-0" ariaLabel="Mover a candidatura">
       <div className="flex max-h-[88vh] flex-col">
@@ -161,7 +304,7 @@ export function MoverCandidaturaModal({
         </div>
 
         <div className="ea-scroll flex-1 overflow-y-auto px-6 py-5">
-          {!viva ? (
+          {encerrada ? (
             <p className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2.5 text-[13px] text-dim">
               Esta candidatura já foi encerrada como{" "}
               {CANDIDATURA_SITUACAO_LABEL[candidatura.situacao]} e não se move mais no funil.
@@ -171,6 +314,40 @@ export function MoverCandidaturaModal({
             </p>
           ) : (
             <>
+              {/* ─ O QUE A SITUAÇÃO ATUAL SIGNIFICA, DITO ANTES DE QUALQUER DECISÃO ─────────
+                  A frase vem de `CANDIDATURA_SITUACAO_AJUDA`, do vocabulário compartilhado, e não é
+                  reescrita aqui: `ALOCADO` e `ENVIADO_PARA_ADMISSAO` são vizinhos e fáceis de trocar,
+                  e trocar um pelo outro grava no banco um fato que não aconteceu. Duas redações da
+                  mesma diferença divergem no primeiro ajuste. */}
+              <div className="mb-5 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3.5 py-2.5">
+                <p className="text-[12.5px] leading-snug text-dim">
+                  {CANDIDATURA_SITUACAO_AJUDA[candidatura.situacao]}
+                </p>
+                {/* ─ DESFAZER UMA ALOCAÇÃO ERRADA É DESVINCULAR COM MOTIVO ────────────────
+                    A FRASE EXISTIA E NUNCA APARECEU PARA NINGUÉM. Ela nasceu aninhada dentro de
+                    `!moveNoFunil`, e `podeMoverNoFunil` é `candidaturaViva`, o COMPLEMENTO EXATO de
+                    `ehSaidaSemExito`: dentro deste ramo (o ramo de quem NÃO está encerrado) ele é
+                    sempre verdadeiro, então a condição era sempre falsa e o bloco inteiro era código
+                    morto. Quem mais perdia era justamente o ALOCADO, para quem a frase foi escrita.
+
+                    A PERGUNTA CERTA NÃO É "QUEM NÃO SE MOVE NO FUNIL", É "QUEM OCUPA A POSIÇÃO".
+                    A régua é `finalizaPosicao`, do vocabulário compartilhado (a posição foi
+                    ENTREGUE?), a mesma que enche o cilindro da vaga: nenhuma régua nova foi escrita
+                    aqui. O alocado se move no funil como todo mundo, e é ele que precisa saber como
+                    devolver a posição que preencheu.
+
+                    ELA FICA JUNTO DO QUE A SITUAÇÃO SIGNIFICA, e não dentro da seção do desvínculo:
+                    é aqui que a pergunta nasce, logo depois de a tela dizer que a pessoa preenche a
+                    posição. E APONTA para a seção abaixo em vez de oferecer botão próprio, porque o
+                    gesto já existe lá e um segundo caminho para o mesmo efeito é como duas regras
+                    para a mesma coisa começam a divergir. */}
+                {finalizaPosicao(candidatura.situacao) && (
+                  <p className="mt-2 text-[12px] leading-snug text-faint">
+                    Para desfazer uma alocação errada, desvincule o candidato na seção abaixo
+                    informando o motivo da saída.
+                  </p>
+                )}
+              </div>
               {/* ── O SELETOR DE ETAPA: UM CARD POR ETAPA DO FUNIL ─────────────────────────
                   NA ORDEM DO PROCESSO (`CANDIDATURA_ETAPAS`), da Captação à Aprovação, porque é
                   assim que o time lê o funil. Cada card diz, na linha de apoio, o que aquele clique
@@ -179,6 +356,7 @@ export function MoverCandidaturaModal({
 
                   CINCO COLUNAS EM TELA LARGA, DUAS NO CELULAR: cabem numa fileira só, e a fileira é
                   o funil desenhado. */}
+              {moveNoFunil && (
               <Secao titulo="Mover No Funil">
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
                   {CANDIDATURA_ETAPAS.map((e, i) => {
@@ -248,10 +426,18 @@ export function MoverCandidaturaModal({
                   não aprova nem encerra ninguém, só registra onde a pessoa está no processo.
                 </p>
               </Secao>
+              )}
 
               {/* A APROVAÇÃO É A OPERAÇÃO QUE CONSOME POSIÇÃO, e por isso ela mora na etapa de
-                  Aprovação e não vem junto com o avanço: chegar na última etapa não aprova ninguém. */}
-              {candidatura.etapa === "APROVACAO" && (
+                  Aprovação e não vem junto com o avanço: chegar na última etapa não aprova ninguém.
+
+                  E SÓ APARECE EM SELEÇÃO, por integridade e não por coerência de tela: a rota de
+                  aprovar NÃO exige situação nenhuma, então aprovar quem já está ALOCADO gravaria
+                  `APROVADO` por cima da entrega, ou seja, DESFARIA a posição entregue com um clique
+                  que parece inofensivo. Enquanto o modal escondia tudo de quem não era ATIVO, essa
+                  porta estava fechada por acidente; abrindo o modal para o alocado, ela passa a ser
+                  fechada de propósito (`podeAprovar`, com teste). */}
+              {candidatura.etapa === "APROVACAO" && podeAprovar(candidatura.situacao) && (
                 <Secao titulo="A Decisão">
                   <Button
                     className="px-4 py-2.5"
@@ -275,78 +461,75 @@ export function MoverCandidaturaModal({
                 </Secao>
               )}
 
-              {/* OS DESFECHOS, no mesmo seletor e em grupo próprio: mesma pergunta ("para onde
-                  mando esta pessoa"), natureza diferente (a etapa se desfaz, o desfecho encerra).
-                  Por isso eles NÃO disparam no clique: abrem o campo de motivo e esperam. */}
-              <Secao titulo="Encerrar O Processo">
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                  <BotaoSaida
-                    rotulo="Descartar"
-                    apoio="Encerra sem êxito"
-                    ativo={saidaAberta === "DESCARTADO"}
-                    onClick={() =>
-                      setSaidaAberta(saidaAberta === "DESCARTADO" ? null : "DESCARTADO")
-                    }
-                  />
-                  <BotaoSaida
-                    rotulo="Desistiu"
-                    apoio="A pessoa saiu do processo"
-                    ativo={saidaAberta === "DESISTIU"}
-                    onClick={() => setSaidaAberta(saidaAberta === "DESISTIU" ? null : "DESISTIU")}
-                  />
-                  <BotaoSaida
-                    rotulo="Contratado"
-                    apoio="Ocupa uma posição"
-                    ativo={saidaAberta === "CONTRATADO"}
-                    onClick={() =>
-                      setSaidaAberta(saidaAberta === "CONTRATADO" ? null : "CONTRATADO")
-                    }
-                  />
-                </div>
+              {/* ─ DESVINCULAR DA VAGA: as duas saídas sem êxito, apresentadas como MOTIVO ──────
+                  ┌─ O QUE MUDOU (decisão do diretor) ────────────────────────────────────────────┐
+                  │ O MECANISMO FICA, A APRESENTAÇÃO MUDA. Descartado e Desistiu sempre tiraram a  │
+                  │ pessoa da vaga e sempre exigiram motivo; o que a tela chamava de "encerrar o   │
+                  │ processo" é, do ponto de vista de quem opera, DESVINCULAR o candidato da vaga. │
+                  │ Agora a seção pergunta o que a pessoa veio fazer, e a escolha entre as duas    │
+                  │ saídas passa a ser o MOTIVO de ela ter saído.                                  │
+                  │                                                                                │
+                  │ NENHUM CAMINHO NOVO FOI ABERTO: é a mesma rota, o mesmo motivo obrigatório e o │
+                  │ mesmo efeito na conta de posições. Um segundo botão que fizesse "o mesmo, mas  │
+                  │ desvinculando" é como duas regras para a mesma coisa começam a divergir.       │
+                  └────────────────────────────────────────────────────────────────────────────────┘
 
-                {saidaAberta && (
-                  <div className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-4">
-                    <label className="flex flex-col gap-1.5">
-                      <span className="text-[12.5px] text-dim">
-                        Motivo
-                        <span className="ml-1 text-danger">*</span>
-                      </span>
-                      <textarea
-                        className="ds-input min-h-[70px] resize-y"
-                        value={motivo}
-                        onChange={(e) => setMotivo(e.target.value)}
-                        placeholder={SAIDA_PLACEHOLDER[saidaAberta]}
+                  ENVIAR PARA A ADMISSÃO NÃO ENTRA AQUI, e por isso ganhou seção própria logo abaixo:
+                  ele é o desfecho BEM-SUCEDIDO, não tira ninguém da vaga (a posição fica preenchida
+                  por essa pessoa) e agrupá-lo com o desvínculo faria a tela chamar de saída o
+                  avanço para a esteira admissional.
+
+                  ELES NÃO DISPARAM NO CLIQUE: o card abre o campo de motivo e espera a confirmação,
+                  porque desvincular não se desfaz clicando em outro lugar.
+
+                  O APOIO DE CADA CARD É A FRASE DO VOCABULÁRIO COMPARTILHADO
+                  (`CANDIDATURA_SITUACAO_AJUDA`), e não um resumo escrito aqui. Duas redações da
+                  mesma diferença divergem no primeiro ajuste.
+
+                  A SITUAÇÃO ATUAL NÃO VIRA CARD: oferecer "desistiu" a quem já consta como
+                  desistente seria oferecer o lugar onde a pessoa já está. */}
+              {desvinculosOferecidos.length > 0 && (
+                <Secao titulo="Desvincular Da Vaga">
+                  <div
+                    className={cn(
+                      "grid grid-cols-1 gap-2",
+                      desvinculosOferecidos.length === 2 ? "sm:grid-cols-2" : "sm:grid-cols-1",
+                    )}
+                  >
+                    {desvinculosOferecidos.map((sa) => (
+                      <BotaoSaida
+                        key={sa}
+                        rotulo={DESVINCULO_MOTIVO[sa]}
+                        apoio={CANDIDATURA_SITUACAO_AJUDA[sa]}
+                        ativo={saidaAberta === sa}
+                        onClick={() => alternarSaida(sa)}
                       />
-                    </label>
-                    <div className="mt-3 flex justify-end">
-                      <Button
-                        className="px-4 py-2.5"
-                        disabled={ocupado || motivo.trim().length < 2}
-                        onClick={() =>
-                          pedirConfirmacao({
-                            titulo: `${SAIDA_TITULO[saidaAberta]}?`,
-                            mensagem: SAIDA_FRASE(saidaAberta, candidatura.candidatoNome),
-                            rotulo: SAIDA_ACAO[saidaAberta],
-                            // OS DESFECHOS SÃO "danger" e o movimento de etapa não é: encerrar não
-                            // se desfaz clicando em outro lugar, mover se desfaz.
-                            tone: "danger",
-                            acao: () =>
-                              registrarSaida(
-                                candidatura.id,
-                                saidaAberta,
-                                motivo.trim(),
-                                token,
-                              ),
-                            falha: SAIDA_FALHA[saidaAberta],
-                          })
-                        }
-                      >
-                        {SAIDA_ACAO[saidaAberta]}
-                      </Button>
-                    </div>
+                    ))}
                   </div>
-                )}
-              </Secao>
+                  <p className="mt-2 text-[12px] text-faint">
+                    Escolha o motivo da saída e escreva o detalhe. O candidato sai da vaga e volta
+                    para o banco de candidatos, a posição volta a ficar livre e o motivo fica no
+                    histórico.
+                  </p>
+                  {saidaAberta !== null && ehDesvinculo(saidaAberta) && caixaDeMotivo(saidaAberta)}
+                </Secao>
+              )}
+
+              {/* O DESFECHO BEM-SUCEDIDO, em seção própria: a pessoa não sai da vaga, ela AVANÇA
+                  para a esteira admissional e a posição continua preenchida por ela. */}
+              {envioOferecido.map((sa) => (
+                <Secao key={sa} titulo="Enviar Para A Admissão">
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <BotaoSaida
+                      rotulo={SAIDA_ACAO[sa]}
+                      apoio={CANDIDATURA_SITUACAO_AJUDA[sa]}
+                      ativo={saidaAberta === sa}
+                      onClick={() => alternarSaida(sa)}
+                    />
+                  </div>
+                  {saidaAberta === sa && caixaDeMotivo(sa)}
+                </Secao>
+              ))}
             </>
           )}
 
@@ -388,18 +571,39 @@ export function MoverCandidaturaModal({
   );
 }
 
-/** O título do diálogo de cada desfecho, em title case (§A.24). */
+/**
+ * O título do diálogo de cada desfecho, em title case (§A.24).
+ *
+ * "REGISTRAR CONTRATAÇÃO" VIROU "ENVIAR PARA ADMISSÃO" (decisão do diretor). A palavra contratação
+ * dava a entender um processo CONCLUÍDO, e é o oposto do que o estado significa: a pessoa foi para a
+ * esteira admissional, a admissão COMEÇOU e ainda NÃO terminou. Quem já dizia isso certo era o
+ * vocabulário compartilhado (`ENVIADO_PARA_ADMISSAO` e a frase de `CANDIDATURA_SITUACAO_AJUDA`); era
+ * a tela que continuava com a palavra antiga, contando outra história na hora da decisão.
+ */
 const SAIDA_TITULO: Record<Saida, string> = {
-  DESCARTADO: "Descartar Candidato",
-  DESISTIU: "Registrar Desistência",
-  CONTRATADO: "Registrar Contratação",
+  DESCARTADO: "Desvincular Da Vaga",
+  DESISTIU: "Desvincular Da Vaga",
+  ENVIADO_PARA_ADMISSAO: "Enviar Para Admissão",
+};
+
+/**
+ * O MOTIVO DA SAÍDA, que é como as duas saídas sem êxito passam a se apresentar (decisão do
+ * diretor). O gesto é um só, desvincular; o que o consultor escolhe no card é POR QUE a pessoa saiu,
+ * e o texto livre logo abaixo detalha.
+ *
+ * É ETIQUETA QUE CLASSIFICA, então title case (§A.24), e não verbo: "Descartar" era o comando de uma
+ * tela em que a escolha ERA a ação, e aqui a ação passou a ser o botão que confirma.
+ */
+const DESVINCULO_MOTIVO: Record<Desvinculo, string> = {
+  DESCARTADO: "Descartado Pela Seleção",
+  DESISTIU: "Desistiu Do Processo",
 };
 
 /** O rótulo do botão que confirma. Botão é AÇÃO, então escrita normal (§A.24). */
 const SAIDA_ACAO: Record<Saida, string> = {
-  DESCARTADO: "Descartar",
-  DESISTIU: "Registrar desistência",
-  CONTRATADO: "Registrar contratação",
+  DESCARTADO: "Desvincular da vaga",
+  DESISTIU: "Desvincular da vaga",
+  ENVIADO_PARA_ADMISSAO: "Enviar para admissão",
 };
 
 /**
@@ -410,26 +614,34 @@ const SAIDA_ACAO: Record<Saida, string> = {
 const SAIDA_PLACEHOLDER: Record<Saida, string> = {
   DESCARTADO: "Por que esta pessoa foi descartada",
   DESISTIU: "O que a pessoa disse ao desistir",
-  CONTRATADO: "Para qual posição, e o que fechou a contratação",
+  ENVIADO_PARA_ADMISSAO: "O que fechou o processo e o que a admissão precisa saber",
 };
 
-/** A mensagem de falha por desfecho. Contratar que falha não pode dizer "falha ao registrar saída". */
+/** A mensagem de falha por desfecho. O envio que falha não pode dizer "falha ao registrar saída". */
 const SAIDA_FALHA: Record<Saida, string> = {
-  DESCARTADO: "Falha ao descartar o candidato.",
-  DESISTIU: "Falha ao registrar a desistência.",
-  CONTRATADO: "Falha ao registrar a contratação.",
+  DESCARTADO: "Falha ao desvincular o candidato da vaga.",
+  DESISTIU: "Falha ao desvincular o candidato da vaga.",
+  ENVIADO_PARA_ADMISSAO: "Falha ao enviar para a admissão.",
 };
 
 /**
  * A FRASE DIZ O QUE ACONTECE COM A VAGA, que é o que o consultor precisa saber antes de confirmar:
- * descarte e desistência LIBERAM posição, contratação OCUPA. As três encerram o processo da pessoa.
+ * o desvínculo LIBERA posição, o envio para a admissão OCUPA.
+ *
+ * A FRASE DO ENVIO FOI REESCRITA JUNTO COM O RÓTULO, e não só o nome do estado: ela dizia "passa a
+ * Contratado e sai do funil", duas coisas que o modelo não afirma mais. O que acontece é que a pessoa
+ * vai para a esteira admissional, a admissão começa e ainda não termina, e a posição da vaga fica
+ * preenchida por ela.
+ *
+ * A FRASE DO DESVÍNCULO DIZ O MOTIVO ESCOLHIDO E PARA ONDE A PESSOA VAI (decisão do diretor): ela
+ * volta para o banco de candidatos, e o motivo é o que o histórico vai mostrar daqui a seis meses
+ * para quem nunca participou do processo.
  */
 function SAIDA_FRASE(saida: Saida, nome: string): string {
-  if (saida === "CONTRATADO") {
-    return `${nome} passa a Contratado, OCUPA uma posição da vaga e sai do funil. O sistema confere quantas posições ainda cabem antes de gravar.`;
+  if (saida === "ENVIADO_PARA_ADMISSAO") {
+    return `${nome} vai para a esteira admissional: a admissão começa e ainda não termina. A posição da vaga fica preenchida por ela, e o sistema confere quantas posições ainda cabem antes de gravar.`;
   }
-  const verbo = saida === "DESCARTADO" ? "é descartada" : "consta como desistente";
-  return `${nome} ${verbo} e o processo dela encerra. A posição volta a ficar livre na vaga, e reabrir depois é uma candidatura nova.`;
+  return `${nome} sai desta vaga com o motivo ${DESVINCULO_MOTIVO[saida]} e volta para o banco de candidatos. A posição volta a ficar livre na vaga, o motivo fica no histórico, e trazer a pessoa de volta depois é uma candidatura nova.`;
 }
 
 function Secao({ titulo, children }: { titulo: string; children: React.ReactNode }) {

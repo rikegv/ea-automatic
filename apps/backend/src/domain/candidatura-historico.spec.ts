@@ -87,7 +87,7 @@ describe("tipoDoEvento", () => {
     expect(eventoEncerra({ etapaDe: null, etapaPara: "CAPTACAO", situacao: null })).toBe(false);
     expect(eventoEncerra({ etapaDe: "CAPTACAO", etapaPara: "TRIAGEM", situacao: null })).toBe(false);
     expect(
-      eventoEncerra({ etapaDe: null, etapaPara: "APROVACAO", situacao: "CONTRATADO" }),
+      eventoEncerra({ etapaDe: null, etapaPara: "APROVACAO", situacao: "ENVIADO_PARA_ADMISSAO" }),
     ).toBe(true);
   });
 });

@@ -35,10 +35,20 @@ import {
   cabeMaisUm,
   decidirAlocacao,
   ocupacaoDaVaga,
+  ocupadasPorLado,
+  ACEITE_BANCO_COM_OFICIAIS_ABERTAS,
   vagaRecebeCandidato,
   SITUACOES_VIVAS,
+  SITUACOES_QUE_CONSOMEM_POSICAO,
   candidaturaViva,
   consomePosicao,
+  finalizaPosicao,
+  ladoDaCandidatura,
+  ocupaPosicao,
+  oficiaisAindaAbertas,
+  tetoDoLado,
+  type PosicaoLado,
+  type SituacaoQueOcupaPosicao,
 } from "../../domain/candidatura";
 import { ordenarLinhaDoTempo, tipoDoEvento } from "../../domain/candidatura-historico";
 import type {
@@ -46,6 +56,7 @@ import type {
   BuscarCandidatosDto,
   CriarCandidatoDto,
   EditarCandidatoDto,
+  FinalizarPosicaoDto,
   MoverEtapaDto,
   RegistrarContatoDto,
   RegistrarSaidaDto,
@@ -271,10 +282,13 @@ export class CandidatosService {
         // O BOOLEANO NO LUGAR DO NÚMERO: a resposta que a tela precisa, sem o dado que ela não usa.
         temCpf: sql<boolean>`${asCandidatos.cpf} is not null`,
         criadoEm: asCandidatos.criadoEm,
+        // A LISTA DAS VIVAS VEM DA CONSTANTE, e não escrita aqui dentro: era uma das cinco cópias
+        // desta régua, e cópia concorda com a fonte por coincidência. `inArray` produz a mesma
+        // cláusula `in (...)` de antes, com a coluna qualificada do mesmo jeito.
         candidaturasAtivas: sql<number>`(
           select count(*)::int from ${asCandidaturas}
            where ${asCandidaturas.candidatoId} = ${ID_DO_CANDIDATO}
-             and ${asCandidaturas.situacao} in ('ATIVO', 'APROVADO', 'CONTRATADO'))`,
+             and ${inArray(asCandidaturas.situacao, SITUACOES_VIVAS)})`,
       })
       .from(asCandidatos)
       .where(filtros.length > 0 ? and(...filtros) : undefined)
@@ -435,9 +449,20 @@ export class CandidatosService {
    * frente, para trás e com pulo, porque a operação real não é linear. A régua está em
    * `movimentoPermitido`, no domínio, e a justificativa inteira mora lá.
    *
-   * A TRAVA QUE CONTINUA DE PÉ, e é a que protege a contagem de posições da vaga: SÓ CANDIDATURA
-   * `ATIVO` SE MOVE. Quem já foi aprovado, contratado, descartado ou desistiu não anda no funil, e é
-   * por isso que liberar a etapa não tem como desfazer uma aprovação nem soltar uma posição ocupada.
+   * ┌─ QUEM SE MOVE: TODA CANDIDATURA VIVA, e não só a `ATIVO` (correção do modelo de posição) ──┐
+   * │ A RÉGUA ERA `situacao !== "ATIVO"`, com a frase "já foi encerrada e não avança mais". Ela   │
+   * │ MENTIA para o `APROVADO` desde sempre (ser aprovado não encerra processo nenhum) e passaria │
+   * │ a mentir para o `ALOCADO`, que é o estado que o diretor definiu como o oposto disso: o      │
+   * │ alocado PREENCHE a posição e CONTINUA no funil.                                            │
+   * │                                                                                            │
+   * │ A RÉGUA CERTA É `candidaturaViva`, a MESMA fonte única do `shared-types` que a ocupação da  │
+   * │ vaga e a trava de duplicata já leem. Uma segunda lista aqui divergiria dela no primeiro dia │
+   * │ em que o vocabulário ganhasse uma situação nova, e é este módulo que já pagou por isso.     │
+   * │                                                                                            │
+   * │ A CONTAGEM DA VAGA CONTINUA FORA DE ALCANCE, que é a garantia que a régua antiga protegia:  │
+   * │ mover de etapa escreve SÓ a coluna `etapa`, e a ocupação deriva de `situacao`. Andar no     │
+   * │ funil não desfaz aprovação nenhuma nem solta posição nenhuma, com qualquer régua das duas.  │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
    */
   async moverEtapa(
     candidaturaId: string,
@@ -448,9 +473,9 @@ export class CandidatosService {
       where: eq(asCandidaturas.id, candidaturaId),
     });
     if (!c) throw new NotFoundException("Candidatura não encontrada.");
-    if (c.situacao !== "ATIVO") {
+    if (!candidaturaViva(c.situacao)) {
       throw new ConflictException(
-        "Esta candidatura já foi encerrada e não avança mais de etapa. Recarregue a página.",
+        "Esta candidatura foi encerrada sem êxito e não anda mais no funil. Para trazer a pessoa de volta, aloque-a de novo na vaga.",
       );
     }
 
@@ -519,7 +544,103 @@ export class CandidatosService {
    * └────────────────────────────────────────────────────────────────────────────────────────────┘
    */
   async aprovar(candidaturaId: string, porId: string): Promise<AsCandidaturaItem> {
-    await this.mudarSituacaoOcupandoPosicao(candidaturaId, "APROVADO", null, porId);
+    /*
+     * ┌─ AS DUAS GUARDAS QUE FALTAVAM AQUI (achado da auditoria, 08/09) ──────────────────────────┐
+     * │ ATÉ AQUI A APROVAÇÃO NÃO CONFERIA SITUAÇÃO NENHUMA, e as duas consequências eram caras:   │
+     * │                                                                                          │
+     * │ 1. APROVAR QUEM JÁ FOI ENTREGUE DESFAZIA A ENTREGA. `ALOCADO` virava `APROVADO`, a        │
+     * │    contagem de entregues CAÍA, o cilindro da tela esvaziava e a vaga que estava completa  │
+     * │    voltava a exigir um Master para fechar. Quem barra isso é a régua de não retroceder    │
+     * │    entrega, que mora no caminho travado e vale para TODO chamador, não só para este.      │
+     * │                                                                                          │
+     * │ 2. APROVAR UM DESCARTADO RESSUSCITAVA A LINHA MORTA e pulava a ciência de reentrada, que  │
+     * │    é exatamente o buraco que a finalização de posição fechou com `exigeCandidaturaViva` e │
+     * │    que a aprovação nunca recebeu. Quem foi recusado e volta a ser escolhido tem UM         │
+     * │    caminho, o da `alocar`, que mostra o motivo e a data do encerramento anterior.         │
+     * │                                                                                          │
+     * │ É O MECANISMO QUE JÁ EXISTE, e não um segundo: a mesma opção da `finalizarPosicao`,       │
+     * │ conferida DENTRO da transação, sob a linha da vaga já travada.                            │
+     * └──────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    await this.mudarSituacaoOcupandoPosicao(candidaturaId, "APROVADO", null, porId, undefined, {
+      exigeCandidaturaViva: true,
+    });
+    return this.candidatura(candidaturaId);
+  }
+
+  /**
+   * ─ FINALIZAR POSIÇÃO: a posição da vaga é ENTREGUE, com nome e sobrenome ──────────────────────
+   *
+   * O QUE ELA RESOLVE. Até aqui, o ÚNICO jeito de dizer "esta posição foi preenchida" era FECHAR a
+   * vaga com um número digitado à mão, e fechar bloqueia: a vaga entregue para de receber candidato
+   * (`STATUS_QUE_NAO_RECEBEM`). Quem tinha 5 posições e entregou a primeira ficava entre mentir o
+   * número ou fechar cedo demais. Com esta operação, entregar uma posição é um fato por pessoa, e a
+   * vaga continua aberta enquanto sobrar posição.
+   *
+   * ELA NÃO É UMA SAÍDA, e é por isso que ela não passa pelo `registrarSaida`: o candidato ALOCADO
+   * CONTINUA NO FUNIL. O `@IsIn` do `RegistrarSaidaDto` recusa `ALOCADO` de propósito, então nem
+   * corpo montado fora da tela entra por lá.
+   *
+   * ELA PASSA PELO CAMINHO TRAVADO, e isto é a regra mais cara deste arquivo: `ALOCADO` consome
+   * posição, então gravá-lo por fora de `mudarSituacaoOcupandoPosicao` reabriria a corrida entre dois
+   * consultores que o `SELECT ... FOR UPDATE` do passo 2 existe para fechar. O comentário de 30
+   * linhas da `aprovar`, logo acima, explica por que uma consulta solta antes do update não resolve.
+   *
+   * SEM MOTIVO, de propósito (`null`): entregar a posição é o desfecho bem-sucedido, e não tem
+   * justificativa a dar. Quem precisa de motivo é a saída, que encerra o processo de alguém.
+   *
+   * ┌─ SÓ CANDIDATURA VIVA FINALIZA POSIÇÃO, e esta trava faltava (achado da auditoria) ─────────┐
+   * │ SEM ELA, uma candidatura DESCARTADA ia direto a `ALOCADO`. Quem foi descartado e volta a    │
+   * │ ser escolhido tem UM caminho, o da `alocar`: ela mostra o MOTIVO e a DATA do descarte e     │
+   * │ exige a ciência de reentrada, porque escolher de novo quem já foi recusado costuma ser      │
+   * │ engano de lista. Finalizar posição por cima da linha morta pulava essa conversa inteira e   │
+   * │ ainda ressuscitava a candidatura ENCERRADA em vez de abrir a nova que o histórico espera.   │
+   * │                                                                                            │
+   * │ O DADO NUNCA CHEGOU A FICAR TORTO, e é isso que faz disto uma correção de RECUSA e não de   │
+   * │ integridade: o índice parcial `uq_as_candidaturas_viva` já impedia duas vivas do mesmo par  │
+   * │ pessoa/vaga. O que ele NÃO impedia era o caso da pessoa sem outra candidatura viva ali, e   │
+   * │ nesse caso a linha morta virava ALOCADO consumindo posição, sem ninguém ser avisado.        │
+   * │                                                                                            │
+   * │ A RÉGUA É `candidaturaViva`, do domínio, a MESMA da `trocarVaga`. Não se escreve aqui uma   │
+   * │ segunda lista de quem está vivo: ela divergiria da primeira no dia em que o vocabulário     │
+   * │ mudasse, que é o defeito que este módulo já pagou cinco vezes.                              │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   */
+  async finalizarPosicao(
+    candidaturaId: string,
+    dto: FinalizarPosicaoDto,
+    porId: string,
+  ): Promise<AsCandidaturaItem> {
+    try {
+      await this.mudarSituacaoOcupandoPosicao(
+        candidaturaId,
+        "ALOCADO",
+        null,
+        porId,
+        {
+          lado: dto.lado ?? "OFICIAL",
+          cienteBancoComOficiaisAbertas: dto.cienteBancoComOficiaisAbertas === true,
+        },
+        // TRAVA 5, PRIMEIRA CAMADA (ver o parágrafo "SÓ CANDIDATURA VIVA FINALIZA", acima).
+        { exigeCandidaturaViva: true },
+      );
+    } catch (err) {
+      /*
+       * TRAVA 5, SEGUNDA CAMADA: a mesma divisão de trabalho da `alocar`, e pelo mesmo motivo.
+       *
+       * A primeira camada recusa com a frase de gente; esta traduz a violação do índice parcial
+       * `uq_as_candidaturas_viva` na fresta que a primeira não cobre. A fresta é estreita e existe:
+       * a `alocar` NÃO trava a linha da vaga, então ela pode criar a segunda candidatura viva do
+       * par pessoa/vaga entre a leitura desta transação e a gravação dela. Sem esta camada, aquele
+       * encontro chega na tela como 500 com erro cru de banco, em vez da frase que a `alocar`
+       * devolveria no mesmo caso.
+       *
+       * `traduzirUnique` DEVOLVE O ERRO INTACTO quando não reconhece a restrição, então as recusas
+       * legítimas de dentro da transação (vaga cheia, aviso do banco, candidatura não encontrada)
+       * passam por aqui sem mudar de forma nem de status.
+       */
+      throw this.traduzirUnique(err);
+    }
     return this.candidatura(candidaturaId);
   }
 
@@ -536,7 +657,7 @@ export class CandidatosService {
    * └────────────────────────────────────────────────────────────────────────────────────────────┘
    *
    * ┌─ POR QUE NÃO HÁ CONTAGEM A ATUALIZAR, e este é o achado da investigação (§A.27) ───────────┐
-   * │ A ocupação NUNCA é armazenada: `ocupacaoDaVaga` conta as linhas APROVADO/CONTRATADO toda    │
+   * │ A ocupação NUNCA é armazenada: `ocupacaoDaVaga` conta as linhas APROVADO/ENVIADO_PARA_ADMISSAO toda    │
    * │ vez que alguém pergunta. Então trocar o `vagaId` já deixa as DUAS vagas certas na leitura   │
    * │ seguinte, sem ninguém decrementar a origem nem incrementar o destino. Não existe contador   │
    * │ para dessincronizar, e é exatamente por isso que o módulo recusou guardar um desde o        │
@@ -621,7 +742,24 @@ export class CandidatosService {
        * Candidatura ATIVO não ocupa nada (`consomePosicao`), então exigir posição livre para movê-la
        * repetiria o erro que a trava 1 existe para evitar: 40 currículos numa vaga de 10 é o normal
        * da operação, e travar a ENTRADA significaria só poder olhar 10 pessoas para escolher 10.
-       * Quem consome posição (APROVADO, CONTRATADO) passa pela mesma contagem da aprovação.
+       * Quem consome posição passa pela mesma contagem da aprovação, e QUEM SÃO ELES NÃO SE DIGITA
+       * AQUI: a contagem lê `SITUACOES_QUE_CONSOMEM_POSICAO`, a mesma lista de que `consomePosicao`
+       * é derivada. Com a lista escrita à mão, a pergunta do `if` e a pergunta do SQL eram duas, e
+       * bastava uma situação nova entrar em uma delas para a trava contar menos gente do que existe.
+       *
+       * ┌─ ESTA CONTAGEM AINDA É TOTAL, E A DA MUDANÇA DE SITUAÇÃO NÃO É MAIS. É deliberado ─────┐
+       * │ A separação por lado de 08/09 alcançou `mudarSituacaoOcupandoPosicao`, que é onde os    │
+       * │ dois defeitos foram MEDIDOS. Aqui, a troca de vaga (correção de Master) continua        │
+       * │ medindo o TOTAL contra a meta oficial, e a consequência é conhecida e estreita: mover   │
+       * │ para outra vaga alguém que está no BANCO pode ser recusado por uma meta oficial cheia,  │
+       * │ mesmo que a vaga de destino tenha reserva sobrando. É uma RECUSA (fail-closed), nunca   │
+       * │ uma posição a mais, e nenhuma linha em produção tem lado BANCO hoje.                    │
+       * │                                                                                        │
+       * │ NÃO FOI MEXIDO AQUI PORQUE ESTE CAMINHO NÃO TEM TESTE NENHUM e é código validado        │
+       * │ (§A.26): a correção é a mesma de lá (contar com `group by posicao_lado`, ler            │
+       * │ `posicoes_banco` do destino e usar `tetoDoLado` com `ladoDaCandidatura(c.posicaoLado)`),│
+       * │ e ela está reportada ao coordenador para virar decisão do diretor, com teste junto.     │
+       * └────────────────────────────────────────────────────────────────────────────────────────┘
        */
       if (consomePosicao(c.situacao)) {
         const [{ ocupadas }] = await tx
@@ -630,7 +768,7 @@ export class CandidatosService {
           .where(
             and(
               eq(asCandidaturas.vagaId, dto.vagaId),
-              inArray(asCandidaturas.situacao, ["APROVADO", "CONTRATADO"]),
+              inArray(asCandidaturas.situacao, SITUACOES_QUE_CONSOMEM_POSICAO),
               // A exclusão é por segurança de borda: a candidatura ainda está na vaga ANTIGA neste
               // ponto, então ela não entraria nesta contagem de qualquer forma.
               ne(asCandidaturas.id, candidaturaId),
@@ -685,21 +823,35 @@ export class CandidatosService {
   }
 
   /**
-   * REGISTRAR SAÍDA, de QUALQUER etapa: DESCARTADO, DESISTIU ou CONTRATADO.
+   * REGISTRAR SAÍDA, de QUALQUER etapa: DESCARTADO, DESISTIU ou ENVIADO_PARA_ADMISSAO.
    *
-   * `CONTRATADO` É A SAÍDA DIFERENTE e vai pelo caminho travado, porque ela consome posição como a
+   * `ENVIADO_PARA_ADMISSAO` É A SAÍDA DIFERENTE e vai pelo caminho travado, porque ela consome posição como a
    * aprovação. `DESCARTADO` e `DESISTIU` liberam posição em vez de consumir, então não precisam da
    * trava: elas nunca fazem a vaga estourar.
+   *
+   * ┌─ QUEM ESCOLHE O CAMINHO É A RÉGUA, e não o nome da situação (achado do tester, 08/09) ─────┐
+   * │ ERA `dto.situacao === "ENVIADO_PARA_ADMISSAO"`, uma comparação com um nome digitado, e o    │
+   * │ perigo estava a UMA linha de distância: bastava alguém acrescentar `"ALOCADO"` à lista de   │
+   * │ saídas, achando que unificava as rotas, para a alocação cair no `update` direto. Sem        │
+   * │ `FOR UPDATE`, sem `cabeMaisUm`, sem lado e sem aceite: vaga de 5 aceitando 6 alocados, em   │
+   * │ silêncio, porque a trava não teria sido burlada, apenas não consultada.                     │
+   * │                                                                                            │
+   * │ PERGUNTANDO A `ocupaPosicao` (que é `consomePosicao` com o tipo estreitado), toda situação   │
+   * │ que consome posição entra no caminho travado SOZINHA, no dia em que for criada.             │
+   * │                                                                                            │
+   * │ HOJE A RESPOSTA É IDÊNTICA À DE ANTES, e é isso que faz disto correção sem mudança de       │
+   * │ comportamento: das três saídas aceitas, só `ENVIADO_PARA_ADMISSAO` consome posição.         │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
    */
   async registrarSaida(
     candidaturaId: string,
     dto: RegistrarSaidaDto,
     porId: string,
   ): Promise<AsCandidaturaItem> {
-    if (dto.situacao === "CONTRATADO") {
+    if (ocupaPosicao(dto.situacao)) {
       await this.mudarSituacaoOcupandoPosicao(
         candidaturaId,
-        "CONTRATADO",
+        dto.situacao,
         texto(dto.motivo),
         porId,
       );
@@ -737,17 +889,40 @@ export class CandidatosService {
   }
 
   /**
-   * O CAMINHO TRAVADO, um só, para as duas situações que consomem posição (APROVADO e CONTRATADO).
+   * O CAMINHO TRAVADO, UM SÓ, para toda situação que ocupa posição da vaga.
    *
-   * UM CAMINHO SÓ É DELIBERADO: duplicar a sequência lock/conta/decide para a aprovação e para a
-   * contratação garantiria que uma das duas cópias perderia a trava na primeira correção feita só na
-   * outra. A trava mais importante do módulo mora em UM lugar.
+   * UM CAMINHO SÓ É DELIBERADO: duplicar a sequência lock/conta/decide para cada uma delas
+   * garantiria que uma das cópias perderia a trava na primeira correção feita só na outra. A trava
+   * mais importante do módulo mora em UM lugar.
+   *
+   * `ALOCADO` ENTROU NA ASSINATURA, e é por aqui que a finalização de posição vai passar quando a
+   * rota dela existir (etapa 2). Um caminho novo que gravasse `ALOCADO` fora daqui reabriria
+   * exatamente a corrida entre dois consultores que o `FOR UPDATE` do passo 2 existe para fechar,
+   * e o comentário da `aprovar` descreve em 30 linhas por que uma consulta solta não resolve.
    */
   private async mudarSituacaoOcupandoPosicao(
     candidaturaId: string,
-    novaSituacao: Extract<CandidaturaSituacao, "APROVADO" | "CONTRATADO">,
+    novaSituacao: SituacaoQueOcupaPosicao,
     motivo: string | null,
     porId: string,
+    posicao?: { lado: PosicaoLado; cienteBancoComOficiaisAbertas: boolean },
+    /*
+     * A EXIGÊNCIA DE CANDIDATURA VIVA É DO CHAMADOR, e nasce DESLIGADA de propósito.
+     *
+     * QUEM A LIGA HOJE: a finalização de posição e a APROVAÇÃO. A aprovação passou a ligá-la na
+     * auditoria de 08/09, e o motivo está escrito na `aprovar`: sem ela, aprovar um DESCARTADO
+     * ressuscitava a linha morta e pulava a ciência de reentrada, que é a conversa que a `alocar`
+     * existe para ter.
+     *
+     * QUEM NÃO A LIGA: o avanço para a esteira (`registrarSaida` com `ENVIADO_PARA_ADMISSAO`), que
+     * segue com a régua exata de antes. Ligá-la ali é mudança de comportamento em caminho já
+     * validado e fora do recorte desta rodada, então virou proposta ao diretor, não código.
+     *
+     * DENTRO DA TRANSAÇÃO, E NÃO ANTES DELA: a leitura que decide é a mesma que já existe aqui, sob
+     * a linha da vaga travada. Uma consulta solta em `finalizarPosicao` custaria uma ida a mais ao
+     * banco para responder sobre um instante anterior ao da gravação.
+     */
+    opcoes?: { exigeCandidaturaViva: boolean },
   ): Promise<void> {
     await this.db.transaction(async (tx) => {
       const c = await tx.query.asCandidaturas.findFirst({
@@ -759,40 +934,187 @@ export class CandidatosService {
           "Esta candidatura já está nesta situação. Recarregue a página.",
         );
       }
+      // TRAVA 5: quem saiu do processo não tem posição a entregar, tem processo a recomeçar, e o
+      // recomeço passa pela `alocar`, que é onde a ciência de reentrada é pedida.
+      if (opcoes?.exigeCandidaturaViva && !candidaturaViva(c.situacao)) {
+        throw new ConflictException(
+          "Esta candidatura já foi encerrada e não recebe posição. Para trazer a pessoa de volta, aloque-a de novo na vaga, que é onde o sistema mostra o motivo do encerramento anterior.",
+        );
+      }
+
+      /*
+       * ┌─ TRAVA 7: A ENTREGA NÃO ANDA PARA TRÁS, e esta vale para TODO chamador ────────────────┐
+       * │ O CASO CONCRETO, medido na auditoria: aprovar alguém que já estava `ALOCADO`. A posição │
+       * │ entregue virava posição apenas RESERVADA, `finalizadasOficial` CAÍA, o cilindro da tela │
+       * │ esvaziava e a vaga que já tinha entregue tudo voltava a precisar de um Master para      │
+       * │ fechar. Nada falhava, nada avisava, e o número simplesmente mudava.                     │
+       * │                                                                                        │
+       * │ POR QUE ELA NÃO É UMA OPÇÃO DO CHAMADOR, como a trava 5: porque não existe chamador     │
+       * │ para quem desfazer uma entrega esteja certo. Deixá-la ligada por parâmetro seria pedir  │
+       * │ que o próximo caminho novo lembrasse de ligá-la, e foi exatamente assim que a aprovação │
+       * │ ficou sem a trava 5.                                                                   │
+       * │                                                                                        │
+       * │ A RÉGUA É `finalizaPosicao`, do vocabulário compartilhado, nos DOIS lados da pergunta:  │
+       * │ recusa só quando a situação ATUAL entrega e a NOVA não entrega. Por construção ela não  │
+       * │ alcança nenhum caminho legítimo de hoje: o avanço do alocado para a esteira entrega dos │
+       * │ dois lados e passa, e aprovar quem está `ATIVO` não parte de entrega nenhuma.           │
+       * └────────────────────────────────────────────────────────────────────────────────────────┘
+       */
+      if (finalizaPosicao(c.situacao) && !finalizaPosicao(novaSituacao)) {
+        throw new ConflictException(
+          "Esta candidatura já entregou a posição da vaga, e a entrega não volta atrás por aqui. Se a pessoa saiu do processo, registre a saída dela.",
+        );
+      }
 
       // ── PASSO 2 DA TRAVA 4: a LINHA DA VAGA é travada ANTES de qualquer contagem. Daqui até o
       // fim da transação, nenhuma outra aprovação nesta mesma vaga passa deste ponto.
       const [vaga] = await tx
-        .select({ id: vagas.id, status: vagas.status, posicoesOficiais: vagas.posicoesOficiais })
+        .select({
+          id: vagas.id,
+          status: vagas.status,
+          posicoesOficiais: vagas.posicoesOficiais,
+          // A META DE BANCO entra na leitura porque ela é metade do teto: quem finaliza posição no
+          // banco é medido contra oficiais mais banco (`tetoDoLado`).
+          posicoesBanco: vagas.posicoesBanco,
+        })
         .from(vagas)
         .where(eq(vagas.id, c.vagaId))
         .for("update");
       if (!vaga) throw new NotFoundException("Vaga não encontrada.");
 
-      // ── PASSO 3: contar, agora que a linha está travada. A contagem EXCLUI a própria candidatura,
-      // senão contratar quem já estava aprovado contaria a mesma pessoa duas vezes e seria recusado
-      // por ela mesma numa vaga cheia.
-      const [{ ocupadas }] = await tx
-        .select({ ocupadas: sql<number>`count(*)::int` })
+      /*
+       * ── PASSO 3: contar POR LADO, agora que a linha está travada.
+       *
+       * A CONTAGEM EXCLUI A PRÓPRIA CANDIDATURA, senão mover quem já estava aprovado contaria a
+       * mesma pessoa duas vezes e seria recusado por ela mesma numa vaga cheia.
+       *
+       * A LISTA É A CONSTANTE `SITUACOES_QUE_CONSOMEM_POSICAO`, e esta é a cópia que mais custava
+       * caro das cinco: é ESTA contagem que a trava 1 usa para decidir se ainda cabe alguém. Uma
+       * situação nova que consumisse posição e não estivesse escrita aqui faria a vaga aceitar gente
+       * a mais em silêncio, com a trava intacta e a conta errada.
+       *
+       * ┌─ POR QUE ELA VIROU UM `group by posicao_lado` (defeito MEDIDO, corrigido em 08/09) ────┐
+       * │ ERA UM `count(*)` SEM LADO, e esse número único era medido contra DOIS tetos            │
+       * │ diferentes. Na vaga real de homologação (5 oficiais, 20 de banco) isso produzia dois    │
+       * │ erros ao mesmo tempo:                                                                  │
+       * │   1. o AVISO do banco contava o total, então ele dizia 5, 4, 3, 2, 1 e SUMIA na quinta  │
+       * │      alocação de banco, com as 5 oficiais ainda vazias;                                 │
+       * │   2. com 20 no banco, o candidato do lado OFICIAL era medido em 20 contra 5 e recusado  │
+       * │      com "as 5 posições já estão preenchidas", tendo ZERO posição oficial preenchida.   │
+       * │      A vaga travava justamente para o que ela existe para fazer.                        │
+       * │                                                                                        │
+       * │ AGORA CADA LADO É MEDIDO CONTRA A OCUPAÇÃO DELE. Para as linhas de hoje nada muda: com  │
+       * │ `posicao_lado` nulo em todas, `ocupadas.OFICIAL` é exatamente o `count(*)` de antes     │
+       * │ (`ladoDaCandidatura` dobra o nulo em OFICIAL) e `ocupadas.BANCO` é zero.                │
+       * └────────────────────────────────────────────────────────────────────────────────────────┘
+       */
+      const linhasOcupadas = await tx
+        .select({
+          lado: asCandidaturas.posicaoLado,
+          quantas: sql<number>`count(*)::int`,
+        })
         .from(asCandidaturas)
         .where(
           and(
             eq(asCandidaturas.vagaId, c.vagaId),
-            inArray(asCandidaturas.situacao, ["APROVADO", "CONTRATADO"]),
+            inArray(asCandidaturas.situacao, SITUACOES_QUE_CONSOMEM_POSICAO),
             ne(asCandidaturas.id, candidaturaId),
           ),
-        );
+        )
+        .groupBy(asCandidaturas.posicaoLado);
 
-      // ── PASSO 4: decidir, com a régua do domínio, e gravar.
-      if (!cabeMaisUm(Number(ocupadas), vaga.posicoesOficiais)) {
+      // O NULO NÃO VIRA UM TERCEIRO LADO: quem o dobra em OFICIAL é o domínio, em um lugar só.
+      const ocupadas = ocupadasPorLado(linhasOcupadas);
+
+      /*
+       * ─ DE QUAL LADO DA META ESTA POSIÇÃO SAI ────────────────────────────────────────────────
+       *
+       * QUANDO A OPERAÇÃO ESCOLHE (a finalização de posição), vale a escolha do consultor. QUANDO
+       * ELA NÃO ESCOLHE (a aprovação e o avanço para a esteira), vale o lado JÁ GRAVADO na
+       * candidatura, e nulo vale `OFICIAL`.
+       *
+       * LER O LADO GRAVADO NÃO É ZELO, É O QUE IMPEDE UM BECO SEM SAÍDA: quem foi alocado no BANCO
+       * de uma vaga com as oficiais cheias seria medido contra a meta oficial ao avançar para a
+       * esteira, e o avanço seria recusado numa vaga que tem reserva de sobra. A pessoa ficaria
+       * presa no estado em que entrou.
+       *
+       * HOJE A COLUNA É NULA EM TODAS AS LINHAS, então este bloco devolve `OFICIAL` para todo mundo
+       * e a régua continua sendo exatamente a de antes. Ele só muda de resposta para as linhas que
+       * a finalização com lado BANCO criar daqui para frente.
+       */
+      const lado: PosicaoLado = posicao?.lado ?? ladoDaCandidatura(c.posicaoLado);
+
+      /*
+       * O AVISO DO BANCO (decisão do diretor): ele AVISA e NÃO BLOQUEIA.
+       *
+       * Alocar no banco enquanto sobra posição OFICIAL é decisão legítima e cara de reverter, então
+       * o consultor recebe o número na frente e decide. A ciência volta no corpo, como a da
+       * reentrada, e a segunda chamada passa.
+       *
+       * SÓ VALE PARA A ESCOLHA EXPLÍCITA (`posicao` presente): quando o lado vem do que já está
+       * gravado, a decisão já foi tomada e confirmada uma vez, e repetir o aviso a cada avanço da
+       * mesma pessoa transformaria a confirmação em clique automático.
+       */
+      // A CONTA É SOBRE AS OFICIAIS, e não sobre o total: é o lado OFICIAL que continua aberto
+      // quando alguém vai para o banco, e era o total que fazia o aviso sumir na quinta alocação.
+      const oficiaisAbertas = oficiaisAindaAbertas(ocupadas.OFICIAL, vaga.posicoesOficiais);
+      const guardaDoBancoDispara = posicao?.lado === "BANCO" && oficiaisAbertas > 0;
+      if (guardaDoBancoDispara && !posicao.cienteBancoComOficiaisAbertas) {
+        throw this.bancoComOficiaisAbertas(oficiaisAbertas);
+      }
+
+      /*
+       * O QUE VAI PARA O LOG DE ACEITE, e ele só existe quando uma guarda foi DE FATO destravada.
+       *
+       * `cienteBancoComOficiaisAbertas` sozinho não basta como gatilho: um corpo montado fora da
+       * tela pode mandar a ciência sempre, e registrar "aceite" onde o aviso nem apareceu encheria a
+       * trilha de linhas que não descrevem decisão nenhuma. O gatilho é a guarda ter disparado
+       * (`guardaDoBancoDispara`) E a ciência ter vindo, que é exatamente o caso em que o consultor
+       * leu o número e passou por cima dele.
+       */
+      const aceiteRegistrado =
+        guardaDoBancoDispara && posicao.cienteBancoComOficiaisAbertas
+          ? // O NOME DA GUARDA VEM DO DOMÍNIO, e não é digitado aqui: é o mesmo nome de que o CHECK
+            // do banco é derivado, e duas escritas do mesmo nome divergem na primeira guarda nova.
+            { aceite: ACEITE_BANCO_COM_OFICIAIS_ABERTAS, aceiteNumero: oficiaisAbertas }
+          : {};
+
+      // ── PASSO 4: decidir, com a régua do domínio, e gravar. A ocupação medida é a DO LADO, contra
+      // o teto DAQUELE lado: uma contagem e um teto que respondem sobre a mesma coisa.
+      const teto = tetoDoLado(lado, vaga.posicoesOficiais, vaga.posicoesBanco);
+      if (!cabeMaisUm(ocupadas[lado], teto)) {
         // META AUSENTE não é vaga cheia, é vaga sem meta: a frase precisa dizer o que fazer.
         if (vaga.posicoesOficiais === null || vaga.posicoesOficiais === undefined) {
           throw new ConflictException(
             "Esta vaga ainda não tem o número de posições definido. Informe as posições da vaga antes de aprovar.",
           );
         }
-        // A TRAVA 1, com a frase que o diretor definiu.
+        /*
+         * A TRAVA 1, com a frase que o diretor definiu para o lado OFICIAL, intocada.
+         *
+         * O LADO BANCO GANHA FRASE PRÓPRIA porque o teto dele é outro, e ela fala SÓ do número de
+         * banco: com o teto próprio, quem é recusado na reserva de uma vaga de 5 oficiais e 20 de
+         * banco esbarrou em 20, e citar os 5 oficiais mandaria o consultor conferir o campo errado.
+         *
+         * BANCO ZERO TEM FRASE PRÓPRIA porque é um problema diferente: não é reserva cheia, é
+         * reserva que ninguém dimensionou, e "as 0 já estão preenchidas" não é português nem
+         * instrução. Antes, o teto cumulativo deixava essa alocação consumir uma posição OFICIAL em
+         * silêncio, que é justamente o que a separação por lado veio acabar.
+         */
         const n = vaga.posicoesOficiais;
+        if (lado === "BANCO") {
+          const banco = vaga.posicoesBanco ?? 0;
+          if (banco === 0) {
+            throw new ConflictException(
+              "Esta vaga não tem posição de banco reservada. Defina as posições de banco da vaga antes de alocar alguém na reserva.",
+            );
+          }
+          throw new ConflictException(
+            banco === 1
+              ? "Esta vaga tem 1 posição de banco e ela já está preenchida. Aumente as posições de banco da vaga ou libere alguém."
+              : `Esta vaga tem ${banco} posições de banco e as ${banco} já estão preenchidas. Aumente as posições de banco da vaga ou libere alguém.`,
+          );
+        }
         throw new ConflictException(
           n === 1
             ? "Esta vaga tem 1 posição e ela já está preenchida. Reprove alguém ou aumente as posições da vaga."
@@ -805,6 +1127,12 @@ export class CandidatosService {
         .set({
           situacao: novaSituacao,
           motivoDescarte: motivo ?? c.motivoDescarte,
+          /*
+           * O LADO SÓ É ESCRITO POR QUEM O ESCOLHEU, e é por isso que ele entra condicionalmente em
+           * vez de sempre: a aprovação e o avanço para a esteira NÃO escolhem lado, e escrever
+           * `OFICIAL` neles apagaria em silêncio o `BANCO` de quem já estava na reserva.
+           */
+          ...(posicao ? { posicaoLado: posicao.lado } : {}),
           atualizadoEm: new Date(),
         })
         .where(eq(asCandidaturas.id, candidaturaId));
@@ -813,6 +1141,21 @@ export class CandidatosService {
        * O DESFECHO ENTRA NO HISTÓRICO DENTRO DA TRANSAÇÃO JÁ ABERTA, e portanto sob a mesma linha de
        * vaga travada da trava 4. Não há custo novo de concorrência: a transação existia, o insert só
        * entrou nela. Se a trava recusar, nada foi gravado, nem o estado nem o evento.
+       *
+       * ┌─ O ACEITE DO AVISO DE BANCO DEIXA LOG PERMANENTE (decisão do diretor, §A.3 regra 8) ───┐
+       * │ ATÉ AQUI A CONFIRMAÇÃO ERA LIDA E JOGADA FORA. O consultor destravava a guarda mais     │
+       * │ cara de desfazer do módulo (mandar alguém para a reserva com posição oficial em aberto) │
+       * │ e não sobrava rastro nenhum de quem decidiu, quando, nem o que ele estava vendo.        │
+       * │                                                                                        │
+       * │ O EVENTO JÁ ERA GRAVADO AQUI: o que faltava era o QUALIFICADOR da decisão, não o        │
+       * │ registro dela. Por isso o log estende esta linha em vez de abrir tabela nova, e por     │
+       * │ isso ele nasce na mesma transação: ou o aceite e a mudança de situação existem os dois, │
+       * │ ou não existe nenhum dos dois.                                                          │
+       * │                                                                                        │
+       * │ QUEM (`por_id`, usuário interno), QUANDO (`ocorrido_em`), O LADO (`posicao_lado`) e o   │
+       * │ NÚMERO (`aceite_numero`: quantas posições oficiais estavam abertas no instante da       │
+       * │ decisão). §A.6: nada de candidato, nada de CPF, nada de nome de pessoa, nada de URL.    │
+       * └────────────────────────────────────────────────────────────────────────────────────────┘
        */
       await tx.insert(asCandidaturaEtapas).values({
         candidaturaId,
@@ -821,6 +1164,13 @@ export class CandidatosService {
         situacao: novaSituacao,
         motivo,
         porId,
+        /*
+         * O LADO SÓ ENTRA QUANDO ALGUÉM O ESCOLHEU, e pela mesma razão de a candidatura só o gravar
+         * aí: a aprovação e o avanço para a esteira não escolhem lado, e carimbar `OFICIAL` neles
+         * faria a linha do tempo afirmar uma decisão que ninguém tomou.
+         */
+        ...(posicao ? { posicaoLado: posicao.lado } : {}),
+        ...aceiteRegistrado,
       });
     });
   }
@@ -934,6 +1284,24 @@ export class CandidatosService {
       situacao: l.h.situacao,
       motivo: l.h.motivo,
       porNome: l.autor,
+      /*
+       * ─ O LOG DO ACEITE SAI NA RESPOSTA (§A.3 regra 8: permanente E CONSULTÁVEL) ──────────────
+       *
+       * ERA GRAVA-E-ESQUECE. A consulta acima já seleciona a tabela INTEIRA, então estes três
+       * campos sempre chegaram do banco, e este `map` os DESCARTAVA. O aceite existia só para quem
+       * abrisse o banco à mão, e "permanente" sem "consultável" cumpre metade da regra.
+       *
+       * E A TELA JÁ PROMETIA O CONTRÁRIO, com estas palavras: "o aceite fica registrado no
+       * histórico desta candidatura". Uma tela que promete trilha e não a exibe é pior do que
+       * trilha nenhuma, porque quem confia nela para de conferir.
+       *
+       * §A.6: sai o NOME DA GUARDA, o LADO e um NÚMERO, e o autor sai do `por_id`, que é usuário
+       * interno. Nenhum dado de candidato, nenhum CPF, nenhuma URL. É o mesmo recorte com que o
+       * `esteira.service` devolve os aceites de passagem.
+       */
+      posicaoLado: l.h.posicaoLado,
+      aceite: l.h.aceite,
+      aceiteNumero: l.h.aceiteNumero,
       vagaDe: l.h.vagaDe,
       vagaPara: l.h.vagaPara,
       // O rótulo cai para o CÓDIGO quando não há nome de divulgação, e para "não informado" (§A.11)
@@ -994,10 +1362,27 @@ export class CandidatosService {
     if (!vaga) throw new NotFoundException("Vaga não encontrada.");
 
     const candidaturas = await this.candidaturasDaVaga(vagaId);
-    const derivada = ocupacaoDaVaga(
-      vaga.posicoesOficiais,
-      candidaturas.map((c) => c.situacao),
-    );
+
+    /*
+     * O LADO DE CADA CANDIDATURA VEM DE UMA LEITURA PRÓPRIA, e não da lista acima, porque
+     * `AsCandidaturaItem` (o que a tela recebe) não carrega `posicao_lado`: acrescentá-lo ali é
+     * mudança de contrato, e o contrato não é deste caminho.
+     *
+     * A CONSULTA A MAIS CUSTA UMA IDA AO BANCO, e é o painel de UMA vaga, com dezenas de linhas.
+     * O caso caro é a LISTAGEM, e lá o lado entrou no `group by` que já existia, sem consulta nova
+     * (`vagas.service.ocupacaoPorVaga`).
+     *
+     * §A.6: duas colunas de processo. Nenhum dado de candidato sai desta consulta.
+     */
+    const lados = await this.db
+      .select({
+        situacao: asCandidaturas.situacao,
+        posicaoLado: asCandidaturas.posicaoLado,
+      })
+      .from(asCandidaturas)
+      .where(eq(asCandidaturas.vagaId, vagaId));
+
+    const derivada = ocupacaoDaVaga(vaga.posicoesOficiais, lados);
 
     const ocupacao: AsOcupacaoVaga = {
       vagaId,
@@ -1154,6 +1539,34 @@ export class CandidatosService {
     };
 
     return new ConflictException(corpo);
+  }
+
+  /**
+   * O AVISO DE ALOCAR NO BANCO COM POSIÇÃO OFICIAL AINDA ABERTA.
+   *
+   * `needsConfirmation: true`, e a simetria com o aviso de reentrada logo acima é de propósito: a
+   * tela lê o mesmo campo para saber se pode oferecer "confirmar mesmo assim". Aqui é `true` porque
+   * existe confirmação; na trava de encerramento da vaga é `false`, porque lá não existe. O campo
+   * diz a verdade sobre o que a tela pode oferecer, e é por isso que ele não é sempre um dos dois.
+   *
+   * A FRASE DIZ O NÚMERO, e não só "ainda há posição oficial aberta": sobrar UMA posição e sobrarem
+   * DOZE são decisões diferentes, e sem o número na frente o aviso vira clique automático. É a mesma
+   * razão de o aviso de reentrada trazer a data e o motivo.
+   *
+   * §A.6: um número de posições da vaga e mais nada. Nenhum dado de candidato entra aqui.
+   */
+  private bancoComOficiaisAbertas(abertas: number): ConflictException {
+    const quantas =
+      abertas === 1 ? "1 posição oficial aberta" : `${abertas} posições oficiais abertas`;
+    return new ConflictException({
+      needsConfirmation: true,
+      reason: "bancoComOficiaisAbertas",
+      message:
+        `Esta vaga ainda tem ${quantas}. ` +
+        "Alocar no banco deixa a posição oficial em aberto. " +
+        "Confirme que é isso mesmo que você quer.",
+      oficiaisAbertas: abertas,
+    });
   }
 
   /**

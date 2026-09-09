@@ -7,6 +7,7 @@ import {
   BuscarCandidatosDto,
   CriarCandidatoDto,
   EditarCandidatoDto,
+  FinalizarPosicaoDto,
   MoverEtapaDto,
   RegistrarContatoDto,
   RegistrarSaidaDto,
@@ -84,6 +85,30 @@ export class CandidatosController {
   @Post("candidaturas/:id/aprovar")
   aprovar(@Param("id", ParseUUIDPipe) id: string, @CurrentUser() user: AuthUser) {
     return this.candidatos.aprovar(id, user.id);
+  }
+
+  /**
+   * FINALIZAR POSIÇÃO: a posição da vaga é entregue e a candidatura vira `ALOCADO`.
+   *
+   * ROTA PRÓPRIA, e não a de saída com `situacao: "ALOCADO"`, porque ALOCAR NÃO É SAIR: o candidato
+   * continua no funil. O `@IsIn` do `RegistrarSaidaDto` recusa `ALOCADO` de propósito, e é bom que
+   * recuse: por lá a operação ainda exigiria um motivo que ela não tem o que dizer.
+   *
+   * POST como a aprovação, e não PATCH: as duas registram um FATO novo do processo (a posição foi
+   * entregue), e não a edição de uma propriedade da candidatura. A troca de vaga é que é PATCH,
+   * porque lá o que muda é um campo de algo que já existe.
+   *
+   * DE QUALQUER CONSULTOR, sem `@Roles`: entregar posição é a operação normal de quem opera a vaga,
+   * e é a mesma régua da aprovação, que também não tem papel exigido. Quem restringe o módulo
+   * inteiro é o menu `as-candidatos` no `MenuGuard`.
+   */
+  @Post("candidaturas/:id/finalizar-posicao")
+  finalizarPosicao(
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body() dto: FinalizarPosicaoDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.candidatos.finalizarPosicao(id, dto, user.id);
   }
 
   /** Registrar saída de QUALQUER etapa: descarte, desistência ou contratação. */

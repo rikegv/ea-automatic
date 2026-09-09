@@ -411,14 +411,34 @@ export const candidaturaEtapaEnum = pgEnum("candidatura_etapa", [
 
 /**
  * SITUAÇÃO da candidatura, coisa diferente da etapa: a etapa diz ONDE a pessoa está, a situação diz
- * se o processo dela segue vivo. Só `APROVADO` e `CONTRATADO` consomem posição da vaga.
+ * se o processo dela segue vivo. Quem consome posição da vaga está escrito em `consomePosicao`
+ * (`@ea/shared-types`), e não nesta lista: aqui só moram os valores que o banco aceita.
+ *
+ * A ORDEM ESPELHA O VOCABULÁRIO (`CANDIDATURA_SITUACOES`), e o enum do banco também: `ALOCADO`
+ * entra `AFTER 'APROVADO'`, que é a ordem da vida da candidatura.
+ *
+ * ┌─ ESTA LISTA ANDA NA FRENTE DO BANCO ATÉ A MIGRATION RODAR ─────────────────────────────────┐
+ * │ `SITUACOES_VIVAS` é DERIVADA daqui e vai para dentro de consulta de verdade                │
+ * │ (`candidatos.service.ts`, `inArray`). Enquanto o enum do Postgres não tiver `ALOCADO`,     │
+ * │ essa consulta manda ao banco um valor que ele não conhece e devolve erro de enum. Logo: o  │
+ * │ código desta lista NÃO PODE SER SERVIDO antes de a migration do `ADD VALUE` ter rodado no  │
+ * │ banco daquele ambiente. Vale para homologação e para produção, na mesma ordem.             │
+ * │                                                                                            │
+ * │ E A DEPENDÊNCIA É DOS DOIS LADOS, o que a redação anterior não dizia: a mesma migration    │
+ * │ (`0095_as_situacao_alocado.sql`) RENOMEIA `CONTRATADO` para `ENVIADO_PARA_ADMISSAO`, e o   │
+ * │ rótulo antigo deixa de existir no instante em que ela roda. Um build ANTERIOR a esta lista │
+ * │ tem `'CONTRATADO'` compilado dentro e passa a errar contra o banco migrado. Portanto a     │
+ * │ migration e a subida deste código andam JUNTAS no mesmo ambiente: nem uma antes da outra   │
+ * │ por muito tempo, sob pena de a A&S daquele ambiente ficar fora do ar no meio do caminho.   │
+ * └────────────────────────────────────────────────────────────────────────────────────────────┘
  */
 export const candidaturaSituacaoEnum = pgEnum("candidatura_situacao", [
   "ATIVO",
   "APROVADO",
+  "ALOCADO",
   "DESCARTADO",
   "DESISTIU",
-  "CONTRATADO",
+  "ENVIADO_PARA_ADMISSAO",
 ]);
 
 /** O que se registra no histórico de uma candidatura. */

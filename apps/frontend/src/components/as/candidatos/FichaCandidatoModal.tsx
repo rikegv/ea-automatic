@@ -45,6 +45,7 @@ import {
   registrarContato,
 } from "@/lib/as-candidatos";
 import { tomDaEtapa, tomDaSituacao } from "@/lib/as-candidatos-visual";
+import { fraseDoAceite, rotuloDoLado } from "@/lib/as-vaga-acoes";
 import { VagaResumoModal } from "@/components/as/vagas/VagaResumoModal";
 
 /**
@@ -111,6 +112,28 @@ function LinhaDoTempo({ eventos }: { eventos: AsCandidaturaEtapaItem[] }) {
               )}
               {e.porNome && <span className="text-faint">por {e.porNome}</span>}
               {e.motivo && <span className="text-dim">Motivo: {e.motivo}</span>}
+              {/* O LADO DA POSIÇÃO ENTREGUE. Sem ele, "Alocado" não diz se a pessoa preencheu uma
+                  posição OFICIAL ou entrou na RESERVA, que é a diferença que o cilindro da vaga
+                  conta e a que o aviso do banco existe para proteger. */}
+              {rotuloDoLado(e.posicaoLado) && (
+                <span className="text-dim">em {rotuloDoLado(e.posicaoLado)}</span>
+              )}
+              {/* ─ O ACEITE, A TRILHA QUE ESTA TELA JÁ PROMETIA ─────────────────────────────
+                  O modal de confirmação do banco diz, com estas palavras, que "o aceite fica
+                  registrado no histórico desta candidatura". Este é o histórico, e até aqui ele não
+                  mostrava nada: o registro existia só para quem abrisse o banco à mão.
+
+                  A LEITURA É DEFENSIVA (`?.` e valor desconhecido devolvendo nulo, em `fraseDoAceite`)
+                  porque o campo é novo no contrato: uma resposta que ainda não o traga faz a linha
+                  ficar como sempre foi, em vez de quebrar a ficha inteira.
+
+                  §A.6: o nome da guarda e um número de posições da vaga. Nenhum dado de candidato. */}
+              {fraseDoAceite(e.aceite, e.aceiteNumero ?? null) && (
+                <>
+                  <StatusPill tone="wn" label="Aceite Registrado" />
+                  <span className="text-dim">{fraseDoAceite(e.aceite, e.aceiteNumero ?? null)}</span>
+                </>
+              )}
             </li>
           ))}
         </ol>

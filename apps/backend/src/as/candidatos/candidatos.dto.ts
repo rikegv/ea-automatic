@@ -18,6 +18,12 @@ import {
   type AsContatoTipo,
   type CandidaturaEtapa,
 } from "@ea/shared-types";
+import {
+  POSICAO_LADOS,
+  SITUACOES_DE_SAIDA,
+  type PosicaoLado,
+  type SituacaoDeSaida,
+} from "../../domain/candidatura";
 
 /**
  * DTOs DA CENTRAL DE CANDIDATOS (A&S, onda 1).
@@ -178,7 +184,7 @@ export class BuscarCandidatosDto {
    * NOME e a alocação segue pelo `id`, que é a chave de verdade da tabela (o CPF nunca foi).
    *
    * "SEM CANDIDATURA" AQUI QUER DIZER ZERO CANDIDATURAS VIVAS OU BEM-SUCEDIDAS (nem `ATIVO`, nem
-   * `APROVADO`, nem `CONTRATADO`), que é EXATAMENTE a mesma régua do `candidaturasAtivas` que a lista
+   * `APROVADO`, nem `ENVIADO_PARA_ADMISSAO`), que é EXATAMENTE a mesma régua do `candidaturasAtivas` que a lista
    * já devolve em cada linha. Reusar a mesma expressão é deliberado: com duas contas diferentes, o
    * filtro e a coluna acabariam discordando na mesma tela.
    *
@@ -237,12 +243,25 @@ export class MoverEtapaDto {
 }
 
 /**
- * REGISTRAR SAÍDA, de QUALQUER etapa. As três saídas entram por aqui, e `CONTRATADO` passa pela
+ * REGISTRAR SAÍDA, de QUALQUER etapa. As três saídas entram por aqui, e `ENVIADO_PARA_ADMISSAO` passa pela
  * mesma trava de posição que a aprovação, porque ela também consome posição.
  */
 export class RegistrarSaidaDto {
-  @IsIn(["DESCARTADO", "DESISTIU", "CONTRATADO"])
-  situacao!: "DESCARTADO" | "DESISTIU" | "CONTRATADO";
+  /**
+   * A LISTA VEM DO DOMÍNIO, e não é mais redigitada aqui (achado do tester, 08/09).
+   *
+   * ELA ESTAVA ESCRITA À MÃO, duas vezes: no `@IsIn` e na anotação do campo. `SITUACOES_DE_SAIDA`
+   * existia em `domain/candidatura` e não era lida por NENHUMA linha de produção, só pelo teste: a
+   * fonte estava morta e a cópia é que mandava. Derivar as duas da constante é o que impede as duas
+   * de divergirem sem ninguém perceber.
+   *
+   * E A DERIVAÇÃO SOZINHA NÃO BASTAVA, por isso ela vem em par com a outra metade da correção: o
+   * `registrarSaida` deixou de escolher o caminho comparando com o nome `"ENVIADO_PARA_ADMISSAO"` e
+   * passou a perguntar à régua (`ocupaPosicao`). Sem isso, acrescentar `"ALOCADO"` a esta lista
+   * mandaria a alocação para o `update` direto, sem trava de ocupação, e a vaga de 5 aceitaria 6.
+   */
+  @IsIn(SITUACOES_DE_SAIDA as unknown as string[])
+  situacao!: SituacaoDeSaida;
 
   /**
    * POR QUE SAIU, E AGORA É OBRIGATÓRIO NOS TRÊS DESFECHOS (ajuste 7 do diretor).
@@ -254,11 +273,73 @@ export class RegistrarSaidaDto {
    *
    * `MinLength(2)` ESPELHA A TELA, que já desabilitava o botão do descarte com menos de dois
    * caracteres úteis. Um espaço em branco não é motivo, e aceitar "." só moveria o buraco.
+   *
+   * ┌─ E A RÉGUA PRECISOU MEDIR O TEXTO APARADO, senão a frase acima era só uma frase ───────────┐
+   * │ O `@MinLength(2)` MEDIA A STRING CRUA (achado do tester, 09/09), então `"   "` passava com  │
+   * │ três caracteres, o `registrarSaida` gravava `texto(dto.motivo)`, o helper aparava, e o      │
+   * │ desfecho ia para o banco com `motivo_descarte` NULO. O buraco que este comentário diz       │
+   * │ impedir estava aberto, e a única barreira real era o NAVEGADOR, que é exatamente o que a    │
+   * │ obrigatoriedade no DTO existe para não depender.                                           │
+   * │                                                                                            │
+   * │ O `@Transform` RODA ANTES DA VALIDAÇÃO (é `plainToInstance` quem o executa), então quem     │
+   * │ valida já vê o texto aparado, e quem GRAVA recebe o mesmo texto aparado do corpo. O         │
+   * │ `texto()` do service continua onde está: ele defende a gravação, não a régua.               │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
    */
+  @Transform(({ value }) => (typeof value === "string" ? value.trim() : value))
   @IsString()
   @MinLength(2)
   @MaxLength(500)
   motivo!: string;
+}
+
+/**
+ * ─ FINALIZAR POSIÇÃO: a candidatura vira `ALOCADO` e a posição da vaga é ENTREGUE ──────────────
+ *
+ * CORPO PRÓPRIO, E ROTA PRÓPRIA, e não `registrarSaida` com `situacao: "ALOCADO"`, por duas razões
+ * que não são de estilo:
+ *   1. ALOCAR NÃO É SAIR. O candidato continua no funil, e é isso que o diretor pediu. `ALOCADO`
+ *      está fora de `SITUACOES_DE_SAIDA` de propósito, e o `@IsIn` do `RegistrarSaidaDto` logo acima
+ *      é a segunda trava: nem corpo montado fora da tela consegue entrar por lá.
+ *   2. A SAÍDA EXIGE MOTIVO (`MinLength(2)`, ajuste 7 do diretor), e finalizar posição não tem
+ *      justificativa a dar: entregar a posição é o desfecho BEM-SUCEDIDO do processo. Passar por lá
+ *      obrigaria o consultor a escrever "alocado" toda vez, que é ruído e não trilha.
+ */
+export class FinalizarPosicaoDto {
+  /**
+   * DE QUAL LADO DA META a posição é preenchida. AUSENTE VALE `OFICIAL`, que é o caso comum e o que
+   * toda candidatura de hoje já é.
+   *
+   * O BANCO É ESCOLHA DELIBERADA, nunca transbordo automático: é o consultor que diz "esta pessoa
+   * fica na reserva desta vaga". Deduzir o lado por ordem de chegada apagaria a intenção no gesto
+   * que a cria.
+   */
+  @IsOptional()
+  @IsIn(POSICAO_LADOS as unknown as string[])
+  lado?: PosicaoLado;
+
+  /**
+   * A CIÊNCIA DO AVISO DE BANCO: "sei que ainda há posição OFICIAL aberta e mesmo assim quero alocar
+   * no banco".
+   *
+   * NASCE FALSO E TEM DE VIR NO CORPO, exatamente como o `cienteReentrada` do `AlocarEmVagaDto`, e a
+   * mecânica é a mesma: a primeira chamada é recusada com um 409 que diz QUANTAS posições oficiais
+   * continuam abertas, a tela mostra a pergunta, o consultor confirma e a MESMA chamada volta com o
+   * flag em `true`.
+   *
+   * AVISA, NÃO BLOQUEIA (decisão do diretor): quem decide é o consultor, com o número na frente.
+   *
+   * NÃO É "FORÇAR", e o nome diz de que ele é ciente por isso: ele não passa por cima de trava
+   * nenhuma. O teto do lado escolhido continua valendo, com ou sem o flag, e um `force` genérico
+   * seria usado pela primeira pessoa apressada para calar qualquer outra recusa.
+   *
+   * `@Transform` porque o corpo pode chegar com `"true"` de um formulário; `@IsBoolean` sozinho
+   * recusaria a string.
+   */
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === "string" ? value === "true" : value))
+  @IsBoolean()
+  cienteBancoComOficiaisAbertas?: boolean;
 }
 
 /**

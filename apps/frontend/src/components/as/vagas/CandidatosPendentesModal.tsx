@@ -48,7 +48,7 @@ import { tomDaEtapa } from "@/lib/as-candidatos-visual";
 const VAGA_CHEIA =
   "A vaga já está com todas as posições preenchidas. Para encerrar, registre este candidato como Descartado ou Desistiu.";
 
-type Acao = "APROVAR" | "CONTRATADO" | "DESCARTADO" | "DESISTIU";
+type Acao = "APROVAR" | "ENVIADO_PARA_ADMISSAO" | "DESCARTADO" | "DESISTIU";
 
 /**
  * O MOTIVO PASSOU A SER OBRIGATÓRIO NOS TRÊS DESFECHOS (ajuste 7 do diretor), e esta tela precisou
@@ -63,13 +63,13 @@ type Acao = "APROVAR" | "CONTRATADO" | "DESCARTADO" | "DESISTIU";
 const PLACEHOLDER: Record<Exclude<Acao, "APROVAR">, string> = {
   DESCARTADO: "Por que esta pessoa foi descartada",
   DESISTIU: "O que a pessoa disse ao desistir",
-  CONTRATADO: "Para qual posição, e o que fechou a contratação",
+  ENVIADO_PARA_ADMISSAO: "Para qual posição, e o que fechou a contratação",
 };
 
 const ACAO_ROTULO: Record<Exclude<Acao, "APROVAR">, string> = {
   DESCARTADO: "Registrar descarte",
   DESISTIU: "Registrar desistência",
-  CONTRATADO: "Registrar contratação",
+  ENVIADO_PARA_ADMISSAO: "Registrar contratação",
 };
 
 export function CandidatosPendentesModal({
@@ -174,9 +174,9 @@ export function CandidatosPendentesModal({
                       />
                       <MiniBotao
                         rotulo="Contratar"
-                        ativo={acao?.id === p.candidaturaId && acao.tipo === "CONTRATADO"}
+                        ativo={acao?.id === p.candidaturaId && acao.tipo === "ENVIADO_PARA_ADMISSAO"}
                         disabled={ocupado}
-                        onClick={() => escolher(p.candidaturaId, "CONTRATADO")}
+                        onClick={() => escolher(p.candidaturaId, "ENVIADO_PARA_ADMISSAO")}
                       />
                       <MiniBotao
                         rotulo="Descartar"

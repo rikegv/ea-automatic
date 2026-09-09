@@ -9,20 +9,38 @@
  * renderização, e não deveria arrastar junto o módulo que fala com a rede.
  */
 
-import type { CandidaturaEtapa, CandidaturaSituacao, VagaStatus } from "@ea/shared-types";
+import {
+  consomePosicao,
+  ehSaidaSemExito,
+  type CandidaturaEtapa,
+  type CandidaturaSituacao,
+  type VagaStatus,
+} from "@ea/shared-types";
 import type { PillTone } from "@/components/ui/Pill";
 
 /**
  * A SITUAÇÃO manda no tom, porque ela é o que diz se o processo deu certo, segue vivo ou acabou.
- *  - Aprovado e Contratado: êxito, check verde.
+ *  - Aprovado, Alocado e Enviado Para Admissão: êxito, check verde.
  *  - Descartado: encerrado sem êxito, X vermelho.
  *  - Desistiu: também encerrado sem êxito, e vermelho pelo mesmo motivo. A pessoa saiu, e pintar de
  *    neutro faria a fila parecer viva onde ela não está.
  *  - Em Seleção: trabalho em andamento, exclamação amarela.
+ *
+ * ─ POR QUE O MAPA PASSOU A SER DERIVADO, e o que ele consertou (etapa 5) ──────────────────────
+ *
+ * `ALOCADO` NÃO TINHA RAMO e caía no `return "wn"` do fim, ou seja, a ENTREGA da posição aparecia com
+ * a exclamação amarela de "trabalho em andamento". Pela §A.12 o ícone acompanha o estado real, e
+ * alocado é entrega: quem preencheu a posição é êxito, e a pill precisa dizer isso.
+ *
+ * A CORREÇÃO NÃO É ACRESCENTAR `ALOCADO` À LISTA, é PARAR DE TER UMA LISTA. As duas perguntas já
+ * estão respondidas no vocabulário compartilhado, lidas pelo backend e pela tela: `consomePosicao`
+ * (aprovado mais quem finaliza) e `ehSaidaSemExito`. Derivando delas, situação nova nasce com tom
+ * coerente por construção, em vez de esperar alguém lembrar de voltar aqui. Foi o esquecimento de
+ * lembrar que produziu este defeito.
  */
 export function tomDaSituacao(s: CandidaturaSituacao): PillTone {
-  if (s === "APROVADO" || s === "CONTRATADO") return "ok";
-  if (s === "DESCARTADO" || s === "DESISTIU") return "dg";
+  if (consomePosicao(s)) return "ok";
+  if (ehSaidaSemExito(s)) return "dg";
   return "wn";
 }
 

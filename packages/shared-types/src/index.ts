@@ -1816,6 +1816,109 @@ export function separarOpcaoEscape(
  * `codCliente` nulo é estado REAL e esperado (a vaga sem cliente vinculado), exibido como
  * "não informado" (§A.11), nunca como traço.
  */
+/**
+ * ─ O FECHAMENTO DA VAGA: O CONTRATO, publicado pelo coordenador (§A.39) ──────────────────────────
+ *
+ * A RÉGUA É DO DIRETOR e não se rediscute aqui: **a vaga só fecha quando TODAS as posições OFICIAIS
+ * estão preenchidas.** O contador de BANCO não participa: reserva não é entrega. O MASTER (e o
+ * SUPER_ADMIN) podem FORÇAR o fechamento com posições oficiais faltando, e o forçado deixa trilha.
+ *
+ * QUEM DECIDE É A DERIVADA, nunca um número digitado: `ocupacao.finalizadasOficial`. É a mesma
+ * leitura que enche o cilindro, então a tela e a trava não têm como discordar.
+ *
+ * A AUTORIZAÇÃO DO `forcar` MORA NO SERVICE, NUNCA EM `@Roles` NA ROTA. Todo consultor precisa poder
+ * fechar uma vaga completa; só o FORÇAR é de Master. `@Roles` no handler barraria o fechamento normal
+ * do COMUM, que é regressão silenciosa. O padrão idêntico já existe na casa, na liberação de Apto sem
+ * ASO (`esteira.service.ts`): o COMUM recebe trava dura sem opção de forçar, o MASTER recebe a
+ * confirmação e, confirmando, a exceção é registrada em nome dele.
+ */
+export interface FecharVagaRecusa {
+  /** Sempre `POSICOES_OFICIAIS_ABERTAS`. Discriminador, para a tela não casar por texto de mensagem. */
+  motivo: "POSICOES_OFICIAIS_ABERTAS";
+  /** Quantas posições oficiais ainda faltam preencher. Sempre maior que zero quando esta recusa sai. */
+  faltam: number;
+  /** A meta oficial e o que já foi entregue, para a tela poder dizer "3 de 5" sem recontar. */
+  posicoesOficiais: number;
+  finalizadasOficial: number;
+  /**
+   * ESTE USUÁRIO pode forçar? Vem do PAPEL de quem pediu, resolvido no servidor.
+   *
+   * A TELA ESCONDER O BOTÃO É CONVENIÊNCIA, O GUARD É A AUTORIDADE. Este campo existe para o COMUM
+   * não ver um botão que vai receber 403, e não para ser a trava: a trava é o service conferir o
+   * papel de novo quando o `forcar` chegar.
+   */
+  podeForcar: boolean;
+  /**
+   * A FRASE PRONTA, em português, para a tela mostrar sem remontar.
+   *
+   * ELA EXISTE POR UM MOTIVO MEDIDO, e não por conforto: o `respostaOuErro` do frontend monta o que
+   * o usuário lê a partir de `message`, caindo em `error` e depois no texto do status HTTP. Sem este
+   * campo, a recusa mais importante da tela chegaria ao consultor escrita **"Conflict"**.
+   */
+  message: string;
+}
+
+/**
+ * A TRILHA DO FECHAMENTO FORÇADO, gravada só quando alguém força (§A.6: nome de usuário interno,
+ * data e um número, nenhum dado de candidato).
+ *
+ * `faltavam` É CONGELADO NO INSTANTE DO FORÇAMENTO, e não recalculado depois: a vaga continua viva
+ * (alguém pode ser descartado, a meta pode mudar), e recalcular faria a trilha contar uma história
+ * diferente da que aconteceu.
+ */
+export interface FechamentoForcado {
+  /** Nome do usuário interno que forçou. Nulo se o usuário foi removido depois. */
+  porNome: string | null;
+  quandoIso: string;
+  faltavam: number;
+}
+
+/**
+ * ─ O RASTRO DA REDUÇÃO DE META, publicado pelo coordenador (§A.39) ───────────────────────────────
+ *
+ * POR QUE ESTE CONTRATO EXISTE, e o achado que o obrigou. A auditoria de 09/09 provou que o gate de
+ * Master do fechamento era CONTORNÁVEL sem tocar no gate: `fechar()` recusa quando
+ * `faltam = meta - entregues > 0`, mas a `meta` é editável por uma ROTA IRMÃ (`PATCH /vagas/:id/posicoes`)
+ * que não tem guard de papel. O consultor baixava a meta até o número já entregue, a subtração dava
+ * zero, e a vaga fechava pela porta NORMAL: sem Master, sem forçar, e com as três colunas da trilha
+ * do forçamento em branco. A trava de excesso não pegava porque ela só barra `entregues > meta`
+ * (estritamente maior), então IGUALAR passa.
+ *
+ * A DECISÃO DO DIRETOR É A OPÇÃO C: RASTRO, e não trava. Baixar a meta continua sendo do consultor,
+ * porque a edição das posições foi liberada a ele em 25/08 e continua fazendo sentido operacional
+ * (o cliente desiste de duas das cinco posições, e isso acontece). O que muda é que o gesto deixa de
+ * ser SILENCIOSO: fica registrado, e a tela avisa ANTES de confirmar que vai ficar. É controle por
+ * responsabilização, o mesmo padrão do aceite de dupla correção da INT-4 (§A.5) e da regra 8 da §A.3.
+ *
+ * ┌─ POR QUE UMA LISTA, E NÃO COLUNAS NA VAGA COMO O `FechamentoForcado` ────────────────────────┐
+ * │ O forçamento acontece NO MÁXIMO UMA VEZ (a vaga só fecha uma vez), então ele coube em três   │
+ * │ colunas. A meta muda QUANTAS VEZES QUISEREM enquanto a vaga está aberta, e guardar só a      │
+ * │ última contaria uma história falsa: quem baixou de 5 para 3 e depois de 3 para 1 apareceria  │
+ * │ como quem baixou de 3 para 1. Trilha que apaga o próprio começo não é trilha.                │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * SÓ A REDUÇÃO É REGISTRADA, e é isso que o diretor pediu. AUMENTAR a meta não contorna gate nenhum:
+ * ele afasta o fechamento em vez de aproximá-lo, e registrar aumento encheria a trilha de ruído
+ * justamente no caso inofensivo.
+ *
+ * OS DOIS LADOS VIAJAM JUNTOS porque o gesto é um só: a tela salva o par de contadores numa
+ * requisição, e separar a linha por lado inventaria dois eventos onde houve um. Quem baixou só o
+ * banco tem `deOficiais === paraOficiais`, e é assim que se lê "esta redução não mexeu no oficial".
+ *
+ * §A.6: nome de usuário INTERNO, data e quatro números. Nenhum dado de candidato, nenhum CPF.
+ */
+export interface VagaMetaReducao {
+  /** A meta oficial ANTES e DEPOIS. Iguais quando a redução foi só do lado do banco. */
+  deOficiais: number;
+  paraOficiais: number;
+  /** A meta de banco ANTES e DEPOIS. Iguais quando a redução foi só do lado oficial. */
+  deBanco: number;
+  paraBanco: number;
+  /** Nome do usuário interno que reduziu. Nulo se o usuário foi removido depois, como no forçamento. */
+  porNome: string | null;
+  quandoIso: string;
+}
+
 export interface VagaListItem {
   id: string;
   /**
@@ -1952,6 +2055,32 @@ export interface VagaListItem {
   dataPrevistaInicio: string | null;
   /** Intenção declarada no fechamento. Registra, não liga nada na esteira (frente separada). */
   enviarParaAdmissao: boolean;
+  /**
+   * A OCUPAÇÃO DERIVADA da vaga, a MESMA que o painel de uma vaga serve, contada na leitura e nunca
+   * guardada. Vem SEMPRE preenchida, inclusive zerada na vaga sem candidatura: campo opcional
+   * obrigaria cada leitor a decidir o que fazer com a ausência, e zero já é a resposta.
+   *
+   * ELA CONVIVE COM `vagasFechadas`, e não o substitui. O contador DIGITADO no fechamento continua
+   * existindo e continua sendo o número autoritativo da vaga ENCERRADA, porque nas vagas antigas
+   * ninguém nunca foi alocado e a derivada delas é zero. Quem escolhe qual dos dois a tela mostra é
+   * uma função só (`preenchidas`), pela régua do diretor: vaga VIVA lê a derivada, vaga ENCERRADA
+   * mantém o congelado.
+   */
+  ocupacao: AsOcupacaoVaga;
+  /**
+   * Preenchido SÓ quando a vaga foi fechada à força por um Master. Nulo é o normal, e é o caso da
+   * imensa maioria das vagas. A tela mostra a trilha quando ele existe.
+   */
+  fechamentoForcado: FechamentoForcado | null;
+  /**
+   * TODAS as reduções de meta desta vaga, da mais ANTIGA para a mais RECENTE. Vazio é o normal.
+   *
+   * VIAJA NA LISTAGEM, e não atrás de uma rota de detalhe, pela mesma razão do `fechamentoForcado`:
+   * a pergunta que este rastro responde ("esta vaga fechou porque entregou, ou porque encolheram a
+   * meta?") nasce OLHANDO A LISTA, e uma segunda requisição por linha faria a resposta chegar depois
+   * da conclusão de quem perguntou. O custo é nulo no caso comum, que é o array vazio.
+   */
+  metaReducoes: VagaMetaReducao[];
 }
 
 /**
@@ -1972,9 +2101,16 @@ export interface VagaContextoAs {
 // CENTRAL DE CANDIDATOS (A&S, onda 1)
 //
 // O vocabulário do funil de seleção, em um lugar só, porque backend e tela precisam responder a
-// mesma coisa. As REGRAS do funil (o que avança para onde, o que consome posição) NÃO moram aqui:
+// mesma coisa. As REGRAS DE MOVIMENTO do funil (o que avança para onde, quem pode encerrar a vaga)
 // moram em `apps/backend/src/domain/candidatura.ts`, puras e testadas, no mesmo espírito de
-// `domain/vaga.ts`. Aqui ficam só a lista de valores, os rótulos e a forma do que trafega.
+// `domain/vaga.ts`. Aqui ficam a lista de valores, os rótulos, a forma do que trafega e a régua de
+// QUEM CONSOME POSIÇÃO.
+//
+// POR QUE A RÉGUA DE POSIÇÃO É A EXCEÇÃO E MORA AQUI (08/09): pelo mesmo motivo que
+// `ehSaidaSemExito` já morava, e o motivo é a TELA. O cilindro da vaga precisa contar posição
+// entregue, e uma cópia da régua no frontend é exatamente como duas contas que deveriam ser iguais
+// começam a divergir. O domínio do backend não perdeu a régua: ele DELEGA para cá, como já
+// delegava a saída sem êxito.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -2020,24 +2156,70 @@ export const CANDIDATURA_ETAPA_LABEL: Record<CandidaturaEtapa, string> = {
  * A SITUAÇÃO DA CANDIDATURA, que é coisa DIFERENTE da etapa: a etapa diz onde a pessoa está no
  * funil, a situação diz se o processo dela segue vivo, terminou bem ou terminou.
  *
- * SÓ `APROVADO` E `CONTRATADO` CONSOMEM POSIÇÃO. `ATIVO` é gente em seleção, que não ocupa nada, e
- * `DESCARTADO`/`DESISTIU` estão fora da conta: nunca somam nem subtraem.
+ * ─ O MODELO DE POSIÇÃO, confirmado pelo diretor (08/09) ──────────────────────────────────────
+ *
+ * ALOCAR UM CANDIDATO PREENCHE A POSIÇÃO OFICIAL, e a régua é UMA posição para UM candidato: não
+ * se aloca duas pessoas na mesma posição, e é a trava de ocupação que garante isso.
+ *
+ * `ALOCADO` É ESTADO NOVO, e não uma saída. O candidato foi alocado numa posição, PREENCHE a
+ * posição e CONTINUA no funil da seleção: ele não sai. É a entrega da A&S, e ela acontece antes de
+ * a admissão existir.
+ *
+ * `ENVIADO_PARA_ADMISSAO` É O PASSO SEGUINTE: o candidato alocado AVANÇOU para a esteira
+ * admissional. A admissão COMEÇOU e NÃO terminou, e é por isso que este valor não se chama mais
+ * "CONTRATADO": a palavra dava a entender um processo concluído que não está concluído. O vínculo
+ * com a esteira é o `as_candidaturas.admissao_id`, que já existe.
+ *
+ * OS DOIS SÃO SEPARADOS, e a diferença tem de chegar ao consultor escrita, para ele não escolher
+ * no chute. A frase está em `CANDIDATURA_SITUACAO_AJUDA` logo abaixo, declarada aqui para as telas
+ * dizerem todas a mesma coisa.
+ *
+ * QUEM CONSOME POSIÇÃO NÃO SE LÊ NESTA LISTA: lê-se em `consomePosicao` e `finalizaPosicao`, mais
+ * abaixo, que são a FONTE ÚNICA da régua.
+ *
+ * A ORDEM DESTA LISTA É ORDEM DE EXIBIÇÃO, e a Central de Candidatos ordena por ela
+ * (`as/candidatos/page.tsx`, via `indexOf`). `ALOCADO` entra logo depois de `APROVADO`, que é a
+ * ordem da vida da candidatura, e nenhum outro valor muda de lugar: a ordenação de hoje continua
+ * exatamente a mesma. O enum do banco recebe o valor no mesmo ponto (`ADD VALUE ... AFTER
+ * 'APROVADO'`), para o banco e o vocabulário contarem a história na mesma ordem.
  */
 export const CANDIDATURA_SITUACOES = [
   "ATIVO",
   "APROVADO",
+  "ALOCADO",
   "DESCARTADO",
   "DESISTIU",
-  "CONTRATADO",
+  "ENVIADO_PARA_ADMISSAO",
 ] as const;
 export type CandidaturaSituacao = (typeof CANDIDATURA_SITUACOES)[number];
 
 export const CANDIDATURA_SITUACAO_LABEL: Record<CandidaturaSituacao, string> = {
   ATIVO: "Em Seleção",
   APROVADO: "Aprovado",
+  ALOCADO: "Alocado",
   DESCARTADO: "Descartado",
   DESISTIU: "Desistiu",
-  CONTRATADO: "Contratado",
+  ENVIADO_PARA_ADMISSAO: "Enviado Para Admissão",
+};
+
+/**
+ * A FRASE QUE EXPLICA CADA SITUAÇÃO AO CONSULTOR, em um lugar só.
+ *
+ * ELA EXISTE POR CAUSA DE UM PAR: `ALOCADO` e `ENVIADO_PARA_ADMISSAO` são vizinhos, parecidos e
+ * fáceis de trocar, e trocar um pelo outro escreve no banco um fato que não aconteceu. O diretor
+ * pediu a diferença dita em uma frase, e uma frase declarada aqui é a única forma de a tela de
+ * vagas e a tela de candidatos não explicarem a mesma coisa de dois jeitos.
+ *
+ * TEXTO DE AJUDA, e não título nem etiqueta: escrita normal, maiúscula só na primeira palavra
+ * (§A.24). Sem travessão (§A.11).
+ */
+export const CANDIDATURA_SITUACAO_AJUDA: Record<CandidaturaSituacao, string> = {
+  ATIVO: "Está em seleção, ainda não se decidiu nada. Não ocupa posição da vaga.",
+  APROVADO: "Foi aprovado e a posição fica reservada para ele, mas a entrega ainda não foi formalizada.",
+  ALOCADO: "Entregue na seleção: preenche a posição oficial e continua no funil.",
+  DESCARTADO: "Saiu do processo por decisão da seleção. Não ocupa posição.",
+  DESISTIU: "Saiu do processo por decisão dele. Não ocupa posição.",
+  ENVIADO_PARA_ADMISSAO: "Foi para a esteira admissional: a admissão começou e ainda não terminou.",
 };
 
 /**
@@ -2061,6 +2243,54 @@ export function ehSaidaSemExito(s: CandidaturaSituacao): boolean {
 /** Esta candidatura ainda ocupa lugar no processo? Complemento exato de `ehSaidaSemExito`. */
 export function candidaturaViva(s: CandidaturaSituacao): boolean {
   return !ehSaidaSemExito(s);
+}
+
+/**
+ * ─ QUEM CONSOME POSIÇÃO: A FONTE ÚNICA, e ela passou a morar aqui ────────────────────────────
+ *
+ * POR QUE ESTA RÉGUA SUBIU PARA O VOCABULÁRIO COMPARTILHADO. Ela estava escrita QUATRO VEZES:
+ * `consomePosicao` no domínio do backend e mais três cópias em SQL cru dentro do
+ * `as/candidatos/candidatos.service.ts`. As quatro concordavam por COINCIDÊNCIA, não por
+ * construção, e o dia em que uma situação nova entrasse em uma e não nas outras seria o dia em que
+ * a LEITURA da tela e a TRAVA da vaga passariam a dar números diferentes. A vaga aceitaria
+ * aprovações a mais EM SILÊNCIO, que é o mesmo defeito dos bugs 11, 12 e 13 chegando por outra
+ * porta. Agora é UMA lista, e as quatro leem dela.
+ *
+ * SÃO DUAS PERGUNTAS DIFERENTES, e por isso duas funções. Escrever as duas como uma só é o que
+ * obrigaria a tela a inventar um contador próprio:
+ *
+ *   `finalizaPosicao`  a posição foi ENTREGUE?  É o que ENCHE O CILINDRO da vaga e o que serve de
+ *                      gate para o fechamento. Entrega é `ALOCADO` e o que vem depois dela.
+ *   `consomePosicao`   a posição está TOMADA?   É a TRAVA de "ainda cabe mais um". Inclui tudo que
+ *                      finaliza, MAIS `APROVADO`, que reserva a posição antes da entrega.
+ *
+ * POR QUE `APROVADO` CONTINUA TOMANDO POSIÇÃO SEM ENTREGAR. Sem isso a trava morre e uma vaga de 10
+ * aceitaria 40 aprovações, cada uma dizendo à pessoa "você está dentro". Aprovação é compromisso
+ * assumido com alguém, e compromisso reserva. Daí `finalizadas <= ocupadas` por construção, sempre,
+ * sem nenhum número guardado em lugar nenhum.
+ *
+ * AS DUAS LISTAS SÃO DERIVADAS UMA DA OUTRA, de propósito: `consomePosicao` é `APROVADO` mais
+ * `finalizaPosicao`. Redigitar a segunda lista criaria de novo as duas cópias que esta seção
+ * acabou de eliminar.
+ */
+export const SITUACOES_QUE_FINALIZAM_POSICAO: readonly CandidaturaSituacao[] = [
+  "ALOCADO",
+  "ENVIADO_PARA_ADMISSAO",
+];
+
+/** A posição foi ENTREGUE por esta candidatura? Enche o cilindro da vaga. */
+export function finalizaPosicao(s: CandidaturaSituacao): boolean {
+  return SITUACOES_QUE_FINALIZAM_POSICAO.includes(s);
+}
+
+/**
+ * A posição está TOMADA por esta candidatura? É a régua da trava de ocupação.
+ *
+ * `ATIVO` NÃO TOMA, e essa é a regra que sustenta o módulo inteiro: gente EM SELEÇÃO não ocupa
+ * posição, senão uma vaga de 10 travaria no 11º currículo triado.
+ */
+export function consomePosicao(s: CandidaturaSituacao): boolean {
+  return s === "APROVADO" || finalizaPosicao(s);
 }
 
 /** O que se registra no histórico de uma candidatura. Texto livre fica no resumo, não aqui. */
@@ -2243,6 +2473,26 @@ export interface AsCandidaturaEtapaItem {
   motivo: string | null;
   porNome: string | null;
   /**
+   * ─ O ACEITE QUE DESTRAVOU UMA GUARDA, e por que ele PRECISA sair na resposta ─────────────────
+   *
+   * A §A.3 REGRA 8 PEDE LOG "PERMANENTE E CONSULTÁVEL", e são duas exigências, não uma. O banco já
+   * guarda o aceite desde a migration 0097, na mesma transação da mudança de situação, com CHECK e
+   * índice. O que faltava era a segunda metade: **nada devolvia isso a ninguém**, então o registro
+   * só existia para quem abrisse o banco à mão.
+   *
+   * E A TELA JÁ PROMETIA O CONTRÁRIO: o modal de confirmação do banco diz ao consultor, com estas
+   * palavras, que "o aceite fica registrado no histórico desta candidatura". O histórico não
+   * mostrava. Uma tela que promete trilha e não a exibe é pior do que nenhuma trilha, porque quem
+   * confia nela para de conferir.
+   *
+   * §A.6: aqui entram o NOME DA GUARDA, o LADO e um NÚMERO. Nenhum dado de candidato.
+   */
+  posicaoLado: string | null;
+  /** Qual guarda foi atravessada por aceite explícito. Nulo é o normal da esmagadora maioria. */
+  aceite: string | null;
+  /** O estado no instante da decisão: para o aviso do banco, quantas oficiais estavam abertas. */
+  aceiteNumero: number | null;
+  /**
    * A TROCA DE VAGA (item 5 do diretor). Preenchidas SÓ quando um Master corrige a vaga da
    * candidatura, mantendo a mesma linha e a mesma etapa. `vagaPara` preenchida é o que marca o
    * evento como troca, e é dela que o `tipo` é derivado.
@@ -2275,17 +2525,56 @@ export interface AsContatoItem {
 export interface AsOcupacaoVaga {
   vagaId: string;
   posicoesOficiais: number | null;
-  /** APROVADO + CONTRATADO. É a única coisa que consome posição. */
+  /** Quem `consomePosicao` diz que toma posição: APROVADO mais tudo que finaliza. */
   ocupadas: number;
-  /** Posições oficiais menos ocupadas, com piso em zero. Nulo quando a vaga não tem meta definida. */
+  /**
+   * Posições ENTREGUES (`finalizaPosicao`), somando os DOIS lados. Vale SEMPRE
+   * `finalizadas <= ocupadas` e `finalizadas === finalizadasOficial + finalizadasBanco`, por
+   * construção: os três saem da mesma leitura, na mesma função, no mesmo instante, e nenhum é
+   * guardado.
+   */
+  finalizadas: number;
+  /**
+   * ─ POR QUE A ENTREGA PASSOU A TER DOIS NÚMEROS (decisão do diretor, 08/09) ────────────────────
+   *
+   * O TOTAL SOZINHO NÃO RESPONDE A PERGUNTA DA VAGA, e isso foi MEDIDO, não suposto. Com uma
+   * contagem única medida contra dois tetos, a vaga real de 5 oficiais e 20 de banco produzia dois
+   * resultados errados ao mesmo tempo:
+   *
+   *   1. O AVISO MENTIA E DEPOIS SUMIA. Alocando no banco com as 5 oficiais SEMPRE vazias, o aviso
+   *      dizia "5 abertas", depois 4, 3, 2, 1, e na quinta parava de avisar. Ele desaparecia
+   *      exatamente no caso que o diretor mandou avisar.
+   *   2. A VAGA NUNCA ENTREGAVA O OFICIAL. Com 20 alocados no banco, o candidato do lado OFICIAL era
+   *      recusado com "as 5 posições já estão preenchidas", tendo ZERO posição oficial preenchida.
+   *
+   * A CORREÇÃO NÃO É UM CONTADOR NOVO GUARDADO, e essa distinção é a que o módulo inteiro defende:
+   * os dois lados saem da MESMA leitura das candidaturas, separados pelo `posicao_lado` da linha.
+   * Continua não existindo número armazenado, continua sendo impossível os dois discordarem.
+   *
+   * O CILINDRO OFICIAL LÊ `finalizadasOficial`, e o de BANCO lê `finalizadasBanco`. Enquanto só
+   * existia `finalizadas`, o cilindro oficial contava quem tinha sido entregue à reserva.
+   */
+  finalizadasOficial: number;
+  /** Entregues do lado BANCO. É o que o cilindro de Banco passa a ler. */
+  finalizadasBanco: number;
+  /**
+   * Posições OFICIAIS livres: a meta oficial menos quem ocupa posição DO LADO OFICIAL, com piso em
+   * zero. Nulo quando a vaga não tem meta definida.
+   *
+   * O LADO IMPORTA, e foi assim que o terceiro defeito da mesma família apareceu (08/09): medindo a
+   * ocupação TOTAL contra a meta OFICIAL, a vaga de 5 oficiais com 20 pessoas na reserva devolvia
+   * `livres: 0` e `excedida: true`, ou seja, a tela dizia que a vaga estourou com as 5 posições
+   * oficiais VAZIAS. Meta oficial se compara com ocupação oficial.
+   */
   livres: number | null;
   /** Candidaturas ATIVAS. Aparecem na conta da tela e NÃO consomem posição. */
   emSelecao: number;
   /** DESCARTADO + DESISTIU. Nunca somam nem subtraem, e ficam aqui só para a tela poder mostrar. */
   fora: number;
   /**
-   * Mais ocupadas do que posições. Acontece quando a vaga DIMINUI depois de aprovar, e o sistema
-   * NÃO desfaz aprovação nenhuma: mostra o excedente e deixa a correção para gente.
+   * Mais ocupadas do que posições, DO LADO OFICIAL. Acontece quando a vaga DIMINUI depois de
+   * aprovar, e o sistema NÃO desfaz aprovação nenhuma: mostra o excedente e deixa a correção para
+   * gente. Quem está na reserva nunca torna a vaga excedida, porque a reserva tem meta própria.
    */
   excedida: boolean;
 }

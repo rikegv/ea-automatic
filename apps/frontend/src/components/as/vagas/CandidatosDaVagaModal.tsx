@@ -3,6 +3,13 @@
 /**
  * OS CANDIDATOS VINCULADOS A UMA VAGA (item 6 do diretor), no sentido vaga para pessoa.
  *
+ * SEM PORTA DE ENTRADA DESDE 08/09/2026, E DE PROPÓSITO. O botão do funil que abria este modal na
+ * coluna Ações da Central de Vagas foi retirado a pedido do diretor: o olho abre o painel da vaga, e
+ * o painel já tem a aba "Ver Candidatos", que lê a MESMA rota e responde a mesma pergunta. O que se
+ * pediu foi tirar o BOTÃO, não remover a tela, então o componente continua aqui, inteiro e testado,
+ * na mesma disciplina da §A.15 (a F9 antiga, fora do menu e viva no código). Quem for ligá-lo de
+ * volta só precisa de um `onClick` novo; nada aqui dentro depende da Central de Vagas.
+ *
  * ┌─ POR QUE ELE EXISTE, e por que não é o modal que já havia ──────────────────────────────────┐
  * │ A Central de Vagas já tinha o `CandidatosPendentesModal`, e ele NÃO serve aqui: aquele é a   │
  * │ fila de TRABALHO do encerramento (só quem está EM SELEÇÃO, com botões de tratar cada um) e   │

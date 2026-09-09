@@ -91,11 +91,22 @@ export function NovoCandidatoModal({
   token,
   onClose,
   onSalvo,
+  vagaSugerida,
 }: {
   vagasAbertas: VagaListItem[];
   token: string | null;
   onClose: () => void;
   onSalvo: (candidatoId: string) => void;
+  /**
+   * A VAGA JÁ ESCOLHIDA, quando o cadastro nasce DE DENTRO de uma vaga (o painel da Central de
+   * Vagas, etapa 5). O passo 2 abre com ela preenchida e o consultor pode trocar, exatamente como o
+   * `vagaSugerida` do "Trazer De Volta" já faz no `AlocarCandidatoModal`, e é de lá que o nome vem:
+   * dois nomes para o mesmo parâmetro é como duas telas passam a se comportar diferente.
+   *
+   * ELA É OPCIONAL E O PADRÃO NÃO MUDOU: sem a prop, o campo nasce vazio e a Central de Candidatos
+   * segue idêntica ao que era.
+   */
+  vagaSugerida?: string | null;
 }) {
   const [passo, setPasso] = useState<1 | 2>(1);
   const [form, setForm] = useState<Form>(VAZIO);
@@ -108,7 +119,7 @@ export function NovoCandidatoModal({
   const [procurando, setProcurando] = useState(false);
   const [usarExistente, setUsarExistente] = useState<Existente | null>(null);
 
-  const [vagaId, setVagaId] = useState("");
+  const [vagaId, setVagaId] = useState(vagaSugerida ?? "");
   const [etapa, setEtapa] = useState<CandidaturaEtapa>("CAPTACAO");
   const [observacao, setObservacao] = useState("");
 

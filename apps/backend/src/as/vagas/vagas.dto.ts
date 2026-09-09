@@ -24,7 +24,6 @@ import {
   VAGA_MODELO_TRABALHO,
   VAGA_NATUREZA,
   VAGA_SAZONALIDADE,
-  VAGA_STATUS,
   VAGA_TEMPO_CONTRATO,
   VAGA_TESTES,
   VAGA_TIPO_SUBSTITUICAO,
@@ -34,10 +33,13 @@ import {
   type VagaModeloTrabalho,
   type VagaNatureza,
   type VagaSazonalidade,
-  type VagaStatus,
   type VagaTipoSubstituicao,
   type VagaVinculo,
 } from "@ea/shared-types";
+import {
+  VAGA_STATUS_DA_TRILHA,
+  type VagaStatusDaTrilha,
+} from "../../domain/vaga";
 import { normalizarSalarioParaDto } from "../../admissoes/dto/valor-monetario-br";
 
 /** Um benefício da vaga: o id do catálogo mais o valor, que nem todo benefício tem. */
@@ -119,9 +121,20 @@ export class CreateVagaDto {
   @IsIn(VAGA_NATUREZA as unknown as string[])
   natureza?: VagaNatureza;
 
+  /**
+   * O STATUS QUE A TRILHA PEDE, e ela só sabe pedir DOIS: `RASCUNHO` e `ABERTA`.
+   *
+   * `ENTREGUE`, `FECHADA` e `CANCELADA` SÃO RECUSADOS AQUI, e a ausência deles é a correção do
+   * achado bloqueante da auditoria: aceitando a lista inteira, esta rota era uma segunda porta para
+   * o estado terminal, sem nenhuma das travas do fechamento. O porquê inteiro está em
+   * `VAGA_STATUS_DA_TRILHA` (`domain/vaga`), e a lista NÃO é redigitada aqui de propósito.
+   *
+   * O SERVICE CONFERE DE NOVO, e isso não é redundância inútil: o DTO defende a ROTA, e a régua do
+   * service defende a OPERAÇÃO, inclusive de um chamador interno que nunca passe por um DTO.
+   */
   @IsOptional()
-  @IsIn(VAGA_STATUS as unknown as string[])
-  status?: VagaStatus;
+  @IsIn(VAGA_STATUS_DA_TRILHA as unknown as string[])
+  status?: VagaStatusDaTrilha;
 
   @IsOptional()
   @IsIn(VAGA_SAZONALIDADE as unknown as string[])
@@ -413,9 +426,18 @@ export class FecharVagaDto {
   dataFechamento!: string;
 
   /**
-   * UMA CONTAGEM PARA CADA META (os dois contadores, 25/08): `vagasFechadas` são as posições
-   * OFICIAIS preenchidas, `vagasFechadasBanco` são as de banco. A trava "não passa das posições" é
-   * do service, que conhece as metas da vaga, e confere os dois lados SEPARADAMENTE.
+   * ─ OS DOIS CONTADORES DIGITADOS: AINDA ACEITOS, JÁ IGNORADOS ─────────────────────────────────
+   *
+   * QUEM CONTA AGORA É A CONTAGEM DE CANDIDATURAS, e não mais o formulário: o fechamento grava
+   * `ocupacao.finalizadasOficial` e `ocupacao.finalizadasBanco`, derivadas de quem foi de fato
+   * alocado. O que vier nestes dois campos NÃO é lido para decidir nada e NÃO é gravado, e há teste
+   * afirmando exatamente isso (`vagas.fechamento-derivado.spec.ts`).
+   *
+   * POR QUE ELES CONTINUAM AQUI, e isto é uma janela e não um desenho: o `ValidationPipe` global
+   * roda com `forbidNonWhitelisted`, então tirá-los AGORA faria a tela de hoje, que ainda os manda,
+   * receber 400 no botão Fechar. Eles saem daqui na etapa do FRONTEND, no gesto em que a tela para
+   * de mandá-los, e não antes. Campo aceito e ignorado é dívida: por isso ele nasce com data para
+   * sair e com teste que prova que ele não escreve nada.
    */
   @IsOptional()
   @IsInt()
@@ -426,6 +448,19 @@ export class FecharVagaDto {
   @IsInt()
   @Min(0)
   vagasFechadasBanco?: number;
+
+  /**
+   * FECHAR MESMO COM POSIÇÃO OFICIAL EM ABERTO (a trava 6).
+   *
+   * SÓ MASTER E SUPER_ADMIN PASSAM, e QUEM CONFERE É O SERVICE, nunca um `@Roles` na rota: todo
+   * consultor precisa poder fechar a vaga COMPLETA, e o decorador barraria o fechamento normal do
+   * COMUM, que é regressão silenciosa. É o mesmo desenho da liberação de Apto sem ASO na Esteira.
+   *
+   * O forçado GRAVA TRILHA (quem, quando, quantas faltavam), e a trilha é o preço da exceção.
+   */
+  @IsOptional()
+  @IsBoolean()
+  forcar?: boolean;
 
   @IsOptional()
   @Transform(({ value }) => normalizarSalarioParaDto(value))

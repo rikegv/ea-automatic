@@ -192,3 +192,42 @@ export function escolaridadeVivaDaVaga(
   if (escolaridade === null) return null;
   return escolaridade === "TECNICO" ? "TECNICO_COMPLETO" : (escolaridade as VagaEscolaridade);
 }
+
+/**
+ * ─ OS DOIS ÚNICOS STATUS QUE A TRILHA DE ABERTURA ESCREVE (achado bloqueante da auditoria) ─────
+ *
+ * A VAGA NASCE E É PUBLICADA POR AQUI, E É SÓ ISSO QUE ELA FAZ: `RASCUNHO` (salva pela metade) e
+ * `ABERTA` (publicada). O ENCERRAMENTO tem porta própria, `POST :id/fechar`, e é lá que moram as
+ * travas que decidem se a vaga pode terminar.
+ *
+ * ┌─ POR QUE ESTA LISTA PRECISOU EXISTIR, e o buraco era alcançável de verdade ────────────────┐
+ * │ O DTO ACEITAVA A LISTA INTEIRA DE STATUS, e o service gravava o valor cru. Um COMUM com um  │
+ * │ RASCUNHO que já tinha candidato pendurado publicava a vaga direto num estado ENCERRADO, e   │
+ * │ NADA rodava: nem a trava de todo candidato tratado, nem a das posições oficiais, nem o 403  │
+ * │ de quem não pode forçar, nem a trilha que grava quem encerrou e quantas faltavam.           │
+ * │                                                                                            │
+ * │ SÃO TRÊS FOLHAS NESSA PORTA, E NÃO DUAS. `FECHADA` e `CANCELADA` eram as visíveis, porque   │
+ * │ eram as que o seletor da tela oferecia. `ENTREGUE` É A TERCEIRA, e é a PIOR: ela está em    │
+ * │ `VAGA_STATUS_ENCERRADOS` junto das outras duas, então a régua do cilindro passa a ler o     │
+ * │ NÚMERO CONGELADO em vez da derivada, e por cima disso `ENTREGUE` é o desfecho que AFIRMA    │
+ * │ que a vaga entregou gente. Um rascunho publicado assim declarava entrega que não houve, com │
+ * │ a tela lendo o carimbo e não a contagem. Por isso a régua aqui é uma PERMISSÃO de dois      │
+ * │ valores, e não uma proibição de dois: proibição esquece a terceira folha.                   │
+ * │                                                                                            │
+ * │ E ERA ISSO QUE INVALIDAVA O DESENHO DA ROTA DE FECHAR. A justificativa para não haver       │
+ * │ `@Roles` lá é "a autoridade é o service", e ela só vale enquanto `fechar()` for a ÚNICA     │
+ * │ porta para o estado terminal. Com esta lista, ela volta a ser: as ÚNICAS duas linhas que    │
+ * │ escrevem `vagas.status` são `camposDaTrilha`, que passa por aqui, e o `fechar`.             │
+ * └────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * A LISTA É UMA PERMISSÃO EXPLÍCITA, e não o complemento dos terminais, e a direção é deliberada:
+ * status novo no vocabulário nasce RECUSADO pela trilha até alguém decidir o contrário, em vez de
+ * nascer aceito por omissão. É o mesmo fail-closed de `candidaturaViva`, na direção que protege.
+ */
+export const VAGA_STATUS_DA_TRILHA = ["RASCUNHO", "ABERTA"] as const;
+export type VagaStatusDaTrilha = (typeof VAGA_STATUS_DA_TRILHA)[number];
+
+/** A trilha de abertura pode gravar este status? Guarda de borda para corpo montado fora da tela. */
+export function ehStatusDaTrilha(s: string): s is VagaStatusDaTrilha {
+  return (VAGA_STATUS_DA_TRILHA as readonly string[]).includes(s);
+}

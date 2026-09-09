@@ -19,6 +19,7 @@
 
 import type { AsCandidaturaEtapaItem } from "@ea/shared-types";
 import { apiFetch, ApiError } from "@/lib/api";
+import type { PosicaoLado } from "@/lib/as-vaga-acoes";
 import {
   CANDIDATURA_ETAPAS,
   type AsCandidatoFicha,
@@ -136,6 +137,32 @@ export function aprovarCandidatura(
 }
 
 /**
+ * FINALIZAR A POSIÇÃO: a candidatura passa a `ALOCADO` e a posição da vaga é ENTREGUE.
+ *
+ * ROTA PRÓPRIA, e não a saída com `situacao: "ALOCADO"`, porque ALOCAR NÃO É SAIR: o candidato
+ * preenche a posição e continua no funil. Por lá a operação ainda exigiria um motivo que ela não tem
+ * o que dizer, e o `@IsIn` do backend recusa `ALOCADO` de propósito.
+ *
+ * OS DOIS PARÂMETROS SEGUEM A MESMA DISCIPLINA DO `cienteReentrada`: `lado` só entra quando a tela
+ * escolheu (ausente vale `OFICIAL` no backend, que é o caso comum) e a ciência do banco só entra
+ * quando o consultor clicou nela. A PRIMEIRA tentativa vai SEMPRE sem a ciência, que é o que faz o
+ * aviso existir: mandar `true` de saída seria a tela decidindo por ele antes de perguntar.
+ */
+export function finalizarPosicaoDaCandidatura(
+  candidaturaId: string,
+  token: string | null,
+  opts: { lado?: PosicaoLado; cienteBancoComOficiaisAbertas?: boolean } = {},
+): Promise<AsCandidaturaItem> {
+  const body: Record<string, unknown> = {};
+  if (opts.lado) body.lado = opts.lado;
+  if (opts.cienteBancoComOficiaisAbertas) body.cienteBancoComOficiaisAbertas = true;
+  return apiFetch<AsCandidaturaItem>(
+    `/as/candidatos/candidaturas/${candidaturaId}/finalizar-posicao`,
+    { method: "POST", token, body },
+  );
+}
+
+/**
  * REGISTRAR SAÍDA. `motivo` É OBRIGATÓRIO NOS TRÊS DESFECHOS desde o ajuste 7 do diretor, e o tipo
  * aqui passou de `string | undefined` para `string` justamente para o compilador cobrar isso de quem
  * chamar: a exigência mora no DTO do backend, e uma assinatura opcional na tela deixaria o erro
@@ -143,7 +170,7 @@ export function aprovarCandidatura(
  */
 export function registrarSaida(
   candidaturaId: string,
-  situacao: "DESCARTADO" | "DESISTIU" | "CONTRATADO",
+  situacao: "DESCARTADO" | "DESISTIU" | "ENVIADO_PARA_ADMISSAO",
   motivo: string,
   token: string | null,
 ): Promise<AsCandidaturaItem> {
@@ -259,7 +286,7 @@ export function caminhoAteEtapa(destino: CandidaturaEtapa): CandidaturaEtapa[] {
  * estados dentro de fusões: "Em Entrevista" somava Soulan com Cliente, "Aprovados" somava aprovado
  * com contratado, "Descartados" somava descartado com desistiu, e quem estava ATIVO na Aprovação não
  * tinha card nenhum. As duas primeiras fusões são justamente as que doem numa análise de funil:
- *  - APROVADO e CONTRATADO são estados DIFERENTES (um virou admissão, o outro ainda não);
+ *  - APROVADO e ENVIADO_PARA_ADMISSAO são estados DIFERENTES (um virou admissão, o outro ainda não);
  *  - DESCARTADO e DESISTIU também (o time recusou, ou a pessoa saiu por conta própria).
  * Somados, esses pares respondem "quantos saíram", e nunca "por que saíram", que é a pergunta real.
  *
@@ -291,9 +318,28 @@ export type KpiId = "total" | "semVaga" | KpiFunil;
  * buraco que o ajuste fechou (quem estava ATIVO na Aprovação não aparecia em card nenhum).
  */
 export function kpiDaCandidatura(etapa: CandidaturaEtapa, situacao: CandidaturaSituacao): KpiFunil {
-  // OS DESFECHOS PRIMEIRO: recebida a decisão, a etapa em que ela foi tomada não muda o card.
-  if (situacao === "APROVADO") return "aprovados";
-  if (situacao === "CONTRATADO") return "contratados";
+  /*
+   * OS DESFECHOS PRIMEIRO: recebida a decisão, a etapa em que ela foi tomada não muda o card.
+   *
+   * ─ O `ALOCADO` ENTRA NO CARD "APROVADOS", E A ESCOLHA PRECISA SER JUSTIFICADA ────────────────
+   *
+   * ELE NÃO TINHA RAMO NENHUM, e o defeito estava dormente só porque ninguém era alocado ainda: sem
+   * ramo, ele escapava dos desfechos e era classificado pela ETAPA, então quem já tinha ENTREGUE a
+   * posição ia parar num card de funil VIVO. O KPI contaria entrega como gente esperando decisão, que
+   * é a leitura oposta da que o card promete.
+   *
+   * POR QUE "APROVADOS" É O CARD CERTO ENTRE OS QUE EXISTEM: ele é o card de quem tem posição
+   * garantida na vaga e ainda NÃO foi para a esteira. `APROVADO` reserva a posição, `ALOCADO` a
+   * entrega, e os dois respondem "está dentro, a admissão ainda não começou". Os vizinhos seriam
+   * piores, e por motivos diferentes: "Contratados" é `ENVIADO_PARA_ADMISSAO` e diria que a admissão
+   * começou (a confusão exata que o vocabulário novo veio desfazer), e qualquer card de etapa diria
+   * que ele ainda está em seleção.
+   *
+   * O CARD PRÓPRIO "ALOCADOS" É PROPOSTA, E NÃO FOI CONSTRUÍDO: card novo é decisão do diretor
+   * (§A.31), e a régua de "uma candidatura cai em UM card só" continua valendo do jeito que está.
+   */
+  if (situacao === "APROVADO" || situacao === "ALOCADO") return "aprovados";
+  if (situacao === "ENVIADO_PARA_ADMISSAO") return "contratados";
   if (situacao === "DESCARTADO") return "descartados";
   if (situacao === "DESISTIU") return "desistiram";
   // E AS CINCO ETAPAS VIVAS, na ordem do funil.
@@ -354,6 +400,36 @@ export function reentradaPrecisaCiencia(err: unknown): AsReentradaPrecisaCiencia
   if (corpo?.reason !== "reentradaAposEncerramento" || corpo.needsConfirmation !== true) return null;
   if (typeof corpo.message !== "string" || !corpo.anterior) return null;
   return corpo as AsReentradaPrecisaCiencia;
+}
+
+/**
+ * O AVISO DE ALOCAR NO BANCO COM POSIÇÃO OFICIAL AINDA ABERTA: o TERCEIRO 409 do módulo.
+ *
+ * MESMA MECÂNICA DO `reentradaPrecisaCiencia`, e de propósito: casa pelo campo `reason`, confere
+ * `needsConfirmation` em vez de deduzi-lo do motivo, e devolve o corpo para a tela CONSUMIR em vez de
+ * uma frase para ela interpretar. Casar pela mensagem quebraria no dia em que alguém corrigisse uma
+ * vírgula, e quebraria do jeito pior: silenciosamente, transformando a pergunta de volta em erro.
+ *
+ * AVISA, NÃO BLOQUEIA (decisão do diretor). Quem decide é o consultor, com o número de posições
+ * oficiais abertas na frente; a tela reenvia a MESMA finalização com a ciência, e o backend grava o
+ * log do aceite. `oficiaisAbertas` é conferido como número porque é ele que a frase carrega: sem o
+ * número, o aviso vira clique automático.
+ *
+ * §A.6: o corpo traz um número de posições da vaga e mais nada. Nenhum dado de candidato entra aqui.
+ */
+export interface AsBancoPrecisaCiencia {
+  needsConfirmation: true;
+  reason: "bancoComOficiaisAbertas";
+  message: string;
+  oficiaisAbertas: number;
+}
+
+export function bancoPrecisaCiencia(err: unknown): AsBancoPrecisaCiencia | null {
+  if (!(err instanceof ApiError) || err.status !== 409) return null;
+  const corpo = err.data as Partial<AsBancoPrecisaCiencia> | undefined;
+  if (corpo?.reason !== "bancoComOficiaisAbertas" || corpo.needsConfirmation !== true) return null;
+  if (typeof corpo.message !== "string" || typeof corpo.oficiaisAbertas !== "number") return null;
+  return corpo as AsBancoPrecisaCiencia;
 }
 
 // ── HIGIENE DE TELA ─────────────────────────────────────────────────────────

@@ -6,6 +6,7 @@ import {
   destinosDeEtapa,
   ehTravaDeVagaCheia,
   entrevistaClienteEhOpcional,
+  bancoPrecisaCiencia,
   formatCpf,
   kpiDaCandidatura,
   reentradaPrecisaCiencia,
@@ -71,7 +72,7 @@ describe("caminhoAteEtapa (a etapa de entrada do cadastro)", () => {
 describe("kpiDaCandidatura (o card é o filtro, e nenhum estado fica sem número à vista)", () => {
   it("aprovado e contratado são cards DIFERENTES, porque são estados diferentes", () => {
     expect(kpiDaCandidatura("APROVACAO", "APROVADO")).toBe("aprovados");
-    expect(kpiDaCandidatura("APROVACAO", "CONTRATADO")).toBe("contratados");
+    expect(kpiDaCandidatura("APROVACAO", "ENVIADO_PARA_ADMISSAO")).toBe("contratados");
   });
 
   it("descartado e desistiu são cards DIFERENTES: o time recusou, ou a pessoa saiu", () => {
@@ -91,6 +92,24 @@ describe("kpiDaCandidatura (o card é o filtro, e nenhum estado fica sem número
 
   it("quem está ATIVO na etapa de Aprovação tem card próprio, e não some mais da conta", () => {
     expect(kpiDaCandidatura("APROVACAO", "ATIVO")).toBe("emAprovacao");
+  });
+
+  it("ALOCADO NÃO é classificado pela etapa: entrega não pode virar fila viva", () => {
+    // O defeito dormente: sem ramo de situação, ele escapava dos desfechos e caía no card da ETAPA,
+    // então quem já tinha entregue a posição era contado como gente esperando decisão.
+    expect(kpiDaCandidatura("TRIAGEM", "ALOCADO")).not.toBe("triagem");
+    expect(kpiDaCandidatura("APROVACAO", "ALOCADO")).not.toBe("emAprovacao");
+    expect(kpiDaCandidatura("CAPTACAO", "ALOCADO")).toBe("aprovados");
+  });
+
+  it("ALOCADO cai com APROVADO, e NÃO com quem já foi para a esteira admissional", () => {
+    expect(kpiDaCandidatura("APROVACAO", "ALOCADO")).toBe("aprovados");
+    expect(kpiDaCandidatura("APROVACAO", "ALOCADO")).not.toBe("contratados");
+  });
+
+  it("a etapa não muda o card de quem já tem desfecho, e isso vale para o ALOCADO também", () => {
+    const cards = CANDIDATURA_ETAPAS.map((e) => kpiDaCandidatura(e, "ALOCADO"));
+    expect(new Set(cards).size).toBe(1);
   });
 
   it("as cinco etapas vivas caem, cada uma, num card distinto", () => {
@@ -192,5 +211,59 @@ describe("reentradaPrecisaCiencia (os DOIS 409 da alocação, que não são a me
   it("exige needsConfirmation verdadeiro: sem ele não há saída a oferecer", () => {
     const semSaida = { ...corpoDaReentrada, needsConfirmation: false };
     expect(reentradaPrecisaCiencia(new ApiError(semSaida.message, 409, semSaida))).toBeNull();
+  });
+});
+
+describe("bancoPrecisaCiencia (o TERCEIRO 409 do módulo: avisa, não bloqueia)", () => {
+  const corpo = {
+    needsConfirmation: true,
+    reason: "bancoComOficiaisAbertas",
+    message:
+      "Esta vaga ainda tem 3 posições oficiais abertas. Alocar no banco deixa a posição oficial em aberto. " +
+      "Confirme que é isso mesmo que você quer.",
+    oficiaisAbertas: 3,
+  };
+
+  it("reconhece o aviso e devolve QUANTAS posições oficiais continuam abertas", () => {
+    const aviso = bancoPrecisaCiencia(new ApiError(corpo.message, 409, corpo));
+    expect(aviso).not.toBeNull();
+    expect(aviso?.oficiaisAbertas).toBe(3);
+    expect(aviso?.message).toContain("3 posições oficiais abertas");
+  });
+
+  it("casa pelo campo reason, e não pela frase: mudar o texto não muda a decisão", () => {
+    const outroTexto = { ...corpo, message: "Outra redação qualquer, com outra vírgula." };
+    expect(bancoPrecisaCiencia(new ApiError(outroTexto.message, 409, outroTexto))).not.toBeNull();
+  });
+
+  it("NÃO se confunde com o aviso de reentrada, que é outra pergunta e outro modal", () => {
+    const reentrada = {
+      needsConfirmation: true,
+      reason: "reentradaAposEncerramento",
+      message: "Esta pessoa já foi descartada desta vaga.",
+      anterior: { situacao: "DESCARTADO", encerradaEm: null, motivo: null },
+    };
+    expect(bancoPrecisaCiencia(new ApiError(reentrada.message, 409, reentrada))).toBeNull();
+    expect(reentradaPrecisaCiencia(new ApiError(corpo.message, 409, corpo))).toBeNull();
+  });
+
+  it("NÃO oferece ciência para a vaga cheia, que é recusa seca e não tem confirmar mesmo assim", () => {
+    const cheia = new ApiError(
+      "Esta vaga tem 3 posições e as 3 já estão preenchidas. Reprove alguém ou aumente as posições da vaga.",
+      409,
+      { statusCode: 409, message: "Esta vaga tem 3 posições e as 3 já estão preenchidas.", error: "Conflict" },
+    );
+    expect(bancoPrecisaCiencia(cheia)).toBeNull();
+  });
+
+  it("exige o NÚMERO: sem ele a frase viraria clique automático, e o aviso não se abre", () => {
+    const semNumero = { ...corpo, oficiaisAbertas: undefined };
+    expect(bancoPrecisaCiencia(new ApiError(corpo.message, 409, semNumero))).toBeNull();
+  });
+
+  it("ignora o que não é 409 e o que não é erro do cliente HTTP", () => {
+    expect(bancoPrecisaCiencia(new ApiError(corpo.message, 404, corpo))).toBeNull();
+    expect(bancoPrecisaCiencia(new Error("Falha de rede"))).toBeNull();
+    expect(bancoPrecisaCiencia(null)).toBeNull();
   });
 });
