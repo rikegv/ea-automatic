@@ -1094,3 +1094,55 @@ porque o pulso é obrigado a dizer quem rodou.
 
 *(Decisão do diretor, 07/09/2026, no realinhamento da operação da fábrica. Primeira aplicação: a tela
 unificada de vagas.)*
+
+## A.40: A DESCOBERTA VEM ANTES DA CONSTRUÇÃO, e o que atrasa é a RODADA, não o agente (regra permanente)
+
+**O que faz uma frente demorar NÃO é a velocidade dos agentes: é o número de RODADAS SERIAIS.**
+Tudo que se descobre depois que o código existe vira rodada nova, e rodada nova não paraleliza com
+coisa nenhuma. Despachar dois agentes juntos economiza minutos; descobrir cedo economiza rodadas.
+
+**A MEDIÇÃO QUE ORIGINOU A REGRA (09/09/2026, frente A&S da tela unificada de vagas).** Somadas as
+durações reais: **92 minutos de trabalho de agente viraram ~77 minutos de relógio, em CINCO rodadas
+seriais**, mais ~12 minutos do coordenador rodando a suíte inteira três vezes. O gargalo não foi
+nenhum agente lento. Foi que cada achado chegou DEPOIS da construção: a auditoria achou uma segunda
+porta que escrevia o mesmo dado, o `tester` achou quatro defeitos, e cada um desses achados custou
+uma rodada inteira de despacho, execução, consolidação e gate.
+
+### AS QUATRO REGRAS, na ordem do que economiza mais
+
+**1. O MAPA É AUDITADO ANTES. O código é auditado depois.** O coordenador já monta o mapa de alcance
+(§A.39 passo 1); ele passa pelo `seguranca` **antes do primeiro despacho**, não só no fim. O furo que
+custou duas rodadas era achável sem uma linha de código existir: "quem mais escreve
+`posicoes_oficiais`?" é um `grep`, e foi exatamente assim que o `seguranca` o achou, tarde. **Custo: 3
+minutos. Economia medida: duas rodadas.**
+
+**2. O `tester` ENTRA JUNTO COM A CONSTRUÇÃO, não depois dela.** Ele levou 22 minutos NO CAMINHO
+CRÍTICO esperando o código ficar pronto, para então achar defeito e gerar outra rodada. Ele não
+precisa do código: precisa do REQUISITO, e escreve o teste que deve falhar enquanto os outros
+constroem. Quem constrói faz passar. Isso preserva inteira a independência da §A.38 (quem testa não é
+quem escreve) e ainda tira o `tester` do caminho crítico.
+
+**3. "QUEM MAIS ESCREVE ESTE DADO?" é LINHA FIXA de todo briefing de backend.** Enumerar todos os
+escritores de uma coluna ou de um estado, e PROVAR que a lista é completa, não é talento de auditor:
+é checklist. Como linha de briefing, pega o buraco na rodada 1, sem nenhum agente a mais.
+
+**4. A SUÍTE INTEIRA RODA UMA VEZ, no fim.** Rodar 2.065 testes a cada rodada para conferir mudança em
+cinco arquivos é ~4 minutos jogados fora por vez. Durante as rodadas, só o subconjunto afetado; a
+suíte completa uma vez, antes da prova visual.
+
+### A PARTE DO COORDENADOR, que foi onde a rodada mais boba se perdeu
+
+**Antes de despachar dois agentes em paralelo, perguntar: "o que a mudança de UM vai exigir do
+OUTRO?"** e escrever isso nos dois briefings. Na frente que originou a regra, o coordenador despachou
+o `backend` para fechar a segunda porta e, no mesmo instante, o `frontend` para outra coisa, **já
+sabendo** que aquela porta passaria a exigir aviso na tela. Descobriu depois e pagou uma rodada
+inteira por um item de meia linha no briefing.
+
+### O QUE NÃO SE CORTA
+
+**A resposta NUNCA é auditar menos.** As duas auditorias desta frente acharam buracos reais: um
+caminho que fechava vaga sem Master e sem trilha, e o motivo obrigatório que qualquer um contornava
+com três espaços. Os dois teriam chegado à operação. **Auditar mais CEDO, nunca menos.**
+
+*(Decisão do diretor, 09/09/2026, após ele apontar que a fábrica estava lenta demais. O coordenador
+mediu, propôs, e o diretor mandou registrar para não depender de memória de sessão.)*
