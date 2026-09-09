@@ -13412,3 +13412,106 @@ efêmero, em `~/ea-backup-producao-20260909-antes-as-vagas.dump` (3,4 MB, 447 ob
   (botões centralizados, cor forte, "Gestão Vaga" no lugar do olho, editar status) e o item 9 (etapa
   do candidato).
 
+
+---
+
+## 09/09/2026 (tarde e noite) — A leva do volume, as melhorias da validação, e o dia em que duas sessões dividiram a mesma árvore
+
+Continuação do dia. Depois da tela unificada subir de manhã, o diretor validou, pediu a próxima
+leva, validou de novo e pediu melhorias. Tudo abaixo está **em produção**, validado por ele na 3010.
+
+### 1. O QUE SUBIU, EM TRÊS JANELAS
+
+| janela | o que foi | duração |
+|---|---|---|
+| **13:50 a 13:52** | grupo 3, a UX: "Gestão Vaga" no lugar do olho, abas centralizadas | 2min |
+| **15:22 a 15:24** | grupos 1, 2 e 5: ações em massa, lista de alocados, gaps da auditoria | 2min03 |
+| **19:42 a 19:43** | as melhorias da validação: modal, UF, cores, rename, vermelho | 1min30 |
+
+Nenhuma migration nas duas últimas: as 0095 a 0099 já estavam aplicadas de manhã.
+
+### 2. O FURO QUE 200 TESTES VERDES NÃO PEGARAM
+
+O caminho travado **lia** `vagas.status` e **nunca o conferia**. Finalizar posição, aprovar e enviar
+para a esteira funcionavam numa vaga já FECHADA. E não era inofensivo: o fechamento CONGELA o
+contador de entregues, então a ocupação derivada e o número congelado passavam a discordar em
+silêncio, e o gate de Master virava contornável em duas etapas.
+
+**Doze dos catorze testes novos ficam vermelhos ao desligar a guarda, e nenhum teste antigo se
+mexeu.** O motivo é a lição: **todo spec do módulo fixava a vaga como "ABERTA" no fake**. Duzentos
+testes conviveram com o buraco porque nenhum deles jamais perguntou o que acontece com a vaga
+fechada. É o retrato do teste que codifica a suposição de quem escreveu o código.
+
+### 3. O DIAGNÓSTICO QUE O DIRETOR PEDIU, E QUE NÃO ERA BUG
+
+Ele alocou três candidatos e a aba "Ver Candidatos Alocados" mostrava zero, e o cilindro não subia.
+Medido no banco: os três estavam `ATIVO`, etapa CAPTACAO, `posicao_lado` NULO. **O sistema estava
+certo.** Ele adicionou ao funil e não finalizou posição de ninguém.
+
+**A culpa era da tela, e a palavra é a culpada.** O botão dizia "Alocar candidato", a pessoa ficava
+ATIVO, a aba se chamava "Ver Candidatos Alocados" e listava ALOCADO, e quem tornava alguém alocado
+era outro botão, "Finalizar posição". Clicava-se em "Alocar" e a pessoa não ficava alocada.
+
+A prova de que não era distração dele: a versão EM MASSA já tinha nascido com o nome certo
+("Adicionar vários ao funil") enquanto a individual continuou "Alocar candidato". E a auditoria do
+MAPA tinha previsto isso antes de existir código, dizendo que "alocar" era ambíguo contra o
+vocabulário do módulo. O coordenador tratou como risco de implementação e não como risco de tela.
+Era das duas coisas. **Renomeado para "Adicionar à vaga".**
+
+### 4. A AUDITORIA DO MAPA, ANTES DA PRIMEIRA LINHA (§A.40)
+
+Custou 7 minutos e achou **nove furos sem existir código**. Os dois que teriam chegado à produção
+sem nenhum teste ficar vermelho:
+- **controller nova nasceria com a rota ABERTA**: o `MenuGuard` resolve o coringa pelo NOME DA
+  CLASSE e operação não reivindicada PASSA. Criar uma controller de lote para não inchar arquivo
+  liberaria escrita em massa para qualquer autenticado;
+- **o furo do `vagas.status`** acima, que virou o grupo 5.
+
+Mais as regras que viraram briefing: loop sequencial obrigatório, proibido `update` próprio, nunca
+ecoar motivo de descarte anterior num resultado de trinta linhas, ids no corpo e nunca filtro na URL.
+
+### 5. O MODAL QUE APAGAVA O TRABALHO (§A.41)
+
+Clicar fora fechava e apagava o preenchimento. Virou regra do sistema, no componente, alcançando 58
+telas. **A metade que dá trabalho:** tirar o clique fora sozinho PRENDE o usuário em todo painel sem
+Cancelar nem Salvar. A varredura achou **NOVE** modais assim, e todos ganharam "Fechar".
+
+### 6. TRÊS DEFEITOS QUE SÓ A PROVA VISUAL PEGOU
+
+- **O resultado do lote nunca aparecia**: a barra era desmontada pelo recarregamento no instante em
+  que acabara de guardar o resultado. Gate verde, e a tela voltava como se nada tivesse acontecido.
+- **O vermelho saía azul em dezenas de telas**: `!bg-[…]` define `background-color` e o botão pinta
+  `background` com gradiente, que é imagem. Cor e imagem não competem, empilham. O `!important`
+  vencia a disputa da propriedade errada.
+- **A busca da UF**, que o coordenador reportou como quebrada e **não estava**: ele auditou o
+  componente errado (`Select` em vez de `Combobox`). Correção registrada no mesmo dia.
+
+### 7. DUAS SESSÕES NA MESMA ÁRVORE, E O QUE ISSO ENSINOU
+
+A sessão ADM publicava o Diagnóstico ao mesmo tempo. O Next não permite publicar frontend em pedaço,
+então as duas frentes dependiam de um build só. O que funcionou:
+- **backend publicado cirurgicamente por eles**, trocando só os cinco arquivos deles no `dist`, com
+  os arquivos da A&S conferidos intactos antes e depois;
+- **frontend publicado por esta sessão**, com o hash do `dist` deles medido ANTES e DEPOIS da janela
+  para provar que nada foi desfeito: `7cbbab83cafb398d` nos dois lados;
+- **sete botões "Fechar" desta sessão entraram na página deles**, conferidos e aprovados por eles
+  antes de subir.
+
+**A lição do dia, que vale registrar:** numa árvore compartilhada **toda medição tem prazo de
+validade**. Três medições envelheceram em minutos: um inventário de arquivos, um md5 conferido e uma
+cópia da homologação. O certo é medir no instante de usar, nunca antes.
+
+E o limite que as duas sessões acertaram por escrito: **uma não destrava a outra**. Autorização que
+passa por intermediário perde o que a torna autorização, porque ninguém consegue repassar o contexto
+que o diretor viu ao decidir. Vale nos dois sentidos.
+
+### 8. O QUE FICOU ABERTO
+
+- **A página do Diagnóstico subiu SEM prova visual da sessão dona dela**, por falta de credencial de
+  administrador na homologação. Há prova de artefato e gate verde, que não substituem o olho. O olho
+  é o do diretor, na 3010.
+- **Produção tem 3 candidaturas e 9 eventos de histórico**, não zero: o diretor criou três hoje às
+  17:24. A janela para mexer nas etapas continua aberta, mas a migration precisa preservar linhas.
+- Próxima leva desenhada e não construída: etapas do funil como catálogo gerenciável, linha "Em
+  Processo" no cilindro, KPIs por etapa e filtro clicável.
+
