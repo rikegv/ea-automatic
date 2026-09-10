@@ -13515,3 +13515,325 @@ que o diretor viu ao decidir. Vale nos dois sentidos.
 - Próxima leva desenhada e não construída: etapas do funil como catálogo gerenciável, linha "Em
   Processo" no cilindro, KPIs por etapa e filtro clicável.
 
+
+---
+
+## 09 e 10/09/2026 — As etapas do funil viram catálogo do diretor, e a fábrica volta a operar distribuída de verdade
+
+Continuação direta do dia anterior. O diretor validou a leva do volume, pediu a próxima na ordem dele, e
+esta entrada cobre da peça 2.1 até onde a noite parou. **Ponto de retomada no fim.**
+
+### 1. O QUE MUDOU DE MODELO: a etapa deixou de ser código e virou dado
+
+As etapas do funil eram um `enum` do Postgres com cinco valores e uma lista no vocabulário compartilhado.
+Agora são a tabela **`as_etapas_funil`**, com CRUD numa tela própria: o diretor cadastra, renomeia,
+reordena, escolhe cor, inativa, reativa e apaga, **sem a fábrica**.
+
+**O custo, aceito de olho aberto e escrito no próprio arquivo:** `CandidaturaEtapa` virou `string`, então
+**o TypeScript parou de recusar `"TRIGEM"`**. Três coisas substituem a garantia, e as três existem: o
+serviço valida contra o catálogo vivo nas duas rotas de escrita, a **FK do banco** recusa em última
+instância, e o fallback devolve o código em vez de `undefined` (pill vazia é pior que pill feia).
+
+### 2. AS DECISÕES DO DIRETOR NESTA LEVA
+
+- **Histórico segue o catálogo**: renomear corrige o nome da MESMA etapa em toda a linha do tempo.
+- **Apagar tem TRÊS camadas**: recusa com o número se há candidatura viva, INATIVA se só há histórico,
+  apaga de verdade se não há nem uma nem outra. Nada de mover candidato automaticamente.
+- **A cor PODE repetir** (a paleta tem 5 tons úteis; o vermelho fica fora porque no sistema significa
+  recusa, e etapa é posição, não julgamento). Quem lê se orienta pela fila.
+- **Ícone único** para todas as etapas; a cor distingue.
+- **"Em Processo" conta só quem NÃO preencheu posição** (`ATIVO`), senão a mesma pessoa apareceria duas
+  vezes no mesmo cilindro.
+- **Só SUPER_ADMIN escreve no catálogo**, com trava na PRÓPRIA ROTA.
+- **Inativar passou a RECUSAR com gente dentro** (10/09), igualando ao excluir.
+- **O menu vai para o hub de CONFIGURAÇÃO**, não para a barra lateral.
+
+### 3. O FURO QUE A AUDITORIA DO MAPA ACHOU ANTES DE EXISTIR CÓDIGO
+
+**"O menu novo nasce só para SUPER_ADMIN" era FALSO para MASTER.** O `MenuGuard` deixa o MASTER passar
+**por pertencer à área**, sem marcação nenhuma, e havia **2 MASTER na área AS em produção**. No dia da
+publicação, os dois ganhariam escrita total no catálogo (inclusive renomear, que reescreve o rótulo em
+todo o histórico) **sem o diretor conceder nada**.
+
+O coordenador tinha afirmado o contrário ao diretor. A auditoria provou o oposto, e a resposta foi
+`@Roles("SUPER_ADMIN")` na própria controller. **Menu não segura MASTER.**
+
+Outros furos da mesma passada: controller nova nasceria com a **rota aberta** (o guard resolve o coringa
+pelo NOME DA CLASSE, e operação não reivindicada PASSA); a **tela abriria por URL** sem o guard de rota do
+frontend (esquecimento já documentado três vezes no código); e a semente literal seria o único ponto entre
+a subida e uma linha órfã.
+
+### 4. O VETO, E O BURACO QUE ELE PEGOU
+
+A auditoria do código **VETOU**. O bloqueante que importava: **a única linha que impede mover gente para
+uma etapa INATIVADA não tinha teste no ponto de chamada.** A FK olha só o código, não o `ativa`; os dois
+`@IsIn` estáticos tinham saído. **Apagando a linha, nenhum teste ficava vermelho.**
+
+E o modo como o buraco nasceu é o que a §A.38 existe para impedir: **o teste que cobria a propriedade foi
+reescrito pelo autor do código**, na mesma frente em que ele mexia nela. A régua mudou de camada e a
+propriedade ficou sem guardião.
+
+Fechado com 5 casos e **prova de mutação: 4 ficam vermelhos** ao apagar a linha. O quinto é o contraste do
+caminho feliz, verde de propósito, senão um serviço que recusasse tudo passaria.
+
+**O segundo caso do mesmo tipo:** o autor também enxertou no arquivo do `tester` uma asserção afirmando a
+escolha DELE sobre o grupo do menu, enquanto a decisão estava aberta com o diretor. Removida. **Teste não
+congela decisão que ainda é do diretor.**
+
+### 5. A MIGRATION, ENSAIADA EM CLONE
+
+| | antes | depois |
+|---|---|---|
+| candidaturas | 52 | **52** |
+| eventos de histórico | 82 | **82** |
+| linhas órfãs | | **0, 0 e 0** |
+| tipo antigo | existia | **removido** |
+
+Três escolhas que a auditoria tentou derrubar e não conseguiu: a semente vem de
+`unnest(enum_range(...))`, o que torna linha órfã **impossível por construção**; `DROP TYPE` **sem
+CASCADE** (com CASCADE o Postgres dropa em silêncio as colunas que ainda usam o tipo, e isso é perda de
+histórico); e `DROP DEFAULT` antes do `ALTER TYPE`.
+
+### 6. O QUE A CONVERSÃO REVELOU, COM NÚMERO
+
+Ao converter a fileira da Central De Candidatos para ler do catálogo:
+- **"Alocados = 22"**: 22 pessoas estavam **somadas dentro de "Aprovados"** e ninguém via. É o quinto card
+  de desfecho que o diretor estranhou: ele não foi inventado, **estava escondido**.
+- **"Dinâmica De Grupo = 0"**: a etapa que o diretor cadastrou **não existia** na fileira antiga; quem
+  estivesse nela cairia no card de Aprovação em silêncio.
+
+**A armadilha evitada:** o corte natural seria `candidaturaViva`, que devolve verdadeiro para APROVADO,
+ALOCADO e ENVIADO_PARA_ADMISSAO, e mandaria os três desfechos BONS de volta para os cards de etapa. O
+corte certo é `ATIVO`, e está travado em teste.
+
+### 7. DUAS DIVERGÊNCIAS QUE SÓ APARECERAM PORQUE DUAS CABEÇAS SE ENCOSTARAM
+
+1. **O card e o filtro de Etapa têm ALCANCES DIFERENTES**: o card conta `ATIVO`, o filtro recorta por
+   `candidaturaViva`. Clicar num card que diz 1 traria mais gente do que ele prometia, e essa gente
+   aparece nos cards de desfecho ao lado. Achado pelo agente da Central De Candidatos, **mandado para
+   dentro da rodada** do agente que está construindo o clique.
+2. **Um dublê de teste MENTIA**: o banco fingido derivava o filtro de etapa das linhas presentes, então
+   **etapa vazia devolvia todas as candidaturas**. Etapa sem ninguém aparecia cheia. Achado e consertado
+   pelo agente de backend, num arquivo escrito pelo `tester`.
+
+### 8. ERROS DA FÁBRICA NESTA LEVA, registrados porque custaram rodada
+
+- **O menu foi para o lugar errado DUAS vezes.** O diretor pediu "dentro do menu de gestão"; a fábrica
+  entendeu "menu lateral de A&S", depois "barra lateral, solto". O certo era **card do hub de
+  configuração**, junto de Clientes, Cargos e Escalas.
+- **O coordenador auditou o componente errado** e reportou como quebrada uma busca que nunca quebrou (foi
+  ao `Select` quando o campo usa `Combobox`). Correção registrada no mesmo dia, e o `Select` ganhou um
+  campo por engano que ficou, testado, por decisão do diretor.
+- **O coordenador escreveu uma opção de pergunta errada**: ofereceu "conta Ativo e Aprovado" quando
+  APROVADO **consome posição** e já aparece nas linhas de cima. A intenção declarada do diretor (não somar
+  duas vezes) prevaleceu sobre a frase errada.
+- **O coordenador afirmou três vezes um dado desatualizado** ("produção tem 0 candidaturas"). Tinha 3, e 9
+  eventos. Terceira medição envelhecida no mesmo dia.
+
+### 9. ESTADO NO FIM DA NOITE
+
+**Produção:** intocada por esta leva. 100 migrations aplicadas, **sem a 0100**, `as_etapas_funil` não
+existe lá, o enum antigo está intacto. A última subida de produção foi a das 19:43 do dia 09.
+
+**Homologação 3120:** com tudo desta leva. Migration 0100 aplicada, **6 etapas cadastradas pelo diretor**,
+52 candidaturas e 82 eventos preservados.
+
+**Gate:** typecheck limpo nos três pacotes; backend **197 arquivos / 2.413 testes**; frontend **39 / 382**.
+
+**Nada commitado desta leva:** 82 arquivos meus no working tree. O último commit da árvore é da sessão ADM
+(o prontuário sob demanda), que fechou a frente dela.
+
+### 10. PONTO DE RETOMADA (ler isto primeiro amanhã)
+
+**EM VOO quando a noite fechou:** um agente de frontend construindo o **redesenho visual da Central De
+Vagas** (referência desenhada pelo diretor) mais a **peça 2.4** (card clicável filtrando a tabela e o
+filtro de Etapa virando multiselect). Ele recebeu o achado da divergência de alcance do item 7.1 e foi
+instruído a usar a régua do CARD no clique, e a **não** mexer no filtro existente sem perguntar.
+
+**Layout já decidido pelo diretor:** Status e Em Seleção **lado a lado**, com divisor vertical; Desfechos
+na faixa de baixo; cards compactos; bloco encostado no topo. Risco a tratar: com 7 etapas a faixa da
+direita aperta, e a degradação tem de ser elegante.
+
+**PENDENTE DO DIRETOR:**
+1. **Criar ou não o agente `frontend-design`.** Ele NÃO existe (a fábrica tem 8: arquiteto, backend,
+   coordenador, devops, frontend, ia, seguranca, tester). O diretor cobrou o uso dele; a resposta honesta é
+   que nunca existiu.
+2. **`as-etapas` fora de `ADMIN_MENUS`** (frontend): quem tiver só esse menu sem ser admin não abre a
+   camada `/admin`. Hoje não dói (é SUPER_ADMIN-only); doeria no dia em que ele liberar para um MASTER.
+3. **A senha da conta de conserto da homologação foi resetada** por um agente (o reclone rotaciona as
+   senhas). Auditoria confirmou: nada além daquela linha, nenhum papel concedido, nenhuma marcação de menu
+   nova. Arquivo com permissão restrita fora do repositório.
+4. **A divergência de alcance card x filtro** (item 7.1): decisão de convergir ou não é dele.
+5. **Os cinco cards de desfecho**: o quinto é "Alocados", com 22 pessoas em homologação. Manter os cinco é
+   a recomendação; com quatro, essas 22 somem da visão.
+
+**DÍVIDA DELIBERADA, não esquecida:** a camada 1 do `remover` e a nova do `inativar` são a mesma régua em
+dois lugares. O ponto único já nasceu parametrizado para o `remover` adotá-lo; a convergência foi adiada
+porque o ganho é zero em comportamento e o custo é mexer em código auditado no meio da frente. **A
+divergência está segurada por teste** que compara as duas frases.
+
+### 11. ADENDO: o redesenho da Central De Vagas fechou depois do registro acima
+
+A rodada que estava em voo voltou. **A tela foi refeita contra a referência desenhada pelo diretor**, e o
+que ele reclamou (KPIs grandes, espaço solto no topo, tabela achatada) foi medido antes e depois:
+
+| medida, viewport 1600x1000 | antes | depois |
+|---|---|---|
+| topo do primeiro card | 227px | **175px** |
+| altura do card | 107px | **72px** |
+| **topo da tabela** | **671px** | **367px** |
+
+**A dívida de largura de 07/09 morreu, e sem tirar coluna.** A tabela declarava 1430px contra 1254px
+úteis, sobrando 176px de rolagem lateral. Agora o piso é **1243px** e a sobra é **ZERO**: a coluna Ações
+aparece inteira, o que não acontecia desde que ela nasceu.
+
+Os 126px saíram de dois lugares medidos: o piso declarado era 61px maior do que qualquer célula pedia
+(largura reservada e não usada), e a densidade horizontal **desta** tabela passou de 16px para 11px por
+lado, o que vale 110px com onze colunas. **O `ds-table` compartilhado ficou intacto**, então as outras 21
+tabelas do sistema não mudaram.
+
+**PONTO PARA O DIRETOR OLHAR:** essa densidade menor vale só nesta tabela, e alguém pode ler como uma
+segunda máscara (§A.12). A identidade visual não mudou (cabeçalho centralizado, hairline, pills,
+ordenação); mudou o respiro lateral da tabela mais larga do sistema. Voltar aos 16px é uma linha, e a
+tabela volta a rolar 110px.
+
+**Sete etapas: a degradação foi provada, não estimada.** Foi criada uma sétima etapa pelo gerenciador e
+apagada depois. A faixa quebra em segunda linha com o card **do mesmo tamanho** (97px, todos os sete),
+rótulo e número inteiros, nada cortado. Quebrar foi escolhido em vez de encolher (que a §A.20 proíbe) ou
+rolar (que esconde card feito para ser visto de relance).
+
+**Duas correções que só a prova visual pegou:** o divisor vertical sumia no tema escuro (a cor de borda
+padrão é 10% de branco) e o filete horizontal do empilhamento estreito tinha o mesmo problema.
+
+**O que a referência pedia e não foi alcançado:** ele desenhou os cards a ~125px do topo e a tela parou em
+175. A diferença são o título e o subtítulo de duas linhas, que ele não desenhou e que a fábrica não apaga
+por conta própria (§A.14). Encurtar o subtítulo tira mais ~40px, e é decisão dele.
+
+### 12. UMA CORREÇÃO AO ITEM 7.1: a divergência NÃO estava onde o coordenador disse
+
+O coordenador mandou ao agente do redesenho o achado de que "o card e o filtro de Etapa têm alcances
+diferentes", pedindo que o clique usasse a régua do card. **O agente conferiu e corrigiu a premissa:**
+
+- **a Central de Vagas NÃO TINHA filtro de Etapa nenhum.** Não havia o que converter de valor único para
+  múltiplo. O filtro dessa tela **nasceu agora**, já múltiplo (§A.28) e **já com a régua do card**
+  (`porEtapa`), então card e filtro concordam ali **por construção**;
+- **a divergência real vive na Central de Candidatos** (`as/candidatos/page.tsx`), onde o filtro recorta
+  por `candidaturaViva` e o card conta `ATIVO`. Continua **intocada** (§A.26), e é decisão do diretor.
+
+O recorte do clique ficou travado em teste no ponto exato do risco: uma vaga com 3 ALOCADOS e ninguém em
+etapa devolve `false` ("não olha o desfecho, só a etapa").
+
+### 13. O QUE MAIS ENTROU NESTA RODADA
+
+- **Busca rápida em QUALQUER coluna**, provada com número: "efetivo" (coluna Vínculo) devolve 1 de 2;
+  "08/09/2026" (coluna Data) devolve 1 de 2.
+- **Paginação**, provada com a página 1 e a 2 (o tamanho de página foi reduzido temporariamente para o
+  print e **restaurado para 25**, com rebuild).
+- **Card de etapa clicável** filtrando a tabela, acendendo o chip no filtro, com um e com dois cards
+  acesos.
+
+**Gate:** typecheck limpo nos três pacotes; frontend **40 arquivos / 403 testes**.
+
+### 14. PENDÊNCIAS ACRESCENTADAS POR ESTA RODADA
+
+1. **A densidade de 11px da tabela da Central De Vagas** (item 11): manter ou voltar aos 16px.
+2. **Encurtar o subtítulo da tela** para os cards subirem os ~40px que faltam para a referência.
+3. **O card de DESFECHO não é clicável** (só o de etapa, que era o pedido). Filtrar por "Alocados" é meia
+   hora, se ele quiser.
+4. **O filtro de Etapa da Central de Candidatos** segue de valor único, violando a §A.28, e com o recorte
+   divergente do card. É a última ponta solta da §A.28 nesta frente.
+5. **O contador do gatilho de filtros conta CAMPOS, não valores**: com duas etapas escolhidas ele diz "1
+   ativo". É o comportamento dos outros seis campos, então mudar é mudar para todos de uma vez.
+
+---
+
+## 10/09/2026 — A leva 2 em produção: as etapas do funil viram catálogo do diretor
+
+Subiu a leva inteira, validada por ele na 3120 antes de cada peça. Janela de parada: **9 segundos**.
+
+### 1. A SUBIDA, PASSO A PASSO E MEDIDA
+
+| passo | resultado |
+|---|---|
+| árvore parada e limpa | sem resíduo de mutação, régua da reversão íntegra |
+| dependentes do tipo | **exatamente 3**, a condição que o ensaio exigia |
+| dump de segurança | 3,3MB, **456 objetos** conferidos, fora do diretório efêmero |
+| cópia do `dist` (a rede que salva de verdade) | 6,1MB |
+| **build com tudo NO AR** | 15:22:15 a 15:24:10, produção respondendo o tempo todo |
+| **janela de parada** | **15:24:25 a 15:24:34, 9 segundos** |
+| migration | **1 segundo** |
+
+O build pesado ficou FORA da janela de propósito: parar, migrar e subir levaram 9 segundos porque o
+único trabalho ali dentro era a migration.
+
+### 2. AS SETE PROVAS DA MIGRATION, EM PRODUÇÃO
+
+| prova | resultado |
+|---|---|
+| migrations | 100 → **101** |
+| candidaturas | 3 → **3** |
+| eventos de histórico | 9 → **9** |
+| **órfãs nas três colunas** | **0, 0 e 0** |
+| tipo `candidatura_etapa` | **removido** |
+| `DEFAULT` da coluna | **nenhum**, e a coluna virou `varchar` |
+| FKs para o catálogo | **3** |
+
+Catálogo semeado a partir do próprio enum: Captação (nasce aqui), Triagem, Entrevista Soulan,
+Entrevista Cliente e Aprovação.
+
+### 3. §A.27: NADA MUDOU ONDE NÃO DEVIA
+
+2.833 admissões, 248 clientes, 241 envelopes Clicksign, 442 registros de Pandapé, 15 lojas, 25
+admissões com loja, grupo de cliente e tipo de marcação do iFractal no lugar, 3 vagas e o rastro de
+redução de meta da leva anterior intactos.
+
+### 4. RBAC PROVADO CONTRA A PRODUÇÃO NO AR
+
+`POST /api/admin/as/etapas` devolve **401** sem credencial, e a rota de reversão também. A leitura de
+catálogo é autenticada. Boot limpo: "successfully started", **zero erros ou exceções**.
+
+Hashes: `dist` do backend `cbd5ad0adcb2ca482e15d5c8`, `BUILD_ID` do frontend `m1dasIddWpkwTISeR_DRZ`.
+
+### 5. O QUE A LEVA ENTREGOU
+
+Etapas gerenciáveis com CRUD no hub de configuração · inativar recusando com gente dentro · três
+camadas do apagar · "Candidatos Em Processo" no cilindro · KPIs por etapa e por desfecho, com etapa
+nova ganhando card sozinha · o redesenho contra a referência desenhada pelo diretor · filtro clicável
+nos dois grupos com "Limpar seleção" · rótulos com o nível · colunas por conteúdo e reequilibradas ·
+modal de gestão mais largo · cabeçalho da tabela congelado · e a reversão do envio para a admissão.
+
+### 6. O QUE A LEVA ENSINOU, e cada item custou uma rodada
+
+- **O menu não segura MASTER.** "Nasce só para SUPER_ADMIN" era falso, e a auditoria provou o
+  contrário do que o coordenador tinha afirmado ao diretor. Quem segura rota é `@Roles`.
+- **Teste do autor pega regressão bem e mal-entendido mal.** Três casos hoje: a guarda da etapa
+  inativa sem teste no ponto de chamada (apagar a linha não deixava nada vermelho); o teste que
+  afirmava que juntar duas funções seria pego, e não era (todas as amostras usavam chaves disjuntas);
+  e a limpeza do motivo, cuja segurança dependia do histórico sobreviver, sem nada proibindo a
+  reversão de apagá-lo também.
+- **Asserção de desenho cobra o preço dela.** `not.toHaveProperty("etapa")` deu falso positivo numa
+  mudança de efeito zero, enquanto a mutação destrutiva passava.
+- **Medição em árvore compartilhada tem prazo de validade.** Um agente pegou o working tree sendo
+  MUTADO ao vivo, com um `return true` injetado numa régua, e levou o mutante para a homologação sem
+  nada falhar.
+- **O "zero de rolagem" da tabela vale no quadro de medição, não no monitor.** Com barras reais ela
+  rolava 4px antes desta frente e rola 3px depois.
+- **A §A.40 pegou o coordenador.** Três ajustes visuais receberam briefing de migration (oito
+  medições antes de escrever uma linha), e o diretor reclamou do tempo com razão. Rigor pesado se
+  paga onde o erro é irreversível; numa largura de coluna, a prova é olhar a tela.
+- **O gate não cabe mais em paralelo nesta máquina.** A suíte passou de 2.363 para 2.906 testes e o
+  vitest paralelo estourou a memória da VM, que roda Postgres, ai-service e dois Next. Rodar com
+  `--no-file-parallelism` resolve.
+
+### 7. PENDENTE DO DIRETOR (nenhuma trava)
+
+1. **motivo obrigatório ao desfazer** o envio (enviar exige, desfazer não);
+2. **reverter em vaga já encerrada**, inerte mas polui a contagem daquela vaga;
+3. **tipo próprio para o evento da reversão**, hoje classificado como desfecho (legibilidade, não
+   integridade: nada decide "encerrado" a partir disso);
+4. **igualar o "limpar filtros" do modal**, que apaga as etapas e deixa os desfechos acesos;
+5. **a frase de apoio** que manda o consultor desvincular quando bastaria reverter;
+6. **alinhamento da coluna Vaga**, a única à esquerda entre as onze;
+7. **criar ou não o agente `frontend-design`**, que nunca existiu;
+8. **a margem de 2px** do botão "Gestão Vaga" com o cabeçalho travado: é o primeiro lugar que estoura
+   se algum rótulo crescer.
