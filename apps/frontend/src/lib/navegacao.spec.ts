@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { gruposDeNavegacao, OPERACAO, SELECAO } from "./navegacao";
+import { ADMINISTRACAO, gruposDeNavegacao, OPERACAO, SELECAO } from "./navegacao";
+import { CARDS } from "@/app/(app)/admin/page";
 
 /**
  * A régua da navegação, afirmada sem montar componente (mesmo padrão do `LogoSou.spec`).
@@ -43,8 +44,44 @@ describe("gruposDeNavegacao", () => {
     expect(grupos.map((g) => g.titulo)).toEqual(["Administração"]);
   });
 
+  /*
+   * ─ ETAPAS DO FUNIL: DENTRO DO HUB, E NÃO SOLTO NA BARRA ────────────────────────────────────────
+   *
+   * A CASA MUDOU DUAS VEZES, e as duas primeiras estavam erradas: o item nasceu no grupo de A&S e
+   * depois foi para a barra, solto abaixo do Menu Gerencial. O pedido era a tela DENTRO do menu de
+   * gestão, junto das outras configurações, e isso é um CARD do hub.
+   *
+   * SÃO DUAS AFIRMAÇÕES, E UMA SÓ NÃO BASTA: "saiu da barra" sem "chegou no hub" passaria verde com
+   * o destino sumido das duas casas, que é o menu liberado e inalcançável da §A.23. Por isso o teste
+   * lê também a lista de cards do hub.
+   */
+  it("Etapas Do Funil NÃO é item da barra: nem em A&S, nem solto na Administração", () => {
+    expect(SELECAO.map((n) => n.codigo)).not.toContain("as-etapas");
+    expect(ADMINISTRACAO.map((n) => n.codigo)).not.toContain("as-etapas");
+    const grupos = gruposDeNavegacao(com("as-vagas", "as-etapas"), false);
+    expect(grupos.find((g) => g.titulo === "Administração")).toBeUndefined();
+    expect(grupos.find((g) => g.titulo === "Atração e Seleção")?.itens).toHaveLength(1);
+  });
+
+  it("Etapas Do Funil é CARD do hub de configuração, ao lado dos outros catálogos", () => {
+    const card = CARDS.find((c) => c.codigo === "as-etapas");
+    expect(card?.href).toBe("/admin/as/etapas");
+    expect(card?.title).toBe("Etapas Do Funil");
+    // §A.11: travessão é proibido em texto que chega ao usuário.
+    expect(card?.desc ?? "").not.toContain("—");
+  });
+
+  it("mudar de casa NÃO mudou quem enxerga: o card é filtrado por `temMenu` (§A.23)", () => {
+    // O hub aparece para o admin, e o CARD de dentro dele continua governado pelo código do menu:
+    // quem não tem `as-etapas` não vê o card, exatamente como não via o item na barra.
+    const grupos = gruposDeNavegacao(() => false, true);
+    const admin = grupos.find((g) => g.titulo === "Administração");
+    expect(admin?.itens.map((i) => i.href)).toEqual(["/admin"]);
+    expect(CARDS.filter((c) => c.codigo === "as-etapas")).toHaveLength(1);
+  });
+
   it("incluirInicio:false tira só o Início, e é o que a própria tela inicial usa", () => {
-    const codigos = [...OPERACAO, ...SELECAO].map((n) => n.codigo);
+    const codigos = [...OPERACAO, ...SELECAO, ...ADMINISTRACAO].map((n) => n.codigo);
     const comTudo = gruposDeNavegacao(com(...codigos), false);
     const semInicio = gruposDeNavegacao(com(...codigos), false, { incluirInicio: false });
 
@@ -58,7 +95,7 @@ describe("gruposDeNavegacao", () => {
   });
 
   it("todo destino tem descrição para o card, senão a home nasce com card mudo", () => {
-    for (const n of [...OPERACAO, ...SELECAO]) {
+    for (const n of [...OPERACAO, ...SELECAO, ...ADMINISTRACAO]) {
       expect(n.descricao.length, `${n.label} sem descrição`).toBeGreaterThan(10);
       // §A.11: travessão é proibido em texto que chega ao usuário.
       expect(n.descricao, `${n.label} com travessão`).not.toContain("—");

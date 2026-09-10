@@ -10,6 +10,7 @@ import {
 import { SITUACOES_DE_SAIDA, ocupaPosicao } from "../../domain/candidatura";
 import { CandidatosService } from "./candidatos.service";
 import { asCandidaturaEtapas, asCandidaturas } from "../../db/schema";
+import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
 
 /**
  * ─ AS GUARDAS DE SITUAÇÃO: quem se move, quem é aprovado, e por qual porta cada saída entra ─────
@@ -131,7 +132,7 @@ function makeDb(cenario: {
     query: { asCandidaturas: { findFirst: vi.fn().mockResolvedValue(c) } },
   };
 
-  return { service: new CandidatosService(db as never), ordem, updates, inserts };
+  return { service: new CandidatosService(db as never, catalogoDeEtapasFingido() as never), ordem, updates, inserts };
 }
 
 const doUpdate = (updates: Escrita[]) =>

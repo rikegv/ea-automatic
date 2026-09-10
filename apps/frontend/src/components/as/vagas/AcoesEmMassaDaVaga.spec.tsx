@@ -29,6 +29,43 @@ const { finalizarPosicaoEmLote, registrarSaidaEmLote, moverEtapaEmLote } = vi.ho
   moverEtapaEmLote: vi.fn(async () => ({ aplicadas: 1, falhas: [] })),
 }));
 
+/**
+ * O CATÁLOGO DE ETAPAS VEM DA REDE AGORA, e por isso ele é dublado aqui.
+ *
+ * A lista do funil deixou de ser constante importada e virou dado do diretor (`as_etapas_funil`),
+ * lido por `GET /as/etapas`. Sem este dublê o `Select` de destino abriria VAZIO no teste (a
+ * requisição não acontece no jsdom) e o clique em "Triagem" não encontraria nada, que é exatamente
+ * como este arquivo falhou na primeira execução depois da mudança.
+ *
+ * SÓ `useEtapas` É DUBLADO, e o resto do módulo é o de verdade (`importActual`): `rotuloDaEtapa` e
+ * companhia são funções puras, e trocá-las por dublê faria o teste afirmar o dublê.
+ */
+vi.mock("@/lib/as-etapas", async () => {
+  const real = await vi.importActual<typeof import("@/lib/as-etapas")>("@/lib/as-etapas");
+  const { ETAPAS_FUNIL_SEMENTE } = await vi.importActual<typeof import("@ea/shared-types")>(
+    "@ea/shared-types",
+  );
+  const catalogo = ETAPAS_FUNIL_SEMENTE.map((e, i) => ({
+    id: i + 1,
+    codigo: e.codigo,
+    rotulo: e.rotulo,
+    ordem: e.ordem,
+    tom: e.tom,
+    inicial: e.ordem === 1,
+    ativa: true,
+  }));
+  return {
+    ...real,
+    useEtapas: () => ({
+      etapas: catalogo,
+      ativas: catalogo,
+      carregando: false,
+      erro: null,
+      recarregar: async () => {},
+    }),
+  };
+});
+
 vi.mock("@/lib/as-candidatos-lote", async () => {
   const real =
     await vi.importActual<typeof import("@/lib/as-candidatos-lote")>("@/lib/as-candidatos-lote");

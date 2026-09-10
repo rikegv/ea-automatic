@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
-  CANDIDATURA_ETAPAS,
   CANDIDATURA_SITUACAO_AJUDA,
   CANDIDATURA_SITUACAO_LABEL,
   CANDIDATURA_SITUACOES,
+  ETAPAS_FUNIL_SEMENTE,
   SITUACOES_QUE_FINALIZAM_POSICAO,
   finalizaPosicao,
   type CandidaturaSituacao,
@@ -26,21 +26,60 @@ import {
   entrevistaClienteEhOpcional,
   ocupacaoDaVaga,
   pendentesDeTratamento,
+  posicaoNoFunil,
   proximasEtapas,
   vagaPodeEncerrar,
   vagaRecebeCandidato,
 } from "./candidatura";
 
+/**
+ * ─ A LISTA DE ETAPAS DEIXOU DE SER CONSTANTE E VIROU PARÂMETRO ────────────────────────────────
+ *
+ * `CANDIDATURA_ETAPAS` SAIU DO VOCABULÁRIO: a lista é DADO DO DIRETOR, na tabela `as_etapas_funil`.
+ * O que estes testes usam é a SEMENTE (`ETAPAS_FUNIL_SEMENTE`), que é a lista de HOJE e serve como
+ * corpo de prova estável para as regras do funil, que não dependem de quantas etapas existem.
+ *
+ * O TESTE DE ORDEM DA LISTA SAIU DAQUI DE PROPÓSITO, e é a mudança que mais importa: afirmar "são
+ * estas cinco, nesta ordem" passou a ser afirmar sobre a escolha do diretor, e quebraria no dia em
+ * que ele criasse a sexta. O que sobra afirmado é o que continua sendo REGRA: de qualquer etapa
+ * para qualquer outra, menos para ela mesma.
+ */
+const ETAPAS = ETAPAS_FUNIL_SEMENTE.map((e) => e.codigo);
+
 describe("o funil de seleção", () => {
-  it("tem as cinco etapas na ordem, e o mapa de avanço cobre todas", () => {
-    expect([...CANDIDATURA_ETAPAS]).toEqual([
-      "CAPTACAO",
-      "TRIAGEM",
-      "ENTREVISTA_SOULAN",
-      "ENTREVISTA_CLIENTE",
-      "APROVACAO",
-    ]);
-    for (const e of CANDIDATURA_ETAPAS) expect(destinosDeEtapa(e)).toBeDefined();
+  it("dá destino para toda etapa do catálogo, e o destino nunca é ela mesma", () => {
+    for (const e of ETAPAS) {
+      const destinos = destinosDeEtapa(e, ETAPAS);
+      expect(destinos).toBeDefined();
+      expect(destinos).not.toContain(e);
+      expect(destinos).toHaveLength(ETAPAS.length - 1);
+    }
+  });
+
+  /**
+   * O CATÁLOGO É DE QUEM OPERA, e a régua tem de valer para a lista que ele montar. Este teste é o
+   * que impede alguém de, um dia, reintroduzir a lista de cinco em código dentro do domínio.
+   */
+  it("vale para um funil que o diretor invente, com nome e tamanho diferentes", () => {
+    const dele = ["ENTRADA", "PROVA_PRATICA", "OFERTA"];
+    expect(destinosDeEtapa("PROVA_PRATICA", dele).sort()).toEqual(["ENTRADA", "OFERTA"]);
+    expect(movimentoPermitido("ENTRADA", "OFERTA")).toBe(true);
+    expect(ehEtapaConhecida("PROVA_PRATICA", dele)).toBe(true);
+    expect(ehEtapaConhecida("TRIAGEM", dele)).toBe(false);
+  });
+
+  /**
+   * A ORDENAÇÃO POR FUNIL SAIU DO `indexOf` E VIROU CONSULTA AO CATÁLOGO, e este teste guarda o
+   * caso que o `indexOf` errava calado: a etapa DESCONHECIDA (inativada, por exemplo) ia para `-1`,
+   * isto é, para ANTES da primeira do funil. Agora ela vai para o FIM.
+   */
+  it("ordena pela ordem do catálogo, e manda a etapa desconhecida para o fim", () => {
+    const ordem = new Map(ETAPAS_FUNIL_SEMENTE.map((e) => [e.codigo, e.ordem]));
+    expect(posicaoNoFunil("CAPTACAO", ordem)).toBe(1);
+    expect(posicaoNoFunil("APROVACAO", ordem)).toBe(5);
+    expect(posicaoNoFunil("ETAPA_QUE_SAIU_DE_CIRCULACAO", ordem)).toBeGreaterThan(
+      posicaoNoFunil("APROVACAO", ordem),
+    );
   });
 
   it("percorre o caminho completo, uma etapa por vez", () => {
@@ -56,8 +95,8 @@ describe("o funil de seleção", () => {
    */
   it("PULA a Entrevista Cliente: de Entrevista Soulan direto para Aprovação", () => {
     expect(movimentoPermitido("ENTREVISTA_SOULAN", "APROVACAO")).toBe(true);
-    expect(entrevistaClienteEhOpcional()).toBe(true);
-    expect(proximasEtapas("ENTREVISTA_SOULAN")).toContain("APROVACAO");
+    expect(entrevistaClienteEhOpcional(ETAPAS)).toBe(true);
+    expect(proximasEtapas("ENTREVISTA_SOULAN", ETAPAS)).toContain("APROVACAO");
   });
 
   /**
@@ -82,7 +121,7 @@ describe("o funil de seleção", () => {
   });
 
   it("Aprovação deixou de ser fim de linha: dali se volta para qualquer etapa", () => {
-    expect(proximasEtapas("APROVACAO").sort()).toEqual([
+    expect(proximasEtapas("APROVACAO", ETAPAS).sort()).toEqual([
       "CAPTACAO",
       "ENTREVISTA_CLIENTE",
       "ENTREVISTA_SOULAN",
@@ -106,8 +145,8 @@ describe("o funil de seleção", () => {
   });
 
   it("etapa inventada não é conhecida (corpo montado fora da tela)", () => {
-    expect(ehEtapaConhecida("TRIAGEM")).toBe(true);
-    expect(ehEtapaConhecida("ENTREVISTA_FINAL")).toBe(false);
+    expect(ehEtapaConhecida("TRIAGEM", ETAPAS)).toBe(true);
+    expect(ehEtapaConhecida("ENTREVISTA_FINAL", ETAPAS)).toBe(false);
   });
 });
 

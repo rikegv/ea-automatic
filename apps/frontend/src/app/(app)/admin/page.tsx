@@ -9,7 +9,14 @@ import { useAuth } from "@/lib/auth-context";
 
 // Um card por tela do Menu Gerencial (padrão: ícone + título + descrição curta + seta). Ordem e
 // lista completas conforme a OST de padronização.
-const CARDS: { href: string; icon: IconName; title: string; desc: string; codigo: string }[] = [
+//
+// EXPORTADO PARA O TESTE, e por um motivo concreto: esta lista é a única casa de destinos
+// administrativos que a barra lateral NÃO tem: `navegacao.ts` deixou de listar "Etapas Do Funil"
+// quando ele virou card, e sem uma afirmação sobre ESTA lista o par de testes só saberia dizer que
+// ele saiu da barra, nunca que ele chegou em algum lugar. Um destino pode sumir das duas casas sem
+// nada falhar, e o sintoma é o menu liberado e inalcançável da §A.23. Exportar uma constante ao lado
+// do `default` é padrão que a casa já usa em página do App Router (ver `beneficios/page.tsx`).
+export const CARDS: { href: string; icon: IconName; title: string; desc: string; codigo: string }[] = [
   {
     // ALTO VOLUME (onda 1): PRIMEIRO card do Menu Gerencial, por decisão do diretor. A tela é
     // dedicada e tem volta para cá pelo botão "Menu Gerencial" do layout de administração.
@@ -84,6 +91,29 @@ const CARDS: { href: string; icon: IconName; title: string; desc: string; codigo
     icon: "alert",
     title: "Motivos De Declínio",
     desc: "Catálogo de motivos de declínio da admissão.",
+  },
+  {
+    /**
+     * ETAPAS DO FUNIL (A&S): É CONFIGURAÇÃO, E CONFIGURAÇÃO MORA COM AS CONFIGURAÇÕES.
+     *
+     * A tela nasceu na barra lateral, dentro do grupo de A&S, e depois foi para a barra lateral de
+     * novo, solta abaixo do Menu Gerencial. As duas casas eram a mesma leitura errada do pedido do
+     * diretor: ele pediu a tela DENTRO do menu de gestão, ao lado de Clientes, Cargos, Escalas e
+     * Motivos De Declínio, que é onde o time procura o cadastro de um catálogo. É aqui.
+     *
+     * ÍCONE `filter`, que no conjunto do sistema é o FUNIL desenhado (o `path` é um funil literal, e
+     * é a mesma marca da Central De Candidatos na barra). Nenhum outro card do hub usa este ícone,
+     * então ele distingue a linha na varredura da grade, que é o critério dos vizinhos.
+     *
+     * §A.23: a régua de quem enxerga NÃO mudou junto de casa. O card é filtrado por `temMenu`, como
+     * todos os outros, e `as-etapas` continua nascendo só para o SUPER_ADMIN. Trocar o item de
+     * lugar não libera menu para ninguém, e quem libera é o diretor.
+     */
+    href: "/admin/as/etapas",
+    codigo: "as-etapas",
+    icon: "filter",
+    title: "Etapas Do Funil",
+    desc: "Cadastro das etapas do funil de seleção: nome, ordem e cor.",
   },
   {
     /**

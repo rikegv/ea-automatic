@@ -22,7 +22,6 @@ import type {
   VagaStatus,
 } from "@ea/shared-types";
 import {
-  CANDIDATURA_ETAPAS,
   OPCAO_OUTRA,
   OPCAO_OUTROS,
   REGIAO_OUTRAS,
@@ -53,9 +52,10 @@ import {
   vagas,
 } from "../../db/schema";
 import {
+  kpisDoFunil,
   ocupacaoDaVaga,
   pendentesDeTratamento,
-  type ItemDeOcupacao,
+  posicaoNoFunil,
 } from "../../domain/candidatura";
 import {
   codigoJaUsado,
@@ -69,6 +69,7 @@ import {
   type VagaStatusDaTrilha,
 } from "../../domain/vaga";
 import type { CreateVagaDto, EditarPosicoesVagaDto, FecharVagaDto } from "./vagas.dto";
+import { EtapasFunilService } from "../etapas/etapas-funil.service";
 
 /**
  * O EXECUTOR DENTRO DA TRANSAÇÃO, tipado como a casa já tipa (`admissoes.service`, `esteira`): o
@@ -94,6 +95,25 @@ interface LinhaDeCandidatura {
 }
 
 /**
+ * UMA CANDIDATURA DA LISTAGEM, do jeito que a consulta agregada de `ocupacaoPorVaga` a devolve.
+ *
+ * TRÊS COLUNAS, E CADA UMA SERVE A UMA RÉGUA DIFERENTE: `situacao` responde quem OCUPA posição,
+ * `posicaoLado` separa a entrega OFICIAL da de BANCO, e `etapa` alimenta a contagem do funil. A
+ * forma é UMA SÓ porque a LEITURA é uma só: a mesma lista é entregue a `ocupacaoDaVaga` e a
+ * `kpisDoFunil`, e é isso que impede os dois números de discordarem sobre o mesmo instante.
+ *
+ * É ESTRUTURALMENTE COMPATÍVEL COM `ItemDeOcupacao` E COM `ItemDoFunil`, cada um lendo o que lhe
+ * interessa e ignorando o resto. Duas listas separadas seriam duas leituras do mesmo fato.
+ *
+ * §A.6: três colunas de PROCESSO. Nenhuma identifica pessoa.
+ */
+interface LinhaDeOcupacao {
+  situacao: CandidaturaSituacao;
+  posicaoLado: string | null;
+  etapa: string;
+}
+
+/**
  * CENTRAL DE VAGAS (A&S): a vaga nasce pela trilha de abertura e termina pela ação de fechar.
  *
  * A LINHA É A IDENTIDADE. Cada abertura é uma vaga com `id` próprio do EA; o `codigo` é o número do
@@ -113,7 +133,17 @@ interface LinhaDeCandidatura {
  */
 @Injectable()
 export class VagasService {
-  constructor(@Inject(DRIZZLE) private readonly db: Database) {}
+  /**
+   * `EtapasFunilService` entra aqui por UM motivo só, e ele é o defeito SILENCIOSO desta frente: a
+   * lista de candidatos pendentes do fechamento é ordenada PELA ORDEM DO FUNIL, e essa ordem era
+   * `CANDIDATURA_ETAPAS.indexOf(...)`, uma constante de código. Com a lista virando dado do diretor,
+   * um `indexOf` sobre qualquer outra lista continuaria compilando e passaria a ordenar errado sem
+   * erro nenhum, que é pior do que quebrar. A ordem passa a vir da coluna `ordem` do catálogo.
+   */
+  constructor(
+    @Inject(DRIZZLE) private readonly db: Database,
+    private readonly etapas: EtapasFunilService,
+  ) {}
 
   /**
    * Lista as vagas com cargo, cliente, autor e os dois lados JÁ RESOLVIDOS em nome.
@@ -1152,6 +1182,11 @@ export class VagasService {
    * separada. Nenhuma admissão, frente ou documento nasce daqui.
    */
   async fechar(id: string, dto: FecharVagaDto, user: AuthUser): Promise<VagaListItem> {
+    // LIDO ANTES DE ABRIR A TRANSAÇÃO: é catálogo de 5 a 10 linhas, servido de cache, e não tem
+    // nada a ver com a linha travada da vaga. Buscá-lo lá dentro só alongaria o tempo com a trava
+    // segurada, sem nenhuma garantia a mais.
+    const ordemDoFunil = await this.etapas.ordemPorCodigo();
+
     await this.db.transaction(async (tx) => {
       // ── A LINHA DA VAGA É TRAVADA ANTES DE QUALQUER CONTAGEM. Daqui até o fim da transação,
       // nenhuma finalização de posição nesta mesma vaga passa deste ponto.
@@ -1172,7 +1207,7 @@ export class VagasService {
       const linhas = await this.candidaturasDaVaga(tx, id);
 
       // TRAVA 5: candidato ainda EM SELEÇÃO segura o fechamento, e ninguém força esta.
-      this.travaCandidatosPendentes(linhas);
+      this.travaCandidatosPendentes(linhas, ordemDoFunil);
 
       /*
        * A OCUPAÇÃO DERIVADA, pela régua do domínio e sobre a MESMA lista já lida. Somar "quem
@@ -1364,12 +1399,21 @@ export class VagasService {
    * §A.6: sai o id da candidatura, o id e o NOME do candidato e a etapa. Sem CPF, sem contato, sem
    * identificador direto, e a consulta não chega a SELECIONAR o CPF, mesmo tendo a tabela no join.
    */
-  private travaCandidatosPendentes(linhas: LinhaDeCandidatura[]): void {
+  private travaCandidatosPendentes(
+    linhas: LinhaDeCandidatura[],
+    ordemDoFunil: ReadonlyMap<string, number>,
+  ): void {
     const pendentes = pendentesDeTratamento(linhas);
     if (pendentes.length === 0) return;
 
+    /*
+     * DO FIM DO FUNIL PARA O COMEÇO, e a ordem agora vem do CATÁLOGO (`posicaoNoFunil`, no domínio),
+     * não de um `indexOf` sobre lista de código. O mapa inclui as etapas INATIVAS de propósito: quem
+     * ficou parado numa etapa que saiu de circulação precisa de uma posição na fila, não de um
+     * buraco, e `indexOf` daria `-1` a ele, jogando-o para ANTES da Captação.
+     */
     const ordenados = [...pendentes].sort(
-      (a, b) => CANDIDATURA_ETAPAS.indexOf(b.etapa) - CANDIDATURA_ETAPAS.indexOf(a.etapa),
+      (a, b) => posicaoNoFunil(b.etapa, ordemDoFunil) - posicaoNoFunil(a.etapa, ordemDoFunil),
     );
 
     const corpo: AsVagaFechamentoBloqueado = {
@@ -1574,6 +1618,7 @@ export class VagasService {
         vagaId: asCandidaturas.vagaId,
         situacao: asCandidaturas.situacao,
         posicaoLado: asCandidaturas.posicaoLado,
+        etapa: asCandidaturas.etapa,
         quantas: sql<number>`count(*)::int`,
       })
       .from(asCandidaturas)
@@ -1583,23 +1628,32 @@ export class VagasService {
           vagasDaPagina.map((v) => v.id),
         ),
       )
-      .groupBy(asCandidaturas.vagaId, asCandidaturas.situacao, asCandidaturas.posicaoLado);
+      .groupBy(
+        asCandidaturas.vagaId,
+        asCandidaturas.situacao,
+        asCandidaturas.posicaoLado,
+        asCandidaturas.etapa,
+      );
 
-    const porVaga = new Map<string, ItemDeOcupacao[]>();
+    const porVaga = new Map<string, LinhaDeOcupacao[]>();
     for (const l of linhas) {
       const lista = porVaga.get(l.vagaId) ?? [];
       // A contagem volta a ser uma lista de candidaturas para o domínio decidir o que cada uma vale.
       for (let i = 0; i < Number(l.quantas); i++) {
-        lista.push({ situacao: l.situacao, posicaoLado: l.posicaoLado });
+        lista.push({ situacao: l.situacao, posicaoLado: l.posicaoLado, etapa: l.etapa });
       }
       porVaga.set(l.vagaId, lista);
     }
 
     for (const v of vagasDaPagina) {
+      const itens = porVaga.get(v.id) ?? [];
       mapa.set(v.id, {
         vagaId: v.id,
         posicoesOficiais: v.posicoesOficiais,
-        ...ocupacaoDaVaga(v.posicoesOficiais, porVaga.get(v.id) ?? []),
+        // A MESMA LISTA ALIMENTA AS DUAS RÉGUAS, e é isso que impede a fileira de KPIs de discordar
+        // do cilindro da vaga: os dois números saem do mesmo instante e da mesma leitura.
+        ...ocupacaoDaVaga(v.posicoesOficiais, itens),
+        ...kpisDoFunil(itens),
       });
     }
     return mapa;
@@ -1612,7 +1666,15 @@ export class VagasService {
    * inventar uma.
    */
   private ocupacaoVazia(vagaId: string, posicoesOficiais: number | null): AsOcupacaoVaga {
-    return { vagaId, posicoesOficiais, ...ocupacaoDaVaga(posicoesOficiais, []) };
+    // OS DOIS GRUPOS DE KPI VÊM VAZIOS, e vazios é a resposta certa: a vaga sem ninguém dentro tem
+    // zero em toda etapa e em todo desfecho. Omiti los obrigaria a tela a inventar o que fazer com a
+    // ausência, que é a mesma razão de esta função existir.
+    return {
+      vagaId,
+      posicoesOficiais,
+      ...ocupacaoDaVaga(posicoesOficiais, []),
+      ...kpisDoFunil([]),
+    };
   }
 
   /**

@@ -17,6 +17,7 @@ import {
   podeDecidir,
   podeFinalizarPosicao,
   podeMoverNoFunil,
+  podeReverterEnvio,
   preenchidasDoLado,
   vagaRecebeCandidato,
   type VagaAcoes,
@@ -44,6 +45,9 @@ function vaga(over: Partial<VagaAcoes> = {}): VagaAcoes {
       emSelecao: 0,
       fora: 0,
       excedida: false,
+      // Contagem do funil: a fixture não a exercita, e o mapa vazio é o estado real da vaga sem ninguém.
+      porEtapa: {},
+      porDesfecho: {},
     },
     ...over,
   };
@@ -267,5 +271,36 @@ describe("fraseDoAceite (a trilha que a tela PROMETIA e não mostrava)", () => {
   it("§A.11: nenhuma frase daqui usa travessão", () => {
     expect(fraseDoAceite("BANCO_COM_OFICIAIS_ABERTAS", 2)).not.toContain("—");
     expect(fraseDoAceite("REENTRADA", null)).not.toContain("—");
+  });
+});
+
+describe("podeReverterEnvio (o alvo ESTREITO do desfazer, espelho da régua do backend)", () => {
+  it("quem está enviado para a admissão pode voltar: é o único caso que existe", () => {
+    expect(podeReverterEnvio("ENVIADO_PARA_ADMISSAO")).toBe(true);
+  });
+
+  it("o ALOCADO não reverte, e é o erro caro que esta régua impede", () => {
+    // Ele FINALIZA POSIÇÃO igual ao enviado, então uma régua escrita com `finalizaPosicao` diria
+    // SIM aqui e abriria na tela uma segunda porta para desfazer alocação, sem motivo e sem passar
+    // por lugar nenhum que conte posição.
+    expect(finalizaPosicao("ALOCADO")).toBe(true);
+    expect(podeReverterEnvio("ALOCADO")).toBe(false);
+  });
+
+  it("ninguém mais reverte: não foi um envio que pôs os outros onde estão", () => {
+    expect(podeReverterEnvio("ATIVO")).toBe(false);
+    expect(podeReverterEnvio("APROVADO")).toBe(false);
+    expect(podeReverterEnvio("DESCARTADO")).toBe(false);
+    expect(podeReverterEnvio("DESISTIU")).toBe(false);
+  });
+
+  it("toda situação do catálogo tem resposta, sem estado ficar sem régua", () => {
+    for (const s of CANDIDATURA_SITUACOES) expect(typeof podeReverterEnvio(s)).toBe("boolean");
+  });
+
+  it("UMA situação só responde SIM: a régua é estreita por construção, e continua sendo", () => {
+    // Situação nova nasce FORA do desfazer, que é o lado seguro: quem quiser incluí-la precisa
+    // dizer o nome dela aqui e no backend, e este teste é o que cobra a decisão explícita.
+    expect(CANDIDATURA_SITUACOES.filter(podeReverterEnvio)).toEqual(["ENVIADO_PARA_ADMISSAO"]);
   });
 });

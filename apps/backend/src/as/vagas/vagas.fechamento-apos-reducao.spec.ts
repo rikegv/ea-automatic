@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AuthUser } from "../../auth/auth.types";
 import { VagasService } from "./vagas.service";
 import { asCandidaturas, vagaBeneficio, vagaMetaReducoes, vagas } from "../../db/schema";
+import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
 
 /**
  * ─ O FURO DO GATE, PONTA A PONTA: REDUZIR A META E ENTÃO FECHAR A VAGA ──────────────────────────
@@ -209,7 +210,7 @@ function makeDb(cenario: {
     query: { vagas: { findFirst: async () => ({ ...vaga }) } },
   };
 
-  return { service: new VagasService(db as never), vaga, rastro };
+  return { service: new VagasService(db as never, catalogoDeEtapasFingido() as never), vaga, rastro };
 }
 
 const FECHAMENTO = { dataFechamento: "2026-09-09" };

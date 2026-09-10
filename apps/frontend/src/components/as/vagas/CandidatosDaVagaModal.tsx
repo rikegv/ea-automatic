@@ -37,7 +37,6 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
-  CANDIDATURA_ETAPA_LABEL,
   CANDIDATURA_SITUACAO_LABEL,
   candidaturaViva,
   type AsCandidaturaItem,
@@ -46,7 +45,8 @@ import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { StatusPill } from "@/components/ui/StatusPill";
 import { mensagemDoErro, painelDaVaga } from "@/lib/as-candidatos";
-import { tomDaEtapa, tomDaSituacao } from "@/lib/as-candidatos-visual";
+import { tomDaSituacao } from "@/lib/as-candidatos-visual";
+import { rotuloDaEtapa, tomDaEtapa, useEtapas } from "@/lib/as-etapas";
 
 export function CandidatosDaVagaModal({
   vagaId,
@@ -59,6 +59,7 @@ export function CandidatosDaVagaModal({
   token: string | null;
   onClose: () => void;
 }) {
+  const { etapas } = useEtapas();
   const [lista, setLista] = useState<AsCandidaturaItem[]>([]);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
@@ -131,7 +132,10 @@ export function CandidatosDaVagaModal({
                   <span className="text-[13.5px] font-semibold text-text">{c.candidatoNome}</span>
                   <span className="flex flex-wrap items-center gap-2">
                     {candidaturaViva(c.situacao) ? (
-                      <StatusPill tone={tomDaEtapa(c.etapa)} label={CANDIDATURA_ETAPA_LABEL[c.etapa]} />
+                      <StatusPill
+                        tone={tomDaEtapa(c.etapa, etapas)}
+                        label={rotuloDaEtapa(c.etapa, etapas)}
+                      />
                     ) : (
                       <StatusPill tone="nt" label="Fora Do Funil" />
                     )}

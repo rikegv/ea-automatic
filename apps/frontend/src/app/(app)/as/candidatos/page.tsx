@@ -29,8 +29,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AS_CANDIDATO_ORIGEM,
   AS_CANDIDATO_ORIGEM_LABEL,
-  CANDIDATURA_ETAPAS,
-  CANDIDATURA_ETAPA_LABEL,
   CANDIDATURA_SITUACAO_LABEL,
   CANDIDATURA_SITUACOES,
   candidaturaViva,
@@ -52,13 +50,16 @@ import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
 import { cn } from "@/lib/cn";
 import {
   buscarCandidatos,
+  cardDaCandidatura,
+  CARD_SEM_VAGA,
+  CARD_TOTAL,
   dataHoraBr,
-  kpiDaCandidatura,
   mensagemDoErro,
   painelDaVaga,
-  type KpiId,
 } from "@/lib/as-candidatos";
-import { tomDaEtapa, tomDaSituacao } from "@/lib/as-candidatos-visual";
+import { cardsDeDesfecho, cardsDeEtapa, type CardDeFunil } from "@/lib/as-vagas-funil";
+import { tomDaSituacao } from "@/lib/as-candidatos-visual";
+import { ordemDaEtapa, rotuloDaEtapa, tomDaEtapa, useEtapas } from "@/lib/as-etapas";
 import { NovoCandidatoModal } from "@/components/as/candidatos/NovoCandidatoModal";
 import { AlocarCandidatoModal } from "@/components/as/candidatos/AlocarCandidatoModal";
 import { FichaCandidatoModal } from "@/components/as/candidatos/FichaCandidatoModal";
@@ -115,13 +116,23 @@ export default function CentralDeCandidatosPage() {
    * carregada, então nem o nome nem o id entram em URL, em query string ou em log de proxy. A busca
    * por CPF continua onde estava, no CORPO do POST, e o número segue nunca aparecendo no endereço.
    */
+  /*
+   * O CATÁLOGO DE ETAPAS. `ativas` alimenta o filtro (não se filtra por etapa que saiu de
+   * circulação) e `etapas`, a lista completa, resolve rótulo, cor e ORDEM de quem já está gravado,
+   * inclusive numa etapa inativada depois.
+   */
+  const { etapas: catalogoEtapas, ativas: etapasAtivas } = useEtapas();
   const [fCandidatos, setFCandidatos] = useState<string[]>([]);
   const [cpfBusca, setCpfBusca] = useState("");
   const [fVaga, setFVaga] = useState("");
   const [fCliente, setFCliente] = useState("");
   const [fEtapa, setFEtapa] = useState("");
   const [fOrigem, setFOrigem] = useState("");
-  const [cardAtivo, setCardAtivo] = useState<KpiId>("total");
+  /**
+   * O CARD ATIVO É UMA CHAVE CRUA (código de etapa, código de situação, ou um dos dois reservados),
+   * e não mais um dos nove nomes escritos à mão: a lista de cards passou a vir do CATÁLOGO.
+   */
+  const [cardAtivo, setCardAtivo] = useState<string>(CARD_TOTAL);
 
   // ── MODAIS
   const [novoAberto, setNovoAberto] = useState(false);
@@ -234,8 +245,14 @@ export default function CentralDeCandidatosPage() {
         /*
          * O FILTRO DE ETAPA SÓ ALCANÇA QUEM ESTÁ VIVO (peça P1 do bug 1), e era aqui que a contagem
          * distorcia: a comparação olhava só `etapa`, então filtrar "Triagem" trazia junto quem foi
-         * DESCARTADO na Triagem, e o filtro DISCORDAVA do card de mesmo nome, que já contava certo
-         * (`kpiDaCandidatura` testa a situação primeiro). Agora os dois respondem a mesma pergunta.
+         * DESCARTADO na Triagem, e o filtro DISCORDAVA do card de mesmo nome.
+         *
+         * ELE CONTINUA COMO ESTAVA, e o recorte dele é `candidaturaViva` (todo mundo menos
+         * DESCARTADO e DESISTIU), enquanto o CARD da etapa conta só quem está `ATIVO`. Os dois
+         * concordam nas duas saídas sem êxito, que era o defeito corrigido, e ainda diferem nos três
+         * desfechos BONS: filtrar "Triagem" traz junto quem foi APROVADO ou ALOCADO estando na
+         * Triagem, e essas pessoas aparecem nos cards de desfecho. Está REGISTRADO e não foi mexido:
+         * mudar o alcance do filtro é comportamento já validado e fora desta correção (§A.14/§A.26).
          */
         if (fEtapa && !(l.candidatura && candidaturaViva(l.candidatura.situacao))) return false;
         if (fEtapa && l.candidatura?.etapa !== fEtapa) return false;
@@ -245,42 +262,56 @@ export default function CentralDeCandidatosPage() {
   );
 
   /**
-   * A CONTA DOS CARDS, com TODOS os estados do funil visíveis (ajuste do diretor). Nenhum estado
-   * fica sem número: as cinco etapas vivas contam separadas, os quatro desfechos contam separados, e
-   * quem ainda não entrou em vaga nenhuma tem o card "Sem Vaga", que é a AUSÊNCIA de candidatura e
-   * por isso é contado aqui, e não pela régua de `kpiDaCandidatura`.
+   * ─ A CONTA DOS CARDS, LIDA DO CATÁLOGO DE ETAPAS ─────────────────────────────────────────────
+   *
+   * ERAM CINCO BLOCOS ESCRITOS À MÃO, com rótulo, ícone e cor fixos no JSX, e o preço disso já
+   * estava sendo pago: a etapa que o diretor cadastrasse não ganhava card e ia parar dentro do card
+   * de Aprovação, em silêncio; e `ALOCADO` era fundido com `APROVADO`, escondendo quem já teve a
+   * posição entregue atrás de quem só a tem reservada.
+   *
+   * A MONTAGEM É A MESMA PEÇA DA CENTRAL DE VAGAS (`lib/as-vagas-funil`), e não uma segunda régua:
+   * `cardsDeEtapa` recebe o CATÁLOGO e o mapa de contagem, `cardsDeDesfecho` recebe o mapa das
+   * situações. Daí saem, de graça, as quatro réguas que a outra fileira já cumpre: a lista vem do
+   * catálogo (nunca das chaves do mapa), a etapa vazia aparece com ZERO, a cor é a que o diretor
+   * escolheu, e a etapa fora de circulação COM GENTE DENTRO aparece marcada como inativa (a inativa
+   * vazia fica de fora). O catálogo lido aqui é o completo, que é o que `useEtapas` já busca com
+   * `?incluirInativas=1`.
+   *
+   * O QUE NÃO VEM DO CATÁLOGO SÃO OS DOIS CARDS QUE NÃO SAEM DE UMA CANDIDATURA: o `total` e o
+   * "Sem Vaga", que é a pessoa na base ainda não alocada, ou seja, a AUSÊNCIA de candidatura.
    */
-  const kpis = useMemo(() => {
-    const conta: Record<KpiId, number> = {
-      total: linhasSemCard.length,
-      semVaga: 0,
-      captacao: 0,
-      triagem: 0,
-      entrevistaSoulan: 0,
-      entrevistaCliente: 0,
-      emAprovacao: 0,
-      aprovados: 0,
-      contratados: 0,
-      descartados: 0,
-      desistiram: 0,
-    };
+  const funil = useMemo(() => {
+    const porEtapa: Record<string, number> = {};
+    const porDesfecho: Record<string, number> = {};
+    let semVaga = 0;
     for (const l of linhasSemCard) {
       if (!l.candidatura) {
-        conta.semVaga += 1;
+        semVaga += 1;
         continue;
       }
-      conta[kpiDaCandidatura(l.candidatura.etapa, l.candidatura.situacao)] += 1;
+      const chave = cardDaCandidatura(l.candidatura.etapa, l.candidatura.situacao);
+      // A SITUAÇÃO VENCE A ETAPA: quem já recebeu decisão sai da contagem de etapa e entra na de
+      // desfecho, mesmo tendo uma etapa gravada na linha. É a régua do contrato do backend.
+      const alvo = l.candidatura.situacao === "ATIVO" ? porEtapa : porDesfecho;
+      alvo[chave] = (alvo[chave] ?? 0) + 1;
     }
-    return conta;
-  }, [linhasSemCard]);
+    return {
+      total: linhasSemCard.length,
+      semVaga,
+      etapas: cardsDeEtapa(catalogoEtapas, porEtapa),
+      desfechos: cardsDeDesfecho(porDesfecho),
+    };
+  }, [linhasSemCard, catalogoEtapas]);
 
   const linhas = useMemo(() => {
-    if (cardAtivo === "total") return linhasSemCard;
-    if (cardAtivo === "semVaga") return linhasSemCard.filter((l) => l.candidatura === null);
+    if (cardAtivo === CARD_TOTAL) return linhasSemCard;
+    if (cardAtivo === CARD_SEM_VAGA) return linhasSemCard.filter((l) => l.candidatura === null);
+    // Nos demais, a chave do card é o próprio código (da etapa ou da situação), e a régua do filtro
+    // é EXATAMENTE a que contou o número: card e tabela não têm como discordar.
     return linhasSemCard.filter(
       (l) =>
         l.candidatura !== null &&
-        kpiDaCandidatura(l.candidatura.etapa, l.candidatura.situacao) === cardAtivo,
+        cardDaCandidatura(l.candidatura.etapa, l.candidatura.situacao) === cardAtivo,
     );
   }, [linhasSemCard, cardAtivo]);
 
@@ -330,7 +361,7 @@ export default function CentralDeCandidatosPage() {
          */
         valor: (l) =>
           l.candidatura && candidaturaViva(l.candidatura.situacao)
-            ? CANDIDATURA_ETAPAS.indexOf(l.candidatura.etapa)
+            ? ordemDaEtapa(l.candidatura.etapa, catalogoEtapas)
             : null,
       },
       {
@@ -341,7 +372,9 @@ export default function CentralDeCandidatosPage() {
       },
       { chave: "ultimoContato", tipo: "data", valor: (l) => l.candidatura?.ultimoContatoEm ?? null },
     ],
-    [],
+    // O CATÁLOGO ENTRA NAS DEPENDÊNCIAS: sem ele, a coluna Etapa ficaria congelada na ordem
+    // calculada ANTES de a rota responder, ou seja, todo mundo empatado no fim da lista.
+    [catalogoEtapas],
   );
   const ord = useOrdenacao(colunasOrdenaveis, linhas);
   const visiveis = ord.itens;
@@ -466,9 +499,9 @@ export default function CentralDeCandidatosPage() {
               <Combobox
                 value={fEtapa}
                 onChange={setFEtapa}
-                options={CANDIDATURA_ETAPAS.map((e) => ({
-                  value: e,
-                  label: CANDIDATURA_ETAPA_LABEL[e],
+                options={etapasAtivas.map((e) => ({
+                  value: e.codigo,
+                  label: e.rotulo,
                 }))}
                 placeholder="Todas"
                 ariaLabel="Etapa"
@@ -511,11 +544,18 @@ export default function CentralDeCandidatosPage() {
       )}
 
       {/* ── OS CARDS, EM DUAS FILEIRAS, E NENHUM ESTADO SEM NÚMERO À VISTA ───────────────────
-          Fileira 1: o Total e as CINCO etapas vivas, NA ORDEM DO FUNIL. Lida da esquerda para a
-          direita, ela mostra o afunilamento, que é justamente o que as fusões antigas escondiam.
-          Fileira 2: os QUATRO desfechos separados (aprovado não é contratado, descartado não é
-          desistiu) mais o "Sem Vaga", que é a pessoa na base ainda não alocada.
-          §A.12: todo card é clicável como FILTRO, em toggle (clicar no ativo volta ao Total). */}
+          Fileira 1: o Total e as ETAPAS DO FUNIL, na ordem do funil, LIDAS DO CATÁLOGO DO DIRETOR.
+          Lida da esquerda para a direita, ela mostra o afunilamento, que é o que as fusões antigas
+          escondiam.
+          Fileira 2: os DESFECHOS, um por situação do vocabulário do sistema (aprovado não é
+          alocado, alocado não é contratado, descartado não é desistiu), mais o "Sem Vaga", que é a
+          pessoa na base ainda não alocada.
+          §A.12: todo card é clicável como FILTRO, em toggle (clicar no ativo volta ao Total).
+
+          A GRADE É `auto-fit`, E NÃO UM NÚMERO DE COLUNAS ESCRITO AQUI: a fileira deixou de ter
+          cinco cards fixos, então ela tem de caber seis etapas hoje e nove amanhã sem ninguém voltar
+          neste bloco. O `minmax` impede o card estreito demais para o rótulo; passou do que cabe, a
+          própria grade quebra a linha, com os cards ainda do mesmo tamanho. */}
       {/* A MARCA D'ÁGUA DE FUNIL SAIU (ajuste 4 do diretor): o desenho literal do funil atrás dos
           cards não ficou bom, e o sombreamento que o sistema já usa é a `.aurora` do `globals.css`,
           desenhada pelo `AppShell` atrás de TODAS as telas, com os três blobs e as variantes de tema
@@ -524,75 +564,24 @@ export default function CentralDeCandidatosPage() {
           O invólucro fica como agrupador das duas fileiras, sem `relative isolate`, que existiam só
           para prender o `-z-10` da marca que saiu. */}
       <div>
-        <div className="mb-[12px] grid grid-cols-2 gap-[12px] sm:grid-cols-3 xl:grid-cols-6">
-          <Kpi id="total" rotulo="Total" valor={kpis.total} icone="layers" />
-          <Kpi
-            id="captacao"
-            rotulo="Em Captação"
-            valor={kpis.captacao}
-            icone="users"
-            tom="var(--accent)"
-          />
-          <Kpi
-            id="triagem"
-            rotulo="Em Triagem"
-            valor={kpis.triagem}
-            icone="filter"
-            tom="var(--accent-2)"
-          />
-          <Kpi
-            id="entrevistaSoulan"
-            rotulo="Entrevista Soulan"
-            valor={kpis.entrevistaSoulan}
-            icone="chart"
-            tom="var(--warn)"
-          />
-          <Kpi
-            id="entrevistaCliente"
-            rotulo="Entrevista Cliente"
-            valor={kpis.entrevistaCliente}
-            icone="peak"
-            tom="var(--warn)"
-          />
-          <Kpi
-            id="emAprovacao"
-            rotulo="Em Aprovação"
-            valor={kpis.emAprovacao}
-            icone="clock"
-            tom="var(--warn)"
-          />
+        <div
+          className="mb-[12px] grid gap-[12px]"
+          style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}
+        >
+          <Kpi id={CARD_TOTAL} rotulo="Total" valor={funil.total} icone="layers" />
+          {funil.etapas.map((c) => (
+            <Kpi key={c.chave} card={c} />
+          ))}
         </div>
 
-        <div className="mb-[18px] grid grid-cols-2 gap-[12px] sm:grid-cols-3 xl:grid-cols-5">
-          <Kpi
-            id="aprovados"
-            rotulo="Aprovados"
-            valor={kpis.aprovados}
-            icone="check"
-            tom="var(--ok)"
-          />
-          <Kpi
-            id="contratados"
-            rotulo="Contratados"
-            valor={kpis.contratados}
-            icone="arr"
-            tom="var(--ok)"
-          />
-          <Kpi
-            id="descartados"
-            rotulo="Descartados"
-            valor={kpis.descartados}
-            icone="x"
-            tom="var(--danger)"
-          />
-          <Kpi
-            id="desistiram"
-            rotulo="Desistiram"
-            valor={kpis.desistiram}
-            icone="logout"
-            tom="var(--danger)"
-          />
-          <Kpi id="semVaga" rotulo="Sem Vaga" valor={kpis.semVaga} icone="folder" />
+        <div
+          className="mb-[18px] grid gap-[12px]"
+          style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}
+        >
+          {funil.desfechos.map((c) => (
+            <Kpi key={c.chave} card={c} />
+          ))}
+          <Kpi id={CARD_SEM_VAGA} rotulo="Sem Vaga" valor={funil.semVaga} icone="folder" />
         </div>
       </div>
 
@@ -709,8 +698,8 @@ export default function CentralDeCandidatosPage() {
                         <span className="inline-flex justify-center">
                           {candidaturaViva(l.candidatura.situacao) ? (
                             <StatusPill
-                              tone={tomDaEtapa(l.candidatura.etapa)}
-                              label={CANDIDATURA_ETAPA_LABEL[l.candidatura.etapa]}
+                              tone={tomDaEtapa(l.candidatura.etapa, catalogoEtapas)}
+                              label={rotuloDaEtapa(l.candidatura.etapa, catalogoEtapas)}
                             />
                           ) : (
                             <StatusPill tone="nt" label="Fora Do Funil" />
@@ -922,43 +911,70 @@ export default function CentralDeCandidatosPage() {
     </>
   );
 
-  /** O card de indicador, que é o próprio filtro (§A.12). Clicar no card ativo volta para o Total. */
-  function Kpi({
-    id,
-    rotulo,
-    valor,
-    icone,
-    tom,
-  }: {
-    id: KpiId;
-    rotulo: string;
-    valor: number;
-    icone: IconName;
-    tom?: string;
-  }) {
-    const ativo = cardAtivo === id;
+  /**
+   * ─ O CARD DE INDICADOR, QUE É O PRÓPRIO FILTRO (§A.12) ───────────────────────────────────────
+   *
+   * ELE RECEBE DE DUAS FORMAS, e as duas são o mesmo card na tela: um `CardDeFunil` já resolvido
+   * pela peça compartilhada (as etapas do catálogo e os desfechos), ou os campos soltos dos DOIS
+   * cards que não saem de candidatura nenhuma (o Total e o "Sem Vaga"). Sem essa segunda forma, os
+   * dois precisariam de um `CardDeFunil` de mentira, com cor e ícone inventados só para caber.
+   *
+   * A COR VEM PRONTA no `card.cor`: nas etapas é a que o DIRETOR escolheu no gerenciador, nos
+   * desfechos é a régua do §A.12 (verde é êxito, vermelho é saída sem êxito). Nenhuma cor de etapa
+   * é decidida nesta tela, que era exatamente o defeito da fileira escrita à mão.
+   *
+   * A ETAPA FORA DE CIRCULAÇÃO NÃO PODE PARECER UMA ETAPA NORMAL: ela só aparece porque ainda tem
+   * gente presa dentro, então ganha a borda tracejada e a tag "Inativa". Sem a marca, o card diria
+   * que aquela fila está viva e recebendo gente, e ela não está.
+   *
+   * Clicar no card ativo volta para o Total, que é o toggle de sempre.
+   */
+  function Kpi(
+    props:
+      | { card: CardDeFunil }
+      | { id: string; rotulo: string; valor: number; icone: IconName; tom?: string },
+  ) {
+    const card: CardDeFunil =
+      "card" in props
+        ? props.card
+        : {
+            chave: props.id,
+            rotulo: props.rotulo,
+            valor: props.valor,
+            cor: props.tom ?? "",
+            icone: props.icone,
+          };
+    const cor = card.cor || undefined;
+    const ativo = cardAtivo === card.chave;
     return (
       <GlassCard
         as="button"
         className={cn(
           "fk !px-4 !py-3.5 text-left transition hover:bg-[var(--surface-2)]",
           ativo && "!border-[var(--accent)] ring-1 ring-[var(--accent)]",
+          card.inativa && "border-dashed opacity-80",
         )}
-        onClick={() => setCardAtivo(ativo ? "total" : id)}
+        onClick={() => setCardAtivo(ativo ? CARD_TOTAL : card.chave)}
         aria-pressed={ativo}
+        title={card.inativa ? `${card.rotulo} está fora de circulação` : undefined}
       >
-        <div className="mb-0.5 flex items-center justify-between">
+        <div className="mb-0.5 flex items-center justify-between gap-2">
           <Icon
-            name={icone}
+            name={card.icone}
             className="h-4 w-4 opacity-70"
-            style={tom ? { color: tom } : undefined}
+            style={cor ? { color: cor } : undefined}
           />
+          {card.inativa && (
+            <span className="rounded-md border border-[var(--border)] px-1.5 py-px text-[10px] font-semibold text-faint">
+              Inativa
+            </span>
+          )}
           {ativo && <Icon name="check" className="h-3 w-3 text-accent" />}
         </div>
-        <div className="num" style={tom ? { color: tom } : undefined}>
-          {carregando ? "…" : valor}
+        <div className="num" style={cor ? { color: cor } : undefined}>
+          {carregando ? "…" : card.valor}
         </div>
-        <div className="lbl">{rotulo}</div>
+        <div className="lbl">{card.rotulo}</div>
       </GlassCard>
     );
   }

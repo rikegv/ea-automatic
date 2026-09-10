@@ -183,15 +183,38 @@ describe("O motivo do desvínculo em massa tem a MESMA régua do individual", ()
 });
 
 describe("Os demais corpos em massa recusam valor fora da lista fechada", () => {
-  it("mover etapa em massa recusa etapa desconhecida", () => {
+  /**
+   * ─ A ETAPA MUDOU DE LADO, E O TESTE MUDA COM ELA (etapas do funil viraram catálogo) ───────────
+   *
+   * O CASO DIZIA "o DTO recusa `ONBOARDING`", e isso deixou de ser verdade DE PROPÓSITO: a lista de
+   * etapas é DADO DO DIRETOR (`as_etapas_funil`), e um `@IsIn` sobre uma constante congelada faria
+   * as duas coisas erradas ao mesmo tempo, recusar a etapa que ele criou hoje e aceitar a que ele
+   * inativou ontem. A recusa não sumiu: ela mudou de camada, para o `EtapasFunilService`, que é
+   * quem pode consultar o catálogo VIVO (afirmado nos specs de `as/etapas`).
+   *
+   * O QUE O DTO AINDA GARANTE, e é o que estes dois casos passam a travar: a FORMA. Um `etapa` que
+   * não é string, vazio, ou maior que a coluna, nunca chega ao service, porque nada disso pode ser
+   * uma etapa em nenhum catálogo que o diretor monte.
+   */
+  it("mover etapa em massa recusa etapa vazia e etapa maior que a coluna (forma, não lista)", () => {
     expect(
-      erros(CORPOS.mover.classe, { candidaturaIds: ids(2), etapa: "ONBOARDING" }, "etapa").length,
+      erros(CORPOS.mover.classe, { candidaturaIds: ids(2), etapa: "   " }, "etapa").length,
+    ).toBeGreaterThan(0);
+    expect(
+      erros(CORPOS.mover.classe, { candidaturaIds: ids(2), etapa: "X".repeat(41) }, "etapa").length,
+    ).toBeGreaterThan(0);
+    expect(
+      erros(CORPOS.mover.classe, { candidaturaIds: ids(2), etapa: 7 }, "etapa").length,
     ).toBeGreaterThan(0);
   });
 
-  it("mover etapa em massa aceita etapa do catálogo", () => {
+  it("mover etapa em massa aceita etapa do catálogo, e também a que o diretor ainda vai criar", () => {
     expect(
       erros(CORPOS.mover.classe, { candidaturaIds: ids(2), etapa: "ENTREVISTA_CLIENTE" }),
+    ).toHaveLength(0);
+    // O DTO NÃO SABE, E NÃO DEVE SABER, quais etapas existem: quem decide é o catálogo, em runtime.
+    expect(
+      erros(CORPOS.mover.classe, { candidaturaIds: ids(2), etapa: "PROVA_PRATICA" }),
     ).toHaveLength(0);
   });
 

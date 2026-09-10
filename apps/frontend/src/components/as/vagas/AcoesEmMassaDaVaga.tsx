@@ -40,8 +40,6 @@
 import { useState } from "react";
 import {
   AS_MAXIMO_POR_LOTE,
-  CANDIDATURA_ETAPAS,
-  CANDIDATURA_ETAPA_LABEL,
   CANDIDATURA_SITUACAO_AJUDA,
   CANDIDATURA_SITUACAO_LABEL,
   type AsCandidaturaItem,
@@ -55,6 +53,7 @@ import { Icon } from "@/components/ui/Icon";
 import { Select } from "@/components/ui/Select";
 import { StatusPill } from "@/components/ui/StatusPill";
 import { mensagemDoErro } from "@/lib/as-candidatos";
+import { rotuloDaEtapa, useEtapas } from "@/lib/as-etapas";
 import {
   finalizarPosicaoEmLote,
   moverEtapaEmLote,
@@ -456,8 +455,10 @@ function FinalizarEmLoteModal({
  * gravado nela: a seleção costuma misturar etapas de origem, e é exatamente por isso que o destino é
  * um só e a origem não é perguntada.
  *
- * TODAS AS ETAPAS SÃO OFERECIDAS, e isso espelha a régua do funil de hoje: ele deixou de ser trilho
- * em 27/08, e de qualquer etapa se vai para qualquer outra. A única recusa possível por linha é a
+ * TODAS AS ETAPAS ATIVAS SÃO OFERECIDAS, e isso espelha a régua do funil de hoje: ele deixou de ser
+ * trilho em 27/08, e de qualquer etapa se vai para qualquer outra. A INATIVA fica de fora porque o
+ * backend a recusa ("foi desativada e não recebe mais candidatos"), e num lote a recusa custaria a
+ * linha de todo mundo. A única recusa possível por linha é a
  * pessoa já estar na etapa de destino, e ela volta na lista de falhas com a frase do backend.
  *
  * §A.35: `Select` do design system, nunca `<select>` cru.
@@ -477,6 +478,12 @@ function MoverEmLoteModal({
   onCancelar: () => void;
   onConfirmar: (etapa: CandidaturaEtapa) => void;
 }) {
+  /*
+   * `ativas` PARA O SELETOR, `etapas` PARA O AVISO. O aviso "N já estão em X" fala da etapa que o
+   * consultor ACABOU de escolher, então ela é sempre uma ativa; a lista completa entra aqui porque
+   * `rotuloDaEtapa` é a mesma função em toda a tela e não deve ter duas fontes de rótulo.
+   */
+  const { etapas, ativas } = useEtapas();
   const [etapa, setEtapa] = useState<CandidaturaEtapa | "">("");
   /** Quem já saiu sem êxito não se move: a linha vai falhar, e a tela avisa antes. */
   const parados = selecionadas.filter((c) => !podeDecidir(c.situacao)).length;
@@ -499,9 +506,9 @@ function MoverEmLoteModal({
         <Select
           value={etapa}
           onChange={(v) => setEtapa(v as CandidaturaEtapa)}
-          options={CANDIDATURA_ETAPAS.map((e) => ({
-            value: e,
-            label: CANDIDATURA_ETAPA_LABEL[e],
+          options={ativas.map((e) => ({
+            value: e.codigo,
+            label: e.rotulo,
           }))}
           placeholder="Escolha para onde estas pessoas vão"
           ariaLabel="Etapa de destino"
@@ -521,7 +528,7 @@ function MoverEmLoteModal({
       )}
       {jaEstao > 0 && (
         <AvisoDaSelecao>
-          {frasePessoas(jaEstao)} da seleção já estão em {CANDIDATURA_ETAPA_LABEL[etapa as CandidaturaEtapa]}.
+          {frasePessoas(jaEstao)} da seleção já estão em {rotuloDaEtapa(etapa, etapas)}.
         </AvisoDaSelecao>
       )}
     </ModalDeLote>

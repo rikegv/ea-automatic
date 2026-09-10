@@ -67,13 +67,22 @@
  * entre dois consultores) já explicam o que aconteceu e o que fazer. Reescrever aqui daria duas
  * versões da mesma regra, e a da tela envelheceria primeiro.
  *
+ * ─ VOLTAR PARA A SELEÇÃO: o desfazer do envio (decisão do diretor) ───────────────────────────
+ *
+ * A QUARTA SEÇÃO, e ela aparece EXATAMENTE onde a de enviar desaparece: quem já está enviado não
+ * recebe o card de envio (a situação atual nunca vira card), e é só ele que recebe este botão. As
+ * duas nunca convivem, e a simetria não é estética: a pergunta "para onde mando esta pessoa" e a
+ * pergunta "como desfaço o que mandei" são a mesma decisão vista dos dois lados.
+ *
+ * ELA NÃO PEDE MOTIVO, e é a única seção de desfecho que não pede. O motivo que existia era o do
+ * ENVIO, e a reversão o LIMPA da linha viva porque ele perdeu o referente: o histórico guarda o
+ * original, com autor e data, e é de lá que a ficha continua contando essa parte da história.
+ *
  * §A.11 (sem travessão), §A.24 (title case em título e rótulo de etapa).
  */
 
 import { useState } from "react";
 import {
-  CANDIDATURA_ETAPAS,
-  CANDIDATURA_ETAPA_LABEL,
   CANDIDATURA_SITUACAO_AJUDA,
   CANDIDATURA_SITUACAO_LABEL,
   ehSaidaSemExito,
@@ -91,9 +100,11 @@ import {
   mensagemDoErro,
   moverEtapa,
   registrarSaida,
+  reverterEnvioParaAdmissao,
 } from "@/lib/as-candidatos";
-import { tomDaEtapa, tomDaSituacao } from "@/lib/as-candidatos-visual";
-import { podeAprovar, podeMoverNoFunil } from "@/lib/as-vaga-acoes";
+import { tomDaSituacao } from "@/lib/as-candidatos-visual";
+import { ordemDaEtapa, rotuloDaEtapa, tomDaEtapa, useEtapas } from "@/lib/as-etapas";
+import { podeAprovar, podeMoverNoFunil, podeReverterEnvio } from "@/lib/as-vaga-acoes";
 import { cn } from "@/lib/cn";
 
 type Saida = "DESCARTADO" | "DESISTIU" | "ENVIADO_PARA_ADMISSAO";
@@ -124,6 +135,16 @@ export function MoverCandidaturaModal({
   onClose: () => void;
   onFeito: () => void;
 }) {
+  /*
+   * DUAS LISTAS, E A DIFERENÇA É O QUE IMPEDE UM DEFEITO SILENCIOSO:
+   *  . `ativas` desenha os CARDS. Oferecer uma etapa que o diretor tirou de circulação levaria a
+   *    um 400 do backend ("foi desativada e não recebe mais candidatos") depois do clique.
+   *  . `etapas` (a lista COMPLETA) resolve o rótulo e a POSIÇÃO da etapa atual. Se a pessoa está
+   *    parada numa etapa que foi inativada depois, ela não está nas ativas, e calcular a posição
+   *    dela ali daria "não encontrada": todos os cards diriam "Avançar para cá", inclusive os que
+   *    ficam ATRÁS dela no funil.
+   */
+  const { etapas, ativas } = useEtapas();
   const [erro, setErro] = useState<string | null>(null);
   const [ocupado, setOcupado] = useState(false);
   const [saidaAberta, setSaidaAberta] = useState<Saida | null>(null);
@@ -183,7 +204,14 @@ export function MoverCandidaturaModal({
     titulo: string;
     mensagem: string;
     rotulo: string;
-    tone: "default" | "danger";
+    /*
+     * O `warn` ENTROU COM A REVERSÃO, e é o tom que faltava aqui. `default` veste a ação de SUCESSO
+     * (check azul) e `danger` a veste de IRREVERSÍVEL (vermelho); voltar alguém para a seleção não é
+     * nenhum dos dois: é correção legítima, que o consultor tem o direito de fazer e mesmo assim
+     * precisa parar para ler. O `ConfirmDialog` já servia os três tons, e nenhuma confirmação
+     * existente muda de aparência por causa desta linha.
+     */
+    tone: "default" | "danger" | "warn";
     acao: () => Promise<unknown>;
     falha: string;
   } | null>(null);
@@ -299,7 +327,7 @@ export function MoverCandidaturaModal({
           </div>
           <p className="mt-1 text-[12.5px] text-dim">
             {candidatura.vagaNome ?? candidatura.vagaCodigo ?? "não informado"}. Etapa atual:{" "}
-            {CANDIDATURA_ETAPA_LABEL[candidatura.etapa]}.
+            {rotuloDaEtapa(candidatura.etapa, etapas)}.
           </p>
         </div>
 
@@ -349,19 +377,25 @@ export function MoverCandidaturaModal({
                 )}
               </div>
               {/* ── O SELETOR DE ETAPA: UM CARD POR ETAPA DO FUNIL ─────────────────────────
-                  NA ORDEM DO PROCESSO (`CANDIDATURA_ETAPAS`), da Captação à Aprovação, porque é
-                  assim que o time lê o funil. Cada card diz, na linha de apoio, o que aquele clique
+                  NA ORDEM DO PROCESSO (a coluna `ordem` do catálogo), da primeira à última, porque
+                  é assim que o time lê o funil. Etapa nova cadastrada pelo diretor no meio do funil
+                  aparece no meio, sem esta tela ser tocada. Cada card diz, na linha de apoio, o que aquele clique
                   significa em relação a onde a pessoa está: avançar, voltar ou o lugar atual. Sem
                   essa linha, "Triagem" é ambíguo para quem está na Entrevista.
 
-                  CINCO COLUNAS EM TELA LARGA, DUAS NO CELULAR: cabem numa fileira só, e a fileira é
-                  o funil desenhado. */}
+                  ATÉ CINCO COLUNAS EM TELA LARGA, DUAS NO CELULAR: a fileira é o funil desenhado.
+                  Com mais etapas do que colunas ela quebra em linhas, na ordem, e continua lendo
+                  como funil. */}
               {moveNoFunil && (
               <Secao titulo="Mover No Funil">
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
-                  {CANDIDATURA_ETAPAS.map((e, i) => {
+                  {ativas.map((etapa) => {
+                    const e = etapa.codigo;
                     const atual = e === candidatura.etapa;
-                    const posAtual = CANDIDATURA_ETAPAS.indexOf(candidatura.etapa);
+                    // A COMPARAÇÃO É POR `ordem` DO CATÁLOGO, e não por posição no array desenhado:
+                    // a etapa atual pode nem estar entre as ativas, e aí o array não teria posição
+                    // para ela. Quem não é encontrada vai para o FIM (nunca para antes da primeira).
+                    const posAtual = ordemDaEtapa(candidatura.etapa, etapas);
                     return (
                       <button
                         key={e}
@@ -371,8 +405,8 @@ export function MoverCandidaturaModal({
                         onClick={() => {
                           setMovendoPara(e);
                           pedirConfirmacao({
-                            titulo: `Mover Para ${CANDIDATURA_ETAPA_LABEL[e]}?`,
-                            mensagem: `${candidatura.candidatoNome} sai de ${CANDIDATURA_ETAPA_LABEL[candidatura.etapa]} e passa a ${CANDIDATURA_ETAPA_LABEL[e]}. Mover de etapa não aprova nem encerra ninguém, e dá para mover de novo depois.`,
+                            titulo: `Mover Para ${etapa.rotulo}?`,
+                            mensagem: `${candidatura.candidatoNome} sai de ${rotuloDaEtapa(candidatura.etapa, etapas)} e passa a ${etapa.rotulo}. Mover de etapa não aprova nem encerra ninguém, e dá para mover de novo depois.`,
                             rotulo: "Mover",
                             tone: "default",
                             acao: () => moverEtapa(candidatura.id, e, token),
@@ -399,11 +433,11 @@ export function MoverCandidaturaModal({
                                 da etapa na tabela. `!bg-transparent`, sem borda e sem espaço zera
                                 a caixa da pill e deixa só o ponto: nenhuma cor nova entrou no
                                 sistema por causa deste card. */}
-                            <span className={cn("pill mt-0.5 !gap-0 !border-0 !bg-transparent !p-0", tomDaEtapa(e))}>
+                            <span className={cn("pill mt-0.5 !gap-0 !border-0 !bg-transparent !p-0", tomDaEtapa(e, etapas))}>
                               <span className="pd" />
                             </span>
                             <span className="text-[12.5px] font-semibold leading-tight text-text">
-                              {CANDIDATURA_ETAPA_LABEL[e]}
+                              {etapa.rotulo}
                             </span>
                           </span>
                           {atual && <Icon name="check" className="mt-0.5 h-3.5 w-3.5 flex-none text-accent" />}
@@ -413,7 +447,7 @@ export function MoverCandidaturaModal({
                             ? "Etapa atual"
                             : movendoPara === e && ocupado
                               ? "Movendo…"
-                              : i > posAtual
+                              : etapa.ordem > posAtual
                                 ? "Avançar para cá"
                                 : "Voltar para cá"}
                         </span>
@@ -530,6 +564,55 @@ export function MoverCandidaturaModal({
                   {saidaAberta === sa && caixaDeMotivo(sa)}
                 </Secao>
               ))}
+
+              {/* ─ VOLTAR PARA A SELEÇÃO: o desfazer do envio, e SÓ para quem está enviado ──────
+                  ┌─ POR QUE ELE EXISTE (decisão do diretor) ──────────────────────────────────────┐
+                  │ MANDAR A PESSOA ERRADA PARA A ESTEIRA É ERRO DE CLIQUE, e erro de clique tem de │
+                  │ ser desfeito por quem o cometeu, no minuto seguinte. Enquanto ele não é         │
+                  │ desfeito, a pessoa errada segue OCUPANDO uma posição da vaga que precisa dela.  │
+                  └────────────────────────────────────────────────────────────────────────────────┘
+
+                  O RÓTULO DESCREVE O EFEITO, NÃO O MECANISMO: "Voltar para a seleção" é o que
+                  acontece com a pessoa (ela volta a estar em seleção, na etapa em que parou, e volta
+                  a contar em Candidatos Em Processo). "Reverter" é o nome da operação para quem
+                  escreveu o código, e obrigaria o consultor a deduzir o que exatamente é revertido.
+                  Botão é AÇÃO, então escrita normal (§A.24); o título da seção é TÍTULO, e é ele que
+                  vai em title case.
+
+                  ELE SÓ EXISTE PARA QUEM ESTÁ ENVIADO (`podeReverterEnvio`, espelho do backend).
+                  Em qualquer outra situação a rota devolve 409, e um botão que só sabe dar 409 é
+                  ruído que ensina o consultor a ignorar a tela.
+
+                  NÃO DISPARA NO CLIQUE, como nenhuma ação de estado deste modal: ele PERGUNTA, e a
+                  pergunta diz as três coisas que mudam (a etapa em que a pessoa volta a ficar, a
+                  posição que fica livre e o motivo do envio, que sai da linha e fica no histórico).
+                  Sem a última frase, o motivo sumiria da ficha sem ninguém ter sido avisado. */}
+              {podeReverterEnvio(candidatura.situacao) && (
+                <Secao titulo="Voltar Para A Seleção">
+                  <Button
+                    className="px-4 py-2.5"
+                    disabled={ocupado}
+                    onClick={() =>
+                      pedirConfirmacao({
+                        titulo: "Voltar Para A Seleção?",
+                        mensagem: `${candidatura.candidatoNome} sai da esteira admissional e volta para a seleção, na etapa ${rotuloDaEtapa(candidatura.etapa, etapas)}, que é onde ela parou. A posição que ela ocupava fica livre na vaga. O motivo do envio sai da ficha e continua registrado no histórico, com quem reverteu.`,
+                        rotulo: "Voltar para a seleção",
+                        // `warn` e não `danger`: desfazer um envio errado é correção legítima, não
+                        // acusação, e mesmo assim é decisão registrada, que se lê antes de confirmar.
+                        tone: "warn",
+                        acao: () => reverterEnvioParaAdmissao(candidatura.id, token),
+                        falha: "Falha ao voltar o candidato para a seleção.",
+                      })
+                    }
+                  >
+                    Voltar para a seleção
+                  </Button>
+                  <p className="mt-2 text-[12px] text-faint">
+                    Desfaz o envio para a admissão: a pessoa volta para a etapa em que estava, a
+                    posição dela fica livre na vaga e o motivo do envio fica só no histórico.
+                  </p>
+                </Secao>
+              )}
             </>
           )}
 

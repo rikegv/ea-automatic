@@ -29,8 +29,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AS_CANDIDATO_ORIGEM,
   AS_CANDIDATO_ORIGEM_LABEL,
-  CANDIDATURA_ETAPAS,
-  CANDIDATURA_ETAPA_LABEL,
   UFS,
   isValidCpf,
   normalizeCpf,
@@ -56,6 +54,7 @@ import {
   reentradaPrecisaCiencia,
   registrarContato,
 } from "@/lib/as-candidatos";
+import { etapaInicial, useEtapas } from "@/lib/as-etapas";
 import { ConfirmarReentradaModal } from "@/components/as/candidatos/ConfirmarReentradaModal";
 
 interface Form {
@@ -120,7 +119,30 @@ export function NovoCandidatoModal({
   const [usarExistente, setUsarExistente] = useState<Existente | null>(null);
 
   const [vagaId, setVagaId] = useState(vagaSugerida ?? "");
-  const [etapa, setEtapa] = useState<CandidaturaEtapa>("CAPTACAO");
+  /**
+   * ─ A ETAPA DE ENTRADA NASCE VAZIA E É PREENCHIDA PELO CATÁLOGO ────────────────────────────────
+   *
+   * AQUI HAVIA `useState("CAPTACAO")`, e esse literal era um dos TRÊS donos da decisão de onde a
+   * candidatura começa: o `DEFAULT` da coluna no banco, a régua do `caminhoAteEtapa` e esta linha.
+   * Os três concordavam por coincidência, e o do banco era capaz de apontar para uma etapa que o
+   * diretor tivesse inativado. Hoje o dono é UM, a coluna `inicial` do catálogo.
+   *
+   * O CAMPO ABRE VAZIO POR UM INSTANTE, e isso é preferível a abrir com um palpite: o catálogo
+   * chega em milissegundos (promessa memoizada, compartilhada com o resto da tela), e um valor
+   * chutado que depois se corrige sozinho é pior do que um campo que ainda não decidiu.
+   */
+  const { ativas: etapasAtivas } = useEtapas();
+  const inicial = etapaInicial(etapasAtivas);
+  const [etapa, setEtapa] = useState<CandidaturaEtapa>("");
+
+  /*
+   * Chegou o catálogo, o campo assume a etapa de nascimento. `etapa === ""` na condição é o que
+   * impede a escolha do consultor de ser desfeita: uma vez que ele trocou, o efeito não volta a
+   * escrever, e o catálogo só chega uma vez por carga de página de qualquer forma.
+   */
+  useEffect(() => {
+    if (etapa === "" && inicial) setEtapa(inicial.codigo);
+  }, [etapa, inicial]);
   const [observacao, setObservacao] = useState("");
 
   const [salvando, setSalvando] = useState(false);
@@ -236,9 +258,13 @@ export function NovoCandidatoModal({
           return;
         }
         setReentrada(null);
-        // A ETAPA DE ENTRADA: a candidatura sempre nasce em Captação, e o backend só aceita avanço de
-        // uma etapa por vez. A tela caminha até a etapa escolhida, um passo de cada vez.
-        for (const proxima of caminhoAteEtapa(etapa)) {
+        // A ETAPA DE ENTRADA: a candidatura nasce na etapa marcada como INICIAL no catálogo (quem
+        // decide é o backend, lendo a coluna). Escolhida outra, a tela move até lá, num passo só.
+        // Escolhida a própria etapa de nascimento, não há movimento nenhum a fazer, e o histórico
+        // da pessoa não ganha um evento de mudança que nunca aconteceu.
+        // `etapa` vazia significa catálogo ainda não chegado, e aí não há para onde mover: a
+        // candidatura fica onde o backend a fez nascer, que é justamente a etapa inicial.
+        for (const proxima of etapa ? caminhoAteEtapa(etapa, inicial?.codigo ?? null) : []) {
           await moverEtapa(candidatura.id, proxima, token);
         }
         if (observacao.trim()) {
@@ -467,15 +493,16 @@ export function NovoCandidatoModal({
                 <Combobox
                   value={etapa}
                   onChange={(v) => setEtapa(v as CandidaturaEtapa)}
-                  options={CANDIDATURA_ETAPAS.map((e) => ({
-                    value: e,
-                    label: CANDIDATURA_ETAPA_LABEL[e],
+                  options={etapasAtivas.map((e) => ({
+                    value: e.codigo,
+                    label: e.rotulo,
                   }))}
                   ariaLabel="Etapa em que entra"
                   disabled={!vagaId}
                 />
                 <span className="text-[12px] text-faint">
-                  Captação é o começo do funil. Escolha adiante quando a pessoa já chegou triada.
+                  {inicial ? `${inicial.rotulo} é o começo do funil.` : "O começo do funil."} Escolha
+                  adiante quando a pessoa já chegou triada.
                 </span>
               </Campo>
 

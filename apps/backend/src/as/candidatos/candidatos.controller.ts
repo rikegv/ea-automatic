@@ -182,6 +182,32 @@ export class CandidatosController {
   }
 
   /**
+   * REVERTER O ENVIO PARA A ADMISSÃO: desfaz o envio recente e devolve a pessoa à seleção, na etapa
+   * em que ela estava. A posição que ela ocupava volta a ficar livre.
+   *
+   * ┌─ DENTRO DESTA CONTROLLER, e isso é RBAC, não organização ──────────────────────────────────┐
+   * │ O `MenuGuard` resolve o coringa PELO NOME DA CLASSE (`"CandidatosController.*"`, em          │
+   * │ `domain/menus`), e OPERAÇÃO NÃO REIVINDICADA PASSA: uma controller nova para esta rota       │
+   * │ nasceria ABERTA a qualquer usuário logado, sem nada falhar e sem nenhum teste vermelho.      │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * SEM `@Roles`, como a aprovação, a finalização de posição e a própria saída que ela desfaz
+   * (decisão do diretor): qualquer consultor reverte, porque erro recente tem de ser desfeito
+   * rápido. Quem restringe o módulo inteiro é o menu `as-candidatos`, no `MenuGuard`.
+   *
+   * POST e CORPO VAZIO, como `aprovar`: a reversão registra um FATO novo do processo, não a edição
+   * de uma propriedade, e não tem parâmetro nenhum a receber. Quem reverteu vem da SESSÃO, nunca do
+   * corpo: é trilha, não campo de formulário.
+   */
+  @Post("candidaturas/:id/reverter-envio")
+  reverterEnvioParaAdmissao(
+    @Param("id", ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.candidatos.reverterEnvioParaAdmissao(id, user.id);
+  }
+
+  /**
    * TROCAR A VAGA da candidatura (item 5 do diretor): corrige a alocação errada MANTENDO a linha e a
    * etapa. Distinta do "Trazer De Volta", que cria processo novo e é de qualquer consultor.
    *

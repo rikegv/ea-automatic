@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CANDIDATURA_ETAPAS, CANDIDATURA_SITUACOES } from "@ea/shared-types";
+import { CANDIDATURA_SITUACOES, ETAPAS_FUNIL_SEMENTE } from "@ea/shared-types";
 import { ApiError } from "./api";
 import {
   caminhoAteEtapa,
@@ -8,9 +8,19 @@ import {
   entrevistaClienteEhOpcional,
   bancoPrecisaCiencia,
   formatCpf,
-  kpiDaCandidatura,
+  cardDaCandidatura,
   reentradaPrecisaCiencia,
 } from "./as-candidatos";
+
+/**
+ * O FUNIL DO TESTE. A lista de etapas passou a ser DADO DO DIRETOR (`as_etapas_funil`), então ela
+ * chega às funções por PARÂMETRO e não por constante importada. O corpo de prova aqui é a semente
+ * (as cinco de hoje), usada como um catálogo qualquer: o que estes testes afirmam é a RÉGUA sobre a
+ * lista recebida, e ela vale para a lista que o diretor cadastrar depois.
+ */
+const ETAPAS = ETAPAS_FUNIL_SEMENTE.map((e) => e.codigo);
+/** A etapa de nascimento do catálogo de prova: hoje a Captação, e amanhã o que ele marcar. */
+const NASCE_EM = "CAPTACAO";
 
 describe("funil da Central de Candidatos (espelho do domínio do backend)", () => {
   /**
@@ -19,36 +29,36 @@ describe("funil da Central de Candidatos (espelho do domínio do backend)", () =
    * a frente e para trás, porque a operação real não é linear.
    */
   it("oferece todas as outras etapas como destino, e nunca a atual", () => {
-    for (const de of CANDIDATURA_ETAPAS) {
-      const destinos = destinosDeEtapa(de);
-      expect(destinos).toHaveLength(CANDIDATURA_ETAPAS.length - 1);
+    for (const de of ETAPAS) {
+      const destinos = destinosDeEtapa(de, ETAPAS);
+      expect(destinos).toHaveLength(ETAPAS.length - 1);
       expect(destinos).not.toContain(de);
     }
   });
 
   it("VOLTA de etapa: da Aprovação se oferece o caminho de volta ao começo", () => {
-    expect(destinosDeEtapa("APROVACAO")).toContain("CAPTACAO");
-    expect(destinosDeEtapa("ENTREVISTA_CLIENTE")).toContain("ENTREVISTA_SOULAN");
+    expect(destinosDeEtapa("APROVACAO", ETAPAS)).toContain("CAPTACAO");
+    expect(destinosDeEtapa("ENTREVISTA_CLIENTE", ETAPAS)).toContain("ENTREVISTA_SOULAN");
   });
 
   it("PULA etapa: da Captação se vai direto para a Aprovação", () => {
-    expect(destinosDeEtapa("CAPTACAO")).toContain("APROVACAO");
+    expect(destinosDeEtapa("CAPTACAO", ETAPAS)).toContain("APROVACAO");
   });
 
   it("pular a Entrevista Cliente é caminho legítimo, não exceção escondida", () => {
-    expect(entrevistaClienteEhOpcional()).toBe(true);
-    expect(destinosDeEtapa("ENTREVISTA_SOULAN")).toContain("ENTREVISTA_CLIENTE");
-    expect(destinosDeEtapa("ENTREVISTA_SOULAN")).toContain("APROVACAO");
+    expect(entrevistaClienteEhOpcional(ETAPAS)).toBe(true);
+    expect(destinosDeEtapa("ENTREVISTA_SOULAN", ETAPAS)).toContain("ENTREVISTA_CLIENTE");
+    expect(destinosDeEtapa("ENTREVISTA_SOULAN", ETAPAS)).toContain("APROVACAO");
   });
 });
 
 describe("caminhoAteEtapa (a etapa de entrada do cadastro)", () => {
   it("entrar em Captação não exige movimento nenhum", () => {
-    expect(caminhoAteEtapa("CAPTACAO")).toEqual([]);
+    expect(caminhoAteEtapa("CAPTACAO", NASCE_EM)).toEqual([]);
   });
 
   it("entrar em Triagem é um passo só", () => {
-    expect(caminhoAteEtapa("TRIAGEM")).toEqual(["TRIAGEM"]);
+    expect(caminhoAteEtapa("TRIAGEM", NASCE_EM)).toEqual(["TRIAGEM"]);
   });
 
   /**
@@ -57,70 +67,114 @@ describe("caminhoAteEtapa (a etapa de entrada do cadastro)", () => {
    * que ninguém escolheu.
    */
   it("entrar em Aprovação é UM passo, e não a caminhada inteira do funil", () => {
-    expect(caminhoAteEtapa("APROVACAO")).toEqual(["APROVACAO"]);
+    expect(caminhoAteEtapa("APROVACAO", NASCE_EM)).toEqual(["APROVACAO"]);
+  });
+
+  /**
+   * A ETAPA DE NASCIMENTO NÃO É MAIS `"CAPTACAO"` ESCRITO NA FUNÇÃO: ela é a coluna `inicial` do
+   * catálogo. Se o diretor marcar a Triagem como inicial, cadastrar alguém "entrando em Triagem"
+   * NÃO pode disparar movimento nenhum, senão o histórico da pessoa ganha um evento de mudança de
+   * etapa que nunca aconteceu, e a Captação (que ela nunca viu) aparece como origem.
+   */
+  it("entrar na PRÓPRIA etapa de nascimento não exige movimento, seja ela qual for", () => {
+    expect(caminhoAteEtapa("TRIAGEM", "TRIAGEM")).toEqual([]);
+    expect(caminhoAteEtapa("CAPTACAO", "TRIAGEM")).toEqual(["CAPTACAO"]);
+  });
+
+  /**
+   * SEM ETAPA INICIAL MARCADA no catálogo, a tela não inventa uma: o movimento é pedido, e quem
+   * recusa com a frase certa é o backend. Adivinhar aqui faria a tela discordar dele em silêncio.
+   */
+  it("sem etapa de nascimento conhecida, o destino continua sendo um passo explícito", () => {
+    expect(caminhoAteEtapa("CAPTACAO", null)).toEqual(["CAPTACAO"]);
   });
 
   it("todo destino do caminho é um movimento permitido pela régua", () => {
-    for (const destino of CANDIDATURA_ETAPAS) {
-      for (const passo of caminhoAteEtapa(destino)) {
-        expect(destinosDeEtapa("CAPTACAO")).toContain(passo);
+    for (const destino of ETAPAS) {
+      for (const passo of caminhoAteEtapa(destino, NASCE_EM)) {
+        expect(destinosDeEtapa("CAPTACAO", ETAPAS)).toContain(passo);
       }
     }
   });
 });
 
-describe("kpiDaCandidatura (o card é o filtro, e nenhum estado fica sem número à vista)", () => {
-  it("aprovado e contratado são cards DIFERENTES, porque são estados diferentes", () => {
-    expect(kpiDaCandidatura("APROVACAO", "APROVADO")).toBe("aprovados");
-    expect(kpiDaCandidatura("APROVACAO", "ENVIADO_PARA_ADMISSAO")).toBe("contratados");
+describe("cardDaCandidatura (a chave do card é o CÓDIGO, e não um nome escrito à mão)", () => {
+  /**
+   * A RÉGUA EM UMA FRASE: quem está ATIVO é contado pela ETAPA, quem já recebeu decisão é contado
+   * pela SITUAÇÃO. É a mesma do contrato do backend (`porEtapa` conta só quem está em seleção,
+   * `porDesfecho` conta o resto), e é o que faz as duas fileiras do sistema, a da Central De Vagas e
+   * a da Central De Candidatos, responderem pela mesma pergunta.
+   */
+  it("a etapa NOVA do diretor ganha a chave dela, e não cai no card de Aprovação", () => {
+    // O DEFEITO QUE ESTA FUNÇÃO SUBSTITUI, afirmado ao contrário: a versão anterior tinha cinco
+    // ramos de etapa escritos à mão e um `return` final, então qualquer etapa fora daquela lista era
+    // contada como "Em Aprovação", em silêncio. Aqui a chave é o próprio código.
+    expect(cardDaCandidatura("DINAMICA_DE_GRUPO", "ATIVO")).toBe("DINAMICA_DE_GRUPO");
+    expect(cardDaCandidatura("PROVA_TECNICA", "ATIVO")).toBe("PROVA_TECNICA");
   });
 
-  it("descartado e desistiu são cards DIFERENTES: o time recusou, ou a pessoa saiu", () => {
-    expect(kpiDaCandidatura("TRIAGEM", "DESCARTADO")).toBe("descartados");
-    expect(kpiDaCandidatura("TRIAGEM", "DESISTIU")).toBe("desistiram");
+  it("cada etapa viva do catálogo cai numa chave distinta", () => {
+    const chaves = ETAPAS.map((e) => cardDaCandidatura(e, "ATIVO"));
+    expect(new Set(chaves).size).toBe(ETAPAS.length);
   });
 
   it("a situação vence a etapa: quem saiu na triagem não conta como Em Triagem", () => {
-    expect(kpiDaCandidatura("TRIAGEM", "ATIVO")).toBe("triagem");
-    expect(kpiDaCandidatura("TRIAGEM", "DESCARTADO")).not.toBe("triagem");
+    expect(cardDaCandidatura("TRIAGEM", "ATIVO")).toBe("TRIAGEM");
+    expect(cardDaCandidatura("TRIAGEM", "DESCARTADO")).toBe("DESCARTADO");
+    expect(cardDaCandidatura("TRIAGEM", "DESCARTADO")).not.toBe("TRIAGEM");
   });
 
-  it("as duas entrevistas têm cada uma o seu card", () => {
-    expect(kpiDaCandidatura("ENTREVISTA_SOULAN", "ATIVO")).toBe("entrevistaSoulan");
-    expect(kpiDaCandidatura("ENTREVISTA_CLIENTE", "ATIVO")).toBe("entrevistaCliente");
+  it("ALOCADO deixou de ser fundido com APROVADO: são cards DIFERENTES", () => {
+    // A FUSÃO ESCONDIA GENTE: `APROVADO` reserva a posição e `ALOCADO` a entrega, e somados no mesmo
+    // card ninguém enxergava quantos já tinham sido entregues à vaga.
+    expect(cardDaCandidatura("APROVACAO", "APROVADO")).toBe("APROVADO");
+    expect(cardDaCandidatura("APROVACAO", "ALOCADO")).toBe("ALOCADO");
+    expect(cardDaCandidatura("APROVACAO", "ALOCADO")).not.toBe(
+      cardDaCandidatura("APROVACAO", "APROVADO"),
+    );
   });
 
-  it("quem está ATIVO na etapa de Aprovação tem card próprio, e não some mais da conta", () => {
-    expect(kpiDaCandidatura("APROVACAO", "ATIVO")).toBe("emAprovacao");
+  it("aprovado, contratado, descartado e desistiu continuam separados", () => {
+    expect(cardDaCandidatura("APROVACAO", "ENVIADO_PARA_ADMISSAO")).toBe("ENVIADO_PARA_ADMISSAO");
+    expect(cardDaCandidatura("TRIAGEM", "DESISTIU")).toBe("DESISTIU");
+    const chaves = CANDIDATURA_SITUACOES.filter((s) => s !== "ATIVO").map((s) =>
+      cardDaCandidatura("TRIAGEM", s),
+    );
+    expect(new Set(chaves).size).toBe(chaves.length);
   });
 
-  it("ALOCADO NÃO é classificado pela etapa: entrega não pode virar fila viva", () => {
-    // O defeito dormente: sem ramo de situação, ele escapava dos desfechos e caía no card da ETAPA,
-    // então quem já tinha entregue a posição era contado como gente esperando decisão.
-    expect(kpiDaCandidatura("TRIAGEM", "ALOCADO")).not.toBe("triagem");
-    expect(kpiDaCandidatura("APROVACAO", "ALOCADO")).not.toBe("emAprovacao");
-    expect(kpiDaCandidatura("CAPTACAO", "ALOCADO")).toBe("aprovados");
+  it("os desfechos BONS não voltam para o card de etapa, e é aqui que o atalho fácil erra", () => {
+    // A ARMADILHA MEDIDA: `candidaturaViva` é o complemento de `ehSaidaSemExito`, então ela devolve
+    // VERDADEIRO para APROVADO, ALOCADO e ENVIADO_PARA_ADMISSAO. Cortar a fileira por ela mandaria
+    // os três de volta para os cards de ETAPA, e a tela diria que gente já aprovada continua
+    // esperando decisão na Triagem. O corte é `ATIVO`, e este teste é a trava disso.
+    for (const situacao of ["APROVADO", "ALOCADO", "ENVIADO_PARA_ADMISSAO"] as const) {
+      for (const etapa of ETAPAS) {
+        expect(cardDaCandidatura(etapa, situacao)).not.toBe(etapa);
+        expect(cardDaCandidatura(etapa, situacao)).toBe(situacao);
+      }
+    }
   });
 
-  it("ALOCADO cai com APROVADO, e NÃO com quem já foi para a esteira admissional", () => {
-    expect(kpiDaCandidatura("APROVACAO", "ALOCADO")).toBe("aprovados");
-    expect(kpiDaCandidatura("APROVACAO", "ALOCADO")).not.toBe("contratados");
-  });
-
-  it("a etapa não muda o card de quem já tem desfecho, e isso vale para o ALOCADO também", () => {
-    const cards = CANDIDATURA_ETAPAS.map((e) => kpiDaCandidatura(e, "ALOCADO"));
-    expect(new Set(cards).size).toBe(1);
-  });
-
-  it("as cinco etapas vivas caem, cada uma, num card distinto", () => {
-    const cards = CANDIDATURA_ETAPAS.map((e) => kpiDaCandidatura(e, "ATIVO"));
-    expect(new Set(cards).size).toBe(CANDIDATURA_ETAPAS.length);
+  it("a etapa não muda o card de quem já tem desfecho", () => {
+    const chaves = ETAPAS.map((e) => cardDaCandidatura(e, "ALOCADO"));
+    expect(new Set(chaves).size).toBe(1);
   });
 
   it("toda combinação de etapa e situação tem card: nenhum estado sem número", () => {
-    for (const etapa of CANDIDATURA_ETAPAS) {
+    for (const etapa of ETAPAS) {
       for (const situacao of CANDIDATURA_SITUACOES) {
-        expect(kpiDaCandidatura(etapa, situacao)).toBeTruthy();
+        expect(cardDaCandidatura(etapa, situacao)).toBeTruthy();
+      }
+    }
+  });
+
+  it("as chaves reservadas da tela NÃO colidem com código de catálogo", () => {
+    // `total` e `semVaga` são minúsculos de propósito: código de etapa e de situação é MAIÚSCULO no
+    // sistema inteiro, então nenhum card do catálogo pode roubar o filtro de um dos dois.
+    for (const etapa of ETAPAS) {
+      for (const situacao of CANDIDATURA_SITUACOES) {
+        expect(["total", "semVaga"]).not.toContain(cardDaCandidatura(etapa, situacao));
       }
     }
   });

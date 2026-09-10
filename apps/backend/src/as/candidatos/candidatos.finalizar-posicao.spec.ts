@@ -2,6 +2,7 @@ import { ConflictException } from "@nestjs/common";
 import { describe, expect, it, vi } from "vitest";
 import { CandidatosService } from "./candidatos.service";
 import { asCandidaturaEtapas, asCandidaturas } from "../../db/schema";
+import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
 
 /**
  * ─ FINALIZAR POSIÇÃO: a posição da vaga é ENTREGUE, com nome e sobrenome ────────────────────────
@@ -131,7 +132,7 @@ function makeDb(cenario: {
     query: { asCandidaturas: { findFirst: vi.fn().mockResolvedValue(c) } },
   };
 
-  return { service: new CandidatosService(db as never), ordem, updates, inserts };
+  return { service: new CandidatosService(db as never, catalogoDeEtapasFingido() as never), ordem, updates, inserts };
 }
 
 const doUpdate = (updates: Escrita[]) =>

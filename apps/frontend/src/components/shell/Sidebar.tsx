@@ -22,6 +22,7 @@ import {
   ASSINATURAS,
   BENEFICIOS,
   SELECAO,
+  ADMINISTRACAO,
 } from "@/lib/navegacao";
 
 const PAPEL_ROTULO: Record<Papel, string> = {
@@ -78,7 +79,12 @@ export function Sidebar() {
     temMenu(n.codigo),
   );
   const temSelecao = SELECAO.some((n) => temMenu(n.codigo));
-  const temAdministracao = isAdmin || podeAbrirAdministracao(temMenu);
+  // OS ITENS PRÓPRIOS DA ADMINISTRAÇÃO seguem a régua de sempre, `temMenu` do código de cada um. O
+  // HUB tem a régua dele (admin ou algum menu da camada `/admin`), e a seção existe se houver
+  // qualquer um dos dois: trocar um item de seção não pode trocar quem o enxerga (§A.23).
+  const administracaoVisivel = ADMINISTRACAO.filter((n) => temMenu(n.codigo));
+  const temHubGerencial = isAdmin || podeAbrirAdministracao(temMenu);
+  const temAdministracao = temHubGerencial || administracaoVisivel.length > 0;
   // O SEPARADOR É DIVISOR ENTRE GRUPOS, então só existe se veio grupo antes dele. Sem isto, o
   // consultor só de A&S abriria a barra com um risco solto logo abaixo do logo.
   const temAlgoAcimaDeSelecao = operacaoVisivel.length > 0;
@@ -177,14 +183,25 @@ export function Sidebar() {
         <>
           {temAlgoAcimaDeAdministracao && <div className="nav-sep" />}
           <div className={cn("nav-label", !expanded && "hidden")}>Administração</div>
-          <NavItem
-            href="/admin"
-            icon="cog"
-            label="Menu Gerencial"
-            active={isActive(pathname, "/admin")}
-            expanded={expanded}
-            badge={diagAlerta.total}
-          />
+          {temHubGerencial && (
+            <NavItem
+              href="/admin"
+              icon="cog"
+              label="Menu Gerencial"
+              active={isActive(pathname, "/admin")}
+              expanded={expanded}
+              badge={diagAlerta.total}
+            />
+          )}
+          {administracaoVisivel.map((n) => (
+            <NavItem
+              key={n.href}
+              {...n}
+              active={isActive(pathname, n.href)}
+              expanded={expanded}
+              badge={0}
+            />
+          ))}
         </>
       )}
 

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { getTableConfig } from "drizzle-orm/pg-core";
 import { VagasService } from "./vagas.service";
 import { asCandidaturas, vagaBeneficio, vagaMetaReducoes, vagas } from "../../db/schema";
+import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
 
 /**
  * ─ O RASTRO DA REDUÇÃO DE META (achado da auditoria de segurança, 09/09/2026) ───────────────────
@@ -168,7 +169,7 @@ function makeDb(cenario: {
     query: { vagas: { findFirst: vi.fn().mockResolvedValue(vaga) } },
   };
 
-  return { service: new VagasService(db as never), escritas, consultasPorTabela };
+  return { service: new VagasService(db as never, catalogoDeEtapasFingido() as never), escritas, consultasPorTabela };
 }
 
 const rastroGravado = (e: Escrita[]) => e.filter((x) => x.tabela === vagaMetaReducoes);

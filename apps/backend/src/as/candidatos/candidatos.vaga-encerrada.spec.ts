@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { STATUS_QUE_NAO_RECEBEM, vagaRecebeCandidato } from "../../domain/candidatura";
 import { CandidatosService } from "./candidatos.service";
 import { asCandidaturaEtapas, asCandidaturas } from "../../db/schema";
+import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
 
 /**
  * ─ A VAGA ENCERRADA NÃO RECEBE POSIÇÃO, TAMBÉM PELO CAMINHO TRAVADO (auditoria de 09/09) ────────
@@ -131,7 +132,7 @@ function makeDb(cenario: {
     query: { asCandidaturas: { findFirst: vi.fn().mockResolvedValue(c) } },
   };
 
-  return { service: new CandidatosService(db as never), ordem, updates, inserts };
+  return { service: new CandidatosService(db as never, catalogoDeEtapasFingido() as never), ordem, updates, inserts };
 }
 
 const doUpdate = (updates: Escrita[]) =>

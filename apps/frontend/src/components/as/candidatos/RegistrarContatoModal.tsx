@@ -20,13 +20,13 @@ import { useState } from "react";
 import {
   AS_CONTATO_TIPO,
   AS_CONTATO_TIPO_LABEL,
-  CANDIDATURA_ETAPA_LABEL,
   type AsCandidaturaItem,
 } from "@ea/shared-types";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { Combobox } from "@/components/ui/Combobox";
 import { mensagemDoErro, registrarContato } from "@/lib/as-candidatos";
+import { rotuloDaEtapa, useEtapas } from "@/lib/as-etapas";
 
 export function RegistrarContatoModal({
   candidatura,
@@ -39,6 +39,7 @@ export function RegistrarContatoModal({
   onClose: () => void;
   onRegistrado: () => void;
 }) {
+  const { etapas } = useEtapas();
   const [tipo, setTipo] = useState<string>("LIGACAO");
   const [resumo, setResumo] = useState("");
   /**
@@ -87,7 +88,7 @@ export function RegistrarContatoModal({
           <p className="mt-1 text-[12.5px] text-dim">
             {candidatura.candidatoNome} em{" "}
             {candidatura.vagaNome ?? candidatura.vagaCodigo ?? "não informado"}. Etapa atual:{" "}
-            {CANDIDATURA_ETAPA_LABEL[candidatura.etapa]}.
+            {rotuloDaEtapa(candidatura.etapa, etapas)}.
           </p>
         </div>
 

@@ -63,8 +63,6 @@
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
-  CANDIDATURA_ETAPAS,
-  CANDIDATURA_ETAPA_LABEL,
   CANDIDATURA_SITUACOES,
   CANDIDATURA_SITUACAO_LABEL,
   VAGA_STATUS_LABEL,
@@ -80,7 +78,8 @@ import { StatusPill } from "@/components/ui/StatusPill";
 import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
 import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
 import { dataBr, dataHoraBr, mensagemDoErro, painelDaVaga } from "@/lib/as-candidatos";
-import { tomDaEtapa, tomDaSituacao, tomDoStatusVaga } from "@/lib/as-candidatos-visual";
+import { tomDaSituacao, tomDoStatusVaga } from "@/lib/as-candidatos-visual";
+import { ordemDaEtapa, rotuloDaEtapa, tomDaEtapa, useEtapas } from "@/lib/as-etapas";
 import { trilhaDaVaga } from "@/lib/as-vaga-trilha";
 import { fraseDoFechamentoForcado } from "@/lib/as-vaga-fechamento";
 import { fraseDaReducaoDeMeta } from "@/lib/as-vaga-meta";
@@ -272,7 +271,24 @@ export function VagaPainelModal({
   const recebeCandidato = vagaRecebeCandidato(vaga.status);
 
   return (
-    <Modal onClose={onClose} className="max-w-[1040px] p-0" ariaLabel="Painel da vaga">
+    /* ─ §A.20, A LARGURA DO PAINEL, MEDIDA E NÃO ESTIMADA (ajuste 2 de 10/09) ─────────────────
+       O QUE O DIRETOR VIU ("o modal esconde a coluna de Ações") NÃO ERA SOBREPOSIÇÃO da tabela de
+       baixo: era a tabela DE DENTRO do modal cortada. Com 1040px de painel, a área útil da lista
+       era de 990px (1040 menos os 48px de `px-6` do miolo) e o conteúdo da lista pedia 1006,92px na
+       aba de candidatos e 1008,08px na de alocados, medidos com doze candidaturas de nome real.
+       Sobravam 17px e 18px de rolagem horizontal, e a coluna que ficava do lado de fora era
+       exatamente AÇÕES, a última. No navegador de verdade o corte é maior: o miolo rola na vertical,
+       e a barra do `ea-scroll` come mais 10px.
+
+       1120px FECHA A CONTA COM FOLGA: 1120 menos 48 de respiro menos 10 da barra vertical dá
+       1062px de área útil contra os 1008px que o conteúdo pede, e a lista volta a repartir a sobra
+       entre as colunas em vez de ficar toda no piso.
+
+       EM TELA MENOR NADA QUEBRA: o painel é `w-full` com teto, então abaixo de 1152px de janela (o
+       teto mais os 16px de respiro do overlay de cada lado) ele encolhe junto com a tela e a lista
+       volta a rolar na horizontal, que é o comportamento que o §A.12 manda ("rola em vez de
+       espremer"). Modal largo demais para a janela nunca acontece. */
+    <Modal onClose={onClose} className="max-w-[1120px] p-0" ariaLabel="Painel da vaga">
       <div className="flex max-h-[88vh] flex-col">
         {/* ── TOPO FIXO: quem é a vaga e em que pé ela está ───────────────── */}
         <div className="flex-none border-b border-[var(--border)] px-6 pb-4 pt-6">
@@ -710,6 +726,7 @@ function TabelaCandidaturas({
   onMover: (c: AsCandidaturaItem) => void;
   onFinalizar: (c: AsCandidaturaItem) => void;
 }) {
+  const { etapas } = useEtapas();
   /*
    * §A.29: ordenação pelo `useOrdenacao` que já existe, nunca à mão.
    *
@@ -739,10 +756,18 @@ function TabelaCandidaturas({
     {
       chave: "etapa",
       tipo: "status",
+      /*
+       * A ORDEM VEM DA COLUNA `ordem` DO CATÁLOGO, e o `indexOf` que estava aqui saiu por dois
+       * motivos, sendo o segundo o perigoso: (1) a lista virou dado do diretor, e reordenar o funil
+       * na tela dele tem de reordenar esta coluna; (2) `indexOf` de quem não está na lista devolve
+       * `-1`, e `-1` ordena ANTES da primeira etapa, então uma etapa desconhecida ou inativada
+       * subiria ao TOPO do funil em vez de descer. `ordemDaEtapa` manda o desconhecido para o fim,
+       * que é o mesmo lugar de quem já saiu do funil.
+       */
       valor: (c) =>
         candidaturaViva(c.situacao)
-          ? CANDIDATURA_ETAPAS.indexOf(c.etapa)
-          : CANDIDATURA_ETAPAS.length,
+          ? ordemDaEtapa(c.etapa, etapas)
+          : Number.MAX_SAFE_INTEGER,
     },
     {
       chave: "situacao",
@@ -903,8 +928,8 @@ function TabelaCandidaturas({
                   <span className="inline-flex justify-center">
                     {candidaturaViva(c.situacao) ? (
                       <StatusPill
-                        tone={tomDaEtapa(c.etapa)}
-                        label={CANDIDATURA_ETAPA_LABEL[c.etapa]}
+                        tone={tomDaEtapa(c.etapa, etapas)}
+                        label={rotuloDaEtapa(c.etapa, etapas)}
                       />
                     ) : (
                       <StatusPill tone="nt" label="Fora Do Funil" />

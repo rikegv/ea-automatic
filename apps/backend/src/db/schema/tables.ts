@@ -23,7 +23,6 @@ import {
   areaEnum,
   asCandidatoOrigemEnum,
   asContatoTipoEnum,
-  candidaturaEtapaEnum,
   candidaturaSituacaoEnum,
   cartaoVtEnum,
   clicksignStatusEnum,
@@ -2752,6 +2751,53 @@ export const asCandidatos = pgTable(
  * │ usar valor de enum na transação em que ele nasceu.                                            │
  * └───────────────────────────────────────────────────────────────────────────────────────────────┘
  */
+/**
+ * ─ O CATÁLOGO DAS ETAPAS DO FUNIL (A&S). A LISTA É DO DIRETOR, NÃO DO CÓDIGO ────────────────────
+ *
+ * ELA ERA UM ENUM DO POSTGRES (`candidatura_etapa`), e virou tabela na migration
+ * `0100_as_etapas_funil`. O motivo é simples e não tem contorno: o diretor CADASTRA, RENOMEIA,
+ * REORDENA e COLORE as etapas na tela do gerenciador, e enum não se edita por tela (o Postgres nem
+ * oferece `ALTER TYPE ... DROP VALUE`). O precedente da casa é o `frenteStatusCatalogo` do iFractal,
+ * logo acima, e a razão que valeu lá vale aqui: onde NÃO há regra amarrada ao valor, a lista pode
+ * ser dado.
+ *
+ * ┌─ IDENTIDADE E NOME SÃO COISAS SEPARADAS, e é isso que impede o histórico de mentir ──────────┐
+ * │ `codigo` é a IDENTIDADE e é IMUTÁVEL: é ele que fica gravado na candidatura e em cada evento  │
+ * │ de `as_candidatura_etapas`. Não existe operação "trocar o código".                            │
+ * │ `rotulo` é o NOME, editável à vontade, resolvido por join na leitura viva E no histórico.     │
+ * │                                                                                               │
+ * │ Renomear "Triagem" para "Triagem Inicial" faz o histórico inteiro daquela etapa passar a      │
+ * │ dizer "Triagem Inicial", que é a leitura CERTA: é a mesma etapa, com o nome corrigido.        │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * A ORDEM NÃO É UNIQUE de propósito: reordenar reescreve `ordem = 1..N` de uma vez, e passa por
+ * estados transitórios com duplicata que um unique não postergável recusaria. A autoridade é a
+ * reescrita completa, e o desempate da leitura é `(ordem, id)`.
+ *
+ * `inicial` É EXCLUSIVO NO BANCO, por índice parcial único (`as_etapas_funil_inicial_unica`, criado
+ * na migration e sem equivalente declarável aqui). Ele é o ÚNICO dono da pergunta "onde a
+ * candidatura nasce?": o `DEFAULT 'CAPTACAO'` que a coluna `etapa` tinha foi removido na mesma
+ * migration justamente para não haver um segundo.
+ *
+ * `ativa` É EXCLUSÃO LÓGICA, e ela não é preferência: pela FK RESTRICT das três colunas, uma etapa
+ * por onde alguém já passou NÃO PODE ser apagada, nunca mais, e inativar é o que sobra. Some dos
+ * seletores e dos filtros, continua resolvendo o rótulo do histórico de quem passou por ela.
+ *
+ * §A.6: código, rótulo, ordem, cor e dois booleanos. Nenhum dado pessoal entra aqui.
+ */
+export const asEtapasFunil = pgTable("as_etapas_funil", {
+  id: serial("id").primaryKey(),
+  codigo: varchar("codigo", { length: 40 }).notNull().unique(),
+  rotulo: varchar("rotulo", { length: 120 }).notNull(),
+  ordem: integer("ordem").notNull(),
+  /** Da paleta FECHADA do design system (`ETAPA_TONS`). CHECK no banco, na migration. */
+  tom: varchar("tom", { length: 4 }).notNull().default("nt"),
+  inicial: boolean("inicial").notNull().default(false),
+  ativa: boolean("ativa").notNull().default(true),
+  criadoEm,
+  atualizadoEm,
+});
+
 const SITUACOES_ENCERRADAS_SQL = sql.raw(
   SITUACOES_ENCERRADAS_SEM_EXITO.map((s) => `'${s}'`).join(", "),
 );
@@ -2793,7 +2839,15 @@ export const asCandidaturas = pgTable(
     vagaId: uuid("vaga_id")
       .notNull()
       .references(() => vagas.id, { onDelete: "restrict" }),
-    etapa: candidaturaEtapaEnum("etapa").notNull().default("CAPTACAO"),
+    /**
+     * ONDE A PESSOA ESTÁ NO FUNIL. `varchar` + FK para o catálogo, e SEM DEFAULT: quem decide o
+     * nascimento é a linha marcada `inicial` em `as_etapas_funil`, lida pelo service e passada
+     * explicitamente no INSERT. O `DEFAULT 'CAPTACAO'` daqui foi removido na migration 0100 porque
+     * era um SEGUNDO dono da mesma decisão, capaz de apontar para uma etapa inativada em silêncio.
+     */
+    etapa: varchar("etapa", { length: 40 })
+      .notNull()
+      .references(() => asEtapasFunil.codigo, { onDelete: "restrict" }),
     situacao: candidaturaSituacaoEnum("situacao").notNull().default("ATIVO"),
     /** Por que saiu. Texto livre: o vocabulário de descarte é da operação e ainda está se formando. */
     motivoDescarte: text("motivo_descarte"),
@@ -2960,9 +3014,13 @@ export const asCandidaturaEtapas = pgTable(
       .notNull()
       .references(() => asCandidaturas.id, { onDelete: "cascade" }),
     /** Nula na ENTRADA (a candidatura nasceu ali) e no DESFECHO gravado sem movimento. */
-    etapaDe: candidaturaEtapaEnum("etapa_de"),
+    etapaDe: varchar("etapa_de", { length: 40 }).references(() => asEtapasFunil.codigo, {
+      onDelete: "restrict",
+    }),
     /** Onde a candidatura ficou, ou onde o desfecho aconteceu. Nunca nula. */
-    etapaPara: candidaturaEtapaEnum("etapa_para").notNull(),
+    etapaPara: varchar("etapa_para", { length: 40 })
+      .notNull()
+      .references(() => asEtapasFunil.codigo, { onDelete: "restrict" }),
     /** Preenchida SÓ no desfecho. É ela que distingue "andou" de "encerrou". */
     situacao: candidaturaSituacaoEnum("situacao"),
     /**

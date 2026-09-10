@@ -65,6 +65,13 @@ export const ROTA_MENU: { prefixo: string; codigo: string }[] = [
   // ser invisível E inalcançável, inclusive por quem digitar a URL. O backend já barra as operações;
   // isto fecha a porta da tela.
   { prefixo: "/as/candidatos", codigo: "as-candidatos" },
+  // ETAPAS DO FUNIL (A&S): governada pelo menu `as-etapas`, que nasce só para o SUPER_ADMIN
+  // (§A.23). AQUI A LINHA PESA MAIS DO QUE NAS OUTRAS, e o motivo é medido: a LEITURA do catálogo
+  // (`GET /as/etapas`) é aberta a qualquer autenticado de propósito, porque a pill da etapa aparece
+  // na tela do consultor. Sem esta linha, quem digitasse a URL abriria o gerenciador, veria o funil
+  // inteiro RENDERIZADO pela leitura aberta, e só tomaria 403 ao clicar em salvar. Tela que abre e
+  // mostra o dado antes de recusar é pior do que tela que não abre: ela ensina o que existe.
+  { prefixo: "/admin/as/etapas", codigo: "as-etapas" },
 ];
 
 /**

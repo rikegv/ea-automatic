@@ -21,7 +21,6 @@ import {
   AS_CANDIDATO_ORIGEM_LABEL,
   AS_CONTATO_TIPO,
   AS_CONTATO_TIPO_LABEL,
-  CANDIDATURA_ETAPA_LABEL,
   CANDIDATURA_SITUACAO_LABEL,
   type AsCandidaturaEtapaItem,
   candidaturaViva,
@@ -44,7 +43,8 @@ import {
   mensagemDoErro,
   registrarContato,
 } from "@/lib/as-candidatos";
-import { tomDaEtapa, tomDaSituacao } from "@/lib/as-candidatos-visual";
+import { tomDaSituacao } from "@/lib/as-candidatos-visual";
+import { rotuloDaEtapa, tomDaEtapa, useEtapas } from "@/lib/as-etapas";
 import { fraseDoAceite, rotuloDoLado } from "@/lib/as-vaga-acoes";
 import { VagaResumoModal } from "@/components/as/vagas/VagaResumoModal";
 
@@ -61,6 +61,14 @@ import { VagaResumoModal } from "@/components/as/vagas/VagaResumoModal";
  * vez de deixar o consultor achar que a pessoa nunca se moveu.
  */
 function LinhaDoTempo({ eventos }: { eventos: AsCandidaturaEtapaItem[] }) {
+  /*
+   * O CATÁLOGO COMPLETO, INATIVAS INCLUÍDAS, e é AQUI que isso mais importa em toda a tela: a linha
+   * do tempo cita etapas por onde a pessoa passou, e o diretor pode ter INATIVADO qualquer uma
+   * delas depois. Lendo só as ativas, o evento antigo sairia com a pill em branco. `useEtapas` lê a
+   * lista inteira e divide a MESMA promessa memoizada com o resto da ficha: nenhuma requisição a
+   * mais por candidatura aberta.
+   */
+  const { etapas: catalogo } = useEtapas();
   return (
     <div className="mt-3.5 border-t border-[var(--border)] pt-3">
       <div className="mb-2 text-[12px] font-semibold text-dim">Por Onde Passou</div>
@@ -93,19 +101,19 @@ function LinhaDoTempo({ eventos }: { eventos: AsCandidaturaEtapaItem[] }) {
                   {/* "descartado NA TRIAGEM": a etapa em que a decisão foi tomada é o que dá
                       sentido ao desfecho, e é ela que o evento guardou. */}
                   <span className="text-dim">
-                    em {CANDIDATURA_ETAPA_LABEL[e.etapaPara]}
+                    em {rotuloDaEtapa(e.etapaPara, catalogo)}
                   </span>
                 </>
               ) : (
                 <>
                   {e.etapaDe && (
                     <span className="text-faint">
-                      {CANDIDATURA_ETAPA_LABEL[e.etapaDe]} para
+                      {rotuloDaEtapa(e.etapaDe, catalogo)} para
                     </span>
                   )}
                   <StatusPill
-                    tone={tomDaEtapa(e.etapaPara)}
-                    label={CANDIDATURA_ETAPA_LABEL[e.etapaPara]}
+                    tone={tomDaEtapa(e.etapaPara, catalogo)}
+                    label={rotuloDaEtapa(e.etapaPara, catalogo)}
                   />
                   {e.tipo === "ENTRADA" && <span className="text-dim">na entrada</span>}
                 </>
@@ -161,6 +169,10 @@ export function FichaCandidatoModal({
    */
   vagaPorId: Map<string, VagaListItem>;
 }) {
+  // `catalogoDeEtapas` e não `etapas`: o estado local `etapas` logo abaixo é OUTRA coisa, o
+  // histórico de eventos por candidatura. Dois nomes iguais para dois dados diferentes no mesmo
+  // componente é o tipo de colisão que compila e confunde quem lê depois.
+  const { etapas: catalogoDeEtapas } = useEtapas();
   const [ficha, setFicha] = useState<AsCandidatoFicha | null>(null);
   const [contatos, setContatos] = useState<Record<string, AsContatoItem[]>>({});
   /** A LINHA DO TEMPO DE ETAPAS por candidatura (peça P3 do bug 1), na mesma carga dos contatos. */
@@ -300,8 +312,8 @@ export function FichaCandidatoModal({
                               do tempo, que é o lugar certo dessa informação. */}
                           {candidaturaViva(c.situacao) ? (
                             <StatusPill
-                              tone={tomDaEtapa(c.etapa)}
-                              label={CANDIDATURA_ETAPA_LABEL[c.etapa]}
+                              tone={tomDaEtapa(c.etapa, catalogoDeEtapas)}
+                              label={rotuloDaEtapa(c.etapa, catalogoDeEtapas)}
                             />
                           ) : (
                             <StatusPill tone="nt" label="Fora Do Funil" />

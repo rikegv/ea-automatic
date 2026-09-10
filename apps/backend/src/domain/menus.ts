@@ -691,6 +691,64 @@ export const MENUS: MenuDef[] = [
     areas: ["AS"],
     operacoes: ["CandidatosController.*"],
   },
+  {
+    /**
+     * ETAPAS DO FUNIL (A&S): o gerenciador da lista de etapas, que deixou de ser enum e virou
+     * catálogo (`as_etapas_funil`, migration 0100).
+     *
+     * ┌─ ESTE MENU NÃO É O QUE SEGURA A PORTA, E ISSO PRECISA ESTAR ESCRITO ────────────────────┐
+     * │ Quem segura é o `@Roles("SUPER_ADMIN")` na `EtapasFunilAdminController`. O MENU SOZINHO  │
+     * │ NÃO SEGURARIA O MASTER: o `MenuGuard` deixa o MASTER passar por PERTENCER À ÁREA, e há   │
+     * │ MASTER na área AS em produção. Por isso o padrão aqui é o de `menu-areas` e `usuarios`   │
+     * │ (papel na controller), e não o do `ifractal` (menu sozinho).                              │
+     * │                                                                                          │
+     * │ A REIVINDICAÇÃO DA CONTROLLER DE ESCRITA FICA MESMO ASSIM, como SEGUNDA camada: o        │
+     * │ `MenuGuard` e o `RolesGuard` recusam pelo próprio motivo, e nenhum dos dois depende do    │
+     * │ outro estar certo. A controller de LEITURA (`EtapasFunilController`) fica FORA da lista   │
+     * │ de propósito: reivindicá-la daria 403 no funil para o consultor COMUM.                    │
+     * └──────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * §A.23: NASCE SÓ PARA O SUPER_ADMIN, e entra também em `MENUS_SOMENTE_SUPER_ADMIN` (some da
+     * barra dos demais em vez de aparecer e dar 403) e em `MENUS_BLOQUEADOS_COMUM` (marcá-lo para
+     * um COMUM não concederia nada, então a tela nem oferece). O convergedor do boot REGISTRA o
+     * menu no catálogo e para por aí: quem libera quem enxerga é o diretor.
+     *
+     * `areas: ["AS"]` é obrigatório: sem declarar, o default é ADM e o menu sumiria para o time de
+     * A&S no dia em que o diretor decidisse liberá-lo.
+     */
+    codigo: "as-etapas",
+    rotulo: "Etapas Do Funil",
+    href: "/admin/as/etapas",
+    /**
+     * GRUPO `ADMIN`, POR DECISÃO DO DIRETOR: esta é a tela que CONFIGURA a lista de etapas, e ele a
+     * quer junto das demais configurações do sistema, não no grupo do módulo.
+     *
+     * A IDENTIDADE QUE ISSO OBRIGOU A REESCREVER FICOU MAIS FORTE, e não mais fraca. A prova de
+     * nascimento era "todo menu fora do grupo SELECAO nasce em ADM": ela usava o GRUPO como sinônimo
+     * de área, então um menu de A&S em grupo ADMIN a quebrava, e um menu de Admissão largado no
+     * grupo SELECAO escapava dela sem ninguém decidir nada. Hoje a prova é NOMINAL
+     * (`MENUS_QUE_NASCEM_FORA_DA_ADM`): o grupo deixou de opinar sobre área, e todo menu que nasce
+     * fora de ADM precisa estar declarado ali, nome a nome, o que faz a próxima exceção custar uma
+     * decisão deliberada em vez de um campo trocado.
+     *
+     * `areas: ["AS"]` NÃO MUDOU, e a mudança de grupo não encosta nela: o GRUPO diz onde o menu
+     * aparece, a ÁREA diz quem o enxerga. Sem esta linha o menu nasceria em ADM e sumiria para o
+     * time de A&S no dia em que o diretor o liberasse.
+     *
+     * A `ordem` FICA EM 49, o que o deixa no fim da Administração. Reposicioná-lo entre os outros é
+     * apresentação, e a OST não pediu (§A.14); 49 também não desloca nenhum menu que já está lá.
+     *
+     * AS DUAS TRAVAS DA §A.23 SEGUEM DE PÉ, E FORAM CONFERIDAS EM VEZ DE SUPOSTAS:
+     * `MENUS_PADRAO_COMUM` exige `grupo === "OPERACAO"` E nascimento em ADM, e este menu falha nos
+     * DOIS critérios (é ADMIN e nasce em AS). `db/backfill-menus-comum.ts` concede exatamente essa
+     * lista, e `db/seed-menus.ts` concede `codigosPadraoDoPapel`, que para o COMUM é a mesma lista:
+     * nenhum dos dois passa a entregar este menu a ninguém por causa da mudança de grupo.
+     */
+    grupo: "ADMIN",
+    ordem: 49,
+    areas: ["AS"],
+    operacoes: ["EtapasFunilAdminController.*"],
+  },
 ];
 
 /** Menus sempre visíveis, independentemente de configuração (a home nunca some). */
@@ -719,6 +777,41 @@ export const TODOS_CODIGOS_MENU = MENUS.map((m) => m.codigo);
 export function areasDeNascimento(menu: MenuDef): Area[] {
   return menu.areas && menu.areas.length > 0 ? menu.areas : AREA_PADRAO_DO_MENU;
 }
+
+/**
+ * ─ A EXCEÇÃO DECLARADA: OS MENUS QUE NASCEM FORA DA ÁREA ADM, UM A UM ──────────────────────
+ *
+ * O QUE ESTA LISTA GUARDA: que nenhum menu nasça visível para a área errada POR DESCUIDO. Ela é o
+ * carimbo do dia da virada da segmentação, e `menus.spec.ts` a cruza com o registro nos dois
+ * sentidos: todo menu de fora dela nasce em ADM, e todo menu dentro dela nasce sem ADM. Nenhum dos
+ * dois lados sozinho bastaria, e é o cruzamento que torna a lista uma PROVA em vez de um comentário.
+ *
+ * POR QUE ELA SUBSTITUIU O GRUPO, e por que isso é um aperto e não um afrouxamento. A prova antiga
+ * era "todo menu fora do grupo SELECAO nasce em ADM", ou seja, o GRUPO respondia pela ÁREA. Duas
+ * coisas diferentes com o mesmo campo: menu do módulo de A&S que precisasse morar na Administração
+ * quebrava a prova sem nada de errado ter acontecido, e menu da Admissão largado no grupo SELECAO
+ * escapava dela sem ninguém decidir. Agora a última palavra sobre ÁREA é esta lista, e o GRUPO
+ * voltou a decidir só onde o menu aparece.
+ *
+ * ACRESCENTAR UM NOME AQUI É O GESTO DELIBERADO que a regra cobra: enquanto o código não estiver
+ * escrito nesta lista, `areas: ["AS"]` no registro quebra o teste, e enquanto estiver escrito aqui
+ * sem o `areas` correspondente, quebra também. As duas declarações têm de concordar.
+ *
+ * NÃO CONCEDE NADA A NINGUÉM (§A.23), e não é lida pelo guard: quem responde "este menu é de que
+ * área HOJE" continua sendo a tabela `menus.areas`, pelo `MenuAreasService`. Isto aqui é só sobre o
+ * NASCIMENTO, que é o único instante em que o código opina sobre área.
+ *
+ * `inicio` FICA DE FORA DE PROPÓSITO: ele nasce em `["ADM", "AS"]`, ou seja, CONTÉM ADM, e a home
+ * não pertence a um time só. A lista é de quem nasce FORA da área da Admissão, não de quem também
+ * serve a A&S.
+ */
+export const MENUS_QUE_NASCEM_FORA_DA_ADM = new Set<string>([
+  "as-vagas",
+  "as-candidatos",
+  // Mora no grupo ADMIN por decisão do diretor e mesmo assim é menu de A&S: é exatamente o caso que
+  // fez a prova deixar de olhar o grupo e passar a olhar esta lista.
+  "as-etapas",
+]);
 
 /** Índice `codigo -> áreas de NASCIMENTO`, para o convergedor semear menu novo. */
 export const AREAS_DE_NASCIMENTO: Map<string, Area[]> = new Map(
@@ -819,7 +912,14 @@ export function codigosPadraoDoPapel(papel: string): string[] {
  * (`definirMenusDoUsuario`) e a tela de configuração os desabilita para COMUM. Já ficam fora do padrão
  * por construção (padrão = só Operação, e estes são Administração).
  */
-export const MENUS_BLOQUEADOS_COMUM = new Set<string>(["diagnostico", "usuarios", "menu-areas"]);
+export const MENUS_BLOQUEADOS_COMUM = new Set<string>([
+  "diagnostico",
+  "usuarios",
+  "menu-areas",
+  // A escrita do catálogo de etapas é `@Roles("SUPER_ADMIN")`: marcar para um COMUM só faria o
+  // menu APARECER e o backend BARRAR, que é o chamado que esta lista existe para não gerar.
+  "as-etapas",
+]);
 
 /**
  * MENUS QUE SÓ O SUPER_ADMIN ENXERGA, e o "enxerga" é literal: o menu nem entra na lista que o
@@ -838,7 +938,14 @@ export const MENUS_BLOQUEADOS_COMUM = new Set<string>(["diagnostico", "usuarios"
  * É CONJUNTO E NÃO FLAG NO `MenuDef` de propósito: o par com `MENUS_BLOQUEADOS_COMUM` deixa as duas
  * regras de visibilidade por papel lado a lado, no mesmo lugar onde já se procura por elas.
  */
-export const MENUS_SOMENTE_SUPER_ADMIN = new Set<string>(["usuarios", "menu-areas"]);
+export const MENUS_SOMENTE_SUPER_ADMIN = new Set<string>([
+  "usuarios",
+  "menu-areas",
+  // Mesma razão das duas de cima: a controller é `@Roles` SUPER_ADMIN, então mostrar o card ao
+  // Master seria mostrar a porta e trancá-la. Quem edita esta lista edita o vocabulário em que todo
+  // o histórico de seleção está escrito.
+  "as-etapas",
+]);
 
 /**
  * Remove do conjunto os menus restritos ao SUPER_ADMIN. Aplicado ao RESULTADO, e não à origem, para

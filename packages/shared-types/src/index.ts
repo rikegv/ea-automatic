@@ -2135,22 +2135,83 @@ export const AS_CANDIDATO_ORIGEM_LABEL: Record<AsCandidatoOrigem, string> = {
  * direto para `APROVACAO` é caminho legítimo, e boa parte dos processos faz exatamente isso. Quem
  * modela esse pulo explicitamente é `AVANCOS_PERMITIDOS`, no domínio.
  */
-export const CANDIDATURA_ETAPAS = [
-  "CAPTACAO",
-  "TRIAGEM",
-  "ENTREVISTA_SOULAN",
-  "ENTREVISTA_CLIENTE",
-  "APROVACAO",
-] as const;
-export type CandidaturaEtapa = (typeof CANDIDATURA_ETAPAS)[number];
+/**
+ * ─ A ETAPA DO FUNIL DEIXOU DE SER UMA LISTA DE CÓDIGO: ELA É DADO DO DIRETOR ────────────────────
+ *
+ * ┌─ POR QUE ISTO É `string` E NÃO MAIS UMA UNION ─────────────────────────────────────────────┐
+ * │ A LISTA PASSOU A SER DELE. O funil é cadastrado, renomeado, reordenado e colorido na tela   │
+ * │ do gerenciador, e a FONTE DA VERDADE É A TABELA `as_etapas_funil`. Uma union aqui seria     │
+ * │ código fingindo saber uma lista que o usuário edita, que é o mesmo motivo pelo qual a       │
+ * │ ordem do iFractal fica vazia no domínio.                                                    │
+ * │                                                                                             │
+ * │ O NOME FICA, e isso é deliberado: mais de vinte assinaturas em backend e frontend dizem     │
+ * │ `CandidaturaEtapa`, e trocar o nome junto com o tipo faria uma mudança de modelo virar uma  │
+ * │ renomeação em massa, com o `grep` deixando de achar tudo por um nome só.                     │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * O QUE SE PERDE, escrito aqui para não ser descoberto no meio de um bug: o TypeScript **para de
+ * recusar** `"TRIGEM"`. Três coisas substituem a garantia que ele dava, e as três precisam existir:
+ *   1. o SERVIÇO valida o código contra o catálogo vivo, em runtime, nas duas rotas de escrita;
+ *   2. a CHAVE ESTRANGEIRA do banco recusa em última instância, e é ela que torna linha órfã
+ *      impossível em vez de improvável;
+ *   3. `tomDaEtapa`/`rotuloDaEtapa` devolvem FALLBACK em vez de `undefined`, com teste, para a pill
+ *      de uma etapa desconhecida sair feia e nunca sair VAZIA.
+ *
+ * É menos garantia do que havia. É o preço de a lista ser do diretor, e ele foi aceito de olho
+ * aberto.
+ */
+export type CandidaturaEtapa = string;
 
-export const CANDIDATURA_ETAPA_LABEL: Record<CandidaturaEtapa, string> = {
-  CAPTACAO: "Captação",
-  TRIAGEM: "Triagem",
-  ENTREVISTA_SOULAN: "Entrevista Soulan",
-  ENTREVISTA_CLIENTE: "Entrevista Cliente",
-  APROVACAO: "Aprovação",
-};
+/**
+ * A ETAPA como o catálogo a descreve. `codigo` é a identidade IMUTÁVEL: é ele que o histórico
+ * guarda, e é por isso que renomear corrige o nome da MESMA etapa em toda a linha do tempo, em vez
+ * de criar uma segunda.
+ */
+export interface AsEtapaFunil {
+  id: number;
+  codigo: string;
+  rotulo: string;
+  ordem: number;
+  tom: EtapaTom;
+  /** A etapa em que toda candidatura NASCE. Exatamente uma por vez. */
+  inicial: boolean;
+  ativa: boolean;
+}
+
+/**
+ * A PALETA OFERECIDA, e ela é vocabulário compartilhado de verdade: o CHECK do banco, a validação
+ * do serviço e o seletor da tela precisam concordar, e três listas escritas em três lugares
+ * concordam por coincidência.
+ *
+ * O VERMELHO (`dg`) FICA DE FORA de propósito: no sistema ele significa RECUSA (§A.12), e etapa é
+ * POSIÇÃO no funil, não julgamento. Uma etapa vermelha diria que estar nela é um problema.
+ *
+ * SÃO CINCO TONS PARA UMA LISTA QUE O DIRETOR PODE FAZER MAIOR, e a decisão dele foi que a COR
+ * PODE REPETIR em etapas distantes na fila, porque quem lê se orienta pela ordem do funil e não só
+ * pela cor. Ampliar a paleta seria mudança no design system inteiro, alcançando toda pill de toda
+ * tela, e isso é OST própria.
+ */
+export const ETAPA_TONS = ["nt", "in", "wn", "or", "ok"] as const;
+export type EtapaTom = (typeof ETAPA_TONS)[number];
+
+/** O tom de quem não for encontrado no catálogo. Neutro, nunca `undefined`. */
+export const ETAPA_TOM_PADRAO: EtapaTom = "nt";
+
+/**
+ * AS CINCO DE HOJE, consumidas UMA vez na migration e nunca mais. Espelho literal do
+ * `STATUS_IFRACTAL_SEMENTE` logo acima, inclusive neste aviso: **a fonte da verdade passou a ser a
+ * tabela `as_etapas_funil`**, e ninguém deve ler daqui para saber quais etapas existem.
+ *
+ * ELA NÃO É A LISTA DEFINITIVA. O diretor cadastra a dele na tela, e as seis que ele quer não são
+ * estas cinco: a fábrica entrega o gerenciador e NÃO engessa a lista.
+ */
+export const ETAPAS_FUNIL_SEMENTE = [
+  { codigo: "CAPTACAO", rotulo: "Captação", ordem: 1, tom: "nt" },
+  { codigo: "TRIAGEM", rotulo: "Triagem", ordem: 2, tom: "in" },
+  { codigo: "ENTREVISTA_SOULAN", rotulo: "Entrevista Soulan", ordem: 3, tom: "wn" },
+  { codigo: "ENTREVISTA_CLIENTE", rotulo: "Entrevista Cliente", ordem: 4, tom: "or" },
+  { codigo: "APROVACAO", rotulo: "Aprovação", ordem: 5, tom: "ok" },
+] as const;
 
 /**
  * A SITUAÇÃO DA CANDIDATURA, que é coisa DIFERENTE da etapa: a etapa diz onde a pessoa está no
@@ -2663,6 +2724,34 @@ export interface AsOcupacaoVaga {
    * gente. Quem está na reserva nunca torna a vaga excedida, porque a reserva tem meta própria.
    */
   excedida: boolean;
+  /**
+   * ─ QUANTA GENTE EM CADA ETAPA, POR CÓDIGO ──────────────────────────────────────────────────
+   *
+   * ┌─ CHAVE DINÂMICA, NUNCA CAMPOS FIXOS, e este é o ponto inteiro da peça ─────────────────────┐
+   * │ A LISTA DE ETAPAS É DO DIRETOR: ele cadastra, renomeia e reordena na tela. Cinco campos    │
+   * │ escritos à mão aqui repetiriam, no contrato, o defeito que a fileira de KPIs tem hoje: a   │
+   * │ etapa nova que ele criar não ganha card e cai no card errado, sem nada falhar.             │
+   * │                                                                                            │
+   * │ SÓ AS CHAVES COM NÚMERO APARECEM. Quem lê monta a fileira a partir do CATÁLOGO, na ordem   │
+   * │ do funil, e resolve o que faltar com `?? 0`. Ler as chaves daqui para descobrir QUAIS      │
+   * │ etapas existem é o erro: etapa recém-criada e ainda vazia sumiria da tela.                  │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * CONTA SÓ QUEM ESTÁ EM SELEÇÃO, e a invariante que amarra isso é `soma(porEtapa) === emSelecao`.
+   * Quem já recebeu decisão sai daqui e entra em `porDesfecho`, mesmo tendo uma etapa gravada na
+   * linha: **a situação vence a etapa**.
+   */
+  porEtapa: Record<string, number>;
+  /**
+   * QUEM JÁ RECEBEU DECISÃO, POR SITUAÇÃO. Mesma forma e mesmo motivo do `porEtapa`, com uma
+   * diferença que vale dizer: aqui a lista É fechada (as situações são vocabulário do sistema, não
+   * do diretor), e ainda assim o mapa é dinâmico, para os dois grupos da fileira serem lidos pela
+   * mesma régua em vez de duas.
+   *
+   * APROVADO, ALOCADO e ENVIADO_PARA_ADMISSAO entram aqui: eles receberam decisão e consomem
+   * posição. "Desfecho" não quer dizer "saiu mal".
+   */
+  porDesfecho: Record<string, number>;
 }
 
 /** O painel de uma vaga: a ocupação derivada mais quem está nela. */

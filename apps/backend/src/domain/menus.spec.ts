@@ -7,6 +7,7 @@ import {
   MENUS_SOMENTE_SUPER_ADMIN,
   filtrarMenusPorPapel,
   MENUS_PADRAO_COMUM,
+  MENUS_QUE_NASCEM_FORA_DA_ADM,
   TODOS_CODIGOS_MENU,
   areasDeNascimento,
   codigosPadraoDoPapel,
@@ -144,17 +145,56 @@ describe("segmentação por área: o NASCIMENTO (a fonte viva é a tabela, testa
   //
   // Os casos de visibilidade vigente vivem agora em `auth/menu-areas.service.spec.ts`.
 
-  it("IDENTIDADE DA VIRADA: todo menu da ADMISSÃO NASCE na área ADM", () => {
+  it("IDENTIDADE DA VIRADA: todo menu NASCE na área ADM, salvo os NOMINALMENTE declarados", () => {
     // É o carimbo que a migration copiou para a tabela, então ele é a prova de que a troca de fonte
     // foi uma identidade. Se algum menu deixar de nascer em ADM sem decisão do diretor, quebra aqui.
     //
-    // O RECORTE MUDOU quando o PRIMEIRO menu de A&S nasceu (Central de Vagas): o caso dizia "todo
-    // menu de hoje", e "hoje" era o dia da virada, quando o módulo de A&S ainda não existia. O que a
-    // virada provou continua travado aqui, agora pelo grupo: menu do módulo de Admissão nasce em ADM.
-    // Menu de A&S vive em grupo próprio (SELECAO) e é coberto pelo caso logo abaixo.
-    for (const m of MENUS.filter((x) => x.grupo !== "SELECAO")) {
-      expect(areasDeNascimento(m)).toContain("ADM");
+    // O RECORTE JÁ MUDOU DUAS VEZES, e a segunda é a que interessa. Ele nasceu como "todo menu de
+    // hoje" (o dia da virada, quando A&S não existia), virou "todo menu FORA DO GRUPO SELECAO"
+    // quando a Central de Vagas nasceu, e agora é "todo menu fora da LISTA NOMINAL". A troca
+    // aconteceu porque o diretor mandou a tela de Etapas Do Funil para o grupo ADMIN: com a prova
+    // amarrada ao grupo, um menu de A&S na Administração a quebrava sem nada de errado ter
+    // acontecido, e um menu da Admissão largado no grupo SELECAO escapava dela sem ninguém decidir.
+    //
+    // A PROVA FICOU MAIS FORTE, e é isto que o par de casos afirma: agora ela cobre TODOS os menus,
+    // sem exceção derivada de campo nenhum, e a única saída é o nome escrito à mão na lista.
+    for (const m of MENUS) {
+      if (MENUS_QUE_NASCEM_FORA_DA_ADM.has(m.codigo)) continue;
+      expect(areasDeNascimento(m), m.codigo).toContain("ADM");
     }
+  });
+
+  it("a lista de exceções é EXATA: quem está nela nasce fora de ADM, e ninguém mais nasce fora", () => {
+    // O SEGUNDO SENTIDO DO CRUZAMENTO, e sem ele a lista viraria um esconderijo: bastaria acrescentar
+    // um código para o menu sair da prova de cima sem que sua área fosse conferida por ninguém.
+    //
+    // A IGUALDADE É COM O CONJUNTO DERIVADO do registro, e não um `toContain`: sobrar nome (menu que
+    // já não é mais de A&S e continuou listado) é tão erro quanto faltar nome (menu novo que nasceu
+    // fora de ADM e ninguém declarou). Os dois lados quebram aqui, e é isso que obriga a próxima
+    // exceção a ser deliberada.
+    const nascemForaDaAdm = MENUS.filter((m) => !areasDeNascimento(m).includes("ADM")).map(
+      (m) => m.codigo,
+    );
+    expect([...MENUS_QUE_NASCEM_FORA_DA_ADM].sort()).toEqual([...nascemForaDaAdm].sort());
+    // E A LISTA NÃO CITA MENU QUE NÃO EXISTE: código órfão aqui protegeria um menu apagado e
+    // deixaria o vivo de mesmo nome sem prova nenhuma.
+    for (const c of MENUS_QUE_NASCEM_FORA_DA_ADM) expect(TODOS_CODIGOS_MENU).toContain(c);
+  });
+
+  it("o GRUPO deixou de opinar sobre ÁREA: a tela de Etapas Do Funil é ADMIN e nasce em AS", () => {
+    // O CASO CONCRETO que obrigou a reescrita da identidade (decisão do diretor: a tela de
+    // configuração das etapas vai para junto das demais configurações). As duas declarações vivem
+    // em campos diferentes e nenhuma manda na outra: `grupo` decide ONDE o menu aparece, `areas`
+    // decide QUEM o enxerga.
+    const etapas = MENUS.find((m) => m.codigo === "as-etapas")!;
+    expect(etapas.grupo).toBe("ADMIN");
+    expect(areasDeNascimento(etapas)).toEqual(["AS"]);
+    // A MUDANÇA DE GRUPO NÃO PODE TER TORNADO O MENU DISTRIBUÍVEL (§A.23), e este é o ponto que a
+    // OST mandou conferir em vez de supor: o padrão do COMUM é o que `backfill-menus-comum` concede.
+    expect(MENUS_PADRAO_COMUM).not.toContain("as-etapas");
+    expect(codigosPadraoDoPapel("COMUM")).not.toContain("as-etapas");
+    expect(MENUS_BLOQUEADOS_COMUM.has("as-etapas")).toBe(true);
+    expect(MENUS_SOMENTE_SUPER_ADMIN.has("as-etapas")).toBe(true);
   });
 
   it("menu de A&S NASCE só na área AS, em grupo próprio, e fora do padrão do COMUM", () => {
@@ -243,10 +283,17 @@ describe("segmentação por área: o NASCIMENTO (a fonte viva é a tabela, testa
  * continua vendo, e ninguém mais vê.
  */
 describe("menus exclusivos do SUPER_ADMIN", () => {
-  it("são exclusivos a tela de Usuários e a de Área Por Menu", () => {
+  it("são exclusivos Usuários, Área Por Menu e Etapas Do Funil", () => {
     // A de Área Por Menu entrou aqui por um motivo mais forte que a régua de sempre: ela ESCREVE a
     // fonte da autorização por área, então quem a alcança redefine o que cada time enxerga.
-    expect([...MENUS_SOMENTE_SUPER_ADMIN]).toEqual(["usuarios", "menu-areas"]);
+    //
+    // ETAPAS DO FUNIL entrou pela mesma família de razão: quem edita aquela lista edita o
+    // VOCABULÁRIO em que TODO o histórico de seleção está escrito (renomear uma etapa reescreve o
+    // nome dela em toda a linha do tempo de todo mundo que passou por lá). A controller é
+    // `@Roles("SUPER_ADMIN")`, e o MENU sozinho NÃO seguraria o MASTER: o `MenuGuard` o deixa passar
+    // por pertencer à área, e há MASTER na área AS. Sem esta linha, o card apareceria para ele e
+    // daria 403 em tudo, que é mostrar a porta e trancá-la.
+    expect([...MENUS_SOMENTE_SUPER_ADMIN]).toEqual(["usuarios", "menu-areas", "as-etapas"]);
   });
 
   it("SUPER_ADMIN continua recebendo `usuarios`", () => {

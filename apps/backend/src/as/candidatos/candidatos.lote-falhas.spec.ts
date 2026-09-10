@@ -4,6 +4,7 @@ import type { AuthUser } from "../../auth/auth.types";
 import { ACEITE_REENTRADA, consomePosicao } from "../../domain/candidatura";
 import { asCandidaturaEtapas, asCandidaturas } from "../../db/schema";
 import { CandidatosService } from "./candidatos.service";
+import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
 
 /**
  * ─ O LOTE PARCIAL: uma linha ruim NÃO derruba as outras, e a resposta NÃO carrega dado pessoal ──
@@ -246,7 +247,7 @@ function makeDb(cenario: {
   };
 
   return {
-    service: new CandidatosService(db as never),
+    service: new CandidatosService(db as never, catalogoDeEtapasFingido() as never),
     estado,
     escritas,
     contar: (situacao: string) =>

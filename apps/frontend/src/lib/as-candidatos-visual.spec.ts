@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { CANDIDATURA_ETAPAS, CANDIDATURA_SITUACOES, VAGA_STATUS } from "@ea/shared-types";
-import { tomDaEtapa, tomDaSituacao, tomDoStatusVaga } from "@/lib/as-candidatos-visual";
+import { CANDIDATURA_SITUACOES, VAGA_STATUS } from "@ea/shared-types";
+import { tomDaSituacao, tomDoStatusVaga } from "@/lib/as-candidatos-visual";
 
 /**
  * §A.12: o ícone da pill acompanha o ESTADO REAL e nunca é fixo. Quem escolhe o ícone é a
@@ -31,30 +31,25 @@ describe("tomDaSituacao (o ícone acompanha o estado real, §A.12)", () => {
   });
 });
 
-describe("tomDaEtapa e tomDoStatusVaga (o resto do mapa visual segue intacto)", () => {
-  it("toda etapa tem tom, e a Aprovação segue fechando em verde", () => {
-    for (const e of CANDIDATURA_ETAPAS) expect(tomDaEtapa(e)).toBeTruthy();
-    expect(tomDaEtapa("APROVACAO")).toBe("ok");
-  });
-
-  /**
-   * O PONTO DO AJUSTE ERA DISTINGUIR AS ETAPAS, então é a distinção que o teste guarda: se alguém
-   * acrescentar etapa nova repetindo um tom já usado, o funil volta a ter duas etapas com a mesma
-   * cor e o "bater o olho e saber onde a pessoa está" morre em silêncio. Aqui ele morre no gate.
-   */
-  it("cada etapa tem um tom DIFERENTE das outras", () => {
-    const tons = CANDIDATURA_ETAPAS.map((e) => tomDaEtapa(e));
-    expect(new Set(tons).size).toBe(CANDIDATURA_ETAPAS.length);
-  });
-
-  /**
-   * `dg` é recusa (a StatusPill põe o X vermelho nele) e etapa de funil não é julgamento: uma etapa
-   * pintada de vermelho diria que a pessoa foi reprovada por estar nela.
-   */
-  it("nenhuma etapa usa o vermelho de recusa", () => {
-    for (const e of CANDIDATURA_ETAPAS) expect(tomDaEtapa(e)).not.toBe("dg");
-  });
-
+/**
+ * ─ O QUE SAIU DAQUI, E POR QUE NÃO É PERDA DE COBERTURA ─────────────────────────────────────────
+ *
+ * ESTE ARQUIVO TINHA UM BLOCO DE `tomDaEtapa`, e ele mudou de casa junto com a função:
+ * `lib/as-etapas.spec.ts` guarda a mesma régua contra o catálogo, com o fallback que a exaustividade
+ * do compilador não cobre mais. Repetir aqui seria duas cópias divergindo no primeiro ajuste.
+ *
+ * UM DAQUELES CASOS MORREU DE PROPÓSITO, E VALE DIZER QUAL: "cada etapa tem um tom DIFERENTE das
+ * outras". Ele guardava uma verdade que a paleta fechada garantia por acidente (cinco tons para
+ * cinco etapas), e o diretor decidiu o contrário ao mandar a lista ser dele: com o funil editável,
+ * a COR PODE REPETIR em etapas distantes na fila, porque quem lê se orienta pela ordem e pelo rótulo
+ * escrito na pill. Mantê-lo faria o gate recusar a sexta etapa que o gerenciador existe para criar.
+ *
+ * O QUE NÃO SE PERDEU: "nenhuma etapa usa o vermelho de recusa" continua travado, e num lugar mais
+ * forte do que este teste. O `dg` está FORA de `ETAPA_TONS` no vocabulário compartilhado, então ele
+ * é recusado pelo CHECK do banco, pelo DTO do serviço e pelo seletor de cor da tela, e o fallback
+ * ter de fugir do vermelho é afirmado em `as-etapas.spec.ts`.
+ */
+describe("tomDoStatusVaga (o resto do mapa visual segue intacto)", () => {
   it("todo status de vaga tem tom", () => {
     for (const s of VAGA_STATUS) expect(tomDoStatusVaga(s)).toBeTruthy();
   });

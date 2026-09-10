@@ -26,15 +26,12 @@
  */
 
 import { useState } from "react";
-import {
-  CANDIDATURA_ETAPA_LABEL,
-  type AsCandidaturaItem,
-  type VagaListItem,
-} from "@ea/shared-types";
+import { type AsCandidaturaItem, type VagaListItem } from "@ea/shared-types";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { Combobox } from "@/components/ui/Combobox";
 import { mensagemDoErro, trocarVagaDaCandidatura } from "@/lib/as-candidatos";
+import { rotuloDaEtapa, useEtapas } from "@/lib/as-etapas";
 
 export function TrocarVagaModal({
   candidatura,
@@ -49,6 +46,7 @@ export function TrocarVagaModal({
   onClose: () => void;
   onTrocado: () => void;
 }) {
+  const { etapas } = useEtapas();
   const [vagaId, setVagaId] = useState("");
   const [motivo, setMotivo] = useState("");
   const [salvando, setSalvando] = useState(false);
@@ -88,7 +86,7 @@ export function TrocarVagaModal({
             {candidatura.candidatoNome} está em{" "}
             <b>{candidatura.vagaNome ?? candidatura.vagaCodigo ?? "vaga sem nome"}</b>. A troca
             corrige a vaga desta mesma candidatura e{" "}
-            <b>mantém a etapa {CANDIDATURA_ETAPA_LABEL[candidatura.etapa]}</b>, sem abrir processo
+            <b>mantém a etapa {rotuloDaEtapa(candidatura.etapa, etapas)}</b>, sem abrir processo
             novo.
           </p>
         </div>

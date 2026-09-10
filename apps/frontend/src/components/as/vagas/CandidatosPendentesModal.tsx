@@ -28,11 +28,7 @@
  */
 
 import { useState } from "react";
-import {
-  CANDIDATURA_ETAPA_LABEL,
-  type AsCandidaturaPendente,
-  type CandidaturaEtapa,
-} from "@ea/shared-types";
+import { type AsCandidaturaPendente } from "@ea/shared-types";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { StatusPill } from "@/components/ui/StatusPill";
@@ -42,7 +38,7 @@ import {
   mensagemDoErro,
   registrarSaida,
 } from "@/lib/as-candidatos";
-import { tomDaEtapa } from "@/lib/as-candidatos-visual";
+import { rotuloDaEtapa, tomDaEtapa, useEtapas } from "@/lib/as-etapas";
 
 /** O texto próprio DESTA tela para a vaga cheia. Ver o bloco no topo do arquivo. */
 const VAGA_CHEIA =
@@ -94,6 +90,7 @@ export function CandidatosPendentesModal({
 }) {
   // A LISTA VIVE AQUI. Ela nasce da resposta do backend e encolhe a cada tratamento, para o
   // consultor ver o trabalho diminuindo sem precisar refazer a tentativa de fechamento.
+  const { etapas } = useEtapas();
   const [lista, setLista] = useState<AsCandidaturaPendente[]>(pendentes);
   const [acao, setAcao] = useState<{ id: string; tipo: Acao } | null>(null);
   const [motivo, setMotivo] = useState("");
@@ -159,8 +156,8 @@ export function CandidatosPendentesModal({
                     <div className="flex flex-wrap items-center gap-2.5">
                       <span className="text-[13px] font-semibold text-text">{p.candidatoNome}</span>
                       <StatusPill
-                        tone={tomDaEtapa(p.etapa as CandidaturaEtapa)}
-                        label={CANDIDATURA_ETAPA_LABEL[p.etapa]}
+                        tone={tomDaEtapa(p.etapa, etapas)}
+                        label={rotuloDaEtapa(p.etapa, etapas)}
                       />
                     </div>
                     <div className="flex flex-wrap items-center gap-1.5">

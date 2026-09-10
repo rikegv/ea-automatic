@@ -38,6 +38,7 @@ import {
   cabeMaisUm,
   decidirAlocacao,
   ACEITE_REENTRADA,
+  kpisDoFunil,
   ocupacaoDaVaga,
   ocupadasPorLado,
   ACEITE_BANCO_COM_OFICIAIS_ABERTAS,
@@ -50,12 +51,16 @@ import {
   ladoDaCandidatura,
   ladoGravado,
   ocupaPosicao,
+  podeReverterEnvio,
+  SITUACAO_APOS_REVERTER_ENVIO,
+  SITUACAO_QUE_A_REVERSAO_DESFAZ,
   oficiaisAindaAbertas,
   tetoDoLado,
   type PosicaoLado,
   type SituacaoQueOcupaPosicao,
 } from "../../domain/candidatura";
 import { ordenarLinhaDoTempo, tipoDoEvento } from "../../domain/candidatura-historico";
+import { EtapasFunilService } from "../etapas/etapas-funil.service";
 import type { AuthUser } from "../../auth/auth.types";
 import type {
   AdicionarEmLoteDto,
@@ -115,9 +120,32 @@ import type {
  */
 const ID_DO_CANDIDATO = sql`${asCandidatos}.${sql.identifier("id")}`;
 
+/**
+ * A RECUSA DA REVERSÃO, EM UMA FRASE SÓ, porque ela é dita em DOIS lugares do mesmo método: na
+ * leitura que decide e no `update` que só afeta a linha se ela ainda estiver enviada.
+ *
+ * DECLARADA AQUI, e não digitada duas vezes, pelo motivo de sempre: as duas respondem à MESMA
+ * pergunta, e duas redações da mesma recusa divergem na primeira vírgula reescrita, fazendo a
+ * mesma régua parecer duas dependendo de qual das duas o consultor esbarrou.
+ *
+ * ELA DIZ O QUE ACONTECEU E O QUE FAZER, porque quem a lê está no meio de uma correção: ou a tela
+ * está desatualizada (outra pessoa já mexeu na linha), ou o clique foi na linha errada.
+ */
+const NAO_HA_ENVIO_A_REVERTER =
+  "Esta candidatura não está enviada para admissão, então não há envio a reverter. Recarregue a página para ver a situação atual.";
+
 @Injectable()
 export class CandidatosService {
-  constructor(@Inject(DRIZZLE) private readonly db: Database) {}
+  /**
+   * `EtapasFunilService` É A FONTE DA LISTA DE ETAPAS, e entra aqui por injeção porque ela deixou de
+   * ser constante de código: é o diretor quem cadastra, renomeia e inativa. Este service usa o
+   * catálogo em DOIS pontos, e os dois eram silenciosos antes: a etapa em que a candidatura NASCE
+   * (que era o `DEFAULT` da coluna) e a validação da etapa de DESTINO (que era um `@IsIn` estático).
+   */
+  constructor(
+    @Inject(DRIZZLE) private readonly db: Database,
+    private readonly etapas: EtapasFunilService,
+  ) {}
 
   // ── A PESSOA ──────────────────────────────────────────────────────────────
 
@@ -352,8 +380,9 @@ export class CandidatosService {
    * A REENTRADA EM VAGA JÁ ENCERRADA É PERMITIDA, COM AVISO (ajuste do diretor). A trava 3 deixou de
    * ser "esta pessoa não pode aparecer duas vezes nesta vaga" e passou a ser "esta pessoa não pode
    * estar DUAS VEZES VIVA nesta vaga". Quem foi DESCARTADO ou DESISTIU no passado volta, e o passado
-   * fica: a linha anterior NÃO é reaproveitada nem apagada, nasce uma candidatura nova em CAPTACAO e
-   * o histórico continua consultável, que é o ponto todo de deixá-lo lá.
+   * fica: a linha anterior NÃO é reaproveitada nem apagada, nasce uma candidatura nova na etapa
+   * INICIAL do catálogo (era "em CAPTACAO", e deixou de ser uma palavra de código quando as etapas
+   * viraram dado do diretor) e o histórico continua consultável, que é o ponto todo de deixá-lo lá.
    *
    * A RECUSA DA PRIMEIRA TENTATIVA NÃO É BUROCRACIA. Alocar quem já foi descartado naquela mesma vaga
    * costuma ser engano (a pessoa foi escolhida de novo numa lista sem que ninguém lembrasse do
@@ -433,6 +462,21 @@ export class CandidatosService {
      */
     const aceiteDaReentrada = decisao.tipo === "REENTRADA" ? { aceite: ACEITE_REENTRADA } : {};
 
+    /*
+     * ─ ONDE A CANDIDATURA NASCE: UM DONO SÓ, E ELE É O CATÁLOGO ──────────────────────────────────
+     *
+     * ERAM TRÊS DONOS CONCORDANDO POR COINCIDÊNCIA: o `DEFAULT 'CAPTACAO'` da coluna (que era quem
+     * de fato decidia), a mesma palavra escrita à mão no estado inicial da tela de cadastro, e
+     * ninguém em lugar nenhum sabendo que os dois existiam. Com a etapa virando dado do diretor,
+     * o default do banco viraria um segundo dono capaz de apontar para uma etapa INATIVADA, em
+     * silêncio, e a FK só reclamaria se a etapa tivesse sido apagada, o que ela nunca é.
+     *
+     * O DEFAULT FOI REMOVIDO NA MIGRATION 0100 e a etapa passa a ser LIDA e PASSADA aqui. Se
+     * nenhuma estiver marcada como inicial, isto lança com a frase que diz o que fazer, ANTES de
+     * abrir a transação: melhor recusar o cadastro do que criar candidatura sem lugar no funil.
+     */
+    const etapaInicial = await this.etapas.etapaInicial();
+
     let id: string;
     try {
       /*
@@ -446,6 +490,7 @@ export class CandidatosService {
           .values({
             candidatoId,
             vagaId: dto.vagaId,
+            etapa: etapaInicial.codigo,
             idMatchPandape: texto(dto.idMatchPandape),
             alocadoPorId,
           })
@@ -521,6 +566,18 @@ export class CandidatosService {
     if (!movimentoPermitido(c.etapa, dto.etapa)) {
       throw new BadRequestException("Esta candidatura já está nesta etapa.");
     }
+
+    /*
+     * A ETAPA DE DESTINO EXISTE E ESTÁ ATIVA? Esta checagem substitui o `@IsIn` que morava no DTO, e
+     * ela precisa ser de RUNTIME e contra o catálogo VIVO: a lista é do diretor, então a única
+     * resposta correta é a de agora, não a de quando o processo subiu.
+     *
+     * É A SEGUNDA DE TRÊS CAMADAS, e nenhuma sobra: o DTO garante a FORMA, esta garante a REGRA (a
+     * etapa existe E recebe gente nova), e a FK do banco garante a INTEGRIDADE mesmo para quem
+     * escrever por fora da aplicação. Como `CandidaturaEtapa` virou `string`, o compilador deixou de
+     * recusar "TRIGEM" e são estas três que seguram o lugar dele.
+     */
+    await this.etapas.exigirEtapaAtiva(dto.etapa);
 
     /*
      * O MOVIMENTO E O REGISTRO DELE, NA MESMA TRANSAÇÃO. A coluna `etapa` é sobrescrita, então o
@@ -937,6 +994,165 @@ export class CandidatosService {
         etapaPara: c.etapa,
         situacao: dto.situacao,
         motivo: texto(dto.motivo),
+        porId,
+      });
+    });
+
+    return this.candidatura(candidaturaId);
+  }
+
+  /**
+   * ─ REVERTER O ENVIO PARA A ADMISSÃO: desfazer o erro recente, rápido ────────────────────────────
+   *
+   * DE QUALQUER CONSULTOR, sem `@Roles` (decisão do diretor), e o motivo é operacional: mandar a
+   * pessoa errada para a esteira é erro de clique, e erro de clique tem de ser desfeito por quem o
+   * cometeu, no minuto seguinte. Exigir um Master transformaria trinta segundos numa espera, e a
+   * espera é onde a pessoa errada segue ocupando posição de uma vaga que precisa dela.
+   *
+   * ┌─ ELA VAI PELO CAMINHO SIMPLES, E NÃO PELO TRAVADO, e a escolha tem TRÊS razões ─────────────┐
+   * │ 1. NÃO HÁ O QUE TRAVAR. O caminho travado existe para responder "ainda cabe mais um?" com a  │
+   * │    linha da vaga segurada (trava 4). A reversão LIBERA posição: ela não tem como fazer a     │
+   * │    vaga estourar, e não há corrida entre dois consultores a serializar, porque a soma que    │
+   * │    dois deles produziriam continua sendo menos ocupação, nunca mais.                         │
+   * │                                                                                             │
+   * │ 2. A TRAVA 7 RECUSARIA, E ELA ESTÁ CERTA. `ENVIADO_PARA_ADMISSAO` finaliza posição e `ATIVO` │
+   * │    não, que é LETRA POR LETRA a condição de recusa dela. A trava não foi afrouxada, contornada│
+   * │    por parâmetro nem consultada de outro jeito: ela segue incondicional no caminho em que    │
+   * │    mora, e o teste que a afirma continua verde.                                              │
+   * │                                                                                             │
+   * │ 3. É A PORTA QUE A PRÓPRIA TRAVA MANDA USAR. A frase dela diz "se a pessoa saiu do processo, │
+   * │    registre a saída dela", e o desvínculo (que também desfaz uma entrega, de um ALOCADO) já  │
+   * │    passa por aqui, pelo caminho simples, com teste próprio afirmando que ele NÃO trava a     │
+   * │    linha da vaga. A reversão é o mesmo formato: verbo EXPLÍCITO, alvo ESTREITO e rastro,     │
+   * │    e não efeito colateral de um verbo que queria dizer outra coisa, que é o que a trava 7    │
+   * │    existe para impedir.                                                                      │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * O ALVO É ESTREITO: só `ENVIADO_PARA_ADMISSAO` (`podeReverterEnvio`). Aceitar de qualquer
+   * situação faria desta rota uma segunda porta para desfazer alocação e aprovação, sem motivo, sem
+   * ciência e sem passar por lugar nenhum que conte posição, que é exatamente a porta que a trava 7
+   * fechou.
+   *
+   * A POSIÇÃO LIBERA SOZINHA, e nada a mais é escrito para isso: a ocupação é sempre DERIVADA da
+   * situação (`consomePosicao`), nunca guardada. O `posicao_lado` gravado na linha NÃO é limpo, de
+   * propósito e pela mesma razão do desvínculo: quem segura posição é a situação, e o lado que
+   * sobra é a memória de onde a pessoa estava, útil no dia em que ela for enviada de novo.
+   *
+   * §A.6: o evento leva QUEM (`por_id`), QUANDO (`ocorrido_em`, do banco) e a ETAPA em que a pessoa
+   * volta a ficar. Nada de CPF, nada de nome, nada de URL.
+   */
+  async reverterEnvioParaAdmissao(candidaturaId: string, porId: string): Promise<AsCandidaturaItem> {
+    /*
+     * A LEITURA QUE DECIDE MORA DENTRO DA TRANSAÇÃO, junto da gravação que ela autoriza. É o que o
+     * caminho travado já faz, e custa a mesma ida ao banco: decidir fora e gravar dentro responde
+     * sobre um instante anterior ao da escrita.
+     *
+     * SEM `FOR UPDATE` na linha da candidatura, e isso é deliberado: duas reversões simultâneas da
+     * MESMA candidatura escrevem o mesmo `ATIVO` (a segunda é ineficaz, não destrutiva) e não há
+     * contagem a furar, porque a ocupação é derivada. O lock existiria para evitar um segundo
+     * registro na trilha, e uma trilha com um evento repetido é preferível a um padrão de lock novo
+     * neste arquivo, que ninguém mais usa nesta camada.
+     */
+    await this.db.transaction(async (tx) => {
+      const c = await tx.query.asCandidaturas.findFirst({
+        where: eq(asCandidaturas.id, candidaturaId),
+      });
+      if (!c) throw new NotFoundException("Candidatura não encontrada.");
+
+      /*
+       * A RECUSA DIZ O QUE ACONTECEU E O QUE FAZER, porque quem a lê está no meio de uma correção:
+       * a tela pode estar desatualizada (outra pessoa já reverteu) ou o consultor pode ter clicado
+       * na linha errada. "Operação inválida" mandaria ele adivinhar qual dos dois.
+       */
+      if (!podeReverterEnvio(c.situacao)) throw new ConflictException(NAO_HA_ENVIO_A_REVERTER);
+
+      /*
+       * A ETAPA NÃO ENTRA NESTE `set`, e é a garantia central da operação: a pessoa volta para a
+       * ÚLTIMA ETAPA em que estava porque essa etapa nunca saiu da linha. Ver o bloco da régua em
+       * `domain/candidatura.ts`.
+       *
+       * ┌─ O `motivo_descarte` É LIMPO, e isto COMPLETA a reversão em vez de acrescentar a ela ───┐
+       * │ O CAMPO É O MOTIVO DAQUELE DESFECHO. Desfeito o desfecho, o motivo PERDEU O REFERENTE:  │
+       * │ a linha volta VIVA carregando a justificativa de um envio que não existe mais, e o campo│
+       * │ é exposto no `AsCandidaturaItem`. Toda tela que o leia passa a mostrar a explicação de  │
+       * │ um fato desfeito, sem erro e sem aviso, com cara de informação boa.                     │
+       * │                                                                                        │
+       * │ É A MESMA INCOERÊNCIA que a guarda do desvínculo já recusa uma linha acima (descartar   │
+       * │ quem já estava descartado SOBRESCREVIA o motivo original): o campo tem de descrever o   │
+       * │ ESTADO ATUAL da linha, e não um estado anterior.                                        │
+       * │                                                                                        │
+       * │ NENHUMA TRILHA SE PERDE, e é isso que torna a limpeza segura: o evento do envio, com o  │
+       * │ motivo, a etapa e o autor, continua em `as_candidatura_etapas`, intocado. O que sai da  │
+       * │ linha viva é a CÓPIA mutável; a memória do fato fica no histórico, que é onde ela mora. │
+       * └────────────────────────────────────────────────────────────────────────────────────────┘
+       */
+      /*
+       * ┌─ A SITUAÇÃO ENTRA NO `where`, e é ela que faz a leitura valer no instante da ESCRITA ───┐
+       * │ SEM ELA, o `update` filtra só por `id` e NÃO RELÊ a situação. Uma reversão concorrente  │
+       * │ com a `finalizarPosicao` ou a `aprovar` da MESMA candidatura termina com a linha em     │
+       * │ `ALOCADO` e um evento "voltou para a seleção" no histórico, ou o inverso.               │
+       * │                                                                                        │
+       * │ NÃO É FURO DE TRAVA, e a distinção importa: a reversão só SUBTRAI ocupação, então       │
+       * │ nenhuma ordem de execução infla contagem nenhuma. O que fica errado é a TRILHA          │
+       * │ CONTRADIZENDO A LINHA, e trilha que contradiz o estado é pior do que trilha ausente,    │
+       * │ porque quem a consulta para de conferir.                                                │
+       * │                                                                                        │
+       * │ É A GUARDA DE CIMA, ESCRITA DE NOVO NO LUGAR ONDE ELA DECIDE. A de cima serve para dar  │
+       * │ a frase certa a quem clicou; esta é a que vale contra a corrida, porque o banco a       │
+       * │ avalia no mesmo instante em que grava. Uma não substitui a outra.                        │
+       * │                                                                                        │
+       * │ MESMO PADRÃO DO VÍNCULO DA SALA DE ESPERA (`sala-espera.service.ts`), e sem lock novo:  │
+       * │ um `FOR UPDATE` aqui seria um padrão que nenhum outro ponto desta camada usa, para      │
+       * │ resolver o que uma cláusula do `where` já resolve.                                       │
+       * └────────────────────────────────────────────────────────────────────────────────────────┘
+       */
+      const [revertida] = await tx
+        .update(asCandidaturas)
+        .set({
+          situacao: SITUACAO_APOS_REVERTER_ENVIO,
+          motivoDescarte: null,
+          atualizadoEm: new Date(),
+        })
+        .where(
+          and(
+            eq(asCandidaturas.id, candidaturaId),
+            eq(asCandidaturas.situacao, SITUACAO_QUE_A_REVERSAO_DESFAZ),
+          ),
+        )
+        .returning({ id: asCandidaturas.id });
+
+      /*
+       * NÃO AFETOU LINHA NENHUMA: alguém mudou a situação entre a leitura e a escrita. A saída é
+       * RECUSAR, e não tratar como no-op, por duas razões:
+       *
+       *   1. É A MESMA RÉGUA DA GUARDA DE CIMA, e a mesma régua tem de dar a mesma resposta. Uma
+       *      recusa quando a leitura pega a mudança e um silêncio quando a escrita pega a MESMA
+       *      mudança seria a régua respondendo duas coisas dependendo do relógio.
+       *   2. NO-OP DEVOLVERIA 200 com a candidatura ainda enviada, e a tela diria "revertido" sobre
+       *      um envio que continua de pé. Quem clicou em desfazer merece saber que não desfez.
+       *
+       * O `throw` DESFAZ A TRANSAÇÃO INTEIRA, e é isso que impede o evento órfão: nenhum registro
+       * de "voltou para a seleção" sobrevive a uma reversão que não aconteceu.
+       */
+      if (!revertida) throw new ConflictException(NAO_HA_ENVIO_A_REVERTER);
+
+      /*
+       * O RASTRO, na MESMA transação: ou a reversão e o registro dela existem os dois, ou não existe
+       * nenhum dos dois. Uma reversão sem evento seria uma pessoa que voltou do envio sem que
+       * ninguém conseguisse dizer quem a trouxe de volta, e o envio dela continuaria no histórico
+       * como o último fato conhecido.
+       *
+       * `etapaPara` RECEBE A ETAPA ATUAL, que é a etapa em que a pessoa VOLTA A FICAR (é a mesma
+       * coisa, e é por isso que ela não precisou ser buscada em lugar nenhum). `situacao` recebe
+       * `ATIVO`, que é o que faz este evento se ler como "voltou para a seleção" e não como um
+       * movimento de funil.
+       */
+      await tx.insert(asCandidaturaEtapas).values({
+        candidaturaId,
+        etapaDe: null,
+        etapaPara: c.etapa,
+        situacao: SITUACAO_APOS_REVERTER_ENVIO,
+        motivo: null,
         porId,
       });
     });
@@ -1688,6 +1904,12 @@ export class CandidatosService {
       .select({
         situacao: asCandidaturas.situacao,
         posicaoLado: asCandidaturas.posicaoLado,
+        // A ETAPA ENTRA NA MESMA LEITURA, e não em uma consulta a mais: `AsOcupacaoVaga` passou a
+        // carregar a contagem do funil, e o painel entrega o MESMO contrato que a listagem. Uma
+        // coluna a mais na projeção não custa ida ao banco nenhuma; devolver o contrato pela metade
+        // custaria a fileira de KPIs zerada só nesta tela, que é o tipo de divergência que ninguém
+        // percebe porque parece um dia parado.
+        etapa: asCandidaturas.etapa,
       })
       .from(asCandidaturas)
       .where(eq(asCandidaturas.vagaId, vagaId));
@@ -1698,6 +1920,9 @@ export class CandidatosService {
       vagaId,
       posicoesOficiais: vaga.posicoesOficiais,
       ...derivada,
+      // A MESMA LISTA, a segunda régua. Contar aqui de outro jeito seria a cópia que o módulo passou
+      // uma frente inteira eliminando.
+      ...kpisDoFunil(lados),
     };
     return { ocupacao, candidaturas };
   }

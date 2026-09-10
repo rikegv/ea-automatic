@@ -384,8 +384,11 @@ export const vagaEscolaridadeEnum = pgEnum("vaga_escolaridade", [
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CENTRAL DE CANDIDATOS (A&S, onda 1). Enums espelhados do vocabulário do shared-types
-// (`AS_CANDIDATO_ORIGEM`, `CANDIDATURA_ETAPAS`, `CANDIDATURA_SITUACOES`, `AS_CONTATO_TIPO`), que é a
-// fonte única lida pela tela e pelos DTOs. Aqui é o mesmo vocabulário do lado do banco.
+// (`AS_CANDIDATO_ORIGEM`, `CANDIDATURA_SITUACOES`, `AS_CONTATO_TIPO`), que é a fonte única lida pela
+// tela e pelos DTOs. Aqui é o mesmo vocabulário do lado do banco.
+//
+// A ETAPA DO FUNIL SAIU DESTA LISTA (migration 0100): ela não é mais vocabulário de código, é
+// CATÁLOGO (`as_etapas_funil`), porque o diretor a edita na tela. Ver o bloco logo abaixo.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** De onde a pessoa veio. `PANDAPE` é a coluna reservada para a onda 4; nada a alimenta hoje. */
@@ -396,18 +399,23 @@ export const asCandidatoOrigemEnum = pgEnum("as_candidato_origem", [
   "BANCO_TALENTOS",
 ]);
 
-/**
- * ETAPA do funil de seleção. A ordem dos valores é a ordem do funil, e `ENTREVISTA_CLIENTE` fica no
- * meio mesmo sendo OPCIONAL: quem sabe que dá para pulá-la é a régua do domínio
- * (`AVANCOS_PERMITIDOS`, em `domain/candidatura.ts`), não o enum.
+/*
+ * ─ A ETAPA DO FUNIL NÃO É MAIS UM ENUM, E ESTA AUSÊNCIA É O REGISTRO DISSO ───────────────────────
+ *
+ * `candidaturaEtapaEnum` VIVIA AQUI e foi removido pela migration `0100_as_etapas_funil`, junto com
+ * o tipo `candidatura_etapa` do Postgres. A lista passou a ser DADO DO DIRETOR, na tabela
+ * `as_etapas_funil` (ver `tables.ts`), porque ele cadastra, renomeia, reordena e colore as etapas na
+ * tela do gerenciador, e enum não se edita por tela: `ALTER TYPE ... DROP VALUE` nem existe.
+ *
+ * AS TRÊS COLUNAS QUE O USAVAM (`as_candidaturas.etapa`, `as_candidatura_etapas.etapa_de` e
+ * `.etapa_para`) são `varchar(40)` com CHAVE ESTRANGEIRA para `as_etapas_funil.codigo`, com
+ * RESTRICT. A integridade que o enum dava não foi perdida, mudou de mecanismo: o enum recusava o
+ * valor inventado, a FK recusa o valor inventado E impede que a etapa referenciada suma.
+ *
+ * A SITUAÇÃO (`candidaturaSituacaoEnum`, logo abaixo) CONTINUA ENUM de propósito, e a assimetria é
+ * o ponto: a situação carrega REGRA (quem consome posição da vaga, quem sai da fila, quem o expurgo
+ * pode alcançar), então a lista dela é de código e não de usuário.
  */
-export const candidaturaEtapaEnum = pgEnum("candidatura_etapa", [
-  "CAPTACAO",
-  "TRIAGEM",
-  "ENTREVISTA_SOULAN",
-  "ENTREVISTA_CLIENTE",
-  "APROVACAO",
-]);
 
 /**
  * SITUAÇÃO da candidatura, coisa diferente da etapa: a etapa diz ONDE a pessoa está, a situação diz

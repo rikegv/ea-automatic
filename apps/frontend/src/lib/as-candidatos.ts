@@ -21,7 +21,6 @@ import type { AsCandidaturaEtapaItem } from "@ea/shared-types";
 import { apiFetch, ApiError } from "@/lib/api";
 import type { PosicaoLado } from "@/lib/as-vaga-acoes";
 import {
-  CANDIDATURA_ETAPAS,
   type AsCandidatoFicha,
   type AsCandidatoListItem,
   type AsCandidaturaItem,
@@ -182,6 +181,33 @@ export function registrarSaida(
 }
 
 /**
+ * ─ REVERTER O ENVIO PARA A ADMISSÃO: desfazer o erro recente, rápido ────────────────────────────
+ *
+ * CORPO VAZIO E SEM PARÂMETRO NENHUM, e isso é o contrato do backend, não economia: a reversão não
+ * recebe motivo (o motivo que existia era o do ENVIO, e ela justamente o LIMPA da linha viva) e quem
+ * reverteu vem da SESSÃO, nunca do corpo, porque é trilha e não campo de formulário.
+ *
+ * POST, como `aprovar` e ao contrário de `trocarVagaDaCandidatura`: a reversão registra um FATO novo
+ * do processo, e não a edição de uma propriedade da candidatura.
+ *
+ * QUALQUER CONSULTOR REVERTE (decisão do diretor): a rota não exige papel, então a tela também não
+ * esconde o gesto por papel. Quem restringe o módulo inteiro é o menu, no `MenuGuard`.
+ *
+ * O QUE VOLTA É O `AsCandidaturaItem` ATUALIZADO, como nas outras ações. A tela não o consome: ela
+ * recarrega, porque a OCUPAÇÃO DA VAGA mudou (uma posição a mais livre, uma pessoa a mais em
+ * seleção), e isso é informação da vaga, que não cabe na linha devolvida.
+ */
+export function reverterEnvioParaAdmissao(
+  candidaturaId: string,
+  token: string | null,
+): Promise<AsCandidaturaItem> {
+  return apiFetch<AsCandidaturaItem>(
+    `/as/candidatos/candidaturas/${candidaturaId}/reverter-envio`,
+    { method: "POST", token },
+  );
+}
+
+/**
  * TROCAR A VAGA da candidatura (item 5 do diretor), só MASTER e SUPER_ADMIN.
  *
  * PATCH, e não POST: a candidatura já existe e uma propriedade dela muda. POST diria que algo nasce,
@@ -246,23 +272,49 @@ export function listarContatos(
  * inteira, e a garantia de que isso não toca a contagem de posições da vaga, mora no domínio.
  *
  * ESTA É UMA FUNÇÃO, e não mais um mapa constante, porque a resposta agora é DERIVADA do catálogo:
- * etapa nova no `CANDIDATURA_ETAPAS` nasce como destino de todas as outras, sem ninguém ter de
- * lembrar de acrescentar cinco linhas num mapa.
+ * etapa nova nasce como destino de todas as outras, sem ninguém ter de lembrar de acrescentar cinco
+ * linhas num mapa.
+ *
+ * ┌─ A LISTA CHEGA POR PARÂMETRO, e a assinatura é a MESMA do domínio do backend ───────────────┐
+ * │ Ela deixou de ser constante importada porque virou DADO DO DIRETOR (`as_etapas_funil`). O    │
+ * │ backend fez exatamente esta mudança em `domain/candidatura.destinosDeEtapa`, e as duas       │
+ * │ assinaturas ficam idênticas de propósito: esta função existe para ESPELHAR aquela, e espelho │
+ * │ com formato diferente é convite a divergir.                                                 │
+ * │                                                                                             │
+ * │ O QUE SE PASSA AQUI SÃO OS CÓDIGOS **ATIVOS**, na ordem do funil (`codigosDeEtapaAtivos`).   │
+ * │ Passar as inativas faria a tela de mover oferecer destino que o diretor tirou de circulação, │
+ * │ e o backend recusaria com "foi desativada e não recebe mais candidatos" só depois do clique. │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────┘
  */
-export function destinosDeEtapa(de: CandidaturaEtapa): CandidaturaEtapa[] {
-  return CANDIDATURA_ETAPAS.filter((e) => e !== de);
+export function destinosDeEtapa(
+  de: CandidaturaEtapa,
+  etapas: readonly CandidaturaEtapa[],
+): CandidaturaEtapa[] {
+  return etapas.filter((e) => e !== de);
 }
 
 /** A entrevista com o cliente é opcional? Dito em função, para o teste afirmar isso diretamente. */
-export function entrevistaClienteEhOpcional(): boolean {
-  return destinosDeEtapa("ENTREVISTA_SOULAN").includes("APROVACAO");
+export function entrevistaClienteEhOpcional(etapas: readonly CandidaturaEtapa[]): boolean {
+  return destinosDeEtapa("ENTREVISTA_SOULAN", etapas).includes("APROVACAO");
 }
 
 /**
  * A ETAPA DE ENTRADA ESCOLHIDA NO CADASTRO, em UM passo.
  *
- * A candidatura SEMPRE nasce em `CAPTACAO` (é o backend que decide isso). Quando o consultor diz que
- * a pessoa já entra em Triagem, a tela precisa movê-la até lá.
+ * A candidatura NASCE NA ETAPA MARCADA COMO INICIAL no catálogo (é o backend que decide isso, lendo
+ * a coluna `inicial`). Quando o consultor diz que a pessoa já entra em Triagem, a tela precisa
+ * movê-la até lá.
+ *
+ * ┌─ POR QUE A ETAPA DE NASCIMENTO CHEGA POR PARÂMETRO ─────────────────────────────────────────┐
+ * │ ELA ERA `"CAPTACAO"` ESCRITO AQUI, e esse literal era um dos TRÊS donos da mesma decisão: o  │
+ * │ `DEFAULT` da coluna no banco, o estado inicial do modal de cadastro e esta linha. Os três     │
+ * │ concordavam por coincidência. Hoje o dono é UM, a coluna `inicial` do catálogo, e o banco    │
+ * │ perdeu o default de propósito.                                                               │
+ * │                                                                                              │
+ * │ O QUE ISSO CONSERTA NA PRÁTICA: se o diretor marcar a Triagem como inicial, cadastrar alguém │
+ * │ "entrando em Triagem" deixa de disparar um movimento inútil (a pessoa JÁ nasceu lá), e o     │
+ * │ histórico dela para de ganhar um evento de mudança que nunca aconteceu.                      │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
  *
  * ERA UMA CAMINHADA, VIROU UM PASSO. Enquanto o backend só aceitava avanço de uma etapa por vez,
  * entrar em Aprovação custava quatro requisições em sequência, e uma falha no meio deixava a pessoa
@@ -270,85 +322,65 @@ export function entrevistaClienteEhOpcional(): boolean {
  * `moverEtapa` leva ao destino: ou vai inteiro, ou não vai.
  *
  * A ASSINATURA CONTINUA DEVOLVENDO LISTA, e não uma etapa só, porque quem chama percorre o retorno
- * em laço. Devolver `[destino]` mantém o laço válido sem tocar no chamador (§A.26); `CAPTACAO` como
- * destino devolve lista vazia, que é o correto, já que ela é o ponto de partida.
+ * em laço. Devolver `[destino]` mantém o laço válido sem tocar no chamador (§A.26); a própria etapa
+ * de nascimento devolve lista vazia, que é o correto, já que ela é o ponto de partida.
  */
-export function caminhoAteEtapa(destino: CandidaturaEtapa): CandidaturaEtapa[] {
-  return destino === "CAPTACAO" ? [] : [destino];
+export function caminhoAteEtapa(
+  destino: CandidaturaEtapa,
+  etapaDeNascimento: CandidaturaEtapa | null,
+): CandidaturaEtapa[] {
+  return destino === etapaDeNascimento ? [] : [destino];
 }
 
-// ── OS KPIs, QUE SÃO O FILTRO ───────────────────────────────────────────────
+// ── OS CARDS DO FUNIL, QUE SÃO O FILTRO ─────────────────────────────────────
 
 /**
- * OS CARDS DO FUNIL: um por ESTADO DE VERDADE, e nenhum estado sem número à vista.
+ * ─ A QUE CARD UMA CANDIDATURA PERTENCE, E POR QUE ISTO DEIXOU DE SER UMA LISTA ─────────────────
  *
- * O QUE MUDOU E POR QUE (ajuste do diretor). O conjunto anterior tinha seis cards e escondia cinco
- * estados dentro de fusões: "Em Entrevista" somava Soulan com Cliente, "Aprovados" somava aprovado
- * com contratado, "Descartados" somava descartado com desistiu, e quem estava ATIVO na Aprovação não
- * tinha card nenhum. As duas primeiras fusões são justamente as que doem numa análise de funil:
- *  - APROVADO e ENVIADO_PARA_ADMISSAO são estados DIFERENTES (um virou admissão, o outro ainda não);
- *  - DESCARTADO e DESISTIU também (o time recusou, ou a pessoa saiu por conta própria).
- * Somados, esses pares respondem "quantos saíram", e nunca "por que saíram", que é a pergunta real.
+ * ┌─ O DEFEITO QUE ESTA FUNÇÃO EXISTE PARA NÃO TER MAIS ────────────────────────────────────────┐
+ * │ A versão anterior (`kpiDaCandidatura`) devolvia um de NOVE nomes escritos à mão, e cinco     │
+ * │ deles eram as etapas do funil por extenso ("captacao", "triagem", "entrevistaSoulan"...).    │
+ * │ Com a lista de etapas virando CADASTRO DO DIRETOR, isso passou a ser um buraco silencioso: a │
+ * │ etapa nova que ele criasse não casava com nenhum ramo, caía no `return` final e era contada  │
+ * │ dentro do card de Aprovação. Ninguém veria, porque nada falha.                                │
+ * │                                                                                              │
+ * │ E ELA FUNDIA `ALOCADO` COM `APROVADO` no mesmo card, escondendo quem já teve a posição        │
+ * │ entregue atrás de quem só tem a posição reservada.                                            │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
  *
- * A REGRA CONTINUA A MESMA: uma candidatura cai em UM card só, sem contagem dupla. A SITUAÇÃO vence
- * a ETAPA, porque quem já recebeu decisão não está mais em fila viva; a etapa só decide entre os
- * cinco cards de quem segue `ATIVO`.
+ * A CHAVE PASSOU A SER O CÓDIGO CRU: a da ETAPA para quem segue em seleção, a da SITUAÇÃO para quem
+ * já recebeu decisão. É o mesmo par de mapas do contrato de `AsOcupacaoVaga` (`porEtapa` e
+ * `porDesfecho`), então as duas fileiras do sistema (Central De Vagas e Central De Candidatos)
+ * passam a responder pela MESMA régua, e a montagem dos cards é a mesma peça (`lib/as-vagas-funil`).
+ *
+ * ┌─ O CORTE É `ATIVO`, E NÃO `candidaturaViva`, E A DIFERENÇA NÃO É DETALHE ───────────────────┐
+ * │ `candidaturaViva` é o complemento de `ehSaidaSemExito`, então ela devolve VERDADEIRO para    │
+ * │ APROVADO, ALOCADO e ENVIADO_PARA_ADMISSAO: usá-la aqui mandaria os três desfechos BONS de    │
+ * │ volta para os cards de ETAPA, e a fileira diria que gente já aprovada continua esperando     │
+ * │ decisão na Triagem. O contrato do backend é explícito no ponto: `porEtapa` conta só quem     │
+ * │ está EM SELEÇÃO (`soma(porEtapa) === emSelecao`, e `emSelecao` são as candidaturas ATIVAS),  │
+ * │ e a SITUAÇÃO VENCE A ETAPA. Esta função é a versão da tela da mesma frase.                   │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * A REGRA DE SEMPRE CONTINUA: uma candidatura cai em UM card só, sem contagem dupla.
  */
-export type KpiFunil =
-  | "captacao"
-  | "triagem"
-  | "entrevistaSoulan"
-  | "entrevistaCliente"
-  | "emAprovacao"
-  | "aprovados"
-  | "contratados"
-  | "descartados"
-  | "desistiram";
-
-/**
- * `total` é a base de tudo e `semVaga` é a pessoa que está na base e ainda não entrou em vaga
- * nenhuma. Nenhum dos dois vem de uma candidatura (o segundo é, por definição, a AUSÊNCIA de uma),
- * então eles vivem fora do `KpiFunil` e são contados pela tela.
- */
-export type KpiId = "total" | "semVaga" | KpiFunil;
-
-/**
- * A QUE CARD UMA CANDIDATURA PERTENCE. Total, agora: toda combinação de etapa e situação tem card,
- * e é por isso que o retorno deixou de ser anulável. O estado sem número à vista era exatamente o
- * buraco que o ajuste fechou (quem estava ATIVO na Aprovação não aparecia em card nenhum).
- */
-export function kpiDaCandidatura(etapa: CandidaturaEtapa, situacao: CandidaturaSituacao): KpiFunil {
-  /*
-   * OS DESFECHOS PRIMEIRO: recebida a decisão, a etapa em que ela foi tomada não muda o card.
-   *
-   * ─ O `ALOCADO` ENTRA NO CARD "APROVADOS", E A ESCOLHA PRECISA SER JUSTIFICADA ────────────────
-   *
-   * ELE NÃO TINHA RAMO NENHUM, e o defeito estava dormente só porque ninguém era alocado ainda: sem
-   * ramo, ele escapava dos desfechos e era classificado pela ETAPA, então quem já tinha ENTREGUE a
-   * posição ia parar num card de funil VIVO. O KPI contaria entrega como gente esperando decisão, que
-   * é a leitura oposta da que o card promete.
-   *
-   * POR QUE "APROVADOS" É O CARD CERTO ENTRE OS QUE EXISTEM: ele é o card de quem tem posição
-   * garantida na vaga e ainda NÃO foi para a esteira. `APROVADO` reserva a posição, `ALOCADO` a
-   * entrega, e os dois respondem "está dentro, a admissão ainda não começou". Os vizinhos seriam
-   * piores, e por motivos diferentes: "Contratados" é `ENVIADO_PARA_ADMISSAO` e diria que a admissão
-   * começou (a confusão exata que o vocabulário novo veio desfazer), e qualquer card de etapa diria
-   * que ele ainda está em seleção.
-   *
-   * O CARD PRÓPRIO "ALOCADOS" É PROPOSTA, E NÃO FOI CONSTRUÍDO: card novo é decisão do diretor
-   * (§A.31), e a régua de "uma candidatura cai em UM card só" continua valendo do jeito que está.
-   */
-  if (situacao === "APROVADO" || situacao === "ALOCADO") return "aprovados";
-  if (situacao === "ENVIADO_PARA_ADMISSAO") return "contratados";
-  if (situacao === "DESCARTADO") return "descartados";
-  if (situacao === "DESISTIU") return "desistiram";
-  // E AS CINCO ETAPAS VIVAS, na ordem do funil.
-  if (etapa === "CAPTACAO") return "captacao";
-  if (etapa === "TRIAGEM") return "triagem";
-  if (etapa === "ENTREVISTA_SOULAN") return "entrevistaSoulan";
-  if (etapa === "ENTREVISTA_CLIENTE") return "entrevistaCliente";
-  return "emAprovacao";
+export function cardDaCandidatura(
+  etapa: CandidaturaEtapa,
+  situacao: CandidaturaSituacao,
+): string {
+  return situacao === "ATIVO" ? etapa : situacao;
 }
+
+/**
+ * OS DOIS CARDS QUE NÃO SAEM DE UMA CANDIDATURA, e por isso não têm código de catálogo.
+ *
+ * `total` é a base de tudo, e `semVaga` é a pessoa que está na base e ainda não entrou em vaga
+ * nenhuma, que é por definição a AUSÊNCIA de candidatura. Eles são reservados em minúsculas
+ * justamente para não colidirem com chave de catálogo: código de etapa e situação são MAIÚSCULOS
+ * (`CAPTACAO`, `APROVADO`), no sistema inteiro.
+ */
+export const CARD_TOTAL = "total";
+export const CARD_SEM_VAGA = "semVaga";
 
 /**
  * A FRASE DA VAGA CHEIA É DO BACKEND, MAS NÃO SERVE EM TODO CONTEXTO.

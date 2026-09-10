@@ -16,7 +16,6 @@ import {
   AS_CANDIDATO_ORIGEM,
   AS_CONTATO_TIPO,
   AS_MAXIMO_POR_LOTE,
-  CANDIDATURA_ETAPAS,
   UFS,
   type AsCandidatoOrigem,
   type AsContatoTipo,
@@ -242,7 +241,22 @@ export class AlocarEmVagaDto {
  * já não está mais.
  */
 export class MoverEtapaDto {
-  @IsIn(CANDIDATURA_ETAPAS as unknown as string[])
+  /**
+   * ─ O `@IsIn` SAIU DAQUI, E A VALIDAÇÃO MUDOU DE LUGAR, NÃO SUMIU ─────────────────────────────
+   *
+   * A LISTA DE ETAPAS PASSOU A SER DADO DO DIRETOR (`as_etapas_funil`), e um `@IsIn` sobre uma
+   * constante congelada faria as duas coisas erradas ao mesmo tempo: RECUSARIA a etapa que ele
+   * criou hoje e ACEITARIA a que ele inativou ontem. O `class-validator` também não faz consulta
+   * assíncrona bem, então decorator não é o lugar de uma lista viva.
+   *
+   * QUEM VALIDA É O SERVICE, contra o catálogo (`EtapasFunilService.exigirEtapaAtiva`), e a FK do
+   * banco recusa em última instância. O que sobra aqui é a checagem de FORMA, que continua sendo
+   * responsabilidade do DTO: string, não vazia, dentro do tamanho da coluna.
+   */
+  @Transform(({ value }) => (typeof value === "string" ? value.trim() : value))
+  @IsString()
+  @MinLength(1)
+  @MaxLength(40)
   etapa!: CandidaturaEtapa;
 }
 
@@ -532,7 +546,17 @@ export class MoverEtapaEmLoteDto {
   @ListaEmMassa()
   candidaturaIds!: string[];
 
-  /** Só a etapa de DESTINO: de onde cada pessoa sai é o que está gravado nela. */
-  @IsIn(CANDIDATURA_ETAPAS as unknown as string[])
+  /**
+   * Só a etapa de DESTINO: de onde cada pessoa sai é o que está gravado nela.
+   *
+   * MESMA MUDANÇA DO `MoverEtapaDto`, e ela precisa acontecer NOS DOIS: converter só o individual
+   * deixaria o LOTE recusando a etapa nova e aceitando a inativada, em silêncio, para trinta
+   * pessoas de uma vez. A validação contra o catálogo vive no service, que é o mesmo `moverEtapa`
+   * chamado N vezes.
+   */
+  @Transform(({ value }) => (typeof value === "string" ? value.trim() : value))
+  @IsString()
+  @MinLength(1)
+  @MaxLength(40)
   etapa!: CandidaturaEtapa;
 }

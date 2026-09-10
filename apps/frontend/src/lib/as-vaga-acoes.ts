@@ -274,6 +274,28 @@ export function podeAprovar(s: CandidaturaSituacao): boolean {
 }
 
 /**
+ * ─ ESTA CANDIDATURA PODE TER O ENVIO REVERTIDO? ────────────────────────────────────────────────
+ *
+ * SÓ QUEM ESTÁ ENVIADO PARA A ADMISSÃO, e o alvo estreito é a régua do backend
+ * (`domain/candidatura.podeReverterEnvio`), letra por letra: não existe "reverter" um aprovado nem
+ * um alocado, porque não foi um ENVIO que os pôs onde estão. Oferecer o botão para eles seria abrir
+ * na tela uma segunda porta para desfazer alocação, sem motivo e sem passar por lugar nenhum que
+ * conte posição, que é a porta que o backend fechou de propósito.
+ *
+ * A TELA NÃO É A TRAVA, e aqui isso tem consequência prática: quem recusa é o 409 do backend ("não
+ * está enviada para admissão, então não há envio a reverter"), medido dentro da transação. Esta
+ * função existe para o botão só aparecer onde ele tem o que fazer. Botão que só sabe dar 409 é
+ * ruído, e o consultor aprende a ignorar a tela.
+ *
+ * É UMA COMPARAÇÃO DIRETA, como `podeAprovar`, e não uma lista nova: `finalizaPosicao` diria SIM
+ * também para o `ALOCADO`, que é exatamente quem não pode. Uma lista escrita aqui concordaria com a
+ * do backend por coincidência.
+ */
+export function podeReverterEnvio(s: CandidaturaSituacao): boolean {
+  return s === "ENVIADO_PARA_ADMISSAO";
+}
+
+/**
  * ESTA CANDIDATURA PODE ENTREGAR UMA POSIÇÃO?
  *
  * DUAS CONDIÇÕES, as duas do vocabulário compartilhado:

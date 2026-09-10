@@ -1,5 +1,4 @@
 import {
-  CANDIDATURA_ETAPAS,
   CANDIDATURA_SITUACOES,
   candidaturaViva,
   consomePosicao,
@@ -45,16 +44,33 @@ import {
  * │ SITUAÇÃO (`consomePosicao`), nunca a etapa. Mover de etapa não muda situação nenhuma, então │
  * │ nem a trava de vaga cheia (`cabeMaisUm`), nem a conta de ocupação                          │
  * │ (`ocupacaoDaVaga`), nem a trava de encerramento da vaga (`vagaPodeEncerrar`) são tocadas    │
- * │ por esta mudança. Uma candidatura APROVADA sequer chega aqui: o service só move quem está   │
- * │ `ATIVO`, e essa trava CONTINUA DE PÉ. Voltar alguém de Aprovação para Triagem não desfaz    │
- * │ aprovação nenhuma, porque quem estava aprovado não é movível.                               │
+ * │ por esta mudança.                                                                           │
+ * │                                                                                             │
+ * │ QUEM SE MOVE É TODA CANDIDATURA **VIVA**, e não só a `ATIVO`. Esta linha dizia o contrário  │
+ * │ ("o service só move quem está ATIVO") e estava DEFASADA desde o modelo de posição: a fonte   │
+ * │ é `candidaturaViva`, em `candidatos.service.moverEtapa`, então `APROVADO`, `ALOCADO` e       │
+ * │ `ENVIADO_PARA_ADMISSAO` ANDAM no funil e OCUPAM etapa. A garantia que importa não muda uma   │
+ * │ vírgula, e é a de cima: mover escreve SÓ a coluna `etapa`, e a ocupação deriva de `situacao`.│
  * └────────────────────────────────────────────────────────────────────────────────────────────┘
  *
  * O QUE CONTINUA BARRADO, e é só isto: mover para a etapa em que a pessoa JÁ ESTÁ. Não é movimento,
  * é ruído, e aceitar em silêncio faria a tela achar que algo aconteceu.
+ *
+ * ┌─ A LISTA DAS ETAPAS DEIXOU DE SER CONSTANTE E PASSOU A SER PARÂMETRO ───────────────────────┐
+ * │ ELA CHEGA DE FORA porque agora é DADO DO DIRETOR: a fonte da verdade é `as_etapas_funil`, e  │
+ * │ uma constante importada aqui seria o domínio fingindo saber uma lista que o usuário edita.   │
+ * │ Quem lê o catálogo é o `EtapasFunilService`; estas funções continuam PURAS e testáveis sem   │
+ * │ banco, que é a razão de o módulo existir.                                                    │
+ * │                                                                                              │
+ * │ O PARÂMETRO É A LISTA DE CÓDIGOS ATIVOS, na ordem do funil. Passar as inativas faria a tela  │
+ * │ de mover oferecer destino que o diretor tirou de circulação.                                 │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
  */
-export function destinosDeEtapa(de: CandidaturaEtapa): CandidaturaEtapa[] {
-  return CANDIDATURA_ETAPAS.filter((e) => e !== de);
+export function destinosDeEtapa(
+  de: CandidaturaEtapa,
+  etapas: readonly CandidaturaEtapa[],
+): CandidaturaEtapa[] {
+  return etapas.filter((e) => e !== de);
 }
 
 /**
@@ -66,8 +82,11 @@ export function destinosDeEtapa(de: CandidaturaEtapa): CandidaturaEtapa[] {
  * service usava esse vazio para dizer "já está na última etapa". Hoje a Aprovação tem quatro
  * destinos como qualquer outra etapa, e a frase de recusa do service foi ajustada junto.
  */
-export function proximasEtapas(de: CandidaturaEtapa): CandidaturaEtapa[] {
-  return destinosDeEtapa(de);
+export function proximasEtapas(
+  de: CandidaturaEtapa,
+  etapas: readonly CandidaturaEtapa[],
+): CandidaturaEtapa[] {
+  return destinosDeEtapa(de, etapas);
 }
 
 /**
@@ -76,8 +95,8 @@ export function proximasEtapas(de: CandidaturaEtapa): CandidaturaEtapa[] {
  * verdadeira, e a função fica porque o dia em que alguém tornar a etapa OBRIGATÓRIA (uma régua que
  * exija passar por ela) é o dia em que este teste tem de quebrar dizendo o que mudou.
  */
-export function entrevistaClienteEhOpcional(): boolean {
-  return destinosDeEtapa("ENTREVISTA_SOULAN").includes("APROVACAO");
+export function entrevistaClienteEhOpcional(etapas: readonly CandidaturaEtapa[]): boolean {
+  return destinosDeEtapa("ENTREVISTA_SOULAN", etapas).includes("APROVACAO");
 }
 
 /**
@@ -97,9 +116,35 @@ export function avancoPermitido(de: CandidaturaEtapa, para: CandidaturaEtapa): b
   return movimentoPermitido(de, para);
 }
 
-/** A etapa é uma das cinco conhecidas? Guarda de borda para corpo montado fora da tela. */
-export function ehEtapaConhecida(v: string): v is CandidaturaEtapa {
-  return (CANDIDATURA_ETAPAS as readonly string[]).includes(v);
+/**
+ * A etapa está no catálogo que foi passado? Guarda de borda para corpo montado fora da tela.
+ *
+ * DEIXOU DE SER UM PREDICADO DE TIPO (`v is CandidaturaEtapa`) porque `CandidaturaEtapa` virou
+ * `string`: o predicado não estreitaria nada e só daria a impressão de uma garantia que o compilador
+ * não tem mais. A garantia real está em outros dois lugares, e os dois são de RUNTIME: esta função,
+ * chamada pelo service contra o catálogo vivo, e a FK do banco, que recusa em última instância.
+ */
+export function ehEtapaConhecida(v: string, etapas: readonly CandidaturaEtapa[]): boolean {
+  return etapas.includes(v);
+}
+
+/**
+ * ─ A ORDEM DO FUNIL, QUANDO ELA PRECISA VIRAR NÚMERO ────────────────────────────────────────────
+ *
+ * Era `CANDIDATURA_ETAPAS.indexOf(...)`, espalhado. Com a lista vindo do banco, o `indexOf` sobre
+ * uma lista qualquer é o defeito mais perigoso desta frente inteira: ele NÃO quebra, ele passa a
+ * ordenar errado em silêncio, e `indexOf` de quem não está na lista devolve `-1`, que joga a etapa
+ * desconhecida para ANTES da primeira em vez de depois da última.
+ *
+ * Esta função devolve a posição do catálogo e manda o desconhecido para o FIM
+ * (`Number.MAX_SAFE_INTEGER`), que é a direção certa: etapa inativada, que só aparece em linha
+ * antiga, não pode se passar pela primeira do funil.
+ */
+export function posicaoNoFunil(
+  etapa: CandidaturaEtapa,
+  ordemPorCodigo: ReadonlyMap<string, number>,
+): number {
+  return ordemPorCodigo.get(etapa) ?? Number.MAX_SAFE_INTEGER;
 }
 
 // ── AS SAÍDAS ───────────────────────────────────────────────────────────────
@@ -161,6 +206,54 @@ export type SituacaoQueOcupaPosicao = Extract<
   CandidaturaSituacao,
   "APROVADO" | "ALOCADO" | "ENVIADO_PARA_ADMISSAO"
 >;
+
+// ── A REVERSÃO DO ENVIO PARA ADMISSÃO ───────────────────────────────────────
+
+/**
+ * ─ DESFAZER O ENVIO PARA A ADMISSÃO, e a régua em DUAS constantes ───────────────────────────────
+ *
+ * O QUE A OPERAÇÃO PEDE (decisão do diretor): o consultor mandou a pessoa errada para a esteira e
+ * precisa desfazer AGORA. Qualquer consultor reverte (não é ação de Master), a pessoa volta para a
+ * ÚLTIMA ETAPA em que estava, a posição que ela ocupava fica LIVRE, e o gesto deixa rastro.
+ *
+ * ┌─ "VOLTAR PARA A ÚLTIMA ETAPA" É NÃO MEXER NA ETAPA, e isso não é economia de código ─────────┐
+ * │ A COLUNA `etapa` NUNCA FOI PERDIDA. Nem `registrarSaida` nem o caminho travado a tocam: os    │
+ * │ dois escrevem `situacao` (e o motivo, e o lado), e a etapa da pessoa continua exatamente onde │
+ * │ estava quando ela foi enviada. O envio não moveu ninguém no funil, ele só mudou a SITUAÇÃO.   │
+ * │                                                                                              │
+ * │ POR ISSO A REVERSÃO NÃO PRECISA DESCOBRIR A ETAPA ANTERIOR no histórico, e não deve: um       │
+ * │ `etapa` reescrito a partir do último evento seria uma SEGUNDA fonte para um dado que já está  │
+ * │ certo na linha, e erraria em toda candidatura que mudou de etapa DEPOIS do envio.             │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * DE ONDE SE REVERTE, e só de lá: `ENVIADO_PARA_ADMISSAO`. Não existe "reverter" um aprovado nem um
+ * alocado, porque não foi um envio que os pôs onde estão.
+ *
+ * PARA ONDE SE VOLTA: `ATIVO`, e ele é FORÇADO pelas duas metades do pedido do diretor ao mesmo
+ * tempo, não escolhido por gosto. "A posição fica LIVRE" exige uma situação que NÃO consuma posição,
+ * e "a pessoa volta a contar em Em Processo" exige exatamente `ATIVO`, que é o critério único de
+ * `emSelecao` e de `porEtapa`. Voltar para `ALOCADO`, que seria o estado anterior mais provável,
+ * satisfaria a segunda metade e QUEBRARIA a primeira: alocado finaliza posição, e a vaga
+ * continuaria devendo a entrega que o consultor acabou de desfazer.
+ *
+ * AS DUAS PROPRIEDADES SÃO AFIRMADAS EM TESTE contra `finalizaPosicao`, `consomePosicao` e
+ * `candidaturaViva`, e não contra o nome escrito aqui: quem trocar estas constantes por outras que
+ * não cumpram a régua quebra o teste antes de chegar à operação.
+ */
+export const SITUACAO_QUE_A_REVERSAO_DESFAZ = "ENVIADO_PARA_ADMISSAO" as const satisfies CandidaturaSituacao;
+
+/** Para onde a candidatura volta ao ter o envio revertido. Ver o bloco acima: `ATIVO` é forçado. */
+export const SITUACAO_APOS_REVERTER_ENVIO = "ATIVO" as const satisfies CandidaturaSituacao;
+
+/**
+ * Esta candidatura pode ter o envio revertido? Só quem está NA situação que a reversão desfaz.
+ *
+ * A PERGUNTA MORA NO DOMÍNIO, e não num `if` dentro do service, pelo mesmo motivo de `ocupaPosicao`:
+ * régua escrita dentro do caminho é régua que a próxima porta esquece de consultar.
+ */
+export function podeReverterEnvio(s: CandidaturaSituacao): boolean {
+  return s === SITUACAO_QUE_A_REVERSAO_DESFAZ;
+}
 
 /**
  * SAÍDA QUE ENCERRA O PROCESSO SEM ÊXITO. Estas duas ficam FORA da conta de ocupação: nunca somam e
@@ -378,6 +471,81 @@ export function ocupacaoDaVaga(
     fora,
     excedida: meta !== null && ocupadasOficial > meta,
   };
+}
+
+/**
+ * ─ OS ITENS QUE OS KPIs DO FUNIL CONSOMEM ───────────────────────────────────────────────────────
+ *
+ * A `etapa` É OBRIGATÓRIA, e não opcional como o `posicaoLado` de `ItemDeOcupacao`. A diferença é
+ * deliberada: lado ausente tem um significado definido (nulo é OFICIAL, por `ladoDaCandidatura`), e
+ * etapa ausente NÃO TEM. Aceitá-la opcional produziria, em silêncio, um `porEtapa` zerado para quem
+ * chamasse sem ela, e KPI zerado é a falha que ninguém percebe porque parece um dia parado.
+ *
+ * O TIPO É `string`, e não `CandidaturaEtapa`, pela mesma razão de a lista ter virado tabela: a
+ * etapa é DADO DO DIRETOR, e o domínio não tem como conhecer a lista de hoje. Inclusive a INATIVA
+ * conta: se sobrou linha viva apontando para uma etapa fora de circulação, ela aparece com a chave
+ * dela, porque número que some é pior que número feio.
+ */
+export interface ItemDoFunil {
+  situacao: CandidaturaSituacao;
+  etapa: string;
+}
+
+/**
+ * OS DOIS GRUPOS DE CONTAGEM, e eles vêm de fontes diferentes de propósito: ETAPA é catálogo (lista
+ * variável, do diretor) e DESFECHO é `CANDIDATURA_SITUACOES` (lista fixa, com regra).
+ */
+export interface KpisDoFunil {
+  /**
+   * Candidaturas EM SELEÇÃO, por CÓDIGO de etapa. `Record` dinâmico, NUNCA campos fixos: a lista de
+   * etapas é editável, e um contrato com cinco campos escritos à mão repetiria exatamente o defeito
+   * que a tabela de etapas veio desmontar (etapa nova cadastrada pelo diretor sem card nenhum).
+   *
+   * SÓ AS CHAVES COM NÚMERO aparecem. Quem lê monta a fileira a partir do CATÁLOGO (ordem, rótulo,
+   * tom) e resolve a ausência com `?? 0`: derivar os cards das chaves devolvidas faria a etapa vazia
+   * sumir da tela justamente quando o time precisa ver que ela está vazia.
+   */
+  porEtapa: Record<string, number>;
+  /** Candidaturas que JÁ receberam decisão, por SITUAÇÃO. Mesma forma, e pelo mesmo motivo. */
+  porDesfecho: Record<string, number>;
+}
+
+/**
+ * ─ A CONTAGEM DO FUNIL: A SITUAÇÃO VENCE A ETAPA ────────────────────────────────────────────────
+ *
+ * A RÉGUA, em uma frase: quem JÁ RECEBEU DECISÃO conta no DESFECHO, e a etapa em que a decisão foi
+ * tomada não muda o card; quem segue EM SELEÇÃO conta na ETAPA em que está. É a mesma régua que os
+ * cards da Central de Candidatos já aplicam (`kpiDaCandidatura`, no frontend), e ela não muda aqui:
+ * o que muda é o FORMATO DA CHAVE, que deixa de ser um literal e passa a ser o código da etapa.
+ *
+ * ┌─ POR QUE ELA NÃO PODE SER "SOMA POR ETAPA" E PRONTO ───────────────────────────────────────────┐
+ * │ TODA candidatura tem uma etapa gravada, inclusive a descartada e a desistente: a coluna nunca   │
+ * │ é esvaziada quando a pessoa sai, porque é ela que diz ONDE a saída aconteceu. Contar por etapa  │
+ * │ sem olhar a situação encheria o card de "Triagem" com gente que saiu do processo meses atrás, e │
+ * │ a fileira passaria a somar mais do que o número de pessoas vivas no funil.                      │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * CADA CANDIDATURA CAI EM UM GRUPO SÓ, e é isso que torna a soma dos dois igual ao total de linhas.
+ * Não existe item fora dos dois grupos: ou a situação é `ATIVO`, ou não é.
+ *
+ * `ATIVO` É O MESMO CRITÉRIO DO `emSelecao` de `ocupacaoDaVaga`, e a concordância entre as duas
+ * funções é AFIRMADA EM TESTE sobre a mesma lista de itens, em vez de confiada ao comentário: no dia
+ * em que uma delas mudar de ideia sobre o que é estar em seleção, o cruzamento quebra.
+ *
+ * §A.6: entram situação e código de etapa, sai contagem. Nenhum dado pessoal atravessa esta função,
+ * e nenhuma das chaves identifica pessoa.
+ */
+export function kpisDoFunil(itens: readonly ItemDoFunil[]): KpisDoFunil {
+  const porEtapa: Record<string, number> = {};
+  const porDesfecho: Record<string, number> = {};
+
+  for (const i of itens) {
+    // A SITUAÇÃO PRIMEIRO. Recebida a decisão, a etapa não decide mais nada.
+    if (i.situacao === "ATIVO") porEtapa[i.etapa] = (porEtapa[i.etapa] ?? 0) + 1;
+    else porDesfecho[i.situacao] = (porDesfecho[i.situacao] ?? 0) + 1;
+  }
+
+  return { porEtapa, porDesfecho };
 }
 
 /**

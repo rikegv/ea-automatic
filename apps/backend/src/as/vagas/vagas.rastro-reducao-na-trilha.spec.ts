@@ -5,6 +5,7 @@ import { VagasController } from "./vagas.controller";
 import type { CreateVagaDto } from "./vagas.dto";
 import type { AuthUser } from "../../auth/auth.types";
 import { asCandidaturas, vagaMetaReducoes, vagas } from "../../db/schema";
+import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
 
 /**
  * ─ O RASTRO DA REDUÇÃO DE META NA OUTRA PORTA: a trilha de abertura (veto mantido, 09/09/2026) ──
@@ -167,7 +168,7 @@ function makeDb(cenario: { posicoesOficiais?: number | null; posicoesBanco?: num
     },
   };
 
-  return { service: new VagasService(db as never), escritas };
+  return { service: new VagasService(db as never, catalogoDeEtapasFingido() as never), escritas };
 }
 
 const rastroGravado = (e: Escrita[]) => e.filter((x) => x.tabela === vagaMetaReducoes);
@@ -533,7 +534,7 @@ function makeDbComMemoria(cenario: {
     },
   };
 
-  return { service: new VagasService(db as never), vaga, rastro };
+  return { service: new VagasService(db as never, catalogoDeEtapasFingido() as never), vaga, rastro };
 }
 
 const FECHAMENTO = { dataFechamento: "2026-09-09" };

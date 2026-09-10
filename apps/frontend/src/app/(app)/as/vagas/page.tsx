@@ -98,6 +98,17 @@ import { Stepper, type StepDef } from "@/components/nova/Stepper";
 import { VAGA_STATUS_PUBLICACAO } from "@/lib/as-vaga-acoes";
 import { fechamentoRecusadoPorPosicoes } from "@/lib/as-vaga-fechamento";
 import { avisoDeReducaoDeMeta, avisoDeReducaoNaTrilha } from "@/lib/as-vaga-meta";
+import { useEtapas, etapasOrdenadas, corDoTom } from "@/lib/as-etapas";
+import { cardsDeDesfecho, cardsDeEtapa, somarFunil, type CardDeFunil } from "@/lib/as-vagas-funil";
+import {
+  casaBusca,
+  fatiarPagina,
+  paginaValida,
+  temGenteNaEtapa,
+  temGenteNoDesfecho,
+  textoBuscavel,
+  totalDePaginas,
+} from "@/lib/as-vagas-lista";
 import { CandidatosPendentesModal } from "@/components/as/vagas/CandidatosPendentesModal";
 import { RecusaFechamentoModal } from "@/components/as/vagas/RecusaFechamentoModal";
 import { VagaPainelModal } from "@/components/as/vagas/VagaPainelModal";
@@ -145,6 +156,16 @@ const MOTIVO_SUBSTITUICAO = "Substituição";
  * O texto começa com dois-pontos de propósito: nenhum uuid pode colidir com ele.
  */
 const SEM_CONSULTOR = ":sem-consultor";
+
+/**
+ * QUANTAS LINHAS POR PÁGINA.
+ *
+ * VINTE E CINCO, e o número tem motivo: a linha desta tabela é ALTA (a coluna Posições carrega dois
+ * cilindros e a contagem do funil, então cada linha mede perto de 90px), e 25 linhas já enchem duas
+ * telas de rolagem. Mais do que isso a página deixa de ser página; menos, e quem trabalha com uma
+ * base pequena passa a clicar em "próxima" para ver o que cabia junto.
+ */
+const POR_PAGINA = 25;
 
 /**
  * TOM DA PILL POR STATUS (§A.12: o ícone acompanha o estado real, nunca é fixo). Entregue é o êxito
@@ -316,6 +337,98 @@ function CilindroMeta({
           </span>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * ─ A TERCEIRA LINHA DA COLUNA POSIÇÕES: QUANTA GENTE ESTÁ EM PROCESSO (peça 2.2) ──────────────
+ *
+ * O QUE ELA CONTA É `ocupacao.emSelecao`, E O NÚMERO JÁ EXISTIA. A listagem de vagas já servia esse
+ * campo em toda linha e nenhum componente o desenhava: a coluna mostrava as duas METAS e não
+ * mostrava o TRABALHO que está acontecendo para enchê-las. Vaga com zero preenchidas e doze pessoas
+ * no funil lia igual a vaga com zero preenchidas e ninguém.
+ *
+ * ┌─ NINGUÉM É CONTADO DUAS VEZES NO MESMO CILINDRO, e é isso que sustenta a linha ao lado das ─┐
+ * │ outras duas. `emSelecao` são as candidaturas `ATIVO`, que por definição NÃO consomem posição.  │
+ * │ Quem foi APROVADO, ALOCADO ou ENVIADO_PARA_ADMISSAO já consome, e por isso já está nas linhas  │
+ * │ Oficiais e Banco. As três linhas somam pessoas distintas, e a coluna não infla.                │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ ELA NÃO É UMA BARRA, DE PROPÓSITO (§A.20 e leitura) ──────────────────────────────────────┐
+ * │ As outras duas dizem "22 / 22": têm meta, e a barra existe para mostrar o quanto falta        │
+ * │ encher. Em Processo é GENTE EM TRABALHO, número absoluto, sem meta contra a qual medir.       │
+ * │ Desenhada como barra, o consultor leria a terceira como mais uma meta a cumprir, que é o      │
+ * │ contrário do que ela diz. A distinção é a hairline que separa, a ausência de trilho e o       │
+ * │ número solto, sem a barra do "x / y".                                                         │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ NÃO HÁ ÍCONE DE PESSOAS AQUI, E A CONTA É A RAZÃO (§A.20, medido na 3120) ─────────────────┐
+ * │ Ele existiu na primeira versão e roubava 33px de uma célula que hoje tem 103,66px úteis      │
+ * │ (125,66px menos os 11px de padding de cada lado da densidade nova). Sem ele, o número ocupa  │
+ * │ 15px e o rótulo fica com o resto, que é pouco e é justamente o assunto do bloco abaixo.      │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ O RÓTULO É "CANDIDATOS EM PROCESSO", E ELE OCUPA DUAS LINHAS (ajuste 3 de 10/09) ──────────┐
+ * │ O PEDIDO DO DIRETOR: dentro de uma coluna chamada "Posições", "Em Processo" sozinho parecia  │
+ * │ contagem de POSIÇÃO, e é contagem de CANDIDATO. SÓ O RÓTULO MUDOU: a conta continua sendo a  │
+ * │ mesma `ocupacao.emSelecao` de sempre, e nenhuma largura de coluna foi tocada.                │
+ * │                                                                                              │
+ * │ UMA LINHA NÃO CABE, E ISSO FOI MEDIDO no browser, não estimado: o rótulo pede 159,53px numa  │
+ * │ linha só, contra 103,66px de célula inteira. Faltam 55,87px, e não há fonte que resolva      │
+ * │ (caberia em ~7px, ilegível). ALARGAR A COLUNA está fora de questão: a tabela fechou em zero  │
+ * │ de sobra no redesenho (1254px de tabela para 1254px de área útil a 1600px) e reabrir a       │
+ * │ rolagem lateral por causa de um rótulo é o oposto do que foi pedido.                          │
+ * │                                                                                              │
+ * │ ENTÃO ELE QUEBRA EM DUAS, e a quebra é LEITURA e não supressão: nada é cortado, nada ganha   │
+ * │ reticências (`scrollWidth === clientWidth` em todas as células, nas duas linhas e nas onze   │
+ * │ colunas). CUSTO MEDIDO: 6,94px por linha da tabela (128,25px para 135,19px). O `pt-1` que    │
+ * │ virou `pt-[3px]` devolve 5px dos 12,1px da segunda linha; o resto é o preço do rótulo maior.  │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ O NÚMERO É `float-right`, E O `leading-[12px]` DELE NÃO É ENFEITE ─────────────────────────┐
+ * │ COM O FLEX DE ANTES, a segunda linha do rótulo ficava presa à mesma largura da primeira (o   │
+ * │ que sobra ao lado do número), e "EM PROCESSO" pede 82,36px contra 81,77px disponíveis:       │
+ * │ faltavam 0,59px e o rótulo QUEBRAVA EM TRÊS LINHAS. Não em todas as linhas da tabela, só nas │
+ * │ de número com DOIS dígitos, que é o tipo de defeito que passa despercebido numa base de      │
+ * │ teste com um dígito e aparece na produção.                                                    │
+ * │                                                                                              │
+ * │ COM O FLOAT, a primeira linha desvia do número e a SEGUNDA usa os 103,66px inteiros. Para    │
+ * │ isso o número não pode ser mais alto que uma linha do rótulo: com o `line-height` natural    │
+ * │ (17,25px contra 12,1px) ele invadia a segunda linha e o problema voltava igual. Com          │
+ * │ `leading-[12px]` ele fica contido na primeira, e o `ml-1` (4px, era 6px) dá a folga que faz  │
+ * │ "CANDIDATOS" (73,81px) caber ao lado até de um número de TRÊS dígitos. Conferido no browser  │
+ * │ com 1, 28 e 128: DUAS linhas nos três casos.                                                  │
+ * │                                                                                              │
+ * │ O `overflow-hidden` do bloco é o que contém o float (BFC), para ele não vazar por cima da    │
+ * │ linha de baixo. Nada é clipado: a medição confirma `scrollHeight === clientHeight`.           │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ZERO É ZERO, e não "não informado" (§A.11): a ausência de gente no funil é uma medição, não uma
+ * lacuna de cadastro. Ele fica apagado (`text-faint`) para a linha cheia saltar à vista.
+ */
+function LinhaEmProcesso({ quantos }: { quantos: number }) {
+  return (
+    <div
+      className="mt-0.5 overflow-hidden border-t pt-[3px]"
+      style={{ borderColor: TRILHO_POSICOES }}
+      title={
+        quantos === 0
+          ? "Candidatos Em Processo: ninguém no funil desta vaga agora."
+          : `Candidatos Em Processo: ${quantos} ${quantos === 1 ? "candidato está" : "candidatos estão"} no funil desta vaga, em qualquer etapa. ${quantos === 1 ? "Ele ainda não preencheu" : "Eles ainda não preencheram"} posição, então não ${quantos === 1 ? "aparece" : "aparecem"} nas contagens de Oficiais e de Banco.`
+      }
+    >
+      <span
+        className={cn(
+          "float-right ml-1 whitespace-nowrap text-[11.5px] font-semibold leading-[12px] tabular-nums",
+          quantos > 0 ? "text-text" : "text-faint",
+        )}
+      >
+        {quantos}
+      </span>
+      <span className="block text-[11px] uppercase leading-[1.1] tracking-wide text-faint">
+        Candidatos Em Processo
+      </span>
     </div>
   );
 }
@@ -661,6 +774,37 @@ export default function CentralDeVagasPage() {
   const [fConsultores, setFConsultores] = useState<string[]>([]);
   const [abertaDe, setAbertaDe] = useState("");
   const [abertaAte, setAbertaAte] = useState("");
+  /**
+   * ─ AS ETAPAS ESCOLHIDAS (peça 2.4): UM ESTADO SÓ PARA O CARD E PARA O FILTRO ─────────────────
+   *
+   * O CLIQUE NO CARD E O CAMPO DO MODAL SÃO A MESMA COISA, e por isso moram no mesmo estado: clicar
+   * em "Triagem" marca Triagem no filtro, e desmarcar Triagem no filtro apaga o destaque do card.
+   * Dois estados paralelos dariam, no primeiro ajuste, a tela dizendo duas coisas ao mesmo tempo.
+   *
+   * NASCE MÚLTIPLO (§A.28), e não "simples por enquanto": a régua de um valor só se espalha pela
+   * consulta e pela tela, e desfazê-la depois custa mais do que nascer certa.
+   *
+   * O RECORTE É O DO CARD (`porEtapa`, só quem está ATIVO), e a justificativa inteira está em
+   * `lib/as-vagas-lista.temGenteNaEtapa`. O filtro de Etapa da CENTRAL DE CANDIDATOS, que recorta
+   * por `candidaturaViva`, NÃO foi tocado por esta frente: é comportamento validado, com gente
+   * usando, e mudar o recorte dele alteraria resultado de busca sem ninguém pedir (§A.26).
+   */
+  const [fEtapas, setFEtapas] = useState<string[]>([]);
+
+  /**
+   * ─ O RECORTE POR DESFECHO (ajuste 2 de 10/09), O GÊMEO DO DE CIMA ────────────────────────────
+   *
+   * MÚLTIPLO DESDE O PRIMEIRO DIA (§A.28), pelo mesmo motivo do de etapas.
+   *
+   * ELE EXISTE PORQUE A ASSIMETRIA NÃO TINHA EXPLICAÇÃO PARA QUEM USA: os cards de etapa e os de
+   * desfecho são iguais, ficam lado a lado, e metade respondia ao clique. Quem clicava em "Alocados"
+   * e não via nada acontecer concluía que a tela estava quebrada.
+   *
+   * O RECORTE É `porDesfecho`, NUNCA `porEtapa`, e a régua inteira (com o porquê de serem duas
+   * funções e não uma) está em `lib/as-vagas-lista.temGenteNoDesfecho`. Ele NÃO tem campo no modal
+   * de filtros, igual ao card de STATUS: quem zera os dois é o "Limpar seleção" da faixa.
+   */
+  const [fDesfechos, setFDesfechos] = useState<string[]>([]);
 
   /**
    * O CARD ATIVO (item 3 da OST). "total" é o estado de repouso, e cada outro valor é um STATUS do
@@ -668,6 +812,14 @@ export default function CentralDeVagasPage() {
    * Clicar no card já ativo volta para o Total, que é o toggle do §A.12.
    */
   const [cardAtivo, setCardAtivo] = useState<VagaStatus | "total">("total");
+
+  /**
+   * A PÁGINA ATUAL DA TABELA. A lista inteira já vive na memória da tela (o `GET /as/vagas` não
+   * pagina), então paginar aqui é só recortar o que se DESENHA: com centenas de vagas, montar
+   * todas as linhas de uma vez enche a tela de rolagem e cobra do navegador um trabalho que
+   * ninguém vê. Filtro e ordenação continuam agindo sobre o conjunto TODO, nunca sobre a página.
+   */
+  const [pagina, setPagina] = useState(1);
 
   // ── Trilha de abertura ────────────────────────────────────────────────────
   const [aberto, setAberto] = useState(false);
@@ -1521,11 +1673,7 @@ export default function CentralDeVagasPage() {
    * ela mora no estado do hook, não na lista.
    */
   const filtradas = useMemo(() => {
-    const termo = busca
-      .trim()
-      .normalize("NFD")
-      .replace(/\p{Diacritic}/gu, "")
-      .toLowerCase();
+    const termo = busca;
     const setClientes = new Set(fClientes);
     const setCargos = new Set(fCargos);
     const setStatus = new Set(fStatus);
@@ -1533,14 +1681,37 @@ export default function CentralDeVagasPage() {
     const setConsultores = new Set(fConsultores);
 
     return rows.filter((v) => {
-      // A BUSCA COBRE CÓDIGO E NOME DE DIVULGAÇÃO, que são os dois jeitos de a vaga ser chamada: o
-      // recruiter procura pelo número do processo, o consultor procura pelo nome do anúncio.
-      if (termo) {
-        const alvo = `${v.codigo ?? ""} ${v.nomeDivulgacao ?? ""}`
-          .normalize("NFD")
-          .replace(/\p{Diacritic}/gu, "")
-          .toLowerCase();
-        if (!alvo.includes(termo)) return false;
+      /*
+       * ─ A BUSCA RÁPIDA COBRE QUALQUER COLUNA ────────────────────────────────────────────────
+       *
+       * ELA COBRIA SÓ CÓDIGO E NOME DA VAGA, e o campo dizia isso: quem digitava "BMB" ou o nome do
+       * consultor não achava nada e concluía que a vaga não estava cadastrada, com ela na tela duas
+       * linhas abaixo. O alvo agora é o TEXTO DA LINHA INTEIRA, montado com os MESMOS rótulos que a
+       * célula desenha, o "não informado" incluído (§A.11): o que está escrito na tabela é o que a
+       * busca acha, sem uma segunda régua para o usuário decorar.
+       *
+       * AS AÇÕES FICAM DE FORA, e é a única coluna de fora: ela não carrega dado da vaga, só botões,
+       * e "Gestão Vaga" casaria com toda linha da tabela.
+       *
+       * A RÉGUA MORA EM `lib/as-vagas-lista`, testada lá: cada palavra digitada tem de aparecer em
+       * algum lugar da linha, em qualquer ordem, então "bmb advogada" acha a linha mesmo com três
+       * colunas entre as duas palavras.
+       */
+      if (termo.trim()) {
+        const alvo = textoBuscavel([
+          v.codigo ?? "não informado",
+          v.nomeDivulgacao ?? "não informado",
+          v.clienteNome ?? "não informado",
+          v.cargoNome ?? "não informado",
+          v.vinculo ? VAGA_VINCULO_LABEL[v.vinculo] : "não informado",
+          v.posicoesOficiais,
+          v.posicoesBanco,
+          VAGA_STATUS_LABEL[v.status],
+          v.consultorNome ?? "não informado",
+          dataBr(v.dataAbertura),
+          textoDias(diasEmAberto(v)),
+        ]);
+        if (!casaBusca(alvo, termo)) return false;
       }
       // LISTA VAZIA É "TODOS". Sem isso, a tela abriria com a tabela vazia esperando alguém marcar
       // alguma coisa em cada um dos cinco filtros.
@@ -1593,9 +1764,89 @@ export default function CentralDeVagasPage() {
     return { total: filtradas.length, porStatus: conta };
   }, [filtradas]);
 
+  /**
+   * ─ A SEGUNDA FILEIRA (peça 2.3): QUANTA GENTE, E ONDE ────────────────────────────────────────
+   *
+   * MESMO RECORTE DA PRIMEIRA: a soma é sobre `filtradas`, então os dois grupos falam da mesma
+   * lista que a tabela logo abaixo mostra.
+   *
+   * A LISTA DE CARDS VEM DO CATÁLOGO DE ETAPAS, e o número vem do mapa com `?? 0` (ver
+   * `lib/as-vagas-funil.ts`). É a régua inteira da peça, e ela é o oposto do que a fileira da
+   * Central de Candidatos faz hoje, com cinco blocos escritos à mão que engolem a etapa nova.
+   *
+   * O CATÁLOGO LIDO É O COMPLETO (`etapas`, não `ativas`): dá para inativar uma etapa que ainda tem
+   * gente viva dentro, e essa contagem continua chegando com a chave dela. Com a lista completa o
+   * card aparece com o rótulo e a cor de verdade, marcado como fora de circulação; só com as ativas,
+   * essa gente sumiria da tela sem nada falhar.
+   */
+  const { etapas: catalogoEtapas } = useEtapas();
+  const funil = useMemo(() => {
+    const soma = somarFunil(filtradas);
+    return {
+      etapas: cardsDeEtapa(catalogoEtapas, soma.porEtapa),
+      desfechos: cardsDeDesfecho(soma.porDesfecho),
+    };
+  }, [filtradas, catalogoEtapas]);
+
+  /**
+   * ─ AS OPÇÕES DO FILTRO DE ETAPA VÊM DO CATÁLOGO, NUNCA DAS LINHAS CARREGADAS (§A.37) ─────────
+   *
+   * Derivar as opções da página encolhe a lista assim que o primeiro valor é escolhido, e não há
+   * como somar o segundo sem limpar o filtro. Aqui a lista é a MESMA do catálogo que desenha os
+   * cards (`etapasOrdenadas`, na ordem do funil), então card e filtro nunca discordam sobre quais
+   * etapas existem.
+   *
+   * A INATIVA SÓ APARECE SE AINDA TIVER GENTE PRESA DENTRO, e a conta é sobre a base INTEIRA
+   * (`rows`), não sobre o recorte: fosse sobre o recorte, a opção sumiria da lista no instante em
+   * que alguém a escolhesse, levando junto o rótulo do chip que acabou de ser marcado.
+   *
+   * O PONTO COLORIDO é a cor que o diretor escolheu para a etapa, a mesma do card: quem procura no
+   * seletor reconhece pela cor antes de ler o rótulo.
+   */
+  const optEtapas = useMemo(() => {
+    const globais = somarFunil(rows).porEtapa;
+    return etapasOrdenadas(catalogoEtapas)
+      .filter((e) => e.ativa || (globais[e.codigo] ?? 0) > 0)
+      .map((e) => ({ value: e.codigo, label: e.rotulo, color: corDoTom(e.tom) }));
+  }, [rows, catalogoEtapas]);
+
+  /**
+   * ─ OS DOIS RECORTES DE CARD, DEPOIS DA CONTA E NUNCA ANTES ───────────────────────────────────
+   *
+   * O STATUS (primeira fileira) e a ETAPA (segunda) recortam a TABELA, e ficam fora do `filtradas`
+   * pelo mesmo motivo já documentado acima: entrando antes, escolher "Triagem" zeraria todos os
+   * outros cards da fileira e não haveria como comparar nem como voltar clicando, porque o card de
+   * destino mostraria zero. Contando antes, a fileira continua sendo o MAPA e o card ativo é só o
+   * recorte do que a tabela lista.
+   *
+   * OS DOIS SE SOMAM: "Abertas" mais "Triagem" mostra as vagas abertas que têm alguém na triagem, e
+   * é o que se espera de dois cards acesos ao mesmo tempo.
+   */
   const doCard = useMemo(
     () => (cardAtivo === "total" ? filtradas : filtradas.filter((v) => v.status === cardAtivo)),
     [filtradas, cardAtivo],
+  );
+
+  /**
+   * OS DOIS GRUPOS DE CARD DE GENTE SE SOMAM POR "E" (ajuste 2 de 10/09), e a escolha está
+   * justificada e TRAVADA EM TESTE no cabeçalho de `lib/as-vagas-lista.temGenteNoDesfecho`: dentro
+   * do mesmo grupo é OU, entre os grupos é E, que é como o card de STATUS e o de ETAPA já se
+   * compõem nesta mesma tela desde a peça 2.4. Com OU, acender o segundo card AUMENTARIA a lista, e
+   * nenhum outro filtro daqui faz isso.
+   *
+   * CADA UM NO SEU MAPA: etapa lê `porEtapa`, desfecho lê `porDesfecho`. São pessoas diferentes (a
+   * mesma nunca está nos dois), e trocar os mapas faria o card prometer um número e a tabela
+   * entregar outro.
+   */
+  const recortadas = useMemo(
+    () =>
+      fEtapas.length === 0 && fDesfechos.length === 0
+        ? doCard
+        : doCard.filter(
+            (v) =>
+              temGenteNaEtapa(v.ocupacao, fEtapas) && temGenteNoDesfecho(v.ocupacao, fDesfechos),
+          ),
+    [doCard, fEtapas, fDesfechos],
   );
 
   const filtrosAtivos =
@@ -1605,6 +1856,7 @@ export default function CentralDeVagasPage() {
     (fStatus.length ? 1 : 0) +
     (fVinculos.length ? 1 : 0) +
     (fConsultores.length ? 1 : 0) +
+    (fEtapas.length ? 1 : 0) +
     (abertaDe || abertaAte ? 1 : 0);
 
   const limparFiltros = useCallback(() => {
@@ -1614,9 +1866,69 @@ export default function CentralDeVagasPage() {
     setFStatus([]);
     setFVinculos([]);
     setFConsultores([]);
+    setFEtapas([]);
     setAbertaDe("");
     setAbertaAte("");
   }, []);
+
+  /**
+   * O CLIQUE NO CARD DE ETAPA (peça 2.4), em TOGGLE: clicar acende, clicar de novo apaga, e dois
+   * cards acesos somam (é OU, ver `temGenteNaEtapa`). É o mesmo estado do filtro do modal, então o
+   * chip aparece lá marcado no mesmo instante.
+   */
+  const alternarEtapa = useCallback((chave: string) => {
+    setFEtapas((atual) =>
+      atual.includes(chave) ? atual.filter((c) => c !== chave) : [...atual, chave],
+    );
+  }, []);
+
+  /** O MESMO TOGGLE, no outro grupo (ajuste 2). Múltipla seleção, §A.28. */
+  const alternarDesfecho = useCallback((chave: string) => {
+    setFDesfechos((atual) =>
+      atual.includes(chave) ? atual.filter((c) => c !== chave) : [...atual, chave],
+    );
+  }, []);
+
+  /**
+   * ─ "LIMPAR SELEÇÃO" (ajuste 1 de 10/09): OS TRÊS GRUPOS DE CARD DE UMA VEZ ───────────────────
+   *
+   * O QUE ELE ZERA são os filtros que moram NOS CARDS: o status (primeira faixa), as etapas
+   * (segunda) e os desfechos (terceira). A busca, o período e os campos do modal NÃO são dele: o
+   * modal já tem o "limpar filtros" próprio, e um botão que apagasse os dois conjuntos faria quem
+   * quer tirar dois cards perder também o cliente que passou um minuto escolhendo.
+   *
+   * ELE ALCANÇA O CHIP DE ETAPA DO MODAL, e isso é correto e não efeito colateral: o card de etapa e
+   * o campo "Etapa Do Funil" são o MESMO estado desde a peça 2.4, então apagar o card apaga o chip,
+   * exatamente como clicar no card já acende o chip hoje.
+   */
+  const temSelecaoDeKpi = cardAtivo !== "total" || fEtapas.length > 0 || fDesfechos.length > 0;
+
+  const limparSelecaoDeKpi = useCallback(() => {
+    setCardAtivo("total");
+    setFEtapas([]);
+    setFDesfechos([]);
+  }, []);
+
+  /**
+   * VOLTAR PARA A PÁGINA 1 QUANDO O RECORTE MUDA. Sem isto, quem está na página 3 e filtra por um
+   * cliente com 4 vagas cai numa tabela vazia, e a contagem ao lado diz que existem 4 resultados.
+   * A `paginaValida` ainda corrige o desenho, mas o estado voltaria a saltar no filtro seguinte.
+   */
+  useEffect(() => {
+    setPagina(1);
+  }, [
+    busca,
+    fClientes,
+    fCargos,
+    fStatus,
+    fVinculos,
+    fConsultores,
+    fEtapas,
+    fDesfechos,
+    abertaDe,
+    abertaAte,
+    cardAtivo,
+  ]);
 
   /**
    * ─ §A.29: A ORDENAÇÃO CLICÁVEL, com a MESMA peça do resto do sistema ─────────────────────────
@@ -1694,37 +2006,54 @@ export default function CentralDeVagasPage() {
     ],
     [],
   );
-  const ord = useOrdenacao(colunasOrdenaveis, doCard);
-  const visiveis = ord.itens;
+  const ord = useOrdenacao(colunasOrdenaveis, recortadas);
+  /**
+   * O CONJUNTO INTEIRO do recorte atual, já ordenado. É ele que a contagem do rodapé fala e é sobre
+   * ele que a paginação corta: ordenar DEPOIS de paginar ordenaria só a página, e a coluna clicada
+   * passaria a mentir a partir da linha 26.
+   */
+  const listadas = ord.itens;
+  const paginaAtual = paginaValida(pagina, listadas.length, POR_PAGINA);
+  const paginas = totalDePaginas(listadas.length, POR_PAGINA);
+  const visiveis = fatiarPagina(listadas, paginaAtual, POR_PAGINA);
 
   const ladoOposto = contexto.papelAs ? contraparteDe(contexto.papelAs) : null;
 
   return (
     <>
-      <PageHead
-        eyebrow="Atração e Seleção"
-        title="Central De Vagas"
-        subtitle="Cada linha é uma abertura de vaga, com identificador próprio do SOUOperações. O código é o número do processo seletivo, digitado à mão e único no sistema: cada nova abertura, mesmo do mesmo cliente e do mesmo cargo, tem o seu."
-      />
+      {/* ── O TOPO COMPACTO (redesenho de 10/09, decisão do diretor) ──────────────────────────
+          A QUEIXA ERA O ESPAÇO SOLTO NO ALTO DA TELA, e ele estava MEDIDO: o primeiro card ficava a
+          227px do topo e a tabela só começava a 671px, ou seja, dois terços de uma tela de 1000px
+          gastos antes da primeira linha de dado. Duas mudanças resolvem, e nenhuma delas apaga
+          conteúdo:
 
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        {/* A CONTAGEM SEGUE O RECORTE, e não a base. Antes ela dizia sempre "2.106 vagas
-            cadastradas", inclusive com a tabela mostrando 4 linhas depois de um filtro: a frase
-            contradiz a tela. Com filtro aplicado ela diz quantas o filtro deixou passar, e de
-            quantas, para o total da base continuar à vista. */}
-        <p className="text-sm text-dim">
-          {loading
-            ? "Carregando as vagas."
-            : visiveis.length === rows.length
-              ? `${rows.length} ${rows.length === 1 ? "vaga cadastrada" : "vagas cadastradas"}.`
-              : `${visiveis.length} de ${rows.length} ${rows.length === 1 ? "vaga" : "vagas"}, pelo recorte atual.`}
-        </p>
-        <div className="flex flex-wrap items-center gap-2">
+          1. A BARRA DE AÇÕES SUBIU PARA A LINHA DO TÍTULO. Ela ocupava uma faixa inteira só para
+             ela, com o lado direito vazio acima e o esquerdo vazio ao lado. Agora o título fica na
+             coluna elástica e a busca, o filtro e o "Abrir vaga" na coluna que se ajusta ao próprio
+             tamanho: uma faixa a menos, sem nada sair da tela.
+          2. A CONTAGEM DESCEU PARA O RODAPÉ DA TABELA, ao lado da paginação, que é onde ela passa a
+             significar mais: "26 de 312, pelo recorte atual, página 2 de 13" é uma frase só sobre a
+             mesma lista. Ela não sumiu, mudou de lugar.
+
+          O `[&>div]:mb-0` neutraliza a margem do `PageHead` SÓ AQUI, sem tocar o componente
+          compartilhado que outras 34 telas usam (§A.26): o espaçamento de baixo passa a ser o desta
+          grade, e o cabeçalho continua sendo o mesmo do resto do sistema. */}
+      <div className="mb-[14px] grid grid-cols-1 items-start gap-3 md:grid-cols-[minmax(0,1fr)_auto] [&>div]:mb-0">
+        <PageHead
+          eyebrow="Atração e Seleção"
+          title="Central De Vagas"
+          subtitle="Cada linha é uma abertura de vaga, com identificador próprio do SOUOperações. O código é o número do processo seletivo, digitado à mão e único no sistema: cada nova abertura, mesmo do mesmo cliente e do mesmo cargo, tem o seu."
+        />
+        <div className="flex flex-wrap items-center gap-2 md:justify-end">
+          {/* A BUSCA RÁPIDA COBRE QUALQUER COLUNA (redesenho de 10/09). O rótulo antigo prometia
+              menos do que a tela agora entrega, e prometer menos é tão ruim quanto prometer demais:
+              quem lia "código ou nome da vaga" nem tentava procurar pelo cliente. */}
           <input
             type="search"
             className="ds-input w-72 rounded-full"
-            placeholder="Buscar por código ou nome da vaga"
-            aria-label="Buscar por código ou nome da vaga"
+            placeholder="Buscar em qualquer coluna"
+            aria-label="Buscar em qualquer coluna da tabela"
+            title="A busca procura em todas as colunas da tabela: código, vaga, cliente, cargo, vínculo, posições, status, consultor, data de abertura e dias em aberto."
             value={busca}
             onChange={(e) => setBusca(e.target.value)}
           />
@@ -1798,6 +2127,31 @@ export default function CentralDeVagasPage() {
                 limpavel
               />
             </FiltroCampo>
+            {/* ─ ETAPA DO FUNIL (peça 2.4), O MESMO ESTADO DO CARD ────────────────────────────
+                MÚLTIPLO DESDE O PRIMEIRO DIA (§A.28), pelo `Combobox` compartilhado, com as opções
+                vindas do CATÁLOGO e não das linhas carregadas (§A.37).
+
+                O RECORTE É O DO CARD: a vaga entra se tiver gente EM SELEÇÃO naquela etapa, que é
+                exatamente o que o card conta (`porEtapa`, só ATIVO). Quem já foi aprovado, alocado
+                ou enviado para admissão está contado na fileira de DESFECHOS, não aqui, e por isso
+                não entra por este filtro: se entrasse, o card diria 1 e a tabela mostraria 3.
+                A justificativa inteira está em `lib/as-vagas-lista.temGenteNaEtapa`. */}
+            <FiltroCampo label="Etapa Do Funil">
+              <Combobox
+                multiple
+                value={fEtapas}
+                onChange={setFEtapas}
+                options={optEtapas}
+                placeholder="Todas"
+                ariaLabel="Etapa do funil"
+                searchable
+                limpavel
+              />
+              <p className="mt-1 text-[11.5px] text-faint">
+                Traz as vagas com alguém em seleção na etapa escolhida, a mesma conta dos cards. É o
+                mesmo controle do clique no card.
+              </p>
+            </FiltroCampo>
             <FiltroCampo label="Data De Abertura">
               <div className="grid grid-cols-2 gap-2">
                 <input
@@ -1838,48 +2192,193 @@ export default function CentralDeVagasPage() {
         </p>
       )}
 
-      {/* ── A LINHA DE KPIs DA CENTRAL DE VAGAS (item 3 da OST de 27/08) ─────────────────────
-          O MESMO VISUAL DAS OUTRAS TELAS: card de vidro, ícone acima, número grande e rótulo, e
-          TODO card é clicável como filtro em toggle (§A.12), com o clique no card ativo voltando
-          para o Total.
+      {/* ── AS DUAS FAIXAS DE INDICADORES (redesenho de 10/09, layout decidido pelo diretor) ───
+          ERAM TRÊS FAIXAS EMPILHADAS, uma sob a outra, com cards de 107px de altura: só elas
+          comiam 444px de tela antes da primeira linha da tabela. Agora são DUAS:
 
-          A ORDEM É A DA VIDA DA VAGA, da esquerda para a direita: Total, o que ainda não nasceu
-          (Rascunho), o que está em pé (Abertas) e os três desfechos (Entregues, Fechadas,
-          Canceladas). Lida em linha, ela conta o processo, que é o que a ordem alfabética
-          esconderia.
+            ┌ STATUS ───────────────┐│┌ INSERÇÃO POR ETAPA ────┐
+            └───────────────────────┘│└────────────────────────┘
+            ┌ DESFECHOS ─────────────────────────────────────────┐
+            └────────────────────────────────────────────────────┘
 
-          A COR SEPARA O QUE COBRA DO QUE JÁ PASSOU: Abertas em atenção, porque é a fila viva de
-          quem trabalha nesta tela; Entregues em êxito; Canceladas em alerta; Rascunho e Fechadas
-          neutros, porque nem cobram nem comemoram. */}
-      <div className="mb-[18px] grid grid-cols-2 gap-[12px] sm:grid-cols-4 xl:grid-cols-6">
-        <Kpi id="total" rotulo="Total De Vagas" valor={kpis.total} icone="layers" />
-        <Kpi id="RASCUNHO" rotulo="Rascunhos" valor={kpis.porStatus.RASCUNHO} icone="pen" />
-        <Kpi
-          id="ABERTA"
-          rotulo="Abertas"
-          valor={kpis.porStatus.ABERTA}
-          icone="clock"
-          tom="var(--warn)"
+          O DIVISOR VERTICAL ENTRE AS DUAS DE CIMA É O PEDIDO, e ele carrega sentido, não é enfeite:
+          à esquerda contam-se VAGAS, à direita conta-se GENTE. São duas unidades diferentes lado a
+          lado, e sem a separação os onze números pareceriam somar entre si. Abaixo de `xl` não há
+          largura para duas faixas, então o traço vertical vira o filete horizontal de sempre e uma
+          faixa desce sob a outra: a separação continua visível, muda a direção.
+
+          ┌─ A DEGRADAÇÃO COM MUITAS ETAPAS, que é o risco conhecido desta composição ────────────┐
+          │ O diretor cadastra as etapas dele: são seis hoje e podem virar sete amanhã, pelo       │
+          │ gerenciador, sem ninguém tocar neste arquivo. A faixa da direita é `auto-fit` com um   │
+          │ MÍNIMO de 88px, então ela NUNCA espreme: enquanto couber, os cards dividem a linha; a  │
+          │ partir do card que não cabe mais, a própria grade QUEBRA EM UMA SEGUNDA LINHA, com os  │
+          │ cards do mesmo tamanho dos de cima. Nenhum rótulo é cortado e nenhum número é          │
+          │ escondido, que é o que o §A.20 proíbe. Provado no browser com SETE etapas.             │
+          │                                                                                        │
+          │ POR QUE 88px E NÃO 150px, que era o mínimo antes: com 150px, SEIS cards já não caberiam│
+          │ na METADE da tela, e a faixa nasceria quebrada em duas linhas no caso NORMAL. O mínimo │
+          │ tem de caber o caso de hoje e deixar o de amanhã quebrar, não o contrário.             │
+          └────────────────────────────────────────────────────────────────────────────────────────┘
+
+          §A.12: todo card é clicável como filtro em toggle, e o card aceso troca o ícone pelo check
+          de sempre. A ORDEM DOS STATUS é a da VIDA da vaga (total, rascunho, aberta, entregue,
+          fechada, cancelada), que lida em linha conta o processo. */}
+      <div className="mb-[14px] grid grid-cols-1 items-start gap-x-[18px] gap-y-[14px] xl:grid-cols-[minmax(0,1fr)_1px_minmax(0,1.05fr)]">
+        <section>
+          <TituloDaFaixa nivel="Nível Vaga">Status</TituloDaFaixa>
+          <div
+            className="grid gap-[10px]"
+            style={{ gridTemplateColumns: "repeat(auto-fit, minmax(88px, 1fr))" }}
+          >
+            <Kpi id="total" rotulo="Total De Vagas" valor={kpis.total} icone="layers" />
+            <Kpi id="RASCUNHO" rotulo="Rascunhos" valor={kpis.porStatus.RASCUNHO} icone="pen" />
+            <Kpi
+              id="ABERTA"
+              rotulo="Abertas"
+              valor={kpis.porStatus.ABERTA}
+              icone="clock"
+              tom="var(--warn)"
+            />
+            <Kpi
+              id="ENTREGUE"
+              rotulo="Entregues"
+              valor={kpis.porStatus.ENTREGUE}
+              icone="check"
+              tom="var(--ok)"
+            />
+            <Kpi id="FECHADA" rotulo="Fechadas" valor={kpis.porStatus.FECHADA} icone="lock" />
+            <Kpi
+              id="CANCELADA"
+              rotulo="Canceladas"
+              valor={kpis.porStatus.CANCELADA}
+              icone="x"
+              tom="var(--danger)"
+            />
+          </div>
+        </section>
+
+        {/* ─ O DIVISOR VERTICAL, o traço que o diretor desenhou ────────────────────────────
+            ELE É `--border-strong` E NÃO `--border`, e a diferença foi vista na prova: no tema
+            ESCURO o hairline de 10% de branco sumia contra o fundo, e a faixa parecia um bloco só
+            com um buraco no meio. Com 16% ele lê nos dois temas sem virar uma barra.
+
+            O DESBOTE NAS PONTAS (o gradiente) é o mesmo acabamento das divisórias da tabela: o
+            traço nasce e morre no ar em vez de encostar com canto duro na borda de cima e na de
+            baixo. Cor de token, nada escrito à mão (§A.35).
+
+            ABAIXO DE `xl` ELE SOME e a faixa da direita desce para baixo da esquerda, onde a
+            separação passa a ser o filete horizontal dela: a divisão continua visível, muda de
+            direção junto com o empilhamento. */}
+        <div
+          aria-hidden
+          className="hidden self-stretch xl:block"
+          style={{
+            background:
+              "linear-gradient(to bottom, transparent, var(--border-strong) 18%, var(--border-strong) 82%, transparent)",
+          }}
         />
-        <Kpi
-          id="ENTREGUE"
-          rotulo="Entregues"
-          valor={kpis.porStatus.ENTREGUE}
-          icone="check"
-          tom="var(--ok)"
-        />
-        <Kpi id="FECHADA" rotulo="Fechadas" valor={kpis.porStatus.FECHADA} icone="lock" />
-        <Kpi
-          id="CANCELADA"
-          rotulo="Canceladas"
-          valor={kpis.porStatus.CANCELADA}
-          icone="x"
-          tom="var(--danger)"
-        />
+
+        <section className="border-t border-[var(--border-strong)] pt-[14px] xl:border-t-0 xl:pt-0">
+          <TituloDaFaixa nivel="Nível Candidato">Inserção Por Etapa</TituloDaFaixa>
+          {funil.etapas.length === 0 ? (
+            <p className="text-[12.5px] text-faint">Nenhuma etapa cadastrada no funil.</p>
+          ) : (
+            <div
+              className="grid gap-[10px]"
+              style={{ gridTemplateColumns: "repeat(auto-fit, minmax(88px, 1fr))" }}
+            >
+              {funil.etapas.map((c) => (
+                <KpiDoFunil key={c.chave} card={c} grupo="etapa" />
+              ))}
+            </div>
+          )}
+        </section>
       </div>
 
+      {/* A FAIXA DE BAIXO: O QUE JÁ FOI DECIDIDO sobre quem passou pela vaga.
+          ETAPA é ONDE A PESSOA ESTÁ, DESFECHO é O QUE DECIDIRAM sobre ela, e por isso os dois
+          grupos nunca se misturam numa fileira só. Ela FILTRA desde 10/09 (ajuste 2), com o mesmo
+          toggle e a mesma múltipla seleção da faixa de etapas: eram cards iguais lado a lado com
+          metade respondendo ao clique, e essa assimetria não tinha explicação para quem usa. */}
+      <section className="mb-[16px]">
+        {/* ─ A LINHA DO TÍTULO CARREGA O "LIMPAR SELEÇÃO" (ajuste 1 de 10/09) ─────────────────
+            ELE MORA AQUI, e não numa faixa própria, porque a faixa acabou de ser comprimida para
+            caber: o título já ocupa esta linha e o botão entra no espaço vazio da direita, sem
+            empurrar a tabela para baixo. É a ÚLTIMA das três faixas de card, então o botão fecha o
+            bloco de indicadores logo acima da tabela que ele recorta.
+
+            SÓ APARECE COM ALGUMA COISA ACESA: botão apagado ocupando espaço para não fazer nada é o
+            que esta tela passou o redesenho inteiro tirando do caminho.
+
+            A TELA NÃO PULA QUANDO ELE APARECE, e isso foi MEDIDO, não suposto: o botão tem 22px de
+            altura contra os 22,75px da linha do título, então ele cabe DENTRO da altura que a linha
+            já tinha e o topo da tabela não se move um pixel. É o `leading-[14px]` que faz isso: com
+            o `line-height` natural do texto de 11px o botão media 24,5px e empurrava a fileira
+            inteira 1,75px para baixo a cada clique em card. O `min-h` é o piso da linha, para ela
+            não encolher se o título mudar.
+
+            §A.24: é AÇÃO, não etiqueta, então escrita normal ("Limpar seleção"). */}
+        <div className="flex min-h-[20px] items-center justify-between gap-3">
+          <TituloDaFaixa className="mb-0" nivel="Nível Candidato">
+            Desfechos
+          </TituloDaFaixa>
+          {temSelecaoDeKpi && (
+            <button
+              type="button"
+              onClick={limparSelecaoDeKpi}
+              title="Apaga de uma vez todos os cards acesos: o status, as etapas e os desfechos. A busca e os campos do modal de filtros continuam como estão."
+              className="inline-flex items-center gap-1.5 rounded-full border border-[var(--border-strong)] px-2.5 py-[3px] text-[11px] font-semibold leading-[14px] text-dim transition hover:bg-[var(--surface-2)] hover:text-text"
+            >
+              <Icon name="x" className="h-[11px] w-[11px]" />
+              Limpar seleção
+            </button>
+          )}
+        </div>
+        <div
+          className="grid gap-[10px]"
+          style={{ gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))" }}
+        >
+          {funil.desfechos.map((c) => (
+            <KpiDoFunil key={c.chave} card={c} grupo="desfecho" />
+          ))}
+        </div>
+      </section>
+
       <GlassCard className="overflow-hidden p-2">
-        <div className="overflow-x-auto">
+        {/* ─ O CABEÇALHO CONGELADO (ajuste 3 de 10/09, pedido do diretor) ────────────────────
+            O ESTILO JÁ EXISTIA E NÃO FUNCIONAVA AQUI, e é isso que este `div` conserta: o
+            `.ds-table thead th` do design system já é `position: sticky; top: 0` com fundo opaco
+            (`--table-head-bg`, sólido nos dois temas) desde a OST de ajustes visuais. Sticky, porém,
+            gruda no CONTÊINER DE ROLAGEM mais próximo, e aqui esse contêiner era esta caixa, que só
+            rolava na horizontal: no eixo vertical quem rolava era o `<main>` do AppShell, então o
+            cabeçalho subia junto com a página e sumia. Dar altura máxima e rolagem vertical A ESTA
+            CAIXA é o que faz o `top: 0` ter contra o que grudar.
+
+            ELE GRUDA NO TOPO DA TABELA, NÃO NO TOPO DA JANELA, e a escolha tem dois motivos: (1) a
+            tabela ainda rola na horizontal abaixo de 1254px úteis, e o cabeçalho precisa rolar JUNTO
+            no eixo horizontal para não descolar das colunas, o que só acontece se ele viver dentro
+            da mesma caixa de rolagem; (2) grudado na janela, ele passaria por cima da faixa de KPIs
+            e dos filtros, que são justamente o que a pessoa lê antes de olhar a fila. §A.12
+            INTACTO: nenhuma regra visual nova foi criada, é o mesmo `ds-table` das outras 21 telas.
+
+            A ALTURA DA CAIXA SAIU DA COMPOSIÇÃO MEDIDA DA PÁGINA, e não de um número redondo: numa
+            janela de 1000px, o que vem antes da tabela (título, filtros e a faixa de KPIs) ocupa
+            387px. Com `100vh - 200px` a caixa fica com 800px e mostra quase seis linhas de cada vez.
+            O número decide DUAS coisas, e só elas: quantas linhas cabem à vista e a que altura o
+            cabeçalho congela depois que a página termina de rolar (medido: 108px do topo da janela,
+            com a caixa a 800px). O respiro de ~90px no pé da página é do próprio `<main>` e não
+            muda com este número: crescer a caixa sobe o cabeçalho, não come aquele respiro.
+
+            `ea-scroll` para a barra de rolagem seguir a do sistema (a caixa passou a ter barra
+            vertical, e a do navegador destoaria da tela ao redor).
+
+            O QUE ISSO CUSTA, MEDIDO E DITO: a barra vertical da caixa come 10px da largura útil da
+            tabela quando a fila é longa o bastante para rolar. Na tela de 1600px com o menu aberto a
+            tabela já rolava 4px na horizontal com as barras de rolagem reais do navegador (medido
+            antes e depois desta mudança, com as duas vagas da homologação), e o custo aparece só na
+            fila longa. É o preço do cabeçalho congelado, e não há como fugir dele: sticky precisa de
+            uma caixa que role. */}
+        <div className="ea-scroll max-h-[calc(100vh-200px)] overflow-auto">
           {/* ITEM 8: A LISTA DEIXOU DE SER UM EXCEL.
               Eram 13 colunas, e ler uma linha exigia rolagem lateral: a tela pedia 1560px de largura
               e a vaga era falada em 7 dados. Ficaram só os que identificam a vaga na fila (código,
@@ -1904,7 +2403,9 @@ export default function CentralDeVagasPage() {
               é cortado nem truncado: tudo é alcançável. A partir de ~1790px de janela ela aparece
               inteira sem rolagem. Encurtar a tabela de volta a uma tela só exigiria tirar coluna ou
               apertar os botões de ação, que é decisão do diretor e não da fábrica (§A.31). */}
-          {/* §A.20 (item 4 da OST de 27/08): AS LARGURAS FORAM REDISTRIBUÍDAS, e não espremidas para
+          {/* SUPERADO PELO BLOCO DA LARGURA POR CONTEÚDO, logo abaixo: as porcentagens descritas aqui
+              não existem mais. O registro fica pelo histórico da medição.
+              §A.20 (item 4 da OST de 27/08): AS LARGURAS FORAM REDISTRIBUÍDAS, e não espremidas para
               caber duas colunas a mais. As dez porcentagens somam 100 e o piso subiu de 960px para
               1220px, MEDIDO no browser e não estimado: é a soma das larguras mínimas reais das dez
               colunas depois de os três rótulos longos ganharem quebra de linha, e é a largura em que
@@ -1928,19 +2429,98 @@ export default function CentralDeVagasPage() {
               NENHUMA COLUNA FICOU CORTADA, conferido célula a célula (`scrollWidth` contra
               `clientWidth` em todos os `th` e `td`, nas duas linhas e nas onze colunas): zero
               supressão. A prova está nas screenshots dos dois temas. */}
-          <table className="ds-table min-w-[1430px]">
+          {/* ─ §A.20, REMEDIDO E REDUZIDO NO BROWSER EM 10/09 (redesenho) ─────────────────────
+              O NÚMERO ANTIGO ERA 1430px DECLARADOS CONTRA 1254px ÚTEIS a 1600px, uma sobra de
+              176px de rolagem lateral, registrada como dívida desde 07/09. Duas medições
+              resolveram, e nenhuma delas tirou coluna (isso é decisão do diretor, não da fábrica):
+
+              1. O PISO DECLARADO ERA MAIOR QUE O CONTEÚDO. Com o `min-width` zerado no browser, a
+                 tabela media 1369px, ou seja, 61px do piso eram largura reservada que nenhuma
+                 célula pedia. O piso passou a ser o mínimo MEDIDO, não um número herdado.
+              2. A DENSIDADE HORIZONTAL DESTA TABELA. Ela é a mais larga do sistema (ONZE colunas),
+                 e 16px de cada lado de cada célula somam 352px só de respiro. Aqui elas ficam com
+                 11px, e a conta muda em 110px, o suficiente para a tabela caber inteira na tela de
+                 1600px que o diretor usa. NENHUMA outra tabela do sistema foi tocada: o `ds-table`
+                 compartilhado (§A.12) continua com os 16px para as outras 21 telas, e a máscara
+                 visual (cabeçalho centralizado, divisória hairline, pills, ordenação) é a mesma.
+
+              A COLUNA AÇÕES, que sozinha pedia 275px dos 1369, também apertou os botões: o ícone
+              perdeu 2px de padding de cada lado e o "Gestão Vaga" 2px. Nenhum rótulo saiu, nenhum
+              `title` saiu, e a área de clique continua acima do mínimo confortável.
+
+              ABAIXO DE 1254px ELA CONTINUA ROLANDO na horizontal, como o §A.12 manda ("rola em vez
+              de espremer"), e nenhum texto é cortado nem truncado: tudo é alcançável. */}
+          {/* ─ §A.20, A LARGURA PASSOU A SEGUIR O CONTEÚDO (ajuste 2 de 10/09, pedido do diretor) ──
+              O QUE ELE VIU: a coluna Vaga com espaço morto até o fim e outras colunas apertando. O
+              defeito não era o número de nenhuma coluna, era a REGRA: as onze larguras eram
+              porcentagens fixas, então TODA sobra de tela era repartida por proporção, e não por
+              necessidade. Quem não tinha o que mostrar recebia igual: com o menu recolhido a 1600px,
+              CLIENTE ficava com 122px para escrever "BMB" (69px mortos) enquanto "Consultor A&S
+              (Homologação)" quebrava em duas linhas ao lado, com 136px.
+
+              A REGRA NOVA SEPARA AS COLUNAS EM DUAS FAMÍLIAS, e é só isso:
+
+              1. CONTEÚDO DE TAMANHO CONHECIDO -> `w-[1%]`, que o `table-layout: auto` resolve como
+                 "encolha até o conteúdo e não cresça mais". São Código, Posições, Status, Data De
+                 Abertura, Dias Em Aberto e Ações: um código, uma data, uma pill de catálogo, dois
+                 cilindros e uma fileira de botões não leem melhor por serem mais largos.
+              2. TEXTO LIVRE, QUE VARIA -> sem largura nenhuma, e o navegador reparte a sobra entre
+                 elas na PROPORÇÃO do texto que cada uma carrega. São Vaga, Cliente, Cargo Da Vaga,
+                 Vínculo e Consultor Responsável, exatamente as que quebram em duas linhas quando
+                 apertam. É aqui que mora o "acompanhar o conteúdo": nome curto pede pouco, nome
+                 comprido pede mais, e o dado de amanhã não depende de ninguém reescrever %.
+
+              A TABELA NÃO CRESCEU UM PIXEL, e isso foi MEDIDO nas três larguras pedidas: a 1600px
+              ela continua com 1254px e ZERO de rolagem (a dívida de 176px que existia desde 07/09
+              segue fechada); a 1280px e a 1200px ela continua nos mesmos 1243px e na mesma rolagem
+              de 309px e 389px. `scrollWidth === clientWidth` em TODOS os `th` e `td`, nas duas
+              linhas e nas onze colunas, nas três larguras: zero supressão, zero corte.
+
+              O QUE MUDA A 1600px COM O MENU ABERTO É POUCO, E O MOTIVO É HONESTO: ali a tabela já
+              está no PISO do conteúdo (1223px de mínimo real para 1254px úteis), então só há 31px a
+              repartir, e eles saíram das colunas de dado fixo para as de texto (Consultor +11,6px,
+              Cargo +1,5px). A diferença aparece inteira quando há sobra de verdade, que é onde o
+              defeito foi visto: com o menu recolhido, Cliente cai de 122px para 87,9px, Posições de
+              160,4px para 127px, Código de 93,8px para 83,7px, e os 100px liberados vão para Cargo
+              (114,2px -> 137,5px) e Consultor (136,1px -> 227,4px), que passam a caber em UMA linha.
+
+              COM TEXTO MAIOR ELA SE COMPORTA COMO ANTES: nome de vaga, cliente, cargo e consultor
+              longos de verdade levam o piso de 1243px para 1319px e a tabela ROLA na horizontal
+              (§A.12, "rola em vez de espremer"), sem cortar nada. Pela regra antiga o mesmo conteúdo
+              dava 1310px: os 9px de diferença são o piso explícito da coluna Posições, e são o preço
+              de manter "Candidatos Em Processo" em duas linhas.
+
+              §A.12 INTACTO: nenhuma outra tabela do sistema foi tocada, e nesta continuam o
+              cabeçalho centralizado, a divisória hairline entre colunas, as pills e a ordenação por
+              clique. Mudou a régua de largura, não a máscara. */}
+          {/* ─ §A.20: O PISO DECLARADO PASSOU DE 1243px PARA 1233px (reequilíbrio de 10/09) ─────
+              1243px era um piso HERDADO, acima do que o conteúdo pede: com o `min-width` zerado no
+              browser a tabela mede 1232,34px. Os ~10px de diferença eram largura reservada que
+              nenhuma célula pedia, e 1233px é o mínimo MEDIDO, arredondado para cima. É o mesmo
+              movimento que já tinha levado o piso de 1430px para 1243px: o piso é medição, não
+              herança.
+
+              ELES FORAM DEVOLVIDOS À TABELA, E NÃO À COLUNA POSIÇÕES, e a escolha é do custo mais
+              caro: subir o piso da célula de Posições para 114px consumia exatamente esses 10px e
+              empurrava o rótulo "Gestão Vaga" 7,34px para fora da vista quando o cabeçalho
+              congelado põe a barra de rolagem vertical na caixa (medido a 1600px com o menu aberto
+              e as barras reais do navegador: 1214px úteis contra 1242,34px de tabela). O diretor
+              pediu esta leva para a coluna de Ações PARAR de se esconder, então a coluna de Ações
+              ganha, e Posições fica com o que o rateio da sobra lhe dá. Com 1233px o botão volta
+              para dentro da vista com 2px de margem. */}
+          <table className="ds-table min-w-[1233px] [&_tbody_td]:!px-[11px] [&_thead_th]:!px-[11px]">
             <thead>
               <tr>
                 {/* §A.29: o cabeçalho ordena por clique. O `<th>` é o mesmo de antes, com a mesma
                     largura e a mesma divisória do §A.12: o que entra dentro dele é o botão com a
                     seta. Ações fica de fora, porque não há o que comparar entre botões. */}
-                <ColunaOrdenavel as="th" ord={ord} chave="codigo" className="w-[7%] text-center">
+                <ColunaOrdenavel as="th" ord={ord} chave="codigo" className="w-[1%] text-center">
                   Código
                 </ColunaOrdenavel>
-                <ColunaOrdenavel as="th" ord={ord} chave="vaga" className="w-[12%] text-center">
+                <ColunaOrdenavel as="th" ord={ord} chave="vaga" className="text-center">
                   Vaga
                 </ColunaOrdenavel>
-                <ColunaOrdenavel as="th" ord={ord} chave="cliente" className="w-[10%] text-center">
+                <ColunaOrdenavel as="th" ord={ord} chave="cliente" className="text-center">
                   Cliente
                 </ColunaOrdenavel>
                 {/* §A.20, MEDIDO NO BROWSER E NÃO ESTIMADO: o `ColunaOrdenavel` põe o rótulo num
@@ -1950,10 +2530,10 @@ export default function CentralDeVagasPage() {
                     continua numa linha só, e quando aperta ele vira duas linhas em vez de roubar
                     espaço das colunas de dado. Duas linhas de cabeçalho é leitura; rótulo cortado
                     com reticências é supressão, que é o que a regra proíbe. */}
-                <ColunaOrdenavel as="th" ord={ord} chave="cargo" className="w-[9%] text-center">
+                <ColunaOrdenavel as="th" ord={ord} chave="cargo" className="text-center">
                   <span className="whitespace-normal">Cargo Da Vaga</span>
                 </ColunaOrdenavel>
-                <ColunaOrdenavel as="th" ord={ord} chave="vinculo" className="w-[8%] text-center">
+                <ColunaOrdenavel as="th" ord={ord} chave="vinculo" className="text-center">
                   Vínculo
                 </ColunaOrdenavel>
                 {/* §A.20: a coluna ganhou espaço porque passou a carregar DOIS contadores, um por
@@ -1964,10 +2544,19 @@ export default function CentralDeVagasPage() {
                     com rótulo e contagem, e não mais duas linhas de texto. Abaixo disso a barra
                     ficava curta demais para o preenchimento ser comparável de relance, que é a
                     única coisa que um cilindro faz melhor que um número. */}
-                <ColunaOrdenavel as="th" ord={ord} chave="posicoes" className="w-[13%] text-center">
+                {/* ─ §A.20, REEQUILÍBRIO DE 10/09 (pedido do diretor): POSIÇÕES DEIXA A FAMÍLIA FIXA ─
+                    O `w-[1%]` a prendia no piso do conteúdo, então ela ficava nos mesmos 127px mesmo
+                    quando havia sobra de tela para repartir: era a coluna MAIS DENSA da tabela (três
+                    linhas, duas com barra e número) presa na largura de quem não tem nada a mostrar.
+                    Sem ele, ela entra no rateio da sobra como as demais colunas de conteúdo variável,
+                    e o teto é o próprio conteúdo. MEDIDO: a 1600px com o menu aberto ela passa de
+                    127px para 141,03px, e com o menu recolhido chega a 197,48px, largura em que
+                    "Candidatos Em Processo" fecha em UMA linha e a linha da tabela ENCOLHE de
+                    135,19px para 123,09px. */}
+                <ColunaOrdenavel as="th" ord={ord} chave="posicoes" className="text-center">
                   Posições
                 </ColunaOrdenavel>
-                <ColunaOrdenavel as="th" ord={ord} chave="status" className="w-[7%] text-center">
+                <ColunaOrdenavel as="th" ord={ord} chave="status" className="w-[1%] text-center">
                   Status
                 </ColunaOrdenavel>
                 {/* ITEM 16 DO MAPA DO TIME (07/09): O CONSULTOR RESPONSÁVEL.
@@ -1983,12 +2572,20 @@ export default function CentralDeVagasPage() {
                     O rótulo quebra em duas linhas pelo mesmo motivo medido de Cargo e das datas: em
                     uma linha só, "CONSULTOR RESPONSÁVEL" pede largura mínima grande demais e empurra
                     a tabela inteira para fora da tela. */}
-                <ColunaOrdenavel
-                  as="th"
-                  ord={ord}
-                  chave="consultor"
-                  className="w-[10%] text-center"
-                >
+                {/* ─ §A.20, O OUTRO LADO DO REEQUILÍBRIO: CONSULTOR ENCOLHE PARA O CONTEÚDO ────
+                    Ela era a coluna que mais crescia com a sobra, porque o nome inteiro em uma linha
+                    é o maior "conteúdo desejado" da tabela: com o menu recolhido a 1600px ela chegava
+                    a 227,39px para escrever "Consultor A&S (Homologação)" sem quebrar, e o que o
+                    diretor viu foi espaço morto ao lado do nome. Com o `w-[1%]` ela passa à família
+                    de largura conhecida e para nos 125,13px do conteúdo, devolvendo os 102px à
+                    tabela.
+
+                    QUEBRAR O NOME EM DUAS LINHAS AQUI NÃO CUSTA ALTURA, e é isso que torna a troca
+                    segura: a linha é alta por causa da célula de Posições (três linhas, 104px de
+                    conteúdo), então o nome em duas ou três linhas continua cabendo dentro da altura
+                    que a linha já tem. Nenhuma linha da tabela ficou mais alta (135,19px antes e
+                    depois, medido nas quatro larguras). */}
+                <ColunaOrdenavel as="th" ord={ord} chave="consultor" className="w-[1%] text-center">
                   <span className="whitespace-normal">Consultor Responsável</span>
                 </ColunaOrdenavel>
                 {/* AS DUAS COLUNAS DE TEMPO (item 1), com a mesma quebra de rótulo do Cargo e pelo
@@ -1996,13 +2593,13 @@ export default function CentralDeVagasPage() {
                     "DIAS EM ABERTO" pedia 151px de largura MÍNIMA, e os dois juntos eram o que
                     empurrava a coluna Ações para fora da tela. Quebrando, elas pedem o tamanho do
                     dado que carregam ("01/06/2026" e "não informado"), que é o justo. */}
-                <ColunaOrdenavel as="th" ord={ord} chave="abertura" className="w-[8%] text-center">
+                <ColunaOrdenavel as="th" ord={ord} chave="abertura" className="w-[1%] text-center">
                   <span className="whitespace-normal">Data De Abertura</span>
                 </ColunaOrdenavel>
-                <ColunaOrdenavel as="th" ord={ord} chave="dias" className="w-[7%] text-center">
+                <ColunaOrdenavel as="th" ord={ord} chave="dias" className="w-[1%] text-center">
                   <span className="whitespace-normal">Dias Em Aberto</span>
                 </ColunaOrdenavel>
-                <th className="w-[10%] text-center">Ações</th>
+                <th className="w-[1%] text-center">Ações</th>
               </tr>
             </thead>
             <tbody>
@@ -2044,7 +2641,17 @@ export default function CentralDeVagasPage() {
                         O texto solto que morava aqui ("Oficiais: 2, Banco: 0") virou barra de meta
                         que enche, e a régua de preenchimento mora em `preenchidas`, uma função só. */}
                     <td>
-                      <div className="flex flex-col gap-1.5">
+                      {/* O PISO CONTINUA 104px, E ISSO FOI DECIDIDO CONTRA A MEDIÇÃO, não por
+                          omissão: ele é a largura em que "Candidatos Em Processo" fecha em DUAS
+                          linhas ao lado de um número de três dígitos, e subi-lo para 114px alargava
+                          esta coluna em 10px na tela cheia. O PREÇO ERA A COLUNA DE AÇÕES: com o
+                          cabeçalho congelado, a barra de rolagem vertical da caixa come 10px, e com
+                          o piso a 114px o rótulo "Gestão Vaga" ficava 7,34px fora da vista a 1600px
+                          com o menu aberto. Voltando a 104px ele volta para dentro com 2px de
+                          margem. Quem alarga esta coluna passou a ser o rateio da sobra (o `w-[1%]`
+                          que saiu do cabeçalho), e é ele que faz a coluna ir a 193px na tela larga.
+                          §A.20, e a régua é a do diretor: Ações não se esconde. */}
+                      <div className="flex min-w-[104px] flex-col gap-1.5">
                         <CilindroMeta
                           rotulo="Oficiais"
                           meta={v.posicoesOficiais}
@@ -2057,6 +2664,12 @@ export default function CentralDeVagasPage() {
                           feitas={preenchidas(v, "banco")}
                           origem={origemContagem(v, "banco")}
                         />
+                        {/* A TERCEIRA LINHA (peça 2.2): quanta gente está no funil desta vaga, sem
+                            barra e sem meta. O `?.` protege a janela de publicação, pelo mesmo
+                            motivo documentado em `preenchidas`: a tela nova pode alcançar por
+                            alguns minutos um backend que ainda não serve a ocupação, e nesse caso a
+                            linha mostra zero em vez de derrubar a Central de Vagas inteira. */}
+                        <LinhaEmProcesso quantos={v.ocupacao?.emSelecao ?? 0} />
                       </div>
                     </td>
                     <td className="text-center">
@@ -2112,7 +2725,7 @@ export default function CentralDeVagasPage() {
                             title="Fechar vaga"
                             aria-label={`Fechar a vaga ${rotuloDaVaga(v)}`}
                             onClick={() => abrirFechamento(v)}
-                            className="rounded-lg border border-transparent p-2 text-dim transition hover:border-[var(--border)] hover:text-accent"
+                            className="rounded-lg border border-transparent p-1.5 text-dim transition hover:border-[var(--border)] hover:text-accent"
                           >
                             <Icon name="lock" className="h-4 w-4" />
                           </button>
@@ -2131,7 +2744,7 @@ export default function CentralDeVagasPage() {
                             title="Editar as posições da vaga"
                             aria-label={`Editar as posições da vaga ${rotuloDaVaga(v)}`}
                             onClick={() => abrirPosicoes(v)}
-                            className="rounded-lg border border-transparent p-2 text-dim transition hover:border-[var(--border)] hover:text-accent"
+                            className="rounded-lg border border-transparent p-1.5 text-dim transition hover:border-[var(--border)] hover:text-accent"
                           >
                             <Icon name="users" className="h-4 w-4" />
                           </button>
@@ -2144,7 +2757,7 @@ export default function CentralDeVagasPage() {
                             title="Continuar o rascunho"
                             aria-label={`Continuar o rascunho da vaga ${rotuloDaVaga(v)}`}
                             onClick={() => continuarRascunho(v)}
-                            className="rounded-lg border border-transparent p-2 text-dim transition hover:border-[var(--border)] hover:text-accent"
+                            className="rounded-lg border border-transparent p-1.5 text-dim transition hover:border-[var(--border)] hover:text-accent"
                           >
                             <Icon name="pen" className="h-4 w-4" />
                           </button>
@@ -2154,7 +2767,7 @@ export default function CentralDeVagasPage() {
                           title="Clonar a vaga"
                           aria-label={`Clonar a vaga ${rotuloDaVaga(v)}`}
                           onClick={() => clonarVaga(v)}
-                          className="rounded-lg border border-transparent p-2 text-dim transition hover:border-[var(--border)] hover:text-accent"
+                          className="rounded-lg border border-transparent p-1.5 text-dim transition hover:border-[var(--border)] hover:text-accent"
                         >
                           <Icon name="copy" className="h-4 w-4" />
                         </button>
@@ -2180,7 +2793,7 @@ export default function CentralDeVagasPage() {
                           title="Abrir a gestão da vaga"
                           aria-label={`Abrir a gestão da vaga ${rotuloDaVaga(v)}`}
                           onClick={() => setVerAlvo(v)}
-                          className="inline-flex flex-none items-center gap-1.5 whitespace-nowrap rounded-lg border border-transparent [background:var(--btn-grad)] px-3 py-2 text-[12.5px] font-bold text-white shadow-[0_8px_18px_-8px_rgba(34,176,219,0.75)] transition hover:brightness-110"
+                          className="inline-flex flex-none items-center gap-1.5 whitespace-nowrap rounded-lg border border-transparent [background:var(--btn-grad)] px-2.5 py-2 text-[12.5px] font-bold text-white shadow-[0_8px_18px_-8px_rgba(34,176,219,0.75)] transition hover:brightness-110"
                         >
                           <Icon name="eye" className="h-4 w-4 flex-none" />
                           Gestão Vaga
@@ -2192,6 +2805,53 @@ export default function CentralDeVagasPage() {
               )}
             </tbody>
           </table>
+        </div>
+
+        {/* ── O RODAPÉ DA LISTA: A CONTAGEM E A PAGINAÇÃO, NA MESMA FRASE ───────────────────────
+            A CONTAGEM VEIO DO TOPO PARA CÁ (redesenho de 10/09) e ganhou vizinha: ela e a página
+            falam da MESMA lista, e lidas juntas respondem de uma vez "quantas passaram pelo filtro,
+            de quantas, e onde eu estou dentro delas".
+
+            A CONTAGEM SEGUE O RECORTE, e não a base: dizer "2.106 vagas cadastradas" com a tabela
+            mostrando 4 linhas é a frase contradizendo a tela. Com filtro aplicado ela diz quantas o
+            filtro deixou passar, e de quantas, para o total da base continuar à vista.
+
+            OS BOTÕES SÓ APARECEM COM MAIS DE UMA PÁGINA, que é o pedido: com 12 vagas na base,
+            um par de setas desabilitadas é ruído. Os mesmos `btn-secondary` com seta do Gerenciador,
+            nenhum componente novo de paginação nasceu aqui. */}
+        <div className="flex flex-wrap items-center justify-between gap-3 px-4 pb-2 pt-4">
+          <p className="text-[12.5px] text-dim">
+            {loading
+              ? "Carregando as vagas."
+              : listadas.length === rows.length
+                ? `${rows.length} ${rows.length === 1 ? "vaga cadastrada" : "vagas cadastradas"}.`
+                : `${listadas.length} de ${rows.length} ${rows.length === 1 ? "vaga" : "vagas"}, pelo recorte atual.`}
+            {paginas > 1 && ` Página ${paginaAtual} de ${paginas}.`}
+          </p>
+          {paginas > 1 && (
+            <div className="flex gap-2">
+              <button
+                type="button"
+                className="btn-secondary px-3 py-2 text-[13px] disabled:opacity-50"
+                disabled={paginaAtual <= 1}
+                onClick={() => setPagina(paginaAtual - 1)}
+                aria-label="Página anterior"
+                title="Página anterior"
+              >
+                <Icon name="left" className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                className="btn-secondary px-3 py-2 text-[13px] disabled:opacity-50"
+                disabled={paginaAtual >= paginas}
+                onClick={() => setPagina(paginaAtual + 1)}
+                aria-label="Próxima página"
+                title="Próxima página"
+              >
+                <Icon name="right" className="h-4 w-4" />
+              </button>
+            </div>
+          )}
         </div>
       </GlassCard>
 
@@ -3617,12 +4277,180 @@ export default function CentralDeVagasPage() {
   );
 
   /**
-   * O CARD DE INDICADOR, QUE É O PRÓPRIO FILTRO (§A.12), na mesma forma da Central de Candidatos:
-   * ícone acima, número grande, rótulo embaixo, e o card ativo com a borda de destaque mais o
-   * check. Clicar no card ativo volta para o Total, que é o toggle pedido pela regra.
+   * ─ O TÍTULO DE UMA FAIXA DE INDICADORES, COM O NÍVEL DO QUE ELA CONTA ─────────────────────────
+   *
+   * §A.24: é rótulo de grupo, então title case ("Inserção Por Etapa"). A caixa alta é do CSS, o
+   * texto no código continua escrito como se lê.
+   *
+   * ┌─ POR QUE O NÍVEL ENTRA NO TÍTULO (ajuste 1 de 10/09, pedido do diretor) ────────────────────┐
+   * │ AS TRÊS FAIXAS CONTAM UNIDADES DIFERENTES e pareciam a mesma coisa: a de Status conta        │
+   * │ VAGAS, as outras duas contam CANDIDATOS. Lado a lado, sem dizer de que nível falam, os       │
+   * │ onze números convidavam a somar entre si o que não se soma.                                  │
+   * │                                                                                              │
+   * │ O QUALIFICADOR NÃO COMPETE COM O NOME DA FAIXA, e a hierarquia vem de TRÊS eixos de uma vez, │
+   * │ nenhum deles o TAMANHO: o nome segue em caixa alta, peso 600 e com o `tracking` largo, que   │
+   * │ é o que o olho lê primeiro numa linha de 10,5px; o parêntese sai da caixa alta               │
+   * │ (`normal-case`), volta ao peso normal e ao `tracking` normal, e ainda perde intensidade      │
+   * │ (`opacity-70`). Mexer no tamanho da fonte é o que NÃO se faz aqui: a linha tem 10,5px, e     │
+   * │ abaixo disso o texto deixa de ser legível antes de deixar de competir.                       │
+   * │                                                                                              │
+   * │ CUSTO EM ALTURA: ZERO, e foi medido, não estimado. O parêntese é da mesma família e do mesmo │
+   * │ tamanho do nome, então divide a MESMA linha e o mesmo `line-height`: a faixa da direita, que │
+   * │ já quebra em duas fileiras de card com sete etapas, não ganhou um pixel.                     │
+   * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+   */
+  function TituloDaFaixa({
+    children,
+    nivel,
+    className,
+  }: {
+    children: React.ReactNode;
+    /** "Nível Vaga" ou "Nível Candidato": de QUE unidade os números daquela faixa falam (§A.24). */
+    nivel?: string;
+    /** Só para o título que divide a linha com o "Limpar seleção": ali a margem de baixo é da linha. */
+    className?: string;
+  }) {
+    return (
+      <h3
+        className={cn(
+          "mb-[7px] text-[10.5px] font-semibold uppercase tracking-[0.09em] text-faint",
+          className,
+        )}
+      >
+        {children}
+        {nivel && (
+          <span className="ml-[5px] font-normal normal-case tracking-normal opacity-70">
+            ({nivel})
+          </span>
+        )}
+      </h3>
+    );
+  }
+
+  /**
+   * ─ O CARD COMPACTO, A ÚNICA CASCA DE INDICADOR DESTA TELA ─────────────────────────────────────
+   *
+   * ┌─ POR QUE ELE ENCOLHEU, com o número medido ────────────────────────────────────────────────┐
+   * │ O card media 107px de altura e as três faixas empilhadas empurravam a tabela para 671px do  │
+   * │ topo, numa tela de 1000px: a fila de trabalho começava fora do primeiro olhar. O card agora  │
+   * │ tem DUAS linhas em vez de três (o ícone e o número dividem a de cima, o rótulo fica na de    │
+   * │ baixo) e paddings menores. Nada foi retirado: ícone, número e rótulo continuam os três lá.  │
+   * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * O NÚMERO NÃO TRUNCA NUNCA (§A.20): o rótulo é que ganha permissão de quebrar em duas linhas
+   * quando a faixa aperta. Cortar o número seria suprimir o dado; quebrar o rótulo é leitura.
+   *
+   * O ACESO TROCA O ÍCONE PELO CHECK, no MESMO lugar, e não acrescenta um segundo ícone à direita:
+   * num card de 88px, um check extra ao lado de um número de três dígitos seria a próxima coluna
+   * esmagada. O check é o mesmo do §A.12, a borda de destaque e o anel continuam.
+   */
+  function CardCompacto({
+    rotulo,
+    valor,
+    icone,
+    cor,
+    ativo = false,
+    onClick,
+    inativa = false,
+    dica,
+  }: {
+    rotulo: string;
+    valor: number;
+    icone: IconName;
+    cor?: string;
+    ativo?: boolean;
+    onClick?: () => void;
+    inativa?: boolean;
+    dica?: string;
+  }) {
+    const clicavel = typeof onClick === "function";
+    return (
+      <GlassCard
+        as={clicavel ? "button" : undefined}
+        className={cn(
+          "!px-3 !py-[9px] text-left transition",
+          clicavel && "hover:bg-[var(--surface-2)]",
+          ativo && "!border-[var(--accent)] bg-[var(--sico)] ring-1 ring-[var(--accent)]",
+          inativa && "border-dashed opacity-80",
+        )}
+        onClick={onClick}
+        type={clicavel ? "button" : undefined}
+        aria-pressed={clicavel ? ativo : undefined}
+        title={dica}
+      >
+        <div className="flex items-center gap-[6px]">
+          <Icon
+            name={ativo ? "check" : icone}
+            className="h-[13px] w-[13px] flex-none"
+            style={{ color: ativo ? "var(--accent)" : cor, opacity: ativo ? 1 : 0.75 }}
+          />
+          <span
+            className="font-display text-[19px] font-extrabold leading-[1.15] tracking-[-0.02em]"
+            style={cor ? { color: cor } : undefined}
+          >
+            {loading ? "…" : valor}
+          </span>
+        </div>
+        <div className="mt-[3px] text-[11px] leading-[1.25] text-dim">{rotulo}</div>
+        {inativa && (
+          <div className="mt-[3px] text-[10px] font-semibold uppercase tracking-[0.06em] text-faint">
+            Inativa
+          </div>
+        )}
+      </GlassCard>
+    );
+  }
+
+  /**
+   * O CARD DE GENTE (etapas e desfechos), E OS DOIS GRUPOS FILTRAM (ajuste 2 de 10/09).
+   *
+   * A COR VEM PRONTA no `card.cor`, resolvida pelo catálogo: nas etapas é a que o diretor escolheu
+   * no gerenciador, nos desfechos é a régua do §A.12 (verde é êxito, vermelho é saída sem êxito).
+   *
+   * ┌─ ANTES SÓ A ETAPA ERA CLICÁVEL, E ERA ISSO QUE NÃO SE EXPLICAVA PARA QUEM USA ─────────────┐
+   * │ São cards iguais, lado a lado, e metade respondia ao clique: quem clicava em "Alocados" e   │
+   * │ via a tabela parada concluía que a tela estava quebrada. Agora os dois grupos filtram, com  │
+   * │ o MESMO toggle e a MESMA múltipla seleção (§A.28).                                          │
+   * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * O `grupo` NÃO É ENFEITE DE TIPAGEM: é ele que amarra cada card ao SEU mapa. A etapa recorta por
+   * `porEtapa` (só quem está em seleção) e o desfecho por `porDesfecho` (só quem já recebeu
+   * decisão), que é exatamente a régua do número desenhado no card. O porquê de serem duas funções
+   * e não uma está em `lib/as-vagas-lista.temGenteNoDesfecho`.
+   *
+   * A ETAPA FORA DE CIRCULAÇÃO NÃO PODE PARECER UMA ETAPA NORMAL: ela só aparece porque ainda tem
+   * gente presa dentro, então ganha a borda tracejada e a marca "Inativa". Sem a marca, o card diria
+   * que aquela fila está viva e recebendo gente, e ela não está. Clicável ela continua sendo, porque
+   * ver QUAIS vagas têm gente parada ali é justamente o que se quer perguntar.
+   */
+  function KpiDoFunil({ card, grupo }: { card: CardDeFunil; grupo: "etapa" | "desfecho" }) {
+    const ehEtapa = grupo === "etapa";
+    const ativo = (ehEtapa ? fEtapas : fDesfechos).includes(card.chave);
+    const oQueConta = ehEtapa ? "em seleção" : "nesta situação";
+    return (
+      <CardCompacto
+        rotulo={card.rotulo}
+        valor={card.valor}
+        icone={card.icone}
+        cor={card.cor}
+        inativa={card.inativa}
+        ativo={ativo}
+        onClick={ehEtapa ? () => alternarEtapa(card.chave) : () => alternarDesfecho(card.chave)}
+        dica={`${card.rotulo}: ${card.valor} ${oQueConta}. ${
+          ativo
+            ? "Clique de novo para tirar do recorte."
+            : `Clique para ver só as vagas com gente ${oQueConta}.`
+        }${card.inativa ? " Esta etapa está fora de circulação." : ""}`}
+      />
+    );
+  }
+
+  /**
+   * O CARD DE INDICADOR DE STATUS, QUE É O PRÓPRIO FILTRO (§A.12): clicar no card ativo volta para o
+   * Total, que é o toggle pedido pela regra.
    *
    * É UMA FUNÇÃO DENTRO DO COMPONENTE, e não um componente à parte, porque ela lê `cardAtivo` e
-   * `loading` do estado da tela. Extrair para fora obrigaria a passar os dois em cada um dos sete
+   * `loading` do estado da tela. Extrair para fora obrigaria a passar os dois em cada um dos seis
    * cards, sem ganho nenhum: ela não é reusada por outra tela.
    */
   function Kpi({
@@ -3640,28 +4468,17 @@ export default function CentralDeVagasPage() {
   }) {
     const ativo = cardAtivo === id;
     return (
-      <GlassCard
-        as="button"
-        className={cn(
-          "fk !px-4 !py-3.5 text-left transition hover:bg-[var(--surface-2)]",
-          ativo && "!border-[var(--accent)] ring-1 ring-[var(--accent)]",
-        )}
+      <CardCompacto
+        rotulo={rotulo}
+        valor={valor}
+        icone={icone}
+        cor={tom}
+        ativo={ativo}
         onClick={() => setCardAtivo(ativo ? "total" : id)}
-        aria-pressed={ativo}
-      >
-        <div className="mb-0.5 flex items-center justify-between">
-          <Icon
-            name={icone}
-            className="h-4 w-4 opacity-70"
-            style={tom ? { color: tom } : undefined}
-          />
-          {ativo && <Icon name="check" className="h-3 w-3 text-accent" />}
-        </div>
-        <div className="num" style={tom ? { color: tom } : undefined}>
-          {loading ? "…" : valor}
-        </div>
-        <div className="lbl">{rotulo}</div>
-      </GlassCard>
+        dica={`${rotulo}: ${valor}. ${
+          ativo ? "Clique de novo para ver todas." : "Clique para ver só estas vagas."
+        }`}
+      />
     );
   }
 }

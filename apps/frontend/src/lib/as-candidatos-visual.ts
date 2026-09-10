@@ -12,7 +12,6 @@
 import {
   consomePosicao,
   ehSaidaSemExito,
-  type CandidaturaEtapa,
   type CandidaturaSituacao,
   type VagaStatus,
 } from "@ea/shared-types";
@@ -45,47 +44,25 @@ export function tomDaSituacao(s: CandidaturaSituacao): PillTone {
 }
 
 /**
- * CADA ETAPA COM A SUA COR, e a cor mora em UM MAPA (decisão do diretor).
+ * ─ O TOM DA ETAPA MUDOU DE CASA: ELE VIVE EM `lib/as-etapas.ts` ────────────────────────────────
  *
- * Antes eram duas cores para cinco etapas (verde na Aprovação, azul em todo o resto), então bater o
- * olho não dizia onde a pessoa estava: quatro das cinco etapas do funil eram visualmente a mesma
- * coisa. Agora cada etapa tem tom próprio, e o tom cresce com o avanço no funil: neutro na entrada,
- * azul quando o trabalho começa, amarelo e laranja nas entrevistas, verde na Aprovação.
+ * AQUI HAVIA UM `Record<CandidaturaEtapa, PillTone>` com as cinco etapas escritas à mão, e o
+ * comentário dele dizia, com todas as letras, que o `Record` existia para o COMPILADOR EXIGIR a cor
+ * de toda etapa nova. Essa garantia morreu por decisão de modelo, não por descuido: a lista de
+ * etapas passou a ser DADO DO DIRETOR (`as_etapas_funil`), e código não pode exigir entrada numa
+ * lista que o usuário edita na tela.
  *
- * ─ POR QUE UM `Record` E NÃO UM `if` ────────────────────────────────────────────────────────────
+ * A COR AGORA É COLUNA DA TABELA (`tom`, da paleta fechada `ETAPA_TONS`), e quem resolve é
+ * `tomDaEtapa(codigo, catalogo)`, em `lib/as-etapas.ts`, com FALLBACK explícito e testado no lugar
+ * da exaustividade perdida. O `dg` continua fora da paleta pelo mesmo motivo de sempre (§A.12:
+ * vermelho é recusa, e etapa de funil é posição, não julgamento), só que agora a exclusão está no
+ * vocabulário compartilhado, valendo para o banco, para o serviço e para o seletor de cor de uma
+ * vez só, em vez de valer por acordo entre três listas.
  *
- * A LISTA DE ETAPAS VAI MUDAR (o diretor já decidiu a próxima), e é o `Record<CandidaturaEtapa, …>`
- * que faz a mudança custar uma linha em vez de uma releitura de tela: quem acrescentar etapa nova ao
- * vocabulário compartilhado tem o TypeScript exigindo a entrada aqui, no lugar certo, e a tela toda
- * (pill da lista, ficha, painel da vaga, modal de mover) segue lendo daqui sem ser tocada. Cor
- * espalhada em condicional pelas telas obrigaria a peça seguinte a caçar cada uma.
- *
- * ─ A PALETA, e o tom que NÃO se usa ─────────────────────────────────────────────────────────────
- *
- * Os tons são os do design system (`PillTone`), sem nenhuma cor escrita à mão, então os dois temas
- * saem de graça: cada tom já tem o seu par claro/escuro em `globals.css`. `dg` (vermelho) fica DE
- * FORA de propósito: pela §A.12 ele é recusa, e a `StatusPill` põe o X vermelho nele. Etapa de funil
- * é posição, não julgamento; pintar uma de vermelho diria que a pessoa foi reprovada por estar nela.
- * Sobram cinco tons utilizáveis para as cinco etapas de hoje, ou seja, a paleta fecha EXATA e não
- * sobra tom para uma sexta etapa (ver a nota de entrega).
+ * `tomDaSituacao` e `tomDoStatusVaga` FICAM AQUI: as duas listas continuam sendo vocabulário fixo
+ * com REGRA (quem ocupa posição, quem é saída sem êxito), e é justamente por isso que elas não
+ * viraram catálogo editável.
  */
-export const TOM_ETAPA: Record<CandidaturaEtapa, PillTone> = {
-  /** Entrou na base e ainda não foi trabalhada: neutro, porque nada aconteceu com ela ainda. */
-  CAPTACAO: "nt",
-  /** O trabalho começou, e azul é o tom de informação do sistema. */
-  TRIAGEM: "in",
-  /** Em avaliação dentro de casa. */
-  ENTREVISTA_SOULAN: "wn",
-  /** Em avaliação no cliente, um passo adiante da anterior, e o laranja lê como esse passo. */
-  ENTREVISTA_CLIENTE: "or",
-  /** Fim bom do caminho: verde, como já era antes deste ajuste. */
-  APROVACAO: "ok",
-};
-
-/** O tom de uma etapa do funil. Forma de função, para casar com `tomDaSituacao`. */
-export function tomDaEtapa(e: CandidaturaEtapa): PillTone {
-  return TOM_ETAPA[e];
-}
 
 /**
  * TOM DA PILL POR STATUS DA VAGA (§A.12: o ícone acompanha o estado real, nunca é fixo).
@@ -108,7 +85,7 @@ export const TOM_STATUS_VAGA: Record<VagaStatus, PillTone> = {
   CANCELADA: "dg",
 };
 
-/** O tom de um status de vaga. Forma de função, para casar com `tomDaEtapa` e `tomDaSituacao`. */
+/** O tom de um status de vaga. Forma de função, para casar com `tomDaSituacao`. */
 export function tomDoStatusVaga(s: VagaStatus): PillTone {
   return TOM_STATUS_VAGA[s];
 }

@@ -8,6 +8,7 @@ import { SITUACOES_DE_SAIDA, ocupacaoDaVaga } from "../../domain/candidatura";
 import { CandidatosService } from "./candidatos.service";
 import { RegistrarSaidaDto } from "./candidatos.dto";
 import { asCandidaturaEtapas, asCandidaturas } from "../../db/schema";
+import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
 
 /**
  * ─ DESVINCULAR O CANDIDATO DA VAGA: o mesmo mecanismo, com o nome que quem opera usa ────────────
@@ -148,7 +149,7 @@ function makeDb(cenario: { candidatura?: Record<string, unknown> } = {}) {
     },
   };
 
-  return { service: new CandidatosService(db as never), linha: c, updates, inserts, ordem };
+  return { service: new CandidatosService(db as never, catalogoDeEtapasFingido() as never), linha: c, updates, inserts, ordem };
 }
 
 const daCandidatura = (updates: Escrita[]) =>

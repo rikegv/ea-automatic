@@ -187,6 +187,30 @@ export const SELECAO: NavDef[] = [
 ];
 
 /**
+ * OS ITENS PRÓPRIOS DA ADMINISTRAÇÃO, ao lado do hub. Eles NÃO são o `MENU_GERENCIAL`: cada um tem
+ * `codigo` e responde a `temMenu`, como qualquer destino da barra.
+ */
+export const ADMINISTRACAO: NavDef[] = [
+  /*
+   * ─ ESTÁ VAZIO DE PROPÓSITO, E O QUE SAIU DAQUI FOI PARA O HUB ──────────────────────────────────
+   *
+   * "Etapas Do Funil" morou aqui e NÃO era este o pedido. O diretor pediu a tela DENTRO do menu de
+   * gestão, junto das outras configurações, e item solto na barra, abaixo do Menu Gerencial, é outra
+   * coisa: ele fica ao lado do hub, e não dentro dele. A tela agora é um CARD do hub
+   * (`app/(app)/admin/page.tsx`, array `CARDS`), ao lado de Clientes, Cargos, Escalas e Motivos De
+   * Declínio, que é o padrão de toda configuração do sistema.
+   *
+   * A LISTA CONTINUA EXISTINDO, com a maquinaria de volta ao estado anterior ao item: ela é a costura
+   * pronta para o dia em que houver um destino administrativo que precise MESMO de linha própria na
+   * barra. Enquanto está vazia, a seção Administração volta a ser só o hub, exatamente como era.
+   *
+   * §A.23: esvaziar esta lista NÃO mexe em permissão de ninguém. Quem governa a tela é o menu
+   * `as-etapas`, que segue de pé no guard de rota (`lib/menu-rotas.ts`) e no filtro do card, e que
+   * continua nascendo só para o SUPER_ADMIN.
+   */
+];
+
+/**
  * MENU GERENCIAL. Não é um `NavDef` comum porque a visibilidade dele NÃO é `temMenu` de um código:
  * é `isAdmin` OU ter ao menos um menu que abre a camada `/admin` (ver `admin-menus.ts`). Quem
  * consumir esta constante precisa aplicar essa regra, e é o que `gruposDeNavegacao` faz.
@@ -227,9 +251,16 @@ export function gruposDeNavegacao(
   const selecao = SELECAO.filter((n) => temMenu(n.codigo));
   if (selecao.length) grupos.push({ titulo: "Atração e Seleção", itens: selecao });
 
-  if (isAdmin || podeAbrirAdministracao(temMenu)) {
-    grupos.push({ titulo: "Administração", itens: [MENU_GERENCIAL] });
-  }
+  /*
+   * A ADMINISTRAÇÃO TEM DUAS RÉGUAS DENTRO DO MESMO GRUPO, e elas continuam separadas item a item.
+   * O HUB aparece para quem é admin ou tem algum menu que abre a camada `/admin`; os itens PRÓPRIOS
+   * aparecem por `temMenu` do código de cada um, exatamente como apareciam no grupo anterior. Sem
+   * essa separação, mudar de seção viraria mudança de PERMISSÃO, e permissão é do diretor (§A.23).
+   */
+  const administracao: GrupoNav["itens"] = [];
+  if (isAdmin || podeAbrirAdministracao(temMenu)) administracao.push(MENU_GERENCIAL);
+  administracao.push(...ADMINISTRACAO.filter((n) => temMenu(n.codigo)));
+  if (administracao.length) grupos.push({ titulo: "Administração", itens: administracao });
 
   return grupos;
 }

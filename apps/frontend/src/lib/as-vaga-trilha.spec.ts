@@ -45,6 +45,9 @@ function ocupacao(finalizadas: number): AsOcupacaoVaga {
     emSelecao: 0,
     fora: 0,
     excedida: false,
+    // Contagem do funil: a fixture não a exercita, e o mapa vazio é o estado real da vaga sem ninguém.
+    porEtapa: {},
+    porDesfecho: {},
   };
 }
 

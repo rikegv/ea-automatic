@@ -8,6 +8,7 @@ import type { Database } from "../../db/client";
 import { VAGA_STATUS_DA_TRILHA } from "../../domain/vaga";
 import { CreateVagaDto } from "./vagas.dto";
 import { VagasService } from "./vagas.service";
+import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
 
 /**
  * ─ A TRILHA DE ABERTURA NÃO ENCERRA VAGA (achado BLOQUEANTE da auditoria, 08/09) ────────────────
@@ -45,7 +46,7 @@ const TERMINAIS = VAGA_STATUS.filter(
 );
 
 /** O `db` nulo prova o ponto: a recusa acontece ANTES de qualquer ida ao banco. */
-const service = new VagasService(null as unknown as Database);
+const service = new VagasService(null as unknown as Database, catalogoDeEtapasFingido() as never);
 
 function guarda(status: string | undefined, padrao: "RASCUNHO" | "ABERTA") {
   return (
@@ -148,7 +149,7 @@ describe("a trilha de abertura só escreve RASCUNHO e ABERTA", () => {
    * não pode encerrar a vaga por aqui" de "faltam campos obrigatórios".
    */
   describe("porta 3, as rotas consultam a guarda antes de tocar o banco", () => {
-    const semBanco = new VagasService(null as unknown as Database);
+    const semBanco = new VagasService(null as unknown as Database, catalogoDeEtapasFingido() as never);
 
     it.each(TERMINAIS)("`create` recusa %s pela guarda, e não pela régua dos obrigatórios", async (status) => {
       const erro = await semBanco
@@ -163,7 +164,7 @@ describe("a trilha de abertura só escreve RASCUNHO e ABERTA", () => {
       /** O mínimo que a rota lê antes da guarda: a vaga existe e está em RASCUNHO. */
       const comRascunho = new VagasService({
         query: { vagas: { findFirst: async () => ({ id: "vaga-1", status: "RASCUNHO", abertoPorId: "user-1" }) } },
-      } as unknown as Database);
+      } as unknown as Database, catalogoDeEtapasFingido() as never);
 
       const erro = await comRascunho
         .atualizar("vaga-1", { status } as unknown as CreateVagaDto)

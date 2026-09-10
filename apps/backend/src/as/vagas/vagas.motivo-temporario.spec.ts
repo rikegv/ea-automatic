@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Database } from "../../db/client";
 import { VagasService } from "./vagas.service";
 import type { CreateVagaDto } from "./vagas.dto";
+import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
 
 /**
  * MOTIVO / JUSTIFICATIVA / SUBSTITUIÇÃO SÓ NO VÍNCULO TEMPORÁRIO (item 1, decisão do diretor 07/09).
@@ -14,7 +15,7 @@ import type { CreateVagaDto } from "./vagas.dto";
  * `camposDaTrilha` é o mapeamento PURO do corpo para as colunas: não toca no banco, e é por isso que
  * ele é testável assim, sem stub de Drizzle. O `db` nulo prova o ponto: nada aqui o usa.
  */
-const service = new VagasService(null as unknown as Database);
+const service = new VagasService(null as unknown as Database, catalogoDeEtapasFingido() as never);
 
 function campos(dto: Partial<CreateVagaDto>) {
   return (
