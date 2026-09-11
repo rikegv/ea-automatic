@@ -1144,6 +1144,11 @@ export const VAGA_OBRIGATORIOS: readonly VagaPendencia[] = [
   { campo: "posicoesOficiais", rotulo: "Nº de posições oficiais", artigo: "o", passo: 0, passoRotulo: "A Vaga", ancora: "vaga-posicoes-oficiais" },
   { campo: "natureza", rotulo: "Natureza", artigo: "a", passo: 0, passoRotulo: "A Vaga", ancora: "vaga-natureza" },
   { campo: "sazonalidade", rotulo: "Sazonalidade", artigo: "a", passo: 0, passoRotulo: "A Vaga", ancora: "vaga-sazonalidade" },
+  // A LINHA DE SERVIÇO (Onda C), ao lado das outras duas classificações da vaga e ANTES do status,
+  // que é o que fecha o passo. Ela sobe para cá vinda de uma composição temporária do backend
+  // (`domain/vaga-obrigatorios.ts`), que era idempotente justamente para esta migração não passar a
+  // cobrar duas vezes. Com ela aqui, aquele arquivo pode ser apagado.
+  { campo: "linhaServicoId", rotulo: "Linha de serviço", artigo: "a", passo: 0, passoRotulo: "A Vaga", ancora: "vaga-linha-servico" },
   { campo: "status", rotulo: "Status", artigo: "o", passo: 0, passoRotulo: "A Vaga", ancora: "vaga-status" },
   { campo: "dataAbertura", rotulo: "Data de abertura", artigo: "a", passo: 1, passoRotulo: "Quem Pediu", ancora: "vaga-data-abertura" },
 ];
@@ -1158,6 +1163,16 @@ export interface VagaCamposObrigatorios {
   posicoesOficiais?: number | string | null;
   natureza?: string | null;
   sazonalidade?: string | null;
+  /**
+   * NÚMERO **OU TEXTO**, pelo mesmo motivo de `posicoesOficiais` logo acima: o backend tem o id do
+   * catálogo como número, e o campo da TELA guarda o que o seletor devolve, que é string. Declarar
+   * só o número obrigaria a tela a converter antes de perguntar "o que falta", e conversão no meio
+   * da régua é onde `"0"`, `""` e `NaN` deixam de significar a mesma coisa nos dois lados.
+   *
+   * `vazio()` resolve os dois: pega `null`, `undefined` e string em branco. Id de catálogo começa
+   * em 1, então não há o caso do zero legítimo que obrigou `posicoesOficiais` a ter régua própria.
+   */
+  linhaServicoId?: number | string | null;
   status?: string | null;
   dataAbertura?: string | null;
 }
@@ -1905,6 +1920,27 @@ export interface AsVagaIdioma {
 }
 
 /**
+ * ─ O PAR COMO O BANCO PODE DEVOLVÊ-LO, com o nível AUSENTE ────────────────────────────────────
+ *
+ * `AsVagaIdioma` é o que a tela EXIGE ao gravar: nível obrigatório por idioma escolhido, senão a
+ * exigência volta a ser incomparável. Este aqui é o que a LEITURA pode encontrar, e os dois são
+ * diferentes de propósito.
+ *
+ * POR QUE O NULO EXISTE, e por que ninguém pode preenchê-lo: as vagas anteriores à Onda C têm
+ * idioma e **não têm nível**, porque o nível não existia quando alguém as abriu. Uma migration que
+ * escolhesse um nível para elas estaria INVENTANDO exigência de negócio: "Básico" afrouxa a
+ * exigência de uma vaga aberta e recebendo candidato, "Fluente" a aperta, e ninguém declarou
+ * nenhum dos dois. O nulo é a resposta honesta, e a tela escreve "nível não informado" (§A.11).
+ *
+ * DOIS TIPOS EM VEZ DE UM COM CAMPO OPCIONAL: com um só, todo ponto que GRAVA passaria a aceitar
+ * nível ausente por omissão, que é exatamente o que a Onda C existe para acabar.
+ */
+export interface VagaIdiomaGravado {
+  idioma: string;
+  nivel: IdiomaNivel | null;
+}
+
+/**
  * ─ O PROJETO DA VAGA (Onda C): a LINHA DE SERVIÇO, e ela é gerenciável pelo diretor ───────────
  *
  * ┌─ ELE NÃO É O "PROJETO" QUE JÁ EXISTE, e a colisão de nome é real ──────────────────────────┐
@@ -1935,7 +1971,8 @@ export interface AsLinhaDeServico {
  * ─ UMA CIDADE DO IBGE (Onda C) ────────────────────────────────────────────────────────────────
  *
  * `id` É O CÓDIGO DO IBGE, de 7 dígitos, e ele é a chave: nome de município se repete entre estados
- * (há quatro "Bom Jesus", em estados diferentes), e casar por nome é como a lista antiga errava.
+ * (são CINCO "Bom Jesus", em PB, PI, RN, RS e SC, contados na base já carregada e não estimados),
+ * e casar por nome é como a lista antiga errava.
  * O código é oficial, estável, e é o que qualquer integração futura vai falar.
  *
  * A BASE É ESTRUTURADA NO BANCO, e não um arquivo de código, por decisão do diretor: são 5.570
@@ -2152,6 +2189,21 @@ export interface VagaListItem {
   status: VagaStatus;
   sazonalidade: VagaSazonalidade;
   /**
+   * ─ A LINHA DE SERVIÇO E A CIDADE (Onda C) ────────────────────────────────────────────────────
+   *
+   * O RÓTULO VIAJA JUNTO DO ID, e o mesmo vale para a cidade, porque a alternativa é a tela fazer
+   * uma segunda consulta por linha só para escrever um nome. O id é a chave; o rótulo é o que se lê.
+   *
+   * NULO É ESTADO LEGÍTIMO nos dois: a linha de serviço é obrigatória na ABERTURA, mas as vagas
+   * anteriores à Onda C não a têm e não foram carimbadas (carimbar seria inventar classificação num
+   * dado que existe para MEDIR a operação). A cidade é opcional.
+   */
+  linhaServicoId: number | null;
+  linhaServicoRotulo: string | null;
+  cidadeId: number | null;
+  cidadeNome: string | null;
+  cidadeUf: string | null;
+  /**
    * OS DOIS CONTADORES DA VAGA (decisão do diretor, 25/08), cada um com a sua META aqui e a sua
    * CONTAGEM no bloco de fechamento: oficiais são as contratações de verdade, banco é o excedente
    * aprovado que fica reservado. É o par que deixa a tela dizer "6 de 10 Oficiais, 3 de 10 Banco".
@@ -2230,8 +2282,24 @@ export interface VagaListItem {
   // ── Requisitos (passo 5) ─────────────────────────────────────────────────
   faixaEtaria: string | null;
   genero: VagaGenero;
-  /** Idiomas marcados na lista fechada. "Outros" leva o texto para `idiomasOutros`. */
+  /**
+   * ─ OS IDIOMAS: DUAS COLUNAS, e a antiga ficou CONGELADA (Onda C) ─────────────────────────────
+   *
+   * `idiomas` é a lista LEGADA, só os nomes, sem nível. Ela **não foi convertida**, e isso é o veto
+   * da auditoria virado desenho: converter a coluna in place quebraria a tela **no instante em que
+   * as migrations rodassem**, porque elas rodam todas no mesmo comando e o código no ar ainda lê
+   * texto. Ela fica como está, de leitura, para a vaga antiga continuar dizendo o que exigia.
+   *
+   * `idiomasExigidos` é o par idioma+nível, e é ele que a Onda C escreve. Na vaga antiga ele vem
+   * com `nivel: null`, que quer dizer "anterior à Onda C", e a tela escreve "nível não informado"
+   * (§A.11). NINGUÉM preenche esse nulo: escolher um nível para quem não declarou nenhum seria
+   * inventar exigência de negócio.
+   *
+   * A TELA LÊ `idiomasExigidos` E CAI EM `idiomas` quando ele vier vazio. As duas convivem até a
+   * vaga antiga sair de circulação, e é a convivência que torna a virada reversível.
+   */
   idiomas: string[];
+  idiomasExigidos: VagaIdiomaGravado[];
   idiomasOutros: string | null;
   /** Segue TEXTO ABERTO por decisão do diretor: é o campo mais colado na realidade de cada cliente. */
   cursosConhecimentos: string | null;

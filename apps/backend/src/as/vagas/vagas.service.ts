@@ -9,6 +9,7 @@ import {
 import { and, asc, desc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type {
+  AsCidade,
   AsCandidaturaParaReabrir,
   AsEtapaFunil,
   AsOcupacaoVaga,
@@ -22,7 +23,6 @@ import type {
   FecharVagaRecusa,
   PapelAs,
   PosicaoLado,
-  VagaCamposObrigatorios,
   VagaContextoAs,
   VagaListItem,
   VagaMetaReducao,
@@ -45,7 +45,6 @@ import {
   regiaoPertenceAUf,
   seguraOCancelamento,
   textoPendencia,
-  vagaPendencias,
 } from "@ea/shared-types";
 import type { AuthUser } from "../../auth/auth.types";
 import type { Database } from "../../db/client";
@@ -54,6 +53,8 @@ import {
   asCandidatos,
   asCandidaturaEtapas,
   asCandidaturas,
+  asCidades,
+  asLinhasServico,
   beneficiosCatalogo,
   cargos,
   clientes,
@@ -94,6 +95,13 @@ import type {
   MoverStatusVagaDto,
   ReabrirVagaDto,
 } from "./vagas.dto";
+import { idiomasGravados, type VagaIdiomaGravado } from "../../domain/vaga-idioma";
+import type { VagaItemOndaC } from "./vaga-item-onda-c";
+import {
+  pendenciasDaVaga,
+  type VagaCamposObrigatoriosComLinha,
+} from "../../domain/vaga-obrigatorios";
+import { linhaDeServicoEscolhida } from "../linhas-servico/linhas-servico.service";
 import { gravarSaidaDaCandidatura } from "../candidatos/encerrar-candidatura";
 import { restaurarCandidatura } from "../candidatos/restaurar-candidatura";
 import { EtapasFunilService } from "../etapas/etapas-funil.service";
@@ -267,7 +275,7 @@ export class VagasService {
    * obrigaria cada leitor a decidir o que fazer com a ausência, e o zero já é a resposta certa: vaga
    * sem gente dentro tem zero posições entregues.
    */
-  async list(): Promise<VagaListItem[]> {
+  async list(): Promise<VagaItemOndaC[]> {
     const consultor = alias(usuarios, "consultor");
     const recruiter = alias(usuarios, "recruiter");
     const autor = alias(usuarios, "autor");
@@ -286,8 +294,20 @@ export class VagasService {
         consultorNome: consultor.nome,
         recruiterNome: recruiter.nome,
         fechamentoForcadoPorNome: forcadoPor.nome,
+        // OS DOIS CATÁLOGOS DA ONDA C, NO MESMO `SELECT`, e não em consultas à parte: a listagem não
+        // pagina, então resolver o rótulo da linha e o nome da cidade linha a linha viraria centenas
+        // de idas ao banco na tela mais pesada do módulo. É a mesma decisão já tomada para a ocupação
+        // derivada e para o rastro de redução de meta, nesta mesma consulta.
+        //
+        // `leftJoin` NOS DOIS: a esmagadora maioria das vagas de hoje não tem nem linha nem cidade
+        // (o campo nasceu agora), e um `innerJoin` as sumiria da listagem inteira.
+        linhaServicoRotulo: asLinhasServico.rotulo,
+        cidadeNome: asCidades.nome,
+        cidadeUf: asCidades.uf,
       })
       .from(vagas)
+      .leftJoin(asLinhasServico, eq(asLinhasServico.id, vagas.linhaServicoId))
+      .leftJoin(asCidades, eq(asCidades.id, vagas.cidadeId))
       .leftJoin(cargos, eq(cargos.id, vagas.cargoId))
       .leftJoin(clientes, eq(clientes.codCliente, vagas.codCliente))
       .leftJoin(autor, eq(autor.id, vagas.abertoPorId))
@@ -321,6 +341,14 @@ export class VagasService {
       // estão em `statusVivoDaVaga`. Hoje ela nunca dispara, porque nenhuma linha usa o valor.
       status: statusVivoDaVaga(v.status),
       sazonalidade: v.sazonalidade,
+      // A LINHA DE SERVIÇO (Onda C). O rótulo vem do join e vale inclusive para a linha INATIVADA:
+      // a vaga antiga continua dizendo de que linha ela era, em vez de mostrar o código cru.
+      linhaServicoId: v.linhaServicoId,
+      linhaServicoRotulo: l.linhaServicoRotulo ?? null,
+      // A CIDADE (Onda C), AO LADO da UF, que não saiu: `regiaoEstado` continua logo abaixo.
+      cidadeId: v.cidadeId,
+      cidadeNome: l.cidadeNome ?? null,
+      cidadeUf: l.cidadeUf ?? null,
       posicoesOficiais: v.posicoesOficiais,
       posicoesBanco: v.posicoesBanco,
       // Traduzida na ENTRADA, como o status: o "TECNICO" solto virou Técnico Completo (item 3).
@@ -365,7 +393,16 @@ export class VagasService {
 
       faixaEtaria: v.faixaEtaria,
       genero: v.genero,
+      // A COLUNA LEGADA, devolvida como sempre foi (`string[]`), para quem ainda a lê não passar a
+      // ler `undefined`. Ela está congelada: nenhuma gravação nova a alimenta.
       idiomas: v.idiomas ?? [],
+      /*
+       * O PAR IDIOMA+NÍVEL. SANEADO NA LEITURA (`idiomasGravados`) porque `jsonb` é coluna SEM
+       * esquema: o DTO defende a porta HTTP, e o que chegar por outro caminho (um `UPDATE` manual,
+       * uma carga futura) não pode virar `undefined` no meio da tela. Nível ilegível vira `null`, e
+       * o idioma continua aparecendo: a exigência é verdadeira mesmo sem o nível.
+       */
+      idiomasExigidos: idiomasGravados(v.idiomasExigidos),
       idiomasOutros: v.idiomasOutros,
       cursosConhecimentos: v.cursosConhecimentos,
       testes: v.testes ?? [],
@@ -659,7 +696,12 @@ export class VagasService {
     // ser gravado pela trilha. Nenhum literal de status sai deste arquivo.
     const regua = await this.statusVaga.regua();
     const status = this.travaStatusDaTrilha(regua, dto.status, "ABERTURA");
-    const campos = this.camposDaTrilha(regua, dto, status);
+    // OS DOIS CATÁLOGOS DA ONDA C, resolvidos ANTES de montar os campos: a linha de serviço tem de
+    // existir e estar ATIVA, e a cidade tem de existir na base do IBGE. Ausentes, nenhum dos dois
+    // toca o banco, e a régua dos obrigatórios é quem decide se a ausência impede publicar.
+    const cidade = await this.resolverCidade(dto.cidadeId);
+    const linhaServicoId = await this.resolverLinhaServico(dto.linhaServicoId);
+    const campos = this.camposDaTrilha(regua, dto, status, cidade, linhaServicoId);
     this.travaObrigatorios(regua, campos, status);
 
     await this.travaDuplicidadeDeCodigo(campos.codigo, null);
@@ -753,8 +795,10 @@ export class VagasService {
     }
 
     const status = this.travaStatusDaTrilha(regua, dto.status, "RASCUNHO");
+    const cidade = await this.resolverCidade(dto.cidadeId);
+    const linhaServicoId = await this.resolverLinhaServico(dto.linhaServicoId);
     const campos = {
-      ...this.camposDaTrilha(regua, dto, status),
+      ...this.camposDaTrilha(regua, dto, status, cidade, linhaServicoId),
       posicoesOficiais: this.metaOficialDaTrilha(dto, atual),
     };
     this.travaObrigatorios(regua, campos, status);
@@ -932,14 +976,49 @@ export class VagasService {
    * de existir a continuação do rascunho isto vivia dentro do `create`; duplicá-lo no `atualizar`
    * teria feito o rascunho e a publicação limparem coisas diferentes.
    */
-  private camposDaTrilha(regua: ReguaDeStatusDaVaga, dto: CreateVagaDto, status: VagaStatus) {
+  private camposDaTrilha(
+    regua: ReguaDeStatusDaVaga,
+    dto: CreateVagaDto,
+    status: VagaStatus,
+    /**
+     * A CIDADE JÁ RESOLVIDA (Onda C), ou `null`. Ela chega PRONTA de propósito, e não é buscada aqui:
+     * esta função é SÍNCRONA, e é isso que faz `vagas.trilha-nao-encerra.spec.ts` conseguir provar,
+     * com o `db` NULO, que a recusa de status terminal acontece ANTES de qualquer ida ao banco.
+     * Transformá-la em `async` para buscar a cidade quebraria essa prova sem nenhum ganho.
+     */
+    cidade: AsCidade | null,
+    /** A linha de serviço já conferida contra o catálogo, ou `null` (rascunho sem escolha). */
+    linhaServicoId: number | null,
+  ) {
     // "ISTO É O RASCUNHO?" PERGUNTADO AO PAPEL, e não ao literal. O código continua sendo
     // `RASCUNHO`; o que muda é que a resposta deixa de depender de o literal e o catálogo
     // concordarem por coincidência. É a mesma pergunta que a régua dos obrigatórios faz logo abaixo.
     const ehRascunho = regua.ehDoPapel(status, "RASCUNHO");
     // A DATA LIMITE não depende mais da sazonalidade (correção de 21/08): vale em qualquer vaga e
     // segue opcional. A data de ABERTURA é obrigatória para PUBLICAR, e quem cobra é a régua.
-    const regiao = this.validaRegioes(dto.regiaoEstado, dto.regioes, dto.regioesOutras);
+    /*
+     * ─ A UF DEIXOU DE SER DIGITADA E PASSOU A SER DERIVADA DA CIDADE (Onda C) ───────────────────
+     *
+     * `vagas.regiao_estado` CONTINUA SENDO GRAVADA, e por isso nada que já a lê (listagem, filtro,
+     * exportação) muda de comportamento. O que muda é a FONTE: escolhida a cidade, a UF é a dela, e
+     * o que vier no corpo é ignorado. Duas fontes para a mesma pergunta é como a vaga acabaria com
+     * cidade de um estado e UF de outro, e ninguém descobriria até a tela mostrar as duas juntas.
+     *
+     * A RÉGUA DAS REGIÕES NÃO AFROUXOU: ela passa a ser conferida contra a UF DERIVADA, então região
+     * de outro estado segue recusada com a mesma frase. Sem cidade, tudo se comporta como antes.
+     */
+    /*
+     * OS IDIOMAS PEDIDOS, POR QUALQUER UM DOS DOIS NOMES DO CORPO. `idiomasExigidos` é o nome da
+     * coluna e tem precedência; `idiomas` é o apelido de transição (ver o DTO). Resolvido UMA vez
+     * aqui para as três linhas abaixo (a coluna nova, o escape e a contagem) lerem a MESMA lista, em
+     * vez de cada uma repetir a escolha e uma delas esquecer o apelido.
+     */
+    const idiomas = dto.idiomasExigidos ?? dto.idiomas ?? [];
+    const regiao = this.validaRegioes(
+      cidade?.uf ?? dto.regiaoEstado,
+      dto.regioes,
+      dto.regioesOutras,
+    );
     const codigoLimpo = dto.codigo ? normalizarCodigoVaga(dto.codigo) : "";
 
     return {
@@ -954,6 +1033,11 @@ export class VagasService {
       vinculo: dto.vinculo ?? null,
       status,
       sazonalidade: dto.sazonalidade ?? "OPERACAO_PADRAO",
+      // A LINHA DE SERVIÇO (Onda C). Já conferida contra o catálogo por quem chamou; aqui ela só é
+      // gravada. OBRIGATÓRIA para publicar, e quem cobra é a régua, não esta linha.
+      linhaServicoId,
+      // A CIDADE (Onda C), pelo código do IBGE. A UF sai dela, logo acima.
+      cidadeId: cidade?.id ?? null,
       // OS DOIS CONTADORES (25/08). O oficial ausente é NULL (rascunho sem meta), o de banco ausente
       // é ZERO: a coluna é NOT NULL DEFAULT 0 e "sem banco" é resposta, não lacuna.
       posicoesOficiais: dto.posicoesOficiais ?? null,
@@ -1025,10 +1109,37 @@ export class VagasService {
 
       faixaEtaria: texto(dto.faixaEtaria),
       genero: dto.genero ?? "INDIFERENTE",
-      idiomas: dto.idiomas?.length ? dto.idiomas : null,
-      // O escape só sobrevive se "Outros" estiver marcado: guardar o texto de um escape que a pessoa
-      // desmarcou deixaria na vaga um idioma que a tela não mostra mais.
-      idiomasOutros: dto.idiomas?.includes(OPCAO_OUTROS) ? texto(dto.idiomasOutros) : null,
+      /*
+       * ─ O IDIOMA PASSOU A CARREGAR O NÍVEL, NUMA COLUNA NOVA (Onda C) ───────────────────────────
+       *
+       * `idiomas` (A COLUNA VELHA) NÃO APARECE AQUI, E A AUSÊNCIA É O DESENHO: ela está congelada,
+       * guardando o que as vagas anteriores pediam, e ninguém a escreve mais. Escrevê-la junto
+       * criaria duas listas de idioma na mesma vaga, com a chance permanente de discordarem.
+       *
+       * O NÍVEL JÁ CHEGA VALIDADO do DTO, onde ele é obrigatório por idioma marcado. A normalização
+       * aqui é MÍNIMA E EXPLÍCITA (`{idioma, nivel}`), e não o objeto do corpo inteiro: `jsonb` é
+       * coluna SEM ESQUEMA, e um campo a mais que alguém mande no corpo entraria em silêncio.
+       */
+      idiomasExigidos: idiomas.length
+        ? idiomas.map((i) => ({ idioma: i.idioma, nivel: i.nivel }) satisfies VagaIdiomaGravado)
+        : null,
+      /*
+       * ┌─ O ESCAPE, E A LINHA QUE A AUDITORIA PEGOU ANTES DE ELA CHEGAR NA OPERAÇÃO ────────────┐
+       * │ Isto era `dto.idiomas?.includes(OPCAO_OUTROS)`. Com a lista virando lista de OBJETOS,   │
+       * │ `includes` de uma string passa a ser SEMPRE falso, e o ramo `: null` zerava o texto de  │
+       * │ "outros idiomas" na PRIMEIRA gravação, sem erro, sem log e sem ninguém perceber: o dado │
+       * │ que o consultor digitou sumiria do banco ao salvar o rascunho de novo.                   │
+       * │                                                                                          │
+       * │ A COMPARAÇÃO AGORA É PELO CAMPO (`i.idioma === OPCAO_OUTROS`), e há teste afirmando que │
+       * │ o texto SOBREVIVE a uma segunda gravação, que é o cenário exato do defeito.              │
+       * └──────────────────────────────────────────────────────────────────────────────────────────┘
+       *
+       * A REGRA EM SI NÃO MUDOU: o escape só sobrevive com "Outros" marcado, senão a vaga guardaria
+       * um idioma que a tela não mostra mais.
+       */
+      idiomasOutros: idiomas.some((i) => i.idioma === OPCAO_OUTROS)
+        ? texto(dto.idiomasOutros)
+        : null,
       cursosConhecimentos: texto(dto.cursosConhecimentos),
       testes: dto.testes?.length ? dto.testes : null,
       testesOutro: texto(dto.testesOutro),
@@ -1045,7 +1156,8 @@ export class VagasService {
   /**
    * A RÉGUA DOS OBRIGATÓRIOS, COBRADA SÓ NO PUBLICAR (itens 2 a 4 da OST de 25/08).
    *
-   * A MESMA FUNÇÃO QUE A TELA USA (`vagaPendencias`, no shared-types). Duas cópias da régua acabariam
+   * A MESMA RÉGUA QUE A TELA USA (`vagaPendencias`, no shared-types, mais a entrada da LINHA DE
+   * SERVIÇO da Onda C, em `domain/vaga-obrigatorios`). Duas cópias da régua acabariam
    * em "a tela deixou publicar e o servidor recusou", que é o pior dos dois mundos: o trabalho já
    * feito e a mensagem chegando do lado errado.
    *
@@ -1055,14 +1167,14 @@ export class VagasService {
    */
   private travaObrigatorios(
     regua: ReguaDeStatusDaVaga,
-    campos: VagaCamposObrigatorios,
+    campos: VagaCamposObrigatoriosComLinha,
     status: VagaStatus,
   ): void {
     // O RASCUNHO NÃO COBRA OBRIGATÓRIO, e quem diz que este é o rascunho é o PAPEL. Um status novo
     // que o diretor crie e marque `daTrilha` NÃO herda a folga: ele não tem papel de RASCUNHO, então
     // publicar nele cobra a régua inteira, que é a direção segura.
     if (regua.ehDoPapel(status, "RASCUNHO")) return;
-    const pendencias = vagaPendencias(campos);
+    const pendencias = pendenciasDaVaga(campos);
     if (pendencias.length === 0) return;
 
     throw new BadRequestException(
@@ -2947,6 +3059,60 @@ export class VagasService {
       `O código ${codigo} já está em uso por outra vaga. Cada processo seletivo tem um código ` +
         `próprio: confira o número no Pandapé.`,
     );
+  }
+
+  /**
+   * ─ A LINHA DE SERVIÇO ESCOLHIDA, CONFERIDA CONTRA O CATÁLOGO VIVO (Onda C) ────────────────────
+   *
+   * ┌─ POR QUE A CONSULTA É FEITA AQUI, E NÃO PELO `LinhasServicoService` INJETADO ──────────────┐
+   * │ Injetá-lo mudaria a ASSINATURA do construtor deste serviço, e treze specs o instanciam à   │
+   * │ mão, um deles com `db` NULO para provar que a recusa de status terminal acontece antes de  │
+   * │ qualquer ida ao banco. Uma dependência a mais no construtor tornaria todos eles vermelhos  │
+   * │ por uma razão que não tem nada a ver com o que eles medem.                                  │
+   * │                                                                                            │
+   * │ A RÉGUA NÃO FOI DUPLICADA, e é isso que torna a escolha segura: quem decide é               │
+   * │ `linhaDeServicoEscolhida`, a MESMA função pura que o catálogo usa. O que muda é só de onde  │
+   * │ vêm as linhas, e uma consulta indexada a uma tabela de cinco linhas, na gravação de uma     │
+   * │ vaga, não é custo.                                                                          │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * AUSENTE NÃO TOCA O BANCO: rascunho sem linha escolhida é estado normal, e quem cobra a presença
+   * é a régua dos obrigatórios, na publicação.
+   */
+  private async resolverLinhaServico(id: number | null | undefined): Promise<number | null> {
+    if (id === null || id === undefined) return null;
+    const linhas = await this.db
+      .select({
+        id: asLinhasServico.id,
+        codigo: asLinhasServico.codigo,
+        rotulo: asLinhasServico.rotulo,
+        ordem: asLinhasServico.ordem,
+        ativo: asLinhasServico.ativo,
+      })
+      .from(asLinhasServico);
+    return linhaDeServicoEscolhida(linhas, id)?.id ?? null;
+  }
+
+  /**
+   * ─ A CIDADE ESCOLHIDA, CONFERIDA CONTRA A BASE DO IBGE (Onda C) ──────────────────────────────
+   *
+   * DEVOLVE A CIDADE INTEIRA porque quem chama precisa da UF: é ela que passa a alimentar
+   * `vagas.regiao_estado`, que deixou de ser digitada. Mesma razão da função acima para a consulta
+   * morar aqui em vez de num serviço injetado.
+   *
+   * AUSENTE NÃO TOCA O BANCO, pelo mesmo motivo: a vaga sem cidade é rascunho, não erro.
+   */
+  private async resolverCidade(id: number | null | undefined): Promise<AsCidade | null> {
+    if (id === null || id === undefined) return null;
+    const [cidade] = await this.db
+      .select({ id: asCidades.id, nome: asCidades.nome, uf: asCidades.uf })
+      .from(asCidades)
+      .where(eq(asCidades.id, id))
+      .limit(1);
+    if (!cidade) {
+      throw new BadRequestException("Esta cidade não existe na base do IBGE. Recarregue a página.");
+    }
+    return cidade;
   }
 
   /**

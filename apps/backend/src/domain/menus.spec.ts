@@ -310,12 +310,17 @@ describe("menus exclusivos do SUPER_ADMIN", () => {
     // ESTA LISTA É PINADA POR INTEIRO DE PROPÓSITO, e a prova falhar ao acrescentar um menu é o
     // comportamento desejado: entrar aqui é decisão do diretor (§A.23), nunca efeito colateral de
     // uma frente. Quem acrescentar um código sem escrever o motivo acima está pulando a decisão.
+    // LINHAS DE SERVIÇO (Onda C) entrou pela mesma razão das outras três que editam TEXTO, com um
+    // agravante próprio: o campo que este catálogo alimenta é OBRIGATÓRIO para publicar vaga, então
+    // inativar a linha errada não deixa um rótulo feio, trava a abertura. A controller de escrita é
+    // `@Roles("SUPER_ADMIN")`, e de novo o MENU sozinho não seguraria o MASTER.
     expect([...MENUS_SOMENTE_SUPER_ADMIN]).toEqual([
       "usuarios",
       "menu-areas",
       "as-etapas",
       "as-motivos-cancelamento",
       "as-status-vaga",
+      "as-linhas-servico",
     ]);
   });
 

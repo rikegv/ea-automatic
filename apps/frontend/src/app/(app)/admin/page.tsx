@@ -117,6 +117,24 @@ export const CARDS: { href: string; icon: IconName; title: string; desc: string;
   },
   {
     /**
+     * LINHAS DE SERVIÇO (Onda C). Card do hub, ao lado das Etapas Do Funil, porque é a mesma
+     * natureza: catálogo de A&S que o diretor mantém e que alimenta um seletor da abertura de vaga.
+     *
+     * ÍCONE `tag`, que é a marca de CLASSIFICAÇÃO no conjunto do sistema: a linha de serviço não é
+     * um passo do processo (o funil, que já tem o `filter`) nem um cadastro de entidade, é a
+     * etiqueta que diz de que serviço aquela vaga é.
+     *
+     * §A.23: o card é filtrado por `temMenu`, como todos os outros, e `as-linhas-servico` nasce só
+     * para o SUPER_ADMIN. Registrar o menu não libera nada para ninguém: quem libera é o diretor.
+     */
+    href: "/admin/as/linhas-servico",
+    codigo: "as-linhas-servico",
+    icon: "tag",
+    title: "Linhas De Serviço",
+    desc: "Cadastro das linhas de serviço da vaga: nome e ordem no seletor da abertura.",
+  },
+  {
+    /**
      * MOTIVOS DE CANCELAMENTO DE VAGA (A&S): é CATÁLOGO, e catálogo mora no Menu Gerencial, ao lado
      * de Motivos De Declínio, que é o vizinho de mesma natureza (a lista fechada que classifica um
      * encerramento). Não vai para a barra lateral: o card É o que faz o menu ser ENCONTRADO, e a

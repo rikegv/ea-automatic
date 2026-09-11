@@ -19,6 +19,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { ACEITES_REGISTRAVEIS, SITUACOES_ENCERRADAS_SEM_EXITO } from "../../domain/candidatura";
+import type { VagaIdiomaGravado } from "../../domain/vaga-idioma";
 import {
   areaEnum,
   asCandidatoOrigemEnum,
@@ -2344,6 +2345,35 @@ export const vagas = pgTable(
       .references(() => asVagaStatus.codigo, { onDelete: "restrict" }),
     sazonalidade: vagaSazonalidadeEnum("sazonalidade").notNull().default("OPERACAO_PADRAO"),
     /**
+     * A LINHA DE SERVIÇO da vaga (Onda C), do catálogo `as_linhas_servico`.
+     *
+     * FK DE VERDADE, e não o nome copiado (que é o que `motivo` e `horario_escala` fazem, cada um
+     * pela sua razão): aqui o catálogo é curto, fechado e do diretor, e renomear "SouFast" tem de
+     * corrigir o nome em toda vaga que já aponta para a linha, não só nas próximas.
+     *
+     * `RESTRICT` NO DELETE é o par da exclusão lógica: linha de serviço já usada por uma vaga não
+     * some do banco, só sai de circulação. Sem isso, apagar a linha apagaria a resposta de "de que
+     * linha era aquela vaga", que é exatamente o que o campo existe para registrar.
+     *
+     * NULÁVEL NA COLUNA, OBRIGATÓRIA NA PUBLICAÇÃO. É a mesma decisão de `codigo` e `cargo_id`: o
+     * rascunho grava o que houver, e quem cobra é a régua dos obrigatórios, na hora de publicar.
+     */
+    linhaServicoId: integer("linha_servico_id").references(() => asLinhasServico.id, {
+      onDelete: "restrict",
+    }),
+    /**
+     * A CIDADE da vaga (Onda C), pelo código do IBGE, SUBSTITUINDO a lista velha de região.
+     *
+     * O QUE ACONTECE COM `regiao_estado`, `regioes` e `regioes_outras`: as três COLUNAS FICAM (a
+     * §A.14 não pediu remoção, e `DROP COLUMN` é destrutivo e irreversível), mas deixam de ser
+     * DIGITADAS. A UF passa a ser DERIVADA da cidade escolhida, no service, então tudo que já lê
+     * `regiao_estado` (listagem, filtro, exportação) continua lendo o mesmo dado, agora com uma
+     * fonte só e sem a chance de a UF e a cidade discordarem.
+     *
+     * `RESTRICT`: a base do IBGE não é apagada por ninguém, e a trava documenta isso.
+     */
+    cidadeId: integer("cidade_id").references(() => asCidades.id, { onDelete: "restrict" }),
+    /**
      * OS DOIS CONTADORES DA VAGA (decisão do diretor, 25/08): a vaga deixa de ter UMA meta e passa a
      * ter DUAS, cada uma com a sua contagem própria. OFICIAIS são as contratações de verdade; BANCO é
      * o excedente aprovado que fica reservado (o caso Blue Skies: 10 oficiais e 10 de banco).
@@ -2490,8 +2520,46 @@ export const vagas = pgTable(
     // ── PASSO 5, requisitos ───────────────────────────────────────────────────────────────────
     faixaEtaria: varchar("faixa_etaria", { length: 80 }),
     genero: vagaGeneroEnum("genero").notNull().default("INDIFERENTE"),
-    /** Lista fechada, seleção múltipla (item 6). "Outros" leva o texto para `idiomas_outros`. */
+    /**
+     * ─ OS IDIOMAS, EM DUAS COLUNAS DURANTE A TRANSIÇÃO, E ISSO É DESENHO ────────────────────────
+     *
+     * `idiomas` (ESTA) É A LEGADA, `text[]`, SEM NÍVEL. Ela fica CONGELADA: nada a escreve mais, e
+     * ela continua respondendo pelas vagas gravadas antes da Onda C, para o código que ainda lê
+     * `string[]` não passar a ler `undefined` no instante em que a migration roda.
+     *
+     * ┌─ POR QUE NÃO FOI CONVERTIDA NO LUGAR, que era o desenho anterior (VETO da auditoria) ────┐
+     * │ As migrations rodam TODAS no mesmo comando, e o código NO AR durante esse comando é o de  │
+     * │ ANTES: ele lê `idiomas` como lista de textos. Converter a coluna para `jsonb` no lugar    │
+     * │ quebraria a tela no intervalo entre a migration e o deploy, que é justamente a janela em  │
+     * │ que ninguém está olhando.                                                                 │
+     * │                                                                                           │
+     * │ E A CONVERSÃO TERIA DE INVENTAR UM NÍVEL para as vagas que já pedem idioma. Nenhuma       │
+     * │ escolha é correta: um nível baixo AFROUXA a exigência de uma vaga aberta e recebendo      │
+     * │ candidato, e um nível alto ELIMINA gente do processo. Migration não decide isso. O nível  │
+     * │ da linha legada fica AUSENTE, e a tela escreve "nível não informado" (§A.11).             │
+     * └───────────────────────────────────────────────────────────────────────────────────────────┘
+     */
     idiomas: text("idiomas").array(),
+    /**
+     * OS IDIOMAS EXIGIDOS, cada um COM O SEU NÍVEL (Onda C). É esta que a trilha escreve.
+     *
+     * ┌─ POR QUE `jsonb` E NÃO DUAS COLUNAS DE ARRAY ────────────────────────────────────────────┐
+     * │ A forma óbvia seria `idiomas text[]` mais `niveis text[]` ao lado. Ela cria DUAS listas   │
+     * │ que concordam pela ORDEM, e ordem é a coisa mais fácil de perder numa edição de tela:     │
+     * │ basta alguém remover o segundo idioma e esquecer o segundo nível para a vaga passar a     │
+     * │ exigir "Espanhol fluente" sem ninguém ter digitado isso. O par é INDIVISÍVEL, então ele é │
+     * │ UM objeto, e não dois campos casados.                                                      │
+     * │                                                                                            │
+     * │ TABELA FILHA SERIA A OUTRA RESPOSTA CERTA, descartada pelo tamanho: de zero a três linhas │
+     * │ por vaga, lidas SEMPRE junto da vaga e nunca sozinhas. Custaria um join em toda leitura   │
+     * │ da Central de Vagas para guardar o que cabe na própria linha.                              │
+     * └───────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * `nivel` É NULÁVEL NO TIPO GRAVADO, e só por causa das linhas migradas: toda escrita NOVA
+     * passa pelo DTO, onde o nível é OBRIGATÓRIO por idioma marcado. Nulo aqui significa
+     * exatamente "vaga anterior à Onda C", e não "alguém deixou em branco".
+     */
+    idiomasExigidos: jsonb("idiomas_exigidos").$type<VagaIdiomaGravado[]>(),
     idiomasOutros: varchar("idiomas_outros", { length: 160 }),
     /** SEGUE TEXTO ABERTO por decisão do diretor: é o campo mais colado na realidade de cada cliente. */
     cursosConhecimentos: text("cursos_conhecimentos"),
@@ -2982,6 +3050,71 @@ export const asCandidatos = pgTable(
  * │ usar valor de enum na transação em que ele nasceu.                                            │
  * └───────────────────────────────────────────────────────────────────────────────────────────────┘
  */
+/**
+ * ─ A LINHA DE SERVIÇO DA VAGA (Onda C). CATÁLOGO DO DIRETOR, no molde de `as_etapas_funil` ─────
+ *
+ * ┌─ ELA NÃO É `projetos_alto_volume`, E O NOME PRÓPRIO É O QUE IMPEDE A CONFUSÃO ───────────────┐
+ * │ `projetos_alto_volume` guarda EVENTOS ("BIENAL DOS LIVROS", "BF"): campanhas com data, dentro│
+ * │ da operação de alto volume. ESTA guarda a LINHA DE SERVIÇO (Pontuais & Estratégicas, RPO &   │
+ * │ BPO, Alto Volume, SouFast, OneShot), que é outro eixo: uma vaga da linha "Alto Volume" pode  │
+ * │ ou não pertencer a um evento de alto volume. Quem escrever `projeto` sem qualificar, daqui a │
+ * │ seis meses, vai ler a tabela errada, e por isso tabela, tipo e rota nascem com nome próprio. │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * O MOLDE É O DO CATÁLOGO DE ETAPAS, e a repetição é deliberada: o problema é o mesmo (uma lista
+ * que é do diretor e não da fábrica) e a resposta já foi auditada uma vez. `codigo` IMUTÁVEL,
+ * derivado do rótulo na criação, porque é ele que fica legível no histórico e em qualquer exportação
+ * futura; `rotulo` editável, e renomear corrige o nome em toda vaga que já aponta para a linha;
+ * `ordem` para o seletor sair na ordem que o diretor quer; `ativo` como EXCLUSÃO LÓGICA, que é o que
+ * faz a vaga do ano passado continuar dizendo de que linha ela era depois de a linha sair de
+ * circulação.
+ *
+ * A ORDEM NÃO É UNIQUE, pelo mesmo motivo das etapas: reordenar reescreve `ordem = 1..N` numa
+ * transação e passa por estados transitórios com duplicata. O desempate da leitura é `(ordem, id)`.
+ *
+ * §A.6: código, rótulo, ordem e um booleano. Nenhum dado pessoal entra aqui.
+ */
+export const asLinhasServico = pgTable("as_linhas_servico", {
+  id: serial("id").primaryKey(),
+  codigo: varchar("codigo", { length: 40 }).notNull().unique(),
+  rotulo: varchar("rotulo", { length: 120 }).notNull(),
+  ordem: integer("ordem").notNull(),
+  ativo: boolean("ativo").notNull().default(true),
+  criadoEm,
+  atualizadoEm,
+});
+
+/**
+ * ─ OS MUNICÍPIOS DO IBGE (Onda C). BASE DE REFERÊNCIA, carregada uma vez ───────────────────────
+ *
+ * `id` É O CÓDIGO DO IBGE, de 7 dígitos, e ele é a CHAVE DE VERDADE, não um serial com o código ao
+ * lado. Nome de município se repete entre estados (há CINCO "Bom Jesus", em PB, PI, RN, RS e SC,
+ * então casar por nome é exatamente como a lista velha de região errava. O código é oficial, estável
+ * e é o que qualquer integração futura (eSocial, folha, ATS) vai falar.
+ *
+ * A CARGA É UM SCRIPT QUE RODA UMA VEZ (`db/carga-cidades-ibge.ts`), e NUNCA uma chamada em tempo de
+ * request: a abertura de vaga não pode depender de o IBGE estar no ar. São 5.571 linhas de dado
+ * público, imutável na prática, e por isso não há tela de manutenção: a fonte é o IBGE, e recarregar
+ * é rodar o script de novo (idempotente por `id`).
+ *
+ * O ÍNDICE É `(uf, nome)` porque a ÚNICA pergunta que a tela faz é "as cidades deste estado, em
+ * ordem alfabética": o seletor encadeia UF -> cidade, como a lista de regiões já fazia.
+ *
+ * §A.6: nome de cidade, sigla de estado e um código público. Nenhum dado pessoal.
+ */
+export const asCidades = pgTable(
+  "as_cidades",
+  {
+    /** Código do IBGE, de 7 dígitos. NÃO é serial: o número vem da fonte e é a identidade. */
+    id: integer("id").primaryKey(),
+    nome: varchar("nome", { length: 120 }).notNull(),
+    uf: varchar("uf", { length: 2 }).notNull(),
+    criadoEm,
+    atualizadoEm,
+  },
+  (t) => [index("as_cidades_uf_nome_idx").on(t.uf, t.nome)],
+);
+
 /**
  * ─ O CATÁLOGO DAS ETAPAS DO FUNIL (A&S). A LISTA É DO DIRETOR, NÃO DO CÓDIGO ────────────────────
  *

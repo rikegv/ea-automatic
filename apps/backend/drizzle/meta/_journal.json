@@ -743,6 +743,13 @@
       "when": 1788086291611,
       "tag": "0105_as_aceite_da_reabertura_sem_origem",
       "breakpoints": true
+    },
+    {
+      "idx": 106,
+      "version": "7",
+      "when": 1788089891611,
+      "tag": "0106_as_linha_de_servico_cidade_idioma",
+      "breakpoints": true
     }
   ]
 }

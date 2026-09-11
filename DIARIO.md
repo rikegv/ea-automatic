@@ -14401,3 +14401,104 @@ destino, então hoje ela bloqueia o consultor comum para **descartar E desistir*
 travar o **descarte**. Desistência é outra coisa: é o candidato ligando para dizer que não vem, e o
 consultor passa a não conseguir registrar um fato que não é decisão dele. Mantido amplo (a leitura
 segura) em vez de estreitado por conta própria; a troca é uma linha em qualquer direção.
+
+## 11/09/2026 (noite): A ONDA C, e o campo que eu bloqueei olhando o nome em vez do rótulo
+
+**ESTADO: na HOMOLOGAÇÃO (3120), NADA COMMITADO.** Produção está com a **Onda B** (commit `1223b2b`,
+106 migrations) e **intocada pela Onda C**: nenhuma das tabelas novas existe lá. Gate: **backend
+2.995/2.995, frontend 607/607**, typecheck limpo.
+
+### 1. AS QUATRO PEÇAS
+
+**Linha de serviço**, catálogo gerenciável no molde das etapas do funil, com as cinco do diretor
+(Pontuais & Estratégicas, RPO & BPO, Alto Volume, SouFast, OneShot). Campo **obrigatório** na 1ª
+página da abertura, com tela de administração própria. **Menu registrado e NÃO distribuído** (§A.23).
+
+**Cidades do IBGE**: 5.571 municípios carregados, chave pelo código oficial de 7 dígitos. Campo NOVO
+**ao lado** do estado, que permanece e é quem filtra. Busca obrigatória (§A.35).
+
+**Idioma com nível**: coluna nova ao lado da antiga, que ficou **congelada**. A vaga anterior à onda
+escreve **"nível não informado"**, nunca um nível inventado.
+
+**SLA de fechamento**: dias que faltam da previsão de entrega até hoje, selo com 2 dias ou menos,
+substituindo "Dias Em Aberto".
+
+### 2. O ERRO QUE BLOQUEOU UMA PEÇA INTEIRA POR HORAS, e era do coordenador
+
+Eu escrevi no mapa que a previsão de entrega "já existe, nada a criar". Existe. **O que eu não
+conferi foi QUEM A ESCREVE**, e a auditoria mediu: `data_prevista_inicio` só é escrita **no
+FECHAMENTO** da vaga. Bloqueei a peça 4 e levei a decisão ao diretor como se fosse escolha dele.
+
+**Ele devolveu a pergunta certa: "existe ambiguidade real?"** E ao responder eu achei o que estava
+debaixo do nariz: **existem DOIS campos**, e o que a tela rotula **"Previsão de entrega" é
+`data_limite`**, que **está no formulário de abertura desde sempre**. O rótulo mudou em 07/09 (item
+19 do mapa do time) e a coluna ficou, porque renomear coluna é migração destrutiva por ganho zero.
+**Está escrito no comentário do próprio campo.**
+
+**Eu li o nome interno e ignorei o rótulo da tela.** O `seguranca` auditou a minha premissa e não o
+rótulo, então o erro passou pelos dois. **A régua do SLA estava certa o tempo todo; o que mudou foi
+uma linha, de qual campo ela lê.**
+
+### 3. A AUDITORIA VETOU 4 DE 6, e um veto evitou um acidente NA MÃO DE QUEM O ESCREVEU
+
+**Seed do IBGE.** A premissa do mapa estava errada: **NENHUMA carga desta casa tem trava de base**, e
+o `DATABASE_URL` padrão aponta para **produção**. Um `db:seed:cidades` sem argumento gravaria 5.570
+linhas na base real. A trava nasceu exigindo a base **nomeada no comando**, conferida contra
+`current_database()`, e **ela pegou o próprio autor**: ele rodou com o `.env` padrão e o script
+recusou com *"A conexão chegou na base `ea_automatic`, e você pediu `ea_automatic_homolog`. NADA foi
+gravado."*
+
+**Migração dos idiomas.** Converter a coluna in place quebraria a tela **no instante em que as
+migrations rodassem**, porque rodam todas no mesmo comando, e teria de **INVENTAR um nível** para as
+3 vagas que já têm idioma. O `backend` tinha escolhido `BASICO` e reconheceu: *"você estava certo e
+eu estava errado"*, porque `BASICO` **afrouxa a exigência de duas vagas abertas e recebendo
+candidato**. Virou coluna nova ao lado, com nível **ausente**.
+
+**Campo obrigatório.** A régua indexa por TEXTO, com um `as Record<string, unknown>` que mata o
+typecheck: errar o nome faria **ninguém publicar vaga nenhuma**, com o compilador verde. Três dos
+quatro pontos viraram **trava de compilação**.
+
+**Idioma virando par.** Uma linha existente **apagaria em silêncio** o texto de "outros idiomas" na
+primeira gravação, porque o `includes` sobre lista de objetos vira sempre falso.
+
+### 4. OS TRÊS AGENTES ME PARARAM ANTES DE EU QUEBRAR A PRODUÇÃO
+
+Eu despachei a Onda C e aceitei a ordem de subir a Onda B **na mesma janela e na mesma árvore**, e
+produção constrói de lá. Mandei parar, **e a minha ordem chegou tarde**: a Onda C já estava no disco,
+em código de produção.
+
+**Os três, independentemente, me pararam.** O `backend` avisou que a árvore não compilava e ofereceu
+duas saídas em vez de escolher; o `frontend` mediu que, se eu publicasse, **a Central De Vagas de
+produção perderia a coluna "Dias Em Aberto"** sem validação; o `tester` mediu os dois lados vermelhos
+e ainda **declarou um arquivo de cache** que um processo dele tocou depois da ordem.
+
+Separei as ondas estacionando a Onda C inteira fora da árvore e restaurando o estado Onda B a partir
+da worktree da homologação, que o provou por busca. **Nada se perdeu**, e a Onda B subiu limpa.
+
+### 5. O QUE OS AGENTES FIZERAM MELHOR DO QUE EU PEDI
+
+O `tester` **não renomeou** o arquivo que poluía o compilado: moveu os ajudantes para dentro do
+próprio spec e apagou o módulo, para ele ficar fora do build **por construção**. E acrescentou quatro
+testes contra uma superfície **que já funciona**, porque um harness quebrado produz a mesma tela de
+falhas de um requisito faltando: **é a prova de que os 14 vermelhos eram do requisito, não dele**.
+
+O `frontend` preparou **seis vagas com datas calculadas** para que uma única screenshot mostre todos
+os estados do SLA, de "vencido há 6 dias" ao limite exato do selo.
+
+### 6. DOIS FATOS QUE EU ESCREVI ERRADO E FORAM CORRIGIDOS POR MEDIÇÃO
+
+São **CINCO** "Bom Jesus" no Brasil (PB, PI, RN, RS, SC), não quatro. O `backend` contou na base
+carregada, e a correção alcançou o contrato e o comentário da tela.
+
+E `regiao_estado` **é a UF e PERMANECE**: eu escrevi "a ser substituída" no mapa, e lido como
+"remover" quebraria a validação de regiões, preenchida nas 3 vagas de produção.
+
+### 7. PENDENTE DO DIRETOR
+
+1. **Validar a Onda C na 3120.**
+2. **O lixo de prova**, que some num comando: as vagas de prova, `AUDITSEGB`, `AUDITSEGB2` e os
+   usuários que o `seguranca` criou e já desativou.
+3. **A trava de base nas cargas ANTIGAS.** A nova nasceu com uma; as que já existem não têm, e o
+   alvo padrão delas é produção.
+4. **O arquivo da Central de Vagas passou de 4.800 linhas** e concentra a trilha de 38 campos, a
+   tabela, os filtros, a ficha e sete modais. É onde três frentes seguidas colidiram, inclusive hoje.

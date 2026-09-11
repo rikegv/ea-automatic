@@ -60,7 +60,10 @@ import {
   rotuloTempoContrato,
   separarOpcaoEscape,
   textoPendencia,
-  vagaPendencias,
+  IDIOMA_NIVEIS,
+  IDIOMA_NIVEL_LABEL,
+  type AsVagaIdioma,
+  type IdiomaNivel,
   type VagaContextoAs,
   type VagaListItem,
   type VagaPendencia,
@@ -106,6 +109,19 @@ import { Stepper, type StepDef } from "@/components/nova/Stepper";
 
 import { fechamentoRecusadoPorPosicoes } from "@/lib/as-vaga-fechamento";
 import { avisoDeReducaoDeMeta, avisoDeReducaoNaTrilha } from "@/lib/as-vaga-meta";
+import {
+  ordemDoSla,
+  slaDaVaga,
+  SLA_ESTADOS,
+  SLA_ESTADO_LABEL,
+  type EstadoDoSla,
+} from "@/lib/as-vaga-sla";
+import {
+  pendenciasComLinhaDeServico,
+  rotuloDaLinhaPorId,
+  useLinhasServico,
+} from "@/lib/as-linhas-servico";
+import { useCidades } from "@/lib/as-cidades";
 import { useEtapas, etapasOrdenadas, corDoTom } from "@/lib/as-etapas";
 import {
   cardsDeDesfecho,
@@ -219,6 +235,54 @@ function moedaBr(v: string | null): string {
 }
 
 const HOJE = () => new Date().toISOString().slice(0, 10);
+
+/**
+ * OS IDIOMAS DA VAGA COMO A FICHA LÊ: "Inglês (Avançado)", um por item.
+ *
+ * O NÍVEL AUSENTE É DITO, E NUNCA INVENTADO (§A.11): a vaga gravada antes da Onda C não tem nível
+ * nenhum, porque ninguém escolheu, e escrever "Básico" ali seria a ficha afirmando uma exigência
+ * que a vaga nunca fez. "nível não informado" é a verdade, e é ela que aparece.
+ *
+ * O "Outros" PASSA INTEIRO, sem parêntese: ele não é um idioma exigido, é o escape que leva o texto
+ * para `idiomasOutros`, e é `listaEmTexto` quem o troca pelo que foi digitado.
+ */
+function textoDosIdiomas(v: VagaListItem): string[] {
+  const { idiomas, idiomaNiveis } = idiomasDaVaga(v);
+  return idiomas.map((idioma) => {
+    if (idioma === OPCAO_OUTROS) return idioma;
+    const nivel = idiomaNiveis[idioma];
+    const rotulo = nivel ? IDIOMA_NIVEL_LABEL[nivel as IdiomaNivel] : null;
+    return `${idioma} (${rotulo ?? "nível não informado"})`;
+  });
+}
+
+/**
+ * OS IDIOMAS DA VAGA VOLTANDO PARA O FORMULÁRIO, lendo os DOIS campos do contrato.
+ *
+ * ┌─ SÃO DOIS CAMPOS, E ELES CONVIVEM DE PROPÓSITO ───────────────────────────────────────────┐
+ * │ `idiomasExigidos` é o par idioma+nível, e é ele que a Onda C escreve. `idiomas` é a lista   │
+ * │ legada, só de nomes, CONGELADA: ela não foi convertida, e é isso que torna a virada          │
+ * │ reversível. A tela lê o NOVO e CAI no antigo quando ele vier vazio, que é o caso da vaga     │
+ * │ aberta antes desta onda.                                                                     │
+ * │                                                                                              │
+ * │ O IDIOMA LEGADO VOLTA SEM NÍVEL, e isso é honesto: ninguém escolheu nível nenhum lá atrás, e │
+ * │ inventar "Básico" seria gravar uma exigência que a vaga nunca fez. O nível fica pendente, a  │
+ * │ caixa daquele idioma diz "nível não informado", e a trilha cobra antes de publicar, que é    │
+ * │ exatamente o que o nível obrigatório quer dizer.                                             │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * O TIPO DA LEITURA É `VagaIdiomaGravado` (nível ANULÁVEL), e não o `AsVagaIdioma` da escrita
+ * (nível OBRIGATÓRIO). Os dois existem separados para que nenhum ponto que GRAVA passe a aceitar
+ * nível ausente por omissão: aqui se lê o que pode ser ENCONTRADO, e lá se escreve o que é EXIGIDO.
+ */
+function idiomasDaVaga(v: VagaListItem): { idiomas: string[]; idiomaNiveis: Record<string, string> } {
+  if (v.idiomasExigidos.length > 0) {
+    const niveis: Record<string, string> = {};
+    for (const par of v.idiomasExigidos) if (par.nivel) niveis[par.idioma] = par.nivel;
+    return { idiomas: v.idiomasExigidos.map((par) => par.idioma), idiomaNiveis: niveis };
+  }
+  return { idiomas: v.idiomas, idiomaNiveis: {} };
+}
 
 /**
  * COMO A VAGA É CHAMADA EM UMA FRASE (rótulo de acessibilidade e de `title`).
@@ -467,44 +531,42 @@ function LinhaEmProcesso({ quantos }: { quantos: number }) {
  * usa a lista nesta tela continua igual: os dias em aberto e o tom da célula de dias.
  */
 
-/**
- * ─ HÁ QUANTOS DIAS A VAGA ESTÁ ABERTA (item 1 da OST de 27/08) ───────────────────────────────
+/*
+ * ─ AQUI MORAVAM `diasEmAberto` E `textoDias`, E ELAS SAÍRAM COM A COLUNA (Onda C, peça 4) ──────
  *
- * O CONTADOR CONGELA NO FECHAMENTO (decisão do diretor): a vaga ABERTA conta da abertura até HOJE e
- * sobe um a cada dia; a vaga ENCERRADA conta da abertura até a data de fechamento e para ali. Em vez
- * de uma coluna que esvazia assim que o processo termina, o número vira o TEMPO DE ATENDIMENTO
- * daquela vaga, que é comparável entre vagas e por isso vale a ordenação.
+ * "Dias Em Aberto" foi SUBSTITUÍDA pelo SLA de entrega, por pedido do diretor, e as duas funções
+ * não tinham outro chamador: mantê-las seria deixar na tela a régua de uma coluna que ninguém mais
+ * desenha, esperando que a próxima pessoa a confundisse com a que está no ar.
  *
- * SEM DATA DE ABERTURA NÃO HÁ CONTA, e isso é o rascunho: a coluna devolve `null`, a célula escreve
- * "não informado" (§A.11) e o `useOrdenacao` manda a linha para o fim nas duas direções.
- *
- * A CONTA É EM DIAS DE CALENDÁRIO, feita em UTC sobre a data pura (`yyyy-mm-dd`), sem hora e sem
- * fuso. Passar por `new Date(iso)` local faria a virada do horário de verão devolver 41,96 dias e o
- * arredondamento oscilar de um dia conforme a máquina de quem abre a tela.
- *
- * ENCERRAMENTO ANTES DA ABERTURA (dado torto vindo da carga) devolveria negativo; o piso em zero
- * mantém a coluna legível sem inventar número.
+ * O QUE NÃO SE PERDEU NA TROCA, e era a parte que exigia leitura antes de remover: o
+ * CONGELAMENTO. Aquela coluna parava de contar no fechamento por decisão do diretor, para a vaga
+ * encerrada virar tempo de atendimento em vez de esvaziar. O SLA herdou o cuidado com o sentido
+ * dele próprio (a vaga encerrada mostra a margem que teve no fechamento, e não um prazo correndo),
+ * e a decisão está escrita e testada em `lib/as-vaga-sla`.
  */
-function diasEmAberto(v: VagaListItem): number | null {
-  if (!v.dataAbertura) return null;
-  // O ENCERRAMENTO É O FLAG `encerra` DO CATÁLOGO (onda B2), e não mais uma lista de três códigos.
-  // Este é um dos pontos em que um flag errado se paga duas vezes: ele decide o fim da conta aqui e
-  // o número do cilindro em `preenchidas`, na mesma linha da tabela.
-  const encerrada = vagaEncerrada(v.status);
-  const fim = encerrada ? v.dataFechamento : HOJE();
-  // Vaga encerrada SEM data de fechamento é dado incompleto, e contar até hoje mentiria que ela
-  // segue aberta. Sem o fim, não há conta.
-  if (!fim) return null;
-  const ini = Date.parse(`${v.dataAbertura.slice(0, 10)}T00:00:00Z`);
-  const fimMs = Date.parse(`${fim.slice(0, 10)}T00:00:00Z`);
-  if (Number.isNaN(ini) || Number.isNaN(fimMs)) return null;
-  return Math.max(0, Math.round((fimMs - ini) / 86_400_000));
-}
 
-/** O número de dias como o time lê. `null` vira "não informado" (§A.11), nunca traço nem vazio. */
-function textoDias(dias: number | null): string {
-  if (dias === null) return "não informado";
-  return dias === 1 ? "1 dia" : `${dias} dias`;
+/**
+ * ─ O SLA DE ENTREGA DA VAGA (Onda C, peça 4), NO LUGAR DE "DIAS EM ABERTO" ────────────────────
+ *
+ * A TROCA É DE PERGUNTA, e não de fórmula. A coluna antiga dizia há quanto tempo a vaga existe, um
+ * número que só cresce e que ninguém transforma em ação; esta diz quanto falta para a entrega
+ * prometida, um número que se aproxima de zero e que ordena a fila do dia.
+ *
+ * O CAMPO É `dataLimite`, QUE É A "PREVISÃO DE ENTREGA" DA TELA, preenchida no formulário de
+ * ABERTURA (o rótulo mudou em 07/09; a coluna ficou como estava, porque renomear coluna é migração
+ * destrutiva por ganho zero). Existe um `data_prevista_inicio` de nome parecido, preenchido só no
+ * modal de FECHAR: uma régua apoiada nele mostraria "não informado" em 100% das vagas VIVAS, para
+ * sempre. A confusão entre os dois nomes já custou uma rodada nesta onda.
+ *
+ * A RÉGUA INTEIRA MORA EM `lib/as-vaga-sla`, com teste, inclusive o CONGELAMENTO que a coluna
+ * antiga tinha e que não podia se perder na troca: vaga encerrada mostra a margem que ela teve no
+ * fechamento, em vez de um prazo que continua correndo sobre trabalho que acabou.
+ *
+ * AQUI FICA SÓ A AMARRAÇÃO com o que é da TELA: quem responde se o status encerra é o catálogo
+ * (`vagaEncerrada`, o flag `encerra` da onda B2), e o "hoje" é o da máquina de quem abriu a página.
+ */
+function slaDaLinha(v: VagaListItem) {
+  return slaDaVaga(v, vagaEncerrada(v.status), HOJE());
 }
 
 /**
@@ -548,6 +610,8 @@ interface FormVaga {
   natureza: string;
   status: string;
   sazonalidade: string;
+  /** O id do catálogo `as_linhas_servico`, como texto porque vem de um `Select` (Onda C, peça 1). */
+  linhaServicoId: string;
   /**
    * OS DOIS CONTADORES DA VAGA (decisão do diretor, 25/08): oficiais são as contratações de verdade,
    * banco é o excedente aprovado que fica reservado. Texto, como todo campo numérico da trilha, para
@@ -582,6 +646,8 @@ interface FormVaga {
    * regiões marcadas, senão a vaga guardaria região de um estado com a sigla de outro.
    */
   regiaoEstado: string;
+  /** O código do IBGE da cidade, como texto pelo mesmo motivo (Onda C, peça 2). */
+  cidadeId: string;
   regioes: string[];
   regioesOutras: string;
   /**
@@ -602,6 +668,14 @@ interface FormVaga {
   faixaEtariaOutra: string;
   genero: string;
   idiomas: string[];
+  /**
+   * O NÍVEL DE CADA IDIOMA ESCOLHIDO, indexado pelo idioma (Onda C, peça 3).
+   *
+   * MAPA, E NÃO UMA SEGUNDA LISTA: duas listas casadas por POSIÇÃO desalinham na primeira remoção
+   * do meio, e o par viaja para o servidor como objeto (`AsVagaIdioma`) justamente para não ter
+   * como desalinhar. Aqui o mapa é só a forma mais direta de o formulário guardar a escolha.
+   */
+  idiomaNiveis: Record<string, string>;
   idiomasOutros: string;
   cursosConhecimentos: string;
   testesOutro: string;
@@ -622,6 +696,7 @@ const FORM_VAZIO = (): FormVaga => ({
   natureza: "EFETIVA",
   status: "ABERTA",
   sazonalidade: "OPERACAO_PADRAO",
+  linhaServicoId: "",
   posicoesOficiais: "1",
   // BANCO NASCE ZERO: a maioria das vagas não reserva excedente, e zero é resposta, não lacuna.
   posicoesBanco: "0",
@@ -647,6 +722,7 @@ const FORM_VAZIO = (): FormVaga => ({
   salarioAbertura: "",
   localTrabalho: "",
   regiaoEstado: "",
+  cidadeId: "",
   regioes: [],
   regioesOutras: "",
   horarioEscalaOpcao: "",
@@ -662,6 +738,7 @@ const FORM_VAZIO = (): FormVaga => ({
   faixaEtariaOutra: "",
   genero: "INDIFERENTE",
   idiomas: [],
+  idiomaNiveis: {},
   idiomasOutros: "",
   cursosConhecimentos: "",
   testesOutro: "",
@@ -805,6 +882,20 @@ export default function CentralDeVagasPage() {
   // ITEM 16 (07/09): o filtro da coluna nova. §A.37, coluna nova nasce com filtro junto, e §A.28,
   // todo filtro é de múltipla seleção. Casa por ID, nunca por nome (ver `consultorId`).
   const [fConsultores, setFConsultores] = useState<string[]>([]);
+  /**
+   * ─ O FILTRO DO SLA (Onda C, peça 4, §A.37: coluna nova nasce com filtro junto) ──────────────
+   *
+   * ELE FILTRA POR ESTADO, E NÃO POR NÚMERO DE DIAS, e a escolha é do que se pergunta na operação:
+   * ninguém procura "as vagas com 4 dias", procura "as que estão vencidas" e "as que vencem já". As
+   * faixas são as do próprio vocabulário da régua (`SLA_ESTADOS`), então o filtro e a cor da célula
+   * nunca discordam: as duas leem a mesma resposta.
+   *
+   * "SEM PREVISÃO" É OPÇÃO COMO QUALQUER OUTRA (§A.37, o valor especial da coluna): sem ele não
+   * daria para perguntar "de quem falta combinar a data de entrega", que é metade da pergunta que
+   * esta coluna cria, e hoje é o estado das duas vagas abertas de produção.
+   */
+  const [fSla, setFSla] = useState<string[]>([]);
+
   const [abertaDe, setAbertaDe] = useState("");
   const [abertaAte, setAbertaAte] = useState("");
   /**
@@ -863,6 +954,15 @@ export default function CentralDeVagasPage() {
    * o recorte (`filtradas`) já o consomem, e em JavaScript a ordem de declaração é a ordem de uso.
    */
   const { status: catalogoStatus } = useStatusVaga(token);
+  /**
+   * O CATÁLOGO DE LINHAS DE SERVIÇO (Onda C, peça 1). Memoizado por carga de página, como o de
+   * status e o de etapas: é DADO DO DIRETOR, lido por endpoint, e nunca uma lista escrita na tela.
+   */
+  const {
+    linhas: catalogoLinhasPorId,
+    ativas: linhasAtivasDoCatalogo,
+    carregando: carregandoLinhas,
+  } = useLinhasServico(token);
 
   /**
    * A PÁGINA ATUAL DA TABELA. A lista inteira já vive na memória da tela (o `GET /as/vagas` não
@@ -878,6 +978,17 @@ export default function CentralDeVagasPage() {
   const [salvando, setSalvando] = useState(false);
   const [erroForm, setErroForm] = useState<string | null>(null);
   const [form, setForm] = useState<FormVaga>(FORM_VAZIO);
+  /**
+   * AS CIDADES DO ESTADO ESCOLHIDO (Onda C, peça 2). Sem estado, nenhuma requisição acontece: antes
+   * de escolher a UF não há o que perguntar. A memória é por UF, então trocar o estado ida e volta
+   * (o gesto de quem está conferindo) não custa uma ida ao servidor a cada troca.
+   */
+  const {
+    cidades: cidadesDaUf,
+    carregando: carregandoCidades,
+    erro: erroCidades,
+  } = useCidades(form.regiaoEstado, token);
+
   const [beneficios, setBeneficios] = useState<Record<string, { marcado: boolean; valor: string }>>(
     {},
   );
@@ -1189,6 +1300,9 @@ export default function CentralDeVagasPage() {
       // é o botão de salvar, não uma escolha de status.
       status: "ABERTA",
       sazonalidade: v.sazonalidade,
+      // ONDA C: o clone e o rascunho trazem de volta a classificação e a cidade. O `?? ""` é o que
+      // faz a vaga antiga (anterior à Onda C) abrir a trilha com o campo vazio, em vez de quebrar.
+      linhaServicoId: v.linhaServicoId ? String(v.linhaServicoId) : "",
       posicoesOficiais: v.posicoesOficiais === null ? "" : String(v.posicoesOficiais),
       posicoesBanco: String(v.posicoesBanco),
 
@@ -1214,6 +1328,7 @@ export default function CentralDeVagasPage() {
       salarioAbertura: salarioParaCampo(v.salarioAbertura),
       localTrabalho: v.localTrabalho ?? "",
       regiaoEstado: v.regiaoEstado ?? "",
+      cidadeId: v.cidadeId ? String(v.cidadeId) : "",
       regioes: v.regioes,
       regioesOutras: v.regioesOutras ?? "",
       horarioEscalaOpcao: escala.opcao,
@@ -1228,7 +1343,7 @@ export default function CentralDeVagasPage() {
       faixaEtariaOpcao: faixa.opcao,
       faixaEtariaOutra: faixa.texto,
       genero: v.genero,
-      idiomas: v.idiomas,
+      ...idiomasDaVaga(v),
       idiomasOutros: v.idiomasOutros ?? "",
       cursosConhecimentos: v.cursosConhecimentos ?? "",
       testesOutro: v.testesOutro ?? "",
@@ -1306,7 +1421,13 @@ export default function CentralDeVagasPage() {
    */
   function escolherEstado(uf: string) {
     setForm((f) =>
-      f.regiaoEstado === uf ? f : { ...f, regiaoEstado: uf, regioes: [], regioesOutras: "" },
+      /* TROCAR O ESTADO ZERA A CIDADE, pelo mesmo motivo de zerar as regiões: a cidade escolhida
+         pertence ao estado anterior, e mantê-la deixaria a vaga com cidade de um estado e UF de
+         outro, que é exatamente a incoerência que a derivação da UF pela cidade existe para
+         impedir do lado do servidor. */
+      f.regiaoEstado === uf
+        ? f
+        : { ...f, regiaoEstado: uf, cidadeId: "", regioes: [], regioesOutras: "" },
     );
   }
 
@@ -1319,8 +1440,11 @@ export default function CentralDeVagasPage() {
    */
   const pendenciasAgora = useMemo(
     () =>
-      vagaPendencias({
+      pendenciasComLinhaDeServico({
         codigo: form.codigo,
+        // ONDA C: a linha de serviço entra na MESMA régua, então o asterisco, a trava do publicar e
+        // a lista clicável de pendências passam a contá-la juntos, sem nenhum `if` novo na tela.
+        linhaServicoId: form.linhaServicoId,
         nomeDivulgacao: form.nomeDivulgacao,
         cargoId: form.cargoId,
         posicoesOficiais: form.posicoesOficiais,
@@ -1442,6 +1566,10 @@ export default function CentralDeVagasPage() {
           natureza: form.natureza || undefined,
           status: publicar ? form.status : "RASCUNHO",
           sazonalidade: form.sazonalidade,
+          /* ONDA C: o id do catálogo. `undefined` quando vazio, e nunca `0` nem string vazia: o
+             rascunho pode ser salvo sem ela, e quem cobra a PRESENÇA na publicação é a régua
+             única, dos dois lados. */
+          linhaServicoId: form.linhaServicoId ? Number(form.linhaServicoId) : undefined,
           posicoesOficiais: metaEnviada.oficiais,
           posicoesBanco: metaEnviada.banco,
 
@@ -1471,6 +1599,10 @@ export default function CentralDeVagasPage() {
           beneficios: marcados,
           localTrabalho: form.localTrabalho || undefined,
           regiaoEstado: form.regiaoEstado || undefined,
+          /* ONDA C: o código do IBGE. A UF continua indo (é ela que filtra a cidade e é ela que a
+             régua de regiões confere), e com a cidade presente o servidor deriva a UF dela: uma
+             fonte só, sem chance de a vaga ficar com cidade de um estado e UF de outro. */
+          cidadeId: form.cidadeId ? Number(form.cidadeId) : undefined,
           regioes: form.regioes.length ? form.regioes : undefined,
           regioesOutras: form.regioes.includes(REGIAO_OUTRAS)
             ? form.regioesOutras || undefined
@@ -1488,7 +1620,22 @@ export default function CentralDeVagasPage() {
           escolaridade: form.escolaridade || undefined,
           faixaEtaria: comEscape(form.faixaEtariaOpcao, form.faixaEtariaOutra, OPCAO_OUTRA),
           genero: form.genero,
-          idiomas: form.idiomas.length ? form.idiomas : undefined,
+          /* ONDA C: O PAR IDIOMA + NÍVEL, montado aqui uma vez só. O "Outros" NÃO entra na lista
+             de exigências, e nunca entrou: ele é o escape que leva o texto para `idiomasOutros`, e
+             mandá-lo como um idioma com nível gravaria uma exigência chamada "Outros".
+
+             IDIOMA SEM NÍVEL NÃO VIAJA. O servidor recusaria o par incompleto (e deve recusar), e
+             mandá-lo seria trocar a frase que a tela já escreve na caixa daquele idioma ("nível não
+             informado", ao lado do nome) por um 400 genérico no fim do formulário. */
+          /* O NOME CANÔNICO DO CAMPO DE ESCRITA É `idiomasExigidos`. O backend ainda aceita o
+             `idiomas` antigo no corpo, por compatibilidade, mas mandar pelo nome velho deixaria a
+             tela apontando para o campo congelado logo na frente em que ele foi congelado. */
+          idiomasExigidos: (() => {
+            const pares: AsVagaIdioma[] = form.idiomas
+              .filter((i) => i !== OPCAO_OUTROS && form.idiomaNiveis[i])
+              .map((i) => ({ idioma: i, nivel: form.idiomaNiveis[i] as IdiomaNivel }));
+            return pares.length ? pares : undefined;
+          })(),
           idiomasOutros: form.idiomas.includes(OPCAO_OUTROS)
             ? form.idiomasOutros || undefined
             : undefined,
@@ -2035,6 +2182,7 @@ export default function CentralDeVagasPage() {
     const setStatus = new Set(fStatus);
     const setVinculos = new Set(fVinculos);
     const setConsultores = new Set(fConsultores);
+    const setSla = new Set(fSla);
 
     return rows.filter((v) => {
       /*
@@ -2065,7 +2213,8 @@ export default function CentralDeVagasPage() {
           rotuloDoStatusVaga(v.status, catalogoStatus),
           v.consultorNome ?? "não informado",
           dataBr(v.dataAbertura),
-          textoDias(diasEmAberto(v)),
+          // A BUSCA PROCURA O QUE A CÉLULA ESCREVE, e a célula agora escreve o SLA.
+          slaDaLinha(v).texto,
         ]);
         if (!casaBusca(alvo, termo)) return false;
       }
@@ -2078,6 +2227,9 @@ export default function CentralDeVagasPage() {
       // O consultor casa por ID; a vaga sem consultor responde pelo sentinela, para "sem responsável"
       // ser uma pergunta que o filtro sabe responder.
       if (setConsultores.size && !setConsultores.has(v.consultorId ?? SEM_CONSULTOR)) return false;
+      // O SLA CASA PELO ESTADO já calculado, e não por uma segunda conta: a régua é a mesma que
+      // desenha a célula, então o que o filtro promete é exatamente o que a coluna mostra.
+      if (setSla.size && !setSla.has(slaDaLinha(v).estado)) return false;
       /*
        * O PERÍODO COMPARA STRING COM STRING, e isso é proposital: `dataAbertura` é `yyyy-mm-dd`, uma
        * data pura, e nessa forma a ordem alfabética É a ordem cronológica. Converter para `Date`
@@ -2106,6 +2258,7 @@ export default function CentralDeVagasPage() {
     fStatus,
     fVinculos,
     fConsultores,
+    fSla,
     abertaDe,
     abertaAte,
     catalogoStatus,
@@ -2249,6 +2402,7 @@ export default function CentralDeVagasPage() {
     (fStatus.length ? 1 : 0) +
     (fVinculos.length ? 1 : 0) +
     (fConsultores.length ? 1 : 0) +
+    (fSla.length ? 1 : 0) +
     (fEtapas.length ? 1 : 0) +
     (abertaDe || abertaAte ? 1 : 0);
 
@@ -2259,6 +2413,7 @@ export default function CentralDeVagasPage() {
     setFStatus([]);
     setFVinculos([]);
     setFConsultores([]);
+    setFSla([]);
     setFEtapas([]);
     setAbertaDe("");
     setAbertaAte("");
@@ -2404,7 +2559,15 @@ export default function CentralDeVagasPage() {
        * manda vazio para o FIM nas duas direções.
        */
       { chave: "abertura", tipo: "data", valor: (v) => v.dataAbertura },
-      { chave: "dias", tipo: "numero", valor: (v) => diasEmAberto(v) },
+      /* ─ O SLA ENTRA NO LUGAR DE "DIAS EM ABERTO" (Onda C, peça 4) ───────────────────────────
+         QUANTO MENOR, MAIS URGENTE, e por isso o primeiro clique traz o vencido para o topo: é a
+         fila de quem precisa de ação hoje. A coluna antiga ordenava pelo maior, porque lá o número
+         grande era o caso interessante (a vaga que demora); aqui o número pequeno é que é.
+
+         A VAGA ENCERRADA NÃO DISPUTA ESSA FILA: `ordemDoSla` a empurra para depois de todas as
+         vivas, e o porquê (com o caso medido) está escrito lá. SEM PREVISÃO devolve nulo e vai para
+         o FIM nas duas direções: ausência de prazo não é um prazo enorme. */
+      { chave: "sla", tipo: "numero", valor: (v) => ordemDoSla(slaDaLinha(v)) },
     ],
     // A ORDEM DA COLUNA STATUS É A DO CATÁLOGO, então ela precisa ser refeita quando ele chega:
     // sem esta dependência, a lista continuaria ordenada pela lista vazia da primeira renderização.
@@ -2532,6 +2695,29 @@ export default function CentralDeVagasPage() {
                 placeholder="Todos"
                 ariaLabel="Consultor responsável"
                 searchable
+                limpavel
+              />
+            </FiltroCampo>
+
+            {/* ─ SLA DE ENTREGA (Onda C, peça 4), §A.37: a coluna nova nasce com o filtro ────
+                MÚLTIPLO (§A.28) pelo mesmo `Combobox` compartilhado dos demais campos, e as opções
+                vêm do VOCABULÁRIO da régua (`SLA_ESTADOS`), não das linhas carregadas: derivadas
+                das linhas, elas encolheriam assim que a primeira fosse escolhida.
+
+                AS FAIXAS SÃO ESTADOS, E NÃO NÚMEROS DE DIAS, porque é assim que a pergunta é feita
+                na operação: ninguém procura "as de 4 dias", procura "as vencidas" e "as que vencem
+                já". Elas vêm na ordem da urgência, da vencida ao histórico. */}
+            <FiltroCampo label="SLA De Entrega">
+              <Combobox
+                multiple
+                value={fSla}
+                onChange={setFSla}
+                options={SLA_ESTADOS.map((e) => ({
+                  value: e,
+                  label: SLA_ESTADO_LABEL[e as EstadoDoSla],
+                }))}
+                placeholder="Todos"
+                ariaLabel="SLA de entrega"
                 limpavel
               />
             </FiltroCampo>
@@ -3027,8 +3213,13 @@ export default function CentralDeVagasPage() {
                 <ColunaOrdenavel as="th" ord={ord} chave="abertura" className="w-[1%] text-center">
                   <span className="whitespace-normal">Data De Abertura</span>
                 </ColunaOrdenavel>
-                <ColunaOrdenavel as="th" ord={ord} chave="dias" className="w-[1%] text-center">
-                  <span className="whitespace-normal">Dias Em Aberto</span>
+                {/* ─ SLA DE ENTREGA, NO LUGAR DE "DIAS EM ABERTO" (Onda C, peça 4) ──────────
+                    A coluna que saiu contava para trás (há quanto tempo a vaga existe) e a que
+                    entra conta para a frente (quanto falta para a previsão de entrega). O rótulo
+                    quebra em duas linhas pelo mesmo motivo medido nas vizinhas: em uma linha só ele
+                    pediria largura mínima grande demais e empurraria a tabela para fora da tela. */}
+                <ColunaOrdenavel as="th" ord={ord} chave="sla" className="w-[1%] text-center">
+                  <span className="whitespace-normal">SLA De Entrega</span>
                 </ColunaOrdenavel>
                 <th className="w-[1%] text-center">Ações</th>
               </tr>
@@ -3123,27 +3314,45 @@ export default function CentralDeVagasPage() {
                         quebraria em duas linhas no meio do ano. Rascunho sem data escreve
                         "não informado" (§A.11), como as demais colunas da linha. */}
                     <td className="whitespace-nowrap text-center">{dataBr(v.dataAbertura)}</td>
-                    {/* DIAS EM ABERTO (item 1), CONGELADO no fechamento (decisão do diretor).
-                        A vaga VIVA (aberta ou de banco) tem o número em destaque, porque é o dela
-                        que sobe todo dia e é por ele que a fila é priorizada; a vaga ENCERRADA
-                        mostra o mesmo número em tom discreto, já que ali ele é histórico e não
-                        cobrança. A frase inteira fica no `title`, para quem passa o mouse. */}
+                    {/* ─ SLA DE ENTREGA (Onda C, peça 4) ─────────────────────────────────────
+                        QUATRO LEITURAS, E A COR É O QUE FAZ A VARREDURA DA FILA FUNCIONAR sem ler
+                        número por número: VENCIDO em vermelho, PRAZO CURTO (2 dias ou menos,
+                        incluindo o dia da entrega) com o selo de atenção em amarelo, NO PRAZO em
+                        texto normal, e SEM PREVISÃO em tom apagado, porque ali não há prazo a
+                        cobrar de ninguém.
+
+                        A VAGA ENCERRADA FICA DISCRETA, como a coluna antiga já fazia: ali o número
+                        é histórico (a margem com que ela terminou), e não cobrança. Pintar de
+                        vermelho uma vaga que fechou atrasada há seis meses encheria a fila de
+                        alarme sobre trabalho que ninguém pode mais mudar.
+
+                        O ÍCONE SEGUE O ESTADO (§A.12: ícone dinâmico, nunca fixo) e só aparece onde
+                        há o que sinalizar. A frase inteira fica no `title`. */}
                     <td className="text-center">
-                      <span
-                        className={
-                          vagaEncerrada(v.status) ? "text-dim" : "font-semibold"
-                        }
-                        title={
-                          v.dataAbertura === null
-                            ? "A vaga ainda não tem data de abertura."
-                            : vagaEncerrada(v.status)
-                              ? `Ficou aberta por ${textoDias(diasEmAberto(v))}, da abertura até o fechamento.`
-                              : `Aberta há ${textoDias(diasEmAberto(v))}, contando até hoje.`
-                        }
-                      >
-                        {textoDias(diasEmAberto(v))}
-                      </span>
+                      {(() => {
+                        const sla = slaDaLinha(v);
+                        const tom =
+                          sla.estado === "ENCERRADA" || sla.estado === "SEM_PREVISAO"
+                            ? "text-dim"
+                            : sla.estado === "VENCIDO"
+                              ? "font-semibold text-danger"
+                              : sla.estado === "ATENCAO"
+                                ? "font-semibold text-warn"
+                                : "font-semibold";
+                        return (
+                          <span
+                            className={cn("inline-flex items-center justify-center gap-1", tom)}
+                            title={sla.detalhe}
+                          >
+                            {(sla.estado === "VENCIDO" || sla.estado === "ATENCAO") && (
+                              <Icon name="alert" className="h-3.5 w-3.5 flex-none" />
+                            )}
+                            {sla.texto}
+                          </span>
+                        );
+                      })()}
                     </td>
+
                     {/* ─ A CÉLULA DE AÇÕES TEM UM BOTÃO SÓ, E ESSE É O PONTO (peça 3 da onda B3) ─
                         ELA CARREGAVA CINCO GESTOS: fechar, cancelar, editar posições, continuar o
                         rascunho e clonar, mais o "Gestão Vaga". A conta era medida e estava
@@ -3384,6 +3593,45 @@ export default function CentralDeVagasPage() {
                         }))}
                         ariaLabel="Sazonalidade da vaga"
                       />
+                    </CampoSelect>
+
+                    {/* ─ LINHA DE SERVIÇO (Onda C, peça 1), OBRIGATÓRIA ──────────────────────
+                        ELA FICA ENTRE SAZONALIDADE E STATUS, e o lugar é o da leitura: natureza,
+                        sazonalidade e linha de serviço são as TRÊS classificações da vaga, e ficam
+                        juntas; o status é o estado dela, e fecha o passo.
+
+                        O ASTERISCO NÃO É ESCRITO AQUI. Ele vem da régua declarativa, a mesma que
+                        trava o publicar e lista a pendência clicável, e é por isso que
+                        `pendenciasComLinhaDeServico` existe: acrescentar um obrigatório continua
+                        sendo acrescentar UMA entrada numa lista, e não três lugares para lembrar.
+
+                        AS OPÇÕES SÃO AS ATIVAS DO CATÁLOGO (§A.35, `Select` do design system, que
+                        liga a busca sozinho acima de 8 itens). Linha inativada some da escolha e
+                        continua escrita nas vagas antigas, que é o que `incluirInativas=1` na
+                        leitura garante. */}
+                    <CampoSelect rotulo="Linha de serviço" obrigatorio id="vaga-linha-servico">
+                      <Select
+                        value={form.linhaServicoId}
+                        onChange={(v) => set("linhaServicoId", v)}
+                        options={linhasAtivasDoCatalogo.map((l) => ({
+                          value: String(l.id),
+                          label: l.rotulo,
+                        }))}
+                        placeholder={
+                          carregandoLinhas ? "Carregando as linhas…" : "Escolha a linha de serviço"
+                        }
+                        disabled={carregandoLinhas}
+                        ariaLabel="Linha de serviço da vaga"
+                      />
+                      {/* O CATÁLOGO VAZIO É DITO, e não escondido atrás de um seletor que não abre
+                          nada: sem linha cadastrada a vaga não publica, e quem lê precisa do
+                          caminho. É a mesma frase do catálogo de motivos de cancelamento. */}
+                      {!carregandoLinhas && linhasAtivasDoCatalogo.length === 0 && (
+                        <span className="mt-1 block text-[12px] text-warn">
+                          Nenhuma linha de serviço está cadastrada. Cadastre em Menu Gerencial,
+                          Linhas De Serviço.
+                        </span>
+                      )}
                     </CampoSelect>
 
                     <CampoSelect rotulo="Status" obrigatorio id="vaga-status">
@@ -3759,6 +4007,50 @@ export default function CentralDeVagasPage() {
                       />
                     </CampoSelect>
 
+                    {/* ─ CIDADE (Onda C, peça 2): CAMPO NOVO AO LADO DO ESTADO ──────────────
+                        A UF NÃO SAIU, e isso é correção de premissa: ela é quem FILTRA a cidade, e
+                        é ela que a régua de regiões do backend continua conferindo. A cidade entra
+                        ao lado, não no lugar.
+
+                        A BUSCA NÃO É OPCIONAL AQUI (§A.35): são 5.570 municípios no país, e o maior
+                        estado sozinho tem 853. O `Combobox` do design system com `searchable` é o
+                        único jeito de o campo ser usável; sem ela, escolher uma cidade seria rolar
+                        uma lista de centenas de linhas.
+
+                        A LISTA SÓ É BUSCADA QUANDO O ESTADO É ESCOLHIDO, e por isso o campo nasce
+                        fechado dizendo o que fazer: baixar o país inteiro para preencher um campo
+                        seria meio megabyte em toda abertura de vaga, e a esmagadora maioria dele de
+                        estados que aquela vaga nunca vai citar. */}
+                    <CampoSelect rotulo="Cidade">
+                      {form.regiaoEstado ? (
+                        <>
+                          <Combobox
+                            value={form.cidadeId}
+                            onChange={(v) => set("cidadeId", v)}
+                            options={cidadesDaUf.map((c) => ({
+                              value: String(c.id),
+                              label: c.nome,
+                            }))}
+                            placeholder={
+                              carregandoCidades
+                                ? "Carregando as cidades…"
+                                : "Busque pelo nome da cidade"
+                            }
+                            ariaLabel="Cidade da vaga"
+                            searchable
+                            limpavel
+                          />
+                          {erroCidades && (
+                            <span className="mt-1 block text-[12px] text-warn">{erroCidades}</span>
+                          )}
+                        </>
+                      ) : (
+                        <p className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-3 text-[12.5px] text-faint">
+                          Escolha o estado ao lado para buscar a cidade.
+                        </p>
+                      )}
+                    </CampoSelect>
+
                     {/* A SEGUNDA LISTA NASCE FECHADA e só abre com o estado escolhido: oferecer
                         região sem saber de que estado ela é seria oferecer as 250 de uma vez. */}
                     <CampoSelect rotulo="Regiões possíveis para abordagem">
@@ -3972,12 +4264,85 @@ export default function CentralDeVagasPage() {
                     <CampoSelect rotulo="Idiomas">
                       <MultiSelect
                         values={form.idiomas}
-                        onChange={(v) => set("idiomas", v)}
+                        /* DESMARCAR UM IDIOMA LEVA O NÍVEL DELE JUNTO. Sem isto, o mapa guardaria o
+                           nível de um idioma que ninguém mais exige, e ele voltaria sozinho no dia
+                           em que a pessoa remarcasse o idioma, com um valor que ela não escolheu
+                           naquela sessão. O par nasce e morre junto. */
+                        onChange={(v) => {
+                          setForm((f) => ({
+                            ...f,
+                            idiomas: v,
+                            idiomaNiveis: Object.fromEntries(
+                              Object.entries(f.idiomaNiveis).filter(([idioma]) =>
+                                v.includes(idioma),
+                              ),
+                            ),
+                          }));
+                        }}
                         options={VAGA_IDIOMAS.map((i) => ({ value: i, label: i }))}
                         placeholder="Selecionar os idiomas"
                         ariaLabel="Idiomas"
                       />
                     </CampoSelect>
+
+                    {/* ─ O NÍVEL DE CADA IDIOMA (Onda C, peça 3) ──────────────────────────────
+                        UMA CAIXA POR IDIOMA ESCOLHIDO, e o nível é OBRIGATÓRIO em cada uma: idioma
+                        sem nível é a caixa de texto de volta com outro nome, que é justamente o que
+                        esta peça existe para acabar. A exigência "inglês" não diz nada; "inglês
+                        fluente" e "inglês básico" são vagas diferentes.
+
+                        O PAR VIAJA COMO OBJETO (`AsVagaIdioma`), nunca como duas listas casadas por
+                        posição: duas listas desalinham na primeira remoção do meio, e o desalinho
+                        grava uma exigência que ninguém pediu sem nada falhar.
+
+                        O QUE FALTA É DITO NA PRÓPRIA CAIXA, e não só no fim: quem escolheu quatro
+                        idiomas precisa ver QUAL deles está sem nível, e não uma frase genérica
+                        embaixo do formulário. A vaga antiga volta do clone sem nível nenhum (a
+                        coluna nova nasceu vazia), e aí a caixa diz exatamente isso, em vez de
+                        inventar um "Básico" que ninguém escolheu. */}
+                    {form.idiomas.filter((i) => i !== OPCAO_OUTROS).length > 0 && (
+                      <Campo rotulo="Nível de cada idioma" largo obrigatorio>
+                        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                          {form.idiomas
+                            .filter((i) => i !== OPCAO_OUTROS)
+                            .map((idioma) => {
+                              const nivel = form.idiomaNiveis[idioma] ?? "";
+                              return (
+                                <div
+                                  key={idioma}
+                                  className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3.5 py-3"
+                                >
+                                  <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+                                    <span className="text-[12.5px] font-semibold text-text">
+                                      {idioma}
+                                    </span>
+                                    {!nivel && (
+                                      <span className="text-[11.5px] text-warn">
+                                        nível não informado
+                                      </span>
+                                    )}
+                                  </div>
+                                  <Select
+                                    value={nivel}
+                                    onChange={(v) =>
+                                      setForm((f) => ({
+                                        ...f,
+                                        idiomaNiveis: { ...f.idiomaNiveis, [idioma]: v },
+                                      }))
+                                    }
+                                    options={IDIOMA_NIVEIS.map((n) => ({
+                                      value: n,
+                                      label: IDIOMA_NIVEL_LABEL[n],
+                                    }))}
+                                    placeholder="Escolha o nível"
+                                    ariaLabel={`Nível de ${idioma}`}
+                                  />
+                                </div>
+                              );
+                            })}
+                        </div>
+                      </Campo>
+                    )}
 
                     {form.idiomas.includes(OPCAO_OUTROS) && (
                       <Campo rotulo="Quais outros idiomas" largo>
@@ -4245,6 +4610,35 @@ export default function CentralDeVagasPage() {
             <BlocoFicha titulo="A Vaga">
               <Linha rotulo="Cliente" valor={verAlvo.clienteNome} />
               <Linha rotulo="Cargo da vaga" valor={verAlvo.cargoNome} />
+              {/* ONDA C: a classificação e a cidade aparecem na ficha porque é aqui que a vaga é
+                  LIDA de volta. Campo obrigatório na abertura que não se lê em lugar nenhum é meio
+                  campo: quem confere a vaga precisa ver o que foi escolhido, sem reabrir a trilha.
+                  O rótulo da linha vem do catálogo (com as inativas, senão a vaga antiga mostraria
+                  vazio no lugar da classificação); a cidade vem com o nome já resolvido. */}
+              <Linha
+                rotulo="Linha de serviço"
+                /* O RÓTULO VIAJA JUNTO DO ID no contrato, então a ficha lê o que o servidor já
+                   resolveu. A QUEDA PARA O CATÁLOGO LOCAL não é redundância: ela cobre a linha
+                   INATIVADA depois da abertura, em que o servidor pode não mandar rótulo, e sem ela
+                   a classificação da vaga antiga apareceria vazia. O catálogo local é o COMPLETO,
+                   com as inativas, exatamente por isso. */
+                valor={
+                  verAlvo.linhaServicoRotulo ??
+                  rotuloDaLinhaPorId(verAlvo.linhaServicoId, catalogoLinhasPorId)
+                }
+              />
+              {/* A CIDADE SAI COM A UF JUNTO, e não sozinha: nome de município se repete entre
+                  estados (são CINCO "Bom Jesus" no país, em PB, PI, RN, RS e SC, contados na base), e o nome sozinho não identifica qual é. */}
+              <Linha
+                rotulo="Cidade"
+                valor={
+                  verAlvo.cidadeNome
+                    ? verAlvo.cidadeUf
+                      ? `${verAlvo.cidadeNome} (${verAlvo.cidadeUf})`
+                      : verAlvo.cidadeNome
+                    : null
+                }
+              />
               <Linha
                 rotulo="Natureza"
                 valor={verAlvo.natureza ? VAGA_NATUREZA_LABEL[verAlvo.natureza] : null}
@@ -4355,7 +4749,15 @@ export default function CentralDeVagasPage() {
               <Linha rotulo="Gênero" valor={VAGA_GENERO_LABEL[verAlvo.genero]} />
               <Linha
                 rotulo="Idiomas"
-                valor={listaEmTexto(verAlvo.idiomas, verAlvo.idiomasOutros, OPCAO_OUTROS)}
+                /* ONDA C: o campo `idiomas` passou de `string[]` para `{idioma, nivel}[]`, e sem
+                   esta tradução a ficha imprimiria "[object Object]" para toda vaga nova. A vaga
+                   ANTIGA continua vindo na forma velha e continua sendo lida: é a mesma régua que o
+                   clone usa, em um lugar só. */
+                valor={listaEmTexto(
+                  textoDosIdiomas(verAlvo),
+                  verAlvo.idiomasOutros,
+                  OPCAO_OUTROS,
+                )}
               />
               <Linha rotulo="Cursos e conhecimentos" valor={verAlvo.cursosConhecimentos} largo />
               <Linha

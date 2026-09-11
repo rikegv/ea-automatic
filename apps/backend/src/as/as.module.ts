@@ -1,10 +1,15 @@
 import { Module } from "@nestjs/common";
 import { CandidatosController } from "./candidatos/candidatos.controller";
+import { CidadesController } from "./cidades/cidades.controller";
+import { CidadesService } from "./cidades/cidades.service";
 import { CandidatosService } from "./candidatos/candidatos.service";
 import { RetencaoCandidatosService } from "./candidatos/retencao-candidatos.service";
 import { EtapasFunilAdminController } from "./etapas/etapas-funil-admin.controller";
 import { EtapasFunilController } from "./etapas/etapas-funil.controller";
 import { EtapasFunilService } from "./etapas/etapas-funil.service";
+import { LinhasServicoAdminController } from "./linhas-servico/linhas-servico-admin.controller";
+import { LinhasServicoController } from "./linhas-servico/linhas-servico.controller";
+import { LinhasServicoService } from "./linhas-servico/linhas-servico.service";
 import { MotivosCancelamentoVagaAdminController } from "./motivos-cancelamento/motivos-cancelamento-admin.controller";
 import { MotivosCancelamentoVagaController } from "./motivos-cancelamento/motivos-cancelamento.controller";
 import { MotivosCancelamentoVagaService } from "./motivos-cancelamento/motivos-cancelamento.service";
@@ -42,6 +47,19 @@ import { VagasService } from "./vagas/vagas.service";
    * (`MotivosCancelamentoVagaAdminController`) é `@Roles("SUPER_ADMIN")`. Uma classe só fecharia o
    * seletor para o consultor COMUM, que é justamente quem cancela vaga.
    */
+  /*
+   * O CATÁLOGO DE LINHAS DE SERVIÇO (Onda C) repete a MESMA separação em duas classes, e aqui ela
+   * custa mais caro do que nos outros: a linha de serviço é OBRIGATÓRIA para publicar vaga, então
+   * reivindicar a leitura pelo menu de administração não deixaria um seletor vazio, travaria a
+   * abertura de vaga inteira para o consultor COMUM. A escrita é `@Roles("SUPER_ADMIN")` na
+   * `LinhasServicoAdminController`, porque quem edita esta lista edita a classificação da operação
+   * inteira, e o menu sozinho não segura MASTER.
+   *
+   * `CidadesController` é SÓ LEITURA, e não tem contraparte de administração de propósito: não
+   * existe CRUD de município. A fonte é o IBGE, carregado uma vez por script
+   * (`db/carga-cidades-ibge.ts`), e uma tela de manutenção só criaria a chance de alguém "corrigir"
+   * o nome de uma cidade e desmanchar o casamento com o código oficial.
+   */
   controllers: [
     VagasController,
     CandidatosController,
@@ -51,6 +69,9 @@ import { VagasService } from "./vagas/vagas.service";
     MotivosCancelamentoVagaAdminController,
     VagaStatusController,
     VagaStatusAdminController,
+    LinhasServicoController,
+    LinhasServicoAdminController,
+    CidadesController,
   ],
   // `RetencaoCandidatosService` é o expurgo por retenção (2 anos para descartado, banco não expira).
   // Fica no módulo e não em um agendador global pelo mesmo motivo do `ExpurgoService` da Admissão:
@@ -71,6 +92,14 @@ import { VagasService } from "./vagas/vagas.service";
     EtapasFunilService,
     MotivosCancelamentoVagaService,
     VagaStatusService,
+    // `LinhasServicoService` é a fonte única do catálogo de linhas de serviço e a ÚNICA porta de
+    // escrita dele, o que é o que torna o cache em memória de lá confiável. O `VagasService` NÃO
+    // depende dele por construtor (ver `resolverLinhaServico`): a régua é compartilhada como função
+    // PURA, e a consulta é feita direto, para não mudar a assinatura que treze specs instanciam.
+    LinhasServicoService,
+    // `CidadesService` serve a leitura por UF. A base vem do script de carga, nunca do IBGE em
+    // tempo de request: a abertura de vaga não pode depender de um servidor externo estar no ar.
+    CidadesService,
   ],
 })
 export class AsModule {}

@@ -4,7 +4,7 @@ import { VagasService } from "./vagas.service";
 import { VagasController } from "./vagas.controller";
 import type { CreateVagaDto } from "./vagas.dto";
 import type { AuthUser } from "../../auth/auth.types";
-import { asCandidaturas, vagaMetaReducoes, vagas } from "../../db/schema";
+import { asCandidaturas, asLinhasServico, vagaMetaReducoes, vagas } from "../../db/schema";
 import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
 import { catalogoDeStatusFingido } from "../vaga-status/vaga-status-catalogo.fake";
 
@@ -81,6 +81,15 @@ interface Escrita {
 }
 
 /** O corpo mínimo que a trilha manda, com tudo que a régua dos obrigatórios cobra ao publicar. */
+/** A linha de serviço que o catálogo fingido devolve, e que o corpo publicável escolhe. */
+const LINHA_SERVICO = {
+  id: 1,
+  codigo: "PONTUAIS_ESTRATEGICAS",
+  rotulo: "Pontuais & Estratégicas",
+  ordem: 1,
+  ativo: true,
+};
+
 function corpo(over: Partial<CreateVagaDto> = {}): CreateVagaDto {
   return {
     codigo: "PS-2026-099",
@@ -91,6 +100,11 @@ function corpo(over: Partial<CreateVagaDto> = {}): CreateVagaDto {
     dataAbertura: "2026-09-01",
     posicoesOficiais: 1,
     posicoesBanco: 0,
+    // A LINHA DE SERVIÇO (Onda C) É OBRIGATÓRIA PARA PUBLICAR, e este corpo é o de uma vaga
+    // PUBLICÁVEL. Sem ela, todo caso que publica (`status: "ABERTA"`) pararia na régua dos
+    // obrigatórios ANTES de chegar na trava de meta, e os testes desta suíte passariam a medir a
+    // mensagem errada. O catálogo é servido pelo fake logo abaixo.
+    linhaServicoId: LINHA_SERVICO.id,
     ...over,
   } as unknown as CreateVagaDto;
 }
@@ -128,7 +142,10 @@ function makeDb(cenario: { posicoesOficiais?: number | null; posicoesBanco?: num
     };
     b.groupBy = () => Promise.resolve(tabela === asCandidaturas ? [] : []);
     // A trava de duplicidade de código aguarda o próprio builder: nenhum código repetido aqui.
-    b.then = (r: (v: unknown) => unknown) => Promise.resolve([]).then(r);
+    // O CATÁLOGO DE LINHAS DE SERVIÇO (Onda C) é lido assim, sem `where` nem `orderBy`: o serviço
+    // pega a lista inteira (são cinco linhas) e aplica a régua pura em memória.
+    b.then = (r: (v: unknown) => unknown) =>
+      Promise.resolve(tabela === asLinhasServico ? [LINHA_SERVICO] : []).then(r);
     return b;
   });
 
@@ -495,7 +512,9 @@ function makeDbComMemoria(cenario: {
       return Promise.resolve([]);
     };
     b.groupBy = () => Promise.resolve(tabela === asCandidaturas ? agregado() : []);
-    b.then = (r: (v: unknown) => unknown) => Promise.resolve([]).then(r);
+    // O CATÁLOGO DE LINHAS DE SERVIÇO (Onda C), lido sem `where` nem `orderBy`, como o outro fake.
+    b.then = (r: (v: unknown) => unknown) =>
+      Promise.resolve(tabela === asLinhasServico ? [LINHA_SERVICO] : []).then(r);
     return b;
   });
 

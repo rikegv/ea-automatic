@@ -15,7 +15,14 @@ import {
  * volta o pior dos dois mundos, a tela deixa publicar e o servidor recusa.
  */
 
-/** Uma vaga com TODOS os obrigatórios preenchidos, para cada teste apagar só o que quer provar. */
+/**
+ * Uma vaga com TODOS os obrigatórios preenchidos, para cada teste apagar só o que quer provar.
+ *
+ * ELE PRECISA SER ATUALIZADO A CADA OBRIGATÓRIO NOVO, e isso é a propriedade que este arquivo tem
+ * de bom, não um incômodo: acrescentar um campo em `VAGA_OBRIGATORIOS` deixa os testes de "não
+ * acusa nada" VERMELHOS até alguém vir aqui. Foi o que aconteceu com a `linhaServicoId` da Onda C,
+ * e o vermelho apareceu no lugar certo, no mesmo minuto, em vez de virar pendência fantasma na tela.
+ */
 const COMPLETA: VagaCamposObrigatorios = {
   codigo: "PV163983",
   nomeDivulgacao: "Analista Fiscal",
@@ -23,6 +30,9 @@ const COMPLETA: VagaCamposObrigatorios = {
   posicoesOficiais: 2,
   natureza: "EFETIVA",
   sazonalidade: "OPERACAO_PADRAO",
+  // ONDA C: a linha de serviço é o id do catálogo gerenciável. Número aqui, e a régua também aceita
+  // texto, que é a forma que o campo da tela devolve.
+  linhaServicoId: 3,
   status: "ABERTA",
   dataAbertura: "2026-08-25",
 };

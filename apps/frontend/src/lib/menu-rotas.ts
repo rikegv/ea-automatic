@@ -72,6 +72,14 @@ export const ROTA_MENU: { prefixo: string; codigo: string }[] = [
   // inteiro RENDERIZADO pela leitura aberta, e só tomaria 403 ao clicar em salvar. Tela que abre e
   // mostra o dado antes de recusar é pior do que tela que não abre: ela ensina o que existe.
   { prefixo: "/admin/as/etapas", codigo: "as-etapas" },
+  // LINHAS DE SERVIÇO (A&S, Onda C): governado pelo menu `as-linhas-servico`, que nasce só para o
+  // SUPER_ADMIN (§A.23), e a régua é IDÊNTICA à das Etapas Do Funil, pelo mesmo motivo medido: a
+  // LEITURA do catálogo (`GET /as/linhas-servico`) é aberta a qualquer autenticado de propósito,
+  // porque o seletor da linha de serviço aparece na abertura de vaga do consultor. Sem esta linha,
+  // quem digitasse a URL abriria o gerenciador, veria o catálogo inteiro RENDERIZADO pela leitura
+  // aberta, e só tomaria 403 ao clicar em salvar. O backend já barra a escrita; isto fecha a porta
+  // da tela.
+  { prefixo: "/admin/as/linhas-servico", codigo: "as-linhas-servico" },
   // MOTIVOS DE CANCELAMENTO DE VAGA (A&S): governado pelo menu `as-motivos-cancelamento`, que nasce
   // só para o SUPER_ADMIN (§A.23). A régua é a mesma das Etapas Do Funil, e pelo mesmo motivo: a
   // LEITURA do catálogo (`GET /as/motivos-cancelamento`) é aberta a qualquer autenticado de

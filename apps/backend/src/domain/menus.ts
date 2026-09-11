@@ -831,6 +831,46 @@ export const MENUS: MenuDef[] = [
     areas: ["AS"],
     operacoes: ["VagaStatusAdminController.*"],
   },
+  {
+    /**
+     * LINHAS DE SERVIÇO (Onda C): o catálogo que classifica a vaga por linha de negócio (Pontuais &
+     * Estratégicas, RPO & BPO, Alto Volume, SouFast, OneShot), no molde de `as_etapas_funil`.
+     *
+     * ┌─ ELE NÃO É O "PROJETO" DO ALTO VOLUME, e a colisão de nome é real ──────────────────────┐
+     * │ `projetos_alto_volume` guarda EVENTOS ("BIENAL DOS LIVROS", "BF"), campanhas com data   │
+     * │ DENTRO da operação de alto volume. Este é outro eixo: uma vaga da linha "Alto Volume"   │
+     * │ pode ou não pertencer a um evento de alto volume. Por isso o código do menu, a rota e a │
+     * │ tabela nascem com nome próprio, e nenhum deles diz só "projeto".                        │
+     * └─────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * SÓ A CONTROLLER DE ESCRITA É REIVINDICADA, e a de LEITURA fica de fora de propósito. O
+     * `MenuGuard` resolve por NOME DE CLASSE, então reivindicar `LinhasServicoController` daria 403
+     * no seletor da ABERTURA DE VAGA para todo consultor COMUM. E como a linha de serviço é
+     * OBRIGATÓRIA para publicar, isso não seria um campo vazio: seria a abertura de vaga inteira
+     * travada para quem mais a usa.
+     *
+     * A REIVINDICAÇÃO É A SEGUNDA CAMADA, NÃO A PRIMEIRA: a autoridade da escrita é o
+     * `@Roles("SUPER_ADMIN")` na própria `LinhasServicoAdminController` (fail-closed no
+     * `RolesGuard`), porque o MENU NÃO SEGURA MASTER, que passa por pertencer à área AS. As duas
+     * camadas recusam por motivos independentes, e nenhuma depende de a outra estar certa.
+     *
+     * §A.23: NASCE SÓ PARA O SUPER_ADMIN. Entra em `MENUS_SOMENTE_SUPER_ADMIN` (some da barra dos
+     * demais em vez de aparecer e dar 403) e em `MENUS_BLOQUEADOS_COMUM` (marcá-lo para um COMUM não
+     * concederia nada, então a tela nem oferece). O convergedor do boot REGISTRA o menu no catálogo,
+     * para ele existir e ser selecionável, e para por aí: quem libera quem enxerga é o diretor.
+     *
+     * `areas: ["AS"]` é obrigatório, e `grupo: "ADMIN"` acompanha os outros três catálogos do
+     * módulo. Por nascer fora da ADM, o código entra também em `MENUS_QUE_NASCEM_FORA_DA_ADM`, que é
+     * a prova NOMINAL de nascimento.
+     */
+    codigo: "as-linhas-servico",
+    rotulo: "Linhas De Serviço",
+    href: "/admin/as/linhas-servico",
+    grupo: "ADMIN",
+    ordem: 52,
+    areas: ["AS"],
+    operacoes: ["LinhasServicoAdminController.*"],
+  },
 ];
 
 /** Menus sempre visíveis, independentemente de configuração (a home nunca some). */
@@ -897,6 +937,8 @@ export const MENUS_QUE_NASCEM_FORA_DA_ADM = new Set<string>([
   "as-motivos-cancelamento",
   // Idem, e o catálogo mais sensível dos três: os flags dele são travas da operação da vaga.
   "as-status-vaga",
+  // Onda C. Mesma razão dos três acima: configura uma lista de A&S e mora no grupo ADMIN por isso.
+  "as-linhas-servico",
 ]);
 
 /** Índice `codigo -> áreas de NASCIMENTO`, para o convergedor semear menu novo. */
@@ -1009,6 +1051,9 @@ export const MENUS_BLOQUEADOS_COMUM = new Set<string>([
   // APARECER e o backend BARRAR.
   "as-motivos-cancelamento",
   "as-status-vaga",
+  // Onda C, mesma razão: a escrita é `@Roles("SUPER_ADMIN")`, então marcar para um COMUM só faria o
+  // menu APARECER e o backend BARRAR.
+  "as-linhas-servico",
 ]);
 
 /**
@@ -1037,6 +1082,9 @@ export const MENUS_SOMENTE_SUPER_ADMIN = new Set<string>([
   "as-etapas",
   "as-motivos-cancelamento",
   "as-status-vaga",
+  // Onda C: quem edita esta lista edita a CLASSIFICAÇÃO da operação inteira, e o rótulo renomeado
+  // reescreve o nome da linha em toda vaga que já aponta para ela.
+  "as-linhas-servico",
 ]);
 
 /**

@@ -29,6 +29,7 @@
     "db:seed:drive-pasta-pai": "tsx src/db/seed-drive-pasta-pai.ts",
     "db:destrava-aguardando": "tsx src/db/destrava-aguardando-auditoria.ts",
     "db:rearquiva-drive": "tsx src/db/rearquiva-drive.ts",
+    "db:carga:cidades": "tsx src/db/carga-cidades-ibge.ts",
     "db:carga-aso-prontuario": "tsx src/db/carga-aso-prontuario.ts",
     "db:cria-prontuario-nc1": "tsx src/db/cria-prontuario-nc1.ts"
   },

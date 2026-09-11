@@ -178,11 +178,26 @@ export function ordemDaEtapa(
  * chama usa isso para nem disparar a requisição.
  */
 export function moverNaOrdem(
-  catalogo: readonly AsEtapaFunil[],
+  /**
+   * ─ A ASSINATURA FOI ALARGADA, E O COMPORTAMENTO NÃO MUDOU (Onda C) ──────────────────────────
+   *
+   * Ela pedia `AsEtapaFunil[]` e passou a pedir a FORMA de que ela de fato precisa: um id e uma
+   * ordem. A função nunca leu cor, nem "inicial", nem "ativa"; ela troca dois vizinhos numa lista
+   * de ids e devolve a lista nova, e isso vale para qualquer catálogo ordenável do sistema.
+   *
+   * QUEM PEDIU FOI O CATÁLOGO DE LINHAS DE SERVIÇO, que reordena exatamente do mesmo jeito. A
+   * alternativa era uma segunda cópia desta régua na outra tela, e duas cópias da mesma troca de
+   * vizinhos divergem no primeiro ajuste. Alargar um parâmetro é compatível para trás: todos os
+   * chamadores de antes continuam válidos, e nenhum teste muda de veredito.
+   *
+   * A ORDENAÇÃO CONTINUA SENDO A MESMA, `ordem` com desempate por `id`, e ela é feita aqui porque
+   * `etapasOrdenadas` devolve etapas e esta função agora atende qualquer catálogo.
+   */
+  catalogo: readonly { id: number; ordem: number }[],
   id: number,
   direcao: "cima" | "baixo",
 ): number[] {
-  const ids = etapasOrdenadas(catalogo).map((e) => e.id);
+  const ids = [...catalogo].sort((a, b) => a.ordem - b.ordem || a.id - b.id).map((e) => e.id);
   const i = ids.indexOf(id);
   const j = direcao === "cima" ? i - 1 : i + 1;
   if (i === -1 || j < 0 || j >= ids.length) return ids;

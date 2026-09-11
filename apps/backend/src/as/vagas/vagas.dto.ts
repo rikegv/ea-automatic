@@ -17,6 +17,7 @@ import {
 } from "class-validator";
 import { Type } from "class-transformer";
 import {
+  IDIOMA_NIVEIS,
   UFS,
   VAGA_ESCOLARIDADE,
   VAGA_ETAPAS_PS,
@@ -29,6 +30,7 @@ import {
   VAGA_TESTES,
   VAGA_TIPO_SUBSTITUICAO,
   VAGA_VINCULO,
+  type IdiomaNivel,
   type VagaEscolaridade,
   type VagaGenero,
   type VagaModeloTrabalho,
@@ -38,6 +40,26 @@ import {
   type VagaVinculo,
 } from "@ea/shared-types";
 import { normalizarSalarioParaDto } from "../../admissoes/dto/valor-monetario-br";
+
+/**
+ * UM IDIOMA EXIGIDO PELA VAGA, com o nível (Onda C).
+ *
+ * CLASSE, e não um par de campos soltos, porque é isso que o `ValidateNested` precisa para conferir
+ * o nível de CADA item: uma lista de idiomas e outra de níveis passaria pela validação com tamanhos
+ * diferentes, e a vaga acabaria exigindo um nível que ninguém escolheu, casado por posição.
+ */
+export class VagaIdiomaDto {
+  /** Da lista FECHADA `VAGA_IDIOMAS`. "Outros" continua levando o texto para `idiomasOutros`. */
+  @IsIn(VAGA_IDIOMAS as unknown as string[])
+  idioma!: string;
+
+  /**
+   * O NÍVEL, da escala fechada, e ele é OBRIGATÓRIO: sem `@IsOptional()`, idioma escolhido sem nível
+   * é recusado. É a regra inteira desta peça, e ela mora aqui, no lugar em que a ausência é medida.
+   */
+  @IsIn(IDIOMA_NIVEIS as unknown as string[])
+  nivel!: IdiomaNivel;
+}
 
 /** Um benefício da vaga: o id do catálogo mais o valor, que nem todo benefício tem. */
 export class VagaBeneficioDto {
@@ -145,6 +167,23 @@ export class CreateVagaDto {
   @IsOptional()
   @IsIn(VAGA_SAZONALIDADE as unknown as string[])
   sazonalidade?: VagaSazonalidade;
+
+  /**
+   * A LINHA DE SERVIÇO (Onda C), pelo id do catálogo `as_linhas_servico`.
+   *
+   * `@IsOptional()` AQUI E OBRIGATÓRIA NA PUBLICAÇÃO, exatamente como `codigo`, `cargoId` e
+   * `natureza`: o mesmo corpo serve para salvar rascunho e para publicar, e quem cobra a PRESENÇA é
+   * a régua única (`pendenciasDaVaga`), chamada no service só quando o status pedido não é rascunho.
+   *
+   * SEM `@IsIn`, e isso não é afrouxamento: a lista virou CATÁLOGO do diretor, então um decorator
+   * sobre a lista de ontem recusaria a linha que ele criou hoje. Quem confere se o id existe e está
+   * ATIVO é `LinhasServicoService.exigirLinhaAtiva`, no service, contra o catálogo vivo. É o mesmo
+   * caminho que o status da vaga e as etapas do funil já percorreram.
+   */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  linhaServicoId?: number;
 
   /**
    * OS DOIS CONTADORES DA VAGA (decisão do diretor, 25/08). OFICIAIS aceita a partir de 1, porque
@@ -270,8 +309,35 @@ export class CreateVagaDto {
   localTrabalho?: string;
 
   /**
-   * A UF ESCOLHIDA (item 7). Lista fechada nas 27 unidades da federação: sigla inventada não entra,
-   * porque é ela que decide quais regiões são aceitas logo abaixo.
+   * A CIDADE DA VAGA (Onda C), pelo CÓDIGO DO IBGE, de 7 dígitos.
+   *
+   * ELA SUBSTITUI A LISTA VELHA DE REGIÃO como campo digitado. A UF deixa de ser escolhida à parte e
+   * passa a ser DERIVADA da cidade, no service: uma fonte só, e nenhuma chance de a vaga ficar com
+   * cidade de um estado e UF de outro. Os três campos antigos (`regiaoEstado`, `regioes`,
+   * `regioesOutras`) continuam ACEITOS logo abaixo, e o porquê está escrito lá.
+   *
+   * SEM `@IsIn` (são 5.571 municípios) e sem `@Min(1000000)`: quem confere é `CidadesService`,
+   * contra a base carregada do IBGE, e código que não existe lá é recusado com a frase certa.
+   */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  cidadeId?: number;
+
+  /**
+   * A UF ESCOLHIDA (item 7). Lista fechada nas 27 unidades da federação.
+   *
+   * ┌─ POR QUE ELA CONTINUA SENDO ACEITA DEPOIS DA CIDADE (Onda C) ─────────────────────────────┐
+   * │ O precedente do `centroCusto` (campo que SAIU do DTO para ser recusado pelo                │
+   * │ `forbidNonWhitelisted`) NÃO se aplica aqui, e a diferença importa: aquele campo saiu da     │
+   * │ trilha inteiro, e este tem TRÊS vagas em produção com região gravada e uma tela que pode    │
+   * │ continuar oferecendo a região como informação complementar. Removê-lo do DTO transformaria  │
+   * │ um corpo antigo em 400 no meio de uma abertura de vaga.                                     │
+   * │                                                                                             │
+   * │ O QUE MUDOU É O DONO DO DADO, não a aceitação: com `cidadeId` presente, a UF gravada é a da │
+   * │ CIDADE, e o que vier aqui é ignorado. A régua das regiões (`regiaoPertenceAUf`) continua    │
+   * │ valendo, agora contra a UF derivada, então região de outro estado segue recusada.           │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
    */
   @IsOptional()
   @IsIn(UFS.map((u) => u.uf))
@@ -340,12 +406,52 @@ export class CreateVagaDto {
   @IsIn(VAGA_GENERO as unknown as string[])
   genero?: VagaGenero;
 
-  /** Lista FECHADA, seleção múltipla (item 6). O que não estiver nela é rejeitado, não gravado. */
+  /**
+   * OS IDIOMAS EXIGIDOS, cada um COM O SEU NÍVEL (Onda C). Lista FECHADA de idiomas, nível da escala
+   * fechada, seleção múltipla. O que não estiver nas duas listas é rejeitado, não gravado.
+   *
+   * ┌─ ELE É CAMPO NOVO, e a coluna também: `idiomas` (a velha, `text[]`) FICA CONGELADA ────────┐
+   * │ Converter a coluna no lugar quebraria a tela no intervalo entre a migration e o deploy, e  │
+   * │ obrigaria a INVENTAR um nível para as vagas que já pedem idioma. Então a coluna nova nasce  │
+   * │ ao lado, e o campo do corpo acompanha o nome dela.                                          │
+   * │                                                                                             │
+   * │ UM CORPO ANTIGO (`idiomas: ["Inglês"]`) É RECUSADO com mensagem, e isso é deliberado: nível │
+   * │ é OBRIGATÓRIO por idioma escolhido, e idioma sem nível é a caixa de texto de volta com      │
+   * │ outro nome. Recusar alto é melhor do que gravar uma exigência pela metade.                  │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * `@ValidateNested` + `@Type` NÃO SÃO DECORAÇÃO: sem eles o `class-validator` não desce ao objeto,
+   * e a coluna, que é `jsonb` e não tem esquema, aceitaria JSON arbitrário de qualquer autenticado.
+   *
+   * `ArrayUnique` COM SELETOR DE IDIOMA: o par é único pelo IDIOMA, não pelo objeto inteiro. Sem o
+   * seletor, "Inglês básico" e "Inglês avançado" passariam juntos na mesma vaga, que é uma exigência
+   * que não quer dizer nada.
+   */
   @IsOptional()
   @IsArray()
-  @ArrayUnique()
-  @IsIn(VAGA_IDIOMAS as unknown as string[], { each: true })
-  idiomas?: string[];
+  @ArrayUnique((i: VagaIdiomaDto) => i?.idioma)
+  @ValidateNested({ each: true })
+  @Type(() => VagaIdiomaDto)
+  idiomasExigidos?: VagaIdiomaDto[];
+
+  /**
+   * O MESMO CAMPO PELO NOME ANTIGO, aceito DURANTE A TRANSIÇÃO e com a MESMA validação.
+   *
+   * POR QUE O APELIDO EXISTE: a tela está sendo reescrita em paralelo a este backend, e o nome do
+   * campo é a única coisa que os dois lados podem escolher diferente sem nada avisar. Com o apelido,
+   * qualquer um dos dois nomes chega ao MESMO lugar; sem ele, a discordância vira 400 no meio de uma
+   * abertura de vaga, e o motivo aparece como "property idiomas should not exist".
+   *
+   * NÃO É UM SEGUNDO DADO, e por isso não existe risco de as duas listas divergirem: os dois campos
+   * gravam a MESMA coluna, e quando os dois vêm, `idiomasExigidos` (o nome da coluna) é quem vale.
+   * O `idiomas` do BANCO continua intocado por qualquer um dos dois.
+   */
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique((i: VagaIdiomaDto) => i?.idioma)
+  @ValidateNested({ each: true })
+  @Type(() => VagaIdiomaDto)
+  idiomas?: VagaIdiomaDto[];
 
   @IsOptional()
   @IsString()
