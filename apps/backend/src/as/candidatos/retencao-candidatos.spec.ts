@@ -114,6 +114,23 @@ describe("expurgo por retenção: quem está em processo VIVO nunca é alcançad
     expect(protecao).not.toContain("'DESISTIU'");
   });
 
+  /**
+   * A RÉGUA DE "VAGA ENCERRADA" VEM DO FLAG `encerra`, POR JOIN, e nunca de uma lista de códigos.
+   *
+   * ESTA AFIRMAÇÃO É SOBRE O CABEÇALHO DESTE ARQUIVO DE SERVIÇO, e é por isso que ela mora aqui e
+   * não no contrato do `tester` (que cobre a régua em si, em
+   * `retencao-candidatos.lgpd.comportamental.spec.ts`): `SITUACOES_VIVAS_SQL` documenta que ali NÃO
+   * SE CONCATENA DADO EXTERNO, e o catálogo `as_vaga_status` É EDITÁVEL pelo diretor. Resolver
+   * "quais status encerram" por uma lista lida do catálogo e interpolada com `sql.raw` quebraria
+   * essa premissa como TEXTO, mesmo que o resultado da consulta continuasse certo.
+   */
+  it("nenhum código de status da vaga é digitado dentro da consulta", async () => {
+    const q = await rodarVarredura();
+    for (const codigo of ["CANCELADA", "FECHADA", "ENTREGUE", "ABERTA", "RASCUNHO"]) {
+      expect(q).not.toContain(`'${codigo}'`);
+    }
+  });
+
   /** O banco de talentos não expira, e o prazo é o do diretor. Guardas do resto da regra. */
   it("candidato de banco não expira, e o prazo continua sendo de 2 anos", async () => {
     const q = await rodarVarredura();

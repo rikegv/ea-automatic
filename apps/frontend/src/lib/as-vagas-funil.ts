@@ -26,9 +26,12 @@ import {
   type AsEtapaFunil,
   type AsOcupacaoVaga,
   type CandidaturaSituacao,
+  type VagaStatusItem,
+  type VagaStatusPapel,
 } from "@ea/shared-types";
 import type { IconName } from "@/components/ui/Icon";
 import { corDoTom, etapasOrdenadas } from "@/lib/as-etapas";
+import { statusOrdenados } from "@/lib/as-status-vaga";
 
 /**
  * UM CARD DA FILEIRA, já resolvido: rótulo, número, cor e ícone.
@@ -168,4 +171,65 @@ export function cardsDeDesfecho(contagem: Record<string, number>): CardDeFunil[]
       icone: visual?.icone ?? ("layers" as IconName),
     };
   });
+}
+
+// ── A PRIMEIRA FILEIRA: QUANTAS VAGAS, E EM QUE STATUS ──────────────────────
+
+/**
+ * O ÍCONE DE CADA CARD DE STATUS, POR PAPEL E NUNCA POR CÓDIGO.
+ *
+ * ┌─ POR QUE PAPEL ─────────────────────────────────────────────────────────────────────────────┐
+ * │ O CÓDIGO é do catálogo e pode ser qualquer coisa que o diretor criar; o PAPEL é vocabulário  │
+ * │ do sistema (`VAGA_STATUS_PAPEIS`), existe exatamente um de cada e diz o que aquela linha FAZ.│
+ * │ Um mapa por código seria a lista à mão de sempre, com o status novo nascendo sem ícone e com │
+ * │ o rascunho perdendo o dele no dia em que alguém renomeasse a linha.                          │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * OS CINCO ÍCONES SÃO OS MESMOS DE ANTES, um a um: lápis no rascunho, relógio na abertura, check na
+ * entrega, cadeado no fechamento e X no cancelamento. `LIVRE` (os status do diretor) fica com a
+ * etiqueta, que é a marca de "estado que ele nomeou".
+ */
+const ICONE_DO_PAPEL: Record<VagaStatusPapel, IconName> = {
+  RASCUNHO: "pen",
+  ABERTURA: "clock",
+  ENTREGA: "check",
+  FECHAMENTO: "lock",
+  CANCELAMENTO: "x",
+  LIVRE: "tag",
+};
+
+/**
+ * OS CARDS DE STATUS, NA ORDEM DA VIDA DA VAGA, direto do catálogo do diretor.
+ *
+ * ┌─ ERAM SEIS CARDS ESCRITOS NO JSX, E ESSE ERA O PROBLEMA ────────────────────────────────────┐
+ * │ Rótulo, ícone, cor e a chave da contagem estavam digitados um a um na tela. O status novo    │
+ * │ que o diretor criasse não ganharia card, e as vagas dele sumiriam da fileira sem nada falhar:│
+ * │ a soma dos cards deixaria de fechar com o Total, e ninguém teria como notar isso olhando.    │
+ * │ Agora a lista vem do catálogo, e status novo nasce contado.                                  │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * O RÓTULO É O DO CATÁLOGO, e não um plural escrito aqui. Os cards diziam "Rascunhos", "Abertas",
+ * "Entregues", e um mapa desses viraria MENTIRA na primeira renomeação: o diretor troca "Entregue"
+ * por "Concluída" no gerenciador e o card continuaria dizendo "Entregues". Quem nomeia é ele.
+ *
+ * QUEM ENTRA: todos os ATIVOS, com ou sem vaga, mais os INATIVOS que ainda têm vaga parada dentro.
+ * A mesma régua dos cards de etapa, e pelo mesmo motivo: inativar NÃO move ninguém, então existe
+ * vaga viva parada num status fora de circulação, e essa vaga precisa aparecer com o rótulo e a cor
+ * de verdade em vez de sumir da fileira em silêncio. O inativo VAZIO fica de fora, porque não
+ * recebe mais nada e não tem o que mostrar.
+ */
+export function cardsDeStatus(
+  catalogo: readonly VagaStatusItem[],
+  contagem: Record<string, number>,
+): CardDeFunil[] {
+  return statusOrdenados(catalogo)
+    .filter((s) => s.ativo || (contagem[s.codigo] ?? 0) > 0)
+    .map((s) => ({
+      chave: s.codigo,
+      rotulo: s.rotulo,
+      valor: contagem[s.codigo] ?? 0,
+      cor: corDoTom(s.tom),
+      icone: ICONE_DO_PAPEL[s.papel] ?? ("tag" as IconName),
+      inativa: !s.ativo,
+    }));
 }

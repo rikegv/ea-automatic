@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   ACEITES_REGISTRAVEIS,
   ACEITE_BANCO_COM_OFICIAIS_ABERTAS,
+  ACEITE_REABERTURA_SEM_ORIGEM,
   ACEITE_REENTRADA,
   POSICAO_LADOS,
   cabeMaisUm,
@@ -206,9 +207,27 @@ describe("oficiaisAindaAbertas", () => {
  * neles é mexer no banco junto, e não uma renomeação interna.
  */
 describe("ACEITES_REGISTRAVEIS", () => {
-  it("são exatamente estes dois, com estas letras, porque o CHECK do banco tem as mesmas", () => {
+  it("são exatamente estes três, com estas letras, porque o CHECK do banco tem as mesmas", () => {
     expect(ACEITE_BANCO_COM_OFICIAIS_ABERTAS).toBe("BANCO_COM_OFICIAIS_ABERTAS");
     expect(ACEITE_REENTRADA).toBe("REENTRADA");
-    expect([...ACEITES_REGISTRAVEIS]).toEqual(["BANCO_COM_OFICIAIS_ABERTAS", "REENTRADA"]);
+    expect(ACEITE_REABERTURA_SEM_ORIGEM).toBe("REABERTURA_SEM_ORIGEM");
+    expect([...ACEITES_REGISTRAVEIS]).toEqual([
+      "BANCO_COM_OFICIAIS_ABERTAS",
+      "REENTRADA",
+      "REABERTURA_SEM_ORIGEM",
+    ]);
   });
 });
+
+/*
+ * ─ O TERCEIRO VALOR ENTROU NA ONDA B3, E ESTA GUARDA DISPAROU CERTO ────────────────────────────
+ *
+ * `REABERTURA_SEM_ORIGEM` é o aceite do Master que traz alguém de volta num cancelamento ANTERIOR
+ * ao registro de origem, isto é, quando o sistema ADMITE que não sabe onde a pessoa estava. Ali ele
+ * não está desfazendo o próprio gesto, está REESCOLHENDO a pessoa, e por isso a escolha fica
+ * registrada, no mesmo espírito da ciência de reentrada.
+ *
+ * A LISTA FOI ATUALIZADA JUNTO COM O BANCO, que é exatamente o que o bloco acima exige: a migration
+ * `0105_as_aceite_da_reabertura_sem_origem.sql` reconstrói o CHECK com os três valores. Atualizar um
+ * lado só é o defeito que esta guarda existe para pegar, e foi ela que pegou.
+ */

@@ -153,14 +153,13 @@ export function excessoDePosicoes(
 /**
  * O STATUS DORMENTE, LIDO DE VOLTA (item 8 do mapa do time, 07/09).
  *
- * "VAGA_BANCO" saiu da lista de status (`VAGA_STATUS`, no shared-types) e nada mais o escreve: o DTO
- * valida contra aquela lista, então nenhuma vaga nova pode nascer com ele. O valor, porém, CONTINUA
- * no enum do Postgres, porque `ALTER TYPE ... DROP VALUE` não existe.
+ * "VAGA_BANCO" saiu da lista de status oferecida e nada mais o escreve. Desde a onda B2 ele é uma
+ * linha INATIVA do catálogo (`as_vaga_status`, semeada pela migration 0102): existe para a FK ter
+ * destino e para o histórico ter rótulo, e não aparece em seletor nenhum.
  *
  * POR QUE UMA CONVERSÃO EXPLÍCITA, e não um `as VagaStatus` na hora de montar a listagem: o cast
- * calaria o compilador e deixaria o valor cru chegar à tela, onde `VAGA_STATUS_LABEL[status]` daria
- * `undefined` (pill sem texto) e a contagem dos cards faria `undefined + 1`, ou seja, um KPI escrito
- * NaN. O jeito de uma linha esquecida não derrubar a tela é traduzi-la na entrada, uma vez só.
+ * calaria o compilador e deixaria o valor cru chegar à tela, onde a busca do rótulo daria `undefined`
+ * (pill sem texto) e a contagem dos cards faria `undefined + 1`, ou seja, um KPI escrito NaN. O jeito de uma linha esquecida não derrubar a tela é traduzi-la na entrada, uma vez só.
  *
  * TRADUZ PARA "ABERTA" porque era isso que a vaga de banco era: uma vaga VIVA que reservava posições
  * excedentes. O que dizia quantas eram nunca foi o status, e sim o CONTADOR `posicoes_banco`, que
@@ -194,40 +193,27 @@ export function escolaridadeVivaDaVaga(
 }
 
 /**
- * ─ OS DOIS ÚNICOS STATUS QUE A TRILHA DE ABERTURA ESCREVE (achado bloqueante da auditoria) ─────
+ * ─ A TRILHA E O CANCELAMENTO DEIXARAM DE TER LISTA AQUI (onda B2) ──────────────────────────────
  *
- * A VAGA NASCE E É PUBLICADA POR AQUI, E É SÓ ISSO QUE ELA FAZ: `RASCUNHO` (salva pela metade) e
- * `ABERTA` (publicada). O ENCERRAMENTO tem porta própria, `POST :id/fechar`, e é lá que moram as
- * travas que decidem se a vaga pode terminar.
+ * O QUE HAVIA NESTE PONTO, e por que saiu:
+ *   - `VAGA_STATUS_DA_TRILHA` / `ehStatusDaTrilha`: a permissão explícita de dois valores
+ *     (`RASCUNHO`, `ABERTA`) que impedia a trilha de abertura de encerrar vaga (achado bloqueante
+ *     da auditoria de 08/09). HOJE ISSO É O FLAG `daTrilha` do catálogo (`as_vaga_status`), lido
+ *     pela `ReguaDeStatusDaVaga`.
+ *   - `VAGA_STATUS_QUE_CANCELAM` / `ehStatusQueCancela`: a permissão de um valor só (`ABERTA`) que
+ *     impede cancelar vaga já encerrada, torna o duplo clique inofensivo e RECUSA (não só ordena) a
+ *     corrida entre duas requisições. HOJE ISSO É O PAPEL `ABERTURA`.
  *
- * ┌─ POR QUE ESTA LISTA PRECISOU EXISTIR, e o buraco era alcançável de verdade ────────────────┐
- * │ O DTO ACEITAVA A LISTA INTEIRA DE STATUS, e o service gravava o valor cru. Um COMUM com um  │
- * │ RASCUNHO que já tinha candidato pendurado publicava a vaga direto num estado ENCERRADO, e   │
- * │ NADA rodava: nem a trava de todo candidato tratado, nem a das posições oficiais, nem o 403  │
- * │ de quem não pode forçar, nem a trilha que grava quem encerrou e quantas faltavam.           │
- * │                                                                                            │
- * │ SÃO TRÊS FOLHAS NESSA PORTA, E NÃO DUAS. `FECHADA` e `CANCELADA` eram as visíveis, porque   │
- * │ eram as que o seletor da tela oferecia. `ENTREGUE` É A TERCEIRA, e é a PIOR: ela está em    │
- * │ `VAGA_STATUS_ENCERRADOS` junto das outras duas, então a régua do cilindro passa a ler o     │
- * │ NÚMERO CONGELADO em vez da derivada, e por cima disso `ENTREGUE` é o desfecho que AFIRMA    │
- * │ que a vaga entregou gente. Um rascunho publicado assim declarava entrega que não houve, com │
- * │ a tela lendo o carimbo e não a contagem. Por isso a régua aqui é uma PERMISSÃO de dois      │
- * │ valores, e não uma proibição de dois: proibição esquece a terceira folha.                   │
- * │                                                                                            │
- * │ E ERA ISSO QUE INVALIDAVA O DESENHO DA ROTA DE FECHAR. A justificativa para não haver       │
- * │ `@Roles` lá é "a autoridade é o service", e ela só vale enquanto `fechar()` for a ÚNICA     │
- * │ porta para o estado terminal. Com esta lista, ela volta a ser: as ÚNICAS duas linhas que    │
- * │ escrevem `vagas.status` são `camposDaTrilha`, que passa por aqui, e o `fechar`.             │
- * └────────────────────────────────────────────────────────────────────────────────────────────┘
+ * A DIREÇÃO QUE AS DUAS LISTAS PROTEGIAM CONTINUA INTEIRA, e essa é a única coisa que não podia se
+ * perder na migração. Elas eram PERMISSÕES explícitas, nunca proibições, porque "proibição esquece a
+ * terceira folha": quando a régua era o complemento dos terminais, o `ENTREGUE` escapava, e ele é o
+ * pior dos três (além de encerrar, AFIRMA que a vaga entregou gente). O flag `daTrilha` guarda a
+ * mesma direção: ele é FALSO por padrão na coluna e FALSO no nascimento de todo status novo, então
+ * status que alguém acrescentar ao catálogo nasce RECUSADO pela trilha até uma decisão explícita.
+ * O papel guarda a mesma direção por construção: só existe UMA linha de `ABERTURA`, garantida por
+ * índice parcial único, e nenhuma linha nova nasce com papel nenhum.
  *
- * A LISTA É UMA PERMISSÃO EXPLÍCITA, e não o complemento dos terminais, e a direção é deliberada:
- * status novo no vocabulário nasce RECUSADO pela trilha até alguém decidir o contrário, em vez de
- * nascer aceito por omissão. É o mesmo fail-closed de `candidaturaViva`, na direção que protege.
+ * O QUE SE GANHOU, e é o motivo da frente: o código do status deixou de ser escrito à mão. Quem
+ * encerra pergunta ao catálogo pelo PAPEL, então o diretor renomeia "Entregue" para o que quiser e o
+ * `fechar` continua achando a linha certa.
  */
-export const VAGA_STATUS_DA_TRILHA = ["RASCUNHO", "ABERTA"] as const;
-export type VagaStatusDaTrilha = (typeof VAGA_STATUS_DA_TRILHA)[number];
-
-/** A trilha de abertura pode gravar este status? Guarda de borda para corpo montado fora da tela. */
-export function ehStatusDaTrilha(s: string): s is VagaStatusDaTrilha {
-  return (VAGA_STATUS_DA_TRILHA as readonly string[]).includes(s);
-}

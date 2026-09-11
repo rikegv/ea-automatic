@@ -61,25 +61,34 @@
  * §A.29 (toda tabela nasce ordenável, pelo `useOrdenacao` que já existe).
  */
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   CANDIDATURA_SITUACOES,
   CANDIDATURA_SITUACAO_LABEL,
-  VAGA_STATUS_LABEL,
   candidaturaViva,
   finalizaPosicao,
   type AsCandidaturaItem,
+  type AsEtapaFunil,
+  type CandidaturaSituacao,
   type VagaListItem,
 } from "@ea/shared-types";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { Icon, type IconName } from "@/components/ui/Icon";
 import { StatusPill } from "@/components/ui/StatusPill";
+import { MultiSelect, type MultiOption } from "@/components/ui/MultiSelect";
 import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
 import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
 import { dataBr, dataHoraBr, mensagemDoErro, painelDaVaga } from "@/lib/as-candidatos";
 import { tomDaSituacao, tomDoStatusVaga } from "@/lib/as-candidatos-visual";
-import { ordemDaEtapa, rotuloDaEtapa, tomDaEtapa, useEtapas } from "@/lib/as-etapas";
+import {
+  etapasOrdenadas,
+  ordemDaEtapa,
+  rotuloDaEtapa,
+  tomDaEtapa,
+  useEtapas,
+} from "@/lib/as-etapas";
+import { podeMoverStatusDaVaga, rotuloDoStatusVaga, useStatusVaga } from "@/lib/as-status-vaga";
 import { trilhaDaVaga } from "@/lib/as-vaga-trilha";
 import { fraseDoFechamentoForcado } from "@/lib/as-vaga-fechamento";
 import { fraseDaReducaoDeMeta } from "@/lib/as-vaga-meta";
@@ -97,8 +106,18 @@ import { NovoCandidatoModal } from "@/components/as/candidatos/NovoCandidatoModa
 import { MoverCandidaturaModal } from "@/components/as/candidatos/MoverCandidaturaModal";
 import { FichaCandidatoModal } from "@/components/as/candidatos/FichaCandidatoModal";
 import { FinalizarPosicaoModal } from "@/components/as/vagas/FinalizarPosicaoModal";
+import { MoverStatusVagaModal } from "@/components/as/vagas/MoverStatusVagaModal";
 import { AcoesEmMassaDaVaga } from "@/components/as/vagas/AcoesEmMassaDaVaga";
 import { AdicionarCandidatosEmLoteModal } from "@/components/as/vagas/AdicionarCandidatosEmLoteModal";
+import {
+  aplicarRecorte,
+  criteriosAtivos,
+  recorteAtivo,
+  selecaoNoRecorte,
+  ETAPA_FORA_DO_FUNIL,
+  RECORTE_VAZIO,
+  type RecorteDoPainel,
+} from "@/lib/as-painel-recorte";
 import { cn } from "@/lib/cn";
 
 type Aba = "vaga" | "candidatos" | "alocados";
@@ -140,16 +159,86 @@ const ABA_ATIVA =
 const ABA_INATIVA =
   "border-[var(--border)] bg-[var(--surface-2)] text-dim shadow-[var(--glass-shadow)] hover:border-[var(--border-strong)] hover:text-text";
 
+/*
+ * ─ AS AÇÕES DA VAGA, NA MESMA BARRA DAS ABAS (peça 3 da onda B3, pedido do diretor) ────────────
+ *
+ * O QUE ELAS RESOLVEM: a coluna Ações da Central de Vagas carregava CINCO gestos por linha, e a
+ * tabela pagava a conta em rolagem horizontal. Os gestos vieram para cá, onde sobra largura e onde
+ * a pessoa já está quando pensa "o que eu faço com esta vaga". Na linha ficou só o botão que ABRE
+ * este painel.
+ *
+ * MESMO FORMATO DAS ABAS, de propósito (pedido literal): a mesma altura, o mesmo raio, a mesma
+ * tipografia e o mesmo par ícone + rótulo. Um segundo formato na mesma barra faria a linha parecer
+ * duas barras empilhadas.
+ *
+ * E A DIFERENÇA ENTRE AS DUAS NATUREZAS PRECISA SER LEGÍVEL, porque elas fazem coisas diferentes: a
+ * aba TROCA o que a caixa mostra e permanece marcada; a ação ABRE outra caixa e não fica marcada
+ * nunca. Três sinais dizem isso sem nenhum rótulo explicativo:
+ *
+ *  1. UMA DIVISÓRIA de um pixel separa os dois grupos, a mesma hairline `--border` do §A.12.
+ *  2. AS ABAS SÃO SÓLIDAS (superfície preenchida, com sombra de vidro; a ativa com o gradiente do
+ *     botão primário) e AS AÇÕES SÃO VAZADAS (fundo transparente, só o contorno). Cheio é estado,
+ *     contorno é comando, e a aba ativa continua sendo a única peça colorida da barra.
+ *  3. O TEXTO SEGUE O §A.24 e reforça a leitura sem custo nenhum: aba é rótulo, então title case
+ *     ("Ver Candidatos"); ação é comando, então escrita normal ("Fechar vaga").
+ *
+ * NENHUMA COR ESCRITA À MÃO, pelo mesmo motivo das abas: `--border`, `--border-strong`,
+ * `--surface-2` e o `text-danger` do design system saem certos nos dois temas.
+ */
+const ACAO_BASE =
+  "border-[var(--border)] bg-transparent text-dim hover:border-[var(--border-strong)] hover:bg-[var(--surface-2)] hover:text-text";
+/** O gesto DESTRUTIVO da barra, no mesmo vermelho que ele já tinha como ícone na tabela. */
+const ACAO_PERIGO =
+  "border-[var(--border)] bg-transparent text-dim hover:border-[var(--border-strong)] hover:bg-[var(--surface-2)] hover:text-danger";
+
+/**
+ * UMA AÇÃO DA VAGA OFERECIDA NA BARRA.
+ *
+ * QUEM DECIDE QUAIS EXISTEM É A CENTRAL DE VAGAS, e não este componente: as réguas de "esta ação
+ * cabe nesta vaga?" e os modais que cada uma abre já moram lá, validados, e trazê-los para cá seria
+ * mover código validado de lugar sem acrescentar nada (§A.26). O painel recebe a lista pronta e só
+ * decide ONDE ela aparece.
+ *
+ * É POR ISSO QUE A BARRA NÃO TEM NÚMERO DE LUGARES. Ela desenha o que vier: hoje são quatro na vaga
+ * ABERTA e duas no RASCUNHO, e o "Reabrir vaga" da vaga CANCELADA entra como mais um item da lista,
+ * sem tocar em uma linha deste arquivo.
+ */
+export type AcaoDaVaga = {
+  /** Chave de render, e nada mais. */
+  id: string;
+  /** O comando, em escrita normal (§A.24). */
+  rotulo: string;
+  icone: IconName;
+  /** A frase inteira, para o mouse e para o leitor de tela. */
+  descricao: string;
+  /** `true` só no gesto destrutivo (cancelar a vaga). */
+  perigo?: boolean;
+  onClick: () => void;
+};
+
 export function VagaPainelModal({
   vaga,
   token,
   onClose,
   onMudou,
+  abaInicial = "vaga",
+  acoes = [],
+  acaoAberta = false,
   children,
 }: {
   vaga: VagaListItem;
   token: string | null;
   onClose: () => void;
+  /**
+   * EM QUE ABA O PAINEL ABRE. O padrão continua sendo "vaga", ou seja, quem abre pelo botão de
+   * gestão não vê diferença nenhuma: este parâmetro existe para QUEM CHEGA AQUI COM UMA PERGUNTA
+   * JÁ FEITA. A recusa do cancelamento lista quem ainda está em processo e precisa LEVAR o consultor
+   * até essa lista; despejá-lo na ficha da vaga, com a aba certa a um clique de distância, é o
+   * mesmo beco que a recusa existia para evitar.
+   *
+   * É SÓ O ESTADO INICIAL, e não uma aba travada: a troca continua sendo do consultor.
+   */
+  abaInicial?: Aba;
   /**
    * AVISA A CENTRAL DE VAGAS DE QUE A VAGA MUDOU, e não é enfeite: o cilindro de posições, a trilha
    * e os cards da tela lem `ocupacao`, que é DERIVADA das candidaturas. Entregar uma posição aqui
@@ -157,10 +246,46 @@ export function VagaPainelModal({
    * da tabela atrás dele, na mesma tela e ao mesmo tempo.
    */
   onMudou: () => void;
+  /**
+   * AS AÇÕES DA VAGA, JÁ FILTRADAS PELO STATUS, na ordem em que a barra as mostra. Lista vazia é um
+   * caso legítimo, e não um esquecimento: a vaga encerrada de hoje não oferece nenhuma, e a barra
+   * volta a ser só as três abas.
+   */
+  acoes?: AcaoDaVaga[];
+  /**
+   * ─ "TEM UM MODAL DA CENTRAL DE VAGAS ABERTO POR CIMA DE MIM" ──────────────────────────────────
+   *
+   * O PAINEL PRECISA SABER DISSO POR CAUSA DA TECLA ESCAPE. O `ui/Modal` registra um `keydown` no
+   * `document` POR INSTÂNCIA, então, com duas caixas abertas, um Escape dispara os DOIS `onClose`:
+   * a pessoa fecharia o formulário de cancelamento e, junto, o painel inteiro que o abriu, perdendo
+   * o contexto que ela levou três cliques para montar.
+   *
+   * §A.41 MANDA MANTER O ESCAPE (é a saída de teclado, e é gesto deliberado), então a correção não é
+   * tirar a tecla: é o Escape fechar SÓ A CAIXA DE CIMA. O painel já sabe dos modais que ele mesmo
+   * abre (alocar, cadastrar, mover, ficha); os que a Central de Vagas abre são estado DELA, e é por
+   * isso que ela avisa por esta porta.
+   *
+   * O BOTÃO "Fechar" DO RODAPÉ NÃO É AFETADO: ele chama `onClose` direto. Com um modal por cima ele
+   * está atrás do overlay e nem alcançável é.
+   */
+  acaoAberta?: boolean;
   /** A ficha completa da vaga, escrita na Central de Vagas. Vira o conteúdo da aba "A Vaga". */
   children: ReactNode;
 }) {
-  const [aba, setAba] = useState<Aba>("vaga");
+  const [aba, setAba] = useState<Aba>(abaInicial);
+  /*
+   * O CATÁLOGO DE STATUS DA VAGA (onda B2), memoizado por carga de página e compartilhado com a
+   * Central de Vagas atrás deste painel. Ele responde três coisas aqui: o RÓTULO e a COR da pill do
+   * cabeçalho, se a vaga ainda RECEBE candidato novo, e se o status dela pode ser MOVIDO à mão.
+   */
+  const { status: catalogoStatus } = useStatusVaga(token);
+  /**
+   * O CATÁLOGO DE ETAPAS, para as OPÇÕES do filtro (§A.37: catálogo de ENDPOINT, nunca das linhas
+   * carregadas, senão escolher uma etapa encolheria a lista de opções e não daria para somar a
+   * segunda sem limpar o filtro). O hook é memoizado por carga de página e já é usado pela tabela
+   * logo abaixo, então isto não acrescenta nenhuma requisição.
+   */
+  const { etapas: catalogoEtapas } = useEtapas();
   const [candidaturas, setCandidaturas] = useState<AsCandidaturaItem[] | null>(null);
   const [carregando, setCarregando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
@@ -176,6 +301,12 @@ export function VagaPainelModal({
   const [adicionarLoteAberto, setAdicionarLoteAberto] = useState(false);
   const [fichaId, setFichaId] = useState<string | null>(null);
   const [moverAlvo, setMoverAlvo] = useState<AsCandidaturaItem | null>(null);
+  /**
+   * O MOVIMENTO DE STATUS DA VAGA (onda B2). É estado próprio, e não um `moverAlvo` reaproveitado:
+   * um move a PESSOA de etapa, o outro move a VAGA de status, e são duas caixas diferentes com dois
+   * alvos diferentes. Um estado só obrigaria cada leitura a conferir de que tipo é o alvo.
+   */
+  const [moverStatusAberto, setMoverStatusAberto] = useState(false);
   const [finalizarAlvo, setFinalizarAlvo] = useState<AsCandidaturaItem | null>(null);
 
   /**
@@ -192,8 +323,87 @@ export function VagaPainelModal({
    */
   const [selecionados, setSelecionados] = useState<string[]>([]);
 
+  /**
+   * ─ O RECORTE DA ABA: busca por nome, situação e etapa (gestão completa, pedido do diretor) ──
+   *
+   * UM RECORTE SÓ, E ELE MORRE NA TROCA DE ABA, exatamente como a seleção: as duas abas mostram
+   * conjuntos diferentes das mesmas pessoas, e um filtro herdado da outra aba seria um recorte que
+   * ninguém escolheu ali, escondendo linha sem dizer por quê.
+   *
+   * ELE É CLIENTE, sobre a lista que o painel já carregou inteira: a maior vaga da homologação tem
+   * 51 candidaturas. Isso resolve o §A.6 por construção (nenhum parâmetro novo de URL, nenhum
+   * endpoint novo, nenhum CPF em lugar nenhum) e não toca uma linha de backend.
+   */
+  const [recorte, setRecorte] = useState<RecorteDoPainel>(RECORTE_VAZIO);
+
   const trilha = trilhaDaVaga(vaga);
   const precisaDaLista = aba === "candidatos" || aba === "alocados";
+
+  /**
+   * ─ A ABA PEDIDA DE FORA CHEGA COM O PAINEL JÁ ABERTO, e antes disso ela nunca chegava ──────────
+   *
+   * `abaInicial` nasceu como estado INICIAL porque o único jeito de pedir uma aba era abrindo o
+   * painel: a recusa do cancelamento fechava o formulário e abria a caixa já na lista de candidatos,
+   * e o componente montava naquele instante. COM O CANCELAMENTO DENTRO DO PAINEL, isso mudou: o
+   * painel já está montado quando a recusa pede a aba, e um valor inicial não move mais nada. O
+   * pedido chegaria e a pessoa continuaria olhando a ficha, que é exatamente o beco que a recusa
+   * existe para evitar.
+   *
+   * O EFEITO SÓ REAGE À MUDANÇA DA PROP, então a aba continua sendo do consultor: trocar de aba aqui
+   * dentro não é desfeito por nada, porque `abaInicial` não mudou. Quem muda é a Central de Vagas,
+   * e só quando ela tem uma pergunta a fazer.
+   */
+  useEffect(() => {
+    setAba(abaInicial);
+  }, [abaInicial]);
+
+  /**
+   * TEM ALGUMA CAIXA POR CIMA DESTA? As do próprio painel ele conhece por estado; as da Central de
+   * Vagas chegam por `acaoAberta`. É esta resposta que decide se o Escape fecha o painel ou só o que
+   * está na frente dele (ver o comentário de `acaoAberta`).
+   */
+  const temModalPorCima =
+    acaoAberta ||
+    alocarAberto ||
+    cadastrarAberto ||
+    adicionarLoteAberto ||
+    moverStatusAberto ||
+    fichaId !== null ||
+    moverAlvo !== null ||
+    finalizarAlvo !== null;
+
+  /**
+   * ─ "HAVIA UM POPOVER DE SELETOR ABERTO QUANDO O ESCAPE DESCEU?" ─────────────────────────────
+   *
+   * Os dois `MultiSelect` da barra do recorte fecham o próprio menu no Escape, e o listener deles
+   * mora no `document`, igual ao do `ui/Modal`. Sem esta guarda, um Escape para fechar a lista de
+   * opções leva o painel inteiro junto, e quem estava filtrando perde o contexto por um gesto que
+   * pedia só para fechar um menu. MEDIDO NA 3120, e foi assim que o defeito apareceu.
+   *
+   * ┌─ POR QUE UM REF NA CAPTURA, E NÃO UMA PERGUNTA AO DOCUMENTO NA HORA DE FECHAR ────────────┐
+   * │ A PRIMEIRA VERSÃO PERGUNTAVA AO DOM dentro do `onClose` (`querySelector('[role=listbox]')`)│
+   * │ e NÃO FUNCIONOU, medido: quando aquela linha rodava, o popover JÁ TINHA SIDO REMOVIDO.     │
+   * │ O motivo é do HTML, não do React: entre dois listeners do MESMO evento a pilha de execução  │
+   * │ esvazia, e o checkpoint de microtarefas roda ali, então a atualização que o `MultiSelect`   │
+   * │ agendou é aplicada ANTES do listener seguinte. Perguntar depois é sempre tarde.            │
+   * │                                                                                            │
+   * │ NA CAPTURA NÃO HÁ ESSA CORRIDA: o `document` é o PRIMEIRO nó do caminho na descida, antes   │
+   * │ do alvo e antes de qualquer listener de bolha. Ali o popover ainda está inteiro no          │
+   * │ documento, e o que se guarda é a resposta daquele instante.                                │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * O `MultiSelect` É COMPARTILHADO POR 8 TELAS e não foi tocado (§A.26): a guarda inteira vive
+   * aqui dentro, e nenhuma outra tela muda de comportamento por causa dela.
+   */
+  const popoverAbertoNoEscape = useRef(false);
+  useEffect(() => {
+    function aoDescer(e: KeyboardEvent) {
+      if (e.key !== "Escape") return;
+      popoverAbertoNoEscape.current = Boolean(document.querySelector('[role="listbox"]'));
+    }
+    document.addEventListener("keydown", aoDescer, true);
+    return () => document.removeEventListener("keydown", aoDescer, true);
+  }, []);
 
   const carregar = useCallback(async () => {
     setCarregando(true);
@@ -239,12 +449,62 @@ export function VagaPainelModal({
 
   const lista = candidaturas ?? [];
   const alocados = lista.filter((c) => finalizaPosicao(c.situacao));
+
   /**
-   * AS LINHAS MARCADAS, RESOLVIDAS NA LISTA ATUAL. Sai da `lista` inteira (e não do recorte da aba)
-   * porque é ela que tem todo mundo; a seleção já é limpa na troca de aba, então o que está aqui é
-   * sempre o que está à vista.
+   * ─ A LISTA DA ABA, ANTES DO RECORTE ────────────────────────────────────────────────────────
+   * A aba de alocados JÁ É um recorte (só quem entregou posição), e o filtro opera DENTRO dele,
+   * nunca por cima: escolher uma situação ali não pode trazer de volta quem a aba exclui.
    */
-  const selecionadas = lista.filter((c) => selecionados.includes(c.id));
+  const baseDaAba = aba === "alocados" ? alocados : lista;
+  /** O QUE A TABELA DESENHA: a base da aba depois da busca e dos dois filtros. */
+  const visiveis = aplicarRecorte(baseDaAba, recorte);
+
+  /**
+   * ─ AS LINHAS MARCADAS, RESOLVIDAS NO QUE ESTÁ À VISTA (e não mais na lista inteira) ─────────
+   *
+   * ESTA LINHA É A REGRA CENTRAL DA FRENTE, e ela mudou de `lista` para `visiveis` de propósito.
+   * Antes dos filtros as duas eram a mesma coisa, porque a seleção morria na troca de aba e não
+   * havia outro jeito de esconder linha. Com busca e filtro passa a haver, e aí a diferença é o
+   * bug: marcar 8, filtrar para 2 e agir mandaria os 8 para o servidor, SEIS DELES INVISÍVEIS.
+   *
+   * É `selecaoNoRecorte` quem responde, com teste, e ela é usada nos DOIS sentidos: aqui para
+   * DERIVAR o que vai para a ação em massa (nem um estado atrasado consegue mandar id invisível),
+   * e no efeito logo abaixo para PODAR o estado (o contador não guarda fantasma). Uma sozinha não
+   * fecha: a derivação deixaria a marca escondida voltar ao limpar o filtro, e a poda depende de um
+   * efeito rodar na hora certa.
+   */
+  /**
+   * AS OPÇÕES DE ETAPA: só as ATIVAS do catálogo, na ordem do funil, mais as INATIVAS que ainda
+   * aparecem nas linhas desta aba.
+   *
+   * A SEGUNDA METADE NÃO É ZELO: etapa inativada some do catálogo ativo e continua escrita nas
+   * candidaturas antigas, que seguem sendo desenhadas na tabela com o rótulo dela. Sem elas, a
+   * coluna mostraria uma pill que o filtro não sabe procurar, e quem visse "Entrevista Cliente" na
+   * tela não a acharia na lista de opções.
+   */
+  const etapasDoFiltro = etapasOrdenadas(catalogoEtapas).filter(
+    (e) => e.ativa || baseDaAba.some((c) => candidaturaViva(c.situacao) && c.etapa === e.codigo),
+  );
+
+  const idsNoRecorte = selecaoNoRecorte(selecionados, visiveis);
+  const selecionadas = visiveis.filter((c) => idsNoRecorte.includes(c.id));
+
+  /**
+   * ─ A PODA DO ESTADO, NO ÚNICO MOMENTO EM QUE UMA LINHA PODE SAIR DA VISTA ───────────────────
+   *
+   * TODA MUDANÇA DE RECORTE PASSA POR AQUI, e é de propósito que não existe um efeito observando a
+   * lista: o efeito precisaria de uma chave derivada dos ids para não rodar a cada render, e uma
+   * poda que depende da ordem em que um efeito acorda é exatamente o tipo de garantia que falha
+   * calada. Aqui a poda acontece NO MESMO gesto que escondeu a linha, com o recorte novo na mão.
+   *
+   * SEM ELA, filtrar esconderia a marca sem desmarcá-la, e limpar o filtro faria o contador da
+   * barra saltar sozinho, com gente que ninguém marcou naquele recorte.
+   */
+  function mudarRecorte(proximo: RecorteDoPainel) {
+    setRecorte(proximo);
+    const aindaVisiveis = aplicarRecorte(baseDaAba, proximo);
+    setSelecionados((atuais) => selecaoNoRecorte(atuais, aindaVisiveis));
+  }
 
   function alternarSelecao(id: string) {
     setSelecionados((atual) =>
@@ -267,8 +527,14 @@ export function VagaPainelModal({
     );
   }
   const titulo = vaga.nomeDivulgacao ?? "Vaga Sem Nome De Divulgação";
-  /** A vaga encerrada não recebe candidato novo (trava 2 do backend), então nem oferece o botão. */
-  const recebeCandidato = vagaRecebeCandidato(vaga.status);
+  /**
+   * A VAGA QUE NÃO RECEBE CANDIDATO NOVO NEM OFERECE O BOTÃO (trava 2 do backend).
+   *
+   * A PERGUNTA PASSOU A SER O FLAG `recebeCandidato` DO CATÁLOGO (onda B2), e não mais a negação de
+   * "encerrada": os dois valiam o mesmo nos cinco status fixos e DESCOLAM no primeiro status que o
+   * diretor criar. Uma vaga pausada não capta gente nova e continua viva.
+   */
+  const recebeCandidato = vagaRecebeCandidato(vaga.status, catalogoStatus);
 
   return (
     /* ─ §A.20, A LARGURA DO PAINEL, MEDIDA E NÃO ESTIMADA (ajuste 2 de 10/09) ─────────────────
@@ -284,11 +550,44 @@ export function VagaPainelModal({
        1062px de área útil contra os 1008px que o conteúdo pede, e a lista volta a repartir a sobra
        entre as colunas em vez de ficar toda no piso.
 
-       EM TELA MENOR NADA QUEBRA: o painel é `w-full` com teto, então abaixo de 1152px de janela (o
-       teto mais os 16px de respiro do overlay de cada lado) ele encolhe junto com a tela e a lista
-       volta a rolar na horizontal, que é o comportamento que o §A.12 manda ("rola em vez de
-       espremer"). Modal largo demais para a janela nunca acontece. */
-    <Modal onClose={onClose} className="max-w-[1120px] p-0" ariaLabel="Painel da vaga">
+       EM TELA MENOR NADA QUEBRA: o painel é `w-full` com teto, então abaixo do teto mais os 16px de
+       respiro do overlay de cada lado ele encolhe junto com a tela e a lista volta a rolar na
+       horizontal, que é o comportamento que o §A.12 manda ("rola em vez de espremer"). Modal largo
+       demais para a janela nunca acontece.
+
+       ─ §A.20, O TETO SUBIU DE 1120px PARA 1280px (peça 3 da onda B3), E FOI A BARRA QUE PEDIU ───
+       As quatro ações da vaga vieram para a linha das abas, e a linha passou a pedir mais do que o
+       painel tinha. MEDIDO NO BROWSER, na vaga ABERTA (a que oferece as quatro), a 1600px: os oito
+       filhos da barra somam 1056,6px, mais 56px dos sete intervalos e 8px das margens da divisória,
+       dá 1120,6px de conteúdo. Com o teto antigo sobravam 1072px úteis (1120 menos os 48px de
+       `px-6`), e o "Clonar vaga" caía sozinho numa segunda linha: um botão órfão embaixo de sete.
+
+       O NÚMERO NÃO É 1169px, QUE SERIA O QUE FECHA A CONTA DE HOJE, e a folga tem dois donos
+       concretos. O primeiro são as CONTAGENS das abas, que só nascem depois de a lista chegar e
+       engordam duas das três (a barra que cabe com o painel recém-aberto voltaria a quebrar três
+       segundos depois, que é o pior jeito de não caber). O segundo é o "Reabrir vaga" da peça 2: ele
+       aparece na vaga CANCELADA, onde fechar, cancelar e editar posições não aparecem, então não é
+       ele o caso mais largo, mas contar com zero folga é escolher refazer a medição na frente
+       seguinte. Com 1280px sobram 1232px úteis contra os 1120,6px pedidos, e a barra fecha em UMA
+       linha com folga real.
+
+       A LISTA DE DENTRO SÓ TEM A GANHAR: ela pedia 1008px e recebia 1062px; agora recebe 1222px, e
+       volta a repartir a sobra entre as colunas em vez de ficar no piso. O teto mais alto não
+       aperta nada, ele só deixa de apertar. */
+    /* O `onClose` DAQUI É SÓ A TECLA ESCAPE (o clique fora não fecha, §A.41), e por isso ele é o
+       lugar certo da guarda: com uma caixa por cima, o Escape é dela, e o painel fica onde está. O
+       "Fechar" do rodapé continua chamando `onClose` direto, sem guarda nenhuma. */
+    <Modal
+      onClose={() => {
+        if (temModalPorCima) return;
+        /* O ESCAPE QUE PERTENCE AO POPOVER DO FILTRO, E NÃO AO PAINEL. A resposta foi colhida na
+           CAPTURA, antes de o popover ter chance de sumir: ver `popoverAbertoNoEscape`, acima. */
+        if (popoverAbertoNoEscape.current) return;
+        onClose();
+      }}
+      className="max-w-[1280px] p-0"
+      ariaLabel="Painel da vaga"
+    >
       <div className="flex max-h-[88vh] flex-col">
         {/* ── TOPO FIXO: quem é a vaga e em que pé ela está ───────────────── */}
         <div className="flex-none border-b border-[var(--border)] px-6 pb-4 pt-6">
@@ -296,9 +595,42 @@ export function VagaPainelModal({
           <div className="flex flex-wrap items-center gap-3">
             <h2 className="text-lg font-semibold text-text">{titulo}</h2>
             <StatusPill
-              tone={tomDoStatusVaga(vaga.status)}
-              label={VAGA_STATUS_LABEL[vaga.status]}
+              tone={tomDoStatusVaga(vaga.status, catalogoStatus)}
+              label={rotuloDoStatusVaga(vaga.status, catalogoStatus)}
             />
+            {/* ─ MOVER O STATUS À MÃO (onda B2): O GESTO FICA COLADO NA PILL ──────────────────
+                ELE MORA AQUI, E NÃO NA COLUNA AÇÕES DA TABELA, e a razão é medida: aquela coluna já
+                carrega cinco gestos e a tabela já estoura a largura útil (§A.20). Um sexto botão
+                pioraria o aperto de toda a Central de Vagas para servir a um gesto que é do PAINEL
+                de UMA vaga. Ao lado da pill, ele fica exatamente onde a pessoa está olhando quando
+                pensa "esta vaga precisa mudar de estado", e o estado atual está ali do lado.
+
+                NOTA DE 11/09 (peça 3 da onda B3): o PARÊNTESE acima envelheceu, a DECISÃO não. A
+                coluna Ações não carrega mais cinco gestos, porque eles vieram para a barra das abas
+                logo abaixo, então o argumento do aperto deixou de valer. Este botão continua AQUI,
+                colado na pill, e isso é escolha e não esquecimento: o pedido do diretor foi mover os
+                gestos DA LINHA DA TABELA, e este nunca esteve lá. Levá-lo para a barra por conta
+                própria seria mexer em código validado que ninguém pediu (§A.14/§A.31); a proposta
+                foi registrada no relatório da peça, para o diretor decidir.
+
+                ELE SÓ APARECE ONDE TEM O QUE FAZER (`podeMoverStatusDaVaga`): a vaga ENCERRADA não
+                sai por aqui (reabrir é desfazer um encerramento, com régua própria) e o RASCUNHO
+                também não (ele publica pela trilha de abertura, que confere os obrigatórios; o
+                backend recusa este caminho com todas as letras). Botão que só sabe dar 409 é ruído,
+                e o consultor aprende a ignorar a tela.
+
+                §A.24: é AÇÃO, então escrita normal. */}
+            {podeMoverStatusDaVaga(vaga.status, catalogoStatus) && (
+              <button
+                type="button"
+                onClick={() => setMoverStatusAberto(true)}
+                title="Mover esta vaga para outro status do catálogo. Não encerra a vaga: fechar e cancelar continuam sendo as únicas portas para isso."
+                className="inline-flex items-center gap-1.5 rounded-full border border-[var(--border-strong)] px-2.5 py-[3px] text-[11.5px] font-semibold text-dim transition hover:bg-[var(--surface-2)] hover:text-text"
+              >
+                <Icon name="arr" className="h-[11px] w-[11px]" />
+                Mover status
+              </button>
+            )}
           </div>
           {/* A LINHA DE IDENTIFICAÇÃO É A MESMA DE ANTES, palavra por palavra (§A.14): ela é o único
               lugar da tela em que a data de abertura e quem abriu aparecem, e reescrevê-la para
@@ -381,14 +713,24 @@ export function VagaPainelModal({
             </p>
           )}
 
-          {/* ── AS ABAS ──────────────────────────────────────────────────────
+          {/* ── AS ABAS E AS AÇÕES, NA MESMA BARRA ───────────────────────────
               CENTRALIZADAS e PREENCHIDAS (decisão do diretor): elas são o caminho para tudo o que
               este modal oferece, então parecem botão de trabalho. O desenho e o porquê estão em
               `ABA_BASE`/`ABA_ATIVA`/`ABA_INATIVA`, no topo do arquivo, com os tokens dos dois temas.
               A contagem só aparece depois de a lista chegar, porque antes disso ela seria um número
-              inventado. */}
-          <div className="mt-4 flex flex-wrap justify-center gap-2">
+              inventado.
+
+              AS AÇÕES DA VAGA ENTRAM À DIREITA, no mesmo formato e separadas por uma divisória (o
+              porquê de cada sinal está em `ACAO_BASE`, no topo). Elas vêm prontas da Central de
+              Vagas: esta barra desenha o que receber, e é por isso que ela não tem número de
+              lugares. */}
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
             {ABAS.map((a) => {
+              /* A CONTAGEM DA ABA É A DA LISTA INTEIRA, e continua sendo mesmo com filtro ligado:
+                 ela responde "quanta gente esta vaga tem", que não muda porque alguém digitou algo
+                 na busca. Quantos estão À VISTA é dito na barra do recorte, logo abaixo, onde a
+                 pergunta é outra. Trocar este número pelo do recorte faria a aba mentir sobre o
+                 tamanho da vaga. */
               const conta =
                 candidaturas === null
                   ? null
@@ -407,6 +749,9 @@ export function VagaPainelModal({
                     // Trocar de aba troca o recorte à vista, e seleção que sobrevive ao recorte é
                     // seleção invisível. Ver o comentário de `selecionados`.
                     setSelecionados([]);
+                    // E O FILTRO VAI JUNTO: cada aba tem o SEU recorte. Um filtro herdado esconderia
+                    // linha na aba nova sem que ninguém o tivesse escolhido ali.
+                    setRecorte(RECORTE_VAZIO);
                   }}
                   aria-pressed={aba === a.id}
                 >
@@ -429,6 +774,31 @@ export function VagaPainelModal({
                 </button>
               );
             })}
+
+            {/* A DIVISÓRIA, e ela só existe quando há os dois lados: numa vaga sem ação nenhuma
+                (a encerrada de hoje), um risco solto no fim da barra separaria coisa de nada. É a
+                mesma hairline `--border` das colunas de tabela (§A.12), e é decorativa, então sai
+                da árvore de acessibilidade. */}
+            {acoes.length > 0 && (
+              <span
+                aria-hidden="true"
+                className="mx-1 h-9 w-px flex-none self-center bg-[var(--border)]"
+              />
+            )}
+
+            {acoes.map((a) => (
+              <button
+                key={a.id}
+                type="button"
+                title={a.descricao}
+                aria-label={a.descricao}
+                onClick={a.onClick}
+                className={cn(ABA_BASE, a.perigo ? ACAO_PERIGO : ACAO_BASE)}
+              >
+                <Icon name={a.icone} className="h-3.5 w-3.5 flex-none" />
+                {a.rotulo}
+              </button>
+            ))}
           </div>
         </div>
 
@@ -464,7 +834,10 @@ export function VagaPainelModal({
                   <p className="text-[12.5px] text-dim">
                     {recebeCandidato
                       ? "Traga alguém para esta vaga procurando na base ou cadastrando na hora."
-                      : `Esta vaga está ${VAGA_STATUS_LABEL[vaga.status]} e não recebe candidato novo. A lista abaixo continua consultável.`}
+                      : /* O RÓTULO É O DO CATÁLOGO (onda B2): a frase diz o nome que o diretor
+                           escreveu, e não um rótulo fixo que ficaria desatualizado na primeira
+                           renomeação. Status desconhecido cai no código cru, nunca em vazio. */
+                        `Esta vaga está em ${rotuloDoStatusVaga(vaga.status, catalogoStatus)} e não recebe candidato novo. A lista abaixo continua consultável.`}
                   </p>
                   {recebeCandidato && (
                     <div className="flex flex-wrap items-center gap-2">
@@ -528,24 +901,85 @@ export function VagaPainelModal({
                 onFeito={aposAcao}
               />
 
+              {/* ─ A BARRA DO RECORTE: buscar, filtrar, e então agir sobre o que apareceu ────
+                  Ela fica ACIMA da barra de seleção e da tabela porque é a ordem do gesto que o
+                  diretor descreveu: "buscar/filtrar, selecionar os que aparecem, agir em massa".
+                  Abaixo da tabela ela chegaria depois da decisão.
+
+                  ELA APARECE NAS DUAS ABAS, e só some enquanto não há lista carregada: filtro sobre
+                  o nada é um controle que não faz nada.
+
+                  NENHUM COMPONENTE NOVO DE FILTRO NASCEU AQUI: os dois são o `MultiSelect` do design
+                  system, o mesmo de outras 8 telas, que já traz busca interna e chips (§A.28/§A.35).
+                  A busca por nome é o `input type="search"` com `ds-input`, o mesmo padrão da
+                  Central de Vagas. */}
+              {!carregando && !erro && candidaturas !== null && (
+                <BarraDoRecorte
+                  recorte={recorte}
+                  onMudar={mudarRecorte}
+                  /* AS OPÇÕES DE SITUAÇÃO SAEM DO VOCABULÁRIO, e na aba de alocados são recortadas
+                     pela MESMA régua que define a aba (`finalizaPosicao`). Oferecer "Descartado" num
+                     recorte onde ele nunca aparece seria uma opção que só sabe devolver lista vazia.
+                     Nenhuma lista nova de situação é escrita: é `CANDIDATURA_SITUACOES` filtrada
+                     pela régua que já existe. */
+                  situacoes={
+                    aba === "alocados"
+                      ? CANDIDATURA_SITUACOES.filter(finalizaPosicao)
+                      : CANDIDATURA_SITUACOES
+                  }
+                  etapas={etapasDoFiltro}
+                  /* O VALOR ESPECIAL DA COLUNA (§A.37) SÓ É OFERECIDO ONDE ELE PODE ACONTECER: na
+                     aba de alocados toda linha está viva (quem entrega posição não é saída sem
+                     êxito), então "Fora Do Funil" ali seria opção morta. A pergunta é feita ao
+                     vocabulário, e não a uma lista escrita à mão. */
+                  incluirForaDoFunil={
+                    aba === "alocados"
+                      ? CANDIDATURA_SITUACOES.filter(finalizaPosicao).some((x) => !candidaturaViva(x))
+                      : true
+                  }
+                  quantosAVista={visiveis.length}
+                  totalDaAba={baseDaAba.length}
+                />
+              )}
+
               {!carregando && !erro && candidaturas !== null && (
                 <TabelaCandidaturas
-                  itens={aba === "candidatos" ? lista : alocados}
+                  /* O QUE A TABELA DESENHA É O RECORTE, e é daqui que sai o "selecionar todos": ela
+                     recebe só o que está à vista, então o gesto de marcar tudo nunca alcança linha
+                     escondida por busca ou filtro. */
+                  itens={visiveis}
                   /* A COLUNA DE POSIÇÃO SÓ EXISTE NA ABA DE ALOCADOS (grupo 2), e é o recorte que
                      lhe dá sentido: lá, todo mundo ocupa uma posição, e a pergunta "oficial ou
                      banco?" é a que a aba existe para responder. Na lista completa, a esmagadora
                      maioria das linhas está no funil sem ocupar posição nenhuma, e a coluna seria
                      uma fileira de "não informado" tomando largura de quem tem texto. */
                   mostrarPosicao={aba === "alocados"}
+                  /* A FRASE DE APOIO SEGUE FALANDO DA ABA INTEIRA, e não do recorte: ela é o
+                     retrato da vaga ("51 candidaturas, sendo 51 ainda no processo"), e trocá-la
+                     pelo número filtrado faria a mesma frase dizer coisas diferentes conforme o
+                     que estivesse digitado na busca. Quantos estão à vista é dito na barra acima. */
                   apoio={
                     aba === "candidatos"
                       ? frasePainel(lista)
                       : "Quem preencheu uma posição desta vaga, contado pela situação da candidatura."
                   }
+                  /* ─ DUAS AUSÊNCIAS DIFERENTES, DUAS FRASES DIFERENTES ──────────────────────
+                     "Esta vaga não tem ninguém" e "o seu filtro escondeu todo mundo" são fatos
+                     opostos, e a segunda tem saída: limpar. Dizer a primeira quando a verdade é a
+                     segunda faz a pessoa procurar um problema que não existe. */
+                  /* O BOTÃO DE LIMPAR NÃO SE REPETE AQUI, e a primeira versão repetia: ele já
+                     está na barra do recorte, a sessenta pixels acima, e dois botões idênticos
+                     empilhados leem como defeito. A barra é a casa dele, porque ela o oferece
+                     SEMPRE que há recorte, com a lista cheia ou vazia; aqui ficaria só no caso
+                     vazio, e a pessoa aprenderia dois lugares para o mesmo gesto. */
                   vazio={
-                    aba === "candidatos"
-                      ? "Ninguém foi vinculado a esta vaga ainda."
-                      : "Ninguém foi marcado como alocado nesta vaga ainda."
+                    recorteAtivo(recorte) ? (
+                      `Nenhuma das ${baseDaAba.length} ${baseDaAba.length === 1 ? "candidatura" : "candidaturas"} desta aba passa pelo recorte atual. Ajuste a busca e os filtros acima, ou limpe o recorte.`
+                    ) : aba === "candidatos" ? (
+                      "Ninguém foi vinculado a esta vaga ainda."
+                    ) : (
+                      "Ninguém foi marcado como alocado nesta vaga ainda."
+                    )
                   }
                   selecionados={selecionados}
                   onAlternar={alternarSelecao}
@@ -576,6 +1010,26 @@ export function VagaPainelModal({
           jeito que ele estava, com a aba e a ordenação preservadas.
 
           TODOS CHAMAM `aposAcao`, que relê a lista e avisa a Central de Vagas. */}
+      {/* O MOVIMENTO DE STATUS DA VAGA. Ele NÃO chama `aposAcao`: nenhuma candidatura mudou, então
+          reler a lista de gente seria trabalho à toa. O que precisa saber é a Central de Vagas, que
+          desenha a pill, o cilindro (a vaga pode ter deixado de ser contada pela derivada) e o
+          contador de dias, e é ela que `onMudou` avisa. O painel FECHA no sucesso, de propósito: a
+          `vaga` que ele recebeu por prop é a fotografia antiga, com o status de antes, e deixá-lo
+          aberto mostraria o cabeçalho velho até alguém reabrir. */}
+      {moverStatusAberto && (
+        <MoverStatusVagaModal
+          vaga={vaga}
+          catalogo={catalogoStatus}
+          token={token}
+          onClose={() => setMoverStatusAberto(false)}
+          onMovido={() => {
+            setMoverStatusAberto(false);
+            onMudou();
+            onClose();
+          }}
+        />
+      )}
+
       {alocarAberto && (
         <AlocarCandidatoModal
           /* SÓ ESTA VAGA NA LISTA, e ela já vem escolhida: o painel é de UMA vaga, e oferecer as
@@ -653,6 +1107,133 @@ export function VagaPainelModal({
   );
 }
 
+/**
+ * ─ A BARRA DO RECORTE: BUSCAR, FILTRAR, E SÓ ENTÃO AGIR ────────────────────────────────────────
+ *
+ * O diretor pediu gestão completa dentro dos dois cards, pensando no volume: busca por nome, filtro
+ * por situação e filtro por etapa, convivendo com a seleção múltipla e as ações em massa que já
+ * existem. Esta barra é a primeira metade do gesto ("buscar/filtrar"), e ela fica fisicamente antes
+ * da barra de seleção e da tabela pela mesma razão.
+ *
+ * ─ NENHUM COMPONENTE NOVO NASCEU AQUI, e isso é a regra e não a economia ──────────────────────
+ * Os dois filtros são o `MultiSelect` do design system (o mesmo de outras 8 telas, inclusive da
+ * Central de Vagas atrás deste painel), que já traz busca interna, chips e marca/desmarca: §A.28
+ * (todo filtro é múltiplo) e §A.35 (nada de seletor nativo) saem resolvidos por reuso. A busca por
+ * nome é o `input type="search"` com `ds-input`, o mesmo padrão da busca daquela tela.
+ *
+ * §A.6: A BUSCA É POR NOME, e o CPF não tem como vazar porque não está aqui: a lista do painel não
+ * carrega CPF, o filtro é CLIENTE sobre o que já foi carregado, e nenhum parâmetro novo entra em
+ * URL nenhuma. O pedido do diretor vira impossível de violar, em vez de virar disciplina.
+ *
+ * §A.20: a barra QUEBRA em vez de espremer (`flex-wrap`), e os controles têm largura própria. Ela
+ * não pode empurrar nem apertar a tabela que vem logo abaixo.
+ * §A.24: os rótulos acima dos campos são etiquetas (title case); o botão é ação (escrita normal).
+ */
+function BarraDoRecorte({
+  recorte,
+  onMudar,
+  situacoes,
+  etapas,
+  incluirForaDoFunil,
+  quantosAVista,
+  totalDaAba,
+}: {
+  recorte: RecorteDoPainel;
+  onMudar: (r: RecorteDoPainel) => void;
+  /** As situações que PODEM aparecer nesta aba, já recortadas pela régua da própria aba. */
+  situacoes: readonly CandidaturaSituacao[];
+  etapas: AsEtapaFunil[];
+  /** "Fora Do Funil" é opção só onde ele pode acontecer (§A.37, valor especial da coluna). */
+  incluirForaDoFunil: boolean;
+  quantosAVista: number;
+  totalDaAba: number;
+}) {
+  const ativo = recorteAtivo(recorte);
+  const quantos = criteriosAtivos(recorte);
+
+  const opcoesSituacao: MultiOption[] = situacoes.map((sit) => ({
+    value: sit,
+    label: CANDIDATURA_SITUACAO_LABEL[sit],
+  }));
+  const opcoesEtapa: MultiOption[] = [
+    ...etapas.map((e) => ({ value: e.codigo, label: e.rotulo })),
+    /* O VALOR ESPECIAL VAI POR ÚLTIMO, depois das etapas do funil: ele não é uma etapa, é a
+       ausência dela, e misturá-lo na ordem do funil sugeriria que é mais um passo. */
+    ...(incluirForaDoFunil
+      ? [{ value: ETAPA_FORA_DO_FUNIL, label: "Fora Do Funil" }]
+      : []),
+  ];
+
+  return (
+    <div className="mb-4 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3.5 py-3">
+      {/* §A.20: ALINHADOS PELO TOPO, e não pela base. Com `items-end` os três rótulos ficavam em
+          alturas diferentes, porque o campo que tem chip escolhido é mais alto que os outros dois e
+          empurrava o próprio rótulo para cima. Pelo topo, os rótulos formam uma linha só e os chips
+          crescem para baixo, que é o lado onde há espaço. */}
+      <div className="flex flex-wrap items-start gap-3">
+        <label className="flex min-w-[220px] flex-1 flex-col gap-1.5">
+          <span className="text-[12px] font-semibold text-dim">Buscar Por Nome</span>
+          {/* §A.6: NOME, e o `title` diz isso com todas as letras. A lista deste painel não traz
+              CPF, e a ficha continua sendo a única superfície do módulo que o mostra. */}
+          <input
+            type="search"
+            className="ds-input"
+            placeholder="Digite parte do nome"
+            aria-label="Buscar candidato por nome nesta vaga"
+            title="A busca procura pelo nome do candidato. O CPF não é usado aqui e não viaja em nenhum endereço."
+            value={recorte.busca}
+            onChange={(e) => onMudar({ ...recorte, busca: e.target.value })}
+          />
+        </label>
+
+        <label className="flex min-w-[200px] flex-1 flex-col gap-1.5">
+          <span className="text-[12px] font-semibold text-dim">Situação</span>
+          <MultiSelect
+            values={recorte.situacoes}
+            onChange={(v) => onMudar({ ...recorte, situacoes: v })}
+            options={opcoesSituacao}
+            placeholder="Todas as situações"
+            ariaLabel="Filtrar por situação da candidatura"
+          />
+        </label>
+
+        <label className="flex min-w-[200px] flex-1 flex-col gap-1.5">
+          <span className="text-[12px] font-semibold text-dim">Etapa</span>
+          <MultiSelect
+            values={recorte.etapas}
+            onChange={(v) => onMudar({ ...recorte, etapas: v })}
+            options={opcoesEtapa}
+            placeholder="Todas as etapas"
+            ariaLabel="Filtrar por etapa do funil"
+          />
+        </label>
+      </div>
+
+      {/* ─ O QUE O RECORTE ESTÁ FAZENDO, DITO EM NÚMERO ─────────────────────────────────────
+          SÓ APARECE COM RECORTE LIGADO: sem filtro, "mostrando 51 de 51" é ruído em toda vaga.
+          E ele é o ÚNICO lugar que fala do recorte: a contagem da aba, logo acima, continua sendo
+          a da vaga inteira, porque é outra pergunta. */}
+      {ativo && (
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border)] pt-2.5">
+          <p className="text-[12px] text-dim">
+            Mostrando <span className="font-semibold text-text">{quantosAVista}</span> de{" "}
+            {totalDaAba} {totalDaAba === 1 ? "candidatura" : "candidaturas"} desta aba, com{" "}
+            {quantos === 1 ? "1 critério" : `${quantos} critérios`}. A seleção e as ações em massa
+            valem só para quem está à vista.
+          </p>
+          <Button
+            variant="secondary"
+            className="flex-none px-3 py-1.5 text-[12.5px]"
+            onClick={() => onMudar(RECORTE_VAZIO)}
+          >
+            Limpar o recorte
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Quantas pessoas estão na vaga e quantas seguem no processo. Texto de apoio, escrita normal. */
 function frasePainel(lista: AsCandidaturaItem[]): string {
   if (lista.length === 0) return "Nenhuma candidatura registrada nesta vaga.";
@@ -714,7 +1295,8 @@ function TabelaCandidaturas({
 }: {
   itens: AsCandidaturaItem[];
   apoio: string;
-  vazio: string;
+  /** É NÓ, e não texto: o vazio POR FILTRO carrega o botão de limpar junto com a frase. */
+  vazio: ReactNode;
   /** A coluna do lado da posição (oficial ou banco). Só a aba de alocados a pede (grupo 2). */
   mostrarPosicao: boolean;
   selecionados: string[];
@@ -791,8 +1373,23 @@ function TabelaCandidaturas({
    * OS IDS VISÍVEIS SAEM DAQUI, e não da lista crua: `ord.itens` é o que a tabela está DESENHANDO,
    * já com o recorte da aba e a ordenação escolhida. É esse o conjunto sobre o qual o "selecionar
    * todos" opera, e por isso ele nasce no mesmo lugar que produz as linhas.
+   *
+   * ─ E ELES SÃO SÓ OS QUE ACEITAM DECISÃO (conserto E da onda B) ───────────────────────────────
+   *
+   * QUEM JÁ SAIU DO PROCESSO NÃO ENTRA NA SELEÇÃO. A caixa da linha encerrada nasce desabilitada
+   * (ver a `<tr>`), e o "selecionar todos" tem de respeitar a MESMA régua: sem isto, a caixa
+   * individual ficaria cinza e a do cabeçalho marcaria a linha assim mesmo, que é a pior das duas
+   * respostas, porque a tela diria uma coisa e a seleção faria outra.
+   *
+   * A RÉGUA É `podeDecidir`, a mesma que decide o ícone de ação da linha e a mesma com que a barra
+   * de ações em massa conta os "parados". Uma segunda régua aqui concordaria com aquela por
+   * coincidência e divergiria dela no primeiro ajuste.
+   *
+   * A LINHA CONTINUA VISÍVEL E CONTINUA CONTANDO NO TOTAL: ela é histórico da vaga, e some da
+   * SELEÇÃO, não da lista. É o que o texto de apoio já promete ("quem já saiu continua na lista,
+   * como histórico").
    */
-  const idsVisiveis = ord.itens.map((c) => c.id);
+  const idsVisiveis = ord.itens.filter((c) => podeDecidir(c.situacao)).map((c) => c.id);
   const todosVisiveisMarcados =
     idsVisiveis.length > 0 && idsVisiveis.every((id) => selecionados.includes(id));
 
@@ -813,8 +1410,8 @@ function TabelaCandidaturas({
                   onChange={() => onAlternarTodos(idsVisiveis)}
                   disabled={idsVisiveis.length === 0}
                   className="h-4 w-4 accent-[var(--accent)]"
-                  aria-label="Selecionar todos os candidatos à vista"
-                  title="Selecionar todos os que estão à vista"
+                  aria-label="Selecionar todos os candidatos à vista que aceitam decisão"
+                  title="Seleciona os que estão à vista e ainda aceitam decisão. Quem já saiu do processo fica de fora."
                 />
               </th>
               {/* §A.20: as larguras foram redistribuídas para a coluna de Ações caber SEM tirar
@@ -885,13 +1482,34 @@ function TabelaCandidaturas({
                 key={c.id}
                 className={selecionados.includes(c.id) ? "bg-[var(--surface)]" : undefined}
               >
+                {/* ─ A CAIXA DA LINHA ENCERRADA NASCE DESABILITADA (conserto E da onda B) ────
+                    ELA NÃO OLHAVA A SITUAÇÃO, e qualquer linha entrava na seleção, inclusive quem
+                    já saiu do processo e não aceita decisão nova. O resultado era uma seleção que
+                    parecia válida e quebrava por linha lá no servidor.
+
+                    A RÉGUA É `podeDecidir`, a mesma do ícone de ação desta linha e a mesma com que
+                    a barra de ações conta os "parados": aqui a tela deixa de OFERECER o que aquela
+                    barra já contava como impossível.
+
+                    O `title` DIZ O PORQUÊ, e não some: caixa cinza sem explicação é a tela
+                    recusando sem dizer o motivo, e quem opera conclui que o sistema travou. */}
                 <td className="text-center">
                   <input
                     type="checkbox"
                     checked={selecionados.includes(c.id)}
                     onChange={() => onAlternar(c.id)}
-                    className="h-4 w-4 accent-[var(--accent)]"
-                    aria-label={`Selecionar ${c.candidatoNome}`}
+                    disabled={!podeDecidir(c.situacao)}
+                    className="h-4 w-4 accent-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-40"
+                    aria-label={
+                      podeDecidir(c.situacao)
+                        ? `Selecionar ${c.candidatoNome}`
+                        : `${c.candidatoNome} já saiu do processo e não entra na seleção`
+                    }
+                    title={
+                      podeDecidir(c.situacao)
+                        ? undefined
+                        : "O processo desta pessoa já terminou, então ela não aceita decisão nova e fica fora das ações em massa. A linha segue na lista como histórico."
+                    }
                   />
                 </td>
                 <td className="font-semibold">{c.candidatoNome}</td>

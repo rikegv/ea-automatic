@@ -1,3 +1,4 @@
+import { VAGA_STATUS_SEMENTE } from "@ea/shared-types";
 import { describe, expect, it } from "vitest";
 import {
   CANDIDATURA_SITUACAO_AJUDA,
@@ -13,7 +14,6 @@ import {
   SITUACOES_QUE_CONSOMEM_POSICAO,
   SITUACOES_TRATADAS,
   SITUACOES_VIVAS,
-  STATUS_QUE_NAO_RECEBEM,
   movimentoPermitido,
   cabeMaisUm,
   candidaturaTratada,
@@ -29,7 +29,6 @@ import {
   posicaoNoFunil,
   proximasEtapas,
   vagaPodeEncerrar,
-  vagaRecebeCandidato,
 } from "./candidatura";
 
 /**
@@ -444,15 +443,31 @@ describe("TRAVA 1: aprovar além das posições", () => {
   });
 });
 
+/**
+ * ─ A TRAVA 2 MUDOU DE CASA, E A ASSERÇÃO A SEGUE (onda B2) ─────────────────────────────────────
+ *
+ * `STATUS_QUE_NAO_RECEBEM` e `vagaRecebeCandidato` saíram do domínio: a pergunta agora é feita ao
+ * CATÁLOGO (`as_vaga_status`), pelo flag `recebeCandidato`. O QUE ESTE BLOCO AFIRMA É QUE A RESPOSTA
+ * NÃO MUDOU, e é isso que faz esta frente ser migração de FORMA e não de comportamento.
+ *
+ * A FONTE É A SEMENTE (`VAGA_STATUS_SEMENTE`), que é o que a migration 0102 grava, e não uma lista
+ * digitada aqui: uma cópia concordaria com a semente hoje e divergiria na primeira correção. O
+ * `VAGA_BANCO` não aparece porque ele não está na semente; ele entra pelo fallback da migration,
+ * inativo e recebendo, e quem afirma isso é o teste da própria migration.
+ */
 describe("TRAVA 2: alocar em vaga fechada", () => {
-  it("FECHADA, CANCELADA e ENTREGUE não recebem candidato novo", () => {
-    for (const s of STATUS_QUE_NAO_RECEBEM) expect(vagaRecebeCandidato(s)).toBe(false);
+  it("os três que ENCERRAM não recebem candidato novo, e é o mesmo trio de sempre", () => {
+    const naoRecebem = VAGA_STATUS_SEMENTE.filter((s) => !s.recebeCandidato).map((s) => s.codigo);
+    expect(naoRecebem).toEqual(["ENTREGUE", "FECHADA", "CANCELADA"]);
+    // E OS DOIS FLAGS ANDAM JUNTOS NA SEMENTE, o que é a leitura do CHECK 2 do banco: terminal não
+    // recebe gente. Eles NÃO são o mesmo flag (um status pausado é `recebeCandidato: false` e
+    // `encerra: false`), e é por isso que a asserção é sobre a direção, e não sobre a igualdade.
+    for (const s of VAGA_STATUS_SEMENTE) if (s.encerra) expect(s.recebeCandidato).toBe(false);
   });
 
   it("ABERTA recebe, e o RASCUNHO também (a captação começa antes de publicar)", () => {
-    expect(vagaRecebeCandidato("ABERTA")).toBe(true);
-    expect(vagaRecebeCandidato("RASCUNHO")).toBe(true);
-    expect(vagaRecebeCandidato("VAGA_BANCO")).toBe(true);
+    const recebem = VAGA_STATUS_SEMENTE.filter((s) => s.recebeCandidato).map((s) => s.codigo);
+    expect(recebem).toEqual(["RASCUNHO", "ABERTA"]);
   });
 });
 

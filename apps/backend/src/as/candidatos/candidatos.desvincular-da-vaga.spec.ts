@@ -9,6 +9,8 @@ import { CandidatosService } from "./candidatos.service";
 import { RegistrarSaidaDto } from "./candidatos.dto";
 import { asCandidaturaEtapas, asCandidaturas } from "../../db/schema";
 import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
+import { catalogoDeStatusFingido } from "../vaga-status/vaga-status-catalogo.fake";
+import type { AuthUser } from "../../auth/auth.types";
 
 /**
  * ─ DESVINCULAR O CANDIDATO DA VAGA: o mesmo mecanismo, com o nome que quem opera usa ────────────
@@ -38,6 +40,24 @@ import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
  */
 
 const AGORA = new Date("2026-09-09T12:00:00.000Z");
+
+/**
+ * QUEM REGISTRA A SAÍDA, E POR QUE ELE É MASTER NESTE ARQUIVO. O método passou a receber o usuário
+ * INTEIRO, e não só o id, porque DESVINCULAR QUEM ESTÁ ALOCADO virou ação de MASTER (decisão do
+ * diretor, Onda B): alocado é ENTREGA, e desfazer entrega derrubava a contagem da vaga sem passar
+ * pelo gate que só um Master pode forçar.
+ *
+ * TODOS OS CENÁRIOS DESTE ARQUIVO partem de uma candidatura `ALOCADO` (é o padrão de `candidatura()`),
+ * então é o Master que os executa. O que eles afirmam continua sendo o MESMO: a porta aceita, a
+ * posição volta a ficar livre, o motivo e a etapa vão para o histórico. A autoria (`porId`) continua
+ * saindo de `user.id`, e é por isso que os ids de antes foram preservados.
+ */
+const master = (id: string): AuthUser => ({
+  id,
+  email: "master@soulan.com.br",
+  papel: "MASTER",
+  senhaTemporaria: false,
+});
 
 /** As duas saídas que TIRAM a pessoa da vaga, derivadas da régua, nunca digitadas aqui. */
 const DESVINCULOS = CANDIDATURA_SITUACOES.filter(ehSaidaSemExito);
@@ -149,7 +169,7 @@ function makeDb(cenario: { candidatura?: Record<string, unknown> } = {}) {
     },
   };
 
-  return { service: new CandidatosService(db as never, catalogoDeEtapasFingido() as never), linha: c, updates, inserts, ordem };
+  return { service: new CandidatosService(db as never, catalogoDeEtapasFingido() as never, catalogoDeStatusFingido() as never), linha: c, updates, inserts, ordem };
 }
 
 const daCandidatura = (updates: Escrita[]) =>
@@ -262,7 +282,7 @@ describe("desvincular um ALOCADO: a porta que a trava da entrega manda usar", ()
       await service.registrarSaida(
         "cand-1",
         { situacao, motivo: "Vaga encolheu" } as never,
-        "user-1",
+        master("user-1"),
       );
 
       expect(daCandidatura(updates)).toMatchObject({
@@ -280,7 +300,7 @@ describe("desvincular um ALOCADO: a porta que a trava da entrega manda usar", ()
     await service.registrarSaida(
       "cand-1",
       { situacao: "DESISTIU", motivo: "Recebeu outra proposta" } as never,
-      "user-1",
+      master("user-1"),
     );
 
     // Depois da gravação a etapa some da leitura viva, e sem o evento o LUGAR onde a decisão foi
@@ -297,7 +317,11 @@ describe("desvincular um ALOCADO: a porta que a trava da entrega manda usar", ()
   it("desvincular NÃO passa pelo caminho que trava a linha da vaga, porque não consome posição", async () => {
     const { service, ordem } = makeDb({ candidatura: candidatura({ situacao: "ALOCADO" }) });
 
-    await service.registrarSaida("cand-1", { situacao: "DESCARTADO", motivo: "Não" } as never, "u");
+    await service.registrarSaida(
+      "cand-1",
+      { situacao: "DESCARTADO", motivo: "Não" } as never,
+      master("u"),
+    );
 
     // A propriedade não é "o código é simples": é que LIBERAR posição não disputa recurso nenhum.
     // Quem entrega posição trava a vaga e conta; quem sai apenas devolve, e devolver não estoura
@@ -356,7 +380,7 @@ describe("o candidato continua visível e realocável depois do desvínculo", ()
     await service.registrarSaida(
       "cand-1",
       { situacao: "DESCARTADO", motivo: "Perfil não aderente" } as never,
-      "user-1",
+      master("user-1"),
     );
 
     // A linha anterior NÃO é apagada nem reaproveitada: ela vira o histórico que a reentrada lê.
@@ -379,7 +403,7 @@ describe("o candidato continua visível e realocável depois do desvínculo", ()
     await service.registrarSaida(
       "cand-1",
       { situacao: "DESISTIU", motivo: "Recebeu outra proposta" } as never,
-      "user-1",
+      master("user-1"),
     );
     await service.alocar(
       "pessoa-1",

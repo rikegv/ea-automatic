@@ -3,12 +3,15 @@ import { BadRequestException } from "@nestjs/common";
 import { plainToInstance } from "class-transformer";
 import { validateSync } from "class-validator";
 import { describe, expect, it } from "vitest";
-import { VAGA_STATUS } from "@ea/shared-types";
 import type { Database } from "../../db/client";
-import { VAGA_STATUS_DA_TRILHA } from "../../domain/vaga";
 import { CreateVagaDto } from "./vagas.dto";
 import { VagasService } from "./vagas.service";
 import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
+import {
+  catalogoDeStatusFingido,
+  linhasDeStatusFingidas,
+} from "../vaga-status/vaga-status-catalogo.fake";
+import { ReguaDeStatusDaVaga } from "../vaga-status/vaga-status.service";
 
 /**
  * ─ A TRILHA DE ABERTURA NÃO ENCERRA VAGA (achado BLOQUEANTE da auditoria, 08/09) ────────────────
@@ -40,20 +43,35 @@ import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
  * do service defende a OPERAÇÃO, inclusive de um chamador interno que não passe por DTO nenhum.
  */
 
-/** Os status que a trilha NÃO pode escrever: derivados, para status novo entrar sozinho no teste. */
-const TERMINAIS = VAGA_STATUS.filter(
-  (s) => !(VAGA_STATUS_DA_TRILHA as readonly string[]).includes(s),
-);
+/**
+ * ─ ONDE A RÉGUA MORA DEPOIS DA ONDA B2, e por que a porta 1 mudou de conteúdo ──────────────────
+ *
+ * A LISTA `VAGA_STATUS_DA_TRILHA` VIROU O FLAG `daTrilha` DO CATÁLOGO, e o `@IsIn` do DTO saiu
+ * junto: o `class-validator` não faz consulta assíncrona bem, e um `@IsIn` sobre a lista de ontem
+ * recusaria o status que o diretor criar hoje. A PROTEÇÃO NÃO AFROUXOU, ela mudou de camada, e é
+ * exatamente isso que este arquivo passa a afirmar: o DTO valida FORMA, e a régua do SERVICE (que
+ * sempre foi a autoridade, pela frase que dispensa o `@Roles` da rota de fechar) recusa os
+ * terminais, nas duas rotas da trilha.
+ *
+ * OS DOIS CONJUNTOS SÃO DERIVADOS DO CATÁLOGO, e não digitados: status novo entra na cobertura
+ * sozinho. `VAGA_BANCO` entra aqui como o quarto recusado, e é correto: ele é INATIVO, e status
+ * fora de circulação não recebe vaga nova, ou a publicação criaria o status fantasma pela porta da
+ * frente.
+ */
+const CATALOGO = linhasDeStatusFingidas();
+const NAO_DA_TRILHA = CATALOGO.filter((s) => !(s.daTrilha && s.ativo)).map((s) => s.codigo);
+const DA_TRILHA = CATALOGO.filter((s) => s.daTrilha && s.ativo).map((s) => s.codigo);
+const REGUA = new ReguaDeStatusDaVaga(CATALOGO);
 
 /** O `db` nulo prova o ponto: a recusa acontece ANTES de qualquer ida ao banco. */
-const service = new VagasService(null as unknown as Database, catalogoDeEtapasFingido() as never);
+const service = new VagasService(null as unknown as Database, catalogoDeEtapasFingido() as never, catalogoDeStatusFingido() as never);
 
-function guarda(status: string | undefined, padrao: "RASCUNHO" | "ABERTA") {
+function guarda(status: string | undefined, padraoPorPapel: "ABERTURA" | "RASCUNHO") {
   return (
     service as unknown as {
-      travaStatusDaTrilha: (p: string | undefined, d: string) => string;
+      travaStatusDaTrilha: (r: ReguaDeStatusDaVaga, p: string | undefined, d: string) => string;
     }
-  ).travaStatusDaTrilha(status, padrao);
+  ).travaStatusDaTrilha(REGUA, status, padraoPorPapel);
 }
 
 function validarStatus(status: unknown) {
@@ -62,17 +80,23 @@ function validarStatus(status: unknown) {
 }
 
 describe("a trilha de abertura só escreve RASCUNHO e ABERTA", () => {
-  it("a lista de terminais que o teste cobre é exatamente ENTREGUE, FECHADA e CANCELADA", () => {
-    // Guarda do próprio teste: se o vocabulário ganhar status, ele entra aqui sem ninguém lembrar.
-    expect(TERMINAIS).toEqual(["ENTREGUE", "FECHADA", "CANCELADA"]);
+  it("a lista que o teste cobre sai do catálogo, e são os três terminais mais o dormente", () => {
+    // Guarda do próprio teste: se o catálogo ganhar status, ele entra aqui sem ninguém lembrar.
+    expect(NAO_DA_TRILHA).toEqual(["ENTREGUE", "FECHADA", "CANCELADA", "VAGA_BANCO"]);
+    expect(DA_TRILHA).toEqual(["RASCUNHO", "ABERTA"]);
   });
 
-  describe("porta 1, o DTO (as duas rotas usam o MESMO corpo, então uma asserção cobre as duas)", () => {
-    it.each(TERMINAIS)("recusa o status %s no corpo", (status) => {
-      expect(validarStatus(status)).toHaveLength(1);
+  describe("porta 1, o DTO, que depois da B2 valida FORMA e não mais a lista", () => {
+    /**
+     * O `@IsIn` SAIU DAQUI, e este bloco afirma isso EM VOZ ALTA em vez de sumir: quem ler o
+     * arquivo daqui a seis meses precisa saber que o corpo passa e que quem recusa é a porta 2.
+     * Apagar as asserções deixaria a impressão de que a cobertura encolheu.
+     */
+    it.each(NAO_DA_TRILHA)("aceita o status %s no CORPO, e quem recusa é o service", (status) => {
+      expect(validarStatus(status)).toHaveLength(0);
     });
 
-    it.each([...VAGA_STATUS_DA_TRILHA])("aceita o status %s", (status) => {
+    it.each(DA_TRILHA)("aceita o status %s", (status) => {
       expect(validarStatus(status)).toHaveLength(0);
     });
 
@@ -80,18 +104,18 @@ describe("a trilha de abertura só escreve RASCUNHO e ABERTA", () => {
       expect(validarStatus(undefined)).toHaveLength(0);
     });
 
-    it("recusa lixo que não é status nenhum, sem depender da lista", () => {
-      expect(validarStatus("PUBLICADA")).toHaveLength(1);
-      expect(validarStatus("")).toHaveLength(1);
+    it("a FORMA continua sendo cobrada: nada de não-texto e nada de código gigante", () => {
+      expect(validarStatus(123)).toHaveLength(1);
+      expect(validarStatus("X".repeat(41))).toHaveLength(1);
     });
   });
 
   describe("porta 2, a régua do service (a autoridade que o desenho da rota de fechar invoca)", () => {
-    it.each(TERMINAIS)("recusa %s na CRIAÇÃO, antes de tocar o banco", (status) => {
-      expect(() => guarda(status, "ABERTA")).toThrow(BadRequestException);
+    it.each(NAO_DA_TRILHA)("recusa %s na CRIAÇÃO, antes de tocar o banco", (status) => {
+      expect(() => guarda(status, "ABERTURA")).toThrow(BadRequestException);
     });
 
-    it.each(TERMINAIS)("recusa %s na CONTINUAÇÃO do rascunho, antes de tocar o banco", (status) => {
+    it.each(NAO_DA_TRILHA)("recusa %s na CONTINUAÇÃO do rascunho, antes de tocar o banco", (status) => {
       expect(() => guarda(status, "RASCUNHO")).toThrow(BadRequestException);
     });
 
@@ -102,7 +126,7 @@ describe("a trilha de abertura só escreve RASCUNHO e ABERTA", () => {
     it("a recusa manda a pessoa para a ação de fechar vaga, e não usa travessão", () => {
       const erro = (() => {
         try {
-          guarda("FECHADA", "ABERTA");
+          guarda("FECHADA", "ABERTURA");
           return null;
         } catch (e) {
           return e as BadRequestException;
@@ -114,7 +138,7 @@ describe("a trilha de abertura só escreve RASCUNHO e ABERTA", () => {
     });
 
     it("deixa passar RASCUNHO e ABERTA, que é o que a trilha existe para escrever", () => {
-      expect(guarda("RASCUNHO", "ABERTA")).toBe("RASCUNHO");
+      expect(guarda("RASCUNHO", "ABERTURA")).toBe("RASCUNHO");
       expect(guarda("ABERTA", "RASCUNHO")).toBe("ABERTA");
     });
 
@@ -123,13 +147,15 @@ describe("a trilha de abertura só escreve RASCUNHO e ABERTA", () => {
      * cheia manda `ABERTA`), continuar sem status mantém RASCUNHO.
      */
     it("mantém os padrões das duas rotas quando o corpo não manda status", () => {
-      expect(guarda(undefined, "ABERTA")).toBe("ABERTA");
+      // O PADRÃO ENTRA POR PAPEL e sai como CÓDIGO: é o catálogo que responde qual é o código da
+      // abertura, então renomear "Aberta" não desloca o padrão de rota nenhuma.
+      expect(guarda(undefined, "ABERTURA")).toBe("ABERTA");
       expect(guarda(undefined, "RASCUNHO")).toBe("RASCUNHO");
     });
 
-    it("recusa valor que não é status nenhum, em vez de gravá-lo cru", () => {
-      expect(() => guarda("VAGA_BANCO", "ABERTA")).toThrow(BadRequestException);
-      expect(() => guarda("", "ABERTA")).toThrow(BadRequestException);
+    it("recusa valor que não está no catálogo, em vez de gravá-lo cru", () => {
+      expect(() => guarda("PUBLICADA", "ABERTURA")).toThrow(BadRequestException);
+      expect(() => guarda("", "ABERTURA")).toThrow(BadRequestException);
     });
   });
 
@@ -149,9 +175,9 @@ describe("a trilha de abertura só escreve RASCUNHO e ABERTA", () => {
    * não pode encerrar a vaga por aqui" de "faltam campos obrigatórios".
    */
   describe("porta 3, as rotas consultam a guarda antes de tocar o banco", () => {
-    const semBanco = new VagasService(null as unknown as Database, catalogoDeEtapasFingido() as never);
+    const semBanco = new VagasService(null as unknown as Database, catalogoDeEtapasFingido() as never, catalogoDeStatusFingido() as never);
 
-    it.each(TERMINAIS)("`create` recusa %s pela guarda, e não pela régua dos obrigatórios", async (status) => {
+    it.each(NAO_DA_TRILHA)("`create` recusa %s pela guarda, e não pela régua dos obrigatórios", async (status) => {
       const erro = await semBanco
         .create({ status } as unknown as CreateVagaDto, "user-1")
         .catch((e) => e);
@@ -160,11 +186,11 @@ describe("a trilha de abertura só escreve RASCUNHO e ABERTA", () => {
       expect(String((erro.getResponse() as { message?: string })?.message)).toContain("fechar vaga");
     });
 
-    it.each(TERMINAIS)("`atualizar` recusa %s pela guarda, com o rascunho já lido", async (status) => {
+    it.each(NAO_DA_TRILHA)("`atualizar` recusa %s pela guarda, com o rascunho já lido", async (status) => {
       /** O mínimo que a rota lê antes da guarda: a vaga existe e está em RASCUNHO. */
       const comRascunho = new VagasService({
         query: { vagas: { findFirst: async () => ({ id: "vaga-1", status: "RASCUNHO", abertoPorId: "user-1" }) } },
-      } as unknown as Database, catalogoDeEtapasFingido() as never);
+      } as unknown as Database, catalogoDeEtapasFingido() as never, catalogoDeStatusFingido() as never);
 
       const erro = await comRascunho
         .atualizar("vaga-1", { status } as unknown as CreateVagaDto)

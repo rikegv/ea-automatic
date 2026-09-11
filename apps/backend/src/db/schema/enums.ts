@@ -311,38 +311,22 @@ export const vagaGeneroEnum = pgEnum("vaga_genero", ["INDIFERENTE", "MASCULINO",
 export const papelAsEnum = pgEnum("papel_as", ["CONSULTOR", "RECRUITER"]);
 
 /**
- * STATUS da vaga: os 5 valores da base, mantidos como a operação fala
- * (Fechada 1.564 · Cancelada 460 · Aberta 198 · Entregue 126 · Vaga Banco 15).
+ * ─ O STATUS DA VAGA NÃO É MAIS UM ENUM DAQUI (onda B2, migration 0102) ─────────────────────────
  *
- * ENTREGUE e FECHADA NÃO SÃO COLAPSADAS em um "ENCERRADA" (decisão do diretor): entregue é
- * preenchida, fechada é encerrada, e juntar as duas apagaria justamente o indicador de sucesso da
- * vaga. Regra geral: sempre que der para manter o status da base, manter.
+ * O `vagaStatusEnum` FOI REMOVIDO, e com ele o tipo `vaga_status` do Postgres. A lista de status
+ * virou CATÁLOGO GERENCIÁVEL (`as_vaga_status`), pelo mesmo caminho que as etapas do funil
+ * percorreram na 0100: `vagas.status` é `varchar(40)` com FK RESTRICT para o catálogo, e o valor de
+ * cada linha é o que sempre foi.
  *
- * VAGA_BANCO aparece nos DOIS eixos (aqui e na natureza) porque aparece nos dois na base. A
- * classificação autoritativa é a NATUREZA; o status guarda a palavra da base para as 15 linhas que a
- * usam ali, em vez de inventar um status que a operação não escreveu.
+ * O QUE ESTA AUSÊNCIA GUARDA: os cinco status da base (Fechada 1.564 · Cancelada 460 · Aberta 198 ·
+ * Entregue 126 · Vaga Banco 15) continuam existindo, agora como LINHAS. `ENTREGUE` e `FECHADA`
+ * seguem separadas por decisão do diretor (entregue é preenchida, fechada é encerrada, e juntar as
+ * duas apagaria o indicador de sucesso), e `VAGA_BANCO` continua DORMENTE: a semente da 0102 o
+ * criou INATIVO, para a FK ter destino e o histórico ter rótulo, sem ele aparecer em seletor.
+ *
+ * QUEM PRECISA DO VOCABULÁRIO usa `VAGA_STATUS_PAPEIS` e `VagaStatusItem` (shared-types), e quem
+ * precisa do VALOR pergunta ao `VagaStatusService`, que é a fonte única.
  */
-export const vagaStatusEnum = pgEnum("vaga_status", [
-  /**
-   * RASCUNHO é o estado ANTERIOR à publicação (OST de 25/08): a vaga salva pela metade, para o
-   * consultor continuar depois. NÃO VEIO DA BASE, e por isso não tem contagem na lista acima: é
-   * estado novo, que só nasce pela trilha. Nenhuma linha importada vira rascunho.
-   */
-  "RASCUNHO",
-  "ABERTA",
-  "ENTREGUE",
-  "FECHADA",
-  "CANCELADA",
-  /**
-   * DORMENTE desde 07/09 (item 8 do mapa do time): o STATUS "Vaga Banco" saiu da lista oferecida
-   * (`VAGA_STATUS`, no shared-types) e nada mais o escreve nem o lê. Fica aqui porque o Postgres não
-   * remove valor de enum. ZERO linhas o usavam em produção e em homologação quando saiu.
-   *
-   * NÃO CONFUNDIR com o CONTADOR de banco (`posicoes_banco`, `vagas_fechadas_banco`), que é outra
-   * coisa, segue vivo e não foi tocado.
-   */
-  "VAGA_BANCO",
-]);
 
 /**
  * SAZONAL ou OPERAÇÃO PADRÃO. NÃO EXISTE na base: toda vaga importada nascerá OPERACAO_PADRAO e a

@@ -12,6 +12,7 @@ import {
   Matches,
   MaxLength,
   Min,
+  MinLength,
   ValidateNested,
 } from "class-validator";
 import { Type } from "class-transformer";
@@ -36,10 +37,6 @@ import {
   type VagaTipoSubstituicao,
   type VagaVinculo,
 } from "@ea/shared-types";
-import {
-  VAGA_STATUS_DA_TRILHA,
-  type VagaStatusDaTrilha,
-} from "../../domain/vaga";
 import { normalizarSalarioParaDto } from "../../admissoes/dto/valor-monetario-br";
 
 /** Um benefício da vaga: o id do catálogo mais o valor, que nem todo benefício tem. */
@@ -122,19 +119,28 @@ export class CreateVagaDto {
   natureza?: VagaNatureza;
 
   /**
-   * O STATUS QUE A TRILHA PEDE, e ela só sabe pedir DOIS: `RASCUNHO` e `ABERTA`.
+   * O STATUS QUE A TRILHA PEDE, e ela só sabe pedir DOIS: o RASCUNHO e a ABERTURA.
    *
-   * `ENTREGUE`, `FECHADA` e `CANCELADA` SÃO RECUSADOS AQUI, e a ausência deles é a correção do
-   * achado bloqueante da auditoria: aceitando a lista inteira, esta rota era uma segunda porta para
-   * o estado terminal, sem nenhuma das travas do fechamento. O porquê inteiro está em
-   * `VAGA_STATUS_DA_TRILHA` (`domain/vaga`), e a lista NÃO é redigitada aqui de propósito.
-   *
-   * O SERVICE CONFERE DE NOVO, e isso não é redundância inútil: o DTO defende a ROTA, e a régua do
-   * service defende a OPERAÇÃO, inclusive de um chamador interno que nunca passe por um DTO.
+   * ┌─ O `@IsIn` SAIU DAQUI (onda B2), E A RÉGUA NÃO AFROUXOU: ELA MUDOU DE CAMADA ──────────────┐
+   * │ Enquanto a lista era estática, o decorator podia recusar no corpo. Com o status virando     │
+   * │ CATÁLOGO, um `@IsIn` sobre a lista de ontem recusaria o status que o diretor criou hoje, e o│
+   * │ `class-validator` não faz consulta assíncrona bem. É o mesmo caminho que as etapas do funil │
+   * │ percorreram, pela mesma razão.                                                              │
+   * │                                                                                             │
+   * │ QUEM RECUSA AGORA É `travaStatusDaTrilha`, no service, contra o flag `daTrilha` do catálogo,│
+   * │ e ele SEMPRE foi a autoridade: a frase que dispensa o `@Roles` da rota de fechar é "a       │
+   * │ autoridade é o service". `ENTREGUE`, `FECHADA` e `CANCELADA` continuam recusados, agora por │
+   * │ não terem o flag, e o mesmo vale para qualquer status novo, que nasce com o flag FALSO.     │
+   * │                                                                                             │
+   * │ O QUE SE PERDEU: a recusa deixou de acontecer antes do handler. O que NÃO se perdeu: nenhum │
+   * │ corpo consegue publicar vaga num estado terminal, que é o achado que a lista fechou em      │
+   * │ 08/09, e há teste afirmando isso nas duas rotas da trilha.                                  │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
    */
   @IsOptional()
-  @IsIn(VAGA_STATUS_DA_TRILHA as unknown as string[])
-  status?: VagaStatusDaTrilha;
+  @IsString()
+  @MaxLength(40)
+  status?: string;
 
   @IsOptional()
   @IsIn(VAGA_SAZONALIDADE as unknown as string[])
@@ -483,4 +489,151 @@ export class FecharVagaDto {
   @IsOptional()
   @IsBoolean()
   enviarParaAdmissao?: boolean;
+}
+
+/**
+ * ─ DTO DO CANCELAMENTO DA VAGA (onda B1) ────────────────────────────────────────────────────────
+ *
+ * CORPO PRÓPRIO, e não o do fechamento, porque a pergunta é outra: fechar registra o que a vaga
+ * ENTREGOU (salário de fechamento, data prevista de início, envio para a admissão); cancelar
+ * registra POR QUE o processo não vai mais acontecer. Reaproveitar o `FecharVagaDto` traria quatro
+ * campos que o cancelamento não tem o que fazer com eles, e o `ValidationPipe` global roda com
+ * `forbidNonWhitelisted`: campo aceito e ignorado é dívida.
+ *
+ * ┌─ O QUE NÃO ESTÁ AQUI, E É DE PROPÓSITO: QUEM CANCELOU E QUANDO ────────────────────────────┐
+ * │ `cancelada_por_id` vem da SESSÃO e `cancelada_em` é o `now()` do SERVIDOR. Autoria e carimbo │
+ * │ são TRILHA, não campo de formulário: aceitá-los no corpo deixaria qualquer chamada direta à  │
+ * │ rota assinar o cancelamento em nome de outra pessoa, ou datá-lo no mês passado, e é          │
+ * │ exatamente esta trilha que compensa as travas que o cancelamento pula em relação ao fechar.  │
+ * │                                                                                             │
+ * │ `dataCancelamento` É OUTRA COISA, e por isso ela ESTÁ no corpo: é a data do FATO comercial   │
+ * │ (quando o cliente cancelou a vaga), que pode ser anterior ao clique, e é ela que vai para    │
+ * │ `data_fechamento`. Sem ela, o contador de dias em aberto ficaria em branco para sempre.      │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+export class CancelarVagaDto {
+  /**
+   * POR QUE A VAGA FOI CANCELADA, do catálogo (`motivos_cancelamento_vaga`).
+   *
+   * VIAJA COMO NOME, e não como id, porque é o NOME que fica gravado na vaga, do mesmo jeito que a
+   * vaga já faz com o motivo de contratação. Quem confere que este nome EXISTE e está ATIVO é o
+   * service, contra o catálogo: sem essa conferência, o campo seria texto livre com aparência de
+   * catálogo, e a auditoria leria depois qualquer coisa que alguém tivesse digitado.
+   *
+   * ┌─ O `@Transform` DE APARA VEM ANTES DO `@MinLength`, e a ordem é a régua ──────────────────┐
+   * │ O `@MinLength` mede a string CRUA, então `"   "` passa com três caracteres, o service      │
+   * │ apara na gravação e a vaga vai para o banco com motivo VAZIO. O defeito já foi pago em     │
+   * │ 09/09, na saída da candidatura (achado do tester): a única barreira real era o NAVEGADOR,  │
+   * │ que é exatamente o que a obrigatoriedade no DTO existe para não depender. O `@Transform`   │
+   * │ roda ANTES da validação (é `plainToInstance` quem o executa), então quem valida já vê o    │
+   * │ texto aparado, e quem grava recebe o mesmo texto aparado do corpo.                          │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   */
+  @Transform(({ value }) => (typeof value === "string" ? value.trim() : value))
+  @IsString()
+  @MinLength(2)
+  @MaxLength(160)
+  motivo!: string;
+
+  /** O detalhe livre, quando o motivo do catálogo não conta a história inteira. Opcional. */
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === "string" ? value.trim() : value))
+  @IsString()
+  @MaxLength(500)
+  observacao?: string;
+
+  /**
+   * A DATA DO FATO, que vira `data_fechamento`. Obrigatória, e a razão é medida: a leitura do
+   * contador de dias devolve nulo para vaga encerrada SEM data de fechamento, e a célula escreve
+   * "não informado" para sempre. Toda vaga cancelada ficaria com o contador em branco.
+   */
+  @IsISO8601()
+  dataCancelamento!: string;
+
+  /**
+   * CANCELAR MESMO COM CANDIDATO EM PROCESSO DENTRO.
+   *
+   * SÓ MASTER E SUPER_ADMIN PASSAM, e QUEM CONFERE É O SERVICE, nunca um `@Roles` na rota: todo
+   * consultor precisa poder cancelar a vaga SEM ninguém segurando, e o decorador barraria o
+   * cancelamento normal do COMUM, que é regressão silenciosa. É o mesmo desenho do `forcar` do
+   * fechamento, logo acima.
+   *
+   * O QUE ELE CUSTA, ALÉM DA TRILHA: as candidaturas que seguravam são ENCERRADAS na mesma
+   * transação. Deixá-las vivas numa vaga cancelada prenderia o dado pessoal do candidato para
+   * sempre (§A.6), porque o prazo de retenção só começa a correr quando nada vivo sobra.
+   */
+  @IsOptional()
+  @IsBoolean()
+  forcar?: boolean;
+}
+
+/**
+ * ─ MOVER O STATUS DA VAGA À MÃO (onda B2) ──────────────────────────────────────────────────────
+ *
+ * SEM `@IsIn`, PELA MESMA RAZÃO DO `status` DA TRILHA: a lista de destinos é o CATÁLOGO, e ele muda
+ * quando o diretor quiser. Quem confere é o service, contra `podeSerDestinoManual` (ativo, movível e
+ * que não encerra) e contra `podeSairManualmente` na origem, sob a linha da vaga travada.
+ *
+ * NÃO EXISTE CAMPO DE ORIGEM, e a ausência é a regra: a origem é lida do banco, sob o
+ * `SELECT ... FOR UPDATE`, e nunca do corpo. Aceitá-la do corpo seria decidir sobre o estado que a
+ * tela viu, que é justamente a fotografia velha que o lock existe para descartar.
+ */
+export class MoverStatusVagaDto {
+  /** O CÓDIGO do status de destino. O catálogo e a FK é que o governam. */
+  @IsString()
+  @MaxLength(40)
+  status!: string;
+
+  /** Por que a vaga foi movida. Opcional, e vai inteiro para a trilha. §A.6: sem dado de candidato. */
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === "string" ? value.trim() : value))
+  @IsString()
+  @MaxLength(500)
+  observacao?: string;
+}
+
+/**
+ * ─ DTO DA REABERTURA DA VAGA CANCELADA (onda B3) ───────────────────────────────────────────────
+ *
+ * CORPO PRÓPRIO, MINÚSCULO, e o que NÃO está nele é a maior parte da régua:
+ *
+ * ┌─ NÃO EXISTE CAMPO DE STATUS DE DESTINO, E A AUSÊNCIA É A TRAVA ────────────────────────────┐
+ * │ O destino é SEMPRE `codigoDoPapel("ABERTURA")`, resolvido no servidor contra o catálogo.    │
+ * │ Aceitá-lo do corpo transformaria esta rota na porta SEM RÉGUA para qualquer status, os que  │
+ * │ encerram inclusive: quem quisesse marcar uma vaga como ENTREGUE sem entregar nada passaria  │
+ * │ por aqui, pulando as travas de candidato tratado e de posição preenchida que o `fechar` tem.│
+ * └────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ NÃO EXISTE CAMPO DE PAPEL NEM DE AUTOR ───────────────────────────────────────────────────┐
+ * │ Quem reabriu vem da SESSÃO, e o papel é reconferido no service a partir dela. Um `papel` no │
+ * │ corpo promoveria o consultor a Master com uma linha de JSON, e a trilha passaria a ser      │
+ * │ assinada por quem o remetente escolhesse.                                                   │
+ * └────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * `candidaturaIds` É OPCIONAL PORQUE REABRIR SEM TRAZER NINGUÉM É LEGÍTIMO: a vaga volta a receber
+ * gente nova e ninguém é ressuscitado. Ausente e lista vazia são a MESMA coisa, e nesse caminho
+ * NENHUMA candidatura é tocada, nem com um carimbo de cortesia (§A.6: para quem está descartado, o
+ * `atualizado_em` É o relógio do expurgo, e mexer nele empurra dois anos de retenção em silêncio).
+ */
+export class ReabrirVagaDto {
+  /**
+   * QUEM O MASTER ESCOLHEU TRAZER DE VOLTA, um a um. `@ArrayUnique` porque o mesmo id duas vezes é
+   * erro de tela, não intenção, e o segundo passaria por uma candidatura já restaurada.
+   *
+   * A LISTA NÃO É A AUTORIDADE: o service confere, dentro da transação e sob a linha da vaga
+   * travada, que cada id pertence ao conjunto daquele cancelamento. Id de fora é RECUSADO, nunca
+   * ignorado em silêncio.
+   */
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @IsUUID("4", { each: true })
+  candidaturaIds?: string[];
+
+  /** Por que a vaga voltou. Opcional, e vai inteiro para a trilha. §A.6: sem dado de candidato. */
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === "string" ? value.trim() : value))
+  @IsString()
+  @MaxLength(500)
+  observacao?: string;
 }

@@ -41,7 +41,6 @@ import {
   vagaTipoSubstituicaoEnum,
   vagaNaturezaEnum,
   vagaSazonalidadeEnum,
-  vagaStatusEnum,
   vagaVinculoEnum,
   ncLiberacaoEnum,
   ncStatusEnum,
@@ -2190,6 +2189,76 @@ export const admissaoProjeto = pgTable(
   }),
 );
 
+// ── A&S / MOTIVO DE CANCELAMENTO DE VAGA (onda B1) ──────────────────────────
+/**
+ * POR QUE A VAGA FOI CANCELADA: catálogo mantido pelo diretor, molde `motivos_declinio`.
+ *
+ * MOLDE `motivos_declinio`, E NÃO O MOLDE DAS ETAPAS DO FUNIL. Motivo não tem ordem, não tem cor,
+ * não tem "inicial" e não precisa resolver rótulo de histórico. O molde das etapas custaria um
+ * service inteiro de catálogo ordenável para servir uma lista de nomes.
+ *
+ * É O NOME QUE FICA GRAVADO NA VAGA, e não o id, exatamente como a vaga já faz com
+ * `motivos_contratacao`. Por isso não há FK e não há `restrict`: inativar um motivo em março não
+ * trava a vaga cancelada em janeiro, e ela continua dizendo por que foi cancelada mesmo com o motivo
+ * fora de circulação. Uma FK responderia "este motivo existe hoje"; o nome responde "foi este o
+ * motivo naquele dia", que é a pergunta que a trilha existe para responder.
+ *
+ * SOFT-DELETE POR `ativo`, NUNCA exclusão física, pelo mesmo motivo dos demais catálogos: o motivo
+ * sai das opções selecionáveis e o histórico segue legível.
+ *
+ * NASCE VAZIA (§A.31): lista de valor é do diretor, e semear "Cliente desistiu" seria a fábrica
+ * decidindo por ele.
+ */
+export const motivosCancelamentoVaga = pgTable("motivos_cancelamento_vaga", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  nome: varchar("nome", { length: 160 }).notNull().unique(),
+  ativo: boolean("ativo").notNull().default(true),
+  criadoEm,
+  atualizadoEm,
+});
+
+/**
+ * ─ O CATÁLOGO DE STATUS DA VAGA (onda B2, migration 0102) ───────────────────────────────────────
+ *
+ * DECLARADO ANTES DE `vagas` DE PROPÓSITO: é a coluna `vagas.status` que aponta para cá, e manter a
+ * ordem de declaração evita depender da resolução preguiçosa da referência.
+ *
+ * `papel` É O QUE SEPARA A LINHA DO SISTEMA DA LINHA DO DIRETOR. Os cinco papéis de sistema
+ * (RASCUNHO, ABERTURA, ENTREGA, FECHAMENTO, CANCELAMENTO) existem exatamente uma vez cada (índice
+ * parcial único no banco) e são os alvos que o código procura quando precisa gravar status: o
+ * fechamento pergunta pelo papel ENTREGA ou FECHAMENTO, o cancelamento pelo CANCELAMENTO, a trilha
+ * de abertura pelo RASCUNHO ou ABERTURA. `LIVRE` é o que o diretor cria, e dele pode haver zero ou
+ * muitos.
+ *
+ * OS CINCO CHECKS VIVEM NA MIGRATION 0102 e estão explicados lá, um a um. Os que mais importam de
+ * saber lendo daqui: linha de papel NUNCA é inativável (`papel = 'LIVRE' OR ativo`), status que
+ * ENCERRA nunca recebe candidato nem é destino de movimento manual, e status LIVRE nunca encerra.
+ *
+ * §A.6: código, rótulo, ordem, cor, papel e quatro booleanos. Nenhum dado pessoal.
+ */
+export const asVagaStatus = pgTable("as_vaga_status", {
+  id: serial("id").primaryKey(),
+  /** A identidade IMUTÁVEL: é ela que fica gravada na vaga e em cada evento da trilha. */
+  codigo: varchar("codigo", { length: 40 }).notNull().unique(),
+  rotulo: varchar("rotulo", { length: 120 }).notNull(),
+  ordem: integer("ordem").notNull(),
+  /** Da paleta FECHADA do design system (`ETAPA_TONS`). CHECK no banco, na migration. */
+  tom: varchar("tom", { length: 4 }).notNull().default("nt"),
+  ativo: boolean("ativo").notNull().default(true),
+  /** `LIVRE` é a linha do diretor; os outros cinco são os alvos que o sistema procura. */
+  papel: varchar("papel", { length: 20 }).notNull().default("LIVRE"),
+  /** O processo desta vaga ACABOU? Congela contagem e para o contador de dias. */
+  encerra: boolean("encerra").notNull().default(false),
+  /** Ainda entra gente nova nesta vaga? */
+  recebeCandidato: boolean("recebe_candidato").notNull().default(true),
+  /** A trilha de abertura pode GRAVAR este status? Permissão, nunca proibição. */
+  daTrilha: boolean("da_trilha").notNull().default(false),
+  /** O diretor pode mover uma vaga PARA este status pela tela? */
+  movivelManualmente: boolean("movivel_manualmente").notNull().default(false),
+  criadoEm,
+  atualizadoEm,
+});
+
 // ── A&S / CENTRAL DE VAGAS (onda 1) ─────────────────────────────────────────
 /**
  * VAGA: a abertura, e a LINHA é a identidade (decisão do diretor, 21/08).
@@ -2258,7 +2327,21 @@ export const vagas = pgTable(
     natureza: vagaNaturezaEnum("natureza"),
     /** Nasce VAZIO: a coluna não existe na base e preencher seria adivinhar. */
     vinculo: vagaVinculoEnum("vinculo"),
-    status: vagaStatusEnum("status").notNull().default("ABERTA"),
+    /**
+     * O STATUS, AGORA UM CÓDIGO DO CATÁLOGO (`as_vaga_status`, migration 0102), e não mais um enum.
+     *
+     * SEM DEFAULT, e a ausência é a regra (mesma decisão de `as_candidaturas.etapa` na 0100): um
+     * default seria um SEGUNDO dono da decisão de onde a vaga nasce, apontando para um código fixo
+     * mesmo depois de o diretor renomear a linha, e faria nascer vaga PUBLICADA num INSERT que
+     * esquecesse a coluna, pulando `travaStatusDaTrilha` inteira. Quem decide é o service, que
+     * pergunta ao catálogo pelo PAPEL e passa o código explicitamente.
+     *
+     * FK RESTRICT: status inexistente é impossível, e um código por onde alguma vaga passou não pode
+     * ser apagado do catálogo, só inativado.
+     */
+    status: varchar("status", { length: 40 })
+      .notNull()
+      .references(() => asVagaStatus.codigo, { onDelete: "restrict" }),
     sazonalidade: vagaSazonalidadeEnum("sazonalidade").notNull().default("OPERACAO_PADRAO"),
     /**
      * OS DOIS CONTADORES DA VAGA (decisão do diretor, 25/08): a vaga deixa de ter UMA meta e passa a
@@ -2484,6 +2567,84 @@ export const vagas = pgTable(
     fechamentoForcadoEm: timestamp("fechamento_forcado_em", { withTimezone: true }),
     fechamentoForcadoFaltavam: integer("fechamento_forcado_faltavam"),
 
+    /**
+     * ─ A TRILHA DO CANCELAMENTO (onda B1): a segunda porta para o estado terminal da vaga ───────
+     *
+     * CANCELAR NÃO É FECHAR, e é por isso que as colunas são outras. Fechar responde "a vaga
+     * entregou o que prometeu?"; cancelar responde "por que este processo não vai mais acontecer?".
+     * O status `CANCELADA` já existia no enum e já era LIDO em quatro pontos (o desfecho da vaga
+     * vence tudo, os contadores congelam, o card de KPI); o que faltava era o ESCRITOR, e ele nasce
+     * carimbando tudo isto na MESMA gravação que muda o status. Não existe vaga cancelada sem trilha.
+     *
+     * `cancelamento_motivo` GUARDA O NOME, e não o id do catálogo (`motivos_cancelamento_vaga`),
+     * pela razão escrita naquela tabela: a vaga cancelada em janeiro continua dizendo por que foi
+     * cancelada mesmo que o motivo saia de circulação em março. O service valida o nome contra o
+     * catálogo ATIVO na hora de gravar, então texto livre não entra por aqui.
+     *
+     * ┌─ AS TRÊS COLUNAS DO FORÇADO, e por que o número se chama `seguravam` ──────────────────┐
+     * │ O CANCELAMENTO É BARRADO quando ainda há candidatura que SEGURA o cancelamento (ATIVO   │
+     * │ ou ALOCADO, régua do diretor em `seguraOCancelamento`). O MASTER passa por cima, porque │
+     * │ acontece de o cliente cancelar a vaga com gente em processo dentro. A exceção deixa      │
+     * │ marca: quem autorizou, quando, e QUANTOS processos ele atropelou naquele instante.       │
+     * │                                                                                         │
+     * │ O NÚMERO É CONGELADO E NÃO RECALCULADO, como o `fechamento_forcado_faltavam`: as         │
+     * │ candidaturas que seguravam são ENCERRADAS pelo próprio cancelamento forçado (§A.6, para  │
+     * │ o prazo de retenção poder correr), então recalcular daria ZERO para sempre e a trilha    │
+     * │ contaria uma história diferente da que aconteceu.                                        │
+     * └─────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * `ON DELETE SET NULL` NOS DOIS AUTORES, e NÃO existe check de "tudo ou nada" entre as colunas,
+     * pela mesma razão da 0098: apagar um usuário não pode FALHAR por causa de uma vaga cancelada
+     * meses antes, e a trilha não pode sumir junto com ele. Sem o autor, ela ainda diz quando, por
+     * que e quantos processos foram atropelados.
+     *
+     * §A.6: um id de usuário INTERNO, duas datas, um número e dois textos de PROCESSO. Nenhum dado
+     * de candidato, nenhum CPF, nenhum nome de pessoa, nenhuma URL.
+     */
+    canceladaPorId: uuid("cancelada_por_id").references(() => usuarios.id, {
+      onDelete: "set null",
+    }),
+    canceladaEm: timestamp("cancelada_em", { withTimezone: true }),
+    cancelamentoMotivo: varchar("cancelamento_motivo", { length: 160 }),
+    cancelamentoObservacao: text("cancelamento_observacao"),
+    cancelamentoForcadoPorId: uuid("cancelamento_forcado_por_id").references(() => usuarios.id, {
+      onDelete: "set null",
+    }),
+    cancelamentoForcadoEm: timestamp("cancelamento_forcado_em", { withTimezone: true }),
+    cancelamentoForcadoSeguravam: integer("cancelamento_forcado_seguravam"),
+
+    /**
+     * ─ O INSTANTE EM QUE A VAGA ENCERROU, CARIMBADO PELO SERVIDOR (migration 0103) ──────────────
+     *
+     * PARA QUE ELA EXISTE: é o RELÓGIO DA RETENÇÃO (§A.6). O expurgo de candidatos passa a tratar
+     * "vivo em vaga ENCERRADA" como processo encerrado, para o prazo de 2 anos poder começar a
+     * correr; sem uma data de referência, o prazo dessa pessoa contaria do `atualizado_em` da
+     * candidatura, que NÃO é carimbado quando a vaga encerra (medido: a candidatura APROVADA ficou
+     * 18 segundos ATRÁS do `cancelada_em` da vaga). Quem foi aprovado em 2024 numa vaga encerrada
+     * hoje nasceria com o prazo JÁ VENCIDO e seria anonimizado na varredura seguinte, sem carência.
+     *
+     * ┌─ POR QUE NÃO `data_fechamento`, e é a razão inteira de a coluna existir ─────────────────┐
+     * │ `data_fechamento` VEM DO CORPO (`dto.dataFechamento` / `dto.dataCancelamento`, os dois    │
+     * │ `@IsISO8601()` sem piso), e isso é deliberado: ela é o fato COMERCIAL, que pode ser        │
+     * │ anterior ao clique, e é o que o contador de dias em aberto lê. O que ela não pode ser é    │
+     * │ relógio de expurgo: um COMUM cancelando uma vaga com data de 2019 faria todo mundo dentro  │
+     * │ dela virar elegível na varredura seguinte, ou seja, um gatilho REMOTO de exclusão          │
+     * │ irreversível de dado pessoal. Esta aqui é `new Date()` do servidor, como `cancelada_em`.   │
+     * │                                                                                           │
+     * │ `cancelada_em` também não bastava: ela só existe no CANCELAMENTO, e a vaga FECHADA e a     │
+     * │ ENTREGUE encerram igual, sem carimbo de servidor nenhum.                                   │
+     * └───────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * ESCRITA POR DUAS PORTAS, E SÓ POR ELAS: `vagas.service.fechar` e `vagas.service.cancelar`,
+     * dentro do MESMO `update` que muda o status, então não existe vaga encerrada sem o instante.
+     * `moverStatus` não alcança status que encerra (o service recusa e o CHECK
+     * `as_vaga_status_encerra_nao_e_destino` da 0102 recusa de novo, no banco).
+     *
+     * NULA NA VAGA VIVA, e a leitura do expurgo é FAIL-CLOSED: vaga marcada como encerrada sem este
+     * carimbo continua PROTEGENDO quem está dentro, em vez de liberar o prazo com data desconhecida.
+     */
+    encerradaEm: timestamp("encerrada_em", { withTimezone: true }),
+
     criadoEm,
     atualizadoEm,
   },
@@ -2520,6 +2681,26 @@ export const vagas = pgTable(
       "ck_vagas_fechamento_forcado_faltavam",
       sql`${t.fechamentoForcadoFaltavam} is null or ${t.fechamentoForcadoFaltavam} > 0`,
     ),
+    /**
+     * FORÇAR O CANCELAMENTO COM ZERO SEGURANDO NÃO EXISTE, e é o mesmo CHECK do forçamento do
+     * fechamento, pela mesma razão: se ninguém segurava, o cancelamento passou pela régua NORMAL e
+     * não é exceção nenhuma. Zero gravado aqui seria uma trilha descrevendo um fato que não
+     * aconteceu, no campo que a auditoria lê para saber o tamanho da exceção autorizada.
+     */
+    ckCancelamentoForcadoSeguravam: check(
+      "ck_vagas_cancelamento_forcado_seguravam",
+      sql`${t.cancelamentoForcadoSeguravam} is null or ${t.cancelamentoForcadoSeguravam} > 0`,
+    ),
+    // A pergunta é sempre "quais vagas foram canceladas", nunca "todas as vagas": índice PARCIAL,
+    // como o do forçamento do fechamento. É ele que faz a trilha ser consultável, e não só gravada.
+    idxCanceladaEm: index("idx_vagas_cancelada_em")
+      .on(t.canceladaEm)
+      .where(sql`${t.canceladaEm} is not null`),
+    // O MESMO DESENHO, e pela mesma razão: a coluna é nula na vaga viva (a maioria) e a pergunta que
+    // a retenção faz é sempre sobre a vaga ENCERRADA.
+    idxEncerradaEm: index("idx_vagas_encerrada_em")
+      .on(t.encerradaEm)
+      .where(sql`${t.encerradaEm} is not null`),
     // O CHECK `ck_vagas_limite_sazonal` (data limite obrigatória na vaga SAZONAL) foi REMOVIDO na
     // correção de 21/08: a amarração era engano, a data limite vale para qualquer natureza de vaga.
   }),
@@ -2642,6 +2823,56 @@ export const vagaMetaReducoes = pgTable(
       "ck_vaga_meta_reducoes_numeros",
       sql`(${t.deOficiais} is null or ${t.deOficiais} > 0) and ${t.paraOficiais} > 0 and ${t.deBanco} >= 0 and ${t.paraBanco} >= 0`,
     ),
+  }),
+);
+
+/**
+ * ─ A TRILHA DO MOVIMENTO MANUAL DE STATUS DA VAGA (onda B2, migration 0102) ────────────────────
+ *
+ * UMA LINHA POR MOVIMENTO, e não um par de colunas na vaga: a vaga pode ir e voltar de um status
+ * quantas vezes o time quiser enquanto estiver aberta, e guardar só o último contaria uma história
+ * falsa. É a mesma decisão, pela mesma razão, de `vaga_meta_reducoes` (0099).
+ *
+ * AS DUAS FKs PARA O CATÁLOGO SÃO `RESTRICT`, e não enfeite: são elas que fazem a camada 2 do apagar
+ * enxergar que vagas JÁ PASSARAM por um status. Sem elas, apagar a linha do catálogo deixaria os
+ * eventos apontando para um código que não existe mais, e a linha do tempo exibiria código cru.
+ *
+ * ELA REGISTRA SÓ O MOVIMENTO MANUAL (`PATCH /as/vagas/:id/status`). O fechamento e o cancelamento
+ * têm trilha PRÓPRIA e mais rica, nas colunas da própria vaga (`fechamento_forcado_*`,
+ * `cancelada_por_id`, `cancelamento_motivo`), e duplicá-los aqui criaria dois lugares para responder
+ * a mesma pergunta.
+ *
+ * §A.6: um id de vaga, dois códigos de status, um id de usuário INTERNO, uma data e a observação
+ * digitada por quem moveu. Nenhum dado de candidato.
+ */
+export const asVagaStatusEventos = pgTable(
+  "as_vaga_status_eventos",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    /** CASCADE: o rastro é DA vaga e não sobrevive a ela, mesma regra de `vaga_meta_reducoes`. */
+    vagaId: uuid("vaga_id")
+      .notNull()
+      .references(() => vagas.id, { onDelete: "cascade" }),
+    /** De onde a vaga saiu. NULÁVEL: existe movimento sem origem conhecida (carga, reprocesso). */
+    de: varchar("de", { length: 40 }).references(() => asVagaStatus.codigo, {
+      onDelete: "restrict",
+    }),
+    para: varchar("para", { length: 40 })
+      .notNull()
+      .references(() => asVagaStatus.codigo, { onDelete: "restrict" }),
+    /**
+     * SET NULL, e não RESTRICT, como o autor da redução de meta: apagar um usuário não pode FALHAR
+     * por causa de um movimento de meses atrás, e o rastro não pode sumir junto com ele. Sem o
+     * autor, ele ainda diz QUANDO e DE ONDE PARA ONDE.
+     */
+    porId: uuid("por_id").references(() => usuarios.id, { onDelete: "set null" }),
+    em: timestamp("em", { withTimezone: true }).notNull().defaultNow(),
+    /** O que quem moveu escreveu. Texto livre, opcional, sem dado de candidato (§A.6). */
+    observacao: text("observacao"),
+  },
+  (t) => ({
+    /** (vaga, quando): a linha do tempo da vaga, da mais antiga para a mais recente. */
+    idxVaga: index("idx_as_vaga_status_eventos_vaga").on(t.vagaId, t.em),
   }),
 );
 
@@ -3081,6 +3312,44 @@ export const asCandidaturaEtapas = pgTable(
      */
     aceiteNumero: integer("aceite_numero"),
     /**
+     * ─ O MARCADOR ESTRUTURAL DA SAÍDA POR CANCELAMENTO DE VAGA (reabertura) ────────────────────
+     *
+     * QUAL MOVIMENTO DA VAGA CAUSOU ESTA SAÍDA. Preenchida SÓ quando o cancelamento da vaga
+     * encerrou a candidatura junto, e nula em todo o resto (entrada, movimento, troca de vaga e
+     * toda saída registrada por gente).
+     *
+     * ┌─ POR QUE UM PONTEIRO, E NÃO O TEXTO DO MOTIVO ────────────────────────────────────────┐
+     * │ Antes desta coluna, o único sinal de que a saída veio de um cancelamento era a frase    │
+     * │ "Vaga cancelada: X" em `motivo`, e esse campo é DIGITÁVEL À MÃO por qualquer consultor  │
+     * │ (o DTO da saída pede dois caracteres). Casar por texto na hora de reabrir ressuscitaria │
+     * │ quem a SELEÇÃO descartou de propósito, e seria atalho para pular a ciência de reentrada.│
+     * │                                                                                        │
+     * │ E O TEXTO NÃO SEPARA DOIS CANCELAMENTOS DA MESMA VAGA: cancelar, reabrir sem trazer     │
+     * │ ninguém, realocar a mesma pessoa e cancelar de novo deixa DUAS saídas com o MESMO texto,│
+     * │ e reativar as duas violaria o unique parcial das vivas, derrubando a transação. Com o   │
+     * │ id do evento, cada cancelamento tem o seu conjunto.                                     │
+     * └────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    vagaStatusEventoId: uuid("vaga_status_evento_id").references(() => asVagaStatusEventos.id, {
+      onDelete: "set null",
+    }),
+    /**
+     * EM QUE SITUAÇÃO A PESSOA ESTAVA quando esta saída a encerrou, e é o que a reabertura precisa
+     * para devolvê-la ao lugar de onde ela veio (`ATIVO` volta em seleção, `ALOCADO` volta alocado).
+     *
+     * ELA NÃO É DEDUZÍVEL DA LINHA, e a heurística óbvia é FALSA: existe candidatura `ATIVO` com
+     * `posicao_lado` preenchido na base agora, porque o `reverterEnvioParaAdmissao` devolve a pessoa
+     * para `ATIVO` sem limpar o lado, de propósito. Chutar por ali devolveria à vaga uma ENTREGA que
+     * nunca houve.
+     */
+    situacaoOrigem: candidaturaSituacaoEnum("situacao_origem"),
+    /**
+     * DE QUE LADO ELA OCUPAVA POSIÇÃO, quando ocupava. NULA quer dizer "não ocupava posição
+     * nenhuma", que é diferente de "ocupava a oficial": coalescer o nulo para OFICIAL na volta
+     * encheria o cilindro oficial da vaga com quem estava só em seleção.
+     */
+    posicaoLadoOrigem: text("posicao_lado_origem"),
+    /**
      * QUANDO ACONTECEU. Separado de `criadoEm` pela mesma razão do `asContatos`: são perguntas
      * diferentes, e a semente do backfill grava aqui o `alocado_em` da candidatura, que é passado.
      */
@@ -3117,5 +3386,18 @@ export const asCandidaturaEtapas = pgTable(
     idxAceite: index("idx_as_candidatura_etapas_aceite")
       .on(t.aceite, t.ocorridoEm)
       .where(sql`${t.aceite} is not null`),
+    /** O lado de ORIGEM é um dos dois, ou ausente. Mesma guarda de borda das colunas irmãs. */
+    ckPosicaoLadoOrigem: check(
+      "ck_as_candidatura_etapas_posicao_lado_origem",
+      sql`${t.posicaoLadoOrigem} is null or ${t.posicaoLadoOrigem} in ('OFICIAL', 'BANCO')`,
+    ),
+    /**
+     * ÍNDICE PARCIAL SOBRE O MARCADOR DO CANCELAMENTO, pela mesma razão do índice do aceite: a
+     * pergunta é sempre "quem saiu NESTE cancelamento", nunca "todos os eventos", e a coluna é nula
+     * na esmagadora maioria das linhas.
+     */
+    idxVagaStatusEvento: index("idx_as_candidatura_etapas_vaga_status_evento")
+      .on(t.vagaStatusEventoId)
+      .where(sql`${t.vagaStatusEventoId} is not null`),
   }),
 );

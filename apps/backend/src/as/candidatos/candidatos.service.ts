@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   HttpException,
   Inject,
   Injectable,
@@ -42,11 +43,11 @@ import {
   ocupacaoDaVaga,
   ocupadasPorLado,
   ACEITE_BANCO_COM_OFICIAIS_ABERTAS,
-  vagaRecebeCandidato,
   SITUACOES_VIVAS,
   SITUACOES_QUE_CONSOMEM_POSICAO,
   candidaturaViva,
   consomePosicao,
+  desvinculoEhDeMaster,
   finalizaPosicao,
   ladoDaCandidatura,
   ladoGravado,
@@ -60,7 +61,14 @@ import {
   type SituacaoQueOcupaPosicao,
 } from "../../domain/candidatura";
 import { ordenarLinhaDoTempo, tipoDoEvento } from "../../domain/candidatura-historico";
+/*
+ * A GRAVAÇÃO DA SAÍDA SAIU DAQUI E VIROU FUNÇÃO DE MÓDULO (ver o arquivo, que explica por quê): o
+ * cancelamento FORÇADO da vaga precisa do MESMO gesto dentro da transação dele, e duas cópias da
+ * saída divergiriam no primeiro ajuste. A régua não mudou uma vírgula.
+ */
+import { gravarSaidaDaCandidatura } from "./encerrar-candidatura";
 import { EtapasFunilService } from "../etapas/etapas-funil.service";
+import { VagaStatusService } from "../vaga-status/vaga-status.service";
 import type { AuthUser } from "../../auth/auth.types";
 import type {
   AdicionarEmLoteDto,
@@ -145,6 +153,20 @@ export class CandidatosService {
   constructor(
     @Inject(DRIZZLE) private readonly db: Database,
     private readonly etapas: EtapasFunilService,
+    /**
+     * O CATÁLOGO DE STATUS DA VAGA (onda B2). Ele responde a TRAVA 2 deste arquivo, "esta vaga
+     * recebe candidato novo?", que antes era a função pura `vagaRecebeCandidato`.
+     *
+     * ┌─ A MUDANÇA QUE IMPORTA NÃO É A FONTE, É A SINCRONIA ────────────────────────────────────┐
+     * │ A função pura podia ser chamada em qualquer lugar sem pensar. A régua é lida com UM       │
+     * │ `await`, SEMPRE ANTES DA TRANSAÇÃO, e perguntada lá dentro SEM `await`. Os cinco pontos   │
+     * │ que fazem esta pergunta continuam exatamente onde estavam: os DOIS que rodam sob o        │
+     * │ `SELECT ... FOR UPDATE` continuam lá dentro (é a correção de 09/09, e tirá-los seria      │
+     * │ decidir sobre uma fotografia velha) e os TRÊS que são pré-conferência de UX continuam     │
+     * │ fora, sem substituir a travada.                                                          │
+     * └─────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    private readonly statusVaga: VagaStatusService,
   ) {}
 
   // ── A PESSOA ──────────────────────────────────────────────────────────────
@@ -409,8 +431,10 @@ export class CandidatosService {
     const vaga = await this.db.query.vagas.findFirst({ where: eq(vagas.id, dto.vagaId) });
     if (!vaga) throw new NotFoundException("Vaga não encontrada.");
 
-    // TRAVA 2: vaga encerrada não recebe candidato novo. FECHADA, CANCELADA e ENTREGUE.
-    if (!vagaRecebeCandidato(vaga.status)) {
+    // TRAVA 2: vaga encerrada não recebe candidato novo. A pergunta é feita ao CATÁLOGO, pelo flag
+    // `recebeCandidato`, e não a uma lista de três códigos escrita aqui.
+    const regua = await this.statusVaga.regua();
+    if (!regua.recebeCandidato(vaga.status)) {
       throw new ConflictException("Esta vaga está Fechada e não recebe candidato novo.");
     }
 
@@ -664,8 +688,8 @@ export class CandidatosService {
    *
    * O QUE ELA RESOLVE. Até aqui, o ÚNICO jeito de dizer "esta posição foi preenchida" era FECHAR a
    * vaga com um número digitado à mão, e fechar bloqueia: a vaga entregue para de receber candidato
-   * (`STATUS_QUE_NAO_RECEBEM`). Quem tinha 5 posições e entregou a primeira ficava entre mentir o
-   * número ou fechar cedo demais. Com esta operação, entregar uma posição é um fato por pessoa, e a
+   * (o flag `recebeCandidato` do catálogo). Quem tinha 5 posições e entregou a primeira ficava entre
+   * mentir o número ou fechar cedo demais. Com esta operação, entregar uma posição é um fato por pessoa, e a
    * vaga continua aberta enquanto sobrar posição.
    *
    * ELA NÃO É UMA SAÍDA, e é por isso que ela não passa pelo `registrarSaida`: o candidato ALOCADO
@@ -770,6 +794,12 @@ export class CandidatosService {
     dto: TrocarVagaDto,
     porId: string,
   ): Promise<AsCandidaturaItem> {
+    /*
+     * O CATÁLOGO ANTES DA TRANSAÇÃO, e a régua é SÍNCRONA lá dentro. O STATUS DA VAGA DE DESTINO
+     * continua sendo lido sob o `SELECT ... FOR UPDATE`, logo abaixo, e trocar essa leitura travada
+     * por uma solta aqui em cima desfaria a corrida que o lock existe para fechar.
+     */
+    const regua = await this.statusVaga.regua();
     await this.db.transaction(async (tx) => {
       const c = await tx.query.asCandidaturas.findFirst({
         where: eq(asCandidaturas.id, candidaturaId),
@@ -797,8 +827,9 @@ export class CandidatosService {
         .for("update");
       if (!destino) throw new NotFoundException("Vaga de destino não encontrada.");
 
-      // TRAVA 1: a vaga de destino recebe candidato? FECHADA, CANCELADA e ENTREGUE não recebem.
-      if (!vagaRecebeCandidato(destino.status)) {
+      // TRAVA 1: a vaga de destino recebe candidato? O flag do catálogo responde, sobre o status
+      // lido AQUI, sob a linha travada.
+      if (!regua.recebeCandidato(destino.status)) {
         throw new ConflictException(
           "Esta vaga não recebe candidato: ela está encerrada. Escolha uma vaga aberta.",
         );
@@ -937,14 +968,37 @@ export class CandidatosService {
   async registrarSaida(
     candidaturaId: string,
     dto: RegistrarSaidaDto,
-    porId: string,
+    user: AuthUser,
   ): Promise<AsCandidaturaItem> {
+    // QUEM vem da SESSÃO inteira, e não só o id: a autoria continua sendo `user.id`, e o PAPEL é o
+    // que a trava do desvínculo de ALOCADO consulta, mais abaixo. Ver o bloco dela.
+    const porId = user.id;
+
     if (ocupaPosicao(dto.situacao)) {
       await this.mudarSituacaoOcupandoPosicao(
         candidaturaId,
         dto.situacao,
         texto(dto.motivo),
         porId,
+        // SEM ESCOLHA DE LADO: o avanço para a esteira não escolhe de que lado da meta a posição
+        // sai, ele herda o lado JÁ GRAVADO na candidatura (ver o bloco do lado, no caminho travado).
+        undefined,
+        /*
+         * ┌─ A TERCEIRA PORTA, FECHADA (decisão do diretor, Onda B) ────────────────────────────────────┐
+         * │ ESTE CHAMADOR NÃO LIGAVA A CONFERÊNCIA, e os outros dois ligavam. O efeito era uma          │
+         * │ RESSURREIÇÃO: enviar para a admissão uma candidatura JÁ ENCERRADA reescrevia a linha morta  │
+         * │ como `ENVIADO_PARA_ADMISSAO`, que CONSOME POSIÇÃO da vaga, sem Master, sem aceite de        │
+         * │ reentrada e sem a conversa que a `alocar` existe para ter. A fronteira de encerrada para    │
+         * │ viva tem DUAS portas declaradas (a restauração do reabrir e a reentrada com aceite), e esta │
+         * │ era uma terceira, não declarada.                                                            │
+         * │                                                                                             │
+         * │ A TELA VOLTA A DIZER A VERDADE DE GRAÇA: o aviso do lote ("vão voltar na lista de falhas")  │
+         * │ já era verdadeiro no modo DESVINCULAR e falso neste, com o MESMO texto e o MESMO componente.│
+         * │ Com a conferência ligada, o backend recusa e a pessoa realmente volta na lista de falhas.   │
+         * │ Nenhum texto precisou mudar.                                                                │
+         * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+         */
+        { exigeCandidaturaViva: true },
       );
       return this.candidatura(candidaturaId);
     }
@@ -965,14 +1019,69 @@ export class CandidatosService {
      * │ EM MASSA ISSO DEIXA DE SER TEÓRICO: uma seleção grande costuma trazer junto quem já saiu,  │
      * │ e sem esta recusa o lote apagaria em silêncio o motivo real de cada um deles.              │
      * │                                                                                           │
-     * │ A RÉGUA É `candidaturaViva`, a MESMA fonte dos outros caminhos, e o RECORTE É ESTREITO DE  │
-     * │ PROPÓSITO: só o caminho simples. O avanço para a esteira (`ENVIADO_PARA_ADMISSAO`) segue   │
-     * │ pelo caminho travado com a régua exata de antes, que é decisão pendente do diretor.        │
+     * │ A RÉGUA É `candidaturaViva`, a MESMA fonte dos outros caminhos, e AGORA OS DOIS CAMINHOS   │
+     * │ DESTE MÉTODO A CONSULTAM: o avanço para a esteira (`ENVIADO_PARA_ADMISSAO`) passou a ligar │
+     * │ a mesma exigência no caminho travado (decisão do diretor, Onda B), então não há mais uma   │
+     * │ saída que ressuscite linha morta.                                                          │
      * └───────────────────────────────────────────────────────────────────────────────────────────┘
      */
     if (!candidaturaViva(c.situacao)) {
       throw new ConflictException(
         "Esta candidatura já foi encerrada e não recebe um segundo desfecho. Para trazer a pessoa de volta, aloque-a de novo na vaga.",
+      );
+    }
+
+    /*
+     * ┌─ DESVINCULAR QUEM ESTÁ ALOCADO É AÇÃO DE MASTER (decisão do diretor, Onda B) ────────────┐
+     * │ ALOCADO É ENTREGA: é ele que enche o cilindro da vaga. Desvincular um alocado DESFAZ uma  │
+     * │ entrega, e era por aqui que o gate de Master do CANCELAMENTO ficava contornável em dois   │
+     * │ passos: o consultor desvinculava os alocados, a vaga deixava de ter gente segurando, e a  │
+     * │ trava que só um Master poderia forçar nem chegava a ser consultada.                       │
+     * │                                                                                          │
+     * │ É O GATE DO CANCELAMENTO, E NÃO O DO FECHAMENTO, e a primeira redação desta caixa dizia   │
+     * │ "fechamento", errado. A auditoria mediu o contrário: o fechamento só pede Master quando   │
+     * │ `faltam = meta - entregues` é POSITIVO, então desvincular um entregue AUMENTA o que falta │
+     * │ e torna o fechamento MAIS difícil, nunca mais fácil. Quem afrouxava era o cancelamento,   │
+     * │ cuja trava conta quem SEGURA (`seguraOCancelamento`: ATIVO e ALOCADO), e foi medido ao    │
+     * │ vivo: sem esta guarda o COMUM desvinculava os alocados, descartava os ativos (gesto       │
+     * │ legítimo dele) e cancelava com ZERO segurando, sem Master nenhum ser consultado.          │
+     * │                                                                                          │
+     * │ O REGISTRO DO ERRO FICA, e não é zelo: é por raciocínio de comentário que o próximo a     │
+     * │ mexer desfaz uma trava. Quem lesse "protege o fechamento" mediria contra o fechamento,    │
+     * │ veria que não protege nada, e removeria a guarda com toda a razão aparente do mundo.      │
+     * │                                                                                          │
+     * │ A AUTORIZAÇÃO MORA AQUI, E NUNCA EM `@Roles` NA ROTA, pelo mesmo argumento já escrito no  │
+     * │ `fechar` e no `cancelar` das vagas: TODO CONSULTOR desvincula quem está EM SELEÇÃO, e um  │
+     * │ `@Roles("MASTER","SUPER_ADMIN")` no handler barraria o desvínculo normal do COMUM, que é  │
+     * │ regressão silenciosa. O que vira de Master é o desvínculo do ALOCADO, e quem sabe a       │
+     * │ situação real é o servidor, depois de ler a linha.                                       │
+     * │                                                                                          │
+     * │ SÓ O ALOCADO, e não todo mundo que `finalizaPosicao`: `ENVIADO_PARA_ADMISSAO` também      │
+     * │ entrega, e ele TAMBÉM entrou na trava (decisão do diretor, depois da auditoria medir que  │
+     * │ DESCARTAR um enviado destrói o acesso à porta própria de desfazer: depois do descarte, o  │
+     * │ `reverterEnvioParaAdmissao` responde "não há envio a reverter" para todo mundo, Master    │
+     * │ inclusive). REVERTER continua sendo de QUALQUER consultor, e por construção: aquele é      │
+     * │ método próprio, com `update` próprio, que não consulta esta régua nem recebe papel.       │
+     * │                                                                                          │
+     * │ §A.6: a recusa é frase de PROCESSO. Nenhum nome, nenhum CPF, nada da pessoa, porque no    │
+     * │ lote ela volta na lista de falhas e a tela copia aquele relatório inteiro.                │
+     * └──────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    if (desvinculoEhDeMaster(c.situacao) && !this.podeDesvincularEntregue(user)) {
+      /*
+       * A FRASE NÃO CITA A SITUAÇÃO, e isso é correção de um defeito que a própria régua criou:
+       * enquanto a trava era só o `ALOCADO`, dizer "já alocado" era exato. Ao passar a cobrir também
+       * o `ENVIADO_PARA_ADMISSAO`, a frase ficou para trás e passou a MENTIR para metade dos casos:
+       * "alocado" é uma situação específica, com pill própria na tela, e quem tentasse tirar da vaga
+       * alguém que está na esteira leria que a pessoa está "já alocada", conferiria a tela, veria
+       * outra coisa, e concluiria que o sistema se confundiu. Em lote dói mais, porque esta frase É
+       * a linha do relatório de falhas, repetida uma vez por pessoa.
+       *
+       * A redação fala do FATO que a trava protege (a posição foi entregue), que é verdade nos dois
+       * estados e continua verdade no dia em que um terceiro entregar posição.
+       */
+      throw new ForbiddenException(
+        "Tirar da vaga um candidato cuja posição já foi entregue é ação de Master. Peça o desvínculo a quem tem esse papel.",
       );
     }
 
@@ -983,19 +1092,19 @@ export class CandidatosService {
      * decisão foi tomada se perderia para sempre.
      */
     await this.db.transaction(async (tx) => {
-      await tx
-        .update(asCandidaturas)
-        .set({ situacao: dto.situacao, motivoDescarte: texto(dto.motivo), atualizadoEm: new Date() })
-        .where(eq(asCandidaturas.id, candidaturaId));
-
-      await tx.insert(asCandidaturaEtapas).values({
-        candidaturaId,
-        etapaDe: null,
-        etapaPara: c.etapa,
-        situacao: dto.situacao,
-        motivo: texto(dto.motivo),
+      await gravarSaidaDaCandidatura(
+        tx,
+        /*
+         * O LADO VAI JUNTO para o evento guardar o RETRATO da origem (`posicao_lado_origem`). Ele
+         * não muda nada nesta saída: quem lê o retrato é a reabertura da vaga, e ela só enxerga
+         * evento com marcador de cancelamento, que esta saída NÃO tem (o sexto argumento fica no
+         * padrão, nulo). Saída registrada por gente não volta em lote.
+         */
+        { id: candidaturaId, etapa: c.etapa, situacao: c.situacao, posicaoLado: c.posicaoLado },
+        dto.situacao,
+        texto(dto.motivo),
         porId,
-      });
+      );
     });
 
     return this.candidatura(candidaturaId);
@@ -1111,6 +1220,28 @@ export class CandidatosService {
         .set({
           situacao: SITUACAO_APOS_REVERTER_ENVIO,
           motivoDescarte: null,
+          /*
+           * ┌─ A MARCA DA POSIÇÃO É LIMPA AQUI TAMBÉM (conserto 2, Onda B) ────────────────────┐
+           * │ ESTA LINHA FALTAVA, e o dano foi MEDIDO em produção de homologação, não deduzido:  │
+           * │ quem estava no BANCO, teve o envio revertido e voltou para a seleção, CARREGAVA a  │
+           * │ marca antiga. A aprovação seguinte lê a marca herdada e mede a pessoa contra a     │
+           * │ META DE BANCO: numa vaga com 4 posições OFICIAIS livres e o banco cheio, a         │
+           * │ aprovação era recusada com "as 3 posições de banco já estão preenchidas". Erro     │
+           * │ incompreensível para quem operou, porque a vaga tinha lugar sobrando.              │
+           * │                                                                                    │
+           * │ O INVARIANTE É UM SÓ, E AGORA VALE NAS DUAS PORTAS: quem está EM SELEÇÃO NÃO       │
+           * │ CARREGA MARCA DE POSIÇÃO. O `restaurar-candidatura` já o cumpria desde o conserto  │
+           * │ C; esta era a outra porta que devolve alguém para a seleção, e ela o violava.      │
+           * │ Invariante cumprido por uma porta só é invariante que a outra desmente.            │
+           * │                                                                                    │
+           * │ E NÃO SE PERDE MEMÓRIA NENHUMA: o lado que a pessoa ocupava está gravado no EVENTO │
+           * │ da entrega, em `as_candidatura_etapas`, que é onde o histórico mora. O que some é   │
+           * │ só o campo do ESTADO ATUAL, e o estado atual é "em seleção, sem posição", que é a  │
+           * │ verdade. O argumento antigo de "apagar também seria escolha" valia enquanto ele    │
+           * │ não tinha consequência medida; agora tem.                                          │
+           * └────────────────────────────────────────────────────────────────────────────────────┘
+           */
+          posicaoLado: null,
           atualizadoEm: new Date(),
         })
         .where(
@@ -1209,7 +1340,11 @@ export class CandidatosService {
   ): Promise<AsResultadoEmMassa> {
     const vaga = await this.db.query.vagas.findFirst({ where: eq(vagas.id, vagaId) });
     if (!vaga) throw new NotFoundException("Vaga não encontrada.");
-    if (!vagaRecebeCandidato(vaga.status)) {
+    // ESTA CONFERÊNCIA CONTINUA SENDO A DE UX, e não substitui a de dentro da `alocar`: ela recusa o
+    // lote inteiro por um problema DA VAGA, para o consultor não receber trinta falhas idênticas.
+    // A régua travada continua rodando por linha, lá dentro.
+    const regua = await this.statusVaga.regua();
+    if (!regua.recebeCandidato(vaga.status)) {
       throw new ConflictException("Esta vaga está Fechada e não recebe candidato novo.");
     }
 
@@ -1238,9 +1373,13 @@ export class CandidatosService {
   ): Promise<AsResultadoEmMassa> {
     const daVaga = dto.vagaId;
     if (daVaga) {
+      // A MESMA PRÉ-CONFERÊNCIA DE UX do lote de alocação: recusa o lote inteiro por um problema DA
+      // VAGA. A conferência que vale continua sendo a de dentro de `mudarSituacaoOcupandoPosicao`,
+      // sob a linha travada, e ela roda por linha.
+      const regua = await this.statusVaga.regua();
       const vaga = await this.db.query.vagas.findFirst({ where: eq(vagas.id, daVaga) });
       if (!vaga) throw new NotFoundException("Vaga não encontrada.");
-      if (!vagaRecebeCandidato(vaga.status)) {
+      if (!regua.recebeCandidato(vaga.status)) {
         throw new ConflictException(
           "Esta vaga já foi encerrada e não recebe posição nova. Recarregue a página para ver o estado atual da vaga.",
         );
@@ -1270,9 +1409,20 @@ export class CandidatosService {
    * `ENVIADO_PARA_ADMISSAO` CONSOME POSIÇÃO e vai pelo caminho travado, linha a linha, como no
    * individual: quem escolhe a porta é a régua (`ocupaPosicao`), não o nome da situação.
    */
-  registrarSaidaEmLote(dto: RegistrarSaidaEmLoteDto, porId: string): Promise<AsResultadoEmMassa> {
+  registrarSaidaEmLote(dto: RegistrarSaidaEmLoteDto, user: AuthUser): Promise<AsResultadoEmMassa> {
+    /*
+     * O USUÁRIO INTEIRO DESCE PARA CADA LINHA, e não só o id dele, porque a trava do desvínculo de
+     * ALOCADO lê o PAPEL. O lote NÃO reconfere nada por conta própria: ele chama a MESMA
+     * `registrarSaida` da ação individual, com a MESMA trava, e é isso que faz a recusa do relatório
+     * ser letra por letra a mesma da tela de uma pessoa só.
+     *
+     * A RECUSA É FALHA DA LINHA, e nunca do lote: um COMUM que selecionou trinta pessoas, das quais
+     * três estão alocadas, desvincula as vinte e sete e recebe as três de volta em `falhas`, com a
+     * frase de processo. Derrubar o lote inteiro por causa delas jogaria fora o trabalho que já
+     * estava certo, que é justamente o que o lote parcial existe para não fazer.
+     */
     return this.emLote(dto.candidaturaIds, (candidaturaId) =>
-      this.registrarSaida(candidaturaId, { situacao: dto.situacao, motivo: dto.motivo }, porId),
+      this.registrarSaida(candidaturaId, { situacao: dto.situacao, motivo: dto.motivo }, user),
     );
   }
 
@@ -1364,6 +1514,17 @@ export class CandidatosService {
   }
 
   /**
+   * QUEM PODE DESFAZER UMA ENTREGA. O papel é lido da SESSÃO, nunca do corpo, e é reconferido a cada
+   * requisição: a tela esconder o botão é conveniência, o servidor é a autoridade.
+   *
+   * MESMA FORMA DO `fechar` E DO `cancelar` das vagas (`vagas.service.ts`), de propósito: três
+   * jeitos diferentes de perguntar "é Master?" divergem na primeira vez que o papel mudar de nome.
+   */
+  private podeDesvincularEntregue(user: AuthUser): boolean {
+    return user.papel === "MASTER" || user.papel === "SUPER_ADMIN";
+  }
+
+  /**
    * A LINHA PERTENCE À VAGA QUE A TELA AFIRMOU? Só roda quando o corpo mandou a vaga.
    *
    * É UMA CONFERÊNCIA DE PERTENCIMENTO, e NÃO uma contagem: ela não decide se cabe mais um (isso é da
@@ -1399,25 +1560,49 @@ export class CandidatosService {
     novaSituacao: SituacaoQueOcupaPosicao,
     motivo: string | null,
     porId: string,
-    posicao?: { lado: PosicaoLado; cienteBancoComOficiaisAbertas: boolean },
     /*
-     * A EXIGÊNCIA DE CANDIDATURA VIVA É DO CHAMADOR, e nasce DESLIGADA de propósito.
-     *
-     * QUEM A LIGA HOJE: a finalização de posição e a APROVAÇÃO. A aprovação passou a ligá-la na
-     * auditoria de 08/09, e o motivo está escrito na `aprovar`: sem ela, aprovar um DESCARTADO
-     * ressuscitava a linha morta e pulava a ciência de reentrada, que é a conversa que a `alocar`
-     * existe para ter.
-     *
-     * QUEM NÃO A LIGA: o avanço para a esteira (`registrarSaida` com `ENVIADO_PARA_ADMISSAO`), que
-     * segue com a régua exata de antes. Ligá-la ali é mudança de comportamento em caminho já
-     * validado e fora do recorte desta rodada, então virou proposta ao diretor, não código.
-     *
-     * DENTRO DA TRANSAÇÃO, E NÃO ANTES DELA: a leitura que decide é a mesma que já existe aqui, sob
-     * a linha da vaga travada. Uma consulta solta em `finalizarPosicao` custaria uma ida a mais ao
-     * banco para responder sobre um instante anterior ao da gravação.
+     * A ESCOLHA DE LADO É EXPLÍCITA, INCLUSIVE QUANDO NÃO HÁ ESCOLHA: `undefined` significa "herda o
+     * lado já gravado na candidatura", e quem não escolhe é obrigado a escrever isso no ponto de
+     * chamada. Opcional aqui não daria: parâmetro opcional não pode preceder obrigatório, e o de
+     * baixo passou a ser obrigatório de propósito (ver o bloco seguinte).
      */
-    opcoes?: { exigeCandidaturaViva: boolean },
+    posicao: { lado: PosicaoLado; cienteBancoComOficiaisAbertas: boolean } | undefined,
+    /*
+     * ┌─ A EXIGÊNCIA DE CANDIDATURA VIVA É OBRIGATÓRIA NA ASSINATURA, e isto é a correção que ────┐
+     * │   IMPEDE A REINCIDÊNCIA (decisão do diretor, Onda B)                                      │
+     * │                                                                                           │
+     * │ ELA NASCEU OPCIONAL, e o DEFAULT SILENCIOSO ERA O DEFEITO. Este método tem três            │
+     * │ chamadores; dois ligavam a conferência e o terceiro, o avanço para a esteira, HERDOU a     │
+     * │ ausência sem ninguém decidir nada: enviar para a admissão uma candidatura ENCERRADA        │
+     * │ ressuscitava a linha morta consumindo posição da vaga, sem Master e sem aceite. Não foi    │
+     * │ uma trava burlada, foi uma trava não consultada, que é o mesmo modo de falha que já custou │
+     * │ caro neste arquivo.                                                                       │
+     * │                                                                                           │
+     * │ OBRIGATÓRIA, O PRÓXIMO A CONSTRUIR É FORÇADO A ESCOLHER, e a escolha fica ESCRITA no ponto │
+     * │ de chamada, onde quem lê o caminho a enxerga. Um chamador novo que não decida nada não     │
+     * │ compila, em vez de nascer com a porta aberta e nenhum teste vermelho.                      │
+     * │                                                                                           │
+     * │ QUEM LIGA HOJE: os TRÊS. A aprovação (auditoria de 08/09), a finalização de posição e o    │
+     * │ avanço para a esteira (Onda B). A opção continua existindo porque ela é uma pergunta       │
+     * │ legítima de um caminho futuro, e não um vestígio: o que deixou de existir é a resposta     │
+     * │ dada por omissão.                                                                         │
+     * │                                                                                           │
+     * │ DENTRO DA TRANSAÇÃO, E NÃO ANTES DELA: a leitura que decide é a mesma que já existe aqui,  │
+     * │ sob a linha da vaga travada. Uma consulta solta custaria uma ida a mais ao banco para      │
+     * │ responder sobre um instante anterior ao da gravação.                                      │
+     * └───────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    opcoes: { exigeCandidaturaViva: boolean },
   ): Promise<void> {
+    /*
+     * O CATÁLOGO ANTES DA TRANSAÇÃO. ISTO NÃO MOVE A TRAVA 2 PARA FORA DO LOCK, e a diferença é a
+     * que a auditoria de 09/09 deixou escrita logo abaixo: o que se lê aqui é o CATÁLOGO (uma lista
+     * de meia dúzia de linhas, servida de cache, que não tem nada a ver com esta vaga); o que se lê
+     * sob o `SELECT ... FOR UPDATE` é o STATUS DA VAGA, que é o dado disputado. A régua devolvida é
+     * síncrona, então lá dentro não sobra `await` de catálogo para alguém, um dia, "aproveitar a
+     * viagem" e puxar a vaga junto por fora do lock.
+     */
+    const regua = await this.statusVaga.regua();
     await this.db.transaction(async (tx) => {
       const c = await tx.query.asCandidaturas.findFirst({
         where: eq(asCandidaturas.id, candidaturaId),
@@ -1430,7 +1615,7 @@ export class CandidatosService {
       }
       // TRAVA 5: quem saiu do processo não tem posição a entregar, tem processo a recomeçar, e o
       // recomeço passa pela `alocar`, que é onde a ciência de reentrada é pedida.
-      if (opcoes?.exigeCandidaturaViva && !candidaturaViva(c.situacao)) {
+      if (opcoes.exigeCandidaturaViva && !candidaturaViva(c.situacao)) {
         throw new ConflictException(
           "Esta candidatura já foi encerrada e não recebe posição. Para trazer a pessoa de volta, aloque-a de novo na vaga, que é onde o sistema mostra o motivo do encerramento anterior.",
         );
@@ -1479,7 +1664,7 @@ export class CandidatosService {
       /*
        * ┌─ TRAVA 2, AGORA TAMBÉM AQUI: A VAGA ENCERRADA NÃO RECEBE POSIÇÃO (auditoria, 09/09) ───┐
        * │ O STATUS JÁ ERA LIDO NESTE `SELECT ... FOR UPDATE` E NINGUÉM O CONFERIA. A `alocar` e a │
-       * │ `trocarVaga` aplicavam `vagaRecebeCandidato`; o CAMINHO TRAVADO, que é por onde passam  │
+       * │ `trocarVaga` aplicavam a régua do status; o CAMINHO TRAVADO, que é por onde passam      │
        * │ a finalização de posição, a aprovação e o avanço para a esteira, lia o campo e seguia   │
        * │ adiante. Uma vaga `FECHADA`, `CANCELADA` ou `ENTREGUE` continuava recebendo entrega.    │
        * │                                                                                        │
@@ -1493,8 +1678,8 @@ export class CandidatosService {
        * │ posição oficial em aberto (a exceção fica registrada em nome dele, como deve), e depois │
        * │ despeja-se alocação na vaga já fechada, onde nenhuma trava do fechamento roda de novo.  │
        * │                                                                                        │
-       * │ A RÉGUA É A MESMA DA `alocar`, importada do domínio e não redigitada: uma segunda lista │
-       * │ de status encerrados neste arquivo divergiria da primeira na correção seguinte.         │
+       * │ A RÉGUA É A MESMA DA `alocar`, vinda do CATÁLOGO e não redigitada: uma segunda lista de │
+       * │ status encerrados neste arquivo divergiria da primeira na correção seguinte.            │
        * │                                                                                        │
        * │ AQUI, E NÃO ANTES DA TRANSAÇÃO: o status que decide é o mesmo que a gravação vai usar,  │
        * │ sob a linha travada. Uma consulta solta antes do lock responderia sobre o instante      │
@@ -1502,7 +1687,7 @@ export class CandidatosService {
        * │ fechar: o fechamento que chega no meio espera, e quem chegar depois lê a vaga encerrada.│
        * └────────────────────────────────────────────────────────────────────────────────────────┘
        */
-      if (!vagaRecebeCandidato(vaga.status)) {
+      if (!regua.recebeCandidato(vaga.status)) {
         throw new ConflictException(
           "Esta vaga já foi encerrada e não recebe posição nova. Recarregue a página para ver o estado atual da vaga.",
         );

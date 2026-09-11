@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { ETAPA_TOM_PADRAO, type AsEtapaFunil, type EtapaTom } from "@ea/shared-types";
 import { apiFetch } from "@/lib/api";
+import type { PillTone } from "@/components/ui/Pill";
 
 /**
  * ─ O CATÁLOGO DE ETAPAS DO FUNIL, DO LADO DA TELA ───────────────────────────────────────────────
@@ -97,15 +98,28 @@ export function tomDaEtapa(codigo: string, catalogo: readonly AsEtapaFunil[]): E
  * O VERMELHO NÃO ESTÁ AQUI porque não está na paleta (`ETAPA_TONS`): no sistema ele é RECUSA
  * (§A.12), e etapa é POSIÇÃO no funil, não julgamento.
  */
-const COR_DO_TOM: Record<EtapaTom, string> = {
+/**
+ * A COR DE CADA TOM, E A TABELA COBRE A PALETA INTEIRA DA `Pill`, não só a das etapas.
+ *
+ * POR QUE `dg` ESTÁ AQUI SE NENHUMA ETAPA PODE SER `dg`: porque esta função deixou de servir só ao
+ * funil. O catálogo de STATUS DA VAGA usa a paleta completa (`VAGA_STATUS_TONS`), e precisa do
+ * vermelho: "Cancelada" é vermelha em produção, e pela §A.12 recusa leva o X vermelho. Estreitar a
+ * função à paleta das etapas obrigaria uma segunda função de cor, e duas tabelas de cor divergem no
+ * primeiro tom que alguém acrescentar.
+ *
+ * A RÉGUA DE QUEM PODE USAR QUAL TOM CONTINUA NO CATÁLOGO, e é lá que ela pertence: o CHECK do banco
+ * das etapas segue com cinco tons, o do status com seis. Esta função só PINTA o que já foi validado.
+ */
+const COR_DO_TOM: Record<PillTone, string> = {
   nt: "var(--dim)",
   in: "var(--accent)",
   wn: "var(--warn)",
   or: "var(--warn-2)",
+  dg: "var(--danger)",
   ok: "var(--ok)",
 };
 
-export function corDoTom(tom: EtapaTom): string {
+export function corDoTom(tom: PillTone): string {
   return COR_DO_TOM[tom] ?? COR_DO_TOM[ETAPA_TOM_PADRAO];
 }
 

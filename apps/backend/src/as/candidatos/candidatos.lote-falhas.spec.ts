@@ -5,6 +5,7 @@ import { ACEITE_REENTRADA, consomePosicao } from "../../domain/candidatura";
 import { asCandidaturaEtapas, asCandidaturas } from "../../db/schema";
 import { CandidatosService } from "./candidatos.service";
 import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
+import { catalogoDeStatusFingido } from "../vaga-status/vaga-status-catalogo.fake";
 
 /**
  * ─ O LOTE PARCIAL: uma linha ruim NÃO derruba as outras, e a resposta NÃO carrega dado pessoal ──
@@ -247,7 +248,7 @@ function makeDb(cenario: {
   };
 
   return {
-    service: new CandidatosService(db as never, catalogoDeEtapasFingido() as never),
+    service: new CandidatosService(db as never, catalogoDeEtapasFingido() as never, catalogoDeStatusFingido() as never),
     estado,
     escritas,
     contar: (situacao: string) =>
@@ -339,7 +340,7 @@ describe("Uma linha ruim no MEIO do lote não impede as seguintes", () => {
 
     const r = await service.registrarSaidaEmLote(
       { candidaturaIds: SELECAO, situacao: "DESCARTADO", motivo: "perfil não aderente" },
-      USER.id,
+      USER,
     );
 
     expect(r.aplicadas).toBe(3);

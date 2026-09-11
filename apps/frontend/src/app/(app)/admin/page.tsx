@@ -117,6 +117,50 @@ export const CARDS: { href: string; icon: IconName; title: string; desc: string;
   },
   {
     /**
+     * MOTIVOS DE CANCELAMENTO DE VAGA (A&S): é CATÁLOGO, e catálogo mora no Menu Gerencial, ao lado
+     * de Motivos De Declínio, que é o vizinho de mesma natureza (a lista fechada que classifica um
+     * encerramento). Não vai para a barra lateral: o card É o que faz o menu ser ENCONTRADO, e a
+     * barra não lista as telas administrativas uma a uma.
+     *
+     * ÍCONE `x`, o mesmo do botão que abre o cancelamento na Central de Vagas: quem cadastra a lista
+     * aqui é quem vai vê-la no seletor de lá, e a mesma marca liga as duas pontas.
+     *
+     * §A.23: o card é filtrado por `temMenu` como todos os outros, e `as-motivos-cancelamento` nasce
+     * só para o SUPER_ADMIN. Registrar o menu faz ele existir para o diretor LIBERAR; este card faz
+     * ele ser encontrado. Os dois passos são necessários, e nenhum concede acesso a ninguém.
+     */
+    href: "/admin/as/motivos-cancelamento",
+    codigo: "as-motivos-cancelamento",
+    icon: "x",
+    title: "Motivos De Cancelamento De Vaga",
+    desc: "Catálogo de motivos oferecido ao cancelar uma vaga de A&S.",
+  },
+  {
+    /**
+     * STATUS DA VAGA (A&S): é CATÁLOGO, e catálogo mora no Menu Gerencial, ao lado das Etapas Do
+     * Funil, que é o vizinho de mesma natureza (a lista que o diretor cadastra e que todas as telas
+     * de A&S leem).
+     *
+     * ÍCONE `tag`, que é a marca de ETIQUETA no sistema: o que se cadastra aqui é o nome, a cor e o
+     * comportamento da pill que a vaga carrega. Nenhum outro card do hub usa este ícone, então ele
+     * distingue a linha na varredura da grade, que é o critério dos vizinhos.
+     *
+     * O CARD É O QUE FAZ O MENU SER ENCONTRADO: a barra lateral não lista as telas administrativas
+     * uma a uma, ela mostra o "Menu Gerencial", que abre ESTA lista. Registrar o menu no backend e
+     * parar por aí deixa a tela existindo, liberável e invisível (§A.23, o caso do `clinicas`).
+     *
+     * §A.23: o card é filtrado por `temMenu` como todos os outros, e `as-status-vaga` nasce só para
+     * o SUPER_ADMIN. Registrar o menu faz ele existir para o diretor LIBERAR; este card faz ele ser
+     * encontrado. Nenhum dos dois passos concede acesso a ninguém.
+     */
+    href: "/admin/as/status-vaga",
+    codigo: "as-status-vaga",
+    icon: "tag",
+    title: "Status Da Vaga",
+    desc: "Catálogo de estados da vaga: nome, ordem, cor e o que cada um deixa fazer.",
+  },
+  {
+    /**
      * O CARD É O QUE FAZ O MENU EXISTIR PARA O USUÁRIO, e essa foi a lição desta entrega.
      *
      * O menu novo foi registrado no catálogo do backend pelo convergedor de boot, e mesmo assim não

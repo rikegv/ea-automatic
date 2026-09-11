@@ -13,6 +13,8 @@ import { eventoEncerra, tipoDoEvento } from "../../domain/candidatura-historico"
 import { CandidatosService } from "./candidatos.service";
 import { asCandidaturaEtapas, asCandidaturas } from "../../db/schema";
 import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
+import { catalogoDeStatusFingido } from "../vaga-status/vaga-status-catalogo.fake";
+import type { AuthUser } from "../../auth/auth.types";
 
 /**
  * ─ REVERSÃO DO ENVIO: COBERTURA INDEPENDENTE (§A.38, tester que não escreveu o código) ──────────
@@ -37,6 +39,19 @@ import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
  */
 
 const AGORA = new Date("2026-09-10T12:00:00.000Z");
+
+/**
+ * QUEM REGISTRA A SAÍDA. O método passou a receber o usuário INTEIRO, e não só o id, porque
+ * desvincular quem está ALOCADO virou ação de MASTER (a posição dele já foi entregue). Aqui o COMUM
+ * basta: nenhuma destas chamadas desvincula um alocado, e a autoria continua saindo de `user.id`.
+ */
+const consultor = (id: string): AuthUser => ({
+  id,
+  email: "consultor@soulan.com.br",
+  papel: "COMUM",
+  senhaTemporaria: false,
+});
+
 const ETAPAS = ETAPAS_FUNIL_SEMENTE.map((e) => e.codigo);
 
 interface Escrita {
@@ -195,7 +210,7 @@ function makeDb(
   };
 
   return {
-    service: new CandidatosService(db as never, catalogoDeEtapasFingido() as never),
+    service: new CandidatosService(db as never, catalogoDeEtapasFingido() as never, catalogoDeStatusFingido() as never),
     linha: c,
     updates,
     inserts,
@@ -253,7 +268,7 @@ describe("a pessoa volta para a etapa em que ESTAVA, afirmado no dado e não no 
     await service.registrarSaida(
       "cand-1",
       { situacao: SITUACAO_QUE_A_REVERSAO_DESFAZ, motivo: "Aprovado pelo cliente" } as never,
-      "user-3",
+      consultor("user-3"),
     );
     // O envio ficou gravado na TRIAGEM...
     expect(doHistorico(inserts)[0]).toMatchObject({ etapaPara: "TRIAGEM" });
@@ -324,7 +339,7 @@ describe("limpar o motivo da linha viva só é seguro porque o histórico fica I
     await service.registrarSaida(
       "cand-1",
       { situacao: SITUACAO_QUE_A_REVERSAO_DESFAZ, motivo: "Aprovado pelo cliente" } as never,
-      "user-3",
+      consultor("user-3"),
     );
     const envio = { ...doHistorico(inserts)[0] };
 

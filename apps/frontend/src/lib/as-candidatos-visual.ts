@@ -10,10 +10,11 @@
  */
 
 import {
+  ETAPA_TOM_PADRAO,
   consomePosicao,
   ehSaidaSemExito,
   type CandidaturaSituacao,
-  type VagaStatus,
+  type VagaStatusItem,
 } from "@ea/shared-types";
 import type { PillTone } from "@/components/ui/Pill";
 
@@ -59,33 +60,37 @@ export function tomDaSituacao(s: CandidaturaSituacao): PillTone {
  * vocabulário compartilhado, valendo para o banco, para o serviço e para o seletor de cor de uma
  * vez só, em vez de valer por acordo entre três listas.
  *
- * `tomDaSituacao` e `tomDoStatusVaga` FICAM AQUI: as duas listas continuam sendo vocabulário fixo
- * com REGRA (quem ocupa posição, quem é saída sem êxito), e é justamente por isso que elas não
- * viraram catálogo editável.
+ * `tomDaSituacao` FICA AQUI e continua sendo DERIVADA do vocabulário fixo com REGRA (quem ocupa
+ * posição, quem é saída sem êxito): situação de candidatura não é cadastro do diretor.
+ *
+ * `tomDoStatusVaga` TAMBÉM FICA AQUI, e deixou de ser um mapa: o STATUS DA VAGA virou catálogo
+ * editável (onda B2), então a função passou a receber o catálogo e a ler a cor que o diretor
+ * escolheu. Ela fica neste arquivo porque é isto que ele é, régua visual sem rede.
  */
 
 /**
- * TOM DA PILL POR STATUS DA VAGA (§A.12: o ícone acompanha o estado real, nunca é fixo).
+ * ─ TOM DA PILL POR STATUS DA VAGA: DE MAPA EXAUSTIVO PARA CONSULTA AO CATÁLOGO (onda B2) ───────
  *
- * SUBIU DA CENTRAL DE VAGAS PARA CÁ, sem alterar um único valor (§A.26): o resumo da vaga passou a
- * ser mostrado também DENTRO da Central de Candidatos (o modal sobreposto do "Ver vaga"), e duas
- * cópias do mesmo mapa fariam a mesma vaga aparecer com cores diferentes em duas telas. A Central de
- * Vagas importa daqui e continua chamando o mapa de `TOM_STATUS`, como sempre chamou.
+ * AQUI MORAVA `TOM_STATUS_VAGA`, um `Record<VagaStatus, PillTone>` com os cinco status escritos à
+ * mão. Ele SÓ COMPILAVA porque a lista era fechada; com o status virando catálogo do diretor, a
+ * exaustividade que o TypeScript garantia deixou de existir, e o mapa passaria a ser mais uma cópia
+ * que envelhece: o status novo cairia em `undefined` e a pill sairia SEM CLASSE DE COR, cinza e sem
+ * ícone, sem nada falhar.
  *
- * Entregue é o êxito da vaga (check verde); aberta é trabalho em andamento (exclamação amarela);
- * cancelada é o X vermelho; fechada é encerramento neutro; vaga banco é estado próprio, em azul.
- * RASCUNHO é neutro de propósito: não é trabalho em andamento (a vaga nem foi publicada) nem êxito
- * nem encerramento. É a vaga que ainda não começou.
+ * QUEM ESCOLHE A COR AGORA É O DIRETOR, na coluna `tom` do catálogo, exatamente como já acontece com
+ * as etapas do funil: a cor que ele escolhe no gerenciador é a cor que a pill mostra aqui, no card
+ * da Central de Vagas e no seletor, sem três lugares para acertar.
+ *
+ * O FALLBACK É O NEUTRO (`ETAPA_TOM_PADRAO`), e NUNCA o vermelho: pela §A.12 o `dg` é RECUSA, e a
+ * `StatusPill` põe o X vermelho nele. Um status que a tela ainda não conhece não é uma recusa.
+ *
+ * §A.12 SEGUE VALENDO: o ícone continua acompanhando o estado real, porque a `StatusPill` o deriva
+ * do tom, e o tom agora vem da linha do catálogo em vez de um mapa local.
+ *
+ * O CATÁLOGO É PARÂMETRO OBRIGATÓRIO, e isso é deliberado: este arquivo é importado por componentes
+ * de RENDERIZAÇÃO e não fala com a rede (ver o cabeçalho). Um default implícito o obrigaria a
+ * conhecer o cliente HTTP; recebendo a lista de quem já a tem em mãos, ele continua sendo só régua.
  */
-export const TOM_STATUS_VAGA: Record<VagaStatus, PillTone> = {
-  RASCUNHO: "nt",
-  ABERTA: "wn",
-  ENTREGUE: "ok",
-  FECHADA: "nt",
-  CANCELADA: "dg",
-};
-
-/** O tom de um status de vaga. Forma de função, para casar com `tomDaSituacao`. */
-export function tomDoStatusVaga(s: VagaStatus): PillTone {
-  return TOM_STATUS_VAGA[s];
+export function tomDoStatusVaga(codigo: string, catalogo: readonly VagaStatusItem[]): PillTone {
+  return catalogo.find((s) => s.codigo === codigo)?.tom ?? ETAPA_TOM_PADRAO;
 }

@@ -114,10 +114,16 @@ export class CandidatosController {
     return this.candidatos.finalizarPosicaoEmLote(dto, user.id);
   }
 
-  /** DESVINCULAR (e ENVIAR PARA ADMISSÃO) EM MASSA. O motivo é obrigatório, como no individual. */
+  /**
+   * DESVINCULAR (e ENVIAR PARA ADMISSÃO) EM MASSA. O motivo é obrigatório, como no individual.
+   *
+   * O USUÁRIO INTEIRO, e não só o id: o desvínculo de quem está ALOCADO é ação de Master, e quem
+   * confere o papel é o SERVICE, linha a linha. SEM `@Roles` aqui, de propósito: todo consultor
+   * desvincula quem está EM SELEÇÃO, e um papel exigido no handler barraria o lote normal do COMUM.
+   */
   @Post("candidaturas/lote/saida")
   registrarSaidaEmLote(@Body() dto: RegistrarSaidaEmLoteDto, @CurrentUser() user: AuthUser) {
-    return this.candidatos.registrarSaidaEmLote(dto, user.id);
+    return this.candidatos.registrarSaidaEmLote(dto, user);
   }
 
   /** MOVER NO FUNIL EM MASSA. PATCH, como a rota individual: é a mesma propriedade que muda. */
@@ -171,14 +177,22 @@ export class CandidatosController {
     return this.candidatos.finalizarPosicao(id, dto, user.id);
   }
 
-  /** Registrar saída de QUALQUER etapa: descarte, desistência ou contratação. */
+  /**
+   * Registrar saída de QUALQUER etapa: descarte, desistência ou contratação.
+   *
+   * O USUÁRIO INTEIRO DESCE PARA O SERVICE, e não só o id dele: desvincular quem já está ALOCADO é
+   * ação de Master (a posição dele já foi entregue), e a autoridade mora no service, NUNCA num
+   * `@Roles` aqui. Um papel exigido no handler barraria o desvínculo normal do COMUM, que é a
+   * operação do dia a dia de quem opera a vaga, e isso é regressão silenciosa. Mesmo desenho do
+   * `fechar` e do `cancelar` das vagas.
+   */
   @Post("candidaturas/:id/saida")
   registrarSaida(
     @Param("id", ParseUUIDPipe) id: string,
     @Body() dto: RegistrarSaidaDto,
     @CurrentUser() user: AuthUser,
   ) {
-    return this.candidatos.registrarSaida(id, dto, user.id);
+    return this.candidatos.registrarSaida(id, dto, user);
   }
 
   /**

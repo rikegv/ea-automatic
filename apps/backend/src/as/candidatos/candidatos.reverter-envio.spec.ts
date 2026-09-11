@@ -18,6 +18,8 @@ import {
 import { CandidatosService } from "./candidatos.service";
 import { asCandidaturaEtapas, asCandidaturas } from "../../db/schema";
 import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
+import { catalogoDeStatusFingido } from "../vaga-status/vaga-status-catalogo.fake";
+import type { AuthUser } from "../../auth/auth.types";
 
 /**
  * ─ REVERTER O ENVIO PARA A ADMISSÃO: desfazer o clique errado ───────────────────────────────────
@@ -47,6 +49,18 @@ import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
  */
 
 const AGORA = new Date("2026-09-10T12:00:00.000Z");
+
+/**
+ * QUEM REGISTRA A SAÍDA. O método passou a receber o usuário INTEIRO, e não só o id, porque
+ * desvincular quem está ALOCADO virou ação de MASTER (a posição dele já foi entregue). Aqui o COMUM
+ * basta: nenhuma destas chamadas desvincula um alocado, e a autoria continua saindo de `user.id`.
+ */
+const consultor = (id: string): AuthUser => ({
+  id,
+  email: "consultor@soulan.com.br",
+  papel: "COMUM",
+  senhaTemporaria: false,
+});
 
 /** A situação de onde se reverte, e as OUTRAS, derivadas da régua e nunca digitadas aqui. */
 const AS_OUTRAS = CANDIDATURA_SITUACOES.filter((s) => s !== SITUACAO_QUE_A_REVERSAO_DESFAZ);
@@ -192,7 +206,7 @@ function makeDb(
   };
 
   return {
-    service: new CandidatosService(db as never, catalogoDeEtapasFingido() as never),
+    service: new CandidatosService(db as never, catalogoDeEtapasFingido() as never, catalogoDeStatusFingido() as never),
     linha: c,
     updates,
     inserts,
@@ -284,15 +298,29 @@ describe("reverter o envio: o que é escrito, e o que NÃO é", () => {
     expect(daCandidatura(updates)).not.toHaveProperty("etapa");
   });
 
-  it("o LADO não é apagado: quem segura posição é a situação, não o lado gravado", async () => {
-    const { service, updates, linha } = makeDb();
+  /*
+   * ─ O LADO É APAGADO, E ESTE TESTE JÁ AFIRMOU O CONTRÁRIO (conserto 2, Onda B) ───────────────
+   *
+   * A REDAÇÃO ANTERIOR DIZIA "o LADO não é apagado", com a justificativa de que ele é memória e
+   * "não segura posição nenhuma sozinho". A justificativa era uma CRENÇA, e a auditoria a derrubou
+   * com medição: o lado pendurado É LIDO pela aprovação seguinte, que mede a pessoa contra a meta
+   * daquele lado. Medido numa vaga com 4 posições OFICIAIS livres e o banco cheio: quem voltou da
+   * reversão carregando marca de BANCO levou 409 "as 3 posições de banco já estão preenchidas".
+   *
+   * O TESTE NÃO ESTAVA DESCUIDADO, e o registro importa: ele codificou a suposição do autor, e a
+   * suposição estava errada. É o modo de falha que a §A.38 descreve, e a prova de que ele é real
+   * é que o teste passou verde durante toda a vida útil do defeito.
+   *
+   * A MEMÓRIA NÃO SE PERDE: o lado da entrega está no EVENTO, em `as_candidatura_etapas`. O que
+   * esta coluna guarda é o ESTADO ATUAL, e o estado atual de quem voltou é "em seleção, sem
+   * posição".
+   */
+  it("o LADO é apagado: quem está em seleção não carrega marca de posição", async () => {
+    const { service, updates } = makeDb();
 
     await service.reverterEnvioParaAdmissao("cand-1", "user-1");
 
-    // O lado é MEMÓRIA de onde a pessoa estava, útil no dia em que ela for enviada de novo, e ele
-    // não segura posição nenhuma sozinho. Já o motivo é outra história, e é o teste seguinte.
-    expect(daCandidatura(updates)).not.toHaveProperty("posicaoLado");
-    expect(linha.posicaoLado).toBe("OFICIAL");
+    expect(daCandidatura(updates).posicaoLado).toBeNull();
   });
 
   /*
@@ -387,7 +415,7 @@ describe("o rastro, que é o que o diretor pediu junto", () => {
     await service.registrarSaida(
       "cand-1",
       { situacao: SITUACAO_QUE_A_REVERSAO_DESFAZ, motivo: "Aprovado pelo cliente" } as never,
-      "user-3",
+      consultor("user-3"),
     );
     expect(linha.motivoDescarte).toBe("Aprovado pelo cliente");
 
@@ -507,7 +535,7 @@ describe("só reverte quem está ENVIADO PARA ADMISSÃO, e a recusa é legível"
       transaction: async (fn: (t: unknown) => Promise<unknown>) =>
         fn({ query: { asCandidaturas: { findFirst: async () => undefined } } }),
     };
-    const vazio = new CandidatosService(db as never, catalogoDeEtapasFingido() as never);
+    const vazio = new CandidatosService(db as never, catalogoDeEtapasFingido() as never, catalogoDeStatusFingido() as never);
 
     await expect(vazio.reverterEnvioParaAdmissao("cand-1", "user-1")).rejects.toBeInstanceOf(
       NotFoundException,

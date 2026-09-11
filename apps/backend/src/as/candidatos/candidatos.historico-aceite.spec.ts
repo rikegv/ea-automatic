@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ACEITE_BANCO_COM_OFICIAIS_ABERTAS } from "../../domain/candidatura";
 import { CandidatosService } from "./candidatos.service";
 import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
+import { catalogoDeStatusFingido } from "../vaga-status/vaga-status-catalogo.fake";
 
 /**
  * ─ O LOG DO ACEITE CHEGA A QUEM CONSULTA (§A.3 regra 8, achado da auditoria de 08/09) ───────────
@@ -57,7 +58,7 @@ function makeDb(linhas: ReturnType<typeof evento>[]) {
     b.orderBy = () => Promise.resolve(linhas);
     return b;
   });
-  return new CandidatosService({ select } as never, catalogoDeEtapasFingido() as never);
+  return new CandidatosService({ select } as never, catalogoDeEtapasFingido() as never, catalogoDeStatusFingido() as never);
 }
 
 /** O evento que a alocação no banco com posição oficial aberta grava, com o aceite preenchido. */

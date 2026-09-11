@@ -255,6 +255,48 @@ export function podeReverterEnvio(s: CandidaturaSituacao): boolean {
   return s === SITUACAO_QUE_A_REVERSAO_DESFAZ;
 }
 
+// ── O DESVÍNCULO QUE DESFAZ UMA ENTREGA ─────────────────────────────────────
+
+/**
+ * ─ TIRAR DA VAGA QUEM JÁ ENTREGOU POSIÇÃO É AÇÃO DE MASTER (decisão do diretor, Onda B) ────────
+ *
+ * QUEM ENTREGOU É QUEM ENCHE O CILINDRO (`finalizaPosicao`): o `ALOCADO` e o
+ * `ENVIADO_PARA_ADMISSAO`. Tirar qualquer um dos dois da vaga DESFAZ uma entrega, e era por aí que o
+ * gate de Master do CANCELAMENTO ficava contornável em dois passos: o consultor tirava os entregues,
+ * a vaga deixava de ter gente segurando (`seguraOCancelamento`), e a trava que só um Master poderia
+ * forçar nem chegava a ser consultada.
+ *
+ * ┌─ ESTA RÉGUA JÁ FOI SÓ O `ALOCADO`, E A CORREÇÃO VEIO DE UMA MEDIÇÃO, não de simetria ───────┐
+ * │ O argumento que deixava o `ENVIADO_PARA_ADMISSAO` de fora era que ele tem PORTA PRÓPRIA de   │
+ * │ desfazer (`podeReverterEnvio`), de QUALQUER consultor, porque erro de clique tem de ser       │
+ * │ desfeito no minuto seguinte. O argumento era bom e estava INCOMPLETO: ele cobre REVERTER, e   │
+ * │ não cobre DESCARTAR.                                                                          │
+ * │                                                                                              │
+ * │ A AUDITORIA MEDIU O QUE FALTAVA: descartar um enviado DESTRÓI o acesso àquela porta. Depois  │
+ * │ do descarte, o `reverterEnvioParaAdmissao` responde "não há envio a reverter" para TODO       │
+ * │ MUNDO, Master inclusive, e a única volta passa a ser aceite de reentrada criando linha nova,  │
+ * │ ou um Master reabrindo a vaga. Ou seja: a ação MAIOR e IRREVERSÍVEL era a única sem trava,    │
+ * │ enquanto a MENOR e reversível já pedia Master. A incoerência estava do lado perigoso.          │
+ * │                                                                                              │
+ * │ REVERTER CONTINUA SENDO DE QUALQUER CONSULTOR, e isto não é promessa, é estrutura:            │
+ * │ `reverterEnvioParaAdmissao` é MÉTODO PRÓPRIO, com `update` próprio, e NÃO consulta esta       │
+ * │ régua. A decisão do diretor sobre o erro de clique fica intacta por construção.               │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * DERIVADA DE `finalizaPosicao`, e nunca redigitada: situação nova que passe a entregar posição
+ * entra nesta trava no mesmo dia, sem ninguém lembrar de vir aqui.
+ *
+ * A PERGUNTA MORA NO DOMÍNIO, e não num `if` dentro do service, pelo mesmo motivo de `ocupaPosicao`:
+ * régua escrita dentro do caminho é régua que a próxima porta esquece de consultar.
+ */
+export function desvinculoEhDeMaster(s: CandidaturaSituacao): boolean {
+  return finalizaPosicao(s);
+}
+
+/** As situações cujo desvínculo é de Master, DERIVADAS da régua acima e nunca escritas à mão. */
+export const SITUACOES_CUJO_DESVINCULO_E_DE_MASTER: readonly CandidaturaSituacao[] =
+  CANDIDATURA_SITUACOES.filter(desvinculoEhDeMaster);
+
 /**
  * SAÍDA QUE ENCERRA O PROCESSO SEM ÊXITO. Estas duas ficam FORA da conta de ocupação: nunca somam e
  * nunca subtraem. É a mesma disciplina da §A.16 na esteira, em que declínio não entra em fila nem
@@ -574,21 +616,24 @@ export function cabeMaisUm(
 }
 
 /**
- * A TRAVA 2, como régua pura: esta vaga recebe candidato novo?
+ * ─ A TRAVA 2 SAIU DAQUI E VIROU FLAG DO CATÁLOGO (onda B2) ─────────────────────────────────────
  *
- * FECHADA, CANCELADA e ENTREGUE são as três que não recebem, e ENTREGUE está na lista por um motivo
- * que não é óbvio: ela é o fechamento BEM-SUCEDIDO, a vaga que já entregou gente. Deixá-la de fora
- * pareceria generoso e permitiria alocar candidato num processo terminado.
+ * O QUE HAVIA NESTE PONTO: `STATUS_QUE_NAO_RECEBEM` (`FECHADA`, `CANCELADA`, `ENTREGUE`) e a função
+ * pura `vagaRecebeCandidato`. HOJE A PERGUNTA É FEITA AO CATÁLOGO, pelo flag `recebeCandidato`
+ * (`as_vaga_status`), lido pela `ReguaDeStatusDaVaga`.
  *
- * O RASCUNHO RECEBE. A vaga salva pela metade é um estado legítimo de trabalho, e barrar a alocação
- * nela obrigaria o time a publicar antes de começar a captar. Quem trava o rascunho é a trava 1, na
- * hora de APROVAR, porque é lá que a meta ausente vira problema de verdade.
+ * O QUE A LISTA DIZIA E O CATÁLOGO CONTINUA DIZENDO, linha por linha: `ENTREGUE` NÃO recebe, e ele
+ * estava na lista por um motivo que não é óbvio (é o fechamento BEM-SUCEDIDO, e deixá-lo de fora
+ * pareceria generoso e permitiria alocar candidato num processo terminado). O RASCUNHO RECEBE, e a
+ * semente da 0102 o mantém assim: vaga salva pela metade é estado legítimo de trabalho, e barrar a
+ * alocação nela obrigaria o time a publicar antes de começar a captar.
+ *
+ * O QUE MUDOU DE VERDADE, e é o motivo de o comentário ficar: a resposta deixou de ser SÍNCRONA. A
+ * função pura podia ser chamada em qualquer lugar sem pensar, inclusive dentro de uma transação; a
+ * régua é lida ANTES da transação e perguntada lá dentro sem `await`. A régua do módulo está escrita
+ * em `ReguaDeStatusDaVaga`: o catálogo se lê antes, o status da vaga se lê SEMPRE sob o
+ * `SELECT ... FOR UPDATE`.
  */
-export const STATUS_QUE_NAO_RECEBEM = ["FECHADA", "CANCELADA", "ENTREGUE"] as const;
-
-export function vagaRecebeCandidato(status: string): boolean {
-  return !(STATUS_QUE_NAO_RECEBEM as readonly string[]).includes(status);
-}
 
 // ── O LADO DA POSIÇÃO: OFICIAL OU BANCO ─────────────────────────────────────
 
@@ -734,14 +779,39 @@ export function ocupadasPorLado(
  * `REENTRADA`: trazer de volta quem já esteve na vaga e saiu. PREVISTA E AINDA NÃO ESCRITA por
  * ninguém: aquele aceite mora na `alocar`, que é código validado e ficou fora do recorte da OST que
  * criou este log. O valor fica aqui para que ligá-lo seja uma linha de service, e não uma migration.
+ *
+ * ┌─ `REABERTURA_SEM_ORIGEM`: POR QUE ELE NÃO É O `REENTRADA` (onda B3) ───────────────────────┐
+ * │ A reabertura da vaga cancelada tem DOIS caminhos, e só UM deles é aceite.                   │
+ * │                                                                                             │
+ * │ NO CAMINHO COM ORIGEM o cancelamento CARIMBOU quem ele descartou (o evento da saída aponta   │
+ * │ para o evento de cancelamento, migration 0104): reabrir ali é DESFAZER O PRÓPRIO GESTO, e    │
+ * │ desfazer o que o sistema registrou não pede ciência de ninguém.                              │
+ * │                                                                                             │
+ * │ NO CAMINHO SEM ORIGEM o cancelamento é ANTERIOR ao carimbo, e o sistema ADMITE QUE NÃO SABE  │
+ * │ quem saiu por causa dele. Quem escolhe ali está REESCOLHENDO A PESSOA, com o mesmo peso da   │
+ * │ ciência de reentrada, e por isso a escolha fica registrada com autor e data.                 │
+ * │                                                                                             │
+ * │ REUSAR O `REENTRADA` PARA OS DOIS DEIXARIA A AUDITORIA SEM RESPOSTA para a única pergunta    │
+ * │ que este valor existe para responder: "quantas vezes alguém voltou pelo caminho em que o     │
+ * │ sistema não sabia de onde ela vinha". Dois fatos diferentes com o mesmo nome não se separam  │
+ * │ depois.                                                                                      │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────┘
  */
 export const ACEITE_BANCO_COM_OFICIAIS_ABERTAS = "BANCO_COM_OFICIAIS_ABERTAS";
 export const ACEITE_REENTRADA = "REENTRADA";
+export const ACEITE_REABERTURA_SEM_ORIGEM = "REABERTURA_SEM_ORIGEM";
 
-/** A lista é MONTADA a partir dos nomes acima, e nunca redigitada: um nome, um lugar. */
+/**
+ * A lista é MONTADA a partir dos nomes acima, e nunca redigitada: um nome, um lugar.
+ *
+ * ELA É A FONTE DO CHECK DO BANCO (`ACEITES_SQL`, em `db/schema/tables.ts`), então acrescentar um
+ * nome aqui SEM a migration que reconstrói `ck_as_candidatura_etapas_aceite` faz o banco recusar a
+ * gravação em produção enquanto o typecheck fica verde. O par desta lista é a migration 0105.
+ */
 export const ACEITES_REGISTRAVEIS = [
   ACEITE_BANCO_COM_OFICIAIS_ABERTAS,
   ACEITE_REENTRADA,
+  ACEITE_REABERTURA_SEM_ORIGEM,
 ] as const;
 export type AceiteRegistravel = (typeof ACEITES_REGISTRAVEIS)[number];
 

@@ -26,13 +26,12 @@ import {
   candidaturaViva,
   finalizaPosicao,
   POSICAO_LADOS,
-  VAGA_STATUS,
   type CandidaturaSituacao,
   type PosicaoLado,
   type VagaListItem,
-  type VagaStatus,
 } from "@ea/shared-types";
-import { preenchidas, vagaEncerrada, type LadoPosicoes, type VagaContagem } from "@/lib/as-vagas-ocupacao";
+import { preenchidas, type LadoPosicoes, type VagaContagem } from "@/lib/as-vagas-ocupacao";
+import { vagaRecebeCandidato } from "@/lib/as-status-vaga";
 
 // ── OS DOIS LADOS DA META ───────────────────────────────────────────────────
 
@@ -138,6 +137,36 @@ export function fraseDoAceite(aceite: string | null | undefined, numero: number 
   if (aceite === "REENTRADA") {
     return "Ciente de que o processo anterior desta pessoa nesta vaga já tinha sido encerrado.";
   }
+  /*
+   * ─ A REABERTURA SEM ORIGEM: O ÚNICO ACEITE EM QUE O SISTEMA ADMITE NÃO SABER ────────────────
+   *
+   * ELE FALTAVA AQUI, E A FALTA ERA GRAVE (veto da auditoria de segurança). A cadeia inteira já
+   * funcionava: o service grava o aceite, o CHECK do banco o aceita e o backend o serve na linha do
+   * tempo. Só que a ficha desenha a pill SOMENTE quando esta função devolve frase, então o aceite
+   * dos outros dois caminhos aparecia e justamente o do caminho ARRISCADO caía no `return null`. A
+   * §A.6 pede log permanente E CONSULTÁVEL, e estava entregue só a primeira metade.
+   *
+   * ┌─ POR QUE ESTA FRASE NÃO PODE DIZER "A PESSOA VOLTOU PARA ONDE ESTAVA" ────────────────────┐
+   * │ É a diferença inteira entre os dois caminhos da reabertura. No `COM_ORIGEM` o sistema SABIA │
+   * │ onde cada um estava e a volta é a REVERSÃO do gesto que ele mesmo registrou: ali não há      │
+   * │ guarda atravessada e não se grava aceite nenhum. Aqui o sistema NÃO SABE nem se aquela saída │
+   * │ veio do cancelamento, e alguém decidiu assim mesmo: a volta é uma ESCOLHA NOVA, com o mesmo  │
+   * │ peso da ciência de reentrada. Quem ler a ficha daqui a seis meses precisa entender isso sem  │
+   * │ abrir o banco, e é esta frase que carrega a diferença.                                      │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * E ELA É O ÚNICO SINAL QUE EXISTE NAQUELA LINHA. O evento da volta é classificado como ENTRADA
+   * pelo `tipoDoEvento` (a linha nasce sem situação, sem etapa de origem e sem vaga anterior), então
+   * a ficha lê "entrou na vaga", com um motivo em texto e nada dizendo que uma guarda foi
+   * atravessada. Mexer naquela classificação alcançaria a linha do tempo inteira, que é código
+   * validado de outra frente: o sinal é esta pill, e é por isso que ela não pode faltar.
+   *
+   * O NÚMERO NÃO ENTRA, e não é esquecimento: esta guarda não tem contagem a congelar (o
+   * `aceiteNumero` dela nasce nulo). O que se registra é a decisão, e ela vale por si.
+   */
+  if (aceite === "REABERTURA_SEM_ORIGEM") {
+    return "Ciente de que o sistema não sabia se esta pessoa saiu por causa do cancelamento da vaga: a volta dela foi uma escolha nova de quem reabriu, e não a reversão de um registro.";
+  }
   return null;
 }
 
@@ -181,17 +210,23 @@ export function oficiaisAbertas(v: VagaAcoes): number | null {
 // ── QUANDO CADA AÇÃO EXISTE ─────────────────────────────────────────────────
 
 /**
- * ESTA VAGA RECEBE CANDIDATO NOVO? Espelha a trava 2 do backend (`vagaRecebeCandidato`), e a lista de
- * quem NÃO recebe é a MESMA de `VAGA_STATUS_ENCERRADOS` (ENTREGUE, FECHADA, CANCELADA), que a régua do
- * cilindro já declarava. Por isso esta função é uma negação e não uma lista: escrever os três status de
- * novo criaria a segunda cópia que a etapa 4 tomou o cuidado de não criar.
+ * ─ ESTA VAGA RECEBE CANDIDATO NOVO? ELA DEIXOU DE SER A NEGAÇÃO DE "ENCERRADA" (onda B2) ───────
+ *
+ * ELA ERA `!vagaEncerrada(status)`, E ISSO ESTAVA CERTO ENQUANTO A LISTA ERA FIXA: os três status
+ * que encerravam eram exatamente os três que não recebiam, então a negação e o flag concordavam. Com
+ * o catálogo do diretor eles DESCOLAM, e o caso é o primeiro que ele vai criar: um "Stand By" é
+ * `recebeCandidato: false` (a vaga pausada não capta gente nova) e `encerra: false` (ela continua
+ * viva, o relógio continua correndo, a contagem continua derivada). Pela negação antiga, a tela
+ * ofereceria alocação numa vaga PAUSADA e o backend recusaria, que é o mesmo desencontro que o
+ * seletor de publicação produzia.
+ *
+ * AGORA SÃO DOIS FLAGS SEPARADOS, e a função é REEXPORTADA de `lib/as-status-vaga`, onde a leitura do
+ * catálogo mora. Quem já importava daqui (o painel da vaga) não muda de porta.
  *
  * O RASCUNHO RECEBE, e isso é do backend, não descuido: a vaga salva pela metade é estado legítimo de
  * trabalho, e barrar a alocação nela obrigaria o time a publicar antes de começar a captar.
  */
-export function vagaRecebeCandidato(status: VagaStatus): boolean {
-  return !vagaEncerrada(status);
-}
+export { vagaRecebeCandidato };
 
 /**
  * ESTA CANDIDATURA SE MOVE NO FUNIL?
@@ -221,28 +256,16 @@ export function podeMoverNoFunil(s: CandidaturaSituacao): boolean {
 }
 
 /**
- * ─ OS STATUS QUE A TRILHA DE PUBLICAÇÃO ACEITA (item 5, a porta que a auditoria vetou) ────────
+ * ─ A LISTA DA PUBLICAÇÃO MUDOU DE CASA E DE NATUREZA (onda B2) ─────────────────────────────────
  *
- * O SELETOR DE STATUS DO FORMULÁRIO OFERECIA "Fechada" E "Cancelada", e essa era uma porta que
- * ENCERRAVA A VAGA sem passar por trava nenhuma: nenhuma conferência de posição oficial, nenhum
- * papel de Master, nenhuma trilha. O mesmo estado que o `POST /fechar` só entrega depois da régua do
- * diretor saía daqui com um clique e um "Publicar". A auditoria de segurança vetou a frente por
- * causa disso, e a correção é a tela PARAR DE OFERECER O GESTO.
+ * AQUI MORAVA `VAGA_STATUS_PUBLICACAO`, montada por EXCLUSÃO (`VAGA_STATUS` menos RASCUNHO, FECHADA
+ * e CANCELADA). Ela era a SEGUNDA fonte do que o backend já decidia por INCLUSÃO, e as duas
+ * discordavam em "Entregue": a tela oferecia, o clique dava 400.
  *
- * RASCUNHO TAMBÉM NÃO ESTÁ AQUI, e pelo motivo que já valia: ele é o BOTÃO "Salvar Rascunho", não
- * uma escolha de status. Dois caminhos para o mesmo estado, e o segundo publicaria uma vaga chamando
- * a de rascunho.
- *
- * A LISTA É DERIVADA DO CATÁLOGO, e não escrita à mão: status novo entra na tela por construção, e
- * quem quiser tirá-lo de lá precisa dizer o nome dele aqui. O contrário (lista fixa) faria status
- * novo nascer invisível, que é o mesmo erro com o sinal trocado.
- *
- * A TELA NÃO É A TRAVA, e isto continua valendo aqui: quem recusa encerrar a vaga por este caminho é
- * o backend. Esta lista é o que a tela OFERECE.
+ * A LISTA AGORA É `statusDePublicacao(catalogo)`, em `lib/as-status-vaga`, e é a coluna `daTrilha`
+ * que responde, para os dois lados. Ela não é reexportada daqui de propósito: quem a usa precisa do
+ * CATÁLOGO em mãos, e um reexport sem argumento convidaria a próxima tela a inventar um default.
  */
-export const VAGA_STATUS_PUBLICACAO: readonly VagaStatus[] = VAGA_STATUS.filter(
-  (s) => s !== "RASCUNHO" && s !== "FECHADA" && s !== "CANCELADA",
-);
 
 /**
  * ESTA CANDIDATURA AINDA ACEITA UMA DECISÃO? (descartar, desistir, enviar para a admissão)

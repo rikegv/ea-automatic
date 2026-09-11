@@ -72,6 +72,23 @@ export const ROTA_MENU: { prefixo: string; codigo: string }[] = [
   // inteiro RENDERIZADO pela leitura aberta, e só tomaria 403 ao clicar em salvar. Tela que abre e
   // mostra o dado antes de recusar é pior do que tela que não abre: ela ensina o que existe.
   { prefixo: "/admin/as/etapas", codigo: "as-etapas" },
+  // MOTIVOS DE CANCELAMENTO DE VAGA (A&S): governado pelo menu `as-motivos-cancelamento`, que nasce
+  // só para o SUPER_ADMIN (§A.23). A régua é a mesma das Etapas Do Funil, e pelo mesmo motivo: a
+  // LEITURA do catálogo (`GET /as/motivos-cancelamento`) é aberta a qualquer autenticado de
+  // propósito, porque o seletor do cancelamento aparece na tela do consultor. Sem esta linha, quem
+  // digitasse a URL abriria o gerenciador, veria o catálogo inteiro renderizado pela leitura aberta,
+  // e só tomaria 403 ao clicar em salvar. O backend já barra a escrita; isto fecha a porta da tela.
+  { prefixo: "/admin/as/motivos-cancelamento", codigo: "as-motivos-cancelamento" },
+  // STATUS DA VAGA (A&S): governado pelo menu `as-status-vaga`, que nasce só para o SUPER_ADMIN
+  // (§A.23), e o código aqui é o MESMO que o backend registra em `domain/menus.ts`, com a mesma
+  // rota: fosse outro, o guard não acharia o menu e a tela não abriria para ninguém.
+  // A RÉGUA É A DAS ETAPAS DO FUNIL, e aqui ela pesa ainda mais: a LEITURA do catálogo
+  // (`GET /as/status-vaga`) é aberta a qualquer autenticado de propósito, porque a pill de status
+  // aparece na tela do consultor. Sem esta linha, quem digitasse a URL abriria o gerenciador, veria
+  // o catálogo inteiro RENDERIZADO pela leitura aberta, e só tomaria 403 ao salvar. Tela que abre e
+  // mostra o dado antes de recusar é pior do que tela que não abre: ela ensina o que existe. A
+  // escrita já está fechada por `@Roles("SUPER_ADMIN")` no backend; isto fecha a porta da tela.
+  { prefixo: "/admin/as/status-vaga", codigo: "as-status-vaga" },
 ];
 
 /**

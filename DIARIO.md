@@ -13837,3 +13837,567 @@ modal de gestão mais largo · cabeçalho da tabela congelado · e a reversão d
 7. **criar ou não o agente `frontend-design`**, que nunca existiu;
 8. **a margem de 2px** do botão "Gestão Vaga" com o cabeçalho travado: é o primeiro lugar que estoura
    se algum rótulo crescer.
+
+---
+
+## 10-11/09/2026: A ONDA B. cancelar vaga, status gerenciável, e o buraco de LGPD que ninguém tinha visto
+
+**ESTADO: tudo na HOMOLOGAÇÃO (3120), NADA COMMITADO.** 96 arquivos no working tree, `HEAD` ainda em
+`d048c18`. Produção segue com 101 migrations e **não recebeu nada desta onda**.
+
+### 0. O PONTO DE RETOMADA, para não reinvestigar
+
+| coisa | onde está |
+|---|---|
+| migrations no arquivo | 0100 a **0104** |
+| aplicadas na **homologação** | **103** (a 0104 NÃO foi aplicada em lugar nenhum) |
+| aplicadas em **produção** | 101 (nada desta onda) |
+| gate | **verde: 3.181 testes, 259 arquivos**, typecheck limpo nos dois lados |
+| serviços | os quatro `active`, health 200 |
+| desenho completo | `docs/DESENHO-AS-ONDAS-B-A-E.md` |
+| trabalho interrompido | `apps/backend/src/as/vagas/LEIA-ME-REABRIR-INCOMPLETO.md` |
+
+**O que falta para fechar a última OST:** o aviso ao cancelar com gente encerrada, a rota e a tela do
+reabrir, mover as ações para dentro do modal de gestão, e os testes do reabrir. **A parte mais
+delicada, que era mexer no `cancelar` validado, JÁ PASSOU E ESTÁ VERDE.**
+
+### 1. O QUE A ONDA ENTREGOU
+
+**B1, cancelar vaga.** Rota própria, sem `@Roles` no handler pelo mesmo argumento do `fechar` (todo
+consultor cancela vaga vazia; o que é de Master é FORÇAR, e a autoridade mora no service). Trava por
+candidato não encerrado, catálogo de motivos gerenciável, e um `update` só com status, data, os dois
+carimbos de contagem, autor, motivo, observação e os três campos do forçado. Não existe vaga
+cancelada sem trilha.
+
+**B2, o status da vaga virou catálogo por PAPEL.** O código parou de escrever `"ENTREGUE"` e passou a
+perguntar ao catálogo qual é o código do papel ENTREGA. O diretor renomeia, reordena, escolhe cor e
+cria status livres; não apaga os cinco de sistema e não cria status que encerra vaga. Cinco travas no
+banco, o tipo antigo removido, e **o `DEFAULT 'ABERTA'` da coluna eliminado**.
+
+**A correção de LGPD (opção B).** O expurgo passou a tratar "vivo em vaga encerrada" como encerrado,
+**sem reescrever a situação**: quem foi aprovado continua aprovado na trilha.
+
+### 2. OS TRÊS BURACOS QUE A ONDA FECHOU, e nenhum deles estava no pedido
+
+**Dado pessoal retido para sempre.** O expurgo só anonimiza quem não tem candidatura viva, e aprovado
+e alocado são vivas. Quem ficasse vivo numa vaga encerrada **nunca era alcançado: o prazo de dois anos
+nunca começava a correr.** Existia na homologação, medido.
+
+**Um botão que só sabia falhar, em produção.** A tela oferecia "Entregue" no seletor de publicação e o
+backend recusava com 400. A causa era a direção da régua: a lista da tela era uma **proibição** (tudo
+menos três) e a do backend uma **permissão** (só dois). O próprio comentário do domínio já tinha
+avisado que *proibição esquece a terceira folha*. Esqueceu. A B2 matou com uma fonte só.
+
+**O segundo dono da decisão.** O `DEFAULT 'ABERTA'` da coluna fazia qualquer insert que omitisse o
+campo **nascer vaga publicada, em silêncio**. Agora estoura alto, provado pelo modo de falha.
+
+### 3. O VETO QUE SALVOU A CORREÇÃO DE LGPD DE INVERTER O DEFEITO
+
+A opção B, escrita ao pé da letra, **não iniciaria o prazo: declararia vencido.**
+
+O relógio conta da última atualização das candidaturas, e encerrar a vaga **não encosta** na
+candidatura de quem não segurava o cancelamento. Medido: a candidatura aprovada ficou **18 segundos
+atrás** do carimbo do cancelamento. Alguém aprovado em 03/2024, vaga cancelada hoje, teria o prazo já
+vencido e seria anonimizado **dentro de 60 minutos**, sem carência. Irreversível.
+
+Entrou junto um **carimbo de servidor do encerramento** (`vagas.encerrada_em`, migration 0103), porque
+o único instante disponível vinha do **formulário**, sem piso: um consultor cancelando com data de 2019
+seria gatilho remoto de exclusão.
+
+**E a vaga ENTREGUE ficou de fora do alcance**, por medição e não por cautela: o CPF de quem foi
+contratado **continua na admissão**, que é outro módulo. Apagar o lado de A&S destruiria o histórico da
+seleção **sem minimizar dado nenhum**, e deixaria o vínculo apontando de um "Candidato Expurgado" para
+uma admissão que ainda guarda o CPF.
+
+### 4. O DIAGNÓSTICO DA TRAVA QUE "NÃO BARROU"
+
+O diretor cancelou uma vaga com uma pessoa dentro e o sistema deixou. **Não era bug:** aquela pessoa
+tinha **DESISTIDO dez horas antes**, e desistido é encerrado pela régua dele. Passou pela porta normal,
+sem forçamento, e o registro confirma.
+
+A trava foi provada ao vivo do outro lado, contra a vaga com 50 pessoas: **409, os 50 listados, zero
+escrita**. O que faltou foi **aviso**, não trava, e o aviso virou item da OST seguinte.
+
+### 5. O QUE O `seguranca` PEGOU, e ele vetou TRÊS vezes
+
+Ele auditou o **mapa**, antes de existir código, as três vezes. O que achou sem uma linha escrita:
+
+- a **trava de origem** que faltava no cancelar (sem ela, cancelar vaga já entregue **reescreveria um
+  fato**, o duplo clique sobrescreveria a trilha, e a corrida seria ordenada em vez de recusada);
+- que o desenho mandava reusar **a função errada** para a trava (ela não pega alocado, e deixaria um
+  comum cancelar vaga com 5 alocados dentro, o oposto da decisão do diretor);
+- o **zumbi permanente**: vaga movida para um status livre ficaria impossível de fechar e de cancelar,
+  segurando candidatura viva, que é o buraco de LGPD recriado pela B2;
+- que **linha de sistema tem de ser não inativável no banco**: inativar a de abertura significa
+  "nenhuma vaga fecha mais";
+- e, no reabrir, que **o marcador de quem o cancelamento descartou era TEXTO DIGITÁVEL À MÃO**.
+
+Na reauditoria final ele **tentou violar cada trava por SQL direto, onze vezes, e as onze foram
+recusadas pelo banco**. Um teste escrito no arquivo que não chega à tabela é pior que trava nenhuma.
+
+### 6. O QUE O `tester` PEGOU, e ele entrou JUNTO com a construção as quatro vezes
+
+**21 mutações aplicadas ao código real, 21 mortas.** E duas vezes ele **denunciou o próprio ponto
+cego**: um fake que não distinguia leitura dentro e fora da trava (a mutação passava verde), e um teste
+de inativação **vazio**, porque conferia o verbo errado. Achou os dois com mutações que ele mesmo
+inventou, fora da lista que recebeu.
+
+Ele também disse, sem ninguém perguntar, **qual dos testes dele segura por acidente e não por mérito**,
+e em que dia isso deixaria de valer.
+
+**As três contradições que ele achou e que foram para o diretor:** a vaga cancelada à força mostra
+posições entregues por quem ela mesma descartou; o movimento manual de status **publicava rascunho pela
+metade em um clique**; e o alcance da correção de LGPD atingia quem foi contratado.
+
+### 7. O QUE A ONDA ENSINOU
+
+- **O mapa auditado antes vale mais que o código auditado depois.** Três vetos, todos sobre desenho,
+  todos pegando coisa que teria custado rodada inteira depois de construída.
+- **O testador entrando junto com a construção tirou ele do caminho crítico.** Na B1, os testes que ele
+  escreveu do requisito **passaram no código do autor sem uma linha editada**: autor e testador
+  chegaram no mesmo lugar por caminhos separados, que é o que a §A.38 procura.
+- **O coordenador errou quatro vezes e foi pego pelos agentes nas quatro.** Estreitei a paleta de cores
+  e tirei do sistema a capacidade de pintar "Cancelada" de vermelho; ao corrigir, alarguei o vocabulário
+  e a tela e **esqueci o servidor**; deixei o status dormente nascer com o código cru como nome; e
+  **empacotei um problema técnico meu como se fosse decisão do diretor**, travando a correção de LGPD
+  por mais tempo do que devia. Nenhuma das quatro apareceria em teste verde.
+- **Dois agentes na mesma árvore se atrapalham de verdade.** O `backend` recebeu um aviso de arquivo
+  alterado mostrando **exatamente o fallback que o `seguranca` tinha vetado**, com o lançamento
+  desativado; era o `tester` rodando mutação ao vivo. Ele conferiu o disco e não adotou. **Só não virou
+  dano porque o agente desconfiou.** E o `backend` chegou a **sobrescrever um spec do `tester`** em
+  silêncio: a régua de dono único da §A.39 precisa valer para spec também.
+- **Fake que reprova produção por limitação dele é o pior tipo de vermelho**, porque não fala sobre o
+  código. Dois fakes precisaram aprender a devolver o id de um insert.
+
+### 8. A QUEDA, e o que ficou pela metade
+
+`backend`, `frontend` e `tester` caíram **no mesmo segundo**, por limite de sessão da API, **no meio da
+escrita**. A árvore ficou sem compilar: o `cancelar` estava pela metade.
+
+**O coordenador fechou as duas peças que faltavam** (o ponto de chamada com o lado da posição e o
+marcador do evento, e a frase que fica na trilha), ensinou os dois fakes, e **estacionou** o banco
+fingido incompleto do `tester` em vez de fingir que terminou o trabalho dele: consertar os três erros
+de tipo o faria **compilar sem o fazer funcionar**, e um fake de banco pela metade responde, e a
+resposta parece um teste verde.
+
+### 9. PENDENTE DO DIRETOR (nada trava a validação)
+
+1. **A largura da tabela**, com 107px de rolagem a 1600px. A OST seguinte já decidiu a saída: **todas
+   as ações vão para dentro do modal de gestão**, e na linha fica só "Gestão Vaga".
+2. **A contagem da vaga cancelada à força**, que mostra as posições entregues por quem ela mesma
+   descartou. Autor e testador escolheram mostrar, separadamente e pelo mesmo motivo. A alternativa é
+   zerar.
+3. **Desvincular um alocado passa a exigir Master?** Hoje não exige, e é por aí que o gate é
+   contornável, com trilha.
+4. **A conta `admin@homolog.local` ganhou o papel de A&S na homologação**, senão não abre vaga nenhuma.
+   Não é menu, foi só lá, e o diretor precisa saber (§A.23).
+5. **Lixo de prova declarado, só na homologação:** a vaga **9999001**, três candidatos "Prova
+   Cancelar...", o status **Stand By** e um rascunho de prova. Existem para provar a LGPD e o gesto de
+   mover status, e somem num comando.
+
+### 10. DOIS RISCOS REGISTRADOS PARA O FUTURO
+
+**A importação da base histórica (2.363 vagas) será o quarto escritor de "vaga encerrada"**, e ela não
+passa pelas duas portas que carimbam. Se não carimbar, o buraco reabre para a base inteira, sem dano.
+**Se carimbar com data de planilha, apaga gente.** Vale uma linha de teste no dia em que a carga existir.
+
+**O cache do catálogo de status é por processo.** Hoje o backend roda em uma instância e isso é
+teórico. Em duas, a janela de um minuto vira trava servida velha, e ali os flags **são travas**, não
+cosmética.
+
+## 11/09/2026: A ONDA B FECHA. o aviso, a reabertura que ressuscita gente, e os dois vetos do mapa
+
+**ESTADO: tudo na HOMOLOGAÇÃO (3120), NADA COMMITADO.** Produção segue em **101 migrations** e não
+recebeu nada. Homologação em **105**. Gate verde: **backend 2.774/2.774, frontend 481/481**,
+typecheck limpo nos dois lados.
+
+### 0. O PONTO DE RETOMADA
+
+| coisa | onde está |
+|---|---|
+| migrations no arquivo | 0100 a **0105** |
+| aplicadas na homologação | **105** |
+| aplicadas em produção | 101 (nada das ondas B) |
+| mapa de alcance da frente | `docs/MAPA-ONDA-B3-REABRIR.md` |
+| screenshots | `/home/henrique/ost-b3-peca3-prints/` |
+
+### 1. AS QUATRO PEÇAS
+
+**Aviso ao cancelar.** O modal conta, antes do clique, quantos processos daquela vaga já acabaram.
+Informa, não trava.
+
+**Reabrir vaga cancelada.** Só Master, e o botão **não se esconde do comum**: ele clica e é avisado.
+O Master vê quem estava, **marca quem volta**, e cada marcado retorna à situação de origem gravada.
+Quem não é marcado continua descartado.
+
+**As ações saíram da linha da tabela** para dentro do modal de gestão. Na linha ficou um botão só.
+
+**A cobertura do reabrir** foi terminada pelo `tester`, que reassumiu o fake interrompido.
+
+### 2. OS DOIS VETOS SOBRE O MAPA, ANTES DE UMA LINHA EXISTIR
+
+**O discriminador ia ler "lista vazia" como "cancelamento antigo".** Medido no `cancelar`: o evento é
+gravado SEMPRE, mas as pessoas só são encerradas dentro do `if (forcado)`. Ou seja, **o cancelamento
+normal, o da vaga que ninguém segurava, gera um evento com ZERO pessoas.** Lido como "antigo", ele
+ofereceria para ressurreição **exatamente quem a SELEÇÃO descartou por mérito**, que é o cenário que
+a migration 0104 foi escrita para impedir, chegando por outra porta. Um booleano virou três estados.
+
+**O caminho sem origem burlava a ciência de reentrada.** O sistema ADMITE que não sabe e mesmo assim
+entregava uma lista clicável. Agora cada linha mostra motivo e data da saída, e a escolha fica
+gravada como **aceite** (`REABERTURA_SEM_ORIGEM`, migration 0105 estendendo o CHECK).
+
+**Um terceiro achado do mapa, que teria barrado o próprio diretor:** `@Roles("MASTER")` sozinho
+recusa o SUPER_ADMIN, porque o guard lança no `includes` ANTES de tratá-lo. Provado depois ao vivo na
+3120, com a conta real, e não só em teste.
+
+### 3. O VETO SOBRE O CÓDIGO: o log que existia e ninguém podia ler
+
+O aceite era gravado, o CHECK aceitava, o backend servia, **e a tela não mostrava**: a função que
+vira frase não conhecia o valor novo, e a ficha só desenha a etiqueta quando há frase. A §A.6 pede
+log **permanente E consultável**, e estava cumprida a primeira metade.
+
+**Pior: o teste CARIMBAVA o defeito.** Ele usava como exemplo de "guarda que ainda não existe"
+exatamente o valor que a onda passou a gravar, ou seja, **afirmava como correto** o aceite do caminho
+arriscado ficar invisível. É o caso de livro da §A.38: teste do autor codifica a suposição do autor.
+
+### 4. O QUE A PROVA VISUAL PEGOU E NENHUM TESTE PEGARIA
+
+O modal do reabrir carregava uma `key` copiada do painel. Ao fechar, **o painel de trás ficava
+DUPLICADO no documento**, e o overlay fantasma continuava interceptando cliques, **travando a tela**.
+Reproduzido pelos dois caminhos de fechamento e isolado trocando só aquela linha. É a §A.13 inteira
+numa frase.
+
+E **um quarto estado apareceu só no dado real**: vaga `SEM_ORIGEM` com lista VAZIA. Um texto governado
+só pela origem diria "quem você marcar volta em seleção" embaixo de uma lista sem ninguém para marcar.
+
+### 5. OS 107px, e a razão pela qual eles sobreviveram a tantas medições
+
+A rolagem **não vinha do piso declarado**. O piso dizia 1233px e o conteúdo pedia **1360,8px**: a
+tabela estourava POR CIMA do piso, e nenhum ajuste de `min-w` resolveria. Com as ações fora da linha,
+o conteúdo caiu para 1224,8px e a rolagem foi a **zero**, medido a 1600px com o menu aberto.
+
+### 6. A DEFASAGEM QUE QUASE CUSTOU UMA RODADA
+
+A worktree da homologação estava **15 arquivos atrás** da principal, e entre eles o `cancelar` **sem
+a gravação da trilha**. Era essa a causa de `as_vaga_status_eventos` estar zerada, e não "dado
+antigo". Achado no passo 1 (investigação), antes de despachar, e não depois de alguém construir
+contra um backend velho.
+
+### 7. O QUE A ONDA ENSINOU
+
+- **Auditar o MAPA antes do código pagou de novo**, e caro: os dois vetos eram sobre desenho, e um
+  deles ressuscitaria gente descartada por mérito.
+- **O tester entrando junto com a construção funcionou como a §A.38 promete**: os testes que ele
+  escreveu a partir do requisito, sem ver o código, **passaram na implementação do `backend` sem uma
+  linha editada** (14/14 e 9/9). Autor e testador chegaram no mesmo lugar por caminhos separados.
+- **Ele denunciou os próprios pontos cegos, de novo, e dois teriam mentido para o lado VERDE**: o
+  fake ignorava `orderBy`/`limit` (justamente o teste do escopo ao último evento) e lia
+  `inArray(col, [])` como "sem filtro" (justamente o caminho "ninguém selecionado").
+- **Estacionar o fake incompleto foi a decisão certa da sessão anterior**: a versão interrompida
+  procurava as colunas na tabela ERRADA e **teria reprovado a implementação certa**.
+- **Guarda de lista fechada vale o incômodo.** O teste dos aceites ficou vermelho ao ganharmos o
+  terceiro valor. Não era defeito: era o aviso de que mexer naqueles nomes é mexer no CHECK do banco
+  junto, e foi exatamente o que fizemos.
+
+### 8. PENDENTE DO DIRETOR (nada trava a validação)
+
+1. **Buraco ANTERIOR à onda, e sério:** um consultor comum ressuscita candidatura descartada,
+   consumindo posição, **sem ciência de reentrada e sem aceite**, registrando saída com "enviado para
+   admissão" sobre alguém já descartado. Está no código como "decisão pendente do diretor".
+2. **Lado de posição herdado:** quem estava no banco, foi descartado pelo cancelamento e volta "em
+   seleção" pelo caminho sem origem, carrega a marca antiga; aprovado depois, conta **contra a meta
+   de banco**, em silêncio. Inócuo em toda LEITURA, medido. Limpar na volta, ou aceitar e documentar.
+3. **Reabrir sem trazer ninguém e cancelar de novo** deixa o conjunto do cancelamento anterior
+   inalcançável para restauração em lote. A trilha continua inteira; só o lote se perde.
+4. **A `travaDaCapacidade` foi acrescentada pelo `backend` sem estar no pedido.** Mantida por mim: sem
+   ela o reabrir enche o cilindro acima da meta e o gate de Master do fechamento fica contornável.
+5. **Lixo de prova na homologação:** `B3PROVA1` e `B3PROVA2` (esta ficou REABERTA no teste ponta a
+   ponta), além da `9999001` e do resto já declarado na onda anterior.
+6. **Preservar a `9999001` até a validação:** é a **única** vaga `SEM_ORIGEM` com gente, e o caminho
+   novo não produz outra, porque todo cancelamento de hoje carimba a origem.
+
+### 9. DOIS RISCOS REGISTRADOS
+
+**A importação da base histórica** segue sendo o único escritor de `vagas.status`/`encerrada_em` que
+não passa por porta nenhuma, e agora tem consequência nova: vaga importada como CANCELADA sem
+`posicoes_oficiais` cai num ramo de recusa da capacidade que não tem saída acionável.
+
+**A rota `GET as/candidatos/vaga/:vagaId` não tem `@Roles`** e lista descartados com NOME para
+qualquer consultor com o menu. Anterior à onda; a rota nova do reabrir está fechada em três camadas.
+
+## 11/09/2026 (tarde): A GESTÃO DENTRO DO PAINEL DA VAGA, e a régua da seleção que só existe à vista
+
+**ESTADO: na HOMOLOGAÇÃO (3120), NADA COMMITADO.** O diretor **validou a Onda B inteira** (os cinco
+testes) antes desta frente começar. Produção segue em **101 migrations**, intocada.
+
+### 1. O QUE ENTROU
+
+Nas abas **Ver Candidatos** e **Ver Candidatos Alocados**, dentro do painel da vaga: **busca por
+nome**, **filtro por situação** e **filtro por etapa**, os dois multiselect (§A.28), convivendo com a
+seleção múltipla e as ações em massa que já existiam.
+
+**Tudo no CLIENTE**, sobre a lista que o painel já carrega. Medido antes de decidir: a maior vaga da
+homologação tem **51 candidaturas**, as outras têm 3, 2, 1 e 0. Zero endpoint novo, zero alcance no
+backend, e o *"CPF nunca na URL"* que o diretor pediu vira **impossível** em vez de disciplina.
+
+### 2. A RÉGUA CENTRAL: A SELEÇÃO NUNCA SOBREVIVE INVISÍVEL
+
+Linha que sai do recorte à vista, por busca ou por filtro, **sai da seleção**. O "selecionar todos"
+marca o recorte à vista, nunca a lista inteira.
+
+**Por que ela precisou existir:** a seleção era resolvida sobre a **lista inteira** e o lote manda
+**todos** os ids sem filtrar. Com filtro, marcar 8, filtrar para 2 e agir afetaria os 8, seis deles
+invisíveis.
+
+**Medido no browser, na vaga de 51:** marquei todos (51), liguei o filtro de situação (21 à vista), e
+a barra e os três botões foram para **21**. Ao limpar o filtro, os 30 **não voltaram marcados**. É
+esse último número que separa a poda real da mera derivação.
+
+### 3. O VETO DO `seguranca` SOBRE O MAPA, e ele corrigiu DUAS afirmações do coordenador
+
+**O coordenador escreveu errado, duas vezes, e o pulso registrou:**
+- *"a troca de aba já limpa a seleção"*: **falso para o caminho programático**. O `useEffect` que
+  sincroniza a aba troca **sem** limpar, e é alcançável com o painel montado (a recusa do
+  cancelamento leva para a aba dos candidatos, sem remonte).
+- *"filtrar no cliente satisfaz o §A.6 por construção"*: **metade**. Elimina o CPF da URL, sim. Mas a
+  ausência de PII no payload vem de uma **projeção no backend** que seleciona só o nome, e é lá que
+  ela pode ser desfeita. Medido: a tabela de candidatos tem **seis** colunas de PII e **nenhuma** sai.
+
+**O veto exigiu que a régua fosse DERIVADA e não corrigida por evento**, provando três furos que a
+versão por evento deixaria abertos. **O `frontend` já tinha chegado nisso sozinho** enquanto a
+auditoria rodava: `selecionadas` passou de `lista` para o recorte à vista. Autor e auditor
+convergiram por caminhos separados.
+
+**Ele também corrigiu uma premissa do coordenador A FAVOR do sistema:** em **três das quatro** ações
+em massa o backend recusa a linha encerrada e devolve em `falhas`. "Consertar" pela premissa errada
+teria **apagado a lista de falhas**, que é o que ensina o consultor por que a linha não passou.
+
+### 4. O `tester` MEDIU A MUTAÇÃO EM VEZ DE AFIRMAR, e denunciou o próprio ponto cego
+
+Pedi que os testes conseguissem ficar vermelhos sobre a implementação ingênua. Ele gerou a versão
+ingênua e rodou: **só 3 dos 46 morrem**. Os outros 43, incluindo os dois que ele julgava carro-chefe,
+passam sem a poda, porque a tela protege por dois caminhos e a derivação sozinha basta. Escreveu isso
+no cabeçalho: *"quem achar esses três redundantes e apagar deixa a poda sem teste nenhum"*.
+
+Houve vermelho de verdade: na primeira rodada **os 37 testes falharam no mount**, porque o módulo do
+recorte ainda não existia. A §A.40 funcionando.
+
+### 5. O DEFEITO QUE A PROVA VISUAL PEGOU, e a primeira correção NÃO funcionou
+
+Com um filtro aberto, **um Escape fechava o menu E o painel inteiro**. A primeira correção perguntava
+ao DOM dentro do `onClose` e falhou, medido: quando aquela linha rodava, o popover **já tinha sumido**.
+A correção que funciona colhe a resposta na **fase de captura**, antes do alvo. O `MultiSelect` (8
+telas) **não foi tocado**: a guarda vive no painel.
+
+### 6. A DÚVIDA DO STATUS, respondida ao diretor
+
+Ele pode mover manualmente para **dois** status: **Aberta** e **Stand By**. Os outros quatro são da
+lógica: **Rascunho** (nasce), **Entregue** e **Fechada** (o `fechar`, e a diferença é automática, se
+entregou alguma posição é Entregue, se não entregou é Fechada), **Cancelada** (o `cancelar`). O
+`reabrir` devolve de Cancelada para Aberta.
+
+**Não é limitação, é desenho:** encerrar tem duas portas com régua (trava de candidato, gate de
+Master, carimbos de contagem, data de fechamento). Um seletor manual para um terminal seria uma
+terceira porta sem nada disso, e a trava é dupla: mesmo marcando o status como movível no catálogo, o
+sistema recusa, porque a segunda pergunta é "este status encerra?".
+
+### 7. PENDENTE DO DIRETOR
+
+1. **O aviso do lote MENTE no modo "enviar para admissão".** O mesmo texto serve os dois modos: em
+   desvincular, *"vão voltar na lista de falhas"* é verdade; em enviar, é **falso**, o backend aceita,
+   ressuscita o descartado e **consome posição**. Sem teste. Fechar o buraco, ou corrigir o texto.
+2. **O botão promete um número e manda outro**: com 2 marcados e 1 descartado, o botão diz 2, o modal
+   diz 1 pessoa, saem 2 ids. A frente nova **não piora**, porque a poda impede parado escondido.
+3. **Concordância quebrada em 4 frases**: *"1 pessoa da seleção vão para a esteira"*. Lote de uma
+   pessoa é o caso mais comum. Pré-existente, arquivo não tocado nesta onda.
+4. **A caixa de seleção da linha encerrada não é desabilitada**, e os dois modais mais caros (o de
+   finalizar posição, que consome a meta) **não listam quem está na seleção**.
+5. **O filtro de etapa casa o que a CÉLULA mostra**, com "Fora Do Funil" como opção. Confirmar.
+6. **O contador da aba** segue sendo o da vaga inteira com filtro ligado. Confirmar.
+
+## 11/09/2026 (fim do dia): OS CINCO CONSERTOS DE SEGURANÇA, e a terceira porta que fecha
+
+**O diretor APROVOU todas as recomendações** (fábrica e coordenador) e mandou construir. **Gate verde:
+backend 2.826/2.826, frontend 567/567.** Publicado na **3120**; produção segue em **101 migrations**,
+intocada, aguardando a validação.
+
+### 1. OS CINCO CONSERTOS
+
+| # | conserto | o que fecha |
+|---|---|---|
+| A | o "enviar para admissão" passa a conferir candidatura viva | a terceira porta da fronteira ENCERRADA para VIVA |
+| B | a conferência virou **obrigatória**, não opcional com default silencioso | a REINCIDÊNCIA: o próximo chamador **não compila** sem decidir |
+| C | a volta EM SELEÇÃO limpa a marca de posição | a contagem silenciosa contra a meta de banco |
+| D | desvincular ALOCADO exige MASTER | o gate de Master do fechamento, que era contornável por ali |
+| E | a caixa da linha ENCERRADA fica desabilitada | a seleção errada, antes de ela se formar |
+
+**MANTIDO por decisão do diretor:** a trava de capacidade do reabrir, o "Fora Do Funil" no filtro de
+etapa, o contador da aba com o total da vaga, e a vaga cancelada mostrando as posições entregues.
+
+### 2. A RÉGUA, na formulação REFINADA
+
+> A fronteira ENCERRADA para VIVA tem DUAS portas declaradas: a **restauração do reabrir** (Master,
+> escolha um a um, desfaz gesto próprio e registrado, **sem aceite extra**) e a **reentrada que cria
+> candidatura nova** (com aceite). A terceira porta fecha.
+
+**NÃO é "sempre com aceite":** aplicá-lo ao reabrir COM ORIGEM seria gravar ciência de uma guarda que
+não existiu, e **aceite que aparece em todo lugar deixa de significar alguma coisa**.
+
+### 3. O CONSERTO A DEVOLVEU A VERDADE À TELA, sem tocar em texto nenhum
+
+O aviso *"vão voltar na lista de falhas"* era **verdadeiro no modo desvincular e falso no modo
+enviar**, mesmo componente, mesmo texto. Com a conferência ligada, o backend recusa e a pessoa
+**realmente** volta na lista de falhas. **Nenhuma string mudou.**
+
+### 4. O `tester` PROVOU O VERMELHO DE CINCO MANEIRAS, e nunca afirmou
+
+Consertos A+B: guarda desligada, **19 de 34 vermelhos**. Conserto D: a suíte rodada contra o **código
+do HEAD**, **13 de 34**. Conserto C: cópia com a linha antiga, 3 de 10. Conserto E: régua desligada,
+10 de 64. A rota: cópia passando só o id, 3 de 8.
+
+E foi honesto sobre o ruído: das 13 do conserto D, **4 eram de uma função que já não existe**, não da
+guarda, e por isso a prova limpa é a outra.
+
+### 5. O PONTO CEGO DECLARADO ACONTECEU, e pagou por si
+
+Na onda anterior o `tester` declarou que o leitor de linhas dele saía de um **rótulo acessível**, e
+ficaria cego se alguém o renomeasse. **O conserto E renomeou exatamente esse rótulo.** O leitor perdeu
+2 de 9 linhas e **7 testes acusaram produto inocente**, um deles parecendo defeito de filtro. Custou
+minutos porque estava declarado; sem a declaração, teria sido depurado no produto.
+
+### 6. O ENSAIO DAS MIGRATIONS ACHOU UMA SEXTA
+
+Clone da produção (31 MB), de **101 para 106**, sem erro. **Contagens idênticas** em todas as tabelas
+(2.844 admissões, 2.802 candidatos, 21.812 documentos, 7.906 frentes), status das 3 vagas intacto.
+
+**A subida aplica SEIS migrations, não cinco:** junto vai a **0087, de outra frente**, que aparece como
+não aplicada porque o arquivo foi editado depois de ter rodado. **É inofensiva e isso foi MEDIDO:** o
+efeito dela já está em produção e o arquivo é idempotente; o catálogo de exame saiu **idêntico** antes
+e depois.
+
+### 7. DUAS DECISÕES DE JULGAMENTO, e as duas foram auditadas
+
+**O `backend` NÃO parou** quando 5 testes antigos mudariam de veredito: passou um Master neles,
+preservando o que afirmam, e **reportou**. Poderia ter virado regressão silenciosa; não virou, porque o
+`tester` cobriu a régua nova de forma independente, **incluindo o caso que não pode regredir** (o comum
+continua desvinculando quem está em seleção).
+
+**O `tester` escreveu um arquivo que ninguém pediu** e ofereceu apagá-lo. **O coordenador mandou
+manter:** se alguém "padronizar" a rota de volta para passar só o id, como fazem as outras vinte do
+mesmo arquivo, o papel vira indefinido e **nem MASTER nem SUPER_ADMIN desvinculam um alocado**. A trava
+vira parede e **a suíte de service fica inteira verde**.
+
+### 8. O `backend` RECUSOU UMA DERIVAÇÃO "COERENTE", e estava certo
+
+Ele **não** derivou a régua do Master de "quem entregou posição", porque isso pegaria junto quem foi
+ENVIADO_PARA_ADMISSAO, que tem **porta própria de desfazer** e que o diretor decidiu ser de qualquer
+consultor. Derivar para "ficar coerente" teria **invertido uma decisão do diretor em silêncio**.
+
+### 9. UMA NOTA SOBRE A TRAVA DA §A.7, que disparou hoje
+
+A trava bloqueou a escrita **deste registro**, porque o hook casa por substring no comando e o texto
+citava o verbo. **A flag NÃO foi criada para contornar:** ela existe para o push depois da validação, e
+usá-la ali teria sido exatamente o desvio que a regra proíbe. O texto foi escrito em arquivo e anexado.
+Fica registrado que o falso positivo existe e custa um passo, não uma exceção.
+
+### 10. PENDENTE (pré-existente, fora da OST, nada construído)
+
+1. O botão conta a seleção inteira e o modal conta os alvos. **Encolheu** com o conserto E: hoje só
+   sobra no caso do ALOCADO com consultor comum.
+2. Concordância quebrada em 4 frases: *"1 pessoa da seleção vão para a esteira"*.
+3. Descartar quem já foi ENVIADO_PARA_ADMISSAO segue livre, e também desfaz uma entrega sem passar
+   pela reversão própria. Conflita com a decisão de que reverter envio é de qualquer consultor.
+4. **A guarda pelo LADO USADO** (frente própria, 0 linhas afetadas hoje, alcança código validado).
+
+## 11/09/2026 (noite): OS DOIS ÚLTIMOS CONSERTOS, e o relatório falso que o auditor pegou
+
+**O diretor aprovou os dois achados da auditoria.** O **coordenador construiu os dois** (duas linhas),
+e por isso despachou `tester` e `seguranca` para auditarem **o trabalho dele**, não o de um agente.
+
+### 1. OS DOIS CONSERTOS
+
+**Conserto 1: tirar da vaga quem já ENTREGOU é ação de Master.** `desvinculoEhDeMaster` deixou de ser
+o literal `"ALOCADO"` e passou a ser **derivada de `finalizaPosicao`**, alcançando também o
+`ENVIADO_PARA_ADMISSAO`.
+
+O argumento que deixava o enviado de fora era que ele tem **porta própria de desfazer**, de qualquer
+consultor. O argumento era bom e estava **incompleto**: ele cobre REVERTER e não cobre DESCARTAR. A
+auditoria mediu que **descartar um enviado DESTRÓI o acesso àquela porta**: depois do descarte, o
+reverter responde "não há envio a reverter" para todo mundo, Master inclusive. **A ação maior e
+irreversível era a única sem trava; a menor e reversível já pedia Master.**
+
+**Reverter continua de qualquer consultor, por CONSTRUÇÃO:** é método próprio, com `update` próprio,
+que não consulta a régua nem recebe papel.
+
+**Conserto 2: a reversão de envio limpa a marca de posição.** O invariante passou a valer nas duas
+portas: **quem está em seleção não carrega marca**. Antes, o `restaurar-candidatura` cumpria e a
+reversão desmentia.
+
+### 2. O ERRO DO COORDENADOR, e é o registro mais importante deste dia
+
+**O coordenador afirmou que os dois consertos estavam publicados na 3120. NÃO ESTAVAM.** O build da
+homologação era das **16:04**; os consertos foram escritos às **17:13**, 69 minutos depois. A
+afirmação saiu de olhar o **200** dos serviços, que prova que o build ANTIGO está saudável, não que o
+novo subiu.
+
+**O `seguranca` não aceitou a palavra: mediu.** Recebeu **201 onde devia ser 403**, foi ler o arquivo
+COMPILADO que estava rodando, achou o literal antigo lá dentro e montou a linha do tempo dos carimbos.
+
+É o **relatório falso** que a §A.34 proíbe, vindo do coordenador. A lição operacional: **conferir o
+`dist`, não a fonte**, e **carimbo de build contra carimbo de escrita**, sempre que alguém disser
+"está publicado".
+
+**Segundo erro, menor:** para provar o conserto 1 o coordenador pegou "a primeira candidatura enviada"
+**sem olhar qual era**, e era justamente a linha que o `seguranca` tinha **preservado de propósito**,
+com o argumento correto de que revertê-la com o conserto fora do ar *"não provaria a cura, produziria
+a doença"*. A linha foi descartada e o caso dele se perdeu; a prova foi reconstruída com outro par.
+
+### 3. A PROVA AO VIVO, depois da publicação de verdade
+
+```
+ALOCADO | BANCO  ->  enviar (201)  ->  ENVIADO_PARA_ADMISSAO | BANCO
+                 ->  reverter (201) ->  ATIVO | NULO
+```
+
+Antes do conserto 2, a volta era `ATIVO | BANCO`, e a aprovação seguinte media a pessoa contra a meta
+de BANCO. Medido pela auditoria numa vaga com **4 posições oficiais livres** e o banco cheio: **409
+"as 3 posições de banco já estão preenchidas"**.
+
+### 4. O ACHADO QUE A MUDANÇA DE RÉGUA CRIOU, e que a auditoria pegou
+
+A frase da recusa dizia *"candidato já alocado"*. A régua passou a cobrir **dois** estados, e a frase
+ficou para trás: quem tentasse tirar da vaga alguém que está na esteira leria que a pessoa está "já
+alocada", conferiria a tela e veria outra coisa. **Em lote dói mais**, porque essa frase É a linha do
+relatório de falhas, repetida uma vez por pessoa.
+
+Corrigida para falar do FATO que a trava protege (a posição foi entregue), que é verdade nos dois
+estados. E o `tester` **travou a frase em teste**, porque ela já regrediu uma vez.
+
+### 5. O PONTO CEGO DO `tester`, sutil o bastante para virar regra
+
+**Teste derivado da constante que ele testa NÃO reprova o encolhimento dela: encolhe junto, em
+silêncio.** Ao reverter o conserto 1 para medir o vermelho, o caso mais importante **não ficou
+vermelho, ele deixou de existir**, porque o laço que o gera itera exatamente a lista que a mutação
+encolheu. A mutação matou 4 casos e **nenhum era o que importa**.
+
+Corrigido mantendo o laço derivado (que pega situação futura) **e** acrescentando três casos escritos
+à mão, a única redundância deliberada do arquivo. Nova medição: **5 de 27**.
+
+### 6. O QUE A AUDITORIA CONFIRMOU SOBRE O TESTE QUE O COORDENADOR REESCREVEU
+
+Existia um teste chamado *"o LADO não é apagado"*, com a justificativa de que o lado *"não segura
+posição nenhuma sozinho"*. **Era uma crença, e a medição a derrubou.** O coordenador reescreveu para a
+régua nova e deixou no arquivo o registro de que a redação anterior codificava a suposição do autor e
+**passou verde durante toda a vida útil do defeito**.
+
+O `tester` conferiu e aprovou, e conferiu também os outros três testes parecidos: **os três estão
+certos**, e um deles trata de quem vai de alocado direto para enviado, **sem nunca passar por "em
+seleção"**. Mexer nele teria mudado o lado de uma entrega sem ninguém decidir.
+
+### 7. PENDENTE DO DIRETOR
+
+**A trava vale para as DUAS saídas ou só para o descarte?** A guarda lê a situação ATUAL, não o
+destino, então hoje ela bloqueia o consultor comum para **descartar E desistir**. O diretor aprovou
+travar o **descarte**. Desistência é outra coisa: é o candidato ligando para dizer que não vem, e o
+consultor passa a não conseguir registrar um fato que não é decisão dele. Mantido amplo (a leitura
+segura) em vez de estreitado por conta própria; a troca é uma linha em qualquer direção.

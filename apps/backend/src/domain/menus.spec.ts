@@ -283,7 +283,7 @@ describe("segmentação por área: o NASCIMENTO (a fonte viva é a tabela, testa
  * continua vendo, e ninguém mais vê.
  */
 describe("menus exclusivos do SUPER_ADMIN", () => {
-  it("são exclusivos Usuários, Área Por Menu e Etapas Do Funil", () => {
+  it("são exclusivos Usuários, Área Por Menu, Etapas Do Funil, Motivos De Cancelamento e Status Da Vaga", () => {
     // A de Área Por Menu entrou aqui por um motivo mais forte que a régua de sempre: ela ESCREVE a
     // fonte da autorização por área, então quem a alcança redefine o que cada time enxerga.
     //
@@ -293,7 +293,30 @@ describe("menus exclusivos do SUPER_ADMIN", () => {
     // `@Roles("SUPER_ADMIN")`, e o MENU sozinho NÃO seguraria o MASTER: o `MenuGuard` o deixa passar
     // por pertencer à área, e há MASTER na área AS. Sem esta linha, o card apareceria para ele e
     // daria 403 em tudo, que é mostrar a porta e trancá-la.
-    expect([...MENUS_SOMENTE_SUPER_ADMIN]).toEqual(["usuarios", "menu-areas", "as-etapas"]);
+    //
+    // MOTIVOS DE CANCELAMENTO entrou pela MESMA razão das etapas, e não por simetria: o NOME do
+    // motivo é o que fica gravado na vaga cancelada, então quem edita aquela lista edita o texto da
+    // trilha de cancelamento de vagas que já foram canceladas. A controller de escrita é
+    // `@Roles("SUPER_ADMIN")`, e de novo o MENU sozinho não seguraria o MASTER.
+    //
+    // STATUS DA VAGA (onda B2) entrou pela razão mais forte das quatro, e vale escrever qual é: os
+    // outros três editam TEXTO (rótulo de etapa, nome de motivo), e este edita TRAVAS. Ligar
+    // `recebeCandidato` num status terminal devolve alocação a vaga encerrada, que é o furo fechado
+    // em 09/09; desligar `movivelManualmente` no status de ABERTURA transforma em zumbi toda vaga
+    // que estiver num status do diretor, porque fechar e cancelar exigem o papel ABERTURA e o
+    // caminho de volta deixa de existir. A controller de escrita é `@Roles("SUPER_ADMIN")`, e de
+    // novo o MENU sozinho não seguraria o MASTER, que passa por pertencer à área AS.
+    //
+    // ESTA LISTA É PINADA POR INTEIRO DE PROPÓSITO, e a prova falhar ao acrescentar um menu é o
+    // comportamento desejado: entrar aqui é decisão do diretor (§A.23), nunca efeito colateral de
+    // uma frente. Quem acrescentar um código sem escrever o motivo acima está pulando a decisão.
+    expect([...MENUS_SOMENTE_SUPER_ADMIN]).toEqual([
+      "usuarios",
+      "menu-areas",
+      "as-etapas",
+      "as-motivos-cancelamento",
+      "as-status-vaga",
+    ]);
   });
 
   it("SUPER_ADMIN continua recebendo `usuarios`", () => {

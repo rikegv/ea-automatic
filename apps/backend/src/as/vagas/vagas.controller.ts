@@ -1,7 +1,14 @@
 import { Body, Controller, Get, Param, Patch, Post } from "@nestjs/common";
-import { CurrentUser } from "../../auth/decorators";
+import { CurrentUser, Roles } from "../../auth/decorators";
 import type { AuthUser } from "../../auth/auth.types";
-import { CreateVagaDto, EditarPosicoesVagaDto, FecharVagaDto } from "./vagas.dto";
+import {
+  CancelarVagaDto,
+  CreateVagaDto,
+  EditarPosicoesVagaDto,
+  FecharVagaDto,
+  MoverStatusVagaDto,
+  ReabrirVagaDto,
+} from "./vagas.dto";
 import { VagasService } from "./vagas.service";
 
 /**
@@ -109,5 +116,115 @@ export class VagasController {
   @Post(":id/fechar")
   fechar(@Param("id") id: string, @Body() dto: FecharVagaDto, @CurrentUser() user: AuthUser) {
     return this.vagas.fechar(id, dto, user);
+  }
+
+  /**
+   * CANCELAR A VAGA (onda B1). Rota própria, e não o `PATCH` da trilha, pelo mesmo argumento que já
+   * separou o `fechar`: aqui não se edita a vaga, registra-se que o processo não vai mais acontecer.
+   *
+   * ┌─ SEM `@Roles` AQUI, E A AUSÊNCIA É A REGRA, NÃO UM ESQUECIMENTO ───────────────────────────┐
+   * │ TODO CONSULTOR CANCELA VAGA. O que é de Master é FORÇAR o cancelamento com candidato ainda │
+   * │ em processo dentro, e essa conferência mora no SERVICE, que é quem sabe quem está lá.      │
+   * │ Um `@Roles("MASTER","SUPER_ADMIN")` neste handler barraria o cancelamento NORMAL do COMUM, │
+   * │ que é regressão silenciosa: a vaga vazia deixaria de ser cancelada por quem a operou.      │
+   * │ É o mesmo desenho do `fechar`, logo acima, e o da liberação de Apto sem ASO na Esteira.    │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * QUEM CANCELOU VEM DA SESSÃO, nunca do corpo: é o papel dele que autoriza a exceção, e é o nome
+   * dele que vai para a trilha do cancelamento. A DATA do carimbo é o `now()` do servidor; a data
+   * que o corpo traz é a do FATO comercial, que é outra coisa.
+   */
+  /**
+   * MOVER O STATUS DA VAGA À MÃO (onda B2): o caminho para os status que o DIRETOR criou.
+   *
+   * ┌─ SEM `@Roles`, E A AUTORIDADE É O SERVICE, como no fechar e no cancelar ───────────────────┐
+   * │ Pôr uma vaga em "Stand By" é operação de consultor, não configuração de sistema. O que é de │
+   * │ SUPER_ADMIN é EDITAR A LISTA de status (`VagaStatusAdminController`), e essa está gatada.   │
+   * │                                                                                            │
+   * │ E ESTA ROTA NÃO ENCERRA VAGA: o destino tem de passar por `podeSerDestinoManual` (ativo,    │
+   * │ movível e que NÃO encerra) e a origem por `podeSairManualmente` (só sai de quem não         │
+   * │ encerra), as duas sob a linha travada. É o que preserva a frase que dispensa o `@Roles` do  │
+   * │ fechamento: `fechar` e `cancelar` continuam sendo as ÚNICAS portas para o estado terminal.  │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * PATCH e não POST porque é a MESMA vaga mudando de estado. Quem moveu vem da SESSÃO, nunca do
+   * corpo: autoria é trilha, não campo de formulário.
+   */
+  @Patch(":id/status")
+  moverStatus(
+    @Param("id") id: string,
+    @Body() dto: MoverStatusVagaDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.vagas.moverStatus(id, dto, user);
+  }
+
+  @Post(":id/cancelar")
+  cancelar(@Param("id") id: string, @Body() dto: CancelarVagaDto, @CurrentUser() user: AuthUser) {
+    return this.vagas.cancelar(id, dto, user);
+  }
+
+  /**
+   * O AVISO DO CANCELAMENTO (onda B3): quantos processos daquela vaga JÁ ESTÃO ENCERRADOS.
+   *
+   * ┌─ SEM `@Roles` AQUI, E A AUSÊNCIA É DELIBERADA ─────────────────────────────────────────────┐
+   * │ ESTA É A LEITURA DO MODAL DE CANCELAR, e cancelar é do CONSULTOR (ver a rota logo acima).  │
+   * │ Um `@Roles("MASTER","SUPER_ADMIN")` deixaria o COMUM cancelar sem nunca ver o aviso que a  │
+   * │ OST existe para dar, que é regressão silenciosa do pior tipo: a trava continuaria valendo e │
+   * │ a informação que ela não dá continuaria faltando.                                          │
+   * │                                                                                            │
+   * │ E O QUE ELA SERVE É ESTRITAMENTE MENOS do que a leitura já aberta: a MESMA informação, COM  │
+   * │ NOME, é servida a qualquer consultor com o menu por `GET as/candidatos/vaga/:vagaId`. Aqui  │
+   * │ sai um NÚMERO por situação. A controller inteira continua reivindicada pelo menu `as-vagas`.│
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   */
+  @Get(":id/cancelamento-previa")
+  previaDoCancelamento(@Param("id") id: string) {
+    return this.vagas.previaDoCancelamento(id);
+  }
+
+  /**
+   * A PRÉVIA DO REABRIR: quem o cancelamento derrubou, para o Master escolher quem volta.
+   *
+   * ┌─ `@Roles` AQUI TAMBÉM, E ELE NÃO É REDUNDANTE COM O DA ESCRITA ────────────────────────────┐
+   * │ SEM ELE, O COMUM ENUMERA OS DESCARTADOS DE QUALQUER VAGA pela URL da API, com nome, motivo  │
+   * │ e data da saída, sem nunca conseguir reabrir nada. Leitura sensível se protege na leitura.  │
+   * │                                                                                            │
+   * │ O AVISO AO COMUM É PURAMENTE DE TELA, SEM `fetch`: o botão não se esconde (decisão do       │
+   * │ diretor), ele DIZ que só o Master reabre. Esconder ensina que o sistema está quebrado; dizer │
+   * │ ensina quem procurar.                                                                       │
+   * │                                                                                            │
+   * │ `SUPER_ADMIN` É ESCRITO, e a omissão seria um defeito medido: o `RolesGuard` faz            │
+   * │ `!required.includes(user.papel)` e LANÇA antes de tratar o SUPER_ADMIN, então               │
+   * │ `@Roles("MASTER")` sozinho barraria o próprio diretor. É o molde do `trocarVaga`.            │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   */
+  @Get(":id/reabrir-previa")
+  @Roles("MASTER", "SUPER_ADMIN")
+  previaDeReabertura(@Param("id") id: string, @CurrentUser() user: AuthUser) {
+    return this.vagas.previaDeReabertura(id, user);
+  }
+
+  /**
+   * REABRIR A VAGA CANCELADA (onda B3): a única porta que DESFAZ um encerramento.
+   *
+   * ┌─ COM `@Roles`, AO CONTRÁRIO DO `fechar` E DO `cancelar`, E O CONTRASTE É A REGRA ──────────┐
+   * │ Lá a ausência é deliberada: todo consultor fecha e cancela, e só FORÇAR é de Master, o que  │
+   * │ o service confere. AQUI A AÇÃO INTEIRA É DE MASTER, por decisão do diretor, então a         │
+   * │ restrição sobe para a rota. O service RECONFERE o papel do `@CurrentUser()`, nunca do corpo:│
+   * │ o guard é a primeira autoridade, e a segunda vale para todo chamador interno.                │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * ELA MORA NESTA CONTROLLER, E ISSO NÃO É ARRUMAÇÃO: uma controller NOVA cairia no default de
+   * área ADM, fail-closed (`menu-areas.service`), e todo Master de A&S levaria 403 dizendo que a
+   * operação é de outra área. A `VagasController` já é reivindicada pelo menu `as-vagas`.
+   *
+   * POST e não PATCH, no molde do `fechar` e do `cancelar`: aqui não se edita a vaga, registra-se um
+   * movimento dela, com trilha e com gente voltando ao processo.
+   */
+  @Post(":id/reabrir")
+  @Roles("MASTER", "SUPER_ADMIN")
+  reabrir(@Param("id") id: string, @Body() dto: ReabrirVagaDto, @CurrentUser() user: AuthUser) {
+    return this.vagas.reabrir(id, dto, user);
   }
 }

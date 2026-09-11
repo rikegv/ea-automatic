@@ -972,16 +972,140 @@ export const VAGA_VINCULO_LABEL: Record<VagaVinculo, string> = {
  * Isso não deixa ponta solta: ZERO linhas usavam o status (conferido em produção e em homologação
  * antes da remoção), e o DTO valida contra ESTA lista, então nenhuma linha nova pode nascer com ele.
  */
-export const VAGA_STATUS = ["RASCUNHO", "ABERTA", "ENTREGUE", "FECHADA", "CANCELADA"] as const;
-export type VagaStatus = (typeof VAGA_STATUS)[number];
+/**
+ * ─ O STATUS DA VAGA VIROU CATÁLOGO DO DIRETOR (Onda B2) ────────────────────────────────────────
+ *
+ * ANTES ERA UMA UNIÃO DE CINCO LITERAIS. Agora é `string`, e o preço disso é o mesmo que
+ * `CandidaturaEtapa` já pagou: **o TypeScript para de recusar `"ABERTAA"`**. Três coisas substituem
+ * a garantia que se perdeu, e as TRÊS precisam existir, porque nenhuma cobre a outra:
+ *   1. validação em runtime no service, contra o catálogo;
+ *   2. FK RESTRICT no banco, de `vagas.status` para `as_vaga_status.codigo`;
+ *   3. fallback no rótulo e no tom, para a pill nunca sair vazia.
+ *
+ * A FK PEGA O CÓDIGO INEXISTENTE. ELA NÃO PEGA O CÓDIGO EXISTENTE E ERRADO, e é aí que mora o dano:
+ * gravar o código do CANCELAMENTO onde ia o do FECHAMENTO é FK válida, desfecho falso e permanente,
+ * carimbado junto de `vagas_fechadas` e `data_fechamento`. Por isso o código NUNCA é escrito à mão:
+ * quem encerra pergunta ao catálogo qual é o código do PAPEL.
+ *
+ * ─ POR QUE PAPEL, E NÃO UMA CAIXINHA "NÃO MEXA" ───────────────────────────────────────────────
+ * Com uma coluna `protegido` genérica, o código continuaria com seis literais espalhados, e ninguém
+ * que olhasse a tabela saberia QUAL linha é a que o fechamento grava quando a contagem é zero. Com
+ * `papel`, a própria tabela documenta a dependência, e o catálogo deixa de mentir: o diretor renomeia
+ * "Entregue" para o que quiser, e o `fechar` continua achando a linha certa pelo papel.
+ */
+export const VAGA_STATUS_PAPEIS = [
+  "LIVRE",
+  "RASCUNHO",
+  "ABERTURA",
+  "ENTREGA",
+  "FECHAMENTO",
+  "CANCELAMENTO",
+] as const;
+export type VagaStatusPapel = (typeof VAGA_STATUS_PAPEIS)[number];
 
-export const VAGA_STATUS_LABEL: Record<VagaStatus, string> = {
-  RASCUNHO: "Rascunho",
-  ABERTA: "Aberta",
-  ENTREGUE: "Entregue",
-  FECHADA: "Fechada",
-  CANCELADA: "Cancelada",
-};
+/** O código gravado na vaga. Texto livre para o TypeScript; o catálogo e a FK é que o governam. */
+export type VagaStatus = string;
+
+/**
+ * UMA LINHA DO CATÁLOGO DE STATUS.
+ *
+ * OS QUATRO FLAGS SÃO COMPORTAMENTOS, e cada um responde uma pergunta DIFERENTE. Hoje três deles
+ * coincidem nos mesmos códigos, e essa coincidência é armadilha: `encerra` e `recebeCandidato` têm
+ * exatamente os mesmos três valores (`ENTREGUE`, `FECHADA`, `CANCELADA`) e por isso parecem o mesmo
+ * flag. NÃO SÃO. Um status LIVRE plausível como "Stand By" é `recebeCandidato: false` (vaga pausada
+ * não capta gente nova) e `encerra: false` (a vaga continua viva). Quem trocar um pelo outro numa
+ * consulta faz uma vaga PAUSADA ser tratada como TERMINADA.
+ *
+ *   `encerra`             o processo desta vaga ACABOU? Congela a contagem, para o contador de dias
+ *                         e, na retenção, diz que o vínculo daquela pessoa com a vaga terminou.
+ *   `recebeCandidato`     ainda entra gente nova nesta vaga?
+ *   `daTrilha`            a trilha de abertura pode GRAVAR este status? (permissão, não proibição)
+ *   `movivelManualmente`  o diretor pode mover uma vaga PARA este status pela tela?
+ */
+/**
+ * A PALETA DO STATUS DA VAGA É MAIS LARGA QUE A DAS ETAPAS, E A DIFERENÇA É O VERMELHO.
+ *
+ * ELA NÃO PODE SER `ETAPA_TONS`, e isto foi um erro do coordenador pego pelo `frontend`: aquela
+ * paleta tem cinco tons e NÃO tem `dg`. Reusá-la aqui deixaria o catálogo INCAPAZ de expressar o X
+ * vermelho que a §A.12 manda para "recusado", e "Cancelada", que é vermelha em produção hoje,
+ * viraria uma exclamação laranja. A paleta do status é a da `Pill` inteira, que sempre foi.
+ *
+ * ETAPA E STATUS SÃO COISAS DIFERENTES, e a paleta acompanha: etapa é passo de funil, e passo de
+ * funil não "recusa" nada; status de vaga tem um desfecho que é recusa de verdade.
+ */
+export const VAGA_STATUS_TONS = ["nt", "in", "wn", "or", "dg", "ok"] as const;
+export type VagaStatusTom = (typeof VAGA_STATUS_TONS)[number];
+
+export interface VagaStatusItem {
+  codigo: VagaStatus;
+  rotulo: string;
+  ordem: number;
+  tom: VagaStatusTom;
+  ativo: boolean;
+  papel: VagaStatusPapel;
+  encerra: boolean;
+  recebeCandidato: boolean;
+  daTrilha: boolean;
+  movivelManualmente: boolean;
+}
+
+/**
+ * A SEMENTE, e ela descreve o comportamento de HOJE, sem inventar nada.
+ *
+ * NENHUM STATUS NOVO NASCE NESTA ONDA (decisão do diretor: o "Análise" foi retirado). O catálogo
+ * começa com exatamente os cinco que já existem, cada um com o papel que ele já exercia no código,
+ * para que a migração seja de FORMA e não de comportamento. Se alguma linha aqui mudar o que o
+ * sistema faz hoje, é defeito de migração, não decisão de produto.
+ *
+ * `movivelManualmente` É FALSO NOS QUATRO QUE ENCERRAM OU ABREM PROCESSO, com uma exceção pensada:
+ * `ABERTURA` é `true` porque, sem ela, uma vaga movida para um status LIVRE ficaria IMPOSSÍVEL de
+ * fechar e de cancelar (as duas portas exigem o status de abertura) e viraria zumbi permanente
+ * segurando candidatura viva. O caminho de volta tem de existir.
+ */
+export const VAGA_STATUS_SEMENTE: readonly VagaStatusItem[] = [
+  { codigo: "RASCUNHO",  rotulo: "Rascunho",  ordem: 1, tom: "nt", ativo: true, papel: "RASCUNHO",     encerra: false, recebeCandidato: true,  daTrilha: true,  movivelManualmente: false },
+  { codigo: "ABERTA",    rotulo: "Aberta",    ordem: 2, tom: "wn", ativo: true, papel: "ABERTURA",     encerra: false, recebeCandidato: true,  daTrilha: true,  movivelManualmente: true  },
+  { codigo: "ENTREGUE",  rotulo: "Entregue",  ordem: 3, tom: "ok", ativo: true, papel: "ENTREGA",      encerra: true,  recebeCandidato: false, daTrilha: false, movivelManualmente: false },
+  { codigo: "FECHADA",   rotulo: "Fechada",   ordem: 4, tom: "nt", ativo: true, papel: "FECHAMENTO",   encerra: true,  recebeCandidato: false, daTrilha: false, movivelManualmente: false },
+  { codigo: "CANCELADA", rotulo: "Cancelada", ordem: 5, tom: "dg", ativo: true, papel: "CANCELAMENTO", encerra: true,  recebeCandidato: false, daTrilha: false, movivelManualmente: false },
+];
+
+/**
+ * OS PAPÉIS QUE PRECISAM EXISTIR SEMPRE, exatamente um de cada.
+ *
+ * `LIVRE` fica de fora de propósito: dele pode haver zero ou muitos. Dos outros cinco tem de haver
+ * um, e um só, e é isso que o índice parcial único do banco garante, no molde do `inicial` das
+ * etapas. Sem essa garantia, `codigoDoPapel("ENTREGA")` teria de escolher entre duas linhas, e
+ * escolher é o que ele não pode fazer.
+ */
+export const VAGA_STATUS_PAPEIS_DE_SISTEMA: readonly VagaStatusPapel[] = VAGA_STATUS_PAPEIS.filter(
+  (p) => p !== "LIVRE",
+);
+
+/**
+ * UM STATUS PODE SER DESTINO DE UM MOVIMENTO MANUAL?
+ *
+ * A DUPLA CONFERÊNCIA É DELIBERADA, e não redundância: `movivelManualmente` é um flag que o DIRETOR
+ * edita, e sozinho ele seria a única coisa entre um clique e uma TERCEIRA PORTA para o estado
+ * terminal, sem a trava de candidato tratado, sem a de posições oficiais, sem o gate de Master, sem
+ * os carimbos de contagem e sem data de fechamento. Encerrar vaga tem duas portas, e as duas têm
+ * régua. Esta não é uma terceira.
+ */
+export function podeSerDestinoManual(s: Pick<VagaStatusItem, "movivelManualmente" | "encerra" | "ativo">): boolean {
+  return s.ativo && s.movivelManualmente && !s.encerra;
+}
+
+/**
+ * UMA VAGA NESTE STATUS PODE SER MOVIDA MANUALMENTE PARA OUTRO?
+ *
+ * SÓ SAI DE STATUS QUE NÃO ENCERRA. Reabrir vaga encerrada NÃO é mover status: é desfazer um
+ * encerramento, com trava e trilha próprias, e não está nesta onda. Deixar a origem livre aqui
+ * ressuscitaria a vaga cancelada, e com ela o carimbo de contagem abandonado, o contador de dias
+ * voltando a correr e a trilha de cancelamento afirmando um fato que já não vale.
+ */
+export function podeSairManualmente(s: Pick<VagaStatusItem, "encerra">): boolean {
+  return !s.encerra;
+}
 
 /**
  * A RÉGUA DOS OBRIGATÓRIOS DA VAGA, declarada UMA VEZ e lida pelos dois lados.
@@ -1743,6 +1867,85 @@ export const VAGA_IDIOMAS = [
   "Libras",
   OPCAO_OUTROS,
 ] as const;
+
+/**
+ * ─ O NÍVEL DO IDIOMA (Onda C) ─────────────────────────────────────────────────────────────────
+ *
+ * A LISTA DE IDIOMAS SOZINHA NÃO RESPONDE A PERGUNTA QUE A VAGA FAZ. "Inglês" cabe tanto na vaga que
+ * precisa de alguém que leia um e-mail quanto na que precisa atender cliente por telefone, e o
+ * recrutador filtrava por um dado que não distinguia as duas. O nível é o que torna a exigência
+ * comparável, e por isso ele é OBRIGATÓRIO por idioma escolhido: idioma sem nível é a caixa de texto
+ * de volta, com outro nome.
+ *
+ * SÃO QUATRO, na ordem crescente, e a ordem É o dado: "Avançado" tem de vir depois de
+ * "Intermediário" em toda leitura, porque a pergunta do recrutador é "pelo menos tal nível", nunca
+ * "exatamente tal nível".
+ */
+export const IDIOMA_NIVEIS = ["BASICO", "INTERMEDIARIO", "AVANCADO", "FLUENTE"] as const;
+export type IdiomaNivel = (typeof IDIOMA_NIVEIS)[number];
+
+/** ETIQUETA, então title case (§A.24). */
+export const IDIOMA_NIVEL_LABEL: Record<IdiomaNivel, string> = {
+  BASICO: "Básico",
+  INTERMEDIARIO: "Intermediário",
+  AVANCADO: "Avançado",
+  FLUENTE: "Fluente",
+};
+
+/**
+ * UM IDIOMA EXIGIDO PELA VAGA, com o nível.
+ *
+ * O PAR É INDIVISÍVEL: gravar os idiomas numa lista e os níveis em outra criaria duas listas que
+ * concordam pela ORDEM, e ordem é a coisa mais fácil de perder numa edição de tela. Um objeto por
+ * exigência não tem como desalinhar.
+ */
+export interface AsVagaIdioma {
+  idioma: string;
+  nivel: IdiomaNivel;
+}
+
+/**
+ * ─ O PROJETO DA VAGA (Onda C): a LINHA DE SERVIÇO, e ela é gerenciável pelo diretor ───────────
+ *
+ * ┌─ ELE NÃO É O "PROJETO" QUE JÁ EXISTE, e a colisão de nome é real ──────────────────────────┐
+ * │ `projetos_alto_volume` já guarda coisas como "BIENAL DOS LIVROS" e "Temporada De Setembro   │
+ * │ 2026": são EVENTOS, campanhas com data, DENTRO da operação de alto volume. Este aqui é a     │
+ * │ LINHA DE SERVIÇO da vaga (Pontuais & Estratégicas, RPO & BPO, Alto Volume, SouFast,          │
+ * │ OneShot), que é outro eixo: uma vaga da linha "Alto Volume" pode ou não pertencer a um       │
+ * │ evento de alto volume.                                                                       │
+ * │                                                                                              │
+ * │ Os dois são DADOS DIFERENTES com o mesmo nome de negócio, e por isso o tipo, a tabela e a    │
+ * │ rota deste nascem com nome próprio: quem escrever `projeto` sem qualificar, daqui a seis     │
+ * │ meses, vai ler a tabela errada.                                                              │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * MOLDE DO CATÁLOGO DE ETAPAS (`as_etapas_funil`), porque o diretor pediu assim e porque aquele
+ * molde já resolveu as perguntas difíceis: código imutável, rótulo editável, ordem, ativo/inativo em
+ * vez de apagar (a vaga antiga continua dizendo de que linha ela era), e o histórico preservado.
+ */
+export interface AsLinhaDeServico {
+  id: number;
+  codigo: string;
+  rotulo: string;
+  ordem: number;
+  ativo: boolean;
+}
+
+/**
+ * ─ UMA CIDADE DO IBGE (Onda C) ────────────────────────────────────────────────────────────────
+ *
+ * `id` É O CÓDIGO DO IBGE, de 7 dígitos, e ele é a chave: nome de município se repete entre estados
+ * (há quatro "Bom Jesus", em estados diferentes), e casar por nome é como a lista antiga errava.
+ * O código é oficial, estável, e é o que qualquer integração futura vai falar.
+ *
+ * A BASE É ESTRUTURADA NO BANCO, e não um arquivo de código, por decisão do diretor: são 5.570
+ * municípios, e um arquivo desse tamanho no bundle é peso morto em toda tela que não pede cidade.
+ */
+export interface AsCidade {
+  id: number;
+  nome: string;
+  uf: string;
+}
 
 /** FAIXA ETÁRIA pretendida, seleção única. "Indiferente" é resposta, não ausência de resposta. */
 export const VAGA_FAIXA_ETARIA = [
@@ -2555,6 +2758,247 @@ export interface AsCandidaturaPendente {
   candidatoId: string;
   candidatoNome: string;
   etapa: CandidaturaEtapa;
+}
+
+/**
+ * ─ A RÉGUA DO CANCELAMENTO DA VAGA: QUEM AINDA SEGURA O CANCELAMENTO ──────────────────────────
+ *
+ * A PERGUNTA É OUTRA, E POR ISSO A LISTA É OUTRA. O fechamento pergunta "sobrou alguém EM SELEÇÃO?"
+ * (`pendentesDeTratamento`, só `ATIVO`). O cancelamento pergunta "sobrou alguém cujo processo NÃO
+ * TERMINOU?", e o diretor definiu o corte: quem já foi APROVADO ou ENVIADO PARA ADMISSÃO está
+ * encerrado e não segura nada; quem saiu (DESCARTADO, DESISTIU) muito menos.
+ *
+ * `ALOCADO` SEGURA, e este é o ponto que não se deduz do resto do módulo. Pela ordem da vida da
+ * candidatura, `ALOCADO` vem DEPOIS de `APROVADO` e é ele quem ENCHE O CILINDRO da vaga
+ * (`finalizaPosicao`). Ainda assim ele NÃO está na lista dos encerrados, porque a régua do diretor
+ * é operacional e não de contagem: alocado "continua no funil" (`CANDIDATURA_SITUACAO_AJUDA`), é
+ * trabalho vivo dentro daquela vaga, e cancelar por cima disso apaga um processo em andamento.
+ * Quem escrever aqui uma derivação de `finalizaPosicao` "para ficar coerente" inverte a decisão.
+ *
+ * A DERIVAÇÃO É FAIL-CLOSED, e a direção protege: a lista enumera os ENCERRADOS, e a trava é o
+ * COMPLEMENTO dela. Situação nova nasce SEGURANDO o cancelamento, até alguém decidir o contrário.
+ * O caminho oposto (enumerar quem trava) faria a situação nova nascer sem travar nada, em silêncio,
+ * que é o mesmo defeito que `candidaturaViva` e `VAGA_STATUS_DA_TRILHA` já evitam por construção.
+ *
+ * `ehSaidaSemExito` É REUSADA, nunca redigitada: duas listas iguais divergem no primeiro dia em que
+ * alguém acrescentar uma saída em uma delas.
+ */
+export function candidaturaEncerradaParaCancelamento(s: CandidaturaSituacao): boolean {
+  return s === "APROVADO" || s === "ENVIADO_PARA_ADMISSAO" || ehSaidaSemExito(s);
+}
+
+/** Esta candidatura ainda SEGURA o cancelamento da vaga? Complemento exato do encerrado. */
+export function seguraOCancelamento(s: CandidaturaSituacao): boolean {
+  return !candidaturaEncerradaParaCancelamento(s);
+}
+
+/** As situações que seguram o cancelamento, DERIVADAS da régua acima e nunca escritas à mão. */
+export const SITUACOES_QUE_SEGURAM_CANCELAMENTO: readonly CandidaturaSituacao[] =
+  CANDIDATURA_SITUACOES.filter(seguraOCancelamento);
+
+/**
+ * A RECUSA DO CANCELAMENTO DA VAGA, quando ainda há candidato com processo em aberto.
+ *
+ * `needsConfirmation: true`, E É A PRIMEIRA VEZ QUE ESSE CAMPO VALE `true` NUM ENCERRAMENTO DE
+ * VAGA. Em `AsVagaFechamentoBloqueado` ele é `false` porque lá não existe "confirmar mesmo assim":
+ * a vaga não fecha com gente em seleção dentro, e o caminho é tratar cada pendente. Aqui existe, e
+ * é decisão do diretor: o consultor desvincula todos primeiro, ou um MASTER cancela assim mesmo.
+ *
+ * `podeForcar` É CONVENIÊNCIA DA TELA, NUNCA A TRAVA. Ele existe só para o botão não ser oferecido
+ * a quem vai receber 403. O papel é resolvido no servidor a cada requisição, e o `forcar: true` de
+ * um COMUM é recusado lá, não aqui. É o mesmo desenho de `FecharVagaRecusa.podeForcar`.
+ *
+ * §A.6: nome, etapa, situação e o id da candidatura, exatamente o que a recusa do fechamento já
+ * trafega hoje em produção. Sem CPF, sem contato, sem identificador direto da pessoa.
+ */
+export interface AsVagaCancelamentoBloqueado {
+  needsConfirmation: true;
+  reason: "candidatosNaoEncerrados";
+  message: string;
+  naoEncerrados: AsCandidaturaNaoEncerrada[];
+  podeForcar: boolean;
+}
+
+/**
+ * ─ O AVISO DO CANCELAMENTO: QUANTOS PROCESSOS DAQUELA VAGA JÁ ACABARAM ────────────────────────
+ *
+ * POR QUE ELE EXISTE: o diretor cancelou uma vaga com uma pessoa dentro e o sistema deixou. NÃO era
+ * defeito, aquela pessoa tinha DESISTIDO dez horas antes, e desistente não segura cancelamento. O
+ * que faltou foi AVISO, não trava: a tela não dizia que havia alguém ali, então o gesto parecia
+ * atropelar um processo vivo quando não atropelava nada.
+ *
+ * ┌─ A QUEBRA POR SITUAÇÃO NÃO É ENFEITE, ELA IMPEDE A FRASE DE MENTIR ────────────────────────┐
+ * │ A régua do cancelamento (`candidaturaEncerradaParaCancelamento`) chama de ENCERRADO tudo que │
+ * │ não segura o gesto, e isso inclui `APROVADO` e `ENVIADO_PARA_ADMISSAO`, que **não são saídas │
+ * │ sem êxito**: são o melhor desfecho que existe. Medido na homologação, a primeira vaga real   │
+ * │ tinha como único "encerrado" um ENVIADO_PARA_ADMISSAO. Dizer ali "1 processo encerrado", sem │
+ * │ mais nada, descreveria uma contratação como se fosse um descarte.                            │
+ * │                                                                                              │
+ * │ Com a quebra, a tela deriva a frase do QUE de fato está lá, e a contagem e o texto não têm    │
+ * │ como divergir: são o mesmo dado, lido uma vez.                                                │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * §A.6: uma contagem por situação, e mais nada. Sem nome, sem CPF, sem contato. O `seguranca`
+ * aprovou a quebra medindo que a MESMA informação, com NOME, já é servida a qualquer consultor com
+ * o menu por `GET as/candidatos/vaga/:vagaId`: um número por situação é estritamente menos.
+ */
+export interface AsVagaCancelamentoPorSituacao {
+  situacao: CandidaturaSituacao;
+  quantos: number;
+}
+
+/** A resposta de `GET /as/vagas/:id/cancelamento-previa`. */
+export interface AsVagaCancelamentoPrevia {
+  vagaId: string;
+  /** Quantos processos daquela vaga JÁ ACABARAM, pela régua do cancelamento. */
+  encerrados: number;
+  /** A quebra, na ordem do vocabulário, e só com as situações que existem naquela vaga. */
+  porSituacao: AsVagaCancelamentoPorSituacao[];
+}
+
+/** Um candidato cujo processo ainda está em aberto na vaga que se tentou cancelar. */
+export interface AsCandidaturaNaoEncerrada {
+  candidaturaId: string;
+  candidatoId: string;
+  candidatoNome: string;
+  etapa: CandidaturaEtapa;
+  situacao: CandidaturaSituacao;
+}
+
+/**
+ * ─ REABRIR VAGA CANCELADA: O VOCABULÁRIO, E POR QUE ELE PRECISA DE DUAS COISAS NOVAS ───────────
+ *
+ * O `seguranca` vetou o primeiro desenho do reabrir com quatro furos, e dois deles são de DADO QUE
+ * NÃO EXISTE. Este bloco é a resposta aos dois:
+ *
+ * 1. QUEM O CANCELAMENTO DESCARTOU. O único marcador de hoje é o TEXTO "Vaga cancelada: motivo"
+ *    gravado no motivo da saída, e esse campo é digitável à mão por qualquer consultor. Casar por
+ *    texto ressuscitaria quem a seleção descartou de propósito, e viraria atalho para burlar a
+ *    ciência de reentrada. O marcador passa a ser ESTRUTURAL: o evento de saída aponta para O
+ *    EVENTO DE CANCELAMENTO DAQUELA VAGA, e o reabrir só enxerga quem saiu naquele evento.
+ *
+ * 2. EM QUE SITUAÇÃO A PESSOA ESTAVA. Não é gravada em lugar nenhum, e adivinhar pela marca da
+ *    posição é PROVADAMENTE FALSO: existe hoje na base uma candidatura EM SELEÇÃO com posição
+ *    OFICIAL marcada (ela foi alocada, enviada para admissão, e alguém reverteu o envio, que não
+ *    limpa a marca). Chutar por ali fabricaria uma entrega que nunca houve.
+ */
+
+/**
+ * UMA PESSOA NA LISTA DO REABRIR, com a verdade sobre ela e sobre o que o sistema SABE dela.
+ *
+ * `situacaoOrigem` NULA NÃO É ERRO: é o cancelamento ANTIGO, feito antes de o sistema passar a
+ * gravar a origem. A tela avisa, e quem for selecionado volta EM SELEÇÃO. Nunca alocado, porque
+ * inventar alocação é inventar entrega, e entrega enche o cilindro da vaga.
+ */
+export interface AsCandidaturaParaReabrir {
+  candidaturaId: string;
+  candidatoId: string;
+  candidatoNome: string;
+  /** A etapa em que a pessoa estava quando o cancelamento a descartou. */
+  etapaOrigem: CandidaturaEtapa;
+  /** Em que situação ela estava. NULA no cancelamento antigo, que não gravava isto. */
+  situacaoOrigem: Extract<CandidaturaSituacao, "ATIVO" | "ALOCADO"> | null;
+  /** O lado da posição que ela ocupava, quando ocupava. Só faz sentido com origem ALOCADO. */
+  posicaoLadoOrigem: PosicaoLado | null;
+  /**
+   * ─ POR QUE E QUANDO ELA SAIU, e estes dois campos são EXIGÊNCIA DE AUDITORIA ────────────────
+   *
+   * O `seguranca` vetou a lista sem eles, e o argumento é o do caminho ANTIGO: ali o sistema ADMITE
+   * que não sabe se a pessoa saiu por causa do cancelamento, e mesmo assim entrega uma lista
+   * clicável. Sem motivo e sem data, o Master decide RECONHECENDO NOME, que é o mesmo gesto que a
+   * ciência de reentrada existe para impedir (`reentradaPrecisaCiencia` já devolve este par ao
+   * consultor antes de ele escolher de novo quem já foi recusado).
+   *
+   * Com eles, "descartado por perfil não aderente em 03/2025" e "descartado no dia do cancelamento"
+   * deixam de ser a mesma linha na tela.
+   *
+   * §A.6: motivo é texto do PROCESSO, não ficha da pessoa, exatamente como `AsCandidaturaEncerrada`
+   * já trafega hoje em produção.
+   */
+  motivoSaida: string | null;
+  saidaEm: string | null;
+  /**
+   * ─ ESTA PESSOA JÁ FOI EXPURGADA, E POR ISSO NÃO VOLTA (§A.6) ────────────────────────────────
+   *
+   * Vaga cancelada há mais de dois anos tem gente que a retenção já anonimizou: nome trocado por
+   * "Candidato Expurgado", CPF, e-mail, telefone e nascimento apagados. Devolvê-la a um processo
+   * VIVO a protegeria de novo pela cláusula do expurgo, ou seja, o apagamento seria DESFEITO pela
+   * porta dos fundos, e a tela convidaria alguém a redigitar os dados para "consertar o fantasma".
+   *
+   * A linha aparece MARCADA e o servidor RECUSA restaurá-la. Aparecer e ser recusada é melhor do
+   * que sumir: sumir faria o Master procurar para sempre uma pessoa que ele lembra que estava lá.
+   */
+  anonimizado: boolean;
+}
+
+/**
+ * O QUE A TELA DO REABRIR RECEBE ANTES DE O DIRETOR ESCOLHER.
+ *
+ * `origemGravada: false` é o cancelamento antigo, e a tela TEM DE DIZER ISSO, porque muda o que
+ * acontece com quem for selecionado. Silenciar seria deixar o diretor escolher achando que a pessoa
+ * volta para onde estava.
+ */
+export interface AsVagaReabrirPrevia {
+  vagaId: string;
+  candidaturas: AsCandidaturaParaReabrir[];
+  origem: AsVagaReabrirOrigem;
+  /** O papel resolvido no SERVIDOR. Conveniência da tela; a autoridade é o guard da rota. */
+  podeReabrir: boolean;
+}
+
+/**
+ * ─ COMO O SISTEMA SABE QUEM DEVE VOLTAR, e este tipo existe por causa de um VETO ──────────────
+ *
+ * ELE ERA UM BOOLEANO (`origemGravada`), E O BOOLEANO ESCONDIA O TERCEIRO CASO, que é justamente o
+ * perigoso. A medição que o derrubou está no `cancelar`: o evento do cancelamento é inserido
+ * SEMPRE, mas as candidaturas só são encerradas DENTRO do `if (forcado)`. Ou seja, o cancelamento
+ * NORMAL, o da vaga que ninguém segurava, produz um evento com ZERO pessoas apontando para ele.
+ *
+ * ┌─ O ERRO QUE ISTO IMPEDE, e ele ressuscitaria gente descartada POR MÉRITO ──────────────────┐
+ * │ Com um booleano, a implementação natural é: "consultei o evento, veio vazio, logo isto deve  │
+ * │ ser cancelamento antigo, então ofereço todos os DESCARTADO da vaga". O resultado é oferecer  │
+ * │ para ressurreição exatamente quem a SELEÇÃO recusou, num cancelamento que não descartou      │
+ * │ ninguém. É o cenário que a migration 0104 foi escrita para impedir, chegando por outra porta.│
+ * │                                                                                              │
+ * │ O DISCRIMINADOR É "EXISTE EVENTO DE CANCELAMENTO?", NUNCA "A LISTA VEIO VAZIA".              │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * `COM_ORIGEM`: o cancelamento carimbou quem descartou. Cada pessoa volta EXATA, para a situação e
+ *   o lado que estavam gravados. É desfazer o próprio gesto, e por isso não pede ciência.
+ * `NINGUEM_DESCARTADO`: o evento existe e não encerrou ninguém. A lista é VAZIA e a tela diz isso.
+ *   Não se oferece nada, porque não há nada a desfazer.
+ * `SEM_ORIGEM`: cancelamento anterior ao carimbo. O sistema NÃO SABE quem saiu por causa dele nem
+ *   onde cada um estava. A tela avisa, quem for escolhido volta EM SELEÇÃO, e a escolha fica
+ *   registrada como aceite, porque ali o Master está reescolhendo a pessoa, não desfazendo um gesto.
+ */
+export type AsVagaReabrirOrigem = "COM_ORIGEM" | "NINGUEM_DESCARTADO" | "SEM_ORIGEM";
+
+/**
+ * A RECUSA DO REABRIR PARA QUEM NÃO É MASTER.
+ *
+ * O BOTÃO NÃO SE ESCONDE, e isso é decisão do diretor: o consultor clica e o sistema DIZ que só o
+ * Master reabre, em vez de a ação simplesmente não existir na tela dele. Esconder ensina que o
+ * sistema está quebrado; dizer ensina quem procurar.
+ */
+export interface AsVagaReabrirNegado {
+  needsConfirmation: false;
+  reason: "reabrirEhDeMaster";
+  message: string;
+}
+
+/**
+ * UM MOTIVO DE CANCELAMENTO DE VAGA, do catálogo que o diretor mantém.
+ *
+ * MOLDE `motivos_declinio`, E NÃO O MOLDE DAS ETAPAS. Motivo não tem ordem de funil, não tem cor,
+ * não tem "inicial" e não precisa resolver rótulo de histórico, porque é o NOME que fica gravado na
+ * vaga, e não o id: é o que a vaga já faz com `motivos_contratacao`. Assim, inativar um motivo no
+ * catálogo não trava a vaga antiga nem exige `restrict`, e a vaga cancelada em janeiro continua
+ * dizendo por que foi cancelada mesmo que o motivo saia de circulação em março.
+ */
+export interface AsMotivoCancelamentoVaga {
+  id: string;
+  nome: string;
+  ativo: boolean;
 }
 
 /**

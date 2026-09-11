@@ -4,6 +4,7 @@ import type { AuthUser } from "../../auth/auth.types";
 import { VagasService } from "./vagas.service";
 import { asCandidaturas, vagaBeneficio, vagas } from "../../db/schema";
 import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
+import { catalogoDeStatusFingido } from "../vaga-status/vaga-status-catalogo.fake";
 
 /**
  * ─ O FECHAMENTO DA VAGA: QUEM DIZ QUE ELA ENTREGOU SÃO AS CANDIDATURAS ──────────────────────────
@@ -197,7 +198,7 @@ function makeDb(cenario: {
     },
   };
 
-  return { service: new VagasService(db as never, catalogoDeEtapasFingido() as never), ordem, updates };
+  return { service: new VagasService(db as never, catalogoDeEtapasFingido() as never, catalogoDeStatusFingido() as never), ordem, updates };
 }
 
 const gravado = (updates: Escrita[]) => updates.find((u) => u.tabela === vagas)?.valores ?? {};

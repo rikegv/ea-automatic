@@ -749,6 +749,88 @@ export const MENUS: MenuDef[] = [
     areas: ["AS"],
     operacoes: ["EtapasFunilAdminController.*"],
   },
+  {
+    /**
+     * MOTIVOS DE CANCELAMENTO DE VAGA (Onda B1). O catálogo que o diretor mantém para dizer POR QUE
+     * uma vaga foi cancelada.
+     *
+     * ┌─ POR QUE ESTE REGISTRO PRECISOU SER ESCRITO À MÃO, E NÃO NASCEU SOZINHO ──────────────────┐
+     * │ O menu vive em DOIS lugares que não se conversam: a rota da tela declara o CÓDIGO que a   │
+     * │ governa (`frontend/src/lib/menu-rotas.ts`), e a autorização vive AQUI. Sem esta entrada, o │
+     * │ código citado lá não existe: o card é filtrado por `temMenu`, a rota é bloqueada, e a tela │
+     * │ do catálogo NÃO ABRE PARA NINGUÉM, nem para o SUPER_ADMIN. É o caso `clinicas` de          │
+     * │ 29/07/2026 com o sinal trocado, e ele aparece só quando alguém tenta abrir a tela.         │
+     * └──────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * SÓ A CONTROLLER DE ESCRITA É REIVINDICADA, e a de LEITURA fica de fora de propósito. O
+     * `MenuGuard` resolve por NOME DE CLASSE, então reivindicar `MotivosCancelamentoVagaController`
+     * daria 403 no seletor de motivo do modal para todo consultor COMUM, que é justamente quem
+     * precisa ler a lista para cancelar uma vaga. Mesma separação que o catálogo de etapas já usa.
+     *
+     * A REIVINDICAÇÃO É A SEGUNDA CAMADA, NÃO A PRIMEIRA: a autoridade da escrita é o
+     * `@Roles("SUPER_ADMIN")` na própria `MotivosCancelamentoVagaAdminController` (fail-closed no
+     * `RolesGuard`), porque o MENU NÃO SEGURA MASTER, que passa por pertencer à área. As duas
+     * camadas recusam por motivos independentes, e nenhuma depende de a outra estar certa.
+     *
+     * §A.23: NASCE SÓ PARA O SUPER_ADMIN. Entra em `MENUS_SOMENTE_SUPER_ADMIN` (some da barra dos
+     * demais em vez de aparecer e dar 403) e em `MENUS_BLOQUEADOS_COMUM` (marcá-lo para um COMUM não
+     * concederia nada, então a tela nem oferece). O convergedor do boot REGISTRA o menu no catálogo,
+     * para ele existir e ser selecionável, e para por aí: quem libera quem enxerga é o diretor.
+     *
+     * `areas: ["AS"]` é obrigatório, e `grupo: "ADMIN"` acompanha o catálogo de etapas: as duas são
+     * telas que CONFIGURAM listas do módulo de A&S, e o diretor quis as configurações juntas. Por
+     * nascer fora da ADM, o código entra também em `MENUS_QUE_NASCEM_FORA_DA_ADM`, que é a prova
+     * NOMINAL de nascimento.
+     */
+    codigo: "as-motivos-cancelamento",
+    rotulo: "Motivos De Cancelamento",
+    href: "/admin/as/motivos-cancelamento",
+    grupo: "ADMIN",
+    ordem: 50,
+    areas: ["AS"],
+    operacoes: ["MotivosCancelamentoVagaAdminController.*"],
+  },
+  {
+    /**
+     * STATUS DA VAGA (onda B2): o gerenciador da lista de status, que deixou de ser enum e virou
+     * catálogo com PAPEL (`as_vaga_status`, migration 0102).
+     *
+     * ┌─ ESTE MENU NÃO É O QUE SEGURA A PORTA, E AQUI ISSO PESA MAIS QUE NOS OUTROS DOIS ────────┐
+     * │ Quem segura é o `@Roles("SUPER_ADMIN")` na `VagaStatusAdminController`. O MENU SOZINHO   │
+     * │ NÃO SEGURARIA O MASTER: o `MenuGuard` o deixa passar por PERTENCER À ÁREA, e há MASTER na │
+     * │ área AS em produção.                                                                      │
+     * │                                                                                           │
+     * │ E O QUE ESTA TELA EDITA SÃO TRAVAS, não rótulos: ligar `recebeCandidato` num status       │
+     * │ terminal devolve alocação a vaga encerrada (o furo de 09/09); desligar                    │
+     * │ `movivelManualmente` no status de ABERTURA transforma em zumbi toda vaga que estiver num  │
+     * │ status do diretor, porque fechar e cancelar exigem o papel ABERTURA e o caminho de volta  │
+     * │ deixa de existir.                                                                         │
+     * │                                                                                           │
+     * │ A CONTROLLER DE LEITURA (`VagaStatusController`) FICA FORA da lista de propósito:         │
+     * │ reivindicá-la daria 403 na pill de status, no filtro e no seletor do movimento manual da  │
+     * │ Central de Vagas, para quem só precisa SABER quais status existem.                         │
+     * └───────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * §A.23: NASCE SÓ PARA O SUPER_ADMIN. Entra também em `MENUS_SOMENTE_SUPER_ADMIN` (some da barra
+     * dos demais em vez de aparecer e dar 403) e em `MENUS_BLOQUEADOS_COMUM` (marcá-lo para um COMUM
+     * não concederia nada, então a tela nem oferece). O convergedor do boot REGISTRA o menu no
+     * catálogo, para ele existir e ser selecionável, e para por aí: quem libera quem enxerga é o
+     * diretor. O registro em código é o que evita o caso `clinicas` de 29/07/2026, em que a tela
+     * subiu no ar e não existia como opção na tela de permissões.
+     *
+     * `areas: ["AS"]` é obrigatório, e `grupo: "ADMIN"` acompanha os outros dois catálogos do
+     * módulo: são telas que CONFIGURAM listas de A&S, e o diretor quis as configurações juntas. Por
+     * nascer fora da ADM, o código entra também em `MENUS_QUE_NASCEM_FORA_DA_ADM`, que é a prova
+     * NOMINAL de nascimento.
+     */
+    codigo: "as-status-vaga",
+    rotulo: "Status Da Vaga",
+    href: "/admin/as/status-vaga",
+    grupo: "ADMIN",
+    ordem: 51,
+    areas: ["AS"],
+    operacoes: ["VagaStatusAdminController.*"],
+  },
 ];
 
 /** Menus sempre visíveis, independentemente de configuração (a home nunca some). */
@@ -811,6 +893,10 @@ export const MENUS_QUE_NASCEM_FORA_DA_ADM = new Set<string>([
   // Mora no grupo ADMIN por decisão do diretor e mesmo assim é menu de A&S: é exatamente o caso que
   // fez a prova deixar de olhar o grupo e passar a olhar esta lista.
   "as-etapas",
+  // Mesma razão do de cima: configura uma lista de A&S e mora no grupo ADMIN por isso.
+  "as-motivos-cancelamento",
+  // Idem, e o catálogo mais sensível dos três: os flags dele são travas da operação da vaga.
+  "as-status-vaga",
 ]);
 
 /** Índice `codigo -> áreas de NASCIMENTO`, para o convergedor semear menu novo. */
@@ -919,6 +1005,10 @@ export const MENUS_BLOQUEADOS_COMUM = new Set<string>([
   // A escrita do catálogo de etapas é `@Roles("SUPER_ADMIN")`: marcar para um COMUM só faria o
   // menu APARECER e o backend BARRAR, que é o chamado que esta lista existe para não gerar.
   "as-etapas",
+  // Idem: a escrita é `@Roles("SUPER_ADMIN")`, então marcar para um COMUM só faria o menu
+  // APARECER e o backend BARRAR.
+  "as-motivos-cancelamento",
+  "as-status-vaga",
 ]);
 
 /**
@@ -945,6 +1035,8 @@ export const MENUS_SOMENTE_SUPER_ADMIN = new Set<string>([
   // Master seria mostrar a porta e trancá-la. Quem edita esta lista edita o vocabulário em que todo
   // o histórico de seleção está escrito.
   "as-etapas",
+  "as-motivos-cancelamento",
+  "as-status-vaga",
 ]);
 
 /**

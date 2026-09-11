@@ -3,6 +3,11 @@ import type { Database } from "../../db/client";
 import { VagasService } from "./vagas.service";
 import type { CreateVagaDto } from "./vagas.dto";
 import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
+import {
+  catalogoDeStatusFingido,
+  linhasDeStatusFingidas,
+} from "../vaga-status/vaga-status-catalogo.fake";
+import { ReguaDeStatusDaVaga } from "../vaga-status/vaga-status.service";
 
 /**
  * MOTIVO / JUSTIFICATIVA / SUBSTITUIÇÃO SÓ NO VÍNCULO TEMPORÁRIO (item 1, decisão do diretor 07/09).
@@ -15,14 +20,25 @@ import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
  * `camposDaTrilha` é o mapeamento PURO do corpo para as colunas: não toca no banco, e é por isso que
  * ele é testável assim, sem stub de Drizzle. O `db` nulo prova o ponto: nada aqui o usa.
  */
-const service = new VagasService(null as unknown as Database, catalogoDeEtapasFingido() as never);
+const service = new VagasService(null as unknown as Database, catalogoDeEtapasFingido() as never, catalogoDeStatusFingido() as never);
+
+/**
+ * A RÉGUA DE STATUS ENTRA COMO PRIMEIRO ARGUMENTO (onda B2): `camposDaTrilha` pergunta a ela se o
+ * status que está sendo gravado é o do RASCUNHO, para decidir se afrouxa a conferência do dígito do
+ * CPF. Ela continua sendo um mapeamento PURO, e o `db` nulo continua provando o ponto.
+ */
+const REGUA = new ReguaDeStatusDaVaga(linhasDeStatusFingidas());
 
 function campos(dto: Partial<CreateVagaDto>) {
   return (
     service as unknown as {
-      camposDaTrilha: (d: CreateVagaDto, s: string) => Record<string, unknown>;
+      camposDaTrilha: (
+        r: ReguaDeStatusDaVaga,
+        d: CreateVagaDto,
+        s: string,
+      ) => Record<string, unknown>;
     }
-  ).camposDaTrilha({ status: "RASCUNHO", ...dto } as CreateVagaDto, "RASCUNHO");
+  ).camposDaTrilha(REGUA, { status: "RASCUNHO", ...dto } as CreateVagaDto, "RASCUNHO");
 }
 
 /** O corpo que a tela do temporário manda, com tudo preenchido, inclusive o CPF. */

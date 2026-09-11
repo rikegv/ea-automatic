@@ -44,8 +44,6 @@ import {
   VAGA_NATUREZA_LABEL,
   VAGA_SAZONALIDADE,
   VAGA_SAZONALIDADE_LABEL,
-  VAGA_STATUS,
-  VAGA_STATUS_LABEL,
   type FecharVagaRecusa,
   VAGA_TEMPO_CONTRATO,
   VAGA_TESTES,
@@ -68,6 +66,8 @@ import {
   type VagaPendencia,
   type VagaStatus,
   type AsCandidaturaPendente,
+  type AsMotivoCancelamentoVaga,
+  type AsVagaCancelamentoBloqueado,
   type AsVagaFechamentoBloqueado,
 } from "@ea/shared-types";
 import { ApiError, apiFetch } from "@/lib/api";
@@ -84,22 +84,36 @@ import { Combobox } from "@/components/ui/Combobox";
 import { FiltroTrigger, FiltroCampo } from "@/components/ui/FiltroTrigger";
 import { Icon, type IconName } from "@/components/ui/Icon";
 import { StatusPill } from "@/components/ui/StatusPill";
-import { TOM_STATUS_VAGA } from "@/lib/as-candidatos-visual";
+import { tomDoStatusVaga } from "@/lib/as-candidatos-visual";
 import {
-  VAGA_STATUS_ENCERRADOS as STATUS_ENCERRADOS,
   origemContagem,
   preenchidas,
+  vagaEncerrada,
   type OrigemContagem,
 } from "@/lib/as-vagas-ocupacao";
+import {
+  ordemDoStatusVaga,
+  rotuloDoStatusVaga,
+  statusDePublicacao,
+  statusDoCodigo,
+  statusOrdenados,
+  useStatusVaga,
+} from "@/lib/as-status-vaga";
 import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
 import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
 import { cn } from "@/lib/cn";
 import { Stepper, type StepDef } from "@/components/nova/Stepper";
-import { VAGA_STATUS_PUBLICACAO } from "@/lib/as-vaga-acoes";
+
 import { fechamentoRecusadoPorPosicoes } from "@/lib/as-vaga-fechamento";
 import { avisoDeReducaoDeMeta, avisoDeReducaoNaTrilha } from "@/lib/as-vaga-meta";
 import { useEtapas, etapasOrdenadas, corDoTom } from "@/lib/as-etapas";
-import { cardsDeDesfecho, cardsDeEtapa, somarFunil, type CardDeFunil } from "@/lib/as-vagas-funil";
+import {
+  cardsDeDesfecho,
+  cardsDeEtapa,
+  cardsDeStatus,
+  somarFunil,
+  type CardDeFunil,
+} from "@/lib/as-vagas-funil";
 import {
   casaBusca,
   fatiarPagina,
@@ -111,7 +125,20 @@ import {
 } from "@/lib/as-vagas-lista";
 import { CandidatosPendentesModal } from "@/components/as/vagas/CandidatosPendentesModal";
 import { RecusaFechamentoModal } from "@/components/as/vagas/RecusaFechamentoModal";
-import { VagaPainelModal } from "@/components/as/vagas/VagaPainelModal";
+import {
+  CancelarVagaModal,
+  type CancelamentoForm,
+} from "@/components/as/vagas/CancelarVagaModal";
+import { RecusaCancelamentoModal } from "@/components/as/vagas/RecusaCancelamentoModal";
+import {
+  cancelamentoBloqueadoPorCandidatos,
+  type AsVagaCancelamentoPrevia,
+} from "@/lib/as-vaga-cancelamento";
+import {
+  VagaPainelModal,
+  type AcaoDaVaga,
+} from "@/components/as/vagas/VagaPainelModal";
+import { ReabrirVagaModal } from "@/components/as/vagas/ReabrirVagaModal";
 
 interface OpcaoCliente {
   codCliente: string;
@@ -172,10 +199,10 @@ const POR_PAGINA = 25;
  * da vaga (check verde); aberta é trabalho em andamento (exclamação amarela); cancelada é o X
  * vermelho; fechada é encerramento neutro; vaga banco é estado próprio, em azul.
  */
-// O MAPA SUBIU PARA `lib/as-candidatos-visual.ts` (ajuste 4), sem alterar um valor sequer: o resumo
-// da vaga passou a aparecer também dentro da Central de Candidatos, e duas cópias fariam a mesma
-// vaga ganhar cores diferentes em duas telas. O nome local fica, e todas as leituras seguem iguais.
-const TOM_STATUS = TOM_STATUS_VAGA;
+// O MAPA MORREU (onda B2). Ele subiu para `lib/as-candidatos-visual.ts` no ajuste 4 e agora deixou
+// de ser mapa: a cor de cada status é a coluna `tom` que o diretor escolhe no gerenciador, e quem a
+// lê é `tomDoStatusVaga(codigo, catalogo)`. Um `Record` local aqui voltaria a ser a cópia que o
+// status novo do diretor não encontra, e a pill dele sairia sem cor e sem ícone.
 
 /** Data ISO (yyyy-mm-dd) no formato brasileiro, sem passar por fuso (a string já é a data). */
 function dataBr(iso: string | null): string {
@@ -460,7 +487,10 @@ function LinhaEmProcesso({ quantos }: { quantos: number }) {
  */
 function diasEmAberto(v: VagaListItem): number | null {
   if (!v.dataAbertura) return null;
-  const encerrada = STATUS_ENCERRADOS.includes(v.status);
+  // O ENCERRAMENTO É O FLAG `encerra` DO CATÁLOGO (onda B2), e não mais uma lista de três códigos.
+  // Este é um dos pontos em que um flag errado se paga duas vezes: ele decide o fim da conta aqui e
+  // o número do cilindro em `preenchidas`, na mesma linha da tabela.
+  const encerrada = vagaEncerrada(v.status);
   const fim = encerrada ? v.dataFechamento : HOJE();
   // Vaga encerrada SEM data de fechamento é dado incompleto, e contar até hoje mentiria que ela
   // segue aberta. Sem o fim, não há conta.
@@ -726,7 +756,10 @@ function CampoSelect({
 }
 
 export default function CentralDeVagasPage() {
-  const { token } = useAuth();
+  /* `isAdmin` É MASTER OU SUPER_ADMIN, a tradução exata do `@Roles` da rota do reabrir (peça 2).
+     Ele NÃO é a trava, é o que decide se a caixa lê a prévia ou explica que a ação é de Master: a
+     autoridade é o servidor, que recusa o POST de quem não tem o papel. */
+  const { token, isAdmin } = useAuth();
   const [rows, setRows] = useState<VagaListItem[]>([]);
   const [opcoes, setOpcoes] = useState<Opcoes>({
     cargos: [],
@@ -813,6 +846,24 @@ export default function CentralDeVagasPage() {
    */
   const [cardAtivo, setCardAtivo] = useState<VagaStatus | "total">("total");
 
+  /*
+   * ─ O CATÁLOGO DE STATUS DA VAGA (onda B2) ────────────────────────────────────────────────────
+   *
+   * ELE ALIMENTA SEIS PONTOS DESTA TELA AO MESMO TEMPO: a pill de cada linha, a ordenação da coluna
+   * Status, os cards da primeira fileira, as opções do filtro, o seletor da trilha de publicação e
+   * os destinos do movimento manual. Todos liam listas escritas à mão, e a lista de um NÃO era a
+   * lista do outro: o seletor oferecia "Entregue" e o backend recusava com 400. Agora é uma fonte
+   * só, e é a mesma que o servidor lê.
+   *
+   * A LEITURA É A COMPLETA (inativos incluídos), memoizada por carga de página: a vaga que ficou
+   * parada num status que o diretor tirou de circulação precisa do rótulo dele para não mostrar o
+   * código cru na pill.
+   *
+   * ELE FICA AQUI, ENTRE OS ESTADOS DA TELA, e não lá embaixo junto do catálogo de etapas: a busca e
+   * o recorte (`filtradas`) já o consomem, e em JavaScript a ordem de declaração é a ordem de uso.
+   */
+  const { status: catalogoStatus } = useStatusVaga(token);
+
   /**
    * A PÁGINA ATUAL DA TABELA. A lista inteira já vive na memória da tela (o `GET /as/vagas` não
    * pagina), então paginar aqui é só recortar o que se DESENHA: com centenas de vagas, montar
@@ -857,6 +908,18 @@ export default function CentralDeVagasPage() {
 
   /** Item 8: a vaga completa vive num modal, aberto pelo olho da linha. Null = modal fechado. */
   const [verAlvo, setVerAlvo] = useState<VagaListItem | null>(null);
+  /**
+   * EM QUE ABA O PAINEL ABRE, e ele quase sempre abre na ficha.
+   *
+   * O ESTADO EXISTE POR CAUSA DE UM CAMINHO SÓ: a recusa do cancelamento precisa LEVAR o consultor
+   * até a lista de quem ainda está em processo, e não só listar os nomes numa caixa e mandá-lo se
+   * virar. Abrindo na ficha, o painel entregaria a aba certa a um clique de distância, que é o
+   * mesmo beco que a recusa existe para evitar.
+   *
+   * ELE VOLTA A "vaga" A CADA ABERTURA NORMAL (o botão Gestão Vaga), então nada muda para quem abre
+   * o painel pelo caminho de sempre: uma aba herdada da última recusa seria surpresa, não memória.
+   */
+  const [verAba, setVerAba] = useState<"vaga" | "candidatos" | "alocados">("vaga");
 
   // ── Fechar vaga ───────────────────────────────────────────────────────────
   const [fecharAlvo, setFecharAlvo] = useState<VagaListItem | null>(null);
@@ -886,6 +949,68 @@ export default function CentralDeVagasPage() {
     dataPrevistaInicio: "",
     enviarParaAdmissao: false,
   });
+
+  // ── Cancelar vaga ─────────────────────────────────────────────────────────
+  /**
+   * CANCELAR NÃO É FECHAR, e por isso este bloco é próprio e não um parâmetro do de cima. Fechar é a
+   * vaga que ACABOU (quantas entregou, com qual salário); cancelar é a vaga que NÃO VAI ACONTECER, e
+   * a pergunta é só POR QUÊ. Compartilhar o estado faria uma tela perguntar o número de entrega de
+   * uma vaga que não entregou nada.
+   */
+  const [cancelarAlvo, setCancelarAlvo] = useState<VagaListItem | null>(null);
+  const [cancelando, setCancelando] = useState(false);
+  const [erroCancelar, setErroCancelar] = useState<string | null>(null);
+  /**
+   * A RECUSA POR CANDIDATO NÃO ENCERRADO. Estado próprio pelo mesmo motivo do `recusaFech`: não é
+   * uma frase, é um corpo com a LISTA de quem segura e com a resposta de quem pode forçar. Dentro do
+   * `erroCancelar` ela viraria um erro seco, sem lista e sem caminho.
+   */
+  const [recusaCanc, setRecusaCanc] = useState<AsVagaCancelamentoBloqueado | null>(null);
+  /**
+   * ─ A PRÉVIA DO CANCELAMENTO (peça 1 da onda B3): quantos processos daquela vaga já acabaram ───
+   *
+   * ELA CARREGA O `vagaId` JUNTO, e isso não é zelo: abrir o cancelamento de uma vaga, voltar e
+   * abrir o de outra dispara duas leituras, e a primeira pode chegar DEPOIS da segunda. Sem o id
+   * amarrado à resposta, o modal da vaga B mostraria a contagem da vaga A, com a frase inteira e
+   * sem nada falhar. Guardando o id, a resposta velha simplesmente não casa e é ignorada.
+   *
+   * `falhou` É ESTADO, E NÃO AUSÊNCIA: nulo quer dizer "ainda estou lendo" e não tem o que mostrar;
+   * `falhou` quer dizer "não consegui contar", que é uma frase diferente e precisa ser dita.
+   */
+  const [previaCanc, setPreviaCanc] = useState<{
+    vagaId: string;
+    dados: AsVagaCancelamentoPrevia | null;
+    falhou: boolean;
+  } | null>(null);
+
+  // ── Reabrir vaga cancelada (peça 2 da onda B3) ────────────────────────────
+  /**
+   * ESTADO PRÓPRIO, e não um `cancelarAlvo` reaproveitado: um ENCERRA a vaga e o outro DESFAZ o
+   * encerramento, são duas caixas com dois corpos e dois papéis diferentes. Um estado só obrigaria
+   * cada leitura a conferir de que lado da operação ela está.
+   *
+   * TODA A LEITURA E TODO O ERRO MORAM DENTRO DO MODAL, ao contrário do cancelamento: aquele
+   * formulário é preenchido aqui (motivo, observação, data) e precisa do estado na página; este é
+   * uma escolha feita inteira lá dentro, e trazer a lista para cá espalharia dado de pessoa por uma
+   * página que não precisa dele (§A.6).
+   */
+  const [reabrirAlvo, setReabrirAlvo] = useState<VagaListItem | null>(null);
+  const [cancForm, setCancForm] = useState<CancelamentoForm>({
+    motivo: "",
+    observacao: "",
+    dataCancelamento: HOJE(),
+  });
+  /**
+   * O CATÁLOGO DE MOTIVOS, CARREGADO SOB DEMANDA (ao abrir o modal) e guardado depois disso.
+   *
+   * NÃO ENTRA NO `carregar()` DA TELA: ele é lido por UMA ação que a maioria das sessões nunca
+   * dispara, e pendurá-lo na carga da lista custaria uma requisição a mais em toda abertura da
+   * Central de Vagas para servir um seletor que ninguém abriu.
+   */
+  const [motivosCancelamento, setMotivosCancelamento] = useState<AsMotivoCancelamentoVaga[] | null>(
+    null,
+  );
+  const [carregandoMotivos, setCarregandoMotivos] = useState(false);
 
   /**
    * EDITAR SÓ OS DOIS CONTADORES DEPOIS (decisão do diretor, 25/08: "continuam editáveis depois").
@@ -1626,6 +1751,237 @@ export default function CentralDeVagasPage() {
     }
   }
 
+  // ── CANCELAR VAGA ─────────────────────────────────────────────────────────
+
+  /**
+   * O CATÁLOGO DE MOTIVOS, buscado na PRIMEIRA abertura do modal e reusado depois.
+   *
+   * A LEITURA É DOS ATIVOS (o `GET /as/motivos-cancelamento` já devolve só eles): motivo inativado
+   * some do seletor e continua escrito nas vagas antigas, porque o que fica gravado na vaga é o NOME
+   * e não o id. É a mesma régua dos motivos de contratação.
+   *
+   * FALHA AQUI NÃO FECHA O MODAL. O consultor vê a lista vazia com a frase que explica o caminho, e
+   * o botão de confirmar continua travado pelo motivo obrigatório: uma falha de catálogo não pode
+   * virar um cancelamento sem motivo.
+   */
+  const carregarMotivosCancelamento = useCallback(async () => {
+    setCarregandoMotivos(true);
+    try {
+      setMotivosCancelamento(
+        await apiFetch<AsMotivoCancelamentoVaga[]>("/as/motivos-cancelamento", { token }),
+      );
+    } catch {
+      setMotivosCancelamento([]);
+    } finally {
+      setCarregandoMotivos(false);
+    }
+  }, [token]);
+
+  function abrirCancelamento(v: VagaListItem) {
+    setCancelarAlvo(v);
+    setErroCancelar(null);
+    setRecusaCanc(null);
+    setCancForm({ motivo: "", observacao: "", dataCancelamento: HOJE() });
+    if (motivosCancelamento === null) void carregarMotivosCancelamento();
+    void carregarPreviaDoCancelamento(v);
+  }
+
+  /**
+   * ─ A LEITURA DO AVISO, A CADA ABERTURA E NÃO UMA VEZ SÓ ────────────────────────────────────────
+   *
+   * O CATÁLOGO DE MOTIVOS É LIDO UMA VEZ E REUSADO (ele é o mesmo para todas as vagas). ESTA NÃO: a
+   * contagem é DAQUELA vaga e muda a cada movimento no funil dela, então memorizá-la mostraria o
+   * número de ontem com a cara de número de agora.
+   *
+   * A FALHA NÃO FECHA NADA E NÃO VIRA ERRO DO FORMULÁRIO: o aviso é complemento da decisão, e o
+   * cancelamento continua inteiro sem ele. O que a tela faz é DIZER que não conseguiu contar, em vez
+   * de sumir e deixar o consultor achando que a vaga não tem processo encerrado nenhum.
+   */
+  async function carregarPreviaDoCancelamento(v: VagaListItem) {
+    setPreviaCanc({ vagaId: v.id, dados: null, falhou: false });
+    try {
+      const dados = await apiFetch<AsVagaCancelamentoPrevia>(
+        `/as/vagas/${v.id}/cancelamento-previa`,
+        { token },
+      );
+      setPreviaCanc({ vagaId: v.id, dados, falhou: false });
+    } catch {
+      setPreviaCanc({ vagaId: v.id, dados: null, falhou: true });
+    }
+  }
+
+  /**
+   * O ENVIO DO CANCELAMENTO, disparado de DOIS lugares (o botão do formulário e o "Cancelar assim
+   * mesmo" da recusa), com o MESMO corpo nos dois casos: o que já estava preenchido. Reabrir o
+   * formulário para a pessoa redigitar o que acabou de digitar seria perder o preenchimento por nada,
+   * e é o desenho que o fechamento já usa.
+   */
+  async function enviarCancelamento(opcoes?: { forcar?: boolean }) {
+    if (!cancelarAlvo) return;
+    setErroCancelar(null);
+    setCancelando(true);
+    try {
+      await apiFetch(`/as/vagas/${cancelarAlvo.id}/cancelar`, {
+        method: "POST",
+        token,
+        body: {
+          motivo: cancForm.motivo,
+          observacao: cancForm.observacao.trim() || undefined,
+          dataCancelamento: cancForm.dataCancelamento,
+          /**
+           * O `forcar` SÓ VIAJA QUANDO ALGUÉM FORÇOU, nunca como `false` explícito, pela mesma razão
+           * do fechamento: o cancelamento normal não é "um forçamento desligado", e mandar a chave
+           * em toda requisição faria a exceção parecer parte do caminho comum.
+           *
+           * ELE NÃO É A AUTORIZAÇÃO, É O PEDIDO: quem decide se há um Master do outro lado é o
+           * servidor, que recalcula o papel quando esta chave chega e devolve 403 ao COMUM.
+           */
+          forcar: opcoes?.forcar ? true : undefined,
+        },
+      });
+      setCancelarAlvo(null);
+      setRecusaCanc(null);
+      await carregar();
+    } catch (err) {
+      /**
+       * DUAS RECUSAS, DOIS TRATAMENTOS. A de candidato não encerrado vem ESTRUTURADA e abre o modal
+       * com a lista e o caminho; a da vaga que já saiu de ABERTA (e o 403 de quem não é Master) é
+       * frase, e aparece no formulário como qualquer outra, com o texto do backend inteiro.
+       */
+      const bloqueio = cancelamentoBloqueadoPorCandidatos(err);
+      if (bloqueio) {
+        setRecusaCanc(bloqueio);
+        setErroCancelar(null);
+      } else {
+        // Uma recusa nova fecha o modal do forçamento: mantê-lo aberto por cima esconderia a frase
+        // que explica o que aconteceu de fato (o 403 do COMUM cai exatamente aqui).
+        setRecusaCanc(null);
+        setErroCancelar(err instanceof Error ? err.message : "Erro ao cancelar a vaga");
+      }
+    } finally {
+      setCancelando(false);
+    }
+  }
+
+  /**
+   * O CAMINHO DA RECUSA: fecha o cancelamento e abre o PAINEL da vaga já na aba dos candidatos.
+   *
+   * NENHUM MECANISMO NOVO DE TRATAMENTO NASCE AQUI. Desvincular, encerrar e mover já existem inteiros
+   * dentro do painel (`AcoesEmMassaDaVaga`), com seleção múltipla e motivo obrigatório. Uma segunda
+   * porta significaria a régua do motivo escrita duas vezes.
+   */
+  function tratarCandidatosDaVaga() {
+    const alvo = cancelarAlvo;
+    if (!alvo) return;
+    setRecusaCanc(null);
+    setCancelarAlvo(null);
+    setVerAba("candidatos");
+    setVerAlvo(alvo);
+  }
+
+  /**
+   * ┌─ AS AÇÕES DA VAGA, QUE SAÍRAM DA LINHA DA TABELA E FORAM PARA A BARRA DO PAINEL ──────────┐
+   * │ Pedido do diretor (peça 3 da onda B3): "mover todos os botões de ação para dentro do modal │
+   * │ Gestão da Vaga, na linha das abas, mesmo formato. Na linha da vaga fica só Gestão da Vaga".│
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * AS RÉGUAS SÃO AS MESMAS DE ANTES, MOVIDAS PALAVRA POR PALAVRA, e isso é deliberado: o pedido é
+   * de LUGAR, não de regra. Fechar, cancelar e editar posições continuam só na vaga ABERTA;
+   * continuar continua só no RASCUNHO; clonar continua em todas. Aproveitar a mudança de lugar para
+   * "melhorar" uma condição seria mexer em comportamento validado que ninguém pediu (§A.14/§A.26).
+   *
+   * A ORDEM TAMBÉM É A DA LINHA, pelo mesmo motivo: quem usa a tela todo dia conhece a sequência.
+   *
+   * OS MODAIS SÃO OS MESMOS, E CONTINUAM ONDE ESTAVAM. Cada entrada aqui chama exatamente o mesmo
+   * `abrirX` que o ícone da tabela chamava, e o estado, o formulário e a recusa de cada um seguem
+   * escritos nesta página. Só o GATILHO mudou de endereço.
+   *
+   * ─ ONDE ENTRA O SEXTO (o "Reabrir vaga" da peça 2, que ainda não existe) ─────────────────────
+   * Ele é MAIS UM ITEM DESTA LISTA, condicionado à vaga CANCELADA, e entra logo antes do clone (o
+   * clone é o último porque vale para todas). Nada na barra precisa mudar para recebê-lo: ela
+   * desenha o que a lista trouxer, sem número fixo de lugares. O que falta para ele é o contrato do
+   * backend, não o lugar na tela.
+   */
+  function acoesDaVaga(v: VagaListItem): AcaoDaVaga[] {
+    const lista: AcaoDaVaga[] = [];
+    // O CADEADO FECHA a vaga que acabou, e é ele que pede a contagem do fechamento.
+    if (v.status === "ABERTA") {
+      lista.push({
+        id: "fechar",
+        rotulo: "Fechar vaga",
+        icone: "lock",
+        descricao: `Fechar a vaga ${rotuloDaVaga(v)}`,
+        onClick: () => abrirFechamento(v),
+      });
+    }
+    /* O CANCELAMENTO É O ENCERRAMENTO QUE NÃO É ENTREGA, e é o único gesto DESTRUTIVO da barra:
+       daí o `perigo`, que é o mesmo vermelho que o ícone `x` já tinha na tabela. Rascunho não
+       aparece aqui porque rascunho ainda não é vaga no mundo, e vaga encerrada não cancela de novo. */
+    if (v.status === "ABERTA") {
+      lista.push({
+        id: "cancelar",
+        rotulo: "Cancelar vaga",
+        icone: "x",
+        descricao: `Cancelar a vaga ${rotuloDaVaga(v)}`,
+        perigo: true,
+        onClick: () => abrirCancelamento(v),
+      });
+    }
+    /* EDITAR AS POSIÇÕES (os dois contadores): na vaga viva e fora do rascunho. No RASCUNHO os dois
+       campos já são editados na própria trilha, e na vaga ENCERRADA a meta não muda mais, porque ela
+       já foi confrontada com a contagem do fechamento. */
+    if (v.status === "ABERTA") {
+      lista.push({
+        id: "posicoes",
+        rotulo: "Editar posições",
+        icone: "users",
+        descricao: `Editar as posições da vaga ${rotuloDaVaga(v)}`,
+        onClick: () => abrirPosicoes(v),
+      });
+    }
+    // SÓ O RASCUNHO VOLTA PARA A TRILHA. Vaga publicada não é editada por aqui.
+    if (v.status === "RASCUNHO") {
+      lista.push({
+        id: "rascunho",
+        rotulo: "Continuar rascunho",
+        icone: "pen",
+        descricao: `Continuar o rascunho da vaga ${rotuloDaVaga(v)}`,
+        onClick: () => continuarRascunho(v),
+      });
+    }
+    /* ─ REABRIR A VAGA CANCELADA (peça 2 da onda B3): o SEXTO lugar da barra ────────────────────
+       A CONDIÇÃO É O PAPEL DO CATÁLOGO, E NÃO O LITERAL "CANCELADA", e isso é deliberado: a onda B2
+       matou os literais de status e o papel é ÚNICO no catálogo (`as_vaga_status_papel_unico`),
+       então a resolução não é ambígua. As condições acima são herdadas e foram movidas palavra por
+       palavra; esta é código NOVO, e código novo não nasce com o defeito conhecido.
+
+       CÓDIGO QUE O CATÁLOGO NÃO CONHECE NÃO OFERECE NADA: sem a linha, não há papel, e o gesto some
+       até a leitura chegar. É a mesma régua do `podeMoverStatusDaVaga`.
+
+       O BOTÃO APARECE PARA TODO MUNDO, inclusive para o consultor comum, e isso é decisão do
+       diretor: ele clica e LÊ que só Master reabre, em vez de a ação não existir na tela dele.
+       Esconder ensina que o sistema está quebrado; dizer ensina quem procurar. Quem responde isso é
+       o próprio modal, sem requisição nenhuma. */
+    if (statusDoCodigo(v.status, catalogoStatus)?.papel === "CANCELAMENTO") {
+      lista.push({
+        id: "reabrir",
+        rotulo: "Reabrir vaga",
+        icone: "refresh",
+        descricao: `Reabrir a vaga cancelada ${rotuloDaVaga(v)}`,
+        onClick: () => setReabrirAlvo(v),
+      });
+    }
+    // O CLONE VALE PARA TODAS, inclusive a encerrada: é dela que costuma nascer a abertura seguinte.
+    lista.push({
+      id: "clonar",
+      rotulo: "Clonar vaga",
+      icone: "copy",
+      descricao: `Clonar a vaga ${rotuloDaVaga(v)}`,
+      onClick: () => clonarVaga(v),
+    });
+    return lista;
+  }
+
   const optCargos = useMemo(
     () => opcoes.cargos.map((c) => ({ value: c.id, label: c.nome })),
     [opcoes.cargos],
@@ -1706,7 +2062,7 @@ export default function CentralDeVagasPage() {
           v.vinculo ? VAGA_VINCULO_LABEL[v.vinculo] : "não informado",
           v.posicoesOficiais,
           v.posicoesBanco,
-          VAGA_STATUS_LABEL[v.status],
+          rotuloDoStatusVaga(v.status, catalogoStatus),
           v.consultorNome ?? "não informado",
           dataBr(v.dataAbertura),
           textoDias(diasEmAberto(v)),
@@ -1739,30 +2095,47 @@ export default function CentralDeVagasPage() {
       }
       return true;
     });
-  }, [rows, busca, fClientes, fCargos, fStatus, fVinculos, fConsultores, abertaDe, abertaAte]);
+    // `catalogoStatus` ENTRA NA LISTA porque a BUSCA procura pelo rótulo do status: sem ele, quem
+    // digitasse "Aberta" antes de o catálogo chegar não acharia nada, e a tela não recalcularia
+    // quando ele chegasse.
+  }, [
+    rows,
+    busca,
+    fClientes,
+    fCargos,
+    fStatus,
+    fVinculos,
+    fConsultores,
+    abertaDe,
+    abertaAte,
+    catalogoStatus,
+  ]);
 
   /**
-   * A CONTA DOS CARDS (item 3 da OST). SEIS cards, e nenhum estado do catálogo fica sem número
-   * (decisão do diretor, 27/08, a mesma da Central de Candidatos): a soma dos CINCO estados fecha
-   * exatamente com o Total, então quem olha a linha sabe que não sobrou vaga escondida em lugar
-   * nenhum. Sem o card de Rascunho, a soma não bateria e o rascunho, que é justamente a vaga que
-   * alguém deixou pela metade, seria o único estado invisível da tela.
+   * ─ A CONTA DOS CARDS DE STATUS, AGORA DERIVADA DO CATÁLOGO (onda B2) ─────────────────────────
    *
-   * ERAM SETE ATÉ 07/09: o card "Vaga Banco" saiu junto com o STATUS que ele contava (item 8 do mapa
-   * do time). O que NÃO saiu é o CONTADOR de banco, que segue na coluna Posições, no segundo
-   * cilindro de cada linha: são coisas diferentes com o mesmo nome.
+   * A RÉGUA DO DIRETOR NÃO MUDOU (27/08): nenhum estado fica sem número, então a soma dos cards
+   * fecha exatamente com o Total e quem olha a fileira sabe que não sobrou vaga escondida em lugar
+   * nenhum. O que mudou é DE ONDE vem a lista.
    *
-   * A CONTA É PELO CATÁLOGO (`VAGA_STATUS`), não por uma lista escrita à mão aqui: status novo no
-   * catálogo nasce contado, sem ninguém ter de lembrar de voltar neste bloco.
+   * ┌─ ELA ERA `VAGA_STATUS`, UMA CONSTANTE, E OS SEIS CARDS ERAM ESCRITOS NO JSX ───────────────┐
+   * │ Com a constante fora, a conta seria feita sobre chaves que ninguém declarou, e os cards     │
+   * │ continuariam sendo os cinco digitados na tela: a vaga em "Stand By" entraria no `Total` e   │
+   * │ não apareceria em card nenhum, e a soma dos cards deixaria de fechar com ele. É um erro     │
+   * │ silencioso de indicador, que é o pior tipo. Agora a conta é um mapa por código (aceita      │
+   * │ qualquer chave) e a LISTA dos cards vem de `cardsDeStatus`, direto do catálogo.             │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * O CATÁLOGO INTEIRO ENTRA (`catalogoStatus`, com os inativos), e não só os ativos, pelo mesmo
+   * motivo dos cards de etapa: inativar um status NÃO move as vagas que estão nele, e essas vagas
+   * precisam continuar aparecendo, com o rótulo e a cor de verdade, marcadas como fora de
+   * circulação. Só com os ativos, elas sumiriam da fileira sem nada falhar.
    */
   const kpis = useMemo(() => {
-    const conta = Object.fromEntries(VAGA_STATUS.map((st) => [st, 0])) as Record<
-      VagaStatus,
-      number
-    >;
-    for (const v of filtradas) conta[v.status] += 1;
-    return { total: filtradas.length, porStatus: conta };
-  }, [filtradas]);
+    const conta: Record<string, number> = {};
+    for (const v of filtradas) conta[v.status] = (conta[v.status] ?? 0) + 1;
+    return { total: filtradas.length, cards: cardsDeStatus(catalogoStatus, conta) };
+  }, [filtradas, catalogoStatus]);
 
   /**
    * ─ A SEGUNDA FILEIRA (peça 2.3): QUANTA GENTE, E ONDE ────────────────────────────────────────
@@ -1803,6 +2176,26 @@ export default function CentralDeVagasPage() {
    * O PONTO COLORIDO é a cor que o diretor escolheu para a etapa, a mesma do card: quem procura no
    * seletor reconhece pela cor antes de ler o rótulo.
    */
+  /**
+   * AS OPÇÕES DO FILTRO DE STATUS VÊM DO CATÁLOGO, NUNCA DAS LINHAS CARREGADAS (§A.37).
+   *
+   * O PONTO COLORIDO é a cor que o diretor escolheu, a mesma da pill e a mesma do card: quem procura
+   * no seletor reconhece pela cor antes de ler o rótulo.
+   *
+   * O INATIVO FICA NA LISTA, e aqui a régua é diferente da dos cards de propósito: card CONTA, e
+   * card zerado de status fora de circulação é ruído; filtro PROCURA, e procurar por um status
+   * inativado é justamente como se acha a vaga que ficou parada nele.
+   */
+  const optStatus = useMemo(
+    () =>
+      statusOrdenados(catalogoStatus).map((st) => ({
+        value: st.codigo,
+        label: st.ativo ? st.rotulo : `${st.rotulo} (fora de circulação)`,
+        color: corDoTom(st.tom),
+      })),
+    [catalogoStatus],
+  );
+
   const optEtapas = useMemo(() => {
     const globais = somarFunil(rows).porEtapa;
     return etapasOrdenadas(catalogoEtapas)
@@ -1944,9 +2337,10 @@ export default function CentralDeVagasPage() {
    * CÓDIGO É TEXTO, mas ordena como gente espera: o comparador usa `numeric: true`, então o código 9
    * vem antes do 10 em vez de depois, que é o que a ordem alfabética crua faria.
    *
-   * STATUS ORDENA PELO CATÁLOGO (`VAGA_STATUS`), que está na ordem da VIDA da vaga: rascunho, aberta,
-   * entregue, fechada, cancelada, banco. Pelo rótulo, "Aberta" viria depois de nada e "Rascunho" iria
-   * para o fim, e a coluna deixaria de contar a história do processo.
+   * STATUS ORDENA PELA COLUNA `ordem` DO CATÁLOGO, que está na ordem da VIDA da vaga: rascunho,
+   * aberta, entregue, fechada, cancelada, e o que o diretor acrescentar no lugar que ele escolher.
+   * Pelo rótulo, "Aberta" viria antes de tudo e "Rascunho" iria para o fim, e a coluna deixaria de
+   * contar a história do processo.
    *
    * POSIÇÕES ORDENA PELA META OFICIAL, e só por ela (ver a nota no cabeçalho da coluna).
    *
@@ -1980,7 +2374,15 @@ export default function CentralDeVagasPage() {
        * Rascunho sem meta devolve nulo e cai no fim, nas duas direções.
        */
       { chave: "posicoes", tipo: "numero", valor: (v) => v.posicoesOficiais },
-      { chave: "status", tipo: "status", valor: (v) => VAGA_STATUS.indexOf(v.status) },
+      /*
+       * ─ O `indexOf` DE UMA CONSTANTE VIROU A COLUNA `ordem` DO CATÁLOGO (onda B2) ───────────
+       * ESTE FOI O PONTO MAIS PERIGOSO DA TROCA, e o perigo é que ele NÃO QUEBRA: com a constante
+       * fora, `indexOf` devolveria `-1` para TODO status, a coluna empataria todas as linhas e
+       * passaria a ordenar errado EM SILÊNCIO, exatamente o defeito que as etapas documentaram.
+       * O status que a tela não conhece vai para o FIM (nunca para o topo, que é onde o `-1` o
+       * punha), e o `useOrdenacao` já manda vazio para o fim nas duas direções.
+       */
+      { chave: "status", tipo: "status", valor: (v) => ordemDoStatusVaga(v.status, catalogoStatus) },
       /**
        * CONSULTOR ORDENA PELO NOME (item 16, 07/09), que é o que a célula mostra, e não pelo id, que
        * ninguém vê: ordenar por uuid daria uma ordem estável e sem sentido nenhum na tela.
@@ -2004,7 +2406,9 @@ export default function CentralDeVagasPage() {
       { chave: "abertura", tipo: "data", valor: (v) => v.dataAbertura },
       { chave: "dias", tipo: "numero", valor: (v) => diasEmAberto(v) },
     ],
-    [],
+    // A ORDEM DA COLUNA STATUS É A DO CATÁLOGO, então ela precisa ser refeita quando ele chega:
+    // sem esta dependência, a lista continuaria ordenada pela lista vazia da primeira renderização.
+    [catalogoStatus],
   );
   const ord = useOrdenacao(colunasOrdenaveis, recortadas);
   /**
@@ -2090,7 +2494,11 @@ export default function CentralDeVagasPage() {
                 multiple
                 value={fStatus}
                 onChange={setFStatus}
-                options={VAGA_STATUS.map((st) => ({ value: st, label: VAGA_STATUS_LABEL[st] }))}
+                /* §A.37/§A.28: multiselect, e as opções vêm do CATÁLOGO (endpoint), nunca das
+                   linhas carregadas. O status INATIVO continua na lista de propósito: se houver
+                   vaga parada nele, é por ele que se procura essa vaga, e derivar as opções da
+                   página encolheria a lista assim que o primeiro valor fosse escolhido. */
+                options={optStatus}
                 placeholder="Todos"
                 ariaLabel="Status"
                 limpavel
@@ -2230,30 +2638,29 @@ export default function CentralDeVagasPage() {
             className="grid gap-[10px]"
             style={{ gridTemplateColumns: "repeat(auto-fit, minmax(88px, 1fr))" }}
           >
+            {/* ─ OS CARDS DE STATUS VÊM DO CATÁLOGO (onda B2), NO MESMO MOLDE DA FAIXA DE ETAPAS
+                AQUI HAVIA SEIS CARDS ESCRITOS UM A UM, com rótulo, ícone e cor digitados: o status
+                que o diretor criasse não ganharia card, as vagas dele entrariam no Total e não
+                apareceriam em lugar nenhum, e a soma da fileira deixaria de fechar sem nada falhar.
+                Agora só o "Total De Vagas" é escrito (ele não é um status, é a soma de todos), e o
+                resto é `map`, como a faixa de etapas ao lado já era.
+
+                A GRADE NÃO MUDA: é a mesma `auto-fit` com mínimo de 88px, provada no browser com
+                sete cards. Status novo entra na linha enquanto couber e, a partir do que não couber,
+                a grade quebra em uma segunda linha com cards do mesmo tamanho (§A.20: nada é
+                espremido nem cortado). */}
             <Kpi id="total" rotulo="Total De Vagas" valor={kpis.total} icone="layers" />
-            <Kpi id="RASCUNHO" rotulo="Rascunhos" valor={kpis.porStatus.RASCUNHO} icone="pen" />
-            <Kpi
-              id="ABERTA"
-              rotulo="Abertas"
-              valor={kpis.porStatus.ABERTA}
-              icone="clock"
-              tom="var(--warn)"
-            />
-            <Kpi
-              id="ENTREGUE"
-              rotulo="Entregues"
-              valor={kpis.porStatus.ENTREGUE}
-              icone="check"
-              tom="var(--ok)"
-            />
-            <Kpi id="FECHADA" rotulo="Fechadas" valor={kpis.porStatus.FECHADA} icone="lock" />
-            <Kpi
-              id="CANCELADA"
-              rotulo="Canceladas"
-              valor={kpis.porStatus.CANCELADA}
-              icone="x"
-              tom="var(--danger)"
-            />
+            {kpis.cards.map((c) => (
+              <Kpi
+                key={c.chave}
+                id={c.chave}
+                rotulo={c.rotulo}
+                valor={c.valor}
+                icone={c.icone}
+                tom={c.cor}
+                inativo={c.inativa}
+              />
+            ))}
           </div>
         </section>
 
@@ -2508,7 +2915,31 @@ export default function CentralDeVagasPage() {
               pediu esta leva para a coluna de Ações PARAR de se esconder, então a coluna de Ações
               ganha, e Posições fica com o que o rateio da sobra lhe dá. Com 1233px o botão volta
               para dentro da vista com 2px de margem. */}
-          <table className="ds-table min-w-[1233px] [&_tbody_td]:!px-[11px] [&_thead_th]:!px-[11px]">
+          {/* ─ §A.20: O PISO CAIU PARA 1225px, E A ROLAGEM DE 107px ACABOU (peça 3 da onda B3) ──
+              O QUE CAUSAVA A ROLAGEM NÃO ERA O PISO DECLARADO, e essa é a parte que a medição
+              corrige: o piso dizia 1233px, mas o CONTEÚDO da linha pedia MAIS do que isso. Com a
+              coluna de Ações carregando os cinco gestos, o mínimo real da tabela era 1360,8px
+              (`width: min-content` no browser, a 1600px com o menu aberto, sobre as quatro vagas da
+              homologação) contra 1254px de caixa útil: 107px de rolagem lateral, exatamente o
+              número que o diretor viu. Nenhum piso resolveria isso, porque a tabela estourava POR
+              CONTEÚDO, acima do piso.
+
+              COM AS AÇÕES DENTRO DO PAINEL, o mínimo real caiu para 1224,8px, e a rolagem foi a
+              ZERO (`scrollWidth - clientWidth` do contêiner: 107 antes, 0 depois). A coluna de Ações
+              passou de 279,11px para 143,11px por linha, e os 136px que ela devolveu foram
+              repartidos pela tabela: ela continua com 1254px, a largura inteira da caixa, sem vazio
+              de um lado nem coluna espremida do outro.
+
+              O PISO PASSA A SER 1225px PORQUE É O MÍNIMO MEDIDO, arredondado para cima, e é o mesmo
+              movimento que já o levou de 1430 para 1243 e de 1243 para 1233: o piso é medição, não
+              herança. A 1600px ele não muda nada (a tabela ocupa os 1254px da caixa nos dois casos);
+              o que ele muda é a janela ESTREITA, entre 1225px e 1233px de caixa, onde a tabela
+              deixa de pedir 8px de rolagem que nenhuma célula precisava.
+
+              ZERO SUPRESSÃO, conferido célula a célula (`scrollWidth` contra `clientWidth` em todos
+              os `th` e `td`, nas quatro linhas e nas onze colunas): nenhum rótulo cortado, nenhum
+              texto truncado. */}
+          <table className="ds-table min-w-[1225px] [&_tbody_td]:!px-[11px] [&_thead_th]:!px-[11px]">
             <thead>
               <tr>
                 {/* §A.29: o cabeçalho ordena por clique. O `<th>` é o mesmo de antes, com a mesma
@@ -2674,9 +3105,13 @@ export default function CentralDeVagasPage() {
                     </td>
                     <td className="text-center">
                       <span className="inline-flex justify-center">
+                        {/* A COR E O RÓTULO SÃO OS DO CATÁLOGO (onda B2): a pill mostra o nome que
+                            o diretor escreveu e a cor que ele escolheu, e o ícone continua saindo
+                            do tom (§A.12). Status que a tela ainda não conhece cai no código cru e
+                            no neutro, e nunca numa pill sem texto. */}
                         <StatusPill
-                          tone={TOM_STATUS[v.status]}
-                          label={VAGA_STATUS_LABEL[v.status]}
+                          tone={tomDoStatusVaga(v.status, catalogoStatus)}
+                          label={rotuloDoStatusVaga(v.status, catalogoStatus)}
                         />
                       </span>
                     </td>
@@ -2696,12 +3131,12 @@ export default function CentralDeVagasPage() {
                     <td className="text-center">
                       <span
                         className={
-                          STATUS_ENCERRADOS.includes(v.status) ? "text-dim" : "font-semibold"
+                          vagaEncerrada(v.status) ? "text-dim" : "font-semibold"
                         }
                         title={
                           v.dataAbertura === null
                             ? "A vaga ainda não tem data de abertura."
-                            : STATUS_ENCERRADOS.includes(v.status)
+                            : vagaEncerrada(v.status)
                               ? `Ficou aberta por ${textoDias(diasEmAberto(v))}, da abertura até o fechamento.`
                               : `Aberta há ${textoDias(diasEmAberto(v))}, contando até hoje.`
                         }
@@ -2709,90 +3144,36 @@ export default function CentralDeVagasPage() {
                         {textoDias(diasEmAberto(v))}
                       </span>
                     </td>
-                    {/* AS AÇÕES, NA ORDEM DO DIRETOR: cadeado (fechar), posições, rascunho,
-                        clonar, e por último "Gestão Vaga", o ÚNICO com texto.
+                    {/* ─ A CÉLULA DE AÇÕES TEM UM BOTÃO SÓ, E ESSE É O PONTO (peça 3 da onda B3) ─
+                        ELA CARREGAVA CINCO GESTOS: fechar, cancelar, editar posições, continuar o
+                        rascunho e clonar, mais o "Gestão Vaga". A conta era medida e estava
+                        registrada logo acima, nos blocos da largura: a coluna sozinha pedia 275px
+                        dos 1369px da tabela, e era ela que empurrava o fim da linha para fora da
+                        tela do diretor.
 
-                        OS ÍCONES CONTINUAM SENDO ÍCONES porque cada um faz uma coisa só e quem usa
-                        a tela todo dia já os conhece; cada um leva `title` e `aria-label` com a
-                        frase inteira, então o rótulo segue alcançável por quem passa o mouse e por
-                        leitor de tela. O que ganhou texto foi o de MAIOR ALCANCE, que era
-                        justamente o mais escondido: o olho. */}
+                        OS CINCO NÃO SUMIRAM, MUDARAM DE LUGAR (decisão do diretor): eles agora
+                        vivem na barra do painel de gestão, na mesma linha das abas, onde há largura
+                        de sobra e onde a pessoa já está quando pensa "o que eu faço com esta vaga".
+                        Quem monta a lista é `acoesDaVaga`, logo acima, e as regras de quando cada
+                        uma aparece são as MESMAS de antes, palavra por palavra.
+
+                        AQUI FICA SÓ A PORTA, com o rótulo que ela já tinha. `title` e `aria-label`
+                        continuam, mesmo com o texto à vista: o rótulo curto na tela e a frase
+                        inteira para quem passa o mouse e para o leitor de tela. As cores são token
+                        (`--btn-grad`, o mesmo do `btn-primary`), então o claro e o escuro saem
+                        certos pelo mesmo código. */}
                     <td>
                       <div className="flex items-center justify-center gap-1">
-                        {v.status === "ABERTA" && (
-                          <button
-                            type="button"
-                            title="Fechar vaga"
-                            aria-label={`Fechar a vaga ${rotuloDaVaga(v)}`}
-                            onClick={() => abrirFechamento(v)}
-                            className="rounded-lg border border-transparent p-1.5 text-dim transition hover:border-[var(--border)] hover:text-accent"
-                          >
-                            <Icon name="lock" className="h-4 w-4" />
-                          </button>
-                        )}
-                        {/* EDITAR AS POSIÇÕES (os dois contadores, 25/08): aparece na vaga que
-                            ainda está viva e fora do rascunho. No RASCUNHO os dois campos já são
-                            editados na própria trilha, e na vaga ENCERRADA a meta não muda mais,
-                            porque ela já foi confrontada com a contagem do fechamento.
-
-                            O `|| VAGA_BANCO` saiu em 07/09 junto com o status (item 8): ABERTA é
-                            agora o único estado vivo fora do rascunho. Os DOIS contadores, oficial
-                            e banco, continuam sendo editados por este mesmo botão. */}
-                        {v.status === "ABERTA" && (
-                          <button
-                            type="button"
-                            title="Editar as posições da vaga"
-                            aria-label={`Editar as posições da vaga ${rotuloDaVaga(v)}`}
-                            onClick={() => abrirPosicoes(v)}
-                            className="rounded-lg border border-transparent p-1.5 text-dim transition hover:border-[var(--border)] hover:text-accent"
-                          >
-                            <Icon name="users" className="h-4 w-4" />
-                          </button>
-                        )}
-                        {/* CONTINUAR O RASCUNHO (item 3): só o rascunho tem lápis, porque só ele
-                            volta para a trilha. Vaga publicada não é editada por aqui. */}
-                        {v.status === "RASCUNHO" && (
-                          <button
-                            type="button"
-                            title="Continuar o rascunho"
-                            aria-label={`Continuar o rascunho da vaga ${rotuloDaVaga(v)}`}
-                            onClick={() => continuarRascunho(v)}
-                            className="rounded-lg border border-transparent p-1.5 text-dim transition hover:border-[var(--border)] hover:text-accent"
-                          >
-                            <Icon name="pen" className="h-4 w-4" />
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          title="Clonar a vaga"
-                          aria-label={`Clonar a vaga ${rotuloDaVaga(v)}`}
-                          onClick={() => clonarVaga(v)}
-                          className="rounded-lg border border-transparent p-1.5 text-dim transition hover:border-[var(--border)] hover:text-accent"
-                        >
-                          <Icon name="copy" className="h-4 w-4" />
-                        </button>
-                        {/* ─ GESTÃO VAGA: O ÚNICO COM TEXTO, E É O PONTO ────────────────
-                            ELE ERA UM OLHO, e o olho é o ícone mais ambíguo desta linha: ele diz
-                            "ver", e o que abre é o painel onde a vaga inteira é TRABALHADA (a
-                            ficha, a trilha, os candidatos, a alocação). Quem não conhecia a tela
-                            não tinha como adivinhar isso a partir de uma pálpebra, e o caminho
-                            principal da tela ficava escondido no ícone mais discreto dela.
-
-                            O COMPORTAMENTO É O MESMO, e de propósito: o mesmo `setVerAlvo(v)`, o
-                            mesmo modal. Mudou o GATILHO, não o destino.
-
-                            É O ÚLTIMO DA SEQUÊNCIA porque é o de maior alcance: os três ícones
-                            antes dele fazem uma coisa cada, e ele abre a vaga toda.
-
-                            AS CORES SÃO TOKEN (`--btn-grad`, o mesmo do `btn-primary`), então o
-                            claro e o escuro saem certos pelo mesmo código. `title` e `aria-label`
-                            continuam, mesmo com o texto à vista: o rótulo curto na tela e a frase
-                            inteira para quem passa o mouse e para o leitor de tela. */}
                         <button
                           type="button"
                           title="Abrir a gestão da vaga"
                           aria-label={`Abrir a gestão da vaga ${rotuloDaVaga(v)}`}
-                          onClick={() => setVerAlvo(v)}
+                          onClick={() => {
+                            // O CAMINHO NORMAL ABRE NA FICHA, sempre: a aba dos candidatos é pedida
+                            // só pela recusa do cancelamento, e herdá-la aqui seria surpresa.
+                            setVerAba("vaga");
+                            setVerAlvo(v);
+                          }}
                           className="inline-flex flex-none items-center gap-1.5 whitespace-nowrap rounded-lg border border-transparent [background:var(--btn-grad)] px-2.5 py-2 text-[12.5px] font-bold text-white shadow-[0_8px_18px_-8px_rgba(34,176,219,0.75)] transition hover:brightness-110"
                         >
                           <Icon name="eye" className="h-4 w-4 flex-none" />
@@ -3010,22 +3391,26 @@ export default function CentralDeVagasPage() {
                         value={form.status}
                         onChange={(v) => set("status", v)}
                         /*
-                          A LISTA É `VAGA_STATUS_PUBLICACAO`, E A RÉGUA MORA LÁ (`as-vaga-acoes`),
-                          testada. Ela tira três coisas daqui:
+                          ─ A LISTA É `ativo && daTrilha`, LIDA DO CATÁLOGO (onda B2) ──────────
 
-                          RASCUNHO (item 3, de antes): é o BOTÃO "Salvar Rascunho", não uma escolha
-                          de status. Dois caminhos para o mesmo estado, e o segundo publicaria uma
-                          vaga chamando-a de rascunho.
+                          ELA ERA `VAGA_STATUS_PUBLICACAO`, montada por EXCLUSÃO, e o preço estava
+                          no ar: "Entregue" aparecia aqui e o backend recusava com 400, porque a
+                          lista da tela era PROIBIÇÃO e a do servidor era PERMISSÃO. Quem clicava na
+                          opção que a própria tela ofereceu recebia um erro dizendo que não pode.
 
-                          FECHADA e CANCELADA: esta lista OFERECIA os dois, e era uma porta que
-                          ENCERRAVA A VAGA sem passar por trava nenhuma, nem conferência de posição
-                          oficial, nem papel de Master, nem trilha. A auditoria de segurança vetou a
-                          frente por causa disso. Encerrar a vaga tem UM caminho, o "Fechar Vaga",
-                          que passa pela régua do diretor.
+                          Agora a régua é a coluna `daTrilha`, lida pelos dois lados, e o que ela
+                          tira daqui ninguém precisou escrever: os três que ENCERRAM a vaga (a porta
+                          que a auditoria de segurança vetou: encerrar tem duas portas com régua, e
+                          o seletor de um formulário não é a terceira), os INATIVOS, e o RASCUNHO,
+                          que é o botão "Salvar Rascunho" e não uma escolha de status.
+
+                          E O CAMINHO INVERSO TAMBÉM VALE: o status que o diretor criar e marcar
+                          como da trilha aparece aqui SOZINHO, sem ninguém voltar neste arquivo.
                         */
-                        options={VAGA_STATUS_PUBLICACAO.map((s) => ({
-                          value: s,
-                          label: VAGA_STATUS_LABEL[s],
+                        options={statusDePublicacao(catalogoStatus).map((st) => ({
+                          value: st.codigo,
+                          label: st.rotulo,
+                          color: corDoTom(st.tom),
                         }))}
                         ariaLabel="Status da vaga"
                       />
@@ -3815,6 +4200,236 @@ export default function CentralDeVagasPage() {
         onCancel={() => setConfirmarDescarte(false)}
       />
 
+      {/* ── O PAINEL DA VAGA (etapa 4 da tela unificada) ───────────────────
+          O olho abria uma ficha e nada mais. Agora ele abre o painel: a MESMA ficha, mais a trilha
+          (em que pé o processo está e como a vaga terminou) e as abas de quem está nela. A ficha
+          continua escrita AQUI, com os formatadores da própria tela, e entra no painel como
+          conteúdo da aba "A Vaga": o painel decide onde ela aparece, não como ela é escrita. */}
+      {verAlvo && (
+        <VagaPainelModal
+          /* A CHAVE É A VAGA, e ela não é enfeite: o painel guarda em estado a lista de candidatos
+             daquela vaga. Sem a chave, trocar a vaga com o painel aberto (o atalho de URL faz isso)
+             manteria o componente montado e mostraria a lista da vaga ANTERIOR, com o cabeçalho da
+             nova. Com ela, trocar de vaga é montar de novo, e o estado nasce limpo. */
+          key={verAlvo.id}
+          vaga={verAlvo}
+          token={token}
+          onClose={() => setVerAlvo(null)}
+          /* AS AÇÕES DA ETAPA 5 ESCREVEM, e o que elas escrevem é lido AQUI: o cilindro de posições,
+             os cards e a própria trilha do painel saem de `ocupacao`, que é DERIVADA das
+             candidaturas. Sem esta releitura, entregar uma posição dentro do painel deixaria a
+             tabela atrás dele com o número velho até alguém recarregar a página. */
+          onMudou={() => void carregar()}
+          /* QUASE SEMPRE "vaga". Só a recusa do cancelamento pede outra, para LEVAR o consultor até
+             a lista de quem ainda está em processo em vez de apenas dizer que ela existe. */
+          abaInicial={verAba}
+          /* AS AÇÕES DA VAGA, que saíram da linha da tabela (peça 3 da onda B3). A lista é montada
+             por `acoesDaVaga`, com as MESMAS réguas de status que a coluna Ações tinha, e chega
+             pronta: o painel desenha o que receber. */
+          acoes={acoesDaVaga(verAlvo)}
+          /* "TEM UMA CAIXA MINHA ABERTA POR CIMA DE VOCÊ", e serve a UMA coisa: a tecla Escape. O
+             `ui/Modal` escuta o `keydown` no documento POR INSTÂNCIA, então, sem este aviso, um
+             Escape fecharia o formulário de cancelamento E o painel que o abriu, no mesmo gesto.
+             §A.41 manda MANTER o Escape, então a correção é ele fechar só a caixa de cima. Os três
+             estados abaixo são exatamente os modais que esta página abre a partir da barra do
+             painel, e cada um deles sempre tem algo na tela (o formulário, ou a recusa que tomou o
+             lugar dele). */
+          acaoAberta={
+            posAlvo !== null ||
+            fecharAlvo !== null ||
+            cancelarAlvo !== null ||
+            reabrirAlvo !== null
+          }
+        >
+          <>
+            <BlocoFicha titulo="A Vaga">
+              <Linha rotulo="Cliente" valor={verAlvo.clienteNome} />
+              <Linha rotulo="Cargo da vaga" valor={verAlvo.cargoNome} />
+              <Linha
+                rotulo="Natureza"
+                valor={verAlvo.natureza ? VAGA_NATUREZA_LABEL[verAlvo.natureza] : null}
+              />
+              <Linha
+                rotulo="Vínculo"
+                valor={verAlvo.vinculo ? VAGA_VINCULO_LABEL[verAlvo.vinculo] : null}
+              />
+              {/* OS DOIS CONTADORES, cada um na sua linha: a ficha é onde a vaga é lida inteira. */}
+              <Linha
+                rotulo="Posições oficiais"
+                valor={verAlvo.posicoesOficiais === null ? null : String(verAlvo.posicoesOficiais)}
+              />
+              <Linha rotulo="Posições de banco" valor={String(verAlvo.posicoesBanco)} />
+              <Linha rotulo="Sazonalidade" valor={VAGA_SAZONALIDADE_LABEL[verAlvo.sazonalidade]} />
+              {/* Item 2: o tempo de contrato só se mostra onde ele existe, pela mesma régua que
+                    esconde o campo na trilha. */}
+              {exigeTempoContrato(verAlvo.vinculo) && (
+                <Linha
+                  rotulo="Tempo de contrato"
+                  valor={verAlvo.tempoContrato ? rotuloTempoContrato(verAlvo.tempoContrato) : null}
+                />
+              )}
+            </BlocoFicha>
+
+            <BlocoFicha titulo="Quem Pediu">
+              <Linha rotulo="Solicitante" valor={verAlvo.solicitanteNome} />
+              <Linha rotulo="Telefone" valor={verAlvo.solicitanteTelefone} />
+              <Linha rotulo="E-mail" valor={verAlvo.solicitanteEmail} />
+              <Linha rotulo="Consultor" valor={verAlvo.consultorNome} />
+              <Linha rotulo="Recruiter" valor={verAlvo.recruiterNome} />
+              <Linha rotulo="Data de solicitação" valor={dataBr(verAlvo.dataSolicitacao)} />
+              <Linha rotulo="Data de alinhamento" valor={dataBr(verAlvo.dataAlinhamento)} />
+              <Linha rotulo="Previsão de entrega" valor={dataBr(verAlvo.dataLimite)} />
+              <Linha rotulo="Envio da shortlist" valor={dataBr(verAlvo.envioShortlist)} />
+            </BlocoFicha>
+
+            <BlocoFicha titulo="Contratação">
+              <Linha rotulo="Motivo" valor={verAlvo.motivo} />
+              <Linha rotulo="Justificativa" valor={verAlvo.justificativaMotivo} />
+              {verAlvo.motivo === MOTIVO_SUBSTITUICAO && (
+                <>
+                  <Linha
+                    rotulo="Tipo de substituição"
+                    valor={
+                      verAlvo.tipoSubstituicao
+                        ? VAGA_TIPO_SUBSTITUICAO_LABEL[verAlvo.tipoSubstituicao]
+                        : null
+                    }
+                  />
+                  <Linha rotulo="Nome do substituído" valor={verAlvo.substituidoNome} />
+                  {/* Item 3: o CPF aparece MASCARADO para leitura. §A.6: a rota inteira do módulo
+                        é fechada pelo menu `as-vagas`, e o número nunca vai para log. */}
+                  <Linha
+                    rotulo="CPF do substituído"
+                    valor={verAlvo.substituidoCpf ? formatCpf(verAlvo.substituidoCpf) : null}
+                  />
+                </>
+              )}
+            </BlocoFicha>
+
+            <BlocoFicha titulo="Condições">
+              <Linha rotulo="Salário de abertura" valor={moedaBr(verAlvo.salarioAbertura)} />
+              <Linha
+                rotulo="Benefícios"
+                valor={
+                  verAlvo.beneficios.length
+                    ? verAlvo.beneficios
+                        .map((b) => (b.valor ? `${b.nome}: ${salarioParaCampo(b.valor)}` : b.nome))
+                        .join(", ")
+                    : null
+                }
+                largo
+              />
+              <Linha rotulo="Local de trabalho" valor={verAlvo.localTrabalho} largo />
+              <Linha
+                rotulo="Estado da abordagem"
+                valor={verAlvo.regiaoEstado ? nomeDaUf(verAlvo.regiaoEstado) : null}
+              />
+              <Linha
+                rotulo="Regiões de abordagem"
+                valor={listaEmTexto(verAlvo.regioes, verAlvo.regioesOutras, REGIAO_OUTRAS)}
+                largo
+              />
+              <Linha rotulo="Horário e escala" valor={verAlvo.horarioEscala} largo />
+              <Linha
+                rotulo="Modelo de trabalho"
+                valor={
+                  verAlvo.modeloTrabalho ? VAGA_MODELO_TRABALHO_LABEL[verAlvo.modeloTrabalho] : null
+                }
+              />
+              {verAlvo.modeloTrabalho === "HIBRIDO" && (
+                <Linha rotulo="Detalhe do híbrido" valor={verAlvo.detalheHibrido} />
+              )}
+              <Linha rotulo="Vaga confidencial" valor={verAlvo.confidencial ? "Sim" : "Não"} />
+              <Linha
+                rotulo="Divulgar o nome da empresa"
+                valor={verAlvo.divulgarEmpresa ? "Sim" : "Não"}
+              />
+            </BlocoFicha>
+
+            <BlocoFicha titulo="Requisitos">
+              <Linha
+                rotulo="Escolaridade"
+                valor={verAlvo.escolaridade ? VAGA_ESCOLARIDADE_LABEL[verAlvo.escolaridade] : null}
+              />
+              <Linha rotulo="Faixa etária" valor={verAlvo.faixaEtaria} />
+              <Linha rotulo="Gênero" valor={VAGA_GENERO_LABEL[verAlvo.genero]} />
+              <Linha
+                rotulo="Idiomas"
+                valor={listaEmTexto(verAlvo.idiomas, verAlvo.idiomasOutros, OPCAO_OUTROS)}
+              />
+              <Linha rotulo="Cursos e conhecimentos" valor={verAlvo.cursosConhecimentos} largo />
+              <Linha
+                rotulo="Testes"
+                valor={listaEmTexto(
+                  verAlvo.testes.map((t) => VAGA_TESTE_LABEL[t as keyof typeof VAGA_TESTE_LABEL]),
+                  verAlvo.testesOutro,
+                  "",
+                )}
+                largo
+              />
+              <Linha rotulo="Experiência necessária" valor={verAlvo.experiencia} largo />
+              <Linha rotulo="Principais atribuições" valor={verAlvo.atribuicoes} largo />
+              <Linha rotulo="Perfil comportamental" valor={verAlvo.perfilComportamental} largo />
+              <Linha rotulo="Ambiente" valor={verAlvo.ambiente} largo />
+              <Linha
+                rotulo="Etapas do processo seletivo"
+                valor={listaEmTexto(verAlvo.etapasPs, verAlvo.etapasPsOutra, OPCAO_OUTRA)}
+                largo
+              />
+              <Linha rotulo="Observações" valor={verAlvo.observacoes} largo />
+            </BlocoFicha>
+
+            {/* O FECHAMENTO SÓ APARECE NA VAGA FECHADA: numa vaga aberta seria um bloco de
+                  "não informado" repetido quatro vezes, dizendo o óbvio. */}
+            {verAlvo.dataFechamento && (
+              <BlocoFicha titulo="Fechamento">
+                <Linha rotulo="Data do fechamento" valor={dataBr(verAlvo.dataFechamento)} />
+                <Linha
+                  rotulo="Vagas fechadas"
+                  valor={verAlvo.vagasFechadas === null ? null : String(verAlvo.vagasFechadas)}
+                />
+                <Linha
+                  rotulo="Vagas fechadas de banco"
+                  valor={
+                    verAlvo.vagasFechadasBanco === null ? null : String(verAlvo.vagasFechadasBanco)
+                  }
+                />
+                <Linha rotulo="Salário de fechamento" valor={moedaBr(verAlvo.salarioFechamento)} />
+                <Linha
+                  rotulo="Data prevista para início"
+                  valor={dataBr(verAlvo.dataPrevistaInicio)}
+                />
+                <Linha
+                  rotulo="Enviar para admissão"
+                  valor={verAlvo.enviarParaAdmissao ? "Sim" : "Não"}
+                />
+              </BlocoFicha>
+            )}
+          </>
+        </VagaPainelModal>
+      )}
+
+      {/* ┌─ OS MODAIS DAS AÇÕES DA VAGA, E A ORDEM AQUI É FUNCIONAL, NÃO ESTÉTICA ────────────────┐
+          │ ELES FICAM DEPOIS DO PAINEL DE PROPÓSITO (peça 3 da onda B3).                          │
+          └────────────────────────────────────────────────────────────────────────────────────────┘
+          Todo modal do sistema sai do mesmo `ui/Modal`, e todos abrem em portal com o MESMO `z-55`.
+          Com z-index igual, quem pinta por cima é quem está DEPOIS no documento, e nada mais. Esses
+          três eram escritos ANTES do painel, então o painel pintava em cima deles.
+
+          ISSO NUNCA APARECEU porque as duas caixas jamais estavam abertas ao mesmo tempo: os gatilhos
+          moravam na linha da tabela, com o painel fechado. AGORA OS GATILHOS ESTÃO DENTRO DO PAINEL,
+          e as duas passam a conviver: sem esta troca de ordem, o consultor clicaria em "Cancelar
+          vaga" e o formulário abriria ATRÁS do painel, invisível, com a tela travada por um overlay
+          que ele não vê.
+
+          A ORDEM DE MONTAGEM JÁ RESOLVERIA O CASO NORMAL (o painel abre primeiro, a ação depois, e o
+          portal de quem monta depois é anexado depois), e é esse mesmo mecanismo que faz os modais
+          internos do painel funcionarem hoje. A ordem no código é o que garante o caso em que os dois
+          entram no MESMO ciclo de render, que é o único que a montagem não cobre. Duas garantias para
+          um defeito irreversível na tela custam uma troca de lugar.
+
+          A TECLA ESCAPE é a outra metade do mesmo problema, e está resolvida na prop `acaoAberta` do
+          painel, logo acima. */}
       {/* ── EDITAR AS POSIÇÕES ────────────────────────────────────────────── */}
       {posAlvo && (
         <Modal
@@ -4085,193 +4700,79 @@ export default function CentralDeVagasPage() {
         />
       )}
 
-      {/* ── O PAINEL DA VAGA (etapa 4 da tela unificada) ───────────────────
-          O olho abria uma ficha e nada mais. Agora ele abre o painel: a MESMA ficha, mais a trilha
-          (em que pé o processo está e como a vaga terminou) e as abas de quem está nela. A ficha
-          continua escrita AQUI, com os formatadores da própria tela, e entra no painel como
-          conteúdo da aba "A Vaga": o painel decide onde ela aparece, não como ela é escrita. */}
-      {verAlvo && (
-        <VagaPainelModal
-          /* A CHAVE É A VAGA, e ela não é enfeite: o painel guarda em estado a lista de candidatos
-             daquela vaga. Sem a chave, trocar a vaga com o painel aberto (o atalho de URL faz isso)
-             manteria o componente montado e mostraria a lista da vaga ANTERIOR, com o cabeçalho da
-             nova. Com ela, trocar de vaga é montar de novo, e o estado nasce limpo. */
-          key={verAlvo.id}
-          vaga={verAlvo}
+      {/* ── CANCELAR VAGA ────────────────────────────────────────────────── */}
+      {/* Mesmo desenho do fechamento: com a recusa aberta, o formulário sai da frente e o
+          preenchimento FICA no estado, então voltar devolve o formulário como estava. */}
+      {cancelarAlvo && !recusaCanc && (
+        <CancelarVagaModal
+          vagaRotulo={cancelarAlvo.nomeDivulgacao ?? rotuloDaVaga(cancelarAlvo)}
+          codigo={cancelarAlvo.codigo}
+          form={cancForm}
+          motivos={motivosCancelamento ?? []}
+          carregandoMotivos={carregandoMotivos}
+          /* SÓ A PRÉVIA DESTA VAGA CHEGA AO MODAL. A comparação de id é o que impede a resposta
+             atrasada de uma vaga anterior de virar a contagem desta (ver o comentário do estado). */
+          previa={previaCanc?.vagaId === cancelarAlvo.id ? previaCanc.dados : null}
+          previaFalhou={previaCanc?.vagaId === cancelarAlvo.id ? previaCanc.falhou : false}
+          erro={erroCancelar}
+          cancelando={cancelando}
+          onChange={setCancForm}
+          onVoltar={() => setCancelarAlvo(null)}
+          onConfirmar={() => void enviarCancelamento()}
+        />
+      )}
+
+      {/* ── REABRIR A VAGA CANCELADA (peça 2 da onda B3) ──────────────────────
+          NO MESMO BLOCO DOS DEMAIS, E DEPOIS DO PAINEL: a ordem aqui é o que faz a caixa pintar por
+          cima dele em vez de atrás (o porquê inteiro está no cabeçalho deste bloco).
+
+          `isAdmin` É A TRADUÇÃO EXATA DO `@Roles("MASTER","SUPER_ADMIN")` da rota, e é só ele que
+          decide se a caixa LÊ a prévia ou EXPLICA que a reabertura é de Master. A autoridade
+          continua no servidor: quem burlar a tela leva 403 com a frase dele. */}
+      {reabrirAlvo && (
+        <ReabrirVagaModal
+          /* SEM `key` AQUI, E A AUSÊNCIA É MEDIDA (ver o relatório da peça 2) ────────────────────
+             A primeira versão trazia `key={reabrirAlvo.id}`, copiado do painel, e ele PRODUZIA UM
+             DEFEITO: ao fechar esta caixa, o PAINEL atrás dela ficava DUPLICADO no documento (dois
+             `[role=dialog]` idênticos, os dois com fiber do React), e o segundo overlay continuava
+             interceptando os cliques. A tela ficava travada atrás de um modal fantasma. Medido no
+             browser, e reproduzido pelos dois caminhos de fechamento (Escape e o botão), enquanto
+             os modais vizinhos, que não têm `key`, fechavam limpo no mesmo build.
+
+             ELE TAMBÉM NÃO SERVIA PARA NADA AQUI: a `key` do painel existe porque a vaga TROCA com
+             ele aberto (o atalho de URL faz isso). Esta caixa só abre a partir de um painel, uma
+             vaga por vez, e o `{reabrirAlvo && ...}` já a destrói e recria a cada abertura, então o
+             estado dela nasce limpo sem nenhuma ajuda. */
+          vaga={reabrirAlvo}
           token={token}
-          onClose={() => setVerAlvo(null)}
-          /* AS AÇÕES DA ETAPA 5 ESCREVEM, e o que elas escrevem é lido AQUI: o cilindro de posições,
-             os cards e a própria trilha do painel saem de `ocupacao`, que é DERIVADA das
-             candidaturas. Sem esta releitura, entregar uma posição dentro do painel deixaria a
-             tabela atrás dele com o número velho até alguém recarregar a página. */
-          onMudou={() => void carregar()}
-        >
-          <>
-            <BlocoFicha titulo="A Vaga">
-              <Linha rotulo="Cliente" valor={verAlvo.clienteNome} />
-              <Linha rotulo="Cargo da vaga" valor={verAlvo.cargoNome} />
-              <Linha
-                rotulo="Natureza"
-                valor={verAlvo.natureza ? VAGA_NATUREZA_LABEL[verAlvo.natureza] : null}
-              />
-              <Linha
-                rotulo="Vínculo"
-                valor={verAlvo.vinculo ? VAGA_VINCULO_LABEL[verAlvo.vinculo] : null}
-              />
-              {/* OS DOIS CONTADORES, cada um na sua linha: a ficha é onde a vaga é lida inteira. */}
-              <Linha
-                rotulo="Posições oficiais"
-                valor={verAlvo.posicoesOficiais === null ? null : String(verAlvo.posicoesOficiais)}
-              />
-              <Linha rotulo="Posições de banco" valor={String(verAlvo.posicoesBanco)} />
-              <Linha rotulo="Sazonalidade" valor={VAGA_SAZONALIDADE_LABEL[verAlvo.sazonalidade]} />
-              {/* Item 2: o tempo de contrato só se mostra onde ele existe, pela mesma régua que
-                    esconde o campo na trilha. */}
-              {exigeTempoContrato(verAlvo.vinculo) && (
-                <Linha
-                  rotulo="Tempo de contrato"
-                  valor={verAlvo.tempoContrato ? rotuloTempoContrato(verAlvo.tempoContrato) : null}
-                />
-              )}
-            </BlocoFicha>
+          podeReabrir={isAdmin}
+          onFechar={() => setReabrirAlvo(null)}
+          onReaberta={(atualizada) => {
+            setReabrirAlvo(null);
+            /* A LINHA É TROCADA NA HORA, com o `VagaListItem` que o servidor devolveu: ele vem da
+               MESMA leitura da listagem, com ocupação e trilha, então a tabela fica certa sem
+               esperar nada. O `carregar()` vem logo atrás porque a reabertura mexe no que a TELA
+               INTEIRA conta (os cards de status, o funil, os desfechos), e esses números saem da
+               lista completa, não de uma linha. Sem ele, a linha ficaria certa no meio de uma faixa
+               de indicadores errada. */
+            setRows((atuais) =>
+              atuais.map((v) => (v.id === atualizada.id ? atualizada : v)),
+            );
+            void carregar();
+          }}
+        />
+      )}
 
-            <BlocoFicha titulo="Quem Pediu">
-              <Linha rotulo="Solicitante" valor={verAlvo.solicitanteNome} />
-              <Linha rotulo="Telefone" valor={verAlvo.solicitanteTelefone} />
-              <Linha rotulo="E-mail" valor={verAlvo.solicitanteEmail} />
-              <Linha rotulo="Consultor" valor={verAlvo.consultorNome} />
-              <Linha rotulo="Recruiter" valor={verAlvo.recruiterNome} />
-              <Linha rotulo="Data de solicitação" valor={dataBr(verAlvo.dataSolicitacao)} />
-              <Linha rotulo="Data de alinhamento" valor={dataBr(verAlvo.dataAlinhamento)} />
-              <Linha rotulo="Previsão de entrega" valor={dataBr(verAlvo.dataLimite)} />
-              <Linha rotulo="Envio da shortlist" valor={dataBr(verAlvo.envioShortlist)} />
-            </BlocoFicha>
-
-            <BlocoFicha titulo="Contratação">
-              <Linha rotulo="Motivo" valor={verAlvo.motivo} />
-              <Linha rotulo="Justificativa" valor={verAlvo.justificativaMotivo} />
-              {verAlvo.motivo === MOTIVO_SUBSTITUICAO && (
-                <>
-                  <Linha
-                    rotulo="Tipo de substituição"
-                    valor={
-                      verAlvo.tipoSubstituicao
-                        ? VAGA_TIPO_SUBSTITUICAO_LABEL[verAlvo.tipoSubstituicao]
-                        : null
-                    }
-                  />
-                  <Linha rotulo="Nome do substituído" valor={verAlvo.substituidoNome} />
-                  {/* Item 3: o CPF aparece MASCARADO para leitura. §A.6: a rota inteira do módulo
-                        é fechada pelo menu `as-vagas`, e o número nunca vai para log. */}
-                  <Linha
-                    rotulo="CPF do substituído"
-                    valor={verAlvo.substituidoCpf ? formatCpf(verAlvo.substituidoCpf) : null}
-                  />
-                </>
-              )}
-            </BlocoFicha>
-
-            <BlocoFicha titulo="Condições">
-              <Linha rotulo="Salário de abertura" valor={moedaBr(verAlvo.salarioAbertura)} />
-              <Linha
-                rotulo="Benefícios"
-                valor={
-                  verAlvo.beneficios.length
-                    ? verAlvo.beneficios
-                        .map((b) => (b.valor ? `${b.nome}: ${salarioParaCampo(b.valor)}` : b.nome))
-                        .join(", ")
-                    : null
-                }
-                largo
-              />
-              <Linha rotulo="Local de trabalho" valor={verAlvo.localTrabalho} largo />
-              <Linha
-                rotulo="Estado da abordagem"
-                valor={verAlvo.regiaoEstado ? nomeDaUf(verAlvo.regiaoEstado) : null}
-              />
-              <Linha
-                rotulo="Regiões de abordagem"
-                valor={listaEmTexto(verAlvo.regioes, verAlvo.regioesOutras, REGIAO_OUTRAS)}
-                largo
-              />
-              <Linha rotulo="Horário e escala" valor={verAlvo.horarioEscala} largo />
-              <Linha
-                rotulo="Modelo de trabalho"
-                valor={
-                  verAlvo.modeloTrabalho ? VAGA_MODELO_TRABALHO_LABEL[verAlvo.modeloTrabalho] : null
-                }
-              />
-              {verAlvo.modeloTrabalho === "HIBRIDO" && (
-                <Linha rotulo="Detalhe do híbrido" valor={verAlvo.detalheHibrido} />
-              )}
-              <Linha rotulo="Vaga confidencial" valor={verAlvo.confidencial ? "Sim" : "Não"} />
-              <Linha
-                rotulo="Divulgar o nome da empresa"
-                valor={verAlvo.divulgarEmpresa ? "Sim" : "Não"}
-              />
-            </BlocoFicha>
-
-            <BlocoFicha titulo="Requisitos">
-              <Linha
-                rotulo="Escolaridade"
-                valor={verAlvo.escolaridade ? VAGA_ESCOLARIDADE_LABEL[verAlvo.escolaridade] : null}
-              />
-              <Linha rotulo="Faixa etária" valor={verAlvo.faixaEtaria} />
-              <Linha rotulo="Gênero" valor={VAGA_GENERO_LABEL[verAlvo.genero]} />
-              <Linha
-                rotulo="Idiomas"
-                valor={listaEmTexto(verAlvo.idiomas, verAlvo.idiomasOutros, OPCAO_OUTROS)}
-              />
-              <Linha rotulo="Cursos e conhecimentos" valor={verAlvo.cursosConhecimentos} largo />
-              <Linha
-                rotulo="Testes"
-                valor={listaEmTexto(
-                  verAlvo.testes.map((t) => VAGA_TESTE_LABEL[t as keyof typeof VAGA_TESTE_LABEL]),
-                  verAlvo.testesOutro,
-                  "",
-                )}
-                largo
-              />
-              <Linha rotulo="Experiência necessária" valor={verAlvo.experiencia} largo />
-              <Linha rotulo="Principais atribuições" valor={verAlvo.atribuicoes} largo />
-              <Linha rotulo="Perfil comportamental" valor={verAlvo.perfilComportamental} largo />
-              <Linha rotulo="Ambiente" valor={verAlvo.ambiente} largo />
-              <Linha
-                rotulo="Etapas do processo seletivo"
-                valor={listaEmTexto(verAlvo.etapasPs, verAlvo.etapasPsOutra, OPCAO_OUTRA)}
-                largo
-              />
-              <Linha rotulo="Observações" valor={verAlvo.observacoes} largo />
-            </BlocoFicha>
-
-            {/* O FECHAMENTO SÓ APARECE NA VAGA FECHADA: numa vaga aberta seria um bloco de
-                  "não informado" repetido quatro vezes, dizendo o óbvio. */}
-            {verAlvo.dataFechamento && (
-              <BlocoFicha titulo="Fechamento">
-                <Linha rotulo="Data do fechamento" valor={dataBr(verAlvo.dataFechamento)} />
-                <Linha
-                  rotulo="Vagas fechadas"
-                  valor={verAlvo.vagasFechadas === null ? null : String(verAlvo.vagasFechadas)}
-                />
-                <Linha
-                  rotulo="Vagas fechadas de banco"
-                  valor={
-                    verAlvo.vagasFechadasBanco === null ? null : String(verAlvo.vagasFechadasBanco)
-                  }
-                />
-                <Linha rotulo="Salário de fechamento" valor={moedaBr(verAlvo.salarioFechamento)} />
-                <Linha
-                  rotulo="Data prevista para início"
-                  valor={dataBr(verAlvo.dataPrevistaInicio)}
-                />
-                <Linha
-                  rotulo="Enviar para admissão"
-                  valor={verAlvo.enviarParaAdmissao ? "Sim" : "Não"}
-                />
-              </BlocoFicha>
-            )}
-          </>
-        </VagaPainelModal>
+      {/* ── OS CANDIDATOS QUE SEGURAM O CANCELAMENTO ──────────────────────── */}
+      {cancelarAlvo && recusaCanc && (
+        <RecusaCancelamentoModal
+          recusa={recusaCanc}
+          vagaRotulo={cancelarAlvo.nomeDivulgacao ?? rotuloDaVaga(cancelarAlvo)}
+          forcando={cancelando}
+          onVoltar={() => setRecusaCanc(null)}
+          onForcar={() => void enviarCancelamento({ forcar: true })}
+          onTratarCandidatos={tratarCandidatosDaVaga}
+        />
       )}
     </>
   );
@@ -4459,12 +4960,15 @@ export default function CentralDeVagasPage() {
     valor,
     icone,
     tom,
+    inativo = false,
   }: {
     id: VagaStatus | "total";
     rotulo: string;
     valor: number;
     icone: IconName;
     tom?: string;
+    /** Status fora de circulação que ainda tem vaga parada dentro (ver `cardsDeStatus`). */
+    inativo?: boolean;
   }) {
     const ativo = cardAtivo === id;
     return (
@@ -4474,10 +4978,11 @@ export default function CentralDeVagasPage() {
         icone={icone}
         cor={tom}
         ativo={ativo}
+        inativa={inativo}
         onClick={() => setCardAtivo(ativo ? "total" : id)}
         dica={`${rotulo}: ${valor}. ${
           ativo ? "Clique de novo para ver todas." : "Clique para ver só estas vagas."
-        }`}
+        }${inativo ? " Este status está fora de circulação e ainda tem vaga parada nele." : ""}`}
       />
     );
   }

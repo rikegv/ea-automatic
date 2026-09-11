@@ -28,14 +28,12 @@
  * §A.11 (sem travessão, "não informado" na célula vazia), §A.24 (title case no título e nos rótulos).
  */
 
-import {
-  VAGA_STATUS_LABEL,
-  type VagaListItem,
-} from "@ea/shared-types";
+import { type VagaListItem } from "@ea/shared-types";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { StatusPill } from "@/components/ui/StatusPill";
 import { tomDoStatusVaga } from "@/lib/as-candidatos-visual";
+import { rotuloDoStatusVaga, useStatusVaga } from "@/lib/as-status-vaga";
 
 /** Uma linha de dado. `null` e vazio caem no mesmo "não informado" (§A.11). */
 function Campo({ rotulo, valor }: { rotulo: string; valor: string | null | undefined }) {
@@ -67,6 +65,13 @@ export function VagaResumoModal({
   onClose: () => void;
 }) {
   const titulo = vaga.nomeDivulgacao ?? vaga.codigo ?? "Vaga sem nome de divulgação";
+  /*
+   * O CATÁLOGO DE STATUS (onda B2). ESTE MODAL CONTINUA NÃO BUSCANDO A VAGA (o cabeçalho explica por
+   * quê), e isto não contradiz aquilo: o que ele lê aqui é o CATÁLOGO, dez linhas compartilhadas por
+   * toda a sessão, memoizadas por carga de página. Não é uma segunda fonte da vaga; é o dicionário
+   * que traduz o código gravado nela em rótulo e cor, e sem ele a pill mostraria `ABERTA` cru.
+   */
+  const { status: catalogoStatus } = useStatusVaga();
 
   return (
     <Modal onClose={onClose} className="max-w-[720px] p-0" ariaLabel="Descritivo da vaga">
@@ -75,7 +80,10 @@ export function VagaResumoModal({
           <div className="eyebrow !mb-1">Atração e Seleção</div>
           <div className="flex flex-wrap items-center gap-3">
             <h2 className="text-lg font-semibold text-text">{titulo}</h2>
-            <StatusPill tone={tomDoStatusVaga(vaga.status)} label={VAGA_STATUS_LABEL[vaga.status]} />
+            <StatusPill
+              tone={tomDoStatusVaga(vaga.status, catalogoStatus)}
+              label={rotuloDoStatusVaga(vaga.status, catalogoStatus)}
+            />
           </div>
           <p className="mt-1 text-[12.5px] text-dim">
             Código {vaga.codigo ?? "não informado"}. {vaga.clienteNome ?? "Cliente não informado"}.

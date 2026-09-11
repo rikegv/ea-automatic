@@ -41,22 +41,27 @@
  * lido por ninguém aqui: desenhar o total em qualquer um dos dois enche o cilindro errado.
  */
 
-import type { VagaListItem, VagaStatus } from "@ea/shared-types";
+import type { VagaListItem } from "@ea/shared-types";
+import { vagaEncerrada } from "@/lib/as-status-vaga";
 
 /**
- * OS ESTADOS EM QUE A VAGA JÁ TERMINOU. A vaga encerrada tem `dataFechamento` escrita pela ação de
- * fechar, e é ela que CONGELA o contador de dias (decisão do diretor, 27/08) e, desde 07/09, também
- * o contador de posições preenchidas.
+ * ─ "A VAGA JÁ TERMINOU?" DEIXOU DE SER UMA LISTA E VIROU A COLUNA `encerra` (onda B2) ──────────
  *
- * CANCELADA entra na lista porque ela É um encerramento, mesmo que hoje nenhuma rota escreva esse
- * status: quando a ação de cancelar existir, os dois contadores já vão congelar sozinhos, sem
- * ninguém ter de lembrar de voltar aqui.
+ * AQUI MORAVA `VAGA_STATUS_ENCERRADOS`, os três códigos de encerramento digitados um a um. Com o
+ * status virando CATÁLOGO DO DIRETOR, essa lista passaria a ser uma CÓPIA que envelhece: o "Stand
+ * By" que ele criasse não estaria nela (certo, ele não encerra) e um status de encerramento futuro
+ * também não estaria (errado, e o erro seria SILENCIOSO). Quem responde agora é `vagaEncerrada`, em
+ * `lib/as-status-vaga`, lendo o flag `encerra` da linha do catálogo.
+ *
+ * O REEXPORT MANTÉM DE PÉ QUEM JÁ LIA DAQUI (a trilha da vaga, as ações do painel, a Central de
+ * Vagas): a régua mudou de casa, e nenhum chamador precisou mudar de porta. Duas cópias da mesma
+ * pergunta em dois arquivos é o que esta onda inteira existe para não ter.
+ *
+ * O QUE ESTE FLAG CONGELA, TUDO AO MESMO TEMPO: o número do cilindro (que passa da contagem derivada
+ * para a do fechamento), a origem que o `title` anuncia, o contador de dias em aberto e o desfecho
+ * da trilha. Um flag errado aqui muda o número do cilindro e o contador de dias na mesma linha.
  */
-export const VAGA_STATUS_ENCERRADOS: VagaStatus[] = ["ENTREGUE", "FECHADA", "CANCELADA"];
-
-export function vagaEncerrada(status: VagaStatus): boolean {
-  return VAGA_STATUS_ENCERRADOS.includes(status);
-}
+export { vagaEncerrada };
 
 /** Os dois contadores da vaga (decisão do diretor, 25/08): a contratação de verdade e o excedente. */
 export type LadoPosicoes = "oficial" | "banco";

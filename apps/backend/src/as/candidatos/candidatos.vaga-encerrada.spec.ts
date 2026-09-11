@@ -1,9 +1,25 @@
 import { ConflictException } from "@nestjs/common";
 import { describe, expect, it, vi } from "vitest";
-import { STATUS_QUE_NAO_RECEBEM, vagaRecebeCandidato } from "../../domain/candidatura";
 import { CandidatosService } from "./candidatos.service";
 import { asCandidaturaEtapas, asCandidaturas } from "../../db/schema";
 import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
+import {
+  catalogoDeStatusFingido,
+  linhasDeStatusFingidas,
+} from "../vaga-status/vaga-status-catalogo.fake";
+import type { AuthUser } from "../../auth/auth.types";
+
+/**
+ * ─ A RÉGUA VEM DO CATÁLOGO, E CONTINUA NÃO SENDO DIGITADA AQUI (onda B2) ───────────────────────
+ *
+ * `STATUS_QUE_NAO_RECEBEM` e `vagaRecebeCandidato` saíram do domínio: a pergunta virou o flag
+ * `recebeCandidato` do catálogo. O QUE ESTE ARQUIVO AFIRMA NÃO MUDOU, e a forma também não: os dois
+ * conjuntos são DERIVADOS do mesmo catálogo que o serviço consulta, então um status novo entra na
+ * cobertura sozinho, que é o ponto inteiro de a trava perguntar em vez de repetir a lista.
+ */
+const CATALOGO = linhasDeStatusFingidas();
+const NAO_RECEBEM = CATALOGO.filter((s) => !s.recebeCandidato).map((s) => s.codigo);
+const RECEBE = (codigo: string) => CATALOGO.find((s) => s.codigo === codigo)?.recebeCandidato === true;
 
 /**
  * ─ A VAGA ENCERRADA NÃO RECEBE POSIÇÃO, TAMBÉM PELO CAMINHO TRAVADO (auditoria de 09/09) ────────
@@ -30,8 +46,8 @@ import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
  *   3. A RECUSA VEM ANTES DA CONTAGEM: a vaga encerrada nem chega a ser medida contra a meta, e a
  *      frase que a pessoa lê fala do ENCERRAMENTO, não de vaga cheia.
  *   4. A VAGA VIVA CONTINUA PASSANDO, inclusive o RASCUNHO, que recebe candidato de propósito.
- *   5. A RÉGUA É A DO DOMÍNIO: quem passa é exatamente quem `vagaRecebeCandidato` deixa passar, e
- *      não uma segunda lista de status escrita aqui dentro.
+ *   5. A RÉGUA É A DO CATÁLOGO: quem passa é exatamente quem o flag `recebeCandidato` deixa passar,
+ *      e não uma segunda lista de status escrita aqui dentro.
  *
  * O FAKE é o mesmo formato do `candidatos.guardas-de-situacao.spec.ts`, com uma diferença: o STATUS
  * DA VAGA é do cenário. Nos outros arquivos ele é sempre "ABERTA", e foi por isso que 200 testes
@@ -39,6 +55,18 @@ import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
  */
 
 const AGORA = new Date("2026-09-09T12:00:00.000Z");
+
+/**
+ * QUEM REGISTRA A SAÍDA. O método passou a receber o usuário INTEIRO, e não só o id, porque
+ * desvincular quem está ALOCADO virou ação de MASTER (a posição dele já foi entregue). Aqui o COMUM
+ * basta: nenhuma destas chamadas desvincula um alocado, e a autoria continua saindo de `user.id`.
+ */
+const consultor = (id: string): AuthUser => ({
+  id,
+  email: "consultor@soulan.com.br",
+  papel: "COMUM",
+  senhaTemporaria: false,
+});
 
 interface Escrita {
   tabela: unknown;
@@ -132,7 +160,7 @@ function makeDb(cenario: {
     query: { asCandidaturas: { findFirst: vi.fn().mockResolvedValue(c) } },
   };
 
-  return { service: new CandidatosService(db as never, catalogoDeEtapasFingido() as never), ordem, updates, inserts };
+  return { service: new CandidatosService(db as never, catalogoDeEtapasFingido() as never, catalogoDeStatusFingido() as never), ordem, updates, inserts };
 }
 
 const doUpdate = (updates: Escrita[]) =>
@@ -167,14 +195,14 @@ const PORTAS: Porta[] = [
       s.registrarSaida(
         "cand-1",
         { situacao: "ENVIADO_PARA_ADMISSAO", motivo: "foi para a esteira" },
-        "user-1",
+        consultor("user-1"),
       ),
   },
 ];
 
 describe("o caminho travado CONFERE o status da vaga que ele já lia", () => {
   for (const porta of PORTAS) {
-    it.each([...STATUS_QUE_NAO_RECEBEM])(
+    it.each([...NAO_RECEBEM])(
       `${porta.nome}: RECUSA a vaga %s, e NADA é gravado`,
       async (status) => {
         const { service, ordem, updates, inserts } = makeDb({
@@ -215,20 +243,22 @@ describe("o caminho travado CONFERE o status da vaga que ele já lia", () => {
 
   /**
    * A RÉGUA É A DO DOMÍNIO, E NÃO UMA SEGUNDA LISTA. Este teste percorre os dois conjuntos pelo
-   * PREDICADO, não por nomes digitados: o dia em que um status novo entrar em
-   * `STATUS_QUE_NAO_RECEBEM`, ele passa a ser recusado aqui sem ninguém tocar neste arquivo, que é
-   * o ponto inteiro de a trava importar a função em vez de repetir a lista.
+   * PREDICADO, não por nomes digitados: o dia em que um status novo nascer com `recebeCandidato`
+   * falso, ele passa a ser recusado aqui sem ninguém tocar neste arquivo, que é o ponto inteiro de
+   * a trava perguntar ao catálogo em vez de repetir a lista.
    */
-  it("quem passa é exatamente quem `vagaRecebeCandidato` deixa passar", async () => {
-    const TODOS = ["RASCUNHO", "ABERTA", "VAGA_BANCO", ...STATUS_QUE_NAO_RECEBEM];
+  it("quem passa é exatamente quem o flag `recebeCandidato` deixa passar", async () => {
+    // O CATÁLOGO INTEIRO, e não uma lista digitada: o `VAGA_BANCO` (dormente, inativo e que RECEBE)
+    // entra por estar no catálogo, exatamente como está no banco depois da migration 0102.
+    const TODOS = CATALOGO.map((s) => s.codigo);
 
     for (const status of TODOS) {
       const { service, updates } = makeDb({ statusVaga: status, posicoesOficiais: 5, ocupadas: 0 });
       const erro = await service.finalizarPosicao("cand-1", {}, "user-1").catch((e) => e);
 
       const passou = !(erro instanceof ConflictException);
-      expect(passou).toBe(vagaRecebeCandidato(status));
-      expect(updates.length > 0).toBe(vagaRecebeCandidato(status));
+      expect(passou).toBe(RECEBE(status));
+      expect(updates.length > 0).toBe(RECEBE(status));
     }
   });
 

@@ -708,6 +708,41 @@
       "when": 1788068291611,
       "tag": "0100_as_etapas_funil",
       "breakpoints": true
+    },
+    {
+      "idx": 101,
+      "version": "7",
+      "when": 1788071891611,
+      "tag": "0101_as_cancelamento_de_vaga",
+      "breakpoints": true
+    },
+    {
+      "idx": 102,
+      "version": "7",
+      "when": 1788075491611,
+      "tag": "0102_as_status_da_vaga",
+      "breakpoints": true
+    },
+    {
+      "idx": 103,
+      "version": "7",
+      "when": 1788079091611,
+      "tag": "0103_as_encerramento_da_vaga",
+      "breakpoints": true
+    },
+    {
+      "idx": 104,
+      "version": "7",
+      "when": 1788082691611,
+      "tag": "0104_as_reabertura_de_vaga",
+      "breakpoints": true
+    },
+    {
+      "idx": 105,
+      "version": "7",
+      "when": 1788086291611,
+      "tag": "0105_as_aceite_da_reabertura_sem_origem",
+      "breakpoints": true
     }
   ]
 }

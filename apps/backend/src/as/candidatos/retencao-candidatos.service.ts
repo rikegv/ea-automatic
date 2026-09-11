@@ -60,10 +60,33 @@ const SITUACOES_VIVAS_SQL = sql.raw(SITUACOES_VIVAS.map((s) => `'${s}'`).join(",
  *
  * "DESCARTADO" É DO PROCESSO, NÃO DA PESSOA, e é o ponto mais delicado da regra. A mesma pessoa pode
  * estar descartada numa vaga e ativa em outra, então o prazo só começa a correr quando TODAS as
- * candidaturas dela estão encerradas SEM ÊXITO (descarte ou desistência). Quem tem UMA candidatura
- * VIVA (`SITUACOES_VIVAS`, o complemento exato de `ehSaidaSemExito`) NÃO entra na conta, em nenhuma
+ * candidaturas dela estão encerradas. Quem tem UMA candidatura VIVA numa vaga que AINDA NÃO ACABOU
+ * (`SITUACOES_VIVAS`, o complemento exato de `ehSaidaSemExito`) NÃO entra na conta, em nenhuma
  * hipótese, e quem nunca se candidatou a nada também não: sem processo encerrado não há prazo a
  * contar.
+ *
+ * ┌─ "VIVO" NÃO BASTA: É "VIVO E EM VAGA NÃO ENCERRADA" (decisão do diretor, opção B) ────────────┐
+ * │ O BURACO QUE ISTO FECHA, e ele é o oposto do defeito acima: `APROVADO`, `ALOCADO` e            │
+ * │ `ENVIADO_PARA_ADMISSAO` são situações VIVAS, então uma pessoa deixada viva numa vaga ENCERRADA │
+ * │ nunca satisfazia a cláusula. O prazo de dois anos NUNCA COMEÇAVA A CORRER e o dado pessoal     │
+ * │ dela ficava retido PARA SEMPRE, num processo que a operação considera morto. Existia de        │
+ * │ verdade: `APROVADO` numa vaga `CANCELADA`, medido na homologação.                              │
+ * │                                                                                                │
+ * │ A DECISÃO É PRESERVAR O FATO E LIBERAR O PRAZO: a pessoa CONTINUA "aprovada" na trilha (ela    │
+ * │ foi aprovada de verdade, e reescrever isso para "descartado" falsearia a história), e o expurgo │
+ * │ é que passa a entender que a VAGA acabou. Nada é reescrito; o que mudou foi a pergunta.        │
+ * │                                                                                                │
+ * │ O QUE NÃO MUDOU, E É O MAIS FÁCIL DE QUEBRAR: a proteção ENTRE VAGAS continua inteira. Quem    │
+ * │ está `APROVADO` numa vaga cancelada E `ATIVO` numa vaga aberta segue PROTEGIDO, porque basta   │
+ * │ UMA candidatura viva em vaga não encerrada. A correção estreitou o que conta como "vivo",      │
+ * │ nunca o alcance da proteção.                                                                    │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * O RELÓGIO ACOMPANHA, e sem isso a correção não iniciaria o prazo: ela o declararia VENCIDO. Para a
+ * candidatura que só passou a contar como encerrada porque a VAGA encerrou, a data de referência é
+ * `vagas.encerrada_em` (carimbo de SERVIDOR, migration 0103), e nunca o `atualizado_em` dela, que o
+ * encerramento da vaga não toca. O `greatest` da consulta garante a direção: a data só anda para
+ * frente, então ninguém fica elegível mais cedo do que ficaria antes desta correção.
  *
  * §A.6: este serviço não loga NADA além de uma contagem. Nenhum nome, nenhum id, nenhum CPF.
  */
@@ -149,17 +172,90 @@ export class RetencaoCandidatosService implements OnModuleInit, OnModuleDestroy 
          and c.origem <> 'BANCO_TALENTOS'
          -- TEM DE HAVER PROCESSO ENCERRADO: sem candidatura nenhuma não há prazo a contar.
          and exists (select 1 from as_candidaturas k where k.candidato_id = c.id)
-         -- E NENHUM PROCESSO VIVO OU BEM-SUCEDIDO. Descartado numa vaga e ativo em outra não conta:
-         -- o descarte é do processo, não da pessoa. A lista das vivas é DERIVADA do domínio
-         -- (ver SITUACOES_VIVAS_SQL, acima): digitá-la aqui é como uma pessoa em processo vira
-         -- expurgada em silêncio.
+         -- E NENHUM PROCESSO VIVO EM VAGA QUE AINDA NÃO ACABOU. Descartado numa vaga e ativo em
+         -- outra não conta: o descarte é do processo, não da pessoa, e ESTA CORREÇÃO NÃO MEXEU
+         -- NISSO. O que ela estreitou foi o que conta como "vivo" (agora é "vivo E em vaga não
+         -- encerrada"), NUNCA o alcance da proteção entre vagas: uma candidatura viva em UMA vaga
+         -- aberta continua protegendo a pessoa inteira, mesmo que ela tenha dez outras encerradas.
+         -- A lista das vivas é DERIVADA do domínio (ver SITUACOES_VIVAS_SQL, acima).
          and not exists (
-               select 1 from as_candidaturas k
+               select 1
+                 from as_candidaturas k
+                 -- OS DOIS JOINS SÃO INTERNOS E NÃO PODEM PERDER LINHA, e é isso que os torna
+                 -- seguros aqui: as_candidaturas.vaga_id é NOT NULL com FK RESTRICT para vagas,
+                 -- e vagas.status é NOT NULL com FK RESTRICT para as_vaga_status. Cada
+                 -- candidatura casa com exatamente uma vaga, e cada vaga com exatamente um status.
+                 -- Um left join diria a mesma coisa; um join que PUDESSE perder linha apagaria uma
+                 -- proteção em silêncio, que é a falha mais cara possível neste arquivo.
+                 join vagas v on v.id = k.vaga_id
+                 join as_vaga_status s on s.codigo = v.status
                 where k.candidato_id = c.id
-                  and k.situacao in (${SITUACOES_VIVAS_SQL}))
-         -- O PRAZO CORRE DO ÚLTIMO ENCERRAMENTO, não do primeiro: quem foi descartado em três vagas
-         -- ao longo de dois anos ainda é alguém que o time viu recentemente.
-         and (select max(k.atualizado_em) from as_candidaturas k where k.candidato_id = c.id)
+                  and k.situacao in (${SITUACOES_VIVAS_SQL})
+                  -- A RÉGUA DE "ACABOU" É O FLAG encerra DO CATÁLOGO, lido por JOIN, e NUNCA uma
+                  -- lista de códigos concatenada em sql.raw: o catálogo é editável pelo diretor, e
+                  -- uma lista vinda dele quebraria como TEXTO a premissa escrita lá em cima (aqui não
+                  -- se concatena dado externo).
+                  --
+                  -- NÃO É recebe_candidato, e trocar um pelo outro inverte a regra: são perguntas
+                  -- diferentes. Um status LIVRE como "Stand By" é recebe_candidato = false e
+                  -- encerra = false, ou seja, VAGA PAUSADA NÃO É VAGA TERMINADA, e ler o flag
+                  -- errado tornaria expurgável todo mundo dentro de uma vaga só pausada.
+                  --
+                  -- ┌─ A ENTREGA FICA DE FORA, E A RAZÃO NÃO É CAUTELA, É MEDIÇÃO ────────────────┐
+                  -- │ O flag encerra é TRUE em três papéis: ENTREGA, FECHAMENTO e CANCELAMENTO. Sem a  │
+                  -- │ condição abaixo, isto alcançaria quem estava numa vaga ENTREGUE, que é QUEM │
+                  -- │ FOI CONTRATADO. O tester mediu o caso: ALOCADO há 3 anos numa vaga        │
+                  -- │ ENTREGUE ERA EXPURGADO.                                                    │
+                  -- │                                                                            │
+                  -- │ E O EXPURGO NÃO PROTEGERIA NADA ALI, que é o ponto que decidiu: o CPF de    │
+                  -- │ quem foi contratado continua na ADMISSÃO, que é outro módulo com retenção   │
+                  -- │ própria. Apagar o lado de A&S deixaria as_candidaturas.admissao_id        │
+                  -- │ apontando de um "Candidato Expurgado" para uma admissão que ainda guarda o  │
+                  -- │ CPF: destrói o histórico da seleção e não minimiza dado nenhum.             │
+                  -- │                                                                            │
+                  -- │ O DIRETOR ESCREVEU "vaga encerrada (cancelada/fechada)", e é isto: os dois  │
+                  -- │ desfechos em que o processo terminou SEM entrega. Reverter é apagar a       │
+                  -- │ condição do papel. PELO PAPEL E NUNCA PELO CÓDIGO, que é renomeável.        │
+                  -- └─────────────────────────────────────────────────────────────────────────────┘
+                  --
+                  -- encerrada_em is null PROTEGE, e a direção é fail-closed: vaga marcada como
+                  -- encerrada SEM o carimbo de servidor (migration 0103) é vaga cujo instante de
+                  -- encerramento ninguém sabe, e prazo sem data de início não começa a correr. Sem
+                  -- esta metade, a linha sem carimbo cairia no relógio antigo, que é justamente o
+                  -- que a correção existe para impedir.
+                  and (s.encerra = false or s.papel = 'ENTREGA' or v.encerrada_em is null))
+         -- ┌─ O RELÓGIO, e sem esta parte a correção não INICIA o prazo: ela o declara VENCIDO ────┐
+         -- │ O prazo corre do ÚLTIMO movimento, não do primeiro: quem foi descartado em três vagas │
+         -- │ ao longo de dois anos ainda é alguém que o time viu recentemente.                     │
+         -- │                                                                                       │
+         -- │ SÓ QUE ENCERRAR A VAGA NÃO CARIMBA A CANDIDATURA de quem não segurava o encerramento  │
+         -- │ (medido na homologação: a candidatura APROVADA ficou 18 SEGUNDOS ATRÁS do             │
+         -- │ cancelada_em da vaga). Contando de k.atualizado_em, quem foi aprovado em 03/2024      │
+         -- │ numa vaga encerrada HOJE nasceria com o prazo JÁ VENCIDO e seria anonimizado na       │
+         -- │ varredura da hora seguinte, sem carência nenhuma, e isso é irreversível.              │
+         -- │                                                                                       │
+         -- │ ENTÃO, PARA A CANDIDATURA QUE SÓ PASSOU A CONTAR COMO ENCERRADA PORQUE A VAGA ACABOU, │
+         -- │ a data de referência é o ENCERRAMENTO DA VAGA (v.encerrada_em, carimbo de SERVIDOR;   │
+         -- │ data_fechamento vem do CORPO, sem piso, e como relógio seria gatilho remoto de        │
+         -- │ exclusão irreversível). O case restringe o efeito a essa candidatura: quem já estava  │
+         -- │ DESCARTADO continua contando do movimento dele, exatamente como antes desta correção. │
+         -- │                                                                                       │
+         -- │ O greatest É A PROVA DE QUE ISTO NÃO APRESSA NINGUÉM: ele só empurra a data PARA      │
+         -- │ FRENTE, nunca para trás, então nenhuma pessoa fica elegível mais CEDO do que ficaria  │
+         -- │ com a consulta anterior. O erro cai para o lado de não apagar.                        │
+         -- │                                                                                       │
+         -- │ O JOIN é interno pelo mesmo argumento de completude do bloco acima (vaga_id NOT NULL  │
+         -- │ com FK RESTRICT): ele não descarta candidatura nenhuma da conta do max, e descartar   │
+         -- │ uma delas poderia BAIXAR o máximo e apressar o expurgo.                               │
+         -- └───────────────────────────────────────────────────────────────────────────────────────┘
+         and (select max(greatest(
+                           k.atualizado_em,
+                           coalesce(
+                             case when k.situacao in (${SITUACOES_VIVAS_SQL}) then v.encerrada_em end,
+                             k.atualizado_em)))
+                from as_candidaturas k
+                join vagas v on v.id = k.vaga_id
+               where k.candidato_id = c.id)
              <= now() - interval '${sql.raw(RetencaoCandidatosService.RETENCAO)}'
       returning c.id
     `);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CANDIDATURA_SITUACOES, VAGA_STATUS } from "@ea/shared-types";
+import { CANDIDATURA_SITUACOES, VAGA_STATUS_SEMENTE } from "@ea/shared-types";
 import { tomDaSituacao, tomDoStatusVaga } from "@/lib/as-candidatos-visual";
 
 /**
@@ -49,8 +49,23 @@ describe("tomDaSituacao (o ícone acompanha o estado real, §A.12)", () => {
  * é recusado pelo CHECK do banco, pelo DTO do serviço e pelo seletor de cor da tela, e o fallback
  * ter de fugir do vermelho é afirmado em `as-etapas.spec.ts`.
  */
-describe("tomDoStatusVaga (o resto do mapa visual segue intacto)", () => {
-  it("todo status de vaga tem tom", () => {
-    for (const s of VAGA_STATUS) expect(tomDoStatusVaga(s)).toBeTruthy();
+describe("tomDoStatusVaga (a cor do status passou a vir do catálogo do diretor)", () => {
+  it("todo status do catálogo tem tom, e é o tom que o diretor escolheu", () => {
+    for (const s of VAGA_STATUS_SEMENTE) {
+      expect(tomDoStatusVaga(s.codigo, VAGA_STATUS_SEMENTE)).toBe(s.tom);
+    }
+  });
+
+  /**
+   * O STATUS QUE A TELA AINDA NÃO CONHECE (criado em outra sessão, ou inativado e fora da leitura)
+   * NÃO PODE SAIR SEM COR: a pill ficaria sem classe, cinza e sem ícone, sem nada falhar. O fallback
+   * é o NEUTRO, e nunca o vermelho, que nesta casa é RECUSA (§A.12).
+   */
+  it("status fora do catálogo cai no neutro, e nunca no vermelho de recusa", () => {
+    expect(tomDoStatusVaga("STATUS_QUE_NAO_EXISTE", VAGA_STATUS_SEMENTE)).toBe("nt");
+  });
+
+  it("o catálogo vazio não derruba a régua: ela responde neutro para todo mundo", () => {
+    expect(tomDoStatusVaga("ABERTA", [])).toBe("nt");
   });
 });

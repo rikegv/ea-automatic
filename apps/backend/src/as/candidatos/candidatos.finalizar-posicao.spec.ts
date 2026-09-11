@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import { CandidatosService } from "./candidatos.service";
 import { asCandidaturaEtapas, asCandidaturas } from "../../db/schema";
 import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
+import { catalogoDeStatusFingido } from "../vaga-status/vaga-status-catalogo.fake";
+import type { AuthUser } from "../../auth/auth.types";
 
 /**
  * ─ FINALIZAR POSIÇÃO: a posição da vaga é ENTREGUE, com nome e sobrenome ────────────────────────
@@ -25,6 +27,18 @@ import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
  */
 
 const AGORA = new Date("2026-09-08T12:00:00.000Z");
+
+/**
+ * QUEM REGISTRA A SAÍDA. O método passou a receber o usuário INTEIRO, e não só o id, porque
+ * desvincular quem está ALOCADO virou ação de MASTER (a posição dele já foi entregue). Aqui o COMUM
+ * basta: nenhuma destas chamadas desvincula um alocado, e a autoria continua saindo de `user.id`.
+ */
+const consultor = (id: string): AuthUser => ({
+  id,
+  email: "consultor@soulan.com.br",
+  papel: "COMUM",
+  senhaTemporaria: false,
+});
 
 interface Escrita {
   tabela: unknown;
@@ -132,7 +146,7 @@ function makeDb(cenario: {
     query: { asCandidaturas: { findFirst: vi.fn().mockResolvedValue(c) } },
   };
 
-  return { service: new CandidatosService(db as never, catalogoDeEtapasFingido() as never), ordem, updates, inserts };
+  return { service: new CandidatosService(db as never, catalogoDeEtapasFingido() as never, catalogoDeStatusFingido() as never), ordem, updates, inserts };
 }
 
 const doUpdate = (updates: Escrita[]) =>
@@ -477,7 +491,7 @@ describe("o lado gravado é lido de volta", () => {
     await service.registrarSaida(
       "cand-1",
       { situacao: "ENVIADO_PARA_ADMISSAO", motivo: "documentação ok" },
-      "user-1",
+      consultor("user-1"),
     );
 
     expect(doUpdate(updates).situacao).toBe("ENVIADO_PARA_ADMISSAO");
@@ -498,7 +512,7 @@ describe("o lado gravado é lido de volta", () => {
     await service.registrarSaida(
       "cand-1",
       { situacao: "ENVIADO_PARA_ADMISSAO", motivo: "documentação ok" },
-      "user-1",
+      consultor("user-1"),
     );
     expect(doUpdate(updates)).not.toHaveProperty("posicaoLado");
   });

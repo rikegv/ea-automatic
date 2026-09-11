@@ -2,6 +2,7 @@ import { ConflictException } from "@nestjs/common";
 import { describe, expect, it, vi } from "vitest";
 import { asCandidaturas } from "../../db/schema";
 import { VagasService } from "./vagas.service";
+import { catalogoDeStatusFingido } from "../vaga-status/vaga-status-catalogo.fake";
 
 /**
  * ─ A ORDEM DO FUNIL NA FILA DE PENDENTES: O DEFEITO QUE NÃO QUEBRA, SÓ MENTE ────────────────────
@@ -73,7 +74,7 @@ function makeDb(linhas: ReturnType<typeof pendente>[], catalogo: unknown) {
     select,
     transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
   };
-  return new VagasService(db as never, catalogo as never);
+  return new VagasService(db as never, catalogo as never, catalogoDeStatusFingido() as never);
 }
 
 /** A fila de pendentes que a recusa devolve, na ordem em que ela foi montada. */

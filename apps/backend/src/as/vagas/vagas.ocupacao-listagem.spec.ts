@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { VagasService } from "./vagas.service";
 import { asCandidaturas, vagaBeneficio, vagas } from "../../db/schema";
 import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
+import { catalogoDeStatusFingido } from "../vaga-status/vaga-status-catalogo.fake";
 
 /**
  * ─ A OCUPAÇÃO DERIVADA NA LISTAGEM DE VAGAS ─────────────────────────────────────────────────────
@@ -123,7 +124,7 @@ function makeDb(
   });
 
   const db = { select };
-  return { service: new VagasService(db as never, catalogoDeEtapasFingido() as never), consultasPorTabela };
+  return { service: new VagasService(db as never, catalogoDeEtapasFingido() as never, catalogoDeStatusFingido() as never), consultasPorTabela };
 }
 
 describe("GET /as/vagas: a ocupação derivada por vaga", () => {

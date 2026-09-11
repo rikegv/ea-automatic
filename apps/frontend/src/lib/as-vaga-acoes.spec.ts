@@ -1,13 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   CANDIDATURA_SITUACOES,
-  VAGA_STATUS,
+  VAGA_STATUS_SEMENTE,
   ehSaidaSemExito,
   finalizaPosicao,
 } from "@ea/shared-types";
 import {
   POSICAO_LADOS,
-  VAGA_STATUS_PUBLICACAO,
   fraseDoAceite,
   rotuloDoLado,
   ladoDoCilindro,
@@ -100,6 +99,12 @@ describe("oficiaisAbertas (o aviso do banco dito antes do 409, com o MESMO núme
 });
 
 describe("vagaRecebeCandidato (espelho da trava 2 do backend)", () => {
+  /*
+   * A LISTA SAIU DO VOCABULÁRIO E VIROU CATÁLOGO (onda B2), então os casos passam a ser escritos
+   * contra a SEMENTE, que é a descrição do comportamento de hoje. Sem catálogo explícito a função
+   * responde pelo catálogo corrente, que nasce sendo essa mesma semente: os dois modos concordam, e
+   * é isso que faz a troca ser de FORMA e não de comportamento.
+   */
   it("rascunho e aberta recebem: captar antes de publicar é trabalho legítimo", () => {
     expect(vagaRecebeCandidato("RASCUNHO")).toBe(true);
     expect(vagaRecebeCandidato("ABERTA")).toBe(true);
@@ -112,7 +117,17 @@ describe("vagaRecebeCandidato (espelho da trava 2 do backend)", () => {
   });
 
   it("todo status do catálogo tem resposta: status novo não deixa a tela sem decisão", () => {
-    for (const s of VAGA_STATUS) expect(typeof vagaRecebeCandidato(s)).toBe("boolean");
+    for (const s of VAGA_STATUS_SEMENTE) {
+      expect(typeof vagaRecebeCandidato(s.codigo)).toBe("boolean");
+    }
+  });
+
+  /**
+   * O CÓDIGO QUE A TELA NÃO CONHECE NÃO RECEBE, e o lado do erro é escolhido: esconder um botão que
+   * o backend recusaria é barato; oferecer alocação numa vaga que talvez esteja pausada não é.
+   */
+  it("código fora do catálogo não recebe: o desconhecido erra para o lado seguro", () => {
+    expect(vagaRecebeCandidato("STATUS_QUE_NAO_EXISTE")).toBe(false);
   });
 });
 
@@ -160,25 +175,17 @@ describe("podeAprovar (a trava que continua exigindo EM SELEÇÃO)", () => {
   });
 });
 
-describe("VAGA_STATUS_PUBLICACAO (a porta que a auditoria de segurança vetou)", () => {
-  it("NÃO oferece Fechada nem Cancelada: encerrar a vaga por aqui não passava por trava nenhuma", () => {
-    expect(VAGA_STATUS_PUBLICACAO).not.toContain("FECHADA");
-    expect(VAGA_STATUS_PUBLICACAO).not.toContain("CANCELADA");
-  });
-
-  it("NÃO oferece Rascunho: ele é o botão de salvar, não uma escolha de status", () => {
-    expect(VAGA_STATUS_PUBLICACAO).not.toContain("RASCUNHO");
-  });
-
-  it("oferece o que a publicação aceita, e não uma lista vazia", () => {
-    expect(VAGA_STATUS_PUBLICACAO).toContain("ABERTA");
-    expect(VAGA_STATUS_PUBLICACAO.length).toBeGreaterThan(0);
-  });
-
-  it("é DERIVADA do catálogo: todo status oferecido existe em VAGA_STATUS", () => {
-    for (const s of VAGA_STATUS_PUBLICACAO) expect(VAGA_STATUS).toContain(s);
-  });
-});
+/*
+ * ─ A LISTA DA PUBLICAÇÃO SAIU DAQUI (onda B2) ─────────────────────────────────────────────────
+ *
+ * `VAGA_STATUS_PUBLICACAO` era uma constante montada por EXCLUSÃO sobre o vocabulário fixo, e virou
+ * `statusDePublicacao(catalogo)`, uma consulta ao flag `daTrilha`. Os casos que estavam aqui (não
+ * oferece Fechada, não oferece Cancelada, não oferece Rascunho, oferece Aberta, é derivada e não
+ * escrita à mão) NÃO foram perdidos: eles vivem agora em
+ * `as-vaga-status-fonte-unica.comportamental.spec.ts`, escrito pelo `tester` ANTES do código, que
+ * ainda acrescenta os dois casos que a lista fixa não tinha como cobrir (o status LIVRE novo marcado
+ * `daTrilha` entra sozinho, e o `daTrilha` inativo sai).
+ */
 
 describe("podeDecidir (a porta do desfecho, que NÃO é a porta do movimento)", () => {
   it("o ALOCADO ainda decide, e é assim que ele chega em Enviado Para Admissão", () => {
@@ -262,15 +269,52 @@ describe("fraseDoAceite (a trilha que a tela PROMETIA e não mostrava)", () => {
     expect(fraseDoAceite("REENTRADA", null)).toContain("já tinha sido encerrado");
   });
 
+  /**
+   * ─ A REABERTURA SEM ORIGEM, E ESTE TESTE NASCEU DE UM VETO DA AUDITORIA ──────────────────────
+   *
+   * O DEFEITO ERA INVISÍVEL E O TESTE ANTIGO O CARIMBAVA: `REABERTURA_SEM_ORIGEM` caía no
+   * `return null`, e a asserção do "valor desconhecido" usava justamente esse valor, com o nome
+   * `GUARDA_QUE_AINDA_NAO_EXISTE`. Ou seja, a suíte AFIRMAVA como correto o aceite que a onda
+   * passou a gravar não aparecer em lugar nenhum. O valor desconhecido volta a ser um valor que de
+   * fato não existe, e o aceite real ganha asserção própria.
+   *
+   * SEM A LINHA NOVA EM `fraseDoAceite`, os dois testes abaixo falham.
+   */
+  it("a reabertura sem origem tem frase, e sem ela o aceite fica invisível na ficha", () => {
+    const frase = fraseDoAceite("REABERTURA_SEM_ORIGEM", null);
+    expect(frase).not.toBeNull();
+    expect(frase).toContain("não sabia");
+  });
+
+  /* A FRASE PRECISA DIZER QUE FOI UMA ESCOLHA, e não uma reversão: é a diferença entre os dois
+     caminhos da reabertura, e é o que quem abrir a ficha daqui a seis meses tem de entender sem
+     consultar o banco. */
+  it("a frase diz que a volta foi ESCOLHA de quem reabriu, nunca reversão de um registro", () => {
+    const frase = fraseDoAceite("REABERTURA_SEM_ORIGEM", null) as string;
+    expect(frase).toContain("escolha nova");
+    expect(frase).toContain("não a reversão");
+    // Ela não pode prometer o que só o caminho COM origem entrega.
+    expect(frase).not.toContain("exatamente");
+  });
+
+  /* O NÚMERO NÃO MUDA ESTA GUARDA: ela não tem contagem a congelar, ao contrário da do banco. */
+  it("a reabertura ignora o número, que nesta guarda nasce nulo", () => {
+    expect(fraseDoAceite("REABERTURA_SEM_ORIGEM", 7)).toBe(
+      fraseDoAceite("REABERTURA_SEM_ORIGEM", null),
+    );
+  });
+
   it("linha SEM aceite não inventa frase, que é o caso da esmagadora maioria", () => {
     expect(fraseDoAceite(null, null)).toBeNull();
     expect(fraseDoAceite(undefined, 5)).toBeNull();
-    expect(fraseDoAceite("GUARDA_QUE_AINDA_NAO_EXISTE", 2)).toBeNull();
+    // Um valor que REALMENTE não existe, e não mais o que a onda B3 passou a gravar.
+    expect(fraseDoAceite("GUARDA_QUE_NUNCA_FOI_GRAVADA", 2)).toBeNull();
   });
 
   it("§A.11: nenhuma frase daqui usa travessão", () => {
     expect(fraseDoAceite("BANCO_COM_OFICIAIS_ABERTAS", 2)).not.toContain("—");
     expect(fraseDoAceite("REENTRADA", null)).not.toContain("—");
+    expect(fraseDoAceite("REABERTURA_SEM_ORIGEM", null)).not.toContain("—");
   });
 });
 

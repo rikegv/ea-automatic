@@ -11,6 +11,8 @@ import { SITUACOES_DE_SAIDA, ocupaPosicao } from "../../domain/candidatura";
 import { CandidatosService } from "./candidatos.service";
 import { asCandidaturaEtapas, asCandidaturas } from "../../db/schema";
 import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
+import { catalogoDeStatusFingido } from "../vaga-status/vaga-status-catalogo.fake";
+import type { AuthUser } from "../../auth/auth.types";
 
 /**
  * ─ AS GUARDAS DE SITUAÇÃO: quem se move, quem é aprovado, e por qual porta cada saída entra ─────
@@ -39,6 +41,18 @@ import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
  */
 
 const AGORA = new Date("2026-09-08T12:00:00.000Z");
+
+/**
+ * QUEM REGISTRA A SAÍDA. O método passou a receber o usuário INTEIRO, e não só o id, porque
+ * desvincular quem está ALOCADO virou ação de MASTER (a posição dele já foi entregue). Aqui o COMUM
+ * basta: nenhuma destas chamadas desvincula um alocado, e a autoria continua saindo de `user.id`.
+ */
+const consultor = (id: string): AuthUser => ({
+  id,
+  email: "consultor@soulan.com.br",
+  papel: "COMUM",
+  senhaTemporaria: false,
+});
 
 interface Escrita {
   tabela: unknown;
@@ -132,7 +146,7 @@ function makeDb(cenario: {
     query: { asCandidaturas: { findFirst: vi.fn().mockResolvedValue(c) } },
   };
 
-  return { service: new CandidatosService(db as never, catalogoDeEtapasFingido() as never), ordem, updates, inserts };
+  return { service: new CandidatosService(db as never, catalogoDeEtapasFingido() as never, catalogoDeStatusFingido() as never), ordem, updates, inserts };
 }
 
 const doUpdate = (updates: Escrita[]) =>
@@ -288,7 +302,7 @@ describe("aprovar: não desfaz entrega, e não ressuscita quem saiu", () => {
     await service.registrarSaida(
       "cand-1",
       { situacao: "ENVIADO_PARA_ADMISSAO", motivo: "foi para a esteira" },
-      "user-1",
+      consultor("user-1"),
     );
     expect(doUpdate(updates)).toMatchObject({ situacao: "ENVIADO_PARA_ADMISSAO" });
   });
@@ -316,7 +330,7 @@ describe("registrarSaida: quem escolhe a porta é a RÉGUA, não o nome da situa
     "%s vai pelo caminho SIMPLES: libera posição, então não precisa travar a vaga",
     async (situacao) => {
       const { service, ordem, updates } = makeDb({ candidatura: candidatura({ situacao: "ATIVO" }) });
-      await service.registrarSaida("cand-1", { situacao, motivo: "não seguiu" }, "user-1");
+      await service.registrarSaida("cand-1", { situacao, motivo: "não seguiu" }, consultor("user-1"));
 
       expect(ordem).toEqual([]);
       expect(doUpdate(updates)).toMatchObject({ situacao, motivoDescarte: "não seguiu" });
@@ -331,7 +345,11 @@ describe("registrarSaida: quem escolhe a porta é a RÉGUA, não o nome da situa
         posicoesOficiais: 5,
         ocupadas: 1,
       });
-      await service.registrarSaida("cand-1", { situacao, motivo: "foi para a esteira" }, "user-1");
+      await service.registrarSaida(
+        "cand-1",
+        { situacao, motivo: "foi para a esteira" },
+        consultor("user-1"),
+      );
 
       expect(ordem).toEqual(["trava-vaga", "conta-ocupadas"]);
       expect(doUpdate(updates)).toMatchObject({ situacao });
@@ -357,7 +375,7 @@ describe("registrarSaida: quem escolhe a porta é a RÉGUA, não o nome da situa
     });
 
     const erro = await cheia.service
-      .registrarSaida("cand-1", { situacao: "ALOCADO" as never, motivo: "alocado" }, "user-1")
+      .registrarSaida("cand-1", { situacao: "ALOCADO" as never, motivo: "alocado" }, consultor("user-1"))
       .catch((e) => e);
 
     expect(cheia.ordem).toEqual(["trava-vaga", "conta-ocupadas"]);
@@ -374,7 +392,7 @@ describe("registrarSaida: quem escolhe a porta é a RÉGUA, não o nome da situa
     await comEspaco.service.registrarSaida(
       "cand-1",
       { situacao: "ALOCADO" as never, motivo: "alocado" },
-      "user-1",
+      consultor("user-1"),
     );
     expect(comEspaco.ordem).toEqual(["trava-vaga", "conta-ocupadas"]);
     expect(doUpdate(comEspaco.updates)).toMatchObject({ situacao: "ALOCADO" });
