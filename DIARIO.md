@@ -14502,3 +14502,433 @@ E `regiao_estado` **é a UF e PERMANECE**: eu escrevi "a ser substituída" no ma
    alvo padrão delas é produção.
 4. **O arquivo da Central de Vagas passou de 4.800 linhas** e concentra a trilha de 38 campos, a
    tabela, os filtros, a ficha e sete modais. É onde três frentes seguidas colidiram, inclusive hoje.
+
+## 12/09/2026: A ONDA D, e o obrigatório que ia travar TODA publicação com o teste verde
+
+**ESTADO: na HOMOLOGAÇÃO (3120), NADA COMMITADO.** Produção segue na Onda B (`1223b2b`, 106
+migrations); a Onda C está commitada em `main` (`03fb839`) e **não** subiu para produção. A Onda D
+**não tem migration nenhuma**. Gate: **backend 3.047/3.047, frontend 650/650**, typecheck limpo nos
+dois. Mapa de alcance: `docs/MAPA-ONDA-D.md`. Screenshots: no scratchpad da sessão.
+
+### 1. AS SETE PEÇAS
+
+**A engrenagem.** O botão da linha trocou o olho pela engrenagem e virou "Gestão Da Vaga" (§A.24).
+
+**A coluna Cargo saiu da tabela**, e só ela: o filtro multiselect e a busca global por cargo
+**ficaram** (decisão do diretor). A §A.30 diz que nem toda coluna vira filtro; não diz o contrário.
+
+**Cliente e Previsão de entrega viraram OBRIGATÓRIOS para publicar**, por duas entradas na régua
+declarativa do `shared-types`. O rascunho continua salvando sem os dois (§A.3 regra 5).
+
+**O nome do cliente perdeu o código**, e ganhou desempate onde o nome não basta.
+
+**Três consertos que a reauditoria pediu** e o coordenador fez: a ordem da lista, e dois comentários
+que ele mesmo tinha escrito errado.
+
+### 2. O VETO SOBRE O MAPA IA SALVAR UMA RODADA, E SALVOU
+
+**A onda, construída como eu a escrevi, travaria a publicação de TODA vaga, para sempre, com o
+typecheck VERDE.** Eu escrevi no mapa que "acrescentar obrigatório é acrescentar UMA entrada". **São
+três.** A tela não passa o formulário inteiro para a régua: ela monta um objeto com **lista branca de
+campos** (`page.tsx:1442`). A régua indexa por TEXTO e todo campo do contrato é opcional, então campo
+não passado chega `undefined`, é lido como vazio, e a pendência fica listada para sempre. O `enviar()`
+barra antes de qualquer chamada: **nenhuma vaga publicaria pela tela, nunca.**
+
+É o mesmo modo de falha que a **Onda C já tinha documentado** num spec, e que eu repeti três semanas
+depois. O `seguranca` o achou **sem uma linha de código existir**, lendo a tela contra o contrato.
+
+**O segundo veto derrubou uma afirmação minha que sustentava a decisão do diretor.** Eu escrevi que,
+nos clientes de nome repetido, "o único campo que difere além do código é o CNPJ". **Falso:** sete
+grupos, **16 clientes ativos**, repetem **nome E CNPJ**, e cinco desses pares são `X` contra
+`X-TEMP.`, a operação de temporários do mesmo CNPJ. Neles **o `cod_cliente` é o único dado que os
+separa no sistema inteiro**, e era exatamente o token que a onda ia remover.
+
+### 3. A MEDIÇÃO QUE MUDOU O PEDIDO, ANTES DE CONSTRUIR
+
+O pedido era "o nome do cliente sem o código, em todo lugar". Medindo a base **antes** de escrever:
+dos **232 clientes ativos**, **138 estão em 27 nomes repetidos**, e "RAIA CAGC CORIFEU" tem **52
+linhas idênticas** (mesma razão social, região vazia). O campo viraria obrigatório no mesmo movimento
+em que o seletor deixaria de saber distinguir 52 opções iguais.
+
+O diretor escolheu a saída do meio: **nome puro, desempate só onde o nome não basta.** Medido pelo
+código, contra a produção: **94** opções mostram só o nome, **122** ganham o CNPJ, **16** ganham o
+código. O apoio vai no `hint` do `Combobox`, que já existia para isto: **nenhuma linha do componente
+compartilhado foi tocada** (§A.26).
+
+**E a metade fácil já estava pronta há meses:** a coluna Cliente da tabela e o modal **nunca**
+mostraram o código. O código aparecia em UM lugar, o rótulo do endpoint `opcoes`, que alimenta o
+seletor E o filtro. Uma linha do backend corrigiu os dois, com consistência por construção.
+
+### 4. A REAUDITORIA DO CÓDIGO DERRUBOU O PRÓPRIO PARECER ANTERIOR DO AUDITOR
+
+Ele havia dito que o `reabrir` publicaria vaga sem passar pela régua. **Mediu e se corrigiu:** o
+`reabrir` exige papel CANCELAMENTO na origem, e o `cancelar` exige papel ABERTURA, então **rascunho
+nunca é cancelado e portanto nunca é reaberto**. O `moverStatus` também recusa origem RASCUNHO, com
+mensagem própria. **Nenhuma porta publica vaga que não passou pela régua.**
+
+**O que ele CONFIRMOU é mais incômodo, e não tem conserto:** a invariante "ABERTA implica obrigatórios
+preenchidos" **já está violada agora**, por dado histórico. **2 das 3 vagas de produção estão ABERTA
+com `data_limite` nulo**, e o `atualizar` recusa vaga publicada: elas vão dizer "não informado" no SLA
+**para sempre**. Não vira risco operacional, e isso foi medido e não suposto: `slaDaVaga` trata o nulo
+na primeira linha, `SEM_PREVISAO` é opção do filtro, a ordenação joga vazio por último, e **nenhum KPI
+agrega SLA**.
+
+Ele também provou o que o relatório não provava: que `clientes.cnpj` **não pode** carregar um CPF (232
+de 232 têm 14 dígitos, zero têm 11), antes de aprovar o campo novo no payload.
+
+### 5. O DEFEITO QUE SÓ A ORDEM DA LISTA DENUNCIAVA
+
+Tirar o código do rótulo quebrou uma coisa que ninguém pediu e ninguém veria em teste: a consulta
+ordenava por `razao_social` e a tela passou a mostrar `nome_operacao`. **232 opções numa ordem que,
+para o olho, é aleatória.** A busca salva quem sabe o que procura; quem rola a lista para achar ficava
+sem nada. O `coalesce` do `orderBy` agora repete **exatamente** a régua do rótulo: ordenar por um texto
+e mostrar outro é o defeito, e reintroduzi-lo pelo fallback seria o mesmo erro com outra roupa.
+
+### 6. DOIS COMENTÁRIOS QUE EU ESCREVI ERRADO, NO MESMO ARQUIVO, NO MESMO DIA
+
+O `shared-types` tem dono único, o coordenador, e foi o coordenador quem sujou os dois:
+
+- **O `Date` que não existe.** Escrevi que o backend "já converteu para `Date`". O `backend` mediu: o
+  helper `data()` devolve **string**, a coluna é `date` do Postgres e o drizzle a entrega como string.
+  Nunca houve conversão.
+- **O `Invalid Date` que a régua leria como PREENCHIDO.** Ao corrigir o primeiro, escrevi que "nenhuma
+  forma de `Date` entra como falso preenchido". `String(new Date("x"))` é `"Invalid Date"`, que não é
+  vazio: é precisamente um falso preenchido. Eu tinha **alargado o tipo com uma justificativa que diz
+  o oposto do comportamento**. É inalcançável hoje (o DTO gateia com `@IsISO8601()`), e por isso o
+  auditor não vetou, mas o comentário é o que a próxima pessoa lê para decidir.
+
+### 7. O QUE A PROVA VISUAL PEGOU, E O QUE ELA CONFIRMOU
+
+A tabela no build real: **10 colunas**, rolagem **ZERO**, `scrollWidth` igual a `clientWidth` em
+**todas** as células, o botão com a engrenagem. O piso caiu de `1225px` para **`1103px`**, o mínimo
+medido.
+
+**E o `frontend` descobriu que o 1225 JÁ ERA HERANÇA antes desta onda:** hoje o mínimo real é 1169px,
+porque os 1225 foram medidos em 09/09 sobre **quatro** vagas e a homologação tem **uma**. Parte da
+queda é a coluna que saiu, parte é a base que encolheu. Ele também mediu o que quase ninguém mediria:
+**o rótulo novo CUSTA 19,34px** na coluna que estoura, e Cargo devolve 86,61px. Medir só o fim
+esconderia que parte do ganho foi gasta no botão.
+
+A trilha de abertura, provada ao vivo: asterisco nos dois campos, as duas pendências listadas
+(`falta o Cliente`, `falta a Previsão de entrega`), **clicáveis**, e o clique caindo no passo certo
+com a âncora presente (passo 1 para o cliente, passo 2 para a previsão, que mora em outro passo).
+
+### 8. O QUE A ONDA ENSINOU
+
+- **Auditar o mapa antes pagou pela terceira onda seguida**, e desta vez o achado não era sutil: era
+  a onda inteira não funcionando, com o compilador verde e a suíte verde.
+- **O `tester` entrando junto com a construção tirou ele do caminho crítico de novo**, e ele entregou
+  o teste que mata a CLASSE do defeito, não o caso: preenche todo campo de `VAGA_OBRIGATORIOS` no
+  objeto da tela e exige zero pendências. **O próximo obrigatório que alguém acrescentar sem editar a
+  lista branca fica vermelho sozinho.**
+- **Medir a base antes mudou o PEDIDO, não a implementação.** "Só o nome" era impossível de operar em
+  57% dos clientes, e isso não aparece em nenhuma leitura de código.
+- **O coordenador errou quatro vezes e foi pego nas quatro:** "uma entrada" (era três), "só o CNPJ
+  difere" (eram 16 clientes sem esse desempate), o `Date` inventado e o `Invalid Date` invertido.
+  Nenhuma das quatro apareceria em teste verde, e três estavam em **comentário**, que é o que a
+  próxima sessão lê como verdade.
+- **O auditor derrubou o próprio parecer anterior**, e disse isso com todas as letras. Vale mais do
+  que ter acertado da primeira vez.
+
+### 9. ACHADO FORA DA ONDA: a homologação estava ATRÁS da produção
+
+A árvore da 3120 estava **6 arquivos de backend atrás** da principal, e um deles era o
+`etapas-funil.service.ts` **sem a guarda da etapa fantasma** aprovada em 10/09. Validar a Onda D ali
+seria validar contra uma ficção. Sincronizado junto com a publicação, e declarado.
+
+### 10. PENDENTE DO DIRETOR
+
+1. **Validar a Onda D na 3120.**
+2. **O código volta à vista de 16 clientes**, nos pares `X`/`X-TEMP.`, porque não existe outro
+   desempate. Nunca como prefixo do nome: sempre como apoio discreto. E o `hint` aparece **também no
+   gatilho** depois da escolha, então são dois lugares, não um.
+3. **O piso de 1103px depende do dado vivo.** O conservador seria 1158px.
+4. **Rótulo em branco tratado como ausência**: implementado por decisão minha, fora da letra da OST.
+   Zero clientes em branco hoje; é defesa, não conserto.
+5. **Registrado, não construído:** `vagas.substituido_cpf` sem TTL (exposição **zero** hoje, 0
+   rascunhos nas duas bases, mas a §A.18 item 2 muda a conta); o comentário do schema que afirma um
+   CHECK de `data_limite` que **não existe**; nenhum teste tranca a FORMA do payload do `opcoes()`; e
+   a FK de `cod_cliente` não confere `ativo`.
+
+---
+
+## 12/09/2026: O PONTO DE RETOMADA DA ONDA D, escrito para a sessão que não viveu esta
+
+O diretor derrubou a sessão para validar depois. **Tudo o que a próxima sessão precisa está aqui, e
+nada precisa ser redescoberto.** A onda está NO AR na 3120 e NADA foi commitado.
+
+### R.0. O ESTADO, em uma tabela
+
+| coisa | onde está |
+|---|---|
+| `HEAD` da `main` | `03fb839` (a Onda C), **inalterado pela Onda D** |
+| a Onda D | **working tree, não commitada** |
+| produção (3010) | **CORRIGIDO EM 12/09, veja R.11: ela JÁ TEM a Onda C.** A linha original dizia "Onda B, commit `1223b2b`, 106 migrations, intocada pela C e pela D", e estava ERRADA |
+| homologação (3120) | **Onda C + Onda D publicadas**, build de 12/09 |
+| migrations da Onda D | **NENHUMA.** A onda não tem migration, não tem coluna nova, não tem seed |
+| mapa de alcance | `docs/MAPA-ONDA-D.md` (com as correções da auditoria na §8) |
+| screenshots e scripts | `/home/henrique/ost-as-onda-d-prints/` (9 prints + `scripts/`) |
+| gate | backend **3.047/3.047**, frontend **650/650**, typecheck limpo nos dois |
+
+### R.1. OS 12 ARQUIVOS DA ONDA D, para o `git add` NOMINAL (§A.14/§A.21 passo 3)
+
+**NUNCA `git add .`**: o working tree tem 17 documentos de OUTRAS frentes soltos (`docs/DESENHO-AS-*`,
+`docs/INVESTIGACAO-*`, `docs/PLANO-*`, `logosoulan.png`) que não são desta onda.
+
+**Modificados (7):**
+```
+apps/backend/src/as/vagas/vagas.service.ts
+apps/backend/src/as/vagas/vagas.rastro-reducao-na-trilha.spec.ts
+apps/backend/src/domain/vaga-obrigatorios.spec.ts
+apps/backend/src/domain/vaga-pendencias.spec.ts
+apps/frontend/src/app/(app)/as/vagas/page.tsx
+packages/shared-types/src/index.ts
+DIARIO.md
+```
+**Novos (5):**
+```
+docs/MAPA-ONDA-D.md
+apps/backend/src/domain/vaga-obrigatorios-onda-d.cobertura-independente.tester.spec.ts
+apps/backend/src/as/vagas/vagas.obrigatorios-onda-d.cobertura-independente.tester.spec.ts
+apps/backend/src/as/vagas/vagas.rotulo-cliente-onda-d.cobertura-independente.tester.spec.ts
+apps/frontend/src/lib/as-vagas-onda-d.comportamental.tester.spec.ts
+```
+
+**`apps/frontend/src/lib/as-vagas-lista.filtros.spec.ts` NÃO É DESTA ONDA.** Ele aparece como novo no
+`git status` e veio de outra frente. **Não commitar junto.**
+
+### R.2. O QUE MUDOU, ARQUIVO POR ARQUIVO
+
+**`packages/shared-types/src/index.ts`** (dono único: o coordenador, §A.39). Duas entradas em
+`VAGA_OBRIGATORIOS`: `codCliente` ("Cliente", artigo "o", passo 0, âncora `vaga-cliente`, **primeira**
+da lista) e `dataLimite` ("Previsão de entrega", artigo "a", passo 1, âncora `vaga-previsao-entrega`,
+**depois** de `dataAbertura`). Dois campos em `VagaCamposObrigatorios`: `codCliente?: string | null` e
+`dataLimite?: string | Date | null`.
+
+**`apps/backend/src/as/vagas/vagas.service.ts`.** Quatro edições, todas no `opcoes()`: `cnpj` no tipo
+do item de cliente, `cnpj` no `select`, o `rotulo` virando `c.nomeOperacao?.trim() || c.razaoSocial`
+(sem o prefixo do código, e branco tratado como ausência), `cnpj` no objeto devolvido. Mais o
+`orderBy` passando de `razaoSocial` para o `coalesce` que repete a régua do rótulo.
+
+**`apps/frontend/src/app/(app)/as/vagas/page.tsx`.** `OpcaoCliente` ganhou `cnpj`; `pendenciasAgora`
+ganhou as duas linhas da lista branca; `optClientes` ganhou o desempate (`hint` e `busca`); saíram o
+`ColunaOrdenavel chave="cargo"`, a `<td>` do cargo e a entrada `{ chave: "cargo" }` de
+`colunasOrdenaveis`; os dois `colSpan={11}` viraram `10`; o botão virou `cog` + "Gestão Da Vaga"; o
+`min-w-[1225px]` virou `min-w-[1103px]`; Cliente ganhou `obrigatorio`, `id="vaga-cliente"` e o
+placeholder "Selecionar cliente"; Previsão de entrega ganhou `obrigatorio` e
+`id="vaga-previsao-entrega"`; três comentários que passaram a mentir foram corrigidos.
+
+**Os 3 specs modificados** são fixtures: `codCliente: "55619"` e `dataLimite: "2026-09-30"` na "vaga
+completa" de cada um. **Não afrouxei régua nenhuma:** os 4 casos do `rastro-reducao` reprovavam com
+*"falta o Cliente; falta a Previsão de entrega"*, que era a régua nova funcionando.
+
+### R.3. COMO REPUBLICAR A HOMOLOGAÇÃO (o passo a passo inteiro, sem adivinhação)
+
+A homologação **não** tem script de deploy: ela é a worktree `/home/henrique/apps/ea-homolog`
+(branch `homolog`, **54 commits atrás da `main` de propósito**), sincronizada por CÓPIA de arquivo, e
+buildada e servida por `systemd --user`.
+
+```bash
+# 1. copiar os arquivos da main para a worktree da homologação
+cd /home/henrique
+for f in "apps/backend/src/as/vagas/vagas.service.ts" \
+         "apps/frontend/src/app/(app)/as/vagas/page.tsx" \
+         "packages/shared-types/src/index.ts"; do
+  cp "apps/ea-automatic/$f" "apps/ea-homolog/$f"
+done
+
+# 2. buildar NA WORKTREE DA HOMOLOGAÇÃO (nunca na principal)
+cd /home/henrique/apps/ea-homolog
+pnpm --filter @ea/shared-types build      # OBRIGATÓRIO: const nova chega undefined sem isto
+pnpm --filter backend build
+BACKEND_ORIGIN=http://127.0.0.1:3111 pnpm --filter frontend build   # SEM ISTO ELA APONTA PARA PRODUÇÃO
+
+# 3. reiniciar e conferir
+systemctl --user restart ea-homolog-backend ea-homolog-frontend
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:3111/api/health   # 200
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:3120/            # 200
+```
+
+**CONFERIR O `dist`, NÃO A FONTE** (a lição de 11/09, quando o coordenador afirmou que algo estava
+publicado olhando o `200` de um build de 69 minutos antes):
+```bash
+stat -c '%y' apps/ea-homolog/apps/backend/dist/as/vagas/vagas.service.js   # tem de ser DEPOIS da fonte
+grep -c "coalesce(nullif(btrim" apps/ea-homolog/apps/backend/dist/as/vagas/vagas.service.js  # 1
+```
+
+**NUNCA rodar `next dev` ou `next build` em `apps/ea-automatic/apps/frontend`**: clobbera o `.next` do
+serviço de PRODUÇÃO e ele passa a servir 500.
+
+### R.4. COMO REFAZER A PROVA VISUAL (três armadilhas, todas resolvidas aqui)
+
+Os scripts estão em `/home/henrique/ost-as-onda-d-prints/scripts/`. Rodar **de dentro do diretório do
+npx que tem o playwright instalado**, com a biblioteca do sistema no caminho:
+
+```bash
+PW=/home/henrique/.npm/_npx/705bc6b22212b352      # é aqui que o playwright está instalado
+L=/home/henrique/.ea-harness/libs/root            # libatk e cia., baixadas sem sudo
+SEN=$(grep -E "^senha +: " ~/SENHA-HOMOLOG-SUPERADMIN.txt | head -1 | sed -E 's/^senha +: *//')
+cp /home/henrique/ost-as-onda-d-prints/scripts/ondad-prova.mjs "$PW/"
+cd "$PW" && LD_LIBRARY_PATH="$L/usr/lib/x86_64-linux-gnu:$L/lib/x86_64-linux-gnu" \
+  HML_SENHA="$SEN" OUT=/tmp/prints node ondad-prova.mjs
+```
+
+**As três armadilhas, para ninguém pagar de novo:**
+1. **`Cannot find package 'playwright'`**: o pacote não está no repositório, só naquele diretório do
+   cache do npx. Copiar o script para lá, não instalar nada.
+2. **`libatk-1.0.so.0: cannot open shared object file`**: o Chromium precisa do `LD_LIBRARY_PATH`
+   apontando para `~/.ea-harness/libs/root`.
+3. **O login falha com a senha certa**: `grep -i "^senha"` casa PRIMEIRO com o cabeçalho do arquivo
+   ("SENHA ATUAL DA CONTA..."), e devolve 54 caracteres de lixo. O padrão certo é `^senha +: `.
+   Conferir o comprimento do que saiu antes de gastar a corrida. Conta: `admin@homolog.local`.
+4. Os scripts já interceptam os dois modais que renascem e bloqueiam o Playwright
+   (`/api/diagnostico/alerta` e `/api/admissoes/aguardando-liberacao/contagem`).
+5. O botão de publicar da trilha chama-se **"Abrir Vaga"**, não "Publicar", e mora no **passo 5 de 5**.
+
+### R.5. O QUE JÁ FOI PROVADO NO BROWSER (não precisa refazer, mas está tudo em print)
+
+| print | o que prova |
+|---|---|
+| `01-tabela-1600.png` | 10 colunas, Cargo fora, engrenagem + "Gestão Da Vaga", cliente "BMB" sem código |
+| `02-abertura-passo0.png` | **Cliente \*** com asterisco e placeholder "Selecionar cliente" |
+| `03-seletor-desempate.png` | nome puro à esquerda, CNPJ discreto à direita, e uma linha caindo no código |
+| `04-busca-por-codigo.png` | digitar "51525" ainda acha "SONOVA", mesmo sem o código no rótulo |
+| `05-pendencias.png` | as duas pendências novas listadas e clicáveis |
+| `06-` e `07-` | clicar cai no passo certo, com a âncora presente (passo 1 e passo 2) |
+| `08-ordem-corrigida.png` | a lista de clientes em ordem alfabética do que se LÊ |
+
+Medição da tabela, no build real, a 1600px com o menu aberto: **10 colunas**, largura 1254px, caixa
+útil 1254px, **rolagem 0**, `scrollWidth - clientWidth` **zero em todas as células**, mínimo real
+1061,88px contra piso declarado de 1103px.
+
+### R.6. A SEQUÊNCIA DEPOIS QUE O DIRETOR VALIDAR (§A.25, na ordem, sem atalho)
+
+1. **Gate verde de novo** (a árvore pode ter mudado): `pnpm --filter backend test`,
+   `pnpm --filter frontend test`, `tsc --noEmit` nos dois.
+2. **A validação do diretor na tela** já é o gatilho; não pedir aval de novo.
+3. **Publicar em produção** (3010): **a Onda C JÁ ESTÁ LÁ** (veja R.11), então a subida é da Onda D
+   sozinha, e ela **não tem migration nenhuma**. Não há ensaio de migration a fazer; no lugar dele vão
+   um dump de segurança e o retrato de antes. **A ordem é frontend primeiro** (veja R.13).
+4. **Commit com `git add` NOMINAL**, os 12 arquivos da R.1, um a um.
+5. **Push**, com a flag `.claude/state/READY_*` criada **depois** dos passos 1 e 2, **em comando
+   separado** (o hook checa antes de rodar), e removida logo após.
+6. **Registro no DIARIO** do que subiu.
+
+### R.7. AS DECISÕES QUE ESTÃO ESPERANDO O DIRETOR
+
+1. **Validar a Onda D na 3120.**
+2. **O código do cliente volta à vista de 16 clientes**, e em DOIS lugares: na lista de opções e no
+   campo já preenchido (o `hint` do `Combobox` desenha nos dois). São os pares `X` contra `X-TEMP.`,
+   em que nome e CNPJ são idênticos. Os outros 216 nunca veem código: **94** só o nome, **122** nome +
+   CNPJ. Sem isso, 52 opções de "RAIA CAGC CORIFEU" ficam indistinguíveis num campo que a mesma onda
+   tornou obrigatório.
+3. **O piso da tabela: 1103px (medido) ou 1158px (conservador)?** Os 1225px anteriores já eram
+   herança: foram medidos sobre 4 vagas e a homologação tem 1. É uma linha em qualquer direção.
+4. **Rótulo de cliente em branco tratado como ausência**: implantado por decisão do coordenador, fora
+   da letra da OST. Zero clientes em branco hoje, é defesa e não conserto. Uma linha para tirar.
+5. **O filtro e a busca por cargo FICARAM** (você decidiu isto hoje). Saiu só a coluna.
+
+### R.8. REGISTRADO E NÃO CONSTRUÍDO (nada disso está no código, é dívida declarada)
+
+1. **`vagas.substituido_cpf` não tem TTL nenhum.** É tabela DIFERENTE de
+   `dados_vaga_folha.substituido_cpf`, que tem o expurgo de 48h da regra 10 do §A.3. A retenção foi
+   decisão do diretor em 22/08, com a justificativa da folha/eSocial. **Num rascunho que nunca
+   publica, essa finalidade não existe.** Exposição **ZERO hoje** (0 rascunhos e 0 CPFs gravados nas
+   duas bases), mas dois obrigatórios a mais tornam o rascunho recusado mais frequente, e a §A.18
+   item 2 (ligar o motor da esteira) é o que muda a conta.
+2. **Comentário FALSO no schema:** `apps/backend/src/db/schema/enums.ts:336` afirma que *"sazonal
+   EXIGE data limite, e isso é travado por CHECK no banco"*. **O CHECK não existe** (medido duas
+   vezes, por dois agentes: `pg_constraint` sobre `vagas` devolve só os quatro `ck_vagas_*` de
+   posições e forçamento). E ficou duplamente falso com a Onda D: a previsão deixou de ser exigência
+   do sazonal e passou a ser de toda vaga publicada.
+3. **Nenhum teste tranca a FORMA do payload do `opcoes()`.** A `razaoSocial` já está no `select`, e um
+   `...c` numa onda futura a vazaria sem quebrar teste. O conserto é um
+   `expect(Object.keys(cliente).sort()).toEqual([...])`.
+4. **A FK de `vagas.cod_cliente` não confere `ativo`**: um cliente inativo passa a régua e passa o
+   banco. Inalcançável pela tela, que filtra `ativo` no `opcoes()`.
+5. **A chave do desempate é montada com `?? ""` e consultada sem ele** (`page.tsx`, `optClientes`). Só
+   não vira defeito porque o `!!c.cnpj` curto-circuita antes. Correto por sorte, não por construção.
+6. **As duas cópias dormentes da régua** (`domain/vaga-obrigatorios.ts` e `lib/as-linhas-servico.ts`)
+   viraram repasse literal desde que a linha de serviço migrou para o `shared-types`. Apagá-las é OST
+   própria, e alcança os dois lados.
+7. **A importação da base histórica de vagas** segue sendo o escritor futuro que não passa por porta
+   nenhuma. Com a Onda D ela ganha uma exigência a mais: vaga importada sem cliente ou sem previsão
+   nasce fora da régua, do mesmo jeito que as 2 vagas de hoje.
+
+### R.9. O ACHADO DE INFRAESTRUTURA, e ele não é da onda
+
+A worktree da homologação estava **6 arquivos de backend ATRÁS** da principal
+(`as/etapas/etapas-funil.{service,fake-db,inativacao.spec}.ts` e
+`as/vaga-status/{vaga-status.service,vaga-status.dto,vaga-status.fake-db,vaga-status-catalogo.fake}.ts`),
+e entre eles o `etapas-funil.service.ts` **sem a guarda da etapa fantasma** aprovada em 10/09. Foram
+sincronizados junto com esta publicação. **Depois da sincronização, as duas árvores estão idênticas em
+`apps/backend/src`, `apps/frontend/src` e `packages/shared-types/src`**, conferido por `diff -rq`.
+
+Isto é a mesma defasagem que quase custou uma rodada na Onda B3, e ela volta porque a sincronização é
+manual, por cópia. **Vale a pena, um dia, virar script**; não virou hoje porque não é a OST.
+
+### R.10. DUAS COISAS QUE A PRÓXIMA SESSÃO NÃO DEVE REFAZER
+
+1. **Não remedir a base de clientes.** Está tudo medido e registrado: 232 ativos, 27 nomes repetidos
+   cobrindo 138 clientes, maior grupo com 52, 7 grupos de nome+CNPJ idênticos cobrindo 16 clientes, 11
+   com `nome_operacao` nulo, 0 em branco, 0 sem CNPJ em produção, 232 de 232 com 14 dígitos.
+2. **Não reabrir a discussão do `reabrir`.** A primeira auditoria disse que ele publicava vaga sem
+   régua; a reauditoria **derrubou o próprio parecer** medindo: o `reabrir` exige papel CANCELAMENTO
+   na origem e o `cancelar` exige papel ABERTURA, então rascunho nunca é cancelado nem reaberto. O
+   `moverStatus` também recusa origem RASCUNHO. **Nenhuma porta publica vaga fora da régua.** O que
+   quebra a invariante é o dado histórico, e ele não tem conserto.
+
+### R.11. CORREÇÃO DE FATO: A ONDA C JÁ ESTAVA EM PRODUÇÃO, e eu registrei o contrário
+
+**O que eu escrevi nas seções anteriores deste mesmo dia está ERRADO**, e a correção vale mais que o
+erro, porque ela muda o tamanho de uma subida. Eu repeti, sem medir, a afirmação do registro de 11/09
+de que produção estava "intocada pela Onda C, nenhuma das tabelas novas existe lá".
+
+**MEDIDO por mim e reconferido, de forma independente, pelo `tester` e pelo `seguranca`:**
+
+| medição | resultado |
+|---|---|
+| migrations aplicadas em `ea_automatic` | **107** |
+| entradas no `_journal.json` | **107** |
+| arquivos `.sql` em `apps/backend/drizzle/` | **107** |
+| hash SHA-256 de `0104`, `0105` e `0106` | os três **presentes** na tabela, conferidos arquivo por arquivo |
+| `as_linhas_servico` / `as_cidades` | **5** linhas / **5.571** linhas |
+| `vagas.linha_servico_id` e `vagas.cidade_id` | presentes, `integer`, nulláveis |
+| `apps/backend/dist/main.js` | 11/09 **20:08:51**, e contém `asLinhasServico` |
+| `.next/BUILD_ID` | 11/09 20:09:52, serviços no ar desde 20:10:10 |
+
+Alguém publicou a Onda C em produção em **11/09 às 20:08**, depois que o registro daquele dia foi
+escrito, e o registro nunca foi corrigido. **A consequência prática é boa: a subida da Onda D é SÓ
+CÓDIGO, com ZERO migration.**
+
+**A lição operacional é a mesma de 11/09, com outra roupa:** naquele dia o erro foi afirmar que algo
+estava publicado olhando o `200` do serviço; hoje o erro foi afirmar que algo NÃO estava publicado
+lendo o DIARIO. **Os dois se consertam do mesmo jeito: medir o `dist` e o banco, e nunca confiar no
+que o registro diz sobre o estado do ambiente.** Registro é história; ambiente é medição.
+
+### R.12. O ACHADO DO `seguranca` QUE MUDOU A URGÊNCIA DA SUBIDA
+
+O `packages/shared-types/dist/` **foi reconstruído em 12/09 às 13:21 com a régua da Onda D dentro**, e
+o backend de produção resolve `@ea/shared-types` **em RUNTIME**, pelo `dist` do pacote (58 arquivos do
+`dist` do backend fazem `require` dele). O processo no ar desde 11/09 carregou a versão antiga na
+memória, e por isso ainda não cobrava os dois obrigatórios.
+
+**Isso deixou a produção com a arma engatilhada:** qualquer restart do backend a partir daquele
+momento, por qualquer motivo (crash, OOM, reboot da VM, um restart pedido por outra frente), ativaria
+a régua da Onda D **com a tela velha no ar**, que é exatamente a combinação ruim da R.13. Não era
+hipótese: era o estado do disco. **É mais um motivo para não deixar publicação pendurada pela metade.**
+
+### R.13. A ORDEM É FRONTEND PRIMEIRO, E NÃO É PREFERÊNCIA
+
+**Frontend NOVO + backend VELHO é SEGURO.** O `cnpj` é opcional no contrato da tela, e o desempate cai
+no `codCliente` quando ele falta. Com o backend velho o rótulo ainda vem `"55619 - NOME"`, todos os
+232 ficam únicos, nenhum apoio é desenhado, e a tela fica visualmente igual à de hoje. Nenhum campo
+novo é ENVIADO: a Onda D só acrescenta campo na RESPOSTA.
+
+**Frontend VELHO + backend NOVO é PERIGOSO.** A tela velha faz `label: c.rotulo` e nada mais: com o
+backend novo, o rótulo perde o código e **52 clientes viram 52 linhas idênticas num seletor**, sem
+apoio (a tela velha não sabe desenhar) e **sem busca por código** (a tela velha não passa o campo). E
+o campo é obrigatório para publicar. O risco não é estético: é gravar o cliente errado na vaga, que é
+o dano exato que a Onda D existe para evitar.
+
+**A janela entre os dois passos é a combinação segura, e é a única razão da ordem. Não inverter.**

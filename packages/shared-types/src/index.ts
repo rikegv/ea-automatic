@@ -1135,6 +1135,13 @@ export interface VagaPendencia {
 }
 
 export const VAGA_OBRIGATORIOS: readonly VagaPendencia[] = [
+  // O CLIENTE (Onda D), PRIMEIRO da lista porque é o primeiro campo da trilha e porque é ele que
+  // pré-preenche os padrões do resto (endereço, escala, contato do solicitante). Ele nasceu NULÁVEL
+  // de propósito em 25/08 ("vaga sem cliente vinculado entra e não trava nada"), e o diretor reverteu
+  // essa decisão em 12/09: toda vaga tem cliente. A coluna do banco continua nulável, e é isso que
+  // mantém o §A.3 regra 5 (não-bloqueio) de pé: o RASCUNHO segue salvando sem cliente, e quem cobra
+  // é a régua do PUBLICAR, que é a única que lê esta lista.
+  { campo: "codCliente", rotulo: "Cliente", artigo: "o", passo: 0, passoRotulo: "A Vaga", ancora: "vaga-cliente" },
   { campo: "codigo", rotulo: "Código da vaga", artigo: "o", passo: 0, passoRotulo: "A Vaga", ancora: "vaga-codigo" },
   { campo: "nomeDivulgacao", rotulo: "Nome de divulgação", artigo: "o", passo: 0, passoRotulo: "A Vaga", ancora: "vaga-nome-divulgacao" },
   { campo: "cargoId", rotulo: "Cargo", artigo: "o", passo: 0, passoRotulo: "A Vaga", ancora: "vaga-cargo" },
@@ -1151,6 +1158,19 @@ export const VAGA_OBRIGATORIOS: readonly VagaPendencia[] = [
   { campo: "linhaServicoId", rotulo: "Linha de serviço", artigo: "a", passo: 0, passoRotulo: "A Vaga", ancora: "vaga-linha-servico" },
   { campo: "status", rotulo: "Status", artigo: "o", passo: 0, passoRotulo: "A Vaga", ancora: "vaga-status" },
   { campo: "dataAbertura", rotulo: "Data de abertura", artigo: "a", passo: 1, passoRotulo: "Quem Pediu", ancora: "vaga-data-abertura" },
+  // A PREVISÃO DE ENTREGA (Onda D). O RÓTULO É O DA TELA e o campo é `dataLimite`: a coluna do banco
+  // se chama `data_limite` desde sempre e o rótulo mudou em 07/09 (item 19 do mapa do time), porque
+  // renomear coluna é migração destrutiva por ganho zero. Quem ler "dataLimite" aqui e "Previsão de
+  // entrega" na tela está lendo o mesmo campo, e o comentário existe para ninguém procurar um
+  // terceiro (o `data_prevista_inicio`, que é outro campo e só é escrito no FECHAMENTO).
+  //
+  // ELA RESOLVE O SLA DE ENTREGA **DA VAGA NOVA**, e "nova" não é enfeite: a coluna de SLA lê
+  // exatamente este campo, e cobrá-lo na publicação faz toda vaga daqui para a frente ter o dado.
+  // O PASSADO NÃO É ALCANÇADO, e isso foi MEDIDO: 2 das 3 vagas de produção estão ABERTA com
+  // `data_limite` nulo, e o `atualizar` recusa vaga já publicada, então elas vão dizer "não
+  // informado" PARA SEMPRE. A régua só é cobrada no ato de publicar; ninguém revalida o que já
+  // passou. Quem ler esta linha para prometer "o SLA deixou de ter buraco" estará errado.
+  { campo: "dataLimite", rotulo: "Previsão de entrega", artigo: "a", passo: 1, passoRotulo: "Quem Pediu", ancora: "vaga-previsao-entrega" },
 ];
 
 /**
@@ -1158,6 +1178,8 @@ export const VAGA_OBRIGATORIOS: readonly VagaPendencia[] = [
  */
 export interface VagaCamposObrigatorios {
   codigo?: string | null;
+  /** O CLIENTE (Onda D). `string` nos dois lados: é o `cod_cliente`, que é texto e não número. */
+  codCliente?: string | null;
   nomeDivulgacao?: string | null;
   cargoId?: string | null;
   posicoesOficiais?: number | string | null;
@@ -1175,6 +1197,38 @@ export interface VagaCamposObrigatorios {
   linhaServicoId?: number | string | null;
   status?: string | null;
   dataAbertura?: string | null;
+  /**
+   * A PREVISÃO DE ENTREGA (Onda D).
+   *
+   * ┌─ CORREÇÃO DE 12/09, e ela é sobre ESTE COMENTÁRIO ────────────────────────────────────────────┐
+   * │ A primeira redação afirmava que "o backend já converteu para `Date` antes de montar os campos │
+   * │ da trilha". **É FALSO, e foi medido pelo `backend`:** o helper `data()` de `vagas.service.ts`  │
+   * │ declara `(v: string | null | undefined): string | null` e devolve STRING; a coluna é `date` do │
+   * │ Postgres e o drizzle a entrega como string. Nunca houve conversão. Quem ler o comentário       │
+   * │ antigo para decidir se pode estreitar o tipo estaria decidindo sobre um comportamento que não  │
+   * │ existe.                                                                                        │
+   * └────────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * O TIPO CONTINUA ACEITANDO `Date`, e isso é decisão e não herança: ele é o contrato COMPARTILHADO,
+   * lido pelos dois lados, e estreitá-lo para `string` prenderia qualquer chamador futuro que tenha
+   * um `Date` em mãos (uma carga, uma importação, uma rota nova) a converter ANTES de perguntar o que
+   * falta. Conversão no meio da régua é onde `null`, `""` e `Invalid Date` deixam de significar a
+   * mesma coisa nos dois lados. O tipo é mais largo que o dado de hoje de propósito.
+   *
+   * `vazio()` resolve as três formas: `null`, `undefined` e string em branco.
+   *
+   * ┌─ O QUE A LARGURA CUSTA, e eu escrevi o CONTRÁRIO antes (correção do `seguranca`, 12/09) ──────┐
+   * │ A primeira redação dizia "nenhuma forma de `Date` entra como falso preenchido". **É FALSO.**   │
+   * │ `String(new Date("x")).trim()` é `"Invalid Date"`, que NÃO é vazio: a régua leria um           │
+   * │ `Invalid Date` como campo PREENCHIDO, que é precisamente um falso preenchido. O tipo foi       │
+   * │ alargado com uma justificativa que dizia o oposto do comportamento.                            │
+   * │                                                                                                │
+   * │ **É INALCANÇÁVEL HOJE, e é só por isso que a largura fica:** o DTO gateia com `@IsISO8601()`   │
+   * │ (`vagas.dto.ts`), e o formulário da tela guarda string. Quem um dia passar um `Date` cru para a │
+   * │ régua (uma carga, uma importação) precisa validá-lo ANTES, porque a régua não o fará.          │
+   * └────────────────────────────────────────────────────────────────────────────────────────────────┘
+   */
+  dataLimite?: string | Date | null;
 }
 
 /**

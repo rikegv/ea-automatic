@@ -479,6 +479,16 @@ export class VagasService {
     clientes: {
       codCliente: string;
       rotulo: string;
+      /**
+       * O CNPJ, QUE É O MATERIAL DO DESEMPATE (Onda D). Vem do cadastro de cliente (`clientes.cnpj`)
+       * e não é rótulo: quem desenha a segunda linha da opção é a TELA, que só tem como desempatar
+       * dois nomes iguais se o dado chegar até ela. Sem ele, a única saída do frontend seria remontar
+       * o rótulo com o código, que é justamente o que esta onda tirou.
+       *
+       * §A.6: CNPJ é documento de PESSOA JURÍDICA, não dado pessoal. É o mesmo campo que a tela de
+       * Clientes já mostra, e ele entra SOZINHO: nem razão social, nem endereço, nem nada além.
+       */
+      cnpj: string | null;
       enderecoPadrao: string | null;
       escalaPadrao: string | null;
       /**
@@ -552,12 +562,24 @@ export class VagasService {
           codCliente: clientes.codCliente,
           razaoSocial: clientes.razaoSocial,
           nomeOperacao: clientes.nomeOperacao,
+          // O DESEMPATE DO RÓTULO (Onda D). Lido aqui e devolvido cru; quem o desenha é a tela.
+          cnpj: clientes.cnpj,
           enderecoPadrao: clientes.enderecoPadrao,
           escalaPadrao: clientes.escalaPadrao,
         })
         .from(clientes)
         .where(eq(clientes.ativo, true))
-        .orderBy(asc(clientes.razaoSocial)),
+        // ─ A ORDEM É A DO QUE SE LÊ, e não a do que se lia ANTES (Onda D) ─────────────────────
+        // Ordenar por `razaoSocial` fazia sentido enquanto o rótulo começava pelo CÓDIGO e a razão
+        // era o texto: a lista saía previsível. Com o rótulo virando `nomeOperacao`, ordenar pela
+        // razão social entrega 232 opções numa ordem que, para o olho, é ALEATÓRIA ("BMB" antes de
+        // "AGV" porque a razão social de uma começa com A e a da outra com B). A busca resolve
+        // quem sabe o que procura; quem rola a lista para achar fica sem nada.
+        //
+        // O `coalesce` repete EXATAMENTE a régua do rótulo (`nomeOperacao?.trim() || razaoSocial`,
+        // logo abaixo): ordenar por um texto e mostrar outro é o defeito que esta linha conserta,
+        // e reintroduzi-lo pela porta do fallback seria o mesmo erro com outra roupa.
+        .orderBy(asc(sql`coalesce(nullif(btrim(${clientes.nomeOperacao}), ''), ${clientes.razaoSocial})`)),
       // O CADASTRO DE BENEFÍCIOS QUE JÁ EXISTE: a mesma tabela que alimenta a tela de Benefícios e a
       // ficha da admissão. `exigeValor` é o que diz se o campo de valor acende ao lado. Só os
       // ATIVOS: inativar no catálogo é exclusão lógica, e o inativo não se oferece em cadastro novo.
@@ -641,7 +663,38 @@ export class VagasService {
         const ultimo = solicitantePorCliente.get(c.codCliente);
         return {
           codCliente: c.codCliente,
-          rotulo: `${c.codCliente} - ${c.nomeOperacao ?? c.razaoSocial}`,
+          /*
+           * ─ O RÓTULO PERDEU O CÓDIGO, E GANHOU O CNPJ AO LADO (Onda D, decisão do diretor 12/09) ─
+           *
+           * POR QUE O CÓDIGO SAIU: a A&S não conhece o `cod_cliente`. Ele é chave de sistema, herdada
+           * do de/para da folha, e lê-lo antes do nome obrigava o consultor a decorar número para
+           * achar cliente. O nome é como o time chama o cliente, e é por ele que se procura.
+           *
+           * POR QUE O CNPJ ENTROU, e a razão é MEDIDA, não estética: dos 232 clientes ATIVOS (esta
+           * consulta filtra `ativo = true`), 138 estão em 27 nomes de operação REPETIDOS, e o maior
+           * grupo tem 52 rótulos IDÊNTICOS. Tirar o código sem pôr nada no lugar entregaria 52 opções
+           * indistinguíveis num campo que esta MESMA onda acabou de tornar OBRIGATÓRIO: o consultor
+           * passa a ser obrigado a escolher numa lista que não lhe diz o que escolher, e cliente
+           * errado na vaga vira cliente errado na admissão, que é a chave da régua documental e da
+           * folha. Em 7 desses grupos (16 clientes, os pares `X` contra `X-TEMP.`) o CNPJ também
+           * repete, e ali só o `codCliente` separa: por isso ele CONTINUA no payload, como `value` do
+           * seletor e como último desempate.
+           *
+           * O RÓTULO FICA LIMPO DE PROPÓSITO. Concatenar o CNPJ aqui seria trocar um prefixo técnico
+           * por outro, e em 94 clientes de nome único ele só faria ruído. O dado vai ao lado, no
+           * campo `cnpj`, e QUEM DECIDE O DESENHO É A TELA: nome puro quando o nome basta, desempate
+           * discreto só onde ele não basta.
+           *
+           * BRANCO É AUSÊNCIA, E NÃO UM RÓTULO (achado do `tester`, aprovado em 12/09). O `??`
+           * sozinho só pega `null`, então um `nome_operacao` com espaços produziria uma opção SEM
+           * TEXTO: invisível numa lista que esta MESMA onda tornou obrigatória, e impossível de
+           * escolher. A régua é a que `vagaPendencias` já aplica em todo lugar (`trim()` vazio é
+           * vazio), e é DEFESA, não conserto: medido hoje, dos 232 clientes ativos 11 têm o nome de
+           * operação NULO (o `?.` já os leva à razão social) e NENHUM o tem em branco. Custa uma
+           * expressão, e o dia em que custar mais é o dia em que já haveria opção muda na tela.
+           */
+          rotulo: c.nomeOperacao?.trim() || c.razaoSocial,
+          cnpj: c.cnpj,
           enderecoPadrao: c.enderecoPadrao,
           escalaPadrao: c.escalaPadrao,
           solicitanteNome: ultimo?.solicitanteNome ?? null,

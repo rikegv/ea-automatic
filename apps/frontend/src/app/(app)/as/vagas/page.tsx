@@ -159,6 +159,15 @@ import { ReabrirVagaModal } from "@/components/as/vagas/ReabrirVagaModal";
 interface OpcaoCliente {
   codCliente: string;
   rotulo: string;
+  /**
+   * O DESEMPATE DO NOME REPETIDO (Onda D). O `rotulo` passou a ser o NOME PURO, sem o código na
+   * frente, e 138 dos 232 clientes ativos compartilham o nome com outro (o maior grupo tem 52
+   * linhas iguais). O CNPJ é o que separa essas filiais, e por isso ele viaja junto.
+   *
+   * OPCIONAL de propósito: a tela continua montando a lista se o backend ainda não mandar o campo,
+   * e nesse caso o desempate cai no `codCliente`, que sempre existe.
+   */
+  cnpj?: string | null;
   enderecoPadrao: string | null;
   escalaPadrao: string | null;
   /** O contato focal da ÚLTIMA vaga deste cliente (item 1). Nulo = cliente sem vaga anterior. */
@@ -1441,6 +1450,15 @@ export default function CentralDeVagasPage() {
   const pendenciasAgora = useMemo(
     () =>
       pendenciasComLinhaDeServico({
+        // ESTA LISTA É O TERCEIRO PONTO DE EDIÇÃO DE TODO OBRIGATÓRIO NOVO, e o mais fácil de
+        // esquecer: a régua indexa por TEXTO e todo campo do contrato é opcional, então o campo
+        // que não for passado aqui chega `undefined`, é lido como VAZIO e a pendência fica listada
+        // para sempre, com o campo preenchido na frente da pessoa e o typecheck VERDE. Como o
+        // `enviar(publicar)` barra na lista antes de qualquer chamada, o esquecimento não vira um
+        // aviso errado: vira vaga que não publica pela tela, nunca.
+        // Os três pontos são: a entrada em `VAGA_OBRIGATORIOS`, o campo com `id`/`obrigatorio` na
+        // trilha, e esta lista.
+        codCliente: form.codCliente,
         codigo: form.codigo,
         // ONDA C: a linha de serviço entra na MESMA régua, então o asterisco, a trava do publicar e
         // a lista clicável de pendências passam a contá-la juntos, sem nenhum `if` novo na tela.
@@ -1452,6 +1470,7 @@ export default function CentralDeVagasPage() {
         sazonalidade: form.sazonalidade,
         status: form.status,
         dataAbertura: form.dataAbertura,
+        dataLimite: form.dataLimite,
       }),
     [form],
   );
@@ -2133,10 +2152,51 @@ export default function CentralDeVagasPage() {
     () => opcoes.cargos.map((c) => ({ value: c.id, label: c.nome })),
     [opcoes.cargos],
   );
-  const optClientes = useMemo(
-    () => opcoes.clientes.map((c) => ({ value: c.codCliente, label: c.rotulo })),
-    [opcoes.clientes],
-  );
+  /**
+   * ─ O CLIENTE APARECE PELO NOME, E O DESEMPATE SÓ ONDE O NOME NÃO BASTA (Onda D) ──────────────
+   *
+   * O `rotulo` do endpoint deixou de carregar o código na frente: a A&S escolhe o cliente pelo NOME.
+   * O QUE DERRUBA A VERSÃO SIMPLES ESTÁ MEDIDO em produção: dos 232 clientes ativos, 138 estão em 27
+   * nomes REPETIDOS, e o maior grupo tem 52 linhas de rótulo idêntico (mesma razão social, região
+   * vazia). Sem desempate, o campo passaria a ser obrigatório no mesmo movimento em que o seletor
+   * deixaria de saber distinguir 52 opções iguais, e cliente errado na vaga vira cliente errado na
+   * admissão, que é a chave do de/para, da régua documental e da folha.
+   *
+   * A RÉGUA, decidida sobre a LISTA INTEIRA e não sobre a página à vista:
+   *  - nome único: só o nome, nada mais, que é o caso da maioria e o que a mudança veio atender;
+   *  - nome repetido: o nome, com o CNPJ de apoio, que é o que separa uma filial da outra;
+   *  - nome repetido E CNPJ repetido (ou ausente): o apoio é o `cod_cliente`, porque nos pares
+   *    `51525` contra `51525-TEMP.` ele é o ÚNICO dado que os distingue no sistema inteiro.
+   *
+   * O APOIO VAI NO `hint` DO COMBOBOX, que já existe para isto ("código do cliente, sigla, unidade")
+   * e desenha o texto discreto ao lado do rótulo, na lista e no gatilho. Nenhuma linha do componente
+   * compartilhado foi tocada (§A.26): o seletor da trilha e o filtro Cliente da tabela leem esta
+   * mesma lista, então os dois ficam legíveis pela mesma régua, sem uma segunda conta.
+   *
+   * O `busca` GUARDA O CÓDIGO PARA TODOS, inclusive para quem não precisa de apoio: quem procurava
+   * o cliente digitando "51525" fazia isso porque o código estava no rótulo, e tirá-lo de lá sem
+   * isto quebraria a busca de quem decorou o código. O campo existe exatamente para separar o que a
+   * opção MOSTRA do que a ENCONTRA.
+   */
+  const optClientes = useMemo(() => {
+    const porNome = new Map<string, number>();
+    const porNomeCnpj = new Map<string, number>();
+    for (const c of opcoes.clientes) {
+      porNome.set(c.rotulo, (porNome.get(c.rotulo) ?? 0) + 1);
+      const chave = `${c.rotulo}|${c.cnpj ?? ""}`;
+      porNomeCnpj.set(chave, (porNomeCnpj.get(chave) ?? 0) + 1);
+    }
+    return opcoes.clientes.map((c) => {
+      const nomeRepetido = (porNome.get(c.rotulo) ?? 0) > 1;
+      const cnpjDesempata = !!c.cnpj && (porNomeCnpj.get(`${c.rotulo}|${c.cnpj}`) ?? 0) === 1;
+      return {
+        value: c.codCliente,
+        label: c.rotulo,
+        hint: nomeRepetido ? (cnpjDesempata ? (c.cnpj as string) : c.codCliente) : undefined,
+        busca: c.codCliente,
+      };
+    });
+  }, [opcoes.clientes]);
   /**
    * AS OPÇÕES DO FILTRO DE CONSULTOR VÊM DO ENDPOINT (`opcoes.consultores`), NUNCA DAS LINHAS
    * CARREGADAS, e o §A.37 é explícito quanto a isto: derivadas das linhas, elas encolheriam assim
@@ -2195,7 +2255,7 @@ export default function CentralDeVagasPage() {
        * busca acha, sem uma segunda régua para o usuário decorar.
        *
        * AS AÇÕES FICAM DE FORA, e é a única coluna de fora: ela não carrega dado da vaga, só botões,
-       * e "Gestão Vaga" casaria com toda linha da tabela.
+       * e "Gestão Da Vaga" casaria com toda linha da tabela.
        *
        * A RÉGUA MORA EM `lib/as-vagas-lista`, testada lá: cada palavra digitada tem de aparecer em
        * algum lugar da linha, em qualquer ordem, então "bmb advogada" acha a linha mesmo com três
@@ -2508,7 +2568,6 @@ export default function CentralDeVagasPage() {
       { chave: "codigo", tipo: "texto", valor: (v) => v.codigo },
       { chave: "vaga", tipo: "texto", valor: (v) => v.nomeDivulgacao },
       { chave: "cliente", tipo: "texto", valor: (v) => v.clienteNome },
-      { chave: "cargo", tipo: "texto", valor: (v) => v.cargoNome },
       // Vínculo ordena pelo RÓTULO, e não pelo catálogo: a lista de vínculos não é um fluxo, é um
       // conjunto de tipos, e quem procura "Efetivo" procura pela letra E.
       {
@@ -2620,7 +2679,7 @@ export default function CentralDeVagasPage() {
             className="ds-input w-72 rounded-full"
             placeholder="Buscar em qualquer coluna"
             aria-label="Buscar em qualquer coluna da tabela"
-            title="A busca procura em todas as colunas da tabela: código, vaga, cliente, cargo, vínculo, posições, status, consultor, data de abertura e dias em aberto."
+            title="A busca procura em código, vaga, cliente, vínculo, posições, status, consultor, data de abertura e SLA de entrega, e também no cargo da vaga, que continua sendo procurável mesmo depois de a coluna sair da tabela."
             value={busca}
             onChange={(e) => setBusca(e.target.value)}
           />
@@ -2975,8 +3034,8 @@ export default function CentralDeVagasPage() {
           {/* ITEM 8: A LISTA DEIXOU DE SER UM EXCEL.
               Eram 13 colunas, e ler uma linha exigia rolagem lateral: a tela pedia 1560px de largura
               e a vaga era falada em 7 dados. Ficaram só os que identificam a vaga na fila (código,
-              nome, cliente, cargo, vínculo, posições e status). Todo o RESTO não sumiu: mora no
-              modal do olho, que abre a vaga completa.
+              nome, cliente, vínculo, posições e status; o cargo saiu na Onda D). Todo o RESTO não
+              sumiu: mora no painel de gestão, que abre a vaga completa.
 
               §A.12/§A.20: cabeçalhos centralizados, larguras proporcionais, sem coluna esmagada.
               Com 8 colunas em vez de 13, cada uma cabe sem apertar e a tabela não rola mais na
@@ -3058,10 +3117,11 @@ export default function CentralDeVagasPage() {
                  Abertura, Dias Em Aberto e Ações: um código, uma data, uma pill de catálogo, dois
                  cilindros e uma fileira de botões não leem melhor por serem mais largos.
               2. TEXTO LIVRE, QUE VARIA -> sem largura nenhuma, e o navegador reparte a sobra entre
-                 elas na PROPORÇÃO do texto que cada uma carrega. São Vaga, Cliente, Cargo Da Vaga,
-                 Vínculo e Consultor Responsável, exatamente as que quebram em duas linhas quando
-                 apertam. É aqui que mora o "acompanhar o conteúdo": nome curto pede pouco, nome
-                 comprido pede mais, e o dado de amanhã não depende de ninguém reescrever %.
+                 elas na PROPORÇÃO do texto que cada uma carrega. São Vaga, Cliente, Vínculo e
+                 Consultor Responsável (e a Cargo Da Vaga, até a Onda D tirá-la), exatamente as que
+                 quebram em duas linhas quando apertam. É aqui que mora o "acompanhar o conteúdo":
+                 nome curto pede pouco, nome comprido pede mais, e o dado de amanhã não depende de
+                 ninguém reescrever %.
 
               A TABELA NÃO CRESCEU UM PIXEL, e isso foi MEDIDO nas três larguras pedidas: a 1600px
               ela continua com 1254px e ZERO de rolagem (a dívida de 176px que existia desde 07/09
@@ -3125,7 +3185,36 @@ export default function CentralDeVagasPage() {
               ZERO SUPRESSÃO, conferido célula a célula (`scrollWidth` contra `clientWidth` em todos
               os `th` e `td`, nas quatro linhas e nas onze colunas): nenhum rótulo cortado, nenhum
               texto truncado. */}
-          <table className="ds-table min-w-[1225px] [&_tbody_td]:!px-[11px] [&_thead_th]:!px-[11px]">
+          {/* ─ §A.20: O PISO CAIU PARA 1103px COM A SAÍDA DA COLUNA CARGO (Onda D) ──────────────
+              MEDIDO NO BROWSER, a 1600px com o menu aberto, com `min-width` zerado e
+              `width: min-content` na tabela, sobre as vagas REAIS de produção (as três que existem)
+              e conferido também na homologação:
+
+                 estado                                    produção      homologação
+                 hoje, como está no ar                     1169,58px     1132,70px
+                 só com o rótulo "Gestão Da Vaga"          1188,92px     1152,05px
+                 depois da Onda D (sem a coluna Cargo)     1102,31px     1061,88px
+
+              SÃO DUAS MUDANÇAS EM SENTIDOS OPOSTOS, e por isso as três leituras: o rótulo novo é
+              `whitespace-nowrap` e ENGORDA a coluna de Ações em 19,34px, enquanto a coluna Cargo
+              que sai devolve 86,61px. O saldo é 67,27px a menos, e medir só o fim esconderia que
+              parte do ganho foi gasta no botão.
+
+              1103px É O MÍNIMO MEDIDO, arredondado para cima, o mesmo movimento que levou o piso de
+              1430 para 1243, de 1243 para 1233 e de 1233 para 1225: o piso é medição, não herança.
+
+              POR QUE A QUEDA PARECE GRANDE DEMAIS PARA UMA COLUNA SÓ: os 1225px foram medidos em
+              09/09 sobre QUATRO vagas da homologação, e hoje a homologação tem UMA. Linha a mais é
+              texto a mais em Vaga, Cliente e Consultor, e o mínimo do conteúdo sobe junto: o piso
+              acompanha o dado que existe. Isso não abre risco de esmagamento, porque a tabela nunca
+              renderiza abaixo do mínimo do próprio conteúdo: o piso só decide a janela ESTREITA,
+              abaixo de 1103px de caixa. A 1600px (1254px úteis) ele não muda nada, com ou sem a
+              coluna Cargo.
+
+              ZERO SUPRESSÃO, conferido célula a célula com o piso novo aplicado (`scrollWidth`
+              contra `clientWidth` em todos os `th` e `td`, nas duas bases e nas dez colunas):
+              nenhum rótulo cortado, nenhum texto truncado. */}
+          <table className="ds-table min-w-[1103px] [&_tbody_td]:!px-[11px] [&_thead_th]:!px-[11px]">
             <thead>
               <tr>
                 {/* §A.29: o cabeçalho ordena por clique. O `<th>` é o mesmo de antes, com a mesma
@@ -3140,16 +3229,14 @@ export default function CentralDeVagasPage() {
                 <ColunaOrdenavel as="th" ord={ord} chave="cliente" className="text-center">
                   Cliente
                 </ColunaOrdenavel>
-                {/* §A.20, MEDIDO NO BROWSER E NÃO ESTIMADO: o `ColunaOrdenavel` põe o rótulo num
-                    `truncate`, que é `white-space: nowrap`, então "CARGO DA VAGA" numa linha só
-                    exigia 150px de largura MÍNIMA e empurrava a tabela inteira para além da tela.
-                    O `whitespace-normal` devolve ao rótulo o direito de quebrar: em tela larga ele
-                    continua numa linha só, e quando aperta ele vira duas linhas em vez de roubar
-                    espaço das colunas de dado. Duas linhas de cabeçalho é leitura; rótulo cortado
-                    com reticências é supressão, que é o que a regra proíbe. */}
-                <ColunaOrdenavel as="th" ord={ord} chave="cargo" className="text-center">
-                  <span className="whitespace-normal">Cargo Da Vaga</span>
-                </ColunaOrdenavel>
+                {/* A COLUNA DO CARGO SAIU DAQUI (Onda D, decisão do diretor). A vaga já é falada
+                    pelo nome de divulgação, que quase sempre repete o cargo, e a coluna gastava
+                    largura para dizer duas vezes a mesma coisa.
+
+                    O FILTRO "Cargo Da Vaga" E A BUSCA GLOBAL FICARAM, também por decisão do
+                    diretor: tirar a COLUNA não é tirar a pergunta "quais vagas são de Operador de
+                    Caixa". O §A.30 diz que nem toda coluna vira filtro, e não diz que filtro
+                    precisa de coluna. O cargo continua à vista no painel de gestão da vaga. */}
                 <ColunaOrdenavel as="th" ord={ord} chave="vinculo" className="text-center">
                   Vínculo
                 </ColunaOrdenavel>
@@ -3227,13 +3314,13 @@ export default function CentralDeVagasPage() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={11} className="py-8 text-center text-faint">
+                  <td colSpan={10} className="py-8 text-center text-faint">
                     Carregando…
                   </td>
                 </tr>
               ) : visiveis.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="py-8 text-center text-faint">
+                  <td colSpan={10} className="py-8 text-center text-faint">
                     {rows.length === 0
                       ? "Nenhuma vaga cadastrada ainda. Use o botão Abrir vaga."
                       : "Nenhuma vaga corresponde ao filtro aplicado. Ajuste os filtros ou limpe todos."}
@@ -3254,7 +3341,6 @@ export default function CentralDeVagasPage() {
                     </td>
                     <td className="font-semibold">{v.nomeDivulgacao ?? "não informado"}</td>
                     <td className="text-center">{v.clienteNome ?? "não informado"}</td>
-                    <td className="text-center">{v.cargoNome ?? "não informado"}</td>
                     <td className="text-center">
                       {v.vinculo ? VAGA_VINCULO_LABEL[v.vinculo] : "não informado"}
                     </td>
@@ -3385,8 +3471,8 @@ export default function CentralDeVagasPage() {
                           }}
                           className="inline-flex flex-none items-center gap-1.5 whitespace-nowrap rounded-lg border border-transparent [background:var(--btn-grad)] px-2.5 py-2 text-[12.5px] font-bold text-white shadow-[0_8px_18px_-8px_rgba(34,176,219,0.75)] transition hover:brightness-110"
                         >
-                          <Icon name="eye" className="h-4 w-4 flex-none" />
-                          Gestão Vaga
+                          <Icon name="cog" className="h-4 w-4 flex-none" />
+                          Gestão Da Vaga
                         </button>
                       </div>
                     </td>
@@ -3494,8 +3580,16 @@ export default function CentralDeVagasPage() {
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 {step === 0 && (
                   <>
-                    <CampoSelect rotulo="Cliente" largo>
-                      {/* NULÁVEL de propósito: vaga sem cliente vinculado entra e não trava nada. */}
+                    <CampoSelect rotulo="Cliente" largo obrigatorio id="vaga-cliente">
+                      {/* OBRIGATÓRIO PARA PUBLICAR (Onda D), e a coluna do banco CONTINUA NULÁVEL.
+                          O campo nasceu sem trava nenhuma em 25/08 ("vaga sem cliente vinculado
+                          entra e não trava nada"), e o diretor reverteu a decisão em 12/09: toda
+                          vaga tem cliente. O que mudou é só o PUBLICAR, que passa pela régua
+                          compartilhada; o RASCUNHO segue salvando sem cliente, que é o que mantém
+                          de pé o não-bloqueio do §A.3 regra 5.
+
+                          O `id` é a ÂNCORA da pendência clicável: sem ele, o item da lista "falta o
+                          Cliente" seria clicável e não levaria a lugar nenhum. */}
                       {/*
                         PRIMEIRO CAMPO NO SELETOR PREMIUM DO A&S (Combobox). É o campo certo para
                         estrear: a lista de clientes é a mais longa da trilha, então ele exercita
@@ -3509,7 +3603,7 @@ export default function CentralDeVagasPage() {
                         options={optClientes}
                         searchable
                         limpavel
-                        placeholder="Sem cliente vinculado"
+                        placeholder="Selecionar cliente"
                         ariaLabel="Cliente da vaga"
                       />
                     </CampoSelect>
@@ -3730,8 +3824,14 @@ export default function CentralDeVagasPage() {
                         maiúscula sozinha no meio da coluna leria como erro de digitação.
 
                         PRAZO EM QUALQUER VAGA (correção de 21/08): a amarração com a vaga sazonal
-                        foi removida, qualquer natureza pode ter prazo. */}
-                    <Campo rotulo="Previsão de entrega">
+                        foi removida, qualquer natureza pode ter prazo.
+
+                        OBRIGATÓRIA PARA PUBLICAR (Onda D): entrou na régua compartilhada, e com ela
+                        o asterisco, a trava do publicar e a pendência clicável (o `id` é a âncora
+                        do salto). O RASCUNHO continua salvando sem prazo. De passagem, é isto que
+                        faz a coluna SLA De Entrega parar de dizer "não informado": ela lê
+                        exatamente este campo. */}
+                    <Campo rotulo="Previsão de entrega" obrigatorio id="vaga-previsao-entrega">
                       <input
                         type="date"
                         value={form.dataLimite}

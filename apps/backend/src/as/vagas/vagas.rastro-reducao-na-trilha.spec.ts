@@ -105,6 +105,12 @@ function corpo(over: Partial<CreateVagaDto> = {}): CreateVagaDto {
     // obrigatórios ANTES de chegar na trava de meta, e os testes desta suíte passariam a medir a
     // mensagem errada. O catálogo é servido pelo fake logo abaixo.
     linhaServicoId: LINHA_SERVICO.id,
+    // ONDA D (12/09): CLIENTE e PREVISÃO DE ENTREGA passaram a ser obrigatórios para publicar, pelo
+    // mesmo motivo escrito acima para a linha de serviço. Sem os dois, todo caso que publica parava
+    // com "falta o Cliente; falta a Previsão de entrega" ANTES da trava de meta, e esta suíte
+    // passaria a medir a mensagem errada. A régua está funcionando: a fixture é que era de antes.
+    codCliente: "55619",
+    dataLimite: "2026-09-30",
     ...over,
   } as unknown as CreateVagaDto;
 }

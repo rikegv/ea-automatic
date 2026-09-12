@@ -35,6 +35,12 @@ const COMPLETA: VagaCamposObrigatorios = {
   linhaServicoId: 3,
   status: "ABERTA",
   dataAbertura: "2026-08-25",
+  // ONDA D: os dois obrigatórios que o diretor acrescentou em 12/09. O `codCliente` é TEXTO (é o
+  // `cod_cliente`, que tem sufixo em alguns clientes, ex.: "51525-TEMP."), e a previsão de entrega
+  // chega como a string do `<input type="date">` da tela; do lado do backend ela chega como `Date`,
+  // e a régua aceita as duas formas de propósito.
+  codCliente: "55619",
+  dataLimite: "2026-09-30",
 };
 
 describe("vagaPendencias", () => {

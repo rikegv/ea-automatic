@@ -57,6 +57,11 @@ function vagaCompleta(): VagaCamposObrigatoriosComLinha {
     status: "ABERTA",
     dataAbertura: "2026-09-11",
     linhaServicoId: 3,
+    // ONDA D (12/09): os dois obrigatórios novos entram na fixture porque ela é, por definição, "a
+    // vaga completa". Sem eles, TODO caso deste arquivo passaria a cobrar duas pendências que o caso
+    // não está testando, e o arquivo inteiro reprovaria a régua certa.
+    codCliente: "55619",
+    dataLimite: "2026-09-30",
   };
 }
 
