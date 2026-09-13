@@ -15422,3 +15422,189 @@ cliente ou operadoras de A&S.
 
 Gate refeito: **backend 3.174/3.174, frontend 685/685**, typecheck limpo nos dois. Homologação
 republicada, health 200 nos dois serviços, compilado mais novo que a fonte. **Produção intocada.**
+
+## 13/09/2026 (madrugada): A ONDA E EM PRODUÇÃO, e a ordem invertida que a auditoria exigiu
+
+**O diretor validou e autorizou.** Commit **`36dc1ea`**, empurrado `14325f0..36dc1ea` para
+`origin/main`. **39 arquivos** por `git add` nominal. Produção com a Onda E, **108 migrations**.
+
+### 1. A ORDEM FOI MIGRATION, BACKEND, FRONTEND. O INVERSO DA ONDA D, E POR MEDIÇÃO
+
+A auditoria do código impôs a ordem como **condição vinculante**, e o motivo não é simetria: é que na
+ordem errada **a trilha para de salvar vaga**. O `ValidationPipe` global é `forbidNonWhitelisted`, o
+DTO velho não conhece `segmentoId`, e o consultor que ESCOLHESSE um segmento levaria 400 com uma
+mensagem que ele não associa ao que fez. A ficha estouraria e o filtro jogaria toda vaga no balde
+"Sem Segmento".
+
+**A régua que fica para toda onda futura, e ela substitui "repete a ordem da anterior":**
+**quem TOLERA a ausência do outro vai primeiro.** Na Onda D o campo novo era opcional e a tela o
+tolerava, então o frontend foi na frente. Aqui ele é lido em toda linha **e enviado na escrita**,
+então o backend vai na frente.
+
+**A migration foi sozinha, antes de tudo**, porque é aditiva e nulável (o backend VELHO convive com
+ela sem enxergá-la) e porque **sem as colunas o `list()` daria 500 na Central De Vagas inteira**.
+
+```
+01:57:32  migration 0107 aplicada .......... 107 -> 108, em UM segundo
+01:57:33  contagens ....................... clientes 249, vagas 3, admissoes 2848, INTACTAS
+          as quatro FK .................... confdeltype 'r' nas quatro
+          backend VELHO com as colunas .... 200  <- a aposta da ordem, confirmada ao vivo
+01:57:48  build do backend
+01:58:31  restart ea-backend
+01:58:44  health 200
+01:58:54  stop ea-frontend, .next -> .next.bak
+02:00:54  frontend no ar                     <- janela de 2min00s
+```
+
+`dist/main.js` de **01:58:27** contra a fonte de **01:31**: o compilado é mais novo que a escrita.
+**Zero `.spec.js` no `dist`.** `BUILD_ID` novo `83jQf6EaiOYa7s2nVo0ox`.
+
+### 2. A §A.23 PROVADA EM PRODUÇÃO, e era o item de maior risco da subida
+
+O `MenusCatalogoService` converge o catálogo **a cada boot**, e essa é exatamente a porta pela qual um
+menu novo poderia conceder acesso por efeito colateral. Medido no restart:
+
+```
+menus ............................ 37 -> 39   (REGISTROU os dois)
+usuario_menus .................... 321 -> 321 (não concedeu NADA)
+usuários com as-segmentos ........ 0
+usuários com as-comerciais ....... 0
+```
+
+**Registrou sem conceder.** E o baseline do `tester` tinha mostrado, de graça, que os menus ADMIN das
+ondas B e C também estão todos com **zero** usuários: a régua vem sendo honrada, e os dois novos
+seguiram o mesmo padrão.
+
+### 3. A PROVA AO VIVO, na base real de produção
+
+```
+GET /as/comerciais ................. 404   (a rota aberta NÃO existe, e é a decisão de §A.6)
+GET /as/segmentos .................. 200
+GET /admin/as/comerciais ........... 200
+GET /admin/clientes/comerciais ..... 200
+```
+
+**A herança nas três vagas reais**, todas com as colunas nulas, devolveu o que tinha de devolver:
+`{id: null, rotulo: null, origem: "AUSENTE"}` nos dois campos, nas três. É o estado correto de uma
+base que ainda não foi classificada, e a tela escreve "não informado" (§A.11).
+
+**`GET /admin/clientes`, a rota aberta, passou de 22 para 25 chaves** e leva `segmentoId`,
+`comercialId` e `segmentoRotulo`. **Não leva nome de comercial**, conferido por varredura das chaves.
+
+**Na tela:** a Central De Vagas mede **1102,31px em 1254**, com **rolagem ZERO** — exatamente o mesmo
+número de antes da onda, porque os dois filtros moram no modal e custam zero de largura. Os dois
+gerenciadores renderizam sem rolagem e sem nada cortado. A tela de Clientes mostra **Segmento** e
+**Comercial** com os quatro seletores já no design system.
+
+### 4. O QUE A AUDITORIA DO CÓDIGO DERRUBOU, e era meu
+
+A guarda `?.` que eu tinha acrescentado **estava pela metade e mentia no comentário**: com o campo
+ausente a linha **casava o sentinela** em vez de não casar nada (filtrar por "Sem Segmento" devolveria
+TODAS as vagas), o `AUSENTE` legítimo produzia o mesmo valor, e a ficha continuava sem guarda nenhuma.
+Desfeita antes da subida. **A janela se fecha pela ORDEM, não por `?.` espalhado**, e foi o que se fez.
+
+Dois comentários que mentiam foram corrigidos junto: um alias que virou no-op no instante em que eu
+removi o campo do contrato e continuava instruindo a remover "quando o dono agir"; e um bloco do DTO
+que afirmava que os campos **não** existiam no cadastro novo, quando estão lá pelo motivo oposto.
+
+### 5. PENDENTE DO DIRETOR
+
+1. **A DECISÃO DE NEGÓCIO ANTES DE POVOAR O CATÁLOGO.** O `inativar` do comercial **recusa quem tem
+   carteira**, e isso torna impossível o estado que QUATRO textos desta onda afirmam existir ("quem sai
+   da empresa é inativado, e o cliente e a vaga antiga continuam dizendo de quem eram"). A pergunta "o
+   que ficou na mão dele?" sempre devolve vazio, por construção. **Ou o `inativar` passa a aceitar
+   carteira, ou os quatro textos e a máquina de inativos saem.** Depois que o time estiver cadastrado,
+   mudar a régua custa mais. **As tabelas subiram vazias de propósito**, então nada foi criado.
+2. **`segmentoRotulo` é carga morta numa rota aberta:** é calculado e enviado em `GET /admin/clientes`
+   e **ninguém o renderiza**. Sai, ou vira coluna com filtro (§A.37). Não é PII.
+3. **Homônimo é permitido e fica INDISTINGUÍVEL** na lista e no filtro. É a decisão de LGPD.
+4. **O menu `clientes` passou a carregar nome de pessoa** pelo seletor. Alcance medido: **~13 pessoas**,
+   todas já administradoras de cliente ou operadoras de A&S.
+5. **A tabela de Clientes rola 99px**, e é **anterior** à onda.
+6. **O filtro de tipo de serviço continua de seleção única** (§A.28), proposto e não construído.
+7. **O hash da migration 0106 diverge entre as bases**: o arquivo foi editado depois de ter rodado na
+   homologação. Inofensivo aqui (o diff coluna a coluna prova que não houve deriva), mas repetido num
+   arquivo com DDL de verdade vira duas bases diferentes com o mesmo número.
+8. **O `atualizar` da vaga é substituição total**, então um `PATCH` parcial devolveria a vaga à herança
+   em vez de preservar a sobreposição. Inofensivo hoje, armadilha para o próximo chamador.
+
+### 6. A CENTRAL DE VAGAS ESTÁ COMPLETA
+
+A Onda E era a última. Em nove dias, a tela saiu de uma lista com rolagem lateral e cinco gestos
+espremidos na linha para: cancelamento com trilha, status gerenciável, reabertura que escolhe quem
+volta, linha de serviço, cidades do IBGE, SLA de entrega, cliente e previsão obrigatórios, o cliente
+pelo nome, e agora segmento e comercial herdados. **Cinco ondas, cinco auditorias de mapa, e a soma
+dos vetos evitou pelo menos três defeitos que teriam chegado à operação:** a publicação travada para
+toda vaga, a ressurreição de candidato descartado por mérito, e a folha do time comercial numa rota
+aberta.
+
+### 7. A VERIFICAÇÃO PÓS-PUBLICAÇÃO: **PASSOU**
+
+O `tester` rodou **os mesmos dois scripts do retrato de antes, sem alterar uma linha**, e o md5 do
+baseline conferiu com o do momento em que foi gravado, o que é a prova de que ele não foi tocado.
+Somente leitura; **nada foi criado nem preenchido** em produção.
+
+**O `diff -u` bruto tem 271 linhas, e as 271 estão explicadas.** As seções do banco que não podiam
+mudar devolveram **zero linha de diferença**: as quebras por status, o Clicksign, **as 3 vagas campo a
+campo, `atualizado_em` inclusive**, e os catálogos das ondas B e C com o conteúdo inteiro. Das 43
+contagens de tabela, **uma só** mudou, e é `menus`. Na API, os 16 endpoints, os KPIs das cinco abas da
+Esteira, o gerencial e a ocupação vieram idênticos, e **nenhuma das 74 chaves anteriores do item de
+vaga sumiu**.
+
+O que mudou é exatamente a onda: 107→108 migrations, as duas tabelas passando a existir vazias, as
+quatro colunas nascendo `integer NULL` e **100% nulas** (249/249 e 3/3), as quatro FKs com
+`confdeltype = 'r'`, `clientes` de 17 para 19 colunas, `vagas` de 77 para 79, o item de `/as/vagas` de
+74 para 78 chaves, `opcoes()` ganhando `comerciais`, e `/admin/clientes` de 22 para 25 chaves.
+
+**A §A.23 foi reconferida por TRÊS ângulos independentes**, porque ele não aceitou a minha medição:
+o total de `usuario_menus`, a soma dos vínculos por código, e a foto por `menu_codigo` linha a linha.
+Os três batem: **catálogo 37→39, vínculos 321→321, zero usuários nos dois menus novos**, e a foto por
+código saiu **idêntica**.
+
+### 8. ELE ACHOU UMA TERCEIRA PORTA, E ELA JÁ TINHA SIDO AUDITADA. OS DOIS CONVERGIRAM SOZINHOS
+
+O `tester` registrou que existe uma **terceira** superfície com nome de comercial, `GET
+/admin/clientes/comerciais`, e que ela **não é fechada por `@Roles`**: quem a fecha é o `MenuGuard`,
+pela reivindicação **nominal** de `"ClientesController.comerciais"`. Ou seja, é autorização por
+convenção de nome de método, e **renomear o handler reabriria a rota em silêncio**. Ele pediu que o
+`seguranca` olhasse, caso ainda não tivesse olhado.
+
+**Já tinha olhado, e chegou ao mesmo lugar por outro caminho.** A auditoria do código registrou a
+mesma ressalva, avaliou que é **consistente com a controller** (que já governa `create`, `update` e
+`remove` só por menu, e cujo único `@Roles` é outro), e a aceitou **porque o risco está travado em
+teste** (`onda-e.menu-dos-catalogos.tester.spec.ts:215-223`, que reivindica o `comerciais` e prova que
+o `list` **não** é reivindicado). Auditor e testador convergiram de forma independente, que é o que a
+§A.38 procura.
+
+**E ele achou uma segunda assimetria deliberada**, que eu não tinha registrado:
+`GET /admin/as/segmentos` dá **404** enquanto `/admin/as/comerciais` dá **200**. Não é defeito: a
+controller de admin do segmento não tem `@Get()` porque a lista dele vem da rota **aberta**
+`/as/segmentos?incluirInativos=1`; a do comercial só existe atrás do `@Roles("SUPER_ADMIN")`. **Quem
+"padronizar" isso depois reabre a porta**, e agora está escrito.
+
+### 9. UMA CORREÇÃO DE FATO QUE ELE ME DEVOLVEU, sobre a ONDA D
+
+Eu relatei, na verificação da Onda D, que os rótulos no formato `CÓDIGO - NOME` tinham ido de **227
+para ZERO**. **O número certo do "depois" é 11, não 0**, e o próprio arquivo daquela onda já media 11:
+o "zero" foi imprecisão da minha redação, não do dado.
+
+**A conclusão da Onda D continua intacta, e isso foi reconferido item a item:** os 11 são falsos
+positivos da heurística, razões sociais que têm hífen próprio (`BUNGE - RJ`, `WURTH - COTIA`,
+`RAIA - BADY BASSITT`), e em **nenhum** deles o prefixo é o `cod_cliente` nem é numérico. **Zero
+rótulos carregam o código do cliente.** Fica o registro de que o número que eu publiquei estava errado
+e a régua não estava.
+
+### 10. O ESTADO FINAL
+
+```
+commit ............ 36dc1ea, em origin/main
+migrations ........ 108
+menus ............. 39   (usuario_menus 321, intacto)
+as_segmentos ...... 0    (vazia de propósito)
+as_comerciais ..... 0    (vazia de propósito)
+healths ........... backend 3011, frontend 3020, proxy 3010, homologação 3120: todos 200
+NRestarts ......... 0 nos dois serviços de produção
+suítes ............ backend 3.174, frontend 685, shared-types 34, todas verdes sobre o publicado
+```
+
+**Nenhum rollback foi necessário.**
