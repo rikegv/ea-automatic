@@ -314,6 +314,16 @@ describe("menus exclusivos do SUPER_ADMIN", () => {
     // agravante próprio: o campo que este catálogo alimenta é OBRIGATÓRIO para publicar vaga, então
     // inativar a linha errada não deixa um rótulo feio, trava a abertura. A controller de escrita é
     // `@Roles("SUPER_ADMIN")`, e de novo o MENU sozinho não seguraria o MASTER.
+    // SEGMENTOS (Onda E) entrou pela razão das que editam TEXTO, e com o mesmo agravante do rótulo
+    // que fica gravado: o segmento classifica o CLIENTE, e a vaga o herda, então quem renomeia um
+    // segmento reescreve como toda a carteira daquele ramo é lida.
+    //
+    // COMERCIAIS (Onda E) entrou pela razão MAIS FORTE de todas, e ela não é sobre travas nem sobre
+    // texto: **este catálogo guarda NOME DE PESSOA**, e é o único da lista que guarda. Editar a
+    // lista é editar quem responde por cada carteira; ler a lista é ler a folha do time comercial.
+    // Por isso ele não tem sequer controller de leitura aberta, ao contrário dos cinco vizinhos: a
+    // lista é servida por superfície já gatada. Se um dia alguém tirar este código daqui, estará
+    // entregando nome de pessoa ao próximo MASTER criado, sem rodar script nenhum.
     expect([...MENUS_SOMENTE_SUPER_ADMIN]).toEqual([
       "usuarios",
       "menu-areas",
@@ -321,6 +331,8 @@ describe("menus exclusivos do SUPER_ADMIN", () => {
       "as-motivos-cancelamento",
       "as-status-vaga",
       "as-linhas-servico",
+      "as-segmentos",
+      "as-comerciais",
     ]);
   });
 

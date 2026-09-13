@@ -750,6 +750,13 @@
       "when": 1788089891611,
       "tag": "0106_as_linha_de_servico_cidade_idioma",
       "breakpoints": true
+    },
+    {
+      "idx": 107,
+      "version": "7",
+      "when": 1788093491611,
+      "tag": "0107_as_segmento_e_comercial",
+      "breakpoints": true
     }
   ]
 }

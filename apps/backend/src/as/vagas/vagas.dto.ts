@@ -186,6 +186,35 @@ export class CreateVagaDto {
   linhaServicoId?: number;
 
   /**
+   * ─ A SOBREPOSIÇÃO DE SEGMENTO E COMERCIAL (Onda E): NÃO MANDAR = **HERDAR DO CLIENTE** ───────
+   *
+   * ┌─ ELES NÃO SÃO "OPCIONAIS" NO SENTIDO DOS DEMAIS, E A DIFERENÇA IMPORTA ───────────────────┐
+   * │ Nos outros campos, ausente quer dizer "em branco, a régua cobra na publicação". AQUI       │
+   * │ ausente quer dizer **HERDAR**: a vaga passa a valer o segmento e o comercial do cliente,   │
+   * │ VIVOS, e é esse o estado normal da esmagadora maioria das vagas. Preencher é a EXCEÇÃO,    │
+   * │ e significa "esta vaga foge do padrão do cliente".                                         │
+   * │                                                                                            │
+   * │ NENHUMA RÉGUA DE OBRIGATÓRIOS OS COBRA, nem no rascunho nem na publicação: a vaga publica  │
+   * │ sem os dois, como sempre publicou, e o cliente pode nem estar classificado ainda.          │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * SEM `@IsIn`, pelo mesmo motivo da linha de serviço: são CATÁLOGOS do diretor, e um decorator
+   * sobre a lista de ontem recusaria o segmento que ele criou hoje. Quem confere se o id existe e
+   * está ATIVO é o service, contra o catálogo vivo, e ele LANÇA em vez de descartar a escolha:
+   * descartar viraria herança silenciosa (ver `resolverHerdaveis`).
+   */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  segmentoId?: number;
+
+  /** A pessoa do comercial. §A.6: o id viaja, o nome nunca entra por aqui. */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  comercialId?: number;
+
+  /**
    * OS DOIS CONTADORES DA VAGA (decisão do diretor, 25/08). OFICIAIS aceita a partir de 1, porque
    * vaga com zero contratação não é vaga; BANCO aceita ZERO, porque não reservar excedente é o
    * estado normal da maioria das vagas. É a mesma assimetria dos dois CHECK do banco de dados.

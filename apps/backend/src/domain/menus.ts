@@ -395,6 +395,15 @@ export const MENUS: MenuDef[] = [
       "ClientesController.definirVinculo",
       "ClientesController.dependencias",
       "ClientesController.opcoesVinculo",
+      // OS COMERCIAIS (Onda E), REIVINDICADOS **NOMINALMENTE**, e a nominalidade é a regra: a lista
+      // é de NOMES DE PESSOA do time comercial, e handler que menu nenhum reivindica é ABERTO por
+      // construção (`menu.guard.ts` devolve `true` para operação não reivindicada). Sem esta linha,
+      // a rota entregaria a folha do comercial a qualquer sessão válida.
+      //
+      // E NÃO PODE VIRAR UM CORINGA `ClientesController.*`: o `list` desta mesma controller fica
+      // FORA da reivindicação DE PROPÓSITO (o consultor precisa da lista de clientes na Liberação e
+      // no wizard), e o coringa o fecharia junto, com 403 na operação diária dele.
+      "ClientesController.comerciais",
       "ClientesController.reativar",
       "ClientesController.remove",
       // LOJAS DO CLIENTE (cenário 1, etapa 1): NENHUMA operação do `LojasController` é reivindicada
@@ -871,6 +880,53 @@ export const MENUS: MenuDef[] = [
     areas: ["AS"],
     operacoes: ["LinhasServicoAdminController.*"],
   },
+  {
+    /**
+     * SEGMENTOS (A&S, Onda E): o catálogo do RAMO do cliente (Varejo, Saúde, Indústria), no molde
+     * dos outros quatro catálogos do módulo.
+     *
+     * §A.23: NASCE SÓ PARA O SUPER_ADMIN. A fábrica REGISTRA para o menu existir e ser selecionável
+     * na tela de liberação, e para por aí: quem libera quem enxerga é o diretor.
+     *
+     * NÃO É DADO PESSOAL, e por isso a reivindicação cobre só a controller de escrita, como no molde:
+     * a lista de ramos é inócua e o seletor do cadastro de cliente precisa lê-la.
+     */
+    codigo: "as-segmentos",
+    rotulo: "Segmentos",
+    href: "/admin/as/segmentos",
+    grupo: "ADMIN",
+    ordem: 53,
+    areas: ["AS"],
+    operacoes: ["SegmentosAdminController.*"],
+  },
+  {
+    /**
+     * COMERCIAIS (A&S, Onda E): as PESSOAS do comercial.
+     *
+     * ┌─ A REIVINDICAÇÃO É DIFERENTE DA DOS OUTROS CATÁLOGOS, E DE PROPÓSITO (§A.6) ──────────────────┐
+     * │ Os quatro catálogos vizinhos reivindicam só a `AdminController` e deixam a LEITURA aberta,    │
+     * │ porque a lista deles é inócua (nomes de etapa, de status, de linha de serviço). **Este        │
+     * │ catálogo guarda NOME DE PESSOA**, e leitura aberta entregaria a folha inteira do time          │
+     * │ comercial a qualquer sessão válida, inclusive aos COMUM da Admissão, que não têm nada com A&S. │
+     * │                                                                                                │
+     * │ Por isso NÃO EXISTE uma `ComerciaisController` de leitura aberta. Quem precisa da lista a      │
+     * │ recebe por superfície JÁ GATADA: o filtro da Central De Vagas por `VagasService.opcoes()`      │
+     * │ (atrás de `VagasController.*`, menu `as-vagas`), e o seletor do cadastro de cliente por rota   │
+     * │ do próprio menu `clientes`. É a mesma régua que `GerencialController.nomes` e                  │
+     * │ `AltoVolumeController.pessoasDaLoja` já seguem, e que o `as-candidatos` aplicou à controller   │
+     * │ inteira, leitura incluída, por ser a primeira superfície com dado pessoal.                     │
+     * └────────────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * §A.23: NASCE SÓ PARA O SUPER_ADMIN, como o vizinho.
+     */
+    codigo: "as-comerciais",
+    rotulo: "Comerciais",
+    href: "/admin/as/comerciais",
+    grupo: "ADMIN",
+    ordem: 54,
+    areas: ["AS"],
+    operacoes: ["ComerciaisAdminController.*"],
+  },
 ];
 
 /** Menus sempre visíveis, independentemente de configuração (a home nunca some). */
@@ -939,6 +995,9 @@ export const MENUS_QUE_NASCEM_FORA_DA_ADM = new Set<string>([
   "as-status-vaga",
   // Onda C. Mesma razão dos três acima: configura uma lista de A&S e mora no grupo ADMIN por isso.
   "as-linhas-servico",
+  // ONDA E: os dois nascem só para o SUPER_ADMIN, como os quatro catálogos vizinhos.
+  "as-segmentos",
+  "as-comerciais",
 ]);
 
 /** Índice `codigo -> áreas de NASCIMENTO`, para o convergedor semear menu novo. */
@@ -1054,6 +1113,9 @@ export const MENUS_BLOQUEADOS_COMUM = new Set<string>([
   // Onda C, mesma razão: a escrita é `@Roles("SUPER_ADMIN")`, então marcar para um COMUM só faria o
   // menu APARECER e o backend BARRAR.
   "as-linhas-servico",
+  // ONDA E: marcar qualquer um dos dois para um COMUM não deve conceder nada.
+  "as-segmentos",
+  "as-comerciais",
 ]);
 
 /**
@@ -1085,6 +1147,9 @@ export const MENUS_SOMENTE_SUPER_ADMIN = new Set<string>([
   // Onda C: quem edita esta lista edita a CLASSIFICAÇÃO da operação inteira, e o rótulo renomeado
   // reescreve o nome da linha em toda vaga que já aponta para ela.
   "as-linhas-servico",
+  // ONDA E: os dois nascem só para o SUPER_ADMIN, como os quatro catálogos vizinhos.
+  "as-segmentos",
+  "as-comerciais",
 ]);
 
 /**

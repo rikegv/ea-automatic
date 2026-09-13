@@ -31,6 +31,30 @@ export class CreateClienteDto {
   @IsString()
   @MaxLength(200)
   nomeOperacao?: string;
+
+  /**
+   * ─ O SEGMENTO E O COMERCIAL JÁ NA CRIAÇÃO (Onda E) ──────────────────────────────────────────
+   *
+   * ┌─ POR QUE ELES ENTRAM AQUI, e não só no editar, sendo o `create` mínimo há muito tempo ─────┐
+   * │ O `ValidationPipe` global roda com `forbidNonWhitelisted: true` (`main.ts`), e isso muda o  │
+   * │ custo do erro: campo que o DTO não conhece NÃO é ignorado, ele RECUSA A REQUISIÇÃO INTEIRA  │
+   * │ com 400. Uma tela que mande os dois campos no mesmo formulário de cadastro pararia de salvar│
+   * │ o cliente INTEIRO, razão social incluída, e a mensagem falaria de um campo que o usuário nem│
+   * │ associou ao que ele estava fazendo.                                                         │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * OPCIONAIS, e cliente sem os dois continua nascendo: são 249 para classificar aos poucos.
+   */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  segmentoId?: number | null;
+
+  /** §A.6: um ID. O NOME do comercial nunca entra nem sai por este DTO. */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  comercialId?: number | null;
 }
 
 export class DefinirVinculoDto {
@@ -97,4 +121,35 @@ export class UpdateClienteDto {
   @IsOptional()
   @IsIn(TIPO_MARCACAO)
   tipoMarcacao?: TipoMarcacao;
+
+  /**
+   * ─ O SEGMENTO (o RAMO) E O COMERCIAL DO CLIENTE (Onda E) ─────────────────────────────────────
+   *
+   * ┌─ OS DOIS ACEITAM `null`, E ISSO É O "LIMPAR" ─────────────────────────────────────────────┐
+   * │ Não mandar o campo é NÃO MEXER; mandar `null` é DESCLASSIFICAR (o admin errou e desfaz);  │
+   * │ mandar um número é escolher, e o número é CONFERIDO contra o catálogo vivo no service. É a │
+   * │ mesma régua dos três campos de benefício logo acima.                                       │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * ELES EXISTEM NOS DOIS DTOs, e a primeira redação deste bloco dizia o contrário (correção de
+   * 13/09, achado da auditoria do código). O plano era só no editar, porque classificar os 249 é
+   * trabalho de edição; **o `forbidNonWhitelisted: true` do `ValidationPipe` global derrubou o
+   * plano**: campo que o DTO não conhece não é ignorado, ele RECUSA A REQUISIÇÃO INTEIRA com 400.
+   * Com os campos só no editar, a tela que os enviasse no cadastro novo pararia de criar cliente,
+   * e o erro não falaria de segmento nenhum. Estão nos dois, e no `Create` são opcionais.
+   *
+   * SEM `@IsIn`: são CATÁLOGOS do diretor, e um decorator sobre a lista de ontem recusaria o
+   * segmento que ele criou hoje. Quem confere é `conferirSegmentoEComercial`, no service.
+   *
+   * §A.6: `comercialId` é um ID. O NOME do comercial nunca entra nem sai por este DTO.
+   */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  segmentoId?: number | null;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  comercialId?: number | null;
 }

@@ -213,6 +213,27 @@ export const clientes = pgTable("clientes", {
    * ajusta a minoria. O default também poupa o backfill dos 228 clientes existentes.
    */
   tipoMarcacao: tipoMarcacaoEnum("tipo_marcacao").notNull().default("APLICATIVO"),
+  /**
+   * ─ O SEGMENTO (o RAMO) E O COMERCIAL DO CLIENTE (Onda E) ─────────────────────────────────────
+   *
+   * NULÁVEIS, E ISSO É O ESTADO NORMAL NO COMEÇO: são 249 clientes, e o diretor vai preenchendo aos
+   * poucos. Cliente sem segmento e sem comercial CONTINUA SALVANDO, em qualquer caminho de escrita,
+   * e a tela escreve "não informado" (§A.11). Nenhuma régua de obrigatoriedade nasce com eles.
+   *
+   * FK COM `restrict` NO DELETE, e não o nome copiado: renomear um segmento tem de corrigir o nome
+   * em todos os clientes que apontam para ele, não só nos próximos. O `restrict` é o par da exclusão
+   * lógica do catálogo: segmento já usado por um cliente não some do banco, só sai de circulação.
+   *
+   * ELES SÃO A RAIZ DA HERANÇA DA VAGA (Onda E): `vagas.segmento_id` e `vagas.comercial_id` nulos
+   * significam HERDAR DAQUI, e a leitura resolve por `coalesce(vaga.x, cliente.x)`. A herança é
+   * VIVA por decisão do diretor (12/09): trocar o comercial do cliente troca o das vagas antigas
+   * dele também, porque a pergunta é "quem atende este cliente HOJE".
+   *
+   * §A.6: `comercial_id` aponta para uma tabela que guarda NOME DE PESSOA. O id é que viaja aqui;
+   * o nome é resolvido por join na leitura e nunca é escrito em log.
+   */
+  segmentoId: integer("segmento_id").references(() => asSegmentos.id, { onDelete: "restrict" }),
+  comercialId: integer("comercial_id").references(() => asComerciais.id, { onDelete: "restrict" }),
   ativo: boolean("ativo").notNull().default(true),
   criadoEm,
   atualizadoEm,
@@ -2362,6 +2383,36 @@ export const vagas = pgTable(
       onDelete: "restrict",
     }),
     /**
+     * ─ O SEGMENTO E O COMERCIAL DA VAGA (Onda E): NULO SIGNIFICA **HERDAR** DO CLIENTE ──────────
+     *
+     * ┌─ A REGRA INTEIRA, EM UMA LINHA ─────────────────────────────────────────────────────────┐
+     * │ NULO = herda do cliente. PREENCHIDO = SOBREPÕE o cliente, só nesta vaga.                 │
+     * │ A leitura resolve por `coalesce(vaga.x, cliente.x)` e devolve, junto, DE ONDE o valor    │
+     * │ veio (`AsValorHerdado.origem`), porque a tela precisa distinguir herdado de sobreposto.  │
+     * └──────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * ┌─ POR QUE NULO-É-HERANÇA, E NÃO UMA CÓPIA CARIMBADA NO NASCIMENTO (decisão do diretor) ───┐
+     * │ A alternativa era a vaga COPIAR o valor do cliente ao nascer e nunca mais mudar, que é o │
+     * │ retrato de quem atendia na época. O diretor escolheu a HERANÇA VIVA (12/09) e aceitou o  │
+     * │ preço, declarado: NÃO existe registro de quem era o comercial na época, e ele não pode   │
+     * │ ser reconstruído depois. Em troca, corrigir a carteira no cadastro do cliente corrige a  │
+     * │ vaga inteira, em vez de deixar um rastro de vagas apontando para quem saiu da empresa.   │
+     * │ POR ISSO NÃO HÁ, E NÃO DEVE HAVER, carimbo, snapshot ou histórico destes dois campos.    │
+     * └──────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * O DEFEITO QUE ESTE DESENHO CRIA, e ele precisa estar escrito onde a coluna mora: uma contagem
+     * ou um filtro escrito contra `vagas.segmento_id` SOZINHO perde TODAS as vagas que herdam, que
+     * são a maioria esmagadora. Quem filtra, filtra pela expressão RESOLVIDA (o `coalesce`), nunca
+     * por esta coluna crua. A ÚNICA leitura legítima da coluna sozinha é "quais vagas SOBREPÕEM".
+     *
+     * `restrict` NO DELETE, como em `linha_servico_id` e pelo mesmo motivo: catálogo já usado por
+     * uma vaga não é apagado do banco, só inativado, e a vaga antiga continua legível.
+     */
+    segmentoId: integer("segmento_id").references(() => asSegmentos.id, { onDelete: "restrict" }),
+    comercialId: integer("comercial_id").references(() => asComerciais.id, {
+      onDelete: "restrict",
+    }),
+    /**
      * A CIDADE da vaga (Onda C), pelo código do IBGE, SUBSTITUINDO a lista velha de região.
      *
      * O QUE ACONTECE COM `regiao_estado`, `regioes` e `regioes_outras`: as três COLUNAS FICAM (a
@@ -3077,6 +3128,76 @@ export const asCandidatos = pgTable(
 export const asLinhasServico = pgTable("as_linhas_servico", {
   id: serial("id").primaryKey(),
   codigo: varchar("codigo", { length: 40 }).notNull().unique(),
+  rotulo: varchar("rotulo", { length: 120 }).notNull(),
+  ordem: integer("ordem").notNull(),
+  ativo: boolean("ativo").notNull().default(true),
+  criadoEm,
+  atualizadoEm,
+});
+
+/**
+ * ─ O CATÁLOGO DOS SEGMENTOS (Onda E). O RAMO DO CLIENTE, e a LISTA É DO DIRETOR ────────────────
+ *
+ * ┌─ ELE NÃO É A "SEGMENTAÇÃO DE ÁREA" DO RBAC, E ESTA É A COLISÃO MAIS CARA DO REPOSITÓRIO ─────┐
+ * │ `docs/ARQUITETURA-SEGMENTACAO-AREA.md` descreve um mecanismo de PERMISSÃO (o teto do MASTER  │
+ * │ sobre a área dele). Isto aqui é o RAMO DE NEGÓCIO do cliente: Varejo, Saúde, Indústria. Não  │
+ * │ se tocam, não se leem juntos, e nada neste arquivo encosta em `Area` nem em menu.            │
+ * │ Há mais dois homônimos vivos: o "segmento de rota" da Esteira e o `LinhaSegmento` do         │
+ * │ gerencial, ambos de outro assunto. O prefixo `as_` é o que mantém os quatro separados.       │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * O MOLDE É O DE `as_linhas_servico`, e a repetição é deliberada: o problema é o mesmo (uma lista
+ * que é do diretor e não da fábrica) e a resposta já foi auditada duas vezes. `codigo` IMUTÁVEL,
+ * derivado do rótulo na criação; `rotulo` editável, e renomear corrige o nome em todo cliente e
+ * toda vaga que já apontam; `ordem` para o seletor sair na ordem do diretor; `ativo` como EXCLUSÃO
+ * LÓGICA, que é o que faz a vaga do ano passado continuar dizendo de que segmento ela era.
+ *
+ * §A.6: código, rótulo, ordem e um booleano. Nenhum dado pessoal entra aqui.
+ */
+export const asSegmentos = pgTable("as_segmentos", {
+  id: serial("id").primaryKey(),
+  codigo: varchar("codigo", { length: 40 }).notNull().unique(),
+  rotulo: varchar("rotulo", { length: 120 }).notNull(),
+  ordem: integer("ordem").notNull(),
+  ativo: boolean("ativo").notNull().default(true),
+  criadoEm,
+  atualizadoEm,
+});
+
+/**
+ * ─ O CATÁLOGO DOS COMERCIAIS (Onda E). AS PESSOAS DO COMERCIAL ─────────────────────────────────
+ *
+ * ┌─ `rotulo` É NOME DE PESSOA, e esta é a ÚNICA tabela da onda com dado pessoal (§A.6) ─────────┐
+ * │ GUARDA O NOME E MAIS NADA: sem e-mail, sem telefone, sem CPF, sem vínculo com `usuarios`.    │
+ * │ É minimização, não economia de escopo: o que a tela precisa responder é "de quem é este      │
+ * │ cliente", e o nome responde. Qualquer contato a mais seria dado pessoal guardado sem uso.    │
+ * │                                                                                              │
+ * │ QUEM SAI DA EMPRESA É INATIVADO, NUNCA APAGADO. O nome continua resolvendo o rótulo dos      │
+ * │ clientes e das vagas que ele atendeu, e some do seletor de quem recebe carteira nova.        │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ ELA NÃO TEM `codigo`, E É A ÚNICA DIFERENÇA DE FORMA PARA `as_segmentos` (veto da auditoria) ┐
+ * │ Nos catálogos irmãos o `codigo` é DERIVADO do rótulo na criação e IMUTÁVEL para sempre, e     │
+ * │ renomear não o toca. Para "Ana Paula Rodrigues" isso gravaria `ANA_PAULA_RODRIGUES` numa      │
+ * │ coluna que NENHUMA tela corrige. Nome de pessoa MUDA (casamento, retificação, nome social) e  │
+ * │ a LGPD dá direito à correção: renomear consertaria o `rotulo` e deixaria o nome ANTIGO vivo   │
+ * │ no `codigo`, num campo que sai no JSON. A IDENTIDADE AQUI É O `id` SERIAL, que não carrega    │
+ * │ significado nenhum, e renomear passa a corrigir a pessoa INTEIRA. Mesma escolha de            │
+ * │ `as_cidades`, que também identifica por um número sem semântica de texto.                     │
+ * │                                                                                               │
+ * │ E NÃO HÁ UNIQUE POR NOME, também de propósito: DUAS "Ana Silva" existem no mundo real, e um   │
+ * │ unique recusaria a segunda. Pior, a recusa teria de dizer com QUEM colidiu, e revelaria o     │
+ * │ nome de uma ex-funcionária inativada a quem só tentou cadastrar alguém. Homônimo é caso       │
+ * │ válido; quem desempata é o `id`.                                                              │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+export const asComerciais = pgTable("as_comerciais", {
+  /**
+   * A IDENTIDADE, e ela é um número SEM SIGNIFICADO de propósito (ver o cabeçalho): é o que permite
+   * corrigir o nome de uma pessoa por inteiro, sem deixar o nome antigo preso num código imutável.
+   */
+  id: serial("id").primaryKey(),
+  /** NOME DE PESSOA (§A.6). Editável a qualquer momento, e SEM unique: homônimo é caso válido. */
   rotulo: varchar("rotulo", { length: 120 }).notNull(),
   ordem: integer("ordem").notNull(),
   ativo: boolean("ativo").notNull().default(true),

@@ -135,6 +135,45 @@ export const CARDS: { href: string; icon: IconName; title: string; desc: string;
   },
   {
     /**
+     * SEGMENTOS (Onda E). Card do hub, ao lado das Linhas De Serviço, porque é a mesma natureza:
+     * catálogo de A&S que o diretor mantém e que alimenta um seletor. A diferença é o que ele
+     * classifica: a linha de serviço classifica a VAGA, o segmento classifica o CLIENTE.
+     *
+     * ÍCONE `layers`, e não o `tag` da linha de serviço: duas etiquetas iguais lado a lado no hub
+     * fariam o olho confundir exatamente os dois catálogos que mais se parecem.
+     *
+     * ELE NÃO É A SEGMENTAÇÃO DE ÁREA, que é o teto de RBAC por área: este aqui é o RAMO do cliente
+     * (Varejo, Saúde, Indústria), e por isso o texto do card diz o ramo com todas as letras.
+     *
+     * §A.23: o card é filtrado por `temMenu`, como todos os outros, e `as-segmentos` nasce só para o
+     * SUPER_ADMIN. Registrar o menu não libera nada para ninguém: quem libera é o diretor.
+     */
+    href: "/admin/as/segmentos",
+    codigo: "as-segmentos",
+    icon: "layers",
+    title: "Segmentos",
+    desc: "Cadastro do ramo do cliente (Varejo, Saúde, Indústria): nome e ordem no seletor.",
+  },
+  {
+    /**
+     * COMERCIAIS (Onda E). Card do hub, ao lado dos Segmentos, porque os dois campos nascem juntos e
+     * moram no mesmo lugar: o cadastro do cliente.
+     *
+     * ÍCONE `users`, que é a marca de PESSOA no conjunto do sistema, e aqui ela é literal: este
+     * catálogo guarda nome de gente, e é o único da onda que guarda (§A.6). O ícone diz isso antes
+     * de o card ser aberto.
+     *
+     * §A.23: o card é filtrado por `temMenu`, como todos os outros, e `as-comerciais` nasce só para
+     * o SUPER_ADMIN. Registrar o menu não libera nada para ninguém: quem libera é o diretor.
+     */
+    href: "/admin/as/comerciais",
+    codigo: "as-comerciais",
+    icon: "users",
+    title: "Comerciais",
+    desc: "Cadastro das pessoas do comercial: nome e ordem no seletor do cliente.",
+  },
+  {
+    /**
      * MOTIVOS DE CANCELAMENTO DE VAGA (A&S): é CATÁLOGO, e catálogo mora no Menu Gerencial, ao lado
      * de Motivos De Declínio, que é o vizinho de mesma natureza (a lista fechada que classifica um
      * encerramento). Não vai para a barra lateral: o card É o que faz o menu ser ENCONTRADO, e a

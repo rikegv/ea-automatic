@@ -54,7 +54,9 @@ import {
   asCandidaturaEtapas,
   asCandidaturas,
   asCidades,
+  asComerciais,
   asLinhasServico,
+  asSegmentos,
   beneficiosCatalogo,
   cargos,
   clientes,
@@ -96,12 +98,15 @@ import type {
   ReabrirVagaDto,
 } from "./vagas.dto";
 import { idiomasGravados, type VagaIdiomaGravado } from "../../domain/vaga-idioma";
-import type { VagaItemOndaC } from "./vaga-item-onda-c";
+import type { VagaItemOndaE } from "./vaga-item-onda-e";
 import {
   pendenciasDaVaga,
   type VagaCamposObrigatoriosComLinha,
 } from "../../domain/vaga-obrigatorios";
 import { linhaDeServicoEscolhida } from "../linhas-servico/linhas-servico.service";
+import { segmentoEscolhido } from "../segmentos/segmentos.service";
+import { comercialEscolhido } from "../comerciais/comerciais.service";
+import { resolverHerdado } from "../../domain/valor-herdado";
 import { gravarSaidaDaCandidatura } from "../candidatos/encerrar-candidatura";
 import { restaurarCandidatura } from "../candidatos/restaurar-candidatura";
 import { EtapasFunilService } from "../etapas/etapas-funil.service";
@@ -275,7 +280,7 @@ export class VagasService {
    * obrigaria cada leitor a decidir o que fazer com a ausência, e o zero já é a resposta certa: vaga
    * sem gente dentro tem zero posições entregues.
    */
-  async list(): Promise<VagaItemOndaC[]> {
+  async list(): Promise<VagaItemOndaE[]> {
     const consultor = alias(usuarios, "consultor");
     const recruiter = alias(usuarios, "recruiter");
     const autor = alias(usuarios, "autor");
@@ -283,6 +288,19 @@ export class VagasService {
     // normal não tem forçamento, e o autor do forçamento vira nulo se o usuário for apagado), então
     // o join é LEFT como os outros três.
     const forcadoPor = alias(usuarios, "forcado_por");
+    /*
+     * ─ QUATRO ALIAS PARA DOIS CATÁLOGOS, E O NÚMERO É A PRÓPRIA HERANÇA (Onda E) ───────────────
+     *
+     * Cada catálogo é lido DUAS vezes na mesma consulta: uma pela VAGA (a sobreposição) e outra
+     * pelo CLIENTE (o que ela herda). Não é desperdício, é a única forma de o `coalesce` ter os
+     * DOIS rótulos na mão: o da vaga e o do cliente são linhas DIFERENTES da mesma tabela, e um
+     * join só devolveria um deles. Sem o segundo, a vaga que herda chegaria com o id resolvido e
+     * o rótulo vazio, e a tela escreveria "não informado" para um cliente que TEM segmento.
+     */
+    const segmentoDaVaga = alias(asSegmentos, "segmento_vaga");
+    const segmentoDoCliente = alias(asSegmentos, "segmento_cliente");
+    const comercialDaVaga = alias(asComerciais, "comercial_vaga");
+    const comercialDoCliente = alias(asComerciais, "comercial_cliente");
 
     const linhas = await this.db
       .select({
@@ -304,12 +322,39 @@ export class VagasService {
         linhaServicoRotulo: asLinhasServico.rotulo,
         cidadeNome: asCidades.nome,
         cidadeUf: asCidades.uf,
+        /*
+         * ─ O SEGMENTO E O COMERCIAL (Onda E), RESOLVIDOS NO MESMO `SELECT` ────────────────────
+         *
+         * MESMA DECISÃO DA ONDA C, e ela vale com mais força aqui: a listagem NÃO PAGINA, então
+         * resolver a herança linha a linha (ler a vaga, depois o cliente dela, depois o catálogo)
+         * viraria TRÊS idas ao banco por vaga na tela mais pesada do módulo.
+         *
+         * O ID DO CLIENTE VEM JUNTO, e ele é a metade que se esquece: sem `clientes.segmentoId` no
+         * payload da consulta, o `coalesce` não teria o que coalescer e toda vaga que HERDA (a
+         * maioria esmagadora) chegaria vazia.
+         *
+         * `leftJoin` NOS QUATRO: vaga sem cliente existe (rascunho, e a importada que não casou), e
+         * cliente sem segmento é o estado de partida dos 249. Um `innerJoin` sumiria com elas da
+         * listagem inteira, em silêncio, que é o pior desfecho possível para uma tela de fila.
+         */
+        segmentoDaVagaRotulo: segmentoDaVaga.rotulo,
+        segmentoDoClienteId: clientes.segmentoId,
+        segmentoDoClienteRotulo: segmentoDoCliente.rotulo,
+        comercialDaVagaRotulo: comercialDaVaga.rotulo,
+        comercialDoClienteId: clientes.comercialId,
+        comercialDoClienteRotulo: comercialDoCliente.rotulo,
       })
       .from(vagas)
       .leftJoin(asLinhasServico, eq(asLinhasServico.id, vagas.linhaServicoId))
       .leftJoin(asCidades, eq(asCidades.id, vagas.cidadeId))
       .leftJoin(cargos, eq(cargos.id, vagas.cargoId))
       .leftJoin(clientes, eq(clientes.codCliente, vagas.codCliente))
+      // OS QUATRO DA ONDA E. Os do CLIENTE dependem do join de `clientes` logo acima, e é por isso
+      // que vêm depois dele: é ele que traz `clientes.segmento_id` e `clientes.comercial_id`.
+      .leftJoin(segmentoDaVaga, eq(segmentoDaVaga.id, vagas.segmentoId))
+      .leftJoin(segmentoDoCliente, eq(segmentoDoCliente.id, clientes.segmentoId))
+      .leftJoin(comercialDaVaga, eq(comercialDaVaga.id, vagas.comercialId))
+      .leftJoin(comercialDoCliente, eq(comercialDoCliente.id, clientes.comercialId))
       .leftJoin(autor, eq(autor.id, vagas.abertoPorId))
       .leftJoin(consultor, eq(consultor.id, vagas.consultorId))
       .leftJoin(recruiter, eq(recruiter.id, vagas.recruiterId))
@@ -349,6 +394,42 @@ export class VagasService {
       cidadeId: v.cidadeId,
       cidadeNome: l.cidadeNome ?? null,
       cidadeUf: l.cidadeUf ?? null,
+      /*
+       * ─ O SEGMENTO E O COMERCIAL (Onda E): A SOBREPOSIÇÃO CRUA **E** O VALOR RESOLVIDO ────────
+       *
+       * OS DOIS PARES SÃO COISAS DIFERENTES, e por isso os dois viajam:
+       *   . `segmentoSobrepostoId` / `comercialSobrepostoId` são a SOBREPOSIÇÃO, crua. É o que o
+       *     FORMULÁRIO pré-seleciona, e é por isso que ele NÃO pode ler o resolvido: marcado com o
+       *     valor herdado, salvar sem tocar no campo viraria a herança numa sobreposição congelada.
+       *   . `segmento` / `comercial` são o valor EFETIVO, com a ORIGEM junto. É o que a TELA
+       *     mostra, o que o FILTRO casa e o que a ficha exibe.
+       *
+       * ┌─ O NOME `segmentoSobrepostoId` É A DEFESA, E ELE NÃO É ENFEITE (achado do `tester`) ────┐
+       * │ Chamar a coluna crua de `segmentoId` no item seria pôr, ao lado do valor resolvido, um   │
+       * │ campo com o nome MAIS ÓBVIO e o conteúdo ERRADO: ele vale NULO exatamente na vaga que    │
+       * │ herda, que é a maioria esmagadora. Quem escrever um filtro pegaria `item.segmentoId` sem │
+       * │ pensar, a lista viria curta, e NADA daria erro: haveria resposta a menos. O nome diz o    │
+       * │ que o campo é, e quem quiser a sobreposição pede pela sobreposição.                       │
+       * └──────────────────────────────────────────────────────────────────────────────────────────┘
+       *
+       * O FILTRO CASA POR `item.segmento.id`, NUNCA pela coluna crua. Como a resolução acontece UMA
+       * vez, aqui, qualquer filtro montado sobre o valor resolvido já nasce ciente da herança, venha
+       * ele da tela ou de uma consulta futura.
+       */
+      segmentoSobrepostoId: v.segmentoId,
+      comercialSobrepostoId: v.comercialId,
+      segmento: resolverHerdado(
+        v.segmentoId,
+        l.segmentoDaVagaRotulo,
+        l.segmentoDoClienteId,
+        l.segmentoDoClienteRotulo,
+      ),
+      comercial: resolverHerdado(
+        v.comercialId,
+        l.comercialDaVagaRotulo,
+        l.comercialDoClienteId,
+        l.comercialDoClienteRotulo,
+      ),
       posicoesOficiais: v.posicoesOficiais,
       posicoesBanco: v.posicoesBanco,
       // Traduzida na ENTRADA, como o status: o "TECNICO" solto virou Técnico Completo (item 3).
@@ -540,6 +621,42 @@ export class VagasService {
      * contato. É o mesmo par que o `contextoAs` já devolve para o seletor da trilha.
      */
     consultores: { id: string; nome: string }[];
+    /**
+     * ─ OS COMERCIAIS (Onda E), E É **AQUI** QUE ELES SÃO SERVIDOS, NÃO EM ROTA PRÓPRIA ─────────
+     *
+     * ┌─ A LISTA É DE NOMES DE PESSOA, E POR ISSO NÃO EXISTE UM `GET /as/comerciais` ABERTO ─────┐
+     * │ Os catálogos irmãos (etapas, status, motivos, linhas de serviço, e o próprio SEGMENTO)   │
+     * │ têm uma controller de leitura aberta a qualquer sessão autenticada, porque a lista deles │
+     * │ é inócua. A dos comerciais é a folha do time comercial: aberta, ela sairia inteira num   │
+     * │ `curl` de qualquer COMUM da Admissão, que não tem nada com A&S.                           │
+     * │                                                                                          │
+     * │ ESTA SUPERFÍCIE JÁ É GATADA e já devolve exatamente este tipo de par: `consultores`, logo │
+     * │ acima, é `{ id, nome }` de USUÁRIO, e vive atrás de `VagasController.*`, reivindicado     │
+     * │ pelo menu `as-vagas`. Servir os comerciais daqui é zero rota nova e zero superfície nova. │
+     * │ Mesma régua de `GerencialController.nomes` e `AltoVolumeController.pessoasDaLoja`.        │
+     * └──────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * O SEGMENTO NÃO VEM JUNTO, e a assimetria é a própria regra: ele tem rota aberta
+     * (`GET /as/segmentos`) porque não é dado pessoal. Duplicá-lo aqui criaria uma segunda fonte
+     * para a mesma lista, e duas fontes divergem no primeiro ajuste.
+     *
+     * ┌─ A LISTA INCLUI OS **INATIVOS**, E O FLAG `ativo` VAI JUNTO PARA A TELA SEPARAR OS DOIS ──┐
+     * │ ESTA É A ÚNICA FONTE DE COMERCIAL PARA QUEM NÃO É SUPER_ADMIN (o gerenciador é o único     │
+     * │ outro lugar, e ele é fechado). Devolvendo só os ativos, a vaga de quem SAIU DA EMPRESA     │
+     * │ ficaria INVISÍVEL ao filtro, para sempre, e essa é justamente a pergunta que mais se faz   │
+     * │ quando alguém sai: "o que ficou na mão dele?". §A.37, e é a mesma régua que o filtro de    │
+     * │ Status da Central já segue ("se houver vaga parada nele, é por ele que se procura").       │
+     * │                                                                                            │
+     * │ O FLAG É O QUE IMPEDE O EFEITO COLATERAL: o FILTRO quer todo mundo, o SELETOR da trilha    │
+     * │ quer só os ativos (não se oferece quem saiu para uma vaga nova). Uma lista só, com o       │
+     * │ estado ao lado, atende os dois sem uma segunda rota; sem o flag, a tela teria de escolher  │
+     * │ qual dos dois quebrar.                                                                      │
+     * └────────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * §A.6: id, NOME e um booleano. A lista não sai em log, e nenhuma contagem por pessoa viaja
+     * junto: quantas vagas cada comercial tem é volume de operação, e não foi pedido.
+     */
+    comerciais: { id: number; rotulo: string; ativo: boolean }[];
   }> {
     const [
       listaCargos,
@@ -549,6 +666,7 @@ export class VagasService {
       ultimoSolicitante,
       listaEscalas,
       listaConsultores,
+      listaComerciais,
     ] = await Promise.all([
       this.db
         .select({ id: cargos.id, nome: cargos.nome })
@@ -649,6 +767,16 @@ export class VagasService {
         .from(usuarios)
         .where(and(eq(usuarios.ativo, true), eq(usuarios.papelAs, "CONSULTOR")))
         .orderBy(asc(usuarios.nome)),
+      // OS COMERCIAIS (Onda E), ATIVOS **E** INATIVOS, na ORDEM DO CATÁLOGO e não em ordem
+      // alfabética: a `ordem` é do diretor, e é ela que o gerenciador reescreve. SEM filtro por
+      // `ativo` de propósito (ver o contrato acima): o filtro da Central precisa de quem saiu, e o
+      // flag viaja junto para o seletor da trilha continuar oferecendo só quem está. Ler a tabela
+      // direto, em vez de injetar o `ComerciaisService`, é a mesma decisão de `resolverLinhaServico`:
+      // mudar a assinatura do construtor alcançaria as specs que instanciam este serviço (§A.26).
+      this.db
+        .select({ id: asComerciais.id, rotulo: asComerciais.rotulo, ativo: asComerciais.ativo })
+        .from(asComerciais)
+        .orderBy(asc(asComerciais.ordem), asc(asComerciais.id)),
     ]);
 
     const solicitantePorCliente = new Map(
@@ -706,6 +834,7 @@ export class VagasService {
       motivos: listaMotivos.map((m) => m.nome),
       escalas: listaEscalas.map((e) => e.nome),
       consultores: listaConsultores,
+      comerciais: listaComerciais,
     };
   }
 
@@ -754,7 +883,8 @@ export class VagasService {
     // toca o banco, e a régua dos obrigatórios é quem decide se a ausência impede publicar.
     const cidade = await this.resolverCidade(dto.cidadeId);
     const linhaServicoId = await this.resolverLinhaServico(dto.linhaServicoId);
-    const campos = this.camposDaTrilha(regua, dto, status, cidade, linhaServicoId);
+    const herdaveis = await this.resolverHerdaveis(dto);
+    const campos = this.camposDaTrilha(regua, dto, status, cidade, linhaServicoId, herdaveis);
     this.travaObrigatorios(regua, campos, status);
 
     await this.travaDuplicidadeDeCodigo(campos.codigo, null);
@@ -850,8 +980,9 @@ export class VagasService {
     const status = this.travaStatusDaTrilha(regua, dto.status, "RASCUNHO");
     const cidade = await this.resolverCidade(dto.cidadeId);
     const linhaServicoId = await this.resolverLinhaServico(dto.linhaServicoId);
+    const herdaveis = await this.resolverHerdaveis(dto);
     const campos = {
-      ...this.camposDaTrilha(regua, dto, status, cidade, linhaServicoId),
+      ...this.camposDaTrilha(regua, dto, status, cidade, linhaServicoId, herdaveis),
       posicoesOficiais: this.metaOficialDaTrilha(dto, atual),
     };
     this.travaObrigatorios(regua, campos, status);
@@ -1042,6 +1173,29 @@ export class VagasService {
     cidade: AsCidade | null,
     /** A linha de serviço já conferida contra o catálogo, ou `null` (rascunho sem escolha). */
     linhaServicoId: number | null,
+    /**
+     * A SOBREPOSIÇÃO DE SEGMENTO E COMERCIAL (Onda E), já conferida contra os dois catálogos.
+     *
+     * CHEGAM PRONTOS, como a cidade e pelo mesmo motivo: esta função é SÍNCRONA, e é isso que faz
+     * `vagas.trilha-nao-encerra.spec.ts` conseguir provar, com o `db` NULO, que a recusa de status
+     * terminal acontece ANTES de qualquer ida ao banco.
+     *
+     * ┌─ O VALOR PADRÃO EXISTE POR ALCANCE (§A.26), E O NEUTRO É "HERDA" ────────────────────────┐
+     * │ Esta função é PRIVADA mas é chamada por specs JÁ VALIDADAS que a alcançam pelo nome e     │
+     * │ passam TRÊS argumentos (`vagas.motivo-temporario.spec.ts`, `vagas.idioma-com-nivel.spec.ts`│
+     * │ ), porque ela é o mapeamento PURO do corpo para as colunas e é assim que se testa isso    │
+     * │ sem banco. Um parâmetro obrigatório a mais quebraria as duas por um motivo que não tem    │
+     * │ nada a ver com o que elas afirmam.                                                         │
+     * │                                                                                            │
+     * │ O PADRÃO É SEGURO PORQUE O NEUTRO AQUI É NULO, E NULO É HERDAR: a ausência produz a vaga  │
+     * │ que segue o cliente, que é o estado da esmagadora maioria. AS DUAS PORTAS DE ESCRITA REAIS│
+     * │ (`create` e `atualizar`) PASSAM O VALOR EXPLICITAMENTE, sempre, e são as únicas.           │
+     * └────────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    herdaveis: { segmentoId: number | null; comercialId: number | null } = {
+      segmentoId: null,
+      comercialId: null,
+    },
   ) {
     // "ISTO É O RASCUNHO?" PERGUNTADO AO PAPEL, e não ao literal. O código continua sendo
     // `RASCUNHO`; o que muda é que a resposta deixa de depender de o literal e o catálogo
@@ -1091,6 +1245,17 @@ export class VagasService {
       linhaServicoId,
       // A CIDADE (Onda C), pelo código do IBGE. A UF sai dela, logo acima.
       cidadeId: cidade?.id ?? null,
+      /*
+       * A SOBREPOSIÇÃO DE SEGMENTO E COMERCIAL (Onda E). NULO AQUI NÃO É "SEM VALOR": é HERDAR DO
+       * CLIENTE, e é o estado normal da esmagadora maioria das vagas. Quem quis o do cliente não
+       * preenche, e a leitura resolve por `coalesce(vaga.x, cliente.x)`.
+       *
+       * NÃO EXISTE "COPIAR DO CLIENTE AO NASCER" aqui, e a ausência é a decisão do diretor (12/09):
+       * a herança é VIVA, então carimbar o valor do cliente na criação congelaria justamente o que
+       * ele quis que acompanhasse.
+       */
+      segmentoId: herdaveis.segmentoId,
+      comercialId: herdaveis.comercialId,
       // OS DOIS CONTADORES (25/08). O oficial ausente é NULL (rascunho sem meta), o de banco ausente
       // é ZERO: a coluna é NOT NULL DEFAULT 0 e "sem banco" é resposta, não lacuna.
       posicoesOficiais: dto.posicoesOficiais ?? null,
@@ -3144,6 +3309,72 @@ export class VagasService {
       })
       .from(asLinhasServico);
     return linhaDeServicoEscolhida(linhas, id)?.id ?? null;
+  }
+
+  /**
+   * ─ A SOBREPOSIÇÃO DE SEGMENTO E COMERCIAL, CONFERIDA CONTRA OS DOIS CATÁLOGOS (Onda E) ───────
+   *
+   * ┌─ A RÉGUA NÃO É DUPLICADA: as funções PURAS `segmentoEscolhido` e `comercialEscolhido` são as │
+   * │ MESMAS que os catálogos usam. O que muda é só de onde vêm as listas, e duas consultas        │
+   * │ indexadas a tabelas curtas, na gravação de UMA vaga, não são custo. Injetar os dois services │
+   * │ mudaria a assinatura do construtor, que TREZE specs instanciam (§A.26), sem nenhum ganho:    │
+   * │ é a mesma decisão, com a mesma justificativa, de `resolverLinhaServico` logo acima.          │
+   * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * ┌─ AUSENTE NÃO TOCA O BANCO, MAS INVÁLIDO **LANÇA**, E A DIFERENÇA É A ONDA INTEIRA ──────────┐
+   * │ Repare no que NÃO está escrito aqui: nenhum `?? null` depois da conferência. Em `linha de   │
+   * │ serviço`, nulo quer dizer "em branco", e coagir um id ruim para nulo só perderia o valor.    │
+   * │ AQUI NULO QUER DIZER **HERDAR DO CLIENTE**: coagir transformaria um erro de escolha em       │
+   * │ HERANÇA SILENCIOSA, e o consultor que escolheu "Saúde" veria a tela voltar mostrando o       │
+   * │ segmento do cliente, concluiria que não salvou, e tentaria de novo para sempre. As           │
+   * │ sobrecargas das duas funções puras garantem isso no TIPO: com `id: number`, elas não têm     │
+   * │ `null` no retorno, então não existe o que coagir.                                            │
+   * │                                                                                              │
+   * │ `undefined` NO CORPO É "NÃO MEXER/NÃO ESCOLHEU" e continua virando nulo, que é HERDAR. Esse  │
+   * │ é o único caminho legítimo para o nulo, e ele não passa por conferência nenhuma.             │
+   * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+   */
+  private async resolverHerdaveis(dto: CreateVagaDto): Promise<{
+    segmentoId: number | null;
+    comercialId: number | null;
+  }> {
+    const segmentoId = await this.resolverSegmento(dto.segmentoId);
+    const comercialId = await this.resolverComercial(dto.comercialId);
+    return { segmentoId, comercialId };
+  }
+
+  /** O segmento sobreposto, ou `null` quando a vaga não sobrepõe (e portanto HERDA do cliente). */
+  private async resolverSegmento(id: number | null | undefined): Promise<number | null> {
+    if (id === null || id === undefined) return null;
+    const segmentos = await this.db
+      .select({
+        id: asSegmentos.id,
+        codigo: asSegmentos.codigo,
+        rotulo: asSegmentos.rotulo,
+        ordem: asSegmentos.ordem,
+        ativo: asSegmentos.ativo,
+      })
+      .from(asSegmentos);
+    return segmentoEscolhido(segmentos, id).id;
+  }
+
+  /**
+   * O comercial sobreposto, ou `null` quando a vaga não sobrepõe (e portanto HERDA do cliente).
+   *
+   * §A.6: a lista de NOMES é lida aqui só para conferir a escolha, vive no escopo desta função e
+   * não sai em resposta nenhuma. Nada dela vai para log.
+   */
+  private async resolverComercial(id: number | null | undefined): Promise<number | null> {
+    if (id === null || id === undefined) return null;
+    const comerciais = await this.db
+      .select({
+        id: asComerciais.id,
+        rotulo: asComerciais.rotulo,
+        ordem: asComerciais.ordem,
+        ativo: asComerciais.ativo,
+      })
+      .from(asComerciais);
+    return comercialEscolhido(comerciais, id).id;
   }
 
   /**

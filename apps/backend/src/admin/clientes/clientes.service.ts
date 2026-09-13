@@ -8,7 +8,17 @@ import {
 import { and, asc, eq, notInArray, sql } from "drizzle-orm";
 import type { Database } from "../../db/client";
 import { DRIZZLE } from "../../db/drizzle.module";
-import { admissoes, candidatos, clientes, clienteVinculos, entidadesSoulan } from "../../db/schema";
+import {
+  admissoes,
+  asComerciais,
+  asSegmentos,
+  candidatos,
+  clientes,
+  clienteVinculos,
+  entidadesSoulan,
+} from "../../db/schema";
+import { segmentoEscolhido } from "../../as/segmentos/segmentos.service";
+import { comercialEscolhido } from "../../as/comerciais/comerciais.service";
 import type { CreateClienteDto, UpdateClienteDto } from "./clientes.dto";
 import { opcaoIdDoVinculo, VINCULO_OPCOES } from "./vinculo-opcoes";
 import { ROTULO_TIPO_SERVICO } from "../../domain/vinculo";
@@ -48,6 +58,36 @@ export class ClientesService {
    */
   async list() {
     const base = await this.db.select().from(clientes).orderBy(clientes.razaoSocial);
+    /**
+     * ─ O RÓTULO DO SEGMENTO (Onda E), RESOLVIDO POR MAPA E **NÃO** POR JOIN NESTA CONSULTA ──────
+     *
+     * ┌─ POR QUE O `select()` NU ACIMA NÃO FOI TOCADO (§A.26) ────────────────────────────────────┐
+     * │ Acrescentar um `leftJoin` obrigaria a trocar o `select()` sem argumento por um `select({   │
+     * │ c: clientes, ... })`, porque com join o drizzle passa a devolver a linha ANINHADA por       │
+     * │ tabela. Isso reescreveria a forma de uma consulta que alimenta a tela de Clientes, o wizard │
+     * │ e a Liberação, para acrescentar UMA string. Um mapa do catálogo custa uma consulta a uma    │
+     * │ tabela de poucas linhas e não encosta na consulta validada.                                │
+     * └────────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * ┌─ E ELE RESOLVE O SEGMENTO, **NUNCA** O NOME DO COMERCIAL (§A.6, régua do coordenador) ─────┐
+     * │ Esta rota (`GET /admin/clientes`) NÃO tem `@Roles` e NÃO é reivindicada por menu nenhum     │
+     * │ (o `menus.ts` deixa o GET de lista de fora de propósito, porque o consultor precisa dele na │
+     * │ Liberação e no wizard): ela é alcançável por QUALQUER sessão autenticada. `segmento_id`,    │
+     * │ `segmento_rotulo` e `comercial_id` não são dado pessoal e podem sair daqui. O NOME do       │
+     * │ comercial NÃO PODE: seria a folha do time comercial vazando pela lista de clientes, que é   │
+     * │ exatamente o que a ausência de uma `ComerciaisController` aberta existe para impedir. Quem  │
+     * │ mostra o nome é a tela de Clientes, que carrega o catálogo por rota GATADA e casa pelo id.  │
+     * └────────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * OS INATIVOS ENTRAM NO MAPA (a consulta não filtra `ativo`): o cliente cadastrado num segmento
+     * que saiu de circulação continua dizendo de que ramo ele é, em vez de mostrar vazio. É o
+     * precedente da etapa fantasma aplicado à leitura.
+     */
+    const rotuloDoSegmento = new Map(
+      (await this.db.select({ id: asSegmentos.id, rotulo: asSegmentos.rotulo }).from(asSegmentos)).map(
+        (s) => [s.id, s.rotulo] as const,
+      ),
+    );
     const vinc = (await this.db.execute(sql`
       SELECT DISTINCT ON (v.cod_cliente)
         v.cod_cliente, v.empresa_codigo, v.filial, v.tipo_servico, v.is_fopag,
@@ -69,7 +109,10 @@ export class ClientesService {
           })
         : null;
       return {
+        // O `...c` traz `segmentoId` e `comercialId` de graça, que são IDs e não dado pessoal. O
+        // rótulo do segmento vai junto; o do comercial NÃO (ver o bloco acima).
         ...c,
+        segmentoRotulo: c.segmentoId === null ? null : (rotuloDoSegmento.get(c.segmentoId) ?? null),
         empresaVinculo: v?.empresa_resolvida ?? null,
         cnpjVinculo: v?.cnpj_resolvido ?? null,
         tipoServico: v?.tipo_servico ?? null,
@@ -197,11 +240,16 @@ export class ClientesService {
       where: eq(clientes.codCliente, dto.codCliente),
     });
     if (existing) throw new ConflictException("cod_cliente já cadastrado");
+    // A MESMA CONFERÊNCIA DA EDIÇÃO, e ela precisa estar NAS DUAS PORTAS: `values(dto)` grava o
+    // corpo inteiro, então um id inexistente aqui viraria 500 de FK e um id INATIVO entraria
+    // normalmente, criando cliente novo apontando para um segmento fora de circulação.
+    await this.conferirSegmentoEComercial(dto);
     const [row] = await this.db.insert(clientes).values(dto).returning();
     return row;
   }
 
   async update(codCliente: string, dto: UpdateClienteDto) {
+    await this.conferirSegmentoEComercial(dto);
     const [row] = await this.db
       .update(clientes)
       .set({ ...dto, atualizadoEm: new Date() })
@@ -209,6 +257,86 @@ export class ClientesService {
       .returning();
     if (!row) throw new NotFoundException("Cliente não encontrado");
     return row;
+  }
+
+  /**
+   * ─ O SEGMENTO E O COMERCIAL ESCOLHIDOS, CONFERIDOS CONTRA OS DOIS CATÁLOGOS (Onda E) ──────────
+   *
+   * ┌─ TRÊS ESTADOS, E CADA UM TEM DE SER TRATADO DIFERENTE ────────────────────────────────────┐
+   * │ CAMPO AUSENTE (`undefined`) = NÃO MEXER. É o `PATCH` que veio para trocar outra coisa, e   │
+   * │   nem chega a ser conferido: o `...dto` não escreve a coluna.                              │
+   * │ `null` = LIMPAR, e é operação legítima (o admin classificou errado e está desfazendo). É a │
+   * │   mesma régua dos campos de benefício, logo ao lado no DTO.                                │
+   * │ NÚMERO = CONFERIDO contra o catálogo vivo, e id inexistente ou INATIVO **LANÇA**. Não vira │
+   * │   `null` em silêncio: nulo aqui é o que a VAGA herda, então engolir a escolha faria a vaga │
+   * │   toda do cliente mudar de dono sem ninguém ter pedido.                                    │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * A RÉGUA NÃO É REESCRITA: são as MESMAS funções puras dos dois catálogos. As tabelas são curtas
+   * e a leitura direta evita injetar dois serviços de outro módulo (`AsModule`) neste, que nasceu
+   * sem essa dependência.
+   *
+   * §A.6: a lista de nomes de comercial é lida só para conferir a escolha, morre no fim desta
+   * função e não sai em resposta nenhuma.
+   */
+  private async conferirSegmentoEComercial(dto: {
+    segmentoId?: number | null;
+    comercialId?: number | null;
+  }): Promise<void> {
+    if (typeof dto.segmentoId === "number") {
+      const segmentos = await this.db
+        .select({
+          id: asSegmentos.id,
+          codigo: asSegmentos.codigo,
+          rotulo: asSegmentos.rotulo,
+          ordem: asSegmentos.ordem,
+          ativo: asSegmentos.ativo,
+        })
+        .from(asSegmentos);
+      segmentoEscolhido(segmentos, dto.segmentoId);
+    }
+    if (typeof dto.comercialId === "number") {
+      const comerciais = await this.db
+        .select({
+          id: asComerciais.id,
+          rotulo: asComerciais.rotulo,
+          ordem: asComerciais.ordem,
+          ativo: asComerciais.ativo,
+        })
+        .from(asComerciais);
+      comercialEscolhido(comerciais, dto.comercialId);
+    }
+  }
+
+  /**
+   * ─ OS COMERCIAIS, PARA O SELETOR DO CADASTRO DE CLIENTE (Onda E) ──────────────────────────────
+   *
+   * ELE NÃO EXISTE COMO ROTA ABERTA EM LUGAR NENHUM, e é por isso que existe aqui: a lista é de
+   * NOMES DE PESSOA, e um `GET /as/comerciais` aberto entregaria a folha do time comercial a
+   * qualquer sessão válida. Quem alcança este método alcança a superfície de ADMINISTRAÇÃO de
+   * clientes, que é exatamente quem precisa escolher o comercial do cliente.
+   *
+   * ┌─ `incluirInativos` EVITA UMA PERDA DE DADO SILENCIOSA, e não é conveniência de tela ────────┐
+   * │ O padrão ESCONDE quem saiu da empresa, porque cadastro novo não se oferece a quem saiu. Mas │
+   * │ o cliente cujo comercial foi inativado PRECISA continuar mostrando o vínculo dele: sem os   │
+   * │ inativos, o seletor não acha o valor guardado, cai no placeholder, o campo passa a valer    │
+   * │ vazio, e o primeiro "Salvar alterações" feito para mudar OUTRA COISA manda `null` e APAGA o │
+   * │ vínculo. Nada falha, e ninguém liga uma coisa à outra depois.                                │
+   * │                                                                                              │
+   * │ O NOME DO PARÂMETRO É MASCULINO E ISSO IMPORTA: escrito errado, ele não dá 400, cai no       │
+   * │ padrão e devolve só os ativos. O modo de falha é exatamente o parágrafo acima.               │
+   * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * NA ORDEM DO CATÁLOGO, que é a do diretor, e não em ordem alfabética.
+   */
+  async comerciais(incluirInativos = false): Promise<{ id: number; rotulo: string; ativo: boolean }[]> {
+    return this.db
+      .select({ id: asComerciais.id, rotulo: asComerciais.rotulo, ativo: asComerciais.ativo })
+      .from(asComerciais)
+      // `undefined` no `where` é o filtro AUSENTE, e não um filtro vazio: é assim que o drizzle
+      // deixa a mesma consulta servir os dois casos sem duplicar a projeção e a ordenação.
+      .where(incluirInativos ? undefined : eq(asComerciais.ativo, true))
+      .orderBy(asc(asComerciais.ordem), asc(asComerciais.id));
   }
 
   /**

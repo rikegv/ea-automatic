@@ -14932,3 +14932,493 @@ o campo é obrigatório para publicar. O risco não é estético: é gravar o cl
 o dano exato que a Onda D existe para evitar.
 
 **A janela entre os dois passos é a combinação segura, e é a única razão da ordem. Não inverter.**
+
+## 13/09/2026: A ONDA E, a última da Central De Vagas, e o molde que não servia para nome de pessoa
+
+**ESTADO: na HOMOLOGAÇÃO (3120), NADA COMMITADO.** Produção está na Onda D (`14325f0`, **107
+migrations**) e intocada pela E. Homologação em **107** (ela estava em 106; a 0107 é a única desta
+onda). Gate: **backend 3.174/3.174, frontend 685/685**, typecheck e eslint limpos.
+Mapa: `docs/MAPA-ONDA-E.md`. Provas: `/home/henrique/ost-as-onda-e-prints/`.
+
+### 1. O QUE ENTROU
+
+**Dois catálogos gerenciáveis**, `as_segmentos` (o RAMO: Varejo, Saúde, Indústria) e `as_comerciais`
+(as PESSOAS do comercial), no molde dos outros cinco, com CRUD, ordem e inativação.
+
+**Dois campos no cadastro do cliente**, opcionais, e **os quatro `<select>` nativos da §A.36
+convertidos** para o design system na mesma passagem, como o diretor autorizou.
+
+**A herança na vaga:** nulo significa herdar do cliente, preenchido significa sobrepor, e a leitura
+resolve por `coalesce(vaga, cliente)`. **Herança viva** (decisão do diretor): trocar o comercial de um
+cliente move as vagas antigas dele junto.
+
+**Dois filtros multiselect** na Central De Vagas, **sem coluna nova**, mais as duas linhas na ficha
+dizendo de onde o valor veio.
+
+### 2. O VETO SOBRE O MAPA, E ELE NÃO ERA SOBRE O DESENHO
+
+A auditoria conferiu as quatro medições do mapa, todas bateram, **e vetou assim mesmo**: o mapa
+mandava copiar um molde que **não serve para dado pessoal**. Três achados valem o veto.
+
+**O molde deixaria a folha do time comercial numa rota aberta.** Nos cinco catálogos vizinhos a
+controller de LEITURA fica fora da reivindicação **de propósito**, porque a lista deles é inócua.
+Copiado, `GET /as/comerciais` ficaria alcançável por **qualquer sessão válida**, e os 23 consultores
+da Admissão baixariam a lista de nomes com um `curl`. O próprio repositório já tinha julgado o
+contrário duas vezes, reivindicando rotas **justamente por devolverem nome**.
+
+**O molde gravaria o nome da pessoa numa chave IMUTÁVEL.** Ele deriva o `codigo` do rótulo e o
+`renomear` não o toca: está escrito no molde, "O CÓDIGO NÃO MUDA". "Ana Paula Rodrigues" viraria
+`ANA_PAULA_RODRIGUES` para sempre, num campo que sai no JSON e que **nenhuma tela corrige**. Nome muda
+e a LGPD dá direito a correção. **`as_comerciais` nasceu sem `codigo`**, e sem unique por nome: duas
+"Ana Silva" existem, e a recusa do duplicado teria de dizer com QUEM colidiu, **revelando o nome de
+uma ex-funcionária inativada** a quem só tentou cadastrar alguém.
+
+**E o achado da §A.23 que não depende de script nenhum.** Sem os menus novos em
+`MENUS_SOMENTE_SUPER_ADMIN`, **o próximo MASTER criado nasce com eles**, porque `users.controller`
+chama `codigosPadraoDoPapel` na criação. Não é o `seed-menus` que concede: é o caminho normal do
+sistema. Registrei nas três listas, e a guarda de lista fechada de `menus.spec.ts` **ficou vermelha na
+hora certa**, exigindo o motivo escrito de cada um.
+
+Mais seis achados menores, todos corrigidos nos briefings: o `remover` do molde conta usos só em
+`vagas` e os catálogos novos são usados em `clientes` também; id inválido tem de **lançar**, nunca
+virar `null` (com `null` significando "herda", um id descartado vira **herança silenciosa** e o
+consultor acha que não salvou); as frases de recusa não podem citar nome; o filtro precisa incluir os
+inativos em uso; e o `menu-rotas.ts` do frontend, sem o qual a tela **abre e mostra os nomes** antes
+de recusar.
+
+### 3. O TIPO VIROU TRAVA, E PEGOU UM DEFEITO QUE JÁ ESTAVA NA TELA
+
+O `tester` achou que a tela de comerciais lia `c.codigo` em **quatro pontos**: a coluna renderizava
+**vazia em toda linha**, a ordenação ordenava por `undefined`, e o modal dizia *"Corrigindo o nome de
+''"*. Compilava porque o tipo compartilhado ainda declarava o campo. Ao remover `codigo` de
+`AsComercial`, os três pontos viraram **erro de `tsc` na hora**. É a diferença entre uma decisão de
+modelagem escrita no comentário e uma escrita no tipo.
+
+### 4. O `tester` CORRIGIU UM NOME DO `backend`, E O MOTIVO É SUTIL
+
+A coluna crua **não** podia se chamar `segmentoId`: ela vale nulo exatamente na vaga que HERDA, que é
+a maioria. `segmentoId` é o nome mais óbvio para quem for escrever um filtro, e quem o pegasse teria o
+**conteúdo errado sem erro nenhum, só resposta a menos**. Virou `segmentoSobrepostoId`, e o valor
+efetivo vai em `segmento`. **A armadilha ficou estruturalmente eliminada:** não existe mais um campo
+com o nome errado para alguém pegar por engano.
+
+### 5. O QUE A PROVA AO VIVO MOSTROU, e ela é melhor que qualquer teste aqui
+
+Pelo caminho real, na 3120:
+
+```
+rota ABERTA de comercial ............ 404   (não existe, e é a decisão)
+/as/segmentos ....................... 200   (ramo não é dado pessoal)
+/admin/as/comerciais ................ 200   (SUPER_ADMIN)
+/admin/clientes/comerciais .......... 200   (menu clientes)
+homônimo cadastrado ................. 2x "Ana Paula Rodrigues", ids 1 e 3
+```
+
+**A herança, medida sem tocar na vaga:** defini segmento e comercial no CLIENTE, e a vaga passou a
+mostrar `{rotulo: "Varejo", origem: "HERDADO"}`. **A herança viva:** troquei o comercial no cliente e
+a vaga antiga **acompanhou**. **A sobreposição:** a vaga ganhou valor próprio e passou a
+`origem: "SOBREPOSTO"`, com o segmento continuando `HERDADO`, independente.
+
+**A trava, e repare na frase:** inativar comercial em uso devolveu *"Este comercial ainda responde por
+1 cliente. Passe a carteira para outra pessoa antes de inativar"*. **Contagem, não nome**, que é
+exatamente o que a auditoria exigiu.
+
+Na tela: a ficha escreve **"Segmento: Varejo / Herdado do cliente"** e **"Comercial: Ana Paula
+Rodrigues / Definido nesta vaga"**. A Central De Vagas continua com **10 colunas e rolagem ZERO**
+(1061,88px numa caixa de 1254). A tela de comerciais perdeu a coluna morta e foi de 820px para 590px
+de piso. E a tela de Clientes mostra os dois campos novos com os quatro seletores já no design system.
+
+### 6. O ERRO QUE EU QUASE REPORTEI, E NÃO ERA
+
+A minha primeira varredura do modal de filtros não encontrou Segmento nem Comercial, e eu ia reportar
+falta. **Conferi a fonte antes:** eles estão lá, o modal ROLA, e a varredura só pegou os seis
+visíveis. Repetindo com rolagem, os dois apareceram, com as opções certas e o sentinela "Sem
+Comercial". **Medição incompleta lida como defeito é relatório falso**, e a diferença foi um `grep`.
+
+### 7. A GUARDA QUE EU ACRESCENTEI, e ela existe por causa da Onda D
+
+`v.segmento.id` é lido em **toda linha** do recorte. Entre o build do frontend e o restart do backend
+existe uma janela de minutos em que a tela NOVA fala com o servidor VELHO, e ela **não é hipotética**:
+foi exatamente o que a Onda D fez, por ordem da auditoria, com o frontend subindo primeiro. Ali o
+campo novo era opcional e a tela tolerava; aqui a ausência **derrubaria a Central De Vagas inteira com
+tela branca**. Com o `?.`, o filtro fica sem efeito por alguns minutos em vez de a tela sumir.
+
+### 8. PENDENTE DO DIRETOR
+
+1. **Validar a Onda E na 3120.**
+2. **Homônimo é permitido e fica INDISTINGUÍVEL na lista e no filtro.** É a decisão de LGPD
+   funcionando (sem unique por nome), e o preço aparece na tela: duas "Ana Paula Rodrigues", iguais.
+   Se incomodar, o desempate teria de ser um dado a mais, e dado a mais é o oposto da minimização.
+3. **O menu `clientes` passou a carregar nome de pessoa**, pelo seletor. Quem decide quem tem esse
+   menu é o diretor (§A.23), e vale saber que ele mudou de natureza.
+4. **Um acoplamento travado em teste, sem escolher lado:** o filtro só funciona porque a inativação
+   recusa comercial em uso. Afrouxar a trava torna as vagas dele invisíveis ao filtro, sem erro.
+5. **A tabela de Clientes rola 99px**, e isso é **anterior** à onda (nenhuma coluna nova entrou lá).
+6. **O filtro de tipo de serviço daquela tela continua de seleção única** (§A.28): o `frontend`
+   propôs converter e **não construiu**, porque não está na OST.
+7. **Lixo de prova, só na homologação:** 4 segmentos, 3 comerciais (dois homônimos de propósito), o
+   cliente `50629` com os dois campos preenchidos e a vaga `123456` com o comercial **sobreposto**.
+   Existem para provar a herança e somem num comando.
+
+---
+
+## 13/09/2026: O PONTO DE RETOMADA DA ONDA E, e o registro integral de quem fez o quê
+
+Escrito a pedido do diretor ("não deixe nada fora do diário"). Tudo o que a próxima sessão precisa
+está aqui; nada precisa ser redescoberto nem perguntado a um agente.
+
+### E.0. O ESTADO, em uma tabela
+
+| coisa | onde está |
+|---|---|
+| `HEAD` da `main` | `14325f0` (a Onda D), **inalterado pela Onda E** |
+| a Onda E | **working tree, não commitada** |
+| produção (3010) | Onda D, **107 migrations**, `as_segmentos` **não existe** lá |
+| homologação (3120) | **Onda E publicada**, **107 migrations** (subiu de 106) |
+| migration da onda | **UMA**, `0107_as_segmento_e_comercial.sql` |
+| gate | backend **3.174/3.174**, frontend **685/685**, typecheck e eslint limpos |
+| mapa de alcance | `docs/MAPA-ONDA-E.md` (com as decisões do diretor na §8) |
+| provas | `/home/henrique/ost-as-onda-e-prints/` (9 prints + `scripts/`) |
+| dump de segurança | `/home/henrique/ost-as-onda-d-prints/dump-antes-onda-d-20260912-2305.dump` |
+
+### E.1. OS 27 ARQUIVOS DA ONDA E, para o `git add` NOMINAL (§A.14/§A.21)
+
+**NUNCA `git add .`**: o working tree tem 17 documentos de OUTRAS frentes soltos.
+
+**Modificados (16):**
+```
+DIARIO.md
+packages/shared-types/src/index.ts
+apps/backend/drizzle/meta/_journal.json
+apps/backend/src/db/schema/tables.ts
+apps/backend/src/domain/menus.ts
+apps/backend/src/domain/menus.spec.ts
+apps/backend/src/as/as.module.ts
+apps/backend/src/as/vagas/vagas.service.ts
+apps/backend/src/as/vagas/vagas.dto.ts
+apps/backend/src/admin/clientes/clientes.service.ts
+apps/backend/src/admin/clientes/clientes.dto.ts
+apps/backend/src/admin/clientes/clientes.controller.ts
+apps/frontend/src/app/(app)/admin/clientes/page.tsx
+apps/frontend/src/app/(app)/admin/page.tsx
+apps/frontend/src/app/(app)/as/vagas/page.tsx
+apps/frontend/src/lib/menu-rotas.ts
+```
+**Novos (11 caminhos):**
+```
+docs/MAPA-ONDA-E.md
+apps/backend/drizzle/0107_as_segmento_e_comercial.sql
+apps/backend/src/as/segmentos/          (service, dto, 2 controllers)
+apps/backend/src/as/comerciais/         (service, dto, 1 controller)
+apps/backend/src/domain/valor-herdado.ts
+apps/backend/src/as/vagas/vaga-item-onda-e.ts
+apps/backend/src/as/vagas/vagas.heranca-onda-e.cobertura-independente.tester.spec.ts
+apps/backend/src/as/onda-e.catalogos-rbac.tester.spec.ts
+apps/backend/src/as/onda-e.menu-dos-catalogos.tester.spec.ts
+apps/backend/src/as/onda-e.catalogos-servico.tester.spec.ts
+apps/backend/src/as/linhas-servico/linhas-servico-menu.spec.ts
+apps/frontend/src/lib/as-segmentos.ts
+apps/frontend/src/lib/as-comerciais.ts
+apps/frontend/src/app/(app)/admin/as/segmentos/page.tsx
+apps/frontend/src/app/(app)/admin/as/comerciais/page.tsx
+apps/frontend/src/lib/as-vagas-onda-e.comportamental.tester.spec.ts
+apps/frontend/src/lib/as-clientes-onda-e.comportamental.tester.spec.ts
+apps/frontend/src/lib/as-comerciais-onda-e.comportamental.tester.spec.ts
+```
+
+**`apps/frontend/src/lib/as-vagas-lista.filtros.spec.ts` NÃO É DESTA ONDA** (nem da D). Veio de outra
+frente e continua solto.
+
+### E.2. QUEM FEZ O QUÊ, agente por agente (§A.34/§A.39)
+
+**`seguranca`, 1ª rodada, auditoria do MAPA: VETADO, nove achados.** Ele conferiu as quatro medições
+do mapa (todas bateram) e vetou assim mesmo, porque o mapa mandava copiar um molde que não serve para
+dado pessoal. Os nove: (1) leitura aberta entregaria a folha do comercial a qualquer autenticado;
+(2) `codigo` derivado do nome congela PII numa chave imutável e mata a retificação da LGPD; (3) unique
+por nome proíbe homônimos e vaza nome de ex-funcionária pela mensagem de erro; (4) a régua de conteúdo
+(só o nome, sem contato, inativar em vez de apagar); (5) sete pontos onde a cópia descuidada do molde
+abre buraco; (6) as três listas de menu mais o `menu-rotas.ts`, sem os quais o próximo MASTER criado
+nasce com os menus; (7) o `remover` contando só `vagas` quando os catálogos são usados em `clientes`
+também; (8) `coalesce` mentindo em quatro casos, e o `?? null` transformando id inválido em herança
+silenciosa; (9) `clientes.service.ts:50` é `select()` nu numa rota **aberta**, então toda coluna nova
+entra no payload de graça. **Ele também recusou, com argumento, apontar o comercial para `usuarios`:**
+obrigaria a criar login para quem não usa o sistema, e criar usuário **concede menus**.
+
+**`tester`: 8 arquivos, vermelho medido, 1 defeito real e 5 pontos cegos declarados.**
+Arquivos: `vagas.heranca-onda-e...` (44 casos), `onda-e.catalogos-rbac...` (39),
+`onda-e.menu-dos-catalogos...` (17), `onda-e.catalogos-servico...` (20),
+`linhas-servico-menu.spec.ts` (7, **a dívida do molde, paga**), e três de frontend (23, 9, 3).
+Vermelho contra o HEAD: **17** na herança, **29** no RBAC, 1 no menu, 15 na Central De Vagas, 2 no
+gerenciador de comerciais. Os 17 cobriam os quatro cenários difíceis e passaram todos quando o
+`backend` subiu.
+**GAP-1, defeito real:** a tela de comerciais lia `c.codigo` em quatro pontos; a coluna renderizava
+vazia em toda linha, a ordenação ordenava por `undefined`, e o modal dizia *"Corrigindo o nome de
+''"*. **GAP-2:** acoplamento silencioso entre a inativação e o filtro, travado como invariante sem
+escolher lado. **GAP-3:** a Central De Vagas ainda não tinha recebido a onda (15 vermelhos), depois
+fechada.
+**Pontos cegos que ele declarou:** varredura de fonte não renderiza; a prova de "nada aberto devolve
+nome" reconhece a superfície pelo NOME, então uma controller futura com outro nome passaria batido; o
+banco de mentira avalia `coalesce` como "primeiro token não-nulo" e não interpreta subconsulta
+correlacionada; e **os nove primeiros vermelhos dele eram bug do próprio dublê**, que ele corrigiu
+antes de reportar em vez de entregar um achado falso.
+
+**`backend`: migration, dois catálogos, herança, e três decisões que ele levou ao coordenador.**
+(1) escreveu a reivindicação `"ClientesController.comerciais"` no menu `clientes`, provada por
+`menuDaOperacao`; (2) **aceitou a correção de nome do `tester`**: o campo cru virou
+`segmentoSobrepostoId`, porque `segmentoId` seria o nome mais óbvio com o conteúdo errado;
+(3) `opcoes().comerciais` devolve ativos **e** inativos com um campo `ativo` a mais, para o filtro
+achar a carteira de quem saiu sem o seletor oferecer quem saiu.
+**A enumeração da §A.40 regra 3:** `vagas` tem **escritor único** (sete pontos, todos em
+`vagas.service.ts`, seis coluna-explícita); `clientes` tem **dez escritores e nenhum é alcançado**
+(inclusive os seeds, que usam `set` nominal, então recarregar a base **não apaga** os campos novos).
+**A única leitura não-inerte é `clientes.service.ts:50`**, e ele resolveu o rótulo por mapa de
+catálogo em vez de trocar o `select()` nu, que alimenta três telas.
+**Ele declarou honestamente não ter como ensaiar a migration**, e o coordenador ensaiou.
+
+**`frontend`, 1ª rodada: as duas telas, os dois campos, os quatro nativos, e a medição.**
+Os quatro `<select>` nativos da §A.36 foram convertidos. **O quarto teve leitura em vez de chute:** um
+`Select` cru tem 46px numa barra em que a busca tem 34, e ficaria uma cabeça acima da linha, que é
+esmagamento ao contrário; ele o ajustou para 34px e **declarou que não há precedente** dessa
+sobrescrita no repositório. **A medição das duas colunas: +211,73px** (e +263,87 sem quebra de linha),
+contra 151,69px de folga: a tabela iria a 1314px numa caixa de 1254. Confirmou a decisão do diretor
+com número.
+**Ele achou três coisas que o coordenador não previu:** o `forbidNonWhitelisted` faria a tela de
+clientes **não salvar nada, nem razão social, para ninguém** na janela entre as duas entregas; o
+seletor só com ativos **apagaria o segmento em silêncio** no primeiro "Salvar alterações" feito para
+mudar outra coisa; e o nome do parâmetro (`incluirInativos` contra `incluirInativas`) **falha calado**.
+
+**`frontend`, 2ª rodada: o GAP-1 e a herança na Central De Vagas.**
+Tirou a coluna morta (piso de 820px para 590px, folga de 214 para 444), reescreveu a frase do modal,
+e construiu os dois filtros, o recorte pelo valor efetivo, a ficha com a origem e a sobreposição na
+trilha. **A Central De Vagas não perdeu nem ganhou um pixel:** o diff é de 332 inserções e **zero
+deleções**, e nenhum hunk cai entre o `<thead>` e o fim do `visiveis.map`.
+**Mais sete achados dele**, todos registrados: a regex do `tester` proíbe o plural em português
+(`fComerciais` não casa); o risco de tela branca na janela de publicação; o `prettier` reformatou 22
+linhas pré-existentes e ele **reverteu** em vez de poluir o diff; o backend recusa id inativo no
+salvar; a busca rápida não acha por segmento nem comercial, de propósito, porque não há célula; a
+prop `apoio` do `Linha` é opcional e não alcança as ~40 linhas existentes; e a coluna de nome dos
+comerciais ficou com 812px, com área vazia à direita nos nomes curtos.
+
+**Coordenador:** mapa, contrato no `shared-types` (dono único), registro dos dois menus nas três
+listas, guarda de lista fechada estendida com o motivo escrito, conserto de `AsComercial`, os quatro
+campos de `VagaListItem`, a guarda `?.` da janela de publicação, o ensaio da migration, a publicação
+da 3120 e a prova visual.
+
+### E.3. O QUE AINDA NÃO FOI FEITO, e é o registro mais importante desta seção
+
+**A auditoria do `seguranca` sobre o CÓDIGO da Onda E ainda não tinha rodado quando este registro foi
+escrito. ELA RODOU LOGO DEPOIS, veredito APROVADO, e está na §E.11 abaixo.** Ele auditou o **mapa** (veredito VETADO, nove achados, todos corrigidos), e a §A.38 pede a
+auditoria do construído também, porque a onda toca **dado pessoal e RBAC**. Ela foi despachada com as
+nove condições que ele mesmo impôs, mais a ordem de publicação em produção. **Nada sobe antes do
+veredito dela.**
+
+### E.4. COMO REPUBLICAR A HOMOLOGAÇÃO
+
+Igual à Onda D (§R.3 do registro de 12/09), com **um passo a mais**, a migration:
+
+```bash
+cd /home/henrique
+rsync -a --delete apps/ea-automatic/apps/backend/src/  apps/ea-homolog/apps/backend/src/
+rsync -a --delete apps/ea-automatic/apps/frontend/src/ apps/ea-homolog/apps/frontend/src/
+rsync -a apps/ea-automatic/packages/shared-types/src/  apps/ea-homolog/packages/shared-types/src/
+rsync -a apps/ea-automatic/apps/backend/drizzle/       apps/ea-homolog/apps/backend/drizzle/
+
+cd /home/henrique/apps/ea-homolog/apps/backend && pnpm exec drizzle-kit migrate
+cd /home/henrique/apps/ea-homolog
+pnpm --filter @ea/shared-types build
+pnpm --filter backend build
+BACKEND_ORIGIN=http://127.0.0.1:3111 pnpm --filter frontend build
+systemctl --user restart ea-homolog-backend ea-homolog-frontend
+```
+
+**O `rsync -a --delete` sobre os `src` inteiros substituiu a cópia arquivo a arquivo**, e é o que
+elimina a defasagem que mordeu na Onda B3 e voltou na D. Conferir depois com `diff -rq`.
+
+### E.5. O ENSAIO DA MIGRATION, o que ele provou
+
+Clone da produção a partir do dump, `drizzle-kit migrate`, **107 → 108**:
+
+```
+clientes=249 vagas=3 admissoes=2848   (idênticos antes e depois)
+as_segmentos=0  as_comerciais=0       (nascem vazias, nada semeado)
+as_comerciais: id,rotulo,ordem,ativo,criado_em,atualizado_em   (SEM codigo)
+as quatro FK: confdeltype = 'r' (RESTRICT) nas quatro
+DELETE de segmento em uso -> RECUSADO pelo banco, não só pela aplicação
+duas "Prova Um" no mesmo catálogo -> ACEITAS (a decisão de LGPD)
+```
+
+Clone removido ao fim. Produção seguiu em 107, sem as tabelas.
+
+### E.6. A PROVA AO VIVO, pelo caminho real da 3120
+
+```
+GET /as/comerciais ................ 404   (a rota aberta NÃO EXISTE, e é a decisão)
+GET /as/segmentos ................. 200   (o ramo não é dado pessoal)
+GET /admin/as/comerciais .......... 200   (SUPER_ADMIN)
+GET /admin/clientes/comerciais .... 200   (menu clientes)
+opcoes() ......................... traz `comerciais`
+```
+
+**Herança, sem tocar na vaga:** defini os dois campos no CLIENTE e a vaga passou a
+`{rotulo:"Varejo", origem:"HERDADO"}`. **Herança viva:** troquei o comercial no cliente e a vaga
+antiga **acompanhou**. **Sobreposição:** a vaga ganhou valor próprio, virou `SOBREPOSTO`, e o segmento
+seguiu `HERDADO`, independente. **A trava:** inativar comercial em uso devolveu *"Este comercial ainda
+responde por 1 cliente. Passe a carteira para outra pessoa antes de inativar"* — **contagem, não
+nome**, como a auditoria exigiu.
+
+**Na tela:** a ficha escreve "Segmento: Varejo / Herdado do cliente" e "Comercial: Ana Paula Rodrigues
+/ Definido nesta vaga". A Central De Vagas segue com **10 colunas e rolagem ZERO** (1061,88px em
+1254). O gerenciador de comerciais tem 4 colunas, rolagem zero, e o texto de apoio diz na tela
+"Guarda-se só o nome: sem e-mail, sem telefone, sem documento". A tela de Clientes mostra Segmento e
+Comercial com os quatro seletores já no design system.
+
+### E.7. O ERRO QUE O COORDENADOR QUASE REPORTOU
+
+A primeira varredura do modal de filtros não achou Segmento nem Comercial, e o relatório ia dizer que
+faltavam. **A fonte foi conferida antes:** estão lá (`page.tsx:2999` e `:3015`), o modal ROLA, e a
+varredura só pegou os seis visíveis. Repetindo com rolagem, apareceram, com as opções certas e o
+sentinela "Sem Comercial". **Medição incompleta lida como defeito é relatório falso**, e a diferença
+custou um `grep`.
+
+### E.8. PENDENTE DO DIRETOR
+
+1. **Validar a Onda E na 3120.**
+2. **Homônimo é permitido e fica INDISTINGUÍVEL** na lista e no filtro (duas "Ana Paula Rodrigues",
+   iguais). É a decisão de LGPD funcionando; desempatar exigiria guardar um dado a mais.
+3. **O menu `clientes` passou a carregar nome de pessoa**, pelo seletor.
+4. **O acoplamento do GAP-2**, travado em teste sem escolher lado.
+5. **A tabela de Clientes rola 99px**, e é **anterior** à onda.
+6. **O filtro de tipo de serviço continua de seleção única** (§A.28): proposto e **não construído**.
+7. **A sobrescrita de altura do quarto seletor** (34px em vez de 46px), sem precedente no repositório.
+   Candidata a virar um `size="sm"` do design system numa frente própria.
+8. **A coluna de nome dos comerciais com 812px**, com área vazia à direita nos nomes curtos.
+9. **Lixo de prova, só na homologação:** 4 segmentos, 3 comerciais (dois homônimos de propósito), o
+   cliente `50629` com os dois campos preenchidos e a vaga `123456` com o comercial **sobreposto**.
+
+### E.9. A ORDEM DE PUBLICAÇÃO EM PRODUÇÃO, e ela é PERGUNTA ABERTA
+
+**Na Onda D a ordem foi frontend primeiro**, por medição da auditoria. **Aqui pode ser o contrário**,
+e o motivo é concreto: o `opcoes()` ganhou o campo `comerciais` e a tela lê `v.segmento` em **toda
+linha** do recorte. Frontend novo com servidor velho é a combinação que derrubaria a Central De Vagas.
+O coordenador já acrescentou a guarda `?.` para que a ordem deixe de importar, **mas a resposta
+autoritativa é da auditoria do código**, que foi despachada com essa pergunta. **Não publicar em
+produção antes dela.**
+
+### E.10. A TRAVA DA §A.7 DISPAROU DE NOVO, e de novo por falso positivo
+
+Ela bloqueou a escrita deste tipo de registro duas vezes na Onda D, porque o hook casa por substring e
+o texto citava o verbo. **A flag NÃO foi criada para contornar em nenhuma delas**: o texto foi escrito
+em arquivo e anexado. Fica registrado pela terceira vez que o falso positivo existe, custa um passo, e
+não é motivo de exceção.
+
+### E.11. A AUDITORIA DO CÓDIGO DA ONDA E: **APROVADO**, e ela derrubou uma guarda que eu tinha acrescentado
+
+Despachada depois do registro acima, fechando a lacuna de processo declarada na E.3. **As nove
+condições que o próprio `seguranca` tinha imposto no veto do mapa foram medidas uma a uma e as nove
+estão CUMPRIDAS.** Nenhuma violação de §A.6.
+
+**A prova mais forte que ele trouxe, e que o meu ensaio contra o clone não podia dar:** ele comparou
+`vagas` e `clientes` **coluna a coluna** entre homologação e produção. A diferença é de **quatro
+linhas, e são exatamente as quatro da onda**. Zero deriva.
+
+```
+só em homolog: clientes.comercial_id, clientes.segmento_id, vagas.comercial_id, vagas.segmento_id
+só em prod:    nenhuma
+```
+
+E ele conferiu o comportamento **no banco real, em transação revertida**: o homônimo passou no
+`INSERT`, o `DELETE` de comercial em uso foi recusado pela FK, e o estado final voltou às 3 linhas.
+Rotas vivas sem sessão: 401, 401, 401, e **404 para `/as/comerciais`**, que é a rota que não existe.
+
+#### O QUE ELE DERRUBOU, e era meu
+
+**A guarda `?.` que eu tinha acrescentado estava PELA METADE e MENTIA no comentário.** Duas coisas,
+e a segunda é pior:
+
+1. **Ela mentia.** O comentário dizia *"sem o valor, a linha simplesmente não casa o filtro"*. Falso:
+   com o campo ausente a expressão vale o **sentinela**, então a linha **casa "Sem Segmento"**, e
+   filtrar por "Sem Segmento" devolveria **todas** as vagas. Pior, o `AUSENTE` legítimo, que é o
+   estado da maioria hoje, produz **exatamente o mesmo valor**: "o servidor não mandou" e "não há
+   valor" ficariam indistinguíveis **para sempre**, não só na janela.
+2. **Ela estava pela metade.** A ficha lê `verAlvo.segmento.rotulo` **sem guarda nenhuma**, então na
+   mesma janela que o `?.` existia para atravessar, abrir o painel de qualquer vaga já estourava. **O
+   `?.` protegia a tabela e deixava a ficha cair.** E os testes não pegavam: a regex do `tester` aceita
+   os dois jeitos de escrever.
+
+**Desfeito.** A guarda saiu, o contrato voltou a valer, e o comentário no lugar dela agora conta o que
+foi tentado e por que não ficou. **A janela se fecha pela ORDEM de publicação, não por `?.` espalhado.**
+
+#### A CONDIÇÃO VINCULANTE: a ordem é MIGRATION, depois BACKEND, depois FRONTEND
+
+**É o INVERSO da Onda D, e o motivo é medido.** Na ordem errada (frontend primeiro) quebram três
+coisas, e a terceira atinge a operação diária:
+
+1. `verAlvo.segmento.rotulo` estoura a ficha de qualquer vaga;
+2. o filtro joga toda vaga no balde "Sem Segmento";
+3. **o salvamento da trilha volta 400.** O `ValidationPipe` é `forbidNonWhitelisted`, o DTO velho não
+   conhece `segmentoId`, e o consultor que **escolher** um segmento não consegue mais salvar a vaga,
+   com uma mensagem que ele não associa ao que fez.
+
+Backend primeiro é seguro: a tela velha ignora os campos a mais e nunca manda `segmentoId`. E a
+migration vai **sozinha, antes**, porque é aditiva e nulável (o backend velho convive com ela sem
+enxergá-la), e porque sem as colunas o `list()` daria **500 na Central De Vagas inteira**.
+
+**A régua que fica, e ela vale para toda onda futura:** não é "repete a ordem da onda passada", é
+**quem TOLERA a ausência do outro vai primeiro**. Na Onda D o campo novo era opcional e a tela o
+tolerava; aqui ele é lido em toda linha **e enviado na escrita**.
+
+#### F1: UMA CONTRADIÇÃO DE NEGÓCIO, e é a mais importante para o diretor
+
+**O `inativar` do comercial recusa quem tem carteira**, e isso torna **impossível** o estado que
+QUATRO textos desta onda afirmam existir:
+
+- a migration diz *"quem sai da empresa é INATIVADO, nunca apagado, para o cliente e a vaga antiga
+  continuarem dizendo de quem eram"*. Depois de inativar, ele não tem cliente nem vaga nenhuma;
+- o `shared-types` repete a mesma frase;
+- o comentário do filtro diz que sem os inativos *"a vaga de quem saiu da empresa ficaria invisível"*,
+  e a pergunta *"o que ficou na mão dele?"* **sempre devolve vazio**, por construção;
+- a mensagem de sucesso da tela diz *"os clientes antigos não mudaram"*, e ela só aparece quando havia
+  **zero** clientes.
+
+Não é buraco de segurança e não vetou. **É decisão de negócio pendente disfarçada de código pronto:**
+ou o `inativar` passa a aceitar carteira, e os quatro textos ficam verdadeiros, ou os quatro textos e
+toda a máquina de `incluirInativos` saem. **Precisa ser decidido ANTES de o catálogo ser povoado em
+produção**: depois que o time estiver cadastrado, mudar a régua custa mais.
+
+#### F2, F3 e F4: três comentários que mentiam, dois já corrigidos
+
+- **F2, corrigido.** `AsComercialGravado = Omit<AsComercial, "codigo">` virou **no-op** no instante em
+  que eu removi o campo do contrato, e o comentário continuava instruindo a remover "quando o dono
+  agir". O dono já tinha agido. Virou `= AsComercial`, com o registro de que a ponte foi atravessada.
+- **F3, corrigido.** O DTO do cliente afirmava, com todas as letras, que os dois campos *"SÓ EXISTEM
+  AQUI, e NÃO no `CreateClienteDto`, de propósito"* — e eles **estão** no `Create`, postos na mesma
+  onda pelo motivo oposto: sem eles lá, o `forbidNonWhitelisted` derrubaria a criação de cliente.
+- **F4, registrado e NÃO corrigido:** `segmentoRotulo` é calculado e enviado em `GET /admin/clientes`,
+  uma rota aberta, e **ninguém o renderiza**. Não é PII e não veta, mas é uma consulta a mais por
+  carga e um campo sem finalidade numa rota alcançável por qualquer sessão. Minimização pede que saia,
+  ou que a coluna seja construída, e aí com filtro (§A.37). **É decisão do diretor**, porque construir
+  a coluna não está na OST.
+
+#### DUAS COISAS QUE ELE MEDIU E QUE NINGUÉM TINHA OLHADO
+
+**O hash da 0106 diverge entre as bases.** A homologação registra a 0106 com um hash e a produção com
+outro, que é o do arquivo de hoje: **o arquivo foi editado depois de ter rodado na homologação**. Não
+afeta esta onda (o diff coluna a coluna prova que não houve deriva, foi edição de comentário) e não
+afeta a subida (o migrator compara `when`, não hash). **Fica o aviso:** repetido num arquivo com DDL
+de verdade, isso vira duas bases diferentes com o mesmo número.
+
+**O `atualizar` da vaga é substituição total**, então um `PATCH` parcial que omita `segmentoId`
+**devolve a vaga para a herança** em vez de preservar a sobreposição. Hoje é inofensivo, porque a
+trilha manda o objeto inteiro e é a única porta, e é o mesmo regime já validado de `cidadeId` e
+`linhaServicoId`. É armadilha para o próximo chamador.
+
+#### O ALCANCE MEDIDO DO NOME DE PESSOA, em produção
+
+`as-vagas` = 1 COMUM + 2 MASTER marcados; `clientes` = 3 COMUM + 3 MASTER marcados; mais 5
+SUPER_ADMIN e o bypass de área do MASTER. **Teto de cerca de 13 pessoas**, todas já administradoras de
+cliente ou operadoras de A&S.
+
+#### ESTADO DEPOIS DAS CORREÇÕES
+
+Gate refeito: **backend 3.174/3.174, frontend 685/685**, typecheck limpo nos dois. Homologação
+republicada, health 200 nos dois serviços, compilado mais novo que a fonte. **Produção intocada.**

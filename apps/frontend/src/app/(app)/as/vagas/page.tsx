@@ -62,6 +62,7 @@ import {
   textoPendencia,
   IDIOMA_NIVEIS,
   IDIOMA_NIVEL_LABEL,
+  type AsOrigemDoValor,
   type AsVagaIdioma,
   type IdiomaNivel,
   type VagaContextoAs,
@@ -122,6 +123,12 @@ import {
   useLinhasServico,
 } from "@/lib/as-linhas-servico";
 import { useCidades } from "@/lib/as-cidades";
+/* ONDA E: o catálogo do RAMO do cliente (Varejo, Saúde), que a vaga HERDA e pode SOBREPOR. Ele tem
+   rota de leitura aberta a qualquer autenticado porque não é dado pessoal, e é por ela que o filtro
+   se alimenta (§A.37: o catálogo do filtro vem de endpoint, nunca das linhas carregadas).
+   O COMERCIAL NÃO VEM POR AQUI, e a assimetria é a régua: ele é NOME DE PESSOA, não tem rota aberta,
+   e chega pelo `/as/vagas/opcoes`, que já é governado pelo menu desta tela (§A.6). */
+import { useSegmentos } from "@/lib/as-segmentos";
 import { useEtapas, etapasOrdenadas, corDoTom } from "@/lib/as-etapas";
 import {
   cardsDeDesfecho,
@@ -185,6 +192,16 @@ interface Opcoes {
   consultores: { id: string; nome: string }[];
   /** O cadastro de escalas do menu gerencial (item 5), servido pelo próprio módulo de A&S. */
   escalas: string[];
+  /**
+   * OS COMERCIAIS (Onda E), servidos POR AQUI e não por uma rota de catálogo aberta: a lista é de
+   * NOMES DE PESSOA, e esta superfície já é governada pelo menu desta tela (§A.6).
+   *
+   * OS INATIVOS VÊM JUNTO, com o `ativo` ao lado, e o flag é o que deixa as duas superfícies
+   * conviverem sem uma segunda rota: o FILTRO quer todo mundo (a vaga de quem saiu da empresa é
+   * justamente a que se procura quando alguém sai), e o SELETOR da trilha quer só os ativos, porque
+   * não se oferece quem saiu para uma vaga nova.
+   */
+  comerciais: { id: number; rotulo: string; ativo: boolean }[];
 }
 
 /** Os 5 passos da trilha. O `hint` é a linha de apoio do Stepper, não um título (§A.24). */
@@ -208,6 +225,20 @@ const MOTIVO_SUBSTITUICAO = "Substituição";
  * O texto começa com dois-pontos de propósito: nenhum uuid pode colidir com ele.
  */
 const SEM_CONSULTOR = ":sem-consultor";
+
+/**
+ * OS SENTINELAS DA ONDA E, pela MESMA razão do de cima e com a mesma forma.
+ *
+ * "QUAIS VAGAS ESTÃO SEM SEGMENTO" É METADE DA PERGUNTA que o campo cria, e hoje é o estado da
+ * esmagadora maioria: são 249 clientes, e o diretor vai classificar aos poucos. Sem um valor
+ * próprio, essa pergunta não teria como ser feita, porque lista vazia significa "todos" nesta tela
+ * inteira (§A.37, os valores especiais da coluna viram opção do filtro).
+ *
+ * ELES RESPONDEM PELO VALOR EFETIVO, e não pela sobreposição: a vaga entra em "Sem Segmento" quando
+ * nem ela nem o cliente dela têm segmento, que é exatamente o `AUSENTE` do contrato.
+ */
+const SEM_SEGMENTO = ":sem-segmento";
+const SEM_COMERCIAL = ":sem-comercial";
 
 /**
  * QUANTAS LINHAS POR PÁGINA.
@@ -299,6 +330,23 @@ function idiomasDaVaga(v: VagaListItem): { idiomas: string[]; idiomaNiveis: Reco
  * O CÓDIGO É O NOME DELA quando existe. O rascunho pode ainda não ter número, e aí vale o nome de
  * divulgação; sem os dois, a frase diz "sem código", que é honesto, em vez de "vaga undefined".
  */
+/**
+ * ─ DE ONDE VEIO O VALOR (Onda E), em português e para a ficha ──────────────────────────────────
+ *
+ * `HERDADO` e `SOBREPOSTO` chegam com o MESMO rótulo ("Varejo" é "Varejo" nos dois), e é só a
+ * origem que separa "esta vaga segue o padrão do cliente" de "esta vaga foge dele". Sem ela a ficha
+ * não teria como dizer qual é qual, e é essa a pergunta que o diretor faz ao abrir a vaga.
+ *
+ * `AUSENTE` DEVOLVE NULO DE PROPÓSITO: a `Linha` já escreve "não informado" (§A.11) no lugar do
+ * valor, e uma segunda frase embaixo dizendo o mesmo seria ruído. É frase de apoio, não tag, então
+ * a maiúscula é só na primeira palavra (§A.24).
+ */
+function origemDoValor(origem: AsOrigemDoValor): string | null {
+  if (origem === "HERDADO") return "Herdado do cliente";
+  if (origem === "SOBREPOSTO") return "Definido nesta vaga";
+  return null;
+}
+
 function rotuloDaVaga(v: VagaListItem): string {
   return v.codigo ?? v.nomeDivulgacao ?? "sem código";
 }
@@ -622,6 +670,21 @@ interface FormVaga {
   /** O id do catálogo `as_linhas_servico`, como texto porque vem de um `Select` (Onda C, peça 1). */
   linhaServicoId: string;
   /**
+   * ─ A SOBREPOSIÇÃO DE SEGMENTO E COMERCIAL (Onda E). VAZIO SIGNIFICA **HERDAR** ───────────────
+   *
+   * ELES NÃO SÃO "CAMPO EM BRANCO", e a diferença é a onda inteira: vazio aqui não quer dizer "a
+   * vaga não tem segmento", quer dizer "a vaga vale o segmento do CLIENTE, vivo". Preencher é a
+   * EXCEÇÃO, e significa "esta vaga foge do padrão do cliente". É por isso que o campo do payload
+   * vira `undefined` quando vazio, e nunca zero nem string vazia: ausente é o que o servidor lê
+   * como herdar.
+   *
+   * O NOME CARREGA "SOBREPOSTO" DE PROPÓSITO, o mesmo cuidado que o contrato tomou: chamá-lo de
+   * `segmentoId` poria, ao lado do valor EFETIVO da vaga, um campo que vale nulo justamente em quem
+   * herda, e quem o pegasse para escrever um filtro teria o conteúdo errado sem nenhum vermelho.
+   */
+  segmentoSobrepostoId: string;
+  comercialSobrepostoId: string;
+  /**
    * OS DOIS CONTADORES DA VAGA (decisão do diretor, 25/08): oficiais são as contratações de verdade,
    * banco é o excedente aprovado que fica reservado. Texto, como todo campo numérico da trilha, para
    * o input controlado aceitar o campo vazio enquanto a pessoa digita.
@@ -706,6 +769,9 @@ const FORM_VAZIO = (): FormVaga => ({
   status: "ABERTA",
   sazonalidade: "OPERACAO_PADRAO",
   linhaServicoId: "",
+  // VAZIO É HERDAR, e é o estado normal: a vaga nasce valendo o segmento e o comercial do cliente.
+  segmentoSobrepostoId: "",
+  comercialSobrepostoId: "",
   posicoesOficiais: "1",
   // BANCO NASCE ZERO: a maioria das vagas não reserva excedente, e zero é resposta, não lacuna.
   posicoesBanco: "0",
@@ -854,6 +920,7 @@ export default function CentralDeVagasPage() {
     motivos: [],
     consultores: [],
     escalas: [],
+    comerciais: [],
   });
   const [contexto, setContexto] = useState<VagaContextoAs>({
     papelAs: null,
@@ -904,6 +971,21 @@ export default function CentralDeVagasPage() {
    * esta coluna cria, e hoje é o estado das duas vagas abertas de produção.
    */
   const [fSla, setFSla] = useState<string[]>([]);
+
+  /**
+   * ─ OS FILTROS DE SEGMENTO E COMERCIAL (Onda E), SEM COLUNA NA TABELA ─────────────────────────
+   *
+   * ELES NÃO TÊM COLUNA, E A DECISÃO É MEDIDA (diretor, 12/09): a tabela mede 1102,31px de mínimo
+   * numa caixa útil de 1254px, e duas colunas de texto livre ("Varejo", um nome de pessoa inteiro)
+   * não cabem na folga sem devolver a rolagem lateral que a Onda B3 e a Onda D acabaram de zerar. A
+   * §A.30 diz que nem toda coluna vira filtro; ela não diz que filtro precisa de coluna. Quem lê o
+   * valor de volta é a FICHA da vaga, onde há espaço de sobra.
+   *
+   * O NOME É SINGULAR, no molde do `fSla` logo acima, porque ele é o nome do CAMPO ("o filtro de
+   * Segmento") e não o da lista. Os dois guardam vários valores, como todo filtro desta tela (§A.28).
+   */
+  const [fSegmento, setFSegmento] = useState<string[]>([]);
+  const [fComercial, setFComercial] = useState<string[]>([]);
 
   const [abertaDe, setAbertaDe] = useState("");
   const [abertaAte, setAbertaAte] = useState("");
@@ -972,6 +1054,12 @@ export default function CentralDeVagasPage() {
     ativas: linhasAtivasDoCatalogo,
     carregando: carregandoLinhas,
   } = useLinhasServico(token);
+  /**
+   * O CATÁLOGO DE SEGMENTOS (Onda E). A leitura é a COMPLETA (`incluirInativos=1`): a vaga de um
+   * cliente classificado num segmento que saiu de circulação precisa do rótulo dele, e o FILTRO
+   * precisa do segmento inativo para poder ser perguntado.
+   */
+  const { segmentos: catalogoSegmentos } = useSegmentos(token);
 
   /**
    * A PÁGINA ATUAL DA TABELA. A lista inteira já vive na memória da tela (o `GET /as/vagas` não
@@ -1312,6 +1400,12 @@ export default function CentralDeVagasPage() {
       // ONDA C: o clone e o rascunho trazem de volta a classificação e a cidade. O `?? ""` é o que
       // faz a vaga antiga (anterior à Onda C) abrir a trilha com o campo vazio, em vez de quebrar.
       linhaServicoId: v.linhaServicoId ? String(v.linhaServicoId) : "",
+      /* ONDA E: volta a SOBREPOSIÇÃO (`...SobrepostoId`), NUNCA o valor efetivo (`v.segmento.id`).
+         Trazer o efetivo transformaria em sobreposição o que era herança: a vaga passaria a carimbar
+         o segmento que o cliente tinha HOJE e deixaria de acompanhar a troca no cliente, que é
+         exatamente a herança viva que o diretor escolheu (12/09). O clone herda como a original. */
+      segmentoSobrepostoId: v.segmentoSobrepostoId ? String(v.segmentoSobrepostoId) : "",
+      comercialSobrepostoId: v.comercialSobrepostoId ? String(v.comercialSobrepostoId) : "",
       posicoesOficiais: v.posicoesOficiais === null ? "" : String(v.posicoesOficiais),
       posicoesBanco: String(v.posicoesBanco),
 
@@ -1589,6 +1683,11 @@ export default function CentralDeVagasPage() {
              rascunho pode ser salvo sem ela, e quem cobra a PRESENÇA na publicação é a régua
              única, dos dois lados. */
           linhaServicoId: form.linhaServicoId ? Number(form.linhaServicoId) : undefined,
+          /* ONDA E: `undefined` quando vazio, e é isso que o servidor lê como HERDAR do cliente
+             (o DTO recusa zero e string vazia de propósito). Mandar o campo só quando há escolha é
+             o que mantém a herança viva: a vaga sem sobreposição continua acompanhando o cliente. */
+          segmentoId: form.segmentoSobrepostoId ? Number(form.segmentoSobrepostoId) : undefined,
+          comercialId: form.comercialSobrepostoId ? Number(form.comercialSobrepostoId) : undefined,
           posicoesOficiais: metaEnviada.oficiais,
           posicoesBanco: metaEnviada.banco,
 
@@ -2215,6 +2314,79 @@ export default function CentralDeVagasPage() {
   );
 
   /**
+   * ─ AS OPÇÕES DA ONDA E: O FILTRO LEVA TODO MUNDO, O SELETOR SÓ OS ATIVOS ─────────────────────
+   *
+   * ┌─ POR QUE O FILTRO INCLUI OS INATIVOS, e por que isso NÃO é descuido ───────────────────────┐
+   * │ "O que ficou na mão de quem saiu?" é a pergunta que mais se faz quando alguém deixa a       │
+   * │ empresa, e ela só existe enquanto o comercial inativado continuar sendo escolhível no       │
+   * │ filtro. Servindo só os ativos, a vaga dele ficaria INVISÍVEL, para sempre, sem nada falhar. │
+   * │ É a mesma régua que o filtro de Status desta tela já segue: se há vaga parada nele, é por   │
+   * │ ele que se procura essa vaga.                                                               │
+   * │                                                                                             │
+   * │ NO SELETOR DA TRILHA É O CONTRÁRIO, e é para isso que o `ativo` existe: não se OFERECE quem │
+   * │ saiu da empresa para uma vaga nova. A exceção é o valor JÁ ESCOLHIDO, que continua na lista │
+   * │ marcado "(inativo)": sem ele, o seletor cairia no vazio e o primeiro "salvar" feito para    │
+   * │ mudar OUTRA coisa apagaria o vínculo em silêncio, sem erro e sem ninguém olhando.           │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * AS DUAS LISTAS VÊM DE ENDPOINT (§A.37), e não das linhas carregadas: derivadas da página, elas
+   * encolheriam assim que o primeiro valor fosse escolhido, e não haveria como somar o segundo sem
+   * limpar o filtro antes.
+   */
+  const optSegmentos = useMemo(
+    () => [
+      { value: SEM_SEGMENTO, label: "Sem Segmento" },
+      ...catalogoSegmentos.map((sg) => ({
+        value: String(sg.id),
+        label: sg.rotulo,
+        hint: sg.ativo ? undefined : "inativo",
+      })),
+    ],
+    [catalogoSegmentos],
+  );
+  const optComerciais = useMemo(
+    () => [
+      { value: SEM_COMERCIAL, label: "Sem Comercial" },
+      ...opcoes.comerciais.map((c) => ({
+        value: String(c.id),
+        label: c.rotulo,
+        hint: c.ativo ? undefined : "inativo",
+      })),
+    ],
+    [opcoes.comerciais],
+  );
+
+  /* AS DUAS LISTAS DA TRILHA. A primeira opção é a HERANÇA, e ela existe para poder VOLTAR: sem
+     ela, uma sobreposição escolhida por engano ficaria para sempre, porque o seletor não teria como
+     devolver a vaga ao padrão do cliente. "Herdar do cliente" não é "não informado": é o estado
+     normal, e dizer isso no lugar de um vazio mudo é o que impede o consultor de achar que o campo
+     ficou por preencher. */
+  const segmentosDaTrilha = useMemo(
+    () => [
+      { value: "", label: "Herdar do cliente" },
+      ...catalogoSegmentos
+        .filter((sg) => sg.ativo || String(sg.id) === form.segmentoSobrepostoId)
+        .map((sg) => ({
+          value: String(sg.id),
+          label: sg.ativo ? sg.rotulo : `${sg.rotulo} (inativo)`,
+        })),
+    ],
+    [catalogoSegmentos, form.segmentoSobrepostoId],
+  );
+  const comerciaisDaTrilha = useMemo(
+    () => [
+      { value: "", label: "Herdar do cliente" },
+      ...opcoes.comerciais
+        .filter((c) => c.ativo || String(c.id) === form.comercialSobrepostoId)
+        .map((c) => ({
+          value: String(c.id),
+          label: c.ativo ? c.rotulo : `${c.rotulo} (inativo)`,
+        })),
+    ],
+    [opcoes.comerciais, form.comercialSobrepostoId],
+  );
+
+  /**
    * ─ A CADEIA DA TELA, e a ORDEM DELA IMPORTA ───────────────────────────────────────────────────
    *
    *   rows (o que o backend mandou)
@@ -2243,6 +2415,8 @@ export default function CentralDeVagasPage() {
     const setVinculos = new Set(fVinculos);
     const setConsultores = new Set(fConsultores);
     const setSla = new Set(fSla);
+    const setSegmento = new Set(fSegmento);
+    const setComercial = new Set(fComercial);
 
     return rows.filter((v) => {
       /*
@@ -2291,6 +2465,41 @@ export default function CentralDeVagasPage() {
       // desenha a célula, então o que o filtro promete é exatamente o que a coluna mostra.
       if (setSla.size && !setSla.has(slaDaLinha(v).estado)) return false;
       /*
+       * ─ ONDA E: O RECORTE CASA PELO VALOR **EFETIVO**, NUNCA PELA SOBREPOSIÇÃO ────────────────
+       *
+       * `v.segmento.id` JÁ É `coalesce(vaga, cliente)`, resolvido pelo servidor numa consulta só.
+       * A coluna crua (`...SobrepostoId`) vale NULO exatamente na vaga que HERDA, e herdar é a
+       * regra, não a exceção: filtrar por ela perderia a MAIORIA das vagas do segmento pedido e
+       * devolveria uma lista curta que parece certa. Não haveria erro, haveria resposta a menos.
+       *
+       * A VAGA SEM VALOR NENHUM (o `AUSENTE` do contrato) responde pelo sentinela, para "quais
+       * estão sem segmento" ser uma pergunta que o filtro sabe responder.
+       */
+      // ─ SEM `?.` AQUI, E A AUSÊNCIA DELE É A DECISÃO (auditoria do código, 13/09) ────────────
+      //
+      // ┌─ O QUE EU TENTEI, E POR QUE FOI DESFEITO ─────────────────────────────────────────────────┐
+      // │ Eu tinha posto `v.segmento?.id` para atravessar a janela em que a tela NOVA fala com o     │
+      // │ servidor VELHO. A auditoria mostrou duas coisas que derrubam a ideia:                       │
+      // │                                                                                             │
+      // │ 1. A GUARDA MENTIA. Com `v.segmento` ausente, a expressão vale o SENTINELA, então a linha  │
+      // │    CASA "Sem Segmento" em vez de não casar nada: filtrar por "Sem Segmento" devolveria     │
+      // │    TODAS as vagas. E o `AUSENTE` legítimo, que é o estado da maioria hoje, produz          │
+      // │    EXATAMENTE o mesmo valor: "o servidor não mandou" e "não há valor" ficariam             │
+      // │    indistinguíveis PARA SEMPRE, não só na janela.                                          │
+      // │                                                                                             │
+      // │ 2. ELA ESTAVA PELA METADE. A ficha lê `verAlvo.segmento.rotulo` sem guarda nenhuma, então   │
+      // │    na mesma janela abrir o painel de qualquer vaga já estourava. O `?.` protegia a tabela   │
+      // │    e deixava a ficha cair.                                                                  │
+      // └─────────────────────────────────────────────────────────────────────────────────────────────┘
+      //
+      // A JANELA SE FECHA PELA ORDEM DE PUBLICAÇÃO, e não por `?.` espalhado: migration, depois
+      // BACKEND, depois FRONTEND. Nessa ordem a tela nova nunca vê um servidor sem os campos. É o
+      // inverso da Onda D, e o motivo é medido: lá o campo novo era opcional e a tela o tolerava;
+      // aqui ele é lido em toda linha E enviado na escrita.
+      if (setSegmento.size && !setSegmento.has(String(v.segmento.id ?? SEM_SEGMENTO))) return false;
+      if (setComercial.size && !setComercial.has(String(v.comercial.id ?? SEM_COMERCIAL)))
+        return false;
+      /*
        * O PERÍODO COMPARA STRING COM STRING, e isso é proposital: `dataAbertura` é `yyyy-mm-dd`, uma
        * data pura, e nessa forma a ordem alfabética É a ordem cronológica. Converter para `Date`
        * traria fuso para dentro de uma comparação que não tem hora, e a vaga aberta no dia da ponta
@@ -2319,6 +2528,8 @@ export default function CentralDeVagasPage() {
     fVinculos,
     fConsultores,
     fSla,
+    fSegmento,
+    fComercial,
     abertaDe,
     abertaAte,
     catalogoStatus,
@@ -2463,6 +2674,8 @@ export default function CentralDeVagasPage() {
     (fVinculos.length ? 1 : 0) +
     (fConsultores.length ? 1 : 0) +
     (fSla.length ? 1 : 0) +
+    (fSegmento.length ? 1 : 0) +
+    (fComercial.length ? 1 : 0) +
     (fEtapas.length ? 1 : 0) +
     (abertaDe || abertaAte ? 1 : 0);
 
@@ -2474,6 +2687,8 @@ export default function CentralDeVagasPage() {
     setFVinculos([]);
     setFConsultores([]);
     setFSla([]);
+    setFSegmento([]);
+    setFComercial([]);
     setFEtapas([]);
     setAbertaDe("");
     setAbertaAte("");
@@ -2779,6 +2994,51 @@ export default function CentralDeVagasPage() {
                 ariaLabel="SLA de entrega"
                 limpavel
               />
+            </FiltroCampo>
+            {/* ─ SEGMENTO E COMERCIAL (Onda E), §A.28/§A.37: os dois nascem MÚLTIPLOS, pelo mesmo
+                `Combobox` compartilhado dos demais campos deste modal, com busca.
+
+                ELES NÃO TÊM COLUNA NA TABELA, e a decisão é do diretor sobre número medido: a folga
+                da tabela é de 151,69px e duas colunas de texto livre não cabem nela sem devolver a
+                rolagem lateral. Quem lê o valor de volta é a FICHA da vaga.
+
+                O RECORTE É PELO VALOR EFETIVO (`v.segmento.id`), que já resolve herança e
+                sobreposição: a vaga que HERDA do cliente entra junto com a que sobrepõe, e é por
+                isso que o filtro responde a maioria em vez de uma lista curta que parece certa.
+
+                AS OPÇÕES VÊM DE ENDPOINT, com os INATIVOS incluídos: a vaga de quem saiu da empresa
+                é justamente a que se procura quando alguém sai. */}
+            <FiltroCampo label="Segmento">
+              <Combobox
+                multiple
+                value={fSegmento}
+                onChange={setFSegmento}
+                options={optSegmentos}
+                placeholder="Todos"
+                ariaLabel="Segmento do cliente"
+                searchable
+                limpavel
+              />
+              <p className="mt-1 text-[11.5px] text-faint">
+                Traz as vagas pelo segmento que vale hoje, o do cliente ou o que a vaga escolheu por
+                conta própria.
+              </p>
+            </FiltroCampo>
+            <FiltroCampo label="Comercial">
+              <Combobox
+                multiple
+                value={fComercial}
+                onChange={setFComercial}
+                options={optComerciais}
+                placeholder="Todos"
+                ariaLabel="Comercial responsável"
+                searchable
+                limpavel
+              />
+              <p className="mt-1 text-[11.5px] text-faint">
+                Quem saiu da empresa continua na lista, marcado como inativo: é por ele que se
+                procura o que ficou na mão dele.
+              </p>
             </FiltroCampo>
             {/* ─ ETAPA DO FUNIL (peça 2.4), O MESMO ESTADO DO CARD ────────────────────────────
                 MÚLTIPLO DESDE O PRIMEIRO DIA (§A.28), pelo `Combobox` compartilhado, com as opções
@@ -3726,6 +3986,50 @@ export default function CentralDeVagasPage() {
                           Linhas De Serviço.
                         </span>
                       )}
+                    </CampoSelect>
+
+                    {/* ─ SEGMENTO E COMERCIAL (Onda E): A SOBREPOSIÇÃO, E ELA É A EXCEÇÃO ─────
+                        ELES FICAM DEPOIS DA LINHA DE SERVIÇO porque são a mesma leitura: natureza,
+                        sazonalidade, linha de serviço, segmento e comercial são as classificações
+                        da vaga, e ficam juntas; o status é o estado dela, e fecha o passo.
+
+                        NENHUM DOS DOIS É OBRIGATÓRIO, e nem entra na régua de pendências: vazio
+                        aqui não é lacuna, é HERANÇA. A vaga nasce valendo o segmento e o comercial
+                        do cliente, VIVOS, e trocá-los no cadastro do cliente corrige todas as vagas
+                        dele de uma vez (decisão do diretor, 12/09). Preencher aqui é dizer "esta
+                        vaga foge do padrão do cliente", e é o caso raro.
+
+                        A PRIMEIRA OPÇÃO É A VOLTA PARA A HERANÇA, e sem ela uma sobreposição
+                        escolhida por engano ficaria para sempre, porque o seletor não teria como
+                        devolver a vaga ao padrão do cliente.
+
+                        §A.35: `Select` do design system, que liga a busca sozinho acima de 8 itens,
+                        e nunca o `<select>` do navegador. */}
+                    <CampoSelect rotulo="Segmento" id="vaga-segmento">
+                      <Select
+                        value={form.segmentoSobrepostoId}
+                        onChange={(v) => set("segmentoSobrepostoId", v)}
+                        options={segmentosDaTrilha}
+                        placeholder="Herdar do cliente"
+                        ariaLabel="Segmento desta vaga"
+                      />
+                      <span className="mt-1 block text-[12px] text-faint">
+                        Sem escolha, a vaga vale o segmento do cliente e acompanha as correções
+                        feitas lá.
+                      </span>
+                    </CampoSelect>
+
+                    <CampoSelect rotulo="Comercial" id="vaga-comercial">
+                      <Select
+                        value={form.comercialSobrepostoId}
+                        onChange={(v) => set("comercialSobrepostoId", v)}
+                        options={comerciaisDaTrilha}
+                        placeholder="Herdar do cliente"
+                        ariaLabel="Comercial desta vaga"
+                      />
+                      <span className="mt-1 block text-[12px] text-faint">
+                        Sem escolha, a vaga vale o comercial que atende o cliente hoje.
+                      </span>
                     </CampoSelect>
 
                     <CampoSelect rotulo="Status" obrigatorio id="vaga-status">
@@ -4739,6 +5043,32 @@ export default function CentralDeVagasPage() {
                     : null
                 }
               />
+              {/* ─ ONDA E: O SEGMENTO E O COMERCIAL, COM A ORIGEM JUNTO ─────────────────────
+                  ELES NÃO TÊM COLUNA NA TABELA (a folga não comporta duas colunas de texto livre),
+                  então É AQUI que a vaga é lida de volta. Campo que a vaga carrega e ninguém lê é
+                  meio campo.
+
+                  O VALOR É O EFETIVO, já resolvido pelo servidor em `coalesce(vaga, cliente)`, e o
+                  NULO CHEGA NULO na `Linha`: quem escreve "não informado" (§A.11) é ela, uma vez
+                  só, para a ficha inteira. Um marcador próprio aqui reescreveria a regra do lado de
+                  fora do componente, e hoje AUSENTE é o estado da maioria, porque os 249 clientes
+                  ainda estão sendo classificados.
+
+                  A ORIGEM VAI NA FRASE DE APOIO porque ela responde a pergunta seguinte, que é a do
+                  diretor: esta vaga segue o padrão do cliente ou foge dele? Herdado e sobreposto
+                  chegam com o mesmo rótulo, e sem a origem a ficha não teria como dizer qual é qual.
+                  No AUSENTE não há apoio: "não informado" já é a resposta inteira, e "não há valor
+                  definido" logo abaixo seria dizer a mesma coisa duas vezes. */}
+              <Linha
+                rotulo="Segmento"
+                valor={verAlvo.segmento.rotulo}
+                apoio={origemDoValor(verAlvo.segmento.origem)}
+              />
+              <Linha
+                rotulo="Comercial"
+                valor={verAlvo.comercial.rotulo}
+                apoio={origemDoValor(verAlvo.comercial.origem)}
+              />
               <Linha
                 rotulo="Natureza"
                 valor={verAlvo.natureza ? VAGA_NATUREZA_LABEL[verAlvo.natureza] : null}
@@ -5509,10 +5839,18 @@ function BlocoFicha({ titulo, children }: { titulo: string; children: React.Reac
 function Linha({
   rotulo,
   valor,
+  apoio,
   largo = false,
 }: {
   rotulo: string;
   valor: string | null | undefined;
+  /**
+   * UMA FRASE DE APOIO ABAIXO DO VALOR, opcional e aditiva: quem não passa nada desenha exatamente
+   * o que desenhava antes. Ela nasceu na Onda E, para o segmento e o comercial dizerem DE ONDE o
+   * valor veio (do cliente ou desta vaga), que é a metade da informação que o rótulo sozinho não
+   * carrega. É frase de apoio, e não tag: maiúscula só na primeira palavra (§A.24).
+   */
+  apoio?: string | null;
   largo?: boolean;
 }) {
   const texto = valor?.trim() ? valor.trim() : "não informado";
@@ -5520,6 +5858,7 @@ function Linha({
     <div className={largo ? "md:col-span-2" : undefined}>
       <span className="block text-[11.5px] text-faint">{rotulo}</span>
       <span className="block whitespace-pre-wrap break-words text-[13px] text-text">{texto}</span>
+      {apoio?.trim() ? <span className="block text-[11px] text-faint">{apoio}</span> : null}
     </div>
   );
 }

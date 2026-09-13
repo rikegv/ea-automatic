@@ -80,6 +80,24 @@ export const ROTA_MENU: { prefixo: string; codigo: string }[] = [
   // aberta, e só tomaria 403 ao clicar em salvar. O backend já barra a escrita; isto fecha a porta
   // da tela.
   { prefixo: "/admin/as/linhas-servico", codigo: "as-linhas-servico" },
+  // SEGMENTOS (A&S, Onda E): o RAMO DO CLIENTE (Varejo, Saúde, Indústria), governado pelo menu
+  // `as-segmentos`, que nasce só para o SUPER_ADMIN (§A.23). A régua é a das Linhas De Serviço, e o
+  // motivo é o mesmo: a LEITURA do catálogo (`GET /as/segmentos`) é aberta a qualquer autenticado de
+  // propósito, porque o seletor do segmento aparece no cadastro de cliente. Sem esta linha, quem
+  // digitasse a URL abriria o gerenciador, veria o catálogo inteiro RENDERIZADO pela leitura aberta,
+  // e só tomaria 403 ao clicar em salvar. O backend já barra a escrita; isto fecha a porta da tela.
+  { prefixo: "/admin/as/segmentos", codigo: "as-segmentos" },
+  // COMERCIAIS (A&S, Onda E): as PESSOAS do comercial, governado pelo menu `as-comerciais`, que
+  // nasce só para o SUPER_ADMIN (§A.23). AQUI A LINHA PESA MAIS QUE NAS VIZINHAS, e o motivo é o
+  // dado: este é o único catálogo da onda que guarda NOME DE PESSOA (§A.6). Enquanto o menu estiver
+  // liberado a ninguém, a tela precisa ser invisível E inalcançável, inclusive por quem digitar a
+  // URL.
+  // E AQUI A DEFESA É DUPLA, ao contrário das vizinhas: este catálogo NÃO TEM leitura aberta.
+  // `GET /as/comerciais` não existe (a auditoria vetou), a tela lê pela rota de SUPER_ADMIN, e o
+  // seletor da tela de Clientes lê por `/admin/clientes/comerciais`, governado pelo menu `clientes`.
+  // Então esta linha não é a única tranca, é a da porta da tela: quem digitar a URL não abre nada, e
+  // se abrisse não teria de onde puxar a lista.
+  { prefixo: "/admin/as/comerciais", codigo: "as-comerciais" },
   // MOTIVOS DE CANCELAMENTO DE VAGA (A&S): governado pelo menu `as-motivos-cancelamento`, que nasce
   // só para o SUPER_ADMIN (§A.23). A régua é a mesma das Etapas Do Funil, e pelo mesmo motivo: a
   // LEITURA do catálogo (`GET /as/motivos-cancelamento`) é aberta a qualquer autenticado de

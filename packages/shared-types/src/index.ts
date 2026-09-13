@@ -2022,6 +2022,79 @@ export interface AsLinhaDeServico {
 }
 
 /**
+ * ─ SEGMENTO E COMERCIAL (Onda E), os dois no MESMO molde da linha de serviço ───────────────────
+ *
+ * SEGMENTO é o RAMO do cliente (Varejo, Saúde, Indústria). COMERCIAL são as PESSOAS do comercial.
+ * Os dois são catálogos gerenciáveis pelo diretor, com código imutável, rótulo editável, ordem, e
+ * inativação em vez de exclusão, pela mesma razão registrada acima: a vaga antiga continua dizendo
+ * de que segmento ela era.
+ *
+ * ┌─ POR QUE SÃO DOIS TIPOS E NÃO UM `AsCatalogoItem` GENÉRICO ────────────────────────────────────┐
+ * │ A forma é a mesma, o SIGNIFICADO não é, e é o significado que a próxima pessoa precisa ler. Um  │
+ * │ alias genérico faria `AsComercial` e `AsSegmento` serem o MESMO tipo para o compilador: passar  │
+ * │ um segmento onde se espera um comercial compilaria em silêncio. São os dois campos que a Onda E │
+ * │ põe lado a lado na mesma tela e na mesma vaga, então trocá-los é o erro mais fácil de cometer.  │
+ * └────────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+export interface AsSegmento {
+  id: number;
+  codigo: string;
+  rotulo: string;
+  ordem: number;
+  ativo: boolean;
+}
+
+/**
+ * O COMERCIAL. **`rotulo` é NOME DE PESSOA**, e é o único dado pessoal desta onda: a tabela guarda o
+ * nome e mais nada (sem e-mail, sem telefone, sem CPF, §A.6 minimização). Quem sai da empresa é
+ * INATIVADO, nunca apagado, para a vaga antiga continuar dizendo de quem ela era.
+ */
+export interface AsComercial {
+  id: number;
+  /**
+   * ┌─ ELE NÃO TEM `codigo`, E A AUSÊNCIA É A DECISÃO (veto do `seguranca`, 12/09) ──────────────────┐
+   * │ Os cinco catálogos vizinhos têm um `codigo varchar(40) UNIQUE` DERIVADO DO RÓTULO, e o         │
+   * │ `renomear` deles não o muda: está escrito no molde, "O CÓDIGO NÃO MUDA". Para "Ana Paula        │
+   * │ Rodrigues" isso gravaria `ANA_PAULA_RODRIGUES` numa chave IMUTÁVEL que nenhuma tela corrige.    │
+   * │ Nome de pessoa muda (casamento, retificação civil, nome social) e a LGPD dá direito a correção: │
+   * │ renomear consertaria o rótulo e deixaria o nome antigo vivo no código, indefinidamente, num     │
+   * │ campo que sai no JSON. A chave é o `id serial`, como já é em `as_cidades`.                      │
+   * │                                                                                                │
+   * │ **E não há unique por nome**, pelo mesmo motivo: duas "Ana Silva" existem, e a recusa do        │
+   * │ duplicado revelaria o nome de uma ex-funcionária inativada a quem só tentou cadastrar alguém.   │
+   * └────────────────────────────────────────────────────────────────────────────────────────────────┘
+   */
+  rotulo: string;
+  ordem: number;
+  ativo: boolean;
+}
+
+/**
+ * ─ COMO A VAGA DEVOLVE O SEGMENTO E O COMERCIAL (Onda E) ──────────────────────────────────────
+ *
+ * A VAGA HERDA DO CLIENTE, e pode SOBREPOR. **NULO na vaga significa HERDAR**, preenchido significa
+ * sobrepor, e a leitura resolve por `coalesce(vaga.x, cliente.x)`.
+ *
+ * **HERANÇA VIVA, decisão do diretor (12/09):** trocando o comercial de um cliente, as vagas antigas
+ * dele **acompanham a troca**. "De quem é esta vaga" significa quem atende o cliente HOJE, e corrigir
+ * a carteira num lugar só corrige tudo. O preço, declarado e aceito: não existe o registro de quem
+ * era o comercial na época, e ele não pode ser reconstruído depois para o período passado.
+ *
+ * `origem` existe para a TELA, que precisa distinguir as duas coisas para mostrar de onde o valor
+ * veio, e para o diretor saber se aquela vaga foge do padrão do cliente. Sem ela, herdado e
+ * sobreposto chegam iguais e a tela não tem como dizer qual é qual.
+ */
+export type AsOrigemDoValor = "HERDADO" | "SOBREPOSTO" | "AUSENTE";
+
+export interface AsValorHerdado {
+  /** O id resolvido: o da vaga quando ela sobrepõe, senão o do cliente. Nulo quando nenhum dos dois tem. */
+  id: number | null;
+  /** O rótulo resolvido pelo join. Nulo quando não há valor; a tela escreve "não informado" (§A.11). */
+  rotulo: string | null;
+  origem: AsOrigemDoValor;
+}
+
+/**
  * ─ UMA CIDADE DO IBGE (Onda C) ────────────────────────────────────────────────────────────────
  *
  * `id` É O CÓDIGO DO IBGE, de 7 dígitos, e ele é a chave: nome de município se repete entre estados
@@ -2257,6 +2330,25 @@ export interface VagaListItem {
   cidadeId: number | null;
   cidadeNome: string | null;
   cidadeUf: string | null;
+  /**
+   * ─ SEGMENTO E COMERCIAL (Onda E): QUATRO campos, e o par de nomes é a parte que importa ────────
+   *
+   * ┌─ POR QUE O ID CRU SE CHAMA `...SobrepostoId` E NÃO `segmentoId` ───────────────────────────────┐
+   * │ Achado do `tester`, e ele estava certo. A coluna crua vale NULO exatamente na vaga que HERDA,   │
+   * │ que é a maioria esmagadora. Um campo chamado `segmentoId` é o nome mais óbvio para quem for     │
+   * │ escrever um filtro ou uma contagem, e quem o pegasse teria o CONTEÚDO ERRADO: nenhum erro,      │
+   * │ nenhum vermelho, só resposta a menos, em silêncio. O nome passa a dizer o que o campo é.        │
+   * └────────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * `...SobrepostoId` é só a SOBREPOSIÇÃO, e existe para o formulário pré-selecionar o que a vaga
+   * escolheu por conta própria. `segmento` e `comercial` são o valor EFETIVO, já resolvido por
+   * `coalesce(vaga, cliente)`, e é deles que a tela e o filtro leem. `origem` diz de onde veio, e
+   * `AUSENTE` é o estado normal de quem ainda não definiu, escrito "não informado" (§A.11).
+   */
+  segmentoSobrepostoId: number | null;
+  comercialSobrepostoId: number | null;
+  segmento: AsValorHerdado;
+  comercial: AsValorHerdado;
   /**
    * OS DOIS CONTADORES DA VAGA (decisão do diretor, 25/08), cada um com a sua META aqui e a sua
    * CONTAGEM no bloco de fechamento: oficiais são as contratações de verdade, banco é o excedente

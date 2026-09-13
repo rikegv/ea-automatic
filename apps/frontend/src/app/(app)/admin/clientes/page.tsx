@@ -7,9 +7,12 @@ import { useAuth } from "@/lib/auth-context";
 import { PageHead } from "@/components/ui/PageHead";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Button } from "@/components/ui/Button";
+import { Select } from "@/components/ui/Select";
 import { Pill, type PillTone } from "@/components/ui/Pill";
 import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
 import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
+import { useSegmentos } from "@/lib/as-segmentos";
+import { useComerciais } from "@/lib/as-comerciais";
 import { LojasDoCliente } from "@/components/admin/LojasDoCliente";
 import { GrupoDoCliente } from "@/components/admin/GrupoDoCliente";
 import { GruposClienteLivreto } from "@/components/admin/GruposClienteLivreto";
@@ -35,6 +38,23 @@ interface Cliente {
   tipoServicoRotulo?: string | null;
   // Opção de vínculo atual (id do catálogo) para pré-selecionar o select na edição.
   vinculoOpcaoId?: string | null;
+  /* ── SEGMENTO E COMERCIAL (Onda E) ────────────────────────────────────────────────────────────
+     OS DOIS SÃO OPCIONAIS E NASCEM NULOS, e isso é do desenho, não provisório: são 249 clientes
+     para o diretor preencher aos poucos, e cliente sem segmento nem comercial continua salvando.
+     A tela escreve "não informado" na ausência (§A.11), nunca traço e nunca vazio.
+     Guardamos o ID (o rótulo vem do catálogo): renomear um segmento corrige o nome em todos os
+     clientes de uma vez, que é o motivo de o catálogo existir. */
+  segmentoId?: number | null;
+  comercialId?: number | null;
+  /* O RÓTULO DO SEGMENTO VEM RESOLVIDO; O NOME DO COMERCIAL NÃO VEM, E A FALTA É DELIBERADA.
+     `GET /admin/clientes` é rota aberta a qualquer autenticado (sem `@Roles`, sem reivindicação de
+     menu), então ela carrega o segmento, que é classificação de negócio, e NÃO carrega o nome do
+     comercial, que é dado pessoal (§A.6): mandar a lista do time inteiro numa rota aberta seria
+     entregá-la a quem só acertou o endereço.
+     Quem precisa do nome resolve pelo CATÁLOGO que esta tela já carrega para o seletor
+     (`nomeDoComercialPorId`, em `lib/as-comerciais`), que é leitura em memória e não chamada nova, e
+     é governada pelo menu `as-comerciais`. Não existe join novo aqui. */
+  segmentoRotulo?: string | null;
 }
 
 // Opção de vínculo (empresa Soulan/tipo/filial) para o select da edição.
@@ -63,6 +83,10 @@ const EMPTY = {
   // Nasce no mesmo default do banco: o formulário de cliente NOVO já vem em Aplicativo, que é o
   // caso majoritário, e o time troca a minoria.
   tipoMarcacao: "APLICATIVO" as TipoMarcacao,
+  // Onda E: guardados como TEXTO no formulário (é o que o `Select` devolve) e convertidos só no
+  // envio. Vazio significa "não informado", e é assim que o admin LIMPA um valor cadastrado errado.
+  segmentoId: "",
+  comercialId: "",
 };
 
 /** Os rótulos da periodicidade, os mesmos que a tela de Benefícios exibe. */
@@ -124,6 +148,12 @@ export default function ClientesPage() {
   const [vinculoSel, setVinculoSel] = useState<string>("");
   // vinculoOpcaoId original do cliente em edição (para detectar mudança ao salvar).
   const [vinculoOriginal, setVinculoOriginal] = useState<string | null>(null);
+  /* OS DOIS CATÁLOGOS DA ONDA E. Cada gancho é `useState` em volta de uma promessa memoizada por
+     carga de página, então abrir esta tela custa UMA requisição por catálogo, e não uma por linha.
+     A falha deles não derruba a tela: o seletor fica vazio e o resto do cadastro continua servindo,
+     porque os dois campos são opcionais. */
+  const catSegmentos = useSegmentos(token);
+  const catComerciais = useComerciais(token);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -195,6 +225,42 @@ export default function ClientesPage() {
   );
   const ord = useOrdenacao(colunas, visiveis);
 
+  /**
+   * ─ AS OPÇÕES DOS DOIS SELETORES NOVOS, e a armadilha que elas evitam ──────────────────────────
+   *
+   * ┌─ O INATIVO SELECIONADO PRECISA CONTINUAR NA LISTA, senão salvar APAGA o dado ─────────────┐
+   * │ Montando o seletor só com os ATIVOS, um cliente que aponta para um segmento inativado não  │
+   * │ acharia o próprio valor na lista: o `Select` cairia no placeholder, o campo passaria a      │
+   * │ valer vazio, e o primeiro "Salvar alterações" (feito para mudar OUTRA coisa) mandaria       │
+   * │ `null` e apagaria o segmento do cliente. Sem erro, sem aviso, e ninguém olhando.            │
+   * │                                                                                            │
+   * │ Por isso a lista é ATIVOS + o escolhido, mesmo que ele esteja inativo: quem já tem o valor  │
+   * │ continua vendo o valor, e quem não tem continua sem poder escolher o que saiu de circulação.│
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * A PRIMEIRA OPÇÃO É "não informado" (§A.11), e ela existe para poder LIMPAR: sem ela, um
+   * segmento escolhido por engano ficaria para sempre, porque o seletor não teria como voltar ao
+   * vazio. É o mesmo recurso que a periodicidade do benefício já oferece nesta tela.
+   */
+  const opcoesSegmento = useMemo(
+    () => [
+      { value: "", label: "não informado" },
+      ...catSegmentos.segmentos
+        .filter((s) => s.ativo || String(s.id) === form.segmentoId)
+        .map((s) => ({ value: String(s.id), label: s.ativo ? s.rotulo : `${s.rotulo} (inativo)` })),
+    ],
+    [catSegmentos.segmentos, form.segmentoId],
+  );
+  const opcoesComercial = useMemo(
+    () => [
+      { value: "", label: "não informado" },
+      ...catComerciais.comerciais
+        .filter((c) => c.ativo || String(c.id) === form.comercialId)
+        .map((c) => ({ value: String(c.id), label: c.ativo ? c.rotulo : `${c.rotulo} (inativo)` })),
+    ],
+    [catComerciais.comerciais, form.comercialId],
+  );
+
   const nAtivos = useMemo(() => rows.filter((c) => c.ativo).length, [rows]);
   const nInativos = rows.length - nAtivos;
 
@@ -209,6 +275,8 @@ export default function ClientesPage() {
       diaPagamentoBeneficio: c.diaPagamentoBeneficio?.toString() ?? "",
       tipoMarcacao: c.tipoMarcacao ?? ("APLICATIVO" as TipoMarcacao),
       diasPrimeiroCredito: c.diasPrimeiroCredito?.toString() ?? "",
+      segmentoId: c.segmentoId?.toString() ?? "",
+      comercialId: c.comercialId?.toString() ?? "",
     });
     setVinculoOriginal(c.vinculoOpcaoId ?? null);
     setVinculoSel(c.vinculoOpcaoId ?? "");
@@ -228,6 +296,34 @@ export default function ClientesPage() {
     e.preventDefault();
     setSaving(true);
     setError(null);
+    /**
+     * ─ SEGMENTO E COMERCIAL SÓ VÃO NO CORPO QUANDO MUDARAM (Onda E) ─────────────────────────────
+     *
+     * ┌─ POR QUE CONDICIONAL, e não sempre como os demais campos ────────────────────────────────┐
+     * │ O backend valida com `forbidNonWhitelisted`, então um campo que o DTO ainda não conhece   │
+     * │ não é ignorado: ele RECUSA a requisição inteira com 400. Mandando os dois em todo salvar, │
+     * │ a janela entre esta tela e o DTO do backend seria uma tela de clientes que não salva NADA,│
+     * │ nem razão social, nem CNPJ, para ninguém.                                                  │
+     * │                                                                                           │
+     * │ Enviando só o que MUDOU, quem não encostar nos campos novos continua salvando como antes, │
+     * │ e quem escolher um segmento antes de o backend estar pronto recebe uma recusa clara na    │
+     * │ própria ação que a causou. É a mesma régua que o VÍNCULO já usa nesta tela, logo abaixo.  │
+     * └───────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * `null` E NÃO `undefined` no valor limpo: `undefined` some do JSON e o campo ficaria como
+     * estava, o que tornaria impossível APAGAR um segmento escolhido por engano.
+     */
+    const original = rows.find((c) => c.codCliente === editando);
+    const mudou = (campo: "segmentoId" | "comercialId") =>
+      form[campo] !== (original?.[campo]?.toString() ?? "");
+    const catalogosOndaE = {
+      ...(mudou("segmentoId")
+        ? { segmentoId: form.segmentoId === "" ? null : Number(form.segmentoId) }
+        : {}),
+      ...(mudou("comercialId")
+        ? { comercialId: form.comercialId === "" ? null : Number(form.comercialId) }
+        : {}),
+    };
     try {
       if (editando) {
         // EDITAR: o codCliente (chave) não muda; envia só os campos editáveis.
@@ -248,6 +344,7 @@ export default function ClientesPage() {
               form.diaPagamentoBeneficio === "" ? null : Number(form.diaPagamentoBeneficio),
             diasPrimeiroCredito:
               form.diasPrimeiroCredito === "" ? null : Number(form.diasPrimeiroCredito),
+            ...catalogosOndaE,
           },
         });
         // TROCA de vínculo (adicional) só quando o usuário mudou a opção selecionada.
@@ -267,6 +364,10 @@ export default function ClientesPage() {
             razaoSocial: form.razaoSocial,
             cnpj: form.cnpj || undefined,
             nomeOperacao: form.nomeOperacao || undefined,
+            /* NO CADASTRO NOVO o `mudou` compara com o cliente que ainda não existe, então os dois
+               só entram quando o admin de fato escolheu algum: cliente novo sem segmento e sem
+               comercial manda o mesmo corpo de sempre. */
+            ...catalogosOndaE,
           },
         });
       }
@@ -379,45 +480,79 @@ export default function ClientesPage() {
         {/* CAMADA DE PAGAMENTO DO BENEFÍCIO, só na EDIÇÃO (§A.17 etapa 4): é regra que se define
             para um cliente que já existe, e o cadastro inicial continua com os campos de sempre.
             Os três são opcionais e podem ser LIMPOS deixando o campo vazio. */}
-        <label className="grid gap-1 sm:col-span-2">
+        {/* §A.35/§A.36: ERA UM `<select>` NATIVO, anterior à regra, e a dívida venceu nesta OST.
+            O nativo abre o dropdown do SISTEMA OPERACIONAL, que não obedece ao tema do EA: é a
+            única parte da interface que o sistema não controla. A lista tem 3 opções, então o
+            `Select` não liga a busca sozinha (o limiar é 8), e é o certo aqui. */}
+        <div className="grid gap-1 sm:col-span-2">
           <span className="ds-label">Tipo de marcação</span>
-          <select
+          <Select
             value={form.tipoMarcacao}
-            onChange={(e) =>
-              setForm({ ...form, tipoMarcacao: e.target.value as TipoMarcacao })
-            }
-            className="ds-input"
-          >
-            {TIPO_MARCACAO.map((t) => (
-              <option key={t} value={t}>
-                {TIPO_MARCACAO_LABEL[t]}
-              </option>
-            ))}
-          </select>
+            onChange={(v) => setForm({ ...form, tipoMarcacao: v as TipoMarcacao })}
+            ariaLabel="Tipo de marcação"
+            options={TIPO_MARCACAO.map((t) => ({ value: t, label: TIPO_MARCACAO_LABEL[t] }))}
+          />
           {/* SEM opção "não informado", ao contrário dos campos de benefício: a coluna é NOT NULL e
               todo cliente marca ponto de alguma forma. Toda admissão do cliente herda este valor. */}
           <span className="text-[12px] text-faint">
             Herdado por todas as admissões deste cliente no iFractal.
           </span>
-        </label>
+        </div>
+
+        {/* ─ SEGMENTO E COMERCIAL (Onda E): os dois campos novos do cadastro ─────────────────────
+            OS DOIS SÃO OPCIONAIS, e isso é o desenho: são 249 clientes para o diretor preencher aos
+            poucos, e cliente sem nenhum dos dois continua salvando exatamente como antes.
+            A VAGA HERDA OS DOIS DAQUI, e é por isso que eles moram no cliente e não na vaga: acertar
+            a carteira num lugar só acerta todas as vagas daquele cliente.
+            O COMERCIAL FICA COM A COLUNA MAIS LARGA porque ele guarda NOME DE PESSOA inteiro, e o
+            segmento guarda uma palavra ("Varejo"). Dar a mesma largura aos dois truncaria o nome
+            (§A.20). */}
+        <div className="grid gap-1">
+          <span className="ds-label">Segmento</span>
+          <Select
+            value={form.segmentoId}
+            onChange={(v) => setForm({ ...form, segmentoId: v })}
+            ariaLabel="Segmento do cliente"
+            placeholder="não informado"
+            options={opcoesSegmento}
+          />
+          {/* A FALHA DO CATÁLOGO APARECE NO LUGAR DA AJUDA, e em vermelho: seletor vazio sem
+              explicação faz quem está aqui achar que ninguém cadastrou segmento nenhum. */}
+          <span className={catSegmentos.erro ? "text-[12px] text-danger" : "text-[12px] text-faint"}>
+            {catSegmentos.erro ?? "O ramo do cliente. Opcional."}
+          </span>
+        </div>
+        <div className="grid gap-1 sm:col-span-2">
+          <span className="ds-label">Comercial</span>
+          <Select
+            value={form.comercialId}
+            onChange={(v) => setForm({ ...form, comercialId: v })}
+            ariaLabel="Comercial responsável pelo cliente"
+            placeholder="não informado"
+            options={opcoesComercial}
+          />
+          <span className={catComerciais.erro ? "text-[12px] text-danger" : "text-[12px] text-faint"}>
+            {catComerciais.erro ?? "Quem do comercial atende este cliente. Opcional."}
+          </span>
+        </div>
 
         {editando && (
           <div className="grid gap-3 sm:col-span-5 sm:grid-cols-3">
-            <label className="grid gap-1">
+            {/* §A.35/§A.36: era um `<select>` nativo. A opção "não informado" continua sendo a
+                primeira, e é ela que LIMPA uma regra cadastrada por engano. */}
+            <div className="grid gap-1">
               <span className="ds-label">Periodicidade do benefício</span>
-              <select
+              <Select
                 value={form.periodicidadeBeneficio}
-                onChange={(e) => setForm({ ...form, periodicidadeBeneficio: e.target.value })}
-                className="ds-input"
-              >
-                <option value="">não informado</option>
-                {OPCOES_PERIODICIDADE.map((o) => (
-                  <option key={o.valor} value={o.valor}>
-                    {o.rotulo}
-                  </option>
-                ))}
-              </select>
-            </label>
+                onChange={(v) => setForm({ ...form, periodicidadeBeneficio: v })}
+                ariaLabel="Periodicidade do benefício"
+                placeholder="não informado"
+                options={[
+                  { value: "", label: "não informado" },
+                  ...OPCOES_PERIODICIDADE.map((o) => ({ value: o.valor, label: o.rotulo })),
+                ]}
+              />
+            </div>
             <label className="grid gap-1">
               <span className="ds-label">Dia do pagamento</span>
               <input
@@ -445,22 +580,21 @@ export default function ClientesPage() {
             </label>
           </div>
         )}
+        {/* §A.35/§A.36: era um `<select>` nativo, e este é o que MAIS pedia a conversão dos quatro.
+            A lista de vínculos é longa (empresa Soulan, tipo e filial combinados), então o `Select`
+            liga a BUSCA sozinho a partir de 8 opções, e achar o vínculo passa a ser digitar em vez
+            de rolar. O nativo não tinha busca nenhuma. */}
         {editando && (
-          <label className="grid gap-1 sm:col-span-5">
+          <div className="grid gap-1 sm:col-span-5">
             <span className="ds-label">Vínculo (empresa Soulan / tipo)</span>
-            <select
+            <Select
               value={vinculoSel}
-              onChange={(e) => setVinculoSel(e.target.value)}
-              className="ds-input"
-            >
-              <option value="">Selecione o vínculo</option>
-              {opcoesVinculo.map((o) => (
-                <option key={o.id} value={o.id}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </label>
+              onChange={setVinculoSel}
+              ariaLabel="Vínculo do cliente com a empresa empregadora"
+              placeholder="Selecione o vínculo"
+              options={opcoesVinculo.map((o) => ({ value: o.id, label: o.label }))}
+            />
+          </div>
         )}
         <div className="flex flex-wrap gap-2 sm:col-span-5">
           <Button type="submit" disabled={saving} className="py-2.5 sm:w-fit">
@@ -508,19 +642,31 @@ export default function ClientesPage() {
           </button>
         ))}
 
-        <select
+        {/* ─ §A.35/§A.36: o QUARTO nativo, e o único dos quatro que não era uma troca direta ─────
+            Ele é um filtro INLINE, e vivia com `h-auto w-auto py-1.5` justamente para encolher até a
+            altura dos chips de status ao lado. O `Select` do design system tem a altura do
+            formulário (o `.ds-select` é `padding: 12px 14px`), e posto aqui cru ele ficaria uma
+            cabeça acima da linha inteira: os chips, a busca e a caixa de seleção deixariam de se
+            alinhar, que é o esmagamento ao contrário da §A.20.
+            A saída é dar ao GATILHO a mesma medida que o nativo tinha, e só a ele: o popover, a
+            busca e o tema continuam sendo os do design system. A largura é fixa porque `w-auto` num
+            botão de seletor encolheria para o rótulo selecionado, e a caixa mudaria de tamanho a
+            cada escolha.
+            MEDIDO no browser, nesta barra: os chips de status têm 30px, a busca ao lado tem 34px, o
+            nativo tinha 33px e um `.ds-select` cru tem 46px. Com `py-1.5` e `text-[13.5px]` o
+            gatilho fica em 34px, a mesma altura da busca vizinha. A largura, 9,5rem, cobre o rótulo
+            mais longo ("Todos os tipos") e fica na casa dos 147px que o nativo ocupava. */}
+        <Select
+          className="w-[9.5rem] [&>button]:!px-3 [&>button]:!py-1.5 [&>button]:!text-[13.5px]"
           value={filtroTipo}
-          onChange={(e) => setFiltroTipo(e.target.value)}
-          aria-label="Filtrar por tipo de serviço"
-          className="ds-input h-auto w-auto py-1.5"
-        >
-          <option value="">Todos os tipos</option>
-          {TIPOS_SERVICO.map((t) => (
-            <option key={t.valor} value={t.valor}>
-              {t.rotulo}
-            </option>
-          ))}
-        </select>
+          onChange={setFiltroTipo}
+          ariaLabel="Filtrar por tipo de serviço"
+          placeholder="Todos os tipos"
+          options={[
+            { value: "", label: "Todos os tipos" },
+            ...TIPOS_SERVICO.map((t) => ({ value: t.valor, label: t.rotulo })),
+          ]}
+        />
 
         <input
           value={busca}

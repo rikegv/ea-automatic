@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from "@nestjs/common";
 import { ClientesService } from "./clientes.service";
 import { CreateClienteDto, DefinirVinculoDto, UpdateClienteDto } from "./clientes.dto";
 import { Roles } from "../../auth/decorators";
@@ -29,6 +29,33 @@ export class ClientesController {
   @Get("vinculo-opcoes")
   opcoesVinculo() {
     return this.clientes.opcoesVinculo();
+  }
+
+  /**
+   * ─ OS COMERCIAIS, PARA O SELETOR DA EDIÇÃO DO CLIENTE (Onda E) ───────────────────────────────
+   *
+   * ┌─ QUEM FECHA ESTA ROTA É O MENU `clientes`, REIVINDICADO **NOMINALMENTE** (§A.6) ───────────┐
+   * │ A lista é de NOMES DE PESSOA (o time comercial), e por isso NÃO existe um `GET             │
+   * │ /as/comerciais` aberto: os catálogos irmãos têm leitura aberta porque a lista deles é       │
+   * │ inócua, esta não é. Uma rota nova sem guarda aqui seria a mesma porta com outro nome, e é   │
+   * │ o que aconteceria SOZINHO: handler que menu nenhum reivindica é ABERTO por construção       │
+   * │ (`menu.guard.ts`: "operação aberta (não reivindicada por menu)" devolve `true`).            │
+   * │                                                                                             │
+   * │ POR ISSO `"ClientesController.comerciais"` ESTÁ ESCRITO, COM ESTE NOME, nas `operacoes` do  │
+   * │ menu `clientes` em `domain/menus.ts`. E por isso NÃO serve um coringa `ClientesController.*`│
+   * │ ali: o `list` desta mesma controller fica FORA da reivindicação de propósito (o consultor   │
+   * │ precisa da lista de clientes na Liberação e no wizard), e o coringa o fecharia junto.       │
+   * │                                                                                             │
+   * │ RENOMEAR ESTE HANDLER SEM MEXER NO MENU REABRE A ROTA, em silêncio. O nome do método é      │
+   * │ parte da autorização, não detalhe de estilo.                                                 │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * `?incluirInativos=1` traz quem saiu da empresa, e é o que impede o seletor de perder o vínculo
+   * já guardado (ver o service). O padrão, sem o parâmetro, devolve só quem está ativo.
+   */
+  @Get("comerciais")
+  comerciais(@Query("incluirInativos") incluirInativos?: string) {
+    return this.clientes.comerciais(incluirInativos === "1" || incluirInativos === "true");
   }
 
   @Post()
