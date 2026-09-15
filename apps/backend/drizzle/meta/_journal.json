@@ -757,6 +757,13 @@
       "when": 1788093491611,
       "tag": "0107_as_segmento_e_comercial",
       "breakpoints": true
+    },
+    {
+      "idx": 108,
+      "version": "7",
+      "when": 1788097091611,
+      "tag": "0108_fila_entradas_pandape",
+      "breakpoints": true
     }
   ]
 }

@@ -3417,3 +3417,87 @@ export interface AsPainelVaga {
   ocupacao: AsOcupacaoVaga;
   candidaturas: AsCandidaturaItem[];
 }
+
+// ─── FILA DE ENTRADAS DO PANDAPÉ ────────────────────────────────────────────────────────────────
+/**
+ * O VOCABULÁRIO DA FILA DE ENTRADAS (OST de 15/09/2026, caso Pamela Tauany).
+ *
+ * POR QUE ESTA FILA EXISTE: o webhook do Pandapé enfileirava e esquecia. O EA não guardava registro
+ * nenhum de evento recebido, e o único rastro era o job no Redis, podado por CONTAGEM. Um evento que
+ * chegou com o CPF ainda zerado (o Pandapé dispara ANTES de o candidato preencher) morria em cinco
+ * tentativas dentro de dez segundos e ninguém ficava sabendo. Medido contra produção, não deduzido.
+ *
+ * §A.6, a régua que este vocabulário carrega: aqui só entram IDENTIFICADORES DO ATS e CLASSIFICAÇÃO.
+ * NUNCA CPF, e nunca o texto cru de uma exceção. O `motivo` é enum fechado de propósito: o `detail`
+ * do erro 23505 do Postgres traz o CPF por extenso, porque o unique parcial de produção é
+ * `uq_admissao_cpf_vaga_viva (candidato_cpf, id_vacancy)`. Classificar por regex sobre a mensagem é
+ * permitido; PERSISTIR a mensagem é proibido.
+ */
+export const PANDAPE_ENTRADA_DESFECHOS = [
+  /** Chegou e foi aceito. Estado inicial, gravado ANTES de enfileirar. */
+  "RECEBIDO",
+  /** Virou admissão completa na esteira (de/para de cliente e cargo resolvido). */
+  "ADMISSAO_CRIADA",
+  /** Virou pré-admissão em AGUARDANDO_LIBERACAO (sem de/para). O caminho da Pamela. */
+  "PRE_ADMISSAO",
+  /** Adotado por admissão viva já existente do mesmo candidato e da mesma vaga. */
+  "ADOTADO",
+  /** Já conhecido, nada a fazer (idempotência). */
+  "NO_OP",
+  /** Tentativas ESGOTADAS. Nunca escrito numa tentativa intermediária. */
+  "FALHOU",
+  /** A fila não aceitou o evento (Redis fora). O Pandapé reenvia. */
+  "NAO_ENFILEIRADO",
+  /** O BullMQ descartou o enfileiramento porque o jobId ainda estava ocupado. */
+  "DESCARTADO_DUPLICADO",
+  /** Integração sem credencial: o worker não tinha o que consultar. */
+  "INERTE",
+  /** Não resolveu ainda e vai ser re-tentado (sem CPF na origem, sem nome, API fora). */
+  "ADIADO",
+] as const;
+export type PandapeEntradaDesfecho = (typeof PANDAPE_ENTRADA_DESFECHOS)[number];
+
+/** Motivo CLASSIFICADO. Enum fechado: texto livre aqui é vazamento permanente (§A.6). */
+export const PANDAPE_ENTRADA_MOTIVOS = [
+  "CPF_INVALIDO",
+  "SEM_CPF_NA_ORIGEM",
+  "SEM_NOME",
+  "SEM_DE_PARA",
+  "QUOTA_429",
+  "TIMEOUT",
+  "API_FORA",
+  "DUPLICADO",
+  "OUTRO",
+] as const;
+export type PandapeEntradaMotivo = (typeof PANDAPE_ENTRADA_MOTIVOS)[number];
+
+/**
+ * A origem do EVENTO, carimbada no nascimento da linha. É IMUTÁVEL: um reprocesso pela tela NÃO a
+ * reescreve para MANUAL, só incrementa as tentativas. Sem isso o histórico do caso se apaga no
+ * primeiro reprocesso.
+ */
+export const PANDAPE_ENTRADA_ORIGENS = ["WEBHOOK", "TICK", "MANUAL"] as const;
+export type PandapeEntradaOrigem = (typeof PANDAPE_ENTRADA_ORIGENS)[number];
+
+/**
+ * Uma linha da fila, do jeito que a tela recebe.
+ *
+ * O `candidatoNome` vem do CACHE EM MEMÓRIA do processo (TTL de minutos, teto com evicção), resolvido
+ * NO WORKER sob o limiter da fila. NUNCA vem do banco, porque a tabela não tem coluna de nome e não
+ * pode ganhar uma. Ausente enquanto a resolução não chegou: a tela mostra "não informado" (§A.11).
+ */
+export interface PandapeEntradaItem {
+  id: string;
+  idPrecollaborator: string | null;
+  idVacancy: string | null;
+  /** Só quando o cache já resolveu. Nunca persistido, nunca logado. */
+  candidatoNome?: string;
+  origem: PandapeEntradaOrigem;
+  desfecho: PandapeEntradaDesfecho;
+  motivo: PandapeEntradaMotivo | null;
+  tentativas: number;
+  recebidoEm: string;
+  ultimaTentativaEm: string | null;
+  resolvidoEm: string | null;
+  admissaoId: string | null;
+}

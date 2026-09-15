@@ -207,6 +207,21 @@ export const ADMINISTRACAO: NavDef[] = [
    * §A.23: esvaziar esta lista NÃO mexe em permissão de ninguém. Quem governa a tela é o menu
    * `as-etapas`, que segue de pé no guard de rota (`lib/menu-rotas.ts`) e no filtro do card, e que
    * continua nascendo só para o SUPER_ADMIN.
+   *
+   * ─ E "ENTRADAS DO PANDAPÉ" SEGUIU O MESMO CAMINHO (decisão do diretor, 15/09/2026) ─────────────
+   *
+   * A tela chegou a ter linha própria aqui, e o diretor decidiu outra coisa: ela vive DENTRO do
+   * Diagnóstico, no Menu Gerencial. O caminho é Menu Gerencial, Diagnóstico, Entradas Do Pandapé, e
+   * a porta é um card do `app/(app)/admin/diagnostico/page.tsx` que NAVEGA para a tela cheia
+   * (`/admin/entradas-pandape`) mostrando quantos estão parados na fila. Ela não virou tabela
+   * embutida nem modal: são 8 colunas, e em janela sobreposta elas violariam a §A.20.
+   *
+   * UMA PORTA SÓ, e é por isso que a linha saiu daqui: destino alcançável por dois caminhos é o
+   * começo de dois caminhos que divergem.
+   *
+   * §A.23 de novo: tirar a linha NÃO revoga nada. O menu `entradas-pandape` continua registrado no
+   * catálogo, continua de pé no guard de rota e continua nascendo só para o SUPER_ADMIN; o card do
+   * Diagnóstico responde ao mesmo `temMenu`. Quem libera para os demais segue sendo o diretor.
    */
 ];
 

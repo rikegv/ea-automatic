@@ -35,6 +35,12 @@ export const ROTA_MENU: { prefixo: string; codigo: string }[] = [
   { prefixo: "/admin/menu-areas", codigo: "menu-areas" },
   { prefixo: "/admin/pastas-drive", codigo: "pastas-drive" },
   { prefixo: "/admin/assinante-empresa", codigo: "assinante-empresa" },
+  // ENTRADAS DO PANDAPÉ: governada pelo menu `entradas-pandape`, que nasce só para o SUPER_ADMIN
+  // (§A.23). Sem esta linha o guard deixaria qualquer autenticado abrir a URL direto, e a tela
+  // DISPARA reprocessamento contra a API do ATS, cujo teto de requisições é compartilhado com o
+  // webhook que alimenta a folha (§A.5). O backend já barra a operação (@Roles MASTER/SUPER_ADMIN);
+  // isto fecha a porta da tela.
+  { prefixo: "/admin/entradas-pandape", codigo: "entradas-pandape" },
   { prefixo: "/admin/diagnostico", codigo: "diagnostico" },
   { prefixo: "/liberacao", codigo: "liberacao" },
   { prefixo: "/nova", codigo: "nova" },

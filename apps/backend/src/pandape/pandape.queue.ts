@@ -64,6 +64,27 @@ export function criarConexaoRedis(host: string, port: number): IORedis {
   });
 }
 
+/**
+ * ─ ESPAÇAMENTO DA RE-TENTATIVA DO `sync-candidate`, E SÓ DELE (OST 15/09/2026) ─────────────────
+ *
+ * O CASO MEDIDO: cinco tentativas em DEZ SEGUNDOS para um dado que só ficou válido DIAS depois. O
+ * evento do Pandapé sai na pasta "Convite de admissão enviado", ANTES de a pessoa preencher o
+ * formulário, então o CPF vem zerado; nenhuma quantidade de tentativas dentro do mesmo minuto faz
+ * alguém preencher mais rápido, e cada uma ainda gasta o rate limit COMPARTILHADO com o webhook que
+ * alimenta a folha (§A.5). A primeira re-tentativa passa a cair em 1 HORA e a janela total alcança
+ * 31 horas (1+2+4+8+16), que é o dia seguinte com folga.
+ *
+ * ┌─ POR QUE ISTO NÃO ESTÁ NO `defaultJobOptions`, e mexer lá seria um incidente ──────────────────┐
+ * │ O default é COMPARTILHADO com o `pull-docs`. Espaçar o pull empurra a coleta documental contra  │
+ * │ o TTL de 48h da STAGING EFÊMERA: o prontuário se perde EM SILÊNCIO, que é exatamente o padrão   │
+ * │ do incidente da §A.33. O pull fica como está (5 tentativas, backoff 2s).                        │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+export const SYNC_CANDIDATE_JOB_OPTIONS = {
+  attempts: 6,
+  backoff: { type: "exponential" as const, delay: 60 * 60 * 1000 },
+};
+
 /** Opções padrão de job: 5 tentativas com backoff exponencial (resiliência ao rate limit). */
 export const PANDAPE_QUEUE_OPTIONS: Omit<QueueOptions, "connection"> = {
   prefix: PANDAPE_BULL_PREFIX,

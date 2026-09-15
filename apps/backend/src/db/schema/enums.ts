@@ -1,4 +1,9 @@
 import { pgEnum } from "drizzle-orm/pg-core";
+import {
+  PANDAPE_ENTRADA_DESFECHOS,
+  PANDAPE_ENTRADA_MOTIVOS,
+  PANDAPE_ENTRADA_ORIGENS,
+} from "@ea/shared-types";
 
 /** RBAC (CLAUDE.md §A.3): Comum (consultor) · Master · Super Admin. */
 export const papelEnum = pgEnum("papel", ["COMUM", "MASTER", "SUPER_ADMIN"]);
@@ -441,3 +446,29 @@ export const asContatoTipoEnum = pgEnum("as_contato_tipo", [
   "ENTREVISTA",
   "OBSERVACAO",
 ]);
+
+// ── FILA DE ENTRADAS DO PANDAPÉ (OST 15/09/2026) ────────────────────────────────────────────────
+// Os três enums da tabela `pandape_entrada`. Os VALORES não são digitados aqui: vêm do vocabulário
+// compartilhado (`@ea/shared-types`), que é o dono único desta lista (§A.39). Digitar de novo faria
+// banco e contrato divergirem no primeiro valor acrescentado, e a divergência só apareceria quando o
+// insert estourasse "invalid input value for enum", em produção.
+
+/**
+ * O DESFECHO de um evento recebido do ATS. Enum do Postgres (conjunto fechado no próprio tipo), e
+ * não texto com CHECK: texto livre vira seis grafias do mesmo desfecho e nenhuma contagem fecha.
+ */
+export const pandapeEntradaDesfechoEnum = pgEnum(
+  "pandape_entrada_desfecho",
+  PANDAPE_ENTRADA_DESFECHOS,
+);
+
+/**
+ * O MOTIVO CLASSIFICADO da não-conclusão. É o coração do §A.6 desta tabela: um código de conjunto
+ * fechado NÃO TEM COMO carregar CPF, nome ou URL, porque não vem da mensagem do erro. Classificar por
+ * regex sobre `err.message` é permitido; PERSISTIR a mensagem é proibido (o `detail` do 23505 do
+ * Postgres traz o CPF por extenso, medido em produção contra `uq_admissao_cpf_vaga_viva`).
+ */
+export const pandapeEntradaMotivoEnum = pgEnum("pandape_entrada_motivo", PANDAPE_ENTRADA_MOTIVOS);
+
+/** A ORIGEM do evento, carimbada no nascimento e IMUTÁVEL (reprocesso não reescreve para MANUAL). */
+export const pandapeEntradaOrigemEnum = pgEnum("pandape_entrada_origem", PANDAPE_ENTRADA_ORIGENS);

@@ -4,6 +4,8 @@ import { AuditoriaModule } from "../auditoria/auditoria.module";
 import { InternalTokenGuard } from "./internal-token.guard";
 import { PandapeArquivosModule } from "./pandape-arquivos.module";
 import { PandapeController } from "./pandape.controller";
+import { PandapeEntradaModule } from "./pandape-entrada.module";
+import { PandapeEntradasController } from "./pandape-entradas.controller";
 import { PandapeQueueModule } from "./pandape-queue.module";
 import { PandapeSchedulerService } from "./pandape-scheduler.service";
 import { PandapeSyncService } from "./pandape-sync.service";
@@ -19,8 +21,16 @@ import { PandapeWebhookGuard } from "./pandape-webhook.guard";
   // `PandapeArquivosModule` é a FOLHA que carrega o `PandapeApiService` (uma instância só, um cache
   // de token só) e a re-baixa por tipo. Ele é importado também pela Auditoria, que precisa re-baixar
   // no arquivamento sem fechar ciclo com este módulo.
-  imports: [AdmissoesModule, AuditoriaModule, PandapeQueueModule, PandapeArquivosModule],
-  controllers: [PandapeController, PandapeWebhookController],
+  imports: [
+    AdmissoesModule,
+    AuditoriaModule,
+    PandapeQueueModule,
+    PandapeArquivosModule,
+    // O REGISTRO DURÁVEL das entradas (OST 15/09/2026). Módulo folha: a porta (webhook), o worker e
+    // a tela leem a MESMA instância, e é isso que mantém o cache de nomes único e em memória.
+    PandapeEntradaModule,
+  ],
+  controllers: [PandapeController, PandapeWebhookController, PandapeEntradasController],
   providers: [
     PandapeSyncService,
     PandapeSchedulerService,

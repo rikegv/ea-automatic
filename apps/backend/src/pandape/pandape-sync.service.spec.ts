@@ -240,7 +240,11 @@ describe("PandapeSyncService — idempotência da sync (DoD §1 / regra 1 / uniq
       admissoes: { create: vi.fn().mockRejectedValue(erro23505) },
     });
 
-    await expect(svc.processarCandidato("PC-1")).resolves.toBeUndefined(); // não relança
+    // NÃO RELANÇA (é o que este teste sempre mediu). O `toBeUndefined` saiu porque
+    // `processarCandidato` deixou de ser `Promise<void>` e passa a DEVOLVER o desfecho do evento
+    // (exigência 9 da fila de entradas): a corrida tratada pelo unique é um `NO_OP`, e não mais um
+    // retorno vazio. A asserção de comportamento continua idêntica: resolve em vez de rejeitar.
+    await expect(svc.processarCandidato("PC-1")).resolves.toMatchObject({ desfecho: "NO_OP" });
     expect(admissoes.create).toHaveBeenCalledTimes(1);
   });
 
@@ -567,7 +571,11 @@ describe("PandapeSyncService — pull de docs reusa F2 (DoD §5 / §A.6 URL nunc
     );
     const { svc, auditoria } = makeService({ db, api });
 
-    await expect(svc.processarCandidato("PC-1")).resolves.toBeUndefined();
+    // Mesma razão do teste da corrida: o retorno agora é o desfecho do evento, e o que este teste
+    // mede (o download falho não quebra o fluxo) é o `resolves`, que segue valendo inteiro.
+    await expect(svc.processarCandidato("PC-1")).resolves.toMatchObject({
+      desfecho: "ADMISSAO_CRIADA",
+    });
     // sem url → não baixa; com url mas 404 → pulado. Nenhuma auditoria.
     expect(auditoria.auditarConjunto).not.toHaveBeenCalled();
 

@@ -10,9 +10,11 @@ import {
   JOB_SYNC_CANDIDATE,
   PANDAPE_QUEUE,
   PANDAPE_QUEUE_OPTIONS,
+  SYNC_CANDIDATE_JOB_OPTIONS,
   type PullDocsJobData,
   type SyncCandidateJobData,
 } from "./pandape.queue";
+import { PandapeEntradaService } from "./pandape-entrada.service";
 
 /**
  * Dono do lado PRODUTOR da fila (a `Queue` BullMQ) e da conexão Redis dedicada. Tolerante a Redis
@@ -25,7 +27,28 @@ export class PandapeQueueService implements OnModuleInit, OnModuleDestroy {
   private connection?: IORedis;
   private queue?: Queue;
 
-  constructor(private readonly config: ConfigService) {}
+  /**
+   * `entradas` é OPCIONAL na assinatura e SEMPRE injetada em produção (o provider é exportado pelo
+   * módulo da fila). Opcional porque o descarte por jobId ocupado é a ÚNICA coisa que esta classe
+   * registra, e porque as suítes que já existiam constroem o serviço só com a config: um argumento
+   * obrigatório novo quebraria código validado sem nenhum ganho (§A.26).
+   */
+  constructor(
+    private readonly config: ConfigService,
+    private readonly entradas?: PandapeEntradaService,
+  ) {}
+
+  /**
+   * O job devolvido pelo `add` já EXISTIA? Comparado pelo `timestamp` do próprio BullMQ (instante de
+   * criação do job): job recém-criado nasce agora, job pré-existente traz o carimbo de quando foi
+   * criado. A folga de 5s evita falso positivo por relógio/latência, e o lado seguro do erro é NÃO
+   * marcar como duplicado (um descarte não registrado é um dado a menos na tela; um falso duplicado
+   * marcaria como descartado um evento que está rodando).
+   */
+  private ehJobPreexistente(job: unknown): boolean {
+    const ts = (job as { timestamp?: unknown } | undefined)?.timestamp;
+    return typeof ts === "number" && Number.isFinite(ts) && Date.now() - ts > 5_000;
+  }
 
   onModuleInit(): void {
     try {
@@ -118,7 +141,10 @@ export class PandapeQueueService implements OnModuleInit, OnModuleDestroy {
    * `queue.add` lançou. O retorno permite ao webhook (INT-1) responder 503 em vez de perder o
    * evento silenciosamente — o Pandapé reenvia (§A.5). O chamador do tick (loop) ignora o retorno.
    */
-  async enfileirarCandidato(idPrecollaborator: string): Promise<boolean> {
+  async enfileirarCandidato(
+    idPrecollaborator: string,
+    opts: { jobIdSufixo?: string } = {},
+  ): Promise<boolean> {
     if (!this.queue) {
       this.logger.warn("enfileirarCandidato ignorado: fila indisponível.");
       return false;
@@ -127,11 +153,35 @@ export class PandapeQueueService implements OnModuleInit, OnModuleDestroy {
       // jobId estável pelo idPreCollaborator: dedup de jobs em voo para o mesmo candidato.
       // Separador "-" (não ":"): o BullMQ 5.x REJEITA custom jobId contendo ":" ("Custom Id
       // cannot contain :"), o que fazia todo webhook real cair em 503 na fila. Ver INT-1/§A.5.
-      await this.queue.add(
+      //
+      // O SUFIXO é o precedente já escrito ao lado, em `enfileirarPullDocumentos`, e existe para o
+      // REPROCESSO MANUAL: `cand-<id>` é estável PARA SEMPRE, e o BullMQ recusa, CALADO, um `add`
+      // com jobId que ainda consta no conjunto de concluídos (`removeOnComplete: 1000`). Sem ele, o
+      // botão "reprocessar" da tela mostraria "reprocessado" para uma coisa que nunca rodou: um
+      // silêncio novo dentro da frente que existe para acabar com o silêncio.
+      const jobId = opts.jobIdSufixo
+        ? `cand-${idPrecollaborator}-${opts.jobIdSufixo}`
+        : `cand-${idPrecollaborator}`;
+      const job = await this.queue.add(
         JOB_SYNC_CANDIDATE,
         { idPrecollaborator } satisfies SyncCandidateJobData,
-        { jobId: `cand-${idPrecollaborator}` },
+        // O espaçamento vale SÓ aqui: o default é compartilhado com o `pull-docs` (ver
+        // SYNC_CANDIDATE_JOB_OPTIONS, e o porquê de não mexer no default).
+        { jobId, ...SYNC_CANDIDATE_JOB_OPTIONS },
       );
+
+      // ─ "ACEITOU" NÃO É A MESMA COISA QUE "JÁ EXISTIA" (exigência 3 da auditoria) ─────────────
+      // O `add` do BullMQ devolve `true` de qualquer jeito: com jobId ocupado ele DESCARTA o
+      // enfileiramento e devolve o job ANTIGO, sem erro nenhum. Uma re-entrega real do Pandapé
+      // sumia aí dentro, e a janela em que isso acontece ficou MAIOR com o espaçamento novo (o
+      // jobId fica ocupado por horas, não por segundos), que é por que as duas coisas sobem juntas.
+      // O carimbo de criação do job devolvido é o que separa um caso do outro.
+      if (this.ehJobPreexistente(job)) {
+        // NÃO É `registrarDesfecho`: o descarte não pode sobrescrever o motivo acionável de uma
+        // linha pendente (ela viraria "Duplicado" e a tela pararia de dizer o que resolver) nem
+        // incrementar `tentativas`, que conta só tentativa de virar admissão. Ver o método.
+        await this.entradas?.registrarDescarteDuplicado(idPrecollaborator);
+      }
       return true;
     } catch (err) {
       // Sem vazar dados (§A.6): mensagem genérica, nunca o id/CPF.

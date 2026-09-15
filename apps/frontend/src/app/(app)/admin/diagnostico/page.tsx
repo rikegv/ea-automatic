@@ -14,6 +14,7 @@ import { Icon, type IconName } from "@/components/ui/Icon";
 import { GoogleDriveLogo } from "@/components/ui/GoogleDriveLogo";
 import { cn } from "@/lib/cn";
 import { DependenciaDrawer } from "@/components/diagnostico/DependenciaDrawer";
+import { listarEntradasPandape } from "@/lib/pandape-entradas";
 
 interface SinalItem {
   // Sinais por admissão trazem admissaoId + candidato; sinais sem pessoa (coleta de VT) não.
@@ -151,7 +152,7 @@ function codFopagDoDetalhe(detalhe: string): string | null {
 }
 
 export default function DiagnosticoPage() {
-  const { token } = useAuth();
+  const { token, temMenu } = useAuth();
   const router = useRouter();
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const [erro, setErro] = useState<string | null>(null);
@@ -193,6 +194,35 @@ export default function DiagnosticoPage() {
   useEffect(() => {
     if (token) void carregar();
   }, [token, carregar]);
+
+  /*
+   * ─ ENTRADAS DO PANDAPÉ: a contagem do card que leva para a fila (diretor, 15/09/2026) ──────────
+   *
+   * O número vem do endpoint da PRÓPRIA fila, e NÃO de um campo novo no snapshot do `/diagnostico`:
+   * aquele serviço é backend validado e auditado, e abri-lo por uma contagem de tela alcança código
+   * aprovado sem necessidade (§A.26). O custo é uma requisição a mais, paga só por quem tem o menu.
+   *
+   * `null` é "não sei": é o estado de quem ainda não respondeu E o de quem falhou. Falha aqui NÃO
+   * derruba o Diagnóstico e NÃO some com o card, porque o destino continua valendo mesmo sem o
+   * número; some o número, não a porta.
+   */
+  const [entradasPendentes, setEntradasPendentes] = useState<number | null>(null);
+  const podeVerEntradas = temMenu("entradas-pandape");
+
+  useEffect(() => {
+    if (!token || !podeVerEntradas) return;
+    let vivo = true;
+    listarEntradasPandape(token)
+      .then((itens) => {
+        if (vivo) setEntradasPendentes(itens.length);
+      })
+      .catch(() => {
+        if (vivo) setEntradasPendentes(null);
+      });
+    return () => {
+      vivo = false;
+    };
+  }, [token, podeVerEntradas]);
 
   const acao = useCallback(
     async (rota: string, body: Record<string, string>, rotulo: string) => {
@@ -628,6 +658,33 @@ export default function DiagnosticoPage() {
               </div>
               <Icon name="right" className="h-4 w-4 text-faint" />
             </GlassCard>
+            {/*
+              ENTRADAS DO PANDAPÉ: o único card da faixa que NAVEGA em vez de abrir modal, e isso é
+              desenho. A tabela da fila tem 8 colunas: em janela sobreposta ela seria espremida, que
+              é o que a §A.20 existe para não deixar acontecer. A porta leva para a tela cheia.
+
+              §A.23: aparece só para quem tem o menu `entradas-pandape`, que nasce para o SUPER_ADMIN
+              e cuja liberação é do diretor. Não aparecer para os demais não é bug.
+            */}
+            {podeVerEntradas && (
+              <GlassCard
+                as="button"
+                onClick={() => router.push("/admin/entradas-pandape")}
+                className="flex items-center justify-between text-left transition hover:bg-[var(--surface-2)] !px-4 !py-3.5"
+              >
+                <div>
+                  <div className="lbl !mb-0.5">Entradas Do Pandapé</div>
+                  <div className="text-[13.5px] font-semibold text-text">
+                    {entradasPendentes === null
+                      ? "abrir a fila"
+                      : entradasPendentes === 0
+                        ? "nada parado na fila"
+                        : `${entradasPendentes} na fila`}
+                  </div>
+                </div>
+                <Icon name="right" className="h-4 w-4 text-faint" />
+              </GlassCard>
+            )}
           </div>
         </>
       )}

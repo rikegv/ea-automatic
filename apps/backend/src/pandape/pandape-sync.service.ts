@@ -45,6 +45,10 @@ import {
   type SyncCandidateJobData,
 } from "./pandape.queue";
 import { PandapeSchedulerService } from "./pandape-scheduler.service";
+import { PandapeEntradaService } from "./pandape-entrada.service";
+import { PandapeNomeCacheService } from "./pandape-nome-cache.service";
+import { classificarMotivo } from "../domain/pandape-entrada";
+import type { PandapeEntradaDesfecho, PandapeEntradaMotivo } from "@ea/shared-types";
 import { agregarCiclo, SCHEDULER_TETO_IA_POR_CICLO } from "../domain/scheduler-pandape";
 
 /**
@@ -73,6 +77,33 @@ export interface ResumoTipoPull {
     | "FALHA";
   estado?: string;
   motivo?: string;
+}
+
+/**
+ * O DESFECHO de um evento, devolvido por `processarCandidato` e por `criarAdmissao`. É este tipo que
+ * faz o compilador cobrar um desfecho em TODO `return` (exigência 9): a alternativa, escrever em
+ * cada saída, já provou que nasce esquecendo uma.
+ *
+ * §A.6: aqui NÃO cabe nome, CPF nem mensagem de erro. Só o desfecho, um código de motivo do conjunto
+ * fechado e os identificadores de SISTEMA.
+ */
+/**
+ * O QUE O WORKER SABE SOBRE A TENTATIVA EM CURSO. É um recorte do `Job` do BullMQ, e é de propósito
+ * que o parâmetro seja O JOB e não um booleano "é a última?": booleano se esquece de passar e falha
+ * ABERTO (marca FALHOU na primeira), enquanto a ausência do JOB é uma afirmação verdadeira e
+ * verificável, a de que não existe re-tentativa programada.
+ */
+export interface TentativaDoJob {
+  attemptsMade?: number;
+  opts?: { attempts?: number };
+}
+
+export interface ResultadoEntradaPandape {
+  desfecho: PandapeEntradaDesfecho;
+  motivo?: PandapeEntradaMotivo;
+  admissaoId?: string;
+  idMatch?: string;
+  idVacancy?: string;
 }
 
 export interface ResumoPull {
@@ -139,6 +170,14 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
     private readonly admissoes: AdmissoesService,
     private readonly auditoria: AuditoriaService,
     private readonly scheduler: PandapeSchedulerService,
+    /**
+     * O REGISTRO DURÁVEL das entradas (OST 15/09/2026). Opcional na assinatura e SEMPRE injetado em
+     * produção: as suítes que já existiam constroem o serviço com sete argumentos, e torná-lo
+     * obrigatório quebraria código validado sem ganho nenhum (§A.26).
+     */
+    private readonly entradas?: PandapeEntradaService,
+    /** Cache EM MEMÓRIA do nome, para a grade. Nunca banco, nunca log, nunca retorno de job. */
+    private readonly nomes?: PandapeNomeCacheService,
   ) {}
 
   // ── Worker lifecycle (consumidor) ─────────────────────────────────────────
@@ -183,7 +222,13 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
     }
     if (job.name === JOB_SYNC_CANDIDATE) {
       const { idPrecollaborator } = job.data as SyncCandidateJobData;
-      await this.processarCandidato(idPrecollaborator);
+      // O JOB INTEIRO ATRAVESSA, e é ele que responde "ainda há re-tentativa?" (exigência 11). O
+      // `failed` do worker dispara a CADA tentativa: sem essa conta, a linha iria a FALHOU na
+      // PRIMEIRA das seis e a fila mentiria ao contrário, mostrando como perdido um evento que vai
+      // nascer daqui a uma hora.
+      await this.processarCandidato(idPrecollaborator, job);
+      // NADA É DEVOLVIDO AQUI, e isso é §A.6 e não estilo: o BullMQ grava o retorno do job no
+      // `returnvalue`, NO REDIS. Nome de candidato nunca pode sair por esta porta.
       return;
     }
     if (job.name === JOB_PULL_DOCS) {
@@ -286,6 +331,10 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
     if (!this.api.estaAtivo()) return; // inerte sem token
     const ids = await this.api.listarMudancas();
     for (const id of ids) {
+      // A LINHA NASCE ANTES DA FILA também aqui: se só o webhook registrasse, um re-sync pontual de
+      // um id conhecido (o uso que sobrou do tick, §A.5) voltaria a ser invisível, e a fila passaria
+      // a mentir por omissão em vez de por erro. `origem` é do EVENTO e é imutável (§4-B/13).
+      await this.entradas?.registrarRecebimento({ idPrecollaborator: id, origem: "TICK" });
       await this.queue.enfileirarCandidato(id);
     }
     if (ids.length > 0) {
@@ -300,10 +349,95 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
    *  b) NOVO → cria candidato+admissão+frentes pela régua (regra 1) + pull de docs;
    *  c) CONHECIDO, etapa diferente → atualiza só a etapa (sem duplicar admissão);
    *  d) CONHECIDO, mesma etapa → no-op (idempotência).
-   * Inerte sem token → no-op.
+   *
+   * ┌─ O DESFECHO É GARANTIDO PELO TIPO, NÃO PELA DISCIPLINA DE QUEM EDITA (exigência 9) ─────────┐
+   * │ Este método era `Promise<void>` e tinha TRÊS saídas SILENCIOSAS que terminavam o job em      │
+   * │ VERDE, sem exceção e sem rastro: integração inerte, pré-colaborador não retornado e          │
+   * │ "conhecido". Mais a de `criarAdmissao`, que adiava com um `logger.warn` quando faltava CPF   │
+   * │ ou nome, que é o caminho do caso medido. Do lado de fora, indistinguível de sucesso.         │
+   * │                                                                                              │
+   * │ Escrever o desfecho em cada `return` seriam seis ou sete sítios, e todo `return` NOVO nasce  │
+   * │ esquecendo um: `criarAdmissao` já ganhou um quando a pré-admissão entrou. Com RETORNO         │
+   * │ DISCRIMINADO, o compilador cobra o desfecho em todo `return`, inclusive nos que alguém       │
+   * │ acrescentar em 2027, e UM ÚNICO ESCRITOR persiste, logo abaixo.                              │
+   * └──────────────────────────────────────────────────────────────────────────────────────────────┘
    */
-  async processarCandidato(idPrecollaborator: string): Promise<void> {
-    if (!this.api.estaAtivo()) return;
+  async processarCandidato(
+    idPrecollaborator: string,
+    job?: TentativaDoJob,
+  ): Promise<ResultadoEntradaPandape> {
+    // ─ `FALHOU` SÓ QUANDO AS TENTATIVAS ESGOTAM (exigência 11 / veto V1 e V2) ──────────────────
+    // A pergunta é UMA: ainda há re-tentativa pela frente? Ela é respondida pelo JOB, e não por um
+    // booleano que o chamador pode esquecer de passar: `job` ausente significa que NÃO EXISTE job,
+    // logo não existe re-tentativa nenhuma programada (chamada direta, reprocesso pontual), e essa
+    // passada É a última que vai acontecer. Quem tem job e omite não existe: o único chamador de
+    // job é o `processarJob`, dez linhas acima, e ele passa o job inteiro.
+    const haRetentativa = this.haRetentativaPelaFrente(job);
+
+    let resultado: ResultadoEntradaPandape;
+    try {
+      resultado = await this.decidirCandidato(idPrecollaborator);
+    } catch (err) {
+      // ─ AS DUAS COISAS SÃO OBRIGATÓRIAS AQUI, e é fácil entregar só uma ───────────────────────
+      // (1) registrar, senão o silêncio continua; (2) RELANÇAR, senão o job "passa", a retentativa
+      // some e trocamos um silêncio por outro pior, porque agora o painel do BullMQ mostra verde.
+      //
+      // O MOTIVO É CLASSIFICADO, nunca a mensagem (§A.6): o `err.message` está ali, à mão, e copiar
+      // é uma linha mais curta do que classificar. O `detail` do 23505 traz o CPF por extenso.
+      await this.entradas?.registrarDesfecho({
+        idPrecollaborator,
+        desfecho: haRetentativa ? "ADIADO" : "FALHOU",
+        motivo: classificarMotivo(err),
+      });
+      throw err;
+    }
+
+    // ─ O ADIAMENTO TEM DE SER RE-TENTADO, E É O CASO QUE ORIGINOU A FRENTE (veto V1) ───────────
+    // `ADIADO` é o evento que NÃO resolveu e depende de o mundo mudar: o ATS ainda não tem o CPF
+    // (o evento sai ANTES de a pessoa preencher) ou a API não respondeu. Os dois são transitórios
+    // por definição, e eram `return`, não `throw`: o job terminava em `completed` e o BullMQ NUNCA
+    // re-tentava, então a política de 6 tentativas em 31h não alcançava justamente o caminho que
+    // ela existe para alcançar. Carimbar "perdido" em dez segundos é PIOR que o silêncio de antes,
+    // porque mente.
+    //
+    // Havendo tentativa pela frente, LANÇA: é o único jeito de o BullMQ re-agendar. A mensagem
+    // carrega SÓ o código do motivo (§A.6), porque o `failed` do worker loga `err.message`.
+    if (resultado.desfecho === "ADIADO") {
+      if (haRetentativa) {
+        await this.entradas?.registrarDesfecho({ idPrecollaborator, ...resultado });
+        throw new Error(
+          `Evento adiado (motivo=${resultado.motivo ?? "OUTRO"}); re-tentativa programada.`,
+        );
+      }
+      // Tentativas esgotadas (ou chamada sem job, onde não há re-tentativa a esperar): aí sim é
+      // FALHOU, que é o estado que pede olho humano na tela.
+      const final: ResultadoEntradaPandape = { ...resultado, desfecho: "FALHOU" };
+      await this.entradas?.registrarDesfecho({ idPrecollaborator, ...final });
+      return final;
+    }
+
+    await this.entradas?.registrarDesfecho({ idPrecollaborator, ...resultado });
+    return resultado;
+  }
+
+  /**
+   * Ainda há re-tentativa programada para este job? Sem job não há: ninguém vai re-executar nada
+   * sozinho, e tratar essa passada como intermediária deixaria a linha em `ADIADO` para sempre,
+   * esperando uma tentativa que nunca virá.
+   */
+  private haRetentativaPelaFrente(job?: TentativaDoJob): boolean {
+    if (!job) return false;
+    const feitas = Number(job.attemptsMade ?? 0);
+    const teto = Number(job.opts?.attempts ?? 1);
+    return feitas + 1 < teto;
+  }
+
+  /** A DECISÃO, sem persistência nenhuma: todo caminho sai por um `return` com desfecho. */
+  private async decidirCandidato(idPrecollaborator: string): Promise<ResultadoEntradaPandape> {
+    // INERTE NÃO É FALHA. Ambiente sem credencial (homologação, máquina de quem desenvolve) não pode
+    // encher a fila de FALHOU: isso treinaria todo mundo a ignorar a tela, que é o jeito mais
+    // eficiente de matar uma fila de trabalho.
+    if (!this.api.estaAtivo()) return { desfecho: "INERTE" };
 
     const existente = await this.db.query.integracaoPandape.findFirst({
       where: eq(integracaoPandape.idPrecollaborator, idPrecollaborator),
@@ -311,10 +445,17 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
 
     const pc = await this.api.getPrecollaborator(idPrecollaborator);
     if (!pc) {
-      this.logger.warn("Pré-colaborador não retornado pelo Pandapé (ignorado neste tick).");
-      return;
+      this.logger.warn("Pré-colaborador não retornado pelo Pandapé (será re-tentado).");
+      // ADIADO e não FALHOU: a API não ter respondido é transitório POR DEFINIÇÃO. Quem transforma
+      // isto em FALHOU é o esgotamento das tentativas, lá em cima, e mais ninguém.
+      return { desfecho: "ADIADO", motivo: "API_FORA" };
     }
+    // O NOME VAI PARA O CACHE EM MEMÓRIA e para lugar nenhum mais (§A.6 / régua do cache): a
+    // resolução acontece AQUI, no worker, sob o limiter que já existe, sem nenhuma chamada extra à
+    // API, porque o pré-colaborador já foi consultado logo acima.
+    this.nomes?.guardar(idPrecollaborator, this.nomeDoPrecolaborador(pc));
     const etapaAtual = pc.etapa ?? pc.stage;
+    const ids = { idMatch: pc.idMatch, idVacancy: pc.idVacancy };
 
     // (c)/(d) CONHECIDO.
     if (existente) {
@@ -324,12 +465,18 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
           .set({ etapa: etapaAtual, atualizadoEm: new Date() })
           .where(eq(integracaoPandape.id, existente.id));
       }
-      // mesma etapa → no-op (idempotência: rodar 2x sobre o mesmo payload não muda nada).
-      return;
+      // Mesma etapa ou etapa nova, dá no mesmo para a FILA: já existe admissão, não é pendência.
+      // O que mudou é que agora isso é REGISTRADO em vez de sumir (silêncio era o defeito).
+      return { desfecho: "NO_OP", admissaoId: existente.admissaoId ?? undefined, ...ids };
     }
 
     // (b) NOVO — cria a admissão.
-    await this.criarAdmissao(pc, etapaAtual);
+    return this.criarAdmissao(pc, etapaAtual);
+  }
+
+  /** Nome só para o cache em memória. Nunca persistido, nunca logado, nunca retorno de job. */
+  private nomeDoPrecolaborador(pc: PandaperPrecollaborator): string {
+    return (pc.nome ?? [pc.name, pc.surname].filter(Boolean).join(" ")).trim();
   }
 
   /**
@@ -340,7 +487,7 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
   private async criarAdmissao(
     pc: PandaperPrecollaborator,
     etapa: string | undefined,
-  ): Promise<void> {
+  ): Promise<ResultadoEntradaPandape> {
     // O `PreCollaborator/Get` NÃO traz CPF, telefone, nascimento nem sexo: tudo isso vem do MATCH
     // (`GET /v1/Match/Get?idMatch=`, confirmado no swagger oficial e ao vivo). O `idMatch` é a ponte,
     // e vem do próprio pré-colaborador. Sem esta chamada o CPF nunca chega e a sync adia para sempre.
@@ -354,9 +501,23 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
       this.logger.warn(
         `Sync adiada (não-bloqueio) — idPreCollaborator=${pc.idPreCollaborator}, motivo: ${this.motivoAdiamento(pc, match)}.`,
       );
-      return;
+      // O ADIAMENTO DEIXA DE SER CALADO. Era um `warn` e um `return`: do lado de fora,
+      // indistinguível de sucesso, o job terminava em `completed`, sumia da lista de falhados e
+      // ninguém re-tentava. Era o mesmo buraco da exceção, com a agravante de nem `failedReason`
+      // existir. É EXATAMENTE o caminho do caso medido (CPF zerado na origem).
+      // ADIADO, e é ESTE o caminho do caso medido: o Pandapé devolve o CPF zerado porque o evento
+      // sai na pasta "Convite de admissão enviado", ANTES de a pessoa preencher. O dado fica válido
+      // em DIAS, então o evento tem de atravessar as 31h da política de re-tentativa antes de
+      // alguém chamá-lo de perdido.
+      return {
+        desfecho: "ADIADO",
+        motivo: this.codigoDoAdiamento(pc, match),
+        idMatch: pc.idMatch,
+        idVacancy: pc.idVacancy,
+      };
     }
 
+    const ids = { idMatch: pc.idMatch, idVacancy: pc.idVacancy };
     const pandapeOpts = {
       idPrecollaborator: pc.idPreCollaborator,
       idMatch: pc.idMatch,
@@ -384,7 +545,8 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
         this.logger.log(
           `Evento Pandapé adotado em admissão viva existente (mesmo CPF+vaga) — idPreCollaborator=${pc.idPreCollaborator}, sem duplicar.`,
         );
-        return;
+        // Adotar É um desfecho: nada nasceu, e mesmo assim o evento terminou de ser pendência.
+        return { desfecho: "ADOTADO", admissaoId: mesmaVaga.id, ...ids };
       }
 
       if (!alvo) {
@@ -393,11 +555,13 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
         // consultor atribui cliente+cargo na tela de Liberação Admissional e aí a admissão nasce.
         // NÃO puxa documentos: sem régua (= cliente+cargo) não há onde mapeá-los; o pull acontece
         // depois, no fluxo normal da esteira, após a liberação.
-        await this.admissoes.criarPreAdmissao(dados, pandapeOpts, { possivelDuplicata });
+        const pre = await this.admissoes.criarPreAdmissao(dados, pandapeOpts, { possivelDuplicata });
         this.logger.log(
           `Pré-admissão criada (AGUARDANDO_LIBERACAO) — idPreCollaborator=${pc.idPreCollaborator}${possivelDuplicata ? " [possível duplicata]" : ""}.`,
         );
-        return;
+        // SAI DESTA FILA porque tem a PRÓPRIA: a Liberação Admissional. Cobrar a mesma pendência em
+        // duas telas é pedir que ninguém trabalhe em nenhuma das duas.
+        return { desfecho: "PRE_ADMISSAO", admissaoId: pre.admissaoId, ...ids };
       }
 
       // Caminho completo (de/para resolvido): admissão nasce direto na esteira.
@@ -408,14 +572,31 @@ export class PandapeSyncService implements OnModuleInit, OnModuleDestroy {
       );
       // Pull de docs (F2 incremental) após o nascimento das frentes (regra 1).
       await this.puxarDocumentos(criada.admissaoId, pc.idPreCollaborator);
+      return { desfecho: "ADMISSAO_CRIADA", admissaoId: criada.admissaoId, ...ids };
     } catch (err) {
       // Corrida: outro tick criou a mesma admissão primeiro → o unique idPrecollaborator estoura.
+      // Isso é SUCESSO, não falha: marcar FALHOU aqui colocaria na fila alguém que JÁ TEM admissão,
+      // que é exatamente o que a régua da §A.19 proíbe.
       if (this.ehViolacaoUnique(err)) {
         this.logger.log("Admissão Pandapé já existente (corrida tratada pelo unique) — no-op.");
-        return;
+        return { desfecho: "NO_OP", motivo: "DUPLICADO", ...ids };
       }
       throw err; // demais erros sobem para o backoff do BullMQ.
     }
+  }
+
+  /**
+   * O motivo do adiamento como CÓDIGO do conjunto fechado (§A.6). A frase legível continua indo para
+   * o log, onde ela morre; o que é PERSISTIDO é só isto.
+   */
+  private codigoDoAdiamento(
+    pc: PandaperPrecollaborator,
+    match: PandapeMatch | undefined,
+  ): PandapeEntradaMotivo {
+    if (!pc.idMatch) return "SEM_CPF_NA_ORIGEM"; // sem a ponte até o Match, o CPF nunca chega
+    if (!match) return "API_FORA";
+    if (!match.cpf?.trim()) return "SEM_CPF_NA_ORIGEM"; // o caso medido: o ATS ainda não tem o dado
+    return "SEM_NOME";
   }
 
   /**

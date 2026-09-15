@@ -33,6 +33,9 @@ import {
   frenteTipoEnum,
   origemSalaEsperaEnum,
   origemVinculoProjetoEnum,
+  pandapeEntradaDesfechoEnum,
+  pandapeEntradaMotivoEnum,
+  pandapeEntradaOrigemEnum,
   periodicidadeBeneficioEnum,
   tipoIntegracaoEnum,
   papelAsEnum,
@@ -1396,6 +1399,64 @@ export const pandapeSchedulerEstado = pgTable("pandape_scheduler_estado", {
   ultimoCicloNota: text("ultimo_ciclo_nota"),
   atualizadoEm,
 });
+
+// ── PandapeEntrada: a FILA DE ENTRADAS do Pandapé (OST do diretor, 15/09/2026) ───────────────
+// O REGISTRO DURÁVEL de todo evento que o ATS mandou. Antes desta tabela, o único rastro de um
+// webhook era o job no Redis, podado por CONTAGEM (`removeOnComplete: 1000`): o caso medido em
+// produção (evento de 11/09 15:59:57) tentou 5 vezes em 10 SEGUNDOS, todas com o CPF ainda zerado na
+// origem (o Pandapé dispara ANTES de a pessoa preencher), terminou na lista `completed` com o erro
+// dentro e ninguém nunca soube. O buraco não era a falha: era o SILÊNCIO dela.
+//
+// §A.6, O RECORTE, e ele é a razão de esta tabela ser curta: SÓ identificadores do ATS e
+// CLASSIFICAÇÃO. Nada de CPF, nome, e-mail, telefone, endereço ou payload, e nenhuma coluna de texto
+// livre onde a mensagem de uma exceção caberia. A tentação é concreta (a tela ficaria melhor com o
+// nome aqui), e a resposta é que o nome vive num CACHE EM MEMÓRIA do processo, com TTL e teto, nunca
+// no banco. `motivo` é ENUM: um código de conjunto fechado não tem como carregar o CPF que o `detail`
+// do erro 23505 do Postgres traz por extenso.
+export const pandapeEntrada = pgTable(
+  "pandape_entrada",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    // A CHAVE DO EVENTO, e o UNIQUE é o que faz a re-entrega ATUALIZAR em vez de duplicar. O webhook
+    // é at-least-once de propósito (o 503 pede reenvio). Entre o `jobId cand-<id>` (que só vale
+    // enquanto o job está em voo) e o unique de `integracao_pandape` (que só existe DEPOIS de a
+    // admissão nascer) há uma janela sem proteção nenhuma, e é exatamente a janela em que esta linha
+    // vive: evento recebido, admissão ainda inexistente.
+    idPrecollaborator: varchar("id_precollaborator", { length: 80 }).notNull().unique(),
+    idMatch: varchar("id_match", { length: 80 }),
+    idVacancy: varchar("id_vacancy", { length: 80 }),
+    // O instante de chegada é o que ORDENA a fila.
+    recebidoEm: timestamp("recebido_em", { withTimezone: true }).defaultNow().notNull(),
+    origem: pandapeEntradaOrigemEnum("origem").notNull(),
+    desfecho: pandapeEntradaDesfechoEnum("desfecho").notNull().default("RECEBIDO"),
+    motivo: pandapeEntradaMotivoEnum("motivo"),
+    // Contador NUNCA nulo: nulo viraria `NaN` na tela, e é a diferença entre "chegou agora" e
+    // "estamos tentando há quatro dias", que é a única informação que permite alguém agir.
+    // CONTA SÓ TENTATIVA DE TRANSFORMAR O EVENTO EM ADMISSÃO, e nada mais. O Pandapé dispara a cada
+    // mudança de etapa: somar esses eventos aqui faria uma linha resolvida exibir "tentativas: 12"
+    // sem que se tivesse tentado nada doze vezes, e a tela contaria uma história falsa em silêncio.
+    tentativas: integer("tentativas").notNull().default(0),
+    ultimaTentativaEm: timestamp("ultima_tentativa_em", { withTimezone: true }),
+    // O ÚLTIMO EVENTO DO ATS sobre este candidato (re-entrega, mudança de etapa). Fica separado das
+    // tentativas de propósito: uma coisa é o ATS ter falado de novo, outra é o EA ter tentado.
+    ultimoEventoEm: timestamp("ultimo_evento_em", { withTimezone: true }),
+    // NULO é o que mantém a linha NA FILA (mesmo desenho da §A.19: a fila é o próprio estado). É
+    // também o relógio da retenção de 30 dias (decisão do diretor).
+    resolvidoEm: timestamp("resolvido_em", { withTimezone: true }),
+    // NULO é o estado NORMAL desta tabela: a linha nasce justamente quando a admissão não existe.
+    // `set null` no delete: apagar uma admissão não pode apagar a memória do evento que a originou.
+    admissaoId: uuid("admissao_id").references(() => admissoes.id, { onDelete: "set null" }),
+    criadoEm,
+    atualizadoEm,
+  },
+  (t) => ({
+    // A fila é lida por "quem ainda está pendente", ordenada por chegada.
+    // UM ÍNDICE SÓ, o da pergunta que a tela faz ("quem ainda está pendente", por chegada). Índice
+    // de coluna que nenhuma consulta filtra é peso em toda escrita: a vaga é COLUNA da grade, não
+    // filtro (§A.30, escolha do diretor), então não ganha índice.
+    idxPendentes: index("idx_pandape_entrada_pendentes").on(t.resolvidoEm, t.recebidoEm),
+  }),
+);
 
 // ── VtColeta: ledger da coleta automática de formulário de VT (§A.17 etapa 3 / INT-2) ────────
 // LEDGER da varredura da pasta coletiva do Drive onde um app externo (Firebase) deposita os PDFs de

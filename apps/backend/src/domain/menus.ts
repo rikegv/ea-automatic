@@ -608,6 +608,27 @@ export const MENUS: MenuDef[] = [
     operacoes: [],
   },
   {
+    /**
+     * FILA DE ENTRADAS DO PANDAPÉ (OST do diretor, 15/09/2026): o que o ATS mandou e ainda NÃO virou
+     * admissão. Nasce porque o webhook enfileirava e esquecia, e um evento que falhou cinco vezes em
+     * dez segundos morria sem deixar rastro em lugar nenhum do EA.
+     *
+     * §A.23: o registro aqui FAZ O MENU EXISTIR e nada mais. Ele nasce visível só para o SUPER_ADMIN
+     * (ninguém o tem concedido), e quem libera quem enxerga é o DIRETOR, pela tela de menu por
+     * usuário. Menu novo que não aparece para os demais NÃO é bug. Nenhum seed foi rodado.
+     *
+     * `operacoes: []` pelo mesmo motivo de `diagnostico` e `usuarios`: a controller é `@Roles`
+     * MASTER/SUPER_ADMIN, então marcá-la para um COMUM não concederia acesso (fail-closed pelo
+     * RolesGuard). Entra em `MENUS_BLOQUEADOS_COMUM` para a tela nem oferecer a marcação.
+     */
+    codigo: "entradas-pandape",
+    rotulo: "Entradas Do Pandapé",
+    href: "/admin/entradas-pandape",
+    grupo: "ADMIN",
+    ordem: 33,
+    operacoes: [],
+  },
+  {
     codigo: "pastas-drive",
     rotulo: "Pastas Do Drive",
     href: "/admin/pastas-drive",
@@ -1101,6 +1122,10 @@ export function codigosPadraoDoPapel(papel: string): string[] {
  */
 export const MENUS_BLOQUEADOS_COMUM = new Set<string>([
   "diagnostico",
+  // Mesma razão do Diagnóstico, e é literalmente a mesma controller-régua: a fila de entradas do
+  // Pandapé é `@Roles("MASTER","SUPER_ADMIN")` e dispara reprocesso contra a API do ATS, cujo teto
+  // é compartilhado com o webhook que alimenta a folha (§A.5).
+  "entradas-pandape",
   "usuarios",
   "menu-areas",
   // A escrita do catálogo de etapas é `@Roles("SUPER_ADMIN")`: marcar para um COMUM só faria o
