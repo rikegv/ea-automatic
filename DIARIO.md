@@ -15608,3 +15608,89 @@ suítes ............ backend 3.174, frontend 685, shared-types 34, todas verdes 
 ```
 
 **Nenhum rollback foi necessário.**
+
+---
+
+## 15/09/2026: A PAMELA PRESA NO PANDAPÉ, e a fila que existe para nunca mais alguém sumir calado
+
+**Como começou:** o diretor perguntou por que a admissão de uma candidata não subia para a
+plataforma, pedindo **só consulta à API do Pandapé** e o diagnóstico.
+
+### O diagnóstico, medido contra produção
+
+O pré-colaborador **423673** existe no Pandapé (vaga 3559570), e **não existia no EA**. O webhook
+chegou em **11/09 15:59:57** e respondeu 202. O worker rodou **5 tentativas em 10 SEGUNDOS**, todas
+`BadRequestException: CPF inválido` lançado em `admissoes.service.ts:722`, e o job morreu de vez.
+
+A causa está no próprio payload que o diretor trouxe: `"Número do CPF": "00000000000"`. O Pandapé
+dispara o evento na pasta **"Convite de admissão enviado"**, ou seja, ANTES de o candidato preencher.
+Quando o dado chegou, dias depois, ninguém re-tentou: o scheduler só re-consulta admissão que JÁ
+existe, e a dela nunca chegou a existir.
+
+**Dois agravantes achados na investigação:**
+1. O job terminou na lista `completed` do Redis com `failedReason` preenchido, então **nem na lista de
+   falhados aparecia**. Alguém reprocessou dois casos vizinhos naquele mesmo dia (trilha de 11/09
+   19:06 e 19:07) e não a viu.
+2. **O EA não guardava registro nenhum de evento recebido.** O webhook enfileirava e esquecia
+   (`pandape-webhook.controller.ts:55`), e o único rastro era o job no Redis, podado por CONTAGEM
+   (`removeOnComplete: 1000`). Os três casos de hoje só foram achados porque ainda estavam na janela.
+
+**Reprocesso:** a rota de reprocesso recusou (`Job cand-423673 is not in the failed state`), porque o
+job estava em `completed`. Limpei o job e reenviei o evento pelo webhook: **pré-admissão criada
+14:05:01**, `AGUARDANDO_LIBERACAO`. Outro SUPER_ADMIN reprocessou 423500 e 424314 pela tela às 14:05 e
+14:06. **Os três entraram com CPF válido** (conferido). Seguem na Liberação, esperando cliente+cargo.
+
+### A frente construída (OST do diretor, aprovada na hora)
+
+**Decisões do diretor:** tabela durável + tela (não só a janela do Redis); espaçar a re-tentativa
+junto; nome NA GRADE com cache; retenção de **30 dias para as DUAS classes** de linha; filtro **só por
+Situação**; e, na validação, a tela **dentro de Menu Gerencial > Diagnóstico**, saindo da barra lateral.
+
+**O que subiu** (commit `bf430d5`, produção em 15/09 17:12):
+- Tabela `pandape_entrada`, **uma linha por candidato, upsert**. Só id do ATS e classificação, sem CPF,
+  nome, e-mail ou payload (§A.6). `motivo` é enum fechado: o `detail` do 23505 traz o CPF por extenso,
+  porque o unique parcial de produção é `uq_admissao_cpf_vaga_viva (candidato_cpf, id_vacancy)`.
+- **Desfecho garantido pelo TIPO:** `processarCandidato` e `criarAdmissao` devolvem resultado
+  discriminado, e um escritor único persiste. O compilador cobra o desfecho em todo `return`, inclusive
+  nos que alguém acrescentar no futuro.
+- **Re-tentativa: 6 tentativas ao longo de 31h**, só na fila `sync-candidate`. O `pull-docs` ficou
+  intocado: espaçar o pull empurra a coleta contra o TTL de 48h da staging e perde o prontuário em
+  silêncio (§A.33).
+- Cache de nomes em memória (TTL, teto com evicção, zero banco, zero log, nunca no `returnvalue`).
+- Expurgo de 30 dias por `coalesce(resolvido_em, ultima_tentativa_em, recebido_em)`.
+- Tela `/admin/entradas-pandape`, alcançada por **Menu Gerencial > Diagnóstico > Entradas Do Pandapé**.
+
+### A auditoria, que é a parte que vale registrar
+
+O agente `seguranca` **vetou três vezes o desenho e uma vez o código**, e os achados eram reais:
+1. Faltava no mapa a porta do `job.retry()` do Diagnóstico (`filas.service.ts:218`).
+2. `processarCandidato` tinha **três saídas silenciosas** que terminavam o job em VERDE.
+3. Ambiguidade minha entre "linha por evento" e "linha por candidato": com `INSERT` puro sobre coluna
+   unique, o segundo evento do mesmo candidato daria 23505 e o webhook responderia **503 para sempre**.
+4. No código: `API_FORA` e o adiamento saíam como `FALHOU` por `return`, então **o BullMQ nunca
+   retentava** e o caso da Pamela era carimbado como perdido em 10 segundos.
+
+O `tester` escreveu **52 testes a partir do requisito, antes do código existir** (§A.40), e nenhum foi
+reescrito para caber na implementação. O `backend` **divergiu declarando** de uma instrução minha no V2
+e a saída dele era melhor; o `seguranca` conferiu e **retirou a própria formulação**.
+
+**Erro meu, registrado:** ao conciliar um teste com o vocabulário, escrevi uma asserção **tautológica**
+(comparava a constante com ela mesma, porque `enums.ts:461` constrói o pgEnum a partir dela). O
+`seguranca` pegou. Refiz lendo o `CREATE TYPE` da migration e **provei por mutação**: removi um valor do
+SQL, o teste falhou; restaurei, passou.
+
+**Gate:** 3.242 testes no backend, 690 no frontend, typecheck e lint limpos. Prova visual em 1600px e
+1280px, sem coluna esmagada, tabela rolando dentro do quadro em vez de espremer (§A.20).
+
+**§A.23:** o menu `entradas-pandape` está **registrado e NÃO concedido**. Nasce só para o SUPER_ADMIN.
+Nenhum seed foi rodado. Quem libera é o diretor.
+
+### Aberto
+
+- **O passivo antigo não foi levantado.** Não se sabe quantos candidatos ficaram presos no Pandapé sem
+  entrar no EA antes de hoje, justamente porque o registro não existia. Propus ao diretor varrer os ids
+  da API e cruzar com o EA (foi assim que a Walquíria apareceu). **Aguardando decisão dele.**
+- Os três casos reprocessados seguem em `AGUARDANDO_LIBERACAO`, esperando cliente+cargo (a vaga 3559570
+  não tem de/para).
+- Em homologação ficaram **7 linhas semeadas por mim** na `pandape_entrada`, para a prova visual. Não
+  existem em produção.
