@@ -15694,3 +15694,26 @@ Nenhum seed foi rodado. Quem libera é o diretor.
   não tem de/para).
 - Em homologação ficaram **7 linhas semeadas por mim** na `pandape_entrada`, para a prova visual. Não
   existem em produção.
+
+### A publicação em si (acrescentado após executá-la)
+
+- **Ordem seguida:** gate verde → salvaguarda → migration → backend → frontend. A migration ANTES do
+  código por escolha: subir o código antes dela faria o insert estourar `relation does not exist`;
+  migrar antes não quebra nada, porque ninguém escreve na tabela ainda.
+- **Salvaguarda de rollback em `/home/henrique/ea-rollback-20260915-1710/`** (`backend-dist/` 7,4M e
+  `frontend-next/` 211M), tirada antes de qualquer build. É o caminho de volta se algo aparecer.
+- **Houve janela de indisponibilidade no frontend**, de poucos minutos, deliberada: `ea-frontend`
+  PARADO antes do `next build` e religado depois. Buildar com o serviço no ar clobbera o `.next` e
+  serve 500 a quem estiver usando. O backend reiniciou sem parada.
+- **A trava da §A.7 me barrou DUAS vezes, e funcionou como devia nas duas.** (1) Tentei criar a flag
+  `READY_*` no MESMO comando do push, e o hook `PreToolUse` checa ANTES de rodar, então a flag ainda
+  não existia: **a flag vai sempre num comando à parte**. (2) Um `git commit` SEM push foi barrado
+  também, porque a MENSAGEM do commit continha a palavra "deploy" e o gate casa o verbo no comando
+  inteiro. Não é defeito do gate (ele erra para o lado seguro), mas é bom saber: mensagem de commit
+  que fala de publicação exige flag, mesmo sem push. Flag removida logo após cada uso.
+- **Commits:** `bf430d5` (a frente, 30 arquivos por `git add` nominal) e `b012639` (a entrada deste
+  diário). Ficaram FORA, soltos no working tree, os 16 docs de outras frentes de A&S e o
+  `logosoulan.png`, que já estavam soltos no início da sessão (§A.14, recorte de escopo).
+- **Conferido depois de subir:** `GET /api/pandape-entradas` respondeu **200 com 0 linhas** em
+  produção, que é o estado correto (a tabela nasce vazia e registra daqui em diante); backend e
+  frontend `active`; `/login` em 200.
