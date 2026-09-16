@@ -134,7 +134,341 @@ Desquitado, `V` é Viuvo e `U` é Uniao Estavel. Quem implementar de memória ac
 Este é preenchido pelo **time** na tela do GI, não pela integração. Fica registrado porque é o
 dicionário do campo que a leitura ao vivo viu em uso.
 
-**Cuidado de implementação, que vale para as quatro:** `D` significa coisas diferentes em tabelas
+### `tipoLogradouro`, o prefixo da via
+
+**178 valores**, entregues pelo diretor, extraidos do sistema. Lista por extenso,
+sem codigo numerico: o valor E o texto.
+
+| | | |
+|---|---|---|
+| Nao Informado | Area | Acesso |
+| Acampamento | Acesso Local | Adro |
+| Area Especial | Aeroporto | Alameda |
+| Avenida Marginal Direita | Avenida Marginal Esquerda | Anel Viario |
+| Antiga Estrada | Arteria | Alto |
+| Atalho | Area Verde | Avenida |
+| Avenida Contorno | Avenida Marginal | Avenida Velha |
+| Balneario | Beco | Buraco |
+| Belvedere | Bloco | Balao |
+| Blocos | Bulevar | Bosque |
+| Boulevard | Baixa | Cais |
+| Calcada | Caminho | Canal |
+| Chacara | Chapadao | Ciclovia |
+| Circular | Conjunto | Conjunto Mutirao |
+| Complexo Viario | Colonia | Comunidade |
+| Condominio | Corredor | Campo |
+| Corrego | Contorno | Descida |
+| Desvio | Distrito | Entre Bloco |
+| Estrada Intermunicipal | Enseada | Entrada Particular |
+| Entre Quadra | Escada | Escadaria |
+| Estrada Estadual | Estrada Vicinal | Estrada de Ligacao |
+| Estrada Municipal | Esplanada | Estrada de Servidao |
+| Estrada | Estrada Velha | Estrada Antiga |
+| Estacao | Estadio | Estancia |
+| Estrada Particular | Estacionamento | Evangelica |
+| Elevada | Eixo Industrial | Favela |
+| Fazenda | Ferrovia | Fonte |
+| Feira | Forte | Galeria |
+| Granja | Nucleo Habitacional | Ilha |
+| Indeterminado | Ilhota | Jardim |
+| Jardinete | Ladeira | Lagoa |
+| Lago | Loteamento | Largo |
+| Lote | Mercado | Marina |
+| Modulo | Projecao | Morro |
+| Monte | Nucleo | Nucleo Rural |
+| Outeiro | Paralela | Passeio |
+| Patio | Praca | Praca de Esportes |
+| Parada | Paradouro | Ponta |
+| Praia | Prolongamento | Parque Municipal |
+| Parque | Parque Residencial | Passarela |
+| Passagem | Passagem de Pedestre | Passagem Subterranea |
+| Ponte | Porto | Quadra |
+| Quinta | Quintas | Rua |
+| Rua Integracao | Rua de Ligacao | Rua Particular |
+| Rua Velha | Ramal | Recreio |
+| Recanto | Retiro | Residencial |
+| Reta | Ruela | Rampa |
+| Rodo Anel | Rodovia | Rotula |
+| Rua de Pedestre | Margem | Retorno |
+| Rotatoria | Segunda Avenida | Sitio |
+| Servidao | Setor | Subida |
+| Trincheira | Terminal | Trecho |
+| Trevo | Tunel | Travessa |
+| Travessa Particular | Travessa Velha | Unidade |
+| Via | Via Coletora | Via Local |
+| Via de Acesso | Vala | Via Costeira |
+| Viaduto | Via Expressa | Vereda |
+| Via Elevado | Vila | Viela |
+| Vale | Via Litoranea | Via de Pedestre |
+| Variante |  |  |
+
+### `nacionalidade`
+
+**258 valores.** Codigo numerico de tres posicoes, com zero a esquerda,
+exatamente como a leitura ao vivo tinha previsto pelo formato.
+
+| Codigo | Significado |
+|---|---|
+| `010` | Brasileiro |
+| `013` | Afeganistao |
+| `017` | Albania Republica Da |
+| `020` | Naturalizado |
+| `021` | Argentino |
+| `022` | Boliviano |
+| `023` | Chileno |
+| `024` | Paraguaio |
+| `025` | Uruguaio |
+| `026` | Venezuelano |
+| `027` | Colombiano |
+| `028` | Peruano |
+| `029` | Equatoriano |
+| `030` | Alemao |
+| `031` | Belga |
+| `032` | Britanico |
+| `034` | Canadense |
+| `035` | Espanhol |
+| `036` | EUA |
+| `037` | Frances |
+| `038` | Suico |
+| `039` | Italiano |
+| `040` | Haitiano |
+| `041` | Japones |
+| `042` | Chines |
+| `043` | Coreano |
+| `044` | Russo |
+| `045` | Portugues |
+| `046` | Paquistanes |
+| `047` | Indiano |
+| `048` | Outros Latinos |
+| `049` | Outros Asiaticos |
+| `050` | Outros |
+| `051` | Outros Europeus |
+| `053` | Arabia Saudita |
+| `059` | Argelia |
+| `060` | Angolano |
+| `061` | Congoles |
+| `062` | Sul-Africano |
+| `064` | Armenia Republica Da |
+| `065` | Aruba |
+| `069` | Australia |
+| `070` | Outros Africanos |
+| `072` | Austria |
+| `073` | Azerbaijao Republica Do |
+| `076` | Burkina Faso |
+| `077` | Bahamas Ilhas |
+| `078` | Belarus Republica Da |
+| `079` | Belize |
+| `080` | Republica Tcheca |
+| `081` | Palestina |
+| `082` | Guine-Bissau |
+| `083` | Cubano |
+| `084` | Marrocos |
+| `085` | Gana |
+| `086` | Mexico |
+| `087` | Senegal |
+| `088` | Filipinas |
+| `089` | Zambia |
+| `090` | Bermudas |
+| `091` | Andorra |
+| `092` | Anguilla |
+| `093` | Mianmar (Birmania) |
+| `094` | Antigua E Barbuda |
+| `095` | Antilhas Holandesas |
+| `096` | Bahrein Ilhas |
+| `097` | Bangladesh |
+| `098` | Bosnia-Herzegovina Republica Da |
+| `099` | Barbados |
+| `101` | Botsuana |
+| `108` | Brunei |
+| `111` | Bulgaria Republica Da |
+| `115` | Burundi |
+| `119` | Butao |
+| `127` | Cabo Verde Republica De |
+| `137` | Cayan Ilhas |
+| `141` | Camboja |
+| `145` | Camaroes |
+| `150` | Jersey Ilha Do Canal |
+| `151` | Canarias Ilhas |
+| `153` | Cazaquistao Republica Do |
+| `154` | Catar |
+| `161` | Formosa (Taiwan) |
+| `163` | Chipre |
+| `165` | Cocos (Keeling) Ilhas |
+| `173` | Comores Ilhas |
+| `183` | Cook Ilhas |
+| `187` | Coreia Do Norte Rep.Pop.Democratica |
+| `193` | Costa Do Marfim |
+| `195` | Croacia Republica Da |
+| `196` | Costa Rica |
+| `198` | Coveite |
+| `199` | Cuba |
+| `229` | Benin |
+| `232` | Dinamarca |
+| `235` | Dominica Ilha |
+| `240` | Egito |
+| `243` | Eritreia |
+| `244` | Emirados Arabes Unidos |
+| `246` | Eslovenia Republica Da |
+| `247` | Eslovaca Republica |
+| `251` | Estonia Republica Da |
+| `253` | Etiopia |
+| `255` | Falkland (Ilhas Malvinas) |
+| `259` | Feroe Ilhas |
+| `271` | Finlandia |
+| `281` | Gabao |
+| `285` | Gambia |
+| `291` | Georgia Republica Da |
+| `293` | Gibraltar |
+| `297` | Granada |
+| `301` | Grecia |
+| `305` | Groenlandia |
+| `309` | Guadalupe |
+| `313` | Guam |
+| `317` | Guatemala |
+| `325` | Guiana Francesa |
+| `329` | Guine |
+| `331` | Guine-Equatorial |
+| `337` | Guiana |
+| `345` | Honduras |
+| `351` | Hong Kong |
+| `355` | Hungria Republica Da |
+| `357` | Iemen |
+| `359` | Man Ilha De |
+| `365` | Indonesia |
+| `369` | Iraque |
+| `372` | Ira Republica Islamica Do |
+| `375` | Irlanda |
+| `379` | Islandia |
+| `383` | Israel |
+| `388` | Servia E Montenegro |
+| `391` | Jamaica |
+| `396` | Johston Ilhas |
+| `403` | Jordania |
+| `411` | Kiribati |
+| `420` | Laos Rep.Pop.Democr.Do |
+| `423` | Lebuan Ilhas |
+| `426` | Lesoto |
+| `427` | Letonia Republica Da |
+| `431` | Libano |
+| `434` | Liberia |
+| `438` | Libia |
+| `440` | Liechtenstein |
+| `442` | Lituania Republica Da |
+| `445` | Luxemburgo |
+| `447` | Macau |
+| `449` | Macedonia Ant.Rep.Iugoslava |
+| `450` | Madagascar |
+| `452` | Ilha Da Madeira |
+| `455` | Malasia |
+| `458` | Malavi |
+| `461` | Maldivas |
+| `464` | Mali |
+| `467` | Malta |
+| `472` | Marianas Do Norte |
+| `476` | Marshall Ilhas |
+| `477` | Martinica |
+| `485` | Mauricio |
+| `488` | Mauritania |
+| `490` | Midway Ilhas |
+| `494` | Moldavia Republica Da |
+| `495` | Monaco |
+| `497` | Mongolia |
+| `498` | Montenegro |
+| `499` | Micronesia |
+| `501` | Montserrat Ilhas |
+| `505` | Mocambique |
+| `507` | Namibia |
+| `508` | Nauru |
+| `511` | Christmas Ilha (Navidad) |
+| `517` | Nepal |
+| `521` | Nicaragua |
+| `525` | Niger |
+| `528` | Nigeria |
+| `531` | Niue Ilha |
+| `535` | Norfolk Ilha |
+| `538` | Noruega |
+| `542` | Nova Caledonia |
+| `545` | Papua Nova Guine |
+| `548` | Nova Zelandia |
+| `551` | Vanuatu |
+| `556` | Oma |
+| `566` | Pacifico Ilhas Do |
+| `573` | Paises Baixos (Holanda) |
+| `575` | Palau |
+| `580` | Panama |
+| `593` | Pitcairn Ilha |
+| `599` | Polinesia Francesa |
+| `603` | Polonia Republica Da |
+| `611` | Porto Rico |
+| `623` | Quenia |
+| `625` | Quirguiz Republica |
+| `628` | Reino Unido |
+| `640` | Republica Centro-Africana |
+| `647` | Republica Dominicana |
+| `660` | Reuniao Ilha |
+| `665` | Zimbabue |
+| `670` | Romenia |
+| `675` | Ruanda |
+| `677` | Salomao Ilhas |
+| `678` | Saint Kitts E Nevis |
+| `685` | Saara Ocidental |
+| `687` | El Salvador |
+| `690` | Samoa |
+| `691` | Samoa Americana |
+| `695` | Sao Cristovao E Neves Ilhas |
+| `697` | San Marino |
+| `700` | Sao Pedro E Miquelon |
+| `705` | Sao Vicente E Granadinas |
+| `710` | Santa Helena |
+| `715` | Santa Lucia |
+| `720` | Sao Tome E Principe Ilhas |
+| `731` | Seychelles |
+| `735` | Serra Leoa |
+| `737` | Servia |
+| `738` | Sikkim |
+| `741` | Cingapura |
+| `744` | Siria Republica Arabe Da |
+| `748` | Somalia |
+| `750` | Sri Lanka |
+| `754` | Suazilandia |
+| `756` | Africa Do Sul |
+| `759` | Sudao |
+| `764` | Suecia |
+| `770` | Suriname |
+| `772` | Tadjiquistao Republica Do |
+| `776` | Tailandia |
+| `780` | Tanzania Rep.Unida Da |
+| `782` | Territorio Brit.Oc.Indico |
+| `783` | Djibuti |
+| `785` | Territorio da Alta Comissao do Pacifico Ocidental |
+| `788` | Chade |
+| `790` | Tchecoslovaquia |
+| `795` | Timor Leste |
+| `800` | Togo |
+| `805` | Toquelau Ilhas |
+| `810` | Tonga |
+| `815` | Trinidad E Tobago |
+| `820` | Tunisia |
+| `823` | Turcas E Caicos Ilhas |
+| `824` | Turcomenistao Republica Do |
+| `827` | Turquia |
+| `828` | Tuvalu |
+| `831` | Ucrania |
+| `833` | Uganda |
+| `840` | Uniao Das Republicas Socialistas Sovieticas |
+| `847` | Uzbequistao Republica Do |
+| `848` | Vaticano Est.Da Cidade Do |
+| `855` | Vietname Norte |
+| `858` | Vietna |
+| `863` | Virgens Ilhas (Britanicas) |
+| `866` | Virgens Ilhas (E.U.A.) |
+| `870` | Fiji |
+| `873` | Wake Ilha |
+| `875` | Wallis E Futuna Ilhas |
+| `888` | Congo Republica Democratica Do |
+| `890` | Zambia |
+
+**Cuidado de implementação, que vale para todas:** `D` significa coisas diferentes em tabelas
 diferentes (Pos-Doutorado em grau de instrução, Divorciado em estado civil, Determinado em contrato).
 Os dicionários **não** são intercambiáveis.
 
@@ -143,12 +477,24 @@ Os dicionários **não** são intercambiáveis.
 O recorte é estrito: só campos **de dado da pessoa** que a integração vai **enviar**. O que o time
 preenche na tela do GI está fora e não bloqueia nada.
 
-#### A. Dicionário de verdade, que só o diretor tem
+#### A. Dicionário de verdade, que só o diretor tem: NENHUM, está fechado
 
-| Campo | O que a investigação já sabe | O que falta |
-|---|---|---|
-| `nacionalidade` | **É código, não texto livre.** Formato numérico de três posições, com zero à esquerda | a tabela de significados |
-| `tipoEndereco` | **Provavelmente NÃO é código.** A leitura viu valor **textual por extenso**, não sigla | confirmar se aceita lista fixa e quais termos |
+**Os dois que faltavam foram entregues e fechados em 16/09/2026:**
+
+- **`nacionalidade`: ENTREGUE**, 258 valores, registrados acima. A previsão da leitura pelo formato
+  (código numérico de três posições com zero à esquerda) se confirmou.
+- **`tipoEndereco`: FECHADO, não precisa de dicionário.** O diretor confirmou que **não existe esse
+  campo como lista**: é **texto livre**. A leitura ao vivo tinha visto ali um valor textual por
+  extenso, e era exatamente isso.
+
+**E entrou um que não estava na lista de pedidos: `tipoLogradouro`**, 178 valores, também registrado
+acima. Ele é o prefixo da via (Rua, Avenida, Travessa) e é **lista por extenso, sem código**.
+
+**Ressalva honesta sobre o `tipoLogradouro`, para não virar surpresa na construção:** a investigação
+**não identificou um campo separado de tipo de logradouro** entre os 119 preenchidos do registro real.
+O GI tem `enderecoResid` como campo único. Ou o prefixo entra concatenado nele, ou existe um campo
+próprio entre os **415 do contrato que ainda não inventariamos**. É item da reconexão, e não bloqueia:
+o dicionário já está guardado para quando o campo aparecer.
 
 #### B. Campos que a leitura viu preenchidos mas cujo FORMATO não conhecemos
 
