@@ -15717,3 +15717,197 @@ Nenhum seed foi rodado. Quem libera é o diretor.
 - **Conferido depois de subir:** `GET /api/pandape-entradas` respondeu **200 com 0 linhas** em
   produção, que é o estado correto (a tabela nasce vazia e registra daqui em diante); backend e
   frontend `active`; `/login` em 200.
+
+---
+
+## 16/09/2026, quarta. Duas integrações lidas por dentro: GI (folha) e Digai (triagem)
+
+Sessão inteira de INVESTIGAÇÃO POR LEITURA, sem construir nada de produção. Duas APIs de
+terceiro, as duas em PRODUÇÃO, as duas com dado pessoal real. O agente `seguranca` foi acionado
+em nove rodadas e VETOU seis vezes. Registro os vetos com o mesmo peso dos achados, porque cinco
+deles pegaram defeito que teria ido para a operação.
+
+### Estado ao fim da sessão
+
+- **Nada em execução.** As duas credenciais foram EXPURGADAS (`shred`), as duas pastas removidas.
+- **Commits feitos:** `6f4e256` (mapa GI + 4 dicionários) e `5a18d49` (tipoLogradouro + nacionalidade).
+  Os dois de documentação, `git add` nominal, push para `origin/main`.
+- **Digai NÃO foi registrado em doc**, por ordem do diretor: ele registra junto quando decidir a
+  estratégia. Esta entrada do DIARIO é a memória disso.
+- Seguem soltos no working tree os 17 arquivos de outras frentes que já estavam soltos no início.
+
+---
+
+## PARTE 1, GI (ERP de folha)
+
+### O que destravou
+
+A credencial renovada trazia o rótulo **`Token`, que é o IDClienteWeb**, e uma `Chave de acesso`
+(UUID) que é a ChaveAcesso. O código lia `Token` como ChaveAcesso e mandava o campo errado: era
+essa a causa do "Cliente não Localizado", não a credencial. Handshake de 2 etapas
+(`Conexao/VerificaConexao` → `Login/Login`) passou depois da correção do mapeamento.
+
+### O que a leitura provou
+
+- **A admissão entra por `FuncionarioSelecao`** (pré-admissão), 415 campos, com marcadores que só
+  ela tem (`statusPreCadastro`, `flagSelecao`, `apiSincAdmissaoDigital`). O `Funcionario` (folha
+  oficial) responde **403** e continua intocado.
+- **Cargo, horário, centro de custo, departamento, sindicato e filial vão VAZIOS**, medido num
+  registro real que o GI aceitou. Derruba a ideia de que o de/para pesado (5.454 cargos, 4.074
+  horários, 12.590 centros) precisaria estar resolvido antes de integrar.
+- **Catálogos que existem e respondem:** Função 5.454, Horário 4.074, Benefício 11.383, Centro de
+  Custo 12.590, Banco 163, Sindicato 36. **CBO dá 403** nesta credencial.
+- **Os catálogos de DOMÍNIO não existem na API**: os 11 nomes tentados deram **404**. A base disso
+  não é o código HTTP, é o swagger completo (435 endereços, 55 áreas) que o parecer de 20/08 já
+  havia analisado e que não traz nenhum deles. O discriminador: recursos DOCUMENTADOS e não
+  liberados (`Funcionario`, `CBO`) respondem **403**, não 404.
+- **`Login/GetTabelas` NÃO estava vazio**, era defeito de leitura nosso: devolve lista de STRING e
+  o extrator só reconhecia lista de dict. São 36 tabelas, nenhuma de domínio. Ela **não é
+  inventário da API** (`TB_FuncionarioSelecao` responde 200 e não está lá), então corrobora sem
+  provar. `DePara` está vazio.
+
+### Os dois vetos do `seguranca` no GI
+
+1. **Imprimi raça, sexo, estado civil, grau de instrução e deficiência de uma pessoa real, com o
+   código de funcionário dela ao lado.** Raça e saúde são dado sensível; os códigos reidentificam.
+   Corrigido: esses campos passaram a mostrar só preenchido/vazio. Nada foi gravado em arquivo; o
+   resíduo ficou só na transcrição da sessão. **Erro meu de recorte**, e a lição é a do parecer: as
+   listas de valores se leem no CATÁLOGO, não no registro de uma pessoa.
+2. **A trava que escrevi para abortar dump suspeito tinha brecha**: `"titulo"` estava nas pistas de
+   descrição, e num contrato `{codigo, tituloEleitor}` ela imprimiria TÍTULO DE ELEITOR. Provado em
+   simulação, corrigido antes de rodar.
+
+### O mapa que o diretor fechou (já em `docs/GI-DADOS-DA-PESSOA-PARA-VALIDAR.md`)
+
+Portal do Candidato coleta pela trilha com IA lendo documentos → EA manda **os dados da pessoa**
+por `FuncionarioSelecao` → documentos-arquivo vão para o **prontuário no Drive**, não para o GI.
+Time preenche na tela do GI: configuração, eSocial, contrato, salário, cargo/horário/centro (vão
+vazios) e a situação trabalhista. O Portal RESOLVE a ressalva do endereço (hoje preso ao VT, que é
+opcional).
+
+**Dicionários entregues e registrados (6, todos no doc):** grauInstrucao (**13** valores, o que
+CORRIGE a inferência de 11 que estava no doc, derivada dos valores em uso no catálogo de cargos),
+raca (6), estadoCivil (7), tipoContrato (3), nacionalidade (**258**), tipoLogradouro (**178**).
+
+**Armadilhas registradas:** os códigos de estado civil NÃO são a inicial (`D`=Divorciado,
+`Q`=Desquitado, `V`=Viuvo, `U`=Uniao Estavel); e `D` significa coisa diferente em cada tabela
+(Pos-Doutorado, Divorciado, Determinado). Em nacionalidade, `089` e `890` têm o mesmo nome
+(Zambia) e foi mantido como veio.
+
+### GI: o que ainda falta
+
+- **`tipoLogradouro` pode não ter campo correspondente**: a investigação NÃO identificou campo
+  separado de prefixo de via entre os 119 preenchidos; o GI tem `enderecoResid` único. Item da
+  reconexão.
+- **Formato (não significado) de:** `naturalidade`, `orgaoRG`, `cidadeRG`, `cidadeExpedicao`, as
+  três UFs e `sexo`. A lacuna é da investigação: não imprimimos os valores por serem PII.
+- **De/para de cidade e de banco** saem de catálogo, não de tabela do diretor. Banco é viável (163
+  registros legíveis); cidade não foi lido.
+- **Lista completa dos 415 campos** (o PIS é o suspeito de faltar no inventário) e **os campos
+  realmente obrigatórios** (hoje inferência fraca: o swagger não marca obrigatoriedade no cadastro
+  de funcionário e só existe UM registro real).
+- **Os scripts ficaram preservados** em `/home/henrique/gi-investigacao/` (700, sem segredo, sem
+  PII), com a grade GET-only auditada e autoteste de 35 bloqueios e 25 leituras. A próxima rodada
+  começa pronta; basta o diretor subir a credencial.
+
+---
+
+## PARTE 2, DIGAI (ATS de triagem)
+
+### A mudança de modelo e o host
+
+O suporte confirmou **BEARER TOKEN**, não OAuth. Token de 67 chars, linha única, opaco (não JWT),
+que bate com a "single API Key per Organization" da doc.
+
+**O host da documentação legada está QUEBRADO e isso custou uma rodada.** `api.hiring.digai.ai`
+tem **certificado inválido**: o cert é `CN=digai.ai` com SAN `*.digai.ai`, e wildcard cobre UM
+rótulo, mas `api.hiring` são dois. A conexão falha fechada. **O host correto é
+`api-screening.digai.ai`**, e o fato decisivo (medido pelo `seguranca`): os DOIS nomes resolvem
+para os MESMOS três IPs e apresentam o MESMO certificado, ou seja, é o mesmo balanceador.
+
+**Eu havia levantado o host errado da doc pública na rodada anterior e o dado como resolvido.**
+Erro meu: deveria ter validado o TLS antes. **Vale reportar o defeito ao Ivan.**
+
+**Registrado em parecer, em definitivo: desativar a verificação de TLS está VETADO.** E a
+proibição virou TESTE no código, não lembrança (mesma lógica da §A.33).
+
+### O resultado, e é conclusivo
+
+**VARREDURA COMPLETA: 86/86 workspaces, 301 screenings (196 com resultado), 13.248 registros
+únicos, 451 chamadas, ZERO falhas.** Paginação por `page` confirmada em 44 screenings.
+
+**ALVO 1, marcador de origem: NÃO EXISTE.**
+- `partnerUserId`: **0 de 13.248**, e em **ZERO** workspaces. Não é limitação de amostra: é a base
+  inteira. A ressalva da amostra anterior está eliminada.
+- `partnerJobId`: 96% preenchido e **não discrimina** (12.686 são `numerico[7]`, mesmo formato).
+- `greenhouseApplicationId`: 0 de 13.248.
+- A **união dos 51 campos de toda a base** não tem campo de origem, fonte, import ou flag.
+- **=> OPÇÃO A**: trazer todos e deduplicar por `userId`/`email`.
+- **Nuance importante:** a API tem endpoint dedicado a GRAVAR `partnerUserId`. Ele não é marca que
+  o Pandapé deixa, é campo que QUEM INTEGRA preenche. Ninguém nunca usou. Se quisermos, NÓS podemos
+  passar a marcar origem daqui para frente, mas isso é ESCRITA, não leitura.
+
+**ALVO 2, como o CPF atualiza: ATUALIZA NO MESMO REGISTRO.**
+- Duas vagas, 100 userIds distintos em 100 registros, **zero repetidos**, com 8 e 23 tendo CPF. Se
+  o CPF criasse registro novo, o mesmo `userId` apareceria duas vezes. Não aparece.
+- A chave é estável e a **reconsulta por `userId` funciona** (`GET /screenings/{id}/users/{userId}
+  /results`, HTTP 200, mesmo candidato). Dá para reconsultar depois que a pessoa finalizar.
+- **Volume: 12.445 pessoas distintas, só 12% com CPF** (1.656 de 13.248).
+
+**Webhook: NÃO confirmado.** O Digai TEM mecanismo de webhook (criar/listar/alterar), mas a doc
+pública não lista os eventos e as páginas de detalhe dão 404. **Hoje o caminho é POLLING**, e
+"existe evento de candidato finalizou?" é **pergunta para o Ivan**. Por decisão do `seguranca`, não
+lemos os listeners: a listagem pode trazer **segredo de assinatura** (credencial de terceiro) e é
+configuração da ORGANIZAÇÃO inteira, não nossa.
+
+**`pre-signup`: o caminho era `/pre-sign-up`, COM HÍFENS.** Os 404 anteriores eram padrão errado
+nosso, não ausência de endpoint. Com o caminho certo responde 200 com **0 registros**: quem não
+finalizou aparece na lista normal, sem CPF.
+
+**Usar a v2, não a v1:** a v1 não tem `cpf`, `partnerUserId`, `stages` nem `appliedAt`.
+
+**Outros achados de operação do Digai:** `documentRequestStatus` é `NOT_REQUESTED` em 100% (nenhum
+documento é pedido por lá); `approvalStatus` e `hasApproved` nulos em 100% (ninguém é aprovado
+formalmente na ferramenta); `rating`, `dnaScore`, `matchPct` e `proficiencyTest` zerados; o que é
+usado são `averageScore` e `globalRank`. A vaga **não tem cliente nem posições**, e traz
+`webAccessLink` e `whatsappAccessLink` (o link da triagem é fixo por vaga: **reengajar é reenviar
+esse link**, não precisa de endpoint).
+
+### Os quatro vetos do `seguranca` no Digai
+
+1. **O script de leitura nem rodava** (importava funções do OAuth que eu removera) e o portão de
+   produção testava `== "sandbox"`, condição que NUNCA pode ser verdadeira porque não há sandbox:
+   **código morto que funcionava por acidente**. Virou flag explícita, default NÃO LÊ.
+2. **Furo de rota por encoding percentual**: os ids usavam `[^/]+`, que aceita `%2f`, `%2e`, `%00`.
+   Servidor que decodifica antes de rotear resolveria fora da allowlist. Ids agora são
+   `[A-Za-z0-9._-]{1,64}`.
+3. **A inspeção de fonte que eu escrevi não se autotestava**: ele COPIOU o arquivo, injetou uma
+   função de escrita depois do ponto onde minha inspeção parava de olhar, e obteve verde. A
+   garantia era decoração. Agora a inspeção recebe o texto por parâmetro e o autoteste injeta o
+   mesmo ataque exigindo que ela acuse.
+4. **A porcentagem desfazia o piso de supressão**: eu suprimia contagem pequena com `<5` e
+   imprimia `(33%)` com o denominador ao lado. **33% de 3 = 1.** E meu teste passava porque
+   procurava o `<5`, e o `<5` estava lá. Lição registrada: **teste de mascaramento que só procura o
+   placeholder não prova mascaramento**.
+
+**Decisões de dados que ele impôs e eu acatei:** deficiência e antecedentes criminais saíram de
+TODA coleta, nem contagem, por minimização (não respondiam nenhuma pergunta da OST). `matchLevel`,
+`proficiencyTest` e `likelyReading` saíram da distribuição por serem julgamento SOBRE a pessoa.
+Os endpoints por **e-mail, telefone e partner-user-id ficaram BARRADOS** porque poriam PII na URL,
+e o 401 do Digai **ecoa o path**. A grade passou a recusar CPF como valor de segmento do path.
+
+### Erro de condução meu, para não repetir
+
+A primeira varredura rodou 14 minutos **e ia entregar nada**: canalizei a saída por um filtro que
+só imprime no fim, com limite de 15 minutos que mataria o processo antes do relatório. O diretor
+perguntou se a fábrica estava parada e ele estava certo em desconfiar: não havia como ver
+progresso. **Saída longa vai para arquivo, sem buffer (`python3 -u`), fora do repositório.**
+
+### Digai: o que falta
+
+- **Perguntar ao Ivan:** existe evento de webhook para "candidato finalizou"? (senão, polling)
+- **Reportar ao Ivan:** o host `api.hiring.digai.ai` da doc está com certificado quebrado.
+- **Decisão do diretor:** a estratégia (opção A confirmada pela varredura) e o registro em doc.
+- **Os scripts ficaram** em `/home/henrique/digai-investigacao/` (700, sem credencial): grade
+  Bearer GET-only com autoteste de 26 bloqueios e 11 leituras, mais os autotestes de saída dos
+  scripts de leitura. A próxima rodada começa pronta.
