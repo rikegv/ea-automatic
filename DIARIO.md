@@ -15995,3 +15995,104 @@ O código está commitado e no `main`, mas o banco de **produção segue em 109 
 homologação em 112. As migrations **0109 a 0112 nunca rodaram em produção**. Publicar lá exige
 rodar `pnpm db:migrate` com o `DATABASE_URL` de produção, e as três guardas escritas à mão dentro
 delas abortam a transação se aparecer valor onde a medição encontrou zero.
+
+---
+
+## 18/09/2026, sexta. A fundação chega em produção, e os dois furos de LGPD fecham antes da ingestão
+
+Duas frentes numa subida só, com um restart só. A fundação da plataforma unificadora, que desde
+ontem estava commitada e **não** estava em produção, saiu das 109 migrations para as 113. E os dois
+furos de LGPD que travavam a ingestão foram fechados **antes** de ela existir, que era a ordem certa.
+
+### O QUE ESTÁ EM PRODUÇÃO AGORA
+
+Commit `662e6a4`, em `origin/main`. A fundação (`42ac208` e `e8c23c3`) subiu junto, porque o `dist`
+de produção era de **15/09 e não tinha uma linha dela**.
+
+- migrations **109 para 113**, tabelas base **76 para 79**;
+- `as_etapas_funil` 0 para **6**, com uma inicial; `as_depara_etapa_externa` com as **10** pastas;
+- as três tabelas novas de pé, as duas gavetas velhas de id do Pandapé derrubadas;
+- migration às 12:44:04, restart às 12:44:06, **janela de 2 segundos**, `NRestarts=0`, zero erro no
+  journal, healths 200 em `3011/api/health` e `3010/login`;
+- o frontend **não** foi tocado, porque a frente não mexeu nele. `.next` de 15/09 intacto, pela
+  memória da casa de que buildar com o serviço no ar clobbera o build e serve 500.
+
+### OS DOIS FUROS, e o que cada um era
+
+**Furo 1, quem entrava sem vaga nunca expirava.** O expurgo exigia candidatura, então quem não
+casasse com vaga nenhuma ficava com CPF, e-mail, telefone e nascimento retidos para sempre. O gate
+saiu e o relógio ganhou uma queda para as datas do próprio candidato. Quem tem candidatura conta
+exatamente como antes.
+
+**Furo 2, `editar` re-identificava quem já fora expurgado**, e ele tinha DUAS metades. A recusa, e a
+cicatrização: a varredura nunca volta a uma linha já carimbada, então uma re-identificação que
+escapasse virava permanente e silenciosa, com nada falhando.
+
+### O NOME, e por que ele foi a correção mais cara de achar
+
+Eu levantei que a cicatrização re-nulava quatro campos e deixava o **nome**. O `seguranca` mediu e
+mostrou que era pior: a premissa de que "o nome já é marcador" é falsa **exatamente na população que
+a CTE repara**, porque ela existe por causa do `editar`, e o `editar` grava o nome na MESMA
+instrução do CPF. Quem reabre ficha expurgada digita o nome primeiro, que é o campo de cima.
+
+E, sem o nome na GUARDA, a linha em que **só o nome voltou** nunca era sequer tocada: saía da
+passada com o nome real intacto, contando como expurgada. Medido contra banco, não deduzido. O
+contrato do `tester` **carimbava o furo**: ele listava quatro colunas com o comentário "o nome fica
+de fora", e por isso a suíte ficava verde com o furo aberto.
+
+### A FÁBRICA, quem rodou e qual foi o veredito (§A.34/§A.38)
+
+| agente | o que fez | veredito |
+|---|---|---|
+| `seguranca` | auditou o MAPA **antes do código** (§A.40), depois o código, depois reprovou o item vetado | **VETOU 3 vezes**, e as três eram reais |
+| `tester` | escreveu 61 testes a partir do requisito, antes do código, com 26 mutantes | nasceram **vermelhos pelo motivo certo** |
+| `backend` | os dois furos, e depois a correção do nome | entregou, e **divergiu declarando** duas vezes |
+| `devops` | ensaio em clone, dump, procedimento, e a aplicação em produção | **divergiu declarando e estava certo** |
+| coordenador | o mapa de alcance, a resolução dos vetos, a conferência do código, o gate, o ciclo | achou o resíduo do nome |
+
+**Um veto foi RECUSADO com evidência, e registro porque a régua manda conferir e não carimbar.** O
+`seguranca` alegou que o relógio de fallback entregaria a retenção a um sistema externo. Conferi: a
+régua **já aprovada** conta de `k.atualizado_em`, que uma ingestão tocaria igual. A forma nova não
+cria assimetria, estende a mesma régua. O que sobrou do achado virou **trava escrita para o briefing
+da ingestão**. Ele conferiu e aceitou a recusa.
+
+**O `devops` recusou o meu pressuposto e estava certo.** Eu disse que o dump de 12h08 servia porque
+o banco não teria mudado. Ele mediu: `frentes_admissao` 8127 para 8129, `documentos_admissao` 22598
+para 22600, escrita viva do scheduler do Pandapé de 12 em 12 minutos. Tirou dump novo (`_1243`).
+**Produção escreve ao vivo, então "contagens idênticas" não é literal para essas duas tabelas**, e o
+invariante real é `admissoes` 2.902, `candidatos` 2.857, `clientes` 250, `usuarios` 38, que bateram
+exato.
+
+### SEM TELA PARA VALIDAR, e é preciso dizer isso com todas as letras
+
+A fundação é estrutura de banco. E o `editar` **não tem tela**: nenhuma página chama
+`PATCH /as/candidatos/:id`, conferido por varredura no frontend. A recusa por anonimização é uma
+resposta de API que hoje ninguém alcança pela interface, e alcançá-la exigiria um registro
+anonimizado, que exige dois anos. **Não há screenshot a tirar nesta frente**, e a prova é a medição
+contra banco, não a §A.13.
+
+### ABERTO, registrado para o gatilho certo
+
+1. **Texto livre sobrevive à anonimização.** `as_contatos.resumo` e `as_candidaturas.motivo_descarte`
+   guardam o que o consultor digitou, e é ali que telefone e nome aparecem na prática. O expurgo não
+   os alcança. É um **terceiro furo**, do mesmo tema, e o momento de fechá-lo é antes de a ingestão
+   criar volume.
+2. **`conflitoDeCpf` devolve o NOME do titular** do CPF submetido. Cumpre a letra da régua e funciona
+   como oráculo de CPF para nome.
+3. **Bomba de ordenação** no parser de `retencao-candidatos.lgpd.comportamental.spec.ts`: ele ancora
+   no primeiro `update as_candidatos` que encontra, e agora há dois. Hoje passa; reordenar as CTEs o
+   faz reprovar código correto.
+4. **Três databases de ensaio** de sessões anteriores seguem de pé no `ea-db`
+   (`ea_ensaio_migrations`, `ea_homolog_clone_etapa1`, `ea_juncao_prova`), e dois têm linha de
+   candidato.
+5. **A TRAVA DA INGESTÃO, e ela é a que não pode ser esquecida:** o upsert de reentrega que não muda
+   nada **não escreve** `as_candidatos.atualizado_em`, e o ingestor **não escreve** `criado_em`
+   histórico. Sem isso, o furo 1 renasce pela porta do lado e o expurgo prematuro fica possível.
+   Também vale para um futuro "desalocar que apaga candidatura": ele moveria a pessoa para a queda
+   das datas próprias, que pode já estar vencida.
+
+### O QUE FICOU FORA DO COMMIT
+
+Seguem soltos no working tree, como já estavam no início da sessão: os 16 docs de outras frentes de
+A&S, o `logosoulan.png` e o `apps/backend/src/as/digai/` com os testes suspensos. §A.14, recorte de
+escopo.
