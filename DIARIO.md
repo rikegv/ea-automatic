@@ -16096,3 +16096,107 @@ contra banco, não a §A.13.
 Seguem soltos no working tree, como já estavam no início da sessão: os 16 docs de outras frentes de
 A&S, o `logosoulan.png` e o `apps/backend/src/as/digai/` com os testes suspensos. §A.14, recorte de
 escopo.
+
+---
+
+## 18/09/2026, sexta (tarde). A varredura do Pandapé, e o texto livre que sobrevivia ao expurgo
+
+Segunda frente do dia. Três limpezas de LGPD mais a ingestão por varredura, construída em
+homologação e inerte de propósito. Commit `5cef7a3`, em `origin/main`.
+
+### AS TRÊS LIMPEZAS, e as duas que viraram quatro
+
+**O terceiro furo, texto livre.** O expurgo alcançava `as_candidatos` e `as_identidades_externas`, e
+nada mais. `as_contatos.resumo` passa a receber marcador (a coluna é NOT NULL, e `set resumo = null`
+derrubaria a varredura inteira, que é o pior mutante dos dois arquivos); `motivo_descarte` vai a
+NULO, porque nulo já é vocabulário da tabela e um marcador apareceria nas telas como se fosse o
+motivo do descarte.
+
+**E um QUARTO furo, que o `tester` achou:** `as_candidatura_etapas.motivo` guarda uma **cópia** da
+mesma frase, gravada na mesma transação. Decidi que não era escopo novo: nular um lado e deixar o
+outro é minimização aparente, ou seja, era o item aprovado que não funcionava. O `backend` então
+mediu que são **sete pontos de insert** naquela coluna e **quatro gravam frase digitada**, o que
+invalidaria um filtro por tipo de evento.
+
+**O aceite fica, e a distinção está escrita.** `aceite` e `aceite_numero` moram na MESMA tabela, e a
+§A.6 os exige permanentes e consultáveis. Um sai porque é dado pessoal, o outro fica porque é
+auditoria. Há mutante vermelho para quem os apagar por simetria.
+
+**`conflitoDeCpf`** devolve só o id. Quem submetia um CPF recebia de volta o nome do titular.
+
+**Os três bancos de ensaio: dois derrubados, um preservado.** O `ea_juncao_prova` não é ensaio, é o
+`DATABASE_URL` de três configs, uma delas o `.env` da RAIZ do repositório, que é armadilha própria:
+comando rodado da raiz pega banco de ensaio em vez do de produção.
+
+### A INGESTÃO, com os números medidos
+
+621 vagas ativas, **137.654 inscrições**, ciclo completo de **660 requisições**, teto real de
+**1.000 por 5 min** (o 120/min da OST era do **Digai**, não do Pandapé), intervalo de **30 minutos**,
+que usa 20% da cota e aguenta +38% de crescimento. A etapa **vem no item**, então o ciclo é
+`1 + (1 por vaga)`; por etapa custaria 10,4 vezes mais.
+
+### AS QUATRO RODADAS DE AUDITORIA, e o que cada uma pegou
+
+**1. O mapa, antes do código (§A.40).** O `seguranca` vetou **nove de dez pontos**. O mais caro:
+a vaga espelhada que nunca encerra deixaria toda pessoa viva dentro dela **protegida do expurgo para
+sempre**, com CPF, e-mail, telefone e nascimento, sem nada falhar. Resolvi espelhando o **ciclo de
+vida** da vaga: quem sai das ativas vai para FECHAMENTO com `encerrada_em` de servidor, caindo no
+ramo do relógio que já existia e já fora auditado.
+
+**2. O código.** Vetou três. O pior: **espelhar ciclo de vida tem DUAS direções**, e só o
+encerramento ganhou fronteira. A reabertura **zerava `encerrada_em` de vaga alheia**, desfazendo a
+decisão de um humano de 30 em 30 minutos. A raiz: a propriedade era lida de `id_vacancy_pandape`,
+coluna **digitada por gente** com índice não unique. Virou matrícula por linha, e o `backend` achou
+sozinho uma **quinta porta** que nem eu nem o parecer listávamos.
+
+**3. A reauditoria, e ela achou o pior de todos.** **`encerrarAusentes` NÃO EXECUTAVA no Postgres.**
+`<> all(${ativos}::text[])`: o drizzle **não recusa o array, ele o ESPALHA**, virando escalar com 1
+id e construtor de LINHA com 3. **3.680 testes verdes conviveram com a instrução central da frente
+sendo incapaz de rodar**, e o furo teria continuado aberto **com carimbo de corrigido**, que é pior
+do que aberto. Provado contra Postgres real em 1, 3 e 621 ids.
+
+**4. O `tester`, em paralelo, sem ter lido os vetos**, acusou os dois defeitos do ciclo de vida da
+vaga pelo contrato dele. A área que ele havia **declarado não cobrir** era exatamente a área do
+defeito.
+
+### O ACHADO ESTRUTURAL, e ele é para o diretor
+
+**Não existe teste com Postgres real neste repositório.** Sem testcontainers, sem pg-mem, sem banco
+no CI. E este é o **SEGUNDO** incidente da mesma família: `regua-on-conflict.spec.ts` nasceu de um
+`ON CONFLICT` que não inferia índice parcial e derrubou a tela da régua em produção. O teste por
+forma é o remendo que a casa vem usando, e ele funciona, mas não é a resposta.
+
+### A HOMOLOGAÇÃO, e o veto que mudou o caminho da validação
+
+Publicada e **INERTE**: sem `PANDAPE_VARREDURA_DATA_CORTE`, nada é lido e nada é escrito, e o gate
+retorna antes de Redis, fila, worker e timer. Provado: zero chave de varredura no Redis da 6381.
+
+**O `seguranca` VETOU rodar a varredura real na homologação**, e concordo. O database é declarado, na
+própria unidade systemd, como **"clone ANONIMIZADO"**. Escrever nome, CPF, e-mail e telefone de gente
+real ali torna a frase falsa **enquanto ela continua escrita**, e quem confiar nela depois (dump,
+depuração, tela compartilhada) quebra em silêncio. O caminho adotado: validar na 3120 com **payload
+fabricado atravessando o caminho real de escrita**. Ver
+`docs/GUIA-VALIDACAO-INGESTAO-PANDAPE.md`.
+
+**Nota de linhagem:** a homologação tinha 112 migrations com **2 hashes órfãos** e 3 faltando, mas o
+`migrate` do drizzle decide por **timestamp e não por hash**, então rodou só a 0113. A deriva
+continua lá e o ledger dela não é comparável ao de produção linha a linha.
+
+### O QUE FALTA, e eu não construí
+
+**O arnês do lote fabricado não existe.** O guia descreve as cinco fases; a fase 1 (a inércia) é
+validável agora, e as fases 2 a 5 precisam de um arnês que alimente a varredura com um lote
+inventado. Não estava na OST e não construí (§A.31). É decisão do diretor.
+
+### ABERTO
+
+1. **A data de corte** (`PANDAPE_VARREDURA_DATA_CORTE`), que é o que liga a ponte.
+2. **As 15 chaves de etapa sem de/para**, que hoje deixam **35% das inscrições** de fora por desenho.
+   As quatro que decidem volume: `entrevista inteligente` (29,5%), `retorno negativo etapa soulan`,
+   `pre selecionado` (5,5%) e `finalistas`.
+3. **`cidade` e `uf` não são escritas**: `location3`/`location2` parecem ser DICIONÁRIOS na API (id e
+   não nome), e errar poria logradouro na coluna que o expurgo preserva de propósito.
+4. **O `.env` da RAIZ** aponta para banco de ensaio.
+5. **Sem teste com Postgres real** (o achado estrutural acima).
+6. Os dumps dos ensaios em `/home/henrique/backup-ensaios-20260918/` têm dado pessoal herdado e
+   precisam de prazo de descarte.
