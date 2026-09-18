@@ -16200,3 +16200,74 @@ inventado. Não estava na OST e não construí (§A.31). É decisão do diretor.
 5. **Sem teste com Postgres real** (o achado estrutural acima).
 6. Os dumps dos ensaios em `/home/henrique/backup-ensaios-20260918/` têm dado pessoal herdado e
    precisam de prazo de descarte.
+
+---
+
+## 18/09/2026 (noite) — AS CINCO DECISÕES DA INGESTÃO, o veto do `seguranca` e o commit `f24c506`
+
+**Retomada depois de queda de conexão.** O estado no disco dizia que as cinco decisões já estavam
+aplicadas em código e que o gate tinha UM teste vermelho. Confirmado item a item, e era isso.
+
+### O QUE ENTROU (commit `f24c506`, pushado para `origin/main`)
+
+As cinco decisões do diretor: data de corte fixa por ambiente sem default; as 11 etapas marginais
+ATIVAS no de/para (0114); `retorno negativo etapa soulan` e `finalistas` como linha INATIVA; papel
+`REVISAO` e status `PENDENTE_REVISAO` (0115) com fila, selo e tela própria; liberação individual com
+trava de servidor e correção restrita a Master. A 0117 guarda de onde a varredura fechou a vaga.
+
+**O teste defasado** (`as-vaga-revisao.spec.ts`) foi consertado: ele varria a semente exigindo
+`false` em todas, e a semente passou a conter a própria linha do papel REVISAO. O varrimento agora
+exclui pelo PAPEL, que é a régua do resto do módulo. A função estava certa.
+
+### O QUE A AUDITORIA PEGOU (o `seguranca` VETOU, e depois LEVANTOU o veto)
+
+1. **V1, bloqueante:** a correção do Master trocava o cliente SEM AUTOR e SEM TRILHA quando não
+   devolvia a vaga para a fila. A trilha não ficava silenciosa, ficava ERRADA. Fechado com
+   `vaga_cliente_correcoes` (**0118**), tabela própria no molde de `vaga_meta_reducoes`. NÃO virou
+   evento de status porque `vaga-status.service.remover` conta eventos por `de`/`para` para escolher
+   entre APAGAR e INATIVAR, e leria uma correção de CADASTRO como passagem de vaga.
+2. **R1:** o nome da pasta do ATS ia para o log a cada passada, e é texto livre que pode chegar com
+   nome de gente dentro. Resolvido com MARCA (`marcaDeChaveExterna`, sha256 truncado), aplicada na
+   ORIGEM, então o log da varredura e o do arnês ficam cobertos de uma vez. **É pseudonimização, não
+   anonimização:** quem já suspeita do nome pode confirmar. Fechar também isso pede um sal fixo de
+   instalação, e é oferta, não exigência.
+
+### O QUE O `tester` INDEPENDENTE PEGOU
+
+Seis gaps. Três cobertos por ele (a inércia medida no SERVIÇO e não só no leitor da variável; a
+liberação com o cliente vindo do corpo sobre vaga com `cod_cliente` NULO, que é o único caminho que
+a tela usa; a trilha da liberação). Dois fechados na mesma rodada: o **RBAC das duas rotas**
+(`vagas.revisao-rbac.spec.ts`, incluindo a AUSÊNCIA deliberada de `@Roles` no liberar) e as **portas
+de rede da tela** (`as-vagas-revisao.portas.spec.ts`, com prova de mutação). **Um fica aberto:** a
+fila em si (`pendentesDeRevisao`, a contagem e `liberadasDaRevisao`) só se prende com Postgres real,
+e está registrado em `docs/FRENTE-REGISTRADA-TESTE-POSTGRES-REAL.md`.
+
+### O ARNÊS EXISTE AGORA, e rodou
+
+`arnes-lote-fabricado.ts` alimenta a varredura pelo caminho real de escrita, com dado 100%
+sintético, e **recusa produção por allowlist de database** (medido: `ea_automatic` é recusado pelo
+nome). As cinco fases rodaram na homologação: 3 pessoas criadas na fase 2, **zero** na repetição
+(dedup), **zero** na pasta sem de/para (fail-closed), e a vaga encerrando e voltando na fase 5.
+
+### GATE E PROVA
+
+Backend **3952** testes, frontend **721**, typecheck e lint limpos. Migrations **0113 a 0118**
+aplicam limpo e são idempotentes em base descartável (`ea_prova_migr_0117`/`0118`). O commit foi
+provado a compilar SOZINHO, em worktree, sem o portal. Prova visual na 3120 conferida: 2 vagas na
+fila, tag "Sem Cliente", zero coluna esmagada, zero travessão.
+
+**Recorte do commit (§A.14):** o portal (outra fábrica) estava misturado em `tables.ts`, no
+`_journal.json` e no `app.module.ts`. Os dois primeiros entraram por blob recortado, hunk a hunk; o
+terceiro não entrou. A entrada `0116_portal` continua intacta no working tree e FORA do commit.
+
+### ABERTO
+
+1. **A data de corte continua FORA do `.env`**, por ordem do diretor: a varredura segue inerte, e o
+   log do boot confirma isso a cada restart.
+2. **As migrations 0113 a 0118 NÃO estão em produção.** A homologação já está com todas.
+3. **As duas linhas inativas** (`retorno negativo etapa soulan`, `finalistas`): ligar é decisão do
+   diretor, e ligar a do retorno negativo carimba `DESCARTADO` e mexe no relógio de retenção.
+4. **O de/para vaga→cliente** segue pendente: sem ele a vaga entra sem cliente, que é o motivo de a
+   fila de revisão existir.
+5. **Teste com Postgres real** (a fila), registrado como frente própria.
+6. **O rastro de `vaga_cliente_correcoes` não tem tela**: é consultável por SQL, não aparece na ficha.
