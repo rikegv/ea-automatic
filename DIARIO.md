@@ -15911,3 +15911,87 @@ progresso. **Saída longa vai para arquivo, sem buffer (`python3 -u`), fora do r
 - **Os scripts ficaram** em `/home/henrique/digai-investigacao/` (700, sem credencial): grade
   Bearer GET-only com autoteste de 26 bloqueios e 11 leituras, mais os autotestes de saída dos
   scripts de leitura. A próxima rodada começa pronta.
+
+---
+
+## 17/09/2026, quinta. A fundação da plataforma unificadora, e o dia em que a origem se partiu em duas
+
+Dia de fechar estrutura. Nada de ingestão ainda, nada em produção: tudo na homologação, validado
+na tela, e agora commitado. Esta entrada é o **ponto de retomada**.
+
+### O QUE FICOU FEITO
+
+**1. A base de A&S foi limpa, nos DOIS bancos.** Nove tabelas apagadas (as oito da frente mais as
+etapas do funil, que o diretor mandou zerar), na ordem filhas antes das mães, sem `TRUNCATE
+CASCADE`, dentro de UMA transação por banco que contava todas as tabelas antes e depois e só
+committava se a única coisa mudada fosse o escopo. Produção: 68 das 76 tabelas idênticas.
+Homologação: 71 das 76. Backup **anonimizado** antes, fora do repositório, em
+`/home/henrique/backup-as-limpeza-20260917/`, pastas 700 e arquivos 600, sem CPF, nome, telefone,
+e-mail, nascimento nem texto livre.
+
+**2. A fundação, commitada em `42ac208`.** As cinco peças: a tabela de identidades externas, as 6
+etapas do funil (a Stand By nasceu aqui), o de/para das 10 pastas reais do Pandapé com os dois
+descartes separados por motivo, o campo `origem` reduzido a UMA pergunta e o Banco De Talentos
+promovido a campo próprio de retenção com cadeado de SUPER_ADMIN e trilha, e as duas gavetas
+velhas de id do Pandapé derrubadas.
+
+**3. Os mapeamentos fechados**, commitados em `e8c23c3`: o desenho da plataforma unificadora, o
+retorno do Digai lido contra a documentação oficial, o mapa completo da API do Pandapé e o
+protocolo LGPD da fábrica. O mapeamento do GI já estava commitado antes (`6f4e256`, `5a18d49`).
+
+**4. A suíte parou de mentir.** Havia 99 testes vermelhos em `src/as/digai/`, escritos antes da
+implementação por outra sessão. Eles **não foram apagados**: ficaram suspensos com uma **sentinela
+que se reativa sozinha**. No dia em que o primeiro arquivo do Digai nascer, as quatro sentinelas
+ficam vermelhas dizendo "a implementação chegou, reative". Medido de verdade: criou-se um arquivo
+falso, as quatro acenderam, apagou-se, voltou ao verde.
+
+**5. Uma armadilha de segurança desarmada.** `ea-homolog/scripts/deploy-local.sh` era cópia
+literal do script de produção: rodando de dentro da homologação, ele reiniciaria os serviços de
+PRODUÇÃO sem publicar nada. Agora recusa, explica o que era e escreve o procedimento certo.
+
+### A PRÓXIMA FRENTE: A INGESTÃO
+
+Ligar a entrada de candidatos do Pandapé e do Digai. **Ela nasce com os fatos certos**, e é por
+isso que o dia foi gasto em estrutura:
+
+| Peça | Estado |
+|---|---|
+| Webhook do Digai (`NEW_APPLICATION`) | **existe**, confirmado na documentação oficial |
+| Como provar que a chamada veio do Digai | **token que NÓS definimos** no cadastro do listener (`authType` BEARER mais `token`). Não há assinatura HMAC. Mesmo modelo do Pandapé, fail-closed |
+| Deduplicação por `userId` | **destravada**: chave forte, única e permanente, confirmada pelo Ivan. É o que o `seguranca` já havia aprovado como o único casamento aceitável |
+| `partnerJobId` como vínculo da vaga | confirmado pelo fornecedor, **ausente da documentação** |
+| Teto de requisição | **120 por minuto**, adotado |
+| A tabela de identidades | **pronta e vazia**, esperando |
+
+### AS PENDÊNCIAS, e duas delas TRAVAM a ingestão
+
+1. **TRAVA: quem entra sem vaga nunca expira.** O expurgo só alcança quem teve candidatura, então
+   todo importado que não casar com vaga nenhuma fica com os dados retidos para sempre. Hoje é
+   teórico, porque a base está vazia. Deixa de ser no primeiro registro da ingestão.
+2. **TRAVA: a edição do candidato traz de volta dado já apagado.** `editar` grava CPF, e-mail,
+   telefone e nascimento sem conferir se a pessoa já foi anonimizada. Custa **uma cláusula** no
+   `where`.
+3. **A trilha de retenção nasceu sem leitura.** Ela grava e ninguém consulta, e a §A.6 pede trilha
+   "permanente e **consultável**". Frente pequena.
+4. **O payload do webhook não traz `partnerJobId`**, então a ingestão é de DOIS passos: o evento
+   chega e entra na fila, o worker busca o resto pelo `screeningId` ou pelo `attemptId`. É a mesma
+   forma que o webhook do Pandapé já tem.
+5. **120 contra 500 por minuto.** A documentação diz 500, o fornecedor disse 120. Adotado o menor.
+   Perguntar ao José qual vale para a nossa chave.
+6. **O payload do webhook carrega e-mail e telefone**, então o corpo do evento **nunca vai para
+   log**. O receptor extrai os identificadores técnicos, enfileira e descarta o resto.
+
+### O QUE O DIRETOR DECIDE AMANHÃ
+
+1. **Pandapé ou Digai primeiro?**
+2. **Resolver os dois furos de LGPD agora, ou ver o desenho da ingestão antes?** A recomendação da
+   fábrica é resolver antes: os dois são baratos e o segundo custa uma cláusula, enquanto ligar a
+   ingestão com eles abertos cria retenção permanente de dado pessoal no primeiro registro.
+3. **Produção ou homologação primeiro?**
+
+### ATENÇÃO PARA QUEM RETOMAR: A FUNDAÇÃO NÃO ESTÁ EM PRODUÇÃO
+
+O código está commitado e no `main`, mas o banco de **produção segue em 109 migrations**, e a
+homologação em 112. As migrations **0109 a 0112 nunca rodaram em produção**. Publicar lá exige
+rodar `pnpm db:migrate` com o `DATABASE_URL` de produção, e as três guardas escritas à mão dentro
+delas abortam a transação se aparecer valor onde a medição encontrou zero.
