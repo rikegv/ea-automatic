@@ -1175,3 +1175,53 @@ confirmação e sem desfazer. O gesto que destrói o trabalho era o mais fácil 
   Escape.
 
 *(Decisão do diretor, na validação da tela unificada de vagas.)*
+
+## A.42: A FÁBRICA SÓ VOLTA COM TUDO PRONTO, E O RETORNO É O RELATÓRIO FINAL (regra permanente)
+
+**O diretor quer UM relatório final, quando TODAS as frentes estiverem concluídas.** Não quer retorno
+parcial, não quer pulso de "despachei e aguardo", não quer ser informado a cada agente que termina.
+
+**O QUE MUDA NA PRÁTICA:** a fábrica NÃO devolve o turno enquanto houver frente aberta. Despachou
+agente, ela **espera o retorno, consolida, despacha a rodada seguinte e continua**, até não restar
+nada em execução. Só então escreve o relatório e devolve.
+
+**POR QUE A REGRA EXISTE, e é o oposto do que parece:** devolver o turno no meio da frente foi
+exatamente o que fez o diretor dizer **"eu não vejo a fábrica atuando"**. Do lado dele, turno
+devolvido é tela parada, e não importa quantos agentes estejam rodando por baixo: o que ele vê é a
+fábrica esperando por ele. Quatro devoluções parciais numa frente única passam a impressão de quatro
+paradas, quando foram quatro rodadas de trabalho.
+
+**ISTO NÃO REVOGA A §A.34, REFINA.** A §A.34 manda dizer QUEM está executando e O QUE, e continua
+valendo inteira: o relatório final declara agente por agente o que cada um fez e qual foi o veredito,
+inclusive quem NÃO foi acionado e por quê. O que a §A.42 acrescenta é QUANDO esse relatório sai: no
+fim, uma vez, e não em parcelas.
+
+**A EXCEÇÃO, e é só esta: PARADA DE VERDADE.** A fábrica devolve o turno antes do fim quando, e
+somente quando, **não tem como prosseguir sem o diretor**:
+- pergunta que só ele responde e sem a qual o trabalho seguinte seria refeito (§A.14, §A.26, §A.27);
+- insumo que só ele destrava (credencial, acesso, base);
+- validação visual dele, que é o gatilho da publicação (§A.13, §A.25).
+
+Nesses casos a fábrica diz, na primeira linha, **que está BLOQUEADA e no quê**, e o que já ficou
+pronto até ali. Bloqueio não é pulso: é pedido de destravamento.
+
+**O RELATÓRIO FINAL É CURTO, E ISTO NÃO É ESTILO, É A CORREÇÃO DE UM DEFEITO MEDIDO.** Ele tem, no
+máximo, **uma tela**: o que foi entregue, o que foi medido (com o número), as correções de premissa, e
+a lista numerada do que o diretor decide. **O DETALHE VAI PARA DOCUMENTO**, e o pulso aponta o
+arquivo. Agente por agente com o veredito de cada um cabe em uma tabela curta, não em uma seção por
+agente.
+
+**O DEFEITO QUE ISTO CORRIGE, e ele nasceu desta própria regra:** ao parar de devolver o turno entre
+rodadas, a fábrica passou a juntar tudo num relatório só, e os pulsos foram de curtos e frequentes
+para longos e únicos, cheios de tabela. **O diretor passou a receber o relatório CORTADO, e teve de
+pedir a mesma coisa três e quatro vezes.** Trocou-se um defeito por outro: antes travava no meio,
+depois cortava no fim.
+
+**A REGRA PRÁTICA, em três linhas:**
+1. **A conclusão vem PRIMEIRO**, no topo. Se a mensagem cortar, o que se perde é o detalhe, nunca a
+   decisão.
+2. **Nada que já esteja em documento se repete no pulso.** Cita-se o arquivo.
+3. **Uma decisão por linha, numerada.** O diretor pede o detalhe do número que quiser.
+
+*(Decisão do diretor, após a frente da plataforma unificadora voltar em quatro parcelas, e emendada no
+mesmo dia depois que a correção produziu o defeito oposto.)*
