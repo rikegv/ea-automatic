@@ -5,6 +5,7 @@ import { ComerciaisService } from "./comerciais/comerciais.service";
 import { CidadesController } from "./cidades/cidades.controller";
 import { CidadesService } from "./cidades/cidades.service";
 import { CandidatosService } from "./candidatos/candidatos.service";
+import { DeparaEtapaExternaService } from "./depara/depara-etapa-externa.service";
 import { RetencaoCandidatosService } from "./candidatos/retencao-candidatos.service";
 import { EtapasFunilAdminController } from "./etapas/etapas-funil-admin.controller";
 import { EtapasFunilController } from "./etapas/etapas-funil.controller";
@@ -110,6 +111,12 @@ import { VagasService } from "./vagas/vagas.service";
   // vaga recebe candidato?" também.
   providers: [
     VagasService,
+    // `DeparaEtapaExternaService` resolve o nome de uma etapa vinda de fora (Pandapé, Digai) para a
+    // etapa do funil ou para um desfecho, lendo a tabela de configuração `as_depara_etapa_externa`.
+    // NASCE SEM CHAMADOR de propósito: a fundação da plataforma unificadora existe antes da
+    // ingestão, e a porta nova ainda não abre. Fica registrado aqui para que ligar a ingestão seja
+    // uma injeção de construtor, e não uma migration na frente do diretor.
+    DeparaEtapaExternaService,
     CandidatosService,
     RetencaoCandidatosService,
     EtapasFunilService,

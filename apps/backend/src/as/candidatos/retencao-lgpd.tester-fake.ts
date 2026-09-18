@@ -101,9 +101,25 @@ export async function sqlDaVarredura(
  */
 export function clausulasDoWhere(sqlTexto: string): string[] {
   const t = sqlTexto.toLowerCase();
-  const inicio = indiceDoWhereDeTopo(t);
+  // ─ A LEITURA COMEÇA NO `update as_candidatos`, E NÃO NO PRIMEIRO CARACTERE ────────────────────
+  //
+  // A CONSULTA DEIXOU DE COMEÇAR PELO `update`. Desde a fundação da plataforma unificadora o
+  // expurgo é UMA instrução só com CTE que modifica dado (`with alvo as (update ... returning id),
+  // ... select count(*) from alvo`), porque três escritas separadas deixariam o candidato carimbado
+  // como anonimizado com o identificador externo dele intacto, e a varredura nunca mais voltaria
+  // naquela linha (§A.6).
+  //
+  // O EFEITO SOBRE ESTE PARSER É MECÂNICO E TOTAL: o `where` da régua passou a viver DENTRO de um
+  // parêntese, então a busca por profundidade zero não o achava mais e TODAS as afirmações deste
+  // contrato viravam "PROTECAO_AUSENTE". Ancorar no `update as_candidatos` devolve o mesmo
+  // referencial de antes (a partir dali, o `where` da régua está de novo em profundidade zero) sem
+  // afrouxar UMA linha do contrato: continua-se lendo a cláusula de topo DAQUELE update, e não uma
+  // cláusula qualquer que apareça pelo caminho.
+  const base = t.indexOf("update as_candidatos");
+  const daRegua = base >= 0 ? t.slice(base) : t;
+  const inicio = indiceDoWhereDeTopo(daRegua);
   if (inicio < 0) return [];
-  const corpo = t.slice(inicio + " where ".length);
+  const corpo = daRegua.slice(inicio + " where ".length);
 
   const pedacos: string[] = [];
   let atual = "";
@@ -159,6 +175,126 @@ export function clausulaDaProtecao(sqlTexto: string): string {
  */
 export function clausulaDoRelogio(sqlTexto: string): string {
   return clausulasDoWhere(sqlTexto).find((c) => c.includes("interval '")) ?? "";
+}
+
+/**
+ * ─ A CLÁUSULA DA RETENÇÃO, E POR QUE ELA PASSOU A SER LIDA POR SENTIDO ─────────────────────────
+ *
+ * A REGRA NÃO MUDOU (candidato de banco NÃO EXPIRA, decisão do diretor); MUDOU ONDE ELA MORA. Até a
+ * migration 0112 a retenção era o valor `BANCO_TALENTOS` do enum de ORIGEM, e o contrato cobrava o
+ * texto `c.origem <> 'banco_talentos'`. Hoje ela é `as_candidatos.banco_talentos`, coluna própria,
+ * e cobrar o texto velho faria este acusador apontar uma REGRESSÃO QUE NÃO EXISTE, que é o pior
+ * defeito possível num contrato: o time aprende a ignorar justamente o que protege a linha mais
+ * perigosa do arquivo.
+ *
+ * E A COBRANÇA NÃO PODE VOLTAR A SER "o nome da coluna aparece no texto", porque as três maneiras
+ * de errar a troca CITAM a coluna e nenhuma delas falha sozinha: `and c.banco_talentos` (sinal
+ * invertido) anonimiza exatamente os protegidos; `is not null` é sempre verdadeiro numa coluna NOT
+ * NULL; e a cláusula ausente tem o mesmo efeito da anterior. O que se lê aqui é o SENTIDO.
+ */
+function semLiterais(clausula: string): string {
+  return clausula.replace(/'[^']*'/g, " ");
+}
+
+export function clausulaDaRetencao(sqlTexto: string): string {
+  return clausulasDoWhere(sqlTexto).find((c) => /\bbanco_talentos\b/.test(semLiterais(c))) ?? "";
+}
+
+/** "A pessoa NÃO está marcada", em qualquer das formas que o Postgres aceita para isso. */
+function exigeRetencaoDesmarcada(clausula: string): boolean {
+  const c = semLiterais(clausula);
+  return (
+    /\b[a-z_]*\.?banco_talentos\s*(=|is)\s*false/.test(c) ||
+    /\bnot\s+[a-z_]*\.?banco_talentos\b/.test(c) ||
+    /\b[a-z_]*\.?banco_talentos\s+is\s+not\s+true/.test(c)
+  );
+}
+
+/** "A pessoa ESTÁ marcada", que nesta cláusula é o sinal invertido: apaga só quem é protegido. */
+function exigeRetencaoMarcada(clausula: string): boolean {
+  const c = semLiterais(clausula);
+  if (/\b[a-z_]*\.?banco_talentos\s*(=|is)\s*true/.test(c)) return true;
+  if (/\bbanco_talentos\s+is\s+not\s+null/.test(c)) return true;
+  const semNegacao = c.replace(/not\s+[a-z_]*\.?banco_talentos\b/g, " ");
+  return /\b[a-z_]*\.?banco_talentos\b(?!\s*(=|is))/.test(semNegacao);
+}
+
+/**
+ * ─ A CLÁUSULA TEM DE SER RESTRITIVA, E ISSO NÃO SE MEDE OLHANDO A COMPARAÇÃO ───────────────────
+ *
+ * As duas funções acima leem o SENTIDO da comparação, e param aí. Enquanto era só isso, estas duas
+ * cláusulas passavam VERDES e desligavam a proteção inteira, cada uma de um jeito:
+ *
+ *   `and (c.banco_talentos = false or 1=1)`  a alternativa é sempre verdadeira, então a cláusula
+ *                                            deixa de excluir alguém: todo protegido volta a ser
+ *                                            alcançável, e a comparação certa continua no texto,
+ *                                            visível na revisão de código, dizendo o contrário.
+ *
+ *   `and c.banco_talentos = false or true`   PIOR: o `or` tem precedência MENOR que o `and`, então
+ *                                            ele não liga só esta cláusula, liga o `where` INTEIRO.
+ *                                            O expurgo passa a alcançar TODO MUNDO, inclusive quem
+ *                                            está em processo vivo e quem nem prazo tem, e a
+ *                                            anonimização é irreversível.
+ *
+ * ┌─ A RÉGUA É SOBRE A CLÁUSULA DA RETENÇÃO, E NUNCA SOBRE O `where` INTEIRO ───────────────────┐
+ * │ Um `or` legítimo pode existir DENTRO de um parêntese de outra cláusula do mesmo `where` (uma │
+ * │ subconsulta que aceita duas situações, por exemplo), e reprovar isso mediria desenho. Por    │
+ * │ isso a leitura é por PROFUNDIDADE: só o `or` que está em profundidade ZERO da cláusula da    │
+ * │ retenção é alternativa DELA; tudo o que está dentro de parêntese é assunto de outra pessoa.  │
+ * │                                                                                             │
+ * │ O EMBRULHO REDUNDANTE É DESFEITO ANTES, e sem isso a régua não pegaria o primeiro mutante:   │
+ * │ `(c.banco_talentos = false or 1=1)` é uma cláusula inteira entre parênteses, e o `or` dela   │
+ * │ está em profundidade 1 por acidente de escrita, não por estar aninhado em outra condição.    │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+export function semEmbrulhoRedundante(clausula: string): string {
+  let c = clausula.trim();
+  // Só desembrulha quando o primeiro `(` é o par do ÚLTIMO `)`: `(a) or (b)` não é um embrulho.
+  for (;;) {
+    if (!c.startsWith("(") || !c.endsWith(")")) return c;
+    let profundidade = 0;
+    let emAspas = false;
+    let fechouAntes = false;
+    for (let i = 0; i < c.length - 1; i += 1) {
+      const ch = c[i];
+      if (ch === "'") emAspas = !emAspas;
+      if (emAspas) continue;
+      if (ch === "(") profundidade += 1;
+      if (ch === ")") profundidade -= 1;
+      if (profundidade === 0 && i > 0) {
+        fechouAntes = true;
+        break;
+      }
+    }
+    if (fechouAntes) return c;
+    c = c.slice(1, -1).trim();
+  }
+}
+
+/** O texto da cláusula com todo conteúdo entre parênteses (e todo literal) trocado por espaço. */
+function soOTopo(clausula: string): string {
+  const c = semLiterais(semEmbrulhoRedundante(clausula));
+  let profundidade = 0;
+  let topo = "";
+  for (const ch of c) {
+    if (ch === "(") {
+      profundidade += 1;
+      topo += " ";
+      continue;
+    }
+    if (ch === ")") {
+      profundidade = Math.max(0, profundidade - 1);
+      topo += " ";
+      continue;
+    }
+    topo += profundidade === 0 ? ch : " ";
+  }
+  return topo;
+}
+
+/** "A cláusula tem uma ALTERNATIVA de topo", que é o que a torna não restritiva. */
+export function temAlternativaDeTopo(clausula: string): boolean {
+  return /\bor\b/.test(soOTopo(clausula));
 }
 
 /** A cláusula que exige AO MENOS UM processo encerrado (o `exists` simples). */
@@ -279,8 +415,27 @@ export function violacoesDoContrato(sqlTexto: string): string[] {
   }
 
   // ── O RESTO DA REGRA, QUE A CORREÇÃO NÃO PODE ATROPELAR ───────────────────
-  if (!t.includes("c.origem <> 'banco_talentos'")) {
-    v.push("REGRESSAO_BANCO_DE_TALENTOS: candidato de banco não expira (decisão do diretor).");
+  const retencao = clausulaDaRetencao(t);
+  if (!retencao) {
+    v.push(
+      "RETENCAO_NAO_LIDA: nenhuma cláusula de topo lê `banco_talentos`. Candidato de banco NÃO EXPIRA (decisão do diretor), e sem esta cláusula a proteção some inteira, em silêncio: o expurgo anonimiza quem o banco de talentos existe para guardar.",
+    );
+  } else {
+    if (exigeRetencaoMarcada(retencao) || !exigeRetencaoDesmarcada(retencao)) {
+      v.push(
+        "RETENCAO_SENTIDO_INVERTIDO: a cláusula tem de alcançar quem NÃO está marcado (`c.banco_talentos = false`). Escrita pela presença, ela anonimiza EXATAMENTE E SOMENTE os protegidos, sem nada falhar e sem volta, e um teste de \"o expurgo funciona\" fica verde porque alguém foi expurgado.",
+      );
+    }
+    if (temAlternativaDeTopo(retencao)) {
+      v.push(
+        "RETENCAO_NAO_RESTRITIVA: a cláusula da retenção tem um `or` de topo, então ela deixou de EXCLUIR alguém. Com `or 1=1` a proteção some com a comparação certa ainda escrita no texto; sem parênteses (`= false or true`), o `or` tem precedência menor que o `and` e liga o `where` INTEIRO, e aí o expurgo alcança todo mundo, inclusive quem está em processo vivo. Anonimizar quem devia ser preservado é irreversível.",
+      );
+    }
+  }
+  if (/'banco_talentos'/i.test(t)) {
+    v.push(
+      "RETENCAO_LE_A_ORIGEM_MORTA: a consulta compara `origem` com um valor que saiu do tipo na migration 0112. Isso derruba a varredura inteira com `invalid input value for enum`, e o expurgo para de rodar sem ninguém notar.",
+    );
   }
   if (!t.includes("interval '2 years'")) {
     v.push("REGRESSAO_PRAZO: o prazo do diretor é de 2 anos.");
@@ -311,11 +466,10 @@ export const SQL_REFERENCIA = sqlExecutavel(sql`
          email = null,
          telefone = null,
          data_nascimento = null,
-         id_candidate_pandape = null,
          anonimizado_em = now(),
          atualizado_em = now()
    where c.anonimizado_em is null
-     and c.origem <> 'BANCO_TALENTOS'
+     and c.banco_talentos = false
      and exists (select 1 from as_candidaturas k where k.candidato_id = c.id)
      and not exists (
            select 1
@@ -411,6 +565,30 @@ export const MUTANTES: Mutante[] = [
         `and k.situacao in (${VIVAS_NO_SQL}) and s.encerra = false)`,
     ),
     regraEsperada: "PROTECAO_OLHA_UMA_CANDIDATURA_SO",
+  },
+  {
+    nome: "8. o sinal da retenção se inverte",
+    dano: "o expurgo anonimiza EXATAMENTE E SOMENTE quem está no banco de talentos, que é quem nunca poderia ser tocado. Irreversível, e uma prova de que `expurgar()` apaga alguém fica verde.",
+    sql: trocar("c.banco_talentos = false", "c.banco_talentos = true"),
+    regraEsperada: "RETENCAO_SENTIDO_INVERTIDO",
+  },
+  {
+    nome: "9. a cláusula da retenção some",
+    dano: "candidato de banco passa a expirar como qualquer outro, e a decisão do diretor deixa de existir sem nada falhar.",
+    sql: trocar(" and c.banco_talentos = false", ""),
+    regraEsperada: "RETENCAO_NAO_LIDA",
+  },
+  {
+    nome: "10. a retenção ganha uma alternativa sempre verdadeira, entre parênteses",
+    dano: "a comparação certa continua no texto, visível na revisão de código, e não exclui mais ninguém: todo mundo do banco de talentos volta a ser anonimizável.",
+    sql: trocar("c.banco_talentos = false", "(c.banco_talentos = false or 1=1)"),
+    regraEsperada: "RETENCAO_NAO_RESTRITIVA",
+  },
+  {
+    nome: "11. a retenção ganha um `or true` SEM parênteses",
+    dano: "o `or` tem precedência menor que o `and` e liga o `where` INTEIRO: o expurgo passa a alcançar TODO MUNDO, inclusive quem está em processo vivo e quem não tem prazo vencido. Irreversível.",
+    sql: trocar("c.banco_talentos = false", "c.banco_talentos = false or true"),
+    regraEsperada: "RETENCAO_NAO_RESTRITIVA",
   },
   {
     nome: "7. o relógio corre do encerramento MAIS ANTIGO (`min`)",

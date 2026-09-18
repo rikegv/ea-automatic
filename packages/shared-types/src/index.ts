@@ -2531,18 +2531,51 @@ export interface VagaContextoAs {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * DE ONDE O CANDIDATO VEIO. `PANDAPE` é reservado para a onda 4 (a varredura do ATS), e hoje só a
- * coluna existe: nenhuma chamada de API é feita nesta onda.
+ * ─ DE QUAL SISTEMA A PLATAFORMA PUXOU ESTA PESSOA. UMA pergunta, e só ela ───────────────────────
+ *
+ * ┌─ ESTA LISTA TINHA QUATRO VALORES QUE RESPONDIAM TRES PERGUNTAS, e a mistura custava caro ────┐
+ * │ `BANCO_TALENTOS` vivia aqui e NAO e origem de nada: e classe de RETENCAO, o valor que isenta │
+ * │ a pessoa do expurgo PARA SEMPRE. Ter a retencao escondida dentro de um campo de origem fazia │
+ * │ com que conceder vida eterna a dado pessoal fosse um item de seletor como outro qualquer,    │
+ * │ alcancavel por quem editasse a ficha, sem papel e sem rastro.                                 │
+ * │                                                                                               │
+ * │ A SEPARACAO foi decisao do diretor em 17/09/2026, tomada na unica janela em que ela e de      │
+ * │ graca: `as_candidatos` com ZERO linhas nos dois bancos, medido. Nada a migrar, nada a         │
+ * │ converter. A retencao virou `as_candidatos.banco_talentos`, campo proprio, com cadeado de     │
+ * │ SUPER_ADMIN e trilha. Depois da ingestao ligada, a mesma separacao seria migracao de dado     │
+ * │ pessoal.                                                                                      │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * `DIGAI` entra junto porque origem passou a significar EXATAMENTE "de qual sistema a plataforma
+ * puxou", e o Digai e o segundo sistema. Quando a ingestao roda, quem preenche este campo e a
+ * PLATAFORMA, que sabe por qual API buscou: ela nao pergunta a ninguem e nao pode errar. O valor
+ * digitado na tela vale so para o cadastro manual.
  */
-export const AS_CANDIDATO_ORIGEM = ["PANDAPE", "MANUAL", "INDICACAO", "BANCO_TALENTOS"] as const;
+export const AS_CANDIDATO_ORIGEM = ["PANDAPE", "DIGAI", "MANUAL", "INDICACAO"] as const;
 export type AsCandidatoOrigem = (typeof AS_CANDIDATO_ORIGEM)[number];
 
 export const AS_CANDIDATO_ORIGEM_LABEL: Record<AsCandidatoOrigem, string> = {
   PANDAPE: "Pandapé",
+  DIGAI: "Digai",
   MANUAL: "Cadastro Manual",
   INDICACAO: "Indicação",
-  BANCO_TALENTOS: "Banco De Talentos",
 };
+
+/**
+ * ─ A RETENCAO, QUE SAIU DA ORIGEM E AGORA E CAMPO PROPRIO ───────────────────────────────────────
+ *
+ * Marcada, a pessoa NAO EXPIRA: o expurgo por retencao a ignora para sempre, porque o banco de
+ * talentos existe justamente para que alguem seja procurado daqui a tres anos.
+ *
+ * E POR ISSO QUE ELA TEM CADEADO: e a unica marca do modulo que concede vida eterna a dado
+ * pessoal, e so SUPER_ADMIN a coloca ou tira, com quem e quando registrados. O rotulo vive aqui
+ * para a tela e a trilha usarem a MESMA palavra, e nao duas que divergem no primeiro ajuste.
+ */
+export const BANCO_TALENTOS_LABEL = "Banco De Talentos";
+
+/** O que aconteceu com uma tentativa de mexer na retencao. `RECUSADO` tambem vira linha na trilha. */
+export const RETENCAO_EVENTO_RESULTADO = ["APLICADO", "RECUSADO"] as const;
+export type RetencaoEventoResultado = (typeof RETENCAO_EVENTO_RESULTADO)[number];
 
 /**
  * AS ETAPAS DO FUNIL, NA ORDEM. A ordem desta lista é a ordem do funil, e é dela que o domínio
@@ -2807,6 +2840,14 @@ export interface AsCandidatoListItem {
   temCpf: boolean;
   /** Em quantas vagas esta pessoa está, contando só as candidaturas vivas ou já aprovadas. */
   candidaturasAtivas: number;
+  /**
+   * A RETENCAO: marcada, a pessoa NAO entra no descarte automatico. Ver `BANCO_TALENTOS_LABEL`.
+   *
+   * ELA VEM NA LISTA, e isso passa pela secao 1 do protocolo LGPD: e CLASSIFICACAO, no mesmo nivel
+   * de `temCpf` e de `origem`, e nao identificador. Sem ela na lista nao ha como filtrar nem ordenar
+   * por quem nao expira, que e a pergunta que a coluna existe para responder.
+   */
+  bancoTalentos: boolean;
   criadoEm: string;
 }
 
@@ -2827,6 +2868,11 @@ export interface AsCandidatoFicha {
   cidade: string | null;
   uf: string | null;
   origem: AsCandidatoOrigem;
+  /**
+   * A RETENCAO desta pessoa. A ficha EXIBE para todos; MUDAR e so de SUPER_ADMIN, com trilha, e
+   * essa guarda mora no backend, nunca na tela: esconder um controle nao e travar uma escrita.
+   */
+  bancoTalentos: boolean;
   criadoEm: string;
   anonimizadoEm: string | null;
   candidaturas: AsCandidaturaItem[];

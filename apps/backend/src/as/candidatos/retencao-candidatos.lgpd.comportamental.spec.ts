@@ -193,10 +193,16 @@ describe("expurgo: o RELÓGIO da candidatura que só encerrou porque a vaga ence
     expect(relogio).not.toMatch(/\blimit\b/);
   });
 
-  /** O resto da regra que a correção não pode atropelar. */
+  /**
+   * O resto da regra que a correção não pode atropelar.
+   *
+   * A retenção virou coluna própria na migration 0112 (`as_candidatos.banco_talentos`), então o
+   * texto cobrado aqui acompanhou. O SENTIDO da cláusula (alcança quem NÃO está marcado, nunca o
+   * contrário) é medido pelo contrato, em `violacoesDoContrato`, e não por esta asserção de texto.
+   */
   it("candidato de banco não expira, e o prazo continua sendo de 2 anos", async () => {
     const q = (await consulta()).toLowerCase();
-    expect(q).toContain("c.origem <> 'banco_talentos'");
+    expect(q).toContain("c.banco_talentos = false");
     expect(q).toContain("interval '2 years'");
   });
 });

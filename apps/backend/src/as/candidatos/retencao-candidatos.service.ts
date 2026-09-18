@@ -39,7 +39,7 @@ const SITUACOES_VIVAS_SQL = sql.raw(SITUACOES_VIVAS.map((s) => `'${s}'`).join(",
  *
  * A REGRA, em duas linhas:
  *   - candidato DESCARTADO: expurgado automaticamente 2 ANOS depois;
- *   - candidato de BANCO (`origem = BANCO_TALENTOS`): NÃO EXPIRA.
+ *   - candidato de BANCO (`as_candidatos.banco_talentos`): NÃO EXPIRA.
  *
  * O PRECEDENTE REUSADO é o `ExpurgoService` da Admissão (`admissoes/expurgo.service.ts`), e ele
  * encaixa inteiro: varredura in-process a cada 1h, com `timer.unref()`, que nula os identificadores
@@ -52,7 +52,7 @@ const SITUACOES_VIVAS_SQL = sql.raw(SITUACOES_VIVAS.map((s) => `'${s}'`).join(",
  * aprovado em vagas passadas. Um processo de dois anos atrás passaria a mostrar 7 aprovados onde
  * houve 10, e o indicador de entrega da vaga mentiria para sempre. O que a LGPD pede é que o dado
  * PESSOAL não fique retido além do necessário, e é exatamente o dado pessoal que sai daqui: CPF,
- * e-mail, telefone, data de nascimento e o id do ATS. O nome é substituído por um marcador.
+ * e-mail, telefone, data de nascimento e as identidades externas. O nome vira um marcador.
  *
  * O QUE FICA: cidade e UF, que sozinhas não identificam ninguém e sustentam a estatística regional,
  * e as candidaturas, que passam a apontar para uma pessoa sem identidade. É a mesma escolha do
@@ -154,22 +154,57 @@ export class RetencaoCandidatosService implements OnModuleInit, OnModuleDestroy 
    * O `update ... where` inteiro em SQL, e não em duas etapas (buscar depois atualizar), porque em
    * duas etapas os ids das pessoas a expurgar circulariam pela memória do processo sem necessidade,
    * e porque a operação passa a ser atômica: ou a linha vira anônima, ou fica como estava.
+   *
+   * ┌─ UMA INSTRUÇÃO SÓ, COM CTE QUE MODIFICA DADO, E ISSO NÃO É ESTILO ────────────────────────┐
+   * │ A partir da fundação da plataforma unificadora o expurgo tem TRÊS efeitos: anonimiza a     │
+   * │ pessoa, APAGA as identidades externas dela e NULA o id de match das candidaturas. A forma  │
+   * │ óbvia seria três escritas numa transação, e o parecer de segurança a VETOU.                │
+   * │                                                                                             │
+   * │ O MOTIVO É O MODO DE FALHA, e ele é §A.33 aplicado a dado pessoal: com escritas separadas, │
+   * │ a falha da SEGUNDA deixa o candidato já carimbado com `anonimizado_em`, e o predicado da    │
+   * │ varredura (`c.anonimizado_em is null`) faz com que ela NUNCA MAIS volte àquela linha. O    │
+   * │ identificador externo viraria permanente EM SILÊNCIO, sem nada falhar do ponto de vista do │
+   * │ serviço. Numa instrução só, o banco garante que os três efeitos caem juntos ou nenhum cai. │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * ┌─ A VARREDURA É CICATRIZANTE, e é ela que fecha o caminho P3 do parecer ────────────────────┐
+   * │ Identidade anexada DEPOIS da anonimização (uma ingestão que casasse por CPF com alguém já   │
+   * │ expurgado, um reprocessamento antigo) nunca seria alcançada, porque a pessoa já não entra   │
+   * │ no `update`. Por isso cada passada também apaga identidade de quem JÁ TEM `anonimizado_em`, │
+   * │ e é isso que torna a rotina IDEMPOTENTE: ela conserta sozinha qualquer falha parcial de uma │
+   * │ passada anterior, inclusive as anteriores a este arquivo existir.                            │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
    */
   async expurgar(): Promise<number> {
     const linhas = await this.db.execute(sql`
+      with alvo as (
       update as_candidatos c
          set nome = 'Candidato Expurgado',
              cpf = null,
              email = null,
              telefone = null,
              data_nascimento = null,
-             id_candidate_pandape = null,
              anonimizado_em = now(),
              atualizado_em = now()
        where c.anonimizado_em is null
-         -- CANDIDATO DE BANCO NÃO EXPIRA (decisão do diretor). É o banco de talentos: a pessoa está
-         -- ali justamente para ser procurada daqui a três anos.
-         and c.origem <> 'BANCO_TALENTOS'
+         -- ┌─ CANDIDATO DE BANCO NÃO EXPIRA (decisão do diretor), E ESTA É A LINHA MAIS PERIGOSA ┐
+         -- │ A pessoa marcada está ali justamente para ser procurada daqui a três anos.            │
+         -- │                                                                                       │
+         -- │ A FORMA CANÔNICA É "= false", E NÃO A FORMA VERDADEIRA POR PRESENÇA. Isto lia          │
+         -- │ "origem <> BANCO_TALENTOS" até a migration 0112, quando a retenção deixou de ser um    │
+         -- │ valor de origem e virou coluna própria. As três maneiras de errar a troca, e o que     │
+         -- │ cada uma causa, escritas aqui porque NENHUMA DELAS FALHA:                              │
+         -- │   1. "and c.banco_talentos" (sinal invertido): anonimiza EXATAMENTE E SOMENTE os       │
+         -- │      protegidos. É irreversível, e um teste de "o expurgo funciona" fica VERDE,        │
+         -- │      porque alguém foi expurgado;                                                      │
+         -- │   2. "and c.banco_talentos is not null": a coluna é NOT NULL, então isto é sempre      │
+         -- │      verdadeiro e a proteção some inteira, sem nada quebrar;                           │
+         -- │   3. cláusula ausente: o mesmo efeito do item 2.                                       │
+         -- │                                                                                       │
+         -- │ É por isso que a cobertura desta linha mede o SENTIDO da cláusula (alcança quem NÃO    │
+         -- │ tem a marca, não alcança quem tem), e não a presença do nome da coluna no texto.       │
+         -- └───────────────────────────────────────────────────────────────────────────────────────┘
+         and c.banco_talentos = false
          -- TEM DE HAVER PROCESSO ENCERRADO: sem candidatura nenhuma não há prazo a contar.
          and exists (select 1 from as_candidaturas k where k.candidato_id = c.id)
          -- E NENHUM PROCESSO VIVO EM VAGA QUE AINDA NÃO ACABOU. Descartado numa vaga e ativo em
@@ -258,9 +293,41 @@ export class RetencaoCandidatosService implements OnModuleInit, OnModuleDestroy 
                where k.candidato_id = c.id)
              <= now() - interval '${sql.raw(RetencaoCandidatosService.RETENCAO)}'
       returning c.id
+      ),
+      -- ─ QUEM JÁ ESTAVA ANONIMIZADO ANTES DESTA PASSADA ──────────────────────────────────────
+      -- As duas listas são DISJUNTAS, e é por isso que as escritas abaixo precisam das duas: todas
+      -- as CTEs enxergam o MESMO retrato do banco, o de antes do "update" do "alvo", então quem
+      -- está sendo anonimizado AGORA ainda tem "anonimizado_em is null" aqui e não apareceria
+      -- nesta lista. Somar "alvo" e esta é o que cobre o caso de hoje e o rastro do passado.
+      ja_anonimizados as (
+        select id from as_candidatos where anonimizado_em is not null
+      ),
+      -- ─ A IDENTIDADE EXTERNA É APAGADA, E NÃO ANONIMIZADA ───────────────────────────────────
+      -- A assimetria com a linha do candidato é deliberada: a linha de identidade É o
+      -- identificador, inteira. Não sobra dela nada que sustente contagem histórica, ao contrário
+      -- da linha do candidato, que sustenta os aprovados das vagas passadas. Anonimizá-la deixaria
+      -- uma linha vazia apontando para ninguém.
+      identidades_apagadas as (
+        delete from as_identidades_externas
+         where candidato_id in (select id from alvo)
+            or candidato_id in (select id from ja_anonimizados)
+      )
+      -- ─ A CTE "matches_nulados" SAIU DAQUI, E COM ELA A SEGUNDA GAVETA ──────────────────────
+      -- Ela nulava "as_candidaturas.id_match_pandape", identificador da PESSOA no ATS que
+      -- sobrevivia à anonimização. A COLUNA FOI DERRUBADA (migration 0112): a identidade externa
+      -- tem um dono só dentro do módulo A&S, "as_identidades_externas", que é apagada pela CTE
+      -- logo acima. Não há mais gaveta paralela a nular, e manter a CTE derrubaria a varredura
+      -- inteira com "column does not exist".
+      --
+      -- "identidades_apagadas" CONTINUA, e a distinção importa para quem ler este diff: a que saiu
+      -- é a da coluna morta, nunca a do desenho novo.
+      -- A CONTAGEM SAI DO "alvo", e só dele: o que se reporta é quantas PESSOAS foram anonimizadas
+      -- nesta passada. As linhas cicatrizadas não entram na conta, porque não são gente nova
+      -- expurgada, e somá-las faria o número do log oscilar sem ninguém ter sido expurgado.
+      select count(*)::int as n from alvo
     `);
 
-    const n = Array.isArray(linhas) ? linhas.length : (linhas as { length?: number }).length ?? 0;
+    const n = contarAnonimizados(linhas);
     // §A.6: só a CONTAGEM vai para o log. Nome, id e CPF nunca.
     if (n > 0) this.logger.log(`Retenção A&S: ${n} candidato(s) anonimizado(s) por prazo vencido.`);
     return n;
@@ -278,4 +345,26 @@ export class RetencaoCandidatosService implements OnModuleInit, OnModuleDestroy 
  */
 function mensagemDoErro(err: unknown): string {
   return err instanceof Error ? err.message : "erro sem mensagem";
+}
+
+/**
+ * QUANTAS PESSOAS FORAM ANONIMIZADAS, lido do `select count(*)` que fecha a instrução.
+ *
+ * ANTES BASTAVA `linhas.length`, porque a instrução era um `update ... returning c.id` e o driver
+ * devolvia uma linha por pessoa. Com a CTE, o que volta é UMA linha com a contagem, e ler o
+ * `length` ali devolveria 1 em toda passada, inclusive nas passadas em que ninguém venceu prazo: o
+ * log passaria a anunciar um expurgo por hora, para sempre, e o número perderia todo o valor.
+ *
+ * A CONTAGEM VEM DO BANCO E NÃO DA MEMÓRIA, e isso é §A.6: o `returning c.id` trazia os ids das
+ * pessoas expurgadas para dentro do processo sem que ninguém precisasse deles. Agora nem isso
+ * circula, só um inteiro.
+ *
+ * DEFENSIVO NA LEITURA porque o formato do driver não é contrato: `?? 0` em vez de `!`, e
+ * `Number(...)` porque um `count` pode chegar como texto (o Postgres devolve bigint, e o cast para
+ * `int` na consulta é o que normalmente evita isso; a conversão aqui é a segunda fechadura).
+ */
+function contarAnonimizados(linhas: unknown): number {
+  const primeira = Array.isArray(linhas) ? (linhas[0] as { n?: unknown } | undefined) : undefined;
+  const n = Number(primeira?.n ?? 0);
+  return Number.isFinite(n) ? n : 0;
 }

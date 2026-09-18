@@ -22,6 +22,7 @@ import { apiFetch, ApiError } from "@/lib/api";
 import type { PosicaoLado } from "@/lib/as-vaga-acoes";
 import {
   type AsCandidatoFicha,
+  type AsCandidatoOrigem,
   type AsCandidatoListItem,
   type AsCandidaturaItem,
   type AsContatoItem,
@@ -36,7 +37,16 @@ export interface BuscaCandidatos {
   nome?: string;
   /** §A.6: viaja NO CORPO do POST. Nunca em URL, nunca em query string. */
   cpf?: string;
-  origem?: string;
+  /**
+   * DE QUAL SISTEMA A PESSOA VEIO, e SÓ isso (fechamento da fundação, 17/09/2026).
+   *
+   * O TIPO DEIXOU DE SER `string` de propósito. `BANCO_TALENTOS` morava nesta lista e não era
+   * origem de nada: era classe de RETENÇÃO, a marca que isenta a pessoa do expurgo para sempre.
+   * Ele saiu para campo próprio, com cadeado de SUPER_ADMIN, e com o tipo estreito o compilador
+   * passa a recusar quem tentar filtrar pelo valor velho, em vez de mandar ao backend um filtro
+   * que nunca casa com ninguém e devolve lista vazia sem explicar por quê.
+   */
+  origem?: AsCandidatoOrigem;
   vagaId?: string;
   /**
    * SÓ QUEM NÃO ESTÁ EM VAGA NENHUMA. É o filtro que abre a alocação SEM CPF: a lista devolve nome,
@@ -470,6 +480,27 @@ export function bancoPrecisaCiencia(err: unknown): AsBancoPrecisaCiencia | null 
  * MÁSCARA DE CPF, a mesma do wizard de Nova Admissão e da Central de Vagas. O campo mostra
  * "123.456.789-01" e o que viaja é o número limpo, no CORPO do POST (§A.6).
  */
+/**
+ * ─ A RETENÇÃO, LIDA DE UM LUGAR SÓ ──────────────────────────────────────────────────────────────
+ *
+ * `bancoTalentos` marcado quer dizer que a pessoa NÃO ENTRA no descarte automático: ela fica na
+ * base para ser procurada daqui a anos, que é a razão de o banco de talentos existir.
+ *
+ * POR QUE A ENTRADA É `unknown` E NÃO A LINHA DA LISTA: o campo é do contrato compartilhado
+ * (`@ea/shared-types`), que é ARQUIVO DO COORDENADOR e não se escreve daqui (§A.39). Enquanto ele
+ * não declara o campo nas interfaces, tipar o parâmetro com elas obrigaria a tela a inventar um
+ * segundo vocabulário, que é exatamente a divergência que o campo único existe para evitar. A
+ * leitura defensiva atravessa a janela sem inventar nada: ausente lê como NÃO retido, que é o
+ * padrão da coluna no banco (`NOT NULL DEFAULT false`), e o dia em que o contrato declarar o campo
+ * esta função continua respondendo a mesma coisa, sem uma linha de tela mudar.
+ *
+ * ELA É O ÚNICO LEITOR: listagem, ficha, filtro e ordenação passam por aqui, então não há como
+ * duas superfícies discordarem sobre quem está no banco de talentos.
+ */
+export function ehBancoTalentos(alvo: unknown): boolean {
+  return (alvo as { bancoTalentos?: unknown } | null | undefined)?.bancoTalentos === true;
+}
+
 export function formatCpf(valor: string): string {
   const d = valor.replace(/\D/g, "").slice(0, 11);
   return d

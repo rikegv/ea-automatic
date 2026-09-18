@@ -31,6 +31,7 @@ import {
   asCandidaturaEtapas,
   asCandidaturas,
   asContatos,
+  asRetencaoEventos,
   usuarios,
   vagas,
 } from "../../db/schema";
@@ -61,6 +62,14 @@ import {
   type SituacaoQueOcupaPosicao,
 } from "../../domain/candidatura";
 import { ordenarLinhaDoTempo, tipoDoEvento } from "../../domain/candidatura-historico";
+import { acaoDaRetencao } from "../../domain/retencao-evento";
+
+/**
+ * A TRANSAÇÃO COMO O DRIZZLE A ENTREGA, derivada do próprio tipo do cliente e nunca escrita à mão:
+ * um apelido digitado divergiria do `Database` na primeira troca de driver. Mesma definição de
+ * `encerrar-candidatura.ts`, pelo mesmo motivo.
+ */
+type DbTransaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 /*
  * A GRAVAÇÃO DA SAÍDA SAIU DAQUI E VIROU FUNÇÃO DE MÓDULO (ver o arquivo, que explica por quê): o
  * cancelamento FORÇADO da vaga precisa do MESMO gesto dentro da transação dele, e duas cópias da
@@ -182,8 +191,22 @@ export class CandidatosService {
    * virar erro 500.
    *
    * §A.6: nem a consulta nem a mensagem repetem o número.
+   *
+   * ┌─ POR QUE O CADASTRO VIROU TRANSACIONAL, E ELE NÃO ERA ─────────────────────────────────────┐
+   * │ A RETENÇÃO (`banco_talentos`) É A ÚNICA MARCA DO SISTEMA QUE CONCEDE VIDA ETERNA A DADO    │
+   * │ PESSOAL, e ela tem cadeado de SUPER_ADMIN. Fechar só a EDIÇÃO deixaria a porta ao lado     │
+   * │ escancarada: quem quisesse imortalizar alguém cadastraria a pessoa de novo, já marcada.    │
+   * │                                                                                            │
+   * │ E A TENTATIVA RECUSADA TAMBÉM VIRA LINHA DE TRILHA, que é o que obriga a transação: a      │
+   * │ linha de `RECUSADO` precisa do `candidato_id`, que só existe DEPOIS do insert. Cadastro    │
+   * │ gravado com a trilha da tentativa perdida é o modo de falha da §A.33 aplicado aqui: do     │
+   * │ ponto de vista do sistema nada falhou, e a tentativa some.                                 │
+   * │                                                                                            │
+   * │ O AUTOR CHEGA INTEIRO (`AuthUser`), E NÃO SÓ O `id`, porque aqui se confere PAPEL além de  │
+   * │ registrar QUEM. A trilha (`criadoPorId`) continua vindo da sessão, nunca do corpo.         │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
    */
-  async criar(dto: CriarCandidatoDto, criadoPorId: string): Promise<AsCandidatoFicha> {
+  async criar(dto: CriarCandidatoDto, autor: AuthUser): Promise<AsCandidatoFicha> {
     const cpf = this.cpfOuNulo(dto.cpf);
 
     if (cpf) {
@@ -196,22 +219,37 @@ export class CandidatosService {
 
     let id: string;
     try {
-      const [row] = await this.db
-        .insert(asCandidatos)
-        .values({
-          nome: dto.nome.trim(),
-          cpf,
-          email: texto(dto.email),
-          telefone: texto(dto.telefone),
-          dataNascimento: texto(dto.dataNascimento),
-          cidade: texto(dto.cidade),
-          uf: dto.uf ?? null,
-          origem: dto.origem ?? "MANUAL",
-          idCandidatePandape: texto(dto.idCandidatePandape),
-          criadoPorId,
-        })
-        .returning({ id: asCandidatos.id });
-      id = row.id;
+      id = await this.db.transaction(async (tx) => {
+        const [row] = await tx
+          .insert(asCandidatos)
+          .values({
+            nome: dto.nome.trim(),
+            cpf,
+            email: texto(dto.email),
+            telefone: texto(dto.telefone),
+            dataNascimento: texto(dto.dataNascimento),
+            cidade: texto(dto.cidade),
+            uf: dto.uf ?? null,
+            origem: dto.origem ?? "MANUAL",
+            /*
+             * `bancoTalentos` NÃO ESTÁ NESTA LISTA, E A AUSÊNCIA É A TRAVA, não um esquecimento.
+             * A coluna tem UM escritor só, `aplicarRetencao`, que confere papel e grava a trilha na
+             * mesma transação. Enquanto este `insert` não a listar, toda porta futura que insira
+             * candidato sem passar por lá (a INGESTÃO da onda 4, que insere SEM usuário autor)
+             * nasce PROIBIDA de conceder retenção, sem ninguém precisar lembrar disso.
+             */
+            criadoPorId: autor.id,
+          })
+          .returning({ id: asCandidatos.id });
+
+        // A pessoa nasce SEM retenção (o default da coluna). Só há o que decidir quando o corpo
+        // trouxe um BOOLEANO: aí o cadeado e a trilha entram, na MESMA transação do cadastro.
+        // Sobre o teste ser por `typeof`, e não por `!== undefined`, ver `aplicarRetencao`.
+        if (typeof dto.bancoTalentos === "boolean") {
+          await this.aplicarRetencao(tx, row.id, dto.bancoTalentos, autor);
+        }
+        return row.id;
+      });
     } catch (err) {
       // A SEGUNDA CAMADA DO DEDUP chegando: a corrida entre dois cadastros simultâneos com o mesmo
       // CPF. Sem esta tradução, o consultor veria um 500 e teria certeza de que o sistema quebrou.
@@ -225,7 +263,7 @@ export class CandidatosService {
    * EDITAR a ficha. Mesmo dedup do cadastro, porque preencher o CPF depois é o caminho normal aqui:
    * a pessoa entra sem CPF na captação e informa o número quando o processo avança.
    */
-  async editar(id: string, dto: EditarCandidatoDto): Promise<AsCandidatoFicha> {
+  async editar(id: string, dto: EditarCandidatoDto, autor: AuthUser): Promise<AsCandidatoFicha> {
     const atual = await this.db.query.asCandidatos.findFirst({ where: eq(asCandidatos.id, id) });
     if (!atual) throw new NotFoundException("Candidato não encontrado.");
 
@@ -239,26 +277,127 @@ export class CandidatosService {
     }
 
     try {
-      await this.db
-        .update(asCandidatos)
-        .set({
-          nome: dto.nome?.trim() ?? atual.nome,
-          cpf,
-          email: dto.email === undefined ? atual.email : texto(dto.email),
-          telefone: dto.telefone === undefined ? atual.telefone : texto(dto.telefone),
-          dataNascimento:
-            dto.dataNascimento === undefined ? atual.dataNascimento : texto(dto.dataNascimento),
-          cidade: dto.cidade === undefined ? atual.cidade : texto(dto.cidade),
-          uf: dto.uf === undefined ? atual.uf : (dto.uf ?? null),
-          origem: dto.origem ?? atual.origem,
-          atualizadoEm: new Date(),
-        })
-        .where(eq(asCandidatos.id, id));
+      await this.db.transaction(async (tx) => {
+        await tx
+          .update(asCandidatos)
+          .set({
+            nome: dto.nome?.trim() ?? atual.nome,
+            cpf,
+            email: dto.email === undefined ? atual.email : texto(dto.email),
+            telefone: dto.telefone === undefined ? atual.telefone : texto(dto.telefone),
+            dataNascimento:
+              dto.dataNascimento === undefined ? atual.dataNascimento : texto(dto.dataNascimento),
+            cidade: dto.cidade === undefined ? atual.cidade : texto(dto.cidade),
+            uf: dto.uf === undefined ? atual.uf : (dto.uf ?? null),
+            origem: dto.origem ?? atual.origem,
+            /*
+             * ─ `bancoTalentos` NÃO ENTRA NESTE `set`, E ESSA É A FORMA DA GUARDA ────────────────
+             *
+             * A retenção é escrita SÓ por `aplicarRetencao`, logo abaixo, e nunca junto do resto da
+             * ficha. Guardar por "comparar e recusar" teria três contornos, e ficar FORA do `set`
+             * mata os três de uma vez:
+             *   1. `null` contra `undefined`: `@IsOptional()` deixa `null` passar, e uma guarda
+             *      escrita como `!== undefined` recusaria um salvamento que não muda nada;
+             *   2. o VALOR IGUAL: reenviar o mesmo valor não é mudança e não pode ser recusado,
+             *      senão todo salvamento de formulário do consultor COMUM quebra;
+             *   3. a LEITURA E A ESCRITA NÃO SÃO ATÔMICAS: um COMUM com o formulário desatualizado
+             *      mandaria o valor velho e DESFARIA EM SILÊNCIO a decisão de um SUPER_ADMIN,
+             *      devolvendo ao expurgo irreversível alguém que fora tornado permanente.
+             */
+            atualizadoEm: new Date(),
+          })
+          .where(eq(asCandidatos.id, id));
+
+        if (typeof dto.bancoTalentos === "boolean") {
+          await this.aplicarRetencao(tx, id, dto.bancoTalentos, autor);
+        }
+      });
     } catch (err) {
       throw this.traduzirUnique(err);
     }
 
     return this.ficha(id);
+  }
+
+  /**
+   * ─ O ÚNICO ESCRITOR DE `as_candidatos.banco_talentos`, COM CADEADO E TRILHA ───────────────────
+   *
+   * A RETENÇÃO É A ÚNICA MARCA DO SISTEMA QUE CONCEDE VIDA ETERNA A DADO PESSOAL: marcada, a pessoa
+   * nunca é alcançada pelo expurgo, e desmarcá-la a devolve a uma anonimização IRREVERSÍVEL que
+   * apaga CPF, e-mail, telefone e nascimento. Por isso ela tem UM escritor, e ele é este.
+   *
+   * ┌─ POR QUE O VALOR ATUAL É LIDO AQUI DENTRO, COM A LINHA TRAVADA ────────────────────────────┐
+   * │ O `SELECT ... FOR UPDATE` acontece na MESMA transação da escrita, e não na leitura que o    │
+   * │ método chamador já fez. Duas requisições simultâneas sobre a mesma pessoa leriam o mesmo    │
+   * │ valor velho lá fora, e a segunda gravaria por cima da primeira com a trilha contando uma    │
+   * │ transição que nunca existiu ("de false para true" duas vezes). Travada a linha, a segunda   │
+   * │ espera, relê e descobre que não há mudança nenhuma a fazer.                                 │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * ┌─ O TESTE DE ENTRADA É `typeof === "boolean"`, E NUNCA `!== undefined` ─────────────────────┐
+   * │ `@IsOptional()` do class-validator pula a validação para `undefined` E PARA `null`, então um │
+   * │ corpo com `"bancoTalentos": null` PASSA e desce até aqui. Lido como mudança, ele custa caro  │
+   * │ nas duas pontas: para quem NÃO é SUPER_ADMIN vira uma linha de `RECUSADO` que ninguém        │
+   * │ decidiu, enchendo a auditoria de ruído e escondendo a tentativa de verdade; para quem É,     │
+   * │ leva `null` a uma coluna NOT NULL, o banco derruba a transação inteira e a ficha para de     │
+   * │ salvar por causa de um campo que ninguém tocou. `null` não é decisão: é o campo que a tela   │
+   * │ não preencheu, e o chamador o descarta antes de chegar aqui.                                 │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * ┌─ QUEM NÃO É SUPER_ADMIN NÃO ESCREVE, E A TENTATIVA REAL VIRA LINHA ────────────────────────┐
+   * │ VALOR IGUAL AO DO BANCO NÃO É TENTATIVA: é o formulário devolvendo o que leu, e ele sai por │
+   * │ cima sem trilha nenhuma. Registrá-lo encheria a tabela de ruído e esconderia a linha que    │
+   * │ importa.                                                                                    │
+   * │                                                                                             │
+   * │ MUDANÇA REAL DE QUEM NÃO PODE VIRA `RECUSADO`, e a gravação NÃO acontece. A linha existe    │
+   * │ porque a pergunta de auditoria não é só "quem conseguiu", é "QUEM TENTOU": tentativa        │
+   * │ repetida pelo mesmo autor é o sinal de uso indevido, e o protocolo proíbe registrar isso no │
+   * │ log de acesso, onde não pode haver PII.                                                     │
+   * │                                                                                             │
+   * │ A RECUSA NÃO DERRUBA O SALVAMENTO, e isso é deliberado: derrubar faria o formulário         │
+   * │ desatualizado de um COMUM bloquear a edição do NOME de uma pessoa por causa de uma caixa    │
+   * │ que ele nem sabe que existe. Quem impede o gesto antes dele acontecer é a TELA, que não     │
+   * │ oferece o controle a quem não é SUPER_ADMIN, e o que garante que ele não teve efeito é esta │
+   * │ guarda. A trilha é o que torna a recusa consultável em vez de silenciosa.                    │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * §A.6: a linha gravada tem um id de candidato, dois booleanos, um id de usuário e uma data.
+   * Nenhum nome, nenhum CPF, nenhum texto livre, e nada disto vai para log.
+   */
+  private async aplicarRetencao(
+    tx: DbTransaction,
+    candidatoId: string,
+    valor: boolean,
+    autor: AuthUser,
+  ): Promise<void> {
+    const [linha] = await tx
+      .select({ atual: asCandidatos.bancoTalentos })
+      .from(asCandidatos)
+      .where(eq(asCandidatos.id, candidatoId))
+      .for("update");
+    if (!linha) throw new NotFoundException("Candidato não encontrado.");
+
+    // NÃO É MUDANÇA: sai por cima, sem escrita e sem trilha, para qualquer papel.
+    if (linha.atual === valor) return;
+
+    const podeMexer = autor.papel === "SUPER_ADMIN";
+    if (podeMexer) {
+      await tx
+        .update(asCandidatos)
+        .set({ bancoTalentos: valor, atualizadoEm: new Date() })
+        .where(eq(asCandidatos.id, candidatoId));
+    }
+
+    // A MUDANÇA E A TRILHA CAEM JUNTAS: as duas escritas estão na mesma transação do chamador.
+    // Marca sem trilha é a §A.33 aplicada aqui, e trilha sem marca mentiria sobre o que houve.
+    await tx.insert(asRetencaoEventos).values({
+      candidatoId,
+      acao: acaoDaRetencao(valor),
+      de: linha.atual,
+      para: valor,
+      autorId: autor.id,
+      resultado: podeMexer ? "APLICADO" : "RECUSADO",
+    });
   }
 
   /**
@@ -337,6 +476,14 @@ export class CandidatosService {
         id: asCandidatos.id,
         nome: asCandidatos.nome,
         origem: asCandidatos.origem,
+        /*
+         * A RETENÇÃO SAI NA LISTA, e isso NÃO é exceção ao §A.6: ela é CLASSIFICAÇÃO, no mesmo
+         * nível de `origem` e do próprio `temCpf` logo abaixo, e não identificador de ninguém. O
+         * que continua proibido no retorno de lista é identificador DIRETO (CPF, e-mail, telefone,
+         * nascimento), e isto não muda nada disso. Ela precisa estar aqui porque a coluna, o filtro
+         * e a ordenação da tela leem a lista, não a ficha.
+         */
+        bancoTalentos: asCandidatos.bancoTalentos,
         cidade: asCandidatos.cidade,
         uf: asCandidatos.uf,
         // O BOOLEANO NO LUGAR DO NÚMERO: a resposta que a tela precisa, sem o dado que ela não usa.
@@ -359,6 +506,9 @@ export class CandidatosService {
       id: l.id,
       nome: l.nome,
       origem: l.origem,
+      // NOT NULL com default no banco, então não há nulo a tratar: o `Boolean` é só a fronteira
+      // de tipo do driver, igual ao `temCpf` logo abaixo.
+      bancoTalentos: Boolean(l.bancoTalentos),
       cidade: l.cidade,
       uf: l.uf,
       temCpf: Boolean(l.temCpf),
@@ -382,6 +532,8 @@ export class CandidatosService {
       cidade: c.cidade,
       uf: c.uf,
       origem: c.origem,
+      /** A marca de retenção: é ela que a ficha mostra, e é ela que só SUPER_ADMIN muda. */
+      bancoTalentos: c.bancoTalentos,
       criadoEm: c.criadoEm.toISOString(),
       anonimizadoEm: c.anonimizadoEm ? c.anonimizadoEm.toISOString() : null,
       candidaturas: await this.candidaturasDoCandidato(id),
@@ -515,7 +667,6 @@ export class CandidatosService {
             candidatoId,
             vagaId: dto.vagaId,
             etapa: etapaInicial.codigo,
-            idMatchPandape: texto(dto.idMatchPandape),
             alocadoPorId,
           })
           .returning({ id: asCandidaturas.id, etapa: asCandidaturas.etapa });
@@ -2325,12 +2476,11 @@ export class CandidatosService {
     if (nome === "uq_as_candidaturas_viva") {
       return new ConflictException("Esta pessoa já está nesta vaga.");
     }
-    if (nome === "uq_as_candidatos_id_candidate_pandape") {
-      return new ConflictException("Já existe um candidato com este código do Pandapé.");
-    }
-    if (nome === "uq_as_candidaturas_id_match_pandape") {
-      return new ConflictException("Já existe uma candidatura com este código de match do Pandapé.");
-    }
+    /*
+     * OS DOIS UNIQUES DO IDENTIFICADOR DO ATS SAÍRAM DAQUI porque as COLUNAS saíram (migration
+     * 0112): identidade externa tem um dono só dentro do módulo A&S, `as_identidades_externas`.
+     * Traduzir uma restrição que não existe mais seria manter uma frase que ninguém pode ver.
+     */
     return err instanceof Error ? err : new Error("Falha ao gravar.");
   }
 }

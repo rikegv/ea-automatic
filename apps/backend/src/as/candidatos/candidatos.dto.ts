@@ -92,13 +92,24 @@ export class CriarCandidatoDto {
   origem?: AsCandidatoOrigem;
 
   /**
-   * O id da pessoa no Pandapé, reservado para a onda 4. Aceito no corpo porque a carga da onda 4 vai
-   * precisar dele, e a coluna já existe; NADA no sistema o preenche sozinho hoje.
+   * ─ A RETENÇÃO (banco de talentos): O CAMPO COM CADEADO ────────────────────────────────────────
+   *
+   * Marcado, a pessoa NÃO EXPIRA nunca. É a única marca do sistema que concede vida eterna a dado
+   * pessoal, e por isso SÓ SUPER_ADMIN a coloca ou tira.
+   *
+   * O CADEADO NÃO ESTÁ AQUI, E ISSO É DESENHO, NÃO ESQUECIMENTO. O DTO valida FORMA, e quem confere
+   * PAPEL é o serviço, que é o único lugar com o autor e com o valor que está no banco: quando o
+   * autor não é SUPER_ADMIN, o campo simplesmente NÃO ENTRA no objeto gravado, e a tentativa de
+   * mudança real vira uma linha de RECUSADO na trilha. Uma recusa escrita no DTO derrubaria também
+   * o salvamento que não muda nada, que é o formulário inteiro do consultor COMUM.
+   *
+   * `@Transform` porque o corpo pode chegar com `"true"` de um formulário; `@IsBoolean` sozinho
+   * recusaria a string.
    */
   @IsOptional()
-  @IsString()
-  @MaxLength(40)
-  idCandidatePandape?: string;
+  @Transform(({ value }) => (typeof value === "string" ? value === "true" : value))
+  @IsBoolean()
+  bancoTalentos?: boolean;
 }
 
 /** Edição da ficha. Mesmos campos da criação, todos opcionais: manda quem mexeu no que mexeu. */
@@ -141,6 +152,26 @@ export class EditarCandidatoDto {
   @IsOptional()
   @IsIn(AS_CANDIDATO_ORIGEM as unknown as string[])
   origem?: AsCandidatoOrigem;
+
+  /**
+   * ─ A RETENÇÃO (banco de talentos): O CAMPO COM CADEADO ────────────────────────────────────────
+   *
+   * Marcado, a pessoa NÃO EXPIRA nunca. É a única marca do sistema que concede vida eterna a dado
+   * pessoal, e por isso SÓ SUPER_ADMIN a coloca ou tira.
+   *
+   * O CADEADO NÃO ESTÁ AQUI, E ISSO É DESENHO, NÃO ESQUECIMENTO. O DTO valida FORMA, e quem confere
+   * PAPEL é o serviço, que é o único lugar com o autor e com o valor que está no banco: quando o
+   * autor não é SUPER_ADMIN, o campo simplesmente NÃO ENTRA no objeto gravado, e a tentativa de
+   * mudança real vira uma linha de RECUSADO na trilha. Uma recusa escrita no DTO derrubaria também
+   * o salvamento que não muda nada, que é o formulário inteiro do consultor COMUM.
+   *
+   * `@Transform` porque o corpo pode chegar com `"true"` de um formulário; `@IsBoolean` sozinho
+   * recusaria a string.
+   */
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === "string" ? value === "true" : value))
+  @IsBoolean()
+  bancoTalentos?: boolean;
 }
 
 /**
@@ -207,12 +238,6 @@ export class BuscarCandidatosDto {
 export class AlocarEmVagaDto {
   @IsUUID()
   vagaId!: string;
-
-  /** O id do match no Pandapé, reservado para a onda 4. Nada o preenche hoje. */
-  @IsOptional()
-  @IsString()
-  @MaxLength(40)
-  idMatchPandape?: string;
 
   /**
    * A CIÊNCIA DA REENTRADA: "sei que esta pessoa já esteve nesta vaga e terminou o processo".

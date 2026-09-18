@@ -20,6 +20,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   AS_CANDIDATO_ORIGEM_LABEL,
   AS_CONTATO_TIPO,
+  BANCO_TALENTOS_LABEL,
   AS_CONTATO_TIPO_LABEL,
   CANDIDATURA_SITUACAO_LABEL,
   type AsCandidaturaEtapaItem,
@@ -36,6 +37,7 @@ import { Icon } from "@/components/ui/Icon";
 import {
   dataBr,
   dataHoraBr,
+  ehBancoTalentos,
   fichaCandidato,
   formatCpf,
   listarContatos,
@@ -229,6 +231,24 @@ export function FichaCandidatoModal({
               <span className="pill in whitespace-nowrap">
                 <Icon name="tag" className="h-3 w-3 flex-none" />
                 {AS_CANDIDATO_ORIGEM_LABEL[ficha.origem]}
+              </span>
+            )}
+            {/* ─ A RETENÇÃO PERMANENTE, AO LADO DA ORIGEM E SÓ QUANDO EXISTE ───────────────────
+                Ela era um dos valores da pill de origem e virou marca própria no fechamento da
+                fundação (17/09/2026). Fica AQUI, e não numa linha da seção A Pessoa, pelo mesmo
+                argumento que mantém a origem aqui: é identidade da pessoa na base, não campo de
+                cadastro. Aparece só quando está marcada, porque o que precisa ser visto é a
+                EXCEÇÃO (esta pessoa não expira); a ausência da pill é o padrão de todo mundo.
+                MOSTRAR É PARA TODOS, MUDAR NÃO: a marca se concede no cadastro e só por
+                SUPER_ADMIN. Quem abre a ficha precisa saber que aquela pessoa não entra no
+                descarte, inclusive para não contar com um expurgo que não vai acontecer. */}
+            {ficha && ehBancoTalentos(ficha) && (
+              <span
+                className="pill ok whitespace-nowrap"
+                title="Esta pessoa não entra no descarte automático."
+              >
+                <Icon name="check" className="h-3 w-3 flex-none" />
+                {BANCO_TALENTOS_LABEL}
               </span>
             )}
           </div>

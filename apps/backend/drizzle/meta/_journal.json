@@ -764,6 +764,34 @@
       "when": 1788097091611,
       "tag": "0108_fila_entradas_pandape",
       "breakpoints": true
+    },
+    {
+      "idx": 109,
+      "version": "7",
+      "when": 1788100691611,
+      "tag": "0109_as_identidades_externas",
+      "breakpoints": true
+    },
+    {
+      "idx": 110,
+      "version": "7",
+      "when": 1788104291611,
+      "tag": "0110_as_depara_etapa_externa",
+      "breakpoints": true
+    },
+    {
+      "idx": 111,
+      "version": "7",
+      "when": 1788107891611,
+      "tag": "0111_as_depara_motivo_e_stand_by",
+      "breakpoints": true
+    },
+    {
+      "idx": 112,
+      "version": "7",
+      "when": 1788111491611,
+      "tag": "0112_as_retencao_campo_proprio",
+      "breakpoints": true
     }
   ]
 }

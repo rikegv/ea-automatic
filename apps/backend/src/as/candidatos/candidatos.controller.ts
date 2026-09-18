@@ -46,10 +46,16 @@ export class CandidatosController {
 
   // ── A PESSOA ──────────────────────────────────────────────────────────────
 
-  /** Quem cadastrou vem da SESSÃO, nunca do corpo: é trilha, não campo de formulário. */
+  /**
+   * Quem cadastrou vem da SESSÃO, nunca do corpo: é trilha, não campo de formulário.
+   *
+   * O USUÁRIO INTEIRO DESCE PARA O SERVIÇO, e não só o `id`, porque o cadastro passou a decidir
+   * sobre a RETENÇÃO (`bancoTalentos`), que só SUPER_ADMIN concede: lá se confere o PAPEL e se
+   * registra o AUTOR na trilha, inclusive quando a tentativa é recusada.
+   */
   @Post()
   criar(@Body() dto: CriarCandidatoDto, @CurrentUser() user: AuthUser) {
-    return this.candidatos.criar(dto, user.id);
+    return this.candidatos.criar(dto, user);
   }
 
   /**
@@ -278,9 +284,20 @@ export class CandidatosController {
     return this.candidatos.ficha(id);
   }
 
+  /**
+   * EDITAR a ficha. O `@CurrentUser()` NÃO É ENFEITE AQUI, e a assinatura mudou por causa dele.
+   *
+   * A edição passou a alcançar a RETENÇÃO (`bancoTalentos`), a única marca do sistema que concede
+   * vida eterna a dado pessoal. Sem o usuário não há PAPEL a conferir nem AUTOR a registrar, e a
+   * rota nasceria como a porta que contorna o cadeado posto no cadastro.
+   */
   @Patch(":id")
-  editar(@Param("id", ParseUUIDPipe) id: string, @Body() dto: EditarCandidatoDto) {
-    return this.candidatos.editar(id, dto);
+  editar(
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body() dto: EditarCandidatoDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.candidatos.editar(id, dto, user);
   }
 
   /**

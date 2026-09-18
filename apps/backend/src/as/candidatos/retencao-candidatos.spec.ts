@@ -131,10 +131,18 @@ describe("expurgo por retenção: quem está em processo VIVO nunca é alcançad
     }
   });
 
-  /** O banco de talentos não expira, e o prazo é o do diretor. Guardas do resto da regra. */
+  /**
+   * O banco de talentos não expira, e o prazo é o do diretor. Guardas do resto da regra.
+   *
+   * A RÉGUA É `c.banco_talentos = false`, E O TEXTO MUDOU PORQUE A COLUNA MUDOU (migration 0112): a
+   * retenção deixou de ser o valor `BANCO_TALENTOS` do enum de origem e virou campo próprio, com
+   * cadeado de SUPER_ADMIN. A segunda asserção é a que importa mais: comparar `origem` com um valor
+   * que não existe mais no tipo derruba a varredura inteira com `invalid input value for enum`.
+   */
   it("candidato de banco não expira, e o prazo continua sendo de 2 anos", async () => {
     const q = await rodarVarredura();
-    expect(q).toContain("c.origem <> 'BANCO_TALENTOS'");
+    expect(q).toContain("c.banco_talentos = false");
+    expect(q).not.toContain("'BANCO_TALENTOS'");
     expect(q).toContain("interval '2 years'");
   });
 });

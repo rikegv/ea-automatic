@@ -380,12 +380,29 @@ export const vagaEscolaridadeEnum = pgEnum("vaga_escolaridade", [
 // CATÁLOGO (`as_etapas_funil`), porque o diretor a edita na tela. Ver o bloco logo abaixo.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** De onde a pessoa veio. `PANDAPE` é a coluna reservada para a onda 4; nada a alimenta hoje. */
+/**
+ * DE QUAL SISTEMA A PLATAFORMA PUXOU A PESSOA, e nada além disso.
+ *
+ * ┌─ `BANCO_TALENTOS` SAIU DAQUI, E ELE NÃO ERA ORIGEM DE NADA (migration 0112) ─────────────────┐
+ * │ Um campo só respondia TRÊS perguntas: de qual SISTEMA veio (`PANDAPE`), COMO entrou          │
+ * │ (`MANUAL`), por qual CANAL chegou (`INDICACAO`) e, no meio delas, QUANTO TEMPO SE GUARDA     │
+ * │ (`BANCO_TALENTOS`). A quarta é de outra natureza: escolher um item de um seletor de origem   │
+ * │ CONCEDIA VIDA ETERNA A DADO PESSOAL, porque o expurgo por retenção lia exatamente aquele     │
+ * │ valor para poupar a pessoa. Sem papel, sem rastro e sem ninguém enxergar a decisão.          │
+ * │                                                                                             │
+ * │ A retenção virou `as_candidatos.banco_talentos`, booleano, com cadeado de SUPER_ADMIN e      │
+ * │ trilha própria (`as_retencao_eventos`). Aqui ficou só a pergunta da origem.                  │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * `DIGAI` ENTROU porque a origem é "de qual sistema a plataforma puxou", e o Digai é o segundo.
+ * A plataforma preenche o valor sozinha quando puxa por API; o que a tela oferece vale para o
+ * cadastro manual. Espelha `AS_CANDIDATO_ORIGEM` do shared-types, que é a fonte única.
+ */
 export const asCandidatoOrigemEnum = pgEnum("as_candidato_origem", [
   "PANDAPE",
+  "DIGAI",
   "MANUAL",
   "INDICACAO",
-  "BANCO_TALENTOS",
 ]);
 
 /*

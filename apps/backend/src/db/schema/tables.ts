@@ -19,6 +19,9 @@ import {
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { ACEITES_REGISTRAVEIS, SITUACOES_ENCERRADAS_SEM_EXITO } from "../../domain/candidatura";
+import { CANDIDATURA_SITUACOES } from "@ea/shared-types";
+import { FONTES_EXTERNAS } from "../../domain/as-etapa-externa";
+import { RETENCAO_EVENTO_ACAO, RETENCAO_EVENTO_RESULTADO } from "../../domain/retencao-evento";
 import type { VagaIdiomaGravado } from "../../domain/vaga-idioma";
 import {
   areaEnum,
@@ -3082,7 +3085,13 @@ export const asVagaStatusEventos = pgTable(
  * atrapalhar. Um unique comum trataria todos os NULL como colidentes em alguns bancos e, no
  * Postgres, permitiria o duplicado sem CPF, que é o comportamento que se quer, mas sem o dedup do
  * lado preenchido ficar explícito. O parcial diz exatamente a regra que se quer: quando há CPF, ele
- * é único. Mesmo tratamento para `id_candidate_pandape`, pela mesma razão.
+ * é único.
+ *
+ * A GAVETA `id_candidate_pandape` FOI DERRUBADA (migration 0112), e a ausência dela é desenho: a
+ * identidade externa tem UM dono dentro do módulo A&S, `as_identidades_externas`, que guarda N
+ * identidades por pessoa, com fonte e data de coleta, e já nasce dentro do expurgo. Uma coluna
+ * paralela de identificador de terceiro era uma SEGUNDA gaveta de dado pessoal, fora daquele
+ * desenho, e o dia da ingestão teria de escolher qual das duas é a verdade.
  */
 export const asCandidatos = pgTable(
   "as_candidatos",
@@ -3105,10 +3114,26 @@ export const asCandidatos = pgTable(
     uf: varchar("uf", { length: 2 }),
     origem: asCandidatoOrigemEnum("origem").notNull().default("MANUAL"),
     /**
-     * O id da PESSOA no Pandapé, reservado para a onda 4. Nasce vazio e nada o preenche hoje: não há
-     * varredura e não há chamada de API nesta onda. Unique parcial, como o CPF.
+     * ─ A RETENÇÃO: A ÚNICA MARCA DO SISTEMA QUE CONCEDE VIDA ETERNA A DADO PESSOAL ─────────────
+     *
+     * Marcada, a pessoa NÃO EXPIRA: o expurgo por retenção a ignora para sempre, porque o banco de
+     * talentos existe justamente para que alguém seja procurado daqui a três anos.
+     *
+     * ┌─ POR QUE ELA SAIU DE DENTRO DE `origem` (migration 0112) ──────────────────────────────┐
+     * │ Ela era o valor `BANCO_TALENTOS` de um seletor de ORIGEM, e por isso conceder retenção  │
+     * │ perpétua a uma pessoa era uma escolha de lista como outra qualquer, sem papel, sem      │
+     * │ rastro e sem ninguém enxergar a decisão. Campo próprio é o que torna a decisão VISÍVEL, │
+     * │ e é o que permite pôr cadeado nela sem travar a edição do resto da ficha.               │
+     * └────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * `NOT NULL DEFAULT false`, e as duas metades importam: anulável faria `null` virar um terceiro
+     * estado sem dono, e um default verdadeiro isentaria do expurgo todo mundo que entrasse.
+     *
+     * O ÚNICO ESCRITOR DELA é `CandidatosService.aplicarRetencao`, com cadeado de SUPER_ADMIN e
+     * trilha em `as_retencao_eventos`. Nem o `insert` de cadastro lista este campo: a ingestão
+     * futura, que insere SEM usuário autor, nasce proibida de escrever aqui.
      */
-    idCandidatePandape: varchar("id_candidate_pandape", { length: 40 }),
+    bancoTalentos: boolean("banco_talentos").notNull().default(false),
     /** Quem cadastrou, da SESSÃO e nunca do corpo: é trilha, não campo de formulário. */
     criadoPorId: uuid("criado_por_id").references(() => usuarios.id, { onDelete: "set null" }),
     /**
@@ -3130,12 +3155,91 @@ export const asCandidatos = pgTable(
     uqCpf: uniqueIndex("uq_as_candidatos_cpf")
       .on(t.cpf)
       .where(sql`${t.cpf} is not null`),
-    uqPandape: uniqueIndex("uq_as_candidatos_id_candidate_pandape")
-      .on(t.idCandidatePandape)
-      .where(sql`${t.idCandidatePandape} is not null`),
     // Busca por nome é o caminho natural de quem trabalha na tela (buscar por CPF é a exceção).
     idxNome: index("idx_as_candidatos_nome").on(t.nome),
     idxOrigem: index("idx_as_candidatos_origem").on(t.origem),
+  }),
+);
+
+/**
+ * ─ A TRILHA DA RETENÇÃO: QUEM CONCEDEU, QUEM REVOGOU, QUEM TENTOU (migration 0112) ──────────────
+ *
+ * UMA LINHA POR TENTATIVA de mexer em `as_candidatos.banco_talentos`, a única marca do sistema que
+ * concede vida eterna a dado pessoal. O molde é o de `as_vaga_status_eventos`, com quatro desvios
+ * que NÃO são detalhe, todos exigidos pela auditoria de segurança:
+ *
+ * 1. A FK DO CANDIDATO É `restrict`, E NUNCA `cascade`. No molde o cascade existe porque o rastro é
+ *    DA vaga e não faz sentido sem ela. Este é rastro de DECISÃO SOBRE DADO PESSOAL, e ele tem de
+ *    sobreviver à linha: a pergunta "quem tornou esta pessoa permanente" não pode ser apagada pelo
+ *    mesmo gesto que apaga a pessoa.
+ * 2. NÃO EXISTE CAMPO DE OBSERVAÇÃO LIVRE, e a ausência é a defesa. Texto livre numa trilha de
+ *    candidato é onde o dado pessoal reaparece, porque quem opera escreve o nome da pessoa na
+ *    justificativa. Sem o campo, não há onde escrever (§A.6).
+ * 3. `autor_id` É FK `restrict`, E NÃO `set null`. `set null` contradiz a permanência do "quem":
+ *    apagado o usuário, a trilha responderia "alguém". Ninguém apaga usuário no meio de um insert,
+ *    então `restrict` não derruba escrita nenhuma.
+ * 4. A AÇÃO É COLUNA PRÓPRIA. Só com `resultado`, a trilha não distinguiria quem tornou alguém
+ *    permanente de quem DEVOLVEU alguém ao expurgo, que é a ação destrutiva e irreversível.
+ *
+ * `resultado` MORA NESTA MESMA TABELA, e a tentativa RECUSADA também vira linha: a pergunta de
+ * auditoria não é só "quem conseguiu", é "quem tentou", porque tentativa repetida pelo mesmo autor é
+ * o sinal de uso indevido, e o protocolo proíbe registrar isso no log de acesso (não há PII em log).
+ * Com as duas colunas juntas, "tudo que aconteceu com a retenção desta pessoa" é UMA leitura.
+ *
+ * ELA NÃO É `candidato_alteracoes_log`, e reusá-la seria andar para trás: aquela guarda
+ * `valor_anterior` e `valor_novo` como TEXTO LIVRE e está amarrada a `admissao_id`. Pendurar um
+ * rastro limpo dentro de uma tabela desenhada para aceitar valor pessoal desfaz o item 2.
+ *
+ * §A.6: um id de candidato, dois booleanos, um id de usuário INTERNO e uma data. Nenhum dado
+ * pessoal, e é por isso que ela NÃO entra na lista de nulagem do expurgo: o id técnico continua
+ * válido (e a pergunta continua respondível) depois da anonimização da pessoa.
+ */
+const RETENCAO_ACAO_SQL = sql.raw(RETENCAO_EVENTO_ACAO.map((a) => `'${a}'`).join(", "));
+const RETENCAO_RESULTADO_SQL = sql.raw(RETENCAO_EVENTO_RESULTADO.map((r) => `'${r}'`).join(", "));
+
+export const asRetencaoEventos = pgTable(
+  "as_retencao_eventos",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    /** `restrict`: o rastro da decisão sobrevive à pessoa (desvio 1 do bloco acima). */
+    candidatoId: uuid("candidato_id")
+      .notNull()
+      .references(() => asCandidatos.id, { onDelete: "restrict" }),
+    /** `MARCAR` ou `DESMARCAR`, DERIVADO do valor pretendido e nunca digitado. CHECK abaixo. */
+    acao: varchar("acao", { length: 20 }).notNull(),
+    /**
+     * O valor de ANTES e o valor PRETENDIDO, os dois NOT NULL.
+     *
+     * NÃO EXISTE "SEM VALOR ANTERIOR", e é o desenho do escritor que garante isso: `aplicarRetencao`
+     * lê a linha com `SELECT ... FOR UPDATE` DENTRO da mesma transação, inclusive no cadastro, onde
+     * a linha acabou de nascer com `false`. Uma coluna anulável aqui abriria um estado ("mexeram, e
+     * ninguém sabe de onde") que nenhum caminho produz.
+     */
+    de: boolean("de").notNull(),
+    para: boolean("para").notNull(),
+    /** `restrict`: sem isso a trilha responderia "alguém" (desvio 3 do bloco acima). */
+    autorId: uuid("autor_id")
+      .notNull()
+      .references(() => usuarios.id, { onDelete: "restrict" }),
+    /** `APLICADO` ou `RECUSADO`. A recusa também vira linha, e é ela que registra a tentativa. */
+    resultado: varchar("resultado", { length: 20 }).notNull(),
+    /** O carimbo é NOMEADO, não implícito: o que não está escrito não é construído. */
+    em: timestamp("em", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    /**
+     * OS DOIS CHECKS SÃO DERIVADOS DE CONSTANTE DE CÓDIGO (`domain/retencao-evento.ts`), pelo mesmo
+     * argumento do CHECK de `as_identidades_externas`: uma lista digitada no banco e outra no código
+     * concordam por coincidência, e param de concordar em silêncio. `sql.raw` porque isto é DDL, e
+     * os valores nunca vêm de entrada de usuário.
+     */
+    ckAcao: check("ck_as_retencao_eventos_acao", sql`${t.acao} in (${RETENCAO_ACAO_SQL})`),
+    ckResultado: check(
+      "ck_as_retencao_eventos_resultado",
+      sql`${t.resultado} in (${RETENCAO_RESULTADO_SQL})`,
+    ),
+    /** (candidato, quando): "tudo que aconteceu com a retenção desta pessoa", em ordem. */
+    idxCandidato: index("idx_as_retencao_eventos_candidato").on(t.candidatoId, t.em),
   }),
 );
 
@@ -3397,8 +3501,6 @@ export const asCandidaturas = pgTable(
     situacao: candidaturaSituacaoEnum("situacao").notNull().default("ATIVO"),
     /** Por que saiu. Texto livre: o vocabulário de descarte é da operação e ainda está se formando. */
     motivoDescarte: text("motivo_descarte"),
-    /** O id do match no Pandapé, reservado para a onda 4. Unique parcial, como o CPF do candidato. */
-    idMatchPandape: varchar("id_match_pandape", { length: 40 }),
     alocadoEm: timestamp("alocado_em", { withTimezone: true }).defaultNow().notNull(),
     alocadoPorId: uuid("alocado_por_id").references(() => usuarios.id, { onDelete: "set null" }),
     /**
@@ -3473,15 +3575,15 @@ export const asCandidaturas = pgTable(
      * entrar no vocabulário. O porquê do complemento em vez da lista positiva está no bloco de
      * `SITUACOES_ENCERRADAS_SQL`, acima, e ele é o mesmo motivo de fail-closed.
      *
-     * UNIQUE PARCIAL NÃO É TÉCNICA NOVA NESTA TABELA: `uq_as_candidatos_cpf` e
-     * `uq_as_candidaturas_id_match_pandape` logo abaixo já são assim.
+     * UNIQUE PARCIAL NÃO É TÉCNICA NOVA NO MÓDULO: `uq_as_candidatos_cpf` é assim pela mesma razão.
+     *
+     * `uq_as_candidaturas_id_match_pandape` VIVIA LOGO ABAIXO E CAIU COM A COLUNA (migration 0112):
+     * `id_match_pandape` era identificador da PESSOA no ATS numa segunda gaveta, fora do desenho de
+     * `as_identidades_externas`, que é o dono da identidade externa dentro do módulo A&S.
      */
     uqCandidaturaViva: uniqueIndex("uq_as_candidaturas_viva")
       .on(t.candidatoId, t.vagaId)
       .where(sql`${t.situacao} not in (${SITUACOES_ENCERRADAS_SQL})`),
-    uqMatchPandape: uniqueIndex("uq_as_candidaturas_id_match_pandape")
-      .on(t.idMatchPandape)
-      .where(sql`${t.idMatchPandape} is not null`),
     // A CONTAGEM DE OCUPAÇÃO é a consulta mais quente do módulo (ela roda dentro da transação de
     // toda aprovação, com a linha da vaga travada), então o índice é por (vaga, situação).
     idxVagaSituacao: index("idx_as_candidaturas_vaga_situacao").on(t.vagaId, t.situacao),
@@ -3714,5 +3816,185 @@ export const asCandidaturaEtapas = pgTable(
     idxVagaStatusEvento: index("idx_as_candidatura_etapas_vaga_status_evento")
       .on(t.vagaStatusEventoId)
       .where(sql`${t.vagaStatusEventoId} is not null`),
+  }),
+);
+
+/**
+ * AS FONTES EXTERNAS e AS SITUAÇÕES DA CANDIDATURA, em SQL, DERIVADAS do vocabulário pelo mesmo
+ * caminho de `SITUACOES_ENCERRADAS_SQL` e `ACEITES_SQL`, logo acima neste arquivo: o CHECK do banco
+ * e o valor que o código grava saem da MESMA lista.
+ *
+ * DIGITAR A LISTA AQUI CRIARIA A SEGUNDA, que concorda com a primeira por coincidência até a
+ * primeira fonte nova, e o preço de discordar é alto: uma fonte que o código escreve e o CHECK não
+ * conhece derruba a escrita, e uma que o CHECK aceita e o código não conhece vira uma origem
+ * fantasma com o `unique (fonte, identificador)` dela própria, duplicando a pessoa em silêncio.
+ *
+ * `sql.raw` pelo mesmo argumento dos vizinhos: os valores vêm de constante de CÓDIGO, nunca de
+ * entrada de usuário, e aqui não se concatena dado externo.
+ */
+const FONTES_EXTERNAS_SQL = sql.raw(FONTES_EXTERNAS.map((f) => `'${f}'`).join(", "));
+const SITUACOES_CANDIDATURA_SQL = sql.raw(
+  CANDIDATURA_SITUACOES.map((s) => `'${s}'`).join(", "),
+);
+
+/**
+ * ─ IDENTIDADE EXTERNA: UMA PESSOA, N IDENTIDADES, SEM DUPLICAR A PESSOA ────────────────────────
+ *
+ * A MESMA PESSOA APARECE EM MAIS DE UM SISTEMA (hoje Pandapé e Digai), e cada um a chama por um id
+ * próprio. Guardar esse id numa COLUNA do candidato (foi assim que `id_candidate_pandape` nasceu)
+ * obriga uma coluna nova a cada fonte nova, e não tem onde pôr a SEGUNDA identidade da mesma fonte,
+ * que é justamente o caso que a deduplicação futura existe para resolver.
+ *
+ * ┌─ A UNICIDADE É `(fonte, identificador)`, E A QUE NÃO EXISTE É TÃO IMPORTANTE QUANTO ───────────┐
+ * │ `UNIQUE (fonte, identificador)` diz a regra da ORIGEM: um `IdPreCollaborator` é único no       │
+ * │ Pandapé, logo ele não pode apontar para duas pessoas aqui. Sem isso, a deduplicação teria de   │
+ * │ escolher qual das duas pessoas é a dona de um id que só tem um dono lá fora.                    │
+ * │                                                                                                 │
+ * │ NÃO EXISTE `unique (candidato_id, fonte)`, e a ausência é o desenho: ela parece a régua óbvia   │
+ * │ ("uma identidade por fonte por pessoa") e é o contrário do que a plataforma precisa. Duas       │
+ * │ linhas da MESMA fonte para a MESMA pessoa são o material da deduplicação; proibi-las apagaria   │
+ * │ a razão da tabela e só apareceria no dia em que a ingestão estourasse chave duplicada.          │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ §A.6 (LGPD): O QUE ENTRA AQUI É ID TÉCNICO, FONTE E DATA. NADA MAIS ──────────────────────────┐
+ * │ O gesto natural de quem liga integração é guardar "o que veio junto", nome e e-mail, para não   │
+ * │ consultar de novo. Isso faria desta tabela um SEGUNDO cadastro de pessoas, com retenção própria │
+ * │ e fora do alcance do expurgo, e ninguém perceberia, porque tudo continuaria funcionando.        │
+ * │                                                                                                 │
+ * │ O EXPURGO ALCANÇA ESTA TABELA, e por DELEÇÃO, não por anonimização: a linha INTEIRA é o         │
+ * │ identificador, não sobra dela nada que sustente contagem histórica, ao contrário da linha do    │
+ * │ candidato, que sustenta os aprovados das vagas passadas. Quem apaga é                            │
+ * │ `retencao-candidatos.service.ts`, na MESMA instrução que anonimiza a pessoa.                     │
+ * │                                                                                                 │
+ * │ O `ON DELETE CASCADE` NÃO É A REDE DE PROTEÇÃO DO EXPURGO, e contar com ele seria o achado P5    │
+ * │ do parecer de segurança: o expurgo ANONIMIZA e PRESERVA a linha do candidato, então o cascade   │
+ * │ NUNCA dispara por aquele caminho. Ele cobre o outro, o `delete` de verdade de um candidato, e    │
+ * │ sem ele a identidade sobreviveria à pessoa, apontando para um id que não existe mais.            │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * NASCE SEM ESCRITOR, de propósito: não há ingestão nesta frente. A porta nova ainda não abre.
+ */
+export const asIdentidadesExternas = pgTable(
+  "as_identidades_externas",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    candidatoId: uuid("candidato_id")
+      .notNull()
+      .references(() => asCandidatos.id, { onDelete: "cascade" }),
+    /** Lista FECHADA (`FONTES_EXTERNAS`), com CHECK abaixo. Código de sistema, não nome de sistema. */
+    fonte: varchar("fonte", { length: 20 }).notNull(),
+    /** O id COMO A ORIGEM o escreve. Nunca reformatado, nunca completado: é chave de terceiro. */
+    identificador: varchar("identificador", { length: 120 }).notNull(),
+    /**
+     * QUANDO O DADO FOI COLETADO, exigência E5 do protocolo LGPD (origem e data por registro).
+     *
+     * O `default now()` É PISO PARA ESCRITA MANUAL, E NÃO O VALOR ESPERADO: o ingestor preenche
+     * este campo EXPLICITAMENTE, com o instante da coleta. Deixar o default responder por uma
+     * CARGA faria a linha jurar que o dado foi coletado no dia em que a carga rodou, e a data de
+     * coleta existe justamente para responder a essa pergunta a um titular que perguntar.
+     */
+    coletadoEm: timestamp("coletado_em", { withTimezone: true }).defaultNow().notNull(),
+    criadoEm,
+    atualizadoEm,
+  },
+  (t) => ({
+    uqFonteIdentificador: unique("uq_as_identidades_externas_fonte_identificador").on(
+      t.fonte,
+      t.identificador,
+    ),
+    /** A pergunta do dia a dia é "onde mais esta pessoa aparece", e ela varre por candidato. */
+    idxCandidato: index("idx_as_identidades_externas_candidato").on(t.candidatoId),
+    ckFonte: check(
+      "ck_as_identidades_externas_fonte",
+      sql`${t.fonte} in (${FONTES_EXTERNAS_SQL})`,
+    ),
+  }),
+);
+
+/**
+ * ─ O DE/PARA DA ETAPA EXTERNA: CONFIGURÁVEL EM TABELA, NUNCA FIXO NO CÓDIGO ────────────────────
+ *
+ * AS PASTAS DO PANDAPÉ SÃO TEXTO LIVRE e mudam por vaga (os dez nomes reais estão medidos no mapa
+ * de alcance, seção 3). Um mapa literal no código obrigaria uma subida de versão a cada vaga nova
+ * com nome diferente, e quem sabe o que cada pasta significa é o diretor, não a fábrica.
+ *
+ * A CHAVE É O NOME NORMALIZADO (`normalizarChaveExterna`, em `domain/as-etapa-externa.ts`) e o
+ * `rotulo_externo` guarda o nome COMO VEIO, para a tela futura mostrar ao diretor o que ele está
+ * mapeando. O rótulo é alimentado por CONFIGURAÇÃO REVISADA, nunca por cópia automática do que a
+ * API devolveu: copiar sozinho encheria a tabela de variações da mesma pasta.
+ *
+ * ┌─ OS DOIS DESTINOS SÃO NULÁVEIS, E UM CHECK OBRIGA PELO MENOS UM ───────────────────────────────┐
+ * │ Nem toda etapa externa é um caneco do funil. `Descartados` não muda a ETAPA da pessoa, muda o  │
+ * │ DESFECHO dela, e forçar uma etapa ali escreveria no histórico um movimento que não aconteceu.  │
+ * │ Uma linha sem nenhum dos dois seria um mapeamento que não diz o que fazer, e o CHECK a recusa.  │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * FK RESTRICT NA ETAPA pela mesma razão das três colunas de `as_candidaturas`: apagar uma etapa do
+ * catálogo não pode deixar um de/para apontando para um código que não existe mais, em silêncio.
+ *
+ * §A.6: nada de pessoal entra aqui. Nome de pasta de vaga, código de etapa e dois booleanos.
+ */
+export const asDeparaEtapaExterna = pgTable(
+  "as_depara_etapa_externa",
+  {
+    id: serial("id").primaryKey(),
+    fonte: varchar("fonte", { length: 20 }).notNull(),
+    /** O nome NORMALIZADO. É por ele que a consulta casa, nunca pelo rótulo cru. */
+    chaveExterna: varchar("chave_externa", { length: 160 }).notNull(),
+    /** O nome COMO VEIO, só para leitura humana na tela futura. Não participa do casamento. */
+    rotuloExterno: varchar("rotulo_externo", { length: 200 }).notNull(),
+    etapaCodigo: varchar("etapa_codigo", { length: 40 }).references(() => asEtapasFunil.codigo, {
+      onDelete: "restrict",
+    }),
+    situacao: varchar("situacao", { length: 40 }),
+    /**
+     * O MOTIVO QUE A INGESTÃO VAI GRAVAR EM `as_candidaturas.motivo_descarte` quando esta pasta
+     * externa chegar. Nulo é o normal: pasta que não é descarte não tem motivo.
+     *
+     * ┌─ POR QUE ELE EXISTE, e é a decisão do diretor de 17/09/2026 ─────────────────────────────┐
+     * │ `RETORNO NEGATIVO` e `Descartados` NÃO podem cair no mesmo lugar: um é "o cliente        │
+     * │ recusou", o outro é "a seleção descartou". Os dois compartilham o DESFECHO (`DESCARTADO`,│
+     * │ que é um valor do vocabulário fechado de situações, e inventar um segundo valor só para  │
+     * │ separar as duas origens contaminaria filtros, contagens e tela do funil inteiro com uma  │
+     * │ distinção que só existe na tradução de UMA fonte). O que os separa é o MOTIVO.            │
+     * └──────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * ┌─ É TEXTO DE CONFIGURAÇÃO REVISADA, NUNCA CÓPIA AUTOMÁTICA DE CAMPO VINDO DA API ─────────┐
+     * │ Mesma condição que o parecer do `seguranca` pôs sobre `rotulo_externo`, e aqui ela pesa   │
+     * │ MAIS: o valor desta coluna é copiado PARA DENTRO DA CANDIDATURA de uma pessoa. Um         │
+     * │ pipeline que jogasse aqui o texto livre devolvido pelo ATS viraria um duto de dado de     │
+     * │ terceiro para dentro da base, sem ninguém ler o que passa, e é assim que dado pessoal     │
+     * │ entra onde não devia (§A.6, minimização). Quem escreve aqui é quem configura o de/para.   │
+     * │ Os 120 caracteres são parte da trava: frase curta de classificação, não campo livre.      │
+     * └──────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    motivoPadrao: varchar("motivo_padrao", { length: 120 }),
+    /**
+     * DESLIGAR É O GESTO QUE O DIRETOR TEM para dizer "pare de confiar nesta tradução", e ele
+     * precisa existir sem apagar a linha: apagada, a próxima configuração perderia o registro de
+     * que aquela pasta já foi vista e decidida.
+     */
+    ativo: boolean("ativo").notNull().default(true),
+    criadoEm,
+    atualizadoEm,
+  },
+  (t) => ({
+    uqFonteChave: unique("uq_as_depara_etapa_externa_fonte_chave").on(t.fonte, t.chaveExterna),
+    ckFonte: check("ck_as_depara_etapa_externa_fonte", sql`${t.fonte} in (${FONTES_EXTERNAS_SQL})`),
+    /**
+     * A SITUAÇÃO, QUANDO PREENCHIDA, É DO VOCABULÁRIO. CHECK e não enum do Postgres porque a coluna
+     * é OPCIONAL e mora num catálogo de configuração: um enum aqui amarraria a tabela de
+     * configuração ao ciclo de vida do tipo, e `ADD VALUE` de enum já é a armadilha conhecida das
+     * migrations desta casa.
+     */
+    ckSituacao: check(
+      "ck_as_depara_etapa_externa_situacao",
+      sql`${t.situacao} is null or ${t.situacao} in (${SITUACOES_CANDIDATURA_SQL})`,
+    ),
+    /** Um mapeamento que não diz nem etapa nem desfecho não é mapeamento. */
+    ckDestino: check(
+      "ck_as_depara_etapa_externa_destino",
+      sql`${t.etapaCodigo} is not null or ${t.situacao} is not null`,
+    ),
   }),
 );

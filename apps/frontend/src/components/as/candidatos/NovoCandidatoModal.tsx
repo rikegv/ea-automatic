@@ -29,6 +29,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AS_CANDIDATO_ORIGEM,
   AS_CANDIDATO_ORIGEM_LABEL,
+  BANCO_TALENTOS_LABEL,
   UFS,
   isValidCpf,
   normalizeCpf,
@@ -37,6 +38,7 @@ import {
   type CandidaturaEtapa,
   type VagaListItem,
 } from "@ea/shared-types";
+import { useAuth } from "@/lib/auth-context";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { Combobox } from "@/components/ui/Combobox";
@@ -145,6 +147,25 @@ export function NovoCandidatoModal({
   }, [etapa, inicial]);
   const [observacao, setObservacao] = useState("");
 
+  /**
+   * ─ A RETENÇÃO PERMANENTE, E ELA É A ÚNICA MARCA COM CADEADO NESTE MODAL ──────────────────────
+   *
+   * ELA NÃO É MAIS UMA ORIGEM. "Banco De Talentos" vivia dentro do seletor de Origem, e ali
+   * conceder vida eterna a dado pessoal era um item de lista como outro qualquer, alcançável por
+   * quem editasse a ficha. Saiu para campo próprio no fechamento da fundação (17/09/2026).
+   *
+   * O CONTROLE NÃO APARECE PARA QUEM NÃO É SUPER_ADMIN, e isso é decisão do `seguranca`, não
+   * economia de tela: o serviço simplesmente NÃO grava o campo quando o autor não tem o papel, e
+   * oferecer a caixa a quem seria recusado é recusa silenciosa. Quem marca, vê a ficha nascer
+   * desmarcada e conclui que o sistema perdeu o clique, então tenta de novo. O que não pode ser
+   * feito, não é oferecido.
+   *
+   * Nasce DESMARCADA, que é o padrão da coluna: retenção permanente é a exceção, e exceção não se
+   * concede por inércia.
+   */
+  const { isSuperAdmin } = useAuth();
+  const [bancoTalentos, setBancoTalentos] = useState(false);
+
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   // O AVISO DE REENTRADA. Enquanto ele existe, o modal de ciência está aberto e NADA foi alocado.
@@ -238,6 +259,14 @@ export function NovoCandidatoModal({
             cidade: form.cidade.trim() || undefined,
             uf: form.uf || undefined,
             origem: form.origem || undefined,
+            /*
+             * SÓ ENTRA NO CORPO QUANDO HÁ CONCESSÃO DE VERDADE: SUPER_ADMIN e caixa marcada.
+             * Mandar `false` seria dizer ao backend uma decisão que ninguém tomou (o padrão da
+             * coluna já é esse) e, no caminho da criação, uma tentativa de escrita sem mudança
+             * nenhuma vira linha de trilha, poluindo justamente o registro que existe para
+             * responder "quem tornou esta pessoa permanente".
+             */
+            ...(isSuperAdmin && bancoTalentos ? { bancoTalentos: true } : {}),
           },
           token,
         );
@@ -406,6 +435,37 @@ export function NovoCandidatoModal({
                   ariaLabel="Origem"
                 />
               </Campo>
+
+              {/* ─ A RETENÇÃO, SÓ PARA SUPER_ADMIN ──────────────────────────────────────────────
+                  O controle diz O QUE FAZ em uma linha, porque quem clica aqui está CONCEDENDO
+                  permanência a dado pessoal, e não etiquetando alguém. Sem a frase, a caixa parece
+                  uma classificação inofensiva, que foi exatamente o efeito de ela ter vivido dentro
+                  do seletor de Origem.
+                  Não usa o `Campo`: ele é um `<label>` inteiro, e um `<label>` dentro de outro
+                  quebra o clique do próprio controle. */}
+              {isSuperAdmin && (
+                <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-3 md:col-span-2">
+                  <label className="flex items-start gap-3">
+                    <input
+                      type="checkbox"
+                      checked={bancoTalentos}
+                      onChange={(e) => setBancoTalentos(e.target.checked)}
+                      className="mt-0.5 h-4 w-4 flex-none accent-[var(--accent)]"
+                      aria-describedby="ajuda-banco-talentos"
+                    />
+                    <span>
+                      <span className="block text-[13px] font-semibold text-text">
+                        {BANCO_TALENTOS_LABEL}
+                      </span>
+                      <span id="ajuda-banco-talentos" className="block text-[12px] text-dim">
+                        Marcado, esta pessoa não entra no descarte automático e fica na base para ser
+                        procurada no futuro. Só Super Admin muda esta marca, e a mudança fica
+                        registrada.
+                      </span>
+                    </span>
+                  </label>
+                </div>
+              )}
 
               {/* O AVISO DE MENOR DE IDADE, com o MESMO enunciado do wizard (§A.26: o texto não foi
                   reescrito, foi reusado) e o mesmo desenho de faixa de atenção do sistema. */}

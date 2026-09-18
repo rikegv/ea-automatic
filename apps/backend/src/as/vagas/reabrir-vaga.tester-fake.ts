@@ -367,7 +367,6 @@ export function pessoa(
       alocadoEm: T0,
       alocadoPorId: COMUM.id,
       admissaoId: null,
-      idMatchPandape: null,
       ultimoContatoEm: null,
       criadoEm: T0,
       atualizadoEm: extras.atualizadoEm ?? T0,
