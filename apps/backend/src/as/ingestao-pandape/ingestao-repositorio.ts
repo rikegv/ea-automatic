@@ -378,8 +378,8 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
   }
 
   /**
-   * A VAGA ESPELHADA: nasce no papel RASCUNHO, casa pela MATRÍCULA da varredura, e REABRE só o que a
-   * própria varredura encerrou.
+   * A VAGA ESPELHADA: nasce no papel REVISAO (a FILA de quem chegou sem cliente), casa pela MATRÍCULA
+   * da varredura, e REABRE só o que a própria varredura encerrou, sem pular a fila.
    *
    * ┌─ A FRONTEIRA DE PROPRIEDADE, E ELA É A MESMA NOS QUATRO PONTOS ──────────────────────────────┐
    * │ Busca, reabertura, matrícula e encerramento leem a MESMA régua: a linha de `as_varredura_vagas`│
@@ -429,7 +429,23 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
     // AUSÊNCIA, que é a verdade ("a vaga não disse quantas"), em vez de derrubar a linha inteira.
     const posicoes = inteiroPositivo(e.valores.posicoes_oficiais);
     const regua = await this.vagaStatus.regua();
-    const codigoRascunho = regua.codigoDoPapel("RASCUNHO");
+    /*
+     * ┌─ O ESPELHO NASCE NA FILA DE REVISÃO, E O CÓDIGO VEM DO PAPEL ───────────────────────────────┐
+     * │ Antes ele nascia no papel RASCUNHO, e ali ficava indistinguível da vaga que um consultor     │
+     * │ começou a digitar: ninguém sabia que faltava vincular o cliente, e o espelho inteiro ficava  │
+     * │ parado sem nenhuma tela acusar. O papel REVISAO existe para essa distinção, e a pergunta ao  │
+     * │ catálogo é a mesma de sempre: o CÓDIGO é editável pelo diretor, o PAPEL é do sistema.        │
+     * │                                                                                              │
+     * │ ELE LANÇA QUANDO FALTA, E SÓ É PERGUNTADO POR QUEM VAI ESCREVÊ-LO. Sem a linha no catálogo   │
+     * │ (banco sem a migration 0115), o caminho que precisa dela PARA com uma frase, em vez de       │
+     * │ empurrar um código que a FK RESTRICT recusaria no meio de uma varredura de 137 mil           │
+     * │ inscrições, onde o chamador engole o erro e soma um contador. Catálogo incompleto é problema │
+     * │ de INSTALAÇÃO. A pergunta é PREGUIÇOSA de propósito: a volta que só atualiza título e cidade │
+     * │ não escreve status nenhum, e fazê-la depender de uma linha que ela não usa transformaria uma │
+     * │ lacuna de catálogo em queda de escrita rotineira.                                            │
+     * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    const codigoDaFila = () => regua.codigoDoPapel("REVISAO");
 
     /*
      * UMA CONSULTA RESPONDE AS DUAS PERGUNTAS: existe vaga com este número, e ela é DA VARREDURA.
@@ -439,6 +455,12 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
     const existentes = (await this.db.execute(sql`
       select v.id,
              v.status,
+             -- O DESTINO DA REABERTURA É O ESTADO DE ANTES DO FECHAMENTO, e é esta coluna que o
+             -- guarda, escrita pelo encerramento automatico na mesma instrucao que fecha a vaga. A
+             -- pergunta que estava aqui antes era "tem cliente?", e ela ERRAVA no único caminho em
+             -- que a vaga está na fila COM cliente: o Master devolveu a vaga para a fila sem trocar
+             -- o cliente. Aquela vaga voltava PUBLICADA, com o vínculo que ele pôs em dúvida.
+             m.status_antes_do_encerramento as status_antes,
              (m.vaga_id is not null) as da_varredura,
              (m.encerrada_pela_varredura_em is not null
               and v.encerrada_em is not distinct from m.encerrada_pela_varredura_em) as encerrou
@@ -447,7 +469,13 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
        where v.id_vacancy_pandape = ${idVacancy}
        order by (m.vaga_id is not null) desc
        limit 1
-    `)) as unknown as { id: string; status: string; da_varredura: boolean; encerrou: boolean }[];
+    `)) as unknown as {
+      id: string;
+      status: string;
+      status_antes: string | null;
+      da_varredura: boolean;
+      encerrou: boolean;
+    }[];
     const existente = existentes[0];
 
     if (!existente) {
@@ -458,7 +486,7 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
         )
         values (
           ${idVacancy}, ${codigo}, ${nomeDivulgacao}, ${cidadeId},
-          ${posicoes}, null, null, ${codigoRascunho}
+          ${posicoes}, null, null, ${codigoDaFila()}
         )
         returning id
       `)) as unknown as { id: string }[];
@@ -494,9 +522,42 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
     }
 
     const reabrir = existente.encerrou && regua.ehDoPapel(existente.status, "FECHAMENTO");
-    const reabertura = reabrir
-      ? sql`status = ${regua.codigoDoPapel("ABERTURA")}, encerrada_em = null, `
-      : sql``;
+    /*
+     * ┌─ A REABERTURA NÃO CONTORNA A FILA ──────────────────────────────────────────────────────────┐
+     * │ Mandar TUDO para ABERTURA abria a porta mais fácil de acionar de todas: bastava a vaga sair  │
+     * │ das ativas do ATS e voltar, e a revisão inteira era pulada em silêncio, de 30 em 30 minutos. │
+     * │ Quem liberou pela tela, conferindo o cliente, não mandava aqui: o ATS mandava.                │
+     * │                                                                                              │
+     * │ O DESTINO É O ESTADO ANTERIOR AO FECHAMENTO, guardado por quem fechou                        │
+     * │ (`as_varredura_vagas.status_antes_do_encerramento`), e NUNCA um estado deduzido de um campo. │
+     * │ A pergunta "tem cliente?", que estava aqui, ERRAVA no único caminho em que a vaga está na    │
+     * │ fila COM cliente: o Master a devolveu para a fila sem trocar o cliente ("este vínculo está   │
+     * │ errado, alguém confira"). Saindo das ativas e voltando, ela ressuscitava PUBLICADA com o     │
+     * │ mesmo vínculo posto em dúvida, sem autor, sem data e sem trilha: o ATS desfazendo sozinho a  │
+     * │ decisão explícita de uma pessoa, pela porta mais fácil de acionar que existe.                 │
+     * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    /*
+     * O DESTINO SÓ É RESOLVIDO QUANDO HÁ REABERTURA: resolver o catálogo na volta que não reabre
+     * nada faria uma escrita rotineira depender de uma linha que ela não usa, e o fail-closed do
+     * catálogo passaria a derrubar o que nem mexe em status.
+     *
+     * ┌─ O GUARDADO É CONFERIDO CONTRA O CATÁLOGO, E O FALLBACK É A FILA ──────────────────────────┐
+     * │ O código guardado não tem FK (ver o schema): o diretor pode ter apagado aquela linha do     │
+     * │ catálogo no meio do caminho, e gravá-la de volta cairia na FK RESTRICT de `vagas.status`,   │
+     * │ derrubando a volta inteira. Status que ENCERRA também não serve de destino: reabrir para um │
+     * │ estado de fechamento deixaria a vaga viva afirmando que acabou. Nos dois casos o destino é  │
+     * │ a FILA, que é o fail-closed certo: revisar de novo custa um clique, e publicar sem revisão  │
+     * │ custa o furo inteiro.                                                                        │
+     * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    const guardado = (existente.status_antes ?? "").trim();
+    const destino = !reabrir
+      ? null
+      : guardado !== "" && regua.existe(guardado) && !regua.linha(guardado).encerra
+        ? guardado
+        : codigoDaFila();
+    const reabertura = destino ? sql`status = ${destino}, encerrada_em = null, ` : sql``;
     /*
      * A REABERTURA ESCREVE MESMO SEM MUDANÇA DE CAMPO, e é por isso que ela entra no `where` como
      * um OU: a vaga pode voltar às ativas com o mesmo título e a mesma cidade, e nesse caso a
@@ -509,7 +570,7 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
      */
     const houveMudanca = sql`(codigo, nome_divulgacao, cidade_id, posicoes_oficiais)
               is distinct from (${codigo}, ${nomeDivulgacao}, ${cidadeId}::integer, ${posicoes}::integer)`;
-    const linhas = (await this.db.execute(sql`
+    const movimento = sql`
       update vagas
          set codigo = ${codigo},
              nome_divulgacao = ${nomeDivulgacao},
@@ -518,8 +579,31 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
              ${reabertura}atualizado_em = now()
        where id = ${existente.id}::uuid
          and ${reabrir ? sql`true` : houveMudanca}
-      returning id
-    `)) as unknown as { id: string }[];
+      returning id`;
+    /*
+     * ┌─ A REABERTURA DEIXA TRILHA, E ELA VAI NA MESMA INSTRUÇÃO DO MOVIMENTO ────────────────────┐
+     * │ Antes o movimento era MUDO: a vaga trocava de status por decisão do ATS e a linha do tempo │
+     * │ dela não registrava nada, então ninguém tinha como saber que aquele status não foi posto   │
+     * │ por gente. Em CTE, e não em duas chamadas, porque o repositório escreve fora de transação: │
+     * │ separadas, a segunda podendo falhar, existiria vaga movida sem o registro do movimento.    │
+     * │                                                                                            │
+     * │ `por_id` É NULO, e isso é a verdade: não houve autor humano. Inventar um usuário de sistema │
+     * │ já está VETADO nesta frente, e faria a trilha afirmar que ALGUÉM moveu o que ninguém moveu. │
+     * │                                                                                            │
+     * │ §A.6: a narrativa tem dois CÓDIGOS DE STATUS e mais nada. Nenhum texto vindo do ATS entra   │
+     * │ aqui: título de vaga é digitado lá fora e já chegou com nome de gente dentro.               │
+     * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    const instrucao =
+      destino === null
+        ? movimento
+        : sql`
+          with movida as (${movimento})
+          insert into as_vaga_status_eventos (vaga_id, de, para, por_id, observacao)
+          select id, ${existente.status}, ${destino}, null, ${narrativaDaReabertura(existente.status, destino)}
+            from movida
+          returning vaga_id as id`;
+    const linhas = (await this.db.execute(instrucao)) as unknown as { id: string }[];
     return { linhasAfetadas: linhas.length > 0 ? 1 : 0, id: existente.id };
   }
 
@@ -616,12 +700,23 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
       sql`, `,
     );
     const linhas = (await this.db.execute(sql`
-      with fechadas as (
+      with
+      -- O RETRATO DE ANTES, E ELE EXISTE PORQUE O "RETURNING" DE UM UPDATE DEVOLVE O VALOR NOVO.
+      -- Sem este retrato nao ha como carregar para a CTE seguinte o status de ONDE a vaga foi
+      -- fechada, que e a unica pergunta que a reabertura pode fazer sem desfazer decisao de gente.
+      -- Ele NAO e o filtro: as condicoes continuam inteiras no "where" do update, entao uma linha
+      -- que mude entre o retrato e a escrita continua sendo avaliada pela regra, e nao pela foto.
+      antes as (
+        select v.id, v.status from vagas v
+      ),
+      fechadas as (
       update vagas v
          set status = ${codigoFechamento},
              encerrada_em = now(),
              atualizado_em = now()
-       where v.id_vacancy_pandape is not null
+        from antes a
+       where a.id = v.id
+         and v.id_vacancy_pandape is not null
          and v.id_vacancy_pandape <> all(array[${ativos}]::text[])
          -- SO AS VAGAS DA VARREDURA, E A FRONTEIRA E A MATRICULA, LINHA A LINHA (m.vaga_id = v.id).
          -- A coluna id_vacancy_pandape de "vagas" tambem e DIGITADA por gente na trilha da vaga, e o
@@ -636,7 +731,7 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
          and exists (
                select 1 from as_vaga_status s
                 where s.codigo = v.status and s.encerra = false)
-      returning v.id
+      returning v.id, a.status as status_antes
       ),
       -- O CARIMBO DE QUEM ENCERROU, e e ele que a REABERTURA le. "now()" e o mesmo instante nas duas
       -- escritas (e o relogio da TRANSACAO, nao o da linha), entao a comparacao "encerrada_em is not
@@ -644,11 +739,17 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
       -- ESTE. Fechado por humano depois disso, o carimbo passa a ser o dele e a varredura nao reabre.
       -- CTE que escreve roda SEMPRE, referenciada ou nao, e na MESMA instrucao: nao ha janela em que
       -- a vaga esteja encerrada sem o registro de quem a encerrou.
+      -- O "DE ONDE" VIAJA JUNTO COM O "QUANDO", e os dois sao o mesmo fato: a reabertura devolve a
+      -- vaga ao status guardado aqui, em vez de deduzi-lo de um campo da vaga. Deduzir pelo cliente
+      -- ressuscitava PUBLICADA a vaga que um Master tinha devolvido para a fila sem trocar o
+      -- cliente, ou seja, o ATS desfazia sozinho e em silencio a decisao explicita de uma pessoa.
       marcadas as (
         update as_varredura_vagas m
            set encerrada_pela_varredura_em = now(),
+               status_antes_do_encerramento = f.status_antes,
                atualizado_em = now()
-         where m.vaga_id in (select id from fechadas)
+          from fechadas f
+         where m.vaga_id = f.id
       )
       select id from fechadas
     `)) as unknown as { id: string }[];
@@ -679,6 +780,17 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
     `)) as unknown as { id: number }[];
     return linhas[0]?.id ?? null;
   }
+}
+
+/**
+ * A FRASE QUE FICA NA TRILHA DA REABERTURA AUTOMÁTICA.
+ *
+ * Ela diz QUEM moveu (a varredura, não uma pessoa) e DE ONDE PARA ONDE, que é o que a linha do
+ * tempo da vaga precisa responder. §A.6: só códigos de status, nada de texto vindo do ATS.
+ * §A.11: sem travessão.
+ */
+function narrativaDaReabertura(de: string, para: string): string {
+  return `A varredura do Pandapé reabriu a vaga, que voltou às ativas do ATS: de ${de} para ${para}.`;
 }
 
 /** O CPF pronto para o banco, ou NULO. Inválido é tratado como ausente (ver `candidatoPorCpf`). */

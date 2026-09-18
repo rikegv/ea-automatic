@@ -203,6 +203,10 @@ export interface BancoDeStatus {
   status: LinhaStatus[];
   vagas: Record<string, unknown>[];
   eventos: Record<string, unknown>[];
+  /** O cadastro de clientes, para quem confere o código do cliente antes de gravá-lo. Vazio por padrão. */
+  clientes: Record<string, unknown>[];
+  /** O rastro da troca de cliente da vaga (`vaga_cliente_correcoes`, 0118). */
+  correcoesDeCliente: Record<string, unknown>[];
   escritas: Escrita[];
   /** A ORDEM DOS GESTOS: é o que prova que a decisão foi tomada COM a linha da vaga travada. */
   ordem: string[];
@@ -211,6 +215,8 @@ export interface BancoDeStatus {
 
 const TABELA_CATALOGO = "as_vaga_status";
 const TABELA_EVENTOS = "as_vaga_status_eventos";
+const TABELA_CLIENTES = "clientes";
+const TABELA_CORRECOES_DE_CLIENTE = "vaga_cliente_correcoes";
 
 /**
  * O BANCO FINGIDO COM MEMÓRIA.
@@ -223,12 +229,15 @@ const TABELA_EVENTOS = "as_vaga_status_eventos";
 export function bancoDeStatus(inicial: {
   status?: LinhaStatus[];
   vagas?: Record<string, unknown>[];
+  clientes?: Record<string, unknown>[];
 } = {}): BancoDeStatus {
   const estado: BancoDeStatus = {
     db: null,
     status: inicial.status ?? statusSemente(),
     vagas: inicial.vagas ?? [],
     eventos: [],
+    clientes: inicial.clientes ?? [],
+    correcoesDeCliente: [],
     escritas: [],
     ordem: [],
     consultas: [],
@@ -237,11 +246,21 @@ export function bancoDeStatus(inicial: {
     if (tabela === TABELA_CATALOGO) return estado.status as unknown as Record<string, unknown>[];
     if (tabela === TABELA_EVENTOS) return estado.eventos;
     if (tabela === "vagas") return estado.vagas;
+    if (tabela === TABELA_CLIENTES) return estado.clientes;
+    if (tabela === TABELA_CORRECOES_DE_CLIENTE) return estado.correcoesDeCliente;
     return [];
   };
 
   const filtrar = (tabela: string, clausula: string): Record<string, unknown>[] => {
     const linhas = linhasDe(tabela);
+    /*
+     * O CADASTRO DE CLIENTES FILTRA PELO CÓDIGO, e por ele SÓ. Sem este ramo, a conferência do
+     * cliente ("este código existe?") receberia o cadastro inteiro e diria SIM para qualquer código
+     * digitado, deixando verde justamente a guarda que recusa cliente inexistente.
+     */
+    if (tabela === TABELA_CLIENTES) {
+      return linhas.filter((l) => mencionado(clausula, String(l.codCliente ?? "")));
+    }
     if (!clausula.trim()) return linhas;
     let saida = linhas;
     const ids = [...clausula.matchAll(/\bid\b\s*(?:=|in)\s*\(?\s*([\d\s,]+)/gi)]

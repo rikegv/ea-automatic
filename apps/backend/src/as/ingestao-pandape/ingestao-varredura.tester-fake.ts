@@ -1,5 +1,6 @@
 import {
   lerLinhaDePara,
+  marcaDeChaveExterna,
   normalizarChaveExterna,
   ehFonteExterna,
   type LinhaDeParaEtapaExternaCrua,
@@ -785,10 +786,27 @@ async function cenarioBase(ingestor: Ingestor, mundos: Mundo[]): Promise<string[
       "ETAPA_MAPEADA_NAO_INGERIDA: a inscrição que ESTÁ na pasta traduzida também não entrou. Fail-closed que recusa tudo não é fail-closed, é ingestão desligada: o ciclo passa a custar 660 requisições por volta para não escrever nada.",
     );
   }
+  /*
+   * ┌─ A REGRA MUDOU DEPOIS DO ACHADO R1 DO `seguranca`, E MUDOU PARA MAIS ESTRITA ───────────────┐
+   * │ ELA EXIGIA A CHAVE CRUA no resumo, e o resumo termina em log PERMANENTE (a varredura escreve│
+   * │ a lista a cada passada). Nome de pasta é TEXTO LIVRE digitado no ATS: "Reservados Fulano de │
+   * │ Tal" punha nome de candidato num log fora do alcance do `aplicarRetencao`. A exigência agora │
+   * │ é a MARCA da chave (`marcaDeChaveExterna`), que é estável e não carrega o texto.             │
+   * │                                                                                             │
+   * │ AS DUAS METADES CONTINUAM MEDIDAS, e é por isso que são duas conferências: o registro TEM de│
+   * │ existir (senão a recusa fail-closed vira perda silenciosa de 35% da entrada) e ele NÃO pode  │
+   * │ ser o texto cru. Trocar uma pela outra reabriria um dos dois defeitos.                       │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   */
   const naoMapeadas = new Set(primeiro.etapasNaoMapeadas.concat(segundo.etapasNaoMapeadas));
-  if (!naoMapeadas.has("entrevista inteligente")) {
+  if ([...naoMapeadas].some((k) => k.includes("entrevista"))) {
     v.push(
-      "ETAPA_NAO_MAPEADA_NAO_REGISTRADA: a chave sem de/para não foi registrada no resumo do ciclo. Recusar a inscrição sem dizer QUAL chave faltou deixa o diretor sem o insumo para mapear, e a recusa vira perda silenciosa de 35% da entrada.",
+      "CHAVE_CRUA_NO_RESUMO: o resumo do ciclo carrega o NOME da pasta do ATS, e ele termina no log da aplicação, que é permanente e está fora do alcance do `aplicarRetencao`. Nome de pasta é texto livre digitado lá fora e chega com nome de gente dentro. O que pode sair daqui é a MARCA da chave.",
+    );
+  }
+  if (!naoMapeadas.has(marcaDeChaveExterna("entrevista inteligente"))) {
+    v.push(
+      "ETAPA_NAO_MAPEADA_NAO_REGISTRADA: a pasta sem de/para não foi registrada no resumo do ciclo, pela MARCA dela. Recusar a inscrição sem registrar nada deixa quem opera sem saber que há configuração faltando, e a recusa vira perda silenciosa de 35% da entrada.",
     );
   }
   if (linhasDe(m, "as_depara_etapa_externa").length > 0) {
@@ -1126,6 +1144,7 @@ export type Defeito =
   | "ETAPA_INICIAL_QUANDO_NAO_MAPEIA"
   | "CRIA_DEPARA_SOZINHO"
   | "NAO_REGISTRA_A_CHAVE"
+  | "REGISTRA_A_CHAVE_CRUA"
   | "FONTE_COM_OUTRA_GRAFIA"
   | "CHAVE_CRUA_SEM_NORMALIZAR"
   | "GRAVA_O_ITEM_INTEIRO"
@@ -1324,7 +1343,12 @@ async function ingerirUm(
   const linha = chave === "" ? null : await deps.banco.deParaEtapa(chave);
   const resolucao = lerLinhaDePara(linha);
   if (!resolucao.mapeada) {
-    if (!com("NAO_REGISTRA_A_CHAVE") && chave !== "") resumo.etapasNaoMapeadas.push(chave);
+    if (!com("NAO_REGISTRA_A_CHAVE") && chave !== "") {
+      // A MARCA, nunca a chave: o resumo termina em log permanente (achado R1 do `seguranca`).
+      resumo.etapasNaoMapeadas.push(
+        com("REGISTRA_A_CHAVE_CRUA") ? chave : marcaDeChaveExterna(chave),
+      );
+    }
     if (com("CRIA_DEPARA_SOZINHO")) {
       await deps.banco.escrever({
         tabela: "as_depara_etapa_externa",
@@ -1528,6 +1552,12 @@ export const MUTANTES_DA_INGESTAO: MutanteDaIngestao[] = [
     dano: "`rotulo_externo` e `motivo_padrao` são configuração REVISADA, e o valor acaba dentro da candidatura de uma pessoa. Um duto automático do ATS para cá leva texto de terceiro para dentro da base sem ninguém ler o que passa.",
     defeito: "CRIA_DEPARA_SOZINHO",
     regraEsperada: "DEPARA_CRIADO_PELO_CICLO",
+  },
+  {
+    nome: "13b. a chave não mapeada é registrada COM O NOME CRU DA PASTA",
+    dano: "o nome da pasta é texto livre do ATS e o resumo termina no log da aplicação, que é permanente e não é alcançado pelo `aplicarRetencao`. Uma pasta \"Reservados Fulano de Tal\" grava nome de candidato ali para sempre (achado R1 do `seguranca`).",
+    defeito: "REGISTRA_A_CHAVE_CRUA",
+    regraEsperada: "CHAVE_CRUA_NO_RESUMO",
   },
   {
     nome: "13. a chave não mapeada não é registrada no resumo",

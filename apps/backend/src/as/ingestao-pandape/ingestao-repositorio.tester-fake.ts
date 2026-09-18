@@ -78,7 +78,7 @@ export function consultaQueCasa(consultas: string[], padrao: RegExp): string | n
 // ── 2. LER A FORMA DA INSTRUÇÃO, POR SENTIDO ───────────────────────────────────────────────────
 
 /** Parte uma lista por vírgula de PROFUNDIDADE ZERO, respeitando parênteses e aspas. */
-function partirPorVirgula(lista: string): string[] {
+export function partirPorVirgula(lista: string): string[] {
   const partes: string[] = [];
   let atual = "";
   let profundidade = 0;

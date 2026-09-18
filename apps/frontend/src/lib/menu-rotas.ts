@@ -71,6 +71,12 @@ export const ROTA_MENU: { prefixo: string; codigo: string }[] = [
   // ser invisível E inalcançável, inclusive por quem digitar a URL. O backend já barra as operações;
   // isto fecha a porta da tela.
   { prefixo: "/as/candidatos", codigo: "as-candidatos" },
+  // VAGAS PENDENTES DE REVISÃO (A&S): governada pelo menu `as-vagas-revisao`, que nasce só para o
+  // SUPER_ADMIN (§A.23). Sem esta linha o guard deixaria qualquer autenticado abrir a URL direto, e
+  // desta tela se VINCULA CLIENTE e se LIBERA vaga, que é decidir a quem pertence o processo
+  // seletivo de gente que já está pendurada nela. O prefixo é próprio de propósito: `/as/vagas` casa
+  // por igualdade ou por `/`, então esta rota não é engolida pelo menu da Central de Vagas.
+  { prefixo: "/as/vagas-pendentes-revisao", codigo: "as-vagas-revisao" },
   // ETAPAS DO FUNIL (A&S): governada pelo menu `as-etapas`, que nasce só para o SUPER_ADMIN
   // (§A.23). AQUI A LINHA PESA MAIS DO QUE NAS OUTRAS, e o motivo é medido: a LEITURA do catálogo
   // (`GET /as/etapas`) é aberta a qualquer autenticado de propósito, porque a pill da etapa aparece

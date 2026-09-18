@@ -3059,6 +3059,79 @@ export const asVagaStatusEventos = pgTable(
   }),
 );
 
+/**
+ * ─ A TROCA DE CLIENTE FEITA PELO MASTER NA CORREÇÃO DA LIBERAÇÃO (achado V1 do `seguranca`) ────
+ *
+ * O DEFEITO QUE ELA FECHA: a correção do Master gravava o `cod_cliente` novo na vaga e só deixava
+ * trilha quando a vaga TAMBÉM voltava para a fila de revisão. Quem corrigia SÓ o cliente não
+ * deixava registro nenhum, e a única afirmação consultável que sobrava era a da liberação
+ * ("Liberada da revisão com o cliente A"), que passava a estar ERRADA. Trilha silenciosa é ruim;
+ * trilha que afirma o cliente antigo é pior, porque é lida como verdade. Trocar o cliente de uma
+ * vaga redefine sob qual controlador ficam as candidaturas penduradas nela (§A.6), então o par
+ * (quem, quando, de quem para quem) é obrigatório.
+ *
+ * ┌─ TABELA PRÓPRIA, E NÃO UMA LINHA EM `as_vaga_status_eventos` ──────────────────────────────────┐
+ * │ Aquela tabela é a linha do tempo do MOVIMENTO DE STATUS, e a correção de cliente não move      │
+ * │ status nenhum: gravá-la como "ABERTA para ABERTA" inventaria um passo que não aconteceu. Mais  │
+ * │ concreto que o argumento de desenho, ela MUDA A RESPOSTA DE UM LEITOR: o apagar do catálogo    │
+ * │ (`vaga-status.service.remover`) conta eventos com `de = codigo or para = codigo` para decidir  │
+ * │ entre APAGAR de verdade e INATIVAR. Uma vaga entra num status sem gerar evento (a trilha de    │
+ * │ abertura e a publicação gravam o status direto), então uma correção de CADASTRO passaria a     │
+ * │ transformar "zero trilha, apaga" em "há vagas que já passaram por ele, inativa" por causa de   │
+ * │ uma edição que não é passagem. É o molde de `vaga_meta_reducoes` (0099), pelo mesmo motivo:    │
+ * │ rastro de um gesto que a linha da vaga sozinha não sabe contar.                                 │
+ * └────────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * `atualizado_em` NÃO RESOLVE, e era o que estava escrito no lugar disto: ele responde QUANDO a
+ * linha foi tocada pela última vez, nunca QUEM tocou nem qual era o valor anterior, e é sobrescrito
+ * pela próxima escrita qualquer.
+ *
+ * SEM FK PARA `clientes`, E A AUSÊNCIA É DELIBERADA (mesma decisão da 0117). Uma FK `restrict` faria
+ * este RASTRO impedir a administração do cadastro de clientes, e uma `set null`/`cascade` trocaria a
+ * memória da troca por um buraco silencioso. Quem escreve confere o código contra o cadastro ANTES
+ * de gravar (`exigirClienteExistente`), que é onde a conferência serve para alguma coisa.
+ *
+ * §A.6: um id de vaga, dois CÓDIGOS de cliente, um id de usuário INTERNO e uma data. Nenhum dado de
+ * candidato, nenhum CPF, nenhum texto livre vindo de fora.
+ */
+export const vagaClienteCorrecoes = pgTable(
+  "vaga_cliente_correcoes",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    /** CASCADE: o rastro é DA vaga e não sobrevive a ela, mesma regra de `vaga_meta_reducoes`. */
+    vagaId: uuid("vaga_id")
+      .notNull()
+      .references(() => vagas.id, { onDelete: "cascade" }),
+    /**
+     * O CLIENTE DE ANTES, NULÁVEL porque a vaga espelhada do Pandapé nasce SEM cliente: é isso que a
+     * fila de revisão existe para resolver. Nulo aqui é "não havia vínculo", que não é um código.
+     */
+    deCodCliente: varchar("de_cod_cliente", { length: 40 }),
+    paraCodCliente: varchar("para_cod_cliente", { length: 40 }).notNull(),
+    /**
+     * SET NULL, como o autor da redução de meta: apagar um usuário não pode FALHAR por causa de uma
+     * correção de meses atrás, e o rastro não pode sumir junto com ele. Sem o autor, ele ainda diz
+     * QUANDO e DE QUEM PARA QUEM.
+     */
+    porId: uuid("por_id").references(() => usuarios.id, { onDelete: "set null" }),
+    criadoEm,
+  },
+  (t) => ({
+    /** (vaga, quando): a linha do tempo da vaga, da mais antiga para a mais recente. */
+    idxVaga: index("idx_vaga_cliente_correcoes_vaga").on(t.vagaId, t.criadoEm),
+    /**
+     * LINHA QUE NÃO É TROCA NÃO EXISTE, e quem garante é o banco: sem este check, um caminho futuro
+     * que gravasse toda correção transformaria o rastro numa lista de "salvei o formulário", e a
+     * pergunta que ele responde (quem trocou o cliente desta vaga, e de qual para qual) ficaria
+     * enterrada no ruído. É o mesmo desenho de `ck_vaga_meta_reducoes_houve_reducao`.
+     */
+    ckHouveTroca: check(
+      "ck_vaga_cliente_correcoes_houve_troca",
+      sql`${t.deCodCliente} is distinct from ${t.paraCodCliente}`,
+    ),
+  }),
+);
+
 // ── CENTRAL DE CANDIDATOS (A&S, onda 1) ─────────────────────────────────────
 //
 // TRÊS TABELAS E UMA PONTE. A pessoa (`as_candidatos`), a ligação dela com uma vaga
@@ -4047,6 +4120,24 @@ export const asVarreduraVagas = pgTable(
     ultimoInsertDate: varchar("ultimo_insert_date", { length: 40 }),
     /** O instante em que a VARREDURA encerrou esta vaga. Nulo é "não fui eu quem encerrou". */
     encerradaPelaVarreduraEm: timestamp("encerrada_pela_varredura_em", { withTimezone: true }),
+    /**
+     * DE ONDE a varredura encerrou esta vaga, e é ele que a REABERTURA retoma (migration 0117).
+     *
+     * ┌─ POR QUE A REABERTURA NÃO PODE DEDUZIR O DESTINO DE UM CAMPO DA VAGA ─────────────────────┐
+     * │ Ela perguntava "tem cliente?", e existe exatamente um caminho em que a vaga está na FILA   │
+     * │ de revisão COM cliente: o Master a devolveu para a fila sem trocar o cliente, que é o      │
+     * │ gesto de "este vínculo está errado, alguém confira". Saindo das ativas do ATS e voltando,  │
+     * │ ela ressuscitava PUBLICADA, com o mesmo cliente posto em dúvida, sem autor e sem trilha: o │
+     * │ ATS desfazia sozinho, em silêncio, a decisão explícita de um Master.                       │
+     * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * ESCRITO NA MESMA INSTRUÇÃO QUE FECHA A VAGA, junto do carimbo de instante: o par (quando, de
+     * onde) é um só fato, e em duas instruções haveria uma janela com a vaga fechada e sem origem.
+     *
+     * SEM FK PARA O CATÁLOGO, de propósito (o raciocínio está na migration): quem lê CONFERE o
+     * código em `regua.existe` e, sem linha, cai na FILA, que é o destino fail-closed.
+     */
+    statusAntesDoEncerramento: varchar("status_antes_do_encerramento", { length: 40 }),
     criadoEm,
     atualizadoEm,
   },

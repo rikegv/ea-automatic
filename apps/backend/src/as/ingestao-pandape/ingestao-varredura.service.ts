@@ -209,7 +209,7 @@ export class IngestaoVarreduraService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  /** §A.6: o resumo do ciclo é CONTAGEM e nome de pasta. Nenhuma pessoa é nomeada aqui. */
+  /** §A.6: o resumo do ciclo é CONTAGEM e MARCA de pasta. Nenhum texto livre do ATS entra no log. */
   private registrar(etapa: string, r: ResumoDoCiclo): void {
     if (
       r.vagasVarridas === 0 &&
@@ -226,10 +226,19 @@ export class IngestaoVarreduraService implements OnModuleInit, OnModuleDestroy {
         `${r.conflitosParaRevisao} conflito(s) para revisao, ${r.erros} erro(s).`,
     );
     if (r.etapasNaoMapeadas.length > 0) {
-      // A CHAVE SEM DE/PARA É INSUMO DO DIRETOR, e é NOME DE PASTA DE VAGA, nunca dado de pessoa.
-      // Sem esta linha, a recusa fail-closed vira perda silenciosa de 35% da entrada.
+      /*
+       * SEM ESTA LINHA, A RECUSA FAIL-CLOSED VIRA PERDA SILENCIOSA DE 35% DA ENTRADA: ela diz que
+       * houve pasta sem tradução e QUANTAS, que é o que faz alguém ir configurar o de/para.
+       *
+       * O QUE SOBE É A MARCA, NUNCA O NOME DA PASTA (achado R1 do `seguranca`): o nome é texto
+       * livre digitado no ATS e pode chegar com nome de gente dentro, e o log da aplicação é
+       * permanente e está fora do alcance do `aplicarRetencao`. A marca é estável entre passadas,
+       * então ela ainda responde "são sempre as mesmas?", que é a pergunta de quem opera; o nome
+       * legível se lê na FONTE, o ATS, que é de onde sai a linha de de/para de qualquer jeito.
+       */
       this.logger.warn(
-        `Etapas externas sem de/para nesta passada: ${r.etapasNaoMapeadas.join(" | ")}`,
+        `Pastas do ATS sem de/para nesta passada: ${r.etapasNaoMapeadas.length}. ` +
+          `Marcas (o nome da pasta nao entra no log, §A.6): ${r.etapasNaoMapeadas.join(" | ")}`,
       );
     }
   }

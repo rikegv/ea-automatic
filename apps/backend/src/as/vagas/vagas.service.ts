@@ -6,7 +6,7 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { and, asc, desc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type {
   AsCidade,
@@ -65,6 +65,7 @@ import {
   usuarios,
   asVagaStatusEventos,
   vagaBeneficio,
+  vagaClienteCorrecoes,
   vagaMetaReducoes,
   vagas,
 } from "../../db/schema";
@@ -96,6 +97,8 @@ import type {
   FecharVagaDto,
   MoverStatusVagaDto,
   ReabrirVagaDto,
+  CorrigirLiberacaoRevisaoDto,
+  LiberarVagaRevisaoDto,
 } from "./vagas.dto";
 import { idiomasGravados, type VagaIdiomaGravado } from "../../domain/vaga-idioma";
 import type { VagaItemOndaE } from "./vaga-item-onda-e";
@@ -2933,9 +2936,26 @@ export class VagasService {
           "Esta vaga já foi encerrada e o status dela não muda mais por aqui. Recarregue a página.",
         );
       }
-      if (regua.ehDoPapel(vaga.status, "RASCUNHO")) {
+      /*
+       * ┌─ A SEGUNDA CONDIÇÃO CRESCEU, E ELA PERGUNTA À RÉGUA, NÃO A UM PAPEL ────────────────────┐
+       * │ Ela cobria só o RASCUNHO, e a fila de revisão nasceu FORA dela: `PENDENTE_REVISAO` não   │
+       * │ encerra (a primeira condição libera a saída) e `ABERTA` é destino manual de propósito (o │
+       * │ destino também libera), então a vaga espelhada SEM CLIENTE terminava esta chamada        │
+       * │ publicada, por uma rota HTTP, e a trava do `liberarPendenteRevisao` continuava lá,       │
+       * │ verdadeira e inútil, porque a mesma tela oferecia o outro caminho.                        │
+       * │                                                                                          │
+       * │ A PERGUNTA MUDOU DE CASA DE PROPÓSITO (`exigeReguaDeAbertura`), e o porquê da lista de   │
+       * │ papéis viver lá está escrito lá: o quarto status que precisar desta recusa se acrescenta │
+       * │ em UM lugar, com a explicação na frente, em vez de virar um terceiro `ehDoPapel` perdido │
+       * │ no meio de uma transação. NÃO "SIMPLIFIQUE" ESTA CONDIÇÃO achando que a primeira a cobre:│
+       * │ ela é a única que existe, nos dois casos.                                                 │
+       * └──────────────────────────────────────────────────────────────────────────────────────────┘
+       */
+      if (regua.exigeReguaDeAbertura(vaga.status)) {
         throw new ConflictException(
-          "O rascunho é publicado pela trilha de abertura, que confere os campos obrigatórios.",
+          regua.ehDoPapel(vaga.status, "REVISAO")
+            ? "Esta vaga veio do Pandapé e está pendente de revisão. Ela sai da fila pela liberação, que confere o cliente vinculado."
+            : "O rascunho é publicado pela trilha de abertura, que confere os campos obrigatórios.",
         );
       }
       // O MOVIMENTO PARA ONDE A VAGA JÁ ESTÁ NÃO É MOVIMENTO: gravá-lo encheria a trilha de linhas
@@ -2960,6 +2980,348 @@ export class VagasService {
     });
 
     return this.devolverVaga(id, "Status alterado, mas a vaga não foi encontrada na listagem.");
+  }
+
+  // ── A FILA DE REVISÃO DA VAGA ESPELHADA ──────────────────────────────────────────────────────
+
+  /**
+   * A FILA: as vagas que a varredura do Pandapé espelhou e que ninguém do EA ainda revisou.
+   *
+   * ELA REUSA A `list()`, E ISSO NÃO É PREGUIÇA: a fila é a MESMA tabela da Central de Vagas, com as
+   * mesmas colunas resolvidas (cliente, cargo, autor, ocupação) e a mesma máscara (§A.12). Uma
+   * segunda consulta divergiria da primeira no primeiro ajuste, e a que divergisse seria a da fila,
+   * mostrando um conjunto que a tela principal não mostra.
+   *
+   * O RECORTE É O PAPEL, resolvido no catálogo: o código é editável pelo diretor, o papel não.
+   */
+  async pendentesDeRevisao(): Promise<VagaItemOndaE[]> {
+    const regua = await this.statusVaga.regua();
+    const codigo = regua.codigoDoPapel("REVISAO");
+    return (await this.list()).filter((v) => v.status === codigo);
+  }
+
+  /**
+   * A CONTAGEM LEVE da fila, para o badge do menu e o polling da tela.
+   *
+   * ELA NÃO PASSA PELA `list()` de propósito: a listagem resolve uma dúzia de junções para desenhar
+   * linha, e quem só precisa do NÚMERO chamaria isso a cada minuto, por usuário. Aqui é um `count`
+   * sobre a coluna indexada, e nenhum dado de vaga sai daqui (§A.6: devolve número, nunca linha).
+   */
+  async contarPendentesDeRevisao(): Promise<{ count: number }> {
+    const regua = await this.statusVaga.regua();
+    const codigo = regua.codigoDoPapel("REVISAO");
+    const [linha] = await this.db
+      .select({ total: count() })
+      .from(vagas)
+      .where(eq(vagas.status, codigo));
+    return { count: Number(linha?.total ?? 0) };
+  }
+
+  /**
+   * ─ LIBERAR A VAGA PENDENTE DE REVISÃO: UMA VAGA POR VEZ, E SÓ COM CLIENTE ─────────────────────
+   *
+   * ┌─ SEM LOTE, E A AUSÊNCIA É A DECISÃO ────────────────────────────────────────────────────────┐
+   * │ O lote foi VETADO: um cliente errado aplicado a centenas de vagas atribui centenas de pessoas │
+   * │ ao controlador errado, e desfazer não desfaz o que já foi visto. Não existe rota de lote, e   │
+   * │ não é para existir.                                                                           │
+   * └────────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * ┌─ SEM `@Roles`, E A AUSÊNCIA TAMBÉM É DECISÃO ───────────────────────────────────────────────┐
+   * │ Revisar a vaga que chegou, vincular o cliente que falta e liberar é trabalho de consultor,   │
+   * │ como a Liberação Admissional. O que é de Master é DESFAZER (`reverterLiberacaoDaRevisao`).    │
+   * └────────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * ┌─ A TRAVA DO CLIENTE É DO SERVIDOR, SOB A LINHA TRAVADA ─────────────────────────────────────┐
+   * │ Guarda só de tela é contornada por qualquer chamada direta à rota, e a vaga sairia da fila   │
+   * │ sem o dado que a pôs lá: depois disso ninguém mais sabe que faltava. O `cod_cliente` é lido  │
+   * │ DENTRO da transação, sob o `SELECT ... FOR UPDATE`, no molde do `moverStatus`, e não da       │
+   * │ fotografia que a tela viu: entre o clique e a gravação alguém pode ter desvinculado.          │
+   * │ E A RECUSA ACONTECE ANTES DE ESCREVER: recusa que já gravou não é recusa.                     │
+   * └────────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * O DESTINO É O CÓDIGO DO PAPEL ABERTURA, perguntado ao catálogo. Um literal acertaria por
+   * coincidência, e a coincidência acaba na primeira renomeação, virando FK RESTRICT na operação.
+   *
+   * A TRILHA VAI NA MESMA TRANSAÇÃO (regra 8 da §A.3): quem liberou, quando, e COM QUAL CLIENTE. O
+   * cliente entra na observação porque ele é a decisão que esta porta registra, e porque a vaga pode
+   * ser revinculada depois: sem ele no rastro, "por que esta vaga foi liberada" fica sem resposta.
+   * §A.6: código de cliente, id de usuário interno e dois códigos de status. Nada de candidato.
+   */
+  async liberarPendenteRevisao(
+    id: string,
+    user: AuthUser,
+    /*
+     * ┌─ O CORPO VEM DEPOIS DO USUÁRIO, E A ORDEM NÃO É DESCUIDO ──────────────────────────────┐
+     * │ Ele é OPCIONAL: quem já vinculou o cliente em outra tela chama sem corpo nenhum, e a    │
+     * │ liberação lê o vínculo do banco. A tela manda o cliente JUNTO, porque vincular e liberar│
+     * │ é um gesto só para quem opera, e duas chamadas deixariam a vaga com cliente e ainda na  │
+     * │ fila quando a segunda falhasse, com a retentativa tendo de adivinhar onde parou.         │
+     * │ Com o parâmetro no fim, a chamada de dois argumentos continua válida, e ela é a forma    │
+     * │ que o contrato de teste desta frente exercita.                                           │
+     * └──────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    dto?: LiberarVagaRevisaoDto,
+  ): Promise<VagaListItem> {
+    const regua = await this.statusVaga.regua();
+    const codigoAbertura = regua.codigoDoPapel("ABERTURA");
+    const clienteDoCorpo = (dto?.codCliente ?? "").trim();
+    if (clienteDoCorpo !== "") await this.exigirClienteExistente(clienteDoCorpo);
+
+    await this.db.transaction(async (tx) => {
+      const [vaga] = await tx
+        .select({ id: vagas.id, status: vagas.status, codCliente: vagas.codCliente })
+        .from(vagas)
+        .where(eq(vagas.id, id))
+        .for("update");
+      if (!vaga) throw new NotFoundException("Vaga não encontrada.");
+
+      /*
+       * SÓ SAI DAQUI QUEM ESTÁ NA FILA. Sem esta conferência, a liberação vira uma SEGUNDA porta
+       * para o papel ABERTURA, sem a régua de obrigatórios da trilha, que é exatamente o buraco que
+       * a guarda do `moverStatus` teve de fechar.
+       */
+      if (!regua.ehDoPapel(vaga.status, "REVISAO")) {
+        throw new ConflictException(
+          "Esta vaga não está pendente de revisão. Recarregue a página.",
+        );
+      }
+      /*
+       * A TRAVA É SOBRE O CLIENTE FINAL, e ela continua sendo do servidor: o corpo pode TRAZER o
+       * vínculo que falta, mas não pode dispensá-lo. Vazio nos dois lados é recusa, e a recusa
+       * acontece ANTES de qualquer escrita, porque recusa que já gravou não é recusa.
+       */
+      const clienteFinal = clienteDoCorpo !== "" ? clienteDoCorpo : (vaga.codCliente ?? "").trim();
+      if (clienteFinal === "") {
+        throw new ConflictException(
+          "Vincule o cliente desta vaga antes de liberar. A vaga veio do Pandapé sem cliente, e é isso que a revisão existe para resolver.",
+        );
+      }
+
+      await tx
+        .update(vagas)
+        .set({
+          status: codigoAbertura,
+          atualizadoEm: new Date(),
+          // O VÍNCULO É GRAVADO NA MESMA TRANSAÇÃO da saída da fila: ou a vaga sai COM cliente, ou
+          // ela não sai. Não existe o estado intermediário em que uma das duas metades venceu.
+          ...(clienteDoCorpo !== "" ? { codCliente: clienteDoCorpo } : {}),
+        })
+        .where(eq(vagas.id, id));
+
+      await tx.insert(asVagaStatusEventos).values({
+        vagaId: id,
+        de: vaga.status,
+        para: codigoAbertura,
+        // QUEM vem da SESSÃO, nunca do corpo: autoria é trilha, não campo de formulário.
+        porId: user.id,
+        observacao: `Liberada da revisão com o cliente ${clienteFinal}.`,
+      });
+    });
+
+    return this.devolverVaga(id, "Vaga liberada, mas não foi encontrada na listagem.");
+  }
+
+  /**
+   * O CLIENTE DO CORPO É CONFERIDO CONTRA O CATÁLOGO ANTES DE QUALQUER ESCRITA.
+   *
+   * SEM ISTO, um código inexistente chegaria à FK RESTRICT e viraria 500 genérico no meio de uma
+   * transação, sem dizer a quem opera o que fazer. A conferência é leitura, então mora FORA da
+   * transação, como o catálogo de status: ela responde sobre um cadastro que não muda no intervalo.
+   */
+  private async exigirClienteExistente(codCliente: string): Promise<void> {
+    const [achado] = await this.db
+      .select({ cod: clientes.codCliente })
+      .from(clientes)
+      .where(eq(clientes.codCliente, codCliente))
+      .limit(1);
+    if (!achado) {
+      throw new BadRequestException(
+        "Este cliente não está no cadastro. Recarregue a página e escolha um cliente da lista.",
+      );
+    }
+  }
+
+  /**
+   * AS VAGAS QUE JÁ SAÍRAM DA FILA PELA LIBERAÇÃO, que é o conjunto da correção do Master.
+   *
+   * ELAS NÃO ESTÃO MAIS PENDENTES (a fila é o próprio estado), então precisam de leitura própria:
+   * sem ela, corrigir uma liberação errada exigiria caçar a vaga no meio da Central de Vagas
+   * inteira. O recorte é a TRILHA, e não um flag novo na vaga: quem saiu da fila por aqui deixou o
+   * evento `REVISAO -> ABERTURA` gravado, e é esse evento que responde "esta vaga foi liberada".
+   */
+  async liberadasDaRevisao(): Promise<VagaItemOndaE[]> {
+    const regua = await this.statusVaga.regua();
+    const codigoRevisao = regua.codigoDoPapel("REVISAO");
+    const codigoAbertura = regua.codigoDoPapel("ABERTURA");
+    const eventos = await this.db
+      .selectDistinct({ vagaId: asVagaStatusEventos.vagaId })
+      .from(asVagaStatusEventos)
+      .where(
+        and(
+          eq(asVagaStatusEventos.de, codigoRevisao),
+          eq(asVagaStatusEventos.para, codigoAbertura),
+        ),
+      );
+    if (eventos.length === 0) return [];
+    const liberadas = new Set(eventos.map((e) => e.vagaId));
+    return (await this.list()).filter((v) => liberadas.has(v.id));
+  }
+
+  /**
+   * ─ CORRIGIR A LIBERAÇÃO (Master): A REDE DE SEGURANÇA DA LIBERAÇÃO ERRADA ─────────────────────
+   *
+   * UMA PORTA PARA OS DOIS GESTOS, e eles andam juntos na vida real: quem descobre que liberou com
+   * o cliente errado quer TROCAR O CLIENTE, e às vezes quer a vaga DE VOLTA NA FILA para alguém
+   * conferir o resto. Duas rotas obrigariam a tela a chamar as duas em sequência no caso mais
+   * comum, com a vaga passando por um estado em que ela afirma um cliente que ninguém mais defende.
+   *
+   * O `devolverParaFila` É EXPLÍCITO, e não deduzido da troca de cliente: corrigir o cliente de uma
+   * vaga que já está rodando não deve, sozinho, tirar a vaga da operação e devolvê-la para uma fila
+   * de revisão. Quem decide isso é quem corrige, e a decisão fica gravada na trilha.
+   *
+   * ┌─ `@Roles("MASTER", "SUPER_ADMIN")` NA ROTA, E O SUPER_ADMIN É ESCRITO ──────────────────────┐
+   * │ O `RolesGuard` faz `required.includes(papel)` e LANÇA antes de tratar o SUPER_ADMIN, então   │
+   * │ `@Roles("MASTER")` sozinho barraria o próprio diretor. É o molde do `reabrir`.                │
+   * └────────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * ┌─ SÓ DESFAZ O QUE ESTA PORTA FEZ ───────────────────────────────────────────────────────────┐
+   * │ A vaga precisa estar no papel ABERTURA E ter, na trilha, uma liberação da revisão. Sem essa  │
+   * │ conferência, esta rota viraria uma porta para EMPURRAR qualquer vaga aberta para dentro da   │
+   * │ fila do espelho, e o que a fila afirma (veio do ATS, falta vincular cliente) deixaria de ser │
+   * │ verdade. Vaga já encerrada não entra: desfazer encerramento é `reabrir`, que tem régua.       │
+   * └────────────────────────────────────────────────────────────────────────────────────────────────┘
+   */
+  async corrigirLiberacaoDaRevisao(
+    id: string,
+    dto: CorrigirLiberacaoRevisaoDto,
+    user: AuthUser,
+  ): Promise<VagaListItem> {
+    const regua = await this.statusVaga.regua();
+    const codigoRevisao = regua.codigoDoPapel("REVISAO");
+    const codigoAbertura = regua.codigoDoPapel("ABERTURA");
+    const clienteCorrigido = (dto.codCliente ?? "").trim();
+    if (clienteCorrigido !== "") await this.exigirClienteExistente(clienteCorrigido);
+
+    await this.db.transaction(async (tx) => {
+      const [vaga] = await tx
+        .select({ id: vagas.id, status: vagas.status, codCliente: vagas.codCliente })
+        .from(vagas)
+        .where(eq(vagas.id, id))
+        .for("update");
+      if (!vaga) throw new NotFoundException("Vaga não encontrada.");
+      if (!regua.ehDoPapel(vaga.status, "ABERTURA")) {
+        throw new ConflictException(
+          "Só é possível desfazer a liberação de uma vaga aberta. Recarregue a página.",
+        );
+      }
+
+      const [liberacao] = await tx
+        .select({ id: asVagaStatusEventos.id })
+        .from(asVagaStatusEventos)
+        .where(
+          and(
+            eq(asVagaStatusEventos.vagaId, id),
+            eq(asVagaStatusEventos.de, codigoRevisao),
+            eq(asVagaStatusEventos.para, codigoAbertura),
+          ),
+        )
+        .limit(1);
+      if (!liberacao) {
+        throw new ConflictException(
+          "Esta vaga não foi liberada da fila de revisão, então não há liberação a desfazer.",
+        );
+      }
+
+      /*
+       * O CLIENTE SÓ É REESCRITO QUANDO O CORPO O TRAZ, e o status só volta quando pedirem. Uma
+       * correção que não mudasse nada nos dois campos seria uma linha de trilha sobre um movimento
+       * que não houve, então ela é recusada antes de gravar.
+       */
+      const trocaCliente = clienteCorrigido !== "" && clienteCorrigido !== (vaga.codCliente ?? "");
+      if (!trocaCliente && !dto.devolverParaFila) {
+        throw new ConflictException(
+          "Nada a corrigir: escolha outro cliente ou devolva a vaga para a fila de revisão.",
+        );
+      }
+
+      await tx
+        .update(vagas)
+        .set({
+          atualizadoEm: new Date(),
+          ...(dto.devolverParaFila ? { status: codigoRevisao } : {}),
+          ...(trocaCliente ? { codCliente: clienteCorrigido } : {}),
+        })
+        .where(eq(vagas.id, id));
+
+      /*
+       * ┌─ A TROCA DE CLIENTE DEIXA RASTRO SEMPRE, E NÃO SÓ QUANDO A VAGA VOLTA PARA A FILA ────────┐
+       * │ ACHADO V1 DO `seguranca`, e ele era bloqueante: o `update` acima grava o cliente novo em  │
+       * │ toda correção, e a escrita da trilha estava INTEIRA dentro do `if (devolverParaFila)`.    │
+       * │ Quem corrigia SÓ o cliente não deixava autor, data nem valor anterior, e a trilha não     │
+       * │ ficava silenciosa: ficava ERRADA, porque a liberação já gravou "Liberada da revisão com o │
+       * │ cliente A" e essa continuava sendo a única afirmação consultável depois de a vaga passar  │
+       * │ a ser do cliente B. Trocar o cliente redefine sob qual controlador ficam as candidaturas  │
+       * │ penduradas na vaga (§A.6), então o par (quem, quando, de quem para quem) é obrigatório.    │
+       * │                                                                                          │
+       * │ `atualizado_em` NÃO ERA RESPOSTA, e era o que estava escrito aqui: ele diz quando a linha │
+       * │ foi tocada, nunca QUEM tocou nem qual era o valor antes, e a próxima escrita o sobrescreve.│
+       * └──────────────────────────────────────────────────────────────────────────────────────────┘
+       */
+      if (trocaCliente) {
+        await tx.insert(vagaClienteCorrecoes).values({
+          vagaId: id,
+          deCodCliente: vaga.codCliente,
+          paraCodCliente: clienteCorrigido,
+          // QUEM vem da SESSÃO, nunca do corpo: autoria é trilha, não campo de formulário.
+          porId: user.id,
+        });
+      }
+
+      /*
+       * A TRILHA DE STATUS SÓ GANHA EVENTO QUANDO O STATUS ANDA. A correção que só troca o cliente
+       * não é movimento de status, e gravá-la como "ABERTA para ABERTA" encheria a linha do tempo de
+       * passos que não aconteceram. Não é só desenho: o apagar do catálogo
+       * (`vaga-status.service.remover`) conta eventos com `de = codigo or para = codigo` para
+       * escolher entre APAGAR e INATIVAR, e uma vaga entra em status sem gerar evento (a trilha de
+       * abertura grava o status direto), então a correção de CADASTRO viraria "há vagas que já
+       * passaram por ele" sem passagem nenhuma. Por isso a troca de cliente tem tabela própria
+       * (`vaga_cliente_correcoes`, 0118), no molde de `vaga_meta_reducoes`, e não uma linha aqui.
+       */
+      if (dto.devolverParaFila) {
+        await tx.insert(asVagaStatusEventos).values({
+          vagaId: id,
+          de: vaga.status,
+          para: codigoRevisao,
+          porId: user.id,
+          observacao: this.narrativaDaCorrecao(
+            vaga.codCliente,
+            trocaCliente ? clienteCorrigido : null,
+          ),
+        });
+      }
+    });
+
+    return this.devolverVaga(id, "Correção aplicada, mas a vaga não foi encontrada na listagem.");
+  }
+
+  /**
+   * A FRASE QUE FICA NA TRILHA DE STATUS DA CORREÇÃO, e ela guarda a TROCA, não só o estado final:
+   * "o cliente era X e passou a ser Y" é a informação que explica a reversão seis meses depois.
+   *
+   * ELA SÓ SERVE AO RAMO DA DEVOLUÇÃO, e a primeira linha dela afirma isso em palavras. É por isso
+   * que ela NÃO é a resposta do achado V1: usá-la na correção que não devolve a vaga faria a frase
+   * mentir ("a vaga voltou para a fila") sobre uma vaga que não voltou. O rastro da troca de cliente
+   * é o par de colunas de `vaga_cliente_correcoes` (0118), que não depende de frase nenhuma e vale
+   * para os dois casos.
+   *
+   * §A.6: só código de cliente. Nenhum dado de candidato, nenhum texto livre de fora.
+   */
+  private narrativaDaCorrecao(clienteAntes: string | null, clienteDepois: string | null): string {
+    const partes = ["Liberação corrigida: a vaga voltou para a fila de revisão."];
+    if (clienteDepois !== null) {
+      partes.push(`Cliente: de ${clienteAntes ?? "não informado"} para ${clienteDepois}.`);
+    }
+    return partes.join(" ");
   }
 
   /**

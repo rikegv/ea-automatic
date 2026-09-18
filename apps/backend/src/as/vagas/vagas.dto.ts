@@ -772,3 +772,61 @@ export class ReabrirVagaDto {
   @MaxLength(500)
   observacao?: string;
 }
+
+/**
+ * ─ DTO DA LIBERAÇÃO DA VAGA PENDENTE DE REVISÃO ────────────────────────────────────────────────
+ *
+ * CORPO MINÚSCULO, E O QUE NÃO ESTÁ NELE É A RÉGUA:
+ *
+ * ┌─ NÃO EXISTE CAMPO DE STATUS ───────────────────────────────────────────────────────────────┐
+ * │ O destino é SEMPRE o código do papel ABERTURA, resolvido no servidor contra o catálogo.     │
+ * │ Aceitá-lo do corpo transformaria a liberação na porta SEM RÉGUA para qualquer status.       │
+ * └────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ `codCliente` É OPCIONAL, E NÃO É A DISPENSA DA TRAVA ─────────────────────────────────────┐
+ * │ Ele existe para VINCULAR E LIBERAR numa chamada só, que é como o gesto acontece na tela.    │
+ * │ Ausente, a liberação usa o vínculo que já está na vaga. Vazio dos dois lados é RECUSA, e a  │
+ * │ recusa é do servidor, dentro da transação, sob a linha travada: o corpo pode TRAZER o       │
+ * │ cliente que falta, nunca dizer que ele não é necessário.                                    │
+ * └────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * NÃO EXISTE CAMPO DE AUTOR: quem liberou vem da SESSÃO, e vai inteiro para a trilha.
+ */
+export class LiberarVagaRevisaoDto {
+  /** O cliente que faltava. O catálogo de clientes e a FK é que o governam. */
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === "string" ? value.trim() : value))
+  @IsString()
+  @MinLength(1)
+  @MaxLength(40)
+  codCliente?: string;
+}
+
+/**
+ * ─ DTO DA CORREÇÃO DA LIBERAÇÃO (Master) ───────────────────────────────────────────────────────
+ *
+ * DOIS GESTOS NUM CORPO SÓ: trocar o cliente e devolver a vaga para a fila de revisão. Quem corrige
+ * escolhe um, o outro, ou os dois, e a escolha é EXPLÍCITA:
+ *
+ * ┌─ `devolverParaFila` NÃO É DEDUZIDO DA TROCA DE CLIENTE ────────────────────────────────────┐
+ * │ Corrigir o cliente de uma vaga que já está rodando não pode, sozinho, tirá-la da operação e │
+ * │ jogá-la de volta numa fila de revisão. Deduzir isso faria uma correção de cadastro virar um │
+ * │ movimento de processo, em silêncio, e a vaga sumiria da Central de Vagas sem ninguém pedir. │
+ * └────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * NÃO EXISTE CAMPO DE STATUS NEM DE AUTOR, pelas mesmas razões do DTO acima.
+ */
+export class CorrigirLiberacaoRevisaoDto {
+  /** O cliente certo. Ausente ou igual ao atual não troca nada. */
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === "string" ? value.trim() : value))
+  @IsString()
+  @MinLength(1)
+  @MaxLength(40)
+  codCliente?: string;
+
+  /** Devolver a vaga para a fila de revisão, em vez de só acertar o cliente. */
+  @IsOptional()
+  @IsBoolean()
+  devolverParaFila?: boolean;
+}

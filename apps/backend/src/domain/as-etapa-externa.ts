@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { CANDIDATURA_SITUACOES, type CandidaturaSituacao } from "@ea/shared-types";
 
 /**
@@ -72,6 +73,39 @@ export function normalizarChaveExterna(nome: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
+}
+
+/**
+ * ─ A MARCA DE UMA CHAVE EXTERNA: O QUE PODE SER DITO EM VOZ ALTA SOBRE UMA PASTA DO ATS ────────
+ *
+ * ┌─ O ACHADO R1 DO `seguranca`, e o repositório já dava a resposta ───────────────────────────────┐
+ * │ A chave sem de/para era escrita CRUA no log da aplicação, a cada passada da varredura, com o   │
+ * │ argumento de que nome de pasta "é nome de vaga, nunca dado de pessoa". Isso é SUPOSIÇÃO. O     │
+ * │ nome da pasta é TEXTO LIVRE, digitado por quem abriu a vaga lá fora, e o próprio código da     │
+ * │ frente já recusou texto do ATS por esse motivo (`ingestao-repositorio.ts`, na narrativa da     │
+ * │ reabertura: "é digitado lá fora e já chegou com nome de gente dentro"). Uma pasta chamada      │
+ * │ "Reservados Fulano de Tal" põe nome de candidato no log, permanentemente e FORA do alcance do  │
+ * │ `aplicarRetencao`, que só sabe expurgar o que está no banco.                                   │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ POR QUE MARCA, E NÃO TRUNCAGEM ──────────────────────────────────────────────────────────────┐
+ * │ Truncar não é controle de dado pessoal, é encurtamento: o primeiro pedaço de "fulano de tal"   │
+ * │ continua sendo o nome da pessoa, e o log continuaria carregando exatamente o que não pode      │
+ * │ carregar. A marca é um digesto curto e ESTÁVEL: a mesma pasta produz a mesma marca em toda     │
+ * │ passada, e duas pastas diferentes não se confundem numa linha só.                              │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * E ELA AINDA SERVE A QUEM OPERA, que é a razão de a recusa ser registrada. A função do registro é
+ * fail-closed: avisar que HOUVE pasta sem tradução, QUANTAS e se são SEMPRE AS MESMAS (é a marca
+ * repetida, passada após passada, que diz "isto não é um caso solto, é configuração faltando"). O
+ * nome legível da pasta se lê na FONTE, o ATS, que é onde ele é autoritativo e onde ele está sob a
+ * retenção de lá, e é de lá que sai a linha de de/para, que é configuração REVISADA à mão.
+ *
+ * NÃO É REVERSÍVEL NA PRÁTICA e não identifica ninguém sozinha: são 8 hexadecimais de um digesto,
+ * sem nome, sem id de pessoa e sem vínculo com registro nenhum.
+ */
+export function marcaDeChaveExterna(chave: string): string {
+  return createHash("sha256").update(chave, "utf8").digest("hex").slice(0, 8);
 }
 
 /**

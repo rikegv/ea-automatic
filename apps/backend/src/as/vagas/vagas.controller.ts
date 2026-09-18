@@ -8,6 +8,8 @@ import {
   FecharVagaDto,
   MoverStatusVagaDto,
   ReabrirVagaDto,
+  CorrigirLiberacaoRevisaoDto,
+  LiberarVagaRevisaoDto,
 } from "./vagas.dto";
 import { VagasService } from "./vagas.service";
 
@@ -41,6 +43,39 @@ export class VagasController {
   @Get("contexto")
   contexto(@CurrentUser() user: AuthUser) {
     return this.vagas.contextoAs(user.id);
+  }
+
+  /**
+   * A FILA DAS VAGAS PENDENTES DE REVISÃO: o que a varredura do Pandapé espelhou sem cliente.
+   *
+   * DECLARADA ANTES DAS ROTAS COM `:id`, e isso não é arrumação: o Nest casa rotas na ORDEM de
+   * declaração, e um `@Get(":id/...")` declarado antes engoliria "pendentes-revisao" como se fosse
+   * um id. É o mesmo cuidado das rotas de liberação da Admissão.
+   *
+   * SEM `@Roles`: revisar a vaga que chegou é trabalho de consultor, como a Liberação Admissional.
+   * A controller inteira já é reivindicada pelo menu `as-vagas`.
+   */
+  @Get("pendentes-revisao")
+  pendentesDeRevisao() {
+    return this.vagas.pendentesDeRevisao();
+  }
+
+  /**
+   * AS VAGAS QUE JÁ SAÍRAM DA FILA PELA LIBERAÇÃO: o conjunto da correção do Master.
+   *
+   * SEM `@Roles` na LEITURA, e é coerente com a fila: a lista é de vaga, cliente e cargo, sem dado
+   * pessoal nenhum, e é a mesma informação que a Central de Vagas já mostra a quem tem o menu. O que
+   * é de Master é a ESCRITA, e ela tem o guard na rota dela.
+   */
+  @Get("pendentes-revisao/liberadas")
+  liberadasDaRevisao() {
+    return this.vagas.liberadasDaRevisao();
+  }
+
+  /** A contagem leve da fila (badge do menu e polling da tela). Devolve número, nunca linha. */
+  @Get("pendentes-revisao/contagem")
+  contagemPendentesDeRevisao() {
+    return this.vagas.contarPendentesDeRevisao();
   }
 
   /** Quem abriu vem da SESSÃO, nunca do corpo: é trilha, não campo de formulário. */
@@ -226,5 +261,50 @@ export class VagasController {
   @Roles("MASTER", "SUPER_ADMIN")
   reabrir(@Param("id") id: string, @Body() dto: ReabrirVagaDto, @CurrentUser() user: AuthUser) {
     return this.vagas.reabrir(id, dto, user);
+  }
+
+  /**
+   * LIBERAR A VAGA PENDENTE DE REVISÃO, uma por vez.
+   *
+   * ┌─ SEM `@Roles`, E A AUSÊNCIA É DECISÃO DO DIRETOR ──────────────────────────────────────────┐
+   * │ QUALQUER CONSULTOR LIBERA: revisar a vaga que chegou do Pandapé, vincular o cliente que     │
+   * │ falta e liberar é fluxo operacional do dia a dia, exatamente como a Liberação Admissional.  │
+   * │ O que é de Master aqui é DESFAZER, e essa rota tem o `@Roles` logo abaixo.                   │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * NÃO HÁ ROTA DE LOTE, e a ausência é a decisão: um cliente errado aplicado a centenas de vagas
+   * atribui centenas de pessoas ao controlador errado, e desfazer não desfaz o que já foi visto.
+   *
+   * POST e não PATCH, no molde do `fechar` e do `reabrir`: aqui não se edita a vaga, registra-se um
+   * movimento dela, com trilha. O CORPO É VAZIO de propósito: o destino é resolvido no catálogo e o
+   * cliente é lido do banco, sob a linha travada, nunca do que a tela mandou.
+   */
+  @Post(":id/liberar-revisao")
+  liberarRevisao(
+    @Param("id") id: string,
+    @Body() dto: LiberarVagaRevisaoDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.vagas.liberarPendenteRevisao(id, user, dto);
+  }
+
+  /**
+   * CORRIGIR A LIBERAÇÃO: trocar o cliente, devolver a vaga para a fila, ou as duas coisas.
+   *
+   * ┌─ COM `@Roles`, E O `SUPER_ADMIN` É ESCRITO ────────────────────────────────────────────────┐
+   * │ A ação inteira é de Master, por decisão do diretor: ela é a rede de segurança da liberação  │
+   * │ errada, e corrigir o trabalho de outra pessoa não é operação de rotina. `@Roles("MASTER")`  │
+   * │ sozinho barraria o próprio diretor, porque o `RolesGuard` confere `required.includes(papel)`│
+   * │ e LANÇA antes de tratar o SUPER_ADMIN. É o molde do `reabrir`.                               │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   */
+  @Post(":id/corrigir-revisao")
+  @Roles("MASTER", "SUPER_ADMIN")
+  corrigirRevisao(
+    @Param("id") id: string,
+    @Body() dto: CorrigirLiberacaoRevisaoDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.vagas.corrigirLiberacaoDaRevisao(id, dto, user);
   }
 }

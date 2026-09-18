@@ -273,7 +273,13 @@ describe("criar: o código sai do rótulo, e recriar um inativo manda REATIVAR",
     expect(criado.encerra).toBe(false);
     expect(criado.daTrilha).toBe(false);
     expect(criado.movivelManualmente).toBe(true);
-    expect(criado.ordem).toBe(6);
+    /*
+     * A ORDEM É DERIVADA, E DEIXOU DE SER O LITERAL `6`: o status do diretor nasce no FIM da lista,
+     * e a lista cresceu quando a semente ganhou `PENDENTE_REVISAO` (migration 0115). O literal
+     * transformava "nasce no fim" em "nasce na sexta posição", que é outra afirmação, e que fica
+     * vermelha toda vez que o catálogo ganha uma linha, sem nenhum defeito ter acontecido.
+     */
+    expect(criado.ordem).toBe(semente().length + 1);
   });
 
   it("recusa recriar um código que existe INATIVO, e a frase manda reativar", async () => {
@@ -294,9 +300,12 @@ describe("criar: o código sai do rótulo, e recriar um inativo manda REATIVAR",
 
   it("recusa rótulo sem letra nem número, em vez de gravar um código vazio", async () => {
     const banco = bancoFingidoDeStatus({ status: semente() });
+    const antes = banco.estado.status.length;
     const erro = await servico(banco).criar({ rotulo: "!!!" }).catch((e) => e);
     expect(erro).toBeInstanceOf(BadRequestException);
-    expect(banco.estado.status).toHaveLength(5);
+    // NADA FOI GRAVADO, e a conta é contra o estado ANTERIOR: o literal `5` media o tamanho da
+    // semente, não a recusa, e a semente cresceu com a fila de revisão (migration 0115).
+    expect(banco.estado.status).toHaveLength(antes);
   });
 });
 

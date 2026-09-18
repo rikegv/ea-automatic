@@ -465,9 +465,18 @@ describe("TRAVA 2: alocar em vaga fechada", () => {
     for (const s of VAGA_STATUS_SEMENTE) if (s.encerra) expect(s.recebeCandidato).toBe(false);
   });
 
-  it("ABERTA recebe, e o RASCUNHO também (a captação começa antes de publicar)", () => {
+  /**
+   * A FILA DE REVISÃO ENTROU NESTA LISTA (migration 0115), e é OBRIGATÓRIO que ela esteja aqui.
+   *
+   * É na vaga que o espelho do Pandapé trouxe que TODA inscrição lida pela varredura é pendurada.
+   * Com `recebeCandidato: false` naquela linha, a ingestão para de gravar candidatura e NADA falha:
+   * a vaga continua na tela, a varredura continua rodando, e as pessoas simplesmente não chegam.
+   * Por isso ela é nomeada aqui, e não somada a uma contagem: quem mexer naquele flag encosta nesta
+   * afirmação e lê o motivo antes de mudá-la.
+   */
+  it("ABERTA recebe, o RASCUNHO também, e a fila de revisão também", () => {
     const recebem = VAGA_STATUS_SEMENTE.filter((s) => s.recebeCandidato).map((s) => s.codigo);
-    expect(recebem).toEqual(["RASCUNHO", "ABERTA"]);
+    expect(recebem).toEqual(["RASCUNHO", "ABERTA", "PENDENTE_REVISAO"]);
   });
 });
 

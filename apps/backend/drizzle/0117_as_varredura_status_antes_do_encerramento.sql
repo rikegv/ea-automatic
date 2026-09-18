@@ -1,0 +1,34 @@
+-- O ESTADO DE ONDE A VARREDURA FECHOU A VAGA, para a REABERTURA retomá-lo em vez de deduzi-lo.
+--
+-- ┌─ O DEFEITO QUE ESTA COLUNA FECHA (veto do `seguranca`) ────────────────────────────────────────┐
+-- │ A reabertura decidia o destino perguntando "esta vaga tem cliente?", e existe exatamente um     │
+-- │ caminho em que a vaga está na FILA de revisão COM cliente preenchido: o Master a devolveu para  │
+-- │ a fila, sem trocar o cliente, que é o gesto de "este vínculo está errado, alguém confira".      │
+-- │ Saindo das ativas do ATS e voltando, ela ressuscitava PUBLICADA, com o mesmo cliente que o      │
+-- │ Master pôs em dúvida, sem autor, sem data e sem trilha. O ATS desfazia a decisão de um Master.  │
+-- │ A pergunta certa não é sobre o cliente: é "de onde a varredura fechou esta vaga?".              │
+-- └─────────────────────────────────────────────────────────────────────────────────────────────────┘
+--
+-- ┌─ POR QUE A COLUNA MORA AQUI, E NÃO EM `vagas` ─────────────────────────────────────────────────┐
+-- │ Ela é memória DA VARREDURA sobre um encerramento que a varredura fez, e é o par exato do        │
+-- │ `encerrada_pela_varredura_em`, que já mora nesta tabela e guarda o QUANDO. O par (quando, de    │
+-- │ onde) tem de nascer e morrer junto, e nascer junto é literal: as duas colunas são escritas na   │
+-- │ MESMA instrução que encerra a vaga, então não existe janela em que a vaga esteja fechada sem se │
+-- │ saber de onde ela veio. Em `vagas` a coluna seria mais um campo de estado que a trilha humana    │
+-- │ passaria a ter de manter, e ela não é estado da vaga: é lembrete de quem vai desfazer.          │
+-- └─────────────────────────────────────────────────────────────────────────────────────────────────┘
+--
+-- SEM FK PARA `as_vaga_status`, E A AUSÊNCIA É DELIBERADA. Uma FK `restrict` faria este LEMBRETE
+-- impedir o diretor de apagar uma linha do catálogo, e uma `set null`/`cascade` transformaria a
+-- administração do catálogo em perda silenciosa de memória. Quem lê a coluna CONFERE o código
+-- contra o catálogo antes de gravá-lo (`regua.existe`) e, não existindo mais, cai na FILA, que é o
+-- destino fail-closed: revisar de novo custa um clique, publicar sem revisão custa o furo inteiro.
+--
+-- MIGRATION PRÓPRIA, e não um pedaço da 0115: aquela é o papel `REVISAO` no catálogo de status,
+-- outro assunto e outra tabela. Reverter uma não pode obrigar a reverter a outra.
+--
+-- §A.6: um código de status. Nenhum dado de pessoa entra nesta tabela, e nada aqui muda isso.
+--
+-- RE-EXECUTÁVEL: `add column if not exists`. Rodar duas vezes deixa o banco no mesmo estado.
+ALTER TABLE "as_varredura_vagas"
+  ADD COLUMN IF NOT EXISTS "status_antes_do_encerramento" varchar(40);

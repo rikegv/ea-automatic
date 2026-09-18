@@ -1,5 +1,6 @@
 import {
   lerLinhaDePara,
+  marcaDeChaveExterna,
   normalizarChaveExterna,
   type FonteExterna,
 } from "../../domain/as-etapa-externa";
@@ -337,19 +338,21 @@ async function espelharVaga(deps: DependenciasDaVarredura, vaga: VagaProjetada):
       cod_cliente: codCliente,
       cargo_id: null,
       /*
-       * NASCE `RASCUNHO`, e o nome aqui é o PAPEL, não o código: quem traduz papel em código é o
-       * repositório, contra `as_vaga_status`, porque o diretor renomeia código e a trilha pergunta
-       * pelo papel (é a régua que `vagas.service` já segue).
+       * ─ NASCE NA FILA DE REVISÃO, E QUEM DECIDE O CÓDIGO É O REPOSITÓRIO ──────────────────────
        *
-       * POR QUE RASCUNHO: a vaga espelhada nasce sem cliente, sem cargo e sem linha de serviço, ou
-       * seja reprovada pela régua `vagaPendencias` do próprio domínio. Nascer ABERTA a publicaria
-       * incompleta na Central de Vagas e misturaria, na contagem da tela, o que o time abriu com o
-       * que o ATS espelhou. RASCUNHO tem `recebe_candidato = true`, então a candidatura entra desde
-       * o primeiro ciclo, e tem `da_trilha = true`, então promovê-la depois é movimento que a
-       * trilha já aceita. A escolha entre RASCUNHO e ABERTA é do diretor; a fábrica adota RASCUNHO
-       * por ora, e é reversível.
+       * ESTE CAMPO É DESCRITIVO, e não a autoridade: o repositório NÃO lê o `status` desta escrita.
+       * Ele pergunta ao catálogo o código do PAPEL (`codigoDoPapel("REVISAO")`), porque o diretor
+       * renomeia código e a régua pergunta pelo papel. O valor fica aqui para que a escrita diga a
+       * verdade a quem a lê.
+       *
+       * POR QUE A FILA, E NÃO MAIS O RASCUNHO (decisão do diretor): a vaga espelhada nasce sem
+       * cliente, e no rascunho ela ficava indistinguível da vaga que um consultor começou a digitar.
+       * Ninguém sabia que faltava vincular o cliente, e as centenas de vagas do espelho ficavam
+       * paradas sem nenhuma tela acusar. `PENDENTE_REVISAO` tem `recebe_candidato = true`, então a
+       * candidatura entra desde o primeiro ciclo, e `da_trilha = false`, porque quem sai dela sai
+       * pela liberação, que confere o cliente, e não pela trilha de abertura.
        */
-      status: "RASCUNHO",
+      status: "PENDENTE_REVISAO",
     },
   });
   return gravada.id;
@@ -390,13 +393,19 @@ async function ingerirInscricao(
   const resolucao = lerLinhaDePara(linha);
   if (!resolucao.mapeada) {
     /*
-     * A RECUSA SEM REGISTRO VIRA PERDA SILENCIOSA DE 35% DA ENTRADA. A chave (que é NOME DE PASTA,
-     * nunca dado de pessoa) volta no resumo do ciclo para o diretor mapear uma a uma. O ciclo NÃO
-     * cria linha de de/para sozinho: `rotulo_externo` e `motivo_padrao` são configuração REVISADA,
-     * e o valor acaba dentro da candidatura de uma pessoa.
+     * A RECUSA SEM REGISTRO VIRA PERDA SILENCIOSA DE 35% DA ENTRADA, então ela é registrada. O que
+     * sobe é a MARCA da chave, nunca a chave: o nome da pasta é texto livre digitado lá fora, e
+     * "Reservados Fulano de Tal" poria nome de candidato num log permanente, fora do alcance do
+     * `aplicarRetencao` (achado R1 do `seguranca`; a razão inteira está em `marcaDeChaveExterna`).
+     * A marca é estável, então a repetição dela entre passadas continua dizendo o que interessa:
+     * há pasta sem tradução, são estas, são sempre as mesmas.
+     *
+     * O CICLO NÃO CRIA LINHA DE DE/PARA SOZINHO: `rotulo_externo` e `motivo_padrao` são configuração
+     * REVISADA, e o valor acaba dentro da candidatura de uma pessoa.
      */
-    if (chave !== "" && !resumo.etapasNaoMapeadas.includes(chave)) {
-      resumo.etapasNaoMapeadas.push(chave);
+    const marca = chave === "" ? "" : marcaDeChaveExterna(chave);
+    if (marca !== "" && !resumo.etapasNaoMapeadas.includes(marca)) {
+      resumo.etapasNaoMapeadas.push(marca);
     }
     return;
   }

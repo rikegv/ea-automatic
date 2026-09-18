@@ -996,6 +996,32 @@ export const VAGA_VINCULO_LABEL: Record<VagaVinculo, string> = {
 export const VAGA_STATUS_PAPEIS = [
   "LIVRE",
   "RASCUNHO",
+  /*
+   * ─ REVISAO, O PAPEL DA VAGA QUE ENTROU SOZINHA E AINDA NAO FOI OLHADA ────────────────────────
+   *
+   * A varredura do Pandape espelha vaga que NINGUEM abriu no EA, e o cliente dela nao tem caminho
+   * na API (medido): ela nasce com `cod_cliente` NULO, esperando alguem vincular e liberar.
+   *
+   * POR QUE UM PAPEL PROPRIO, E NAO UM DOS QUE JA EXISTIAM. Os dois atalhos foram medidos e os dois
+   * quebram:
+   *   1. REUSAR `RASCUNHO`: o banco RECUSA. O indice parcial unico (`papel` onde `papel <> 'LIVRE'`)
+   *      garante exatamente UM status por papel de sistema, entao o segundo RASCUNHO nem entra;
+   *   2. USAR `LIVRE`: o banco aceita, e e por isso que este e o atalho perigoso. A guarda que
+   *      impede publicar sem conferir os obrigatorios pergunta `ehDoPapel(status, "RASCUNHO")`, e
+   *      com `LIVRE` ela simplesmente NAO DISPARA: a vaga sem cliente vira ABERTA por movimento
+   *      manual, pulando a fila de revisao inteira, sem nada falhar e sem tela nenhuma acusar.
+   *
+   * ELE E DE SISTEMA, e nao `LIVRE`, porque a fila de revisao precisa perguntar ao catalogo QUAL e
+   * a linha da revisao, e essa pergunta so tem resposta quando ha uma linha so. E a unicidade quem
+   * responde, exatamente como no ENTREGA e no FECHAMENTO.
+   *
+   * ELE NAO ENCERRA (`encerra = false`) e RECEBE CANDIDATO (`recebe_candidato = true`), e as duas
+   * coisas sao obrigatorias: sem a segunda a ingestao nao consegue pendurar as candidaturas que
+   * acabou de ler, e a primeira e o que mantem a vaga viva ate alguem revisar. O risco conhecido da
+   * primeira (gente protegida do expurgo enquanto a vaga nao encerra) ja esta fechado pelo
+   * `encerrarAusentes`, que alcanca por `s.encerra = false` e nao por codigo nenhum.
+   */
+  "REVISAO",
   "ABERTURA",
   "ENTREGA",
   "FECHAMENTO",
@@ -1068,6 +1094,23 @@ export const VAGA_STATUS_SEMENTE: readonly VagaStatusItem[] = [
   { codigo: "ENTREGUE",  rotulo: "Entregue",  ordem: 3, tom: "ok", ativo: true, papel: "ENTREGA",      encerra: true,  recebeCandidato: false, daTrilha: false, movivelManualmente: false },
   { codigo: "FECHADA",   rotulo: "Fechada",   ordem: 4, tom: "nt", ativo: true, papel: "FECHAMENTO",   encerra: true,  recebeCandidato: false, daTrilha: false, movivelManualmente: false },
   { codigo: "CANCELADA", rotulo: "Cancelada", ordem: 5, tom: "dg", ativo: true, papel: "CANCELAMENTO", encerra: true,  recebeCandidato: false, daTrilha: false, movivelManualmente: false },
+  /*
+   * A SEXTA LINHA, a fila da vaga que entrou sozinha (migration 0115).
+   *
+   * `recebeCandidato: true` E OBRIGATORIO, e nao uma escolha: a varredura precisa pendurar nela as
+   * candidaturas que acabou de ler, e sem isso a ingestao para de funcionar em silencio.
+   *
+   * `daTrilha: false` porque ninguem a abre pela trilha: ela nasce da varredura do Pandape.
+   * `movivelManualmente: false` porque a saida dela e a LIBERACAO, que confere o cliente. Os dois
+   * flags juntos NAO bastam como trava, e por isso existe `exigeReguaDeAbertura` na regua: o
+   * diretor edita flag pela tela do catalogo, e uma trava que dependesse so deles mudaria de
+   * alcance sozinha.
+   *
+   * `encerra: false` mantem a vaga viva ate alguem revisar. O risco conhecido disso (gente
+   * protegida do expurgo enquanto a vaga nao encerra) ja esta fechado pelo `encerrarAusentes`, que
+   * alcanca por `s.encerra = false` e nao por codigo nenhum.
+   */
+  { codigo: "PENDENTE_REVISAO", rotulo: "Pendente De Revisão", ordem: 6, tom: "dg", ativo: true, papel: "REVISAO", encerra: false, recebeCandidato: true, daTrilha: false, movivelManualmente: false },
 ];
 
 /**

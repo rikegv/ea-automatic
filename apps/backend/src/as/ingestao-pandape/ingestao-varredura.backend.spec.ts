@@ -226,9 +226,16 @@ function repositorioFalso(respostas: unknown[][] = []): {
     },
     async regua() {
       return {
+        /*
+         * UM CÓDIGO POR PAPEL, e não um "tudo que não for rascunho é ABERTA": desde que a vaga
+         * espelhada passou a nascer na FILA DE REVISÃO, este dublê precisa distinguir o papel
+         * REVISAO do papel ABERTURA, senão a afirmação do destino ficaria verde com os dois.
+         */
         codigoDoPapel: (papel: string) => {
           papeis.push(papel);
-          return papel === "RASCUNHO" ? "RASCUNHO" : "ABERTA";
+          if (papel === "RASCUNHO") return "RASCUNHO";
+          if (papel === "REVISAO") return "PENDENTE_REVISAO";
+          return "ABERTA";
         },
         ehDoPapel: (codigo: string, papel: string) =>
           codigo === "FECHADA" && papel === "FECHAMENTO",
@@ -348,7 +355,13 @@ describe("o repositório da ingestão", () => {
     expect(sqls[0]).toContain("on conflict (fonte, identificador) do nothing");
   });
 
-  it("a vaga espelhada NASCE no papel RASCUNHO, sem cliente e sem cargo", async () => {
+  /*
+   * O NASCIMENTO MUDOU DE PAPEL POR DECISÃO DO DIRETOR, e o teste acompanha o requisito novo: a
+   * vaga que o espelho traz SEM CLIENTE nasce na FILA DE REVISÃO (papel REVISAO, migration 0115), e
+   * não mais no RASCUNHO. No rascunho ela ficava indistinguível da vaga que um consultor começou a
+   * digitar, e as centenas de vagas espelhadas ficavam paradas sem nenhuma tela acusar.
+   */
+  it("a vaga espelhada NASCE na FILA DE REVISÃO, sem cliente e sem cargo", async () => {
     const { repo, sqls, papeis } = repositorioFalso([[], [{ id: "v" }], []]);
     await repo.escrever({
       tabela: "vagas",
@@ -362,7 +375,7 @@ describe("o repositório da ingestão", () => {
         posicoes_oficiais: 3,
         cod_cliente: null,
         cargo_id: null,
-        status: "RASCUNHO",
+        status: "PENDENTE_REVISAO",
       },
     });
     const insert = sqls.find((s) => s.includes("insert into vagas")) ?? "";
@@ -370,11 +383,14 @@ describe("o repositório da ingestão", () => {
     expect(insert).toContain("null, null");
     /*
      * O STATUS ENTRA PELO PAPEL, e não pelo literal: o código é editável pelo diretor, e um
-     * `'RASCUNHO'` gravado direto pararia de valer no dia da renomeação, com o FK RESTRICT
+     * `'PENDENTE_REVISAO'` gravado direto pararia de valer no dia da renomeação, com o FK RESTRICT
      * derrubando a ingestão inteira. O valor viaja como PARÂMETRO, então o que se afirma aqui é a
      * pergunta que o repositório fez ao catálogo.
      */
-    expect(papeis).toContain("RASCUNHO");
+    expect(papeis).toContain("REVISAO");
+    // E o RASCUNHO deixou de ser perguntado: a fila de revisão é outro papel, e a vaga do espelho
+    // não passa mais pelo status em que a trilha humana rascunha.
+    expect(papeis).not.toContain("RASCUNHO");
     // A linha da varredura nasce junto: é ela que diz QUAIS vagas são da varredura, e sem isso o
     // encerramento automático alcançaria a vaga que um consultor cadastrou à mão.
     const matricula = sqls.find((s) => s.includes("insert into as_varredura_vagas")) ?? "";

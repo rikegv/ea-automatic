@@ -55,10 +55,11 @@ mapeada.
 
 | onde | o que tem de aparecer |
 |---|---|
-| Central de Vagas | **uma linha nova**, com o número do ATS preenchido, nascendo em **Rascunho** |
+| Central de Vagas | **uma linha nova**, com o número do ATS preenchido, nascendo em **Pendente De Revisão**, com o selo **Não Revisada** |
 | a mesma linha | **cliente VAZIO**, e isto é o certo, não defeito (veja a nota abaixo) |
 | Central de Candidatos | **três pessoas novas**, cada uma na **etapa traduzida**, nunca todas na inicial |
 | a ficha de qualquer uma | **origem Pandapé** |
+| **Vagas Pendentes De Revisão** (menu novo) | a mesma linha, esperando alguém vincular o cliente |
 
 **A nota do cliente vazio, e ela importa:** foi medido que o cliente da vaga **não tem caminho na API
 do Pandapé**. A régua da casa é **adiar em vez de inventar** `cod_cliente` (§A.5), então a vaga entra
@@ -97,10 +98,18 @@ A fábrica manda um candidato numa pasta **sem tradução**.
 que ninguém fez, e contaminaria o funil inteiro sem ninguém descobrir. E cadastrar a pessoa para
 segurar só a candidatura coletaria CPF, e-mail e telefone para uso nenhum.
 
-**Isto é o que hoje deixa 35% das inscrições de fora, POR DESENHO.** Foi medido: das 25 chaves de
-etapa vivas no Pandapé, **10 estão mapeadas e 15 faltam**. As quatro que decidem o volume são
-`entrevista inteligente` (325 vagas, 29,5% das inscrições), `retorno negativo etapa soulan` (401
-vagas), `pre selecionado` (136 vagas, 5,5%) e `finalistas` (174 vagas). **Mapear as 15 é insumo seu.**
+**ISTO MUDOU COM AS SUAS DECISÕES, e o número de fora caiu.** Antes, das 25 chaves de etapa vivas no
+Pandapé, 10 estavam mapeadas e **15 faltavam**, o que deixava 35% das inscrições de fora. Agora são
+**23 chaves resolvidas**: as 10 antigas, mais `entrevista inteligente` (325 vagas), `pre selecionado`
+(136 vagas) e as **11 marginais** que você fechou, todas ATIVAS.
+
+**Duas ficaram INATIVAS de propósito, e a diferença importa:** `retorno negativo etapa soulan` (401
+vagas) e `finalistas` (174 vagas). Linha inativa **não é linha ausente**: ela fica gravada como
+decisão deliberada, e o resolvedor a trata como não mapeada, então **ninguém é escrito por ela**.
+Ligar qualquer uma das duas é um `update` de uma linha, e o efeito de ligar a do retorno negativo é
+grande: ela é a única que escreve `DESCARTADO`, o que carimba a pessoa e mexe no relógio de retenção.
+
+A fase 4 continua valendo para a pasta que ninguém mapeou ainda, que é o que o fail-closed protege.
 
 ---
 
@@ -120,12 +129,40 @@ conjunto cresce a cada volta. Foi o achado mais caro da auditoria desta frente.
 
 ---
 
+## FASE 6: A FILA DE REVISÃO (a tela nova, e a decisão 5)
+
+O menu **Vagas Pendentes De Revisão** nasce só para o Super Admin (§A.23): quem mais enxerga é você
+quem libera, na tela de permissão de menu.
+
+| o que conferir | esperado |
+|---|---|
+| a fila | as vagas espelhadas, cada uma com a tag **Sem Cliente** |
+| a vaga sem cliente | o botão de liberar **recusa**, e a tela diz que falta vincular o cliente |
+| vincule o cliente e libere | a vaga sai da fila e vai para **Aberta**, uma de cada vez |
+| a aba **Liberadas Recentemente** | a vaga aparece ali, com quem liberou |
+| liberar em lote | **não existe**, e a ausência é deliberada |
+
+**Por que não existe lote:** um cliente errado aplicado a 600 vagas atribuiria centenas de pessoas ao
+controlador errado, de uma vez, sem ninguém olhar linha por linha. A auditoria vetou, e a liberação é
+uma vaga por vez.
+
+**A trava é do servidor, não da tela.** Sem cliente vinculado, a rota recusa mesmo que alguém chame
+por fora. A tela só explica o motivo.
+
+**A correção é de MASTER.** Liberou com o cliente errado, o Master conserta pela ação de correção, que
+pode trocar o cliente e, se você quiser, devolver a vaga para a fila. Consultor não corrige.
+
+---
+
 ## O QUE VOCÊ DECIDE DEPOIS DE VALIDAR
 
 1. **A data de corte** (`PANDAPE_VARREDURA_DATA_CORTE`), que é o que liga a ponte de verdade.
-2. **As 15 chaves de etapa** sem de/para, uma a uma.
-3. **Com que status a vaga espelhada nasce**, Rascunho ou Aberta. Ligada a ponte, a Central de Vagas
-   ganha cerca de 600 linhas de uma vez: nenhuma tela quebra, todas mudam de número.
+2. ~~As 15 chaves de etapa sem de/para~~ **RESPONDIDO:** 11 marginais ativas, 2 inativas (o retorno
+   negativo e as finalistas). Resta ligar as duas inativas, se e quando você quiser.
+3. ~~Com que status a vaga espelhada nasce~~ **RESPONDIDO:** ela nasce em **Pendente De Revisão**, um
+   status novo, e entra na fila da tela nova em vez de se misturar aos rascunhos de quem abre vaga
+   aqui. Ligada a ponte, a Central de Vagas ganha cerca de 600 linhas de uma vez: nenhuma tela quebra,
+   todas mudam de número, e as 600 ficam identificadas pelo selo.
 4. **O intervalo**: 30 minutos é o mais agressivo ainda seguro, usa 20% da cota e aguenta 38% de
    crescimento da conta.
 5. **Se a validação com dado real acontece em produção**, com janela curta e sob o seu olho.

@@ -150,7 +150,45 @@ export class ReguaDeStatusDaVaga {
   rotulo(codigo: string): string {
     return this.linha(codigo).rotulo;
   }
+
+  /**
+   * ─ A VAGA NESTE STATUS PUBLICA POR PORTA PRÓPRIA, COM RÉGUA? ──────────────────────────────────
+   *
+   * É a pergunta que o `moverStatus` faz antes de deixar uma vaga SAIR do status em que ela está, e
+   * ela existe porque publicar tem régua e o movimento manual não a tem: `ABERTA` é destino manual
+   * de propósito (é o caminho de volta que impede a vaga em status do diretor de virar zumbi), então
+   * sem esta pergunta a régua inteira é pulada por uma rota HTTP, em um clique.
+   *
+   * ┌─ POR QUE A LISTA DE PAPÉIS, E NÃO UMA PROPRIEDADE DO CATÁLOGO ──────────────────────────────┐
+   * │ A forma preferível seria perguntar uma PROPRIEDADE ("este status exige a régua de abertura"), │
+   * │ porque lista de papéis é o que faz o TERCEIRO status repetir esta história. Ela não existe, e │
+   * │ as candidatas todas MENTEM ao serem medidas contra o catálogo de verdade:                     │
+   * │   . `da_trilha` é PERMISSÃO DE GRAVAÇÃO da trilha de abertura, não estado pré-publicação: o   │
+   * │     RASCUNHO o tem LIGADO e a fila de revisão o tem DESLIGADO, ou seja, o flag responde o     │
+   * │     contrário em cada um dos dois status que precisam da mesma recusa;                        │
+   * │   . a combinação "não encerra, não é destino manual e não é da trilha" casaria também com     │
+   * │     QUALQUER status LIVRE que o diretor crie com os dois flags desligados (o `VAGA_BANCO`     │
+   * │     dormente já é assim hoje), e a vaga que fosse parar lá ficaria IMÓVEL sem ninguém ter     │
+   * │     pedido isso. Uma trava que nasce de combinação acidental de flags editáveis pelo diretor  │
+   * │     é pior do que a lista: ela muda de alcance quando alguém edita a tela do catálogo.        │
+   * │ ENTÃO A LISTA FICA, MAS EM UM LUGAR SÓ. O ganho real não era eliminar a enumeração, era não   │
+   * │ tê-la espalhada: o terceiro status se acrescenta AQUI, com esta explicação na frente, em vez  │
+   * │ de virar um segundo `ehDoPapel` perdido no meio de uma transação. Inventar coluna para isso   │
+   * │ é decisão do diretor, e não foi pedida (§A.14).                                               │
+   * └────────────────────────────────────────────────────────────────────────────────────────────────┘
+   */
+  exigeReguaDeAbertura(codigo: string): boolean {
+    return PAPEIS_QUE_PUBLICAM_COM_REGUA.includes(this.linha(codigo).papel);
+  }
 }
+
+/**
+ * OS PAPÉIS CUJA SAÍDA TEM PORTA PRÓPRIA, e a razão de cada um estar aqui:
+ *   RASCUNHO  publica pela TRILHA DE ABERTURA, que confere os campos obrigatórios;
+ *   REVISAO   sai pela LIBERAÇÃO, que confere o cliente vinculado que a varredura não trouxe.
+ * Os dois são estados PRÉ-PUBLICAÇÃO, e em nenhum deles o movimento manual pode servir de atalho.
+ */
+const PAPEIS_QUE_PUBLICAM_COM_REGUA: readonly VagaStatusPapel[] = ["RASCUNHO", "REVISAO"];
 
 /**
  * ─ O CATÁLOGO DE STATUS DA VAGA (A&S). A LISTA É DO DIRETOR, OS PAPÉIS SÃO DO SISTEMA ───────────

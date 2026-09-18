@@ -33,11 +33,20 @@
 import type { VagaListItem } from "@ea/shared-types";
 import type { PillTone } from "@/components/ui/Pill";
 import { preenchidas, vagaEncerrada, type VagaContagem } from "@/lib/as-vagas-ocupacao";
+import { ehDoPapelDaVaga, ehPendenteDeRevisao } from "@/lib/as-status-vaga";
 import { dataBr } from "@/lib/as-candidatos";
 
 /** Onde o PROCESSO SELETIVO está. Derivado do status mais a contagem de posições entregues. */
 export type TrilhaProcesso =
   | "RASCUNHO"
+  /**
+   * A VAGA QUE ENTROU SOZINHA E AINDA NÃO FOI REVISADA (varredura do Pandapé).
+   *
+   * ELA PRECISA DE ESTADO PRÓPRIO, e não era detalhe: sem ele a vaga espelhada caía em
+   * `VAGA_ABERTA`, porque não é rascunho e não encerra. A trilha dizia "A vaga está aberta" para uma
+   * vaga SEM CLIENTE, que ninguém abriu e que ninguém conferiu, e nada falhava.
+   */
+  | "PENDENTE_REVISAO"
   | "VAGA_ABERTA"
   | "PROCESSO_CONCLUIDO"
   | "PROCESSO_ENCERRADO";
@@ -75,6 +84,9 @@ export interface TrilhaDaVaga {
 
 export const TRILHA_PROCESSO_ROTULO: Record<TrilhaProcesso, string> = {
   RASCUNHO: "Rascunho",
+  // TAG, então title case (§A.24), e o mesmo rótulo do catálogo, palavra por palavra: duas grafias
+  // do mesmo estado em duas telas é como o time passa a achar que são dois estados.
+  PENDENTE_REVISAO: "Pendente De Revisão",
   VAGA_ABERTA: "Vaga Aberta",
   PROCESSO_CONCLUIDO: "Processo Seletivo Concluído",
   PROCESSO_ENCERRADO: "Processo Seletivo Encerrado",
@@ -99,6 +111,12 @@ export const TRILHA_DESFECHO_ROTULO: Record<TrilhaDesfecho, string> = {
  */
 export const TRILHA_PROCESSO_TOM: Record<TrilhaProcesso, PillTone> = {
   RASCUNHO: "nt",
+  /*
+   * VERMELHO, e não o amarelo do trabalho em andamento: esta vaga não está "andando", ela está
+   * ESPERANDO alguém conferir o que a varredura trouxe, e enquanto ninguém confere ela não tem
+   * cliente. O X vermelho é o mesmo do selo da Central de Vagas, e os dois lêem o mesmo estado.
+   */
+  PENDENTE_REVISAO: "dg",
   VAGA_ABERTA: "wn",
   PROCESSO_CONCLUIDO: "ok",
   PROCESSO_ENCERRADO: "nt",
@@ -133,7 +151,19 @@ function preenchidasTexto(n: number): string {
  * posição nenhuma. Nesse caso ela continua sendo uma vaga aberta, que é o que ela é.
  */
 export function processoDaVaga(v: VagaTrilha): TrilhaProcesso {
-  if (v.status === "RASCUNHO") return "RASCUNHO";
+  /*
+   * ─ A PERGUNTA É PELO PAPEL, E NÃO PELO LITERAL DO CÓDIGO ──────────────────────────────────────
+   *
+   * Aqui estava `v.status === "RASCUNHO"`, e o literal MEDIA A COISA ERRADA: ele pergunta pelo NOME
+   * da linha do catálogo, quando o que decide é o PAPEL dela. O efeito medido foi o da vaga
+   * espelhada do Pandapé (código `PENDENTE_REVISAO`, papel `REVISAO`): nenhum literal casava, ela
+   * não encerra, e a trilha a anunciava como "Vaga Aberta".
+   *
+   * A REVISÃO VEM ANTES DO ENCERRAMENTO na ordem das perguntas porque ela é o estado mais forte da
+   * vaga: enquanto ninguém revisou, nada do que a vaga diz sobre si mesma foi conferido por gente.
+   */
+  if (ehPendenteDeRevisao(v.status)) return "PENDENTE_REVISAO";
+  if (ehDoPapelDaVaga(v.status, "RASCUNHO")) return "RASCUNHO";
   if (vagaEncerrada(v.status)) return "PROCESSO_ENCERRADO";
   const meta = v.posicoesOficiais;
   if (meta !== null && meta > 0 && preenchidas(v, "oficial") >= meta) return "PROCESSO_CONCLUIDO";
@@ -150,7 +180,10 @@ export function processoDaVaga(v: VagaTrilha): TrilhaProcesso {
  */
 export function desfechoDaVaga(v: VagaTrilha): TrilhaDesfecho {
   if (!vagaEncerrada(v.status)) return "AINDA_NAO_ENCERRADA";
-  if (v.status === "CANCELADA") return "CANCELADA";
+  // PELO PAPEL, e não pelo literal "CANCELADA", pelo mesmo motivo do `processoDaVaga`: o papel
+  // `CANCELAMENTO` é único no catálogo, então a resolução não é ambígua, e um código de
+  // cancelamento que o diretor venha a criar passa a ser lido aqui sem ninguém escrever o nome dele.
+  if (ehDoPapelDaVaga(v.status, "CANCELAMENTO")) return "CANCELADA";
   if (v.enviarParaAdmissao) return "ENVIADA_PARA_ADMISSAO";
   return preenchidas(v, "oficial") > 0 ? "FINALIZADA_NA_AS" : "FECHADA_SEM_ENTREGA";
 }
@@ -160,6 +193,9 @@ function fraseDoProcesso(v: VagaTrilha, estado: TrilhaProcesso): string {
   const feitas = preenchidas(v, "oficial");
   if (estado === "RASCUNHO") {
     return "A vaga ainda não foi publicada, então o processo seletivo não começou.";
+  }
+  if (estado === "PENDENTE_REVISAO") {
+    return "A vaga entrou sozinha pela varredura do Pandapé e ainda não foi revisada. Falta vincular o cliente e liberar.";
   }
   if (estado === "PROCESSO_ENCERRADO") {
     return v.dataFechamento

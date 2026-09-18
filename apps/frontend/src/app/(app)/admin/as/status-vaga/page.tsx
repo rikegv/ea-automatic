@@ -101,6 +101,8 @@ const PAPEL_EXPLICACAO: Record<VagaStatusPapel, string> = {
   LIVRE:
     "Status criado pela administração. É o único tipo que pode ser renomeado por inteiro, ter os comportamentos ajustados, ser tirado de circulação e ser apagado.",
   RASCUNHO: "É a linha que o sistema grava na vaga salva pela metade, antes da publicação.",
+  REVISAO:
+    "É a linha que a varredura do Pandapé grava na vaga espelhada, que entrou sozinha e ainda não tem cliente. Ela sai desta linha quando alguém vincula o cliente e libera.",
   ABERTURA: "É a linha que a trilha de abertura grava ao publicar a vaga.",
   ENTREGA: "É a linha que o sistema grava quando a vaga é fechada com todas as posições entregues.",
   FECHAMENTO: "É a linha que o sistema grava no fechamento da vaga.",
@@ -111,6 +113,7 @@ const PAPEL_EXPLICACAO: Record<VagaStatusPapel, string> = {
 const PAPEL_ROTULO: Record<VagaStatusPapel, string> = {
   LIVRE: "Da Administração",
   RASCUNHO: "Rascunho",
+  REVISAO: "Revisão",
   ABERTURA: "Abertura",
   ENTREGA: "Entrega",
   FECHAMENTO: "Fechamento",

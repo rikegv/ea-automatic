@@ -132,14 +132,32 @@ describe("a semente descreve o comportamento de hoje, e não inventa status novo
    * §A.27, CONTAGENS INTACTAS: nenhuma vaga muda de status por efeito da migração. A garantia
    * começa aqui, no vocabulário: os cinco códigos que a base já usa continuam sendo esses cinco,
    * com essas letras. Um `ENTREGA` no lugar de `ENTREGUE` deixaria 126 vagas órfãs da FK.
+   *
+   * ┌─ A SEMENTE GANHOU UMA SEXTA LINHA, E ESTA AFIRMAÇÃO NÃO PODE VIRAR CONTAGEM CEGA ──────────┐
+   * │ `PENDENTE_REVISAO` entrou com a migration 0115. Trocar "cinco" por "seis" e seguir em frente │
+   * │ mataria o que a afirmação existe para pegar: ela não conta linhas, ela FIXA quais são e em   │
+   * │ que ordem, e é isso que acusa renomeação e remoção de linha de sistema.                       │
+   * │                                                                                              │
+   * │ ENTÃO ELA VIROU DUAS, e as duas continuam sendo sobre identidade:                             │
+   * │   . os CINCO da base seguem sendo os mesmos cinco, nas mesmas letras, e NO COMEÇO da lista.  │
+   * │     Renomear um deles continua vermelho, e continua vermelho pelo mesmo motivo de sempre;    │
+   * │   . o que vier DEPOIS deles é declarado NOMINALMENTE. Status novo entrando na semente sem    │
+   * │     ninguém tocar aqui fica vermelho, que é a propriedade que o "cinco" dava de graça.       │
+   * └──────────────────────────────────────────────────────────────────────────────────────────────┘
    */
-  it("os cinco códigos da base continuam idênticos", () => {
+  const CODIGOS_DA_BASE = ["RASCUNHO", "ABERTA", "ENTREGUE", "FECHADA", "CANCELADA"];
+
+  it("os cinco códigos da base continuam idênticos, e continuam ABRINDO a lista", () => {
+    expect(VAGA_STATUS_SEMENTE.slice(0, CODIGOS_DA_BASE.length).map((s) => s.codigo)).toEqual(
+      CODIGOS_DA_BASE,
+    );
+  });
+
+  it("e o que a semente ganhou depois deles é declarado, e não apenas contado", () => {
     expect(VAGA_STATUS_SEMENTE.map((s) => s.codigo)).toEqual([
-      "RASCUNHO",
-      "ABERTA",
-      "ENTREGUE",
-      "FECHADA",
-      "CANCELADA",
+      ...CODIGOS_DA_BASE,
+      // A fila da vaga que o espelho do Pandapé trouxe sem cliente (migration 0115).
+      "PENDENTE_REVISAO",
     ]);
   });
 
@@ -182,6 +200,14 @@ describe("`codigoDoPapel`: o único jeito certo de falhar é LANÇAR", () => {
     const esperado: Record<VagaStatusPapel, string> = {
       LIVRE: "",
       RASCUNHO: "RASCUNHO",
+      /*
+       * O PAPEL DA FILA DE REVISÃO (migration 0115). A LINHA DELE AINDA NÃO ESTÁ NA SEMENTE:
+       * `VAGA_STATUS_SEMENTE` mora em `packages/shared-types/src/index.ts`, que é ARQUIVO DE DONO
+       * ÚNICO (§A.39), e o dono é o coordenador. Enquanto a linha não chegar lá, esta afirmação
+       * e as irmãs abaixo ficam VERMELHAS, e é assim que elas devem ficar: a semente descreve o
+       * catálogo COMO AS MIGRATIONS O DEIXAM, e desde a 0115 ele tem seis linhas, não cinco.
+       */
+      REVISAO: "PENDENTE_REVISAO",
       ABERTURA: "ABERTA",
       ENTREGA: "ENTREGUE",
       FECHAMENTO: "FECHADA",

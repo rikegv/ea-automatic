@@ -81,6 +81,7 @@ describe("o contrato da ingestão, exercitado contra referência e mutantes", ()
         "BANCO_TALENTOS_ESCRITO",
         "CAMINHO_DE_ESCRITA",
         "CASOU_POR_NOME",
+        "CHAVE_CRUA_NO_RESUMO",
         "COD_CLIENTE_INVENTADO",
         "COLETADO_EM_NAO_EXPLICITO",
         "CONFLITO_DECIDIDO_SOZINHO",

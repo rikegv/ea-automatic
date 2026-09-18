@@ -1,8 +1,13 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { and, eq } from "drizzle-orm";
 import { getTableConfig } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 import * as schema from "../db/schema";
+// A LEITURA PURA DA LINHA É IMPORTADA PELO NOME, e não descoberta no disco como o serviço: ela é
+// domínio estável, citada pela própria migration 0114 como a SEGUNDA fechadura do `ativo`, e é
+// exatamente o caminho que precisa ser medido separado da consulta.
+import { lerLinhaDePara } from "../domain/as-etapa-externa";
 
 /**
  * ─ FUNDAÇÃO, PEÇA 4: O DE/PARA DAS ETAPAS EXTERNAS, E O FAIL-CLOSED DELE ──────────────────────
@@ -223,6 +228,16 @@ interface LinhaSemeada {
   destino: string | null;
   situacao: string | null;
   motivo: string | null;
+  /**
+   * O `ativo` DA LINHA, com o MESMO padrão do banco (`default true`) quando a coluna não aparece no
+   * `INSERT`, que é o caso das sementes 0110 e 0111.
+   *
+   * ELE NÃO ESTAVA AQUI, E A FALTA DELE CEGAVA O TESTE INTEIRO: o banco fingido carimbava
+   * `ativo: true` em toda linha, então uma chave semeada DESLIGADA (a decisão do diretor de deixar
+   * `retorno negativo etapa soulan` e `finalistas` inertes) chegava ao resolvedor como se estivesse
+   * ligada. Um esquecimento do filtro `ativo = true` na consulta passaria verde.
+   */
+  ativo: boolean;
 }
 
 /**
@@ -357,6 +372,9 @@ const SEMENTE: LinhaSemeada[] = (() => {
         destino: valor("etapa_codigo"),
         situacao: valor("situacao"),
         motivo: valor("motivo_padrao"),
+        // COLUNA AUSENTE É `true`, e nunca `false`: quem espelha o `default true` do schema mede a
+        // 0110 e a 0111 como o banco as guarda. Invertesse isso, e as dez linhas antigas sumiriam.
+        ativo: !/^false$/i.test(valor("ativo") ?? "true"),
       });
     }
   }
@@ -667,7 +685,9 @@ const LINHAS: Record<string, unknown>[] = SEMENTE.map((l, i) => ({
   // e um fake que devolvesse nulo faria o caso do motivo medir a minha suposição, nunca a migration.
   motivo_padrao: l.motivo,
   motivoPadrao: l.motivo,
-  ativo: true,
+  // O `ativo` VEM DA SEMENTE, e não é um `true` de conveniência: ver o comentário do campo em
+  // `LinhaSemeada`. Linha desligada tem de chegar desligada, ou o dublê esconde o filtro que falta.
+  ativo: l.ativo,
 }));
 
 /** Reconstrói o texto de uma cláusula do drizzle, para o fake filtrar pelo que ela menciona. */
@@ -684,21 +704,101 @@ function textoDoSql(no: unknown): string {
 }
 
 /**
- * O BANCO FINGIDO DO DE/PARA, e ele é deliberadamente permissivo em uma direção só.
- *
- * A consulta que CITA uma chave recebe a linha daquela chave; a consulta que não cita nenhuma
- * (o serviço que carrega o catálogo inteiro e filtra em memória, que é desenho legítimo e provável
- * num de/para de dez linhas) recebe TODAS. As duas implementações são aceitas, e nenhuma das duas
- * ganha de graça: quem filtra em memória ainda precisa normalizar certo para achar a linha.
+ * ┌─ AS COLUNAS QUE O DUBLÊ SABE FILTRAR ──────────────────────────────────────────────────────────┐
+ * │ Condição sobre coluna FORA desta lista faz o dublê ESTOURAR com uma frase, em vez de ignorá-la │
+ * │ calado. Ignorar seria o mesmo defeito do casamento por substring: o dublê aceitaria uma        │
+ * │ consulta que o banco recusaria, e o verde não diria nada sobre o produto.                       │
+ * └────────────────────────────────────────────────────────────────────────────────────────────────┘
  */
-function bancoFingido(): unknown {
+const COLUNAS_FILTRAVEIS = [
+  "id",
+  "fonte",
+  "chave_externa",
+  "rotulo_externo",
+  "etapa_codigo",
+  "situacao",
+  "motivo_padrao",
+  "ativo",
+] as const;
+
+interface Condicao {
+  coluna: string;
+  valor: string;
+}
+
+/**
+ * ─ AS IGUALDADES DE UMA CLÁUSULA, LIDAS UMA A UMA ─────────────────────────────────────────────
+ *
+ * O texto reconstruído de um `and(eq(...), eq(...), eq(...))` sai assim:
+ * `( fonte = PANDAPE and chave_externa = entrevista and ativo = true )`. O corte é feito só onde o
+ * pedaço seguinte PARECE uma condição (`coluna =`), e não em todo ` and `, para que um valor que
+ * contenha a palavra não seja partido no meio.
+ */
+function condicoesDaClausula(clausula: string): Condicao[] {
+  const texto = clausula.replace(/[()]/g, " ").replace(/\s+/g, " ").trim();
+  if (texto === "") return [];
+  const condicoes: Condicao[] = [];
+  for (const pedaco of texto.split(/ and (?=[a-z_]+ ?=)/i)) {
+    const t = pedaco.trim();
+    if (t === "") continue;
+    const m = /^([a-z_]+)\s*=\s*(.*)$/i.exec(t);
+    if (!m) {
+      throw new Error(
+        `o banco fingido não entendeu a condição "${t}". Ele só sabe igualdade simples, e prefere ` +
+          "ESTOURAR a fingir que filtrou: um dublê que ignora o que não entende devolve linha que o " +
+          "banco de verdade não devolveria, e o verde passa a medir o dublê, não o produto.",
+      );
+    }
+    const coluna = m[1]!.toLowerCase();
+    if (!(COLUNAS_FILTRAVEIS as readonly string[]).includes(coluna)) {
+      throw new Error(
+        `o banco fingido não conhece a coluna "${coluna}" da cláusula "${t}". Se a consulta passou ` +
+          "a filtrar por ela, ensine o dublê antes de confiar no verde.",
+      );
+    }
+    condicoes.push({ coluna, valor: m[2]!.trim() });
+  }
+  return condicoes;
+}
+
+/**
+ * ┌─ O BANCO FINGIDO DO DE/PARA, QUE CASA POR IGUALDADE PORQUE O BANCO CASA POR IGUALDADE ────────┐
+ * │ ELE JÁ MENTIU, E É POR ISSO QUE ESTE BLOCO EXISTE. A versão anterior decidia quais linhas      │
+ * │ devolver perguntando se o TEXTO DA CLÁUSULA CONTINHA a chave semeada como SUBSTRING. Enquanto  │
+ * │ todas as chaves eram frases (`entrevista soulan`, `short list encaminhados cliente`), a        │
+ * │ diferença para a igualdade do `eq()` não aparecia. A migration 0114 semeou chaves de UMA        │
+ * │ PALAVRA (`entrevista`, `triagem`, `testes`, `admissao`), e a partir dali                        │
+ * │ `"entrevista tecnica terceirizada"` CONTINHA `"entrevista"`: o dublê devolvia a linha e o teste │
+ * │ acusava, em vermelho, um chute que o produto NUNCA cometeu. Dublê frouxo dá vermelho falso hoje │
+ * │ e verde falso amanhã, e as duas mentiras custam a mesma sessão.                                 │
+ * │                                                                                                 │
+ * │ A REGRA AGORA É A DO BANCO: cada `coluna = valor` da cláusula é uma IGUALDADE EXATA sobre a     │
+ * │ linha, `ativo` incluído. A consulta que não cita cláusula nenhuma (o serviço que carrega o      │
+ * │ catálogo inteiro e filtra em memória, desenho legítimo num de/para de duas dezenas de linhas)   │
+ * │ continua recebendo TODAS as linhas, COM O `ativo` REAL DE CADA UMA: quem lê o catálogo inteiro  │
+ * │ tem de peneirar a desligada sozinho, e `lerLinhaDePara` faz exatamente isso.                     │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+function bancoFingido(
+  opcoes: { ignorarAtivo?: boolean; registro?: string[] } = {},
+): unknown {
   const filtrar = (clausula: string): Record<string, unknown>[] => {
-    // A FONTE É HONRADA DE VERDADE, e sem isto o caso "outra fonte não herda o mapa" ficaria
-    // VERMELHO contra uma implementação CERTA: a consulta filtraria por fonte e o fake devolveria
-    // a linha assim mesmo.
-    if (clausula.trim() && !clausula.includes("PANDAPE")) return [];
-    const citadas = LINHAS.filter((l) => clausula.includes(String(l.chave_externa)));
-    return (citadas.length ? citadas : clausula.trim() ? [] : LINHAS).map((l) => ({ ...l }));
+    // O REGISTRO GUARDA A CLÁUSULA COMO ELA CHEGOU, e é o que permite perguntar não só o que o
+    // resolvedor respondeu, mas O QUE ELE PERGUNTOU ao banco.
+    if (opcoes.registro && clausula.trim() !== "") opcoes.registro.push(clausula.trim());
+    // O BANCO DESOBEDIENTE (`ignorarAtivo`) DEVOLVE A LINHA DESLIGADA ASSIM MESMO. Ele não é uma
+    // frouxidão: é o cenário em que a consulta esquece o `ativo = true`, e serve para medir se o
+    // resolvedor confia SÓ no filtro do banco ou se ele confere a linha que recebeu.
+    const condicoes = condicoesDaClausula(clausula).filter(
+      (c) => !(opcoes.ignorarAtivo && c.coluna === "ativo"),
+    );
+    const casa = (l: Record<string, unknown>, c: Condicao): boolean => {
+      const valorDaLinha = l[c.coluna];
+      // NULO NÃO CASA COM NADA, como no SQL: `etapa_codigo = 'X'` não devolve a linha de descarte.
+      if (valorDaLinha === null || valorDaLinha === undefined) return false;
+      return String(valorDaLinha) === c.valor;
+    };
+    return LINHAS.filter((l) => condicoes.every((c) => casa(l, c))).map((l) => ({ ...l }));
   };
 
   const leitura = () => {
@@ -748,7 +848,7 @@ const NOMES_DO_METODO = [
 ];
 
 /** Carrega o resolvedor, ou explica em uma frase o que foi procurado e não existe. */
-async function carregarResolvedor(): Promise<Resolvedor> {
+async function carregarResolvedor(db: unknown = bancoFingido()): Promise<Resolvedor> {
   const arquivos = arquivosDoDePara();
   if (!arquivos.length) {
     throw new Error(
@@ -764,7 +864,7 @@ async function carregarResolvedor(): Promise<Resolvedor> {
       if (typeof valor !== "function") continue;
       let instancia: Record<string, unknown>;
       try {
-        instancia = new (valor as new (db: unknown) => Record<string, unknown>)(bancoFingido());
+        instancia = new (valor as new (db: unknown) => Record<string, unknown>)(db);
       } catch (e) {
         problemas.push(`${nome}: ${e instanceof Error ? e.message : String(e)}`);
         continue;
@@ -953,4 +1053,352 @@ describe("nome não mapeado devolve NÃO MAPEADA, e nunca um chute", () => {
     const texto = comoTexto(await resolver("FONTE_INVENTADA_QUE_NAO_EXISTE", "triados"));
     expect(texto.includes("TRIAGEM")).toBe(false);
   });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+// 5. O DUBLÊ AUDITADO: ELE JÁ MENTIU DUAS VEZES NESTA FRENTE, ENTÃO ELE TAMBÉM É MEDIDO
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+/**
+ * ┌─ POR QUE UM TESTE DO PRÓPRIO TESTE ────────────────────────────────────────────────────────────┐
+ * │ O banco fingido é código que decide se o produto passa. Quando ele afrouxa, ele não avisa: ele │
+ * │ inventa um vermelho que o produto não merece (foi o caso) ou engole um verde que o produto não │
+ * │ merece (é o caso seguinte, e o caro). Os casos abaixo prendem as DUAS frouxidões que já        │
+ * │ existiram aqui, e ficam VERMELHOS se alguém reintroduzir qualquer uma delas.                    │
+ * └────────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+async function consultarFingido(clausula: unknown): Promise<Record<string, unknown>[]> {
+  const db = bancoFingido() as {
+    select: () => {
+      from: (t: unknown) => {
+        where: (c: unknown) => PromiseLike<Record<string, unknown>[]>;
+      };
+    };
+  };
+  return await db
+    .select()
+    .from(schema.asDeparaEtapaExterna)
+    .where(clausula);
+}
+
+/** A consulta EXATA que o resolvedor faz: fonte, chave normalizada e `ativo = true`. */
+function clausulaDoResolvedor(chave: string) {
+  return and(
+    eq(schema.asDeparaEtapaExterna.fonte, "PANDAPE"),
+    eq(schema.asDeparaEtapaExterna.chaveExterna, chave),
+    eq(schema.asDeparaEtapaExterna.ativo, true),
+  );
+}
+
+/**
+ * AS CHAVES CURTAS QUE A 0114 SEMEOU, e o nome comprido que CONTÉM cada uma. É este par que separa
+ * igualdade de substring: o casamento por substring devolve a linha da chave curta para o nome
+ * comprido, e a igualdade não devolve nada.
+ */
+const CURTA_DENTRO_DA_COMPRIDA = [
+  { curta: "entrevista", comprida: "entrevista tecnica terceirizada" },
+  { curta: "triagem", comprida: "triagem documental 2a fase" },
+  { curta: "testes", comprida: "testes tecnicos aplicados pelo cliente" },
+  { curta: "admissao", comprida: "admissao provisoria em analise" },
+] as const;
+
+describe("o banco fingido casa por IGUALDADE, e não por substring", () => {
+  /**
+   * A PRECONDIÇÃO, MEDIDA E NÃO SUPOSTA: sem a chave curta semeada, o caso do mutante passaria por
+   * vacuidade, que é o modo mais silencioso de um teste parar de testar.
+   */
+  it.each(CURTA_DENTRO_DA_COMPRIDA)("a chave curta $curta está mesmo semeada", ({ curta }) => {
+    expect(
+      SEMENTE.map((l) => l.chave),
+      `sem "${curta}" na semente, o caso do mutante do substring não mede nada`,
+    ).toContain(curta);
+  });
+
+  it.each(CURTA_DENTRO_DA_COMPRIDA)(
+    "a consulta por $comprida não devolve a linha de $curta",
+    async ({ curta, comprida }) => {
+      const linhas = await consultarFingido(clausulaDoResolvedor(comprida));
+      expect(
+        linhas.map((l) => l.chave_externa),
+        `o dublê devolveu a linha de "${curta}" para a chave "${comprida}". Ele voltou a casar por ` +
+          "SUBSTRING, e a partir daqui ele acusa chute que o produto não comete e esconde o dia em " +
+          "que o produto passar a cometer",
+      ).toEqual([]);
+    },
+  );
+
+  it.each(CURTA_DENTRO_DA_COMPRIDA)(
+    "a consulta pela chave exata $curta devolve UMA linha, e é a dela",
+    async ({ curta }) => {
+      const linhas = await consultarFingido(clausulaDoResolvedor(curta));
+      expect(linhas.map((l) => l.chave_externa), "o dublê ficou restritivo demais").toEqual([curta]);
+    },
+  );
+
+  /** A FONTE CONTINUA HONRADA, e agora por igualdade de coluna, e não por procurar "PANDAPE" no texto. */
+  it("a mesma chave em outra fonte não sai do banco fingido", async () => {
+    const linhas = await consultarFingido(
+      and(
+        eq(schema.asDeparaEtapaExterna.fonte, "DIGAI"),
+        eq(schema.asDeparaEtapaExterna.chaveExterna, "triados"),
+        eq(schema.asDeparaEtapaExterna.ativo, true),
+      ),
+    );
+    expect(linhas).toEqual([]);
+  });
+
+  /** SEM CLÁUSULA, O CATÁLOGO INTEIRO: é o desenho de quem filtra em memória, e continua aceito. */
+  it("a consulta sem cláusula recebe todas as linhas, com o ativo real de cada uma", async () => {
+    const db = bancoFingido() as {
+      select: () => { from: (t: unknown) => PromiseLike<Record<string, unknown>[]> };
+    };
+    const linhas = await db.select().from(schema.asDeparaEtapaExterna);
+    expect(linhas.length).toBe(SEMENTE.length);
+    expect(
+      linhas.some((l) => l.ativo === false),
+      "o catálogo inteiro veio todo ligado: o dublê voltou a carimbar ativo=true e a segunda " +
+        "fechadura do desligamento deixou de ser medida",
+    ).toBe(true);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+// 6. AS DECISÕES QUE A 0114 GRAVA: TREZE LIGADAS, DUAS DESLIGADAS
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+/**
+ * AS TREZE LIGADAS, DIGITADAS À MÃO contra a tabela da decisão de 18/09/2026, e nunca lidas da
+ * migration: derivar o esperado do arquivo que se mede faz o teste concordar com qualquer coisa
+ * escrita lá, que é o defeito que já custou uma correção neste arquivo.
+ */
+const ATIVAS_DA_0114 = [
+  { chave: "entrevista inteligente", nome: "Entrevista Inteligente", etapa: "CAPTACAO", situacao: null },
+  { chave: "pre selecionado", nome: "Pre-selecionado", etapa: "TRIAGEM", situacao: null },
+  { chave: "triagem", nome: "Triagem", etapa: "TRIAGEM", situacao: null },
+  { chave: "triado", nome: "Triado", etapa: "TRIAGEM", situacao: null },
+  { chave: "testes", nome: "Testes", etapa: "TRIAGEM", situacao: null },
+  { chave: "entrevistas soulan", nome: "Entrevistas Soulan", etapa: "ENTREVISTA_SOULAN", situacao: null },
+  { chave: "entrevista", nome: "Entrevista", etapa: "ENTREVISTA_SOULAN", situacao: null },
+  { chave: "entrevista cliente", nome: "Entrevista Cliente", etapa: "ENTREVISTA_CLIENTE", situacao: null },
+  { chave: "enviados para cliente", nome: "Enviados Para Cliente", etapa: "ENTREVISTA_CLIENTE", situacao: null },
+  { chave: "encaminhados cliente", nome: "Encaminhados Cliente", etapa: "ENTREVISTA_CLIENTE", situacao: null },
+  { chave: "etapa inteligente", nome: "Etapa Inteligente", etapa: "CAPTACAO", situacao: null },
+  { chave: "admissao", nome: "Admissao", etapa: "APROVACAO", situacao: "ENVIADO_PARA_ADMISSAO" },
+  { chave: "abordados", nome: "Abordados", etapa: "CAPTACAO", situacao: null },
+] as const;
+
+/**
+ * ┌─ AS DUAS DESLIGADAS, E O DANO DE LIGAR A PRIMEIRA ─────────────────────────────────────────────┐
+ * │ `retorno negativo etapa soulan` é a única das quinze que escreve DESFECHO, e é por isso que o  │
+ * │ diretor a deixou inerte em 18/09/2026: gravar `situacao` carimba `atualizado_em` na            │
+ * │ candidatura, e esse carimbo É O RELÓGIO DA RETENÇÃO. Ligar a linha empurraria o prazo de dois  │
+ * │ anos para frente, a contar da volta, para TODA a população alcançada, e ainda tiraria dela a   │
+ * │ proteção de "vivo em vaga não encerrada", porque `DESCARTADO` não está entre as situações       │
+ * │ vivas. Uma linha de tradução reescreveria o relógio de gente que ninguém tocou.                 │
+ * │                                                                                                 │
+ * │ `finalistas` é a mesma forma por outra razão: o diretor mandou "ignorar", e linha INATIVA é o   │
+ * │ registro deliberado dessa escolha, distinguível do esquecimento que a ausência de linha seria.  │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+const INATIVAS_DA_0114 = [
+  { chave: "retorno negativo etapa soulan", nome: "Retorno Negativo Etapa Soulan" },
+  { chave: "finalistas", nome: "Finalistas" },
+] as const;
+
+/** A linha da semente por CHAVE exata, para os casos da 0114 que são identificados pela chave. */
+function porChave(chave: string): LinhaSemeada {
+  const linha = SEMENTE.find((l) => l.chave === chave);
+  if (!linha) {
+    throw new Error(
+      `a semente não traz a chave "${chave}". Chaves: ${JSON.stringify(SEMENTE.map((l) => l.chave))}`,
+    );
+  }
+  return linha;
+}
+
+describe("as treze etapas que o diretor LIGOU em 18/09/2026", () => {
+  it.each(ATIVAS_DA_0114)("$chave está semeada, ligada, e vai para $etapa", ({
+    chave,
+    etapa,
+    situacao,
+  }) => {
+    const linha = porChave(chave);
+    expect(linha.ativo, `"${chave}" foi semeada DESLIGADA, e o diretor a fechou como vigente`).toBe(
+      true,
+    );
+    expect(linha.destino, `a etapa de "${chave}"`).toBe(etapa);
+    expect(linha.situacao, `a situação de "${chave}"`).toBe(situacao);
+  });
+
+  it.each(ATIVAS_DA_0114)("$nome resolve de ponta a ponta em $etapa", async ({ nome, etapa, situacao }) => {
+    const { resolver, origem } = await carregarResolvedor();
+    const texto = comoTexto(await resolver("PANDAPE", nome));
+    expect(texto, `resolvido por ${origem}`).toContain(etapa);
+    if (situacao) expect(texto).toContain(situacao);
+  });
+
+  /**
+   * DEZ DAS TREZE NÃO ESCREVEM DESFECHO, e é isso que torna ligá-las barato: elas movem a pessoa
+   * DENTRO do funil sem tocar `situacao`, logo sem tocar o relógio da retenção. A única com
+   * situação é `admissao`, e o valor dela é vivo. Um desfecho novo aparecendo aqui é a mesma
+   * armadilha do `retorno negativo`, com outro nome.
+   */
+  it("nenhuma das treze grava DESCARTADO", () => {
+    // A LEITURA É DA SEMENTE, e não da lista digitada acima: é a migration que precisa ser medida,
+    // e a lista à mão só diz QUAIS chaves olhar.
+    const comDescarte = ATIVAS_DA_0114.map((a) => a.chave).filter(
+      (chave) => porChave(chave).situacao === "DESCARTADO",
+    );
+    expect(
+      comDescarte,
+      "uma linha ATIVA passou a gravar descarte: ela reescreve o relógio de retenção de quem ela " +
+        "alcançar, que é exatamente o efeito que fez o diretor desligar o retorno negativo",
+    ).toEqual([]);
+  });
+});
+
+describe("as duas etapas que o diretor deixou DESLIGADAS, e que não podem agir", () => {
+  it("são exatamente duas, e são estas", () => {
+    expect(
+      SEMENTE.filter((l) => !l.ativo)
+        .map((l) => l.chave)
+        .sort(),
+      "a lista de linhas desligadas mudou. Ligar uma delas é DECISÃO do diretor, e desligar outra " +
+        "também: nenhuma das duas pode acontecer sem este caso ficar vermelho",
+    ).toEqual(INATIVAS_DA_0114.map((i) => i.chave).sort());
+  });
+
+  /** A LINHA EXISTE, e é isso que a separa do esquecimento. O que a torna inerte é só o flag. */
+  it.each(INATIVAS_DA_0114)("$chave existe na semente, com destino, porém desligada", ({ chave }) => {
+    const linha = porChave(chave);
+    expect(linha.ativo, `"${chave}" foi LIGADA, e o diretor a deixou inerte de propósito`).toBe(
+      false,
+    );
+    expect(
+      linha.destino !== null || linha.situacao !== null,
+      `"${chave}" ficou sem destino nenhum: ligá-la depois não faria nada, e o CHECK do banco já ` +
+        "não deixaria a linha existir assim",
+    ).toBe(true);
+  });
+
+  /**
+   * ─ PRIMEIRO CAMINHO: A CONSULTA FILTRADA ─────────────────────────────────────────────────────
+   *
+   * O `ativo = true` na cláusula é a primeira fechadura. Este caso mostra a linha SAINDO do banco
+   * fingido quando o filtro não está lá, e NÃO SAINDO quando está: sem as duas metades, um dublê
+   * que ignorasse o flag daria o mesmo verde de um dublê que o honra.
+   */
+  it.each(INATIVAS_DA_0114)("a consulta com ativo=true não devolve $chave", async ({ chave }) => {
+    const semFiltro = await consultarFingido(
+      and(
+        eq(schema.asDeparaEtapaExterna.fonte, "PANDAPE"),
+        eq(schema.asDeparaEtapaExterna.chaveExterna, chave),
+      ),
+    );
+    expect(
+      semFiltro.map((l) => l.chave_externa),
+      `a linha de "${chave}" nem existe no banco fingido: o caso do ativo passaria por vacuidade`,
+    ).toEqual([chave]);
+
+    const comFiltro = await consultarFingido(clausulaDoResolvedor(chave));
+    expect(
+      comFiltro.map((l) => l.chave_externa),
+      `"${chave}" está DESLIGADA e saiu de uma consulta que pede ativo=true`,
+    ).toEqual([]);
+  });
+
+  /**
+   * ─ SEGUNDO CAMINHO: A LEITURA DA LINHA ───────────────────────────────────────────────────────
+   *
+   * A segunda fechadura, e a que vale para quem carrega o catálogo inteiro e filtra em memória:
+   * mesmo recebendo a linha desligada na mão, o domínio devolve NÃO MAPEADA. Esquecer o filtro da
+   * consulta passa a ser um defeito de eficiência, e nunca um desfecho gravado em pessoa.
+   */
+  it.each(INATIVAS_DA_0114)("lerLinhaDePara devolve NÃO MAPEADA para $chave", ({ chave }) => {
+    const linha = porChave(chave);
+    const resolucao = lerLinhaDePara({
+      etapaCodigo: linha.destino,
+      situacao: linha.situacao as never,
+      motivoPadrao: linha.motivo,
+      ativo: linha.ativo,
+    });
+    expect(
+      resolucao.mapeada,
+      `"${chave}" está desligada e a leitura a tratou como ordem válida. Se for o retorno ` +
+        "negativo, essa ordem grava DESCARTADO, carimba atualizado_em e REMARCA O RELÓGIO DE " +
+        "RETENÇÃO de uma população inteira, além de tirar dela a proteção de vaga viva",
+    ).toBe(false);
+  });
+
+  /**
+   * ─ E DE PONTA A PONTA, QUE É O QUE A OPERAÇÃO VERIA ──────────────────────────────────────────
+   */
+  it.each(INATIVAS_DA_0114)("$nome resolve NÃO MAPEADA no resolvedor de verdade", async ({
+    nome,
+  }) => {
+    const { resolver, origem } = await carregarResolvedor();
+    const texto = comoTexto(await resolver("PANDAPE", nome));
+    for (const codigo of CODIGOS_DO_FUNIL) {
+      expect(texto.includes(codigo), `"${nome}" está desligada e foi resolvida em ${codigo}`).toBe(
+        false,
+      );
+    }
+    expect(
+      /DESCARTADO|ENVIADO_PARA_ADMISSAO|APROVADO|ALOCADO|DESISTIU/.test(texto),
+      `"${nome}" está DESLIGADA e o resolvedor (${origem}) devolveu um desfecho. Gravar desfecho ` +
+        "carimba atualizado_em na candidatura, e esse carimbo é o relógio do expurgo: a linha que " +
+        "o diretor deixou inerte passaria a remarcar a retenção de todo mundo que ela alcançasse",
+    ).toBe(false);
+  });
+
+  /**
+   * ┌─ A PRIMEIRA FECHADURA MEDIDA NO PRODUTO, E NÃO NO DUBLÊ ──────────────────────────────────────┐
+   * │ Os casos acima provam que o banco fingido honra o `ativo`; este pergunta se o RESOLVEDOR pede │
+   * │ o filtro. Sem ele, apagar o `eq(ativo, true)` da consulta fica VERDE, porque a segunda        │
+   * │ fechadura (a leitura da linha) segura o comportamento sozinha, e a defesa em profundidade     │
+   * │ vira defesa de uma camada só sem ninguém perceber.                                             │
+   * │                                                                                                │
+   * │ ELE MEDE O DESENHO DE HOJE, que é a consulta filtrada, e é o desenho que a própria 0114 cita  │
+   * │ como fechadura. No dia em que o resolvedor passar a carregar o catálogo inteiro e peneirar em │
+   * │ memória (desenho legítimo), este caso muda JUNTO com a decisão, e não por acidente.            │
+   * └────────────────────────────────────────────────────────────────────────────────────────────────┘
+   */
+  it("o resolvedor PEDE ao banco o filtro de ativo, e não confia só na leitura da linha", async () => {
+    const registro: string[] = [];
+    const { resolver, origem } = await carregarResolvedor(bancoFingido({ registro }));
+    await resolver("PANDAPE", "Finalistas");
+    const perguntado = registro.join(" | ");
+    expect(perguntado, `${origem} não consultou o banco`).not.toBe("");
+    expect(
+      /ativo\s*=\s*true/i.test(perguntado),
+      `a consulta de ${origem} não pede ativo = true. A cláusula foi: "${perguntado}". A linha ` +
+        "desligada passa a sair do banco, e só a conferência do domínio impede que ela vire ordem",
+    ).toBe(true);
+  });
+
+  /**
+   * ─ E SE A CONSULTA ESQUECER O FILTRO ─────────────────────────────────────────────────────────
+   *
+   * As duas fechaduras existem porque UMA SÓ é uma linha de código de distância de sumir. Aqui o
+   * banco fingido DESOBEDECE de propósito e devolve a linha desligada mesmo com `ativo = true` na
+   * cláusula: o resolvedor tem de continuar respondendo NÃO MAPEADA, porque ele confere a linha que
+   * recebeu. Sem este caso, apagar a conferência do domínio ficaria verde enquanto a outra fechadura
+   * estivesse no lugar, e o defeito só apareceria no dia em que alguém tocasse na consulta.
+   */
+  it.each(INATIVAS_DA_0114)(
+    "$nome continua NÃO MAPEADA mesmo se o banco devolver a linha desligada",
+    async ({ nome }) => {
+      const { resolver } = await carregarResolvedor(bancoFingido({ ignorarAtivo: true }));
+      const texto = comoTexto(await resolver("PANDAPE", nome));
+      for (const codigo of CODIGOS_DO_FUNIL) {
+        expect(texto.includes(codigo), `"${nome}" desligada virou ${codigo}`).toBe(false);
+      }
+      expect(
+        /DESCARTADO|ENVIADO_PARA_ADMISSAO/.test(texto),
+        `o resolvedor confiou só no filtro da consulta: recebeu a linha DESLIGADA de "${nome}" e a ` +
+          "tratou como ordem. Bastaria alguém tirar o ativo=true do WHERE para a linha inerte " +
+          "passar a gravar desfecho e remarcar o relógio de retenção de quem ela alcançar",
+      ).toBe(false);
+    },
+  );
 });

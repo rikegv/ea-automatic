@@ -404,8 +404,21 @@ describe("a origem: só a vaga no papel de ABERTURA cancela", () => {
     .filter((s) => s.papel !== "ABERTURA")
     .map((s) => s.codigo);
 
-  it("o recorte não é vazio (o catálogo precisa ter os outros quatro mais o dormente)", () => {
-    expect(OUTROS).toEqual(["RASCUNHO", "ENTREGUE", "FECHADA", "CANCELADA", "VAGA_BANCO"]);
+  /**
+   * O `PENDENTE_REVISAO` ENTROU NO RECORTE quando a fila da vaga espelhada nasceu (migration 0115),
+   * e é correto que ele esteja aqui: a vaga que o espelho trouxe sem cliente não exerce o papel de
+   * ABERTURA, então cancelar por ali é recusado, como em qualquer outro status que não seja o de
+   * abertura. Quem sai daquela fila sai pela liberação, que confere o cliente.
+   */
+  it("o recorte não é vazio (o catálogo tem os outros status, a fila de revisão e o dormente)", () => {
+    expect(OUTROS).toEqual([
+      "RASCUNHO",
+      "ENTREGUE",
+      "FECHADA",
+      "CANCELADA",
+      "PENDENTE_REVISAO",
+      "VAGA_BANCO",
+    ]);
   });
 
   it.each(OUTROS)("a vaga %s é recusada com conflito, e nada é gravado", async (status) => {

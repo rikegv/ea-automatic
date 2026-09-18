@@ -80,9 +80,20 @@ function validarStatus(status: unknown) {
 }
 
 describe("a trilha de abertura só escreve RASCUNHO e ABERTA", () => {
-  it("a lista que o teste cobre sai do catálogo, e são os três terminais mais o dormente", () => {
-    // Guarda do próprio teste: se o catálogo ganhar status, ele entra aqui sem ninguém lembrar.
-    expect(NAO_DA_TRILHA).toEqual(["ENTREGUE", "FECHADA", "CANCELADA", "VAGA_BANCO"]);
+  /**
+   * A GUARDA DO PRÓPRIO TESTE FUNCIONOU: o catálogo ganhou `PENDENTE_REVISAO` (migration 0115) e a
+   * lista acusou sozinha. Ele entra aqui pelo motivo certo, e não por acomodação: a fila da vaga
+   * espelhada nasce da VARREDURA, não da trilha de abertura, então `da_trilha = false` é o desenho,
+   * e a consequência medida é esta, a trilha humana não publica dentro da fila do espelho.
+   */
+  it("a lista que o teste cobre sai do catálogo: os três terminais, a fila de revisão e o dormente", () => {
+    expect(NAO_DA_TRILHA).toEqual([
+      "ENTREGUE",
+      "FECHADA",
+      "CANCELADA",
+      "PENDENTE_REVISAO",
+      "VAGA_BANCO",
+    ]);
     expect(DA_TRILHA).toEqual(["RASCUNHO", "ABERTA"]);
   });
 

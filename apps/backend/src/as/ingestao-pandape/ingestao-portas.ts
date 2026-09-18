@@ -146,7 +146,14 @@ export interface ResumoDoCiclo {
   paginasLidas: number;
   pessoasCriadas: number;
   candidaturasCriadas: number;
-  /** As chaves normalizadas sem de/para. Registro para o diretor mapear, NUNCA escrita automática. */
+  /**
+   * As MARCAS (`marcaDeChaveExterna`) das pastas sem de/para, uma por pasta distinta. Registro para
+   * o de/para ser configurado, NUNCA escrita automática.
+   *
+   * A CHAVE CRUA NÃO ENTRA AQUI, e isso é o achado R1 do `seguranca`: nome de pasta é texto livre
+   * do ATS, esta lista termina em log permanente, e o log está fora do alcance do `aplicarRetencao`.
+   * O nome legível se lê na FONTE; daqui sai quantas são e se são sempre as mesmas.
+   */
   etapasNaoMapeadas: string[];
   /** Quantos casos foram para revisão humana em vez de o ciclo escolher sozinho. */
   conflitosParaRevisao: number;

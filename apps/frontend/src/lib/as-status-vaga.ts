@@ -6,6 +6,7 @@ import {
   VAGA_STATUS_SEMENTE,
   podeSairManualmente,
   podeSerDestinoManual,
+  type VagaStatusPapel,
   type VagaStatusTom,
   type VagaStatusItem,
 } from "@ea/shared-types";
@@ -165,6 +166,74 @@ export function vagaRecebeCandidato(
   catalogo: readonly VagaStatusItem[] = corrente,
 ): boolean {
   return statusDoCodigo(codigo, catalogo)?.recebeCandidato ?? false;
+}
+
+/**
+ * ─ O PAPEL DA LINHA, QUE É O QUE O CÓDIGO SIGNIFICA ────────────────────────────────────────────
+ *
+ * ESTA É A PERGUNTA QUE SUBSTITUI O LITERAL DE STATUS NO FRONTEND, e ela existe porque o literal
+ * mede a coisa errada: `status === "ABERTA"` pergunta pelo NOME da linha, e o que a tela quer saber
+ * é o PAPEL dela. O backend já raciocina assim (`regua.ehDoPapel`), e o `papel` é ÚNICO no catálogo
+ * para os papéis de sistema (índice parcial único), então a resolução nunca é ambígua.
+ *
+ * O CASO QUE OBRIGOU A PEÇA: a vaga que a varredura do Pandapé espelha nasce no código
+ * `PENDENTE_REVISAO`, papel `REVISAO`, e NENHUM literal casa com ela. Medido: ela caía em
+ * "Vaga Aberta" na trilha e ficava com a barra de ações vazia no painel, sem nada falhar.
+ *
+ * CÓDIGO DESCONHECIDO NÃO TEM PAPEL, e devolve `null`: sem a linha do catálogo não há o que afirmar,
+ * e inventar um papel aqui faria a tela decidir por um status que ela nunca leu.
+ */
+export function papelDoStatusVaga(
+  codigo: string | null | undefined,
+  catalogo: readonly VagaStatusItem[] = corrente,
+): VagaStatusPapel | null {
+  if (!codigo) return null;
+  return statusDoCodigo(codigo, catalogo)?.papel ?? null;
+}
+
+/**
+ * ESTE STATUS EXERCE ESTE PAPEL? É o `ehDoPapel` do backend, com o mesmo nome e o mesmo sentido.
+ *
+ * FAIL-CLOSED POR CONSTRUÇÃO: código que o catálogo não conhece responde `false` para TODO papel, e
+ * não "talvez". Quem pergunta está decidindo se OFERECE um gesto, e não oferecer o gesto de uma
+ * vaga cujo status a tela ainda não leu é o lado seguro: o servidor continua sendo a trava.
+ */
+export function ehDoPapelDaVaga(
+  codigo: string | null | undefined,
+  papel: VagaStatusPapel,
+  catalogo: readonly VagaStatusItem[] = corrente,
+): boolean {
+  return papelDoStatusVaga(codigo, catalogo) === papel;
+}
+
+/**
+ * ─ A VAGA ESTÁ NA FILA DE REVISÃO? ─────────────────────────────────────────────────────────────
+ *
+ * É `ehDoPapelDaVaga(codigo, "REVISAO")` com nome próprio, e o nome próprio é o ponto: esta pergunta
+ * é feita em quatro lugares (o selo da Central de Vagas, a trilha, a fila da tela de revisão e o que
+ * NÃO entra no seletor de alocação), e cada um escrevendo o papel à mão seria a lista de literais
+ * voltando por outra porta.
+ *
+ * O QUE ELA SIGNIFICA: a vaga foi espelhada do Pandapé por uma varredura, ninguém a abriu no EA, e
+ * o cliente dela é NULO porque o cliente não tem caminho na API do ATS (medido). Ela está viva e
+ * recebe candidatura da INGESTÃO, mas ainda não foi revisada por gente.
+ */
+export function ehPendenteDeRevisao(
+  codigo: string | null | undefined,
+  catalogo: readonly VagaStatusItem[] = corrente,
+): boolean {
+  return ehDoPapelDaVaga(codigo, "REVISAO", catalogo);
+}
+
+/**
+ * A LINHA DE UM PAPEL DE SISTEMA, quando a tela precisa do CÓDIGO (por exemplo para pré-selecionar o
+ * destino de um movimento). `undefined` enquanto o catálogo não tiver chegado.
+ */
+export function statusDoPapel<T extends VagaStatusItem>(
+  papel: VagaStatusPapel,
+  catalogo: readonly T[],
+): T | undefined {
+  return catalogo.find((s) => s.papel === papel);
 }
 
 /**

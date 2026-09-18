@@ -799,6 +799,34 @@
       "when": 1788115091611,
       "tag": "0113_as_ingestao_pandape_varredura",
       "breakpoints": true
+    },
+    {
+      "idx": 114,
+      "version": "7",
+      "when": 1788118691611,
+      "tag": "0114_as_depara_etapas_decididas_e_propostas",
+      "breakpoints": true
+    },
+    {
+      "idx": 115,
+      "version": "7",
+      "when": 1788122291611,
+      "tag": "0115_as_vaga_status_pendente_revisao",
+      "breakpoints": true
+    },
+    {
+      "idx": 117,
+      "version": "7",
+      "when": 1788129491611,
+      "tag": "0117_as_varredura_status_antes_do_encerramento",
+      "breakpoints": true
+    },
+    {
+      "idx": 118,
+      "version": "7",
+      "when": 1788133091611,
+      "tag": "0118_as_troca_de_cliente_da_vaga",
+      "breakpoints": true
     }
   ]
 }

@@ -96,13 +96,15 @@ import {
   type OrigemContagem,
 } from "@/lib/as-vagas-ocupacao";
 import {
+  ehDoPapelDaVaga,
+  ehPendenteDeRevisao,
   ordemDoStatusVaga,
   rotuloDoStatusVaga,
   statusDePublicacao,
-  statusDoCodigo,
   statusOrdenados,
   useStatusVaga,
 } from "@/lib/as-status-vaga";
+import { SeloDeRevisao } from "@/components/as/SeloDeRevisao";
 import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
 import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
 import { cn } from "@/lib/cn";
@@ -2169,8 +2171,27 @@ export default function CentralDeVagasPage() {
    */
   function acoesDaVaga(v: VagaListItem): AcaoDaVaga[] {
     const lista: AcaoDaVaga[] = [];
+    /*
+     * ┌─ AS CONDIÇÕES PERGUNTAM PELO PAPEL, E NÃO PELO LITERAL DO CÓDIGO ─────────────────────────┐
+     * │ Elas nasceram como `v.status === "ABERTA"` e `=== "RASCUNHO"`, herdadas de quando status   │
+     * │ era uma união de cinco literais. Com o status virando CATÁLOGO DO DIRETOR (onda B2), o     │
+     * │ literal passou a medir a coisa errada: ele pergunta pelo NOME da linha, e quem decide é o  │
+     * │ PAPEL dela, que é único no catálogo e é o que o backend já consulta (`regua.ehDoPapel`).   │
+     * │                                                                                            │
+     * │ O QUE ISSO CORRIGE, MEDIDO: a vaga espelhada pela varredura do Pandapé (código            │
+     * │ `PENDENTE_REVISAO`, papel `REVISAO`) não casava com literal nenhum, e a barra dela abria   │
+     * │ com as ações de uma vaga qualquer sem que ninguém tivesse decidido isso. Agora ela cai     │
+     * │ fora de fechar, cancelar, editar posições e continuar rascunho, que é o certo: enquanto    │
+     * │ ninguém revisou, a vaga não tem cliente e não há o que fechar nem o que publicar.          │
+     * │                                                                                            │
+     * │ NENHUMA RÉGUA MUDOU DE SENTIDO (§A.14/§A.26): o papel `ABERTURA` resolve exatamente para a │
+     * │ linha "ABERTA" da semente, e o `RASCUNHO` para a linha "RASCUNHO". O que muda é que um     │
+     * │ código novo de mesmo papel passa a ser lido sem ninguém escrever o nome dele.              │
+     * └────────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    const ehAbertura = ehDoPapelDaVaga(v.status, "ABERTURA", catalogoStatus);
     // O CADEADO FECHA a vaga que acabou, e é ele que pede a contagem do fechamento.
-    if (v.status === "ABERTA") {
+    if (ehAbertura) {
       lista.push({
         id: "fechar",
         rotulo: "Fechar vaga",
@@ -2182,7 +2203,7 @@ export default function CentralDeVagasPage() {
     /* O CANCELAMENTO É O ENCERRAMENTO QUE NÃO É ENTREGA, e é o único gesto DESTRUTIVO da barra:
        daí o `perigo`, que é o mesmo vermelho que o ícone `x` já tinha na tabela. Rascunho não
        aparece aqui porque rascunho ainda não é vaga no mundo, e vaga encerrada não cancela de novo. */
-    if (v.status === "ABERTA") {
+    if (ehAbertura) {
       lista.push({
         id: "cancelar",
         rotulo: "Cancelar vaga",
@@ -2195,7 +2216,7 @@ export default function CentralDeVagasPage() {
     /* EDITAR AS POSIÇÕES (os dois contadores): na vaga viva e fora do rascunho. No RASCUNHO os dois
        campos já são editados na própria trilha, e na vaga ENCERRADA a meta não muda mais, porque ela
        já foi confrontada com a contagem do fechamento. */
-    if (v.status === "ABERTA") {
+    if (ehAbertura) {
       lista.push({
         id: "posicoes",
         rotulo: "Editar posições",
@@ -2204,8 +2225,10 @@ export default function CentralDeVagasPage() {
         onClick: () => abrirPosicoes(v),
       });
     }
-    // SÓ O RASCUNHO VOLTA PARA A TRILHA. Vaga publicada não é editada por aqui.
-    if (v.status === "RASCUNHO") {
+    /* SÓ O RASCUNHO VOLTA PARA A TRILHA. Vaga publicada não é editada por aqui, e a vaga PENDENTE
+       DE REVISÃO também não: ela não é um rascunho de ninguém, é o espelho de uma vaga que já vive
+       no Pandapé, e quem a resolve é a fila de revisão, com cliente e liberação. */
+    if (ehDoPapelDaVaga(v.status, "RASCUNHO", catalogoStatus)) {
       lista.push({
         id: "rascunho",
         rotulo: "Continuar rascunho",
@@ -2227,7 +2250,7 @@ export default function CentralDeVagasPage() {
        diretor: ele clica e LÊ que só Master reabre, em vez de a ação não existir na tela dele.
        Esconder ensina que o sistema está quebrado; dizer ensina quem procurar. Quem responde isso é
        o próprio modal, sem requisição nenhuma. */
-    if (statusDoCodigo(v.status, catalogoStatus)?.papel === "CANCELAMENTO") {
+    if (ehDoPapelDaVaga(v.status, "CANCELAMENTO", catalogoStatus)) {
       lista.push({
         id: "reabrir",
         rotulo: "Reabrir vaga",
@@ -3641,7 +3664,11 @@ export default function CentralDeVagasPage() {
                       </div>
                     </td>
                     <td className="text-center">
-                      <span className="inline-flex justify-center">
+                      {/* O SELO FICA EMBAIXO DA PILL, E NÃO AO LADO (§A.20): esta coluna já é
+                          estreita, e um segundo elemento na horizontal empurraria a pill contra a
+                          vizinha ou alargaria a coluna comendo a de Ações, que é a que não pode
+                          sumir. Em coluna, os dois mantêm a largura da célula como estava. */}
+                      <span className="inline-flex flex-col items-center gap-1">
                         {/* A COR E O RÓTULO SÃO OS DO CATÁLOGO (onda B2): a pill mostra o nome que
                             o diretor escreveu e a cor que ele escolheu, e o ícone continua saindo
                             do tom (§A.12). Status que a tela ainda não conhece cai no código cru e
@@ -3649,6 +3676,14 @@ export default function CentralDeVagasPage() {
                         <StatusPill
                           tone={tomDoStatusVaga(v.status, catalogoStatus)}
                           label={rotuloDoStatusVaga(v.status, catalogoStatus)}
+                        />
+                        {/* O SELO VERMELHO DA VAGA QUE ENTROU SOZINHA. Ele não repete o status: a
+                            pill diz EM QUE PÉ a vaga está, e o selo diz que ninguém conferiu o que a
+                            varredura trouxe. §A.12: ele acompanha o estado real (some no instante em
+                            que a vaga é liberada), nunca é fixo. */}
+                        <SeloDeRevisao
+                          mostrar={ehPendenteDeRevisao(v.status, catalogoStatus)}
+                          clienteVinculado={!!v.codCliente}
                         />
                       </span>
                     </td>

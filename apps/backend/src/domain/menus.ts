@@ -723,6 +723,38 @@ export const MENUS: MenuDef[] = [
   },
   {
     /**
+     * VAGAS PENDENTES DE REVISÃO (A&S): a fila das vagas que a varredura do Pandapé espelhou e que
+     * ninguém conferiu ainda. Elas nascem sem cliente, porque o cliente não tem caminho na API do
+     * ATS (medido), e esta tela é onde alguém vincula o cliente que falta e libera.
+     *
+     * §A.23, E ELA NÃO TEM EXCEÇÃO AQUI: o menu NASCE SÓ PARA O SUPER_ADMIN. O convergedor do boot
+     * REGISTRA o menu no catálogo (para ele existir e ser selecionável na tela de liberação) e PARA
+     * POR AÍ: nenhuma concessão acontece neste arquivo, nenhum seed é rodado, e não aparecer para os
+     * demais usuários NÃO é bug. Quem libera quem enxerga é o diretor.
+     *
+     * `operacoes: []`, E A LISTA VAZIA É DELIBERADA, não esquecimento. As rotas desta tela vivem na
+     * `VagasController`, que já é reivindicada por inteiro pelo menu `as-vagas`. Reivindicá-la uma
+     * segunda vez aqui daria DOIS donos para a mesma operação, e o mapa `operação -> menu` responde
+     * UM: o resultado seria a Central de Vagas passar a exigir o menu errado, ou esta tela exigir o
+     * da Central, conforme a ordem do registro. Quem segura as rotas continua sendo o `as-vagas` no
+     * backend e o `@Roles` da correção do Master; o que ESTE menu governa é a PORTA DA TELA, pelo
+     * `ROTA_MENU` do frontend.
+     *
+     * `areas: ["AS"]` é obrigatório: sem declarar, o default é ADM (`AREA_PADRAO_DO_MENU`) e o menu
+     * não apareceria para o time de A&S no dia em que o diretor o liberasse. O grupo `SELECAO`, além
+     * de separar a barra, é a segunda trava da §A.23: `MENUS_PADRAO_COMUM` filtra por
+     * `grupo === "OPERACAO"`, então este menu fica fora de qualquer backfill futuro por construção.
+     */
+    codigo: "as-vagas-revisao",
+    rotulo: "Vagas Pendentes De Revisão",
+    href: "/as/vagas-pendentes-revisao",
+    grupo: "SELECAO",
+    ordem: 42,
+    areas: ["AS"],
+    operacoes: [],
+  },
+  {
+    /**
      * ETAPAS DO FUNIL (A&S): o gerenciador da lista de etapas, que deixou de ser enum e virou
      * catálogo (`as_etapas_funil`, migration 0100).
      *
@@ -1007,6 +1039,8 @@ export function areasDeNascimento(menu: MenuDef): Area[] {
 export const MENUS_QUE_NASCEM_FORA_DA_ADM = new Set<string>([
   "as-vagas",
   "as-candidatos",
+  // A fila de revisão das vagas espelhadas do Pandapé: menu de A&S, nasce só na área AS.
+  "as-vagas-revisao",
   // Mora no grupo ADMIN por decisão do diretor e mesmo assim é menu de A&S: é exatamente o caso que
   // fez a prova deixar de olhar o grupo e passar a olhar esta lista.
   "as-etapas",

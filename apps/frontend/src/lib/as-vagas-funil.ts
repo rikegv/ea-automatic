@@ -191,6 +191,9 @@ export function cardsDeDesfecho(contagem: Record<string, number>): CardDeFunil[]
  */
 const ICONE_DO_PAPEL: Record<VagaStatusPapel, IconName> = {
   RASCUNHO: "pen",
+  // REVISÃO: o alerta, e é o MESMO ícone do selo vermelho que a Central de Vagas desenha na linha
+  // da vaga espelhada. Quem vê o selo na tabela reconhece o card pelo mesmo símbolo.
+  REVISAO: "alert",
   ABERTURA: "clock",
   ENTREGA: "check",
   FECHAMENTO: "lock",

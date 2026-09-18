@@ -184,6 +184,24 @@ export const SELECAO: NavDef[] = [
     codigo: "as-candidatos",
     descricao: "Funil da seleção: etapas, movimentação e trilha do candidato.",
   },
+  /*
+   * VAGAS PENDENTES DE REVISÃO: a fila das vagas que a varredura do Pandapé espelhou sem cliente.
+   *
+   * §A.23: o menu `as-vagas-revisao` nasce SÓ PARA O SUPER_ADMIN, e esta linha não concede nada a
+   * ninguém. Ela só faz o item aparecer na barra de quem JÁ tem permissão de ver a tela; não
+   * aparecer para os demais segue não sendo bug.
+   *
+   * ÍCONE `alert`, e é o mesmo do selo vermelho que a Central de Vagas desenha na linha da vaga:
+   * quem vê o selo na tabela reconhece a barra pelo mesmo símbolo. `table` e `filter` já são das
+   * duas vizinhas e não distinguiriam a linha na varredura.
+   */
+  {
+    href: "/as/vagas-pendentes-revisao",
+    icon: "alert",
+    label: "Vagas Pendentes De Revisão",
+    codigo: "as-vagas-revisao",
+    descricao: "Vagas que entraram sozinhas do Pandapé e esperam cliente e liberação.",
+  },
 ];
 
 /**

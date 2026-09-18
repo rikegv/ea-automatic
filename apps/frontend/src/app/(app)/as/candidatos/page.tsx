@@ -40,6 +40,7 @@ import {
 } from "@ea/shared-types";
 import { useAuth } from "@/lib/auth-context";
 import { apiFetch } from "@/lib/api";
+import { ehDoPapelDaVaga, useStatusVaga } from "@/lib/as-status-vaga";
 import { PageHead } from "@/components/ui/PageHead";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Button } from "@/components/ui/Button";
@@ -110,6 +111,14 @@ export default function CentralDeCandidatosPage() {
   // `isAdmin` é MASTER ou SUPER_ADMIN (`auth-context`), e governa SÓ a exibição da ação de trocar
   // vaga. A autoridade é o `@Roles` da rota: esconder aqui evita oferecer o que viraria 403.
   const { token, isAdmin } = useAuth();
+  /*
+   * O CATÁLOGO DE STATUS DA VAGA, LIDO EXPLICITAMENTE, e não pelo corrente implícito: esta tela não
+   * o carregava, então a pergunta pelo papel cairia na SEMENTE enquanto nenhuma outra tela da sessão
+   * tivesse buscado o catálogo. Com a semente a resposta é certa para os cinco status de origem e
+   * ERRADA, em silêncio, para qualquer status que o diretor tenha criado depois. A requisição é a
+   * mesma promessa memoizada que a Central de Vagas já usa: uma por carga de página, compartilhada.
+   */
+  const { status: catalogoStatusVaga } = useStatusVaga(token);
 
   const [vagas, setVagas] = useState<VagaListItem[]>([]);
   const [pessoas, setPessoas] = useState<AsCandidatoListItem[]>([]);
@@ -445,7 +454,46 @@ export default function CentralDeCandidatosPage() {
     return [...mapa].map(([value, label]) => ({ value, label, hint: value }));
   }, [vagas]);
 
-  const vagasAbertas = useMemo(() => vagas.filter((v) => v.status === "ABERTA"), [vagas]);
+  /**
+   * ─ AS VAGAS QUE PODEM RECEBER ALOCAÇÃO MANUAL, E A RÉGUA NÃO É "RECEBE CANDIDATO" ─────────────
+   *
+   * A CONDIÇÃO ERA O LITERAL `v.status === "ABERTA"`, herdado de quando status era uma união de
+   * cinco literais. O literal pergunta pelo NOME da linha do catálogo, e quem decide é o PAPEL dela,
+   * que é único e é o que o backend consulta. Trocado pelo papel `ABERTURA`, o comportamento de hoje
+   * fica idêntico (o papel resolve exatamente para a linha "ABERTA") e um código novo de mesmo papel
+   * passa a ser lido sem ninguém escrever o nome dele.
+   *
+   * ┌─ POR QUE NÃO `vagaRecebeCandidato`, QUE PARECE A PERGUNTA CERTA E NÃO É ───────────────────┐
+   * │ Decisão da auditoria de segurança, e ela é o ponto mais delicado desta lista. A vaga        │
+   * │ PENDENTE DE REVISÃO (papel `REVISAO`, espelhada do Pandapé pela varredura) TEM              │
+   * │ `recebeCandidato = true`, e precisa ter: sem isso a ingestão não teria onde pendurar as     │
+   * │ candidaturas que acabou de ler, e ela pararia de funcionar em silêncio.                     │
+   * │                                                                                             │
+   * │ MESMO ASSIM ELA FICA FORA DESTE SELETOR, e o motivo é o cliente. Enquanto `cod_cliente` for │
+   * │ NULO, não há finalidade determinada para o dado das pessoas que forem alocadas ali: ninguém │
+   * │ sabe para qual controlador aquele processo seletivo está trabalhando. RECEBER da ingestão   │
+   * │ (um espelho do que já existe no ATS) e SER OFERECIDA para alocação manual (uma decisão nova │
+   * │ que uma pessoa toma na tela) são duas coisas diferentes, e só a segunda passa por aqui.     │
+   * │                                                                                             │
+   * │ O caminho de quem precisa alocar numa vaga dessas é o mesmo de sempre: revisar a vaga na    │
+   * │ tela de Vagas Pendentes De Revisão, vincular o cliente e liberar. Liberada, ela passa a ser │
+   * │ do papel `ABERTURA` e aparece aqui sozinha.                                                 │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   */
+  const vagasAbertas = useMemo(
+    () =>
+      /*
+       * A LISTA VAZIA CAI NO CATÁLOGO CORRENTE, e isso não é detalhe: enquanto a leitura não voltou
+       * (ou se ela falhar), `catalogoStatusVaga` é `[]`, e com ele o papel de TODA vaga responderia
+       * `null`. O seletor de alocação ficaria vazio sem nada falhar, que é o modo de falha que esta
+       * régua inteira existe para não ter. Sem o catálogo próprio, a pergunta usa o corrente, que é
+       * o último lido na sessão ou a semente, exatamente como no resto do sistema.
+       */
+      vagas.filter((v) =>
+        ehDoPapelDaVaga(v.status, "ABERTURA", catalogoStatusVaga.length ? catalogoStatusVaga : undefined),
+      ),
+    [vagas, catalogoStatusVaga],
+  );
 
   const filtrosAtivos =
     (fCandidatos.length ? 1 : 0) +
