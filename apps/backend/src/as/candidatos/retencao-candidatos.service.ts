@@ -35,6 +35,28 @@ import { SITUACOES_VIVAS } from "../../domain/candidatura";
 const SITUACOES_VIVAS_SQL = sql.raw(SITUACOES_VIVAS.map((s) => `'${s}'`).join(", "));
 
 /**
+ * O MARCADOR QUE SUBSTITUI O NOME NO EXPURGO, escrito UMA VEZ SÓ.
+ *
+ * ┌─ POR QUE CONSTANTE, E NÃO O LITERAL REPETIDO NOS DOIS PONTOS ────────────────────────────────┐
+ * │ O mesmo texto é gravado pelo `update` do `alvo` (quem está sendo expurgado agora) e pela CTE  │
+ * │ `pessoais_cicatrizados` (quem já estava carimbado e teve o nome devolvido). A cicatrização    │
+ * │ ainda COMPARA o nome com ele, na guarda de "há o que cicatrizar", e é essa terceira ocorrência │
+ * │ que torna a duplicação perigosa: se os textos DIVERGIREM por um espaço, um acento ou uma      │
+ * │ maiúscula, o defeito não falha, ele escolhe um de dois lados ruins.                           │
+ * │   1. a guarda nunca casa com o que o `alvo` escreveu, e TODA linha anonimizada da base é      │
+ * │      reescrita a cada hora, para sempre, sem nenhuma mudança de valor;                        │
+ * │   2. ou a guarda casa com o marcador errado e a linha em que o nome VOLTOU nunca é alcançada, │
+ * │      que é exatamente o furo que esta correção fecha.                                         │
+ * │ Uma constante só, interpolada nos três lugares, torna a divergência impossível de escrever.   │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * `sql.raw` pelo mesmo motivo da lista acima: é constante de código, nunca entrada de usuário, e
+ * precisa chegar ao banco como LITERAL para que o contrato de forma leia o texto executado.
+ */
+const MARCADOR_EXPURGO = "Candidato Expurgado";
+const MARCADOR_EXPURGO_SQL = sql.raw(`'${MARCADOR_EXPURGO.replace(/'/g, "''")}'`);
+
+/**
  * EXPURGO POR RETENÇÃO da Central de Candidatos (decisão do diretor, §A.6).
  *
  * A REGRA, em duas linhas:
@@ -62,8 +84,20 @@ const SITUACOES_VIVAS_SQL = sql.raw(SITUACOES_VIVAS.map((s) => `'${s}'`).join(",
  * estar descartada numa vaga e ativa em outra, então o prazo só começa a correr quando TODAS as
  * candidaturas dela estão encerradas. Quem tem UMA candidatura VIVA numa vaga que AINDA NÃO ACABOU
  * (`SITUACOES_VIVAS`, o complemento exato de `ehSaidaSemExito`) NÃO entra na conta, em nenhuma
- * hipótese, e quem nunca se candidatou a nada também não: sem processo encerrado não há prazo a
- * contar.
+ * hipótese.
+ *
+ * ┌─ QUEM NUNCA SE CANDIDATOU A NADA TAMBÉM TEM PRAZO, E ISSO MUDOU (furo 1 de LGPD) ─────────────┐
+ * │ ATÉ AQUI A RÉGUA DIZIA "sem processo encerrado não há prazo a contar", e exigia               │
+ * │ `exists (select 1 from as_candidaturas ...)`. A consequência é a oposta da intenção: quem     │
+ * │ entra e não casa com vaga nenhuma NUNCA satisfaz a cláusula, então o prazo NUNCA começa a     │
+ * │ correr e CPF, e-mail, telefone e data de nascimento ficam retidos PARA SEMPRE. Retenção       │
+ * │ indefinida é exatamente o que a LGPD proíbe, e era teórico só enquanto a base estava vazia:   │
+ * │ deixa de ser no primeiro registro da INGESTÃO, que é por isso que o furo fecha ANTES dela.    │
+ * │                                                                                               │
+ * │ AGORA O PRAZO DESSA PESSOA CORRE DAS DATAS DELA MESMA (ver o relógio, lá embaixo). O ramo de  │
+ * │ quem TEM candidatura ficou EXATAMENTE como estava: a correção ACRESCENTA uma população, e     │
+ * │ nunca reescreve a régua da outra.                                                             │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
  *
  * ┌─ "VIVO" NÃO BASTA: É "VIVO E EM VAGA NÃO ENCERRADA" (decisão do diretor, opção B) ────────────┐
  * │ O BURACO QUE ISTO FECHA, e ele é o oposto do defeito acima: `APROVADO`, `ALOCADO` e            │
@@ -173,13 +207,20 @@ export class RetencaoCandidatosService implements OnModuleInit, OnModuleDestroy 
    * │ no `update`. Por isso cada passada também apaga identidade de quem JÁ TEM `anonimizado_em`, │
    * │ e é isso que torna a rotina IDEMPOTENTE: ela conserta sozinha qualquer falha parcial de uma │
    * │ passada anterior, inclusive as anteriores a este arquivo existir.                            │
+   * │                                                                                             │
+   * │ E O MESMO VALE PARA O DADO PESSOAL, desde o fechamento do furo 2: a passada RE-NULA CPF,    │
+   * │ e-mail, telefone e nascimento de quem já está carimbado, e REESCREVE O NOME com o marcador, │
+   * │ porque o caminho que devolvia os quatro devolvia o nome junto, e podia devolver SÓ o nome.  │
+   * │ Sem isso, uma re-identificação que                                                          │
+   * │ escapasse (a porta era o `editar`) ficaria PERMANENTE, porque a varredura não volta a uma   │
+   * │ linha com `anonimizado_em` preenchido. Ver a CTE `pessoais_cicatrizados`.                    │
    * └─────────────────────────────────────────────────────────────────────────────────────────────┘
    */
   async expurgar(): Promise<number> {
     const linhas = await this.db.execute(sql`
       with alvo as (
       update as_candidatos c
-         set nome = 'Candidato Expurgado',
+         set nome = ${MARCADOR_EXPURGO_SQL},
              cpf = null,
              email = null,
              telefone = null,
@@ -205,8 +246,19 @@ export class RetencaoCandidatosService implements OnModuleInit, OnModuleDestroy 
          -- │ tem a marca, não alcança quem tem), e não a presença do nome da coluna no texto.       │
          -- └───────────────────────────────────────────────────────────────────────────────────────┘
          and c.banco_talentos = false
-         -- TEM DE HAVER PROCESSO ENCERRADO: sem candidatura nenhuma não há prazo a contar.
-         and exists (select 1 from as_candidaturas k where k.candidato_id = c.id)
+         -- ┌─ O GATE DE "TEM DE HAVER CANDIDATURA" SAIU DAQUI, E SOZINHO ELE NÃO MUDAVA NADA ────┐
+         -- │ O que estava escrito nesta linha era                                                 │
+         -- │   and exists (select 1 from as_candidaturas k where k.candidato_id = c.id)           │
+         -- │ e ele é a definição do furo 1: sem candidatura, a régua nunca era satisfeita e o     │
+         -- │ prazo NUNCA começava a correr.                                                       │
+         -- │                                                                                       │
+         -- │ APAGÁ-LO SOZINHO NÃO CORRIGE COISA NENHUMA, e este é o ponto que o "seguranca"        │
+         -- │ MEDIU: o relógio, logo abaixo, é um "max()" sobre "as_candidaturas", e "max()" sobre  │
+         -- │ conjunto VAZIO devolve NULL. "NULL <= now() - interval '2 years'" NÃO é verdadeiro,   │
+         -- │ então a linha continuaria fora do "update", agora sem NENHUMA cláusula no "where" que │
+         -- │ denunciasse o motivo, que é pior do que o defeito original. QUEM FAZ A CORREÇÃO       │
+         -- │ EXISTIR É O "coalesce" DO RELÓGIO, e não esta remoção.                                │
+         -- └───────────────────────────────────────────────────────────────────────────────────────┘
          -- E NENHUM PROCESSO VIVO EM VAGA QUE AINDA NÃO ACABOU. Descartado numa vaga e ativo em
          -- outra não conta: o descarte é do processo, não da pessoa, e ESTA CORREÇÃO NÃO MEXEU
          -- NISSO. O que ela estreitou foi o que conta como "vivo" (agora é "vivo E em vaga não
@@ -283,14 +335,40 @@ export class RetencaoCandidatosService implements OnModuleInit, OnModuleDestroy 
          -- │ com FK RESTRICT): ele não descarta candidatura nenhuma da conta do max, e descartar   │
          -- │ uma delas poderia BAIXAR o máximo e apressar o expurgo.                               │
          -- └───────────────────────────────────────────────────────────────────────────────────────┘
-         and (select max(greatest(
+         --
+         -- ┌─ A QUEDA, E É ELA QUE FECHA O FURO 1 ────────────────────────────────────────────────┐
+         -- │ O "coalesce" resolve as DUAS populações numa expressão só, e a ordem dos argumentos   │
+         -- │ é a regra inteira:                                                                    │
+         -- │   1. quem TEM candidatura cai no primeiro argumento, o "max" de sempre, EXATAMENTE    │
+         -- │      como antes desta correção. O "max" nunca devolve NULL para essa pessoa (ela tem  │
+         -- │      ao menos uma linha), então o segundo argumento JAMAIS é avaliado para ela: o     │
+         -- │      ramo de quem tem candidatura não muda em nada;                                   │
+         -- │   2. quem NÃO tem candidatura nenhuma recebe NULL do "max" (conjunto vazio) e cai no  │
+         -- │      segundo, que são as datas do PRÓPRIO candidato, sem ler "as_candidaturas". Uma   │
+         -- │      queda que ainda lesse aquela tabela devolveria NULL de novo e deixaria o furo    │
+         -- │      inteiro, escondido na nulidade em vez de visível no "where".                     │
+         -- │                                                                                       │
+         -- │ O "greatest" É A DEFESA, E TROCÁ-LO POR "c.criado_em" SOZINHO REABRE EXPURGO          │
+         -- │ PREMATURO, QUE É IRREVERSÍVEL. A razão é medida, não estilística: "atualizado_em" tem │
+         -- │ "default now()" no INSERT e NÃO tem "$onUpdate" ("db/schema/tables.ts:66"). Uma carga │
+         -- │ ou migração que recue só o "criado_em" deixa o "atualizado_em" em HOJE, e o "greatest"│
+         -- │ devolve hoje: ninguém é apressado. Contando só do "criado_em", a mesma linha nasceria │
+         -- │ com o prazo JÁ VENCIDO e seria anonimizada na varredura da hora seguinte, sem         │
+         -- │ carência nenhuma. É a mesma régua de ÚLTIMO MOVIMENTO que o ramo de cima já usa, e a  │
+         -- │ direção é a mesma do "greatest" de lá: a data só anda PARA FRENTE. "least"/"min" no   │
+         -- │ lugar dele puxariam a referência para trás e tornariam gente elegível mais CEDO do    │
+         -- │ que ficaria antes da correção. O erro cai para o lado de não apagar.                  │
+         -- └───────────────────────────────────────────────────────────────────────────────────────┘
+         and coalesce(
+               (select max(greatest(
                            k.atualizado_em,
                            coalesce(
                              case when k.situacao in (${SITUACOES_VIVAS_SQL}) then v.encerrada_em end,
                              k.atualizado_em)))
-                from as_candidaturas k
-                join vagas v on v.id = k.vaga_id
-               where k.candidato_id = c.id)
+                  from as_candidaturas k
+                  join vagas v on v.id = k.vaga_id
+                 where k.candidato_id = c.id),
+               greatest(c.criado_em, c.atualizado_em))
              <= now() - interval '${sql.raw(RetencaoCandidatosService.RETENCAO)}'
       returning c.id
       ),
@@ -311,6 +389,82 @@ export class RetencaoCandidatosService implements OnModuleInit, OnModuleDestroy 
         delete from as_identidades_externas
          where candidato_id in (select id from alvo)
             or candidato_id in (select id from ja_anonimizados)
+      ),
+      -- ─ A CICATRIZAÇÃO DO DADO PESSOAL, e ela é a SEGUNDA METADE DO FURO 2 ──────────────────
+      --
+      -- ┌─ O QUE ESTA CTE REPARA, e a recusa do "editar" sozinha NÃO repara ───────────────────┐
+      -- │ A recusa que "CandidatosService.editar" passou a fazer protege o FUTURO: daqui para   │
+      -- │ frente, ninguém regrava CPF, e-mail, telefone ou nascimento em linha já carimbada.    │
+      -- │ Ela não repara o PASSADO, e é aí que mora o modo de falha: uma linha                  │
+      -- │ re-identificada antes desta correção (ou por qualquer caminho futuro que escape)      │
+      -- │ fica com "anonimizado_em" PREENCHIDO e com o dado pessoal DE VOLTA, e a varredura     │
+      -- │ NUNCA MAIS passa nela, porque a régua do "alvo" é "c.anonimizado_em is null". A       │
+      -- │ re-identificação vira PERMANENTE E SILENCIOSA: do ponto de vista do serviço, nada     │
+      -- │ falhou.                                                                               │
+      -- │                                                                                       │
+      -- │ É EXATAMENTE O MESMO ARGUMENTO QUE JÁ JUSTIFICOU A CTE DAS IDENTIDADES, logo acima,    │
+      -- │ e por isso esta nasce no molde dela: é a cicatrização que torna a rotina IDEMPOTENTE  │
+      -- │ CONTRA O PASSADO, e não só contra a falha parcial de uma passada.                     │
+      -- └───────────────────────────────────────────────────────────────────────────────────────┘
+      --
+      -- ┌─ O NOME ENTRA AQUI, E A PREMISSA DE QUE ELE "JÁ É UM MARCADOR" ERA FALSA ────────────┐
+      -- │ ESTAVA ESCRITO NESTA LINHA que o nome não precisava ser reescrito, porque depois do  │
+      -- │ expurgo ele já seria o marcador. Isso vale para quem SÓ passou pelo "alvo", e a      │
+      -- │ população que esta CTE existe para reparar é justamente a OUTRA: a de quem foi       │
+      -- │ RE-IDENTIFICADO depois de carimbado, pelo "editar".                                  │
+      -- │                                                                                       │
+      -- │ E O "editar" ESCREVE O NOME NA MESMA INSTRUÇÃO em que escrevia os outros quatro      │
+      -- │ ("candidatos.service.ts", "nome: dto.nome?.trim() ?? atual.nome"). Não existe caminho │
+      -- │ que devolva CPF, e-mail, telefone ou nascimento sem poder devolver o nome junto, e o  │
+      -- │ caminho real é o contrário: quem reabre uma ficha expurgada digita o NOME de volta    │
+      -- │ PRIMEIRO. O nome volta junto ou volta sozinho.                                        │
+      -- │                                                                                       │
+      -- │ A GUARDA ABAIXO TAMBÉM PRECISAVA DELE, e sem isso a metade pior do furo ficava fora   │
+      -- │ de alcance: a linha em que SÓ o nome voltou não satisfazia nenhuma das quatro         │
+      -- │ condições, então a passada não a TOCAVA e ela seguia contando como expurgada com o    │
+      -- │ nome real intacto. Medido contra banco pelo "seguranca". É a §A.33 aplicada a dado    │
+      -- │ pessoal: do ponto de vista do serviço, nada falhou.                                   │
+      -- └───────────────────────────────────────────────────────────────────────────────────────┘
+      --
+      -- "anonimizado_em" E "atualizado_em" NÃO SÃO TOCADOS, e isso é deliberado: o carimbo da
+      -- anonimização é a prova de QUANDO o dado pessoal saiu, e reescrevê-lo de hora em hora
+      -- apagaria justamente o que se precisa provar. "atualizado_em" também fica quieto porque
+      -- ele é insumo do RELÓGIO (a queda do furo 1), e empurrá-lo adiante a cada passada seria
+      -- mexer em prazo de gente por efeito colateral de uma faxina.
+      --
+      -- A CONDIÇÃO DE "HÁ O QUE CICATRIZAR" EVITA REESCRITA INÚTIL: sem ela, toda linha
+      -- anonimizada da base seria regravada a cada hora, para sempre, sem nenhuma mudança de
+      -- valor. O "alvo" e esta CTE alcançam conjuntos DISJUNTOS no mesmo retrato do banco
+      -- ("anonimizado_em is null" contra "is not null"), então nenhuma linha é atualizada duas
+      -- vezes na mesma instrução, que o Postgres não define.
+      --
+      -- O PREDICADO É ESCRITO AQUI, INTEIRO, E NÃO DELEGADO A "ja_anonimizados": as duas formas
+      -- enxergam o MESMO retrato do banco e são equivalentes, mas a guarda que decide EM QUEM se
+      -- escreve precisa estar visível no ponto da escrita. Quem ler este bloco daqui a um ano tem
+      -- de ver, sem sair da linha, que ele só alcança quem JÁ está carimbado, e nunca o contrário.
+      --
+      -- O MARCADOR É A MESMA CONSTANTE DO "alvo" (ver MARCADOR_EXPURGO, no topo do arquivo), aqui
+      -- e na guarda. Dois literais digitados à mão divergem com o tempo, e a divergência não falha:
+      -- ou a guarda nunca casa e a base inteira é reescrita de hora em hora, ou ela casa com o
+      -- texto errado e a linha re-identificada nunca é alcançada.
+      --
+      -- A COMPARAÇÃO É "is distinct from", E NÃO "<>", porque "<>" com NULL devolve NULL, nunca
+      -- verdadeiro: se um dia o nome puder ser nulo, a guarda escrita com "<>" deixaria passar em
+      -- silêncio a linha sem nome. A direção certa é a que fica VERDADEIRA quando o nome não é o
+      -- marcador, seja qual for o valor.
+      pessoais_cicatrizados as (
+        update as_candidatos
+           set nome = ${MARCADOR_EXPURGO_SQL},
+               cpf = null,
+               email = null,
+               telefone = null,
+               data_nascimento = null
+         where anonimizado_em is not null
+           and (nome is distinct from ${MARCADOR_EXPURGO_SQL}
+                or cpf is not null
+                or email is not null
+                or telefone is not null
+                or data_nascimento is not null)
       )
       -- ─ A CTE "matches_nulados" SAIU DAQUI, E COM ELA A SEGUNDA GAVETA ──────────────────────
       -- Ela nulava "as_candidaturas.id_match_pandape", identificador da PESSOA no ATS que
@@ -322,8 +476,9 @@ export class RetencaoCandidatosService implements OnModuleInit, OnModuleDestroy 
       -- "identidades_apagadas" CONTINUA, e a distinção importa para quem ler este diff: a que saiu
       -- é a da coluna morta, nunca a do desenho novo.
       -- A CONTAGEM SAI DO "alvo", e só dele: o que se reporta é quantas PESSOAS foram anonimizadas
-      -- nesta passada. As linhas cicatrizadas não entram na conta, porque não são gente nova
-      -- expurgada, e somá-las faria o número do log oscilar sem ninguém ter sido expurgado.
+      -- nesta passada. As linhas cicatrizadas (identidade externa apagada, dado pessoal re-nulado)
+      -- NÃO entram na conta, porque não são gente nova expurgada, e somá-las faria o número do log
+      -- oscilar sem ninguém ter sido expurgado.
       select count(*)::int as n from alvo
     `);
 

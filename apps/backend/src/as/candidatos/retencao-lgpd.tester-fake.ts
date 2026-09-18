@@ -440,11 +440,26 @@ export function violacoesDoContrato(sqlTexto: string): string[] {
   if (!t.includes("interval '2 years'")) {
     v.push("REGRESSAO_PRAZO: o prazo do diretor é de 2 anos.");
   }
-  if (!clausulaDoExistePlano(t)) {
-    v.push(
-      "REGRESSAO_SEM_PROCESSO_NAO_CONTA: sumiu a exigência de haver ao menos uma candidatura. Sem processo encerrado não há prazo a contar, e quem nunca se candidatou não pode ser alcançado.",
-    );
-  }
+  /*
+   * ─ A REGRA `REGRESSAO_SEM_PROCESSO_NAO_CONTA` FOI REVOGADA, E ELA ERA O DEFEITO ───────────────
+   *
+   * ELA COBRAVA, AQUI, a cláusula `exists (select 1 from as_candidaturas k where k.candidato_id =
+   * c.id)`, escrita quando a régua era "sem processo encerrado não há prazo a contar". A régua
+   * MUDOU por decisão registrada em `docs/MAPA-ALCANCE-FUNDACAO-PROD-E-2-FUROS.md` (FURO 1): aquela
+   * cláusula é exatamente o que faz quem entra sem casar com vaga nenhuma NUNCA ter prazo, e o dado
+   * pessoal dessa pessoa ficar retido para sempre, que é o que a LGPD proíbe.
+   *
+   * MANTÊ-LA SERIA UM CONTRATO QUE COBRA O FURO: ele acusaria como REGRESSÃO justamente a correção,
+   * e o pior defeito possível num acusador é apontar regressão que não existe, porque o time aprende
+   * a ignorar o vermelho que protege a linha mais perigosa do arquivo. O `tester` declarou esta
+   * colisão em `retencao-sem-candidatura.tester-fake.ts` (`HERDADAS_REVOGADAS`) e, corretamente, NÃO
+   * a apagou: quem implementa é que apaga. É o que esta remoção é.
+   *
+   * O QUE PASSA A COBRAR A POPULAÇÃO SEM CANDIDATURA é `violacoesDaRetencaoSemCandidatura`, no
+   * arquivo vizinho, que herda este contrato inteiro e acrescenta a queda do relógio. Nada do que
+   * este contrato protege foi afrouxado: a proteção da vaga não encerrada, o sentido da cláusula de
+   * banco, a lista derivada das vivas, o prazo e o `max` continuam aqui.
+   */
   return v;
 }
 

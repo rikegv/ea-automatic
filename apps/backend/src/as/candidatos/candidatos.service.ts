@@ -7,7 +7,7 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type {
   AsCandidaturaEtapaItem,
@@ -262,10 +262,35 @@ export class CandidatosService {
   /**
    * EDITAR a ficha. Mesmo dedup do cadastro, porque preencher o CPF depois é o caminho normal aqui:
    * a pessoa entra sem CPF na captação e informa o número quando o processo avança.
+   *
+   * ┌─ ESTA PORTA RE-IDENTIFICAVA QUEM O EXPURGO JÁ TINHA ANONIMIZADO (furo 2 de LGPD) ──────────┐
+   * │ O `set` abaixo monta nome, CPF, e-mail, telefone e nascimento e gravava por `where eq(id)`, │
+   * │ SEM OLHAR `anonimizado_em`. Uma edição depois do expurgo devolvia o dado pessoal à linha e  │
+   * │ NADA FALHAVA: do ponto de vista do sistema foi um salvamento comum. O expurgo existe para   │
+   * │ que aquele dado não esteja mais ali, e esta era a porta que o colocava de volta.            │
+   * │                                                                                             │
+   * │ A GUARDA TEM DUAS CAMADAS, E NENHUMA DAS DUAS BASTA SOZINHA:                                │
+   * │   1. a RECUSA pela leitura, logo abaixo, que é a que impede o dado pessoal de sequer entrar │
+   * │      num `set`, e a que dá ao consultor uma frase em vez de um salvamento mudo;             │
+   * │   2. a CLÁUSULA `anonimizado_em is null` NO `where` mais a CONTAGEM DE LINHAS AFETADAS, que │
+   * │      é a que vale contra a CORRIDA: leitura e escrita não são atômicas, e a varredura roda  │
+   * │      de hora em hora. Quem decidisse só pela leitura de antes deixaria passar exatamente a  │
+   * │      edição que começou meio segundo antes do expurgo.                                      │
+   * │                                                                                             │
+   * │ E A CLÁUSULA SOZINHA SERIA PIOR DO QUE NADA: ela atualizaria ZERO linhas EM SILÊNCIO, o     │
+   * │ método seguiria, devolveria `ficha(id)` (a ficha velha) e a tela mostraria "salvo" para um  │
+   * │ salvamento que não existiu. Salvamento que não salva é pior que erro, porque ninguém vai    │
+   * │ atrás. Por isso QUEM DECIDE É A CONTAGEM DE LINHAS, e nunca a leitura de antes.             │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * A CICATRIZAÇÃO É A OUTRA METADE, e ela não mora aqui: a recusa protege o FUTURO, e o passado
+   * (qualquer linha já re-identificada) é reparado pela varredura, em `RetencaoCandidatosService`,
+   * CTE `pessoais_cicatrizados`. Uma metade sem a outra não fecha o furo.
    */
   async editar(id: string, dto: EditarCandidatoDto, autor: AuthUser): Promise<AsCandidatoFicha> {
     const atual = await this.db.query.asCandidatos.findFirst({ where: eq(asCandidatos.id, id) });
     if (!atual) throw new NotFoundException("Candidato não encontrado.");
+    if (atual.anonimizadoEm) throw this.recusaPorAnonimizacao();
 
     const cpf = dto.cpf === undefined ? atual.cpf : this.cpfOuNulo(dto.cpf);
     if (cpf && cpf !== atual.cpf) {
@@ -278,7 +303,7 @@ export class CandidatosService {
 
     try {
       await this.db.transaction(async (tx) => {
-        await tx
+        const gravadas = await tx
           .update(asCandidatos)
           .set({
             nome: dto.nome?.trim() ?? atual.nome,
@@ -306,17 +331,53 @@ export class CandidatosService {
              */
             atualizadoEm: new Date(),
           })
-          .where(eq(asCandidatos.id, id));
+          /*
+           * A CLÁUSULA QUE O BANCO AVALIA NO INSTANTE DA ESCRITA. A conferência em memória, lá em
+           * cima, não cobre a corrida: entre o `findFirst` e este `update` cabe a varredura de
+           * retenção, e sem esta linha as duas requisições passariam juntas pela conferência e a
+           * segunda regravaria o dado pessoal na pessoa que o expurgo acabou de anonimizar.
+           */
+          .where(and(eq(asCandidatos.id, id), isNull(asCandidatos.anonimizadoEm)))
+          .returning({ id: asCandidatos.id });
+
+        /*
+         * ZERO LINHA AFETADA NÃO É SUCESSO, e é aqui que a segunda camada vira RECUSA VISÍVEL. A
+         * linha existe (o `findFirst` a achou), então a única razão de o `update` não alcançá-la é
+         * ela ter deixado de satisfazer a régua entre a leitura e a escrita. Seguir daqui devolveria
+         * 200 com a ficha velha. Lançar dentro da transação também DESFAZ o `aplicarRetencao`, que
+         * de outro modo gravaria trilha de uma edição que não aconteceu.
+         */
+        if (gravadas.length === 0) throw this.recusaPorAnonimizacao();
 
         if (typeof dto.bancoTalentos === "boolean") {
           await this.aplicarRetencao(tx, id, dto.bancoTalentos, autor);
         }
       });
     } catch (err) {
+      // `traduzirUnique` devolve o próprio erro quando ele já é um `Error`, então a recusa acima
+      // atravessa daqui inteira, com o status dela. Só violação de unique vira outra frase.
       throw this.traduzirUnique(err);
     }
 
     return this.ficha(id);
+  }
+
+  /**
+   * ─ A RECUSA DE EDITAR UM CADASTRO JÁ ANONIMIZADO ──────────────────────────────────────────────
+   *
+   * §A.6 NA MENSAGEM, E ESTA É A PARTE MAIS FÁCIL DE ERRAR SEM PERCEBER: a frase natural de
+   * escrever aqui ("o CPF 000... pertence a um cadastro expurgado") publicaria justamente o dado
+   * que o expurgo apagou, e mensagem de erro é de onde o dado mais facilmente cai num log de
+   * aplicação. Não entra CPF, nem nome, nem e-mail, nem telefone: a frase diz O QUE ACONTECEU e o
+   * que a pessoa pode fazer, e nada mais.
+   *
+   * 409 E NÃO 400: o corpo enviado não tem defeito nenhum, quem mudou foi o ESTADO do cadastro.
+   */
+  private recusaPorAnonimizacao(): ConflictException {
+    return new ConflictException(
+      "Este cadastro foi anonimizado por prazo de retenção e não aceita mais edição. " +
+        "Se a pessoa voltou a participar de um processo, cadastre-a de novo.",
+    );
   }
 
   /**
