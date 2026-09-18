@@ -1,4 +1,8 @@
 import { Module } from "@nestjs/common";
+import { PandapeArquivosModule } from "../pandape/pandape-arquivos.module";
+import { IngestaoHttp } from "./ingestao-pandape/ingestao-http";
+import { IngestaoRepositorio } from "./ingestao-pandape/ingestao-repositorio";
+import { IngestaoVarreduraService } from "./ingestao-pandape/ingestao-varredura.service";
 import { CandidatosController } from "./candidatos/candidatos.controller";
 import { ComerciaisAdminController } from "./comerciais/comerciais-admin.controller";
 import { ComerciaisService } from "./comerciais/comerciais.service";
@@ -81,6 +85,19 @@ import { VagasService } from "./vagas/vagas.service";
    * (`db/carga-cidades-ibge.ts`), e uma tela de manutenção só criaria a chance de alguém "corrigir"
    * o nome de uma cidade e desmanchar o casamento com o código oficial.
    */
+  /*
+   * ─ A ÚNICA IMPORTAÇÃO DESTE MÓDULO, E ELA NÃO DESFAZ O ISOLAMENTO ───────────────────────────
+   *
+   * `PandapeArquivosModule` é a FOLHA da integração (o comentário de lá explica por que ela existe):
+   * não importa ninguém e carrega o `PandapeApiService`, que é o cliente HTTP com UMA instância e UM
+   * cache de token. A varredura precisa dele, e importar a folha é o que impede duas coisas: um ciclo
+   * de módulos (o `PandapeModule` importa `AdmissoesModule`) e uma SEGUNDA instância do cliente, que
+   * dobraria a emissão de token e o consumo da cota compartilhada (§A.5).
+   *
+   * O ISOLAMENTO QUE O MÓDULO DECLARA CONTINUA INTEIRO: nenhuma dependência do módulo da ADMISSÃO
+   * entra por aqui, e nada em `as/` passa a conhecer Esteira, Gerenciador ou Alto Volume.
+   */
+  imports: [PandapeArquivosModule],
   controllers: [
     VagasController,
     CandidatosController,
@@ -138,6 +155,25 @@ import { VagasService } from "./vagas/vagas.service";
     // `CidadesService` serve a leitura por UF. A base vem do script de carga, nunca do IBGE em
     // tempo de request: a abertura de vaga não pode depender de um servidor externo estar no ar.
     CidadesService,
+    /*
+     * ─ A INGESTÃO DO PANDAPÉ POR VARREDURA (`as/ingestao-pandape`) ──────────────────────────────
+     *
+     * Três peças, e a separação é o que a torna auditável: o REPOSITÓRIO (único ponto de escrita no
+     * banco, com as guardas de anonimização e a lista nominal de colunas), o HTTP (GET apenas, com
+     * allowlist de caminho e o cache das pastas) e o SERVIÇO (a fila isolada, o worker e a cadência).
+     *
+     * ELA NASCE INERTE: sem `PANDAPE_VARREDURA_DATA_CORTE` no ambiente, nada é lido e nada é escrito.
+     * A data de corte não tem default de propósito (ver o serviço): um default faria a primeira
+     * subida começar a colher dado pessoal de 137 mil pessoas sem ninguém decidir isso.
+     *
+     * `VagaStatusService` e `EtapasFunilService` são consumidos daqui de dentro, e é por isso que as
+     * três peças moram NESTE módulo em vez de num módulo próprio: os dois catálogos têm cache em
+     * memória cuja confiabilidade vem de haver UMA instância, e um módulo novo com os mesmos
+     * providers criaria a segunda.
+     */
+    IngestaoRepositorio,
+    IngestaoHttp,
+    IngestaoVarreduraService,
   ],
 })
 export class AsModule {}

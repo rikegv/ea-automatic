@@ -1,5 +1,13 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import {
+  projetarInscricao,
+  projetarPasta,
+  projetarVaga,
+  type InscricaoProjetada,
+  type PastaProjetada,
+  type VagaProjetada,
+} from "../domain/pandape-varredura-projecao";
 
 /**
  * Um documento do pré-colaborador no Pandapé (GET /v1/PreCollaborator/Get → `documents[]`). O `link`
@@ -391,6 +399,75 @@ export class PandapeApiService {
     return Array.isArray(lista) ? lista : [];
   }
 
+  // ── A VARREDURA (v2): TRÊS LEITURAS, TODAS PROJETADAS ───────────────────────
+  /**
+   * ─ AS VAGAS ATIVAS, UMA CHAMADA (medido: 2,15s para as 621) ──────────────────────────────────
+   *
+   * `VacancyStatus=2` é a fronteira do ciclo de varredura: só vaga ATIVA é varrida, e a vaga que SAI
+   * desta lista é a que o espelho do EA encerra (`IngestaoRepositorio.encerrarAusentes`).
+   *
+   * O TIPO DE RETORNO É PROJETADO, e é o que impede o resto do payload de circular. Vale para as três
+   * leituras desta seção, e na de inscrições isso é §A.6 e não higiene: ver o bloco lá embaixo.
+   */
+  async listarVagasAtivas(): Promise<VagaProjetada[]> {
+    if (this.inerte()) return [];
+    const res = await this.getComStatus<unknown>(
+      `/v2/vacancies?VacancyStatus=2&Page=1&PageSize=1000`,
+    );
+    return listaDaResposta(res.dados)
+      .map(projetarVaga)
+      .filter((v): v is VagaProjetada => v !== null);
+  }
+
+  /**
+   * AS PASTAS DE UMA VAGA, para traduzir `idVacancyFolder` em NOME (a entrada do de/para de etapa).
+   *
+   * MEDIDO, E MUDA O DESENHO: o `idVacancyFolder` NÃO É COMPARTILHADO ENTRE VAGAS (zero sobreposição
+   * em 6 vagas), então isto é uma chamada POR VAGA, e não um dicionário global. Quem cacheia é o
+   * adaptador HTTP da ingestão; aqui não há cache para não guardar estado de uma frente dentro do
+   * cliente que as outras três também usam.
+   */
+  async listarPastasDaVaga(idVacancy: number): Promise<PastaProjetada[]> {
+    if (this.inerte()) return [];
+    const res = await this.getComStatus<unknown>(
+      `/v2/vacancy-folders?idVacancy=${encodeURIComponent(String(idVacancy))}`,
+    );
+    return listaDaResposta(res.dados)
+      .map(projetarPasta)
+      .filter((p): p is PastaProjetada => p !== null);
+  }
+
+  /**
+   * ─ UMA PÁGINA DE INSCRIÇÕES, E É AQUI QUE A MINIMIZAÇÃO ACONTECE (§A.6) ──────────────────────
+   *
+   * `/v2/matches` NÃO devolve um resumo: devolve o CURRÍCULO INTEIRO, 58 campos por inscrição, com
+   * `summary`, `experiences` (empresa, cargo e salário), `studies`, endereço, latitude, longitude, e
+   * QUATRO CAMPOS DE DADO PESSOAL SENSÍVEL do art. 11 (`idRace`, `idSexualOrientation`,
+   * `idGenderIdentity`, `deficiencies`).
+   *
+   * O DESCARTE É DAQUI PARA DENTRO, e não "lá adiante alguém não usa": o tipo de retorno é a
+   * projeção, montada CAMPO A CAMPO por allowlist, e o objeto cru morre no escopo deste método. Um
+   * espalhamento com `delete` dos sensíveis carregaria o campo NOVO que a API passar a devolver
+   * amanhã, e ninguém revisa integração que não quebrou.
+   *
+   * `PageSize=200` é o melhor ponto medido: gasta mais requisições que o 1.000 e termina ANTES
+   * (1,45s por página contra 3,44s), porque o gargalo da varredura é a LATÊNCIA, não a cota.
+   */
+  async listarInscricoesDaVaga(
+    idVacancy: number,
+    page: number,
+    pageSize: number,
+  ): Promise<InscricaoProjetada[]> {
+    if (this.inerte()) return [];
+    const res = await this.getComStatus<unknown>(
+      `/v2/matches?IdVacancy=${encodeURIComponent(String(idVacancy))}` +
+        `&Page=${encodeURIComponent(String(page))}&PageSize=${encodeURIComponent(String(pageSize))}`,
+    );
+    return listaDaResposta(res.dados)
+      .map(projetarInscricao)
+      .filter((i): i is InscricaoProjetada => i !== null);
+  }
+
   /**
    * "Mudanças desde a última verificação". Inerte → []. A API v1 **NÃO tem endpoint de
    * listagem/discovery de pré-colaboradores** (só `Get` por id) → retornamos [] sempre.
@@ -452,4 +529,15 @@ export class PandapeApiService {
       clearTimeout(timer);
     }
   }
+}
+
+/**
+ * A LISTA DE DENTRO DA RESPOSTA, sem confiar no formato: `{ data: [...] }` e o array cru convivem na
+ * API do Pandapé conforme a versão do endpoint. Qualquer outra coisa vira lista VAZIA, que é a
+ * direção fail-closed da frente: o que não é reconhecido não é ingerido.
+ */
+function listaDaResposta(resposta: unknown): Record<string, unknown>[] {
+  const bruto = Array.isArray(resposta) ? resposta : (resposta as { data?: unknown } | undefined)?.data;
+  if (!Array.isArray(bruto)) return [];
+  return bruto.filter((x): x is Record<string, unknown> => typeof x === "object" && x !== null);
 }

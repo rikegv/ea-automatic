@@ -792,6 +792,13 @@
       "when": 1788111491611,
       "tag": "0112_as_retencao_campo_proprio",
       "breakpoints": true
+    },
+    {
+      "idx": 113,
+      "version": "7",
+      "when": 1788115091611,
+      "tag": "0113_as_ingestao_pandape_varredura",
+      "breakpoints": true
     }
   ]
 }

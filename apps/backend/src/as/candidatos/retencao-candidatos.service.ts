@@ -57,6 +57,25 @@ const MARCADOR_EXPURGO = "Candidato Expurgado";
 const MARCADOR_EXPURGO_SQL = sql.raw(`'${MARCADOR_EXPURGO.replace(/'/g, "''")}'`);
 
 /**
+ * O MARCADOR QUE SUBSTITUI O TEXTO LIVRE DO CONTATO, e ele é SEPARADO do marcador do nome.
+ *
+ * ┌─ POR QUE DOIS MARCADORES, E NÃO O MESMO TEXTO NOS DOIS LUGARES ──────────────────────────────┐
+ * │ São campos de naturezas diferentes, lidos em telas diferentes: um é o NOME de uma pessoa na  │
+ * │ lista, o outro é o RESUMO de uma ligação no histórico da candidatura. Um marcador só faria a │
+ * │ linha do histórico dizer "Candidato Expurgado" onde se espera a frase do contato, e quem     │
+ * │ lesse a tela concluiria que o campo foi preenchido errado, e não que ele foi expurgado.      │
+ * │                                                                                              │
+ * │ O RESTO DO ARGUMENTO DO MARCADOR DO NOME VALE INTEIRO AQUI: este texto é gravado pela CTE e  │
+ * │ COMPARADO pela guarda de "há o que cicatrizar" da mesma CTE, então divergir por um espaço ou │
+ * │ um acento não falha, escolhe um de dois lados ruins (reescrever a base de hora em hora para  │
+ * │ sempre, ou nunca alcançar a linha que precisa ser limpa). Uma constante só torna isso         │
+ * │ impossível de escrever.                                                                      │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+const MARCADOR_RESUMO = "Resumo Expurgado";
+const MARCADOR_RESUMO_SQL = sql.raw(`'${MARCADOR_RESUMO.replace(/'/g, "''")}'`);
+
+/**
  * EXPURGO POR RETENÇÃO da Central de Candidatos (decisão do diretor, §A.6).
  *
  * A REGRA, em duas linhas:
@@ -75,6 +94,13 @@ const MARCADOR_EXPURGO_SQL = sql.raw(`'${MARCADOR_EXPURGO.replace(/'/g, "''")}'`
  * houve 10, e o indicador de entrega da vaga mentiria para sempre. O que a LGPD pede é que o dado
  * PESSOAL não fique retido além do necessário, e é exatamente o dado pessoal que sai daqui: CPF,
  * e-mail, telefone, data de nascimento e as identidades externas. O nome vira um marcador.
+ *
+ * O TEXTO LIVRE ESCRITO PELO OPERADOR SAI JUNTO, e é o terceiro furo que esta rotina fechou: o
+ * `resumo` dos contatos (substituído por marcador, a coluna é NOT NULL), o `motivo_descarte` das
+ * candidaturas (nulado) e o `motivo` dos eventos do histórico (nulado), que é a SEGUNDA CÓPIA da
+ * mesma frase, gravada pela mesma transação da saída. Anonimizar o CPF e deixar o telefone digitado
+ * à mão na linha ao lado é minimização aparente, e nular a frase num lugar só é a mesma coisa. Ver
+ * as CTEs `contatos_expurgados`, `motivos_expurgados` e `motivos_do_historico_expurgados`.
  *
  * O QUE FICA: cidade e UF, que sozinhas não identificam ninguém e sustentam a estatística regional,
  * e as candidaturas, que passam a apontar para uma pessoa sem identidade. É a mesma escolha do
@@ -190,15 +216,16 @@ export class RetencaoCandidatosService implements OnModuleInit, OnModuleDestroy 
    * e porque a operação passa a ser atômica: ou a linha vira anônima, ou fica como estava.
    *
    * ┌─ UMA INSTRUÇÃO SÓ, COM CTE QUE MODIFICA DADO, E ISSO NÃO É ESTILO ────────────────────────┐
-   * │ A partir da fundação da plataforma unificadora o expurgo tem TRÊS efeitos: anonimiza a     │
-   * │ pessoa, APAGA as identidades externas dela e NULA o id de match das candidaturas. A forma  │
-   * │ óbvia seria três escritas numa transação, e o parecer de segurança a VETOU.                │
+   * │ O expurgo tem VÁRIOS efeitos: anonimiza a pessoa, APAGA as identidades externas dela,      │
+   * │ SUBSTITUI o resumo dos contatos e NULA o motivo de descarte das candidaturas. A forma      │
+   * │ óbvia seria uma escrita por efeito, numa transação, e o parecer de segurança a VETOU.      │
    * │                                                                                             │
    * │ O MOTIVO É O MODO DE FALHA, e ele é §A.33 aplicado a dado pessoal: com escritas separadas, │
    * │ a falha da SEGUNDA deixa o candidato já carimbado com `anonimizado_em`, e o predicado da    │
    * │ varredura (`c.anonimizado_em is null`) faz com que ela NUNCA MAIS volte àquela linha. O    │
-   * │ identificador externo viraria permanente EM SILÊNCIO, sem nada falhar do ponto de vista do │
-   * │ serviço. Numa instrução só, o banco garante que os três efeitos caem juntos ou nenhum cai. │
+   * │ identificador externo (ou o telefone digitado no resumo de um contato) viraria permanente  │
+   * │ EM SILÊNCIO, sem nada falhar do ponto de vista do serviço. Numa instrução só, o banco      │
+   * │ garante que todos os efeitos caem juntos ou nenhum cai.                                    │
    * └─────────────────────────────────────────────────────────────────────────────────────────────┘
    *
    * ┌─ A VARREDURA É CICATRIZANTE, e é ela que fecha o caminho P3 do parecer ────────────────────┐
@@ -390,6 +417,35 @@ export class RetencaoCandidatosService implements OnModuleInit, OnModuleDestroy 
          where candidato_id in (select id from alvo)
             or candidato_id in (select id from ja_anonimizados)
       ),
+      -- ─ A FILA DE CONFLITO DA INGESTÃO, PELO MESMO MOTIVO E NA MESMA INSTRUÇÃO ──────────────
+      --
+      -- ┌─ O QUE ELA GUARDA É O MESMO IDENTIFICADOR QUE A CTE ACIMA EXISTE PARA APAGAR ────────┐
+      -- │ "as_ingestao_conflitos.identificador" É o "idCandidate" do Pandapé, o MESMO valor de  │
+      -- │ "as_identidades_externas", ao lado do "candidato_id". Se a linha do conflito ficasse  │
+      -- │ fora do expurgo, sobraria uma ponte ligando a ficha ANONIMIZADA ao id de quem ela era │
+      -- │ no ATS, onde o nome e o CPF continuam: a anonimização seria desfeita por quem tivesse │
+      -- │ acesso às duas pontas, e nada falharia. Apagar a identidade e deixar a cópia ao lado  │
+      -- │ é minimização APARENTE, que é o defeito que as CTEs deste arquivo existem para pegar. │
+      -- └───────────────────────────────────────────────────────────────────────────────────────┘
+      --
+      -- APAGADA, E NÃO ANONIMIZADA, pelo mesmo argumento da identidade externa: a linha É o
+      -- identificador mais o ponteiro para a pessoa, e não sobra dela nada que sustente contagem.
+      -- Um conflito de identidade de uma ficha expurgada também não tem mais o que revisar: não há
+      -- pessoa a desempatar.
+      --
+      -- O ALCANCE É "alvo" MAIS "ja_anonimizados", como em todas as outras CTEs daqui, e pela mesma
+      -- razão: a varredura NUNCA volta a uma linha carimbada, então o conflito registrado depois da
+      -- anonimização (ou antes desta correção existir) ficaria retido para sempre, em silêncio.
+      --
+      -- "as_varredura_vagas" NÃO ENTRA AQUI, E A OMISSÃO É DELIBERADA: ela guarda id de vaga do
+      -- ATS, id de vaga do EA e duas datas de processo, e não tem pessoa nenhuma dentro. Apagá-la
+      -- "por simetria" destruiria a marca de água e a fronteira de propriedade da varredura, que é
+      -- o que impede a ingestão de encerrar vaga de outro dono.
+      conflitos_apagados as (
+        delete from as_ingestao_conflitos
+         where candidato_id in (select id from alvo)
+            or candidato_id in (select id from ja_anonimizados)
+      ),
       -- ─ A CICATRIZAÇÃO DO DADO PESSOAL, e ela é a SEGUNDA METADE DO FURO 2 ──────────────────
       --
       -- ┌─ O QUE ESTA CTE REPARA, e a recusa do "editar" sozinha NÃO repara ───────────────────┐
@@ -465,6 +521,152 @@ export class RetencaoCandidatosService implements OnModuleInit, OnModuleDestroy 
                 or email is not null
                 or telefone is not null
                 or data_nascimento is not null)
+      ),
+      -- ─ O TEXTO LIVRE DO CONTATO, e ele é o TERCEIRO furo do mesmo tema ─────────────────────
+      --
+      -- ┌─ O QUE SOBREVIVIA À ANONIMIZAÇÃO ────────────────────────────────────────────────────┐
+      -- │ O expurgo alcançava "as_candidatos" e "as_identidades_externas", e NADA MAIS. O que o │
+      -- │ consultor DIGITA continua sendo dado pessoal, e é onde ele aparece na prática: "liguei│
+      -- │ no 11 9xxxx-xxxx", "falei com a irmã dela", "mandei e-mail para fulano@...". Nular o  │
+      -- │ CPF e deixar o telefone digitado aqui é minimização APARENTE: a pessoa continua        │
+      -- │ identificável e localizável pela linha ao lado, e nada falha.                          │
+      -- └───────────────────────────────────────────────────────────────────────────────────────┘
+      --
+      -- ┌─ A LINHA É PRESERVADA E O TEXTO É SUBSTITUÍDO, e o critério é o MESMO das duas CTEs ──┐
+      -- │ acima, aplicado a um terceiro caso. A régua deste arquivo já estava escrita:           │
+      -- │   - a IDENTIDADE EXTERNA é APAGADA porque a linha É o identificador, inteira, e nada  │
+      -- │     sobra dela que sustente contagem;                                                  │
+      -- │   - o CANDIDATO é ANONIMIZADO porque a linha sustenta a contagem histórica das vagas.  │
+      -- │ O CONTATO cai no segundo caso, e não no primeiro: só o "resumo" é dado pessoal. O      │
+      -- │ TIPO, o "ocorrido_em" e o "registrado_por_id" são fato de PROCESSO (houve ligação      │
+      -- │ naquele dia, feita por aquele consultor), da mesma natureza das candidaturas que a     │
+      -- │ linha do candidato preserva. Apagar a linha destruiria a prova de que o trabalho       │
+      -- │ aconteceu, e destruiria por tabela a leitura de esforço da candidatura, sem minimizar  │
+      -- │ NADA além do que a substituição do texto já minimiza.                                  │
+      -- └───────────────────────────────────────────────────────────────────────────────────────┘
+      --
+      -- "resumo" É NOT NULL ("db/schema/tables.ts"), então "anular" aqui é gravar um MARCADOR, e
+      -- não "null": um "set resumo = null" derrubaria a varredura inteira com violação de NOT NULL,
+      -- e a varredura que morre é a varredura que não expurga ninguém.
+      --
+      -- O ALCANCE É "alvo" MAIS "ja_anonimizados", PELO MESMO ARGUMENTO JÁ ESCRITO ACIMA: a
+      -- varredura NUNCA volta a uma linha carimbada, então contato registrado DEPOIS da
+      -- anonimização (ou antes desta correção existir) ficaria retido para sempre, em silêncio.
+      -- É o que torna a rotina idempotente contra o passado, e não só contra a falha de uma passada.
+      --
+      -- A LIGAÇÃO COM A PESSOA É INDIRETA, e por isso a subconsulta: "as_contatos" pendura na
+      -- CANDIDATURA, nunca no candidato. Ler "candidato_id" direto daqui não compila, e resolver
+      -- isso por join no "update" mudaria a forma sem mudar o efeito.
+      --
+      -- A GUARDA DE "HÁ O QUE CICATRIZAR" evita reescrever de hora em hora, para sempre, todo
+      -- contato de toda pessoa já anonimizada. "is distinct from" e não "<>" pela razão já escrita
+      -- na CTE acima: "<>" com NULL devolve NULL, nunca verdadeiro.
+      contatos_expurgados as (
+        update as_contatos
+           set resumo = ${MARCADOR_RESUMO_SQL}
+         where candidatura_id in (
+                 select k.id
+                   from as_candidaturas k
+                  where k.candidato_id in (select id from alvo)
+                     or k.candidato_id in (select id from ja_anonimizados))
+           and resumo is distinct from ${MARCADOR_RESUMO_SQL}
+      ),
+      -- ─ O MOTIVO DO DESCARTE, texto livre pelo mesmo motivo e com a mesma exposição ─────────
+      --
+      -- ┌─ ESTE VAI A NULO, E A ASSIMETRIA COM O "resumo" É DELIBERADA ────────────────────────┐
+      -- │ A coluna é ANULÁVEL ("motivo_descarte text", sem NOT NULL), e nula já QUER DIZER      │
+      -- │ ALGUMA COISA no vocabulário da tabela: "saiu sem motivo registrado". É exatamente o   │
+      -- │ estado em que a candidatura nasce e o estado para o qual "restaurar-candidatura" a    │
+      -- │ devolve. Gravar um marcador aqui inventaria um terceiro estado, que toda tela que já  │
+      -- │ testa "motivoDescarte &&" passaria a EXIBIR, e o "Resumo Expurgado" apareceria como   │
+      -- │ se fosse o motivo pelo qual a pessoa foi descartada.                                   │
+      -- │                                                                                        │
+      -- │ E A ESTATÍSTICA DE MOTIVO NÃO É DESTRUÍDA, que é a objeção que decide: o que sustenta │
+      -- │ contagem de desfecho é a SITUAÇÃO ("DESCARTADO", "DESISTIU", "REPROVADO"), coluna      │
+      -- │ estruturada que esta CTE não toca e que continua inteira. O "motivo_descarte" é texto │
+      -- │ livre, e o próprio schema diz por quê: "o vocabulário de descarte é da operação e     │
+      -- │ ainda está se formando". Nenhum relatório agrupa por ele, e nenhum poderia: são frases │
+      -- │ digitadas. O que se perde é a frase de UMA pessoa cujo nome e CPF já não existem mais. │
+      -- └────────────────────────────────────────────────────────────────────────────────────────┘
+      --
+      -- "atualizado_em" NÃO É TOCADO, e aqui isso é mais do que higiene: "k.atualizado_em" é
+      -- INSUMO DO RELÓGIO do expurgo, lá em cima. Empurrá-lo a cada passada mexeria no prazo de
+      -- gente por efeito colateral de uma faxina, e é o mesmo argumento que já mantém quieto o
+      -- "atualizado_em" da CTE "pessoais_cicatrizados".
+      motivos_expurgados as (
+        update as_candidaturas
+           set motivo_descarte = null
+         where (candidato_id in (select id from alvo)
+                or candidato_id in (select id from ja_anonimizados))
+           and motivo_descarte is not null
+      ),
+      -- ─ A SEGUNDA CÓPIA DA MESMA FRASE, no HISTÓRICO da candidatura ─────────────────────────
+      --
+      -- ┌─ SEM ESTA CTE, A DE CIMA É MINIMIZAÇÃO APARENTE ─────────────────────────────────────┐
+      -- │ "gravarSaidaDaCandidatura" ("as/candidatos/encerrar-candidatura.ts") escreve a MESMA   │
+      -- │ string nos DOIS lugares, na MESMA transação: em "as_candidaturas.motivo_descarte" e no │
+      -- │ "motivo" do evento que ela insere em "as_candidatura_etapas". O próprio schema diz que │
+      -- │ a repetição é de propósito, porque a candidatura guarda o estado de HOJE e o histórico │
+      -- │ guarda o instante da decisão.                                                          │
+      -- │                                                                                        │
+      -- │ ENTÃO NULAR SÓ UM DOS DOIS NÃO EXPURGA NADA: a frase digitada sobrevive inteira na     │
+      -- │ linha ao lado, e nada falha do ponto de vista do serviço, que é exatamente o modo de   │
+      -- │ falha que este arquivo inteiro existe para fechar. É o mesmo argumento do resumo do    │
+      -- │ contato, aplicado à cópia que ninguém tinha visto.                                     │
+      -- └────────────────────────────────────────────────────────────────────────────────────────┘
+      --
+      -- ┌─ O ALCANCE É A COLUNA INTEIRA, E NÃO SÓ O EVENTO DE SAÍDA ───────────────────────────┐
+      -- │ Não há filtro por tipo de evento aqui, de propósito: TODO "motivo" desta tabela é      │
+      -- │ texto livre digitado pelo operador, com a mesma exposição, e NENHUM escritor grava     │
+      -- │ rótulo derivado. São SETE pontos que inserem evento hoje, e QUATRO deles gravam a      │
+      -- │ frase: a SAÍDA (a cópia de que fala o bloco acima), a TROCA DE VAGA                    │
+      -- │ ("candidatos.service", "motivo: texto(dto.motivo)", frase de um Master corrigindo dado │
+      -- │ vivo), a finalização de posição e a REENTRADA ("restaurar-candidatura.ts",             │
+      -- │ "motivo: trilha.motivo"). Os outros três já gravam nulo ou nem passam o campo.         │
+      -- │                                                                                        │
+      -- │ FILTRAR POR "situacao is not null" (ou seja, "só o desfecho") DEIXARIA DUAS DELAS       │
+      -- │ RETIDAS PARA SEMPRE: a troca de vaga e a reentrada gravam "situacao" NULA de propósito, │
+      -- │ porque não são desfecho, e são digitadas pela mesma gente, sobre a mesma pessoa.        │
+      -- └────────────────────────────────────────────────────────────────────────────────────────┘
+      --
+      -- ┌─ O ACEITE NÃO SAI, E A DISTINÇÃO PRECISA ESTAR ESCRITA ──────────────────────────────┐
+      -- │ A MESMA TABELA guarda "aceite" e "aceite_numero", que são a trilha do aceite de        │
+      -- │ passagem (§A.3 regra 8), e a §A.6 os classifica como "log de auditoria sensível,       │
+      -- │ PERMANENTE e consultável". Apagá-los por simetria com o "motivo" destruiria a prova de │
+      -- │ que alguém atravessou uma guarda, que é a decisão mais cara de desfazer do módulo.     │
+      -- │                                                                                        │
+      -- │ E A NATUREZA DOS DOIS É OPOSTA, que é o que justifica o corte: o "motivo" é FRASE      │
+      -- │ LIVRE sobre a PESSOA, onde o telefone e o nome do parente aparecem na prática; o       │
+      -- │ aceite é um NOME DE GUARDA e um NÚMERO, vocabulário fechado escrito pelo sistema, sem  │
+      -- │ nada do candidato dentro. Quem decidiu sai do "por_id", que é usuário INTERNO. Não há  │
+      -- │ dado pessoal a minimizar ali, e há trilha a preservar: um sai porque é dado pessoal, o │
+      -- │ outro fica porque é auditoria. "situacao", "etapa_para", "posicao_lado" e              │
+      -- │ "ocorrido_em" ficam pelo mesmo motivo do aceite: são fato de PROCESSO, e é deles que a │
+      -- │ linha do tempo da vaga é lida depois que a pessoa vira anônima.                        │
+      -- └────────────────────────────────────────────────────────────────────────────────────────┘
+      --
+      -- A FORMA É NULO, E NÃO MARCADOR, PELO MESMO ARGUMENTO DA CTE ACIMA, E ELE VALE AQUI COM
+      -- MAIS FORÇA: a coluna é ANULÁVEL ("motivo text", sem NOT NULL) e nula JÁ QUER DIZER ALGUMA
+      -- COISA no vocabulário desta tabela, "evento sem motivo registrado". É o estado da esmagadora
+      -- maioria das linhas (a entrada e o movimento de etapa nem passam o campo, e a reversão do
+      -- envio grava "motivo: null" explicitamente). Um marcador inventaria um TERCEIRO estado, que
+      -- o histórico da candidatura exibiria como se fosse a frase que alguém escreveu. A assimetria
+      -- com o "resumo" do contato continua sendo a mesma e única: lá a coluna é NOT NULL e não há
+      -- nulo para gravar.
+      --
+      -- O ALCANCE É "alvo" MAIS "ja_anonimizados", e a subconsulta é INDIRETA pela mesma razão do
+      -- contato: o evento pendura na CANDIDATURA, nunca no candidato, e não há "candidato_id" para
+      -- ler daqui. A guarda de "há o que expurgar" evita gravar nulo por cima de nulo, de hora em
+      -- hora, em todo evento de toda pessoa já anonimizada, e ela é a maioria das linhas da tabela.
+      motivos_do_historico_expurgados as (
+        update as_candidatura_etapas
+           set motivo = null
+         where candidatura_id in (
+                 select k.id
+                   from as_candidaturas k
+                  where k.candidato_id in (select id from alvo)
+                     or k.candidato_id in (select id from ja_anonimizados))
+           and motivo is not null
       )
       -- ─ A CTE "matches_nulados" SAIU DAQUI, E COM ELA A SEGUNDA GAVETA ──────────────────────
       -- Ela nulava "as_candidaturas.id_match_pandape", identificador da PESSOA no ATS que
@@ -476,9 +678,12 @@ export class RetencaoCandidatosService implements OnModuleInit, OnModuleDestroy 
       -- "identidades_apagadas" CONTINUA, e a distinção importa para quem ler este diff: a que saiu
       -- é a da coluna morta, nunca a do desenho novo.
       -- A CONTAGEM SAI DO "alvo", e só dele: o que se reporta é quantas PESSOAS foram anonimizadas
-      -- nesta passada. As linhas cicatrizadas (identidade externa apagada, dado pessoal re-nulado)
-      -- NÃO entram na conta, porque não são gente nova expurgada, e somá-las faria o número do log
-      -- oscilar sem ninguém ter sido expurgado.
+      -- nesta passada. As linhas cicatrizadas (identidade externa apagada, conflito da ingestão
+      -- apagado, dado pessoal re-nulado,
+      -- resumo de contato substituído, motivo de descarte e motivo do histórico nulados) NÃO entram
+      -- na conta, porque não
+      -- são gente nova expurgada, e somá-las faria o número do log oscilar sem ninguém ter sido
+      -- expurgado. Nenhuma das CTEs novas acrescenta NADA ao log (§A.6).
       select count(*)::int as n from alvo
     `);
 

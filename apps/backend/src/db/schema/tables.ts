@@ -3998,3 +3998,114 @@ export const asDeparaEtapaExterna = pgTable(
     ),
   }),
 );
+
+/**
+ * ─ A MARCA DE ÁGUA DA VARREDURA DO PANDAPÉ, uma linha por vaga ativa ───────────────────────────
+ *
+ * O MAIOR `insertDate` JÁ INGERIDO daquela vaga. É REGISTRO, e não parada de leitura, e a distinção
+ * é o que separa esta coluna de um defeito caro: MOVER ALGUÉM DE PASTA NÃO ALTERA O `insertDate`
+ * (medido), então quem parasse de paginar na marca nunca mais veria a troca de etapa nem o dado
+ * corrigido daquela inscrição. Quem decide o que entra é a DATA DE CORTE, fixa, de configuração.
+ *
+ * `ultimo_insert_date` É TEXTO, e de propósito: é o valor COMO O ATS o escreve, comparado contra o
+ * mesmo formato que o ATS devolve na volta seguinte. Convertê-lo para `timestamp` obrigaria a
+ * escolher um fuso para uma data que vem sem ele, e a escolha erraria por horas na borda do corte.
+ *
+ * ┌─ A LINHA É TAMBÉM O REGISTRO DE PROPRIEDADE, E POR ISSO ELA GUARDA O `vaga_id` ─────────────┐
+ * │ `vagas.id_vacancy_pandape` é DIGITADO por gente na trilha da vaga, e o índice dela não é      │
+ * │ unique (está escrito lá em cima, na própria coluna). Propriedade lida pelo NÚMERO do ATS,     │
+ * │ portanto, não separa nada: a vaga que um consultor cadastrou à mão com o número dentro cairia │
+ * │ no alcance da varredura, que passaria a reabri-la de 30 em 30 minutos, a sobrescrever o       │
+ * │ `codigo` e o `nome_divulgacao` digitados, e a encerrá-la com `encerrada_em` carimbado,        │
+ * │ ligando relógio de exclusão irreversível sobre gente de uma vaga que a varredura não criou.   │
+ * │ A propriedade é da LINHA, então ela aponta para a linha, e a matrícula só acontece no         │
+ * │ NASCIMENTO da vaga espelhada.                                                                 │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * `encerradaPelaVarreduraEm` É O CARIMBO DO ENCERRAMENTO AUTOMÁTICO, e ele existe para a REABERTURA
+ * só desfazer o que a PRÓPRIA varredura fez: ela compara este instante com `vagas.encerrada_em` e só
+ * reabre quando os dois são o MESMO. Fechamento, cancelamento e entrega feitos por humano têm outro
+ * instante, e ficam onde estão.
+ *
+ * `cascade` no FK, e não `restrict`: a matrícula NÃO É DADO, é registro de propriedade, e sem a
+ * linha que ela possui não quer dizer nada. Apagada a vaga, a varredura a espelha do zero na volta
+ * seguinte.
+ *
+ * §A.6: id de vaga de terceiro, id de vaga do EA e duas datas de processo. Nenhum dado de pessoa
+ * entra aqui, e por isso esta tabela NÃO cai no expurgo de candidatos (a `as_ingestao_conflitos`
+ * cai, e a razão está escrita nela).
+ */
+export const asVarreduraVagas = pgTable(
+  "as_varredura_vagas",
+  {
+    /** O `IdVacancy` do Pandapé. `varchar` pelo mesmo motivo de `vagas.id_vacancy_pandape`. */
+    idVacancyPandape: varchar("id_vacancy_pandape", { length: 40 }).primaryKey(),
+    /** A vaga do EA que a VARREDURA criou. É a fronteira de propriedade, e ela é por LINHA. */
+    vagaId: uuid("vaga_id")
+      .notNull()
+      .references(() => vagas.id, { onDelete: "cascade" }),
+    ultimoInsertDate: varchar("ultimo_insert_date", { length: 40 }),
+    /** O instante em que a VARREDURA encerrou esta vaga. Nulo é "não fui eu quem encerrou". */
+    encerradaPelaVarreduraEm: timestamp("encerrada_pela_varredura_em", { withTimezone: true }),
+    criadoEm,
+    atualizadoEm,
+  },
+  (t) => ({
+    /** Uma vaga do EA pertence a NO MÁXIMO um número do ATS. */
+    uqVaga: unique("uq_as_varredura_vagas_vaga").on(t.vagaId),
+  }),
+);
+
+/**
+ * ─ O CONFLITO DE IDENTIDADE, PARA REVISÃO HUMANA (achado 4 do `seguranca`) ─────────────────────
+ *
+ * UMA LINHA POR CASO em que o `idCandidate` do Pandapé aponta para uma pessoa e o CPF da mesma
+ * inscrição aponta para OUTRA. O ciclo NÃO ESCOLHE e NÃO FUNDE: fusão automática de duas fichas é
+ * irreversível, porque depois ninguém sabe mais qual candidatura era de quem. E não escolher sem
+ * avisar perderia a inscrição a cada volta, para sempre, sem ninguém saber que há caso a resolver.
+ *
+ * ┌─ NÃO EXISTE CAMPO DE OBSERVAÇÃO LIVRE, E A AUSÊNCIA É A DEFESA ──────────────────────────────┐
+ * │ É o molde de `as_retencao_eventos`, pelo mesmo motivo escrito lá: texto livre numa trilha de  │
+ * │ candidato é onde o dado pessoal reaparece, porque quem opera escreve o nome da pessoa na      │
+ * │ justificativa. Aqui pesa ainda mais, porque o caso É sobre um CPF: uma coluna de "detalhe"     │
+ * │ receberia o CPF conflitante na primeira vez que alguém a achasse útil. O CPF NÃO ENTRA, e o    │
+ * │ NOME também não: os dois ids técnicos bastam para quem for resolver na ficha.                  │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * `unique (fonte, identificador)` NÃO É ORGANIZAÇÃO, É CONTENÇÃO: a mesma inscrição volta a cada 30
+ * minutos, e sem a chave um único caso irresolvido viraria 48 linhas por dia, para sempre.
+ *
+ * FK `restrict` no candidato, como em `as_retencao_eventos`: o rastro sobrevive à linha.
+ *
+ * ┌─ ESTA TABELA CAI NO EXPURGO DE CANDIDATOS, E A RAZÃO É O `identificador` ────────────────────┐
+ * │ Ele é o `idCandidate` do Pandapé, o MESMO valor que `as_identidades_externas` guarda, e o     │
+ * │ expurgo APAGA aquela tabela justamente porque o id externo RE-IDENTIFICA a ficha anonimizada: │
+ * │ com ele na mão, nome e CPF são lidos de volta no ATS. Deixar esta linha fora do alcance do    │
+ * │ expurgo guardaria, para sempre, a ligação entre a ficha expurgada e quem ela era lá fora.     │
+ * │ Por isso `retencao-candidatos.service.ts` a apaga na MESMA instrução das identidades.         │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+export const asIngestaoConflitos = pgTable(
+  "as_ingestao_conflitos",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    /** A pessoa a que a IDENTIDADE EXTERNA aponta. A outra ponta do conflito não é gravada. */
+    candidatoId: uuid("candidato_id")
+      .notNull()
+      .references(() => asCandidatos.id, { onDelete: "restrict" }),
+    fonte: varchar("fonte", { length: 20 }).notNull(),
+    identificador: varchar("identificador", { length: 120 }).notNull(),
+    /** Preenchido quando um humano resolveu o caso. Nulo é "ainda na fila de revisão". */
+    resolvidoEm: timestamp("resolvido_em", { withTimezone: true }),
+    criadoEm,
+    atualizadoEm,
+  },
+  (t) => ({
+    uqFonteIdentificador: unique("uq_as_ingestao_conflitos_fonte_identificador").on(
+      t.fonte,
+      t.identificador,
+    ),
+    ckFonte: check("ck_as_ingestao_conflitos_fonte", sql`${t.fonte} in (${FONTES_EXTERNAS_SQL})`),
+    idxCandidato: index("idx_as_ingestao_conflitos_candidato").on(t.candidatoId),
+  }),
+);

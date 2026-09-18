@@ -185,7 +185,7 @@ export class CandidatosService {
    *
    * O DEDUP TEM DUAS CAMADAS, e as duas importam. A primeira é esta consulta, que existe para a
    * pessoa receber uma frase em português e o `candidatoId` de quem já está cadastrado, para a tela
-   * poder oferecer "abrir o cadastro existente". A segunda é o UNIQUE PARCIAL no banco, que é o que
+   * poder oferecer "abrir o cadastro existente". SÓ O ID, e nunca o nome: ver `conflitoDeCpf`. A segunda é o UNIQUE PARCIAL no banco, que é o que
    * de fato garante: dois cliques simultâneos passam pela primeira camada juntos, e é a segunda que
    * derruba o segundo. Por isso a violação de unique é capturada e traduzida logo abaixo, em vez de
    * virar erro 500.
@@ -210,11 +210,13 @@ export class CandidatosService {
     const cpf = this.cpfOuNulo(dto.cpf);
 
     if (cpf) {
+      // §A.6: O NOME NÃO É SELECIONADO, e a ausência dele aqui é metade da guarda. A consulta
+      // pedia `nome` só para compor a frase do 409, e o que não é selecionado não tem como vazar.
       const [existente] = await this.db
-        .select({ id: asCandidatos.id, nome: asCandidatos.nome })
+        .select({ id: asCandidatos.id })
         .from(asCandidatos)
         .where(eq(asCandidatos.cpf, cpf));
-      if (existente) throw this.conflitoDeCpf(existente.id, existente.nome);
+      if (existente) throw this.conflitoDeCpf(existente.id);
     }
 
     let id: string;
@@ -294,11 +296,12 @@ export class CandidatosService {
 
     const cpf = dto.cpf === undefined ? atual.cpf : this.cpfOuNulo(dto.cpf);
     if (cpf && cpf !== atual.cpf) {
+      // §A.6: sem `nome` na projeção, pelo mesmo motivo do `criar`.
       const [outro] = await this.db
-        .select({ id: asCandidatos.id, nome: asCandidatos.nome })
+        .select({ id: asCandidatos.id })
         .from(asCandidatos)
         .where(and(eq(asCandidatos.cpf, cpf), ne(asCandidatos.id, id)));
-      if (outro) throw this.conflitoDeCpf(outro.id, outro.nome);
+      if (outro) throw this.conflitoDeCpf(outro.id);
     }
 
     try {
@@ -2423,15 +2426,34 @@ export class CandidatosService {
    * O CONFLITO DE CPF, com o `candidatoId` de quem já está cadastrado para a tela poder oferecer
    * "abrir o cadastro existente" em vez de deixar a pessoa procurando.
    *
-   * §A.6: devolve o id e o NOME, nunca o CPF. A frase mais natural de escrever aqui seria "o CPF
-   * 123.456.789-01 já está cadastrado", e ela colocaria o número na resposta de erro, que é o lugar
-   * de onde ele mais facilmente cai num log.
+   * ┌─ O NOME SAIU DAQUI, E ELE ERA UM ORÁCULO DE CPF PARA NOME (§A.6) ──────────────────────────┐
+   * │ A frase dizia "Já existe um candidato cadastrado com este CPF: FULANO DE TAL". Ela cumpria │
+   * │ a letra da régua (não repetia o número) e violava o propósito dela: quem SUBMETE um CPF    │
+   * │ recebia de volta o NOME de quem o tem. Não é preciso ter acesso a ficha nenhuma para       │
+   * │ perguntar, e o caminho é aberto pelas DUAS portas (`criar` e `editar`), então qualquer     │
+   * │ usuário autenticado podia converter uma lista de CPFs numa lista de nomes, um a um, sem    │
+   * │ nunca abrir uma tela. É a consulta de dado pessoal de terceiro por tentativa, e ela não    │
+   * │ deixa rastro de leitura em lugar nenhum.                                                    │
+   * │                                                                                             │
+   * │ O QUE A TELA PRECISA É O ID, E SÓ ELE: é com o `candidatoId` que ela oferece "abrir o       │
+   * │ cadastro existente", e quem abrir a ficha vê o nome LÁ, passando pelo controle de acesso da │
+   * │ ficha, que é onde essa decisão pertence. O 409 deixa de ser uma porta paralela de leitura.  │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * §A.6: nem NOME nem CPF. A frase mais natural de escrever aqui seria "o CPF 123.456.789-01 já
+   * está cadastrado", e ela colocaria o número na resposta de erro, que é o lugar de onde ele mais
+   * facilmente cai num log de cliente HTTP.
+   *
+   * A FRASE FICOU IGUAL À DO `traduzirUnique` NA PRIMEIRA METADE, e isso é bom: as duas camadas do
+   * dedup (esta consulta e o unique do banco) passam a dizer a mesma coisa à pessoa, que é o que
+   * elas sempre significaram.
    */
-  private conflitoDeCpf(candidatoId: string, nome: string): ConflictException {
+  private conflitoDeCpf(candidatoId: string): ConflictException {
     return new ConflictException({
       statusCode: 409,
       error: "Conflict",
-      message: `Já existe um candidato cadastrado com este CPF: ${nome}. Abra o cadastro dele em vez de criar outro.`,
+      message:
+        "Já existe um candidato cadastrado com este CPF. Abra o cadastro dele em vez de criar outro.",
       candidatoId,
     });
   }
