@@ -16271,3 +16271,225 @@ terceiro não entrou. A entrada `0116_portal` continua intacta no working tree e
    fila de revisão existir.
 5. **Teste com Postgres real** (a fila), registrado como frente própria.
 6. **O rastro de `vaga_cliente_correcoes` não tem tela**: é consultável por SQL, não aparece na ficha.
+
+---
+
+## 2026-09-19 · O Portal do Candidato ponta a ponta, e o balde do VT que vaza CPF
+
+**Sessão do Portal.** Duas frentes registradas aqui: o **Portal do Candidato**, construído inteiro
+nesta sessão, e a **correção do balde do VT**, aberta com plano e não executada. A frente de **A&S**
+tem registro próprio, do commit `c946149`, e não é reescrita aqui.
+
+**Estado do código: NADA do Portal foi commitado, e nada subiu para produção.** Tudo em working tree,
+verde. A homologação (3120) está com a versão publicada ontem, anterior aos quatro últimos itens.
+
+### O QUE FOI CONSTRUÍDO
+
+**1. O Portal híbrido.** A chave RSA que assinava a URL **saiu do EA** (zero ocorrências das quatro
+variáveis de credencial, e o arquivo que assinava foi apagado). Quem assina passa a ser um emissor com
+identidade de runtime no nosso projeto do Google; **o arquivo não entra na função** (vetado: ela só
+aguenta JSON pequeno e tem parede de 60 s, e o celular em 4G não empurra 10 MB nesse tempo). O
+candidato escreve direto no balde por URL assinada, e o leitor isolado lê em memória na nossa VM.
+**O comando privilegiado foi rodado pelo diretor**, então a exigência 4 está fechada.
+
+**2. O filtro de arquivamento por veredito, que consertou bug ATIVO em produção.** O arquivamento
+subia **todo arquivo da pasta temporária** ao prontuário, sem olhar veredito: documento reprovado ia
+junto com os aprovados. Agora só sobe o que está `ENTREGUE`. O filtro mora em **um método só**, e isso
+é o ponto: pô-lo no ponto compartilhado **pararia o contrato assinado em 100% dos casos** (ele não é
+tipo do catálogo) e **pararia o VT coletado fora da régua**. Medições que decidiram o recorte: **214**
+documentos entregues pertencem a tipos **inativos**, **1.352** estão entregues por **validação
+humana**, e **4** admissões têm APTO com o ASO inconforme. **O ASO ficou FORA do filtro**, por decisão
+do diretor, porque ele sobe pela condição do APTO.
+
+**3. O teto de 3 tentativas por pendência**, com o Master destravando **a partir da terceira**, e o
+**time solicitando reenvio** (devolve UM envio; o Master devolve o teto inteiro). A chave é
+**(admissão, tipo de documento)**: se fosse o link, pedir link novo zeraria o teto.
+
+**4. O candidato vê O QUE corrigir.** Onze frases fechadas, escritas por nós. **O texto da regra
+interna nunca chega a ele**, porque dizer o critério é entregar o gabarito, e o motivo cru do modelo
+pode citar dado pessoal de terceiro.
+
+**5. A tela do candidato, FORA do EA**, em `/home/henrique/portal-candidato-soulan`, no molde do app
+do VT, **com git desde o primeiro commit**. *(Correção de premissa: o app do VT NÃO é versionado.)*
+
+**6. Documento único**, que fechou um buraco que ninguém tinha visto: nada impedia um **segundo**
+arquivo do mesmo tipo, e como o banco guarda **uma linha por documento**, o segundo reescrevia o
+primeiro. Mandada a frente e depois o verso, **o sistema ficava com o verso**.
+
+**7. O menu da Auditoria, que fechou uma PORTA ABERTA.** `solicitarReenvio`, que reabre tentativa e
+credita envio, era alcançável por **qualquer autenticado do sistema**. A operação foi reivindicada
+pelo menu `esteira` **que já existia**: criar menu novo teria **CONCEDIDO** acesso sozinho, porque todo
+menu de `OPERACAO` com área ADM entra no padrão do COMUM (§A.23).
+
+**8. As 23 respostas 400 por abertura do modal**, limpas: de 31 chamadas para 8. A causa era um
+`LEFT JOIN` devolvendo estado nulo para tipo da régua que ninguém tocou.
+
+### O PONTO DE RETOMADA DO PORTAL: as quatro decisões que o LIGAM
+
+1. **A camada de identidade**, ou seja, como o candidato prova quem é. **Não existe nada dela:** sem
+   emissor de bilhete, sem tabela de link, sem rota de identificação. **Hoje a tela não obtém sessão
+   nenhuma.** Se ela nascer como rota pública do EA, o ganho de ter posto a tela fora **se perde no
+   mesmo ato**: o EA volta a expor um enumerador de CPF.
+2. **A ponte de rede até o EA**, que depende do Fernando, como o VT ainda depende.
+3. **A rota que lista os documentos do candidato**, que o servidor ainda não tem. Ela vem **do
+   servidor**, nunca de arquivo do Hosting, senão a régua por cliente vira arquivo público.
+4. **Documento aceito não ganha botão de reenviar**, decisão de produto tomada pelo agente e a
+   confirmar.
+
+**Também pendente:** a **carta do Fernando**, pronta com **uma pergunta só** (quem varre antivírus num
+balde em projeto nosso, já que ele sai do perímetro dele); o **texto das regras em linguagem de
+candidato** (§A.9); e a **migração do Portal, que NÃO está em produção**. A tabela nem existe lá, e o
+**Portal nunca processou um documento real**.
+
+### FRENTE DO VT: ABERTA COM PLANO, NÃO EXECUTADA
+
+`docs/PLANO-CORRECAO-BALDE-VT.md`. O balde do VT grava **nome completo e CPF sem máscara no NOME do
+objeto**, em produção, e nome de objeto vai para o registro de acesso do Google. Some-se o escritor com
+poder de administrador, a leitura pela credencial unificada de Drive e Vertex, e a sobrescrita sem
+trava. **O Portal aprendeu a lição que o VT está violando.**
+
+O plano tem ordem segura (do menos ao mais arriscado), **backup manual obrigatório** (aquele projeto
+não tem git) e cinco provas por passo. O ponto que parecia travar está resolvido com evidência: **o
+ledger do VT é indexado por md5 e o nome do objeto nunca é persistido**, então **renomear não recoleta
+e não duplica**.
+
+### O QUE FICOU COMMITADO E O QUE FICOU NO WORKING TREE
+
+- **Commitado:** só a frente de **A&S** (`f24c506` e `c946149`).
+- **Working tree, verde e não commitado:** **todo o Portal** (backend, o modal do consultor,
+  `shared-types`, a migração `0116` e os documentos), mais os pareceres desta sessão.
+- **Fora do repositório:** a tela do candidato, com git próprio e sem remoto.
+- **Homologação:** publicada ontem, com banco próprio (`ea_automatic_homolog`) e a migração aplicada
+  **só nele**. Produção segue com **zero** tabelas do Portal.
+
+### GATE DESTA SESSÃO
+
+Suíte completa do backend: **300 arquivos, 4.286 testes, zero falha**. Typecheck limpo. Prova visual
+tirada e conferida em duas telas: a fila do time no modal da Esteira (com o ciclo de solicitar reenvio
+rodado de verdade, resposta 201 e trilha gravada) e a tela do candidato em tamanho de celular, com a
+reprovação e o que corrigir.
+
+### OS AGENTES, E O QUE CADA UM PEGOU
+
+`seguranca` auditou **cinco vezes** e vetou **quatro**, sempre antes do deploy. Os achados que mais
+mudaram a frente: a URL do emissor aceita sem conferência (documentos do candidato iriam para o
+domínio de um terceiro, em silêncio), a limpeza que **apagaria a frente quando o verso chegasse**, a
+porta aberta do `solicitarReenvio`, e o menu novo que **concederia acesso sozinho**. O `tester`
+independente pegou o que o autor não pegaria: **tipo sem regra ativa queimava as três tentativas**
+sem uma única reprovação real, porque escalada não é reprovação.
+
+---
+
+## 18 a 19/09/2026: PONTO DE RETOMADA DAS TRÊS FRENTES, e os DOIS VETOS DE CPF
+
+Sessão encerrada pelo diretor. **Esta entrada é o ponto de retomada completo:** quem retomar lê daqui
+e sabe o que está pronto, o que espera validação e **o que está proibido de subir**.
+
+# ⛔ OS DOIS VETOS ABERTOS, e os dois são CPF VAZANDO
+
+**Ler isto ANTES de qualquer publicação. Os dois travam produção.**
+
+**VETO 1, A&S: o CPF do SUBSTITUÍDO sai no retorno de LISTA da Central de Vagas.**
+`vagas.service.ts:466-467`: `list()` devolve `substituidoCpf` e `substituidoNome` de TODA vaga, para
+TODO usuário que abre a tela, mesmo sem nenhuma coluna mostrar o campo. Vai em payload, em cache de
+navegador e em log de proxy que registre corpo. O CPF do CANDIDATO obedece à régua contrária no mesmo
+módulo (`tables.ts:3178-3182`: "fora do retorno de lista, sai só na ficha"); o do substituído faz o
+oposto, na mesma tela, e o comentário da coluna (`tables.ts:2597`) promete "nunca exportado".
+**É PRÉ-EXISTENTE:** a frente não criou nem alargou a exposição, ela alarga a POPULAÇÃO de vagas com
+o campo preenchido. **O conserto NÃO é de uma linha:** a trilha lê `v.substituidoCpf` do
+`VagaListItem` (`TrilhaDaVaga.tsx:570`), então tirar da lista exige criar a **porta de ficha**
+(`GET /as/vagas/:id`), senão quebram o "continuar rascunho" e o "clonar".
+
+**VETO 2, VT: CPF no NOME DO OBJETO, em PRODUÇÃO.** Plano escrito e **não executado**:
+`docs/PLANO-CORRECAO-BALDE-VT.md`.
+
+---
+
+# FRENTE 1, A&S (INGESTÃO)
+
+## Commitado e no ar (rodada anterior)
+`f24c506` (as cinco decisões) e `c946149` (o diário). Papel REVISAO + status PENDENTE_REVISAO, o
+de/para das etapas, a fila de revisão, a liberação individual e a correção do Master. Detalhe na
+entrada anterior deste diário.
+
+## Construído NESTA rodada e NÃO COMMITADO (o veto 1 é o motivo)
+- **A tela "Liberar Vaga" com o formulário COMPLETO.** O wizard da abertura foi EXTRAÍDO para
+  `components/as/vagas/TrilhaDaVaga.tsx` (a página caiu de **5.899 para 3.855 linhas**) e a fila passa
+  a abri-lo em `modo: "liberacao"`: Status escondido, código do ATS em leitura, pendências clicáveis
+  desde a abertura, rodapé "Cancelar / Salvar sem liberar / Continuar / Liberar vaga (N pendentes)".
+  **Backend:** `atualizar` (PATCH) passa a aceitar o papel REVISAO **sem poder mover a vaga** (o status
+  gravado é o atual e `dto.status` é ignorado, senão ela sairia da fila em silêncio), e
+  `liberar-revisao` recebe o `CreateVagaDto` inteiro e cobra os **ONZE** obrigatórios com o status de
+  DESTINO, antes de qualquer escrita, na mesma transação.
+- **A simulação de candidatos** (fase `simulacao` do arnês): 55 pessoas e 15 vagas na homologação,
+  prefixo `SIMULADO` no nome da pessoa E da vaga, funil povoado (Captação 19, Triagem 13, Entrevista
+  Soulan 9, Entrevista Cliente 5, Enviados Para Admissão 9) e cilindro com caso sobrando, no limite e
+  estourado. **Só 12 têm CPF**, por exigência da auditoria; as outras 43 entram com `cpf = null`.
+  Predicado que prova a ausência em produção: `as_identidades_externas like 'ARNES-%'` (**medido: 0 em
+  produção, 55 em homologação**).
+- **Menu renomeado para "Liberar Vaga"**, **pseudonimização fechada com sal fixo** (HMAC-SHA256, sal
+  por PARÂMETRO, domínio puro intacto, varredura recusa subir sem `AS_MARCA_SAL`), e as duas linhas
+  do de/para seguem INATIVAS por decisão tomada.
+
+**Gate desta rodada:** backend **4202** testes, frontend **726**, typecheck e lint limpos. Prova
+visual em `/home/henrique/ost-liberar-vaga-prints/`.
+
+## AS SEIS DECISÕES PENDENTES (detalhe em `docs/DECISOES-ABERTAS-LIBERAR-VAGA.md`)
+1. **O VETO 1** acima: trava este deploy, ou vira OST própria?
+2. **A varredura sobrescreve, e pode APAGAR, campo obrigatório de vaga JÁ PUBLICADA.**
+   `ingestao-repositorio.ts:571-582` reescreve `codigo`, `nome_divulgacao`, `cidade_id` e
+   `posicoes_oficiais` a cada 30 min, **sem condição de status**. `codigo` vira NULL com texto vazio e
+   `posicoes_oficiais` vira NULL com zero: **meta nula deixa o fechamento sem gate nenhum**, sem rastro
+   e sem passar pelas travas de 09/09. Conserto: uma cláusula no `where` (`and (reabrir or status =
+   REVISAO)`), meia hora com teste. **Hoje é inofensivo só porque a varredura está INERTE.** É a mais
+   barata e a mais protetora.
+3. **O CPF do substituído é cobrado com rigor no salvamento PARCIAL** da vaga em revisão, o que empurra
+   quem preenche a inventar um CPF de dígito válido (que é o CPF de um terceiro real) para destravar o
+   Salvar, indo para a coluna que NÃO tem TTL. Recomendado: tratar como parcial na edição e cobrar só
+   na liberação, que já é o gate.
+4. **Salário, benefícios e escala continuam OPCIONAIS** (a régua são onze campos e não os inclui).
+   Torná-los obrigatórios alcança a ABERTURA inteira e todo rascunho que hoje passa sem eles.
+5. **A ingestão move a etapa da pessoa SEM escrever histórico** (`ingestao-repositorio.ts:369-377`). Na
+   validação, a ficha do simulado abre com a linha do tempo vazia; em produção, a movimentação não
+   deixa rastro de quem, quando e de onde para onde.
+6. **Três menores:** vaga liberada entra sem consultor e sem recruiter (`abertoPorId` nulo); vaga
+   espelhada sem `codigo` no ATS não consegue ser liberada (o campo é obrigatório e a origem é o ATS);
+   e a homologação não tem `AS_MARCA_SAL` próprio.
+
+## PENDENTE para ligar a frente
+Validar a tela na 3120 (§A.13, gatilho da publicação), resolver o veto 1, decidir os seis itens,
+**subir as migrations 0113 a 0118** (medido: produção está em **113 registros** e NÃO tem
+`as_varredura_vagas`, então falta da 0113 em diante) e **LIGAR**, que é pôr a data de corte
+(`PANDAPE_VARREDURA_DATA_CORTE`) no `.env`. Sem ela a varredura nasce inerte, e é assim que está.
+
+---
+
+# FRENTE 2, PORTAL DO CANDIDATO (outra sessão)
+
+**Feito e NÃO commitado** (a homologação está com a versão de ontem): portal híbrido, filtro por
+veredito, teto de 3 tentativas com Master destravando, o candidato vendo a reprovação (backend mais as
+11 frases, tela ainda inerte), a tela FORA do EA (repositório próprio, molde do VT), documento único,
+menu na Auditoria, o time solicitando reenvio, e as 23 respostas limpas.
+
+**Pendente, quatro decisões para LIGAR:** a camada de identidade (o app externo), a ponte de rede (com
+o Fernando), a rota que lista os documentos, e o botão de reenviar em documento já aceito. Além disso:
+a carta do Fernando (uma pergunta), o texto das regras (§A.9) e a **migração não está em produção**.
+
+---
+
+# FRENTE 3, VT (CORREÇÃO)
+
+**Aberta, com plano escrito e NÃO executada.** `docs/PLANO-CORRECAO-BALDE-VT.md`: o CPF vaza no nome
+do objeto, **em produção**. É o VETO 2.
+
+---
+
+# ESTADO NO DISCO, no encerramento
+
+- Produção (3010) e homologação (3120) respondendo **200**; os quatro serviços ativos.
+- `git log`: `c946149` na frente. **104 arquivos não commitados** no working tree, de TRÊS frentes
+  misturadas (A&S desta rodada, Portal e VT). Quem retomar **não faz `git add .`** (§A.14): o recorte é
+  nominal, e o portal tem hunks dentro de `tables.ts`, `app.module.ts` e do `_journal.json` que NÃO
+  pertencem à A&S.
+- Produção em **113 migrations**, sem `as_varredura_vagas`. Homologação com 0113 a 0118 aplicadas.
+- A varredura do Pandapé está **INERTE** nos dois ambientes, e o log do boot diz isso a cada restart.
