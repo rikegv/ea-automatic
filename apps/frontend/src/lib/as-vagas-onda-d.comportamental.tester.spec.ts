@@ -31,6 +31,14 @@ import { pendenciasComLinhaDeServico } from "./as-linhas-servico";
  */
 
 const PAGINA = new URL("../app/(app)/as/vagas/page.tsx", import.meta.url).pathname;
+/**
+ * A TRILHA SAIU DA PÁGINA e virou componente, para a tela de Liberar Vaga reusar o MESMO formulário
+ * em vez de ganhar um segundo (§A.26). A varredura passou a ler os DOIS arquivos, porque a pergunta
+ * que ela faz não mudou de dono: a âncora de cada obrigatório e a lista branca entregue à régua
+ * continuam existindo, só que agora moram no componente. Ler só a página deixaria este teste verde
+ * por não achar nada, que é o pior desfecho possível para ele.
+ */
+const TRILHA = new URL("../components/as/vagas/TrilhaDaVaga.tsx", import.meta.url).pathname;
 
 /**
  * A FONTE SEM COMENTÁRIO, e isso não é preciosismo: esta página documenta as próprias decisões em
@@ -38,7 +46,7 @@ const PAGINA = new URL("../app/(app)/as/vagas/page.tsx", import.meta.url).pathna
  * Cargo"). Procurar no texto cru acharia a citação e daria o teste por verde com a tela errada.
  */
 function fonte(): string {
-  const cru = readFileSync(PAGINA, "utf8");
+  const cru = `${readFileSync(PAGINA, "utf8")}\n${readFileSync(TRILHA, "utf8")}`;
   return cru.replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/\/\*[\s\S]*?\*\//g, "");
 }
 
@@ -91,8 +99,10 @@ function chavesEntreguesPelaTela(src: string): Set<string> {
 /** A abertura da tag que carrega aquele `id`, para conferir as props dela (o asterisco). */
 function tagComId(src: string, id: string): string {
   const i = src.indexOf(`id="${id}"`);
-  expect(i, `nenhum campo da tela tem id="${id}": a pendência clicável não levaria a lugar nenhum`)
-    .toBeGreaterThan(-1);
+  expect(
+    i,
+    `nenhum campo da tela tem id="${id}": a pendência clicável não levaria a lugar nenhum`,
+  ).toBeGreaterThan(-1);
   return src.slice(src.lastIndexOf("<", i), src.indexOf(">", i) + 1);
 }
 
@@ -213,19 +223,27 @@ describe("a régua é UMA: o que o servidor cobra é o que a tela desenha e sabe
  * "não incomodar". Este teste é o que transforma essa mudança silenciosa em vermelho.
  */
 describe("clonar continua zerando a previsão e mantendo o cliente", () => {
-  it("o clone não herda a previsão de entrega da vaga de origem", () => {
+  /**
+   * O NOME DA FUNÇÃO MUDOU NA EXTRAÇÃO (`preencherTrilhaCom` virou `estadoInicial`, porque a trilha
+   * montada já nasce com a vaga dentro em vez de recebê-la por uma sequência de `set`), e o leitor
+   * aceita os DOIS, do mesmo jeito que `objetoDaRegua` já aceitava dois nomes de régua. A pergunta
+   * é sobre o clone, não sobre como a função se chama hoje.
+   */
+  function blocoDoClone(): string {
     const src = fonte();
-    const i = src.indexOf("function preencherTrilhaCom");
-    expect(i, "não achei a função que monta a trilha a partir de outra vaga").toBeGreaterThan(-1);
-    const bloco = src.slice(i, i + 4000);
+    for (const nome of ["function estadoInicial", "function preencherTrilhaCom"]) {
+      const i = src.indexOf(nome);
+      if (i > -1) return src.slice(i, i + 4000);
+    }
+    throw new Error("não achei a função que monta a trilha a partir de outra vaga");
+  }
 
-    expect(bloco).toMatch(/dataLimite:\s*manterCodigo\s*\?/);
+  it("o clone não herda a previsão de entrega da vaga de origem", () => {
+    expect(blocoDoClone()).toMatch(/dataLimite:\s*manterCodigo\s*\?/);
   });
 
   it("o clone MANTÉM o cliente, que é o que a vaga nova tem em comum com a de origem", () => {
-    const src = fonte();
-    const i = src.indexOf("function preencherTrilhaCom");
-    expect(src.slice(i, i + 4000)).toMatch(/codCliente:\s*v\.codCliente/);
+    expect(blocoDoClone()).toMatch(/codCliente:\s*v\.codCliente/);
   });
 });
 
@@ -275,7 +293,9 @@ describe("a coluna Cargo sai da tabela", () => {
 
   it("a célula de cargo sai da LINHA, e a busca global continua podendo ler o cargo", () => {
     const src = fonte();
-    expect(linha(src), "a célula do cargo continua desenhada na linha").not.toContain("v.cargoNome");
+    expect(linha(src), "a célula do cargo continua desenhada na linha").not.toContain(
+      "v.cargoNome",
+    );
 
     // O filtro e a busca PERMANECEM (recomendação do mapa, [P1]): tirar a COLUNA não é tirar a
     // pergunta "quais vagas são de Operador de Caixa".

@@ -91,19 +91,60 @@ export function contarPendentesDeRevisao(token?: string | null): Promise<number>
 }
 
 /**
- * VINCULAR O CLIENTE E LIBERAR, NUMA CHAMADA SÓ, e o "numa chamada só" é o ponto: fossem duas
- * (grava o cliente, depois libera), a falha da segunda deixaria a vaga com cliente e ainda na fila,
+ * ─ O CORPO QUE AS DUAS PORTAS DE ESCRITA CARREGAM ──────────────────────────────────────────────
+ *
+ * É O FORMULÁRIO INTEIRO DA TRILHA (`CreateVagaDto` do lado do servidor), montado uma vez só pela
+ * `TrilhaDaVaga` e mandado igual nos dois destinos. O tipo é aberto de propósito: o vocabulário do
+ * corpo já é o DTO do backend, e redigitá-lo aqui criaria uma segunda declaração dos quase 40
+ * campos, que envelhece no primeiro campo novo e sem nada ficar vermelho.
+ *
+ * O `status` NÃO ENTRA, e a ausência é a regra: na fila quem move a vaga é a LIBERAÇÃO, e mais
+ * nada. O PATCH IGNORA o status do corpo (o service grava o atual) e o POST resolve o destino pelo
+ * catálogo, então mandá-lo seria escrever na tela uma decisão que a tela não toma.
+ */
+export type FormularioDaVagaEmRevisao = Record<string, unknown> & { codCliente?: string };
+
+/**
+ * ─ SALVAR SEM LIBERAR: o trabalho fica guardado e a vaga CONTINUA NA FILA ──────────────────────
+ *
+ * POR QUE ELA EXISTE. A vaga do Pandapé chega sem benefícios, sem escala, sem salário e sem
+ * endereço, e completar os onze obrigatórios mais essas quatro frentes não termina numa sentada.
+ * Sem esta porta, quem parasse no meio perderia tudo no Cancelar.
+ *
+ * É O `PATCH /as/vagas/:id` DE SEMPRE, e não uma rota nova: o service reconhece a vaga no papel
+ * `REVISAO`, grava os campos, MANTÉM o status (a vaga não sai da fila) e NÃO cobra os obrigatórios,
+ * porque nada está sendo publicado aqui.
+ */
+export function salvarVagaEmRevisao(
+  id: string,
+  corpo: FormularioDaVagaEmRevisao,
+  token?: string | null,
+): Promise<void> {
+  return apiFetch<void>(`/as/vagas/${id}`, {
+    method: "PATCH",
+    body: { ...corpo },
+    token,
+  });
+}
+
+/**
+ * GRAVAR O FORMULÁRIO E LIBERAR, NUMA CHAMADA SÓ, e o "numa chamada só" é o ponto: fossem duas
+ * (grava os campos, depois libera), a falha da segunda deixaria a vaga preenchida e ainda na fila,
  * e a retentativa teria de adivinhar em que metade parou. O servidor resolve o código do papel
  * `ABERTURA` pelo catálogo; a tela nunca manda código de status nenhum.
+ *
+ * O CORPO É O FORMULÁRIO INTEIRO, e não só o `codCliente`: a vaga espelhada sai da fila COMPLETA ou
+ * não sai. Quem cobra os onze obrigatórios antes de escrever é o servidor, e a recusa dele volta
+ * com a LISTA INTEIRA de pendências, nunca só a primeira.
  */
 export function liberarVagaPendenteRevisao(
   id: string,
-  codCliente: string,
+  corpo: FormularioDaVagaEmRevisao,
   token?: string | null,
 ): Promise<void> {
   return apiFetch<void>(`/as/vagas/${id}/liberar-revisao`, {
     method: "POST",
-    body: { codCliente },
+    body: { ...corpo },
     token,
   });
 }

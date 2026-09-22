@@ -124,7 +124,36 @@ export interface DependenciasDaIngestao {
    * que entra sem ninguém decidir isso.
    */
   dataDeCorte: Date;
+  /**
+   * O SAL DA MARCA DE PASTA, injetado pela BORDA, do mesmo jeito que a `dataDeCorte`.
+   *
+   * ┌─ POR QUE ELE VEM DAQUI, E NÃO DE UM `process.env` DENTRO DO DOMÍNIO ────────────────────────┐
+   * │ `marcaDeChaveExterna` (`domain/as-etapa-externa.ts`) é DOMÍNIO PURO: sem consulta, sem       │
+   * │ injeção, sem Nest. Ler o ambiente lá dentro faria o teste puro depender do runner e tiraria  │
+   * │ da função o determinismo por argumento, que é o que a torna auditável. Quem lê a variável é  │
+   * │ o serviço Nest (`ingestao-varredura.service.ts`).                                            │
+   * │                                                                                              │
+   * │ FIXO POR INSTALAÇÃO, JAMAIS POR PROCESSO OU POR PASSADA: um sal sorteado no boot faria as    │
+   * │ mesmas 15 pastas aparecerem como 15 novidades depois de todo deploy, e quem opera aprenderia │
+   * │ a ignorar o aviso. A estabilidade entre passadas é o que responde "são sempre as mesmas?".   │
+   * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * OPCIONAL NO TIPO, EXIGIDO NA PARTIDA: o ciclo RECUSA a varredura quando ele falta
+   * (`salDaVarredura`), antes da primeira página. Ausente nunca vira "segue sem marca" (perda
+   * silenciosa de 35% da entrada) nem "segue sem sal" (volta ao digesto confirmável).
+   *
+   * §A.6: o VALOR nunca vai a log, a erro, a resposta de rota ou a commit. O sistema pode dizer QUE
+   * ele está configurado, nunca QUAL é.
+   */
+  salDaMarca?: string;
 }
+
+/**
+ * O NOME DA VARIÁVEL DE AMBIENTE DO SAL, nomeado UMA vez, para a recusa poder dizer o que falta.
+ *
+ * ELE É O NOME, NUNCA O VALOR: é a única coisa sobre o sal que pode aparecer em log.
+ */
+export const VARIAVEL_DO_SAL_DA_MARCA = "AS_MARCA_SAL";
 
 /** As dependências COMPLETAS de produção: as do contrato mais o ciclo de vida da vaga. */
 export interface DependenciasDaVarredura extends DependenciasDaIngestao {

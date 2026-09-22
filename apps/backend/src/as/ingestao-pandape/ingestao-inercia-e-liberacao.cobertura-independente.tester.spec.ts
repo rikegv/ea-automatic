@@ -172,6 +172,23 @@ interface EscritaObservada {
  * qualquer `select` faz a conferência do cliente contra o cadastro passar sempre, inclusive quando
  * ela é removida do código.
  */
+/**
+ * OS ONZE OBRIGATÓRIOS JÁ GRAVADOS NA VAGA, que é o estado de quem passou pela revisão e está
+ * pronta para sair da fila. `codCliente` não entra aqui: ele é o que cada cenário decide.
+ */
+const VAGA_COMPLETA_NA_FILA = {
+  codigo: "PS-2026-901",
+  nomeDivulgacao: "Vaga espelhada, já revisada",
+  cargoId: "11111111-1111-4111-8111-111111111111",
+  posicoesOficiais: 2,
+  posicoesBanco: 0,
+  natureza: "AUMENTO_DE_QUADRO",
+  sazonalidade: "OPERACAO_PADRAO",
+  linhaServicoId: 1,
+  dataAbertura: "2026-09-01",
+  dataLimite: "2026-09-30",
+};
+
 function bancoDaLiberacao(opcoes: {
   vaga: { status: string; codCliente: string | null };
   clienteExiste: boolean;
@@ -203,7 +220,20 @@ function bancoDaLiberacao(opcoes: {
       }
       if (t === vagas) {
         return thenable([
-          { id: ID_DA_VAGA, status: opcoes.vaga.status, codCliente: opcoes.vaga.codCliente },
+          {
+            id: ID_DA_VAGA,
+            status: opcoes.vaga.status,
+            codCliente: opcoes.vaga.codCliente,
+            /*
+             * A LINHA DA VAGA PASSOU A SER LIDA INTEIRA, e o dublê acompanha: a liberação cobra os
+             * ONZE OBRIGATÓRIOS antes de deixar a vaga sair da fila (a vaga do Pandapé chegava
+             * incompleta e saía incompleta). O que este bloco mede continua sendo o MESMO (o
+             * vínculo do cliente gravado na mesma escrita e a trilha da passagem), e para medir
+             * isso a vaga tem de ser uma vaga que PODE ser liberada. A recusa por campo em branco
+             * é medida nos testes da régua, com a vaga incompleta.
+             */
+            ...VAGA_COMPLETA_NA_FILA,
+          },
         ]);
       }
       return thenable([]);

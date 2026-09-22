@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHmac } from "node:crypto";
 import { CANDIDATURA_SITUACOES, type CandidaturaSituacao } from "@ea/shared-types";
 
 /**
@@ -101,11 +101,39 @@ export function normalizarChaveExterna(nome: string): string {
  * nome legível da pasta se lê na FONTE, o ATS, que é onde ele é autoritativo e onde ele está sob a
  * retenção de lá, e é de lá que sai a linha de de/para, que é configuração REVISADA à mão.
  *
- * NÃO É REVERSÍVEL NA PRÁTICA e não identifica ninguém sozinha: são 8 hexadecimais de um digesto,
- * sem nome, sem id de pessoa e sem vínculo com registro nenhum.
+ * ┌─ ISTO É PSEUDONIMIZAÇÃO COM CHAVE, E NÃO ANONIMIZAÇÃO. A DIFERENÇA É COBRÁVEL ───────────────┐
+ * │ O texto que morava aqui afirmava "não é reversível na prática", e essa frase era a SUPOSIÇÃO   │
+ * │ que originou o achado: um digesto SEM CHAVE é CONFIRMÁVEL por quem já suspeita do nome, que    │
+ * │ calcula o digesto do palpite e compara. O universo de pastas é da ordem de 15 nomes, então     │
+ * │ confirmar era trivial, e truncar em 8 não atrapalhava nada: o comprimento nunca foi a fraqueza.│
+ * │                                                                                                │
+ * │ COM O SAL, a marca é OPACA para quem não tem o sal e REVERSÍVEL para quem tem. Ela continua,   │
+ * │ portanto, SOB A §A.6: é dado pseudonimizado, não dado anônimo, e não pode ser tratada como se  │
+ * │ tivesse deixado de carregar o que carrega. Quem escrever "anonimizado" aqui faz a próxima      │
+ * │ pessoa acreditar e usar a marca onde dado pessoal não pode estar.                              │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ O SAL ENTRA POR PARÂMETRO, E ESTE ARQUIVO CONTINUA DOMÍNIO PURO (linhas 7 a 9) ──────────────┐
+ * │ Um `process.env` aqui dentro cobraria três preços: os testes puros passariam a depender do     │
+ * │ ambiente do runner, o contrato do log passaria a exigir variável para rodar, e a função        │
+ * │ deixaria de ser determinística por argumento, que é o que a torna auditável. O sal é INJETADO  │
+ * │ PELA BORDA, exatamente como a `dataDeCorte` (`ingestao-portas.ts`), que também não é lida de   │
+ * │ dentro. Quem lê a variável é o serviço Nest; quem a exige é o fail-closed da partida.          │
+ * │                                                                                                │
+ * │ HMAC-SHA256, e não `sha256(sal + chave)`: mesmo custo, e é a construção padrão para hash com   │
+ * │ chave. 8 hex são 32 bits contra um universo da ordem de 15 chaves, então colisão não é risco e │
+ * │ a linha de log continua legível.                                                               │
+ * │                                                                                                │
+ * │ SAL VAZIO LANÇA, e não degrada em silêncio: continuar sem sal seria voltar ao digesto          │
+ * │ confirmável no exato momento em que a configuração falhou. A mensagem NÃO carrega o sal, e     │
+ * │ nunca poderá carregar, nem truncado.                                                           │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────────┘
  */
-export function marcaDeChaveExterna(chave: string): string {
-  return createHash("sha256").update(chave, "utf8").digest("hex").slice(0, 8);
+export function marcaDeChaveExterna(chave: string, sal: string): string {
+  if (sal.trim() === "") {
+    throw new Error("marca de chave externa sem sal: a marca sem chave é confirmável (§A.6).");
+  }
+  return createHmac("sha256", sal).update(chave, "utf8").digest("hex").slice(0, 8);
 }
 
 /**

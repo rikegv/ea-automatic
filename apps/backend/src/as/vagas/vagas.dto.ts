@@ -776,31 +776,39 @@ export class ReabrirVagaDto {
 /**
  * ─ DTO DA LIBERAÇÃO DA VAGA PENDENTE DE REVISÃO ────────────────────────────────────────────────
  *
- * CORPO MINÚSCULO, E O QUE NÃO ESTÁ NELE É A RÉGUA:
+ * ┌─ O CORPO DEIXOU DE SER MINÚSCULO, E A RAZÃO É A RÉGUA ─────────────────────────────────────┐
+ * │ A vaga chega do Pandapé INCOMPLETA, e a liberação era a única porta para o papel ABERTURA   │
+ * │ que NÃO cobrava obrigatório nenhum: a vaga saía da fila com código, cargo, natureza, linha  │
+ * │ de serviço e datas possivelmente vazios, e depois dela ninguém mais sabia que faltava algo. │
+ * │ Agora a liberação recebe o MESMO formulário da abertura (`CreateVagaDto`) e cobra a MESMA   │
+ * │ régua (`pendenciasDaVaga`), com o status de DESTINO, antes de qualquer escrita.             │
+ * └────────────────────────────────────────────────────────────────────────────────────────────┘
  *
- * ┌─ NÃO EXISTE CAMPO DE STATUS ───────────────────────────────────────────────────────────────┐
- * │ O destino é SEMPRE o código do papel ABERTURA, resolvido no servidor contra o catálogo.     │
- * │ Aceitá-lo do corpo transformaria a liberação na porta SEM RÉGUA para qualquer status.       │
+ * ┌─ HERDA `CreateVagaDto` EM VEZ DE REDIGITAR OS CAMPOS ──────────────────────────────────────┐
+ * │ São quase quarenta campos, com validação por campo. Uma segunda cópia divergiria da         │
+ * │ primeira no primeiro ajuste, e a que divergiria seria esta, aceitando na liberação o que a  │
+ * │ abertura recusa (ou o contrário). A herança é o mesmo argumento da régua declarativa.       │
+ * └────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ O `status` HERDADO NÃO É UMA PORTA: ELE É IGNORADO NO SERVICE ────────────────────────────┐
+ * │ `CreateVagaDto` traz `status?`, e tirá-lo daqui (um `OmitType`) faria o corpo da tela, que  │
+ * │ é o formulário inteiro, bater no `forbidNonWhitelisted` e virar 400 por um campo que o      │
+ * │ servidor nem lê. O destino continua sendo SEMPRE o código do papel ABERTURA, resolvido no   │
+ * │ servidor contra o catálogo: `liberarPendenteRevisao` não lê `dto.status` em lugar nenhum, e │
+ * │ há teste afirmando que um status no corpo não muda o destino.                               │
  * └────────────────────────────────────────────────────────────────────────────────────────────┘
  *
  * ┌─ `codCliente` É OPCIONAL, E NÃO É A DISPENSA DA TRAVA ─────────────────────────────────────┐
  * │ Ele existe para VINCULAR E LIBERAR numa chamada só, que é como o gesto acontece na tela.    │
  * │ Ausente, a liberação usa o vínculo que já está na vaga. Vazio dos dois lados é RECUSA, e a  │
  * │ recusa é do servidor, dentro da transação, sob a linha travada: o corpo pode TRAZER o       │
- * │ cliente que falta, nunca dizer que ele não é necessário.                                    │
+ * │ cliente que falta, nunca dizer que ele não é necessário. Ele VEM DE `CreateVagaDto`, com a  │
+ * │ mesma validação da abertura.                                                                │
  * └────────────────────────────────────────────────────────────────────────────────────────────┘
  *
  * NÃO EXISTE CAMPO DE AUTOR: quem liberou vem da SESSÃO, e vai inteiro para a trilha.
  */
-export class LiberarVagaRevisaoDto {
-  /** O cliente que faltava. O catálogo de clientes e a FK é que o governam. */
-  @IsOptional()
-  @Transform(({ value }) => (typeof value === "string" ? value.trim() : value))
-  @IsString()
-  @MinLength(1)
-  @MaxLength(40)
-  codCliente?: string;
-}
+export class LiberarVagaRevisaoDto extends CreateVagaDto {}
 
 /**
  * ─ DTO DA CORREÇÃO DA LIBERAÇÃO (Master) ───────────────────────────────────────────────────────

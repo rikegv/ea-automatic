@@ -42,11 +42,43 @@ import { IngestaoRepositorio } from "./ingestao-repositorio";
  *   DATABASE_URL='postgres://ea:...@127.0.0.1:5433/ea_automatic_homolog' \
  *     npx tsx apps/backend/src/as/ingestao-pandape/arnes-lote-fabricado.ts <fase>
  *
- *   <fase> é uma de: 2 | 3 | 4 | 5-fecha | 5-volta | todas
- *   As fases são as do `docs/GUIA-VALIDACAO-INGESTAO-PANDAPE.md`.
+ *   <fase> é uma de: 2 | 3 | 4 | 5-fecha | 5-volta | todas | simulacao
+ *   As cinco primeiras são as do `docs/GUIA-VALIDACAO-INGESTAO-PANDAPE.md`, e `todas` roda só
+ *   elas. A `simulacao` é o LOTE DE VITRINE (ver `A SIMULAÇÃO`), e fica FORA do `todas` de
+ *   propósito: ela troca a lista de vagas ativas inteira, e o ciclo encerra o que não está nela.
  *
  * §A.6: TUDO AQUI É SINTÉTICO. Nenhum CPF, nome, e-mail ou telefone de pessoa real entra neste
  * arquivo, nem "só para ilustrar o formato". Ver o bloco `A GENTE FABRICADA`.
+ *
+ * ┌─ O PREDICADO ÚNICO DO LOTE: UMA LINHA DE SQL RESPONDE "ISTO ESTÁ AQUI DENTRO?" ────────────────┐
+ * │                                                                                                │
+ * │   select count(*) from as_identidades_externas where identificador like 'ARNES-%';             │
+ * │                                                                                                │
+ * │ TODA pessoa escrita por este arquivo, sem exceção, é alcançada por ele: o ciclo anexa a        │
+ * │ identidade externa a cada pessoa que ingere (`anexarIdentidade`), e o `idCandidate` de toda    │
+ * │ pessoa fabricada nasce com o prefixo `ARNES-`. Vale inclusive para quem entra SEM CPF, que é a │
+ * │ maior parte do lote de simulação.                                                               │
+ * │                                                                                                │
+ * │ NÃO DEPENDE DO NOME NEM DO CPF de propósito: o nome é texto editável por tela (o prefixo       │
+ * │ `SIMULADO` some no dia em que alguém corrigir um cadastro) e o CPF a maior parte do lote não   │
+ * │ tem. As vagas têm o seu par: `select count(*) from vagas where codigo like 'SIM-VAGA-%' or     │
+ * │ codigo like 'ARNES-VAGA-%';`                                                                    │
+ * │                                                                                                │
+ * │ O CAMINHO DE VAZAMENTO QUE ISTO COBRE é o de alguém restaurar um dump de homologação dentro de │
+ * │ produção: contagem ZERO em produção é a prova de que nada disto passou, e ela não depende de   │
+ * │ ninguém lembrar como o lote foi montado.                                                        │
+ * └────────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ COMO RECRIAR O LOTE DO ZERO (o re-clone da homologação dá DROP DATABASE e apaga tudo isto) ───┐
+ * │ Um comando, e não arqueologia. Do diretório `apps/backend` da homologação:                     │
+ * │                                                                                                │
+ * │   DATABASE_URL="$(grep '^DATABASE_URL=' .env | cut -d= -f2-)" \                                │
+ * │     npx tsx src/as/ingestao-pandape/arnes-lote-fabricado.ts simulacao                          │
+ * │                                                                                                │
+ * │ Ele é IDEMPOTENTE: rodar de novo sobre um lote que já existe devolve `pessoas novas=0`. Para   │
+ * │ ter também as quatro pessoas das fases do guia, rodar `todas` antes. Para APAGAR o lote, o     │
+ * │ mesmo predicado de cima é o alcance, e o expurgo é manual e deliberado: o arnês não apaga.     │
+ * └────────────────────────────────────────────────────────────────────────────────────────────────┘
  */
 
 // ══ A GUARDA DE PRODUÇÃO ═══════════════════════════════════════════════════════════════════════
@@ -119,7 +151,28 @@ interface PessoaFabricada {
   idCandidate: string;
   name: string;
   surname: string;
-  cpf: string;
+  /**
+   * NULO NA MAIOR PARTE DO LOTE, E ISSO É A CORREÇÃO DE UM VETO, não economia de digitação.
+   *
+   * ┌─ NÃO EXISTE FAIXA DE CPF RESERVADA PARA TESTE ─────────────────────────────────────────────┐
+   * │ `999xxxxxxxx` com dígito verificador válido é estruturalmente EMISSÍVEL: cada um destes      │
+   * │ números é, ou pode vir a ser, de uma pessoa real. Com quatro, é curiosidade; com dezenas ou  │
+   * │ centenas, é um bloco de identificadores de terceiros numa base, sem base legal (§A.6).       │
+   * │                                                                                              │
+   * │ E O DANO É CONCRETO, não teórico: `uq_as_candidatos_cpf` é ÚNICO e a ingestão DESEMPATA POR  │
+   * │ CPF (`resolverPessoa`). Uma pessoa real cujo CPF caísse na faixa seria FUNDIDA com o registro │
+   * │ fabricado, e fusão de ficha não se desfaz.                                                    │
+   * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * A RÉGUA: um bloco PEQUENO, FIXO e documentado (ver `VAGA_COM_CPF_DA_SIMULACAO`), só o bastante
+   * para exercitar dedup, conflito e busca por CPF. TODO o resto entra com `cpf` NULO, que é estado
+   * previsto (a coluna é nulável e a tela já renderiza o candidato sem CPF).
+   *
+   * CPF COM DÍGITO QUEBRADO NÃO SERVE DE MEIO-TERMO: `cpfParaBanco` trata CPF inválido como AUSENTE
+   * em silêncio, então ele exercitaria o caminho do nulo enquanto alguém acredita estar exercitando
+   * o do CPF.
+   */
+  cpf: string | null;
   email: string;
   phone: string;
   birthDate: string;
@@ -145,24 +198,50 @@ function cpfSintetico(sequencia: number): string {
   return `${base}${digitosVerificadores(base)}`;
 }
 
-function pessoa(sequencia: number, apelido: string): PessoaFabricada {
+/**
+ * O PREFIXO DO NOME, E ELE É A ÚNICA MARCA QUE A TELA MOSTRA.
+ *
+ * ┌─ MEDIDO: NA LISTA, NADA MAIS DENUNCIA O DADO FABRICADO ────────────────────────────────────────┐
+ * │ O repositório escreve `origem = 'PANDAPE'` fixo, o enum de origem não tem valor para           │
+ * │ "fabricado", o CPF não sai na lista (só na ficha) e a 3120 não tem tarja de ambiente. Sobra o  │
+ * │ nome.                                                                                           │
+ * │                                                                                                 │
+ * │ CAIXA ALTA, PALAVRA QUE NÃO É NOME DE GENTE, E NA FRENTE. O nome anterior (`Arnes Alfa          │
+ * │ Sintetico`) falhava duas vezes: "Arnes" é jargão da casa, que um leitor de fora lê como         │
+ * │ sobrenome, e "Sintetico" ficava no FIM, que é justamente o pedaço que a coluna estreita corta.  │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+const PREFIXO_SIMULADO = "SIMULADO";
+
+function pessoa(
+  sequencia: number,
+  apelido: string,
+  /** Sem CPF é o PADRÃO do lote. Ver o bloco de `PessoaFabricada.cpf`: o CPF é a exceção rara. */
+  comCpf = false,
+): PessoaFabricada {
   return {
     // O identificador externo é o que casa com `as_identidades_externas`, e ele nasce marcado:
-    // qualquer um que veja `ARNES-...` na base sabe de onde a linha veio.
+    // qualquer um que veja `ARNES-...` na base sabe de onde a linha veio. É ELE o predicado único
+    // do lote (ver o cabeçalho), e por isso ele não muda de forma nem para a vitrine.
     idCandidate: `ARNES-${String(sequencia).padStart(6, "0")}`,
-    name: "Arnes",
-    surname: `${apelido} Sintetico`,
-    cpf: cpfSintetico(sequencia),
+    name: PREFIXO_SIMULADO,
+    surname: apelido,
+    cpf: comCpf ? cpfSintetico(sequencia) : null,
     email: `arnes.${apelido.toLowerCase()}@exemplo.invalid`,
     phone: "00000000000",
     birthDate: "1990-01-01",
   };
 }
 
-const ALFA = pessoa(1, "Alfa");
-const BRAVO = pessoa(2, "Bravo");
-const CHARLIE = pessoa(3, "Charlie");
-const DELTA = pessoa(4, "Delta");
+/**
+ * AS QUATRO DO GUIA CONTINUAM COM CPF, e são QUATRO: é com elas que as fases 2 e 3 medem o dedup
+ * por CPF e o conflito identidade-contra-CPF. Quatro identificadores fixos é o bloco mínimo que
+ * exercita o caminho, e é a ordem de grandeza que o veto do CPF admite.
+ */
+const ALFA = pessoa(1, "Alfa Sintetico", true);
+const BRAVO = pessoa(2, "Bravo Sintetico", true);
+const CHARLIE = pessoa(3, "Charlie Sintetico", true);
+const DELTA = pessoa(4, "Delta Sintetico", true);
 
 // ══ O LOTE ═════════════════════════════════════════════════════════════════════════════════════
 
@@ -199,7 +278,11 @@ const PASTAS = [
 /** A data de inscrição do lote. FIXA, pelo mesmo motivo dos ids: a fase 3 repete o lote inteiro. */
 const INSERT_DATE = "2026-09-15T10:00:00Z";
 
-function inscricao(p: PessoaFabricada, idVacancyFolder: number): Record<string, unknown> {
+function inscricao(
+  p: PessoaFabricada,
+  idVacancyFolder: number,
+  idVacancy: number = VAGA_PRINCIPAL,
+): Record<string, unknown> {
   return {
     idCandidate: p.idCandidate,
     name: p.name,
@@ -208,7 +291,7 @@ function inscricao(p: PessoaFabricada, idVacancyFolder: number): Record<string, 
     email: p.email,
     phone: p.phone,
     birthDate: p.birthDate,
-    idVacancy: VAGA_PRINCIPAL,
+    idVacancy,
     idVacancyFolder,
     insertDate: INSERT_DATE,
   };
@@ -238,13 +321,207 @@ const VAGA_SENTINELA_CRUA = {
   numberVacancies: 1,
 };
 
-export const FASES = ["2", "3", "4", "5-fecha", "5-volta"] as const;
+
+// ══ A SIMULAÇÃO ════════════════════════════════════════════════════════════════════════════════
+
+/**
+ * ─ O LOTE DE VITRINE: doze vagas e cinquenta e duas pessoas, para a tela ter o que mostrar ─────
+ *
+ * ┌─ PARA QUE ELE EXISTE, E POR QUE NÃO É MAIS UMA FASE DO GUIA ───────────────────────────────────┐
+ * │ As fases 2 a 5 provam COMPORTAMENTO (não duplica, não inventa etapa, encerra e reabre), e para │
+ * │ isso quatro pessoas bastam. Esta fase não prova nada: ela ENCHE a homologação, para o diretor  │
+ * │ olhar o funil, o cilindro das posições, os KPIs e a Central de Candidatos com volume que se    │
+ * │ parece com o de um dia de operação, ANTES de a ingestão real ser ligada.                       │
+ * │                                                                                                │
+ * │ O CAMINHO DE ESCRITA É O MESMO, E ISSO É O PONTO: mesma porta fabricada, mesmo ciclo, mesmo    │
+ * │ de/para lido do banco, mesmo repositório, mesmas guardas. Um script de `insert` à parte encheria│
+ * │ a tela com linhas que a ingestão de verdade nunca produziria, e o diretor validaria uma tela   │
+ * │ que não corresponde ao sistema.                                                                │
+ * └────────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ §A.6: A TELA TEM DE DIZER QUE É SIMULAÇÃO, E NÃO SÓ O BANCO ──────────────────────────────────┐
+ * │ Um print da homologação circula. Por isso a marca não fica só no CPF `999` e no domínio        │
+ * │ `.invalid`, que ninguém vê na Central de Candidatos: ela está no PRIMEIRO NOME de cada pessoa  │
+ * │ (`SIMULADO`, caixa alta, palavra que não é nome de gente) e no nome de divulgação de cada vaga.   │
+ * │ Quem olhar a lista, o funil ou o cilindro lê a palavra antes de ler qualquer outra coisa.       │
+ * └────────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * O QUE ELA ENCERRA, E ISSO NÃO É EFEITO COLATERAL ESCONDIDO: a lista de vagas ativas deste lote
+ * são as doze da simulação, então as vagas espelhadas das outras fases (990001 e 990002) saem das
+ * ativas e o ciclo as encerra, que é exatamente o que ele faz em produção. É reversível rodando
+ * `5-volta`. Por isso a simulação fica FORA do `todas`.
+ */
+
+/**
+ * AS CINCO PASTAS, uma por etapa mapeada do funil.
+ *
+ * OS NOMES SÃO OS DO DE/PARA SEMEADO, e a caixa é irregular de propósito (é assim que o Pandapé os
+ * devolve): quem casa é a chave NORMALIZADA, e não o texto cru. Se uma linha de de/para for
+ * inativada no banco, a pasta correspondente para de entrar, e o resumo acusa a pasta sem tradução
+ * em vez de a etapa sumir em silêncio.
+ */
+const PASTA_SIM_CAPTACAO = 992001;
+const PASTA_SIM_TRIAGEM = 992002;
+const PASTA_SIM_ENTREVISTA_SOULAN = 992003;
+const PASTA_SIM_ENTREVISTA_CLIENTE = 992004;
+const PASTA_SIM_APROVACAO = 992005;
+
+const PASTAS_DA_SIMULACAO = [
+  { idVacancyFolder: PASTA_SIM_CAPTACAO, name: "Lead" },
+  { idVacancyFolder: PASTA_SIM_TRIAGEM, name: "TRIADOS" },
+  { idVacancyFolder: PASTA_SIM_ENTREVISTA_SOULAN, name: "Entrevista Soulan" },
+  { idVacancyFolder: PASTA_SIM_ENTREVISTA_CLIENTE, name: "Encaminhados Cliente" },
+  { idVacancyFolder: PASTA_SIM_APROVACAO, name: "Contratados" },
+];
+
+/** Quantas pessoas cada vaga recebe em cada uma das cinco pastas, na ordem de `PASTAS_DA_SIMULACAO`. */
+interface VagaDaSimulacao {
+  idVacancy: number;
+  codigo: string;
+  titulo: string;
+  /** `posicoes_oficiais`. Nulo não existe aqui: toda vaga da vitrine tem meta, senão não há cilindro. */
+  posicoes: number;
+  captacao: number;
+  triagem: number;
+  entrevistaSoulan: number;
+  entrevistaCliente: number;
+  /**
+   * A pasta `Contratados` traduz para a etapa APROVACAO **e** para o desfecho
+   * `ENVIADO_PARA_ADMISSAO`, que é o que FINALIZA posição: é esta coluna, e só ela, que enche o
+   * cilindro. As três primeiras vagas existem para o cilindro mostrar os três estados que ele sabe
+   * mostrar: posição sobrando, posição no limite e posição EXCEDIDA.
+   */
+  aprovacao: number;
+}
+
+/**
+ * OS IDS SÃO FIXOS E ALTOS (`9910xx`), pelo mesmo motivo dos das outras fases: fixos para a segunda
+ * rodada ser idêntica à primeira (idempotência), altos para não colidirem com id de vaga real.
+ *
+ * OS TÍTULOS SÃO CARGOS GENÉRICOS DE OPERAÇÃO, inventados, e nenhum deles é a cópia de uma vaga
+ * real da conta: a vitrine precisa parecer plausível, não precisa ser verdadeira.
+ */
+const VAGAS_DA_SIMULACAO: VagaDaSimulacao[] = [
+  // Cilindro com posição SOBRANDO: 2 entregues em 5 posições.
+  { idVacancy: 991001, codigo: "SIM-VAGA-01", titulo: "Operador De Loja", posicoes: 5, captacao: 3, triagem: 2, entrevistaSoulan: 1, entrevistaCliente: 1, aprovacao: 2 },
+  // Cilindro NO LIMITE: 3 entregues em 3 posições.
+  { idVacancy: 991002, codigo: "SIM-VAGA-02", titulo: "Auxiliar De Limpeza", posicoes: 3, captacao: 2, triagem: 1, entrevistaSoulan: 1, entrevistaCliente: 0, aprovacao: 3 },
+  // Cilindro EXCEDIDO: 4 entregues em 2 posições. O domínio permite (`excedida`), e a tela precisa
+  // ser olhada justamente nesse estado, que é o que ninguém vê até acontecer em produção.
+  { idVacancy: 991003, codigo: "SIM-VAGA-03", titulo: "Repositor De Mercadorias", posicoes: 2, captacao: 1, triagem: 1, entrevistaSoulan: 1, entrevistaCliente: 1, aprovacao: 4 },
+  { idVacancy: 991004, codigo: "SIM-VAGA-04", titulo: "Atendente De Loja", posicoes: 8, captacao: 4, triagem: 2, entrevistaSoulan: 1, entrevistaCliente: 1, aprovacao: 0 },
+  { idVacancy: 991005, codigo: "SIM-VAGA-05", titulo: "Porteiro Noturno", posicoes: 1, captacao: 1, triagem: 0, entrevistaSoulan: 0, entrevistaCliente: 0, aprovacao: 0 },
+  { idVacancy: 991006, codigo: "SIM-VAGA-06", titulo: "Recepcionista", posicoes: 4, captacao: 2, triagem: 1, entrevistaSoulan: 1, entrevistaCliente: 0, aprovacao: 0 },
+  { idVacancy: 991007, codigo: "SIM-VAGA-07", titulo: "Auxiliar De Cozinha", posicoes: 6, captacao: 2, triagem: 2, entrevistaSoulan: 1, entrevistaCliente: 1, aprovacao: 0 },
+  { idVacancy: 991008, codigo: "SIM-VAGA-08", titulo: "Motorista Entregador", posicoes: 2, captacao: 1, triagem: 1, entrevistaSoulan: 0, entrevistaCliente: 0, aprovacao: 0 },
+  { idVacancy: 991009, codigo: "SIM-VAGA-09", titulo: "Estoquista", posicoes: 10, captacao: 1, triagem: 1, entrevistaSoulan: 1, entrevistaCliente: 0, aprovacao: 0 },
+  { idVacancy: 991010, codigo: "SIM-VAGA-10", titulo: "Vigilante Patrimonial", posicoes: 1, captacao: 1, triagem: 0, entrevistaSoulan: 0, entrevistaCliente: 0, aprovacao: 0 },
+  // A vaga VAZIA é de propósito: cilindro zerado e funil sem ninguém também são estados de tela.
+  { idVacancy: 991011, codigo: "SIM-VAGA-11", titulo: "Fiscal De Prevencao", posicoes: 3, captacao: 0, triagem: 0, entrevistaSoulan: 0, entrevistaCliente: 0, aprovacao: 0 },
+  { idVacancy: 991012, codigo: "SIM-VAGA-12", titulo: "Jovem Aprendiz Administrativo", posicoes: 20, captacao: 0, triagem: 1, entrevistaSoulan: 1, entrevistaCliente: 1, aprovacao: 0 },
+];
+
+/**
+ * A ÚNICA VAGA DA VITRINE CUJA GENTE NASCE COM CPF, e ela é a PRIMEIRA da tabela.
+ *
+ * SÃO NOVE PESSOAS, uma em cada uma das cinco etapas mapeadas (3 + 2 + 1 + 1 + 2), que é o bloco
+ * pequeno, fixo e documentado que o veto do CPF pede: dá para exercitar dedup, conflito e busca por
+ * CPF em toda etapa do funil sem criar um bloco de identificadores de terceiros do tamanho do lote.
+ * As outras onze vagas inteiras entram com `cpf` NULO.
+ */
+const VAGA_COM_CPF_DA_SIMULACAO = 0;
+
+/**
+ * A PRIMEIRA SEQUÊNCIA DA VITRINE. Começa em 2001 para não encostar nas quatro pessoas das fases do
+ * guia (1 a 4): o CPF e o `idCandidate` saem da sequência, e repetir um número faria a vitrine
+ * reescrever a pessoa da fase 2 em vez de criar a dela.
+ */
+const PRIMEIRA_SEQUENCIA_DA_SIMULACAO = 2001;
+
+/** A ordem em que as pessoas são distribuídas, e ela é fixa: é dela que vem a idempotência. */
+const DISTRIBUICAO: { pasta: number; quantas: (v: VagaDaSimulacao) => number }[] = [
+  { pasta: PASTA_SIM_CAPTACAO, quantas: (v) => v.captacao },
+  { pasta: PASTA_SIM_TRIAGEM, quantas: (v) => v.triagem },
+  { pasta: PASTA_SIM_ENTREVISTA_SOULAN, quantas: (v) => v.entrevistaSoulan },
+  { pasta: PASTA_SIM_ENTREVISTA_CLIENTE, quantas: (v) => v.entrevistaCliente },
+  { pasta: PASTA_SIM_APROVACAO, quantas: (v) => v.aprovacao },
+];
+
+/**
+ * O LOTE DA VITRINE, montado a cada chamada e SEMPRE IGUAL.
+ *
+ * NADA AQUI É SORTEADO, e a ausência do acaso é o que torna a fase idempotente: a sequência da
+ * pessoa sai da posição dela na tabela acima, então a segunda rodada produz o MESMO `idCandidate`,
+ * o MESMO CPF e a MESMA pasta, e o ciclo reconhece todo mundo pela identidade externa. Duas rodadas
+ * devolvem `pessoas novas=0 candidaturas=0`.
+ */
+export function loteDaSimulacao(): Lote {
+  const inscricoes: Record<number, Record<string, unknown>[]> = {};
+  let sequencia = PRIMEIRA_SEQUENCIA_DA_SIMULACAO;
+
+  for (const [indice, vaga] of VAGAS_DA_SIMULACAO.entries()) {
+    const lista: Record<string, unknown>[] = [];
+    for (const faixa of DISTRIBUICAO) {
+      for (let i = 0; i < faixa.quantas(vaga); i += 1) {
+        // §A.6: "SIMULADO Candidato 0007" é o que a Central de Candidatos mostra. A palavra vem
+        // PRIMEIRO porque é o primeiro pedaço lido numa coluna de nome, inclusive quando a coluna
+        // é estreita e corta o resto.
+        const p = pessoa(
+          sequencia,
+          `Candidato ${String(sequencia).padStart(4, "0")}`,
+          indice === VAGA_COM_CPF_DA_SIMULACAO,
+        );
+        lista.push(inscricao(p, faixa.pasta, vaga.idVacancy));
+        sequencia += 1;
+      }
+    }
+    inscricoes[vaga.idVacancy] = lista;
+  }
+
+  const pessoas = sequencia - PRIMEIRA_SEQUENCIA_DA_SIMULACAO;
+  return {
+    descricao: `a vitrine: ${VAGAS_DA_SIMULACAO.length} vagas e ${pessoas} pessoas, espalhadas pelas cinco etapas mapeadas`,
+    vagasAtivas: VAGAS_DA_SIMULACAO.map((v) => ({
+      idVacancy: v.idVacancy,
+      reference: v.codigo,
+      // O nome que aparece na TELA. O MESMO prefixo do nome da pessoa, para a LINHA INTEIRA ser
+      // lida como simulada: um print desta base pode circular, e a vaga é a outra metade da linha.
+      job: `${PREFIXO_SIMULADO} ${v.titulo}`,
+      city: null,
+      numberVacancies: v.posicoes,
+    })),
+    inscricoes,
+    pastas: PASTAS_DA_SIMULACAO,
+  };
+}
+
+// ══ AS FASES ═══════════════════════════════════════════════════════════════════════════════════
+
+/**
+ * AS FASES DO GUIA DE VALIDAÇÃO, e são só estas que o `todas` roda, na ordem.
+ *
+ * A SIMULAÇÃO FICA DE FORA DELA de propósito: ela troca a lista de vagas ativas inteira, e o ciclo
+ * encerra a vaga espelhada que saiu da lista. Rodada dentro do `todas`, ela desfaria o estado que a
+ * fase `5-volta` acabou de montar, e quem lesse o resultado veria a fase 5 falhando sem ter falhado.
+ */
+export const FASES_DO_GUIA = ["2", "3", "4", "5-fecha", "5-volta"] as const;
+
+export const FASES = [...FASES_DO_GUIA, "simulacao"] as const;
 export type Fase = (typeof FASES)[number];
 
 interface Lote {
   vagasAtivas: Record<string, unknown>[];
   inscricoes: Record<number, Record<string, unknown>[]>;
   descricao: string;
+  /**
+   * AS PASTAS QUE A PORTA DEVOLVE. Ausente, valem as `PASTAS` das fases do guia.
+   *
+   * Ela entrou no lote, e não ficou constante global, porque a fase de SIMULAÇÃO precisa das cinco
+   * pastas que traduzem para as cinco etapas do funil, e as fases do guia precisam continuar com
+   * exatamente as quatro delas (a quarta sem de/para é a fase 4 inteira). Um conjunto só serviria
+   * mal aos dois: acrescentar pasta às fases do guia mudaria o que a fase 4 mede.
+   */
+  pastas?: { idVacancyFolder: number; name: string }[];
 }
 
 /** O lote de cada fase do guia de validação. */
@@ -278,6 +555,8 @@ export function loteDaFase(fase: Fase): Lote {
         vagasAtivas: [VAGA_PRINCIPAL_CRUA, VAGA_SENTINELA_CRUA],
         inscricoes: { [VAGA_PRINCIPAL]: TRES_ETAPAS_MAPEADAS, [VAGA_SENTINELA]: [] },
       };
+    case "simulacao":
+      return loteDaSimulacao();
   }
 }
 
@@ -295,7 +574,7 @@ export function portaHttpFabricada(lote: Lote): PortaHttp {
         throw new Error(`A ingestão do Pandapé é GET apenas. Verbo recusado: ${metodo}.`);
       }
       if (caminho === CAMINHO_VAGAS) return { data: lote.vagasAtivas };
-      if (caminho === CAMINHO_PASTAS) return { data: PASTAS };
+      if (caminho === CAMINHO_PASTAS) return { data: lote.pastas ?? PASTAS };
       if (caminho === CAMINHO_INSCRICOES) {
         const idVacancy = Number(params.IdVacancy);
         const pagina = Number(params.Page ?? 1);
@@ -345,7 +624,7 @@ async function main(): Promise<void> {
   const pedida = (process.argv[2] ?? "").trim();
   const fases: Fase[] =
     pedida === "todas"
-      ? [...FASES]
+      ? [...FASES_DO_GUIA]
       : (FASES as readonly string[]).includes(pedida)
         ? [pedida as Fase]
         : [];
@@ -374,6 +653,19 @@ async function main(): Promise<void> {
     },
     agora: () => new Date(),
     dataDeCorte: DATA_DE_CORTE,
+    /*
+     * O SAL DA MARCA DE PASTA, lido da variável `AS_MARCA_SAL` do ambiente em que o arnês roda.
+     *
+     * SEM VALOR PADRÃO DE CONVENIÊNCIA, e o `?? ""` não é um: ele apenas entrega a AUSÊNCIA ao
+     * ciclo, que RECUSA rodar sem sal, de propósito, em vez de marcar pasta sem chave. Inventar um
+     * literal aqui faria o arnês produzir marcas que nenhum outro ambiente reproduz, e ainda poria
+     * uma chave dentro do repositório.
+     *
+     * O VALOR NÃO SAI DAQUI: não é logado, não é impresso no resumo e não entra em teste. Só o
+     * NOME da variável pode ser dito em voz alta, que é a mesma disciplina da URL do banco logo
+     * acima (dela só sai o nome do database, nunca a senha).
+     */
+    salDaMarca: process.env.AS_MARCA_SAL ?? "",
     cicloDeVida: repo,
     etapaInicial: async () => (await etapas.etapaInicial()).codigo,
   };

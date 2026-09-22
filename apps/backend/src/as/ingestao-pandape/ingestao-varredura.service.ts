@@ -11,7 +11,11 @@ import {
   varrerPaginaDaVaga,
 } from "./ingestao-ciclo";
 import { IngestaoHttp } from "./ingestao-http";
-import type { DependenciasDaVarredura, ResumoDoCiclo } from "./ingestao-portas";
+import {
+  VARIAVEL_DO_SAL_DA_MARCA,
+  type DependenciasDaVarredura,
+  type ResumoDoCiclo,
+} from "./ingestao-portas";
 import { IngestaoRepositorio } from "./ingestao-repositorio";
 import {
   criarConexaoDaVarredura,
@@ -58,6 +62,24 @@ export class IngestaoVarreduraService implements OnModuleInit, OnModuleDestroy {
   private worker?: Worker;
   private timer?: NodeJS.Timeout;
   private dataDeCorte?: Date;
+  /**
+   * O SAL DA MARCA DE PASTA, lido do ambiente UMA vez, no boot, e guardado em memória.
+   *
+   * ┌─ ESTE É O ÚNICO LUGAR QUE LÊ A VARIÁVEL, E ELE É A BORDA ────────────────────────┐
+   * │ O domínio (`marcaDeChaveExterna`) recebe o sal por PARÂMETRO e continua puro; o ciclo o      │
+   * │ recebe pelas dependências, como já recebe a data de corte. Lido aqui, o segredo tem um       │
+   * │ caminho só, que é o que torna a proibição conferível em revisão.                             │
+   * │                                                                                              │
+   * │ FIXO POR INSTALAÇÃO: vem do `.env` (classe JWT) e NÃO é sorteado no boot. Sorteado, as mesmas│
+   * │ 15 pastas apareceriam como 15 novidades a cada subida, e o aviso viraria ruído. Não mora em  │
+   * │ TABELA (viajaria em todo `pg_dump`, inclusive no que alimenta a homologação, entregando      │
+   * │ chave e dado juntos) nem em arquivo novo (caminho de segredo que os procedimentos não        │
+   * │ conhecem).                                                                                   │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * §A.6: o VALOR nunca é logado, nem truncado, nem devolvido por rota. Só o NOME da variável.
+   */
+  private salDaMarca?: string;
 
   constructor(
     private readonly config: ConfigService,
@@ -79,7 +101,21 @@ export class IngestaoVarreduraService implements OnModuleInit, OnModuleDestroy {
       this.logger.log("Varredura do Pandapé INERTE: integração sem credencial OAuth.");
       return;
     }
+    /*
+     * FAIL-CLOSED DO SAL, na mesma porta da data de corte: sem ele a varredura NÃO SOBE. Não é
+     * "roda sem marca" (reabre a perda silenciosa de 35% da entrada) nem "roda sem sal" (o digesto
+     * sem chave é confirmável por quem já suspeita do nome da pasta, que calcula e compara). A
+     * linha nomeia a VARIÁVEL que falta, jamais o valor dela.
+     */
+    const sal = (this.config.get<string>(VARIAVEL_DO_SAL_DA_MARCA) ?? "").trim();
+    if (sal === "") {
+      this.logger.log(
+        `Varredura do Pandapé INERTE: ${VARIAVEL_DO_SAL_DA_MARCA} não configurada. Nenhuma inscrição é lida.`,
+      );
+      return;
+    }
     this.dataDeCorte = corte;
+    this.salDaMarca = sal;
     try {
       const host = this.config.get<string>("REDIS_HOST") ?? "127.0.0.1";
       const port = Number(this.config.get<string>("REDIS_PORT") ?? 6380);
@@ -190,6 +226,10 @@ export class IngestaoVarreduraService implements OnModuleInit, OnModuleDestroy {
   private deps(): DependenciasDaVarredura {
     const corte = this.dataDeCorte;
     if (!corte) throw new Error("Varredura sem data de corte configurada.");
+    // A SEGUNDA FECHADURA DO SAL: montar as dependências sem ele LANÇA, em vez de devolver um
+    // ciclo que marcaria pasta sem chave. A mensagem nomeia a variável, nunca o valor (§A.6).
+    const sal = this.salDaMarca;
+    if (!sal) throw new Error(`Varredura sem ${VARIAVEL_DO_SAL_DA_MARCA} configurada.`);
     return {
       http: this.http,
       banco: this.repo,
@@ -204,6 +244,7 @@ export class IngestaoVarreduraService implements OnModuleInit, OnModuleDestroy {
       },
       agora: () => new Date(),
       dataDeCorte: corte,
+      salDaMarca: sal,
       cicloDeVida: this.repo,
       etapaInicial: async () => (await this.etapas.etapaInicial()).codigo,
     };

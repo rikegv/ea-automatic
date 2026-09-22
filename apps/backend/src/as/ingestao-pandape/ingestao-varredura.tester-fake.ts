@@ -244,6 +244,14 @@ export interface DependenciasDaIngestao {
    * momentos diferentes teriam cortes diferentes sem ninguém decidir isso.
    */
   dataDeCorte: Date;
+  /**
+   * O SAL DA MARCA DE PASTA, injetado pela BORDA como a data de corte, e nunca lido do ambiente.
+   *
+   * A SUÍTE NÃO LÊ A VARIÁVEL REAL: o mundo falso usa `SAL_DE_TESTE`, que é público e inventado.
+   * Um teste que lesse o sal de produção passaria a depender do ambiente do runner e, pior,
+   * poderia imprimir o segredo numa mensagem de falha.
+   */
+  salDaMarca?: string;
 }
 
 export interface ResumoDoCiclo {
@@ -307,6 +315,14 @@ export interface Mundo {
  * banco, o mesmo candidato, e um campo diferente chegando na volta seguinte.
  */
 const MUNDOS_E_ESTADOS = new WeakMap<Mundo, EstadoDoMundo>();
+
+/**
+ * O SAL DO MUNDO FALSO. Inventado, público e SEM relação nenhuma com o sal de qualquer instalação.
+ *
+ * ELE É EXPLÍCITO DE PROPÓSITO: o sal de verdade nunca entra em teste, nem por leitura de ambiente
+ * nem por literal copiado. Quem compara marcas numa asserção usa este, passado por parâmetro.
+ */
+export const SAL_DE_TESTE = "sal-de-teste-do-mundo-falso";
 
 const CORTE_PADRAO = new Date("2026-09-01T00:00:00.000Z");
 const AGORA_PADRAO = new Date("2026-09-18T12:00:00.000Z");
@@ -463,6 +479,7 @@ export function criarMundo(estado: EstadoDoMundo): Mundo {
     },
     agora: () => agoraAtual,
     dataDeCorte: CORTE_PADRAO,
+    salDaMarca: SAL_DE_TESTE,
   };
 
   const mundo: Mundo = {
@@ -804,7 +821,7 @@ async function cenarioBase(ingestor: Ingestor, mundos: Mundo[]): Promise<string[
       "CHAVE_CRUA_NO_RESUMO: o resumo do ciclo carrega o NOME da pasta do ATS, e ele termina no log da aplicação, que é permanente e está fora do alcance do `aplicarRetencao`. Nome de pasta é texto livre digitado lá fora e chega com nome de gente dentro. O que pode sair daqui é a MARCA da chave.",
     );
   }
-  if (!naoMapeadas.has(marcaDeChaveExterna("entrevista inteligente"))) {
+  if (!naoMapeadas.has(marcaDeChaveExterna("entrevista inteligente", SAL_DE_TESTE))) {
     v.push(
       "ETAPA_NAO_MAPEADA_NAO_REGISTRADA: a pasta sem de/para não foi registrada no resumo do ciclo, pela MARCA dela. Recusar a inscrição sem registrar nada deixa quem opera sem saber que há configuração faltando, e a recusa vira perda silenciosa de 35% da entrada.",
     );
@@ -1346,7 +1363,9 @@ async function ingerirUm(
     if (!com("NAO_REGISTRA_A_CHAVE") && chave !== "") {
       // A MARCA, nunca a chave: o resumo termina em log permanente (achado R1 do `seguranca`).
       resumo.etapasNaoMapeadas.push(
-        com("REGISTRA_A_CHAVE_CRUA") ? chave : marcaDeChaveExterna(chave),
+        com("REGISTRA_A_CHAVE_CRUA")
+          ? chave
+          : marcaDeChaveExterna(chave, deps.salDaMarca ?? SAL_DE_TESTE),
       );
     }
     if (com("CRIA_DEPARA_SOZINHO")) {

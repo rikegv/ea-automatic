@@ -24,6 +24,7 @@ import type {
   PapelAs,
   PosicaoLado,
   VagaContextoAs,
+  VagaDetalhe,
   VagaListItem,
   VagaMetaReducao,
   VagaStatus,
@@ -464,7 +465,13 @@ export class VagasService {
       justificativaMotivo: v.justificativaMotivo,
       tipoSubstituicao: v.tipoSubstituicao,
       substituidoNome: v.substituidoNome,
-      substituidoCpf: v.substituidoCpf,
+      // ─ O `substituidoCpf` NÃO DESCE MAIS NA LISTA (correção de LGPD ativo, 22/09/2026) ─────────
+      // Ele descia CRU para TODA vaga, a cada carga, para todo consultor com o menu, e NENHUMA coluna
+      // o mostrava: só alimentava a ficha de edição/clone/liberação. Isso é o oposto da minimização
+      // (§A.6). O tipo compartilhado (`VagaListItem`) já perdeu o campo; o CPF agora desce de UMA vaga
+      // por vez, pela rota de detalhe (`detalhe(id)` abaixo, servida por `GET /as/vagas/:id`), quando
+      // o consultor abre AQUELA vaga. O `substituidoNome` FICA: é coluna visível, e nome não é a chave
+      // nacional que o CPF é. A retenção do CPF (decisão do diretor, 22/08) não mudou, só QUANDO desce.
       localTrabalho: v.localTrabalho,
       regiaoEstado: v.regiaoEstado,
       regioes: v.regioes ?? [],
@@ -541,6 +548,43 @@ export class VagasService {
        */
       metaReducoes: reducoes.get(v.id) ?? [],
     }));
+  }
+
+  /**
+   * UMA VAGA, COM O `substituidoCpf` QUE A LISTA NÃO CARREGA MAIS (correção de LGPD ativo, 22/09).
+   *
+   * A ficha de edição, o clone e a liberação precisam do CPF do substituído para preencher o campo e
+   * mandar para a folha. Ele SAIU da lista (`list`, acima) porque descer o CPF de TODA vaga para TODO
+   * consultor a cada carga é o oposto da minimização (§A.6). Aqui ele desce de UMA vaga só, quando o
+   * consultor a abre.
+   *
+   * ┌─ REUSA `list()` INTEIRO, DE PROPÓSITO, e não uma segunda consulta com a mesma montagem ─────┐
+   * │ O item da lista já resolve cargo, cliente, autor, os dois lados, a ocupação derivada, o     │
+   * │ rastro de meta e a herança de segmento/comercial, em 170 linhas de mapeamento. Uma consulta │
+   * │ de detalhe PRÓPRIA seria uma SEGUNDA cópia dessa montagem, e duas cópias divergem no primeiro│
+   * │ ajuste, entregando à ficha um item diferente do que a lista mostra. O detalhe é, LITERALMENTE│
+   * │ , "o item da lista MAIS o CPF": pega o item já pronto e ACRESCENTA o único campo que faltava.│
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * MESMA RÉGUA DE RECORTE DA LISTA: só devolve a vaga que a lista devolveria (procura o `id` no
+   * conjunto de `list()`). Não há caminho para ler uma vaga que a lista esconde, então o detalhe não
+   * abre acesso nenhum além do que o menu `as-vagas` já concede.
+   *
+   * §A.6: o CPF sai em DÍGITOS (a tela mascara na exibição), e NUNCA é logado: este método não tem
+   * `Logger`, e o retorno não passa por nenhum. Nada de exportação.
+   */
+  async detalhe(id: string): Promise<VagaDetalhe> {
+    const item = (await this.list()).find((v) => v.id === id);
+    if (!item) throw new NotFoundException("Vaga não encontrada");
+
+    // O ÚNICO CAMPO QUE A LISTA DEIXOU DE TRAZER, lido de UMA linha só. `id` já foi validado como UUID
+    // no controller (`ParseUUIDPipe`) e o item acima confirma que a vaga existe e é visível.
+    const [linha] = await this.db
+      .select({ substituidoCpf: vagas.substituidoCpf })
+      .from(vagas)
+      .where(eq(vagas.id, id));
+
+    return { ...item, substituidoCpf: linha?.substituidoCpf ?? null };
   }
 
   /**
@@ -971,16 +1015,45 @@ export class VagasService {
     const regua = await this.statusVaga.regua();
     const atual = await this.db.query.vagas.findFirst({ where: eq(vagas.id, id) });
     if (!atual) throw new NotFoundException("Vaga não encontrada.");
-    // SÓ RASCUNHO ENTRA, e a pergunta é pelo PAPEL: o código continua sendo `RASCUNHO`, mas quem o
-    // afirma passa a ser o catálogo. Comparar com o literal voltaria a errar no dia em que a linha
-    // fosse recadastrada com outro código.
-    if (!regua.ehDoPapel(atual.status, "RASCUNHO")) {
+    /*
+     * ┌─ DOIS PAPÉIS ENTRAM AQUI, E O SEGUNDO NÃO MOVE A VAGA ─────────────────────────────────────┐
+     * │ RASCUNHO, como sempre, e agora REVISAO, que é a FILA da vaga espelhada do Pandapé. Até     │
+     * │ aqui a vaga em REVISAO não era editável por ROTA NENHUMA: os campos só podiam viajar no    │
+     * │ corpo da liberação, e quem começasse a completar os onze obrigatórios (mais salário,       │
+     * │ benefícios e escala) e parasse no meio perdia tudo no Cancelar. Ninguém termina esse       │
+     * │ formulário em uma sentada.                                                                  │
+     * │                                                                                             │
+     * │ O QUE ELA GANHA É O PODER DE ESCREVER CAMPO, NUNCA O DE TROCAR DE PAPEL, e as três guardas │
+     * │ auditadas continuam de pé: a fila é o próprio ESTADO, a LIBERAÇÃO é a única porta para o   │
+     * │ papel ABERTURA (`moverStatus` recusa a saída da fila, `exigeReguaDeAbertura`), e nenhum     │
+     * │ lote nasce.                                                                                 │
+     * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    const ehRevisao = regua.ehDoPapel(atual.status, "REVISAO");
+    // A pergunta é pelo PAPEL: o código continua sendo `RASCUNHO`, mas quem o afirma passa a ser o
+    // catálogo. Comparar com o literal voltaria a errar no dia em que a linha fosse recadastrada
+    // com outro código.
+    if (!regua.ehDoPapel(atual.status, "RASCUNHO") && !ehRevisao) {
       throw new ConflictException(
         "Esta vaga já foi publicada e não volta para a trilha de abertura. Recarregue a página.",
       );
     }
 
-    const status = this.travaStatusDaTrilha(regua, dto.status, "RASCUNHO");
+    /*
+     * ┌─ NA REVISÃO, O STATUS GRAVADO É O ATUAL, E `dto.status` É IGNORADO. ISTO É TRAVA ──────────┐
+     * │ Não é conveniência de implementação: `travaStatusDaTrilha(regua, dto.status, "RASCUNHO")`  │
+     * │ cairia no PADRÃO RASCUNHO quando o corpo não manda status, e a vaga SAIRIA DA FILA em      │
+     * │ silêncio, por uma rota de edição, sem trilha, sem a régua dos obrigatórios e sem o cliente │
+     * │ conferido. Pior ainda com status no corpo: o papel REVISAO tem `daTrilha` DESLIGADO        │
+     * │ (`vaga-status.service`, e o comentário de lá diz exatamente isto), então a trava do        │
+     * │ catálogo não protege esta porta, ela só protegeria a de saída.                              │
+     * │                                                                                             │
+     * │ Quem muda o status da vaga em REVISAO é a LIBERAÇÃO, e mais nada.                           │
+     * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    const status = ehRevisao
+      ? atual.status
+      : this.travaStatusDaTrilha(regua, dto.status, "RASCUNHO");
     const cidade = await this.resolverCidade(dto.cidadeId);
     const linhaServicoId = await this.resolverLinhaServico(dto.linhaServicoId);
     const herdaveis = await this.resolverHerdaveis(dto);
@@ -988,7 +1061,13 @@ export class VagasService {
       ...this.camposDaTrilha(regua, dto, status, cidade, linhaServicoId, herdaveis),
       posicoesOficiais: this.metaOficialDaTrilha(dto, atual),
     };
-    this.travaObrigatorios(regua, campos, status);
+    /*
+     * A RÉGUA DOS OBRIGATÓRIOS NÃO RODA NA REVISÃO, e o motivo é o mesmo do rascunho: nada está
+     * sendo PUBLICADO aqui. Quem cobra os onze campos é a LIBERAÇÃO, que é a porta de saída da
+     * fila. A chamada continua sendo feita (e não removida) para o RASCUNHO se comportar
+     * exatamente como antes, inclusive publicando por esta rota.
+     */
+    if (!ehRevisao) this.travaObrigatorios(regua, campos, status);
 
     await this.travaDuplicidadeDeCodigo(campos.codigo, id);
     const beneficios = await this.validaBeneficios(dto.beneficios ?? []);
@@ -3067,9 +3146,73 @@ export class VagasService {
     const clienteDoCorpo = (dto?.codCliente ?? "").trim();
     if (clienteDoCorpo !== "") await this.exigirClienteExistente(clienteDoCorpo);
 
+    /*
+     * ┌─ O CORPO INTEIRO, OU SÓ O CLIENTE: OS DOIS CAMINHOS CONTINUAM VÁLIDOS ────────────────────┐
+     * │ A tela nova manda o FORMULÁRIO COMPLETO, porque é nela que a vaga incompleta do Pandapé é │
+     * │ preenchida. A chamada antiga (sem corpo, ou só com o cliente) continua existindo e é o    │
+     * │ contrato que os testes já validados exercitam: quem já vinculou o cliente em outra tela   │
+     * │ libera sem mandar campo nenhum.                                                            │
+     * │                                                                                            │
+     * │ A DISTINÇÃO É EXPLÍCITA, e não deduzida campo a campo, porque a regra da casa na trilha é │
+     * │ "O CORPO É COMPLETO": campo ausente é campo LIMPO, e é assim que o idioma, o escape de    │
+     * │ "Outros" e o detalhe do híbrido somem quando a pessoa desmarca a opção. Aplicar essa regra│
+     * │ a um corpo que só traz o cliente APAGARIA a vaga inteira na saída da fila. Então: corpo   │
+     * │ com campo de vaga = formulário completo, que sobrescreve; corpo só com cliente = o gesto  │
+     * │ antigo, que não toca campo nenhum.                                                         │
+     * │                                                                                            │
+     * │ OS ONZE OBRIGATÓRIOS SÃO COBRADOS NOS DOIS CAMINHOS, e é esse o pedido: sem informação    │
+     * │ obrigatória a vaga NÃO sai da fila, venha ela do corpo ou já esteja gravada.               │
+     * └────────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    const corpoCompleto = dto !== undefined && this.corpoTrazCamposDaVaga(dto);
+    /*
+     * AS LEITURAS DE CATÁLOGO FICAM FORA DA TRANSAÇÃO, como a conferência do cliente e pelo mesmo
+     * motivo: elas respondem sobre cadastros que não mudam no intervalo, e nenhuma delas escreve.
+     * O que acontece DENTRO, sob a linha travada, é a decisão e a escrita.
+     */
+    const cidade = corpoCompleto ? await this.resolverCidade(dto!.cidadeId) : null;
+    const linhaServicoId = corpoCompleto ? await this.resolverLinhaServico(dto!.linhaServicoId) : null;
+    const herdaveis = corpoCompleto
+      ? await this.resolverHerdaveis(dto!)
+      : { segmentoId: null, comercialId: null };
+    /*
+     * O MAPEAMENTO É O MESMO DA TRILHA (`camposDaTrilha`), e não uma segunda cópia: é ele que
+     * guarda a higiene de campo inteira (escape do "Outros", tempo de contrato só no vínculo com
+     * prazo, motivo e CPF do substituído só no temporário, região conferida contra a UF). Uma
+     * segunda cópia aqui limparia coisas diferentes das que a abertura limpa, e a divergência só
+     * apareceria no banco.
+     */
+    const camposDoCorpo = corpoCompleto
+      ? this.camposDaTrilha(regua, dto!, codigoAbertura, cidade, linhaServicoId, herdaveis)
+      : null;
+    // O CÓDIGO DA VAGA É ÚNICO NO SISTEMA: sem esta conferência, o código digitado na liberação
+    // bateria no índice unique e viraria 500 genérico no meio da transação.
+    if (camposDoCorpo) await this.travaDuplicidadeDeCodigo(camposDoCorpo.codigo, id);
+    const beneficios = corpoCompleto ? await this.validaBeneficios(dto!.beneficios ?? []) : [];
+
     await this.db.transaction(async (tx) => {
       const [vaga] = await tx
-        .select({ id: vagas.id, status: vagas.status, codCliente: vagas.codCliente })
+        .select({
+          id: vagas.id,
+          status: vagas.status,
+          codCliente: vagas.codCliente,
+          /*
+           * OS CAMPOS DA RÉGUA SÃO LIDOS SOB A LINHA TRAVADA, e não da fotografia que a tela viu:
+           * é com eles que o corpo é MESCLADO antes de a régua perguntar o que falta. Sem isto, a
+           * liberação sem corpo não teria contra o que cobrar os onze, e a que vem com corpo não
+           * saberia que a meta e o cliente já existiam.
+           */
+          codigo: vagas.codigo,
+          nomeDivulgacao: vagas.nomeDivulgacao,
+          cargoId: vagas.cargoId,
+          posicoesOficiais: vagas.posicoesOficiais,
+          posicoesBanco: vagas.posicoesBanco,
+          natureza: vagas.natureza,
+          sazonalidade: vagas.sazonalidade,
+          linhaServicoId: vagas.linhaServicoId,
+          dataAbertura: vagas.dataAbertura,
+          dataLimite: vagas.dataLimite,
+        })
         .from(vagas)
         .where(eq(vagas.id, id))
         .for("update");
@@ -3097,9 +3240,71 @@ export class VagasService {
         );
       }
 
+      /*
+       * ┌─ A MESCLA, E ELA ACONTECE ANTES DE QUALQUER ESCRITA ─────────────────────────────────────┐
+       * │ O que vai ser GRAVADO é o que a régua confere, e não uma composição parecida: conferir a │
+       * │ mescla e gravar outra coisa deixaria passar exatamente o campo que o corpo não mandou e  │
+       * │ o `camposDaTrilha` limparia. Duas coisas vêm da LINHA TRAVADA, não do corpo:             │
+       * │   . o CLIENTE, que é a decisão que esta porta sempre registrou (e pode já estar na vaga);│
+       * │   . a META OFICIAL, pela MESMA exceção da trilha (`metaOficialDaTrilha`): corpo sem o    │
+       * │     campo PRESERVA o número, porque apagá-lo deixa o fechamento sem gate nenhum e o      │
+       * │     rastro não sabe escrever "virou nulo".                                                │
+       * └──────────────────────────────────────────────────────────────────────────────────────────┘
+       */
+      const campos = camposDoCorpo
+        ? {
+            ...camposDoCorpo,
+            codCliente: clienteFinal,
+            posicoesOficiais: this.metaOficialDaTrilha(dto!, vaga),
+          }
+        : null;
+      /*
+       * ─ OS ONZE OBRIGATÓRIOS, COM O STATUS DE DESTINO ────────────────────────────────────────
+       *
+       * O STATUS QUE A RÉGUA VÊ É O DA ABERTURA, nunca o atual: com o código da FILA ela cairia no
+       * ramo do rascunho e não cobraria NADA, que é precisamente o buraco desta porta. A mensagem
+       * sai igual à da publicação, com a LISTA INTEIRA de uma vez, porque quem preenche quarenta
+       * campos não descobre as pendências uma por uma.
+       */
+      this.travaObrigatorios(
+        regua,
+        campos ?? { ...vaga, codCliente: clienteFinal, status: codigoAbertura },
+        codigoAbertura,
+      );
+
+      /*
+       * ┌─ A META NÃO DESCE ABAIXO DO ENTREGUE, TAMBÉM POR AQUI, E COM O MESMO RASTRO ────────────┐
+       * │ Esta porta passa a ser o TERCEIRO escritor de `posicoes_oficiais` (os outros dois são a │
+       * │ trilha e a rota das posições, as duas com trava e rastro desde a auditoria de 09/09).   │
+       * │ A vaga na FILA RECEBE CANDIDATO (`PENDENTE_REVISAO` tem `recebeCandidato: true`, e é    │
+       * │ obrigatório que tenha: é nela que a varredura pendura quem se inscreveu), então liberar │
+       * │ com um número menor baixaria a meta sem uma linha em lugar nenhum, e o fechamento       │
+       * │ passaria pela porta normal, sem Master. As duas peças são as que já existem, aplicadas  │
+       * │ na porta que ficou de fora, e as duas decidem ANTES da escrita.                          │
+       * └──────────────────────────────────────────────────────────────────────────────────────────┘
+       */
+      const reducao = campos ? this.reducaoDeMeta(vaga, campos) : null;
+      if (campos) {
+        const ocupacao =
+          (await this.ocupacaoPorVaga([{ id, posicoesOficiais: vaga.posicoesOficiais }])).get(id) ??
+          this.ocupacaoVazia(id, vaga.posicoesOficiais);
+        const excesso = excessoDePosicoes(
+          {
+            vagasFechadas: ocupacao.finalizadasOficial,
+            vagasFechadasBanco: ocupacao.finalizadasBanco,
+          },
+          { posicoesOficiais: campos.posicoesOficiais, posicoesBanco: campos.posicoesBanco },
+        );
+        if (excesso) throw new BadRequestException(this.mensagemDeExcesso(excesso));
+      }
+
       await tx
         .update(vagas)
         .set({
+          // O FORMULÁRIO INTEIRO E A SAÍDA DA FILA NA MESMA ESCRITA: ou a vaga sai COMPLETA, ou ela
+          // não sai. Duas chamadas deixariam a vaga preenchida e ainda na fila quando a segunda
+          // falhasse, com a retentativa tendo de adivinhar onde parou.
+          ...(campos ?? {}),
           status: codigoAbertura,
           atualizadoEm: new Date(),
           // O VÍNCULO É GRAVADO NA MESMA TRANSAÇÃO da saída da fila: ou a vaga sai COM cliente, ou
@@ -3107,6 +3312,35 @@ export class VagasService {
           ...(clienteDoCorpo !== "" ? { codCliente: clienteDoCorpo } : {}),
         })
         .where(eq(vagas.id, id));
+
+      // O RASTRO DA REDUÇÃO VAI NA MESMA TRANSAÇÃO DA ESCRITA: rastro que pode FALTAR quando a
+      // escrita deu certo não é rastro, seria a meta menor sem ninguém para responder por ela.
+      if (reducao) {
+        await tx.insert(vagaMetaReducoes).values({
+          vagaId: id,
+          deOficiais: reducao.deOficiais,
+          paraOficiais: reducao.paraOficiais,
+          deBanco: reducao.deBanco,
+          paraBanco: reducao.paraBanco,
+          porId: user.id,
+        });
+      }
+
+      /*
+       * OS BENEFÍCIOS SÃO SUBSTITUÍDOS, como na trilha: o formulário manda a lista COMPLETA do que
+       * está marcado. SÓ NO CAMINHO DO CORPO COMPLETO: no gesto antigo (sem corpo) não há lista
+       * nenhuma, e apagar seria tirar da vaga o que ninguém pediu para tirar.
+       */
+      if (corpoCompleto) {
+        await tx.delete(vagaBeneficio).where(eq(vagaBeneficio.vagaId, id));
+        if (beneficios.length > 0) {
+          await tx
+            .insert(vagaBeneficio)
+            .values(
+              beneficios.map((b) => ({ vagaId: id, beneficioId: b.beneficioId, valor: b.valor })),
+            );
+        }
+      }
 
       await tx.insert(asVagaStatusEventos).values({
         vagaId: id,
@@ -3119,6 +3353,26 @@ export class VagasService {
     });
 
     return this.devolverVaga(id, "Vaga liberada, mas não foi encontrada na listagem.");
+  }
+
+  /**
+   * ─ O CORPO DA LIBERAÇÃO TRAZ O FORMULÁRIO, OU SÓ O CLIENTE? ───────────────────────────────────
+   *
+   * A PERGUNTA EXISTE PORQUE A REGRA DA TRILHA É "O CORPO É COMPLETO": campo ausente é campo
+   * LIMPO. Aplicada a um corpo que só traz o cliente (o gesto antigo, que continua valendo), essa
+   * regra APAGARIA a vaga inteira na saída da fila, e o dano seria silencioso: a vaga sairia
+   * publicada e vazia.
+   *
+   * O TESTE É POR CAMPO PRESENTE, e não por campo preenchido: mandar `codigo: ""` é dizer "limpe o
+   * código", e isso é o formulário falando. `codCliente` NÃO conta, porque ele é o corpo antigo; e
+   * `status` também não, porque ele é herdado do `CreateVagaDto`, é IGNORADO por esta rota (o
+   * destino é sempre o papel ABERTURA) e sozinho não faz de um corpo um formulário.
+   */
+  private corpoTrazCamposDaVaga(dto: LiberarVagaRevisaoDto): boolean {
+    return Object.entries(dto as Record<string, unknown>).some(
+      ([chave, valor]) =>
+        chave !== "codCliente" && chave !== "status" && valor !== undefined,
+    );
   }
 
   /**

@@ -746,7 +746,7 @@ export const MENUS: MenuDef[] = [
      * `grupo === "OPERACAO"`, então este menu fica fora de qualquer backfill futuro por construção.
      */
     codigo: "as-vagas-revisao",
-    rotulo: "Vagas Pendentes De Revisão",
+    rotulo: "Liberar Vaga",
     href: "/as/vagas-pendentes-revisao",
     grupo: "SELECAO",
     ordem: 42,

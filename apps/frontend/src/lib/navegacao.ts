@@ -198,7 +198,7 @@ export const SELECAO: NavDef[] = [
   {
     href: "/as/vagas-pendentes-revisao",
     icon: "alert",
-    label: "Vagas Pendentes De Revisão",
+    label: "Liberar Vaga",
     codigo: "as-vagas-revisao",
     descricao: "Vagas que entraram sozinhas do Pandapé e esperam cliente e liberação.",
   },

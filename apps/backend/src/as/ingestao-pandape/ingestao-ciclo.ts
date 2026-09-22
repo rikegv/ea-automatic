@@ -4,10 +4,11 @@ import {
   normalizarChaveExterna,
   type FonteExterna,
 } from "../../domain/as-etapa-externa";
-import type {
-  DependenciasDaVarredura,
-  Escrita,
-  ResumoDoCiclo,
+import {
+  VARIAVEL_DO_SAL_DA_MARCA,
+  type DependenciasDaVarredura,
+  type Escrita,
+  type ResumoDoCiclo,
 } from "./ingestao-portas";
 import {
   projetarInscricao,
@@ -105,6 +106,31 @@ export interface VagaEspelhada {
   vagaId: string;
 }
 
+/**
+ * ─ O SAL DA MARCA, FAIL-CLOSED NA PARTIDA ──────────────────────────────────────────────────────
+ *
+ * Devolve o sal, ou `null` quando ele falta. `null` RECUSA a varredura antes da primeira página,
+ * no mesmo lugar em que a falta da data de corte já a mantém inerte.
+ *
+ * ┌─ AS DUAS SAÍDAS FÁCEIS ESTÃO FECHADAS, E CADA UMA REABRIRIA UM DEFEITO CONHECIDO ────────────┐
+ * │ "SEGUIR SEM MARCA" devolveria a perda silenciosa de 35% da entrada: a recusa por de/para       │
+ * │ deixaria de ser registrada e ninguém saberia que há configuração faltando.                     │
+ * │ "SEGUIR SEM SAL" seria degradação silenciosa para o estado inseguro, justo no momento em que a │
+ * │ configuração falhou: a marca voltaria a ser um digesto CONFIRMÁVEL por quem suspeita do nome.  │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * A RECUSA NOMEIA A VARIÁVEL QUE FALTA, JAMAIS O VALOR DELA (§A.6).
+ */
+function salDaVarredura(deps: DependenciasDaVarredura, resumo: ResumoDoCiclo): string | null {
+  const sal = (deps.salDaMarca ?? "").trim();
+  if (sal !== "") return sal;
+  resumo.erros += 1;
+  deps.log.erro("varredura recusada: sal da marca de pasta ausente", {
+    variavel: VARIAVEL_DO_SAL_DA_MARCA,
+  });
+  return null;
+}
+
 export function novoResumo(): ResumoDoCiclo {
   return {
     vagasVarridas: 0,
@@ -152,6 +178,8 @@ export async function descobrirVagasAtivas(
   deps: DependenciasDaVarredura,
   resumo: ResumoDoCiclo,
 ): Promise<VagaEspelhada[]> {
+  // FAIL-CLOSED ANTES DA PRIMEIRA REQUISIÇÃO: sem o sal, nada é lido e nada é escrito.
+  if (salDaVarredura(deps, resumo) === null) return [];
   const resposta = await deps.http.requisitar("GET", CAMINHO_VAGAS, {
     VacancyStatus: 2,
     Page: 1,
@@ -224,6 +252,12 @@ export async function varrerPaginaDaVaga(
   pagina: number,
   resumo: ResumoDoCiclo,
 ): Promise<ResultadoDaPagina> {
+  /*
+   * A MESMA GUARDA AQUI, E ELA NÃO É REDUNDANTE: em produção a volta é ROLANTE, e um job de PÁGINA
+   * é uma partida própria, que entra por esta função sem passar pela descoberta.
+   */
+  const sal = salDaVarredura(deps, resumo);
+  if (sal === null) return { proximaPagina: null };
   const resposta = await deps.http.requisitar("GET", CAMINHO_INSCRICOES, {
     IdVacancy: vaga.idVacancy,
     Page: pagina,
@@ -262,7 +296,7 @@ export async function varrerPaginaDaVaga(
     }
     if (maior === null || ehPosterior(inscricao.insertDate, maior)) maior = inscricao.insertDate;
     try {
-      await ingerirInscricao(deps, resumo, inscricao, vaga.vagaId, pastas);
+      await ingerirInscricao(deps, resumo, inscricao, vaga.vagaId, pastas, sal);
     } catch (err) {
       /*
        * §A.6 NO CAMINHO MENOS VIGIADO DE TODOS. O erro do driver carrega `detail` com o VALOR que
@@ -370,6 +404,8 @@ async function ingerirInscricao(
   inscricao: InscricaoProjetada,
   vagaId: string,
   pastas: Map<number, string>,
+  /** O sal da marca, já conferido na partida. Vem por PARÂMETRO, nunca do ambiente. */
+  sal: string,
 ): Promise<void> {
   /*
    * ─ A ETAPA É FAIL-CLOSED, E SEM DE/PARA NADA É ESCRITO ────────────────────────────────────
@@ -397,13 +433,13 @@ async function ingerirInscricao(
      * sobe é a MARCA da chave, nunca a chave: o nome da pasta é texto livre digitado lá fora, e
      * "Reservados Fulano de Tal" poria nome de candidato num log permanente, fora do alcance do
      * `aplicarRetencao` (achado R1 do `seguranca`; a razão inteira está em `marcaDeChaveExterna`).
-     * A marca é estável, então a repetição dela entre passadas continua dizendo o que interessa:
-     * há pasta sem tradução, são estas, são sempre as mesmas.
+     * A marca é estável ENTRE PASSADAS (o sal é fixo por instalação), então a repetição dela
+     * continua dizendo o que interessa: há pasta sem tradução, são estas, são sempre as mesmas.
      *
      * O CICLO NÃO CRIA LINHA DE DE/PARA SOZINHO: `rotulo_externo` e `motivo_padrao` são configuração
      * REVISADA, e o valor acaba dentro da candidatura de uma pessoa.
      */
-    const marca = chave === "" ? "" : marcaDeChaveExterna(chave);
+    const marca = chave === "" ? "" : marcaDeChaveExterna(chave, sal);
     if (marca !== "" && !resumo.etapasNaoMapeadas.includes(marca)) {
       resumo.etapasNaoMapeadas.push(marca);
     }

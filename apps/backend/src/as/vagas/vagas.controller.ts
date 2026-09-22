@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post } from "@nestjs/common";
+import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post } from "@nestjs/common";
 import { CurrentUser, Roles } from "../../auth/decorators";
 import type { AuthUser } from "../../auth/auth.types";
 import {
@@ -306,5 +306,30 @@ export class VagasController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.vagas.corrigirLiberacaoDaRevisao(id, dto, user);
+  }
+
+  /**
+   * O DETALHE DE UMA VAGA, com o `substituidoCpf` que a LISTA não carrega mais (correção de LGPD
+   * ativo, 22/09). A ficha de edição, o clone e a liberação buscam AQUI o CPF do substituído quando o
+   * consultor abre uma vaga; a `@Get()` da lista parou de descer o CPF de todas as vagas para todos.
+   *
+   * ┌─ DECLARADA POR ÚLTIMO, E ISSO É A REGRA, NÃO ARRUMAÇÃO ────────────────────────────────────┐
+   * │ O Nest casa rotas na ORDEM de declaração. Um `@Get(":id")` de SEGMENTO ÚNICO declarado antes │
+   * │ engoliria "opcoes", "contexto", "pendentes-revisao" e "pendentes-revisao/contagem" como se   │
+   * │ fossem um id. Por isso ele vem DEPOIS de toda rota de caminho literal. As rotas `:id/...`     │
+   * │ (dois segmentos) e os `@Post`/`@Patch` de `:id` não conflitam: método ou profundidade         │
+   * │ diferente. É o mesmo cuidado que o comentário de `pendentes-revisao` já registra.             │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * `ParseUUIDPipe` recusa id malformado com 400 limpo, e é defesa em profundidade: só UUID bem
+   * formado chega à consulta do service.
+   *
+   * SEM `@Roles`, no MESMO regime da lista: a controller inteira é reivindicada pelo menu `as-vagas`
+   * (`VagasController.*`, `domain/menus`), então quem não pode ver a lista não pode ver o detalhe. O
+   * detalhe não afrouxa nada: só devolve a vaga que a lista já devolveria, com um campo a mais.
+   */
+  @Get(":id")
+  detalhe(@Param("id", ParseUUIDPipe) id: string) {
+    return this.vagas.detalhe(id);
   }
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import type { VagaContextoAs, VagaDetalhe } from "@ea/shared-types";
 import { useAuth } from "@/lib/auth-context";
 import { apiFetch } from "@/lib/api";
 import { PageHead } from "@/components/ui/PageHead";
@@ -14,11 +15,14 @@ import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
 import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
 import { cn } from "@/lib/cn";
 import { dataBr } from "@/lib/as-candidatos";
+import { TrilhaDaVaga, type Opcoes } from "@/components/as/vagas/TrilhaDaVaga";
+import { useLinhasServico } from "@/lib/as-linhas-servico";
+import { useSegmentos } from "@/lib/as-segmentos";
+import { useStatusVaga } from "@/lib/as-status-vaga";
 import {
   carregarFilaDeRevisao,
   carregarLiberadasDaRevisao,
   corrigirLiberacaoDeRevisao,
-  liberarVagaPendenteRevisao,
   reguaDeLiberacao,
   type VagaEmRevisao,
 } from "@/lib/as-vagas-revisao";
@@ -29,7 +33,17 @@ import {
  * A FILA DE TRABALHO DE QUEM CONFERE O QUE A VARREDURA TROUXE. A varredura do Pandapé espelha, no
  * EA, vagas que NINGUÉM abriu aqui: elas nascem no status `PENDENTE_REVISAO` e com o `cod_cliente`
  * NULO, porque o cliente não tem caminho na API do ATS (medido). A tela existe para uma pessoa
- * vincular o cliente que falta e liberar a vaga para a operação.
+ * completar a vaga e liberá-la para a operação.
+ *
+ * ┌─ A VAGA CHEGA INCOMPLETA, E NÃO SÓ SEM CLIENTE (rodada 2) ─────────────────────────────────┐
+ * │ O ATS não tem benefícios, escala, salário nem endereço. Enquanto o "Revisar vaga" abria um  │
+ * │ modal de UM campo, liberar era tirar da fila uma vaga vazia: ela ia para a Central de Vagas │
+ * │ sem nada do que a abertura pede, e o buraco só aparecia lá na frente.                        │
+ * │                                                                                              │
+ * │ Agora ele abre a TRILHA INTEIRA (`components/as/vagas/TrilhaDaVaga`, o MESMO formulário da   │
+ * │ Central de Vagas, §A.26: reusar e nunca duplicar) no modo `liberacao`, e sem os obrigatórios │
+ * │ a vaga NÃO sai da fila. Quem não termina numa sentada usa "Salvar sem liberar".              │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
  *
  * O MODELO É A LIBERAÇÃO ADMISSIONAL (`app/(app)/liberacao/page.tsx`), e o padrão copiado é o dela:
  * FILA, CONTADOR e AÇÃO INDIVIDUAL. A fila é o próprio estado, não uma marcação: liberou, a vaga
@@ -57,13 +71,20 @@ import {
  */
 
 /** O cliente como o `/as/vagas/opcoes` serve. É o MESMO catálogo que a Central de Vagas consome. */
-interface OpcaoCliente {
-  codCliente: string;
-  rotulo: string;
-  cnpj: string | null;
-}
+type OpcaoCliente = Opcoes["clientes"][number];
 
 type Aba = "pendentes" | "liberadas";
+
+/** O catálogo vazio, enquanto a leitura não volta. Mesma forma da Central de Vagas. */
+const OPCOES_VAZIAS: Opcoes = {
+  cargos: [],
+  clientes: [],
+  beneficios: [],
+  motivos: [],
+  consultores: [],
+  escalas: [],
+  comerciais: [],
+};
 
 export default function VagasPendentesDeRevisaoPage() {
   const { token, isAdmin } = useAuth();
@@ -71,31 +92,72 @@ export default function VagasPendentesDeRevisaoPage() {
   const [aba, setAba] = useState<Aba>("pendentes");
   const [pendentes, setPendentes] = useState<VagaEmRevisao[]>([]);
   const [liberadas, setLiberadas] = useState<VagaEmRevisao[]>([]);
-  const [clientes, setClientes] = useState<OpcaoCliente[]>([]);
+  /**
+   * ─ O CATÁLOGO INTEIRO, E NÃO SÓ OS CLIENTES (rodada 2) ────────────────────────────────────────
+   *
+   * A tela lia `/as/vagas/opcoes` só pela lista de clientes, porque o modal só pedia o cliente.
+   * Agora ela monta a TRILHA INTEIRA, que pede cargo, benefícios, motivos, escalas e comerciais: é
+   * o MESMO endpoint, servindo o MESMO objeto, e a leitura continua sendo UMA.
+   */
+  const [opcoes, setOpcoes] = useState<Opcoes>(OPCOES_VAZIAS);
+  const [contexto, setContexto] = useState<VagaContextoAs>({
+    papelAs: null,
+    nome: "",
+    contraparte: [],
+  });
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   const [busca, setBusca] = useState("");
 
-  const [revisarAlvo, setRevisarAlvo] = useState<VagaEmRevisao | null>(null);
+  /**
+   * A VAGA A LIBERAR, agora como `VagaDetalhe` (correção de LGPD ativo, 22/09/2026). O
+   * `substituidoCpf` SAIU da fila (`VagaEmRevisao`, que é o item da lista): ele descia CRU para todo
+   * consultor. A trilha de liberação preenche o campo com o CPF, então ao clicar "Revisar vaga" a
+   * tela busca a vaga por `GET /as/vagas/:id`, UMA por vez, e só então monta a trilha.
+   */
+  const [revisarAlvo, setRevisarAlvo] = useState<VagaDetalhe | null>(null);
   const [corrigirAlvo, setCorrigirAlvo] = useState<VagaEmRevisao | null>(null);
+  /**
+   * A ESPERA E A FALHA DA BUSCA DO DETALHE. `carregandoRevisao` segura o botão enquanto o detalhe não
+   * chega, e `erroRevisao` mostra uma mensagem se a busca falhar, sem abrir a trilha com dado velho.
+   */
+  const [carregandoRevisao, setCarregandoRevisao] = useState(false);
+  const [erroRevisao, setErroRevisao] = useState<string | null>(null);
+
+  /**
+   * ─ OS TRÊS CATÁLOGOS QUE A TRILHA RECEBE PRONTOS, pelos ganchos memoizados por carga de página ─
+   *
+   * ELES NÃO SÃO LIDOS DENTRO DA TRILHA de propósito (o comentário de `CatalogosDaTrilha` explica):
+   * montados lá, o seletor de Linha De Serviço piscaria "Carregando as linhas…" e o de Status
+   * abriria vazio a cada abertura. Aqui em cima eles são lidos UMA vez por carga de página, e a
+   * trilha nasce com tudo na mão.
+   */
+  const { status: catalogoStatus } = useStatusVaga(token);
+  const { ativas: linhasAtivas, carregando: carregandoLinhas } = useLinhasServico(token);
+  const { segmentos } = useSegmentos(token);
 
   const carregar = useCallback(async () => {
     setCarregando(true);
     setErro(null);
     try {
       /*
-       * AS TRÊS LEITURAS EM PARALELO, e a das LIBERADAS só para quem pode corrigir: pedir ao
+       * AS QUATRO LEITURAS EM PARALELO, e a das LIBERADAS só para quem pode corrigir: pedir ao
        * servidor uma lista que a tela não vai desenhar é gastar consulta e, pior, é alcançar uma
-       * rota restrita com quem não tem o papel, o que devolveria 403 e derrubaria as outras duas
+       * rota restrita com quem não tem o papel, o que devolveria 403 e derrubaria as outras
        * junto no `Promise.all`.
+       *
+       * O `contexto` entra na mesma leva porque a trilha o exige (é ele que diz o papel de A&S de
+       * quem está preenchendo). Ele é o mesmo endpoint que a Central de Vagas já lê.
        */
-      const [fila, opcoes, jaLiberadas] = await Promise.all([
+      const [fila, ops, ctx, jaLiberadas] = await Promise.all([
         carregarFilaDeRevisao(token),
-        apiFetch<{ clientes: OpcaoCliente[] }>("/as/vagas/opcoes", { token }),
+        apiFetch<Opcoes>("/as/vagas/opcoes", { token }),
+        apiFetch<VagaContextoAs>("/as/vagas/contexto", { token }),
         isAdmin ? carregarLiberadasDaRevisao(token) : Promise.resolve([] as VagaEmRevisao[]),
       ]);
       setPendentes(fila);
-      setClientes(opcoes.clientes);
+      setOpcoes(ops);
+      setContexto(ctx);
       setLiberadas(jaLiberadas);
     } catch (e) {
       setErro(e instanceof Error ? e.message : "Não foi possível carregar a fila de revisão.");
@@ -109,6 +171,25 @@ export default function VagasPendentesDeRevisaoPage() {
   }, [carregar]);
 
   /**
+   * ABRE A TRILHA DE LIBERAÇÃO com a vaga COMPLETA (correção de LGPD ativo). A fila não traz mais o
+   * `substituidoCpf`, então a tela o busca por `GET /as/vagas/:id`, UMA por vez, no clique. Falhou a
+   * busca, a trilha NÃO abre: o `erroRevisao` fica na tela e ninguém libera com o campo em branco por
+   * engano.
+   */
+  async function abrirRevisao(v: VagaEmRevisao) {
+    setErroRevisao(null);
+    setCarregandoRevisao(true);
+    try {
+      const detalhe = await apiFetch<VagaDetalhe>(`/as/vagas/${v.id}`, { token });
+      setRevisarAlvo(detalhe);
+    } catch {
+      setErroRevisao("Não foi possível abrir a vaga. Tente de novo.");
+    } finally {
+      setCarregandoRevisao(false);
+    }
+  }
+
+  /**
    * AS OPÇÕES DE CLIENTE VÊM DO ENDPOINT, NUNCA DAS LINHAS CARREGADAS (§A.37). Derivadas das linhas
    * elas seriam a lista VAZIA, porque é exatamente o cliente que falta em toda vaga desta fila.
    *
@@ -118,6 +199,7 @@ export default function VagasPendentesDeRevisaoPage() {
    * achando por ele.
    */
   const optClientes = useMemo(() => {
+    const clientes: OpcaoCliente[] = opcoes.clientes;
     const porNome = new Map<string, number>();
     const porNomeCnpj = new Map<string, number>();
     for (const c of clientes) {
@@ -137,7 +219,13 @@ export default function VagasPendentesDeRevisaoPage() {
         busca: c.codCliente,
       };
     });
-  }, [clientes]);
+  }, [opcoes.clientes]);
+
+  /** A lista de cargos como a trilha a consome. Mesma derivação da Central de Vagas. */
+  const optCargos = useMemo(
+    () => opcoes.cargos.map((c) => ({ value: c.id, label: c.nome })),
+    [opcoes.cargos],
+  );
 
   const linhas = aba === "pendentes" ? pendentes : liberadas;
 
@@ -176,7 +264,7 @@ export default function VagasPendentesDeRevisaoPage() {
       <PageHead
         eyebrow="Atração e Seleção"
         title="Vagas Pendentes De Revisão"
-        subtitle="Vagas que entraram sozinhas pela varredura do Pandapé e ainda não foram conferidas. Vincule o cliente que falta e libere, uma de cada vez."
+        subtitle="Vagas que entraram sozinhas pela varredura do Pandapé e ainda não foram conferidas. O ATS manda a vaga incompleta: complete o que falta e libere, uma de cada vez."
       />
 
       {/* O CONTADOR, que é o que a fila promete: quantas esperam, e de quantas falta o cliente. Não
@@ -320,7 +408,7 @@ export default function VagasPendentesDeRevisaoPage() {
                         {aba === "pendentes" ? (
                           <Button
                             className="w-full whitespace-nowrap py-2"
-                            onClick={() => setRevisarAlvo(v)}
+                            onClick={() => void abrirRevisao(v)}
                           >
                             Revisar vaga
                           </Button>
@@ -343,17 +431,67 @@ export default function VagasPendentesDeRevisaoPage() {
         </div>
       </GlassCard>
 
+      {/* ── REVISAR A VAGA: A TRILHA INTEIRA, E NÃO MAIS UM MODAL DE UM CAMPO ─────────────────
+          O QUE MUDOU E POR QUÊ: a vaga vem do Pandapé INCOMPLETA (o ATS não tem benefícios, escala,
+          salário nem endereço), e o modal só pedia o cliente. Quem liberasse tirava da fila uma
+          vaga vazia. Agora a tela pede TUDO o que a abertura pede, pelo MESMO formulário da Central
+          de Vagas (§A.26: reusar, nunca duplicar), e sem obrigatório ela NÃO libera.
+
+          O PREFILL NÃO PRECISA DE ENDPOINT NOVO: a fila já devolve o `VagaListItem` inteiro, que é
+          exatamente o que a trilha consome.
+
+          MONTADA SÓ QUANDO ABERTA, COM `key` NA VAGA: é a chave que faz o formulário nascer limpo
+          a cada abertura, em vez de depender de alguém lembrar de zerar campo por campo. */}
       {revisarAlvo && (
-        <RevisarVagaModal
-          vaga={revisarAlvo}
-          clientes={optClientes}
+        <TrilhaDaVaga
+          key={revisarAlvo.id}
+          modo={{ tipo: "liberacao", vaga: revisarAlvo }}
+          catalogos={{
+            opcoes,
+            contexto,
+            segmentos,
+            optClientes,
+            optCargos,
+            statusVaga: catalogoStatus,
+            linhasAtivas,
+            carregandoLinhas,
+          }}
           token={token}
-          onClose={() => setRevisarAlvo(null)}
-          onLiberada={() => {
+          onFechar={() => setRevisarAlvo(null)}
+          /* Serve aos DOIS destinos: "Salvar sem liberar" (a vaga fica na fila, com os campos
+             gravados) e "Liberar vaga" (ela sai). A releitura é a mesma, e é ela que faz a linha
+             sumir da fila ou voltar atualizada, sem a tela ter de adivinhar qual foi o gesto. */
+          onGravada={async () => {
             setRevisarAlvo(null);
-            void carregar();
+            await carregar();
           }}
         />
+      )}
+
+      {/* A ESPERA E A FALHA DA BUSCA DO DETALHE AO REVISAR (correção de LGPD ativo). O aviso de
+          espera não fecha por engano (§A.41): some sozinho quando o detalhe chega ou a busca falha. */}
+      {carregandoRevisao && (
+        <Modal onClose={() => {}} ariaLabel="Abrindo a vaga" className="max-w-sm">
+          <div className="p-6 text-center text-faint">Abrindo a vaga…</div>
+        </Modal>
+      )}
+
+      {erroRevisao && (
+        <Modal onClose={() => setErroRevisao(null)} ariaLabel="Erro ao abrir a vaga" className="max-w-sm">
+          <div className="p-5">
+            <p
+              className="rounded-xl border border-[var(--border)] bg-[rgba(214,69,69,0.1)] px-3 py-2 text-sm text-danger"
+              role="alert"
+            >
+              {erroRevisao}
+            </p>
+            <div className="mt-4 flex justify-end">
+              <Button variant="secondary" onClick={() => setErroRevisao(null)}>
+                Fechar
+              </Button>
+            </div>
+          </div>
+        </Modal>
       )}
 
       {corrigirAlvo && (
@@ -374,113 +512,6 @@ export default function VagasPendentesDeRevisaoPage() {
 
 /** As opções já prontas para o `Combobox`, montadas uma vez pela página. */
 type OpcoesCliente = { value: string; label: string; hint?: string; busca?: string }[];
-
-/**
- * ─ REVISAR A VAGA: vincular o cliente e liberar ────────────────────────────────────────────────
- *
- * §A.41: modal de PREENCHIMENTO, então ele fecha por "Cancelar" ou pela ação de salvar, e NUNCA por
- * clique fora (quem garante isso é o `ui/Modal`, para o sistema inteiro). A tecla Escape continua
- * fechando, que é a saída de teclado.
- *
- * O BOTÃO NASCE DESABILITADO ENQUANTO NÃO HÁ CLIENTE, com a frase ao lado dizendo por quê. A trava
- * é do servidor; isto é o aviso, e os dois existem de propósito.
- */
-function RevisarVagaModal({
-  vaga,
-  clientes,
-  token,
-  onClose,
-  onLiberada,
-}: {
-  vaga: VagaEmRevisao;
-  clientes: OpcoesCliente;
-  token?: string | null;
-  onClose: () => void;
-  onLiberada: () => void;
-}) {
-  const [codCliente, setCodCliente] = useState<string>(vaga.codCliente ?? "");
-  const [salvando, setSalvando] = useState(false);
-  const [erro, setErro] = useState<string | null>(null);
-
-  const regua = reguaDeLiberacao({ codCliente: codCliente || null });
-
-  async function liberar() {
-    if (!regua.pode) return;
-    setSalvando(true);
-    setErro(null);
-    try {
-      await liberarVagaPendenteRevisao(vaga.id, codCliente, token);
-      onLiberada();
-    } catch (e) {
-      // A MENSAGEM É A DO BACKEND, sempre: é ela que sabe por que recusou, e reescrever aqui criaria
-      // uma segunda versão da mesma regra, que envelhece primeiro.
-      setErro(e instanceof Error ? e.message : "Não foi possível liberar a vaga.");
-    } finally {
-      setSalvando(false);
-    }
-  }
-
-  return (
-    <Modal onClose={onClose} ariaLabel="Revisar a vaga" className="max-w-[560px]">
-      <div className="p-5">
-        <h2 className="text-lg font-extrabold">Revisar A Vaga</h2>
-        <p className="mt-1 text-sm text-dim">
-          Esta vaga entrou sozinha pela varredura do Pandapé. Confira os dados, escolha o cliente e
-          libere para a operação.
-        </p>
-
-        <dl className="mt-4 grid grid-cols-2 gap-3 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-3 text-sm">
-          <Campo rotulo="Vaga" valor={vaga.codigo} />
-          <Campo rotulo="Nome de divulgação" valor={vaga.nomeDivulgacao} />
-          <Campo rotulo="Cargo" valor={vaga.cargoNome} />
-          <Campo
-            rotulo="Cidade"
-            valor={vaga.cidadeNome ? `${vaga.cidadeNome}${vaga.cidadeUf ? `/${vaga.cidadeUf}` : ""}` : null}
-          />
-          <Campo rotulo="Posições oficiais" valor={vaga.posicoesOficiais?.toString() ?? null} />
-          <Campo rotulo="Candidatos em processo" valor={String(vaga.ocupacao?.emSelecao ?? 0)} />
-        </dl>
-
-        <label className="mt-4 block text-[13px] font-semibold" htmlFor="cliente-da-revisao">
-          Cliente
-        </label>
-        <Combobox
-          id="cliente-da-revisao"
-          value={codCliente}
-          onChange={(v) => setCodCliente(v)}
-          options={clientes}
-          placeholder="Escolher o cliente"
-          ariaLabel="Cliente da vaga"
-          searchable
-          limpavel
-          invalido={!regua.pode}
-          className="mt-1"
-        />
-        {!regua.pode && (
-          <p className="mt-2 flex items-start gap-1.5 text-[12.5px] text-warn-2">
-            <Icon name="alert" className="mt-[2px] h-3.5 w-3.5 flex-none" />
-            {regua.motivo}
-          </p>
-        )}
-
-        {erro && (
-          <p className="mt-3 rounded-lg border border-[rgba(220,38,38,0.35)] bg-[rgba(220,38,38,0.1)] px-3 py-2 text-[12.5px] text-danger">
-            {erro}
-          </p>
-        )}
-
-        <div className="mt-5 flex justify-end gap-2">
-          <Button variant="secondary" onClick={onClose} disabled={salvando}>
-            Cancelar
-          </Button>
-          <Button onClick={() => void liberar()} disabled={!regua.pode || salvando}>
-            {salvando ? "Liberando…" : "Vincular cliente e liberar"}
-          </Button>
-        </div>
-      </div>
-    </Modal>
-  );
-}
 
 /**
  * ─ A CORREÇÃO DO MASTER ────────────────────────────────────────────────────────────────────────

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { marcaDeChaveExterna, normalizarChaveExterna } from "../../domain/as-etapa-externa";
 import { executarCicloDeIngestao } from "./ingestao-ciclo";
-import { SENTINELA, criarMatch, criarMundo } from "./ingestao-varredura.tester-fake";
+import { SAL_DE_TESTE, SENTINELA, criarMatch, criarMundo } from "./ingestao-varredura.tester-fake";
 
 /**
  * ─ A PASTA SEM DE/PARA NÃO PODE IR PARA O LOG COM O NOME QUE VEIO DO ATS (achado R1) ───────────
@@ -78,7 +78,7 @@ describe("a recusa continua VISÍVEL para quem opera", () => {
     expect(
       resumo.etapasNaoMapeadas,
       "sem registro nenhum, a recusa fail-closed vira perda silenciosa de 35% da entrada",
-    ).toEqual([marcaDeChaveExterna(normalizarChaveExterna(PASTA_COM_NOME))]);
+    ).toEqual([marcaDeChaveExterna(normalizarChaveExterna(PASTA_COM_NOME), SAL_DE_TESTE)]);
   });
 
   it("a mesma pasta produz a MESMA marca na passada seguinte, que é o que diz 'são sempre as mesmas'", async () => {
@@ -88,8 +88,8 @@ describe("a recusa continua VISÍVEL para quem opera", () => {
   });
 
   it("pastas diferentes não colapsam numa marca só", () => {
-    const a = marcaDeChaveExterna(normalizarChaveExterna("Short List"));
-    const b = marcaDeChaveExterna(normalizarChaveExterna("Reservados"));
+    const a = marcaDeChaveExterna(normalizarChaveExterna("Short List"), SAL_DE_TESTE);
+    const b = marcaDeChaveExterna(normalizarChaveExterna("Reservados"), SAL_DE_TESTE);
     expect(a).not.toBe(b);
     expect(a).toMatch(/^[0-9a-f]{8}$/);
   });

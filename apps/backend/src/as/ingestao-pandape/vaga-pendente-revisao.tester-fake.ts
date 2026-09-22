@@ -1429,6 +1429,22 @@ export async function rodarLiberacao(
     status: cenario.naFila ? CODIGO.pendenteRevisao : CODIGO.abertura,
     cod_cliente: cenario.temCliente ? "CLI-SINTETICO" : null,
     codCliente: cenario.temCliente ? "CLI-SINTETICO" : null,
+    /*
+     * OS ONZE OBRIGATÓRIOS JÁ GRAVADOS, que é o estado de quem passou pela revisão e PODE sair da
+     * fila. A liberação passou a cobrar a régua da abertura antes de mover a vaga (a vaga do
+     * Pandapé chegava incompleta e saía incompleta), então uma vaga vazia aqui é recusada por um
+     * motivo que este bloco não está medindo: o que ele mede é o CLIENTE e o DESTINO.
+     */
+    codigo: "PS-SINTETICO-1",
+    nomeDivulgacao: "Vaga sintética já revisada",
+    cargoId: "00000000-0000-4000-8000-0000000000aa",
+    posicoesOficiais: 1,
+    posicoesBanco: 0,
+    natureza: "EFETIVA",
+    sazonalidade: "OPERACAO_PADRAO",
+    linhaServicoId: 1,
+    dataAbertura: "2026-09-01",
+    dataLimite: "2026-09-30",
   });
   const servico = criar(banco.db, cat.servico) as unknown as Record<
     string,

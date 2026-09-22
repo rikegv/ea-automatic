@@ -2442,18 +2442,22 @@ export interface VagaListItem {
   motivo: string | null;
   justificativaMotivo: string | null;
   tipoSubstituicao: VagaTipoSubstituicao | null;
-  substituidoNome: string | null;
   /**
-   * CPF DE QUEM SERÁ SUBSTITUÍDO, em dígitos ("12345678901"); a tela aplica a máscara na exibição.
-   *
-   * ELE PERSISTE, e isso é decisão do diretor (22/08), diferente do CPF de substituição da ADMISSÃO
-   * (`dados_vaga_folha.substituido_cpf`), que tem expurgo em 48h pela regra 10 da §A.3. Aqui a
-   * exigência é legal e continuada: o time de cadastro do ADM precisa do número para a folha e o
-   * eSocial. §A.6 continua valendo no resto: nunca vai para log, nunca sai em exportação.
-   *
-   * O EXPURGO DA ADMISSÃO NÃO FOI TOCADO por esta frente: são tabelas e regras diferentes.
+   * NOME do substituído. CONTINUA NA LISTA: é coluna VISÍVEL da Central de Vagas (o time precisa ver
+   * quem está sendo substituído sem abrir a ficha), e nome não é a chave nacional que o CPF é. O CPF,
+   * esse, SAIU da lista (ver abaixo).
    */
-  substituidoCpf: string | null;
+  substituidoNome: string | null;
+  /*
+   * O `substituidoCpf` SAIU DE `VagaListItem` (correção de LGPD ativo, 22/09/2026). Ele descia CRU na
+   * resposta da LISTA (`vagas.service.ts` projetava `substituidoCpf: v.substituidoCpf` sem guarda),
+   * para todo consultor a cada carga, e nenhuma coluna o mostrava: ele só alimentava a FICHA de
+   * edição. Isso é o oposto da minimização da §A.6.
+   *
+   * Agora o CPF só desce por `VagaDetalhe`, buscado UMA vaga por vez quando o consultor a abre para
+   * editar/clonar/liberar. A régua do diretor (22/08) continua: o CPF PERSISTE, o cadastro precisa
+   * dele para a folha e o eSocial, nunca vai a log nem a exportação. O que muda é só QUANDO ele desce.
+   */
   localTrabalho: string | null;
   /** UF escolhida no passo 4 (item 7). Comanda quais regiões a segunda lista oferece. */
   regiaoEstado: string | null;
@@ -2541,6 +2545,25 @@ export interface VagaListItem {
    * da conclusão de quem perguntou. O custo é nulo no caso comum, que é o array vazio.
    */
   metaReducoes: VagaMetaReducao[];
+}
+
+/**
+ * UMA vaga, com os campos SENSÍVEIS que a lista não carrega mais (correção de LGPD ativo).
+ *
+ * ┌─ POR QUE ISTO EXISTE, E POR QUE É `VagaListItem` MAIS O CPF ────────────────────────────────┐
+ * │ A ficha de edição, o clone e a liberação precisam do `substituidoCpf` para preencher o campo │
+ * │ e mandar para a folha. Ele saiu da lista porque descer o CPF de TODA vaga para TODO consultor │
+ * │ a cada carga é o oposto da minimização. Aqui ele desce de UMA vaga só, quando o consultor a  │
+ * │ abre, por uma rota de detalhe (`GET /as/vagas/:id`) sob o mesmo menu da Central de Vagas.     │
+ * │                                                                                              │
+ * │ É `extends VagaListItem` porque a ficha já usa todo o resto do item; o detalhe só ACRESCENTA │
+ * │ o que a lista deixou de trazer. Quem abre a ficha troca o item da lista por este, uma vez.    │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * §A.6: `substituidoCpf` em dígitos, nunca a log, nunca a exportação. A tela mascara na exibição.
+ */
+export interface VagaDetalhe extends VagaListItem {
+  substituidoCpf: string | null;
 }
 
 /**

@@ -5,7 +5,7 @@ import type { ApiOptions } from "@/lib/api";
  * ─ AS PORTAS DE REDE DA FILA DE VAGAS PENDENTES DE REVISÃO ─────────────────────────────────────
  *
  * O QUE FALTAVA. `as-vaga-revisao.spec.ts` mede a régua de decisão (`reguaDeLiberacao`), que é
- * texto e booleano. As cinco funções que FALAM COM O SERVIDOR não eram afirmadas por ninguém:
+ * texto e booleano. As funções que FALAM COM O SERVIDOR não eram afirmadas por ninguém:
  * caminho, método e corpo passavam por nenhum teste.
  *
  * O DEFEITO CONCRETO QUE PASSARIA SEM ESTE ARQUIVO: `liberarVagaPendenteRevisao` deixar de mandar
@@ -94,25 +94,56 @@ describe("as leituras: caminho fixo, sem método (GET) e sem corpo", () => {
   });
 });
 
-describe("a liberação: POST com o `codCliente` no corpo", () => {
+describe("a liberação: POST com o FORMULÁRIO INTEIRO no corpo", () => {
+  /** O formulário como a trilha o monta, no tamanho que basta para afirmar o contrato. */
+  const FORMULARIO = {
+    codCliente: "51525",
+    codigo: "511805",
+    nomeDivulgacao: "Auxiliar de Limpeza",
+    cargoId: "cg-1",
+    posicoesOficiais: 2,
+    natureza: "EFETIVA",
+    sazonalidade: "OPERACAO_PADRAO",
+    linhaServicoId: 3,
+    dataAbertura: "2026-09-18",
+    dataLimite: "2026-09-30",
+  };
+
   /**
-   * ─ O CASO QUE ORIGINOU O ARQUIVO ─────────────────────────────────────────────────────────────
+   * ─ O CASO QUE ORIGINOU O ARQUIVO, AGORA COM O CORPO INTEIRO ──────────────────────────────────
    * O `codCliente` no corpo É a liberação: é ele que vincula o cliente que a varredura do Pandapé
    * não tinha como trazer. Sem ele o servidor recusa, a vaga fica na fila, e a tela não mostra nada.
+   * Os demais campos são o resto do que o ATS não manda, e eles saem NA MESMA chamada.
    */
-  it("manda POST em `/as/vagas/{id}/liberar-revisao` com `{ codCliente }` no corpo", async () => {
-    await porta.liberarVagaPendenteRevisao("vaga-1", "51525", "tk");
+  it("manda POST em `/as/vagas/{id}/liberar-revisao` com o formulário inteiro no corpo", async () => {
+    await porta.liberarVagaPendenteRevisao("vaga-1", FORMULARIO, "tk");
 
     expect(apiFetch).toHaveBeenCalledTimes(1);
     const { caminho, opcoes } = chamada();
     expect(caminho).toBe("/as/vagas/vaga-1/liberar-revisao");
     expect(opcoes.method).toBe("POST");
-    expect(opcoes.body).toEqual({ codCliente: "51525" });
+    expect(opcoes.body).toEqual(FORMULARIO);
+    expect((opcoes.body as Record<string, unknown>).codCliente).toBe("51525");
     expect(opcoes.token).toBe("tk");
   });
 
+  /**
+   * ─ O STATUS NÃO VIAJA, E A AUSÊNCIA É A TRAVA ────────────────────────────────────────────────
+   * Na fila quem move a vaga é a LIBERAÇÃO, e mais nada: o destino é o papel `ABERTURA`, resolvido
+   * pelo catálogo NO SERVIDOR. Um `status` no corpo seria a tela decidindo um movimento que ela não
+   * decide, e no `PATCH` irmão ele é ignorado justamente para a vaga não sair da fila por uma rota
+   * de edição. Este caso PRENDE a ausência nas duas portas.
+   */
+  it("nenhuma das duas portas de escrita manda `status` no corpo", async () => {
+    await porta.liberarVagaPendenteRevisao("vaga-1", FORMULARIO, "tk");
+    await porta.salvarVagaEmRevisao("vaga-1", FORMULARIO, "tk");
+
+    expect(chamada(0).opcoes.body).not.toHaveProperty("status");
+    expect(chamada(1).opcoes.body).not.toHaveProperty("status");
+  });
+
   it("o id da vaga vai no CAMINHO, nunca no corpo", async () => {
-    await porta.liberarVagaPendenteRevisao("vaga-42", "51525", null);
+    await porta.liberarVagaPendenteRevisao("vaga-42", FORMULARIO, null);
 
     const { caminho, opcoes } = chamada();
     expect(caminho).toContain("vaga-42");
@@ -121,35 +152,80 @@ describe("a liberação: POST com o `codCliente` no corpo", () => {
 
   /**
    * ─ UMA CHAMADA SÓ, e a ausência da segunda é o desenho ────────────────────────────────────────
-   * Vincular o cliente e liberar são UM gesto. Fossem duas chamadas, a falha da segunda deixaria a
-   * vaga com cliente e ainda na fila, e a retentativa teria de adivinhar em que metade parou.
+   * Gravar o formulário e liberar são UM gesto. Fossem duas chamadas, a falha da segunda deixaria a
+   * vaga preenchida e ainda na fila, e a retentativa teria de adivinhar em que metade parou.
    */
-  it("vincular e liberar é UMA chamada, não duas", async () => {
-    await porta.liberarVagaPendenteRevisao("vaga-1", "51525", "tk");
+  it("gravar e liberar é UMA chamada, não duas", async () => {
+    await porta.liberarVagaPendenteRevisao("vaga-1", FORMULARIO, "tk");
     expect(apiFetch).toHaveBeenCalledTimes(1);
   });
 
   /**
    * ─ O CLIENTE VAZIO: A PORTA NÃO GUARDA, E ISSO É PROPOSITAL ───────────────────────────────────
-   * Quem recusa é o SERVIDOR; `reguaDeLiberacao` só impede a tela de OFERECER o clique. Uma guarda
+   * Quem recusa é o SERVIDOR; a régua da tela só impede que o clique seja OFERECIDO. Uma guarda
    * aqui seria uma terceira régua, contornável pela rota, dizendo o que o backend já diz. Este caso
    * PRENDE essa escolha: se alguém acrescentar um `throw` local, este teste fala antes da operação.
    */
-  it("cliente vazio NÃO é barrado aqui: a chamada sai e o servidor é quem recusa", async () => {
-    await porta.liberarVagaPendenteRevisao("vaga-1", "", "tk");
+  it("corpo sem cliente NÃO é barrado aqui: a chamada sai e o servidor é quem recusa", async () => {
+    await porta.liberarVagaPendenteRevisao("vaga-1", { codigo: "511805" }, "tk");
 
     expect(apiFetch).toHaveBeenCalledTimes(1);
-    expect(chamada().opcoes.body).toEqual({ codCliente: "" });
+    expect(chamada().opcoes.body).toEqual({ codigo: "511805" });
+  });
+
+  /**
+   * O CORPO É UMA CÓPIA do objeto recebido: a porta não guarda a referência do estado da tela, e
+   * uma edição posterior no formulário não reescreve um corpo já enviado.
+   */
+  it("o corpo é cópia, não a referência do formulário da tela", async () => {
+    await porta.liberarVagaPendenteRevisao("vaga-1", FORMULARIO, "tk");
+
+    expect(chamada().opcoes.body).not.toBe(FORMULARIO);
+    expect(chamada().opcoes.body).toEqual(FORMULARIO);
   });
 
   /**
    * O ERRO SOBE INTEIRO: a porta não engole a recusa do servidor. Se ela resolvesse a promessa em
-   * silêncio, a tela daria a liberação por feita com a vaga ainda na fila.
+   * silêncio, a tela daria a liberação por feita com a vaga ainda na fila. É por este caminho que a
+   * LISTA INTEIRA de pendências do 400 chega à tela.
    */
   it("a recusa do servidor PROPAGA, e não vira sucesso silencioso", async () => {
     const recusa = new Error("400");
     apiFetch.mockRejectedValue(recusa);
-    await expect(porta.liberarVagaPendenteRevisao("vaga-1", "51525", "tk")).rejects.toBe(recusa);
+    await expect(porta.liberarVagaPendenteRevisao("vaga-1", FORMULARIO, "tk")).rejects.toBe(recusa);
+  });
+});
+
+describe("salvar sem liberar: PATCH na vaga, e ela CONTINUA na fila", () => {
+  /**
+   * ─ POR QUE ELA É O `PATCH` DE SEMPRE ─────────────────────────────────────────────────────────
+   * O service reconhece a vaga no papel `REVISAO`, grava os campos e MANTÉM o status. Apontar esta
+   * porta para `liberar-revisao` por engano tiraria a vaga da fila num clique que promete o
+   * contrário, e nada ficaria vermelho: as duas devolvem `Promise<void>`.
+   */
+  it("manda PATCH em `/as/vagas/{id}`, sem `/liberar-revisao` no caminho", async () => {
+    await porta.salvarVagaEmRevisao("vaga-7", { codigo: "511805" }, "tk");
+
+    const { caminho, opcoes } = chamada();
+    expect(caminho).toBe("/as/vagas/vaga-7");
+    expect(caminho).not.toContain("liberar-revisao");
+    expect(opcoes.method).toBe("PATCH");
+    expect(opcoes.body).toEqual({ codigo: "511805" });
+    expect(opcoes.token).toBe("tk");
+  });
+
+  it("o corpo é cópia, e o id não vai nele", async () => {
+    const corpo = { codigo: "511805" };
+    await porta.salvarVagaEmRevisao("vaga-7", corpo, null);
+
+    expect(chamada().opcoes.body).not.toBe(corpo);
+    expect(chamada().opcoes.body).not.toHaveProperty("id");
+  });
+
+  it("a recusa do servidor PROPAGA também ao salvar sem liberar", async () => {
+    const recusa = new Error("409");
+    apiFetch.mockRejectedValue(recusa);
+    await expect(porta.salvarVagaEmRevisao("vaga-7", {}, "tk")).rejects.toBe(recusa);
   });
 });
 
@@ -206,7 +282,7 @@ describe("a correção do Master: POST com os DOIS campos", () => {
   });
 });
 
-describe("as cinco portas, vistas juntas", () => {
+describe("as seis portas, vistas juntas", () => {
   /**
    * TODAS PENDURADAS NO MESMO PREFIXO. Uma rota que escapa do `/as/vagas` é rota de outra frente, e
    * o erro de copiar e colar caminho entre módulos irmãos é exatamente assim que ele se parece.
@@ -217,11 +293,12 @@ describe("as cinco portas, vistas juntas", () => {
     apiFetch.mockResolvedValue({ count: 0 });
     await porta.contarPendentesDeRevisao(null);
     apiFetch.mockResolvedValue(undefined);
-    await porta.liberarVagaPendenteRevisao("v", "c", null);
+    await porta.liberarVagaPendenteRevisao("v", { codCliente: "c" }, null);
+    await porta.salvarVagaEmRevisao("v", { codCliente: "c" }, null);
     await porta.corrigirLiberacaoDeRevisao("v", { codCliente: "c", devolverParaFila: false }, null);
 
-    expect(apiFetch).toHaveBeenCalledTimes(5);
-    for (let i = 0; i < 5; i++) expect(chamada(i).caminho, chamada(i).caminho).toMatch(/^\/as\/vagas\//);
+    expect(apiFetch).toHaveBeenCalledTimes(6);
+    for (let i = 0; i < 6; i++) expect(chamada(i).caminho, chamada(i).caminho).toMatch(/^\/as\/vagas\//);
   });
 
   /**
@@ -240,6 +317,7 @@ describe("as cinco portas, vistas juntas", () => {
       "corrigirLiberacaoDeRevisao",
       "liberarVagaPendenteRevisao",
       "reguaDeLiberacao",
+      "salvarVagaEmRevisao",
     ]);
   });
 });
