@@ -66,6 +66,48 @@ memória do coordenador não é fonte: ela morre no fim da sessão e mente entre
 
 ---
 
+## 2026-09-22: ingestao A&S para producao (113 para 118), Portal fora
+
+**O que subiu.** So a ingestao A&S validada na 3120: a varredura do Pandape (as 5 decisoes, o sal
+da marca de pasta agora com HMAC), a tela Liberar Vaga (rodada 2, a trilha inteira) e a correcao de
+LGPD ativo do CPF do substituido fora da lista da Central de Vagas (a lista parou de projetar
+`substituidoCpf`; ele desce so por `VagaDetalhe` em `GET /as/vagas/:id`, uma vaga por vez, sob o
+mesmo RBAC). Commit `e71ddb7` (recorte por escopo, `git add` nominal, 31 arquivos).
+
+**As 5 migrations (113 para 118):** 0113_as_ingestao_pandape_varredura, 0114_as_depara_etapas,
+0115_as_vaga_status_pendente_revisao, 0117_as_varredura_status_antes_do_encerramento,
+0118_as_troca_de_cliente_da_vaga (hashes 9c20b86e3b4c, e0cdd7804bd2, 5c19e19cab74, 0e30c0aa9d98,
+41b3f59b026d). 0116 e 0119 (Portal) NAO subiram: nao commitadas, o journal committado nao as tem.
+Tabelas A&S novas criadas vazias (DDL pura).
+
+**Portal, VT e Dicas ficaram FORA**, soltos no working tree (decisao do diretor: Portal espera o
+Fernando). Producao passou a servir de um `git worktree` no `e71ddb7`
+(`/home/henrique/apps/ea-release-ingestao`), isolado do main sujo; o systemd (`ea-backend`,
+`ea-frontend`) foi repontado para la (backup dos units em scratchpad). O achado que provou o valor
+do build isolado: `CilindroMeta.tsx` (balde A, consumido pela `as/vagas/page.tsx`) tinha ficado de
+fora do recorte e o main sujo escondia isso; entrou no `e71ddb7`.
+
+**Varredura INERTE (nao ligada).** `PANDAPE_VARREDURA_DATA_CORTE` fora do `.env` de producao. Log
+do boot: "Varredura do Pandape INERTE: PANDAPE_VARREDURA_DATA_CORTE nao configurada." O time testa
+com a base vazia; o diretor liga depois dando a data de corte (e ai o `AS_MARCA_SAL` vira
+pre-requisito, hoje nao e: o boot retorna inerte antes de exigir o sal, sem lancar).
+
+**Fabrica distribuida (A.39):** arquiteto (manifesto de recorte, achou o entrelacamento do Portal no
+CandidatosService), seguranca APROVADO nos dois acionamentos (fix de CPF/RBAC no compilado;
+HMAC-com-sal e PII da ingestao), devops (ensaio das 5 migrations num clone com dump antes, 113 para
+118 limpo, e depois o corte real).
+
+**Healths verdes:** backend `127.0.0.1:3011/api/health` 200 (a rota real e `/api/health`, ha
+`setGlobalPrefix("api")`), frontend 3020 200, ingress Caddy 3010 200, migrations = 118. Servicos
+active, 0 restarts. **Contagens intactas (A.27):** ADMISSAO_CONCLUIDA 1893, DECLINOU 880, clicksign
+ASSINADO 1781, lojas 15, grupos 6. Dump de producao antes em scratchpad.
+
+**Aberto:** ligar a varredura (data de corte + `AS_MARCA_SAL`, decisao do diretor); o de/para
+Pandape para catalogo (sem ele, vaga nao-mapeada nasce PENDENTE_REVISAO, resolvida na tela Liberar
+Vaga). A tela de Gestao de Pendencias Obrigatorias (A.19) segue mapeada, depois do motor.
+
+---
+
 ## 2026-06-29 — Fase 4 AJUSTES FINAIS (OST-EA-FASE-4-AJUSTES-FINAIS) + smoke real do Drive
 
 Branch `feat/fase-4-ia-arquivamento` (working tree). Backend (item 1) pelo coordenador; itens 2–3
