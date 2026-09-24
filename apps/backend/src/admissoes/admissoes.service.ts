@@ -3177,6 +3177,32 @@ export class AdmissoesService {
     const adm = await this.db.query.admissoes.findFirst({ where: eq(admissoes.id, id) });
     if (!adm) throw new NotFoundException("Admissão não encontrada");
 
+    // GUARDA DA LIBERAÇÃO ADMISSIONAL (incidente 701dcef3, 23/09/2026). O `editar` grava o farol
+    // que vem no dto SEM criar frentes: as frentes AUDITORIA+EXAME (regra 1, §A.3) nascem só em
+    // `create` e em `aplicarLiberacao`. Mover uma pré-admissão (AGUARDANDO_LIBERACAO/
+    // LIBERACAO_RECUSADA) para um farol ativo pelo seletor de status do modal a tornaria ATIVA SEM
+    // FRENTES: ela some das abas Auditoria/Exame/Cadastro e vive só no Gerenciador. O caminho certo
+    // é a tela de Liberação (Reativar depois Liberar), que cria as frentes e os documentos da régua.
+    //
+    // A comparação é `!== adm.farolGlobal` de propósito: o modal de edição SEMPRE reenvia
+    // `farolGlobal`, e numa pré-admissão reenvia o VALOR ATUAL dela. Editar só a folha de uma
+    // recusada manda `farolGlobal` IGUAL ao atual, o que é legítimo e deve passar. Só uma TROCA
+    // real de/para a pré-liberação é bloqueada. É invariante estrutural, vale para todos os papéis.
+    const PRE_LIBERACAO: ReadonlySet<FarolGlobal> = new Set<FarolGlobal>([
+      "AGUARDANDO_LIBERACAO",
+      "LIBERACAO_RECUSADA",
+    ]);
+    if (
+      dto.farolGlobal !== undefined &&
+      dto.farolGlobal !== adm.farolGlobal &&
+      (PRE_LIBERACAO.has(adm.farolGlobal as FarolGlobal) ||
+        PRE_LIBERACAO.has(dto.farolGlobal as FarolGlobal))
+    ) {
+      throw new ConflictException(
+        "Esta admissão ainda está na Liberação Admissional. Para colocá-la em andamento, use Reativar e depois Liberar na tela de Liberação. A edição não cria as frentes de Auditoria e Exame.",
+      );
+    }
+
     // LOJA (etapa 3): validada contra o cliente ATUAL da admissão, antes de a transação abrir. O
     // editar não troca cliente (isso é a rota `trocar-cliente`, que limpa a loja), então o
     // cliente aqui é sempre o de `adm`.
