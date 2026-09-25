@@ -20,6 +20,7 @@ import {
 import { sql } from "drizzle-orm";
 import { ACEITES_REGISTRAVEIS, SITUACOES_ENCERRADAS_SEM_EXITO } from "../../domain/candidatura";
 import { CANDIDATURA_SITUACOES } from "@ea/shared-types";
+import type { CampoExtraidoPortal, VereditoDoDocumento } from "@ea/shared-types";
 import { FONTES_EXTERNAS } from "../../domain/as-etapa-externa";
 import { RETENCAO_EVENTO_ACAO, RETENCAO_EVENTO_RESULTADO } from "../../domain/retencao-evento";
 import type { VagaIdiomaGravado } from "../../domain/vaga-idioma";
@@ -357,6 +358,42 @@ export const tiposDocumento = pgTable("tipos_documento", {
   nome: varchar("nome", { length: 200 }).notNull(),
   ativo: boolean("ativo").notNull().default(true),
   criadoEm,
+});
+
+// ── DicaDocumento: como o documento precisa estar, por TIPO (migration 0123) ─
+/**
+ * A DICA QUE O CANDIDATO LÊ antes de fotografar o documento, escrita pelo diretor por TIPO.
+ *
+ * UMA DICA POR TIPO (`unique` em `tipo_documento_id`), que é a frase do diretor virada regra: com
+ * duas linhas para o mesmo tipo, a tela do candidato mostraria a que o banco devolvesse primeiro e
+ * a tela de cadastro editaria a outra.
+ *
+ * TABELA PRÓPRIA, E NÃO UMA COLUNA EM `tipos_documento`: aquele catálogo é VIVO e lido pelo sistema
+ * inteiro (régua, esteira, auditoria, kit, portal), e o que ele carrega é IDENTIDADE (código, nome,
+ * ativo). Isto é CONTEÚDO editorial, com autoria, data e um `ativo` próprio, que muda noutra
+ * cadência. Separado, quem lê o catálogo não carrega texto que não pediu.
+ *
+ * O TIPO INATIVADO NÃO APAGA A DICA. Tipo nunca é excluído fisicamente nesta casa (a rota DELETE
+ * só faz `ativo = false`, §A.6), então a dica sobrevive inteira à inativação e volta a valer se o
+ * tipo for reativado. Quem decide se o CANDIDATO a vê é a leitura da trilha, que exige a dica ativa
+ * E o tipo ativo, e não a existência da linha: tipo fora do catálogo não fala com o candidato.
+ *
+ * §A.6, com o risco INVERTIDO: nada aqui é dado de candidato (sem CPF, sem nome, sem admissão). O
+ * cuidado é que este texto é renderizado na tela PÚBLICA do portal, então ele tem TETO DE TAMANHO
+ * no banco (1000, e não `text` solto) e passa por sanitização na escrita (`DicasDocumentoService`).
+ */
+export const dicasDocumento = pgTable("dicas_documento", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  tipoDocumentoId: uuid("tipo_documento_id")
+    .notNull()
+    .unique()
+    .references(() => tiposDocumento.id, { onDelete: "cascade" }),
+  texto: varchar("texto", { length: 1000 }).notNull(),
+  ativo: boolean("ativo").notNull().default(true),
+  criadoPorId: uuid("criado_por_id").references(() => usuarios.id),
+  atualizadoPorId: uuid("atualizado_por_id").references(() => usuarios.id),
+  criadoEm,
+  atualizadoEm,
 });
 
 // ── ReguaDocumental: (cod_cliente + cargo) → exigência por tipo de documento ─
@@ -1662,6 +1699,37 @@ export const duplaCorrecaoAceites = pgTable(
   }),
 );
 
+// ── LiberacaoOverrideAceites: rastro do OVERRIDE dos obrigatórios-para-liberar (item 6, diretor) ──
+// A liberação passou a exigir 6 campos próprios (Cargo, Sexo, Tipo de contrato, Data de admissão,
+// Pacote de benefícios, Escala) — conjunto PRÓPRIO deste gate, distinto da régua unificada da §A.19
+// (NÃO é `pendencia-config`; ver `domain/liberacao-obrigatorios.ts`). Comum não libera com faltante;
+// só MASTER/SUPER_ADMIN, e SÓ com aceite explícito, e cada aceite deixa este rastro.
+//
+// §A.6 — MOLDE do `passagem_aceites`/`dupla_correcao_aceites`, NÃO do `candidato_alteracoes_log`:
+// guarda só QUEM (autorId + papelAutor), QUANDO (criadoEm), a ADMISSÃO e QUAIS campos faltavam, e
+// esses campos são os RÓTULOS legíveis (ex.: "Sexo, Escala"), nunca CPF, nome ou valor. Nenhuma PII.
+export const liberacaoOverrideAceites = pgTable(
+  "liberacao_override_aceites",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    admissaoId: uuid("admissao_id")
+      .notNull()
+      .references(() => admissoes.id, { onDelete: "cascade" }),
+    autorId: uuid("autor_id")
+      .notNull()
+      .references(() => usuarios.id),
+    // Papel de quem exerceu o override (MASTER/SUPER_ADMIN). Texto simples: é registro de auditoria,
+    // não referência a enum vivo.
+    papelAutor: varchar("papel_autor", { length: 20 }).notNull(),
+    // Rótulos legíveis dos campos que faltavam, separados por vírgula (§A.6: rótulo, nunca valor).
+    camposFaltantes: text("campos_faltantes").notNull(),
+    criadoEm,
+  },
+  (t) => ({
+    idxAdmissao: index("idx_liberacao_override_aceites_admissao").on(t.admissaoId),
+  }),
+);
+
 // ── CandidatoAlteracaoLog: trilha de edição de dados da admissão/vaga (OST-EA-GESTAO-USUARIOS) ──
 // ATENÇÃO (§A.6): ao contrário das trilhas de frente (frente_status_eventos, passagem_aceites, que
 // deliberadamente evitam PII e guardam só rótulos/estado), esta tabela guarda os VALORES ANTES/DEPOIS
@@ -1883,6 +1951,200 @@ export const formularioVtConducoes = pgTable(
   (t) => ({
     idxFormulario: index("idx_conducao_formulario").on(t.formularioId),
   }),
+);
+
+// ── AdmissaoDadosGi: os dados DA PESSOA que o EA não tem e que o G.I pede (Portal→GI, peça 2) ──
+//
+// MOLDE de `formularios_vt`: PII estruturada do candidato, UMA linha por admissão, tipada e com
+// carimbo de quem confirmou e quando. Cobre SÓ os campos do GI que o EA ainda não guarda (grupos 1,
+// 2, 3 e 5 do `docs/GI-DADOS-DA-PESSOA-PARA-VALIDAR.md`). NÃO duplica o que já mora em `candidatos`
+// (nome, cpf, nascimento, sexo, banco, agência, conta) nem o endereço do VT: o de/para do envio ao
+// GI lê `candidatos` para esses. A filiação é UMA por pessoa (não por documento), então o nome do
+// pai/mãe que a IA lê de RG/certidão cai aqui, e não em colunas por documento.
+//
+// ══ MUDANÇA DE POLÍTICA (§A.6), E ELA É CONSCIENTE ═════════════════════════════════════════════
+// A postura de hoje do Portal é "só conta, não guarda": os valores extraídos pela IA viajam para a
+// tela do candidato e somem (nenhuma coluna, nenhuma trilha com valor). Esta tabela GUARDA o dado
+// validado, porque ele precisa sobreviver do "candidato confirmou" até "o time envia ao GI", que
+// pode ser dias depois. É PII sensível (RG, PIS, CTPS, filiação, endereço), e por isso:
+//  - só é escrita pelo caminho do Portal (`PortalDadosGiService`), sob `PortalSessaoGuard`;
+//  - o `seguranca` audita antes do deploy (§A.38);
+//  - tem RETENÇÃO/EXPURGO (`expurgar_em`, sweep in-process no molde do `ExpurgoService`);
+//  - NUNCA aparece em superfície coletiva (Gerenciador, Esteira, export), só na FICHA da própria
+//    admissão, para quem já tem acesso a ela. Mesma régua já decidida para `candidatos.agencia`/
+//    `conta` e para o CPF do substituído.
+//  - NUNCA em log, em evento de trilha (o `PORTAL_CAMPO_APLICADO` carrega só a CONTAGEM) nem em
+//    mensagem de erro.
+//
+// `jti_link` É O ANCORADOURO DO CANDIDATO, E NÃO UM FK DE `usuarios` (achado do `seguranca`): quem
+// confirma é o CANDIDATO, que NÃO é usuário do sistema. Guarda-se o `jti` do link da sessão do
+// Portal que gravou (uuid, id da linha de `portal_links`), sem `references`: o link pode ser
+// revogado ou expirar sem levar este dado junto.
+export const admissaoDadosGi = pgTable(
+  "admissao_dados_gi",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    // UMA linha por admissão: unique. Cascade acompanha a admissão que sai do sistema.
+    admissaoId: uuid("admissao_id")
+      .notNull()
+      .unique()
+      .references(() => admissoes.id, { onDelete: "cascade" }),
+    // ── Grupo 1 (identidade que o EA não tem) e filiação ──
+    nacionalidade: varchar("nacionalidade", { length: 120 }),
+    naturalidade: varchar("naturalidade", { length: 120 }),
+    filiacaoNomeMae: varchar("filiacao_nome_mae", { length: 200 }),
+    filiacaoNomePai: varchar("filiacao_nome_pai", { length: 200 }),
+    // ── Grupo 2 (dados civis) ──
+    estadoCivil: varchar("estado_civil", { length: 60 }),
+    raca: varchar("raca", { length: 60 }),
+    grauInstrucao: varchar("grau_instrucao", { length: 80 }),
+    // ── Grupo 3 (números de documento) ──
+    rgNumero: varchar("rg_numero", { length: 30 }),
+    rgOrgaoEmissor: varchar("rg_orgao_emissor", { length: 40 }),
+    rgUf: varchar("rg_uf", { length: 2 }),
+    rgDataEmissao: date("rg_data_emissao"),
+    ctpsNumero: varchar("ctps_numero", { length: 30 }),
+    ctpsSerie: varchar("ctps_serie", { length: 20 }),
+    ctpsUf: varchar("ctps_uf", { length: 2 }),
+    ctpsData: date("ctps_data"),
+    pis: varchar("pis", { length: 20 }),
+    tituloNumero: varchar("titulo_numero", { length: 20 }),
+    tituloZona: varchar("titulo_zona", { length: 10 }),
+    tituloSecao: varchar("titulo_secao", { length: 10 }),
+    reservistaNumero: varchar("reservista_numero", { length: 30 }),
+    reservistaCategoria: varchar("reservista_categoria", { length: 40 }),
+    cnhNumero: varchar("cnh_numero", { length: 30 }),
+    cnhDataEmissao: date("cnh_data_emissao"),
+    cnhDataValidade: date("cnh_data_validade"),
+    // ── Grupo 5 (endereço completo) ──
+    endCep: varchar("end_cep", { length: 8 }),
+    endLogradouro: varchar("end_logradouro", { length: 200 }),
+    endNumero: varchar("end_numero", { length: 20 }),
+    endComplemento: varchar("end_complemento", { length: 100 }),
+    endBairro: varchar("end_bairro", { length: 120 }),
+    endCidade: varchar("end_cidade", { length: 120 }),
+    endUf: varchar("end_uf", { length: 2 }),
+    // ── Carimbos ──
+    // Quando o candidato confirmou pela última vez (a gravação é upsert idempotente).
+    confirmadoEm: timestamp("confirmado_em", { withTimezone: true }),
+    // `jti` do link da sessão do Portal que gravou. NÃO é FK de `usuarios` (o candidato não é
+    // usuário). uuid porque o `jti` é o id da linha de `portal_links` (validado por `ParseUUIDPipe`).
+    jtiLink: uuid("jti_link"),
+    // RETENÇÃO (B3): quando esta linha deve ser expurgada. Escrita na confirmação como um TETO
+    // (minimização, §A.6): o EA não vira repositório permanente de RG e PIS. A peça 3, quando ligar,
+    // re-carimba para "envio ao GI + margem".
+    expurgarEm: timestamp("expurgar_em", { withTimezone: true }),
+    criadoEm,
+    atualizadoEm,
+  },
+  (t) => ({
+    // O sweep do expurgo varre por `expurgar_em` vencido; sem índice, varreria a tabela inteira.
+    idxExpurgo: index("idx_admissao_dados_gi_expurgo").on(t.expurgarEm),
+  }),
+);
+
+// ── PortalDadosGiAceites: rastro PII-free de que o candidato confirmou QUAIS campos do GI ──────
+//
+// MOLDE de `passagem_aceites`/`liberacao_override_aceites`: trilha de responsabilização que guarda
+// só QUAIS campos (RÓTULOS legíveis, ex.: "RG, PIS, Endereço"), QUANDO, e ancorada em ADMISSÃO +
+// `jti_link`. NUNCA o VALOR confirmado (que é PII e mora só em `admissao_dados_gi`), NUNCA CPF, nome
+// ou o token do link.
+//
+// `jti_link` E NÃO `autor_id` (achado do `seguranca`): o autor do aceite é o CANDIDATO, que não é
+// usuário do sistema. O ancoradouro é o `jti` do link da sessão do Portal, no mesmo espírito da
+// trilha de eventos (`portal_eventos`), não um FK de `usuarios`.
+export const portalDadosGiAceites = pgTable(
+  "portal_dados_gi_aceites",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    admissaoId: uuid("admissao_id")
+      .notNull()
+      .references(() => admissoes.id, { onDelete: "cascade" }),
+    // `jti` do link do Portal que originou o aceite. NÃO é FK de `usuarios`. NOT NULL: aceite sem
+    // ancoradouro é rastro pela metade.
+    jtiLink: uuid("jti_link").notNull(),
+    // Rótulos legíveis dos campos confirmados, separados por vírgula (§A.6: rótulo, nunca valor).
+    camposConfirmados: text("campos_confirmados").notNull(),
+    criadoEm,
+  },
+  (t) => ({
+    idxAdmissao: index("idx_portal_dados_gi_aceites_admissao").on(t.admissaoId),
+  }),
+);
+
+// ── PortalConferencia: o RESULTADO EFÊMERO da leitura da IA, persistido para a tela reidratar ────
+//
+// A RAIZ dos bugs de tela do Portal: os campos que a IA leu e o veredito eram devolvidos UMA vez em
+// tempo real pelo `confirmar` e viviam só no estado React. Toda navegação/refresh zerava a tela.
+// Esta tabela GUARDA esse resultado (uma linha por admissão + tipo), e a trilha passa a devolvê-lo,
+// então a tela reconstrói "conferir" / "ajustar" / "aceito" sem depender do estado volátil.
+//
+// §A.6 — REVERTE A CONSEQUÊNCIA do veto V12 (ratificado pelo diretor), NÃO o núcleo: isto é
+// SUGESTÃO, nunca dado autoritativo. Quem grava dado final é a confirmação humana, em
+// `admissao_dados_gi`, por outra rota. Esta tabela é DISPLAY-ONLY: nunca entra em contagem de teto,
+// gate de fase, "cabe outro arquivo" ou caminho de gravação do GI (C4/C5/C10). `campos` é PII do
+// próprio candidato: viaja só na trilha (no-store, private), NUNCA a log.
+//
+// TTL 48h (`expurgar_em`), mesmo princípio da staging efêmera: o EA não guarda o que a IA leu além
+// do necessário para a conferência. Na confirmação do candidato os `campos` são ANULADOS (o valor
+// confirmado já vive em `admissao_dados_gi`), e `veredito` sobrevive para a tela dizer o que
+// corrigir. Molde do índice de expurgo de `admissao_dados_gi`.
+export const portalConferencia = pgTable(
+  "portal_conferencia",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    // UMA linha por (admissão + tipo). Cascade acompanha a admissão que sai do sistema (C2).
+    admissaoId: uuid("admissao_id")
+      .notNull()
+      .references(() => admissoes.id, { onDelete: "cascade" }),
+    tipoDocumentoId: uuid("tipo_documento_id")
+      .notNull()
+      .references(() => tiposDocumento.id),
+    // Os campos que a IA leu, para o candidato conferir. Anulado (`[]`) após a confirmação.
+    campos: jsonb("campos").notNull().$type<CampoExtraidoPortal[]>(),
+    // O veredito REDIGIDO (lista fechada do EA, sem o motivo cru do modelo, C8). Nulo quando ninguém
+    // julgou (tipo sem regra ativa).
+    veredito: jsonb("veredito").$type<VereditoDoDocumento | null>(),
+    // Nulo enquanto o candidato não confirmou. Preenchido na gravação do GI (os `campos` viram `[]`).
+    confirmadoEm: timestamp("confirmado_em", { withTimezone: true }),
+    // RETENÇÃO (TTL 48h): quando esta linha deve ser expurgada. NOT NULL: sempre nasce com teto.
+    expurgarEm: timestamp("expurgar_em", { withTimezone: true }).notNull(),
+    criadoEm,
+    atualizadoEm,
+  },
+  (t) => ({
+    // Chave de negócio: uma conferência por (admissão + tipo). O upsert do service converge por ela.
+    uqAdmissaoTipo: unique("uq_portal_conferencia_admissao_tipo").on(
+      t.admissaoId,
+      t.tipoDocumentoId,
+    ),
+    // O sweep do expurgo varre por `expurgar_em` vencido; sem índice, varreria a tabela inteira (C1).
+    idxExpurgo: index("idx_portal_conferencia_expurgo").on(t.expurgarEm),
+  }),
+);
+
+// ── PortalTermoAceite: prova de CONSENTIMENTO do termo de privacidade (LGPD) ──────────────────────
+//
+// Uma linha por admissão (unique): o candidato aceitou o termo de privacidade do Portal. A trilha
+// devolve `termoAceito` para a tela PULAR a tela do termo na volta (bug 1: o termo reaparecia por
+// ser estado React não persistido).
+//
+// SEM TTL, de propósito (C13): prova de consentimento LGPD não expurga. É o oposto de
+// `portal_conferencia` (dado da IA, efêmero). §A.6: PII-free por construção, só admissão + carimbo
+// + `jti_link` (ancoradouro do CANDIDATO, que não é usuário). NUNCA CPF, nome ou valor.
+export const portalTermoAceite = pgTable(
+  "portal_termo_aceite",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    // UMA linha por admissão (unique). Cascade acompanha a admissão que sai do sistema (C2).
+    admissaoId: uuid("admissao_id")
+      .notNull()
+      .unique()
+      .references(() => admissoes.id, { onDelete: "cascade" }),
+    aceitoEm: timestamp("aceito_em", { withTimezone: true }).notNull(),
+    // `jti` do link da sessão do Portal que registrou o aceite. NÃO é FK de `usuarios`.
+    jtiLink: uuid("jti_link"),
+  },
 );
 
 // ── DrivePastaPai: pasta-pai do Drive por (escopo + chave), fora do .env (INT-2) ─────────────
@@ -4198,5 +4460,365 @@ export const asIngestaoConflitos = pgTable(
     ),
     ckFonte: check("ck_as_ingestao_conflitos_fonte", sql`${t.fonte} in (${FONTES_EXTERNAS_SQL})`),
     idxCandidato: index("idx_as_ingestao_conflitos_candidato").on(t.candidatoId),
+  }),
+);
+
+// ══ PORTAL DO CANDIDATO: O CAMINHO DO ARQUIVO ═══════════════════════════════════════════════════
+// Desenho em `docs/DESENHO-PORTAL-CAMINHO-DO-ARQUIVO.md` e `docs/DESENHO-PORTAL-REGRAS-DE-SEGURANCA.md`.
+// O arquivo vai do navegador do candidato DIRETO para o armazenamento do Google e não é guardado
+// por nós (§A.3 regra 7 levada ao extremo: nem status do binário, só a marca de que ele chegou).
+// Estas três tabelas são o que sobra do nosso lado: quem autorizou a escrita, se o objeto de fato
+// chegou, e a trilha de tudo isso sem PII.
+
+// ── PortalCredencial: uma linha por credencial de escrita EMITIDA ───────────────────────────────
+// A linha nasce na EMISSÃO, não na confirmação, e essa ordem é a exigência 2 do desenho, que é
+// impeditiva: é contando a linha emitida que os tetos do diretor (25 arquivos e 60 MB por link)
+// param quem pede credencial e nunca envia. Contar só o que chegou tornaria o pedido ilimitado, e
+// cada credencial já é, na prática, uma chamada gratuita ao motor de IA que atende a esteira.
+//
+// §A.6, o que esta tabela guarda e o que ela NÃO guarda: guarda o CAMINHO DO OBJETO, porque sem ele
+// não há como consultar o metadado e confirmar a chegada (veto V11). Esse caminho é opaco por
+// construção (`portal/portal-objeto.ts`): o primeiro segmento é hash com pepper do id da admissão,
+// nunca o id, e o nome de arquivo ORIGINAL do candidato é descartado e nunca chega aqui. NÃO guarda
+// a URL assinada, que é credencial e não é persistida nem logada em lugar nenhum.
+export const portalCredenciais = pgTable(
+  "portal_credenciais",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    /** `jti` do link do portal. Identificador do LINK, não da pessoa. */
+    jtiLink: varchar("jti_link", { length: 64 }).notNull(),
+    admissaoId: uuid("admissao_id")
+      .notNull()
+      .references(() => admissoes.id, { onDelete: "cascade" }),
+    tipoDocumentoId: uuid("tipo_documento_id")
+      .notNull()
+      .references(() => tiposDocumento.id),
+    objeto: text("objeto").notNull(),
+    /** Tipo fixado DENTRO da assinatura. A confirmação compara o metadado real contra este valor. */
+    contentType: varchar("content_type", { length: 80 }).notNull(),
+    /** Teto assinado em `x-goog-content-length-range`. É também o que soma nos 60 MB do link. */
+    bytesConcedidos: integer("bytes_concedidos").notNull(),
+    expiraEm: timestamp("expira_em", { withTimezone: true }).notNull(),
+    /** Nulo enquanto o lado do servidor não confirmou. Documento só vai a ENTREGUE com isto preenchido. */
+    confirmadoEm: timestamp("confirmado_em", { withTimezone: true }),
+    bytesConfirmados: integer("bytes_confirmados"),
+    /** Quantas vezes a IA leu ESTE objeto. Alimenta o teto de extrações por link (leitura é paga). */
+    extracoes: integer("extracoes").notNull().default(0),
+    /**
+     * Carimbo da REPROVAÇÃO da IA sobre o documento deste envio. Nulo é o caso normal: aprovado,
+     * ainda sem veredito, ou sem regra ativa para auditar.
+     *
+     * É ESTA COLUNA, E SÓ ELA, QUE QUEIMA TENTATIVA DO CANDIDATO (`domain/portal-tentativas.ts`).
+     * Credencial emitida e nunca usada, envio que morreu na rede e arquivo que o leitor não
+     * conseguiu abrir continuam com o campo nulo de propósito: nenhum deles é decisão sobre o
+     * documento, e contar envio em vez de reprovação puniria justamente quem está com internet ruim.
+     */
+    reprovadoEm: timestamp("reprovado_em", { withTimezone: true }),
+    criadoEm,
+  },
+  (t) => ({
+    // UNIQUE no objeto, e ele é a trava de não sobrescrita do NOSSO lado. A do lado do Google é o
+    // `x-goog-if-generation-match: 0` assinado; esta aqui garante que nem por engano duas
+    // credenciais apontem para o mesmo destino, o que faria a confirmação de uma validar o arquivo
+    // da outra.
+    uqObjeto: unique("uq_portal_credenciais_objeto").on(t.objeto),
+    // Teto POR ARQUIVO impossível de gravar, por qualquer caminho (defesa em profundidade). Os
+    // tetos AGREGADOS do link não cabem num CHECK (ele não conta linhas): quem os torna invioláveis
+    // é a trava `pg_advisory_xact_lock` por `jti_link`, na mesma transação que grava.
+    ckBytes: check(
+      "ck_portal_credenciais_bytes",
+      sql`${t.bytesConcedidos} > 0 and ${t.bytesConcedidos} <= 10485760`,
+    ),
+    ckExtracoes: check("ck_portal_credenciais_extracoes", sql`${t.extracoes} >= 0`),
+    // O índice que a contagem da emissão usa em TODO pedido: quantas credenciais e quantos bytes
+    // este link já levou. Sem ele, o teto do diretor custaria uma varredura por clique do candidato.
+    idxLink: index("idx_portal_credenciais_link").on(t.jtiLink, t.criadoEm),
+    idxAdmissao: index("idx_portal_credenciais_admissao").on(t.admissaoId),
+    // O índice da contagem de tentativas: quantas reprovações esta pendência já teve. A pergunta é
+    // feita em TODO pedido de credencial do candidato, e sem ele custaria varredura por clique.
+    idxPendencia: index("idx_portal_credenciais_pendencia").on(t.admissaoId, t.tipoDocumentoId),
+  }),
+);
+
+// ── PortalPendenciaNoTime: a pendência que ESGOTOU as tentativas do candidato ────────────────────
+// Uma linha por pendência (admissão + tipo de documento) que bateu no teto de reprovações e passou
+// a ser trabalho do time. Ela guarda as duas perguntas que o diretor pediu para registrar: QUANTAS
+// tentativas houve e QUANDO caiu.
+//
+// POR QUE TABELA PRÓPRIA, E NÃO UMA COLUNA EM `documentos_admissao`. Aquela tabela é lida pela
+// Auditoria, pelo Gerenciador, pela Esteira e por todos os KPIs de pendência (§A.26): acrescentar
+// estado do Portal ali mudaria o alcance de código validado por causa de um contador. Aqui o
+// registro fica ao lado do Portal, e quem não conhece o Portal não é afetado por ele.
+//
+// O QUE ESTA LINHA NÃO FAZ: ela NÃO muda o estado do documento e NÃO cria fila nova. A pendência já
+// está na fila humana que sempre existiu (o modal da aba Auditoria da Esteira), porque o documento
+// do Portal chega como AGUARDANDO_AUDITORIA e é o time quem decide. Esta linha só diz desde quando
+// o candidato parou de tentar sozinho.
+//
+// §A.6: identificadores técnicos, contagem e carimbo. Nenhum dado pessoal.
+export const portalPendenciasNoTime = pgTable(
+  "portal_pendencias_no_time",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    admissaoId: uuid("admissao_id")
+      .notNull()
+      .references(() => admissoes.id, { onDelete: "cascade" }),
+    tipoDocumentoId: uuid("tipo_documento_id")
+      .notNull()
+      .references(() => tiposDocumento.id),
+    /** Quantas reprovações a pendência tinha quando caiu. Zero na linha que existe só por liberação. */
+    tentativas: integer("tentativas").notNull(),
+    /**
+     * Quando caiu para o time. É o carimbo da QUEDA, não o do último clique de quem insistiu.
+     *
+     * NULO é estado legítimo desde o destravamento do Master: a linha pode existir só para carregar
+     * a liberação de uma pendência que NUNCA caiu (o Master zera duas reprovações antes da terceira).
+     * Carimbar uma queda que não houve seria mentira gravada em tabela, e quem lê a fila do time
+     * acreditaria nela.
+     */
+    caiuEm: timestamp("caiu_em", { withTimezone: true }),
+    /**
+     * O MARCO DA REABERTURA, e ele é o mecanismo inteiro dos itens 5 e 6.
+     *
+     * A contagem de reprovações NÃO é apagada, nunca: ela passa a contar só o que veio DEPOIS deste
+     * carimbo (`reprovacoesDaPendencia`). Apagar tentativa destruiria trilha; mover o marco zera o
+     * teto sem perder uma linha de histórico, e o histórico é o que responde "esta pessoa já tinha
+     * sido destravada antes?".
+     */
+    liberadoEm: timestamp("liberado_em", { withTimezone: true }),
+    /** Quem reabriu. É a metade "quem" do rastro; a outra é o `liberado_em`. */
+    liberadoPorId: uuid("liberado_por_id").references(() => usuarios.id),
+    /**
+     * POR QUE FOI REABERTA, e a diferença entre os dois valores é de NATUREZA, não de rótulo:
+     *
+     *  - `SOLICITACAO_REENVIO`: o TIME pediu o documento de novo ao candidato. É FLUXO NORMAL, é do
+     *    consultor, e acontece depois de a pendência cair na fila dele. O ciclo previsto é candidato
+     *    tenta, cai na fila, o time solicita, o candidato reenvia.
+     *  - `DESTRAVAMENTO_MASTER`: um MASTER zerou o teto. É EXCEÇÃO, e ela admite em voz alta que a
+     *    RÉGUA pode estar errada: as 91 regras ativas não foram validadas pelo RH (§A.9), e uma regra
+     *    errada reprova documento bom três vezes e tranca uma pessoa que está certa.
+     *
+     * Enum fechado, de propósito: campo de texto livre aqui viraria observação, e observação é por
+     * onde o nome da pessoa volta para a tabela (§A.6).
+     */
+    liberadoTipo: varchar("liberado_tipo", { length: 24 }),
+    /**
+     * QUANTAS VEZES O TIME JÁ REABRIU esta pendência. Existe porque reabertura sem limite devolve,
+     * em parcelas, o teto que o Master deveria decidir: sem contar, o consultor reabriria sem fim e
+     * o destravamento do Master viraria decorativo. O limite é `TETO_REABERTURAS_DO_TIME`.
+     *
+     * O destravamento do Master NÃO incrementa esta coluna: ele é exceção, e é dela que o número de
+     * "quantas vezes a régua precisou ser desmentida" tem de sair limpo.
+     */
+    reaberturasTime: integer("reaberturas_time").notNull().default(0),
+  },
+  (t) => ({
+    // UMA linha por pendência. A gravação é idempotente por cima deste unique: reprovação repetida
+    // depois da queda não cria linha nova nem reescreve a data da queda.
+    uqPendencia: unique("uq_portal_pendencias_no_time").on(t.admissaoId, t.tipoDocumentoId),
+    // `>= 0` desde a liberação: a linha que nasce só para registrar um destravamento preventivo não
+    // carrega queda nenhuma.
+    ckTentativas: check("ck_portal_pendencias_no_time_tentativas", sql`${t.tentativas} >= 0`),
+    ckReaberturas: check(
+      "ck_portal_pendencias_no_time_reaberturas",
+      sql`${t.reaberturasTime} >= 0`,
+    ),
+    ckLiberadoTipo: check(
+      "ck_portal_pendencias_no_time_liberado_tipo",
+      sql`${t.liberadoTipo} is null or ${t.liberadoTipo} in ('SOLICITACAO_REENVIO','DESTRAVAMENTO_MASTER')`,
+    ),
+    // Reabertura sem autor e sem data é rastro pela metade, e rastro pela metade não responde "quem
+    // destravou". Os três andam juntos ou nenhum existe.
+    ckLiberacaoCompleta: check(
+      "ck_portal_pendencias_no_time_liberacao",
+      sql`(${t.liberadoEm} is null and ${t.liberadoPorId} is null and ${t.liberadoTipo} is null)
+          or (${t.liberadoEm} is not null and ${t.liberadoPorId} is not null and ${t.liberadoTipo} is not null)`,
+    ),
+  }),
+);
+
+// ── PortalEvento: a trilha (catálogo `PORTAL_*`, seção 9 do documento de regras) ─────────────────
+// Esta é a PRIMEIRA tabela de log de ACESSO do EA. A `candidato_alteracoes_log` é de edição e
+// guarda valores de propósito; esta é o oposto: nasce proibida de guardar valor.
+//
+// `motivo_codigo` é CÓDIGO CURTO, nunca texto livre, e a ausência do campo de texto é a defesa, não
+// um esquecimento: é no campo de observação que o dado pessoal reaparece, porque quem opera escreve
+// o nome da pessoa ali. Mesma decisão de `as_retencao_eventos`. A guarda em código está em
+// `portal/portal-eventos.ts` (`conferirDadosSemPii`), que ABORTA a gravação quando uma chave
+// proibida aparece no jsonb.
+//
+// NÃO há CHECK no `tipo` de propósito: o catálogo vive em código e acrescentar evento novo não pode
+// exigir migration, senão o log que existe para registrar incidente vira o mais caro de estender.
+export const portalEventos = pgTable(
+  "portal_eventos",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    tipo: varchar("tipo", { length: 40 }).notNull(),
+    ocorridoEm: timestamp("ocorrido_em", { withTimezone: true }).defaultNow().notNull(),
+    jtiLink: varchar("jti_link", { length: 64 }),
+    /** sha256(pepper + cpf), 32 hex. NUNCA o CPF. */
+    candidatoHash: varchar("candidato_hash", { length: 32 }),
+    /** sha256(pepper + mês + ip), 32 hex. O sal mensal impede correlação permanente por endereço. */
+    ipHash: varchar("ip_hash", { length: 32 }),
+    uaHash: varchar("ua_hash", { length: 32 }),
+    resultado: varchar("resultado", { length: 10 }),
+    motivoCodigo: varchar("motivo_codigo", { length: 40 }),
+    /** Campos próprios do evento, todos técnicos (código do tipo de documento, bytes, formato). */
+    dados: jsonb("dados"),
+  },
+  (t) => ({
+    ckResultado: check(
+      "ck_portal_eventos_resultado",
+      sql`${t.resultado} is null or ${t.resultado} in ('OK','RECUSADO')`,
+    ),
+    // Os três eixos que a Sala De Segurança consulta: "o que aconteceu neste tipo de evento",
+    // "o que aconteceu neste link" e "o que aconteceu com este candidato". O quarto índice, só por
+    // data, é o que a rotina de retenção usa para varrer a janela vencida sem ler a tabela inteira.
+    idxTipo: index("idx_portal_eventos_tipo").on(t.tipo, t.ocorridoEm),
+    idxLink: index("idx_portal_eventos_link").on(t.jtiLink, t.ocorridoEm),
+    idxCandidato: index("idx_portal_eventos_candidato").on(t.candidatoHash, t.ocorridoEm),
+    idxOcorridoEm: index("idx_portal_eventos_ocorrido_em").on(t.ocorridoEm),
+  }),
+);
+
+// ── PortalEventoIp: o ÚNICO lugar com o IP completo ──────────────────────────────────────────────
+// Tabela separada, e a separação é a proteção: a trilha principal pode ser lida por quem investiga
+// um caso, e esta exige Master ou Super Admin. Aos 90 dias o valor é TRUNCADO no lugar (IPv4 perde o
+// último octeto, IPv6 fica na rede), então o registro sobrevive para a estatística e deixa de
+// identificar o assinante. Decisão 14 do documento de regras.
+export const portalEventosIp = pgTable(
+  "portal_eventos_ip",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    eventoId: uuid("evento_id")
+      .notNull()
+      .references(() => portalEventos.id, { onDelete: "cascade" }),
+    ip: varchar("ip", { length: 45 }).notNull(),
+    /** Carimbo de quando o valor foi truncado. Nulo é "ainda completo, dentro dos 90 dias". */
+    truncadoEm: timestamp("truncado_em", { withTimezone: true }),
+    ocorridoEm: timestamp("ocorrido_em", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    uqEvento: unique("uq_portal_eventos_ip_evento").on(t.eventoId),
+    idxOcorridoEm: index("idx_portal_eventos_ip_ocorrido_em").on(t.ocorridoEm),
+  }),
+);
+
+// ── PortalLink: A LINHA QUE TORNA O LINK REVOGÁVEL ───────────────────────────────────────────────
+//
+// ELA EXISTE PARA CORRIGIR O FURO ABERTO DO LINK DO VT (decisão 4 do documento de regras). O token
+// do VT é auto-suficiente e verificado OFFLINE: vazou no WhatsApp, vale sete dias e não há botão
+// que o mate. Aqui o bilhete continua sendo assinado, mas ele não é a autoridade sozinho.
+//
+// A LINHA É A AUTORIDADE DO PRAZO, E NÃO O `exp` ASSINADO. Conferir só o `exp` do bilhete deixaria
+// impossível encurtar o prazo de um link já entregue, porque bilhete assinado é imutável por
+// definição. Quem decide se o link ainda vale é `expira_em` DESTA LINHA, lida em toda identificação
+// e também na emissão de credencial e na confirmação (senão a sessão de 30 minutos sobrevive à
+// revogação por até 30 minutos, escrevendo no armazenamento o tempo todo).
+//
+// §A.6: ela NÃO guarda CPF, NÃO guarda nome, NÃO guarda data de nascimento e NÃO guarda o token. O
+// token é credencial e não é persistido em lugar nenhum, no mesmo regime da URL assinada. O que ela
+// guarda é o vínculo com a admissão, quem emitiu, quem revogou e os prazos.
+export const portalLinks = pgTable(
+  "portal_links",
+  {
+    /**
+     * O `id` É O `jti` DO BILHETE, e a igualdade é deliberada: é ela que liga o token à linha
+     * revogável sem um segundo campo para manter em sincronia. `portal_credenciais.jti_link` e
+     * `portal_eventos.jti_link` já falam nesta moeda.
+     */
+    id: uuid("id").defaultRandom().primaryKey(),
+    admissaoId: uuid("admissao_id")
+      .notNull()
+      .references(() => admissoes.id, { onDelete: "cascade" }),
+    /** Usuário do EA que emitiu. Exigido pelo item L1 da trilha (`autor_id`). */
+    criadoPorId: uuid("criado_por_id")
+      .notNull()
+      .references(() => usuarios.id),
+    criadoEm,
+    /** Decisão 2: 72 horas. É ESTE valor que manda, não o `exp` do bilhete. */
+    expiraEm: timestamp("expira_em", { withTimezone: true }).notNull(),
+    /** Nulo é "vivo". Preenchido pela revogação manual ou pela emissão de um link novo. */
+    revogadoEm: timestamp("revogado_em", { withTimezone: true }),
+    revogadoPorId: uuid("revogado_por_id").references(() => usuarios.id),
+    /**
+     * O FIM DO BLOQUEIO PROGRESSIVO (decisão 5). O balde de tentativas é do CPF e do link e passa
+     * sozinho; a suspensão é da LINHA e vale para qualquer CPF que tente por aquele link, que é o
+     * que barra quem varre datas de nascimento trocando de CPF no mesmo link.
+     */
+    suspensoAte: timestamp("suspenso_ate", { withTimezone: true }),
+    /**
+     * O BLOQUEIO MANUAL DO LINK, E ELE É REVERSÍVEL (migration 0121).
+     *
+     * TRÊS COLUNAS PARA TRÊS COISAS DIFERENTES, e a separação é o desenho:
+     *  - `revogado_em` é TERMINAL: nasce da emissão de um link novo ou da revogação manual, e
+     *    desfazê-lo ressuscitaria um link que alguém matou de propósito;
+     *  - `suspenso_ate` é do SISTEMA (bloqueio progressivo por tentativa errada) e passa sozinho;
+     *  - `bloqueado_em` é DECISÃO do time, sem data de fim, e volta atrás: fecha a porta agora e
+     *    reabre depois SEM trocar a URL que o candidato já tem no WhatsApp.
+     *
+     * DESBLOQUEAR ZERA SÓ ESTAS DUAS COLUNAS. Tocar `revogado_em` ou `expira_em` no desbloqueio
+     * ressuscitaria link morto, que é a forma exata de o bloqueio virar um furo.
+     *
+     * §A.6: carimbo e autor (usuário do EA). O "por quê" vive na trilha, por código fechado.
+     */
+    bloqueadoEm: timestamp("bloqueado_em", { withTimezone: true }),
+    bloqueadoPorId: uuid("bloqueado_por_id").references(() => usuarios.id),
+    /**
+     * O CARIMBO DO ACESSO, e ele é o CONTADOR do painel do RH (`portal-painel.service.ts`).
+     *
+     * NÃO É A TRILHA, e a diferença é deliberada. `portal_eventos` já registra `PORTAL_LINK_ABERTO`
+     * e `PORTAL_IDENTIFICACAO_OK`, e mesmo assim não serve para contar: (a) `PortalTrilhaService.
+     * registrar` ENGOLE falha de gravação de propósito, (b) a trilha tem retenção declarada (90
+     * dias, 12 e 24 meses), então o KPI encolheria sozinho quando a rotina de expurgo nascer, e
+     * (c) um falso "não acessou" faz o consultor REEMITIR o link, e a emissão REVOGA todos os
+     * links vivos da admissão, matando a sessão de quem está enviando documento naquele instante.
+     *
+     * Escritos no caminho da identificação BEM-SUCEDIDA, fora do `try/catch` da trilha. O primeiro
+     * é imutável depois de escrito (`coalesce`), o último é reescrito a cada entrada.
+     *
+     * §A.6: só tempo. Sem IP, sem agente do navegador, sem CPF e sem contagem de falha.
+     */
+    primeiroAcessoEm: timestamp("primeiro_acesso_em", { withTimezone: true }),
+    ultimoAcessoEm: timestamp("ultimo_acesso_em", { withTimezone: true }),
+    /**
+     * O CARIMBO DO ENVIO DO LINK (migration 0122). Quatro colunas para UMA pergunta que o
+     * Gerenciador do Portal precisa responder: "este link foi ENTREGUE, quando, por qual canal e
+     * por quem?".
+     *
+     * NÃO É A TRILHA, e a diferença é a mesma que criou `primeiro_acesso_em` uma migration atrás:
+     * `portal_eventos` tem retenção declarada e `PortalTrilhaService.registrar` ENGOLE falha de
+     * gravação de propósito. As duas coisas são certas para log e erradas para dado operacional,
+     * que tem de continuar verdadeiro depois do expurgo.
+     *
+     * NÃO SÃO UM SEGUNDO ESTADO DO LINK. Envio não decide se o link está VIVO, então NENHUMA delas
+     * entra na projeção `COLUNAS_DO_LINK` (`portal/portal-link-colunas.ts`): aquela constante
+     * afirma que tudo que está nela FECHA a porta, e envio não fecha porta nenhuma.
+     *
+     * §A.6, E É A LINHA MAIS DURA DESTE BLOCO: NÃO HÁ COLUNA DE ENDEREÇO, nem em claro nem
+     * hasheada. Hash de e-mail não protege nada (espaço de busca pequeno, dicionário pronto) e
+     * ainda vira chave de correlação. O destino é DERIVADO na leitura, MASCARADO
+     * (`f****o@empresa.com`, `domain/portal-envio.ts`), a partir de `candidatos.email`. A URL do
+     * link também não está aqui: ela é credencial, no mesmo regime do token.
+     *
+     * `envio_canal` nasce com um valor só (`EMAIL`) porque o diretor fechou "só e-mail por ora";
+     * um booleano teria de ser desfeito no dia do WhatsApp. `envio_origem` (`AUTOMATICO` pelo
+     * funil de A&S, `MANUAL` pelo Gerenciador) é o item 4 da OST em forma de dado: os dois
+     * caminhos passam pela MESMA emissão, então esta coluna é o único lugar onde a diferença
+     * sobrevive. Os catálogos vivem em código (`shared-types`), sem CHECK, para que canal novo não
+     * exija migration.
+     *
+     * NULO É "NUNCA FOI ENVIADO POR CANAL NENHUM", que é a verdade de todo link emitido até hoje:
+     * a emissão manual devolve a URL na tela e quem a entrega é o consultor, à mão.
+     */
+    enviadoEm: timestamp("enviado_em", { withTimezone: true }),
+    envioCanal: varchar("envio_canal", { length: 20 }),
+    envioOrigem: varchar("envio_origem", { length: 20 }),
+    enviadoPorId: uuid("enviado_por_id").references(() => usuarios.id),
+  },
+  (t) => ({
+    // A pergunta de TODA emissão: "quais links vivos esta admissão tem?". Emitir um novo revoga os
+    // anteriores, então esta consulta acontece antes de cada link gerado.
+    idxAdmissao: index("idx_portal_links_admissao").on(t.admissaoId, t.criadoEm),
   }),
 );

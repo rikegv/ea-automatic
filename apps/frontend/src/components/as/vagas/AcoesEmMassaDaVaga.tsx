@@ -72,6 +72,8 @@ import {
   type PosicaoLado,
 } from "@/lib/as-vaga-acoes";
 import { ResultadoLoteModal } from "@/components/as/vagas/ResultadoLoteModal";
+import { PreviaDoEnvioEmLoteSecao } from "@/components/portal/EnvioDoLink";
+import { AVISO_DO_ENVIO_DO_LINK, usePreviaDoEnvio } from "@/lib/portal-envio-link";
 import { cn } from "@/lib/cn";
 
 /** Qual confirmação está aberta. `null` é a barra sozinha, sem nada perguntado ainda. */
@@ -285,6 +287,7 @@ export function AcoesEmMassaDaVaga({
         <SaidaEmLoteModal
           modo={acao}
           selecionadas={selecionadas}
+          token={token}
           processando={processando}
           erro={erro}
           bloqueado={acimaDoTeto}
@@ -547,6 +550,7 @@ function MoverEmLoteModal({
 function SaidaEmLoteModal({
   modo,
   selecionadas,
+  token,
   processando,
   erro,
   bloqueado,
@@ -555,6 +559,7 @@ function SaidaEmLoteModal({
 }: {
   modo: "DESVINCULAR" | "ENVIAR";
   selecionadas: AsCandidaturaItem[];
+  token: string | null;
   processando: boolean;
   erro: string | null;
   bloqueado: boolean;
@@ -566,6 +571,24 @@ function SaidaEmLoteModal({
     "DESCARTADO",
   );
   const [motivo, setMotivo] = useState("");
+
+  /**
+   * ─ A PRÉVIA DO LINK, E POR QUE ELA É OBRIGATÓRIA JUSTAMENTE AQUI ────────────────────────────
+   *
+   * "Confirmar uma vez e enviar N às cegas" foi VETADO na auditoria, e o motivo é concreto: o que
+   * sai por e-mail é uma CREDENCIAL DE ACESSO ao prontuário, e um endereço desatualizado no
+   * cadastro entrega o prontuário de um candidato a um terceiro sem que nada falhe. Em massa,
+   * ninguém repara, porque o lote devolveu sucesso.
+   *
+   * Então, antes do clique, a lista aparece NOMINALMENTE: quem recebe e para qual destino
+   * mascarado, e SEPARADO, quem fica de fora e por quê. Ela é buscada ao abrir e só no modo de
+   * ENVIO: o desvínculo não manda e-mail nenhum.
+   */
+  const estadoPrevia = usePreviaDoEnvio(
+    selecionadas.map((c) => c.id),
+    token,
+    envio,
+  );
 
   const situacao: SaidaEmLote = envio ? "ENVIADO_PARA_ADMISSAO" : desvinculo;
   const parados = selecionadas.filter((c) => !podeDecidir(c.situacao)).length;
@@ -644,6 +667,13 @@ function SaidaEmLoteModal({
             {CANDIDATURA_SITUACAO_AJUDA.ENVIADO_PARA_ADMISSAO} O sistema confere quantas posições
             ainda cabem antes de gravar cada linha, e quem não couber volta na lista de falhas.
           </p>
+        </Secao>
+      )}
+
+      {envio && (
+        <Secao titulo="Quem Vai Receber O Link Do Portal">
+          <p className="mb-2.5 text-[12px] text-dim">{AVISO_DO_ENVIO_DO_LINK}</p>
+          <PreviaDoEnvioEmLoteSecao estado={estadoPrevia} />
         </Secao>
       )}
 

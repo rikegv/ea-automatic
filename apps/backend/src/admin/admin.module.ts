@@ -25,6 +25,8 @@ import { PendenciasClienteService } from "./pendencias-cliente/pendencias-client
 import { ClinicasService } from "./clinicas/clinicas.service";
 import { GruposClienteService } from "./grupos-cliente/grupos-cliente.service";
 import { LojasService } from "./lojas/lojas.service";
+import { DicasDocumentoController } from "./dicas-documento/dicas-documento.controller";
+import { DicasDocumentoService } from "./dicas-documento/dicas-documento.service";
 import { EscalasController } from "./escalas/escalas.controller";
 import { EscalasService } from "./escalas/escalas.service";
 import { KitRegrasController } from "./kit-regras/kit-regras.controller";
@@ -65,6 +67,7 @@ import { TiposDocumentoService } from "./tipos-documento/tipos-documento.service
     TarifasController,
     ReguaController,
     TiposDocumentoController,
+    DicasDocumentoController,
     CatalogosController,
     RegrasController,
     KitTiposController,
@@ -88,6 +91,7 @@ import { TiposDocumentoService } from "./tipos-documento/tipos-documento.service
     TarifasService,
     ReguaService,
     TiposDocumentoService,
+    DicasDocumentoService,
     CatalogosService,
     RegrasService,
     KitTiposService,

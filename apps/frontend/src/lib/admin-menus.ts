@@ -25,9 +25,25 @@ export const ADMIN_MENUS = [
   // `/admin` (é gestão, não catálogo), mas o CARD dela mora no hub. Quem tiver só este menu precisa
   // conseguir abrir a camada para chegar ao card, senão o menu ficaria liberado e inalcançável.
   "ifractal",
+  // O GERENCIADOR DO PORTAL CONTINUA AQUI, e agora pelo motivo PURO: a TELA vive sob
+  // `/admin/portal-links`, então quem tiver só este menu precisa conseguir abrir a camada, senão o
+  // menu ficaria liberado e inalcançável (o layout de `/admin` responderia "Acesso Restrito").
+  //
+  // O que mudou foi o CAMINHO até ela: o card do hub saiu e o item passou a viver na BARRA
+  // LATERAL, abaixo da Liberação Admissional (`lib/navegacao.ts`). A entrada aqui NÃO era sobre o
+  // card, é sobre a CAMADA, e por isso a mudança de lugar não a dispensa. Tirá-la faria a barra
+  // mostrar o item e a tela responder "Acesso Restrito", que é o pior sintoma possível e é
+  // exatamente o que este arquivo existe para não acontecer.
+  //
+  // EFEITO COLATERAL CONHECIDO, e ele é aceitável: quem tiver SÓ este menu continua enxergando o
+  // card "Menu Gerencial", que agora abriria um hub sem nenhum card para essa pessoa. Resolver
+  // isso exigiria tirar a tela de baixo de `/admin`, o que muda a URL e está fora do que foi
+  // pedido (§A.14). Fica registrado para o diretor decidir.
+  "portal-links",
   "regua",
   "kit-regras",
   "regras",
+  "dicas-documento",
   "usuarios",
   "menu-areas",
   "assinante-empresa",

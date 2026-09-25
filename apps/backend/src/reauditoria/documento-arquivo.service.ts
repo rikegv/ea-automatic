@@ -1,6 +1,6 @@
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
-import { Inject, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import { ConflictException, Inject, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { and, eq } from "drizzle-orm";
 import type { AuthUser } from "../auth/auth.types";
 import type { Database } from "../db/client";
@@ -12,7 +12,12 @@ import {
   documentosAdmissao,
   tiposDocumento,
 } from "../db/schema";
-import { precisaArquivarDrive } from "../auditoria/auditoria.service";
+import {
+  AuditoriaService,
+  precisaArquivarDrive,
+  type RecuoDaAuditoria,
+} from "../auditoria/auditoria.service";
+import { podeReabrirDocumento } from "../domain/reabertura-documento";
 import { StagingService } from "../staging/staging.service";
 import {
   mimeDeVisualizacao,
@@ -54,6 +59,7 @@ export class DocumentoArquivoService {
   constructor(
     @Inject(DRIZZLE) private readonly db: Database,
     private readonly staging: StagingService,
+    private readonly auditoria: AuditoriaService,
   ) {}
 
   /** Tipo de documento pelo id, ou 404. */
@@ -173,6 +179,18 @@ export class DocumentoArquivoService {
     const adm = await this.db.query.admissoes.findFirst({ where: eq(admissoes.id, admissaoId) });
     if (!adm) throw new NotFoundException("Admissão não encontrada");
 
+    // A GUARDA, ANTES DE QUALQUER EFEITO. Reabrir a pendência de um documento com contrato vivo lá
+    // fora (envelope aguardando ou assinado) ou com o kit já na fila é dano, não correção. A régua
+    // é única e mora no domínio, e esta é uma das DUAS portas que a chamam, além do próprio
+    // EFEITO (`recuarAuditoria`), que é onde ela também é conferida (ver
+    // `domain/reabertura-documento.ts`).
+    const veredito = podeReabrirDocumento({
+      clicksignStatus: adm.clicksignStatus,
+      kitAssinaturaPath: adm.kitAssinaturaPath,
+      kitAssinaturaEm: adm.kitAssinaturaEm,
+    });
+    if (!veredito.pode) throw new ConflictException(veredito.mensagem);
+
     const antes = await this.db.query.documentosAdmissao.findFirst({
       where: and(
         eq(documentosAdmissao.admissaoId, admissaoId),
@@ -181,6 +199,19 @@ export class DocumentoArquivoService {
     });
     const estadoAntes = antes?.estado ?? "PENDENTE";
 
+    // ══ O LIMITE DO DRIVE, MEDIDO E NÃO RESOLVIDO AQUI (frente da reabertura de documento) ═══════
+    //
+    // `precisaArquivarDrive` devolve `false` PARA SEMPRE depois que `drive_pasta_url` é gravada, e
+    // `criarProntuarioSobDemanda` sai em `jaExistia: true`. Consequências que ficam de pé mesmo
+    // depois desta frente, as duas conhecidas e nenhuma delas corrigida por aqui:
+    //   1. o documento ERRADO permanece no prontuário do Drive (o EA não usa a API de exclusão);
+    //   2. o documento SUBSTITUTO nunca será arquivado quando a régua fechar de novo, porque o ramo
+    //      de arquivamento do `aplicarPosVeredito` está atrás do `precisaArquivarDrive`.
+    //
+    // O RE-ARQUIVAMENTO DO SUBSTITUTO É DECISÃO DO DIRETOR, e não desta camada: envolve versionar ou
+    // sobrescrever arquivo no prontuário de uma pessoa. O que a reabertura faz é NÃO SILENCIAR: o
+    // aviso abaixo sobe na resposta para a tela dizer em voz alta.
+    //
     // Camada 5, avaliada ANTES de mexer em qualquer coisa: o arquivo já foi para o Drive?
     // `drivePastaUrl` cobre o fechamento da régua; `driveAsoUrl` cobre o ASO, o único que sobe
     // sozinho (ao ser validado), que é o caso real em que isto acontece.
@@ -243,9 +274,39 @@ export class DocumentoArquivoService {
       `Documento descartado: tipo=${tipo.codigo}, estado anterior=${estadoAntes}, arquivos removidos=${removidos}.`,
     );
 
+    // CAMADA 7, A CONSEQUÊNCIA (frente da reabertura de documento). O descarte devolvia o documento
+    // a PENDENTE e parava ali: se aquele obrigatório era o que FECHAVA a régua, a frente AUDITORIA
+    // continuava em `ANALISE_OK`, concluída, com a régua incompleta, e o Cadastro seguia aberto por
+    // um gate que já não se sustentava. O pós-veredito é o MESMO da IA e da validação humana
+    // (`aplicarPosVeredito`), então o recuo não é regra nova nem código duplicado: é o ramo que
+    // faltava, alcançado pelo mesmo ponto único.
+    //
+    // BEST-EFFORT e fora de transação, pelo mesmo motivo do arquivamento: o descarte já está
+    // commitado e não pode ser derrubado por uma falha de consequência. Sem cliente/cargo não há
+    // régua a medir (pré-admissão), e `aplicarPosVeredito` recusaria com 404.
+    let recuo: RecuoDaAuditoria | undefined;
+    if (adm.codCliente && adm.cargoId) {
+      try {
+        recuo = (await this.auditoria.aplicarPosVeredito(admissaoId, user)).recuo;
+      } catch (err) {
+        this.logger.warn(
+          `Pós-veredito do descarte falhou (admissão ${admissaoId}): ` +
+            `${err instanceof Error ? err.message : "erro"}. ` +
+            `O documento já voltou a PENDENTE; a próxima ação de auditoria recalcula.`,
+        );
+      }
+    }
+
     return {
       documento: { tipoDocumentoId, estado: "PENDENTE" as const },
       estadoAntes,
+      // O CONTRATO DA REABERTURA (`ResultadoDaReaberturaDeDocumento`, shared-types). Os três
+      // primeiros vêm do recuo; `avisoDrive` é o sinal que já existia aqui, agora também em forma
+      // de booleano para a tela poder dizer em voz alta.
+      reaberto: true,
+      frenteRecuou: recuo?.frenteRecuou ?? false,
+      cadastroDerrubado: recuo?.cadastroDerrubado ?? false,
+      farolAtualizado: recuo?.farolAtualizado ?? false,
       arquivosRemovidos: removidos,
       ...(falhasAoRemover > 0 ? { falhasAoRemover } : {}),
       marcasDedupRemovidas: true,

@@ -24,10 +24,26 @@ export const ROTA_MENU: { prefixo: string; codigo: string }[] = [
   { prefixo: "/admin/beneficios", codigo: "beneficios" },
   { prefixo: "/admin/motivos-declinio", codigo: "motivos-declinio" },
   { prefixo: "/admin/tarifas", codigo: "tarifas" },
+  /*
+   * O GERENCIADOR DO PORTAL. A ausência desta linha era um buraco REAL, e a primeira redação deste
+   * comentário exagerava o tamanho dele: ela dizia "qualquer pessoa autenticada", e a auditoria
+   * mostrou que não. O COMUM sem o menu já tomava 403 do `MenuGuard` na consulta, e a tela abria
+   * vazia. Quem entrava de fato era o MASTER, que passa pelo guard por ÁREA, sem precisar ter o
+   * menu concedido: ele digitava a URL e via a lista nominal de candidatos.
+   *
+   * A linha fica, e é defesa em profundidade: quem decide quem enxerga a tela é o menu, não o
+   * conhecimento da URL (§A.23), e a régua da tela tem de ser a mesma do backend.
+   */
+  { prefixo: "/admin/portal-links", codigo: "portal-links" },
   { prefixo: "/ifractal", codigo: "ifractal" },
   { prefixo: "/admin/regua", codigo: "regua" },
   { prefixo: "/admin/kit-regras", codigo: "kit-regras" },
   { prefixo: "/admin/regras", codigo: "regras" },
+  // DICAS POR DOCUMENTO: governada pelo menu `dicas-documento`, que nasce só para o SUPER_ADMIN
+  // (§A.23). Sem esta linha o guard deixaria qualquer autenticado abrir a URL direto, e desta tela
+  // se ESCREVE o texto que vai parar na tela PÚBLICA do candidato. O backend já barra a escrita;
+  // isto fecha a porta da tela.
+  { prefixo: "/admin/dicas-documento", codigo: "dicas-documento" },
   { prefixo: "/admin/usuarios", codigo: "usuarios" },
   // ÁREA POR MENU: sem esta linha o guard deixaria qualquer autenticado abrir a URL direto, e a tela
   // ESCREVE a fonte da autorização por área. O backend já barra as operações (@Roles SUPER_ADMIN);

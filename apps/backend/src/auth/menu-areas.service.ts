@@ -8,6 +8,7 @@ import {
   AREA_PADRAO_DO_MENU,
   AREA_POR_CONTROLLER,
   MENU_SEMPRE_VISIVEL,
+  masterPrecisaDeMarcacao,
   menuDaOperacao,
   temIntersecao,
 } from "../domain/menus";
@@ -148,8 +149,14 @@ export class MenuAreasService {
    *
    * A REGRA DE QUEM VÊ, que é a mesma do `/auth/me`, aplicada duas vezes (antes e depois):
    *   - SUPER_ADMIN vê sempre, está acima da segmentação, e por isso nem entra na conta;
-   *   - MASTER vê se tiver interseção de área (não depende de marcação);
+   *   - MASTER vê se tiver interseção de área (não depende de marcação), SALVO nos menus de
+   *     `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER`, em que ele também precisa dela;
    *   - COMUM vê se tiver interseção de área E o menu marcado.
+   *
+   * A EXCEÇÃO NOMINAL PRECISA ESTAR AQUI, e não é zelo: este é o TERCEIRO lugar que reescreve a
+   * régua do guard (os outros dois são o `MenuGuard` e o `/auth/me`), e um previsor que discorda do
+   * guard é pior do que previsor nenhum: ele diria ao diretor que um MASTER "perde" um menu que
+   * ele nunca teve, na tela em que ele decide justamente com base nesse número.
    *
    * Só conta usuário ATIVO: quem está desativado não perde acesso que não usa, e listá-lo daria um
    * número assustador e falso.
@@ -179,7 +186,8 @@ export class MenuAreasService {
     const ve = (u: { id: string; papel: string }, areasDoMenu: Area[]) => {
       if (u.papel === "SUPER_ADMIN") return true;
       if (!temIntersecao(areasDoMenu, areasDe.get(u.id) ?? [])) return false;
-      return u.papel === "MASTER" || temMarcado.has(u.id);
+      if (u.papel === "MASTER" && !masterPrecisaDeMarcacao(codigo)) return true;
+      return temMarcado.has(u.id);
     };
 
     const perdem = pessoas.filter((u) => u.papel !== "SUPER_ADMIN" && ve(u, atuais) && !ve(u, novasAreas));

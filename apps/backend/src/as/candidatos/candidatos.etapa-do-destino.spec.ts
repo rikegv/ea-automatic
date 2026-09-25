@@ -6,6 +6,7 @@ import { EtapasFunilService } from "../etapas/etapas-funil.service";
 import { bancoFingido, etapasSemente } from "../etapas/etapas-funil.fake-db";
 import { CandidatosService } from "./candidatos.service";
 import { catalogoDeStatusFingido } from "../vaga-status/vaga-status-catalogo.fake";
+import { envioDoPortalFingido } from "../../portal/portal-envio.fake";
 
 /**
  * ─ QUEM MOVE GENTE NO FUNIL PERGUNTA AO CATÁLOGO, E ESTE ARQUIVO GUARDA A PERGUNTA ──────────────
@@ -133,7 +134,7 @@ function cenario() {
   };
 
   return {
-    service: new CandidatosService(db as never, catalogoComUmaInativada() as never, catalogoDeStatusFingido() as never),
+    service: new CandidatosService(db as never, catalogoComUmaInativada() as never, catalogoDeStatusFingido() as never, envioDoPortalFingido() as never),
     linha,
     escritas,
   };

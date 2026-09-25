@@ -127,7 +127,15 @@ function ehRotaDeSessao(path: string): boolean {
  * kit falha com 404, não 401, então nunca cai neste ciclo.
  */
 function ehFluxoPublicoComSessaoPropria(path: string): boolean {
-  return path.startsWith("/vt/");
+  // O PORTAL DO CANDIDATO entra pelo mesmo motivo do VT, e com um agravante: a sessão dele dura
+  // MINUTOS de propósito (é a credencial que autoriza escrita no nosso armazenamento), então o 401
+  // aqui não é acidente, é o fim de sessão ESPERADO no meio de um envio. Sem esta isenção, cada
+  // expiração dispara uma renovação que o candidato não tem como responder e termina jogando ele no
+  // login do OPERADOR, onde ele não tem conta, perdendo o que estava fazendo.
+  //
+  // Autorizado pelo diretor (§A.26) para tocar este arquivo compartilhado, e escrito pelo
+  // COORDENADOR (§A.39), porque as duas camadas leem daqui.
+  return path.startsWith("/vt/") || path.startsWith("/portal/");
 }
 
 /**

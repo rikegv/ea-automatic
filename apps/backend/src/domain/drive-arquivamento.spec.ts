@@ -5,6 +5,7 @@ import {
   motivoFalhaEnvioDrive,
   motivoPandapeSemTipos,
   MOTIVO_DRIVE,
+  somenteAprovadosVaoAoProntuario,
   tiposFaltantesNoArquivamento,
 } from "./drive-arquivamento";
 
@@ -141,5 +142,42 @@ describe("tiposFaltantesNoArquivamento — validado à mão vale sem arquivo", (
     expect(
       tiposFaltantesNoArquivamento({ entregues: ["RG", "CPF"], naStaging: ["RG"] }),
     ).toEqual(["CPF"]);
+  });
+});
+
+/**
+ * O FILTRO POR VEREDITO (OST do prontuário: só o aprovado sobe).
+ *
+ * A prova que o diretor pediu é dos DOIS lados: o reprovado deixa de subir E o aprovado continua
+ * subindo exatamente como antes. Sem a segunda metade, um filtro que barrasse tudo passaria.
+ */
+describe("somenteAprovadosVaoAoProntuario", () => {
+  const arq = (codigoTipo: string) => ({ codigoTipo, caminho: `/staging/adm-1/${codigoTipo}__1` });
+
+  it("o REPROVADO fica de fora, e é isso que o defeito em produção fazia passar", () => {
+    const lote = somenteAprovadosVaoAoProntuario([arq("RG"), arq("CNH")], ["RG"]);
+    expect(lote.map((a) => a.codigoTipo)).toEqual(["RG"]);
+  });
+
+  it("o APROVADO continua subindo, todos eles, sem nenhuma mudança de comportamento", () => {
+    const entrada = [arq("RG"), arq("CPF"), arq("ASO")];
+    const lote = somenteAprovadosVaoAoProntuario(entrada, ["RG", "CPF", "ASO"]);
+    expect(lote).toEqual(entrada);
+  });
+
+  it("o FACULTATIVO reprovado também fica de fora, e isso é o objetivo, não efeito colateral", () => {
+    const lote = somenteAprovadosVaoAoProntuario([arq("RG"), arq("CARTAO_SUS")], ["RG"]);
+    expect(lote.map((a) => a.codigoTipo)).toEqual(["RG"]);
+  });
+
+  it("o NÃO DECIDIDO (pendente ou aguardando auditoria) não sobe: só ENTREGUE sobe", () => {
+    expect(somenteAprovadosVaoAoProntuario([arq("CTPS")], [])).toEqual([]);
+  });
+
+  it("compara pelo código SANITIZADO, que é o que o nome do arquivo carrega", () => {
+    // `CARTEIRA/TRABALHO` vira `CARTEIRA_TRABALHO` no nome do arquivo. Quem chama sanitiza antes, e
+    // este teste trava o contrato: comparar contra o código cru deixaria o APROVADO de fora.
+    const lote = somenteAprovadosVaoAoProntuario([arq("CARTEIRA_TRABALHO")], ["CARTEIRA_TRABALHO"]);
+    expect(lote).toHaveLength(1);
   });
 });

@@ -11,16 +11,16 @@ import { CARDS } from "@/app/(app)/admin/page";
  */
 
 /** `temMenu` de mentira: só os códigos passados existem para a pessoa. */
-const com = (...codigos: string[]) => (c: string) => codigos.includes(c);
+const com =
+  (...codigos: string[]) =>
+  (c: string) =>
+    codigos.includes(c);
 
 describe("gruposDeNavegacao", () => {
   it("só entrega o que a pessoa tem liberado", () => {
     const grupos = gruposDeNavegacao(com("esteira", "gerenciador"), false);
     expect(grupos.map((g) => g.titulo)).toEqual(["Operação"]);
-    expect(grupos[0].itens.map((i) => i.label)).toEqual([
-      "Esteira Admissional",
-      "Gerenciador",
-    ]);
+    expect(grupos[0].itens.map((i) => i.label)).toEqual(["Esteira Admissional", "Gerenciador"]);
   });
 
   it("consultor de A&S vê o grupo de seleção e NÃO o de operação", () => {
@@ -92,6 +92,37 @@ describe("gruposDeNavegacao", () => {
     expect(hrefs(semInicio)).not.toContain("/");
     // Nada MAIS pode sumir junto: a home mostra tudo o que a barra mostra, menos o link para ela mesma.
     expect(hrefs(comTudo).filter((h) => h !== "/")).toEqual(hrefs(semInicio));
+  });
+
+  /*
+   * ─ GERENCIADOR DO PORTAL: SAIU DO HUB E FOI PARA A BARRA (decisão do diretor) ─────────────────
+   *
+   * SÃO TRÊS AFIRMAÇÕES, E NENHUMA BASTA SOZINHA: "entrou na barra" sem "saiu do hub" deixaria o
+   * destino com DUAS portas, e "saiu do hub" sem "entrou na barra" é o menu liberado e inalcançável
+   * da §A.23. A terceira é a POSIÇÃO, que foi o que o diretor pediu de fato: logo abaixo da
+   * Liberação Admissional, e não em qualquer lugar da lista.
+   */
+  it("Gerenciador Do Portal é item da barra, logo ABAIXO da Liberação Admissional", () => {
+    const codigos = OPERACAO.map((n) => n.codigo);
+    const i = codigos.indexOf("portal-links");
+    expect(i).toBeGreaterThan(-1);
+    expect(codigos[i - 1]).toBe("liberacao");
+    expect(OPERACAO[i].href).toBe("/admin/portal-links");
+  });
+
+  it("e NÃO é mais card do hub: uma porta só", () => {
+    expect(CARDS.map((c) => c.codigo)).not.toContain("portal-links");
+  });
+
+  it("mudar de casa NÃO concedeu nada: quem não tem o menu continua sem ver (§A.23)", () => {
+    const semOMenu = gruposDeNavegacao(com("esteira"), false);
+    expect(semOMenu.flatMap((g) => g.itens.map((i) => i.href))).not.toContain(
+      "/admin/portal-links",
+    );
+    const comOMenu = gruposDeNavegacao(com("portal-links"), false);
+    expect(comOMenu.find((g) => g.titulo === "Operação")?.itens.map((i) => i.href)).toEqual([
+      "/admin/portal-links",
+    ]);
   });
 
   it("todo destino tem descrição para o card, senão a home nasce com card mudo", () => {

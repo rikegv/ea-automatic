@@ -7,8 +7,11 @@ import {
   MENUS_SOMENTE_SUPER_ADMIN,
   filtrarMenusPorPapel,
   MENUS_PADRAO_COMUM,
+  MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER,
   MENUS_QUE_NASCEM_FORA_DA_ADM,
   TODOS_CODIGOS_MENU,
+  baseDeMenusDoMaster,
+  masterPrecisaDeMarcacao,
   areasDeNascimento,
   codigosPadraoDoPapel,
   menuDaOperacao,
@@ -34,6 +37,18 @@ describe("mapa operação -> menu", () => {
     // regua reivindica ReguaController.* e TiposDocumentoController.*
     expect(menuDaOperacao("ReguaController", "upsert")).toBe("regua");
     expect(menuDaOperacao("TiposDocumentoController", "remove")).toBe("regua");
+  });
+
+  /**
+   * MENU DE DICAS (exigência S12). A controller não tem `@Roles`, e operação que nenhum menu
+   * reivindica passa LIVRE pelo `MenuGuard`: sem esta reivindicação, qualquer sessão autenticada
+   * escreveria o texto que aparece na tela PÚBLICA do candidato. O coringa de `regua` (que já
+   * reivindica `TiposDocumentoController`) NÃO alcança classe nova.
+   */
+  it("as Dicas De Documento são reivindicadas pelo menu próprio, leitura incluída", () => {
+    for (const h of ["list", "upsert", "reativar", "remove"]) {
+      expect(menuDaOperacao("DicasDocumentoController", h)).toBe("dicas-documento");
+    }
   });
 
   it("handler exato tem precedência de reivindicação", () => {
@@ -122,8 +137,14 @@ describe("padrão do papel (decisão do diretor 24/07/2026): COMUM enxerga toda 
     // menus". Quem o mudou foi a decisão SEGUINTE do diretor, de esconder de quem não é SUPER_ADMIN
     // as telas que ele não pode usar: a de Usuários e, agora, a de Área Por Menu. A diferença é
     // escrita como subtração explícita para que qualquer poda a mais quebre aqui.
+    // DUAS SUBTRAÇÕES, e são de naturezas diferentes: `MENUS_SOMENTE_SUPER_ADMIN` some da LISTA
+    // dele (não é concedível), e `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER` só não vem DE NASCENÇA (o
+    // diretor concede pela tela). As duas escritas como subtração explícita para que qualquer poda
+    // a mais quebre aqui.
     expect(codigosPadraoDoPapel("MASTER")).toEqual(
-      TODOS_CODIGOS_MENU.filter((c) => !MENUS_SOMENTE_SUPER_ADMIN.has(c)),
+      TODOS_CODIGOS_MENU.filter(
+        (c) => !MENUS_SOMENTE_SUPER_ADMIN.has(c) && !MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER.has(c),
+      ),
     );
   });
 });
@@ -351,7 +372,7 @@ describe("menus exclusivos do SUPER_ADMIN", () => {
     // A DIFERENÇA É EXATAMENTE O CONJUNTO DE EXCLUSIVOS. É o teste que impede a regra de virar uma
     // poda ampla por descuido: qualquer menu a mais que sumir da lista do Master quebra aqui.
     expect(TODOS_CODIGOS_MENU.filter((c) => !depois.includes(c)).sort()).toEqual(
-      [...MENUS_SOMENTE_SUPER_ADMIN].sort(),
+      [...new Set([...MENUS_SOMENTE_SUPER_ADMIN, ...MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER])].sort(),
     );
   });
 
@@ -364,5 +385,75 @@ describe("menus exclusivos do SUPER_ADMIN", () => {
   it("o filtro por papel não mexe em nenhum outro menu", () => {
     const semExclusivos = TODOS_CODIGOS_MENU.filter((c) => !MENUS_SOMENTE_SUPER_ADMIN.has(c));
     expect(filtrarMenusPorPapel(TODOS_CODIGOS_MENU, "MASTER")).toEqual(semExclusivos);
+  });
+});
+
+/**
+ * ══ OS MENUS EM QUE O MASTER TAMBÉM PRECISA DA MARCAÇÃO (decisão do diretor, Dicas De Documento) ══
+ *
+ * O QUE ESTE BLOCO TRAVA, e os quatro casos são complementares:
+ *  1. a lista é NOMINAL e só contém código que existe (nada de menu fantasma);
+ *  2. ela é ADITIVA: todo menu FORA dela continua não exigindo marcação do MASTER;
+ *  3. ela NÃO PODE ENCOSTAR em `MENUS_SOMENTE_SUPER_ADMIN`, porque as duas se contradizem: uma
+ *     torna o menu concedível sob marcação, a outra o REMOVE da lista de quem não é SUPER_ADMIN,
+ *     ou seja, o tornaria impossível de conceder. Juntas, entregariam uma tela que só o diretor
+ *     usa para sempre, que é exatamente o que ele NÃO pediu;
+ *  4. a porta do NASCIMENTO está fechada: `codigosPadraoDoPapel("MASTER")` não entrega o menu, e é
+ *     essa função que o `criar` de usuário grava e o grandfather do `seed-menus.ts` distribui.
+ */
+describe("menus que exigem marcação explícita do MASTER", () => {
+  it("todo código da lista EXISTE no registro (lista nominal, sem menu fantasma)", () => {
+    for (const c of MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER) {
+      expect(TODOS_CODIGOS_MENU).toContain(c);
+    }
+  });
+
+  it("as Dicas De Documento estão na lista (o texto vai para a tela PÚBLICA do candidato)", () => {
+    expect(masterPrecisaDeMarcacao("dicas-documento")).toBe(true);
+  });
+
+  it("ADITIVA: nenhum menu FORA da lista passou a exigir marcação do MASTER", () => {
+    for (const c of TODOS_CODIGOS_MENU) {
+      if (MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER.has(c)) continue;
+      expect(masterPrecisaDeMarcacao(c)).toBe(false);
+    }
+  });
+
+  it("NÃO se cruza com MENUS_SOMENTE_SUPER_ADMIN: uma concede sob marcação, a outra impede conceder", () => {
+    for (const c of MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER) {
+      expect(MENUS_SOMENTE_SUPER_ADMIN.has(c)).toBe(false);
+    }
+  });
+
+  it("o menu CONTINUA CONCEDÍVEL: o filtro por papel não o tira da lista de um MASTER marcado", () => {
+    // É a diferença prática para o precedente das Etapas Do Funil. Uma marcação gravada no banco
+    // sobrevive ao filtro, então a concessão do diretor vale de verdade.
+    expect(filtrarMenusPorPapel(["dicas-documento", "esteira"], "MASTER")).toEqual([
+      "dicas-documento",
+      "esteira",
+    ]);
+    expect(filtrarMenusPorPapel(["dicas-documento"], "COMUM")).toEqual(["dicas-documento"]);
+  });
+
+  it("a base do MASTER esconde o menu nominal e revela o que ele TEM marcado", () => {
+    expect(baseDeMenusDoMaster([])).not.toContain("dicas-documento");
+    expect(baseDeMenusDoMaster(["dicas-documento"])).toContain("dicas-documento");
+    // E não mexe em mais nada: a diferença é exatamente a lista nominal.
+    expect(TODOS_CODIGOS_MENU.filter((c) => !baseDeMenusDoMaster([]).includes(c)).sort()).toEqual(
+      [...MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER].sort(),
+    );
+  });
+
+  it("A PORTA DO NASCIMENTO ESTÁ FECHADA: MASTER novo não nasce com o menu", () => {
+    // `codigosPadraoDoPapel` é o que o `criar` de usuário grava e o que o grandfather do
+    // `seed-menus.ts` distribui. Se ela entregasse a lista inteira, o MASTER recuperaria o menu por
+    // outra porta e a trava do `MenuGuard` não adiantaria nada.
+    expect(codigosPadraoDoPapel("MASTER")).not.toContain("dicas-documento");
+    // O SUPER_ADMIN continua recebendo tudo: ele é o dono do menu no dia em que ele nasce (§A.23).
+    expect(codigosPadraoDoPapel("SUPER_ADMIN")).toContain("dicas-documento");
+    // E o COMUM segue como sempre: fora do padrão, porque é menu de Administração.
+    expect(codigosPadraoDoPapel("COMUM")).not.toContain("dicas-documento");
+    // ...mas CONCEDÍVEL, ou seja, fora do bloqueio do COMUM.
+    expect(MENUS_BLOQUEADOS_COMUM.has("dicas-documento")).toBe(false);
   });
 });

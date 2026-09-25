@@ -870,6 +870,30 @@
   .ds-table tbody tr + tr td {
     border-top: 1px solid var(--border);
   }
+  /* ─ A VARIANTE DENSA, para a tabela de MUITAS colunas ───────────────────────────────────────
+     A máscara é a MESMA (§A.12): mesma divisória, mesmo cabeçalho, mesmo alinhamento. O que muda
+     é só a calha lateral da célula, de 16px para 9px, e ela existe por uma medição: o Gerenciador
+     do Portal tem DEZ colunas, e em 1440 (a tela do diretor) a tabela pedia 1290px para 1094
+     disponíveis, escondendo justamente a coluna de AÇÕES, que é onde moram os botões da frente.
+     Só a calha, e só em quem pedir a classe: nenhuma das outras tabelas do sistema muda. */
+  .ds-table--densa thead th {
+    padding-left: 9px;
+    padding-right: 9px;
+  }
+  .ds-table--densa tbody td {
+    padding-left: 9px;
+    padding-right: 9px;
+  }
+  /* O TÍTULO DE COLUNA PODE QUEBRAR EM DUAS LINHAS aqui, e é este o item que realmente fazia a
+     tabela estourar: o `ColunaOrdenavel` envolve o texto num `truncate`, que é `nowrap`, então o
+     conteúdo MÍNIMO de cada coluna passava a ser o título inteiro numa linha só ("Data De
+     Admissão" sozinho pedia 168px). Deixar quebrar devolve a largura para o DADO, que é o que a
+     pessoa lê. Vale só na variante densa: nas outras tabelas o título continua em uma linha. */
+  .ds-table--densa thead th .truncate {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+  }
   /* Padrão único de tabela (§A.12): divisória sutil e premium entre colunas. */
   .ds-table thead th + th,
   .ds-table tbody td + td {

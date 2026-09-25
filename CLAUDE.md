@@ -474,7 +474,8 @@ está no sistema**. Estado por etapa:
 |---|---|---|
 | **1** | Tarifas de transporte (tabela + tela `/admin/tarifas`) | **em `main`/produção** (18 tarifas) |
 | **2** | Formulário do candidato (`/vt`) + os 2 PDFs (optante / não-optante) | **em `main`/produção** |
-| **3** | VT compõe o **Kit** (e auditoria) | **a fazer** |
+| **3a** | VT na **auditoria** (varredura arquiva e dá baixa no `FORMULARIO_VT`) | **em produção**, 138 réguas e 205 documentos |
+| **3b** | VT compõe o **Kit** | **a fazer** |
 | **4** | Tela de **Benefícios** | **em andamento** (parte 1 entregue: `admissao_beneficio`, `status_cadastro_beneficio`, memória cliente+cargo) |
 
 **Acesso público:** pendência de **infraestrutura**, com o Fernando (**em andamento**). A tela `/vt`
@@ -483,9 +484,21 @@ Pacote técnico pronto e testado (vhost `vt.soulanrh.com.br`, fail-closed, allow
 da `/vt`, `/api/auth/*` bloqueado, certbot). Falta o Fernando aplicar (DNS + vhost + certificado) e o
 diretor validar da internet. *O código não depende disso: é infra.*
 
-**Etapa 3 (a fazer):** o VT ainda **não** está ligado ao kit nem à auditoria. `tipos_documento` já tem
-`FORMULARIO_VT` e `CARTAO_TRANSPORTE` cadastrados, porém **dormentes** (0 réguas, 0 documentos): o
-catálogo já previa o documento e ninguém ligou os fios.
+**Etapa 3 (a fazer):** o VT ainda **não** está ligado ao **kit**. *(Antes esta linha dizia que ele
+não estava ligado à auditoria e que `FORMULARIO_VT` e `CARTAO_TRANSPORTE` estavam **dormentes**, com
+"0 réguas, 0 documentos". **Estava DEFASADA.**)*
+
+**O estado REAL, medido na produção em 21/09/2026:** `FORMULARIO_VT` está em **138 réguas** e tem
+**205 documentos**; `CARTAO_TRANSPORTE` está em **138 réguas** e tem **3 documentos**. Os fios da
+auditoria **foram ligados**: a varredura da coleta (`vt-coleta.service.ts`) arquiva o formulário na
+subpasta BENEFICIOS do prontuário e **dá baixa** no `FORMULARIO_VT`, marcando ENTREGUE com autor
+SISTEMA e reavaliando a régua pelo mesmo caminho dos demais documentos.
+
+Consequência que o texto antigo escondia, e que vale registrar porque muda decisão: **o VT já é uma
+casa da trilha do Portal do Candidato**, funcionando hoje como UPLOAD. Foi isso que transformou a
+pergunta "trazer o formulário para dentro do Portal" em "trocar o que aquela casa faz", e foi o que
+levou ao parecer de que trazer é COMPLEXO (`docs/AVALIACAO-VT-DENTRO-DO-PORTAL.md`) e à escolha da
+**ponte pequena**: um botão, na própria casa, que abre o formulário de VT que já está no ar.
 
 O texto abaixo é o escopo original da frente, mantido como referência do que foi pedido.
 

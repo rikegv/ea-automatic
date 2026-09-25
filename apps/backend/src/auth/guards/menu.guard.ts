@@ -3,7 +3,7 @@ import { Reflector } from "@nestjs/core";
 import type { Request } from "express";
 import { IS_PUBLIC_KEY } from "../decorators";
 import type { AuthUser } from "../auth.types";
-import { menuDaOperacao } from "../../domain/menus";
+import { masterPrecisaDeMarcacao, menuDaOperacao } from "../../domain/menus";
 import { MenuAreasService } from "../menu-areas.service";
 import { MenusService } from "../menus.service";
 
@@ -23,7 +23,8 @@ import { MenusService } from "../menus.service";
  *   4. operação NÃO reivindicada por menu nenhum → ABERTA (leitura de catálogo, leitura compartilhada,
  *      operação de trabalho). Passa. É a régua "ler é trabalho", preservada.
  *   5. MASTER → passa se o menu da operação estiver em alguma ÁREA dele. Não depende de marcação
- *      (continua mandando na área inteira), mas deixou de mandar fora dela.
+ *      (continua mandando na área inteira), mas deixou de mandar fora dela. EXCEÇÃO NOMINAL: nos
+ *      menus de `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER` ele TAMBÉM precisa da marcação, e cai no 6.
  *   6. COMUM → exige TER o menu **e** que o menu esteja em alguma área dele. Senão, 403.
  *
  * O QUE MUDOU NA SEGMENTAÇÃO DE ÁREA (fundação do módulo de A&S): o bypass do MASTER deixou de ser
@@ -80,7 +81,19 @@ export class MenuGuard implements CanActivate {
     }
 
     // MASTER manda na área inteira: dentro dela, segue sem depender de marcação.
-    if (user.papel === "MASTER") return true;
+    //
+    // ┌─ A EXCEÇÃO NOMINAL, E ELA É ADITIVA (decisão do diretor, menu de Dicas De Documento) ─────┐
+    // │ `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER` (`domain/menus`) lista, um a um, os menus em que o  │
+    // │ MASTER TAMBÉM precisa da marcação. Nesses, e SÓ nesses, esta linha não responde e o fluxo │
+    // │ cai na MESMA pergunta do COMUM, logo abaixo. Para todo menu FORA da lista o comportamento │
+    // │ fica byte a byte igual, que é o que torna seguro mexer num guard no caminho de TODAS as   │
+    // │ rotas autenticadas (§A.26).                                                                │
+    // │                                                                                            │
+    // │ O menu continua CONCEDÍVEL, e essa é a diferença para `MENUS_SOMENTE_SUPER_ADMIN`: aquela  │
+    // │ lista REMOVE o menu de quem não é SUPER_ADMIN e o torna impossível de liberar; esta só     │
+    // │ exige a marcação que o diretor dá pela tela dele.                                          │
+    // └────────────────────────────────────────────────────────────────────────────────────────────┘
+    if (user.papel === "MASTER" && !masterPrecisaDeMarcacao(menuExigido)) return true;
 
     if (codigos.has(menuExigido)) return true;
 

@@ -1,0 +1,13 @@
+/* PELE DO DESIGNER, escopada a /portal. Forca a Montserrat na subarvore do portal real.
+   O globals.css tem uma regra base `h1,h2,h3 { font-family: var(--font-manrope) }` que vence
+   a heranca por ser regra de elemento; aqui um seletor com a classe do container
+   (especificidade maior) reassume os titulos para Montserrat, sem tocar o globals.css nem o
+   layout raiz do app. Absorve a tecnica que estava no /portal-preview da Fase 0. */
+.raiz {
+  font-family: var(--font-montserrat), "Montserrat", system-ui, sans-serif;
+}
+
+.raiz :is(h1, h2, h3, h4, h5, h6) {
+  font-family: var(--font-montserrat), "Montserrat", system-ui, sans-serif;
+  letter-spacing: normal;
+}

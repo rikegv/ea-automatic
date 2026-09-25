@@ -75,6 +75,18 @@ function makeDb() {
         findFirst: vi.fn().mockResolvedValue({ id: "tipo-rg", codigo: "RG", nome: "RG" }),
       },
       dadosVagaFolha: { findFirst: vi.fn().mockResolvedValue({ salario: "2000" }) },
+      /*
+       * A ADMISSÃO ENTROU NO BANCO DE MENTIRINHA por causa do RECUO DA AUDITORIA (frente de
+       * reabertura de documento, 20/09/2026): o pós-veredito passou a ter um ramo para a régua
+       * INCOMPLETA, e ele lê a admissão para saber se ela está viva. Sem esta linha o fake
+       * respondia `undefined` em `db.query.admissoes` e o teste morria com "Cannot read
+       * properties of undefined", que é lacuna do fake e não defeito do serviço.
+       *
+       * Devolver `undefined` aqui mantém o teste medindo o que ele sempre mediu (a equivalência
+       * entre auditar por arquivo e por buffer): sem admissão, o recuo devolve "não fiz nada" e
+       * sai, sem tocar em frente nenhuma. Nenhuma asserção foi afrouxada.
+       */
+      admissoes: { findFirst: vi.fn().mockResolvedValue(undefined) },
     },
   };
   return { db, select, insert, update };
@@ -107,6 +119,7 @@ function makeService() {
     reguaCompletude as never,
     drivePastaPaiFake as never,
      pandapeArquivosFake as never,
+     { enviar: async () => ({ enviado: false, motivo: "GI_NAO_CONFIGURADO" }) } as never,
   );
   return { svc, staging, ai };
 }

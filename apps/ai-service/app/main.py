@@ -13,7 +13,7 @@ from app import drive as drive_mod
 from app import gemini
 from app.auth import require_internal_token
 from fastapi import Depends
-from app.routers import auditoria, coleta_vt, drive, kit, planilha, vt
+from app.routers import auditoria, coleta_vt, drive, kit, planilha, portal, vt
 
 # Fail-fast no boot: valida o ambiente (ex.: DRIVE_MOCK proibido em produção) antes de servir.
 get_settings()
@@ -25,6 +25,8 @@ app.include_router(coleta_vt.router)
 app.include_router(drive.router)
 app.include_router(kit.router)
 app.include_router(planilha.router)
+# Portal do Candidato: leitor em memória. INERTE sem PORTAL_BUCKET (responde 503).
+app.include_router(portal.router)
 app.include_router(vt.router)
 
 

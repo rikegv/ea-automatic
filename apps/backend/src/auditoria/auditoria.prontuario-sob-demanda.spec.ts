@@ -149,6 +149,7 @@ function montar(opts: { adm?: Partial<typeof BASE_ADM>; reguaCompleta?: boolean 
     regua as never,
     drivePastaPaiFake as never,
     pandapeArquivos as never,
+    { enviar: async () => ({ enviado: false, motivo: "GI_NAO_CONFIGURADO" }) } as never,
   );
   return { svc, ai, staging, updates, inserts };
 }

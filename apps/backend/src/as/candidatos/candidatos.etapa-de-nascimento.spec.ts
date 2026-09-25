@@ -3,6 +3,7 @@ import { asCandidaturaEtapas, asCandidaturas } from "../../db/schema";
 import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
 import { catalogoDeStatusFingido } from "../vaga-status/vaga-status-catalogo.fake";
 import { CandidatosService } from "./candidatos.service";
+import { envioDoPortalFingido } from "../../portal/portal-envio.fake";
 
 /**
  * ─ ONDE A CANDIDATURA NASCE: O DEFAULT DO BANCO MORREU, E ESTE TESTE É QUEM GUARDA O LUGAR ──────
@@ -87,7 +88,7 @@ function makeDb(catalogo: unknown) {
     },
   };
 
-  const service = new CandidatosService(db as never, catalogo as never, catalogoDeStatusFingido() as never);
+  const service = new CandidatosService(db as never, catalogo as never, catalogoDeStatusFingido() as never, envioDoPortalFingido() as never);
   // `candidatura(id)` monta a resposta com um join que este fake não serve, e ela não é o objeto do
   // teste: o que interessa é o que foi ESCRITO. A leitura final é neutralizada.
   vi.spyOn(service as never as { candidatura: () => Promise<unknown> }, "candidatura").mockResolvedValue(

@@ -327,14 +327,18 @@ export default function VagasPendentesDeRevisaoPage() {
       <GlassCard className="overflow-hidden p-2">
         <div className="ea-scroll overflow-x-auto">
           {/* A LARGURA MÍNIMA É A SOMA DO QUE CADA COLUNA PRECISA para não esmagar ninguém (§A.20):
-              abaixo dela a tabela ROLA na horizontal, em vez de espremer nome de vaga e de cliente. */}
-          <table className="ds-table min-w-[1180px]">
+              abaixo dela a tabela ROLA na horizontal, em vez de espremer nome de vaga e de cliente.
+              Nome De Divulgação ganhou largura própria: sem ela, era a única coluna de conteúdo sem
+              largura e engolia todo o espaço sobrando, abrindo um vão morto antes de Cargo, e ao
+              mesmo tempo ficava espremida na largura mínima (a soma das fixas quase batia o `min-w`).
+              Com largura própria, a folga se distribui entre todas as colunas. */}
+          <table className="ds-table min-w-[1380px]">
             <thead>
               <tr>
                 <ColunaOrdenavel as="th" ord={ord} chave="codigo" className="w-[120px]">
                   Vaga
                 </ColunaOrdenavel>
-                <ColunaOrdenavel as="th" ord={ord} chave="vaga">
+                <ColunaOrdenavel as="th" ord={ord} chave="vaga" className="w-[220px]">
                   Nome De Divulgação
                 </ColunaOrdenavel>
                 <ColunaOrdenavel as="th" ord={ord} chave="cargo" className="w-[180px]">

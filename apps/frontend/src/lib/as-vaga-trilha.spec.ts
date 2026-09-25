@@ -146,9 +146,12 @@ describe("eixo 2: o desfecho", () => {
 });
 
 describe("a frase de apoio diz o que o rótulo não cabe", () => {
-  it("a intenção de admissão vem com a ressalva de que ninguém confirmou", () => {
+  it("o envio para admissão explica o próximo passo, sem afirmar que o link já saiu", () => {
     const t = trilhaDaVaga(vaga({ status: "ENTREGUE", fechadas: 1, enviar: true }));
-    expect(t.desfecho.frase).toContain("ainda não confirma");
+    // A ponte A&S para a admissão está viva; a frase diz que o candidato recebe o link quando a
+    // admissão revisar a vaga, sem inventar que o link já foi enviado (item 4, decisão do diretor).
+    expect(t.desfecho.frase).toContain("encaminhada para admissão");
+    expect(t.desfecho.frase).toContain("recebe o link");
   });
 
   it("a vaga aberta diz quantas posições faltam, no plural certo", () => {

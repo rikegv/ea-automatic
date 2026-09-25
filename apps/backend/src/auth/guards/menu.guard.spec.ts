@@ -3,7 +3,12 @@ import { Reflector } from "@nestjs/core";
 import type { Area } from "@ea/shared-types";
 import { describe, expect, it, vi } from "vitest";
 import { MenuGuard } from "./menu.guard";
-import { temIntersecao } from "../../domain/menus";
+import {
+  MENUS,
+  MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER,
+  menuDaOperacao,
+  temIntersecao,
+} from "../../domain/menus";
 import type { MenuAreasService } from "../menu-areas.service";
 import type { MenusService } from "../menus.service";
 
@@ -142,5 +147,91 @@ describe("MenuGuard", () => {
     await expect(
       guard.canActivate(ctx("RegrasController", "create", COMUM)),
     ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  // ── A EXCEÇÃO NOMINAL: OS MENUS EM QUE O MASTER TAMBÉM PRECISA DA MARCAÇÃO ──────────────
+  //
+  // Decisão do diretor, no menu de Dicas De Documento: o texto escrito lá aparece na tela PÚBLICA
+  // do candidato, então escrevê-lo é concessão nominal e não consequência do papel. A lista vive em
+  // `domain/menus` e é ADITIVA: os dois lados são provados aqui, porque nenhum sozinho bastaria.
+
+  it("MASTER SEM a marcação é BARRADO no menu nominal, mesmo estando na área", async () => {
+    const { guard } = makeGuard([], ["ADM"]);
+    await expect(
+      guard.canActivate(ctx("DicasDocumentoController", "upsert", MASTER)),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it("MASTER COM a marcação passa: o menu continua CONCEDÍVEL pelo diretor", async () => {
+    const { guard } = makeGuard(["dicas-documento"], ["ADM"]);
+    await expect(
+      guard.canActivate(ctx("DicasDocumentoController", "upsert", MASTER)),
+    ).resolves.toBe(true);
+  });
+
+  it("a LEITURA da tela também é gatada: sem marcação, nem listar", async () => {
+    const { guard } = makeGuard([], ["ADM"]);
+    await expect(
+      guard.canActivate(ctx("DicasDocumentoController", "list", MASTER)),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it("SUPER_ADMIN continua com bypass TOTAL no menu nominal, sem tocar o banco", async () => {
+    const { guard, menus } = makeGuard([]);
+    await expect(guard.canActivate(ctx("DicasDocumentoController", "upsert", ADMIN))).resolves.toBe(
+      true,
+    );
+    expect(menus.permissaoDoUsuario).not.toHaveBeenCalled();
+  });
+
+  it("o TETO DE ÁREA continua ANTES da marcação: marcado mas fora da área, barrado", async () => {
+    // A área nunca concede, só limita, e a exceção nominal não inverteu essa ordem.
+    const { guard } = makeGuard(["dicas-documento"], ["AS"], ["ADM"]);
+    await expect(
+      guard.canActivate(ctx("DicasDocumentoController", "upsert", MASTER)),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it("COMUM não mudou: sem o menu barra, com o menu passa", async () => {
+    const semMenu = makeGuard([], ["ADM"]).guard;
+    await expect(
+      semMenu.canActivate(ctx("DicasDocumentoController", "list", COMUM)),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    const comMenu = makeGuard(["dicas-documento"], ["ADM"]).guard;
+    await expect(comMenu.canActivate(ctx("DicasDocumentoController", "list", COMUM))).resolves.toBe(
+      true,
+    );
+  });
+
+  /**
+   * A PROVA DE QUE A MUDANÇA É ADITIVA, e é o caso mais importante deste arquivo.
+   *
+   * O `MenuGuard` está no caminho de TODAS as rotas autenticadas (§A.26), então "mudei só um menu"
+   * precisa ser MEDIDO, não afirmado. Este caso VARRE O REGISTRO INTEIRO com um MASTER da área ADM
+   * e SEM marcação nenhuma, e cobra o comportamento antigo (passa) em todo menu FORA da lista
+   * nominal, e o novo (403) em todo menu DENTRO dela. Qualquer nome acrescentado à lista sem a
+   * decisão do diretor quebra aqui, e qualquer regressão que barre um menu de fora também.
+   */
+  it("VARREDURA: para TODO menu fora da lista nominal, o MASTER da área passa sem marcação", async () => {
+    const semMarcacao = makeGuard([], ["ADM"], ["ADM"]).guard;
+    let varridos = 0;
+    for (const menu of MENUS) {
+      for (const operacao of menu.operacoes) {
+        const [controller, handler] = operacao.split(".");
+        // O registro tem handler exato E coringa, e a precedência é do exato: quem responde qual
+        // menu governa a operação é o mesmo índice que o guard usa, nunca este laço.
+        const alvo = menuDaOperacao(controller, handler === "*" ? "qualquerCoisa" : handler);
+        if (!alvo) continue;
+        varridos += 1;
+        const promessa = semMarcacao.canActivate(ctx(controller, handler === "*" ? "qualquerCoisa" : handler, MASTER));
+        if (MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER.has(alvo)) {
+          await expect(promessa).rejects.toBeInstanceOf(ForbiddenException);
+        } else {
+          await expect(promessa).resolves.toBe(true);
+        }
+      }
+    }
+    // A varredura só vale se de fato varreu: um registro vazio passaria em silêncio.
+    expect(varridos).toBeGreaterThan(50);
   });
 });

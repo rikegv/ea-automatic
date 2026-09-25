@@ -25,7 +25,18 @@ const MASTER: AuthUser = {
 };
 const CPF_OK = "52998224725";
 const CARGO = "11111111-1111-4111-8111-111111111111";
-const DTO = { codCliente: "100", cargoId: CARGO, uniforme: { possui: false } };
+// GATE DOS OBRIGATÓRIOS-PARA-LIBERAR (item 6): os 6 campos próprios do gate preenchidos, para
+// exercitar a trava de CPF duplicado sem esbarrar no novo gate (a trava de duplicidade roda ANTES
+// dele, então os casos que esperam 409 de duplicidade seguem barrando na duplicidade).
+const DTO = {
+  codCliente: "100",
+  cargoId: CARGO,
+  uniforme: { possui: false },
+  sexo: "MASCULINO" as const,
+  tipoContrato: "Interno",
+  dataAdmissao: "2026-10-01",
+  vagaFolha: { escala: "12x36", beneficios: "VR" },
+};
 
 /**
  * Fake do Drizzle para o caminho da liberação. `vivas` são as OUTRAS admissões vivas do mesmo CPF,

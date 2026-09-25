@@ -29,7 +29,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AS_CANDIDATO_ORIGEM,
   AS_CANDIDATO_ORIGEM_LABEL,
-  BANCO_TALENTOS_LABEL,
   CANDIDATURA_SITUACAO_LABEL,
   CANDIDATURA_SITUACOES,
   candidaturaViva,
@@ -57,7 +56,6 @@ import {
   CARD_SEM_VAGA,
   CARD_TOTAL,
   dataHoraBr,
-  ehBancoTalentos,
   mensagemDoErro,
   painelDaVaga,
 } from "@/lib/as-candidatos";
@@ -78,21 +76,6 @@ interface Linha {
   candidatura: AsCandidaturaItem | null;
   vaga: VagaListItem | null;
 }
-
-/**
- * ─ AS DUAS RESPOSTAS DA COLUNA RETENÇÃO, e elas são o vocabulário do filtro também ─────────────
- *
- * O rótulo do retido vem de `BANCO_TALENTOS_LABEL`, no contrato compartilhado, e não é digitado
- * aqui: tela e trilha precisam falar a MESMA palavra, e duas cópias divergem no primeiro ajuste.
- * O rótulo do outro lado é desta tela porque é leitura de tela, não vocabulário de domínio: no
- * banco ele é a ausência da marca.
- */
-const RETIDO = "RETIDO";
-const NAO_RETIDO = "NAO_RETIDO";
-const RETENCAO_OPCOES = [
-  { value: RETIDO, label: BANCO_TALENTOS_LABEL },
-  { value: NAO_RETIDO, label: "Retenção Padrão" },
-];
 
 /**
  * Os painéis das vagas, buscados em PARALELO COM TETO. Sem o teto, uma base com muitas vagas abriria
@@ -156,18 +139,15 @@ export default function CentralDeCandidatosPage() {
   const [fEtapa, setFEtapa] = useState("");
   const [fOrigem, setFOrigem] = useState<AsCandidatoOrigem | "">("");
   /**
-   * ─ O FILTRO DA COLUNA NOVA, MÚLTIPLO DESDE O PRIMEIRO DIA (§A.37 + §A.28) ────────────────────
+   * ─ ESCOPO DA VISÃO (item 5): FRENTE DE TRABALHO × HISTÓRICO ──────────────────────────────────
    *
-   * A coluna Retenção nasceu nesta entrega, então o filtro dela nasce junto, no mesmo commit, e
-   * múltiplo pelo componente compartilhado. As DUAS opções existem de propósito: sem a segunda,
-   * "quem AINDA entra no descarte" seria pergunta sem resposta na tela, e ela costuma ser a metade
-   * útil de uma coluna de exceção.
-   *
-   * ELE RODA NO CLIENTE, como os de cliente e etapa: a busca do backend não tem este eixo, e
-   * inventar um parâmetro que a rota ignora seria filtro que mente (§A.28). A tela carrega o
-   * conjunto inteiro, então o recorte aqui é honesto.
+   * A visão padrão é a FRENTE DE TRABALHO: mostra só quem está EM ANDAMENTO (candidatura ATIVO) mais
+   * quem ainda não foi alocado (sem vaga). Quem já recebeu desfecho (aprovado, alocado, enviado para
+   * admissão, descartado, desistiu) SAI da visão padrão e aparece no HISTÓRICO, no molde da aba
+   * Concluído do Gerenciador. O escopo recorta ANTES da conta dos cards, então card e tabela nunca
+   * discordam: na frente, as etapas contam; no histórico, os desfechos contam.
    */
-  const [fRetencao, setFRetencao] = useState<string[]>([]);
+  const [escopo, setEscopo] = useState<"andamento" | "historico">("andamento");
   /**
    * O CARD ATIVO É UMA CHAVE CRUA (código de etapa, código de situação, ou um dos dois reservados),
    * e não mais um dos nove nomes escritos à mão: a lista de cards passou a vir do CATÁLOGO.
@@ -279,15 +259,20 @@ export default function CentralDeCandidatosPage() {
   const linhasSemCard = useMemo(
     () =>
       linhasBase.filter((l) => {
+        /*
+         * ─ ESCOPO DA VISÃO (item 5): FRENTE DE TRABALHO × HISTÓRICO ──────────────────────────────
+         *
+         * EM ANDAMENTO é candidatura ATIVO, mais quem ainda não foi alocado (sem candidatura). Quem
+         * já recebeu qualquer desfecho (aprovado, alocado, enviado para admissão, descartado,
+         * desistiu) NÃO é frente de trabalho: sai da visão padrão e mora no HISTÓRICO. O recorte vem
+         * ANTES da conta dos cards, de propósito, para o card sempre bater com a tabela.
+         */
+        const emAndamento = l.candidatura === null || l.candidatura.situacao === "ATIVO";
+        if (escopo === "andamento" && !emAndamento) return false;
+        if (escopo === "historico" && emAndamento) return false;
         // LISTA VAZIA É "TODOS" (§A.28): sem isso a tela abriria vazia esperando alguém marcar.
         if (fCandidatos.length > 0 && !fCandidatos.includes(l.pessoa.id)) return false;
         if (fCliente && l.vaga?.codCliente !== fCliente) return false;
-        // LISTA VAZIA É "TODOS" (§A.28), igual ao filtro de candidato logo acima.
-        if (
-          fRetencao.length > 0 &&
-          !fRetencao.includes(ehBancoTalentos(l.pessoa) ? RETIDO : NAO_RETIDO)
-        )
-          return false;
         /*
          * O FILTRO DE ETAPA SÓ ALCANÇA QUEM ESTÁ VIVO (peça P1 do bug 1), e era aqui que a contagem
          * distorcia: a comparação olhava só `etapa`, então filtrar "Triagem" trazia junto quem foi
@@ -304,7 +289,7 @@ export default function CentralDeCandidatosPage() {
         if (fEtapa && l.candidatura?.etapa !== fEtapa) return false;
         return true;
       }),
-    [linhasBase, fCandidatos, fCliente, fEtapa, fRetencao],
+    [linhasBase, fCandidatos, fCliente, fEtapa, escopo],
   );
 
   /**
@@ -416,18 +401,6 @@ export default function CentralDeCandidatosPage() {
         valor: (l) =>
           l.candidatura ? CANDIDATURA_SITUACOES.indexOf(l.candidatura.situacao) : null,
       },
-      {
-        chave: "retencao",
-        /*
-         * `status` E NÃO `texto`: a coluna tem dois estados, e ordenar pelo rótulo faria "Banco De
-         * Talentos" e "Retenção Padrão" se alternarem por acaso alfabético. O rank põe quem NÃO
-         * expira no topo do primeiro clique, que é a pergunta que a coluna responde. Zero não conta
-         * como vazio no `useOrdenacao` (só `null`, `undefined` e `""` contam), então ninguém é
-         * empurrado para o fim da lista por estar retido.
-         */
-        tipo: "status",
-        valor: (l) => (ehBancoTalentos(l.pessoa) ? 0 : 1),
-      },
       { chave: "ultimoContato", tipo: "data", valor: (l) => l.candidatura?.ultimoContatoEm ?? null },
     ],
     // O CATÁLOGO ENTRA NAS DEPENDÊNCIAS: sem ele, a coluna Etapa ficaria congelada na ordem
@@ -501,8 +474,7 @@ export default function CentralDeCandidatosPage() {
     (fVaga ? 1 : 0) +
     (fCliente ? 1 : 0) +
     (fEtapa ? 1 : 0) +
-    (fOrigem ? 1 : 0) +
-    (fRetencao.length ? 1 : 0);
+    (fOrigem ? 1 : 0);
 
   function limparFiltros() {
     setFCandidatos([]);
@@ -511,7 +483,6 @@ export default function CentralDeCandidatosPage() {
     setFCliente("");
     setFEtapa("");
     setFOrigem("");
-    setFRetencao([]);
   }
 
   return (
@@ -607,8 +578,7 @@ export default function CentralDeCandidatosPage() {
                 limpavel
               />
             </FiltroCampo>
-            {/* ORIGEM É SÓ O SISTEMA DE ONDE A PESSOA VEIO. "Banco De Talentos" saiu daqui e virou
-                o filtro de Retenção logo abaixo: eram duas perguntas dentro de um seletor só. */}
+            {/* ORIGEM É SÓ O SISTEMA DE ONDE A PESSOA VEIO. */}
             <FiltroCampo label="Origem">
               <Combobox
                 value={fOrigem}
@@ -621,21 +591,6 @@ export default function CentralDeCandidatosPage() {
                 ariaLabel="Origem"
                 limpavel
               />
-            </FiltroCampo>
-            <FiltroCampo label="Retenção">
-              <Combobox
-                multiple
-                value={fRetencao}
-                onChange={setFRetencao}
-                options={RETENCAO_OPCOES}
-                placeholder="Todas"
-                ariaLabel="Retenção"
-                limpavel
-              />
-              <p className="mt-1 text-[11.5px] text-faint">
-                Quem está no banco de talentos não entra no descarte automático. Dá para escolher os
-                dois lados de uma vez.
-              </p>
             </FiltroCampo>
           </FiltroTrigger>
           {/* A QUARTA AÇÃO DA TELA. Ela existe porque o único caminho de alocação passava pelo dedup
@@ -658,6 +613,34 @@ export default function CentralDeCandidatosPage() {
           {erro}
         </p>
       )}
+
+      {/* ESCOPO DA VISÃO (item 5): frente de trabalho (em andamento) × histórico (concluídos). O
+          escopo recorta ANTES da conta dos cards, então trocar de aba muda cards e tabela juntos. */}
+      <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
+        {(["andamento", "historico"] as const).map((e) => (
+          <button
+            key={e}
+            type="button"
+            onClick={() => {
+              setEscopo(e);
+              setCardAtivo(CARD_TOTAL);
+            }}
+            className={cn(
+              "rounded-full border px-3 py-1 transition",
+              escopo === e
+                ? "border-accent bg-[var(--surface-2)] text-accent"
+                : "border-[var(--border)] text-dim hover:text-text",
+            )}
+          >
+            {e === "andamento" ? "Em Andamento" : "Histórico"}
+          </button>
+        ))}
+        <span className="text-[11.5px] text-faint">
+          {escopo === "andamento"
+            ? "A frente de trabalho: só quem está em andamento. Concluídos ficam no Histórico."
+            : "Histórico: quem já recebeu desfecho (aprovado, alocado, enviado para admissão, descartado ou desistiu)."}
+        </span>
+      </div>
 
       {/* ── OS CARDS, EM DUAS FILEIRAS, E NENHUM ESTADO SEM NÚMERO À VISTA ───────────────────
           Fileira 1: o Total e as ETAPAS DO FUNIL, na ordem do funil, LIDAS DO CATÁLOGO DO DIRETOR.
@@ -707,43 +690,34 @@ export default function CentralDeCandidatosPage() {
               larguras proporcionais que aproveitam a linha inteira sem esmagar nome nem pill. As
               colunas de pill (Etapa e Situação) recebem largura do rótulo mais longo do sistema
               ("Entrevista Soulan" e "Em Seleção"), então nenhuma delas quebra em duas linhas. */}
-          {/* §A.20: a coluna Retenção entrou e as larguras foram REDISTRIBUÍDAS, não espremidas.
-              Quem mais cedeu foi a Vaga (17% para 13%), que tinha folga por já truncar nome longo
-              de divulgação, mais um ponto de Candidato, Cliente, Cargo, Etapa, Situação e Último
-              Contato; a nova recebe 11%, o bastante para a pill "Banco De Talentos" caber em uma
-              linha só. As nove somam 100%, sem sobra e sem estouro. A largura mínima da tabela subiu junto (1180 para 1340), então nada
-              encolhe: falta espaço, a tabela rola na horizontal, que é a régua da §A.12. */}
-          <table className="ds-table min-w-[1340px]">
+          {/* §A.20: a coluna Retenção SAIU (decisão do diretor) e as larguras foram REDISTRIBUÍDAS,
+              não espremidas: os 11% dela voltaram para as oito colunas restantes, que somam 100% sem
+              sobra e sem estouro. A largura mínima da tabela voltou para 1180, então nada encolhe:
+              falta espaço, a tabela rola na horizontal, que é a régua da §A.12. */}
+          <table className="ds-table min-w-[1180px]">
             <thead>
               <tr>
                 {/* §A.29: todo cabeçalho que ordena vira `ColunaOrdenavel`. O `<th>` continua sendo
                     o mesmo elemento de antes, com a mesma largura e a mesma divisória, então o
                     layout do §A.12 não muda; o que entra é o botão com a seta dentro dele. Só Ações
                     fica de fora, porque não há o que comparar entre dois grupos de botões. */}
-                <ColunaOrdenavel as="th" ord={ord} chave="candidato" className="w-[17%] text-center">
+                <ColunaOrdenavel as="th" ord={ord} chave="candidato" className="w-[19%] text-center">
                   Candidato
                 </ColunaOrdenavel>
-                <ColunaOrdenavel as="th" ord={ord} chave="vaga" className="w-[13%] text-center">
+                <ColunaOrdenavel as="th" ord={ord} chave="vaga" className="w-[15%] text-center">
                   Vaga
                 </ColunaOrdenavel>
-                <ColunaOrdenavel as="th" ord={ord} chave="cliente" className="w-[11%] text-center">
+                <ColunaOrdenavel as="th" ord={ord} chave="cliente" className="w-[12%] text-center">
                   Cliente
                 </ColunaOrdenavel>
-                <ColunaOrdenavel as="th" ord={ord} chave="cargo" className="w-[11%] text-center">
+                <ColunaOrdenavel as="th" ord={ord} chave="cargo" className="w-[12%] text-center">
                   Cargo
                 </ColunaOrdenavel>
-                <ColunaOrdenavel as="th" ord={ord} chave="etapa" className="w-[11%] text-center">
+                <ColunaOrdenavel as="th" ord={ord} chave="etapa" className="w-[12%] text-center">
                   Etapa
                 </ColunaOrdenavel>
-                <ColunaOrdenavel as="th" ord={ord} chave="situacao" className="w-[10%] text-center">
+                <ColunaOrdenavel as="th" ord={ord} chave="situacao" className="w-[11%] text-center">
                   Situação
-                </ColunaOrdenavel>
-                {/* ─ RETENÇÃO: A COLUNA NOVA, e ela nasce ORDENÁVEL e COM FILTRO (§A.29/§A.37) ──
-                    O cabeçalho é "Retenção" e não "Banco De Talentos" porque a coluna responde à
-                    pergunta (quanto tempo se guarda esta pessoa) e o banco de talentos é UMA das
-                    duas respostas, a que aparece na célula. */}
-                <ColunaOrdenavel as="th" ord={ord} chave="retencao" className="w-[11%] text-center">
-                  Retenção
                 </ColunaOrdenavel>
                 {/* §A.20: a coluna ganhou um ponto de largura porque o rótulo mais longo da tabela
                     passou a dividir a célula com a seta. Sem isso, "Último Contato" truncaria. */}
@@ -751,23 +725,23 @@ export default function CentralDeCandidatosPage() {
                   as="th"
                   ord={ord}
                   chave="ultimoContato"
-                  className="w-[10%] whitespace-nowrap text-center"
+                  className="w-[12%] whitespace-nowrap text-center"
                 >
                   Último Contato
                 </ColunaOrdenavel>
-                <th className="w-[6%] text-center">Ações</th>
+                <th className="w-[7%] text-center">Ações</th>
               </tr>
             </thead>
             <tbody>
               {carregando ? (
                 <tr>
-                  <td colSpan={9} className="py-8 text-center text-faint">
+                  <td colSpan={8} className="py-8 text-center text-faint">
                     Carregando…
                   </td>
                 </tr>
               ) : visiveis.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="py-8 text-center text-faint">
+                  <td colSpan={8} className="py-8 text-center text-faint">
                     Nenhum candidato nesta fila. Use o botão Novo candidato ou limpe os filtros.
                   </td>
                 </tr>
@@ -848,26 +822,6 @@ export default function CentralDeCandidatosPage() {
                         </span>
                       ) : (
                         <span className="text-faint">Vaga Não Alocada</span>
-                      )}
-                    </td>
-                    {/* ─ A RETENÇÃO É DA PESSOA, NÃO DA CANDIDATURA ──────────────────────────
-                        É por isso que esta célula é a única do miolo que não tem "Vaga Não
-                        Alocada": quem está na base sem vaga nenhuma tem retenção igual, e é
-                        justamente essa pessoa que o banco de talentos existe para guardar.
-                        O padrão sai em texto apagado, e não em pill: pill em todo mundo pintaria a
-                        coluna inteira para dizer "nada de especial aqui", e o que precisa saltar é
-                        a EXCEÇÃO, quem não expira. */}
-                    <td className="text-center">
-                      {ehBancoTalentos(l.pessoa) ? (
-                        <span className="inline-flex justify-center">
-                          <StatusPill
-                            tone="ok"
-                            label={BANCO_TALENTOS_LABEL}
-                            title="Esta pessoa não entra no descarte automático."
-                          />
-                        </span>
-                      ) : (
-                        <span className="text-faint">Retenção Padrão</span>
                       )}
                     </td>
                     {/* ÚLTIMO CONTATO, e não "última movimentação": é a pergunta que a operação

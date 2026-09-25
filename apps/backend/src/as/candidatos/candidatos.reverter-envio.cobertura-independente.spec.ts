@@ -15,6 +15,7 @@ import { asCandidaturaEtapas, asCandidaturas } from "../../db/schema";
 import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
 import { catalogoDeStatusFingido } from "../vaga-status/vaga-status-catalogo.fake";
 import type { AuthUser } from "../../auth/auth.types";
+import { envioDoPortalFingido } from "../../portal/portal-envio.fake";
 
 /**
  * ─ REVERSÃO DO ENVIO: COBERTURA INDEPENDENTE (§A.38, tester que não escreveu o código) ──────────
@@ -142,7 +143,11 @@ function makeDb(
       return Promise.resolve([vaga]);
     };
     b.groupBy = () => Promise.resolve([]);
-    b.then = (r: (v: unknown) => unknown) => Promise.resolve([]).then(r);
+    // A PONTE A&S → Esteira lê o candidato (CPF) antes de consumir a posição, no envio de verdade
+    // (`registrarSaida`). É o único `select` deste fake resolvido por `then`: devolve um candidato
+    // com CPF VÁLIDO para o envio passar do gate de CPF e a cobertura exercer a reversão de verdade.
+    b.then = (r: (v: unknown) => unknown) =>
+      Promise.resolve([{ candCpf: "52998224725", candNome: "Fulano" }]).then(r);
     return b;
   });
 
@@ -210,7 +215,7 @@ function makeDb(
   };
 
   return {
-    service: new CandidatosService(db as never, catalogoDeEtapasFingido() as never, catalogoDeStatusFingido() as never),
+    service: new CandidatosService(db as never, catalogoDeEtapasFingido() as never, catalogoDeStatusFingido() as never, envioDoPortalFingido() as never),
     linha: c,
     updates,
     inserts,

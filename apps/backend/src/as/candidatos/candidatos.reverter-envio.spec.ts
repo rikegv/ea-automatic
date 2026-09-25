@@ -20,6 +20,7 @@ import { asCandidaturaEtapas, asCandidaturas } from "../../db/schema";
 import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
 import { catalogoDeStatusFingido } from "../vaga-status/vaga-status-catalogo.fake";
 import type { AuthUser } from "../../auth/auth.types";
+import { envioDoPortalFingido } from "../../portal/portal-envio.fake";
 
 /**
  * ─ REVERTER O ENVIO PARA A ADMISSÃO: desfazer o clique errado ───────────────────────────────────
@@ -146,7 +147,11 @@ function makeDb(
       return Promise.resolve([vaga]);
     };
     b.groupBy = () => Promise.resolve([]);
-    b.then = (r: (v: unknown) => unknown) => Promise.resolve([]).then(r);
+    // A PONTE A&S → Esteira lê o candidato (CPF) antes de consumir a posição, no envio de verdade
+    // (`registrarSaida`). É o único `select` deste fake resolvido por `then`: devolve um candidato
+    // com CPF VÁLIDO para o envio passar do gate de CPF e o teste exercer a reversão de verdade.
+    b.then = (r: (v: unknown) => unknown) =>
+      Promise.resolve([{ candCpf: "52998224725", candNome: "Fulano" }]).then(r);
     return b;
   });
 
@@ -206,7 +211,7 @@ function makeDb(
   };
 
   return {
-    service: new CandidatosService(db as never, catalogoDeEtapasFingido() as never, catalogoDeStatusFingido() as never),
+    service: new CandidatosService(db as never, catalogoDeEtapasFingido() as never, catalogoDeStatusFingido() as never, envioDoPortalFingido() as never),
     linha: c,
     updates,
     inserts,
@@ -535,7 +540,7 @@ describe("só reverte quem está ENVIADO PARA ADMISSÃO, e a recusa é legível"
       transaction: async (fn: (t: unknown) => Promise<unknown>) =>
         fn({ query: { asCandidaturas: { findFirst: async () => undefined } } }),
     };
-    const vazio = new CandidatosService(db as never, catalogoDeEtapasFingido() as never, catalogoDeStatusFingido() as never);
+    const vazio = new CandidatosService(db as never, catalogoDeEtapasFingido() as never, catalogoDeStatusFingido() as never, envioDoPortalFingido() as never);
 
     await expect(vazio.reverterEnvioParaAdmissao("cand-1", "user-1")).rejects.toBeInstanceOf(
       NotFoundException,

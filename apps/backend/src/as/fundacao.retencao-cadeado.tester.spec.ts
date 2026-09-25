@@ -8,6 +8,7 @@ import type { Papel } from "@ea/shared-types";
 import * as schema from "../db/schema";
 import { EditarCandidatoDto } from "./candidatos/candidatos.dto";
 import { CandidatosService } from "./candidatos/candidatos.service";
+import { envioDoPortalFingido } from "../portal/portal-envio.fake";
 
 /**
  * ─ FECHAMENTO DA FUNDAÇÃO, PEÇA C: O CADEADO DA RETENÇÃO, NA CRIAÇÃO E NA EDIÇÃO ───────────────
@@ -407,7 +408,7 @@ interface ServicoComCadeado {
 
 function servico(candidato: Record<string, unknown>) {
   const { db, escritas } = bancoFingido(candidato);
-  const s = new CandidatosService(db as never, {} as never, {} as never);
+  const s = new CandidatosService(db as never, {} as never, {} as never, envioDoPortalFingido() as never);
   // A leitura final (`ficha`) monta a resposta com consultas que este fake não serve, e ela NÃO é o
   // objeto do teste: o que interessa é o que foi ESCRITO. É o padrão dos specs vizinhos.
   vi.spyOn(s as unknown as { ficha: () => Promise<unknown> }, "ficha").mockResolvedValue({} as never);

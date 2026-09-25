@@ -2,7 +2,8 @@
  * Formulario de VT online, lado do candidato (app Firebase, fora do EA).
  *
  * Fluxo:
- *   1. Le o token da URL (?t=...). Verifica a assinatura Ed25519 OFFLINE com a chave publica
+ *   1. Le o token da URL: FRAGMENTO (#t=...) primeiro, query (?t=...) como reserva de transicao.
+ *      Verifica a assinatura Ed25519 OFFLINE com a chave publica
  *      embutida (so para UX). Ela so barra o que da para ter CERTEZA aqui (token ausente, cortado,
  *      alg errado, assinatura reprovada, claim faltando), cada caso com a sua mensagem. PRAZO e
  *      cripto indisponivel NAO barram: quem decide isso e o servidor, no envio.
@@ -1068,8 +1069,13 @@
   }
 
   async function iniciar() {
-    const params = new URLSearchParams(window.location.search);
-    const token = params.get("t");
+    // LGPD (§A.6): o token vem no FRAGMENTO (#t=), que o navegador NAO envia ao servidor, entao
+    // nao cai no log do Firebase Hosting. A query (?t=) segue como RESERVA: links de consultor ja
+    // emitidos valem 30 dias, e derrubar a query antes disso quebraria todo link ainda vivo.
+    // Fragmento primeiro, query so quando nao ha fragmento. O token so e lido, nunca reescrito na URL.
+    const hash = window.location.hash;
+    const token = (hash.indexOf("#t=") === 0 ? decodeURIComponent(hash.slice(3)) : null)
+      ?? new URLSearchParams(window.location.search).get("t");
     const veredito = await verificarTokenOffline(token);
     if (!veredito.ok) {
       telaErro(MSG_TOKEN[veredito.motivo] || MSG_TOKEN.MALFORMADO);

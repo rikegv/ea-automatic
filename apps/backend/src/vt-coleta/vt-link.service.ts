@@ -25,6 +25,29 @@ export interface LinkVtGerado {
 }
 
 /**
+ * O PRAZO DA EMISSÃO, QUANDO O CHAMADOR PRECISA DE UM DIFERENTE DO PADRÃO.
+ *
+ * ┌─ POR QUE O PARÂMETRO EXISTE (veto F2 da auditoria da ponte do VT) ─────────────────────────┐
+ * │ O prazo deste token é do CONSULTOR: ele manda o link por e-mail e a pessoa responde quando  │
+ * │ puder, então dias fazem sentido (`VT_LINK_TTL_DIAS`, e a produção está em 30). A PONTE DO   │
+ * │ PORTAL é o caso oposto: o candidato está com a tela aberta e clicou para ir preencher AGORA.│
+ * │ Dar-lhe a mesma validade seria cunhar, num clique e sem revogação possível, uma credencial  │
+ * │ com CPF e nome em claro que vive um mês, dentro de um produto cujo link vale 72 horas e cuja│
+ * │ sessão vale 30 minutos.                                                                      │
+ * │                                                                                              │
+ * │ OPCIONAL, E O CAMINHO ANTIGO SAI BYTE A BYTE IGUAL: sem `ttlHoras`, o cálculo é exatamente o │
+ * │ de sempre (`VT_LINK_TTL_DIAS`, com queda para `VT_LINK_TTL_DIAS_PADRAO`). Os dois chamadores │
+ * │ do consultor (`vt-coleta.controller` e `solicitacao-vt.service`) não foram tocados.          │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+export interface OpcoesDoLinkVt {
+  /** Validade em HORAS. Ausente = o padrão em dias do ambiente, o comportamento de sempre. */
+  ttlHoras?: number;
+}
+
+const HORAS_POR_DIA = 24;
+
+/**
  * Gerador do LINK ASSINADO do formulário de VT (§A.17), lado EA.
  *
  * O consultor dispara pela ficha da admissão; o EA assina um token Ed25519 (chave privada só aqui) e
@@ -44,10 +67,24 @@ export class VtLinkService {
     private readonly config: ConfigService,
   ) {}
 
-  /** TTL do link em dias (env `VT_LINK_TTL_DIAS`, default 7). Valor inválido cai no padrão. */
+  /**
+   * TTL do link em dias. Vem de `VT_LINK_TTL_DIAS`, e o padrão de código (`VT_LINK_TTL_DIAS_PADRAO`)
+   * só vale quando a variável está ausente ou inválida.
+   *
+   * O NÚMERO DO AMBIENTE MANDA, E ELE NÃO É O PADRÃO: a produção está em 30 dias, medido no `.env`.
+   * Nenhum comentário deste módulo escreve um prazo fixo por isso mesmo: número em prosa envelhece
+   * calado no dia em que alguém mexe na variável.
+   */
   private ttlDias(): number {
     const bruto = Number(this.config.get<string>("VT_LINK_TTL_DIAS"));
     return Number.isFinite(bruto) && bruto > 0 ? bruto : VT_LINK_TTL_DIAS_PADRAO;
+  }
+
+  /** O prazo efetivo da emissão, em dias: o pedido na chamada (em horas) ou o do ambiente. */
+  private ttlDaEmissao(opcoes?: OpcoesDoLinkVt): number {
+    const horas = opcoes?.ttlHoras;
+    if (typeof horas === "number" && Number.isFinite(horas) && horas > 0) return horas / HORAS_POR_DIA;
+    return this.ttlDias();
   }
 
   /** URL base do app externo (env `VT_LINK_BASE_URL`, default do app Firebase do VT). */
@@ -60,7 +97,7 @@ export class VtLinkService {
    * nascimento); sem CPF ou sem data de nascimento cadastrados, devolve 422 (não dá para emitir uma
    * credencial que o app não consegue conferir). Sem chave privada configurada, devolve 503.
    */
-  async gerarParaAdmissao(admissaoId: string): Promise<LinkVtGerado> {
+  async gerarParaAdmissao(admissaoId: string, opcoes?: OpcoesDoLinkVt): Promise<LinkVtGerado> {
     const chavePrivada = carregarChavePrivadaVt(this.config.get<string>("VT_LINK_PRIVATE_KEY"));
     if (!chavePrivada) throw new ServiceUnavailableException(VT_LINK_NAO_CONFIGURADO);
 
@@ -82,7 +119,7 @@ export class VtLinkService {
       );
     }
 
-    const ttl = this.ttlDias();
+    const ttl = this.ttlDaEmissao(opcoes);
     const agora = new Date();
     const token = gerarTokenVt(
       { admissaoId, nome: candidato.nome, cpf, dataNascimento },
@@ -97,7 +134,16 @@ export class VtLinkService {
   }
 }
 
-/** Monta o link final do VT: `${baseUrl}?t=${token}`. Puro, exposto para teste. */
+/**
+ * Monta o link final do VT: `${baseUrl}#t=${token}`. Puro, exposto para teste.
+ *
+ * FRAGMENTO, e não query (OST 3 vazamentos, vazamento 3). O token carrega CPF, nome e um hash da
+ * data de nascimento; o FRAGMENTO (`#t=`) NÃO é enviado ao servidor, então não cai no log do Firebase
+ * Hosting, no `Referer` nem no histórico de proxy, ao contrário da query string (`?t=`). §A.6.
+ *
+ * SÓ O BACKEND EMITE `#t=`. A compatibilidade dos links ANTIGOS (`?t=`, ainda válidos pelo TTL) é
+ * resolvida no APP do Firebase (dual-read lá), não aqui.
+ */
 export function montarLinkVt(baseUrl: string, token: string): string {
-  return `${baseUrl}?t=${token}`;
+  return `${baseUrl}#t=${token}`;
 }

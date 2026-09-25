@@ -6,6 +6,7 @@ import { asCandidaturaEtapas, asCandidaturas } from "../../db/schema";
 import { CandidatosService } from "./candidatos.service";
 import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
 import { catalogoDeStatusFingido } from "../vaga-status/vaga-status-catalogo.fake";
+import { envioDoPortalFingido } from "../../portal/portal-envio.fake";
 
 /**
  * ─ A TRAVA DE OCUPAÇÃO SOBREVIVE AO LOTE (escrito ANTES do código, §A.40 regra 2) ───────────────
@@ -287,7 +288,7 @@ function makeDb(cenario: {
   const contar = (situacao: string) => situacoes().filter((s) => s === situacao).length;
 
   return {
-    service: new CandidatosService(db as never, catalogoDeEtapasFingido() as never, catalogoDeStatusFingido() as never),
+    service: new CandidatosService(db as never, catalogoDeEtapasFingido() as never, catalogoDeStatusFingido() as never, envioDoPortalFingido() as never),
     estado,
     escritas,
     ordem,

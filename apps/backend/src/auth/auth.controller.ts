@@ -11,7 +11,7 @@ import {
 import { ConfigService } from "@nestjs/config";
 import type { Request, Response } from "express";
 import { AREA } from "@ea/shared-types";
-import { TODOS_CODIGOS_MENU, filtrarMenusPorPapel } from "../domain/menus";
+import { baseDeMenusDoMaster, filtrarMenusPorPapel } from "../domain/menus";
 import { MenuAreasService } from "./menu-areas.service";
 import { UsersService } from "../users/users.service";
 import { AuthService } from "./auth.service";
@@ -96,7 +96,12 @@ export class AuthController {
     }
 
     const { codigos, areas } = await this.menus.permissaoDoUsuario(user.id);
-    const base = user.papel === "MASTER" ? TODOS_CODIGOS_MENU : [...codigos];
+    // O MASTER RECEBE "TODOS, MENOS OS NOMINAIS QUE ELE NÃO TEM", e não mais a lista inteira: os
+    // menus de `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER` só entram quando ele TEM a marcação. Sem isto
+    // a barra ofereceria um card que o `MenuGuard` recusa em seguida, que é o "mostrar a porta e
+    // trancá-la" que a `MENUS_SOMENTE_SUPER_ADMIN` existe para acabar. A regra continua sendo
+    // escrita UMA vez, no domínio, e lida pelos dois lados.
+    const base = user.papel === "MASTER" ? baseDeMenusDoMaster(codigos) : [...codigos];
 
     return {
       user,

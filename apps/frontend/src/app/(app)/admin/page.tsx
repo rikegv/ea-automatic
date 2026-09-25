@@ -16,7 +16,13 @@ import { useAuth } from "@/lib/auth-context";
 // ele saiu da barra, nunca que ele chegou em algum lugar. Um destino pode sumir das duas casas sem
 // nada falhar, e o sintoma é o menu liberado e inalcançável da §A.23. Exportar uma constante ao lado
 // do `default` é padrão que a casa já usa em página do App Router (ver `beneficios/page.tsx`).
-export const CARDS: { href: string; icon: IconName; title: string; desc: string; codigo: string }[] = [
+export const CARDS: {
+  href: string;
+  icon: IconName;
+  title: string;
+  desc: string;
+  codigo: string;
+}[] = [
   {
     // ALTO VOLUME (onda 1): PRIMEIRO card do Menu Gerencial, por decisão do diretor. A tela é
     // dedicada e tem volta para cá pelo botão "Menu Gerencial" do layout de administração.
@@ -42,7 +48,13 @@ export const CARDS: { href: string; icon: IconName; title: string; desc: string;
     title: "Clientes",
     desc: "Código, CNPJ, razão social e operação.",
   },
-  { href: "/admin/cargos", icon: "tag", title: "Cargos", desc: "Catálogo de cargos da admissão.", codigo: "cargos" },
+  {
+    href: "/admin/cargos",
+    icon: "tag",
+    title: "Cargos",
+    desc: "Catálogo de cargos da admissão.",
+    codigo: "cargos",
+  },
   {
     href: "/admin/escalas",
     codigo: "escalas",
@@ -242,6 +254,21 @@ export const CARDS: { href: string; icon: IconName; title: string; desc: string;
     title: "Tarifas De Transporte",
     desc: "Tarifa vigente por cidade e transporte, base do formulário de VT.",
   },
+  /*
+   * O GERENCIADOR DO PORTAL SAIU DAQUI, e foi para a BARRA LATERAL (decisão do diretor).
+   *
+   * Ele chegou a ser card deste hub e o lugar estava errado: ele não é catálogo, é a FILA de
+   * acompanhamento da coleta de documentos, e fila de trabalho mora na barra, junto da Liberação
+   * Admissional, que é logo acima dela (`lib/navegacao.ts`, array `OPERACAO`).
+   *
+   * O CARD NÃO FICOU AQUI TAMBÉM, de propósito: é a mesma régua que tirou "Entradas Do Pandapé"
+   * da barra quando ela virou porta do Diagnóstico. UMA PORTA SÓ, porque destino alcançável por
+   * dois caminhos é o começo de dois caminhos que divergem.
+   *
+   * §A.23: TIRAR O CARD NÃO REVOGA NADA. O menu `portal-links` continua registrado no catálogo,
+   * continua nascendo só para o SUPER_ADMIN e continua em `admin-menus.ts`, porque a TELA segue
+   * sob `/admin/` e sem aquela linha quem tiver só este menu não abriria a camada.
+   */
   {
     href: "/admin/regua",
     codigo: "regua",
@@ -262,6 +289,29 @@ export const CARDS: { href: string; icon: IconName; title: string; desc: string;
     icon: "check",
     title: "Regras De Auditoria",
     desc: "Critério de validade de cada documento (motor de IA).",
+  },
+  {
+    /**
+     * DICAS POR DOCUMENTO: vizinho das Regras De Auditoria de propósito, porque é a MESMA pergunta
+     * feita para os dois lados. A regra é o critério que o motor aplica; a dica é o que o CANDIDATO
+     * lê, no portal, antes de tirar a foto. Cadastrar uma sem a outra é o caminho curto para a tela
+     * pedir uma coisa e a auditoria cobrar outra, então elas moram lado a lado.
+     *
+     * ÍCONE `alert`, e não o `check` da regra: o que se escreve aqui é AVISO, não critério, e duas
+     * marcas iguais lado a lado fariam o olho confundir justamente os dois cards mais parecidos.
+     *
+     * O CARD É O QUE FAZ O MENU SER ENCONTRADO: a barra lateral não lista as telas administrativas
+     * uma a uma, ela mostra o "Menu Gerencial", que abre ESTA lista. Registrar o menu no backend e
+     * parar por aí deixa a tela existindo, liberável e invisível (§A.23, o caso do `clinicas`).
+     *
+     * §A.23: o card é filtrado por `temMenu` como todos os outros, e `dicas-documento` nasce só
+     * para o SUPER_ADMIN. Nenhum dos dois passos concede acesso a ninguém.
+     */
+    href: "/admin/dicas-documento",
+    codigo: "dicas-documento",
+    icon: "alert",
+    title: "Dicas Por Documento",
+    desc: "O texto que o candidato lê no portal antes de enviar cada documento.",
   },
   {
     href: "/admin/pastas-drive",

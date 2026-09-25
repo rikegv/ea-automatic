@@ -171,7 +171,18 @@ function montar() {
   return { db, atualizados, service: new AdmissoesService(db as never) };
 }
 
-const DTO_BASE = { codCliente: "100", cargoId: CARGO };
+// GATE DOS OBRIGATÓRIOS-PARA-LIBERAR (item 6): os 6 campos próprios do gate preenchidos, para os
+// testes de uniforme/EPI passarem pelo gate e exercitarem a validação de uniforme/EPI (que roda
+// depois). O teste "sem resposta do uniforme" continua barrando na trava do uniforme, que é anterior
+// ao gate. Nenhum teste aqui sobrescreve `vagaFolha`, então é seguro fixá-lo na base.
+const DTO_BASE = {
+  codCliente: "100",
+  cargoId: CARGO,
+  sexo: "MASCULINO" as const,
+  tipoContrato: "Interno",
+  dataAdmissao: "2026-10-01",
+  vagaFolha: { escala: "12x36", beneficios: "VR" },
+};
 
 describe("liberação individual: uniforme e EPI", () => {
   it("BARRA a liberação sem a resposta do uniforme", async () => {

@@ -41,6 +41,24 @@ class Settings(BaseSettings):
     # aceitam upload; My Drive recusa por falta de quota). Preencha com o e-mail do usuário a
     # impersonar quando o destino for um My Drive compartilhado.
     drive_delegated_subject: str = ""
+    # ── Portal do Candidato: o LEITOR (docs/DESENHO-PORTAL-CAMINHO-DO-ARQUIVO.md) ──────────
+    # TUDO NASCE INERTE. O bucket de entrada ainda não existe; enquanto `portal_bucket` estiver
+    # vazio, a rota do leitor responde 503 e nenhuma outra parte do serviço é afetada. Nenhuma
+    # variável daqui é obrigatória no boot, porque o mesmo código sobe numa SEGUNDA INSTÂNCIA de
+    # ambiente magro (sem DATABASE_URL e sem DRIVE_*), e faltar configuração não pode derrubar.
+    portal_bucket: str = ""
+    # Teto por arquivo, decisão do diretor: 10 MB. Cortado ANTES de carregar (pelo metadado do
+    # objeto) e de novo DURANTE a leitura (orçamento de bytes), porque metadado é declaração.
+    portal_bytes_max: int = 10 * 1024 * 1024
+    # Páginas de PDF. O motor de kit já encontrou empiricamente o teto prático do Vertex em 28
+    # páginas por chamada (kit_lote_paginas); documento de admissão fotografado vive muito abaixo.
+    portal_paginas_max: int = 20
+    # Imagem: lado e megapixels, medidos NO CABEÇALHO, sem decodificar (decodificar é o ataque).
+    portal_imagem_lado_max: int = 20_000
+    portal_imagem_megapixels_max: float = 80.0
+    # Tempo máximo da inspeção local (o processo filho é MORTO no estouro, não só abandonado).
+    portal_tempo_max_s: float = 20.0
+
     # Modo mock do Drive (validação visual híbrida): não chama a API do Google; devolve um
     # ArquivamentoDrive plausível. Ligar enquanto a SA não tem acesso de escrita ao Shared Drive.
     drive_mock: bool = False

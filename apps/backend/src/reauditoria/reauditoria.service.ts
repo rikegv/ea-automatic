@@ -1,16 +1,25 @@
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
-import { BadRequestException, Inject, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import {
+  BadRequestException,
+  ConflictException,
+  Inject,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from "@nestjs/common";
 import { and, eq } from "drizzle-orm";
 import type { AuthUser } from "../auth/auth.types";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
 import {
+  admissoes,
   candidatoAlteracoesLog,
   documentosAdmissao,
   integracaoPandape,
   tiposDocumento,
 } from "../db/schema";
+import { podeReabrirDocumento } from "../domain/reabertura-documento";
 import { AuditoriaService } from "../auditoria/auditoria.service";
 import { StagingService } from "../staging/staging.service";
 import { PandapeSyncService } from "../pandape/pandape-sync.service";
@@ -76,6 +85,21 @@ export class ReauditoriaService {
       where: eq(tiposDocumento.id, tipoDocumentoId),
     });
     if (!tipo) throw new NotFoundException("Tipo de documento não encontrado");
+
+    // A GUARDA DA REABERTURA, a MESMA do descarte, ANTES de qualquer efeito.
+    //
+    // POR QUE ELA VALE AQUI TAMBÉM, e não só no descarte: a reauditoria vale para QUALQUER estado,
+    // inclusive ENTREGUE, e pode devolver INCONFORME. Ou seja, é uma porta de reabertura de fato,
+    // ainda que pelo caminho da IA. Guarda que mora em uma porta de três não é guarda: a porta que
+    // ficasse de fora seria o contorno pronto da outra.
+    const alvo = await this.db.query.admissoes.findFirst({ where: eq(admissoes.id, admissaoId) });
+    if (!alvo) throw new NotFoundException("Admissão não encontrada");
+    const podeReabrir = podeReabrirDocumento({
+      clicksignStatus: alvo.clicksignStatus,
+      kitAssinaturaPath: alvo.kitAssinaturaPath,
+      kitAssinaturaEm: alvo.kitAssinaturaEm,
+    });
+    if (!podeReabrir.pode) throw new ConflictException(podeReabrir.mensagem);
 
     // OST B1 / Bloco 4 — PRECEDÊNCIA DA VALIDAÇÃO HUMANA. Documento assumido por uma pessoa não é
     // sobrescrito pela IA em silêncio. Aqui, que é ação MANUAL, o caminho existe, mas só com aceite

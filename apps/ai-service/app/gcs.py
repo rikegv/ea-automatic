@@ -49,7 +49,8 @@ def listar_objetos(bucket: str) -> list[dict]:
     Devolve, por objeto: `{"name", "md5", "contentType", "size"}`. O `md5` sai em HEX: o GCS
     devolve `md5_hash` em base64, então decodificamos base64 e re-codificamos em hex. Objeto sem
     md5 (raro, objetos compostos) fica com `md5=None`. O `name` é consumido só DENTRO do ai-service
-    (extração do CPF) e nunca sai deste serviço nem é logado (§A.6).
+    (resolução do handle: CPF do nome legado, ou `admissaoId` do JSON irmão no nome opaco) e nunca
+    sai deste serviço nem é logado (§A.6). O nome novo é OPACO (UUID), sem PII; o legado tem CPF.
     """
     client = get_storage_client()
     itens: list[dict] = []
@@ -100,8 +101,9 @@ def listar_objetos_com_nome(bucket: str) -> list[dict]:
     """Como `listar_objetos`, mas DEVOLVE o nome do objeto e a hora em que ele chegou.
 
     EXISTE SÓ PARA O DIAGNÓSTICO DO ÓRFÃO, e o nome é o ponto: quando um formulário não casa com
-    nenhuma admissão, o único jeito de saber DE QUEM ele é está no nome do objeto (NOME + CPF), que
-    é justamente o que o resto desta frente nunca deixa sair daqui.
+    nenhuma admissão, o roteador resolve o handle a partir do nome (CPF do nome legado, ou o
+    `admissaoId` do JSON irmão no nome opaco). O nome NOVO é opaco (UUID) e não carrega PII; o legado
+    ainda traz NOME + CPF, que é justamente o que o resto desta frente nunca deixa sair daqui.
 
     §A.6, e a diferença é o que torna isto aceitável: o nome é LIDO NA HORA e devolvido para uma tela
     autenticada, e NÃO é persistido em lugar nenhum. Guardar nome e CPF de quem não está na base

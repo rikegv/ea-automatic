@@ -21,12 +21,14 @@ import { DrizzleModule } from "./db/drizzle.module";
 import { EsteiraModule } from "./esteira/esteira.module";
 import { IfractalModule } from "./ifractal/ifractal.module";
 import { GerencialModule } from "./gerencial/gerencial.module";
+import { GiModule } from "./gi/gi.module";
 import { SalaEsperaModule } from "./sala-espera/sala-espera.module";
 import { KitModule } from "./kit/kit.module";
 import { BeneficiosFilaModule } from "./beneficios/beneficios-fila.module";
 import { NaoConformidadesModule } from "./nao-conformidades/nao-conformidades.module";
 import { PastasDriveModule } from "./admin/pastas-drive/pastas-drive.module";
 import { PandapeModule } from "./pandape/pandape.module";
+import { PortalModule } from "./portal/portal.module";
 import { ReauditoriaModule } from "./reauditoria/reauditoria.module";
 import { ReguaModule } from "./regua/regua.module";
 import { StagingModule } from "./staging/staging.module";
@@ -62,11 +64,16 @@ import { VtColetaModule } from "./vt-coleta/vt-coleta.module";
     AuditoriaModule,
     KitModule,
     PandapeModule,
+    // Portal do Candidato, caminho do arquivo. Sobe INERTE ate o bucket e as envs existirem.
+    PortalModule,
     ReauditoriaModule,
     ClicksignModule,
     VtModule,
     VtColetaModule,
     DiagnosticoModule,
+    // Portal→GI (peça 2 + gatilho da peça 3, INERTE). Sobe sem GI configurado; o expurgo dos dados
+    // do GI roda sempre (minimização, §A.6). Ver `GiModule`.
+    GiModule,
   ],
   controllers: [HealthController],
   providers: [

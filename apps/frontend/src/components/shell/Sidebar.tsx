@@ -10,6 +10,7 @@ import { LogoSou } from "@/components/ui/LogoSou";
 import { NavItem } from "@/components/ui/NavItem";
 import { useLiberacaoCount } from "./LiberacaoAlerta";
 import { useDiagnosticoAlerta } from "./DiagnosticoAlerta";
+import { useRevisaoCount } from "./RevisaoAlerta";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
 import { Button } from "@/components/ui/Button";
 import { Icon } from "@/components/ui/Icon";
@@ -52,6 +53,7 @@ function isActive(pathname: string, href: string): boolean {
 export function Sidebar() {
   const { user, isAdmin, temMenu, logout } = useAuth();
   const liberacaoCount = useLiberacaoCount();
+  const revisaoCount = useRevisaoCount();
   const diagAlerta = useDiagnosticoAlerta();
   const pathname = usePathname();
   const router = useRouter();
@@ -165,15 +167,22 @@ export function Sidebar() {
         <>
           {temAlgoAcimaDeSelecao && <div className="nav-sep" />}
           <div className={cn("nav-label", !expanded && "hidden")}>Atração e Seleção</div>
-          {SELECAO.filter((n) => temMenu(n.codigo)).map((n) => (
-            <NavItem
-              key={n.href}
-              {...n}
-              active={isActive(pathname, n.href)}
-              expanded={expanded}
-              badge={0}
-            />
-          ))}
+          {SELECAO.filter((n) => temMenu(n.codigo)).map((n) => {
+            // LIBERAR VAGA ganha o MESMO tratamento visual da Liberação Admissional: badge vermelho
+            // com contador E a faixa vermelha de fundo (prop `critical`). A faixa fica sempre ligada,
+            // igual ao Liberacao Admissional (critical estatico); o badge mostra o contador de vagas em revisao.
+            const ehRevisao = n.href === "/as/vagas-pendentes-revisao";
+            return (
+              <NavItem
+                key={n.href}
+                {...n}
+                active={isActive(pathname, n.href)}
+                expanded={expanded}
+                badge={ehRevisao ? revisaoCount : 0}
+                critical={n.critical}
+              />
+            );
+          })}
         </>
       )}
 

@@ -3,6 +3,7 @@ import {
   ArrayMaxSize,
   ArrayNotEmpty,
   IsArray,
+  IsBoolean,
   IsOptional,
   IsString,
   IsUUID,
@@ -112,4 +113,14 @@ export class LiberarEmLoteDto {
   @IsOptional()
   @IsUUID()
   grupoEntradaId?: string;
+
+  /**
+   * ACEITE do override dos OBRIGATÓRIOS-PARA-LIBERAR (item 6), aplicado a TODAS as N da leva (valor só
+   * do lote, como cliente/cargo). No lote o gate checa 5 campos: Sexo é individual-only e nem entra
+   * aqui. Comum NÃO libera com faltante; só MASTER/SUPER_ADMIN com este aceite. O papel é validado no
+   * serviço (lê `AuthUser.papel` do JWT, nunca do corpo).
+   */
+  @IsOptional()
+  @IsBoolean()
+  aceiteObrigatoriosFaltantes?: boolean;
 }

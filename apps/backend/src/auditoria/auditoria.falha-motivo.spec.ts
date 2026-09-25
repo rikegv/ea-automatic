@@ -103,6 +103,10 @@ function makeDb() {
         findFirst: vi.fn().mockResolvedValue({ id: "tipo-rg", codigo: "RG", nome: "RG" }),
       },
       dadosVagaFolha: { findFirst: vi.fn().mockResolvedValue({ salario: "2000" }) },
+      // Régua incompleta faz o pós-veredito passar pelo RECUO (frente da reabertura de documento),
+      // que lê a admissão para saber se ela está viva. Sem frente concluída não há o que recuar,
+      // então estas asserções seguem falando só do que sempre falaram.
+      admissoes: { findFirst: vi.fn().mockResolvedValue({ id: "adm-1", farolGlobal: "EM_ADMISSAO" }) },
     },
   };
   return { db, inserts, updates };
@@ -128,6 +132,7 @@ function makeService(auditarDocumento: ReturnType<typeof vi.fn>) {
     reguaCompletude as never,
     drivePastaPaiFake as never,
      pandapeArquivosFake as never,
+     { enviar: async () => ({ enviado: false, motivo: "GI_NAO_CONFIGURADO" }) } as never,
   );
   return { svc, inserts, updates, staging, auditarDocumento };
 }

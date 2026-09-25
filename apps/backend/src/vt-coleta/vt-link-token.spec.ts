@@ -85,11 +85,14 @@ describe("token do link de VT (Ed25519 / EdDSA)", () => {
     expect(carregarChavePrivadaVt("   ")).toBeNull();
   });
 
-  it("monta o link com o token na query `t`", () => {
+  it("monta o link com o token no FRAGMENTO `#t` (não na query, §A.6)", () => {
     const chavePrivada = carregarChavePrivadaVt(privadaBase64)!;
     const token = gerarTokenVt(dados, 7, chavePrivada);
     const link = montarLinkVt(VT_LINK_BASE_URL_PADRAO, token);
-    expect(link).toBe(`${VT_LINK_BASE_URL_PADRAO}?t=${token}`);
-    expect(link.startsWith("https://vt-online-soulan.web.app/vt?t=")).toBe(true);
+    // FRAGMENTO: o token com CPF/nome/nascHash não vai ao servidor (vazamento 3, OST 3 vazamentos).
+    expect(link).toBe(`${VT_LINK_BASE_URL_PADRAO}#t=${token}`);
+    expect(link.startsWith("https://vt-online-soulan.web.app/vt#t=")).toBe(true);
+    // E não regride para a query string, que é o que vazava.
+    expect(link.includes("?t=")).toBe(false);
   });
 });

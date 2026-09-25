@@ -79,6 +79,33 @@ export const OPERACAO: NavDef[] = [
     descricao: "Fila crítica: pré-admissões aguardando liberação para seguir.",
     critical: true,
   },
+  /*
+   * GERENCIADOR DO PORTAL: entra AQUI, logo ABAIXO da Liberação Admissional, por decisão do
+   * diretor. Ele era um CARD do hub do Menu Gerencial e saiu de lá: ele não é catálogo, é a fila
+   * de acompanhamento da coleta de documentos, e fila de trabalho mora na barra, junto das outras.
+   *
+   * UMA PORTA SÓ, que é a mesma régua que tirou "Entradas Do Pandapé" desta lista: destino
+   * alcançável por dois caminhos é o começo de dois caminhos que divergem. Por isso o card do hub
+   * foi REMOVIDO no mesmo passo, e não duplicado aqui.
+   *
+   * A ROTA CONTINUA SOB `/admin/`, e isso é de propósito: mudar a URL quebraria os atalhos já
+   * salvos e o mapa do guard de rota, que não é o que o diretor pediu. Mudou o LUGAR na navegação,
+   * não o endereço da tela, e por isso `portal-links` SEGUE em `admin-menus.ts` (ver o comentário
+   * de lá): sem a linha, quem tiver só este menu não conseguiria abrir a camada `/admin`.
+   *
+   * §A.23: NADA AQUI CONCEDE ACESSO A NINGUÉM. A visibilidade continua sendo `temMenu`
+   * ("portal-links"), exatamente como era quando o item morava no hub. Mover não libera.
+   *
+   * ÍCONE `link`, o mesmo que o card usava, e ele distingue a linha na varredura da barra: nenhum
+   * vizinho de Operação usa esse desenho.
+   */
+  {
+    href: "/admin/portal-links",
+    icon: "link",
+    label: "Gerenciador Do Portal",
+    codigo: "portal-links",
+    descricao: "Emissão do link, funil da coleta e onde cada candidato está na trilha.",
+  },
   {
     href: "/nova",
     icon: "plus",
@@ -153,6 +180,30 @@ export const BENEFICIOS: NavDef = {
 // para o SUPER_ADMIN (§A.23): não aparecer para os demais não é bug, é o diretor ainda não ter
 // liberado.
 export const SELECAO: NavDef[] = [
+  /*
+   * A ORDEM SEGUE O PROCESSO (decisão do diretor): Liberar Vaga, depois Central De Vagas, depois
+   * Central De Candidatos. Liberar Vaga vem primeiro porque é a fila crítica de entrada, a vaga que
+   * o Pandapé espelhou sem cliente e que ninguém conferiu; ela ganha o badge vermelho com contador,
+   * no mesmo molde do menu Liberação Admissional.
+   *
+   * VAGAS PENDENTES DE REVISÃO: a fila das vagas que a varredura do Pandapé espelhou sem cliente.
+   *
+   * §A.23: o menu `as-vagas-revisao` nasce SÓ PARA O SUPER_ADMIN, e esta linha não concede nada a
+   * ninguém. Ela só faz o item aparecer na barra de quem JÁ tem permissão de ver a tela; não
+   * aparecer para os demais segue não sendo bug.
+   *
+   * ÍCONE `alert`, e é o mesmo do selo vermelho que a Central de Vagas desenha na linha da vaga:
+   * quem vê o selo na tabela reconhece a barra pelo mesmo símbolo. `table` e `filter` já são das
+   * duas vizinhas e não distinguiriam a linha na varredura.
+   */
+  {
+    href: "/as/vagas-pendentes-revisao",
+    icon: "alert",
+    label: "Liberar Vaga",
+    codigo: "as-vagas-revisao",
+    descricao: "Vagas que entraram sozinhas do Pandapé e esperam cliente e liberação.",
+    critical: true,
+  },
   {
     href: "/as/vagas",
     icon: "table",
@@ -183,24 +234,6 @@ export const SELECAO: NavDef[] = [
     label: "Central De Candidatos",
     codigo: "as-candidatos",
     descricao: "Funil da seleção: etapas, movimentação e trilha do candidato.",
-  },
-  /*
-   * VAGAS PENDENTES DE REVISÃO: a fila das vagas que a varredura do Pandapé espelhou sem cliente.
-   *
-   * §A.23: o menu `as-vagas-revisao` nasce SÓ PARA O SUPER_ADMIN, e esta linha não concede nada a
-   * ninguém. Ela só faz o item aparecer na barra de quem JÁ tem permissão de ver a tela; não
-   * aparecer para os demais segue não sendo bug.
-   *
-   * ÍCONE `alert`, e é o mesmo do selo vermelho que a Central de Vagas desenha na linha da vaga:
-   * quem vê o selo na tabela reconhece a barra pelo mesmo símbolo. `table` e `filter` já são das
-   * duas vizinhas e não distinguiriam a linha na varredura.
-   */
-  {
-    href: "/as/vagas-pendentes-revisao",
-    icon: "alert",
-    label: "Liberar Vaga",
-    codigo: "as-vagas-revisao",
-    descricao: "Vagas que entraram sozinhas do Pandapé e esperam cliente e liberação.",
   },
 ];
 

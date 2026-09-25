@@ -10,6 +10,7 @@ import {
   candidatos,
   clientes,
   dadosVagaFolha,
+  documentoArquivosColetados,
   documentosAdmissao,
   frentesAdmissao,
   frenteStatusEventos,
@@ -36,8 +37,10 @@ import {
 import { TravaPorChave } from "../domain/trava-por-chave";
 import { DrivePastaPaiService } from "../ai/drive-pasta-pai.service";
 import { recomputeFarolGlobal } from "../admissoes/farol";
-import { calcSinalizadorPreenchimento } from "../domain/admissao";
+import { calcSinalizadorPreenchimento, STATUS_INICIAL_FRENTE } from "../domain/admissao";
 import { podeAbrirCadastro } from "../domain/frentes";
+import { reversaoDerrubaCadastro } from "../domain/esteira";
+import { admissaoVivaParaRecuo, podeReabrirDocumento } from "../domain/reabertura-documento";
 import { clienteExigeIntegracao } from "../esteira/integracao-obrigatoria.repo";
 import { nascerCadastroEIntegracao } from "../esteira/nascimento-cadastro";
 import {
@@ -47,6 +50,7 @@ import {
 } from "../domain/auditoria";
 import { ReguaCompletudeService } from "../regua/regua-completude.service";
 import { StagingService } from "../staging/staging.service";
+import { EnviarParaGiService } from "../gi/enviar-para-gi.service";
 import { PandapeArquivosService, type AbortoBaixa } from "../pandape/pandape-arquivos.service";
 import {
   limitar,
@@ -54,6 +58,7 @@ import {
   motivoPandapeSemTipos,
   MOTIVO_DRIVE,
   motivoEnvioParcial,
+  somenteAprovadosVaoAoProntuario,
   tiposFaltantesNoArquivamento,
 } from "../domain/drive-arquivamento";
 
@@ -82,6 +87,22 @@ export interface PosVeredito {
    * avisar (arquivou, ou a régua ainda não fechou).
    */
   avisoDrive?: string;
+  /**
+   * O RECUO: preenchido quando a régua obrigatória DEIXOU de estar completa e a frente AUDITORIA
+   * teve de voltar. Ausente quando não havia o que recuar (régua completa, frente já pendente,
+   * admissão finalizada ou encerrada). Ver `recuarAuditoria`.
+   */
+  recuo?: RecuoDaAuditoria;
+}
+
+/** O que o recuo da AUDITORIA de fato desfez. Espelha `ResultadoDaReaberturaDeDocumento`. */
+export interface RecuoDaAuditoria {
+  /** A frente AUDITORIA voltou de concluída para `ANALISE_PENDENTE`. */
+  frenteRecuou: boolean;
+  /** A frente CADASTRO_CONTRATO, já nascida, foi derrubada junto (o gate da regra 3 fechou). */
+  cadastroDerrubado: boolean;
+  /** O farol global mudou de valor no recompute. */
+  farolAtualizado: boolean;
 }
 
 /**
@@ -140,6 +161,7 @@ export class AuditoriaService {
     private readonly reguaCompletude: ReguaCompletudeService,
     private readonly drivePastaPai: DrivePastaPaiService,
     private readonly pandapeArquivos: PandapeArquivosService,
+    private readonly enviarParaGi: EnviarParaGiService,
   ) {}
 
   /** Carrega a admissão com o candidato e o cliente (sem expor nada em log). */
@@ -241,6 +263,49 @@ export class AuditoriaService {
     // a CTPS da Silvia, um documento bom. Detectar "exige senha para ABRIR" exige tentar abrir com
     // senha vazia, e quem faz isso é o ai-service com pypdf (ver `app/pdf_seguranca.py`), que devolve
     // o mesmo INCONFORME com motivo acionável sem gastar chamada de IA. Aqui não se adivinha mais.
+
+    // ══ AS TENTATIVAS VELHAS: LISTADAS AGORA, APAGADAS SÓ DEPOIS, E SÓ SE O NOVO FOR APROVADO ══
+    //
+    // O QUE ISTO FECHA: o filtro "só sobe o ENTREGUE" (ver `arquivarNoDriveSemTrava`) resolve o tipo
+    // reprovado que nunca foi reenviado, e NÃO resolvia o caso mais comum, que é reprovou, reenviou,
+    // APROVOU. O estado vive em `documentos_admissao` e é POR TIPO; a pasta temporária é POR ARQUIVO
+    // e guardava o histórico das tentativas, então os bytes da tentativa reprovada ficavam lá com o
+    // MESMO código de tipo, passavam pelo filtro e subiam ao prontuário permanente junto do aprovado.
+    //
+    // ══ POR QUE A LIMPEZA NÃO ACONTECE AQUI, E ESTE PARÁGRAFO EXISTE PARA NINGUÉM "CONSERTAR" ═════
+    //
+    // Apagar as tentativas velhas ANTES de salvar o envio novo destrói o caminho principal da
+    // operação, e isso foi medido no código da tela, não deduzido: `AuditoriaController` usa
+    // `FileInterceptor("file")`, no SINGULAR; `auditarBuffer` embrulha esse arquivo único como um
+    // conjunto de tamanho 1; e o `input` do modal da Esteira NÃO tem `multiple`, lê `files?.[0]` e,
+    // depois do primeiro veredito, oferece o botão "Enviar novo arquivo". Ou seja: a tela CONVIDA o
+    // consultor a mandar a FRENTE da carteira, receber a reprovação por falta do verso, e mandar o
+    // VERSO numa segunda requisição. Limpando antes, a frente seria apagada para dar lugar ao verso,
+    // e meio documento subiria ao prontuário permanente sem nada falhar e sem ninguém descobrir. É a
+    // §A.33 pelo avesso: destruir o que se tem apostando no que ainda não chegou.
+    //
+    // A ORDEM CERTA, e ela é de ORDEM, não de lugar:
+    //   1. listar aqui o que já existe daquele tipo, e só listar;
+    //   2. salvar o conjunto novo e obter o veredito, como sempre;
+    //   3. apagar a lista velha SOMENTE quando o veredito novo for VALIDADO (`descartarTentativasVelhas`).
+    // Reprovou, não se apaga nada: trocar uma cópia possivelmente boa por uma pior, sem volta, é o
+    // pior desfecho possível. E um conjunto incompleto (só o verso) não é aprovado, então o caso da
+    // frente e verso nunca chega ao apagamento.
+    //
+    // CUSTO ACEITO PELO DIRETOR: aprovado o documento, o consultor PERDE a visualização das
+    // tentativas velhas no modal. Fica o conjunto que o veredito exibido descreve.
+    //
+    // ══ O "DOCUMENTO ÚNICO" DO PORTAL NÃO TORNA ESTA GUARDA REDUNDANTE. NÃO A REMOVA ═════════════
+    //
+    // O diretor decidiu que o CANDIDATO manda frente e verso num arquivo só, e a régua está escrita e
+    // testada em `domain/portal-arquivo-unico.ts`. Ela vale para o PORTAL, e só para ele.
+    //
+    // ESTE caminho continua recebendo VÁRIOS arquivos por tipo, por duas portas que não mudaram: o
+    // CONSULTOR, que manda um arquivo por requisição e é convidado pela própria tela a mandar outro
+    // depois do veredito (o "Enviar novo arquivo" do modal), e o PANDAPÉ, que traz vários anexos do
+    // mesmo tipo vindos de fora. Remover esta guarda achando que o documento único a cobriu faria a
+    // frente voltar a ser apagada pelo verso, exatamente como descrito acima, e sem nada falhar.
+    const velhasDoTipo = await this.arquivosDaStagingDoTipo(admissaoId, tipo.codigo);
 
     // 1) Staging efêmera — cada arquivo do conjunto vai a disco e é descartado depois (§A.6). Salva
     //    TODOS, inclusive o que a triagem abaixo vai reprovar: o consultor precisa poder VISUALIZAR
@@ -363,6 +428,19 @@ export class AuditoriaService {
         target: [documentosAdmissao.admissaoId, documentosAdmissao.tipoDocumentoId],
         set: { estado, observacao, atualizadoEm: new Date() },
       });
+
+    // 5.1) AS TENTATIVAS VELHAS SAEM AGORA, E SÓ SE ESTE VEREDITO FOI VALIDADO. Ver o bloco longo
+    //      lá em cima, antes do salvamento: a ordem é listar, auditar, e só então apagar. Vem ANTES
+    //      de `aplicarPosVeredito` porque é ele que dispara o arquivamento quando a régua fecha, e o
+    //      byte velho não pode estar na pasta nesse instante.
+    await this.descartarTentativasVelhas(
+      admissaoId,
+      tipoDocumentoId,
+      tipo.codigo,
+      resultado.status,
+      velhasDoTipo,
+      stagingPaths,
+    );
 
     // 4.3) DIVERGÊNCIA BANCÁRIA (melhorias EAC, item 8): o comprovante bancário é o único tipo que
     // traz cadastro para comparar, e o que a IA apontou vira AVISO na admissão. Reescrito a cada
@@ -542,6 +620,16 @@ export class AuditoriaService {
     let auditoriaAuto: { status: string; gateAberto: boolean } | undefined;
     let arquivado: { pastaUrl: string } | undefined;
     let avisoDrive: string | undefined;
+    let recuo: RecuoDaAuditoria | undefined;
+    if (!progresso.completa) {
+      // O RAMO QUE NÃO EXISTIA (frente da reabertura de documento). Até aqui o pós-veredito só sabia
+      // AVANÇAR: `if (progresso.completa)` e nada de `else`. A consequência era alcançável em
+      // produção e silenciosa: qualquer caminho que devolvesse um obrigatório a pendente (o descarte
+      // de documento, uma reauditoria que volta INCONFORME) deixava a AUDITORIA em `ANALISE_OK`,
+      // concluída, com a régua obrigatória INCOMPLETA, e o gate do Cadastro aberto por uma conclusão
+      // que já não se sustentava. Recuar é a outra metade da mesma regra 2/complemento do §A.3.
+      recuo = await this.recuarAuditoria(admissaoId, user);
+    }
     if (progresso.completa) {
       auditoriaAuto = await this.autoConcluirAuditoria(admissaoId, user);
       // Fechou a régua e ainda não arquivou? → arquiva no Drive e expurga a staging.
@@ -563,6 +651,13 @@ export class AuditoriaService {
           avisoDrive = await this.avisoFalhaDrive(err, adm.id);
         }
       }
+
+      // ── GATILHO da peça 3 (Portal→GI), PONTO (a): a régua obrigatória fechou, a admissão está
+      // completa do lado da auditoria. É aqui que o EA "manda a pessoa para a folha". HOJE É INERTE:
+      // `EnviarParaGiService.enviar` é no-op sem GI configurado (fail-closed). Não lança e não
+      // altera o pós-veredito: a auditoria não pode quebrar por causa de um envio que ainda não
+      // existe. O cliente do GI é a peça 3. O ponto (b) é o botão manual do time.
+      await this.enviarParaGi.enviar(admissaoId);
     }
 
     return {
@@ -571,6 +666,160 @@ export class AuditoriaService {
       ...(auditoriaAuto ? { auditoriaAuto } : {}),
       ...(arquivado ? { arquivado } : {}),
       ...(avisoDrive ? { avisoDrive } : {}),
+      ...(recuo ? { recuo } : {}),
+    };
+  }
+
+  /**
+   * O RECUO DA AUDITORIA: o espelho exato de `autoConcluirAuditoria`.
+   *
+   * QUANDO RODA: a régua obrigatória deixou de estar completa e a frente AUDITORIA ainda está
+   * concluída. A frente volta a `ANALISE_PENDENTE`, `concluida: false`, `dataConclusao` nula, e o
+   * evento em `frente_status_eventos` vai com **`reversao: true`**, que é o molde da Esteira para
+   * recuo de etapa (`esteira.service`, transição de status).
+   *
+   * IDEMPOTENTE, e isso é requisito: reabrir dois documentos seguidos não recua duas vezes nem
+   * duplica evento. A primeira chamada tira a frente de concluída; a segunda encontra a frente já
+   * pendente e sai sem escrever nada.
+   *
+   * A FRENTE CADASTRO É DERRUBADA JUNTO, quando o gate da regra 3 fechar por causa deste recuo. O
+   * predicado é `reversaoDerrubaCadastro`, que é a régua da casa para exatamente esta pergunta, e
+   * não uma condição nova escrita aqui.
+   *
+   * DERRUBAR É RECUAR, NÃO APAGAR, e a escolha é deliberada. `frente_status_eventos.frente_id`
+   * referencia `frentes_admissao` com ON DELETE CASCADE: apagar a linha do Cadastro levaria junto a
+   * TRILHA de todas as transições dela, que é auditoria permanente (§A.6). Então o Cadastro volta ao
+   * status inicial, não concluído, com evento de reversão, e o nascimento lazy o reencontra quando o
+   * gate reabrir. Nada se perde e o gate fecha do mesmo jeito (`kitLiberado` exige o Cadastro
+   * concluído).
+   *
+   * NÃO ALCANÇA ADMISSÃO FINALIZADA NEM ENCERRADA (`admissaoVivaParaRecuo`, §A.16/§A.19): a carga
+   * histórica não é recalculada e quem declinou não volta para fila nenhuma.
+   *
+   * §A.6: opera por ids, status e datas. Nada de CPF, nome ou URL no log.
+   */
+  private async recuarAuditoria(admissaoId: string, user: AuthUser): Promise<RecuoDaAuditoria> {
+    const nada: RecuoDaAuditoria = {
+      frenteRecuou: false,
+      cadastroDerrubado: false,
+      farolAtualizado: false,
+    };
+
+    const adm = await this.db.query.admissoes.findFirst({ where: eq(admissoes.id, admissaoId) });
+    if (!adm || !admissaoVivaParaRecuo(adm.farolGlobal)) return nada;
+
+    /*
+     * ┌─ A GUARDA PROTEGE O EFEITO, E NÃO SÓ AS PORTAS (veto da reauditoria de segurança) ────────┐
+     * │ Ela já estava em `descartar` e em `reauditar`, e mesmo assim era CONTORNÁVEL, porque o    │
+     * │ recuo mora no pós-veredito COMPARTILHADO: qualquer caminho que des-complete a régua o     │
+     * │ dispara. O caminho medido tem um clique: o modal da Esteira oferece "Enviar novo arquivo" │
+     * │ em documento JÁ ENTREGUE, o upload comum (`auditarConjunto`) faz upsert incondicional do  │
+     * │ estado, a IA devolve INCONFORME, e o Cadastro caía com o envelope da Clicksign VIVO lá    │
+     * │ fora, que é exatamente o dano que a guarda define.                                        │
+     * │                                                                                            │
+     * │ Barrado aqui, o recuo NÃO acontece e a frente fica como está: o documento muda, a esteira │
+     * │ não. É a direção segura, porque desfazer uma frente com contrato em assinatura é o que    │
+     * │ não tem volta. Vira WARN no log, sem PII (§A.6).                                           │
+     * └────────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    const veredito = podeReabrirDocumento({
+      clicksignStatus: adm.clicksignStatus ?? null,
+      kitAssinaturaPath: adm.kitAssinaturaPath ?? null,
+      kitAssinaturaEm: adm.kitAssinaturaEm ?? null,
+    });
+    if (!veredito.pode) {
+      this.logger.warn(
+        `recuo da AUDITORIA barrado admissao=${admissaoId} motivo=${veredito.motivo ?? "nao informado"}`,
+      );
+      return nada;
+    }
+
+    const frentes = await this.db
+      .select({
+        id: frentesAdmissao.id,
+        tipo: frentesAdmissao.tipo,
+        status: frentesAdmissao.status,
+        concluida: frentesAdmissao.concluida,
+      })
+      .from(frentesAdmissao)
+      .where(eq(frentesAdmissao.admissaoId, admissaoId));
+
+    const auditoria = frentes.find((f) => f.tipo === "AUDITORIA");
+    // Nada a recuar: frente inexistente (pré-admissão) ou já pendente. É aqui que mora a
+    // idempotência da reabertura repetida.
+    if (!auditoria?.concluida) return nada;
+
+    const paraStatus = STATUS_INICIAL_FRENTE.AUDITORIA;
+    const cadastro = frentes.find((f) => f.tipo === "CADASTRO_CONTRATO");
+    const cadastroAbertoAgora = podeAbrirCadastro(
+      frentes.map((f) => ({ tipo: f.tipo, concluida: f.concluida, status: f.status })),
+    );
+    const derrubaCadastro =
+      Boolean(cadastro) &&
+      reversaoDerrubaCadastro("AUDITORIA", auditoria.status, paraStatus, cadastroAbertoAgora);
+    // O Cadastro já no status inicial e não concluído não tem o que derrubar: derrubá-lo de novo
+    // seria evento de reversão sem reversão nenhuma.
+    const precisaMexerNoCadastro =
+      derrubaCadastro &&
+      cadastro !== undefined &&
+      (cadastro.concluida || cadastro.status !== STATUS_INICIAL_FRENTE.CADASTRO_CONTRATO);
+
+    await this.db.transaction(async (tx) => {
+      const agora = new Date();
+      await tx
+        .update(frentesAdmissao)
+        .set({
+          status: paraStatus,
+          concluida: false,
+          dataConclusao: null,
+          atualizadoEm: agora,
+        })
+        .where(eq(frentesAdmissao.id, auditoria.id));
+      await tx.insert(frenteStatusEventos).values({
+        admissaoId,
+        frenteId: auditoria.id,
+        tipo: "AUDITORIA",
+        deStatus: auditoria.status,
+        paraStatus,
+        reversao: true,
+        autorId: user.id,
+      });
+
+      if (precisaMexerNoCadastro && cadastro) {
+        await tx
+          .update(frentesAdmissao)
+          .set({
+            status: STATUS_INICIAL_FRENTE.CADASTRO_CONTRATO,
+            concluida: false,
+            dataConclusao: null,
+            atualizadoEm: agora,
+          })
+          .where(eq(frentesAdmissao.id, cadastro.id));
+        await tx.insert(frenteStatusEventos).values({
+          admissaoId,
+          frenteId: cadastro.id,
+          tipo: "CADASTRO_CONTRATO",
+          deStatus: cadastro.status,
+          paraStatus: STATUS_INICIAL_FRENTE.CADASTRO_CONTRATO,
+          reversao: true,
+          autorId: user.id,
+        });
+      }
+    });
+
+    const farolAntes = adm.farolGlobal;
+    const farolDepois = await recomputeFarolGlobal(this.db, admissaoId);
+
+    this.logger.log(
+      `Auditoria RECUADA por régua obrigatória incompleta (admissão ${admissaoId}): ` +
+        `${auditoria.status} para ${paraStatus}` +
+        `${precisaMexerNoCadastro ? ", Cadastro derrubado" : ""}.`,
+    );
+
+    return {
+      frenteRecuou: true,
+      cadastroDerrubado: precisaMexerNoCadastro,
+      farolAtualizado: farolDepois !== null && farolDepois !== farolAntes,
     };
   }
 
@@ -647,16 +896,99 @@ export class AuditoriaService {
   }
 
   /**
-   * Apaga da staging os arquivos de UM tipo daquela admissão. Usado pelo reenvio do ASO, onde o
-   * novo arquivo substitui o antigo. Falha ao remover não derruba o fluxo: o TTL de 48h da staging
-   * pega o resto. §A.6: nada de caminho no log.
+   * Apaga da staging os arquivos de UM tipo daquela admissão. Chamador ÚNICO: o reenvio do ASO
+   * (`classificarAso`), onde o documento é de arquivo único e o novo substitui o anterior no mesmo
+   * ato, sem veredito no meio.
+   *
+   * NÃO É O CAMINHO DA RÉGUA, e a diferença importa: `auditarConjunto` julga um CONJUNTO montado ao
+   * longo de VÁRIAS requisições (a tela manda um arquivo por vez), então lá o descarte é condicionado
+   * ao veredito e vive em `descartarTentativasVelhas`. Aqui não há conjunto a perder.
+   *
+   * Falha ao remover não derruba o fluxo: o TTL de 48h da staging pega o resto. §A.6: nada de
+   * caminho no log.
    */
   private async limparStagingDoTipo(admissaoId: string, codigoTipo: string): Promise<void> {
-    const alvo = codigoTipo.replace(/[^a-zA-Z0-9_-]/g, "_");
-    const arquivos = (await this.staging.listar(admissaoId)).filter((a) => a.codigoTipo === alvo);
-    for (const a of arquivos) {
+    for (const a of await this.arquivosDaStagingDoTipo(admissaoId, codigoTipo)) {
       await this.staging.removerArquivo(a.caminho).catch(() => undefined);
     }
+  }
+
+  /**
+   * Os arquivos que a staging tem daquele tipo, casando pelo código SANITIZADO, que é o que vai para
+   * o nome do arquivo (`{codigo saneado}__{uuid}`). Mesma régua de `arquivarNoDriveSemTrava`.
+   */
+  private async arquivosDaStagingDoTipo(admissaoId: string, codigoTipo: string) {
+    const alvo = codigoTipo.replace(/[^a-zA-Z0-9_-]/g, "_");
+    return (await this.staging.listar(admissaoId)).filter((a) => a.codigoTipo === alvo);
+  }
+
+  /**
+   * DESCARTA AS TENTATIVAS VELHAS DE UM TIPO, DEPOIS DE O NOVO VEREDITO SER **VALIDADO**.
+   *
+   * ══ A REGRA, E CADA CONDIÇÃO EXISTE POR UM CASO REAL ═══════════════════════════════════════════
+   *
+   *  - **SÓ COM VALIDADO.** Reprovou, nada é apagado: trocar uma cópia possivelmente boa pela pior,
+   *    sem volta, é o pior desfecho. E é isto que protege o conjunto montado em várias requisições
+   *    (frente e verso), porque conjunto incompleto não é aprovado. Ver o bloco longo em
+   *    `auditarConjunto`, que mede isso no código da tela.
+   *  - **O QUE ACABOU DE ENTRAR NUNCA SAI.** A staging deduplica por CONTEÚDO: reenviar os MESMOS
+   *    bytes devolve o caminho que já existia, e ele aparece nas duas listas. Sem esta exclusão, o
+   *    reenvio idêntico apagaria o próprio arquivo aprovado.
+   *  - **QUEM APAGA O ARQUIVO APAGA A MARCA DE DEDUP JUNTO**, e este é o ponto que, sozinho, fabrica
+   *    um beco sem saída. Sem limpar `documento_arquivos_coletados`, o estado vira "sem arquivo e sem
+   *    caminho de volta": a varredura do Pandapé vê acervo idêntico ao marcado e decide
+   *    `PULAR_SEM_BAIXAR`, e a reauditoria não encontra o que rebaixar. O molde é o
+   *    `DocumentoArquivoService.descartar`, que faz as duas coisas no mesmo ato e pelo mesmo motivo.
+   *    Apagamos as marcas do TIPO inteiro: os chamadores que mantêm marcas (a varredura do Pandapé e
+   *    a reauditoria) regravam as do conjunto atual logo depois, e um tipo ENTREGUE sem marca é o
+   *    caso já previsto em `decidirColeta`, que ele pula em vez de rebaixar à toa.
+   *  - **O APAGAMENTO É CONTADO NO LOG.** Antes ele era silêncio absoluto. §A.6: quantidade e código
+   *    de tipo, nunca caminho, nome de arquivo ou nome de pessoa.
+   *
+   * Falha ao remover não derruba o fluxo: o veredito já está gravado, e o TTL de 48h pega o resto.
+   */
+  private async descartarTentativasVelhas(
+    admissaoId: string,
+    tipoDocumentoId: string,
+    codigoTipo: string,
+    statusDoVeredito: string,
+    velhas: Array<{ caminho: string }>,
+    caminhosDoEnvioAtual: string[],
+  ): Promise<void> {
+    if (statusDoVeredito !== "VALIDADO") return;
+    const atuais = new Set(caminhosDoEnvioAtual);
+    const alvos = velhas.filter((a) => !atuais.has(a.caminho));
+    if (alvos.length === 0) return;
+
+    let removidos = 0;
+    let falhas = 0;
+    for (const a of alvos) {
+      try {
+        await this.staging.removerArquivo(a.caminho);
+        removidos += 1;
+      } catch {
+        falhas += 1;
+      }
+    }
+
+    if (removidos > 0) {
+      await this.db
+        .delete(documentoArquivosColetados)
+        .where(
+          and(
+            eq(documentoArquivosColetados.admissaoId, admissaoId),
+            eq(documentoArquivosColetados.tipoDocumentoId, tipoDocumentoId),
+          ),
+        )
+        .catch(() => undefined);
+    }
+
+    // §A.6: contagem e código do tipo. Sem caminho, sem nome de arquivo, sem PII.
+    this.logger.log(
+      `Tentativas anteriores descartadas após veredito VALIDADO (admissão ${admissaoId}): ` +
+        `tipo=${codigoTipo}, removidos=${removidos}${falhas > 0 ? `, falhas=${falhas}` : ""}, ` +
+        `marcas de dedup do tipo apagadas.`,
+    );
   }
 
   /**
@@ -999,6 +1331,10 @@ export class AuditoriaService {
    *
    * TODO desfecho que não conclui GRAVA O MOTIVO em `admissoes.drive_falha_motivo`, e a conclusão
    * limpa. Nunca mais falha calada.
+   *
+   * SÓ SOBE O QUE ESTÁ ENTREGUE (decisão do diretor). O lote é filtrado por VEREDITO antes de
+   * qualquer outra conta: reprovado e não decidido ficam de fora do prontuário. Ver o bloco do
+   * filtro em `arquivarNoDriveSemTrava`.
    */
   private async arquivarNoDrive(
     adm: Awaited<ReturnType<AuditoriaService["carregarAdmissao"]>>,
@@ -1030,7 +1366,40 @@ export class AuditoriaService {
     // motivo quando o prontuário vai ficar incompleto (nada aqui escreve veredito de documento).
     const motivoIncompleto = await this.completarStagingParaArquivamento(adm);
 
-    const arquivosStaging = await this.staging.listar(adm.id);
+    // ══ SÓ O APROVADO SOBE AO PRONTUÁRIO (decisão do diretor) ═══════════════════════════════════
+    //
+    // O filtro por VEREDITO é aplicado aqui, sobre o que está na pasta temporária. Antes, o lote era
+    // TODO arquivo presente no instante do fechamento, sem consultar estado de documento nenhum, e
+    // arquivo REPROVADO pela IA subia junto com os aprovados (ver
+    // `somenteAprovadosVaoAoProntuario`, que carrega a régra inteira e a consequência intencional
+    // sobre o documento facultativo reprovado).
+    //
+    // A ORDEM IMPORTA, E ELA É A METADE DIFÍCIL DESTA MUDANÇA: o filtro vem ANTES do cálculo de
+    // `semArquivos`. A regra do diretor é que RÉGUA FECHADA SIGNIFICA PRONTUÁRIO CRIADO SEMPRE,
+    // inclusive sem arquivo nenhum. Filtrar depois criaria a pasta contando arquivo reprovado como
+    // se estivesse lá, ou seja, prontuário que se diz completo sem estar.
+    //
+    // A COMPARAÇÃO USA O CÓDIGO SANITIZADO, a mesma régua de `completarStagingParaArquivamento`:
+    // o nome do arquivo na pasta é `{codigo saneado}__{uuid}`.
+    const entreguesSanitizados = (await this.documentosEntregues(adm.id)).map((d) =>
+      sanitizarCodigo(d.codigo),
+    );
+    const naStagingAgora = await this.staging.listar(adm.id);
+    const arquivosStaging = somenteAprovadosVaoAoProntuario(naStagingAgora, entreguesSanitizados);
+    const barrados = naStagingAgora.filter((a) => !arquivosStaging.includes(a));
+    if (barrados.length > 0) {
+      // O DESCARTE VIRA CONTAGEM NO LOG, E NÃO `drive_falha_motivo`. Régua fechada significa zero
+      // obrigatório pendente: o que o filtro barrou é facultativo reprovado ou tentativa velha, e
+      // gravar isso como falha acenderia o sinal do Diagnóstico à toa, treinando o time a ignorar o
+      // sinal. O aviso de pasta sem arquivo continua sendo gravado pelo caminho de sempre, porque
+      // `semArquivos` é calculado sobre a lista JÁ FILTRADA (logo abaixo).
+      // §A.6: CÓDIGO de tipo e contagem, nunca nome de arquivo, caminho ou nome de pessoa.
+      const codigos = [...new Set(barrados.map((a) => a.codigoTipo))].sort();
+      this.logger.log(
+        `Arquivamento filtrado por veredito (admissão ${adm.id}): ${barrados.length} arquivo(s) ` +
+          `fora do prontuário por não estarem ENTREGUE. Tipos: ${codigos.join(", ")}.`,
+      );
+    }
     // RÉGUA FECHADA = PRONTUÁRIO EXISTE, SEMPRE (decisão do diretor). Antes, staging vazia fazia o
     // método voltar sem criar nada: a admissão ficava com a régua completa e SEM pasta no Drive, e
     // isso é exatamente "documento ausente impedindo a criação da pasta", que a regra proíbe. Quem
@@ -1144,18 +1513,39 @@ export class AuditoriaService {
    *
    * Devolve o MOTIVO quando o prontuário vai ficar incompleto, ou `undefined` quando está tudo lá.
    */
+  /**
+   * Os tipos de documento ENTREGUES da admissão, obrigatórios E facultativos. Uma consulta só, com
+   * DOIS consumidores que precisam exatamente da mesma lista:
+   *
+   *  1. o FILTRO POR VEREDITO do arquivamento (só o aprovado sobe ao prontuário);
+   *  2. o RE-BAIXAR do Pandapé, que precisa saber o que está entregue e não tem arquivo.
+   *
+   * Ficarem juntos é a garantia de que as duas pontas nunca divirjam sobre o que é "aprovado": o dia
+   * em que uma delas passasse a aceitar um estado a mais seria o dia em que o prontuário voltaria a
+   * receber o que a outra recusa.
+   *
+   * `validadoEm` vem junto porque documento validado à MÃO é aceito sem arquivo pelo consumidor 2.
+   *
+   * ESTE MÉTODO SÓ LÊ. §A.6: código de tipo e carimbo de tempo, sem PII.
+   */
+  private async documentosEntregues(
+    admissaoId: string,
+  ): Promise<{ codigo: string; validadoEm: Date | null }[]> {
+    return this.db
+      .select({ codigo: tiposDocumento.codigo, validadoEm: documentosAdmissao.validadoEm })
+      .from(documentosAdmissao)
+      .innerJoin(tiposDocumento, eq(tiposDocumento.id, documentosAdmissao.tipoDocumentoId))
+      .where(
+        and(eq(documentosAdmissao.admissaoId, admissaoId), eq(documentosAdmissao.estado, "ENTREGUE")),
+      );
+  }
+
   private async completarStagingParaArquivamento(
     adm: Awaited<ReturnType<AuditoriaService["carregarAdmissao"]>>,
   ): Promise<string | undefined> {
     // Tipos ENTREGUES da admissão (obrigatórios E facultativos). Só código de tipo, sem PII.
     // `validadoEm` vem junto: documento validado à MÃO é aceito SEM arquivo (ver `aceitosSemArquivo`).
-    const linhasEntregues = await this.db
-      .select({ codigo: tiposDocumento.codigo, validadoEm: documentosAdmissao.validadoEm })
-      .from(documentosAdmissao)
-      .innerJoin(tiposDocumento, eq(tiposDocumento.id, documentosAdmissao.tipoDocumentoId))
-      .where(
-        and(eq(documentosAdmissao.admissaoId, adm.id), eq(documentosAdmissao.estado, "ENTREGUE")),
-      );
+    const linhasEntregues = await this.documentosEntregues(adm.id);
     const entregues = linhasEntregues.map((l) => l.codigo);
     const validadosAMao = linhasEntregues.filter((l) => l.validadoEm).map((l) => l.codigo);
     // MESMA CONDIÇÃO DE SEXO DA RÉGUA (OST do seletor de sexo, item 3). Sem isto, a linha do

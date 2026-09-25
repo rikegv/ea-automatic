@@ -34,21 +34,62 @@ router = APIRouter(prefix="/coleta-vt", tags=["coleta-vt"])
 logger = logging.getLogger("ea.ai.coleta_vt")
 
 
+def _admissao_id_do_json(bucket: str, nome_pdf: str) -> str | None:
+    """Lê o `admissaoId` do JSON irmão de um PDF de nome OPACO. §A.6: nada aqui é logado.
+
+    O JSON irmão tem o MESMO nome do PDF com a extensão trocada. Objeto ausente, ilegível ou sem o
+    campo devolve `None` (o arquivo fica sem identificação, e o backend o trata como órfão).
+    """
+    nome_json = re.sub(r"\.pdf$", "", nome_pdf, flags=re.IGNORECASE) + ".json"
+    bruto = gcs.ler_objeto_texto(bucket, nome_json)
+    if bruto is None:
+        return None
+    try:
+        dados = json.loads(bruto)
+    except json.JSONDecodeError:
+        logger.warning("JSON irmão do VT ilegível ao resolver o handle; objeto fica sem identificação.")
+        return None
+    if not isinstance(dados, dict):
+        return None
+    valor = dados.get("admissaoId")
+    return str(valor) if valor else None
+
+
+def _resolver_handle(bucket: str, nome: str) -> tuple[str | None, str | None]:
+    """DUAL-READ da transição do vazamento 2. Devolve `(cpf, admissaoId)`, IRMÃOS, no máximo um cheio.
+
+    Ordem (o contrato): 1) nome no padrão ANTIGO (`NOME + 11 dígitos`) → CPF do nome (legado A e B);
+    2) nome OPACO de PDF → baixa o JSON irmão, lê `admissaoId` (novo, classe C). O backend casa por
+    presença: `if admissaoId` → admissão; `elif cpf` → CPF; senão → nome fora do padrão. O não-PDF
+    opaco (o próprio JSON irmão) fica sem handle. §A.6: nem o nome, nem o CPF, nem o id vão a log.
+    """
+    cpf = extrair_cpf_do_nome(nome)
+    if cpf:
+        return cpf, None
+    if nome.lower().endswith(".pdf"):
+        admissao_id = _admissao_id_do_json(bucket, nome)
+        if admissao_id:
+            return None, admissao_id
+    return None, None
+
+
 @router.post("/listar", response_model=ListarColetaVtResponse, response_model_by_alias=True)
 def coleta_vt_listar(
     req: ListarColetaVtRequest, _: None = Depends(require_internal_token)
 ) -> ListarColetaVtResponse:
-    objetos = gcs.listar_objetos(req.bucket)
-    itens = [
-        ItemColetaVt(
-            id=obj["name"],
-            md5=obj.get("md5"),
-            mime_type=obj.get("contentType") or "application/octet-stream",
-            cpf=extrair_cpf_do_nome(obj.get("name") or ""),
-            eh_pdf=obj.get("contentType") == "application/pdf",
+    itens: list[ItemColetaVt] = []
+    for obj in gcs.listar_objetos(req.bucket):
+        cpf, admissao_id = _resolver_handle(req.bucket, obj.get("name") or "")
+        itens.append(
+            ItemColetaVt(
+                id=obj["name"],
+                md5=obj.get("md5"),
+                mime_type=obj.get("contentType") or "application/octet-stream",
+                cpf=cpf,
+                admissao_id=admissao_id,
+                eh_pdf=obj.get("contentType") == "application/pdf",
+            )
         )
-        for obj in objetos
-    ]
     return ListarColetaVtResponse(arquivos=itens)
 
 
@@ -110,16 +151,21 @@ def coleta_vt_orfaos(
     Só JSON e PDF do VT vivem neste bucket, então a rota não filtra por tipo: o backend decide o que
     fazer com cada um a partir do md5 que ele já tem no ledger.
     """
-    itens = [
-        ItemOrfaoVt(
-            id=obj.get("name") or "",
-            md5=obj.get("md5"),
-            cpf=extrair_cpf_do_nome(obj.get("name") or ""),
-            nome=_nome_sem_cpf(obj.get("name") or ""),
-            criado_em=obj.get("criadoEm"),
+    itens: list[ItemOrfaoVt] = []
+    for obj in gcs.listar_objetos_com_nome(req.bucket):
+        nome_obj = obj.get("name") or ""
+        cpf, admissao_id = _resolver_handle(req.bucket, nome_obj)
+        itens.append(
+            ItemOrfaoVt(
+                id=nome_obj,
+                md5=obj.get("md5"),
+                cpf=cpf,
+                admissao_id=admissao_id,
+                # Nome opaco não carrega nome de pessoa: `None`. Só o legado (com CPF) tem nome.
+                nome=_nome_sem_cpf(nome_obj) if cpf else None,
+                criado_em=obj.get("criadoEm"),
+            )
         )
-        for obj in gcs.listar_objetos_com_nome(req.bucket)
-    ]
     return OrfaosColetaVtResponse(arquivos=itens)
 
 

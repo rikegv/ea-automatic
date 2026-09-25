@@ -59,6 +59,32 @@ const TIPOS_CONTRATO = [
   "Jovem Aprendiz",
 ];
 
+/**
+ * CORES DO CAMPO (OST parte 2, cores da Liberação). Tokens do design, nunca hex solto:
+ *  - AZUL (`accent`): o valor veio pré-preenchido do A&S, para o time ver o que já chegou;
+ *  - VERMELHO (`danger`): é pendência obrigatória (o rótulo está em `camposPendentes`) E o campo
+ *    ainda está vazio. É recomputo AO VIVO: preencheu, deixa de estar vazio e sai do vermelho.
+ *
+ * A régua NÃO é recalculada aqui (§A.19): a lista autoritativa é `camposPendentes` (fonte única
+ * `pendenciasObrigatorias`); o front só decide "azul ou vermelho" a partir de "este campo está vazio?".
+ */
+type CorCampo = "azul" | "vermelho" | null;
+
+const BORDA_INPUT: Record<"azul" | "vermelho", string> = {
+  azul: "!border-accent focus:!border-accent",
+  vermelho: "!border-danger focus:!border-danger",
+};
+// O `Select`/`MultiSelect` recebe className no WRAPPER; a borda mora no botão `.ds-select` interno,
+// então a cor é aplicada pela variante de descendente. Sem isto a cor cairia no div, não no controle.
+const BORDA_SELECT: Record<"azul" | "vermelho", string> = {
+  azul: "[&_.ds-select]:!border-accent",
+  vermelho: "[&_.ds-select]:!border-danger",
+};
+const COR_LABEL: Record<"azul" | "vermelho", string> = {
+  azul: "!text-accent",
+  vermelho: "!text-danger",
+};
+
 interface CatItem {
   id: string;
   nome: string;
@@ -80,6 +106,30 @@ interface PreAdmissao {
   /** Cliente e cargo JÁ atribuídos à admissão (hoje, quem os sugere é o match da Sala de Espera). */
   codCliente: string | null;
   cargoId: string | null;
+  /**
+   * FOLHA PRÉ-PREENCHIDA (OST parte 2, contrato congelado). O backend estende o payload de
+   * `GET /admissoes/aguardando-liberacao` com estes valores, que o modal usa para nascer preenchido
+   * (campo AZUL) em vez de vazio. Opcionais de propósito: enquanto o backend da outra sessão não
+   * subir, o modal se comporta como antes (tudo vazio), sem quebrar.
+   */
+  salario?: string | number | null;
+  escala?: string | null;
+  centroCusto?: string | null;
+  setor?: string | null;
+  gestorBp?: string | null;
+  departamento?: string | null;
+  tempoContrato?: string | null;
+  motivo?: string | null;
+  substituidoNome?: string | null;
+  endereco?: string | null;
+  beneficios?: unknown;
+  /**
+   * RÓTULOS das pendências obrigatórias, da fonte única `pendenciasObrigatorias` (§A.19). O front NÃO
+   * recalcula régua: consome esta lista e só checa "o campo ainda está vazio?" para o vermelho.
+   */
+  camposPendentes?: string[];
+  /** Veio do funil do A&S (para a marca de origem no topo do modal). */
+  veioDoFunil?: boolean;
 }
 interface Cliente {
   codCliente: string;
@@ -286,6 +336,15 @@ function salarioParaNumero(s: string): string | undefined {
   return limpo || undefined;
 }
 
+// Salário do PAYLOAD (numérico "2500.00" ou número) → máscara pt-BR do input ("2.500,00"), idêntica
+// ao que `maskMoedaBR` produz ao digitar. Vazio, nulo ou zero vira "", que a régua trata como pendente.
+function salarioParaInput(v: string | number | null | undefined): string {
+  if (v == null || String(v).trim() === "") return "";
+  const n = typeof v === "number" ? v : Number(String(v).replace(/\s/g, "").replace(",", "."));
+  if (!Number.isFinite(n) || n === 0) return "";
+  return n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 // Tempo parado desde a CHEGADA (criadoEm) até agora. Duas leituras do MESMO total: dias (piso, dias
 // completos decorridos) e horas (piso). `nowMs` vem do estado, atualizado no load/liberar.
 function paradoMs(criadoEm: string, nowMs: number): number {
@@ -335,6 +394,9 @@ export default function LiberacaoPage() {
   const precisaValorBeneficio = useMemo(() => criarPrecisaValor(beneficiosCat), [beneficiosCat]);
   // Modal de liberação: a pré-admissão alvo (null = fechado) + os campos do formulário.
   const [alvo, setAlvo] = useState<PreAdmissao | null>(null);
+  // Rótulos dos campos que NASCERAM pré-preenchidos pelo payload do A&S (folha). Base do azul: campo
+  // azul = veio do A&S e ainda tem valor. Recomputado a cada abertura de modal, nunca deriva régua.
+  const [prefilledKeys, setPrefilledKeys] = useState<Set<string>>(new Set());
   /**
    * SALA DE ESPERA (onda 3): estado PRÓPRIO do vínculo, em três peças que não se misturam com nada
    * do formulário de liberação.
@@ -679,14 +741,28 @@ export default function LiberacaoPage() {
     const sugerido = resolverPrePreenchimento(r, pre);
     setCodCliente(sugerido.codCliente);
     setCargoId(sugerido.cargoId);
-    setSalario("");
+    // FOLHA PRÉ-PREENCHIDA (OST parte 2): o modal nasce com o que já veio do A&S, e cada campo com
+    // valor aparece AZUL. O mesmo princípio de `resolverPrePreenchimento`, estendido à folha: o
+    // payload manda o valor, e o consultor edita. Tipo e data de admissão não vêm no payload da folha,
+    // então seguem vazios (e vermelhos, se forem pendência obrigatória do par).
+    const salarioPre = salarioParaInput(r.salario);
+    setSalario(salarioPre);
     setTipoContrato("");
     setDataAdmissao("");
-    setEscala("");
-    setCentroCusto("");
-    setGestorBp("");
-    setSetor("");
-    setDepartamento("");
+    setEscala(r.escala ?? "");
+    setCentroCusto(r.centroCusto ?? "");
+    setGestorBp(r.gestorBp ?? "");
+    setSetor(r.setor ?? "");
+    setDepartamento(r.departamento ?? "");
+    // Quais rótulos nasceram preenchidos pelo A&S: base do azul. Só entra quem veio com valor de fato.
+    const pre0: string[] = [];
+    if (salarioPre) pre0.push("Salário");
+    if (r.escala) pre0.push("Escala");
+    if (r.centroCusto) pre0.push("Centro de custo");
+    if (r.gestorBp) pre0.push("Gestor / BP");
+    if (r.setor) pre0.push("Setor");
+    if (r.departamento) pre0.push("Departamento");
+    setPrefilledKeys(new Set(pre0));
     setObservacao("");
     setBeneficiosSel([]);
     setBeneficiosValores({});
@@ -768,7 +844,7 @@ export default function LiberacaoPage() {
    * `aceiteDuplicidade` só vem `true` no REENVIO, depois de o consultor ler o painel de duplicidade
    * e confirmar. A primeira tentativa nunca o manda, senão a trava do backend nasceria morta.
    */
-  async function liberar(aceiteDuplicidade = false) {
+  async function liberar(aceiteDuplicidade = false, aceiteObrigatoriosFaltantes = false) {
     if (!alvo || !codCliente || !cargoId) return;
     setLiberando(true);
     setModalErro(null);
@@ -807,6 +883,9 @@ export default function LiberacaoPage() {
             sexo: sexo || undefined,
             // Só viaja no reenvio confirmado; `false` fica de fora para não sujar o payload.
             aceiteDuplicidade: aceiteDuplicidade || undefined,
+            // ACEITE dos 6 obrigatórios (item 6): só viaja quando o Master/Super libera com faltante,
+            // pelo botão de aceite explícito. O backend valida o papel e grava o rastro.
+            aceiteObrigatoriosFaltantes: aceiteObrigatoriosFaltantes || undefined,
             // ALTO VOLUME (onda 2): só viaja com o FLAG LIGADO. Desligado manda `undefined`, o
             // backend não recebe projeto, não valida e não grava vínculo, e a liberação sai byte a
             // byte igual à de antes desta onda. O grupo é opcional mesmo com o projeto escolhido.
@@ -992,7 +1071,30 @@ export default function LiberacaoPage() {
     };
   }, [token, avProjetoSel]);
 
-  const podeLiberar =
+  /**
+   * ─ OS 6 OBRIGATÓRIOS PARA LIBERAR (item 6, contrato congelado) ────────────────────────────────
+   *
+   * CONJUNTO PRÓPRIO, e não a régua unificada (`camposPendentes`): são exatamente estes seis campos
+   * que TRAVAM a liberação. As demais pendências vermelhas seguem não travando e viram pendência na
+   * esteira (regra 5, não-bloqueio). Cargo entra na lista, mas na prática ele já é trava dura
+   * (`codCliente && cargoId`), então nunca chega a ser um "faltante" liberável por aceite.
+   */
+  const obrigatoriosLiberar: { rotulo: string; preenchido: boolean }[] = [
+    { rotulo: "Cargo", preenchido: Boolean(cargoId) },
+    { rotulo: "Sexo", preenchido: Boolean(sexo) },
+    { rotulo: "Tipo de contrato", preenchido: Boolean(tipoContrato) },
+    { rotulo: "Data de admissão", preenchido: Boolean(dataAdmissao) },
+    { rotulo: "Pacote de benefícios", preenchido: beneficiosSel.length > 0 },
+    { rotulo: "Escala", preenchido: Boolean(escala) },
+  ];
+  const faltantesObrigatorios = obrigatoriosLiberar.filter((o) => !o.preenchido).map((o) => o.rotulo);
+
+  /**
+   * A BASE do gate: tudo o que trava a liberação MENOS a completude dos 6. Separada de propósito,
+   * porque o botão de aceite do Master reusa a base e só relaxa os 6 (nunca cliente, cargo, uniforme,
+   * CPF, vínculo ou Alto Volume, que continuam travas duras para todos).
+   */
+  const baseLiberar =
     Boolean(codCliente && cargoId) &&
     !cpfAlvoInvalido &&
     possuiUniforme !== null &&
@@ -1002,6 +1104,12 @@ export default function LiberacaoPage() {
     // desligado o termo é `true` e o gate segue com o mesmo significado que tinha; ligado, ele passa
     // a exigir o projeto, porque flag ligado sem projeto não é vínculo nenhum.
     (!avLigado || Boolean(avProjetoSel));
+
+  // O botão "Liberar" só habilita com os 6 preenchidos, PARA TODOS (§A.14 do item 6).
+  const podeLiberar = baseLiberar && faltantesObrigatorios.length === 0;
+  // MASTER/SUPER_ADMIN: com faltante nos 6, liberam só pelo ACEITE EXPLÍCITO (botão à parte). Sem o
+  // aceite, nem eles liberam com faltante. COMUM nunca vê este caminho.
+  const podeLiberarComAceite = isAdmin && baseLiberar && faltantesObrigatorios.length > 0;
 
   // ---------- Liberação em massa ----------
   function abrirLote() {
@@ -1105,6 +1213,22 @@ export default function LiberacaoPage() {
   const rowsFiltradas = filtrarBusca(rows, busca);
   const recusadasFiltradas = filtrarBusca(recusadas, busca);
 
+  /**
+   * NOME DO CLIENTE PARA A COLUNA (item 1). A pré-admissão traz só o `codCliente`; o nome vem do
+   * catálogo `clientes` já carregado. Sem cliente atribuído (a pré-admissão do Pandapé ainda sem o
+   * de/para), a célula mostra "não informado" (§A.11), nunca o código cru sozinho.
+   */
+  const clientePorCodigo = useMemo(() => {
+    const m = new Map<string, Cliente>();
+    for (const c of clientes) m.set(c.codCliente, c);
+    return m;
+  }, [clientes]);
+  function nomeClienteDaLinha(cod: string | null): string {
+    if (!cod) return "não informado";
+    const c = clientePorCodigo.get(cod);
+    return c ? (c.nomeOperacao ?? c.razaoSocial) : cod;
+  }
+
   // Ordenação clicável (OST visual, leva das 11 tabelas), uma instância por tabela.
   //
   // "Parado (dias)" e "Parado (horas)" são a MESMA grandeza em unidades diferentes, e as duas são
@@ -1114,6 +1238,15 @@ export default function LiberacaoPage() {
   // Chegada é data e traz o mais recente primeiro. Checkbox e Ação ficam de fora: são controle.
   const colunasFila = useMemo<ColOrd<PreAdmissao>[]>(
     () => [
+      {
+        chave: "cliente",
+        tipo: "texto",
+        valor: (r) => {
+          if (!r.codCliente) return null;
+          const c = clientePorCodigo.get(r.codCliente);
+          return c ? (c.nomeOperacao ?? c.razaoSocial) : r.codCliente;
+        },
+      },
       { chave: "candidato", tipo: "texto", valor: (r) => r.candidatoNome },
       { chave: "cpf", tipo: "texto", valor: (r) => r.candidatoCpf },
       { chave: "telefone", tipo: "texto", valor: (r) => r.telefone },
@@ -1123,7 +1256,7 @@ export default function LiberacaoPage() {
       { chave: "paradoDias", tipo: "numero", valor: (r) => paradoMs(r.criadoEm, nowMs) },
       { chave: "paradoHoras", tipo: "numero", valor: (r) => paradoMs(r.criadoEm, nowMs) },
     ],
-    [nowMs],
+    [nowMs, clientePorCodigo],
   );
   const ordFila = useOrdenacao(colunasFila, rowsFiltradas);
 
@@ -1232,18 +1365,50 @@ export default function LiberacaoPage() {
     !loteGestorBp && "Gestor / BP",
   ].filter(Boolean) as string[];
 
-  const pendentesNoModal = [
-    // Uniforme NÃO entra nesta lista: ela é o aviso do que segue pendente DEPOIS de liberar, e o
-    // uniforme não passa daqui sem resposta (é trava, não pendência que segue para a esteira).
-    !salario && "Salário",
-    !tipoContrato && "Tipo de contrato",
-    !dataAdmissao && "Data de admissão",
-    beneficiosSel.length === 0 && "Pacote de benefícios",
-    !escala && "Escala",
-    !centroCusto && "Centro de custo",
-    !setor && "Setor",
-    !gestorBp && "Gestor / BP",
-  ].filter(Boolean) as string[];
+  // PENDÊNCIAS DO MODAL (OST parte 2): a lista autoritativa é `camposPendentes` (fonte única
+  // `pendenciasObrigatorias`, §A.19). O front NÃO recria régua: só remove da lista o rótulo cujo campo
+  // o consultor JÁ preencheu aqui, o que dá o recomputo ao vivo. Rótulo sem campo no modal (ex.: Termo
+  // de Banco) segue na lista, porque não há como preenchê-lo por aqui e ele continua pendente.
+  const preenchidoPorRotulo: Record<string, boolean> = {
+    Cliente: Boolean(codCliente),
+    Cargo: Boolean(cargoId),
+    Salário: Boolean(salario),
+    "Tipo de contrato": Boolean(tipoContrato),
+    "Data de admissão": Boolean(dataAdmissao),
+    "Pacote de benefícios": beneficiosSel.length > 0,
+    Escala: Boolean(escala),
+    "Centro de custo": Boolean(centroCusto),
+    Setor: Boolean(setor),
+    "Gestor / BP": Boolean(gestorBp),
+    Uniforme: possuiUniforme !== null,
+  };
+  const camposPendentesModal = alvo?.camposPendentes ?? [];
+  const pendentesNoModal = camposPendentesModal.filter((rotulo) => !preenchidoPorRotulo[rotulo]);
+  const pendentesSet = new Set(pendentesNoModal);
+
+  /**
+   * A cor de um campo, a partir do seu rótulo e de estar vazio. VERMELHO quando é pendência ainda
+   * vazia; AZUL quando veio do A&S e tem valor; nada quando o consultor preencheu por conta (nem veio
+   * do A&S nem está pendente). `pendentesSet` já é `camposPendentes` ∩ vazio, então usar ele fecha a
+   * régua num lugar só, sem recomputo paralelo.
+   */
+  function corDe(rotulo: string, vazio: boolean): CorCampo {
+    if (vazio) return pendentesSet.has(rotulo) ? "vermelho" : null;
+    return prefilledKeys.has(rotulo) ? "azul" : null;
+  }
+  // Cor de cada campo do modal individual, calculada uma vez para o render. Rótulos EXATOS da fonte
+  // única (`ROTULO_PENDENCIA` do backend), para casar com `camposPendentes` sem tradução no meio.
+  const corCliente = corDe("Cliente", !codCliente);
+  const corCargo = corDe("Cargo", !cargoId);
+  const corSalario = corDe("Salário", !salario);
+  const corTipoContrato = corDe("Tipo de contrato", !tipoContrato);
+  const corDataAdmissao = corDe("Data de admissão", !dataAdmissao);
+  const corEscala = corDe("Escala", !escala);
+  const corSetor = corDe("Setor", !setor);
+  const corCentroCusto = corDe("Centro de custo", !centroCusto);
+  const corGestorBp = corDe("Gestor / BP", !gestorBp);
+  const corDepartamento = corDe("Departamento", !departamento);
+  const corBeneficios = corDe("Pacote de benefícios", beneficiosSel.length === 0);
 
   return (
     <>
@@ -1320,7 +1485,11 @@ export default function LiberacaoPage() {
       {aba === "aguardando" ? (
         <GlassCard className="overflow-hidden p-2">
           <div className="ea-scroll overflow-x-auto">
-            <table className="ds-table min-w-[1034px]">
+            {/* §A.20: as larguras somam a `min-w` da tabela, então nenhuma coluna encolhe abaixo do
+                que precisa (o botão "Liberar Admissão" cabe inteiro na coluna Ação) e, sobrando
+                espaço, a folga se distribui entre todas em vez de virar um vão morto atrás do nome.
+                Cliente (item 1) entra como PRIMEIRA coluna de conteúdo, logo após o checkbox. */}
+            <table className="ds-table min-w-[1604px]">
               <thead>
                 <tr>
                   <th className="w-[44px]">
@@ -1334,7 +1503,10 @@ export default function LiberacaoPage() {
                       disabled={idsVisiveis.length === 0}
                     />
                   </th>
-                  <ColunaOrdenavel as="th" ord={ordFila} chave="candidato">
+                  <ColunaOrdenavel as="th" ord={ordFila} chave="cliente" className="w-[200px]">
+                    Cliente
+                  </ColunaOrdenavel>
+                  <ColunaOrdenavel as="th" ord={ordFila} chave="candidato" className="w-[220px]">
                     Candidato
                   </ColunaOrdenavel>
                   <ColunaOrdenavel as="th" ord={ordFila} chave="cpf" className="w-[150px]">
@@ -1366,13 +1538,13 @@ export default function LiberacaoPage() {
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan={10} className="py-8 text-center text-faint">
+                    <td colSpan={11} className="py-8 text-center text-faint">
                       Carregando…
                     </td>
                   </tr>
                 ) : rowsFiltradas.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="py-8 text-center text-faint">
+                    <td colSpan={11} className="py-8 text-center text-faint">
                       {busca
                         ? "Nenhum candidato encontrado para a busca."
                         : "Nenhuma pré-admissão aguardando liberação."}
@@ -1390,6 +1562,10 @@ export default function LiberacaoPage() {
                           onChange={() => alternarSelecao(r.admissaoId)}
                         />
                       </td>
+                      {/* CLIENTE (item 1): primeira coluna de conteúdo. Nome operacional do cliente
+                          já atribuído à pré-admissão, ou "não informado" quando o de/para ainda não
+                          resolveu o cliente da vaga do Pandapé. */}
+                      <td className="text-[12.5px]">{nomeClienteDaLinha(r.codCliente)}</td>
                       <td className="font-semibold">
                         <span className="inline-flex items-center gap-2">
                           {/* Bloco 1 da OST: caixa alta de exibição (o banco segue como veio). */}
@@ -1445,10 +1621,12 @@ export default function LiberacaoPage() {
       ) : (
         <GlassCard className="overflow-hidden p-2">
           <div className="ea-scroll overflow-x-auto">
-            <table className="ds-table min-w-[820px]">
+            {/* §A.20: Candidato ganha largura própria, então o nome não abre um vão morto até o CPF
+                e a folga se distribui entre as colunas. As larguras somam a `min-w` da tabela. */}
+            <table className="ds-table min-w-[980px]">
               <thead>
                 <tr>
-                  <ColunaOrdenavel as="th" ord={ordRecusadas} chave="candidato">
+                  <ColunaOrdenavel as="th" ord={ordRecusadas} chave="candidato" className="w-[240px]">
                     Candidato
                   </ColunaOrdenavel>
                   <ColunaOrdenavel as="th" ord={ordRecusadas} chave="cpf" className="w-[150px]">
@@ -1542,6 +1720,13 @@ export default function LiberacaoPage() {
             <div className="eyebrow !mb-1">Liberação Admissional</div>
             <h2 className="font-display text-xl font-bold">{caixaAlta(alvo.candidatoNome)}</h2>
             <p className="mt-0.5 font-mono text-[13px] text-dim">{fmtCpf(alvo.candidatoCpf)}</p>
+            {/* Marca de origem (contrato: `veioDoFunil`): sinaliza que os valores azuis vieram do A&S. */}
+            {alvo.veioDoFunil && (
+              <span className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-[rgba(21,147,189,0.35)] bg-[rgba(21,147,189,0.1)] px-2.5 py-0.5 text-[11.5px] text-accent">
+                <Icon name="check" className="h-3.5 w-3.5 flex-none" />
+                Veio Do Funil A&amp;S
+              </span>
+            )}
           </div>
 
           {/* TRAVA DO CPF INVÁLIDO (item 9, Frente A). Bloqueia a liberação e diz por quê. Quem
@@ -1571,11 +1756,56 @@ export default function LiberacaoPage() {
             </p>
           )}
 
+          {/* INFORMAÇÕES QUE FALTAM (OST parte 2, item 3): a lista das pendências obrigatórias ainda
+              vazias, espelhando a Liberação de Vaga do A&S. Fonte autoritativa é `camposPendentes`
+              (§A.19); o front só filtra o que já foi preenchido aqui, então a lista encolhe AO VIVO
+              conforme o time preenche. Não bloqueia: o que sobrar segue como pendência na esteira. */}
+          {pendentesNoModal.length > 0 && (
+            <div
+              className="mb-4 rounded-xl border border-[var(--border)] bg-[rgba(214,69,69,0.06)] px-3 py-2.5"
+              role="status"
+            >
+              <div className="text-[11px] uppercase tracking-wide text-danger">
+                Informações Que Faltam
+              </div>
+              <ul className="mt-2 flex flex-wrap gap-1.5">
+                {pendentesNoModal.map((p) => (
+                  <li
+                    key={p}
+                    className="rounded-full border border-[rgba(214,69,69,0.4)] px-2.5 py-0.5 text-[12px] text-danger"
+                  >
+                    {p}
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-2 text-[11.5px] text-dim">
+                Seis campos travam a liberação: Cargo, Sexo, Tipo de contrato, Data de admissão,
+                Pacote de benefícios e Escala. As demais pendências não travam: o que ficar vazio
+                segue como pendência na esteira, e some desta lista assim que você preenche.
+              </p>
+            </div>
+          )}
+
+          {/* Legenda das cores: azul veio do A&S, vermelho é pendência a preencher. Só aparece quando
+              há campo colorido, para não poluir quando nada veio nem falta. */}
+          {(prefilledKeys.size > 0 || pendentesNoModal.length > 0) && (
+            <p className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11.5px] text-dim">
+              <span className="inline-flex items-center gap-1.5">
+                <span className="h-2.5 w-2.5 flex-none rounded-full bg-accent" />
+                <span className="text-accent">Azul</span>: veio do A&amp;S.
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="h-2.5 w-2.5 flex-none rounded-full bg-danger" />
+                <span className="text-danger">Vermelho</span>: pendência a preencher.
+              </span>
+            </p>
+          )}
+
           {/* Cliente + cargo: o que ESTA OST entrega e a única trava de liberação. A próxima OST
               (pendências obrigatórias) adiciona campos ABAIXO deste bloco, sem refazer o modal. */}
           <div className="grid gap-4">
             <label className="grid gap-1.5">
-              <span className="ds-label">Cliente</span>
+              <span className={cn("ds-label", corCliente && COR_LABEL[corCliente])}>Cliente</span>
               <Select
                 value={codCliente}
                 onChange={setCodCliente}
@@ -1583,11 +1813,12 @@ export default function LiberacaoPage() {
                 ariaLabel="Cliente"
                 searchable
                 menuFit
+                className={corCliente ? BORDA_SELECT[corCliente] : undefined}
                 options={clientes.map((c) => ({ value: c.codCliente, label: rotuloCliente(c) }))}
               />
             </label>
             <label className="grid gap-1.5">
-              <span className="ds-label">Cargo</span>
+              <span className={cn("ds-label", corCargo && COR_LABEL[corCargo])}>Cargo</span>
               <Select
                 value={cargoId}
                 onChange={setCargoId}
@@ -1595,6 +1826,7 @@ export default function LiberacaoPage() {
                 ariaLabel="Cargo"
                 searchable
                 menuFit
+                className={corCargo ? BORDA_SELECT[corCargo] : undefined}
                 options={cargos.map((c) => ({ value: c.id, label: c.nome }))}
               />
             </label>
@@ -1662,9 +1894,9 @@ export default function LiberacaoPage() {
                 </span>
               </label>
               <label className="grid gap-1.5">
-                <span className="ds-label">Salário</span>
+                <span className={cn("ds-label", corSalario && COR_LABEL[corSalario])}>Salário</span>
                 <input
-                  className="ds-input"
+                  className={cn("ds-input", corSalario && BORDA_INPUT[corSalario])}
                   inputMode="decimal"
                   placeholder="Ex.: 2.500,00"
                   value={salario}
@@ -1672,22 +1904,27 @@ export default function LiberacaoPage() {
                 />
               </label>
               <label className="grid gap-1.5">
-                <span className="ds-label">Data de admissão</span>
+                <span className={cn("ds-label", corDataAdmissao && COR_LABEL[corDataAdmissao])}>
+                  Data de admissão
+                </span>
                 <input
                   type="date"
-                  className="ds-input"
+                  className={cn("ds-input", corDataAdmissao && BORDA_INPUT[corDataAdmissao])}
                   value={dataAdmissao}
                   onChange={(e) => setDataAdmissao(e.target.value)}
                 />
               </label>
               <label className="grid gap-1.5">
-                <span className="ds-label">Tipo de contrato</span>
+                <span className={cn("ds-label", corTipoContrato && COR_LABEL[corTipoContrato])}>
+                  Tipo de contrato
+                </span>
                 <Select
                   value={tipoContrato}
                   onChange={setTipoContrato}
                   placeholder="Selecione…"
                   ariaLabel="Tipo de contrato"
                   searchable
+                  className={corTipoContrato ? BORDA_SELECT[corTipoContrato] : undefined}
                   options={[
                     OPCAO_EM_BRANCO,
                     ...TIPOS_CONTRATO.map((t) => ({ value: t, label: t })),
@@ -1695,7 +1932,7 @@ export default function LiberacaoPage() {
                 />
               </label>
               <label className="grid gap-1.5">
-                <span className="ds-label">Escala</span>
+                <span className={cn("ds-label", corEscala && COR_LABEL[corEscala])}>Escala</span>
                 <Select
                   value={escala}
                   onChange={setEscala}
@@ -1703,6 +1940,7 @@ export default function LiberacaoPage() {
                   ariaLabel="Escala"
                   searchable
                   menuFit
+                  className={corEscala ? BORDA_SELECT[corEscala] : undefined}
                   options={[
                     OPCAO_EM_BRANCO,
                     ...escalasCat.map((e) => ({ value: e.nome, label: e.nome })),
@@ -1714,9 +1952,9 @@ export default function LiberacaoPage() {
                   valores já usados neste cliente+cargo (memória dinâmica): o `list` é sugestão, não
                   trava, então setor novo continua entrando e passa a alimentar a memória. */}
               <label className="grid gap-1.5">
-                <span className="ds-label">Setor</span>
+                <span className={cn("ds-label", corSetor && COR_LABEL[corSetor])}>Setor</span>
                 <input
-                  className="ds-input"
+                  className={cn("ds-input", corSetor && BORDA_INPUT[corSetor])}
                   value={setor}
                   onChange={(e) => setSetor(e.target.value)}
                   list="setores-memoria"
@@ -1729,17 +1967,21 @@ export default function LiberacaoPage() {
                 </datalist>
               </label>
               <label className="grid gap-1.5">
-                <span className="ds-label">Departamento</span>
+                <span className={cn("ds-label", corDepartamento && COR_LABEL[corDepartamento])}>
+                  Departamento
+                </span>
                 <input
-                  className="ds-input"
+                  className={cn("ds-input", corDepartamento && BORDA_INPUT[corDepartamento])}
                   value={departamento}
                   onChange={(e) => setDepartamento(e.target.value)}
                 />
               </label>
               <label className="grid gap-1.5">
-                <span className="ds-label">Centro de custo</span>
+                <span className={cn("ds-label", corCentroCusto && COR_LABEL[corCentroCusto])}>
+                  Centro de custo
+                </span>
                 <input
-                  className="ds-input"
+                  className={cn("ds-input", corCentroCusto && BORDA_INPUT[corCentroCusto])}
                   value={centroCusto}
                   onChange={(e) => setCentroCusto(e.target.value)}
                 />
@@ -1749,9 +1991,11 @@ export default function LiberacaoPage() {
                   coisas distintas, e a loja é que passa a responder "onde a pessoa trabalha". */}
               <SeletorLoja codCliente={codCliente} value={lojaId} onChange={setLojaId} />
               <label className="grid gap-1.5">
-                <span className="ds-label">Gestor / BP</span>
+                <span className={cn("ds-label", corGestorBp && COR_LABEL[corGestorBp])}>
+                  Gestor / BP
+                </span>
                 <input
-                  className="ds-input"
+                  className={cn("ds-input", corGestorBp && BORDA_INPUT[corGestorBp])}
                   value={gestorBp}
                   onChange={(e) => setGestorBp(e.target.value)}
                 />
@@ -1761,12 +2005,15 @@ export default function LiberacaoPage() {
             {/* Pacote de benefícios: REUSA a régua de valor (precisaValorBeneficio). Menu, nunca texto
                 livre; valores pré-preenchidos pela memória cliente+cargo, editáveis. */}
             <label className="grid gap-1.5">
-              <span className="ds-label">Benefícios</span>
+              <span className={cn("ds-label", corBeneficios && COR_LABEL[corBeneficios])}>
+                Benefícios
+              </span>
               <MultiSelect
                 values={beneficiosSel}
                 onChange={setBeneficiosSel}
                 placeholder="Selecione os benefícios…"
                 ariaLabel="Benefícios"
+                className={corBeneficios ? BORDA_SELECT[corBeneficios] : undefined}
                 options={beneficiosCat.map((b) => ({ value: b.nome, label: b.nome }))}
               />
             </label>
@@ -1958,14 +2205,6 @@ export default function LiberacaoPage() {
               )}
             </div>
 
-            {/* Sinalização do que ainda falta (mesmos campos da régua unificada). Só cliente+cargo
-                travam; o resto é pendência que segue para a esteira. */}
-            {podeLiberar && pendentesNoModal.length > 0 && (
-              <p className="rounded-xl border border-[var(--border)] bg-[rgba(201,138,18,0.1)] px-3 py-2 text-[12.5px] text-warn">
-                Ainda pendente (não bloqueia, segue como pendência na esteira):{" "}
-                {pendentesNoModal.join(", ")}.
-              </p>
-            )}
           </div>
 
           {modalErro && (
@@ -2003,6 +2242,32 @@ export default function LiberacaoPage() {
             </div>
           )}
 
+          {/* FALTAM PARA LIBERAR (item 6): os campos do conjunto próprio dos 6 ainda vazios. Trava o
+              botão Liberar para todos; o Master/Super libera por aceite explícito, logo abaixo. */}
+          {baseLiberar && faltantesObrigatorios.length > 0 && (
+            <div
+              className="mt-4 rounded-xl border border-[rgba(214,69,69,0.4)] bg-[rgba(214,69,69,0.06)] px-3 py-2.5"
+              role="status"
+            >
+              <div className="text-[11px] uppercase tracking-wide text-danger">Faltam Para Liberar</div>
+              <ul className="mt-2 flex flex-wrap gap-1.5">
+                {faltantesObrigatorios.map((p) => (
+                  <li
+                    key={p}
+                    className="rounded-full border border-[rgba(214,69,69,0.4)] px-2.5 py-0.5 text-[12px] text-danger"
+                  >
+                    {p}
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-2 text-[11.5px] text-dim">
+                {isAdmin
+                  ? "Estes campos travam a liberação. Você pode liberar mesmo assim, com o aceite abaixo, e o que faltar segue como pendência na esteira."
+                  : "Estes campos travam a liberação. Preencha todos para liberar."}
+              </p>
+            </div>
+          )}
+
           <div className="mt-6 flex items-center justify-between gap-3">
             {/* Recusar: visível a todos, ATIVO só para Master/Super Admin (o backend também barra por
                 @Roles). Consultor comum vê desabilitado. */}
@@ -2019,6 +2284,23 @@ export default function LiberacaoPage() {
               <Button variant="secondary" onClick={fecharModal} disabled={liberando || acaoRecusa}>
                 Cancelar
               </Button>
+              {/* ACEITE do Master/Super (item 6): aparece SÓ quando a base está ok e há faltante nos
+                  6. Confirma o aceite e manda `aceiteObrigatoriosFaltantes: true`. O botão Liberar
+                  normal continua ao lado, mas fica travado enquanto houver faltante. */}
+              {podeLiberarComAceite && (
+                <Button
+                  variant="secondary"
+                  onClick={() => void liberar(Boolean(dupAviso), true)}
+                  disabled={liberando || acaoRecusa}
+                  className="!border-[rgba(201,138,18,0.5)] !text-warn"
+                >
+                  {liberando
+                    ? "Liberando…"
+                    : dupAviso
+                      ? "Confirmar e liberar mesmo com campos faltando"
+                      : "Liberar mesmo com campos faltando"}
+                </Button>
+              )}
               <Button
                 onClick={() => void liberar(Boolean(dupAviso))}
                 disabled={!podeLiberar || liberando || acaoRecusa}

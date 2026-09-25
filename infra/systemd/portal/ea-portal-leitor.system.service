@@ -1,0 +1,98 @@
+[Unit]
+# UNIDADE DEFINITIVA do leitor do Portal do Candidato. Unidade de SISTEMA, com usuario proprio.
+# Instalar em /etc/systemd/system/ea-portal-leitor.service (exige raiz: ver instalar-portal-leitor.sh).
+# Cumpre a exigencia 4 da secao 6 do DESENHO-PORTAL-CAMINHO-DO-ARQUIVO.md: usuario de sistema
+# proprio, limites de memoria, de processos e de alcance de rede.
+Description=Portal do Candidato - leitor isolado (127.0.0.1:8020)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+
+# ---- Identidade propria: nao e o usuario do diretor ----
+User=ea-portal
+Group=ea-portal
+# Sem grupos herdados, sem nenhuma capacidade.
+SupplementaryGroups=
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+
+# ---- Codigo e ambiente: copia propria em /opt, fora de /home ----
+# /home/henrique e 0750, entao o usuario do leitor NAO consegue nem atravessar o diretorio do
+# diretor. Isso e desejado: o codigo dele vive em /opt/ea-portal-leitor, instalado por copia.
+WorkingDirectory=/opt/ea-portal-leitor
+Environment=PYTHONPATH=/opt/ea-portal-leitor/codigo
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+# Ambiente MAGRO, dono root, leitura so do usuario do leitor (0640 root:ea-portal).
+EnvironmentFile=/etc/ea-portal-leitor/leitor.env
+ExecStart=/opt/ea-portal-leitor/venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8020
+
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+# ---- Sistema de arquivos: somente leitura, com duas ilhas de escrita ----
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateMounts=yes
+StateDirectory=ea-portal-leitor
+RuntimeDirectory=ea-portal-leitor
+ReadWritePaths=/var/lib/ea-portal-leitor
+# Trava explicita e redundante: mesmo que alguem afrouxe o acima, o ambiente da operacao
+# continua fora de alcance.
+InaccessiblePaths=-/home
+InaccessiblePaths=-/etc/ea-backend
+ProtectProc=invisible
+ProcSubset=pid
+UMask=0077
+
+# ---- Nucleo e kernel ----
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=no
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @obsolete @mount @debug @swap
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+# ---- Alcance de rede: fala com quem precisa e com mais ninguem ----
+# Loopback (o backend chama ele) e saida para a nuvem do Google (Vertex e o balde de entrada).
+# Faixas privadas negadas: o leitor nao tem o que conversar com o banco, com o Redis nem com a VPN.
+# Sem `IPAddressDeny=any` de proposito: o prefixo 0.0.0.0/0 apareceria nas duas listas e a
+# resolucao viraria ambiguidade. Aqui a regra e explicita, e vence o prefixo mais especifico.
+IPAddressAllow=any
+IPAddressAllow=localhost
+IPAddressDeny=10.0.0.0/8
+IPAddressDeny=172.16.0.0/12
+IPAddressDeny=192.168.0.0/16
+IPAddressDeny=169.254.0.0/16
+# O socket de escuta e so loopback (ver --host no ExecStart): nao ha porta publica.
+
+# ---- Limites: um arquivo hostil derruba no maximo o leitor ----
+MemoryHigh=512M
+MemoryMax=768M
+MemorySwapMax=0
+CPUQuota=150%
+TasksMax=64
+LimitNOFILE=1024
+LimitNPROC=64
+LimitCORE=0
+OOMPolicy=stop
+
+[Install]
+WantedBy=multi-user.target

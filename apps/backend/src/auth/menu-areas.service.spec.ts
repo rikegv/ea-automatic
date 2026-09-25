@@ -235,6 +235,34 @@ describe("MenuAreasService: prévia do impacto (mudar área tira acesso, e não 
     expect(r.ganham).toBe(1); // o Master de A&S
   });
 
+  /**
+   * A EXCEÇÃO NOMINAL CHEGA ATÉ AQUI, e é o terceiro lugar que reescreve a régua do guard.
+   *
+   * Sem isto, a prévia diria ao diretor que um MASTER "perde" o menu de Dicas ao mudar a área,
+   * quando ele nunca o teve: número falso na exata tela em que ele decide com base no número.
+   */
+  it("menu NOMINAL: o MASTER sem marcação não conta como quem perde (ele nunca viu)", async () => {
+    const h = makeDb(
+      { "dicas-documento": ["ADM"] },
+      { usuarios: USUARIOS, areas: AREAS_USUARIO, marcados: [] },
+    );
+    const svc = new MenuAreasService(h.db as never);
+    const r = await svc.impacto("dicas-documento", ["AS"]);
+    expect(r.perdem).toEqual([]);
+    // E nem passa a ver pela mudança de área: área não concede, e a marcação continua faltando.
+    expect(r.ganham).toBe(0);
+  });
+
+  it("menu NOMINAL: o MASTER COM a marcação perde de verdade ao sair da área dele", async () => {
+    const h = makeDb(
+      { "dicas-documento": ["ADM"] },
+      { usuarios: USUARIOS, areas: AREAS_USUARIO, marcados: [{ usuarioId: "master-adm" }] },
+    );
+    const svc = new MenuAreasService(h.db as never);
+    const r = await svc.impacto("dicas-documento", ["AS"]);
+    expect(r.perdem.map((u) => u.id)).toEqual(["master-adm"]);
+  });
+
   it("simular área VAZIA é permitido, e mostra o estrago que a recusa impede", async () => {
     const h = makeDb(
       { esteira: ["ADM"] },

@@ -182,7 +182,17 @@ describe("liberar (item 9, Frente A)", () => {
 
   // A resposta do UNIFORME passou a ser obrigatória na liberação individual (OST Onda 3, item 1):
   // sem ela a chamada morreria na trava do uniforme, antes de exercitar a trava do CPF.
-  const DTO = { codCliente: "100", cargoId: "cargo-1", uniforme: { possui: false } };
+  // GATE DOS OBRIGATÓRIOS-PARA-LIBERAR (item 6): preenche os 6 campos próprios do gate para exercitar
+  // a trava do CPF sem esbarrar no novo gate (o teste é sobre o dígito do CPF, não sobre o item 6).
+  const DTO = {
+    codCliente: "100",
+    cargoId: "cargo-1",
+    uniforme: { possui: false },
+    sexo: "MASCULINO" as const,
+    tipoContrato: "Interno",
+    dataAdmissao: "2026-10-01",
+    vagaFolha: { escala: "12x36", beneficios: "VR" },
+  };
 
   it("BLOQUEIA a liberação individual quando o dígito verificador não fecha", async () => {
     const { db, transacoes } = dbLiberacao(CPF_RUIM);

@@ -39,6 +39,8 @@ import {
   registrarSaida,
 } from "@/lib/as-candidatos";
 import { rotuloDaEtapa, tomDaEtapa, useEtapas } from "@/lib/as-etapas";
+import { AvisoDoEnvioDoLink } from "@/components/portal/EnvioDoLink";
+import { usePreviaIndividual } from "@/lib/portal-envio-link";
 
 /** O texto próprio DESTA tela para a vaga cheia. Ver o bloco no topo do arquivo. */
 const VAGA_CHEIA =
@@ -96,6 +98,19 @@ export function CandidatosPendentesModal({
   const [motivo, setMotivo] = useState("");
   const [ocupado, setOcupado] = useState(false);
   const [erro, setErro] = useState<{ id: string; texto: string } | null>(null);
+
+  /**
+   * PARA ONDE O LINK DO PORTAL VAI, conferido quando o consultor escolhe "Contratar" e antes de
+   * ele gravar. ESTE CAMINHO NÃO TEM DIÁLOGO DE CONFIRMAÇÃO (o botão do campo de motivo é quem
+   * grava), então o aviso mora DENTRO do campo de motivo: é o último lugar em que dá para ler
+   * antes de a credencial de acesso sair por e-mail.
+   */
+  const enviando = acao?.tipo === "ENVIADO_PARA_ADMISSAO";
+  const { destinatario, carregando: conferindoDestino } = usePreviaIndividual(
+    acao?.id ?? "",
+    token,
+    enviando,
+  );
 
   function escolher(id: string, tipo: Acao) {
     setErro(null);
@@ -192,6 +207,14 @@ export function CandidatosPendentesModal({
 
                   {acao?.id === p.candidaturaId && acao.tipo !== "APROVAR" && (
                       <div className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-3.5">
+                        {acao.tipo === "ENVIADO_PARA_ADMISSAO" && (
+                          <div className="mb-3">
+                            <AvisoDoEnvioDoLink
+                              destinatario={destinatario}
+                              carregando={conferindoDestino}
+                            />
+                          </div>
+                        )}
                         <label className="flex flex-col gap-1.5">
                           <span className="text-[12.5px] text-dim">
                             Motivo

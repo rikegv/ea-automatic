@@ -185,6 +185,7 @@ function montar(opts: { reguaCompleta: boolean; arquivosNaStaging?: number }) {
     regua as never,
     drivePastaPaiFake as never,
     pandapeArquivos as never,
+    { enviar: async () => ({ enviado: false, motivo: "GI_NAO_CONFIGURADO" }) } as never,
   );
   const validacao = new ValidacaoHumanaService(db as never, auditoria);
   return { validacao, auditoria, db, updates, inserts, staging, ai, pandapeArquivos };

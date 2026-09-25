@@ -1,10 +1,16 @@
 import type { Config } from "tailwindcss";
+import soulanPreset from "./tailwind/soulan-preset";
 
 /**
  * Tokens do DESIGN-SYSTEM.md expostos ao Tailwind como cores/raio/fontes.
  * Os valores reais vivem em CSS variables (globals.css), temáveis por [data-theme].
+ *
+ * Preset Soulan (portal do candidato): aditivo, namespaces `soulan-*`/`portal-*`,
+ * fonte `montserrat`, raios `card`/`btn`, e keyframes da auditoria. Sem colisao com
+ * os tokens da fabrica (cores por CSS var, fontes `sans`/`display`, keyframes proprios).
  */
 const config: Config = {
+  presets: [soulanPreset as Config],
   darkMode: ["selector", '[data-theme="dark"]'],
   content: ["./src/app/**/*.{ts,tsx}", "./src/components/**/*.{ts,tsx}"],
   theme: {

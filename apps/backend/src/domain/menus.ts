@@ -167,6 +167,29 @@ export const MENUS: MenuDef[] = [
       "ReauditoriaController.reauditar",
       "ReauditoriaController.validarPorHumano",
       "ReauditoriaController.descartar",
+      // ── AS DUAS AÇÕES DO PORTAL QUE SÃO DO TIME (solicitar reenvio e zerar tentativas) ────────
+      //
+      // AQUI, E NÃO NUM MENU NOVO. O botão vive DENTRO do modal da aba Auditoria da Esteira, e a
+      // aba Auditoria é a Esteira. Reivindicar por um menu diferente daria 403 a quem tem a Esteira
+      // e não tem o menu novo, que é o time inteiro de hoje. Este arquivo já registra os dois
+      // precedentes: o `KitController.download` ficou DE FORA do menu de assinaturas por isso, e a
+      // importação de matrículas MUDOU de menu junto com o botão.
+      //
+      // E MENU NOVO SERIA CONCESSÃO, NÃO REGISTRO (§A.23). `MENUS_PADRAO_COMUM` é DERIVADO: todo
+      // menu de grupo `OPERACAO` que nasce na área ADM entra nele sozinho, e esse conjunto é
+      // concedido a todo usuário criado e a todo COMUM em qualquer execução do backfill. Um menu
+      // "auditoria" novo se concederia sem ninguém abrir a tela de liberação, que é exatamente o
+      // incidente que originou a §A.23.
+      //
+      // O QUE ISTO FECHA, e é a razão de ser uma correção e não arrumação: `solicitarReenvio` NÃO
+      // tem `@Roles` (é operacional de propósito, como as rotas de auditoria acima) e, sem
+      // reivindicação, o `MenuGuard` deixa passar operação de menu nenhum. As duas ausências
+      // somadas punham uma operação que CREDITA ENVIO ao candidato ao alcance de qualquer sessão
+      // autenticada. Reivindicada, ela passa a exigir o menu da Esteira.
+      //
+      // O CORINGA É DELIBERADO: handler novo neste controller nasce reivindicado em vez de nascer
+      // aberto, que é a direção segura. A leitura (`situacao`) entra junto porque é a mesma tela.
+      "PortalPendenciasController.*",
       // UNIFORME editável no modal do olho (melhoria EAC, item 11b). Fica no menu da ESTEIRA porque é
       // lá que a edição vive, e sai de graça para o COMUM, que já tem este menu: corrigir tamanho é
       // trabalho de consultor, com a trilha registrando quem mudou.
@@ -553,6 +576,42 @@ export const MENUS: MenuDef[] = [
     operacoes: ["ReguaController.*", "TiposDocumentoController.*"],
   },
   {
+    /**
+     * DICAS DE DOCUMENTO (OST da ordem dos 7 + menu de Dicas). O diretor escreve, por TIPO de
+     * documento, como o documento precisa estar para passar na auditoria, e o candidato lê a dica
+     * na trilha do portal, no cartão daquele documento.
+     *
+     * VIZINHO DA RÉGUA DE PROPÓSITO: é o mesmo catálogo (`tipos_documento`) visto por outro lado.
+     * A Régua diz QUAIS documentos o cargo exige; a Dica diz COMO cada um tem de estar. Menu
+     * SEPARADO, e não uma aba dentro da Régua, porque quem escreve o texto (o diretor) não é
+     * necessariamente quem monta régua de cliente, e menu é a unidade de permissão desta casa.
+     *
+     * §A.23, E O REGISTRO AQUI É SÓ REGISTRO: o convergedor de boot faz o menu EXISTIR e ser
+     * selecionável na tela de liberação, e para por aí. Ele nasce visível só para o SUPER_ADMIN,
+     * nenhum seed foi rodado (`seed-menus.ts` e `backfill-menus-comum.ts` NÃO foram executados), e
+     * quem decide quem enxerga é o DIRETOR. Menu novo que não aparece para os demais NÃO é bug.
+     *
+     * GRUPO `ADMIN`, e isso tem efeito de segurança: `MENUS_PADRAO_COMUM` é DERIVADO do grupo
+     * `OPERACAO`, então menu nascido lá se concederia sozinho a todo COMUM no próximo backfill,
+     * que é o incidente que originou a §A.23.
+     *
+     * A CONTROLLER É REIVINDICADA POR NOME, leitura incluída (exigência S12): ela não tem `@Roles`
+     * e operação que nenhum menu reivindica passa LIVRE pelo `MenuGuard`. Sem esta linha, qualquer
+     * sessão autenticada escreveria o texto que aparece na tela PÚBLICA do candidato. O coringa é
+     * deliberado: handler novo nesta controller nasce reivindicado, que é a direção segura.
+     *
+     * A LEITURA DO CANDIDATO NÃO PASSA POR AQUI, e é por isso que gatar a lista inteira não custa
+     * nada à operação: a dica viaja DENTRO da trilha do portal (`PortalDocumentosController`), na
+     * admissão dele, por rota `@Public()` com guard de sessão próprio.
+     */
+    codigo: "dicas-documento",
+    rotulo: "Dicas De Documento",
+    href: "/admin/dicas-documento",
+    grupo: "ADMIN",
+    ordem: 35,
+    operacoes: ["DicasDocumentoController.*"],
+  },
+  {
     codigo: "kit-regras",
     rotulo: "Regras Do Kit",
     href: "/admin/kit-regras",
@@ -627,6 +686,84 @@ export const MENUS: MenuDef[] = [
     grupo: "ADMIN",
     ordem: 33,
     operacoes: [],
+  },
+  {
+    /**
+     * LINK DO PORTAL DO CANDIDATO (frente da identidade). Emitir o link de 72 horas para uma
+     * admissão e revogar link vazado.
+     *
+     * §A.23, E O REGISTRO AQUI É SÓ REGISTRO: o convergedor de boot faz o menu EXISTIR e ser
+     * selecionável na tela de liberação, e para por aí. Ele nasce visível só para o SUPER_ADMIN,
+     * ninguém o tem concedido, nenhum seed foi rodado, e quem decide quem enxerga é o DIRETOR. Menu
+     * novo que não aparece para os demais NÃO é bug.
+     *
+     * GRUPO `ADMIN`, E ISSO NÃO É ARRUMAÇÃO DE GAVETA: `MENUS_PADRAO_COMUM` é DERIVADO e junta todo
+     * menu de grupo `OPERACAO` nascido na área ADM, conjunto que é concedido a todo usuário criado e
+     * a todo COMUM em qualquer execução do backfill. Nascido em `OPERACAO`, este menu se concederia
+     * sozinho, sem ninguém abrir a tela de liberação, que é exatamente o incidente que originou a
+     * §A.23. No grupo `ADMIN` ele fica fora do derivado por construção.
+     *
+     * AS OPERAÇÕES SÃO REIVINDICADAS, e isso é o que fecha a porta: `PortalLinksController` não tem
+     * `@Roles` (emitir link é trabalho de consultor, como as rotas de auditoria), e operação que
+     * NENHUM menu reivindica passa livre pelo `MenuGuard`. Somadas, as duas ausências deixariam
+     * qualquer sessão autenticada FABRICAR credencial de acesso aos documentos de um candidato. O
+     * coringa é deliberado: handler novo neste controller nasce reivindicado, que é a direção
+     * segura.
+     */
+    codigo: "portal-links",
+    // ROTULO TROCADO pelo COORDENADOR em 20/09/2026: o menu nasceu como "Link Do Portal", quando a
+    // tela era só emitir o link. O diretor transformou a frente num GERENCIADOR (o funil da coleta
+    // inteiro, com contadores e o estado de cada candidato), e "Link Do Portal" passaria a vender
+    // menos do que a tela faz. O menu é desta mesma frente e ainda não foi concedido a ninguém, e a
+    // troca foi pedida em "menu no lugar certo". §A.23 continua inteira: isto RENOMEIA, não concede.
+    rotulo: "Portal Do Candidato",
+    href: "/admin/portal-links",
+    grupo: "ADMIN",
+    ordem: 34,
+    /**
+     * DUAS CONTROLLERS, UM MENU SÓ, e a segunda não podia ficar de fora.
+     *
+     * `PortalPainelController` é o GERENCIADOR do Portal (funil da coleta e lista de candidatos).
+     * Ela também não tem `@Roles`, e o coringa da irmã NÃO A ALCANÇA: o índice é por
+     * `Controller.handler`, então classe nova é operação nova, e operação que nenhum menu
+     * reivindica passa LIVRE pelo `MenuGuard`. Sem esta linha, qualquer sessão autenticada leria a
+     * lista nominal de candidatos com cargo, cliente e o estado de cada um.
+     *
+     * NO MESMO MENU, e não num menu novo, pelos dois motivos que a casa já registrou: é a MESMA
+     * tela de trabalho (quem emite o link é quem acompanha a coleta), e menu novo seria concessão
+     * a decidir, não registro (§A.23).
+     *
+     * ══ TRÊS CONTROLLERS, PELO MESMO ARGUMENTO ═════════════════════════════════════════════════
+     *
+     * `PortalEnvioController` (`esteira/portal/envio/*`) é o ENVIO do link, LEITURA E ESCRITA: a
+     * prévia nominal do lote, a busca de admissão sem link e o disparo manual. Ela precisou ser
+     * classe nova porque o caminho do contrato (`esteira/portal/envio/...`) não cabe no prefixo da
+     * irmã (`esteira/portal-painel`), e handler não sai do prefixo da própria classe.
+     *
+     * SEM ESTA LINHA A CLASSE NASCE ABERTA, e o que está em jogo aqui é o pior dos três: além da
+     * lista nominal de candidatos com o destino de cada um, ela DISPARA o e-mail com a credencial
+     * de acesso ao prontuário dentro. Classe nova é operação nova, e operação que nenhum menu
+     * reivindica passa LIVRE.
+     *
+     * A ESCRITA ESTEVE DENTRO DO `PortalLinksController`, justamente para herdar o coringa dele, e
+     * SAIU DE LÁ: aquela classe mora sob `portal/`, o prefixo que a barreira do Fernando allowlista
+     * para o candidato na internet. Reivindicar a classe nova POR NOME é o que a exigência S12
+     * admite, e é o que permite cumprir a S10 ao mesmo tempo.
+     */
+    operacoes: [
+      "PortalLinksController.*",
+      "PortalPainelController.*",
+      "PortalEnvioController.*",
+      // ══ QUATRO CONTROLLERS, PELO MESMO ARGUMENTO ═══════════════════════════════════════════════
+      //
+      // `PortalPedidosAjudaController` (`esteira/portal-pedidos-ajuda`) é a LEITURA dos pedidos de
+      // ajuda para entrar (o candidato clicou "Não consigo entrar", evento
+      // `PORTAL_RECUPERACAO_SOLICITADA` agregado por link). Classe nova, e o coringa das irmãs NÃO a
+      // alcança: o índice é por `Controller.handler`. Sem esta linha ela nasce ABERTA, e o que
+      // passaria é a lista NOMINAL de candidatos (nome, cargo, cliente) que pediram ajuda. É a mesma
+      // tela de trabalho do Portal, então o MESMO menu, e não um menu novo (§A.23).
+      "PortalPedidosAjudaController.*",
+    ],
   },
   {
     codigo: "pastas-drive",
@@ -1130,6 +1267,65 @@ export const MENUS_PADRAO_COMUM = MENUS.filter(
 ).map((m) => m.codigo);
 
 /**
+ * ─ OS MENUS EM QUE O MASTER TAMBÉM PRECISA DA MARCAÇÃO, UM A UM ────────────────────────────────
+ *
+ * O QUE ESTA LISTA FAZ: desliga, SÓ para os códigos escritos aqui, o "bypass dentro da área" do
+ * MASTER no `MenuGuard`. Nesses menus o MASTER responde à MESMA pergunta que o COMUM responde,
+ * `codigos.has(menu)`, e o menu passa a ser CONCEDIDO usuário a usuário, pela tela do diretor.
+ *
+ * POR QUE NÃO SERVIU O PRECEDENTE DOS CATÁLOGOS DE A&S, e a diferença é o pedido do diretor. Lá o
+ * aperto foi `@Roles("SUPER_ADMIN")` na escrita mais o código em `MENUS_SOMENTE_SUPER_ADMIN`, e
+ * `MENUS_SOMENTE_SUPER_ADMIN` é aplicada ao RESULTADO por `filtrarMenusPorPapel`: ela REMOVE o menu
+ * da lista de todo mundo que não é SUPER_ADMIN, ou seja, torna o menu NÃO CONCEDÍVEL. Para as Dicas
+ * o diretor pediu o oposto, com todas as letras: "nasce só para o SUPER_ADMIN, e o Rike CONCEDE
+ * para quem quiser". Copiar o precedente entregaria uma tela que só ele usaria para sempre.
+ *
+ * É ADITIVA E NOMINAL, e é isso que torna seguro mexer num guard que governa TODAS as rotas
+ * autenticadas (§A.26): para todo menu FORA desta lista, a régua do MASTER fica byte a byte igual.
+ * `menu.guard.spec.ts` prova os dois lados (o menu de dentro passa a exigir marcação; o de fora
+ * continua passando sem ela), e nenhum dos dois sozinho bastaria.
+ *
+ * NÃO É TETO DE ÁREA E NÃO O SUBSTITUI: a área continua sendo verificada ANTES, e continua nunca
+ * concedendo, só limitando. Esta lista é sobre MARCAÇÃO, que é a outra pergunta.
+ *
+ * O SUPER_ADMIN continua com bypass TOTAL, acima disto, para ninguém se trancar fora do sistema.
+ *
+ * QUEM ENTRA AQUI PRECISA SAIR DO PADRÃO DO MASTER, e as duas coisas andam juntas de propósito:
+ * `codigosPadraoDoPapel` dá ao MASTER `TODOS_CODIGOS_MENU`, e é ele que o `criar` de usuário e o
+ * grandfather do `seed-menus.ts` gravam. Sem o recorte logo abaixo, todo MASTER NOVO nasceria com a
+ * marcação e recuperaria o menu por outra porta, com a trava do guard intacta e inútil.
+ */
+export const MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER = new Set<string>([
+  // DICAS DE DOCUMENTO: o texto escrito aqui é renderizado na tela PÚBLICA do candidato, e o menu
+  // nasceu na área ADM, onde estão todos os MASTER de hoje. Decisão do diretor: escrever a dica é
+  // concessão nominal, não consequência do papel.
+  "dicas-documento",
+]);
+
+/** O menu exige marcação EXPLÍCITA mesmo de um MASTER? Consumida pelo `MenuGuard`. */
+export function masterPrecisaDeMarcacao(codigo: string): boolean {
+  return MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER.has(codigo);
+}
+
+/**
+ * A BASE DE MENUS DE UM MASTER, antes dos tetos de área e de papel: todos os menus, menos os
+ * nominais que ele não tem marcados.
+ *
+ * EXISTE PARA O `/auth/me` DIZER O MESMO QUE O GUARD DECIDE. Sem ela, o MASTER continuaria vendo o
+ * card na barra e tomaria 403 ao abrir, que é exatamente o "mostrar a porta e trancá-la" que a
+ * `MENUS_SOMENTE_SUPER_ADMIN` foi criada para acabar. Marcação e visibilidade dizem a mesma coisa.
+ *
+ * `marcados` vazio devolve a base de quem não tem nenhuma das concessões nominais, que é o que o
+ * `codigosPadraoDoPapel` precisa: MASTER NOVO nasce sem elas.
+ */
+export function baseDeMenusDoMaster(marcados: Iterable<string>): string[] {
+  const tem = new Set(marcados);
+  return TODOS_CODIGOS_MENU.filter(
+    (c) => !MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER.has(c) || tem.has(c),
+  );
+}
+
+/**
  * Códigos que um papel recebe por PADRÃO, pelo PAPEL apenas.
  *
  * NÃO RECORTA POR ÁREA, e a ausência é o ponto: a área vigente mora na TABELA, e esta é uma função
@@ -1143,7 +1339,13 @@ export const MENUS_PADRAO_COMUM = MENUS.filter(
 export function codigosPadraoDoPapel(papel: string): string[] {
   if (papel === "SUPER_ADMIN") return TODOS_CODIGOS_MENU;
   // `filtrarMenusPorPapel` tira o que é exclusivo do SUPER_ADMIN (hoje, a tela de Usuários).
-  const base = papel === "MASTER" ? TODOS_CODIGOS_MENU : MENUS_PADRAO_COMUM;
+  //
+  // O MASTER NÃO RECEBE MAIS "TODOS" CRU, e a diferença é a lista nominal
+  // `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER`: esta função é o que o `criar` de usuário grava e o que o
+  // grandfather do `seed-menus.ts` distribui, então deixá-la entregando a lista inteira faria todo
+  // MASTER novo NASCER com a concessão nominal, e a trava do `MenuGuard` não valeria nada. Menu
+  // nominal nasce só para o SUPER_ADMIN e é concedido pela tela do diretor (§A.23).
+  const base = papel === "MASTER" ? baseDeMenusDoMaster([]) : MENUS_PADRAO_COMUM;
   return filtrarMenusPorPapel(base, papel);
 }
 

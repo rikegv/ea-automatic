@@ -74,12 +74,81 @@ interface ArquivosResp {
   arquivos: { indice: number; rotulo: string; mime: string; tamanhoBytes: number }[];
 }
 
-/** BLOCO 3 — resposta do descarte, com o aviso do Drive quando o arquivo já havia subido. */
+/**
+ * BLOCO 3 — resposta do descarte, com o aviso do Drive quando o arquivo já havia subido.
+ *
+ * OS TRÊS CAMPOS DO RECUO entraram nesta rodada, e eles são a CONSEQUÊNCIA que faltava: reabrir o
+ * último obrigatório aceito devolve a frente de Auditoria a ANALISE_PENDENTE e pode derrubar junto
+ * o Cadastro já aberto. Sem dizer isso na tela, o consultor corrige a IA e não faz ideia de que
+ * mexeu na esteira de outra pessoa.
+ */
 interface DescartarResp {
   documento: { tipoDocumentoId: string; estado: string };
   arquivosRemovidos: number;
   driveJaArquivado: boolean;
   avisoDrive?: string;
+  frenteRecuou?: boolean;
+  cadastroDerrubado?: boolean;
+  farolAtualizado?: boolean;
+}
+
+/**
+ * ── PORTAL DO CANDIDATO: a pendência que caiu para a fila do time ────────────────────────────────
+ *
+ * O candidato audita o documento na hora, no Portal. Depois de 3 reprovações na MESMA pendência ele
+ * para de tentar sozinho e a pendência passa a ser do time. A partir daí há duas ações, e elas não
+ * valem a mesma coisa: SOLICITAR REENVIO é do consultor e devolve UM envio; ZERAR TENTATIVAS é de
+ * MASTER/SUPER_ADMIN e devolve o teto inteiro, porque admite que a régua da IA pode estar errada.
+ *
+ * A FORMA ABAIXO É A QUE O BACKEND DEVOLVE HOJE, e ela diverge do `SituacaoPendenciaPortal` de
+ * `@ea/shared-types` em três pontos (`devolveriaAoReabrir` é objeto e não número, `tentativas` não
+ * traz `aviso`, e `reabertura.tipo` vem como `SOLICITACAO_REENVIO`/`DESTRAVAMENTO_MASTER`). A
+ * divergência foi reportada ao coordenador, que é o dono do arquivo compartilhado (§A.39). Enquanto
+ * ela existe, a tela lê as DUAS formas e normaliza, para não quebrar quando os lados convergirem.
+ */
+interface SituacaoPortalBruta {
+  tentativas: { teto: number; usadas: number; restantes: number; noTime: boolean };
+  reabertura: {
+    em: string;
+    tipo: string | null;
+    reaberturasDoTime: number;
+    reaberturasDoTimeRestantes: number;
+  } | null;
+  devolveriaAoReabrir: number | Record<string, number>;
+}
+
+/** A mesma situação, já normalizada para o que a tela precisa dizer ANTES do clique. */
+interface SituacaoPortal {
+  teto: number;
+  usadas: number;
+  noTime: boolean;
+  /** Quantos envios cada ação devolve. */
+  devolveTime: number;
+  devolveMaster: number;
+  /** Quantas reaberturas o TIME ainda tem nesta pendência. `null` quando o backend ainda não sabe. */
+  reaberturasDoTimeRestantes: number | null;
+}
+
+/** Normaliza a resposta do backend, aceitando as duas formas de `devolveriaAoReabrir`. */
+function normalizarPortal(b: SituacaoPortalBruta): SituacaoPortal {
+  const d = b.devolveriaAoReabrir;
+  const devolveTime = typeof d === "number" ? d : (d?.SOLICITACAO_REENVIO ?? 1);
+  const devolveMaster = typeof d === "number" ? d : (d?.DESTRAVAMENTO_MASTER ?? b.tentativas.teto);
+  return {
+    teto: b.tentativas.teto,
+    usadas: b.tentativas.usadas,
+    noTime: b.tentativas.noTime,
+    devolveTime,
+    devolveMaster,
+    // Pendência nunca reaberta não traz o contador, e aí a tela NÃO inventa um número: ela
+    // simplesmente não avisa sobre o fim das reaberturas, que é o comportamento honesto.
+    reaberturasDoTimeRestantes: b.reabertura?.reaberturasDoTimeRestantes ?? null,
+  };
+}
+
+/** "1 envio" / "2 envios", para o aviso de quanto a ação devolve. */
+function envios(n: number): string {
+  return `${n} ${n === 1 ? "envio" : "envios"}`;
 }
 
 const EXIG_ROTULO: Record<DocDetalhe["exigencia"], string> = {
@@ -163,7 +232,11 @@ export function AuditoriaDocsModal({
   /** Fecha o modal; recebe `true` se houve ao menos uma auditoria (para a lista recarregar). */
   onClose: (mudou: boolean) => void;
 }) {
-  const { token } = useAuth();
+  // `isAdmin` (MASTER ou SUPER_ADMIN) é o MESMO jeito que o resto do projeto usa para saber o papel
+  // da sessão (ver `AdmissaoDetalheModal`). Nenhum caminho novo de autorização nasce aqui: quem
+  // decide de verdade é o `RolesGuard` da rota de zerar tentativas, a tela só evita oferecer o que
+  // o consultor não pode fazer.
+  const { token, isAdmin } = useAuth();
   const [detalhe, setDetalhe] = useState<AdmissaoDetalhe | null>(null);
   const [tipos, setTipos] = useState<TipoDocumento[]>([]);
   const [progresso, setProgresso] = useState<ProgressoRegua | null>(null);
@@ -187,6 +260,14 @@ export function AuditoriaDocsModal({
   const [carregandoArquivos, setCarregandoArquivos] = useState<string | null>(null);
   // BLOCO 3 — aviso do Drive depois de descartar um documento que já havia sido arquivado.
   const [avisoDrive, setAvisoDrive] = useState<string | null>(null);
+  // PORTAL — situação da pendência por tipo de documento (chave = tipoDocumentoId). Só existe entrada
+  // para o que o backend respondeu; documento que nunca passou pelo Portal simplesmente não aparece.
+  const [portalPorTipo, setPortalPorTipo] = useState<Record<string, SituacaoPortal>>({});
+  const [portalAgindo, setPortalAgindo] = useState<string | null>(null);
+  const [portalErro, setPortalErro] = useState<Record<string, string>>({});
+  // Confirmação da última ação do time naquele documento. Existe porque a ação TIRA a pendência da
+  // fila do time: sem a frase, o bloco inteiro sumiria e quem clicou não saberia o que aconteceu.
+  const [portalFeito, setPortalFeito] = useState<Record<string, string>>({});
 
   /** Marca que houve mudança, para a lista de trás recarregar ao fechar. */
   const mudou = useCallback(() => {
@@ -433,9 +514,11 @@ export function AuditoriaDocsModal({
   const descartar = useCallback(
     async (tipoDocumentoId: string, nomeDoc: string) => {
       const ok = window.confirm(
-        `Descartar "${nomeDoc}"?\n\nO documento sai da análise e volta a ser cobrado como pendente. ` +
-          `O candidato precisará reenviar o arquivo (o mesmo arquivo volta a ser aceito).\n\n` +
-          `Esta ação não pode ser desfeita.`,
+        `Reabrir a pendência de "${nomeDoc}"?\n\nUse quando a IA tiver aprovado um documento errado. ` +
+          `O documento sai da análise e volta a ser cobrado como pendente, e o candidato precisará ` +
+          `reenviar o arquivo (o mesmo arquivo volta a ser aceito).\n\n` +
+          `Se este for o último obrigatório aceito, a frente de Auditoria VOLTA a ficar pendente e o ` +
+          `Cadastro, se já estiver aberto, é fechado junto.\n\nEsta ação não pode ser desfeita.`,
       );
       if (!ok) return;
 
@@ -458,7 +541,15 @@ export function AuditoriaDocsModal({
           const { [tipoDocumentoId]: _fora, ...resto } = a;
           return resto;
         });
-        if (resp.avisoDrive) setAvisoDrive(resp.avisoDrive);
+        // O AVISO É O PRODUTO DA OPERAÇÃO, não enfeite: o consultor precisa saber, na hora, que a
+        // frente recuou e que o Cadastro fechou. Os dois textos convivem, porque são fatos
+        // diferentes (um é o Drive, outro é a esteira) e esconder um deles seria escolher por ele.
+        const recuos = [
+          resp.frenteRecuou ? "A frente de Auditoria voltou a ficar pendente." : "",
+          resp.cadastroDerrubado ? "O Cadastro foi fechado e volta a aguardar a Auditoria." : "",
+        ].filter(Boolean);
+        const textos = [...recuos, resp.avisoDrive ?? ""].filter(Boolean);
+        if (textos.length) setAvisoDrive(textos.join(" "));
         mudou();
         await recarregarDetalhe();
         await recarregarProgresso();
@@ -466,13 +557,96 @@ export function AuditoriaDocsModal({
         const msg =
           e instanceof ApiError
             ? e.message
-            : "Falha de rede ao descartar o documento. Verifique a conexão e tente de novo.";
+            : "Falha de rede ao reabrir a pendência do documento. Verifique a conexão e tente de novo.";
         setErroDoc((er) => ({ ...er, [tipoDocumentoId]: msg }));
       } finally {
         setAuditandoId(null);
       }
     },
     [admissaoId, token, mudou, recarregarDetalhe, recarregarProgresso],
+  );
+
+  /**
+   * PORTAL — carrega a situação de cada documento da régua que AINDA NÃO está entregue.
+   *
+   * A consulta é por (admissão, tipo), que é a chave da pendência, e não existe rota de lote: por
+   * isso as chamadas saem em paralelo, e cada falha morre sozinha (`allSettled`). Documento já
+   * ENTREGUE fica de fora porque não há pendência a reabrir nele, e isso segura o número de
+   * chamadas no que a tela realmente usa.
+   *
+   * A RÉGUA QUE O BACKEND RECONHECE é a linha em `documentos_admissao`, e nem toda linha do
+   * checklist tem uma: o detalhe monta as linhas a partir de `regua_documental` com LEFT JOIN, então
+   * o tipo que ninguém tocou ainda vem SEM estado. Consultar esses tipos devolvia 400 ("Este
+   * documento não faz parte da régua desta admissão"), 23 por abertura na admissão medida (31 linhas
+   * da régua, 8 com documento). O que sai é a chamada que não devia existir, não a tolerância: o
+   * `allSettled` continua, porque ele protege de falha individual.
+   */
+  useEffect(() => {
+    const docs = detalhe?.documentos ?? [];
+    if (docs.length === 0) return;
+    const ids = Array.from(
+      new Set(
+        docs
+          .filter((d) => Boolean(d.estado) && d.estado !== "ENTREGUE")
+          .map((d) => d.tipoDocumentoId ?? idPorNome.get(d.nome))
+          .filter((id): id is string => Boolean(id)),
+      ),
+    );
+    if (ids.length === 0) return;
+    let vivo = true;
+    void Promise.allSettled(
+      ids.map(async (id) => {
+        const r = await apiFetch<SituacaoPortalBruta>(
+          `/esteira/pendencias-portal/${admissaoId}/${id}`,
+          { token },
+        );
+        return [id, normalizarPortal(r)] as const;
+      }),
+    ).then((rs) => {
+      if (!vivo) return;
+      const mapa: Record<string, SituacaoPortal> = {};
+      for (const r of rs) if (r.status === "fulfilled") mapa[r.value[0]] = r.value[1];
+      setPortalPorTipo((atual) => ({ ...atual, ...mapa }));
+    });
+    return () => {
+      vivo = false;
+    };
+  }, [detalhe, idPorNome, admissaoId, token]);
+
+  /**
+   * PORTAL — as duas ações do time. A resposta de cada uma JÁ É a situação nova, então a tela
+   * reflete o novo estado sem recarregar nada: o contador de envios, o selo e os avisos saem da
+   * mesma leitura que o backend acabou de devolver.
+   */
+  const acaoPortal = useCallback(
+    async (tipoDocumentoId: string, rota: "solicitar-reenvio" | "zerar-tentativas") => {
+      setPortalAgindo(tipoDocumentoId);
+      setPortalErro((e) => ({ ...e, [tipoDocumentoId]: "" }));
+      try {
+        const r = await apiFetch<SituacaoPortalBruta>(
+          `/esteira/pendencias-portal/${admissaoId}/${tipoDocumentoId}/${rota}`,
+          { method: "POST", token },
+        );
+        const nova = normalizarPortal(r);
+        setPortalPorTipo((atual) => ({ ...atual, [tipoDocumentoId]: nova }));
+        setPortalFeito((f) => ({
+          ...f,
+          [tipoDocumentoId]:
+            rota === "solicitar-reenvio"
+              ? `Reenvio solicitado. O candidato recebeu ${envios(nova.devolveTime)} e pode mandar este documento de novo.`
+              : `Tentativas zeradas. O candidato recebeu ${envios(nova.devolveMaster)} e pode mandar este documento de novo.`,
+        }));
+      } catch (e) {
+        const msg =
+          e instanceof ApiError
+            ? e.message
+            : "Falha de rede ao reabrir a pendência. Verifique a conexão e tente de novo.";
+        setPortalErro((er) => ({ ...er, [tipoDocumentoId]: msg }));
+      } finally {
+        setPortalAgindo(null);
+      }
+    },
+    [admissaoId, token],
   );
 
   /**
@@ -765,17 +939,24 @@ export function AuditoriaDocsModal({
                         <Icon name="eye" className="h-4 w-4" />
                       )}
                     </button>
-                    {/* BLOCO 3 — DESCARTAR: tira o documento do fluxo em uma operação só, incluindo a
-                        marca de dedup (sem ela o reenvio do mesmo arquivo seria ignorado). */}
+                    {/* BLOCO 3 — REABRIR A PENDÊNCIA: tira o documento do fluxo em uma operação só,
+                        incluindo a marca de dedup (sem ela o reenvio do mesmo arquivo seria
+                        ignorado), e agora RECUA a frente quando a régua deixa de fechar.
+
+                        O ÍCONE DEIXOU DE SER A LIXEIRA, e a troca tem motivo: a operação não apaga
+                        documento, ela o devolve a PENDENTE, e a lixeira dizia "isto some". A
+                        exclamação amarela é o vocabulário que o sistema inteiro já usa para
+                        pendência (§A.12), então o ícone passa a dizer o estado em que o documento
+                        fica. */}
                     <button
                       type="button"
-                      className={cn(BTN_ICONE, "hover:text-danger")}
+                      className={cn(BTN_ICONE, "hover:text-warn")}
                       disabled={!tipoId || auditando}
-                      title="Descartar este documento: o candidato precisará reenviar"
-                      aria-label="Descartar documento"
+                      title="Reabrir a pendência deste documento: use quando a IA aprovou errado, e o candidato precisará reenviar"
+                      aria-label="Reabrir a pendência do documento"
                       onClick={() => tipoId && void descartar(tipoId, d.nome)}
                     >
-                      <Icon name="trash" className="h-4 w-4" />
+                      <Icon name="alert" className="h-4 w-4" />
                     </button>
                   </div>
                 </div>
@@ -834,6 +1015,106 @@ export function AuditoriaDocsModal({
                           : "text-warn";
                   return <p className={cn("mt-2 text-[12.5px]", cor)}>{motivo}</p>;
                 })()}
+                {/* ── PORTAL: a pendência que caiu para a FILA DO TIME ────────────────────
+                    Aparece só quando o candidato esgotou os envios dele naquele documento (ou logo
+                    depois de uma ação do time, para a confirmação não sumir junto com a fila). As
+                    duas ações e os avisos de quanto cada uma devolve vivem aqui, na própria linha do
+                    documento, porque é a pendência daquele documento que está sendo reaberta. */}
+                {(() => {
+                  const portal = tipoId ? portalPorTipo[tipoId] : undefined;
+                  const feito = tipoId ? portalFeito[tipoId] : undefined;
+                  const erroPortal = tipoId ? portalErro[tipoId] : undefined;
+                  if (!portal || (!portal.noTime && !feito && !erroPortal)) return null;
+                  const agindo = portalAgindo === tipoId;
+                  const restantesTime = portal.reaberturasDoTimeRestantes;
+                  const semReaberturaDoTime = restantesTime === 0;
+                  return (
+                    <div className="mt-3 rounded-xl border border-[rgba(201,138,18,0.35)] bg-[rgba(201,138,18,0.08)] p-3">
+                      {portal.noTime && (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Pill tone="or">Na Fila Do Time</Pill>
+                          <span className="text-[12.5px] text-warn">
+                            O candidato usou {portal.usadas} de {portal.teto} envios no Portal e não
+                            pode tentar sozinho de novo.
+                          </span>
+                        </div>
+                      )}
+
+                      {/* O QUE CADA AÇÃO DEVOLVE, ANTES DO CLIQUE. Sem isto o consultor descobre o
+                          efeito depois de causá-lo, e o Master não sabe o que a exceção dele vale. */}
+                      {portal.noTime && (
+                        <p className="mt-2 text-[12px] text-dim">
+                          Solicitar reenvio devolve {envios(portal.devolveTime)} ao candidato.
+                          {isAdmin && ` Zerar tentativas devolve ${envios(portal.devolveMaster)}.`}
+                        </p>
+                      )}
+
+                      {/* O FIM DAS REABERTURAS DO TIME, avisado antes, e não descoberto no erro. */}
+                      {portal.noTime && restantesTime !== null && restantesTime <= 1 && (
+                        <p className="mt-1 flex items-start gap-1.5 text-[12px] font-semibold text-warn">
+                          <Icon name="alert" className="mt-0.5 h-3 w-3 flex-none" />
+                          <span>
+                            {semReaberturaDoTime
+                              ? "O time já reabriu esta pendência o número máximo de vezes. Daqui para frente, só um Master destrava as tentativas."
+                              : "O time pode reabrir esta pendência mais 1 vez. Depois disso, só um Master destrava as tentativas."}
+                          </span>
+                        </p>
+                      )}
+
+                      {portal.noTime && (
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            className={cn(BTN_TEXTO, "hover:text-text")}
+                            disabled={!tipoId || agindo || semReaberturaDoTime}
+                            title={
+                              semReaberturaDoTime
+                                ? "O time já usou todas as reaberturas desta pendência. Peça a um Master para zerar as tentativas."
+                                : "Devolver um envio ao candidato, para ele mandar este documento de novo"
+                            }
+                            onClick={() => tipoId && void acaoPortal(tipoId, "solicitar-reenvio")}
+                          >
+                            {agindo ? <Spinner /> : <Icon name="undo" className="h-4 w-4" />}
+                            Solicitar reenvio
+                          </button>
+                          {/* ZERAR É EXCEÇÃO, e o peso visual diz isso: moldura e texto de alerta, ao
+                              lado de um botão neutro. Só MASTER e SUPER_ADMIN enxergam, no mesmo
+                              recorte que o `RolesGuard` aplica na rota. */}
+                          {isAdmin && (
+                            <button
+                              type="button"
+                              className={
+                                "inline-flex h-[38px] flex-none items-center gap-1.5 whitespace-nowrap " +
+                                "rounded-lg border border-[rgba(201,138,18,0.55)] bg-[rgba(201,138,18,0.12)] " +
+                                "px-3 text-[12.5px] font-semibold text-warn transition " +
+                                "hover:bg-[rgba(201,138,18,0.2)] disabled:opacity-50"
+                              }
+                              disabled={!tipoId || agindo}
+                              title="Exceção de Master: devolver o teto inteiro de envios, quando a régua da IA reprovou um documento bom"
+                              onClick={() => tipoId && void acaoPortal(tipoId, "zerar-tentativas")}
+                            >
+                              {agindo ? <Spinner /> : <Icon name="lock" className="h-4 w-4" />}
+                              Zerar tentativas
+                            </button>
+                          )}
+                        </div>
+                      )}
+
+                      {feito && (
+                        <p className="mt-2 flex items-start gap-1.5 text-[12.5px] text-ok">
+                          <Icon name="check" className="mt-0.5 h-3.5 w-3.5 flex-none" />
+                          <span>{feito}</span>
+                        </p>
+                      )}
+                      {erroPortal && (
+                        <p className="mt-2 text-[12.5px] text-danger" role="alert">
+                          {erroPortal}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })()}
+
                 {erro && (
                   <p className="mt-2 text-[12.5px] text-danger" role="alert">
                     {erro}

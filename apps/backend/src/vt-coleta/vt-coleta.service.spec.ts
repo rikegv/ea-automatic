@@ -92,6 +92,7 @@ function spyDb(
   over: {
     ledger?: string | undefined;
     matches?: Array<Record<string, unknown>>;
+    matchesPorAdmissao?: Array<Record<string, unknown>>;
     tipoVt?: { id: string; nome: string } | undefined;
     naRegua?: boolean;
   } = {},
@@ -100,6 +101,9 @@ function spyDb(
   const buscarMatches = vi
     .spyOn(svc, "buscarMatches")
     .mockResolvedValue((over.matches ?? []) as never);
+  const buscarMatchPorAdmissao = vi
+    .spyOn(svc, "buscarMatchPorAdmissao")
+    .mockResolvedValue((over.matchesPorAdmissao ?? []) as never);
   const carregarTipoVt = vi
     .spyOn(svc, "carregarTipoVt")
     .mockResolvedValue(over.tipoVt ?? { id: "vt-tipo", nome: "Formulario de VT" });
@@ -109,6 +113,7 @@ function spyDb(
   return {
     buscarLedgerStatus,
     buscarMatches,
+    buscarMatchPorAdmissao,
     carregarTipoVt,
     vtEstaNaRegua,
     darBaixaVt,
@@ -222,6 +227,64 @@ describe("processarItem", () => {
     expect(ai.arquivarDrive).not.toHaveBeenCalled();
     expect(db.upsertLedger).not.toHaveBeenCalled();
     expect(r).toMatchObject({ status: "CASADO", novo: false, jaProcessado: true });
+  });
+
+  // ── DUAL-READ (OST 3 vazamentos, vazamento 2): objeto NOVO com nome opaco + admissaoId no JSON ──
+  it("(h) formato NOVO (admissaoId, sem cpf): casa por ADMISSÃO, não por CPF", async () => {
+    const { svc, ai } = montar();
+    const db = spyDb(svc, { matchesPorAdmissao: [admissao()], naRegua: true });
+
+    const r = await svc.processarItem(item({ cpf: null, admissaoId: "adm-1" }));
+
+    // Casou pela ADMISSÃO, e o caminho por CPF nem foi tocado.
+    expect(db.buscarMatchPorAdmissao).toHaveBeenCalledWith("adm-1");
+    expect(db.buscarMatches).not.toHaveBeenCalled();
+    expect(ai.arquivarDrive).toHaveBeenCalledTimes(1);
+    expect(db.darBaixaVt).toHaveBeenCalledWith("adm-1", "vt-tipo");
+    expect(r).toMatchObject({ status: "CASADO", novo: true, arquivado: true, deuBaixa: true });
+  });
+
+  it("(i) formato NOVO cujo admissaoId não casa (encerrada/pausada): SEM_ADMISSAO, sem arquivar", async () => {
+    const { svc, ai } = montar();
+    const db = spyDb(svc, { matchesPorAdmissao: [] });
+
+    const r = await svc.processarItem(item({ cpf: null, admissaoId: "adm-x" }));
+
+    expect(db.buscarMatchPorAdmissao).toHaveBeenCalledWith("adm-x");
+    expect(db.buscarMatches).not.toHaveBeenCalled();
+    expect(ai.arquivarDrive).not.toHaveBeenCalled();
+    expect(db.upsertLedger).toHaveBeenCalledWith(
+      "md5-1",
+      expect.objectContaining({ status: "SEM_ADMISSAO" }),
+    );
+    expect(r.status).toBe("SEM_ADMISSAO");
+  });
+
+  it("(j) legado (cpf, sem admissaoId): segue casando por CPF, caminho intocado", async () => {
+    const { svc, ai } = montar();
+    const db = spyDb(svc, { matches: [admissao()], naRegua: true });
+
+    const r = await svc.processarItem(item()); // item() já vem com CPF e sem admissaoId
+
+    expect(db.buscarMatches).toHaveBeenCalledWith(CPF);
+    expect(db.buscarMatchPorAdmissao).not.toHaveBeenCalled();
+    expect(ai.arquivarDrive).toHaveBeenCalledTimes(1);
+    expect(r).toMatchObject({ status: "CASADO", deuBaixa: true });
+  });
+
+  it("(k) sem cpf E sem admissaoId: NOME_FORA_PADRAO, não tenta casar por nenhum caminho", async () => {
+    const { svc } = montar();
+    const db = spyDb(svc);
+
+    const r = await svc.processarItem(item({ cpf: null, admissaoId: null }));
+
+    expect(db.buscarMatches).not.toHaveBeenCalled();
+    expect(db.buscarMatchPorAdmissao).not.toHaveBeenCalled();
+    expect(db.upsertLedger).toHaveBeenCalledWith(
+      "md5-1",
+      expect.objectContaining({ status: "NOME_FORA_PADRAO" }),
+    );
+    expect(r.status).toBe("NOME_FORA_PADRAO");
   });
 });
 

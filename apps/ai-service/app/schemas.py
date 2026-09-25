@@ -64,6 +64,97 @@ class ResultadoAuditoria(_CamelModel):
     divergencias_cadastro: list[str] = Field(default_factory=list)
 
 
+# ── Portal do Candidato: o leitor (docs/DESENHO-PORTAL-CAMINHO-DO-ARQUIVO.md) ──────────────
+class PortalLerRequest(_CamelModel):
+    """Pedido de leitura de UM objeto do bucket de entrada do Portal.
+
+    Chega do BACKEND (X-Internal-Token), nunca do navegador do candidato: o celular só fala com o
+    bucket do Google. O `objeto` é o nome que o próprio backend escolheu ao assinar a credencial de
+    escrita, então ele nunca vem do aparelho de quem enviou.
+    """
+
+    bucket: str
+    objeto: str
+    tipo_documento_codigo: str
+    tipo_documento_nome: str
+    candidato: CandidatoIn
+    regras: list[RegraIn] = Field(default_factory=list)
+
+
+class PortalChegada(_CamelModel):
+    """A PROVA de que o arquivo chegou, mais o que o backend precisa para tratar o objeto.
+
+    §A.6: aqui não entra o nome do objeto (carrega nome e CPF), nem trecho do documento, nem valor
+    extraído. São números e rótulos. O `tipoDeclarado` é o que o cliente disse e serve só para o
+    backend corrigir o tipo do objeto depois da leitura; quem vale é o `mimeDetectado`, dos magic
+    bytes.
+    """
+
+    tamanho_bytes: int
+    mime_detectado: str | None = None
+    tipo_declarado: str | None = None
+    md5: str | None = None
+    criado_em: str | None = None
+    geracao: int | None = None
+    paginas: int | None = None
+    largura: int | None = None
+    altura: int | None = None
+    conteudo_ativo: list[str] = Field(default_factory=list)
+
+
+class PortalSugestaoCampo(_CamelModel):
+    """UM campo lido do documento, para o candidato conferir na tela. NUNCA é dado final.
+
+    `lido=False` com `valor` vazio é resposta NORMAL e frequente: significa que a IA não conseguiu ler
+    aquele campo com confiança suficiente e NÃO chutou. O consumidor mostra o campo em branco para a
+    pessoa digitar. Campo chutado num formulário de admissão vira dado errado no eSocial, que é multa;
+    campo vazio custa dez segundos de digitação.
+    """
+
+    campo: str
+    rotulo: str
+    valor: str = ""
+    # 0.0 sempre que `lido=False`. Acima do piso de `portal_extracao.CONFIANCA_MINIMA` quando lido.
+    confianca: float = 0.0
+    lido: bool = False
+
+
+class PortalSugestoes(_CamelModel):
+    """O bloco de AUTO-PREENCHIMENTO. A forma diz o que ele é, para ninguém confundir com dado.
+
+    Os dois campos fixos existem por causa do veto V12 (Camada G5): `origem` e
+    `exigeConfirmacaoHumana` viajam em toda resposta para que nenhum consumidor, agora ou daqui a um
+    ano, trate isto como valor conferido. Nada daqui escreve em dado autoritativo: CPF, nome e
+    vínculo com a admissão vêm do link e da base, nunca do documento lido, e quem confirma é humano.
+
+    §A.6: este é o ÚNICO lugar da resposta que carrega PII de conteúdo, e ele existe para ir à tela do
+    candidato. Nenhum valor daqui pode aparecer em log, mensagem de erro ou rastro de exceção.
+    """
+
+    origem: Literal["IA_SUGESTAO"] = "IA_SUGESTAO"
+    exige_confirmacao_humana: Literal[True] = True
+    campos: list[PortalSugestaoCampo] = Field(default_factory=list)
+
+
+class PortalLerResponse(_CamelModel):
+    """Campos e veredicto, NUNCA o binário e NUNCA o texto integral do documento (§A.6).
+
+    `aceito=False` com `recusa` preenchido é resposta NORMAL (arquivo que não serve), não erro: o
+    HTTP segue 200 e o backend mostra o `motivo` ao candidato. Erro HTTP fica para falha nossa.
+    """
+
+    aceito: bool
+    recusa: str | None = None
+    motivo: str = ""
+    chegada: PortalChegada
+    auditoria: ResultadoAuditoria | None = None
+    # ACRÉSCIMO, não troca: o `auditoria` acima responde "este documento serve?" e continua igual; o
+    # `sugestoes` responde "e o que está escrito nele?", que é a metade do auto-preenchimento. Nulo
+    # quando não houve leitura (arquivo recusado, sem regra ativa) ou quando o tipo de documento não
+    # tem catálogo de campos mapeado.
+    sugestoes: PortalSugestoes | None = None
+
+
 # ── Drive ──────────────────────────────────────────────────────────────────
 class ArquivoIn(_CamelModel):
     staging_path: str
@@ -115,15 +206,22 @@ class ListarColetaVtRequest(_CamelModel):
 
 
 class ItemColetaVt(_CamelModel):
-    """Um objeto do bucket. §A.6: o nome cru NUNCA sai do ai-service; sobe só o CPF.
+    """Um objeto do bucket. §A.6: o nome cru NUNCA sai do ai-service; sobe só o handle já resolvido.
 
     `id` é o NOME do objeto (o backend precisa dele para pedir o download); `md5` é hex.
+
+    HANDLE de casamento (dual-read da transição do vazamento 2). São campos IRMÃOS; no máximo UM vem
+    preenchido, e o backend decide por presença: `if admissao_id` → casa por admissão; `elif cpf` →
+    casa por CPF (legado); senão → nome fora do padrão.
+    - LEGADO (nome antigo `NOME + 11 dígitos`): `cpf` preenchido, `admissao_id` nulo.
+    - NOVO (nome opaco): `admissao_id` preenchido (lido do JSON irmão), `cpf` nulo.
     """
 
     id: str
     md5: str | None = None
     mime_type: str
     cpf: str | None = None
+    admissao_id: str | None = None
     eh_pdf: bool
 
 
@@ -153,8 +251,10 @@ class ItemOrfaoVt(_CamelModel):
     id: str
     md5: str | None = None
     cpf: str | None = None
-    # Nome que a PESSOA preencheu no app, extraído do nome do objeto. É o que permite ao time
-    # reconhecer de quem é o formulário quando o CPF não casa com ninguém.
+    # Handle novo (nome opaco): o `admissaoId` lido do JSON irmão. Irmão do `cpf`; no máximo um vem.
+    admissao_id: str | None = None
+    # Nome que a PESSOA preencheu no app, extraído do nome do objeto ANTIGO. `None` no nome opaco: a
+    # identidade do arquivo novo é o admissaoId, e o nome da pessoa não vive mais no nome do objeto.
     nome: str | None = None
     criado_em: str | None = None
 

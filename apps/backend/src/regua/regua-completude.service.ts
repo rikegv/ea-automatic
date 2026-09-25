@@ -1,6 +1,6 @@
 import { Inject, Injectable } from "@nestjs/common";
 import { and, eq, inArray, sql } from "drizzle-orm";
-import type { ProgressoRegua } from "@ea/shared-types";
+import type { ExigenciaDocumento, ProgressoRegua } from "@ea/shared-types";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
 import {
@@ -43,6 +43,7 @@ function porDocumento<
   }
   return [...escolhido.values()];
 }
+import { compararDocumentosDaTrilha } from "../domain/ordem-dos-documentos";
 import {
   calcularProgressoRegua,
   faltantesObrigatorios,
@@ -236,6 +237,84 @@ export class ReguaCompletudeService {
       if (l.estado === "INCONFORME") atual.inconformes += 1;
       map.set(l.admissaoId, atual);
     }
+    return map;
+  }
+
+  /**
+   * O PRÓXIMO OBRIGATÓRIO PENDENTE de cada admissão, por NOME. É a coluna "em que documento está"
+   * do gerenciador do Portal, e ela não podia nascer de uma régua nova (§A.19): a mesma consulta
+   * dos dois contadores acima, mudando só o que se guarda do resultado.
+   *
+   * A ORDEM É A MESMA QUE O CANDIDATO VÊ, E AGORA É LITERALMENTE A MESMA FUNÇÃO.
+   * `compararDocumentosDaTrilha` (`domain/ordem-dos-documentos.ts`) é a régua única da trilha, e
+   * aqui ela é chamada com todas as linhas em OBRIGATORIO (que é o recorte desta consulta), então
+   * o que decide é a lista fixa dos 7 e, depois dela, o nome em pt-BR.
+   *
+   * POR QUE A CHAMADA PASSOU A SER A MESMA FUNÇÃO (OST da ordem dos 7, 21/09/2026): enquanto a
+   * régua da trilha era só "por nome", esta comparação por nome concordava com ela por
+   * coincidência e o acordo cabia neste comentário. Com uma lista fixa de documentos na frente do
+   * nome, a coincidência acabaria: o candidato veria RG no topo e esta coluna diria "Atestado De
+   * Antecedentes" (o primeiro em ordem alfabética), ou seja, o RH cobrando um documento e a pessoa
+   * olhando outro, que é o defeito que a nota antiga já avisava.
+   *
+   * `null` significa NENHUM obrigatório pendente, que é o lado bom: é o mesmo zero que entra na
+   * conta de CONCLUÍRAM. Sem PII (§A.6): nome de TIPO de documento, nunca da pessoa.
+   */
+  async proximoObrigatorioPendenteMap(
+    admissaoIds: string[],
+  ): Promise<Map<string, string | null>> {
+    const map = new Map<string, string | null>();
+    if (admissaoIds.length === 0) return map;
+    for (const id of admissaoIds) map.set(id, null);
+    const linhas = await this.db
+      .select({
+        admissaoId: admissoes.id,
+        estado: documentosAdmissao.estado,
+        tipoDocumentoId: reguaDocumental.tipoDocumentoId,
+        clienteVinculoId: reguaDocumental.clienteVinculoId,
+        nome: tiposDocumento.nome,
+        // O `codigo` entrou com a ordem dos 7: a régua compartilhada ordena por CÓDIGO, e não por
+        // nome, porque nome é editável na tela da Régua e uma correção de grafia mudaria a ordem.
+        codigo: tiposDocumento.codigo,
+      })
+      .from(admissoes)
+      .innerJoin(candidatos, eq(candidatos.cpf, admissoes.candidatoCpf))
+      .innerJoin(
+        reguaDocumental,
+        and(
+          eq(reguaDocumental.codCliente, admissoes.codCliente),
+          eq(reguaDocumental.cargoId, admissoes.cargoId),
+          eq(reguaDocumental.exigencia, "OBRIGATORIO"),
+          REGUA_DO_VINCULO_DA_ADMISSAO,
+        ),
+      )
+      .innerJoin(tiposDocumento, eq(tiposDocumento.id, reguaDocumental.tipoDocumentoId))
+      .leftJoin(
+        documentosAdmissao,
+        and(
+          eq(documentosAdmissao.admissaoId, admissoes.id),
+          eq(documentosAdmissao.tipoDocumentoId, reguaDocumental.tipoDocumentoId),
+        ),
+      )
+      .where(and(inArray(admissoes.id, admissaoIds), naoExigeReservista));
+    // O MENOR pela régua da trilha, e não o menor por nome. Guarda-se a linha inteira porque a
+    // comparação precisa do código, e só no fim se projeta o nome, que é o que a coluna mostra.
+    const melhor = new Map<string, { codigoTipoDocumento: string; nome: string; exigencia: ExigenciaDocumento }>();
+    for (const l of porDocumento(linhas)) {
+      if (l.estado === "ENTREGUE") continue;
+      // Todas as linhas desta consulta são OBRIGATORIO (a junção filtra por isso), então a faixa
+      // de exigência empata sempre e quem decide é a lista dos 7, depois o nome.
+      const candidato = {
+        codigoTipoDocumento: l.codigo,
+        nome: l.nome,
+        exigencia: "OBRIGATORIO" as ExigenciaDocumento,
+      };
+      const atual = melhor.get(l.admissaoId);
+      if (!atual || compararDocumentosDaTrilha(candidato, atual) < 0) {
+        melhor.set(l.admissaoId, candidato);
+      }
+    }
+    for (const [admissaoId, doc] of melhor) map.set(admissaoId, doc.nome);
     return map;
   }
 

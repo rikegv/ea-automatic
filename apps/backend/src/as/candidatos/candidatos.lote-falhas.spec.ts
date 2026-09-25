@@ -6,6 +6,7 @@ import { asCandidaturaEtapas, asCandidaturas } from "../../db/schema";
 import { CandidatosService } from "./candidatos.service";
 import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
 import { catalogoDeStatusFingido } from "../vaga-status/vaga-status-catalogo.fake";
+import { envioDoPortalFingido } from "../../portal/portal-envio.fake";
 
 /**
  * ─ O LOTE PARCIAL: uma linha ruim NÃO derruba as outras, e a resposta NÃO carrega dado pessoal ──
@@ -248,7 +249,7 @@ function makeDb(cenario: {
   };
 
   return {
-    service: new CandidatosService(db as never, catalogoDeEtapasFingido() as never, catalogoDeStatusFingido() as never),
+    service: new CandidatosService(db as never, catalogoDeEtapasFingido() as never, catalogoDeStatusFingido() as never, envioDoPortalFingido() as never),
     estado,
     escritas,
     contar: (situacao: string) =>

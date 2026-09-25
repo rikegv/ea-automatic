@@ -1,0 +1,79 @@
+[Unit]
+# Leitor do Portal do Candidato: SEGUNDA instancia do ai-service, dedicada a abrir arquivo
+# hostil vindo da internet. Nao substitui e nao encosta na `ea-ai-service`, que atende a
+# auditoria da operacao (secao 2 do DESENHO-PORTAL-CAMINHO-DO-ARQUIVO.md).
+#
+# ESTA E A UNIDADE PROVISORIA, do gerenciador de usuario. Ela aplica SO o que foi MEDIDO como
+# efetivo aqui: limites de memoria, de CPU e de processos, ambiente magro e alcance de disco
+# separado. O isolamento de sistema de arquivos e de rede NAO cabe numa unidade de usuario
+# nesta maquina: as diretrizes de namespace sao aceitas e IGNORADAS em silencio (medido, o
+# processo continua no mesmo namespace de montagem do hospedeiro). A unidade definitiva, de
+# sistema e com usuario proprio, esta em ea-portal-leitor.system.service.
+Description=Portal do Candidato - leitor isolado (provisorio, gerenciador de usuario, 127.0.0.1:8020)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+
+# CWD FORA DO REPOSITORIO: e assim que o ambiente fica magro. O pydantic-settings le o `.env`
+# do diretorio de trabalho, entao esta instancia le /home/henrique/apps/ea-portal-leitor/.env
+# (sem banco, sem Drive, com credencial e token proprios) e NUNCA o .env do ai-service.
+WorkingDirectory=/home/henrique/apps/ea-portal-leitor
+
+# O codigo e o mesmo, importado por caminho. Nada e escrito no repositorio.
+Environment=PYTHONPATH=/home/henrique/apps/ea-automatic/apps/ai-service
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=TMPDIR=/home/henrique/apps/ea-portal-leitor/tmp
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/henrique/apps/ea-automatic/apps/ai-service/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8020
+
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+# ---- Limites: um arquivo hostil derruba no maximo o leitor ----
+# Medidos como efetivos (os controladores cpu, memory e pids estao delegados ao usuario).
+MemoryHigh=512M
+MemoryMax=768M
+MemorySwapMax=0
+CPUQuota=150%
+TasksMax=64
+LimitNOFILE=1024
+# SEM LimitNPROC nesta unidade, e o motivo foi MEDIDO: o teto de processos e por USUARIO do
+# sistema, nao por servico. Como aqui o leitor compartilha o usuario do diretor (que ja tem
+# dezenas de processos), qualquer teto util derruba o leitor no boot (abortou com 64). O teto
+# de processos existe na unidade de sistema, onde o usuario e so dele. Aqui quem segura a
+# multiplicacao e o TasksMax acima, que e por servico e foi medido como efetivo.
+# Sem despejo de memoria: o despejo de um processo que acabou de abrir documento de candidato
+# seria dado pessoal em disco (secao A.6).
+LimitCORE=0
+OOMPolicy=stop
+
+# ---- Endurecimento que funciona em unidade de usuario (medido) ----
+NoNewPrivileges=yes
+UMask=0077
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+ProtectKernelTunables=yes
+ProtectHostname=yes
+ProtectControlGroups=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @obsolete @mount @debug @swap
+
+# NAO declarar aqui: ProtectSystem, ProtectHome, PrivateTmp, ReadOnlyPaths, InaccessiblePaths,
+# IPAddressDeny, PrivateDevices, CapabilityBoundingSet. As primeiras sao aceitas e ignoradas em
+# silencio no gerenciador de usuario desta maquina, e declara-las daria falsa sensacao de
+# isolamento; as ultimas fazem a unidade nem subir (codigo 218). Todas estao na unidade de
+# sistema, que e onde de fato valem.
+
+[Install]
+WantedBy=default.target

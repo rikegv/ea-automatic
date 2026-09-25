@@ -1,7 +1,7 @@
 import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Worker, type Job } from "bullmq";
-import { and, asc, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, type SQL } from "drizzle-orm";
 import type IORedis from "ioredis";
 import { AiClientService, type ItemColetaVt } from "../ai/ai-client.service";
 import { AuditoriaService } from "../auditoria/auditoria.service";
@@ -104,14 +104,18 @@ export interface ResumoScanAdmissao {
  * NÚCLEO da coleta de formulário de VT (§A.17 etapa 3 / INT-2) + o Worker BullMQ (consumidor).
  *
  * Um app externo (Firebase) deposita os PDFs de VT num bucket coletivo do GCS. Esta varredura
- * (periódica e sob demanda) casa cada PDF a uma admissão viva pelo CPF do nome do objeto, arquiva na
- * subpasta BENEFICIOS do prontuário e, quando o FORMULARIO_VT está na régua daquela admissão, dá
- * baixa (marca ENTREGUE e reavalia a régua pelo MESMO pós-veredito da IA/validação humana).
+ * (periódica e sob demanda) casa cada PDF a uma admissão viva e arquiva na subpasta BENEFICIOS do
+ * prontuário e, quando o FORMULARIO_VT está na régua daquela admissão, dá baixa (marca ENTREGUE e
+ * reavalia a régua pelo MESMO pós-veredito da IA/validação humana).
  *
- * §A.6: o CPF, o nome do objeto (NOME+CPF) e o md5 NUNCA são logados; o nome do objeto é um handle
- * TRANSITÓRIO usado só para a baixa e nunca persistido. O ledger guarda só md5 (dedup) + origem
- * ("GCS") + vínculo com a admissão. A URL/binário não trafega por aqui (o ai-service baixa para a
- * staging e devolve só o caminho).
+ * CASAMENTO DUAL (OST 3 vazamentos, vazamento 2): objeto NOVO tem nome OPACO e traz o `admissaoId`
+ * no JSON irmão (casa por admissão); objeto LEGADO tem nome `NOME + 11 dígitos` (casa pelo CPF do
+ * nome, caminho intocado). Convivem até a fila drenar.
+ *
+ * §A.6: o CPF, o `admissaoId`, o nome do objeto e o md5 NUNCA são logados; o nome do objeto é um
+ * handle TRANSITÓRIO usado só para a baixa e nunca persistido. O ledger guarda só md5 (dedup) +
+ * origem ("GCS") + vínculo com a admissão. A URL/binário não trafega por aqui (o ai-service baixa
+ * para a staging e devolve só o caminho).
  */
 @Injectable()
 export class VtColetaService implements OnModuleInit, OnModuleDestroy {
@@ -255,19 +259,29 @@ export class VtColetaService implements OnModuleInit, OnModuleDestroy {
       return { status: "NAO_PDF", novo: false };
     }
 
+    // DUAL-READ do handle (OST 3 vazamentos, vazamento 2). O bucket tem, convivendo até a fila
+    // drenar, objetos NOVOS (nome opaco, `admissaoId` no JSON) e LEGADOS (nome `NOME + 11 dígitos`).
+    // O ai-service já devolve EXATAMENTE UM dos dois por objeto:
+    //   · novo   → `admissaoId` preenchido, `cpf` ausente  → casa POR ADMISSÃO;
+    //   · legado → `cpf` preenchido, `admissaoId` ausente  → casa POR CPF (o caminho de hoje, intocado).
+    // §A.6: nem o `admissaoId`, nem o CPF, nem o nome do objeto entram em log.
+    const admissaoId = (item.admissaoId ?? "").trim();
     const cpf = (item.cpf ?? "").replace(/\D/g, "");
-    if (cpf.length !== 11) {
+    if (!admissaoId && cpf.length !== 11) {
       await this.upsertLedger(chave, { status: "NOME_FORA_PADRAO" });
       return { status: "NOME_FORA_PADRAO", novo: false };
     }
 
-    // Idempotência: já casado antes → não reprocessa, não re-arquiva.
+    // Idempotência: já casado antes → não reprocessa, não re-arquiva. A chave é o md5; o nome opaco é
+    // um id único por submissão (serve igual), mas o md5 segue sendo a chave, sem PII (§A.6).
     const jaProcessado = await this.buscarLedgerStatus(chave);
     if (jaProcessado === "CASADO") {
       return { status: "CASADO", novo: false, jaProcessado: true };
     }
 
-    const matches = await this.buscarMatches(cpf);
+    const matches = admissaoId
+      ? await this.buscarMatchPorAdmissao(admissaoId)
+      : await this.buscarMatches(cpf);
     if (matches.length === 0) {
       await this.upsertLedger(chave, { status: "SEM_ADMISSAO" });
       return { status: "SEM_ADMISSAO", novo: false };
@@ -379,8 +393,9 @@ export class VtColetaService implements OnModuleInit, OnModuleDestroy {
 
   // ── Varredura direcionada (o "buscar VT" da ficha) ────────────────────────
   /**
-   * Varredura de UMA admissão (manual). Lista o bucket coletivo e processa SÓ os arquivos cujo CPF
-   * casa com o candidato desta admissão, reusando o MESMO `processarItem` (sem segundo caminho).
+   * Varredura de UMA admissão (manual). Lista o bucket coletivo e processa SÓ os arquivos desta
+   * admissão, reusando o MESMO `processarItem` (sem segundo caminho). DUAL-READ: casa o objeto NOVO
+   * pelo `admissaoId` do JSON e o LEGADO pelo CPF do nome, os dois apontando para esta admissão.
    */
   async rodarParaAdmissao(admissaoId: string): Promise<ResumoScanAdmissao> {
     const bucket = this.bucketColetivo();
@@ -394,7 +409,11 @@ export class VtColetaService implements OnModuleInit, OnModuleDestroy {
     }
 
     const { arquivos } = await this.ai.listarColetaVt(bucket);
-    const doCandidato = arquivos.filter((it) => (it.cpf ?? "").replace(/\D/g, "") === cpf);
+    const doCandidato = arquivos.filter(
+      (it) =>
+        (it.admissaoId ?? "").trim() === admissaoId ||
+        (it.cpf ?? "").replace(/\D/g, "") === cpf,
+    );
 
     let arquivado = false;
     let deuBaixa = false;
@@ -409,8 +428,42 @@ export class VtColetaService implements OnModuleInit, OnModuleDestroy {
   }
 
   // ── Acessos ao banco (isolados para o teste poder espiá-los) ──────────────
-  /** Admissões VIVAS deste CPF (o universo do casamento). Sem CPF na saída (§A.6). */
+  /**
+   * Admissões VIVAS deste CPF (o universo do casamento LEGADO, nome `NOME + 11 dígitos`). Sem CPF na
+   * saída (§A.6).
+   *
+   * RÉGUA PRÓPRIA DO VT, e não a `admissaoOperavelSql()` global (OST do reenvio).
+   *
+   * O QUE MUDOU E POR QUÊ: a régua global exige farol VIVO, e por isso um VT reenviado por quem já
+   * foi admitido voltava como SEM_ADMISSAO. Mas o VT é justamente o dado que continua mudando DEPOIS
+   * da admissão: muda o endereço, muda a linha, a passagem sobe. Recusar aquele envio era recusar a
+   * correção de um benefício que a pessoa recebe todo mês.
+   *
+   * A GLOBAL NÃO FOI TOCADA de propósito: ela é a régua de todos os automáticos (scheduler, filas,
+   * Pandapé), e afrouxá-la para resolver o VT afrouxaria tudo junto. Aqui a régua é local: aceita
+   * EM_ADMISSAO, BANCO_AGUARDAR e ADMISSAO_CONCLUIDA, e segue recusando DECLINOU e RESCISAO (quem
+   * declinou não preenche VT, §A.16) e admissão PAUSADA.
+   *
+   * Aceitar não é reabrir: o que protege a admissão concluída é a baixa condicional em
+   * `processarMatch`. Ver o comentário de lá, que é onde o risco real mora.
+   */
   async buscarMatches(cpf: string): Promise<AdmissaoMatch[]> {
+    return this.buscarMatchesOnde(eq(admissoes.candidatoCpf, cpf));
+  }
+
+  /**
+   * A admissão do casamento NOVO (nome opaco): casa pelo `admissaoId` do JSON, não mais pelo CPF do
+   * nome (OST 3 vazamentos, vazamento 2). MESMA régua local do `buscarMatches` (`FAROIS_ACEITOS_VT`
+   * + não pausada): o id sozinho não basta, a admissão precisa ACEITAR VT. Devolve [] (vira
+   * SEM_ADMISSAO) quando o id não casa com admissão que aceite. Como o id é único, nunca devolve mais
+   * de uma. Sem CPF na saída (§A.6).
+   */
+  async buscarMatchPorAdmissao(admissaoId: string): Promise<AdmissaoMatch[]> {
+    return this.buscarMatchesOnde(eq(admissoes.id, admissaoId));
+  }
+
+  /** Núcleo comum das duas buscas: a MESMA projeção e a MESMA régua local, só muda o alvo. */
+  private async buscarMatchesOnde(alvo: SQL): Promise<AdmissaoMatch[]> {
     const rows = await this.db
       .select({
         id: admissoes.id,
@@ -427,23 +480,9 @@ export class VtColetaService implements OnModuleInit, OnModuleDestroy {
       .from(admissoes)
       .innerJoin(candidatos, eq(candidatos.cpf, admissoes.candidatoCpf))
       .leftJoin(clientes, eq(clientes.codCliente, admissoes.codCliente))
-      // RÉGUA PRÓPRIA DO VT, e não a `admissaoOperavelSql()` global (OST do reenvio).
-      //
-      // O QUE MUDOU E POR QUÊ: a régua global exige farol VIVO, e por isso um VT reenviado por quem
-      // já foi admitido voltava como SEM_ADMISSAO. Mas o VT é justamente o dado que continua mudando
-      // DEPOIS da admissão: muda o endereço, muda a linha, a passagem sobe. Recusar aquele envio era
-      // recusar a correção de um benefício que a pessoa recebe todo mês.
-      //
-      // A GLOBAL NÃO FOI TOCADA de propósito: ela é a régua de todos os automáticos (scheduler,
-      // filas, Pandapé), e afrouxá-la para resolver o VT afrouxaria tudo junto. Aqui a régua é local:
-      // aceita EM_ADMISSAO, BANCO_AGUARDAR e ADMISSAO_CONCLUIDA, e segue recusando DECLINOU e
-      // RESCISAO (quem declinou não preenche VT, §A.16) e admissão PAUSADA.
-      //
-      // Aceitar não é reabrir: o que protege a admissão concluída é a baixa condicional em
-      // `processarMatch`. Ver o comentário de lá, que é onde o risco real mora.
       .where(
         and(
-          eq(admissoes.candidatoCpf, cpf),
+          alvo,
           inArray(admissoes.farolGlobal, [...FAROIS_ACEITOS_VT]),
           isNull(admissoes.pausadaEm),
         ),

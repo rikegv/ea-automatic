@@ -121,3 +121,58 @@ export function motivoFalhaEnvioDrive(detalhe: string): string {
 export function limitar(motivo: string): string {
   return motivo.slice(0, MAX_MOTIVO_DRIVE);
 }
+
+/**
+ * O FILTRO POR VEREDITO: SÓ O APROVADO SOBE AO PRONTUÁRIO (decisão do diretor).
+ *
+ * O DEFEITO QUE ISTO FECHA, e ele era ativo em produção. O arquivamento montava o lote a partir de
+ * TODO arquivo que estivesse na pasta temporária no instante em que a régua fechava, sem consultar o
+ * estado de documento nenhum. Um arquivo REPROVADO pela IA, cujos bytes ainda estivessem lá, subia
+ * para o prontuário do funcionário lado a lado com os aprovados, e nada falhava: do ponto de vista
+ * do sistema o lote tinha ido inteiro. Três coisas atenuavam (trocar o arquivo apaga os anteriores
+ * daquele tipo, reclassificar o ASO limpa o tipo, e o prazo de 48h apaga o que envelheceu) e
+ * NENHUMA fechava.
+ *
+ * A RÉGUA, EM UMA FRASE: vai ao prontuário o documento cujo veredito é ENTREGUE. INCONFORME
+ * (reprovado) e não decidido (PENDENTE, AGUARDANDO_AUDITORIA) NÃO vão.
+ *
+ * CONSEQUÊNCIA INTENCIONAL, E ELA ESTÁ ESCRITA AQUI DE PROPÓSITO: documento FACULTATIVO REPROVADO
+ * deixa de subir. Isso é o objetivo, não efeito colateral. "Facultativo" diz que ele não era
+ * exigido, não que ele possa entrar no prontuário reprovado.
+ *
+ * O QUE NÃO MUDA: o aprovado sobe exatamente como sempre subiu. O comportamento novo alcança SÓ o
+ * arquivo cujo documento não está ENTREGUE.
+ *
+ * A COMPARAÇÃO É PELO CÓDIGO SANITIZADO, e é por isso que quem chama passa os códigos já
+ * sanitizados: o nome do arquivo na pasta temporária carrega o código saneado (`{codigo}__{uuid}`),
+ * e comparar contra o código cru erraria por diferença de grafia em todo tipo com caractere fora de
+ * `[A-Za-z0-9_-]`, deixando de subir justamente o que estava aprovado.
+ *
+ * O LIMITE DESTE FILTRO, ESCRITO COM TODAS AS LETRAS PARA NINGUÉM VENDER CORREÇÃO COMPLETA. O
+ * estado é por TIPO; a pasta temporária guarda HISTÓRICO por ARQUIVO e NÃO apaga as tentativas
+ * anteriores do mesmo tipo (a limpeza por tipo só existe no reenvio do ASO e no descarte manual).
+ * Então: o candidato manda a carteira de trabalho, a IA reprova, ele manda de novo e a IA aprova. O
+ * tipo fica ENTREGUE e os bytes da tentativa REPROVADA continuam na pasta, com o MESMO código, e
+ * passam por este filtro.
+ *
+ *   ESTE FILTRO FECHA o caso do tipo reprovado que NUNCA foi reenviado.
+ *   ESTE FILTRO NÃO FECHA o caso do reprovado que FOI reenviado e depois aprovado.
+ *
+ * Fechar o segundo exige apagar as tentativas anteriores, o que tira do consultor a visualização
+ * delas no modal, e isso é decisão do diretor, não da fábrica.
+ *
+ * ESTE FILTRO MORA EM UM LUGAR SÓ, `arquivarNoDriveSemTrava`, e a restrição é de aceitação. Ele NÃO
+ * pode descer para `AiClientService.arquivarDrive` nem para o `POST /drive/arquivar` do serviço de
+ * IA: por ali passam TAMBÉM o CONTRATO ASSINADO da INT-4 (cujo tipo não é do catálogo e nunca terá
+ * estado ENTREGUE, então ele pararia de ser arquivado em 100% dos casos) e o VT coletado FORA da
+ * régua (que o diretor decidiu arquivar sem criar pendência).
+ *
+ * §A.6: só código de tipo. Nada de nome de arquivo, nome de pessoa ou CPF atravessa esta função.
+ */
+export function somenteAprovadosVaoAoProntuario<T extends { codigoTipo: string }>(
+  arquivos: readonly T[],
+  entreguesSanitizados: readonly string[],
+): T[] {
+  const aprovados = new Set(entreguesSanitizados);
+  return arquivos.filter((a) => aprovados.has(a.codigoTipo));
+}

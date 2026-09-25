@@ -4,6 +4,7 @@ import type { PgTable } from "drizzle-orm/pg-core";
 import { describe, expect, it, vi } from "vitest";
 import type { Papel } from "@ea/shared-types";
 import { CandidatosService } from "./candidatos.service";
+import { envioDoPortalFingido } from "../../portal/portal-envio.fake";
 
 /**
  * ─ FURO 2 DE LGPD: `editar` REGRAVA DADO PESSOAL EM QUEM JÁ FOI ANONIMIZADO ───────────────────
@@ -232,7 +233,7 @@ async function editar(cenario: Cenario): Promise<{
     candidatoNoBanco(cenario.anonimizado),
     cenario.linhasAfetadas ?? (cenario.anonimizado ? 0 : 1),
   );
-  const s = new CandidatosService(db as never, {} as never, {} as never);
+  const s = new CandidatosService(db as never, {} as never, {} as never, envioDoPortalFingido() as never);
   // A leitura final (`ficha`) monta a resposta com consultas que este fake não serve, e ela não é o
   // objeto do teste. O que interessa é o que foi ESCRITO, e SE ela chegou a ser chamada.
   const espiaFicha = vi

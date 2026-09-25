@@ -815,6 +815,13 @@
       "breakpoints": true
     },
     {
+      "idx": 116,
+      "version": "7",
+      "when": 1788125891611,
+      "tag": "0116_portal_caminho_do_arquivo",
+      "breakpoints": true
+    },
+    {
       "idx": 117,
       "version": "7",
       "when": 1788129491611,
@@ -826,6 +833,62 @@
       "version": "7",
       "when": 1788133091611,
       "tag": "0118_as_troca_de_cliente_da_vaga",
+      "breakpoints": true
+    },
+    {
+      "idx": 119,
+      "version": "7",
+      "when": 1788136691611,
+      "tag": "0119_portal_links_identidade",
+      "breakpoints": true
+    },
+    {
+      "idx": 120,
+      "version": "7",
+      "when": 1788140291611,
+      "tag": "0120_portal_links_acesso",
+      "breakpoints": true
+    },
+    {
+      "idx": 121,
+      "version": "7",
+      "when": 1788143891611,
+      "tag": "0121_portal_links_bloqueio_manual",
+      "breakpoints": true
+    },
+    {
+      "idx": 122,
+      "version": "7",
+      "when": 1788147491611,
+      "tag": "0122_portal_links_envio",
+      "breakpoints": true
+    },
+    {
+      "idx": 123,
+      "version": "7",
+      "when": 1788151091611,
+      "tag": "0123_dicas_documento",
+      "breakpoints": true
+    },
+    {
+      "idx": 124,
+      "version": "7",
+      "when": 1788154691611,
+      "tag": "0124_liberacao_override_aceites",
+      "breakpoints": true
+    },
+    {
+      "idx": 125,
+      "version": "7",
+      "when": 1788158291611,
+      "tag": "0125_admissao_dados_gi",
+      "breakpoints": true
+    },
+    {
+      "idx": 126,
+      "version": "7",
+      "when": 1788158292611,
+      "tag": "0126_portal_conferencia",
       "breakpoints": true
     }
   ]

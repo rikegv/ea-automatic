@@ -1,5 +1,7 @@
 import { Module } from "@nestjs/common";
+import { AdmissoesModule } from "../admissoes/admissoes.module";
 import { PandapeArquivosModule } from "../pandape/pandape-arquivos.module";
+import { PortalModule } from "../portal/portal.module";
 import { IngestaoHttp } from "./ingestao-pandape/ingestao-http";
 import { IngestaoRepositorio } from "./ingestao-pandape/ingestao-repositorio";
 import { IngestaoVarreduraService } from "./ingestao-pandape/ingestao-varredura.service";
@@ -97,7 +99,54 @@ import { VagasService } from "./vagas/vagas.service";
    * O ISOLAMENTO QUE O MÓDULO DECLARA CONTINUA INTEIRO: nenhuma dependência do módulo da ADMISSÃO
    * entra por aqui, e nada em `as/` passa a conhecer Esteira, Gerenciador ou Alto Volume.
    */
-  imports: [PandapeArquivosModule],
+  /*
+   * ─ A SEGUNDA IMPORTAÇÃO, E ELA MERECE SER DECLARADA EM VOZ ALTA ─────────────────────────────
+   *
+   * `PortalModule` é a PRIMEIRA dependência deste módulo com uma frente da ADMISSÃO, e o cabeçalho
+   * acima dizia "NENHUMA". A frase valia enquanto o funil terminava em si mesmo; ela deixou de
+   * valer no instante em que o diretor pediu que "Enviar Para Admissão" ENTREGASSE o link do
+   * Portal ao candidato. O gancho tinha de morar no ramo de `ENVIADO_PARA_ADMISSAO` de
+   * `registrarSaida` (e não em `mudarSituacaoOcupandoPosicao`, que também serve `aprovar` e
+   * `alocar`), então é daqui que a chamada sai.
+   *
+   * O QUE O A&S USA É UMA PORTA SÓ, `PortalEnvioService`. O QUE ELE ALCANÇA SÃO TRÊS, E ISSO É
+   * DIFERENTE: no Nest, importar um módulo torna injetável TUDO que ele EXPORTA, e o
+   * `PortalModule` exporta `PortalTrilhaService`, `PortalIdentidadeService` e `PortalEnvioService`.
+   * Ou seja, o dono de TODA escrita em `portal_links` (`emitirLink`, que REVOGA os anteriores, e
+   * `revogarLink`) passou a estar a uma injeção de construtor de distância daqui.
+   *
+   * Nada em `as/` injeta as outras duas, e QUEM TRAVA ISSO É UM TESTE, não este comentário:
+   * `as-porta-do-portal.tester.spec.ts` varre `as/` e falha se alguém importar
+   * `PortalIdentidadeService` ou `PortalTrilhaService`. A barreira de módulo ficou mais fina, e o
+   * desenho do `portal-envio.service.ts` se apoia em `portal_links` ter UM ponto de escrita.
+   *
+   * (Este parágrafo dizia "UMA PORTA SÓ" e estava ERRADO: achado da auditoria. Comentário que
+   * mente sobre alcance é o modo de falha exato da §A.26.)
+   *
+   * O A&S não passa a conhecer Esteira, Gerenciador nem Alto Volume, não lê tabela da Admissão e
+   * não escreve em `portal_links` (quem escreve é o `PortalIdentidadeService`, do outro lado).
+   *
+   * SEM CICLO DE MÓDULOS: `PortalModule` importa `ConfigModule` e `ReguaModule`, e nenhum dos dois
+   * conhece `as/`. É a mesma conferência que a nota do `PandapeArquivosModule` faz abaixo.
+   *
+   * E O ACOPLAMENTO É INERTE HOJE: `as_candidaturas.admissao_id` ainda nasce nula, então o envio
+   * automático devolve `SEM_ADMISSAO` e não faz nada. Ele liga sozinho no dia em que a ponte
+   * A&S para Esteira escrever aquela coluna.
+   */
+  /*
+   * ─ A PONTE A&S → ESTEIRA: `AdmissoesModule` (a ligação do funil com a Admissão) ─────────────
+   *
+   * O cabeçalho deste módulo dizia "NENHUMA dependência de módulo da Admissão", e a frase valeu
+   * enquanto o funil terminava em si mesmo. Deixou de valer quando o diretor pediu a PONTE: o
+   * candidato ENVIADO_PARA_ADMISSAO nasce como PRÉ-ADMISSÃO na Esteira. O `CandidatosService` usa
+   * UMA porta só do núcleo, `AdmissoesService` (nascer a pré-admissão e contar a duplicidade viva
+   * por CPF), no ramo `ENVIADO_PARA_ADMISSAO` de `registrarSaida`.
+   *
+   * SEM CICLO: `AdmissoesModule` importa `PandapeQueueModule` e `ReguaModule`, e nenhum dos dois
+   * conhece `as/`. `AdmissoesModule` exporta só o `AdmissoesService` (o `ExpurgoService` fica
+   * dentro), então o alcance novo é exatamente essa porta, e nada mais da Admissão entra aqui.
+   */
+  imports: [AdmissoesModule, PandapeArquivosModule, PortalModule],
   controllers: [
     VagasController,
     CandidatosController,

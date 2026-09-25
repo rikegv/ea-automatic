@@ -19,6 +19,16 @@ const USER: AuthUser = {
   senhaTemporaria: false,
 };
 
+// GATE DOS OBRIGATÓRIOS-PARA-LIBERAR (item 6): no LOTE o gate cobra 5 campos (Sexo é individual-only).
+// O USER aqui é COMUM (sem override), então os dtos deste arquivo trazem os 5 preenchidos para liberar.
+// Os campos NÃO-gate (salário, centro de custo, setor, gestor/BP) seguem em branco de propósito: é o
+// que ainda prova o não-bloqueio (regra 5) e mantém o sinalizador fora de OK.
+const GATE_LOTE = {
+  tipoContrato: "Temporário",
+  dataAdmissao: "2026-08-01",
+  vagaFolha: { escala: "12x36", beneficios: "VR" },
+};
+
 type Row = Record<string, unknown>;
 
 /**
@@ -115,6 +125,7 @@ async function rodarLote(
   dto: Parameters<AdmissoesService["liberarEmLote"]>[1] = {
     codCliente: "100",
     cargoId: "11111111-1111-4111-8111-111111111111",
+    ...GATE_LOTE,
   },
 ) {
   let i = 0;
@@ -160,7 +171,7 @@ describe("AdmissoesService.liberarEmLote", () => {
       cargoId: "11111111-1111-4111-8111-111111111111",
       tipoContrato: "Temporário",
       dataAdmissao: "2026-08-01",
-      vagaFolha: { salario: "2500.00", escala: "12x36" },
+      vagaFolha: { salario: "2500.00", escala: "12x36", beneficios: "VR" },
     });
     expect(r.liberadas).toHaveLength(2);
     expect(r.falhas).toHaveLength(0);
@@ -170,7 +181,7 @@ describe("AdmissoesService.liberarEmLote", () => {
     for (const u of admissoesAtualizadas) {
       expect(u.tipoContrato).toBe("Temporário");
       expect(u.dataAdmissao).toBe("2026-08-01");
-      // Campos em branco no lote (centro de custo, gestor, benefícios) seguem como pendência
+      // Campos NÃO-gate em branco no lote (centro de custo, gestor, setor) seguem como pendência
       // individual: o sinalizador da régua unificada §A.19 NÃO fecha em OK.
       expect(u.sinalizadorPreenchimento).not.toBe("OK");
     }
@@ -195,7 +206,10 @@ describe("AdmissoesService.liberarEmLote", () => {
       admissaoIds: ids,
       codCliente: "100",
       cargoId: "44444444-4444-4444-8444-444444444444",
-      vagaFolha: { salario: "R$ 2.500,00" },
+      // GATE (item 6): os 5 do lote preenchidos, senão o COMUM não libera. O foco do teste é o salário.
+      tipoContrato: "Temporário",
+      dataAdmissao: "2026-08-01",
+      vagaFolha: { salario: "R$ 2.500,00", escala: "12x36", beneficios: "VR" },
     });
     // Validação real (o que o ValidationPipe roda): não deve haver erro e o salário vem canônico.
     expect(validateSync(dto, { whitelist: true })).toHaveLength(0);
@@ -217,6 +231,7 @@ describe("AdmissoesService.liberarEmLote", () => {
     await rodarLote(ctx, ids, {
       codCliente: "100",
       cargoId: "11111111-1111-4111-8111-111111111111",
+      ...GATE_LOTE,
       observacaoLiberacao: "VT possui 6% de desconto",
     });
 
@@ -232,6 +247,7 @@ describe("AdmissoesService.liberarEmLote", () => {
     await rodarLote(ctx, ["a1"], {
       codCliente: "100",
       cargoId: "11111111-1111-4111-8111-111111111111",
+      ...GATE_LOTE,
       observacaoLiberacao: "   ",
     });
 
@@ -244,12 +260,14 @@ describe("AdmissoesService.liberarEmLote", () => {
     await rodarLote(ctx, ["a1"], {
       codCliente: "100",
       cargoId: "11111111-1111-4111-8111-111111111111",
-      // Tudo o que a régua §A.19 cobra preenchido, MENOS nada: só a observação é extra.
+      // Os 5 do gate (item 6) preenchidos; os demais campos NÃO-gate seguem em branco. Só a observação
+      // é o extra sob teste.
+      ...GATE_LOTE,
       observacaoLiberacao: "Recado do consultor",
     });
 
     const [u] = ctx.atualizados.filter((x) => x.farolGlobal === "EM_ADMISSAO");
-    // A observação não maquia pendência: sem salário/contrato/data/benefícios, segue pendente.
+    // A observação não maquia pendência: sem salário/centro de custo/setor/gestor, segue pendente.
     expect(u.sinalizadorPreenchimento).not.toBe("OK");
   });
 

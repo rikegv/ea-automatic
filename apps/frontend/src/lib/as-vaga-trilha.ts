@@ -20,11 +20,10 @@
  * pelo diretor em 07/09), e é por isso que a trilha NUNCA pode discordar do cilindro da tabela.
  * Recalcular aqui criaria a segunda conta, que é como duas telas passam a dizer números diferentes.
  *
- * "ENVIADA PARA ADMISSÃO" É UMA INTENÇÃO DECLARADA, E A FRASE DIZ ISSO. O EA não sabe se a admissão
- * nasceu: a ponte com a esteira (`as_candidaturas.admissao_id`) está dormente. O rótulo registra o
- * que foi escolhido no fechamento e a frase de apoio avisa que confirmação não existe ainda, em vez
- * de fingir um fato. No dia da ponte, o estado passa a ser derivável de verdade e melhora sem
- * quebrar.
+ * "ENVIADA PARA ADMISSÃO" REGISTRA O ENCAMINHAMENTO DA VAGA PARA A ADMISSÃO. A ponte A&S para a
+ * admissão foi construída e está viva; o candidato recebe o link quando a admissão revisar a vaga e
+ * preencher as informações obrigatórias. O rótulo registra o que foi escolhido no fechamento e a
+ * frase de apoio explica o próximo passo, sem afirmar que o link já saiu.
  *
  * §A.11 (sem travessão), §A.24 (title case nos rótulos, que são TAG; as frases são texto de apoio e
  * seguem escrita normal).
@@ -217,11 +216,11 @@ function fraseDoDesfecho(v: VagaTrilha, estado: TrilhaDesfecho): string {
       return "A vaga ainda não foi encerrada, então ela não tem desfecho registrado.";
     case "ENVIADA_PARA_ADMISSAO":
       /*
-       * A RESSALVA É OBRIGATÓRIA, e não é excesso de zelo. Este estado é a INTENÇÃO registrada no
-       * fechamento, e não a confirmação de que a admissão nasceu: o EA não tem como saber disso
-       * hoje. Sem a frase, a tela afirmaria um fato que ela não mediu.
+       * A FRASE EXPLICA O PRÓXIMO PASSO, sem afirmar que o link já saiu. A ponte A&S para a admissão
+       * está viva; o candidato recebe o link quando a admissão revisar a vaga e preencher as
+       * informações obrigatórias.
        */
-      return "Intenção registrada no fechamento. O EA ainda não confirma a admissão: a ponte com a esteira admissional é frente separada.";
+      return "A vaga está sendo encaminhada para admissão. O candidato recebe o link assim que a admissão revisar a vaga e preencher as informações obrigatórias.";
     case "FINALIZADA_NA_AS":
       return `Encerrada na Atração e Seleção, com ${posicoes(preenchidas(v, "oficial"))} ${preenchidasTexto(preenchidas(v, "oficial"))}, sem envio para admissão.`;
     case "FECHADA_SEM_ENTREGA":

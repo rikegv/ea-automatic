@@ -5,7 +5,9 @@ import {
   HttpException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
+  Optional,
 } from "@nestjs/common";
 import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
@@ -77,6 +79,8 @@ type DbTransaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
  */
 import { gravarSaidaDaCandidatura } from "./encerrar-candidatura";
 import { EtapasFunilService } from "../etapas/etapas-funil.service";
+import { PortalEnvioService } from "../../portal/portal-envio.service";
+import { AdmissoesService, type PreAdmissaoDoFunilInput } from "../../admissoes/admissoes.service";
 import { VagaStatusService } from "../vaga-status/vaga-status.service";
 import type { AuthUser } from "../../auth/auth.types";
 import type {
@@ -159,6 +163,15 @@ export class CandidatosService {
    * catálogo em DOIS pontos, e os dois eram silenciosos antes: a etapa em que a candidatura NASCE
    * (que era o `DEFAULT` da coluna) e a validação da etapa de DESTINO (que era um `@IsIn` estático).
    */
+  /**
+   * O PRIMEIRO `Logger` DESTE ARQUIVO, e ele nasce com uma régua: §A.6, nada de nome, e-mail, CPF
+   * nem id de pessoa nas mensagens. O que ele registra são CÓDIGOS de catálogo e nomes de classe
+   * de erro, que é o mesmo limite que `portal-correio.service.ts` e `portal-emissor.service.ts`
+   * já cumprem. Ele existe porque os dois ganchos do Portal ABSORVEM falha de propósito, e falha
+   * absorvida sem registro é falha que ninguém descobre.
+   */
+  private readonly log = new Logger(CandidatosService.name);
+
   constructor(
     @Inject(DRIZZLE) private readonly db: Database,
     private readonly etapas: EtapasFunilService,
@@ -176,6 +189,33 @@ export class CandidatosService {
      * └─────────────────────────────────────────────────────────────────────────────────────────┘
      */
     private readonly statusVaga: VagaStatusService,
+    /**
+     * O ENVIO DO LINK DO PORTAL, e ele é a ÚNICA porta deste arquivo para uma frente da Admissão.
+     *
+     * ┌─ POR QUE UM SERVIÇO INTEIRO, E NÃO UM `update` daqui ───────────────────────────────────┐
+     * │ Quem escreve em `portal_links` é UM arquivo só (`portal-identidade.service.ts`), e é     │
+     * │ essa unicidade que torna auditável a régua do que pode ser gravado sobre um link. Este   │
+     * │ arquivo sabe o funil, não sabe (e não deve saber) o que é um link vivo, o que é o prazo  │
+     * │ de 72 horas nem o que pode ir para dentro de um e-mail.                                  │
+     * └──────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * ELE É INERTE HOJE: `as_candidaturas.admissao_id` ainda nasce nula, então o envio devolve
+     * `SEM_ADMISSAO` e não faz nada. Liga sozinho no dia da ponte A&S para Esteira.
+     */
+    private readonly envioDoPortal: PortalEnvioService,
+    /**
+     * A PONTE A&S → ESTEIRA. É a ÚNICA porta deste arquivo para o NÚCLEO da Admissão, usada só no ramo
+     * `ENVIADO_PARA_ADMISSAO` de `registrarSaida`: nascer a pré-admissão (AGUARDANDO_LIBERACAO) e
+     * computar a duplicidade viva por CPF. Não lê tabela da Admissão daqui, nem escreve nela por fora
+     * deste serviço: quem grava é o `AdmissoesService`, do outro lado da porta.
+     *
+     * `@Optional()` pelo MESMO motivo do `pandapeQueue`/`reguaCompletude` do próprio `AdmissoesService`:
+     * as ~14 specs deste módulo constroem `new CandidatosService(db, etapas, statusVaga, envioDoPortal)`
+     * com quatro argumentos, e um quinto obrigatório quebraria todas de uma vez. Em PRODUÇÃO o
+     * `AsModule` importa o `AdmissoesModule`, então ele está SEMPRE presente; ausente só em teste que
+     * não exercita a ponte (o teste que a exercita passa um dublê no quinto argumento).
+     */
+    @Optional() private readonly admissoes?: AdmissoesService,
   ) {}
 
   // ── A PESSOA ──────────────────────────────────────────────────────────────
@@ -1190,6 +1230,29 @@ export class CandidatosService {
     const porId = user.id;
 
     if (ocupaPosicao(dto.situacao)) {
+      /*
+       * ┌─ A PONTE A&S → ESTEIRA, PASSO 1: O GESTO DE ENVIAR EXIGE CPF VÁLIDO ────────────────────┐
+       * │ A pré-admissão nasce pela CHAVE DE IDENTIDADE do candidato (o CPF, §A.3), e a régua de   │
+       * │ CPF da liberação (`travarDuplicidadeDeCpf`, `uq_admissao_cpf_vaga_viva`) se apoia nela.  │
+       * │ Sem CPF válido, enviar criaria uma admissão sem sobre o que essas travas raciocinarem.   │
+       * │                                                                                         │
+       * │ TRAVA SÓ O GESTO DE ENVIO, e não o funil: candidato entra e anda no funil sem CPF        │
+       * │ (o cadastro o faz opcional, de propósito). É AQUI, no avanço para a esteira, que o dado  │
+       * │ passa a ser exigido, porque é aqui que ele começa a ser necessário.                      │
+       * │                                                                                         │
+       * │ FAIL-CLOSED, mensagem própria, e §A.6: o CPF NÃO entra na frase de erro nem em log algum │
+       * │ (este ramo já loga só o código do motivo). A validação roda ANTES de consumir a posição:│
+       * │ recusar depois deixaria a posição consumida sem admissão do outro lado.                  │
+       * └─────────────────────────────────────────────────────────────────────────────────────────┘
+       */
+      const ponte = await this.dadosDaPonteParaAdmissao(candidaturaId);
+      const cpf = normalizeCpf(ponte?.candidato.cpf ?? "");
+      if (!isValidCpf(cpf)) {
+        throw new BadRequestException(
+          "Este candidato não tem CPF válido. Preencha o CPF antes de enviar para admissão.",
+        );
+      }
+
       await this.mudarSituacaoOcupandoPosicao(
         candidaturaId,
         dto.situacao,
@@ -1215,6 +1278,87 @@ export class CandidatosService {
          */
         { exigeCandidaturaViva: true },
       );
+
+      /*
+       * ┌─ A PONTE A&S → ESTEIRA, PASSO 2: NASCE A PRÉ-ADMISSÃO E A CANDIDATURA APONTA PARA ELA ──┐
+       * │ A posição já foi consumida (o fato); a ponte é EFEITO, e mora FORA da transação da       │
+       * │ posição pelo mesmo motivo do envio do link logo abaixo: uma falha aqui não desfaz uma    │
+       * │ saída consumada. A pré-admissão nasce em AGUARDANDO_LIBERACAO (nunca `create`), então as  │
+       * │ frentes/régua e o dedup de CPF por vínculo ficam para o `aplicarLiberacao`, onde já moram.│
+       * │                                                                                          │
+       * │ IDEMPOTÊNCIA: `criarPreAdmissaoDoFunil` captura o unique parcial `uq_admissao_cpf_vaga_   │
+       * │ viva` e devolve a admissão viva existente do par (CPF + idVacancy). O `admissao_id` é     │
+       * │ regravado com esse id, então repetir não duplica nem deixa a candidatura sem ponte.       │
+       * │                                                                                          │
+       * │ `possivelDuplicata` é conta AO VIVO (mesmo critério do Pandapé): já há admissão viva do   │
+       * │ CPF cujo par de vaga não dá para casar com segurança. NÃO bloqueia, só sinaliza na tela.  │
+       * │                                                                                          │
+       * │ EM PRODUÇÃO `this.admissoes` está SEMPRE presente (o `AsModule` importa o `AdmissoesModule`│
+       * │ ); o guard existe só para o teste que constrói o serviço sem a ponte (ver o construtor).  │
+       * └──────────────────────────────────────────────────────────────────────────────────────────┘
+       */
+      if (this.admissoes && ponte) {
+        const vivas = await this.admissoes.vivasPorCpf(cpf);
+        const possivelDuplicata =
+          vivas.length > 0 && (!ponte.idVacancy || vivas.some((v) => !v.idVacancy));
+        const { admissaoId } = await this.admissoes.criarPreAdmissaoDoFunil({
+          candidato: {
+            cpf,
+            nome: ponte.candidato.nome,
+            email: ponte.candidato.email,
+            telefone: ponte.candidato.telefone,
+            dataNascimento: ponte.candidato.dataNascimento,
+          },
+          codCliente: ponte.codCliente,
+          cargoId: ponte.cargoId,
+          idVacancy: ponte.idVacancy,
+          vagaFolha: ponte.vagaFolha,
+          possivelDuplicata,
+        });
+        // A ÚNICA escrita de `as_candidaturas.admissao_id` no sistema: a ponte. Fora da transação da
+        // posição de propósito (o comentário acima). §A.6: só o id técnico da admissão.
+        await this.db
+          .update(asCandidaturas)
+          .set({ admissaoId, atualizadoEm: new Date() })
+          .where(eq(asCandidaturas.id, candidaturaId));
+      }
+
+      /*
+       * ┌─ O GANCHO DO CAMINHO 1: A SAÍDA ACONTECEU, AGORA O CANDIDATO É AVISADO ─────────────────┐
+       * │ ELE MORA AQUI, E NÃO DENTRO DE `mudarSituacaoOcupandoPosicao`, e a diferença é tudo:   │
+       * │ aquele método também é chamado por `aprovar` e por `alocar`. Pendurado lá, o e-mail com │
+       * │ a credencial de acesso ao prontuário sairia na APROVAÇÃO e na ALOCAÇÃO, que são gestos │
+       * │ internos do funil em que ninguém decidiu chamar a pessoa para nada.                     │
+       * │                                                                                        │
+       * │ FALHA DE ENVIO NÃO DERRUBA A SAÍDA, e esta é a mesma lição da notificação do Clicksign │
+       * │ (§A.5): a SAÍDA é o fato (a pessoa avançou, a posição foi consumida, a trilha foi       │
+       * │ gravada), o envio é o AVISO. Lançar aqui desfaria um fato consumado por causa de um     │
+       * │ e-mail, e na retentativa a saída seria recusada (a candidatura já não está mais viva),  │
+       * │ deixando a operação presa sem caminho de volta.                                         │
+       * │                                                                                        │
+       * │ O SERVIÇO DE ENVIO JÁ NÃO LANÇA por recusa (e-mail vazio, canal apagado, falha do       │
+       * │ correio): tudo isso volta como `enviado: false` com código. O `catch` é para o          │
+       * │ inesperado, e a razão de ele existir é que o custo de errar é assimétrico.              │
+       * │                                                                                        │
+       * │ HOJE ISTO NÃO DISPARA NADA: sem `admissao_id` na candidatura, o envio devolve           │
+       * │ `SEM_ADMISSAO` sem emitir link nenhum.                                                  │
+       * └────────────────────────────────────────────────────────────────────────────────────────┘
+       *
+       * §A.6: o desfecho NÃO é logado com nome, e-mail nem id de pessoa. O que se registra é o
+       * código do motivo, que é rótulo de catálogo fechado, e nada mais. A rota devolve a
+       * candidatura como sempre devolveu.
+       */
+      try {
+        const [desfecho] = await this.envioDoPortal
+          .enviarParaCandidaturas([candidaturaId], porId)
+          .then((r) => r.recusados);
+        if (desfecho?.motivo) {
+          this.log.warn(`envio do link do portal nao saiu na saida para admissao: ${desfecho.motivo}`);
+        }
+      } catch (erro) {
+        this.log.error(`falha inesperada ao enviar o link do portal: ${(erro as Error).name}`);
+      }
+
       return this.candidatura(candidaturaId);
     }
 
@@ -1367,6 +1511,12 @@ export class CandidatosService {
    */
   async reverterEnvioParaAdmissao(candidaturaId: string, porId: string): Promise<AsCandidaturaItem> {
     /*
+     * A ADMISSÃO LIGADA À CANDIDATURA, LIDA DENTRO DA TRANSAÇÃO e usada DEPOIS dela. Lê-la de novo
+     * lá fora responderia sobre um instante posterior ao da reversão, e a linha pode ter andado.
+     */
+    let admissaoDoEnvio: string | null = null;
+
+    /*
      * A LEITURA QUE DECIDE MORA DENTRO DA TRANSAÇÃO, junto da gravação que ela autoriza. É o que o
      * caminho travado já faz, e custa a mesma ida ao banco: decidir fora e gravar dentro responde
      * sobre um instante anterior ao da escrita.
@@ -1501,7 +1651,45 @@ export class CandidatosService {
         motivo: null,
         porId,
       });
+
+      admissaoDoEnvio = c.admissaoId ?? null;
     });
+
+    /*
+     * ┌─ DESFEZ O ENVIO, O LINK MORRE JUNTO (decisão 4 do diretor nesta frente) ─────────────────┐
+     * │ A pessoa VOLTOU PARA A SELEÇÃO. Deixar vivo o link que o envio gerou manteria o           │
+     * │ prontuário dela aberto para coleta de documento de uma admissão que não está mais            │
+     * │ acontecendo, e o candidato continuaria recebendo tela de "envie seus documentos" depois de │
+     * │ o processo ter sido desfeito. Pior: o próximo envio EMITIRIA outro link, e o primeiro       │
+     * │ continuaria valendo por até 72 horas, porque só a emissão da MESMA admissão revoga.         │
+     * │                                                                                            │
+     * │ ESTE CAMINHO NÃO PASSA POR `registrarSaida`: `reverterEnvioParaAdmissao` é `update`         │
+     * │ próprio, e foi por isso que a auditoria o apontou em separado. Sem esta chamada, a          │
+     * │ revogação valeria só pela porta que ninguém usa para desfazer.                              │
+     * │                                                                                            │
+     * │ FORA DA TRANSAÇÃO, E DEPOIS DELA, de propósito: a reversão é o fato e não pode ser         │
+     * │ desfeita por uma falha ao revogar o link (mesma assimetria do gancho do envio). E a         │
+     * │ revogação escreve em OUTRA tabela, por outro serviço, com o handle de conexão dele: metê-la │
+     * │ dentro desta transação exigiria passar a `tx` para fora do módulo, que é o começo de o      │
+     * │ A&S segurar lock em tabela da Admissão.                                                     │
+     * │                                                                                            │
+     * │ CÓDIGO PRÓPRIO NA TRILHA (`ENVIO_REVERTIDO`): não foi revogação manual (ninguém clicou em  │
+     * │ revogar link) nem substituição (nenhum link novo nasceu). Contá-la como manual inflaria o  │
+     * │ número que a Sala De Segurança lê como incidente.                                           │
+     * └────────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * IDEMPOTENTE DE GRAÇA: `revogarLinksDaAdmissao` só toca link ainda não revogado, então
+     * reverter duas vezes não move carimbo nem grava evento repetido. Sem admissão ligada (o caso
+     * de hoje, enquanto a ponte não existe) não há o que revogar e nada é feito.
+     */
+    if (admissaoDoEnvio) {
+      try {
+        await this.envioDoPortal.revogarLinksDaReversao(admissaoDoEnvio, porId);
+      } catch (erro) {
+        // §A.6: só o nome da classe do erro. A reversão já aconteceu e não volta atrás.
+        this.log.error(`falha ao revogar o link do portal apos reverter o envio: ${(erro as Error).name}`);
+      }
+    }
 
     return this.candidatura(candidaturaId);
   }
@@ -1756,6 +1944,86 @@ export class CandidatosService {
         "Esta candidatura não é da vaga selecionada. Recarregue a página e refaça a seleção.",
       );
     }
+  }
+
+  /**
+   * O SNAPSHOT DA PONTE A&S → ESTEIRA: candidato + vaga da candidatura, no formato que
+   * `AdmissoesService.criarPreAdmissaoDoFunil` consome. Leitura pura, usada só no ramo
+   * `ENVIADO_PARA_ADMISSAO` de `registrarSaida`.
+   *
+   * O MAPEAMENTO vaga → folha é conservador: só o que a vaga SABE. Salário é o de fechamento (o
+   * negociado) com o de abertura como recurso; escala vem do horário/escala; cliente e cargo podem vir
+   * NULOS (vaga sem de/para resolvido, §A.5), e nesse caso viram pendência na Liberação, nunca um
+   * `cod_cliente` inventado. Setor, gestor BP e departamento a vaga não tem: chegam vazios e viram
+   * pendência (regra 5). §A.6: nenhum CPF é logado; o CPF do substituído segue só como valor a gravar.
+   */
+  private async dadosDaPonteParaAdmissao(candidaturaId: string): Promise<
+    | {
+        candidato: {
+          cpf: string | null;
+          nome: string;
+          email: string | null;
+          telefone: string | null;
+          dataNascimento: string | null;
+        };
+        codCliente: string | null;
+        cargoId: string | null;
+        idVacancy: string | null;
+        vagaFolha: PreAdmissaoDoFunilInput["vagaFolha"];
+      }
+    | null
+  > {
+    const [linha] = await this.db
+      .select({
+        candCpf: asCandidatos.cpf,
+        candNome: asCandidatos.nome,
+        candEmail: asCandidatos.email,
+        candTelefone: asCandidatos.telefone,
+        candNascimento: asCandidatos.dataNascimento,
+        codCliente: vagas.codCliente,
+        cargoId: vagas.cargoId,
+        idVacancy: vagas.idVacancyPandape,
+        salarioAbertura: vagas.salarioAbertura,
+        salarioFechamento: vagas.salarioFechamento,
+        horarioEscala: vagas.horarioEscala,
+        centroCusto: vagas.centroCusto,
+        tempoContrato: vagas.tempoContrato,
+        motivo: vagas.motivo,
+        substituidoNome: vagas.substituidoNome,
+        substituidoCpf: vagas.substituidoCpf,
+        localTrabalho: vagas.localTrabalho,
+      })
+      .from(asCandidaturas)
+      .innerJoin(asCandidatos, eq(asCandidaturas.candidatoId, asCandidatos.id))
+      .innerJoin(vagas, eq(asCandidaturas.vagaId, vagas.id))
+      .where(eq(asCandidaturas.id, candidaturaId));
+    if (!linha) return null;
+
+    return {
+      candidato: {
+        cpf: linha.candCpf,
+        nome: linha.candNome,
+        email: linha.candEmail,
+        telefone: linha.candTelefone,
+        dataNascimento: linha.candNascimento,
+      },
+      codCliente: linha.codCliente,
+      cargoId: linha.cargoId,
+      idVacancy: linha.idVacancy,
+      vagaFolha: {
+        salario: linha.salarioFechamento ?? linha.salarioAbertura,
+        escala: linha.horarioEscala,
+        centroCusto: linha.centroCusto,
+        setor: null,
+        gestorBp: null,
+        departamento: null,
+        tempoContrato: linha.tempoContrato,
+        motivo: linha.motivo,
+        substituidoNome: linha.substituidoNome,
+        substituidoCpf: linha.substituidoCpf,
+        endereco: linha.localTrabalho,
+      },
+    };
   }
 
   /**

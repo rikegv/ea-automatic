@@ -1615,6 +1615,17 @@ export default function CentralDeVagasPage() {
       // alguma coisa em cada um dos cinco filtros.
       if (setClientes.size && !(v.codCliente && setClientes.has(v.codCliente))) return false;
       if (setCargos.size && !(v.cargoId && setCargos.has(v.cargoId))) return false;
+      /*
+       * ─ ESCOPO PADRÃO (item 5): A VISÃO DE TRABALHO MOSTRA SÓ VAGA VIVA ───────────────────────
+       *
+       * Sem filtro de status escolhido, a vaga ENCERRADA (finalizada ou cancelada) SAI da visão
+       * padrão: a frente de trabalho é onde ainda há o que fazer. Ela volta quando o status é
+       * escolhido no filtro, que é o caminho explícito para o histórico ("aparece só quando
+       * filtrada pelo status"). Com status escolhido, a régua abaixo já resolve exatamente o que
+       * mostrar, encerrada incluída, e os cards contam esse mesmo recorte, então card e tabela nunca
+       * discordam.
+       */
+      if (setStatus.size === 0 && vagaEncerrada(v.status, catalogoStatus)) return false;
       if (setStatus.size && !setStatus.has(v.status)) return false;
       if (setVinculos.size && !(v.vinculo && setVinculos.has(v.vinculo))) return false;
       // O consultor casa por ID; a vaga sem consultor responde pelo sentinela, para "sem responsável"

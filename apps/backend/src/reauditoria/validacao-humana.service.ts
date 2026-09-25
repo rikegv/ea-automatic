@@ -38,6 +38,17 @@ export class ValidacaoHumanaService {
   /**
    * Marca o documento como ENTREGUE por decisão humana. Idempotente: validar de novo só reafirma a
    * marca (e atualiza quem/quando). Devolve o progresso da régua para a tela atualizar a barra.
+   *
+   * SEM A GUARDA `podeReabrirDocumento`, e isso é medido, não esquecimento (frente da reabertura de
+   * documento). A guarda existe para impedir que um documento saia de aprovado com o contrato já em
+   * assinatura. Esta porta NUNCA escreve para trás: o único estado que ela grava é `ENTREGUE`, que
+   * COMPLETA a régua, nunca a des-completa. Pôr a guarda aqui bloquearia o consultor de destravar um
+   * documento numa admissão que está exatamente onde ele precisa destravar. Se algum dia esta porta
+   * ganhar um "desvalidar", ela passa a ser a quarta porta de reabertura e a guarda vem junto.
+   *
+   * O PÓS-VEREDITO daqui pode, ainda assim, DISPARAR O RECUO, e o caso é legítimo: a admissão já
+   * estava no estado inconsistente "AUDITORIA concluída com régua incompleta" (alcançável em
+   * produção antes desta frente), e o recuo o conserta na primeira ação seguinte.
    */
   async validar(admissaoId: string, tipoDocumentoId: string, user: AuthUser) {
     const tipo = await this.db.query.tiposDocumento.findFirst({

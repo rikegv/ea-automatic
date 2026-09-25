@@ -42,6 +42,17 @@ function makeDb(estadoAtual: string | undefined, idPrecollaborator?: string) {
       integracaoPandape: {
         findFirst: vi.fn(async () => (idPrecollaborator ? { idPrecollaborator } : undefined)),
       },
+      // Admissão SEM contrato vivo: a guarda de reabertura (frente da reabertura de documento)
+      // libera, e estas asserções seguem falando do que sempre falaram. A recusa da guarda tem
+      // suíte própria em `reabertura-documento.portas.spec.ts`.
+      admissoes: {
+        findFirst: vi.fn(async () => ({
+          id: "adm-1",
+          clicksignStatus: "SEM_ENVELOPE",
+          kitAssinaturaPath: null,
+          kitAssinaturaEm: null,
+        })),
+      },
     },
     insert: vi.fn(() => ({
       values: async (v: Record<string, unknown>) => {

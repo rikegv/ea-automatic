@@ -13,6 +13,7 @@ import base64
 import json
 import logging
 import os
+import uuid
 from datetime import datetime, timezone
 
 from firebase_functions import https_fn, options
@@ -201,9 +202,14 @@ def _bucket_name():
     return nome
 
 
-def _nome_objeto(nome, cpf):
-    # Nome do objeto EXATO: NOME EM MAIUSCULAS + um espaco + CPF de 11 digitos (sem mascara).
-    return f"{nome.upper()} {cpf}.pdf"
+def _nome_objeto(uid):
+    """Nome do objeto OPACO: <uuid>.pdf, ZERO dado pessoal.
+
+    O nome do objeto entra no LOG DE ACESSO do Google (fora do EA e fora da §A.6), entao NAO carrega
+    CPF nem nome. Antes era `NOME CPF.pdf`, e o CPF cru vazava por esse log. A identificacao de quem
+    e o arquivo (admissaoId) viaja DENTRO do JSON irmao, que nao aparece no log de path.
+    """
+    return f"{uid}.pdf"
 
 
 def _agora_iso():
@@ -211,12 +217,14 @@ def _agora_iso():
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _nome_objeto_json(nome, cpf):
-    """JSON IRMAO do PDF: mesmo nome, extensao trocada. O EA deriva este nome do lado dele."""
-    return f"{nome.upper()} {cpf}.json"
+def _nome_objeto_json(uid):
+    """JSON IRMAO do PDF: o MESMO uid, extensao .json. O par PDF+JSON compartilha a raiz do nome,
+    senao o sidecar deixa de casar com o PDF. Gere o uid UMA vez por submissao e passe aos dois.
+    """
+    return f"{uid}.json"
 
 
-def _sidecar(dados, doc, ciente_em):
+def _sidecar(dados, doc, ciente_em, admissao_id):
     """Campos ESTRUTURADOS que viajam junto do PDF, para o EA somar na tela de Beneficios.
 
     POR QUE PELO BUCKET, e nao por uma chamada ao EA: esta funcao roda no Firebase e o EA e loopback
@@ -226,12 +234,15 @@ def _sidecar(dados, doc, ciente_em):
     OS VALORES DE ENUM SAO OS DO BANCO DO EA (IDA/VOLTA, BILHETE_UNICO/CARTAO_TOP/OUTRO), de
     proposito: sem traducao no caminho nao ha um segundo lugar onde a lista pode divergir.
 
-    NENHUM DADO DE IDENTIFICACAO AQUI. Nada de nome, CPF ou data de nascimento: o EA ja sabe de quem
-    e o arquivo pelo CPF no NOME do objeto, e repetir isso dentro do JSON so espalharia dado pessoal
-    por mais um lugar sem necessidade.
+    O UNICO handle de identificacao e o `admissaoId` (o `sub` do token do link, id INTERNO do EA).
+    NAO ha CPF, nome nem data de nascimento aqui: agora que o nome do objeto e opaco, o EA casa o
+    arquivo pelo admissaoId lido DAQUI, e esse id nao e dado pessoal (nao identifica a pessoa por si).
+    O CPF em claro num JSON seria primitivo de exfiltracao em massa (parse trivial); o admissaoId nao.
     """
     return {
         "versao": 1,
+        # Handle de casamento do EA (§A.6: id interno, sem PII; NUNCA logado ao lado de nome).
+        "admissaoId": admissao_id,
         "optante": dados["optante"],
         "cep": dados["cep"],
         "logradouro": dados["logradouro"],
@@ -265,16 +276,17 @@ def _sidecar(dados, doc, ciente_em):
     }
 
 
-def _enviar_json_ao_bucket(nome, cpf, conteudo):
-    """Sobe o JSON irmao. FALHA AQUI NAO DERRUBA O ENVIO: o PDF ja subiu, e o formulario do candidato
-    esta entregue. Sem o JSON o EA arquiva o PDF do mesmo jeito e a tela so nao soma os valores.
+def _enviar_json_ao_bucket(uid, conteudo):
+    """Sobe o JSON irmao com o MESMO uid do PDF. FALHA AQUI NAO DERRUBA O ENVIO: o PDF ja subiu, e o
+    formulario do candidato esta entregue. Sem o JSON o EA nao acha o admissaoId do arquivo novo, mas
+    o PDF fica arquivado no bucket e a tela so nao soma os valores.
     """
     # Import LOCAL, igual ao do envio do PDF: mantem o cold start da funcao leve, porque a rota so
     # toca o Storage no fim do fluxo.
     from google.cloud import storage
 
     client = storage.Client()
-    blob = client.bucket(_bucket_name()).blob(_nome_objeto_json(nome, cpf))
+    blob = client.bucket(_bucket_name()).blob(_nome_objeto_json(uid))
     blob.upload_from_string(
         json.dumps(conteudo, ensure_ascii=False).encode("utf-8"),
         content_type="application/json",
@@ -282,14 +294,14 @@ def _enviar_json_ao_bucket(nome, cpf, conteudo):
     return blob.name
 
 
-def _enviar_ao_bucket(nome, cpf, pdf_bytes):
+def _enviar_ao_bucket(uid, pdf_bytes):
     from google.cloud import storage
 
     # Application Default Credentials = a service account de runtime da funcao. Ela escreve no
-    # bucket do PROPRIO projeto (storage nativo), sem chave JSON no repositorio.
+    # bucket do PROPRIO projeto (storage nativo), sem chave JSON no repositorio. Nome OPACO (uid).
     client = storage.Client()
     bucket = client.bucket(_bucket_name())
-    blob = bucket.blob(_nome_objeto(nome, cpf))
+    blob = bucket.blob(_nome_objeto(uid))
     blob.upload_from_string(pdf_bytes, content_type="application/pdf")
     return blob.name
 
@@ -360,19 +372,22 @@ def enviarVt(req: https_fn.Request) -> https_fn.Response:
     except Exception:
         return _json(500, {"ok": False, "erro": "nao foi possivel gerar o documento"})
 
-    # 5) Arquivamento no bucket coletivo do GCS (ADC).
+    # 5) Arquivamento no bucket coletivo do GCS (ADC). Nome OPACO (uid), gerado UMA vez e compartilhado
+    #    pelo PDF e pelo JSON irmao: o CPF saiu do nome do objeto (que ia ao log de acesso do Google) e
+    #    a identificacao passa a viajar DENTRO do JSON, no campo admissaoId (§A.6).
+    uid = uuid.uuid4().hex
     try:
-        objeto = _enviar_ao_bucket(claims["nome"], claims["cpf"], pdf_bytes)
+        objeto = _enviar_ao_bucket(uid, pdf_bytes)
     except RuntimeError:
         return _json(503, {"ok": False, "erro": "arquivamento nao configurado, procure o RH"})
     except Exception:
         return _json(502, {"ok": False, "erro": "nao foi possivel arquivar o documento agora"})
 
-    # 6) JSON irmao com os campos estruturados. DEPOIS do PDF e num try proprio: o PDF e a entrega
-    #    que nao pode falhar, e o JSON e o que permite a tela somar. Um sem o outro e melhor que
-    #    nenhum dos dois.
+    # 6) JSON irmao com os campos estruturados e o admissaoId (o `sub` do token). MESMO uid do PDF.
+    #    DEPOIS do PDF e num try proprio: o PDF e a entrega que nao pode falhar, e o JSON e o que
+    #    permite a tela somar e o EA casar o arquivo novo. Um sem o outro e melhor que nenhum dos dois.
     try:
-        _enviar_json_ao_bucket(claims["nome"], claims["cpf"], _sidecar(dados, doc, _agora_iso()))
+        _enviar_json_ao_bucket(uid, _sidecar(dados, doc, _agora_iso(), claims["sub"]))
     except Exception:  # noqa: BLE001
         logging.warning("JSON irmao do formulario nao subiu; o PDF foi arquivado normalmente.")
 

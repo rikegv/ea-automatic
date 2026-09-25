@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { GiModule } from "../gi/gi.module";
 import { PandapeArquivosModule } from "../pandape/pandape-arquivos.module";
 import { ReguaModule } from "../regua/regua.module";
 import { StagingModule } from "../staging/staging.module";
@@ -13,7 +14,9 @@ import { AuditoriaService } from "./auditoria.service";
  * `PandapeModule` inteiro fecharia ciclo: ele já importa este módulo aqui.
  */
 @Module({
-  imports: [ReguaModule, StagingModule, PandapeArquivosModule],
+  // `GiModule` entra pelo GATILHO da peça 3 (INERTE): ao fechar a régua obrigatória, a Auditoria
+  // chama `EnviarParaGiService.enviar` (no-op sem GI configurado). O módulo exporta só esse serviço.
+  imports: [ReguaModule, StagingModule, PandapeArquivosModule, GiModule],
   controllers: [AuditoriaController],
   providers: [AuditoriaService],
   // Exporta o service para o pull de docs do Pandapé (Fase 5) reusar a F2 incremental.

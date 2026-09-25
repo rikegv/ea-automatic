@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   HttpException,
   Inject,
   Injectable,
@@ -59,6 +60,7 @@ import {
 import {
   clienteLojas,
   admissaoBeneficio,
+  asCandidaturas,
   admissaoIfractal,
   admissaoProjeto,
   admissoes,
@@ -82,6 +84,7 @@ import {
   frentesAdmissao,
   gruposCliente,
   integracaoPandape,
+  liberacaoOverrideAceites,
   motivosDeclinio,
   reguaDocumental,
   usuarios,
@@ -109,6 +112,11 @@ import {
   vinculosDoCliente,
 } from "../regua/vinculo.repo";
 import { exigeEscolhaDeVinculo } from "../domain/vinculo";
+import {
+  obrigatoriosFaltantesParaLiberar,
+  rotulosDosFaltantes,
+  type ChaveObrigatorioLiberar,
+} from "../domain/liberacao-obrigatorios";
 import { avisoDivergenciaBancaria, divergenciasReconhecidas } from "../domain/cadastro-bancario";
 import type { AuthUser } from "../auth/auth.types";
 import type { CandidatoInputDto, CreateAdmissaoDto } from "./dto/create-admissao.dto";
@@ -307,6 +315,46 @@ export interface CreateAdmissaoOpts {
   origem?: "MANUAL" | "PANDAPE";
   bypassAceite?: boolean;
   pandape?: { idPrecollaborator: string; idMatch?: string; idVacancy?: string; etapa?: string };
+}
+
+/**
+ * Entrada da PONTE A&S → Esteira (`criarPreAdmissaoDoFunil`). É o SNAPSHOT da vaga + candidato
+ * montado pelo funil no instante do envio para admissão; os campos de folha que a vaga não conhece
+ * chegam vazios e viram pendência na Liberação (§A.19), nunca bloqueio (regra 5).
+ */
+export interface PreAdmissaoDoFunilInput {
+  candidato: {
+    cpf: string;
+    nome: string;
+    email?: string | null;
+    telefone?: string | null;
+    dataNascimento?: string | null;
+  };
+  /**
+   * NULÁVEIS de propósito: a vaga do A&S pode não ter cliente resolvido (só 31 de 164 casaram) e o
+   * de/para é manual (§A.5). Enviar não pode inventar `cod_cliente`: o que não resolve entra na
+   * Liberação como pendência (regra 5, não-bloqueio), nunca inventado.
+   */
+  codCliente: string | null;
+  cargoId: string | null;
+  /** `IdVacancy` do Pandapé, quando a vaga do A&S o tem: alimenta o unique parcial (risco a). */
+  idVacancy?: string | null;
+  vagaFolha: {
+    salario?: string | null;
+    escala?: string | null;
+    centroCusto?: string | null;
+    setor?: string | null;
+    gestorBp?: string | null;
+    departamento?: string | null;
+    tempoContrato?: string | null;
+    motivo?: string | null;
+    substituidoNome?: string | null;
+    /** §A.6: gravado com TTL de 48h do lado da admissão, nunca perpetuado nem logado. */
+    substituidoCpf?: string | null;
+    endereco?: string | null;
+  };
+  pacoteBeneficios?: { beneficioId: string; valor?: number }[];
+  possivelDuplicata?: boolean;
 }
 
 /**
@@ -781,6 +829,129 @@ export class AdmissoesService {
   }
 
   /**
+   * PRÉ-ADMISSÃO VINDA DO FUNIL A&S (a PONTE Central de Candidatos → Esteira). O candidato
+   * ENVIADO_PARA_ADMISSAO nasce como pré-admissão em `AGUARDANDO_LIBERACAO`, JÁ com cliente + cargo +
+   * dados de vaga/folha pré-preenchidos, e entra na Liberação Admissional. As frentes, a régua e os
+   * documentos NÃO nascem aqui: nascem depois, em `aplicarLiberacao`, que JÁ lê a régua-por-vínculo e
+   * JÁ chama `travarDuplicidadeDeCpf`. É por isso que a ponte usa PRÉ-ADMISSÃO e nunca `create`:
+   * `create` nasce EM_ADMISSAO e pularia esses dois gates (dedup de CPF e régua-por-vínculo).
+   *
+   * NÃO reusa `criarPreAdmissao`: aquela exige `pandape.idPrecollaborator` e insere
+   * `integracao_pandape`. Esta é a origem A&S, sem nada de Pandapé, com cliente/cargo/folha já sabidos.
+   *
+   * IDEMPOTÊNCIA: captura a violação do unique parcial `uq_admissao_cpf_vaga_viva` (23505) e devolve a
+   * admissão viva já existente do par (CPF + idVacancy) com `jaExistia: true`, em vez de duplicar. Só
+   * dispara quando há `idVacancy` (o unique é parcial em `id_vacancy IS NOT NULL`).
+   *
+   * §A.6: valida o dígito do CPF na primeira linha; o CPF do substituído (retenção legal SEM TTL do
+   * lado da VAGA) NUNCA é copiado como valor perpétuo aqui: grava-se em `dados_vaga_folha` com o TTL de
+   * 48h (regra 10 da §A.3), do lado da ADMISSÃO, igual ao `create`. Nenhum CPF é logado.
+   */
+  async criarPreAdmissaoDoFunil(
+    input: PreAdmissaoDoFunilInput,
+  ): Promise<{ admissaoId: string; jaExistia: boolean }> {
+    const cpf = normalizeCpf(input.candidato.cpf);
+    // Risco (b): dígito do CPF conferido antes de qualquer escrita. Fail-closed, sem repetir o número.
+    if (!isValidCpf(cpf)) throw new BadRequestException("CPF inválido");
+
+    // Risco (a): o idVacancy é DESNORMALIZADO na admissão para alimentar o unique parcial
+    // `uq_admissao_cpf_vaga_viva`, que é a defesa de corrida contra duas admissões vivas do par.
+    const idVacancy = input.idVacancy ?? null;
+    const vf = input.vagaFolha ?? {};
+
+    // §A.6 (risco 5): CPF do substituído com TTL de 48h, do lado da admissão (mesmo padrão do `create`).
+    // A vaga fica intocada (a retenção legal dela é frente do A&S). Validado quando presente.
+    const substituidoCpf = vf.substituidoCpf ? normalizeCpf(vf.substituidoCpf) : null;
+    if (substituidoCpf && !isValidCpf(substituidoCpf)) {
+      throw new BadRequestException("CPF do substituído inválido");
+    }
+    const ehSubstituicao = vf.motivo === "Substituição" && Boolean(substituidoCpf);
+
+    try {
+      return await this.db.transaction(async (tx) => {
+        // Candidato por CPF, preservando o existente (regra 6 — histórico).
+        await tx
+          .insert(candidatos)
+          .values({
+            cpf,
+            nome: input.candidato.nome,
+            email: input.candidato.email ?? null,
+            telefone: input.candidato.telefone ?? null,
+            dataNascimento: input.candidato.dataNascimento ?? null,
+          })
+          .onConflictDoNothing({ target: candidatos.cpf });
+
+        // Admissão em AGUARDANDO_LIBERACAO, JÁ com cliente + cargo (o de/para do funil resolve os dois,
+        // ao contrário do Pandapé sem de/para). Sinalizador PENDENTE (nada confirmado ainda): o farol
+        // não é vivo, então o sinalizador não é recomputado e fica estável até a liberação.
+        const [adm] = await tx
+          .insert(admissoes)
+          .values({
+            candidatoCpf: cpf,
+            codCliente: input.codCliente,
+            cargoId: input.cargoId,
+            farolGlobal: "AGUARDANDO_LIBERACAO",
+            sinalizadorPreenchimento: "PENDENTE",
+            // origem MANUAL: não veio do Pandapé. A marca de "veio do funil" é carregada pela ponte
+            // `as_candidaturas.admissao_id` (derivada na tela), não por um valor de enum novo aqui.
+            origem: "MANUAL",
+            idVacancy,
+            possivelDuplicata: input.possivelDuplicata ?? false,
+          })
+          .returning({ id: admissoes.id });
+
+        // dados_vaga_folha (1:1) PRÉ-PREENCHIDO com o snapshot da vaga. Na liberação, o consultor
+        // confirma/ajusta e o `aplicarLiberacao` reescreve estes mesmos campos.
+        await tx.insert(dadosVagaFolha).values({
+          admissaoId: adm.id,
+          salario: vf.salario ?? null,
+          escala: vf.escala ?? null,
+          centroCusto: vf.centroCusto ?? null,
+          setor: vf.setor ?? null,
+          departamento: vf.departamento ?? null,
+          gestorBp: vf.gestorBp ?? null,
+          motivo: vf.motivo ?? null,
+          tempoContrato: vf.tempoContrato ?? null,
+          endereco: vf.endereco ?? null,
+          substituidoNome: ehSubstituicao ? (vf.substituidoNome ?? null) : null,
+          substituidoCpf: ehSubstituicao ? substituidoCpf : null,
+          substituicaoExpurgarEm: ehSubstituicao
+            ? new Date(Date.now() + 48 * 60 * 60 * 1000)
+            : null,
+        });
+
+        // Pacote de benefícios ESTRUTURADO (§A.17 etapa 4), quando o funil trouxe. Mesma gravação do
+        // `create` (g.2): a string legada `dados_vaga_folha.beneficios` fica nula.
+        if (input.pacoteBeneficios?.length) {
+          await tx.insert(admissaoBeneficio).values(
+            input.pacoteBeneficios.map((b) => ({
+              admissaoId: adm.id,
+              beneficioId: b.beneficioId,
+              valor: b.valor === undefined ? null : b.valor.toFixed(2),
+            })),
+          );
+        }
+
+        return { admissaoId: adm.id, jaExistia: false };
+      });
+    } catch (err) {
+      // Corrida/reentrada do MESMO par (CPF + idVacancy) já vivo: o unique parcial estoura (23505).
+      // Isso é idempotência, não falha: devolve a admissão viva existente. `vivasPorCpf` é a mesma
+      // fonte que o Pandapé usa, e o predicado dela casa o do índice (inclui AGUARDANDO_LIBERACAO).
+      if (this.ehViolacaoUnique(err) && idVacancy) {
+        const existente = (await this.vivasPorCpf(cpf)).find((v) => v.idVacancy === idVacancy);
+        if (existente) return { admissaoId: existente.id, jaExistia: true };
+      }
+      throw err;
+    }
+  }
+
+  /** Detecta violação de unique (Postgres 23505) — trata corrida/reentrada como "já existe". */
+  private ehViolacaoUnique(err: unknown): boolean {
+    return typeof err === "object" && err !== null && (err as { code?: string }).code === "23505";
+  }
+
+  /**
    * DEDUP Pandapé — admissões VIVAS do CPF (não terminais). "Viva" = EM_ADMISSAO / BANCO_AGUARDAR /
    * AGUARDANDO_LIBERACAO (§A.16: declínio/rescisão/concluída são terminais e viram processo NOVO).
    * Devolve o `idVacancy` de cada uma para a trava decidir por (CPF + vaga). Manuais/históricas têm
@@ -883,6 +1054,11 @@ export class AdmissoesService {
        * o consultor já viu o 409 com a lista e confirmou que NÃO é duplicata.
        */
       aceiteDuplicidade?: boolean;
+      /**
+       * ACEITE do override dos obrigatórios-para-liberar (item 6). Só surte efeito para MASTER/
+       * SUPER_ADMIN e só quando há faltante; comum é barrado antes, independente deste flag.
+       */
+      aceiteObrigatoriosFaltantes?: boolean;
     },
     user: AuthUser,
   ): Promise<{ admissaoId: string; temRegua: boolean }> {
@@ -936,6 +1112,28 @@ export class AdmissoesService {
     // Mesma validação do `create` (benefício que exige valor não passa sem valor). Fora da tx.
     await this.validarValoresDoPacote(dto.pacoteBeneficios);
 
+    // GATE DOS OBRIGATÓRIOS-PARA-LIBERAR (item 6). INDIVIDUAL, então checa os 6 (inclui Sexo). O
+    // valor vem do corpo do liberar OU da admissão/candidato sendo liberados (Sexo confirmado no
+    // corpo tem precedência sobre o já gravado). Fora da transação, ANTES de qualquer escrita: comum
+    // com faltante para aqui (Forbidden), Master/Super sem aceite para aqui (Conflict pedindo aceite),
+    // e com aceite segue, devolvendo os faltantes para o rastro. Zero faltante NÃO consulta papel: a
+    // liberação segue exatamente como sempre seguiu.
+    const overrideLiberacao = this.travarObrigatoriosDaLiberacao(
+      obrigatoriosFaltantesParaLiberar(
+        {
+          cargoId: dto.cargoId,
+          sexo: dto.sexo ?? candidato?.sexo ?? null,
+          tipoContrato: dto.tipoContrato ?? adm.tipoContrato,
+          dataAdmissao: dto.dataAdmissao ?? adm.dataAdmissao,
+          temBeneficios: Boolean(dto.pacoteBeneficios?.length) || Boolean(dto.vagaFolha?.beneficios?.trim()),
+          escala: dto.vagaFolha?.escala,
+        },
+        { incluirSexo: true },
+      ),
+      user,
+      dto.aceiteObrigatoriosFaltantes,
+    );
+
     const resultado = await this.db.transaction(async (tx) => {
       // SEXO ANTES DE TUDO (OST do seletor de sexo). Grava o que o consultor confirmou ou corrigiu,
       // e grava PRIMEIRO de propósito: a régua e o sinalizador calculados logo abaixo dependem dele
@@ -959,6 +1157,11 @@ export class AdmissoesService {
         vinculoId,
         vinculoProjeto,
       });
+      // RASTRO do override (item 6), na MESMA transação: só quando Master/Super liberou COM aceite e
+      // de fato havia faltante. §A.6: só autor, papel e rótulos dos campos.
+      if (overrideLiberacao.length > 0) {
+        await this.registrarOverrideLiberacao(tx, admissaoId, user, overrideLiberacao);
+      }
       return { admissaoId, temRegua: regua.length > 0 };
     });
 
@@ -1031,6 +1234,68 @@ export class AdmissoesService {
         outras.length === 1
           ? "Já existe uma admissão em andamento para este CPF. Confirme que não é duplicata antes de liberar."
           : `Já existem ${outras.length} admissões em andamento para este CPF. Confirme que não é duplicata antes de liberar.`,
+    });
+  }
+
+  /**
+   * GATE DOS OBRIGATÓRIOS-PARA-LIBERAR (item 6 do diretor). Conjunto PRÓPRIO deste gate (Cargo, Sexo,
+   * Tipo de contrato, Data de admissão, Pacote de benefícios, Escala), NÃO a régua unificada da §A.19:
+   * os campos ficam de fora do `pendencia-config`, e este é o ÚNICO ponto que os cobra. É outra régua,
+   * com outro propósito (pré-condição de liberação), e por isso não recria a divergência que a §A.19
+   * eliminou. Sexo é individual-only (o lote não o carrega); o chamador diz se ele entra.
+   *
+   * A ORDEM é a do coordenador, e o molde é o `travarDuplicidadeDeCpf` (short-circuit só DEPOIS da
+   * checagem do servidor): (a) zero faltante → devolve `[]`, papel e flag IGNORADOS, libera como
+   * sempre; (b) há faltante e o autor NÃO é MASTER/SUPER_ADMIN → `ForbiddenException`, INDEPENDENTE do
+   * flag (comum não escapa nem marcando o aceite); (c) há faltante e é MASTER/SUPER_ADMIN SEM aceite →
+   * `ConflictException` pedindo o aceite; (d) com aceite → devolve os faltantes para o chamador gravar
+   * o rastro na MESMA transação.
+   *
+   * §A.6: RBAC lido de `user.papel` (JWT/`AuthUser`), NUNCA do corpo. Mensagens só com RÓTULOS de
+   * campo, jamais valores.
+   */
+  private travarObrigatoriosDaLiberacao(
+    faltantes: ChaveObrigatorioLiberar[],
+    user: AuthUser,
+    aceite?: boolean,
+  ): ChaveObrigatorioLiberar[] {
+    if (faltantes.length === 0) return [];
+    const rotulos = rotulosDosFaltantes(faltantes);
+    const ehGestor = user.papel === "MASTER" || user.papel === "SUPER_ADMIN";
+    if (!ehGestor) {
+      throw new ForbiddenException({
+        reason: "obrigatoriosFaltantes",
+        campos: rotulos,
+        message: `Preencha antes de liberar: ${rotulos.join(", ")}. Só Master ou Super Admin pode liberar com esses campos em branco.`,
+      });
+    }
+    if (!aceite) {
+      throw new ConflictException({
+        needsConfirmation: true,
+        reason: "obrigatoriosFaltantes",
+        campos: rotulos,
+        message: `Faltam campos obrigatórios para liberar: ${rotulos.join(", ")}. Confirme o aceite para liberar mesmo assim.`,
+      });
+    }
+    return faltantes;
+  }
+
+  /**
+   * Grava o RASTRO do override na MESMA transação da liberação (item 6). Só é chamado quando houve
+   * faltante e o Master/Super deu o aceite. §A.6: só id do autor, papel, admissão e os RÓTULOS dos
+   * campos que faltavam. Nenhum valor, nenhum CPF, nenhum nome.
+   */
+  private async registrarOverrideLiberacao(
+    tx: DbTransaction,
+    admissaoId: string,
+    user: AuthUser,
+    faltantes: ChaveObrigatorioLiberar[],
+  ): Promise<void> {
+    await tx.insert(liberacaoOverrideAceites).values({
+      admissaoId,
+      autorId: user.id,
+      papelAutor: user.papel,
+      camposFaltantes: rotulosDosFaltantes(faltantes).join(", "),
     });
   }
 
@@ -1391,6 +1656,11 @@ export class AdmissoesService {
        * campo em branco do lote.
        */
       lojasPorAdmissao?: { admissaoId: string; lojaId: string }[];
+      /**
+       * ACEITE do override dos obrigatórios-para-liberar (item 6), aplicado a TODAS as N (é um valor
+       * só do lote, como cliente/cargo). No lote o gate checa 5 campos (Sexo é individual-only).
+       */
+      aceiteObrigatoriosFaltantes?: boolean;
     },
     user: AuthUser,
   ): Promise<{
@@ -1469,6 +1739,26 @@ export class AdmissoesService {
         const lojaDaLinha = lojaDaLinhaDoLote(dto.lojasPorAdmissao, admissaoId);
         await validarLojaDoCliente(this.db, dto.codCliente, lojaDaLinha);
 
+        // GATE DOS OBRIGATÓRIOS-PARA-LIBERAR (item 6), POR LINHA. No lote exclui Sexo (`incluirSexo:
+        // false`): Sexo é confirmado por pessoa e o `LiberarEmLoteDto` nem o carrega, então cobrar um
+        // único valor para a leva seria errado por definição. Os outros valores são do lote (iguais
+        // para todas), com o fallback para o já gravado na admissão. Comum com faltante falha SÓ esta
+        // linha (o catch reporta), Master/Super sem aceite idem, com aceite segue e grava o rastro.
+        const overrideLote = this.travarObrigatoriosDaLiberacao(
+          obrigatoriosFaltantesParaLiberar(
+            {
+              cargoId: dto.cargoId,
+              tipoContrato: dto.tipoContrato ?? adm.tipoContrato,
+              dataAdmissao: dto.dataAdmissao ?? adm.dataAdmissao,
+              temBeneficios: Boolean(dto.pacoteBeneficios?.length) || Boolean(dto.vagaFolha?.beneficios?.trim()),
+              escala: dto.vagaFolha?.escala,
+            },
+            { incluirSexo: false },
+          ),
+          user,
+          dto.aceiteObrigatoriosFaltantes,
+        );
+
         await this.db.transaction(async (tx) => {
           await this.aplicarLiberacao(tx, {
             adm,
@@ -1478,6 +1768,10 @@ export class AdmissoesService {
             user,
             vinculoProjeto,
           });
+          // RASTRO do override (item 6), na MESMA transação da linha. Um por admissão.
+          if (overrideLote.length > 0) {
+            await this.registrarOverrideLiberacao(tx, admissaoId, user, overrideLote);
+          }
         });
         // Um job de pull POR ADMISSÃO: liberar 30 de uma vez enfileira 30 jobs, que o limiter da
         // fila serializa sob o teto do Pandapé, em vez de 30 chamadas simultâneas (§A.5).
@@ -1508,7 +1802,7 @@ export class AdmissoesService {
    * (telefone/nascimento/sexo) e a origem/chegada. Ordena por chegada (mais antigo primeiro).
    */
   async listarAguardandoLiberacao() {
-    return this.db
+    const linhas = await this.db
       .select({
         admissaoId: admissoes.id,
         candidatoNome: candidatos.nome,
@@ -1522,15 +1816,77 @@ export class AdmissoesService {
         possivelDuplicata: admissoes.possivelDuplicata,
         // CLIENTE E CARGO JÁ ATRIBUÍDOS, quando existem. A pré-admissão do Pandapé nasce sem os dois,
         // então o normal é virem nulos; eles só chegam preenchidos quando algo os SUGERIU antes, e
-        // hoje esse algo é o match partindo da Sala de Espera. Sem devolvê-los aqui, a sugestão fica
-        // gravada no banco e INVISÍVEL na tela, que foi o bug reportado pelo diretor.
+        // hoje esse algo é o match partindo da Sala de Espera (ou a ponte do funil A&S, que já traz
+        // cliente + cargo resolvidos). Sem devolvê-los aqui, a sugestão fica gravada no banco e
+        // INVISÍVEL na tela, que foi o bug reportado pelo diretor.
         codCliente: admissoes.codCliente,
         cargoId: admissoes.cargoId,
+        // VALORES PRÉ-PREENCHIDOS DA FOLHA (Liberação com cores): a tela pré-preenche o formulário e o
+        // consultor confirma/ajusta na liberação. Vêm nulos quando a origem não os sabia, e a coluna
+        // `substituidoCpf` NÃO é devolvida (§A.6: dado sensível, o time não precisa dele na fila).
+        salario: dadosVagaFolha.salario,
+        escala: dadosVagaFolha.escala,
+        centroCusto: dadosVagaFolha.centroCusto,
+        setor: dadosVagaFolha.setor,
+        gestorBp: dadosVagaFolha.gestorBp,
+        departamento: dadosVagaFolha.departamento,
+        tempoContrato: dadosVagaFolha.tempoContrato,
+        motivo: dadosVagaFolha.motivo,
+        substituidoNome: dadosVagaFolha.substituidoNome,
+        endereco: dadosVagaFolha.endereco,
       })
       .from(admissoes)
       .innerJoin(candidatos, eq(admissoes.candidatoCpf, candidatos.cpf))
+      .leftJoin(dadosVagaFolha, eq(dadosVagaFolha.admissaoId, admissoes.id))
       .where(eq(admissoes.farolGlobal, "AGUARDANDO_LIBERACAO"))
       .orderBy(asc(admissoes.criadoEm));
+
+    const ids = linhas.map((l) => l.admissaoId);
+
+    // `camposPendentes`: FONTE ÚNICA (§A.19), a MESMA régua que a Esteira e o Gerenciador usam. NÃO
+    // recalcular régua nova aqui: `pendenciasObrigatoriasPorAdmissao` já lê folha, banco, benefício e
+    // config-por-cliente em lote e devolve os rótulos, que é exatamente o que a Liberação com cores
+    // precisa listar por candidato.
+    const pendPorAdmissao = await pendenciasObrigatoriasPorAdmissao(this.db, ids);
+
+    // Benefícios ESTRUTURADOS por admissão, para pré-preencher o pacote da Liberação.
+    const benefRows = ids.length
+      ? await this.db
+          .select({
+            admissaoId: admissaoBeneficio.admissaoId,
+            beneficioId: admissaoBeneficio.beneficioId,
+            valor: admissaoBeneficio.valor,
+          })
+          .from(admissaoBeneficio)
+          .where(inArray(admissaoBeneficio.admissaoId, ids))
+      : [];
+    const benefPorAdmissao = new Map<string, { beneficioId: string; valor: string | null }[]>();
+    for (const b of benefRows) {
+      const arr = benefPorAdmissao.get(b.admissaoId) ?? [];
+      arr.push({ beneficioId: b.beneficioId, valor: b.valor });
+      benefPorAdmissao.set(b.admissaoId, arr);
+    }
+
+    // `veioDoFunil`: a ponte A&S. Uma admissão veio do funil quando ALGUMA candidatura da Central de
+    // Candidatos aponta para ela (`as_candidaturas.admissao_id`). Leitura só desta coluna técnica,
+    // sem PII (§A.6). `inArray` já exclui os nulos por construção.
+    const doFunil = ids.length
+      ? await this.db
+          .selectDistinct({ admissaoId: asCandidaturas.admissaoId })
+          .from(asCandidaturas)
+          .where(inArray(asCandidaturas.admissaoId, ids))
+      : [];
+    const setFunil = new Set(
+      doFunil.map((d) => d.admissaoId).filter((x): x is string => x !== null),
+    );
+
+    // Preserva o payload atual (a tela de hoje lê estes campos) e ACRESCENTA os novos.
+    return linhas.map((l) => ({
+      ...l,
+      beneficios: benefPorAdmissao.get(l.admissaoId) ?? [],
+      camposPendentes: pendPorAdmissao.get(l.admissaoId) ?? [],
+      veioDoFunil: setFunil.has(l.admissaoId),
+    }));
   }
 
   /**

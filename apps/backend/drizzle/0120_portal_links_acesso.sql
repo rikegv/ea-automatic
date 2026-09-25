@@ -1,0 +1,28 @@
+-- PORTAL DO CANDIDATO: O CARIMBO DE ACESSO NA LINHA DO LINK (gerenciador do Portal).
+--
+-- ARQUIVO ESCRITO À MÃO, no molde da 0116 e da 0119: o `drizzle-kit` não gera comentário nem
+-- `IF NOT EXISTS`, e regenerar este SQL apaga as duas coisas.
+--
+-- NUMERAÇÃO: 0120 porque a 0119 é a identidade do Portal e as 0117/0118 são de outra sessão
+-- (ingestão do A&S). Renumerar migration alheia é o jeito mais rápido de duas frentes se apagarem.
+--
+-- ══ POR QUE UM CARIMBO NA LINHA, E NÃO UMA CONTAGEM EM `portal_eventos` ═════════════════════════
+--
+-- O painel do RH precisa responder "quem ACESSOU e quem NÃO ACESSOU". A trilha (`portal_eventos`)
+-- parece a fonte óbvia e NÃO serve como contador, por três motivos, e o terceiro é o que decide:
+--
+--  (a) `PortalTrilhaService.registrar` ENGOLE falha de gravação de propósito (ler a própria lista
+--      não pode ficar refém de log), então a trilha é declaradamente não confiável como CONTADOR;
+--  (b) `portal_eventos` tem RETENÇÃO declarada (90 dias / 12 meses / 24 meses): um KPI apoiado nela
+--      encolheria sozinho no dia em que a rotina de retenção nascer, sem ninguém perceber;
+--  (c) UM FALSO "NÃO ACESSOU" FAZ O CONSULTOR REEMITIR O LINK, e `emitirLink` REVOGA todos os links
+--      vivos da admissão: a reemissão mata a sessão de quem está enviando documento naquele
+--      instante. O erro do contador vira dano na operação, não só número errado na tela.
+--
+-- O EVENTO CONTINUA SENDO A TRILHA. O que nasce aqui é o CONTADOR, escrito no caminho da
+-- identificação bem-sucedida, FORA do `try/catch` da trilha.
+--
+-- §A.6: os dois campos são CARIMBO DE TEMPO. Não guardam IP, não guardam agente do navegador, não
+-- guardam CPF e não contam tentativa falha (isso é a Sala De Segurança, de Master e Super Admin).
+ALTER TABLE "portal_links" ADD COLUMN IF NOT EXISTS "primeiro_acesso_em" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "portal_links" ADD COLUMN IF NOT EXISTS "ultimo_acesso_em" timestamp with time zone;

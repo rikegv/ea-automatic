@@ -98,8 +98,11 @@ function montar(cen: Cenario = {}) {
     dentroDaRaiz: vi.fn(() => true),
   };
 
-  const svc = new DocumentoArquivoService(db as never, staging as never);
-  return { svc, db, staging, updates, deletes, trilha, removidos };
+  // A CONSEQUÊNCIA da reabertura (pós-veredito) é testada na suíte própria; aqui ela entra como
+  // fake inerte, para estas asserções continuarem falando só das seis camadas do descarte.
+  const auditoria = { aplicarPosVeredito: vi.fn(async () => ({ progresso: { completa: false } })) };
+  const svc = new DocumentoArquivoService(db as never, staging as never, auditoria as never);
+  return { svc, db, staging, updates, deletes, trilha, removidos, auditoria };
 }
 
 afterEach(() => vi.restoreAllMocks());

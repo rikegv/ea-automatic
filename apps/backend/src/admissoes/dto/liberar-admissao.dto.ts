@@ -139,4 +139,15 @@ export class LiberarAdmissaoDto {
   @IsOptional()
   @IsBoolean()
   aceiteDuplicidade?: boolean;
+
+  /**
+   * ACEITE do override dos OBRIGATÓRIOS-PARA-LIBERAR (item 6 do diretor). A liberação exige 6 campos
+   * próprios (Cargo, Sexo, Tipo de contrato, Data de admissão, Pacote de benefícios, Escala) — conjunto
+   * PRÓPRIO deste gate, distinto da régua unificada (§A.19). Comum NÃO libera com faltante; só MASTER/
+   * SUPER_ADMIN, e só marcando este aceite. Quem valida o papel é o serviço (lê `AuthUser.papel` do
+   * JWT, nunca do corpo); este flag sozinho não dá poder a ninguém.
+   */
+  @IsOptional()
+  @IsBoolean()
+  aceiteObrigatoriosFaltantes?: boolean;
 }

@@ -70,13 +70,26 @@ export interface ItemOrfaoVt {
   cpf: string | null;
   nome: string | null;
   criadoEm: string | null;
+  /**
+   * Handle de identificação do formato NOVO (nome opaco): o `admissaoId` lido do JSON irmão, sem
+   * PII. Preenchido só nos objetos novos; `null` no legado (que identifica por `cpf`/`nome` do nome
+   * do objeto). §A.6: nunca persistido nem logado.
+   */
+  admissaoId?: string | null;
 }
 
 export interface ItemColetaVt {
   id: string;
   md5: string | null;
   mimeType: string;
+  /** Handle LEGADO: CPF extraído do nome do objeto `NOME + 11 dígitos`. `null` no formato novo. */
   cpf: string | null;
+  /**
+   * Handle NOVO: `admissaoId` lido do CONTEÚDO do JSON irmão (nome do objeto é opaco, sem PII). O
+   * ai-service devolve EXATAMENTE UM dos dois por objeto, `cpf` (legado) OU `admissaoId` (novo).
+   * §A.6: sem PII, mas continua não sendo logado.
+   */
+  admissaoId?: string | null;
   ehPdf: boolean;
 }
 

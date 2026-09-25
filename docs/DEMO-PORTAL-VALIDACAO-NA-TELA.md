@@ -1,71 +1,57 @@
-# DEMO Portal do Candidato -> GI: como VOCE (Rike) valida na tela
+# DEMO Portal do Candidato: validar na tela (com os 4 ajustes)
 
-> Homologacao / DEMO. Nada aqui toca a producao. E o passo a passo para voce VER, na tela, o
-> candidato subir o RG, a IA **APROVAR na hora**, e a **tela de conferencia** dos campos aparecer
-> (o candidato confere e corrige o que a IA leu). E a validacao visual da frente (§A.0: a aprovacao
-> e sua).
+> Homologacao / DEMO (3120). Nada aqui toca a producao. Os 4 ajustes que voce pediu ja estao no ar.
+> A candidata sintetica e "Maria Simulada" (dados SIMULADOS, §A.6, sem PII real).
 
-## O que foi montado para a demo APROVAR (23/09/2026)
+## Os 4 ajustes, e como VER cada um
 
-Para a IA aprovar em vez de reprovar, a fabrica casou o **cadastro** com o **documento**:
-
-- Uma **admissao sintetica** (dados SIMULADOS, §A.6, sem PII real): candidata
-  **MARIA SIMULADA DA SILVA TESTE**, CPF **111.444.777-35**, nascimento **10/05/1990**.
-- Um **RG fabricado** com EXATAMENTE esses dados, foto e assinatura identificaveis, dentro da
-  validade. A IA compara documento x cadastro, tudo BATE, e **aprova**.
-
-A fabrica ja mediu o veredito direto na IA (instancia isolada 8001, Gemini 2.5 Flash):
-**STATUS VALIDADO**, motivo *"Documento de identidade (RG) valido, legivel, completo e dados do
-titular conferem com o cadastro."* A **producao ficou intacta**; a **peca 3 (envio pro G.I)** esta
-construida e **DESLIGADA**.
+1. **Casa do RG vazia:** a admissao sintetica abaixo nasce SEM o RG anexado. Voce sobe o RG e ve a
+   IA processar ao vivo.
+2. **Motivo da reprova claro:** quando a IA reprova, a tela diz o motivo em linguagem de candidato.
+   Ex.: RG sem foto/assinatura nitidas: *"Nao conseguimos ver bem a foto ou a assinatura do
+   documento. Envie uma foto nitida, com o rosto e a assinatura bem visiveis, sem reflexo."*
+3. **Mensagem de "processando" maior:** enquanto a IA valida, aparece em destaque
+   *"Estamos processando o seu documento. Voce pode enviar o proximo agora. No final, a gente avisa
+   se algum precisar de ajuste."*
+4. **Sem campos vazios de auditoria:** a tela de conferencia mostra so os campos preenchiveis
+   (numero do RG, orgao, nome, nascimento, filiacao), sem as linhas vazias de "Legibilidade",
+   "Foto", "Assinatura".
 
 ## O que voce precisa
 
-- **Endereco:** o ambiente unico de homologacao, `http://10.18.117.235:3120` (§A.32).
-- **O link da candidata sintetica** (pessoal, emitido agora, vale ate 26/09):
-  `http://10.18.117.235:3120/portal#t=eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1NGE4MGYzNy03NWU4LTQ0NWEtOWQ5Yi1iMjBjMWFjZDFmMGMiLCJqdGkiOiJhNTk3Zjk4ZC04ZjBkLTQyYjktODRlNS1iYTkyMzhlMjZhMjQiLCJ0eXAiOiJwb3J0YWwtbGluayIsImlhdCI6MTc5MDE4NDg1MSwiZXhwIjoxNzkwNDQ0MDUxfQ.dcMeWUFBjm-_sZCMORKx-qpAV2uMaxkYr9dyu9584OStmiG-UVCsSTRnpqvA6xBsA_IONgZMzw9O8hR2aF_TDA`
-- **Os dois dados para identificar:**
-  - **CPF:** `111.444.777-35`
-  - **Data de nascimento:** `10/05/1990`
-- **O documento para subir:** o **RG fabricado** (`demo-portal-rg-simulado.png`) que a fabrica te
-  mandou. E o mesmo que casa com o cadastro sintetico. Salve no celular ou no PC.
+- **Endereco:** `http://10.18.117.235:3120` (§A.32, ambiente unico).
+- **Link da candidata (pristino, emitido agora, vale ate 26/09):**
+  `http://10.18.117.235:3120/portal#t=eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMTY5MjcyZC00YjcxLTQwZjUtODFkMi03MWMyZTM1MDgyOGIiLCJqdGkiOiJhZGM4YmY1Ny01NjRjLTQ5ODYtYjM0My1iMzhjNWNmNDRhMTAiLCJ0eXAiOiJwb3J0YWwtbGluayIsImlhdCI6MTc5MDE4ODkyMiwiZXhwIjoxNzkwNDQ4MTIyfQ.v4KFFaNflYvwBoyGx4Xj2b_Q8BGnjaI9vZ15txJ-LEOd8lYW4G_pKyUmtCmjMF7Eh0tBCnUojTILd7XqyK1tAQ`
+- **Dados para identificar:** CPF `111.444.777-35`, nascimento `10/05/1990`.
+- **Dois documentos de teste** que a fabrica te mandou:
+  - `demo-portal-rg-simulado.png` (RG BOM: foto e assinatura nitidas, dados batem) -> a IA APROVA.
+  - `demo-portal-rg-simulado-ruim.png` (RG RUIM: so a silhueta, sem assinatura) -> a IA REPROVA
+    com o motivo claro (ajuste 2).
 
-> DICA: o Portal e mobile-first. Fica mais fiel abrir o link **no celular**. No PC tambem funciona.
+## Passo a passo
 
-## O passo a passo na tela
+1. Abra o link. Digite o CPF `111.444.777-35` e nascimento `10/05/1990`, clique **Entrar**.
+   - Se aparecer *"Muitas tentativas"*, e a trava anti-abuso do CPF (5 tentativas / 15 min, LGPD).
+     Espere ~15 min e repita. A fabrica testou muito neste CPF hoje, entao ele pode estar em
+     descanso; passa sozinho.
+2. Aceite o termo, **Comecar**. Na tela "O Que Reunir", **Continuar**. Em "Como Funciona",
+   **Comecar a enviar**.
+3. Voce cai no **RG** (primeiro documento).
+   - **Para ver a APROVACAO (ajustes 3 e 4):** suba o `demo-portal-rg-simulado.png`. A IA processa
+     (mensagem grande do ajuste 3) e abre a **conferencia** com os campos lidos, **sem linhas
+     vazias** (ajuste 4). Confira/corrija e **Confirmar e continuar**.
+   - **Para ver a REPROVA com motivo claro (ajuste 2):** suba o `demo-portal-rg-simulado-ruim.png`.
+     A IA reprova e a tela diz *"Nao conseguimos ver bem a foto ou a assinatura..."*.
 
-1. **Abra o link.** Cai na identificacao ("Vamos Comecar", a assistente Sol).
-2. Digite o **CPF** `111.444.777-35` e a **data de nascimento** `10/05/1990`, e clique **Entrar**.
-   - Se aparecer *"Muitas tentativas. Aguarde alguns minutos"*, NAO e erro: e a trava anti-abuso do
-     CPF (5 tentativas em 15 min, protecao de LGPD). Espere ~15 min e repita.
-3. **Aceite o termo** de privacidade (marque a caixa) e clique **Comecar**.
-4. Tela **"O Que Reunir"**: clique **Continuar**.
-5. Tela **"Como Funciona"**: clique **Comecar a enviar**.
-6. Voce chega na **trilha**. O primeiro documento e o **RG**. Escolha o arquivo (ou tire foto) e
-   **suba o `demo-portal-rg-simulado.png`**.
-7. Em segundos a IA le e **APROVA**, e abre a **tela de conferencia**:
-   *"Confira O Que Lemos Do Seu RG"* com os campos que a IA leu ja preenchidos (numero do RG,
-   orgao emissor, UF, data de emissao, nome, nascimento, filiacao). **Confira ou corrija** um campo
-   e clique **Confirmar e continuar**. E essa a peca 1: o candidato conferindo o que a IA leu.
+## Observacoes (§A.31: registro, nao mexi)
 
-## Onde cada peca esta
-
-- **Infra + IA (identificar, subir, a IA ler e APROVAR na hora):** LIGADA e provada na demo.
-- **Peca 1 (tela de conferir os campos que a IA leu):** LIGADA. E o passo 7 acima.
-- **Peca 2 (guardar o que o candidato conferiu):** construida (o "Confirmar e continuar" grava).
-- **Peca 3 (mandar para o G.I):** construida e **DESLIGADA** de proposito.
+- **Motivo cru no canal do time:** o texto tecnico que a IA gera fica guardado no campo interno da
+  admissao (atras de login/RBAC, na aba de Auditoria), igual a esteira ja faz. Ao candidato so vai
+  a frase curta e sem PII. Se voce quiser tolerancia zero de PII de terceiro nesse campo interno, e
+  decisao sua e alcanca esteira + portal juntos (o `seguranca` levantou isso na auditoria).
 
 ## Se algo nao abrir
 
-- **"Link Invalido":** o link foi revogado (um link novo revoga o anterior da mesma admissao). Me
-  peca um link novo, emito na hora.
-- **"Muitas tentativas":** a trava de 15 min do CPF (passo 2). Espere e repita.
+- **"Link Invalido":** um link novo revoga o anterior da mesma admissao. Me peca outro.
+- **"Muitas tentativas":** trava de 15 min do CPF. Espere e repita.
 - **"Portal indisponivel" / 503:** lacuna de config do homolog, nao regressao. Me avise.
-
-## Observacao para voce decidir (§A.31: proponho, nao mexo)
-
-Na tela de conferencia, abaixo dos campos lidos, aparecem alguns itens vazios com *"Nao consegui
-ler este campo. Digite voce mesmo"* (ex.: "Legibilidade", "Foto", "Assinatura", "Tipo de
-documento"). Esses sao **pontos de conferencia da auditoria**, nao campos que o candidato deveria
-digitar, e poluem um pouco a tela. Nao mexi (fora do escopo desta OST). Se quiser, abro uma OST
-para esconder do candidato os pontos que nao sao campos preenchiveis.

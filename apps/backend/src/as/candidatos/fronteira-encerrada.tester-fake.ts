@@ -1,8 +1,14 @@
 import { vi } from "vitest";
-import { asCandidaturaEtapas, asCandidaturas, vagas as vagasTabela } from "../../db/schema";
+import {
+  asCandidatos,
+  asCandidaturaEtapas,
+  asCandidaturas,
+  vagas as vagasTabela,
+} from "../../db/schema";
 import { CandidatosService } from "./candidatos.service";
 import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
 import { catalogoDeStatusFingido } from "../vaga-status/vaga-status-catalogo.fake";
+import { envioDoPortalFingido } from "../../portal/portal-envio.fake";
 
 /**
  * ─ O BANCO FINGIDO DA FRONTEIRA ENCERRADA→VIVA (infraestrutura de teste, nada roda em produção) ─
@@ -125,10 +131,19 @@ export interface CenarioFingido {
   posicoesBanco?: number | null;
   /** A escrita não alcança a linha (corrida entre a leitura e o `update`). */
   naoAlcanca?: boolean;
+  /**
+   * O CPF DO CANDIDATO DO FUNIL, como a PONTE A&S → Esteira o lê antes de consumir a posição
+   * (`registrarSaida`, ramo `ENVIADO_PARA_ADMISSAO`). Default VÁLIDO, para o caminho feliz do funil
+   * passar do gate de CPF sem cada cenário precisar dizer isso. `null` MODELA o candidato SEM CPF (a
+   * violação do risco b), e um CPF de dígito inválido modela "presente porém inválido". Só o gate de
+   * envio lê este valor; nenhum outro caminho do fake o usa.
+   */
+  cpfDoFunil?: string | null;
 }
 
 export function bancoFingido(cenario: CenarioFingido) {
   const linhas = cenario.candidaturas.map((l) => ({ ...l }));
+  const cpfDoFunil = cenario.cpfDoFunil === undefined ? "52998224725" : cenario.cpfDoFunil;
   const vaga = {
     id: "vaga-1",
     status: cenario.vagaStatus ?? "ABERTA",
@@ -147,6 +162,10 @@ export function bancoFingido(cenario: CenarioFingido) {
   const select = vi.fn((projecao?: Record<string, unknown>) => {
     let tabela: unknown = null;
     let idFiltrado: string | null = null;
+    // A PONTE A&S → Esteira é o único `select` que junta `asCandidatos` para ler o candidato do
+    // funil. Marcá-lo é o que separa a leitura da ponte da consulta das candidaturas anteriores
+    // (alocação), que também termina no `where` sobre `asCandidaturas` e continua devolvendo [].
+    let juntouCandidatos = false;
     const b: Record<string, unknown> = {};
     b.from = (t: unknown) => {
       tabela = t;
@@ -156,7 +175,10 @@ export function bancoFingido(cenario: CenarioFingido) {
       idFiltrado = idDaCandidatura(filtro);
       return b;
     };
-    b.innerJoin = () => b;
+    b.innerJoin = (t: unknown) => {
+      if (t === asCandidatos) juntouCandidatos = true;
+      return b;
+    };
     b.leftJoin = () => b;
     /** A leitura da vaga com `FOR UPDATE` (passo 2 da trava 4). */
     b.for = () => Promise.resolve([vaga]);
@@ -179,10 +201,15 @@ export function bancoFingido(cenario: CenarioFingido) {
         { c, candidatoNome: "Fulano", vagaCodigo: "PS-1", vagaNome: "Vaga", autor: "Consultor" },
       ]);
     };
-    /** A consulta das candidaturas ANTERIORES (alocação) termina no `where`. */
+    /**
+     * A PONTE A&S → Esteira (junta `asCandidatos`) devolve o candidato do funil com o CPF do cenário;
+     * a consulta das candidaturas ANTERIORES (alocação), que NÃO junta, continua terminando em [].
+     */
     b.then = (r: (v: unknown) => unknown) => {
       void projecao;
-      return Promise.resolve(tabela === asCandidaturas ? [] : []).then(r);
+      void tabela;
+      const linha = juntouCandidatos ? [{ candCpf: cpfDoFunil, candNome: "Fulano" }] : [];
+      return Promise.resolve(linha).then(r);
     };
     return b;
   });
@@ -252,6 +279,7 @@ export function bancoFingido(cenario: CenarioFingido) {
       db as never,
       catalogoDeEtapasFingido() as never,
       catalogoDeStatusFingido() as never,
+      envioDoPortalFingido() as never,
     ),
     linhas,
     updates,

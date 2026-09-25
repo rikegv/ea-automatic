@@ -1,0 +1,13 @@
+[project]
+name = "portal-emissor"
+version = "0.1.0"
+description = "Emissor do Portal: assina URL de escrita do GCS a partir do bilhete Ed25519 do EA (servidor falso da demo / loopback)."
+requires-python = ">=3.10"
+dependencies = [
+    # Verificacao do bilhete Ed25519. Ja presente no sistema; unica dependencia do fail-closed.
+    "cryptography>=41",
+    # Assinatura V4 fiel da URL do GCS (generate_signed_url). Necessaria so no caminho de escrita.
+    "google-cloud-storage>=2.14",
+]
+
+# Sem framework: o servidor usa http.server da stdlib. Rodar: `python3 emissor.py`.

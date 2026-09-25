@@ -3613,3 +3613,947 @@ export interface PandapeEntradaItem {
   resolvidoEm: string | null;
   admissaoId: string | null;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PORTAL DO CANDIDATO: O VEREDITO QUE CHEGA À TELA, E A FILA DO TIME
+//
+// POR QUE ESTES TIPOS EXISTEM AQUI. Eles são o contrato entre o backend e QUALQUER tela que mostre o
+// resultado de um envio do candidato, e entre o backend e a tela do time que resolve o que sobrou.
+// Escritos pelo COORDENADOR (§A.39): este arquivo é único e tem dois lados lendo, então ele tem dono.
+//
+// A REGRA QUE NÃO PODE SER DESFEITA POR QUEM CONSUMIR: o que vai ao candidato é uma LISTA FECHADA de
+// frases escritas por nós. O texto das regras de auditoria, que é critério interno do RH, NUNCA chega
+// a ele: dizer o critério é entregar o gabarito de como burlá-lo, e o motivo cru do modelo pode citar
+// dado pessoal de TERCEIRO (o caso previsto é o comprovante em nome de familiar). A tela exibe
+// `mensagem` como veio, e não remonta frase nenhuma.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** O que o candidato lê. Lista FECHADA: frase nova entra aqui, nunca solta do texto da regra. */
+export const MOTIVOS_PARA_O_CANDIDATO = [
+  "ACEITO",
+  "ILEGIVEL",
+  "VENCIDO",
+  "INCOMPLETO",
+  "NAO_CONFERE",
+  "DOCUMENTO_ERRADO",
+  "PROTEGIDO_SENHA",
+  "ARQUIVO_GRANDE",
+  "ARQUIVO_NAO_SUPORTADO",
+  "NAO_PROCESSADO",
+  "GENERICO",
+] as const;
+export type MotivoParaOCandidato = (typeof MOTIVOS_PARA_O_CANDIDATO)[number];
+
+/** O julgamento do DOCUMENTO. `mensagem` já vem pronta para exibir, sem formatação da tela. */
+export interface VereditoDoDocumento {
+  status: string;
+  valido: boolean;
+  codigo: MotivoParaOCandidato;
+  mensagem: string;
+}
+
+/**
+ * UM campo que a IA leu do documento, para o candidato CONFERIR na tela. NUNCA e dado final: o
+ * valido e sempre o que o candidato confirma, nunca o que a IA leu. `lido=false` com `valor` vazio
+ * e resposta NORMAL (a IA nao conseguiu ler com confianca): a tela pede para o candidato digitar.
+ * §A.6: estes valores so viajam para a tela; enquanto sao sugestao, nunca vao a log, trilha ou export.
+ */
+export interface CampoExtraidoPortal {
+  /** A chave do campo (ex.: "rgNumero", "pis"), estavel entre extracao e gravacao. */
+  campo: string;
+  /** O rotulo para a tela. */
+  rotulo: string;
+  /** O valor lido, VAZIO quando `lido` e false. */
+  valor: string;
+  /** 0 quando nao lido; acima do piso da IA quando lido. So decide o realce, nunca bloqueia a edicao. */
+  confianca: number;
+  /** A IA leu com confianca? Nao lido significa que a tela pede para o candidato digitar. */
+  lido: boolean;
+}
+
+/**
+ * O bloco de SUGESTAO que a IA extraiu de UM documento, entregue na resposta de confirmar o envio,
+ * para o candidato conferir. `confirmadoPorHumano` e SEMPRE false aqui (a sugestao nunca e o dado
+ * final, veto V12): quem grava dado cadastral e a confirmacao humana, por outra rota. §A.6: a
+ * sugestao e efemera, viaja so para a tela; nada dela persiste nem vai a log ate o candidato confirmar.
+ */
+export interface SugestaoExtraida {
+  campos: CampoExtraidoPortal[];
+  origem: "IA";
+  confirmadoPorHumano: false;
+}
+
+/** O ARQUIVO nem chegou a ser julgado (grande demais, tipo não aceito, com senha). */
+export interface RecusaDoArquivo {
+  codigo: string;
+  codigoMensagem: MotivoParaOCandidato;
+  mensagem: string;
+}
+
+/**
+ * Quantos envios ainda restam NESTA pendência (admissão mais tipo de documento).
+ *
+ * `noTime` verdadeiro significa que o teto foi atingido e quem resolve agora é o time. `aviso` é a
+ * frase pronta para essa situação, e é nula quando não há o que avisar.
+ */
+export interface TentativasDaPendencia {
+  teto: number;
+  usadas: number;
+  restantes: number;
+  noTime: boolean;
+  /**
+   * A frase pronta para o CANDIDATO. Ela só existe na resposta do Portal, porque é lá que há alguém
+   * esperando uma explicação. A rota do TIME não a traz, e isso é desenho: o time lê o motivo
+   * completo da IA no modal, que é outro texto e mais específico.
+   */
+  aviso?: string | null;
+}
+
+/**
+ * Quem devolveu o direito de enviar: o time (uma tentativa) ou o Master (o teto inteiro).
+ *
+ * OS NOMES SÃO OS DO BACKEND, e isto é correção de premissa: a primeira versão deste arquivo trazia
+ * `TIME` e `MASTER`, que é como se fala da coisa, e não como o servidor a grava. Quem converge é o
+ * contrato, nunca a tela: tela que traduz nome de estado passa a ter uma segunda verdade, e a
+ * divergência só aparece quando alguém compara os dois lados na mão.
+ */
+export const TIPOS_DE_REABERTURA = ["SOLICITACAO_REENVIO", "DESTRAVAMENTO_MASTER"] as const;
+export type TipoDeReabertura = (typeof TIPOS_DE_REABERTURA)[number];
+
+/**
+ * A pendência do Portal como a tela do TIME a vê.
+ *
+ * `devolveriaAoReabrir` existe para a tela dizer, ANTES do clique, quantos envios o candidato ganha:
+ * a reabertura do time devolve UMA tentativa, e o zerar do Master devolve o teto inteiro. Quando as
+ * reaberturas do time acabam, o próximo passo é o Master, e `reaberturasDoTimeRestantes` é o que
+ * permite avisar isso sem o consultor descobrir no erro.
+ */
+export interface SituacaoPendenciaPortal {
+  tentativas: TentativasDaPendencia;
+  reabertura: {
+    em: string;
+    tipo: TipoDeReabertura;
+    reaberturasDoTime: number;
+    reaberturasDoTimeRestantes: number;
+  } | null;
+  /**
+   * Quantos envios cada ação devolve, para a tela avisar ANTES do clique. É um objeto, e não um
+   * número, porque as duas ações devolvem quantidades diferentes de propósito: solicitar reenvio é
+   * do time e devolve UM envio; zerar é do Master e devolve o teto inteiro.
+   */
+  devolveriaAoReabrir: Record<TipoDeReabertura, number>;
+  admissaoId: string;
+  tipoDocumentoId: string;
+  codigoTipoDocumento: string;
+  nomeTipoDocumento: string;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PORTAL DO CANDIDATO: A TRILHA DA SOL (o que a tela do candidato precisa saber)
+//
+// Escrito pelo COORDENADOR (§A.39: arquivo único, dois lados lendo, um dono só).
+//
+// O QUE ESTE CONTRATO NÃO TEM, E A AUSÊNCIA É O DESENHO (§A.6):
+//  - NÃO tem CPF, e o portal inteiro não o vê: quem amarra a sessão à admissão é o bilhete assinado
+//    (`PortalSessaoGuard`), que também não carrega CPF.
+//  - NÃO tem o nome completo do candidato, só o PRIMEIRO nome, que é o mínimo para a Sol chamar a
+//    pessoa pelo nome. Nome completo é dado pessoal que a tela não precisa para funcionar.
+//  - NÃO tem id de admissão nem id de tipo de documento: a tela pede credencial pelo CÓDIGO do tipo,
+//    e a admissão vem do token. Id na mão do cliente é convite para pedir pelo documento do outro.
+//  - NÃO tem o texto da regra de auditoria. O que o candidato lê é `VereditoDoDocumento.mensagem`,
+//    da lista fechada, e a tela exibe como veio.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * O estado de uma casa do tabuleiro, DERIVADO no backend, nunca remontado pela tela.
+ *
+ * OS SEIS ESTADOS SAEM DO ENUM DO BANCO MAIS O TETO, e não de uma simplificação de tela:
+ *
+ *  - `ACEITO`: documento `ENTREGUE`. Casa verde, e ela não pede envio de novo.
+ *  - `EM_ANALISE`: documento `AGUARDANDO_AUDITORIA` SEM leitura pronta, ou seja, o envio chegou e a
+ *    IA ainda não devolveu os campos. É a janela curta da auditoria síncrona ("estou analisando").
+ *  - `AGUARDANDO_VALIDACAO`: a IA JÁ leu, os campos estão prontos e o veredito não reprovou, mas o
+ *    candidato ainda não confirmou (`portal_conferencia.aguardandoConfirmacao`). Não está mais em
+ *    análise: está pendente da AÇÃO DELE, confirmar os dados lidos. Casa vermelha, porque o que falta
+ *    é ele. Alinhado 1 para 1 com o `envio.fase === "conferir"` que a tela reidrata da conferência.
+ *  - `AJUSTAR`: documento `INCONFORME` com tentativa sobrando. É a casa que pede reenvio.
+ *  - `NO_TIME`: o teto de 3 reprovações foi atingido. Casa roxa, o candidato não envia mais ali.
+ *  - `PENDENTE`: nada foi enviado ainda.
+ *
+ * POR QUE `EM_ANALISE` E `AJUSTAR` EXISTEM SEPARADOS DE `PENDENTE`, e isto é correção de premissa
+ * do coordenador, apontada pela auditoria prévia (§A.40): a primeira versão deste contrato colapsava
+ * tudo que não fosse `ENTREGUE` em `PENDENTE`. A casa então convidaria a enviar um documento que a
+ * emissão RECUSA, porque a régua do arquivo único (`domain/portal-arquivo-unico.ts`) barra segundo
+ * envio enquanto há um em aberto. A tela prometeria o que a emissão nega, que é o mesmo defeito por
+ * outra porta. O enum do banco tem quatro valores (`PENDENTE`, `ENTREGUE`, `INCONFORME`,
+ * `AGUARDANDO_AUDITORIA`), e a tela precisa dos quatro mais o teto.
+ *
+ * POR QUE `PULADO` NÃO É ESTADO DO SERVIDOR: pular não é fato do processo, é o candidato não ter o
+ * documento na mão agora, e o documento segue exatamente tão pendente quanto antes. Persistir isso
+ * criaria um segundo estado do documento, que o time veria na esteira sem significar nada. A casa
+ * amarela é memória da VISITA, e quando ele volta pelo link a casa volta a ser pendência comum.
+ */
+export const ESTADOS_PASSO_PORTAL = [
+  "ACEITO",
+  "EM_ANALISE",
+  "AGUARDANDO_VALIDACAO",
+  "AJUSTAR",
+  "NO_TIME",
+  "PENDENTE",
+] as const;
+export type EstadoPassoPortal = (typeof ESTADOS_PASSO_PORTAL)[number];
+
+/**
+ * O RESULTADO PERSISTIDO da leitura da IA para UM documento, devolvido pela trilha para a tela
+ * reconstruir o estado da conferencia (conferir / ajustar / aceito) sem depender do estado React
+ * volatil. Corrige os bugs 4/5/6 (a tela nao regride nem perde o que a IA leu ao navegar/recarregar).
+ *
+ * §A.6: reverte a CONSEQUENCIA do veto V12 (a sugestao passa a persistir), ratificado pelo diretor,
+ * com TTL 48h e minimizacao no backend. O NUCLEO do V12 fica de pe: isto e SUGESTAO, nunca o dado
+ * autoritativo (quem grava dado final e a confirmacao humana, por outra rota). `campos.valor` e PII
+ * do proprio candidato: viaja so na trilha (no-store, private), nunca a log.
+ */
+export interface ConferenciaDoPasso {
+  /** Os campos que a IA leu, para o candidato conferir. Vazio quando anulado apos a confirmacao. */
+  campos: CampoExtraidoPortal[];
+  /** true quando ha campos lidos aguardando a confirmacao do candidato (veredito valido, nao confirmado ainda). */
+  aguardandoConfirmacao: boolean;
+  /** O veredito redigido (lista fechada do EA, sem texto cru do modelo). Presente para reprovado (AJUSTAR); null caso contrario. */
+  veredito: VereditoDoDocumento | null;
+}
+
+/** Uma casa do tabuleiro: um documento da régua do cargo daquela admissão. */
+export interface PassoDaTrilhaPortal {
+  /** Código do catálogo `tipos_documento`. É por ele que a tela pede a credencial de escrita. */
+  codigoTipoDocumento: string;
+  /** Nome exibido, como está no catálogo. */
+  nome: string;
+  /** Da régua (cliente + cargo). A tela mostra obrigatório e facultativo distintos. */
+  exigencia: ExigenciaDocumento;
+  estado: EstadoPassoPortal;
+  /** Quantos envios ainda restam NESTA pendência. Zero e `noTime` quando já caiu para o time. */
+  tentativas: TentativasDaPendencia;
+  /**
+   * A DICA daquele tipo de documento, cadastrada pelo diretor, ou `null` quando não há.
+   *
+   * ┌─ POR QUE O TEXTO VIAJA JUNTO, e não por uma rota própria ───────────────────────────────┐
+   * │ (1) UMA SUPERFÍCIE PÚBLICA A MENOS: a tela do candidato fica atrás da barreira do        │
+   * │     Fernando, e rota nova é caminho novo a allowlistar e a limitar.                      │
+   * │ (2) MINIMIZAÇÃO DE VERDADE: assim ele recebe só as dicas dos documentos DA ADMISSÃO      │
+   * │     DELE. Uma rota por documento responderia sobre qualquer código do catálogo e viraria │
+   * │     enumeração da configuração interna a partir de fora.                                 │
+   * │ (3) CUSTO MEDIDO: pior caso ~30 KB (32 documentos pelo teto de 1000), típico ~2 KB, e é  │
+   * │     um `leftJoin` na consulta que já existe, não N chamadas.                             │
+   * │ (4) A PRESENÇA DO TEXTO JÁ É O "TEM DICA" da tela, sem um booleano a mais para manter em │
+   * │     sincronia com ele.                                                                   │
+   * └──────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * NULO E TEXTO VAZIO SÃO A MESMA COISA para a tela: sem dica, o ícone não nasce. Não existe
+   * ícone desabilitado nem modal vazio.
+   */
+  dica: string | null;
+  /**
+   * O RESULTADO DA IA PARA ESTE DOCUMENTO, persistido, para a tela reconstruir "conferir" / "ajustar"
+   * / "aceito" ao navegar e ao recarregar (bugs 4/5/6). `null` quando ainda nao houve envio julgado.
+   */
+  conferencia: ConferenciaDoPasso | null;
+}
+
+/**
+ * A TRILHA INTEIRA, como a tela a recebe ao abrir.
+ *
+ * A FONTE DOS PASSOS É `documentos_admissao`, NUNCA `regua_documental`, e a diferença foi MEDIDA:
+ * na admissão de homologação conferida, a régua tem 32 linhas e a admissão tem 14 documentos. A
+ * emissão de credencial exige a LINHA existir (`portal-credencial.service.ts`, predicado `naRegua`,
+ * que responde "Este documento não faz parte da sua lista"), então montar a trilha pela régua faria
+ * a tela listar 18 casas que recusam no toque, logo depois de a mesma API dizer que eram dela. O
+ * mesmo erro já foi pago uma vez no modal de auditoria da esteira, e está documentado lá.
+ *
+ * É UMA CHAMADA SÓ, e a tela não monta régua nenhuma: a régua é do servidor (§A.3 regra 4), e tela
+ * que recalcula régua é a segunda verdade que o ajuste da etapa 4 existiu para eliminar (§A.19).
+ */
+export interface TrilhaDoCandidato {
+  /** Só o primeiro nome. Ver a nota de §A.6 no topo deste bloco. */
+  primeiroNome: string;
+  cargo: string;
+  cliente: string;
+  passos: PassoDaTrilhaPortal[];
+  /** Tipos aceitos e teto de bytes, para a tela recusar antes de gastar uma credencial. */
+  limites: { bytesMaxArquivo: number; tiposAceitos: string[] };
+  /** O candidato ja aceitou o termo de privacidade nesta admissao? A tela pula BOAS_VINDAS quando true (bug 1). */
+  termoAceito: boolean;
+  /**
+   * Os dados que o candidato JA confirmou (de `admissao_dados_gi`), para a tela reidratar
+   * `camposVistos` no reload sem depender do estado React volatil. §A.6: PII do proprio candidato,
+   * viaja so na trilha (no-store, private), nunca a log.
+   */
+  dadosGiConfirmados: { campo: string; rotulo: string; valor: string }[];
+}
+
+/** Resposta de `POST /portal/termo`: grava o aceite do termo pela admissao da SESSAO (nunca do corpo). */
+export interface TermoAceiteResposta {
+  aceito: boolean;
+  /** ISO do momento do aceite (registro de consentimento LGPD). */
+  aceitoEm: string;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PORTAL DO CANDIDATO: A IDENTIDADE (o link do RH e a entrada do candidato)
+//
+// Escrito pelo COORDENADOR (§A.39). As regras e os números não são meus: vêm de
+// `docs/DESENHO-PORTAL-REGRAS-DE-SEGURANCA.md`, seção 10 (decisões do diretor) e seção 9 (log).
+//
+// O QUE ESTE CONTRATO NÃO TEM, E É O VETO V5 DO DOCUMENTO: nem o link nem a sessão carregam CPF,
+// nome ou data de nascimento. O token do VT carrega (`ClaimsTokenVt`), e foi justamente isso que o
+// parecer proibiu replicar aqui. O que amarra tudo é a admissão mais o `jti` do link.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** O link pessoal que o RH envia ao candidato. Prazo de 72 horas (decisão 2), revogável. */
+export interface LinkDoPortalGerado {
+  /** A URL inteira, com o token no FRAGMENTO. Devolvida uma vez e nunca persistida em claro. */
+  link: string;
+  /** ISO. É o prazo da LINHA no banco, que é a autoridade, e não só o `exp` assinado. */
+  expiraEm: string;
+}
+
+/**
+ * O que o candidato manda para provar quem é: o link que recebeu, mais CPF e data de nascimento.
+ *
+ * O casamento é contra a admissão DO LINK, e não uma busca global por CPF como faz o VT. Essa é a
+ * diferença deliberada: sem link, não há o que enumerar.
+ */
+export interface IdentificacaoDoCandidato {
+  linkToken: string;
+  cpf: string;
+  /** `yyyy-mm-dd`, o formato do `date` do Postgres. */
+  dataNascimento: string;
+}
+
+/**
+ * A sessão curta que a identificação devolve, e que o `PortalSessaoGuard` já sabe verificar.
+ *
+ * `expiraEm` é o MENOR entre o prazo da sessão e o do link: sessão que sobrevive ao link vencido é
+ * o furo que a auditoria prévia desta frente encontrou antes de existir código.
+ */
+export interface SessaoDoCandidato {
+  sessao: string;
+  expiraEm: string;
+}
+
+/** Mensagem única de qualquer não casamento. Uma só, para não virar oráculo (veto V7). */
+export const PORTAL_IDENTIFICACAO_NAO_CASOU =
+  "Dados não encontrados. Confira o CPF e a data de nascimento, ou procure o RH.";
+
+/** Mensagem única de link morto: revogado, expirado e inexistente respondem igual (item F9). */
+export const PORTAL_LINK_MORTO =
+  "Este link não é mais válido. Procure o RH para receber um link novo.";
+
+/**
+ * O CÓDIGO DO ERRO DA IDENTIFICAÇÃO, e ele existe porque a tela precisa DECIDIR, não interpretar.
+ *
+ * As duas situações levam o candidato a lugares diferentes: `LINK_MORTO` é terminal (só o RH
+ * resolve, emitindo outro), `NAO_CASOU` volta ao formulário (ele confere os dados e tenta de novo)
+ * e `BLOQUEADO` manda esperar. Sem código, a tela teria de COMPARAR A FRASE para saber onde ir, e
+ * frase é texto de produto: muda uma vírgula e o fluxo quebra em silêncio. Foi o `frontend` quem
+ * apontou isto, comparando string por falta de alternativa.
+ *
+ * O código NÃO revela nada a mais do que a frase já revela: revogado, expirado e inexistente
+ * compartilham `LINK_MORTO`, e CPF inexistente e data errada compartilham `NAO_CASOU`. A régua de
+ * não virar oráculo (vetos V7 e F9) está preservada, porque o recorte é o mesmo.
+ */
+export const CODIGOS_ERRO_IDENTIFICACAO = ["LINK_MORTO", "NAO_CASOU", "BLOQUEADO"] as const;
+export type CodigoErroIdentificacao = (typeof CODIGOS_ERRO_IDENTIFICACAO)[number];
+
+/**
+ * O corpo do erro da identificação e da recuperação.
+ *
+ * A `mensagem` vai no CORPO, e não só no `message` do erro HTTP, por um motivo medido: o cliente
+ * compartilhado do frontend troca a mensagem de todo 401 pela frase do OPERADOR ("sua sessão
+ * expirou, entre novamente"), que fala de um login que o candidato não tem.
+ */
+export interface ErroDaIdentificacao {
+  codigo: CodigoErroIdentificacao;
+  mensagem: string;
+}
+
+/** O pedido de socorro do candidato que não consegue entrar. Só o link, nunca CPF. */
+export interface PedidoDeRecuperacao {
+  linkToken: string;
+}
+
+/**
+ * O PREFIXO DO FRAGMENTO onde o link do candidato viaja: `https://.../portal#t=<token>`.
+ *
+ * ELE ESTÁ AQUI PORQUE FALTAR AQUI JÁ CUSTOU UM DEFEITO. O backend emitia `#t=` e a tela lia `#l=`,
+ * cada lado coerente consigo mesmo, os dois verdes em teste, e NENHUM link abria: a tela dizia
+ * "link não é mais válido" para todo link recém-emitido. É o modo de falha clássico do vocabulário
+ * que não tem dono (§A.39), e quem devia ter escrito esta linha antes era o coordenador.
+ *
+ * FRAGMENTO, e não query string, por §A.6: o que vem depois do `#` não é enviado ao servidor em
+ * requisição nenhuma, não entra em log de proxy e não entra no cabeçalho `Referer`.
+ */
+export const PORTAL_FRAGMENTO_LINK = "t";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GERENCIADOR DO PORTAL: o funil de coleta, como o RH o enxerga
+//
+// Escrito pelo COORDENADOR (§A.39). Tela INTERNA e autenticada, ao contrário da tela do candidato:
+// aqui o nome completo aparece, porque é a fila de trabalho de quem já enxerga a admissão.
+//
+// O QUE ESTE CONTRATO NÃO TEM, E É CONDIÇÃO DA AUDITORIA: IP, dado de navegador, geografia,
+// CONTAGEM DE TENTATIVAS QUE FALHARAM e qualquer listagem de evento. Isso é a Sala De Segurança,
+// que é outra tela e de outro papel (Master e Super Admin, decisão do diretor). Contagem de falha
+// de identificação é justamente o oráculo que o catálogo de log fechou ao forçar `NAO_CASOU`: dizer
+// "errou 4 vezes" conta ao operador o que o sistema se recusa a contar a quem tenta.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** O estado do link na linha da lista. Deriva da LINHA, que é a autoridade, nunca do bilhete. */
+/**
+ * `BLOQUEADO` ENTROU AQUI, E NÃO NUMA LISTA NOVA AO LADO (condição de saída da auditoria de mapa).
+ *
+ * Uma segunda lista deixaria a primeira viva, e o serviço do painel tem um `?? "REVOGADO"` que
+ * continuaria apontando para a lista velha: duas verdades sobre o mesmo estado, com o default na
+ * errada. A precedência, auditada, é REVOGADO > BLOQUEADO > SUSPENSO > VENCIDO > VIVO.
+ *
+ * `BLOQUEADO` é ato HUMANO e REVERSÍVEL (o link na mão do candidato não muda). `REVOGADO` é
+ * terminal e nasce de toda emissão nova. `SUSPENSO` é do SISTEMA (bloqueio progressivo) e passa
+ * sozinho, por isso não tem botão.
+ */
+export const ESTADOS_LINK_PAINEL = [
+  "VIVO",
+  "VENCIDO",
+  "REVOGADO",
+  "SUSPENSO",
+  "BLOQUEADO",
+] as const;
+export type EstadoLinkPainel = (typeof ESTADOS_LINK_PAINEL)[number];
+
+/**
+ * Os cinco números do funil.
+ *
+ * `acessaram` sai do CARIMBO na linha do link, e não da contagem de eventos, e isso é condição de
+ * auditoria com um motivo operacional: a trilha engole falha de gravação de propósito, e um falso
+ * "não acessou" faz o consultor REEMITIR o link. Reemitir revoga os links vivos daquela admissão,
+ * ou seja, mataria a sessão de quem está enviando documento naquele instante. O carimbo é lido de
+ * TODOS os links da admissão, e não só do vigente, pela mesma razão.
+ *
+ * `acessaram` significa IDENTIFICOU-SE, não "abriu a URL": quem abre e erra o CPF não acessou.
+ *
+ * `concluiram` exige TER ACESSADO mais zero obrigatórios pendentes. Só "zero pendentes" fecharia
+ * igual quando o consultor subiu tudo pela Esteira e o candidato nunca abriu o link, e o painel
+ * exibiria uma conclusão de coleta que não aconteceu.
+ */
+export interface ContadoresDoPainelPortal {
+  encaminhados: number;
+  acessaram: number;
+  naoAcessaram: number;
+  concluiram: number;
+  intervencaoHumana: number;
+}
+
+/** Uma linha da lista: onde aquele candidato está, agora. */
+export interface LinhaDoPainelPortal {
+  admissaoId: string;
+  nome: string;
+  cargo: string;
+  cliente: string;
+  /** ISO `aaaa-mm-dd` ou `null`. Ver a nota da coluna nova, no fim do arquivo. */
+  dataAdmissao: string | null;
+  /**
+   * O `jti` DO LINK VIGENTE, que é o `id` da linha em `portal_links`, ou `null` quando não há link
+   * vivo. Ele existe porque as ações de bloquear e desbloquear são POR LINK, e a linha da tabela é
+   * por ADMISSÃO: sem este campo a tela mandaria o `admissaoId` num parâmetro lido como `jti`, os
+   * dois passariam pelo `ParseUUIDPipe` e o erro seria SILENCIOSO.
+   */
+  linkJti: string | null;
+  /** O próximo obrigatório pendente, ou nulo quando não há o que ele possa resolver. */
+  documentoAtual: string | null;
+  aceitos: number;
+  obrigatorios: number;
+  /** A pendência caiu para o time (teto de tentativas atingido). */
+  noTime: boolean;
+  /** ISO, ou nulo para quem nunca entrou. É o carimbo, não o evento. */
+  ultimoAcessoEm: string | null;
+  estadoLink: EstadoLinkPainel;
+  /**
+   * A ORIGEM do link VIGENTE (o mesmo link de `linkJti` e de `estadoLink`), ou `null` para o link
+   * emitido antes desta frente.
+   *
+   * É A ORIGEM DO VIGENTE, E NUNCA UM `max` SOBRE TODOS OS LINKS DA ADMISSÃO. A consulta da lista
+   * agrupa por admissão e usa `max(...)` no carimbo de acesso de propósito (ver o comentário lá),
+   * mas fazer o mesmo aqui devolveria a origem de um link REVOGADO, ordenada por alfabeto, e a
+   * coluna passaria a descrever uma entrega que não é a que está de pé.
+   */
+  origemEnvio: OrigemDeEnvioDoLink | null;
+}
+
+/** A página da lista. Teto no servidor: a base tem milhares de admissões. */
+export interface PaginaDoPainelPortal {
+  itens: LinhaDoPainelPortal[];
+  total: number;
+  pagina: number;
+  tamanho: number;
+}
+
+/**
+ * UM PEDIDO DE AJUDA PARA ENTRAR NO PORTAL, agregado por LINK.
+ *
+ * Nasce do evento `PORTAL_RECUPERACAO_SOLICITADA` da trilha (o candidato clicou "Não consigo
+ * entrar"). A leitura junta cada link que tem esse evento à admissão e devolve o candidato, para o
+ * RH agir no Gerenciador do Portal. É lista de TRABALHO (incidente de acesso), não relatório.
+ *
+ * §A.6: NÃO carrega CPF (o CPF é só chave de junção no servidor), NÃO carrega IP, agente do
+ * navegador nem token. `nome`, `cargo` e `cliente` são legítimos: a tela é interna, autenticada e
+ * governada pelo mesmo menu `portal-links` que já mostra o nome do candidato ao mesmo time.
+ *
+ * `linkJti` é o `id` da LINHA em `portal_links` (o `jti`), não a credencial: é o mesmo campo que a
+ * lista do Gerenciador já devolve para as ações por link. `vezes` é a contagem de pedidos daquele
+ * link; `primeiroPedidoEm`/`ultimoPedidoEm` são ISO. A lista vem ordenada pelo último pedido
+ * (mais recente primeiro).
+ */
+export interface PedidoDeAjudaDoPortal {
+  admissaoId: string;
+  linkJti: string;
+  nome: string;
+  cargo: string;
+  cliente: string;
+  vezes: number;
+  primeiroPedidoEm: string;
+  ultimoPedidoEm: string;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+// GERENCIADOR DO PORTAL, SEGUNDA RODADA: a aba, os filtros, a data e o bloqueio do link
+//
+// Escrito pelo COORDENADOR (§A.39). Ajustes pedidos pelo diretor depois de validar a primeira
+// versão da tela. O que já estava acima continua valendo e não foi reescrito.
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+/**
+ * AS DUAS ABAS, e a de trabalho é a padrão.
+ *
+ * "Concluiu a entrega" SAI da frente de trabalho: a fila existe para mostrar quem ainda dá
+ * trabalho, e quem terminou só volta quando alguém procura. O recorte é do SERVIDOR, e não um
+ * filtro de tela, pelo mesmo motivo de sempre: filtro de tela paginado mente, porque esconde
+ * depois de contar.
+ */
+export const ABAS_PAINEL_PORTAL = ["EM_ANDAMENTO", "CONCLUIDO"] as const;
+export type AbaDoPainelPortal = (typeof ABAS_PAINEL_PORTAL)[number];
+
+/**
+ * OS FILTROS DA TELA, TODOS DE MÚLTIPLA SELEÇÃO (§A.28, sem exceção).
+ *
+ * As opções vêm de ENDPOINT, nunca das linhas carregadas (§A.37): derivar da página encolhe a
+ * lista assim que o primeiro valor é escolhido, e aí não há como somar o segundo.
+ *
+ * `nome` é BUSCA, não filtro de lista: é texto livre, casa por pedaço, e por isso não tem catálogo.
+ * `dataAdmissaoDe`/`Ate` são intervalo (ISO `aaaa-mm-dd`), porque data em lista de opções seria uma
+ * lista infinita.
+ */
+export interface FiltrosDoPainelPortal {
+  aba?: AbaDoPainelPortal;
+  nome?: string;
+  clientes?: string[];
+  cargos?: string[];
+  documentos?: string[];
+  situacoes?: string[];
+  estadosLink?: EstadoLinkPainel[];
+  /** O card clicado. Quando presente e não vazio, ele MANDA e a `aba` não se aplica. */
+  recorte?: RecorteDoPainelPortal;
+  /** Múltiplo (§A.28). Aceita `SEM_ORIGEM_DE_ENVIO` para o link sem origem. */
+  origens?: string[];
+  ultimoAcessoDe?: string;
+  ultimoAcessoAte?: string;
+  dataAdmissaoDe?: string;
+  dataAdmissaoAte?: string;
+  pagina?: number;
+  tamanho?: number;
+}
+
+/**
+ * O RECORTE DOS CINCO CARDS DO FUNIL, e ele passou a ser DO SERVIDOR (correção do diretor).
+ *
+ * ┌─ O DEFEITO QUE ISTO CONSERTA, medido na homologação em 21/09 ───────────────────────────────┐
+ * │ Os cinco contadores sempre estiveram CERTOS: eles contam o recorte INTEIRO, as duas abas     │
+ * │ juntas. A TABELA, não: ela é cortada pela ABA no servidor (padrão "Em Andamento"), e o card  │
+ * │ filtrava no CLIENTE, sobre a página que a aba já tinha cortado.                              │
+ * │                                                                                               │
+ * │ Resultado visto pelo diretor: o card dizia "Acessaram 2" e clicar nele ZERAVA a tabela,      │
+ * │ porque os dois que acessaram já tinham concluído e estavam na OUTRA aba. Número certo,       │
+ * │ tabela vazia, e nenhuma forma de descobrir isso olhando a tela.                              │
+ * │                                                                                               │
+ * │ E HAVIA UM SEGUNDO DEFEITO NO MESMO LUGAR, que a base pequena escondia: filtrando no cliente │
+ * │ sobre no máximo 100 linhas, o card passaria a recortar só a primeira página assim que        │
+ * │ houvesse mais de 100 encaminhados, mentindo em silêncio (§A.28).                             │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * QUANDO HÁ RECORTE, A ABA NÃO SE APLICA: o card varre o universo inteiro, FINALIZADOS INCLUÍDOS,
+ * que é o que o diretor pediu em voz alta ("deveria filtrar, inclusive os finalizados"). Sem
+ * recorte, a aba continua mandando como antes.
+ *
+ * `""` é "todos", e existe como valor para o card poder ser desmarcado (os cards são alternadores).
+ */
+export const RECORTES_DO_PAINEL_PORTAL = [
+  "",
+  "acessaram",
+  "naoAcessaram",
+  "concluiram",
+  "intervencaoHumana",
+] as const;
+export type RecorteDoPainelPortal = (typeof RECORTES_DO_PAINEL_PORTAL)[number];
+
+/**
+ * O VALOR ESPECIAL DO FILTRO DE ORIGEM (§A.37).
+ *
+ * Link emitido ANTES desta frente não tem origem, e é a maioria da base. Sem uma opção para esse
+ * caso não há como perguntar "quem ainda está sem origem", que é metade da pergunta que a coluna
+ * cria. É um código, e não a frase da tela, para não amarrar consulta a rótulo.
+ */
+export const SEM_ORIGEM_DE_ENVIO = "__SEM_ORIGEM";
+
+/** O catálogo de opções de cada filtro de lista, servido pelo backend (§A.37). */
+export interface CatalogoDeFiltrosDoPainelPortal {
+  clientes: { valor: string; rotulo: string }[];
+  cargos: { valor: string; rotulo: string }[];
+  documentos: { valor: string; rotulo: string }[];
+  situacoes: { valor: string; rotulo: string }[];
+  estadosLink: { valor: EstadoLinkPainel; rotulo: string }[];
+  /** Inclui `SEM_ORIGEM_DE_ENVIO` quando existe link sem origem no recorte. */
+  origens: { valor: string; rotulo: string }[];
+}
+
+/**
+ * A COLUNA NOVA `dataAdmissao` entra na linha que JÁ EXISTE (`LinhaDoPainelPortal`, acima), pelo
+ * mesmo motivo do estado do link: contrato duplicado é duas verdades. Ela é ISO `aaaa-mm-dd` ou
+ * `null`, e `null` NÃO é erro (admissão de banco não tem data; a célula diz "não informado").
+ *
+ * Por §A.37, coluna nova nasce com FILTRO e ORDENAÇÃO junto, e os dois estão nesta rodada.
+ */
+
+/**
+ * REABRIR UM DOCUMENTO JÁ APROVADO, como pendência (correção do veredito da IA).
+ *
+ * ┌─ A PORTA JÁ EXISTE, E POR ISSO NÃO NASCE UMA SEGUNDA ───────────────────────────────────────┐
+ * │ `POST /esteira/auditoria/:admissaoId/descartar` já devolve o documento a PENDENTE, limpa o   │
+ * │ veredito, apaga a marca de dedup, expurga a staging e grava trilha, e já é operacional (sem  │
+ * │ `@Roles`). A auditoria de mapa mediu: qualquer consultor JÁ reabre documento aprovado hoje.  │
+ * │ Rota nova ao lado seria a SEGUNDA a escrever `documentos_admissao.estado`, e qualquer guarda │
+ * │ posta nela nasceria contornável pela antiga.                                                 │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * O QUE FALTAVA, e é o que esta rodada constrói: a CONSEQUÊNCIA. Reabrir o último obrigatório
+ * aceito deixava a frente AUDITORIA em ANALISE_OK com a régua incompleta, e nesse estado a
+ * pendência reaberta some da fila (a Esteira esconde frente concluída). O recuo é o trabalho.
+ *
+ * SEM CAMPO DE MOTIVO, de propósito (§A.31): o diretor não pediu, e texto livre sobre o documento
+ * de outra pessoa é o coletor de dado pessoal de terceiro que a auditoria apontou. Fica proposto.
+ */
+export interface ResultadoDaReaberturaDeDocumento {
+  reaberto: boolean;
+  /** A frente AUDITORIA recuou de ANALISE_OK para ANALISE_PENDENTE (a régua deixou de fechar). */
+  frenteRecuou: boolean;
+  /** A frente CADASTRO_CONTRATO, já nascida, foi derrubada junto (o gate da regra 3 fechou). */
+  cadastroDerrubado: boolean;
+  farolAtualizado: boolean;
+  /**
+   * O documento já estava no Drive. O EA NÃO apaga arquivo de lá, e o substituto só volta ao
+   * prontuário quando alguém decidir o re-arquivamento (decisão aberta do diretor), então a tela
+   * tem de dizer isso em voz alta em vez de deixar a divergência silenciosa (família da §A.33).
+   *
+   * SÃO DOIS CAMPOS, e não um, porque o `descartar` que já está no ar devolve o TEXTO do aviso e a
+   * tela o mostra como veio: tipar `avisoDrive` como booleano quebraria esse consumidor. O booleano
+   * é o `driveJaArquivado`, e o texto continua sendo o `avisoDrive`.
+   */
+  driveJaArquivado: boolean;
+  avisoDrive: string | null;
+}
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// O ENVIO DO LINK DO PORTAL (OST da lógica de envio: automático + manual, por e-mail)
+//
+// ESTE BLOCO É ESCRITO PELO COORDENADOR (§A.39, dono único do arquivo compartilhado). Backend e
+// frontend CONSOMEM; nenhum dos dois acrescenta campo aqui sem passar pelo coordenador.
+//
+// ┌─ A RÉGUA DE §A.6 QUE ATRAVESSA TODO ESTE CONTRATO, e ela veio da auditoria do mapa ──────────┐
+// │ NENHUM CAMPO DAQUI CARREGA O ENDEREÇO DE E-MAIL EM CLARO, e nenhum carrega a URL do link.    │
+// │ O endereço aparece SEMPRE mascarado (`destinoMascarado`) e SEMPRE derivado na hora da        │
+// │ leitura, a partir do cadastro, nunca de um registro de envio: é o mesmo precedente já        │
+// │ escrito para o CPF nas regras de segurança do portal. O que se persiste do envio é carimbo,  │
+// │ canal, origem e autor, e mais nada.                                                          │
+// │                                                                                              │
+// │ A URL do link é CREDENCIAL DE ACESSO AO PRONTUÁRIO. Ela volta uma vez, na emissão manual que │
+// │ já existe, e a partir desta frente ela também vai para dentro de um e-mail. Em nenhum dos    │
+// │ dois caminhos ela entra em tabela, em log ou em payload de fila.                             │
+// └──────────────────────────────────────────────────────────────────────────────────────────────┘
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+
+/**
+ * O CANAL. Lista de UM, e a lista existe justamente para o segundo não nascer solto.
+ *
+ * O diretor fechou "só e-mail por ora, WhatsApp depois". Um booleano `porEmail` teria de ser
+ * desfeito no dia do WhatsApp, e é essa troca que costuma deixar as duas verdades convivendo.
+ */
+export const CANAIS_DE_ENVIO_DO_LINK = ["EMAIL"] as const;
+export type CanalDeEnvioDoLink = (typeof CANAIS_DE_ENVIO_DO_LINK)[number];
+
+/**
+ * A ORIGEM do envio, e ela é o coração do item 4 da OST ("todo link aparece no Gerenciador,
+ * INDEPENDENTE da origem").
+ *
+ * `AUTOMATICO` é o disparo do clique "Enviar Para Admissão" no funil de A&S. `MANUAL` é o RH
+ * gerando e enviando pelo Gerenciador, para candidato fora do funil. Os DOIS passam pela MESMA
+ * emissão (`PortalIdentidadeService.emitirLink`), que é o que faz os dois caírem na mesma lista
+ * sem ninguém precisar sincronizar duas fontes.
+ *
+ * `ENTREGA_A_MAO` É O TERCEIRO, E ELE NÃO É UM ENVIO. É o botão antigo de "gerar link", que devolve
+ * a URL UMA vez para o consultor entregar por fora (foi assim que o portal funcionou desde o
+ * primeiro dia, com o link copiado para o WhatsApp). Ele passou a carimbar a origem porque, sem
+ * isso, todo link nascido por ali aparecia com a coluna VAZIA e ninguém saberia dizer se era link
+ * antigo ou defeito.
+ *
+ * ELE É CÓDIGO PRÓPRIO, E NÃO `MANUAL`, de propósito: `MANUAL` significa "o RH ENVIOU por e-mail
+ * pelo Gerenciador", e chamar de manual um caminho que NÃO manda e-mail nenhum juntaria duas
+ * coisas diferentes na mesma palavra. A pergunta que a coluna existe para responder é "o candidato
+ * recebeu, e por onde?", e a resposta aqui é "o sistema não entregou, alguém entregou".
+ */
+export const ORIGENS_DE_ENVIO_DO_LINK = ["AUTOMATICO", "MANUAL", "ENTREGA_A_MAO"] as const;
+export type OrigemDeEnvioDoLink = (typeof ORIGENS_DE_ENVIO_DO_LINK)[number];
+
+/**
+ * POR QUE UM ENVIO NÃO ACONTECEU. Código fechado, e é ele que vai para a tela e para a trilha.
+ *
+ * É CÓDIGO E NÃO FRASE porque a frase muda e o log não pode mudar junto; e porque o motivo entra
+ * na lista de falhas do lote, que a tela copia inteira: uma frase montada com o endereço dentro
+ * poria o dado pessoal no relatório que alguém cola em outro lugar (§A.6).
+ *
+ * `SEM_ADMISSAO` é o caminho 1 antes da ponte A&S -> Esteira existir: a candidatura ainda não tem
+ * admissão, e `portal_links.admissao_id` é NOT NULL, então não há a que prender o link. NÃO é
+ * erro, é "ainda não"; a tela diz isso e a operação segue.
+ *
+ * `ENVIADO_HA_POUCO` É A JANELA, e é a SEGUNDA abstenção, irmã da de baixo e diferente dela. Aqui
+ * o link está vivo e o candidato AINDA NÃO ABRIU: o e-mail acabou de sair e está na caixa dele.
+ * Reenviar agora emitiria um link novo que REVOGA o que acabou de ser mandado, então o candidato
+ * ficaria com duas mensagens das quais a primeira, a que ele provavelmente vai abrir, não funciona
+ * mais. Cobre o clique duplo e a retentativa de rede, que é onde isso acontece de verdade.
+ *
+ * SÃO DOIS CÓDIGOS E NÃO UM, porque a frase que a tela precisa dizer é diferente: aqui é "já
+ * mandamos agora há pouco, peça para ele olhar a caixa", lá embaixo é "ele já entrou, não mexa".
+ *
+ * `LINK_VIVO_EM_USO` É A ABSTENÇÃO, e o código só existe porque um teste independente mostrou que
+ * ele faltava. A admissão já tem link VIVO que o candidato JÁ ABRIU, então reemitir revogaria a
+ * sessão de alguém que está enviando documento naquele instante. O sistema se ABSTÉM, que é o
+ * comportamento seguro. Sem este código, a abstenção voltava como `enviado: false` com `motivo`
+ * NULO, e a tela caía no ramo "não sei o que houve" justamente na recusa mais comum das seis: a
+ * pessoa leria "falhou" onde o certo é "não precisa, o link dela está vivo e ela já entrou".
+ */
+export const MOTIVOS_DE_RECUSA_DE_ENVIO = [
+  "SEM_EMAIL",
+  "EMAIL_INVALIDO",
+  "SEM_ADMISSAO",
+  "CANAL_INDISPONIVEL",
+  "LINK_VIVO_EM_USO",
+  "ENVIADO_HA_POUCO",
+  "FALHA_NO_ENVIO",
+] as const;
+export type MotivoDeRecusaDeEnvio = (typeof MOTIVOS_DE_RECUSA_DE_ENVIO)[number];
+
+/**
+ * O QUE UM ENVIO DEVOLVE.
+ *
+ * `enviado: false` com `motivo: "SEM_EMAIL"` é a regra do diretor em forma de dado: o sistema
+ * AVISA e NÃO envia, e o link NEM CHEGA A SER EMITIDO. Emitir e não entregar deixaria credencial
+ * viva que ninguém recebeu, e ainda revogaria o link anterior de quem estivesse enviando
+ * documento naquele instante.
+ */
+export interface ResultadoDoEnvioDoLink {
+  enviado: boolean;
+  /** Nulo quando `enviado` é verdadeiro. */
+  motivo: MotivoDeRecusaDeEnvio | null;
+  canal: CanalDeEnvioDoLink;
+  origem: OrigemDeEnvioDoLink;
+  /** `f****o@empresa.com`. DERIVADO na hora, do cadastro, e nunca persistido (§A.6). */
+  destinoMascarado: string | null;
+  /** ISO do carimbo do envio, ou nulo quando não houve envio. */
+  enviadoEm: string | null;
+  /** ISO do vencimento do link (72h), para a tela poder dizer o prazo. */
+  expiraEm: string | null;
+}
+
+/**
+ * UMA PESSOA NA PRÉVIA DO DISPARO, e esta é a exigência que a auditoria pôs para liberar o lote.
+ *
+ * Antes de confirmar, o consultor vê NOME e DESTINO MASCARADO de cada um, e vê separado quem fica
+ * de fora e por quê. Sem isso, "confirmar uma vez, enviar N" tira o humano de N entregas de
+ * credencial de acesso a prontuário, e um e-mail desatualizado no cadastro entrega o prontuário de
+ * um candidato a um terceiro sem que nada falhe (família da §A.33).
+ */
+export interface DestinatarioDoLink {
+  /** A candidatura, no caminho automático. Ausente no caminho manual. */
+  candidaturaId?: string;
+  /** Nulo enquanto a ponte A&S -> Esteira não existir (motivo `SEM_ADMISSAO`). */
+  admissaoId: string | null;
+  nome: string;
+  destinoMascarado: string | null;
+  podeEnviar: boolean;
+  motivo: MotivoDeRecusaDeEnvio | null;
+}
+
+/** A prévia do lote: o que a tela mostra ANTES do clique que dispara. */
+export interface PreviaDoEnvioEmLote {
+  itens: DestinatarioDoLink[];
+  enviaveis: number;
+  recusados: number;
+}
+
+/** O desfecho do lote. Os recusados voltam nominalmente, para o consultor resolver um a um. */
+export interface ResultadoDoEnvioEmLote {
+  enviados: number;
+  recusados: DestinatarioDoLink[];
+}
+
+/**
+ * O CAMINHO 2, E A PORTA QUE FALTAVA. Uma admissão VIVA que ainda NÃO tem link nenhum.
+ *
+ * ┌─ POR QUE ISTO PRECISOU EXISTIR ────────────────────────────────────────────────────────────┐
+ * │ A lista do Gerenciador sai de `from(portal_links)`, ou seja, só mostra quem JÁ tem link.    │
+ * │ Quem nunca recebeu não aparece, e a emissão só é clicável a partir de uma linha da lista:   │
+ * │ não havia, em tela nenhuma, por onde nascer o PRIMEIRO link de uma admissão (os links da    │
+ * │ homologação foram semeados por script). O caminho 2 da OST pede exatamente essa porta.      │
+ * │                                                                                             │
+ * │ ELA É UMA BUSCA, E NÃO UM ALARGAMENTO DA LISTA, de propósito (§A.26): mudar o recorte da    │
+ * │ lista mexeria nos cinco contadores, nos filtros e na paginação, que são código validado.    │
+ * │ Uma busca por nome, em modal próprio, não encosta em nada disso.                            │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * SEM BUSCA POR CPF, pela mesma razão da lista (§A.6): busca por CPF em tela operacional é o
+ * oráculo de existência que a identificação do candidato fecha desde o primeiro dia.
+ */
+export interface AdmissaoSemLinkDoPortal {
+  admissaoId: string;
+  nome: string;
+  cargo: string;
+  cliente: string;
+  destinoMascarado: string | null;
+  podeEnviar: boolean;
+  motivo: MotivoDeRecusaDeEnvio | null;
+}
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// AS DICAS DE DOCUMENTO (o catálogo que o diretor mantém, por TIPO DE DOCUMENTO)
+//
+// Uma dica por tipo, e a unicidade é do BANCO, não da tela: "RG tem a dica do RG" é regra, e regra
+// que mora só na interface é combinada, não garantia.
+//
+// §A.6 PELO AVESSO, e vale dizer em voz alta: aqui não há dado de candidato nenhum. O risco é o
+// contrário do usual, porque este texto é escrito por uma pessoa e RENDERIZADO NA TELA PÚBLICA do
+// candidato. Ele é saneado na ESCRITA (aparado, sem caractere de controle, recusando `<` e `>` em
+// vez de limpar em silêncio, com teto), de forma que o que chega à tela já está limpo e a limpeza
+// vale para qualquer consumidor futuro que esqueça de escapar.
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+
+/** O teto do texto da dica. O mesmo número no banco, na validação e na tela. */
+export const DICA_DOCUMENTO_TEXTO_MAX = 1000;
+
+/**
+ * Uma linha da tela de administração: SEMPRE um tipo de documento ATIVO, com a dica quando existir.
+ *
+ * A LISTA É DOS TIPOS, E NÃO DAS DICAS, e a diferença é o que faz a tela servir: o diretor precisa
+ * ver o que AINDA NÃO tem dica para saber o que falta cadastrar. Uma lista de dicas responderia só
+ * sobre o que já foi feito.
+ */
+export interface LinhaDeDicaDeDocumento {
+  tipoDocumentoId: string;
+  /** Código do catálogo (`RG`, `COMPROVANTE_ESCOLARIDADE`). */
+  codigo: string;
+  nome: string;
+  /** Nulo quando este tipo ainda não tem dica. É o que a tela usa para dizer "Sem Dica". */
+  dicaId: string | null;
+  texto: string | null;
+  /** Da DICA, não do tipo. Nulo quando não há dica. Dica inativa não chega ao candidato. */
+  ativo: boolean | null;
+  /** ISO. Nulo quando não há dica. */
+  atualizadoEm: string | null;
+}
+
+/**
+ * O corpo de gravação. É UPSERT por TIPO, e não criação por id, porque a chave de negócio é o tipo
+ * de documento: a tela não precisa saber se aquela linha já existia.
+ */
+export interface UpsertDicaDocumento {
+  texto: string;
+  ativo?: boolean;
+}
+
+/**
+ * OS DOIS FILTROS DA TELA DE DICAS, e são DOIS por escolha do diretor (§A.30): Situação e
+ * Documento. Código, Dica e Ações não viram filtro.
+ *
+ * `SITUACOES_DA_DICA` TEM TRÊS VALORES, e o terceiro é consequência da inativação ser LÓGICA: a
+ * dica ocultada continua existindo, com o texto guardado, e chamá-la de "Com Dica" mentiria para
+ * quem confere o que o candidato está vendo.
+ *
+ * `SEM_DICA` NÃO É UM REGISTRO, É A AUSÊNCIA DELE, e é isso que faz este filtro diferente dos
+ * outros do sistema: ele não recorta linhas de uma tabela, ele pergunta se o `leftJoin` casou. Quem
+ * for implementá-lo não pode transformar o join em `innerJoin` para responder, que é exatamente o
+ * modo de falha que a auditoria pegou no join da trilha na rodada anterior.
+ */
+export const SITUACOES_DA_DICA = ["COM_DICA", "SEM_DICA", "DICA_INATIVA"] as const;
+export type SituacaoDaDica = (typeof SITUACOES_DA_DICA)[number];
+
+/** O que a lista de dicas aceita recortar. Tudo múltiplo (§A.28). */
+export interface FiltrosDasDicasDeDocumento {
+  situacoes?: SituacaoDaDica[];
+  /** Ids de `tipos_documento`. */
+  documentos?: string[];
+}
+
+/** O catálogo das opções, servido pelo backend, nunca derivado das linhas carregadas (§A.37). */
+export interface CatalogoDeFiltrosDasDicas {
+  situacoes: { valor: SituacaoDaDica; rotulo: string }[];
+  documentos: { valor: string; rotulo: string }[];
+}
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// A PONTE PARA O VALE-TRANSPORTE (decisão do diretor: a ponte pequena, não trazer o formulário)
+//
+// O parecer `docs/AVALIACAO-VT-DENTRO-DO-PORTAL.md` mediu que trazer o formulário de VT para dentro
+// do Portal é COMPLEXO (existem TRÊS formulários no repositório e nenhum é componente reusável), e
+// o diretor escolheu a ponte: um BOTÃO, na casa que já existe, que abre o formulário que já está no
+// ar. A baixa na casa continua sendo da varredura da coleta, que já a fazia antes desta frente.
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+
+/**
+ * O CÓDIGO DO TIPO DE DOCUMENTO DO VT, publicado porque agora DOIS lados precisam reconhecê-lo.
+ *
+ * A tela do candidato identifica a casa do VT por este código para trocar o upload pelo botão. O
+ * backend já o tinha literal em quatro lugares; a alternativa a publicar era a tela ganhar uma
+ * quinta cópia da string, e string repetida entre camadas é o tipo de coisa que só diverge no dia
+ * em que alguém renomeia o código no catálogo.
+ *
+ * LEMBRETE PRÁTICO: este é um VALOR, não um tipo. Ele chega `undefined` em runtime até alguém rodar
+ * o `pnpm --filter @ea/shared-types build`, e o typecheck passa mesmo assim, o que faz o erro
+ * parecer bug de lógica.
+ */
+export const CODIGO_TIPO_FORMULARIO_VT = "FORMULARIO_VT";
+
+/**
+ * O que a porta do candidato devolve. Só o link e o prazo.
+ *
+ * ┌─ §A.6, E ESTA CAIXA É A RAZÃO DE O TIPO SER TÃO CURTO ──────────────────────────────────────┐
+ * │ O `link` É CREDENCIAL, e diferente da do resto do Portal: o token do VT viaja em QUERY       │
+ * │ STRING (`?t=`), e carrega CPF, nome e data de nascimento. O link do próprio Portal usa       │
+ * │ FRAGMENTO (`#t=`) de propósito, porque o fragmento não é enviado ao servidor e por isso não  │
+ * │ cai em log de proxy, de barreira nem no cabeçalho `Referer`. A query string cai nos três.    │
+ * │                                                                                              │
+ * │ Isso NÃO é regressão: o link do VT já é assim hoje, entregue à mão pelo consultor, e mudar o │
+ * │ formato exigiria mexer no app externo. Mas a ponte aumenta o VOLUME desse caminho e o põe    │
+ * │ dentro de um produto cuja régua é a inversa, então quem consumir este tipo trata o `link`    │
+ * │ como credencial: não persiste, não loga, não manda para lugar nenhum além do navegador da    │
+ * │ própria pessoa.                                                                              │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+export interface LinkDoVtParaOCandidato {
+  link: string;
+  /** ISO. O link do VT tem prazo próprio, mais longo que a sessão do Portal. */
+  expiraEm: string;
+}

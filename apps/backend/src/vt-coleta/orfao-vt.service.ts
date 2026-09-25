@@ -1,5 +1,5 @@
 import { BadRequestException, Inject, Injectable, Logger, NotFoundException } from "@nestjs/common";
-import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql, type SQL } from "drizzle-orm";
 import { AiClientService } from "../ai/ai-client.service";
 import type { AuthUser } from "../auth/auth.types";
 import type { Database } from "../db/client";
@@ -82,6 +82,10 @@ export class OrfaoVtService {
         continue;
       }
 
+      // DUAL-READ do handle (OST 3 vazamentos, vazamento 2). Objeto NOVO identifica o dono pelo
+      // `admissaoId` do JSON (nome opaco, sem PII); objeto LEGADO, pelo CPF do nome. §A.6: no formato
+      // novo `nome`/`cpf` vêm nulos de propósito (o nome do objeto e o JSON não carregam PII).
+      const admissaoId = (obj.admissaoId ?? "").trim();
       const cpf = (obj.cpf ?? "").replace(/\D/g, "");
       const base = {
         md5: l.md5,
@@ -91,7 +95,8 @@ export class OrfaoVtService {
         chegouEm: obj.criadoEm ?? null,
       };
 
-      if (l.status === "NOME_FORA_PADRAO" || cpf.length !== 11) {
+      // Sem admissaoId (novo) e sem CPF legível (legado): o handle não aponta para ninguém.
+      if (!admissaoId && (l.status === "NOME_FORA_PADRAO" || cpf.length !== 11)) {
         saida.push({
           ...base,
           motivo: "CPF_NAO_IDENTIFICADO" as const,
@@ -102,8 +107,10 @@ export class OrfaoVtService {
         continue;
       }
 
-      const doCpf = await this.admissoesDoCpf(cpf);
-      if (doCpf.length === 0) {
+      const candidatas = admissaoId
+        ? await this.admissoesDoAdmissaoId(admissaoId)
+        : await this.admissoesDoCpf(cpf);
+      if (candidatas.length === 0) {
         saida.push({
           ...base,
           motivo: "SEM_CANDIDATO" as const,
@@ -114,14 +121,14 @@ export class OrfaoVtService {
         continue;
       }
 
-      const aceitavel = doCpf.find((a) => a.aceitaVt);
+      const aceitavel = candidatas.find((a) => a.aceitaVt);
       if (aceitavel) {
         saida.push({
           ...base,
           motivo: "RESOLVE_SOZINHO" as const,
           explicacao:
             "A pessoa tem admissão que aceita VT. O próximo ciclo da coleta casa sozinho, sem ação sua.",
-          admissoesCandidatas: doCpf,
+          admissoesCandidatas: candidatas,
         });
         continue;
       }
@@ -131,7 +138,7 @@ export class OrfaoVtService {
         motivo: "ADMISSAO_ENCERRADA" as const,
         explicacao:
           "A pessoa existe, mas a admissão dela está encerrada (declínio ou rescisão) ou pausada. Casar aqui é decisão sua.",
-        admissoesCandidatas: doCpf,
+        admissoesCandidatas: candidatas,
       });
     }
     return saida;
@@ -183,8 +190,17 @@ export class OrfaoVtService {
       .where(eq(admissoes.id, admissaoId));
     if (!adm) throw new NotFoundException("Admissão não encontrada.");
 
+    // `processarMatch` já recebe a admissão resolvida, então não relê `cpf`/`admissaoId` para casar;
+    // ambos vão aqui só por fidelidade ao objeto (dual-read: legado tem `cpf`, novo tem `admissaoId`).
     const resultado = await this.coleta.processarMatch(
-      { id: obj.id, md5, mimeType: "application/pdf", cpf: obj.cpf ?? null, ehPdf: true },
+      {
+        id: obj.id,
+        md5,
+        mimeType: "application/pdf",
+        cpf: obj.cpf ?? null,
+        admissaoId: obj.admissaoId ?? null,
+        ehPdf: true,
+      },
       adm,
     );
     // §A.6: id de admissão e prefixo do digest, nunca nome nem CPF.
@@ -260,8 +276,21 @@ export class OrfaoVtService {
     return { ok: true, jaEstava: !linha };
   }
 
-  /** As admissões daquele CPF, com a marca de quais o VT aceita hoje. */
+  /** As admissões daquele CPF (handle LEGADO), com a marca de quais o VT aceita hoje. */
   private async admissoesDoCpf(cpf: string) {
+    return this.admissoesOnde(eq(admissoes.candidatoCpf, cpf));
+  }
+
+  /**
+   * A admissão daquele `admissaoId` (handle NOVO, nome opaco), com a marca do VT. 0 ou 1 linha: o id
+   * é único, e um id que não resolve nenhuma admissão vira SEM_CANDIDATO como o CPF sem dono.
+   */
+  private async admissoesDoAdmissaoId(admissaoId: string) {
+    return this.admissoesOnde(eq(admissoes.id, admissaoId));
+  }
+
+  /** Núcleo comum: a MESMA projeção e a MESMA marca `aceitaVt`, só muda o alvo (CPF ou id). */
+  private async admissoesOnde(alvo: SQL) {
     const linhas = await this.db
       .select({
         id: admissoes.id,
@@ -274,7 +303,7 @@ export class OrfaoVtService {
       .from(admissoes)
       .leftJoin(clientes, eq(clientes.codCliente, admissoes.codCliente))
       .leftJoin(cargos, eq(cargos.id, admissoes.cargoId))
-      .where(eq(admissoes.candidatoCpf, cpf));
+      .where(alvo);
 
     return linhas.map((l) => ({
       id: l.id,

@@ -13,6 +13,7 @@ import { asCandidaturaEtapas, asCandidaturas } from "../../db/schema";
 import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
 import { catalogoDeStatusFingido } from "../vaga-status/vaga-status-catalogo.fake";
 import type { AuthUser } from "../../auth/auth.types";
+import { envioDoPortalFingido } from "../../portal/portal-envio.fake";
 
 /**
  * ─ AS GUARDAS DE SITUAÇÃO: quem se move, quem é aprovado, e por qual porta cada saída entra ─────
@@ -116,7 +117,11 @@ function makeDb(cenario: {
       if (tabela === asCandidaturas) ordem.push("conta-ocupadas");
       return Promise.resolve([{ lado: null, quantas: cenario.ocupadas ?? 0 }]);
     };
-    b.then = (r: (v: unknown) => unknown) => Promise.resolve([]).then(r);
+    // A PONTE A&S → Esteira lê o candidato (CPF) antes de consumir a posição: é o único
+    // `select` deste fake resolvido por `then`. Devolve um candidato com CPF VÁLIDO para o envio
+    // passar do gate de CPF e o teste exercer o avanço de verdade.
+    b.then = (r: (v: unknown) => unknown) =>
+      Promise.resolve([{ candCpf: "52998224725", candNome: "Fulano" }]).then(r);
     return b;
   });
 
@@ -146,7 +151,7 @@ function makeDb(cenario: {
     query: { asCandidaturas: { findFirst: vi.fn().mockResolvedValue(c) } },
   };
 
-  return { service: new CandidatosService(db as never, catalogoDeEtapasFingido() as never, catalogoDeStatusFingido() as never), ordem, updates, inserts };
+  return { service: new CandidatosService(db as never, catalogoDeEtapasFingido() as never, catalogoDeStatusFingido() as never, envioDoPortalFingido() as never), ordem, updates, inserts };
 }
 
 const doUpdate = (updates: Escrita[]) =>

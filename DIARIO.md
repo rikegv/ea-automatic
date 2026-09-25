@@ -66,48 +66,6 @@ memória do coordenador não é fonte: ela morre no fim da sessão e mente entre
 
 ---
 
-## 2026-09-22: ingestao A&S para producao (113 para 118), Portal fora
-
-**O que subiu.** So a ingestao A&S validada na 3120: a varredura do Pandape (as 5 decisoes, o sal
-da marca de pasta agora com HMAC), a tela Liberar Vaga (rodada 2, a trilha inteira) e a correcao de
-LGPD ativo do CPF do substituido fora da lista da Central de Vagas (a lista parou de projetar
-`substituidoCpf`; ele desce so por `VagaDetalhe` em `GET /as/vagas/:id`, uma vaga por vez, sob o
-mesmo RBAC). Commit `e71ddb7` (recorte por escopo, `git add` nominal, 31 arquivos).
-
-**As 5 migrations (113 para 118):** 0113_as_ingestao_pandape_varredura, 0114_as_depara_etapas,
-0115_as_vaga_status_pendente_revisao, 0117_as_varredura_status_antes_do_encerramento,
-0118_as_troca_de_cliente_da_vaga (hashes 9c20b86e3b4c, e0cdd7804bd2, 5c19e19cab74, 0e30c0aa9d98,
-41b3f59b026d). 0116 e 0119 (Portal) NAO subiram: nao commitadas, o journal committado nao as tem.
-Tabelas A&S novas criadas vazias (DDL pura).
-
-**Portal, VT e Dicas ficaram FORA**, soltos no working tree (decisao do diretor: Portal espera o
-Fernando). Producao passou a servir de um `git worktree` no `e71ddb7`
-(`/home/henrique/apps/ea-release-ingestao`), isolado do main sujo; o systemd (`ea-backend`,
-`ea-frontend`) foi repontado para la (backup dos units em scratchpad). O achado que provou o valor
-do build isolado: `CilindroMeta.tsx` (balde A, consumido pela `as/vagas/page.tsx`) tinha ficado de
-fora do recorte e o main sujo escondia isso; entrou no `e71ddb7`.
-
-**Varredura INERTE (nao ligada).** `PANDAPE_VARREDURA_DATA_CORTE` fora do `.env` de producao. Log
-do boot: "Varredura do Pandape INERTE: PANDAPE_VARREDURA_DATA_CORTE nao configurada." O time testa
-com a base vazia; o diretor liga depois dando a data de corte (e ai o `AS_MARCA_SAL` vira
-pre-requisito, hoje nao e: o boot retorna inerte antes de exigir o sal, sem lancar).
-
-**Fabrica distribuida (A.39):** arquiteto (manifesto de recorte, achou o entrelacamento do Portal no
-CandidatosService), seguranca APROVADO nos dois acionamentos (fix de CPF/RBAC no compilado;
-HMAC-com-sal e PII da ingestao), devops (ensaio das 5 migrations num clone com dump antes, 113 para
-118 limpo, e depois o corte real).
-
-**Healths verdes:** backend `127.0.0.1:3011/api/health` 200 (a rota real e `/api/health`, ha
-`setGlobalPrefix("api")`), frontend 3020 200, ingress Caddy 3010 200, migrations = 118. Servicos
-active, 0 restarts. **Contagens intactas (A.27):** ADMISSAO_CONCLUIDA 1893, DECLINOU 880, clicksign
-ASSINADO 1781, lojas 15, grupos 6. Dump de producao antes em scratchpad.
-
-**Aberto:** ligar a varredura (data de corte + `AS_MARCA_SAL`, decisao do diretor); o de/para
-Pandape para catalogo (sem ele, vaga nao-mapeada nasce PENDENTE_REVISAO, resolvida na tela Liberar
-Vaga). A tela de Gestao de Pendencias Obrigatorias (A.19) segue mapeada, depois do motor.
-
----
-
 ## 2026-06-29 — Fase 4 AJUSTES FINAIS (OST-EA-FASE-4-AJUSTES-FINAIS) + smoke real do Drive
 
 Branch `feat/fase-4-ia-arquivamento` (working tree). Backend (item 1) pelo coordenador; itens 2–3
@@ -16535,3 +16493,326 @@ do objeto, **em produção**. É o VETO 2.
   pertencem à A&S.
 - Produção em **113 migrations**, sem `as_varredura_vagas`. Homologação com 0113 a 0118 aplicadas.
 - A varredura do Pandapé está **INERTE** nos dois ambientes, e o log do boot diz isso a cada restart.
+
+---
+
+## 20 a 21/09/2026: PONTO DE RETOMADA, com o Portal na 3120 esperando validação
+
+Sessão encerrada pelo diretor para ele validar no dia seguinte. **Esta entrada é o ponto de retomada
+completo das TRÊS frentes.** Quem retomar lê daqui, confere o disco (§ norma 1) e não precisa de mais
+nada. O diretor **não validou nada desta rodada ainda**: nada commitou e nada subiu para produção.
+
+# ⛔ OS DOIS VETOS DE CPF SEGUEM ABERTOS, e os dois travam produção
+
+Eles são da entrada anterior, **não foram tocados nesta rodada** e continuam sendo a primeira coisa
+a olhar na retomada.
+
+1. **A&S: o CPF do SUBSTITUÍDO sai no retorno de LISTA da Central de Vagas** (`vagas.service.ts`,
+   `list()`). Pré-existente, e o conserto não é de uma linha: a trilha lê o campo do item de lista,
+   então tirá-lo de lá exige criar a porta de ficha (`GET /as/vagas/:id`), senão quebram o "continuar
+   rascunho" e o "clonar".
+2. **VT: CPF no NOME DO OBJETO, em produção.** Plano escrito e **não executado**:
+   `docs/PLANO-CORRECAO-BALDE-VT.md`.
+
+---
+
+# FRENTE 1, PORTAL DO CANDIDATO: no ar na 3120, NÃO commitado, aguardando o olho do diretor
+
+Detalhe técnico completo em `docs/DESENHO-PORTAL-TRILHA-SOL.md`, capítulos 7 e 8.
+
+## O que entrou nesta rodada
+
+**O gerenciador do Portal** (`/admin/portal-links`): menu movido para a **barra lateral, logo abaixo
+de Liberação Admissional** (e fora do hub do Menu Gerencial); **CRUD do link** na coluna Ações
+(gerar, bloquear e desbloquear, reversível); **aba Concluído** com recorte no servidor, com a frente
+de trabalho mostrando só quem ainda dá trabalho; **coluna Data De Admissão** com filtro e ordenação;
+**cilindro de progresso** no lugar do texto "7 de 7", extraído da Central de Vagas para componente
+compartilhado; **oito filtros de múltipla seleção** mais busca por nome; e o **botão Copiar
+corrigido**.
+
+**A trilha do candidato:** layout de PC que usa a horizontal de verdade (container de 1600, tabuleiro
+como painel à esquerda, cartão de envio em duas colunas com área de arrastar), **banner Grupo Soulan
+em todas as telas**, botão **"Fale com o RH"** em todas as telas, **Voltar** para a casa anterior,
+casas clicáveis no tabuleiro, e a **reabertura de documento** como pendência no modal de Auditoria,
+para qualquer consultor.
+
+## O furo que a auditoria achou, e ele JÁ ESTAVA EM PRODUÇÃO
+
+`aplicarPosVeredito` só agia com a régua completa, `autoConcluirAuditoria` só escrevia `ANALISE_OK` e
+o farol deriva de `frentes.concluida`. Logo, o estado **"Auditoria concluída com régua obrigatória
+INCOMPLETA" já era alcançável**, e nele a pendência reaberta **some da fila** (a Esteira esconde
+frente concluída). Corrigido com o recuo: frente volta a `ANALISE_PENDENTE` com `concluida: false`,
+evento marcado como reversão, Cadastro já aberto derrubado pela régua que já existia, farol
+recomputado.
+
+**A guarda protege o EFEITO, não só as portas**, e este foi o veto da auditoria de código: havia um
+caminho de UM clique por fora (o modal oferece "Enviar novo arquivo" em documento já aprovado), e por
+ele o Cadastro caía **com o envelope da Clicksign vivo**. A guarda é por `clicksign_status` e kit
+gerado, nunca por farol (`ADMISSAO_CONCLUIDA` é flag manual até a INT-4 e passaria batido).
+
+## Medições desta rodada, para não se perder
+
+- O **Copiar** falhava porque `navigator.clipboard` não existe fora de contexto seguro, e a
+  homologação é `http`. Caminho de reserva entrou, e a prova é de ponta a ponta: clicar e colar
+  devolve a URL.
+- A tabela de **dez colunas não cabia em 1440**: pedia 1.290px para 1.094 disponíveis, e o que ficava
+  de fora era a coluna de **Ações**. Resolvido com a variante `ds-table--densa`, sem tocar nas outras
+  tabelas do sistema (a máscara da §A.12 continua uma só).
+- O **banner cortava o título no celular** ("Portal Do ..."). Corrigido.
+- **Bloquear e desbloquear** provados ao vivo contra o backend real: a pill vai para "Bloqueado" e
+  volta para "Ativo" no MESMO link.
+- A **aba Concluído** traz 2 e os cinco cards **não mudam de número**, que é o que impede o funil de
+  mentir conforme a aba.
+
+## Portões desta rodada
+
+Backend **317 arquivos / 4.755 testes**, frontend **60 / 822**, `tsc` limpo nos dois. `seguranca`
+auditou o MAPA antes do código (vetou os dois itens, 8 vetos) e o CÓDIGO depois (bloqueio aprovado,
+reabertura vetada por 1 furo, hoje corrigido e provado por mutação). O `tester` independente escreveu
+75 testes a partir do requisito, em paralelo à construção.
+
+## AS 7 DECISÕES PENDENTES DO PORTAL (o diretor decide na validação)
+
+1. **O ASO não recua.** `esteira.service.anexarAso` também des-completa a régua e não dispara o
+   recuo: existe condição explícita do diretor de que aquele caminho não crie gatilho de conclusão
+   nem de arquivamento. A segurança classificou o risco como MÉDIO, com **efeito retardado e autor
+   errado na trilha** (a próxima ação inocente de outra pessoa dispara o recuo e carimba o nome dela).
+2. **Drive.** O documento errado fica no prontuário e o substituto **nunca é re-arquivado** enquanto
+   `drive_pasta_url` existir. A tela avisa; o re-arquivamento é decisão do diretor.
+3. **"Gerar link novo" contorna o bloqueio** (link novo nasce liberado e revoga os anteriores). O
+   bloqueio tranca o LINK, não o candidato. Confirmar se é o desejado.
+4. **Sobre-entrega passou a concluir** (régua que encolheu depois da entrega, `aceitos >=
+   obrigatorios`). Decisão da fábrica, tomada ao consolidar, e reversível em uma linha.
+5. **Admissão concluída nunca sai do funil:** ENCAMINHADOS só cresce. A aba Concluído já é decisão
+   dele; falta dizer como fica o CONTADOR.
+6. **A logo saiu do cartão de identificação** (o banner passou a carregar a marca) e a identificação
+   ficou com **dois "Fale com o RH"**, o compacto do banner e o de bloco do rodapé. Decidir se tira um.
+7. **Base existente:** admissões hoje presas no estado inconsistente serão recuadas na **próxima ação
+   de auditoria**. É correção, mas é mudança visível em base existente. Medir quantas antes de subir,
+   se o diretor quiser.
+
+## As 4 pendências anteriores do Portal, que continuam de pé
+
+A **identidade já está ligada** (não é mais pendência). Seguem: o **PC** (agora construído, aguardando
+validação), o **termo de privacidade do jurídico** (em validação com ele), a **carta para o Fernando**
+(allowlist do Portal na barreira e o antivírus/bucket, pronta, o diretor envia) e o **balde de
+throttle** separado do Portal.
+
+---
+
+# FRENTE 2, A&S (INGESTÃO)
+
+Commitada: `f24c506` (as cinco decisões da esteira) e `c946149` (o diário). **Pendente**, sem
+alteração nesta rodada: a tela **"Liberar Vaga" completa mais a simulação** (esperando validação), o
+**veto 1 do CPF do substituído** (trava produção), **subir as migrations** e **ligar a varredura**
+(data de corte). A varredura do Pandapé segue **INERTE** nos dois ambientes.
+
+---
+
+# FRENTE 3, VT
+
+Frente de correção **aberta e não executada**: o CPF vaza no nome do objeto, **em produção**. É o veto
+2, e o plano é o `docs/PLANO-CORRECAO-BALDE-VT.md`.
+
+---
+
+# ESTADO NO DISCO, no encerramento
+
+- `git log`: **`23491fb`** na frente, igual à sessão anterior. **141 arquivos não commitados**, de
+  TRÊS frentes misturadas. Quem retomar **não faz `git add .`** (§A.14): o recorte é nominal, e o
+  Portal tem hunks dentro de arquivos que pertencem à A&S.
+- Produção (3010) e homologação (3120) respondendo **200**; os quatro serviços `active`.
+- **Migrations: produção em 113, homologação em 118** pelo registro do drizzle. As **0119, 0120 e
+  0121** (identidade do link, carimbos de acesso e bloqueio manual) foram aplicadas na homologação
+  **à mão**, por `psql`, e **não estão no registro**. **Produção não tem `portal_links`**: quando o
+  Portal subir, as três migrations vão **ANTES** do backend, senão as cinco leituras do link quebram.
+- O que só existe na homologação: o banco dela tem duas admissões de prova com link vivo e uma
+  pendência semeada em NO_TIME, usadas para a prova visual.
+
+## O que falta o diretor mandar
+
+- **A mensagem para o Fernando** (allowlist do Portal na barreira mais o antivírus/bucket): pronta,
+  ele envia.
+- **O termo de privacidade do jurídico**: em validação.
+
+---
+
+# SESSAO 2026-09-23, PORTAL: DEMO ->GI, 4 AJUSTES, E OS 6 BUGS DE TELA
+
+Sessao longa, tres frentes do Portal do Candidato, todas na homologacao (3120). Registro completo
+para a proxima sessao reconstruir so lendo isto.
+
+## FRENTE A, DEMO PORTAL ->GI LIGADA E PROVADA (commitada)
+
+Objetivo: ligar a demo de ponta a ponta na homolog para o diretor validar a conferencia na tela.
+- GCP do projeto `ea-v2-automatic` plugado pelo diretor (bucket + 2 service accounts: emissor que
+  assina, leitor que le). Chaves fora do diretorio de trabalho.
+- Provado AO VIVO: emissor assina (200) -> navegador sobe o RG no balde (PUT 200, CORS ok) -> IA
+  isolada (instancia 8001, so leitura) le com Gemini 2.5 Flash -> veredito. Producao (IA 8000)
+  intocada; peca 3 (envio ao G.I) construida e DESLIGADA.
+- Para a IA APROVAR um RG fabricado: casar o CADASTRO com o documento. Criada admissao sintetica
+  (candidata simulada, dados SIMULADOS sem PII real) com nome/cpf/nascimento identicos ao RG; e o RG
+  precisa de foto E assinatura identificaveis + dentro da validade (regra de auditoria do RG). Com
+  isso: STATUS VALIDADO, e a tela de conferencia ("Confira O Que Lemos Do Seu RG") abre com os
+  campos lidos.
+- Descoberta util (memoria): a auditoria da IA compara nome+cpf com o cadastro; e o diagnostico
+  rapido e chamar `gemini.auditar_documento` direto (venv da IA isolada), sem browser nem limite de
+  tentativa, iterando a imagem ate dar VALIDADO.
+- Entregue: `docs/DEMO-PORTAL-GCP-PASSO-A-PASSO.md` (setup GCP), `docs/DEMO-PORTAL-VALIDACAO-NA-TELA.md`
+  (walkthrough), `docs/demo-portal-rg-simulado.png` (RG que a IA aprova).
+- COMMITADO E PUSHADO: **`07cee21`** (docs + RG), em `origin/main`. Autorizado pelo diretor.
+
+## FRENTE B, 4 AJUSTES DA DEMO (deployado na homolog, NAO commitado)
+
+O diretor validou a demo e pediu 4 ajustes, feitos e no ar na 3120:
+1. Admissao sintetica com a casa do RG VAZIA (para o diretor subir o RG e ver a IA ao vivo).
+2. Motivo da reprova CLARO para o candidato: nova categoria `FOTO_ASSINATURA` em
+   `portal-motivo-candidato.ts` (frase de lista fechada, sem travessao). O reprovado por foto agora
+   diz "Nao conseguimos ver bem a foto ou a assinatura...", nao o generico.
+3. Mensagem de "processando" maior e mais clara (a casa EM_ANALISE no `page.tsx`).
+4. Conferencia SEM campos vazios de auditoria: removido o loop que empurrava `camposConferidos`
+   (Legibilidade/Foto/Assinatura) como campos vazios em `portal-credencial.service.ts`.
+- Auditado: `backend` (44 testes), `seguranca` APROVADO (o motivo cru nao vaza ao candidato; fica so
+  no canal do time em `documentos_admissao.observacao`, atras de RBAC). Provado visual (ajustes 3 e
+  4). NAO commitado: a frente do Portal e UNTRACKED.
+
+## FRENTE C, OS 6 BUGS DE TELA + PERSISTENCIA (deployado na homolog, NAO commitado)
+
+O diretor achou 6 bugs na validacao ao vivo. RAIZ COMUM (bugs 4,5,6): o resultado da IA (campos
+lidos + veredito) era EFEMERO, so vivia no estado React da tela, nao persistia e nao voltava pela
+trilha; toda navegacao/refresh regredia para AGUARDANDO_AUDITORIA -> EM_ANALISE. Refinos do
+`arquiteto`: (1) a auditoria do Portal e SINCRONA, logo polling e errado, a cura e persistir e
+devolver pela trilha; (2) o reprovado ficava preso em "em analise" porque o Portal nunca escreve
+INCONFORME e `estadoDoPasso` mapeava AGUARDANDO_AUDITORIA->EM_ANALISE antes de tudo, o que tambem
+travava o "substituir".
+
+Correcao construida (distribuida: arquiteto -> backend + frontend + tester em paralelo -> seguranca):
+- **Migration 0126** (`0126_portal_conferencia.sql`, journal idx 126): tabelas `portal_conferencia`
+  (campos lidos + veredito redigido, TTL 48h, unique admissao+tipo, cascade, DISPLAY-ONLY) e
+  `portal_termo_aceite` (consentimento LGPD, PII-free, sem TTL).
+- A trilha (`portal-documentos.service.ts`) devolve `conferencia` por passo, `termoAceito` e
+  `dadosGiConfirmados`; a tela reconstroi conferir/ajustar/aceito do servidor (bugs 4,5).
+- `estadoDoPasso` ganhou `reprovadoNoPortal` (veredito.valido=false E tentativa restante) -> AJUSTAR
+  em vez de EM_ANALISE (bug 3, o substituir reabre). O "ha tentativa" vem de `portal_credenciais`,
+  nao da conferencia (display-only, C10).
+- Frontend (`page.tsx`): sessao E link no **sessionStorage** (refresh retoma, morre ao fechar aba);
+  reconstroi `Envio` de `passo.conferencia`; `POST /portal/termo` no aceite (bug 1); reidrata
+  `camposVistos` de `dadosGiConfirmados`.
+- Contrato compartilhado (`packages/shared-types`) escrito pelo COORDENADOR (dono unico, §A.39):
+  `ConferenciaDoPasso`, `conferencia`, `termoAceito`, `dadosGiConfirmados`, `TermoAceiteResposta`.
+
+Gate: backend suite 5279 passed / 1 pre-existing out-of-scope (filtro de estado do link no painel do
+RH, fixture com data vencida) / 99 skip; frontend typecheck verde; `tester` independente 34/34 nos 9
+requisitos; `seguranca` APROVADO o plano (C1-C13) E o codigo antes do deploy. `devops` deployou:
+migration aplicada (as duas tabelas existem), 3 builds verdes (shared-types->backend->frontend com
+BACKEND_ORIGIN), restart so dos `ea-homolog-*`, health OK, `POST /portal/termo` responde 401 (nao
+404, o controller subiu). Producao intocada.
+
+Prova visual (§A.13) na 3120: refresh RETOMA a trilha sem expulsar e o termo nao reaparece (bugs 1,2);
+reprovado vira "ajustar" com o motivo claro e o botao de substituir (bugs 3,6); conferencia so com
+campos preenchiveis (bug 4); bug 5 e o mesmo motor do 4.
+
+## DECISOES FECHADAS NESTA SESSAO (nao re-litigar)
+
+- **Reversao da CONSEQUENCIA do veto V12, RATIFICADA pelo diretor.** A sugestao da IA (campos lidos)
+  passa a PERSISTIR (`portal_conferencia`), com TTL 48h, minimizacao, CPF fora de log, campos
+  anulados apos a confirmacao. O NUCLEO do V12 fica de pe: a sugestao nunca e dado autoritativo (quem
+  grava dado final e a confirmacao humana, por outra rota); e display-only, nunca conta teto/gate/GI.
+- **Persistir o LINK no aparelho (sessionStorage), escolha do diretor.** Para o refresh sempre
+  retomar. CORRECAO DE FATO: o `seguranca` afirmou por engano que o link carrega CPF+nome; o link do
+  Portal e **PII-free** (so admissao+jti, veto V5, `portal-identidade.service.ts:128/501`), o
+  coordenador pegou o erro conferindo (§A.39 passo 5). Persistir o link e seguro.
+
+## ESTADO NO DISCO, no encerramento (2026-09-23)
+
+- `git log` na frente: **`07cee21`** (docs da demo Portal->GI), em `origin/main`. As Frentes B e C
+  (codigo do Portal) **NAO commitadas**: a frente do Portal inteira e UNTRACKED (sem commit de
+  sessoes anteriores), entao commitar arrastaria toda a frente nao revisada (§A.14). Fica para uma
+  OST propria de commit do Portal.
+- Homologacao (3120) e o backend dela (3111) respondendo; migration da homolog agora inclui a **0126**
+  (as tabelas `portal_conferencia` e `portal_termo_aceite` existem no banco `ea_automatic_homolog`).
+- Admissoes sinteticas de prova (candidata simulada) criadas na homolog para as capturas e para o
+  diretor revalidar; guia `docs/DEMO-PORTAL-REVALIDAR-6-BUGS.md`.
+- Producao (3010) intocada em todas as tres frentes.
+
+## FOLLOW-UPS ABERTOS (nao travam nada)
+
+- **Commit da frente do Portal**: tratar como OST propria (a frente e untracked; recorte nominal).
+- **Allowlist de `/portal/termo`** com o Fernando quando o portal for ao ar (como as outras
+  `/portal/*`). Na homolog ja funciona.
+- **`0126_snapshot.json` do drizzle**: a migration subiu sem o snapshot (aplica pelo journal, mas o
+  proximo `drizzle-kit generate` precisa dele). Gerar.
+- **1 teste pre-existente falhando** fora do escopo: filtro de estado do link no painel do RH
+  (`portal-painel-aba-e-filtros.tester.spec.ts`), fixture com `expiraEm` vencida. Dono da tela do
+  painel reancora a data.
+
+---
+
+## 2026-09-24 — Admissão ativa SEM FRENTES: correção do registro + fecho da causa raiz (commit d845232, EM PRODUÇÃO)
+
+**Sintoma (diretor):** admissão da Leila Aparecida Farias (CPF 344…75, id 701dcef3) só aparecia no
+Gerenciador (farol EM_ADMISSAO), sumida das abas Auditoria/Exame/Cadastro ("não informado / não
+informado / aguardando").
+
+**Diagnóstico (trilha em candidato_alteracoes_log):** admissão do Pandapé nasceu pré-admissão
+(AGUARDANDO_LIBERACAO, sem frentes). Leia (MASTER) recusou (LIBERACAO_RECUSADA). Depois, pelo modal
+de edição do Gerenciador, preencheu contrato/salário/VT/data e trocou o seletor de status para "Em
+Admissão": o `editar` gravou farolGlobal=EM_ADMISSAO **sem criar as frentes** (AUDITORIA+EXAME só
+nascem em `create` e `aplicarLiberacao`). Resultado: admissão ativa sem frentes + recusa órfã
+(`recusado_por_id`/`recusado_em` preenchidos fora de LIBERACAO_RECUSADA). Bug + ação de time.
+
+**Correção do registro (produção, transacional, idempotente):** criadas AUDITORIA (ANALISE_PENDENTE)
++ EXAME (A_AGENDAR); documentos da régua (cliente 66 + cargo) inseridos PENDENTE preservando o CPF
+ENTREGUE; recusa limpa; trilha registrada. Verificado no banco.
+
+**Causa raiz fechada (commit d845232):** guarda no `editar` bloqueia com ConflictException qualquer
+troca de farol que entre ou saia dos estados de pré-liberação (AGUARDANDO_LIBERACAO/LIBERACAO_RECUSADA);
+o caminho correto é a tela de Liberação (Reativar, Liberar). A comparação é `!== adm.farolGlobal`
+porque o modal reenvia o farol atual em toda edição (editar só a folha de uma recusada segue passando).
+Spec novo `admissoes.editar-liberacao-guard.spec.ts` (6 casos, verde). typecheck verde; suíte de
+admissões 260 passed.
+
+**Agentes:** Explore (mapa do modal do front), backend (guarda + spec), coordenador (consolidou
+conferindo + rodou a suíte). `seguranca` NÃO acionado: regra de fluxo (farol), sem CPF/dado
+pessoal/auth/RBAC/credencial (§A.38 não dispara).
+
+**Deploy:** recorte por blob (service.ts tinha WIP de outras frentes), commit d845232, push origin/main,
+release `ea-release-ingestao` fast-forward + `nest build` + restart `ea-backend` (health 200, Nest OK).
+Produção roda do release, não do working tree do dev.
+
+## 2026-09-25 — Portal do Candidato e lote de frentes A&S/admissão em origin/main, mais a vaga de demo
+
+**O que subiu (commit do lote validado inteiro, opção 2 do diretor, sem cirurgia).** O working tree
+acumulava várias frentes já validadas pelo Rike ao longo do caminho, entrelaçadas nos arquivos
+compartilhados (shared-types, schema, journal de migrations, wiring de módulos). Em vez de recorte
+cirúrgico por hunk (que deixaria dívida de journal), o diretor decidiu commitar tudo de uma vez:
+- **Portal do Candidato** (backend `src/portal/`, domínio `portal-*`, front `app/portal/` + `admin/portal-links/`, ai-service `portal_*.py` + `routers/portal.py`, migrations `0116/0119/0120/0121/0122/0126`, `admin/dicas-documento`, docs de desenho e parecer).
+- **dados-gi** (`domain/dados-gi-campos`, `portal-dados-gi`, migration `0125_admissao_dados_gi`) e **ordem-dos-documentos**: dependências do Portal.
+- **dicas-documento** (migration `0123`), **liberação-override-aceites** (migration `0124`), **VT** (`vt-coleta`, `vt-online`), **reauditoria/reabertura-documento**, e o churn de specs de A&S/admissões/auditoria.
+
+**Gate (verde antes do commit, §A.21/§A.25):** typecheck 0; suíte **5325 testes passando** (359 arquivos).
+O único vermelho era um teste NOVO do Portal, `portal-painel-aba-e-filtros.tester.spec.ts`: a fixture
+ancorava o vencimento do link no relógio congelado `HOJE`, enquanto `estadoDoLinkVigente` compara com
+`Date.now()` real, então o link nascia VENCIDO e o filtro por VIVO voltava vazio. Correção só na
+fixture (link nasce vivo de verdade), sem tocar produção; o filtro do painel estava correto.
+
+**Vaga de demonstração (frente 2, homolog, pronta e NÃO commitada em produção).** Na `ea_automatic_homolog`:
+limpeza da esteira A&S (com backup antes, §A.6) + seed de 1 vaga `SIM-2026-0501` "Auxiliar Administrativo
+de Farmácia (Loja Corifeu)" em `PENDENTE_REVISAO` + 4 candidatos sintéticos (CPF faixa 999): 2 vinculados
+(Camila, Bruno, em Triagem) e 2 soltos (Larissa, Diego). Fluxo provado fim a fim contra a homolog e
+depois restaurado ao estado inicial: liberar, funil, vincular solto ao vivo, mover etapa, aprovar,
+enviar para admissão (a ponte cria a admissão em `AGUARDANDO_LIBERACAO`). Passo a passo em
+`docs/DEMO-VAGA-AS-PASSO-A-PASSO.md`. Prova visual §A.13 na 3120 (tela "Liberar Vaga").
+
+**O que ainda espera:**
+- **Fernando (infra do Portal):** barreira/allowlist, domínio e e-mail de envio do link. O Portal foi
+  commitado, mas NÃO sobe para produção enquanto o Fernando não aplicar. A subida para prod fica para
+  quando o diretor mandar.
+- **Data de corte da ingestão A&S** para produção (ainda pendente do diretor).
+- **Vaga de demo:** pronta na homolog, aguardando a validação/demonstração do diretor.
+
+**Agentes (§A.34/§A.38):** `backend` limpou+semeou a homolog (morreu por limite de sessão antes de
+provar o fluxo); coordenador provou o fluxo, corrigiu o teste vermelho, rodou o gate, consolidou e
+commitou. `seguranca` NÃO acionado: a frente 2 é dado sintético em homolog (sem PII real, sem prod) e
+a correção da frente 1 é fixture de teste de filtro (não toca CPF/auth/RBAC/credencial); o Portal já
+tem parecer prévio em `docs/PARECER-SEGURANCA-PORTAL-CONSTRUIDO.md`.
