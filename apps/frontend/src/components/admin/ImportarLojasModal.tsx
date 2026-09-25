@@ -48,6 +48,17 @@ interface Previa {
   descartadasPorTeto: number;
   tetoLinhas: number;
   colapsadas: number;
+  /**
+   * O QUE A LEITURA ENTENDEU DA PLANILHA (mesmo contrato da importação de candidatos).
+   *
+   * OPCIONAIS DE PROPÓSITO: o backend passou a expor estes campos, e enquanto uma versão não os
+   * devolver a linha e o seletor de aba simplesmente não aparecem, sem quebrar a tela.
+   */
+  abaUsada?: string;
+  /** Todas as abas do arquivo, para trocar quando a leitura pegou a aba errada. */
+  abasDisponiveis?: string[];
+  /** Linha (base 1) onde o cabeçalho foi encontrado; 1 quando não há título antes dele. */
+  linhaCabecalho?: number;
   criar: LinhaLoja[];
   jaExiste: { linha: number; nome: string; ativo: boolean; ganhaEndereco: boolean }[];
   rejeitadas: { linha: number; motivo: string }[];
@@ -70,26 +81,49 @@ export function ImportarLojasModal({
 }) {
   const [arquivo, setArquivo] = useState<File | null>(null);
   const [previa, setPrevia] = useState<Previa | null>(null);
+  /**
+   * A ABA EM USO. Nasce do que o backend escolheu (`abaUsada`) e passa a ser a escolha do consultor
+   * quando ele troca. Ela acompanha TODA releitura do arquivo (inclusive a correção de coluna), ou
+   * a prévia voltaria para a aba padrão no primeiro ajuste de de/para.
+   */
+  const [aba, setAba] = useState<string | null>(null);
   const [carregando, setCarregando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   const [resultado, setResultado] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  /** Pede a prévia. Sem `mapa`, a IA decide; com `mapa`, é a correção e a IA não é consultada. */
-  async function pedirPrevia(file: File, mapa?: Mapeamento) {
+  /**
+   * Pede a prévia. Sem `mapa`, a IA decide; com `mapa`, é a correção e a IA não é consultada.
+   *
+   * `aba` vai junto quando existe. `preservarPrevia` é o caso da TROCA DE ABA: falhar ali não pode
+   * apagar o de/para que já estava conferido na tela.
+   */
+  async function pedirPrevia(
+    file: File,
+    opcoes: { mapa?: Mapeamento; aba?: string | null; preservarPrevia?: boolean } = {},
+  ) {
     setCarregando(true);
     setErro(null);
     try {
       const form = new FormData();
       // §A.6: o arquivo vai no CORPO, nunca em query string.
       form.append("file", file);
-      if (mapa) form.append("mapeamento", JSON.stringify(mapa));
-      setPrevia(
-        await apiUpload<Previa>(`/admin/clientes/${encodeURIComponent(codCliente)}/lojas/importar/previa`, form),
+      if (opcoes.mapa) form.append("mapeamento", JSON.stringify(opcoes.mapa));
+      if (opcoes.aba) form.append("aba", opcoes.aba);
+      const p = await apiUpload<Previa>(
+        `/admin/clientes/${encodeURIComponent(codCliente)}/lojas/importar/previa`,
+        form,
       );
+      setPrevia(p);
+      // O estado da aba só avança QUANDO A LEITURA VOLTA: marcá-lo no clique deixaria o seletor
+      // apontando para uma aba que falhou ao ser lida.
+      setAba(p.abaUsada ?? opcoes.aba ?? null);
     } catch (e) {
       setErro(e instanceof Error ? e.message : "Não foi possível ler a planilha.");
-      setPrevia(null);
+      if (!opcoes.preservarPrevia) {
+        setPrevia(null);
+        setAba(null);
+      }
     } finally {
       setCarregando(false);
     }
@@ -98,6 +132,7 @@ export function ImportarLojasModal({
   async function escolherArquivo(file: File | null) {
     setArquivo(file);
     setResultado(null);
+    setAba(null);
     if (file) await pedirPrevia(file);
     else setPrevia(null);
   }
@@ -106,7 +141,18 @@ export function ImportarLojasModal({
   async function corrigirColuna(chave: keyof Mapeamento, valor: string) {
     if (!previa || !arquivo) return;
     const mapa: Mapeamento = { ...previa.mapeamento, [chave]: valor === "" ? null : Number(valor) };
-    await pedirPrevia(arquivo, mapa);
+    await pedirPrevia(arquivo, { mapa, aba });
+  }
+
+  /**
+   * TROCA A ABA: refaz a leitura e o de/para para a aba escolhida.
+   *
+   * SEM `mapa` de propósito: aba diferente tem colunas diferentes, então o mapeamento anterior não
+   * se aplica e a IA volta a sugerir para o conteúdo novo.
+   */
+  async function trocarAba(nova: string) {
+    if (!arquivo || nova === aba) return;
+    await pedirPrevia(arquivo, { aba: nova, preservarPrevia: true });
   }
 
   async function aplicar() {
@@ -126,6 +172,7 @@ export function ImportarLojasModal({
       );
       setPrevia(null);
       setArquivo(null);
+      setAba(null);
       if (inputRef.current) inputRef.current.value = "";
       onImportado();
     } catch (e) {
@@ -136,6 +183,31 @@ export function ImportarLojasModal({
   }
 
   const semNome = previa && previa.mapeamento.colunaNome === null;
+
+  /** As abas do arquivo como opções do seletor; só aparece quando há mais de uma. */
+  const optAbas = (previa?.abasDisponiveis ?? []).map((nome) => ({ value: nome, label: nome }));
+
+  /**
+   * O QUE A LEITURA ENTENDEU, em uma frase, e por que ela é obrigatória aqui.
+   *
+   * A importação de Lojas lia SEMPRE a primeira aba. Com o leitor compartilhado ela passou a varrer
+   * as abas e escolher a primeira com cabeçalho e dado, e a achar a linha do cabeçalho: ganho real,
+   * mas invisível. Sem esta linha, a prévia poderia vir de OUTRA aba sem o consultor ver nem poder
+   * trocar. §A.11: vírgula e ponto, nunca travessão.
+   */
+  const frasePrevia = (() => {
+    if (!previa) return null;
+    const partes: string[] = [];
+    if (previa.abaUsada) partes.push(`Lendo a aba ${previa.abaUsada}`);
+    if (previa.linhaCabecalho) {
+      partes.push(
+        partes.length > 0
+          ? `cabeçalho na linha ${previa.linhaCabecalho}`
+          : `Cabeçalho na linha ${previa.linhaCabecalho}`,
+      );
+    }
+    return partes.length > 0 ? `${partes.join(", ")}.` : null;
+  })();
 
   return (
     <Modal onClose={onClose} ariaLabel="Importar lojas" className="max-w-[820px] p-6">
@@ -172,6 +244,31 @@ export function ImportarLojasModal({
 
       {previa && (
         <div className="mt-4 grid gap-4">
+          {/* O QUE A LEITURA ENTENDEU, declarado ANTES das colunas, com a troca de aba ao lado.
+              Degrada em silêncio: backend que não informe a aba nem a linha do cabeçalho não
+              renderiza nada aqui. */}
+          {(frasePrevia || optAbas.length > 1) && (
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              {frasePrevia && <p className="text-[11.5px] text-dim">{frasePrevia}</p>}
+              {/* Mais de uma aba: o consultor troca e a prévia é refeita, inclusive a sugestão da
+                  IA. §A.35: Select do design system, nunca o nativo. */}
+              {optAbas.length > 1 && (
+                <label className="grid gap-1">
+                  <span className="ds-label">Aba Da Planilha</span>
+                  <Select
+                    value={aba ?? ""}
+                    onChange={(v) => void trocarAba(v)}
+                    options={optAbas}
+                    placeholder="Escolha a aba"
+                    ariaLabel="Aba da planilha a ser lida"
+                    disabled={carregando}
+                    className="min-w-[220px]"
+                  />
+                </label>
+              )}
+            </div>
+          )}
+
           {/* O MAPEAMENTO, editável coluna a coluna. */}
           <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-3">
             <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">

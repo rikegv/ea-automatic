@@ -15,14 +15,13 @@ import type { CreateLojaDto, UpdateLojaDto } from "./lojas.dto";
 import {
   aplicarMapeamento,
   amostraParaIa,
-  ehXlsx,
-  lerCsvLojas,
-  lerXlsxLojas,
+  lerPlanilhaLojas,
   MAX_LINHAS_PLANILHA,
   type GradePlanilha,
   type LinhaLoja,
   type MapeamentoColunas,
 } from "./lojas-planilha";
+import { ErroLeituraPlanilha } from "../../planilha/leitor";
 
 /**
  * Catálogo de LOJAS por cliente (cenário 1, `docs/DESENHO-LOJAS-UNIDADES.md`, etapa 1).
@@ -219,15 +218,29 @@ export class LojasService {
    *
    * §A.6: o arquivo vive em memória, não passa pela staging e nada do conteúdo é logado.
    */
-  async previaImportacao(codCliente: string, arquivo: Buffer, mapa?: MapeamentoColunas) {
+  /**
+   * A `aba` fecha a visibilidade que o leitor único abriu: Lojas lia SEMPRE a primeira worksheet e
+   * agora varre e escolhe a primeira com cabeçalho e dado. Sem poder trocar, a tela mostraria de
+   * qual aba leu e o consultor ficaria preso nela. Ausente, segue a escolha automática.
+   */
+  async previaImportacao(
+    codCliente: string,
+    arquivo: Buffer,
+    mapa?: MapeamentoColunas,
+    aba?: string,
+  ) {
     await this.exigirCliente(codCliente);
 
-    const grade: GradePlanilha = ehXlsx(arquivo)
-      ? await lerXlsxLojas(arquivo)
-      : lerCsvLojas(arquivo.toString("utf8"));
-
-    if (grade.cabecalho.length === 0) {
-      throw new BadRequestException("A planilha está vazia ou não tem cabeçalho.");
+    // LEITURA PELO LEITOR ÚNICO: xlsx, `.xls` legado (OLE2) e csv/tsv, com o cabeçalho LOCALIZADO em
+    // vez de presumido na linha 1. O que ele não sabe ler é RECUSADO com mensagem, nunca lido como
+    // texto "na melhor das hipóteses": era isso que fazia um binário virar uma coluna de mojibake.
+    let grade: GradePlanilha;
+    try {
+      grade = await lerPlanilhaLojas(arquivo, { aba });
+    } catch (err) {
+      // Erro de LEITURA é problema do arquivo que a pessoa enviou, logo 400 com a mensagem pronta.
+      if (err instanceof ErroLeituraPlanilha) throw new BadRequestException(err.message);
+      throw err;
     }
 
     // Mapeamento: o que veio do consultor manda; sem ele, pergunta à IA.
@@ -290,6 +303,12 @@ export class LojasService {
       totalLinhas: grade.linhas.length,
       descartadasPorTeto: grade.descartadasPorTeto,
       tetoLinhas: MAX_LINHAS_PLANILHA,
+      // QUAL ABA FOI LIDA, e quais existem (§A.26): a visibilidade é dívida que a troca de leitor
+      // criou aqui. Lojas lia SEMPRE a primeira aba; o leitor único VARRE as abas e escolhe a primeira
+      // com dado, o que é melhor leitura e, sem estes dois campos, é também importação silenciosa de
+      // uma aba que o consultor não escolheu e não vê. A prévia de candidatos já devolvia os dois.
+      abaUsada: grade.abaUsada,
+      abasDisponiveis: grade.abasDisponiveis,
       colapsadas,
       criar,
       jaExiste,

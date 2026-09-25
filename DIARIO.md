@@ -16816,3 +16816,85 @@ provar o fluxo); coordenador provou o fluxo, corrigiu o teste vermelho, rodou o 
 commitou. `seguranca` NÃO acionado: a frente 2 é dado sintético em homolog (sem PII real, sem prod) e
 a correção da frente 1 é fixture de teste de filtro (não toca CPF/auth/RBAC/credencial); o Portal já
 tem parecer prévio em `docs/PARECER-SEGURANCA-PORTAL-CONSTRUIDO.md`.
+
+## 2026-09-25 — Central de Candidatos: importação de planilha por IA, e o leitor que parou de fingir
+
+**O que entrou.** A quarta porta de entrada de candidato (além de Pandapé, Digai e cadastro manual): o
+time sobe a planilha do jeito que gerou, a IA lê o cabeçalho e sugere o de/para das colunas, o time
+confere na tela e importa. Dois cenários desde o início: sem vaga (nasce na Central) e com vaga
+(entra na vaga escolhida, em CAPTACAO). Qualquer consultor importa, sem `@Roles`, como o cadastro
+manual e o lote que ela reusa. Regras do diretor: só o NOME é obrigatório; CPF duplicado REAPROVEITA
+o candidato existente sem sobrescrever; CPF vazio ou inválido importa mesmo assim (`SEM_CPF`), porque
+nem toda base tem CPF; origem carimbada como `IMPORTACAO` (migration 0128).
+
+**Terceira instância de um padrão que já existia**, e o reuso foi quase tudo: o de/para por IA
+(`/planilha/mapear-colunas-candidato` no ai-service, espelhando o de Lojas), o parser de planilha, o
+`criar` (que já dedupa por CPF) e o `adicionarEmLote` (a vinculação). Novo: o mapeador de colunas de
+candidato, o serviço de importação, as 2 rotas (`importar/previa`, `importar/aplicar`) e o modal.
+
+**O TESTE DO DIRETOR FALHOU, E A CAUSA NÃO ERA A IA.** Ele subiu a base real e a tela mostrou lixo.
+A investigação achou TRÊS armadilhas, e só a primeira era óbvia:
+1. O arquivo era **`.xls` legado** (OLE2/BIFF, magic `d0cf11e0`), e o `ehXlsx` só reconhecia `PK` (zip).
+   Pior: o roteamento era um ternário binário, **o que não é xlsx virava CSV**, então o binário foi
+   lido como texto e virou mojibake. O `exceljs` não lê `.xls`.
+2. O **cabeçalho não estava na linha 1**: a linha 1 era um título (`"Dados: Candidatos"`). Mesmo lendo
+   o `.xls`, pegar a linha 1 manteria a falha.
+3. A planilha tinha **duas abas**.
+Ou seja: a IA recebeu um cabeçalho de lixo e respondeu, corretamente, que não dava para mapear. O erro
+foi antes dela. Consertar só o formato não teria resolvido.
+
+**O leitor único (`src/planilha/leitor.ts`), e o fim da falha silenciosa.** Formato decidido por MAGIC
+BYTE, nunca por extensão: `PK` (xlsx/ODS), `d0cf11e0` (xls via SheetJS 0.20.3 do CDN oficial, não o
+`xlsx` do npm que está parado no 0.18.5 com CVE), senão texto com separador (`;`, `,`, tab) e encoding
+(UTF-8 com e sem BOM, UTF-16 com BOM que é o "Texto Unicode" do Excel, queda para cp1252) farejados.
+Detecta a linha do cabeçalho, lista e escolhe a aba, e **RECUSA com mensagem clara** o que não é
+planilha legível, em vez de fingir que leu. Lojas passou a usar o mesmo leitor e ganhou o mesmo
+conserto.
+
+**O QUE AS AUDITORIAS PEGARAM, e é o registro mais importante desta entrada.** O `seguranca` VETOU
+com dois bloqueadores medidos, e o `tester` independente achou SEIS defeitos reais, todos da mesma
+classe do bug original (falha silenciosa):
+- **Veto A:** upload sem teto de bytes + o leitor materializando TODAS as abas antes de cortar. Um
+  arquivo de 27 MB de um consultor comum gastava 2 GB e **45,8 s de parse SÍNCRONO**, parando o
+  backend inteiro, inclusive o webhook do Pandapé que a §A.5 manda não atrasar. Fechado em camadas:
+  teto na porta (multer), teto de bytes (10 MB), corte DENTRO dos três laços, teto de abas, e o furo
+  que o próprio autor achou medindo, o teto de bytes NÃO protege o zip (um xlsx de 4,69 MB com 300 mil
+  linhas custava 12 s), fechado lendo o tamanho DECLARADO no diretório central do zip. Hoje: recusa em
+  milissegundos, e o pior caso aceito ficou abaixo de 1,5 s (teto do descomprimido baixado para 8 MB).
+- **Veto B:** a guarda do teto de 2.000 linhas era **código morto**, e `totalLinhas` recebia a
+  contagem já cortada: uma planilha de 5.000 importava 2.000 e a tela dizia "2000 linhas na planilha".
+  Hoje recusa com o total REAL, e a tela mostra quantas o arquivo tem, quantas entram e quantas ficam
+  de fora. Lojas já fazia certo; era só não ler o campo.
+- **Defeitos do tester:** separador escolhido na primeira linha com vírgula (um título de ERP com
+  vírgula fazia cada linha virar uma célula só); título de 2 células vencendo cabeçalho de 3 colunas;
+  CSV de uma coluna partindo em duas; a reserva cp1252 corrompendo `José` em `JosÃ©` por causa de um
+  único byte; e o ODS caindo em "planilha vazia" porque o `exceljs` não lança, devolve zero abas.
+
+**Guarda da aba.** A prévia devolve uma assinatura (hash) do cabeçalho conferido e o aplicar recusa se
+divergir, fechando o "mapa conferido na aba A aplicado na aba B". Nasceu ATIVA (o frontend já envia).
+
+**Tela.** Modal do design system (§A.35 Select, §A.41 não fecha ao clicar fora, §A.11 sem travessão,
+§A.24 title case), com o que a leitura entendeu ("Lendo a aba Candidatos, cabeçalho na linha 2"),
+seletor de aba, aviso de descarte, recusa legível, e **animação de carregamento** nas três esperas.
+Achado no caminho: não existia spinner no design system, e o mesmo círculo estava reescrito à mão em
+8 telas; o componente foi criado em `components/ui/Spinner.tsx`, sem converter as 8 (fora da OST).
+
+**Também nesta entrega:** teto de bytes no import de MATRÍCULAS (mesmo defeito, `toString` + parse) e
+filtro de `MulterError` para upload grande devolver 400 em vez de 500, só nas 4 rotas de planilha.
+
+**Prova (§A.13).** Na homologação 3120, com a BASE REAL do diretor: `.xls` lido, aba `Candidatos`,
+cabeçalho na linha 2, 8 colunas, **397 linhas**, IA com Confiança Alta mapeando Nome_cand, Email_cand
+e Telefone_cand (a base não tem CPF, nascimento, cidade nem UF). A importação dos 397 NÃO foi feita: é
+PII real e o diretor decide depois, e conversa com a frente futura do acesso ao Portal por e-mail para
+quem não tem CPF.
+
+**Agentes (§A.34/§A.38).** `ia` (mapeador, 208 testes), `backend` (leitor, serviço, rotas, correções;
+5.508 testes verdes), `frontend` (modal, avisos, animação), `seguranca` (VETOU, depois DERRUBOU o veto
+medindo), `tester` independente (6 defeitos reais com repro vermelho, 42 testes). Coordenador:
+investigou a causa das 3 armadilhas, fechou o `aba` de Lojas, publicou e provou.
+
+**Pendências registradas, não construídas (§A.31).** Teto de bytes nos uploads de DOCUMENTO
+(auditoria, esteira, kit, clicksign): medido na staging real de produção, 496 arquivos, máximo de
+4,98 MB, e o `kit/processar` aceita até 40 PDFs numa requisição sem teto nenhum; a proposta é 10 MB
+por arquivo (o precedente do Portal) mais teto agregado no kit. E o `matriculas-import.ts` ainda tem
+um parser próprio duplicado com o mesmo defeito do original.

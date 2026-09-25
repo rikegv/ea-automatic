@@ -1,5 +1,4 @@
 import {
-  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -11,6 +10,7 @@ import {
   Res,
   StreamableFile,
   UploadedFile,
+  UseFilters,
   UseInterceptors,
 } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
@@ -18,6 +18,8 @@ import type { Response } from "express";
 import { CurrentUser, Roles } from "../auth/decorators";
 import type { AuthUser } from "../auth/auth.types";
 import { parseMulti } from "../common/parse-multi";
+import { exigirPlanilhaNoTeto, OPCOES_UPLOAD_PLANILHA } from "../planilha/upload";
+import { FiltroUploadPlanilha } from "../planilha/upload-erro.filter";
 import { AdmissoesService } from "./admissoes.service";
 import { CreateAdmissaoDto } from "./dto/create-admissao.dto";
 import { LiberarAdmissaoDto } from "./dto/liberar-admissao.dto";
@@ -218,11 +220,18 @@ export class AdmissoesController {
    * princípio do documento efêmero (§A.3 regra 7).
    */
   @Post("matriculas/previa")
-  @UseInterceptors(FileInterceptor("file"))
+  @UseFilters(FiltroUploadPlanilha)
+  @UseInterceptors(FileInterceptor("file", OPCOES_UPLOAD_PLANILHA))
   previaMatriculas(@UploadedFile() file?: Express.Multer.File) {
-    if (!file?.buffer?.length) throw new BadRequestException("Envie a planilha.");
+    // TETO DE BYTES NA PORTA, e é a MESMA classe de defeito que travou o backend na importação de
+    // candidatos: o `FileInterceptor("file")` cru usa o padrão do multer, que é INFINITO, e o
+    // serviço faz `toString("utf8")` mais parse SÍNCRONO do arquivo inteiro. Medido lá: 27,66 MB
+    // viraram 2 GB de RSS e 45,8 s de event loop parado, com sessão, worker do BullMQ, webhook do
+    // Pandapé (§A.5) e tick do Clicksign esperando na fila de um upload.
+    //
     // O BUFFER vai inteiro: quem decide se é xlsx ou csv é o serviço, pelos magic bytes.
-    return this.admissoes.previaMatriculas(file.buffer);
+    const arquivo = exigirPlanilhaNoTeto(file);
+    return this.admissoes.previaMatriculas(arquivo);
   }
 
   /** Aplica as matrículas conferidas na prévia, em lote transacional com trilha. */

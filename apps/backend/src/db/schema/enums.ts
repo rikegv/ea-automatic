@@ -403,6 +403,9 @@ export const asCandidatoOrigemEnum = pgEnum("as_candidato_origem", [
   "DIGAI",
   "MANUAL",
   "INDICACAO",
+  // Importação por planilha com de/para de colunas por IA (Central de Candidatos). A plataforma
+  // carimba sozinha; o cadastro manual não a oferece. Espelha `AS_CANDIDATO_ORIGEM` do shared-types.
+  "IMPORTACAO",
 ]);
 
 /*

@@ -63,6 +63,7 @@ import { cardsDeDesfecho, cardsDeEtapa, type CardDeFunil } from "@/lib/as-vagas-
 import { tomDaSituacao } from "@/lib/as-candidatos-visual";
 import { ordemDaEtapa, rotuloDaEtapa, tomDaEtapa, useEtapas } from "@/lib/as-etapas";
 import { NovoCandidatoModal } from "@/components/as/candidatos/NovoCandidatoModal";
+import { ImportarCandidatosModal } from "@/components/as/candidatos/ImportarCandidatosModal";
 import { AlocarCandidatoModal } from "@/components/as/candidatos/AlocarCandidatoModal";
 import { FichaCandidatoModal } from "@/components/as/candidatos/FichaCandidatoModal";
 import { TrocarVagaModal } from "@/components/as/candidatos/TrocarVagaModal";
@@ -156,6 +157,7 @@ export default function CentralDeCandidatosPage() {
 
   // ── MODAIS
   const [novoAberto, setNovoAberto] = useState(false);
+  const [importarAberto, setImportarAberto] = useState(false);
   const [alocarAberto, setAlocarAberto] = useState(false);
   /**
    * TRAZER DE VOLTA (bug 2): quem é a pessoa e de qual vaga ela saiu. Enquanto isto existe, o modal
@@ -596,6 +598,9 @@ export default function CentralDeCandidatosPage() {
           {/* A QUARTA AÇÃO DA TELA. Ela existe porque o único caminho de alocação passava pelo dedup
               por CPF, e quem foi cadastrado SEM CPF ficava em beco sem saída: existia na base e não
               entrava em vaga nenhuma. Aqui a escolha é pelo nome, e a alocação vai por id. */}
+          <Button variant="secondary" onClick={() => setImportarAberto(true)} className="py-2.5">
+            Importar Candidatos
+          </Button>
           <Button variant="secondary" onClick={() => setAlocarAberto(true)} className="py-2.5">
             Adicionar à vaga
           </Button>
@@ -934,6 +939,15 @@ export default function CentralDeCandidatosPage() {
             setFichaId(id);
             void carregar();
           }}
+        />
+      )}
+
+      {importarAberto && (
+        <ImportarCandidatosModal
+          vagasAbertas={vagasAbertas}
+          token={token}
+          onClose={() => setImportarAberto(false)}
+          onImportado={() => void carregar()}
         />
       )}
 

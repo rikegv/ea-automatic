@@ -332,6 +332,55 @@ export class AiClientService {
     }
   }
 
+  /**
+   * MAPEAMENTO DE COLUNAS DA PLANILHA DE CANDIDATOS (Central de Candidatos, importação por planilha).
+   *
+   * Mesma disciplina do `mapearColunasPlanilha` de Lojas, e pelo mesmo motivo: vai só o CABEÇALHO e
+   * uma AMOSTRA (§A.6), nunca a planilha inteira. A tarefa da IA é dizer QUAIS COLUNAS são o quê; quem
+   * aplica o mapeamento nas até 2.000 linhas é o backend, o que deixa a importação determinística.
+   *
+   * NUNCA LANÇA. Falha, quota estourada, credencial ruim ou serviço fora devolvem `null`, e o
+   * chamador abre a prévia com o mapa VAZIO para o time mapear na mão. A IA ACELERA, não habilita:
+   * uma quota estourada não pode virar "não dá para importar candidato hoje".
+   *
+   * §A.6: loga só o status HTTP. Nada do conteúdo da planilha entra em log.
+   */
+  async mapearColunasCandidato(
+    cabecalho: string[],
+    amostra: string[][],
+  ): Promise<{
+    colunaNome: number | null;
+    colunaCpf: number | null;
+    colunaEmail: number | null;
+    colunaTelefone: number | null;
+    colunaNascimento: number | null;
+    colunaCidade: number | null;
+    colunaUf: number | null;
+    confianca: "ALTA" | "MEDIA" | "BAIXA";
+    observacao: string;
+  } | null> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 45_000);
+    try {
+      const res = await fetch(`${this.baseUrl}/planilha/mapear-colunas-candidato`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Internal-Token": this.token },
+        body: JSON.stringify({ cabecalho, amostra }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        this.logger.warn(`ai-service /planilha/mapear-colunas-candidato respondeu HTTP ${res.status}`);
+        return null;
+      }
+      return (await res.json()) as Awaited<ReturnType<AiClientService["mapearColunasCandidato"]>>;
+    } catch {
+      this.logger.warn("ai-service /planilha/mapear-colunas-candidato indisponível; mapeamento manual.");
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async localizarPastaDrive(
     parentFolderId: string,
     pastaNome: string,

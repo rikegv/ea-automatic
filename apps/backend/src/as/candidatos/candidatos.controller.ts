@@ -1,7 +1,29 @@
-import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post } from "@nestjs/common";
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+  UploadedFile,
+  UseFilters,
+  UseInterceptors,
+} from "@nestjs/common";
+import { FileInterceptor } from "@nestjs/platform-express";
+import {
+  CENARIOS_IMPORT_CANDIDATO,
+  type CenarioImportCandidato,
+  type MapaColunasCandidato,
+} from "@ea/shared-types";
 import { CurrentUser, Roles } from "../../auth/decorators";
 import type { AuthUser } from "../../auth/auth.types";
 import { CandidatosService } from "./candidatos.service";
+import { CandidatosImportService } from "./candidatos-import.service";
+import { exigirPlanilhaNoTeto, OPCOES_UPLOAD_PLANILHA } from "../../planilha/upload";
+import { FiltroUploadPlanilha } from "../../planilha/upload-erro.filter";
 import {
   AdicionarEmLoteDto,
   AlocarEmVagaDto,
@@ -42,7 +64,10 @@ import {
  */
 @Controller("as/candidatos")
 export class CandidatosController {
-  constructor(private readonly candidatos: CandidatosService) {}
+  constructor(
+    private readonly candidatos: CandidatosService,
+    private readonly candidatosImport: CandidatosImportService,
+  ) {}
 
   // ── A PESSOA ──────────────────────────────────────────────────────────────
 
@@ -274,6 +299,92 @@ export class CandidatosController {
   @Get("candidaturas/:id/contatos")
   listarContatos(@Param("id", ParseUUIDPipe) id: string) {
     return this.candidatos.listarContatos(id);
+  }
+
+  // ── IMPORTAÇÃO POR PLANILHA (caminhos fixos, antes do `:id`) ──────────────
+
+  /*
+   * ─ POR QUE AS DUAS ROTAS DE IMPORT MORAM NESTA CONTROLLER, e é RBAC, não organização ──────────
+   *
+   * O `MenuGuard` resolve o coringa PELO NOME DA CLASSE (`"CandidatosController.*"`, em
+   * `domain/menus`), e OPERAÇÃO NÃO REIVINDICADA PASSA. Uma controller nova para o import nasceria
+   * ABERTA a qualquer sessão válida, e o que ela oferece é ESCRITA EM MASSA de dado pessoal de quem
+   * ainda não é funcionário. Uma superfície, uma reivindicação, como o resto do módulo.
+   *
+   * `importar/previa` e `importar/aplicar` vêm ANTES do bloco `:id`: o Nest casa na ordem de
+   * declaração, e "importar" é caminho fixo que não pode ser engolido por `:id`.
+   *
+   * SEM `@Roles`, como o `criar` e as ações em lote: é a mesma operação que o consultor já faz uma a
+   * uma. Quem restringe o módulo inteiro é o menu `as-candidatos`, no `MenuGuard`.
+   *
+   * §A.6: o arquivo vai no CORPO (multipart), nunca em query string. O buffer vive na requisição e é
+   * expurgado no serviço; nada do conteúdo é logado.
+   */
+
+  /**
+   * PRÉVIA: sobe a planilha, a IA sugere o de/para das colunas e a tela confere. NÃO GRAVA NADA.
+   * IA fora do ar devolve a prévia com o mapa vazio, para o time mapear na mão.
+   */
+  @Post("importar/previa")
+  @HttpCode(200)
+  @UseFilters(FiltroUploadPlanilha)
+  @UseInterceptors(FileInterceptor("file", OPCOES_UPLOAD_PLANILHA))
+  importarPrevia(@UploadedFile() file?: Express.Multer.File, @Body("aba") aba?: string) {
+    // TETO DE BYTES NA PORTA (§A.6 e disponibilidade): sem ele, o multer aceita arquivo de tamanho
+    // infinito e o parse síncrono trava o event loop do backend inteiro.
+    const arquivo = exigirPlanilhaNoTeto(file);
+    // `aba` é OPCIONAL: sem ela a leitura escolhe a primeira aba utilizável e devolve quais existem,
+    // para a tela oferecer a troca. A base real do diretor tem duas abas no mesmo arquivo.
+    return this.candidatosImport.previa(arquivo, aba || undefined);
+  }
+
+  /**
+   * APLICA: com o `mapa` já confirmado pela tela, lê a planilha inteira e cria/reaproveita os
+   * candidatos, tolerante a falha por linha. Cenário `COM_VAGA` vincula à `vagaId` na etapa CAPTACAO.
+   *
+   * O corpo do multipart chega em TEXTO (não é JSON): `mapa` vem como string a ser parseada, e um
+   * texto inválido é erro do chamador, não motivo para 500.
+   */
+  @Post("importar/aplicar")
+  @UseFilters(FiltroUploadPlanilha)
+  @UseInterceptors(FileInterceptor("file", OPCOES_UPLOAD_PLANILHA))
+  importarAplicar(
+    @CurrentUser() user: AuthUser,
+    @UploadedFile() file?: Express.Multer.File,
+    @Body("cenario") cenario?: string,
+    @Body("vagaId") vagaId?: string,
+    @Body("mapa") mapaJson?: string,
+    @Body("aba") aba?: string,
+    @Body("assinaturaCabecalho") assinaturaCabecalho?: string,
+  ) {
+    const arquivo = exigirPlanilhaNoTeto(file);
+    if (!cenario || !(CENARIOS_IMPORT_CANDIDATO as readonly string[]).includes(cenario)) {
+      throw new BadRequestException("Cenário de importação inválido.");
+    }
+    let mapa: MapaColunasCandidato;
+    try {
+      mapa = JSON.parse(mapaJson ?? "") as MapaColunasCandidato;
+    } catch {
+      throw new BadRequestException("Mapeamento de colunas inválido.");
+    }
+    if (!mapa || typeof mapa !== "object") {
+      throw new BadRequestException("Mapeamento de colunas inválido.");
+    }
+    return this.candidatosImport.aplicar(
+      {
+        arquivo,
+        cenario: cenario as CenarioImportCandidato,
+        vagaId: vagaId || undefined,
+        mapa,
+        // A MESMA aba que a prévia usou: o mapa foi conferido contra o cabeçalho DELA.
+        aba: aba || undefined,
+        // A ASSINATURA DAQUELE cabeçalho, ecoada pela tela: o serviço recalcula a da grade que leu e
+        // recusa quando diverge, em vez de gravar a coluna errada em silêncio. Ausente (cliente
+        // antigo), a gravação segue o comportamento de antes.
+        assinaturaCabecalho: assinaturaCabecalho || undefined,
+      },
+      user,
+    );
   }
 
   // ── ROTAS COM `:id` DE CANDIDATO (por último) ─────────────────────────────

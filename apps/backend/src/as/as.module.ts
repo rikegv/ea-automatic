@@ -11,6 +11,7 @@ import { ComerciaisService } from "./comerciais/comerciais.service";
 import { CidadesController } from "./cidades/cidades.controller";
 import { CidadesService } from "./cidades/cidades.service";
 import { CandidatosService } from "./candidatos/candidatos.service";
+import { CandidatosImportService } from "./candidatos/candidatos-import.service";
 import { DeparaEtapaExternaService } from "./depara/depara-etapa-externa.service";
 import { RetencaoCandidatosService } from "./candidatos/retencao-candidatos.service";
 import { EtapasFunilAdminController } from "./etapas/etapas-funil-admin.controller";
@@ -184,6 +185,10 @@ import { VagasService } from "./vagas/vagas.service";
     // uma injeção de construtor, e não uma migration na frente do diretor.
     DeparaEtapaExternaService,
     CandidatosService,
+    // Importação de candidatos por planilha (de/para de colunas por IA). Serviço PRÓPRIO, e não um
+    // método no `CandidatosService`, para não acrescentar um quinto argumento de construtor às ~14
+    // specs que o instanciam (§A.26). Reusa `criar` e `adicionarEmLote` daquele serviço.
+    CandidatosImportService,
     RetencaoCandidatosService,
     EtapasFunilService,
     MotivosCancelamentoVagaService,

@@ -54,10 +54,15 @@ function controllerComServicoFingido() {
   const registrarSaidaEmLote = vi.fn(
     async (..._args: unknown[]) => ({ aplicadas: 0, falhas: [] }) as never,
   );
-  const controller = new CandidatosController({
-    registrarSaida,
-    registrarSaidaEmLote,
-  } as never);
+  // O SEGUNDO ARGUMENTO é o serviço de importação por planilha, que este arquivo não exercita: um
+  // dublê vazio basta para o construtor, e nenhuma rota de saída o toca.
+  const controller = new CandidatosController(
+    {
+      registrarSaida,
+      registrarSaidaEmLote,
+    } as never,
+    {} as never,
+  );
   return { controller, registrarSaida, registrarSaidaEmLote };
 }
 

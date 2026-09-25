@@ -1,40 +1,35 @@
-import { parse } from "csv-parse/sync";
-import ExcelJS from "exceljs";
 import { nomeLojaNormalizado } from "../../domain/loja";
+import {
+  amostraParaIa,
+  ehZip,
+  LINHAS_DE_AMOSTRA,
+  lerPlanilha,
+  lerTexto,
+  MAX_LINHAS_PLANILHA,
+  numeroDaLinhaNoArquivo,
+  type GradePlanilha,
+} from "../../planilha/leitor";
 
 /**
- * LEITURA DA PLANILHA DE LOJAS (cenário 1, etapa 2). FUNÇÕES PURAS, sem I/O e sem IA.
+ * IMPORTAÇÃO DA PLANILHA DE LOJAS (cenário 1, etapa 2). FUNÇÕES PURAS, sem I/O e sem IA.
  *
- * REUSA O PRECEDENTE `matriculas-import.ts` no que serve: XLSX e CSV, formato decidido pelos MAGIC
- * BYTES e não pela extensão (extensão é o que o navegador disse; magic byte é o que o arquivo é), e
- * tolerância a separador vírgula ou ponto e vírgula.
+ * A LEITURA DA GRADE NÃO MORA MAIS AQUI: mora em `planilha/leitor.ts`, que é o leitor ÚNICO do
+ * sistema (formato por magic byte incluindo `.xls` legado, cabeçalho localizado em vez de presumido
+ * na linha 1, multi aba, e RECUSA explícita do que não sabe ler em vez de devolver lixo em silêncio).
+ * Este arquivo ficou com o que é de LOJA: o de/para de colunas e as regras de rejeição e colapso.
  *
- * ONDE ELA DIFERE, e a diferença é consciente: a de matrículas DISPENSA cabeçalho, porque a célula
- * com 11 dígitos se identifica sozinha como CPF. Aqui nome, endereço e código são os três texto
- * livre, e sem cabeçalho não há como saber qual é qual. Por isso a primeira linha é sempre tratada
- * como cabeçalho, e é justamente ela que a IA lê para dizer qual coluna é o quê.
+ * Os nomes de leitura continuam exportados daqui (`lerCsvLojas`, `lerXlsxLojas`, `ehXlsx`) porque é
+ * por eles que o serviço e as specs entram, e trocar assinatura de código validado não era o pedido.
+ * Eles são casca fina sobre o leitor único: um leitor só, para não divergirem no primeiro ajuste.
  *
- * A IA NÃO ENTRA AQUI. Este arquivo lê a grade e aplica um mapeamento que alguém já decidiu (a IA ou
- * o consultor, dá no mesmo). É o que torna a importação determinística: o mesmo arquivo com o mesmo
- * mapeamento dá sempre o mesmo resultado.
+ * A IA NÃO ENTRA AQUI. Este arquivo aplica um mapeamento que alguém já decidiu (a IA ou o consultor,
+ * dá no mesmo). É o que torna a importação determinística: o mesmo arquivo com o mesmo mapeamento dá
+ * sempre o mesmo resultado.
  *
  * §A.6: nome de loja e endereço de estabelecimento não são dado pessoal, e nada daqui é logado.
  */
 
-/** Teto de linhas por arquivo (Q7). Cobre o maior caso real (60 lojas) com folga enorme. */
-export const MAX_LINHAS_PLANILHA = 2000;
-
-/** Quantas linhas de exemplo vão para a IA. O que decide o mapeamento é o cabeçalho; a amostra confirma. */
-export const LINHAS_DE_AMOSTRA = 15;
-
-export interface GradePlanilha {
-  /** Primeira linha do arquivo, sempre tratada como cabeçalho. */
-  cabecalho: string[];
-  /** As demais linhas, já limitadas ao teto. */
-  linhas: string[][];
-  /** Quantas linhas o arquivo tinha além do teto (0 quando coube inteiro). */
-  descartadasPorTeto: number;
-}
+export { MAX_LINHAS_PLANILHA, LINHAS_DE_AMOSTRA, amostraParaIa, type GradePlanilha };
 
 /** O mapeamento de colunas, venha da IA ou da mão do consultor. Índices base 0, `null` = não existe. */
 export interface MapeamentoColunas {
@@ -56,85 +51,39 @@ export interface LinhaRejeitada {
   motivo: string;
 }
 
-/** O arquivo é xlsx? Decidido pelos MAGIC BYTES (PK, zip), não pela extensão. */
+/**
+ * O arquivo é um zip (xlsx)? Decidido pelos MAGIC BYTES (PK), não pela extensão.
+ *
+ * MANTIDO como nome histórico do serviço e das specs, mas ele já NÃO é o roteador de formato: quem
+ * decide o que ler é `lerPlanilhaLojas`, que reconhece também o `.xls` legado (OLE2) e recusa o que
+ * não é planilha. Perguntar "é xlsx?" e assumir CSV no `else` foi exatamente o defeito que deixou um
+ * binário ser lido como texto.
+ */
 export function ehXlsx(buffer: Buffer): boolean {
-  return buffer.length > 1 && buffer[0] === 0x50 && buffer[1] === 0x4b;
-}
-
-/** Normaliza uma grade crua: apara as células e descarta linhas totalmente vazias. */
-function montarGrade(cruas: string[][]): GradePlanilha {
-  const limpas = cruas
-    .map((linha) => linha.map((c) => (c ?? "").trim()))
-    .filter((linha) => linha.some((c) => c !== ""));
-  const [cabecalho = [], ...resto] = limpas;
-  return {
-    cabecalho,
-    linhas: resto.slice(0, MAX_LINHAS_PLANILHA),
-    descartadasPorTeto: Math.max(0, resto.length - MAX_LINHAS_PLANILHA),
-  };
+  return ehZip(buffer);
 }
 
 /**
- * XLSX: lê a PRIMEIRA planilha do arquivo. TODA CÉLULA VIRA TEXTO, como na de matrículas, porque o
- * Excel guarda "0012" como número 12 e comeria o zero à esquerda de um código de loja.
+ * A PORTA DE LEITURA DA IMPORTAÇÃO DE LOJAS: formato por magic byte (xlsx, xls legado, csv/tsv),
+ * cabeçalho localizado, multi aba, e RECUSA com mensagem quando o arquivo não dá grade.
+ *
+ * Lança `ErroLeituraPlanilha`, que o serviço traduz para 400.
  */
+export async function lerPlanilhaLojas(
+  buffer: Buffer,
+  opcoes?: { aba?: string },
+): Promise<GradePlanilha> {
+  return lerPlanilha(buffer, opcoes);
+}
+
+/** XLSX pelo leitor único (casca fina, mantida pelo nome que o serviço já usa). */
 export async function lerXlsxLojas(buffer: Buffer): Promise<GradePlanilha> {
-  const wb = new ExcelJS.Workbook();
-  await wb.xlsx.load(buffer as unknown as ArrayBuffer);
-  const ws = wb.worksheets[0];
-  if (!ws) return { cabecalho: [], linhas: [], descartadasPorTeto: 0 };
-  const cruas: string[][] = [];
-  ws.eachRow({ includeEmpty: false }, (row) => {
-    const celulas: string[] = [];
-    row.eachCell({ includeEmpty: true }, (cell) => {
-      const v = cell.value;
-      if (v === null || v === undefined) celulas.push("");
-      else if (typeof v === "object" && "result" in v)
-        celulas.push(String((v as { result?: unknown }).result ?? ""));
-      else if (typeof v === "object" && "text" in v)
-        celulas.push(String((v as { text?: unknown }).text ?? ""));
-      else celulas.push(String(v));
-    });
-    cruas.push(celulas);
-  });
-  return montarGrade(cruas);
+  return lerPlanilha(buffer);
 }
 
-/**
- * O separador do arquivo, DETECTADO pela primeira linha, e não aceito às cegas.
- *
- * A importação de matrículas passa `delimiter: [",", ";"]`, aceitando os dois ao mesmo tempo, e lá
- * isso é inofensivo: CPF e matrícula não têm vírgula. AQUI QUEBRA, e o teste pegou: endereço tem
- * vírgula quase sempre ("Av. Roque Petroni, 1089"), então aceitar os dois parte o endereço no meio e
- * empurra o resto para a coluna seguinte, silenciosamente.
- *
- * A regra é contar na PRIMEIRA linha: o separador de verdade aparece nela tantas vezes quantas forem
- * as colunas menos um, e o outro caractere, quando aparece, está dentro de um texto.
- */
-export function detectarSeparador(conteudo: string): "," | ";" {
-  const primeira = conteudo.split(/\r?\n/, 1)[0] ?? "";
-  const pontoEVirgula = (primeira.match(/;/g) ?? []).length;
-  const virgula = (primeira.match(/,/g) ?? []).length;
-  // Empate ou ausência dos dois cai na vírgula, que é o padrão do CSV.
-  return pontoEVirgula > virgula ? ";" : ",";
-}
-
-/** CSV: tolerante a aspas e BOM como a de matrículas, com o separador DETECTADO. */
+/** CSV/TSV pelo leitor único, a partir do texto já decodificado. */
 export function lerCsvLojas(conteudo: string): GradePlanilha {
-  const cruas = parse(conteudo, {
-    delimiter: detectarSeparador(conteudo),
-    relax_column_count: true,
-    relax_quotes: true,
-    skip_empty_lines: true,
-    trim: true,
-    bom: true,
-  }) as string[][];
-  return montarGrade(cruas);
-}
-
-/** A amostra que vai para a IA: poucas linhas, o suficiente para confirmar o que o cabeçalho diz. */
-export function amostraParaIa(grade: GradePlanilha): string[][] {
-  return grade.linhas.slice(0, LINHAS_DE_AMOSTRA);
+  return lerTexto(conteudo);
 }
 
 /**
@@ -163,8 +112,9 @@ export function aplicarMapeamento(
   }
 
   grade.linhas.forEach((celulas, i) => {
-    // +2: a linha 1 do arquivo é o cabeçalho, e o índice é base 0.
-    const numeroNoArquivo = i + 2;
+    // A linha COMO ELA ESTÁ NO ARQUIVO, contada a partir da linha do cabeçalho: cabeçalho na linha 1
+    // dá o velho `i + 2`, e cabeçalho na linha 2 (planilha de ERP com título em cima) dá `i + 3`.
+    const numeroNoArquivo = numeroDaLinhaNoArquivo(grade, i);
     const valor = (idx: number | null) =>
       idx === null ? "" : ((celulas[idx] ?? "") as string).trim();
 

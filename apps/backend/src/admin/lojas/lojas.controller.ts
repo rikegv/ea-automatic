@@ -8,10 +8,13 @@ import {
   Patch,
   Post,
   UploadedFile,
+  UseFilters,
   UseInterceptors,
 } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
 import { LojasService } from "./lojas.service";
+import { exigirPlanilhaNoTeto, OPCOES_UPLOAD_PLANILHA } from "../../planilha/upload";
+import { FiltroUploadPlanilha } from "../../planilha/upload-erro.filter";
 import { AplicarImportacaoDto, CreateLojaDto, UpdateLojaDto } from "./lojas.dto";
 
 /**
@@ -85,13 +88,17 @@ export class LojasController {
    * que deixa o consultor mexer numa coluna e ver a prévia recalcular na hora, de graça.
    */
   @Post("importar/previa")
-  @UseInterceptors(FileInterceptor("file"))
+  @UseFilters(FiltroUploadPlanilha)
+  @UseInterceptors(FileInterceptor("file", OPCOES_UPLOAD_PLANILHA))
   previaImportacao(
     @Param("codCliente") codCliente: string,
     @UploadedFile() file?: Express.Multer.File,
     @Body("mapeamento") mapeamentoJson?: string,
+    @Body("aba") aba?: string,
   ) {
-    if (!file?.buffer?.length) throw new BadRequestException("Envie a planilha.");
+    // TETO DE BYTES NA PORTA: o mesmo das rotas de candidato, pelo mesmo motivo (o parse de um arquivo
+    // grande é síncrono e trava o event loop do backend inteiro).
+    const arquivo = exigirPlanilhaNoTeto(file);
     // O mapeamento chega como TEXTO no multipart (o corpo não é JSON). Texto inválido é erro do
     // chamador, não motivo para 500.
     let mapa;
@@ -106,7 +113,7 @@ export class LojasController {
         throw new BadRequestException("Mapeamento de colunas inválido.");
       }
     }
-    return this.lojas.previaImportacao(codCliente, file.buffer, mapa);
+    return this.lojas.previaImportacao(codCliente, arquivo, mapa, aba);
   }
 
   /**

@@ -890,6 +890,13 @@
       "when": 1788158292611,
       "tag": "0126_portal_conferencia",
       "breakpoints": true
+    },
+    {
+      "idx": 128,
+      "version": "7",
+      "when": 1788244693611,
+      "tag": "0128_as_candidato_origem_importacao",
+      "breakpoints": true
     }
   ]
 }

@@ -430,3 +430,25 @@ class MapeamentoColunas(_CamelModel):
     coluna_codigo: int | None = None
     confianca: str = "BAIXA"
     observacao: str = ""
+
+
+# ── Planilha de CANDIDATOS: mapeamento de colunas por IA (Central de Candidatos, A&S) ────
+# Espelha MapeamentoColunas (lojas). O request é o MESMO (cabeçalho + amostra), então reusa
+# PlanilhaMapearRequest; muda só o que a IA devolve, porque candidato tem outras colunas.
+class MapeamentoColunasCandidato(_CamelModel):
+    """ÍNDICE (base 0) de cada coluna de CANDIDATO, ou nulo quando aquilo não existe na planilha.
+
+    Índice e não nome, pelo mesmo motivo das lojas: o cabeçalho pode vir vazio, repetido ou com
+    acento, e é pelo índice que o backend aplica o mapeamento nas linhas todas. Só `colunaNome` é
+    essencial; os demais podem faltar (viram null) e o backend segue com o que veio.
+    """
+
+    coluna_nome: int | None = None
+    coluna_cpf: int | None = None
+    coluna_email: int | None = None
+    coluna_telefone: int | None = None
+    coluna_nascimento: int | None = None
+    coluna_cidade: int | None = None
+    coluna_uf: int | None = None
+    confianca: str = "BAIXA"
+    observacao: str = ""

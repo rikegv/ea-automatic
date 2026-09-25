@@ -2617,7 +2617,15 @@ export interface VagaContextoAs {
  * PLATAFORMA, que sabe por qual API buscou: ela nao pergunta a ninguem e nao pode errar. O valor
  * digitado na tela vale so para o cadastro manual.
  */
-export const AS_CANDIDATO_ORIGEM = ["PANDAPE", "DIGAI", "MANUAL", "INDICACAO"] as const;
+export const AS_CANDIDATO_ORIGEM = [
+  "PANDAPE",
+  "DIGAI",
+  "MANUAL",
+  "INDICACAO",
+  // Importação por planilha com de/para de colunas por IA (Central de Candidatos). Como PANDAPE e
+  // DIGAI, é a plataforma que preenche a origem sozinha; a tela não a oferece no cadastro manual.
+  "IMPORTACAO",
+] as const;
 export type AsCandidatoOrigem = (typeof AS_CANDIDATO_ORIGEM)[number];
 
 export const AS_CANDIDATO_ORIGEM_LABEL: Record<AsCandidatoOrigem, string> = {
@@ -2625,6 +2633,7 @@ export const AS_CANDIDATO_ORIGEM_LABEL: Record<AsCandidatoOrigem, string> = {
   DIGAI: "Digai",
   MANUAL: "Cadastro Manual",
   INDICACAO: "Indicação",
+  IMPORTACAO: "Importação",
 };
 
 /**
@@ -4556,4 +4565,99 @@ export interface LinkDoVtParaOCandidato {
   link: string;
   /** ISO. O link do VT tem prazo próprio, mais longo que a sessão do Portal. */
   expiraEm: string;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Importação de candidatos por planilha com de/para de colunas por IA (Central de
+// Candidatos, A&S). Terceira instância do padrão de Lojas/Matrículas. Vocabulário
+// compartilhado backend↔frontend; dono: coordenador (§A.39).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Os campos-alvo do candidato que a IA tenta reconhecer nas colunas da planilha. */
+export const CAMPOS_IMPORT_CANDIDATO = [
+  "nome",
+  "cpf",
+  "email",
+  "telefone",
+  "nascimento",
+  "cidade",
+  "uf",
+] as const;
+export type CampoImportCandidato = (typeof CAMPOS_IMPORT_CANDIDATO)[number];
+
+export const CONFIANCA_IMPORT = ["ALTA", "MEDIA", "BAIXA"] as const;
+export type ConfiancaImport = (typeof CONFIANCA_IMPORT)[number];
+
+/** Campo-alvo -> índice da coluna na planilha (base 0), ou null quando não reconhecida. */
+export type MapaColunasCandidato = Record<CampoImportCandidato, number | null>;
+
+/** O que a IA devolve ao ler cabeçalho + amostra (nunca a planilha inteira, §A.6). */
+export interface SugestaoColunasCandidato {
+  mapa: MapaColunasCandidato;
+  confianca: ConfiancaImport;
+  observacao: string;
+}
+
+export const CENARIOS_IMPORT_CANDIDATO = ["SEM_VAGA", "COM_VAGA"] as const;
+export type CenarioImportCandidato = (typeof CENARIOS_IMPORT_CANDIDATO)[number];
+
+/** A prévia devolvida após o upload: cabeçalho, amostra e a sugestão da IA. */
+export interface PreviaImportCandidato {
+  cabecalho: string[];
+  /** Amostra limitada (até 15 linhas) para o time conferir o de/para. */
+  amostra: string[][];
+  totalLinhas: number;
+  sugestao: SugestaoColunasCandidato;
+  /**
+   * O QUE A LEITURA ENTENDEU DA PLANILHA, e por que isto existe: base real de ERP vem com uma
+   * linha de TÍTULO antes do cabeçalho e com mais de uma aba. O time precisa VER o que foi lido
+   * (qual aba, qual linha virou cabeçalho) e poder trocar, em vez de receber lixo em silêncio.
+   */
+  abaUsada?: string;
+  /** Todas as abas do arquivo, para o time trocar quando a leitura pegou a aba errada. */
+  abasDisponiveis?: string[];
+  /** Linha (base 1) onde o cabeçalho foi encontrado; 1 quando não há título antes. */
+  linhaCabecalho?: number;
+  /**
+   * QUANTAS LINHAS O TETO DESCARTOU, e por que este campo é obrigatório na régua: cortar em
+   * silêncio e ainda dizer "N linhas na planilha" com o N já cortado faz o time concluir que
+   * entrou tudo. `totalLinhas` é o que SERÁ importado; `descartadasPorTeto` é o que ficou de fora.
+   */
+  descartadasPorTeto?: number;
+  /**
+   * ASSINATURA DO CABEÇALHO CONFERIDO, e é ela que fecha a porta do "mapa da aba A aplicado na aba
+   * B". O mapa é conferido pelo time contra ESTE cabeçalho; o aplicar recalcula a assinatura da aba
+   * que recebeu e recusa quando diverge, em vez de importar a coluna errada em silêncio.
+   */
+  assinaturaCabecalho?: string;
+}
+
+/** Contagem do que será feito, mostrada antes de gravar. */
+export interface ContagemImportCandidato {
+  total: number;
+  novos: number;
+  duplicadosCpf: number;
+  semCpf: number;
+  invalidos: number;
+}
+
+export type StatusLinhaImportCandidato =
+  | "IMPORTADO"
+  | "REAPROVEITADO"
+  | "SEM_CPF"
+  | "INVALIDO";
+
+/** Resultado por linha e agregado da importação. §A.6: sem PII no relatório além do nome. */
+export interface ResultadoImportCandidato {
+  contagem: ContagemImportCandidato;
+  importados: number;
+  reaproveitados: number;
+  vinculados: number;
+  ignorados: number;
+  linhas: {
+    linha: number;
+    nome: string;
+    status: StatusLinhaImportCandidato;
+    motivo?: string;
+  }[];
 }

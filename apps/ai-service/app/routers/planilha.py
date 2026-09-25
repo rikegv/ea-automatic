@@ -17,7 +17,11 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app import gemini
 from app.auth import require_internal_token
-from app.schemas import MapeamentoColunas, PlanilhaMapearRequest
+from app.schemas import (
+    MapeamentoColunas,
+    MapeamentoColunasCandidato,
+    PlanilhaMapearRequest,
+)
 from app.vertex_erros import ErroVertex, FamiliaErroVertex
 
 router = APIRouter(prefix="/planilha", tags=["planilha"])
@@ -65,3 +69,30 @@ def mapear_colunas(
         ) from erro
 
     return MapeamentoColunas(**dado)
+
+
+@router.post("/mapear-colunas-candidato", response_model=MapeamentoColunasCandidato)
+def mapear_colunas_candidato(
+    req: PlanilhaMapearRequest, _: None = Depends(require_internal_token)
+) -> MapeamentoColunasCandidato:
+    """Espelha /mapear-colunas (lojas) para a planilha de CANDIDATOS da Central de Candidatos.
+
+    Mesmo request (cabeçalho + amostra), mesma tradução de erro. §A.6: a amostra AQUI é PII (nome,
+    CPF, e-mail); o teto de MAX_AMOSTRA linhas continua valendo e nada disto é logado nem persistido.
+    """
+    if not req.cabecalho:
+        raise HTTPException(status_code=422, detail="Planilha sem cabeçalho para interpretar.")
+
+    try:
+        dado = gemini.mapear_colunas_candidato(
+            cabecalho=req.cabecalho,
+            amostra=[linha[: len(req.cabecalho)] for linha in req.amostra[:MAX_AMOSTRA]],
+        )
+    except ErroVertex as erro:
+        # §A.6: sobe a família e o detalhe padrão, nunca a mensagem do provedor nem o conteúdo.
+        raise HTTPException(
+            status_code=HTTP_POR_FAMILIA[erro.familia],
+            detail=DETALHE_POR_FAMILIA[erro.familia],
+        ) from erro
+
+    return MapeamentoColunasCandidato(**dado)
