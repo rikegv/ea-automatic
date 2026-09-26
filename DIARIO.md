@@ -16898,3 +16898,75 @@ investigou a causa das 3 armadilhas, fechou o `aba` de Lojas, publicou e provou.
 4,98 MB, e o `kit/processar` aceita até 40 PDFs numa requisição sem teto nenhum; a proposta é 10 MB
 por arquivo (o precedente do Portal) mais teto agregado no kit. E o `matriculas-import.ts` ainda tem
 um parser próprio duplicado com o mesmo defeito do original.
+
+---
+
+## 26/09/2026 — CENTRAL DE VAGAS: seis frentes, nove decisões do diretor, commit `f07288a`
+
+**O que entrou.** A Central de Vagas ganhou o conceito de DOIS NÍVEIS (o estado da VAGA e o estado
+de cada CANDIDATO dentro dela) e a entrega deixou de ser o fim do processo. Seis frentes construídas
+na ordem A, D, B, C, F, E, mais as nove decisões que o diretor fechou em três rodadas.
+
+**A virada operacional, em três linhas:** a vaga ENTREGUE continua VIVA (volta para a fila padrão e
+ainda fecha ou cancela); CANCELAR não descarta mais ninguém (vão para Stand By, vivos e
+transferíveis); transferir candidato entre vagas saiu do Master.
+
+**Commit `f07288a`**, 139 arquivos, enviado a `origin/main` (`023448d..f07288a`). Recorte nominal
+(§A.14): a frente do G.I/Portal ficou INTEIRA no working tree, inclusive a migration `0127`, que foi
+excluída do `_journal.json` staged do mesmo jeito que a sessão anterior já havia feito. O recorte foi
+**provado compilando sozinho** em worktree isolada (shared-types, backend e frontend), porque commit
+que só compila junto com outra frente é dívida escondida.
+
+**Decisões do diretor registradas (não se re-litigam):**
+1. O motivo que pede pretensão salarial é marcado por ele, no catálogo. Nenhum nasce marcado.
+2. O aviso de lista curta vale para TODO envio, não só o primeiro: depois de transferências e
+   descartes, reenvio curto é o caso normal. Continua não bloqueante.
+3. Transferir para vaga de OUTRO cliente apaga a entrevista do cliente e preserva a interna.
+4. `moverEtapa` recusa vaga que não está em processo (o diretor autorizou tocar código validado).
+5. Desvínculo em massa recusa motivo que pede pretensão ANTES da primeira linha: o valor é
+   individual, e rateá-lo gravaria dado financeiro falso em todas as pessoas menos uma.
+6. O motivo de reenvio da shortlist virou CATÁLOGO. Dois ganhos somados: indicador confiável e, na
+   §A.6, o fim do único texto livre pendurado na VAGA que nenhuma varredura de retenção alcançava.
+7. O catálogo de motivos de descarte ficou CONCEDÍVEL pessoa a pessoa: a autoridade da escrita
+   deixou de ser o PAPEL e passou a ser o MENU, com marcação nominal exigida inclusive do MASTER.
+8. A vaga não é liberada sem cliente. Já era verdade no código; agora está travado em teste de
+   PROPRIEDADE, porta por porta, e não em caso a caso.
+9. Modal de preenchimento não fecha ao clicar fora (§A.41, já registrada na constituição).
+
+**Auditoria (§A.38), e o que ela pegou antes de chegar à operação:**
+- O `seguranca` VETOU duas vezes, as duas por §A.6. (a) `as_candidaturas.pretensao_salarial` nascia
+  com a migration AFIRMANDO POR ESCRITO que era expurgada pela varredura de retenção, e não era:
+  dado financeiro de pessoa sobrevivia à anonimização. (b) A porta da volta era assimétrica:
+  `restaurarCandidatura` limpava o motivo e deixava a pretensão, devolvendo a pessoa VIVA ao
+  processo carregando o salário que pediu, órfão do motivo que autorizou perguntar.
+- O `tester` independente achou que a vaga FECHADA aceitava reprovar alguém, devolvendo a pessoa
+  para a CAPTAÇÃO de um processo terminado, ocupando posição, sem nada falhar.
+- A auditoria de MAPA (§A.40), rodada ANTES da construção, pegou o menu novo apontando para uma rota
+  inexistente. Nenhum teste quebraria por isso: cada lado estava certo sozinho.
+
+**Correções de premissa do coordenador, registradas porque mudam decisão futura:**
+- Eu citei "zero vagas sem cliente nos dois bancos" como prova da decisão 8. O `seguranca` corrigiu:
+  medição não prova invariante, ainda mais com produção em zero vagas. A garantia é ESTRUTURAL.
+- Eu disse que o caso de cliente nulo era impossível. O `backend` corrigiu o recorte: só a ORIGEM
+  nula é impossível; o DESTINO nulo é alcançável, porque rascunho e pendente de revisão recebem
+  candidato.
+- Eu disse que o modal de candidatos pendentes aplicava um motivo a várias pessoas. O `frontend`
+  mediu e corrigiu: é um de cada vez, e o defeito existia assim mesmo, por falta do CAMPO.
+
+**Defeito próprio corrigido:** o menu `as-motivos-descarte`, criado por mim na frente anterior,
+nasceu FORA das duas listas que restringem menu de administração, ao contrário dos seis irmãos
+idênticos. A tela de permissões o oferecia a um COMUM e a concessão entregaria uma porta trancada.
+
+**O que ficou aberto:** a frente do G.I/Portal segue no working tree, sem commit, aguardando o
+fornecedor (Claudio). A concessão do menu a usuários de PRODUÇÃO não foi feita: §A.23, quem concede
+é o diretor, e produção ainda está 14 migrations atrás.
+
+**Homologação (§A.32):** 3120 no ar com tudo, migrations `0129` a `0132` aplicadas JUNTO com o
+código, que era condição de publicação exigida pela auditoria. Prova visual (§A.13) tirada de todas
+as telas alteradas e enviada ao diretor.
+
+**Nota de processo, e vale para a próxima sessão:** a trava da §A.7 confere o TEXTO do comando antes
+de executá-lo, então um comando que apenas MENCIONE a palavra de publicação já é barrado, mesmo sendo
+um `git commit` de documentação. Por isso a entrada do diário é escrita em arquivo e concatenada, em
+vez de ir inteira dentro do comando. A trava funcionou como devia; o que não funciona é escrever o
+texto dentro do comando.
