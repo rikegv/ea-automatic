@@ -1,102 +1,128 @@
 import { describe, expect, it } from "vitest";
-import type { AsVagaCancelamentoBloqueado } from "@ea/shared-types";
-import { ApiError } from "./api";
+import type { AsOcupacaoVaga } from "@ea/shared-types";
 import {
   avisoDeProcessosEncerrados,
-  cancelamentoBloqueadoPorCandidatos,
-  fraseDoCancelamentoForcado,
+  avisoDoDestinoDoCancelamento,
+  quantosVaoParaODestino,
   type AsVagaCancelamentoPrevia,
 } from "./as-vaga-cancelamento";
 
 /**
- * O QUE ESTE TESTE PROTEGE.
+ * ─ O QUE ESTE TESTE PROTEGE, E O QUE ELE DEIXOU DE PROTEGER (Frente B) ─────────────────────────
  *
- * 1. O RECONHECIMENTO DA RECUSA. Sem ele, o 409 estruturado do cancelamento cai no tratamento
- *    genérico e o consultor lê uma frase solta no lugar da LISTA de quem ainda está em processo,
- *    que é justamente o que o corpo estruturado existe para entregar. A falha é silenciosa: nada
- *    quebra, a tela só volta a ser pior.
- * 2. O AVISO DO FORÇAMENTO. Ele descreve um efeito IRREVERSÍVEL pela tela (encerrar as candidaturas
- *    vivas), e uma frase que deixe de dizer isso transforma um botão perigoso em um botão qualquer.
+ * ┌─ DOIS BLOCOS FORAM REMOVIDOS, E O MOTIVO NÃO É "ELES FALHAVAM" ────────────────────────────┐
+ * │ Eles cobriam `cancelamentoBloqueadoPorCandidatos` (o parser do 409                          │
+ * │ `candidatosNaoEncerrados`) e `fraseDoCancelamentoForcado` (o aviso do forçamento). Os dois   │
+ * │ PASSAVAM. O que mudou foi o REQUISITO: o backend revogou a trava de candidatos, aquele 409   │
+ * │ deixou de ser lançado e o forçamento deixou de existir, então as duas funções saíram do      │
+ * │ código e os testes delas descreviam um comportamento que o sistema não tem mais.             │
+ * │                                                                                              │
+ * │ TESTE DE COMPORTAMENTO EXTINTO NÃO É REDE DE PROTEÇÃO, É ÂNCORA: ele cimenta como requisito  │
+ * │ a régua antiga, e é ele que quebra no dia em que a régua certa chega. O caso está escrito no │
+ * │ `as-vaga-acoes` ("o teste protegia o bug, não a régua").                                     │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * O QUE ENTROU NO LUGAR: a conta de quem vai para o Stand By e a frase que a diz. As duas erram em
+ * silêncio, que é a razão de elas serem função com teste em vez de expressão dentro do modal. Um
+ * número inflado numa frase que explica efeito é pior do que a frase não existir.
  */
 
-const RECUSA: AsVagaCancelamentoBloqueado = {
-  needsConfirmation: true,
-  reason: "candidatosNaoEncerrados",
-  message: "Esta vaga tem 2 candidatos com processo em aberto.",
-  naoEncerrados: [
-    {
-      candidaturaId: "c1",
-      candidatoId: "p1",
-      candidatoNome: "Fulano De Tal",
-      etapa: "CAPTACAO",
-      situacao: "ATIVO",
-    },
-    {
-      candidaturaId: "c2",
-      candidatoId: "p2",
-      candidatoNome: "Sicrano De Tal",
-      etapa: "ENTREVISTA",
-      situacao: "ALOCADO",
-    },
-  ],
-  podeForcar: true,
+const OCUPACAO_BASE: AsOcupacaoVaga = {
+  vagaId: "v1",
+  posicoesOficiais: 3,
+  ocupadas: 0,
+  finalizadas: 0,
+  finalizadasOficial: 0,
+  finalizadasBanco: 0,
+  livres: 3,
+  emSelecao: 0,
+  fora: 0,
+  excedida: false,
+  porEtapa: {},
+  porDesfecho: {},
 };
 
-describe("cancelamentoBloqueadoPorCandidatos (casa por `reason`, nunca por texto)", () => {
-  it("reconhece o 409 estruturado e devolve a lista que a tela desenha", () => {
-    const lido = cancelamentoBloqueadoPorCandidatos(new ApiError("Conflict", 409, RECUSA));
-    expect(lido?.naoEncerrados).toHaveLength(2);
-    expect(lido?.podeForcar).toBe(true);
-  });
-
-  it("reconhece a recusa que NÃO pode forçar, sem confundir com ausência de recusa", () => {
-    const semForcar = { ...RECUSA, podeForcar: false };
-    expect(cancelamentoBloqueadoPorCandidatos(new ApiError("Conflict", 409, semForcar))?.podeForcar).toBe(
-      false,
-    );
-  });
-
-  it("ignora outro status, outro `reason` e erro que não é da API", () => {
-    expect(cancelamentoBloqueadoPorCandidatos(new ApiError("Conflict", 400, RECUSA))).toBeNull();
-    expect(
-      cancelamentoBloqueadoPorCandidatos(
-        new ApiError("Conflict", 409, { ...RECUSA, reason: "candidatosPendentes" }),
-      ),
-    ).toBeNull();
-    expect(cancelamentoBloqueadoPorCandidatos(new Error("caiu a rede"))).toBeNull();
+describe("quantosVaoParaODestino (a régua é `candidaturaViva`, a mesma do backend)", () => {
+  it("soma quem está EM SELEÇÃO com os desfechos que continuam VIVOS", () => {
+    const quantos = quantosVaoParaODestino({
+      ...OCUPACAO_BASE,
+      emSelecao: 4,
+      porDesfecho: { APROVADO: 1, ALOCADO: 2, ENVIADO_PARA_ADMISSAO: 1 },
+    });
+    expect(quantos).toBe(8);
   });
 
   /**
-   * A OUTRA RECUSA DA MESMA ROTA (a vaga que já saiu de ABERTA) NÃO PODE SER CONFUNDIDA COM ESTA:
-   * ela não tem lista nem `podeForcar`, e tratá-la como bloqueio abriria um modal vazio oferecendo
-   * "cancelar assim mesmo" uma vaga que já está encerrada.
+   * QUEM SAIU SEM ÊXITO NÃO ENTRA, e este é o erro que a frase cometeria se a régua fosse "todo
+   * mundo da vaga": o descartado de março apareceria na conta de quem "ainda está em processo", e o
+   * consultor leria que vai mover gente que saiu faz meses. O backend também não os move.
    */
-  it("não confunde o 409 da vaga já encerrada com o bloqueio por candidatos", () => {
-    const jaEncerrada = new ApiError("Conflict", 409, {
-      message: "Esta vaga já foi encerrada. Recarregue a página.",
+  it("ignora quem saiu SEM ÊXITO, que é quem o backend também não move", () => {
+    const quantos = quantosVaoParaODestino({
+      ...OCUPACAO_BASE,
+      emSelecao: 2,
+      porDesfecho: { DESCARTADO: 5, DESISTIU: 3, ALOCADO: 1 },
     });
-    expect(cancelamentoBloqueadoPorCandidatos(jaEncerrada)).toBeNull();
+    expect(quantos).toBe(3);
   });
 
-  /** Corpo pela metade é recusado: com o discriminador aceito e a lista ausente, a tela abriria a
-      caixa dizendo que há gente em processo sem conseguir dizer quem. */
-  it("recusa corpo pela metade, mesmo com o `reason` certo", () => {
-    const semLista = { needsConfirmation: true, reason: "candidatosNaoEncerrados", message: "x", podeForcar: true };
-    const semPodeForcar = { ...RECUSA, podeForcar: undefined };
-    expect(cancelamentoBloqueadoPorCandidatos(new ApiError("Conflict", 409, semLista))).toBeNull();
-    expect(cancelamentoBloqueadoPorCandidatos(new ApiError("Conflict", 409, semPodeForcar))).toBeNull();
+  /**
+   * A GUARDA CONTRA A CONTAGEM DUPLA. Pelo contrato, `ATIVO` nunca aparece em `porDesfecho` (ele já
+   * está em `emSelecao`). Se um dia aparecer, somar os dois mapas contaria a mesma pessoa duas
+   * vezes, e a tela afirmaria um número inflado sem nada falhar.
+   */
+  it("não conta o ATIVO duas vezes, mesmo se ele vier nos dois mapas", () => {
+    const quantos = quantosVaoParaODestino({
+      ...OCUPACAO_BASE,
+      emSelecao: 2,
+      porDesfecho: { ATIVO: 2, APROVADO: 1 },
+    });
+    expect(quantos).toBe(3);
+  });
+
+  it("ninguém na vaga é ZERO, e ocupação ausente é NULO, que são respostas diferentes", () => {
+    expect(quantosVaoParaODestino(OCUPACAO_BASE)).toBe(0);
+    expect(quantosVaoParaODestino(null)).toBeNull();
+    expect(quantosVaoParaODestino(undefined)).toBeNull();
   });
 });
 
-describe("fraseDoCancelamentoForcado (o efeito, dito antes do clique)", () => {
-  it("diz que ENCERRA quem está em processo, e concorda no singular e no plural", () => {
-    expect(fraseDoCancelamentoForcado(1)).toContain("a 1 pessoa que ainda está em processo");
-    expect(fraseDoCancelamentoForcado(3)).toContain("as 3 pessoas que ainda estão em processo");
-    expect(fraseDoCancelamentoForcado(2)).toContain("descartada");
+describe("avisoDoDestinoDoCancelamento (informa o efeito, e nunca o forçamento)", () => {
+  it("diz o destino e a quantidade, concordando no singular e no plural", () => {
+    expect(avisoDoDestinoDoCancelamento(1).frase).toContain("1 pessoa ainda está em processo");
+    expect(avisoDoDestinoDoCancelamento(1).frase).toContain("viva, e continua encontrável");
+    expect(avisoDoDestinoDoCancelamento(3).frase).toContain("3 pessoas ainda estão em processo");
+    expect(avisoDoDestinoDoCancelamento(3).frase).toContain("vivas, e continuam encontráveis");
   });
 
-  it("não usa travessão (§A.11)", () => {
-    expect(fraseDoCancelamentoForcado(2)).not.toContain("—");
+  it("nomeia a etapa de destino, que é a palavra que o histórico também usa", () => {
+    for (const q of [null, 1, 4]) {
+      expect(avisoDoDestinoDoCancelamento(q).frase).toContain("Stand By");
+    }
+  });
+
+  /**
+   * A GARANTIA É A METADE QUE IMPORTA. Quem lê que um monte de gente vai ser movida pergunta logo
+   * em seguida se aquilo é um descarte, e era EXATAMENTE isso que o cancelamento fazia até a Frente
+   * B. A nota responde antes de a pergunta existir.
+   */
+  it("a nota promete que NINGUÉM é descartado e que a situação não muda", () => {
+    const { nota } = avisoDoDestinoDoCancelamento(2);
+    expect(nota).toContain("Ninguém é descartado");
+    expect(nota).toContain("continua entregue");
+  });
+
+  it("vaga sem ninguém diz isso, e ocupação desconhecida não afirma quantidade", () => {
+    expect(avisoDoDestinoDoCancelamento(0).frase).toContain("não move nenhuma pessoa");
+    expect(avisoDoDestinoDoCancelamento(null).frase).not.toMatch(/\d/);
+  });
+
+  it("nenhuma frase usa travessão (§A.11)", () => {
+    for (const q of [null, 0, 1, 5]) {
+      const { frase, nota } = avisoDoDestinoDoCancelamento(q);
+      expect(frase).not.toContain("\u2014");
+      expect(nota).not.toContain("\u2014");
+    }
   });
 });
 

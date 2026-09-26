@@ -196,15 +196,35 @@ describe("furo 1: o que a correção NÃO pode atropelar", () => {
   });
 
   /**
-   * QUEM ESTÁ EM VAGA COM PAPEL `ENTREGA` CONTINUA PROTEGIDO. O flag `encerra` é verdadeiro em
-   * ENTREGA, FECHAMENTO e CANCELAMENTO: sem a exceção, quem FOI CONTRATADO é expurgado do lado de
-   * A&S enquanto o CPF dele segue na ADMISSÃO, que é outro módulo com retenção própria. Destrói o
-   * histórico da seleção e não minimiza dado nenhum.
+   * ─ QUEM ESTÁ EM VAGA QUE ENTREGOU CONTINUA PROTEGIDO, PELO CARIMBO (Frente B) ────────────────
+   *
+   * A GARANTIA NÃO MUDOU: sem a exceção, quem FOI CONTRATADO é expurgado do lado de A&S enquanto o
+   * CPF dele segue na ADMISSÃO, que é outro módulo com retenção própria. Destrói o histórico da
+   * seleção e não minimiza dado nenhum.
+   *
+   * O ENDEREÇO DELA MUDOU: `ENTREGUE` deixou de encerrar, então a vaga que entregou passou a sair
+   * `FECHADA`, e a cláusula deixou de perguntar pelo papel ENTREGA e passou a perguntar pelo
+   * CARIMBO de entrega (`vagas_fechadas` + `vagas_fechadas_banco`), restrito ao papel FECHAMENTO.
+   *
+   * A EQUIVALÊNCIA É PROVÁVEL, e é ela que torna a troca segura: `fechar` gravava `ENTREGUE`
+   * quando, e SOMENTE quando, `ocupacao.finalizadas > 0`, e no MESMO `update` carimbava os dois
+   * contadores com essa contagem. Ler o carimbo é ler o dado; ler o status era ler a cópia.
+   *
+   * A METADE `papel = FECHAMENTO` É OBRIGATÓRIA: a vaga CANCELADA também carimba a contagem, e sem
+   * ela o cancelamento passaria a proteger gente que nunca protegeu, retendo dado pessoal a mais.
    */
-  it("quem está em vaga de papel ENTREGA continua protegido", async () => {
+  it("quem está em vaga que ENTREGOU continua protegido, pelo carimbo de entrega", async () => {
     const protecao = clausulaDaProtecao(await consultaDeProducao());
     expect(protecao).toMatch(/papel\s*(=|in)/);
-    expect(protecao.toLowerCase()).toContain("entrega");
+    expect(protecao.toLowerCase()).toContain("fechamento");
+    expect(
+      protecao.toLowerCase(),
+      "sem o carimbo, a exceção protegeria TODA vaga fechada, inclusive a que não entregou ninguém",
+    ).toContain("vagas_fechadas");
+    expect(
+      protecao.toLowerCase(),
+      "sem restringir ao FECHAMENTO, a vaga CANCELADA (que também carimba a contagem) passaria a proteger quem ela nunca protegeu",
+    ).not.toContain("cancelamento");
   });
 
   it("o prazo continua sendo o do diretor, 2 anos", async () => {

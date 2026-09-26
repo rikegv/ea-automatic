@@ -131,7 +131,22 @@ describe("S10: a rota nova NÃO nasce sob o prefixo `portal/`", () => {
 
 describe("§A.23: a frente não concede menu a ninguém", () => {
   it("nenhum menu novo nasceu para o envio", () => {
-    const suspeitos = MENUS.filter((m) => /envio|correio|email/i.test(m.codigo));
+    /*
+     * ─ O CASAMENTO É POR PALAVRA INTEIRA, E NÃO POR PEDAÇO DE PALAVRA ──────────────────────────
+     *
+     * A primeira redação era `/envio|correio|email/i`, e ela casava SUBSTRING. Em 26/09/2026 o
+     * diretor mandou transformar o motivo de reenvio da shortlist em catálogo gerenciável, e o menu
+     * legítimo dessa frente, `as-motivos-reenvio`, caiu aqui: "reenvio" contém "envio".
+     *
+     * ISSO NÃO É A GUARDA FUNCIONANDO, É UM FALSO POSITIVO, e a diferença importa. A guarda existe
+     * para provar que A FRENTE DO PORTAL não criou menu para si (§A.23: menu nasce só para o
+     * SUPER_ADMIN, e quem libera é o diretor). Um menu de OUTRA frente, aprovado por ele, que por
+     * acaso tem a sequência de letras "envio" no nome, não diz nada sobre esta frente.
+     *
+     * AFROUXAR NÃO É O MESMO QUE DESLIGAR: continua sendo lista fechada, e um menu chamado `envio`,
+     * `envio-gi` ou `portal-envio` continua sendo pego, que é exatamente o que se quer pegar.
+     */
+    const suspeitos = MENUS.filter((m) => /(^|-)(envio|correio|email)(-|$)/i.test(m.codigo));
     expect(suspeitos.map((m) => m.codigo)).toEqual([]);
   });
 

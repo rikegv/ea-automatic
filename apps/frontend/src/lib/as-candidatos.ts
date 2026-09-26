@@ -23,7 +23,7 @@ import type { PosicaoLado } from "@/lib/as-vaga-acoes";
 import {
   type AsCandidatoFicha,
   type AsCandidatoOrigem,
-  type AsCandidatoListItem,
+  type AsCandidatosPagina,
   type AsCandidaturaItem,
   type AsContatoItem,
   type AsReentradaPrecisaCiencia,
@@ -54,17 +54,31 @@ export interface BuscaCandidatos {
    * O CPF continua fora do caminho inteiro, inclusive da resposta.
    */
   semCandidatura?: boolean;
+  /** Quantas linhas esta página traz. Ausente, vale o padrão do backend (200). */
+  limite?: number;
+  /** De qual linha a página começa, para o "carregar mais". */
+  offset?: number;
 }
 
 /**
  * A BUSCA. `POST` e não `GET`, e a diferença não é de estilo: é o que mantém o CPF fora da URL.
  * Campo vazio não é enviado, para o backend não receber filtro em branco e devolver lista vazia.
+ *
+ * ┌─ ELA DEVOLVE UMA PÁGINA, E NÃO MAIS UM ARRAY PELADO (Frente D, ponto 15) ───────────────────┐
+ * │ A busca SEMPRE teve teto (200 linhas). O que mudou é que ele deixou de ser INVISÍVEL: a      │
+ * │ resposta traz `total`, `limite`, `offset` e `truncado`, e quem chama passa a ter como dizer   │
+ * │ "mostrando 200 de 1.480" em vez de apresentar uma janela como se fosse a lista inteira.       │
+ * │                                                                                              │
+ * │ O TIPO MUDOU DE PROPÓSITO: manter o array e pendurar o corte num canal paralelo deixaria      │
+ * │ quem chama continuar ignorando o corte sem nem saber que ele existe, que é exatamente o       │
+ * │ defeito que esta mudança corrige.                                                            │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
  */
 export function buscarCandidatos(
   filtros: BuscaCandidatos,
   token: string | null,
-): Promise<AsCandidatoListItem[]> {
-  const body: Record<string, string | boolean> = {};
+): Promise<AsCandidatosPagina> {
+  const body: Record<string, string | boolean | number> = {};
   if (filtros.nome?.trim()) body.nome = filtros.nome.trim();
   if (filtros.cpf?.trim()) body.cpf = filtros.cpf.trim();
   if (filtros.origem) body.origem = filtros.origem;
@@ -72,11 +86,44 @@ export function buscarCandidatos(
   // Booleano só é enviado quando VERDADEIRO: `semCandidatura: false` no corpo diria ao backend algo
   // que ele não precisa ouvir, e a busca padrão é justamente "todo mundo".
   if (filtros.semCandidatura) body.semCandidatura = true;
-  return apiFetch<AsCandidatoListItem[]>("/as/candidatos/buscar", {
+  if (filtros.limite) body.limite = filtros.limite;
+  if (filtros.offset) body.offset = filtros.offset;
+  return apiFetch<AsCandidatosPagina>("/as/candidatos/buscar", {
     method: "POST",
     token,
     body,
   });
+}
+
+/**
+ * A FRASE DO CORTE, em um lugar só. Devolve nulo quando não há corte, e é isso que faz o aviso
+ * aparecer só quando ele tem o que dizer.
+ *
+ * §A.11: sem travessão. §A.24: isto é frase de apoio, não título, então só a primeira maiúscula.
+ */
+export function avisoDeCorte(pagina: {
+  itens: unknown[];
+  total: number;
+  truncado: boolean;
+}): string | null {
+  if (!pagina.truncado) return null;
+  return `Mostrando ${pagina.itens.length} de ${pagina.total} candidatos. Use a busca para encontrar quem não está na lista.`;
+}
+
+/**
+ * QUEM PODE SER TRANSFERIDO PARA ESTA VAGA: as candidaturas VIVAS que estão em OUTRAS vagas, já com
+ * a vaga atual de cada uma resolvida em nome.
+ *
+ * É a metade "b" da aba Candidatos Disponíveis. A metade "a" (quem está solto) é a própria
+ * `buscarCandidatos` com `semCandidatura: true`.
+ *
+ * §A.6: nenhum CPF atravessa esta leitura, nem no filtro nem na resposta.
+ */
+export function transferiveisParaVaga(
+  vagaId: string,
+  token: string | null,
+): Promise<AsCandidaturaItem[]> {
+  return apiFetch<AsCandidaturaItem[]>(`/as/candidatos/vaga/${vagaId}/transferiveis`, { token });
 }
 
 export function fichaCandidato(id: string, token: string | null): Promise<AsCandidatoFicha> {
@@ -177,17 +224,57 @@ export function finalizarPosicaoDaCandidatura(
  * chamar: a exigência mora no DTO do backend, e uma assinatura opcional na tela deixaria o erro
  * aparecer só como 400 em produção.
  */
+/**
+ * ─ E A PRETENSÃO SALARIAL SÓ VIAJA QUANDO O MOTIVO PEDE (Frente E, ponto 9) ───────────────────
+ *
+ * ┌─ MANDAR O VALOR COM O MOTIVO NÃO MARCADO É 400, E ISSO É MINIMIZAÇÃO, NÃO CAPRICHO ────────┐
+ * │ O servidor recusa o valor que ninguém pediu (`exigirPretensaoQuandoOMotivoPede` confere os  │
+ * │ dois sentidos), e recusa de propósito: sem essa metade, o campo seria uma gaveta de salário │
+ * │ aberta em QUALQUER desfecho, coletando dado financeiro de pessoa que ninguém mandou coletar │
+ * │ (§A.6). Então a tela só o inclui quando a marca `pedePretensao` do motivo escolhido pediu.   │
+ * │                                                                                             │
+ * │ QUEM DECIDE É A MARCA DO CATÁLOGO, NUNCA O NOME DO MOTIVO: o diretor renomeia pela tela de   │
+ * │ administração, e uma comparação por nome pararia de funcionar em silêncio na primeira        │
+ * │ correção de grafia.                                                                          │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
 export function registrarSaida(
   candidaturaId: string,
   situacao: "DESCARTADO" | "DESISTIU" | "ENVIADO_PARA_ADMISSAO",
   motivo: string,
   token: string | null,
+  opts: { pretensaoSalarial?: string } = {},
 ): Promise<AsCandidaturaItem> {
+  const body: Record<string, unknown> = { situacao, motivo };
+  if (opts.pretensaoSalarial) body.pretensaoSalarial = opts.pretensaoSalarial;
   return apiFetch<AsCandidaturaItem>(`/as/candidatos/candidaturas/${candidaturaId}/saida`, {
     method: "POST",
     token,
-    body: { situacao, motivo },
+    body,
   });
+}
+
+/**
+ * ─ REPROVADO PELO CLIENTE: a pessoa volta para a ETAPA INICIAL (Frente E, ponto 12) ───────────
+ *
+ * O CORPO NÃO CARREGA DESTINO NENHUM, e a ausência é a regra inteira: o destino é a etapa marcada
+ * `inicial` no catálogo, lida pelo servidor. Mandar a etapa daqui faria deste gesto um segundo
+ * "mover etapa" com nome bonito, e a pessoa poderia ser "reprovada pelo cliente" para qualquer
+ * lugar do funil.
+ *
+ * O MOTIVO É OPCIONAL, ao contrário do desfecho: esta reprovação NÃO encerra nada (a pessoa segue
+ * viva, volta ao começo do funil e pode ser apresentada de novo). Exigir texto aqui só faria o
+ * consultor escrever "reprovado" toda vez, que é ruído e não trilha.
+ */
+export function reprovarPeloCliente(
+  candidaturaId: string,
+  motivo: string | undefined,
+  token: string | null,
+): Promise<AsCandidaturaItem> {
+  return apiFetch<AsCandidaturaItem>(
+    `/as/candidatos/candidaturas/${candidaturaId}/reprovar-pelo-cliente`,
+    { method: "POST", token, body: motivo ? { motivo } : {} },
+  );
 }
 
 /**

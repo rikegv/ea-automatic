@@ -48,7 +48,6 @@ import {
   type VagaStatus,
   type AsCandidaturaPendente,
   type AsMotivoCancelamentoVaga,
-  type AsVagaCancelamentoBloqueado,
   type AsVagaFechamentoBloqueado,
 } from "@ea/shared-types";
 import { ApiError, apiFetch } from "@/lib/api";
@@ -77,6 +76,7 @@ import {
   rotuloDoStatusVaga,
   statusOrdenados,
   useStatusVaga,
+  vagaEmProcesso,
 } from "@/lib/as-status-vaga";
 import { SeloDeRevisao } from "@/components/as/SeloDeRevisao";
 import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
@@ -112,6 +112,7 @@ import {
   casaBusca,
   fatiarPagina,
   paginaValida,
+  somarPosicoesOficiais,
   temGenteNaEtapa,
   temGenteNoDesfecho,
   textoBuscavel,
@@ -120,9 +121,8 @@ import {
 import { CandidatosPendentesModal } from "@/components/as/vagas/CandidatosPendentesModal";
 import { RecusaFechamentoModal } from "@/components/as/vagas/RecusaFechamentoModal";
 import { CancelarVagaModal, type CancelamentoForm } from "@/components/as/vagas/CancelarVagaModal";
-import { RecusaCancelamentoModal } from "@/components/as/vagas/RecusaCancelamentoModal";
 import {
-  cancelamentoBloqueadoPorCandidatos,
+  quantosVaoParaODestino,
   type AsVagaCancelamentoPrevia,
 } from "@/lib/as-vaga-cancelamento";
 import { VagaPainelModal, type AcaoDaVaga } from "@/components/as/vagas/VagaPainelModal";
@@ -734,12 +734,17 @@ export default function CentralDeVagasPage() {
   const [cancelarAlvo, setCancelarAlvo] = useState<VagaListItem | null>(null);
   const [cancelando, setCancelando] = useState(false);
   const [erroCancelar, setErroCancelar] = useState<string | null>(null);
-  /**
-   * A RECUSA POR CANDIDATO NÃO ENCERRADO. Estado próprio pelo mesmo motivo do `recusaFech`: não é
-   * uma frase, é um corpo com a LISTA de quem segura e com a resposta de quem pode forçar. Dentro do
-   * `erroCancelar` ela viraria um erro seco, sem lista e sem caminho.
+  /*
+   * ─ O `recusaCanc` DEIXOU DE EXISTIR (Frente B) ────────────────────────────────────────────────
+   *
+   * AQUI MORAVA O CORPO DA RECUSA `candidatosNaoEncerrados`, com a lista de quem segurava a vaga e
+   * o `podeForcar`. A trava 3 do backend foi REVOGADA: cancelar com candidato dentro é permitido
+   * para qualquer consultor e ninguém é descartado, então aquela recusa NÃO É MAIS LANÇADA e o
+   * estado que a guardava ficaria para sempre nulo, com um modal inteiro pendurado nele.
+   *
+   * O `recusaFech` CONTINUA, e o contraste é a régua: o FECHAMENTO mantém as travas e o forçamento
+   * de Master. As duas portas encerram a vaga, e só uma delas perdeu a trava de candidato.
    */
-  const [recusaCanc, setRecusaCanc] = useState<AsVagaCancelamentoBloqueado | null>(null);
   /**
    * ─ A PRÉVIA DO CANCELAMENTO (peça 1 da onda B3): quantos processos daquela vaga já acabaram ───
    *
@@ -1213,7 +1218,6 @@ export default function CentralDeVagasPage() {
   function abrirCancelamento(v: VagaListItem) {
     setCancelarAlvo(v);
     setErroCancelar(null);
-    setRecusaCanc(null);
     setCancForm({ motivo: "", observacao: "", dataCancelamento: HOJE() });
     if (motivosCancelamento === null) void carregarMotivosCancelamento();
     void carregarPreviaDoCancelamento(v);
@@ -1244,12 +1248,21 @@ export default function CentralDeVagasPage() {
   }
 
   /**
-   * O ENVIO DO CANCELAMENTO, disparado de DOIS lugares (o botão do formulário e o "Cancelar assim
-   * mesmo" da recusa), com o MESMO corpo nos dois casos: o que já estava preenchido. Reabrir o
-   * formulário para a pessoa redigitar o que acabou de digitar seria perder o preenchimento por nada,
-   * e é o desenho que o fechamento já usa.
+   * ─ O ENVIO DO CANCELAMENTO, AGORA COM UM CAMINHO SÓ (Frente B) ─────────────────────────────────
+   *
+   * ELE ERA DISPARADO DE DOIS LUGARES (o botão do formulário e o "Cancelar assim mesmo" da recusa) e
+   * carregava um `forcar` opcional. Os dois sumiram no mesmo movimento:
+   *
+   *   . O `forcar` NÃO VIAJA MAIS. O backend ainda ACEITA o campo, por compatibilidade com o corpo
+   *     que a tela mandava, mas ele NÃO FAZ NADA. Mandar uma chave que não tem efeito é pior do que
+   *     não mandar: a próxima leitura desta função concluiria que existe um forçamento vivo.
+   *   . O SEGUNDO GATILHO MORREU com a recusa que o abria (ver o comentário do estado `recusaCanc`).
+   *
+   * O TRATAMENTO DO ERRO PASSA A SER UM SÓ, e isso não é perda: a recusa que vinha ESTRUTURADA
+   * deixou de ser lançada, e a que sobra ("Esta vaga já foi encerrada. Recarregue a página.", mais o
+   * motivo inválido) sempre foi frase, e sempre apareceu no formulário com o texto do backend.
    */
-  async function enviarCancelamento(opcoes?: { forcar?: boolean }) {
+  async function enviarCancelamento() {
     if (!cancelarAlvo) return;
     setErroCancelar(null);
     setCancelando(true);
@@ -1261,55 +1274,15 @@ export default function CentralDeVagasPage() {
           motivo: cancForm.motivo,
           observacao: cancForm.observacao.trim() || undefined,
           dataCancelamento: cancForm.dataCancelamento,
-          /**
-           * O `forcar` SÓ VIAJA QUANDO ALGUÉM FORÇOU, nunca como `false` explícito, pela mesma razão
-           * do fechamento: o cancelamento normal não é "um forçamento desligado", e mandar a chave
-           * em toda requisição faria a exceção parecer parte do caminho comum.
-           *
-           * ELE NÃO É A AUTORIZAÇÃO, É O PEDIDO: quem decide se há um Master do outro lado é o
-           * servidor, que recalcula o papel quando esta chave chega e devolve 403 ao COMUM.
-           */
-          forcar: opcoes?.forcar ? true : undefined,
         },
       });
       setCancelarAlvo(null);
-      setRecusaCanc(null);
       await carregar();
     } catch (err) {
-      /**
-       * DUAS RECUSAS, DOIS TRATAMENTOS. A de candidato não encerrado vem ESTRUTURADA e abre o modal
-       * com a lista e o caminho; a da vaga que já saiu de ABERTA (e o 403 de quem não é Master) é
-       * frase, e aparece no formulário como qualquer outra, com o texto do backend inteiro.
-       */
-      const bloqueio = cancelamentoBloqueadoPorCandidatos(err);
-      if (bloqueio) {
-        setRecusaCanc(bloqueio);
-        setErroCancelar(null);
-      } else {
-        // Uma recusa nova fecha o modal do forçamento: mantê-lo aberto por cima esconderia a frase
-        // que explica o que aconteceu de fato (o 403 do COMUM cai exatamente aqui).
-        setRecusaCanc(null);
-        setErroCancelar(err instanceof Error ? err.message : "Erro ao cancelar a vaga");
-      }
+      setErroCancelar(err instanceof Error ? err.message : "Erro ao cancelar a vaga");
     } finally {
       setCancelando(false);
     }
-  }
-
-  /**
-   * O CAMINHO DA RECUSA: fecha o cancelamento e abre o PAINEL da vaga já na aba dos candidatos.
-   *
-   * NENHUM MECANISMO NOVO DE TRATAMENTO NASCE AQUI. Desvincular, encerrar e mover já existem inteiros
-   * dentro do painel (`AcoesEmMassaDaVaga`), com seleção múltipla e motivo obrigatório. Uma segunda
-   * porta significaria a régua do motivo escrita duas vezes.
-   */
-  function tratarCandidatosDaVaga() {
-    const alvo = cancelarAlvo;
-    if (!alvo) return;
-    setRecusaCanc(null);
-    setCancelarAlvo(null);
-    setVerAba("candidatos");
-    setVerAlvo(alvo);
   }
 
   /**
@@ -1355,9 +1328,23 @@ export default function CentralDeVagasPage() {
      * │ código novo de mesmo papel passa a ser lido sem ninguém escrever o nome dele.              │
      * └────────────────────────────────────────────────────────────────────────────────────────────┘
      */
-    const ehAbertura = ehDoPapelDaVaga(v.status, "ABERTURA", catalogoStatus);
+    /*
+     * ┌─ DE `ABERTURA` PARA "EM PROCESSO" (Frente B), E A MUDANÇA É DE ALCANCE, NÃO DE RÉGUA ─────┐
+     * │ A pergunta era `ehDoPapelDaVaga(v.status, "ABERTURA")` nas três ações de baixo, e ela      │
+     * │ bastava enquanto `ENTREGUE` ERA UM DESFECHO. A entrega passou a ser estado VIVO            │
+     * │ (`encerra: false`), e o backend acompanhou: `fechar` e `cancelar` agora perguntam          │
+     * │ `papelDeVagaEmProcesso` (ABERTURA **ou** ENTREGA), e o `editarPosicoes` recusa apenas o    │
+     * │ que ENCERRA. Sem esta troca a vaga ENTREGUE abriria a barra SEM PORTA DE SAÍDA: o backend  │
+     * │ aceitaria fechar e cancelar, e a tela não ofereceria nenhum dos dois.                       │
+     * │                                                                                             │
+     * │ O QUE **NÃO** MUDOU, e a lista importa porque a mudança poderia ter alargado demais:        │
+     * │ RASCUNHO, PENDENTE DE REVISÃO e qualquer status LIVRE do diretor continuam fora das três.   │
+     * │ `vagaEmProcesso` responde exatamente os dois papéis vivos, e não "tudo o que não encerra".  │
+     * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    const emProcesso = vagaEmProcesso(v.status, catalogoStatus);
     // O CADEADO FECHA a vaga que acabou, e é ele que pede a contagem do fechamento.
-    if (ehAbertura) {
+    if (emProcesso) {
       lista.push({
         id: "fechar",
         rotulo: "Fechar vaga",
@@ -1369,7 +1356,7 @@ export default function CentralDeVagasPage() {
     /* O CANCELAMENTO É O ENCERRAMENTO QUE NÃO É ENTREGA, e é o único gesto DESTRUTIVO da barra:
        daí o `perigo`, que é o mesmo vermelho que o ícone `x` já tinha na tabela. Rascunho não
        aparece aqui porque rascunho ainda não é vaga no mundo, e vaga encerrada não cancela de novo. */
-    if (ehAbertura) {
+    if (emProcesso) {
       lista.push({
         id: "cancelar",
         rotulo: "Cancelar vaga",
@@ -1382,7 +1369,7 @@ export default function CentralDeVagasPage() {
     /* EDITAR AS POSIÇÕES (os dois contadores): na vaga viva e fora do rascunho. No RASCUNHO os dois
        campos já são editados na própria trilha, e na vaga ENCERRADA a meta não muda mais, porque ela
        já foi confrontada com a contagem do fechamento. */
-    if (ehAbertura) {
+    if (emProcesso) {
       lista.push({
         id: "posicoes",
         rotulo: "Editar posições",
@@ -1728,7 +1715,19 @@ export default function CentralDeVagasPage() {
   const kpis = useMemo(() => {
     const conta: Record<string, number> = {};
     for (const v of filtradas) conta[v.status] = (conta[v.status] ?? 0) + 1;
-    return { total: filtradas.length, cards: cardsDeStatus(catalogoStatus, conta) };
+    return {
+      total: filtradas.length,
+      /*
+       * ─ AS POSIÇÕES DO RECORTE (frente C, ponto 6) ────────────────────────────────────────────
+       *
+       * "1 VAGA COM 10 POSIÇÕES SÃO 10 TRABALHOS, NÃO 1". A conta é sobre `filtradas`, a MESMA
+       * lista do `total` logo acima, então os dois números do card dividido falam sempre do mesmo
+       * recorte: filtrar um cliente e ler "15 vagas / 150 posições" é a leitura pedida. A régua
+       * mora em `lib/as-vagas-lista.somarPosicoesOficiais` e é testada lá.
+       */
+      posicoes: somarPosicoesOficiais(filtradas),
+      cards: cardsDeStatus(catalogoStatus, conta),
+    };
   }, [filtradas, catalogoStatus]);
 
   /**
@@ -2325,8 +2324,11 @@ export default function CentralDeVagasPage() {
                 A GRADE NÃO MUDA: é a mesma `auto-fit` com mínimo de 88px, provada no browser com
                 sete cards. Status novo entra na linha enquanto couber e, a partir do que não couber,
                 a grade quebra em uma segunda linha com cards do mesmo tamanho (§A.20: nada é
-                espremido nem cortado). */}
-            <Kpi id="total" rotulo="Total De Vagas" valor={kpis.total} icone="layers" />
+                espremido nem cortado).
+
+                O PRIMEIRO CARD AGORA É DIVIDIDO (frente C, ponto 6): ele ocupa DUAS colunas da
+                mesma grade e mostra VAGAS de um lado e POSIÇÕES do outro. Ver `KpiTotalDividido`. */}
+            <KpiTotalDividido />
             {kpis.cards.map((c) => (
               <Kpi
                 key={c.chave}
@@ -3605,9 +3607,9 @@ export default function CentralDeVagasPage() {
       )}
 
       {/* ── CANCELAR VAGA ────────────────────────────────────────────────── */}
-      {/* Mesmo desenho do fechamento: com a recusa aberta, o formulário sai da frente e o
-          preenchimento FICA no estado, então voltar devolve o formulário como estava. */}
-      {cancelarAlvo && !recusaCanc && (
+      {/* SEM A CONDIÇÃO `!recusaCanc` (Frente B): não existe mais uma segunda caixa para sair da
+          frente desta. O formulário é a única tela do cancelamento, do começo ao fim. */}
+      {cancelarAlvo && (
         <CancelarVagaModal
           vagaRotulo={cancelarAlvo.nomeDivulgacao ?? rotuloDaVaga(cancelarAlvo)}
           codigo={cancelarAlvo.codigo}
@@ -3618,6 +3620,11 @@ export default function CentralDeVagasPage() {
              atrasada de uma vaga anterior de virar a contagem desta (ver o comentário do estado). */
           previa={previaCanc?.vagaId === cancelarAlvo.id ? previaCanc.dados : null}
           previaFalhou={previaCanc?.vagaId === cancelarAlvo.id ? previaCanc.falhou : false}
+          /* QUEM VAI PARA O STAND BY sai da OCUPAÇÃO da linha, que a listagem já traz com a vaga:
+             é o mesmo número que enche o cilindro e os cards desta tela, então a frase do modal
+             nunca contradiz o que está desenhado atrás dele. Sem ocupação a conta devolve nulo, e
+             o modal diz a frase que não afirma quantidade. */
+          vaoParaStandBy={quantosVaoParaODestino(cancelarAlvo.ocupacao)}
           erro={erroCancelar}
           cancelando={cancelando}
           onChange={setCancForm}
@@ -3665,17 +3672,9 @@ export default function CentralDeVagasPage() {
         />
       )}
 
-      {/* ── OS CANDIDATOS QUE SEGURAM O CANCELAMENTO ──────────────────────── */}
-      {cancelarAlvo && recusaCanc && (
-        <RecusaCancelamentoModal
-          recusa={recusaCanc}
-          vagaRotulo={cancelarAlvo.nomeDivulgacao ?? rotuloDaVaga(cancelarAlvo)}
-          forcando={cancelando}
-          onVoltar={() => setRecusaCanc(null)}
-          onForcar={() => void enviarCancelamento({ forcar: true })}
-          onTratarCandidatos={tratarCandidatosDaVaga}
-        />
-      )}
+      {/* A CAIXA "OS CANDIDATOS QUE SEGURAM O CANCELAMENTO" FOI REMOVIDA (Frente B): ninguém segura
+          mais o cancelamento, e o que aconteceria com essas pessoas passou a ser dito DENTRO do
+          próprio formulário, antes do clique. */}
     </>
   );
 
@@ -3845,6 +3844,100 @@ export default function CentralDeVagasPage() {
             : `Clique para ver só as vagas com gente ${oQueConta}.`
         }${card.inativa ? " Esta etapa está fora de circulação." : ""}`}
       />
+    );
+  }
+
+  /**
+   * ─ O CARD DO TOTAL, DIVIDIDO NO MEIO: VAGAS de um lado, POSIÇÕES do outro (frente C, ponto 6) ─
+   *
+   * ┌─ O PEDIDO DO DIRETOR, na frase dele ────────────────────────────────────────────────────────┐
+   * │ "1 vaga com 10 posições são 10 trabalhos, não 1". O card contava LINHAS DE VAGA, e nessa     │
+   * │ conta uma fileira de três linhas podia esconder trinta contratações a fazer. As duas contas  │
+   * │ passam a viver lado a lado: à esquerda quantas VAGAS, à direita quantas POSIÇÕES.            │
+   * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * O RÓTULO DIZ O QUE ESTÁ SENDO CONTADO, e ele MUDA com o filtro, porque senão mentiria. Sem
+   * filtro de status a tela já esconde a vaga ENCERRADA (ver `filtradas`), então o que está na conta
+   * é vaga VIVA e o rótulo diz "Abertas". Escolhido um status no filtro, a encerrada volta para a
+   * lista e "Abertas" passaria a nomear um recorte que inclui vaga fechada e cancelada: aí o rótulo
+   * vira "No Recorte", que é o que o número é de fato. Um rótulo fixo daria certo em um dos dois
+   * casos e estaria errado no outro, sem nada falhar.
+   *
+   * ELE OCUPA DUAS COLUNAS DA MESMA GRADE (`span 2`), e não uma grade própria: é assim que ele fica
+   * MAIOR sem sair da máscara única (§A.12). A ALTURA NÃO MUDA, de propósito, e isso é §A.20: os
+   * dois lados usam a mesma tipografia dos demais cards, então a fileira continua alinhada e nenhum
+   * card ao lado é esmagado para o total caber.
+   *
+   * O DIVISOR É O MESMO TRAÇO DAS FAIXAS, com o mesmo desbote nas pontas e a mesma cor de token
+   * (`--border-strong`, que é a que lê nos dois temas).
+   *
+   * O CLIQUE CONTINUA SENDO O QUE ERA: este card é o "Total" do §A.12, o que devolve a tabela
+   * inteira do recorte. Ele já não recortava nada por conta própria antes desta mudança e continua
+   * não recortando; o que mudou é só o que ele MOSTRA.
+   */
+  function KpiTotalDividido() {
+    const ativo = cardAtivo === "total";
+    // O RECORTE DE STATUS É QUEM DECIDE O RÓTULO, e a régua é a mesma do `filtradas`: lista vazia
+    // significa "todos" e, nesse caso, a encerrada já ficou de fora.
+    const recorteDeStatus = fStatus.length > 0;
+    const rotuloVagas = recorteDeStatus ? "Vagas No Recorte" : "Vagas Abertas";
+    const rotuloPosicoes = recorteDeStatus ? "Posições No Recorte" : "Posições Abertas";
+    const dica = recorteDeStatus
+      ? `${kpis.total} ${kpis.total === 1 ? "vaga" : "vagas"} e ${kpis.posicoes} ${
+          kpis.posicoes === 1 ? "posição" : "posições"
+        } no recorte filtrado, com os status escolhidos.`
+      : `${kpis.total} ${kpis.total === 1 ? "vaga aberta" : "vagas abertas"} e ${kpis.posicoes} ${
+          kpis.posicoes === 1 ? "posição" : "posições"
+        }. A vaga encerrada só entra na conta quando o status é escolhido no filtro.`;
+    return (
+      <GlassCard
+        as="button"
+        type="button"
+        style={{ gridColumn: "span 2" }}
+        className={cn(
+          "!px-3 !py-[9px] text-left transition hover:bg-[var(--surface-2)]",
+          ativo && "!border-[var(--accent)] bg-[var(--sico)] ring-1 ring-[var(--accent)]",
+        )}
+        onClick={() => setCardAtivo("total")}
+        aria-pressed={ativo}
+        title={dica}
+      >
+        <div className="grid grid-cols-[minmax(0,1fr)_1px_minmax(0,1fr)] gap-x-[10px]">
+          <MetadeDoTotal rotulo={rotuloVagas} valor={kpis.total} icone="layers" />
+          <div
+            aria-hidden
+            className="self-stretch"
+            style={{
+              background:
+                "linear-gradient(to bottom, transparent, var(--border-strong) 18%, var(--border-strong) 82%, transparent)",
+            }}
+          />
+          <MetadeDoTotal rotulo={rotuloPosicoes} valor={kpis.posicoes} icone="users" />
+        </div>
+      </GlassCard>
+    );
+  }
+
+  /** Um dos dois lados do card dividido: a MESMA tipografia do `CardCompacto`, sem casca própria. */
+  function MetadeDoTotal({
+    rotulo,
+    valor,
+    icone,
+  }: {
+    rotulo: string;
+    valor: number;
+    icone: IconName;
+  }) {
+    return (
+      <div className="min-w-0">
+        <div className="flex items-center gap-[6px]">
+          <Icon name={icone} className="h-[13px] w-[13px] flex-none" style={{ opacity: 0.75 }} />
+          <span className="font-display text-[19px] font-extrabold leading-[1.15] tracking-[-0.02em]">
+            {loading ? "…" : valor}
+          </span>
+        </div>
+        <div className="mt-[3px] text-[11px] leading-[1.25] text-dim">{rotulo}</div>
+      </div>
     );
   }
 

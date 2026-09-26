@@ -5,13 +5,24 @@ import {
   IsArray,
   IsBoolean,
   IsIn,
+  IsInt,
   IsISO8601,
   IsOptional,
   IsString,
   IsUUID,
+  Matches,
+  Max,
   MaxLength,
+  Min,
   MinLength,
 } from "class-validator";
+/*
+ * O NORMALIZADOR DE VALOR MONETÁRIO É O DA CASA, e não um segundo escrito aqui: ele já aceita as
+ * formas que a tela brasileira produz ("2.500,00", "2500", "R$ 2.500") e devolve o formato que o
+ * `numeric` do Postgres entende. Dois normalizadores de dinheiro divergem no primeiro separador, e
+ * o preço de divergir é um salário gravado cem vezes maior. Mesma importação do `CreateVagaDto`.
+ */
+import { normalizarSalarioParaDto } from "../../admissoes/dto/valor-monetario-br";
 import {
   AS_CANDIDATO_ORIGEM,
   AS_CONTATO_TIPO,
@@ -186,6 +197,19 @@ export class EditarCandidatoDto {
  * a primeira pessoa que precisasse filtrar por CPF acrescentaria `?cpf=` a ela sem pensar duas
  * vezes. Não havendo a porta, não há o atalho.
  */
+/**
+ * ─ O TAMANHO DA PÁGINA DA BUSCA, e por que ele é DIZÍVEL agora (ponto 15) ──────────────────────
+ *
+ * O PADRÃO É O TETO ANTIGO (200), preservado de propósito: era o que as telas já recebiam, e mudá-lo
+ * por conta própria seria alterar comportamento validado sem ninguém pedir (§A.14). O que mudou é a
+ * RESPOSTA, que passou a dizer quantos existem além da página.
+ *
+ * O MÁXIMO É BARREIRA, NÃO REGRA DE NEGÓCIO, no mesmo espírito de `AS_MAXIMO_POR_LOTE`: sem teto,
+ * `limite: 999999` transformaria a busca numa exportação da base inteira de dado pessoal (§A.6).
+ */
+export const BUSCA_LIMITE_PADRAO = 200;
+export const BUSCA_LIMITE_MAXIMO = 500;
+
 export class BuscarCandidatosDto {
   /** Trecho do nome. Busca sem acento e sem caixa é resolvida no service. */
   @IsOptional()
@@ -232,6 +256,31 @@ export class BuscarCandidatosDto {
   @Transform(({ value }) => (typeof value === "string" ? value === "true" : value))
   @IsBoolean()
   semCandidatura?: boolean;
+
+  /**
+   * QUANTAS LINHAS ESTA PÁGINA TRAZ. Ausente vale `BUSCA_LIMITE_PADRAO`, que é o teto fixo que
+   * existia antes desta frente.
+   *
+   * O `@Transform` CONVERTE A STRING porque o corpo pode chegar de um formulário com `"50"`, e o
+   * `@IsInt` sozinho recusaria. O service ainda assim aparelha o número entre 1 e o máximo: validação
+   * de DTO defende a FORMA, e o teto de §A.6 não pode depender de nenhum corpo vir bem formado.
+   */
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === "string" ? Number(value) : value))
+  @IsInt()
+  @Min(1)
+  @Max(BUSCA_LIMITE_MAXIMO)
+  limite?: number;
+
+  /**
+   * DE QUAL LINHA ESTA PÁGINA COMEÇA. É o que permite "carregar mais" sem a tela ter de inventar um
+   * filtro só para caber no teto.
+   */
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === "string" ? Number(value) : value))
+  @IsInt()
+  @Min(0)
+  offset?: number;
 }
 
 /** Alocar a pessoa numa vaga: nasce em CAPTACAO e ATIVO, e ATIVO não consome posição. */
@@ -328,12 +377,128 @@ export class RegistrarSaidaDto {
    * │ valida já vê o texto aparado, e quem GRAVA recebe o mesmo texto aparado do corpo. O         │
    * │ `texto()` do service continua onde está: ele defende a gravação, não a régua.               │
    * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * ┌─ E AGORA O CAMPO TEM DUAS NATUREZAS, CONFORME A SITUAÇÃO (Frente A, ponto 7) ──────────────┐
+   * │ No DESCARTE (`SITUACOES_COM_MOTIVO_DE_CATALOGO`, hoje SÓ `DESCARTADO`) o motivo            │
+   * │ deixou de ser texto livre e passou a ser um NOME DO CATÁLOGO `motivos_descarte`. No         │
+   * │ `ENVIADO_PARA_ADMISSAO` ele continua PROSA, porque a pergunta da tela ali é outra ("o que   │
+   * │ fechou o processo e o que a admissão precisa saber").                                       │
+   * │                                                                                             │
+   * │ POR QUE A CONFERÊNCIA NÃO É UM `@IsIn` AQUI, e a razão é o que o catálogo é: a lista é      │
+   * │ DADO, mantida pela tela de administração, e muda sem deploy. Um `@IsIn` congelaria em       │
+   * │ código o que o diretor acabou de ganhar o poder de editar, e ficaria defasado no primeiro   │
+   * │ motivo novo. Quem confere é o service, contra a consulta que TAMBÉM enche o seletor         │
+   * │ (`exigirMotivoDoCatalogo`), que é o que impede a tela de oferecer o que a rota recusa.      │
+   * │                                                                                             │
+   * │ O `@MaxLength(500)` FICA, e não vira 160: ele é o teto da PROSA do envio para a admissão.   │
+   * │ Baixá-lo para o tamanho da coluna do catálogo apertaria o único ramo que ainda escreve      │
+   * │ texto de verdade. O nome do catálogo cabe nos 500 com folga, e é o catálogo, não o          │
+   * │ comprimento, que o recusa quando está errado.                                               │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
    */
   @Transform(({ value }) => (typeof value === "string" ? value.trim() : value))
   @IsString()
   @MinLength(2)
   @MaxLength(500)
   motivo!: string;
+
+  /**
+   * ─ QUANTO A PESSOA PEDIU, quando o MOTIVO ESCOLHIDO pede isso (Frente E, ponto 9) ────────────
+   *
+   * ┌─ ELE É OPCIONAL AQUI E OBRIGATÓRIO LÁ, E A DIVISÃO NÃO É DESLEIXO ──────────────────────────┐
+   * │ O DTO só sabe a FORMA, e a forma deste campo depende de um DADO que muda sem deploy: a      │
+   * │ marca `pedePretensao` da linha do catálogo que o consultor escolheu. Um `@IsNotEmpty` aqui  │
+   * │ exigiria o valor em TODO descarte, inclusive nos motivos que não têm nada a ver com salário;│
+   * │ um `@ValidateIf` comparando o NOME do motivo seria o literal de catálogo que esta frente    │
+   * │ inteira existe para não escrever.                                                            │
+   * │                                                                                             │
+   * │ QUEM EXIGE É O SERVICE (`exigirPretensaoQuandoOMotivoPede`), contra a MESMA consulta que     │
+   * │ enche o seletor da tela. É o mesmo desenho do `motivo` logo acima, e pela mesma razão.       │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * E O SERVICE TAMBÉM RECUSA O VALOR QUANDO NINGUÉM O PEDIU, que é a metade fácil de esquecer:
+   * sem ela, este campo seria uma gaveta de salário aberta em QUALQUER desfecho, coletando dado
+   * financeiro de pessoa que ninguém mandou coletar (§A.6, minimização).
+   *
+   * `string`, E NÃO `number`, como todo valor monetário do sistema: `numeric` viaja como texto para
+   * não passar por ponto flutuante. O `@Matches` é o MESMO de `salarioAbertura`, depois do mesmo
+   * `@Transform`, então "2.500,00" e "2500" entram iguais.
+   */
+  @IsOptional()
+  @Transform(({ value }) => normalizarSalarioParaDto(value))
+  @Matches(/^\d+(\.\d{1,2})?$/, {
+    message:
+      "Pretensão salarial inválida. Informe um valor como 2500 ou 2.500,00 (ponto separa o milhar, vírgula os centavos).",
+  })
+  pretensaoSalarial?: string;
+}
+
+/**
+ * ─ MARCAR (OU REMARCAR) A ENTREVISTA DA CANDIDATURA (Frente E, ponto 8) ────────────────────────
+ *
+ * UM CORPO SÓ PARA OS DOIS GESTOS, e é assim porque eles são o MESMO gesto: "a entrevista desta
+ * pessoa, nesta etapa, é neste dia e nesta hora". Marcar é a primeira vez que a frase é dita,
+ * remarcar é dizê-la de novo. Duas rotas produziriam a pergunta "já existe?" na TELA, e a tela
+ * responderia com a fotografia que ela carregou, que pode estar velha.
+ */
+export class MarcarEntrevistaDto {
+  /**
+   * EM QUAL ETAPA. VEM NO CORPO, e não é deduzida da etapa ATUAL da candidatura, de propósito: o
+   * time marca a entrevista do cliente ENQUANTO a pessoa ainda está na etapa Soulan (é justamente
+   * por isso que se marca com antecedência). Deduzir gravaria a entrevista na etapa errada
+   * exatamente no caso que a OST manda prever.
+   *
+   * SEM `@IsIn`, pela mesma razão do `MoverEtapaDto`: a lista é do diretor. Quem confere que a
+   * etapa existe, está ativa E é etapa de entrevista é o catálogo, no service
+   * (`exigirEtapaComEntrevista`), e a FK do banco recusa em última instância.
+   */
+  @Transform(({ value }) => (typeof value === "string" ? value.trim() : value))
+  @IsString()
+  @MinLength(1)
+  @MaxLength(40)
+  etapa!: CandidaturaEtapa;
+
+  /**
+   * DATA E HORÁRIO, num instante só (ISO 8601, com fuso).
+   *
+   * UM CAMPO, E NÃO DOIS, e isso é a decisão do schema chegando até aqui: uma data e uma hora
+   * separadas admitem o corpo com hora e sem dia, que é estado impossível e que alguém teria de
+   * recusar em algum lugar. `@IsISO8601` é o mesmo validador que o módulo já usa para instante
+   * vindo da tela.
+   *
+   * PASSADO É ACEITO de propósito: registrar hoje a entrevista que aconteceu ontem é caso NORMAL na
+   * operação (a mesma razão pela qual `as_contatos.ocorrido_em` aceita retroativo). Recusar o
+   * passado faria o time inventar uma data futura para conseguir salvar.
+   */
+  @IsISO8601()
+  agendadaEm!: string;
+}
+
+/**
+ * ─ REPROVADO PELO CLIENTE: A PESSOA VOLTA PARA A ETAPA INICIAL (Frente E, ponto 12) ────────────
+ *
+ * O CORPO NÃO TEM ETAPA DE DESTINO, E A AUSÊNCIA É A REGRA INTEIRA: o destino é a etapa marcada
+ * `inicial` no catálogo (`as_etapas_funil`), lida pelo service. Aceitar o destino do corpo faria
+ * deste gesto um segundo "mover etapa" com nome bonito, e a pessoa poderia ser "reprovada pelo
+ * cliente" para qualquer lugar do funil.
+ */
+export class ReprovarPeloClienteDto {
+  /**
+   * O QUE O CLIENTE DISSE. OPCIONAL, e a comparação certa é com a TROCA DE VAGA e não com o
+   * desfecho: o desfecho ENCERRA o processo de alguém e por isso exige justificativa (ajuste 7);
+   * esta reprovação NÃO encerra nada (a pessoa continua viva, volta ao começo do funil e pode ser
+   * apresentada de novo). Exigir texto aqui só faria o consultor escrever "reprovado" toda vez, que
+   * é ruído e não trilha. Quando ele escreve, o texto entra no rastro e vale.
+   *
+   * §A.6: é texto do PROCESSO, da mesma natureza do `motivo` que a tabela já guarda, e é NULADO
+   * pela varredura de retenção junto com os demais. O que sobrevive ao expurgo é o FATO, no
+   * booleano `reprovado_pelo_cliente`, que é o que a contagem lê.
+   */
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === "string" ? value.trim() : value))
+  @IsString()
+  @MaxLength(500)
+  motivo?: string;
 }
 
 /**
@@ -387,7 +552,14 @@ export class FinalizarPosicaoDto {
 
 /**
  * TROCAR A VAGA DA CANDIDATURA (item 5 do diretor). Corrige a alocação errada MANTENDO a linha e a
- * etapa, e é operação de MASTER e SUPER_ADMIN (o `@Roles` na rota é a autoridade).
+ * etapa.
+ *
+ * É DE QUALQUER CONSULTOR desde a Frente D (decisão do diretor, ponto 13/15): o time operacional faz
+ * a gestão das vagas, e transferir alguém da vaga A para a B é gesto de gestão, não de exceção. O
+ * `@Roles("MASTER","SUPER_ADMIN")` que havia na rota SAIU; o que restringe o módulo inteiro continua
+ * sendo o menu `as-candidatos`, no `MenuGuard`. As travas que sobrevivem estão no service, onde
+ * sempre estiveram: candidatura viva, vaga de destino que recebe candidato, pessoa que já está no
+ * destino e teto de posições do destino.
  */
 export class TrocarVagaDto {
   /** A vaga de DESTINO. As travas do destino são conferidas no service, com a linha dela travada. */
@@ -564,8 +736,20 @@ export class RegistrarSaidaEmLoteDto {
 }
 
 /**
- * MOVER NO FUNIL EM MASSA. É a `moverEtapa`, N vezes, e SÓ ela: trocar de vaga é operação de MASTER,
- * com rota própria e `@Roles`, e entrar aqui abriria um caminho de COMUM para uma ação que não é dele.
+ * MOVER NO FUNIL EM MASSA. É a `moverEtapa`, N vezes, e SÓ ela: trocar de vaga tem rota própria, com
+ * travas próprias (vaga de destino travada, teto do destino conferido linha a linha), e não ganha
+ * versão em massa de carona aqui.
+ *
+ * ┌─ O ARGUMENTO MUDOU, A CONCLUSÃO NÃO (Frente D) ────────────────────────────────────────────┐
+ * │ ATÉ AQUI ESTA CAIXA DIZIA "trocar de vaga é operação de MASTER, com `@Roles`", e o `@Roles` │
+ * │ SAIU (decisão do diretor: qualquer consultor transfere). A frase ficaria DEFASADA e, pior,   │
+ * │ convidaria o próximo a incluir a troca no lote "já que não é mais de Master".                │
+ * │                                                                                             │
+ * │ O MOTIVO DE ELA CONTINUAR FORA DO LOTE É OUTRO, e é técnico: a troca trava a linha da vaga   │
+ * │ de DESTINO e conta a ocupação dela dentro da transação. Em massa, N linhas disputariam a     │
+ * │ mesma vaga de destino, e um lote parcial deixaria metade da seleção movida e metade não, sem │
+ * │ que ninguém tivesse dito qual metade importava.                                              │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────┘
  */
 export class MoverEtapaEmLoteDto {
   @ListaEmMassa()

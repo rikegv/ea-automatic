@@ -28,7 +28,7 @@
  */
 
 import { useState } from "react";
-import { type AsCandidaturaPendente } from "@ea/shared-types";
+import { motivoVemDoCatalogo, type AsCandidaturaPendente } from "@ea/shared-types";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { StatusPill } from "@/components/ui/StatusPill";
@@ -40,6 +40,7 @@ import {
 } from "@/lib/as-candidatos";
 import { rotuloDaEtapa, tomDaEtapa, useEtapas } from "@/lib/as-etapas";
 import { AvisoDoEnvioDoLink } from "@/components/portal/EnvioDoLink";
+import { CampoMotivoDaSaida } from "@/components/as/candidatos/CampoMotivoDaSaida";
 import { usePreviaIndividual } from "@/lib/portal-envio-link";
 
 /** O texto próprio DESTA tela para a vaga cheia. Ver o bloco no topo do arquivo. */
@@ -215,18 +216,41 @@ export function CandidatosPendentesModal({
                             />
                           </div>
                         )}
-                        <label className="flex flex-col gap-1.5">
-                          <span className="text-[12.5px] text-dim">
-                            Motivo
-                            <span className="ml-1 text-danger">*</span>
-                          </span>
-                          <textarea
-                            className="ds-input min-h-[62px] resize-y"
-                            value={motivo}
-                            onChange={(e) => setMotivo(e.target.value)}
-                            placeholder={PLACEHOLDER[acao.tipo]}
-                          />
-                        </label>
+                        {/* SEGUNDA PORTA DAS MESMAS TRÊS OPERAÇÕES, E ELA USA O MESMO CAMPO: o
+                            descarte virou CLASSIFICAÇÃO conferida pelo backend, então texto livre
+                            aqui voltava 400 no meio do encerramento da vaga. Quem decide entre
+                            seletor e caixa de texto é `motivoVemDoCatalogo`, dentro do componente. */}
+                        <CampoMotivoDaSaida
+                          situacao={acao.tipo}
+                          valor={motivo}
+                          onChange={setMotivo}
+                          token={token}
+                          desabilitado={ocupado}
+                          placeholder={PLACEHOLDER[acao.tipo]}
+                          alturaMinima="min-h-[62px]"
+                          /* ─ ESTA TELA NÃO OFERECE OS MOTIVOS QUE PEDEM A PRETENSÃO SALARIAL ──
+                             E O DEFEITO QUE ISSO EVITA É DE RUNTIME, NÃO DE ESTILO: `registrarSaida`
+                             RECUSA (400) o motivo marcado que chega sem o valor
+                             (`exigirPretensaoQuandoOMotivoPede`), e este modal não tem onde pedi-lo.
+                             No dia em que o diretor marcar o primeiro motivo, escolhê-lo aqui
+                             falharia em CADA candidato, no meio do encerramento da vaga, que é o pior
+                             momento possível para o sistema recusar.
+
+                             COLETAR A PRETENSÃO AQUI SERIA FUNCIONALIDADE NOVA, e o diretor não
+                             pediu (§A.31): quem precisa registrar essa saída com o valor faz pela
+                             ficha do candidato, que é a tela desenhada para isso. */
+                          semMotivosQuePedemPretensao
+                        />
+                        {/* A AUSÊNCIA É DITA, e não deixada para a pessoa notar: quem procura um
+                            motivo que existe no catálogo e não está no seletor conclui que a lista
+                            quebrou, e vai abrir a administração para conferir. */}
+                        {motivoVemDoCatalogo(acao.tipo) && (
+                          <p className="mt-2 text-[11.5px] text-faint">
+                            A lista é a do catálogo mantido pela administração, sem os motivos que
+                            pedem a pretensão salarial: esse valor é de cada pessoa, então esses
+                            descartes são registrados pela ficha do candidato.
+                          </p>
+                        )}
                         <div className="mt-2.5 flex justify-end">
                           <Button
                             className="px-4 py-2"

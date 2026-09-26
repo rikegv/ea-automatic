@@ -18,7 +18,14 @@ import {
   type CenarioImportCandidato,
   type MapaColunasCandidato,
 } from "@ea/shared-types";
-import { CurrentUser, Roles } from "../../auth/decorators";
+/*
+ * O `Roles` NÃO É MAIS IMPORTADO AQUI, e a ausência é a regra: esta controller não tem NENHUM
+ * `@Roles`, nem de classe nem de método (o último, o da troca de vaga, saiu na Frente D por decisão
+ * do diretor). Quem restringe o módulo é o menu `as-candidatos`, no `MenuGuard`, e as autoridades
+ * que dependem do ESTADO da linha (desvincular quem já entregou posição) moram no service, que é o
+ * único lugar que sabe qual é esse estado. Ver `candidatos.saida-autoridade-na-rota.spec.ts`.
+ */
+import { CurrentUser } from "../../auth/decorators";
 import type { AuthUser } from "../../auth/auth.types";
 import { CandidatosService } from "./candidatos.service";
 import { CandidatosImportService } from "./candidatos-import.service";
@@ -32,10 +39,12 @@ import {
   EditarCandidatoDto,
   FinalizarPosicaoDto,
   FinalizarPosicaoEmLoteDto,
+  MarcarEntrevistaDto,
   MoverEtapaDto,
   MoverEtapaEmLoteDto,
   RegistrarContatoDto,
   RegistrarSaidaDto,
+  ReprovarPeloClienteDto,
   RegistrarSaidaEmLoteDto,
   TrocarVagaDto,
 } from "./candidatos.dto";
@@ -95,6 +104,23 @@ export class CandidatosController {
 
   // ── A CANDIDATURA (caminhos fixos, declarados antes do `:id`) ─────────────
 
+  /**
+   * QUEM PODE SER TRANSFERIDO PARA ESTA VAGA: as candidaturas VIVAS que estão em OUTRAS vagas.
+   *
+   * É a metade "b" da aba Candidatos Disponíveis. A metade "a" (quem está solto, sem processo vivo
+   * nenhum) é a busca com `semCandidatura`, que já existe e não ganha rota nova.
+   *
+   * ANTES DE `vaga/:vagaId`? NÃO PRECISA: os dois caminhos têm número de segmentos diferente, então
+   * o Nest não os confunde. A ordem aqui é de leitura, não de roteamento.
+   *
+   * GET, e sem `@Roles`: é LEITURA, e ela não devolve CPF nenhum (§A.6). Quem restringe o módulo
+   * inteiro é o menu `as-candidatos`, no `MenuGuard`.
+   */
+  @Get("vaga/:vagaId/transferiveis")
+  transferiveisPara(@Param("vagaId", ParseUUIDPipe) vagaId: string) {
+    return this.candidatos.transferiveisPara(vagaId);
+  }
+
   /** O painel de uma vaga: a ocupação DERIVADA mais quem está nela. */
   @Get("vaga/:vagaId")
   painelVaga(@Param("vagaId", ParseUUIDPipe) vagaId: string) {
@@ -121,9 +147,11 @@ export class CandidatosController {
    * é de propósito: o Nest casa na ordem de declaração, e sem o prefixo próprio um POST em massa
    * bateria na rota de parâmetro com o id valendo "lote".
    *
-   * SEM `@Roles`: são as mesmas operações que o consultor já faz uma a uma. A troca de vaga, que é de
-   * Master, NÃO tem versão em massa aqui, e é por isso que "mover no funil em massa" é `moverEtapa` e
-   * só ela: incluir a troca abriria um caminho de COMUM para uma ação que o `@Roles` protege.
+   * SEM `@Roles`: são as mesmas operações que o consultor já faz uma a uma. A troca de vaga NÃO tem
+   * versão em massa aqui, e o motivo deixou de ser o papel (o `@Roles` dela saiu na Frente D, por
+   * decisão do diretor) e passou a ser o que sempre esteve por baixo: a troca trava a linha da vaga
+   * de DESTINO e confere o teto dela dentro da transação, e um lote parcial deixaria metade da
+   * seleção movida e metade não, sem ninguém ter dito qual metade importava.
    */
 
   /**
@@ -173,6 +201,53 @@ export class CandidatosController {
     // QUEM MOVEU vai para o histórico de etapas. Uma linha do tempo sem autor responde "por onde a
     // pessoa passou" e não responde "quem decidiu", que é metade do valor de uma trilha.
     return this.candidatos.moverEtapa(id, dto, user.id);
+  }
+
+  /**
+   * ─ REPROVADO PELO CLIENTE: a pessoa volta para a ETAPA INICIAL (Frente E, ponto 12) ───────────
+   *
+   * `POST`, E NÃO `PATCH`, e a diferença não é estética: o `PATCH .../etapa` ao lado é "mude esta
+   * propriedade para o valor que eu mandei", e o corpo dele CARREGA a etapa. Aqui o corpo NÃO
+   * carrega destino nenhum (ele vem do catálogo) e o que se registra é um FATO do processo, com
+   * marcador próprio na trilha. É verbo de gesto, no molde do `aprovar` e do `finalizar-posicao`.
+   *
+   * SEM `@Roles`, como todo o resto desta controller: é a operação normal de quem opera a vaga, e o
+   * que restringe o módulo é o menu `as-candidatos`. As guardas que dependem do ESTADO (candidatura
+   * viva, pessoa em etapa de entrega ao cliente) moram no service, que é quem lê a linha.
+   */
+  @Post("candidaturas/:id/reprovar-pelo-cliente")
+  reprovarPeloCliente(
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body() dto: ReprovarPeloClienteDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.candidatos.reprovarPeloCliente(id, dto, user.id);
+  }
+
+  /**
+   * ─ MARCAR OU REMARCAR A ENTREVISTA (Frente E, ponto 8) ────────────────────────────────────────
+   *
+   * UMA ROTA PARA OS DOIS GESTOS: é o mesmo fato dito uma ou duas vezes ("a entrevista desta
+   * pessoa, nesta etapa, é neste dia e nesta hora"). Duas rotas obrigariam a TELA a decidir se já
+   * existe marcação, e ela decidiria com a fotografia que carregou, que pode estar velha.
+   *
+   * DEVOLVE A LISTA INTEIRA da candidatura, e não só a linha gravada: a ficha mostra as entrevistas
+   * das duas etapas lado a lado, e devolver uma obrigaria a tela a uma segunda chamada para
+   * redesenhar o que ela já poderia ter recebido.
+   */
+  @Post("candidaturas/:id/entrevista")
+  marcarEntrevista(
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body() dto: MarcarEntrevistaDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.candidatos.marcarEntrevista(id, dto, user.id);
+  }
+
+  /** AS ENTREVISTAS MARCADAS da candidatura, na ordem da agenda. §A.6: nada do candidato sai aqui. */
+  @Get("candidaturas/:id/entrevistas")
+  listarEntrevistas(@Param("id", ParseUUIDPipe) id: string) {
+    return this.candidatos.listarEntrevistas(id);
   }
 
   /**
@@ -256,15 +331,46 @@ export class CandidatosController {
    * TROCAR A VAGA da candidatura (item 5 do diretor): corrige a alocação errada MANTENDO a linha e a
    * etapa. Distinta do "Trazer De Volta", que cria processo novo e é de qualquer consultor.
    *
-   * `@Roles` É A AUTORIDADE, e é aqui que a restrição vale. Esconder a ação na tela é conveniência:
-   * um consultor comum que chame esta rota direto recebe 403 do `RolesGuard`, e é o guard, não a
-   * interface, que garante a regra.
+   * ┌─ O `@Roles("MASTER","SUPER_ADMIN")` SAIU DAQUI (Frente D, decisão do diretor) ─────────────┐
+   * │ O PEDIDO: o time operacional faz a gestão das vagas, e transferir alguém da vaga A para a B  │
+   * │ é gesto de gestão do dia a dia. QUALQUER CONSULTOR TRANSFERE.                                │
+   * │                                                                                             │
+   * │ ESTE ERA O ÚNICO `@Roles` DE MÉTODO DA CONTROLLER INTEIRA, e a investigação antes de removê- │
+   * │ lo (§A.26) mediu o que ele sustentava por baixo: NADA no `trocarVaga` consulta papel. O      │
+   * │ método recebe `porId: string`, nunca o `AuthUser`, então não havia como uma régua de lá      │
+   * │ depender do papel nem em silêncio. As quatro travas que decidem a operação continuam         │
+   * │ INTEIRAS e não são de papel nenhum: candidatura VIVA, vaga de destino que RECEBE candidato,  │
+   * │ pessoa que JÁ ESTÁ no destino, e TETO de posições do destino (contado sob a linha travada).  │
+   * │                                                                                             │
+   * │ O QUE CONTINUA PROTEGIDO, E PRECISA SER DITO PORQUE ISTO É BAIXAR PERMISSÃO (§A.38):         │
+   * │  · O MÓDULO INTEIRO segue reivindicado pelo menu `as-candidatos` no `MenuGuard`: sem o menu, │
+   * │    a rota é inalcançável, inclusive pela URL da API. "Sem `@Roles`" nunca quis dizer         │
+   * │    "aberto a qualquer autenticado" nesta controller.                                        │
+   * │  · DESVINCULAR quem já ENTREGOU posição (`ALOCADO`, `ENVIADO_PARA_ADMISSAO`) continua sendo  │
+   * │    de MASTER, no service (`desvinculoEhDeMaster`), e esta mudança não o toca: transferir NÃO │
+   * │    é desvincular. O desvínculo DESTRÓI o processo da pessoa (vira desfecho, com motivo); a   │
+   * │    transferência PRESERVA a linha, a etapa e o histórico, e a pessoa continua viva na vaga   │
+   * │    nova. É a diferença entre apagar e mudar de lugar.                                       │
+   * │  · FECHAR vaga continua com a trava de Master dele, no `VagasService`: o COMUM leva trava   │
+   * │    dura quando ainda falta posição, e só o MASTER passa com `forcar`, com a exceção          │
+   * │    registrada na trilha.                                                                     │
+   * │                                                                                             │
+   * │ O EFEITO COLATERAL QUE EU HAVIA REPORTADO AQUI NÃO EXISTE MAIS, E A CORREÇÃO É DA AUDITORIA  │
+   * │ (§A.38): este bloco dizia que um COMUM poderia esvaziar a vaga por transferência e depois    │
+   * │ cancelá-la "sem Master". NÃO HÁ MAIS GATE DE MASTER NO CANCELAMENTO: a própria Frente B      │
+   * │ revogou a `travaCandidatosQueSeguram`, o cancelamento passou a ser do consultor e o `forcar` │
+   * │ deixou de ter efeito. Não há trava a contornar, então não há contorno.                       │
+   * │                                                                                             │
+   * │ ARGUMENTO DE SEGURANÇA APOIADO EM TRAVA REVOGADA É PIOR QUE COMENTÁRIO NENHUM: a próxima     │
+   * │ sessão o lê como verdade e decide em cima dele. O que continua valendo do parágrafo antigo é │
+   * │ só o FECHAMENTO, e para ele a transferência não afrouxa nada: tirar um entregue AUMENTA o    │
+   * │ que falta para a meta, então fechar fica MAIS difícil, nunca menos.                          │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
    *
    * PATCH e não POST: a candidatura já existe e uma propriedade dela muda. POST diria que algo nasce,
    * e nascer é justamente o que esta operação NÃO faz, ao contrário do "Trazer De Volta".
    */
   @Patch("candidaturas/:id/vaga")
-  @Roles("MASTER", "SUPER_ADMIN")
   trocarVaga(
     @Param("id", ParseUUIDPipe) id: string,
     @Body() dto: TrocarVagaDto,

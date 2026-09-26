@@ -829,7 +829,25 @@ export const MENUS: MenuDef[] = [
     grupo: "SELECAO",
     ordem: 40,
     areas: ["AS"],
-    operacoes: ["VagasController.*"],
+    /**
+     * ─ DUAS CONTROLLERS, UM MENU, E A SEGUNDA NÃO É UMA TELA NOVA (Frente E, pontos 10 e 11) ────
+     *
+     * `ShortlistsController` serve `/as/vagas/:vagaId/shortlists`, que é operação DA CENTRAL DE
+     * VAGAS: a shortlist pertence à vaga, é montada na tela da vaga e é lida ali. Ela mora em
+     * classe própria por TAMANHO (a `VagasService` tem 4.400 linhas e treze specs a instanciam,
+     * §A.26), nunca por permissão.
+     *
+     * REIVINDICAR É OBRIGATÓRIO, E NÃO OPCIONAL: o `MenuGuard` é FAIL-OPEN para operação que
+     * ninguém reivindicou. Deixar a classe de fora não a tornaria "restrita como a vizinha": ela
+     * ficaria ABERTA a qualquer autenticado, inclusive aos COMUM da Admissão, com um `curl`. É o
+     * mesmo raciocínio escrito na `MotivosDescarteAdminController`.
+     *
+     * E NÃO HÁ DOIS DONOS PARA A MESMA OPERAÇÃO: as duas classes são distintas, cada uma aparece em
+     * UM menu só, então o mapa `operação -> menu` continua respondendo um. É o oposto do caso do
+     * `as-vagas-revisao` logo abaixo, que deixa `operacoes: []` justamente por compartilhar a
+     * `VagasController` com este menu.
+     */
+    operacoes: ["VagasController.*", "ShortlistsController.*"],
   },
   {
     /**
@@ -988,6 +1006,75 @@ export const MENUS: MenuDef[] = [
     ordem: 50,
     areas: ["AS"],
     operacoes: ["MotivosCancelamentoVagaAdminController.*"],
+  },
+  {
+    /**
+     * MOTIVOS DE DESCARTE (Central de Vagas, ponto 7). Irmão do de cancelamento, e pelo mesmo
+     * motivo: o motivo do descarte deixou de ser texto livre e virou catálogo, porque cada
+     * consultor escrevia de um jeito e o relatório não fechava.
+     *
+     * REGISTRO, NÃO CONCESSÃO (§A.23): entrar aqui faz o menu EXISTIR e ser selecionável na tela
+     * de permissão. Quem enxerga é decisão do diretor, e menu novo nasce só para o SUPER_ADMIN.
+     *
+     * ┌─ ESTE MENU É A AUTORIDADE DA ESCRITA, e não só a camada de UX (decisão do diretor) ──────┐
+     * │ A `MotivosDescarteAdminController` NÃO tem mais `@Roles`: o diretor pediu um catálogo     │
+     * │ RESTRITO e CONCEDÍVEL, pessoa a pessoa, e com o papel na classe conceder o menu entregava │
+     * │ uma porta trancada (403 ao ABRIR a tela, que lê o `GET` de administração).                 │
+     * │                                                                                           │
+     * │ POR ISSO O CÓDIGO ESTÁ EM `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER` e FORA de                 │
+     * │ `MENUS_SOMENTE_SUPER_ADMIN` e de `MENUS_BLOQUEADOS_COMUM`: a primeira fecha o bypass de   │
+     * │ ÁREA do MASTER (sem ela, todo MASTER de A&S ganharia o catálogo sozinho), e as duas       │
+     * │ últimas TRAVAM a concessão, uma para o MASTER e outra para o COMUM. O molde é o de        │
+     * │ `dicas-documento`, não o dos catálogos irmãos de A&S, que continuam `@Roles`.              │
+     * │                                                                                           │
+     * │ SÓ A ESCRITA É REIVINDICADA. A leitura (`MotivosDescarteController`) fica fora: o guard    │
+     * │ resolve por NOME DE CLASSE, e reivindicá-la daria 403 no seletor de motivo do consultor.   │
+     * └───────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    codigo: "as-motivos-descarte",
+    rotulo: "Motivos De Descarte",
+    href: "/admin/as/motivos-descarte",
+    grupo: "ADMIN",
+    ordem: 51,
+    areas: ["AS"],
+    operacoes: ["MotivosDescarteAdminController.*"],
+  },
+  {
+    /**
+     * MOTIVOS DE REENVIO DE SHORTLIST (decisão 6 do diretor). Irmão dos dois de cima, e pelo mesmo
+     * motivo: "por que a lista foi refeita" deixou de ser texto livre de 500 caracteres e virou
+     * catálogo, porque a pergunta é de relatório e relatório sobre frase digitada é `like`.
+     *
+     * SÓ A CONTROLLER DE ESCRITA É REIVINDICADA, e a de LEITURA
+     * (`MotivosReenvioShortlistController`) fica de fora de propósito: o `MenuGuard` resolve por
+     * NOME DE CLASSE, então reivindicá-la daria 403 no seletor de motivo para o consultor COMUM,
+     * que é justamente quem reenvia shortlist.
+     *
+     * A REIVINDICAÇÃO É A SEGUNDA CAMADA, NÃO A PRIMEIRA: a autoridade é o `@Roles("SUPER_ADMIN")`
+     * na própria `MotivosReenvioShortlistAdminController` (fail-closed no `RolesGuard`), porque o
+     * MENU NÃO SEGURA MASTER, que passa por pertencer à área. E ela também não é dispensável: o
+     * `MenuGuard` é FAIL-OPEN para operação não reivindicada, então sem esta linha a rota de escrita
+     * nasceria alcançável por qualquer autenticado que soubesse a URL.
+     *
+     * REGISTRO, NÃO CONCESSÃO (§A.23): entrar aqui faz o menu EXISTIR e ser selecionável na tela de
+     * permissão. Quem enxerga é decisão do diretor, e menu novo nasce só para o SUPER_ADMIN. Por
+     * nascer fora da ADM, o código entra também em `MENUS_QUE_NASCEM_FORA_DA_ADM`, que é a prova
+     * NOMINAL de nascimento.
+     */
+    codigo: "as-motivos-reenvio",
+    rotulo: "Motivos De Reenvio",
+    /*
+     * A ROTA DA TELA É CURTA E A DA API É LONGA, e a assimetria é deliberada (decisão do
+     * coordenador): a tela vive em `/admin/as/motivos-reenvio`, e as rotas de API continuam em
+     * `/as/motivos-reenvio-shortlist` (leitura) e `/admin/as/motivos-reenvio-shortlist` (escrita).
+     * O `href` daqui é o da TELA: é ele que o menu lateral abre, e apontá-lo para a rota da API
+     * daria 404 no clique, sem quebrar teste nenhum.
+     */
+    href: "/admin/as/motivos-reenvio",
+    grupo: "ADMIN",
+    ordem: 51,
+    areas: ["AS"],
+    operacoes: ["MotivosReenvioShortlistAdminController.*"],
   },
   {
     /**
@@ -1183,6 +1270,10 @@ export const MENUS_QUE_NASCEM_FORA_DA_ADM = new Set<string>([
   "as-etapas",
   // Mesma razão do de cima: configura uma lista de A&S e mora no grupo ADMIN por isso.
   "as-motivos-cancelamento",
+  // Irmão do de cima, mesma razão: configura uma lista de A&S e mora no grupo ADMIN por isso.
+  "as-motivos-descarte",
+  // Idem, decisão 6 do diretor: o motivo do REENVIO de shortlist virou catálogo.
+  "as-motivos-reenvio",
   // Idem, e o catálogo mais sensível dos três: os flags dele são travas da operação da vaga.
   "as-status-vaga",
   // Onda C. Mesma razão dos três acima: configura uma lista de A&S e mora no grupo ADMIN por isso.
@@ -1300,6 +1391,12 @@ export const MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER = new Set<string>([
   // nasceu na área ADM, onde estão todos os MASTER de hoje. Decisão do diretor: escrever a dica é
   // concessão nominal, não consequência do papel.
   "dicas-documento",
+  // MOTIVOS DE DESCARTE: o diretor decidiu que este catálogo continua RESTRITO e passa a ser
+  // CONCEDÍVEL, por pessoa. É o MENU que segura a rota (o `@Roles("SUPER_ADMIN")` saiu da
+  // `MotivosDescarteAdminController`), e sem esta entrada nominal o MASTER passaria pelo bypass de
+  // ÁREA do `MenuGuard`: há MASTER na área AS em produção, e todos ganhariam o catálogo sozinhos,
+  // que é exatamente a decisão individual que o diretor pediu para poder tomar.
+  "as-motivos-descarte",
 ]);
 
 /** O menu exige marcação EXPLÍCITA mesmo de um MASTER? Consumida pelo `MenuGuard`. */
@@ -1370,7 +1467,16 @@ export const MENUS_BLOQUEADOS_COMUM = new Set<string>([
   // Idem: a escrita é `@Roles("SUPER_ADMIN")`, então marcar para um COMUM só faria o menu
   // APARECER e o backend BARRAR.
   "as-motivos-cancelamento",
+  // `as-motivos-descarte` ESTEVE AQUI E SAIU, e a saída é decisão do diretor, não descuido. Ele
+  // entrou como conserto de omissão enquanto a escrita era `@Roles("SUPER_ADMIN")`: ali, marcar o
+  // menu para um COMUM só faria a tela aparecer e o backend barrar. A decisão seguinte foi que o
+  // catálogo fica CONCEDÍVEL, e o `@Roles` saiu da controller (quem segura a rota passou a ser o
+  // `MenuGuard`). Mantê-lo nesta lista TRAVARIA a concessão a um COMUM, que é o oposto do pedido.
+  // A restrição dele continua inteira, em outra casa: `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER`.
   "as-status-vaga",
+  // Decisão 6 do diretor: a escrita é `@Roles("SUPER_ADMIN")`, então marcar para um COMUM só faria
+  // o menu APARECER e o backend BARRAR.
+  "as-motivos-reenvio",
   // Onda C, mesma razão: a escrita é `@Roles("SUPER_ADMIN")`, então marcar para um COMUM só faria o
   // menu APARECER e o backend BARRAR.
   "as-linhas-servico",
@@ -1404,7 +1510,18 @@ export const MENUS_SOMENTE_SUPER_ADMIN = new Set<string>([
   // o histórico de seleção está escrito.
   "as-etapas",
   "as-motivos-cancelamento",
+  // `as-motivos-descarte` ESTEVE AQUI E SAIU, pela mesma decisão do diretor. Esta lista REMOVE o
+  // menu do resultado de `filtrarMenusPorPapel`, ou seja, torna o menu IMPOSSÍVEL DE CONCEDER: o
+  // diretor marcaria a pessoa na tela de permissões e o `/auth/me` dela devolveria a lista sem o
+  // menu. Era o certo enquanto a rota era `@Roles("SUPER_ADMIN")` (mostrar a porta e trancá-la é
+  // pior do que não mostrar), e passou a ser o errado quando a rota virou concedível pelo menu.
+  // O NASCIMENTO CONTINUA FECHADO (§A.23) sem ela: `codigosPadraoDoPapel` não entrega o menu a
+  // MASTER nenhum (`baseDeMenusDoMaster` o esconde) nem a COMUM (não é do grupo OPERACAO), e o
+  // `MenuGuard` exige a marcação nominal. Quem vê e quem edita passa a ser só quem o diretor marcar.
   "as-status-vaga",
+  // Decisão 6 do diretor: a controller de escrita é `@Roles` SUPER_ADMIN, então mostrar o card ao
+  // Master seria mostrar a porta e trancá-la.
+  "as-motivos-reenvio",
   // Onda C: quem edita esta lista edita a CLASSIFICAÇÃO da operação inteira, e o rótulo renomeado
   // reescreve o nome da linha em toda vaga que já aponta para ela.
   "as-linhas-servico",

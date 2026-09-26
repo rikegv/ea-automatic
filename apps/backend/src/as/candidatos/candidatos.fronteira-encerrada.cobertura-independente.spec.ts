@@ -11,6 +11,7 @@ import {
 } from "@ea/shared-types";
 import { asCandidaturaEtapas, asCandidaturas } from "../../db/schema";
 import { bancoFingido, linhaFingida, usuarioFingido } from "./fronteira-encerrada.tester-fake";
+import { MOTIVO_DE_DESCARTE_VALIDO } from "../motivos-descarte/motivos-descarte.fake";
 
 /**
  * ─ A FRONTEIRA ENCERRADA→VIVA: A TERCEIRA PORTA, E A AUTORIDADE DE DESFAZER A ENTREGA ─────────
@@ -45,7 +46,16 @@ import { bancoFingido, linhaFingida, usuarioFingido } from "./fronteira-encerrad
  * situação do vocabulário compartilhado e um papel de sessão.
  */
 
-const MOTIVO = "Perfil não aderente ao cliente";
+/*
+ * O MOTIVO PRECISOU SAIR DO CATÁLOGO (Frente A, ponto 7), e a troca não é cosmética: "Perfil não
+ * aderente ao cliente" era texto livre, e o DESCARTE passou a ser conferido contra `motivos_descarte`
+ * antes de qualquer transação. Com o literal antigo, TODO teste desta suíte passaria a morrer num 400
+ * de motivo, escondendo a fronteira de encerrada que ela existe para medir.
+ *
+ * O MESMO VALOR SERVE OS DEMAIS DESFECHOS, que continuam aceitando prosa: o que se afirma aqui é a
+ * fronteira, e um motivo só mantém as comparações de antes e depois legíveis.
+ */
+const MOTIVO: string = MOTIVO_DE_DESCARTE_VALIDO;
 
 /** As situações ENCERRADAS, derivadas da régua e nunca digitadas: saída nova cai aqui sozinha. */
 const ENCERRADAS = CANDIDATURA_SITUACOES.filter((s) => !candidaturaViva(s));

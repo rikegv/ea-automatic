@@ -345,12 +345,25 @@ describe("menus exclusivos do SUPER_ADMIN", () => {
     // Por isso ele não tem sequer controller de leitura aberta, ao contrário dos cinco vizinhos: a
     // lista é servida por superfície já gatada. Se um dia alguém tirar este código daqui, estará
     // entregando nome de pessoa ao próximo MASTER criado, sem rodar script nenhum.
+    //
+    // MOTIVOS DE DESCARTE ENTROU E SAIU, e a saída é DECISÃO DO DIRETOR, não regressão da omissão
+    // que o fez entrar. Ele entrou enquanto a escrita era `@Roles("SUPER_ADMIN")`: ali, deixá-lo
+    // visível ao MASTER era mostrar a porta e trancá-la. O diretor então pediu o contrário do que
+    // esta lista faz: o catálogo continua RESTRITO, e ele decide INDIVIDUALMENTE quem edita. Esta
+    // lista REMOVE o menu do resultado de `filtrarMenusPorPapel`, ou seja, o torna IMPOSSÍVEL DE
+    // CONCEDER, então ela é incompatível com a decisão. A restrição dele mudou de casa e continua
+    // inteira: `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER` (bloco abaixo), que é o molde das Dicas.
+    //
+    // MOTIVOS DE REENVIO DE SHORTLIST (decisão 6) entra pela mesma razão, com uma diferença que
+    // ENDURECE o caso: aqui o que fica gravado na shortlist é a **FK**, então renomear a linha
+    // reescreve a leitura de todo reenvio já gravado, e não só a dos próximos.
     expect([...MENUS_SOMENTE_SUPER_ADMIN]).toEqual([
       "usuarios",
       "menu-areas",
       "as-etapas",
       "as-motivos-cancelamento",
       "as-status-vaga",
+      "as-motivos-reenvio",
       "as-linhas-servico",
       "as-segmentos",
       "as-comerciais",
@@ -410,6 +423,46 @@ describe("menus que exigem marcação explícita do MASTER", () => {
 
   it("as Dicas De Documento estão na lista (o texto vai para a tela PÚBLICA do candidato)", () => {
     expect(masterPrecisaDeMarcacao("dicas-documento")).toBe(true);
+  });
+
+  /**
+   * ─ OS MOTIVOS DE DESCARTE, E POR QUE ESTA É A ÚNICA CASA QUE ATENDE AS DUAS EXIGÊNCIAS ───────
+   *
+   * O DIRETOR PEDIU DUAS COISAS AO MESMO TEMPO, e elas parecem opostas: o menu NASCE só para o
+   * SUPER_ADMIN (§A.23) e mesmo assim é CONCEDÍVEL, um a um, pela tela de permissões.
+   *
+   * As outras duas listas atendem a primeira QUEBRANDO a segunda:
+   *   . `MENUS_SOMENTE_SUPER_ADMIN` some com o menu do `/auth/me` de quem não é SUPER_ADMIN, então
+   *     a marcação do diretor seria gravada e não valeria nada;
+   *   . `MENUS_BLOQUEADOS_COMUM` é filtrada ao SALVAR a config de um COMUM, então o menu nem chega
+   *     a ser gravado para ele.
+   *
+   * Esta atende as duas: o menu não vem de nascença para MASTER nenhum (`baseDeMenusDoMaster` o
+   * esconde, e é `codigosPadraoDoPapel` que o `criar` de usuário grava e o grandfather distribui),
+   * o `MenuGuard` exige a marcação nominal inclusive do MASTER, e a marcação, quando existe,
+   * sobrevive a todos os filtros. QUEM SEGURA A ROTA É O MENU: a
+   * `MotivosDescarteAdminController` deixou de ter `@Roles`.
+   */
+  it("os Motivos De Descarte exigem marcação TAMBÉM do MASTER (senão todo MASTER de A&S edita)", () => {
+    expect(masterPrecisaDeMarcacao("as-motivos-descarte")).toBe(true);
+    // A PORTA DO NASCIMENTO, fechada nos três papéis que não são o dono do menu (§A.23).
+    expect(codigosPadraoDoPapel("MASTER")).not.toContain("as-motivos-descarte");
+    expect(codigosPadraoDoPapel("COMUM")).not.toContain("as-motivos-descarte");
+    expect(MENUS_PADRAO_COMUM).not.toContain("as-motivos-descarte");
+    expect(codigosPadraoDoPapel("SUPER_ADMIN")).toContain("as-motivos-descarte");
+  });
+
+  it("os Motivos De Descarte são CONCEDÍVEIS: nenhuma das duas listas de papel os trava", () => {
+    // Se qualquer uma das duas voltar a conter o código, a concessão do diretor vira marcação
+    // gravada e inútil, que é o defeito que esta frente foi feita para acabar.
+    expect(MENUS_SOMENTE_SUPER_ADMIN.has("as-motivos-descarte")).toBe(false);
+    expect(MENUS_BLOQUEADOS_COMUM.has("as-motivos-descarte")).toBe(false);
+    // E a marcação sobrevive ao filtro por papel, nos dois papéis que podem recebê-la.
+    expect(filtrarMenusPorPapel(["as-motivos-descarte"], "MASTER")).toEqual([
+      "as-motivos-descarte",
+    ]);
+    expect(filtrarMenusPorPapel(["as-motivos-descarte"], "COMUM")).toEqual(["as-motivos-descarte"]);
+    expect(baseDeMenusDoMaster(["as-motivos-descarte"])).toContain("as-motivos-descarte");
   });
 
   it("ADITIVA: nenhum menu FORA da lista passou a exigir marcação do MASTER", () => {

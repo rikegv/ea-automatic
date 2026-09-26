@@ -133,6 +133,29 @@ export const ROTA_MENU: { prefixo: string; codigo: string }[] = [
   // digitasse a URL abriria o gerenciador, veria o catálogo inteiro renderizado pela leitura aberta,
   // e só tomaria 403 ao clicar em salvar. O backend já barra a escrita; isto fecha a porta da tela.
   { prefixo: "/admin/as/motivos-cancelamento", codigo: "as-motivos-cancelamento" },
+  // MOTIVOS DE DESCARTE DO CANDIDATO (A&S, Frente A): mesma régua da linha acima, e pelo mesmo
+  // motivo medido: a LEITURA do catálogo (`GET /as/motivos-descarte`) é aberta a qualquer
+  // autenticado de propósito, porque o seletor do desvínculo aparece na tela do consultor. Sem esta
+  // linha, quem digitasse a URL abriria o gerenciador, veria o catálogo inteiro renderizado pela
+  // leitura aberta, e só tomaria 403 ao clicar em salvar. A escrita já está fechada por
+  // `@Roles("SUPER_ADMIN")` no backend; isto fecha a porta da tela.
+  //
+  // §A.23: ISTO NÃO CONCEDE MENU A NINGUÉM, e é o contrário disso. O SUPER_ADMIN passa pelo guard
+  // por ser SUPER_ADMIN (ver `(app)/layout.tsx`), e todos os demais ficam de fora até o diretor
+  // liberar o menu na tela de permissão. O registro do menu no catálogo é passo separado, do
+  // backend, e não é feito aqui.
+  { prefixo: "/admin/as/motivos-descarte", codigo: "as-motivos-descarte" },
+  // MOTIVOS DE REENVIO DA SHORTLIST (A&S): mesma régua das duas linhas acima, e pelo mesmo motivo
+  // medido: a LEITURA do catálogo (`GET /as/motivos-reenvio-shortlist`) é aberta a qualquer
+  // autenticado de propósito, porque o seletor do reenvio aparece na tela do consultor. Sem esta
+  // linha, quem digitasse a URL abriria o gerenciador, veria o catálogo inteiro renderizado pela
+  // leitura aberta, e só tomaria 403 ao clicar em salvar. A escrita já está fechada por
+  // `@Roles("SUPER_ADMIN")` no backend; isto fecha a porta da tela.
+  //
+  // §A.23: ISTO NÃO CONCEDE MENU A NINGUÉM. O SUPER_ADMIN passa pelo guard por ser SUPER_ADMIN, e
+  // todos os demais ficam de fora até o diretor liberar o menu na tela de permissão. O registro do
+  // menu no catálogo é passo separado, do backend, e não é feito aqui.
+  { prefixo: "/admin/as/motivos-reenvio", codigo: "as-motivos-reenvio" },
   // STATUS DA VAGA (A&S): governado pelo menu `as-status-vaga`, que nasce só para o SUPER_ADMIN
   // (§A.23), e o código aqui é o MESMO que o backend registra em `domain/menus.ts`, com a mesma
   // rota: fosse outro, o guard não acharia o menu e a tela não abriria para ninguém.

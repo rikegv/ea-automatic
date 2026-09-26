@@ -686,16 +686,19 @@ export class CancelarVagaDto {
   dataCancelamento!: string;
 
   /**
-   * CANCELAR MESMO COM CANDIDATO EM PROCESSO DENTRO.
+   * ─ INERTE DESDE A FRENTE B DA CENTRAL DE VAGAS (decisão do diretor) ───────────────────────────
    *
-   * SÓ MASTER E SUPER_ADMIN PASSAM, e QUEM CONFERE É O SERVICE, nunca um `@Roles` na rota: todo
-   * consultor precisa poder cancelar a vaga SEM ninguém segurando, e o decorador barraria o
-   * cancelamento normal do COMUM, que é regressão silenciosa. É o mesmo desenho do `forcar` do
-   * fechamento, logo acima.
+   * O QUE ELE ERA: "cancelar mesmo com candidato em processo dentro", de Master, e forçar
+   * ENCERRAVA (descartava) quem segurava.
    *
-   * O QUE ELE CUSTA, ALÉM DA TRILHA: as candidaturas que seguravam são ENCERRADAS na mesma
-   * transação. Deixá-las vivas numa vaga cancelada prenderia o dado pessoal do candidato para
-   * sempre (§A.6), porque o prazo de retenção só começa a correr quando nada vivo sobra.
+   * O QUE ELE É: NADA. Cancelar com candidato dentro passou a ser permitido para qualquer
+   * consultor, e ninguém é descartado: quem está vivo vai para o Stand By e continua vivo. Não
+   * existe mais exceção a autorizar, então não há o que forçar.
+   *
+   * ELE CONTINUA ACEITO, E NÃO FOI REMOVIDO, de propósito: a tela de cancelamento em produção ainda
+   * pode mandá-lo, e tirar o campo do DTO faria o `forbidNonWhitelisted` da validação RECUSAR o
+   * corpo inteiro com 400, derrubando o cancelamento por causa de um campo que não faz mais nada.
+   * O service o IGNORA; quem remove o botão e o campo é a frente de tela, e aí esta linha sai.
    */
   @IsOptional()
   @IsBoolean()

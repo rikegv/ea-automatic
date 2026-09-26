@@ -40,6 +40,7 @@ import { StatusPill } from "@/components/ui/StatusPill";
 import { tomDaSituacao } from "@/lib/as-candidatos-visual";
 import {
   avisoDeProcessosEncerrados,
+  avisoDoDestinoDoCancelamento,
   type AsVagaCancelamentoPrevia,
 } from "@/lib/as-vaga-cancelamento";
 
@@ -57,6 +58,7 @@ export function CancelarVagaModal({
   carregandoMotivos,
   previa,
   previaFalhou,
+  vaoParaStandBy,
   erro,
   cancelando,
   onChange,
@@ -82,6 +84,14 @@ export function CancelarVagaModal({
    * disponível: o aviso INFORMA, não trava, e isso vale inclusive quando ele não consegue informar.
    */
   previaFalhou: boolean;
+  /**
+   * QUANTAS PESSOAS O CANCELAMENTO VAI MOVER PARA O STAND BY (Frente B).
+   *
+   * NULO É "NÃO SEI", e a frase muda de forma em vez de chutar zero: a vaga pode chegar sem
+   * ocupação, e afirmar "ninguém será movido" sem ter contado seria a tela garantindo o que não
+   * apurou. A conta mora em `quantosVaoParaODestino`, que é onde ela tem teste.
+   */
+  vaoParaStandBy: number | null;
   erro: string | null;
   cancelando: boolean;
   onChange: (f: CancelamentoForm) => void;
@@ -96,6 +106,11 @@ export function CancelarVagaModal({
      MENTIR (chamar de perda quem foi aprovado e enviado para a admissão), então ela é uma régua com
      teste, e não três ternários dentro de um componente. Nulo quer dizer "não há o que dizer". */
   const aviso = avisoDeProcessosEncerrados(previa);
+  /* O DESTINO É DITO SEMPRE, e não só quando há gente: a caixa responde "o que acontece com quem
+     está na vaga?", e "não há ninguém" É a resposta nos casos em que ela vale. É o contrário do
+     aviso de processos encerrados logo acima, que some quando não tem o que dizer, porque lá o
+     silêncio não esconde efeito nenhum. Aqui o efeito existe e é novo para quem usa a tela. */
+  const destino = avisoDoDestinoDoCancelamento(vaoParaStandBy);
 
   return (
     <Modal onClose={onVoltar} className="max-w-[560px] p-6" ariaLabel="Cancelar vaga">
@@ -117,8 +132,9 @@ export function CancelarVagaModal({
 
           O TOM É NEUTRO, e isso é escolha: `--surface-2` com o ícone de informação, e não o
           amarelo de atenção. Processo que já terminou não é problema nem risco, é fato, e pintar
-          de amarelo ensinaria o time a ler alarme onde só há contexto. O amarelo desta tela é do
-          forçamento, que é o único gesto com efeito irreversível. */}
+          de amarelo ensinaria o time a ler alarme onde só há contexto. Esta tela não tem mais
+          nenhum bloco de atenção: o gesto irreversível que justificava o amarelo era o forçamento,
+          e ele deixou de existir na Frente B. */}
       {aviso && (
         <div className="mb-5 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3.5 py-3">
           <div className="flex items-start gap-2.5">
@@ -151,6 +167,28 @@ export function CancelarVagaModal({
           continua disponível.
         </p>
       )}
+
+      {/* ── O QUE VAI ACONTECER COM QUEM AINDA ESTÁ EM PROCESSO (Frente B) ───────────────────
+          AQUI HAVIA UM GESTO, E AGORA HÁ UMA INFORMAÇÃO. O caminho antigo era uma recusa 409 com
+          a lista de quem segurava e um "Cancelar assim mesmo" de Master que DESCARTAVA todo
+          mundo. A trava foi revogada: cancelar com gente dentro é permitido para qualquer
+          consultor, e ninguém é descartado.
+
+          ELE FICA DEPOIS DO AVISO DE PROCESSOS ENCERRADOS E ANTES DO FORMULÁRIO, porque a ordem
+          de leitura da tela é a ordem do tempo: primeiro o que JÁ aconteceu nesta vaga, depois o
+          que VAI acontecer quando o botão for clicado, e só então o preenchimento.
+
+          MESMO TOM NEUTRO do bloco acima, pela mesma razão: isto é o efeito normal do gesto, não
+          um risco. Amarelo aqui ensinaria o time a ler alarme onde só há descrição. */}
+      <div className="mb-5 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3.5 py-3">
+        <div className="flex items-start gap-2.5">
+          <Icon name="users" className="mt-[3px] h-3.5 w-3.5 flex-none text-accent" />
+          <div>
+            <p className="text-[12.5px] leading-snug text-text">{destino.frase}</p>
+            <p className="mt-1 text-[12px] leading-snug text-dim">{destino.nota}</p>
+          </div>
+        </div>
+      </div>
 
       <div className="flex flex-col gap-4">
         <label className="flex flex-col gap-1.5">

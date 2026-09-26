@@ -1,4 +1,6 @@
 import "reflect-metadata";
+import { readFileSync, readdirSync } from "node:fs";
+import { join, relative } from "node:path";
 import { getTableName } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import type { AuthUser } from "../../auth/auth.types";
@@ -43,6 +45,8 @@ const USUARIO: AuthUser = {
 const CLIENTE = "CLI-A";
 const CARGO = "11111111-1111-4111-8111-111111111111";
 const BENEFICIO = "22222222-2222-4222-8222-222222222222";
+const MOTIVO_CANCELAMENTO_ID = "33333333-3333-4333-8333-333333333333";
+const MOTIVO_CANCELAMENTO = "Cliente desistiu";
 
 /** O catálogo injetado, fingido, com a RÉGUA DE PRODUÇÃO dentro (molde do spec da correção). */
 function catalogoDeStatusFingido(linhas: LinhaStatus[]) {
@@ -78,6 +82,14 @@ function catalogoDeStatusFingido(linhas: LinhaStatus[]) {
 const CATALOGOS: Record<string, Record<string, unknown>[]> = {
   as_linhas_servico: [{ id: 1, codigo: "OPERACAO", rotulo: "Operação", ordem: 1, ativo: true }],
   beneficios_catalogo: [{ id: BENEFICIO, ativo: true }],
+  /*
+   * O MOTIVO DE CANCELAMENTO ENTROU PELA PROPRIEDADE DO BLOCO (f), e a entrada não é decoração: o
+   * `cancelar` confere o motivo contra o catálogo ATIVO antes de qualquer outra coisa, então, sem
+   * esta linha, ele morreria em "motivo inválido" e o caso do encerramento ficaria VERDE sem nunca
+   * ter chegado ao gate que ele existe para medir. Um teste de propriedade que não alcança a
+   * guarda não é teste de propriedade, é um vácuo com nome bonito.
+   */
+  motivos_cancelamento_vaga: [{ id: MOTIVO_CANCELAMENTO_ID, nome: MOTIVO_CANCELAMENTO, ativo: true }],
 };
 
 function bancoComCatalogos(db: unknown): unknown {
@@ -414,6 +426,299 @@ describe("a liberação completa grava o formulário E move a vaga, na mesma tra
     ).toBe("Operador de Loja");
     expect(vaga.cargoId).toBe(CARGO);
   });
+});
+
+// ── (e) A INVARIANTE: VAGA EM PROCESSO SEMPRE TEM CLIENTE ───────────────────────────────────
+
+/**
+ * ─ "VAGA EM PROCESSO SEMPRE TEM CLIENTE": A INVARIANTE, E POR QUE ELA PRECISA DE TESTE PRÓPRIO ─
+ *
+ * ┌─ ELA DEIXOU DE SER UMA CONVENIÊNCIA E PASSOU A SUSTENTAR COMPORTAMENTO ────────────────────┐
+ * │ A transferência entre clientes (decisão 3) apaga a entrevista do CLIENTE quando a vaga de   │
+ * │ origem e a de destino são de clientes DIFERENTES, e se ABSTÉM quando algum lado é NULO      │
+ * │ ("não sei" não é "é outro"). Perguntar se o caso de origem NULA existe é perguntar se uma   │
+ * │ candidatura com entrevista de cliente pode viver numa vaga sem cliente, e a resposta vem    │
+ * │ desta invariante: marcar entrevista exige `papelDeVagaEmProcesso` (ABERTURA ou ENTREGA), e  │
+ * │ nenhuma vaga chega a esses papéis sem cliente. Enquanto isto for verdade, aquele caso é     │
+ * │ IMPOSSÍVEL por construção, e não apenas raro.                                                │
+ * │                                                                                              │
+ * │ SÃO DUAS PORTAS PARA O PAPEL ABERTURA, E AS DUAS ESTÃO AQUI. Uma sozinha não prova nada: a  │
+ * │ trava da liberação já existia e ainda assim a vaga em revisão saía publicada pelo           │
+ * │ `moverStatus`, que é o defeito que a `exigeReguaDeAbertura` fechou. Testar só uma delas é   │
+ * │ afirmar a invariante olhando para metade do sistema.                                         │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ESTE BLOCO MEDE AS DUAS PORTAS, UMA A UMA, E ISSO NÃO BASTA. `reabrir` grava o código de
+ * abertura SEM OLHAR O CLIENTE, e só é seguro porque `fechar` e `cancelar` gateiam em
+ * `papelDeVagaEmProcesso` num OUTRO ponto do arquivo: afrouxe aquele gate remoto e a invariante cai
+ * aqui, em silêncio, sem nenhum destes casos ficar vermelho. É por isso que o bloco (f), logo
+ * abaixo, afirma a PROPRIEDADE inteira em vez de mais um caso. Os dois se complementam: estes casos
+ * dizem QUAL é a frase e QUANDO a recusa acontece; o de baixo diz que não sobrou porta nenhuma.
+ */
+describe("a invariante: nenhuma porta leva ao papel ABERTURA sem cliente", () => {
+  it("a liberação recusa a vaga sem cliente, e a recusa vem ANTES de qualquer escrita", async () => {
+    const { service, banco, vaga, codigoDaFila } = cenario("REVISAO");
+    const erro = (await erroDe(() =>
+      service.liberarPendenteRevisao(
+        "vaga-1",
+        USUARIO,
+        { ...FORMULARIO_COMPLETO, codCliente: undefined } as never,
+      ),
+    )) as { message?: string } | null;
+
+    expect(erro, "a vaga sem cliente saiu da fila: a invariante caiu").not.toBeNull();
+    expect(
+      String(erro?.message ?? ""),
+      "a frase é o que diz ao consultor o que fazer: o vínculo do cliente é o que a revisão existe para resolver",
+    ).toContain("Vincule o cliente desta vaga antes de liberar");
+    expect(
+      banco.escritas,
+      "recusa que já gravou não é recusa: a vaga ficaria com o formulário pela metade, ainda na fila",
+    ).toEqual([]);
+    expect(vaga.status).toBe(codigoDaFila);
+    expect(vaga.codCliente).toBeNull();
+  });
+
+  it("o corpo VAZIO não contorna a trava: a vaga da fila continua sem cliente gravado", async () => {
+    // O GESTO ANTIGO (liberar sem mandar formulário) lê o cliente da LINHA TRAVADA. Sem ele lá, a
+    // trava tem de valer igual: é o caminho em que ninguém digitou nada e é o mais fácil de acionar.
+    const { service, banco, vaga, codigoDaFila } = cenario("REVISAO");
+    const erro = await erroDe(() => service.liberarPendenteRevisao("vaga-1", USUARIO, {} as never));
+
+    expect(erro).not.toBeNull();
+    expect(banco.escritas).toEqual([]);
+    expect(vaga.status).toBe(codigoDaFila);
+  });
+
+  /**
+   * A SEGUNDA PORTA. `PENDENTE_REVISAO` não encerra (a vaga pode sair) e o papel ABERTURA é destino
+   * manual de propósito, então sem a `exigeReguaDeAbertura` esta chamada publicaria a vaga espelhada
+   * SEM CLIENTE por uma rota HTTP, com a trava da liberação intacta e inútil ao lado.
+   */
+  it("o movimento manual NÃO publica a vaga da fila: ela sai pela liberação, que confere o cliente", async () => {
+    const { service, banco, vaga, codigoDaFila, codigoAbertura } = cenario("REVISAO");
+    const erro = (await erroDe(() =>
+      service.moverStatus("vaga-1", { status: codigoAbertura } as never, USUARIO),
+    )) as { message?: string } | null;
+
+    expect(erro, "o movimento manual virou a segunda porta para o papel ABERTURA").not.toBeNull();
+    expect(String(erro?.message ?? "")).toContain("pendente de revisão");
+    expect(vaga.status).toBe(codigoDaFila);
+    expect(banco.escritas, "nem o movimento nem a trilha dele podem ter sido gravados").toEqual([]);
+  });
+
+  it("o movimento manual também não publica o RASCUNHO, que é a outra vaga sem cliente", async () => {
+    const { service, banco, vaga, codigoRascunho, codigoAbertura } = cenario("RASCUNHO");
+    const erro = (await erroDe(() =>
+      service.moverStatus("vaga-1", { status: codigoAbertura } as never, USUARIO),
+    )) as { message?: string } | null;
+
+    expect(erro, "o rascunho publicou sem passar pela régua dos obrigatórios").not.toBeNull();
+    expect(
+      String(erro?.message ?? ""),
+      "a recusa tem de ser a da régua de abertura, e não um erro de outra trava qualquer",
+    ).toContain("rascunho");
+    expect(vaga.status).toBe(codigoRascunho);
+    expect(banco.escritas).toEqual([]);
+  });
+
+  it("a trilha de publicação do RASCUNHO cobra o cliente como qualquer outro obrigatório", async () => {
+    const { service, banco, vaga, codigoRascunho, codigoAbertura } = cenario("RASCUNHO");
+    const erro = (await erroDe(() =>
+      service.atualizar(
+        "vaga-1",
+        { ...FORMULARIO_COMPLETO, codCliente: undefined, status: codigoAbertura } as never,
+        USUARIO.id,
+      ),
+    )) as { message?: string } | null;
+
+    expect(erro, "a trilha publicou uma vaga sem cliente").not.toBeNull();
+    expect(
+      String(erro?.message ?? ""),
+      "`codCliente` é um dos onze obrigatórios, e a mensagem sai com a lista inteira",
+    ).toContain("Cliente");
+    expect(vaga.status).toBe(codigoRascunho);
+    expect(banco.escritas).toEqual([]);
+  });
+
+  /** O CONTRASTE: sem ele, os cinco casos acima seriam satisfeitos por uma porta que barra tudo. */
+  it("COM o cliente, a vaga sai da fila para o papel ABERTURA normalmente", async () => {
+    const { service, vaga, codigoAbertura } = cenario("REVISAO");
+    await service.liberarPendenteRevisao("vaga-1", USUARIO, { ...FORMULARIO_COMPLETO } as never);
+
+    expect(vaga.status).toBe(codigoAbertura);
+    expect(vaga.codCliente, "a vaga aberta sem cliente é o estado que não pode existir").toBe(
+      CLIENTE,
+    );
+  });
+});
+
+// ── (f) A PROPRIEDADE, E NÃO MAIS UM CASO ───────────────────────────────────────────────────
+
+/**
+ * ─ "NENHUMA PORTA PÕE VAGA SEM CLIENTE EM PAPEL DE PROCESSO": A PROPRIEDADE ────────────────────
+ *
+ * ┌─ POR QUE ISTO EXISTE, E É ACHADO DO `seguranca`, não zelo ──────────────────────────────────┐
+ * │ A invariante passou a SUSTENTAR COMPORTAMENTO (a transferência entre clientes se abstém      │
+ * │ quando um dos lados é nulo, e o caso de origem nula só é impossível porque a invariante vale).│
+ * │ Ela é ESTRUTURAL: não vem de uma trava só, vem da CADEIA de portas. E a auditoria achou onde │
+ * │ a cadeia é frágil: DUAS portas chegam ao papel de processo SEM OLHAR O CLIENTE, e são        │
+ * │ seguras por guardas que moram longe delas:                                                    │
+ * │   . `reabrir` grava o código de abertura direto. Ela só não ressuscita vaga sem cliente       │
+ * │     porque `fechar` e `cancelar` recusam quem não está em processo, então vaga sem cliente    │
+ * │     nunca chega a CANCELADA para ser reaberta;                                                │
+ * │   . a reabertura da INGESTÃO (`ingestao-repositorio.ts`) restaura o status guardado           │
+ * │     conferindo só `existe` e `!encerra`, e nunca o cliente.                                    │
+ * │ Depender de guarda remota já custou dois achados nesta frente. O teste de propriedade é o que │
+ * │ fica vermelho quando alguém mexe LONGE daqui.                                                 │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ O ARGUMENTO É A CADEIA DE PORTAS, E NUNCA A MEDIÇÃO DO BANCO ──────────────────────────────┐
+ * │ "Hoje não há vaga sem cliente na base" NÃO PROVA NADA sobre a invariante, e não é usado como │
+ * │ evidência em lugar nenhum deste arquivo: a produção tem pouquíssimas vagas, e uma base que   │
+ * │ por acaso está limpa continua limpa até o primeiro caminho novo. O que prova é que as portas  │
+ * │ recusam, e é isso que é medido abaixo.                                                        │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * COMO A PROPRIEDADE É AFIRMADA: para CADA status do catálogo como destino, por CADA porta de
+ * `VagasService` que grava status, sobre uma vaga SEM CLIENTE nos dois papéis em que ela pode
+ * legitimamente estar (RASCUNHO e REVISAO), o estado final nunca é papel de processo. O laço passa
+ * pelo catálogo inteiro de propósito: um status NOVO com papel ABERTURA, cadastrado pelo diretor,
+ * entra neste teste sozinho, sem ninguém lembrar de acrescentar um caso.
+ */
+describe("PROPRIEDADE: vaga sem cliente nunca alcança papel de processo, por porta nenhuma", () => {
+  const SEMENTE = statusSemente();
+  const papelDe = (codigo: unknown) => SEMENTE.find((l) => l.codigo === String(codigo))?.papel;
+  const EM_PROCESSO = ["ABERTURA", "ENTREGA"];
+  /** A vaga SEM CLIENTE só pode legitimamente estar nestes dois papéis. Ambos são exercitados. */
+  const ORIGENS = ["RASCUNHO", "REVISAO"] as const;
+
+  /** A guarda do laço: se o catálogo do fake deixar de ter papel de processo, o teste vira vácuo. */
+  it("o catálogo exercitado TEM papel de processo (senão o laço abaixo não prova nada)", () => {
+    expect(SEMENTE.filter((l) => EM_PROCESSO.includes(l.papel)).length).toBeGreaterThan(0);
+    expect(SEMENTE.length).toBeGreaterThanOrEqual(6);
+  });
+
+  for (const origem of ORIGENS) {
+    for (const destino of statusSemente()) {
+      it(`${origem} sem cliente não vira ${destino.codigo} por porta nenhuma`, async () => {
+        const { service, vaga } = cenario(origem);
+        const semCliente = { ...FORMULARIO_COMPLETO, codCliente: undefined };
+
+        // AS QUATRO PORTAS QUE ACEITAM UM DESTINO, cada uma tentando o mesmo código. O erro é
+        // ENGOLIDO de propósito: o que se afirma é o ESTADO FINAL, e não qual trava recusou. Uma
+        // porta que recusasse pelo motivo errado ainda assim não pode ter movido a vaga.
+        await erroDe(() => service.moverStatus("vaga-1", { status: destino.codigo } as never, USUARIO));
+        await erroDe(() =>
+          service.atualizar("vaga-1", { status: destino.codigo } as never, USUARIO.id),
+        );
+        await erroDe(() =>
+          service.atualizar("vaga-1", { ...semCliente, status: destino.codigo } as never, USUARIO.id),
+        );
+        await erroDe(() =>
+          service.liberarPendenteRevisao("vaga-1", USUARIO, {
+            ...semCliente,
+            status: destino.codigo,
+          } as never),
+        );
+
+        expect(
+          EM_PROCESSO.includes(String(papelDe(vaga.status))),
+          `a vaga SEM CLIENTE terminou em "${vaga.status}", que é papel de processo. A invariante "vaga em processo sempre tem cliente" caiu, e com ela a abstenção da transferência entre clientes passa a se aplicar a um caso REAL.`,
+        ).toBe(false);
+        expect(vaga.codCliente, "nenhuma porta pode ter inventado um cliente").toBeNull();
+      });
+    }
+  }
+
+  /**
+   * ─ O CANÁRIO DOS ESCRITORES, PORQUE NEM TODA PORTA MORA NO `VagasService` ────────────────────
+   *
+   * A REABERTURA DA INGESTÃO ESCREVE STATUS DE VAGA FORA DESTE SERVIÇO, e ela restaura o
+   * `status_antes_do_encerramento` conferindo só `existe` e `!encerra`, nunca o cliente. Ela não é
+   * alcançável pelo dublê deste arquivo (é SQL cru contra outro repositório), e é justamente a
+   * classe de porta que uma propriedade medida só aqui deixaria passar.
+   *
+   * ENTÃO O QUE SE TRAVA É A LISTA DE QUEM ESCREVE NA TABELA. Um arquivo NOVO gravando em `vagas`
+   * quebra este caso e obriga quem o escreveu a responder a pergunta desta seção antes de seguir:
+   * "esta porta pode pôr vaga sem cliente em papel de processo?". É um canário, e não uma prova de
+   * comportamento: ele não diz que a porta nova está errada, diz que ninguém olhou ainda.
+   *
+   * POR QUE NÃO SE MEDE ISTO CONTRA O BANCO: a base pode estar limpa hoje e continuar limpa até o
+   * primeiro caminho novo. O que prova a invariante é o conjunto de portas, e é ele que é pinado.
+   */
+  it("SÓ QUATRO ARQUIVOS escrevem na tabela `vagas`, e cada um tem a sua resposta escrita aqui", () => {
+    const raiz = join(__dirname, "..", "..");
+    const arquivos: string[] = [];
+    const varrer = (dir: string) => {
+      for (const entrada of readdirSync(dir, { withFileTypes: true })) {
+        const caminho = join(dir, entrada.name);
+        if (entrada.isDirectory()) varrer(caminho);
+        else if (
+          entrada.name.endsWith(".ts") &&
+          !/\.spec\.ts$|fake|tester|arnes/.test(entrada.name) &&
+          /\.update\(vagas\)|update\s+vagas\s/.test(readFileSync(caminho, "utf8"))
+        ) {
+          arquivos.push(relative(raiz, caminho).replace(/\\/g, "/"));
+        }
+      }
+    };
+    varrer(raiz);
+
+    expect(arquivos.sort()).toEqual([
+      // A INGESTÃO. Reabre a vaga espelhada restaurando o status de antes do encerramento, SEM
+      // olhar o cliente. Segura hoje porque o status guardado é o da própria vaga (que estava em
+      // processo, logo com cliente) e o fallback é a FILA. Porta nova aqui exige releitura.
+      "as/ingestao-pandape/ingestao-repositorio.ts",
+      // A SHORTLIST. Grava só `envio_shortlist` e `atualizado_em`: não toca status nem cliente.
+      "as/shortlists/shortlists.service.ts",
+      // A DERIVAÇÃO. Só se move DENTRO do processo: ela retorna cedo quando o papel atual não é de
+      // processo, então não é porta de ENTRADA e não alcança vaga sem cliente.
+      "as/vagas/derivar-status-da-vaga.ts",
+      // AS PORTAS COM RÉGUA. São as medidas caso a caso acima.
+      "as/vagas/vagas.service.ts",
+    ]);
+  });
+
+  /**
+   * ─ O ELO REMOTO, TRAZIDO PARA DENTRO DO TESTE ────────────────────────────────────────────────
+   *
+   * `reabrir` não confere cliente, e não é defeito dela: ela desfaz um cancelamento, e vaga
+   * cancelada veio de vaga em processo, que TEM cliente. O elo que sustenta isso é o gate de
+   * `fechar` e de `cancelar`, e é ELE que este caso mede. Afrouxá-lo lá em cima faz a vaga sem
+   * cliente virar CANCELADA, e a reabertura seguinte a publica sem que nada aqui reclame, se este
+   * caso não existir.
+   *
+   * NÃO SE TESTA `reabrir` DIRETO SOBRE UMA VAGA CANCELADA SEM CLIENTE: aquele estado é
+   * inalcançável, e um teste sobre estado inalcançável afirmaria uma guarda que ninguém escreveu,
+   * nascendo vermelho e sendo "consertado" com um `if` que não protege nada.
+   */
+  for (const origem of ORIGENS) {
+    it(`a vaga ${origem} sem cliente não chega a ser ENCERRADA, que é a entrada do reabrir`, async () => {
+      // `posicoesOficiais: 0` É O QUE FAZ ESTE CASO MEDIR O GATE, e não outra trava: com a meta em
+      // 2 e ninguém entregue, o `fechar` morreria na trava das posições e o caso ficaria verde sem
+      // nunca ter chegado ao `papelDeVagaEmProcesso`. Com a meta zerada (e sem candidatura viva),
+      // as demais travas passam e sobra exatamente a que se quer medir. MEDIDO POR MUTAÇÃO: com o
+      // gate desligado, este caso fica VERMELHO.
+      const { service, vaga } = cenario(origem, { posicoesOficiais: 0 });
+
+      await erroDe(() =>
+        service.fechar("vaga-1", { dataFechamento: "2026-09-20" } as never, USUARIO),
+      );
+      await erroDe(() =>
+        service.cancelar(
+          "vaga-1",
+          { motivo: MOTIVO_CANCELAMENTO, dataCancelamento: "2026-09-20" } as never,
+          USUARIO,
+        ),
+      );
+
+      expect(
+        SEMENTE.find((l) => l.codigo === vaga.status)?.encerra,
+        `a vaga SEM CLIENTE foi encerrada a partir de "${origem}". Encerrada, ela vira entrada do \`reabrir\`, que grava o papel de abertura SEM conferir cliente: a invariante cai por um caminho de dois passos, e nenhuma trava de liberação é tocada.`,
+      ).toBe(false);
+    });
+  }
 });
 
 // ── (d) REGRESSÃO: O RASCUNHO SE COMPORTA EXATAMENTE COMO ANTES ─────────────────────────────

@@ -202,6 +202,16 @@ describe("o PATCH descarta o que não vale para a linha, em vez de recusar o cor
   it("na linha de SISTEMA aplica rótulo, ordem e tom, e IGNORA os três flags", async () => {
     const banco = bancoFingidoDeStatus({ status: semente() });
     const entregue = banco.estado.status.find((s) => s.codigo === "ENTREGUE")!;
+    /*
+     * OS FLAGS DE ANTES SÃO GUARDADOS, E A ASSERÇÃO PASSOU A SER "NÃO MUDOU" (Frente B).
+     *
+     * ANTES ELA ERA LITERAL (`toBe(false)` nos três), e isso amarrava o teste ao VALOR da semente
+     * em vez de ao COMPORTAMENTO sob teste, que é "o PATCH não deixa flag entrar em linha de
+     * sistema". Quando a Frente B ligou `recebeCandidato` e `movivelManualmente` na ENTREGA, o
+     * teste ficou vermelho sem que nada do que ele mede tivesse mudado. Comparando com o estado
+     * anterior, ele mede a invariância, e continua vermelho no dia em que o PATCH deixar passar.
+     */
+    const antes = { ...entregue };
 
     await servico(banco).atualizar(entregue.id, {
       rotulo: "Preenchida",
@@ -218,9 +228,15 @@ describe("o PATCH descarta o que não vale para a linha, em vez de recusar o cor
     expect(depois.tom).toBe("in");
     // OS TRÊS QUE NÃO PODEM TER ENTRADO, e cada um tem um dano próprio: alocação em vaga encerrada,
     // a trilha de abertura publicando direto no terminal, e a terceira porta para o encerramento.
-    expect(depois.recebeCandidato).toBe(false);
-    expect(depois.daTrilha).toBe(false);
-    expect(depois.movivelManualmente).toBe(false);
+    expect(depois.recebeCandidato).toBe(antes.recebeCandidato);
+    expect(depois.daTrilha).toBe(antes.daTrilha);
+    expect(depois.movivelManualmente).toBe(antes.movivelManualmente);
+    // E O CORPO TENTOU MESMO MUDAR ALGO: sem isto, a asserção de invariância passaria de graça no
+    // dia em que a semente já tivesse os três no valor que o corpo mandou.
+    expect(
+      [antes.recebeCandidato, antes.daTrilha, antes.movivelManualmente],
+      "o corpo manda `true` nos três: ao menos um precisa estar `false` antes, senão nada é medido",
+    ).toContain(false);
     // E O CÓDIGO NÃO SE MEXE: é ele que está gravado em toda vaga entregue do histórico.
     expect(depois.codigo).toBe("ENTREGUE");
   });

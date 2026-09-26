@@ -122,6 +122,13 @@ function cenario() {
 
   const query = {
     asCandidaturas: { findFirst: async () => ({ ...linha }) },
+    /*
+     * A VAGA DA CANDIDATURA, EM PROCESSO. Ela entrou no dublê porque a `moverEtapa` passou a
+     * conferir se a vaga ainda é um processo ANTES de olhar a etapa de destino, e este arquivo
+     * mede a régua da ETAPA: a vaga aqui é cenário, e precisa estar viva para o teste chegar no
+     * assunto dele.
+     */
+    vagas: { findFirst: async () => ({ id: linha.vagaId, status: "ABERTA", codCliente: "CLI-1" }) },
   };
 
   const tx = { select, update, insert, query };

@@ -88,6 +88,7 @@ import {
   ehSaidaSemExito,
   finalizaPosicao,
   type AsCandidaturaItem,
+  type AsMotivoDescarte,
   type CandidaturaEtapa,
 } from "@ea/shared-types";
 import { Modal } from "@/components/ui/Modal";
@@ -102,10 +103,14 @@ import {
   registrarSaida,
   reverterEnvioParaAdmissao,
 } from "@/lib/as-candidatos";
+import { maskMoedaBR } from "@/lib/salario";
+import { EntrevistaDaCandidatura } from "@/components/as/candidatos/EntrevistaDaCandidatura";
+import { ReprovarPeloClienteModal } from "@/components/as/candidatos/ReprovarPeloClienteModal";
 import { tomDaSituacao } from "@/lib/as-candidatos-visual";
 import { ordemDaEtapa, rotuloDaEtapa, tomDaEtapa, useEtapas } from "@/lib/as-etapas";
 import { podeAprovar, podeMoverNoFunil, podeReverterEnvio } from "@/lib/as-vaga-acoes";
 import { AvisoDoEnvioDoLink } from "@/components/portal/EnvioDoLink";
+import { CampoMotivoDaSaida } from "@/components/as/candidatos/CampoMotivoDaSaida";
 import { fraseDaCienciaDoEnvio, usePreviaIndividual } from "@/lib/portal-envio-link";
 import { cn } from "@/lib/cn";
 
@@ -151,6 +156,30 @@ export function MoverCandidaturaModal({
   const [ocupado, setOcupado] = useState(false);
   const [saidaAberta, setSaidaAberta] = useState<Saida | null>(null);
   const [motivo, setMotivo] = useState("");
+  /**
+   * ─ A LINHA DO CATÁLOGO ESCOLHIDA, e não só o nome que vai no corpo (Frente E, ponto 9) ───────
+   *
+   * É ELA que responde se este desfecho pede a PRETENSÃO SALARIAL, pela marca `pedePretensao`, que
+   * é a MESMA que o servidor confere. O nome do motivo nunca responde isso: o catálogo é
+   * gerenciável, o diretor renomeia pela tela de administração, e uma comparação por nome pararia
+   * de funcionar em silêncio na primeira correção de grafia.
+   *
+   * HOJE NENHUM MOTIVO NASCE MARCADO (a migration não marca nenhum de propósito: a escolha é
+   * vocabulário do diretor), então o campo nasce INERTE. Isso é o esperado, e não defeito: no dia
+   * em que ele marcar um motivo pela tela de Motivos De Descarte, o campo passa a aparecer sozinho.
+   */
+  const [motivoEscolhido, setMotivoEscolhido] = useState<AsMotivoDescarte | null>(null);
+  /** Quanto a pessoa pediu. Só viaja quando o motivo escolhido pede (§A.6, minimização). */
+  const [pretensao, setPretensao] = useState("");
+  /**
+   * ─ A REPROVAÇÃO PELO CLIENTE TEM CAIXA PRÓPRIA, e não um campo a mais neste modal ────────────
+   *
+   * ELA NÃO É UM DESFECHO e não divide nada com eles: não encerra ninguém, não libera posição e o
+   * texto dela é OPCIONAL, enquanto o motivo dos três desfechos é obrigatório. Um segundo campo de
+   * texto aqui dentro, ao lado do motivo da saída, seria a pergunta errada respondida na caixa
+   * certa: o consultor escreveria a explicação da reprovação no campo que o desvínculo grava.
+   */
+  const [reprovacaoAberta, setReprovacaoAberta] = useState(false);
 
   /**
    * ─ PARA ONDE O LINK DO PORTAL VAI, CONFERIDO ANTES DE O CONSULTOR CONFIRMAR ─────────────────
@@ -252,6 +281,11 @@ export function MoverCandidaturaModal({
   function alternarSaida(sa: Saida) {
     setSaidaAberta((atual) => (atual === sa ? null : sa));
     setMotivo("");
+    /* A PRETENSÃO MORRE COM O MOTIVO, pela mesma razão que o texto morre: ela foi digitada para um
+       motivo que pedia o valor, e carregá-la para outro desfecho mandaria ao servidor um valor que
+       ninguém pediu, que é exatamente o que ele recusa (§A.6, minimização). */
+    setMotivoEscolhido(null);
+    setPretensao("");
   }
 
   /** Não executa: PERGUNTA. Quem chama descreve a ação, e o diálogo é quem dispara. */
@@ -293,6 +327,10 @@ export function MoverCandidaturaModal({
    * eventos que mais precisam de explicação.
    */
   function caixaDeMotivo(sa: Saida) {
+    /* A PERGUNTA É FEITA À LINHA DO CATÁLOGO, uma vez, e as três leituras abaixo (mostrar o campo,
+       travar o botão e incluir o valor no corpo) saem da MESMA resposta: três comparações soltas
+       divergiriam no primeiro ajuste, e a que divergisse seria a do corpo, em silêncio. */
+    const pedePretensao = motivoEscolhido?.pedePretensao === true;
     return (
       <div className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-4">
         {sa === "ENVIADO_PARA_ADMISSAO" && (
@@ -300,22 +338,56 @@ export function MoverCandidaturaModal({
             <AvisoDoEnvioDoLink destinatario={destinatario} carregando={conferindoDestino} />
           </div>
         )}
-        <label className="flex flex-col gap-1.5">
-          <span className="text-[12.5px] text-dim">
-            Motivo
-            <span className="ml-1 text-danger">*</span>
-          </span>
-          <textarea
-            className="ds-input min-h-[70px] resize-y"
-            value={motivo}
-            onChange={(e) => setMotivo(e.target.value)}
-            placeholder={SAIDA_PLACEHOLDER[sa]}
-          />
-        </label>
+        {/* O CAMPO SE DECIDE SOZINHO ENTRE SELETOR E CAIXA DE TEXTO, pela régua compartilhada
+            (`motivoVemDoCatalogo`), e não por uma comparação escrita aqui. Ver o cabeçalho de
+            `CampoMotivoDaSaida`: o descarte passou a ser CLASSIFICAÇÃO conferida pelo backend, e
+            texto livre ali voltava 400. */}
+        <CampoMotivoDaSaida
+          situacao={sa}
+          valor={motivo}
+          onChange={setMotivo}
+          /* A LINHA INTEIRA DO CATÁLOGO, e não só o nome: é a marca `pedePretensao` dela que abre o
+             campo do valor logo abaixo. Trocar de motivo LIMPA o que foi digitado, senão o valor
+             pedido por um motivo viajaria carimbado com outro. */
+          onEscolha={(m) => {
+            setMotivoEscolhido(m);
+            setPretensao("");
+          }}
+          token={token}
+          desabilitado={ocupado}
+          placeholder={SAIDA_PLACEHOLDER[sa]}
+        />
+
+        {/* ─ QUANTO A PESSOA PEDIU, SÓ QUANDO O MOTIVO PEDE (Frente E, ponto 9) ────────────────
+            QUEM DECIDE É A MARCA DO CATÁLOGO, nunca o nome do motivo. E o campo é a MESMA máscara
+            de moeda dos salários do sistema (`maskMoedaBR`), porque é o mesmo tipo de valor e o
+            servidor o normaliza pela mesma régua: "2.500,00" e "2500" entram iguais. */}
+        {pedePretensao && (
+          <label className="mt-3 flex flex-col gap-1.5">
+            <span className="text-[12.5px] text-dim">
+              Pretensão salarial
+              <span className="ml-1 text-danger">*</span>
+            </span>
+            <input
+              className="ds-input w-full sm:w-[220px]"
+              value={pretensao}
+              disabled={ocupado}
+              inputMode="numeric"
+              onChange={(e) => setPretensao(maskMoedaBR(e.target.value))}
+              placeholder="0,00"
+              aria-label="Pretensão salarial"
+            />
+            <span className="text-[11.5px] text-faint">
+              O motivo escolhido pede o valor que a pessoa pediu. Ele fica na ficha dela e é o que
+              responde, depois, por que este processo não seguiu.
+            </span>
+          </label>
+        )}
+
         <div className="mt-3 flex justify-end">
           <Button
             className="px-4 py-2.5"
-            disabled={ocupado || motivo.trim().length < 2}
+            disabled={ocupado || motivo.trim().length < 2 || (pedePretensao && !pretensao.trim())}
             onClick={() =>
               pedirConfirmacao({
                 titulo: `${SAIDA_TITULO[sa]}?`,
@@ -329,7 +401,17 @@ export function MoverCandidaturaModal({
                 // OS DESFECHOS SÃO "danger" e o movimento de etapa não é: desvincular e enviar para
                 // a admissão não se desfazem clicando em outro lugar, mover se desfaz.
                 tone: "danger",
-                acao: () => registrarSaida(candidatura.id, sa, motivo.trim(), token),
+                /* ─ O VALOR SÓ VIAJA QUANDO O MOTIVO PEDE ───────────────────────────────────
+                   O servidor RECUSA a pretensão mandada com motivo não marcado, e recusa de
+                   propósito (§A.6, minimização). E a chamada sem o valor é feita com a ASSINATURA
+                   DE SEMPRE, sem o quinto argumento: o desfecho comum não passa a carregar um
+                   objeto vazio só porque este caso existe. */
+                acao: () =>
+                  pedePretensao
+                    ? registrarSaida(candidatura.id, sa, motivo.trim(), token, {
+                        pretensaoSalarial: pretensao.trim(),
+                      })
+                    : registrarSaida(candidatura.id, sa, motivo.trim(), token),
                 falha: SAIDA_FALHA[sa],
               })
             }
@@ -488,6 +570,58 @@ export function MoverCandidaturaModal({
                   não aprova nem encerra ninguém, só registra onde a pessoa está no processo.
                 </p>
               </Secao>
+              )}
+
+              {/* ─ A ENTREVISTA DESTA PESSOA (Frente E, ponto 8) ─────────────────────────────
+                  LOGO ABAIXO DO FUNIL, porque é ali que a pergunta nasce: acabei de mover a pessoa
+                  para a entrevista, que dia ela é? O componente se esconde sozinho quando a etapa
+                  atual não tem entrevista E nada foi marcado ainda, então nenhuma seção vazia
+                  aparece para quem não usa o controle. Quais etapas o oferecem vem do CATÁLOGO,
+                  nunca de um literal escrito aqui. */}
+              {moveNoFunil && (
+                <EntrevistaDaCandidatura
+                  candidatura={candidatura}
+                  token={token}
+                  desabilitado={ocupado}
+                />
+              )}
+
+              {/* ─ REPROVADO PELO CLIENTE (Frente E, ponto 12) ───────────────────────────────
+                  ┌─ POR QUE ELA NÃO É "MOVER PARA A CAPTAÇÃO" ────────────────────────────────┐
+                  │ O EFEITO é parecido (a pessoa volta ao começo do funil), o FATO não: "voltou │
+                  │ para Captação" e "o cliente reprovou, voltou para Captação" são coisas       │
+                  │ diferentes para quem lê o histórico da vaga seis meses depois, e é por isso   │
+                  │ que o evento ganha marcador próprio na linha do tempo. Reprovar NÃO encerra   │
+                  │ ninguém: a pessoa segue viva e pode ser apresentada de novo.                  │
+                  └────────────────────────────────────────────────────────────────────────────┘
+
+                  O DESTINO NÃO É ESCOLHIDO AQUI: quem responde é a etapa marcada `inicial` no
+                  catálogo, no servidor. Oferecer um seletor faria deste gesto um segundo "mover
+                  etapa" com nome bonito.
+
+                  A SEÇÃO É OFERECIDA A QUEM ESTÁ VIVO, e a régua fina (estar numa etapa de ENTREGA
+                  AO CLIENTE) mora no servidor, que é quem conhece a marca `entrega_ao_cliente` do
+                  catálogo: ela NÃO é publicada para a tela por nenhuma rota. Quando a etapa não
+                  serve, a recusa do backend já diz o que fazer, com todas as letras.
+
+                  O MOTIVO É OPCIONAL, ao contrário do desfecho: exigir texto aqui só faria o
+                  consultor escrever "reprovado" toda vez, que é ruído e não trilha. */}
+              {moveNoFunil && (
+                <Secao titulo="Reprovado Pelo Cliente">
+                  <Button
+                    variant="secondary"
+                    className="px-4 py-2.5"
+                    disabled={ocupado}
+                    onClick={() => setReprovacaoAberta(true)}
+                  >
+                    Registrar reprovação
+                  </Button>
+                  <p className="mt-2 text-[12px] text-faint">
+                    A pessoa volta para a etapa inicial do funil e segue no processo, podendo ser
+                    apresentada de novo. O registro vale para quem está numa etapa de entrega ao
+                    cliente.
+                  </p>
+                </Secao>
               )}
 
               {/* A APROVAÇÃO É A OPERAÇÃO QUE CONSOME POSIÇÃO, e por isso ela mora na etapa de
@@ -660,6 +794,20 @@ export function MoverCandidaturaModal({
           </Button>
         </div>
       </div>
+
+      {/* A REPROVAÇÃO PELO CLIENTE, em caixa própria (ver o estado que a abre). Ela fecha e avisa
+          por `onFeito`, como todo gesto deste modal: a etapa da pessoa mudou, e quem chamou relê. */}
+      {reprovacaoAberta && (
+        <ReprovarPeloClienteModal
+          candidatura={candidatura}
+          token={token}
+          onCancelar={() => setReprovacaoAberta(false)}
+          onFeito={() => {
+            setReprovacaoAberta(false);
+            onFeito();
+          }}
+        />
+      )}
 
       {/* O PORTÃO DE TODAS AS AÇÕES DE ESTADO. Ele é o `ConfirmDialog` do design system, o mesmo da
           Esteira, e não uma caixa própria desta tela: um jeito só de confirmar no sistema inteiro. */}

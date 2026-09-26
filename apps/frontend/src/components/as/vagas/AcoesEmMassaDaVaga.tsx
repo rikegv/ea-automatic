@@ -42,6 +42,7 @@ import {
   AS_MAXIMO_POR_LOTE,
   CANDIDATURA_SITUACAO_AJUDA,
   CANDIDATURA_SITUACAO_LABEL,
+  motivoVemDoCatalogo,
   type AsCandidaturaItem,
   type AsResultadoEmMassa,
   type CandidaturaEtapa,
@@ -61,6 +62,7 @@ import {
   type SaidaEmLote,
 } from "@/lib/as-candidatos-lote";
 import { tomDaSituacao } from "@/lib/as-candidatos-visual";
+import { CampoMotivoDaSaida } from "@/components/as/candidatos/CampoMotivoDaSaida";
 import {
   POSICAO_LADOS,
   POSICAO_LADO_LABEL,
@@ -72,12 +74,15 @@ import {
   type PosicaoLado,
 } from "@/lib/as-vaga-acoes";
 import { ResultadoLoteModal } from "@/components/as/vagas/ResultadoLoteModal";
+import { EnviarShortlistModal } from "@/components/as/vagas/EnviarShortlistModal";
+import { useShortlists } from "@/lib/as-shortlists";
+import { useStatusVaga, vagaEmProcesso } from "@/lib/as-status-vaga";
 import { PreviaDoEnvioEmLoteSecao } from "@/components/portal/EnvioDoLink";
 import { AVISO_DO_ENVIO_DO_LINK, usePreviaDoEnvio } from "@/lib/portal-envio-link";
 import { cn } from "@/lib/cn";
 
 /** Qual confirmação está aberta. `null` é a barra sozinha, sem nada perguntado ainda. */
-type Acao = "FINALIZAR" | "MOVER" | "DESVINCULAR" | "ENVIAR";
+type Acao = "FINALIZAR" | "MOVER" | "DESVINCULAR" | "ENVIAR" | "SHORTLIST";
 
 /**
  * O MOTIVO DO DESVÍNCULO, as duas saídas sem êxito. As etiquetas são as MESMAS palavras da ação
@@ -122,6 +127,23 @@ export function AcoesEmMassaDaVaga({
     dados: AsResultadoEmMassa;
     nomes: Map<string, string>;
   } | null>(null);
+
+  /**
+   * ─ A SHORTLIST DESTA VAGA (Frente E, pontos 10 e 11) ────────────────────────────────────────
+   *
+   * ELA É LIDA AQUI, E NÃO DENTRO DO MODAL, por uma razão só: é dela que sai o NÚMERO do próximo
+   * envio, e é o número que decide se o formulário pede o motivo do reenvio. Lendo lá dentro, o
+   * campo obrigatório apareceria depois de a caixa já estar aberta, piscando na cara de quem lê.
+   *
+   * ELA SÓ É BUSCADA QUANDO O ENVIO É POSSÍVEL (`emProcesso`): vaga em rascunho, fechada ou
+   * cancelada não manda shortlist, e uma leitura por painel aberto seria requisição sem uso.
+   */
+  const { status: catalogoStatus } = useStatusVaga(token);
+  /* A MESMA RÉGUA DO SERVIDOR, e não uma lista de status escrita aqui: lá o envio só é aceito em
+     vaga de papel ABERTURA ou ENTREGA (`papelDeVagaEmProcesso`). Um botão que só sabe dar 409
+     gasta o clique, devolve uma recusa e não diz o que fazer no lugar. */
+  const emProcesso = vagaEmProcesso(vaga.status, catalogoStatus);
+  const shortlists = useShortlists(vaga.id, token, emProcesso);
 
   const ids = selecionadas.map((c) => c.id);
   const podeFinalizar = selecionadas.some((c) => podeFinalizarPosicao(c.situacao));
@@ -187,6 +209,26 @@ export function AcoesEmMassaDaVaga({
               >
                 <Icon name="check" className="mr-1.5 inline h-3.5 w-3.5 align-middle" />
                 {`Finalizar posição (${selecionadas.length})`}
+              </Button>
+            )}
+            {/* ─ ENVIAR A SHORTLIST AO CLIENTE ─────────────────────────────────────────────
+                SÓ EM VAGA EM PROCESSO, pela mesma régua do servidor. E ela NÃO depende de
+                `podeDecidirAlgo`: apresentar ao cliente não é decidir nada sobre a pessoa, é
+                mandar o nome dela. Quem já saiu do processo é barrado dentro do formulário, por
+                nome, porque a recusa do servidor é por contagem e não diz quem tirar. */}
+            {emProcesso && (
+              <Button
+                variant="secondary"
+                className="shrink-0 px-3 py-2"
+                disabled={processando}
+                title="Congela esta lista como a shortlist enviada ao cliente"
+                onClick={() => {
+                  setErro(null);
+                  setAcao("SHORTLIST");
+                }}
+              >
+                <Icon name="doc" className="mr-1.5 inline h-3.5 w-3.5 align-middle" />
+                {`Enviar shortlist (${selecionadas.length})`}
               </Button>
             )}
             {podeDecidirAlgo && (
@@ -300,6 +342,29 @@ export function AcoesEmMassaDaVaga({
               () => registrarSaidaEmLote(ids, situacao, motivo, token),
             )
           }
+        />
+      )}
+
+      {/* O ENVIO DA SHORTLIST NÃO PASSA PELO `executar` DAS OUTRAS: ele não é lote parcial (a rota
+          aceita ou recusa a lista INTEIRA, numa transação só), então não tem `aplicadas` nem
+          `falhas` para mostrar em `ResultadoLoteModal`. O que ele tem de próprio é a pergunta da
+          lista curta, e ela vive dentro do formulário, que é onde o consultor está olhando. */}
+      {acao === "SHORTLIST" && (
+        <EnviarShortlistModal
+          vagaId={vaga.id}
+          selecionadas={selecionadas}
+          enviadas={shortlists.shortlists}
+          carregandoEnviadas={shortlists.carregando}
+          token={token}
+          onCancelar={() => setAcao(null)}
+          onEnviada={() => {
+            setAcao(null);
+            // A LISTA DE ENVIOS É RELIDA AQUI, e não só quando alguém volta para a aba da vaga: é
+            // dela que sai o número do PRÓXIMO envio, e sem a releitura um reenvio feito em
+            // seguida abriria como se fosse a primeira lista, sem pedir o motivo.
+            void shortlists.recarregar();
+            onFeito();
+          }}
         />
       )}
 
@@ -622,7 +687,16 @@ function SaidaEmLoteModal({
                   type="button"
                   disabled={processando}
                   aria-pressed={escolhido}
-                  onClick={() => setDesvinculo(d.situacao)}
+                  onClick={() => {
+                    setDesvinculo(d.situacao);
+                    /* ─ TROCAR DE DESFECHO LIMPA O MOTIVO, e agora ele PRECISA limpar ──────────
+                       O campo mudou de NATUREZA entre os dois: o descarte é um nome do catálogo, a
+                       desistência é prosa. Mantido, o texto escrito em uma passaria carimbado com a
+                       outra situação, e no sentido catálogo para prosa o valor sobreviveria para ser
+                       gravado como explicação de um desfecho que ninguém explicou. É a mesma régua
+                       que o `alternarSaida` da tela individual já segue. */
+                    setMotivo("");
+                  }}
                   className={cn(
                     "rounded-xl border px-3.5 py-2.5 text-left transition",
                     escolhido
@@ -640,24 +714,46 @@ function SaidaEmLoteModal({
         </Secao>
       )}
 
-      <Secao titulo={envio ? "O Que A Admissão Precisa Saber" : "O Detalhe Do Motivo"}>
-        <textarea
-          className="ds-input min-h-[92px] w-full resize-y"
-          value={motivo}
-          onChange={(e) => setMotivo(e.target.value)}
-          disabled={processando}
-          maxLength={500}
+      {/* ─ O MESMO CAMPO DA SAÍDA INDIVIDUAL, e o lote precisava dele tanto quanto ──────────────
+          O LOTE NÃO É PORTA NOVA: `registrarSaidaEmLote` chama a MESMA `registrarSaida` linha a
+          linha, então ele herda a conferência do catálogo. Texto livre aqui falharia trinta vezes
+          de uma vez, com o motivo certo na cabeça de quem clicou e 400 em todas as linhas.
+
+          QUEM DECIDE ENTRE SELETOR E CAIXA DE TEXTO É `motivoVemDoCatalogo`, dentro do componente:
+          o descarte é CLASSIFICAÇÃO (catálogo), a desistência e o envio são PROSA. É por isso que a
+          escolha do desfecho, logo acima, troca o campo abaixo sem nenhuma condição escrita aqui. */}
+      <Secao
+        titulo={
+          envio
+            ? "O Que A Admissão Precisa Saber"
+            : motivoVemDoCatalogo(situacao)
+              ? "O Motivo Do Descarte"
+              : "O Detalhe Do Motivo"
+        }
+      >
+        <CampoMotivoDaSaida
+          situacao={situacao}
+          valor={motivo}
+          onChange={setMotivo}
+          token={token}
+          desabilitado={processando}
+          alturaMinima="min-h-[92px]"
+          semRotulo
+          /* O LOTE NÃO OFERECE OS MOTIVOS QUE PEDEM A PRETENSÃO SALARIAL, e o servidor os RECUSA
+             aqui: perguntada uma vez para valer por N pessoas, a pretensão gravaria um número falso
+             em todas menos uma. Escondê-los é o que evita o consultor escolher o que vai ser
+             recusado depois de marcar trinta linhas. No desfecho individual nada muda. */
+          semMotivosQuePedemPretensao
           placeholder={
             envio
               ? "O que fechou o processo e o que a admissão precisa saber"
               : "Por que estas pessoas saíram do processo"
           }
-          aria-label="Motivo da saída"
         />
         <p className="mt-2 text-[11.5px] text-faint">
-          O motivo é obrigatório e vale para a seleção inteira: ele é gravado no histórico de cada
-          uma das pessoas, e é o que alguém vai ler daqui a seis meses sem ter participado do
-          processo. Escreva pelo menos dois caracteres.
+          {motivoVemDoCatalogo(situacao)
+            ? "O motivo é obrigatório e vale para a seleção inteira: ele é gravado no histórico de cada uma das pessoas, e é o que alguém vai ler daqui a seis meses sem ter participado do processo. A lista é a do catálogo mantido pela administração, sem os motivos que pedem a pretensão salarial: esse valor é de cada pessoa, então esses descartes são registrados um a um, pela ficha do candidato."
+            : "O motivo é obrigatório e vale para a seleção inteira: ele é gravado no histórico de cada uma das pessoas, e é o que alguém vai ler daqui a seis meses sem ter participado do processo. Escreva pelo menos dois caracteres."}
         </p>
       </Secao>
 

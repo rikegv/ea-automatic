@@ -9,27 +9,38 @@ import {
   NotFoundException,
   Optional,
 } from "@nestjs/common";
-import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, ne, sql, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type {
+  AsCandidaturaEntrevista,
   AsCandidaturaEtapaItem,
   AsCandidatoFicha,
   AsCandidatoListItem,
+  AsCandidatosPagina,
   AsCandidaturaEncerrada,
   AsCandidaturaItem,
   AsContatoItem,
   AsFalhaEmMassa,
+  AsMotivoDescarte,
   AsOcupacaoVaga,
   AsPainelVaga,
   AsReentradaPrecisaCiencia,
   AsResultadoEmMassa,
   CandidaturaSituacao,
 } from "@ea/shared-types";
-import { isValidCpf, normalizeCpf } from "@ea/shared-types";
+import { isValidCpf, motivoVemDoCatalogo, normalizeCpf } from "@ea/shared-types";
+/*
+ * O CATÁLOGO DE MOTIVOS DE DESCARTE chega como FUNÇÃO DE MÓDULO, e não por injeção de construtor
+ * (ver o bloco de `exigirMotivoDoCatalogo`): este serviço tem cinco argumentos e é instanciado por
+ * dezenas de specs, e um sexto por causa de uma LEITURA mudaria a assinatura que código já validado
+ * usa (§A.26). Mesma escolha que `motivosDeCancelamentoAtivos` no `VagasService`.
+ */
+import { motivosDeDescarteAtivos } from "../motivos-descarte/motivos-descarte.service";
 import type { Database } from "../../db/client";
 import { DRIZZLE } from "../../db/drizzle.module";
 import {
   asCandidatos,
+  asCandidaturaEntrevistas,
   asCandidaturaEtapas,
   asCandidaturas,
   asContatos,
@@ -81,8 +92,32 @@ import { gravarSaidaDaCandidatura } from "./encerrar-candidatura";
 import { EtapasFunilService } from "../etapas/etapas-funil.service";
 import { PortalEnvioService } from "../../portal/portal-envio.service";
 import { AdmissoesService, type PreAdmissaoDoFunilInput } from "../../admissoes/admissoes.service";
-import { VagaStatusService } from "../vaga-status/vaga-status.service";
+import { VagaStatusService, type ReguaDeStatusDaVaga } from "../vaga-status/vaga-status.service";
+/*
+ * A DERIVAÇÃO DO STATUS DA VAGA (Frente B, ponto 2) É UMA ROTINA DE MÓDULO, e ela mora em
+ * `as/vagas/` porque o dado que ela escreve é da VAGA. Importada como FUNÇÃO, e não injetada como
+ * serviço, de propósito: ela recebe a `tx` de quem a chama e roda DENTRO da transação do fato que a
+ * disparou. Um serviço com `db` próprio abriria uma segunda transação e o estado da vaga poderia
+ * ficar para trás quando a escrita principal desse certo.
+ */
+import { derivarStatusDaVaga } from "../vagas/derivar-status-da-vaga";
+/*
+ * O ATALHO QUE IMPEDE A DERIVAÇÃO DE COBRAR UM LOCK POR GESTO. A prova de que ele não perde
+ * movimento nenhum está no domínio, junto da função: só muda a resposta quem TOCA uma etapa de
+ * entrega ao cliente.
+ */
+import {
+  movimentoPodeMudarAEntrega,
+  papelDeVagaEmProcesso,
+} from "../../domain/vaga-status-derivado";
 import type { AuthUser } from "../../auth/auth.types";
+/*
+ * OS DOIS NÚMEROS DA PÁGINA VÊM DO DTO, e não são redigitados aqui: o `@Max` do corpo e o teto que o
+ * service aplica têm de ser O MESMO número, senão um corpo com `limite: 400` passaria a validação e
+ * seria cortado em silêncio por um teto menor escrito no service. É valor, então a importação NÃO
+ * pode ser `import type`.
+ */
+import { BUSCA_LIMITE_MAXIMO, BUSCA_LIMITE_PADRAO } from "./candidatos.dto";
 import type {
   AdicionarEmLoteDto,
   AlocarEmVagaDto,
@@ -91,11 +126,13 @@ import type {
   EditarCandidatoDto,
   FinalizarPosicaoDto,
   FinalizarPosicaoEmLoteDto,
+  MarcarEntrevistaDto,
   MoverEtapaDto,
   MoverEtapaEmLoteDto,
   RegistrarContatoDto,
   RegistrarSaidaDto,
   RegistrarSaidaEmLoteDto,
+  ReprovarPeloClienteDto,
   TrocarVagaDto,
 } from "./candidatos.dto";
 
@@ -516,13 +553,48 @@ export class CandidatosService {
    * vazamento por sondagem: com poucas tentativas se confirma o número de alguém que se suspeita
    * estar na base.
    */
-  async buscar(dto: BuscarCandidatosDto): Promise<AsCandidatoListItem[]> {
+  async buscar(dto: BuscarCandidatosDto): Promise<AsCandidatosPagina> {
+    /*
+     * O TAMANHO DA PÁGINA, com o padrão ANTIGO preservado (200) e um TETO acima dele. O padrão fica
+     * onde estava porque ele já era o que as telas recebiam; o que mudou é que agora ele é dizível
+     * (`limite` na resposta) e ultrapassável por quem pedir, até o teto.
+     *
+     * O TETO É BARREIRA, NÃO REGRA DE NEGÓCIO, pelo mesmo argumento de `AS_MAXIMO_POR_LOTE`: sem
+     * ele, `limite: 999999` transformaria a rota numa exportação da base inteira de dado pessoal
+     * (§A.6). Quem precisa de mais de uma página pagina.
+     */
+    const limite = Math.min(Math.max(dto.limite ?? BUSCA_LIMITE_PADRAO, 1), BUSCA_LIMITE_MAXIMO);
+    const offset = Math.max(dto.offset ?? 0, 0);
+
     const filtros = [];
 
-    if (dto.cpf) {
+    /*
+     * ┌─ CPF PREENCHIDO E ILEGÍVEL AGORA RECUSA, E ANTES MENTIA DE DUAS FORMAS (ponto 15) ────────┐
+     * │ O QUE HAVIA: `if (dto.cpf) { ...; if (!cpf) return []; }`. Duas mentiras, em direções      │
+     * │ OPOSTAS, e nenhuma das duas dizia à pessoa o que estava errado:                            │
+     * │                                                                                            │
+     * │  1. `return []` SILENCIOSO: a tela mostrava "nenhum candidato encontrado", que é uma        │
+     * │     RESPOSTA sobre a base ("esta pessoa não está cadastrada"), quando o fato era outro      │
+     * │     ("o que você digitou não é um CPF"). Quem lê a tela conclui a coisa errada e cadastra   │
+     * │     de novo alguém que já existe.                                                          │
+     * │  2. O `if (dto.cpf)` TRUNCADO: o `@Transform` do DTO deixa só dígitos, então "abc" chega    │
+     * │     como STRING VAZIA, que é falsa, e o filtro era simplesmente PULADO. A busca por um CPF  │
+     * │     ilegível devolvia A BASE INTEIRA, que é a mentira contrária e a mais perigosa das duas. │
+     * │                                                                                            │
+     * │ A RÉGUA DE HOJE: o campo foi ENVIADO (`!== undefined`), então ou ele vira um CPF completo   │
+     * │ e válido, ou a chamada é RECUSADA com uma frase. Nunca uma lista.                          │
+     * │                                                                                            │
+     * │ §A.6: a recusa NÃO repete o número recebido. O validador continua sendo um só               │
+     * │ (`cpfOuNulo` → `isValidCpf`): não nasce aqui um segundo, que divergiria do primeiro.        │
+     * └────────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    if (dto.cpf !== undefined) {
       const cpf = this.cpfOuNulo(dto.cpf);
-      // CPF preenchido e inválido devolve NADA, em vez de ignorar o filtro e listar a base inteira.
-      if (!cpf) return [];
+      if (!cpf) {
+        throw new BadRequestException(
+          "Para buscar por CPF, informe os 11 dígitos. Para procurar pelo nome, use o campo de nome.",
+        );
+      }
       filtros.push(eq(asCandidatos.cpf, cpf));
     }
 
@@ -548,19 +620,27 @@ export class CandidatosService {
     /**
      * QUEM NÃO ESTÁ EM VAGA NENHUMA: a lista de escolha do botão "Alocar candidato".
      *
-     * ┌─ A RÉGUA APERTOU (ajuste 1 do diretor), e o motivo é o caminho novo ao lado ──────────────┐
-     * │ ANTES: "sem candidatura VIVA". Quem tinha sido descartado ou tinha desistido continuava    │
-     * │ na lista, porque na época ESTA era a única porta: barrá-lo aqui o deixaria sem caminho     │
-     * │ nenhum de volta.                                                                          │
+     * ┌─ A RÉGUA VOLTOU A SER "SEM CANDIDATURA **VIVA**" (ponto 13, decisão do diretor) ──────────┐
+     * │ O QUE ELA FOI POR UM TEMPO, e o dano medido: "sem candidatura NENHUMA". Com essa régua,    │
+     * │ QUEM FOI DESCARTADO UMA VEZ NUNCA MAIS APARECIA em lista de alocação nenhuma, para sempre, │
+     * │ mesmo estando livre. Não é hipótese: o diretor descartou uma pessoa e não a achou mais.    │
      * │                                                                                           │
-     * │ AGORA: "sem candidatura NENHUMA". O que mudou foi a existência do "Trazer De Volta", que   │
-     * │ nasce na LINHA da pessoa encerrada e leva à reentrada, com o processo anterior à vista. Com│
-     * │ ele, quem já esteve numa vaga tem porta própria, e misturá-lo aqui só engorda uma lista    │
-     * │ que existe para achar CANDIDATO SOLTO.                                                    │
+     * │ O ARGUMENTO QUE SUSTENTAVA A RÉGUA APERTADA ERA O "TRAZER DE VOLTA", que nasce na LINHA da │
+     * │ pessoa encerrada DENTRO DA VAGA em que ela saiu. Ele resolve UMA pergunta ("trazer de volta│
+     * │ para ESTA vaga") e não resolve a outra ("alocar esta pessoa em QUALQUER vaga"): para achar │
+     * │ alguém descartado na vaga A e levá-lo à vaga B seria preciso saber de cor em que vaga ele  │
+     * │ tinha saído. Os dois caminhos não eram excludentes; um deles simplesmente não existia.     │
      * │                                                                                           │
-     * │ OS DOIS CAMINHOS SÃO EXCLUDENTES POR CONSTRUÇÃO, e é isso que impede o beco: quem tem      │
-     * │ candidatura sai daqui e aparece no outro; quem não tem aparece aqui e não precisa do outro.│
+     * │ A RÉGUA DE HOJE É A DA VIVACIDADE, e ela é a MESMA de `candidaturasAtivas` logo abaixo,    │
+     * │ lida da MESMA constante (`SITUACOES_VIVAS`, derivada de `candidaturaViva`). Não existe uma │
+     * │ terceira régua aqui: filtro e coluna discordando na mesma tela é o defeito que a constante │
+     * │ única veio eliminar, e ele apareceria na primeira situação nova.                           │
      * └───────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * O QUE CONTINUA FORA, e é a metade que não pode afrouxar junto: quem tem candidatura VIVA
+     * (`ATIVO`, `APROVADO`, `ALOCADO`, `ENVIADO_PARA_ADMISSAO`) NÃO aparece. Alocá-lo de novo seria
+     * recusado pelo unique parcial `uq_as_candidaturas_viva` na vaga em que ele já está, e oferecê-lo
+     * na lista faria a tela propor um gesto que o banco recusa.
      *
      * `not exists` E NÃO `count(...) = 0`: o Postgres para na primeira linha encontrada, enquanto a
      * contagem percorreria todas as candidaturas da pessoa para descobrir o mesmo.
@@ -571,7 +651,8 @@ export class CandidatosService {
     if (dto.semCandidatura) {
       filtros.push(
         sql`not exists (select 1 from ${asCandidaturas}
-                         where ${asCandidaturas.candidatoId} = ${ID_DO_CANDIDATO})`,
+                         where ${asCandidaturas.candidatoId} = ${ID_DO_CANDIDATO}
+                           and ${inArray(asCandidaturas.situacao, SITUACOES_VIVAS)})`,
       );
     }
 
@@ -600,13 +681,51 @@ export class CandidatosService {
           select count(*)::int from ${asCandidaturas}
            where ${asCandidaturas.candidatoId} = ${ID_DO_CANDIDATO}
              and ${inArray(asCandidaturas.situacao, SITUACOES_VIVAS)})`,
+        /*
+         * ─ QUANTOS EXISTEM DE VERDADE, na MESMA ida ao banco (ponto 15) ─────────────────────────
+         *
+         * `count(*) over ()` é a contagem da consulta INTEIRA, antes do `limit`, devolvida em toda
+         * linha. É o que permite dizer "200 de 1.480" sem uma segunda consulta e sem o risco de as
+         * duas verem bases diferentes: um `select count(*)` separado rodaria em outro instante, e
+         * duas leituras de instantes diferentes é como uma tela passa a mostrar total menor que a
+         * própria lista.
+         *
+         * §A.6: é um NÚMERO. Não identifica ninguém, e é exatamente o que falta para a tela parar
+         * de mentir por omissão.
+         */
+        total: sql<number>`count(*) over ()`,
       })
       .from(asCandidatos)
       .where(filtros.length > 0 ? and(...filtros) : undefined)
-      .orderBy(desc(asCandidatos.criadoEm))
-      .limit(200);
+      /*
+       * O DESEMPATE POR `id` NÃO É ENFEITE: sem ele, duas pessoas cadastradas no MESMO instante
+       * (uma importação de planilha grava em lote) têm ordem indefinida entre uma página e a
+       * seguinte, e a mesma linha pode aparecer duas vezes ou sumir no meio da paginação.
+       */
+      .orderBy(desc(asCandidatos.criadoEm), desc(asCandidatos.id))
+      .limit(limite)
+      .offset(offset);
 
-    return linhas.map((l) => ({
+    /*
+     * ┌─ O CORTE DEIXA DE MENTIR (ponto 15) ───────────────────────────────────────────────────────┐
+     * │ O QUE HAVIA: `.limit(200)` fixo, com ordenação por data de criação, e um ARRAY como         │
+     * │ resposta. Quem chamasse sem filtro recebia os 200 mais RECENTES e nada dizia que havia mais │
+     * │ alguém: a tela de alocação mostrava uma lista completa, e ela era uma janela. O candidato   │
+     * │ cadastrado no ano passado simplesmente não existia para quem procurava pela rolagem.        │
+     * │                                                                                            │
+     * │ A CORREÇÃO NÃO É "SUBIR O LIMITE": qualquer teto escolhido volta a mentir na base seguinte. │
+     * │ O que muda é a RESPOSTA: ela passa a carregar `total` (quantos existem), `limite`, `offset` │
+     * │ e `truncado`. O consumidor que ignora o corte deixa de conseguir ignorá-lo sem saber, e a   │
+     * │ tela tem o que dizer ("mostrando 200 de 1.480, refine a busca").                            │
+     * │                                                                                            │
+     * │ O TETO CONTINUA EXISTINDO, e continua sendo barreira: ele impede a consulta sem filtro de   │
+     * │ despejar a base inteira de dado pessoal no navegador (§A.6, minimização). O que ele não     │
+     * │ pode mais é fazer isso em silêncio.                                                        │
+     * └────────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    const total = Number(linhas[0]?.total ?? 0);
+
+    const itens: AsCandidatoListItem[] = linhas.map((l) => ({
       id: l.id,
       nome: l.nome,
       origem: l.origem,
@@ -619,6 +738,16 @@ export class CandidatosService {
       candidaturasAtivas: Number(l.candidaturasAtivas ?? 0),
       criadoEm: l.criadoEm.toISOString(),
     }));
+
+    return {
+      itens,
+      total,
+      limite,
+      offset,
+      // TRUNCADO É DERIVADO, e nunca um flag gravado à parte: dois números que deveriam concordar
+      // discordam no primeiro ajuste. Sobrou alguém além do que esta página mostra?
+      truncado: offset + itens.length < total,
+    };
   }
 
   /** A FICHA: o único lugar em que o CPF e os dados de contato saem do backend. */
@@ -757,6 +886,11 @@ export class CandidatosService {
      */
     const etapaInicial = await this.etapas.etapaInicial();
 
+    // OS INSUMOS DA DERIVAÇÃO, ANTES DA TRANSAÇÃO (ver `insumosDaDerivacao`). A `regua` já foi lida
+    // lá em cima para a trava 2; ler de novo custa nada (o serviço serve de cache) e mantém a régua
+    // desta rotina vindo de um lugar só.
+    const { regua: reguaDerivacao, etapasDeEntrega } = await this.insumosDaDerivacao();
+
     let id: string;
     try {
       /*
@@ -786,6 +920,17 @@ export class CandidatosService {
           // não existe nenhum dos dois. Aceite sem o fato que ele autorizou não é trilha.
           ...aceiteDaReentrada,
         });
+
+        /*
+         * O STATUS DA VAGA ACOMPANHA (Frente B, ponto 2). Na alocação a derivação quase nunca muda
+         * nada (a candidatura NASCE na etapa INICIAL, que não é de entrega), e ela está aqui pela
+         * mesma razão de a etapa inicial ser dado do diretor: no dia em que ele marcar a etapa
+         * inicial como de entrega, ou criar uma etapa inicial diferente, o caminho já acompanha.
+         * Custa um `exists` só quando a vaga está em papel derivável.
+         */
+        if (movimentoPodeMudarAEntrega([row.etapa], etapasDeEntrega)) {
+          await derivarStatusDaVaga(tx, dto.vagaId, reguaDerivacao, etapasDeEntrega, alocadoPorId);
+        }
 
         return row.id;
       });
@@ -822,6 +967,28 @@ export class CandidatosService {
    * │ funil não desfaz aprovação nenhuma nem solta posição nenhuma, com qualquer régua das duas.  │
    * └────────────────────────────────────────────────────────────────────────────────────────────┘
    */
+  /**
+   * ─ OS DOIS INSUMOS DE CATÁLOGO DA DERIVAÇÃO DE STATUS DA VAGA (Frente B) ──────────────────────
+   *
+   * LIDOS SEMPRE ANTES DA TRANSAÇÃO, e é a mesma régua que o resto deste arquivo já segue: são dois
+   * catálogos de meia dúzia de linhas, servidos de cache, que não têm nada a ver com a linha travada
+   * da vaga. Buscá-los lá dentro só alongaria o tempo com a trava segurada, e abriria a porta para
+   * alguém, um dia, "aproveitar a viagem" e puxar a vaga junto por fora do lock.
+   *
+   * OS DOIS EM PARALELO porque são independentes: um responde "o que é ABERTURA e o que é ENTREGA",
+   * o outro "quais etapas significam estar com o cliente".
+   */
+  private async insumosDaDerivacao(): Promise<{
+    regua: ReguaDeStatusDaVaga;
+    etapasDeEntrega: ReadonlySet<string>;
+  }> {
+    const [regua, etapasDeEntrega] = await Promise.all([
+      this.statusVaga.regua(),
+      this.etapas.codigosDeEntregaAoCliente(),
+    ]);
+    return { regua, etapasDeEntrega };
+  }
+
   async moverEtapa(
     candidaturaId: string,
     dto: MoverEtapaDto,
@@ -834,6 +1001,51 @@ export class CandidatosService {
     if (!candidaturaViva(c.situacao)) {
       throw new ConflictException(
         "Esta candidatura foi encerrada sem êxito e não anda mais no funil. Para trazer a pessoa de volta, aloque-a de novo na vaga.",
+      );
+    }
+
+    // OS INSUMOS DA DERIVAÇÃO, ANTES DA TRANSAÇÃO (ver `insumosDaDerivacao`). Eles subiram para cá
+    // porque a guarda da VAGA, logo abaixo, precisa da régua de papéis, e ela é a PRIMEIRA recusa.
+    const { regua, etapasDeEntrega } = await this.insumosDaDerivacao();
+
+    /*
+     * ┌─ A VAGA PRECISA ESTAR EM PROCESSO (decisão 4 do diretor, que AUTORIZOU tocar aqui) ───────┐
+     * │ ESTA FRESTA ESTAVA DOCUMENTADA E ABERTA. O bloco do `reprovarPeloCliente` dizia, com todas │
+     * │ as letras, "o `moverEtapa` TEM A MESMA FRESTA E NÃO É TOCADO AQUI: ele é código VALIDADO   │
+     * │ (§A.26), e o alcance do conserto é decisão do diretor". O diretor decidiu.                  │
+     * │                                                                                            │
+     * │ O QUE UM CLIQUE PRODUZIA: o caminho não é borda inventada, é o caminho FELIZ da Frente B.  │
+     * │ A vaga fica ENTREGUE com alguém na Entrevista Cliente, a pessoa é contratada e a vaga      │
+     * │ FECHA; a trava do fechamento não barra um `ALOCADO` (para ela, ALOCADO é TRATADO), então   │
+     * │ ele continua VIVO na Entrevista Cliente de uma vaga FECHADA. Movê-lo grava um evento de    │
+     * │ funil dentro de um processo terminado, contado pelos KPIs, e NADA ACUSA: a derivação de    │
+     * │ status sai no papel FECHAMENTO e não corrige coisa alguma.                                  │
+     * │                                                                                            │
+     * │ A FORMA É COPIADA de `reprovarPeloCliente` e `marcarEntrevista`, e não reinventada: mesma  │
+     * │ `papelDeVagaEmProcesso`, mesma pré-conferência FORA da transação, mesmo 409. Uma segunda   │
+     * │ lista de papéis vivos garantiria a divergência no dia em que um papel novo entrasse em uma │
+     * │ só delas.                                                                                   │
+     * │                                                                                            │
+     * │ ALCANCE MEDIDO ANTES DE ESCREVER (§A.27), e a lista de chamadores é COMPLETA: a rota       │
+     * │ `PATCH .../etapa` da controller e o `moverEtapaEmLote`, e mais nada. Os OUTROS escritores  │
+     * │ de `as_candidaturas.etapa` NÃO passam por aqui e seguem intocados: o Stand By do           │
+     * │ cancelamento da vaga (`vagas.service.moverVivosParaODestino`), a volta da reprovação       │
+     * │ (`reprovarPeloCliente`, que tem a própria guarda), a restauração da reabertura e a         │
+     * │ sincronização do Pandapé escrevem a coluna DIRETO. Nenhum caminho interno do sistema       │
+     * │ depende de mover etapa em vaga fora de processo.                                            │
+     * │                                                                                            │
+     * │ NO LOTE A RECUSA É POR LINHA, e não do lote inteiro: `emLote` envolve cada chamada num     │
+     * │ `try/catch` e devolve a frase em `falhas[].motivo` (`motivoDaFalha` aproveita a mensagem   │
+     * │ da `HttpException` inteira). Nada de 500, e as demais linhas seguem.                        │
+     * └────────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    const vagaDaCandidatura = await this.db.query.vagas.findFirst({
+      where: eq(vagas.id, c.vagaId),
+    });
+    if (!vagaDaCandidatura) throw new NotFoundException("Vaga da candidatura não encontrada.");
+    if (!papelDeVagaEmProcesso(regua.linha(vagaDaCandidatura.status).papel)) {
+      throw new ConflictException(
+        `Esta vaga está em "${regua.rotulo(vagaDaCandidatura.status)}" e não tem processo em andamento. A vaga acabou, então não é possível mover ninguém no funil dela.`,
       );
     }
 
@@ -858,6 +1070,7 @@ export class CandidatosService {
      */
     await this.etapas.exigirEtapaAtiva(dto.etapa);
 
+
     /*
      * O MOVIMENTO E O REGISTRO DELE, NA MESMA TRANSAÇÃO. A coluna `etapa` é sobrescrita, então o
      * evento é a ÚNICA memória de que a pessoa esteve na etapa anterior: gravar um sem o outro
@@ -878,6 +1091,176 @@ export class CandidatosService {
         situacao: null,
         porId,
       });
+
+      /*
+       * ─ O STATUS DA VAGA ACOMPANHA (Frente B, ponto 2) ──────────────────────────────────────────
+       *
+       * ESTE É O GATILHO PRINCIPAL DA DERIVAÇÃO: mover alguém PARA a Entrevista Cliente entrega a
+       * vaga, e mover o último que estava lá PARA FORA a devolve para Aberta. Sem exigir ordem: o
+       * funil é livre desde 27/08, então o pulo da Captação direto para a Entrevista Cliente conta
+       * igual.
+       *
+       * NA MESMA TRANSAÇÃO do movimento, e não depois: estado de vaga que pode ficar para trás
+       * quando a escrita deu certo é o mesmo defeito que "rastro que pode faltar não é rastro".
+       */
+      if (movimentoPodeMudarAEntrega([c.etapa, dto.etapa], etapasDeEntrega)) {
+        await derivarStatusDaVaga(tx, c.vagaId, regua, etapasDeEntrega, porId);
+      }
+    });
+
+    return this.candidatura(candidaturaId);
+  }
+
+  /**
+   * ─ REPROVADO PELO CLIENTE: A PESSOA VOLTA PARA A ETAPA INICIAL (Frente E, ponto 12) ───────────
+   *
+   * O GESTO NÃO EXISTIA. Até aqui, quando o cliente recusava alguém, o consultor tinha dois
+   * caminhos e os dois eram ruins: DESCARTAR a pessoa (que ENCERRA o processo dela, e o cliente
+   * recusar para UMA vaga não é a pessoa sair da base) ou MOVER de etapa à mão (que funciona, e não
+   * deixa dito que foi o cliente quem recusou). Este gesto é o terceiro, e é o que o diretor pediu.
+   *
+   * ┌─ É MOVIMENTO, E NUNCA DESFECHO, e essa é a decisão que governa o método inteiro ─────────────┐
+   * │ A pessoa continua VIVA: ela volta ao começo do funil e pode ser apresentada de novo, para    │
+   * │ esta vaga ou para outra. Por isso a `situacao` NÃO é tocada, `motivo_descarte` NÃO é escrito │
+   * │ e o evento entra em `as_candidatura_etapas` com `situacao` NULA, que é o que `tipoDoEvento`  │
+   * │ lê para classificá-lo como MOVIMENTO.                                                        │
+   * │                                                                                              │
+   * │ CONSEQUÊNCIA QUE IMPORTA E QUE NÃO É ÓBVIA: a POSIÇÃO da vaga não é mexida. Quem consome     │
+   * │ posição é a SITUAÇÃO (`consomePosicao`), e ela não muda aqui. Então este caminho NÃO precisa │
+   * │ do `SELECT ... FOR UPDATE` da trava 4 (não há "ainda cabe mais um?" a responder), exatamente │
+   * │ como o `moverEtapa` logo acima.                                                              │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * ┌─ O DESTINO VEM DO CATÁLOGO, E NUNCA DE UM LITERAL ───────────────────────────────────────────┐
+   * │ A etapa de volta é a marcada `inicial` em `as_etapas_funil` (0100), que é a MESMA fonte de   │
+   * │ onde a candidatura NASCE. Escrever `"CAPTACAO"` aqui criaria um segundo dono da pergunta     │
+   * │ "onde é o começo do funil", capaz de divergir do primeiro no dia em que o diretor marcasse   │
+   * │ outra etapa como inicial, e a pessoa reprovada voltaria para um começo que já não é o começo.│
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * ┌─ SÓ REPROVA O CLIENTE QUEM ESTAVA COM O CLIENTE, e a lista também é do catálogo ────────────┐
+   * │ A guarda é `entrega_ao_cliente` (a marca que a Frente B criou na 0130), e não uma segunda    │
+   * │ lista escrita aqui. Sem ela, "reprovado pelo cliente" seria gravável sobre quem está na      │
+   * │ Captação, e a contagem do indicador passaria a incluir reprovação que nenhum cliente fez.    │
+   * │                                                                                              │
+   * │ FAIL-CLOSED SOBRE O CONJUNTO VAZIO: catálogo sem nenhuma etapa marcada recusa TODO MUNDO,    │
+   * │ com a frase dizendo o que configurar. É o mesmo lado seguro que a derivação de status já     │
+   * │ escolhe (sem etapa marcada, nunca afirma entrega).                                            │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * O STATUS DA VAGA ACOMPANHA, E ESTE É O EFEITO MAIS CARO DE ESQUECER (§A.27): tirar da Entrevista
+   * Cliente o ÚLTIMO candidato que estava lá faz a vaga deixar de estar ENTREGUE e voltar a ABERTA.
+   * É a mesma rotina do `moverEtapa`, na mesma transação, e não uma segunda cópia dela.
+   *
+   * §A.6: o evento leva QUEM, QUANDO, DE ONDE, PARA ONDE e uma frase de processo opcional. Nenhum
+   * CPF, nenhum nome de candidato, nenhum log.
+   */
+  async reprovarPeloCliente(
+    candidaturaId: string,
+    dto: ReprovarPeloClienteDto,
+    porId: string,
+  ): Promise<AsCandidaturaItem> {
+    const c = await this.db.query.asCandidaturas.findFirst({
+      where: eq(asCandidaturas.id, candidaturaId),
+    });
+    if (!c) throw new NotFoundException("Candidatura não encontrada.");
+    if (!candidaturaViva(c.situacao)) {
+      throw new ConflictException(
+        "Esta candidatura foi encerrada sem êxito e não anda mais no funil. Para trazer a pessoa de volta, aloque-a de novo na vaga.",
+      );
+    }
+
+    // OS INSUMOS DE CATÁLOGO, TODOS ANTES DA TRANSAÇÃO, pela régua deste arquivo: são listas de
+    // meia dúzia de linhas servidas de cache, e buscá-las lá dentro só alongaria o tempo com a
+    // trava da vaga segurada pela derivação.
+    const { regua, etapasDeEntrega } = await this.insumosDaDerivacao();
+
+    /*
+     * ┌─ A VAGA PRECISA ESTAR EM PROCESSO (achado do `tester`, cobertura independente §A.38) ────┐
+     * │ AS TRÊS GUARDAS DESTE MÉTODO ERAM TODAS SOBRE A CANDIDATURA (existe, está viva, está em   │
+     * │ etapa de entrega), e NENHUMA perguntava se a VAGA ainda é um processo. O caminho não é    │
+     * │ borda inventada, é o caminho FELIZ da Frente B: a vaga fica ENTREGUE com alguém na        │
+     * │ Entrevista Cliente, a pessoa é contratada e a vaga FECHA a partir da entrega; a trava 5   │
+     * │ do fechamento não barra um `ALOCADO` (para ela, ALOCADO é TRATADO), então ela continua    │
+     * │ VIVA na Entrevista Cliente de uma vaga FECHADA.                                            │
+     * │                                                                                           │
+     * │ O QUE UM CLIQUE PRODUZIA ALI: um `ALOCADO` (que CONSOME POSIÇÃO) devolvido à Captação de  │
+     * │ um processo terminado, contado pelos KPIs de funil, com a linha do tempo afirmando que o  │
+     * │ cliente o reprovou DEPOIS de a vaga ter fechado entregando a posição dele. E NADA ACUSA:  │
+     * │ a derivação de status sai no papel FECHAMENTO e não corrige coisa alguma.                  │
+     * │                                                                                           │
+     * │ A RÉGUA É A MESMA QUE O `fechar`, O `cancelar` E A SHORTLIST JÁ USAM, e não uma quarta:   │
+     * │ `papelDeVagaEmProcesso` (ABERTURA ou ENTREGA). Escrever aqui uma segunda lista de papéis  │
+     * │ vivos garantiria a divergência no dia em que um papel novo entrasse em uma só delas.      │
+     * │                                                                                           │
+     * │ PRÉ-CONFERÊNCIA, FORA DA TRANSAÇÃO, e isso é coerente e não afrouxamento: este gesto NÃO  │
+     * │ consome posição (a situação não muda), então não há corrida a serializar. É o mesmo lugar │
+     * │ das outras pré-conferências deste arquivo, e a recusa chega como 409 antes de qualquer    │
+     * │ lock ser segurado.                                                                         │
+     * │                                                                                           │
+     * │ O `moverEtapa` TEM A MESMA FRESTA E NÃO É TOCADO AQUI: ele é código VALIDADO e anterior a │
+     * │ esta frente (§A.26), e alargar o conserto até ele muda o comportamento de um gesto que o  │
+     * │ time usa todo dia. O achado foi reportado; o alcance do conserto é decisão do diretor.    │
+     * └───────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    const vagaDaCandidatura = await this.db.query.vagas.findFirst({
+      where: eq(vagas.id, c.vagaId),
+    });
+    if (!vagaDaCandidatura) throw new NotFoundException("Vaga da candidatura não encontrada.");
+    if (!papelDeVagaEmProcesso(regua.linha(vagaDaCandidatura.status).papel)) {
+      throw new ConflictException(
+        `Esta vaga está em "${regua.rotulo(vagaDaCandidatura.status)}" e não tem processo em andamento. Não é possível registrar reprovação pelo cliente nela.`,
+      );
+    }
+
+    if (!etapasDeEntrega.has(c.etapa)) {
+      throw new BadRequestException(
+        "Só é possível registrar reprovação pelo cliente para quem está numa etapa de entrega ao cliente. Marque a etapa na tela de Etapas Do Funil, ou mova a pessoa para ela antes.",
+      );
+    }
+
+    const destino = await this.etapas.etapaInicial();
+    /*
+     * A ETAPA INICIAL PODE SER A PRÓPRIA ETAPA DE ENTREGA, e isso não é hipótese absurda: o
+     * catálogo é do diretor, e nada no banco impede que a MESMA linha esteja marcada `inicial` e
+     * `entrega_ao_cliente`. Sem esta recusa, o gesto gravaria um movimento de A para A, que é
+     * evento que não conta nada e que o `moverEtapa` já recusa pela mesma função.
+     */
+    if (!movimentoPermitido(c.etapa, destino.codigo)) {
+      throw new BadRequestException(
+        "A etapa inicial do funil é a mesma em que esta pessoa está, então não há para onde voltar. Revise as etapas na tela de Etapas Do Funil.",
+      );
+    }
+
+    await this.db.transaction(async (tx) => {
+      await tx
+        .update(asCandidaturas)
+        .set({ etapa: destino.codigo, atualizadoEm: new Date() })
+        .where(eq(asCandidaturas.id, candidaturaId));
+
+      await tx.insert(asCandidaturaEtapas).values({
+        candidaturaId,
+        etapaDe: c.etapa,
+        etapaPara: destino.codigo,
+        // MOVIMENTO: `situacao` NULA. Reprovar pelo cliente não encerra ninguém, e escrever
+        // situação aqui transformaria o gesto num desfecho que o diretor não pediu.
+        situacao: null,
+        motivo: texto(dto.motivo),
+        // O MARCADOR. É ele, e não o texto acima, que responde "quantos o cliente reprovou".
+        reprovadoPeloCliente: true,
+        porId,
+      });
+
+      /*
+       * A DERIVAÇÃO RODA SEMPRE NESTE CAMINHO, e o `movimentoPodeMudarAEntrega` é redundante aqui
+       * POR CONSTRUÇÃO (a guarda acima já exigiu que a ORIGEM fosse etapa de entrega). Ele fica
+       * assim mesmo, pela mesma forma do `moverEtapa`: é a rotina de módulo que decide quando
+       * derivar, em UM lugar só, e um caminho que a chamasse direto seria o primeiro a divergir no
+       * dia em que a régua do atalho mudar.
+       */
+      if (movimentoPodeMudarAEntrega([c.etapa, destino.codigo], etapasDeEntrega)) {
+        await derivarStatusDaVaga(tx, c.vagaId, regua, etapasDeEntrega, porId);
+      }
     });
 
     return this.candidatura(candidaturaId);
@@ -1015,7 +1398,23 @@ export class CandidatosService {
   }
 
   /**
-   * ─ TROCAR A VAGA DA CANDIDATURA (item 5 do diretor, só MASTER e SUPER_ADMIN) ─────────────────
+   * ─ TROCAR A VAGA DA CANDIDATURA (item 5 do diretor) ──────────────────────────────────────────
+   *
+   * ┌─ ELA É DE QUALQUER CONSULTOR DESDE A FRENTE D, e esta linha dizia o contrário ─────────────┐
+   * │ Estava escrito aqui "só MASTER e SUPER_ADMIN", e o `@Roles("MASTER","SUPER_ADMIN")` da rota │
+   * │ SAIU na Frente D, por decisão do diretor: o time operacional faz a gestão das vagas, e      │
+   * │ transferir alguém da vaga A para a B é gesto de gestão, não de exceção.                     │
+   * │                                                                                            │
+   * │ POR QUE A FRASE VELHA ERA PERIGOSA E NÃO SÓ FEIA: comentário que descreve uma trava         │
+   * │ REVOGADA é lido pela próxima sessão como verdade, e ela passa a raciocinar (e a construir)  │
+   * │ apoiada num papel que ninguém mais exige. É a mesma classe de defeito que a §A.26 existe    │
+   * │ para pegar, com a agravante de estar num arquivo que todo mundo abre.                       │
+   * │                                                                                            │
+   * │ O QUE RESTRINGE HOJE é o menu `as-candidatos`, no `MenuGuard`. As travas que sobrevivem     │
+   * │ estão AQUI no service, onde sempre estiveram, e elas dependem do ESTADO da linha, não do    │
+   * │ papel: candidatura viva, vaga de destino que recebe candidato, pessoa que já está no        │
+   * │ destino e teto de posições do destino.                                                      │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
    *
    * ┌─ O QUE ELA É, E O QUE ELA NÃO É ───────────────────────────────────────────────────────────┐
    * │ CORRIGE, não recomeça. O candidato foi alocado na vaga ERRADA, e o único caminho era o      │
@@ -1055,6 +1454,10 @@ export class CandidatosService {
      * por uma solta aqui em cima desfaria a corrida que o lock existe para fechar.
      */
     const regua = await this.statusVaga.regua();
+    // O SEGUNDO INSUMO DA DERIVAÇÃO (ver `insumosDaDerivacao`).
+    const etapasDeEntrega = await this.etapas.codigosDeEntregaAoCliente();
+    // A VAGA DE ORIGEM, GUARDADA PARA DEPOIS DO COMMIT. Ver o bloco da derivação, no fim do método.
+    let vagaDeOrigem: string | null = null;
     await this.db.transaction(async (tx) => {
       const c = await tx.query.asCandidaturas.findFirst({
         where: eq(asCandidaturas.id, candidaturaId),
@@ -1076,7 +1479,14 @@ export class CandidatosService {
       // ── A LINHA DA VAGA DE DESTINO É TRAVADA ANTES DE QUALQUER CONTAGEM. Daqui até o fim da
       // transação, nenhuma outra aprovação ou troca nesta mesma vaga passa deste ponto.
       const [destino] = await tx
-        .select({ id: vagas.id, status: vagas.status, posicoesOficiais: vagas.posicoesOficiais })
+        .select({
+          id: vagas.id,
+          status: vagas.status,
+          posicoesOficiais: vagas.posicoesOficiais,
+          // O CLIENTE ENTROU NESTA PROJEÇÃO por causa da entrevista do cliente (decisão 3). Ele é
+          // lido SOB A TRAVA, junto do resto, e não numa segunda consulta solta.
+          codCliente: vagas.codCliente,
+        })
         .from(vagas)
         .where(eq(vagas.id, dto.vagaId))
         .for("update");
@@ -1184,6 +1594,73 @@ export class CandidatosService {
        * `etapaPara` RECEBE A ETAPA ATUAL, que não mudou: é o que deixa explícito na linha do tempo
        * que a troca NÃO mexeu na etapa.
        */
+      /*
+       * ─ TRANSFERÊNCIA ENTRE CLIENTES APAGA A ENTREVISTA DO CLIENTE (decisão 3 do diretor) ──────
+       *
+       * ┌─ POR QUE SÓ A DO CLIENTE, E NUNCA A INTERNA ────────────────────────────────────────────┐
+       * │ A PESSOA É A MESMA. A entrevista SOULAN aconteceu (ou está marcada) com o nosso time, e  │
+       * │ ela continua valendo de pé em qualquer vaga: apagá-la faria o consultor remarcar uma     │
+       * │ conversa que já teve. A entrevista com o CLIENTE é com AQUELE cliente, e ela não          │
+       * │ sobrevive à mudança de cliente: manter é deixar na agenda da semana um compromisso com   │
+       * │ quem não vai mais receber esta pessoa.                                                    │
+       * └─────────────────────────────────────────────────────────────────────────────────────────┘
+       *
+       * QUEM SÃO AS ETAPAS DE ENTREGA VEM DO CATÁLOGO (`entrega_ao_cliente`), e nunca de uma
+       * segunda lista escrita aqui: é a MESMA fonte que a derivação de status e a reprovação pelo
+       * cliente já leem. Conjunto VAZIO não apaga nada, e esse é o lado seguro: catálogo sem etapa
+       * marcada não pode significar "apague todas".
+       *
+       * ┌─ CLIENTE DESCONHECIDO NÃO APAGA NADA, E ISSO É DECISÃO ─────────────────────────────────┐
+       * │ `vagas.cod_cliente` é NULÁVEL de propósito (a carga importou vaga sem cliente resolvido),│
+       * │ então `null !== "X"` é "não sei", e não "é outro". Apagar sobre desconhecimento          │
+       * │ destruiria a entrevista de uma vaga cujo cliente talvez seja o MESMO, e destruir é        │
+       * │ irreversível. Abster-se é o comportamento seguro.                                         │
+       * └─────────────────────────────────────────────────────────────────────────────────────────┘
+       *
+       * NA MESMA TRANSAÇÃO do `update` do `vagaId`, e não depois: fora dela, uma falha parcial
+       * deixaria a entrevista VIVA apontando para o cliente novo, que é exatamente o estado que
+       * este bloco existe para impedir.
+       */
+      const clienteDaOrigem = await tx.query.vagas.findFirst({ where: eq(vagas.id, c.vagaId) });
+      const trocouDeCliente =
+        !!clienteDaOrigem?.codCliente &&
+        !!destino.codCliente &&
+        clienteDaOrigem.codCliente !== destino.codCliente;
+
+      let entrevistasRemovidas = 0;
+      if (trocouDeCliente && etapasDeEntrega.size > 0) {
+        const removidas = await tx
+          .delete(asCandidaturaEntrevistas)
+          .where(
+            and(
+              eq(asCandidaturaEntrevistas.candidaturaId, candidaturaId),
+              inArray(asCandidaturaEntrevistas.etapa, [...etapasDeEntrega]),
+            ),
+          )
+          .returning({ id: asCandidaturaEntrevistas.id });
+        entrevistasRemovidas = removidas.length;
+      }
+
+      /*
+       * A TRILHA DIZ O QUE ACONTECEU, NO MOLDE DE `narrativaDoCancelamento`: CONTAGEM e rótulo de
+       * processo, NUNCA nome, NUNCA data da entrevista apagada, NUNCA nada do candidato (§A.6). E
+       * nada no logger: este arquivo não tem um, de propósito.
+       *
+       * A FRASE DO CONSULTOR VEM PRIMEIRO e a do sistema depois, pelo mesmo motivo que a narrativa
+       * do cancelamento põe o motivo na frente: quem lê a linha do tempo procura primeiro o porquê
+       * humano, e o efeito automático é a consequência dele.
+       */
+      const partes: string[] = [];
+      const motivoDoConsultor = texto(dto.motivo);
+      if (motivoDoConsultor) partes.push(motivoDoConsultor);
+      if (entrevistasRemovidas > 0) {
+        partes.push(
+          entrevistasRemovidas === 1
+            ? "Transferência para outro cliente: 1 entrevista com o cliente foi removida. A entrevista interna foi mantida."
+            : `Transferência para outro cliente: ${entrevistasRemovidas} entrevistas com o cliente foram removidas. A entrevista interna foi mantida.`,
+        );
+      }
+
       await tx.insert(asCandidaturaEtapas).values({
         candidaturaId,
         etapaDe: null,
@@ -1191,10 +1668,46 @@ export class CandidatosService {
         situacao: null,
         vagaDe: c.vagaId,
         vagaPara: dto.vagaId,
-        motivo: texto(dto.motivo),
+        motivo: partes.length > 0 ? partes.join(" ") : null,
         porId,
       });
+
+      /*
+       * ─ O STATUS DAS DUAS VAGAS ACOMPANHA, E ELAS SÃO DERIVADAS EM MOMENTOS DIFERENTES ─────────
+       *
+       * O DESTINO VAI AQUI, DENTRO DA TRANSAÇÃO: a linha dele JÁ ESTÁ TRAVADA (trava 2 desta
+       * operação), então o `FOR UPDATE` da rotina é o mesmo lock, já nosso.
+       *
+       * ┌─ A ORIGEM VAI DEPOIS DO COMMIT, E ISSO É PREVENÇÃO DE DEADLOCK, NÃO DESLEIXO ──────────┐
+       * │ Travar a origem AQUI significaria pedir um segundo lock de vaga segurando o primeiro, e │
+       * │ em ordem que este método não controla (o destino já foi travado). Duas trocas           │
+       * │ simultâneas em sentidos opostos (A->B e B->A) travariam uma na outra: o Postgres        │
+       * │ detecta e ABORTA uma delas, então a correção de um Master viraria um erro 500 sem       │
+       * │ nenhuma razão visível.                                                                   │
+       * │                                                                                          │
+       * │ E O ATRASO É INÓCUO, que é o que torna a escolha defensável: a derivação é IDEMPOTENTE  │
+       * │ (pergunta presença e grava só quando o destino difere), então uma falha aqui não         │
+       * │ corrompe nada, só deixa a vaga de origem um movimento atrás, até o próximo gesto de      │
+       * │ candidato nela. O FATO (a pessoa trocou de vaga) já está commitado, e derivar a origem   │
+       * │ dentro da mesma transação faria uma troca legítima ser desfeita por um efeito.            │
+       * └──────────────────────────────────────────────────────────────────────────────────────────┘
+       */
+      /*
+       * A TROCA NÃO MEXE NA ETAPA (é a garantia central da operação, ver o `set` acima), então a
+       * MESMA etapa responde pelas DUAS vagas: se a pessoa não está com o cliente, tirá-la de uma
+       * vaga e pô-la na outra não muda a entrega de nenhuma das duas.
+       */
+      if (movimentoPodeMudarAEntrega([c.etapa], etapasDeEntrega)) {
+        await derivarStatusDaVaga(tx, dto.vagaId, regua, etapasDeEntrega, porId);
+        vagaDeOrigem = c.vagaId;
+      }
     });
+
+    if (vagaDeOrigem) {
+      await this.db.transaction(async (tx) => {
+        await derivarStatusDaVaga(tx, vagaDeOrigem as string, regua, etapasDeEntrega, porId);
+      });
+    }
 
     return this.candidatura(candidaturaId);
   }
@@ -1220,6 +1733,130 @@ export class CandidatosService {
    * │ comportamento: das três saídas aceitas, só `ENVIADO_PARA_ADMISSAO` consome posição.         │
    * └────────────────────────────────────────────────────────────────────────────────────────────┘
    */
+  /**
+   * ─ O MOTIVO DO DESVÍNCULO É CONFERIDO CONTRA O CATÁLOGO `motivos_descarte` (Frente A, ponto 7) ─
+   *
+   * ┌─ POR QUE A CONFERÊNCIA NÃO PODE VIVER SÓ NA TELA ──────────────────────────────────────────┐
+   * │ O vocabulário de descarte se formou, e o diretor fechou a lista. Um seletor no navegador,   │
+   * │ sozinho, é a mesma régua que já furou aqui uma vez: até o ajuste 7, o motivo era exigido    │
+   * │ só na tela e qualquer chamada direta à rota gravava desfecho sem motivo. Catálogo que vive  │
+   * │ apenas no combobox é texto livre com aparência de lista.                                    │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * ┌─ O RECORTE É A PARTE QUE MAIS IMPORTA, E ELE SAI DO VOCABULÁRIO COMPARTILHADO ─────────────┐
+   * │ `SITUACOES_COM_MOTIVO_DE_CATALOGO` é `DESCARTADO` e `DESISTIU`: o DESVÍNCULO, que a tela    │
+   * │ trata como um gesto só ("Desvincular Da Vaga") e cujo vocabulário é o que o diretor ditou.  │
+   * │                                                                                            │
+   * │ `ENVIADO_PARA_ADMISSAO` FICA DE FORA, e isto é §A.26, não esquecimento: ali o mesmo campo   │
+   * │ pede PROSA ("o que fechou o processo e o que a admissão precisa saber"). Conferi-lo contra  │
+   * │ "Reprovado, Faltante, Desistente..." recusaria o envio para a esteira de TODA pessoa        │
+   * │ aprovada, derrubando a ponte A&S para Admissão, que é código validado em produção.          │
+   * │                                                                                            │
+   * │ A LISTA MORA NO `shared-types` para a tela e o servidor lerem a MESMA: se a tela decidisse  │
+   * │ sozinha quando mostrar seletor e quando mostrar caixa de texto, o dia em que o recorte      │
+   * │ mudasse seria o dia em que a tela passaria a oferecer o que a rota recusa.                  │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * ┌─ O HISTÓRICO ANTIGO NÃO É TOCADO, E ESSE É O RISCO QUE A FRENTE TINHA ─────────────────────┐
+   * │ `motivo_descarte` guardou TEXTO LIVRE por toda a vida da coluna, e a migration NÃO o        │
+   * │ reescreve. Esta conferência é de ESCRITA NOVA e roda numa ÚNICA porta (`registrarSaida`):   │
+   * │ nenhuma LEITURA compara o que está gravado com o catálogo, não existe FK e não existe       │
+   * │ `restrict`, então "reprovado na entrevista com o cliente", de junho, continua legível na    │
+   * │ ficha, no histórico e no relatório da vaga. É o mesmo desenho de `vagas.cancelamento_       │
+   * │ motivo`. Provado em `motivos-descarte.saida.spec.ts`.                                       │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * OS OUTROS ESCRITORES DE `motivo_descarte` CONTINUAM FORA, cada um por uma razão própria, e a
+   * lista é completa (a pergunta "quem mais escreve este dado?" foi respondida por varredura):
+   *   . `vagas.service.cancelar` grava `"Vaga cancelada: <motivo>"` pelo `gravarSaidaDaCandidatura`,
+   *     com o motivo JÁ conferido contra o OUTRO catálogo (`motivos_cancelamento_vaga`). Conferir
+   *     aqui faria o sistema recusar a si mesmo.
+   *   . A ingestão externa (`ingestao-ciclo`) grava `as_depara_etapa_externa.motivo_padrao`, que é
+   *     CONFIGURAÇÃO revisada por admin, e não digitação de consultor.
+   *   . `restaurar-candidatura` e a reversão do envio NULAM o campo; não escrevem motivo.
+   *   . `registrarSaidaEmLote` NÃO é porta nova: ele chama esta mesma `registrarSaida`, linha a
+   *     linha, então o lote herda a conferência sem nenhuma segunda régua.
+   *
+   * A CONSULTA É A MESMA DO SELETOR (`motivosDeDescarteAtivos`), e roda ANTES de qualquer transação:
+   * motivo fora da lista é erro de CORPO, não conflito de estado, e recusar antes é a diferença entre
+   * um 400 imediato e um lock segurado à toa. Mesmo desenho de `VagasService.cancelar`.
+   *
+   * §A.6: a frase de recusa carrega vocabulário de processo. Nenhum CPF, nenhum nome, nenhum log.
+   */
+  /*
+   * ─ ELA PASSOU A DEVOLVER A LINHA DO CATÁLOGO, e a mudança de retorno é o ponto (Frente E) ─────
+   *
+   * Antes ela devolvia `void` e servia a UMA pergunta ("este motivo está na lista?"). Agora são
+   * DUAS, e a segunda é "este motivo PEDE A PRETENSÃO SALARIAL?" (`pedePretensao`, migration 0131).
+   *
+   * A CONSULTA CONTINUA SENDO UMA SÓ, e é por isso que a resposta sobe em vez de virar um segundo
+   * método com um segundo `select`: duas leituras do mesmo catálogo, em pontos diferentes do mesmo
+   * gesto, podem ler estados diferentes se o diretor salvar a tela de administração no meio, e aí o
+   * motivo seria aceito por uma e classificado pela outra.
+   *
+   * `null` QUER DIZER "ESTA SAÍDA NÃO TEM MOTIVO DE CATÁLOGO", e não "não achei": o recorte
+   * (`SITUACOES_COM_MOTIVO_DE_CATALOGO`) continua sendo só o DESCARTE, e sair antes é o que mantém
+   * o `ENVIADO_PARA_ADMISSAO` escrevendo PROSA, como a ponte A&S para Admissão exige (§A.26).
+   */
+  private async exigirMotivoDoCatalogo(dto: RegistrarSaidaDto): Promise<AsMotivoDescarte | null> {
+    if (!motivoVemDoCatalogo(dto.situacao)) return null;
+    const ativos = await motivosDeDescarteAtivos(this.db);
+    const escolhido = ativos.find((m) => m.nome === dto.motivo);
+    if (escolhido) return escolhido;
+    throw new BadRequestException("Motivo de saída inválido. Escolha um motivo da lista.");
+  }
+
+  /**
+   * ─ A PRETENSÃO SALARIAL: EXIGIDA QUANDO O MOTIVO PEDE, RECUSADA QUANDO NÃO (ponto 9) ──────────
+   *
+   * ┌─ A LIGAÇÃO É PELA MARCA DO CATÁLOGO, E NÃO PELO NOME DO MOTIVO, EM CAMADA NENHUMA ──────────┐
+   * │ `motivos_descarte` é gerenciável pelo diretor: ele cria, RENOMEIA e inativa pela tela. Um    │
+   * │ `motivo === "Pretensão Salarial"` aqui pararia de funcionar no dia em que ele corrigisse a   │
+   * │ grafia, SEM NADA FALHAR: o campo simplesmente deixaria de ser pedido, e o dado deixaria de   │
+   * │ ser coletado em silêncio, que é o pior tipo de defeito que existe. Quem responde é o         │
+   * │ booleano `pedePretensao` da linha, e a OST diz isso com todas as letras.                      │
+   * │                                                                                              │
+   * │ E O NOME NÃO SERVIRIA NEM HOJE: a semente da 0129 tem seis motivos e nenhum deles é          │
+   * │ "pretensão salarial". Comparar por nome exigiria INVENTAR um, que é o que a §A.31 recusa.    │
+   * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * ┌─ AS DUAS METADES, E A SEGUNDA É A QUE SE ESQUECE ───────────────────────────────────────────┐
+   * │ 1. O MOTIVO PEDE E O VALOR NÃO VEIO -> 400. Sem isto, a regra viveria só no navegador, e     │
+   * │    qualquer chamada direta à rota gravaria o desfecho sem o número que ele existe para       │
+   * │    explicar. É letra por letra o furo que o ajuste 7 já pagou neste mesmo DTO.                │
+   * │ 2. O MOTIVO NÃO PEDE E O VALOR VEIO -> 400. Esta é §A.6 antes de ser higiene: sem ela, o     │
+   * │    campo é uma gaveta de salário aberta em QUALQUER desfecho, e o sistema passa a guardar    │
+   * │    dado financeiro de pessoa que ninguém mandou guardar. Minimização é recusar o que não se  │
+   * │    pediu, não só deixar de pedir.                                                             │
+   * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * SÍNCRONA E PURA, sobre a linha que a consulta acima já trouxe: ela não vai ao banco, então roda
+   * ANTES de qualquer transação, como toda recusa de CORPO deste arquivo. Motivo errado é 400
+   * imediato, nunca um lock segurado à toa.
+   *
+   * §A.6: as duas frases falam do CAMPO e NUNCA repetem o valor recebido. Um erro que devolvesse o
+   * número faria o dado financeiro viajar na resposta e, dali, para qualquer log de cliente HTTP, que
+   * é a mesma razão pela qual a recusa de CPF duplicado não repete o CPF.
+   */
+  private exigirPretensaoQuandoOMotivoPede(
+    dto: RegistrarSaidaDto,
+    motivo: AsMotivoDescarte | null,
+  ): void {
+    const pede = motivo?.pedePretensao === true;
+    const veio = dto.pretensaoSalarial !== undefined && dto.pretensaoSalarial !== null;
+
+    if (pede && !veio) {
+      throw new BadRequestException(
+        "Este motivo pede a pretensão salarial do candidato. Informe o valor pretendido.",
+      );
+    }
+    if (!pede && veio) {
+      throw new BadRequestException(
+        "Este motivo não pede pretensão salarial. Escolha o motivo que pede o valor, ou envie o desfecho sem ele.",
+      );
+    }
+  }
+
   async registrarSaida(
     candidaturaId: string,
     dto: RegistrarSaidaDto,
@@ -1228,6 +1865,14 @@ export class CandidatosService {
     // QUEM vem da SESSÃO inteira, e não só o id: a autoria continua sendo `user.id`, e o PAPEL é o
     // que a trava do desvínculo de ALOCADO consulta, mais abaixo. Ver o bloco dela.
     const porId = user.id;
+
+    /*
+     * AS DUAS CONFERÊNCIAS DE CORPO, NA ORDEM, E ANTES DE QUALQUER TRANSAÇÃO: o motivo está na
+     * lista ativa, e a pretensão acompanha (ou não acompanha) o que aquele motivo pede. A segunda
+     * consome a LINHA que a primeira já trouxe, para o catálogo ser lido UMA vez só.
+     */
+    const motivoEscolhido = await this.exigirMotivoDoCatalogo(dto);
+    this.exigirPretensaoQuandoOMotivoPede(dto, motivoEscolhido);
 
     if (ocupaPosicao(dto.situacao)) {
       /*
@@ -1450,6 +2095,9 @@ export class CandidatosService {
      * desta gravação a etapa some da leitura viva da tela (peça P1), e sem o evento o lugar onde a
      * decisão foi tomada se perderia para sempre.
      */
+    // OS INSUMOS DA DERIVAÇÃO, ANTES DA TRANSAÇÃO (ver `insumosDaDerivacao`).
+    const { regua, etapasDeEntrega } = await this.insumosDaDerivacao();
+
     await this.db.transaction(async (tx) => {
       await gravarSaidaDaCandidatura(
         tx,
@@ -1463,7 +2111,39 @@ export class CandidatosService {
         dto.situacao,
         texto(dto.motivo),
         porId,
+        null,
+        /*
+         * ─ A PRETENSÃO SALARIAL (ponto 9), NA MESMA TRANSAÇÃO DO DESFECHO ──────────────────────
+         *
+         * ELA SÓ CHEGA AQUI DEPOIS DE `exigirPretensaoQuandoOMotivoPede` TER PASSADO, e a régua já
+         * garantiu as duas metades: o valor existe quando o motivo o pede, e NÃO existe quando ele
+         * não pede. Por isso aqui não há nenhum `if`: o que vier está certo por construção.
+         *
+         * NA MESMA TRANSAÇÃO, e não num `update` depois: o valor só faz sentido ao lado do motivo
+         * que o pediu, e gravá-los em dois tempos admitiria o desfecho gravado com a pretensão
+         * perdida, que é a metade do fato que explica a outra.
+         *
+         * ESTE CAMINHO É O ÚNICO QUE A ESCREVE, e a prova é o recorte: a pretensão só é aceita no
+         * DESCARTE (`SITUACOES_COM_MOTIVO_DE_CATALOGO`), o descarte NÃO ocupa posição
+         * (`ocupaPosicao` é falso para ele), e por isso ele nunca passa pelo caminho travado. O
+         * outro chamador de `gravarSaidaDaCandidatura` (o cancelamento da vaga) não passa o
+         * parâmetro, então não toca a coluna.
+         */
+        dto.pretensaoSalarial ?? undefined,
       );
+
+      /*
+       * O STATUS DA VAGA ACOMPANHA (Frente B, ponto 2). Descartar ou registrar a desistência do
+       * ÚLTIMO candidato que estava com o cliente tira a vaga de ENTREGUE e a devolve para ABERTA,
+       * que é exatamente o que o time precisa ver: voltou a ser vaga a preencher.
+       *
+       * AQUI A VAGA AINDA NÃO ESTAVA TRAVADA (este é o caminho SIMPLES, que não conta posição de
+       * propósito), então é a própria rotina que adquire o lock. Ela não conta nada: pergunta
+       * presença e grava, e a saída já foi gravada acima, na mesma transação.
+       */
+      if (movimentoPodeMudarAEntrega([c.etapa], etapasDeEntrega)) {
+        await derivarStatusDaVaga(tx, c.vagaId, regua, etapasDeEntrega, porId);
+      }
     });
 
     return this.candidatura(candidaturaId);
@@ -1812,7 +2492,49 @@ export class CandidatosService {
    * `ENVIADO_PARA_ADMISSAO` CONSOME POSIÇÃO e vai pelo caminho travado, linha a linha, como no
    * individual: quem escolhe a porta é a régua (`ocupaPosicao`), não o nome da situação.
    */
-  registrarSaidaEmLote(dto: RegistrarSaidaEmLoteDto, user: AuthUser): Promise<AsResultadoEmMassa> {
+  async registrarSaidaEmLote(
+    dto: RegistrarSaidaEmLoteDto,
+    user: AuthUser,
+  ): Promise<AsResultadoEmMassa> {
+    /*
+     * ─ O LOTE NÃO ACEITA MOTIVO QUE PEDE PRETENSÃO SALARIAL (decisão 5, escolha do coordenador) ─
+     *
+     * ┌─ O QUE ACONTECIA ANTES, E POR QUE "deixar falhar" NÃO ERA UMA SAÍDA ────────────────────┐
+     * │ O corpo do lote NÃO tem campo de pretensão, e a régua individual exige o valor quando o  │
+     * │ motivo o pede. Resultado: escolher um motivo marcado `pedePretensao` fazia TODAS as       │
+     * │ trinta linhas falharem, uma a uma, com a mesma frase, depois de trinta transações abertas │
+     * │ à toa. O consultor recebia um relatório de trinta erros idênticos e nenhuma pista do que  │
+     * │ fazer.                                                                                    │
+     * └───────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * ┌─ E A OUTRA SAÍDA POSSÍVEL SERIA PIOR: PERGUNTAR O VALOR UMA VEZ E APLICAR A N PESSOAS ───┐
+     * │ PRETENSÃO SALARIAL É VALOR INDIVIDUAL. Um número perguntado uma vez e gravado em trinta  │
+     * │ linhas seria dado financeiro FALSO em vinte e nove pessoas, dentro do campo que existe    │
+     * │ justamente para explicar o desfecho de cada uma. Gravar mentira é pior do que recusar, e  │
+     * │ §A.6 (minimização) empurra para o mesmo lado: não se coleta por lote o que é de um só.    │
+     * └───────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * A RECUSA É DO LOTE INTEIRO E VEM ANTES DE QUALQUER LINHA, e isso é coerente com a régua da
+     * casa: o lote PARCIAL existe para o problema que é DE UMA LINHA (esta pessoa está alocada,
+     * aquela já saiu). Este problema é DA SELEÇÃO, igual ao da vaga encerrada no lote de alocação,
+     * e problema de seleção derruba a seleção, com uma frase só e nada gravado.
+     *
+     * O RECORTE É O MESMO DA RÉGUA INDIVIDUAL (`motivoVemDoCatalogo`), e não uma segunda lista:
+     * `ENVIADO_PARA_ADMISSAO` fica de fora porque ali o campo pede PROSA, e conferi-lo contra o
+     * catálogo derrubaria a ponte A&S para Admissão, que é código validado.
+     *
+     * §A.6: a frase fala do MOTIVO e do gesto, e nunca de candidato nenhum.
+     */
+    if (motivoVemDoCatalogo(dto.situacao)) {
+      const ativos = await motivosDeDescarteAtivos(this.db);
+      const escolhido = ativos.find((m) => m.nome === dto.motivo);
+      if (escolhido?.pedePretensao === true) {
+        throw new BadRequestException(
+          "Este motivo pede a pretensão salarial, e a pretensão salarial é de cada pessoa. Por isso ele só pode ser usado no desvínculo individual: desvincule uma pessoa por vez informando o valor de cada uma, ou escolha outro motivo para o lote.",
+        );
+      }
+    }
+
     /*
      * O USUÁRIO INTEIRO DESCE PARA CADA LINHA, e não só o id dele, porque a trava do desvínculo de
      * ALOCADO lê o PAPEL. O lote NÃO reconfere nada por conta própria: ele chama a MESMA
@@ -1832,9 +2554,23 @@ export class CandidatosService {
   /**
    * MOVER NO FUNIL EM MASSA, e SÓ isto: `moverEtapa`, N vezes.
    *
-   * TROCAR DE VAGA NÃO ENTRA AQUI, e a razão não é de escopo, é de RBAC: a troca é
-   * `@Roles("MASTER","SUPER_ADMIN")`, e embutí-la numa ação em massa sem papel exigido abriria um
-   * caminho de COMUM para uma operação de Master, sem erro e sem teste vermelho.
+   * ┌─ TROCAR DE VAGA NÃO ENTRA AQUI, E O MOTIVO DEIXOU DE SER O PAPEL ──────────────────────────┐
+   * │ Estava escrito que a razão era RBAC, porque a troca seria `@Roles("MASTER","SUPER_ADMIN")`. │
+   * │ NÃO É MAIS: o `@Roles` dela saiu na Frente D, por decisão do diretor, e a troca é de        │
+   * │ QUALQUER consultor. O argumento apoiado na trava revogada seria lido pela próxima sessão    │
+   * │ como verdade, e ela concluiria, com toda a razão aparente, que agora a troca PODE entrar no │
+   * │ lote, porque o papel que a impedia não existe mais.                                         │
+   * │                                                                                            │
+   * │ O MOTIVO REAL É O QUE SEMPRE ESTEVE POR BAIXO, e ele não depende de papel nenhum: a troca   │
+   * │ TRAVA A LINHA DA VAGA DE DESTINO e confere o TETO DELA dentro da transação. Num lote, esse  │
+   * │ teto se esgota NO MEIO: a seleção de trinta entra até a vaga de destino encher, e as        │
+   * │ demais voltam em `falhas`. O resultado é metade da seleção movida e metade não, sem ninguém │
+   * │ ter dito QUAL metade importava, e sem caminho de volta em um gesto (desfazer exige trocar   │
+   * │ de novo, uma a uma, com o mesmo teto disputado do outro lado).                              │
+   * │                                                                                            │
+   * │ É A MESMA FRASE QUE A CONTROLLER JÁ DIZ, e as duas precisam concordar: o lote PARCIAL é a   │
+   * │ régua da casa para o que é reversível linha a linha, e a troca não é.                       │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
    */
   moverEtapaEmLote(dto: MoverEtapaEmLoteDto, porId: string): Promise<AsResultadoEmMassa> {
     return this.emLote(dto.candidaturaIds, (candidaturaId) =>
@@ -2086,6 +2822,8 @@ export class CandidatosService {
      * viagem" e puxar a vaga junto por fora do lock.
      */
     const regua = await this.statusVaga.regua();
+    // O SEGUNDO INSUMO DA DERIVAÇÃO, pela mesma régua e no mesmo lugar (ver `insumosDaDerivacao`).
+    const etapasDeEntrega = await this.etapas.codigosDeEntregaAoCliente();
     await this.db.transaction(async (tx) => {
       const c = await tx.query.asCandidaturas.findFirst({
         where: eq(asCandidaturas.id, candidaturaId),
@@ -2366,6 +3104,21 @@ export class CandidatosService {
         ...(posicao ? { posicaoLado: posicao.lado } : {}),
         ...aceiteRegistrado,
       });
+
+      /*
+       * ─ O STATUS DA VAGA ACOMPANHA (Frente B, ponto 2) ──────────────────────────────────────────
+       *
+       * ESTE CAMINHO COBRE TRÊS GATILHOS DE UMA VEZ, e é por isso que a chamada mora AQUI e não nos
+       * três chamadores: `aprovar`, `finalizarPosicao` e o avanço para a esteira. O que eles mudam é
+       * a SITUAÇÃO, e situação decide quem é VIVO, que é metade da pergunta da derivação: enviar
+       * para a admissão o último candidato que estava com o cliente tira a vaga de ENTREGUE.
+       *
+       * A VAGA JÁ ESTÁ TRAVADA por este método (passo 2 da trava 4), então o `FOR UPDATE` de lá
+       * dentro é o mesmo lock, já nosso, e não custa espera nenhuma.
+       */
+      if (movimentoPodeMudarAEntrega([c.etapa], etapasDeEntrega)) {
+        await derivarStatusDaVaga(tx, c.vagaId, regua, etapasDeEntrega, porId);
+      }
     });
   }
 
@@ -2444,6 +3197,133 @@ export class CandidatosService {
    *
    * O TIPO DE CADA EVENTO NÃO VEM DO BANCO: é derivado aqui, pela mesma função que o teste afirma.
    */
+  /**
+   * ─ MARCAR (OU REMARCAR) A ENTREVISTA DA CANDIDATURA (Frente E, ponto 8) ───────────────────────
+   *
+   * UM GESTO SÓ PARA OS DOIS CASOS, e o `onConflictDoUpdate` é o que torna isso correto em vez de
+   * conveniente: "já existe marcação para esta etapa?" é pergunta cuja resposta só vale no instante
+   * da GRAVAÇÃO. Perguntá-la antes, com um `select`, e decidir entre `insert` e `update` reabre a
+   * corrida entre dois consultores marcando ao mesmo tempo, e o segundo levaria violação de unique
+   * na cara em vez de remarcar. O banco resolve os dois casos numa instrução.
+   *
+   * ┌─ A ETAPA VEM DO CORPO, E NÃO DA ETAPA ATUAL DA PESSOA ───────────────────────────────────────┐
+   * │ Marcar a entrevista do CLIENTE enquanto a pessoa ainda está na etapa Soulan é o caso NORMAL: │
+   * │ é para isso que se marca com antecedência. Deduzir a etapa da candidatura gravaria a         │
+   * │ entrevista no lugar errado exatamente no caso que a OST manda prever.                        │
+   * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * AS TRÊS GUARDAS, e nenhuma sobra:
+   *   1. A CANDIDATURA EXISTE E ESTÁ VIVA. Marcar entrevista para quem foi descartado é agendar com
+   *      alguém que saiu do processo, e a linha do tempo dele passaria a ter um compromisso futuro.
+   *   2. A ETAPA EXISTE, ESTÁ ATIVA E TEM ENTREVISTA (`exigirEtapaComEntrevista`, contra o catálogo
+   *      VIVO). Substitui um `@IsIn` que congelaria em código a lista que o diretor edita.
+   *   3. A FK do banco recusa em última instância, mesmo para quem escrever por SQL cru.
+   *
+   * NÃO EXISTE DESMARCAR, e a ausência é decisão (§A.31): a OST pediu o CAMPO para o time
+   * preencher, e remarcar cobre a correção (data errada, hora errada, dia trocado). Cancelar uma
+   * entrevista é gesto novo, com pergunta própria ("cancelou ou só mudou?"), e ele é PROPOSTA no
+   * relatório, não código construído sem pedido.
+   *
+   * §A.6: grava id de candidatura, código de etapa, um instante e o id do usuário INTERNO da
+   * sessão. Nenhum dado pessoal do candidato entra aqui, e não há log.
+   */
+  async marcarEntrevista(
+    candidaturaId: string,
+    dto: MarcarEntrevistaDto,
+    porId: string,
+  ): Promise<AsCandidaturaEntrevista[]> {
+    const c = await this.db.query.asCandidaturas.findFirst({
+      where: eq(asCandidaturas.id, candidaturaId),
+    });
+    if (!c) throw new NotFoundException("Candidatura não encontrada.");
+    if (!candidaturaViva(c.situacao)) {
+      throw new ConflictException(
+        "Esta candidatura foi encerrada e não recebe entrevista nova. Para retomar o processo, aloque a pessoa de novo na vaga.",
+      );
+    }
+
+    /*
+     * ┌─ A VAGA PRECISA ESTAR EM PROCESSO (achado do `tester`, o gêmeo do da reprovação) ────────┐
+     * │ A MESMA FRESTA, PELA MESMA RAZÃO: as guardas deste método eram todas sobre a CANDIDATURA │
+     * │ (existe, está viva) e sobre a ETAPA (tem entrevista no catálogo). Nenhuma perguntava se a │
+     * │ vaga ainda é um processo, e o caminho é o mesmo caminho FELIZ da Frente B: um `ALOCADO`   │
+     * │ continua vivo na Entrevista Cliente depois de a vaga FECHAR entregando a posição dele (a  │
+     * │ trava do fechamento trata ALOCADO como TRATADO).                                          │
+     * │                                                                                           │
+     * │ O QUE UM CLIQUE PRODUZIA ALI: uma entrevista MARCADA PARA O FUTURO numa vaga terminada,   │
+     * │ que entra na agenda da semana (o índice `idx_as_candidatura_entrevistas_agenda` existe    │
+     * │ para essa leitura) e chama o time para um compromisso de um processo que acabou.           │
+     * │                                                                                           │
+     * │ A RÉGUA É A MESMA de `fechar`, `cancelar`, do envio de shortlist e da reprovação pelo     │
+     * │ cliente: `papelDeVagaEmProcesso`. Nenhuma lista nova de papéis vivos é escrita aqui.      │
+     * │                                                                                           │
+     * │ A ORDEM É DELIBERADA: a guarda da VAGA vem ANTES da do catálogo de etapas. Quem clica numa │
+     * │ vaga encerrada precisa ouvir que a VAGA acabou, e não que "a etapa não tem entrevista",   │
+     * │ que mandaria a pessoa configurar catálogo para resolver um problema que não é de catálogo.│
+     * └───────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    const regua = await this.statusVaga.regua();
+    const vagaDaCandidatura = await this.db.query.vagas.findFirst({
+      where: eq(vagas.id, c.vagaId),
+    });
+    if (!vagaDaCandidatura) throw new NotFoundException("Vaga da candidatura não encontrada.");
+    if (!papelDeVagaEmProcesso(regua.linha(vagaDaCandidatura.status).papel)) {
+      throw new ConflictException(
+        `Esta vaga está em "${regua.rotulo(vagaDaCandidatura.status)}" e não tem processo em andamento. Não é possível marcar entrevista nela.`,
+      );
+    }
+
+    await this.etapas.exigirEtapaComEntrevista(dto.etapa);
+
+    const agendadaEm = new Date(dto.agendadaEm);
+
+    await this.db
+      .insert(asCandidaturaEntrevistas)
+      .values({ candidaturaId, etapa: dto.etapa, agendadaEm, agendadaPorId: porId })
+      /*
+       * REMARCAR É ESTE `onConflictDoUpdate`, e o alvo é o MESMO par do unique do banco. O AUTOR É
+       * REESCRITO junto com a data, de propósito: quem remarcou é quem responde por aquela
+       * marcação, e manter o autor original diria que a entrevista das 15h foi marcada por alguém
+       * que marcou outra coisa. `atualizado_em` é empurrado na mão porque `onConflictDoUpdate` não
+       * dispara o default da coluna.
+       */
+      .onConflictDoUpdate({
+        target: [asCandidaturaEntrevistas.candidaturaId, asCandidaturaEntrevistas.etapa],
+        set: { agendadaEm, agendadaPorId: porId, atualizadoEm: new Date() },
+      });
+
+    return this.listarEntrevistas(candidaturaId);
+  }
+
+  /**
+   * AS ENTREVISTAS DA CANDIDATURA, na ordem da agenda (a mais próxima primeiro).
+   *
+   * O AUTOR JÁ VEM RESOLVIDO EM NOME, numa consulta só, pela mesma razão do histórico de etapas: a
+   * alternativa seria a tela pedir o nome de cada usuário depois, uma chamada por linha.
+   *
+   * ORDEM POR `agendada_em` ASCENDENTE, e não por criação: a pergunta que a ficha faz é "o que está
+   * marcado para esta pessoa", e agenda se lê do próximo compromisso em diante.
+   *
+   * §A.6: devolve código de etapa, instante e o nome de um usuário INTERNO do EA. Nada do candidato.
+   */
+  async listarEntrevistas(candidaturaId: string): Promise<AsCandidaturaEntrevista[]> {
+    const linhas = await this.db
+      .select({ e: asCandidaturaEntrevistas, autor: usuarios.nome })
+      .from(asCandidaturaEntrevistas)
+      .leftJoin(usuarios, eq(usuarios.id, asCandidaturaEntrevistas.agendadaPorId))
+      .where(eq(asCandidaturaEntrevistas.candidaturaId, candidaturaId))
+      .orderBy(asc(asCandidaturaEntrevistas.agendadaEm));
+
+    return linhas.map((l) => ({
+      id: l.e.id,
+      candidaturaId: l.e.candidaturaId,
+      etapa: l.e.etapa,
+      agendadaEm: l.e.agendadaEm.toISOString(),
+      agendadaPorNome: l.autor,
+      atualizadoEm: l.e.atualizadoEm.toISOString(),
+    }));
+  }
+
   async listarHistoricoEtapas(candidaturaId: string): Promise<AsCandidaturaEtapaItem[]> {
     /*
      * OS DOIS JOINS DE VAGA existem para a linha do tempo poder DIZER O NOME das vagas na troca, em
@@ -2502,6 +3382,20 @@ export class CandidatosService {
       // quando a vaga foi apagada e o SET NULL levou o ponteiro.
       vagaDeRotulo: l.vagaDeNome ?? l.vagaDeCodigo ?? null,
       vagaParaRotulo: l.vagaParaNome ?? l.vagaParaCodigo ?? null,
+      /*
+       * ─ O MARCADOR DA REPROVAÇÃO PELO CLIENTE (Frente E, ponto 12) ────────────────────────────
+       *
+       * `tipo` CONTINUA `MOVIMENTO` quando isto é `true`, e é de propósito: a pessoa volta para a
+       * etapa inicial e segue VIVA, então o evento é mesmo um movimento. O que este campo faz é
+       * deixar a linha do tempo DIZER a diferença entre "voltou para a Captação" e "o cliente
+       * reprovou, e por isso voltou para a Captação", que são dois fatos para quem lê o histórico.
+       *
+       * ELE SOBREVIVE AO EXPURGO, e essa é a razão de ele existir em vez de se confiar no `motivo`
+       * ao lado: a varredura de retenção NULA todo `motivo` desta tabela (§A.6, é texto livre sobre
+       * a pessoa), e a contagem "quantos o cliente reprovou" não pode depender de uma frase que
+       * desaparece com o tempo. É o mesmo critério que preserva `situacao`, `etapa_para` e `aceite`.
+       */
+      reprovadoPeloCliente: l.h.reprovadoPeloCliente,
       ocorridoEm: l.h.ocorridoEm,
     }));
 
@@ -2595,6 +3489,67 @@ export class CandidatosService {
     return { ocupacao, candidaturas };
   }
 
+  /**
+   * ─ QUEM PODE SER TRANSFERIDO PARA ESTA VAGA (Frente D, ponto 13, conjunto "b") ─────────────────
+   *
+   * A ABA "CANDIDATOS DISPONÍVEIS" da Gestão da Vaga tem DOIS conjuntos, e eles respondem a
+   * perguntas diferentes:
+   *   (a) QUEM ESTÁ SOLTO: a busca com `semCandidatura`, que devolve PESSOAS sem processo vivo.
+   *   (b) QUEM JÁ ESTÁ EM OUTRA VAGA e pode ser TRAZIDO para esta, que é o que este método serve.
+   *
+   * ┌─ POR QUE ELE DEVOLVE CANDIDATURA, E NÃO PESSOA, e isso não é detalhe de tipo ──────────────┐
+   * │ O QUE SE TRANSFERE É A CANDIDATURA, nunca a pessoa: é a LINHA que muda de vaga, mantendo a  │
+   * │ etapa e o histórico (é isso que `trocarVaga` preserva). Uma lista de pessoas obrigaria a     │
+   * │ tela a adivinhar QUAL processo mover de quem tem dois, e adivinhar errado moveria o processo │
+   * │ de outra vaga sem ninguém pedir.                                                            │
+   * │                                                                                             │
+   * │ POR ISSO CADA LINHA JÁ VEM COM A VAGA ATUAL (`vagaId`, `vagaCodigo`, `vagaNome`), a etapa e  │
+   * │ a situação: é exatamente o que o consultor precisa ler antes de puxar alguém de outra vaga,  │
+   * │ e é o que a tela mostra para a transferência não ser um gesto às cegas.                      │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * O `trocarVaga` NÃO É DUPLICADO AQUI. Esta é uma LEITURA: ela não decide nada, não trava linha
+   * nenhuma e não confere teto. Quem decide continua sendo o `trocarVaga`, dentro da transação, com
+   * a vaga de destino travada, e é por isso que uma linha oferecida aqui ainda pode ser recusada lá
+   * (a vaga encheu no intervalo). Antecipar aquelas travas nesta leitura seria a segunda cópia da
+   * régua, e a cópia é que passaria a mentir quando a de verdade mudasse.
+   *
+   * O QUE ELE JÁ RECORTA, e são só os dois recortes que NÃO são corrida:
+   *   1. SÓ CANDIDATURA VIVA (`SITUACOES_VIVAS`): quem encerrou não tem vaga a corrigir, tem
+   *      processo a recomeçar, e para isso existe o "Trazer De Volta". É a mesma trava 4 do
+   *      `trocarVaga`, lida da MESMA constante.
+   *   2. NEM ESTA VAGA, NEM QUEM JÁ ESTÁ NELA: a linha desta vaga não se transfere para ela mesma, e
+   *      a pessoa que já tem processo vivo aqui seria recusada pelo unique parcial
+   *      `uq_as_candidaturas_viva`. Oferecer qualquer um dos dois seria propor um gesto que o banco
+   *      recusa.
+   *
+   * §A.6: nenhum CPF, nenhum contato. `candidaturasPor` não seleciona o CPF nem com a tabela do
+   * candidato no join, e esta leitura herda exatamente a mesma pobreza.
+   */
+  async transferiveisPara(vagaId: string): Promise<AsCandidaturaItem[]> {
+    const destino = await this.db.query.vagas.findFirst({ where: eq(vagas.id, vagaId) });
+    if (!destino) throw new NotFoundException("Vaga não encontrada.");
+
+    return this.candidaturasPor(
+      and(
+        inArray(asCandidaturas.situacao, SITUACOES_VIVAS),
+        ne(asCandidaturas.vagaId, vagaId),
+        /*
+         * A PESSOA QUE JÁ TEM PROCESSO VIVO NESTA VAGA SAI DA LISTA INTEIRA, e a correlação é pelo
+         * CANDIDATO (não pela candidatura): quem está ATIVO aqui e ALOCADO na vaga B não pode ter a
+         * linha da B trazida para cá, porque o unique parcial recusaria a segunda viva.
+         */
+        sql`not exists (select 1 from ${asCandidaturas} as viva_aqui
+                         where viva_aqui.candidato_id = ${asCandidaturas.candidatoId}
+                           and viva_aqui.vaga_id = ${vagaId}::uuid
+                           and viva_aqui.situacao in (${sql.join(
+                             SITUACOES_VIVAS.map((s) => sql`${s}`),
+                             sql`, `,
+                           )}))`,
+      ),
+    );
+  }
+
   // ── LEITURAS INTERNAS ─────────────────────────────────────────────────────
 
   private async candidatura(id: string): Promise<AsCandidaturaItem> {
@@ -2617,7 +3572,13 @@ export class CandidatosService {
    * §A.6: esta consulta NÃO seleciona o CPF, mesmo tendo a tabela do candidato disponível pelo join.
    * O nome basta para a tela da candidatura, e o que não é selecionado não tem como vazar.
    */
-  private async candidaturasPor(filtro: ReturnType<typeof eq>): Promise<AsCandidaturaItem[]> {
+  /*
+   * O TIPO DO FILTRO É `SQL`, E NÃO MAIS `ReturnType<typeof eq>`: o `and(...)` de que a leitura dos
+   * transferíveis precisa devolve `SQL | undefined`, e a assinatura antiga só aceitava a igualdade
+   * simples. É alargamento de PARÂMETRO, então nenhuma das três chamadas antigas muda de
+   * comportamento: `eq(...)` continua sendo um `SQL`.
+   */
+  private async candidaturasPor(filtro: SQL | undefined): Promise<AsCandidaturaItem[]> {
     const linhas = await this.db
       .select({
         c: asCandidaturas,
@@ -2665,6 +3626,21 @@ export class CandidatosService {
        * └─────────────────────────────────────────────────────────────────────────────────────────┘
        */
       posicaoLado: ladoGravado(c.posicaoLado),
+      /*
+       * ─ A PRETENSÃO SALARIAL SOBE CRU (Frente E, ponto 9) ──────────────────────────────────────
+       *
+       * `numeric` VIAJA COMO STRING, e é assim que o driver o entrega: converter para `number` aqui
+       * passaria dinheiro por ponto flutuante, que é o erro que `salarioAbertura` e o salário da
+       * admissão já evitam da mesma forma. Quem formata é a tela.
+       *
+       * §A.6, E O RECORTE FOI CONFERIDO ANTES DE SUBIR: esta função serve a FICHA de uma pessoa, as
+       * candidaturas de UMA vaga e os transferíveis de UMA vaga. A BUSCA da Central de Candidatos
+       * NÃO passa por aqui (ela devolve `AsCandidatoListItem`, que reduz até o CPF a um booleano),
+       * então o valor não desce em carga de listagem, que foi exatamente o defeito corrigido no
+       * `substituidoCpf` em 22/09. Nulo é o normal: só quem foi descartado por um motivo marcado
+       * `pedePretensao` tem valor aqui.
+       */
+      pretensaoSalarial: c.pretensaoSalarial,
     }));
   }
 

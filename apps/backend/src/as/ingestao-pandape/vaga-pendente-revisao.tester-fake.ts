@@ -675,11 +675,25 @@ export function violacoesDoAbrigoDoExpurgo(sqlDoExpurgo: string): string[] {
       "EXPURGO_NAO_PROTEGE_PELA_PROPRIEDADE: a proteção do expurgo deixou de ler `s.encerra = false`. É essa propriedade que faz o status novo ser tratado como qualquer status não encerrado, sem que a frente precise tocar no expurgo.",
     );
   }
+  /*
+   * ─ A EXCEÇÃO POR PAPEL MUDOU DE `ENTREGA` PARA `FECHAMENTO` (Frente B da Central de Vagas) ────
+   *
+   * O QUE ESTA GUARDA PROTEGE NÃO MUDOU: o status novo da fila de revisão tem de continuar abrigado
+   * pela PROPRIEDADE (`s.encerra = false`), e não por uma lista de papéis que cresça a cada frente.
+   * A exceção continua sendo UMA, e continua sendo sobre A MESMA GENTE (quem FOI CONTRATADO).
+   *
+   * O QUE MUDOU É O ENDEREÇO DELA: `ENTREGUE` deixou de encerrar, então a vaga que entregou passou
+   * a sair `FECHADA`, e a exceção passou a ser "papel FECHAMENTO **com carimbo de entrega**". Os
+   * dois sempre descreveram o mesmo conjunto (o `fechar` gravava ENTREGUE quando, e só quando,
+   * `ocupacao.finalizadas > 0`, carimbando `vagas_fechadas` na mesma gravação).
+   *
+   * A CONTAGEM DE PAPÉIS CITADOS CONTINUA SENDO UM, que é o que impede a lista de crescer.
+   */
   const papeis = [...t.matchAll(/s\.papel\s*(?:=|in)\s*\(?\s*'([a-z_]+)'/g)].map((m) => m[1]);
-  const inesperados = papeis.filter((p) => p !== "entrega");
+  const inesperados = papeis.filter((p) => p !== "fechamento");
   if (inesperados.length > 0) {
     v.push(
-      `EXPURGO_ENUMERA_PAPEIS: o expurgo passou a citar os papéis ${inesperados.join(", ")}. Enquanto ele só excetua ENTREGA, o status novo se comporta como o rascunho se comportava, QUALQUER que seja o papel dele, e é essa a razão pela qual a frente pode criar o status sem tocar no expurgo. Citar outro papel quebra essa garantia em silêncio.`,
+      `EXPURGO_ENUMERA_PAPEIS: o expurgo passou a citar os papéis ${inesperados.join(", ")}. Enquanto ele só excetua a vaga que ENTREGOU (papel FECHAMENTO com carimbo de entrega), o status novo se comporta como o rascunho se comportava, QUALQUER que seja o papel dele, e é essa a razão pela qual a frente pode criar o status sem tocar no expurgo. Citar outro papel quebra essa garantia em silêncio.`,
     );
   }
   return v;

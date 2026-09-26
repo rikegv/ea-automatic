@@ -498,7 +498,12 @@ describe("Vaga encerrada recusa o LOTE INTEIRO, e não entrega meia coisa", () =
    * É ESTADO DA VAGA, NÃO DA LINHA. Trinta recusas idênticas num relatório de falhas não é
    * resultado, é ruído: o problema é um só, é da vaga, e a resposta certa é recusar o pedido.
    */
-  for (const status of ["FECHADA", "CANCELADA", "ENTREGUE"] as const) {
+  /*
+   * `ENTREGUE` SAIU DA LISTA (Frente B da Central de Vagas): ela deixou de encerrar e voltou a
+   * RECEBER candidato, porque vaga entregue ao cliente segue em processo e segue captando. As duas
+   * que sobraram são as que encerram de verdade.
+   */
+  for (const status of ["FECHADA", "CANCELADA"] as const) {
     it(`vaga ${status} recusa o lote de adição e não grava nada`, async () => {
       const { service, escritas } = makeDb({ linhas: [], posicoesOficiais: 5, status });
 

@@ -35,7 +35,7 @@ import {
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { buscarCandidatos, mensagemDoErro } from "@/lib/as-candidatos";
+import { avisoDeCorte, buscarCandidatos, mensagemDoErro } from "@/lib/as-candidatos";
 import { adicionarCandidatosEmLote } from "@/lib/as-candidatos-lote";
 import { ResultadoLoteModal } from "@/components/as/vagas/ResultadoLoteModal";
 
@@ -66,6 +66,8 @@ export function AdicionarCandidatosEmLoteModal({
   const [confirmando, setConfirmando] = useState(false);
   const [enviando, setEnviando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
+  /** O aviso do corte da busca: nulo é lista inteira, texto é "sobrou gente além desta". */
+  const [avisoCorte, setAvisoCorte] = useState<string | null>(null);
   const [resultado, setResultado] = useState<{
     dados: AsResultadoEmMassa;
     nomes: Map<string, string>;
@@ -74,7 +76,14 @@ export function AdicionarCandidatosEmLoteModal({
   const carregar = useCallback(async () => {
     setCarregando(true);
     try {
-      setDisponiveis(await buscarCandidatos({ semCandidatura: true }, token));
+      /*
+       * O CORTE DA BUSCA DITO EM VOZ ALTA (Frente D, ponto 15). Aqui ele dói mais do que no modal
+       * individual: o "selecionar todos os visíveis" marca o que a lista mostra, e uma lista
+       * cortada em silêncio faria "todos" querer dizer "os 200 mais recentes" sem avisar ninguém.
+       */
+      const pagina = await buscarCandidatos({ semCandidatura: true }, token);
+      setDisponiveis(pagina.itens);
+      setAvisoCorte(avisoDeCorte(pagina));
     } catch (err) {
       setErro(mensagemDoErro(err, "Falha ao carregar os candidatos disponíveis."));
     } finally {
@@ -189,6 +198,12 @@ export function AdicionarCandidatosEmLoteModal({
                   <span className="font-semibold tabular-nums text-text">{marcados.length}</span>
                 </span>
               </div>
+
+              {/* O CORTE DA LISTA, ANTES DA SELEÇÃO: quem marca "todos os visíveis" precisa saber
+                  que existe gente fora desta janela. */}
+              {avisoCorte ? (
+                <p className="mb-3 text-[12px] text-warn">{avisoCorte}</p>
+              ) : null}
 
               {visiveis.length === 0 ? (
                 <p className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2.5 text-[13px] text-dim">

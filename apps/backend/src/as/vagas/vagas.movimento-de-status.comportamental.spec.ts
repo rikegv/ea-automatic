@@ -230,12 +230,52 @@ describe("o destino é conferido contra o catálogo", () => {
     expect(banco.escritas.filter((e) => e.tabela === "vagas")).toHaveLength(0);
   });
 
-  it("recusa os status de sistema que encerram (ENTREGUE, FECHADA, CANCELADA)", async () => {
-    for (const destino of ["ENTREGUE", "FECHADA", "CANCELADA"]) {
+  /**
+   * ─ A ENTREGA SAIU DESTA LISTA E VIROU O TESTE DE BAIXO (Frente B da Central de Vagas) ────────
+   *
+   * MUDANÇA DE REQUISITO, e não conserto de teste: `ENTREGUE` deixou de encerrar e passou a ser
+   * DESTINO MANUAL de propósito, porque o diretor quer `ABERTA <-> ENTREGUE` no seletor. As duas
+   * que continuam fora são as que ENCERRAM, e elas continuam tendo porta própria com régua
+   * (motivo do catálogo, candidato tratado, posição preenchida), que é o que esta asserção
+   * protege: "mover status" não pode ser a terceira porta para o estado terminal.
+   */
+  it("recusa os status de sistema que encerram (FECHADA, CANCELADA)", async () => {
+    for (const destino of ["FECHADA", "CANCELADA"]) {
       const { service, vaga } = cenario("ABERTA");
       expect(await erroDe(() => mover(service)(destino)), `${destino} não é destino manual`).not.toBeNull();
       expect(vaga.status).toBe("ABERTA");
     }
+  });
+
+  it("ACEITA a ENTREGA como destino manual: é o par `ABERTA <-> ENTREGUE` do diretor", async () => {
+    const { service, vaga } = cenario("ABERTA");
+    expect(await erroDe(() => mover(service)("ENTREGUE"))).toBeNull();
+    expect(vaga.status).toBe("ENTREGUE");
+  });
+
+  it("ACEITA a volta: da ENTREGA para a ABERTURA, que é a outra metade do par", async () => {
+    const { service, vaga } = cenario("ENTREGUE");
+    expect(await erroDe(() => mover(service)("ABERTA"))).toBeNull();
+    expect(vaga.status).toBe("ABERTA");
+  });
+
+  /**
+   * ─ O CARIMBO QUE FAZ O MANUAL GRUDAR (Frente B, ponto 2) ─────────────────────────────────────
+   *
+   * ESTA É A ÚNICA ESCRITA DE `status_manual_em` NO SISTEMA, e é ela que a derivação lê para não
+   * desfazer o que o time decidiu. Sem o carimbo, o movimento manual seria revertido na primeira
+   * movimentação de candidato daquela vaga, e a decisão do consultor viraria ruído.
+   *
+   * QUEM vem da SESSÃO, nunca do corpo: autoria é trilha, não campo de formulário.
+   */
+  it("o movimento manual CARIMBA quem moveu e quando, na mesma gravação do status", async () => {
+    const { service, banco } = cenario("ABERTA");
+    await mover(service)("STAND_BY");
+
+    const gravacao = banco.escritas.find((e) => e.tabela === "vagas" && e.tipo === "update");
+    const valores = (gravacao as unknown as { valores: Record<string, unknown> }).valores;
+    expect(valores.statusManualEm).toBeInstanceOf(Date);
+    expect(valores.statusManualPorId).toBeDefined();
   });
 
   it("recusa destino que não existe no catálogo", async () => {
@@ -251,7 +291,9 @@ describe("a origem é conferida: vaga encerrada não volta a andar", () => {
    * seletor: o carimbo de contagem fica abandonado, o contador de dias volta a correr e a trilha do
    * cancelamento passa a afirmar um fato que já não vale.
    */
-  it.each(["ENTREGUE", "FECHADA", "CANCELADA"])("recusa mover a vaga %s", async (origem) => {
+  // `ENTREGUE` SAIU DA LISTA na Frente B: ela não encerra mais, então sair dela é movimento
+  // legítimo (é a volta do par `ABERTA <-> ENTREGUE`). As duas que sobraram são as que encerram.
+  it.each(["FECHADA", "CANCELADA"])("recusa mover a vaga %s", async (origem) => {
     const { service, vaga, banco } = cenario(origem);
     expect(await erroDe(() => mover(service)("STAND_BY"))).not.toBeNull();
     expect(vaga.status).toBe(origem);

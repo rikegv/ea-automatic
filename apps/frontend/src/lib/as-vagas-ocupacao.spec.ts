@@ -80,8 +80,14 @@ describe("quais status encerram a vaga", () => {
     expect(vagaEncerrada("ABERTA")).toBe(false);
   });
 
-  it("ENTREGUE, FECHADA e CANCELADA são encerramento", () => {
-    expect(vagaEncerrada("ENTREGUE")).toBe(true);
+  /*
+   * ─ A ENTREGA SAIU DESTA LISTA (Frente B da Central de Vagas) ────────────────────────────────
+   * MUDANÇA DE REQUISITO: `ENTREGUE` deixou de encerrar e virou estado VIVO ("entregue ao cliente,
+   * ainda NÃO finalizada"). Quem encerra é FECHADA e CANCELADA, e o `fechar` do backend passou a
+   * gravar SEMPRE o fechamento.
+   */
+  it("FECHADA e CANCELADA são encerramento, e a ENTREGUE é vaga VIVA", () => {
+    expect(vagaEncerrada("ENTREGUE")).toBe(false);
     expect(vagaEncerrada("FECHADA")).toBe(true);
     expect(vagaEncerrada("CANCELADA")).toBe(true);
   });
@@ -109,7 +115,8 @@ describe("posições preenchidas do lado OFICIAL", () => {
   });
 
   it("vaga ENCERRADA mantém o número congelado, mesmo com a derivada zerada", () => {
-    const v = vaga("ENTREGUE", 1, null, 0);
+    // `FECHADA` NO LUGAR DE `ENTREGUE`: a entrega deixou de encerrar (Frente B).
+    const v = vaga("FECHADA", 1, null, 0);
     expect(preenchidas(v, "oficial")).toBe(1);
     expect(origemContagem(v, "oficial")).toBe("fechamento");
   });
@@ -149,7 +156,7 @@ describe("posições preenchidas do lado BANCO", () => {
   });
 
   it("vaga ENCERRADA mostra o banco contado no fechamento", () => {
-    const v = vaga("ENTREGUE", 3, 2, 0, 0);
+    const v = vaga("FECHADA", 3, 2, 0, 0);
     expect(preenchidas(v, "banco")).toBe(2);
     expect(origemContagem(v, "banco")).toBe("fechamento");
   });
@@ -184,7 +191,7 @@ describe("os dois cilindros não se contaminam", () => {
 
   it("vaga ENCERRADA com derivada diferente do congelado mostra os DOIS congelados", () => {
     // Derivada 4 e 6, congelado 1 e 2: o histórico manda nos dois lados, não só no oficial.
-    const v = vaga("ENTREGUE", 1, 2, 4, 6);
+    const v = vaga("FECHADA", 1, 2, 4, 6);
     expect(preenchidas(v, "oficial")).toBe(1);
     expect(preenchidas(v, "banco")).toBe(2);
     expect(origemContagem(v, "oficial")).toBe("fechamento");
@@ -225,7 +232,7 @@ describe("os quatro casos da homologação", () => {
     },
     {
       nome: "PS-2026-001",
-      v: vaga("ENTREGUE", 1, 1, 0, 0),
+      v: vaga("FECHADA", 1, 1, 0, 0),
       metaOficial: 3,
       oficial: 1,
       metaBanco: 4,

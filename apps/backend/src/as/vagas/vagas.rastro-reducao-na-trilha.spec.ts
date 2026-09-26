@@ -585,7 +585,8 @@ describe("o passo 4: a vaga rebaixada pela TRILHA chega a FECHAR, e o rastro con
     // E A VAGA FECHA PELA PORTA NORMAL: `faltam` deu zero, então nem `forcar` nem Master.
     const fechada = await service.fechar("vaga-1", FECHAMENTO as never, COMUM);
 
-    expect(vaga.status).toBe("ENTREGUE");
+    // A VAGA SAI `FECHADA` desde a Frente B: `ENTREGUE` virou estado VIVO e deixou de ser desfecho.
+    expect(vaga.status).toBe("FECHADA");
     expect(vaga.vagasFechadas).toBe(3);
     expect(fechada.fechamentoForcado).toBeNull();
 
@@ -614,7 +615,7 @@ describe("o passo 4: a vaga rebaixada pela TRILHA chega a FECHAR, e o rastro con
 
     // Mesmo status, mesma contagem, mesma trilha de forçamento vazia do caso anterior. Sem o rastro,
     // os dois fechamentos seriam o MESMO registro e a pergunta não teria resposta em lugar nenhum.
-    expect(fechada.status).toBe("ENTREGUE");
+    expect(fechada.status).toBe("FECHADA");
     expect(fechada.vagasFechadas).toBe(3);
     expect(fechada.fechamentoForcado).toBeNull();
     expect(fechada.metaReducoes).toEqual([]);

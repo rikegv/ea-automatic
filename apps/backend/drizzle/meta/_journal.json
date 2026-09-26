@@ -897,6 +897,34 @@
       "when": 1788244693611,
       "tag": "0128_as_candidato_origem_importacao",
       "breakpoints": true
+    },
+    {
+      "idx": 129,
+      "version": "7",
+      "when": 1788331093611,
+      "tag": "0129_as_motivos_descarte",
+      "breakpoints": true
+    },
+    {
+      "idx": 130,
+      "version": "7",
+      "when": 1788417493611,
+      "tag": "0130_as_vaga_status_derivado",
+      "breakpoints": true
+    },
+    {
+      "idx": 131,
+      "version": "7",
+      "when": 1788503893611,
+      "tag": "0131_as_frente_e",
+      "breakpoints": true
+    },
+    {
+      "idx": 132,
+      "version": "7",
+      "when": 1788590293611,
+      "tag": "0132_as_motivos_reenvio_shortlist",
+      "breakpoints": true
     }
   ]
 }

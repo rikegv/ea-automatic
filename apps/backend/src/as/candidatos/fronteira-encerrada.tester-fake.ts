@@ -9,6 +9,7 @@ import { CandidatosService } from "./candidatos.service";
 import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
 import { catalogoDeStatusFingido } from "../vaga-status/vaga-status-catalogo.fake";
 import { envioDoPortalFingido } from "../../portal/portal-envio.fake";
+import { respostaDoCatalogoDeDescarte } from "../motivos-descarte/motivos-descarte.fake";
 
 /**
  * ─ O BANCO FINGIDO DA FRONTEIRA ENCERRADA→VIVA (infraestrutura de teste, nada roda em produção) ─
@@ -194,8 +195,16 @@ export function bancoFingido(cenario: CenarioFingido) {
         [...porLado].map(([lado, quantas]) => ({ lado, quantas })),
       );
     };
-    /** A leitura da ficha, no fim de cada ação. */
+    /** A leitura da ficha, no fim de cada ação, e o CATÁLOGO DE DESCARTE quando é ele o consultado. */
     b.orderBy = () => {
+      /*
+       * O CATÁLOGO É RECONHECIDO PELA TABELA (Frente A, ponto 7): `registrarSaida` confere o motivo
+       * do DESCARTE contra `motivos_descarte` ANTES de qualquer transação. Sem este ramo, o catálogo
+       * chegaria vazio ao serviço e TODO descarte deste fake seria recusado por um 400 que nada tem
+       * a ver com a fronteira de encerrada que estas specs existem para medir.
+       */
+      const catalogo = respostaDoCatalogoDeDescarte(tabela);
+      if (catalogo) return Promise.resolve(catalogo);
       const c = acharLinha(idFiltrado) ?? linhas[0];
       return Promise.resolve([
         { c, candidatoNome: "Fulano", vagaCodigo: "PS-1", vagaNome: "Vaga", autor: "Consultor" },

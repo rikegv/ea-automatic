@@ -1,77 +1,125 @@
 /**
- * ─ A RECUSA DO CANCELAMENTO DA VAGA, LIDA DO CORPO DO 409 ─────────────────────────────────────
+ * ─ O QUE O CANCELAMENTO DA VAGA FAZ, DITO ANTES DO CLIQUE ─────────────────────────────────────
  *
- * ESTE ARQUIVO NÃO DECIDE NADA, ele LÊ a decisão que já veio do servidor. É o gêmeo do
- * `as-vaga-fechamento`, e existe pela mesma razão: reconhecer uma recusa ESTRUTURADA no meio de um
- * erro HTTP genérico é a peça que erra em silêncio. Um parser que deixe de reconhecer o corpo devolve
- * a tela ao "leia a frase e vire-se", sem nada falhar e sem ninguém perceber.
+ * ┌─ A TRAVA DE CANDIDATOS MORREU, E COM ELA O PARSER QUE VIVIA AQUI (Frente B) ───────────────┐
+ * │ ESTE ARQUIVO ERA, EM METADE, O LEITOR DA RECUSA 409 `candidatosNaoEncerrados`:              │
+ * │ `cancelamentoBloqueadoPorCandidatos` reconhecia o corpo e `fraseDoCancelamentoForcado`      │
+ * │ explicava que FORÇAR descartava todo mundo que segurava.                                    │
+ * │                                                                                             │
+ * │ OS DOIS FORAM REMOVIDOS PORQUE A RECUSA NÃO EXISTE MAIS. O backend revogou a trava 3        │
+ * │ (`travaCandidatosQueSeguram`): cancelar com candidato dentro é permitido para qualquer      │
+ * │ consultor, NINGUÉM É DESCARTADO, e quem estava vivo vai para o STAND BY, vivo. O campo      │
+ * │ `forcar` continua aceito no corpo por compatibilidade e NÃO FAZ NADA.                        │
+ * │                                                                                             │
+ * │ PARSER DE UMA RECUSA QUE NINGUÉM MAIS LANÇA NÃO É INÓCUO: ele é código morto que PARECE     │
+ * │ vivo, e a próxima pessoa a ler a tela conclui que a trava continua de pé. A frase do         │
+ * │ forçamento era pior: ela afirmava um descarte em lote que o sistema deixou de fazer.         │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────┘
  *
- * CASA-SE PELO CAMPO `reason`, NUNCA PELO TEXTO DA MENSAGEM, no padrão dos outros quatro parsers de
- * 409 deste módulo (`candidatosPendentes`, `reentradaAposEncerramento`, `bancoComOficiaisAbertas`,
- * `POSICOES_OFICIAIS_ABERTAS`): a frase muda no singular, no plural e em qualquer ajuste de texto, e
- * um parser casado por frase para de reconhecer a própria recusa que ele existe para reconhecer.
+ * O QUE SOBROU AQUI SÃO AS DUAS FRASES QUE A TELA PRECISA DIZER, e nenhuma delas trava nada:
+ *   1. `avisoDeProcessosEncerrados`: quantos processos daquela vaga JÁ acabaram (peça 1 da onda B3);
+ *   2. `avisoDoDestinoDoCancelamento`: para onde vai quem ainda está em processo (Frente B).
  *
- * OS CAMPOS SÃO CONFERIDOS, e não presumidos do discriminador. É `podeForcar` que decide se a tela
- * desenha o gesto de forçar, e é `naoEncerrados` que ela LISTA. Um corpo pela metade, aceito por
- * causa do `reason`, viraria uma caixa vazia dizendo que há gente em processo sem dizer quem.
- *
- * `podeForcar` É CONVENIÊNCIA DA TELA, NUNCA A TRAVA, e isto é o contrato, não interpretação: o
- * servidor recalcula o papel a cada requisição e responde 403 ao COMUM que mandar `forcar: true`.
- * Este campo serve para o consultor comum não ver um botão que só sabe falhar, e para mais nada.
- *
- * §A.6: nome, etapa, situação e os ids da candidatura, exatamente o que a recusa do fechamento já
- * trafega hoje em produção. Sem CPF, sem contato, sem identificador direto da pessoa.
+ * §A.6: só contagens e vocabulário de processo. Nenhum nome, nenhum CPF, nenhum id de pessoa.
  * §A.11 (sem travessão), §A.24 (as frases daqui são apoio, escrita normal).
  */
 
 import {
+  CANDIDATURA_SITUACOES,
   candidaturaEncerradaParaCancelamento,
+  candidaturaViva,
   ehSaidaSemExito,
-  type AsVagaCancelamentoBloqueado,
+  type AsOcupacaoVaga,
   type AsVagaCancelamentoPorSituacao,
   type AsVagaCancelamentoPrevia,
 } from "@ea/shared-types";
-import { ApiError } from "@/lib/api";
 
 /**
- * A RECUSA POR CANDIDATO NÃO ENCERRADO, reconhecida pelo CORPO do 409.
+ * ─ QUANTAS PESSOAS O CANCELAMENTO VAI MOVER PARA O STAND BY ────────────────────────────────────
  *
- * O OUTRO 409 DESTA MESMA ROTA NÃO CAI AQUI, e é de propósito: a vaga que já saiu de ABERTA responde
- * "Esta vaga já foi encerrada. Recarregue a página.", sem `reason` e sem lista, e segue pelo caminho
- * genérico de erro, que é onde a frase do backend aparece inteira. Duas recusas, dois tratamentos.
+ * A RÉGUA É A DO BACKEND, LETRA POR LETRA: `moverVivosParaODestino` move quem `candidaturaViva`
+ * diz que está vivo, e só isso. Nenhuma lista de situação é escrita aqui, pelo motivo de sempre: uma
+ * segunda lista concorda com a primeira no dia em que é escrita e diverge na primeira situação nova.
+ *
+ * ┌─ A CONTA É `emSelecao` MAIS OS DESFECHOS VIVOS, E O `ATIVO` É EXCLUÍDO À MÃO ──────────────┐
+ * │ `emSelecao` JÁ É a contagem de quem está `ATIVO` (contrato do `AsOcupacaoVaga`), e          │
+ * │ `porDesfecho` é "quem JÁ RECEBEU DECISÃO", o que inclui APROVADO, ALOCADO e                 │
+ * │ ENVIADO_PARA_ADMISSAO, os três vivos. Somar os dois é a conta certa.                        │
+ * │                                                                                             │
+ * │ A EXCLUSÃO EXPLÍCITA DO `ATIVO` É DEFENSIVA E NÃO DECORATIVA: pelo contrato ele nunca       │
+ * │ aparece em `porDesfecho`, mas se um dia aparecer, somar os dois mapas contaria a mesma      │
+ * │ pessoa DUAS VEZES, e um número inflado numa frase que explica um efeito é pior do que a     │
+ * │ frase não existir.                                                                           │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * NULO QUER DIZER "NÃO SEI", e não zero: a vaga pode chegar à tela sem ocupação (a janela entre a
+ * publicação do backend e a da tela), e afirmar "ninguém será movido" sem ter contado seria a tela
+ * garantindo o que não apurou. Quem lê decide o que fazer com o nulo.
+ *
+ * O NÚMERO É TETO, NÃO EXATO, e a diferença é inofensiva: o backend não move quem JÁ está na etapa
+ * de destino (mover alguém para onde ele já está seria um evento de trilha sem fato). A frase fala
+ * de "quem está em processo", que é verdade para todos eles.
  */
-export function cancelamentoBloqueadoPorCandidatos(
-  err: unknown,
-): AsVagaCancelamentoBloqueado | null {
-  if (!(err instanceof ApiError) || err.status !== 409) return null;
-  const corpo = err.data as Partial<AsVagaCancelamentoBloqueado> | undefined;
-  if (corpo?.reason !== "candidatosNaoEncerrados") return null;
-  if (!Array.isArray(corpo.naoEncerrados)) return null;
-  if (typeof corpo.podeForcar !== "boolean") return null;
-  return corpo as AsVagaCancelamentoBloqueado;
+export function quantosVaoParaODestino(
+  ocupacao: AsOcupacaoVaga | null | undefined,
+): number | null {
+  if (!ocupacao) return null;
+  const decididosVivos = CANDIDATURA_SITUACOES.filter(
+    (s) => candidaturaViva(s) && s !== "ATIVO",
+  ).reduce((total, s) => total + (ocupacao.porDesfecho?.[s] ?? 0), 0);
+  return ocupacao.emSelecao + decididosVivos;
+}
+
+/** O que o modal desenha sobre o destino: a frase e a garantia que vem logo atrás dela. */
+export interface AvisoDoDestinoDoCancelamento {
+  frase: string;
+  nota: string;
 }
 
 /**
- * O QUE O CANCELAMENTO FORÇADO FAZ COM QUEM AINDA ESTÁ EM PROCESSO, dito ANTES do clique.
+ * ─ PARA ONDE VAI QUEM ESTÁ NA VAGA, DITO ANTES DO CLIQUE (Frente B) ────────────────────────────
  *
- * ISTO NÃO É DETALHE DE IMPLEMENTAÇÃO, é o EFEITO QUE A PESSOA ESTÁ AUTORIZANDO: forçar encerra as
- * candidaturas que seguram o cancelamento, marcando cada uma como descartada com o motivo do
- * cancelamento. Quem clica precisa ler isso, com o número de pessoas na frente, porque não há como
- * desfazer descarte em lote pela tela.
+ * ELA SUBSTITUI A OPÇÃO DE FORÇAR, e a troca é de natureza: onde havia um GESTO que descartava
+ * gente, há agora uma INFORMAÇÃO sobre o que o cancelamento faz sozinho. Nada aqui desabilita o
+ * botão, pede confirmação ou muda a régua.
  *
- * POR QUE O EFEITO EXISTE (e por que ele não pode ser "só cancelar a vaga e deixar a lista quieta"):
- * candidatura viva dentro de vaga cancelada nunca seria expurgada pela retenção, ou seja, dado
- * pessoal ficaria parado para sempre num processo que ninguém vai retomar. É exigência de LGPD
- * (§A.6), e é por isso que o cancelamento forçado encerra em vez de abandonar.
+ * A NOTA DIZ O QUE NÃO MUDA, e é ela que responde a pergunta seguinte de quem acabou de ler que um
+ * monte de gente vai ser movida: ninguém é descartado e a SITUAÇÃO de cada um fica como está, então
+ * quem entregou posição continua entregue e a ocupação da vaga não se mexe.
+ *
+ * "STAND BY" É O NOME QUE O PRÓPRIO BACKEND ESCREVE na trilha do cancelamento e no motivo de cada
+ * movimento, então a tela e o histórico contam a mesma história. A etapa de destino é uma FLAG do
+ * catálogo (`destino_do_cancelamento`) que a leitura pública de etapas não serve, então a tela não
+ * tem como lê-la hoje; está reportado ao coordenador.
  *
  * §A.24: frase de apoio, escrita normal.
  */
-export function fraseDoCancelamentoForcado(quantos: number): string {
-  const pessoas =
+export function avisoDoDestinoDoCancelamento(
+  quantos: number | null,
+): AvisoDoDestinoDoCancelamento {
+  const nota =
+    "Ninguém é descartado e a situação de cada pessoa não muda: quem já entregou posição continua entregue.";
+  if (quantos === null) {
+    return {
+      frase:
+        "Quem ainda está em processo nesta vaga vai para a etapa Stand By, vivo, e continua encontrável para ser transferido ou realocado depois.",
+      nota,
+    };
+  }
+  if (quantos === 0) {
+    return {
+      frase: "Não há ninguém em processo nesta vaga, então o cancelamento não move nenhuma pessoa.",
+      nota,
+    };
+  }
+  /* O PLURAL É CONCORDADO NA FRASE INTEIRA, e não só no substantivo: a lição está escrita em
+     `as-vaga-trilha` ("1 posição oficial preenchidas" chegou à tela da PS-2026-001). Aqui são
+     quatro palavras que concordam de uma vez (pessoa, está, vai, encontrável). */
+  const frase =
     quantos === 1
-      ? "a 1 pessoa que ainda está em processo"
-      : `as ${quantos} pessoas que ainda estão em processo`;
-  return `Cancelando assim mesmo, o sistema ENCERRA ${pessoas} nesta vaga: cada candidatura é marcada como descartada, com o motivo do cancelamento registrado. Isso não se desfaz pela tela, e fica no histórico com o seu nome e a data.`;
+      ? "1 pessoa ainda está em processo nesta vaga e vai para a etapa Stand By, viva, e continua encontrável para ser transferida ou realocada depois."
+      : `${quantos} pessoas ainda estão em processo nesta vaga e vão para a etapa Stand By, vivas, e continuam encontráveis para serem transferidas ou realocadas depois.`;
+  return { frase, nota };
 }
 
 /**

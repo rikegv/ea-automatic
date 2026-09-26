@@ -60,6 +60,9 @@ const ENVIADO: AsCandidaturaItem = {
   alocadoPorNome: "Ana",
   atualizadoEm: "2026-09-01T12:00:00.000Z",
   ultimoContatoEm: null,
+  // A PRETENSÃO SALARIAL entrou em `AsCandidaturaItem` na Frente E (ponto 9). NULA é o normal:
+  // só quem foi descartado por um motivo marcado `pedePretensao` no catálogo tem valor.
+  pretensaoSalarial: null,
 };
 
 function abrir(over: Partial<AsCandidaturaItem> = {}) {

@@ -245,7 +245,8 @@ describe("o contorno do gate de Master: baixar a meta até o entregue e FECHAR",
     // E AGORA A VAGA FECHA PELA PORTA NORMAL, sem Master e sem `forcar`.
     const fechada = await service.fechar("vaga-1", FECHAMENTO as never, COMUM);
 
-    expect(vaga.status).toBe("ENTREGUE");
+    // A VAGA SAI `FECHADA` desde a Frente B: `ENTREGUE` virou estado VIVO e deixou de ser desfecho.
+    expect(vaga.status).toBe("FECHADA");
     expect(vaga.vagasFechadas).toBe(3);
     // A TRILHA DO FORÇAMENTO FICA EM BRANCO, exatamente como o desvio previa: não houve forçamento.
     expect(vaga.fechamentoForcadoPorId).toBeNull();
@@ -269,7 +270,7 @@ describe("o contorno do gate de Master: baixar a meta até o entregue e FECHAR",
     // As colunas da VAGA são idênticas às do teste anterior: mesmo status, mesma contagem, mesma
     // trilha de forçamento vazia. Se o rastro não existisse, os dois fechamentos seriam o MESMO
     // registro, e a pergunta "entregou ou encolheram a meta?" não teria resposta em lugar nenhum.
-    expect(fechada.status).toBe("ENTREGUE");
+    expect(fechada.status).toBe("FECHADA");
     expect(fechada.vagasFechadas).toBe(3);
     expect(fechada.fechamentoForcado).toBeNull();
     expect(fechada.metaReducoes).toEqual([]);
@@ -332,7 +333,8 @@ describe("o contorno do gate de Master: baixar a meta até o entregue e FECHAR",
     const fechada = await service.fechar("vaga-1", FECHAMENTO as never, COMUM);
 
     // O GATE ABRIU, porque ele lê o lado OFICIAL sozinho: é este o caminho que a soma esconderia.
-    expect(vaga.status).toBe("ENTREGUE");
+    // A VAGA SAI `FECHADA` desde a Frente B: `ENTREGUE` virou estado VIVO e deixou de ser desfecho.
+    expect(vaga.status).toBe("FECHADA");
     expect(fechada.fechamentoForcado).toBeNull();
     // E O RASTRO REGISTROU A QUEDA DO OFICIAL, com o lado do banco na mesma linha para a leitura
     // saber que ele SUBIU (`paraBanco` maior que `deBanco`) em vez de ter ficado parado.
@@ -370,7 +372,7 @@ describe("o rastro é evitável? os caminhos tentados, e o que cada um devolve",
 
     await service.fechar("vaga-1", FECHAMENTO as never, COMUM);
 
-    // A vaga saiu ENTREGUE, e a rota das posições recusa a vaga encerrada. Sem isto, uma vaga que
+    // A vaga saiu FECHADA, e a rota das posições recusa a vaga encerrada. Sem isto, uma vaga que
     // fechou 3 de 3 poderia virar "3 de 1" depois do fato, e o indicador de entrega passaria a
     // mentir sobre um processo terminado.
     await expect(

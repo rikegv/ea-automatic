@@ -36,6 +36,7 @@ import { Button } from "@/components/ui/Button";
 import { Combobox } from "@/components/ui/Combobox";
 import {
   alocarEmVaga,
+  avisoDeCorte,
   buscarCandidatos,
   mensagemDoErro,
   reentradaPrecisaCiencia,
@@ -88,6 +89,11 @@ export function AlocarCandidatoModal({
   const [vagaId, setVagaId] = useState(vagaSugerida ?? "");
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
+  /**
+   * O AVISO DO CORTE DA BUSCA (Frente D, ponto 15). Nulo quer dizer que a lista está INTEIRA; com
+   * texto, quer dizer que sobrou gente além do que o seletor mostra, e o modal precisa dizê-lo.
+   */
+  const [avisoCorte, setAvisoCorte] = useState<string | null>(null);
   // O AVISO DE REENTRADA, quando a primeira tentativa esbarra no processo anterior daquela pessoa
   // NAQUELA vaga. Enquanto ele existe, o modal de ciência está aberto e nada foi alocado.
   const [reentrada, setReentrada] = useState<AsReentradaPrecisaCiencia | null>(null);
@@ -102,7 +108,15 @@ export function AlocarCandidatoModal({
     }
     setCarregando(true);
     try {
-      setDisponiveis(await buscarCandidatos({ semCandidatura: true }, token));
+      /*
+       * O CORTE DA BUSCA NÃO PODE SER SILENCIOSO (Frente D, ponto 15): a resposta é uma PÁGINA, e
+       * quando sobra gente além dela o modal DIZ isso, em vez de apresentar a janela como se fosse
+       * a lista inteira. Era assim que o candidato antigo sumia da tela de alocação sem que nada
+       * parecesse errado.
+       */
+      const pagina = await buscarCandidatos({ semCandidatura: true }, token);
+      setDisponiveis(pagina.itens);
+      setAvisoCorte(avisoDeCorte(pagina));
     } catch (err) {
       setErro(mensagemDoErro(err, "Falha ao carregar os candidatos disponíveis."));
     } finally {
@@ -225,6 +239,11 @@ export function AlocarCandidatoModal({
                       : "pessoas disponíveis na base"}
                     .
                   </span>
+                  {/* O CORTE DITO EM VOZ ALTA: sem esta linha, o número acima se apresenta como a
+                      base inteira, e quem não achar alguém conclui que a pessoa não existe. */}
+                  {avisoCorte ? (
+                    <span className="text-[11.5px] text-warn">{avisoCorte}</span>
+                  ) : null}
                 </label>
               )}
 

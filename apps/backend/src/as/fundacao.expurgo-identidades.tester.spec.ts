@@ -68,6 +68,14 @@ const ALVO = {
   data_nascimento: "1991-02-03",
   identificadorPandape: "PRECOLLAB-INVENTADO-4242",
   identificadorDigai: "DIGAI-INVENTADO-8484",
+  /**
+   * ─ A PRETENSÃO SALARIAL (Frente E, ponto 9): dado FINANCEIRO da pessoa ─────────────────────
+   *
+   * AGULHA COM VALOR IMPROVÁVEL, na régua deste arquivo: nenhum outro valor do fixture a contém
+   * como substring, e ela não aparece por acaso num JSON de datas e uuids. Um "2500" qualquer
+   * passaria verde por casar com outro pedaço do estado.
+   */
+  pretensao_salarial: "7391.73",
 } as const;
 
 /**
@@ -324,10 +332,27 @@ function bancoFingido(
     // A tabela é outra, o dono do dado é o mesmo. O fake aplica o SET de verdade para que o teste
     // possa procurar o VALOR REAL no estado final e, principalmente, para que a coluna que NÃO
     // pode ser escrita (`atualizado_em`, o relógio da retenção) apareça se alguém a acrescentar.
-    const iUpdateK = t.search(/update\s+"?as_candidaturas"?/);
-    if (iUpdateK >= 0) {
+    /*
+     * ─ TODOS OS `update as_candidaturas`, E NÃO SÓ O PRIMEIRO (correção do harness, Frente E) ──
+     *
+     * ELE LIA `t.search(...)`, QUE DEVOLVE A PRIMEIRA OCORRÊNCIA, e isso bastava enquanto havia
+     * UMA CTE escrevendo nesta tabela. Passou a haver DUAS (`motivos_expurgados` e
+     * `pretensoes_expurgadas`), e com a leitura antiga a SEGUNDA nunca era executada pelo fake: o
+     * teste da pretensão ficaria VERMELHO com o serviço certo, e, pior, um serviço que PARASSE de
+     * expurgar o motivo passaria verde se a ordem das CTEs mudasse.
+     *
+     * É CORREÇÃO DE COBERTURA, E NÃO AFROUXAMENTO: o laço executa mais do que antes, nunca menos.
+     */
+    let desdeK = 0;
+    for (;;) {
+      const resto = t.slice(desdeK);
+      const achado = resto.search(/update\s+"?as_candidaturas"?[\s,)]/);
+      if (achado < 0) break;
+      const iUpdateK = desdeK + achado;
       const fim = fimDoComando(iUpdateK);
       const iSet = t.indexOf(" set ", iUpdateK);
+      desdeK = fim;
+      if (iSet < 0 || iSet > fim) continue;
       const iWhere = indiceDoWhere(texto, iSet + 1, fim);
       const trecho = texto.slice(iSet + " set ".length, iWhere > iSet ? iWhere : fim);
       const pares = atribuicoesDoSet(trecho);
@@ -483,7 +508,14 @@ function estadoInicial(): Estado {
       { id: "i4", candidato_id: ID_CICATRIZ, fonte: "PANDAPE", identificador: CICATRIZ.identificador },
     ],
     candidaturas: [
-      { id: "k1", candidato_id: ID_ALVO, atualizado_em: ATUALIZADO_EM_ORIGINAL },
+      {
+        id: "k1",
+        candidato_id: ID_ALVO,
+        atualizado_em: ATUALIZADO_EM_ORIGINAL,
+        // A PRETENSÃO DA PESSOA QUE VAI SER EXPURGADA. Sem ela no fixture, o caso da pretensão
+        // passaria verde sobre uma coluna vazia, provando nada.
+        pretensao_salarial: ALVO.pretensao_salarial,
+      },
       { id: "k2", candidato_id: ID_CICATRIZ, atualizado_em: ATUALIZADO_EM_ORIGINAL },
       { id: "k3", candidato_id: ID_VIZINHO, atualizado_em: ATUALIZADO_EM_ORIGINAL },
     ],
@@ -758,6 +790,19 @@ const COLUNAS_PERMITIDAS: Record<string, string[]> = {
     "ultimo_contato_em",
     "admissao_id",
     "posicao_lado",
+    /**
+     * ─ A PRETENSÃO SALARIAL (Frente E, ponto 9), E A DECISÃO QUE ESTA LINHA REGISTRA ──────────
+     *
+     * ELA É DADO PESSOAL, e não identificador externo: é quanto AQUELA PESSOA pediu para
+     * trabalhar, dado financeiro de indivíduo, da mesma natureza do `motivo_descarte` ao lado.
+     * Por isso o destino dela NÃO é `as_identidades_externas`, e sim o EXPURGO, no mesmo commit,
+     * que é o que a mensagem deste teste cobra. A CTE `pretensoes_expurgadas` a nula, e o caso
+     * comportamental logo abaixo procura o VALOR REAL no estado final.
+     *
+     * A LINHA FICA (não se apaga a candidatura) pelo mesmo motivo de sempre: ela sustenta a
+     * contagem histórica das vagas. O que sai é o número, não o fato de ter havido processo.
+     */
+    "pretensao_salarial",
     "criado_em",
     "atualizado_em",
   ],
@@ -779,6 +824,32 @@ describe("nenhuma coluna identificadora sobrevive à anonimização (D1)", () =>
       ).toBe(false);
     },
   );
+
+  /**
+   * ─ A PRETENSÃO SALARIAL NÃO SOBREVIVE (Frente E, ponto 9) ──────────────────────────────────
+   *
+   * ┌─ POR QUE ELA MERECE UM CASO PRÓPRIO, E NÃO UMA LINHA EM `COLUNAS_IDENTIFICADORAS` ───────┐
+   * │ Aquela lista é de IDENTIFICADORES, e esta coluna não identifica ninguém sozinha. O que    │
+   * │ ela é: dado FINANCEIRO da pessoa, e a pergunta da §A.6 aqui não é "identifica?" e sim     │
+   * │ "é sobre a PESSOA?". Misturá-la na lista dos identificadores apagaria essa distinção, que │
+   * │ é justamente a que decide o que fica (situação, etapa: fato do PROCESSO) e o que sai.     │
+   * └───────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * SEM ESTE CASO A ANONIMIZAÇÃO SERIA APARENTE: o nome sai, o CPF sai, o e-mail sai, e sobra na
+   * MESMA linha quanto a pessoa pediu, ligado à vaga, ao cliente e à data. Em vaga de poucos
+   * candidatos isso reidentifica sozinho.
+   *
+   * O TESTE PROCURA O VALOR REAL NO ESTADO FINAL, e nunca um marcador (protocolo LGPD, 1.1):
+   * afirmar `pretensao === null` na linha do alvo ficaria verde com o valor intacto na linha ao
+   * lado, se um dia a régua da cláusula errar de pessoa.
+   */
+  it("a pretensão salarial não sobrevive em lugar nenhum do banco", async () => {
+    const { banco } = await expurgar();
+    expect(
+      sobrou(banco).includes(ALVO.pretensao_salarial),
+      "o valor de `as_candidaturas.pretensao_salarial` continua no banco depois do expurgo",
+    ).toBe(false);
+  });
 
   /** O identificador externo é dado pessoal pelo protocolo (seção 1), e some pela linha inteira. */
   it.each([ALVO.identificadorPandape, ALVO.identificadorDigai])(

@@ -66,6 +66,36 @@ vi.mock("@/lib/as-etapas", async () => {
   };
 });
 
+/**
+ * O CATÁLOGO DE MOTIVOS DE DESCARTE, FINGIDO, porque o campo de motivo do DESCARTE passou a ser um
+ * seletor alimentado por `GET /as/motivos-descarte`. Sem esta dublê ele abriria vazio no teste, que
+ * é exatamente como este arquivo falhou na primeira execução depois da mudança.
+ *
+ * A DESISTÊNCIA NÃO É AFETADA: lá o campo continua sendo prosa, e quem decide é
+ * `motivoVemDoCatalogo`, do vocabulário compartilhado.
+ */
+const MOTIVO_DO_CATALOGO = "Perfil não aderente";
+/**
+ * O SEGUNDO MOTIVO É O MARCADO `pedePretensao`, e ele existe aqui para NÃO aparecer: o servidor
+ * recusa esses motivos no lote, porque a pretensão salarial é valor de CADA pessoa e perguntá-la uma
+ * vez para valer por N gravaria um número falso em todas menos uma. Os dois nomes são igualmente
+ * plausíveis de propósito: quem filtra é a MARCA, nunca o nome.
+ */
+const MOTIVO_QUE_PEDE_PRETENSAO = "Fora da faixa salarial";
+vi.mock("@/lib/as-motivos-descarte", () => ({
+  listarMotivosDescarteAtivos: vi.fn(async () => []),
+  useMotivosDescarte: (_token: string | null, ativo: boolean) => ({
+    motivos: ativo
+      ? [
+          { id: "m1", nome: "Perfil não aderente", ativo: true, pedePretensao: false },
+          { id: "m2", nome: "Fora da faixa salarial", ativo: true, pedePretensao: true },
+        ]
+      : [],
+    carregando: false,
+    erro: null,
+  }),
+}));
+
 vi.mock("@/lib/as-candidatos-lote", async () => {
   const real =
     await vi.importActual<typeof import("@/lib/as-candidatos-lote")>("@/lib/as-candidatos-lote");
@@ -104,6 +134,9 @@ function candidatura(over: Partial<AsCandidaturaItem> = {}): AsCandidaturaItem {
     alocadoPorNome: "Ana",
     atualizadoEm: "2026-09-01T12:00:00.000Z",
     ultimoContatoEm: null,
+    // A PRETENSÃO SALARIAL entrou em `AsCandidaturaItem` na Frente E (ponto 9). NULA é o normal:
+    // só quem foi descartado por um motivo marcado `pedePretensao` no catálogo tem valor.
+    pretensaoSalarial: null,
     ...over,
   };
 }
@@ -211,9 +244,50 @@ describe("finalizar posição em massa", () => {
 });
 
 describe("desvincular em massa", () => {
-  it("não confirma com menos de dois caracteres ÚTEIS no motivo", () => {
+  /**
+   * O DESCARTE (o desfecho que o lote abre por padrão) ESCOLHE NO CATÁLOGO, e o lote precisava
+   * acompanhar tanto quanto a tela individual: `registrarSaidaEmLote` chama a MESMA `registrarSaida`
+   * linha a linha, então texto livre aqui falharia trinta vezes de uma vez, com 400 em todas.
+   */
+  it("o descarte em massa escolhe o motivo no CATÁLOGO, e sem escolha não confirma", () => {
     montar([candidatura()]);
     fireEvent.click(screen.getByRole("button", { name: /desvincular da vaga \(1\)/i }));
+
+    const confirmar = screen
+      .getAllByRole("button", { name: "Desvincular da vaga" })
+      .at(-1) as HTMLButtonElement;
+    expect(confirmar.disabled).toBe(true);
+    // NÃO HÁ CAIXA DE TEXTO no desfecho de descarte: é esta ausência que impede a tela de mandar
+    // texto livre para uma rota que agora confere o motivo contra a lista.
+    expect(screen.queryByLabelText(/motivo da saída/i)).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Motivo do descarte" }));
+    fireEvent.click(screen.getByRole("option", { name: MOTIVO_DO_CATALOGO }));
+    expect(confirmar.disabled).toBe(false);
+  });
+
+  /**
+   * O MOTIVO QUE PEDE A PRETENSÃO NÃO É OFERECIDO NO LOTE, e a ausência é a metade da tela de uma
+   * régua que o servidor passou a impor: perguntada UMA vez para valer por N pessoas, a pretensão
+   * gravaria dado financeiro FALSO em todas menos uma. Oferecê-lo aqui faria o consultor escolher o
+   * motivo certo na cabeça dele e levar a recusa depois de marcar trinta linhas.
+   *
+   * NO DESFECHO INDIVIDUAL NADA MUDA: lá a pergunta é feita para uma pessoa e a resposta é dela, e
+   * é `MoverCandidaturaModal.pretensao.spec` que afirma isso.
+   */
+  it("NÃO oferece, no lote, o motivo marcado com a pretensão salarial", () => {
+    montar([candidatura()]);
+    fireEvent.click(screen.getByRole("button", { name: /desvincular da vaga \(1\)/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Motivo do descarte" }));
+
+    expect(screen.getByRole("option", { name: MOTIVO_DO_CATALOGO })).toBeTruthy();
+    expect(screen.queryByRole("option", { name: MOTIVO_QUE_PEDE_PRETENSAO })).toBeNull();
+  });
+
+  it("a desistência continua sendo PROSA, e menos de dois caracteres ÚTEIS não confirma", () => {
+    montar([candidatura()]);
+    fireEvent.click(screen.getByRole("button", { name: /desvincular da vaga \(1\)/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Desistiu Do Processo/i }));
 
     const confirmar = screen
       .getAllByRole("button", { name: "Desvincular da vaga" })
@@ -227,6 +301,26 @@ describe("desvincular em massa", () => {
 
     fireEvent.change(screen.getByLabelText(/motivo da saída/i), { target: { value: " ok " } });
     expect(confirmar.disabled).toBe(false);
+  });
+
+  /**
+   * TROCAR DE DESFECHO LIMPA O MOTIVO, e agora isso é integridade e não zelo: o campo muda de
+   * NATUREZA entre os dois, e um nome do catálogo sobrevivente viraria a "prosa" que explica uma
+   * desistência que ninguém explicou.
+   */
+  it("trocar de desfecho limpa o motivo que já estava escolhido", () => {
+    montar([candidatura()]);
+    fireEvent.click(screen.getByRole("button", { name: /desvincular da vaga \(1\)/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Motivo do descarte" }));
+    fireEvent.click(screen.getByRole("option", { name: MOTIVO_DO_CATALOGO }));
+
+    fireEvent.click(screen.getByRole("button", { name: /Desistiu Do Processo/i }));
+    expect((screen.getByLabelText(/motivo da saída/i) as HTMLTextAreaElement).value).toBe("");
+    expect(
+      (
+        screen.getAllByRole("button", { name: "Desvincular da vaga" }).at(-1) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
   });
 
   it("manda o motivo aparado e o desfecho escolhido", async () => {

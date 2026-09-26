@@ -198,8 +198,10 @@ export function NovoCandidatoModal({
     async (cpf: string) => {
       setProcurando(true);
       try {
-        const achados = await buscarCandidatos({ cpf }, token);
-        setExistente(achados.length > 0 ? { id: achados[0].id, nome: achados[0].nome } : null);
+        // A BUSCA VIROU PÁGINA (Frente D, ponto 15): aqui o CPF é exato, então a página tem zero ou
+        // uma linha, e o corte não alcança este caminho. O `itens` é a mesma lista de antes.
+        const { itens } = await buscarCandidatos({ cpf }, token);
+        setExistente(itens.length > 0 ? { id: itens[0].id, nome: itens[0].nome } : null);
       } catch {
         // Falha de rede na procura não pode travar o cadastro: o backend tem a segunda camada do
         // dedup (o unique do banco) e recusa a duplicata de qualquer jeito, com frase pronta.

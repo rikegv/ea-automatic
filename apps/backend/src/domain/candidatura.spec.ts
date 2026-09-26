@@ -456,9 +456,20 @@ describe("TRAVA 1: aprovar além das posições", () => {
  * inativo e recebendo, e quem afirma isso é o teste da própria migration.
  */
 describe("TRAVA 2: alocar em vaga fechada", () => {
-  it("os três que ENCERRAM não recebem candidato novo, e é o mesmo trio de sempre", () => {
+  /**
+   * ─ O TRIO VIROU UM PAR, E A MUDANÇA É DE REQUISITO (Frente B da Central de Vagas) ────────────
+   *
+   * `ENTREGUE` SAIU DESTA LISTA porque ela deixou de ENCERRAR: no conceito dos quatro estados do
+   * diretor ela é um estado VIVO ("entregue ao cliente, ainda NÃO finalizada"), e vaga em entrega
+   * continua captando, que é o normal da operação. Quem encerra passou a ser só `FECHADA` e
+   * `CANCELADA`, e as duas continuam tendo porta própria com régua.
+   *
+   * A ASSERÇÃO DO PAR DE FLAGS NÃO MUDOU UMA VÍRGULA, e ela é o que segura o resto: terminal
+   * continua sem receber gente, pelo mesmo CHECK 2 do banco.
+   */
+  it("os DOIS que ENCERRAM não recebem candidato novo, e a ENTREGA não é mais um deles", () => {
     const naoRecebem = VAGA_STATUS_SEMENTE.filter((s) => !s.recebeCandidato).map((s) => s.codigo);
-    expect(naoRecebem).toEqual(["ENTREGUE", "FECHADA", "CANCELADA"]);
+    expect(naoRecebem).toEqual(["FECHADA", "CANCELADA"]);
     // E OS DOIS FLAGS ANDAM JUNTOS NA SEMENTE, o que é a leitura do CHECK 2 do banco: terminal não
     // recebe gente. Eles NÃO são o mesmo flag (um status pausado é `recebeCandidato: false` e
     // `encerra: false`), e é por isso que a asserção é sobre a direção, e não sobre a igualdade.
@@ -476,7 +487,9 @@ describe("TRAVA 2: alocar em vaga fechada", () => {
    */
   it("ABERTA recebe, o RASCUNHO também, e a fila de revisão também", () => {
     const recebem = VAGA_STATUS_SEMENTE.filter((s) => s.recebeCandidato).map((s) => s.codigo);
-    expect(recebem).toEqual(["RASCUNHO", "ABERTA", "PENDENTE_REVISAO"]);
+    // `ENTREGUE` ENTROU NESTA LISTA na Frente B, na ordem da semente: a vaga entregue ao cliente
+    // segue viva e segue captando, enquanto o processo dela não termina.
+    expect(recebem).toEqual(["RASCUNHO", "ABERTA", "ENTREGUE", "PENDENTE_REVISAO"]);
   });
 });
 

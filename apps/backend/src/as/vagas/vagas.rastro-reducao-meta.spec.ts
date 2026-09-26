@@ -344,7 +344,9 @@ describe("editarPosicoes: a redução de meta deixa rastro, e continua passando"
   });
 
   it("vaga já encerrada não escreve rastro nenhum", async () => {
-    const { service, escritas } = makeDb({ status: "ENTREGUE", posicoesOficiais: 5 });
+    // `FECHADA` NO LUGAR DE `ENTREGUE`: a entrega deixou de encerrar na Frente B, então a vaga
+    // encerrada que este teste precisa é a fechada.
+    const { service, escritas } = makeDb({ status: "FECHADA", posicoesOficiais: 5 });
     await expect(
       service.editarPosicoes("vaga-1", { posicoesOficiais: 1, posicoesBanco: 0 }, AUTOR),
     ).rejects.toBeInstanceOf(ConflictException);

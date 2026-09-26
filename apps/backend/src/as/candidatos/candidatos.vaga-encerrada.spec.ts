@@ -292,8 +292,10 @@ describe("o caminho travado CONFERE o status da vaga que ele já lia", () => {
 
   /** §A.11: nenhuma frase que chega ao usuário carrega travessão. §A.6: fala de estado, não de gente. */
   it("a frase da recusa não tem travessão e não cita pessoa nenhuma", async () => {
+    // `FECHADA` NO LUGAR DE `ENTREGUE` (Frente B): a entrega deixou de encerrar e voltou a receber
+    // posição, então a vaga encerrada de que este teste precisa é a fechada.
     const { service } = makeDb({
-      statusVaga: "ENTREGUE",
+      statusVaga: "FECHADA",
       candidatura: candidatura({ situacao: "ATIVO" }),
       posicoesOficiais: 5,
     });

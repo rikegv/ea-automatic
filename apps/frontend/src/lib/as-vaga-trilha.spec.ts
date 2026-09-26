@@ -70,6 +70,15 @@ function vaga(p: {
   };
 }
 
+/*
+ * ─ OS CENÁRIOS DE VAGA ENCERRADA TROCARAM `ENTREGUE` POR `FECHADA` (Frente B da Central de Vagas)
+ *
+ * MUDANÇA DE REQUISITO, e não conserto de teste: `ENTREGUE` deixou de encerrar e virou estado VIVO
+ * ("entregue ao cliente, ainda NÃO finalizada"). O `fechar` do backend passou a gravar SEMPRE o
+ * papel FECHAMENTO, e quem responde "esta vaga entregou" é o carimbo `vagasFechadas`, que estes
+ * cenários já traziam e que não mudou. O que a trilha mede (processo encerrado, desfecho, frase de
+ * apoio) continua exatamente o mesmo.
+ */
 describe("eixo 1: o processo seletivo", () => {
   it("rascunho não começou o processo", () => {
     expect(processoDaVaga(vaga({ status: "RASCUNHO" }))).toBe("RASCUNHO");
@@ -103,7 +112,7 @@ describe("eixo 1: o processo seletivo", () => {
   });
 
   it("vaga encerrada tem o processo encerrado, qualquer que seja a contagem", () => {
-    expect(processoDaVaga(vaga({ status: "ENTREGUE", fechadas: 1 }))).toBe("PROCESSO_ENCERRADO");
+    expect(processoDaVaga(vaga({ status: "FECHADA", fechadas: 1 }))).toBe("PROCESSO_ENCERRADO");
     expect(processoDaVaga(vaga({ status: "FECHADA", fechadas: 0 }))).toBe("PROCESSO_ENCERRADO");
     expect(processoDaVaga(vaga({ status: "CANCELADA" }))).toBe("PROCESSO_ENCERRADO");
   });
@@ -116,13 +125,13 @@ describe("eixo 2: o desfecho", () => {
   });
 
   it("encerrada com o envio marcado é ENVIADA PARA ADMISSÃO", () => {
-    expect(desfechoDaVaga(vaga({ status: "ENTREGUE", fechadas: 2, enviar: true }))).toBe(
+    expect(desfechoDaVaga(vaga({ status: "FECHADA", fechadas: 2, enviar: true }))).toBe(
       "ENVIADA_PARA_ADMISSAO",
     );
   });
 
   it("encerrada com entrega e SEM envio finaliza na A&S", () => {
-    expect(desfechoDaVaga(vaga({ status: "ENTREGUE", fechadas: 2, enviar: false }))).toBe(
+    expect(desfechoDaVaga(vaga({ status: "FECHADA", fechadas: 2, enviar: false }))).toBe(
       "FINALIZADA_NA_AS",
     );
   });
@@ -147,7 +156,7 @@ describe("eixo 2: o desfecho", () => {
 
 describe("a frase de apoio diz o que o rótulo não cabe", () => {
   it("o envio para admissão explica o próximo passo, sem afirmar que o link já saiu", () => {
-    const t = trilhaDaVaga(vaga({ status: "ENTREGUE", fechadas: 1, enviar: true }));
+    const t = trilhaDaVaga(vaga({ status: "FECHADA", fechadas: 1, enviar: true }));
     // A ponte A&S para a admissão está viva; a frase diz que o candidato recebe o link quando a
     // admissão revisar a vaga, sem inventar que o link já foi enviado (item 4, decisão do diretor).
     expect(t.desfecho.frase).toContain("encaminhada para admissão");
@@ -171,8 +180,8 @@ describe("a frase de apoio diz o que o rótulo não cabe", () => {
       vaga({ status: "ABERTA", meta: null }),
       vaga({ status: "ABERTA", meta: 0 }),
       vaga({ status: "ABERTA", meta: 3, finalizadas: 3 }),
-      vaga({ status: "ENTREGUE", fechadas: 1, enviar: true }),
-      vaga({ status: "ENTREGUE", fechadas: 1 }),
+      vaga({ status: "FECHADA", fechadas: 1, enviar: true }),
+      vaga({ status: "FECHADA", fechadas: 1 }),
       vaga({ status: "FECHADA", fechadas: 0 }),
       vaga({ status: "CANCELADA" }),
     ];
@@ -204,7 +213,7 @@ describe("os quatro casos da homologação", () => {
     },
     {
       nome: "PS-2026-001 (entregue, contada 1 de 3 no fechamento)",
-      v: vaga({ status: "ENTREGUE", meta: 3, fechadas: 1, dataFechamento: "2026-08-25" }),
+      v: vaga({ status: "FECHADA", meta: 3, fechadas: 1, dataFechamento: "2026-08-25" }),
       processo: "Processo Seletivo Encerrado",
       desfecho: "Finalizada Na A&S",
     },

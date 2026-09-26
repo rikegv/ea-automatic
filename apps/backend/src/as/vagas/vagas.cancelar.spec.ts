@@ -1,4 +1,4 @@
-import { ConflictException, ForbiddenException, HttpException } from "@nestjs/common";
+import { ConflictException, HttpException } from "@nestjs/common";
 import { describe, expect, it, vi } from "vitest";
 import {
   CANDIDATURA_SITUACOES,
@@ -67,7 +67,6 @@ const COMUM: AuthUser = {
   senhaTemporaria: false,
 };
 const MASTER: AuthUser = { ...COMUM, id: "user-master", papel: "MASTER" };
-const SUPER: AuthUser = { ...COMUM, id: "user-super", papel: "SUPER_ADMIN" };
 
 const MOTIVO = "Cliente cancelou a solicitação";
 const CATALOGO = [
@@ -323,9 +322,6 @@ async function recusa(
   }
 }
 
-const corpoDe = (erro: unknown): Record<string, unknown> =>
-  (erro as ConflictException).getResponse() as Record<string, unknown>;
-
 /** As escritas na linha da VAGA, que é onde a trilha do cancelamento mora. */
 const naVaga = (escritas: Escrita[]) => escritas.filter((e) => e.tabela === vagas);
 const naCandidatura = (escritas: Escrita[]) => escritas.filter((e) => e.tabela === asCandidaturas);
@@ -342,24 +338,6 @@ function gravado(escritas: Escrita[]): Record<string, unknown> {
   const saida: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(alvo)) saida[k.replace(/_/g, "").toLowerCase()] = v;
   return saida;
-}
-
-/** Todo campo de "forçado" que a gravação tocou, com o valor que recebeu. */
-function camposDeForcado(escritas: Escrita[]): [string, unknown][] {
-  const alvo = naVaga(escritas)[0]?.valores ?? {};
-  return Object.entries(alvo).filter(([k]) => /forcad/i.test(k));
-}
-
-/** Todos os textos alcançáveis dentro de um objeto, para espiar a cláusula `where` do Drizzle. */
-function textosDe(valor: unknown, vistos = new Set<unknown>(), profundidade = 0): string[] {
-  if (profundidade > 8 || valor === null || valor === undefined) return [];
-  if (typeof valor === "string") return [valor];
-  if (typeof valor !== "object") return [];
-  if (vistos.has(valor)) return [];
-  vistos.add(valor);
-  return Object.values(valor as Record<string, unknown>).flatMap((v) =>
-    textosDe(v, vistos, profundidade + 1),
-  );
 }
 
 // ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -391,7 +369,7 @@ describe("a régua do cancelamento é OUTRA, e não a do fechamento", () => {
 // ────────────────────────────────────────────────────────────────────────────────────────────────
 // ITEM 1: A ORIGEM
 // ────────────────────────────────────────────────────────────────────────────────────────────────
-describe("a origem: só a vaga no papel de ABERTURA cancela", () => {
+describe("a origem: só a vaga EM PROCESSO cancela", () => {
   /**
    * A LISTA VEM DO CATÁLOGO (onda B2), e não mais de `VAGA_STATUS`. O que a trava pergunta deixou
    * de ser "o código é ABERTA?" e passou a ser "esta linha exerce o papel de ABERTURA?", que é a
@@ -400,8 +378,16 @@ describe("a origem: só a vaga no papel de ABERTURA cancela", () => {
    * O `VAGA_BANCO` ENTRA NO RECORTE, e é correto: ele não é o status de abertura, então cancelar
    * por ali é recusado. O status dormente nunca teve permissão de cancelar coisa alguma.
    */
+  /**
+   * ─ A ENTREGA SAIU DO RECORTE (Frente B da Central de Vagas) ─────────────────────────────────
+   *
+   * MUDANÇA DE REQUISITO: `ENTREGUE` deixou de encerrar e virou estado VIVO. A trava de origem
+   * passou a perguntar "esta vaga está EM PROCESSO?" (papel ABERTURA ou ENTREGA), e sem isso a
+   * vaga entregue ficaria SEM PORTA DE SAÍDA: o cliente desiste do processo entregue e ninguém
+   * consegue cancelar a vaga.
+   */
   const OUTROS = linhasDeStatusFingidas()
-    .filter((s) => s.papel !== "ABERTURA")
+    .filter((s) => s.papel !== "ABERTURA" && s.papel !== "ENTREGA")
     .map((s) => s.codigo);
 
   /**
@@ -413,12 +399,20 @@ describe("a origem: só a vaga no papel de ABERTURA cancela", () => {
   it("o recorte não é vazio (o catálogo tem os outros status, a fila de revisão e o dormente)", () => {
     expect(OUTROS).toEqual([
       "RASCUNHO",
-      "ENTREGUE",
       "FECHADA",
       "CANCELADA",
       "PENDENTE_REVISAO",
       "VAGA_BANCO",
     ]);
+  });
+
+  it("a vaga ENTREGUE CANCELA: o cliente desistiu do processo que já estava com ele", async () => {
+    const { service, vaga, escritas } = makeDb({ status: "ENTREGUE", candidaturas: [] });
+
+    await cancelarDe(service)("vaga-1", CORPO, COMUM);
+
+    expect(vaga.status).toBe("CANCELADA");
+    expect(naVaga(escritas)).toHaveLength(1);
   });
 
   it.each(OUTROS)("a vaga %s é recusada com conflito, e nada é gravado", async (status) => {
@@ -467,212 +461,90 @@ describe("a origem: só a vaga no papel de ABERTURA cancela", () => {
 });
 
 // ────────────────────────────────────────────────────────────────────────────────────────────────
-// ITEM 2: A TRAVA
+// ITEM 2: O QUE ERA A TRAVA (Frente B: ela deixou de existir, e ninguém é descartado)
 // ────────────────────────────────────────────────────────────────────────────────────────────────
-describe("a trava: quem ainda não terminou SEGURA o cancelamento", () => {
-  /**
-   * ─ O TESTE QUE PEGA A RÉGUA ERRADA ────────────────────────────────────────────────────────────
-   *
-   * UM `ALOCADO` E MAIS NADA. Com `pendentesDeTratamento` no lugar de `seguraOCancelamento`, esta
-   * vaga cancela em silêncio, sem Master e sem trilha, com uma pessoa entregue dentro dela.
-   */
-  it.each([...SITUACOES_QUE_SEGURAM_CANCELAMENTO])(
-    "a vaga com UM %s e mais nada recusa o COMUM que não forçou",
-    async (situacao) => {
-      const { service, escritas } = makeDb({ candidaturas: [pessoa(situacao, "Ana")] });
+/**
+ * ┌─ O QUE MUDOU, E ISTO É REQUISITO NOVO DO DIRETOR, NÃO CONSERTO DE TESTE ──────────────────────┐
+ * │ ATÉ AQUI: candidato `ATIVO` ou `ALOCADO` BARRAVA o cancelamento; só um MASTER passava com     │
+ * │ `forcar: true`, e forçar DESCARTAVA todo mundo que segurava.                                   │
+ * │                                                                                                │
+ * │ A PARTIR DA FRENTE B: cancelar com candidato dentro é PERMITIDO, para qualquer consultor, e   │
+ * │ NINGUÉM É DESCARTADO. Quem está VIVO é movido para o STAND BY e CONTINUA VIVO, ligado à vaga  │
+ * │ cancelada, para poder ser transferido ou realocado depois.                                     │
+ * │                                                                                                │
+ * │ OS TESTES DA TRAVA, DO FORÇAR E DO CARIMBO DE FORÇADO FORAM REMOVIDOS porque o comportamento  │
+ * │ que eles afirmavam foi REVOGADO, e não porque ficaram vermelhos. No lugar deles entram os que │
+ * │ afirmam a regra nova, e o mais importante é o primeiro: NINGUÉM É DESCARTADO.                  │
+ * └────────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * `STAND_BY` NÃO ESTÁ NO CATÁLOGO FINGIDO PADRÃO, e a ausência é fiel: ele nasceu na migration 0111
+ * e não está em `ETAPAS_FUNIL_SEMENTE`. Quem testa o destino monta o catálogo com ele, abaixo.
+ */
+const STAND_BY = {
+  id: 99,
+  codigo: "STAND_BY",
+  rotulo: "Stand By",
+  ordem: 6,
+  tom: "wn" as const,
+  inicial: false,
+  ativa: true,
+  entregaAoCliente: false,
+  destinoDoCancelamento: true,
+};
 
-      const erro = await recusa(service, COMUM);
-      expect(erro).toBeInstanceOf(ConflictException);
-      expect(corpoDe(erro)).toMatchObject({
-        needsConfirmation: true,
-        reason: "candidatosNaoEncerrados",
-        podeForcar: false,
+/** O catálogo de etapas COM o destino de cancelamento configurado, que é o estado de produção. */
+function catalogoComStandBy() {
+  const base = catalogoDeEtapasFingido();
+  return {
+    ...base,
+    etapaDoCancelamento: async () => STAND_BY,
+    ordemPorCodigo: async () => {
+      const mapa = new Map(await base.ordemPorCodigo());
+      mapa.set(STAND_BY.codigo, STAND_BY.ordem);
+      return mapa;
+    },
+  };
+}
+
+/** O mesmo `makeDb`, com o catálogo de etapas trocado pelo que tem destino de cancelamento. */
+function comStandBy(cenario: Parameters<typeof makeDb>[0]) {
+  const feito = makeDb(cenario);
+  const db = (feito.service as unknown as { db: unknown }).db;
+  return {
+    ...feito,
+    service: new VagasService(
+      db as never,
+      catalogoComStandBy() as never,
+      catalogoDeStatusFingido() as never,
+    ),
+  };
+}
+
+describe("cancelar com candidato dentro: passa, e NINGUÉM é descartado", () => {
+  it.each([...SITUACOES_QUE_SEGURAM_CANCELAMENTO])(
+    "a vaga com UM %s cancela pela porta normal, sem Master e sem forçar",
+    async (situacao) => {
+      const { service, vaga, escritas } = comStandBy({
+        candidaturas: [pessoa(situacao, "Ana", "OFICIAL")],
       });
-      const lista = corpoDe(erro).naoEncerrados as Record<string, unknown>[];
-      expect(lista).toHaveLength(1);
-      expect(lista[0]).toMatchObject({ candidaturaId: "cand-Ana", situacao });
-      // NADA FOI GRAVADO: a recusa não pode deixar meia mudança.
-      expect(escritas).toHaveLength(0);
+
+      await cancelarDe(service)("vaga-1", CORPO, COMUM);
+
+      expect(vaga.status).toBe("CANCELADA");
+      expect(naVaga(escritas)).toHaveLength(1);
     },
   );
 
-  const ENCERRADAS = CANDIDATURA_SITUACOES.filter((s) => !seguraOCancelamento(s));
-
-  it("o recorte dos encerrados é o esperado (o laço abaixo não pode ser vazio)", () => {
-    expect([...ENCERRADAS].sort()).toEqual([
-      "APROVADO",
-      "DESCARTADO",
-      "DESISTIU",
-      "ENVIADO_PARA_ADMISSAO",
-    ]);
-  });
-
-  it.each(ENCERRADAS)("a vaga com UM %s cancela pela porta normal, sem Master", async (situacao) => {
-    const { service, vaga, escritas } = makeDb({ candidaturas: [pessoa(situacao, "Bia")] });
-
-    await cancelarDe(service)("vaga-1", CORPO, COMUM);
-
-    expect(vaga.status).toBe("CANCELADA");
-    expect(camposDeForcado(escritas)).toEqual([]);
-  });
-
-  it("a vaga com TODOS os encerrados juntos cancela: nenhum deles segura nada", async () => {
-    const { service, vaga } = makeDb({
-      candidaturas: ENCERRADAS.map((s) => pessoa(s, `P-${s}`)),
-    });
-
-    await cancelarDe(service)("vaga-1", CORPO, COMUM);
-    expect(vaga.status).toBe("CANCELADA");
-  });
-
-  it("o corpo da recusa lista TODOS os que seguram e NENHUM dos encerrados", async () => {
-    const { service } = makeDb({
-      candidaturas: [
-        pessoa("ATIVO", "Ana"),
-        pessoa("ALOCADO", "Bia", "OFICIAL"),
-        pessoa("APROVADO", "Caio"),
-        pessoa("ENVIADO_PARA_ADMISSAO", "Dora"),
-        pessoa("DESCARTADO", "Eli"),
-        pessoa("DESISTIU", "Fábio"),
-      ],
-    });
-
-    const erro = await recusa(service, COMUM);
-    const lista = corpoDe(erro).naoEncerrados as Record<string, unknown>[];
-    expect(lista.map((i) => i.candidaturaId).sort()).toEqual(["cand-Ana", "cand-Bia"]);
-  });
-
   /**
-   * §A.6: A RECUSA VIAJA PARA A TELA. Ela leva id de candidatura, id e NOME do candidato, etapa e
-   * situação, que é o que a recusa do fechamento já trafega hoje em produção. CPF, e-mail e telefone
-   * estão na linha lida do banco (o fake os coloca lá de propósito) e NÃO podem sair daqui.
-   */
-  it("o corpo da recusa NÃO carrega CPF, e-mail nem telefone", async () => {
-    const { service } = makeDb({ candidaturas: [pessoa("ATIVO", "Ana")] });
-
-    const erro = await recusa(service, COMUM);
-    const lista = corpoDe(erro).naoEncerrados as Record<string, unknown>[];
-    for (const item of lista) {
-      expect(Object.keys(item).sort()).toEqual([
-        "candidatoId",
-        "candidatoNome",
-        "candidaturaId",
-        "etapa",
-        "situacao",
-      ]);
-    }
-  });
-
-  it("`podeForcar` é do PAPEL DA SESSÃO: falso para o COMUM, verdadeiro para Master e Super", async () => {
-    for (const [user, esperado] of [
-      [COMUM, false],
-      [MASTER, true],
-      [SUPER, true],
-    ] as const) {
-      const { service } = makeDb({ candidaturas: [pessoa("ATIVO", "Ana")] });
-      const erro = await recusa(service, user);
-      expect(corpoDe(erro).podeForcar, `papel ${user.papel}`).toBe(esperado);
-    }
-  });
-});
-
-// ────────────────────────────────────────────────────────────────────────────────────────────────
-// ITEM 3: A AUTORIDADE
-// ────────────────────────────────────────────────────────────────────────────────────────────────
-describe("a autoridade do forçar: só MASTER e SUPER_ADMIN atropelam alguém", () => {
-  it("o COMUM que manda `forcar: true` numa vaga travada recebe 403, e nada é gravado", async () => {
-    const { service, escritas } = makeDb({ candidaturas: [pessoa("ALOCADO", "Ana", "OFICIAL")] });
-
-    const erro = await recusa(service, COMUM, { forcar: true });
-    expect(erro).toBeInstanceOf(ForbiddenException);
-    expect(escritas).toHaveLength(0);
-  });
-
-  it.each([MASTER, SUPER])("o $papel força e a vaga sai CANCELADA", async (user) => {
-    const { service, vaga } = makeDb({ candidaturas: [pessoa("ATIVO", "Ana")] });
-
-    await cancelarDe(service)("vaga-1", { ...CORPO, forcar: true }, user);
-    expect(vaga.status).toBe("CANCELADA");
-  });
-
-  /**
-   * O PAPEL VEM DA SESSÃO, NUNCA DO CORPO. O corpo carrega um `papel` de mentira; quem decide é o
-   * `AuthUser` que a controller preenche com `@CurrentUser()`.
-   */
-  it("o papel mandado no CORPO não promove ninguém", async () => {
-    const { service, escritas } = makeDb({ candidaturas: [pessoa("ATIVO", "Ana")] });
-
-    const erro = await recusa(service, COMUM, {
-      forcar: true,
-      papel: "SUPER_ADMIN",
-      user: { papel: "MASTER" },
-    });
-    expect(erro).toBeInstanceOf(ForbiddenException);
-    expect(escritas).toHaveLength(0);
-  });
-});
-
-// ────────────────────────────────────────────────────────────────────────────────────────────────
-// ITEM 4: O CARIMBO DO FORÇADO
-// ────────────────────────────────────────────────────────────────────────────────────────────────
-describe("o carimbo do forçado é do FATO, e não do flag que veio no corpo", () => {
-  /**
-   * ─ O TESTE QUE PEGA O `...(dto.forcar ? {...} : {})` ──────────────────────────────────────────
+   * ─ A AFIRMAÇÃO CENTRAL DO PONTO 3: NENHUMA SITUAÇÃO DE SAÍDA É GRAVADA ────────────────────────
    *
-   * UM COMUM COM `forcar: true` NUMA VAGA EM QUE NINGUÉM SEGURA. A tela manda o flag por descuido, o
-   * botão fica pressionado duas vezes, o cliente reenvia o mesmo pedido: em nenhum desses casos
-   * houve exceção alguma a registrar. Carimbar aqui é acusar de exceção quem cancelou uma vaga
-   * limpa, e é o `cancelamento_forcado_por_id` de alguém que não tem autoridade para forçar.
+   * É o teste que pega a volta silenciosa do comportamento antigo: qualquer caminho que volte a
+   * chamar `gravarSaidaDaCandidatura` escreve `DESCARTADO`/`DESISTIU` na candidatura, e a pessoa
+   * some da fila viva. A asserção é sobre o VALOR gravado, e não sobre o nome da função, porque é o
+   * valor que apaga gente.
    */
-  it("o COMUM com `forcar: true` numa vaga LIMPA cancela, e a vaga NÃO sai carimbada", async () => {
-    const { service, vaga, escritas } = makeDb({
-      candidaturas: [pessoa("APROVADO", "Caio"), pessoa("DESISTIU", "Eli")],
-    });
-
-    await cancelarDe(service)("vaga-1", { ...CORPO, forcar: true }, COMUM);
-
-    expect(vaga.status).toBe("CANCELADA");
-    // NENHUM campo de "forçado" pode ter sido escrito com valor.
-    for (const [campo, valor] of camposDeForcado(escritas)) {
-      expect(valor, `${campo} não podia ter sido carimbado`).toBeNull();
-    }
-  });
-
-  it("a vaga SEM candidatura nenhuma com `forcar: true` também sai sem carimbo", async () => {
-    const { service, vaga, escritas } = makeDb({ candidaturas: [] });
-
-    await cancelarDe(service)("vaga-1", { ...CORPO, forcar: true }, MASTER);
-
-    expect(vaga.status).toBe("CANCELADA");
-    for (const [campo, valor] of camposDeForcado(escritas)) {
-      expect(valor, `${campo} não podia ter sido carimbado`).toBeNull();
-    }
-  });
-
-  /**
-   * O CONTRASTE, sem o qual os dois testes acima seriam satisfeitos por uma implementação que nunca
-   * carimba nada: quando houve ATROPELO de verdade, o carimbo TEM de existir, com o autor e a hora.
-   */
-  it("o MASTER que atropela alguém SAI carimbado, com autor e hora", async () => {
-    const { service, escritas } = makeDb({ candidaturas: [pessoa("ALOCADO", "Ana", "OFICIAL")] });
-
-    await cancelarDe(service)("vaga-1", { ...CORPO, forcar: true }, MASTER);
-
-    const campos = camposDeForcado(escritas);
-    expect(campos.length, "o forçamento precisa deixar trilha").toBeGreaterThan(0);
-    const preenchidos = campos.filter(([, v]) => v !== null && v !== undefined);
-    expect(preenchidos.length).toBeGreaterThan(0);
-    expect(campos.map(([, v]) => v)).toContain(MASTER.id);
-  });
-
-  /**
-   * O TAMANHO DA EXCEÇÃO É O QUE A AUDITORIA VAI LER: quantos processos aquele Master atropelou. Um
-   * zero gravado aqui descreveria um fato que não aconteceu, e o banco recusa (`CHECK > 0`), então o
-   * número tem de ser a contagem de quem segurava NO INSTANTE, e não um recálculo posterior (que
-   * daria zero para sempre, porque o próprio cancelamento encerra essas candidaturas).
-   */
-  it("o carimbo conta QUANTOS seguravam no instante, e o número não é zero", async () => {
-    const { service, escritas } = makeDb({
+  it("NINGUÉM vira DESCARTADO nem DESISTIU: nenhuma situação de saída é escrita", async () => {
+    const { service, escritas } = comStandBy({
       candidaturas: [
         pessoa("ATIVO", "Ana"),
         pessoa("ALOCADO", "Bia", "OFICIAL"),
@@ -680,16 +552,164 @@ describe("o carimbo do forçado é do FATO, e não do flag que veio no corpo", (
       ],
     });
 
-    await cancelarDe(service)("vaga-1", { ...CORPO, forcar: true }, MASTER);
+    await cancelarDe(service)("vaga-1", CORPO, COMUM);
 
-    const numeros = camposDeForcado(escritas)
-      .map(([, v]) => v)
-      .filter((v): v is number => typeof v === "number");
-    expect(numeros, "o carimbo precisa registrar quantos processos foram atropelados").toContain(2);
-    for (const n of numeros) expect(n).toBeGreaterThan(0);
+    for (const e of naCandidatura(escritas)) {
+      expect(e.valores.situacao, "cancelar não escreve desfecho em candidatura nenhuma").toBeUndefined();
+    }
+    for (const e of noHistorico(escritas)) {
+      expect(e.valores.situacao, "o evento é MOVIMENTO, não desfecho").toBeNull();
+    }
+  });
+
+  it("quem está VIVO é movido para o STAND BY, e a situação NÃO muda", async () => {
+    const { service, escritas } = comStandBy({
+      candidaturas: [pessoa("ATIVO", "Ana"), pessoa("ALOCADO", "Bia", "OFICIAL")],
+    });
+
+    await cancelarDe(service)("vaga-1", CORPO, COMUM);
+
+    const movimentos = naCandidatura(escritas);
+    expect(movimentos).toHaveLength(2);
+    for (const m of movimentos) {
+      expect(m.valores.etapa).toBe("STAND_BY");
+      expect(m.naTransacao, "mover e cancelar são um fato só").toBe(true);
+    }
+  });
+
+  /**
+   * QUEM JÁ TINHA SAÍDO NÃO É ARRASTADO: descartado e desistente saíram por decisão de alguém, e
+   * reescrever a etapa deles apagaria o lugar em que a decisão foi tomada ("descartado na Triagem").
+   */
+  it("quem já estava encerrado NÃO é movido", async () => {
+    const { service, escritas } = comStandBy({
+      candidaturas: [pessoa("DESCARTADO", "Dora"), pessoa("DESISTIU", "Edu")],
+    });
+
+    await cancelarDe(service)("vaga-1", CORPO, COMUM);
+    expect(naCandidatura(escritas)).toHaveLength(0);
+  });
+
+  it("o movimento aparece na LINHA DO TEMPO, com a etapa de origem preservada", async () => {
+    const { service, escritas } = comStandBy({ candidaturas: [pessoa("ATIVO", "Ana")] });
+
+    await cancelarDe(service)("vaga-1", CORPO, COMUM);
+
+    const eventos = noHistorico(escritas);
+    expect(eventos).toHaveLength(1);
+    expect(eventos[0].valores).toMatchObject({ etapaDe: "APROVACAO", etapaPara: "STAND_BY" });
+  });
+
+  /**
+   * SEM DESTINO CONFIGURADO, O CANCELAMENTO NÃO É BLOQUEADO: as pessoas ficam vivas onde estão.
+   * Lançar aqui devolveria a trava por outra porta, agora dependendo de configuração de catálogo.
+   */
+  it("sem etapa de destino no catálogo, cancela do mesmo jeito e não move ninguém", async () => {
+    const { service, vaga, escritas } = makeDb({ candidaturas: [pessoa("ATIVO", "Ana")] });
+
+    await cancelarDe(service)("vaga-1", CORPO, COMUM);
+
+    expect(vaga.status).toBe("CANCELADA");
+    expect(naCandidatura(escritas)).toHaveLength(0);
+  });
+
+  /**
+   * §A.6, E É A GARANTIA QUE SUBSTITUI O DESCARTE DO FORÇADO: o prazo de retenção NÃO depende de a
+   * candidatura estar encerrada. A cláusula do expurgo lê a VAGA (`s.encerra` + `v.encerrada_em`),
+   * e o cancelamento carimba `encerrada_em` com relógio de SERVIDOR na mesma gravação do status.
+   * Era essa a razão pela qual o forçado descartava todo mundo, e ela já não vale.
+   */
+  it("a vaga cancelada carimba `encerrada_em`, que é o relógio do expurgo", async () => {
+    const { service, escritas } = comStandBy({ candidaturas: [pessoa("ATIVO", "Ana")] });
+
+    await cancelarDe(service)("vaga-1", CORPO, COMUM);
+    expect(gravado(escritas).encerradaem).toBeInstanceOf(Date);
   });
 });
 
+// ────────────────────────────────────────────────────────────────────────────────────────────────
+// ITEM 4: O CARIMBO DA ETAPA (Frente B, ponto 4)
+// ────────────────────────────────────────────────────────────────────────────────────────────────
+describe("o carimbo da etapa: até onde este processo chegou antes de morrer", () => {
+  /**
+   * A DEFINIÇÃO É A ETAPA MAIS AVANÇADA ENTRE OS VIVOS, e a ordem da medição é o que este bloco
+   * protege: medir DEPOIS de mover todo mundo responderia "STAND_BY" em todo cancelamento, porque
+   * ele é a última etapa da fila. É o defeito mais fácil de introduzir aqui, e o mais inútil.
+   */
+  it("carimba a etapa MAIS AVANÇADA entre os vivos, e não o Stand By para onde eles vão", async () => {
+    const { service, escritas } = comStandBy({
+      candidaturas: [
+        { ...pessoa("ATIVO", "Ana"), etapa: "CAPTACAO" },
+        { ...pessoa("ATIVO", "Bia"), etapa: "ENTREVISTA_CLIENTE" },
+        { ...pessoa("ATIVO", "Caio"), etapa: "TRIAGEM" },
+      ],
+    });
+
+    await cancelarDe(service)("vaga-1", CORPO, COMUM);
+    expect(gravado(escritas).cancelamentoetapa).toBe("ENTREVISTA_CLIENTE");
+  });
+
+  it("ignora quem já tinha saído: a etapa é dos VIVOS", async () => {
+    const { service, escritas } = comStandBy({
+      candidaturas: [
+        { ...pessoa("ATIVO", "Ana"), etapa: "CAPTACAO" },
+        { ...pessoa("DESCARTADO", "Dora"), etapa: "ENTREVISTA_CLIENTE" },
+      ],
+    });
+
+    await cancelarDe(service)("vaga-1", CORPO, COMUM);
+    expect(gravado(escritas).cancelamentoetapa).toBe("CAPTACAO");
+  });
+
+  /**
+   * NULO QUER DIZER UMA COISA SÓ: a vaga foi cancelada vazia. Devolver a etapa inicial aqui
+   * afirmaria um fato que não aconteceu, e o relatório contaria processos que nunca existiram.
+   */
+  it("vaga sem ninguém vivo carimba NULO, e não a etapa inicial", async () => {
+    const { service, escritas } = comStandBy({ candidaturas: [pessoa("DESCARTADO", "Dora")] });
+
+    await cancelarDe(service)("vaga-1", CORPO, COMUM);
+    expect(gravado(escritas).cancelamentoetapa).toBeNull();
+  });
+
+  /**
+   * A ETAPA VIAJA TAMBÉM NA NARRATIVA DA TRILHA, e a redundância é requisito: a REABERTURA limpa
+   * `cancelamento_etapa` da linha da vaga, e sem a cópia no evento a resposta se perderia para
+   * sempre. É a mesma razão pela qual o motivo já viajava nos dois lugares.
+   */
+  it("a etapa aparece na observação do evento de status, que a reabertura não apaga", async () => {
+    const { service, escritas } = comStandBy({
+      candidaturas: [{ ...pessoa("ATIVO", "Ana"), etapa: "ENTREVISTA_CLIENTE" }],
+    });
+
+    await cancelarDe(service)("vaga-1", CORPO, COMUM);
+
+    const observacoes = escritas
+      .map((e) => e.valores.observacao)
+      .filter((o): o is string => typeof o === "string");
+    expect(observacoes.some((o) => o.includes("ENTREVISTA_CLIENTE"))).toBe(true);
+  });
+
+  /**
+   * §A.6 NA NARRATIVA: ela carrega vocabulário de processo e uma CONTAGEM, e nada que identifique
+   * pessoa. O que identifica alguém vive na linha do tempo dela, nunca na da vaga.
+   */
+  it("a narrativa conta QUANTOS seguem vivos, e não diz quem", async () => {
+    const { service, escritas } = comStandBy({
+      candidaturas: [pessoa("ATIVO", "Ana"), pessoa("ALOCADO", "Bia", "OFICIAL")],
+    });
+
+    await cancelarDe(service)("vaga-1", CORPO, COMUM);
+
+    const observacoes = escritas
+      .map((e) => e.valores.observacao)
+      .filter((o): o is string => typeof o === "string")
+      .join(" ");
+    expect(observacoes).toContain("2");
+    expect(observacoes).not.toContain("Ana");
+    expect(observacoes).not.toContain("12345678901");
+  });
+});
 // ────────────────────────────────────────────────────────────────────────────────────────────────
 // ITEM 5: O RASTRO
 // ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -774,117 +794,6 @@ describe("o rastro: não existe vaga cancelada sem trilha", () => {
     const g = gravado(escritas);
     expect(g.vagasfechadas).toBe(2);
     expect(g.vagasfechadasbanco).toBe(1);
-  });
-});
-
-// ────────────────────────────────────────────────────────────────────────────────────────────────
-// ITEM 6: A LGPD
-// ────────────────────────────────────────────────────────────────────────────────────────────────
-describe("§A.6: o forçado ENCERRA quem atropelou, ou o CPF fica retido para sempre", () => {
-  /**
-   * POR QUE ISTO É REQUISITO E NÃO ZELO: `retencao-candidatos.service.ts` só anonimiza o candidato
-   * que NÃO tem candidatura viva, e `ATIVO`/`ALOCADO` são vivas (`candidaturaViva`). Uma viva
-   * pendurada numa vaga CANCELADA nunca mais se move, então o prazo nunca corre e o expurgo nunca
-   * alcança aquela pessoa. Nome, CPF, e-mail e telefone ficam no banco indefinidamente.
-   */
-  it("o cancelamento forçado grava DESCARTADO nas candidaturas, dentro da MESMA transação", async () => {
-    const { service, escritas } = makeDb({
-      candidaturas: [pessoa("ATIVO", "Ana"), pessoa("ALOCADO", "Bia", "OFICIAL")],
-    });
-
-    await cancelarDe(service)("vaga-1", { ...CORPO, forcar: true }, MASTER);
-
-    const encerramentos = naCandidatura(escritas);
-    expect(encerramentos.length, "o forçado precisa encerrar quem atropelou").toBeGreaterThan(0);
-    for (const e of encerramentos) {
-      expect(e.valores.situacao).toBe("DESCARTADO");
-      expect(e.naTransacao, "o encerramento tem de estar na transação do cancelamento").toBe(true);
-      // UM `update` sem `where` varreria a tabela inteira. Nunca pode ser ausente.
-      expect(e.where, "o encerramento sem cláusula alcançaria outras vagas").toBeTruthy();
-    }
-  });
-
-  it("o descarte carrega POR QUÊ, e não encerra em silêncio", async () => {
-    const { service, escritas } = makeDb({ candidaturas: [pessoa("ATIVO", "Ana")] });
-
-    await cancelarDe(service)("vaga-1", { ...CORPO, forcar: true }, MASTER);
-
-    const motivos = naCandidatura(escritas).map((e) => String(e.valores.motivoDescarte ?? ""));
-    expect(motivos.length).toBeGreaterThan(0);
-    for (const m of motivos) {
-      expect(m.trim().length, "o motivo do descarte não pode ser vazio").toBeGreaterThan(0);
-      // DERIVADO DO CANCELAMENTO: ou repete o motivo escolhido, ou diz que a vaga foi cancelada.
-      expect(m.includes(MOTIVO) || /cancel/i.test(m), `motivo do descarte: ${m}`).toBe(true);
-    }
-  });
-
-  /**
-   * O EVENTO NA LINHA DO TEMPO, e ele não é enfeite: depois da saída, a etapa some da leitura viva
-   * da tela, e sem o evento o lugar onde o processo terminou se perde para sempre. Uma implementação
-   * que troque a porta de saída por um `update` cru na situação continua passando nos testes acima e
-   * quebra neste, que é exatamente o desvio que o módulo já documentou como risco.
-   */
-  it("o encerramento aparece na LINHA DO TEMPO da candidatura, e não só na coluna", async () => {
-    const { service, escritas } = makeDb({ candidaturas: [pessoa("ATIVO", "Ana")] });
-
-    await cancelarDe(service)("vaga-1", { ...CORPO, forcar: true }, MASTER);
-
-    const eventos = noHistorico(escritas);
-    expect(eventos.length, "a saída forçada precisa virar evento no histórico").toBeGreaterThan(0);
-    expect(eventos[0].valores).toMatchObject({ candidaturaId: "cand-Ana", situacao: "DESCARTADO" });
-    // A AUTORIA É DA SESSÃO: quem autorizou a exceção responde por ela também no histórico.
-    expect(eventos[0].valores.porId).toBe(MASTER.id);
-  });
-
-  /**
-   * O RELÓGIO DA RETENÇÃO É O `atualizado_em` DA CANDIDATURA (`retencao-candidatos.service.ts`: o
-   * prazo corre do ÚLTIMO encerramento). Encerrar sem tocar o carimbo faria o prazo correr a partir
-   * de uma data velha, e a pessoa seria anonimizada antes do prazo que o diretor definiu.
-   */
-  it("o encerramento move o carimbo que o prazo de retenção lê", async () => {
-    const { service, escritas } = makeDb({ candidaturas: [pessoa("ALOCADO", "Bia", "OFICIAL")] });
-
-    await cancelarDe(service)("vaga-1", { ...CORPO, forcar: true }, MASTER);
-
-    for (const e of naCandidatura(escritas)) {
-      expect(e.valores.atualizadoEm).toBeInstanceOf(Date);
-    }
-  });
-
-  it("o cancelamento NORMAL (ninguém segurando) não toca candidatura nenhuma", async () => {
-    const { service, escritas } = makeDb({
-      candidaturas: [pessoa("APROVADO", "Caio"), pessoa("ENVIADO_PARA_ADMISSAO", "Dora")],
-    });
-
-    await cancelarDe(service)("vaga-1", CORPO, COMUM);
-    expect(naCandidatura(escritas)).toHaveLength(0);
-    expect(noHistorico(escritas)).toHaveLength(0);
-  });
-
-  /**
-   * O APROVADO NÃO PODE SER DESCARTADO JUNTO. Ele é um processo BEM-SUCEDIDO, e transformá-lo em
-   * DESCARTADO por causa do cancelamento apaga uma aprovação que aconteceu de verdade. Este teste
-   * só consegue afirmar sobre a cláusula quando ela carrega IDS; quando ela filtra por SITUAÇÃO, a
-   * afirmação fica com o `naoEncerrados` do teste da trava.
-   */
-  it("o encerramento não alcança o APROVADO nem o ENVIADO_PARA_ADMISSAO", async () => {
-    const { service, escritas } = makeDb({
-      candidaturas: [
-        pessoa("ATIVO", "Ana"),
-        pessoa("APROVADO", "Caio"),
-        pessoa("ENVIADO_PARA_ADMISSAO", "Dora"),
-      ],
-    });
-
-    await cancelarDe(service)("vaga-1", { ...CORPO, forcar: true }, MASTER);
-
-    const textos = naCandidatura(escritas).flatMap((e) => textosDe(e.where));
-    const citaIds = textos.some((t) => t.startsWith("cand-"));
-    if (citaIds) {
-      expect(textos).toContain("cand-Ana");
-      expect(textos).not.toContain("cand-Caio");
-      expect(textos).not.toContain("cand-Dora");
-    }
   });
 });
 

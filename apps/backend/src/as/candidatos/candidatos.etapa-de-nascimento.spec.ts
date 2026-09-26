@@ -48,6 +48,11 @@ function catalogoDoDiretor() {
     ordemPorCodigo: async () => new Map(linhas.map((e) => [e.codigo, e.ordem])),
     etapaInicial: async () => linhas.find((e) => e.inicial)!,
     exigirEtapaAtiva: async (codigo: string) => linhas.find((e) => e.codigo === codigo)!,
+    // OS DOIS INSUMOS DA DERIVAÇÃO DE STATUS DA VAGA (Frente B). O catálogo DESTE diretor não tem
+    // etapa de entrega ao cliente nem destino de cancelamento, e é fiel: ele é um funil inventado
+    // pelo spec, e a derivação tem de continuar inerte sobre ele.
+    codigosDeEntregaAoCliente: async () => new Set<string>(),
+    etapaDoCancelamento: async () => null,
   };
 }
 

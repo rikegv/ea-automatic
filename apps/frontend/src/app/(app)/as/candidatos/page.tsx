@@ -51,6 +51,7 @@ import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
 import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
 import { cn } from "@/lib/cn";
 import {
+  avisoDeCorte,
   buscarCandidatos,
   cardDaCandidatura,
   CARD_SEM_VAGA,
@@ -109,6 +110,8 @@ export default function CentralDeCandidatosPage() {
   const [candidaturas, setCandidaturas] = useState<AsCandidaturaItem[]>([]);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
+  /** O aviso do corte da busca: nulo é "a lista está inteira". */
+  const [avisoCorte, setAvisoCorte] = useState<string | null>(null);
 
   // ── FILTROS. `nome`, `cpf` e `origem` vão para o backend (no CORPO do POST); `cliente` e `etapa`
   // são resolvidos aqui, porque a busca do backend não tem esses eixos e o volume da tela é pequeno.
@@ -196,7 +199,10 @@ export default function CentralDeCandidatosPage() {
         ),
       ]);
       setVagas(listaVagas);
-      setPessoas(listaPessoas);
+      // A BUSCA VIROU PÁGINA (Frente D, ponto 15): `itens` é a lista, e `truncado` diz se sobrou
+      // gente além dela. A tela usa o aviso logo abaixo do contador de linhas.
+      setPessoas(listaPessoas.itens);
+      setAvisoCorte(avisoDeCorte(listaPessoas));
 
       const paineis = await comTeto(listaVagas, 6, (v) => painelDaVaga(v.id, token));
       setCandidaturas(paineis.flatMap((p) => p.candidaturas));
@@ -616,6 +622,14 @@ export default function CentralDeCandidatosPage() {
           role="alert"
         >
           {erro}
+        </p>
+      )}
+
+      {/* O CORTE DA BUSCA (Frente D, ponto 15). A lista sempre teve teto; o que não podia continuar
+          é ele ser invisível, porque a tela passava a apresentar uma janela como se fosse a base. */}
+      {avisoCorte && (
+        <p className="mb-5 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-[13px] text-dim">
+          {avisoCorte}
         </p>
       )}
 

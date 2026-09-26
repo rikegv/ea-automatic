@@ -3,7 +3,12 @@ import { ConflictException } from "@nestjs/common";
 import { plainToInstance } from "class-transformer";
 import { validateSync } from "class-validator";
 import { describe, expect, it, vi } from "vitest";
-import { CANDIDATURA_SITUACOES, ehSaidaSemExito, finalizaPosicao } from "@ea/shared-types";
+import {
+  CANDIDATURA_SITUACOES,
+  ehSaidaSemExito,
+  finalizaPosicao,
+  motivoVemDoCatalogo,
+} from "@ea/shared-types";
 import { SITUACOES_DE_SAIDA, ocupacaoDaVaga } from "../../domain/candidatura";
 import { CandidatosService } from "./candidatos.service";
 import { RegistrarSaidaDto } from "./candidatos.dto";
@@ -12,6 +17,10 @@ import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
 import { catalogoDeStatusFingido } from "../vaga-status/vaga-status-catalogo.fake";
 import type { AuthUser } from "../../auth/auth.types";
 import { envioDoPortalFingido } from "../../portal/portal-envio.fake";
+import {
+  MOTIVO_DE_DESCARTE_VALIDO,
+  respostaDoCatalogoDeDescarte,
+} from "../motivos-descarte/motivos-descarte.fake";
 
 /**
  * ─ DESVINCULAR O CANDIDATO DA VAGA: o mesmo mecanismo, com o nome que quem opera usa ────────────
@@ -106,10 +115,14 @@ function makeDb(cenario: { candidatura?: Record<string, unknown> } = {}) {
     b.where = () => b;
     b.innerJoin = () => b;
     b.leftJoin = () => b;
+    // O CATÁLOGO DE DESCARTE É RECONHECIDO PELA TABELA: `registrarSaida` confere contra ele o
+    // motivo do DESCARTE (Frente A, ponto 7) antes de qualquer transação.
     b.orderBy = () =>
-      Promise.resolve([
-        { c, candidatoNome: "Fulano", vagaCodigo: "PS-1", vagaNome: "Vaga", autor: "Consultor" },
-      ]);
+      Promise.resolve(
+        respostaDoCatalogoDeDescarte(tabela) ?? [
+          { c, candidatoNome: "Fulano", vagaCodigo: "PS-1", vagaNome: "Vaga", autor: "Consultor" },
+        ],
+      );
     b.for = (modo: string) => {
       ordem.push(`${modo === "update" ? "trava" : modo}-vaga`);
       return Promise.resolve([vaga]);
@@ -280,16 +293,13 @@ describe("desvincular um ALOCADO: a porta que a trava da entrega manda usar", ()
     it(`e a porta indicada ACEITA: ${situacao} desvincula quem estava ALOCADO`, async () => {
       const { service, updates } = makeDb({ candidatura: candidatura({ situacao: "ALOCADO" }) });
 
-      await service.registrarSaida(
-        "cand-1",
-        { situacao, motivo: "Vaga encolheu" } as never,
-        master("user-1"),
-      );
+      // O MOTIVO SAI DA RÉGUA, e não de um literal: o DESCARTE é conferido contra o catálogo
+      // `motivos_descarte` (Frente A, ponto 7) e a DESISTÊNCIA continua sendo prosa. Lendo
+      // `motivoVemDoCatalogo`, este teste acompanha sozinho o dia em que o recorte mudar.
+      const motivo = motivoVemDoCatalogo(situacao) ? MOTIVO_DE_DESCARTE_VALIDO : "Vaga encolheu";
+      await service.registrarSaida("cand-1", { situacao, motivo } as never, master("user-1"));
 
-      expect(daCandidatura(updates)).toMatchObject({
-        situacao,
-        motivoDescarte: "Vaga encolheu",
-      });
+      expect(daCandidatura(updates)).toMatchObject({ situacao, motivoDescarte: motivo });
     });
   }
 
@@ -320,7 +330,7 @@ describe("desvincular um ALOCADO: a porta que a trava da entrega manda usar", ()
 
     await service.registrarSaida(
       "cand-1",
-      { situacao: "DESCARTADO", motivo: "Não" } as never,
+      { situacao: "DESCARTADO", motivo: MOTIVO_DE_DESCARTE_VALIDO } as never,
       master("u"),
     );
 
@@ -380,7 +390,7 @@ describe("o candidato continua visível e realocável depois do desvínculo", ()
 
     await service.registrarSaida(
       "cand-1",
-      { situacao: "DESCARTADO", motivo: "Perfil não aderente" } as never,
+      { situacao: "DESCARTADO", motivo: MOTIVO_DE_DESCARTE_VALIDO } as never,
       master("user-1"),
     );
 
@@ -394,7 +404,7 @@ describe("o candidato continua visível e realocável depois do desvínculo", ()
     expect(erro!.getResponse()).toMatchObject({
       needsConfirmation: true,
       reason: "reentradaAposEncerramento",
-      anterior: { situacao: "DESCARTADO", motivo: "Perfil não aderente" },
+      anterior: { situacao: "DESCARTADO", motivo: MOTIVO_DE_DESCARTE_VALIDO },
     });
   });
 

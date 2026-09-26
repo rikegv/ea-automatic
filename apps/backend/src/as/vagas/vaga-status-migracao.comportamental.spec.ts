@@ -381,8 +381,67 @@ function linhasSemeadas(): LinhaSemeada[] {
   return linhas;
 }
 
+/**
+ * ─ OS `UPDATE` POSTERIORES AO `INSERT`, APLICADOS POR CIMA DAS LINHAS SEMEADAS ──────────────────
+ *
+ * ┌─ POR QUE ISTO PRECISOU EXISTIR (Frente B da Central de Vagas) ────────────────────────────────┐
+ * │ A 0130 não RE-SEMEIA o catálogo: ela faz `UPDATE ... SET encerra = false, ... WHERE papel =   │
+ * │ 'ENTREGA'`, que é a forma correta de mudar uma linha que já existe em produção. Lendo só os   │
+ * │ `INSERT`, este spec passou a comparar a semente de HOJE com o estado de 2026 e a acusar       │
+ * │ divergência num catálogo que, no banco, está exatamente igual à semente.                       │
+ * │                                                                                                │
+ * │ E A CORREÇÃO NÃO É AFROUXAR A ASSERÇÃO, é medir a coisa certa: o que o spec quer saber é      │
+ * │ "o que o banco TEM depois de rodar todas as migrations", e isso é o insert MAIS os updates.   │
+ * │ Reescrever a 0102 para já nascer com os flags novos seria pior: ela descreve o que rodou em   │
+ * │ produção, e migration aplicada não se reescreve.                                               │
+ * └────────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * O LEITOR É ESTREITO DE PROPÓSITO: só entende `UPDATE "as_vaga_status" SET "col" = valor, ...
+ * WHERE "papel" = 'X'` (ou `"codigo" = 'X'`), que é a forma da 0130. Um `UPDATE` de outra forma NÃO
+ * é aplicado em silêncio: ele LANÇA, porque um leitor que ignora o que não entende deixaria a
+ * comparação passar sobre um estado que o banco não tem.
+ */
+function aplicarUpdatesPosteriores(linhas: LinhaSemeada[]): LinhaSemeada[] {
+  for (const m of migracoesQueAtualizamOCatalogo()) {
+    const sql = m.sql.replace(/--[^\n]*/g, " ");
+    const re = /update\s+"?as_vaga_status"?\s+set\s+([\s\S]*?)\s+where\s+([\s\S]*?);/gi;
+    let achou: RegExpExecArray | null;
+    while ((achou = re.exec(sql)) !== null) {
+      const [, atribuicoes, condicao] = achou;
+      const alvo = /"?(papel|codigo)"?\s*=\s*'([A-Z_]+)'/i.exec(condicao);
+      if (!alvo) {
+        throw new Error(
+          `${m.arquivo}: há um UPDATE em as_vaga_status cujo WHERE este leitor não entende (${condicao.trim()}). Ou a migration usa papel/codigo, ou o leitor acompanha, de propósito.`,
+        );
+      }
+      const [, coluna, valor] = alvo;
+      const pares = itens(atribuicoes)
+        .map((par) => /"?([a-z_]+)"?\s*=\s*(.+)/i.exec(par))
+        .filter((x): x is RegExpExecArray => x !== null);
+      for (const linha of linhas) {
+        if (linha.valores[coluna.toLowerCase()] !== valor) continue;
+        for (const [, col, bruto] of pares) {
+          // `atualizado_em = now()` não descreve o catálogo, e comparar relógio não faz sentido.
+          if (col.toLowerCase() === "atualizado_em") continue;
+          linha.valores[col.toLowerCase()] = semAspas(bruto);
+        }
+      }
+    }
+  }
+  return linhas;
+}
+
+/** As migrations que ATUALIZAM o catálogo, na ordem. Complementa `migracoesDoCatalogo`. */
+function migracoesQueAtualizamOCatalogo(): { arquivo: string; sql: string }[] {
+  return readdirSync(DIR)
+    .filter((n) => n.endsWith(".sql"))
+    .sort()
+    .map((arquivo) => ({ arquivo, sql: readFileSync(join(DIR, arquivo), "utf8") }))
+    .filter((m) => /update\s+"?as_vaga_status"?\s+set/i.test(m.sql.replace(/--[^\n]*/g, " ")));
+}
+
 describe("a semente do vocabulário e as migrations descrevem o mesmo catálogo", () => {
-  const semeadas = linhasSemeadas();
+  const semeadas = aplicarUpdatesPosteriores(linhasSemeadas());
 
   it("o leitor achou linha literal em migration, senão as afirmações abaixo seriam vazias", () => {
     expect(

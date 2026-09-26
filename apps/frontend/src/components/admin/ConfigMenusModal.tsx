@@ -190,11 +190,18 @@ export function ConfigMenusModal({
       {ehAdmin && (
         <p className="mb-4 flex items-start gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[12.5px] text-dim">
           <Icon name="alert" className="mt-0.5 h-4 w-4 flex-none" />
-          {/* O TEXTO MUDOU com a segmentação de área. Ele dizia que Master enxerga TODOS os menus
-              sempre, e isso virou mentira: o Master passou a enxergar todos os menus DA ÁREA dele. */}
+          {/* O TEXTO MUDOU DUAS VEZES, E O MOTIVO DA SEGUNDA É O QUE IMPORTA AQUI.
+              (1) Com a segmentação de área, "Master enxerga TODOS os menus" virou mentira: ele passou
+                  a enxergar todos os menus DA ÁREA dele.
+              (2) Em 26/09/2026 o diretor mandou que o catálogo de Motivos De Descarte fosse
+                  concedido POR PESSOA, e a régua passou a exigir marcação NOMINAL inclusive do
+                  MASTER (`MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER`, no backend). Sem esta ressalva, a
+                  tela afirma que marcar não muda nada para um Master, e quem lesse isso concluiria
+                  que a concessão que o diretor acabou de pedir é inútil. O aviso passaria a
+                  DESENCORAJAR exatamente o gesto que a decisão criou. */}
           {ehSuperAdmin
             ? "Este usuário é Super Admin e enxerga TODOS os menus, de todas as áreas, independentemente desta marcação."
-            : "Este usuário é Master e enxerga TODOS os menus DA ÁREA dele, independentemente desta marcação. Fora da área, não alcança nada. A configuração por menu vale para o perfil Comum."}
+            : "Este usuário é Master e enxerga os menus DA ÁREA dele sem precisar de marcação, e fora da área não alcança nada. Os menus de configuração de catálogo são a exceção: eles exigem marcação aqui, inclusive para o Master, e é assim que o acesso a cada catálogo é concedido pessoa a pessoa."}
         </p>
       )}
 

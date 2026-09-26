@@ -108,6 +108,17 @@ function LinhaDoTempo({ eventos }: { eventos: AsCandidaturaEtapaItem[] }) {
                 </>
               ) : (
                 <>
+                  {/* ─ A REPROVAÇÃO PELO CLIENTE (Frente E, ponto 12) ────────────────────────
+                      BADGE PRÓPRIA, E O `tipo` CONTINUA SENDO `MOVIMENTO`: reprovar pelo cliente É
+                      um movimento (a pessoa volta para a etapa inicial e segue VIVA), e um quinto
+                      valor em `AsTipoEventoEtapa` obrigaria toda tela que já trata os quatro a
+                      ganhar um ramo novo para dizer a mesma coisa. Quem distingue é este booleano.
+
+                      O QUE ELA MUDA PARA QUEM LÊ: "voltou para Captação" e "o cliente reprovou,
+                      voltou para Captação" são fatos diferentes no histórico da vaga. O movimento
+                      manual de volta para a Captação NÃO recebe a badge, e não deve receber: aquele
+                      é o time recuando alguém por decisão própria. */}
+                  {e.reprovadoPeloCliente && <StatusPill tone="dg" label="Reprovado Pelo Cliente" />}
                   {e.etapaDe && (
                     <span className="text-faint">
                       {rotuloDaEtapa(e.etapaDe, catalogo)} para

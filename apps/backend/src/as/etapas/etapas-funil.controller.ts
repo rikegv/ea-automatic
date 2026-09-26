@@ -36,4 +36,25 @@ export class EtapasFunilController {
   listar(@Query("incluirInativas") incluirInativas?: string): Promise<AsEtapaFunil[]> {
     return this.etapas.listar(incluirInativas === "1" || incluirInativas === "true");
   }
+
+  /**
+   * ─ EM QUAIS ETAPAS SE MARCA ENTREVISTA (Frente E, ponto 8) ────────────────────────────────────
+   *
+   * ROTA PRÓPRIA, E SÓ OS CÓDIGOS, e as duas coisas são a mesma decisão: o payload do `GET
+   * /as/etapas` é CONGELADO em sete campos por um teste que existe justamente para pegar o campo a
+   * mais (`etapas-funil.leitura-sem-contagem.spec.ts`), e acrescentar o flag lá derrubaria aquele
+   * teste com razão. Aqui o recorte é explícito e mínimo: uma lista de códigos, sem rótulo, sem
+   * ordem e sem contagem nenhuma.
+   *
+   * PARA QUE A TELA PRECISA: decidir se o controle de "marcar entrevista" aparece para a etapa em
+   * que a pessoa está. Sem ela, a tela compararia com `"ENTREVISTA_SOULAN"`, que é exatamente o
+   * literal de catálogo que esta frente inteira existe para não escrever.
+   *
+   * ABERTA, como a listagem ao lado e pela mesma razão: é dado de TRABALHO do consultor COMUM, e
+   * fechá-la esconderia o botão de quem marca entrevista. §A.6: uma lista de códigos de etapa.
+   */
+  @Get("com-entrevista")
+  async comEntrevista(): Promise<string[]> {
+    return [...(await this.etapas.codigosComEntrevista())];
+  }
 }

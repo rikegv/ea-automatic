@@ -1091,7 +1091,26 @@ export interface VagaStatusItem {
 export const VAGA_STATUS_SEMENTE: readonly VagaStatusItem[] = [
   { codigo: "RASCUNHO",  rotulo: "Rascunho",  ordem: 1, tom: "nt", ativo: true, papel: "RASCUNHO",     encerra: false, recebeCandidato: true,  daTrilha: true,  movivelManualmente: false },
   { codigo: "ABERTA",    rotulo: "Aberta",    ordem: 2, tom: "wn", ativo: true, papel: "ABERTURA",     encerra: false, recebeCandidato: true,  daTrilha: true,  movivelManualmente: true  },
-  { codigo: "ENTREGUE",  rotulo: "Entregue",  ordem: 3, tom: "ok", ativo: true, papel: "ENTREGA",      encerra: true,  recebeCandidato: false, daTrilha: false, movivelManualmente: false },
+  /*
+   * ─ A ENTREGA DEIXOU DE ENCERRAR (decisão do diretor, Frente B da Central de Vagas) ────────────
+   *
+   * ELA ERA UM DESFECHO E VIROU UM ESTADO VIVO. No conceito do diretor a vaga tem QUATRO estados
+   * (Aberta, Entregue, Fechada, Cancelada), e `ENTREGUE` quer dizer "entregue ao cliente, ainda
+   * NÃO finalizada": há candidato em Entrevista Cliente, o processo continua, e a vaga continua
+   * recebendo gente. Quem termina é `FECHADA`, pela porta `fechar`, que confere candidato tratado
+   * e posição preenchida.
+   *
+   * OS TRÊS FLAGS MUDARAM JUNTOS, e nenhum deles é decorativo:
+   *   `encerra: false`          a vaga segue viva (e o CHECK do banco deixa de barrá-la como destino);
+   *   `recebeCandidato: true`   vaga em entrega continua captando, que é o normal da operação;
+   *   `movivelManualmente: true` é o que abre `ABERTA <-> ENTREGUE` no "mover status".
+   *
+   * `FECHADA` E `CANCELADA` NÃO VIRAM DESTINO MANUAL, e a omissão é a régua inteira: encerrar vaga
+   * tem DUAS portas, e as duas têm régua (motivo do catálogo, candidato tratado, posições
+   * preenchidas, gate de Master, carimbos de contagem). `podeSerDestinoManual` continua sendo a
+   * dupla conferência que impede uma terceira.
+   */
+  { codigo: "ENTREGUE",  rotulo: "Entregue",  ordem: 3, tom: "ok", ativo: true, papel: "ENTREGA",      encerra: false, recebeCandidato: true,  daTrilha: false, movivelManualmente: true  },
   { codigo: "FECHADA",   rotulo: "Fechada",   ordem: 4, tom: "nt", ativo: true, papel: "FECHAMENTO",   encerra: true,  recebeCandidato: false, daTrilha: false, movivelManualmente: false },
   { codigo: "CANCELADA", rotulo: "Cancelada", ordem: 5, tom: "dg", ativo: true, papel: "CANCELAMENTO", encerra: true,  recebeCandidato: false, daTrilha: false, movivelManualmente: false },
   /*
@@ -2927,6 +2946,33 @@ export interface AsCandidatoListItem {
 }
 
 /**
+ * ─ A PÁGINA DA BUSCA DE CANDIDATOS, e por que a lista deixou de ser um ARRAY PELADO ────────────
+ *
+ * A BUSCA SEMPRE TEVE TETO (200 linhas), e até a Frente D ele era INVISÍVEL: a resposta era um array,
+ * a tela mostrava o que veio, e ninguém tinha como saber que havia mais alguém atrás do corte. Numa
+ * lista ordenada por data de cadastro, isso quer dizer que o candidato antigo simplesmente NÃO
+ * EXISTIA para quem procurava rolando a tela.
+ *
+ * O CORTE CONTINUA EXISTINDO, e é proposital (§A.6: a busca sem filtro não despeja a base inteira de
+ * dado pessoal no navegador). O que ele não pode mais é ser silencioso. `total` diz quantos casam com
+ * o filtro, `limite`/`offset` dizem que fatia é esta, e `truncado` responde de uma vez a pergunta que
+ * a tela precisa fazer para não mentir.
+ *
+ * §A.6: nada aqui é identificador. São três números e um booleano em volta da MESMA lista pobre.
+ */
+export interface AsCandidatosPagina {
+  itens: AsCandidatoListItem[];
+  /** Quantos candidatos casam com o filtro, ANTES do corte. */
+  total: number;
+  /** Quantas linhas esta página pediu. */
+  limite: number;
+  /** De qual linha esta página começou. */
+  offset: number;
+  /** Sobrou gente além desta página? Derivado, nunca gravado. */
+  truncado: boolean;
+}
+
+/**
  * A FICHA de um candidato: o ÚNICO lugar em que os dados de contato e o CPF trafegam.
  *
  * `anonimizadoEm` preenchido quer dizer que a retenção venceu e os identificadores diretos já foram
@@ -2998,6 +3044,29 @@ export interface AsCandidaturaItem {
    * └─────────────────────────────────────────────────────────────────────────────────────────────┘
    */
   posicaoLado: PosicaoLado | null;
+  /**
+   * ─ QUANTO A PESSOA PEDIU, quando o motivo do desfecho pediu isso (Frente E, ponto 9) ─────────
+   *
+   * `string` E NÃO `number`, como todo `numeric` do sistema (`salarioAbertura`, `salarioFechamento`):
+   * o driver do Postgres devolve `numeric` como string de propósito, e converter para `number` aqui
+   * introduziria erro de ponto flutuante num valor que é dinheiro. Quem formata é a tela.
+   *
+   * NULO É O NORMAL, e ele quer dizer "não foi pedido", que é diferente de zero. Só a candidatura
+   * descartada por um motivo marcado `pedePretensao` tem valor aqui.
+   *
+   * ┌─ ONDE ELE APARECE, E POR QUE ISSO COUBE NA §A.6 ───────────────────────────────────────────┐
+   * │ ESTE TIPO SERVE TRÊS SUPERFÍCIES, e nenhuma delas é uma varredura da base: a FICHA de UMA   │
+   * │ pessoa, as candidaturas de UMA vaga e a lista de transferíveis de UMA vaga. A busca da       │
+   * │ Central de Candidatos NÃO usa este tipo (ela devolve `AsCandidatoListItem`, que minimiza até │
+   * │ o CPF em um booleano), então o valor não desce em carga de listagem.                          │
+   * │                                                                                             │
+   * │ A COMPARAÇÃO É COM O CPF DO SUBSTITUÍDO, que foi RETIRADO da lista de vagas em 22/09 por    │
+   * │ descer CRU para TODA vaga, a cada carga, sem nenhuma coluna mostrá-lo. Aqui é o oposto nos   │
+   * │ dois pontos: o recorte é de uma vaga por vez, e a tela MOSTRA o valor, porque é ela que o    │
+   * │ pediu. O que continua valendo igual: nunca em log, e expurgado pela retenção.                │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   */
+  pretensaoSalarial: string | null;
 }
 
 /**
@@ -3337,6 +3406,87 @@ export interface AsMotivoCancelamentoVaga {
 }
 
 /**
+ * UM MOTIVO DE DESCARTE DO CANDIDATO, do catálogo que o diretor mantém (Frente A, ponto 7).
+ *
+ * MESMA FORMA de `AsMotivoCancelamentoVaga`, e a repetição é deliberada em vez de um tipo genérico
+ * compartilhado: são DOIS catálogos com DUAS telas, DUAS rotas e DOIS ciclos de vida, e colapsá-los
+ * num `AsMotivo` faria uma mudança em um passar despercebida no outro. O que eles compartilham é o
+ * molde, não a identidade.
+ *
+ * O QUE FICA GRAVADO NA CANDIDATURA É O NOME, e não o id, como a vaga já faz com o motivo de
+ * cancelamento: inativar um motivo aqui não trava candidatura nenhuma, e a linha descartada em
+ * janeiro continua dizendo por que a pessoa saiu mesmo com o motivo fora de circulação em março.
+ */
+export interface AsMotivoDescarte {
+  id: string;
+  nome: string;
+  ativo: boolean;
+  /**
+   * ─ ESTE MOTIVO PEDE A PRETENSÃO SALARIAL? (Frente E, ponto 9) ────────────────────────────────
+   *
+   * ┌─ A MARCA SOBE AO CONTRATO PORQUE É A TELA QUE PRECISA DELA ANTES DO SERVIDOR ─────────────┐
+   * │ O diretor pediu que, quando o motivo do desfecho for pretensão salarial, a tela abra um    │
+   * │ MODAL PRÓPRIO pedindo o valor. Para abrir o modal, a tela precisa saber, no instante em     │
+   * │ que o motivo é escolhido, se AQUELE motivo pede o valor. Sem este campo no payload, a tela  │
+   * │ só descobriria isso pelo 400 do servidor, depois de o consultor ter clicado em salvar.      │
+   * │                                                                                            │
+   * │ E ELE É A MESMA MARCA QUE O SERVIDOR LÊ, não uma segunda: `exigirPretensaoQuandoOMotivoPede`│
+   * │ confere contra `motivosDeDescarteAtivos`, que é a MESMA consulta que enche o seletor. A     │
+   * │ tela não decide nada sozinha; ela só deixa de perguntar tarde.                              │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * NUNCA SE COMPARA O `nome` PARA DESCOBRIR ISSO, em camada nenhuma: o catálogo é gerenciável, o
+   * diretor renomeia, e a comparação por nome pararia de funcionar em silêncio na primeira correção
+   * de grafia. Quem responde é este booleano.
+   */
+  pedePretensao: boolean;
+}
+
+/**
+ * QUAIS SAÍDAS TÊM O MOTIVO CONFERIDO CONTRA O CATÁLOGO `motivos_descarte`.
+ *
+ * ┌─ A LISTA É UM RECORTE, E ELE É A PARTE QUE MAIS IMPORTA DESTE VOCABULÁRIO ─────────────────┐
+ * │ `RegistrarSaidaDto.motivo` é UM campo servindo TRÊS desfechos, e eles NÃO são da mesma      │
+ * │ natureza. A pergunta que cada um faz na tela é a prova disso, e está escrita lá:            │
+ * │   . `DESCARTADO`            "Por que esta pessoa foi descartada"  → CLASSIFICAÇÃO           │
+ * │   . `DESISTIU`              "O que a pessoa disse ao desistir"    → PROSA                   │
+ * │   . `ENVIADO_PARA_ADMISSAO` "O que fechou o processo e o que a admissão precisa saber"      │
+ * │                                                                   → PROSA                   │
+ * │                                                                                            │
+ * │ SÓ O PRIMEIRO É CLASSIFICAÇÃO, e é só dele que o diretor fechou o vocabulário. A própria    │
+ * │ lista que ele ditou diz isso: "Desistente" é um MOTIVO DE DESCARTE ("descartei porque       │
+ * │ desistiu"), e não a situação `DESISTIU`. Fossem as duas coisas a mesma, o valor não          │
+ * │ precisaria existir no catálogo.                                                             │
+ * │                                                                                            │
+ * │ ALARGAR O RECORTE QUEBRARIA CÓDIGO VALIDADO (§A.26), e isto foi MEDIDO, não suposto:        │
+ * │ incluir `DESISTIU` e `ENVIADO_PARA_ADMISSAO` derruba 38 testes em 5 arquivos, e o pior      │
+ * │ deles é a ponte A&S para Admissão, que passaria a recusar o envio de TODA pessoa aprovada   │
+ * │ cuja explicação não estivesse numa lista de desfechos negativos.                            │
+ * └────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * TUPLA DE UM ELEMENTO, E NÃO UM `=== "DESCARTADO"` ESPALHADO: hoje o recorte é um, e o dia em que o
+ * diretor decidir que a desistência também tem catálogo é uma linha aqui, não uma caçada por
+ * comparações de string em duas camadas.
+ *
+ * A CONSTANTE EXISTE PARA A TELA E PARA O SERVIDOR LEREM A MESMA LISTA. Sem ela, a tela decide
+ * sozinha quando mostrar o seletor e quando mostrar a caixa de texto, e no dia em que o recorte mudar
+ * a tela oferece o que a rota recusa. É o mesmo desenho de `SITUACOES_DE_SAIDA`.
+ */
+export const SITUACOES_COM_MOTIVO_DE_CATALOGO = ["DESCARTADO"] as const;
+export type SituacaoComMotivoDeCatalogo = (typeof SITUACOES_COM_MOTIVO_DE_CATALOGO)[number];
+
+/**
+ * ESTA SAÍDA ESCOLHE O MOTIVO NO CATÁLOGO, ou escreve prosa?
+ *
+ * FUNÇÃO, e não um `includes` solto em cada chamador: o `includes` de uma tupla `as const` não
+ * estreita o tipo sozinho, e cada lugar acabaria com um `as never` próprio. Um único ponto de
+ * conversão é o que mantém a pergunta com a mesma resposta nas duas camadas.
+ */
+export function motivoVemDoCatalogo(situacao: string): situacao is SituacaoComMotivoDeCatalogo {
+  return (SITUACOES_COM_MOTIVO_DE_CATALOGO as readonly string[]).includes(situacao);
+}
+
+/**
  * A RECUSA DA PRIMEIRA TENTATIVA DE REENTRADA, quando a pessoa JÁ TEVE candidatura ENCERRADA
  * naquela vaga.
  *
@@ -3428,6 +3578,22 @@ export interface AsCandidaturaEtapaItem {
   /** O nome de divulgação de cada vaga, com o código como reserva. Nulo se a vaga foi apagada. */
   vagaDeRotulo: string | null;
   vagaParaRotulo: string | null;
+  /**
+   * ─ ESTE MOVIMENTO FOI UMA REPROVAÇÃO PELO CLIENTE? (Frente E, ponto 12) ──────────────────────
+   *
+   * `tipo` CONTINUA SENDO `MOVIMENTO` quando isto é `true`, e a redundância aparente é o desenho:
+   * a reprovação pelo cliente É um movimento (a pessoa volta para a etapa inicial e segue VIVA), e
+   * inflar `AsTipoEventoEtapa` com um quinto valor obrigaria toda tela que já trata os quatro a
+   * ganhar um ramo novo para dizer a mesma coisa.
+   *
+   * O QUE ELE MUDA NA TELA: o rótulo do evento na linha do tempo. "Voltou para Captação" e "o
+   * cliente reprovou, voltou para Captação" são fatos diferentes para quem lê o histórico da vaga.
+   *
+   * `false` EM TODO O RESTO, inclusive no movimento manual da Entrevista Cliente de volta para a
+   * Captação: aquele é o time recuando alguém por decisão própria, e contar os dois como um só
+   * seria inventar reprovação de cliente que não houve.
+   */
+  reprovadoPeloCliente: boolean;
   ocorridoEm: string;
   tipo: AsTipoEventoEtapa;
 }
@@ -3537,6 +3703,186 @@ export interface AsOcupacaoVaga {
 export interface AsPainelVaga {
   ocupacao: AsOcupacaoVaga;
   candidaturas: AsCandidaturaItem[];
+}
+
+// ─── A ENTREVISTA MARCADA (Frente E, ponto 8) ───────────────────────────────────────────────────
+/**
+ * ─ UMA ENTREVISTA MARCADA: DATA, HORÁRIO E EM QUE ETAPA ────────────────────────────────────────
+ *
+ * ┌─ POR QUE ELA É UMA LINHA POR ETAPA, E NÃO DOIS CAMPOS NA CANDIDATURA ────────────────────────┐
+ * │ A OST diz, na mesma frase que pede a entrevista da etapa Soulan, para CONSIDERAR QUE PODE     │
+ * │ HAVER ENTREVISTA TAMBÉM NA ETAPA CLIENTE. Com um par de campos na candidatura, marcar a       │
+ * │ segunda apaga a primeira, e "que dia foi a entrevista interna desta pessoa" deixa de ter      │
+ * │ resposta no instante em que o cliente marca a dele.                                           │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * QUAIS ETAPAS ACEITAM ENTREVISTA VEM DO CATÁLOGO (`as_etapas_funil.tem_entrevista`), lido pela
+ * rota `GET /as/etapas/com-entrevista`. A tela NUNCA compara com `"ENTREVISTA_SOULAN"`: a lista é
+ * do diretor, e ele renomeia e acrescenta etapa sem deploy.
+ *
+ * `agendadaEm` É UM INSTANTE (ISO, com fuso), e não uma data e uma hora separadas: os dois campos
+ * criariam o estado impossível de ter hora sem dia. Quem formata para o padrão brasileiro é a tela.
+ *
+ * §A.6: id de candidatura, código de etapa, instante e o NOME DE QUEM MARCOU (usuário INTERNO do
+ * EA, nunca o candidato). Nenhum dado pessoal de candidato atravessa este tipo.
+ */
+export interface AsCandidaturaEntrevista {
+  id: string;
+  candidaturaId: string;
+  /** O código da etapa. O rótulo sai do catálogo, como em todo lugar que fala de etapa. */
+  etapa: CandidaturaEtapa;
+  /** Data E horário, num instante só. */
+  agendadaEm: string;
+  /** Quem marcou, da sessão. Nulo quando o usuário foi removido do sistema. */
+  agendadaPorNome: string | null;
+  atualizadoEm: string;
+}
+
+/**
+ * ─ O CATÁLOGO DE MOTIVOS DE REENVIO DA SHORTLIST (decisão do diretor) ──────────────────────────
+ *
+ * MESMA FORMA DO `AsMotivoDescarte`, e a igualdade é de propósito: são dois catálogos gerenciáveis
+ * pelo diretor, com a mesma tela, o mesmo gesto de inativar e a mesma promessa de que a linha
+ * inativada CONTINUA resolvendo o histórico (o reenvio de janeiro segue legível com o motivo fora
+ * de circulação em março).
+ *
+ * NÃO TEM `pedePretensao` nem marca nenhuma: aqui não há segundo comportamento pendurado no item.
+ * Se um dia houver, ele entra como booleano nomeado, nunca como comparação de `nome`.
+ */
+export interface AsMotivoReenvioShortlist {
+  id: string;
+  nome: string;
+  ativo: boolean;
+}
+
+// ─── A SHORTLIST DA VAGA (Frente E, pontos 10 e 11) ─────────────────────────────────────────────
+/**
+ * ─ QUANTOS CANDIDATOS UMA PRIMEIRA SHORTLIST DEVERIA TER ───────────────────────────────────────
+ *
+ * TRÊS, e o número mora AQUI para a tela e o servidor lerem o MESMO. Escrito em dois lugares, ele
+ * diverge no dia em que o diretor pedir quatro, e a tela passa a avisar sobre um limite que a rota
+ * não conhece (ou o contrário, que é pior: a rota recusa algo que a tela nunca avisou).
+ *
+ * ELE AVISA E NÃO IMPEDE (decisão do diretor, registrada na OST): enviar com menos de três é
+ * PERMITIDO, e o que o sistema faz é perguntar uma vez e REGISTRAR a confirmação
+ * (`avisoCurtaAceito`). É a mesma mecânica do aviso de banco com posições oficiais abertas, e é a
+ * §A.3 regra 8 aplicada: guarda que se atravessa sem registro não é guarda, é texto.
+ *
+ * ┌─ TODO ENVIO É MEDIDO, E NÃO SÓ O PRIMEIRO (decisão do diretor) ─────────────────────────────┐
+ * │ A primeira redação media só a shortlist de número 1, com o argumento de que "reenvio de duas │
+ * │ pessoas depois de uma lista de seis é o cliente pedindo mais dois nomes". O diretor decidiu  │
+ * │ o contrário, e a razão dele é a operação: DEPOIS DE TRANSFERÊNCIA E DESCARTE, REENVIO CURTO  │
+ * │ É O CASO NORMAL, não a exceção. Justamente a lista que encolheu porque a vaga perdeu gente é │
+ * │ a que precisa da pergunta, e era exatamente ela que a régua antiga deixava passar calada.    │
+ * │                                                                                              │
+ * │ A COBERTURA INDEPENDENTE JÁ TINHA APONTADO ISSO como "teste que passa medindo a coisa        │
+ * │ errada": o requisito do diretor nunca disse "só a primeira", e o `numero === 1` era escolha  │
+ * │ de quem escreveu, cimentada por um teste que afirmava o reenvio curto passando direto.        │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * O AVISO CONTINUA NÃO BLOQUEANTE, e isso não mudou: ele pergunta e REGISTRA a confirmação
+ * (`avisoCurtaAceito`), nunca recusa.
+ */
+export const SHORTLIST_MINIMO_SUGERIDO = 3;
+
+/**
+ * ESTA SHORTLIST É CURTA A PONTO DE MERECER O AVISO?
+ *
+ * UMA CONDIÇÃO SÓ: ter MENOS que o mínimo. O `numero` continua na assinatura porque é ele que a
+ * mensagem usa para dizer "primeira shortlist" ou "reenvio", e porque tirá-lo obrigaria a mexer nas
+ * quatro chamadas por uma mudança de texto.
+ *
+ * CONTINUA SENDO FUNÇÃO, e não um `< 3` solto em cada camada, pelo mesmo motivo de sempre: a tela e
+ * a rota têm de concordar sobre QUANDO perguntar, e duas cópias da régua divergem na primeira
+ * mudança (esta aqui é a prova: a régua mudou, e mudou em um lugar só).
+ */
+export function shortlistCurta(_numero: number, quantidade: number): boolean {
+  return quantidade < SHORTLIST_MINIMO_SUGERIDO;
+}
+
+/**
+ * ─ UMA SHORTLIST ENVIADA AO CLIENTE, com quem estava nela ──────────────────────────────────────
+ *
+ * ┌─ O CONJUNTO É CONGELADO NO ENVIO, E NÃO EXISTE EDITAR ────────────────────────────────────────┐
+ * │ O que o cliente recebeu naquele dia é FATO, e fato não se edita. Mudou a lista, é REENVIO,    │
+ * │ com `numero` próprio, `motivoReenvio` e data própria. É a mesma disciplina que faz            │
+ * │ `as_candidatura_etapas` nunca ser reescrito.                                                   │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * `numero` É A ORDEM DO ENVIO NAQUELA VAGA: 1 é a primeira, 2+ é reenvio. É ele que a tela lê para
+ * escrever "Shortlist 1" ou "Reenvio 2", e é ele que decide se o aviso dos três se aplica.
+ *
+ * §A.6: o item carrega o NOME do candidato porque a shortlist é, por definição, a lista de nomes
+ * que foi ao cliente, e uma tela que a mostrasse por UUID não serviria para nada. NÃO carrega CPF,
+ * e-mail, telefone nem pretensão: quem precisa da ficha abre a ficha.
+ */
+export interface AsShortlistItem {
+  candidaturaId: string;
+  candidatoId: string;
+  candidatoNome: string;
+  /** Onde a pessoa está no funil AGORA, e não onde ela estava no envio. Ver o bloco do tipo. */
+  etapaAtual: CandidaturaEtapa;
+  situacaoAtual: CandidaturaSituacao;
+}
+
+export interface AsShortlist {
+  id: string;
+  vagaId: string;
+  /** 1 = a primeira. 2+ = reenvio. */
+  numero: number;
+  /** A data do envio ao cliente. É ELA que carimba `vagas.envioShortlist`, e não o contrário. */
+  enviadaEm: string;
+  enviadaPorNome: string | null;
+  /**
+   * POR QUE HOUVE REENVIO, pelo CATÁLOGO. Nulo no primeiro envio, preenchido em todo reenvio.
+   *
+   * ┌─ ERA TEXTO LIVRE, E VIROU CATÁLOGO POR DUAS RAZÕES QUE SE SOMAM (decisão do diretor) ──────┐
+   * │ 1. INDICADOR. O diretor quer contar POR QUE as listas voltam, e frase digitada não conta:   │
+   * │    "cliente pediu mais nomes", "Cliente pediu + nomes" e "+ nomes" são três linhas de um    │
+   * │    relatório que deveriam ser uma. É o mesmo argumento que já tirou o motivo de descarte do │
+   * │    campo aberto.                                                                            │
+   * │ 2. §A.6. A auditoria de segurança registrou que este campo, sendo texto livre pendurado na  │
+   * │    VAGA, NÃO É ALCANÇADO por varredura nenhuma: a retenção é chaveada por `candidato_id`, e │
+   * │    quem escrevesse ali o telefone ou o nome de um parente deixaria esse dado fora do        │
+   * │    expurgo, para sempre e sem ninguém achar. Catálogo resolve por construção: não há onde   │
+   * │    digitar dado pessoal.                                                                    │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * O `id` É O DADO E O `nome` É A LEITURA: o id sustenta a contagem e sobrevive ao diretor
+   * renomear a linha; o nome poupa a tela de buscar o catálogo para escrever uma etiqueta. Nunca se
+   * agrupa por nome, pela mesma razão pela qual não se compara nome no motivo de descarte.
+   */
+  motivoReenvioId: string | null;
+  motivoReenvioNome: string | null;
+  /** A primeira shortlist foi enviada com menos de três candidatos, e alguém confirmou isso. */
+  avisoCurtaAceito: boolean;
+  /**
+   * QUEM ESTAVA NA LISTA, e a `etapaAtual` de cada um é o ESTADO DE HOJE, não o do envio.
+   *
+   * ISSO É ESCOLHA, E PRECISA ESTAR ESCRITA: a leitura junta os itens (que são congelados) com a
+   * candidatura VIVA, então a lista enviada em março mostra, em setembro, onde cada uma daquelas
+   * pessoas foi parar. É a pergunta que a tela faz ("dos seis que mandei, quantos o cliente
+   * entrevistou?"), e ela só tem resposta com o estado atual. QUEM estava na lista continua
+   * congelado, que é a parte que não pode mudar.
+   */
+  itens: AsShortlistItem[];
+}
+
+/**
+ * A RECUSA DA PRIMEIRA TENTATIVA DE ENVIAR UMA SHORTLIST CURTA.
+ *
+ * `needsConfirmation: true`, pelo mesmo desenho de `AsReentradaPrecisaCiencia`: o envio é legítimo,
+ * o consultor só precisa ver o número antes de confirmar. A tela mostra a pergunta e reenvia a
+ * MESMA chamada com `cienteShortlistCurta: true`.
+ *
+ * O NÚMERO VAI JUNTO porque "tem certeza?" não é aviso: avisar com DOIS candidatos e avisar com UM
+ * são conversas diferentes, e é o número que distingue as duas. Mesma razão do aviso do banco.
+ */
+export interface AsShortlistCurtaPrecisaCiencia {
+  needsConfirmation: true;
+  quantidade: number;
+  minimoSugerido: number;
+  mensagem: string;
 }
 
 // ─── FILA DE ENTRADAS DO PANDAPÉ ────────────────────────────────────────────────────────────────

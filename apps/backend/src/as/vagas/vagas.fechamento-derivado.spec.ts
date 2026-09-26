@@ -253,7 +253,14 @@ describe("fechar: a trava 6, quem decide é a contagem das candidaturas", () => 
 
     await service.fechar("vaga-1", CORPO, COMUM);
     const v = gravado(updates);
-    expect(v).toMatchObject({ status: "ENTREGUE", vagasFechadas: 5, vagasFechadasBanco: 0 });
+    /*
+     * ─ SAI `FECHADA`, E NÃO MAIS `ENTREGUE` (Frente B da Central de Vagas) ──────────────────────
+     * MUDANÇA DE REQUISITO: `ENTREGUE` deixou de ser desfecho e virou estado VIVO ("entregue ao
+     * cliente, ainda NÃO finalizada"). Fechar passou a gravar SEMPRE o papel FECHAMENTO, e quem
+     * responde "esta vaga entregou" são os DOIS CARIMBOS abaixo, que já eram escritos na mesma
+     * gravação e não mudaram uma vírgula.
+     */
+    expect(v).toMatchObject({ status: "FECHADA", vagasFechadas: 5, vagasFechadasBanco: 0 });
     expect(v.fechamentoForcadoPorId).toBeUndefined();
     expect(v.fechamentoForcadoEm).toBeUndefined();
     expect(v.fechamentoForcadoFaltavam).toBeUndefined();
@@ -280,7 +287,7 @@ describe("fechar: a trava 6, quem decide é a contagem das candidaturas", () => 
       candidaturas: [pessoa("ALOCADO", null, "A"), pessoa("ENVIADO_PARA_ADMISSAO", null, "B")],
     });
     await service.fechar("vaga-1", CORPO, COMUM);
-    expect(gravado(updates)).toMatchObject({ vagasFechadas: 2, status: "ENTREGUE" });
+    expect(gravado(updates)).toMatchObject({ vagasFechadas: 2, status: "FECHADA" });
 
     const so2Aprovados = makeDb({
       posicoesOficiais: 2,
@@ -314,7 +321,7 @@ describe("fechar: o forçamento é de Master, e ele deixa trilha", () => {
     await service.fechar("vaga-1", { ...CORPO, forcar: true }, MASTER);
     const v = gravado(updates);
     expect(v).toMatchObject({
-      status: "ENTREGUE",
+      status: "FECHADA",
       vagasFechadas: 3,
       fechamentoForcadoPorId: "user-master",
       fechamentoForcadoFaltavam: 2,
@@ -432,7 +439,9 @@ describe("fechar: a ordem, a trava 5 e o que deixou de decidir", () => {
   });
 
   it("recusa a vaga que já foi fechada, sem contar nada", async () => {
-    const { service, ordem } = makeDb({ status: "ENTREGUE", candidaturas: pessoas(5, "ALOCADO") });
+    // O STATUS DE PARTIDA VIROU `FECHADA`: `ENTREGUE` não encerra mais, então partir dela é o
+    // caminho NORMAL do fechamento e não a recusa que este teste mede.
+    const { service, ordem } = makeDb({ status: "FECHADA", candidaturas: pessoas(5, "ALOCADO") });
     await expect(service.fechar("vaga-1", CORPO, COMUM)).rejects.toBeInstanceOf(ConflictException);
     expect(ordem).toEqual(["trava-vaga"]);
   });
@@ -538,8 +547,10 @@ describe("fechar forçado: a vaga que entregou SÓ no banco (a decisão, pinada)
 
     await service.fechar("vaga-1", { ...CORPO, forcar: true }, MASTER);
     expect(gravado(updates)).toMatchObject({
-      // O RÓTULO: entregou gente, então ENTREGUE. Três pessoas na reserva são três pessoas.
-      status: "ENTREGUE",
+      // O RÓTULO VIROU `FECHADA` na Frente B: a vaga TERMINOU, e quem diz que ela entregou são os
+      // dois carimbos logo abaixo. A decisão pinada por este bloco continua intacta: o que se
+      // protege é os CARIMBOS não mentirem, e eles não mentem.
+      status: "FECHADA",
       // OS DOIS CARIMBOS SEPARADOS: zero no oficial, três no banco. Nenhum dos dois mente.
       vagasFechadas: 0,
       vagasFechadasBanco: 3,

@@ -13,7 +13,6 @@ import type {
   AsCandidaturaParaReabrir,
   AsEtapaFunil,
   AsOcupacaoVaga,
-  AsVagaCancelamentoBloqueado,
   AsVagaFechamentoBloqueado,
   CandidaturaEtapa,
   CandidaturaSituacao,
@@ -44,7 +43,6 @@ import {
   nomeDaUf,
   normalizeCpf,
   regiaoPertenceAUf,
-  seguraOCancelamento,
   textoPendencia,
 } from "@ea/shared-types";
 import type { AuthUser } from "../../auth/auth.types";
@@ -111,8 +109,14 @@ import { linhaDeServicoEscolhida } from "../linhas-servico/linhas-servico.servic
 import { segmentoEscolhido } from "../segmentos/segmentos.service";
 import { comercialEscolhido } from "../comerciais/comerciais.service";
 import { resolverHerdado } from "../../domain/valor-herdado";
-import { gravarSaidaDaCandidatura } from "../candidatos/encerrar-candidatura";
 import { restaurarCandidatura } from "../candidatos/restaurar-candidatura";
+/*
+ * A RÉGUA DOS PAPÉIS EM QUE A VAGA ESTÁ EM PROCESSO (Frente B). Ela responde a trava de ORIGEM do
+ * `fechar` e do `cancelar`, que antes perguntavam `ehDoPapel(status, "ABERTURA")` e passaram a
+ * precisar aceitar a ENTREGA também, porque ela deixou de encerrar. A lista é UMA só, e a mesma que
+ * a derivação alcança: ver o porquê no domínio.
+ */
+import { papelDeVagaEmProcesso } from "../../domain/vaga-status-derivado";
 import { EtapasFunilService } from "../etapas/etapas-funil.service";
 import {
   VagaStatusService,
@@ -1748,7 +1752,8 @@ export class VagasService {
      * lido lá dentro, sob o `FOR UPDATE`, e só lá.
      */
     const regua = await this.statusVaga.regua();
-    const codigoEntrega = regua.codigoDoPapel("ENTREGA");
+    // `codigoDoPapel("ENTREGA")` SAIU DAQUI na Frente B: fechar não grava mais a ENTREGA, porque ela
+    // deixou de ser desfecho e virou estado VIVO. Ver o bloco na gravação do status, abaixo.
     const codigoFechamento = regua.codigoDoPapel("FECHAMENTO");
 
     await this.db.transaction(async (tx) => {
@@ -1765,14 +1770,27 @@ export class VagasService {
         .for("update");
       if (!vaga) throw new BadRequestException("Vaga não encontrada.");
       /*
-       * A TRAVA DE ORIGEM, AGORA PELO PAPEL: só a vaga em ABERTURA fecha. O código continua sendo
+       * A TRAVA DE ORIGEM, PELO PAPEL: só a vaga EM PROCESSO fecha. O código continua sendo
        * `ABERTA`, e é justamente por isso que perguntar pelo papel importa: o literal concorda com o
        * catálogo por coincidência, e a coincidência acaba no dia em que a linha for recadastrada.
+       *
+       * ┌─ ELA PASSOU A ACEITAR A ENTREGA, E SEM ISSO A FRENTE B TRAVARIA O CAMINHO NORMAL ──────┐
+       * │ Até aqui a pergunta era `ehDoPapel(status, "ABERTURA")`, e bastava porque `ENTREGUE`    │
+       * │ era TERMINAL. Com a entrega viva (o candidato está com o cliente), o caminho NORMAL do  │
+       * │ processo é exatamente este: a vaga fica ENTREGUE, o candidato é contratado, e a vaga    │
+       * │ FECHA. Com o literal antigo, ela não fecharia por porta nenhuma e o consultor teria de  │
+       * │ movê-la à mão de volta para Aberta antes, o que ainda GRUDARIA o status (§ o carimbo    │
+       * │ manual) e desligaria a derivação daquela vaga para sempre.                               │
+       * │                                                                                         │
+       * │ NENHUMA TRAVA FOI AFROUXADA: o candidato tratado (trava 5) e a posição entregue         │
+       * │ (trava 6) continuam sendo conferidos logo abaixo, iguais, sobre a mesma lista lida sob  │
+       * │ o lock. O que mudou foi DE ONDE se pode fechar, não SOB QUE CONDIÇÕES.                   │
+       * └─────────────────────────────────────────────────────────────────────────────────────────┘
        *
        * SEGUE SENDO A TRAVA QUE RECUSA A CORRIDA, e não só a ordena: o `FOR UPDATE` serializa duas
        * requisições, e quem chega em segundo lugar encontra a vaga já encerrada e para AQUI.
        */
-      if (!regua.ehDoPapel(vaga.status, "ABERTURA")) {
+      if (!papelDeVagaEmProcesso(regua.linha(vaga.status).papel)) {
         throw new ConflictException("Esta vaga já foi fechada. Recarregue a página.");
       }
 
@@ -1826,22 +1844,45 @@ export class VagasService {
           dataPrevistaInicio: data(dto.dataPrevistaInicio),
           enviarParaAdmissao: dto.enviarParaAdmissao ?? false,
           /**
-           * ENTREGUE quando ALGUMA posição foi preenchida, dos dois lados. O lado do banco entra na
-           * conta porque ele é posição preenchida de verdade, e chamar de FECHADA uma vaga que
-           * entregou três pessoas para o banco apagaria justamente o indicador de sucesso que o
-           * vocabulário de status preserva de propósito.
+           * ─ FECHAR SEMPRE GRAVA `FECHAMENTO`, E ISTO MUDOU NA FRENTE B (decisão do diretor) ────
            *
-           * O QUE MUDOU AQUI É A FONTE, NÃO A REGRA: antes a pergunta era feita ao número digitado,
-           * agora é feita à contagem das candidaturas. Uma vaga que entregou de fato continua saindo
-           * ENTREGUE; a que fecha sem ninguém dentro continua saindo FECHADA.
+           * ┌─ O QUE ERA, E POR QUE DEIXOU DE PODER SER ────────────────────────────────────────┐
+           * │ ERA `ocupacao.finalizadas > 0 ? ENTREGUE : FECHADA`: a vaga que entregou alguém     │
+           * │ saía ENTREGUE, e ENTREGUE era um DESFECHO (`encerra = true`).                       │
+           * │                                                                                     │
+           * │ NO CONCEITO NOVO `ENTREGUE` É UM ESTADO VIVO ("entregue ao cliente, ainda NÃO       │
+           * │ finalizada", §A.3 da Frente B), com `encerra = false` e `recebe_candidato = true`.  │
+           * │ Continuar gravando-a aqui deixaria a vaga FECHADA VIVA: ela voltaria a receber       │
+           * │ posição (a trava 2 do caminho travado pergunta `recebeCandidato`), voltaria a ser    │
+           * │ destino do "mover status", e a derivação do funil poderia arrastá-la de volta para   │
+           * │ ABERTA. O gate de Master do fechamento viraria contornável, que é exatamente o furo  │
+           * │ que a auditoria de 09/09 fechou.                                                     │
+           * │                                                                                     │
+           * │ A INFORMAÇÃO "ESTA VAGA ENTREGOU" NÃO SE PERDE, e é por isso que a troca é segura:   │
+           * │ ela já era gravada no MESMO `update`, nas duas linhas logo acima                     │
+           * │ (`vagas_fechadas` e `vagas_fechadas_banco`), que são o CARIMBO da mesma derivada que │
+           * │ decidia o status. "Saiu ENTREGUE" e "tem carimbo de entrega maior que zero" sempre   │
+           * │ foram o MESMO conjunto, escrito duas vezes; o que sai é a cópia, não o dado.          │
+           * │                                                                                     │
+           * │ E O EXPURGO POR RETENÇÃO ACOMPANHOU (§A.6): a cláusula que POUPAVA quem estava em    │
+           * │ vaga de papel ENTREGA passou a ler o carimbo de entrega, pela equivalência acima.    │
+           * │ Ver `retencao-candidatos.service.ts`, que explica a prova.                            │
+           * └─────────────────────────────────────────────────────────────────────────────────────┘
            *
            * O CÓDIGO VEM DO PAPEL, E NUNCA DO LITERAL (onda B2). A FK pega o código INEXISTENTE; ela
            * não pega o código existente e ERRADO, e é aí que mora o dano: gravar aqui o código do
            * CANCELAMENTO seria FK válida, desfecho falso e permanente, carimbado junto de
-           * `vagas_fechadas` e `data_fechamento`. Os dois códigos foram resolvidos ANTES da
-           * transação, e o diretor pode renomear "Entregue" sem que esta linha perca o alvo.
+           * `vagas_fechadas` e `data_fechamento`.
            */
-          status: ocupacao.finalizadas > 0 ? codigoEntrega : codigoFechamento,
+          status: codigoFechamento,
+          /*
+           * O CARIMBO MANUAL É LIMPO PELA PORTA COM RÉGUA (Frente B, ponto 2). A invariante é
+           * "preenchido <=> o status VIGENTE veio de um gesto manual", e depois daqui o status
+           * vigente veio do fechamento. Deixá-lo para trás faria a vaga reaberta no futuro nascer
+           * com a derivação desligada por causa de um movimento manual de meses antes.
+           */
+          statusManualEm: null,
+          statusManualPorId: null,
           /**
            * A TRILHA DO FORÇADO, escrita na MESMA gravação que encerra a vaga: um `update` só, então
            * não existe o estado de vaga fechada à força sem trilha.
@@ -1870,26 +1911,29 @@ export class VagasService {
    * vaga, onde ele VENCE TUDO; os contadores congelados; o card de KPI); o que faltava era o
    * ESCRITOR.
    *
-   * ┌─ AS TRAVAS, NESTA ORDEM, e a primeira é a que o desenho original tinha esquecido ──────────┐
-   * │ 1. STATUS DE ORIGEM: só a vaga no papel ABERTURA cancela (o catálogo responde, desde a B2;  │
-   * │    antes era `VAGA_STATUS_QUE_CANCELAM`, no domínio). É ela que impede cancelar uma vaga já ENTREGUE (o que APAGARIA a entrega da │
-   * │    leitura, porque `CANCELADA` vence tudo), que torna o duplo clique inofensivo e que faz a │
-   * │    corrida entre duas requisições ser RECUSADA, e não só ordenada: o `FOR UPDATE` serializa │
-   * │    as duas, mas quem chega em segundo lugar só para por causa desta lista.                   │
+   * ┌─ AS DUAS TRAVAS QUE RESTARAM (a terceira foi REVOGADA na Frente B) ────────────────────────┐
+   * │ 1. STATUS DE ORIGEM: só a vaga EM PROCESSO cancela (papel ABERTURA **ou** ENTREGA, desde a  │
+   * │    Frente B, em que a entrega deixou de encerrar). É ela que impede cancelar uma vaga já    │
+   * │    ENCERRADA (o que APAGARIA o desfecho da leitura, porque `CANCELADA` vence tudo), que     │
+   * │    torna o duplo clique inofensivo e que faz a corrida entre duas requisições ser RECUSADA, │
+   * │    e não só ordenada: o `FOR UPDATE` serializa as duas, mas quem chega em segundo lugar só  │
+   * │    para por causa desta pergunta.                                                            │
    * │ 2. MOTIVO DO CATÁLOGO: o nome tem de existir e estar ATIVO. Sem isto, o campo seria texto   │
    * │    livre com aparência de catálogo, e a auditoria leria depois o que alguém tiver digitado.  │
-   * │ 3. QUEM AINDA SEGURA O CANCELAMENTO: bloqueio COM aceite de Master, e a régua é do domínio  │
-   * │    compartilhado (`seguraOCancelamento`: `ATIVO` e `ALOCADO` seguram; aprovado, enviado para │
-   * │    a admissão, descartado e desistente NÃO).                                                 │
    * └────────────────────────────────────────────────────────────────────────────────────────────┘
    *
-   * ┌─ A TRAVA 3 NÃO É `pendentesDeTratamento`, E CONFUNDI-LAS INVERTE A DECISÃO DO DIRETOR ─────┐
-   * │ A régua do FECHAMENTO (`SITUACOES_TRATADAS`) inclui `ALOCADO`, porque lá a pergunta é       │
-   * │ "sobrou alguém sem DECISÃO?" e alocar é a decisão mais definitiva de todas. Reusá-la aqui   │
-   * │ deixaria um COMUM cancelar, sem trava nenhuma, uma vaga com cinco pessoas ALOCADAS dentro,  │
-   * │ que é o oposto do que o diretor decidiu. São duas perguntas diferentes, e por isso duas     │
-   * │ réguas. `SITUACOES_TRATADAS` NÃO foi tocada: ela é a trava 5 do fechamento, e mexer nela    │
-   * │ para "ficar coerente" quebraria a outra frente por alcance.                                  │
+   * ┌─ A TRAVA 3 FOI REVOGADA PELO DIRETOR, E O REGISTRO FICA PORQUE ELA EXPLICA UM RISCO ───────┐
+   * │ O QUE ERA: candidato `ATIVO` ou `ALOCADO` BARRAVA o cancelamento (`seguraOCancelamento`), e │
+   * │ só um MASTER passava com `forcar: true`, o que DESCARTAVA todos eles.                       │
+   * │                                                                                             │
+   * │ O QUE É: cancelar com candidato dentro é PERMITIDO, e ninguém é descartado. Quem está vivo  │
+   * │ vai para o STAND BY e CONTINUA VIVO (`moverVivosParaODestino`), para poder ser transferido  │
+   * │ ou realocado depois.                                                                         │
+   * │                                                                                             │
+   * │ O QUE NÃO SE PODE CONCLUIR DISSO: que `SITUACOES_TRATADAS` e `seguraOCancelamento` viraram  │
+   * │ a mesma coisa. Elas continuam sendo réguas DIFERENTES para perguntas diferentes, e a do     │
+   * │ FECHAMENTO (trava 5, que considera o `ALOCADO` tratado) NÃO foi tocada. Unificá-las "para   │
+   * │ ficar coerente" quebraria a outra frente por alcance.                                        │
    * └────────────────────────────────────────────────────────────────────────────────────────────┘
    *
    * A TRANSAÇÃO E O `SELECT ... FOR UPDATE` SÃO OS MESMOS DO `fechar`, pela mesma razão medida: a
@@ -1916,8 +1960,14 @@ export class VagasService {
     }
 
     const ordemDoFunil = await this.etapas.ordemPorCodigo();
+    /*
+     * PARA ONDE VAI QUEM ESTAVA NA VAGA (Frente B, ponto 3). Lido ANTES da transação, pela régua da
+     * casa, e NULO É RESPOSTA VÁLIDA: sem destino configurado ninguém é movido e ninguém é
+     * descartado, as candidaturas ficam vivas onde estão. Ver `etapaDoCancelamento`.
+     */
+    const destinoDoCancelamento = await this.etapas.etapaDoCancelamento();
     // O CATÁLOGO DE STATUS, ANTES DA TRANSAÇÃO, como no fechamento: aqui ele responde as duas
-    // perguntas do cancelamento, "de onde pode cancelar" (papel ABERTURA) e "o que gravar" (papel
+    // perguntas do cancelamento, "de onde pode cancelar" (vaga EM PROCESSO) e "o que gravar" (papel
     // CANCELAMENTO). O status da VAGA continua sendo lido sob o `FOR UPDATE`, logo abaixo.
     const regua = await this.statusVaga.regua();
     const codigoCancelamento = regua.codigoDoPapel("CANCELAMENTO");
@@ -1940,14 +1990,39 @@ export class VagasService {
        * encerrada está com a tela velha, seja por duplo clique, seja porque outra pessoa encerrou a
        * vaga enquanto o modal estava aberto.
        */
-      if (!regua.ehDoPapel(vaga.status, "ABERTURA")) {
+      if (!papelDeVagaEmProcesso(regua.linha(vaga.status).papel)) {
         throw new ConflictException("Esta vaga já foi encerrada. Recarregue a página.");
       }
 
       const linhas = await this.candidaturasDaVaga(tx, id);
 
-      // TRAVA 3. Devolve `null` quando ninguém segurava, ou o que carimbar quando um Master forçou.
-      const forcado = this.travaCandidatosQueSeguram(linhas, ordemDoFunil, dto, user);
+      /*
+       * ┌─ A TRAVA 3 DEIXOU DE EXISTIR (decisão do diretor, Frente B, ponto 3) ───────────────────┐
+       * │ O QUE ERA: `travaCandidatosQueSeguram` BARRAVA o cancelamento quando alguém estava       │
+       * │ `ATIVO` ou `ALOCADO`, e só um MASTER passava por cima com `forcar: true`. Forçar         │
+       * │ DESCARTAVA todo mundo que segurava.                                                      │
+       * │                                                                                          │
+       * │ O QUE PASSA A SER: cancelar com candidato dentro é PERMITIDO, para qualquer consultor, e │
+       * │ NINGUÉM É DESCARTADO. Quem estava VIVO vai para o STAND BY e CONTINUA VIVO, ligado à     │
+       * │ vaga cancelada, para a pessoa não sumir e poder ser transferida ou realocada depois.     │
+       * │                                                                                          │
+       * │ ISSO NÃO APAGA NENHUMA GARANTIA, E É O PONTO QUE PRECISA FICAR ESCRITO:                  │
+       * │   . a §A.6 continua satisfeita porque a proteção do expurgo NÃO depende da candidatura   │
+       * │     estar encerrada: a cláusula de retenção lê a VAGA (`s.encerra` + `v.encerrada_em`),  │
+       * │     e a vaga cancelada é encerrada com carimbo de servidor. O prazo de 2 anos começa a   │
+       * │     correr no instante do cancelamento, exatamente como corria para quem era descartado. │
+       * │     Era ESSA a razão pela qual o forçado encerrava as candidaturas, e ela já não vale.   │
+       * │   . a trava do DESVÍNCULO DE ALOCADO (`desvinculoEhDeMaster`, em `candidatos.service`)   │
+       * │     continua intacta. O que ela protegia era este cancelamento; agora ele não tem gate   │
+       * │     a contornar, e desfazer a entrega de alguém segue sendo ação de Master.              │
+       * └──────────────────────────────────────────────────────────────────────────────────────────┘
+       *
+       * A ETAPA DA VAGA É MEDIDA ANTES DE MOVER NINGUÉM (Frente B, ponto 4), e a ordem é
+       * obrigatória: o Stand By é a última etapa da fila, então medir depois responderia "Stand By"
+       * em todo cancelamento, para sempre, que é a resposta mais inútil possível.
+       */
+      const etapaDaVaga = this.etapaMaisAvancadaViva(linhas, ordemDoFunil);
+      const movidos = await this.moverVivosParaODestino(tx, linhas, destinoDoCancelamento, user.id);
 
       /*
        * ┌─ A TRILHA DA VAGA PASSA A SER ESCRITA AQUI TAMBÉM, e ela era o buraco do módulo ────────┐
@@ -1970,69 +2045,14 @@ export class VagasService {
        * §A.6: id de vaga, dois códigos, id de usuário INTERNO, data, o motivo do catálogo e a
        * observação de quem cancelou. Nenhum dado de candidato, e o número do forçado é contagem.
        */
-      const [evento] = await tx
-        .insert(asVagaStatusEventos)
-        .values({
-          vagaId: id,
-          de: vaga.status,
-          para: codigoCancelamento,
-          // QUEM vem da SESSÃO, nunca do corpo: autoria é trilha, não campo de formulário.
-          porId: user.id,
-          observacao: this.narrativaDoCancelamento(dto, forcado),
-        })
-        .returning({ id: asVagaStatusEventos.id });
-
-      /*
-       * ┌─ O FORÇADO ENCERRA QUEM ELE ATROPELOU, E ISTO É §A.6, NÃO CORTESIA ────────────────────┐
-       * │ O expurgo por retenção só anonimiza candidato SEM NENHUMA candidatura viva, e `ATIVO` e │
-       * │ `ALOCADO` são vivas. Uma candidatura deixada viva numa vaga CANCELADA nunca satisfaz a  │
-       * │ cláusula: nome, CPF, e-mail, telefone e data de nascimento ficariam retidos PARA SEMPRE  │
-       * │ num processo que a operação considera morto, e o prazo de dois anos nunca começaria a   │
-       * │ correr. E este é o caso de uso PRINCIPAL do `forcar`, não uma borda.                     │
-       * │                                                                                         │
-       * │ NA MESMA TRANSAÇÃO, e pelo MECANISMO QUE JÁ EXISTE (`gravarSaidaDaCandidatura`, a mesma  │
-       * │ gravação do `registrarSaida`): uma segunda régua de saída divergiria da primeira, e a    │
-       * │ régua do motivo obrigatório e do evento no histórico está escrita lá.                    │
-       * └─────────────────────────────────────────────────────────────────────────────────────────┘
-       */
-      if (forcado) {
-        for (const linha of forcado.seguravamCandidaturas) {
-          await gravarSaidaDaCandidatura(
-            tx,
-            {
-              id: linha.candidaturaId,
-              etapa: linha.etapa,
-              situacao: linha.situacao,
-              /*
-               * O LADO VIAJA JUNTO porque é ele que a REABERTURA lê para devolver a pessoa à
-               * posição de onde ela veio. Adivinhar depois é o que o desenho anterior fazia, e é
-               * PROVADAMENTE errado: existe na base uma candidatura EM SELEÇÃO com posição OFICIAL
-               * marcada (foi alocada, enviada para a admissão, e a reversão do envio não limpa o
-               * lado), então "tem lado, logo estava alocada" fabricaria uma entrega que não houve.
-               */
-              posicaoLado: linha.posicaoLado,
-            },
-            "DESCARTADO",
-            /*
-             * O MOTIVO É DERIVADO do motivo do cancelamento, e não uma frase genérica: a pessoa não
-             * desistiu nem foi reprovada, o processo dela terminou porque a VAGA terminou, e é isso
-             * que a linha do tempo dela precisa dizer daqui a seis meses.
-             */
-            `Vaga cancelada: ${dto.motivo}`,
-            user.id,
-            /*
-             * O MARCADOR ESTRUTURAL, e é ele que torna a reabertura possível sem chute. Antes, o
-             * único sinal de "esta pessoa saiu POR CAUSA do cancelamento" era o TEXTO do motivo,
-             * logo acima, e aquele campo é digitável à mão por qualquer consultor: casar por texto
-             * ressuscitaria quem a seleção descartou de propósito e viraria atalho para burlar a
-             * ciência de reentrada. Apontando para ESTE evento, a reabertura enxerga exatamente
-             * quem saiu NESTE cancelamento, e um segundo cancelamento da mesma vaga tem o conjunto
-             * dele, sem as duas saídas colidirem no unique parcial das candidaturas vivas.
-             */
-            evento.id,
-          );
-        }
-      }
+      await tx.insert(asVagaStatusEventos).values({
+        vagaId: id,
+        de: vaga.status,
+        para: codigoCancelamento,
+        // QUEM vem da SESSÃO, nunca do corpo: autoria é trilha, não campo de formulário.
+        porId: user.id,
+        observacao: this.narrativaDoCancelamento(dto, movidos, etapaDaVaga),
+      });
 
       /*
        * A OCUPAÇÃO DERIVADA, lida SOB O LOCK e sobre a MESMA lista, como no fechamento.
@@ -2083,22 +2103,31 @@ export class VagasService {
           cancelamentoMotivo: dto.motivo,
           cancelamentoObservacao: texto(dto.observacao),
           /*
-           * ┌─ O CARIMBO DO FORÇADO VEM DO RETORNO DA TRAVA, E NUNCA DE `dto.forcar` ────────────┐
-           * │ Um COMUM pode mandar `forcar: true` numa vaga em que NINGUÉM segura: a trava não    │
-           * │ dispara, o papel nem chega a ser conferido, e o cancelamento é legítimo. Carimbando │
-           * │ pelo campo do corpo, essa vaga sairia marcada como "cancelada à força por um COMUM, │
-           * │ com 0 segurando": trilha MENTINDO, no campo que existe só para registrar exceção,   │
-           * │ e o CHECK do banco (`> 0`) recusaria a gravação inteira por cima. É o mesmo desenho  │
-           * │ do forçamento do fechamento, e pela mesma razão.                                    │
-           * └────────────────────────────────────────────────────────────────────────────────────┘
+           * ─ O CARIMBO DA ETAPA (Frente B, ponto 4): ATÉ ONDE ESTE PROCESSO CHEGOU ─────────────
+           *
+           * A definição está no schema da coluna, e ela precisa estar escrita porque VIRA
+           * RELATÓRIO: é a etapa MAIS AVANÇADA entre as candidaturas VIVAS no instante do
+           * cancelamento, ou NULO quando não havia ninguém vivo.
+           *
+           * MEDIDA ANTES DE QUALQUER MOVIMENTO, lá em cima, e a ordem é obrigatória: quem move
+           * todo mundo para o Stand By primeiro carimba "Stand By" em TODO cancelamento, porque
+           * ele é a última etapa da fila.
+           *
+           * OS TRÊS CARIMBOS DO FORÇADO SAÍRAM DE CENA, e não foram apagados da tabela: o
+           * cancelamento não tem mais exceção a registrar (ele não é barrado por candidato
+           * nenhum), então não há o que gravar. As colunas continuam existindo e continuam
+           * legíveis para os cancelamentos forçados que JÁ aconteceram, pela mesma razão de
+           * `cancelamento_motivo` guardar o nome e não o id: o passado não se reescreve.
            */
-          ...(forcado
-            ? {
-                cancelamentoForcadoPorId: user.id,
-                cancelamentoForcadoEm: new Date(),
-                cancelamentoForcadoSeguravam: forcado.seguravam,
-              }
-            : {}),
+          cancelamentoEtapa: etapaDaVaga,
+          /*
+           * O CARIMBO MANUAL É LIMPO PELA PORTA COM RÉGUA (Frente B, ponto 2), como no fechamento:
+           * a invariante é "preenchido <=> o status VIGENTE veio de um gesto manual", e depois
+           * daqui o status vigente veio do cancelamento. Sem esta limpeza, a vaga REABERTA no
+           * futuro nasceria com a derivação desligada por causa de um movimento de meses antes.
+           */
+          statusManualEm: null,
+          statusManualPorId: null,
           atualizadoEm: new Date(),
         })
         .where(eq(vagas.id, id));
@@ -2116,14 +2145,16 @@ export class VagasService {
    * │ que faltava não era trava, era INFORMAÇÃO: o modal dizia nada sobre as pessoas cujo         │
    * │ processo já tinha acabado, então cancelar parecia estar apagando gente viva.                │
    * │                                                                                            │
-   * │ INFORMA, NÃO TRAVA. Nada aqui recusa nada. Quem recusa é a trava do `cancelar`, que olha o  │
-   * │ lado OPOSTO desta mesma régua.                                                              │
+   * │ INFORMA, NÃO TRAVA. Nada aqui recusa nada, e desde a Frente B NADA MAIS RECUSA: a trava do  │
+   * │ `cancelar` que olhava o lado oposto desta régua foi revogada pelo diretor, e quem estava    │
+   * │ vivo passou a ser MOVIDO para o Stand By em vez de barrar o cancelamento.                    │
    * └────────────────────────────────────────────────────────────────────────────────────────────┘
    *
-   * A RÉGUA É O COMPLEMENTO EXATO DA TRAVA: `candidaturaEncerradaParaCancelamento`, a mesma função
-   * de que `seguraOCancelamento` é a negação, e que o `travaCandidatosQueSeguram` já usa pelo outro
-   * lado. NENHUMA LISTA NOVA DE SITUAÇÃO é escrita, aqui nem em lugar nenhum desta frente: duas
-   * listas iguais concordam por coincidência e param de concordar na primeira situação nova.
+   * A RÉGUA CONTINUA SENDO `candidaturaEncerradaParaCancelamento`, a mesma função de que
+   * `seguraOCancelamento` é a negação, e ELA NÃO MUDOU com a revogação da trava: a pergunta deste
+   * aviso ("quantos já estão encerrados?") é de LEITURA, e continua valendo. NENHUMA LISTA NOVA DE
+   * SITUAÇÃO é escrita, aqui nem em lugar nenhum: duas listas iguais concordam por coincidência e
+   * param de concordar na primeira situação nova.
    *
    * A QUEBRA POR SITUAÇÃO VAI JUNTO porque "3 encerrados" e "1 aprovado, 1 enviado para a admissão
    * e 1 desistente" respondem perguntas diferentes, e é a segunda que faz o consultor decidir. A
@@ -2623,6 +2654,15 @@ export class VagasService {
             // matou. Aceitá-lo do corpo faria desta rota a porta sem régua para qualquer status.
             status: codigoAbertura,
             /*
+             * O CARIMBO MANUAL É LIMPO PELA REABERTURA (Frente B, ponto 2), e aqui ele IMPORTA de
+             * verdade: `fechar` e `cancelar` já o limpam ao encerrar, mas uma vaga que tivesse sido
+             * movida à mão e encerrada por um caminho futuro voltaria à vida com a derivação
+             * desligada, em silêncio. A vaga reaberta volta para Aberta pela porta, então o status
+             * vigente NÃO é o que alguém pôs à mão, e o carimbo não pode afirmar que é.
+             */
+            statusManualEm: null,
+            statusManualPorId: null,
+            /*
              * `encerradaEm` SAI NO MESMO `set` DO STATUS, e as duas metades importam. Limpar o
              * carimbo sem mover o status deixaria a vaga ENCERRADA com `encerrada_em` nulo, e essa
              * combinação é fail-closed no expurgo (`v.encerrada_em is null` PROTEGE): todo mundo
@@ -2642,6 +2682,10 @@ export class VagasService {
             cancelamentoForcadoPorId: null,
             cancelamentoForcadoEm: null,
             cancelamentoForcadoSeguravam: null,
+            // A ETAPA DO CANCELAMENTO (Frente B, ponto 4) entra na MESMA limpeza, e pela MESMA
+            // razão das linhas acima: ela descreve o estado ATUAL, e vaga reaberta não está
+            // cancelada. O fato não se perde, porque a etapa viaja na narrativa do evento.
+            cancelamentoEtapa: null,
             /*
              * OS TRÊS DO ENCERRAMENTO, que o `cancelar` também escreve. Deixados para trás, a vaga
              * volta viva com a CONTAGEM CONGELADA (o cilindro mostraria o retrato do dia do
@@ -3045,7 +3089,29 @@ export class VagasService {
 
       await tx
         .update(vagas)
-        .set({ status: dto.status, atualizadoEm: new Date() })
+        .set({
+          status: dto.status,
+          /*
+           * ─ O CARIMBO QUE FAZ O MANUAL GRUDAR (Frente B, ponto 2) ──────────────────────────────
+           *
+           * ESTA É A ÚNICA ESCRITA DE `status_manual_em` NO SISTEMA, e é ela que a derivação lê
+           * para não desfazer o que o time decidiu. O padrão é o do `farol_global` (§A.3: o
+           * automático deriva, o manual é pegajoso), com a diferença de forma explicada no schema:
+           * aqui `ABERTA` e `ENTREGUE` são alcançáveis pelos DOIS caminhos, então o que gruda é o
+           * carimbo e não o valor.
+           *
+           * ELE NÃO EXPIRA, e é decisão: o time move a vaga à mão porque sabe de algo que o funil
+           * não conta (o cliente pediu para segurar, a posição mudou de escopo). Uma derivação que
+           * desfizesse isso na primeira movimentação de candidato transformaria a decisão do
+           * consultor em ruído. Quem devolve a vaga ao automático são as portas com régua própria,
+           * que LIMPAM o carimbo ao gravar status (fechar, cancelar, reabrir, liberar, publicar).
+           *
+           * QUEM vem da SESSÃO, nunca do corpo: autoria é trilha, não campo de formulário.
+           */
+          statusManualEm: new Date(),
+          statusManualPorId: user.id,
+          atualizadoEm: new Date(),
+        })
         .where(eq(vagas.id, id));
 
       await tx.insert(asVagaStatusEventos).values({
@@ -3306,6 +3372,15 @@ export class VagasService {
           // falhasse, com a retentativa tendo de adivinhar onde parou.
           ...(campos ?? {}),
           status: codigoAbertura,
+          /*
+           * O CARIMBO MANUAL NASCE LIMPO AQUI (Frente B, ponto 2). A vaga espelhada nunca foi
+           * movida à mão, mas a liberação é uma PORTA COM RÉGUA que grava status, e a invariante é
+           * "preenchido <=> o status vigente veio de um gesto manual". Escrever o `null` em toda
+           * porta, e não só nas que poderiam ter o carimbo, é o que impede a invariante de depender
+           * de alguém lembrar qual caminho pode ou não ter passado pelo `moverStatus` antes.
+           */
+          statusManualEm: null,
+          statusManualPorId: null,
           atualizadoEm: new Date(),
           // O VÍNCULO É GRAVADO NA MESMA TRANSAÇÃO da saída da fila: ou a vaga sai COM cliente, ou
           // ela não sai. Não existe o estado intermediário em que uma das duas metades venceu.
@@ -3502,7 +3577,16 @@ export class VagasService {
         .update(vagas)
         .set({
           atualizadoEm: new Date(),
-          ...(dto.devolverParaFila ? { status: codigoRevisao } : {}),
+          /*
+           * O CARIMBO MANUAL SÓ É LIMPO NO RAMO QUE GRAVA STATUS (Frente B, ponto 2), e a condição
+           * é a mesma do `status` por construção: a correção que NÃO devolve a vaga para a fila não
+           * toca o status, então ela não tem por que desfazer um movimento manual que continua
+           * valendo. Limpar sempre religaria a derivação numa vaga que o time tinha parado à mão,
+           * por causa de uma correção de cliente que não tem nada a ver com isso.
+           */
+          ...(dto.devolverParaFila
+            ? { status: codigoRevisao, statusManualEm: null, statusManualPorId: null }
+            : {}),
           ...(trocaCliente ? { codCliente: clienteCorrigido } : {}),
         })
         .where(eq(vagas.id, id));
@@ -3579,115 +3663,135 @@ export class VagasService {
   }
 
   /**
-   * ─ A TRAVA DO CANCELAMENTO: QUEM AINDA ESTÁ COM O PROCESSO EM ABERTO NESTA VAGA ────────────────
-   *
-   * A RÉGUA VEM DO VOCABULÁRIO COMPARTILHADO (`seguraOCancelamento`), e NÃO de uma lista escrita
-   * aqui: `ATIVO` e `ALOCADO` seguram; `APROVADO`, `ENVIADO_PARA_ADMISSAO`, `DESCARTADO` e
-   * `DESISTIU` estão encerrados e não seguram nada. A derivação é fail-closed pela direção que
-   * protege: a lista enumera os ENCERRADOS, então situação NOVA nasce SEGURANDO o cancelamento.
-   *
-   * NÃO É A RÉGUA DO FECHAMENTO. Ver o bloco no `cancelar`: `pendentesDeTratamento` considera o
-   * `ALOCADO` tratado, e usá-la aqui deixaria cancelar por cima de gente entregue.
-   *
-   * ┌─ A AUTORIZAÇÃO MORA AQUI, E NUNCA EM `@Roles` NA ROTA ─────────────────────────────────────┐
-   * │ TODO CONSULTOR PRECISA PODER CANCELAR UMA VAGA VAZIA. Só o FORÇAR é de Master, então um     │
-   * │ `@Roles("MASTER","SUPER_ADMIN")` no handler barraria o cancelamento NORMAL do COMUM, que é  │
-   * │ regressão silenciosa. A tela esconder o botão é conveniência (`podeForcar`); o servidor é a │
-   * │ autoridade, e ele reconfere o papel A CADA requisição que chega com `forcar: true`.         │
-   * └────────────────────────────────────────────────────────────────────────────────────────────┘
-   *
-   * A ORDEM DA LISTA é a mesma da recusa do fechamento: do FIM do funil para o começo, pela ordem do
-   * CATÁLOGO (`posicaoNoFunil`), porque quem está mais adiante é o mais caro de encerrar sem aviso.
-   *
-   * Devolve `null` quando ninguém segurava, ou o que gravar (e quem encerrar) quando houve exceção.
-   */
-  /**
    * A FRASE QUE FICA NA TRILHA DA VAGA quando alguém cancela, e ela é a ÚNICA cópia que sobrevive.
    *
-   * POR QUE ELA PRECISA CARREGAR O MOTIVO: a REABERTURA limpa os carimbos de cancelamento da linha
-   * da vaga, e limpa com razão, porque aquelas colunas descrevem o estado ATUAL e vaga reaberta não
-   * está cancelada. Se o motivo vivesse só lá, a reabertura apagaria para sempre a resposta de "por
-   * que esta vaga chegou a ser cancelada". Aqui ele fica.
+   * POR QUE ELA PRECISA CARREGAR O MOTIVO E A ETAPA: a REABERTURA limpa os carimbos de cancelamento
+   * da linha da vaga, e limpa com razão, porque aquelas colunas descrevem o estado ATUAL e vaga
+   * reaberta não está cancelada. Se o motivo e a etapa vivessem só lá, a reabertura apagaria para
+   * sempre as respostas de "por que esta vaga foi cancelada" e "até onde ela tinha chegado".
    *
-   * O NÚMERO DO FORÇADO ENTRA PORQUE ELE É O TAMANHO DA EXCEÇÃO. "Cancelada por cima de 12 pessoas
-   * em processo" e "cancelada com a vaga vazia" são fatos diferentes, e quem lê a trilha seis meses
-   * depois precisa distinguir os dois sem ter de cruzar tabela nenhuma.
+   * O NÚMERO MUDOU DE SENTIDO JUNTO COM A REGRA (Frente B, ponto 3), e isto é o que mais importa
+   * registrar: antes ele contava quantos processos o Master ATROPELOU, porque forçar o cancelamento
+   * os DESCARTAVA. Agora ele conta quantos SEGUEM VIVOS em Stand By, que é a informação que alguém
+   * vai procurar seis meses depois ("sobrou gente desta vaga para realocar?"). A frase foi reescrita
+   * inteira em vez de reaproveitada: o texto antigo ("foram encerrados juntos") afirmaria sobre os
+   * cancelamentos novos exatamente o contrário do que aconteceu.
    *
-   * §A.6: motivo do catálogo, observação de quem cancelou e uma CONTAGEM. Nenhum nome, nenhum id de
-   * candidato, nenhum CPF. O que identifica pessoa fica na linha do tempo dela, não na da vaga.
+   * §A.6: motivo do catálogo, observação de quem cancelou, um código de etapa e uma CONTAGEM.
+   * Nenhum nome, nenhum id de candidato, nenhum CPF. O que identifica pessoa fica na linha do tempo
+   * dela, não na da vaga.
    */
   private narrativaDoCancelamento(
     dto: CancelarVagaDto,
-    forcado: { seguravam: number } | null,
+    movidos: number,
+    etapaDaVaga: string | null,
   ): string {
     const partes = [`Cancelada. Motivo: ${dto.motivo}.`];
     if (dto.observacao) partes.push(`Observação: ${dto.observacao}.`);
-    if (forcado) {
+    if (etapaDaVaga) partes.push(`Etapa da vaga no cancelamento: ${etapaDaVaga}.`);
+    if (movidos > 0) {
       partes.push(
-        forcado.seguravam === 1
-          ? "Cancelamento forçado por um Master, com 1 candidato ainda em processo, que foi encerrado junto."
-          : `Cancelamento forçado por um Master, com ${forcado.seguravam} candidatos ainda em processo, que foram encerrados juntos.`,
+        movidos === 1
+          ? "1 candidatura seguia em processo e foi movida para Stand By, viva."
+          : `${movidos} candidaturas seguiam em processo e foram movidas para Stand By, vivas.`,
       );
     }
     return partes.join(" ");
   }
 
-  private travaCandidatosQueSeguram(
+  /**
+   * ─ QUEM ESTAVA NA VAGA VAI PARA O STAND BY, VIVO (Frente B, ponto 3) ──────────────────────────
+   *
+   * ┌─ ISTO SUBSTITUI A TRAVA 3 E O FORÇADO, E A DIFERENÇA É DE NATUREZA ────────────────────────┐
+   * │ O QUE HAVIA: `travaCandidatosQueSeguram` BARRAVA o cancelamento quando alguém estava        │
+   * │ `ATIVO` ou `ALOCADO`; só um MASTER passava com `forcar: true`, e forçar DESCARTAVA todos     │
+   * │ eles (`gravarSaidaDaCandidatura` com situação `DESCARTADO`).                                 │
+   * │                                                                                             │
+   * │ O QUE HÁ: o cancelamento não é barrado por ninguém, e ninguém é descartado. Quem está VIVO  │
+   * │ é MOVIDO DE ETAPA e continua VIVO, na vaga cancelada, encontrável e transferível.            │
+   * │                                                                                             │
+   * │ ETAPA, E NUNCA SITUAÇÃO, e é a confusão que apagaria gente: "virar stand by" NÃO é um        │
+   * │ desfecho novo, é mudar de LUGAR no funil. A situação de cada um fica exatamente como estava │
+   * │ (`ATIVO` continua `ATIVO`, `ALOCADO` continua `ALOCADO`), e por isso a OCUPAÇÃO derivada da │
+   * │ vaga não se mexe: os dois carimbos de contagem seguem contando quem a vaga entregou de fato.│
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * QUEM SE MOVE É QUEM ESTÁ VIVO (`candidaturaViva`, a régua única do vocabulário compartilhado),
+   * e não "quem segurava": quem foi descartado ou desistiu já tinha saído do processo por decisão
+   * de alguém, e arrastá-lo para o Stand By reescreveria a etapa em que ele saiu, que é o dado que
+   * a frase "descartado na Triagem" precisa para existir.
+   *
+   * QUEM JÁ ESTÁ NO DESTINO NÃO SE MOVE: gravar o movimento de uma etapa para ela mesma encheria a
+   * trilha de linhas que não contam nada, exatamente como o `moverStatus` recusa fazer.
+   *
+   * O HISTÓRICO É PRESERVADO em `as_candidatura_etapas`, com `etapaDe` e `etapaPara`: a linha do
+   * tempo da pessoa continua dizendo de onde ela veio, e é isso que permite realocá-la com contexto
+   * meses depois.
+   *
+   * §A.6: o motivo gravado é o do CATÁLOGO de cancelamento, já conferido pelo `cancelar`. Nenhum
+   * nome, nenhum CPF, nenhum log.
+   *
+   * Devolve QUANTOS foram movidos, para a narrativa da trilha dizer o tamanho do que aconteceu.
+   */
+  private async moverVivosParaODestino(
+    tx: DbTransaction,
+    linhas: LinhaDeCandidatura[],
+    destino: { codigo: string; rotulo: string } | null,
+    porId: string,
+  ): Promise<number> {
+    // SEM DESTINO CONFIGURADO, NINGUÉM SE MOVE E NINGUÉM SE PERDE. A escolha e o porquê estão em
+    // `EtapasFunilService.etapaDoCancelamento`: bloquear o cancelamento por causa de catálogo
+    // desfaria a decisão do diretor, e a narrativa da trilha diz que o agrupamento não aconteceu.
+    if (!destino) return 0;
+
+    const vivos = linhas.filter((l) => candidaturaViva(l.situacao) && l.etapa !== destino.codigo);
+    for (const linha of vivos) {
+      await tx
+        .update(asCandidaturas)
+        // A SITUAÇÃO NÃO ENTRA NESTE `set`, e é a garantia central da operação: quem estava
+        // ALOCADO continua ALOCADO, e a ocupação da vaga não se mexe.
+        .set({ etapa: destino.codigo, atualizadoEm: new Date() })
+        .where(eq(asCandidaturas.id, linha.candidaturaId));
+
+      await tx.insert(asCandidaturaEtapas).values({
+        candidaturaId: linha.candidaturaId,
+        etapaDe: linha.etapa,
+        etapaPara: destino.codigo,
+        // MOVIMENTO, E NÃO DESFECHO: `situacao` nula é o que diz, na linha do tempo, que a pessoa
+        // andou no funil e NÃO saiu do processo. Preenchê-la aqui carimbaria um desfecho que não
+        // houve, e é justamente o que o cancelamento deixou de fazer.
+        situacao: null,
+        motivo: `Vaga cancelada: a candidatura foi movida para ${destino.rotulo} e segue ativa.`,
+        porId,
+      });
+    }
+    return vivos.length;
+  }
+
+  /**
+   * ─ A ETAPA DA VAGA NO INSTANTE DO CANCELAMENTO (Frente B, ponto 4) ────────────────────────────
+   *
+   * "A ETAPA DA VAGA" NÃO EXISTE COMO DADO: a etapa é da CANDIDATURA, e uma vaga tem várias ao
+   * mesmo tempo, em etapas diferentes. A escolha é a MAIS AVANÇADA (maior `ordem` no catálogo)
+   * entre as candidaturas VIVAS, e o porquê está no schema da coluna: a pergunta do relatório é
+   * "até onde este processo chegou antes de morrer", e quem responde isso é quem foi mais longe.
+   *
+   * A ORDEM VEM DO CATÁLOGO (`posicaoNoFunil`, do domínio), e ela inclui as INATIVAS de propósito,
+   * pela mesma razão das travas: quem ficou parado numa etapa que saiu de circulação precisa de uma
+   * posição na fila, não de um buraco.
+   *
+   * NULO QUANDO NÃO HÁ NINGUÉM VIVO, e nulo aqui quer dizer uma coisa só: a vaga foi cancelada
+   * vazia. Devolver a etapa inicial nesse caso afirmaria um fato que não aconteceu.
+   */
+  private etapaMaisAvancadaViva(
     linhas: LinhaDeCandidatura[],
     ordemDoFunil: ReadonlyMap<string, number>,
-    dto: CancelarVagaDto,
-    user: AuthUser,
-  ): { seguravam: number; seguravamCandidaturas: LinhaDeCandidatura[] } | null {
-    const seguram = linhas.filter((l) => seguraOCancelamento(l.situacao));
-    if (seguram.length === 0) return null;
-
-    const ordenados = [...seguram].sort(
-      (a, b) => posicaoNoFunil(b.etapa, ordemDoFunil) - posicaoNoFunil(a.etapa, ordemDoFunil),
-    );
-
-    // O PAPEL É RESOLVIDO NO SERVIDOR, e volta no corpo da recusa só para a tela não oferecer ao
-    // COMUM um botão que vai receber 403. Quem decide continua sendo esta função.
-    const podeForcar = user.papel === "MASTER" || user.papel === "SUPER_ADMIN";
-
-    if (!dto.forcar) {
-      /*
-       * A RECUSA É ESTRUTURADA, e não uma frase: a tela abre o modal com a lista e oferece o
-       * "cancelar assim mesmo" a quem pode, sem recontar nada e sem casar por texto de mensagem.
-       *
-       * `needsConfirmation: true`, e é a PRIMEIRA VEZ que esse campo vale `true` num encerramento de
-       * vaga. No fechamento ele é `false` porque lá não existe "confirmar mesmo assim"; aqui existe,
-       * por decisão do diretor: o consultor encerra cada processo primeiro, ou um Master cancela por
-       * cima e a exceção fica registrada em nome dele.
-       *
-       * A `message` VIAJA JUNTO porque a mensagem de erro do sistema vem do backend, sempre: sem
-       * ela, o tratamento genérico mostraria "Conflict" ao consultor.
-       */
-      const corpo: AsVagaCancelamentoBloqueado = {
-        needsConfirmation: true,
-        reason: "candidatosNaoEncerrados",
-        message:
-          seguram.length === 1
-            ? "Esta vaga ainda tem 1 candidato com o processo em aberto. Encerre o processo dele, ou peça a um Master para cancelar assim mesmo."
-            : `Esta vaga ainda tem ${seguram.length} candidatos com o processo em aberto. Encerre os processos, ou peça a um Master para cancelar assim mesmo.`,
-        naoEncerrados: ordenados.map((l) => ({
-          candidaturaId: l.candidaturaId,
-          candidatoId: l.candidatoId,
-          candidatoNome: l.candidatoNome,
-          etapa: l.etapa,
-          situacao: l.situacao,
-        })),
-        podeForcar,
-      };
-      throw new ConflictException(corpo);
-    }
-
-    if (!podeForcar) {
-      throw new ForbiddenException(
-        "Cancelar a vaga com candidato em processo é ação de Master. Encerre os processos em aberto, ou peça a um Master para cancelar assim mesmo.",
-      );
-    }
-
-    return { seguravam: seguram.length, seguravamCandidaturas: ordenados };
+  ): string | null {
+    const vivos = linhas.filter((l) => candidaturaViva(l.situacao));
+    if (vivos.length === 0) return null;
+    return vivos.reduce((maior, l) =>
+      posicaoNoFunil(l.etapa, ordemDoFunil) > posicaoNoFunil(maior.etapa, ordemDoFunil) ? l : maior,
+    ).etapa;
   }
 
   /**

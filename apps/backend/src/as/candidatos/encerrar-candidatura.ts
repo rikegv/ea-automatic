@@ -83,6 +83,25 @@ export async function gravarSaidaDaCandidatura(
    * justamente por isso que ela NÃO pode ser reaberta em lote junto com um cancelamento.
    */
   vagaStatusEventoId: string | null = null,
+  /**
+   * ─ A PRETENSÃO SALARIAL DO CANDIDATO, quando o motivo do desfecho a pediu (Frente E, ponto 9) ─
+   *
+   * `undefined` QUER DIZER "NÃO MEXE", e é diferente de `null` ("apaga"). A distinção não é
+   * preciosismo: o CANCELAMENTO DA VAGA também chama esta função, e ele não tem nada a dizer sobre
+   * pretensão nenhuma. Se o parâmetro fosse `string | null` com default `null`, aquele caminho
+   * escreveria `null` na coluna a cada uso, e um dia apagaria um valor legítimo sem ninguém pedir.
+   *
+   * COM O `undefined`, A CHAVE NEM ENTRA NO `set`: quem não fala do campo não o toca, que é a
+   * mesma disciplina do `atualizado_em` das CTEs de expurgo.
+   *
+   * QUEM VALIDA SE ELE PODIA VIR É O `registrarSaida` (`exigirPretensaoQuandoOMotivoPede`), contra
+   * a marca `pedePretensao` do catálogo. Esta função GRAVA, não decide, do mesmo jeito que ela já
+   * recebe o `motivo` pronto e aparado.
+   *
+   * §A.6: o valor NÃO é logado aqui nem em lugar nenhum deste caminho, e é EXPURGADO pela varredura
+   * de retenção junto com o `motivo_descarte`.
+   */
+  pretensaoSalarial?: string | null,
 ): Promise<void> {
   if (!candidaturaViva(candidatura.situacao)) {
     throw new ConflictException(
@@ -92,7 +111,14 @@ export async function gravarSaidaDaCandidatura(
 
   await tx
     .update(asCandidaturas)
-    .set({ situacao, motivoDescarte: motivo, atualizadoEm: new Date() })
+    .set({
+      situacao,
+      motivoDescarte: motivo,
+      // A CHAVE SÓ EXISTE QUANDO ALGUÉM FALOU DELA. Ver o bloco do parâmetro: `undefined` é "não
+      // mexe", e é o que o cancelamento da vaga passa (ele não tem o que dizer sobre pretensão).
+      ...(pretensaoSalarial === undefined ? {} : { pretensaoSalarial }),
+      atualizadoEm: new Date(),
+    })
     // O `where` SEMPRE existe: um `update` sem cláusula varreria a tabela inteira, e aqui ele
     // alcançaria candidatura de outras vagas.
     .where(eq(asCandidaturas.id, candidatura.id));

@@ -5,6 +5,7 @@ import {
   candidaturaViva,
   consomePosicao,
   finalizaPosicao,
+  motivoVemDoCatalogo,
   type CandidaturaSituacao,
 } from "@ea/shared-types";
 import { SITUACOES_DE_SAIDA, ocupaPosicao } from "../../domain/candidatura";
@@ -14,6 +15,10 @@ import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
 import { catalogoDeStatusFingido } from "../vaga-status/vaga-status-catalogo.fake";
 import type { AuthUser } from "../../auth/auth.types";
 import { envioDoPortalFingido } from "../../portal/portal-envio.fake";
+import {
+  MOTIVO_DE_DESCARTE_VALIDO,
+  respostaDoCatalogoDeDescarte,
+} from "../motivos-descarte/motivos-descarte.fake";
 
 /**
  * ─ AS GUARDAS DE SITUAÇÃO: quem se move, quem é aprovado, e por qual porta cada saída entra ─────
@@ -105,10 +110,14 @@ function makeDb(cenario: {
     b.where = () => b;
     b.innerJoin = () => b;
     b.leftJoin = () => b;
+    // O CATÁLOGO DE DESCARTE É RECONHECIDO PELA TABELA, e devolvido tal como o banco o devolveria:
+    // `registrarSaida` confere o motivo do DESCARTE contra ele antes de qualquer transação.
     b.orderBy = () =>
-      Promise.resolve([
-        { c, candidatoNome: "Fulano", vagaCodigo: "PS-1", vagaNome: "Vaga", autor: "Consultor" },
-      ]);
+      Promise.resolve(
+        respostaDoCatalogoDeDescarte(tabela) ?? [
+          { c, candidatoNome: "Fulano", vagaCodigo: "PS-1", vagaNome: "Vaga", autor: "Consultor" },
+        ],
+      );
     b.for = (modo: string) => {
       ordem.push(`${modo === "update" ? "trava" : modo}-vaga`);
       return Promise.resolve([vaga]);
@@ -140,7 +149,17 @@ function makeDb(cenario: {
     select,
     update: vi.fn(registrar(updates)),
     insert: vi.fn(registrar(inserts)),
-    query: { asCandidaturas: { findFirst: vi.fn().mockResolvedValue(c) } },
+    query: {
+      asCandidaturas: { findFirst: vi.fn().mockResolvedValue(c) },
+      /*
+       * A VAGA DA CANDIDATURA. Ela entrou no dublê porque o service passou a LER a vaga por esta
+       * porta, e não porque o teste mudou de assunto: o `moverEtapa` confere se a vaga ainda está
+       * em processo, e a troca entre vagas lê o CLIENTE da vaga de origem. Sem esta linha o dublê
+       * derruba a chamada com `findFirst of undefined`, acusando o service de um defeito que é do
+       * dublê.
+       */
+      vagas: { findFirst: vi.fn().mockResolvedValue({ id: c.vagaId, status: "ABERTA", codCliente: "CLI-1" }) },
+    },
   };
 
   const db = {
@@ -148,7 +167,17 @@ function makeDb(cenario: {
     update: vi.fn(registrar(updates)),
     insert: vi.fn(registrar(inserts)),
     transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
-    query: { asCandidaturas: { findFirst: vi.fn().mockResolvedValue(c) } },
+    query: {
+      asCandidaturas: { findFirst: vi.fn().mockResolvedValue(c) },
+      /*
+       * A VAGA DA CANDIDATURA. Ela entrou no dublê porque o service passou a LER a vaga por esta
+       * porta, e não porque o teste mudou de assunto: o `moverEtapa` confere se a vaga ainda está
+       * em processo, e a troca entre vagas lê o CLIENTE da vaga de origem. Sem esta linha o dublê
+       * derruba a chamada com `findFirst of undefined`, acusando o service de um defeito que é do
+       * dublê.
+       */
+      vagas: { findFirst: vi.fn().mockResolvedValue({ id: c.vagaId, status: "ABERTA", codCliente: "CLI-1" }) },
+    },
   };
 
   return { service: new CandidatosService(db as never, catalogoDeEtapasFingido() as never, catalogoDeStatusFingido() as never, envioDoPortalFingido() as never), ordem, updates, inserts };
@@ -335,10 +364,17 @@ describe("registrarSaida: quem escolhe a porta é a RÉGUA, não o nome da situa
     "%s vai pelo caminho SIMPLES: libera posição, então não precisa travar a vaga",
     async (situacao) => {
       const { service, ordem, updates } = makeDb({ candidatura: candidatura({ situacao: "ATIVO" }) });
-      await service.registrarSaida("cand-1", { situacao, motivo: "não seguiu" }, consultor("user-1"));
+      /*
+       * O MOTIVO SAI DA RÉGUA, e não de um literal: o DESCARTE passou a ser conferido contra o
+       * catálogo `motivos_descarte` (Frente A, ponto 7) e a DESISTÊNCIA continua sendo prosa. Ler
+       * `motivoVemDoCatalogo` aqui é o que faz este teste acompanhar sozinho o dia em que o recorte
+       * mudar, em vez de voltar a falhar por um texto digitado à mão.
+       */
+      const motivo = motivoVemDoCatalogo(situacao) ? MOTIVO_DE_DESCARTE_VALIDO : "não seguiu";
+      await service.registrarSaida("cand-1", { situacao, motivo }, consultor("user-1"));
 
       expect(ordem).toEqual([]);
-      expect(doUpdate(updates)).toMatchObject({ situacao, motivoDescarte: "não seguiu" });
+      expect(doUpdate(updates)).toMatchObject({ situacao, motivoDescarte: motivo });
     },
   );
 

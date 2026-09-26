@@ -23,9 +23,17 @@ import { LinhasServicoService } from "./linhas-servico/linhas-servico.service";
 import { SegmentosAdminController } from "./segmentos/segmentos-admin.controller";
 import { SegmentosController } from "./segmentos/segmentos.controller";
 import { SegmentosService } from "./segmentos/segmentos.service";
+import { ShortlistsController } from "./shortlists/shortlists.controller";
+import { ShortlistsService } from "./shortlists/shortlists.service";
 import { MotivosCancelamentoVagaAdminController } from "./motivos-cancelamento/motivos-cancelamento-admin.controller";
 import { MotivosCancelamentoVagaController } from "./motivos-cancelamento/motivos-cancelamento.controller";
 import { MotivosCancelamentoVagaService } from "./motivos-cancelamento/motivos-cancelamento.service";
+import { MotivosDescarteAdminController } from "./motivos-descarte/motivos-descarte-admin.controller";
+import { MotivosDescarteController } from "./motivos-descarte/motivos-descarte.controller";
+import { MotivosDescarteService } from "./motivos-descarte/motivos-descarte.service";
+import { MotivosReenvioShortlistAdminController } from "./motivos-reenvio-shortlist/motivos-reenvio-shortlist-admin.controller";
+import { MotivosReenvioShortlistController } from "./motivos-reenvio-shortlist/motivos-reenvio-shortlist.controller";
+import { MotivosReenvioShortlistService } from "./motivos-reenvio-shortlist/motivos-reenvio-shortlist.service";
 import { VagaStatusAdminController } from "./vaga-status/vaga-status-admin.controller";
 import { VagaStatusController } from "./vaga-status/vaga-status.controller";
 import { VagaStatusService } from "./vaga-status/vaga-status.service";
@@ -150,11 +158,25 @@ import { VagasService } from "./vagas/vagas.service";
   imports: [AdmissoesModule, PandapeArquivosModule, PortalModule],
   controllers: [
     VagasController,
+    /*
+     * A SHORTLIST DA VAGA (Frente E, pontos 10 e 11). CLASSE PRÓPRIA, e a separação é de TAMANHO e
+     * NUNCA de permissão: ela é reivindicada pelo MESMO menu `as-vagas` que a `VagasController`
+     * (ver `domain/menus`), então o alcance é idêntico. O que ela evita é acrescentar a shortlist a
+     * um serviço de 4.400 linhas que treze specs instanciam (§A.26).
+     */
+    ShortlistsController,
     CandidatosController,
     EtapasFunilController,
     EtapasFunilAdminController,
     MotivosCancelamentoVagaController,
     MotivosCancelamentoVagaAdminController,
+    // O catálogo de motivos de DESCARTE (Frente A, ponto 7). DUAS classes pela MESMA razão do par
+    // acima: a leitura é aberta (o consultor precisa do seletor para descartar) e a escrita é
+    // `@Roles("SUPER_ADMIN")`. Uma classe só fecharia o seletor do desfecho para quem opera.
+    MotivosDescarteController,
+    MotivosDescarteAdminController,
+    MotivosReenvioShortlistController,
+    MotivosReenvioShortlistAdminController,
     VagaStatusController,
     VagaStatusAdminController,
     LinhasServicoController,
@@ -178,6 +200,14 @@ import { VagasService } from "./vagas/vagas.service";
   // vaga recebe candidato?" também.
   providers: [
     VagasService,
+    /*
+     * `ShortlistsService` é o dono ÚNICO da escrita de `as_shortlists` e `as_shortlist_itens`, e o
+     * SEGUNDO escritor de `vagas.envio_shortlist`. Os dois escritores daquele campo NÃO colidem,
+     * por construção: a trilha de abertura só grava em vaga de papel RASCUNHO/REVISAO, e o envio de
+     * shortlist só é aceito em vaga de papel ABERTURA/ENTREGA. A prova está no cabeçalho do serviço,
+     * e a guarda que a sustenta está no `enviar`.
+     */
+    ShortlistsService,
     // `DeparaEtapaExternaService` resolve o nome de uma etapa vinda de fora (Pandapé, Digai) para a
     // etapa do funil ou para um desfecho, lendo a tabela de configuração `as_depara_etapa_externa`.
     // NASCE SEM CHAMADOR de propósito: a fundação da plataforma unificadora existe antes da
@@ -192,6 +222,17 @@ import { VagasService } from "./vagas/vagas.service";
     RetencaoCandidatosService,
     EtapasFunilService,
     MotivosCancelamentoVagaService,
+    // `MotivosDescarteService` é o catálogo do descarte do candidato. O `CandidatosService` NÃO
+    // depende dele por CONSTRUTOR, e a ausência é deliberada: a validação do `registrarSaida` chega
+    // pela função de módulo `motivosDeDescarteAtivos`, para não acrescentar um sexto argumento à
+    // assinatura que dezenas de specs instanciam (§A.26). Mesma escolha de `motivosDeCancelamento
+    // Ativos` no `VagasService`.
+    MotivosDescarteService,
+    // `MotivosReenvioShortlistService` é o catálogo do motivo de REENVIO de shortlist. Mesma
+    // escolha do vizinho, e pela mesma razão: o `ShortlistsService` NÃO depende dele por construtor,
+    // porque a conferência do envio chega pela função de módulo `motivosDeReenvioAtivos`, e um
+    // terceiro argumento mudaria a assinatura que as specs da shortlist já instanciam (§A.26).
+    MotivosReenvioShortlistService,
     VagaStatusService,
     // `LinhasServicoService` é a fonte única do catálogo de linhas de serviço e a ÚNICA porta de
     // escrita dele, o que é o que torna o cache em memória de lá confiável. O `VagasService` NÃO

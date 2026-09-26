@@ -140,6 +140,33 @@ export async function restaurarCandidatura(
     .set({
       situacao: candidatura.situacao,
       motivoDescarte: null,
+      /*
+       * ┌─ A PRETENSÃO SAI JUNTO COM O MOTIVO, E ISTO É §A.6 (veto do `seguranca`, Frente E) ────┐
+       * │ O bloco do cabeçalho já escrevia o argumento e não o aplicava a este campo, porque ele  │
+       * │ não existia quando aquilo foi escrito: `gravarSaidaDaCandidatura` passou a escrever     │
+       * │ `motivo_descarte` E `pretensao_salarial` no MESMO `set`, então limpar só o primeiro     │
+       * │ deixa a volta ASSIMÉTRICA.                                                              │
+       * │                                                                                         │
+       * │ O ESTADO QUE ISSO PRODUZIA É EXATAMENTE O QUE A RÉGUA DA ESCRITA RECUSA COM 400: uma    │
+       * │ candidatura VIVA carregando quanto a pessoa pediu, ÓRFÃ do motivo que autorizou pedir   │
+       * │ o valor (apagado na linha de cima). `exigirPretensaoQuandoOMotivoPede` existe para      │
+       * │ impedir esse par, e a restauração o alcançava por outra porta.                          │
+       * │                                                                                         │
+       * │ E ELE QUEBRAVA A INVARIANTE ESCRITA NO CONTRATO: "só a candidatura descartada por um    │
+       * │ motivo marcado `pedePretensao` tem valor aqui". Com a volta, o valor descia no          │
+       * │ `painelVaga` e na lista de transferíveis de QUALQUER outra vaga, que são superfícies de │
+       * │ candidatura VIVA.                                                                       │
+       * │                                                                                         │
+       * │ O CAMINHO É ALCANÇÁVEL, e não hipótese: a reabertura SEM ORIGEM (`vagas.service`) põe   │
+       * │ na lista do Master TODOS os `DESCARTADO` da vaga, inclusive quem saiu pelo motivo que   │
+       * │ pede a pretensão.                                                                       │
+       * │                                                                                         │
+       * │ NENHUM FATO SE PERDE, pela mesma razão do motivo ao lado: o que aconteceu continua no   │
+       * │ EVENTO da saída. O que sai da linha viva é o dado que descrevia um desfecho que não     │
+       * │ vale mais.                                                                              │
+       * └─────────────────────────────────────────────────────────────────────────────────────────┘
+       */
+      pretensaoSalarial: null,
       etapa: candidatura.etapaDestino,
       /*
        * ┌─ O LADO É SEMPRE ESCRITO, E A VOLTA EM SELEÇÃO O ZERA (decisão do diretor, Onda B) ────┐

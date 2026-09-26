@@ -216,7 +216,20 @@ describe("`codigoDoPapel`: o único jeito certo de falhar é LANÇAR", () => {
     for (const papel of VAGA_STATUS_PAPEIS_DE_SISTEMA) {
       await expect(codigoDoPapel(statusSemente(), papel)).resolves.toBe(esperado[papel]);
     }
-  });
+    /*
+     * ─ O TETO DE TEMPO É EXPLÍCITO, E NÃO É MÁSCARA DE LENTIDÃO ────────────────────────────────
+     *
+     * ESTE CASO É O ÚNICO DO ARQUIVO QUE PAGA O GRAFO DE MÓDULOS INTEIRO: `codigoDoPapel` resolve
+     * o papel IMPORTANDO DINAMICAMENTE todo arquivo de produção que menciona o nome, e o conjunto
+     * cresce a cada arquivo novo do módulo A&S. A cobertura independente MEDIU 4.176ms contra o
+     * teto padrão de 5.000ms, ou seja, ele já passava raspando e ia estourar sob carga, por
+     * crescimento normal do código e não por defeito.
+     *
+     * O QUE ISSO NÃO PODE VIRAR: teto global no runner. Teto global esconde teste genuinamente
+     * PENDURADO em toda a suíte, que é o defeito que o tempo limite existe para revelar. Aqui o
+     * custo é conhecido, medido e localizado, então o teto é deste caso e de mais nenhum.
+     */
+  }, 30_000);
 
   /**
    * A MUTAÇÃO 1 MORRE AQUI. Com `?? "ENTREGUE"` no lugar do lançamento, este teste fica verde na

@@ -28,6 +28,34 @@ import { codigoDoRotulo } from "../../ifractal/ifractal-status.service";
  * §A.6: código, rótulo, ordem, cor e dois booleanos. Nenhum dado pessoal passa por este arquivo; as
  * contagens que ele faz sobre candidaturas devolvem NÚMERO, nunca nome, nunca CPF, nunca id.
  */
+/**
+ * A LINHA DO CATÁLOGO COMO ELA SAI DO BANCO: o `AsEtapaFunil` do vocabulário compartilhado mais o
+ * flag `entregaAoCliente` (migration 0130).
+ *
+ * O TIPO MORA AQUI, E NÃO NO `shared-types`, POR PROCESSO: aquele arquivo é de DONO ÚNICO (§A.39,
+ * e o dono é o coordenador), e o flag é insumo INTERNO da derivação de status da vaga, que nenhuma
+ * tela consome nesta frente. É o mesmo desenho do `AsVagaStatusLinha` em `vaga-status.service.ts`:
+ * quando o dono levar o campo para o contrato compartilhado, esta interface some e nada muda em
+ * runtime.
+ */
+export interface AsEtapaFunilLinha extends AsEtapaFunil {
+  entregaAoCliente: boolean;
+  destinoDoCancelamento: boolean;
+  /**
+   * ─ NESTA ETAPA SE MARCA ENTREVISTA? (Frente E, ponto 8, migration 0131) ───────────────────────
+   *
+   * FICA AQUI DENTRO, e NÃO em `AsEtapaFunil`, pela MESMA razão dos dois flags acima e por uma a
+   * mais, que é medida e não suposta: `etapas-funil.leitura-sem-contagem.spec.ts` congela o payload
+   * de `GET /as/etapas` em SETE campos EXATOS, e promover o flag ao contrário derrubaria aquele
+   * teste (que está certo: a rota é aberta a todo autenticado, e o que ela devolve é vigiado).
+   *
+   * QUEM PRECISA DA LISTA NA TELA A PEGA PELA ROTA PRÓPRIA, `GET /as/etapas/com-entrevista`, que
+   * devolve só os CÓDIGOS. É recorte menor e explícito, em vez de um campo a mais em todo item de
+   * um payload que já tem dono.
+   */
+  temEntrevista: boolean;
+}
+
 @Injectable()
 export class EtapasFunilService {
   constructor(@Inject(DRIZZLE) private readonly db: Database) {}
@@ -48,7 +76,7 @@ export class EtapasFunilService {
    * que acabou de ser inativada. O contrário (recusar etapa que existe) é o que dói, e é por isso
    * que a invalidação na escrita é imediata em vez de depender do relógio.
    */
-  private cache: { em: number; linhas: AsEtapaFunil[] } | null = null;
+  private cache: { em: number; linhas: AsEtapaFunilLinha[] } | null = null;
   private static readonly TTL_MS = 60_000;
 
   private invalidar(): void {
@@ -56,7 +84,7 @@ export class EtapasFunilService {
   }
 
   /** TODAS as linhas, ativas e inativas, na ordem do funil. É a base de tudo que se lê daqui. */
-  private async todas(): Promise<AsEtapaFunil[]> {
+  private async todas(): Promise<AsEtapaFunilLinha[]> {
     const agora = Date.now();
     if (this.cache && agora - this.cache.em < EtapasFunilService.TTL_MS) return this.cache.linhas;
 
@@ -69,13 +97,16 @@ export class EtapasFunilService {
         tom: asEtapasFunil.tom,
         inicial: asEtapasFunil.inicial,
         ativa: asEtapasFunil.ativa,
+        entregaAoCliente: asEtapasFunil.entregaAoCliente,
+        destinoDoCancelamento: asEtapasFunil.destinoDoCancelamento,
+        temEntrevista: asEtapasFunil.temEntrevista,
       })
       .from(asEtapasFunil)
       // O DESEMPATE POR `id` NÃO É DETALHE: sem ele, duas etapas com a mesma `ordem` trocam de lugar
       // a cada consulta, e a tela passa a mostrar o funil numa ordem diferente a cada F5.
       .orderBy(asc(asEtapasFunil.ordem), asc(asEtapasFunil.id));
 
-    const mapeadas: AsEtapaFunil[] = linhas.map((l) => ({ ...l, tom: l.tom as EtapaTom }));
+    const mapeadas: AsEtapaFunilLinha[] = linhas.map((l) => ({ ...l, tom: l.tom as EtapaTom }));
     this.cache = { em: agora, linhas: mapeadas };
     return mapeadas;
   }
@@ -87,7 +118,28 @@ export class EtapasFunilService {
    */
   async listar(incluirInativas = false): Promise<AsEtapaFunil[]> {
     const todas = await this.todas();
-    return incluirInativas ? todas : todas.filter((e) => e.ativa);
+    const visiveis = incluirInativas ? todas : todas.filter((e) => e.ativa);
+    /*
+     * ─ OS SETE CAMPOS, E SÓ ELES: OS FLAGS INTERNOS NÃO VAZAM PARA A LEITURA ───────────────────
+     *
+     * ACHADO DE TESTE, E ELE ESTAVA CERTO (`etapas-funil.leitura-sem-contagem.spec.ts`): esta
+     * lista é o payload de `GET /as/etapas`, e o contrato dela é `AsEtapaFunil`, congelado em sete
+     * campos. Devolver o objeto do CACHE inteiro publicaria `entregaAoCliente` e
+     * `destinoDoCancelamento` na API por acidente de tipagem: o TypeScript aceita o supertipo, o
+     * `JSON.stringify` não, e a tela passaria a receber campo que ninguém declarou.
+     *
+     * O RECORTE É EXPLÍCITO, e não um `delete`: campo novo no cache não escapa sozinho, porque a
+     * lista positiva não o inclui até alguém escrevê-lo aqui de propósito.
+     */
+    return visiveis.map((e) => ({
+      id: e.id,
+      codigo: e.codigo,
+      rotulo: e.rotulo,
+      ordem: e.ordem,
+      tom: e.tom,
+      inicial: e.inicial,
+      ativa: e.ativa,
+    }));
   }
 
   /** Só os CÓDIGOS ativos, na ordem do funil: é o que o domínio recebe como parâmetro. */
@@ -100,6 +152,89 @@ export class EtapasFunilService {
    * de candidatos pendentes do fechamento pode conter alguém parado numa etapa inativada, e ele
    * precisa de uma posição, não de um buraco.
    */
+  /**
+   * AS ETAPAS QUE SIGNIFICAM "O CANDIDATO ESTÁ COM O CLIENTE" (migration 0130).
+   *
+   * É o único insumo de catálogo da derivação `ABERTA <-> ENTREGUE`: a vaga é ENTREGUE enquanto
+   * existir alguém VIVO numa destas etapas.
+   *
+   * INCLUI AS INATIVAS, de propósito, e a razão é a mesma do `ordemPorCodigo`: quem ficou parado
+   * numa etapa que saiu de circulação continua PARADO NELA. Filtrar as inativas aqui faria a vaga
+   * "desentregar" sozinha no instante em que o diretor inativasse a Entrevista Cliente, sem
+   * ninguém ter movido candidato nenhum.
+   *
+   * CONJUNTO VAZIO É RESPOSTA VÁLIDA, e a derivação é fail-closed sobre ele: sem etapa marcada,
+   * deriva-se sempre ABERTA, que é o estado que não afirma entrega nenhuma.
+   */
+  async codigosDeEntregaAoCliente(): Promise<ReadonlySet<string>> {
+    return new Set((await this.todas()).filter((e) => e.entregaAoCliente).map((e) => e.codigo));
+  }
+
+  /**
+   * PARA ONDE VAI QUEM ESTAVA NA VAGA QUE FOI CANCELADA (migration 0130). Nula quando não há.
+   *
+   * ┌─ ELA NÃO LANÇA, E A ESCOLHA É O OPOSTO DA DO `etapaInicial` ───────────────────────────────┐
+   * │ `etapaInicial` LANÇA porque sem ela a candidatura não teria onde nascer: recusar o cadastro │
+   * │ é melhor do que criar linha órfã. AQUI O CUSTO DE LANÇAR É OUTRO: o cancelamento da vaga    │
+   * │ passaria a ser BLOQUEADO por uma configuração de catálogo, e o diretor acabou de decidir    │
+   * │ que ele deixa de ser bloqueado.                                                             │
+   * │                                                                                            │
+   * │ SEM DESTINO, NINGUÉM É MOVIDO E NINGUÉM É DESCARTADO: as candidaturas ficam VIVAS onde      │
+   * │ estão, na vaga cancelada, encontráveis e transferíveis, que é a garantia que o diretor      │
+   * │ pediu. O que se perde é só o agrupamento no Stand By, e a trilha do cancelamento DIZ que    │
+   * │ isso aconteceu, em vez de o sistema fingir que moveu.                                       │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * SÓ A ATIVA: mover gente para uma etapa que o diretor tirou de circulação a esconderia dos
+   * seletores e dos filtros, que é o contrário de "a pessoa não some".
+   */
+  async etapaDoCancelamento(): Promise<AsEtapaFunilLinha | null> {
+    return (await this.todas()).find((e) => e.destinoDoCancelamento && e.ativa) ?? null;
+  }
+
+  /**
+   * ─ AS ETAPAS EM QUE SE MARCA ENTREVISTA (Frente E, ponto 8) ───────────────────────────────────
+   *
+   * É o único insumo de "onde cabe agendar entrevista", e é CONJUNTO, não linha única: o diretor
+   * pediu a entrevista da etapa Soulan e mandou considerar que pode haver entrevista TAMBÉM na
+   * etapa Cliente. A semente marca as duas.
+   *
+   * SÓ AS ATIVAS, e aqui a escolha é OPOSTA à de `codigosDeEntregaAoCliente`, de propósito:
+   *   . lá o conjunto responde "quem ESTÁ com o cliente", uma leitura sobre gente PARADA numa
+   *     etapa, e filtrar as inativas faria a vaga "desentregar" sozinha quando o diretor
+   *     inativasse a Entrevista Cliente, sem ninguém ter movido candidato nenhum;
+   *   . aqui o conjunto autoriza uma ESCRITA NOVA, e etapa que saiu de circulação não recebe
+   *     marcação nova, pela mesma régua de `exigirEtapaAtiva`. A entrevista JÁ MARCADA numa etapa
+   *     depois inativada continua existindo e continua sendo lida: a FK é `restrict`, e nada a
+   *     apaga.
+   *
+   * CONJUNTO VAZIO É RESPOSTA VÁLIDA, e o agendamento é fail-closed sobre ela: sem etapa marcada,
+   * nenhuma entrevista é aceita em lugar nenhum. O erro cai para o lado de não gravar.
+   */
+  async codigosComEntrevista(): Promise<ReadonlySet<string>> {
+    return new Set((await this.todas()).filter((e) => e.temEntrevista && e.ativa).map((e) => e.codigo));
+  }
+
+  /**
+   * A ETAPA ACEITA ENTREVISTA? Recusa com a FRASE que diz o que fazer, e não com um booleano que o
+   * chamador teria de traduzir em cada ponto.
+   *
+   * ELA CHAMA `exigirEtapaAtiva` PRIMEIRO, e a ordem produz as duas recusas certas em vez de uma
+   * só: etapa inexistente recebe "não existe no funil", etapa existente mas sem entrevista recebe
+   * a frase própria, com o RÓTULO dentro (é ele que o consultor vê na tela, e o código não diria
+   * nada a ele).
+   */
+  async exigirEtapaComEntrevista(codigo: string): Promise<AsEtapaFunil> {
+    const etapa = await this.exigirEtapaAtiva(codigo);
+    const comEntrevista = await this.codigosComEntrevista();
+    if (!comEntrevista.has(codigo)) {
+      throw new BadRequestException(
+        `A etapa "${etapa.rotulo}" não tem entrevista. Marque a etapa como etapa de entrevista na tela de Etapas Do Funil, ou escolha outra.`,
+      );
+    }
+    return etapa;
+  }
+
   async ordemPorCodigo(): Promise<ReadonlyMap<string, number>> {
     return new Map((await this.todas()).map((e) => [e.codigo, e.ordem]));
   }

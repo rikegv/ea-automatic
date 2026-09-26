@@ -315,11 +315,10 @@ export class RetencaoCandidatosService implements OnModuleInit, OnModuleDestroy 
                   -- encerra = false, ou seja, VAGA PAUSADA NÃO É VAGA TERMINADA, e ler o flag
                   -- errado tornaria expurgável todo mundo dentro de uma vaga só pausada.
                   --
-                  -- ┌─ A ENTREGA FICA DE FORA, E A RAZÃO NÃO É CAUTELA, É MEDIÇÃO ────────────────┐
-                  -- │ O flag encerra é TRUE em três papéis: ENTREGA, FECHAMENTO e CANCELAMENTO. Sem a  │
-                  -- │ condição abaixo, isto alcançaria quem estava numa vaga ENTREGUE, que é QUEM │
-                  -- │ FOI CONTRATADO. O tester mediu o caso: ALOCADO há 3 anos numa vaga        │
-                  -- │ ENTREGUE ERA EXPURGADO.                                                    │
+                  -- ┌─ A VAGA QUE ENTREGOU FICA DE FORA, E A RAZÃO NÃO É CAUTELA, É MEDIÇÃO ──────┐
+                  -- │ Sem a condição do carimbo, isto alcançaria quem estava numa vaga que       │
+                  -- │ ENTREGOU, que é QUEM FOI CONTRATADO. O tester mediu o caso: ALOCADO há 3   │
+                  -- │ anos numa vaga de entrega ERA EXPURGADO.                                   │
                   -- │                                                                            │
                   -- │ E O EXPURGO NÃO PROTEGERIA NADA ALI, que é o ponto que decidiu: o CPF de    │
                   -- │ quem foi contratado continua na ADMISSÃO, que é outro módulo com retenção   │
@@ -328,8 +327,33 @@ export class RetencaoCandidatosService implements OnModuleInit, OnModuleDestroy 
                   -- │ CPF: destrói o histórico da seleção e não minimiza dado nenhum.             │
                   -- │                                                                            │
                   -- │ O DIRETOR ESCREVEU "vaga encerrada (cancelada/fechada)", e é isto: os dois  │
-                  -- │ desfechos em que o processo terminou SEM entrega. Reverter é apagar a       │
-                  -- │ condição do papel. PELO PAPEL E NUNCA PELO CÓDIGO, que é renomeável.        │
+                  -- │ desfechos em que o processo terminou SEM entrega.                          │
+                  -- └─────────────────────────────────────────────────────────────────────────────┘
+                  --
+                  -- ┌─ A CONDIÇÃO ERA s.papel = 'ENTREGA' E VIROU O CARIMBO. É A MESMA GENTE ───┐
+                  -- │ POR QUE MUDOU: na Frente B da Central de Vagas, ENTREGUE deixou de ser    │
+                  -- │ desfecho e virou ESTADO VIVO ("entregue ao cliente, ainda não finalizada"), │
+                  -- │ com encerra = false. fechar passou a gravar SEMPRE o papel FECHAMENTO.    │
+                  -- │ A condição antiga não alcançaria mais ninguém, em silêncio, e quem foi      │
+                  -- │ contratado perderia a proteção sem nada falhar. Isso é exatamente o modo de │
+                  -- │ falha que esta cláusula existe para impedir.                                │
+                  -- │                                                                            │
+                  -- │ A EQUIVALÊNCIA É PROVÁVEL, E NÃO UMA APOSTA: fechar gravava ENTREGUE    │
+                  -- │ quando, E SOMENTE QUANDO, ocupacao.finalizadas > 0, e no MESMO update   │
+                  -- │ carimbava vagas_fechadas + vagas_fechadas_banco com ESSA contagem. Os   │
+                  -- │ dois sempre foram o mesmo conjunto, escrito duas vezes. Ler o carimbo é ler │
+                  -- │ o dado; ler o status era ler a cópia.                                       │
+                  -- │                                                                            │
+                  -- │ papel = 'FECHAMENTO' SEGURA O ALCANCE, e a metade importa: a vaga         │
+                  -- │ CANCELADA também carimba a contagem (ela conta quantas posições a vaga      │
+                  -- │ chegou a entregar de fato), e sem esta metade o cancelamento passaria a     │
+                  -- │ proteger gente que ele nunca protegeu, retendo dado pessoal a mais.         │
+                  -- │                                                                            │
+                  -- │ E A VAGA ESPELHADA ENCERRADA PELA VARREDURA CONTINUA FORA: encerrarAusentes│
+                  -- │ grava o papel FECHAMENTO e NÃO escreve carimbo nenhum, então a soma é nula  │
+                  -- │ e a proteção não a alcança, exatamente como antes.                          │
+                  -- │                                                                            │
+                  -- │ PELO PAPEL E NUNCA PELO CÓDIGO, que é renomeável pelo diretor.              │
                   -- └─────────────────────────────────────────────────────────────────────────────┘
                   --
                   -- encerrada_em is null PROTEGE, e a direção é fail-closed: vaga marcada como
@@ -337,7 +361,10 @@ export class RetencaoCandidatosService implements OnModuleInit, OnModuleDestroy 
                   -- encerramento ninguém sabe, e prazo sem data de início não começa a correr. Sem
                   -- esta metade, a linha sem carimbo cairia no relógio antigo, que é justamente o
                   -- que a correção existe para impedir.
-                  and (s.encerra = false or s.papel = 'ENTREGA' or v.encerrada_em is null))
+                  and (s.encerra = false
+                       or (s.papel = 'FECHAMENTO'
+                           and coalesce(v.vagas_fechadas, 0) + coalesce(v.vagas_fechadas_banco, 0) > 0)
+                       or v.encerrada_em is null))
          -- ┌─ O RELÓGIO, e sem esta parte a correção não INICIA o prazo: ela o declara VENCIDO ────┐
          -- │ O prazo corre do ÚLTIMO movimento, não do primeiro: quem foi descartado em três vagas │
          -- │ ao longo de dois anos ainda é alguém que o time viu recentemente.                     │
@@ -599,6 +626,37 @@ export class RetencaoCandidatosService implements OnModuleInit, OnModuleDestroy 
          where (candidato_id in (select id from alvo)
                 or candidato_id in (select id from ja_anonimizados))
            and motivo_descarte is not null
+      ),
+      -- ─ A PRETENSÃO SALARIAL, dado FINANCEIRO da pessoa (Frente E, ponto 9) ─────────────────
+      --
+      -- ┌─ POR QUE ELA SAI, e a pergunta certa não é "é PII?" e sim "é sobre a PESSOA?" ───────┐
+      -- │ "as_candidaturas.pretensao_salarial" é quanto AQUELA PESSOA pediu para trabalhar. É   │
+      -- │ dado financeiro de indivíduo, da MESMA natureza do "motivo_descarte" da CTE logo      │
+      -- │ acima, e não de "situacao"/"etapa" (que são fato do PROCESSO e por isso ficam).       │
+      -- │                                                                                        │
+      -- │ SEM ESTA CTE A ANONIMIZAÇÃO SERIA APARENTE: o nome sai, o CPF sai, o e-mail sai, e    │
+      -- │ sobra na mesma linha o salário que a pessoa pediu, ligado à vaga, ao cliente e à data. │
+      -- │ Em uma vaga de poucos candidatos isso reidentifica sozinho. É letra por letra o modo  │
+      -- │ de falha que a CTE do "motivo" do histórico documenta: nular só metade não expurga.   │
+      -- └────────────────────────────────────────────────────────────────────────────────────────┘
+      --
+      -- A FORMA É NULO, E NÃO MARCADOR, pelo mesmo argumento da CTE acima: a coluna é ANULÁVEL e
+      -- nula JÁ QUER DIZER ALGUMA COISA no vocabulário da tabela ("não foi pedida"), que é o
+      -- estado da esmagadora maioria das linhas. Um marcador inventaria um terceiro estado que
+      -- toda tela que testa "pretensaoSalarial &&" passaria a EXIBIR.
+      --
+      -- O ALCANCE É "alvo" MAIS "ja_anonimizados", E ELE NÃO É SIMETRIA CEGA: é a mesma correção
+      -- das CTEs vizinhas. A varredura NUNCA volta a uma linha carimbada, então um desfecho com
+      -- pretensão gravado DEPOIS da anonimização ficaria retido para sempre, em silêncio.
+      --
+      -- "atualizado_em" NÃO É TOCADO: ele é INSUMO DO RELÓGIO do expurgo, e empurrá-lo a cada
+      -- passada mexeria no prazo de gente por efeito colateral de uma faxina.
+      pretensoes_expurgadas as (
+        update as_candidaturas
+           set pretensao_salarial = null
+         where (candidato_id in (select id from alvo)
+                or candidato_id in (select id from ja_anonimizados))
+           and pretensao_salarial is not null
       ),
       -- ─ A SEGUNDA CÓPIA DA MESMA FRASE, no HISTÓRICO da candidatura ─────────────────────────
       --

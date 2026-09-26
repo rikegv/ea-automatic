@@ -37,7 +37,7 @@
  * é o Cancelar do rodapé, o Salvar, ou a tecla Escape).
  */
 
-import { useMemo, useRef, useState, type FormEvent } from "react";
+import { createContext, useContext, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   ESCALA_OUTRA,
   OPCAO_OUTRA,
@@ -85,8 +85,10 @@ import {
   type VagaPendencia,
 } from "@ea/shared-types";
 import { apiFetch } from "@/lib/api";
+import { cn } from "@/lib/cn";
 import { maskMoedaBR, salarioParaCampo } from "@/lib/salario";
 import { Button } from "@/components/ui/Button";
+import { Icon } from "@/components/ui/Icon";
 import { Combobox } from "@/components/ui/Combobox";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Modal } from "@/components/ui/Modal";
@@ -96,7 +98,10 @@ import { Stepper, type StepDef } from "@/components/nova/Stepper";
 import { useCidades } from "@/lib/as-cidades";
 import { corDoTom } from "@/lib/as-etapas";
 import { pendenciasComLinhaDeServico } from "@/lib/as-linhas-servico";
+import { ancorasObrigatorias, marcacaoDoCampo, type MarcacaoCampo } from "@/lib/as-vaga-marcacao";
 import { type AsSegmento } from "@/lib/as-segmentos";
+import { dataBr } from "@/lib/as-candidatos";
+import { envioDeShortlistEditavel } from "@/lib/as-shortlists";
 import { statusDePublicacao, statusDoPapel, type AsVagaStatus } from "@/lib/as-status-vaga";
 import { avisoDeReducaoNaTrilha } from "@/lib/as-vaga-meta";
 import { liberarVagaPendenteRevisao, salvarVagaEmRevisao } from "@/lib/as-vagas-revisao";
@@ -396,12 +401,79 @@ function Obrigatorio() {
 }
 
 /**
+ * ─ A MARCAÇÃO POR CAMPO (frente F, ponto 16): O CONTEXTO EXISTE PARA A RÉGUA NÃO SE MULTIPLICAR ─
+ *
+ * ┌─ POR QUE CONTEXTO, e não uma prop em cada campo ───────────────────────────────────────────┐
+ * │ São ONZE obrigatórios espalhados por cinco passos, e a alternativa seria calcular a cor em  │
+ * │ cada chamada de `Campo`. Bastaria UMA delas ficar para trás, ou receber a âncora errada,    │
+ * │ para o campo nascer verde com o servidor recusando a vaga, e nada falharia. Com o contexto,  │
+ * │ o campo se marca sozinho a partir do `id` que ele JÁ tem (o mesmo que a lista do topo usa    │
+ * │ para saltar até ele), então o campo obrigatório novo nasce marcado sem ninguém lembrar.      │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * A LISTA QUE ENTRA AQUI É A MESMA QUE O TOPO DESENHA (`pendenciasAgora`): a marcação e a lista não
+ * têm como divergir porque não existem duas contas, existe uma só, lida em dois lugares.
+ *
+ * `ligada` É QUANDO A TELA JÁ ESTÁ COBRANDO, e segue exatamente o gatilho da lista do topo: no modo
+ * LIBERAÇÃO desde a abertura (lá o botão nasce desabilitado e a pessoa precisa saber o que falta);
+ * nos demais modos, só depois de uma tentativa de publicar. Marcar antes disso pintaria de vermelho
+ * um formulário em branco que a pessoa acabou de abrir para preencher.
+ */
+const MarcacaoDaTrilha = createContext<{
+  pendentes: readonly VagaPendencia[];
+  ligada: boolean;
+} | null>(null);
+
+/** O universo da régua, montado uma vez: ele é feito de constantes e não muda em tempo de execução. */
+const UNIVERSO_OBRIGATORIO = ancorasObrigatorias();
+
+function useMarcacao(ancora: string | undefined, obrigatorio: boolean): MarcacaoCampo {
+  const ctx = useContext(MarcacaoDaTrilha);
+  if (!ctx?.ligada || !obrigatorio) return null;
+  return marcacaoDoCampo(ancora, ctx.pendentes, UNIVERSO_OBRIGATORIO);
+}
+
+/**
+ * A TAG DO ESTADO DO CAMPO, ao lado do rótulo (§A.24: tag em title case).
+ *
+ * ELA NÃO SUBSTITUI O ASTERISCO, soma a ele: o asterisco diz "este campo é obrigatório" e continua
+ * ali em todos os onze; a tag diz "e ele está assim AGORA". Quem tira o asterisco troca uma
+ * informação permanente por uma que muda a cada tecla.
+ *
+ * COR E ÍCONE ANDAM JUNTOS, e não é enfeite: cor sozinha não chega a quem não distingue vermelho de
+ * verde, e o ícone é o que sobra para essa pessoa (§A.12 já usa o mesmo par na tabela, check para
+ * completo e exclamação para pendente). O texto por extenso fecha, e é o que o leitor de tela lê.
+ */
+function MarcaDoCampo({ estado }: { estado: Exclude<MarcacaoCampo, null> }) {
+  const pendente = estado === "pendente";
+  return (
+    <span
+      className={cn(
+        "ml-1.5 inline-flex items-center gap-1 align-middle text-[11px] font-semibold",
+        pendente ? "text-danger" : "text-ok",
+      )}
+      title={
+        pendente
+          ? "Campo obrigatório ainda vazio: falta preencher."
+          : "Campo obrigatório já preenchido."
+      }
+    >
+      <Icon name={pendente ? "alert" : "check"} className="h-3 w-3 flex-none" aria-hidden />
+      {pendente ? "Pendente" : "Preenchido"}
+    </span>
+  );
+}
+
+/**
  * Rótulo de campo, no padrão do DS.
  *
  * O `id` VAI NO CONTÊINER, e não no input, e isso é deliberado: é o alvo do salto vindo da lista de
  * pendências do publicar (item 4). Saltar para o contêiner deixa o RÓTULO visível junto do campo,
  * enquanto saltar para o input sozinho encostaria o campo no topo da área rolante, sem o nome dele.
  * Quem recebe o foco continua sendo o controle de dentro (ver `irParaPendencia`).
+ *
+ * O `id` É TAMBÉM A CHAVE DA MARCAÇÃO (frente F): é por ele que o campo se reconhece na lista de
+ * pendências, sem precisar repetir o nome do campo numa segunda prop.
  */
 export function Campo({
   rotulo,
@@ -416,15 +488,17 @@ export function Campo({
   obrigatorio?: boolean;
   id?: string;
 }) {
+  const marcacao = useMarcacao(id, obrigatorio);
   return (
     <label
       id={id}
       className={largo ? "flex flex-col gap-1.5 md:col-span-2" : "flex flex-col gap-1.5"}
     >
-      <span className="text-[12.5px] text-dim">
+      <span className={cn("text-[12.5px]", marcacao === "pendente" ? "text-danger" : "text-dim")}>
         {rotulo}
         {obrigatorio && <Obrigatorio />}
         {obrigatorio && <span className="sr-only"> (obrigatório)</span>}
+        {marcacao && <MarcaDoCampo estado={marcacao} />}
       </span>
       {children}
     </label>
@@ -445,15 +519,17 @@ function CampoSelect({
   obrigatorio?: boolean;
   id?: string;
 }) {
+  const marcacao = useMarcacao(id, obrigatorio);
   return (
     <div
       id={id}
       className={largo ? "flex flex-col gap-1.5 md:col-span-2" : "flex flex-col gap-1.5"}
     >
-      <span className="text-[12.5px] text-dim">
+      <span className={cn("text-[12.5px]", marcacao === "pendente" ? "text-danger" : "text-dim")}>
         {rotulo}
         {obrigatorio && <Obrigatorio />}
         {obrigatorio && <span className="sr-only"> (obrigatório)</span>}
+        {marcacao && <MarcaDoCampo estado={marcacao} />}
       </span>
       {children}
     </div>
@@ -666,6 +742,15 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
    */
   const ehLiberacao = modo.tipo === "liberacao";
 
+  /**
+   * O "ENVIO DA SHORTLIST" AINDA É DIGITÁVEL NESTA VAGA?
+   *
+   * A PERGUNTA É FEITA AO STATUS DA VAGA EM EDIÇÃO, e não ao MODO da trilha: modo é como a tela foi
+   * aberta, e o que decide é o estado da vaga. Sem vaga (abertura nova, clone) a resposta é sim, e
+   * ela está dentro da régua, que devolve `true` para status ausente. Ver `envioDeShortlistEditavel`.
+   */
+  const envioShortlistEditavel = envioDeShortlistEditavel(vagaEmEdicao?.status, catalogoStatus);
+
   /* LIDO UMA VEZ, NA MONTAGEM. Trocar de vaga é remontar (a `key` da página), então não existe o
      caso de o modo mudar por baixo de um formulário já preenchido. */
   const [inicial] = useState<EstadoInicial>(() => estadoInicial(modo, opcoes));
@@ -866,6 +951,26 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
         dataLimite: form.dataLimite,
       }),
     [form, statusDaRegua],
+  );
+
+  /**
+   * ─ A MARCAÇÃO POR CAMPO (frente F, ponto 16) LÊ ESTA MESMA LISTA ───────────────────────────────
+   *
+   * É O PONTO DA FRENTE INTEIRA: o que desce para os campos é `pendenciasAgora`, a MESMA lista que
+   * o bloco do topo desenha logo abaixo. Não existe uma segunda conta de "este campo está vazio?",
+   * então a lista e a marcação não têm como discordar sobre o mesmo campo, que é exatamente o
+   * defeito que a casa já pagou quando duas réguas responderam a mesma pergunta em telas vizinhas.
+   *
+   * `ligada` REPETE O GATILHO DA LISTA DO TOPO, e repetir aqui é deliberado: as duas coisas
+   * aparecem juntas ou não aparecem. No modo LIBERAÇÃO (a Revisão de Vaga do A&S) elas nascem
+   * visíveis, porque lá o botão já nasce desabilitado e a pessoa precisa saber o que falta; nos
+   * modos `nova`, `rascunho` e `clone` elas só aparecem depois de uma tentativa de publicar, que é
+   * o comportamento que aquelas telas já tinham VALIDADO (§A.26): abrir a trilha em branco e ver
+   * onze campos vermelhos seria a tela cobrando antes de a pessoa ter começado.
+   */
+  const marcacaoDaTrilha = useMemo(
+    () => ({ pendentes: pendenciasAgora, ligada: ehLiberacao || pendencias.length > 0 }),
+    [pendenciasAgora, ehLiberacao, pendencias.length],
   );
 
   /**
@@ -1130,7 +1235,7 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
   }
 
   return (
-    <>
+    <MarcacaoDaTrilha.Provider value={marcacaoDaTrilha}>
       <Modal
         onClose={pedirParaSair}
         className="max-w-[1100px] p-0"
@@ -1533,13 +1638,41 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
                     />
                   </Campo>
 
+                  {/* ─ ENVIO DA SHORTLIST: DIGITÁVEL ANTES DA PUBLICAÇÃO, LEITURA DEPOIS ────────
+                        ┌─ POR QUE ELE PARA DE SER DIGITADO ────────────────────────────────────┐
+                        │ O campo virou CONSEQUÊNCIA do envio de shortlist ao cliente: a partir  │
+                        │ da publicação quem o escreve é o envio, com a data do mais recente. Um │
+                        │ campo digitável aqui seria um segundo escritor do mesmo dado, e o que  │
+                        │ a pessoa digitasse seria sobrescrito pelo primeiro envio, em silêncio. │
+                        └───────────────────────────────────────────────────────────────────────┘
+
+                        RASCUNHO E PENDENTE DE REVISÃO CONTINUAM DIGITANDO, e isso não é exceção:
+                        é a mesma divisão que o servidor faz, e ela é o que prova que os dois
+                        escritores nunca alcançam a mesma vaga. Quem responde é
+                        `envioDeShortlistEditavel`, com a régua de papéis do catálogo, nunca uma
+                        lista de status escrita aqui.
+
+                        A VAGA QUE AINDA NÃO EXISTE (abertura nova, clone) TAMBÉM DIGITA: ela
+                        nasce em rascunho, e sem status não há publicação a respeitar. */}
                   <Campo rotulo="Envio da shortlist">
-                    <input
-                      type="date"
-                      value={form.envioShortlist}
-                      onChange={(e) => set("envioShortlist", e.target.value)}
-                      className="ds-input"
-                    />
+                    {envioShortlistEditavel ? (
+                      <input
+                        type="date"
+                        value={form.envioShortlist}
+                        onChange={(e) => set("envioShortlist", e.target.value)}
+                        className="ds-input"
+                      />
+                    ) : (
+                      <>
+                        <span className="ds-input flex items-center text-dim">
+                          {form.envioShortlist ? dataBr(form.envioShortlist) : "não informado"}
+                        </span>
+                        <span className="text-[11.5px] text-faint">
+                          Com a vaga publicada, esta data passa a ser a do último envio de shortlist
+                          ao cliente, feito no painel da vaga.
+                        </span>
+                      </>
+                    )}
                   </Campo>
                 </>
               )}
@@ -2446,6 +2579,6 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
         }}
         onCancel={() => setConfirmarDescarte(false)}
       />
-    </>
+    </MarcacaoDaTrilha.Provider>
   );
 }

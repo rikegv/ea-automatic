@@ -7,6 +7,10 @@ import { CandidatosService } from "./candidatos.service";
 import { catalogoDeEtapasFingido } from "../etapas/etapas-funil-catalogo.fake";
 import { catalogoDeStatusFingido } from "../vaga-status/vaga-status-catalogo.fake";
 import { envioDoPortalFingido } from "../../portal/portal-envio.fake";
+import {
+  MOTIVO_DE_DESCARTE_VALIDO,
+  respostaDoCatalogoDeDescarte,
+} from "../motivos-descarte/motivos-descarte.fake";
 
 /**
  * ─ O LOTE PARCIAL: uma linha ruim NÃO derruba as outras, e a resposta NÃO carrega dado pessoal ──
@@ -157,6 +161,11 @@ function makeDb(cenario: {
     b.for = () => Promise.resolve([{ ...vaga }]);
     b.groupBy = () => Promise.resolve(ocupadas(atual ? atual.id : null));
     b.orderBy = () => {
+      // O CATÁLOGO DE DESCARTE É RECONHECIDO PELA TABELA: `registrarSaida` confere contra ele o
+      // motivo do DESCARTE (Frente A, ponto 7), e o LOTE herda a conferência porque chama a mesma
+      // `registrarSaida`, linha a linha, em vez de ter régua própria.
+      const catalogo = respostaDoCatalogoDeDescarte(tabela);
+      if (catalogo) return Promise.resolve(catalogo);
       const alvo = parametros(onde).find((p) => estado.has(p));
       if (!alvo) return Promise.resolve([]);
       const l = estado.get(alvo)!;
@@ -340,7 +349,7 @@ describe("Uma linha ruim no MEIO do lote não impede as seguintes", () => {
     const { service, contar } = comInexistente();
 
     const r = await service.registrarSaidaEmLote(
-      { candidaturaIds: SELECAO, situacao: "DESCARTADO", motivo: "perfil não aderente" },
+      { candidaturaIds: SELECAO, situacao: "DESCARTADO", motivo: MOTIVO_DE_DESCARTE_VALIDO },
       USER,
     );
 

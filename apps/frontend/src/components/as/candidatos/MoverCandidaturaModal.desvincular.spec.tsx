@@ -36,6 +36,28 @@ vi.mock("@/lib/as-candidatos", async () => {
   return { ...real, registrarSaida, aprovarCandidatura: vi.fn(), moverEtapa: vi.fn() };
 });
 
+/**
+ * ─ O CATÁLOGO DE MOTIVOS DE DESCARTE, FINGIDO, porque agora o campo DEPENDE dele ───────────────
+ *
+ * O DESCARTE DEIXOU DE SER TEXTO LIVRE: o backend confere o motivo contra `motivos_descarte`, e a
+ * tela passou a oferecer um SELETOR naquele card. Sem esta dublê, o componente sairia buscando a
+ * lista pela rede no meio do teste, e o seletor nasceria vazio.
+ *
+ * A DESISTÊNCIA NÃO É AFETADA, e é isso que os dois caminhos deste arquivo afirmam: lá o campo
+ * continua sendo PROSA, porque a pergunta é outra ("o que a pessoa disse ao desistir"). Quem decide
+ * qual dos dois é `motivoVemDoCatalogo`, do vocabulário compartilhado, e NÃO uma comparação escrita
+ * na tela.
+ */
+const MOTIVO_DO_CATALOGO = "Perfil não aderente";
+vi.mock("@/lib/as-motivos-descarte", () => ({
+  listarMotivosDescarteAtivos: vi.fn(async () => []),
+  useMotivosDescarte: (_token: string | null, ativo: boolean) => ({
+    motivos: ativo ? [{ id: "m1", nome: MOTIVO_DO_CATALOGO, ativo: true }] : [],
+    carregando: false,
+    erro: null,
+  }),
+}));
+
 import { MoverCandidaturaModal } from "./MoverCandidaturaModal";
 
 const ALOCADO: AsCandidaturaItem = {
@@ -54,6 +76,9 @@ const ALOCADO: AsCandidaturaItem = {
   alocadoPorNome: "Ana",
   atualizadoEm: "2026-09-01T12:00:00.000Z",
   ultimoContatoEm: null,
+  // A PRETENSÃO SALARIAL entrou em `AsCandidaturaItem` na Frente E (ponto 9). NULA é o normal:
+  // só quem foi descartado por um motivo marcado `pedePretensao` no catálogo tem valor.
+  pretensaoSalarial: null,
 };
 
 function abrir(candidatura: AsCandidaturaItem = ALOCADO) {
@@ -67,6 +92,16 @@ function abrir(candidatura: AsCandidaturaItem = ALOCADO) {
     />,
   );
   return { onFeito };
+}
+
+/**
+ * ESCOLHER NO SELETOR DO CATÁLOGO: abrir o gatilho e clicar na opção, que é o gesto real de quem
+ * opera. Mandar o valor direto ao estado passaria por cima justamente do componente que esta frente
+ * introduziu, e o teste ficaria verde com o seletor quebrado.
+ */
+function escolherNoCatalogo(nome: string) {
+  fireEvent.click(screen.getByRole("button", { name: "Motivo do descarte" }));
+  fireEvent.click(screen.getByRole("option", { name: nome }));
 }
 
 /** O botão que CONFIRMA dentro da caixa de motivo (o diálogo tem outro com o mesmo rótulo). */
@@ -116,52 +151,81 @@ describe("o motivo é obrigatório NOS DOIS cards, e o branco não conta como mo
     registrarSaida.mockClear();
   });
 
-  for (const { card, situacao } of CARDS) {
-    it(`${card}: o botão nasce desabilitado e só libera com motivo escrito`, () => {
-      abrir();
-      fireEvent.click(screen.getByText(card));
+  /**
+   * O DESCARTE ESCOLHE NO CATÁLOGO, e por isso ele não cabe mais no laço dos dois cards: lá não há
+   * o que digitar, e "só espaços não é motivo" nem chega a ser uma pergunta que o seletor permita
+   * fazer. A régua equivalente aqui é OUTRA: sem escolha, o botão não libera.
+   */
+  it("Descartado Pela Seleção: o motivo vem do CATÁLOGO, e o botão só libera com uma opção escolhida", () => {
+    abrir();
+    fireEvent.click(screen.getByText("Descartado Pela Seleção"));
 
-      const botao = botaoDoFormulario("Desvincular da vaga") as HTMLButtonElement;
-      const campo = screen.getByRole("textbox");
+    // NÃO HÁ CAIXA DE TEXTO NESTE CARD. É esta ausência que impede a tela de mandar texto livre
+    // para uma rota que agora confere o motivo contra a lista (e devolvia 400 em todo descarte).
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect((botaoDoFormulario("Desvincular da vaga") as HTMLButtonElement).disabled).toBe(true);
 
-      expect(botao.disabled).toBe(true);
+    escolherNoCatalogo(MOTIVO_DO_CATALOGO);
+    expect((botaoDoFormulario("Desvincular da vaga") as HTMLButtonElement).disabled).toBe(false);
+  });
 
-      // SÓ ESPAÇOS NÃO É MOTIVO, dos dois lados: aqui pelo `trim()` da tela, e no backend pelo
-      // `@Transform` que apara antes do `@MinLength(2)` (era esse o buraco, e ele foi fechado).
-      fireEvent.change(campo, { target: { value: "     " } });
-      expect((botaoDoFormulario("Desvincular da vaga") as HTMLButtonElement).disabled).toBe(true);
+  it("Descartado Pela Seleção: confirmar manda o NOME do motivo do catálogo", async () => {
+    abrir();
+    fireEvent.click(screen.getByText("Descartado Pela Seleção"));
+    escolherNoCatalogo(MOTIVO_DO_CATALOGO);
+    fireEvent.click(botaoDoFormulario("Desvincular da vaga"));
 
-      // UM caractere também não, e a régua da tela é a mesma do `@MinLength(2)`.
-      fireEvent.change(campo, { target: { value: "x" } });
-      expect((botaoDoFormulario("Desvincular da vaga") as HTMLButtonElement).disabled).toBe(true);
+    // NENHUMA AÇÃO DE ESTADO EXECUTA EM UM CLIQUE SÓ: o botão PERGUNTA, o diálogo executa.
+    expect(registrarSaida).not.toHaveBeenCalled();
 
-      fireEvent.change(campo, { target: { value: "Perfil não aderente" } });
-      expect((botaoDoFormulario("Desvincular da vaga") as HTMLButtonElement).disabled).toBe(false);
-    });
+    const dialogo = screen.getByRole("dialog", { name: "Desvincular Da Vaga?" });
+    fireEvent.click(within(dialogo).getByRole("button", { name: "Desvincular da vaga" }));
 
-    it(`${card}: confirmar manda a situação do card e o motivo APARADO`, async () => {
-      abrir();
-      fireEvent.click(screen.getByText(card));
-      fireEvent.change(screen.getByRole("textbox"), {
-        target: { value: "  Perfil não aderente  " },
-      });
-      fireEvent.click(botaoDoFormulario("Desvincular da vaga"));
+    await waitFor(() => expect(registrarSaida).toHaveBeenCalledTimes(1));
+    // O QUE VAI NO CORPO É O NOME, e não o id: é o nome que o backend compara e é o nome que fica
+    // gravado na candidatura.
+    expect(registrarSaida).toHaveBeenCalledWith("cand-1", "DESCARTADO", MOTIVO_DO_CATALOGO, "t");
+  });
 
-      // NENHUMA AÇÃO DE ESTADO EXECUTA EM UM CLIQUE SÓ: o botão PERGUNTA, o diálogo executa.
-      expect(registrarSaida).not.toHaveBeenCalled();
+  it("Desistiu Do Processo: o motivo continua sendo PROSA, e o branco não conta como motivo", () => {
+    abrir();
+    fireEvent.click(screen.getByText("Desistiu Do Processo"));
 
-      const dialogo = screen.getByRole("dialog", { name: "Desvincular Da Vaga?" });
-      fireEvent.click(within(dialogo).getByRole("button", { name: "Desvincular da vaga" }));
+    const campo = screen.getByRole("textbox");
+    expect((botaoDoFormulario("Desvincular da vaga") as HTMLButtonElement).disabled).toBe(true);
 
-      await waitFor(() => expect(registrarSaida).toHaveBeenCalledTimes(1));
-      expect(registrarSaida).toHaveBeenCalledWith("cand-1", situacao, "Perfil não aderente", "t");
-    });
-  }
+    // SÓ ESPAÇOS NÃO É MOTIVO, dos dois lados: aqui pelo `trim()` da tela, e no backend pelo
+    // `@Transform` que apara antes do `@MinLength(2)` (era esse o buraco, e ele foi fechado).
+    fireEvent.change(campo, { target: { value: "     " } });
+    expect((botaoDoFormulario("Desvincular da vaga") as HTMLButtonElement).disabled).toBe(true);
+
+    // UM caractere também não, e a régua da tela é a mesma do `@MinLength(2)`.
+    fireEvent.change(campo, { target: { value: "x" } });
+    expect((botaoDoFormulario("Desvincular da vaga") as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.change(campo, { target: { value: "Outra proposta" } });
+    expect((botaoDoFormulario("Desvincular da vaga") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("Desistiu Do Processo: confirmar manda a situação do card e o motivo APARADO", async () => {
+    abrir();
+    fireEvent.click(screen.getByText("Desistiu Do Processo"));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "  Outra proposta  " } });
+    fireEvent.click(botaoDoFormulario("Desvincular da vaga"));
+
+    expect(registrarSaida).not.toHaveBeenCalled();
+
+    const dialogo = screen.getByRole("dialog", { name: "Desvincular Da Vaga?" });
+    fireEvent.click(within(dialogo).getByRole("button", { name: "Desvincular da vaga" }));
+
+    await waitFor(() => expect(registrarSaida).toHaveBeenCalledTimes(1));
+    expect(registrarSaida).toHaveBeenCalledWith("cand-1", "DESISTIU", "Outra proposta", "t");
+  });
 
   it("o diálogo diz o que acontece com a POSIÇÃO antes de confirmar, e não só o nome do estado", () => {
     abrir();
     fireEvent.click(screen.getByText("Descartado Pela Seleção"));
-    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Não aderente" } });
+    escolherNoCatalogo(MOTIVO_DO_CATALOGO);
     fireEvent.click(botaoDoFormulario("Desvincular da vaga"));
 
     const dialogo = screen.getByRole("dialog", { name: "Desvincular Da Vaga?" });

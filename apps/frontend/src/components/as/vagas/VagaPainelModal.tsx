@@ -108,7 +108,9 @@ import { FichaCandidatoModal } from "@/components/as/candidatos/FichaCandidatoMo
 import { FinalizarPosicaoModal } from "@/components/as/vagas/FinalizarPosicaoModal";
 import { MoverStatusVagaModal } from "@/components/as/vagas/MoverStatusVagaModal";
 import { AcoesEmMassaDaVaga } from "@/components/as/vagas/AcoesEmMassaDaVaga";
+import { ShortlistsDaVaga } from "@/components/as/vagas/ShortlistsDaVaga";
 import { AdicionarCandidatosEmLoteModal } from "@/components/as/vagas/AdicionarCandidatosEmLoteModal";
+import { CandidatosDisponiveisDaVaga } from "@/components/as/vagas/CandidatosDisponiveisDaVaga";
 import {
   aplicarRecorte,
   criteriosAtivos,
@@ -120,12 +122,21 @@ import {
 } from "@/lib/as-painel-recorte";
 import { cn } from "@/lib/cn";
 
-type Aba = "vaga" | "candidatos" | "alocados";
+type Aba = "vaga" | "candidatos" | "alocados" | "disponiveis";
 
+/**
+ * A QUARTA ABA É "CANDIDATOS DISPONÍVEIS" (frente D, ponto 15), e ela responde a pergunta que as
+ * outras três não respondem: as três olham para DENTRO da vaga (o que ela é, quem está nela, quem
+ * entregou posição), e esta olha para FORA, para quem ainda pode entrar. Por isso ela é a última:
+ * ela é o caminho de trazer gente, e não um recorte do que já existe aqui.
+ *
+ * §A.24: aba é rótulo, então title case.
+ */
 const ABAS: { id: Aba; rotulo: string; icone: IconName }[] = [
   { id: "vaga", rotulo: "A Vaga", icone: "doc" },
   { id: "candidatos", rotulo: "Ver Candidatos", icone: "users" },
   { id: "alocados", rotulo: "Ver Candidatos Alocados", icone: "check" },
+  { id: "disponiveis", rotulo: "Candidatos Disponíveis", icone: "plus" },
 ];
 
 /*
@@ -308,6 +319,12 @@ export function VagaPainelModal({
    */
   const [moverStatusAberto, setMoverStatusAberto] = useState(false);
   const [finalizarAlvo, setFinalizarAlvo] = useState<AsCandidaturaItem | null>(null);
+  /**
+   * A ABA DE DISPONÍVEIS ABRE OS PRÓPRIOS MODAIS (vincular, transferir, lote), e o painel precisa
+   * saber disso pelo MESMO motivo do `acaoAberta`: o `ui/Modal` escuta o Escape no `document` por
+   * instância, e sem este aviso um Escape para fechar a caixa de cima fecharia o painel junto.
+   */
+  const [disponiveisComModal, setDisponiveisComModal] = useState(false);
 
   /**
    * ─ A SELEÇÃO MÚLTIPLA (grupo 1), COM O MESMO GESTO DO ALTO VOLUME ────────────────────────────
@@ -368,6 +385,7 @@ export function VagaPainelModal({
     cadastrarAberto ||
     adicionarLoteAberto ||
     moverStatusAberto ||
+    disponiveisComModal ||
     fichaId !== null ||
     moverAlvo !== null ||
     finalizarAlvo !== null;
@@ -804,7 +822,38 @@ export function VagaPainelModal({
 
         {/* ── MIOLO ROLANTE ───────────────────────────────────────────────── */}
         <div className="ea-scroll flex-1 overflow-y-auto px-6 py-5">
-          {aba === "vaga" && children}
+          {/* ─ A ABA DA VAGA: a ficha escrita pela Central de Vagas, MAIS as shortlists ────────
+              AS SHORTLISTS FICAM AQUI, e não em aba nova, porque elas são um FATO DA VAGA, da
+              mesma natureza do que a ficha já conta (quando abriu, qual o prazo, quando a lista
+              foi ao cliente). Quem as MANDA é a barra da seleção, na aba dos candidatos, que é
+              onde se escolhe quem vai.
+
+              MONTADA COM A ABA, então trocar de aba e voltar relê a lista: é assim que o envio
+              feito na aba ao lado aparece aqui sem nenhum fio extra entre as duas. */}
+          {aba === "vaga" && (
+            <>
+              {children}
+              <ShortlistsDaVaga vagaId={vaga.id} token={token} />
+            </>
+          )}
+
+          {/* ─ A QUARTA ABA: QUEM AINDA PODE ENTRAR NESTA VAGA ────────────────────────────────
+              COMPONENTE PRÓPRIO, e não mais um ramo aqui dentro: esta aba tem leitura própria (a
+              base sem vaga, mais as candidaturas vivas das OUTRAS vagas), tabela própria e ações
+              próprias, e enfiá-la nos ramos de `precisaDaLista` misturaria dois carregamentos que
+              não têm nada a ver um com o outro. O painel só decide ONDE ela aparece. */}
+          {aba === "disponiveis" && (
+            <CandidatosDisponiveisDaVaga
+              vaga={vaga}
+              token={token}
+              recebeCandidato={recebeCandidato}
+              /* A LISTA DESTA VAGA TAMBÉM MUDOU: quem foi vinculado ou transferido passou a estar
+                 aqui dentro, então `aposAcao` relê o painel e avisa a Central de Vagas (o cilindro
+                 das DUAS vagas mudou, a de origem inclusive). */
+              onMudou={aposAcao}
+              onModalAberto={setDisponiveisComModal}
+            />
+          )}
 
           {precisaDaLista && (
             <>

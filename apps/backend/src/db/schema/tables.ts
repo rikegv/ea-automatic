@@ -2034,6 +2034,13 @@ export const admissaoDadosGi = pgTable(
     // (minimização, §A.6): o EA não vira repositório permanente de RG e PIS. A peça 3, quando ligar,
     // re-carimba para "envio ao GI + margem".
     expurgarEm: timestamp("expurgar_em", { withTimezone: true }),
+    // ── ENVIO AO GI (peça 3): a marca de IDEMPOTÊNCIA por admissão ──
+    // Quando o FuncionarioSelecao foi criado no GI. Presença = "já enviado": o gatilho não recria.
+    giEnviadoEm: timestamp("gi_enviado_em", { withTimezone: true }),
+    // O id do FuncionarioSelecao devolvido pelo GI (quando devolve). NÃO é PII: é a chave do registro
+    // de pré-admissão no GI, usada só como âncora de idempotência/rastreio. Pode ser nulo se o GI não
+    // devolver id mas confirmar a criação (aí `gi_enviado_em` é a marca).
+    giFuncionarioSelecaoId: varchar("gi_funcionario_selecao_id", { length: 60 }),
     criadoEm,
     atualizadoEm,
   },
@@ -2566,6 +2573,96 @@ export const motivosCancelamentoVaga = pgTable("motivos_cancelamento_vaga", {
 });
 
 /**
+ * ─ O CATÁLOGO DE MOTIVOS DE DESCARTE DO CANDIDATO (Central de Vagas, Frente A, ponto 7) ─────────
+ *
+ * O QUE ELE SUBSTITUI, e por que agora: `as_candidaturas.motivo_descarte` nasceu TEXTO LIVRE, com o
+ * comentário "o vocabulário de descarte é da operação e ainda está se formando". Ele se formou. Cada
+ * consultor escrevia o mesmo desfecho de um jeito ("reprovado", "reprovou", "não passou"), e o campo
+ * que deveria responder "por que esta pessoa saiu" passou a responder "quem digitou".
+ *
+ * ┌─ ESTES SÃO MOTIVOS, E NÃO SITUAÇÕES NOVAS (decisão do diretor, não reinterpretar) ─────────┐
+ * │ Reprovado, faltante, desistente, sem interesse, sem perfil e stand by entram AQUI, no       │
+ * │ catálogo de motivo. `CANDIDATURA_SITUACOES` NÃO é tocada: inflar a situação mexeria na régua │
+ * │ de posição e de ocupação (quem consome posição, quem a libera, quem segura o cancelamento   │
+ * │ da vaga), que é código validado e nada tem a ver com o vocabulário do desfecho.             │
+ * └────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * MOLDE `motivos_cancelamento_vaga`, LINHA A LINHA: mesmas cinco colunas, unique no nome,
+ * soft-delete por `ativo`, e o que fica gravado na candidatura é o NOME, nunca uma FK. Sem FK,
+ * inativar "Stand By" em março não trava a candidatura descartada em janeiro, e ela continua dizendo
+ * por que a pessoa saiu mesmo com o motivo fora de circulação. A FK responderia "este motivo existe
+ * hoje"; o nome responde "foi este o motivo naquele dia", que é a pergunta que a trilha faz.
+ *
+ * NASCE SEMEADA, e a diferença para a irmã é o diretor, não a régua: `motivos_cancelamento_vaga`
+ * nasceu vazia porque a lista de valor dela ainda era dele; esta nasce com as SEIS linhas que ele
+ * listou. Semear o que o diretor ditou não é a fábrica decidindo por ele (§A.31).
+ *
+ * §A.6: nome de motivo e um flag. Nenhum dado pessoal, nenhum CPF, nenhuma URL.
+ */
+export const motivosDescarte = pgTable("motivos_descarte", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  nome: varchar("nome", { length: 160 }).notNull().unique(),
+  ativo: boolean("ativo").notNull().default(true),
+  /**
+   * ─ ESTE MOTIVO PEDE A PRETENSÃO SALARIAL? (Frente E, ponto 9, migration 0131) ─────────────────
+   *
+   * ┌─ A MARCA MORA NO CATÁLOGO, E NÃO EXISTE COMPARAÇÃO POR NOME EM LUGAR NENHUM ───────────────┐
+   * │ O catálogo é GERENCIÁVEL pelo diretor: ele cria, RENOMEIA e inativa motivo pela tela. Um    │
+   * │ `motivo === "Pretensão Salarial"` no código deixaria de funcionar no dia em que ele         │
+   * │ corrigisse a grafia, sem nada falhar e sem ninguém ficar sabendo: o campo simplesmente       │
+   * │ pararia de ser pedido, e o dado pararia de ser coletado em silêncio. É a MESMA razão pela    │
+   * │ qual `entrega_ao_cliente` e `destino_do_cancelamento` são flags em `as_etapas_funil` em vez  │
+   * │ de literais no service.                                                                      │
+   * │                                                                                              │
+   * │ E O NOME NÃO SERVIRIA NEM HOJE: o catálogo semeado pela 0129 tem seis linhas, e NENHUMA      │
+   * │ delas é "pretensão salarial". Comparar por nome exigiria INVENTAR um motivo, que é           │
+   * │ exatamente o que a OST proíbe e o que a §A.31 recusa.                                        │
+   * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * NASCE `false` EM TUDO, E NADA É SEMEADO MARCADO (§A.31): decidir QUAL motivo significa
+   * "pretensão salarial" é escolha de vocabulário, e vocabulário de desfecho é do diretor. Enquanto
+   * nenhuma linha estiver marcada, a régua é inerte e nenhum desfecho pede valor nenhum, que é o
+   * lado fail-closed: o sistema não coleta dado financeiro de pessoa que ninguém mandou coletar
+   * (§A.6, minimização).
+   */
+  pedePretensao: boolean("pede_pretensao").notNull().default(false),
+  criadoEm,
+  atualizadoEm,
+});
+
+/**
+ * ─ O CATÁLOGO DE MOTIVOS DE REENVIO DE SHORTLIST (decisão 6 do diretor, migration 0132) ─────────
+ *
+ * O QUE ELE SUBSTITUI: `as_shortlists.motivo_reenvio`, texto livre de 500 caracteres, com o mesmo
+ * defeito que o motivo de descarte já pagou na 0129. "Por que a lista foi refeita" é pergunta de
+ * RELATÓRIO, e relatório sobre frase digitada é `like` sobre prosa.
+ *
+ * MOLDE `motivos_descarte`, LINHA A LINHA: cinco colunas, unique no nome, soft-delete por `ativo`.
+ * A marca `pede_pretensao` da irmã NÃO tem paralelo aqui, e a ausência é o recorte: reenvio de
+ * lista é fato de processo da VAGA, e não desfecho de pessoa, então não há dado de candidato a
+ * pedir junto.
+ *
+ * ┌─ AQUI FICA GRAVADA A **FK**, E NA 0129 FICA O NOME. A divergência é deliberada ─────────────┐
+ * │ O descarte é desfecho de PESSOA, e a pergunta da trilha é "foi este o motivo naquele dia",  │
+ * │ que o nome responde mesmo depois de o catálogo mudar. O reenvio é fato de PROCESSO, lido em │
+ * │ agregado ("quantos reenvios por mudança de perfil?"), e essa pergunta só tem resposta exata │
+ * │ com id. O `restrict` fecha: motivo usado não é apagável, só inativável.                      │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * NASCE SEMEADO, como a 0129 e pela mesma razão: a lista é vocabulário de OPERAÇÃO, o diretor a
+ * edita pela tela (`admin/as/motivos-reenvio-shortlist`), e a semente planta sem governar.
+ *
+ * §A.6: nome de motivo e um flag. Nenhum dado pessoal, nenhum CPF, nenhuma URL.
+ */
+export const motivosReenvioShortlist = pgTable("motivos_reenvio_shortlist", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  nome: varchar("nome", { length: 160 }).notNull().unique(),
+  ativo: boolean("ativo").notNull().default(true),
+  criadoEm,
+  atualizadoEm,
+});
+
+/**
  * ─ O CATÁLOGO DE STATUS DA VAGA (onda B2, migration 0102) ───────────────────────────────────────
  *
  * DECLARADO ANTES DE `vagas` DE PROPÓSITO: é a coluna `vagas.status` que aponta para cá, e manter a
@@ -3059,6 +3156,57 @@ export const vagas = pgTable(
     cancelamentoForcadoSeguravam: integer("cancelamento_forcado_seguravam"),
 
     /**
+     * ─ EM QUE ETAPA DO FUNIL A VAGA ESTAVA QUANDO FOI CANCELADA (migration 0130) ────────────────
+     *
+     * A DEFINIÇÃO, e ela precisa ser defensável porque VIRA RELATÓRIO: é a etapa MAIS AVANÇADA
+     * (maior `ordem` no catálogo) entre as candidaturas VIVAS no instante do cancelamento.
+     *
+     * POR QUE A MAIS AVANÇADA: a pergunta do relatório é "até onde este processo chegou antes de
+     * morrer", e quem responde isso é quem foi mais longe. Uma vaga com 30 na Captação e 1 na
+     * Entrevista Cliente CHEGOU à Entrevista Cliente; responder "Captação" porque é a maioria
+     * contaria o oposto. É a MESMA régua de ordenação que as travas de fechamento e de cancelamento
+     * já usam para listar pendentes ("do fim do funil para o começo", `posicaoNoFunil`).
+     *
+     * NULA QUER DIZER UMA COISA SÓ: a vaga foi cancelada sem ninguém vivo dentro. Inventar a etapa
+     * inicial nesse caso afirmaria um fato que não aconteceu.
+     *
+     * ELA É LIMPA PELA REABERTURA, como os outros carimbos de cancelamento, e pela mesma razão:
+     * descreve o estado ATUAL, e vaga reaberta não está cancelada. O FATO não se perde, porque a
+     * etapa também viaja na narrativa do evento de trilha, exatamente como o motivo.
+     *
+     * §A.6: código de etapa, que é vocabulário de processo. Nenhum dado de pessoa.
+     */
+    cancelamentoEtapa: varchar("cancelamento_etapa", { length: 40 }).references(
+      () => asEtapasFunil.codigo,
+      { onDelete: "restrict" },
+    ),
+
+    /**
+     * ─ O STATUS ATUAL FOI POSTO À MÃO? O CARIMBO QUE FAZ O MANUAL GRUDAR (migration 0130) ───────
+     *
+     * ┌─ POR QUE UM CARIMBO, E NÃO UMA LISTA DE ESTADOS COMO O `FAROL_MANUAL` DA ADMISSÃO ───────┐
+     * │ No farol (§A.3) basta a LISTA porque nenhum estado manual é alcançável pela derivação.    │
+     * │ AQUI NÃO BASTA: `ABERTA` e `ENTREGUE` são alcançáveis pelos DOIS caminhos, então o valor  │
+     * │ do status não diz quem o escreveu. O que gruda é o carimbo, não o valor.                  │
+     * │                                                                                           │
+     * │ É A MESMA LIÇÃO JÁ ESCRITA NO `deriveFarolGlobal`: a correção de 13/08/2026 não foi pôr   │
+     * │ `BANCO_AGUARDAR` entre os manuais (isso congelaria a derivação para quem chega nele       │
+     * │ sozinho), foi ler a FLAG que registra a decisão explícita do usuário.                      │
+     * └───────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * A INVARIANTE: preenchido <=> o status VIGENTE veio de um gesto manual. Quem escreve é o
+     * `moverStatus`, e só ele; quem limpa são as portas que gravam status por régua própria
+     * (publicar, liberar, corrigir cliente, fechar, cancelar, reabrir), porque depois delas o
+     * status vigente já não é o que alguém pôs à mão.
+     *
+     * §A.6: uma data e um id de usuário INTERNO. Nenhum dado de candidato.
+     */
+    statusManualEm: timestamp("status_manual_em", { withTimezone: true }),
+    statusManualPorId: uuid("status_manual_por_id").references(() => usuarios.id, {
+      onDelete: "set null",
+    }),
+
+    /**
      * ─ O INSTANTE EM QUE A VAGA ENCERROU, CARIMBADO PELO SERVIDOR (migration 0103) ──────────────
      *
      * PARA QUE ELA EXISTE: é o RELÓGIO DA RETENÇÃO (§A.6). O expurgo de candidatos passa a tratar
@@ -3146,6 +3294,11 @@ export const vagas = pgTable(
     idxEncerradaEm: index("idx_vagas_encerrada_em")
       .on(t.encerradaEm)
       .where(sql`${t.encerradaEm} is not null`),
+    // A pergunta é "quais vagas estão com o status travado à mão", nunca "todas as vagas": índice
+    // PARCIAL, mesmo desenho dos dois acima. A coluna é nula na esmagadora maioria das linhas.
+    idxStatusManualEm: index("idx_vagas_status_manual_em")
+      .on(t.statusManualEm)
+      .where(sql`${t.statusManualEm} is not null`),
     // O CHECK `ck_vagas_limite_sazonal` (data limite obrigatória na vaga SAZONAL) foi REMOVIDO na
     // correção de 21/08: a amarração era engano, a data limite vale para qualquer natureza de vaga.
   }),
@@ -3779,6 +3932,58 @@ export const asEtapasFunil = pgTable("as_etapas_funil", {
   tom: varchar("tom", { length: 4 }).notNull().default("nt"),
   inicial: boolean("inicial").notNull().default(false),
   ativa: boolean("ativa").notNull().default(true),
+  /**
+   * ─ ESTAR NESTA ETAPA SIGNIFICA QUE O CANDIDATO ESTÁ COM O CLIENTE (migration 0130) ────────────
+   *
+   * É O ÚNICO INSUMO DA DERIVAÇÃO `ABERTA <-> ENTREGUE`: a vaga é ENTREGUE quando existe alguém
+   * VIVO numa etapa marcada aqui, e volta a ser ABERTA quando não existe mais. O flag mora no
+   * CATÁLOGO, e não num `if etapa === 'ENTREVISTA_CLIENTE'` no código, pela mesma razão de os
+   * quatro flags de `as_vaga_status` morarem lá: a LISTA é do diretor (ele cadastra, renomeia,
+   * reordena e inativa pela tela), o COMPORTAMENTO é do sistema.
+   *
+   * NASCE `false` EM TUDO, e isso faz a derivação ser fail-closed: catálogo sem nenhuma etapa
+   * marcada deriva sempre ABERTA, que é o estado que não afirma entrega nenhuma. O erro cai para o
+   * lado de não declarar entregue o que não foi.
+   */
+  entregaAoCliente: boolean("entrega_ao_cliente").notNull().default(false),
+  /**
+   * ─ PARA ONDE VAI QUEM ESTAVA NA VAGA QUE FOI CANCELADA (migration 0130) ───────────────────────
+   *
+   * Cancelar vaga com candidato dentro passa a ser PERMITIDO e NINGUÉM É DESCARTADO: quem estava
+   * vivo é movido para ESTA etapa e continua VIVO, ligado à vaga cancelada, para poder ser
+   * transferido ou realocado depois. A semente marca o `STAND_BY` (0111).
+   *
+   * ETAPA, E NUNCA SITUAÇÃO, e confundir as duas é o erro que apaga gente: a SITUAÇÃO diz se o
+   * processo segue vivo, a ETAPA diz onde a pessoa está. O cancelamento muda o LUGAR, não o estado.
+   *
+   * NO MÁXIMO UMA linha marcada, por índice parcial único no banco, no molde do `inicial`: a
+   * pergunta tem UMA resposta, e duas linhas marcadas fariam a rotina escolher.
+   */
+  destinoDoCancelamento: boolean("destino_do_cancelamento").notNull().default(false),
+  /**
+   * ─ NESTA ETAPA SE MARCA ENTREVISTA? (Frente E, ponto 8, migration 0131) ───────────────────────
+   *
+   * É O ÚNICO INSUMO de "onde cabe agendar entrevista", e ele mora no CATÁLOGO pela MESMA razão dos
+   * dois flags acima: a LISTA é do diretor (ele cadastra, renomeia, reordena e inativa pela tela), o
+   * COMPORTAMENTO é do sistema. Um `if etapa === 'ENTREVISTA_SOULAN'` no código seria código
+   * fingindo saber uma lista que o usuário edita, e é o hardcode que a 0102 e a 0130 passaram
+   * inteiras eliminando.
+   *
+   * ┌─ ELE NÃO É ÚNICO, E A DIFERENÇA PARA `inicial` E `destino_do_cancelamento` É O PEDIDO ──────┐
+   * │ Aqueles dois respondem perguntas com UMA resposta ("onde a candidatura nasce", "para onde    │
+   * │ vai quem estava na vaga cancelada"), e por isso têm índice parcial ÚNICO no banco. Este       │
+   * │ responde "em quais etapas se marca entrevista", que é pergunta de CONJUNTO: o diretor pediu   │
+   * │ a entrevista da etapa Soulan e disse, na mesma frase, para considerar que PODE HAVER          │
+   * │ ENTREVISTA TAMBÉM NA ETAPA CLIENTE. Um índice único aqui tornaria impossível exatamente o     │
+   * │ caso que a OST manda prever.                                                                 │
+   * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * NASCE `false` EM TUDO e é ligado em DUAS linhas pela semente (Entrevista Soulan e Entrevista
+   * Cliente), o que torna o agendamento fail-closed: catálogo sem nenhuma etapa marcada NÃO aceita
+   * entrevista em lugar nenhum, que é o lado seguro (nada é gravado sobre uma etapa que ninguém
+   * declarou ter entrevista).
+   */
+  temEntrevista: boolean("tem_entrevista").notNull().default(false),
   criadoEm,
   atualizadoEm,
 });
@@ -3834,7 +4039,32 @@ export const asCandidaturas = pgTable(
       .notNull()
       .references(() => asEtapasFunil.codigo, { onDelete: "restrict" }),
     situacao: candidaturaSituacaoEnum("situacao").notNull().default("ATIVO"),
-    /** Por que saiu. Texto livre: o vocabulário de descarte é da operação e ainda está se formando. */
+    /**
+     * POR QUE SAIU. Continua `text` e continua SEM FK, e as duas coisas são de propósito.
+     *
+     * ┌─ O VOCABULÁRIO SE FORMOU, E AGORA É CATÁLOGO (Frente A, ponto 7) ──────────────────────┐
+     * │ Esta coluna nasceu TEXTO LIVRE ("o vocabulário de descarte é da operação e ainda está   │
+     * │ se formando"). Ele se formou: `motivos_descarte` é o catálogo, e o DESVÍNCULO           │
+     * │ (`DESCARTADO` e `DESISTIU`) passa a ser recusado quando o nome não está na lista ativa. │
+     * │                                                                                         │
+     * │ A COLUNA NÃO VIROU FK, e é o mesmo desenho de `vagas.cancelamento_motivo`: o que fica   │
+     * │ gravado é o NOME. Inativar um motivo não trava a candidatura antiga, e a linha de       │
+     * │ janeiro continua legível em março.                                                      │
+     * │                                                                                         │
+     * │ E AS LINHAS ANTIGAS FICAM COMO ESTÃO. Havia texto livre aqui antes do catálogo, e a     │
+     * │ migration NÃO o reescreve: a validação vale para ESCRITA NOVA, e a LEITURA do histórico │
+     * │ nunca confere nada contra o catálogo. Um `restrict` ou um backfill tornaria ilegível o  │
+     * │ passado que esta coluna existe para guardar.                                            │
+     * └────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * OS OUTROS ESCRITORES CONTINUAM FORA DO CATÁLOGO, e cada um por uma razão própria:
+     *   . `ENVIADO_PARA_ADMISSAO` (a mesma rota de saída) grava PROSA, e não desfecho negativo: o
+     *     campo da tela pergunta "o que fechou o processo e o que a admissão precisa saber".
+     *   . O CANCELAMENTO DA VAGA grava `"Vaga cancelada: <motivo>"`, já validado contra o OUTRO
+     *     catálogo (`motivos_cancelamento_vaga`). Conferir aqui recusaria o próprio sistema.
+     *   . A INGESTÃO EXTERNA grava `as_depara_etapa_externa.motivo_padrao`, que é CONFIGURAÇÃO
+     *     revisada por admin, e não digitação de consultor.
+     */
     motivoDescarte: text("motivo_descarte"),
     alocadoEm: timestamp("alocado_em", { withTimezone: true }).defaultNow().notNull(),
     alocadoPorId: uuid("alocado_por_id").references(() => usuarios.id, { onDelete: "set null" }),
@@ -3885,6 +4115,33 @@ export const asCandidaturas = pgTable(
      * amarraria a próxima migration que precisasse citar o valor.
      */
     posicaoLado: text("posicao_lado"),
+    /**
+     * ─ QUANTO A PESSOA PEDIU (Frente E, ponto 9, migration 0131) ─────────────────────────────────
+     *
+     * ESCRITA POR UMA PORTA SÓ, e a régua inteira está em `exigirPretensaoQuandoOMotivoPede`
+     * (`candidatos.service.ts`): o DESCARTE cujo motivo está marcado `pede_pretensao` no catálogo
+     * EXIGE o valor, e todo o resto o RECUSA. As duas metades importam: sem a segunda, o campo
+     * viraria uma gaveta de salário aberta em qualquer desfecho, coletando dado financeiro que
+     * ninguém pediu (§A.6, minimização).
+     *
+     * ┌─ POR QUE NA CANDIDATURA, E NÃO NO CANDIDATO ────────────────────────────────────────────┐
+     * │ A pretensão é de UM PROCESSO, não da pessoa: a mesma pessoa pede um valor para a vaga de │
+     * │ operador e outro para a de supervisor, seis meses depois. Guardá-la no candidato faria a │
+     * │ segunda apagar a primeira, e a leitura do descarte de janeiro passaria a mostrar o valor │
+     * │ que ele pediu em agosto. É a mesma razão pela qual `as_contatos` pendura na CANDIDATURA e │
+     * │ não na pessoa.                                                                            │
+     * └───────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * `numeric(12,2)`, o MESMO tipo de `vagas.salario_abertura` e do salário da admissão, para o
+     * valor não mudar de forma ao ser comparado com aquilo que ele existe para ser comparado.
+     *
+     * §A.6, E ELA TEM TRÊS PARTES AQUI: o valor NUNCA entra em log (o service não o passa a
+     * `Logger` nenhum, e a frase de recusa fala do campo sem repetir o número), ele NÃO desce na
+     * LISTA de vagas nem em resposta de lote, e ele é EXPURGADO junto com o dado pessoal na
+     * varredura de retenção (`retencao-candidatos.service.ts`), pelo mesmo motivo do
+     * `motivo_descarte`: é frase sobre a PESSOA, não fato de processo.
+     */
+    pretensaoSalarial: numeric("pretensao_salarial", { precision: 12, scale: 2 }),
     criadoEm,
     atualizadoEm,
   },
@@ -3893,6 +4150,16 @@ export const asCandidaturas = pgTable(
     ckPosicaoLado: check(
       "ck_as_candidaturas_posicao_lado",
       sql`${t.posicaoLado} is null or ${t.posicaoLado} in ('OFICIAL', 'BANCO')`,
+    ),
+    /**
+     * PRETENSÃO NÃO É NEGATIVA. Guarda de BORDA, no banco, no molde dos CHECKs de `posicoes_*` da
+     * vaga: o DTO já recusa, e este é o que vale para quem escrever por fora da aplicação. Zero é
+     * ACEITO de propósito (`>= 0`, e não `> 0`): "não tenho pretensão definida" é resposta que a
+     * operação dá, e transformá-la em erro faria o consultor inventar um número.
+     */
+    ckPretensaoSalarial: check(
+      "ck_as_candidaturas_pretensao_salarial",
+      sql`${t.pretensaoSalarial} is null or ${t.pretensaoSalarial} >= 0`,
     ),
     /**
      * A TRAVA 3, no banco e não só na tela: duplo clique não vira duas linhas.
@@ -4102,6 +4369,38 @@ export const asCandidaturaEtapas = pgTable(
      */
     posicaoLadoOrigem: text("posicao_lado_origem"),
     /**
+     * ─ ESTE MOVIMENTO FOI UMA REPROVAÇÃO PELO CLIENTE? (Frente E, ponto 12, migration 0131) ─────
+     *
+     * `true` SÓ pelo gesto `reprovarPeloCliente`, e `false` em absolutamente todo o resto.
+     *
+     * ┌─ ELA NÃO É UMA COLUNA `tipo`, E A DISTINÇÃO É O QUE A TORNA LEGÍTIMA AQUI ──────────────┐
+     * │ O cabeçalho desta tabela diz, com todas as letras, que o TIPO do evento é DERIVADO e     │
+     * │ nunca guardado, e isso CONTINUA valendo: a reprovação pelo cliente é um MOVIMENTO        │
+     * │ (`etapaDe` preenchida, `situacao` nula), e `tipoDoEvento` a devolve como MOVIMENTO, sem  │
+     * │ nenhum valor novo no vocabulário. Esta coluna QUALIFICA o movimento, exatamente como     │
+     * │ `posicao_lado` qualifica o desfecho e `aceite` qualifica a guarda atravessada.           │
+     * │                                                                                          │
+     * │ SEM ELA, "reprovado pelo cliente" SÓ SERIA RESPONDÍVEL LENDO TEXTO LIVRE, e o `motivo`   │
+     * │ ao lado é digitado por gente (e é NULADO pela varredura de retenção, §A.6). A pergunta   │
+     * │ "quantos o cliente reprovou nesta vaga" viraria um `like` sobre frase, que é a mesma     │
+     * │ falha que o catálogo de motivos de descarte existe para ter fechado.                      │
+     * │                                                                                          │
+     * │ E A ESTRUTURA NÃO IDENTIFICA O GESTO SOZINHA: um movimento MANUAL da Entrevista Cliente  │
+     * │ de volta para a Captação grava exatamente as mesmas colunas, e é gesto DIFERENTE (o time │
+     * │ recuando alguém por decisão própria). Derivar por "veio da entrega e foi para a inicial" │
+     * │ contaria os dois como um só.                                                             │
+     * └──────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * `NOT NULL DEFAULT false`, e não anulável: a pergunta tem resposta para TODO evento, inclusive
+     * os milhares que já existem (nenhum deles foi reprovação pelo cliente, porque o gesto não
+     * existia). Nulo aqui seria um terceiro estado sem significado.
+     *
+     * §A.6: um booleano de processo. Nenhum dado pessoal, e ele NÃO é expurgado pela retenção, pelo
+     * mesmo critério que preserva `situacao`, `etapa_para` e `aceite`: é fato do PROCESSO, e é dele
+     * que a linha do tempo da vaga continua legível depois de a pessoa virar anônima.
+     */
+    reprovadoPeloCliente: boolean("reprovado_pelo_cliente").notNull().default(false),
+    /**
      * QUANDO ACONTECEU. Separado de `criadoEm` pela mesma razão do `asContatos`: são perguntas
      * diferentes, e a semente do backfill grava aqui o `alocado_em` da candidatura, que é passado.
      */
@@ -4151,6 +4450,233 @@ export const asCandidaturaEtapas = pgTable(
     idxVagaStatusEvento: index("idx_as_candidatura_etapas_vaga_status_evento")
       .on(t.vagaStatusEventoId)
       .where(sql`${t.vagaStatusEventoId} is not null`),
+  }),
+);
+
+/**
+ * ─ A ENTREVISTA MARCADA: DATA E HORÁRIO, POR CANDIDATURA E POR ETAPA (Frente E, ponto 8) ────────
+ *
+ * ┌─ POR QUE UMA TABELA, E NÃO DUAS COLUNAS EM `as_candidaturas` ─────────────────────────────────┐
+ * │ A coluna era o caminho simples, e ela quebra na PRIMEIRA frase da própria OST: "considere que │
+ * │ pode haver entrevista também na etapa Cliente". Com um par de colunas, marcar a entrevista do │
+ * │ cliente SOBRESCREVE a da Soulan, e a pergunta "que dia foi a entrevista interna desta pessoa" │
+ * │ deixa de ter resposta no instante em que o cliente marca a dele. Duas etapas com entrevista   │
+ * │ são duas LINHAS, não duas colunas, e o dia em que o diretor marcar uma terceira etapa no      │
+ * │ catálogo não custa migration nenhuma.                                                          │
+ * │                                                                                                │
+ * │ E A CHAVE DIZ ISSO: `unique (candidatura_id, etapa)`. UMA entrevista viva por etapa, N etapas │
+ * │ por candidatura. Remarcar é UPDATE da mesma linha, e é por isso que `atualizado_em` está aqui:│
+ * │ ele responde "quando esta marcação foi mexida pela última vez".                                │
+ * └────────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * O HISTÓRICO DE REMARCAÇÕES NÃO É GUARDADO, e a ausência é decisão, não esquecimento (§A.31): a
+ * OST pediu "campo para o time preencher a data e o horário", e uma trilha de remarcação é outra
+ * frente, com outra tela. Remarcar reescreve a linha. O dia em que isso for pedido, a tabela já
+ * está no formato certo para ganhar uma irmã de histórico.
+ *
+ * `agendada_em` É `timestamptz`, E NÃO `date`: o pedido é DATA E HORÁRIO, e guardar os dois em
+ * campos separados criaria o estado impossível de ter hora sem dia. Toda a casa já grava instante
+ * assim (`ocorrido_em`, `alocado_em`, `enviada_em` logo abaixo).
+ *
+ * A ETAPA É FK `RESTRICT` para o CATÁLOGO, como `as_candidaturas.etapa` e as duas pontas de
+ * `as_candidatura_etapas`: etapa em que alguém já foi entrevistado é INATIVÁVEL, nunca apagável, e
+ * é o banco que garante, mesmo por SQL cru.
+ *
+ * CASCADE NA CANDIDATURA, como `as_contatos` e `as_candidatura_etapas`: a marcação não sobrevive ao
+ * processo a que ela pertence. SET NULL no autor: usuário removido não apaga a entrevista, perde-se
+ * só o nome de quem marcou.
+ *
+ * §A.6: um id de candidatura, um código de etapa, um instante e um id de usuário INTERNO. Nenhum
+ * nome, nenhum CPF, nenhum texto livre sobre a pessoa. O local da entrevista NÃO existe aqui de
+ * propósito: ninguém pediu, e campo livre é por onde endereço e telefone entram.
+ */
+export const asCandidaturaEntrevistas = pgTable(
+  "as_candidatura_entrevistas",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    candidaturaId: uuid("candidatura_id")
+      .notNull()
+      .references(() => asCandidaturas.id, { onDelete: "cascade" }),
+    /** EM QUAL ETAPA. Só etapas marcadas `tem_entrevista` no catálogo chegam aqui (o service confere). */
+    etapa: varchar("etapa", { length: 40 })
+      .notNull()
+      .references(() => asEtapasFunil.codigo, { onDelete: "restrict" }),
+    /** DATA E HORÁRIO, num instante só. Ver o bloco acima. */
+    agendadaEm: timestamp("agendada_em", { withTimezone: true }).notNull(),
+    agendadaPorId: uuid("agendada_por_id").references(() => usuarios.id, { onDelete: "set null" }),
+    criadoEm,
+    atualizadoEm,
+  },
+  (t) => ({
+    /** UMA marcação viva por (candidatura, etapa). É a chave do conceito, e ela mora no banco. */
+    uqCandidaturaEtapa: uniqueIndex("uq_as_candidatura_entrevistas_etapa").on(
+      t.candidaturaId,
+      t.etapa,
+    ),
+    /** A pergunta da ficha é "as entrevistas desta candidatura, em ordem de data". */
+    idxCandidatura: index("idx_as_candidatura_entrevistas_candidatura").on(
+      t.candidaturaId,
+      t.agendadaEm,
+    ),
+    /** A agenda da semana: "o que está marcado entre tal e tal dia", sobre a base inteira. */
+    idxAgenda: index("idx_as_candidatura_entrevistas_agenda").on(t.agendadaEm),
+  }),
+);
+
+/**
+ * ─ A SHORTLIST DA VAGA: UM CONJUNTO DE CANDIDATOS ENVIADO AO CLIENTE (Frente E, pontos 10 e 11) ─
+ *
+ * ┌─ O QUE EXISTIA ANTES, E POR QUE ELE NÃO ERA UMA SHORTLIST ────────────────────────────────────┐
+ * │ `vagas.envio_shortlist` é UM campo `date`, DIGITADO À MÃO no formulário de abertura. Ele diz   │
+ * │ "alguma coisa foi enviada em tal dia" e mais nada: não sabe QUEM foi enviado, não sabe QUANTOS │
+ * │ eram, não sabe se houve REENVIO nem por quê, e não impede que a data diga uma coisa e a        │
+ * │ operação tenha feito outra. Era um carimbo sem fato por baixo.                                 │
+ * │                                                                                                │
+ * │ AGORA O FATO EXISTE, E O CARIMBO PASSA A SER CONSEQUÊNCIA DELE (ver `envioDaShortlist` em      │
+ * │ `shortlists.service.ts`): quem envia a shortlist escreve `vagas.envio_shortlist` junto, na     │
+ * │ MESMA transação. O campo NÃO foi derrubado, e o porquê está na seção "O CAMPO ANTIGO" abaixo.  │
+ * └────────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ A SHORTLIST NASCE ENVIADA, E NÃO EXISTE RASCUNHO ────────────────────────────────────────────┐
+ * │ `enviada_em` é NOT NULL. Compor hoje e mandar amanhã seria um segundo estado, com uma tela a   │
+ * │ mais e uma pergunta a mais ("esta shortlist já foi?"), e NINGUÉM PEDIU ISSO (§A.31). O fato    │
+ * │ que a OST nomeia é o ENVIO, então o envio é o que cria a linha: um gesto, uma transação, um    │
+ * │ conjunto congelado. Quem errou a composição reenvia, que é o gesto que a OST pediu de verdade. │
+ * └────────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * `numero` É A ORDEM DO ENVIO NAQUELA VAGA, 1 para a primeira e 2+ para cada REENVIO, com
+ * `unique (vaga_id, numero)`. Ele não é enfeite: é ELE que responde "esta é a PRIMEIRA shortlist?",
+ * que é a pergunta do aviso dos menos de 3 candidatos, e é ele que ordena a leitura sem depender de
+ * duas linhas terem instantes diferentes. Atribuído DENTRO da transação, sob a linha da vaga
+ * travada, pelo mesmo motivo de a ocupação ser contada lá dentro: dois envios simultâneos leriam o
+ * mesmo `max(numero)` e gravariam o mesmo número, e é o unique que os separa.
+ *
+ * `motivo_reenvio` É OBRIGATÓRIO A PARTIR DO SEGUNDO, e isso é CHECK no banco, não só régua de
+ * service: reenviar é dizer que a primeira lista não serviu, e uma shortlist 2 sem motivo é
+ * exatamente o buraco de trilha que o ajuste 7 fechou na saída da candidatura. No PRIMEIRO envio o
+ * campo é proibido (não há o que justificar), e o CHECK diz as duas metades.
+ *
+ * §A.6: id de vaga, um número, uma data, um id de usuário INTERNO e uma frase de PROCESSO. Nenhum
+ * nome de candidato, nenhum CPF. Quem está na lista mora na tabela de itens, por ID.
+ */
+export const asShortlists = pgTable(
+  "as_shortlists",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    /**
+     * RESTRICT, como `as_candidaturas.vaga_id` e pela mesma razão: apagar uma vaga que tem shortlist
+     * enviada faria a prova do envio evaporar em silêncio, junto com a trilha do que o cliente viu.
+     */
+    vagaId: uuid("vaga_id")
+      .notNull()
+      .references(() => vagas.id, { onDelete: "restrict" }),
+    /** 1 = a primeira. 2+ = reenvio. Ver o bloco acima. */
+    numero: integer("numero").notNull(),
+    /** A DATA DO ENVIO. É ela que vira `vagas.envio_shortlist`, e não o contrário. */
+    enviadaEm: date("enviada_em").notNull(),
+    enviadaPorId: uuid("enviada_por_id").references(() => usuarios.id, { onDelete: "set null" }),
+    /**
+     * ─ POR QUE REENVIOU: A FK DO CATÁLOGO (decisão 6 do diretor, migration 0132) ────────────────
+     *
+     * Nulo no primeiro envio, obrigatório nos demais, com CHECK abaixo. `restrict` na FK: motivo
+     * usado por uma shortlist não é apagável, só INATIVÁVEL pela tela de administração, então esta
+     * coluna nunca fica órfã e a leitura nunca perde a resposta.
+     *
+     * ┌─ ELE ERA TEXTO LIVRE DE 500 CARACTERES, E DEIXOU DE SER. ISSO FECHA UM RESÍDUO DE §A.6 ──┐
+     * │ O `seguranca` havia registrado aqui um resíduo REAL e sem conserto barato: a varredura de │
+     * │ retenção (`retencao-candidatos.service.ts`) é chaveada por `candidato_id`, e ESTA LINHA   │
+     * │ PENDURA NA VAGA, então nenhuma cláusula dela a alcançava. Com texto livre digitado por    │
+     * │ consultor, o campo era o único lugar da shortlist onde telefone ou nome de parente podiam  │
+     * │ sobreviver ao expurgo do candidato.                                                        │
+     * │                                                                                           │
+     * │ COM A FK NÃO HÁ MAIS TEXTO A EXPURGAR: o que fica gravado é um ID que aponta para uma      │
+     * │ linha de catálogo escrita pelo DIRETOR, nunca por quem opera. O resíduo não foi mitigado,  │
+     * │ ele deixou de existir, e foi consequência da decisão 6 e não o objetivo dela.              │
+     * └───────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    motivoReenvioId: uuid("motivo_reenvio_id").references(() => motivosReenvioShortlist.id, {
+      onDelete: "restrict",
+    }),
+    /**
+     * ─ O ACEITE DO AVISO DE SHORTLIST CURTA (§A.3 regra 8, e o aviso NÃO bloqueia) ──────────────
+     *
+     * `true` quer dizer uma coisa só: a PRIMEIRA shortlist foi enviada com MENOS DE 3 candidatos e
+     * alguém confirmou isso de propósito. O aviso avisa e não impede (decisão do diretor), e é
+     * justamente por não impedir que ele precisa deixar rastro: uma guarda que se atravessa sem
+     * registro não é guarda, é texto.
+     *
+     * NASCE `false`, E FALSO É O NORMAL. Mesma mecânica do `cienteBancoComOficiaisAbertas`: a
+     * primeira chamada volta 409 com o NÚMERO de candidatos, a tela mostra a pergunta, e a MESMA
+     * chamada volta com o flag.
+     */
+    avisoCurtaAceito: boolean("aviso_curta_aceito").notNull().default(false),
+    criadoEm,
+    atualizadoEm,
+  },
+  (t) => ({
+    /** A ordem do envio é ÚNICA por vaga: é o que impede dois "reenvio 2" na mesma vaga. */
+    uqVagaNumero: uniqueIndex("uq_as_shortlists_vaga_numero").on(t.vagaId, t.numero),
+    /** A pergunta é sempre "as shortlists desta vaga, na ordem", nunca "todas as shortlists". */
+    idxVaga: index("idx_as_shortlists_vaga").on(t.vagaId, t.numero),
+    /** A pergunta agregada que o id existe para responder: "quantos reenvios por este motivo?". */
+    idxMotivoReenvio: index("idx_as_shortlists_motivo_reenvio").on(t.motivoReenvioId),
+    /**
+     * O MOTIVO ACOMPANHA O REENVIO, NOS DOIS SENTIDOS. Primeiro envio SEM motivo (não há o que
+     * justificar, e aceitar texto ali criaria uma justificativa sem pergunta); reenvio COM motivo.
+     * No banco, e não só no DTO, porque é a trilha do porquê de uma lista ter sido refeita.
+     */
+    ckMotivoDoReenvio: check(
+      "ck_as_shortlists_motivo_reenvio",
+      sql`(${t.numero} = 1 and ${t.motivoReenvioId} is null) or (${t.numero} > 1 and ${t.motivoReenvioId} is not null)`,
+    ),
+    /** A numeração começa em 1. Guarda de borda para quem escrever por fora da aplicação. */
+    ckNumero: check("ck_as_shortlists_numero", sql`${t.numero} >= 1`),
+  }),
+);
+
+/**
+ * ─ QUEM ESTAVA NA SHORTLIST: O CONJUNTO, CONGELADO NO INSTANTE DO ENVIO ─────────────────────────
+ *
+ * ┌─ APONTA PARA A CANDIDATURA, E NUNCA PARA O CANDIDATO ────────────────────────────────────────┐
+ * │ A shortlist é de UMA VAGA, e o que se envia ao cliente é "estas pessoas, PARA ESTA VAGA". A   │
+ * │ candidatura é exatamente esse par, e é por ela que a etapa, a situação e o histórico são      │
+ * │ alcançáveis. Apontar para o candidato perderia a vaga e deixaria a lista ambígua para quem    │
+ * │ está em três processos ao mesmo tempo.                                                         │
+ * └────────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * O CONJUNTO É IMUTÁVEL DEPOIS DO ENVIO, e isso é o desenho inteiro: não existe "acrescentar
+ * alguém à shortlist 1" nem "tirar alguém dela". O que o cliente recebeu naquele dia é um fato, e
+ * fato não se edita. Mudou a lista, é REENVIO, com motivo e data próprios. É a mesma disciplina que
+ * faz `as_candidatura_etapas` nunca ser reescrito.
+ *
+ * CASCADE NOS DOIS LADOS, e cada um por uma razão: na shortlist porque o item não existe sem ela;
+ * na candidatura porque apagar um CANDIDATO leva as candidaturas dele (`as_candidatos` cascateia), e
+ * um item órfão apontando para candidatura inexistente seria linha que nenhuma leitura resolve.
+ *
+ * §A.6: dois ids técnicos. Nenhum dado pessoal atravessa esta tabela.
+ */
+export const asShortlistItens = pgTable(
+  "as_shortlist_itens",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    shortlistId: uuid("shortlist_id")
+      .notNull()
+      .references(() => asShortlists.id, { onDelete: "cascade" }),
+    candidaturaId: uuid("candidatura_id")
+      .notNull()
+      .references(() => asCandidaturas.id, { onDelete: "cascade" }),
+    criadoEm,
+  },
+  (t) => ({
+    /** A mesma pessoa não entra duas vezes na mesma lista. Duplo clique não vira duas linhas. */
+    uqShortlistCandidatura: uniqueIndex("uq_as_shortlist_itens_candidatura").on(
+      t.shortlistId,
+      t.candidaturaId,
+    ),
+    /** "Quem estava nesta lista": a leitura da shortlist. */
+    idxShortlist: index("idx_as_shortlist_itens_shortlist").on(t.shortlistId),
+    /** "Em quantas listas esta pessoa já entrou": a leitura pela ficha da candidatura. */
+    idxCandidatura: index("idx_as_shortlist_itens_candidatura").on(t.candidaturaId),
   }),
 );
 

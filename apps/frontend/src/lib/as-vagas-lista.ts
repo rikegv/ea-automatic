@@ -159,3 +159,30 @@ export function fatiarPagina<T>(itens: readonly T[], pagina: number, porPagina: 
   const p = paginaValida(pagina, itens.length, porPagina);
   return itens.slice((p - 1) * porPagina, p * porPagina) as T[];
 }
+
+/**
+ * ─ QUANTAS POSIÇÕES O RECORTE PEDE (frente C, ponto 6 do mapa do diretor) ──────────────────────
+ *
+ * ┌─ POR QUE O CARD DEIXOU DE CONTAR SÓ LINHA ─────────────────────────────────────────────────┐
+ * │ "1 vaga com 10 posições são 10 trabalhos, não 1". O card de cima contava LINHAS DE VAGA, e  │
+ * │ por isso uma fileira de três linhas podia esconder trinta contratações a fazer. As duas      │
+ * │ contas vivem lado a lado agora, no mesmo card: à esquerda quantas VAGAS, à direita quantas   │
+ * │ POSIÇÕES. São duas unidades e nenhuma substitui a outra.                                     │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * SOMA O QUE O FILTRO DEIXOU PASSAR, e não a base inteira: é a mesma régua que a fileira de status
+ * e a de funil já seguem (`somarFunil`), então filtrar um cliente muda os dois números juntos e o
+ * card nunca contradiz a tabela logo abaixo.
+ *
+ * NULO CONTA COMO ZERO, e não como um, mesmo sabendo que toda vaga publicada tem o campo (ele é
+ * obrigatório para publicar, `VAGA_OBRIGATORIOS`). O RASCUNHO pode não ter, e chutar 1 ali seria
+ * inventar uma contratação que ninguém dimensionou. Número a menos é lacuna visível; número a mais
+ * é indicador errado, que é o pior dos dois.
+ *
+ * §A.6: entram só contagens. Nenhum dado pessoal atravessa esta função.
+ */
+export function somarPosicoesOficiais(
+  vagas: readonly { posicoesOficiais: number | null }[],
+): number {
+  return vagas.reduce((soma, v) => soma + (v.posicoesOficiais ?? 0), 0);
+}

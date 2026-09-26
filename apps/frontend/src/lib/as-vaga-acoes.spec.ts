@@ -110,8 +110,13 @@ describe("vagaRecebeCandidato (espelho da trava 2 do backend)", () => {
     expect(vagaRecebeCandidato("ABERTA")).toBe(true);
   });
 
-  it("os três encerramentos NÃO recebem, inclusive ENTREGUE", () => {
-    expect(vagaRecebeCandidato("ENTREGUE")).toBe(false);
+  /*
+   * ─ A ENTREGA VOLTOU A RECEBER (Frente B da Central de Vagas) ────────────────────────────────
+   * MUDANÇA DE REQUISITO: vaga entregue ao cliente segue em processo e segue captando. Os dois que
+   * não recebem são os que ENCERRAM, e é esse o espelho da trava 2 do backend.
+   */
+  it("os dois encerramentos NÃO recebem, e a ENTREGUE recebe", () => {
+    expect(vagaRecebeCandidato("ENTREGUE")).toBe(true);
     expect(vagaRecebeCandidato("FECHADA")).toBe(false);
     expect(vagaRecebeCandidato("CANCELADA")).toBe(false);
   });

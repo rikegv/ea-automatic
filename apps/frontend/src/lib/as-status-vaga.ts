@@ -207,6 +207,45 @@ export function ehDoPapelDaVaga(
 }
 
 /**
+ * ─ A VAGA ESTÁ EM PROCESSO? (viva, nem pré-publicação nem desfecho) ────────────────────────────
+ *
+ * SÃO OS DOIS PAPÉIS VIVOS do conceito dos quatro estados do diretor: ABERTURA e ENTREGA. É o
+ * espelho exato de `papelDeVagaEmProcesso` (`domain/vaga-status-derivado.ts`), que é a régua que o
+ * backend usa para decidir de ONDE se pode FECHAR e CANCELAR.
+ *
+ * ┌─ POR QUE ELA PRECISOU EXISTIR, E POR QUE `!vagaEncerrada` NÃO SERVE ───────────────────────┐
+ * │ Até a Frente B as três ações de encerramento perguntavam `ehDoPapelDaVaga(status,          │
+ * │ "ABERTURA")`, e isso bastava porque `ENTREGUE` ERA UM DESFECHO. Com a entrega viva, a      │
+ * │ pergunta literal deixaria a vaga ENTREGUE SEM PORTA DE SAÍDA na tela: nem fechar (o        │
+ * │ caminho normal, o candidato que estava com o cliente foi contratado) nem cancelar (o       │
+ * │ cliente desistiu). Ela ficaria presa até alguém movê-la à mão de volta para Aberta.         │
+ * │                                                                                             │
+ * │ E A NEGAÇÃO DE `encerra` SERIA LARGA DEMAIS: ela diria SIM para o RASCUNHO (que publica    │
+ * │ pela trilha de abertura), para o PENDENTE DE REVISÃO (que sai pela liberação, com o        │
+ * │ cliente que a varredura não trouxe) e para qualquer status LIVRE que o diretor crie. Os    │
+ * │ três ficam de fora hoje, e cada ausência é uma decisão, não um esquecimento.                │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ A LISTA ESTÁ ESCRITA DUAS VEZES, E ISSO É DÍVIDA DECLARADA ───────────────────────────────┐
+ * │ O par de papéis vive no DOMÍNIO DO BACKEND, e o vocabulário compartilhado é de DONO ÚNICO  │
+ * │ (§A.39): quem o move é o coordenador. Enquanto ele não sobe, esta é a segunda cópia, e as  │
+ * │ duas concordam por leitura e não por construção. Está reportado, e o lugar certo dela é    │
+ * │ `@ea/shared-types`, junto de `podeSerDestinoManual`, que já mora lá pela mesma razão.       │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * CÓDIGO DESCONHECIDO NÃO ESTÁ EM PROCESSO, no molde do `ehDoPapelDaVaga`: sem a linha do catálogo
+ * não há papel, e não oferecer um gesto de encerramento é o lado seguro. O servidor continua sendo
+ * a trava.
+ */
+export function vagaEmProcesso(
+  codigo: string | null | undefined,
+  catalogo: readonly VagaStatusItem[] = corrente,
+): boolean {
+  const papel = papelDoStatusVaga(codigo, catalogo);
+  return papel === "ABERTURA" || papel === "ENTREGA";
+}
+
+/**
  * ─ A VAGA ESTÁ NA FILA DE REVISÃO? ─────────────────────────────────────────────────────────────
  *
  * É `ehDoPapelDaVaga(codigo, "REVISAO")` com nome próprio, e o nome próprio é o ponto: esta pergunta

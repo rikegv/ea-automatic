@@ -5,6 +5,7 @@ import {
   fatiarPagina,
   normalizar,
   paginaValida,
+  somarPosicoesOficiais,
   temGenteNaEtapa,
   temGenteNoDesfecho,
   textoBuscavel,
@@ -208,5 +209,34 @@ describe("paginação", () => {
   it("recusa página menor que um", () => {
     expect(paginaValida(0, 53, 25)).toBe(1);
     expect(paginaValida(-3, 53, 25)).toBe(1);
+  });
+});
+
+/**
+ * ─ AS POSIÇÕES DO RECORTE (frente C, ponto 6) ──────────────────────────────────────────────────
+ *
+ * O CARD DIVIDIDO conta VAGAS de um lado e POSIÇÕES do outro, e é esta função que responde o lado
+ * direito. O que ela precisa garantir é o que o diretor pediu: "1 vaga com 10 posições são 10
+ * trabalhos, não 1".
+ */
+describe("somarPosicoesOficiais", () => {
+  it("soma as posições, e não as linhas de vaga", () => {
+    expect(somarPosicoesOficiais([{ posicoesOficiais: 10 }])).toBe(10);
+    expect(
+      somarPosicoesOficiais([
+        { posicoesOficiais: 10 },
+        { posicoesOficiais: 5 },
+        { posicoesOficiais: 1 },
+      ]),
+    ).toBe(16);
+  });
+
+  // NULO É ZERO, NUNCA UM: o rascunho sem dimensionamento não pode inventar uma contratação.
+  it("trata a vaga sem posição dimensionada como zero", () => {
+    expect(somarPosicoesOficiais([{ posicoesOficiais: null }, { posicoesOficiais: 4 }])).toBe(4);
+  });
+
+  it("recorte vazio soma zero", () => {
+    expect(somarPosicoesOficiais([])).toBe(0);
   });
 });

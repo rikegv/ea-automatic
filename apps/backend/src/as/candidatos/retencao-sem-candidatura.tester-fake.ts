@@ -777,7 +777,7 @@ export const SQL_REFERENCIA_SEM_CANDIDATURA = sqlExecutavel(sql`
              join as_vaga_status s on s.codigo = v.status
             where k.candidato_id = c.id
               and k.situacao in (${sql.raw(VIVAS_NO_SQL)})
-              and (s.encerra = false or s.papel = 'ENTREGA' or v.encerrada_em is null))
+              and (s.encerra = false or (s.papel = 'FECHAMENTO' and coalesce(v.vagas_fechadas, 0) + coalesce(v.vagas_fechadas_banco, 0) > 0) or v.encerrada_em is null))
      and coalesce(
            (select max(greatest(
                          k.atualizado_em,
@@ -915,15 +915,18 @@ export const MUTANTES_SEM_CANDIDATURA: MutanteDaQueda[] = [
     nome: "12. a proteção da vaga não encerrada some",
     dano: "quem está em processo vivo numa vaga aberta volta a ser alcançável, e o expurgo apaga gente EM PROCESSO.",
     sql: trocar(
-      `not exists ( select 1 from as_candidaturas k join vagas v on v.id = k.vaga_id join as_vaga_status s on s.codigo = v.status where k.candidato_id = c.id and k.situacao in (${VIVAS_NO_SQL}) and (s.encerra = false or s.papel = 'ENTREGA' or v.encerrada_em is null))`,
+      `not exists ( select 1 from as_candidaturas k join vagas v on v.id = k.vaga_id join as_vaga_status s on s.codigo = v.status where k.candidato_id = c.id and k.situacao in (${VIVAS_NO_SQL}) and (s.encerra = false or (s.papel = 'FECHAMENTO' and coalesce(v.vagas_fechadas, 0) + coalesce(v.vagas_fechadas_banco, 0) > 0) or v.encerrada_em is null))`,
       `not exists ( select 1 from as_candidaturas k where k.candidato_id = c.id and k.situacao in (${VIVAS_NO_SQL}) and false)`,
     ),
     regraEsperada: "PROTECAO_SEM_CATALOGO",
   },
   {
-    nome: "13. a exceção da ENTREGA some da proteção",
+    nome: "13. a exceção de quem ENTREGOU some da proteção",
     dano: "quem FOI CONTRATADO passa a ser expurgado do lado de A&S, enquanto o CPF dele segue na ADMISSÃO: destrói o histórico da seleção e não minimiza dado nenhum.",
-    sql: trocar(" or s.papel = 'ENTREGA'", ""),
+    sql: trocar(
+      " or (s.papel = 'FECHAMENTO' and coalesce(v.vagas_fechadas, 0) + coalesce(v.vagas_fechadas_banco, 0) > 0)",
+      "",
+    ),
     regraEsperada: "PROTECAO_PERDEU_A_ENTREGA",
   },
   {
