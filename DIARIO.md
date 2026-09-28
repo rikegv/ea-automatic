@@ -17377,3 +17377,208 @@ original restaurado e provado.** O dado de teste foi removido e a base voltou ao
 recorte de blob; as **39 linhas** da outra sessão (`MENU_RESTRICAO`, `MenuCatalogoItem`) ficaram
 intactas no working tree. **Provado que o commit compila sozinho**, extraindo a árvore do índice em
 diretório isolado e rodando o build do pacote e o typecheck do backend sobre ela.
+
+---
+
+## 28/09/2026 (parte 2): AS QUATRO AUTORIZAÇÕES, o gate destravado e a Fase 2 dobrando o manual
+
+**OST do diretor:** ele respondeu as quatro decisões que a fábrica tinha levantado e, mais importante,
+**estabeleceu um princípio de regime**: não quer ser travado por questão que a fábrica resolve
+sozinha. Onde houver autonomia técnica e a decisão já estiver alinhada, resolver e seguir; parar só no
+que for decisão de NEGÓCIO. Nada commitado: o gatilho continua sendo a validação dele na tela (§A.25).
+
+### O que mudou, com o número de cada coisa
+
+| entrega | antes | depois |
+|---|---|---|
+| Artigos da Central De Ajuda | 17 | **37** |
+| Famílias (blocos compartilhados) | 0 | **7** |
+| Prints anotados | 22 | **98**, em 37 pastas |
+| Roteiros que gravam | 7 | **36 de 37** |
+| Menus da conta de captura | 10 | **42** |
+| Suíte `src/ajuda` | 324 | **455, zero vermelho** |
+
+Telas cobertas que antes eram inalcançáveis: Nova Admissão, Liberação Admissional, Benefícios, Sala
+De Espera, Gerenciador Do Portal, e as cinco abas da Esteira.
+
+### O gate: quatro defeitos que só a EXECUÇÃO achou
+
+Nenhum destes aparece em teste verde; todos apareceram abrindo a tela de verdade.
+
+1. **O detector genérico de nome foi desligado**, com autorização dele. **E o recorte era a parte
+   perigosa:** `pareceNomeDePessoa` é chamado em TRÊS lugares, e só um é o detector. Os outros dois
+   são a proteção do campo do GESTOR e a guarda que impede a dispensa de catálogo de liberar uma
+   pessoa. **Apagar o léxico teria desligado as duas em silêncio.**
+2. **A chave nasceu GLOBAL e alcançou a asserção de população**, que é quem decide se o lote começa.
+   O `seguranca` vetou: as quatro fontes em régua `ASSERCAO` são dado de TERCEIRO, a mesma classe do
+   gestor, e ficaram sem controle. Consertado por SEPARAÇÃO DE SUPERFÍCIE: `auditarTelaDoManual` é o
+   único caminho leniente, `auditarTexto` voltou a ser estrito **sem como pedir menos**. Quem chamar a
+   errada fica mais estrito, não menos.
+3. **Telefone de 11 dígitos era lido como CPF.** Dois agentes mediram o mesmo defeito em telas
+   diferentes: os "CPF" acusados na Liberação e na Sala De Espera eram a coluna TELEFONE. O gate passou
+   a exigir **dígito verificador válido, só da forma CRUA** (a mascarada continua acusada sempre, o que
+   preserva o CPF partido em dois elementos). Medido: 5.000 de 5.000 CPFs válidos continuam acusados,
+   **zero CPF real perdido**, e 2.662 de 2.689 falsos positivos fechados. Os 27 residuais eram
+   telefones que fechavam o verificador por acaso, e foram corrigidos **no DADO**, não no gate.
+4. **A denylist atravessava quebra de linha** e juntava duas células (`"Joao\nPereira"` casando um
+   colega). Fronteira dura no `\n` para os três baldes. Medido nas 102 telas: **zero** nome de colega
+   deixou de ser achado.
+
+### A linha que o diretor NÃO liberou, e que ficou de pé
+
+Ele liberou o dado do **CANDIDATO**. O do **COLEGA** não: a denylist de equipe continua inteira,
+medida A/B com números idênticos (nome 97/97, e-mail 36/36, coluna do gestor 363/363). E o campo do
+GESTOR, que é dado de terceiro, continua recusando a imagem que o desenha.
+
+### Uma fronteira registrada para o futuro
+
+`EnviarLinkModal` desenha o **link de acesso do candidato** num campo de leitura, e o gate **não tem
+régua de URL nem de token**: ele veria o link e aprovaria. Hoje nenhum print o alcança (medido: zero
+URL nas 102 telas), mas qualquer preparo que clique em "Copiar" ou "Enviar" naquele modal exige
+auditoria nova, e o conserto certo é uma regra de token no gate. Link válido em PNG versionado é
+credencial, não dado de processo.
+
+### O que sobrou, e é pequeno
+
+- **`importar-uma-planilha` é o único roteiro que não grava.** O detector de lista vazia está CERTO:
+  quem dispara é o catálogo de lojas da ficha, que escreve o vazio em palavras. Buscar um cliente com
+  lojas troca a recusa por uma legítima (CEPs e nomes de logradouro). É arnês, não gate.
+- **Dois defeitos de ANOTAÇÃO, pré-existentes:** o rótulo é posicionado contra o viewport e não contra
+  a caixa do recorte, então rótulo longo pode cair fora do recorte; e o recorte mais largo que a
+  viewport corta a coluna da esquerda. Não afetam o gate nem o texto.
+
+---
+
+## 2026-09-28 — Sessão de INFRA: acesso do Fernando, máquina nova e o levantamento do caminho público do Portal
+
+**Sessão sem construção: nenhuma linha de código alterada, nenhum build, nenhum deploy, nenhum
+serviço reiniciado.** Rodava em paralelo outra sessão na **Central de Ajuda** (artigos, prints, menu),
+e o recorte foi respeitado (§A.14): nada daquela frente foi tocado, e este arquivo recebeu só esta
+entrada, por acréscimo ao final, porque ele já estava modificado por aquela sessão.
+
+### O que o Fernando perguntou, e o que a fábrica respondeu
+
+O Fernando (Eng. Segurança) perguntou três vezes **"como você está alterando o arquivo"**, e a
+primeira resposta da fábrica errou o alvo: falou do `clientesportal/index.php`. O arquivo de que ele
+falava é o **`webpanda.php`**, a ponte que recebe o webhook do Pandapé
+(`https://soulan.com.br/webpanda/webpanda.php`, cadastrada no painel do Pandapé como "Ea Automatic";
+a do G.Infor é outra, `gi-mms.gi.app.br/WebhookPandaFsSolucoes/`, e segue intocável).
+
+A resposta correta, registrada para não se perder: **a fábrica escreveu o `webpanda.php` e o subiu por
+FTP**, com a credencial que o próprio Fernando forneceu, para o box `10.18.117.63` (srvwebhook, Apache
+2.4.58 com mod_php 8.3.6). **Não temos SSH nesse box**, e não temos acesso a nada mais do
+soulan.com.br: só aquele diretório. A fonte do pacote vive em `~/ea-bridge-fernando/`, fora do
+repositório de propósito, porque o arquivo carrega o token.
+
+Também foi informado a ele o **endereço de origem** da fábrica, para eventual regra de firewall: o
+tráfego para o box sai pela ZeroTier, de **`10.18.117.235`** (a VM do EA). Na LAN a mesma VM é
+`192.168.1.22`, que é o alvo interno que o `webpanda.php` já usa, e o IP de saída público é
+`187.102.148.222`. Conferido na hora: a rota para `10.18.117.63` sai de fato pela interface ZeroTier.
+
+### A máquina NOVA do Fernando, testada ao vivo
+
+Ele mandou uma credencial nova para `192.168.1.234` e pediu o teste a partir da VM do EA. **Medido:**
+
+- **A porta 21 (FTP) está FECHADA** (connection refused). **A 22 está ABERTA, e o acesso funciona por
+  SFTP** com a credencial dele. Melhor assim: tráfego cifrado, ao contrário do FTP do box antigo.
+- É uma **máquina nova**, criada no mesmo dia: Ubuntu com **Apache 2.4.66** e a página padrão do
+  Apache ainda no ar. **O `webpanda.php` NÃO existe nela** (404).
+- O que já está preparado é **`/var/www/html/clientesportal/`**, dono `henrique`, grupo `www-data`,
+  contendo um `index.php` com o conteúdo "Teste", respondendo 200. Esse diretório é o **home do
+  usuário** do acesso. Existe também um usuário `scavasin` na máquina.
+- **Escrita confirmada:** a fábrica gravou um arquivo de teste naquele diretório, conferiu que
+  apareceu e **apagou em seguida**. A máquina ficou como estava.
+- **Não substitui nada:** o box antigo segue no ar e o `webpanda.php` em produção responde normalmente.
+  O fluxo vivo do Pandapé não foi tocado. Migrar o webhook para a máquina nova, se for o caso, é
+  mudança combinada, com janela, porque é fluxo real.
+
+§A.6: a credencial foi guardada em `~/.ea-secrets/` com permissão 600, **fora do repositório**, nunca
+commitada e não escrita em log.
+
+### O levantamento que interessa: o que falta para o link do Portal abrir para o candidato
+
+Pedido do diretor, só levantar. **O achado que muda a conversa: o Portal NÃO EXISTE EM PRODUÇÃO.**
+
+Medido no banco de produção (`ea_automatic` no `ea-db`): **83 tabelas, ZERO do Portal**. As migrações
+aplicadas param em **30/08/2026**, e as sete do Portal (`0116`, `0119` a `0122`, `0125`, `0126`) não
+foram aplicadas. O `.env` de produção **não tem** `PORTAL_LINK_PRIVATE_KEY` nem `PORTAL_LINK_BASE_URL`.
+A homologação tem as duas, e o `PORTAL_LINK_BASE_URL` dela aponta para o endereço interno: é
+literalmente por isso que o link copiado no Gerenciador sai como `10.18.117.235:3120` e o candidato não
+abre. O código está certo e é deliberado: sem a variável a base sai **relativa**, para o link ser
+visivelmente incompleto em vez de parecer bom e não abrir (comentário em `portal-identidade.service.ts`).
+
+**A ponte é a máquina nova**, e o molde já existe: o vhost do VT (`~/ea-bridge-fernando/vt-soulanrh.conf`),
+fail-closed, nega tudo por padrão e libera por `LocationMatch` + `ProxyPassMatch` só os caminhos da
+allowlist, repassando ao ingress do EA em **`192.168.1.22:3010`** (o Caddy do `ea-proxy`). A versão do
+Portal é a mesma peça com outra lista: a tela `/portal`, os estáticos do Next, e oito rotas de API
+(`identificar`, `recuperacao`, `credencial`, `confirmar`, `termo`, `dados-gi`, `documentos`, `vt-link`).
+Ponto a favor, já no desenho: o token do link viaja no **fragmento** (`#l=`), e fragmento **nunca chega
+ao servidor**, então não entra em log de Apache nenhum (§A.6). E o **HTTPS é obrigatório**, não
+capricho: o envio do documento usa credencial assinada e a cópia do link exige contexto seguro.
+
+**A sequência levantada, na ordem de dependência:**
+
+1. **Rike** define o endereço público (ex.: `portal.soulanrh.com.br`). É o gargalo: sem ele não se
+   escreve vhost nem se configura o link.
+2. **Fernando** aponta o DNS e emite o certificado TLS.
+3. **Fábrica** escreve o vhost e aplica na máquina nova por SFTP, apontando **provisoriamente para a
+   homologação** (`192.168.1.22:3120`).
+4. **Rike** abre o endereço no celular, no 4G, fora da VPN. **É o marco:** aqui se prova a rota
+   inteira sem tocar em produção.
+5. **Fábrica** sobe o Portal para produção: backup do banco, as sete migrações, chave de assinatura,
+   endereço base.
+6. **Fábrica** troca o alvo do proxy para o ingress de produção (`192.168.1.22:3010`).
+7. **Rike** gera um link em produção e manda para um candidato de teste.
+
+O teste apontando para a homologação serve para **provar o caminho**, não para mandar link a candidato
+real: a homologação tem dado de cópia e vive commits atrás da main.
+
+### O que ficou ABERTO, para a próxima sessão
+
+- **Decisão do diretor:** o endereço público do Portal.
+- **Decisão do diretor:** a fábrica aplica o vhost por SFTP, ou o Fernando aplica o arquivo pronto?
+- **Decisão do diretor:** autorizar e agendar a subida do Portal para produção (migrações e chave).
+  Encosta em banco de produção, então precisa de janela e não deve colidir com outra sessão.
+- **Pergunta ao Fernando:** o que ele quer que a fábrica publique no `clientesportal` da máquina nova.
+  É a nova casa do webhook, ou o caminho do Portal? Hoje há só um `index.php` de teste.
+- **Nada foi commitado nesta sessão.** Não houve alteração de código; este arquivo ficou modificado em
+  conjunto com a frente da Central de Ajuda, então o commit do diário é da sessão que fechar aquela
+  frente, com recorte nominal (§A.14/§A.21).
+
+### ESTADO AO ENCERRAR A SESSÃO (28/09/2026), e como retomar
+
+**No ar e commitado:** `7277083` (a frente) e `519dab1` (este registro), em `origin/main`. A
+**homologação (3120) está sincronizada** com esses dois commits nos arquivos da frente, backend e
+frontend rebuildados e reiniciados, saúde conferida. **Produção (3010) NÃO recebeu nada desta
+frente**, e nem poderia: o Portal não existe lá.
+
+**O QUE FALTA, e é do diretor:**
+
+1. **Validar na 3120.** O botão "Copiar ou enviar link" no Gerenciador Do Portal. As capturas estão
+   em `~/prova-portal-link-copiar/`. **Registro honesto: o commit foi feito ANTES da validação
+   dele**, porque a OST que pediu a rota apontada listou "COMMITAR" como entrega e pediu os hashes
+   no pulso. Se algo não agradar na tela, o conserto é commit novo, não revert.
+2. **Restart do backend de PRODUÇÃO**, para o menu `portal-links` entrar na tabela `menus` de lá (o
+   `MenusCatalogoService` registra sozinho no boot). **Só depois disso** a caixa aparece na tela de
+   liberação e o diretor consegue conceder o menu ao consultor. Conferência:
+   `docker exec ea-db psql -U ea -d ea_automatic -c "select codigo, areas from menus where codigo='portal-links'"`.
+   **Registrar é tudo o que a fábrica faz aqui: conceder menu é decisão dele (§A.23).**
+
+**O QUE ESTÁ SOLTO NO WORKING TREE, e NÃO é desta frente:** cerca de 59 arquivos de **outras
+sessões**, concentrados em `apps/backend/src/gi` (9), `apps/backend/src/as` (16 no total),
+`apps/frontend/src/ajuda` e `packages/shared-types/src/index.ts` (as 39 linhas de
+`MENU_RESTRICAO`/`MenuCatalogoItem`). **Não commitar isso junto**: é trabalho de quem está do lado, e
+o `shared-types` em especial já exigiu recorte por blob nesta sessão. Quem retomar deve conferir com
+`git status` e **perguntar antes** de tocar em qualquer um deles.
+
+**Insumo de fábrica reconstruído nesta sessão:** o harness visual (Playwright) estava sem as
+bibliotecas do Chromium, e elas foram baixadas sem sudo e extraídas fora do repositório. Se a próxima
+sessão precisar de prova visual e o navegador não abrir com `error while loading shared libraries`, o
+caminho é `apt-get download` dos pacotes e `LD_LIBRARY_PATH` apontando para o diretório extraído. A
+lista completa que fez o Chromium abrir está na memória da fábrica.
+
+**Senha da homologação:** está em `~/SENHA-HOMOLOG-SUPERADMIN.txt` (conta `admin@homolog.local`).
+**Ler esse arquivo ANTES de mexer em senha**, sempre. Não lê-lo foi o erro que causou a colisão
+registrada acima.
+
+**Nada rodando:** nenhum agente, nenhum comando em segundo plano, nenhuma frente aberta desta sessão.
