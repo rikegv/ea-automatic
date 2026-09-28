@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   MOTIVOS_DE_RECUSA_DE_ENVIO,
   type DestinatarioDoLink,
+  type LinkDoPortalParaCopiar,
   type PreviaDoEnvioEmLote,
   type ResultadoDoEnvioDoLink,
 } from "@ea/shared-types";
@@ -11,16 +12,20 @@ import {
   RECUSA_FRASE,
   ROTA_SEM_LINK,
   destinoVisivel,
+  abstencaoDoLink,
   etiquetaDaRecusa,
   fraseDaCienciaDoEnvio,
   fraseDaRecusa,
+  fraseDoLinkParaCopiar,
   fraseDoResultado,
   frasePessoas,
   resumoDaPrevia,
   rotaDaPrevia,
   rotaEnviarLink,
+  rotaLinkParaCopiar,
   rotaSemLink,
   separarPrevia,
+  tituloDoLinkParaCopiar,
 } from "./portal-envio-link";
 
 function pessoa(p: Partial<DestinatarioDoLink> = {}): DestinatarioDoLink {
@@ -203,5 +208,58 @@ describe("a prévia do lote", () => {
   it("o plural é calculado, sem (s) e sem travessão (§A.11)", () => {
     expect(frasePessoas(1)).toBe("1 pessoa");
     expect(frasePessoas(4)).toBe("4 pessoas");
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────────────────────────
+// O LINK PARA COPIAR, que é o caminho que funciona sem correio nenhum
+// ────────────────────────────────────────────────────────────────────────────────────────────────
+
+function copiavel(p: Partial<LinkDoPortalParaCopiar> = {}): LinkDoPortalParaCopiar {
+  return {
+    gerado: true,
+    motivo: null,
+    link: "https://portal.exemplo/portal#t=abc",
+    expiraEm: "2026-09-30T12:00:00.000Z",
+    ...p,
+  };
+}
+
+describe("o link para copiar", () => {
+  it("a rota é a do envio, com `/link` no fim, e NÃO mora sob `portal/`", () => {
+    expect(rotaLinkParaCopiar("adm-9")).toBe("/esteira/portal/envio/admissao/adm-9/link");
+    expect(rotaLinkParaCopiar("adm-9").startsWith("/portal/")).toBe(false);
+  });
+
+  it("gerado: a frase diz o prazo e avisa que o anterior morreu", () => {
+    const f = fraseDoLinkParaCopiar(copiavel(), "30/09/2026 09:00");
+    expect(f).toContain("30/09/2026 09:00");
+    expect(f).toContain("deixou de valer");
+    expect(tituloDoLinkParaCopiar(copiavel())).toBe("Link Do Portal");
+  });
+
+  it("A ABSTENÇÃO NÃO É ERRO: nem o título nem a frase falam em falha", () => {
+    const r = copiavel({ gerado: false, motivo: "LINK_VIVO_EM_USO", link: null, expiraEm: null });
+    expect(abstencaoDoLink(r)).toBe(true);
+    const titulo = tituloDoLinkParaCopiar(r);
+    const frase = fraseDoLinkParaCopiar(r, "não informado");
+    for (const t of [titulo, frase]) {
+      expect(t.toLowerCase()).not.toContain("falha");
+      expect(t.toLowerCase()).not.toContain("erro");
+      expect(t).not.toContain("\u2014");
+    }
+    expect(frase).toContain("já entrou no portal");
+  });
+
+  it("a recusa por admissão inexistente não é abstenção, e diz o que fazer", () => {
+    const r = copiavel({ gerado: false, motivo: "SEM_ADMISSAO", link: null, expiraEm: null });
+    expect(abstencaoDoLink(r)).toBe(false);
+    expect(tituloDoLinkParaCopiar(r)).toBe("Nenhum Link Novo Foi Gerado");
+    expect(fraseDoLinkParaCopiar(r, "não informado")).toBe(RECUSA_FRASE.SEM_ADMISSAO);
+  });
+
+  it("§A.6: nenhuma frase do desfecho carrega a URL dentro", () => {
+    const r = copiavel();
+    expect(fraseDoLinkParaCopiar(r, "30/09/2026 09:00")).not.toContain("http");
   });
 });

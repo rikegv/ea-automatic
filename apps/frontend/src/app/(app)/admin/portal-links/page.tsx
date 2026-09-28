@@ -7,6 +7,7 @@ import type {
   ContadoresDoPainelPortal,
   EstadoLinkPainel,
   FiltrosDoPainelPortal,
+  LinkDoPortalParaCopiar,
   PaginaDoPainelPortal,
   PedidoDeAjudaDoPortal,
 } from "@ea/shared-types";
@@ -27,7 +28,13 @@ import { MultiSelect } from "@/components/ui/MultiSelect";
 import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
 import { copiarTexto, AVISO_COPIA_FALHOU } from "@/lib/copiar-texto";
 import { EnviarLinkModal } from "@/components/portal/EnviarLinkModal";
-import { enviarLinkDaAdmissao, fraseDoResultado } from "@/lib/portal-envio-link";
+import {
+  enviarLinkDaAdmissao,
+  fraseDoLinkParaCopiar,
+  fraseDoResultado,
+  gerarLinkParaCopiar,
+  tituloDoLinkParaCopiar,
+} from "@/lib/portal-envio-link";
 import {
   ABAS,
   ROTA_CANDIDATOS,
@@ -47,7 +54,6 @@ import {
   rankSituacao,
   rotaBloquear,
   rotaDesbloquear,
-  rotaEmitir,
   rotuloDaOrigem,
   semRegua,
   situacaoDaLinha,
@@ -129,11 +135,6 @@ const CATALOGO_VAZIO: CatalogoDeFiltrosDoPainelPortal = {
 };
 
 /** O que a emissão devolve. A URL volta UMA vez e não é persistida em claro (§A.6). */
-interface LinkEmitido {
-  link: string;
-  expiraEm: string;
-}
-
 export default function PortalLinksPage() {
   const { token } = useAuth();
 
@@ -236,7 +237,10 @@ export default function PortalLinksPage() {
   // Emissão do link: alvo em curso e o resultado, mostrado UMA vez no modal.
   const [emitindo, setEmitindo] = useState<string | null>(null);
   const [alternando, setAlternando] = useState<string | null>(null);
-  const [emitido, setEmitido] = useState<{ nome: string; dados: LinkEmitido } | null>(null);
+  const [emitido, setEmitido] = useState<{
+    nome: string;
+    dados: LinkDoPortalParaCopiar;
+  } | null>(null);
   const [copia, setCopia] = useState<"" | "copiado" | "falhou">("");
   /** O envio por e-mail em voo, por admissão, e o desfecho do último. */
   const [enviandoEmail, setEnviandoEmail] = useState<string | null>(null);
@@ -398,7 +402,18 @@ export default function PortalLinksPage() {
   const pedidosVisiveis = ordPedidos.itens;
 
   /**
-   * EMITIR O LINK. Revoga os anteriores da mesma admissão e devolve a URL UMA vez.
+   * EMITIR O LINK PARA COPIAR, e ela DEIXOU DE USAR A ROTA CRUA (`rotaEmitir`).
+   *
+   * ┌─ POR QUE A TROCA, e ela é pedido explícito da OST ─────────────────────────────────────────┐
+   * │ A rota crua emite SEMPRE, e emitir revoga o link anterior. Quando o candidato está com o   │
+   * │ portal ABERTO naquele instante, o clique daqui matava a sessão de quem estava enviando     │
+   * │ documento, EM SILÊNCIO: nada na tela dizia que alguém tinha sido derrubado. A rota nova se │
+   * │ ABSTÉM nesse caso e devolve `gerado: false` com `LINK_VIVO_EM_USO`.                        │
+   * │                                                                                             │
+   * │ A ABSTENÇÃO É DESFECHO NORMAL, NUNCA ERRO: ela NÃO entra em `setErro` (que pinta a faixa   │
+   * │ vermelha da tela), vai para o mesmo modal da emissão, em tom neutro, dizendo o que houve e │
+   * │ o que fazer. Apresentar a proteção como falha é o começo do pedido para desligá-la.        │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
    *
    * §A.6: a URL é CREDENCIAL de acesso aos documentos do candidato. Ela vive no estado desta tela
    * enquanto o modal estiver aberto e some quando ele fecha. Não vai para log, não vai para
@@ -414,8 +429,7 @@ export default function PortalLinksPage() {
       setErro(null);
       setCopia("");
       try {
-        const r = await apiFetch<LinkEmitido>(rotaEmitir(l.admissaoId), { method: "POST", token });
-        setEmitido({ nome: l.nome, dados: r });
+        setEmitido({ nome: l.nome, dados: await gerarLinkParaCopiar(l.admissaoId, token) });
       } catch (e) {
         setErro(e instanceof ApiError ? e.message : "Falha ao gerar o link do portal.");
       } finally {
@@ -692,17 +706,20 @@ export default function PortalLinksPage() {
             </FiltroCampo>
           </FiltroTrigger>
 
-          {/* A PORTA DO PRIMEIRO LINK. A lista só mostra quem JÁ tem link, então sem este botão
-              não existe tela por onde enviar o link de quem nunca recebeu nenhum. Ele abre uma
-              BUSCA POR NOME em modal, e não altera o recorte da lista (§A.26). */}
+          {/* A PORTA DO PRIMEIRO LINK, E ELA PRECISA SER VISTA. A lista só mostra quem JÁ tem
+              link, então sem este botão não existe tela por onde atender o candidato que nasce
+              fora do funil. Ele estava secundário e escrito "Enviar link", e nessa forma ninguém
+              descobria que é por ali que se pega o link de quem nunca recebeu nenhum: virou o
+              botão PRIMÁRIO da barra e o rótulo diz as duas ações que ele oferece.
+
+              Ele abre uma BUSCA POR NOME em modal, e não altera o recorte da lista (§A.26). */}
           <Button
-            variant="secondary"
             onClick={() => setBuscandoSemLink(true)}
             className="px-3 py-2"
-            title="Buscar um candidato que ainda não tem link e enviar o link por e-mail"
+            title="Buscar um candidato que ainda não tem link, copiar o link para mandar pelo canal que quiser ou enviar por e-mail"
           >
-            <Icon name="arr" className="h-4 w-4" />
-            Enviar link
+            <Icon name="link" className="h-4 w-4" />
+            Copiar ou enviar link
           </Button>
 
           <Button variant="secondary" onClick={() => void carregar()} className="px-3 py-2">
@@ -1035,7 +1052,7 @@ export default function PortalLinksPage() {
 
                           <button
                             type="button"
-                            title="Gerar um link novo do portal, o anterior deixa de valer"
+                            title="Gerar o link do portal e copiar. O anterior deixa de valer, e se o candidato estiver usando o link dele agora o sistema avisa e não troca"
                             aria-label={`Gerar link do portal para ${l.nome}`}
                             disabled={rodando || trocando || mandando}
                             onClick={() => void emitir(l)}
@@ -1053,7 +1070,9 @@ export default function PortalLinksPage() {
                           {/* ENVIAR POR E-MAIL, que é o caminho manual da OST. Ele é IRMÃO do
                               botão ao lado e não o substitui: um COPIA a URL para quem vai passar
                               o link por outro canal, o outro MANDA o e-mail. Os dois emitem link
-                              novo, e o anterior deixa de valer. */}
+                              novo e o anterior deixa de valer, com uma diferença que importa: o
+                              de copiar se ABSTÉM quando o candidato está com o portal aberto, em
+                              vez de derrubar a sessão dele em silêncio. */}
                           <button
                             type="button"
                             title="Enviar o link do portal por e-mail para o candidato"
@@ -1243,7 +1262,7 @@ export default function PortalLinksPage() {
                                 copiar e enviar). O anterior deixa de valer. */}
                             <button
                               type="button"
-                              title="Gerar um link novo do portal para este candidato"
+                              title="Gerar o link do portal deste candidato e copiar. Se ele estiver usando o link dele agora, o sistema avisa e não troca"
                               aria-label={`Gerar link do portal para ${p.nome}`}
                               disabled={rodando}
                               onClick={() =>
@@ -1289,41 +1308,50 @@ export default function PortalLinksPage() {
       )}
 
       {/* O LINK APARECE UMA VEZ. Quem o perder emite outro, que é barato e mata o anterior.
+
+          O MESMO MODAL ATENDE OS DOIS DESFECHOS, e é de propósito: a emissão que deu certo e a
+          ABSTENÇÃO (`LINK_VIVO_EM_USO`, o candidato está com o portal aberto agora). A abstenção
+          NÃO é erro, então ela não vai para a faixa vermelha da tela: ela aparece aqui, no mesmo
+          tom neutro, com o título e a frase do vocabulário testado, dizendo o que houve e o que
+          fazer. O campo da URL simplesmente não existe quando nada foi gerado.
+
           §A.41: o modal não fecha por clique fora, e tem "Fechar" no rodapé. */}
       {emitido && (
         <Modal onClose={fecharEmitido} className="max-w-xl" ariaLabel="Link Do Portal">
-          <h3>Link Do Portal</h3>
+          <h3>{tituloDoLinkParaCopiar(emitido.dados)}</h3>
           <p className="psub mt-1">{caixaAlta(emitido.nome)}</p>
-          <p className="mt-3 text-[12.5px] text-dim">
-            Copie e envie ao candidato. O link vale até {formatarDataHora(emitido.dados.expiraEm)} e
-            some desta tela quando você fechar esta janela. Qualquer link anterior deste candidato
-            deixou de valer agora.
+          <p className="mt-3 text-[12.5px] leading-relaxed text-dim">
+            {fraseDoLinkParaCopiar(emitido.dados, formatarDataHora(emitido.dados.expiraEm))}
           </p>
 
-          <div className="mt-4 flex items-center gap-2">
-            <input
-              readOnly
-              value={emitido.dados.link}
-              aria-label="Link do portal"
-              onFocus={(e) => e.currentTarget.select()}
-              className="ds-input w-full py-2 text-[12.5px]"
-            />
-            <Button
-              variant="secondary"
-              onClick={() => void copiarLink(emitido.dados.link)}
-              className="shrink-0 px-3 py-2"
-            >
-              <Icon name="copy" className="h-4 w-4" />
-              {copia === "copiado" ? "Copiado" : "Copiar"}
-            </Button>
-          </div>
+          {emitido.dados.link && (
+            <>
+              <div className="mt-4 flex items-center gap-2">
+                <input
+                  readOnly
+                  value={emitido.dados.link}
+                  aria-label="Link do portal"
+                  onFocus={(e) => e.currentTarget.select()}
+                  className="ds-input w-full py-2 text-[12.5px]"
+                />
+                <Button
+                  variant="secondary"
+                  onClick={() => void copiarLink(emitido.dados.link as string)}
+                  className="shrink-0 px-3 py-2"
+                >
+                  <Icon name="copy" className="h-4 w-4" />
+                  {copia === "copiado" ? "Copiado" : "Copiar"}
+                </Button>
+              </div>
 
-          {/* ERRO HONESTO: quando nem a reserva copia, a tela DIZ, e diz o que fazer. Antes disto o
-              botão simplesmente não fazia nada fora de contexto seguro. */}
-          {copia === "falhou" && (
-            <p className="mt-2 text-[12.5px] text-warn" role="alert">
-              {AVISO_COPIA_FALHOU}
-            </p>
+              {/* ERRO HONESTO: quando nem a reserva copia, a tela DIZ, e diz o que fazer. Antes
+                  disto o botão simplesmente não fazia nada fora de contexto seguro. */}
+              {copia === "falhou" && (
+                <p className="mt-2 text-[12.5px] text-warn" role="alert">
+                  {AVISO_COPIA_FALHOU}
+                </p>
+              )}
+            </>
           )}
 
           <div className="mt-5 flex justify-end">

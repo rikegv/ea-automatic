@@ -24,7 +24,17 @@ export const ROTA_CONTADORES = "/esteira/portal-painel/contadores";
 export const ROTA_CANDIDATOS = "/esteira/portal-painel/candidatos";
 export const ROTA_CATALOGO_FILTROS = "/esteira/portal-painel/filtros";
 
-/** Emitir link novo: revoga os anteriores da mesma admissão e devolve a URL UMA vez. */
+/**
+ * Emitir link novo: revoga os anteriores da mesma admissão e devolve a URL UMA vez.
+ *
+ * ┌─ A TELA NÃO USA MAIS ESTA ROTA, e a troca foi pedida pela OST ──────────────────────────────┐
+ * │ Ela é a rota CRUA: emite sempre, e por isso REVOGA o link anterior mesmo quando o candidato │
+ * │ está com o portal aberto enviando documento naquele instante, matando a sessão dele em      │
+ * │ silêncio. O Gerenciador passou a emitir por `rotaLinkParaCopiar`                            │
+ * │ (`lib/portal-envio-link`), que se ABSTÉM nesse caso e devolve `LINK_VIVO_EM_USO` para a tela│
+ * │ dizer o que houve. Caminho novo que precise emitir link deve usar a de lá, não esta.        │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
 export const rotaEmitir = (admissaoId: string) => `/portal/links/${admissaoId}`;
 
 /**

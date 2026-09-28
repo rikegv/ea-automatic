@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * ─ ENVIAR O LINK DO PORTAL: a porta por onde nasce o PRIMEIRO link de alguém ──────────────────
+ * ─ ENVIAR OU COPIAR O LINK DO PORTAL: a porta por onde nasce o PRIMEIRO link de alguém ─────────
  *
  * ┌─ O QUE ISTO RESOLVE, e é um ovo e galinha que estava fechado dos dois lados ────────────────┐
  * │ A lista do Gerenciador do Portal sai de `portal_links`: ela só mostra quem JÁ tem link. E a  │
@@ -14,36 +14,68 @@
  * │ ninguém pediu para mudar.                                                                    │
  * └──────────────────────────────────────────────────────────────────────────────────────────────┘
  *
+ * ┌─ SÃO DUAS AÇÕES POR LINHA, E COPIAR É A QUE FUNCIONA HOJE ──────────────────────────────────┐
+ * │ O correio do Portal NÃO está configurado, então o envio por e-mail recusa com               │
+ * │ `CANAL_INDISPONIVEL` e nada é emitido. COPIAR O LINK não depende de canal nenhum: o          │
+ * │ consultor pega a URL e manda pelo caminho que o time já usa. Por isso copiar está SEMPRE     │
+ * │ disponível, inclusive para quem tem `podeEnviar: false` por falta de e-mail: a régua do      │
+ * │ `podeEnviar` é do E-MAIL, e não do link.                                                     │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ A ABSTENÇÃO É DESFECHO NORMAL, NUNCA ERRO (condição da auditoria) ─────────────────────────┐
+ * │ `gerado: false` com `LINK_VIVO_EM_USO` quer dizer que o candidato está com o portal ABERTO   │
+ * │ neste instante. Emitir outro derrubaria a sessão de quem está enviando documento. A tela     │
+ * │ diz isso em voz alta, em tom neutro: nada de vermelho, nada de "falha", nada de `role`       │
+ * │ de alerta.                                                                                   │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
  * §A.6: A BUSCA É POR NOME, NUNCA POR CPF. Busca por CPF em tela operacional é oráculo de
  * existência, e é o que a identificação do candidato fecha desde o primeiro dia. O endereço do
  * candidato aparece só MASCARADO, como o servidor o manda, e nenhuma mensagem de erro daqui o
- * carrega dentro.
+ * carrega dentro. A URL é CREDENCIAL: ela vive no estado deste modal, não vai para log, não vai
+ * para telemetria, não vai para `localStorage` e some quando o modal fecha.
  *
  * §A.41: o modal não fecha por clique fora (é o `Modal` do design system) e tem "Fechar" no
  * rodapé. §A.11 (sem travessão), §A.24 (title case em título e etiqueta; botão é ação).
  */
 
 import { useCallback, useEffect, useState } from "react";
-import type { AdmissaoSemLinkDoPortal, ResultadoDoEnvioDoLink } from "@ea/shared-types";
+import type {
+  AdmissaoSemLinkDoPortal,
+  LinkDoPortalParaCopiar,
+  ResultadoDoEnvioDoLink,
+} from "@ea/shared-types";
 import { apiFetch } from "@/lib/api";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { Icon } from "@/components/ui/Icon";
 import { StatusPill } from "@/components/ui/StatusPill";
 import { caixaAlta } from "@/lib/nome";
+import { copiarTexto, AVISO_COPIA_FALHOU, type ResultadoDaCopia } from "@/lib/copiar-texto";
 import {
   destinoVisivel,
   enviarLinkDaAdmissao,
   etiquetaDaRecusa,
   fraseDaRecusa,
+  fraseDoLinkParaCopiar,
   fraseDoResultado,
+  gerarLinkParaCopiar,
   mensagemDaFalha,
   rotaSemLink,
+  tituloDoLinkParaCopiar,
 } from "@/lib/portal-envio-link";
 import { formatarDataHora } from "@/lib/portal-painel";
 
 /** O que já foi enviado nesta sessão do modal, por admissão. Some quando o modal fecha. */
 type Desfecho = { ok: boolean; texto: string };
+
+/**
+ * O QUE A EMISSÃO DEVOLVEU, por admissão, e SÓ enquanto o modal está aberto.
+ *
+ * `url` é credencial: ela não sai daqui. `titulo` e `texto` já vêm prontos do vocabulário testado,
+ * para a abstenção e a emissão falarem a mesma língua em todas as superfícies.
+ */
+type LinkNaTela = { url: string | null; titulo: string; texto: string };
 
 export function EnviarLinkModal({
   token,
@@ -60,7 +92,10 @@ export function EnviarLinkModal({
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   const [enviando, setEnviando] = useState<string | null>(null);
+  const [gerando, setGerando] = useState<string | null>(null);
   const [desfechos, setDesfechos] = useState<Record<string, Desfecho>>({});
+  const [links, setLinks] = useState<Record<string, LinkNaTela>>({});
+  const [copias, setCopias] = useState<Record<string, ResultadoDaCopia | undefined>>({});
 
   const buscar = useCallback(
     async (termo: string) => {
@@ -115,15 +150,61 @@ export function EnviarLinkModal({
     }
   }
 
+  /**
+   * GERAR O LINK PARA COPIAR. A abstenção volta por aqui como desfecho NORMAL, com a frase do
+   * próprio motivo, e não como erro.
+   */
+  async function gerar(a: AdmissaoSemLinkDoPortal) {
+    setGerando(a.admissaoId);
+    // O aviso de cópia da emissão ANTERIOR não pode sobreviver à emissão nova: a URL mudou, e
+    // "Copiado" ao lado de um link recém-gerado diria que a pessoa já tem na mão o que ela não tem.
+    setCopias((c) => ({ ...c, [a.admissaoId]: undefined }));
+    try {
+      const r: LinkDoPortalParaCopiar = await gerarLinkParaCopiar(a.admissaoId, token);
+      setLinks((l) => ({
+        ...l,
+        [a.admissaoId]: {
+          url: r.link,
+          titulo: tituloDoLinkParaCopiar(r),
+          texto: fraseDoLinkParaCopiar(r, formatarDataHora(r.expiraEm)),
+        },
+      }));
+      // Nasceu link: a linha passou a existir na lista de trás, que relê. Abstenção não cria nada.
+      if (r.gerado) onEnviou();
+    } catch (e) {
+      setLinks((l) => ({
+        ...l,
+        [a.admissaoId]: {
+          url: null,
+          titulo: "Nenhum Link Novo Foi Gerado",
+          texto: mensagemDaFalha(e, "Falha ao gerar o link do portal."),
+        },
+      }));
+    } finally {
+      setGerando(null);
+    }
+  }
+
+  /**
+   * COPIAR, COM CAMINHO DE RESERVA E ERRO HONESTO. `navigator.clipboard` não existe fora de
+   * contexto seguro (a homologação é `http://`), e a régua dos dois caminhos mora em
+   * `@/lib/copiar-texto`; aqui só se diz o que aconteceu.
+   */
+  async function copiar(admissaoId: string, url: string) {
+    const r = await copiarTexto(url);
+    setCopias((c) => ({ ...c, [admissaoId]: r }));
+  }
+
   return (
-    <Modal onClose={onClose} className="max-w-[720px] p-0" ariaLabel="Enviar Link Do Portal">
+    <Modal onClose={onClose} className="max-w-[760px] p-0" ariaLabel="Enviar Link Do Portal">
       <div className="flex max-h-[88vh] flex-col">
         <div className="flex-none border-b border-[var(--border)] px-6 pb-4 pt-6">
           <div className="eyebrow !mb-1">Portal do candidato</div>
           <h2 className="text-lg font-semibold text-text">Enviar Link Do Portal</h2>
           <p className="mt-1 text-[12.5px] text-dim">
-            Busque pelo nome do candidato e envie o link por e-mail. Aqui aparece quem ainda não
-            tem link nenhum; quem já tem é enviado pela própria linha da lista.
+            Busque pelo nome do candidato e copie o link para mandar pelo canal que você preferir,
+            ou envie por e-mail. Aqui aparece quem ainda não tem link nenhum; quem já tem é
+            atendido pela própria linha da lista.
           </p>
           <input
             type="search"
@@ -156,7 +237,10 @@ export function EnviarLinkModal({
             <ul className="flex flex-col gap-2.5">
               {itens.map((a) => {
                 const desfecho = desfechos[a.admissaoId];
+                const link = links[a.admissaoId];
+                const copia = copias[a.admissaoId];
                 const rodando = enviando === a.admissaoId;
+                const gerandoEsta = gerando === a.admissaoId;
                 return (
                   <li
                     key={a.admissaoId}
@@ -176,27 +260,90 @@ export function EnviarLinkModal({
                       </div>
 
                       <div className="flex flex-none items-center gap-2">
-                        {/* QUEM NÃO PODE RECEBER MOSTRA A ETIQUETA DO MOTIVO, e o botão fica
-                            apagado DIZENDO POR QUÊ no `title`, em vez de sumir e deixar a pessoa
-                            procurando o que fazer. */}
+                        {/* QUEM NÃO PODE RECEBER POR E-MAIL MOSTRA A ETIQUETA DO MOTIVO, e o botão
+                            do e-mail fica apagado DIZENDO POR QUÊ no `title`, em vez de sumir e
+                            deixar a pessoa procurando o que fazer. A etiqueta NÃO apaga o copiar:
+                            ela é da régua do e-mail, e o link continua podendo ser gerado. */}
                         {!a.podeEnviar && (
                           <StatusPill tone="wn" label={etiquetaDaRecusa(a.motivo)} />
                         )}
+
+                        {/* COPIAR SEMPRE DISPONÍVEL: é o caminho que não depende de correio. */}
+                        <Button
+                          className="px-3 py-2"
+                          disabled={gerandoEsta || rodando}
+                          title="Gerar o link do portal e copiar para mandar pelo canal que você preferir"
+                          onClick={() => void gerar(a)}
+                        >
+                          <Icon
+                            name={gerandoEsta ? "refresh" : "link"}
+                            className={
+                              gerandoEsta
+                                ? "mr-1.5 inline h-3.5 w-3.5 animate-spin align-middle"
+                                : "mr-1.5 inline h-3.5 w-3.5 align-middle"
+                            }
+                          />
+                          {gerandoEsta ? "Gerando…" : link ? "Gerar de novo" : "Copiar link"}
+                        </Button>
+
                         <Button
                           variant="secondary"
                           className="px-3 py-2"
-                          disabled={!a.podeEnviar || rodando || desfecho?.ok === true}
+                          disabled={
+                            !a.podeEnviar || rodando || gerandoEsta || desfecho?.ok === true
+                          }
                           title={a.podeEnviar ? undefined : fraseDaRecusa(a.motivo)}
                           onClick={() => void enviar(a)}
                         >
                           <Icon
                             name={rodando ? "refresh" : desfecho?.ok ? "check" : "arr"}
-                            className={rodando ? "mr-1.5 inline h-3.5 w-3.5 animate-spin align-middle" : "mr-1.5 inline h-3.5 w-3.5 align-middle"}
+                            className={
+                              rodando
+                                ? "mr-1.5 inline h-3.5 w-3.5 animate-spin align-middle"
+                                : "mr-1.5 inline h-3.5 w-3.5 align-middle"
+                            }
                           />
                           {rodando ? "Enviando…" : desfecho?.ok ? "Enviado" : "Enviar por e-mail"}
                         </Button>
                       </div>
                     </div>
+
+                    {/* A CAIXA DO LINK, e ela serve aos DOIS desfechos no mesmo tom neutro: a
+                        emissão que deu certo e a ABSTENÇÃO. Nada de vermelho aqui: abster-se
+                        porque o candidato está usando o link dele é o comportamento certo. */}
+                    {link && (
+                      <div className="mt-2.5 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2.5">
+                        <p className="text-[12.5px] font-semibold text-text">{link.titulo}</p>
+                        <p className="mt-1 text-[12px] leading-relaxed text-dim">{link.texto}</p>
+
+                        {link.url && (
+                          <>
+                            <div className="mt-2.5 flex items-center gap-2">
+                              <input
+                                readOnly
+                                value={link.url}
+                                aria-label={`Link do portal de ${a.nome}`}
+                                onFocus={(e) => e.currentTarget.select()}
+                                className="ds-input w-full py-2 text-[12px]"
+                              />
+                              <Button
+                                variant="secondary"
+                                className="shrink-0 px-3 py-2"
+                                onClick={() => void copiar(a.admissaoId, link.url as string)}
+                              >
+                                <Icon name="copy" className="mr-1.5 inline h-3.5 w-3.5 align-middle" />
+                                {copia === "copiado" ? "Copiado" : "Copiar"}
+                              </Button>
+                            </div>
+                            {copia === "falhou" && (
+                              <p className="mt-2 text-[12px] text-warn" role="alert">
+                                {AVISO_COPIA_FALHOU}
+                              </p>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    )}
 
                     {desfecho && (
                       <p

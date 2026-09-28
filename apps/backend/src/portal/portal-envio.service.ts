@@ -4,6 +4,7 @@ import type {
   AdmissaoSemLinkDoPortal,
   CanalDeEnvioDoLink,
   DestinatarioDoLink,
+  LinkDoPortalParaCopiar,
   MotivoDeRecusaDeEnvio,
   OrigemDeEnvioDoLink,
   PreviaDoEnvioEmLote,
@@ -171,8 +172,18 @@ export class PortalEnvioService {
          * linha. Repetir a pergunta aqui fora seria a segunda régua de sempre, e ela responderia
          * sobre um instante diferente. `LINK_VIVO_EM_USO` continua sendo o padrão de leitura, que
          * é o que este campo significava antes de a janela existir.
+         *
+         * E AGORA SÃO TRÊS DESFECHOS, com a entrada do recorte de farol dentro de `emitirComTrava`.
+         * O `foraDoRecorte` vem PRIMEIRO na leitura, e a ordem não é estética: por este caminho a
+         * admissão já passou pelo filtro de farol de `destinatarioDaAdmissao`, então chegar aqui
+         * com `foraDoRecorte` significa que o farol MUDOU entre a resolução do destinatário e a
+         * emissão (alguém declinou no meio). Sem esta linha a recusa sairia rotulada
+         * `LINK_VIVO_EM_USO`, dizendo "já existe link vivo" sobre uma admissão que não tem link
+         * nenhum, e o consultor iria procurar na tela um link que não existe. Nada é emitido nem
+         * revogado nos dois casos: o que muda é o rótulo dizer a verdade na corrida. Achado da
+         * auditoria (observação 1) na frente que apontou a rota antiga.
          */
-        vivo?.motivo ?? "LINK_VIVO_EM_USO",
+        emissao.foraDoRecorte?.motivo ?? vivo?.motivo ?? "LINK_VIVO_EM_USO",
         vivo?.expiraEm ? vivo.expiraEm.toISOString() : null,
         vivo?.enviadoEm ? vivo.enviadoEm.toISOString() : null,
       );
@@ -233,6 +244,77 @@ export class PortalEnvioService {
       destinoMascarado: mascararEmail(destinatario.email),
       enviadoEm: new Date().toISOString(),
       expiraEm: expiraEm.toISOString(),
+    };
+  }
+
+  // ══ O LINK PARA COPIAR ═════════════════════════════════════════════════════════════════════
+
+  /**
+   * GERA O LINK E DEVOLVE A URL PARA O CONSULTOR COPIAR. É o caminho que FUNCIONA HOJE.
+   *
+   * ┌─ ELE NÃO EXIGE E-MAIL E NÃO EXIGE CORREIO, e é esse o ponto da frente ─────────────────────┐
+   * │ O correio NÃO está configurado em ambiente nenhum, então `enviarParaAdmissao` recusa com   │
+   * │ `CANAL_INDISPONIVEL` antes de emitir, e o consultor fica sem saída nenhuma para o          │
+   * │ candidato que nasce fora do funil. Aqui não há destino a validar nem canal a consultar: a  │
+   * │ entrega é humana, pelo canal que o time já usa.                                            │
+   * │                                                                                             │
+   * │ ELE NÃO SUBSTITUI O ENVIO POR E-MAIL, convive. Quando o correio subir, os dois caminhos    │
+   * │ continuam existindo e o carimbo de origem distingue um do outro (`ENTREGA_A_MAO` aqui,     │
+   * │ `MANUAL`/`AUTOMATICO` lá).                                                                  │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * ┌─ A ORDEM É RECORTE PRIMEIRO, EMISSÃO DEPOIS, e ela é a regra e não um detalhe ─────────────┐
+   * │ Emitir REVOGA os links vivos da admissão. Emitir antes de saber se aquela admissão sequer  │
+   * │ pode receber link mataria o link de quem está enviando documento, para em seguida devolver │
+   * │ uma recusa. É a mesma lição da ordem dos passos de `entregar`, logo acima.                  │
+   * │                                                                                             │
+   * │ O RECORTE É O MESMO DE `destinatarioDaAdmissao`, REUSADO e não redigitado: declínio e      │
+   * │ rescisão não deixam trabalho ativo (§A.16), e a pré-admissão (`AGUARDANDO_LIBERACAO`,      │
+   * │ `LIBERACAO_RECUSADA`) chega sem cliente e sem cargo, logo sem régua, logo sem nada que o   │
+   * │ candidato pudesse enviar. Fora do recorte, `SEM_ADMISSAO`, e NENHUM link é emitido.        │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * `gerado: false` COM `LINK_VIVO_EM_USO` NÃO É FALHA: é a abstenção da S15, e o desfecho certo.
+   * A admissão já tem link vivo que o candidato JÁ ABRIU, e emitir outro derrubaria a sessão dele
+   * em silêncio. A janela curta (`ENVIADO_HA_POUCO`) NÃO se aplica por aqui, e o porquê está em
+   * `emitirLinkParaCopiar`.
+   *
+   * §A.6: a URL é CREDENCIAL. Ela atravessa em memória, volta UMA vez no corpo da resposta e
+   * morre ali: não é persistida, não é logada e não entra na trilha. Nenhum e-mail, nome de
+   * candidato ou CPF sai deste método, nem em log nem na resposta.
+   */
+  async gerarLinkParaCopiar(admissaoId: string, autorId: string): Promise<LinkDoPortalParaCopiar> {
+    const recusado = (motivo: MotivoDeRecusaDeEnvio): LinkDoPortalParaCopiar => ({
+      gerado: false,
+      motivo,
+      link: null,
+      expiraEm: null,
+    });
+
+    // PASSO 1. O recorte de farol, e NADA é emitido quando ele barra.
+    const destinatario = await this.destinatarioDaAdmissao(admissaoId);
+    if (!destinatario) return recusado("SEM_ADMISSAO");
+
+    // PASSO 2. SÓ AGORA emite, com a abstenção da S15 ligada e a janela de reenvio desligada.
+    const emissao = await this.identidade.emitirLinkParaCopiar(admissaoId, autorId);
+    if (!emissao.emitido) {
+      // QUEM ESCOLHE O CÓDIGO É QUEM SE ABSTEVE, dentro da transação, que é o único lugar que
+      // enxerga o estado real da linha. `LINK_VIVO_EM_USO` é o padrão de leitura, e por este
+      // caminho é o único que pode chegar aqui.
+      //
+      // O `foraDoRecorte` VEM ANTES, e ele é INALCANÇÁVEL por aqui: o passo 1 já barrou o farol,
+      // com a mesma lista. Ele é lido mesmo assim para que o dia em que alguém tirar o passo 1
+      // devolva a recusa CERTA, e não um "link vivo em uso" sobre um link que não existe.
+      return recusado(
+        emissao.foraDoRecorte?.motivo ?? emissao.jaAtivo?.motivo ?? "LINK_VIVO_EM_USO",
+      );
+    }
+
+    return {
+      gerado: true,
+      motivo: null,
+      link: emissao.emitido.link,
+      expiraEm: emissao.emitido.expiraEm.toISOString(),
     };
   }
 

@@ -37,6 +37,7 @@ import {
   verificarLink,
 } from "../domain/portal-identidade";
 import { entregueHaPouco } from "../domain/portal-envio";
+import { FAROIS_FORA_DO_PAINEL } from "./portal-painel.service";
 import type { PortalMotivo } from "../domain/portal-evento";
 import { COLUNAS_DO_LINK } from "./portal-link-colunas";
 import { PortalTrilhaService } from "./portal-trilha.service";
@@ -72,6 +73,33 @@ export interface EmissaoParaEnvio {
      */
     motivo?: Extract<MotivoDeRecusaDeEnvio, "LINK_VIVO_EM_USO" | "ENVIADO_HA_POUCO">;
   } | null;
+  /**
+   * A RECUSA POR FAROL, E ELA NÃO É A ABSTENÇÃO: aqui NÃO existe link vivo para devolver, porque
+   * aquela admissão não pode receber credencial nenhuma (declínio, rescisão ou pré-admissão ainda
+   * não liberada). Por isso ela precisa de campo próprio: `jaAtivo` promete `jti` e `expiraEm` de
+   * um link que EXISTE, e preenchê-lo com uma recusa faria quem lê acreditar num link que não há.
+   *
+   * O CÓDIGO É `SEM_ADMISSAO`, o MESMO que `gerarLinkParaCopiar` já devolve nesse caso, e a
+   * coincidência é deliberada: pela ROTA NOVA, admissão fora do recorte é indistinguível da
+   * inexistente, porque `destinatarioDaAdmissao` devolve nulo nos dois casos e a resposta não
+   * conta a quem pergunta que aquela pessoa declinou.
+   *
+   * ┌─ A INDISTINGUIBILIDADE NÃO VALE NA ROTA ANTIGA, e dizer que valia era overpromise ─────────┐
+   * │ Em `portal/links/:admissaoId` os dois casos SE SEPARAM: admissão inexistente lança 404     │
+   * │ (a guarda logo abaixo, no `emitirComTrava`), e admissão fora do recorte responde 201 com   │
+   * │ `gerado: false`. Ou seja, ali dá para distinguir "não existe" de "existe e está encerrada".│
+   * │                                                                                            │
+   * │ A auditoria (observação 2) mediu isso e NÃO vetou, por três razões: a rota é autenticada,  │
+   * │ sem `@Public()`, atrás do `JwtAuthGuard` e do `MenuGuard`; o oráculo "existe ou não"       │
+   * │ já era idêntico ANTES desta frente, e não nasceu aqui; e o único bit novo é o estado do    │
+   * │ farol, que o mesmo usuário já lê no Gerenciador. O texto foi corrigido para não prometer   │
+   * │ uma propriedade que aquela porta não entrega, que é pior do que não prometer nada.         │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * OPCIONAL, e ausente quer dizer "não houve recusa por farol": é o que todo caminho que já
+   * filtrava o farol antes de chamar continua devolvendo, byte a byte como antes.
+   */
+  foraDoRecorte?: { motivo: Extract<MotivoDeRecusaDeEnvio, "SEM_ADMISSAO"> } | null;
 }
 
 /**
@@ -303,7 +331,20 @@ export class PortalIdentidadeService {
      * │ ninguém mandou, bloqueando um envio legítimo logo em seguida.                               │
      * └────────────────────────────────────────────────────────────────────────────────────────────┘
      */
-    const saida = await this.emitirComTrava(admissaoId, autorId, false, "ENTREGA_A_MAO");
+    const saida = await this.emitirComTrava(admissaoId, autorId, false, "ENTREGA_A_MAO", false);
+    /*
+     * A RECUSA POR FAROL, NESTE ENVELOPE, É UM `404`, e não um valor de retorno.
+     *
+     * `LinkDoPortalGerado` é um contrato de DUAS colunas (URL e prazo): não há onde dizer "não
+     * emiti, e por isto". Inventar uma URL vazia aqui entregaria `undefined` dentro de um link
+     * entregue ao candidato, que é o mesmo desfecho que a guarda logo abaixo existe para impedir.
+     *
+     * E O 404 É A MESMA RESPOSTA DA ADMISSÃO INEXISTENTE, DE PROPÓSITO: para quem pede, admissão
+     * fora do recorte é indistinguível da que não existe, então a resposta não conta a ninguém que
+     * aquela pessoa declinou. Quem precisa da recusa como DADO usa `emitirLinkParaCopiar`, que tem
+     * campo próprio para ela.
+     */
+    if (saida.foraDoRecorte) throw new NotFoundException("Admissão não encontrada");
     if (!saida.emitido) {
       // INALCANÇÁVEL POR CONSTRUÇÃO: com `recusarSeJaAcessado` falso, a emissão nunca se abstém.
       // A guarda existe para que o dia em que alguém inverter o padrão do parâmetro vire uma falha
@@ -341,7 +382,42 @@ export class PortalIdentidadeService {
      * Gravá-la aqui diria "enviado por e-mail" sobre um link que ainda pode nem ser entregue (e
      * que, nesse caso, é revogado pelo serviço de envio).
      */
-    return this.emitirComTrava(admissaoId, autorId, true, null);
+    return this.emitirComTrava(admissaoId, autorId, true, null, true);
+  }
+
+  /**
+   * A MESMA EMISSÃO, PARA O CONSULTOR COPIAR O LINK E ENTREGAR PELO CANAL QUE ELE JÁ USA.
+   *
+   * ┌─ POR QUE ESTE TERCEIRO ENVELOPE EXISTE, medido e não suposto ───────────────────────────────┐
+   * │ O correio do Portal NÃO está configurado, então todo envio por e-mail recusa com            │
+   * │ `CANAL_INDISPONIVEL` e NADA é emitido. Este é o caminho que funciona hoje, para admissão de │
+   * │ QUALQUER origem: o sistema devolve a URL uma vez e quem entrega é a pessoa.                  │
+   * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * ┌─ ELE NÃO É O `emitirLink`, E A DIFERENÇA É A ABSTENÇÃO ─────────────────────────────────────┐
+   * │ `emitirLink` REVOGA todos os links vivos, SEMPRE. Sobre uma admissão cujo candidato está    │
+   * │ enviando documento naquele instante, isso mata a sessão dele no meio do upload, sem aviso e │
+   * │ sem nada falhar. Aqui a S15 vale: link vivo JÁ ABERTO faz a emissão se ABSTER, e quem chama │
+   * │ reporta "esta pessoa já tem link e já entrou por ele", que é o desfecho CERTO e não um erro.│
+   * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * ┌─ E NÃO É O `emitirLinkParaEnvio`: A JANELA DE REENVIO FICA DE FORA, de propósito ───────────┐
+   * │ A URL volta UMA vez e não é recuperável por rota nenhuma (§A.6). Recusar por três minutos   │
+   * │ deixaria o consultor sem o link e sem como obtê-lo, que é um beco sem saída que o caminho   │
+   * │ do e-mail não tem (lá a mensagem já está na caixa do candidato). Ver `aplicarJanelaDeReenvio`│
+   * │ dentro de `emitirComTrava`, que é o parâmetro EXPLÍCITO que separa as duas políticas.        │
+   * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * A ORIGEM É `ENTREGA_A_MAO`, a mesma do "gerar link", e pelo mesmo motivo: o sistema gerou,
+   * alguém entrega por fora, e nada foi enviado. `MANUAL` quer dizer "o RH mandou por e-mail pelo
+   * Gerenciador", e juntar as duas na mesma palavra apagaria a diferença que a coluna existe para
+   * mostrar. Nada de `enviado_em`: não houve envio.
+   *
+   * §A.6: a URL é CREDENCIAL. Ela volta UMA vez para quem pediu, e não é persistida, não é logada
+   * e não entra na trilha (a trilha de emissão leva jti, autor e prazo, e nada além).
+   */
+  async emitirLinkParaCopiar(admissaoId: string, autorId: string): Promise<EmissaoParaEnvio> {
+    return this.emitirComTrava(admissaoId, autorId, true, "ENTREGA_A_MAO", false);
   }
 
   private async emitirComTrava(
@@ -349,6 +425,7 @@ export class PortalIdentidadeService {
     autorId: string,
     recusarSeJaAcessado: boolean,
     origemDoNascimento: OrigemDeEnvioDoLink | null,
+    aplicarJanelaDeReenvio: boolean,
   ): Promise<EmissaoParaEnvio> {
     const chave = this.chaveDoLink();
     if (!chave || !this.pepper()) {
@@ -360,11 +437,40 @@ export class PortalIdentidadeService {
     }
 
     const [admissao] = await this.db
-      .select({ id: admissoes.id })
+      .select({ id: admissoes.id, farol: admissoes.farolGlobal })
       .from(admissoes)
       .where(eq(admissoes.id, admissaoId))
       .limit(1);
     if (!admissao) throw new NotFoundException("Admissão não encontrada");
+
+    /*
+     * ┌─ O RECORTE DE FAROL, E ELE MORA AQUI PORQUE AQUI E A PORTA UNICA DE ESCRITA ───────────────┐
+     * │ Ele existia só em `PortalEnvioService.destinatarioDaAdmissao`, ou seja, protegia apenas    │
+     * │ quem passava por aquele serviço. A rota antiga (`POST portal/links/:admissaoId`) chamava a │
+     * │ emissão DIRETO, então ela fabricava credencial de acesso ao prontuário de quem DECLINOU,   │
+     * │ de quem foi RESCINDIDO e de pré-admissão ainda NÃO LIBERADA. Regra escrita de um lado e    │
+     * │ contornável pelo outro não é regra: é combinação.                                          │
+     * │                                                                                            │
+     * │ DENTRO DE `emitirComTrava` ela alcança os TRÊS envelopes de uma vez, e continua alcançando │
+     * │ o quarto que alguém escrever amanhã, que é a diferença entre defesa estrutural e lembrança.│
+     * └────────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * PARA O CAMINHO DO E-MAIL ELA É INÓCUA, e isso é requisito, não efeito colateral:
+     * `enviarParaAdmissao` e `enviarParaCandidaturas` já resolvem o destinatário com
+     * `notInArray(farol, FAROIS_FORA_DO_PAINEL)` ANTES de pedir a emissão, então nenhuma admissão
+     * barrada por esta guarda chega até aqui por aquele caminho. Nenhuma mensagem da tela muda. É
+     * defesa em profundidade, e não régua nova.
+     *
+     * A LISTA É REUSADA, NUNCA REDIGITADA (`FAROIS_FORA_DO_PAINEL`, a mesma do painel, do envio e
+     * dos pedidos de ajuda): uma cópia diverge da original no primeiro ajuste, e a divergência
+     * aparece como credencial emitida para quem não deveria, que é silenciosa.
+     *
+     * ANTES DA TRANSAÇÃO, e a ordem é a regra: emitir REVOGA os links vivos da admissão. Recusar
+     * depois de abrir a transação arriscaria matar o link de alguém para em seguida dizer "não".
+     */
+    if ((FAROIS_FORA_DO_PAINEL as readonly string[]).includes(admissao.farol ?? "")) {
+      return { emitido: null, jaAtivo: null, foraDoRecorte: { motivo: "SEM_ADMISSAO" } };
+    }
 
     const agora = new Date();
     const expiraEm = new Date(agora.getTime() + PORTAL_LINK_TTL_HORAS * 3_600_000);
@@ -452,12 +558,30 @@ export class PortalIdentidadeService {
          * A JANELA CONTINUA VALENDO SÓ PARA QUEM PEDE (`recusarSeJaAcessado`), que é o ENVIO. O
          * "gerar link" passa direto e segue sendo a válvula de escape de quando algo trava.
          */
-        const enviadoAgoraMesmo = naoRevogados.find(
-          (linha) =>
-            linha.primeiroAcessoEm === null &&
-            estadoDaLinha(linha, agora.getTime()).vivo &&
-            entregueHaPouco(linha, agora.getTime()),
-        );
+        /*
+         * ┌─ E A JANELA É OPCIONAL, PORQUE NUM DOS CAMINHOS ELA É UM BECO SEM SAÍDA ──────────────┐
+         * │ `aplicarJanelaDeReenvio` é PARÂMETRO EXPLÍCITO, sem valor padrão, e essa ausência é a │
+         * │ trava: quem chamar é obrigado a dizer qual das duas políticas quer, e o caminho do    │
+         * │ e-mail (o único que tinha a janela) continua passando `true`, byte a byte como antes. │
+         * │                                                                                       │
+         * │ QUEM PASSA `false` É O "COPIAR O LINK", e o motivo é a forma do dano. No e-mail, a    │
+         * │ recusa por janela não custa nada: a mensagem ESTÁ na caixa do candidato, e o pedido   │
+         * │ repetido só não faz de novo o que já foi feito. No copiar, a URL volta UMA vez e não  │
+         * │ é recuperável por rota nenhuma (§A.6); recusar por três minutos deixaria o consultor  │
+         * │ sem o link e SEM COMO OBTÊ-LO, com a única saída sendo esperar o relógio.             │
+         * │                                                                                       │
+         * │ A ABSTENÇÃO DE CIMA (`LINK_VIVO_EM_USO`) CONTINUA VALENDO NOS DOIS, e é a que protege │
+         * │ de verdade: ela impede derrubar a sessão de quem está enviando documento agora.       │
+         * └───────────────────────────────────────────────────────────────────────────────────────┘
+         */
+        const enviadoAgoraMesmo = aplicarJanelaDeReenvio
+          ? naoRevogados.find(
+              (linha) =>
+                linha.primeiroAcessoEm === null &&
+                estadoDaLinha(linha, agora.getTime()).vivo &&
+                entregueHaPouco(linha, agora.getTime()),
+            )
+          : undefined;
         if (enviadoAgoraMesmo) {
           return {
             emitido: null,
@@ -494,7 +618,7 @@ export class PortalIdentidadeService {
     if (!resultado.emitido) {
       // NADA FOI EMITIDO E NADA FOI REVOGADO, então NADA vai para a trilha: a abstenção é um
       // não-evento, e registrá-la encheria o log de "não fiz nada" a cada clique repetido.
-      return { emitido: null, jaAtivo: resultado.jaAtivo };
+      return { emitido: null, jaAtivo: resultado.jaAtivo, foraDoRecorte: null };
     }
 
     const token = cunharLink(
@@ -519,7 +643,7 @@ export class PortalIdentidadeService {
       exp: Math.floor(expiraEm.getTime() / 1000),
     });
 
-    return { emitido: { jti, link: this.urlDoLink(token), expiraEm }, jaAtivo: null };
+    return { emitido: { jti, link: this.urlDoLink(token), expiraEm }, jaAtivo: null, foraDoRecorte: null };
   }
 
   /**

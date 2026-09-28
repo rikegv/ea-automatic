@@ -1,4 +1,5 @@
 import { Controller, Param, ParseUUIDPipe, Post } from "@nestjs/common";
+import type { LinkDoPortalParaCopiar } from "@ea/shared-types";
 import { CurrentUser } from "../auth/decorators";
 import type { AuthUser } from "../auth/auth.types";
 import { PortalIdentidadeService } from "./portal-identidade.service";
@@ -51,12 +52,62 @@ export class PortalLinksController {
   /**
    * Emite o link de 72 horas para uma admissão, REVOGANDO os anteriores dela.
    *
+   * ┌─ ELA DEIXOU DE CHAMAR A EMISSÃO CRUA, E ESSA É A CORREÇÃO DESTA FRENTE ────────────────────┐
+   * │ `emitirLink` REVOGA SEMPRE e nunca se abstém: um clique aqui, enquanto o candidato estava  │
+   * │ com o portal aberto enviando documento, matava a sessão dele EM SILÊNCIO. Nada falhava,    │
+   * │ nada logava, e a tela dele morria. Esta rota passa a usar o MESMO caminho da tela nova     │
+   * │ (`emitirLinkParaCopiar`), que liga a abstenção da S15: link vivo JÁ ABERTO faz a emissão   │
+   * │ se abster em vez de derrubar quem está no meio do upload.                                  │
+   * │                                                                                             │
+   * │ A ROTA NÃO FOI REMOVIDA, FOI APONTADA (decisão do diretor): se algum consumidor que não    │
+   * │ enxergamos ainda a chama, apontar conserta o comportamento dele sem quebrá-lo.             │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * ┌─ O CORPO É SUPERCONJUNTO DO ANTIGO, de propósito ──────────────────────────────────────────┐
+   * │ No sucesso ele continua tendo `link` e `expiraEm` (ISO), byte a byte no formato de fio de  │
+   * │ antes, e ganha `gerado` e `motivo`. Quem só lia os dois primeiros continua lendo os dois   │
+   * │ primeiros. Na recusa, `link` vem NULO e o motivo é EXPLÍCITO, que é o que faltava: antes   │
+   * │ não havia recusa nenhuma a relatar, porque não havia recusa nenhuma.                        │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * `SEM_ADMISSAO` é a recusa por FAROL (declínio, rescisão, pré-admissão não liberada), decidida
+   * dentro da porta única de escrita. `LINK_VIVO_EM_USO` é a abstenção, e ela NÃO é falha: é o
+   * desfecho certo, e quem a apresentar como erro está pedindo para alguém querer desligá-la.
+   *
    * A URL volta UMA vez, no corpo desta resposta, e não é persistida em claro em lugar nenhum
    * (§A.6). Quem a perder emite outra, que é barato e mata a primeira.
    */
   @Post(":admissaoId")
-  emitir(@Param("admissaoId", ParseUUIDPipe) admissaoId: string, @CurrentUser() user: AuthUser) {
-    return this.identidade.emitirLink(admissaoId, user.id);
+  async emitir(
+    @Param("admissaoId", ParseUUIDPipe) admissaoId: string,
+    @CurrentUser() user: AuthUser,
+  ): Promise<LinkDoPortalParaCopiar> {
+    const emissao = await this.identidade.emitirLinkParaCopiar(admissaoId, user.id);
+
+    // A RECUSA POR FAROL VEM PRIMEIRO, e ela tem campo próprio na emissão justamente para não se
+    // confundir com a abstenção: ali não existe link vivo nenhum a relatar.
+    if (emissao.foraDoRecorte) {
+      return { gerado: false, motivo: emissao.foraDoRecorte.motivo, link: null, expiraEm: null };
+    }
+
+    if (!emissao.emitido) {
+      // QUEM ESCOLHE O CÓDIGO É QUEM SE ABSTEVE, dentro da transação, que é o único lugar que
+      // enxerga o estado real da linha. `LINK_VIVO_EM_USO` é o padrão de leitura, e por este
+      // caminho (sem a janela de reenvio) é o único que chega aqui.
+      return {
+        gerado: false,
+        motivo: emissao.jaAtivo?.motivo ?? "LINK_VIVO_EM_USO",
+        link: null,
+        expiraEm: null,
+      };
+    }
+
+    return {
+      gerado: true,
+      motivo: null,
+      link: emissao.emitido.link,
+      expiraEm: emissao.emitido.expiraEm.toISOString(),
+    };
   }
 
   /**

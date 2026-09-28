@@ -25,6 +25,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type {
   DestinatarioDoLink,
+  LinkDoPortalParaCopiar,
   MotivoDeRecusaDeEnvio,
   PreviaDoEnvioEmLote,
   ResultadoDoEnvioDoLink,
@@ -357,4 +358,65 @@ export function enviarLinkDaAdmissao(
  */
 export function mensagemDaFalha(e: unknown, padrao: string): string {
   return e instanceof ApiError ? e.message : padrao;
+}
+
+// ── O LINK PARA COPIAR: o caminho que funciona sem correio nenhum ───────────────────────────────
+
+/**
+ * A ROTA QUE EMITE E DEVOLVE A URL PARA A TELA COPIAR, e ela mora ao lado das outras do envio
+ * (`esteira/portal/envio`), nunca sob `portal/`: ver a nota de `rotaEnviarLink`, que vale inteira
+ * aqui e com mais força, porque esta rota DEVOLVE a credencial em vez de só disparar o e-mail.
+ *
+ * ELA EXISTE PORQUE O CORREIO NÃO EXISTE. Hoje todo envio por e-mail recusa com
+ * `CANAL_INDISPONIVEL`, e o consultor ficava sem nenhuma saída para o candidato que nasce fora do
+ * funil. Copiar o link e mandar pelo canal que o time já usa não depende de infraestrutura.
+ *
+ * SEM CORPO, pela mesma razão da irmã: a origem do carimbo é construção da rota, não campo da tela.
+ */
+export const rotaLinkParaCopiar = (admissaoId: string) =>
+  `/esteira/portal/envio/admissao/${admissaoId}/link`;
+
+/**
+ * O DISPARO. O que volta pode ser a URL (`gerado: true`) ou uma ABSTENÇÃO (`gerado: false`), e as
+ * duas são respostas legítimas do servidor: só a chamada que não completa é falha.
+ *
+ * §A.6: a URL volta UMA vez e é CREDENCIAL. Ela não é logada aqui, não é guardada em lugar nenhum
+ * deste módulo e não entra em frase de erro alguma.
+ */
+export function gerarLinkParaCopiar(
+  admissaoId: string,
+  token: string | null,
+): Promise<LinkDoPortalParaCopiar> {
+  return apiFetch<LinkDoPortalParaCopiar>(rotaLinkParaCopiar(admissaoId), {
+    method: "POST",
+    token,
+  });
+}
+
+/**
+ * A ABSTENÇÃO NÃO É FALHA, E A TELA É OBRIGADA A DIZER ISSO (condição da auditoria, não gosto).
+ *
+ * `LINK_VIVO_EM_USO` quer dizer que o candidato está com o portal ABERTO agora: emitir outro
+ * revogaria o dele e derrubaria, em silêncio, quem está enviando documento naquele instante. O
+ * sistema se abstém, e abster-se é o desfecho CERTO. Pintar isso de vermelho e chamar de "falha"
+ * é o começo do pedido para desligar a proteção.
+ */
+export function abstencaoDoLink(r: LinkDoPortalParaCopiar): boolean {
+  return !r.gerado && r.motivo === "LINK_VIVO_EM_USO";
+}
+
+/** O TÍTULO do desfecho, em Title Case (§A.24). Nenhum deles usa a palavra "falha". */
+export function tituloDoLinkParaCopiar(r: LinkDoPortalParaCopiar): string {
+  if (r.gerado) return "Link Do Portal";
+  if (abstencaoDoLink(r)) return "O Candidato Já Está Usando O Link";
+  return "Nenhum Link Novo Foi Gerado";
+}
+
+/**
+ * A FRASE do desfecho. Quando nasceu link, ela diz o prazo e avisa que o anterior morreu; quando
+ * houve abstenção ou recusa, ela é a frase do próprio motivo, que já diz o que fazer no lugar.
+ */
+export function fraseDoLinkParaCopiar(r: LinkDoPortalParaCopiar, quando: string): string {
+  if (!r.gerado) return fraseDaRecusa(r.motivo);
+  return `Copie e mande ao candidato pelo canal que você preferir. O link vale até ${quando} e some desta tela quando você fechar esta janela. Qualquer link anterior deste candidato deixou de valer agora.`;
 }

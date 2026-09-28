@@ -131,6 +131,41 @@ export class PortalEnvioController {
   ) {
     return this.envio.enviarParaAdmissao(admissaoId, user.id, "MANUAL");
   }
+
+  /**
+   * O LINK PARA COPIAR, de UMA admissão, de QUALQUER origem. É o caminho que funciona hoje.
+   *
+   * O correio não está configurado em ambiente nenhum, então a rota acima recusa com
+   * `CANAL_INDISPONIVEL` sem emitir nada. Esta gera o link e devolve a URL para o consultor
+   * entregar pelo canal que o time já usa. Ela NÃO exige e-mail e NÃO exige canal.
+   *
+   * ┌─ AQUI A URL VOLTA, E A DIFERENÇA EM RELAÇÃO À ROTA DE CIMA É DELIBERADA ────────────────────┐
+   * │ No envio por e-mail quem entrega é o correio, então devolver a credencial na resposta a    │
+   * │ espalharia sem nenhum uso. Aqui quem entrega é a PESSOA que clicou, e a URL é o produto da │
+   * │ rota. §A.6: ela volta UMA vez, não é persistida, não é logada, não entra na trilha e não é │
+   * │ devolvida por rota de leitura nenhuma. Perdida, o caminho é gerar outra.                    │
+   * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * `Cache-Control: no-store, private` NÃO É ENFEITE NESTA ROTA: a resposta atravessa o proxy do
+   * Next carregando uma credencial de acesso ao prontuário, e nem ele nem o disco do navegador
+   * podem guardá-la.
+   *
+   * SEM DTO DE CORPO, pela mesma razão da rota de cima: não há o que o cliente escolha. A origem
+   * (`ENTREGA_A_MAO`) é carimbada pelo serviço, e o autor vem da sessão, nunca do corpo.
+   *
+   * `admissao/:id/link` nasce sob o MESMO prefixo, então o coringa `PortalEnvioController.*` do
+   * menu `portal-links` já a reivindica (exigência S12): ela nasce protegida, sem tocar em
+   * `domain/menus.ts`.
+   */
+  @Post("admissao/:admissaoId/link")
+  gerarLink(
+    @Res({ passthrough: true }) res: Response,
+    @Param("admissaoId", ParseUUIDPipe) admissaoId: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    res.set({ "Cache-Control": "no-store, private" });
+    return this.envio.gerarLinkParaCopiar(admissaoId, user.id);
+  }
 }
 
 /**

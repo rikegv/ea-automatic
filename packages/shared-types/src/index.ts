@@ -4793,6 +4793,39 @@ export interface AdmissaoSemLinkDoPortal {
   motivo: MotivoDeRecusaDeEnvio | null;
 }
 
+/**
+ * O LINK PARA COPIAR, e ele é o caminho que FUNCIONA HOJE.
+ *
+ * ┌─ POR QUE ELE EXISTE, medido e não suposto ─────────────────────────────────────────────────┐
+ * │ O correio do Portal NÃO está configurado (nem em produção nem na homologação), então todo  │
+ * │ envio por e-mail recusa com `CANAL_INDISPONIVEL` e NADA é emitido. O consultor ficava sem  │
+ * │ nenhuma saída para o candidato que nasce fora do funil. Copiar o link e mandar pelo canal  │
+ * │ que o time já usa é o gesto que não depende de infraestrutura nenhuma.                     │
+ * │                                                                                             │
+ * │ ELE NÃO SUBSTITUI O ENVIO POR E-MAIL, convive: quando o correio subir, o mesmo modal passa │
+ * │ a oferecer os dois, e o carimbo de origem distingue um do outro.                           │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ `gerado: false` NÃO É FALHA, e a tela é obrigada a tratar assim ──────────────────────────┐
+ * │ `LINK_VIVO_EM_USO` é a ABSTENÇÃO: existe link vivo e o candidato JÁ ENTROU por ele. Emitir │
+ * │ outro revogaria o dele e mataria, em silêncio, a sessão de quem está enviando documento    │
+ * │ naquele instante. Abster-se é o desfecho CERTO, e apresentá-lo como erro é o caminho para  │
+ * │ alguém querer desligar a proteção.                                                          │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * §A.6: a URL é CREDENCIAL. Ela volta UMA vez, para a tela copiar, e não é persistida, não é
+ * logada, não entra na trilha e não é devolvida por nenhuma rota de leitura.
+ */
+export interface LinkDoPortalParaCopiar {
+  gerado: boolean;
+  /** Nulo quando `gerado` é verdadeiro. Aqui só ocorrem `SEM_ADMISSAO` e `LINK_VIVO_EM_USO`. */
+  motivo: MotivoDeRecusaDeEnvio | null;
+  /** A URL completa, com o token no fragmento. Nula quando houve abstenção ou recusa. */
+  link: string | null;
+  /** ISO do vencimento (72h). Nulo quando nada foi gerado. */
+  expiraEm: string | null;
+}
+
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 // AS DICAS DE DOCUMENTO (o catálogo que o diretor mantém, por TIPO DE DOCUMENTO)
 //
