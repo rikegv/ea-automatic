@@ -16970,3 +16970,163 @@ de executá-lo, então um comando que apenas MENCIONE a palavra de publicação 
 um `git commit` de documentação. Por isso a entrada do diário é escrita em arquivo e concatenada, em
 vez de ir inteira dentro do comando. A trava funcionou como devia; o que não funciona é escrever o
 texto dentro do comando.
+
+---
+
+## 27 e 28/09/2026: PERMISSÕES CONCEDÍVEIS e CENTRAL DE AJUDA (Fases 0 e 1). Nada commitado, e o porquê
+
+**Duas frentes, nenhuma commitada, as duas verdes e na homologação.** O gatilho do commit é a validação do diretor na tela (§A.25), e ela não aconteceu ainda. A Central De Ajuda tem, além disso, um **veto de captura em pé**, descrito no fim.
+
+---
+
+### FRENTE 1: o Super Admin concede qualquer tela a qualquer usuário
+
+**A regra do diretor:** ele decide quem vê o quê, e não existe mais tela de configuração que ele não possa conceder.
+
+**O defeito que originou:** a tela de permissões oferecia caixa marcável dos 7 catálogos de configuração de A&S, o diretor marcava, a tela salvava **sem reclamar**, e o backend **descartava em silêncio**. É o "mostrar a porta e trancá-la" acontecendo dentro da própria tela que existe para abrir portas.
+
+**O que entrou:** os 7 catálogos perderam o `@Roles("SUPER_ADMIN")` da controller e passaram a ser guardados pelo `MenuGuard`; saíram de `MENUS_SOMENTE_SUPER_ADMIN` e de `MENUS_BLOQUEADOS_COMUM`; entraram em `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER`, senão todo MASTER ganharia sozinho e o diretor deixaria de decidir. A tela parou de guardar a régua (uma lista de DOIS códigos escrita à mão, enquanto o backend aplicava ONZE) e passou a receber a restrição do servidor, menu a menu, derivada e nunca digitada.
+
+**Medido:** a `restricaoDeConcessao` deriva das duas listas do domínio; `menu.guard.ts` intocado; os SETE menus irmãos conferidos um a um antes e depois, sem afrouxamento.
+
+**O que a auditoria pegou, e não teria sido pego por quem construiu:**
+- **Quase VETO no item 5:** `MENUS_BLOQUEADOS_COMUM` **não tinha trava de igualdade em teste nenhum**. Dava para derrubar `entradas-pandape` ou `menu-areas` daquela lista e a suíte inteira continuava verde. Fechado por um teste do `tester` escrito na mesma rodada.
+- **Auto-concessão: não existe caminho.** Cada catálogo escreve só a própria tabela; nenhum toca `menus`, `usuario_menus` ou `usuario_areas`. As duas portas da régua de permissão seguem exclusivas do SUPER_ADMIN e não são concedíveis por menu.
+- **Um teste reprovava por TEMPO, não por regra** (`vaga-status-catalogo.rbac-comportamental.spec.ts`), e continuaria vermelho depois de corrigido. Custo de importação dinâmica, com teto próprio e o motivo escrito.
+
+**Decisões do diretor registradas:** os 7 viram concedíveis; `Motivos De Reenvio` junto, sem inconsistência entre irmãos; e a lista do que **segue não concedível** é `usuarios` e `menu-areas` (as telas que CONCEDEM permissão, e conceder criaria auto-concessão), mais `diagnostico` e `entradas-pandape`, concedíveis a MASTER e não a COMUM.
+
+**Efeito que o diretor precisa saber:** conceder `as-comerciais` passa a entregar a lista de NOMES do time comercial, porque ali a leitura nunca foi separada da escrita.
+
+---
+
+### FRENTE 2: a CENTRAL DE AJUDA, manual dentro da plataforma
+
+**O pedido:** manual de uso do sistema inteiro, dentro da plataforma, com busca por texto e **prints anotados** com seta e círculo vermelhos. A fábrica captura, anota e escreve, e **atualiza o artigo na mesma entrega** quando mudar uma tela (regra §A.43 proposta, pronta para colar).
+
+#### O inventário, e por que ele DOBROU
+
+Primeiro número: 84 artigos mais 16 fichas. O diretor testou, procurou "auditoria" e perguntou de escopo: **o manual precisa cobrir cada RECURSO de cada tela**, não só como usar a tela. Ele estava certo, e a medição provou: o inventário cobria A TELA.
+
+**Número novo: 178 artigos mais 18 fichas (196 peças), 2,0x.** Não triplicou porque **320 dos 803 controles são o mesmo recurso repetido** (251 colunas ordenáveis de UM componente, 69 campos de filtro de UM). O que estava subdimensionado era o oposto do que se imaginava: **a tarefa é menor que o fluxo** (o modal de auditoria era 1 artigo e são 5 tarefas), e duas peças não estavam no inventário, entre elas a **ficha da admissão**, a tela mais aberta do sistema.
+
+**Corte das fases mudou de MÓDULO para PROFUNDIDADE:** com 196 peças, cortar por módulo entregaria um Soul ADM exaustivo e zero SouTalent por meses. Por profundidade, o manual cobre o sistema inteiro na terceira fase, raso.
+
+#### O motor de captura: o que ele prova, e as duas regras duras
+
+Anotação **ancorada no elemento**, nunca em pixel, e é isso que faz o print ser **regerado** quando a tela muda. Duas regras inegociáveis: **alvo não encontrado é falha dura** (é o detector de artigo velho; print sem a seta ensina o errado com a autoridade da casa) e **gate de dado pessoal fail-closed** antes de cada gravação.
+
+#### O que o veto de captura comprou, em duas rodadas
+
+1. **O gate lia o TEXTO da tela, e o CPF dos formulários não está no texto, está no VALOR do campo.** Ele apareceria na imagem e ficaria invisível para o filtro, em telas que o manual PRECISA ensinar.
+2. **A correção da denylist entrou no núcleo testado e NÃO entrou no arquivo que grava.** Provado executando: a mesma tela, com nome e e-mail de colega real, recusada por um caminho e **APROVADA, com zero achados**, pelo que grava. E o afrouxamento era **silencioso**, porque o campo era opcional no tipo.
+
+**Nenhum PNG foi escrito em nenhum dos dois momentos.**
+
+#### A correção de premissa que o diretor provocou, e que estava errada em nós
+
+A fábrica havia desenhado a asserção de arranque exigindo **zero linha fora do padrão sintético** em `candidatos` **e** em `usuarios`. O diretor esclareceu que **os usuários da homologação são REAIS, são o time dele testando**, e não podem sumir. Com isso, aquela trava **nunca passaria**: construímos uma proteção que, no mundo real, impedia a frente inteira.
+
+**Correção:** `candidatos` segue estrito; `usuarios` deixou de barrar o lote e passou a alimentar a **denylist**, lida do banco, que o gate procura em cada imagem. Quem entrar no time amanhã nasce protegido. Medido: a denylist pega **34 de 36**, contra 6 da régua anterior.
+
+**E o achado que nenhum mapa previa:** a barra lateral **não mostra o nome do cadastro**, mostra um nome **derivado do e-mail**. Procurar só `usuarios.nome` deixaria passar a forma que sai em TODO print.
+
+#### O falso positivo, e por que a saída fácil foi recusada
+
+O gate passou a recusar telas de CLIENTE, escolhidas por não terem pessoa. Causa: a dispensa é por igualdade inteira e o detector devolve um **prefixo** (`REDE D'OR SAO LUIZ S.A.` vira `REDE D'OR SAO LUIZ S`). Medido: remendar o regex resolve 24 de 47 e deixa 23, por causas diferentes.
+
+**A correção aprovada é mais ESTRITA que a anterior:** dispensa por **cobertura de span**, ou seja, o valor inteiro do catálogo tem de estar **ali, naquele lugar do texto**. 47 falsos positivos foram a zero, com as três provas de vazamento ainda flagrando.
+
+**E ela criava um vazamento, pego antes de virar imagem:** entrada de catálogo de UMA palavra picava nome de gente. Dos 6.117 valores, 2.873 têm uma palavra e **42 são prenome ou sobrenome do léxico** (cidades reais de SP: Santos, Oliveira, Cristina). Com elas, **192 de 192 nomes de duas palavras e 864 de 864 de três palavras eram dispensados**. Fechado com filtro de uma palavra, a **custo zero de dispensa**.
+
+#### A cobertura, medida, e a linha de base que estava errada
+
+O detector de controle órfão enumera os controles da tela e compara com o que os artigos declaram. **Foi opinião não medida que produziu o inventário de 84.**
+
+Primeira linha de base: 0 de 944. **Errada, por defeito do próprio detector:** os "466 controles de padrão" eram **444 variantes de UM controle** (opções de filtro e números de página, que são DADO). Números corretos: **495 a 500 controles ensináveis**, balde de padrão de **22 ou 23**, não 466.
+
+**Hoje: 67 cobertos (13,5%), em 37 telas. MOLDURA 19 de 19. PADRÃO 21 de 23. Zero artigo N1 mudo.**
+
+#### O veto que está de pé, e é o que impede a captura agora
+
+A asserção de população ganhou **8 colunas de pessoa** e **reprovou a base na primeira execução**:
+
+> BASE REPROVADA: **372 linhas fora do padrão sintético** em `dados_vaga_folha.gestor_bp`, `dados_vaga_folha.motivo`, `sala_espera` e `as_candidatos`.
+
+**`gestor_bp` é PII REAL DE TERCEIRO**, e não estava em barreira nenhuma: 413 dos 414 valores da homologação são **byte-idênticos à produção**, 94 carregam e-mail corporativo real de gestor de cliente, e **107 passavam pelo gate inteiro, com zero achados**.
+
+**Nenhuma captura roda até essas quatro fontes serem anonimizadas.** É decisão do diretor: é a base em que o time dele testa.
+
+
+#### Adendo ao veto: anonimizar UMA VEZ não fecha o assunto
+
+A cobertura independente apontou, ao fechar a rodada, algo que muda a decisão do diretor e que o registro acima não dizia: das quatro fontes reprovadas, **`sala_espera` e `as_candidatos` são gente que ENTRA todo dia**. Anonimizar hoje resolve hoje, e a asserção volta a reprovar no próximo cadastro, que é o pior tipo de conserto: o que parece feito e volta sozinho.
+
+As duas saídas duráveis:
+1. **anonimização recorrente** na homologação, e aí é rotina, não ato; ou
+2. **essas duas fontes virarem DENYLIST**, como `gestor_bp` já é, ou seja, deixam de barrar o lote e passam a ser procuradas em cada imagem. É o mesmo movimento que já foi feito com `usuarios` quando o diretor esclareceu que o time dele é real e permanece.
+
+**O que NÃO funciona, e fica escrito para ninguém tentar:** declarar essas pessoas na allowlist. A própria mensagem de erro do `executarCaptura` já desaconselha esse caminho para gente do time, porque allowlist é a lista do que PODE aparecer, e o que se quer aqui é o contrário.
+
+`dados_vaga_folha.gestor_bp` é caso diferente e já está resolvido no desenho: ele é asserção **e** denylist, porque é PII real de terceiro que ninguém precisa ter na homologação.
+
+#### Dois achados de produto, que valem além do manual
+
+1. **A SENHA do iFractal é desenhada em texto claro** (`esteira/page.tsx:2261-2269`, `<input>` sem `type="password"`). Duas consequências somadas: o valor aparece na imagem, e a exclusão de campo de senha **não se aplica**, porque ela casa por `type=password`. Medido: o gate aprovava com zero achados. Homologação tem 1 credencial; **produção tem 124**. A regra de rótulo para senha foi criada e recusa a imagem; **o conserto na origem é do produto**.
+2. **A conta de captura alcança 36 menus, não os 10 concedidos.** Sendo MASTER com as áreas ADM e AS, ela recebe todos os menus das áreas, e as 10 concessões só governam DOIS. Foi por isso que o motor abriu a Sala De Espera, que ninguém liberou. **Recomendação: rebaixar a COMUM com a lista nominal**, e aí as concessões voltam a significar o que dizem. É §A.23, decisão do diretor.
+
+#### Correções contra o coordenador, registradas porque mudam decisão futura
+
+- Afirmei que o tipo garantia o que ele não garante (slug duplicado, artigo sem `fontes`, rota inexistente **compilam**).
+- Deixei a mesma duplicação em três campos (`alvos`, `preparo`, `recorte`), sendo o `recorte` a **medida de privacidade** das telas que mostram gente.
+- Mandei o motor entrar como SUPER ADMIN, que é justamente quem enxerga as telas que não podem virar print.
+- Disse que a busca "achava auditoria" olhando o número e **sem ler o resultado**: o artigo era sobre Exame. O diretor leu e me corrigiu.
+- Caracterizei errado, em 3 de 4 atributos, as linhas que bloqueavam o lote.
+- Usei medição do banco como prova de invariante, com produção em zero vagas.
+- Afirmei que a conta tinha 10 menus auditados. São 36.
+
+#### O padrão que esta frente expôs três vezes, e que vale para o projeto inteiro
+
+**Dado declarado de um lado e nunca consumido do outro, com tudo verde:** o contador de pendências que o frontend nunca renderizou (§A.22), o campo de rótulos que a busca não indexava, e a denylist que não chegava ao caminho que grava. Nas três, o typecheck passava e nenhum teste falhava. **Duas delas só apareceram porque um campo virou obrigatório e o compilador obrigou alguém a reler a fixture.**
+
+---
+
+### Estado no disco, ao fim do registro
+
+- **Homologação (3120):** as duas frentes no ar. Manual em `/ajuda`, com 17 artigos (3 pilotos mais os 14 padrões), busca na página e no painel lateral, e o painel abrindo AO LADO.
+- **Prints:** 18 gravados e 2 apagados de propósito (capturaram tela VAZIA, e print vazio **parece pronto**, que é pior que print faltando).
+- **Gate:** typecheck limpo nos três projetos, `src/ajuda` com 324 testes verdes.
+- **Nada commitado**, nas duas frentes.
+
+### O que está aberto, e com quem
+
+| item | com quem |
+|---|---|
+| anonimizar as 4 fontes (372 linhas) para a captura rodar | diretor |
+| rebaixar a conta de captura a COMUM | diretor |
+| `type="password"` no iFractal (conserto de produto) | diretor, §A.26 |
+| 15º artigo de padrão, "Atualizar A Lista" | diretor |
+| validar o formato dos artigos e as duas frentes na 3120 | diretor |
+| as 10 telas que a conta não alcança (catálogos de A&S, `usuarios`, `menu-areas`) | diretor, §A.23 |
+
+### ESTADO NO DISCO AO ENCERRAR A SESSÃO (28/09/2026), e como retomar
+
+**Nada em execução.** Nenhum agente e nenhum processo em segundo plano. Último commit: `8ffb7f0` (o diário da Central De Vagas). **As duas frentes desta entrada seguem NÃO COMMITADAS**, por decisão de processo: o gatilho do commit é a validação do diretor na tela (§A.25), e ela não aconteceu.
+
+**Working tree: 58 caminhos modificados ou novos**, de TRÊS frentes distintas, e quem retomar precisa separá-las antes de commitar (§A.14, recorte nominal):
+1. **Permissões concedíveis** (os 7 catálogos, `domain/menus.ts`, os 7 admin controllers, `auth/menus.service.ts`, `ConfigMenusModal.tsx`).
+2. **Central De Ajuda** (`apps/frontend/src/ajuda/**`, `tools/ajuda/**`, `apps/frontend/public/ajuda/**`, `docs/DESENHO-CENTRAL-DE-AJUDA.md`, o menu `ajuda` em `domain/menus.ts`).
+3. **G.I / Portal**, que está parada aguardando o fornecedor (Claudio) desde antes desta sessão, com 9 arquivos em `apps/backend/src/gi` e a migration `0127` fora do `_journal.json` staged. **Não commitar junto**, como já foi feito duas vezes.
+
+**No ar:** produção (3010) e homologação (3120), os quatro serviços ativos. O manual está em `/ajuda` na 3120, com 17 artigos e **22 PNGs** gravados.
+
+**A conta de captura** é `manual.captura@homolog.local`, MASTER, senha em `/home/henrique/SENHA-HOMOLOG-MASTER-AJUDA.txt` (chmod 600, fora do repositório). Ela é sintética, criada pela fábrica sob autorização do diretor, e **não é de ninguém do time**.
+
+**Para retomar a captura**, na ordem: (1) o diretor decide as quatro fontes reprovadas (ver o adendo acima, e lembrar que anonimizar uma vez não fecha); (2) `pnpm ajuda:conferir` para ver os alvos perdidos sem gravar nada; (3) `pnpm ajuda:capturar --todos`; (4) `pnpm ajuda:cobertura` para o número. O veto de gravação está **baixado** (`GRAVACAO_VETADA = false`), mas as travas que seguram de verdade continuam: asserção de população, denylist da equipe, alvo não encontrado e lista vazia.
+
+**Quatro roteiros falham por ROTEIRO VELHO, e isso é o detector funcionando**, não defeito: apontam para botões que a tela não tem mais (`dicas-documento` "Cancelar" e "Situação da dica", `integracao-clientes` "Não exigir", `gerenciador` "Voltar ao padrão"). É exatamente a §A.43 em ação, e o conserto é corrigir roteiro e texto na mesma entrega.
+
+**Três coisas que a próxima sessão NÃO deve fazer**, porque custaram rodadas para serem fechadas:
+- afrouxar a dispensa do gate para CONTENÇÃO ou para PREFIXO (reabre o vazamento medido: 192 de 192 nomes de duas palavras dispensados);
+- declarar gente do time na allowlist para destravar o lote (é o inverso do que se quer, e a mensagem de erro do `executarCaptura` já desaconselha);
+- simplificar os stubs de `TabelaDePessoas` de volta para um ternário (foi assim que uma tabela nova passou a receber a lista errada com 28 testes verdes).
