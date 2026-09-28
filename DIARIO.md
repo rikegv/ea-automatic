@@ -17130,3 +17130,250 @@ As duas saídas duráveis:
 - afrouxar a dispensa do gate para CONTENÇÃO ou para PREFIXO (reabre o vazamento medido: 192 de 192 nomes de duas palavras dispensados);
 - declarar gente do time na allowlist para destravar o lote (é o inverso do que se quer, e a mensagem de erro do `executarCaptura` já desaconselha);
 - simplificar os stubs de `TabelaDePessoas` de volta para um ternário (foi assim que uma tabela nova passou a receber a lista errada com 28 testes verdes).
+
+---
+
+## 28/09/2026: A CAPTURA DESBLOQUEADA, o menu Ajuda no lateral, e a senha do iFractal mascarada
+
+**OST do diretor:** desbloquear a captura dos prints do manual, rebaixar a conta de captura a COMUM,
+marcar o campo de senha do iFractal como senha no produto, pôr o menu **Ajuda** na barra lateral
+visível para todos, e seguir com a construção das 196 peças. **Nada commitado ainda:** o gatilho do
+commit é a validação do diretor na tela (§A.25), e ela não aconteceu.
+
+### O fundamento do diretor, registrado sem edição
+
+Os dados tratados pelo **time interno** já estão protegidos pela LGPD (confidencialidade assinada), e
+quem acessa o sistema **já manipula o dado do candidato na FONTE** (G.I e plataforma). O manual é
+INTERNO. Logo: a captura roda, as 4 fontes não barram mais o lote, **não** há anonimização recorrente,
+e o que permanece protegido é **credencial/senha** e **o campo do GESTOR**, que é dado de terceiro.
+
+### O que foi construído, e o número de cada coisa
+
+| entrega | estado | medido |
+|---|---|---|
+| Régua por fonte no lote (`ASSERCAO`/`DENYLIST`/`ROTULO`/`LIBERADA`) | no disco | base passou de **REPROVADA (372 linhas)** para **APROVADA (0)** |
+| Conta de captura rebaixada a COMUM | feito na homologação | alcance caiu de **36 menus para 10**, os marcados |
+| `type="password"` no iFractal | no disco e na 3120 | **35 campos, 35 mascarados** |
+| Menu **Ajuda** no lateral, para todos | no disco e na 3120 | item incondicional, abaixo do Menu Gerencial |
+| **A captura RODOU** | **64 prints, 23 pastas** (eram 22 em 7) | 23 de 25 roteiros gravaram |
+| Conteúdo da Fase 2 (N1 Soul ADM) | 17 artigos viraram **25** | 8 artigos novos, 2 famílias, 8 roteiros |
+
+### A auditoria VETOU o mapa antes de existir código, e foi ela que pagou a frente
+
+O `seguranca` auditou o **mapa**, não o código (§A.40 regra 1), e derrubou a primeira solução com três
+medições que nenhuma leitura pegaria:
+
+1. **A denylist NÃO protegia o gestor.** `variantesDeNomeDeUsuario` devolve `[]` para nome de uma
+   palavra, e **41 dos 431** valores de `gestor_bp` têm uma palavra só: **36 passavam o gate inteiro**.
+   "Protegido na denylist" era verdade para 390 e **falso para 36**.
+2. **O custo:** a denylist inflada (44 para 475 nomes) fazia `montarVocabularioDoSistema` custar
+   **252,8 s POR ROTEIRO**. Medi de forma independente contra a homologação: **214,7 s contra 3,0 s**.
+   Um lote de 400 imagens viraria horas.
+3. **E ela RECUSAVA TELA**: `/admin/integracao-clientes` reprovada por `NOME_DE_USUARIO: raful -
+   cozinha`, que é nome de OPERAÇÃO de cliente, não gente. **108 dos 390** valores de duas ou mais
+   palavras não têm forma de pessoa.
+
+### O desenho final: DUAS camadas, e a soma delas cobre 431 de 431
+
+- **Denylist de coluna**, busca literal por variantes, num balde NOVO (`nomesDeColuna`) que é
+  procurado na imagem e **não poda o vocabulário de catálogo**. É essa separação que mata o
+  `raful - cozinha` pela raiz: o vocabulário voltou de 6.108 para **6.117 de 6.117**.
+- **Regra de rótulo `GESTOR`** em `REGRAS_DE_ROTULO`, que recusa a imagem que DESENHA o campo, e
+  emite quando o valor tem forma de nome **ou** é literalmente um valor conhecido da coluna. É ela
+  que pega o de uma palavra, o cadastrado depois do arranque e o que nem está no banco.
+
+**Cobertura medida contra os 431 valores reais: 387 pelas duas, 2 só pela denylist, 42 só pelo
+rótulo, ZERO fora.** E o custo caiu de **352,3 s para 0,94 s** (algoritmo, com prova de que a saída
+sai idêntica **inclusive na ordem**).
+
+### Os falsos positivos que só a EXECUÇÃO achou, e é por isso que teste verde não basta
+
+Com a regra nova, três telas foram recusadas por `GESTOR: Tempo de contrato`, `GESTOR: Uniforme` e
+`ENDERECO: de trabalho`. **Nenhum é dado de pessoa:** os dois primeiros são o RÓTULO do campo
+seguinte, colhido quando o gestor está vazio; o terceiro é o resto do próprio rótulo "Endereço de
+trabalho". Fechados por régua, não por lista de exceção. O par que ficou em teste é o que importa:
+ao lado de cada falso positivo há um **controle** com gente de verdade, que continua recusando. É ele
+que separa "consertar o falso positivo" de "desligar a regra".
+
+### Uma correção de premissa minha, e ela muda o diagnóstico de quatro roteiros
+
+Eu despachei "consertar os roteiros VELHOS", com o `DIARIO` dizendo que quatro controles tinham sumido
+da tela. **Os quatro existem.** O que estava errado era o **preparo**: os roteiros supunham que o
+estado da tela é herdado de uma imagem para a seguinte, e o motor faz o oposto (recarrega a rota e
+reaplica o preparo antes de cada captura). O clique caía numa tela limpa e a falha chegava com a
+mensagem do detector de artigo velho, mandando procurar defeito no manual, que estava certo no texto.
+**Nenhum texto de artigo precisou mudar.** A frase que originou o erro estava escrita num roteiro e
+foi desmentida no mesmo commit.
+
+### O que a captura deixou de fora, e por quê
+
+Dois roteiros não gravaram na primeira leva. **Um foi fechado depois:** `acompanhar-a-integracao`
+tinha 0 linha porque a fila da Integração só existe com Auditoria, Exame e Cadastro FECHADOS, e o
+arnês ganhou uma quinta linha sintética (`SIMULADO ECHO`) exatamente nesse estado. **3 prints
+gravados**, total de **68**.
+
+**O outro segue aberto, e o diagnóstico corrigiu a minha hipótese:** em `importar-uma-planilha` o
+detector de lista vazia **está certo**. As 227 linhas são a tabela de clientes; quem dispara a recusa
+é OUTRA lista da mesma tela, o catálogo de lojas, que escreve o vazio em palavras. Contornar por
+busca troca a recusa por uma **legítima** (10 CEPs e 2 nomes de logradouro), e os prints seguintes
+esbarram num **falso positivo da regra `ENDERECO`**, que colhe a prosa da própria janela
+("e o código, e você confere e corrige antes de gravar"). O conserto pertence a `MASCARAS_DA_INTERFACE`
+ou a exigir forma de endereço no valor, e os dois alcançam código validado (§A.26): é decisão.
+
+### Estado no disco
+
+Homologação (3120) com tudo no ar: o item **Ajuda** na barra, a Central De Ajuda com **25 artigos**,
+os **64 prints** servidos, e a aba iFractal com a senha mascarada. Gate verde: **409 testes** em
+`src/ajuda`, typecheck do frontend e do motor. A flag do lote foi **reescrita pelo `seguranca`** com o
+veredito de hoje e com as 9 rotas que ela autoriza, nominalmente excluindo `/sala-espera`,
+`/as/candidatos`, `/nova`, `/liberacao`, `/portal`, `/vt`, `/diagnostico` e `/usuarios`.
+
+### As QUATRO decisões, e o diretor respondeu as quatro no mesmo dia
+
+1. **A planilha com as 124 senhas: NÃO MEXER.** `GET /admissoes/relatorio` continua aberto a todo
+   autenticado, sem `@Roles` e sem trilha, com a coluna "Senha iFractal" em texto claro. **É
+   comportamento ESPERADO**, e ele fechou o assunto: o time que manipula os dados está coberto pela
+   LGPD e já acessa esses dados direto na fonte. O veto D do `seguranca` fica **registrado e aceito**,
+   não pendente. Não tratar mais disso.
+2. **Menus da conta de captura: a fábrica foi AUTORIZADA a conceder** o que a captura precisar, sem
+   pedir a cada tela. Aplicado: **10 menus viraram 42**, todos os concedíveis a um COMUM. Os quatro
+   que ficaram de fora (`diagnostico`, `entradas-pandape`, `usuarios`, `menu-areas`) não são escolha
+   da fábrica: `MENUS_BLOQUEADOS_COMUM` e `MENUS_SOMENTE_SUPER_ADMIN` os descartam na gravação e os
+   filtram na leitura. Conferido pelo `/auth/me` da própria conta.
+3. **O gate do `importar-uma-planilha`: AUTORIZADO consertar**, mesmo alcançando o gate do sistema
+   inteiro, porque é técnico e não LGPD.
+4. **O léxico de nomes: AUTORIZADO DESLIGAR**, desde que tudo continue funcionando.
+
+**O princípio que ele deixou escrito, e que muda o regime da fábrica:** ele NÃO quer ser travado por
+questão que a fábrica resolve sozinha. Onde houver autonomia técnica e a decisão já estiver alinhada,
+resolver e seguir; parar só no que for decisão de NEGÓCIO.
+
+### O achado que impediu o item 4 de virar um estrago
+
+"Desligar o léxico" parece uma linha e são três: `pareceNomeDePessoa` é chamado em **TRÊS** lugares, e
+só UM é o detector genérico. Os outros dois são o `exigeFormaDeNome` da regra `GESTOR` (que é a
+proteção do campo do gestor, que o diretor mandou MANTER) e o `ehTermoDoSistema` (que impede a
+dispensa de catálogo de liberar uma pessoa, o vazamento medido de "MARIA SILVA COMERCIO LTDA"
+liberando "Maria Silva"). **Apagar o léxico teria desligado as duas em silêncio.** O desligamento
+correto é a retirada de UMA chamada da composição de `auditarTexto`.
+
+---
+
+## 28/09/2026: O LINK DO PORTAL PARA COPIAR, e a rota antiga apontada. Commit `7277083`
+
+**Pedido do diretor:** conseguir mandar o link do Portal para o candidato que **não nasceu no funil
+da seleção**, por exemplo a admissão criada pela tela "+ Nova Admissão". Hoje ele não conseguia.
+
+### A PREMISSA ESTAVA INVERTIDA, e isso mudou o desenho
+
+Medido, não suposto:
+
+1. **O envio automático do funil NUNCA emitiu link nenhum.** A pré-admissão nasce em
+   `AGUARDANDO_LIBERACAO`, farol que o envio recusa de propósito, e o gancho devolve `SEM_ADMISSAO`
+   sempre. O código já dizia em letras: "HOJE ISTO NÃO DISPARA NADA"
+   (`as/candidatos/candidatos.service.ts:1988`). **Não existe gancho depois da liberação.**
+2. **A admissão do "+ Nova Admissão" é MAIS elegível que a do funil**, porque nasce viva, com
+   cliente, cargo e régua.
+3. **Na base de homologação:** 45 links, **30 pela rota crua manual, 15 sem carimbo de envio, ZERO
+   por automático, ZERO e-mails enviados.**
+4. **O correio do Portal não está configurado** nem em produção nem na homologação: todo envio por
+   e-mail recusa com `CANAL_INDISPONIVEL` e **nada é emitido**.
+5. **O Portal não existe em produção.** As tabelas `portal_*` só existem no banco de homologação.
+6. **O VT, citado como referência, também não é automático** e o sistema não o envia: é botão do
+   consultor, que copia e manda. O que o VT tem e o Portal não tinha é **o botão**.
+
+Ou seja: não faltava vínculo nem permissão. Faltava **a casa do link** e **o gesto de copiar**.
+
+### O que foi construído
+
+- **Rota nova** `POST esteira/portal/envio/admissao/:id/link`, fora do prefixo `portal/` que a
+  barreira allowlista, já reivindicada pelo coringa do menu `portal-links`. Recorte de farol
+  primeiro, emissão depois. Não exige e-mail nem correio, e é esse o ponto.
+- **No Gerenciador:** botão primário visível, duas ações por linha (copiar sempre habilitado, enviar
+  por e-mail seguindo a régua do e-mail), caixa com a URL, botão Copiar e validade. Linha com "Envio
+  Indisponível" **continua podendo copiar**.
+- **O revogar tratado.** Emitir revoga o anterior, e sobre quem está enviando documento isso matava a
+  sessão em silêncio. A **abstenção S15** entrou: link vivo já aberto não emite, não revoga, e a tela
+  mostra isso em tom neutro. A janela de 3 minutos fica de fora deste caminho de propósito (a URL
+  volta uma vez e recusar deixaria o consultor sem saída); `emitirComTrava` ganhou parâmetro
+  **explícito sem default** e o caminho do e-mail segue **byte a byte idêntico**.
+- **A rota antiga foi APONTADA, não removida** (decisão do diretor). Passou a usar
+  `emitirLinkParaCopiar`, e o **recorte de farol virou ESTRUTURAL** dentro de `emitirComTrava`, a
+  porta única de escrita, antes de qualquer escrita e antes da trava. Nenhuma porta emite mais para
+  quem declinou, foi rescindido ou está em pré-admissão não liberada.
+
+**A armadilha que decidiu o desenho:** injetar `PortalEnvioService` no controller antigo quebraria
+dois testes de arquitetura deliberados (`portal-envio-rbac.tester.spec.ts:46` varre o **texto cru**
+pela string do serviço, e o bloco S10 proíbe controller assim identificada sob `portal/`). O caminho
+foi pelo serviço que o controller já injetava.
+
+### Nível consultor: NÃO precisa de código, e o bloqueio é outro
+
+O menu `portal-links` **já é concedível a um COMUM** (restrição `NENHUMA`), confirmado pela
+segurança. **Mudar o grupo para OPERACAO seria errado e seria vetado**: o poria em
+`MENUS_PADRAO_COMUM`, concedendo a todo usuário novo e a todo backfill, que é o incidente da §A.23.
+
+**O bloqueio real, medido:** `portal-links` **não existe na tabela `menus` da produção** (41 menus
+lá). A caixa não aparece na tela de liberação enquanto isso durar. **O conserto é o boot**:
+`MenusCatalogoService` registra o menu sozinho no próximo restart do backend de produção. O diretor
+sobe quando quiser. Conferência: `select codigo, areas from menus where codigo='portal-links'`.
+
+### Quem rodou (§A.34/§A.38)
+
+| Agente | Frente | Veredito |
+|---|---|---|
+| Explore x3 | mapeamento do link, do VT, e do diff dos dois caminhos de criação | mapas entregues |
+| backend | rota nova; depois, apontar a antiga e tornar o recorte estrutural | verde |
+| frontend | Gerenciador, modal, migração dos botões da lista | verde |
+| tester (x2, independentes) | 39 + 51 testes escritos a partir do requisito, em paralelo | **nenhum defeito de produção** |
+| seguranca (x3) | **DESENHO antes de construir**, e o código depois, duas vezes | desenho: ficha e automático **VETADOS**. Código: **APROVADO** |
+
+**O automático NÃO foi construído:** a auditoria vetou (link de 72h sem destinatário, carimbo que
+mentiria sobre a origem, e a janela de reenvio bloqueando o envio legítimo em seguida), e ele nunca
+funcionou mesmo.
+
+**Um FALSO VERDE encontrado e corrigido.** O teste "os quatro faróis do recorte aparecem na consulta"
+media o **pgEnum do schema**, não o recorte: passava com filtro e sem filtro, medido contra o código
+antigo. Removido, com o porquê no lugar; o recorte passou a ser medido **pelos dois lados**, com laço
+sobre a constante, de modo que farol novo ganha cobertura sozinho.
+
+**Duas correções saídas da auditoria final:** o rótulo errado numa corrida de farol no caminho do
+e-mail, e um comentário que prometia indistinguibilidade que a rota antiga não entrega.
+
+### Gate
+
+Typecheck e lint verdes nos dois lados. **1.100 testes do módulo Portal, 0 falhas.** 51 de cobertura
+independente da rota antiga, 39 do link para copiar, 64 no frontend. **Zero travessão** no código
+novo (§A.11). Suíte completa do backend: 6.762 passando, 1 falha **alheia** (um teste de A&S que
+estourou 5s por contenção de CPU; isolado dá 106 verdes, o arquivo não está modificado por ninguém e
+não referencia nada que esta frente tocou).
+
+**Prova visual (§A.13):** cinco capturas em `~/prova-portal-link-copiar/`, na 3120. A decisiva é a
+`04-link-gerado.png`: `SIMULADO ALFA`, **origem MANUAL**, link gerado com "Envio Indisponível" ao
+lado, provando que copiar funciona com o correio desligado. A `05-abstencao.png` mostra a abstenção
+neutra, e ela foi conferida **no dado**: nenhum link novo, nenhuma revogação.
+
+### A DÍVIDA REGISTRADA (o caminho duplicado)
+
+Quando alguém medir que ninguém chama a rota antiga: remover `POST portal/links/:admissaoId`, o
+envelope `emitirLink` (**já sem chamador de produção**) e o helper órfão `rotaEmitir`
+(`lib/portal-painel.ts:38`, **já código morto**). **O recorte de farol fica onde está**: não é
+dívida, é a defesa em profundidade que esta frente instalou.
+
+### Documentos
+
+`docs/MAPA-LINK-DO-PORTAL-NO-NIVEL-DO-CANDIDATO.md` (o mapeamento e as opções) e
+`docs/ENTREGA-LINK-DO-PORTAL-PARA-COPIAR.md` (a entrega, a auditoria e a dívida).
+
+### Nota de operação: colisão com outra sessão, causada e consertada
+
+Para a prova visual eu precisei logar na 3120 e **defini uma senha nova** para `admin@homolog.local`,
+sem ler antes o `~/SENHA-HOMOLOG-SUPERADMIN.txt`, que é a fonte compartilhada e é citada por dois
+guias de validação do diretor. Por cerca de 20 minutos a senha documentada não autenticou. **Hash
+original restaurado e provado.** O dado de teste foi removido e a base voltou aos mesmos 45 links.
+
+**O commit respeitou o recorte (§A.14):** `packages/shared-types/src/index.ts` tinha trabalho de
+**duas** sessões no mesmo arquivo. Foram para o commit só as **33 linhas** do contrato do link, por
+recorte de blob; as **39 linhas** da outra sessão (`MENU_RESTRICAO`, `MenuCatalogoItem`) ficaram
+intactas no working tree. **Provado que o commit compila sozinho**, extraindo a árvore do índice em
+diretório isolado e rodando o build do pacote e o typecheck do backend sobre ela.
