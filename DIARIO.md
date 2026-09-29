@@ -18112,3 +18112,24 @@ depois (0 de 0), e o `seguranca` provou que ela não toca `admissoes`, `candidat
   fail-closed, mas as duas variáveis precisam ser preenchidas **antes** de o Portal ficar público.
 - **Os 98 prints da Ajuda são servidos sem autenticação** (`public/ajuda/`, 49 MB). Conteúdo
   sintético e provado, mas expõe estrutura de interface e nome de cliente. Decisão do diretor.
+
+### O ACHADO QUE A LISTA DA OST NÃO PREVIA: O `ai-service` ESTAVA DEFASADO
+
+A OST mandava trocar "os serviços", e a lista prática era backend e frontend. **Faltava um.** O
+`ea-ai-service` roda do checkout `ea-automatic` (não de release), então o código dele já estava certo
+no disco, mas **o processo era de 01/09** e o código do Portal e da importação por IA é de 25/09:
+nunca foi carregado. Medido pela API, não deduzido: `GET /openapi.json` na 8000 devolvia **20 rotas**
+sem `/portal/ler` nem `/planilha/mapear-colunas-candidato`, e um `POST` nessa segunda respondia
+**404**. Publicar sem reiniciá-lo teria deixado a **importação de candidatos por IA** (`023448d`, que
+a OST lista como parte da subida) quebrada em produção, com o código no ar e a rota inexistente.
+
+Conferido antes de reiniciar que `pyproject.toml` e `uv.lock` **não mudaram** (o serviço sobe com
+`uv run --no-sync`, então dependência nova quebraria o boot). Reiniciado: **22 rotas**, as duas
+presentes. A lição: **serviço que roda do checkout não se atualiza com `git pull`**, e "o código está
+na main" não é o mesmo que "o processo carregou o código".
+
+**Junto, uma segunda pendência que apareceu na mesma medição:** o leitor de documento do Portal pela
+IA nasce **inerte por configuração** (`PORTAL_LEITOR_URL` e `PORTAL_LEITOR_TOKEN` ausentes do `.env`
+de produção). O serviço isolado (`ea-portal-leitor`, 8020) existe, responde e serve `/portal/ler`,
+mas não está ligado ao backend. Ligar é decisão do diretor, não da fábrica: é IA lendo documento de
+candidato.
