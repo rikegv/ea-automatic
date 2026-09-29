@@ -90,7 +90,12 @@ describe("REQ 7 (estrutural): o controller usa a admissao da SESSAO e so passa o
   });
 
   it("a rota e protegida pelo guard de sessao do portal", () => {
-    expect(CTRL).toMatch(/@UseGuards\(PortalSessaoGuard\)/);
+    // O `PortalSessaoGuard` continua sendo quem AUTORIZA, e a asserção deixou de exigir que ele
+    // seja o único da lista: o limitador de ritmo entrou ANTES dele (veto 5 da auditoria do
+    // limitador), porque esta rota é alcançável sem credencial e o `ThrottlerGuard` global conta
+    // antes de o guard de sessão recusar. A régua deste teste não mudou: sem o guard de sessão,
+    // vermelho.
+    expect(CTRL).toMatch(/@UseGuards\((?:[A-Za-z]+,\s*)*PortalSessaoGuard\)/);
     expect(CTRL).toMatch(/@Post\("termo"\)/);
   });
 });

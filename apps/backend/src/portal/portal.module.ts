@@ -21,6 +21,8 @@ import { PortalPedidosAjudaService } from "./portal-pedidos-ajuda.service";
 import { PortalLeitorService } from "./portal-leitor.service";
 import { PortalPendenciasController } from "./portal-pendencias.controller";
 import { PortalPendenciasService } from "./portal-pendencias.service";
+import { PortalRitmoContadores } from "./portal-ritmo.contadores";
+import { PortalRitmoGuard, PortalRitmoSessaoGuard } from "./portal-ritmo.guard";
 import { PortalSessaoGuard } from "./portal-sessao.guard";
 import { PortalTermoController } from "./portal-termo.controller";
 import { PortalTermoService } from "./portal-termo.service";
@@ -143,6 +145,16 @@ import { VtLinkModule } from "../vt-coleta/vt-link.module";
     PortalPedidosAjudaService,
     PortalTrilhaService,
     PortalPendenciasService,
+    // O LIMITE DE RITMO DAS ONZE ROTAS DO CANDIDATO (veto 2 do mapa de acesso público, e veto 5 da
+    // auditoria do limitador). Guards de ROTA, e não globais: os baldes são próprios e não encostam
+    // no `ThrottlerGuard` do resto do sistema. DOIS perfis porque o uso legítimo é diferente: as
+    // cinco anônimas e as seis com sessão, que são alcançáveis SEM credencial e por isso consomem
+    // cota antes de qualquer guard recusar. Ver o cabeçalho da classe.
+    PortalRitmoGuard,
+    PortalRitmoSessaoGuard,
+    // Os contadores do limitador: quantas derivações de IP deram certo, por que as outras não
+    // deram, e quantas recusas por regra. §A.6: inteiros e rótulos técnicos, nenhum endereço.
+    PortalRitmoContadores,
     PortalSessaoGuard,
     // GRAVAÇÃO do aceite do termo de privacidade (bug 1). Escreve `portal_termo_aceite` (PII-free,
     // sem TTL); é o único ponto de escrita dessa tabela.

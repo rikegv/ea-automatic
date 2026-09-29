@@ -1,8 +1,10 @@
 import { Body, Controller, Post, Req, Res, UseGuards } from "@nestjs/common";
 import type { Response } from "express";
+import { SkipThrottle } from "@nestjs/throttler";
 import { Public } from "../auth/decorators";
 import { GravarDadosGiDto } from "./portal.dto";
 import { PortalDadosGiService } from "./portal-gi-gravacao.service";
+import { PortalRitmoSessaoGuard } from "./portal-ritmo.guard";
 import { PortalSessaoGuard, type RequestComPortal } from "./portal-sessao.guard";
 
 /**
@@ -19,6 +21,11 @@ import { PortalSessaoGuard, type RequestComPortal } from "./portal-sessao.guard"
  * um `admissaoId` no corpo deixaria um link válido gravar dado na admissão de OUTRA pessoa. A
  * admissão vem do `req.portal`, escrito pelo guard a partir do bilhete assinado, e de lugar nenhum
  * mais.
+ *
+ * LIMITE DE RITMO: `@SkipThrottle()` mais `PortalRitmoSessaoGuard`, ANTES do guard de sessão. Esta
+ * rota está na allowlist da barreira e é ALCANÇÁVEL SEM CREDENCIAL, e o `ThrottlerGuard` global
+ * conta ANTES de o guard de sessão recusar: sem isto, um laço aqui esgotava o balde `default` e
+ * devolvia 429 aos consultores (veto 5 da auditoria do limitador).
  */
 @Controller("portal")
 export class PortalDadosGiController {
@@ -26,7 +33,8 @@ export class PortalDadosGiController {
 
   @Post("dados-gi")
   @Public()
-  @UseGuards(PortalSessaoGuard)
+  @SkipThrottle()
+  @UseGuards(PortalRitmoSessaoGuard, PortalSessaoGuard)
   gravar(
     @Req() req: RequestComPortal,
     @Body() dto: GravarDadosGiDto,

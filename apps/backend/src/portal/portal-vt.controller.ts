@@ -9,9 +9,11 @@ import {
   UseGuards,
 } from "@nestjs/common";
 import type { Response } from "express";
+import { SkipThrottle } from "@nestjs/throttler";
 import { Public } from "../auth/decorators";
 import { VtLinkService } from "../vt-coleta/vt-link.service";
 import { PortalLinkVivoService } from "./portal-link-vivo.service";
+import { PortalRitmoSessaoGuard } from "./portal-ritmo.guard";
 import { PortalSessaoGuard, type RequestComPortal } from "./portal-sessao.guard";
 import { PortalTrilhaService } from "./portal-trilha.service";
 
@@ -130,6 +132,11 @@ export interface LinkDoVtParaOCandidato {
  * ║ candidato daquela admissão. Quem chega aqui já provou CPF e data de nascimento em            ║
  * ║ `portal/identificar`, então o token não lhe conta nada que ele já não soubesse.              ║
  * ╚══════════════════════════════════════════════════════════════════════════════════════════════╝
+ *
+ * LIMITE DE RITMO: `@SkipThrottle()` mais `PortalRitmoSessaoGuard`, ANTES do guard de sessão. Esta
+ * rota está na allowlist da barreira e é ALCANÇÁVEL SEM CREDENCIAL, e o `ThrottlerGuard` global
+ * conta ANTES de o guard de sessão recusar: sem isto, um laço aqui esgotava o balde `default` e
+ * devolvia 429 aos consultores (veto 5 da auditoria do limitador).
  */
 @Controller("portal")
 export class PortalVtController {
@@ -166,7 +173,8 @@ export class PortalVtController {
    */
   @Get("vt-link")
   @Public()
-  @UseGuards(PortalSessaoGuard)
+  @SkipThrottle()
+  @UseGuards(PortalRitmoSessaoGuard, PortalSessaoGuard)
   async link(
     @Req() req: RequestComPortal,
     @Res({ passthrough: true }) res: Response,

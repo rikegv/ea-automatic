@@ -1,7 +1,9 @@
 import { Controller, Get, Req, Res, UseGuards } from "@nestjs/common";
 import type { Response } from "express";
+import { SkipThrottle } from "@nestjs/throttler";
 import { Public } from "../auth/decorators";
 import { PortalDocumentosService } from "./portal-documentos.service";
+import { PortalRitmoSessaoGuard } from "./portal-ritmo.guard";
 import { PortalSessaoGuard, type RequestComPortal } from "./portal-sessao.guard";
 
 /**
@@ -17,6 +19,11 @@ import { PortalSessaoGuard, type RequestComPortal } from "./portal-sessao.guard"
  * ELA É A PRIMEIRA ROTA DO PORTAL QUE DEVOLVE DADO, e é por isso que o cabeçalho de cache está
  * aqui: as outras duas recebem. A resposta atravessa o proxy do Next e a barreira externa, e
  * qualquer um dos dois guardaria a lista de documentos de uma pessoa se não for proibido.
+ *
+ * LIMITE DE RITMO: `@SkipThrottle()` mais `PortalRitmoSessaoGuard`, ANTES do guard de sessão. Esta
+ * rota está na allowlist da barreira e é ALCANÇÁVEL SEM CREDENCIAL, e o `ThrottlerGuard` global
+ * conta ANTES de o guard de sessão recusar: sem isto, um laço aqui esgotava o balde `default` e
+ * devolvia 429 aos consultores (veto 5 da auditoria do limitador).
  */
 @Controller("portal")
 export class PortalDocumentosController {
@@ -32,7 +39,8 @@ export class PortalDocumentosController {
    */
   @Get("documentos")
   @Public()
-  @UseGuards(PortalSessaoGuard)
+  @SkipThrottle()
+  @UseGuards(PortalRitmoSessaoGuard, PortalSessaoGuard)
   trilha(@Req() req: RequestComPortal, @Res({ passthrough: true }) res: Response) {
     // Lista de documentos de candidato não fica em cache de proxy nem de disco do navegador (§A.6),
     // mesmo tratamento do arquivo servido pela reauditoria.

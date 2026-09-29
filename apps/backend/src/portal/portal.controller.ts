@@ -1,4 +1,5 @@
 import { Body, Controller, Post, Req, UseGuards } from "@nestjs/common";
+import { SkipThrottle } from "@nestjs/throttler";
 import { Public } from "../auth/decorators";
 import {
   ConfirmarEnvioDto,
@@ -8,6 +9,7 @@ import {
 } from "./portal.dto";
 import { PortalIdentidadeService } from "./portal-identidade.service";
 import { PortalCredencialService } from "./portal-credencial.service";
+import { PortalRitmoGuard, PortalRitmoSessaoGuard } from "./portal-ritmo.guard";
 import { PortalSessaoGuard, type RequestComPortal } from "./portal-sessao.guard";
 
 /**
@@ -21,13 +23,27 @@ import { PortalSessaoGuard, type RequestComPortal } from "./portal-sessao.guard"
  * emitir credencial é a mais sensível de todas, porque é ela que autoriza escrita no nosso
  * armazenamento. Rota nova não avisada ao Fernando quebra em produção, em silêncio.
  *
- * SEM `@Throttle` DE ROTA, pelo mesmo motivo medido em `vt.controller.ts`: o balde global conta por
- * `req.ip`, o backend escuta em loopback atrás do proxy e TODO mundo chega como `127.0.0.1`, então
- * um `@Throttle` aqui não seria "por IP", seria um balde ÚNICO que derruba o portal inteiro. O
- * limite de ritmo de verdade é POR LINK e vive na emissão (`LIMITES_PORTAL.EMISSOES_POR_JANELA`);
- * o limite por IP é da barreira, que é quem enxerga o IP real. É o furo V1, que continua aberto e
- * é veto de saída: o balde global do portal precisa ser separado do da operação interna antes de
- * isto ir ao ar.
+ * AS QUATRO ROTAS DESTA CLASSE TÊM LIMITE DE RITMO PRÓPRIO, e o `@SkipThrottle()` que acompanha
+ * cada uma é metade da correção: elas SAEM do balde global (`req.ip`, 120 por minuto, compartilhado
+ * com a operação interna) e passam a contar num balde PRÓPRIO. É assim que um laço contra o Portal
+ * deixa de devolver 429 na cara dos consultores, que era o furo V1 e veto de saída.
+ *
+ * ┌─ E `credencial` E `confirmar` ENTRARAM TAMBÉM, o que a primeira versão desta frente errou ──┐
+ * │ A conclusão de que "quem alcança essas duas já passou pela identificação" É FALSA para o    │
+ * │ efeito de COTA, e a auditoria pegou: o `ThrottlerGuard` é o PRIMEIRO APP_GUARD              │
+ * │ (`app.module.ts`), então ele CONTA ANTES de o `PortalSessaoGuard` recusar. Um laço contra    │
+ * │ `POST portal/credencial` SEM token nenhum esgotava o balde `default` e devolvia 429 aos     │
+ * │ consultores. O guard de sessão protege o DADO; ele não protege a COTA.                      │
+ * │                                                                                             │
+ * │ ELAS USAM O PERFIL COM SESSÃO (`PortalRitmoSessaoGuard`), com números maiores, porque o uso  │
+ * │ legítimo é outro: o domínio já permite 25 arquivos por link e 10 emissões por minuto.       │
+ * │ A ORDEM DOS GUARDS IMPORTA: o de ritmo vem ANTES do de sessão, senão o trabalho de verificar │
+ * │ o bilhete aconteceria antes do freio, que é o que o freio existe para evitar.                │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * O limite de ritmo POR LINK continua onde estava (`LIMITES_PORTAL.EMISSOES_POR_JANELA`), e os
+ * tetos por CPF e por link da identificação também: o guard é o freio de VOLUME por endereço, não
+ * o substituto de nenhum deles.
  */
 @Controller("portal")
 export class PortalController {
@@ -46,12 +62,13 @@ export class PortalController {
    * (o vhost da barreira) precisa estar lá. É o mesmo caminho por onde `POST /vt/identificar`
    * passa hoje, e é pendência de INFRA, não de código.
    *
-   * SEM `@Throttle` de rota, pelo mesmo motivo medido no `vt.controller.ts` e repetido no
-   * cabeçalho desta classe: o balde global conta por `req.ip`, e todo mundo chega como
-   * `127.0.0.1`. O limite de verdade é POR LINK e POR CPF, e vive no serviço.
+   * O RITMO POR IP É DO `PortalRitmoGuard` (balde próprio, fora do global). O limite que DECIDE
+   * sobre esta rota continua sendo o do serviço, POR LINK e POR CPF: o guard só contém volume.
    */
   @Post("identificar")
   @Public()
+  @SkipThrottle()
+  @UseGuards(PortalRitmoGuard)
   identificar(@Req() req: RequestComPortal, @Body() dto: IdentificarNoPortalDto) {
     return this.identidade.identificar({
       linkToken: dto.linkToken,
@@ -71,6 +88,8 @@ export class PortalController {
    */
   @Post("recuperacao")
   @Public()
+  @SkipThrottle()
+  @UseGuards(PortalRitmoGuard)
   recuperacao(@Req() req: RequestComPortal, @Body() dto: RecuperacaoNoPortalDto) {
     return this.identidade.recuperacao({
       linkToken: dto.linkToken,
@@ -84,7 +103,8 @@ export class PortalController {
    */
   @Post("credencial")
   @Public()
-  @UseGuards(PortalSessaoGuard)
+  @SkipThrottle()
+  @UseGuards(PortalRitmoSessaoGuard, PortalSessaoGuard)
   pedirCredencial(@Req() req: RequestComPortal, @Body() dto: PedirCredencialDto) {
     return this.credenciais.emitir({
       // A admissão e o link vêm do TOKEN, nunca do corpo: o candidato não escolhe por quem envia
@@ -102,7 +122,8 @@ export class PortalController {
   /** Confirma a chegada pelo lado do servidor e dispara a leitura. A palavra do cliente não vale. */
   @Post("confirmar")
   @Public()
-  @UseGuards(PortalSessaoGuard)
+  @SkipThrottle()
+  @UseGuards(PortalRitmoSessaoGuard, PortalSessaoGuard)
   confirmar(@Req() req: RequestComPortal, @Body() dto: ConfirmarEnvioDto) {
     return this.credenciais.confirmar({
       admissaoId: req.portal!.admissaoId,
