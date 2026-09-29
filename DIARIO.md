@@ -17840,3 +17840,99 @@ lint limpos.** A migration **0135 foi aplicada na homologação**. A integraçã
 **O token ficou GUARDADO na VM** (`chmod 600`, fora do repositório), por regra nova do diretor: a
 fábrica não expurga credencial por conta própria, **pergunta antes**. Ele já havia subido o token
 três vezes porque a fábrica dava `shred` ao fim de cada rodada.
+
+---
+
+## 29/09/2026: GI, o segundo disparo, o contrato real achado no Swagger e os 4 nomes de campo errados
+
+**OST do diretor, em três tempos:** provar o sincronizador novo do fornecedor com uma admissão
+sintética nova; depois levantar o que falta para o envio completo; depois corrigir os nomes de campo
+e commitar a frente.
+
+### O disparo: HTTP 400 duas vezes, e o motivo era nosso
+
+Criada a admissão sintética JOAO SIMULADO SEGUNDO (CPF 99900000773, faixa 999 com dígito válido).
+`seguranca` **VETOU o desenho inicial** e exigiu quatro condições, todas implementadas: guarda de
+alvo sintético no disparador (a homologação tem 2.689 candidatos REAIS, e um id errado criaria PII
+real na produção do fornecedor, sem desfazer), checagem de colisão de CPF pelo `GetAll` antes do
+POST, proibição de retentativa cega e higiene de stdout. A guarda foi provada recusando um alvo real.
+
+Duas recusas HTTP 400. O `seguranca` autorizou **um** POST de diagnóstico, instrumentando a leitura
+na porta única (tee no `fetch`, não segunda porta). O corpo, mascarado: `Naturalidade: máximo 2
+caracteres`, `Nacionalidade: máximo 3 caracteres`. **O GI quer CÓDIGO e o EA mandava texto livre.**
+Corrigido para `SP` e campo nulo (o catálogo `Nacionalidade/GetAll` dá 404, e nunca se inventa
+código); o GI preencheu `010` sozinho, que é o código do Brasil lá, medido e não deduzido.
+
+Terceiro disparo: **GI_ENVIADO, idRegistroWeb 17**, e o diretor confirmou que apareceu na tela.
+
+### O achado que vale mais que o teste: 200 não prova que gravou
+
+Lido de volta, o registro 17 tinha **12 dos 32 campos** enviados. Não entraram RG, CTPS (voltou
+`00000000`), endereço inteiro (CEP voltou `00000-000`), filiação, naturalidade e **raça, enviada com
+o código certo**. `grauInstrucao` foi `7` e voltou `4`. `criarFuncionarioSelecao` só olha `res.ok`:
+mesma família da §A.33, o sistema declara sucesso sem o efeito ter acontecido.
+
+### DUAS CORREÇÕES DE PREMISSA MINHAS, registradas porque custaram rodada
+
+1. **"A pré-admissão está vazia" descrevia a JANELA, não a tabela.** O `GetAll` mostra só o que ainda
+   não foi processado: os registros 16 e 17 apareceram e sumiram depois de promovidos. O diretor
+   apontou a contradição (a ALESSANDRA, com documentos completos), e ele estava certo.
+2. **"O contrato do GI não é público" estava ERRADO.** Li `/swagger/swagger-initializer.js`, que é o
+   arquivo de fábrica do Swagger UI e aponta para o petstore. A página do GI carrega
+   **`/swagger/index.js`**, e o spec está em **`https://apigeral.gi.app.br/openapi/v1.json`**
+   (OpenAPI 3.1.1, 443 rotas). O suporte (Gilberto Rodrigues) apontou o caminho.
+
+### O contrato real, e os 4 nomes errados
+
+O `Add` declara **415 propriedades, nenhuma `required`**, então **"o Add grava menos por desenho" é
+falso**. Dos 43 campos enviados, 39 tinham o nome exato e **4 não existiam**:
+
+| antes | agora | por quê |
+|---|---|---|
+| `ufCTPS` | `ufExpedicao` | `ufCTPS` não existe no contrato |
+| `numeroResid` | `nroEndereco` | é **int32 NÃO-anulável**, padrão de dígitos, default `0` |
+| `complementoResid` | `cplEndereco` | máximo **30** caracteres |
+| `bancoNome` | **removido** | o GI guarda só o código do banco |
+
+**Decisões do diretor:** o `nroEndereco` sai como número ("100-A" vira `100`, "S/N" vira `0`, o
+sufixo se perde e é limite do campo do GI); e o `cplEndereco` é **cortado em 30**, porque acima disso
+o GI recusa o envio INTEIRO com 400, e perder o final do complemento é melhor que perder a admissão.
+
+### Outros achados do levantamento, que NÃO foram construídos (§A.31)
+
+- **`reservistaCategoria` é campo morto:** coletada e gravada, nunca lida nem enviada.
+- **A data da CTPS lida pela IA é descartada em silêncio:** a extração emite `ctpsDataExpedicao` e a
+  allowlist só aceita `ctpsData`, e nada renomeia no meio.
+- **Falta coletar a cidade de expedição do RG**, que não existe em camada nenhuma.
+- **Raça, grau de instrução e estado civil JÁ são coletados como código** no Portal: a premissa de
+  que faltava coletar raça era falsa.
+- **Cliente, salário, data de admissão e vínculo existem no EA e não são enviados por decisão de
+  escopo** do próprio diretor (16/09), não por defeito. O contrato suporta todos.
+
+### O caminho do Pandapé NÃO é atalho, e o fornecedor confirmou
+
+O Pandapé não usa a API pública: posta em `giinterno.gi.app.br/WebhooksPandaPe/Soulan/...`, um
+receptor privado. O Gilberto explicou o resto: **o webhook só sinaliza, e o GI VAI BUSCAR** os dados
+no Pandapé. É um importador deles, que só existe para o Pandapé. Não há canal a copiar.
+
+### A grade de leitura do GI ganhou a terceira dimensão
+
+`ler()` aceitava `params` e **não os enviava**: toda leitura foi feita sem filtro. Corrigido com
+autorização do `seguranca`, e a validação ficou DENTRO da barreira única. O furo que ele apontou é
+melhor que o meu: não era `$filter`, era **`$expand`**, que por navegação alcançaria `Funcionario`
+(a folha, na denylist) sem a URL deixar de dizer `FuncionarioSelecao`. Allowlist de 4 chaves,
+bloqueio redundante, varredura de id proibida. **Autoteste: 50 bloqueios e 29 leituras, verde.**
+
+### Limitação a registrar
+
+O Gilberto disse para conferir o gravado pelo `GetAll`. **Isso não funciona depois que o registro é
+processado:** `GetAll` volta a zero e `Get?Id=` responde 204. Sem leitura em `Funcionario` (que ele
+recusou liberar), não há como auditar um registro depois da matrícula.
+
+### Estado e pendências
+
+Enviados ao Gilberto o payload do registro 17 e quatro perguntas: quais campos o `Add` exige para
+persistir documentos e endereço (hipótese: `codigoEmpresa`/`codigoFilial`/`codigoCliente`, que não
+mandamos); se o caminho é `Add` ou `Add_Update`; por que três campos voltaram diferentes; e como
+conferir depois da matrícula. **Nenhum novo envio até a resposta dele (§A.27).**
+

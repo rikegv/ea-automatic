@@ -22,15 +22,14 @@ export class EnviarParaGiController {
   constructor(private readonly enviarService: EnviarParaGiService) {}
 
   /**
-   * Dispara o envio da admissão ao GI. Hoje é NO-OP (o serviço nasce inerte), e o `@CurrentUser()`
-   * fica aqui porque a peça 3 vai gravar autor do disparo na trilha do GI.
+   * Dispara o envio manual da admissão ao GI. É o ÚNICO caminho que chega perto do envio real (o
+   * automático da auditoria é estruturalmente no-op), e ainda assim trava por `GI_DISPARO_ARMADO`,
+   * DESLIGADA nesta entrega: hoje monta o payload e devolve `GI_MONTADO_NAO_DISPARADO` sem criar nada
+   * no GI. O `@CurrentUser()` é o autor do disparo, para a trilha do GI da peça 3.
    */
   @Post("admissao/:admissaoId/enviar")
   @Roles("MASTER", "SUPER_ADMIN")
-  enviar(
-    @Param("admissaoId", ParseUUIDPipe) admissaoId: string,
-    @CurrentUser() _user: AuthUser,
-  ) {
-    return this.enviarService.enviar(admissaoId);
+  enviar(@Param("admissaoId", ParseUUIDPipe) admissaoId: string, @CurrentUser() user: AuthUser) {
+    return this.enviarService.enviarManual(admissaoId, user.id);
   }
 }

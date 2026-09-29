@@ -149,8 +149,11 @@ export interface PessoaParaGi {
 
 /**
  * O payload da pré-admissão do GI (`FuncionarioSelecao`), SÓ com campos de pessoa. Os nomes espelham
- * os campos do GI (`docs/GI-DADOS-DA-PESSOA-PARA-VALIDAR.md`). `codigoBcoFolha`/`codigoCidadeResid`
- * NÃO estão aqui: são de/para de código, da peça 3; aqui vai o NOME.
+ * os campos do GI (`docs/GI-DADOS-DA-PESSOA-PARA-VALIDAR.md`).
+ *
+ * PEÇA 3: o de/para de código entrou. `cidadeResid` guarda o NOME (o que o EA tem como
+ * texto), e `codigoCidadeResid`/`codigoBcoFolha`/`codigoBcoPagar` guardam o CÓDIGO do GI, resolvido
+ * por um de/para injetado. Sem de/para, o código nasce NULO (fail-closed: nunca se INVENTA código).
  */
 export interface FuncionarioSelecao {
   nome: string | null;
@@ -173,9 +176,17 @@ export interface FuncionarioSelecao {
   dtExpedicaoRG: string | null;
   carteiraTrabalho: string | null;
   serie: string | null;
-  ufCTPS: string | null;
+  /**
+   * UF de expedição da CTPS. O campo do GI é `ufExpedicao`, NÃO `ufCTPS`: `ufCTPS` não existe no
+   * contrato (conferido no `openapi/v1.json` do GI, 29/09/2026) e era ignorado no envio.
+   */
+  ufExpedicao: string | null;
   dtExpedicaoCTPS: string | null;
-  pisNit: string | null;
+  /**
+   * O campo do PIS no GI é `pis` (contrato confirmado 25/09/2026), NÃO `pisNit` como constava antes.
+   * OPCIONAL: veio vazio no registro real; a ausência de PIS não bloqueia o envio.
+   */
+  pis: string | null;
   tituloEleitor: string | null;
   titEleZona: string | null;
   titEleSecao: string | null;
@@ -184,22 +195,90 @@ export interface FuncionarioSelecao {
   cnhDataEmissao: string | null;
   dataVectoHabilitacao: string | null;
   cepResid: string | null;
+  /**
+   * Logradouro. `tipoLogradouro` NÃO existe como campo no GI: o prefixo da via (Rua, Avenida) vive
+   * concatenado AQUI. O EA coleta o logradouro já por extenso, então o tipo entra por construção no
+   * texto; se um dia o tipo vier separado, é aqui que ele se concatena.
+   */
   enderecoResid: string | null;
-  numeroResid: string | null;
-  complementoResid: string | null;
+  /**
+   * Número do endereço. O campo do GI é `nroEndereco`, e é **INTEIRO não-anulável** (`int32`, padrão
+   * `^-?(?:0|[1-9]\d*)$`, default `0`). Por isso o valor é normalizado para dígitos e a ausência vai
+   * como `0`, nunca `null`: `null` viola o contrato. Número não-numérico ("S/N", "100-A") perde o
+   * sufixo, que é o limite do campo do GI, não escolha nossa.
+   */
+  nroEndereco: number;
+  /**
+   * Complemento do endereço. O campo do GI é `cplEndereco`, NÃO `complementoResid`, e tem **máximo de
+   * 30 caracteres**. O valor é CORTADO em 30 antes de sair: acima disso o GI recusa o envio inteiro
+   * com HTTP 400, e perder o final do complemento é melhor que perder a admissão. Decisão do diretor.
+   */
+  cplEndereco: string | null;
   bairroResid: string | null;
-  /** NOME da cidade; o `codigoCidadeResid` é peça 3. */
+  /** NOME da cidade (o que o EA guarda). */
   cidadeResid: string | null;
   ufResid: string | null;
-  /** NOME do banco; o `codigoBcoFolha`/`codigoBcoPagar` é peça 3. */
-  bancoNome: string | null;
+  /** CÓDIGO da cidade no GI (de/para). NULO quando o de/para não resolve: não se inventa código. */
+  codigoCidadeResid: string | null;
+  /** CÓDIGO do banco no GI (de/para catálogo `Banco`). NULO quando não resolve. */
+  codigoBcoFolha: string | null;
+  /** CÓDIGO do banco pagador no GI. Mesmo de/para do `codigoBcoFolha`. NULO quando não resolve. */
+  codigoBcoPagar: string | null;
   agencia: string | null;
   contaCorrente: string | null;
 }
 
+/**
+ * O DE/PARA de código do GI, INJETADO. Traduz o que o EA guarda como TEXTO (nome da cidade, nome do
+ * banco) no CÓDIGO que o GI espera. Materializado a partir dos catálogos do GI (`Banco`, municípios),
+ * nunca inventado: quando não há correspondência, devolve `null` e o campo de código fica vazio.
+ */
+export interface DeParaGi {
+  codigoCidade(nome: string | null | undefined, uf: string | null | undefined): string | null;
+  codigoBanco(nome: string | null | undefined): string | null;
+}
+
+/** De/para VAZIO (fail-closed): todo código é nulo. É o default quando nenhum de/para foi provido. */
+export const DE_PARA_GI_VAZIO: DeParaGi = {
+  codigoCidade: () => null,
+  codigoBanco: () => null,
+};
+
 function limpo(v: unknown): string | null {
   const t = typeof v === "string" ? v.trim() : "";
   return t.length > 0 ? t : null;
+}
+
+/**
+ * Sexo no formato do GI: 'M' ou 'F'. O EA guarda o enum `MASCULINO`/`FEMININO`; o GI quer a letra
+ * única (contrato confirmado). Qualquer outra coisa vira nulo (não se chuta sexo, §A.6/qualidade).
+ */
+function mapearSexo(v: unknown): string | null {
+  const t = (typeof v === "string" ? v : "").trim().toUpperCase();
+  if (t === "MASCULINO" || t === "M") return "M";
+  if (t === "FEMININO" || t === "F") return "F";
+  return null;
+}
+
+/**
+ * Corta um texto no limite do campo do GI. Devolve `null` intacto (o schema aceita null aqui), e o
+ * corte é por caractere, sem reticências: o GI valida TAMANHO, e qualquer marca de corte ocuparia
+ * espaço do próprio dado.
+ */
+function cortar(v: string | null, max: number): string | null {
+  return v != null && v.length > max ? v.slice(0, max) : v;
+}
+
+/**
+ * Número do endereço no formato do GI: `nroEndereco` é `int32` NÃO-ANULÁVEL, com padrão de dígitos e
+ * default `0`. Fica só a parte numérica; vazio, ausente ou sem dígito nenhum vira `0` (o default do
+ * contrato), nunca `null`, que o schema não aceita.
+ */
+function numeroDoEndereco(v: unknown): number {
+  const digitos = (typeof v === "string" ? v : "").replace(/\D/g, "");
+  if (digitos.length === 0) return 0;
+  const n = Number.parseInt(digitos, 10);
+  return Number.isSafeInteger(n) ? n : 0;
 }
 
 /** Separa DDD (2 primeiros dígitos) do número. O GI quer os dois separados (grupo 4). */
@@ -212,9 +291,16 @@ function separarTelefone(telefone: unknown): { ddd: string | null; numero: strin
 /**
  * Monta o `FuncionarioSelecao` lendo SÓ as chaves de pessoa (allowlist). Qualquer chave a mais
  * (salário, situação trabalhista, arquivo, folha) NÃO é lida e não atravessa: é o desenho, provado
- * pelo contrato do tester. Cidade e banco guardam o NOME (de/para para código é peça 3).
+ * pelo contrato do tester.
+ *
+ * O de/para (`depara`) traduz cidade e banco em CÓDIGO do GI; ausente, cai no `DE_PARA_GI_VAZIO` e os
+ * códigos ficam NULOS (fail-closed: nunca se inventa código). Cidade e banco por NOME seguem no
+ * payload em paralelo ao código.
  */
-export function montarFuncionarioSelecao(pessoa: PessoaParaGi): FuncionarioSelecao {
+export function montarFuncionarioSelecao(
+  pessoa: PessoaParaGi,
+  depara: DeParaGi = DE_PARA_GI_VAZIO,
+): FuncionarioSelecao {
   const p = pessoa ?? {};
   const { ddd, numero } = separarTelefone(p.telefone);
   const cpf = limpo(p.cpf);
@@ -222,7 +308,7 @@ export function montarFuncionarioSelecao(pessoa: PessoaParaGi): FuncionarioSelec
     nome: limpo(p.nome),
     cpf: cpf ? cpf.replace(/\D/g, "") : null,
     dataNascimento: limpo(p.nascimento),
-    sexo: limpo(p.sexo),
+    sexo: mapearSexo(p.sexo),
     email: limpo(p.email),
     smsdddCel: ddd,
     smsNroCel: numero,
@@ -239,9 +325,9 @@ export function montarFuncionarioSelecao(pessoa: PessoaParaGi): FuncionarioSelec
     dtExpedicaoRG: limpo(p.rgDataEmissao),
     carteiraTrabalho: limpo(p.ctpsNumero),
     serie: limpo(p.ctpsSerie),
-    ufCTPS: limpo(p.ctpsUf),
+    ufExpedicao: limpo(p.ctpsUf),
     dtExpedicaoCTPS: limpo(p.ctpsData),
-    pisNit: limpo(p.pis),
+    pis: limpo(p.pis),
     tituloEleitor: limpo(p.tituloNumero),
     titEleZona: limpo(p.tituloZona),
     titEleSecao: limpo(p.tituloSecao),
@@ -251,14 +337,124 @@ export function montarFuncionarioSelecao(pessoa: PessoaParaGi): FuncionarioSelec
     dataVectoHabilitacao: limpo(p.cnhDataValidade),
     cepResid: limpo(p.cep),
     enderecoResid: limpo(p.logradouro),
-    numeroResid: limpo(p.numero),
-    complementoResid: limpo(p.complemento),
+    nroEndereco: numeroDoEndereco(p.numero),
+    cplEndereco: cortar(limpo(p.complemento), 30),
     bairroResid: limpo(p.bairro),
     cidadeResid: limpo(p.cidade),
     ufResid: limpo(p.uf),
-    bancoNome: limpo(p.banco),
+    codigoCidadeResid: depara.codigoCidade(p.cidade, p.uf),
+    codigoBcoFolha: depara.codigoBanco(p.banco),
+    codigoBcoPagar: depara.codigoBanco(p.banco),
     agencia: limpo(p.agencia),
     contaCorrente: limpo(p.conta),
+  };
+}
+
+/**
+ * As colunas de `candidatos` que a leitura da pessoa consome (só dado de PESSOA, §A.6). Achatado, é a
+ * metade "que o EA já tem" do `PessoaParaGi`.
+ */
+export interface CandidatoParaGi {
+  nome?: string | null;
+  cpf?: string | null;
+  dataNascimento?: string | null;
+  sexo?: string | null;
+  email?: string | null;
+  telefone?: string | null;
+  banco?: string | null;
+  agencia?: string | null;
+  conta?: string | null;
+}
+
+/**
+ * As colunas de `admissao_dados_gi` que a leitura consome (a metade coletada pelo Portal). Nomes das
+ * COLUNAS do schema (`rgNumero`, `endCep`), traduzidos para o vocabulário de `PessoaParaGi`.
+ */
+export interface DadosGiParaPessoa {
+  nacionalidade?: string | null;
+  naturalidade?: string | null;
+  filiacaoNomeMae?: string | null;
+  filiacaoNomePai?: string | null;
+  estadoCivil?: string | null;
+  raca?: string | null;
+  grauInstrucao?: string | null;
+  rgNumero?: string | null;
+  rgOrgaoEmissor?: string | null;
+  rgUf?: string | null;
+  rgDataEmissao?: string | null;
+  ctpsNumero?: string | null;
+  ctpsSerie?: string | null;
+  ctpsUf?: string | null;
+  ctpsData?: string | null;
+  pis?: string | null;
+  tituloNumero?: string | null;
+  tituloZona?: string | null;
+  tituloSecao?: string | null;
+  reservistaNumero?: string | null;
+  cnhNumero?: string | null;
+  cnhDataEmissao?: string | null;
+  cnhDataValidade?: string | null;
+  endCep?: string | null;
+  endLogradouro?: string | null;
+  endNumero?: string | null;
+  endComplemento?: string | null;
+  endBairro?: string | null;
+  endCidade?: string | null;
+  endUf?: string | null;
+}
+
+/**
+ * A JUNÇÃO das duas fontes num `PessoaParaGi`, função PURA (testável sem banco). `candidatos` traz o
+ * que o EA já tinha (nome, cpf, nascimento, sexo, contato, banco); `admissao_dados_gi` traz o que o
+ * Portal coletou (documentos, filiação, endereço). Só dado de PESSOA (§A.6): nada de salário, folha
+ * ou situação trabalhista, que o time preenche na tela do GI.
+ */
+export function montarPessoaParaGi(
+  candidato: CandidatoParaGi | null | undefined,
+  dados: DadosGiParaPessoa | null | undefined,
+): PessoaParaGi {
+  const c = candidato ?? {};
+  const d = dados ?? {};
+  return {
+    nome: c.nome ?? null,
+    cpf: c.cpf ?? null,
+    nascimento: c.dataNascimento ?? null,
+    sexo: c.sexo ?? null,
+    email: c.email ?? null,
+    telefone: c.telefone ?? null,
+    banco: c.banco ?? null,
+    agencia: c.agencia ?? null,
+    conta: c.conta ?? null,
+    nacionalidade: d.nacionalidade ?? null,
+    naturalidade: d.naturalidade ?? null,
+    nomeMae: d.filiacaoNomeMae ?? null,
+    nomePai: d.filiacaoNomePai ?? null,
+    estadoCivil: d.estadoCivil ?? null,
+    raca: d.raca ?? null,
+    grauInstrucao: d.grauInstrucao ?? null,
+    rg: d.rgNumero ?? null,
+    rgOrgao: d.rgOrgaoEmissor ?? null,
+    rgUf: d.rgUf ?? null,
+    rgDataEmissao: d.rgDataEmissao ?? null,
+    ctpsNumero: d.ctpsNumero ?? null,
+    ctpsSerie: d.ctpsSerie ?? null,
+    ctpsUf: d.ctpsUf ?? null,
+    ctpsData: d.ctpsData ?? null,
+    pis: d.pis ?? null,
+    tituloNumero: d.tituloNumero ?? null,
+    tituloZona: d.tituloZona ?? null,
+    tituloSecao: d.tituloSecao ?? null,
+    reservista: d.reservistaNumero ?? null,
+    cnh: d.cnhNumero ?? null,
+    cnhDataEmissao: d.cnhDataEmissao ?? null,
+    cnhDataValidade: d.cnhDataValidade ?? null,
+    cep: d.endCep ?? null,
+    logradouro: d.endLogradouro ?? null,
+    numero: d.endNumero ?? null,
+    complemento: d.endComplemento ?? null,
+    bairro: d.endBairro ?? null,
+    cidade: d.endCidade ?? null,
+    uf: d.endUf ?? null,
   };
 }
 
