@@ -1,32 +1,34 @@
 import { describe, expect, it } from "vitest";
 import {
   carregar,
-  describeSuspenso,
   exigirExport,
   fonteExigida,
   semComentario,
-  sentinelaDoDigai,
+  sentinelaDasPecas,
+  suspensoSem,
 } from "./digai.tester-fake";
 
 /**
- * ┌─ SUITE SUSPENSA: A IMPLEMENTACAO DO DIGAI AINDA NAO EXISTE ─────────────────────────────────┐
- * │ Nada aqui foi apagado. Cada assercao, cada caso e cada `it` continua escrito, palavra por   │
- * │ palavra: este arquivo e o CONTRATO que a construcao vai ter de satisfazer, escrito antes do │
- * │ codigo de proposito (secao A.38 e secao A.40, regra 2). A frente esta parada por insumo do  │
- * │ diretor (o token do Digai, docs/PLATAFORMA-UNIFICADORA-DECISOES.md, secao 5).               │
+ * ┌─ SUSPENSO POR PECA, E NAO PELO MODULO INTEIRO (ajuste de 29/09/2026) ───────────────────────┐
+ * │ Nada aqui foi apagado. Cada assercao continua escrita palavra por palavra: este arquivo e o │
+ * │ CONTRATO que a construcao tem de satisfazer, escrito antes do codigo de proposito (secao    │
+ * │ A.38 e secao A.40, regra 2).                                                                │
  * │                                                                                             │
- * │ O QUE MUDA E SO QUANDO RODA. Os blocos abaixo usam `describeSuspenso`, que e `describe.skip` │
- * │ enquanto NENHUMA peca do Digai existir no disco, e vira `describe` de verdade sozinho no     │
- * │ minuto em que a primeira peca nascer. Nao ha interruptor para alguem esquecer de virar: a    │
- * │ suspensao e DERIVADA da ausencia medida (`pecasPresentes`, em digai.tester-fake.ts).         │
+ * │ CADA BLOCO DECLARA DE QUE PECAS PRECISA (`suspensoSem`), e acorda sozinho quando elas        │
+ * │ existirem no disco. A medida global de 21/09 (`describeSuspenso`) acordava TUDO quando a     │
+ * │ PRIMEIRA peca nascesse, e isso acenderia junto as assercoes de pecas que a OST de hoje NAO   │
+ * │ pede (o `reengajar`), cobrando arquivo que ninguem mandou construir (secao A.31).            │
  * │                                                                                             │
- * │ A SENTINELA ABAIXO RODA SEMPRE, e e ela que impede este trabalho de dormir para sempre: no   │
- * │ dia em que a implementacao chegar, ela FICA VERMELHA dizendo o que fazer. `skip` puro        │
- * │ ninguem lembra de reativar, e cobertura esquecida e pior do que cobertura que nao existe,    │
- * │ porque parece que existe.                                                                   │
+ * │ A SENTINELA ABAIXO RODA SEMPRE e diz, em toda rodada, qual peca falta a ESTE arquivo. `skip` │
+ * │ que ninguem lembra de reativar e pior do que teste nenhum, porque parece que existe.         │
  * └─────────────────────────────────────────────────────────────────────────────────────────────┘
  */
-sentinelaDoDigai("digai.grade-de-acesso.tester.spec.ts");
+sentinelaDasPecas("digai.grade-de-acesso.tester.spec.ts", ["grade", "cliente"]);
+
+/** Toda a grade vive numa peca so: sem ela, nao ha o que autorizar nem o que inspecionar. */
+const comGrade = suspensoSem("grade");
+/** O bloco da inercia precisa tambem do cliente HTTP, que e quem nasce mudo sem credencial. */
+const comCliente = suspensoSem("grade", "cliente");
 
 
 /**
@@ -69,7 +71,7 @@ function recusa(fn: (p: string, m: string) => void, path: string, metodo: string
 
 // ── 1. METODO: leitura e GET-only, declarado em codigo ──────────────────────
 
-describeSuspenso("a grade recusa qualquer metodo que nao seja GET", () => {
+comGrade("a grade recusa qualquer metodo que nao seja GET", () => {
   for (const metodo of ["POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "get", ""]) {
     it(`recusa ${metodo || "(metodo vazio)"} num path que ate seria valido em GET`, async () => {
       const fn = await autorizar();
@@ -91,7 +93,7 @@ describeSuspenso("a grade recusa qualquer metodo que nao seja GET", () => {
 
 // ── 2. ROTA: allowlist fechada, recusada ANTES de a chamada sair ────────────
 
-describeSuspenso("a grade recusa rota fora da allowlist", () => {
+comGrade("a grade recusa rota fora da allowlist", () => {
   const FORA = [
     ["/api/v1/private/admin/users", "rota privada: fail-closed e o padrao, nao a excecao"],
     ["/api/v1/public/search", "busca: poria criterio de pessoa na URL"],
@@ -120,7 +122,7 @@ describeSuspenso("a grade recusa rota fora da allowlist", () => {
 
 // ── 3. O VETO 2 DE 16/09: ID COM ALFABETO FECHADO ──────────────────────────
 
-describeSuspenso("o id de rota tem alfabeto FECHADO, e nunca curinga", () => {
+comGrade("o id de rota tem alfabeto FECHADO, e nunca curinga", () => {
   /**
    * ┌─ O VETO 2, na integra ──────────────────────────────────────────────────────────────────┐
    * │ Os ids usavam `[^/]+`, que ACEITA `%2f`, `%2e` e `%00`. Servidor que decodifica ANTES de │
@@ -161,7 +163,7 @@ describeSuspenso("o id de rota tem alfabeto FECHADO, e nunca curinga", () => {
 
 // ── 4. PII NUNCA NA URL: nem no path, nem na query ─────────────────────────
 
-describeSuspenso("a grade recusa dado pessoal no path e na query", () => {
+comGrade("a grade recusa dado pessoal no path e na query", () => {
   const NO_PATH = [
     "/api/v1/public/screenings/sc1/emails/fulano@exemplo.invalido/results",
     "/api/v1/public/screenings/sc1/phone-numbers/11900000001/results",
@@ -223,7 +225,7 @@ describeSuspenso("a grade recusa dado pessoal no path e na query", () => {
 
 // ── 5. ANTI-SSRF: host constante, https, sem redirecionamento ──────────────
 
-describeSuspenso("o destino e constante, e o esquema e https", () => {
+comGrade("o destino e constante, e o esquema e https", () => {
   it("o host e o constante medido, e nao o da doc legada", async () => {
     const base = await exigirExport<string>("grade", "DIGAI_BASE_URL");
     expect(
@@ -257,7 +259,7 @@ describeSuspenso("o destino e constante, e o esquema e https", () => {
 
 // ── 6. TLS: a proibicao e TESTE, nao lembranca (mesma logica da secao A.33) ─
 
-describeSuspenso("desligar a verificacao de TLS esta impedido POR TESTE", () => {
+comGrade("desligar a verificacao de TLS esta impedido POR TESTE", () => {
   /**
    * ┌─ POR QUE ISTO E UM TESTE E NAO UM COMENTARIO ───────────────────────────────────────────┐
    * │ Cert quebrado significa HOST ERRADO, e foi o que aconteceu de verdade em 16/09. O atalho │
@@ -295,7 +297,7 @@ describeSuspenso("desligar a verificacao de TLS esta impedido POR TESTE", () => 
 
 // ── 7. O VETO 3 DE 16/09: O AUTOTESTE E ADVERSARIAL ────────────────────────
 
-describeSuspenso("a inspecao de fonte recebe o TEXTO por parametro, e o autoteste injeta o ataque", () => {
+comGrade("a inspecao de fonte recebe o TEXTO por parametro, e o autoteste injeta o ataque", () => {
   /**
    * ┌─ O VETO 3, na integra, e ele e o mais dificil de acreditar ─────────────────────────────┐
    * │ A inspecao anterior recebia o CAMINHO do arquivo e lia sozinha. O `seguranca` COPIOU o   │
@@ -359,7 +361,7 @@ describeSuspenso("a inspecao de fonte recebe o TEXTO por parametro, e o autotest
 
 // ── 8. FECHADA E INERTE SEM CREDENCIAL ─────────────────────────────────────
 
-describeSuspenso("a integracao nasce FECHADA E INERTE sem credencial", () => {
+comCliente("a integracao nasce FECHADA E INERTE sem credencial", () => {
   it("nao ha token do Digai escrito em codigo", async () => {
     const fonte = semComentario(fonteExigida());
     expect(

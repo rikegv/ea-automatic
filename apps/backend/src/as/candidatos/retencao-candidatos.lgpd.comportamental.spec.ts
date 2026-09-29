@@ -19,7 +19,7 @@ import {
  * ┌─ O BURACO QUE A CORREÇÃO FECHA ────────────────────────────────────────────────────────────┐
  * │ O expurgo só anonimiza quem NÃO tem candidatura VIVA, e `SITUACOES_VIVAS` inclui `APROVADO`,│
  * │ `ALOCADO` e `ENVIADO_PARA_ADMISSAO`. Quem fica vivo numa vaga ENCERRADA nunca é alcançado:  │
- * │ o prazo de 2 anos NUNCA COMEÇA e o dado pessoal fica retido PARA SEMPRE. É retenção          │
+ * │ o prazo NUNCA COMEÇA e o dado pessoal fica retido PARA SEMPRE. É retenção                    │
  * │ indefinida, que é exatamente o que a LGPD proíbe.                                           │
  * └────────────────────────────────────────────────────────────────────────────────────────────┘
  *
@@ -200,10 +200,17 @@ describe("expurgo: o RELÓGIO da candidatura que só encerrou porque a vaga ence
    * texto cobrado aqui acompanhou. O SENTIDO da cláusula (alcança quem NÃO está marcado, nunca o
    * contrário) é medido pelo contrato, em `violacoesDoContrato`, e não por esta asserção de texto.
    */
-  it("candidato de banco não expira, e o prazo continua sendo de 2 anos", async () => {
+  it("candidato de banco não expira, e o prazo é o do diretor: 6 MESES", async () => {
     const q = (await consulta()).toLowerCase();
     expect(q).toContain("c.banco_talentos = false");
-    expect(q).toContain("interval '2 years'");
+    expect(
+      q,
+      "o prazo do diretor é de 6 MESES (era 2 anos e ENCOLHEU). Alongá-lo retém dado pessoal além do necessário (§A.6); encurtá-lo torna elegível, na varredura da hora seguinte, gente que o time viu no mês passado.",
+    ).toContain("interval '6 months'");
+    expect(
+      q,
+      "o prazo REVOGADO ainda está no texto. Uma reversão parcial (os dois intervalos no mesmo `where`) não falha nada, e a régua efetiva volta a ser a antiga.",
+    ).not.toContain("interval '2 years'");
   });
 });
 

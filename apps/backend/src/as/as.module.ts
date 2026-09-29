@@ -2,6 +2,14 @@ import { Module } from "@nestjs/common";
 import { AdmissoesModule } from "../admissoes/admissoes.module";
 import { PandapeArquivosModule } from "../pandape/pandape-arquivos.module";
 import { PortalModule } from "../portal/portal.module";
+import { DigaiController } from "./digai/digai.controller";
+import { DigaiFilaService } from "./digai/digai-fila.service";
+import { DigaiImportacaoService } from "./digai/digai-importacao.service";
+import { DigaiRepositorio } from "./digai/digai-repositorio";
+import {
+  DigaiWebhookController,
+  PORTA_DA_FILA_DIGAI,
+} from "./digai/digai-webhook.controller";
 import { IngestaoHttp } from "./ingestao-pandape/ingestao-http";
 import { IngestaoRepositorio } from "./ingestao-pandape/ingestao-repositorio";
 import { IngestaoVarreduraService } from "./ingestao-pandape/ingestao-varredura.service";
@@ -185,8 +193,25 @@ import { VagasService } from "./vagas/vagas.service";
     SegmentosAdminController,
     ComerciaisAdminController,
     CidadesController,
+    /*
+     * ─ A INGESTAO DO DIGAI (`as/digai`) ────────────────────────────────────────────────────────
+     *
+     * DUAS CLASSES, E A SEPARACAO E DE AUTORIZACAO, nao de organizacao. `DigaiWebhookController` e
+     * PUBLICA (`@Public()`) e protegida pelo guard de origem proprio, token-only e fail-closed:
+     * quem chama e o fornecedor, que nao tem sessao. `DigaiController` e a operacao interna, com
+     * `@Roles("SUPER_ADMIN")`, porque o `MenuGuard` e FAIL-OPEN para controller que nenhum menu
+     * reivindica, e esta frente nao tem menu (menu novo e decisao do diretor, §A.23).
+     *
+     * O RECEPTOR MORA AQUI, e nao no modulo do Pandape, porque o contrato do `tester` varre a pasta
+     * `as/digai`: fora dela, o arquivo nao herda nenhuma assercao de fonte (zero PII em log, sem
+     * atalho de TLS, sem token em codigo).
+     */
+    DigaiWebhookController,
+    DigaiController,
   ],
-  // `RetencaoCandidatosService` é o expurgo por retenção (2 anos para descartado, banco não expira).
+  // `RetencaoCandidatosService` é o expurgo por retenção (6 MESES para descartado, banco não expira).
+  // O prazo era 2 anos e mudou por decisão do diretor em 29/09/2026: candidatura viva em vaga que
+  // ninguém revisou protegia a pessoa por tempo INDEFINIDO, e o relógio nunca começava a correr.
   // Fica no módulo e não em um agendador global pelo mesmo motivo do `ExpurgoService` da Admissão:
   // a regra pertence ao domínio que ela protege, e some junto com ele se o módulo for desligado.
   // `EtapasFunilService` é a fonte única do catálogo de etapas e a ÚNICA porta de escrita dele, o
@@ -269,6 +294,28 @@ import { VagasService } from "./vagas/vagas.service";
     IngestaoRepositorio,
     IngestaoHttp,
     IngestaoVarreduraService,
+    /*
+     * ─ A INGESTAO DO DIGAI: QUATRO PECAS, E ELA NASCE INERTE ───────────────────────────────────
+     *
+     * `DigaiRepositorio` e o UNICO ponto de escrita no banco (com a guarda de anonimizacao, que e o
+     * veto A do `seguranca`: a ingestao do Digai e o QUARTO escritor de `as_candidatos` e nasceria
+     * sem a clausula). `DigaiImportacaoService` e a regra. `DigaiFilaService` e a fila isolada, com
+     * o limiter que cabe no teto de 120 req/min do fornecedor. A controller do receptor consome a
+     * fila pelo TOKEN, e nao pela classe, para nao criar ciclo de importacao.
+     *
+     * DOIS PORTOES, E NENHUM DELES E REDUNDANTE: sem `DIGAI_API_TOKEN` nada SAI para a rede, e sem
+     * `DIGAI_INGESTAO_ATIVA` nada e ESCRITO no banco, mesmo com credencial. O universo medido do
+     * outro lado e de 12.445 pessoas, e uma integracao que comeca a escrever no dia em que o token
+     * chega nao foi ligada, foi surpreendida.
+     *
+     * ELAS MORAM NESTE MODULO, e nao num modulo proprio, pela MESMA razao da ingestao do Pandape:
+     * `VagaStatusService` e `EtapasFunilService` tem cache em memoria cuja confiabilidade vem de
+     * haver UMA instancia, e um modulo novo com os mesmos providers criaria a segunda.
+     */
+    DigaiRepositorio,
+    DigaiImportacaoService,
+    DigaiFilaService,
+    { provide: PORTA_DA_FILA_DIGAI, useExisting: DigaiFilaService },
   ],
 })
 export class AsModule {}

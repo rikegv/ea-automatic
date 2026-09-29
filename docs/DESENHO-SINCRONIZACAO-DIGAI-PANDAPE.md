@@ -195,3 +195,33 @@ O token foi expurgado em 16/09. Cada pergunta abaixo vale uma reconexão, e só 
   nada.
 - Quando a vaga não resolve, a criação é **ADIADA e reprocessável**, nunca inventa vínculo. Precedente
   da casa, §A.5.
+
+---
+
+## AS PERGUNTAS AO IVAN FORAM RESPONDIDAS (29/09/2026)
+
+Este documento deixou quatro perguntas em aberto com o fornecedor do Digai. Três voltaram, e uma
+delas muda a arquitetura desenhada aqui.
+
+| pergunta deste documento | resposta do Ivan |
+|---|---|
+| **Existe evento de webhook para "candidato finalizou"?** (item 4, pendente desde 16/09) | **EXISTE: `NEW_APPLICATION`**, disparado quando o candidato finaliza a triagem, documentado em `digai.readme.io/reference/new-application` |
+| **Qual o teto real do Digai?** (a conta da peça 1 supunha o teto da documentação) | **120 requisições por minuto.** A documentação diz 500, e **adota-se o menor** |
+| O que é o `partnerJobId`? | **o id da vaga de origem no Pandapé** |
+| Dá para saber a ORIGEM do candidato (planilha ou Pandapé) pela API? | **NÃO**, o dado existe no Digai mas só na interface web |
+
+**O QUE ISSO MUDA NO DESENHO DESTE DOCUMENTO:** o polling do Digai **deixa de ser a entrada** e vira,
+no máximo, rede de segurança. A entrada é o webhook, no mesmo molde do Pandapé (receptor fail-closed,
+enfileira, responde 202, o worker enriquece). A conta de teto deste documento foi refeita contra 120
+por minuto, e o limiter da fila do Digai trabalha a **90 por minuto, 75% do teto**.
+
+**A pergunta 2c, do webhook de movimentação de funil do Pandapé, segue em aberto com o suporte do
+Pandapé.** Ela não depende do Ivan.
+
+**Sobre a ORIGEM, e é decisão do diretor:** **não precisa.** A deduplicação por `userId` resolve, e o
+`userId` foi confirmado como **único e permanente**, o mesmo em todas as triagens. Quem já veio do
+Pandapé não duplica, e quem só existe no Digai entra. O `partnerUserId`, que seria o marcador de
+origem do lado do fornecedor, foi medido **vazio em 100% dos registros**, nas duas varreduras.
+
+*(Detalhe completo, inclusive a sondagem de contrato ao vivo que derrubou três premissas do código,
+em `docs/MAPA-ALCANCE-DIGAI.md`.)*

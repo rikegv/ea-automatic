@@ -243,7 +243,23 @@ describe("o encerramento automático, medido contra a regressão que esta frente
     expect(violacoes.filter((x) => x.startsWith("ALCANCE_POR_LISTA_DE_CODIGOS:"))).not.toEqual([]);
   });
 
-  it("e o expurgo continua protegendo por `encerra = false`, que é o que abriga o status novo", async () => {
+  /**
+   * ─ ESTA AFIRMAÇÃO VIROU DE LADO, E O TÍTULO ANTIGO PASSOU A MENTIR ──────────────────────────
+   *
+   * ELA DIZIA "o expurgo continua protegendo por `encerra = false`, que é o que ABRIGA o status
+   * novo": a frente da fila de revisão nasceu contando com esse abrigo para não precisar tocar no
+   * expurgo. O efeito medido foi o contrário do pretendido, e o diretor o reverteu: a vaga
+   * espelhada nasce sem cliente, é a que MENOS gente revisa, e enquanto ninguém a revisa ela não
+   * encerra, então uma candidatura viva ali segurava o expurgo da pessoa INTEIRA por tempo
+   * INDEFINIDO. A inércia de quem revisa virava política de retenção (§A.6).
+   *
+   * O QUE A AFIRMAÇÃO GUARDA AGORA são as DUAS metades: a fila está FORA da proteção (pelo PAPEL,
+   * nunca pelo código, que o diretor renomeia pela tela) e a subtração é de UM papel SÓ. A segunda
+   * metade é a garantia original desta função, com o alvo trocado: o RASCUNHO e todo status LIVRE
+   * (do tipo Stand By) continuam abrigados pela PROPRIEDADE, e uma lista positiva de papéis os
+   * derrubaria junto, em silêncio.
+   */
+  it("e o expurgo NÃO abriga mais a fila de revisão, sem estreitar além dela", async () => {
     expect(violacoesDoAbrigoDoExpurgo(await sqlDoExpurgo())).toEqual([]);
   });
 

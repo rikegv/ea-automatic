@@ -10,29 +10,45 @@ import {
   exigirPeca,
   fonteExigida,
   piiNaSaida,
-  describeSuspenso,
-  sentinelaDoDigai,
+  sentinelaDasPecas,
+  suspensoSem,
 } from "./digai.tester-fake";
 
 /**
- * ┌─ SUITE SUSPENSA: A IMPLEMENTACAO DO DIGAI AINDA NAO EXISTE ─────────────────────────────────┐
- * │ Nada aqui foi apagado. Cada assercao, cada caso e cada `it` continua escrito, palavra por   │
- * │ palavra: este arquivo e o CONTRATO que a construcao vai ter de satisfazer, escrito antes do │
- * │ codigo de proposito (secao A.38 e secao A.40, regra 2). A frente esta parada por insumo do  │
- * │ diretor (o token do Digai, docs/PLATAFORMA-UNIFICADORA-DECISOES.md, secao 5).               │
+ * ┌─ SUSPENSO POR PECA, E NAO PELO MODULO INTEIRO (ajuste de 29/09/2026) ───────────────────────┐
+ * │ Nada aqui foi apagado. Cada assercao continua escrita palavra por palavra: este arquivo e o │
+ * │ CONTRATO que a construcao tem de satisfazer, escrito antes do codigo de proposito (secao    │
+ * │ A.38 e secao A.40, regra 2).                                                                │
  * │                                                                                             │
- * │ O QUE MUDA E SO QUANDO RODA. Os blocos abaixo usam `describeSuspenso`, que e `describe.skip` │
- * │ enquanto NENHUMA peca do Digai existir no disco, e vira `describe` de verdade sozinho no     │
- * │ minuto em que a primeira peca nascer. Nao ha interruptor para alguem esquecer de virar: a    │
- * │ suspensao e DERIVADA da ausencia medida (`pecasPresentes`, em digai.tester-fake.ts).         │
+ * │ CADA BLOCO DECLARA DE QUE PECAS PRECISA (`suspensoSem`), e acorda sozinho quando elas        │
+ * │ existirem no disco. A medida global de 21/09 (`describeSuspenso`) acordava TUDO quando a     │
+ * │ PRIMEIRA peca nascesse, e isso acenderia junto as assercoes de pecas que a OST de hoje NAO   │
+ * │ pede (o `reengajar`), cobrando arquivo que ninguem mandou construir (secao A.31).            │
  * │                                                                                             │
- * │ A SENTINELA ABAIXO RODA SEMPRE, e e ela que impede este trabalho de dormir para sempre: no   │
- * │ dia em que a implementacao chegar, ela FICA VERMELHA dizendo o que fazer. `skip` puro        │
- * │ ninguem lembra de reativar, e cobertura esquecida e pior do que cobertura que nao existe,    │
- * │ porque parece que existe.                                                                   │
+ * │ A SENTINELA ABAIXO RODA SEMPRE e diz, em toda rodada, qual peca falta a ESTE arquivo. `skip` │
+ * │ que ninguem lembra de reativar e pior do que teste nenhum, porque parece que existe.         │
  * └─────────────────────────────────────────────────────────────────────────────────────────────┘
  */
-sentinelaDoDigai("digai.reengajar.tester.spec.ts");
+sentinelaDasPecas("digai.reengajar.tester.spec.ts", ["reengajar", "controller", "dto", "grade"]);
+
+/**
+ * ┌─ ESTE ARQUIVO CONTINUA SUSPENSO HOJE, E ISSO E DELIBERADO (29/09/2026) ─────────────────────┐
+ * │ A OST de hoje constroi `grade`, `dominio`, `cliente`, `importacao`, `dto` e `controller`, e │
+ * │ NAO pede o reengajar (secao A.31: so o que a OST pede; o que falta se PROPOE). Com a        │
+ * │ suspensao global de 21/09, o nascimento da primeira peca acenderia estas 24 assercoes        │
+ * │ cobrando `digai-reengajar.service.ts`, que ninguem mandou construir, e a saida mais facil    │
+ * │ dali seria apagar cobertura boa.                                                             │
+ * │                                                                                              │
+ * │ NO DIA EM QUE `digai-reengajar.service.ts` NASCER, este arquivo ACORDA SOZINHO e fica        │
+ * │ VERMELHO ate a implementacao satisfazer o contrato, sem ninguem virar interruptor.           │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+const comReengajar = suspensoSem("reengajar");
+/** O RBAC mora na controller, e o DTO e quem carrega o aceite do lote. */
+const comControllerERservico = suspensoSem("reengajar", "controller");
+const comDtoESservico = suspensoSem("reengajar", "dto");
+/** A inspecao adversarial que prova a ausencia de porta de escrita vem da grade. */
+const comGradeEServico = suspensoSem("reengajar", "grade");
 
 
 /**
@@ -143,7 +159,7 @@ async function bancada(): Promise<Bancada> {
 
 // ── 1. RBAC: a autoridade mora na ROTA, e ela e explicita ──────────────────
 
-describeSuspenso("RBAC: quem nao tem o papel nao reengaja, nem sozinho nem em massa", () => {
+comControllerERservico("RBAC: quem nao tem o papel nao reengaja, nem sozinho nem em massa", () => {
   const ROTAS = ["reengajar", "reengajarEmLote"] as const;
 
   it("a controller do Digai existe", async () => {
@@ -188,7 +204,7 @@ describeSuspenso("RBAC: quem nao tem o papel nao reengaja, nem sozinho nem em ma
 
 // ── 2. ZERO ESCRITA NO DIGAI ───────────────────────────────────────────────
 
-describeSuspenso("o reengajar NAO escreve no Digai", () => {
+comGradeEServico("o reengajar NAO escreve no Digai", () => {
   it("nenhum POST, PUT ou PATCH sai numa passada individual", async () => {
     const b = await bancada();
     await b.servico.reengajar(USUARIO_AUTORIZADO, ALVO.candidaturaId);
@@ -226,7 +242,7 @@ describeSuspenso("o reengajar NAO escreve no Digai", () => {
 
 // ── 3. O ACEITE EXPLICITO SOBRE A LISTA ────────────────────────────────────
 
-describeSuspenso("lote so dispara com aceite explicito sobre a lista", () => {
+comDtoESservico("lote so dispara com aceite explicito sobre a lista", () => {
   async function corpo(valores: Record<string, unknown>) {
     const mod = await exigirPeca("dto");
     const Classe = mod.ReengajarEmLoteDto as { new (): object } | undefined;
@@ -272,7 +288,7 @@ describeSuspenso("lote so dispara com aceite explicito sobre a lista", () => {
 
 // ── 4. RASTRO: quem, o que, quando. NUNCA o valor ──────────────────────────
 
-describeSuspenso("ha rastro de quem reengajou, quando e qual o alvo tecnico", () => {
+comReengajar("ha rastro de quem reengajou, quando e qual o alvo tecnico", () => {
   it("o rastro grava autor, alvo tecnico, carimbo e resultado", async () => {
     const b = await bancada();
     await b.servico.reengajar(USUARIO_AUTORIZADO, ALVO.candidaturaId);
@@ -317,7 +333,7 @@ describeSuspenso("ha rastro de quem reengajou, quando e qual o alvo tecnico", ()
 
 // ── 5. IDEMPOTENCIA: repetir nao duplica efeito ───────────────────────────
 
-describeSuspenso("reengajar duas vezes nao duplica o efeito", () => {
+comReengajar("reengajar duas vezes nao duplica o efeito", () => {
   it("a segunda chamada imediata nao dispara um segundo envio", async () => {
     /**
      * ┌─ POR QUE A GUARDA E NOSSA ───────────────────────────────────────────────────────────────┐

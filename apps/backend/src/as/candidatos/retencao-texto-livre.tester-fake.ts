@@ -589,7 +589,7 @@ const CTE_ALVO = `alvo as (
      and coalesce(
            (select max(k.atualizado_em) from as_candidaturas k where k.candidato_id = c.id),
            greatest(c.criado_em, c.atualizado_em))
-         <= now() - interval '2 years'
+         <= now() - interval '6 months'
   returning c.id
   )`;
 

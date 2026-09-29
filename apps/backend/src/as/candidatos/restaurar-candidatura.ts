@@ -207,7 +207,7 @@ export async function restaurarCandidatura(
      *
      * O `where` NUNCA é por vaga. Um `update ... where vaga_id = <vaga>` alcançaria quem NÃO foi
      * selecionado e empurraria o `atualizado_em` dele para hoje, reiniciando em silêncio o prazo de
-     * dois anos de retenção de dado pessoal de gente que ninguém trouxe de volta (§A.6).
+     * o prazo inteiro de retenção de dado pessoal de gente que ninguém trouxe de volta (§A.6).
      */
     .where(
       and(

@@ -22,7 +22,7 @@ import { SITUACOES_VIVAS } from "../../domain/candidatura";
  * ┌─ POR QUE ESTA LISTA NÃO PODE SER DIGITADA À MÃO, e este é o ponto §A.6 do arquivo ────────────┐
  * │ ELA ESTAVA DIGITADA, com três valores, e a consequência é IRREVERSÍVEL: uma situação viva      │
  * │ ausente desta linha faz o expurgo enxergar uma pessoa EM PROCESSO como pessoa sem processo, e  │
- * │ anonimizá-la em silêncio, passados os 2 anos. Nenhum alarme toca, porque do ponto de vista do  │
+ * │ anonimizá-la em silêncio, passado o prazo. Nenhum alarme toca, porque do ponto de vista do      │
  * │ serviço nada falhou. Foi exatamente o que o modelo de posição criaria: `ALOCADO` nasceu VIVO   │
  * │ no vocabulário e ficaria de fora daqui, e alguém ocupando posição OFICIAL de uma vaga seria    │
  * │ tratado como candidato encerrado. A janela é lenta, o defeito não.                             │
@@ -79,7 +79,7 @@ const MARCADOR_RESUMO_SQL = sql.raw(`'${MARCADOR_RESUMO.replace(/'/g, "''")}'`);
  * EXPURGO POR RETENÇÃO da Central de Candidatos (decisão do diretor, §A.6).
  *
  * A REGRA, em duas linhas:
- *   - candidato DESCARTADO: expurgado automaticamente 2 ANOS depois;
+ *   - candidato DESCARTADO: expurgado automaticamente 6 MESES depois (ver RETENCAO, abaixo);
  *   - candidato de BANCO (`as_candidatos.banco_talentos`): NÃO EXPIRA.
  *
  * O PRECEDENTE REUSADO é o `ExpurgoService` da Admissão (`admissoes/expurgo.service.ts`), e ele
@@ -90,7 +90,7 @@ const MARCADOR_RESUMO_SQL = sql.raw(`'${MARCADOR_RESUMO.replace(/'/g, "''")}'`);
  *
  * POR QUE ANONIMIZAR E NÃO APAGAR A LINHA, que é a pergunta que o desenho tem de responder: apagar o
  * candidato levaria junto as candidaturas dele (a FK é CASCADE) e, com elas, a contagem de quem foi
- * aprovado em vagas passadas. Um processo de dois anos atrás passaria a mostrar 7 aprovados onde
+ * aprovado em vagas passadas. Um processo antigo passaria a mostrar 7 aprovados onde
  * houve 10, e o indicador de entrega da vaga mentiria para sempre. O que a LGPD pede é que o dado
  * PESSOAL não fique retido além do necessário, e é exatamente o dado pessoal que sai daqui: CPF,
  * e-mail, telefone, data de nascimento e as identidades externas. O nome vira um marcador.
@@ -128,7 +128,7 @@ const MARCADOR_RESUMO_SQL = sql.raw(`'${MARCADOR_RESUMO.replace(/'/g, "''")}'`);
  * ┌─ "VIVO" NÃO BASTA: É "VIVO E EM VAGA NÃO ENCERRADA" (decisão do diretor, opção B) ────────────┐
  * │ O BURACO QUE ISTO FECHA, e ele é o oposto do defeito acima: `APROVADO`, `ALOCADO` e            │
  * │ `ENVIADO_PARA_ADMISSAO` são situações VIVAS, então uma pessoa deixada viva numa vaga ENCERRADA │
- * │ nunca satisfazia a cláusula. O prazo de dois anos NUNCA COMEÇAVA A CORRER e o dado pessoal     │
+ * │ nunca satisfazia a cláusula. O PRAZO NUNCA COMEÇAVA A CORRER e o dado pessoal                  │
  * │ dela ficava retido PARA SEMPRE, num processo que a operação considera morto. Existia de        │
  * │ verdade: `APROVADO` numa vaga `CANCELADA`, medido na homologação.                              │
  * │                                                                                                │
@@ -154,10 +154,28 @@ const MARCADOR_RESUMO_SQL = sql.raw(`'${MARCADOR_RESUMO.replace(/'/g, "''")}'`);
 export class RetencaoCandidatosService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger("RetencaoCandidatosService");
   private timer?: NodeJS.Timeout;
-  /** Mesma cadência do `ExpurgoService`: uma varredura por hora basta para um prazo de 2 anos. */
+  /** Mesma cadência do `ExpurgoService`: uma varredura por hora basta para um prazo de meses. */
   private static readonly INTERVALO_MS = 60 * 60 * 1000;
-  /** O prazo do diretor. Constante nomeada para a régua ser lida, não deduzida do SQL. */
-  private static readonly RETENCAO = "2 years";
+  /**
+   * O PRAZO DO DIRETOR: 6 MESES. Constante nomeada para a régua ser lida, não deduzida do SQL.
+   *
+   * ┌─ ERA "2 years", E ENCOLHEU POR DECISÃO DO DIRETOR ────────────────────────────────────────┐
+   * │ A REDUÇÃO ANDA NA DIREÇÃO QUE A LGPD PEDE (menos retenção de dado pessoal), e é justamente │
+   * │ por isso que ela é a mudança MAIS PERIGOSA deste arquivo: encurtar o prazo torna elegível,  │
+   * │ na varredura da hora seguinte, TODO MUNDO que estava entre 6 meses e 2 anos de parado. A    │
+   * │ anonimização é IRREVERSÍVEL, e não há de onde restaurar.                                    │
+   * │                                                                                             │
+   * │ O QUE SEGURA O ESTRAGO NÃO É ESTA LINHA, e sim as proteções que continuam inteiras abaixo:  │
+   * │ banco de talentos não expira, quem tem candidatura VIVA em vaga NÃO encerrada não entra, e  │
+   * │ quem FOI CONTRATADO (vaga do papel FECHAMENTO com carimbo de entrega) segue de fora. Mexer  │
+   * │ no número sem que essas três continuem valendo é o modo de falha, não o número em si.       │
+   * │                                                                                             │
+   * │ A FORMA É "6 months", E NÃO "180 days": o intervalo de CALENDÁRIO do Postgres respeita mês  │
+   * │ de tamanho diferente, e é assim que a operação lê o prazo ("seis meses depois"). Trocar por │
+   * │ dias muda a data de corte de gente de verdade, em silêncio.                                 │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   */
+  private static readonly RETENCAO = "6 months";
 
   constructor(@Inject(DRIZZLE) private readonly db: Database) {}
 
@@ -191,8 +209,8 @@ export class RetencaoCandidatosService implements OnModuleInit, OnModuleDestroy 
    * o processo do mesmo jeito. É a captura que fecha isso, e não a ordem de subida.
    *
    * O PADRÃO É O DA CASA, o mesmo do `clicksign_notificado_em` (§A.5): falha registrada como ERRO,
-   * visível, que não derruba o job. A varredura seguinte tenta de novo, e para um prazo de 2 anos
-   * perder uma passada de hora em hora não custa nada.
+   * visível, que não derruba o job. A varredura seguinte tenta de novo, e para um prazo medido em
+   * MESES perder uma passada de hora em hora não custa nada.
    *
    * §A.6: SÓ A MENSAGEM DO ERRO VAI PARA O LOG. Nem o objeto do erro, nem a `detail` do Postgres
    * (que carrega o VALOR que violou a restrição, e num expurgo de candidato esse valor é o CPF),
@@ -281,7 +299,7 @@ export class RetencaoCandidatosService implements OnModuleInit, OnModuleDestroy 
          -- │                                                                                       │
          -- │ APAGÁ-LO SOZINHO NÃO CORRIGE COISA NENHUMA, e este é o ponto que o "seguranca"        │
          -- │ MEDIU: o relógio, logo abaixo, é um "max()" sobre "as_candidaturas", e "max()" sobre  │
-         -- │ conjunto VAZIO devolve NULL. "NULL <= now() - interval '2 years'" NÃO é verdadeiro,   │
+         -- │ conjunto VAZIO devolve NULL. "NULL <= now() - interval '6 months'" NÃO é verdadeiro,  │
          -- │ então a linha continuaria fora do "update", agora sem NENHUMA cláusula no "where" que │
          -- │ denunciasse o motivo, que é pior do que o defeito original. QUEM FAZ A CORREÇÃO       │
          -- │ EXISTIR É O "coalesce" DO RELÓGIO, e não esta remoção.                                │
@@ -305,6 +323,76 @@ export class RetencaoCandidatosService implements OnModuleInit, OnModuleDestroy 
                  join as_vaga_status s on s.codigo = v.status
                 where k.candidato_id = c.id
                   and k.situacao in (${SITUACOES_VIVAS_SQL})
+                  -- ┌─ A FILA DE REVISÃO NÃO PROTEGE MAIS NINGUÉM (decisão do diretor) ──────────┐
+                  -- │ O QUE ELA É: o papel REVISAO é a fila da vaga ESPELHADA do Pandapé, a que  │
+                  -- │ a varredura da ingestão cria sozinha, sem cliente e sem posições, esperando │
+                  -- │ alguém olhar. Ela nasce com encerra = false e sem encerrada_em, então, até  │
+                  -- │ esta linha existir, ela satisfazia DUAS das três pernas da condição abaixo  │
+                  -- │ e protegia do expurgo todo mundo pendurado nela.                            │
+                  -- │                                                                             │
+                  -- │ POR QUE ISSO ERA UM FURO, E NÃO UMA PROTEÇÃO: vaga de triagem é a que MENOS │
+                  -- │ gente revisa. Enquanto ninguém a olha, ela não encerra, o relógio não começa │
+                  -- │ a correr, e o dado pessoal de quem a ingestão trouxe fica retido POR TEMPO   │
+                  -- │ INDEFINIDO, em massa e em silêncio. Retenção indefinida é exatamente o que  │
+                  -- │ esta varredura existe para impedir, e a fila a reintroduzia pela porta dos   │
+                  -- │ fundos: a inércia de quem revisa virava política de retenção.                │
+                  -- │                                                                             │
+                  -- │ O QUE ESTA LINHA NÃO FAZ, e é o que a mantém segura:                        │
+                  -- │   - NÃO apressa ninguém. O relógio da pessoa continua sendo o ÚLTIMO         │
+                  -- │     MOVIMENTO dela (a vaga em revisão não tem encerrada_em, então o case do  │
+                  -- │     relógio cai no k.atualizado_em, como sempre). Ela passa a CORRER, e não  │
+                  -- │     a vencer retroativamente;                                                │
+                  -- │   - NÃO estreita a proteção ENTRE VAGAS. Quem está vivo numa vaga em revisão │
+                  -- │     E vivo numa vaga ABERTA continua protegido pela segunda, porque basta    │
+                  -- │     UMA candidatura viva em vaga que protege. O que mudou foi QUAIS vagas    │
+                  -- │     protegem, nunca o alcance;                                               │
+                  -- │   - NÃO alcança quem foi CONTRATADO. A vaga que entregou é do papel          │
+                  -- │     FECHAMENTO com carimbo, e nunca do papel REVISAO: os conjuntos não se    │
+                  -- │     tocam.                                                                    │
+                  -- │                                                                             │
+                  -- │ PELO PAPEL, E NUNCA PELO CÓDIGO: o código PENDENTE_REVISAO é do catálogo e o │
+                  -- │ diretor o renomeia pela tela; o papel é de SISTEMA e tem índice único        │
+                  -- │ parcial (exatamente UMA linha por papel <> LIVRE), que é o que torna esta    │
+                  -- │ pergunta respondível. Um literal 'PENDENTE_REVISAO' aqui pararia de valer no │
+                  -- │ dia do renome, sem nada falhar, e a fila voltaria a proteger em silêncio.    │
+                  -- │                                                                             │
+                  -- │ is distinct from E NÃO <>, pela razão já escrita nas CTEs de baixo: <> com   │
+                  -- │ NULL devolve NULL, e NULL aqui DERRUBA a linha do not exists, isto é, tira a │
+                  -- │ proteção. A coluna é NOT NULL hoje, e a direção certa é a que continua       │
+                  -- │ valendo se um dia ela deixar de ser.                                         │
+                  -- └───────────────────────────────────────────────────────────────────────────────┘
+                  --
+                  -- ┌─ E QUEM JÁ FOI PARA A ADMISSÃO PROTEGE PELO FATO, E NÃO PELO PROXY ────────┐
+                  -- │ SEM ESTA PERNA, A SUBTRAÇÃO ACIMA ABRE UM CAMINHO DE DANO INTEIRO, e ele   │
+                  -- │ é feito só de código que já existe:                                        │
+                  -- │   1. a vaga espelhada nasce em REVISAO;                                    │
+                  -- │   2. alguém a libera, ela vai para ABERTURA;                               │
+                  -- │   3. a pessoa é aprovada e ENVIADA PARA ADMISSÃO (situação VIVA, e o       │
+                  -- │      'admissao_id' é gravado em as_candidaturas, candidatos.service);      │
+                  -- │   4. um Master usa 'corrigirLiberacaoDaRevisao' com 'devolverParaFila' e a │
+                  -- │      vaga VOLTA para REVISAO (vagas.service). Essa porta NÃO confere se há │
+                  -- │      candidatura viva dentro da vaga.                                       │
+                  -- │ No passo 4 a proteção sumiria e a pessoa seria anonimizada do lado de A&S  │
+                  -- │ ENQUANTO O CPF DELA SEGUE INTEIRO NA ADMISSÃO. É letra por letra o dano    │
+                  -- │ que o bloco da vaga que ENTREGOU (lá embaixo) existe para impedir,         │
+                  -- │ chegando por outra porta, e é PIOR: o módulo da Admissão não tem retenção  │
+                  -- │ geral (o 'ExpurgoService' de lá só trata TTLs de 48h). O lado que some é o │
+                  -- │ que preserva o histórico; o que sobrevive é o que guarda o CPF.            │
+                  -- │ Minimização ZERO, e irreversível.                                           │
+                  -- │                                                                             │
+                  -- │ ENTÃO A PERGUNTA É O FATO, E NÃO A DEDUÇÃO: 'k.admissao_id is not null'     │
+                  -- │ diz que ESTA candidatura virou admissão, direto, sem passar pelo estado da │
+                  -- │ vaga. A régua do carimbo continua inteira ao lado dela (ela cobre quem foi │
+                  -- │ contratado numa vaga que já fechou, e que pode não ter 'admissao_id' da    │
+                  -- │ época da carga): as duas são alternativas, e nenhuma substitui a outra.    │
+                  -- │                                                                             │
+                  -- │ E ELA FICA FORA DO 'and' DO PAPEL, DE PROPÓSITO. Dentro dele, a devolução  │
+                  -- │ para a fila desligaria justamente a proteção que este bloco existe para    │
+                  -- │ dar, e o caminho de dano dos 4 passos continuaria aberto com o comentário  │
+                  -- │ dizendo o contrário.                                                        │
+                  -- └───────────────────────────────────────────────────────────────────────────────┘
+                  and (k.admissao_id is not null
+                       or (s.papel is distinct from 'REVISAO'
                   -- A RÉGUA DE "ACABOU" É O FLAG encerra DO CATÁLOGO, lido por JOIN, e NUNCA uma
                   -- lista de códigos concatenada em sql.raw: o catálogo é editável pelo diretor, e
                   -- uma lista vinda dele quebraria como TEXTO a premissa escrita lá em cima (aqui não
@@ -361,17 +449,18 @@ export class RetencaoCandidatosService implements OnModuleInit, OnModuleDestroy 
                   -- encerramento ninguém sabe, e prazo sem data de início não começa a correr. Sem
                   -- esta metade, a linha sem carimbo cairia no relógio antigo, que é justamente o
                   -- que a correção existe para impedir.
-                  and (s.encerra = false
-                       or (s.papel = 'FECHAMENTO'
-                           and coalesce(v.vagas_fechadas, 0) + coalesce(v.vagas_fechadas_banco, 0) > 0)
-                       or v.encerrada_em is null))
+                           and (s.encerra = false
+                                or (s.papel = 'FECHAMENTO'
+                                    and coalesce(v.vagas_fechadas, 0)
+                                        + coalesce(v.vagas_fechadas_banco, 0) > 0)
+                                or v.encerrada_em is null))))
          -- ┌─ O RELÓGIO, e sem esta parte a correção não INICIA o prazo: ela o declara VENCIDO ────┐
          -- │ O prazo corre do ÚLTIMO movimento, não do primeiro: quem foi descartado em três vagas │
-         -- │ ao longo de dois anos ainda é alguém que o time viu recentemente.                     │
+         -- │ ao longo do período ainda é alguém que o time viu recentemente.                       │
          -- │                                                                                       │
          -- │ SÓ QUE ENCERRAR A VAGA NÃO CARIMBA A CANDIDATURA de quem não segurava o encerramento  │
          -- │ (medido na homologação: a candidatura APROVADA ficou 18 SEGUNDOS ATRÁS do             │
-         -- │ cancelada_em da vaga). Contando de k.atualizado_em, quem foi aprovado em 03/2024      │
+         -- │ cancelada_em da vaga). Contando de k.atualizado_em, quem foi aprovado muito antes     │
          -- │ numa vaga encerrada HOJE nasceria com o prazo JÁ VENCIDO e seria anonimizado na       │
          -- │ varredura da hora seguinte, sem carência nenhuma, e isso é irreversível.              │
          -- │                                                                                       │
@@ -413,14 +502,58 @@ export class RetencaoCandidatosService implements OnModuleInit, OnModuleDestroy 
          -- │ lugar dele puxariam a referência para trás e tornariam gente elegível mais CEDO do    │
          -- │ que ficaria antes da correção. O erro cai para o lado de não apagar.                  │
          -- └───────────────────────────────────────────────────────────────────────────────────────┘
+         --
+         -- ┌─ O PISO DA FILA DE REVISÃO, e sem ele a subtração de cima APRESSA um expurgo ────────┐
+         -- │ Para a candidatura VIVA numa vaga em REVISAO, 'v.encerrada_em' é nulo (a vaga não    │
+         -- │ encerrou), então o case acima cai no 'k.atualizado_em'. Para quem NASCEU na fila,    │
+         -- │ isso é a data da ingestão e está certo.                                              │
+         -- │                                                                                       │
+         -- │ PARA QUEM VOLTOU PARA A FILA, NÃO ESTÁ. Enquanto a vaga esteve ABERTA, a proteção    │
+         -- │ era incondicional e NINGUÉM PRECISAVA TOCAR A LINHA: 'k.atualizado_em' pode ter      │
+         -- │ ANOS. No instante em que o Master devolve a vaga para a fila, a proteção sai e essa  │
+         -- │ pessoa nasce com o PRAZO JÁ VENCIDO, sendo anonimizada na varredura da hora          │
+         -- │ seguinte, sem carência nenhuma. É irreversível, e é EXATAMENTE o modo de falha que o │
+         -- │ bloco acima já resolveu para o encerramento, com 'v.encerrada_em'.                    │
+         -- │                                                                                       │
+         -- │ O PISO É O INSTANTE DA ENTRADA NA FILA, lido da trilha de status                      │
+         -- │ ('as_vaga_status_eventos', carimbo de SERVIDOR 'em', gravado pela devolução em        │
+         -- │ vagas.service). 'max(e.em)' porque a vaga pode ter ido e voltado da fila mais de uma │
+         -- │ vez, e o que vale é a ÚLTIMA entrada.                                                 │
+         -- │                                                                                       │
+         -- │ ELE VIVE DENTRO DO 'greatest', E NUNCA COMO ARGUMENTO NOVO DO 'coalesce' DE FORA:     │
+         -- │ dentro do 'greatest' ele só empurra a data PARA FRENTE, então nenhuma pessoa fica     │
+         -- │ elegível mais CEDO do que ficaria sem ele. Como argumento do 'coalesce' externo, um   │
+         -- │ NULL dele mudaria a queda inteira e o erro cairia para o lado de APAGAR.              │
+         -- │                                                                                       │
+         -- │ O 'coalesce' INTERNO É A MESMA DEFESA DO CASE VIZINHO: vaga que não é da fila (e a    │
+         -- │ vaga da fila SEM evento, que é o caso do NASCIMENTO na fila) devolve NULL, e 'NULL'   │
+         -- │ dentro do 'greatest' do Postgres é IGNORADO, o que aqui seria inofensivo, mas a queda │
+         -- │ explícita para 'k.atualizado_em' mantém a leitura óbvia e a forma igual à de cima.    │
+         -- │                                                                                       │
+         -- │ O PAPEL VEM DO JOIN (s2), E NÃO DE UM CÓDIGO DIGITADO: 'e.para = v.status' compara a  │
+         -- │ trilha com o status ATUAL da própria vaga, sem nenhum literal de catálogo, e o gate   │
+         -- │ é 's2.papel = 'REVISAO'', que é papel de SISTEMA e não é renomeável pela tela.        │
+         -- │                                                                                       │
+         -- │ O JOIN É INTERNO pelo mesmo argumento de completude já escrito acima: 'vagas.status'  │
+         -- │ é NOT NULL com FK RESTRICT para 'as_vaga_status', então ele não perde candidatura     │
+         -- │ nenhuma da conta do 'max', e perder uma poderia BAIXAR o máximo e APRESSAR o expurgo. │
+         -- └───────────────────────────────────────────────────────────────────────────────────────┘
          and coalesce(
                (select max(greatest(
                            k.atualizado_em,
                            coalesce(
                              case when k.situacao in (${SITUACOES_VIVAS_SQL}) then v.encerrada_em end,
+                             k.atualizado_em),
+                           coalesce(
+                             case when s2.papel = 'REVISAO'
+                                  then (select max(e.em)
+                                          from as_vaga_status_eventos e
+                                         where e.vaga_id = v.id
+                                           and e.para = v.status) end,
                              k.atualizado_em)))
                   from as_candidaturas k
                   join vagas v on v.id = k.vaga_id
+                  join as_vaga_status s2 on s2.codigo = v.status
                  where k.candidato_id = c.id),
                greatest(c.criado_em, c.atualizado_em))
              <= now() - interval '${sql.raw(RetencaoCandidatosService.RETENCAO)}'

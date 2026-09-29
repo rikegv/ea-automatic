@@ -17582,3 +17582,159 @@ lista completa que fez o Chromium abrir está na memória da fábrica.
 registrada acima.
 
 **Nada rodando:** nenhum agente, nenhum comando em segundo plano, nenhuma frente aberta desta sessão.
+
+---
+
+## 29/09/2026, terça. Digai: o token chegou, a API real derrubou três premissas, e 174 testes verdes estavam errados
+
+**O que o diretor pediu:** atualizar os docs com as confirmações do Ivan e seguir com a construção da
+ingestão, agora com a dedup por `userId` destravada e o token Bearer na mão.
+
+**O que aconteceu de verdade:** o token permitiu, pela primeira vez, **medir a API contra a produção
+em vez de contra a documentação**. E a documentação não bate.
+
+### A sondagem, e o que ela derrubou
+
+Somente leitura, pela grade auditada e pelo cliente real, imprimindo **estrutura** (nome de campo,
+tipo, contagem) e nunca valor. Três premissas caíram:
+
+1. **O envelope é `{ message, data: { value } }`**, e a lista de resultados chama-se **`candidates`**.
+   `listaDaResposta` só reconhecia array no topo, `results` ou `data` array: contra a resposta real
+   devolveria `[]`, e **todo evento sairia por "sem registro correspondente", com zero escrito e
+   nenhum erro**. Falha silenciosa completa, que nenhum teste pegava.
+2. **A rota do par é `v1`, não `v2`.** No mesmo par, a v2 devolve **404** e a v1 devolve 200. A
+   listagem de resultados continua v2: **a versão é por rota, não por integração**.
+3. **Não existe o campo `name`.** Existem `firstname` e `lastname`. A projeção lia `o.name`, então
+   todo candidato do Digai nasceria sem nome.
+
+Mais: **os parâmetros de query são ignorados pelo fornecedor** (`?userId=`, `?search=` devolveram os
+mesmos 58 de 58, não há filtro no servidor), e **`curriculumUrl` entrou no mapa como PII pura**, fora
+da projeção pela mesma régua da URL do Pandapé.
+
+**Presença medida numa página de 58 registros:** `userId` 58/58 (36 caracteres, alfabeto fechado),
+`partnerJobId` 58/58 e **todos numéricos de 7 dígitos** (confirma o Ivan), `cpf` **4/58**,
+`partnerUserId` **0/58**, `name` **0/58**. Em 60 screenings: **2.298 registros, 17% com CPF, 40
+vagas distintas**. A base do fornecedor cresceu de 301 para **522 screenings** desde 16/09.
+
+### A lição, e ela vale muito além do Digai
+
+**Havia 174 testes verdes sobre um contrato errado.** Os fakes foram escritos a partir da
+documentação, e `digai.tester-fake.ts` **inventava o campo `name`**: era ele que ensinava a suíte
+inteira a concordar com o erro. Teste verde sobre dublê inventado não prova integração nenhuma, ele
+prova que o dublê concorda consigo mesmo.
+
+### O que os agentes acharam, e o que isso diz do processo
+
+O `tester` independente achou o que o autor não achou: o bloco de teste do `backend` chamava-se
+"as formas que o codigo antigo aceitava NAO existem no fornecedor", **nomeava "array no topo" no
+comentário e não o asseria**. O comentário declarava o requisito e a asserção pulava justamente o
+caso que falharia. É a §A.38 em estado puro.
+
+O `seguranca` auditou duas vezes. Na primeira, alertou que **os arquivos estavam sendo editados
+durante a auditoria** e vinculou o veredito aos md5 lidos: erro meu de sequenciamento, despachei a
+auditoria de código junto com a correção, em vez de depois. A segunda rodada, sobre o estado final e
+com md5 registrado, devolveu **APROVADO item por item**, com prova por mutação.
+
+### O que foi corrigido
+
+Contrato: desembrulhador único **fail-closed** (envelope não reconhecido significa lista vazia), rota
+do par em v1, nome composto de `firstname` + `lastname`, allowlist de projeção fechada (dos 41 campos
+reais, **33 seguem fora**). Mais as cinco ressalvas do `seguranca`: situação de nascimento que
+reprova em `consomePosicao` é descartada, guarda de anonimização nos dois ramos, `failedReason` pelo
+funil de tradução, `anexarIdentidade` com `insert ... select ... where exists`, e a camada 2 da
+máscara alcançando telefone formatado.
+
+E uma janela que a reauditoria deixou como residual, fechada por mim: **`garantirCandidatura` também
+carrega a cláusula de anonimização**. Sem ela, a candidatura viva nascia apontando para ficha já
+expurgada, e candidatura viva em vaga não encerrada **protege a pessoa do expurgo para sempre**.
+
+Tirei também uma asserção de teatro que a reauditoria pegou: um `it` cuja única asserção era
+`["userId","user_id","search","partnerUserId"].length === 4`, tautologia sobre um array literal do
+próprio teste, que não podia ficar vermelha por motivo nenhum. A medição virou comentário, que é o
+lugar dela.
+
+**Uma armadilha que quase me pegou:** o teste novo varre a FONTE do repositório, e o comentário que
+explica a cláusula **cita a cláusula**. Varredura crua casaria o comentário e ficaria verde com o SQL
+apagado. O teste tira comentário antes de asserir, e a mutação confirma que ele morre sem a cláusula.
+
+### Números
+
+| medição | valor |
+|---|---|
+| suíte do Digai, antes | 174 verdes sobre contrato errado |
+| suíte do Digai, depois | **240 verdes, 7 arquivos, zero vermelho** |
+| testes do `tester` independente | 48, provados por mutação em duas rodadas |
+| campos reais do registro do Digai | 41, dos quais **33 fora da projeção** |
+| screenings na base do fornecedor | **522** (eram 301 em 16/09) |
+| `vagas` em produção | **0** (3 na homologação) |
+
+### Quem rodou
+
+| agente | frente | veredito |
+|---|---|---|
+| coordenador | sondagem da API real, docs, consolidação, fechamento da última janela | 3 premissas derrubadas |
+| **seguranca (1, código)** | os 7 itens de LGPD e auth | **APROVADO**, 5 ressalvas, alerta de alvo móvel |
+| backend | contrato, as 5 ressalvas, o fallback fail-closed | verde |
+| **tester (independente)** | 48 testes do requisito medido | achou 1 gap real que o autor declarava e não asseria |
+| **seguranca (2, estado final)** | reauditoria com md5 e mutação | **APROVADO** item por item |
+
+### O token
+
+Usado **uma vez, somente leitura**, e **expurgado (`shred -u -z -n 3`)** ao fim. Nunca esteve em
+`.env` nenhum, nunca foi ecoado, nunca entrou em log ou em linha de comando. A integração segue
+**INERTE**: sem `DIGAI_API_TOKEN` nada sai para a rede, sem `DIGAI_INGESTAO_ATIVA` nada é escrito.
+
+**Nada foi commitado nem publicado.** A frente não tem tela, então não há validação visual a fazer;
+o que falta é a decisão do diretor.
+
+### Segunda parte do dia: o questionamento do diretor, e as decisões aplicadas
+
+**O diretor questionou o vínculo com a vaga, e ele estava certo.** Eu havia dito no pulso que "a
+ingestão adia 100% até existir vaga viva". **Estava errado, e corrijo:** a vaga **nasce sozinha**.
+`espelharVaga` (`digai-repositorio.ts`) insere em `vagas` com `id_vacancy_pandape = partnerJobId`,
+`cod_cliente` nulo e status do papel `REVISAO`, exatamente como o espelho do Pandapé. **O `adiar` só
+acontece quando o `partnerJobId` falta ou é inválido**, e ele veio 58/58 na medição. O desenho que o
+diretor lembrava é o que está construído; o erro foi meu, ao inferir da tabela `vagas` vazia.
+
+**Decisão: trazer só quem FINALIZOU.** Sem CPF significa que não finalizou. O portão é
+`INGERIR_SOMENTE_QUEM_FINALIZOU`, **parâmetro com padrão nomeado e não constante lida por dentro**,
+e a diferença importa: constante lida por dentro só é testável do lado em que está hoje, e o outro
+lado teria de ser "provado" lendo o fonte, que é afirmar sobre texto e não sobre comportamento.
+Quem não finalizou **não escreve nada e nem faz o banco ser lido**, que é a diferença entre não
+mostrar e não coletar. O quarto número entrou no resumo com nome próprio: confundi-lo com `adiado`
+(falta de elo com a vaga) ou com `ignorado` (já importado) faria o log mentir sobre o motivo.
+
+**Decisão: retenção de 6 meses, e vaga em revisão não protege mais.** Esta tocou código validado e
+de alto risco, cuja saída é anonimização irreversível. **O `seguranca` auditou o MAPA antes de o
+código existir e VETOU 3 de 5 itens**, com caminhos de dano provados:
+
+1. **a forma da subtração.** A cláusula protege por PROPRIEDADE (`encerra = false`), então tirar a
+   revisão por **lista positiva** derrubaria junto `RASCUNHO` e **todo status `LIVRE`** (o Stand By),
+   e o contrato antigo deixaria isso passar verde. A forma segura é subtrair UM papel.
+2. **o contratado protegido por PROXY, não pelo fato.** Caminho inteiro em código existente: vaga
+   espelhada nasce em revisão, é liberada, a pessoa é aprovada e **enviada para admissão**, um Master
+   devolve a vaga para a fila, e a proteção some. A pessoa seria anonimizada em A&S **com o CPF vivo
+   do lado da Admissão**, que não tem retenção geral. Passou a ler `k.admissao_id`, o fato.
+3. **o relógio sem piso.** Quem **volta** para a fila tem `atualizado_em` de anos atrás, porque
+   enquanto a vaga esteve aberta a proteção era incondicional e ninguém precisava tocar a linha.
+   Nasceria com **o prazo já vencido**, anonimizado na varredura seguinte, sem carência. Ganhou piso
+   no instante de entrada em revisão, dentro do `greatest`.
+
+**A reauditoria do código levantou os três vetos**, com **8 mutantes mortos sobre o serviço real**.
+
+**Um defeito que teria ido para produção:** a primeira escrita da cláusula saiu com **um parêntese a
+menos**. Passava em **todas** as asserções da suíte, porque elas leem STRING e não executam SQL, e
+teria dado `syntax error` no primeiro boot: a varredura para, ninguém é expurgado nunca mais, e a
+falha vira **uma linha de log**, por desenho. Virou teste permanente de balanceamento, que lê o SQL
+de produção e não uma cópia.
+
+**A fresta que fica registrada, e é da plataforma, não desta frente:** não há pglite, pg-mem nem
+testcontainers no backend, então **nenhum teste executa SQL de verdade**. O parêntese foi coberto e
+os identificadores novos foram conferidos à mão, mas o modo de falha continua aberto para o próximo.
+
+| medição | valor |
+|---|---|
+| suíte do Digai | **259 verdes** |
+| suíte inteira do backend | **7.226 verdes, 404 arquivos, zero vermelho** |
+| mutantes mortos, retenção | 8 sobre o serviço real, pelo auditor |
+| `as_candidatos` em produção | **0** (410 na homologação), então nada é anonimizado hoje |

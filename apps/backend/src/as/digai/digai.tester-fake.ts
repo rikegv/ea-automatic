@@ -40,6 +40,15 @@ export const CAMINHOS = {
   dto: "./digai.dto",
   /** A controller, que e onde o RBAC das rotas mora. */
   controller: "./digai.controller",
+  /**
+   * O RECEPTOR do evento `NEW_APPLICATION`: a rota publica que o Digai chama quando o candidato
+   * finaliza a triagem. Espelha `pandape-webhook.controller.ts` (secao A.5).
+   */
+  webhook: "./digai-webhook.controller",
+  /** O guard de ORIGEM do receptor, no molde do `PandapeWebhookGuard`: token proprio, fail-closed. */
+  guardaWebhook: "./digai-webhook.guard",
+  /** A fila do Digai: nome, prefixo, banco Redis e o LIMITER que cabe no teto de 120 req/min. */
+  fila: "./digai.queue",
 } as const;
 
 export type PecaDoDigai = keyof typeof CAMINHOS;
@@ -99,12 +108,33 @@ export const CPF_SINTETICO = {
   terceiro: "55566677720",
 } as const;
 
-/** Um registro de `results` v2 do Digai, com a forma medida na varredura de 16/09 e nada alem. */
+/**
+ * ─ UM REGISTRO CRU DO DIGAI, NA FORMA QUE A PRODUCAO DO FORNECEDOR DEVOLVE DE VERDADE ──────────
+ *
+ * ┌─ A LICAO, E ELA CUSTOU 174 TESTES VERDES SOBRE UM CONTRATO ERRADO ───────────────────────────┐
+ * │ ESTE FAKE TINHA UM CAMPO `name`, E `name` NAO EXISTE NO FORNECEDOR. A sondagem da producao em │
+ * │ 29/09/2026 mediu `name` em 0 de 58 registros de um screening real: o que existe e `firstname` │
+ * │ e `lastname`, SEPARADOS. Como o fake inventava o campo, toda a suite concordava com ele e     │
+ * │ NINGUEM viu que a producao nasceria com candidato sem nome.                                    │
+ * │                                                                                               │
+ * │ FAKE QUE NAO COPIA O FORNECEDOR NAO TESTA A INTEGRACAO, TESTA A SI MESMO. Ele so vale se a    │
+ * │ forma dele tiver sido MEDIDA contra o outro lado, e e por isso que os campos abaixo tem a      │
+ * │ presenca anotada.                                                                              │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * Presenca medida numa pagina de 58 registros: `userId` 58/58, `partnerJobId` 58/58 (numerico de 7
+ * digitos, o id da vaga do Pandape), `appliedAt` 58/58, `email` 58/58, `phoneNumber` 58/58,
+ * `stages` 58/58, `cpf` 4/58, `partnerUserId` 0/58, `name` 0/58.
+ *
+ * Os campos de JULGAMENTO entram aqui de proposito, para que a projecao tenha o que RECUSAR: eles
+ * existem no fornecedor e nao podem existir do lado de ca (protocolo, secao 3).
+ */
 export function resultadoDigaiFingido(over: Partial<ResultadoDigai> = {}): ResultadoDigai {
   return {
     userId: "usr-sintetico-1",
     partnerJobId: "1234567",
-    name: "Fulano De Teste",
+    firstname: "Fulano",
+    lastname: "De Teste",
     email: "fulano.teste@exemplo.invalido",
     phoneNumber: "11900000001",
     cpf: null,
@@ -117,12 +147,29 @@ export function resultadoDigaiFingido(over: Partial<ResultadoDigai> = {}): Resul
 export interface ResultadoDigai {
   userId: string;
   partnerJobId: string | null;
-  name: string | null;
+  firstname: string | null;
+  lastname: string | null;
   email: string | null;
   phoneNumber: string | null;
   cpf: string | null;
   appliedAt: string | null;
   stages: unknown[];
+}
+
+/**
+ * ─ O ENVELOPE DO FORNECEDOR, E TODA RESPOSTA VEM DENTRO DELE ───────────────────────────────────
+ *
+ * Forma medida em 29/09/2026: `{ message: [...], data: { value: <conteudo> } }`. `data` e OBJETO,
+ * nunca array, e nao existe `results` no topo. Fake que devolve o conteudo PELADO faz a leitura
+ * passar sem nunca ter desembrulhado nada, que e exatamente o verde falso que esta rodada corrigiu.
+ */
+export function respostaDigaiFingida(conteudo: unknown): unknown {
+  return { message: [], data: { value: conteudo } };
+}
+
+/** A listagem de resultados de um screening: a lista chama-se `candidates`, e nao `results`. */
+export function paginaDeCandidatosFingida(candidates: unknown[]): unknown {
+  return respostaDigaiFingida({ page: 1, total: candidates.length, candidates });
 }
 
 // ── 3. A CACA AO VALOR REAL (armadilha 2 do protocolo, seccao 1.1) ──────────
@@ -185,6 +232,18 @@ export function fonteDoModulo(pasta: string = PASTA_DO_DIGAI): string {
     }
   };
   andar(pasta);
+
+  /*
+   * ─ O DOMINIO ENTRA NA VARREDURA, E ELE MORA FORA DA PASTA (achado do `seguranca`, 29/09) ─────
+   *
+   * `CAMINHOS.dominio` aponta para `../../domain/digai`, entao ele NAO estava sendo alcancado por
+   * nenhuma assercao de fonte: "nao ha atalho de TLS", "nao ha token em codigo" e "nao se loga
+   * campo de pessoa" eram afirmacoes sobre a pasta `as/digai` apenas, e o dominio e justamente
+   * onde a mascara, o resumo e a montagem de erro vivem, ou seja o codigo que MAIS toca o valor.
+   */
+  const doDominio = join(pasta, "../../domain/digai.ts");
+  if (existsSync(doDominio)) pedacos.push(readFileSync(doDominio, "utf8"));
+
   return pedacos.join("\n");
 }
 
@@ -250,30 +309,141 @@ export function pecasPresentes(): PecaDoDigai[] {
  */
 export const PECAS_PRESENTES: readonly PecaDoDigai[] = pecasPresentes();
 
-/** `true` enquanto NENHUMA peca do Digai existir. */
-export const DIGAI_SUSPENSO = PECAS_PRESENTES.length === 0;
+/** Quais das pecas pedidas ainda NAO estao no disco. Vazio = o bloco pode rodar. */
+export function pecasFaltando(...pecas: PecaDoDigai[]): PecaDoDigai[] {
+  return pecas.filter((peca) => !PECAS_PRESENTES.includes(peca));
+}
+
+type BlocoDeSuite = (nome: string, corpo: () => void) => void;
 
 /**
- * O `describe` das suites suspensas: `describe.skip` enquanto nao ha implementacao, `describe` de
- * verdade no minuto em que a primeira peca nascer. Nenhuma assercao foi apagada: elas so esperam.
+ * ─ A SUSPENSAO E POR PECA, E NAO GLOBAL (correcao de 29/09/2026) ────────────────────────────────
+ *
+ * ┌─ O QUE ESTAVA ERRADO NO DESENHO DE 21/09, e ele quebraria a construcao de hoje ──────────────┐
+ * │ `DIGAI_SUSPENSO` era UM booleano para o modulo inteiro: suspendia TUDO enquanto NENHUMA peca │
+ * │ existisse, e acordava TUDO no minuto em que a PRIMEIRA nascesse. Funciona quando a frente     │
+ * │ nasce inteira de uma vez, e so entao. A OST de 29/09 constroi `grade`, `dominio`, `cliente`,  │
+ * │ `importacao`, `dto` e `controller`, e NAO pede o `reengajar` (secao A.31: so o que a OST      │
+ * │ pede; o que falta se PROPOE). Com a medida global, o nascimento da primeira peca acordaria    │
+ * │ junto as 24 assercoes do reengajar, que ficariam vermelhas cobrando um arquivo que ninguem    │
+ * │ pediu, e a saida mais facil dali seria apagar ou silenciar cobertura boa.                     │
+ * │                                                                                                │
+ * │ ENTAO CADA BLOCO DECLARA DE QUE PECAS ELE PRECISA, e so acorda quando TODAS elas existirem.   │
+ * │ As duas propriedades que o desenho antigo tinha continuam valendo, e agora por bloco:          │
+ * │  1. acorda SOZINHO, sem ninguem virar interruptor;                                             │
+ * │  2. nao ha `skip` eterno, porque a sentinela deste arquivo diz, em toda rodada, exatamente     │
+ * │     qual peca falta para cada arquivo (e `skip` que ninguem lembra de reativar e pior que      │
+ * │     teste nenhum).                                                                             │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
  */
-export const describeSuspenso = DIGAI_SUSPENSO ? describe.skip : describe;
+export function suspensoSem(...pecas: PecaDoDigai[]): BlocoDeSuite {
+  return pecasFaltando(...pecas).length === 0 ? describe : describe.skip;
+}
 
 /**
- * A SENTINELA. Roda SEMPRE, inclusive com a suite suspensa, e e a unica coisa que impede este
- * trabalho de dormir para sempre: `skip` puro ninguem lembra de reativar, entao quem avisa nao e a
- * memoria de ninguem, e um teste que FICA VERMELHO no dia em que a implementacao aparecer.
+ * A SENTINELA, agora POR ARQUIVO E POR PECA. Roda SEMPRE, e tem duas caras:
+ *
+ *  - com peca faltando, ela PASSA e o NOME do teste diz quais faltam. E o unico jeito de uma suite
+ *    suspensa continuar aparecendo em toda rodada, em vez de virar um `skip` que ninguem le.
+ *  - com todas presentes, ela vira TRABALHO DE VERDADE: exige que cada peca CARREGUE. Peca que
+ *    existe e nao importa (erro de sintaxe, ciclo de import, export faltando no barril) produziria
+ *    N vermelhos confusos espalhados pelos blocos; aqui produz UM, dizendo o nome do modulo e a
+ *    mensagem original do carregador.
+ *
+ * O ARQUIVO SO PRECISA LISTAR AS PECAS DELE. A sentinela do `reengajar` continua dizendo "falta
+ * reengajar" hoje, e no dia em que `digai-reengajar.service.ts` nascer aquele arquivo acorda
+ * sozinho, inteiro, e fica vermelho ate a implementacao satisfazer o contrato de 21/09.
  */
-export function sentinelaDoDigai(arquivo: string): void {
-  it(`SENTINELA: a implementacao do Digai ainda nao existe, entao esta suite segue suspensa`, () => {
-    expect(
-      [...PECAS_PRESENTES],
-      [
-        "A IMPLEMENTACAO DO DIGAI CHEGOU, REATIVE ESTA SUITE REMOVENDO A SUSPENSAO.",
-        `Pecas encontradas no disco: ${PECAS_PRESENTES.join(", ")}.`,
-        `Como reativar em '${arquivo}': troque 'describeSuspenso' por 'describe', apague o cabecalho de suspensao e remova a chamada de 'sentinelaDoDigai'.`,
-        "O contrato escrito neste arquivo continua valendo palavra por palavra: ele foi escrito antes do codigo de proposito (secao A.40, regra 2), e e ele que a construcao tem de satisfazer.",
-      ].join(" "),
-    ).toEqual([]);
-  });
+export function sentinelaDasPecas(arquivo: string, pecas: readonly PecaDoDigai[]): void {
+  const faltando = pecasFaltando(...pecas);
+
+  if (faltando.length > 0) {
+    it(`SENTINELA de ${arquivo}: suspenso enquanto faltar [${faltando.join(", ")}]`, () => {
+      for (const peca of faltando) {
+        expect(
+          CAMINHOS[peca],
+          `a peca '${peca}' nao esta em CAMINHOS. Nome de peca que ninguem registrou faz o bloco dormir para sempre acreditando que a implementacao nao chegou.`,
+        ).toBeTruthy();
+      }
+      expect(
+        pecas.length,
+        "um arquivo que nao declara peca nenhuma nunca suspende e nunca acorda: a declaracao e obrigatoria.",
+      ).toBeGreaterThan(0);
+    });
+    return;
+  }
+
+  it(`SENTINELA de ${arquivo}: as pecas [${pecas.join(", ")}] chegaram, e a suite ACORDOU`, async () => {
+    for (const peca of pecas) {
+      const { erro } = await carregar(peca);
+      expect(
+        erro,
+        `a peca '${peca}' (${CAMINHOS[peca]}) existe no disco mas NAO CARREGA. Isto e defeito de codigo, nao ausencia de implementacao: ${erro}`,
+      ).toBeNull();
+    }
+    // O TEMPO E FOLGADO DE PROPOSITO: este `it` IMPORTA as pecas, e a primeira importacao do modulo
+    // do Digai puxa o Nest junto. Com o padrao de 5s ele falhava por frieza de cache, que e a pior
+    // especie de vermelho: o que nao diz nada sobre o codigo e ensina a gente a ignorar vermelho.
+  }, 30_000);
+}
+
+// ── 6. O EVENTO DO WEBHOOK, E OS DUBLES DE REQUISICAO ───────────────────────
+
+/**
+ * O CORPO CRU DO EVENTO `NEW_APPLICATION`, com PII SINTETICA DENTRO, de proposito.
+ *
+ * ┌─ POR QUE A FIXTURE CARREGA E-MAIL, TELEFONE E NOME ──────────────────────────────────────────┐
+ * │ Porque o evento real carrega. Uma fixture higienizada provaria que um payload limpo nao suja  │
+ * │ o log, que e uma frase verdadeira sobre coisa nenhuma. O que se quer provar e que o payload   │
+ * │ SUJO nao chega ao log, a mensagem de erro nem a FILA, e para isso o dado tem de estar la e    │
+ * │ ser procurado NA SAIDA pelo VALOR (`piiNaSaida`), nunca pelo placeholder (licao do veto 4).   │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+export function eventoDigaiFingido(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    event: "NEW_APPLICATION",
+    screeningId: "sc-sintetico-1",
+    userId: "usr-sintetico-1",
+    candidate: {
+      name: "Fulano De Teste",
+      email: "fulano.teste@exemplo.invalido",
+      phoneNumber: "11900000001",
+      cpf: CPF_SINTETICO.finalizou,
+    },
+    occurredAt: "2026-09-29T12:00:00.000Z",
+    ...over,
+  };
+}
+
+/** A PII que o evento fingido carrega, que e exatamente o que nao pode sair em lugar nenhum. */
+export const PII_DO_EVENTO = [
+  "Fulano De Teste",
+  "fulano.teste@exemplo.invalido",
+  "11900000001",
+  CPF_SINTETICO.finalizou,
+] as const;
+
+/**
+ * Um `ExecutionContext` do Nest reduzido ao que um guard de origem usa: headers, corpo e socket.
+ * Nao se importa `@nestjs/common` aqui de proposito: o guard so precisa do FORMATO, e o duble
+ * mantem o teste sem Nest de pe.
+ */
+export function contextoFingido(req: {
+  headers?: Record<string, string | string[] | undefined>;
+  body?: unknown;
+  socket?: { remoteAddress?: string };
+}): { switchToHttp: () => { getRequest: <T>() => T } } {
+  const requisicao = {
+    headers: req.headers ?? {},
+    body: req.body ?? {},
+    socket: req.socket ?? { remoteAddress: "127.0.0.1" },
+  };
+  return { switchToHttp: () => ({ getRequest: <T>() => requisicao as unknown as T }) };
+}
+
+/** Um `ConfigService` reduzido ao `get`, para provar o fail-closed SEM credencial e COM ela. */
+export function configFingida(vars: Record<string, string | undefined>): {
+  get: <T>(chave: string) => T | undefined;
+} {
+  return { get: <T>(chave: string) => vars[chave] as unknown as T | undefined };
 }

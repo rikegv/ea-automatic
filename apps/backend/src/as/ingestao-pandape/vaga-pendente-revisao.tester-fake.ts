@@ -672,28 +672,52 @@ export function violacoesDoAbrigoDoExpurgo(sqlDoExpurgo: string): string[] {
   const t = sqlDoExpurgo.toLowerCase();
   if (!/s\.encerra\s*=\s*false/.test(t)) {
     v.push(
-      "EXPURGO_NAO_PROTEGE_PELA_PROPRIEDADE: a proteção do expurgo deixou de ler `s.encerra = false`. É essa propriedade que faz o status novo ser tratado como qualquer status não encerrado, sem que a frente precise tocar no expurgo.",
+      "EXPURGO_NAO_PROTEGE_PELA_PROPRIEDADE: a proteção do expurgo deixou de ler `s.encerra = false`. É essa propriedade que mantém protegido TODO papel que não encerra (RASCUNHO, ABERTURA, ENTREGA e toda linha LIVRE que o diretor criar pela tela, do tipo Stand By). Trocá-la por uma lista de papéis derruba, em silêncio, tudo o que não foi lembrado.",
     );
   }
   /*
-   * ─ A EXCEÇÃO POR PAPEL MUDOU DE `ENTREGA` PARA `FECHAMENTO` (Frente B da Central de Vagas) ────
+   * ─ A REGRA VIROU DE LADO: A FILA DE REVISÃO NÃO ABRIGA MAIS (decisão do diretor) ──────────────
    *
-   * O QUE ESTA GUARDA PROTEGE NÃO MUDOU: o status novo da fila de revisão tem de continuar abrigado
-   * pela PROPRIEDADE (`s.encerra = false`), e não por uma lista de papéis que cresça a cada frente.
-   * A exceção continua sendo UMA, e continua sendo sobre A MESMA GENTE (quem FOI CONTRATADO).
+   * O QUE ESTE CONTRATO COBRAVA ATÉ AQUI, e vale escrever porque é o oposto do que ele cobra agora:
+   * que o status novo fosse abrigado pela PROPRIEDADE (`encerra = false`), de modo que a frente da
+   * fila de revisão pudesse nascer sem tocar no expurgo. A premissa era boa e o efeito medido foi
+   * ruim: a vaga espelhada nasce sem cliente, é a que MENOS gente revisa, e enquanto ninguém a
+   * revisa ela não encerra. Candidatura viva ali dentro segurava o expurgo da pessoa INTEIRA por
+   * tempo INDEFINIDO, e a inércia de quem revisa virava política de retenção (§A.6).
    *
-   * O QUE MUDOU É O ENDEREÇO DELA: `ENTREGUE` deixou de encerrar, então a vaga que entregou passou
-   * a sair `FECHADA`, e a exceção passou a ser "papel FECHAMENTO **com carimbo de entrega**". Os
-   * dois sempre descreveram o mesmo conjunto (o `fechar` gravava ENTREGUE quando, e só quando,
-   * `ocupacao.finalizadas > 0`, carimbando `vagas_fechadas` na mesma gravação).
-   *
-   * A CONTAGEM DE PAPÉIS CITADOS CONTINUA SENDO UM, que é o que impede a lista de crescer.
+   * O DIRETOR DECIDIU QUE A FILA NÃO PROTEGE MAIS. Este contrato passa a cobrar a subtração, e não
+   * o abrigo. As DUAS afirmações abaixo são necessárias e medem coisas diferentes:
+   *   1. a fila está fora da proteção, e pelo PAPEL (o código é renomeável pela tela do catálogo);
+   *   2. a subtração é de UM papel SÓ. Tirar a fila com uma lista positiva
+   *      (`s.papel in ('ABERTURA','ENTREGA')`) tira o RASCUNHO e todo status LIVRE junto, o que é
+   *      exatamente o dano que a primeira versão desta função existia para impedir.
+   * A garantia antiga não foi apagada: ela mudou de alvo, do REVISAO para todo o resto.
    */
-  const papeis = [...t.matchAll(/s\.papel\s*(?:=|in)\s*\(?\s*'([a-z_]+)'/g)].map((m) => m[1]);
-  const inesperados = papeis.filter((p) => p !== "fechamento");
+  const excluiPeloPapel =
+    /papel\s+(?:is\s+distinct\s+from|<>|!=)\s*'revisao'/.test(t) ||
+    /papel\s+not\s+in\s*\([^)]*'revisao'/.test(t);
+  if (!excluiPeloPapel) {
+    v.push(
+      "EXPURGO_AINDA_ABRIGA_A_FILA: a proteção do expurgo não exclui o papel REVISAO. A vaga espelhada nasce na fila sem cliente, com `encerra = false` e sem `encerrada_em`, então ela protege do expurgo todo mundo pendurado nela enquanto ninguém a revisar: retenção INDEFINIDA de dado pessoal, em massa e em silêncio (§A.6).",
+    );
+  }
+  if (/'pendente_revisao'/.test(t)) {
+    v.push(
+      "EXPURGO_EXCLUI_A_FILA_POR_CODIGO: a subtração foi escrita com o CÓDIGO do status. O diretor renomeia `PENDENTE_REVISAO` pela tela do catálogo, e no dia do renome a fila volta a proteger, sem nada falhar. A âncora é o PAPEL, que é de sistema e tem índice único parcial.",
+    );
+  }
+  /*
+   * A CONTAGEM DE PAPÉIS CITADOS NÃO É MAIS UM, e sim DOIS, nomeados: FECHAMENTO (a exceção de quem
+   * ENTREGOU, isto é, foi contratado) e REVISAO (a subtração desta decisão). É a lista que não pode
+   * crescer: cada papel a mais aqui é uma população perdendo ou ganhando proteção sem decisão.
+   */
+  const papeis = [
+    ...t.matchAll(/s2?\.papel\s*(?:=|in|<>|!=|is\s+distinct\s+from)\s*\(?\s*'([a-z_]+)'/g),
+  ].map((m) => m[1]);
+  const inesperados = papeis.filter((p) => p !== "fechamento" && p !== "revisao");
   if (inesperados.length > 0) {
     v.push(
-      `EXPURGO_ENUMERA_PAPEIS: o expurgo passou a citar os papéis ${inesperados.join(", ")}. Enquanto ele só excetua a vaga que ENTREGOU (papel FECHAMENTO com carimbo de entrega), o status novo se comporta como o rascunho se comportava, QUALQUER que seja o papel dele, e é essa a razão pela qual a frente pode criar o status sem tocar no expurgo. Citar outro papel quebra essa garantia em silêncio.`,
+      `EXPURGO_ENUMERA_PAPEIS: o expurgo passou a citar os papéis ${inesperados.join(", ")}. Só DOIS são autorizados: FECHAMENTO (a exceção de quem foi contratado) e REVISAO (a fila que o diretor tirou da proteção). Todo papel a mais aqui é uma população inteira ganhando ou perdendo proteção sem que ninguém tenha decidido isso, e o flag \`encerra\` deixa de ser a régua.`,
     );
   }
   return v;

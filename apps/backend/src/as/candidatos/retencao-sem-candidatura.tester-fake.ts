@@ -529,7 +529,7 @@ export const NOME_REAL_SINTETICO = "Fulano De Teste Sintetico";
  *
  * ELE HERDA O CONTRATO VIZINHO INTEIRO, menos a regra revogada, e é assim que "o que NÃO pode
  * mudar" fica travado sem ser reescrito: a proteção da vaga não encerrada, o sentido da cláusula de
- * banco, a lista derivada das situações vivas, o prazo de 2 anos e o `max` do relógio continuam
+ * banco, a lista derivada das situações vivas, o prazo do diretor e o `max` do relógio continuam
  * cobrados pela régua que já existia.
  */
 export function violacoesDaRetencaoSemCandidatura(sqlTexto: string): string[] {
@@ -574,7 +574,7 @@ export function violacoesDaRetencaoSemCandidatura(sqlTexto: string): string[] {
   const fallback = queda[queda.length - 1];
   if (!/\bc\.atualizado_em\b/.test(fallback)) {
     v.push(
-      "QUEDA_NAO_USA_O_ULTIMO_MOVIMENTO: a queda não lê `c.atualizado_em`. Contando só do `criado_em`, alguém cadastrado há 2 anos e editado ontem nasce com o prazo JÁ VENCIDO e é anonimizado na varredura da hora seguinte, sem carência. É irreversível, e é a mesma régua de último movimento que o ramo de quem TEM candidatura já usa.",
+      "QUEDA_NAO_USA_O_ULTIMO_MOVIMENTO: a queda não lê `c.atualizado_em`. Contando só do `criado_em`, alguém cadastrado há mais de 6 meses e editado ontem nasce com o prazo JÁ VENCIDO e é anonimizado na varredura da hora seguinte, sem carência. É irreversível, e é a mesma régua de último movimento que o ramo de quem TEM candidatura já usa.",
     );
   }
   if (/\bc\.criado_em\b/.test(fallback) && !/\bgreatest\s*\(/.test(fallback)) {
@@ -777,18 +777,22 @@ export const SQL_REFERENCIA_SEM_CANDIDATURA = sqlExecutavel(sql`
              join as_vaga_status s on s.codigo = v.status
             where k.candidato_id = c.id
               and k.situacao in (${sql.raw(VIVAS_NO_SQL)})
-              and (s.encerra = false or (s.papel = 'FECHAMENTO' and coalesce(v.vagas_fechadas, 0) + coalesce(v.vagas_fechadas_banco, 0) > 0) or v.encerrada_em is null))
+              and (k.admissao_id is not null or (s.papel is distinct from 'REVISAO' and (s.encerra = false or (s.papel = 'FECHAMENTO' and coalesce(v.vagas_fechadas, 0) + coalesce(v.vagas_fechadas_banco, 0) > 0) or v.encerrada_em is null))))
      and coalesce(
            (select max(greatest(
                          k.atualizado_em,
                          coalesce(
                            case when k.situacao in (${sql.raw(VIVAS_NO_SQL)}) then v.encerrada_em end,
+                           k.atualizado_em),
+                         coalesce(
+                           case when s2.papel = 'REVISAO' then (select max(e.em) from as_vaga_status_eventos e where e.vaga_id = v.id and e.para = v.status) end,
                            k.atualizado_em)))
               from as_candidaturas k
               join vagas v on v.id = k.vaga_id
+              join as_vaga_status s2 on s2.codigo = v.status
              where k.candidato_id = c.id),
            greatest(c.criado_em, c.atualizado_em))
-         <= now() - interval '2 years'
+         <= now() - interval '6 months'
   returning c.id
   ),
   cicatriz as (
@@ -833,10 +837,18 @@ function trocar(de: string, para: string): string {
 }
 
 const QUEDA_REFERENCIA = "greatest(c.criado_em, c.atualizado_em)";
+const PISO_REFERENCIA =
+  `coalesce( case when s2.papel = 'REVISAO' then (select max(e.em) from as_vaga_status_eventos e ` +
+  `where e.vaga_id = v.id and e.para = v.status) end, k.atualizado_em)`;
 const MAX_REFERENCIA =
   `(select max(greatest( k.atualizado_em, coalesce( case when k.situacao in (${VIVAS_NO_SQL}) ` +
-  `then v.encerrada_em end, k.atualizado_em))) from as_candidaturas k join vagas v on v.id = k.vaga_id ` +
+  `then v.encerrada_em end, k.atualizado_em), ${PISO_REFERENCIA})) from as_candidaturas k ` +
+  `join vagas v on v.id = k.vaga_id join as_vaga_status s2 on s2.codigo = v.status ` +
   `where k.candidato_id = c.id)`;
+const CONDICAO_REFERENCIA =
+  `(k.admissao_id is not null or (s.papel is distinct from 'REVISAO' and (s.encerra = false ` +
+  `or (s.papel = 'FECHAMENTO' and coalesce(v.vagas_fechadas, 0) + coalesce(v.vagas_fechadas_banco, 0) > 0) ` +
+  `or v.encerrada_em is null)))`;
 
 export const MUTANTES_SEM_CANDIDATURA: MutanteDaQueda[] = [
   {
@@ -915,7 +927,7 @@ export const MUTANTES_SEM_CANDIDATURA: MutanteDaQueda[] = [
     nome: "12. a proteção da vaga não encerrada some",
     dano: "quem está em processo vivo numa vaga aberta volta a ser alcançável, e o expurgo apaga gente EM PROCESSO.",
     sql: trocar(
-      `not exists ( select 1 from as_candidaturas k join vagas v on v.id = k.vaga_id join as_vaga_status s on s.codigo = v.status where k.candidato_id = c.id and k.situacao in (${VIVAS_NO_SQL}) and (s.encerra = false or (s.papel = 'FECHAMENTO' and coalesce(v.vagas_fechadas, 0) + coalesce(v.vagas_fechadas_banco, 0) > 0) or v.encerrada_em is null))`,
+      `not exists ( select 1 from as_candidaturas k join vagas v on v.id = k.vaga_id join as_vaga_status s on s.codigo = v.status where k.candidato_id = c.id and k.situacao in (${VIVAS_NO_SQL}) and ${CONDICAO_REFERENCIA})`,
       `not exists ( select 1 from as_candidaturas k where k.candidato_id = c.id and k.situacao in (${VIVAS_NO_SQL}) and false)`,
     ),
     regraEsperada: "PROTECAO_SEM_CATALOGO",
@@ -937,9 +949,39 @@ export const MUTANTES_SEM_CANDIDATURA: MutanteDaQueda[] = [
   },
   {
     nome: "15. o prazo encolhe",
-    dano: "o prazo do diretor é de 2 anos. Encolhido, o expurgo alcança gente que o time viu no mês passado.",
-    sql: trocar("interval '2 years'", "interval '2 days'"),
+    dano: "o prazo do diretor é de 6 MESES. Encolhido, o expurgo alcança gente que o time viu no mês passado.",
+    sql: trocar("interval '6 months'", "interval '2 days'"),
     regraEsperada: "REGRESSAO_PRAZO",
+  },
+  {
+    nome: "15b. o prazo volta a ser de 2 anos",
+    dano: "a decisão do diretor é revogada em silêncio, e o dado pessoal de quem parou há 6 meses fica retido por mais um ano e meio.",
+    sql: trocar("interval '6 months'", "interval '2 years'"),
+    regraEsperada: "PRAZO_ANTIGO_DE_VOLTA",
+  },
+  {
+    nome: "16. a fila de revisão volta a proteger",
+    dano: "quem a ingestão pendurou na vaga espelhada (sem cliente, que ninguém revisa) fica com o dado pessoal retido por tempo INDEFINIDO, em massa e em silêncio.",
+    sql: trocar("s.papel is distinct from 'REVISAO' and ", ""),
+    regraEsperada: "PROTECAO_ABRIGA_A_FILA_DE_REVISAO",
+  },
+  {
+    nome: "16b. a subtração da fila vira uma lista POSITIVA de papéis",
+    dano: "tira o REVISAO e leva junto o RASCUNHO (que recebe candidato) e TODO status LIVRE que o diretor criar pela tela, do tipo Stand By: gente em processo vivo numa vaga só PAUSADA passa a ser expurgável.",
+    sql: trocar("s.papel is distinct from 'REVISAO'", "s.papel in ('ABERTURA', 'ENTREGA')"),
+    regraEsperada: "PROTECAO_ESTREITA_ALEM_DE_REVISAO",
+  },
+  {
+    nome: "16c. a leitura do FATO da admissão some",
+    dano: "a vaga devolvida para a fila anonimiza, do lado de A&S, quem já foi ENVIADO PARA ADMISSÃO, enquanto o CPF dessa pessoa segue inteiro na Admissão, que não tem retenção geral.",
+    sql: trocar("k.admissao_id is not null or ", ""),
+    regraEsperada: "PROTECAO_NAO_LE_A_ADMISSAO",
+  },
+  {
+    nome: "16d. o piso da fila de revisão some do relógio",
+    dano: "quem VOLTA para a fila perde a proteção JÁ com o prazo vencido (o `atualizado_em` dele tem anos) e é anonimizado na varredura da hora seguinte, sem carência nenhuma.",
+    sql: trocar(`, ${PISO_REFERENCIA}`, ""),
+    regraEsperada: "RELOGIO_SEM_PISO_DA_FILA_DE_REVISAO",
   },
   {
     nome: "17. a cicatrização some",

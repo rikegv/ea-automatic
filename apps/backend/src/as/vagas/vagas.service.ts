@@ -1817,7 +1817,8 @@ export class VagasService {
            * ─ O INSTANTE DO ENCERRAMENTO, DO SERVIDOR, e ele NÃO é `data_fechamento` ───────────
            *
            * §A.6: este carimbo é o RELÓGIO DA RETENÇÃO. O expurgo de candidatos trata "vivo em
-           * vaga encerrada" como processo encerrado, e conta o prazo de 2 anos A PARTIR DAQUI para
+           * vaga encerrada" como processo encerrado, e conta o prazo de retenção (6 MESES desde 29/09/2026,
+           * era 2 anos) A PARTIR DAQUI para
            * quem só passou a contar como encerrado porque a vaga acabou. Sem ele, o prazo dessa
            * pessoa contaria do `atualizado_em` da CANDIDATURA, que este fechamento não toca: quem
            * foi aprovado em 2024 numa vaga fechada hoje nasceria com o prazo JÁ VENCIDO e seria
@@ -2009,7 +2010,7 @@ export class VagasService {
        * │ ISSO NÃO APAGA NENHUMA GARANTIA, E É O PONTO QUE PRECISA FICAR ESCRITO:                  │
        * │   . a §A.6 continua satisfeita porque a proteção do expurgo NÃO depende da candidatura   │
        * │     estar encerrada: a cláusula de retenção lê a VAGA (`s.encerra` + `v.encerrada_em`),  │
-       * │     e a vaga cancelada é encerrada com carimbo de servidor. O prazo de 2 anos começa a   │
+       * │     e a vaga cancelada é encerrada com carimbo de servidor. O prazo de retenção começa a │
        * │     correr no instante do cancelamento, exatamente como corria para quem era descartado. │
        * │     Era ESSA a razão pela qual o forçado encerrava as candidaturas, e ela já não vale.   │
        * │   . a trava do DESVÍNCULO DE ALOCADO (`desvinculoEhDeMaster`, em `candidatos.service`)   │
@@ -2521,7 +2522,7 @@ export class VagasService {
    * │                                                                                            │
    * │ E QUEM NÃO FOI ESCOLHIDO NÃO É TOCADO, nem com um carimbo de cortesia: para quem está       │
    * │ DESCARTADO, o `atualizado_em` É o relógio do expurgo, e qualquer escrita nele reinicia em   │
-   * │ silêncio dois anos de retenção de dado pessoal de gente que ninguém trouxe de volta.        │
+   * │ silêncio o prazo inteiro de retenção de dado pessoal de gente que ninguém trouxe de volta.  │
    * └────────────────────────────────────────────────────────────────────────────────────────────┘
    *
    * A LIMPEZA DOS CARIMBOS É O COMBINADO DO `cancelar`, e não uma escolha nova: está escrito no

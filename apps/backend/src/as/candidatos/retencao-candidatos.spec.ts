@@ -7,7 +7,7 @@ import { RetencaoCandidatosService } from "./retencao-candidatos.service";
  * ─ O EXPURGO DE RETENÇÃO NÃO PODE ALCANÇAR QUEM ESTÁ EM PROCESSO (§A.6, LGPD) ───────────────────
  *
  * O QUE A VARREDURA FAZ: anonimiza o candidato cujas candidaturas estão TODAS encerradas sem êxito
- * há mais de 2 anos. Ela apaga nome, CPF, e-mail, telefone, data de nascimento e o id do ATS, e é
+ * há mais de 6 MESES (o prazo era de 2 anos e ENCOLHEU por decisão do diretor). Ela apaga nome, CPF, e-mail, telefone, data de nascimento e o id do ATS, e é
  * IRREVERSÍVEL: não há de onde restaurar o dado depois.
  *
  * O DEFEITO QUE ESTE ARQUIVO EXISTE PARA IMPEDIR, e ele é silencioso por natureza. A lista de "quem
@@ -126,7 +126,20 @@ describe("expurgo por retenção: quem está em processo VIVO nunca é alcançad
    */
   it("nenhum código de status da vaga é digitado dentro da consulta", async () => {
     const q = await rodarVarredura();
-    for (const codigo of ["CANCELADA", "FECHADA", "ENTREGUE", "ABERTA", "RASCUNHO"]) {
+    for (const codigo of [
+      "CANCELADA",
+      "FECHADA",
+      "ENTREGUE",
+      "ABERTA",
+      "RASCUNHO",
+      /*
+       * `PENDENTE_REVISAO` ENTROU NA LISTA com a subtração da fila de revisão: ela é feita pelo
+       * PAPEL (`s.papel is distinct from 'REVISAO'`), e o código do status continua proibido aqui
+       * pelo motivo de sempre, que o diretor o renomeia pela tela do catálogo. Escrita pelo código,
+       * a subtração para de valer no dia do renome, sem nada falhar, e a fila volta a proteger.
+       */
+      "PENDENTE_REVISAO",
+    ]) {
       expect(q).not.toContain(`'${codigo}'`);
     }
   });
@@ -139,11 +152,107 @@ describe("expurgo por retenção: quem está em processo VIVO nunca é alcançad
    * cadeado de SUPER_ADMIN. A segunda asserção é a que importa mais: comparar `origem` com um valor
    * que não existe mais no tipo derruba a varredura inteira com `invalid input value for enum`.
    */
-  it("candidato de banco não expira, e o prazo continua sendo de 2 anos", async () => {
+  it("candidato de banco não expira, e o prazo é o do diretor: 6 MESES", async () => {
     const q = await rodarVarredura();
     expect(q).toContain("c.banco_talentos = false");
     expect(q).not.toContain("'BANCO_TALENTOS'");
-    expect(q).toContain("interval '2 years'");
+    expect(q).toContain("interval '6 months'");
+    expect(
+      q,
+      "o prazo de 2 anos foi REVOGADO pelo diretor. Enquanto ele estiver no texto, o dado pessoal de quem parou há 6 meses continua retido por mais um ano e meio, e uma reversão parcial (os dois intervalos no mesmo `where`) não falha nada.",
+    ).not.toContain("interval '2 years'");
+  });
+
+  /**
+   * ─ A FILA DE REVISÃO NÃO PROTEGE MAIS, E QUEM FOI PARA A ADMISSÃO PROTEGE SEMPRE ─────────────
+   *
+   * As duas metades da decisão do diretor, medidas juntas porque uma sem a outra é um caminho de
+   * dano: tirar a fila da proteção, sozinho, anonimiza do lado de A&S quem já foi ENVIADO PARA
+   * ADMISSÃO assim que um Master devolver a vaga para a fila, enquanto o CPF dessa pessoa segue
+   * inteiro na Admissão, que não tem retenção geral.
+   */
+  it("a fila de REVISAO não abriga mais, e é pelo PAPEL", async () => {
+    const protecao = (await rodarVarredura()).toLowerCase();
+    expect(protecao).toMatch(/papel\s+is\s+distinct\s+from\s+'revisao'/);
+  });
+
+  it("quem já foi para a ADMISSÃO protege pelo FATO, e fora da subtração do papel", async () => {
+    const q = (await rodarVarredura()).toLowerCase();
+    expect(q).toContain("k.admissao_id is not null");
+    expect(
+      q,
+      "a leitura do fato tem de ser ALTERNATIVA à régua da vaga (`or`), e nunca ficar subordinada à exclusão do papel: subordinada, a vaga devolvida para a fila desliga justamente a proteção que ela existe para dar.",
+    ).toMatch(/\(k\.admissao_id is not null\s+or\b/);
+  });
+
+  /**
+   * O PISO DO RELÓGIO, que é o que impede a subtração de cima de APRESSAR um expurgo irreversível:
+   * quem VOLTA para a fila tem `k.atualizado_em` de anos atrás, porque enquanto a vaga esteve
+   * aberta a proteção era incondicional e ninguém precisava tocar a linha.
+   */
+  it("o relógio tem PISO na entrada na fila, lido da trilha de status", async () => {
+    const q = (await rodarVarredura()).toLowerCase();
+    expect(q).toContain("as_vaga_status_eventos");
+    expect(
+      q,
+      "fora do `greatest`, um nulo do piso (vaga que não é da fila, ou vaga da fila sem evento, que é quem NASCEU nela) muda a queda inteira e o erro passa a cair para o lado de APAGAR.",
+    ).toMatch(/greatest\([^;]*as_vaga_status_eventos/);
+  });
+
+  /**
+   * ─ OS TRÊS INVARIANTES QUE A MUDANÇA DO DIRETOR NÃO PODE TER QUEBRADO ────────────────────────
+   *
+   * Eles já estavam certos antes desta frente, e é por isso que estão aqui: o que esta frente pode
+   * derrubar é justamente o que ninguém estava olhando.
+   */
+  it("QUEM FOI CONTRATADO continua fora: a vaga que ENTREGOU protege pelo carimbo", async () => {
+    const q = (await rodarVarredura()).toLowerCase();
+    expect(q).toContain("s.papel = 'fechamento'");
+    expect(
+      q,
+      "sem o carimbo, a exceção protegeria TODA vaga fechada, inclusive a que não entregou ninguém.",
+    ).toContain("vagas_fechadas");
+    expect(
+      q,
+      "a vaga CANCELADA também carimba a contagem: sem restringir ao FECHAMENTO, o cancelamento passaria a proteger quem ele nunca protegeu.",
+    ).not.toContain("'cancelamento'");
+  });
+
+  it("VAGA PAUSADA não é vaga terminada: a régua é `encerra`, nunca `recebe_candidato`", async () => {
+    const q = (await rodarVarredura()).toLowerCase();
+    expect(q).toContain("s.encerra = false");
+    expect(
+      q,
+      "um status LIVRE como Stand By é `recebe_candidato = false` e `encerra = false`: ler o flag errado torna expurgável todo mundo dentro de uma vaga só PAUSADA.",
+    ).not.toContain("recebe_candidato");
+  });
+
+  it("a PROTEÇÃO ENTRE VAGAS continua inteira: correlação pela pessoa, sem reduzir a uma candidatura", async () => {
+    const protecao = (await rodarVarredura()).toLowerCase();
+    const trecho = protecao.slice(protecao.indexOf("not exists"), protecao.indexOf("and coalesce("));
+    expect(trecho).toMatch(/k\.candidato_id\s*=\s*c\.id/);
+    expect(trecho).not.toMatch(/\blimit\b/);
+    expect(trecho).not.toMatch(/\border\s+by\b/);
+  });
+
+  /**
+   * ─ O PARÊNTESE, QUE NENHUMA OUTRA AFIRMAÇÃO DESTE ARQUIVO PEGA ───────────────────────────────
+   *
+   * TODO TESTE DAQUI LÊ TEXTO, e texto desbalanceado passa em todos eles. A consulta desta frente
+   * ganhou DOIS níveis de aninhamento novos no `not exists`, e a primeira escrita saiu com um
+   * parêntese a menos: verde em toda asserção de texto, e `syntax error at or near` no primeiro
+   * boot em produção, isto é, a varredura simplesmente PARA DE RODAR e ninguém é expurgado nunca
+   * mais, em silêncio (a falha vira uma linha de log, por desenho).
+   */
+  it("a consulta é balanceada: nenhum parêntese sobra nem falta", async () => {
+    const q = (await rodarVarredura()).replace(/'[^']*'/g, "");
+    let saldo = 0;
+    for (const c of q) {
+      if (c === "(") saldo += 1;
+      if (c === ")") saldo -= 1;
+      expect(saldo, "fechou um parêntese que nunca foi aberto").toBeGreaterThanOrEqual(0);
+    }
+    expect(saldo, "a consulta tem parêntese aberto sem fechar: ela não é SQL válido.").toBe(0);
   });
 });
 

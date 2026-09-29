@@ -3210,7 +3210,7 @@ export const vagas = pgTable(
      * ─ O INSTANTE EM QUE A VAGA ENCERROU, CARIMBADO PELO SERVIDOR (migration 0103) ──────────────
      *
      * PARA QUE ELA EXISTE: é o RELÓGIO DA RETENÇÃO (§A.6). O expurgo de candidatos passa a tratar
-     * "vivo em vaga ENCERRADA" como processo encerrado, para o prazo de 2 anos poder começar a
+     * "vivo em vaga ENCERRADA" como processo encerrado, para o prazo de retenção poder começar a
      * correr; sem uma data de referência, o prazo dessa pessoa contaria do `atualizado_em` da
      * candidatura, que NÃO é carimbado quando a vaga encerra (medido: a candidatura APROVADA ficou
      * 18 segundos ATRÁS do `cancelada_em` da vaga). Quem foi aprovado em 2024 numa vaga encerrada
@@ -3626,7 +3626,7 @@ export const asCandidatos = pgTable(
     criadoPorId: uuid("criado_por_id").references(() => usuarios.id, { onDelete: "set null" }),
     /**
      * CARIMBO DO EXPURGO POR RETENÇÃO (decisão do diretor): candidato DESCARTADO tem os
-     * identificadores diretos descartados 2 anos depois; candidato de BANCO não expira.
+     * identificadores diretos descartados 6 MESES depois (era 2 anos ate 29/09/2026); BANCO não expira.
      *
      * A LINHA NÃO É APAGADA, e isso é deliberado: apagar levaria junto as candidaturas e o histórico
      * das vagas, e a contagem de posições de processos passados passaria a mentir. O que se descarta
@@ -4085,10 +4085,17 @@ export const asCandidaturas = pgTable(
      */
     ultimoContatoEm: timestamp("ultimo_contato_em", { withTimezone: true }),
     /**
-     * A PONTE FUTURA COM A ESTEIRA. Nasce NULA e NÃO É USADA nesta onda: nenhuma admissão nasce
-     * daqui, nenhuma frente é criada, nada é lido. A coluna existe agora para que, no dia da ponte,
-     * a ligação já tenha onde morar. Sem FK de propósito enquanto ninguém a escreve, para a Central
-     * de Candidatos não passar a depender do módulo da Admissão antes da hora.
+     * A PONTE COM A ESTEIRA, E ELA DEIXOU DE SER FUTURA. Nasce nula, mas **é escrita** por
+     * `candidatos.service.ts` ao enviar para admissão, e desde 29/09/2026 **é LIDA** pela retenção
+     * (`retencao-candidatos.service.ts`), que a usa como prova direta de "esta pessoa foi
+     * contratada" e por isso NÃO a expurga: o CPF dela segue do lado da Admissão, e apagar o lado
+     * de A&S destruiria o histórico da seleção sem minimizar dado nenhum.
+     *
+     * *(O texto anterior dizia "NÃO É USADA nesta onda: nada é lido", e isso induzia ao erro de
+     * tratar a coluna como morta. Estava defasado desde que a escrita nasceu.)*
+     *
+     * Sem FK de propósito, para a Central de Candidatos não passar a depender do módulo da
+     * Admissão antes da hora.
      */
     admissaoId: uuid("admissao_id"),
     /**

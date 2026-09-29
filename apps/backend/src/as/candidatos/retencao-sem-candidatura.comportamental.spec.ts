@@ -39,7 +39,7 @@ import {
  *
  * ┌─ O DEFEITO, em uma linha ───────────────────────────────────────────────────────────────────┐
  * │ A régua exige `exists (select 1 from as_candidaturas ...)`. Quem entra e não casa com vaga   │
- * │ nenhuma NUNCA satisfaz essa cláusula: o prazo de 2 anos nunca começa a correr, e CPF,        │
+ * │ nenhuma NUNCA satisfaz essa cláusula: o prazo nunca começa a correr, e CPF,                  │
  * │ e-mail, telefone e data de nascimento ficam retidos PARA SEMPRE. Hoje é teórico porque a     │
  * │ base de A&S de produção está vazia; deixa de ser no primeiro registro da INGESTÃO, que é     │
  * │ exatamente por isso que o furo se fecha ANTES dela.                                          │
@@ -58,7 +58,7 @@ import {
  * banco fingido devolveria a linha que eu mandasse, com o filtro certo ou errado.
  *
  * O QUE SE AFIRMA É O SENTIDO, e o argumento central é de NULIDADE, que é semântica e não estilo:
- * `max()` sobre conjunto vazio devolve NULL, e `NULL <= now() - interval '2 years'` NÃO é
+ * `max()` sobre conjunto vazio devolve NULL, e `NULL <= now() - interval '6 months'` NÃO é
  * verdadeiro. É por isso que quem não tem candidatura escapa hoje, e é por isso que a correção só
  * existe de fato se houver um valor de queda que NÃO dependa de `as_candidaturas`. Toda a leitura é
  * feita sobre o SQL EXECUTÁVEL (comentário apagado antes), por cláusula de topo e, dentro do
@@ -125,7 +125,7 @@ describe("furo 1: o prazo passa a correr para quem NÃO tem candidatura nenhuma"
 
   /**
    * O ÚLTIMO MOVIMENTO, e não o primeiro: é a mesma régua que o ramo de quem TEM candidatura já
-   * usa. Contando só do `criado_em`, alguém cadastrado há 2 anos e editado ontem nasceria com o
+   * usa. Contando só do `criado_em`, alguém cadastrado há mais de 6 meses e editado ontem nasceria com o
    * prazo JÁ VENCIDO e seria anonimizado na varredura da hora seguinte, sem carência nenhuma.
    */
   it("a queda usa o ÚLTIMO movimento do candidato, e não só a data de cadastro", async () => {
@@ -227,8 +227,38 @@ describe("furo 1: o que a correção NÃO pode atropelar", () => {
     ).not.toContain("cancelamento");
   });
 
-  it("o prazo continua sendo o do diretor, 2 anos", async () => {
-    expect((await consultaDeProducao()).toLowerCase()).toContain("interval '2 years'");
+  it("o prazo é o do diretor, 6 MESES, e o antigo não sobrou no texto", async () => {
+    const q = (await consultaDeProducao()).toLowerCase();
+    expect(q).toContain("interval '6 months'");
+    expect(
+      q,
+      "o prazo de 2 anos foi REVOGADO pelo diretor. Enquanto ele estiver no texto, o dado pessoal de quem parou há 6 meses continua retido por mais um ano e meio.",
+    ).not.toContain("interval '2 years'");
+  });
+
+  /**
+   * ─ A FILA DE REVISÃO NÃO ABRIGA MAIS NINGUÉM (decisão do diretor) ───────────────────────────
+   *
+   * O FURO QUE ISTO FECHA: a vaga espelhada do Pandapé nasce no papel REVISAO, sem cliente e sem
+   * posições, com `encerra = false` e sem `encerrada_em`. Ela satisfazia DUAS das três pernas da
+   * proteção, então uma candidatura viva ali dentro segurava o expurgo da pessoa INTEIRA por tempo
+   * indefinido: é a vaga que menos gente revisa, e enquanto ninguém revisa o relógio não anda.
+   *
+   * É PELO PAPEL, E NUNCA PELO CÓDIGO, e as duas afirmações medem coisas diferentes: a primeira é a
+   * regra, a segunda é a durabilidade dela. O código `PENDENTE_REVISAO` é do catálogo e o diretor o
+   * renomeia pela tela; o papel é de sistema, com índice único parcial. Escrita pelo código, a
+   * exclusão para de valer no dia do renome, sem nada falhar, e a fila volta a proteger em silêncio.
+   */
+  it("a vaga na FILA DE REVISÃO não protege mais do expurgo", async () => {
+    const protecao = clausulaDaProtecao(await consultaDeProducao());
+    expect(
+      protecao,
+      "a vaga espelhada nasce na fila sem cliente e ninguém a revisa: enquanto ela abrigar, o dado pessoal de quem a ingestão pendurou nela fica retido por tempo INDEFINIDO, em massa (§A.6).",
+    ).toMatch(/papel\s+(is\s+distinct\s+from|<>|!=)\s*'revisao'|papel\s+not\s+in\s*\([^)]*'revisao'/);
+    expect(
+      protecao,
+      "a exclusão escrita pelo CÓDIGO do status para de valer no dia em que o diretor renomear `PENDENTE_REVISAO` na tela, sem nada falhar.",
+    ).not.toContain("'pendente_revisao'");
   });
 
   it("a varredura continua ignorando quem já foi anonimizado", async () => {
@@ -322,9 +352,19 @@ describe("o contrato do furo 1 discrimina", () => {
  * E A RESOLUÇÃO DIZ A PARTE QUE ME CABE: essa defesa DEIXA DE SER ARGUMENTO E VIRA TESTE. Os dois
  * casos abaixo não leem texto, eles AVALIAM a expressão da queda sobre uma linha sintética.
  */
+/** O prazo do diretor, em meses, para a data de corte deste bloco ser DERIVADA e não digitada. */
+const MESES_DE_RETENCAO = 6;
+
 describe("furo 1: a defesa do `greatest` é medida, e não argumentada", () => {
   const AGORA = new Date("2026-09-18T12:00:00.000Z");
-  const LIMITE = new Date("2024-09-18T12:00:00.000Z"); // now() - interval '2 years'
+  /*
+   * A DATA DE CORTE É DERIVADA DO PRAZO, e não escrita à mão: ela JÁ ficou defasada uma vez. Estava
+   * fixa em 2024-09-18 com o comentário "now() - interval '2 years'", e o dia em que o diretor
+   * encurtou o prazo para 6 meses ela passou a medir uma janela que não existe mais, VERDE, sem
+   * ninguém notar. Teste que fica verde medindo o prazo errado é pior que teste nenhum.
+   */
+  const LIMITE = new Date(AGORA);
+  LIMITE.setUTCMonth(LIMITE.getUTCMonth() - MESES_DE_RETENCAO);
   /** A linha perigosa: cadastro velho, movimento recente. */
   const LINHA = {
     criadoEm: new Date("2021-01-01T00:00:00.000Z"),
@@ -332,6 +372,11 @@ describe("furo 1: a defesa do `greatest` é medida, e não argumentada", () => {
   };
 
   it("linha com cadastro ANTIGO e movimento RECENTE não fica elegível", async () => {
+    // A DATA DE CORTE ACIMA SÓ VALE SE O PRAZO FOR ESTE. Amarra o número derivado à produção.
+    expect(
+      (await consultaDeProducao()).toLowerCase(),
+      "o prazo da produção mudou e a data de corte deste bloco parou de descrever a janela real.",
+    ).toContain(`interval '${MESES_DE_RETENCAO} months'`);
     const queda = coalesceDaQueda(clausulaDoRelogio(reguaDoAlvo(await consultaDeProducao())));
     expect(queda, "a queda ainda não existe: ver o bloco 1.").not.toBeNull();
     const referencia = avaliarQueda(queda?.[queda.length - 1] ?? "", LINHA, AGORA);

@@ -333,6 +333,103 @@ function exigeVagaEncerrada(clausula: string): boolean {
 }
 
 /**
+ * A LEITURA DO FATO DA ADMISSÃO ESTÁ FORA DA SUBTRAÇÃO DO PAPEL?
+ *
+ * MEDIDO PELO ANINHAMENTO, e não por ordem de palavras: procura-se um `or` de profundidade tal que
+ * `admissao_id is not null` esteja de um lado e a exclusão do papel do outro. É o que distingue
+ * "protege sempre, ou então vale a régua da vaga" de "protege só se a vaga não for da fila".
+ */
+function admissaoProtegeForaDoPapel(clausula: string): boolean {
+  for (const grupo of gruposParentizados(clausula)) {
+    const ramos = partirPorOr(grupo);
+    if (ramos.length < 2) continue;
+    const temORamoDoFato = ramos.some((r) => /^[a-z_]*\.?admissao_id\s+is\s+not\s+null$/.test(r.trim()));
+    const temORamoDoPapel = ramos.some((r) => excluiAFilaDeRevisao(r));
+    if (temORamoDoFato && temORamoDoPapel) return true;
+  }
+  return false;
+}
+
+/** Todo trecho entre parênteses do texto, do mais externo ao mais interno. */
+function gruposParentizados(t: string): string[] {
+  const grupos: string[] = [];
+  const pilha: number[] = [];
+  let emAspas = false;
+  for (let i = 0; i < t.length; i += 1) {
+    const c = t[i];
+    if (c === "'") emAspas = !emAspas;
+    if (emAspas) continue;
+    if (c === "(") pilha.push(i);
+    if (c === ")" && pilha.length > 0) grupos.push(t.slice((pilha.pop() as number) + 1, i));
+  }
+  return grupos;
+}
+
+/** Parte por `or` de PROFUNDIDADE ZERO, respeitando parênteses e aspas. */
+function partirPorOr(t: string): string[] {
+  const partes: string[] = [];
+  let atual = "";
+  let profundidade = 0;
+  let emAspas = false;
+  for (let i = 0; i < t.length; i += 1) {
+    const c = t[i];
+    if (c === "'") emAspas = !emAspas;
+    if (!emAspas) {
+      if (c === "(") profundidade += 1;
+      if (c === ")") profundidade -= 1;
+      if (profundidade === 0 && t.startsWith(" or ", i)) {
+        partes.push(atual.trim());
+        atual = "";
+        i += 3;
+        continue;
+      }
+    }
+    atual += c;
+  }
+  if (atual.trim()) partes.push(atual.trim());
+  return partes;
+}
+
+/**
+ * A FILA DE REVISÃO ESTÁ EXCLUÍDA DA PROTEÇÃO?
+ *
+ * TRÊS FORMAS, UMA PROPRIEDADE. `is distinct from 'REVISAO'` (a de produção, e a mais segura,
+ * porque `<>` com NULL devolve NULL e NULL aqui DERRUBA a linha do `not exists`, isto é, tira a
+ * proteção), `<>`/`!=` e `not in (...)`. Medir só a primeira seria medir o DESENHO de hoje, e um
+ * contrato que morre de estilo ensina o time a ignorar o vermelho.
+ */
+/**
+ * OS PAPÉIS QUE A PROTEÇÃO EXCLUI, lidos em qualquer das três formas de negar.
+ *
+ * Existe para a regra `PROTECAO_ESTREITA_ALEM_DE_REVISAO`: a subtração autorizada pelo diretor é de
+ * UM papel, e de mais nenhum. Qualquer outro nome aqui é gente perdendo proteção sem decisão.
+ */
+function papeisExcluidos(clausula: string): string[] {
+  const simples = [...clausula.matchAll(/papel\s+(?:is\s+distinct\s+from|<>|!=)\s*'([a-z_]+)'/g)].map(
+    (m) => m[1],
+  );
+  const listas = [...clausula.matchAll(/papel\s+not\s+in\s*\(([^)]*)\)/g)].flatMap((m) =>
+    [...m[1].matchAll(/'([a-z_]+)'/g)].map((x) => x[1]),
+  );
+  return [...new Set([...simples, ...listas])];
+}
+
+/** As listas POSITIVAS de papel, que são a forma perigosa: elas trocam exceção por whitelist. */
+function listasPositivasDePapel(clausula: string): string[][] {
+  return [...clausula.matchAll(/papel\s+in\s*\(([^)]*)\)/g)].map((m) =>
+    [...m[1].matchAll(/'([a-z_]+)'/g)].map((x) => x[1]),
+  );
+}
+
+function excluiAFilaDeRevisao(clausula: string): boolean {
+  return (
+    /papel\s+is\s+distinct\s+from\s+'revisao'/.test(clausula) ||
+    /papel\s*(<>|!=)\s*'revisao'/.test(clausula) ||
+    /papel\s+not\s+in\s*\([^)]*'revisao'/.test(clausula)
+  );
+}
+
+/**
  * ─ O CONTRATO DA CORREÇÃO, EM REGRAS NOMEADAS ──────────────────────────────────────────────────
  *
  * Devolve a lista das VIOLAÇÕES. Vazia é o contrato cumprido. Cada regra é nomeada para o vermelho
@@ -382,6 +479,96 @@ export function violacoesDoContrato(sqlTexto: string): string[] {
       "PROTECAO_OLHA_UMA_CANDIDATURA_SO: a proteção ordena ou limita. Ela tem de olhar TODAS as candidaturas da pessoa; olhando só a última, quem tem processo vivo em outra vaga é apagado.",
     );
   }
+  /*
+   * ─ A FILA DE REVISÃO DEIXOU DE PROTEGER (decisão do diretor) ─────────────────────────────────
+   *
+   * O QUE ESTA REGRA COBRA, e por que ela é uma regra e não um detalhe de escrita: o papel REVISAO
+   * é a fila da vaga ESPELHADA do Pandapé, criada pela varredura sem cliente e sem posições. Ela
+   * nasce com `encerra = false` e sem `encerrada_em`, então satisfaz DUAS das três pernas da
+   * condição da proteção e abriga do expurgo, por tempo INDEFINIDO, todo mundo que a ingestão
+   * pendurou nela. É a vaga que menos gente revisa, e enquanto ninguém a revisa o relógio não anda.
+   *
+   * A DIREÇÃO É INCOMUM NESTE ARQUIVO, e vale dizer em voz alta: todas as outras regras daqui
+   * cobram MAIS proteção, porque o erro caro é apagar quem não devia. Esta cobra MENOS, porque o
+   * erro que ela fecha é o oposto e igualmente proibido pela §A.6, reter dado pessoal para sempre.
+   * Ela é, por construção, a única regra deste contrato que um "corrigi para o lado seguro" quebra.
+   *
+   * A LEITURA É PELO PAPEL, e aceita as três formas de dizer a mesma coisa (`is distinct from`,
+   * `<>`/`!=` e `not in`), porque o requisito nomeia a PROPRIEDADE e não o desenho. O que ela NÃO
+   * aceita é o código do status (`pendente_revisao`): ele é renomeável pelo diretor na tela, e no
+   * dia do renome a exclusão pararia de valer sem nada falhar. Por isso o código é acusado à parte.
+   */
+  if (!excluiAFilaDeRevisao(protecao)) {
+    v.push(
+      "PROTECAO_ABRIGA_A_FILA_DE_REVISAO: a proteção não exclui o papel REVISAO. A vaga espelhada do Pandapé nasce na fila sem cliente, com `encerra = false` e sem `encerrada_em`, então ela protege do expurgo todo mundo pendurado nela enquanto ninguém a revisar, que é retenção INDEFINIDA de dado pessoal em massa (§A.6). O diretor decidiu que a fila de revisão NÃO protege mais.",
+    );
+  }
+  /*
+   * ─ A SUBTRAÇÃO É DE UM PAPEL SÓ, E O RESTO CONTINUA PROTEGIDO (achado do `seguranca`) ─────────
+   *
+   * A CLÁUSULA DE HOJE É UMA PROPRIEDADE (`encerra = false`), e ela protege TODO papel que não
+   * encerra: RASCUNHO, ABERTURA, ENTREGA, REVISAO e TODA linha LIVRE que o diretor criar pela tela
+   * (o "Stand By" é o exemplo canônico). O diretor autorizou tirar UM papel dessa proteção. Tirar
+   * qualquer outro é gente perdendo proteção sem decisão de ninguém.
+   *
+   * O QUE ESTA REGRA PEGA, E O CONTRATO ANTIGO NÃO PEGAVA: a forma mais natural de implementar a
+   * subtração errado é trocar a propriedade por uma LISTA POSITIVA, `s.papel in ('ABERTURA',
+   * 'ENTREGA')`. Ela tira o REVISAO, sim, e leva junto o RASCUNHO e todo status LIVRE, sem uma
+   * linha vermelha: a regra `PROTECAO_SEM_FLAG_ENCERRA` só exige que a palavra `encerra` APAREÇA,
+   * e a lista positiva pode conviver com ela no mesmo texto.
+   *
+   * A LEITURA É TEXTUAL, E O LIMITE DISSO ESTÁ DITO: ela pega as formas enumeradas (negação de
+   * papel diferente de REVISAO, e whitelist positiva que não inclui RASCUNHO e LIVRE). A exceção
+   * legítima de quem ENTREGOU é uma igualdade (`papel = 'FECHAMENTO'`) dentro de um `or`, e não uma
+   * whitelist, então ela não cai aqui; escrita como `papel in ('fechamento')`, também não, porque a
+   * lista só de FECHAMENTO é reconhecida como aquela exceção.
+   */
+  const excluidos = papeisExcluidos(protecao).filter((x) => x !== "revisao");
+  if (excluidos.length > 0) {
+    v.push(
+      `PROTECAO_ESTREITA_ALEM_DE_REVISAO: a proteção deixou de alcançar o(s) papel(éis) ${excluidos.join(", ")}. O diretor autorizou tirar UM papel da proteção, o REVISAO. Todo papel que não encerra (RASCUNHO, ABERTURA, ENTREGA e toda linha LIVRE que o diretor criar pela tela, do tipo Stand By) continua protegendo, e tirar outro é anonimizar gente em processo sem decisão de ninguém.`,
+    );
+  }
+  for (const lista of listasPositivasDePapel(protecao)) {
+    const ehAExcecaoDaEntrega = lista.length === 1 && lista[0] === "fechamento";
+    if (!ehAExcecaoDaEntrega && (!lista.includes("rascunho") || !lista.includes("livre"))) {
+      v.push(
+        `PROTECAO_ESTREITA_ALEM_DE_REVISAO: a proteção passou a listar papéis (${lista.join(", ")}) em vez de ler a PROPRIEDADE. Lista positiva não é subtração: ela derruba tudo o que não foi lembrado, e o que não foi lembrado aqui é o RASCUNHO (que RECEBE candidato) e todo status LIVRE que o diretor criar pela tela. A régua é \`encerra = false\` MENOS o papel REVISAO, e nunca uma whitelist.`,
+      );
+    }
+  }
+  if (/'pendente_revisao'/.test(protecao)) {
+    v.push(
+      "PROTECAO_EXCLUI_A_REVISAO_POR_CODIGO: a exclusão da fila de revisão foi escrita com o CÓDIGO do status, e não com o PAPEL. O código é do catálogo e o diretor o renomeia pela tela; o papel é de sistema e tem índice único parcial. No dia do renome a fila volta a proteger, em silêncio.",
+    );
+  }
+  /*
+   * ─ QUEM JÁ FOI PARA A ADMISSÃO PROTEGE PELO FATO (achado do `seguranca`) ─────────────────────
+   *
+   * O CAMINHO DE DANO É FEITO SÓ DE CÓDIGO QUE JÁ EXISTE: a vaga espelhada nasce em REVISAO, é
+   * liberada para ABERTURA, a pessoa é aprovada e ENVIADA PARA ADMISSÃO (situação viva, com
+   * `admissao_id` gravado), e um Master devolve a vaga para a fila (`devolverParaFila`, que NÃO
+   * confere candidatura viva dentro da vaga). Nesse instante a pessoa perde a proteção e é
+   * anonimizada do lado de A&S ENQUANTO O CPF DELA SEGUE NA ADMISSÃO, que não tem retenção geral.
+   *
+   * O PROXY NÃO COBRE ISSO: a régua do carimbo deduz "foi contratado" de "a vaga fechou com papel
+   * FECHAMENTO e entregou", e a vaga devolvida para a fila não fechou nada. O fato direto existe na
+   * coluna e não estava sendo lido.
+   *
+   * A SEGUNDA AFIRMAÇÃO É A QUE IMPORTA, e ela é a que um "corrigi juntando tudo num and" quebra:
+   * a leitura do fato tem de estar FORA do `and` que tira o papel REVISAO. Dentro dele, a devolução
+   * para a fila desliga justamente a proteção que esta regra existe para dar, e o texto continua
+   * citando `admissao_id`, o que é pior do que não citar.
+   */
+  if (!/admissao_id\s+is\s+not\s+null/.test(protecao)) {
+    v.push(
+      "PROTECAO_NAO_LE_A_ADMISSAO: a proteção não lê `k.admissao_id is not null`. Quem foi ENVIADO PARA ADMISSÃO está protegido hoje por PROXY (a vaga fechou e entregou), e o proxy não cobre a vaga DEVOLVIDA para a fila de revisão: ali a pessoa é anonimizada do lado de A&S enquanto o CPF dela segue inteiro na Admissão, que não tem retenção geral. Minimização zero, e irreversível.",
+    );
+  } else if (!admissaoProtegeForaDoPapel(protecao)) {
+    v.push(
+      "PROTECAO_LE_A_ADMISSAO_DENTRO_DA_SUBTRACAO: a consulta cita `admissao_id`, mas a leitura está SUBORDINADA à exclusão do papel REVISAO. Assim, a vaga devolvida para a fila desliga a proteção de quem já foi para a admissão, que é exatamente o caminho de dano que essa leitura existe para fechar, e o texto passa a AFIRMAR o contrário do que faz.",
+    );
+  }
   if (!protecao.includes(LISTA_DAS_VIVAS)) {
     v.push(
       `PROTECAO_SEM_LISTA_DERIVADA: a proteção não usa a lista derivada de SITUACOES_VIVAS (${LISTA_DAS_VIVAS}). Lista digitada à mão concorda com o vocabulário por coincidência, e para de concordar no dia em que uma situação nova nascer.`,
@@ -408,7 +595,39 @@ export function violacoesDoContrato(sqlTexto: string): string[] {
       "RELOGIO_SEM_SAIDA_SEM_EXITO: o relógio não lê `k.atualizado_em`. Quem foi DESCARTADO continua contando prazo do próprio descarte; trocar isso pelo encerramento da vaga muda o prazo de todo mundo que já saiu.",
     );
   }
-  if (!/\bmax\s*\(/.test(relogio)) {
+  /*
+   * ─ O PISO DA FILA DE REVISÃO (achado do `seguranca`) ─────────────────────────────────────────
+   *
+   * SEM ELE, A SUBTRAÇÃO DO PAPEL APRESSA UM EXPURGO IRREVERSÍVEL. Para a candidatura viva numa
+   * vaga em REVISAO, `v.encerrada_em` é nulo e o relógio cai em `k.atualizado_em`. Para quem NASCEU
+   * na fila isso está certo (é a data da ingestão). Para quem VOLTOU para a fila, não: enquanto a
+   * vaga esteve aberta a proteção era incondicional e ninguém precisava tocar a linha, então
+   * `k.atualizado_em` pode ter ANOS. No instante da devolução essa pessoa nasce com o prazo JÁ
+   * VENCIDO e é anonimizada na varredura da hora seguinte, sem carência nenhuma.
+   *
+   * A FORMA É A MESMA QUE O ARQUIVO JÁ USOU PARA O ENCERRAMENTO: piso lido de um carimbo de
+   * SERVIDOR (`as_vaga_status_eventos.em`), DENTRO do `greatest`, com queda para `k.atualizado_em`.
+   * Dentro do `greatest` ele só empurra a data para frente; como argumento do `coalesce` de fora,
+   * um nulo dele mudaria a queda inteira e o erro cairia para o lado de APAGAR.
+   */
+  if (!/as_vaga_status_eventos/.test(relogio)) {
+    v.push(
+      "RELOGIO_SEM_PISO_DA_FILA_DE_REVISAO: o relógio não lê a trilha de status (`as_vaga_status_eventos`). Quem VOLTA para a fila de revisão tem `k.atualizado_em` de anos atrás (enquanto a vaga esteve aberta, a proteção era incondicional e ninguém tocava a linha), então, no instante da devolução, a pessoa perde a proteção JÁ com o prazo vencido e é anonimizada na varredura seguinte, sem carência. É irreversível, e é o mesmo modo de falha que `vagas.encerrada_em` já resolveu para o encerramento.",
+    );
+  } else if (!/greatest\s*\([^;]*as_vaga_status_eventos/.test(relogio)) {
+    v.push(
+      "PISO_FORA_DO_GREATEST: o piso da fila de revisão não está dentro do `greatest`. Fora dele, um nulo do piso (vaga que não é da fila, ou vaga da fila sem evento, que é o caso de quem NASCEU nela) muda a queda inteira, e o erro passa a cair para o lado de APAGAR. Dentro do `greatest`, o piso só empurra a data para frente.",
+    );
+  }
+  /*
+   * O AGREGADO MEDIDO É O QUE EMBRULHA O `greatest`, e não "existe um `max` no texto": desde o piso
+   * da fila de revisão, o relógio tem um `max(e.em)` LÁ DENTRO, na subconsulta da trilha. Procurar
+   * a palavra solta deixaria o mutante `min(greatest(...))` passar batido, com o `max` do piso
+   * respondendo pelo `max` que sumiu de fora.
+   */
+  const agregado = /\b(max|min)\s*\(\s*greatest\s*\(/.exec(relogio);
+  const temMax = agregado ? agregado[1] === "max" : /\bmax\s*\(/.test(relogio);
+  if (!temMax || /\bmin\s*\(/.test(relogio)) {
     v.push(
       "RELOGIO_SEM_MAX: o relógio tem de correr do encerramento MAIS RECENTE. Com `min`, quem foi visto pelo time no mês passado é apagado por causa de um processo de três anos atrás.",
     );
@@ -437,8 +656,20 @@ export function violacoesDoContrato(sqlTexto: string): string[] {
       "RETENCAO_LE_A_ORIGEM_MORTA: a consulta compara `origem` com um valor que saiu do tipo na migration 0112. Isso derruba a varredura inteira com `invalid input value for enum`, e o expurgo para de rodar sem ninguém notar.",
     );
   }
-  if (!t.includes("interval '2 years'")) {
-    v.push("REGRESSAO_PRAZO: o prazo do diretor é de 2 anos.");
+  /*
+   * ─ O PRAZO ENCOLHEU DE 2 ANOS PARA 6 MESES (decisão do diretor) ──────────────────────────────
+   *
+   * AS DUAS AFIRMAÇÕES SÃO NECESSÁRIAS, e a segunda é a que mata a mutação: só exigir "6 months"
+   * deixa passar um texto que tenha OS DOIS intervalos (uma correção pela metade, ou uma segunda
+   * cláusula de prazo esquecida num `or`), e nesse texto a régua efetiva pode ser a antiga. Recusar
+   * o "2 years" explicitamente é o que faz o contrato ficar VERMELHO no dia em que alguém reverter
+   * a decisão do diretor, que é justamente o cenário que este arquivo existe para pegar.
+   */
+  if (!t.includes("interval '6 months'")) {
+    v.push("REGRESSAO_PRAZO: o prazo do diretor é de 6 MESES (`interval '6 months'`). Ele era de 2 anos e ENCOLHEU por decisão do diretor: alongá-lo de volta retém dado pessoal além do necessário (§A.6), e encurtá-lo mais torna elegível, na varredura da hora seguinte, gente que o time viu no mês passado. Nos dois sentidos o erro é caro, e a anonimização é irreversível.");
+  }
+  if (t.includes("interval '2 years'")) {
+    v.push("PRAZO_ANTIGO_DE_VOLTA: a consulta ainda cita `interval '2 years'`, o prazo REVOGADO pelo diretor. Enquanto ele estiver no texto, o dado pessoal de quem parou há 6 meses continua retido por mais um ano e meio, e uma reversão parcial (os dois intervalos no mesmo `where`) não falha nada.");
   }
   /*
    * ─ A REGRA `REGRESSAO_SEM_PROCESSO_NAO_CONTA` FOI REVOGADA, E ELA ERA O DEFEITO ───────────────
@@ -485,7 +716,6 @@ export const SQL_REFERENCIA = sqlExecutavel(sql`
          atualizado_em = now()
    where c.anonimizado_em is null
      and c.banco_talentos = false
-     and exists (select 1 from as_candidaturas k where k.candidato_id = c.id)
      and not exists (
            select 1
              from as_candidaturas k
@@ -493,16 +723,32 @@ export const SQL_REFERENCIA = sqlExecutavel(sql`
              join as_vaga_status s on s.codigo = v.status
             where k.candidato_id = c.id
               and k.situacao in (${sql.raw(SITUACOES_VIVAS.map((s) => `'${s}'`).join(", "))})
-              and s.encerra = false)
-     and (select max(case
-                       when k.situacao in (${sql.raw(SITUACOES_VIVAS.map((s) => `'${s}'`).join(", "))})
-                       then coalesce(v.encerrada_em, now())
-                       else k.atualizado_em
-                     end)
-            from as_candidaturas k
-            join vagas v on v.id = k.vaga_id
-           where k.candidato_id = c.id)
-         <= now() - interval '2 years'
+              and (k.admissao_id is not null
+                   or (s.papel is distinct from 'REVISAO'
+                       and (s.encerra = false
+                            or (s.papel = 'FECHAMENTO'
+                                and coalesce(v.vagas_fechadas, 0)
+                                    + coalesce(v.vagas_fechadas_banco, 0) > 0)
+                            or v.encerrada_em is null))))
+     and coalesce(
+           (select max(greatest(
+                       k.atualizado_em,
+                       coalesce(
+                         case when k.situacao in (${sql.raw(SITUACOES_VIVAS.map((s) => `'${s}'`).join(", "))}) then v.encerrada_em end,
+                         k.atualizado_em),
+                       coalesce(
+                         case when s2.papel = 'REVISAO'
+                              then (select max(e.em)
+                                      from as_vaga_status_eventos e
+                                     where e.vaga_id = v.id
+                                       and e.para = v.status) end,
+                         k.atualizado_em)))
+              from as_candidaturas k
+              join vagas v on v.id = k.vaga_id
+              join as_vaga_status s2 on s2.codigo = v.status
+             where k.candidato_id = c.id),
+           greatest(c.criado_em, c.atualizado_em))
+         <= now() - interval '6 months'
   returning c.id
 `);
 
@@ -523,13 +769,21 @@ function trocar(de: string, para: string): string {
 }
 
 const VIVAS_NO_SQL = SITUACOES_VIVAS.map((s) => `'${s}'`).join(", ");
+const CONDICAO_REFERENCIA =
+  `(k.admissao_id is not null or (s.papel is distinct from 'REVISAO' and (s.encerra = false ` +
+  `or (s.papel = 'FECHAMENTO' and coalesce(v.vagas_fechadas, 0) + coalesce(v.vagas_fechadas_banco, 0) > 0) ` +
+  `or v.encerrada_em is null)))`;
 const PROTECAO_REFERENCIA =
   `not exists ( select 1 from as_candidaturas k join vagas v on v.id = k.vaga_id ` +
   `join as_vaga_status s on s.codigo = v.status where k.candidato_id = c.id ` +
-  `and k.situacao in (${VIVAS_NO_SQL}) and s.encerra = false)`;
+  `and k.situacao in (${VIVAS_NO_SQL}) and ${CONDICAO_REFERENCIA})`;
+const PISO_REFERENCIA =
+  `coalesce( case when s2.papel = 'REVISAO' then (select max(e.em) from as_vaga_status_eventos e ` +
+  `where e.vaga_id = v.id and e.para = v.status) end, k.atualizado_em)`;
 const RELOGIO_REFERENCIA =
-  `(select max(case when k.situacao in (${VIVAS_NO_SQL}) then coalesce(v.encerrada_em, now()) ` +
-  `else k.atualizado_em end) from as_candidaturas k join vagas v on v.id = k.vaga_id ` +
+  `(select max(greatest( k.atualizado_em, coalesce( case when k.situacao in (${VIVAS_NO_SQL}) ` +
+  `then v.encerrada_em end, k.atualizado_em), ${PISO_REFERENCIA})) from as_candidaturas k ` +
+  `join vagas v on v.id = k.vaga_id join as_vaga_status s2 on s2.codigo = v.status ` +
   `where k.candidato_id = c.id)`;
 
 export const MUTANTES: Mutante[] = [
@@ -560,13 +814,13 @@ export const MUTANTES: Mutante[] = [
   {
     nome: "5. o relógio lê `data_fechamento` (o campo do corpo)",
     dano: "um COMUM cancelando com data de 2019 dispara a exclusão de quem estava naquela vaga.",
-    sql: trocar("coalesce(v.encerrada_em, now())", "v.data_fechamento"),
+    sql: trocar("then v.encerrada_em end", "then v.data_fechamento end"),
     regraEsperada: "RELOGIO_LE_DATA_FECHAMENTO",
   },
   {
     nome: "6a. a proteção passa a olhar SÓ a candidatura da vaga encerrada",
     dano: "APROVADO em vaga cancelada e ATIVO em vaga aberta deixa de ser protegido: apaga alguém em processo.",
-    sql: trocar("s.encerra = false)", "s.encerra = true)"),
+    sql: trocar("s.encerra = false", "s.encerra = true"),
     regraEsperada: "PROTECAO_OLHA_A_VAGA_ERRADA",
   },
   {
@@ -577,7 +831,7 @@ export const MUTANTES: Mutante[] = [
       `not exists ( select 1 from as_candidaturas k join vagas v on v.id = k.vaga_id ` +
         `join as_vaga_status s on s.codigo = v.status where k.candidato_id = c.id ` +
         `and k.id = (select k2.id from as_candidaturas k2 where k2.candidato_id = c.id order by k2.atualizado_em desc limit 1) ` +
-        `and k.situacao in (${VIVAS_NO_SQL}) and s.encerra = false)`,
+        `and k.situacao in (${VIVAS_NO_SQL}) and ${CONDICAO_REFERENCIA})`,
     ),
     regraEsperada: "PROTECAO_OLHA_UMA_CANDIDATURA_SO",
   },
@@ -606,9 +860,72 @@ export const MUTANTES: Mutante[] = [
     regraEsperada: "RETENCAO_NAO_RESTRITIVA",
   },
   {
+    nome: "12. o prazo volta a ser de 2 anos",
+    dano: "a decisão do diretor é REVOGADA em silêncio: o dado pessoal de quem parou há 6 meses fica retido por mais um ano e meio, e nada falha.",
+    sql: trocar("interval '6 months'", "interval '2 years'"),
+    regraEsperada: "PRAZO_ANTIGO_DE_VOLTA",
+  },
+  {
+    nome: "12b. o prazo some do texto",
+    dano: "sem o intervalo do diretor, o prazo vira o que quer que esteja escrito no lugar, e o expurgo passa a alcançar quem o time viu ontem.",
+    sql: trocar("interval '6 months'", "interval '3 days'"),
+    regraEsperada: "REGRESSAO_PRAZO",
+  },
+  {
+    nome: "13. a fila de revisão volta a proteger",
+    dano: "a vaga espelhada do Pandapé nasce sem cliente e ninguém a revisa: quem está pendurado nela fica com o dado pessoal retido por tempo INDEFINIDO, em massa e em silêncio, que é o furo que a decisão do diretor fecha.",
+    sql: trocar("s.papel is distinct from 'REVISAO' and ", ""),
+    regraEsperada: "PROTECAO_ABRIGA_A_FILA_DE_REVISAO",
+  },
+  {
+    nome: "13b. a fila de revisão é excluída pelo CÓDIGO, e não pelo papel",
+    dano: "funciona hoje e para de funcionar no dia em que o diretor renomear `PENDENTE_REVISAO` na tela do catálogo, sem nada falhar: a fila volta a proteger em silêncio.",
+    sql: trocar("s.papel is distinct from 'REVISAO'", "v.status is distinct from 'PENDENTE_REVISAO'"),
+    regraEsperada: "PROTECAO_ABRIGA_A_FILA_DE_REVISAO",
+  },
+  {
+    nome: "14. a subtração vira lista positiva de papéis",
+    dano: "tira o REVISAO e leva junto o RASCUNHO (que RECEBE candidato) e TODO status LIVRE que o diretor criar pela tela, do tipo Stand By: gente em processo vivo numa vaga só pausada passa a ser expurgável, sem decisão de ninguém.",
+    sql: trocar(
+      "s.papel is distinct from 'REVISAO'",
+      "s.papel in ('ABERTURA', 'ENTREGA')",
+    ),
+    regraEsperada: "PROTECAO_ESTREITA_ALEM_DE_REVISAO",
+  },
+  {
+    nome: "14b. a subtração tira também o RASCUNHO",
+    dano: "a vaga em rascunho recebe candidato, e quem está dentro dela passa a ser anonimizado enquanto o processo está vivo.",
+    sql: trocar(
+      "s.papel is distinct from 'REVISAO'",
+      "s.papel is distinct from 'REVISAO' and s.papel is distinct from 'RASCUNHO'",
+    ),
+    regraEsperada: "PROTECAO_ESTREITA_ALEM_DE_REVISAO",
+  },
+  {
+    nome: "15. a leitura do FATO da admissão some",
+    dano: "a vaga devolvida para a fila de revisão anonimiza, do lado de A&S, quem já foi ENVIADO PARA ADMISSÃO, enquanto o CPF dessa pessoa segue inteiro na Admissão, que não tem retenção geral. Minimização zero e irreversível.",
+    sql: trocar("k.admissao_id is not null or ", ""),
+    regraEsperada: "PROTECAO_NAO_LE_A_ADMISSAO",
+  },
+  {
+    nome: "15b. a leitura da admissão vira subordinada à subtração do papel",
+    dano: "o texto passa a CITAR `admissao_id` e a não proteger: na vaga devolvida para a fila, que é exatamente o caminho de dano, a proteção continua desligada.",
+    sql: trocar(
+      "(k.admissao_id is not null or (s.papel is distinct from 'REVISAO' and (s.encerra = false",
+      "(s.papel is distinct from 'REVISAO' and (k.admissao_id is not null or s.encerra = false",
+    ),
+    regraEsperada: "PROTECAO_LE_A_ADMISSAO_DENTRO_DA_SUBTRACAO",
+  },
+  {
+    nome: "16. o piso da fila de revisão some do relógio",
+    dano: "quem VOLTA para a fila de revisão perde a proteção JÁ com o prazo vencido (o `atualizado_em` dele tem anos, porque enquanto a vaga esteve aberta ninguém precisou tocar a linha) e é anonimizado na varredura da hora seguinte, sem carência nenhuma.",
+    sql: trocar(`, ${PISO_REFERENCIA}`, ""),
+    regraEsperada: "RELOGIO_SEM_PISO_DA_FILA_DE_REVISAO",
+  },
+  {
     nome: "7. o relógio corre do encerramento MAIS ANTIGO (`min`)",
     dano: "quem o time viu no mês passado é apagado por causa de um processo de três anos atrás.",
-    sql: trocar("max(case", "min(case"),
+    sql: trocar("max(greatest(", "min(greatest("),
     regraEsperada: "RELOGIO_SEM_MAX",
   },
 ];

@@ -39,14 +39,20 @@ describe("o contrato aprova uma consulta que cumpre o requisito", () => {
    * metade certa cobrir a outra metade destruída.
    */
   it("o `where` é partido nas cláusulas de topo, e cada metade é achada pelo que ela é", () => {
+    /*
+     * QUATRO, E NÃO CINCO: a referência tinha um `and exists (select 1 from as_candidaturas ...)`,
+     * que era o GATE revogado do furo 1 (quem nunca se candidatou nunca começava a contar prazo, e
+     * ficava retido para sempre). Ele saiu da produção quando o furo foi fechado e só sobrevivia
+     * aqui, o que fazia o arnês exercitar uma consulta que ninguém mais produz.
+     */
     const pedacos = clausulasDoWhere(SQL_REFERENCIA);
-    expect(pedacos.length).toBeGreaterThanOrEqual(5);
+    expect(pedacos.length).toBeGreaterThanOrEqual(4);
     expect(clausulaDaProtecao(SQL_REFERENCIA)).toContain("as_vaga_status");
-    expect(clausulaDoRelogio(SQL_REFERENCIA)).toContain("interval '2 years'");
+    expect(clausulaDoRelogio(SQL_REFERENCIA)).toContain("interval '6 months'");
     // A proteção NÃO é o relógio, e o relógio NÃO é a proteção: os dois pedaços são distintos.
     expect(clausulaDaProtecao(SQL_REFERENCIA)).not.toBe(clausulaDoRelogio(SQL_REFERENCIA));
     // Um ` and ` DENTRO da subconsulta não parte cláusula nenhuma.
-    expect(clausulaDaProtecao(SQL_REFERENCIA)).toContain("and s.encerra = false");
+    expect(clausulaDaProtecao(SQL_REFERENCIA)).toContain("s.encerra = false");
   });
 
   /**
@@ -96,9 +102,9 @@ describe("o contrato reprova cada quebra deliberada, e diz qual propriedade caiu
     expect(violacoesDoContrato(comNot)).toEqual([]);
 
     const outraOrdem = SQL_REFERENCIA.replace(
-      "k.candidato_id = c.id and k.situacao in",
-      "k.situacao in",
-    ).replace("and s.encerra = false)", "and s.encerra = false and k.candidato_id = c.id)");
+      "where k.candidato_id = c.id and k.situacao in",
+      "where k.situacao in",
+    ).replace("and (k.admissao_id is not null", "and k.candidato_id = c.id and (k.admissao_id is not null");
     expect(violacoesDoContrato(outraOrdem)).toEqual([]);
   });
 });

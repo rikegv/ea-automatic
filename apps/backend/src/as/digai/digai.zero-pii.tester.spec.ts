@@ -7,32 +7,34 @@ import {
   piiNaSaida,
   resultadoDigaiFingido,
   semComentario,
-  describeSuspenso,
-  sentinelaDoDigai,
+  sentinelaDasPecas,
+  suspensoSem,
 } from "./digai.tester-fake";
 
 /**
- * ┌─ SUITE SUSPENSA: A IMPLEMENTACAO DO DIGAI AINDA NAO EXISTE ─────────────────────────────────┐
- * │ Nada aqui foi apagado. Cada assercao, cada caso e cada `it` continua escrito, palavra por   │
- * │ palavra: este arquivo e o CONTRATO que a construcao vai ter de satisfazer, escrito antes do │
- * │ codigo de proposito (secao A.38 e secao A.40, regra 2). A frente esta parada por insumo do  │
- * │ diretor (o token do Digai, docs/PLATAFORMA-UNIFICADORA-DECISOES.md, secao 5).               │
+ * ┌─ SUSPENSO POR PECA, E NAO PELO MODULO INTEIRO (ajuste de 29/09/2026) ───────────────────────┐
+ * │ Nada aqui foi apagado. Cada assercao continua escrita palavra por palavra: este arquivo e o │
+ * │ CONTRATO que a construcao tem de satisfazer, escrito antes do codigo de proposito (secao    │
+ * │ A.38 e secao A.40, regra 2).                                                                │
  * │                                                                                             │
- * │ O QUE MUDA E SO QUANDO RODA. Os blocos abaixo usam `describeSuspenso`, que e `describe.skip` │
- * │ enquanto NENHUMA peca do Digai existir no disco, e vira `describe` de verdade sozinho no     │
- * │ minuto em que a primeira peca nascer. Nao ha interruptor para alguem esquecer de virar: a    │
- * │ suspensao e DERIVADA da ausencia medida (`pecasPresentes`, em digai.tester-fake.ts).         │
+ * │ CADA BLOCO DECLARA DE QUE PECAS PRECISA (`suspensoSem`), e acorda sozinho quando elas        │
+ * │ existirem no disco. A medida global de 21/09 (`describeSuspenso`) acordava TUDO quando a     │
+ * │ PRIMEIRA peca nascesse, e isso acenderia junto as assercoes de pecas que a OST de hoje NAO   │
+ * │ pede (o `reengajar`), cobrando arquivo que ninguem mandou construir (secao A.31).            │
  * │                                                                                             │
- * │ A SENTINELA ABAIXO RODA SEMPRE, e e ela que impede este trabalho de dormir para sempre: no   │
- * │ dia em que a implementacao chegar, ela FICA VERMELHA dizendo o que fazer. `skip` puro        │
- * │ ninguem lembra de reativar, e cobertura esquecida e pior do que cobertura que nao existe,    │
- * │ porque parece que existe.                                                                   │
- * │                                                                                             │
- * │ UM bloco daqui segue RODANDO, o das fixtures: ele confere o digito verificador dos CPFs     │
- * │ sinteticos e nao depende de implementacao nenhuma, entao suspende-lo so tiraria verde real. │
+ * │ A SENTINELA ABAIXO RODA SEMPRE e diz, em toda rodada, qual peca falta a ESTE arquivo. `skip` │
+ * │ que ninguem lembra de reativar e pior do que teste nenhum, porque parece que existe.         │
  * └─────────────────────────────────────────────────────────────────────────────────────────────┘
  */
-sentinelaDoDigai("digai.zero-pii.tester.spec.ts");
+sentinelaDasPecas("digai.zero-pii.tester.spec.ts", ["dominio", "grade"]);
+
+/** A mascara, a supressao e a minimizacao vivem no dominio puro. */
+const comDominio = suspensoSem("dominio");
+/**
+ * A varredura do FONTE precisa de codigo DENTRO de `as/digai` (o `dominio` mora em `domain/`), e a
+ * primeira peca da pasta e a grade. Sem ela, "o fonte nao loga CPF" seria verdade sobre o vazio.
+ */
+const comFonte = suspensoSem("dominio", "grade");
 
 
 /**
@@ -52,13 +54,21 @@ sentinelaDoDigai("digai.zero-pii.tester.spec.ts");
  * na regra sob prova, e o verde viria pelo motivo errado.
  */
 
-const NOME = "Fulano De Teste";
+/*
+ * O NOME VEM PARTIDO DO FORNECEDOR (`firstname` mais `lastname`), medido em 29/09/2026: o campo
+ * `name` nao existe do outro lado. As DUAS metades entram na caca ao valor, e nao so o composto:
+ * procurar so "Fulano De Teste" na saida deixaria passar uma saida que imprime "Fulano" de um lado
+ * e "De Teste" do outro, que e como o dado de fato trafega.
+ */
+const PRIMEIRO_NOME = "Fulano";
+const SOBRENOME = "De Teste";
+const NOME = `${PRIMEIRO_NOME} ${SOBRENOME}`;
 const EMAIL = "fulano.teste@exemplo.invalido";
 const TELEFONE = "11900000001";
 const CPF = CPF_SINTETICO.finalizou;
 
 /** Tudo o que NAO pode aparecer, em nenhuma superficie, em nenhuma das suas formas. */
-const OS_VALORES = [CPF, NOME, EMAIL, TELEFONE] as const;
+const OS_VALORES = [CPF, NOME, PRIMEIRO_NOME, SOBRENOME, EMAIL, TELEFONE] as const;
 
 describe("as fixtures sao sinteticas e validas", () => {
   it("os CPFs de fixture passam pelo validador da casa", () => {
@@ -70,7 +80,7 @@ describe("as fixtures sao sinteticas e validas", () => {
 
 // ── 1. A MASCARA, PROCURANDO O VALOR ───────────────────────────────────────
 
-describeSuspenso("a mascara tira o VALOR, e o teste procura o VALOR", () => {
+comDominio("a mascara tira o VALOR, e o teste procura o VALOR", () => {
   async function mascarar(): Promise<(texto: unknown) => string> {
     return exigirExport<(texto: unknown) => string>("dominio", "mascararParaLog");
   }
@@ -92,7 +102,7 @@ describeSuspenso("a mascara tira o VALOR, e o teste procura o VALOR", () => {
 
   it("a mascara aceita objeto, e nao so string", async () => {
     const fn = await mascarar();
-    const saida = fn(resultadoDigaiFingido({ cpf: CPF, name: NOME, email: EMAIL, phoneNumber: TELEFONE }));
+    const saida = fn(resultadoDigaiFingido({ cpf: CPF, firstname: PRIMEIRO_NOME, lastname: SOBRENOME, email: EMAIL, phoneNumber: TELEFONE }));
     expect(
       piiNaSaida(saida, OS_VALORES),
       "o caminho mais comum de vazamento e alguem interpolar o OBJETO cru numa mensagem de erro. A mascara tem de alcancar a serializacao inteira.",
@@ -116,7 +126,7 @@ describeSuspenso("a mascara tira o VALOR, e o teste procura o VALOR", () => {
 
 // ── 2. O VETO 4: SUPRESSAO COBRE CONTAGEM E PORCENTAGEM, JUNTAS ────────────
 
-describeSuspenso("o piso de supressao cobre contagem E porcentagem, sempre juntas", () => {
+comDominio("o piso de supressao cobre contagem E porcentagem, sempre juntas", () => {
   async function resumo(): Promise<
     (r: { rotulo: string; contagem: number; total: number }) => string
   > {
@@ -159,7 +169,7 @@ describeSuspenso("o piso de supressao cobre contagem E porcentagem, sempre junta
 
 // ── 3. NENHUM LOG, NENHUM ERRO E NENHUMA LISTA CARREGA PII ─────────────────
 
-describeSuspenso("log, erro e retorno de lista nao carregam dado pessoal", () => {
+comFonte("log, erro e retorno de lista nao carregam dado pessoal", () => {
   it("o modulo nao loga campo de pessoa", async () => {
     const fonte = semComentario(fonteExigida());
     const suspeitos = [
@@ -179,7 +189,7 @@ describeSuspenso("log, erro e retorno de lista nao carregam dado pessoal", () =>
       "erroDoRegistro",
     );
     const saida = montarErro(
-      resultadoDigaiFingido({ cpf: CPF, name: NOME, email: EMAIL, phoneNumber: TELEFONE }),
+      resultadoDigaiFingido({ cpf: CPF, firstname: PRIMEIRO_NOME, lastname: SOBRENOME, email: EMAIL, phoneNumber: TELEFONE }),
       "partnerJobId nao resolve para vaga",
     );
     expect(
@@ -192,11 +202,11 @@ describeSuspenso("log, erro e retorno de lista nao carregam dado pessoal", () =>
   it("o retorno da importacao e contagem e id tecnico, nunca identificador direto", async () => {
     const resumir = await exigirExport<(rs: unknown[]) => unknown>("dominio", "resumoDaImportacao");
     const saida = resumir([
-      resultadoDigaiFingido({ cpf: CPF, name: NOME, email: EMAIL, phoneNumber: TELEFONE }),
-      resultadoDigaiFingido({ userId: "usr-sintetico-2", name: "Beltrano De Teste" }),
+      resultadoDigaiFingido({ cpf: CPF, firstname: PRIMEIRO_NOME, lastname: SOBRENOME, email: EMAIL, phoneNumber: TELEFONE }),
+      resultadoDigaiFingido({ userId: "usr-sintetico-2", firstname: "Beltrano", lastname: "De Teste" }),
     ]);
     expect(
-      piiNaSaida(saida, [...OS_VALORES, "Beltrano De Teste"]),
+      piiNaSaida(saida, [...OS_VALORES, "Beltrano"]),
       "retorno de LISTA nao carrega identificador direto: ele sai so na ficha individual (protocolo, secao 1). Lista e onde o vazamento vem multiplicado pelo tamanho da pagina.",
     ).toEqual([]);
   });
@@ -204,25 +214,77 @@ describeSuspenso("log, erro e retorno de lista nao carregam dado pessoal", () =>
 
 // ── 4. MINIMIZACAO: campo que a funcao nao usa nao e coletado ──────────────
 
-describeSuspenso("minimizacao: so o que a funcao usa de verdade", () => {
-  it("deficiencia, antecedentes criminais e julgamento sobre a pessoa ficam FORA", async () => {
+comFonte("minimizacao: a coleta e uma ALLOWLIST de sete caminhos, e nao uma denylist", () => {
+  /**
+   * ┌─ DENYLIST VIROU ALLOWLIST EM 29/09/2026, POR VETO DO `seguranca`, E O MOTIVO E MEDIDO ───┐
+   * │ A versao de 21/09 listava dez campos PROIBIDOS e comparava com `===` sobre a lista. Dois │
+   * │ furos, os dois achados na auditoria do mapa:                                             │
+   * │  1. `stages` NAO ESTAVA NA LISTA, e ele e justamente o campo mais pesado da decisao de    │
+   * │     16/09 (`digai_agregado.py:42`): carrega resposta e julgamento sobre a pessoa, e foi   │
+   * │     excluido de TODA coleta. A denylist passava verde com ele dentro.                     │
+   * │  2. `===` sobre a lista nao pega CAMINHO ANINHADO: `resultado.stages[0].answer` nao e     │
+   * │     igual a "stages", entao o campo entrava pela porta de baixo.                          │
+   * │                                                                                           │
+   * │ Denylist so protege do que alguem lembrou de escrever. A ALLOWLIST inverte o onus: campo  │
+   * │ novo do fornecedor nasce FORA, e quem quiser coletar tem de vir aqui e justificar.        │
+   * └───────────────────────────────────────────────────────────────────────────────────────────┘
+   */
+  const ALLOWLIST = [
+    "userId",
+    "partnerJobId",
+    "firstname",
+    "lastname",
+    "cpf",
+    "email",
+    "phoneNumber",
+    "appliedAt",
+  ] as const;
+
+  /*
+   * ─ ERAM SETE, SAO OITO, E O QUE MUDOU FOI O FORNECEDOR E NAO A REGRA ────────────────────────
+   *
+   * A sondagem de 29/09/2026 mediu 41 campos no registro real, e `name` NAO e um deles: o nome vem
+   * em `firstname` e `lastname`, separados. O `name` do dominio passa a ser DERIVADO dos dois, e a
+   * allowlist lista os campos LIDOS do fornecedor, que e o que ela existe para limitar.
+   *
+   * A REGRA NAO AFROUXOU: dos 41 campos medidos, 33 continuam fora, inclusive `justification`
+   * (1.556 caracteres de julgamento sobre a pessoa), `attemptFeedback`, `summarizedAnalysis`,
+   * `profileAssessment`, `requirementDetails`, `stages` e `curriculumUrl`, que e URL de curriculo,
+   * PII pura, na mesma regua da URL do Pandape (secao A.6).
+   */
+  it("sao exatamente os OITO caminhos ditados pelo `seguranca`, nem um a mais", async () => {
     const campos = await exigirExport<readonly string[]>("dominio", "CAMPOS_COLETADOS_DO_DIGAI");
-    const proibidos = [
-      "disability",
-      "deficiencia",
-      "criminalRecord",
-      "antecedentes",
-      "matchLevel",
-      "matchPct",
-      "dnaScore",
-      "proficiencyTest",
-      "likelyReading",
-      "rating",
-    ];
-    const achados = campos.filter((c) => proibidos.some((p) => c.toLowerCase() === p.toLowerCase()));
+    const fora = campos.filter((c) => !(ALLOWLIST as readonly string[]).includes(c));
     expect(
-      achados,
-      "deficiencia e antecedentes sairam de TODA coleta por minimizacao, nem contagem; `matchLevel`, `proficiencyTest` e `likelyReading` sairam por serem JULGAMENTO SOBRE A PESSOA (protocolo, secao 3). Decisao imposta pelo `seguranca` em 16/09 e acatada.",
+      fora,
+      `campo fora da allowlist. So se coleta, so se trafega e so se grava o que a funcao usa de verdade (protocolo, secao 3). A lista e: ${ALLOWLIST.join(", ")}.`,
+    ).toEqual([]);
+    expect(
+      [...campos].sort(),
+      "a allowlist tambem nao pode ENCOLHER sem alguem notar: campo que some daqui e funcao que para de funcionar.",
+    ).toEqual([...ALLOWLIST].sort());
+  });
+
+  it("nenhum caminho ANINHADO passa, e `stages` e o caso que a denylist deixava escapar", async () => {
+    const campos = await exigirExport<readonly string[]>("dominio", "CAMPOS_COLETADOS_DO_DIGAI");
+    for (const c of campos) {
+      expect(
+        /[.[\]]/.test(c),
+        `'${c}' e caminho aninhado. A coleta e rasa, e campo aninhado e por onde o julgamento sobre a pessoa entra sem ser visto.`,
+      ).toBe(false);
+      expect(
+        /stages|answer|score|match|proficiency|likely|rating|disability|criminal/i.test(c),
+        `'${c}' e julgamento sobre a pessoa ou resposta de triagem, e saiu de TODA coleta em 16/09, nem contagem (protocolo, secao 3).`,
+      ).toBe(false);
+    }
+  });
+
+  it("o fonte do modulo nao le `stages` em lugar nenhum", async () => {
+    const fonte = semComentario(fonteExigida());
+    const leituras = [...fonte.matchAll(/\.stages\b|\["stages"\]|\bstages\s*:/g)].map((m) => m[0]);
+    expect(
+      leituras,
+      "o campo `stages` foi excluido de toda coleta por minimizacao (decisao do `seguranca`, 16/09). Coletar para depois descartar ja e coletar.",
     ).toEqual([]);
   });
 });

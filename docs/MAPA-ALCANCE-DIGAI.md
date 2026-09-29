@@ -25,24 +25,36 @@ chamadas, zero falhas) e na leitura do codigo em 17/09.
   la.
 - **O CPF ATUALIZA NO MESMO REGISTRO.** `userId` e chave estavel, a reconsulta por `userId`
   funciona. Sem CPF = nao finalizou; com CPF = finalizou. 12% tem CPF (1.656 de 13.248).
-- **Usar a v2.** A v1 nao tem `cpf`, `partnerUserId`, `stages` nem `appliedAt`.
+- **A VERSAO E POR ROTA, E NAO POR INTEGRACAO.** *(Correcao medida em 29/09, ver a secao final:
+  a redacao anterior dizia "usar a v2", sem ressalva, e ela quebra a rota do par.)* A LISTAGEM de
+  resultados e **v2** (`/api/v2/public/screenings/{id}/results`), porque a v1 de listagem nao tem
+  `cpf`, `partnerUserId`, `stages` nem `appliedAt`. **A leitura do PAR (screening + `userId`) e
+  `v1`**: a v2 daquela rota devolve **404**, e o registro unico da v1 traz `cpf`, `stages`,
+  `appliedAt` e `partnerUserId`, que era exatamente o que faltava na listagem.
 - **Host: `api-screening.digai.ai`.** `api.hiring.digai.ai` da doc tem certificado invalido (cert
   `CN=digai.ai`, SAN `*.digai.ai`, wildcard cobre UM rotulo). Mesmos IPs, mesmo cert, mesmo
   balanceador. Desativar verificacao de TLS esta VETADO.
 - **Paginacao por `page`**, confirmada em 44 screenings.
-- **Webhook NAO confirmado.** O caminho hoje e POLLING. "Existe evento de candidato finalizou?" e
-  pergunta ao Ivan.
+- **WEBHOOK CONFIRMADO PELO FORNECEDOR (Ivan, 29/09/2026), e ele MUDA O CAMINHO.** O evento e
+  **`NEW_APPLICATION`**, disparado quando o candidato FINALIZA a triagem, documentado em
+  `digai.readme.io/reference/new-application`. **O polling deixa de ser o caminho:** a ingestao passa
+  a nascer por evento, no mesmo molde do Pandape (receptor fail-closed, enfileira, responde 202, o
+  worker enriquece). *(Antes esta linha dizia "Webhook NAO confirmado. O caminho hoje e POLLING".)*
 - **Endpoints por e-mail, telefone e partner-user-id estao BARRADOS** na grade: poriam PII na URL, e
   o 401 do Digai ECOA o path.
 
 ## O QUE DEPENDE DO DIRETOR, E BLOQUEIA SO A EXECUCAO
 
-- **O TOKEN BEARER FOI EXPURGADO** (`shred`, 16/09) e nao esta no `.env` do backend. Todo o codigo
-  se constroi sem ele, e a rota nasce FECHADA E INERTE sem credencial (mesmo padrao do Pandape,
-  secao A.5). **A leitura da producao do Digai nao roda ate o token voltar.**
-- **Deduplicacao Digai x Pandape: SEGURADA por ordem do diretor**, aguardando o Ivan confirmar se o
-  `userId` e o mesmo entre vagas e qual a chave de casamento. O ponto fica PREPARADO, nao
-  construido.
+- ~~**O TOKEN BEARER FOI EXPURGADO** (`shred`, 16/09).~~ **O token VOLTOU em 29/09/2026**, entregue
+  pelo diretor, e foi usado UMA VEZ, somente para leitura, na sondagem de contrato registrada na
+  secao final. **Ele nao esta no `.env` de nenhum ambiente e foi expurgado (`shred`) ao fim da
+  sessao**, entao a integracao segue FECHADA E INERTE (mesmo padrao do Pandape, secao A.5): sem
+  `DIGAI_API_TOKEN` nada sai para a rede, sem `DIGAI_INGESTAO_ATIVA` nada e escrito. Ligar e decisao
+  do diretor.
+- ~~**Deduplicacao Digai x Pandape: SEGURADA por ordem do diretor.**~~ **DESTRAVADA em 29/09/2026.**
+  O Ivan confirmou que o **`userId` e UNICO E PERMANENTE, o MESMO em todas as triagens**, entao ele
+  E a chave da dedup, e ela se constroi. *(A pergunta que segurava o ponto era exatamente esta, e foi
+  respondida.)*
 
 ## QUEM DEPENDE DO QUE VAI SER MEXIDO (a pergunta da secao A.27)
 
@@ -89,3 +101,77 @@ for tocado nela se pergunta antes.
 commit. A grade e obrigatoria e fail-closed. O reengajar, por reenviar link do nosso lado, NAO abre
 caminho de escrita no Digai, e essa e a razao de ele ser o caminho escolhido (protocolo, secao 6,
 regra zero).
+
+
+---
+
+## O QUE O FORNECEDOR CONFIRMOU EM 29/09/2026 (Ivan), E O QUE ISSO FECHA
+
+| pergunta que estava aberta | resposta do fornecedor | efeito |
+|---|---|---|
+| Existe evento de "candidato finalizou"? | **SIM, `NEW_APPLICATION`**, documentado | o caminho deixa de ser polling e passa a ser webhook |
+| O `userId` e o mesmo entre triagens? | **SIM, unico e permanente** | a dedup DESTRAVA, e a chave e ele |
+| O que e o `partnerJobId`? | **o id da vaga de origem no Pandape** | o elo com a vaga deixa de ser hipotese e vira desenho |
+| Da para saber a ORIGEM (planilha ou Pandape) pela API? | **NAO**, so na interface web | **o diretor decidiu que nao precisa**: a dedup por `userId` resolve, porque quem ja veio do Pandape nao duplica e quem so existe no Digai entra |
+| Qual o teto de requisicao? | **120 por minuto** (a doc diz 500) | **adota-se o MENOR, 120**, e o limiter da fila trabalha a 90, 75% do teto |
+
+**A PENDENCIA QUE SOBRA COM O FORNECEDOR, e nao e urgente:** o host `api.hiring.digai.ai` da
+documentacao esta com **certificado invalido** (cert `CN=digai.ai`, SAN `*.digai.ai`, e wildcard
+cobre UM rotulo). O host que se usa e `api-screening.digai.ai`. **Avisar o Ivan um dia.** Desativar
+verificacao de TLS continua VETADO.
+
+---
+
+## A SONDAGEM DE CONTRATO DE 29/09/2026, E ELA DERRUBOU TRES PREMISSAS
+
+Com o token na mao, o coordenador sondou a **producao do Digai**, somente leitura, pela grade real
+(`digai-grade.ts`) e pelo cliente real (`digai.cliente.ts`). Nenhum dado pessoal foi lido para fora
+da memoria do processo: a sonda imprime **estrutura** (nome de campo, tipo, contagem), nunca valor.
+
+**A LICAO, e ela vale alem do Digai:** havia **174 testes verdes** sobre um contrato **errado**. Os
+fakes foram escritos a partir da documentacao, e a documentacao nao bate com a producao. Teste verde
+sobre fake inventado nao prova integracao nenhuma.
+
+**1. O ENVELOPE.** Toda resposta tem a forma `{ message: [...], data: { value: <conteudo> } }`.
+Nunca array no topo, e `data` e OBJETO, nunca array.
+
+| rota | `data.value` |
+|---|---|
+| `GET /api/v1/public/screenings?page=1` | `{ page, total, screenings: [...] }`, **522 numa pagina** |
+| `GET /api/v2/public/screenings/{id}/results?page=1` | `{ page, total, candidates: [...] }`, a lista chama-se **`candidates`** |
+| `GET /api/v1/public/screenings/{id}/users/{userId}/results` | **UM registro plano** |
+
+**2. A ROTA DO PAR E `v1`.** No MESMO par, a v2 devolveu **404** e a v1 devolveu **200**.
+
+**3. O CAMPO `name` NAO EXISTE.** O registro traz **`firstname`** e **`lastname`**, separados.
+
+**Os 41 campos do registro real:** `accessibilityDeclaration, accessibilityRequest, appliedAt,
+approvalStatus, attempt, attemptFeedback, attemptId, averageRawScore, averageScore,
+backgroundCheckHasRecords, backgroundCheckSeverity, comment, cpf, curriculumUrl, distanceKm,
+dnaScore, dnaScoreRaw, documentRequestStatus, email, expectedAnswersMet, firstname, globalRank,
+greenhouseApplicationId, hasApproved, justification, lastname, likelyReading, matchLevel, matchPct,
+partnerJobId, partnerUserId, phoneNumber, proficiencyTest, profileAssessment, rating,
+requirementDetails, requirementMet, reuseFrom, stages, summarizedAnalysis, userId`.
+
+**`curriculumUrl` E NOVO NO MAPA E E PII PURA:** URL de curriculo, mesma regua da URL do Pandape
+(secao A.6). Nao persiste, nao loga, nao entra na projecao. `justification` (1.556 caracteres),
+`attemptFeedback` (771), `summarizedAnalysis`, `profileAssessment`, `stages` e `requirementDetails`
+sao JULGAMENTO sobre a pessoa e seguem fora, pela decisao de minimizacao de 16/09.
+
+**Presenca medida numa pagina de 58 registros de um screening real:**
+
+| campo | presenca |
+|---|---|
+| `userId` | 58/58, 36 caracteres, todos no alfabeto fechado `[A-Za-z0-9._-]{1,64}` |
+| `partnerJobId` | 58/58, e **todos numericos de 7 digitos**, o que confirma o Ivan |
+| `appliedAt`, `email`, `phoneNumber`, `stages` | 58/58 |
+| `cpf` | **4/58**, coerente com os 12% da varredura de 16/09 |
+| `partnerUserId` | **0/58**, coerente com os 13.248 de 16/09 |
+| `name` | **0/58**, porque o campo nao existe |
+| `userId` distintos | 58/58 |
+
+**4. OS PARAMETROS DE QUERY SAO IGNORADOS PELO FORNECEDOR.** `?userId=`, `?user_id=`, `?search=` e
+`?partnerUserId=` devolveram os **mesmos 58 de 58**. **Nao existe filtro no servidor**, e nenhuma
+peca pode depender de filtrar por la.
+
+**5. Crescimento da base:** **522 screenings** hoje, contra **301** em 16/09.
