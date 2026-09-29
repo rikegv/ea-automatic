@@ -395,6 +395,67 @@ export class DigaiRepositorio {
     }
     return { criada: true, id: criada.id };
   }
+
+  // ── O CURSOR DO POLLING, QUE E MEDICAO E NAO DECISAO ─────────────────────────────────────────
+
+  /**
+   * ─ GRAVA O QUE A LISTAGEM DISSE SOBRE UM SCREENING, E NADA DECIDE POR ISSO ────────────────────
+   *
+   * ┌─ O QUE VAI PARA A TABELA, E POR QUE SO ISSO ────────────────────────────────────────────────┐
+   * │ `screening_id`, o `updatedAt` que a LISTAGEM devolveu e o `total` de candidatos visto no     │
+   * │ ultimo ciclo. Tres colunas, zero dado de pessoa: um screening nao e de ninguem, e o `total`  │
+   * │ e contagem. Nada aqui entra no expurgo porque nada aqui e PII (secao A.6).                    │
+   * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * ┌─ FALHA AQUI NAO DERRUBA O CICLO, E ISSO E DELIBERADO ───────────────────────────────────────┐
+   * │ O cursor nao decide nada hoje (ver `CursorDoScreeningDigai`, em `domain/digai.ts`): ele e a  │
+   * │ MEDICAO que um dia permitira pular screening sem mudanca. Derrubar a varredura porque a      │
+   * │ medicao falhou seria trocar "perdi um numero" por "perdi as pessoas daquela passada", que e  │
+   * │ exatamente a troca errada. Quem chama trata o `false` como aviso.                             │
+   * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+   */
+  async registrarCursorDoScreening(dados: {
+    screeningId: string;
+    updatedAt: string | null;
+    total: number;
+  }): Promise<boolean> {
+    try {
+      await this.db.execute(sql`
+        insert into as_digai_screening_cursor (screening_id, updated_at_externo, total_visto, visto_em)
+        values (${dados.screeningId}, ${textoOuNulo(dados.updatedAt)}, ${dados.total}, now())
+        on conflict (screening_id) do update
+           set updated_at_externo = excluded.updated_at_externo,
+               total_visto = excluded.total_visto,
+               visto_em = now()
+      `);
+      return true;
+    } catch {
+      /*
+       * SEM `err` NA MAO E SEM LOG AQUI. A excecao do driver carrega `detail` e `query`, e este
+       * arquivo nao loga por regra; quem avisa e o chamador, com contagem e sem valor.
+       */
+      return false;
+    }
+  }
+
+  /** O cursor de um screening, para comparar ciclo a ciclo. Ausente = nunca foi visto. */
+  async cursorDoScreening(screeningId: string): Promise<{
+    updatedAt: string | null;
+    total: number;
+  } | null> {
+    try {
+      const linhas = (await this.db.execute(sql`
+        select updated_at_externo, total_visto
+          from as_digai_screening_cursor
+         where screening_id = ${screeningId}
+         limit 1
+      `)) as unknown as { updated_at_externo: string | null; total_visto: number | null }[];
+      const l = linhas[0];
+      return l ? { updatedAt: l.updated_at_externo, total: l.total_visto ?? 0 } : null;
+    } catch {
+      return null;
+    }
+  }
 }
 
 /** Onze digitos com verificador valido, ou nulo. Documento invalido nunca vira chave de nada. */

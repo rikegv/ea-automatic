@@ -932,6 +932,13 @@
       "when": 1788676693611,
       "tag": "0133_as_depara_etapa_externa_digai",
       "breakpoints": true
+    },
+    {
+      "idx": 135,
+      "version": "7",
+      "when": 1790646001719,
+      "tag": "0135_as_digai_screening_cursor",
+      "breakpoints": true
     }
   ]
 }

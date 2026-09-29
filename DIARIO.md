@@ -17738,3 +17738,105 @@ os identificadores novos foram conferidos à mão, mas o modo de falha continua 
 | suíte inteira do backend | **7.226 verdes, 404 arquivos, zero vermelho** |
 | mutantes mortos, retenção | 8 sobre o serviço real, pelo auditor |
 | `as_candidatos` em produção | **0** (410 na homologação), então nada é anonimizado hoje |
+
+---
+
+## 29/09/2026, noite. Digai vai de consulta periódica, e a medição da produção derrubou o dimensionamento
+
+**Decisão do diretor:** não depender do fornecedor. O webhook existe, mas depende de o Ivan cadastrar
+o listener no painel deles, então a ingestão passa a ser **polling**. O webhook fica intocado como
+opção futura, e o `DIGAI_WEBHOOK_TOKEN` deixou de ser necessário para operar.
+
+**O caminho escolhido foi o scheduler in-process**, no molde da Clicksign, e a razão é medida: o
+`crontab` desta VM está **vazio**. Os crons do Pandapé e da Clicksign nunca foram instalados, e foi
+por isso que a Clicksign já tinha trazido o agendamento para dentro do Nest. Depender de cron seria
+trocar a dependência do fornecedor por uma dependência de infra que a casa já viu falhar.
+
+### O que a medição da produção mudou, e ela mudou muito
+
+Com o token, varri os 528 screenings com ritmo controlado. **O tamanho da página é 100**, coisa que
+até hoje estava documentada como "≥ 58", uma suposição vinda de uma amostra em que 58 de 58 couberam
+na primeira página.
+
+| medição | valor |
+|---|---|
+| screenings | **528** (522 pela manhã, 301 em 16/09) |
+| tamanho da página | **100** |
+| screenings acima de 100 | **78**; o maior tem **1.225** |
+| **ciclo real** | 1 + 527 + **154 páginas extras** = **682 requisições** (o código dizia 523) |
+| duração a 90/min | **7,6 min** |
+| candidatos na base | **27.418**, 15% com CPF |
+| falha do fornecedor | **4 em 532** (0,75%), inclusive timeout |
+
+### O incremental: medido, e a resposta é NÃO construir
+
+**O `startAt` funciona**, e é o único: `start_at`, `startDate`, `from`, `updatedAtFrom` e
+`appliedAtFrom` são ignorados. Mas medi **sobre qual data ele filtra**, e é aí que morre: num
+screening com datas espalhadas por 12 dias, com o corte no meio (50 dos 100 eram anteriores),
+`startAt=corte` devolveu **zero** anteriores. **Ele filtra por `appliedAt`, a data de INSCRIÇÃO.**
+
+Nós queremos quem **FINALIZOU**, e finalizar acontece depois, no MESMO registro, **sem mexer no
+`appliedAt`**. Um ciclo incremental perderia exatamente quem se inscreveu antes da janela e finalizou
+dentro dela. Some-se que o **`total` não responde ao filtro**, então nem dá para saber quantos
+casaram. E a economia seria de **~15%** (682 → ~582), porque o custo é dominado por **1 requisição
+por screening**, que filtro nenhum remove. **Quinze por cento em troca de perder gente em silêncio
+não se paga.**
+
+### O defeito que a medição da página revelou, e ele estava em produção lógica há três auditorias
+
+O teto de 1.200 parecia folgado. Não era: a cota por screening é `min(20, floor((teto-1)/N))`, que
+com N=528 dava **2 páginas**. **Todo screening com mais de 200 candidatos perdia o resto, todo
+ciclo, no mesmo ponto**, e o `warn` dizia *"os demais ficam para o proximo ciclo"*, ou seja,
+informava como transitório algo permanente.
+
+**E é permanente porque o fornecedor NÃO ORDENA os resultados.** Medi em três screenings paginados:
+em todos, o maior `appliedAt` da página 2 é mais novo que o menor da página 1, e as datas se
+misturam dentro da própria página. **Cortar página não atrasa os antigos: sorteia quem fica de fora,
+e pode ser exatamente quem acabou de finalizar.**
+
+**Por que passou em três auditorias, incluindo as do `seguranca`:** as três auditaram o **mecanismo**
+do freio (a unidade que ele cobra, se o corte aparece), e nenhuma auditou o **tamanho**. A pergunta
+"a cota que este teto produz cobre o maior screening real?" era **inrespondível sem o tamanho da
+página**. Freio dimensionado contra grandeza suposta não é auditável, só é revisável. O conserto não
+veio de auditar melhor, veio de medir a produção do fornecedor.
+
+### O invariante que eu mandei reescrever, e a auditoria me cobrou a conta
+
+A 15 min, o invariante antigo ("o pior caso de retentativa cabe na cadência") vira impossível: a
+janela tem 1.350 vagas e o ciclo nominal já custa 682. Mandei reescrever para os invariantes que de
+fato protegem, **a vazão (o limiter) e o não-empilhamento (`temCicloEmAndamento`)**, e o `seguranca`
+sustentou o raciocínio **mas vetou a execução**: o comentário afirmava que os dois novos morriam sob
+mutação, e **as duas mutações passavam verdes**. O teste asseria o **valor da constante** do limiter,
+não o Worker construído com ela, e `temCicloEmAndamento` **não tinha um único teste da
+implementação**, só dublês. Trocar um invariante por outro exige que o novo esteja **amarrado**, e
+ele estava apenas declarado.
+
+### O número que compra menos tempo do que parece
+
+O teto subiu para 8.000 (cobertura primeiro, freio depois). Mas o `seguranca` mediu o que importa: a
+**cobertura quebra em N=616**, que é **+17% sobre hoje, ou ~4 dias** no ritmo medido. Os "~58 dias"
+do texto eram do **freio**, não da cobertura, e os dois estavam na mesma seção dando conforto sobre a
+grandeza errada. A saída registrada não é subir o teto de novo, é **repartir por necessidade**
+(`ceil(total/100)`, com o `total` que o cursor já grava): repartir igualmente desperdiça cota nos
+~450 screenings de uma página e a tira justamente dos grandes.
+
+### Quem rodou
+
+| agente | veredito |
+|---|---|
+| `backend` (4 rodadas) | construiu e fechou os vetos |
+| **`seguranca` (1)** | **VETOU 2 de 7**: o teto contava screenings e autorizava 10.441 onde dizia 1.200; a rota interna comparava token com `!==` |
+| **`seguranca` (2)** | **VETOU 1 de 7**: `SEM_TOTAL` saía sem log nenhum |
+| **`seguranca` (3)** | **VETOU 3 de 6**: mutações prometidas que passavam verdes, ruptura de cobertura subdocumentada, log que desarma |
+| coordenador | as medições contra a produção, a migration 0135, o recorte do commit |
+
+### Gate
+
+**329 verdes no módulo, 366 nas suítes do guard compartilhado (Clicksign e Pandapé), typecheck e
+lint limpos.** A migration **0135 foi aplicada na homologação**. A integração segue **INERTE**: sem
+`DIGAI_API_TOKEN` nada sai para a rede, sem `DIGAI_INGESTAO_ATIVA` nada é escrito, sem
+`DIGAI_POLLING_ATIVO` o scheduler não dispara e a rota interna não enfileira.
+
+**O token ficou GUARDADO na VM** (`chmod 600`, fora do repositório), por regra nova do diretor: a
+fábrica não expurga credencial por conta própria, **pergunta antes**. Ele já havia subido o token
+três vezes porque a fábrica dava `shred` ao fim de cada rodada.

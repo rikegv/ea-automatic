@@ -800,6 +800,520 @@ export function chaveDoJobDigai(ids: { userId: string }): string {
   return `digai-${ids.userId}`;
 }
 
+// ── 7. O POLLING: A CONSULTA PERIODICA QUE SUBSTITUIU O WEBHOOK COMO CAMINHO VIGENTE ───────────
+
+/**
+ * ─ POR QUE O CAMINHO VIGENTE E POLLING, E NAO O WEBHOOK QUE JA ESTA CONSTRUIDO ─────────────────
+ *
+ * ┌─ A DECISAO DO DIRETOR (29/09/2026) ──────────────────────────────────────────────────────────┐
+ * │ O webhook do Digai FUNCIONA e FICA NO LUGAR. O que ele tem e uma DEPENDENCIA DE TERCEIRO que  │
+ * │ o diretor nao quer: o listener precisa ser cadastrado no painel do fornecedor pelo Ivan, e    │
+ * │ ate la nao chega evento nenhum. A ingestao passa a se sustentar sozinha, consultando.          │
+ * │                                                                                               │
+ * │ CONSEQUENCIA PRATICA: `DIGAI_WEBHOOK_TOKEN` DEIXOU DE SER NECESSARIO PARA OPERAR. Sem ele o   │
+ * │ receptor continua fail-closed e inerte, e a ingestao roda igual pelo polling. O dia em que o  │
+ * │ diretor quiser o webhook de volta, basta pedir o cadastro ao Ivan e configurar o token: nao   │
+ * │ ha nada a construir, e nada aqui depende dele.                                                 │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+
+/**
+ * ─ A CADENCIA: 15 MINUTOS, E A CONTA FOI MEDIDA CONTRA A PRODUCAO DO FORNECEDOR ────────────────
+ *
+ * ┌─ O CUSTO DE UM CICLO, MEDIDO VARRENDO A BASE INTEIRA EM 29/09/2026 ──────────────────────────┐
+ * │     1 requisicao para a LISTAGEM (`/api/v1/public/screenings`: 528 screenings em UMA pagina)  │
+ * │ + 527 requisicoes, uma por screening, para a primeira pagina de resultados                    │
+ * │ + 154 requisicoes de PAGINA EXTRA                                                              │
+ * │ = 682 REQUISICOES POR CICLO, ou 7,6 min a 90/min.                                              │
+ * │                                                                                               │
+ * │ O NUMERO ANTERIOR (523) ERA 30% BAIXO, E A CAUSA ESTA REGISTRADA PORQUE ELA SE REPETE: ele    │
+ * │ supunha UMA pagina por screening porque O TAMANHO DA PAGINA NUNCA TINHA SIDO MEDIDO (a        │
+ * │ amostra tinha `total` 58 com os 58 na primeira pagina, o que so provava "tamanho >= 58").      │
+ * │                                                                                               │
+ * │ AGORA FOI MEDIDO: A PAGINA E DE 100. Um screening com `total` 273 devolveu 100 na pagina 1.   │
+ * │ 78 dos 528 screenings passam de 100 candidatos, e o maior tem 1.225, que sao 13 paginas.       │
+ * │ Base declarada: 27.418 candidatos, 15% deles com CPF (ou seja, finalizaram a triagem).         │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ O QUE O INTERVALO GOVERNA, E O QUE ELE NAO GOVERNA ─────────────────────────────────────────┐
+ * │ QUEM RESPEITA O TETO DE 120/min DO FORNECEDOR E O LIMITER, NAO A CADENCIA. O limiter segura   │
+ * │ 90/min em QUALQUER intervalo, entao mudar a cadencia NAO muda o pico que o fornecedor ve.     │
+ * │ O intervalo governa outras duas coisas: o VOLUME MEDIO e a LATENCIA ate a pessoa aparecer.    │
+ * │                                                                                               │
+ * │ E UM CICLO MAIS LONGO QUE A CADENCIA NAO ESTOURA NADA: ele apenas faz o tick seguinte NAO     │
+ * │ SAIR, com linha de log, pela trava `temCicloEmAndamento`. Isso e degradacao prevista, e nao    │
+ * │ falha. Ver o bloco do teto abaixo, que e onde essa correcao de invariante esta escrita.        │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ A CONTA, SOBRE O CICLO MEDIDO DE 682, E A ESCOLHA DO DIRETOR ───────────────────────────────┐
+ * │ intervalo   ocupacao da janela   media req/min   % do teto do fornecedor   base cresce ate    │
+ * │   10 min           76%                68,2               57%                    1,3x          │
+ * │   12 min           63%                56,8               47%                    1,6x          │
+ * │   15 min           51%                45,5               38%              2,0x <- ESCOLHIDO │
+ * │   30 min           25%                22,7               19%                    4,0x          │
+ * │                                                                                               │
+ * │ O DIRETOR ESCOLHEU 15 MIN em 29/09/2026. A latencia maxima entre a pessoa finalizar a triagem │
+ * │ e aparecer na fila cai pela metade, o ciclo ocupa metade da janela e a media fica em 38% do   │
+ * │ teto do fornecedor. E a mesma cadencia da coleta de VT.                                        │
+ * │                                                                                               │
+ * │ O QUE SE ACEITA COM ELA, escrito para nao ser redescoberto: a 15 min o ciclo pode DOBRAR      │
+ * │ antes de passar da janela. A base foi de 301 screenings em 16/09 para 528 em 29/09, ou +73%   │
+ * │ em treze dias; nesse ritmo, dobrar leva ~16 DIAS. Passado isso, o tick seguinte comeca a ser  │
+ * │ pulado de vez em quando, com log, e a latencia media sobe: NADA QUEBRA, e o custo e a pessoa  │
+ * │ demorar mais para aparecer na fila. A saida, quando chegar, e subir a cadencia.                │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ POR QUE NAO MENOS QUE 15 ───────────────────────────────────────────────────────────────────┐
+ * │ A 12 min o ciclo ja ocupa 63% da janela e a 10 min, 76%: o tick pulado deixaria de ser        │
+ * │ excecao e viraria regra, e a cadencia nominal passaria a mentir sobre a latencia real. E nada │
+ * │ aqui expira: a Clicksign e de 2 min porque a URL do arquivo assinado expira em ~5 min.        │
+ * │ Triagem nao tem relogio correndo contra ela.                                                   │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+export const DIGAI_POLLING_INTERVALO_MS = 15 * 60 * 1000;
+
+/**
+ * ─ O TETO DE REQUISICOES POR CICLO: 8.000, E ELE CONTA REQUISICAO, NAO SCREENING ────────────────
+ *
+ * ┌─ POR QUE UM TETO, e a razao vale mais aqui do que no precedente ─────────────────────────────┐
+ * │ O precedente e `SCHEDULER_TETO_IA_POR_CICLO` (`domain/scheduler-pandape.ts`): o scheduler     │
+ * │ roda SOZINHO e REPETIDAMENTE, e um erro queimaria quota em escala sem ninguem olhando.         │
+ * │                                                                                               │
+ * │ O CICLO DO DIGAI E UMA ORDEM DE GRANDEZA MAIS PESADO QUE O DO PANDAPE: 682 requisicoes        │
+ * │ medidas contra ~45. E a base do fornecedor CRESCE RAPIDO: 301 screenings em 16/09, 528 em     │
+ * │ 29/09, ou +73% em treze dias. Sem teto, a base crescer faz o ciclo crescer EM SILENCIO, e o   │
+ * │ primeiro a notar e o fornecedor, reclamando ou cortando o acesso.                              │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ O VETO DO `seguranca` (29/09): A PRIMEIRA VERSAO CONTAVA A UNIDADE ERRADA ──────────────────┐
+ * │ Ela cobrava UMA requisicao por screening e nao acompanhava o gasto depois disso. So que cada  │
+ * │ screening vira um job de pagina que pode pedir a proxima pagina sozinho: o teto autorizava,   │
+ * │ na pratica, 1 + N x 20 requisicoes. A paginacao da LISTAGEM tinha o mesmo furo por outra      │
+ * │ porta: cada pagina de listagem recomecava com o orcamento cheio.                               │
+ * │                                                                                               │
+ * │ A CORRECAO FOI DE MECANISMO, E ELA CONTINUA INTEIRA: O ORCAMENTO VIAJA NO PAYLOAD DO JOB, e   │
+ * │ cada peca do leque recebe a sua fatia, entao a soma do que o plano autoriza nunca passa do    │
+ * │ que ele recebeu. O TAMANHO do teto e outro eixo, e e o que a secao seguinte dimensiona.        │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ O INVARIANTE QUE SE USAVA PARA DERIVAR ESTE NUMERO ESTAVA ERRADO, E A CADENCIA DE 15 REVELOU ┐
+ * │ ATE 29/09 o teto era escolhido para que "o pior caso de retentativa CABE NA CADENCIA"         │
+ * │ (attempts x teto, a 90/min, menor que o intervalo). A 15 min isso e impossivel: a janela tem  │
+ * │ 1.350 requisicoes e o CICLO NOMINAL MEDIDO ja custa 682, entao com `attempts: 2` o pior caso  │
+ * │ (1.364) ja estoura a janela. E "fazer caber" baixando o teto para 675 CORTARIA O CICLO        │
+ * │ NORMAL, que e muito pior: cortar o ciclo normal e deixar gente de fora.                        │
+ * │                                                                                               │
+ * │ O INVARIANTE ERA ERRADO DESDE O COMECO PORQUE DERIVAVA O TETO DA CADENCIA, E A DEPENDENCIA E  │
+ * │ A OPOSTA: a cadencia e ESCOLHA DO DIRETOR (latencia que a operacao aceita) e o teto e FREIO   │
+ * │ DE CRESCIMENTO (ate onde a base pode crescer antes de alguem olhar). Sao decisoes de donos    │
+ * │ diferentes, e amarrar uma a outra fez a escolha de cadencia parecer um erro de seguranca.      │
+ * │                                                                                               │
+ * │ OS DOIS INVARIANTES QUE DE FATO PROTEGEM JA EXISTEM NO CODIGO, E SAO ESTES:                   │
+ * │  1. A VAZAO nunca passa do que o fornecedor aguenta, e quem garante e o LIMITER de 90/min com │
+ * │     concorrencia 1 (`DIGAI_WORKER_OPTIONS`), em QUALQUER cadencia e com qualquer teto.        │
+ * │  2. OS CICLOS NUNCA SE EMPILHAM, e quem garante e `temCicloEmAndamento`, que trava o          │
+ * │     scheduler enquanto o anterior nao drenou.                                                  │
+ * │ Com os dois, um ciclo mais longo que a cadencia so faz o tick seguinte nao sair, com log.      │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ COMO 8.000 FOI DIMENSIONADO: PRIMEIRO COBERTURA, DEPOIS FREIO ──────────────────────────────┐
+ * │ COBERTURA (o piso, e ele manda). O plano reparte o restante igualmente: cada screening leva   │
+ * │ `min(20, floor((teto - 1) / N))` paginas. Com N = 528 e teto 8.000, isso da 15 PAGINAS, ou    │
+ * │ 1.500 candidatos por screening, acima do maior medido (1.225 = 13 paginas).                    │
+ * │                                                                                               │
+ * │ Com o teto antigo de 1.200 dariam `floor(1199/528)` = 2 PAGINAS, e o conjunto perdido eram os │
+ * │ screenings ACIMA DE 200 CANDIDATOS: quem tem 101 a 200 termina COMPLETA, porque                │
+ * │ `proximaPaginaDigai` avalia `lidosAcumulados >= total` ANTES dos cortes. (Sabe-se que 78       │
+ * │ passam de 100 e que o maior tem 1.225; quantos passam de 200 NAO foi medido.) A direcao do    │
+ * │ argumento nao muda e o numero sim, e ele esta corrigido aqui porque numero publicado errado    │
+ * │ vira a proxima medicao errada de alguem. Teto apertado nao atrasa gente, ele PERDE gente.      │
+ * │                                                                                               │
+ * │ FREIO (o teto, depois de garantida a cobertura). 8.000 e 11,7x o ciclo medido de 682. No      │
+ * │ ritmo medido (+73% em 13 dias, ou 4,3% ao dia), a base levaria ~58 DIAS para chegar la. A     │
+ * │ truncagem da LISTA (`foraDoTeto`) so dispara com mais de 7.999 screenings, 15x a base de      │
+ * │ hoje, e ai o ciclo PARA e REGISTRA em vez de somar.                                            │
+ * │                                                                                               │
+ * │ O PIOR CASO AUTORIZADO passa a ser 8.000 requisicoes, ou 89 min a 90/min, ~6 cadencias. SOB   │
+ * │ OS INVARIANTES CERTOS ISSO NAO E FALHA: a vazao continua em 90/min e os ciclos nao se somam,  │
+ * │ o que se paga e latencia. E e AUTORIZACAO, nao gasto: o gasto medido e 682.                    │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ OS 58 DIAS SAO DO FREIO. A COBERTURA QUEBRA EM QUATRO DIAS, E E ELA QUE MANDA ──────────────┐
+ * │ NAO LEIA "~58 dias" COMO PRAZO DESTA CONSTANTE. Sao duas grandezas diferentes na mesma        │
+ * │ secao, e a que manda (cobertura) e MUITO mais curta que a que conforta (freio):                │
+ * │                                                                                               │
+ * │      N        cota = min(20, floor(7999/N))    cobre        cobre o maior medido (1.225)?     │
+ * │    528 (hoje)            15                    1.500                  sim                      │
+ * │    616                   12                    1.200                  NAO   <- A RUPTURA       │
+ * │  1.000                    7                      700                  nao                      │
+ * │                                                                                               │
+ * │ A COBERTURA DO MAIOR SCREENING QUEBRA EM N = 616, que e +17% sobre hoje, ou ~4 DIAS no ritmo  │
+ * │ de +4,3% ao dia que esta propria secao mede. O FREIO, esse sim, esta a ~58 dias. Confundir os │
+ * │ dois da conforto exatamente sobre a grandeza que este bloco declara ser a que manda.           │
+ * │                                                                                               │
+ * │ O PONTO DE RUPTURA ESTA FIXADO EM TESTE (`digai-polling.backend.spec.ts`), e nao so aqui, para │
+ * │ que ele nao volte a ser prosa: mudar o teto sem mexer na reparticao move o numero e o teste    │
+ * │ cobra o novo. QUANDO ELE CHEGAR, a saida e a reparticao por necessidade do bloco abaixo, e     │
+ * │ nao subir o teto de novo: subir o teto trata o sintoma, e a cota continua caindo com N.        │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ O QUE VAI DOER PRIMEIRO COM O CRESCIMENTO, E NAO E ESTE TETO ───────────────────────────────┐
+ * │ A reparticao e IGUALITARIA, e a base e TORTA: 450 screenings cabem numa pagina e um tem 13.   │
+ * │ Entao quem aperta primeiro e a COBERTURA DOS GRANDES, e nao o teto: com N = 1.000 a cota cai  │
+ * │ para 7 paginas (700 candidatos) e com N = 1.600, para 4 (400 candidatos). Ou seja, MUITO      │
+ * │ antes de o teto disparar, os screenings grandes voltam a ser cortados.                         │
+ * │                                                                                               │
+ * │ A SAIDA ESTA A MAO E NAO FOI CONSTRUIDA AQUI (§A.31, propor e nao construir): o cursor JA     │
+ * │ GRAVA o `total` de candidatos por screening (`CursorDoScreeningDigai`), entao da para repartir │
+ * │ POR NECESSIDADE (`ceil(total/100)`) em vez de igualmente, e o mesmo orcamento cobriria a base │
+ * │ varias vezes maior. Quem for fazer isso: a decisao e pura, mora em `planoDaVarredura`, e o    │
+ * │ dado de entrada ja esta gravado.                                                               │
+ * │                                                                                               │
+ * │ E A MEDICAO DA ORDENACAO (abaixo) DEIXA A REPARTICAO POR NECESSIDADE AINDA MELHOR: repartir   │
+ * │ igualmente DESPERDICA cota nos screenings pequenos (450 deles cabem numa pagina e recebem 15) │
+ * │ e a tira justamente dos GRANDES, que sao os unicos onde o corte tem efeito.                    │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ NAO APERTE ESTE TETO. O FORNECEDOR NAO ORDENA OS RESULTADOS, E ISSO FOI MEDIDO ─────────────┐
+ * │ O proximo a ler "8.000 contra um gasto de 682" vai achar folgado demais e vai querer apertar. │
+ * │ APERTAR O TETO BAIXA A COTA POR SCREENING E VOLTA A CORTAR PAGINA, e cortar pagina PERDE      │
+ * │ CANDIDATO RECENTE, EM SILENCIO. Nao e opiniao, e consequencia de medicao.                      │
+ * │                                                                                               │
+ * │ MEDIDO EM 29/09/2026, em TRES screenings com mais de uma pagina (`total` 275, 135 e 167): as  │
+ * │ 100 datas da pagina 1 vem SEM ORDEM APARENTE, e nos tres o MAIOR `appliedAt` DA PAGINA 2 E    │
+ * │ MAIS NOVO QUE O MENOR DA PAGINA 1. Nao ha crescente nem decrescente: as datas se misturam     │
+ * │ dentro da propria pagina.                                                                      │
+ * │                                                                                               │
+ * │ ENTAO A HIPOTESE CONFORTAVEL ESTA DERRUBADA: nao e verdade que o corte de pagina "empurra os  │
+ * │ antigos para depois". QUEM CAI NA PAGINA CORTADA E SORTEADO, e pode ser exatamente quem acabou │
+ * │ de finalizar a triagem, que e justamente quem esta ingestao existe para trazer. Por isso a     │
+ * │ regra de dimensionamento e COBERTURA PRIMEIRO, FREIO DEPOIS, e ela deixou de ser preferencia   │
+ * │ de quem escreveu para ser consequencia do que se mediu.                                        │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ AS RETENTATIVAS: 2 CONTINUA CERTO, E AGORA POR MEDICAO E NAO POR ARITMETICA ────────────────┐
+ * │ A varredura de 29/09 teve 4 FALHAS EM 532 REQUISICOES (0,75%): o fornecedor deu TIMEOUT, e um │
+ * │ screening se perdeu mesmo com tres tentativas. Isso derruba o argumento antigo (que derivava  │
+ * │ as tentativas da cadencia) e poe outro no lugar, mais forte:                                   │
+ * │                                                                                               │
+ * │ NO POLLING, FALHA E ATRASO E NAO PERDA. O ciclo rele TUDO daqui a 15 min, entao a pagina que  │
+ * │ falhou volta sozinha. Com 0,75% e `attempts: 2`, a chance de um screening ficar de fora de um │
+ * │ ciclo e 0,75%^2 = 1 em 18.000, e mesmo esse volta no ciclo seguinte. Subir para 3 trocaria    │
+ * │ "1 em 18.000 atrasado 15 min" por "1 em 2,4 milhoes", contra um fornecedor QUE JA ESTA        │
+ * │ RESPONDENDO MAL: insistir mais nele e piorar a causa para melhorar uma casa decimal.           │
+ * │ Ver `DIGAI_TENTATIVAS_DO_POLLING` (`digai.queue.ts`), que e onde o numero mora.                │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+export const DIGAI_TETO_REQ_POR_CICLO = 8_000;
+
+/**
+ * O TETO DE PAGINAS POR SCREENING: 20.
+ *
+ * Nao e orcamento, e ANTI-LACO: a paginacao avanca enquanto o fornecedor disser que ha mais, e um
+ * `total` inconsistente (ou uma pagina que devolve os mesmos itens) faria um unico screening varrer
+ * para sempre, sob o limiter, sem nada falhar.
+ *
+ * A CONTA, AGORA COM A PAGINA MEDIDA (100, e nao ">= 58" como se supunha): 20 paginas cobrem 2.000
+ * candidatos num unico screening, contra 1.225 do maior medido em 29/09. Sao 1,63x de folga, que e
+ * menos do que parecia quando a pagina era desconhecida, e continua servindo por DOIS motivos:
+ *  1. o que corta hoje NAO E ele, e sim a cota do orcamento (`min(20, floor((teto-1)/N))` = 15 com
+ *     a base de hoje). Subir este numero seria inerte enquanto a cota for menor;
+ *  2. o corte anti-laco REGISTRA (`warn` com "CORTADO" e "anti-laco"), entao encostar nele vira
+ *     linha de log e nao silencio. Quem vier: se o maior screening passar de 2.000 candidatos, o
+ *     numero a subir e este, e o aviso ja estara no log.
+ */
+export const DIGAI_TETO_PAGINAS_POR_SCREENING = 20;
+
+/**
+ * ─ O TERCEIRO PORTAO DE INERCIA, E ELE E SO DO POLLING ─────────────────────────────────────────
+ *
+ * Sem `DIGAI_POLLING_ATIVO`, o scheduler NAO DISPARA e a rota interna nao enfileira nada. Ele e
+ * separado dos outros dois de proposito, porque decide coisa diferente:
+ *   `DIGAI_API_TOKEN`      -> pode SAIR para a rede
+ *   `DIGAI_INGESTAO_ATIVA` -> pode ESCREVER no banco
+ *   `DIGAI_POLLING_ATIVO`  -> pode VARRER sozinho, em cadencia, sem ninguem pedir
+ * Juntar o terceiro ao segundo faria "quero escrever o que o webhook trouxer" e "quero varrer 522
+ * screenings a cada 30 minutos" virarem a mesma decisao, e elas nao sao.
+ *
+ * SO `true` LIGA, pelo mesmo fail-closed de `ingestaoHabilitada`: ausente, vazio e o erro de
+ * digitacao no `.env` deixam desligado.
+ */
+export function pollingHabilitado(env: Record<string, string | undefined>): boolean {
+  return (env.DIGAI_POLLING_ATIVO ?? "").trim().toLowerCase() === "true";
+}
+
+/**
+ * ─ O SCREENING PROJETADO, E A ALLOWLIST VALE AQUI TAMBEM ───────────────────────────────────────
+ *
+ * A listagem devolve 17 campos por screening (`title`, `description`, `webAccessLink`,
+ * `whatsappAccessLink`, `occupationType`, `seniorityLevel` e outros). A varredura precisa de DOIS:
+ * o `id`, para montar o caminho dos resultados, e o `updatedAt`, que e o cursor da secao abaixo.
+ *
+ * PROJETAR AQUI, E NAO ADIANTE, e o que impede os outros quinze de existirem no plano, no log e no
+ * job do Redis. `webAccessLink` e `whatsappAccessLink` sao o caso concreto: sao URL de acesso, na
+ * mesma regua da URL do Pandape (secao A.6), que nao se persiste nem se loga.
+ *
+ * O `id` PASSA PELO ALFABETO FECHADO antes de virar qualquer coisa, porque ele vai para o PATH da
+ * proxima leitura e para a chave do job: e a mesma regra do `userId`, pela mesma razao.
+ */
+export interface ScreeningDigai {
+  id: string;
+  /** O carimbo que a LISTAGEM devolve. So se ARMAZENA; nao se decide nada com ele (ver o cursor). */
+  updatedAt: string | null;
+}
+
+export function projetarScreeningDigai(cru: unknown): ScreeningDigai | null {
+  const o = comoObjetoSimples(cru);
+  if (o === null) return null;
+  const id = texto(o.id);
+  if (id === null || !ehIdTecnicoDigai(id)) return null;
+  return { id, updatedAt: texto(o.updatedAt) };
+}
+
+/**
+ * ─ O CURSOR: GRAVA-SE PARA MEDIR, E NAO SE PULA NADA COM ELE. AINDA ────────────────────────────
+ *
+ * ┌─ O QUE SE GRAVA, E POR QUE SO ISSO ──────────────────────────────────────────────────────────┐
+ * │ Por screening: o `updatedAt` que a LISTAGEM devolveu e o `total` de candidatos visto no       │
+ * │ ultimo ciclo. Dois numeros tecnicos, zero dado de pessoa.                                      │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ POR QUE NAO SE PULA NADA COM ELE HOJE, E ESTA E A PARTE QUE NAO PODE SER "OTIMIZADA" ───────┐
+ * │ NAO ESTA PROVADO que o `updatedAt` do SCREENING se mexe quando um CANDIDATO finaliza. O       │
+ * │ `updatedAt` e do screening (titulo, configuracao, numero de perguntas), e o candidato e outro │
+ * │ objeto. Se ele NAO se mexer, pular o screening "sem mudanca" deixa de fora exatamente quem    │
+ * │ acabou de finalizar, para sempre, SEM NADA FALHAR: zero erro, zero alarme, e a pessoa         │
+ * │ simplesmente nunca chega na fila. E o modo de falha mais caro que uma ingestao tem, e esta    │
+ * │ frente ja pagou por ele uma vez (o desembrulho errado zerava a ingestao em silencio).          │
+ * │                                                                                               │
+ * │ ENTAO GRAVAR E A MEDICAO QUE DESTRAVA A OTIMIZACAO: com dois ou tres ciclos gravados da para  │
+ * │ comparar, por screening, "o `updatedAt` mudou?" contra "o `total` mudou?" e RESPONDER a        │
+ * │ pergunta em vez de supo-la. Custa uma tabela e nao muda comportamento nenhum.                   │
+ * │                                                                                               │
+ * │ O QUE FALTA MEDIR, nominalmente, para que quem vier saiba o que procurar:                      │
+ * │  1. o `updatedAt` do screening muda quando um candidato finaliza a triagem?                    │
+ * │  2. o `total` da pagina de resultados muda quando um candidato finaliza, ou so quando um       │
+ * │     candidato NOVO entra? (se so no segundo caso, ele tambem nao serve de cursor sozinho)      │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ O INCREMENTAL POR DATA: MEDIDO EM 29/09/2026, E A RESPOSTA E NAO CONSTRUIR ─────────────────┐
+ * │ AQUI ESTAVA ESCRITO que `startAt`/`endAt` "NAO FORAM TESTADOS". AGORA FORAM, e o resultado    │
+ * │ fecha a pergunta em vez de deixa-la aberta. Quem vier depois precisa ACHAR A MEDICAO, e nao   │
+ * │ repetir a medicao.                                                                             │
+ * │                                                                                               │
+ * │ 1. `startAt` FUNCIONA, E E O UNICO QUE FUNCIONA. Testados contra a producao do fornecedor:    │
+ * │    `start_at`, `startDate`, `from`, `updatedAtFrom` e `appliedAtFrom` sao TODOS IGNORADOS     │
+ * │    (devolvem a pagina inteira, como os quatro ja registrados acima).                           │
+ * │                                                                                               │
+ * │ 2. E SOBRE QUAL DATA ELE FILTRA, que e onde a ideia morre: `startAt` FILTRA POR `appliedAt`,  │
+ * │    A DATA DE INSCRICAO. Medido: num screening com 100 na pagina e datas espalhadas por 12     │
+ * │    dias, com o corte no meio (50 dos 100 eram anteriores), `startAt = corte` devolveu ZERO    │
+ * │    anteriores.                                                                                 │
+ * │                                                                                               │
+ * │ 3. ENTAO O INCREMENTAL POR DATA E INSEGURO PARA O NOSSO CASO. Nos queremos quem FINALIZOU, e  │
+ * │    finalizar acontece DEPOIS, NO MESMO REGISTRO, SEM MEXER NO `appliedAt`. Um ciclo com       │
+ * │    `startAt = ultimo ciclo` perderia exatamente quem se inscreveu ANTES da janela e finalizou │
+ * │    DENTRO dela, para sempre e sem nada falhar: o mesmo modo de falha que esta secao inteira   │
+ * │    existe para evitar. E o `total` NAO RESPONDE AO FILTRO (continua devolvendo o numero sem   │
+ * │    filtro), entao nem daria para conferir quantos casaram.                                     │
+ * │                                                                                               │
+ * │ 4. E A ECONOMIA SERIA PEQUENA, o que encerra o assunto ate por custo. O ciclo e dominado por  │
+ * │    UMA REQUISICAO POR SCREENING (527 das 682 medidas), e filtro nenhum remove essa. O filtro  │
+ * │    so cortaria PAGINA EXTRA: com janela de 14 dias (35% dos registros), as 154 extras cairiam │
+ * │    para ~54, ou seja 682 -> ~582, CERCA DE 15%. Quinze por cento em troca de perder gente em  │
+ * │    silencio nao se paga.                                                                       │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+export interface CursorDoScreeningDigai {
+  screeningId: string;
+  updatedAt: string | null;
+  total: number;
+}
+
+/**
+ * ─ O PLANO DA VARREDURA: O ORCAMENTO E REPARTIDO AQUI, E ELE E DE REQUISICOES ──────────────────
+ *
+ * ┌─ O QUE MUDOU DEPOIS DO VETO, E POR QUE A FORMA E ESTA ───────────────────────────────────────┐
+ * │ A primeira versao devolvia "quais screenings varrer" e cobrava 1 de cada, ignorando que cada  │
+ * │ screening pode pedir ate 20 paginas sozinho. Agora ela devolve, junto de cada screening,      │
+ * │ QUANTAS PAGINAS ele tem direito a ler, e o que sobra para a proxima pagina da LISTAGEM. O     │
+ * │ orcamento passa a fechar: a soma do que o plano autoriza NUNCA passa do que ele recebeu.      │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ COMO O ORCAMENTO E REPARTIDO, e as duas regras sao diferentes de proposito ─────────────────┐
+ * │ LISTAGEM EM UMA PAGINA SO (o caso medido): sabe-se N exatamente, entao o restante inteiro e   │
+ * │ dividido pelos N screenings, e cada um leva `floor(R/N)` paginas, limitado pelo teto de 20.   │
+ * │                                                                                               │
+ * │ LISTAGEM PAGINADA: NAO se sabe quantos screenings ainda virao, entao esta pagina e            │
+ * │ CONSERVADORA (uma pagina por screening) e o resto do orcamento SEGUE para a proxima pagina da │
+ * │ listagem. Sem isso, cada pagina de listagem recomecaria com o orcamento cheio, que era o furo │
+ * │ B do veto: com o fornecedor paginando de 20 em 20, seriam 27 ticks x 1.199 e o teto jamais    │
+ * │ dispararia.                                                                                    │
+ * │                                                                                               │
+ * │ ORCAMENTO QUE NAO DA NEM UMA PAGINA POR SCREENING TRUNCA A LISTA, e os que sobram sao         │
+ * │ contados em `foraDoTeto` para virar linha de log.                                              │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * A DEDUPLICACAO POR `id` ACONTECE AQUI: a listagem repetir um screening (por paginacao instavel do
+ * fornecedor) gastaria requisicao pelo mesmo conteudo, e o orcamento e de REQUISICOES.
+ */
+export interface ScreeningComOrcamentoDigai {
+  screening: ScreeningDigai;
+  /** Quantas paginas de resultados este screening pode ler nesta passada. Sempre >= 1. */
+  paginasPermitidas: number;
+}
+
+export function planoDaVarredura(entrada: {
+  screenings: readonly ScreeningDigai[];
+  /** O orcamento que ESTE tick recebeu, em REQUISICOES. Inclui a requisicao da propria listagem. */
+  orcamento?: number;
+  /** A listagem tem proxima pagina? Muda a regra de reparticao, e nao so o resto. */
+  haProximaPaginaDaListagem?: boolean;
+  tetoDePaginas?: number;
+}): {
+  varrer: ScreeningComOrcamentoDigai[];
+  foraDoTeto: number;
+  estourou: boolean;
+  /** O que sobra para a proxima pagina da LISTAGEM. Zero significa que ela nao deve ser pedida. */
+  orcamentoRestante: number;
+} {
+  const orcamento = entrada.orcamento ?? DIGAI_TETO_REQ_POR_CICLO;
+  const tetoDePaginas = entrada.tetoDePaginas ?? DIGAI_TETO_PAGINAS_POR_SCREENING;
+  // A REQUISICAO DA PROPRIA LISTAGEM JA FOI GASTA por quem chamou: ela e a primeira do ciclo.
+  const restante = Math.max(0, orcamento - 1);
+
+  const vistos = new Set<string>();
+  const unicos: ScreeningDigai[] = [];
+  for (const s of entrada.screenings) {
+    if (vistos.has(s.id)) continue;
+    vistos.add(s.id);
+    unicos.push(s);
+  }
+
+  // Sem orcamento nem para uma pagina de cada, a lista e TRUNCADA e o resto vira contagem.
+  const cabem = Math.min(unicos.length, restante);
+  const escolhidos = unicos.slice(0, cabem);
+  const foraDoTeto = unicos.length - escolhidos.length;
+
+  const paginasPermitidas =
+    escolhidos.length === 0
+      ? 0
+      : entrada.haProximaPaginaDaListagem === true
+        ? 1
+        : Math.min(tetoDePaginas, Math.max(1, Math.floor(restante / escolhidos.length)));
+
+  const gasto = escolhidos.length * paginasPermitidas;
+  return {
+    varrer: escolhidos.map((screening) => ({ screening, paginasPermitidas })),
+    foraDoTeto,
+    estourou: foraDoTeto > 0,
+    orcamentoRestante: Math.max(0, restante - gasto),
+  };
+}
+
+/**
+ * ─ A PAGINACAO, E ELA E DE VERDADE: NAO SE PRESUME QUE UMA PAGINA BASTA ────────────────────────
+ *
+ * ┌─ POR QUE ISTO E UMA FUNCAO E NAO UM `if` NO SERVICO ─────────────────────────────────────────┐
+ * │ A amostra que se tinha teve `total` 58 com os 58 na primeira pagina, e e exatamente esse tipo │
+ * │ de amostra que faz alguem concluir "uma pagina basta". A MEDICAO DE 29/09 MOSTROU QUE A       │
+ * │ PRESUNCAO SERIA ERRADA: A PAGINA E DE 100, e 78 dos 528 screenings passam disso, o maior com  │
+ * │ 1.225 candidatos (13 paginas). Presumir uma pagina perderia, HOJE, todo mundo da segunda em   │
+ * │ diante em 78 screenings, em silencio.                                                          │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ ELA DEVOLVE O MOTIVO, E NAO SO O NUMERO (veto do `seguranca`, 29/09) ───────────────────────┐
+ * │ A primeira versao devolvia `null` tanto para "acabou" quanto para "bati no teto de paginas",  │
+ * │ e as duas coisas eram INDISTINGUIVEIS, sem log nenhum. Um screening com mais paginas do que o │
+ * │ teto perderia todo mundo dali em diante sem erro e sem alarme, que e o modo de falha que esta │
+ * │ frente ja chamou de o mais caro que uma ingestao tem. Agora o CORTE tem nome, e quem chama e  │
+ * │ obrigado a decidir o que fazer com ele, que na pratica e REGISTRAR.                            │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ `SEM_TOTAL` NAO E TERMINO NORMAL, E CLASSIFICA-LO ASSIM FOI ERRO DE JULGAMENTO ─────────────┐
+ * │ A versao anterior deste comentario punha `SEM_TOTAL` entre os terminos normais, e o efeito    │
+ * │ pratico era grave: ele saia com `cortada: false`, ninguem logava nada e nenhum contador o     │
+ * │ acusava. O `seguranca` mediu ao vivo em 29/09:                                                 │
+ * │ `{"proxima":null,"motivo":"SEM_TOTAL","cortada":false}`, e zero linha de log.                  │
+ * │                                                                                               │
+ * │ A DIFERENCA E DE EPISTEMOLOGIA, E ELA DECIDE O NIVEL DO LOG:                                   │
+ * │   `COMPLETA`  PROVOU-SE que acabou (leu-se tudo o que o fornecedor declarou);                  │
+ * │   `SEM_TOTAL` NAO SE SABE se acabou (o fornecedor nao declarou nada).                          │
+ * │ Tratar DESCONHECIMENTO como CONCLUSAO e a definicao do modo de falha silencioso.               │
+ * │                                                                                               │
+ * │ O CENARIO NAO E HIPOTETICO: basta o fornecedor mudar a forma da resposta, coisa que este       │
+ * │ modulo JA DOCUMENTA ter acontecido (a versao e por rota justamente porque a v2 daquela rota    │
+ * │ sumiu). A ingestao passaria a ler a pagina 1 da listagem e a pagina 1 de cada screening, ou    │
+ * │ seja ~4% da base, e nada ficaria vermelho, amarelo, nem contado.                               │
+ * │                                                                                               │
+ * │ NAO SE INVENTA PAGINACAO SEM `total`: parar continua sendo o certo, e fail-closed. O que se    │
+ * │ corrige e a AUSENCIA DE REGISTRO, que e outra coisa.                                            │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * OS MOTIVOS DE PARADA, em tres classes:
+ *   TERMINO PROVADO
+ *     `COMPLETA`        leu-se tudo o que o fornecedor declarou;
+ *     `PAGINA_VAZIA`    a pagina veio sem itens (insistir seria laco, e nao ha o que somar);
+ *   ABSTENCAO POR FORMATO INESPERADO (`abstencao: true`, e vira WARN)
+ *     `SEM_TOTAL`       o fornecedor nao declarou `total`: nao se sabe se acabou;
+ *   CORTE NOSSO (`cortada: true`, e vira WARN)
+ *     `CORTE_ORCAMENTO` o orcamento DESTA passada acabou, e ha mais para ler;
+ *     `CORTE_TETO`      o teto anti-laco de paginas por screening foi atingido, e ha mais para ler.
+ *
+ * AS DUAS ULTIMAS CLASSES SAO SEPARADAS DE PROPOSITO: corte e decisao NOSSA sobre uma base que
+ * conhecemos, e abstencao e a base ter deixado de ser conhecivel. Quem le o log precisa saber qual
+ * das duas aconteceu, porque a acao e diferente (rever o teto contra conferir o contrato).
+ */
+export type MotivoDeParadaDigai =
+  | "COMPLETA"
+  | "PAGINA_VAZIA"
+  | "SEM_TOTAL"
+  | "CORTE_ORCAMENTO"
+  | "CORTE_TETO";
+
+export function proximaPaginaDigai(entrada: {
+  total: unknown;
+  lidosAcumulados: number;
+  itensNaPagina: number;
+  paginaAtual: number;
+  /** Quantas paginas o orcamento desta passada concedeu a ESTE screening. */
+  paginasPermitidas: number;
+  tetoDePaginas?: number;
+}): {
+  proxima: number | null;
+  motivo: MotivoDeParadaDigai | null;
+  /** Decisao NOSSA que deixou gente de fora. Vira WARN. */
+  cortada: boolean;
+  /** O formato do fornecedor mudou e nao se sabe se acabou. Tambem vira WARN, com outro texto. */
+  abstencao: boolean;
+} {
+  const teto = entrada.tetoDePaginas ?? DIGAI_TETO_PAGINAS_POR_SCREENING;
+  const parar = (motivo: MotivoDeParadaDigai) => ({
+    proxima: null,
+    motivo,
+    cortada: motivo === "CORTE_ORCAMENTO" || motivo === "CORTE_TETO",
+    abstencao: motivo === "SEM_TOTAL",
+  });
+
+  if (entrada.itensNaPagina <= 0) return parar("PAGINA_VAZIA");
+  const total =
+    typeof entrada.total === "number" && Number.isFinite(entrada.total) ? entrada.total : null;
+  if (total === null) return parar("SEM_TOTAL");
+  // TERMINO NORMAL VEM ANTES DOS CORTES: quem leu tudo nao foi cortado, e chamar isso de corte
+  // encheria o log de alarme falso justamente no caso em que nada se perdeu.
+  if (entrada.lidosAcumulados >= total) return parar("COMPLETA");
+  if (entrada.paginaAtual >= teto) return parar("CORTE_TETO");
+  if (entrada.paginaAtual >= entrada.paginasPermitidas) return parar("CORTE_ORCAMENTO");
+  return { proxima: entrada.paginaAtual + 1, motivo: null, cortada: false, abstencao: false };
+}
+
+/** O `total` que a resposta do fornecedor declara, ou `null` quando ele nao veio no formato medido. */
+export function totalDeclaradoDigai(conteudo: unknown): number | null {
+  const o = comoObjetoSimples(conteudo);
+  const t = o?.total;
+  return typeof t === "number" && Number.isFinite(t) ? t : null;
+}
+
 // ── AUXILIARES ─────────────────────────────────────────────────────────────────────────────────
 
 /** Texto util, ou `null`. Vazio e ausente sao a mesma coisa para tudo o que este arquivo decide. */

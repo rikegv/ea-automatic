@@ -795,7 +795,14 @@ describe("A3: o erro que ESCAPA do worker passa pelo funil antes de o BullMQ o p
         throw erroDoDriver;
       }),
     } as unknown as ConstructorParameters<typeof DigaiFilaService>[1];
-    const fila = new DigaiFilaService({ get: () => undefined } as unknown as ConfigService, importacao);
+    // A varredura entrou no construtor com o polling (29/09). Ela NAO participa deste caminho: o
+    // job aqui e `JOB_EVENTO_DIGAI`, do webhook, e o duble existe so para o construtor fechar.
+    const varredura = {} as unknown as ConstructorParameters<typeof DigaiFilaService>[2];
+    const fila = new DigaiFilaService(
+      { get: () => undefined } as unknown as ConfigService,
+      importacao,
+      varredura,
+    );
 
     const executar = (fila as unknown as { processar: (j: unknown) => Promise<void> }).processar.bind(fila);
     await expect(

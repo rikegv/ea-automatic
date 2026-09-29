@@ -5,7 +5,10 @@ import { PortalModule } from "../portal/portal.module";
 import { DigaiController } from "./digai/digai.controller";
 import { DigaiFilaService } from "./digai/digai-fila.service";
 import { DigaiImportacaoService } from "./digai/digai-importacao.service";
+import { DigaiPollingController } from "./digai/digai-polling.controller";
 import { DigaiRepositorio } from "./digai/digai-repositorio";
+import { DigaiSchedulerService } from "./digai/digai-scheduler.service";
+import { DigaiVarreduraService } from "./digai/digai-varredura.service";
 import {
   DigaiWebhookController,
   PORTA_DA_FILA_DIGAI,
@@ -208,6 +211,15 @@ import { VagasService } from "./vagas/vagas.service";
      */
     DigaiWebhookController,
     DigaiController,
+    /*
+     * ─ O DISPARO MANUAL DA VARREDURA (`POST /internal/digai/tick`) ─────────────────────────────
+     *
+     * Terceira classe, e a separacao segue sendo de AUTORIZACAO: esta e `@Public()` protegida pelo
+     * `InternalTokenGuard` (segredo compartilhado), porque quem chama e um processo e nao uma
+     * sessao. Ela NAO e o unico caminho da varredura: a cadencia vive no `DigaiSchedulerService`,
+     * dentro do Nest, pela licao do cron da Clicksign que nunca foi instalado.
+     */
+    DigaiPollingController,
   ],
   // `RetencaoCandidatosService` é o expurgo por retenção (6 MESES para descartado, banco não expira).
   // O prazo era 2 anos e mudou por decisão do diretor em 29/09/2026: candidatura viva em vaga que
@@ -295,7 +307,7 @@ import { VagasService } from "./vagas/vagas.service";
     IngestaoHttp,
     IngestaoVarreduraService,
     /*
-     * ─ A INGESTAO DO DIGAI: QUATRO PECAS, E ELA NASCE INERTE ───────────────────────────────────
+     * ─ A INGESTAO DO DIGAI: SEIS PECAS, E ELA NASCE INERTE ─────────────────────────────────────
      *
      * `DigaiRepositorio` e o UNICO ponto de escrita no banco (com a guarda de anonimizacao, que e o
      * veto A do `seguranca`: a ingestao do Digai e o QUARTO escritor de `as_candidatos` e nasceria
@@ -303,8 +315,14 @@ import { VagasService } from "./vagas/vagas.service";
      * o limiter que cabe no teto de 120 req/min do fornecedor. A controller do receptor consome a
      * fila pelo TOKEN, e nao pela classe, para nao criar ciclo de importacao.
      *
-     * DOIS PORTOES, E NENHUM DELES E REDUNDANTE: sem `DIGAI_API_TOKEN` nada SAI para a rede, e sem
-     * `DIGAI_INGESTAO_ATIVA` nada e ESCRITO no banco, mesmo com credencial. O universo medido do
+     * `DigaiVarreduraService` e o CICLO DO POLLING (a consulta periodica que passou a ser o caminho
+     * vigente, decisao do diretor de 29/09/2026), e `DigaiSchedulerService` e a cadencia dele dentro
+     * do Nest. O WEBHOOK FICA NO LUGAR e nao foi removido: ele funciona e e opcao futura, bastando
+     * o cadastro do listener no painel do fornecedor. O que mudou foi qual dos dois esta ligado.
+     *
+     * TRES PORTOES, E NENHUM DELES E REDUNDANTE: sem `DIGAI_API_TOKEN` nada SAI para a rede, sem
+     * `DIGAI_INGESTAO_ATIVA` nada e ESCRITO no banco, mesmo com credencial, e sem
+     * `DIGAI_POLLING_ATIVO` a varredura nao dispara sozinha. O universo medido do
      * outro lado e de 12.445 pessoas, e uma integracao que comeca a escrever no dia em que o token
      * chega nao foi ligada, foi surpreendida.
      *
@@ -314,7 +332,9 @@ import { VagasService } from "./vagas/vagas.service";
      */
     DigaiRepositorio,
     DigaiImportacaoService,
+    DigaiVarreduraService,
     DigaiFilaService,
+    DigaiSchedulerService,
     { provide: PORTA_DA_FILA_DIGAI, useExisting: DigaiFilaService },
   ],
 })

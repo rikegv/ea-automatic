@@ -12,11 +12,14 @@ import {
   ingestaoHabilitada,
   planoDaImportacao,
   projetarResultadoDigai,
+  projetarScreeningDigai,
   situacaoDeNascimentoDigai,
   resumoDaImportacao,
   separarPorFinalizacaoDigai,
+  totalDeclaradoDigai,
   traduzirErroDeBanco,
   type ResultadoDigai,
+  type ScreeningDigai,
 } from "../../domain/digai";
 import { DigaiCliente } from "./digai.cliente";
 import { DigaiRepositorio } from "./digai-repositorio";
@@ -91,6 +94,15 @@ export class DigaiImportacaoService {
     return this.cliente.ativo && this.escritaLiberada;
   }
 
+  /**
+   * PODE SAIR PARA A REDE? E o PRIMEIRO portao, sozinho, e ele existe separado de `ativa` porque a
+   * varredura precisa saber se vale a pena LER mesmo quando a escrita esta desligada: ler com a
+   * escrita fechada e justamente como se liga uma ingestao de 12.445 pessoas sem surpresa.
+   */
+  get podeLer(): boolean {
+    return this.cliente.ativo;
+  }
+
   /** O SEGUNDO PORTAO, lido do ambiente na borda e decidido pelo dominio puro. */
   private get escritaLiberada(): boolean {
     return ingestaoHabilitada({
@@ -144,6 +156,66 @@ export class DigaiImportacaoService {
     }
     const unico = projetarResultadoDigai(conteudo);
     return unico !== null && unico.userId === ids.userId ? unico : null;
+  }
+
+  /**
+   * ─ A LISTAGEM DE SCREENINGS: A PRIMEIRA REQUISICAO DO CICLO DO POLLING ─────────────────────────
+   *
+   * ┌─ A ROTA E `v1`, E A VERSAO E POR ROTA (a mesma armadilha de `buscarRegistro`) ──────────────┐
+   * │ `GET /api/v1/public/screenings?page=1` respondeu 200 em 29/09/2026, com `data.value` valendo │
+   * │ `{ page, total, screenings: [...] }` e 522 screenings numa unica pagina. Uniformizar isto    │
+   * │ para v2 por simetria quebraria a listagem, do mesmo jeito que uniformizar o registro unico   │
+   * │ para v2 o quebra (la a v2 devolve 404).                                                       │
+   * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * O `page` VAI POR PARAMETRO, e nao colado no caminho: a query tem porta propria (`validarParams`,
+   * com coleira de nome, tamanho e conteudo), e query embutida no path e a porta sem coleira.
+   *
+   * A PROJECAO POR ALLOWLIST ACONTECE AQUI: dos 17 campos do screening, dois atravessam (`id` e
+   * `updatedAt`). `webAccessLink` e `whatsappAccessLink` ficam de fora com razao propria, sao URL de
+   * acesso, na mesma regua da URL do Pandape (secao A.6).
+   */
+  async listarScreenings(pagina: number): Promise<{ screenings: ScreeningDigai[]; total: number | null }> {
+    const resposta = await this.cliente.ler("/api/v1/public/screenings", { page: pagina });
+    const { conteudo, lista } = desembrulharRespostaDigai(resposta);
+    const screenings: ScreeningDigai[] = [];
+    for (const cru of lista) {
+      const projetado = projetarScreeningDigai(cru);
+      if (projetado !== null) screenings.push(projetado);
+    }
+    return { screenings, total: totalDeclaradoDigai(conteudo) };
+  }
+
+  /**
+   * ─ UMA PAGINA DE RESULTADOS DE UM SCREENING: A FOLHA DO LEQUE ──────────────────────────────────
+   *
+   * ┌─ AQUI A ROTA E `v2`, E ISSO NAO E INCONSISTENCIA ───────────────────────────────────────────┐
+   * │ `GET /api/v2/public/screenings/{id}/results?page=1` devolve `{ page, total, candidates }` em  │
+   * │ `data.value`. A LISTAGEM de resultados e v2; o REGISTRO UNICO do par (screening, usuario) e  │
+   * │ v1, porque a v2 daquela rota devolve 404. As duas coisas foram medidas no mesmo dia, no       │
+   * │ mesmo screening: a versao e por ROTA, nao por integracao.                                     │
+   * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * DEVOLVE O `total` DECLARADO junto dos registros, porque e ele que decide se ha proxima pagina
+   * (`haProximaPaginaDigai`). O chamador nao presume que uma pagina basta: a PAGINA MEDIDA em 29/09
+   * e de 100, e 78 dos 528 screenings passam disso (o maior com 1.225). A amostra antiga, de 58 de
+   * 58 numa pagina so, e exatamente o tipo de amostra que induz a presuncao contraria.
+   */
+  async lerPaginaDeResultados(
+    screeningId: string,
+    pagina: number,
+  ): Promise<{ registros: ResultadoDigai[]; total: number | null }> {
+    const resposta = await this.cliente.ler(
+      `/api/v2/public/screenings/${screeningId}/results`,
+      { page: pagina },
+    );
+    const { conteudo, lista } = desembrulharRespostaDigai(resposta);
+    const registros: ResultadoDigai[] = [];
+    for (const cru of lista) {
+      const projetado = projetarResultadoDigai(cru);
+      if (projetado !== null) registros.push(projetado);
+    }
+    return { registros, total: totalDeclaradoDigai(conteudo) };
   }
 
   /**

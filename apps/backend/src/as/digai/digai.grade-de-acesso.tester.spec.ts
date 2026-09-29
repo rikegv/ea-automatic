@@ -390,3 +390,69 @@ comCliente("a integracao nasce FECHADA E INERTE sem credencial", () => {
     ).rejects.toThrow();
   });
 });
+
+// ── 8. A INSPECAO MODULO-WIDE, QUE SAIU DE UM `describe.skip` (29/09/2026) ─
+
+/**
+ * ─ ELA MORAVA DORMINDO, E DORMINDO NAO PROTEGIA NADA ───────────────────────────────────────────
+ *
+ * ┌─ O ACHADO DO `seguranca` (29/09) ────────────────────────────────────────────────────────────┐
+ * │ A UNICA afirmacao de que o modulo inteiro nao tem porta de escrita nem segunda porta de rede │
+ * │ vivia em `digai.reengajar.tester.spec.ts`, dentro de um bloco SUSPENSO, porque a peca         │
+ * │ `reengajar` nao existe e ninguem pediu para constru-la (secao A.31). Ou seja: a garantia      │
+ * │ existia no papel e nunca rodava. Aqui ela roda em TODA rodada, porque este arquivo so depende │
+ * │ da grade, que existe.                                                                          │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ POR QUE A LISTA CONHECIDA, E NAO `toEqual([])` ─────────────────────────────────────────────┐
+ * │ `[]` fica vermelho a cada metodo PRIVADO novo chamado `gravar*`, `criar*` ou `atualizar*`, e a │
+ * │ saida facil disso e afrouxar o DETECTOR, que e exatamente o que o veto 3 de 16/09 proibiu.    │
+ * │ Fixar o conjunto ESPERADO mantem o detector intacto e ainda assim acusa qualquer achado NOVO: │
+ * │ o que muda e que o falso positivo conhecido tem nome, dono e justificativa escrita.            │
+ * │                                                                                               │
+ * │ A REGEX DA GRADE NAO FOI TOCADA. Ela e codigo validado (secao A.26), e estreita-la para       │
+ * │ ignorar `private` e decisao do diretor, nao da fabrica.                                        │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+const ACHADOS_CONHECIDOS: readonly string[] = [
+  /*
+   * `DigaiImportacaoService.gravar` e PRIVADO e escreve no NOSSO Postgres, e nao no fornecedor. A
+   * inspecao procura `(function|const|let|var|async)\s+<verbo>\b` e casa com `private async gravar(`,
+   * sem enxergar o `private`. Conferido em 29/09: o modulo tem UMA porta de rede (o `DigaiCliente`),
+   * so `GET`, e nenhum verbo de escrita contra o Digai.
+   */
+  "porta de escrita declarada na fonte: gravar",
+];
+
+comGrade("a inspecao adversarial roda em TODA rodada, e o unico achado e o conhecido", () => {
+  it("o modulo nao ganhou porta de rede nova nem porta de escrita contra o fornecedor", async () => {
+    const inspecionar = await exigirExport<(texto: string) => string[]>("grade", "inspecionarFonte");
+    expect(
+      inspecionar(fonteExigida()).sort(),
+      "achado NOVO aqui significa segunda porta de rede, atalho de TLS, residuo de OAuth, proxy de ambiente ou porta de escrita. Nenhum deles fica vermelho sozinho quando aparece.",
+    ).toEqual([...ACHADOS_CONHECIDOS].sort());
+  });
+
+  it("a lista conhecida nao pode virar tapete: ela tem EXATAMENTE o que existe hoje", () => {
+    /*
+     * O LIMITE E 1, E NAO 2 (aperto pedido na auditoria de 29/09). Com uma vaga livre, um achado
+     * NOVO podia ser absorvido com uma linha nesta lista e a suite seguia verde, sem ninguem
+     * decidir nada: freio fraco e meio convite. Com o limite colado no que existe, qualquer achado
+     * novo obriga a uma DECISAO explicita (estreitar o detector, com o diretor, ou justificar e
+     * subir o limite de proposito), e nao a um acrescimo silencioso.
+     */
+    expect(
+      ACHADOS_CONHECIDOS.length,
+      "lista conhecida que cresce e denylist com outro nome. Ha UM falso positivo conhecido, entao o teto e UM.",
+    ).toBe(1);
+  });
+
+  it("a propria inspecao continua ACUSANDO, entao o verde acima nao e vacuo", async () => {
+    const inspecionar = await exigirExport<(texto: string) => string[]>("grade", "inspecionarFonte");
+    const adulterado = `${fonteExigida()}\nexport async function enviar(x: unknown) { return x; }`;
+    expect(
+      inspecionar(adulterado).length,
+      "se a inspecao parasse de acusar, a assercao de cima passaria de graca para sempre.",
+    ).toBeGreaterThan(ACHADOS_CONHECIDOS.length);
+  });
+});

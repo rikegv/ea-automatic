@@ -8,7 +8,6 @@ import {
   CPF_SINTETICO,
   exigirExport,
   exigirPeca,
-  fonteExigida,
   piiNaSaida,
   sentinelaDasPecas,
   suspensoSem,
@@ -231,13 +230,18 @@ comGradeEServico("o reengajar NAO escreve no Digai", () => {
     expect(escritas, "o lote multiplica o dano pelo tamanho da selecao, de uma vez so.").toEqual([]);
   });
 
-  it("o modulo inteiro nao tem porta de escrita, e quem afirma isso e a inspecao adversarial", async () => {
-    const inspecionar = await exigirExport<(texto: string) => string[]>("grade", "inspecionarFonte");
-    expect(
-      inspecionar(fonteExigida()),
-      "a inspecao (que o veto 3 obrigou a receber o TEXTO por parametro) acusou porta de rede ou de escrita fora do ponto unico.",
-    ).toEqual([]);
-  });
+  /*
+   * ─ A ASSERCAO MODULO-WIDE MUDOU DE CASA (29/09/2026, achado do `seguranca`) ──────────────────
+   *
+   * Ela vivia AQUI, dentro de um bloco suspenso pela ausencia da peca `reengajar`, que ninguem
+   * pediu para construir. A UNICA afirmacao de que o modulo nao tem porta de escrita nem segunda
+   * porta de rede estava DORMINDO, e acordaria vermelha. Foi para
+   * `digai.grade-de-acesso.tester.spec.ts`, que roda em toda rodada, com a lista de achados
+   * CONHECIDOS em vez de `[]` (o `private async gravar` escreve no NOSSO Postgres).
+   *
+   * Nada se perdeu: as assercoes de ESCRITA CONTRA O FORNECEDOR, que sao o assunto deste arquivo,
+   * continuam logo acima.
+   */
 });
 
 // ── 3. O ACEITE EXPLICITO SOBRE A LISTA ────────────────────────────────────
