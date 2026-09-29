@@ -417,15 +417,28 @@ export class DigaiRepositorio {
   async registrarCursorDoScreening(dados: {
     screeningId: string;
     updatedAt: string | null;
-    total: number;
+    /**
+     * ─ AUSENTE E "NAO MEDI AGORA", E NAO "ZERO" (29/09/2026, reparticao por necessidade) ───────
+     *
+     * O TICK chama sem `total`, porque a LISTAGEM nao diz quantos candidatos um screening tem. Ate
+     * aqui ele gravava `0` e contava com a pagina 1 para repor o numero no mesmo ciclo, e isso
+     * deixou de ser inocente quando o `total` passou a REPARTIR ORCAMENTO: o screening CORTADO nao
+     * tem pagina 1, entao o `0` do tick ficaria de pe, e ele receberia cota de desconhecido para
+     * sempre. Fome permanente causada pela propria medicao.
+     *
+     * Sem `total`, o `update` PRESERVA o `total_visto` que ja estava la, e o `insert` usa o padrao
+     * 0 da coluna (que o dominio le como DESCONHECIDO, nao como vazio).
+     */
+    total?: number;
   }): Promise<boolean> {
     try {
+      const total = typeof dados.total === "number" ? Math.max(0, Math.trunc(dados.total)) : null;
       await this.db.execute(sql`
         insert into as_digai_screening_cursor (screening_id, updated_at_externo, total_visto, visto_em)
-        values (${dados.screeningId}, ${textoOuNulo(dados.updatedAt)}, ${dados.total}, now())
+        values (${dados.screeningId}, ${textoOuNulo(dados.updatedAt)}, ${total ?? 0}, now())
         on conflict (screening_id) do update
            set updated_at_externo = excluded.updated_at_externo,
-               total_visto = excluded.total_visto,
+               total_visto = coalesce(${total}, as_digai_screening_cursor.total_visto),
                visto_em = now()
       `);
       return true;
@@ -435,6 +448,42 @@ export class DigaiRepositorio {
        * arquivo nao loga por regra; quem avisa e o chamador, com contagem e sem valor.
        */
       return false;
+    }
+  }
+
+  /**
+   * ─ OS `total` DE TODOS OS SCREENINGS, DE UMA VEZ, PORQUE A REPARTICAO PRECISA DELES JUNTOS ───
+   *
+   * ┌─ POR QUE UMA CONSULTA E NAO 528 ────────────────────────────────────────────────────────────┐
+   * │ `planoDaVarredura` reparte o orcamento OLHANDO A BASE INTEIRA: a necessidade de um screening │
+   * │ so vira cota depois de comparada com a soma de todas. Ler um a um seria 528 ida-e-voltas ao  │
+   * │ banco DENTRO do job da listagem, que e o job mais curto do ciclo e o que segura a cadencia.  │
+   * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * A TABELA INTEIRA SAI NUMA VEZ, e ela e pequena por construcao: uma linha por screening JA
+   * VISTO, tres colunas, zero PII (secao A.6). Filtrar pelos ids desta pagina economizaria nada e
+   * custaria uma lista de 528 parametros.
+   *
+   * FALHA DEVOLVE MAPA VAZIO, e isso e fail-safe e nao fail-closed: sem `total` conhecido todo
+   * mundo vira DESCONHECIDO, a reparticao degenera na IGUALITARIA de antes e o ciclo roda. Perder
+   * a medicao nao pode custar as pessoas da passada.
+   */
+  async totaisConhecidos(): Promise<Map<string, number>> {
+    try {
+      const linhas = (await this.db.execute(sql`
+        select screening_id, total_visto
+          from as_digai_screening_cursor
+      `)) as unknown as { screening_id: string; total_visto: number | null }[];
+      const mapa = new Map<string, number>();
+      for (const l of linhas) {
+        const total = Number(l.total_visto ?? 0);
+        if (typeof l.screening_id === "string" && Number.isFinite(total)) {
+          mapa.set(l.screening_id, total);
+        }
+      }
+      return mapa;
+    } catch {
+      return new Map();
     }
   }
 

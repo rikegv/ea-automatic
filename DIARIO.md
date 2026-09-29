@@ -17936,3 +17936,94 @@ persistir documentos e endereço (hipótese: `codigoEmpresa`/`codigoFilial`/`cod
 mandamos); se o caminho é `Add` ou `Add_Update`; por que três campos voltaram diferentes; e como
 conferir depois da matrícula. **Nenhum novo envio até a resposta dele (§A.27).**
 
+---
+
+## 29/09/2026, fim da noite. PONTO DE RETOMADA dos dois motores: o que falta para ligar Pandapé e Digai
+
+**Sessão encerrada aqui. Ao retomar, a PRIMEIRA COISA é levar para produção tudo o que der**
+(decisão do diretor). Este registro existe para que a retomada não precise redescobrir nada.
+
+### A DESCOBERTA QUE REORDENA TUDO
+
+**Produção NÃO roda deste repositório.** Ela roda de `/home/henrique/apps/ea-release-ingestao`,
+commit **`d845232`**, build de **24/09**. O banco de produção está na migration **119**; o
+repositório, na **135**. A última migration aplicada em produção é de **30/08**.
+
+**Quase um mês de trabalho commitado NÃO está em produção.** Tudo o que se leu como "está pronto"
+estava pronto na `main`, que é outro lugar.
+
+### PANDAPÉ: inerte, e a UMA variável de ligar
+
+- **Falta só `PANDAPE_VARREDURA_DATA_CORTE`.** Em produção o `AS_MARCA_SAL` e as credenciais **já
+  estão preenchidos**, e o código está no `dist`. Essa variável é o que separa "só os novos" das
+  **137.654 inscrições vivas do passivo**, e **não tem default de propósito**: um default faria a
+  ingestão começar a colher dado pessoal de 137 mil pessoas logo de saída, sem ninguém decidir.
+- **NÃO existe de/para de cliente NEM de cargo.** O código devolve `null` fixo nos dois
+  (`ingestao-repositorio.ts:157`, `ingestao-ciclo.ts:373`). **Toda vaga nasce em `PENDENTE_REVISAO`
+  com vínculo manual, uma a uma: liberar em lote não existe.**
+- **Pasta sem de/para é RECUSADA por completo**, não adiada: nem candidato, nem identidade externa,
+  nem candidatura. Duas linhas do de/para estão gravadas **inativas** (`retorno negativo etapa
+  soulan`, `finalistas`), e ligá-las é um `update`, não código novo.
+- **A Central de Vagas (`f07288a`) está na `main` mas NÃO em produção.** Ligar sem ela tira o
+  catálogo de motivos de descarte, o de reenvio de shortlist, a aba de disponíveis, a correção do bug
+  que sumia o descartado das listas para sempre, e **a trava que impede liberar vaga sem cliente**,
+  que é justamente a que protegeria o cenário do item acima.
+- **BURACO NA PONTE A&S para a ADMISSÃO:** a ingestão grava `ENVIADO_PARA_ADMISSAO` **direto** em
+  `as_candidaturas` (`ingestao-ciclo.ts:634`), **sem passar por `registrarSaida`**, então **sem criar
+  pré-admissão e sem gravar `admissao_id`**. Quem chegar já na pasta `Contratados` entra sem
+  pré-admissão e **sem link do portal**, que depende daquela coluna.
+- **Correção de leitura:** o `pandape_scheduler_estado` está **LIGADO** e rodando, mas é **OUTRO
+  motor**, a re-consulta de documentos das admissões da Esteira. A ingestão de vagas de A&S segue
+  parada, e `as_varredura_vagas` tem zero linhas.
+
+### DIGAI: não existe em produção
+
+- A pasta `as/digai/` no build de produção tem **só o dublê de teste**. Os commits de hoje
+  (`b8ee451`, `be1abad`) **não estão lá**.
+- **Ciclo simulado EM SECO contra a produção do fornecedor** (687 requisições, **nada escrito**):
+
+| medição | valor |
+|---|---|
+| registros lidos | **27.498** |
+| pessoas distintas (`userId`) | **25.472** |
+| **entrariam** (CPF válido = finalizaram) | **4.532 (16%)** |
+| **vagas que nasceriam** | **277** |
+| adiados (sem `partnerJobId`) | **609** |
+
+- **A RETENÇÃO de 6 meses NÃO tem liga/desliga:** roda de hora em hora **a partir do boot**
+  (`onModuleInit` mais `setInterval`), e a saída é **IRREVERSÍVEL**. Hoje anonimizaria **zero**
+  (`as_candidatos` está vazia nos dois bancos); quem nascer pela ingestão tem 6 meses a partir do
+  `criado_em`. Em produção a régua ainda é de **2 anos**: a de 6 meses passa a valer na publicação.
+
+### A ORDEM RECOMENDADA
+
+**DIGAI primeiro, PANDAPÉ depois.** O Digai tem **cota própria** (não divide com a folha), volume
+**conhecido** (4.532 pessoas, 277 vagas) e portão de escrita separado. O Pandapé **divide o teto com
+o webhook do G.Infor que alimenta a folha**, e o volume depende de uma data que ainda não existe.
+
+**Sem colisão de dedup:** as duas fontes convergem para a MESMA linha de vaga pelo
+`id_vacancy_pandape`, por desenho, e a identidade é por fonte em `as_identidades_externas`.
+
+**REVERSÍVEL:** desligar portão, farol, vínculo de vaga. **NÃO REVERSÍVEL:** a anonimização da
+retenção, e o trabalho manual de revisar 277 (ou ~600) vagas uma a uma.
+
+### A LISTA PARA A RETOMADA
+
+**Depende da FÁBRICA:** levar produção ao dia (16 migrations mais a construção do build), o de/para
+de cliente e cargo, a pré-admissão que falta na ingestão, os **três comentários que mentem** dizendo
+que a ponte A&S para a Admissão é inerte (`as.module.ts:152`, `candidatos.service.ts:239` e `:1988`,
+todos escritos no mesmo commit que construiu a ponte), e o `.env.example`, que **não documenta**
+`PANDAPE_VARREDURA_DATA_CORTE` nem `AS_MARCA_SAL` (a única forma de descobri-las é lendo o fonte).
+
+**Depende do DIRETOR:** a data de corte, levar a Central de Vagas antes de ligar, as duas linhas
+inativas do de/para, quem revisa as vagas manualmente, e se a retenção de 6 meses pode ir ao ar sem
+interruptor.
+
+### O QUE ENTROU NESTE COMMIT
+
+A **repartição por necessidade** do orçamento da varredura do Digai: cada screening recebe
+`ceil(total x 1,1 / 100)` páginas em vez de uma fatia igual, com o `total` que o cursor já grava.
+**A ruptura da cobertura vai de N=616 (~4 dias) para N=5.762 (~57 dias)**, nove vezes mais folga, e
+a cobertura deixa de ser o gargalo. Um bug latente foi corrigido junto: o tick gravava `total: 0`
+todo ciclo, o que com repartição por necessidade viraria **fome permanente** do screening cortado
+(cortado, sem página 1, `total` fica 0, cota de desconhecido para sempre).

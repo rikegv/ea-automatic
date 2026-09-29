@@ -15,9 +15,13 @@ import {
   JOB_TICK_DIGAI,
 } from "./digai.queue";
 import {
+  DIGAI_FOLGA_DA_NECESSIDADE,
+  DIGAI_PAGINAS_DE_DESCOBERTA,
   DIGAI_POLLING_INTERVALO_MS,
+  DIGAI_TAMANHO_DA_PAGINA,
   DIGAI_TETO_PAGINAS_POR_SCREENING,
   DIGAI_TETO_REQ_POR_CICLO,
+  necessidadeDePaginasDigai,
   planoDaVarredura,
   proximaPaginaDigai,
   pollingHabilitado,
@@ -112,17 +116,28 @@ function importacaoComClienteDublado(respostaPorCaminho: (caminho: string, param
   return { importacao, chamadas };
 }
 
-/** O repositorio do cursor como duble: ANOTA o que seria gravado e nunca toca banco. */
-function repositorioDeCursorFingido(falhar = false) {
-  const gravados: Array<{ screeningId: string; updatedAt: string | null; total: number }> = [];
+/**
+ * O repositorio do cursor como duble: ANOTA o que seria gravado e nunca toca banco.
+ *
+ * `totais` e o que o CICLO ANTERIOR mediu, e e o insumo da reparticao por necessidade. Vazio (o
+ * padrao) significa base inteira DESCONHECIDA, que e a partida a frio.
+ */
+function repositorioDeCursorFingido(
+  falhar = false,
+  totais: ReadonlyMap<string, number> = new Map(),
+) {
+  const gravados: Array<{ screeningId: string; updatedAt: string | null; total?: number }> = [];
   const repo = {
     gravados,
-    registrarCursorDoScreening: vi.fn(async (d: { screeningId: string; updatedAt: string | null; total: number }) => {
-      if (falhar) return false;
-      gravados.push(d);
-      return true;
-    }),
+    registrarCursorDoScreening: vi.fn(
+      async (d: { screeningId: string; updatedAt: string | null; total?: number }) => {
+        if (falhar) return false;
+        gravados.push(d);
+        return true;
+      },
+    ),
     cursorDoScreening: vi.fn(async () => null),
+    totaisConhecidos: vi.fn(async () => new Map(totais)),
   };
   return repo as unknown as DigaiRepositorio & { gravados: typeof gravados };
 }
@@ -389,7 +404,7 @@ describe("a paginacao e de verdade: nao se presume que uma pagina basta", () => 
 
     expect(
       repo.gravados,
-      "carimbar `total_visto = 0` faria o ciclo seguinte ler 'o total caiu de 58 para 0' e concluir que o screening esvaziou. Medicao FALSA e pior que medicao AUSENTE, porque a falsa e usada. A ausencia quem registra e o `warn`.",
+      "carimbar `total_visto = 0` faria o ciclo seguinte ler 'o total caiu de 58 para 0' e concluir que o screening esvaziou. Com a reparticao POR NECESSIDADE isso ficou pior: 0 e DESCONHECIDO, e a cota erraria por um ciclo inteiro.",
     ).toEqual([]);
   });
 
@@ -516,15 +531,21 @@ describe("o teto por ciclo conta REQUISICOES, e o orcamento atravessa jobs e pag
     ).toBeGreaterThan(10);
   });
 
-  it("A CONTA FECHA: o pior caso com a base de HOJE cabe no teto", () => {
+  it("A CONTA FECHA: o pior caso com a base de HOJE cabe no teto, e a PARTIDA A FRIO tambem", () => {
     const screenings = Array.from({ length: 528 }, (_, i) => ({ id: `sc-${i}`, updatedAt: null }));
+    // Sem cursor nenhum: a base inteira e DESCONHECIDA, que e o pior caso da cota de descoberta.
     const plano = planoDaVarredura({ screenings, orcamento: DIGAI_TETO_REQ_POR_CICLO });
-    const piorCaso = 1 + plano.varrer.length * (plano.varrer[0]?.paginasPermitidas ?? 0);
+    const piorCaso = 1 + plano.paginasAutorizadas;
     expect(
       piorCaso,
       "este era o veto: cada screening podia pedir ate 20 paginas sem consultar orcamento, e o teto autorizava 1 + N x 20.",
     ).toBeLessThanOrEqual(DIGAI_TETO_REQ_POR_CICLO);
-    expect(plano.varrer[0]?.paginasPermitidas, "min(20, floor(7999/528)) = 15.").toBe(15);
+    expect(piorCaso, "528 x 13 + 1 = 6.865 de 8.000: nem a partida a frio degrada.").toBe(6_865);
+    expect(
+      plano.varrer[0]?.paginasPermitidas,
+      "desconhecido leva a COTA DE DESCOBERTA, que e o maior screening ja medido (1.225 = 13 paginas).",
+    ).toBe(DIGAI_PAGINAS_DE_DESCOBERTA);
+    expect(plano.cortadosPorOrcamento, "ninguem foi cortado: a soma coube.").toBe(0);
   });
 
   /**
@@ -575,45 +596,241 @@ describe("o teto por ciclo conta REQUISICOES, e o orcamento atravessa jobs e pag
   });
 
   /**
-   * ─ O PONTO DE RUPTURA DA COBERTURA, FIXADO EM TESTE PARA NAO VOLTAR A SER PROSA ───────────────
+   * ─ A BASE MEDIDA, NA FORMA QUE A REPARTICAO POR NECESSIDADE ENXERGA ───────────────────────────
    *
-   * A auditoria de 29/09 mostrou que "22% de folga" e "~58 dias" davam conforto sobre grandezas
-   * DIFERENTES: os 58 dias sao do FREIO, e a COBERTURA quebra MUITO antes. Aqui o numero e
-   * calculado do teto de verdade, entao mexer no teto sem mexer na reparticao cobra o novo valor.
+   * Medido em 29/09/2026: 528 screenings, o maior com 1.225 candidatos (13 paginas de 100), 78
+   * acima de uma pagina e 154 paginas extras no ciclo inteiro. O molde abaixo reproduz essa forma
+   * (1 gigante de 1.225, 71 de 284 e 456 de 58), que soma exatamente as 154 extras medidas. E
+   * SINTETICO NO DADO E FIEL NA FORMA: nenhum candidato real, e a distorcao que importa (a base e
+   * TORTA) preservada.
    */
-  it("A COBERTURA QUEBRA EM N = 616, que sao ~4 dias no ritmo medido (e nao os 58 do freio)", () => {
-    const cota = (n: number) =>
-      Math.min(DIGAI_TETO_PAGINAS_POR_SCREENING, Math.floor((DIGAI_TETO_REQ_POR_CICLO - 1) / n));
-    const paginasDoMaior = Math.ceil(1_225 / 100);
-    let ruptura = 0;
-    for (let n = 1; n <= 20_000; n += 1) {
-      if (cota(n) < paginasDoMaior) {
-        ruptura = n;
-        break;
-      }
+  function baseMedida(n: number): Map<string, number> {
+    const m = new Map<string, number>();
+    for (let i = 0; i < n; i += 1) {
+      const r = i % 528;
+      m.set(`sc-${i}`, r === 0 ? 1_225 : r < 72 ? 284 : 58);
     }
+    return m;
+  }
+
+  function screeningsDe(n: number) {
+    return Array.from({ length: n }, (_, i) => ({ id: `sc-${i}`, updatedAt: null }));
+  }
+
+  /**
+   * ─ O DESPERDICIO QUE A REPARTICAO IGUALITARIA TINHA, E ELE ERA A METADE DO PROBLEMA ───────────
+   *
+   * ~450 dos 528 screenings cabem numa pagina so, e cada um recebia cota de 15 para usar 1. A cota
+   * reservada onde nao havia o que ler era tirada de quem tinha: o gigante levava as mesmas 15.
+   *
+   * ESTE TESTE E A PROVA DE MUTACAO DA REPARTICAO: voltando a dividir igualmente, o pequeno recebe
+   * 15 e a primeira assercao cai; ignorando o `total` conhecido, todos viram desconhecidos, o
+   * pequeno recebe 13 e ela cai do mesmo jeito.
+   */
+  it("REPARTE POR NECESSIDADE: o pequeno leva 1 pagina e o gigante leva as 14 dele", () => {
+    const plano = planoDaVarredura({
+      screenings: screeningsDe(528),
+      orcamento: DIGAI_TETO_REQ_POR_CICLO,
+      totaisConhecidos: baseMedida(528),
+    });
+    const cota = (i: number) => plano.varrer[i]?.paginasPermitidas;
+    expect(cota(0), "1.225 candidatos com folga de 10% sao 14 paginas.").toBe(14);
+    expect(cota(100), "58 candidatos cabem em UMA pagina, e e uma que ele leva (antes: 15).").toBe(1);
+    expect(cota(5), "284 candidatos com folga sao 4 paginas (antes: 15).").toBe(4);
     expect(
-      ruptura,
-      "com N = 616 a cota cai para 12 paginas (1.200 candidatos) e deixa de cobrir o maior medido, 1.225.",
-    ).toBe(616);
-    expect(cota(615), "em 615 ainda cobre.").toBe(13);
-    expect(cota(616), "em 616 ja nao cobre.").toBe(12);
-    const crescimento = ruptura / 528;
-    const diasAteARuptura = Math.log(crescimento) / Math.log(1.043);
-    expect(
-      diasAteARuptura,
-      "+17% sobre a base de hoje, a 4,3% ao dia: ~4 dias. Quando chegar, a saida e repartir por NECESSIDADE (`ceil(total/100)`), e nao subir o teto de novo.",
-    ).toBeLessThan(5);
+      plano.paginasAutorizadas,
+      "754 paginas autorizadas de 7.999 disponiveis. A igualitaria autorizava 528 x 15 = 7.920 para ler as mesmas ~682.",
+    ).toBe(754);
+    expect(plano.cortadosPorOrcamento, "com a base de hoje nao ha corte nenhum.").toBe(0);
   });
 
-  it("A SOMA DO QUE O PLANO AUTORIZA NUNCA PASSA DO QUE ELE RECEBEU, em varios tamanhos", () => {
-    for (const n of [1, 5, 60, 522, 1_500, 3_000]) {
+  /**
+   * ─ CASO 1: O SCREENING QUE A GENTE NUNCA VIU ──────────────────────────────────────────────────
+   *
+   * Sem cursor nao ha `total`, e os dois erros sao assimetricos: dar POUCO perde gente de verdade
+   * (o fornecedor NAO ORDENA, entao quem cai na pagina cortada e sorteado); dar DEMAIS gasta
+   * orcamento de todo mundo. Erra-se para CIMA porque a cota e AUTORIZACAO e nao gasto (o vazio
+   * para em `PAGINA_VAZIA` na primeira requisicao) e porque o pior caso cabe: 528 x 13 + 1 = 6.865.
+   */
+  it("DESCONHECIDO leva a cota de descoberta, que e o maior screening ja medido", () => {
+    expect(necessidadeDePaginasDigai(null)).toBe(DIGAI_PAGINAS_DE_DESCOBERTA);
+    expect(necessidadeDePaginasDigai(undefined)).toBe(DIGAI_PAGINAS_DE_DESCOBERTA);
+    expect(
+      necessidadeDePaginasDigai(0),
+      "`0` e a linha recem-inserida pelo tick, e NAO um screening vazio: tratar como vazio daria UMA pagina a quem pode ter 1.225, no ciclo em que ele aparece.",
+    ).toBe(DIGAI_PAGINAS_DE_DESCOBERTA);
+    expect(
+      DIGAI_PAGINAS_DE_DESCOBERTA,
+      "13 e o maior medido (1.225 candidatos em paginas de 100), e nao um numero redondo.",
+    ).toBe(Math.ceil(1_225 / DIGAI_TAMANHO_DA_PAGINA));
+    expect(
+      528 * DIGAI_PAGINAS_DE_DESCOBERTA + 1,
+      "a partida a frio (base inteira desconhecida) tem de caber no teto, senao a generosidade vira corte.",
+    ).toBeLessThanOrEqual(DIGAI_TETO_REQ_POR_CICLO);
+  });
+
+  /**
+   * ─ CASO 2: O `total` DO CURSOR E VELHO POR CONSTRUCAO, E A FOLGA E O QUE PAGA POR ISSO ────────
+   *
+   * Ele foi gravado no ciclo anterior, 15 min atras. Cravar `ceil(total/100)` cortaria justamente
+   * quem CRESCEU. A folga e de 10% e PROPORCIONAL: 122 candidatos de sobra no maior medido e
+   * nenhuma pagina extra nos 450 que cabem em uma. "Uma pagina a mais para todos" foi recusado por
+   * custo medido: levaria o ciclo de ~682 para ~1.210 requisicoes, 90% da janela de 15 min.
+   */
+  it("A FOLGA DE 10% sobre o `total` guardado, e ela e proporcional ao tamanho", () => {
+    expect(DIGAI_FOLGA_DA_NECESSIDADE).toBe(0.1);
+    expect(necessidadeDePaginasDigai(58), "58 x 1,1 = 63,8: uma pagina.").toBe(1);
+    expect(
+      necessidadeDePaginasDigai(100),
+      "quem encheu a pagina exata e o mais provavel de ter crescido: leva a segunda.",
+    ).toBe(2);
+    expect(
+      necessidadeDePaginasDigai(1_225),
+      "13 paginas de necessidade crua e 14 com folga: 122 candidatos de margem no maior medido.",
+    ).toBe(14);
+    expect(
+      necessidadeDePaginasDigai(1_225),
+      "PROVA DE MUTACAO DA FOLGA: sem ela o maior medido receberia 13 e o primeiro candidato novo do ciclo seria cortado.",
+    ).toBeGreaterThan(Math.ceil(1_225 / DIGAI_TAMANHO_DA_PAGINA));
+    const crescimentoPorCiclo = 0.043 / 96;
+    expect(
+      DIGAI_FOLGA_DA_NECESSIDADE / crescimentoPorCiclo,
+      "a +4,3% ao dia, 10% sao ~220 ciclos de 15 min de folga.",
+    ).toBeGreaterThan(200);
+  });
+
+  /**
+   * ─ CASO 3: A SOMA DAS NECESSIDADES PASSOU DO ORCAMENTO. QUEM E CORTADO? ───────────────────────
+   *
+   * Cortar O MAIOR primeiro concentra a perda inteira em quem tem mais gente, e o deixa
+   * PERMANENTEMENTE cego do mesmo trecho. Cortar O MENOR mal libera orcamento, porque os pequenos
+   * ja estao no piso de uma pagina. O adotado e PROPORCIONAL: todos encolhem na mesma fracao, pelo
+   * metodo do maior resto, e ninguem e eleito vitima.
+   */
+  it("CORTE PROPORCIONAL: todos encolhem na mesma fracao, ninguem cai abaixo do piso", () => {
+    const screenings = screeningsDe(10);
+    // Cinco gigantes de 20 paginas e cinco de uma: necessidade 105, orcamento util 59.
+    const totais = new Map(screenings.map((s, i) => [s.id, i < 5 ? 5_000 : 58]));
+    const plano = planoDaVarredura({ screenings, orcamento: 60, totaisConhecidos: totais });
+    const cotas = plano.varrer.map((i) => i.paginasPermitidas);
+
+    expect(cotas.reduce((a, b) => a + b, 0), "a soma nunca passa do orcamento util.").toBeLessThanOrEqual(59);
+    expect(
+      cotas.slice(5),
+      "os pequenos NAO sao cortados abaixo do piso, e os deles ja estavam satisfeitos com 1.",
+    ).toEqual([1, 1, 1, 1, 1]);
+    expect(
+      cotas.slice(0, 5),
+      "os cinco gigantes encolhem JUNTOS e quase igual (54 paginas para 5 x 20 de necessidade), com o troco do maior resto. Cortar 'o maior primeiro' daria 20,20,20,... e zero para o ultimo.",
+    ).toEqual([11, 11, 11, 11, 10]);
+    expect(
+      plano.cortadosPorOrcamento,
+      "sao os cinco gigantes que receberam menos do que precisavam, e o corte e CONTADO para virar log.",
+    ).toBe(5);
+  });
+
+  it("CABENDO TUDO, ninguem e cortado e o troco segue para a proxima pagina da listagem", () => {
+    const screenings = screeningsDe(3);
+    const plano = planoDaVarredura({
+      screenings,
+      orcamento: 100,
+      totaisConhecidos: new Map([
+        ["sc-0", 1_225],
+        ["sc-1", 58],
+        ["sc-2", 284],
+      ]),
+    });
+    expect(plano.varrer.map((i) => i.paginasPermitidas)).toEqual([14, 1, 4]);
+    expect(plano.cortadosPorOrcamento).toBe(0);
+    expect(plano.orcamentoRestante, "99 restantes menos 19 autorizados = 80 de troco.").toBe(80);
+  });
+
+  /**
+   * ─ CASO 5: O NOVO PONTO DE RUPTURA, CALCULADO PELA FUNCAO DE VERDADE ──────────────────────────
+   *
+   * ┌─ O NUMERO VELHO E O NOVO, e a diferenca e de NOVE VEZES ────────────────────────────────────┐
+   * │ Com a reparticao IGUALITARIA a cota caia com N, e a cobertura do maior medido quebrava em    │
+   * │ N = 616: +17% sobre a base de hoje, ou ~4 DIAS a +4,3% ao dia.                                │
+   * │                                                                                               │
+   * │ Com a reparticao POR NECESSIDADE a cota cai com a SOMA DAS NECESSIDADES, e a base e TORTA:   │
+   * │ a ruptura vai para N = 5.524 (o gigante perde a FOLGA) e N = 5.762 (perde a COBERTURA de     │
+   * │ verdade, as 13 paginas dos 1.225 medidos). Sao ~56 e ~57 DIAS no mesmo ritmo.                 │
+   * │                                                                                               │
+   * │ O EFEITO QUE IMPORTA: a cobertura deixou de ser o gargalo e passou a vencer JUNTO com o      │
+   * │ freio (~58 dias). As duas grandezas que o `DIGAI_TETO_REQ_POR_CICLO` mandava nao confundir   │
+   * │ agora coincidem.                                                                              │
+   * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * O CALCULO E PELA FUNCAO DE PRODUCAO, e nao por uma formula copiada para o teste: a versao
+   * anterior deste teste repetia `min(20, floor((teto-1)/N))` a mao, e uma formula copiada nao pega
+   * mudanca nenhuma na reparticao. Aqui, mexer no teto, na folga ou no criterio de corte move o
+   * numero e este teste cobra o novo.
+   */
+  it("A COBERTURA QUEBRA EM N = 5.524 (folga) e N = 5.762 (cobertura), ~56 dias e nao mais ~4", () => {
+    const cotaDoGigante = (n: number) =>
+      planoDaVarredura({
+        screenings: screeningsDe(n),
+        orcamento: DIGAI_TETO_REQ_POR_CICLO,
+        totaisConhecidos: baseMedida(n),
+      }).varrer[0]?.paginasPermitidas ?? 0;
+
+    /*
+     * VARREDURA EM DOIS PASSOS (grosso de 32 em 32, depois fino), e nao linear de 1 em 1: o plano e
+     * recalculado do zero a cada N, entao a busca linear ate ~5.800 custava 28 SEGUNDOS de suite. A
+     * resposta e a MESMA, porque o passo fino comeca no ultimo N que ainda cobria.
+     */
+    const primeiro = (limite: number) => {
+      let grosso = 528;
+      while (grosso <= 8_000 && cotaDoGigante(grosso) >= limite) grosso += 32;
+      for (let n = Math.max(528, grosso - 32); n <= 8_000; n += 1) {
+        if (cotaDoGigante(n) < limite) return n;
+      }
+      return 0;
+    };
+
+    const rupturaDaFolga = primeiro(necessidadeDePaginasDigai(1_225));
+    const rupturaDaCobertura = primeiro(Math.ceil(1_225 / DIGAI_TAMANHO_DA_PAGINA));
+    expect(rupturaDaFolga, "o gigante deixa de receber as 14 de necessidade.").toBe(5_524);
+    expect(
+      rupturaDaCobertura,
+      "e so aqui ele deixa de cobrir os 1.225 candidatos medidos. O primeiro e o alarme, o segundo e o dano.",
+    ).toBe(5_762);
+    expect(cotaDoGigante(5_523), "em 5.523 ainda leva as 14.").toBe(14);
+
+    const dias = (n: number) => Math.log(n / 528) / Math.log(1.043);
+    expect(dias(rupturaDaCobertura), "~57 dias a +4,3% ao dia.").toBeGreaterThan(50);
+    expect(
+      dias(rupturaDaCobertura) / dias(616),
+      "PROVA DE MUTACAO DA RUPTURA: a igualitaria quebrava em ~4 dias (N = 616). Voltando a ela, esta razao desaba para 1.",
+    ).toBeGreaterThan(10);
+  });
+
+  it("A SOMA DO QUE O PLANO AUTORIZA NUNCA PASSA DO QUE ELE RECEBEU, em varios tamanhos e formas", () => {
+    for (const n of [1, 5, 60, 522, 1_500, 3_000, 9_000]) {
       const screenings = Array.from({ length: n }, (_, i) => ({ id: `sc-${i}`, updatedAt: null }));
-      const plano = planoDaVarredura({ screenings, orcamento: DIGAI_TETO_REQ_POR_CICLO });
-      const gasto = 1 + plano.varrer.length * (plano.varrer[0]?.paginasPermitidas ?? 0);
-      expect(gasto, `com ${n} screening(s), o plano autorizou ${gasto} requisicoes.`).toBeLessThanOrEqual(
-        DIGAI_TETO_REQ_POR_CICLO,
-      );
+      // Duas formas: base DESCONHECIDA (cota de descoberta) e base TORTA com um gigante de 20.
+      const tortos = new Map(screenings.map((s, i) => [s.id, i % 7 === 0 ? 9_000 : 58]));
+      for (const totais of [undefined, tortos]) {
+        const plano = planoDaVarredura({
+          screenings,
+          orcamento: DIGAI_TETO_REQ_POR_CICLO,
+          totaisConhecidos: totais,
+        });
+        const gasto = 1 + plano.paginasAutorizadas;
+        const somado = plano.varrer.reduce((a, i) => a + i.paginasPermitidas, 0);
+        expect(somado, "o campo agregado tem de bater com a soma das cotas, item a item.").toBe(
+          plano.paginasAutorizadas,
+        );
+        expect(gasto, `com ${n} screening(s), o plano autorizou ${gasto} requisicoes.`).toBeLessThanOrEqual(
+          DIGAI_TETO_REQ_POR_CICLO,
+        );
+        for (const item of plano.varrer) {
+          expect(
+            item.paginasPermitidas,
+            "o PISO de uma pagina e o que impede um screening de ficar inteiramente invisivel.",
+          ).toBeGreaterThanOrEqual(1);
+        }
+      }
     }
   });
 
@@ -667,20 +884,36 @@ describe("o teto por ciclo conta REQUISICOES, e o orcamento atravessa jobs e pag
     ).toBe(89);
   });
 
-  it("LISTAGEM EM UMA PAGINA SO divide o restante inteiro, e nao sobra orcamento orfao", () => {
+  /**
+   * ─ A IGUALITARIA E O CASO DEGENERADO DA NOVA REGRA, E ISSO E A PROVA DE QUE ELA A GENERALIZA ──
+   *
+   * Com TODOS desconhecidos as necessidades sao iguais, e o corte proporcional devolve exatamente a
+   * divisao igualitaria de antes (`floor(99/10)` = 9), com o troco indo para quem tem maior resto.
+   */
+  it("SEM NADA CONHECIDO, a reparticao degenera na IGUALITARIA de antes", () => {
     const screenings = Array.from({ length: 10 }, (_, i) => ({ id: `sc-${i}`, updatedAt: null }));
     const plano = planoDaVarredura({ screenings, orcamento: 100, haProximaPaginaDaListagem: false });
-    expect(plano.varrer[0]?.paginasPermitidas, "min(20, floor(99/10)) = 9.").toBe(9);
+    const cotas = plano.varrer.map((i) => i.paginasPermitidas);
+    expect(
+      cotas,
+      "cota igual para todos (com o troco do maior resto), e nao 13 para uns e 1 para outros: sem `total` nao ha necessidade que os distinga.",
+    ).toEqual([10, 10, 10, 10, 10, 10, 10, 10, 10, 9]);
+    expect(
+      cotas.reduce((a, b) => a + b, 0),
+      "99 restantes, 99 gastos. A igualitaria de antes dava `floor(99/10)` = 9 a cada um e DEIXAVA 9 requisicoes orfas.",
+    ).toBe(99);
   });
 
-  it("o teto de paginas por screening limita a divisao, e nao o contrario", () => {
+  it("o teto de paginas por screening limita a NECESSIDADE, e nao o contrario", () => {
     const plano = planoDaVarredura({
       screenings: [{ id: "sc-1", updatedAt: null }],
       orcamento: 10_000,
+      // 5.000 candidatos pedem 55 paginas com folga: quem manda e o anti-laco.
+      totaisConhecidos: new Map([["sc-1", 5_000]]),
     });
     expect(
       plano.varrer[0]?.paginasPermitidas,
-      "com orcamento enorme e um screening so, quem manda e o teto anti-laco.",
+      "com orcamento enorme e um screening enorme, quem manda e o teto anti-laco.",
     ).toBe(DIGAI_TETO_PAGINAS_POR_SCREENING);
   });
 
@@ -845,9 +1078,10 @@ describe("o cursor e medicao, e nao decisao", () => {
 
     await varredura.executarTick(1);
 
-    expect(repo.gravados).toEqual([
-      { screeningId: "sc-1", updatedAt: "2026-09-29T09:00:00Z", total: 0 },
-    ]);
+    expect(
+      repo.gravados,
+      "o tick grava o `updatedAt` e NAO MEXE no `total`: zerando, o screening CORTADO (que nao tem pagina 1 nesta passada) ficaria com 0 de pe e voltaria a receber cota de desconhecido para sempre.",
+    ).toEqual([{ screeningId: "sc-1", updatedAt: "2026-09-29T09:00:00Z" }]);
   });
 
   it("o cursor NAO pula screening: um screening ja visto continua sendo varrido", async () => {
@@ -867,6 +1101,120 @@ describe("o cursor e medicao, e nao decisao", () => {
       r.screenings.map((i) => i.screeningId),
       "nao esta provado que o `updatedAt` do SCREENING se mexe quando um CANDIDATO finaliza. Pular sem prova perde exatamente quem acabou de finalizar, para sempre e em silencio.",
     ).toEqual(["sc-1"]);
+  });
+
+  /**
+   * ─ O CICLO DE VERDADE USA O CURSOR PARA REPARTIR, E NAO SO PARA MEDIR (29/09/2026) ────────────
+   *
+   * Aqui o duble e do REPOSITORIO, e a varredura, o plano e a reparticao sao codigo de producao. E
+   * a prova de que o fio existe: trocando a leitura dos totais por um mapa vazio, os dois screenings
+   * recebem a mesma cota de descoberta e as assercoes caem.
+   */
+  it("o tick REPARTE pelo `total` que o ciclo anterior gravou", async () => {
+    const { importacao } = importacaoComClienteDublado(() =>
+      paginaDeScreeningsFingida([screeningFingido("sc-grande"), screeningFingido("sc-pequeno")]),
+    );
+    const repo = repositorioDeCursorFingido(
+      false,
+      new Map([
+        ["sc-grande", 1_225],
+        ["sc-pequeno", 58],
+      ]),
+    );
+    const varredura = new DigaiVarreduraService(importacao, repo);
+    const log = vi.spyOn(Logger.prototype, "log").mockImplementation(() => undefined);
+
+    const r = await varredura.executarTick(1, DIGAI_TETO_REQ_POR_CICLO);
+    log.mockRestore();
+
+    expect(r.screenings).toEqual([
+      { screeningId: "sc-grande", paginasPermitidas: 14 },
+      { screeningId: "sc-pequeno", paginasPermitidas: 1 },
+    ]);
+    expect(
+      r.orcamentoRestante,
+      "7.999 menos as 15 autorizadas. Na igualitaria os dois levavam min(20, floor(7999/2)) = 20, e 40 ficavam reservadas para ler 1.283 candidatos.",
+    ).toBe(7_984);
+  });
+
+  it("A LEITURA DOS TOTAIS acontece ANTES da gravacao do cursor, senao o tick leria o que acabou de escrever", async () => {
+    const { importacao } = importacaoComClienteDublado(() =>
+      paginaDeScreeningsFingida([screeningFingido("sc-1")]),
+    );
+    const ordem: string[] = [];
+    const repo = repositorioDeCursorFingido(false, new Map([["sc-1", 1_225]]));
+    (repo.totaisConhecidos as unknown as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      ordem.push("leu");
+      return new Map([["sc-1", 1_225]]);
+    });
+    (repo.registrarCursorDoScreening as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      async () => {
+        ordem.push("gravou");
+        return true;
+      },
+    );
+    const varredura = new DigaiVarreduraService(importacao, repo);
+    const log = vi.spyOn(Logger.prototype, "log").mockImplementation(() => undefined);
+
+    await varredura.executarTick(1);
+    log.mockRestore();
+
+    expect(ordem).toEqual(["leu", "gravou"]);
+  });
+
+  it("SEM CURSOR NENHUM o ciclo roda igual, degradado para a reparticao IGUALITARIA", async () => {
+    const { importacao } = importacaoComClienteDublado(() =>
+      paginaDeScreeningsFingida([screeningFingido("sc-1"), screeningFingido("sc-2")]),
+    );
+    // Banco fora, ou tabela vazia: o repositorio devolve mapa vazio e ninguem tem `total`.
+    const repo = repositorioDeCursorFingido();
+    const varredura = new DigaiVarreduraService(importacao, repo);
+    const log = vi.spyOn(Logger.prototype, "log").mockImplementation(() => undefined);
+
+    const r = await varredura.executarTick(1, DIGAI_TETO_REQ_POR_CICLO);
+    log.mockRestore();
+
+    expect(
+      r.screenings.map((i) => i.paginasPermitidas),
+      "perder a medicao nao pode custar as pessoas da passada: sem `total`, todos levam a cota de descoberta.",
+    ).toEqual([DIGAI_PAGINAS_DE_DESCOBERTA, DIGAI_PAGINAS_DE_DESCOBERTA]);
+  });
+
+  /**
+   * ─ O CORTE DA REPARTICAO REGISTRA, PELA MESMA REGUA DO `CORTE_ORCAMENTO` DA FOLHA ─────────────
+   *
+   * Repartir por necessidade nao e repartir sem teto. Estourando, alguem le menos do que precisa, e
+   * a perda e RECORRENTE: o proximo ciclo rele da pagina 1 com a mesma cota, e o fornecedor NAO
+   * ORDENA os resultados. Corte que nao aparece no log e perda silenciosa.
+   */
+  it("O CORTE DA REPARTICAO VIRA WARN, e ele diz que a perda e RECORRENTE", async () => {
+    const muitos = Array.from({ length: 40 }, (_, i) => screeningFingido(`sc-${i}`));
+    const { importacao } = importacaoComClienteDublado(() => paginaDeScreeningsFingida(muitos));
+    const repo = repositorioDeCursorFingido(
+      false,
+      new Map(muitos.map((s) => [s.id, 5_000] as const)),
+    );
+    const varredura = new DigaiVarreduraService(importacao, repo);
+    const avisos: string[] = [];
+    const aviso = vi.spyOn(Logger.prototype, "warn").mockImplementation((m: unknown) => {
+      avisos.push(String(m));
+    });
+    const log = vi.spyOn(Logger.prototype, "log").mockImplementation(() => undefined);
+
+    // 40 screenings de 20 paginas de necessidade = 800, contra 99 de orcamento util.
+    const r = await varredura.executarTick(1, 100);
+    aviso.mockRestore();
+    log.mockRestore();
+
+    expect(
+      r.screenings.reduce((a, i) => a + i.paginasPermitidas, 0),
+      "a soma continua cabendo no orcamento: repartir por necessidade nao e repartir sem teto.",
+    ).toBeLessThanOrEqual(99);
+    expect(avisos.join("\n")).toContain("REPARTICAO POR NECESSIDADE");
+    expect(
+      avisos.join("\n"),
+      "sem dizer que a perda se repete, quem le arquiva o aviso como rotina.",
+    ).toContain("RECORRENTE");
   });
 
   it("falha ao gravar o cursor NAO derruba o ciclo: perder a medicao nao pode custar as pessoas", async () => {

@@ -113,10 +113,24 @@ export class DigaiVarreduraService {
       );
     }
 
+    /*
+     * ─ OS `total` DO CICLO ANTERIOR, LIDOS ANTES DE QUALQUER ESCRITA ─────────────────────────────
+     *
+     * E o insumo da REPARTICAO POR NECESSIDADE: cada screening leva a cota de que precisa
+     * (`ceil(total x 1,1 / 100)`) em vez de uma fatia igual. UMA consulta para a tabela inteira,
+     * que e pequena por construcao e nao tem PII.
+     *
+     * FALHAR AQUI NAO DERRUBA O CICLO: o repositorio devolve mapa VAZIO, todo mundo vira
+     * desconhecido e a reparticao degenera na IGUALITARIA, que e exatamente o comportamento
+     * anterior. Degradacao para o desenho antigo, e nao para o silencio.
+     */
+    const totaisConhecidos = await this.repo.totaisConhecidos();
+
     const plano = planoDaVarredura({
       screenings,
       orcamento,
       haProximaPaginaDaListagem: haMaisListagem,
+      totaisConhecidos,
     });
     if (plano.estourou) {
       this.logger.warn(
@@ -135,10 +149,14 @@ export class DigaiVarreduraService {
      */
     let cursoresPerdidos = 0;
     for (const item of plano.varrer) {
+      /*
+       * SEM `total`: o tick nao o mede, e desde 29/09 ele NAO PODE ZERA-LO. Zerando, o screening
+       * CORTADO (que nao tem pagina 1 nesta passada) ficaria com `total = 0` de pe e voltaria a
+       * receber cota de desconhecido para sempre. Quem escreve o `total` e quem o mediu.
+       */
       const ok = await this.repo.registrarCursorDoScreening({
         screeningId: item.screening.id,
         updatedAt: item.screening.updatedAt,
-        total: 0,
       });
       if (!ok) cursoresPerdidos += 1;
     }
@@ -165,10 +183,29 @@ export class DigaiVarreduraService {
       }
     }
 
+    /*
+     * ─ O CORTE POR ORCAMENTO NA REPARTICAO REGISTRA, PELA MESMA REGUA DO `CORTE_ORCAMENTO` ───────
+     *
+     * Repartir por necessidade nao e repartir sem teto: passando a soma das necessidades do
+     * orcamento, todo mundo encolhe na mesma fracao (maior resto) e ALGUEM le menos do que precisa.
+     * A perda e RECORRENTE e o proximo ciclo NAO a recupera, porque ele rele da pagina 1 com a
+     * mesma cota e o fornecedor NAO ORDENA os resultados. Corte que nao aparece no log e perda
+     * silenciosa, que e o modo de falha mais caro desta ingestao.
+     */
+    if (plano.cortadosPorOrcamento > 0) {
+      this.logger.warn(
+        `Varredura do Digai: a REPARTICAO POR NECESSIDADE nao coube no orcamento e ` +
+          `${plano.cortadosPorOrcamento} de ${plano.varrer.length} screening(s) receberam MENOS ` +
+          `paginas do que precisavam (corte proporcional, todos encolhem na mesma fracao). A perda ` +
+          `e RECORRENTE e o proximo ciclo NAO a recupera. Reveja o teto por ciclo e a cadencia.`,
+      );
+    }
+
+    const maiorCota = plano.varrer.reduce((m, i) => Math.max(m, i.paginasPermitidas), 0);
     this.logger.log(
       `Varredura do Digai, pagina ${pagina} da listagem: ${lidos} screening(s) lido(s), ` +
-        `${plano.varrer.length} na fila desta passada com ate ` +
-        `${plano.varrer[0]?.paginasPermitidas ?? 0} pagina(s) cada, ${plano.foraDoTeto} fora do teto, ` +
+        `${plano.varrer.length} na fila desta passada, ${plano.paginasAutorizadas} pagina(s) ` +
+        `autorizada(s) por necessidade (maior cota ${maiorCota}), ${plano.foraDoTeto} fora do teto, ` +
         `${plano.orcamentoRestante} requisicao(oes) de orcamento restante.`,
     );
 

@@ -917,9 +917,15 @@ export const DIGAI_POLLING_INTERVALO_MS = 15 * 60 * 1000;
  * └───────────────────────────────────────────────────────────────────────────────────────────────┘
  *
  * ┌─ COMO 8.000 FOI DIMENSIONADO: PRIMEIRO COBERTURA, DEPOIS FREIO ──────────────────────────────┐
- * │ COBERTURA (o piso, e ele manda). O plano reparte o restante igualmente: cada screening leva   │
- * │ `min(20, floor((teto - 1) / N))` paginas. Com N = 528 e teto 8.000, isso da 15 PAGINAS, ou    │
- * │ 1.500 candidatos por screening, acima do maior medido (1.225 = 13 paginas).                    │
+ * │ COBERTURA (o piso, e ele manda). O plano reparte o restante POR NECESSIDADE (29/09/2026):     │
+ * │ cada screening leva `ceil(total x 1,1 / 100)` paginas, com o `total` do cursor, piso de uma   │
+ * │ pagina e teto anti-laco de 20. Com a base de hoje isso soma 754 paginas AUTORIZADAS de 7.999  │
+ * │ disponiveis, e o maior medido (1.225 candidatos) leva as 14 de que precisa.                    │
+ * │                                                                                               │
+ * │ ATE 29/09 A REPARTICAO ERA IGUALITARIA (`min(20, floor((teto - 1) / N))`, ou 15 paginas para  │
+ * │ cada um), e ela tinha o defeito de reservar 15 paginas para os ~450 screenings que cabem em   │
+ * │ UMA. O teto de 8.000 foi dimensionado contra AQUELA regra; ele continua valendo contra esta,  │
+ * │ e agora com muito mais folga (ver o quadro da ruptura, abaixo).                                │
  * │                                                                                               │
  * │ Com o teto antigo de 1.200 dariam `floor(1199/528)` = 2 PAGINAS, e o conjunto perdido eram os │
  * │ screenings ACIMA DE 200 CANDIDATOS: quem tem 101 a 200 termina COMPLETA, porque                │
@@ -938,40 +944,42 @@ export const DIGAI_POLLING_INTERVALO_MS = 15 * 60 * 1000;
  * │ o que se paga e latencia. E e AUTORIZACAO, nao gasto: o gasto medido e 682.                    │
  * └───────────────────────────────────────────────────────────────────────────────────────────────┘
  *
- * ┌─ OS 58 DIAS SAO DO FREIO. A COBERTURA QUEBRA EM QUATRO DIAS, E E ELA QUE MANDA ──────────────┐
- * │ NAO LEIA "~58 dias" COMO PRAZO DESTA CONSTANTE. Sao duas grandezas diferentes na mesma        │
- * │ secao, e a que manda (cobertura) e MUITO mais curta que a que conforta (freio):                │
+ * ┌─ A COBERTURA E O FREIO CONVERGIRAM, E FOI A REPARTICAO POR NECESSIDADE QUE FEZ ISSO ────────┐
+ * │ ATE 29/09 ESTE BLOCO DIZIA "os 58 dias sao do freio, a cobertura quebra em QUATRO". Estava    │
+ * │ certo, e era consequencia da reparticao IGUALITARIA: a cota caia com N, entao bastavam +17%   │
+ * │ de screenings (N = 616, ~4 dias a +4,3% ao dia) para a cota cair a 12 paginas e deixar de     │
+ * │ cobrir o maior medido, de 13.                                                                  │
  * │                                                                                               │
- * │      N        cota = min(20, floor(7999/N))    cobre        cobre o maior medido (1.225)?     │
- * │    528 (hoje)            15                    1.500                  sim                      │
- * │    616                   12                    1.200                  NAO   <- A RUPTURA       │
- * │  1.000                    7                      700                  nao                      │
+ * │ COM A REPARTICAO POR NECESSIDADE A COTA NAO CAI COM N: ela cai com a SOMA DAS NECESSIDADES,   │
+ * │ e a base e TORTA (450 dos 528 cabem numa pagina). O quadro, medido contra a forma real da     │
+ * │ base (1 screening de 1.225, 71 acima de 100, 456 de uma pagina):                                │
  * │                                                                                               │
- * │ A COBERTURA DO MAIOR SCREENING QUEBRA EM N = 616, que e +17% sobre hoje, ou ~4 DIAS no ritmo  │
- * │ de +4,3% ao dia que esta propria secao mede. O FREIO, esse sim, esta a ~58 dias. Confundir os │
- * │ dois da conforto exatamente sobre a grandeza que este bloco declara ser a que manda.           │
+ * │      regra              N da ruptura     crescimento     dias a +4,3% ao dia                   │
+ * │    igualitaria               616             +17%              ~4                              │
+ * │    por necessidade         5.524            +946%             ~56    <- a de hoje              │
  * │                                                                                               │
- * │ O PONTO DE RUPTURA ESTA FIXADO EM TESTE (`digai-polling.backend.spec.ts`), e nao so aqui, para │
- * │ que ele nao volte a ser prosa: mudar o teto sem mexer na reparticao move o numero e o teste    │
- * │ cobra o novo. QUANDO ELE CHEGAR, a saida e a reparticao por necessidade do bloco abaixo, e     │
- * │ nao subir o teto de novo: subir o teto trata o sintoma, e a cota continua caindo com N.        │
+ * │ SAO 9 VEZES MAIS FOLGA, e o efeito que importa e este: a COBERTURA deixou de ser o gargalo e  │
+ * │ passou a vencer JUNTO com o freio (~58 dias). As duas grandezas que este bloco mandava nao    │
+ * │ confundir agora coincidem, e nao por coincidencia: a cobertura parou de pagar pelo            │
+ * │ desperdicio dos pequenos.                                                                      │
+ * │                                                                                               │
+ * │ A ORDEM DOS DOIS PONTOS, para quem for medir: em N = 5.524 o maior screening perde a FOLGA    │
+ * │ (13 paginas concedidas para 14 de necessidade, e 13 ainda cobrem os 1.225 de hoje); em        │
+ * │ N = 5.762 ele perde a COBERTURA de verdade. O primeiro e o alarme, o segundo e o dano.         │
+ * │                                                                                               │
+ * │ OS DOIS PONTOS ESTAO FIXADOS EM TESTE (`digai-polling.backend.spec.ts`), calculados pela      │
+ * │ FUNCAO DE VERDADE e nao por uma formula copiada: mexer no teto, na folga ou na reparticao     │
+ * │ move o numero e o teste cobra o novo.                                                          │
  * └───────────────────────────────────────────────────────────────────────────────────────────────┘
  *
- * ┌─ O QUE VAI DOER PRIMEIRO COM O CRESCIMENTO, E NAO E ESTE TETO ───────────────────────────────┐
- * │ A reparticao e IGUALITARIA, e a base e TORTA: 450 screenings cabem numa pagina e um tem 13.   │
- * │ Entao quem aperta primeiro e a COBERTURA DOS GRANDES, e nao o teto: com N = 1.000 a cota cai  │
- * │ para 7 paginas (700 candidatos) e com N = 1.600, para 4 (400 candidatos). Ou seja, MUITO      │
- * │ antes de o teto disparar, os screenings grandes voltam a ser cortados.                         │
+ * ┌─ O QUE VAI DOER PRIMEIRO COM O CRESCIMENTO, E CONTINUA NAO SENDO ESTE TETO ──────────────────┐
+ * │ Quem aperta primeiro segue sendo a COBERTURA DOS GRANDES, so que agora 9x mais tarde. Quando  │
+ * │ chegar, a saida NAO e subir o teto: e olhar a FOLGA (`DIGAI_FOLGA_DA_NECESSIDADE`) e a COTA   │
+ * │ DE DESCOBERTA, que sao o que a reparticao reserva sem ter lido, e depois a CADENCIA. Subir o  │
+ * │ teto trata o sintoma e empurra o ciclo para fora da janela de 15 min.                          │
  * │                                                                                               │
- * │ A SAIDA ESTA A MAO E NAO FOI CONSTRUIDA AQUI (§A.31, propor e nao construir): o cursor JA     │
- * │ GRAVA o `total` de candidatos por screening (`CursorDoScreeningDigai`), entao da para repartir │
- * │ POR NECESSIDADE (`ceil(total/100)`) em vez de igualmente, e o mesmo orcamento cobriria a base │
- * │ varias vezes maior. Quem for fazer isso: a decisao e pura, mora em `planoDaVarredura`, e o    │
- * │ dado de entrada ja esta gravado.                                                               │
- * │                                                                                               │
- * │ E A MEDICAO DA ORDENACAO (abaixo) DEIXA A REPARTICAO POR NECESSIDADE AINDA MELHOR: repartir   │
- * │ igualmente DESPERDICA cota nos screenings pequenos (450 deles cabem numa pagina e recebem 15) │
- * │ e a tira justamente dos GRANDES, que sao os unicos onde o corte tem efeito.                    │
+ * │ E A MEDICAO DA ORDENACAO (abaixo) E O QUE TORNA ISSO URGENTE QUANDO CHEGAR: sem ordenacao, o  │
+ * │ corte nao adia ninguem, ele PERDE, e perde sorteando.                                          │
  * └───────────────────────────────────────────────────────────────────────────────────────────────┘
  *
  * ┌─ NAO APERTE ESTE TETO. O FORNECEDOR NAO ORDENA OS RESULTADOS, E ISSO FOI MEDIDO ─────────────┐
@@ -1071,11 +1079,28 @@ export function projetarScreeningDigai(cru: unknown): ScreeningDigai | null {
 }
 
 /**
- * ─ O CURSOR: GRAVA-SE PARA MEDIR, E NAO SE PULA NADA COM ELE. AINDA ────────────────────────────
+ * ─ O CURSOR: O `total` JA DECIDE ORCAMENTO; O `updatedAt` NAO PULA NADA. AINDA ────────────────
  *
  * ┌─ O QUE SE GRAVA, E POR QUE SO ISSO ──────────────────────────────────────────────────────────┐
  * │ Por screening: o `updatedAt` que a LISTAGEM devolveu e o `total` de candidatos visto no       │
  * │ ultimo ciclo. Dois numeros tecnicos, zero dado de pessoa.                                      │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ OS DOIS CAMPOS TEM DESTINOS DIFERENTES, E ISSO PASSOU A IMPORTAR EM 29/09/2026 ─────────────┐
+ * │ O `total` DEIXOU DE SER SO MEDICAO: e ele que `planoDaVarredura` usa para repartir o          │
+ * │ orcamento POR NECESSIDADE (`ceil(total x 1,1 / 100)`) em vez de igualmente. Errar o `total`   │
+ * │ para MENOS custa uma cota curta por um ciclo (15 min), e o `total` FRESCO da pagina 1 corrige │
+ * │ o cursor na mesma passada.                                                                     │
+ * │                                                                                               │
+ * │ DUAS CONSEQUENCIAS QUE NAO SAO OBVIAS, e as duas viraram codigo:                               │
+ * │  1. O TICK NAO PODE MAIS ZERAR O `total`. Ele gravava `total: 0` em todo ciclo, contando com  │
+ * │     a pagina 1 para repor o numero. Com a reparticao por necessidade isso seria FOME          │
+ * │     PERMANENTE do screening CORTADO: cortado, ele nao tem pagina 1; sem pagina 1, o `total`   │
+ * │     fica 0; com 0, ele volta a receber cota de desconhecido para sempre. O tick agora grava   │
+ * │     SO o `updatedAt`, e o `total` so e escrito por quem o mediu.                               │
+ * │  2. `total = 0` E DESCONHECIDO, e nao vazio (ver `necessidadeDePaginasDigai`).                 │
+ * │                                                                                               │
+ * │ O `updatedAt` CONTINUA SEM DECIDIR NADA, e o paragrafo abaixo segue valendo inteiro para ele. │
  * └───────────────────────────────────────────────────────────────────────────────────────────────┘
  *
  * ┌─ POR QUE NAO SE PULA NADA COM ELE HOJE, E ESTA E A PARTE QUE NAO PODE SER "OTIMIZADA" ───────┐
@@ -1131,6 +1156,103 @@ export interface CursorDoScreeningDigai {
 }
 
 /**
+ * ─ O TAMANHO DA PAGINA DO FORNECEDOR: 100, E ELE E MEDIDO E NAO SUPOSTO ────────────────────────
+ *
+ * Medido em 29/09/2026: um screening com `total` 273 devolveu 100 itens na pagina 1. A amostra
+ * antiga (`total` 58, os 58 na primeira pagina) nao permitia concluir nada sobre o tamanho, e foi
+ * ela que quase fez alguem presumir que uma pagina basta.
+ *
+ * ELE VIRA CONSTANTE PORQUE AGORA DECIDE ORCAMENTO, e nao so paginacao: a NECESSIDADE de um
+ * screening e `total / pagina`, entao errar este numero erra a cota de todo mundo de uma vez.
+ */
+export const DIGAI_TAMANHO_DA_PAGINA = 100;
+
+/**
+ * ─ A FOLGA SOBRE O `total` GUARDADO: 10%, E ELA EXISTE PORQUE O CURSOR E VELHO POR CONSTRUCAO ──
+ *
+ * ┌─ O PROBLEMA, e ele nao e hipotetico ─────────────────────────────────────────────────────────┐
+ * │ O `total` que a reparticao le foi gravado no CICLO ANTERIOR, 15 min atras. No meio-tempo      │
+ * │ entrou gente. Repartir por `ceil(total/100)` CRAVADO cortaria justamente o screening QUE      │
+ * │ CRESCEU, que e o unico lugar onde havia gente nova para trazer. Seria punir pelo crescimento. │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ POR QUE 10%, E POR QUE PROPORCIONAL EM VEZ DE "UMA PAGINA A MAIS PARA TODOS" ───────────────┐
+ * │ O `ceil` JA da, sozinho, uma folga media de meia pagina (50 candidatos). A folga proporcional │
+ * │ soma a isso 10% do tamanho do screening, entao ela E MAIOR ONDE O RISCO E MAIOR: 122          │
+ * │ candidatos de sobra no maior medido (1.225) e nenhuma pagina extra nos 450 que cabem em uma   │
+ * │ pagina so. Contra o crescimento MEDIDO (+4,3% ao dia, ou 0,045% por ciclo de 15 min), 10% e   │
+ * │ ~220 ciclos de folga no maior screening.                                                       │
+ * │                                                                                               │
+ * │ "UMA PAGINA A MAIS PARA TODOS" foi considerado e RECUSADO POR CUSTO MEDIDO: o ciclo e         │
+ * │ dominado por UMA requisicao por screening (527 das 682 medidas), entao dar uma pagina extra a │
+ * │ cada um levaria o ciclo de ~682 para ~1.210 requisicoes, ou 13,4 min dos 15 da cadencia (90%  │
+ * │ de ocupacao, contra 51% hoje). Pagar 90% da janela para cobrir um crescimento de 0,045% por   │
+ * │ ciclo e trocar o gargalo de lugar.                                                             │
+ * │                                                                                               │
+ * │ E O ERRO AQUI CUSTA UM CICLO, E NAO A PESSOA: o `total` FRESCO chega na resposta da pagina 1  │
+ * │ desta mesma passada e e gravado no cursor, entao o screening que estourou a folga e cortado   │
+ * │ HOJE e vem completo daqui a 15 min, com a cota ja corrigida. A folga compra latencia, nao     │
+ * │ existencia, e e por isso que ela pode ser modesta.                                             │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+export const DIGAI_FOLGA_DA_NECESSIDADE = 0.1;
+
+/**
+ * ─ A COTA DE DESCOBERTA: 13 PAGINAS PARA O SCREENING QUE A GENTE NUNCA VIU ─────────────────────
+ *
+ * ┌─ O CASO, e ele e o unico em que nao ha `total` nenhum para repartir por necessidade ─────────┐
+ * │ Screening novo (ou cursor perdido) nao tem tamanho conhecido. OS DOIS ERROS SAO DIFERENTES:  │
+ * │  DAR POUCO   perde gente recente DE VERDADE, e o fornecedor NAO ORDENA os resultados, entao  │
+ * │              quem cai na pagina cortada e SORTEADO, podendo ser quem acabou de finalizar;    │
+ * │  DAR DEMAIS  gasta ORCAMENTO DE TODO MUNDO, porque a soma das cotas e o que o teto limita.   │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ POR QUE ERRAR PARA CIMA AQUI E BARATO, E ISSO E ARITMETICA E NAO GOSTO ─────────────────────┐
+ * │ 1. A COTA E AUTORIZACAO, NAO GASTO. Quem para a paginacao e `proximaPaginaDigai`, que para   │
+ * │    em `COMPLETA` ou `PAGINA_VAZIA` assim que o fornecedor acaba. Um screening vazio com cota  │
+ * │    de 13 gasta UMA requisicao. O custo de 13 e contabil, e so aperta o teto.                  │
+ * │ 2. O PIOR CASO CABE, e foi conferido: com a BASE INTEIRA desconhecida (primeiro ciclo, ou     │
+ * │    tabela de cursor recem-criada), 528 x 13 + 1 = 6.865 requisicoes AUTORIZADAS, dentro das   │
+ * │    8.000 do teto. Ou seja, nem a partida a frio degrada.                                      │
+ * │ 3. EM REGIME O CASO E RARO: a base cresceu de 301 para 528 screenings em 13 dias, ou ~17 por  │
+ * │    dia, que sao 0,18 screening novo por ciclo de 15 min.                                      │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * O NUMERO E O MAIOR SCREENING MEDIDO: 1.225 candidatos, ou 13 paginas de 100 (29/09/2026). Nao e
+ * chute redondo: e "cobre o maior que ja se viu nesta base".
+ *
+ * ┌─ E QUANDO NADA SE CONHECE, A REGRA VELHA VOLTA SOZINHA, o que e a prova de que ela e o caso  ┐
+ * │ DEGENERADO desta: com TODOS desconhecidos, todas as necessidades sao iguais, e a reparticao   │
+ * │ proporcional devolve exatamente a divisao IGUALITARIA de antes. A reparticao por necessidade  │
+ * │ nao substitui a igualitaria: ela a generaliza para quando ha o que saber.                     │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+export const DIGAI_PAGINAS_DE_DESCOBERTA = 13;
+
+/**
+ * ─ A NECESSIDADE DE UM SCREENING, EM PAGINAS ───────────────────────────────────────────────────
+ *
+ * `ceil(total x (1 + folga) / 100)`, com piso de 1 e teto do anti-laco. `total` ausente, invalido
+ * ou ZERO significa DESCONHECIDO, e nao vazio: a linha do cursor nasce com `total_visto = 0` no
+ * primeiro `insert`, e tratar isso como "screening vazio" daria UMA pagina a quem pode ter 1.225
+ * candidatos, no exato ciclo em que ele aparece. Screening realmente vazio recebe cota de
+ * descoberta e gasta UMA requisicao, porque a paginacao para em `PAGINA_VAZIA`.
+ */
+export function necessidadeDePaginasDigai(
+  totalConhecido: number | null | undefined,
+  tetoDePaginas: number = DIGAI_TETO_PAGINAS_POR_SCREENING,
+): number {
+  const teto = Math.max(1, Math.trunc(tetoDePaginas));
+  const total =
+    typeof totalConhecido === "number" && Number.isFinite(totalConhecido)
+      ? Math.trunc(totalConhecido)
+      : 0;
+  if (total <= 0) return Math.min(teto, DIGAI_PAGINAS_DE_DESCOBERTA);
+  const comFolga = Math.ceil((total * (1 + DIGAI_FOLGA_DA_NECESSIDADE)) / DIGAI_TAMANHO_DA_PAGINA);
+  return Math.min(teto, Math.max(1, comFolga));
+}
+
+/**
  * ─ O PLANO DA VARREDURA: O ORCAMENTO E REPARTIDO AQUI, E ELE E DE REQUISICOES ──────────────────
  *
  * ┌─ O QUE MUDOU DEPOIS DO VETO, E POR QUE A FORMA E ESTA ───────────────────────────────────────┐
@@ -1140,18 +1262,54 @@ export interface CursorDoScreeningDigai {
  * │ orcamento passa a fechar: a soma do que o plano autoriza NUNCA passa do que ele recebeu.      │
  * └───────────────────────────────────────────────────────────────────────────────────────────────┘
  *
- * ┌─ COMO O ORCAMENTO E REPARTIDO, e as duas regras sao diferentes de proposito ─────────────────┐
- * │ LISTAGEM EM UMA PAGINA SO (o caso medido): sabe-se N exatamente, entao o restante inteiro e   │
- * │ dividido pelos N screenings, e cada um leva `floor(R/N)` paginas, limitado pelo teto de 20.   │
+ * ┌─ A REPARTICAO E POR NECESSIDADE, E NAO IGUAL (autorizado pelo diretor em 29/09/2026) ───────┐
+ * │ A versao anterior dava `min(20, floor(R/N))` paginas A CADA UM, e isso tinha dois defeitos    │
+ * │ MEDIDOS, nao suspeitados:                                                                      │
+ * │  1. DESPERDICIO: ~450 dos 528 screenings cabem numa pagina so, e cada um recebia cota de 15   │
+ * │     para usar 1. O orcamento era reservado onde nao havia o que ler;                           │
+ * │  2. A COBERTURA QUEBRAVA EM N = 616, que sao +17% sobre a base de hoje, ou ~4 DIAS no ritmo   │
+ * │     medido (+4,3% ao dia): a cota caia para 12 paginas e deixava de cobrir o maior screening  │
+ * │     medido (1.225 candidatos, 13 paginas).                                                     │
+ * │                                                                                               │
+ * │ AGORA CADA SCREENING PEDE O QUE PRECISA, `ceil(total x 1,1 / 100)`, com o `total` que o       │
+ * │ CURSOR guardou (`CursorDoScreeningDigai`), e o desconhecido recebe a COTA DE DESCOBERTA.       │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ AS TRES REGRAS, e as diferencas sao de proposito ───────────────────────────────────────────┐
+ * │ LISTAGEM EM UMA PAGINA SO (o caso medido): sabe-se N exatamente, entao reparte-se por         │
+ * │ NECESSIDADE, com PISO DE UMA PAGINA para todos e o resto distribuido por quem precisa.        │
  * │                                                                                               │
  * │ LISTAGEM PAGINADA: NAO se sabe quantos screenings ainda virao, entao esta pagina e            │
  * │ CONSERVADORA (uma pagina por screening) e o resto do orcamento SEGUE para a proxima pagina da │
  * │ listagem. Sem isso, cada pagina de listagem recomecaria com o orcamento cheio, que era o furo │
  * │ B do veto: com o fornecedor paginando de 20 em 20, seriam 27 ticks x 1.199 e o teto jamais    │
- * │ dispararia.                                                                                    │
+ * │ dispararia. ISTO NAO MUDOU, e nao podia mudar: repartir por necessidade sem saber quantos     │
+ * │ ainda virao gastaria o orcamento inteiro na primeira pagina da listagem.                       │
  * │                                                                                               │
  * │ ORCAMENTO QUE NAO DA NEM UMA PAGINA POR SCREENING TRUNCA A LISTA, e os que sobram sao         │
- * │ contados em `foraDoTeto` para virar linha de log.                                              │
+ * │ contados em `foraDoTeto` para virar linha de log. O PISO DE UMA PAGINA E O QUE GARANTE QUE    │
+ * │ NENHUM SCREENING FIQUE INTEIRAMENTE INVISIVEL: perder a cauda de um screening custa gente;    │
+ * │ perder o screening custa TODA a gente dele.                                                    │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ QUANDO A SOMA DAS NECESSIDADES PASSA DO ORCAMENTO: CORTE PROPORCIONAL, e ele nao elege ─────┐
+ * │ vitima. Repartir por necessidade NAO e repartir sem teto, e a pergunta "quem e cortado" tem   │
+ * │ tres respostas possiveis, das quais duas foram RECUSADAS:                                      │
+ * │  CORTAR O MAIOR PRIMEIRO  concentra a perda inteira em um screening, que passa a ser          │
+ * │                           PERMANENTEMENTE cego do mesmo trecho, ciclo apos ciclo, enquanto    │
+ * │                           todos os outros ficam completos. E ele e justamente quem tem mais   │
+ * │                           gente;                                                               │
+ * │  CORTAR O MENOR PRIMEIRO  desperdica, e mal chega a liberar orcamento: os pequenos ja estao   │
+ * │                           no PISO de uma pagina e nao ha o que cortar neles. A pressao vem    │
+ * │                           dos grandes, e cortar o menor nao a alivia;                          │
+ * │  PROPORCIONAL (o adotado) encolhe TODO MUNDO NA MESMA FRACAO, pelo metodo do MAIOR RESTO.     │
+ * │                           Ninguem e eleito, a perda fica proporcional ao tamanho, e nenhum    │
+ * │                           screening fica cego do mesmo trecho para sempre.                     │
+ * │                                                                                               │
+ * │ O CORTE E CONTADO EM `cortadosPorOrcamento` PARA VIRAR LINHA DE LOG, e a regua e a do         │
+ * │ `CORTE_ORCAMENTO` que ja existe: a perda e RECORRENTE e o proximo ciclo NAO a recupera (ele   │
+ * │ rele da pagina 1 com a mesma cota, e o fornecedor NAO ORDENA os resultados, medido em 29/09   │
+ * │ em tres screenings paginados). Corte que nao aparece no log e perda silenciosa.                │
  * └───────────────────────────────────────────────────────────────────────────────────────────────┘
  *
  * A DEDUPLICACAO POR `id` ACONTECE AQUI: a listagem repetir um screening (por paginacao instavel do
@@ -1170,10 +1328,23 @@ export function planoDaVarredura(entrada: {
   /** A listagem tem proxima pagina? Muda a regra de reparticao, e nao so o resto. */
   haProximaPaginaDaListagem?: boolean;
   tetoDePaginas?: number;
+  /**
+   * O `total` de candidatos que o CURSOR guardou por screening, do ciclo anterior. E o dado que
+   * permite repartir por NECESSIDADE; ausente (mapa vazio, ou screening que nunca se viu), cada um
+   * recebe a COTA DE DESCOBERTA e a reparticao degenera na igualitaria de antes.
+   */
+  totaisConhecidos?: ReadonlyMap<string, number>;
 }): {
   varrer: ScreeningComOrcamentoDigai[];
   foraDoTeto: number;
   estourou: boolean;
+  /**
+   * Quantos screenings receberam MENOS paginas do que precisavam. Vira WARN: a perda e recorrente
+   * e o proximo ciclo NAO a recupera (mesma regua do `CORTE_ORCAMENTO`).
+   */
+  cortadosPorOrcamento: number;
+  /** A soma das cotas desta passada. Nunca passa do orcamento recebido. */
+  paginasAutorizadas: number;
   /** O que sobra para a proxima pagina da LISTAGEM. Zero significa que ela nao deve ser pedida. */
   orcamentoRestante: number;
 } {
@@ -1195,20 +1366,91 @@ export function planoDaVarredura(entrada: {
   const escolhidos = unicos.slice(0, cabem);
   const foraDoTeto = unicos.length - escolhidos.length;
 
-  const paginasPermitidas =
-    escolhidos.length === 0
-      ? 0
-      : entrada.haProximaPaginaDaListagem === true
-        ? 1
-        : Math.min(tetoDePaginas, Math.max(1, Math.floor(restante / escolhidos.length)));
+  /*
+   * LISTAGEM PAGINADA CONTINUA CONSERVADORA: uma pagina por screening, e o resto segue adiante.
+   * Repartir por necessidade aqui gastaria o orcamento inteiro na primeira pagina da listagem, sem
+   * saber quantos screenings ainda virao, que e o furo B do veto por outra porta.
+   */
+  const conservador = entrada.haProximaPaginaDaListagem === true;
+  const necessidades = escolhidos.map((s) =>
+    conservador ? 1 : necessidadeDePaginasDigai(entrada.totaisConhecidos?.get(s.id), tetoDePaginas),
+  );
 
-  const gasto = escolhidos.length * paginasPermitidas;
+  const cotas = repartirPorNecessidade(necessidades, restante);
+  const gasto = cotas.reduce((a, b) => a + b, 0);
+  let cortadosPorOrcamento = 0;
+  for (let i = 0; i < cotas.length; i += 1) {
+    if (cotas[i]! < necessidades[i]!) cortadosPorOrcamento += 1;
+  }
+
   return {
-    varrer: escolhidos.map((screening) => ({ screening, paginasPermitidas })),
+    varrer: escolhidos.map((screening, i) => ({ screening, paginasPermitidas: cotas[i]! })),
     foraDoTeto,
     estourou: foraDoTeto > 0,
+    cortadosPorOrcamento,
+    paginasAutorizadas: gasto,
     orcamentoRestante: Math.max(0, restante - gasto),
   };
+}
+
+/**
+ * ─ O MAIOR RESTO, E ELE E O QUE FAZ O CORTE NAO ELEGER VITIMA ──────────────────────────────────
+ *
+ * ┌─ A ORDEM DAS DUAS CAMADAS IMPORTA, E ELA E A REGRA INTEIRA ──────────────────────────────────┐
+ * │ 1. PISO: uma pagina para CADA UM, sempre. Ele cabe por construcao, porque a lista ja foi      │
+ * │    truncada em `restante` screenings la em cima. E o que garante que nenhum screening fique   │
+ * │    inteiramente invisivel;                                                                     │
+ * │ 2. SOBRA: o que resta e distribuido entre as necessidades EXTRAS (`necessidade - 1`). Cabendo │
+ * │    todas, todo mundo leva o que precisa e o troco segue para a proxima pagina da listagem.     │
+ * │    NAO cabendo, cada um leva a MESMA FRACAO da sua extra, e as fracoes perdidas no `floor`     │
+ * │    sao devolvidas em ordem decrescente de resto.                                               │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ O DESEMPATE E DETERMINISTICO, E ISSO NAO E DETALHE ─────────────────────────────────────────┐
+ * │ Resto igual desempata pela NECESSIDADE maior, e depois pela POSICAO na lista. Um desempate    │
+ * │ instavel (ordenacao nao estavel, ou aleatoria) faria a mesma base produzir cotas diferentes a │
+ * │ cada ciclo, e o log de corte deixaria de ser comparavel entre ciclos, que e justamente o que  │
+ * │ alguem vai querer ler quando a base crescer.                                                   │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * NENHUMA COTA PASSA DA NECESSIDADE, e nenhuma soma passa do orcamento: sao os dois invariantes
+ * que o veto de 29/09 instalou, e eles continuam sendo o contrato desta funcao.
+ */
+function repartirPorNecessidade(necessidades: readonly number[], restante: number): number[] {
+  const n = necessidades.length;
+  if (n === 0) return [];
+
+  const cotas = necessidades.map(() => 1);
+  const sobra = restante - n;
+  if (sobra <= 0) return cotas;
+
+  const extras = necessidades.map((need) => Math.max(0, need - 1));
+  const somaExtras = extras.reduce((a, b) => a + b, 0);
+  if (somaExtras === 0) return cotas;
+  if (somaExtras <= sobra) return necessidades.map((need) => need);
+
+  // CORTE PROPORCIONAL: cada um leva `extra x sobra / somaExtras`, arredondado para baixo.
+  const bruto = extras.map((e) => (e * sobra) / somaExtras);
+  const base = bruto.map((b) => Math.floor(b));
+  let distribuido = base.reduce((a, b) => a + b, 0);
+
+  const ordem = base
+    .map((_, i) => i)
+    .sort((a, b) => {
+      const restoA = bruto[a]! - base[a]!;
+      const restoB = bruto[b]! - base[b]!;
+      if (restoB !== restoA) return restoB - restoA;
+      if (extras[b]! !== extras[a]!) return extras[b]! - extras[a]!;
+      return a - b;
+    });
+  for (const i of ordem) {
+    if (distribuido >= sobra) break;
+    if (base[i]! >= extras[i]!) continue;
+    base[i] = base[i]! + 1;
+    distribuido += 1;
+  }
+
+  return cotas.map((piso, i) => piso + base[i]!);
 }
 
 /**
