@@ -18027,3 +18027,88 @@ A **repartição por necessidade** do orçamento da varredura do Digai: cada scr
 a cobertura deixa de ser o gargalo. Um bug latente foi corrigido junto: o tick gravava `total: 0`
 todo ciclo, o que com repartição por necessidade viraria **fome permanente** do screening cortado
 (cortado, sem página 1, `total` fica 0, cota de desconhecido para sempre).
+
+---
+
+## 29/09/2026, fim do dia. A MAIN INTEIRA EM PRODUÇÃO: 16 migrations, 2 commits e o release trocado
+
+**Autorização do diretor: publicação COMPLETA.** Sessão única, todas as outras encerradas, checkout
+estável. Produção saiu de `ea-release-ingestao` (`d845232`, build de 24/09) para
+`ea-release-portal` (`2873bd1`). O release antigo **fica intacto como rollback**.
+
+### O QUE FOI COMMITADO (recorte nominal, §A.14, nunca `git add .`)
+
+- **`3026abe`, limitador de ritmo do Portal.** 12 arquivos. `portal.module.ts` e `.env.example`
+  carregavam hunks da porta de e-mail e do G.I: entraram **por hunk**, e o `.env.example` levou só as
+  três chaves `PORTAL_RITMO_*`. Nenhum vestígio da frente da porta de e-mail no commit (medido: 0).
+- **`2873bd1`, Central De Ajuda + permissões concedíveis dos catálogos.** 280 arquivos, 37 artigos e
+  98 prints. As duas frentes num commit só porque escrevem no **mesmo** registro de menus
+  (`domain/menus.ts`, `lib/admin-menus.ts`, `menu-rotas`); separá-las exigiria partir aquele arquivo
+  ao meio sem ganho. O `shared-types` entrou **só** com o bloco `MENU_RESTRICAO`/`MenuCatalogoItem`.
+- **FORA, de propósito:** a porta de e-mail do Portal (migration `0134` e companhia),
+  `tools/ajuda/.trabalho/` (ignorada, e contém um script que CONCEDE menu), `logosoulan.png`,
+  `arnes-seed-manual.ts` e o conserto de intermitência do `EnviarShortlistModal.spec.tsx`.
+
+### AS 16 MIGRATIONS, E O ACHADO QUE MUDAVA A DECISÃO
+
+Banco em 119, repositório em 135. **Achado ANTES de aplicar:** muitas tabelas das pendentes **já
+existiam** no banco (`portal_links`, `portal_conferencia`, `admissao_dados_gi`,
+`as_depara_etapa_externa`...), aplicadas à mão numa rodada anterior **sem gravar a linha no journal**.
+As 16 são todas idempotentes (escritas à mão: `IF NOT EXISTS` em tabela, coluna e índice,
+`ADD CONSTRAINT` dentro de `DO $$` com `duplicate_object`, `INSERT ... ON CONFLICT DO NOTHING`,
+`UPDATE` por código). Conferido também que a FK de `as_etapas_funil(codigo)` **ON DELETE RESTRICT**
+era satisfazível: produção tem os 6 códigos, e o `CAPTACAO` que a `0133` insere existe.
+
+Aplicadas e **conferidas uma a uma**: as 135 entradas do journal do release estão no banco, 119 a 133
+e a 135. Objetos: **91 para 99 tabelas**, as 8 colunas novas de `portal_links`, `motivos_descarte` 6,
+`motivos_reenvio_shortlist` 7, de/para do Digai 2.
+
+**O RISCO DA MARCA D'ÁGUA, para quem for retomar a porta de e-mail:** o migrador compara **data**, não
+conteúdo. A `0135` (`when` 1790646001719) subiu e a `0134` (`1790646000719`) ficou **abaixo da marca**:
+ela **nunca mais será aplicada em silêncio** pelo caminho normal. Antes de retomar aquela frente, o
+`when` da `0134` tem de ser **elevado acima** do da `0135`.
+
+### CONTAGENS ANTES E DEPOIS (§A.27)
+
+Idênticas em tudo, com **uma** diferença esperada: `menus` 41 para 46. É o
+`MenusCatalogoService` convergindo o catálogo no boot, que **REGISTRA e não concede** (§A.23).
+`usuario_menus` ficou **348 nas duas medições**: ninguém ganhou acesso. 14 menus estão registrados
+com **zero concessão**, inclusive o `ajuda` e o `portal-links`, aguardando a liberação do diretor.
+Intactos: admissoes 3004 (63 / 1956 / 892 / 55), candidatos 2957, clientes 251,
+documentos_admissao 23953, frentes 8597, usuarios 39.
+
+### O CADDY: A PROMESSA NÃO CUMPRIDA, ENCONTRADA E FECHADA COM MEDIÇÃO
+
+O `seguranca` provou que o mascaramento de IP estava **prometido e não estava em vigor**: o
+Caddyfile foi editado às 19:02 e o processo estava de pé desde 20/08, nunca tendo lido o arquivo.
+E `caddy reload` **não resolve**: o Caddyfile tem `admin off`, então a API de administração está
+fechada e o `ExecReload` falha com conexão recusada. **Só o restart carrega a config.** Feito, e
+**medido depois**: `remote_ip` e `client_ip` saem `127.0.0.0` (eram `127.0.0.1`) e o `User-Agent`
+deixou de ser gravado. A redação de CPF na URI já funcionava (0 violações em 5.544 linhas).
+
+### AS TRÊS INTEGRAÇÕES CONTINUAM INERTES, E O BACKEND DECLARA ISSO NO PRÓPRIO LOG
+
+`Varredura do Pandapé INERTE: PANDAPE_VARREDURA_DATA_CORTE não configurada`,
+`Fila do Digai ativa, com ingestao INERTE`, `polling DESLIGADO`. Nenhuma variável `GI_*` existe em
+produção. Zero `ERROR` no boot. A **retenção de 6 meses** rodou a primeira varredura e escreveu
+**zero linha nas 7 tabelas** que ela alcança, porque `as_candidatos` está vazia: medido antes e
+depois (0 de 0), e o `seguranca` provou que ela não toca `admissoes`, `candidatos`,
+`documentos_admissao` nem `frentes_admissao`.
+
+### AGENTES ACIONADOS E VEREDITOS (§A.34/§A.38)
+
+| agente | veredito |
+|---|---|
+| `seguranca` (sobre o mapa e as 3 frentes, ANTES do deploy) | **APROVADO**, nenhum achado bloqueante. Provou o fail-closed do limitador nos 6 desvios, que os prints são de base sintética com gate obrigatório em código, e que os 7 controllers de A&S que perderam `@Roles("SUPER_ADMIN")` seguem fechados porque os 7 menus os reivindicam por curinga e o `MenuGuard` exige marcação nominal (conferiu os 7 nomes: batem). Dois achados de ação: o Caddy e não commitar `tools/.trabalho` |
+| `tester` (gate independente) | **VERDE**: 521 arquivos, **8984 testes, 0 falhas**. Os 13 erros de lint são **pré-existentes** e provados fora das frentes (arquivos byte-idênticos ao HEAD; eslint só nos 211 arquivos das frentes sai exit 0) |
+| coordenador | mapa de alcance, recorte por hunk, as 16 migrations, os builds, a troca, o Caddy e a conferência de produção |
+
+### O QUE FALTA, REGISTRADO
+
+- **A porta de e-mail (`0134`) ficou fora**, como o diretor decidiu. Recomendação: **manter fora** até
+  o correio destravar, e **elevar o `when` da `0134`** antes de retomar.
+- **O Portal público** depende do Fernando (DNS `portal.soulan.com.br`, vhost na `.174`, certbot).
+- **O limitador por IP nasce inerte** (`PORTAL_RITMO_SALTOS_CONFIAVEIS` vazio): correto e
+  fail-closed, mas as duas variáveis precisam ser preenchidas **antes** de o Portal ficar público.
+- **Os 98 prints da Ajuda são servidos sem autenticação** (`public/ajuda/`, 49 MB). Conteúdo
+  sintético e provado, mas expõe estrutura de interface e nome de cliente. Decisão do diretor.
