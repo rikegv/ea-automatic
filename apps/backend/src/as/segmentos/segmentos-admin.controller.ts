@@ -1,24 +1,29 @@
 import { Body, Controller, Delete, Param, ParseIntPipe, Patch, Post } from "@nestjs/common";
-import { Roles } from "../../auth/decorators";
 import { CriarSegmentoDto, RenomearSegmentoDto, ReordenarSegmentosDto } from "./segmentos.dto";
 import { SegmentosService } from "./segmentos.service";
 
 /**
  * ─ O GERENCIADOR DE SEGMENTOS: A SUPERFÍCIE DE ESCRITA, E SÓ ELA ───────────────────────────────
  *
- * ┌─ `@Roles("SUPER_ADMIN")` NA PRÓPRIA CONTROLLER ───────────────────────────────────────────────┐
+ * ┌─ QUEM SEGURA A PORTA É O MENU, NÃO O PAPEL (regra do diretor, 27/09/2026) ────────────────────┐
+ * │ O `@Roles("SUPER_ADMIN")` QUE MORAVA AQUI FOI REMOVIDO: o Super Admin concede QUALQUER tela a │
+ * │ QUALQUER usuário. A autoridade é o `MenuGuard`, que já reivindicava esta classe inteira       │
+ * │ (`SegmentosAdminController.*`, menu `as-segmentos`), e sem essa reivindicação tirar o papel   │
+ * │ teria ABERTO a rota: o guard é fail-open para operação sem dono.                              │
+ * │                                                                                                │
  * │ O MENU SOZINHO NÃO SEGURA O MASTER, e isto está conferido no código, não suposto:             │
  * │ `menu.guard.ts` deixa o MASTER passar por PERTENCER À ÁREA do menu ("MASTER manda na área     │
  * │ inteira: dentro dela, segue sem depender de marcação"), e há MASTER na área AS em produção.   │
- * │ Um menu de área AS, sozinho, entregaria este catálogo a eles.                                 │
+ * │ Um menu de área AS, sozinho, entregaria este catálogo a eles: quem fecha o atalho é a entrada │
+ * │ nominal do código em `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER`.                                    │
  * │                                                                                                │
  * │ POR QUE ISSO IMPORTA AQUI: quem edita esta lista edita a CLASSIFICAÇÃO DA CARTEIRA INTEIRA.   │
  * │ Renomear um segmento reescreve o nome dele em todo cliente e em toda vaga que já apontam, e   │
  * │ inativar tira o segmento de circulação para o time todo. É configuração de sistema, não        │
  * │ operação de vaga.                                                                              │
  * │                                                                                                │
- * │ O `@Roles` É A AUTORIDADE (fail-closed no `RolesGuard`); o menu é a camada de UX que decide se │
- * │ o card aparece. Mesmo padrão do `LinhasServicoAdminController` e do `EtapasFunilAdminController`│
+ * │ O catálogo segue RESTRITO: o que mudou é que a restrição passou a ser CONCEDÍVEL, pessoa a    │
+ * │ pessoa. Mesmo padrão do `LinhasServicoAdminController` e do `EtapasFunilAdminController`.       │
  * └────────────────────────────────────────────────────────────────────────────────────────────────┘
  *
  * ┌─ O `DELETE` EXISTE, E SÓ ALCANÇA QUEM NUNCA FOI USADO ────────────────────────────────────────┐
@@ -31,7 +36,6 @@ import { SegmentosService } from "./segmentos.service";
  * contagens que aparecem nas frases de recusa são NÚMEROS, sem nome e sem identificador.
  */
 @Controller("admin/as/segmentos")
-@Roles("SUPER_ADMIN")
 export class SegmentosAdminController {
   constructor(private readonly segmentos: SegmentosService) {}
 

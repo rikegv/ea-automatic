@@ -8,6 +8,7 @@ import {
   filtrarMenusPorPapel,
   MENUS_PADRAO_COMUM,
   MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER,
+  restricaoDeConcessao,
   MENUS_QUE_NASCEM_FORA_DA_ADM,
   TODOS_CODIGOS_MENU,
   baseDeMenusDoMaster,
@@ -214,8 +215,14 @@ describe("segmentação por área: o NASCIMENTO (a fonte viva é a tabela, testa
     // OST mandou conferir em vez de supor: o padrão do COMUM é o que `backfill-menus-comum` concede.
     expect(MENUS_PADRAO_COMUM).not.toContain("as-etapas");
     expect(codigosPadraoDoPapel("COMUM")).not.toContain("as-etapas");
-    expect(MENUS_BLOQUEADOS_COMUM.has("as-etapas")).toBe(true);
-    expect(MENUS_SOMENTE_SUPER_ADMIN.has("as-etapas")).toBe(true);
+    // AS DUAS LISTAS DE BLOQUEIO SAÍRAM DAQUI (regra do diretor, 27/09/2026), e a troca é de CASA,
+    // não de intensidade: o menu virou CONCEDÍVEL pessoa a pessoa, e quem impede o MASTER de ganhá-lo
+    // pelo bypass de ÁREA é a entrada nominal em `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER`. As duas
+    // listas de baixo TRAVARIAM a concessão, uma na gravação e outra na leitura, que é exatamente o
+    // descarte silencioso que a frente foi feita para acabar.
+    expect(MENUS_BLOQUEADOS_COMUM.has("as-etapas")).toBe(false);
+    expect(MENUS_SOMENTE_SUPER_ADMIN.has("as-etapas")).toBe(false);
+    expect(masterPrecisaDeMarcacao("as-etapas")).toBe(true);
   });
 
   it("menu de A&S NASCE só na área AS, em grupo próprio, e fora do padrão do COMUM", () => {
@@ -304,70 +311,49 @@ describe("segmentação por área: o NASCIMENTO (a fonte viva é a tabela, testa
  * continua vendo, e ninguém mais vê.
  */
 describe("menus exclusivos do SUPER_ADMIN", () => {
-  it("são exclusivos Usuários, Área Por Menu, Etapas Do Funil, Motivos De Cancelamento e Status Da Vaga", () => {
-    // A de Área Por Menu entrou aqui por um motivo mais forte que a régua de sempre: ela ESCREVE a
-    // fonte da autorização por área, então quem a alcança redefine o que cada time enxerga.
-    //
-    // ETAPAS DO FUNIL entrou pela mesma família de razão: quem edita aquela lista edita o
-    // VOCABULÁRIO em que TODO o histórico de seleção está escrito (renomear uma etapa reescreve o
-    // nome dela em toda a linha do tempo de todo mundo que passou por lá). A controller é
-    // `@Roles("SUPER_ADMIN")`, e o MENU sozinho NÃO seguraria o MASTER: o `MenuGuard` o deixa passar
-    // por pertencer à área, e há MASTER na área AS. Sem esta linha, o card apareceria para ele e
-    // daria 403 em tudo, que é mostrar a porta e trancá-la.
-    //
-    // MOTIVOS DE CANCELAMENTO entrou pela MESMA razão das etapas, e não por simetria: o NOME do
-    // motivo é o que fica gravado na vaga cancelada, então quem edita aquela lista edita o texto da
-    // trilha de cancelamento de vagas que já foram canceladas. A controller de escrita é
-    // `@Roles("SUPER_ADMIN")`, e de novo o MENU sozinho não seguraria o MASTER.
-    //
-    // STATUS DA VAGA (onda B2) entrou pela razão mais forte das quatro, e vale escrever qual é: os
-    // outros três editam TEXTO (rótulo de etapa, nome de motivo), e este edita TRAVAS. Ligar
-    // `recebeCandidato` num status terminal devolve alocação a vaga encerrada, que é o furo fechado
-    // em 09/09; desligar `movivelManualmente` no status de ABERTURA transforma em zumbi toda vaga
-    // que estiver num status do diretor, porque fechar e cancelar exigem o papel ABERTURA e o
-    // caminho de volta deixa de existir. A controller de escrita é `@Roles("SUPER_ADMIN")`, e de
-    // novo o MENU sozinho não seguraria o MASTER, que passa por pertencer à área AS.
-    //
-    // ESTA LISTA É PINADA POR INTEIRO DE PROPÓSITO, e a prova falhar ao acrescentar um menu é o
-    // comportamento desejado: entrar aqui é decisão do diretor (§A.23), nunca efeito colateral de
-    // uma frente. Quem acrescentar um código sem escrever o motivo acima está pulando a decisão.
-    // LINHAS DE SERVIÇO (Onda C) entrou pela mesma razão das outras três que editam TEXTO, com um
-    // agravante próprio: o campo que este catálogo alimenta é OBRIGATÓRIO para publicar vaga, então
-    // inativar a linha errada não deixa um rótulo feio, trava a abertura. A controller de escrita é
-    // `@Roles("SUPER_ADMIN")`, e de novo o MENU sozinho não seguraria o MASTER.
-    // SEGMENTOS (Onda E) entrou pela razão das que editam TEXTO, e com o mesmo agravante do rótulo
-    // que fica gravado: o segmento classifica o CLIENTE, e a vaga o herda, então quem renomeia um
-    // segmento reescreve como toda a carteira daquele ramo é lida.
-    //
-    // COMERCIAIS (Onda E) entrou pela razão MAIS FORTE de todas, e ela não é sobre travas nem sobre
-    // texto: **este catálogo guarda NOME DE PESSOA**, e é o único da lista que guarda. Editar a
-    // lista é editar quem responde por cada carteira; ler a lista é ler a folha do time comercial.
-    // Por isso ele não tem sequer controller de leitura aberta, ao contrário dos cinco vizinhos: a
-    // lista é servida por superfície já gatada. Se um dia alguém tirar este código daqui, estará
-    // entregando nome de pessoa ao próximo MASTER criado, sem rodar script nenhum.
-    //
-    // MOTIVOS DE DESCARTE ENTROU E SAIU, e a saída é DECISÃO DO DIRETOR, não regressão da omissão
-    // que o fez entrar. Ele entrou enquanto a escrita era `@Roles("SUPER_ADMIN")`: ali, deixá-lo
-    // visível ao MASTER era mostrar a porta e trancá-la. O diretor então pediu o contrário do que
-    // esta lista faz: o catálogo continua RESTRITO, e ele decide INDIVIDUALMENTE quem edita. Esta
-    // lista REMOVE o menu do resultado de `filtrarMenusPorPapel`, ou seja, o torna IMPOSSÍVEL DE
-    // CONCEDER, então ela é incompatível com a decisão. A restrição dele mudou de casa e continua
-    // inteira: `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER` (bloco abaixo), que é o molde das Dicas.
-    //
-    // MOTIVOS DE REENVIO DE SHORTLIST (decisão 6) entra pela mesma razão, com uma diferença que
-    // ENDURECE o caso: aqui o que fica gravado na shortlist é a **FK**, então renomear a linha
-    // reescreve a leitura de todo reenvio já gravado, e não só a dos próximos.
-    expect([...MENUS_SOMENTE_SUPER_ADMIN]).toEqual([
-      "usuarios",
-      "menu-areas",
-      "as-etapas",
-      "as-motivos-cancelamento",
-      "as-status-vaga",
-      "as-motivos-reenvio",
-      "as-linhas-servico",
-      "as-segmentos",
-      "as-comerciais",
-    ]);
+  it("sobraram DUAS, e são as telas que CONCEDEM permissão", () => {
+    /**
+     * ─ ESTA LISTA ENCOLHEU DE NOVE PARA DUAS (regra do diretor, 27/09/2026) ─────────────────────
+     *
+     * A REGRA NOVA, com todas as letras: o Super Admin concede QUALQUER tela a QUALQUER usuário.
+     * Não existe mais tela de configuração que ele não possa conceder, e é ele que decide, pessoa a
+     * pessoa, quem enxerga e quem configura o quê.
+     *
+     * ┌─ O QUE ESTA LISTA FAZ, e é por isso que ela era incompatível com a regra ────────────────┐
+     * │ Ela é aplicada ao RESULTADO por `filtrarMenusPorPapel`: REMOVE o menu de quem não é       │
+     * │ SUPER_ADMIN, ou seja, o torna IMPOSSÍVEL DE CONCEDER. O diretor marcava a pessoa na tela  │
+     * │ de permissões e o `/auth/me` dela devolvia a lista sem o menu, em silêncio. Somada ao     │
+     * │ filtro da GRAVAÇÃO, a caixa aparecia marcável, a tela salvava sem reclamar e o acesso     │
+     * │ nunca chegava.                                                                            │
+     * └───────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * OS SETE CATÁLOGOS DE A&S SAÍRAM (`as-etapas`, `as-status-vaga`, `as-motivos-cancelamento`,
+     * `as-linhas-servico`, `as-segmentos`, `as-comerciais`, `as-motivos-reenvio`), junto com o
+     * `as-motivos-descarte`, que já havia saído antes pela mesma decisão. Os argumentos que os
+     * trouxeram aqui continuam VERDADEIROS e deixaram de ser motivo para NÃO CONCEDER: quem edita
+     * as etapas edita o vocabulário do histórico, quem edita o status da vaga edita TRAVAS, quem
+     * edita os comerciais mexe em NOME DE PESSOA. Tudo isso diz que o catálogo é RESTRITO, e
+     * restrito passou a significar "concedido a quem o diretor marcar", não "só o diretor".
+     *
+     * A RESTRIÇÃO DELES MUDOU DE CASA E CONTINUA INTEIRA: `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER`
+     * (bloco abaixo) fecha o bypass de ÁREA do MASTER, sem o qual todo MASTER de A&S ganharia os
+     * sete sozinhos; e as sete controllers de administração são reivindicadas por menu, sem o que
+     * remover o `@Roles` teria ABERTO as rotas (o `MenuGuard` é fail-open para operação sem dono).
+     * Ver `as/catalogos-concediveis.rbac.spec.ts`, que prova as duas metades handler por handler.
+     *
+     * ─ POR QUE AS DUAS QUE SOBRARAM NÃO ENTRAM NA REGRA NOVA (decisão do diretor) ───────────────
+     *
+     * `usuarios` marca menu por usuário e cadastra ÁREA; `menu-areas` escreve a ÁREA de cada menu,
+     * que é o teto aplicado por cima de tudo. São as telas que CONCEDEM permissão, e torná-las
+     * concedíveis criaria caminho de AUTO-CONCESSÃO: quem recebesse passaria a poder conceder a si
+     * mesmo qualquer outro menu, e a decisão individual deixaria de ser do diretor. As duas seguem
+     * `@Roles("SUPER_ADMIN")` na controller, com `operacoes: []`.
+     *
+     * ESTA LISTA CONTINUA PINADA POR INTEIRO, e falhar ao acrescentar ou remover um código é o
+     * comportamento desejado: entrar ou sair daqui é decisão do diretor (§A.23), nunca efeito
+     * colateral de uma frente.
+     */
+    expect([...MENUS_SOMENTE_SUPER_ADMIN]).toEqual(["usuarios", "menu-areas"]);
   });
 
   it("SUPER_ADMIN continua recebendo `usuarios`", () => {
@@ -426,6 +412,42 @@ describe("menus que exigem marcação explícita do MASTER", () => {
   });
 
   /**
+   * ─ A LISTA É PINADA POR INTEIRO, e ela CRESCEU quando a outra encolheu ──────────────────────────
+   *
+   * Os sete catálogos de configuração de A&S vieram de `MENUS_SOMENTE_SUPER_ADMIN` (regra do diretor,
+   * 27/09/2026) e ESTA é a única casa que atende as duas exigências ao mesmo tempo: o menu NASCE só
+   * para o SUPER_ADMIN (§A.23) e mesmo assim é CONCEDÍVEL, pessoa a pessoa.
+   *
+   * SEM A ENTRADA NOMINAL AQUI, TIRAR O `@Roles` DAS CONTROLLERS ENTREGARIA OS SETE A TODO MASTER DE
+   * A&S: o `MenuGuard` deixa o MASTER passar por PERTENCER À ÁREA, sem marcação, e há MASTER na área
+   * AS em produção. Não sobraria decisão individual nenhuma para o diretor tomar, que é o ponto
+   * inteiro da regra dele.
+   *
+   * PINADA porque entrar aqui é decisão do diretor, nunca efeito colateral: a prova quebrar ao
+   * acrescentar um código é o comportamento desejado.
+   */
+  it("a lista é EXATAMENTE as Dicas, os Motivos De Descarte, os sete catálogos de A&S e a Ajuda", () => {
+    expect([...MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER].sort()).toEqual(
+      [
+        "dicas-documento",
+        // CENTRAL DE AJUDA, e é o único da lista que não é catálogo de configuração: ela não tem
+        // escrita para segurar (`operacoes: []`, o manual mora no frontend). Ela está aqui só para
+        // cumprir a §A.23 ao pé da letra, porque sem a entrada nominal todo MASTER nasceria com o
+        // menu por `codigosPadraoDoPapel`, que é concessão em massa decidida pela fábrica.
+        "ajuda",
+        "as-motivos-descarte",
+        "as-etapas",
+        "as-status-vaga",
+        "as-motivos-cancelamento",
+        "as-linhas-servico",
+        "as-segmentos",
+        "as-comerciais",
+        "as-motivos-reenvio",
+      ].sort(),
+    );
+  });
+
+  /**
    * ─ OS MOTIVOS DE DESCARTE, E POR QUE ESTA É A ÚNICA CASA QUE ATENDE AS DUAS EXIGÊNCIAS ───────
    *
    * O DIRETOR PEDIU DUAS COISAS AO MESMO TEMPO, e elas parecem opostas: o menu NASCE só para o
@@ -463,6 +485,54 @@ describe("menus que exigem marcação explícita do MASTER", () => {
     ]);
     expect(filtrarMenusPorPapel(["as-motivos-descarte"], "COMUM")).toEqual(["as-motivos-descarte"]);
     expect(baseDeMenusDoMaster(["as-motivos-descarte"])).toContain("as-motivos-descarte");
+  });
+
+  /**
+   * ══ CENTRAL DE AJUDA: NASCE FECHADA, E É CONCEDÍVEL (§A.23) ═════════════════════════════════════
+   *
+   * O QUE ESTE CASO TRAVA, e nenhuma das metades bastaria sozinha:
+   *  1. o menu não vem DE NASCENÇA para MASTER nem para COMUM. `codigosPadraoDoPapel` é o que o
+   *     `criar` de usuário grava e o que o grandfather do `seed-menus.ts` distribui, então é ela que
+   *     transformaria o registro em CONCESSÃO. Para o COMUM a trava é o grupo `ADMIN` (fora do padrão,
+   *     que é só `OPERACAO`); para o MASTER é a entrada nominal em
+   *     `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER`, sem a qual ele receberia a base inteira;
+   *  2. e mesmo assim ele é CONCEDÍVEL aos dois papéis, porque estar em qualquer uma das outras duas
+   *     listas faria a marcação do diretor ser descartada em silêncio (uma na leitura, outra na
+   *     gravação), que é o defeito medido em 26/09/2026.
+   *
+   * A ÁREA ENTRA NO MESMO CASO porque é ela que decide QUEM enxerga depois de concedido: o manual
+   * ensina o sistema INTEIRO, e carimbado só como ADM ele sumiria da barra do time de A&S mesmo
+   * liberado, já que a área é um TETO aplicado por cima da marcação.
+   */
+  it("a CENTRAL DE AJUDA nasce fechada (nem MASTER nem COMUM), segue concedível, e é das DUAS áreas", () => {
+    // 1. A PORTA DO NASCIMENTO, fechada nos dois papéis que não são o dono do menu (§A.23).
+    expect(codigosPadraoDoPapel("MASTER")).not.toContain("ajuda");
+    expect(codigosPadraoDoPapel("COMUM")).not.toContain("ajuda");
+    expect(MENUS_PADRAO_COMUM).not.toContain("ajuda");
+    // O SUPER_ADMIN é o dono do menu no dia em que ele nasce.
+    expect(codigosPadraoDoPapel("SUPER_ADMIN")).toContain("ajuda");
+    // A trava do COMUM é o GRUPO (o padrão é exatamente o grupo OPERACAO); a do MASTER é a nominal.
+    expect(MENUS.find((m) => m.codigo === "ajuda")!.grupo).toBe("ADMIN");
+    expect(masterPrecisaDeMarcacao("ajuda")).toBe(true);
+
+    // 2. E CONTINUA CONCEDÍVEL: nenhuma das duas listas que TRAVAM a concessão o contém, e a marcação
+    // sobrevive ao filtro por papel nos dois papéis que podem recebê-la.
+    expect(MENUS_SOMENTE_SUPER_ADMIN.has("ajuda")).toBe(false);
+    expect(MENUS_BLOQUEADOS_COMUM.has("ajuda")).toBe(false);
+    expect(restricaoDeConcessao("ajuda")).toBe("NENHUMA");
+    expect(filtrarMenusPorPapel(["ajuda"], "MASTER")).toEqual(["ajuda"]);
+    expect(filtrarMenusPorPapel(["ajuda"], "COMUM")).toEqual(["ajuda"]);
+    expect(baseDeMenusDoMaster(["ajuda"])).toContain("ajuda");
+
+    // 3. AS DUAS ÁREAS, como o `inicio`: o manual ensina os dois lados do sistema.
+    expect(areasDeNascimento(MENUS.find((m) => m.codigo === "ajuda")!)).toEqual(["ADM", "AS"]);
+    // E por CONTER ADM, ele fica fora da lista de quem nasce FORA da Admissão, como o `inicio`.
+    expect(MENUS_QUE_NASCEM_FORA_DA_ADM.has("ajuda")).toBe(false);
+
+    // 4. NÃO REIVINDICA OPERAÇÃO NENHUMA, e isso é o desenho: o manual mora no frontend, tipado, sem
+    // tabela, sem controller e sem rota de API. Se alguém acrescentar backend ao menu um dia, este
+    // caso quebra antes, e a reivindicação passa a ser uma decisão em vez de um efeito.
+    expect(MENUS.find((m) => m.codigo === "ajuda")!.operacoes).toEqual([]);
   });
 
   it("ADITIVA: nenhum menu FORA da lista passou a exigir marcação do MASTER", () => {
@@ -508,5 +578,70 @@ describe("menus que exigem marcação explícita do MASTER", () => {
     expect(codigosPadraoDoPapel("COMUM")).not.toContain("dicas-documento");
     // ...mas CONCEDÍVEL, ou seja, fora do bloqueio do COMUM.
     expect(MENUS_BLOQUEADOS_COMUM.has("dicas-documento")).toBe(false);
+  });
+});
+
+/**
+ * ══ A RESTRIÇÃO DE CONCESSÃO QUE A TELA DE PERMISSÕES CONSOME, DERIVADA E NUNCA DIGITADA ══════════
+ *
+ * ┌─ O DEFEITO QUE ESTA FUNÇÃO EXISTE PARA MATAR, medido em 26/09/2026 ─────────────────────────┐
+ * │ A tela de permissões guardava uma TERCEIRA cópia desta regra, escrita à mão dentro do       │
+ * │ componente, com DOIS códigos, enquanto o backend aplicava ONZE. As duas divergiram, e o     │
+ * │ resultado era o pior possível numa tela de concessão: a caixa aparecia MARCÁVEL, o diretor  │
+ * │ marcava, a tela salvava SEM RECLAMAR e o servidor descartava em silêncio.                    │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * OS TESTES ABAIXO AFIRMAM A DERIVAÇÃO, não os valores de hoje um por um: é a derivação que faz um
+ * menu novo nascer com a resposta certa sem ninguém lembrar de atualizar a tela, e é ela que impede a
+ * divergência de voltar. Um valor pinado à mão aqui seria a QUARTA cópia do mesmo problema.
+ */
+describe("a restrição de concessão que desce para a tela", () => {
+  it("todo menu do registro recebe uma resposta, e ela é um dos três valores", () => {
+    for (const c of TODOS_CODIGOS_MENU) {
+      expect(["NENHUMA", "SO_SUPER_ADMIN", "NAO_PARA_COMUM"], c).toContain(
+        restricaoDeConcessao(c),
+      );
+    }
+  });
+
+  it("é DERIVADA das duas listas, nos dois sentidos", () => {
+    for (const c of TODOS_CODIGOS_MENU) {
+      const r = restricaoDeConcessao(c);
+      if (MENUS_SOMENTE_SUPER_ADMIN.has(c)) expect(r, c).toBe("SO_SUPER_ADMIN");
+      else if (MENUS_BLOQUEADOS_COMUM.has(c)) expect(r, c).toBe("NAO_PARA_COMUM");
+      else expect(r, c).toBe("NENHUMA");
+    }
+  });
+
+  /**
+   * A ORDEM IMPORTA, e o caso existe de verdade: `usuarios` e `menu-areas` estão nas DUAS listas.
+   * Responder `NAO_PARA_COMUM` ali sugeriria que o MASTER receberia, que é falso, e a tela
+   * habilitaria a caixa para ele.
+   */
+  it("menu nas DUAS listas responde SO_SUPER_ADMIN, que é a mais forte", () => {
+    for (const c of ["usuarios", "menu-areas"]) {
+      expect(MENUS_SOMENTE_SUPER_ADMIN.has(c), c).toBe(true);
+      expect(MENUS_BLOQUEADOS_COMUM.has(c), c).toBe(true);
+      expect(restricaoDeConcessao(c)).toBe("SO_SUPER_ADMIN");
+    }
+  });
+
+  /**
+   * ═ `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER` NÃO ENTRA NA DERIVAÇÃO, E A AUSÊNCIA É O PONTO ═══════
+   *
+   * Ela não RESTRINGE a concessão, ela a EXIGE (o menu deixa de vir de graça pelo papel). Tratá-la
+   * como restrição desabilitaria na tela exatamente as caixas que o diretor precisa marcar, e os sete
+   * catálogos de A&S voltariam a ser inconcedíveis por outro caminho.
+   */
+  it("exigir marcação do MASTER NÃO é restrição: os menus dessa lista são concedíveis", () => {
+    for (const c of MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER) {
+      expect(restricaoDeConcessao(c), c).toBe("NENHUMA");
+    }
+  });
+
+  it("menu que não existe no registro responde NENHUMA, sem estourar", () => {
+    // A tela lê a TABELA, que pode ter uma linha que o código já não conhece (menu apagado do
+    // registro e ainda ativo no banco). Responder em vez de lançar mantém a tela de pé.
+    expect(restricaoDeConcessao("menu-que-nao-existe")).toBe("NENHUMA");
   });
 });

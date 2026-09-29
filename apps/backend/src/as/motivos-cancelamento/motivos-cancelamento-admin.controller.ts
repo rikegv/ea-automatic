@@ -1,5 +1,4 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post } from "@nestjs/common";
-import { Roles } from "../../auth/decorators";
 import {
   AtualizarMotivoCancelamentoVagaDto,
   CriarMotivoCancelamentoVagaDto,
@@ -9,15 +8,20 @@ import { MotivosCancelamentoVagaService } from "./motivos-cancelamento.service";
 /**
  * ─ A ADMINISTRAÇÃO DOS MOTIVOS DE CANCELAMENTO DE VAGA: A SUPERFÍCIE DE ESCRITA, E SÓ ELA ──────
  *
- * ┌─ `@Roles("SUPER_ADMIN")` NA PRÓPRIA CONTROLLER, E ELE NÃO É REDUNDANTE ────────────────────┐
- * │ O MENU SOZINHO NÃO SEGURA O MASTER, e isto está conferido no código, não suposto: o         │
- * │ `MenuGuard` deixa o MASTER passar por PERTENCER À ÁREA do menu, e há MASTER na área AS em    │
- * │ produção. Um menu de área AS, sozinho, entregaria a edição deste catálogo a eles.            │
+ * ┌─ QUEM SEGURA A PORTA É O MENU, NÃO O PAPEL (regra do diretor, 27/09/2026) ──────────────────┐
+ * │ O `@Roles("SUPER_ADMIN")` QUE MORAVA AQUI FOI REMOVIDO: o Super Admin concede QUALQUER tela │
+ * │ a QUALQUER usuário, e com o papel na classe a concessão do menu abria uma PORTA TRANCADA    │
+ * │ (403 já no `@Get` que a tela lê ao abrir), com a marcação descartada em silêncio.           │
  * │                                                                                             │
- * │ E O MOLDE MAIS PRÓXIMO ESTÁ ERRADO PARA ESTE CASO: `admin/motivos-declinio` não tem `@Roles` │
- * │ nenhum, e o `MenuGuard` é FAIL-OPEN para operação não reivindicada. Copiá-lo aqui deixaria a │
- * │ escrita aberta. O molde certo é `EtapasFunilAdminController`: quem segura rota é o `@Roles`, │
- * │ que é fail-closed no `RolesGuard`; o menu é a camada de UX que decide se o card aparece.     │
+ * │ A AUTORIDADE É O `MenuGuard`, que já reivindicava esta classe inteira                       │
+ * │ (`MotivosCancelamentoVagaAdminController.*`, menu `as-motivos-cancelamento`). A             │
+ * │ reivindicação NÃO é dispensável: o guard é FAIL-OPEN para operação não reivindicada, então  │
+ * │ sem ela remover o papel teria aberto a escrita a qualquer autenticado, que é exatamente o   │
+ * │ defeito do molde `admin/motivos-declinio`.                                                  │
+ * │                                                                                             │
+ * │ E O MASTER NÃO PASSA DE GRAÇA: o `MenuGuard` o deixa passar por PERTENCER À ÁREA, e há       │
+ * │ MASTER na área AS em produção. Quem fecha esse atalho é a entrada nominal do código em      │
+ * │ `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER`.                                                      │
  * └─────────────────────────────────────────────────────────────────────────────────────────────┘
  *
  * POR QUE ISSO IMPORTA MAIS DO QUE PARECE NUMA LISTA DE NOMES: é o NOME daqui que fica GRAVADO na
@@ -32,7 +36,6 @@ import { MotivosCancelamentoVagaService } from "./motivos-cancelamento.service";
  * §A.6: nomes de motivo e um flag. Nenhum dado pessoal em nenhuma destas rotas.
  */
 @Controller("admin/as/motivos-cancelamento")
-@Roles("SUPER_ADMIN")
 export class MotivosCancelamentoVagaAdminController {
   constructor(private readonly motivos: MotivosCancelamentoVagaService) {}
 

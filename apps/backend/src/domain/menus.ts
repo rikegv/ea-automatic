@@ -1,4 +1,4 @@
-import type { Area } from "@ea/shared-types";
+import type { Area, MenuRestricaoConcessao } from "@ea/shared-types";
 
 /**
  * REGISTRO DOS MENUS e o mapa OPERAÇÃO -> MENU (OST permissão de menu por usuário).
@@ -807,6 +807,111 @@ export const MENUS: MenuDef[] = [
     // segmentação inteira viraria decorativa.
     operacoes: [],
   },
+  {
+    /**
+     * CENTRAL DE AJUDA (Fase 0 da frente de ajuda): o manual do sistema, lido de dentro do sistema.
+     *
+     * ┌─ NÃO TEM BACKEND, E ISSO É DESENHO ──────────────────────────────────────────────────────┐
+     * │ O conteúdo do manual mora no FRONTEND, tipado, e não em banco: não há tabela, controller  │
+     * │ nem rota de API nesta fase. Daí `operacoes: []`, que aqui significa a coisa mais forte    │
+     * │ que essa lista pode significar: não existe operação de backend para reivindicar. Este     │
+     * │ menu governa a PORTA DA TELA (pelo `ROTA_MENU` do frontend) e nada mais.                   │
+     * └──────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * ── AS DUAS ÁREAS, como o `inicio`, e pelo mesmo motivo dele ────────────────────────────────
+     *
+     * `areas: ["ADM", "AS"]`. A área é um TETO aplicado DEPOIS da marcação: carimbado só como ADM,
+     * este menu sumiria da barra do time de A&S mesmo depois de o diretor liberá-lo, e o manual
+     * ensina o sistema INTEIRO, os dois lados. Declará-lo em uma área só esconderia a ajuda de
+     * metade do time, que é o oposto do que a frente existe para fazer. É a mesma razão do `inicio`,
+     * e a única outra entrada do registro nas duas áreas.
+     *
+     * Ele fica FORA de `MENUS_QUE_NASCEM_FORA_DA_ADM` de propósito, e pela mesma leitura que deixa o
+     * `inicio` fora: aquela lista é de quem nasce SEM a área ADM, não de quem também serve a A&S.
+     *
+     * ── GRUPO `ADMIN`, E ISSO NÃO É ARRUMAÇÃO DE GAVETA ─────────────────────────────────────────
+     *
+     * `MENUS_PADRAO_COMUM` é DERIVADO: todo menu de grupo `OPERACAO` que nasce na área ADM entra
+     * nele sozinho, e esse conjunto é concedido a todo usuário criado e a todo COMUM em qualquer
+     * execução do `backfill-menus-comum`. Nascido em `OPERACAO`, este menu se concederia SOZINHO, sem
+     * ninguém abrir a tela de liberação, que é exatamente o incidente que originou a §A.23. No grupo
+     * `ADMIN` ele fica fora do derivado por construção. É o mesmo argumento já escrito em
+     * `portal-links` e em `dicas-documento`.
+     *
+     * A CONSEQUÊNCIA HONESTA, registrada em vez de escondida: o card aparece no grupo Administração
+     * da barra, que não é onde se esperaria encontrar um manual. Mover o menu para OPERACAO é
+     * CONCESSÃO EM MASSA, não apresentação, então é decisão do diretor (§A.23), e não da fábrica.
+     *
+     * `ordem` 36: fecha o bloco de Administração da Admissão (o último era `dicas-documento`, 35) e
+     * não desloca nenhum menu que já está lá. O bloco de A&S começa em 49.
+     *
+     * ── §A.23: REGISTRO, E SÓ REGISTRO ─────────────────────────────────────────────────────────
+     *
+     * Entrar aqui faz o menu EXISTIR e ser SELECIONÁVEL na tela de liberação (é o convergedor de
+     * boot que o grava, e é o que evita o caso `clinicas` de 29/07/2026, em que a tela subiu no ar e
+     * não existia como opção). Nenhuma concessão acontece neste arquivo, nenhum seed foi rodado
+     * (`seed-menus.ts` e `backfill-menus-comum.ts` NÃO foram executados), e quem libera quem enxerga
+     * é o DIRETOR, usuário a usuário. Menu novo que não aparece para os demais NÃO é bug.
+     *
+     * ── E O MASTER TAMBÉM PRECISA DA MARCAÇÃO (`MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER`) ──────────
+     *
+     * O código está na lista nominal, e a escolha é deliberada porque o caminho oposto era
+     * defensável. O argumento de não exigir marcação é bom: manual não é permissão de OPERAR nada
+     * (`operacoes: []` prova isso), e esconder a ajuda de quem opera é o contrário do pedido.
+     *
+     * NÃO É ISSO QUE A LISTA FAZ, E É AÍ QUE O ARGUMENTO SE QUEBRA. Ficar fora dela não entrega o
+     * manual a quem OPERA: o COMUM não recebe o menu de nenhum dos dois jeitos (é grupo ADMIN, fora
+     * do padrão do COMUM). Quem receberia de graça é o MASTER, e só ele. Ou seja, a escolha real é
+     * "todo MASTER nasce com o menu" contra "o diretor marca quem vê", e a §A.23 responde essa
+     * pergunta com todas as letras: menu novo nasce só para o SUPER_ADMIN.
+     *
+     * E O CUSTO É ASSIMÉTRICO. Exigir a marcação custa UM CLIQUE do diretor por pessoa, e o menu
+     * segue CONCEDÍVEL a qualquer papel (por isso ele fica FORA de `MENUS_SOMENTE_SUPER_ADMIN` e de
+     * `MENUS_BLOQUEADOS_COMUM`, que TRAVARIAM a concessão em vez de a adiarem, uma na leitura e
+     * outra na gravação). Nascer aberto a todo MASTER é uma concessão que a FÁBRICA tomou, e
+     * desfazê-la depois custa código.
+     *
+     * NÃO HÁ RISCO DE 403 NENHUM NISTO, que é a objeção usual à lista: ela governa VISIBILIDADE, e
+     * este menu não reivindica operação alguma. O `inicio` resolve o caso dele por outro mecanismo
+     * (`MENU_SEMPRE_VISIVEL`), que é "sempre visível para todos".
+     *
+     * ══ ATUALIZAÇÃO DE 28/09/2026: O DIRETOR PEDIU A AJUDA VISÍVEL PARA TODOS ═════════════════
+     *
+     * "O menu Ajuda precisa aparecer no menu lateral, abaixo do Menu Gerencial, VISÍVEL PARA TODOS
+     * os usuários, sem precisar concessão: ajuda é pra todo mundo." É ordem explícita dele, que é o
+     * que a §A.23 exige para desviar do "menu novo nasce só para o SUPER_ADMIN". O bloco acima fica
+     * porque o raciocínio dele continua válido; o que mudou foi a decisão, e ela é registrada aqui em
+     * vez de apagar o histórico.
+     *
+     * ┌─ O QUE MUDOU E O QUE **NÃO** MUDOU, e a distinção importa para não arrastar uma na outra ──┐
+     * │ MUDOU: a BARRA LATERAL passou a desenhar o item "Ajuda" INCONDICIONALMENTE                  │
+     * │ (`components/shell/Sidebar.tsx`), fora de `temMenu`. É frontend puro, e é a porta que o      │
+     * │ diretor pediu.                                                                              │
+     * │                                                                                             │
+     * │ NÃO MUDOU NADA AQUI: este registro, a marcação nominal do MASTER e o CARD do `/ajuda` dentro │
+     * │ do Menu Gerencial (`admin/page.tsx`) continuam governados pelo menu `ajuda`, pessoa a        │
+     * │ pessoa. São DUAS portas para a mesma tela de leitura, e mexer numa não move a outra.         │
+     * │                                                                                             │
+     * │ A CONSEQUÊNCIA HONESTA, registrada porque o `seguranca` a levantou: a caixa do `ajuda` na    │
+     * │ tela de liberação passa a governar só o CARD, e não mais a barra. Isso é menos do que ela    │
+     * │ sugere. Usar `MENU_SEMPRE_VISIVEL` resolveria a coerência num lugar só, e NÃO foi feito de   │
+     * │ propósito: aquele conjunto é declarado e NUNCA consumido (ver `auth.controller.ts`), então   │
+     * │ ligá-lo hoje entregaria também o `inicio` a todo COMUM que não o tem, ou seja, mudaria o     │
+     * │ comportamento no ar de usuário real sem a OST pedir (§A.14). É decisão do diretor, em OST    │
+     * │ própria.                                                                                    │
+     * └───────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * A ROTA `/ajuda` JÁ ERA ABERTA a qualquer autenticado (fora de `ROTA_MENU`, no frontend), então
+     * nenhuma rota de API passou a ser alcançável: `operacoes: []` continua sendo literal.
+     */
+    codigo: "ajuda",
+    rotulo: "Central De Ajuda",
+    href: "/ajuda",
+    grupo: "ADMIN",
+    ordem: 36,
+    areas: ["ADM", "AS"],
+    operacoes: [],
+  },
   // ── Atração e Seleção ─────────────────────────────────────────────────────
   {
     /**
@@ -913,22 +1018,24 @@ export const MENUS: MenuDef[] = [
      * ETAPAS DO FUNIL (A&S): o gerenciador da lista de etapas, que deixou de ser enum e virou
      * catálogo (`as_etapas_funil`, migration 0100).
      *
-     * ┌─ ESTE MENU NÃO É O QUE SEGURA A PORTA, E ISSO PRECISA ESTAR ESCRITO ────────────────────┐
-     * │ Quem segura é o `@Roles("SUPER_ADMIN")` na `EtapasFunilAdminController`. O MENU SOZINHO  │
-     * │ NÃO SEGURARIA O MASTER: o `MenuGuard` deixa o MASTER passar por PERTENCER À ÁREA, e há   │
-     * │ MASTER na área AS em produção. Por isso o padrão aqui é o de `menu-areas` e `usuarios`   │
-     * │ (papel na controller), e não o do `ifractal` (menu sozinho).                              │
+     * ┌─ ESTE MENU É A AUTORIDADE DA ESCRITA (regra do diretor, 27/09/2026) ────────────────────┐
+     * │ O `@Roles("SUPER_ADMIN")` SAIU da `EtapasFunilAdminController`: o catálogo continua      │
+     * │ RESTRITO e passa a ser CONCEDÍVEL, pessoa a pessoa. Com o papel na classe, conceder o    │
+     * │ menu entregava uma porta trancada, e a marcação era descartada em silêncio na gravação.  │
      * │                                                                                          │
-     * │ A REIVINDICAÇÃO DA CONTROLLER DE ESCRITA FICA MESMO ASSIM, como SEGUNDA camada: o        │
-     * │ `MenuGuard` e o `RolesGuard` recusam pelo próprio motivo, e nenhum dos dois depende do    │
-     * │ outro estar certo. A controller de LEITURA (`EtapasFunilController`) fica FORA da lista   │
-     * │ de propósito: reivindicá-la daria 403 no funil para o consultor COMUM.                    │
+     * │ A REIVINDICAÇÃO ABAIXO É O QUE SEGURA A PORTA, e ela não é decorativa: o `MenuGuard` é   │
+     * │ FAIL-OPEN para operação que NINGUÉM reivindica, então tirar o `@Roles` sem ela teria     │
+     * │ aberto a rota a QUALQUER AUTENTICADO. As duas mudanças só fazem sentido juntas.          │
+     * │                                                                                          │
+     * │ O MASTER NÃO PASSA DE GRAÇA: o código está em `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER`, que │
+     * │ fecha o bypass de ÁREA (há MASTER na área AS em produção, e todos ganhariam o catálogo   │
+     * │ sozinhos). A controller de LEITURA (`EtapasFunilController`) fica FORA da lista de       │
+     * │ propósito: reivindicá-la daria 403 no funil para o consultor COMUM.                       │
      * └──────────────────────────────────────────────────────────────────────────────────────────┘
      *
-     * §A.23: NASCE SÓ PARA O SUPER_ADMIN, e entra também em `MENUS_SOMENTE_SUPER_ADMIN` (some da
-     * barra dos demais em vez de aparecer e dar 403) e em `MENUS_BLOQUEADOS_COMUM` (marcá-lo para
-     * um COMUM não concederia nada, então a tela nem oferece). O convergedor do boot REGISTRA o
-     * menu no catálogo e para por aí: quem libera quem enxerga é o diretor.
+     * §A.23: NASCE SÓ PARA O SUPER_ADMIN, e fica FORA de `MENUS_SOMENTE_SUPER_ADMIN` e de
+     * `MENUS_BLOQUEADOS_COMUM`, que travariam a concessão em vez de a adiarem. O convergedor do
+     * boot REGISTRA o menu no catálogo e para por aí: quem libera quem enxerga é o diretor.
      *
      * `areas: ["AS"]` é obrigatório: sem declarar, o default é ADM e o menu sumiria para o time de
      * A&S no dia em que o diretor decidisse liberá-lo.
@@ -984,14 +1091,14 @@ export const MENUS: MenuDef[] = [
      * daria 403 no seletor de motivo do modal para todo consultor COMUM, que é justamente quem
      * precisa ler a lista para cancelar uma vaga. Mesma separação que o catálogo de etapas já usa.
      *
-     * A REIVINDICAÇÃO É A SEGUNDA CAMADA, NÃO A PRIMEIRA: a autoridade da escrita é o
-     * `@Roles("SUPER_ADMIN")` na própria `MotivosCancelamentoVagaAdminController` (fail-closed no
-     * `RolesGuard`), porque o MENU NÃO SEGURA MASTER, que passa por pertencer à área. As duas
-     * camadas recusam por motivos independentes, e nenhuma depende de a outra estar certa.
+     * A REIVINDICAÇÃO É A AUTORIDADE, e não mais a segunda camada (regra do diretor, 27/09/2026):
+     * o `@Roles("SUPER_ADMIN")` SAIU da `MotivosCancelamentoVagaAdminController`, e quem recusa
+     * quem não tem o menu é o `MenuGuard`. Sem a reivindicação, tirar o papel teria ABERTO a rota a
+     * qualquer autenticado, porque o guard é fail-open para operação sem dono.
      *
-     * §A.23: NASCE SÓ PARA O SUPER_ADMIN. Entra em `MENUS_SOMENTE_SUPER_ADMIN` (some da barra dos
-     * demais em vez de aparecer e dar 403) e em `MENUS_BLOQUEADOS_COMUM` (marcá-lo para um COMUM não
-     * concederia nada, então a tela nem oferece). O convergedor do boot REGISTRA o menu no catálogo,
+     * §A.23: NASCE SÓ PARA O SUPER_ADMIN, e fica FORA de `MENUS_SOMENTE_SUPER_ADMIN` e de
+     * `MENUS_BLOQUEADOS_COMUM`, que travariam a concessão. O bypass de ÁREA do MASTER é fechado por
+     * `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER`. O convergedor do boot REGISTRA o menu no catálogo,
      * para ele existir e ser selecionável, e para por aí: quem libera quem enxerga é o diretor.
      *
      * `areas: ["AS"]` é obrigatório, e `grupo: "ADMIN"` acompanha o catálogo de etapas: as duas são
@@ -1050,11 +1157,11 @@ export const MENUS: MenuDef[] = [
      * NOME DE CLASSE, então reivindicá-la daria 403 no seletor de motivo para o consultor COMUM,
      * que é justamente quem reenvia shortlist.
      *
-     * A REIVINDICAÇÃO É A SEGUNDA CAMADA, NÃO A PRIMEIRA: a autoridade é o `@Roles("SUPER_ADMIN")`
-     * na própria `MotivosReenvioShortlistAdminController` (fail-closed no `RolesGuard`), porque o
-     * MENU NÃO SEGURA MASTER, que passa por pertencer à área. E ela também não é dispensável: o
-     * `MenuGuard` é FAIL-OPEN para operação não reivindicada, então sem esta linha a rota de escrita
-     * nasceria alcançável por qualquer autenticado que soubesse a URL.
+     * A REIVINDICAÇÃO É A AUTORIDADE (regra do diretor, 27/09/2026): o `@Roles("SUPER_ADMIN")` SAIU
+     * da `MotivosReenvioShortlistAdminController`, e o catálogo passou a ser CONCEDÍVEL pessoa a
+     * pessoa. Ela não é dispensável: o `MenuGuard` é FAIL-OPEN para operação não reivindicada, então
+     * sem esta linha a rota de escrita ficaria alcançável por qualquer autenticado que soubesse a
+     * URL. O bypass de ÁREA do MASTER é fechado por `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER`.
      *
      * REGISTRO, NÃO CONCESSÃO (§A.23): entrar aqui faz o menu EXISTIR e ser selecionável na tela de
      * permissão. Quem enxerga é decisão do diretor, e menu novo nasce só para o SUPER_ADMIN. Por
@@ -1081,10 +1188,11 @@ export const MENUS: MenuDef[] = [
      * STATUS DA VAGA (onda B2): o gerenciador da lista de status, que deixou de ser enum e virou
      * catálogo com PAPEL (`as_vaga_status`, migration 0102).
      *
-     * ┌─ ESTE MENU NÃO É O QUE SEGURA A PORTA, E AQUI ISSO PESA MAIS QUE NOS OUTROS DOIS ────────┐
-     * │ Quem segura é o `@Roles("SUPER_ADMIN")` na `VagaStatusAdminController`. O MENU SOZINHO   │
-     * │ NÃO SEGURARIA O MASTER: o `MenuGuard` o deixa passar por PERTENCER À ÁREA, e há MASTER na │
-     * │ área AS em produção.                                                                      │
+     * ┌─ ESTE MENU É O QUE SEGURA A PORTA, E AQUI ISSO PESA MAIS QUE NOS OUTROS ─────────────────┐
+     * │ O `@Roles("SUPER_ADMIN")` SAIU da `VagaStatusAdminController` (regra do diretor,          │
+     * │ 27/09/2026): quem recusa é o `MenuGuard`, pela reivindicação da classe inteira. O MENU    │
+     * │ SOZINHO NÃO SEGURARIA O MASTER, que passa por PERTENCER À ÁREA, e há MASTER na área AS em │
+     * │ produção: quem fecha esse atalho é `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER`, nominalmente.   │
      * │                                                                                           │
      * │ E O QUE ESTA TELA EDITA SÃO TRAVAS, não rótulos: ligar `recebeCandidato` num status       │
      * │ terminal devolve alocação a vaga encerrada (o furo de 09/09); desligar                    │
@@ -1097,12 +1205,11 @@ export const MENUS: MenuDef[] = [
      * │ Central de Vagas, para quem só precisa SABER quais status existem.                         │
      * └───────────────────────────────────────────────────────────────────────────────────────────┘
      *
-     * §A.23: NASCE SÓ PARA O SUPER_ADMIN. Entra também em `MENUS_SOMENTE_SUPER_ADMIN` (some da barra
-     * dos demais em vez de aparecer e dar 403) e em `MENUS_BLOQUEADOS_COMUM` (marcá-lo para um COMUM
-     * não concederia nada, então a tela nem oferece). O convergedor do boot REGISTRA o menu no
-     * catálogo, para ele existir e ser selecionável, e para por aí: quem libera quem enxerga é o
-     * diretor. O registro em código é o que evita o caso `clinicas` de 29/07/2026, em que a tela
-     * subiu no ar e não existia como opção na tela de permissões.
+     * §A.23: NASCE SÓ PARA O SUPER_ADMIN, e fica FORA de `MENUS_SOMENTE_SUPER_ADMIN` e de
+     * `MENUS_BLOQUEADOS_COMUM`, que travariam a concessão em vez de a adiarem. O convergedor do boot
+     * REGISTRA o menu no catálogo, para ele existir e ser selecionável, e para por aí: quem libera
+     * quem enxerga é o diretor. O registro em código é o que evita o caso `clinicas` de 29/07/2026,
+     * em que a tela subiu no ar e não existia como opção na tela de permissões.
      *
      * `areas: ["AS"]` é obrigatório, e `grupo: "ADMIN"` acompanha os outros dois catálogos do
      * módulo: são telas que CONFIGURAM listas de A&S, e o diretor quis as configurações juntas. Por
@@ -1135,15 +1242,15 @@ export const MENUS: MenuDef[] = [
      * OBRIGATÓRIA para publicar, isso não seria um campo vazio: seria a abertura de vaga inteira
      * travada para quem mais a usa.
      *
-     * A REIVINDICAÇÃO É A SEGUNDA CAMADA, NÃO A PRIMEIRA: a autoridade da escrita é o
-     * `@Roles("SUPER_ADMIN")` na própria `LinhasServicoAdminController` (fail-closed no
-     * `RolesGuard`), porque o MENU NÃO SEGURA MASTER, que passa por pertencer à área AS. As duas
-     * camadas recusam por motivos independentes, e nenhuma depende de a outra estar certa.
+     * A REIVINDICAÇÃO É A AUTORIDADE (regra do diretor, 27/09/2026): o `@Roles("SUPER_ADMIN")` SAIU
+     * da `LinhasServicoAdminController`, e quem recusa quem não tem o menu é o `MenuGuard`. O MENU
+     * SOZINHO NÃO SEGURA MASTER, que passa por pertencer à área AS: esse atalho é fechado
+     * nominalmente por `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER`.
      *
-     * §A.23: NASCE SÓ PARA O SUPER_ADMIN. Entra em `MENUS_SOMENTE_SUPER_ADMIN` (some da barra dos
-     * demais em vez de aparecer e dar 403) e em `MENUS_BLOQUEADOS_COMUM` (marcá-lo para um COMUM não
-     * concederia nada, então a tela nem oferece). O convergedor do boot REGISTRA o menu no catálogo,
-     * para ele existir e ser selecionável, e para por aí: quem libera quem enxerga é o diretor.
+     * §A.23: NASCE SÓ PARA O SUPER_ADMIN, e fica FORA de `MENUS_SOMENTE_SUPER_ADMIN` e de
+     * `MENUS_BLOQUEADOS_COMUM`, que travariam a concessão. O convergedor do boot REGISTRA o menu no
+     * catálogo, para ele existir e ser selecionável, e para por aí: quem libera quem enxerga é o
+     * diretor.
      *
      * `areas: ["AS"]` é obrigatório, e `grupo: "ADMIN"` acompanha os outros três catálogos do
      * módulo. Por nascer fora da ADM, o código entra também em `MENUS_QUE_NASCEM_FORA_DA_ADM`, que é
@@ -1167,6 +1274,10 @@ export const MENUS: MenuDef[] = [
      *
      * NÃO É DADO PESSOAL, e por isso a reivindicação cobre só a controller de escrita, como no molde:
      * a lista de ramos é inócua e o seletor do cadastro de cliente precisa lê-la.
+     *
+     * A REIVINDICAÇÃO É A AUTORIDADE (regra do diretor, 27/09/2026): o `@Roles("SUPER_ADMIN")` SAIU
+     * da `SegmentosAdminController`, o catálogo virou CONCEDÍVEL pessoa a pessoa, e o bypass de ÁREA
+     * do MASTER é fechado por `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER`.
      */
     codigo: "as-segmentos",
     rotulo: "Segmentos",
@@ -1181,7 +1292,7 @@ export const MENUS: MenuDef[] = [
      * COMERCIAIS (A&S, Onda E): as PESSOAS do comercial.
      *
      * ┌─ A REIVINDICAÇÃO É DIFERENTE DA DOS OUTROS CATÁLOGOS, E DE PROPÓSITO (§A.6) ──────────────────┐
-     * │ Os quatro catálogos vizinhos reivindicam só a `AdminController` e deixam a LEITURA aberta,    │
+     * │ Os catálogos vizinhos reivindicam só a `AdminController` e deixam a LEITURA aberta,           │
      * │ porque a lista deles é inócua (nomes de etapa, de status, de linha de serviço). **Este        │
      * │ catálogo guarda NOME DE PESSOA**, e leitura aberta entregaria a folha inteira do time          │
      * │ comercial a qualquer sessão válida, inclusive aos COMUM da Admissão, que não têm nada com A&S. │
@@ -1195,6 +1306,15 @@ export const MENUS: MenuDef[] = [
      * └────────────────────────────────────────────────────────────────────────────────────────────────┘
      *
      * §A.23: NASCE SÓ PARA O SUPER_ADMIN, como o vizinho.
+     *
+     * ┌─ E É O ÚNICO DOS SETE EM QUE A REIVINDICAÇÃO COBRE TAMBÉM A LEITURA ───────────────────────┐
+     * │ A `ComerciaisAdminController` tem um `@Get` que É a lista de pessoas, e não existe          │
+     * │ controller de leitura aberta ao lado dela (é o desenho descrito acima). O coringa           │
+     * │ `ComerciaisAdminController.*` cobre esse `@Get`, então tirar o `@Roles("SUPER_ADMIN")`      │
+     * │ (regra do diretor, 27/09/2026) NÃO abriu a folha do comercial: ela passou de "só            │
+     * │ SUPER_ADMIN" para "quem o diretor marcar", e continua fechada para todo o resto, inclusive  │
+     * │ para o MASTER sem marcação, por `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER`.                       │
+     * └────────────────────────────────────────────────────────────────────────────────────────────┘
      */
     codigo: "as-comerciais",
     rotulo: "Comerciais",
@@ -1397,6 +1517,55 @@ export const MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER = new Set<string>([
   // ÁREA do `MenuGuard`: há MASTER na área AS em produção, e todos ganhariam o catálogo sozinhos,
   // que é exatamente a decisão individual que o diretor pediu para poder tomar.
   "as-motivos-descarte",
+  /*
+   * ══ OS SETE CATÁLOGOS DE CONFIGURAÇÃO DE A&S (regra do diretor, 27/09/2026) ═══════════════════
+   *
+   * A REGRA NOVA, com todas as letras: o Super Admin concede QUALQUER tela a QUALQUER usuário. Não
+   * existe mais tela de configuração que ele não possa conceder, e é ele que decide, pessoa a
+   * pessoa, quem enxerga e quem configura o quê.
+   *
+   * ┌─ O DEFEITO QUE ISTO CONSERTA, MEDIDO, e ele era o pior possível numa tela de concessão ─────┐
+   * │ A tela de permissões OFERECIA a caixa marcável destes sete códigos, o diretor marcava, a    │
+   * │ tela salvava SEM RECLAMAR e o backend DESCARTAVA EM SILÊNCIO: `MENUS_SOMENTE_SUPER_ADMIN`   │
+   * │ era aplicada na GRAVAÇÃO (`auth/menus.service.ts`) e de novo na LEITURA                     │
+   * │ (`filtrarMenusPorPapel`). Ninguém via erro, e a pessoa simplesmente não recebia o acesso.   │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * ESTA É A ÚNICA CASA QUE ATENDE AS DUAS EXIGÊNCIAS AO MESMO TEMPO, e o molde é o
+   * `as-motivos-descarte` logo acima: o menu NASCE só para o SUPER_ADMIN (§A.23) e mesmo assim é
+   * CONCEDÍVEL. `MENUS_SOMENTE_SUPER_ADMIN` atenderia a primeira quebrando a segunda (remove o menu
+   * do `/auth/me` de quem não é SUPER_ADMIN, então a marcação seria gravada e não valeria nada), e
+   * `MENUS_BLOQUEADOS_COMUM` filtraria a concessão a um COMUM já na gravação.
+   *
+   * SEM ESTA ENTRADA NOMINAL, TIRAR O `@Roles` ENTREGARIA O CATÁLOGO A TODO MASTER DE A&S: o
+   * `MenuGuard` deixa o MASTER passar por PERTENCER À ÁREA, sem marcação nenhuma, e há MASTER na
+   * área AS em produção. Aí não sobraria decisão individual nenhuma para o diretor tomar, que é o
+   * ponto inteiro da regra dele.
+   */
+  "as-etapas",
+  "as-status-vaga",
+  "as-motivos-cancelamento",
+  "as-linhas-servico",
+  "as-segmentos",
+  "as-comerciais",
+  "as-motivos-reenvio",
+  /*
+   * ══ CENTRAL DE AJUDA: o único aqui que NÃO é catálogo de configuração ══════════════════════════
+   *
+   * Ela entra por um motivo diferente do dos nove de cima, e por isso a linha é separada: não há
+   * escrita para segurar (`operacoes: []`, o manual mora no frontend, tipado). O que esta entrada faz
+   * é só cumprir a §A.23 no ponto em que ela é literal: menu novo nasce só para o SUPER_ADMIN.
+   *
+   * SEM ELA, TODO MASTER NASCERIA COM O MENU, porque `codigosPadraoDoPapel("MASTER")` entrega a base
+   * inteira e é ela que o `criar` de usuário grava e o grandfather do `seed-menus.ts` distribui. Isso
+   * não é teto de área nem restrição de rota: é concessão em massa decidida pela fábrica, que é
+   * exatamente o que a §A.23 proíbe.
+   *
+   * E O MENU SEGUE CONCEDÍVEL A QUALQUER PAPEL, inclusive ao COMUM: o código fica FORA de
+   * `MENUS_SOMENTE_SUPER_ADMIN` e de `MENUS_BLOQUEADOS_COMUM`, que travariam a concessão do diretor
+   * em vez de a adiarem. O argumento longo está no registro do menu.
+   */
+  "ajuda",
 ]);
 
 /** O menu exige marcação EXPLÍCITA mesmo de um MASTER? Consumida pelo `MenuGuard`. */
@@ -1461,28 +1630,21 @@ export const MENUS_BLOQUEADOS_COMUM = new Set<string>([
   "entradas-pandape",
   "usuarios",
   "menu-areas",
-  // A escrita do catálogo de etapas é `@Roles("SUPER_ADMIN")`: marcar para um COMUM só faria o
-  // menu APARECER e o backend BARRAR, que é o chamado que esta lista existe para não gerar.
-  "as-etapas",
-  // Idem: a escrita é `@Roles("SUPER_ADMIN")`, então marcar para um COMUM só faria o menu
-  // APARECER e o backend BARRAR.
-  "as-motivos-cancelamento",
-  // `as-motivos-descarte` ESTEVE AQUI E SAIU, e a saída é decisão do diretor, não descuido. Ele
-  // entrou como conserto de omissão enquanto a escrita era `@Roles("SUPER_ADMIN")`: ali, marcar o
-  // menu para um COMUM só faria a tela aparecer e o backend barrar. A decisão seguinte foi que o
-  // catálogo fica CONCEDÍVEL, e o `@Roles` saiu da controller (quem segura a rota passou a ser o
-  // `MenuGuard`). Mantê-lo nesta lista TRAVARIA a concessão a um COMUM, que é o oposto do pedido.
-  // A restrição dele continua inteira, em outra casa: `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER`.
-  "as-status-vaga",
-  // Decisão 6 do diretor: a escrita é `@Roles("SUPER_ADMIN")`, então marcar para um COMUM só faria
-  // o menu APARECER e o backend BARRAR.
-  "as-motivos-reenvio",
-  // Onda C, mesma razão: a escrita é `@Roles("SUPER_ADMIN")`, então marcar para um COMUM só faria o
-  // menu APARECER e o backend BARRAR.
-  "as-linhas-servico",
-  // ONDA E: marcar qualquer um dos dois para um COMUM não deve conceder nada.
-  "as-segmentos",
-  "as-comerciais",
+  /*
+   * ══ OS SETE CATÁLOGOS DE A&S SAÍRAM DAQUI (regra do diretor, 27/09/2026) ══════════════════════
+   *
+   * `as-etapas`, `as-status-vaga`, `as-motivos-cancelamento`, `as-linhas-servico`, `as-segmentos`,
+   * `as-comerciais` e `as-motivos-reenvio` ESTAVAM NESTA LISTA e saíram, junto com o
+   * `as-motivos-descarte`, que já havia saído antes pela mesma decisão.
+   *
+   * O ARGUMENTO QUE OS TROUXE AQUI ERA CORRETO E DEIXOU DE VALER: enquanto a escrita era
+   * `@Roles("SUPER_ADMIN")` na controller, marcar o menu para um COMUM só faria a tela APARECER e o
+   * backend BARRAR. O `@Roles` saiu das sete controllers de administração, e quem segura a rota
+   * passou a ser o `MenuGuard`: mantê-los aqui TRAVARIA a concessão a um COMUM na gravação, que é
+   * exatamente o descarte silencioso que a frente foi feita para acabar.
+   *
+   * A RESTRIÇÃO DELES CONTINUA INTEIRA, em outra casa: `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER`.
+   */
 ]);
 
 /**
@@ -1503,31 +1665,31 @@ export const MENUS_BLOQUEADOS_COMUM = new Set<string>([
  * regras de visibilidade por papel lado a lado, no mesmo lugar onde já se procura por elas.
  */
 export const MENUS_SOMENTE_SUPER_ADMIN = new Set<string>([
+  /*
+   * SOBRARAM DUAS, E A RAZÃO DELAS É DIFERENTE DA DOS SETE QUE SAÍRAM (regra do diretor,
+   * 27/09/2026): estas são as telas que CONCEDEM permissão. `usuarios` marca menu por usuário e
+   * cadastra área; `menu-areas` escreve a ÁREA de cada menu, que é o teto aplicado por cima de tudo.
+   *
+   * TORNÁ-LAS CONCEDÍVEIS CRIARIA CAMINHO DE AUTO-CONCESSÃO: quem recebesse passaria a poder
+   * conceder a si mesmo qualquer outro menu, e a decisão individual do diretor deixaria de ser dele.
+   * É por isso que a regra "o Super Admin concede QUALQUER tela" não as alcança, e é por isso que as
+   * duas seguem `@Roles("SUPER_ADMIN")` na controller, sem menu reivindicando operação nenhuma.
+   */
   "usuarios",
   "menu-areas",
-  // Mesma razão das duas de cima: a controller é `@Roles` SUPER_ADMIN, então mostrar o card ao
-  // Master seria mostrar a porta e trancá-la. Quem edita esta lista edita o vocabulário em que todo
-  // o histórico de seleção está escrito.
-  "as-etapas",
-  "as-motivos-cancelamento",
-  // `as-motivos-descarte` ESTEVE AQUI E SAIU, pela mesma decisão do diretor. Esta lista REMOVE o
-  // menu do resultado de `filtrarMenusPorPapel`, ou seja, torna o menu IMPOSSÍVEL DE CONCEDER: o
-  // diretor marcaria a pessoa na tela de permissões e o `/auth/me` dela devolveria a lista sem o
-  // menu. Era o certo enquanto a rota era `@Roles("SUPER_ADMIN")` (mostrar a porta e trancá-la é
-  // pior do que não mostrar), e passou a ser o errado quando a rota virou concedível pelo menu.
-  // O NASCIMENTO CONTINUA FECHADO (§A.23) sem ela: `codigosPadraoDoPapel` não entrega o menu a
-  // MASTER nenhum (`baseDeMenusDoMaster` o esconde) nem a COMUM (não é do grupo OPERACAO), e o
-  // `MenuGuard` exige a marcação nominal. Quem vê e quem edita passa a ser só quem o diretor marcar.
-  "as-status-vaga",
-  // Decisão 6 do diretor: a controller de escrita é `@Roles` SUPER_ADMIN, então mostrar o card ao
-  // Master seria mostrar a porta e trancá-la.
-  "as-motivos-reenvio",
-  // Onda C: quem edita esta lista edita a CLASSIFICAÇÃO da operação inteira, e o rótulo renomeado
-  // reescreve o nome da linha em toda vaga que já aponta para ela.
-  "as-linhas-servico",
-  // ONDA E: os dois nascem só para o SUPER_ADMIN, como os quatro catálogos vizinhos.
-  "as-segmentos",
-  "as-comerciais",
+  /*
+   * OS SETE CATÁLOGOS DE A&S SAÍRAM DAQUI, e saíram porque esta lista é aplicada ao RESULTADO por
+   * `filtrarMenusPorPapel`: ela REMOVE o menu de quem não é SUPER_ADMIN, ou seja, torna o menu
+   * IMPOSSÍVEL DE CONCEDER. O diretor marcaria a pessoa na tela de permissões e o `/auth/me` dela
+   * devolveria a lista sem o menu, em silêncio. Era o certo enquanto as rotas eram
+   * `@Roles("SUPER_ADMIN")` (mostrar a porta e trancá-la é pior do que não mostrar), e passou a ser
+   * o errado quando elas viraram concedíveis pelo menu.
+   *
+   * O NASCIMENTO CONTINUA FECHADO (§A.23) sem ela: `codigosPadraoDoPapel` não entrega o menu a
+   * MASTER nenhum (`baseDeMenusDoMaster` o esconde, pela entrada em
+   * `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER`) nem a COMUM (não é do grupo OPERACAO), e o `MenuGuard`
+   * exige a marcação nominal. Quem vê e quem edita passa a ser só quem o diretor marcar.
+   */
 ]);
 
 /**
@@ -1538,6 +1700,34 @@ export const MENUS_SOMENTE_SUPER_ADMIN = new Set<string>([
 export function filtrarMenusPorPapel(codigos: Iterable<string>, papel: string): string[] {
   if (papel === "SUPER_ADMIN") return [...codigos];
   return [...codigos].filter((c) => !MENUS_SOMENTE_SUPER_ADMIN.has(c));
+}
+
+/**
+ * ─ A RESTRIÇÃO DE CONCESSÃO DE UM MENU, DERIVADA DAS LISTAS ACIMA ──────────────────────────────
+ *
+ * ┌─ POR QUE ELA É DERIVADA, E NUNCA DIGITADA ─────────────────────────────────────────────────┐
+ * │ A tela de permissões guardava uma TERCEIRA cópia desta regra, escrita à mão dentro do       │
+ * │ componente, com DOIS códigos, enquanto o backend aplicava ONZE. As duas divergiram, e o     │
+ * │ resultado foi o pior possível numa tela de concessão: a caixa aparecia marcável, o diretor  │
+ * │ marcava, a tela salvava sem reclamar e o servidor descartava em silêncio.                    │
+ * │                                                                                              │
+ * │ DERIVAR É O QUE FAZ UM MENU NOVO NASCER COM A RESPOSTA CERTA sem ninguém lembrar de          │
+ * │ atualizar a tela: entrar numa das duas listas passa a mudar a tela na mesma linha em que     │
+ * │ muda o guard, que é a única forma de a divergência não voltar.                               │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * A ORDEM IMPORTA: `SO_SUPER_ADMIN` é mais forte e vem primeiro. Um menu nas duas listas é
+ * impossível de conceder a quem quer que seja, e dizer "não para o COMUM" sugeriria que o MASTER
+ * receberia, que é falso.
+ *
+ * `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER` NÃO ENTRA AQUI DE PROPÓSITO: ela não restringe a concessão,
+ * ela EXIGE a concessão (o menu deixa de vir de graça pelo papel). Mostrá-la na tela como restrição
+ * desabilitaria exatamente as caixas que o diretor precisa marcar.
+ */
+export function restricaoDeConcessao(codigo: string): MenuRestricaoConcessao {
+  if (MENUS_SOMENTE_SUPER_ADMIN.has(codigo)) return "SO_SUPER_ADMIN";
+  if (MENUS_BLOQUEADOS_COMUM.has(codigo)) return "NAO_PARA_COMUM";
+  return "NENHUMA";
 }
 
 /**

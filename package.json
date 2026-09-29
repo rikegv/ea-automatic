@@ -15,6 +15,11 @@
     "typecheck": "pnpm -r --if-present typecheck",
     "test": "pnpm -r --if-present test",
     "build": "pnpm -r --if-present build",
+    "ajuda:capturar": "LD_LIBRARY_PATH=/home/henrique/.ea-harness/libs/root/usr/lib/x86_64-linux-gnu apps/backend/node_modules/.bin/tsx tools/ajuda/src/bin/capturar.ts",
+    "ajuda:conferir": "LD_LIBRARY_PATH=/home/henrique/.ea-harness/libs/root/usr/lib/x86_64-linux-gnu apps/backend/node_modules/.bin/tsx tools/ajuda/src/bin/conferir.ts",
+    "ajuda:cobertura": "LD_LIBRARY_PATH=/home/henrique/.ea-harness/libs/root/usr/lib/x86_64-linux-gnu apps/backend/node_modules/.bin/tsx tools/ajuda/src/bin/cobertura.ts",
+    "ajuda:registro": "apps/backend/node_modules/.bin/tsx tools/ajuda/src/bin/registro.ts",
+    "ajuda:typecheck": "tsc -p tools/ajuda/tsconfig.json",
     "infra:up": "docker compose -f infra/docker-compose.yml --env-file infra/.env up -d",
     "infra:down": "docker compose -f infra/docker-compose.yml --env-file infra/.env down",
     "infra:logs": "docker compose -f infra/docker-compose.yml logs -f"

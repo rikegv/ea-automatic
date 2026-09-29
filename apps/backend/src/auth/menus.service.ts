@@ -2,7 +2,7 @@ import { Inject, Injectable } from "@nestjs/common";
 import { and, eq, inArray } from "drizzle-orm";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
-import type { Area } from "@ea/shared-types";
+import type { Area, MenuCatalogoItem } from "@ea/shared-types";
 import { menus, usuarioAreas, usuarioMenus } from "../db/schema";
 import {
   AREAS_DE_NASCIMENTO,
@@ -11,6 +11,7 @@ import {
   MENUS_SOMENTE_SUPER_ADMIN,
   TODOS_CODIGOS_MENU,
   planejarSelecaoDeMenus,
+  restricaoDeConcessao,
 } from "../domain/menus";
 import { MenuAreasService } from "./menu-areas.service";
 
@@ -92,8 +93,24 @@ export class MenusService {
    * registro em código; a fonte da autorização mudou de lugar e este é um dos consumidores. A tela de
    * permissão do usuário usa esse campo para desabilitar o menu que está fora da área da pessoa, e ela
    * precisa refletir o que o guard vai decidir, não o que o código dizia na hora do build.
+   *
+   * ┌─ A `restricao` VEM DAQUI, DERIVADA, e é ela que mata o defeito medido em 26/09/2026 ────────┐
+   * │ A tela de permissões guardava uma TERCEIRA cópia da regra de concessão, escrita à mão no    │
+   * │ componente, com DOIS códigos, enquanto o backend aplicava ONZE. As duas divergiram, e o     │
+   * │ resultado era o pior possível: a caixa aparecia marcável, o diretor marcava, a tela salvava │
+   * │ sem reclamar e a gravação descartava em silêncio.                                           │
+   * │                                                                                             │
+   * │ DERIVADA DE `restricaoDeConcessao` (`domain/menus`), NUNCA digitada: é a MESMA fonte que a  │
+   * │ gravação (`definirMenusDoUsuario`, `salvarSelecaoDaTela`) e a leitura                        │
+   * │ (`filtrarMenusPorPapel`) consultam, então menu novo nasce com a resposta certa sem ninguém  │
+   * │ lembrar de atualizar a tela. A tela deixa de ter opinião: desabilita o que vier restrito e  │
+   * │ escreve o motivo.                                                                            │
+   * │                                                                                             │
+   * │ VALE PARA OS DOIS RAMOS, inclusive o fallback: a restrição é do CÓDIGO, não da tabela, e    │
+   * │ derivá-la só no caminho normal deixaria a base recém-migrada mentindo pelo ramo de exceção. │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
    */
-  async catalogo() {
+  async catalogo(): Promise<MenuCatalogoItem[]> {
     const linhas = await this.db
       .select({
         codigo: menus.codigo,
@@ -117,10 +134,15 @@ export class MenusService {
         href,
         grupo,
         ordem,
-        areas: AREAS_DE_NASCIMENTO.get(codigo) ?? ["ADM"],
+        areas: (AREAS_DE_NASCIMENTO.get(codigo) ?? ["ADM"]) as Area[],
+        restricao: restricaoDeConcessao(codigo),
       }));
     }
-    return linhas.map((m) => ({ ...m, areas: (m.areas ?? []) as Area[] }));
+    return linhas.map((m) => ({
+      ...m,
+      areas: (m.areas ?? []) as Area[],
+      restricao: restricaoDeConcessao(m.codigo),
+    }));
   }
 
   /**

@@ -1,7 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AREA, AREA_LABEL, type Area, type Papel } from "@ea/shared-types";
+import {
+  AREA,
+  AREA_LABEL,
+  type Area,
+  type MenuCatalogoItem,
+  type MenuRestricaoConcessao,
+  type Papel,
+} from "@ea/shared-types";
 import { apiFetch, ApiError } from "@/lib/api";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
@@ -16,22 +23,58 @@ import { Icon } from "@/components/ui/Icon";
  * fora da área do usuário não é acessível nem que esteja marcado. Pôr a área depois da lista faria a
  * pessoa marcar primeiro e descobrir a regra depois.
  */
-interface MenuCat {
-  codigo: string;
-  rotulo: string;
-  href: string;
-  grupo: string;
-  ordem: number;
-  /** Áreas que enxergam este menu. Vem do registro em código, via backend. */
-  areas?: Area[];
-}
+/**
+ * O ITEM DO CATÁLOGO VEM DO CONTRATO COMPARTILHADO (`MenuCatalogoItem`), e a `restricao` é a régua
+ * de habilitar a caixa. O tipo local que existia aqui era a cópia que deixava a tela inventar a
+ * regra.
+ *
+ * A `restricao` é OPCIONAL SÓ NA LEITURA, de propósito: enquanto a versão do backend em pé ainda não
+ * devolve o campo, a resposta chega sem ele, e um `undefined` lido como restrição bloquearia TODA a
+ * lista. Ausente é tratado como `NENHUMA` (ver `restricaoDe`), que é o comportamento da regra do
+ * diretor de 27/09/2026: menu é concedível a qualquer usuário, salvo o que o servidor marcar.
+ */
+type MenuCat = Omit<MenuCatalogoItem, "restricao"> & { restricao?: MenuRestricaoConcessao };
 
 /**
- * Menus que NÃO podem ser marcados para um COMUM: Diagnóstico e Usuários têm a controller @Roles
- * admin-only no backend, então marcar aqui só faria o menu aparecer e a tela barrar os dados. O
- * backend também filtra ao salvar (defesa em profundidade); aqui a caixa nasce desabilitada.
+ * A REGRA NÃO MORA MAIS AQUI. Antes esta tela guardava `BLOQUEADOS_COMUM`, uma lista de DOIS códigos
+ * escrita à mão, enquanto o backend aplicava uma de ONZE mais a dos exclusivos do Super Admin. As
+ * duas divergiram, e o efeito era o pior possível numa tela de concessão: a caixa aparecia marcável,
+ * o diretor marcava, a tela salvava sem reclamar e o servidor descartava em silêncio. A régua agora
+ * desce do servidor POR MENU, e o único trabalho da tela é cruzar com o papel do alvo e ESCREVER O
+ * MOTIVO.
  */
-const BLOQUEADOS_COMUM = new Set<string>(["diagnostico", "usuarios"]);
+function restricaoDe(m: MenuCat): MenuRestricaoConcessao {
+  return m.restricao ?? "NENHUMA";
+}
+
+/** Por que esta caixa não pode ser marcada para ESTE usuário, ou `null` quando pode. */
+function motivoDaRestricao(
+  m: MenuCat,
+  papel: Papel,
+): { titulo: string; etiqueta: string } | null {
+  switch (restricaoDe(m)) {
+    case "SO_SUPER_ADMIN":
+      // A marcação não vale para outro papel (hoje, as telas que concedem permissão): para um Master
+      // ou um Comum ela seria aceita na tela e ignorada no servidor.
+      return papel === "SUPER_ADMIN"
+        ? null
+        : {
+            titulo:
+              "Restrito ao Super Admin: este menu não pode ser liberado para outro papel, e marcar aqui não daria o acesso.",
+            etiqueta: "somente super admin",
+          };
+    case "NAO_PARA_COMUM":
+      return papel === "COMUM"
+        ? {
+            titulo:
+              "Restrito à administração: não pode ser liberado para o perfil Comum, e marcar aqui não daria o acesso.",
+            etiqueta: "somente administração",
+          }
+        : null;
+    default:
+      return null;
+  }
+}
 
 export function ConfigMenusModal({
   usuario,
@@ -224,7 +267,10 @@ export function ConfigMenusModal({
                   // sumir sem explicação vira chamado, e a pessoa não entende por que o menu que ela
                   // procura não está na lista. Aqui o motivo aparece no `title` e no rótulo lateral.
                   const foraDaArea = !naArea(m);
-                  const bloqueado = foraDaArea || (!ehAdmin && BLOQUEADOS_COMUM.has(m.codigo));
+                  // O TETO DE ÁREA VEM PRIMEIRO porque é o mais forte: menu de outra área não é
+                  // alcançável nem que a restrição de papel permitisse.
+                  const restricao = foraDaArea ? null : motivoDaRestricao(m, usuario.papel);
+                  const bloqueado = foraDaArea || restricao !== null;
                   return (
                     <label
                       key={m.codigo}
@@ -237,9 +283,7 @@ export function ConfigMenusModal({
                       title={
                         foraDaArea
                           ? "Este menu é de outra área. Marque a área correspondente acima para liberá-lo."
-                          : bloqueado
-                            ? "Restrito à administração: não pode ser liberado para o perfil Comum."
-                            : undefined
+                          : (restricao?.titulo ?? undefined)
                       }
                     >
                       <input
@@ -251,11 +295,7 @@ export function ConfigMenusModal({
                       />
                       <span className="font-semibold">{m.rotulo}</span>
                       <span className="ml-auto text-[11.5px] text-faint">
-                        {foraDaArea
-                          ? "outra área"
-                          : bloqueado
-                            ? "somente administração"
-                            : m.href}
+                        {foraDaArea ? "outra área" : (restricao?.etiqueta ?? m.href)}
                       </span>
                     </label>
                   );

@@ -47,6 +47,18 @@ export const ADMIN_MENUS = [
   "usuarios",
   "menu-areas",
   "assinante-empresa",
+  /*
+   * CENTRAL DE AJUDA: o MESMO caso do `ifractal` logo acima, e pelo mesmo motivo. A TELA vive FORA de
+   * `/admin` (é o manual, lido por quem opera), mas a PORTA dela é um card do hub, porque o menu
+   * nasce no grupo de Administração. Sem esta linha, quem tiver SÓ este menu não conseguiria abrir a
+   * camada para chegar ao card, e o menu ficaria liberado e inalcançável, que é o sintoma que este
+   * arquivo existe para não deixar acontecer.
+   *
+   * §A.23: isto NÃO concede nada a ninguém. Só quem JÁ tem o menu `ajuda` é alcançado, e hoje esse
+   * conjunto é o SUPER_ADMIN, porque menu novo nasce só para ele e nenhum seed foi rodado. Quem
+   * libera para os demais é o diretor.
+   */
+  "ajuda",
 ] as const;
 
 /** Tem ao menos um menu que abre a camada de administração? */

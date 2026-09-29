@@ -3,7 +3,7 @@ import { ForbiddenException, type ExecutionContext } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
 import type { Papel } from "@ea/shared-types";
 import { describe, expect, it } from "vitest";
-import { RolesGuard } from "../auth/guards/roles.guard";
+import { MenuGuard } from "../auth/guards/menu.guard";
 import type { MenusService } from "../auth/menus.service";
 import { MenuAreasService } from "../auth/menu-areas.service";
 import {
@@ -11,6 +11,8 @@ import {
   MENUS_BLOQUEADOS_COMUM,
   MENUS_QUE_NASCEM_FORA_DA_ADM,
   MENUS_SOMENTE_SUPER_ADMIN,
+  codigosPadraoDoPapel,
+  masterPrecisaDeMarcacao,
   menuDaOperacao,
 } from "../domain/menus";
 import { menus as tabelaMenus } from "../db/schema";
@@ -134,9 +136,29 @@ function menuAreasReal(): MenuAreasService {
  * continuaria escapando. Com as duas, o que decide é a interseção, e a interseção só falha se a
  * operação não tiver área nenhuma.
  */
-function guardReal(): RolesGuard {
-  const menus = { areasDoUsuario: async () => new Set(["AS", "ADM"]) } as unknown as MenusService;
-  return new RolesGuard(new Reflector(), menus, menuAreasReal());
+/**
+ * ─ O GUARD QUE DECIDE PASSOU A SER O `MenuGuard` (regra do diretor, 27/09/2026) ─────────────────
+ *
+ * O `@Roles("SUPER_ADMIN")` saiu das controllers de administração dos catálogos de A&S, porque o
+ * Super Admin concede QUALQUER tela a QUALQUER usuário e o papel na classe abria uma porta trancada.
+ * Este harness trocou de guard junto, senão passaria a medir um guard que já não governa a rota.
+ *
+ * O `MenuAreasService` REAL, com o dublê do banco, CONTINUA no lugar, e é o que este arquivo tem de
+ * mais valioso: é ele que faz o teto de ÁREA ser resolvido a partir do registro em vez de fixado no
+ * dublê, e é assim que um menu declarado na área errada é pego aqui.
+ *
+ * O usuário recebe as áreas por parâmetro (`AS` por padrão): o teto de área é conferido ANTES da
+ * marcação, então um caso com a área errada seria recusado por OUTRO motivo e não falaria da
+ * concessão, que é o que está em jogo depois da regra nova.
+ */
+function guardReal(codigos: string[] = [], areasDoUsuario: string[] = ["AS", "ADM"]): MenuGuard {
+  const menus = {
+    permissaoDoUsuario: async () => ({
+      codigos: new Set(codigos),
+      areas: new Set(areasDoUsuario),
+    }),
+  } as unknown as MenusService;
+  return new MenuGuard(new Reflector(), menus, menuAreasReal());
 }
 
 function contexto(
@@ -175,7 +197,7 @@ describe("controle: o harness funciona contra uma superfície que JÁ existe", (
     expect(acharPorRota(ETAPAS_ADMIN)).not.toBeNull();
   });
 
-  it("o guard real barra o MASTER na escrita das etapas", async () => {
+  it("o guard real barra o MASTER SEM marcação na escrita das etapas", async () => {
     const admin = exigirPorRota(ETAPAS_ADMIN);
     const handler = handlersDe(admin)[0]!;
     await expect(
@@ -233,7 +255,7 @@ describe("o catálogo de linhas de serviço tem escrita e leitura SEPARADAS", ()
 // 2. A ESCRITA É DO SUPER_ADMIN, MEDIDA PELO GUARD DE VERDADE
 // ═══════════════════════════════════════════════════════════════════════════════════════════════
 
-describe("a escrita do catálogo de linhas de serviço é do SUPER_ADMIN, e de mais ninguém", () => {
+describe("a escrita do catálogo de linhas de serviço é de quem o diretor marcar", () => {
   /**
    * ─ O LAÇO SAI DO PROTÓTIPO, E NÃO DE UMA LISTA DIGITADA ──────────────────────────────────────
    * Rota de escrita que alguém acrescentar amanhã já nasce dentro do teste, sem ninguém lembrar de
@@ -244,27 +266,57 @@ describe("a escrita do catálogo de linhas de serviço é do SUPER_ADMIN, e de m
     expect(handlersDe(exigirPorRota(ROTA_ADMIN)).length).toBeGreaterThan(0);
   });
 
-  it("o COMUM é barrado em TODOS os handlers de escrita", async () => {
+  /**
+   * O CASO PROVA DUAS COISAS DE UMA VEZ: que a rota é fechada a quem não foi marcado, e que ela NÃO
+   * FICOU ABERTA quando o `@Roles` saiu. O usuário tem um menu de A&S na mão (`as-vagas`), só não tem
+   * ESTE: faltando a reivindicação, o `MenuGuard` é fail-open e devolveria `true` aqui.
+   */
+  it("o COMUM SEM o menu é barrado em TODOS os handlers de escrita", async () => {
     const admin = exigirPorRota(ROTA_ADMIN);
     for (const handler of handlersDe(admin)) {
       await expect(
-        guardReal().canActivate(contexto(admin as never, handler, "COMUM")),
-        `escrita.${handler} para COMUM`,
+        guardReal(["as-vagas"]).canActivate(contexto(admin as never, handler, "COMUM")),
+        `escrita.${handler} para COMUM sem o menu`,
       ).rejects.toBeInstanceOf(ForbiddenException);
     }
   });
 
+  /** E o COMUM MARCADO escreve: é a metade que a regra do diretor de 27/09/2026 acrescentou. */
+  it("o COMUM COM o menu concedido escreve em TODOS os handlers", async () => {
+    const admin = exigirPorRota(ROTA_ADMIN);
+    const menu = codigoDoMenuDoCatalogo();
+    for (const handler of handlersDe(admin)) {
+      await expect(
+        guardReal([menu]).canActivate(contexto(admin as never, handler, "COMUM")),
+        `escrita.${handler} para COMUM com o menu`,
+      ).resolves.toBe(true);
+    }
+  });
+
   /**
-   * O CASO QUE O MENU NÃO PEGA, e é o motivo inteiro deste bloco existir: o MASTER atravessa o
-   * `MenuGuard` por ser da área. Se o `@Roles` listar MASTER (ou não existir), ele edita.
+   * O CASO QUE O MENU SOZINHO NÃO PEGA, e é o motivo inteiro deste bloco existir: o MASTER atravessa
+   * o `MenuGuard` por ser da ÁREA, sem marcação nenhuma. Quem fecha esse atalho é a entrada nominal
+   * do código em `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER`; sem ela este caso resolve `true` sozinho e
+   * todo MASTER de A&S edita o catálogo, sem o diretor decidir nada.
    */
-  it("o MASTER é barrado em TODOS os handlers de escrita (o menu sozinho deixaria passar)", async () => {
+  it("o MASTER SEM marcação é barrado em TODOS os handlers de escrita", async () => {
     const admin = exigirPorRota(ROTA_ADMIN);
     for (const handler of handlersDe(admin)) {
       await expect(
         guardReal().canActivate(contexto(admin as never, handler, "MASTER")),
-        `escrita.${handler} para MASTER`,
+        `escrita.${handler} para MASTER sem marcação`,
       ).rejects.toBeInstanceOf(ForbiddenException);
+    }
+  });
+
+  it("o MASTER COM marcação escreve em TODOS os handlers", async () => {
+    const admin = exigirPorRota(ROTA_ADMIN);
+    const menu = codigoDoMenuDoCatalogo();
+    for (const handler of handlersDe(admin)) {
+      await expect(
+        guardReal([menu]).canActivate(contexto(admin as never, handler, "MASTER")),
+        `escrita.${handler} para MASTER com marcação`,
+      ).resolves.toBe(true);
     }
   });
 
@@ -335,23 +387,30 @@ function codigoDoMenuDoCatalogo(): string {
 
 describe("o menu reivindica a ESCRITA, e não encosta na leitura", () => {
   /**
-   * ─ A CASA TEM DOIS PADRÕES VÁLIDOS AQUI, e o teste não escolhe entre eles ───────────────────
+   * ─ A CASA DEIXOU DE TER DOIS PADRÕES AQUI (regra do diretor, 27/09/2026) ────────────────────
    *
-   * `as-etapas` REIVINDICA os handlers do admin; `usuarios` e `menu-areas` declaram `operacoes: []`,
-   * com o argumento escrito no próprio `domain/menus.ts`: a controller já é `@Roles("SUPER_ADMIN")`,
-   * então marcá-la para outra pessoa não concederia nada (fail-closed no `RolesGuard`).
+   * ANTES havia dois, e o teste não escolhia entre eles: ou a escrita era reivindicada pelo menu, ou
+   * declarava `operacoes: []` porque a controller já era `@Roles("SUPER_ADMIN")` (fail-closed no
+   * `RolesGuard`, então marcar o menu para outra pessoa não concederia nada).
    *
-   * OS DOIS ESTÃO CERTOS, e exigir um deles seria o teste impondo o gosto de quem o escreveu. O que
-   * NÃO pode acontecer é a reivindicação apontar para um menu que NÃO é só do SUPER_ADMIN: aí o
-   * menu vira a trava aparente de uma rota cuja trava real é outra, e alguém "simplifica" o
-   * `@Roles` confiando nele.
+   * O SEGUNDO PADRÃO DEIXOU DE VALER PARA ESTE CATÁLOGO: o `@Roles` saiu, o Super Admin concede a
+   * tela a quem quiser, e a REIVINDICAÇÃO passou a ser a única trava da rota. Com ela ausente, o
+   * `MenuGuard` é fail-open e a escrita ficaria alcançável por qualquer autenticado, então
+   * reivindicar virou OBRIGATÓRIO e é isso que se afirma.
+   *
+   * `operacoes: []` continua válido para `usuarios` e `menu-areas`, que seguem `@Roles` e são as
+   * únicas telas que a regra nova NÃO alcança (torná-las concedíveis criaria AUTO-CONCESSÃO).
    */
-  it("se a escrita for reivindicada, o menu dela é SÓ do SUPER_ADMIN", () => {
+  it("TODA operação de escrita é reivindicada, e o menu dela EXIGE marcação até do MASTER", () => {
     const admin = exigirPorRota(ROTA_ADMIN);
-    for (const handler of handlersDe(admin)) {
+    const handlers = handlersDe(admin);
+    expect(handlers.length).toBeGreaterThan(0);
+    for (const handler of handlers) {
       const menu = menuDaOperacao(admin.name, handler);
-      if (menu === null) continue;
-      expect(MENUS_SOMENTE_SUPER_ADMIN.has(menu), `${handler} -> ${menu}`).toBe(true);
+      expect(menu, `${handler} sem menu: a rota estaria ABERTA`).not.toBeNull();
+      expect(masterPrecisaDeMarcacao(menu!), `${handler} -> ${menu}`).toBe(true);
+      // E NÃO pode estar na lista que o torna inconcedível: as duas se contradizem.
+      expect(MENUS_SOMENTE_SUPER_ADMIN.has(menu!), `${handler} -> ${menu}`).toBe(false);
     }
   });
 
@@ -386,10 +445,10 @@ describe("o menu reivindica a ESCRITA, e não encosta na leitura", () => {
    * │                                   liberar (o caso `clinicas`, 29/07/2026);                │
    * │ 2. `MENUS_QUE_NASCEM_FORA_DA_ADM` sem ele, o menu de A&S nasce na área ADM, que é o       │
    * │                                   default fail-closed, e o time de A&S é barrado;         │
-   * │ 3. `MENUS_BLOQUEADOS_COMUM`       sem ele, a tela de permissões OFERECE marcar o menu      │
-   * │                                   para um COMUM, e a marcação não concede nada: promete   │
-   * │                                   uma porta que o `RolesGuard` tranca;                    │
-   * │ 4. `MENUS_SOMENTE_SUPER_ADMIN`    sem ele, o card APARECE para o Master e dá 403;         │
+   * │ 3. reivindicação da ESCRITA       sem ela, o `MenuGuard` é fail-open e a rota fica ABERTA  │
+   * │                                   a qualquer autenticado, agora que o `@Roles` saiu;       │
+   * │ 4. `MENUS_QUE_EXIGEM_MARCACAO...` sem ela, todo MASTER de A&S ganha o catálogo pelo        │
+   * │                                   bypass de ÁREA, e não sobra decisão individual nenhuma;  │
    * │ 5. `lib/menu-rotas.ts` (frontend) sem ele, a rota da tela não é governada por menu nenhum. │
    * └─────────────────────────────────────────────────────────────────────────────────────────┘
    *
@@ -401,8 +460,19 @@ describe("o menu reivindica a ESCRITA, e não encosta na leitura", () => {
 
     expect(MENUS.map((m) => m.codigo), "1. o registro").toContain(codigo);
     expect(MENUS_QUE_NASCEM_FORA_DA_ADM.has(codigo), "2. nasce fora da ADM (área AS)").toBe(true);
-    expect(MENUS_BLOQUEADOS_COMUM.has(codigo), "3. bloqueado para o COMUM").toBe(true);
-    expect(MENUS_SOMENTE_SUPER_ADMIN.has(codigo), "4. só do SUPER_ADMIN").toBe(true);
+    const admin = exigirPorRota(ROTA_ADMIN);
+    for (const handler of handlersDe(admin)) {
+      expect(menuDaOperacao(admin.name, handler), `3. ${handler} reivindicado`).toBe(codigo);
+    }
+    expect(masterPrecisaDeMarcacao(codigo), "4. exige marcação até do MASTER").toBe(true);
+    /*
+     * E AS DUAS LISTAS DE BLOQUEIO FICAM DE FORA, que é a inversão desta frente: elas TRAVAVAM a
+     * concessão (uma na leitura, outra na gravação), então a tela oferecia a caixa, o diretor
+     * marcava e o acesso nunca chegava. Afirmar a ausência é o que impede alguém de "consertar"
+     * isso de volta.
+     */
+    expect(MENUS_BLOQUEADOS_COMUM.has(codigo), "não travado para o COMUM").toBe(false);
+    expect(MENUS_SOMENTE_SUPER_ADMIN.has(codigo), "não inconcedível").toBe(false);
   });
 
   /**
@@ -418,7 +488,7 @@ describe("o menu reivindica a ESCRITA, e não encosta na leitura", () => {
     );
   });
 
-  it("o menu do catálogo EXISTE no registro e nasce SÓ para o SUPER_ADMIN (§A.23)", () => {
+  it("o menu do catálogo EXISTE no registro e é CONCEDÍVEL pelo diretor (§A.23)", () => {
     /*
      * O MENU PRECISA EXISTIR NO REGISTRO, e não é formalidade: a tela de liberação lista a TABELA
      * `menus`, que o `MenusCatalogoService` converge a partir DESTE registro a cada boot. Menu que
@@ -433,7 +503,12 @@ describe("o menu reivindica a ESCRITA, e não encosta na leitura", () => {
     ).toBeGreaterThan(0);
 
     for (const codigo of doCatalogo) {
-      expect(MENUS_SOMENTE_SUPER_ADMIN.has(codigo), `${codigo} fora do SÓ SUPER_ADMIN`).toBe(true);
+      // NASCE só para o SUPER_ADMIN (ninguém o recebe por padrão) e é CONCEDÍVEL (nenhuma das duas
+      // listas de bloqueio o alcança). As duas coisas ao mesmo tempo, que é o que a regra pede.
+      expect(codigosPadraoDoPapel("MASTER"), `${codigo} vindo de nascença`).not.toContain(codigo);
+      expect(codigosPadraoDoPapel("COMUM"), `${codigo} vindo de nascença`).not.toContain(codigo);
+      expect(MENUS_SOMENTE_SUPER_ADMIN.has(codigo), `${codigo} inconcedível`).toBe(false);
+      expect(masterPrecisaDeMarcacao(codigo), `${codigo} sem exigir marcação`).toBe(true);
     }
   });
 });

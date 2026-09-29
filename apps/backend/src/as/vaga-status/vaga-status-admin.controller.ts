@@ -1,28 +1,32 @@
 import { Body, Controller, Delete, Param, ParseIntPipe, Patch, Post } from "@nestjs/common";
-import { Roles } from "../../auth/decorators";
 import { AtualizarVagaStatusDto, CriarVagaStatusDto } from "./vaga-status.dto";
 import { VagaStatusService } from "./vaga-status.service";
 
 /**
  * ─ O GERENCIADOR DE STATUS DA VAGA: A SUPERFÍCIE DE ESCRITA, E SÓ ELA ──────────────────────────
  *
- * ┌─ `@Roles("SUPER_ADMIN")` NA PRÓPRIA CONTROLLER, E O MENU NÃO SUBSTITUI ISSO ──────────────────┐
+ * ┌─ QUEM SEGURA A PORTA É O MENU, NÃO O PAPEL (regra do diretor, 27/09/2026) ────────────────────┐
+ * │ O `@Roles("SUPER_ADMIN")` QUE MORAVA AQUI FOI REMOVIDO: o Super Admin concede QUALQUER tela a  │
+ * │ QUALQUER usuário, e com o papel na classe a concessão abria uma porta trancada. A autoridade   │
+ * │ passou a ser o `MenuGuard`, que já reivindicava esta classe inteira                            │
+ * │ (`VagaStatusAdminController.*`, menu `as-status-vaga`). Sem aquela reivindicação, remover o    │
+ * │ `@Roles` teria ABERTO a rota a qualquer autenticado: o guard é fail-open para operação sem     │
+ * │ dono.                                                                                          │
+ * │                                                                                                │
  * │ O MENU SOZINHO NÃO SEGURA O MASTER, e isto foi conferido no código, não suposto:               │
  * │ `menu.guard.ts` deixa o MASTER passar por PERTENCER À ÁREA do menu ("MASTER manda na área      │
  * │ inteira: dentro dela, segue sem depender de marcação"), e há MASTER na área AS em produção.    │
- * │ Um menu de área AS, sozinho, entregaria este catálogo a eles.                                  │
- * │                                                                                                 │
+ * │ Quem fecha esse atalho é a entrada nominal do código em                                        │
+ * │ `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER`, sem a qual todos eles ganhariam este catálogo sozinhos. │
+ * │                                                                                                │
  * │ POR QUE ISSO IMPORTA MAIS AQUI DO QUE NO CATÁLOGO DE ETAPAS: as etapas são POSIÇÃO no funil, e │
  * │ o pior que uma edição errada faz é bagunçar a fila. AQUI OS CAMPOS SÃO TRAVAS. Ligar           │
  * │ `recebeCandidato` num status terminal devolve alocação a vaga encerrada (o furo de 09/09);     │
  * │ desligar `movivelManualmente` no status de ABERTURA transforma em zumbi toda vaga que estiver  │
  * │ num status do diretor, porque fechar e cancelar exigem o papel ABERTURA. É configuração de     │
- * │ sistema com efeito de trava, não operação de vaga.                                             │
- * │                                                                                                 │
- * │ O `@Roles` É A AUTORIDADE (fail-closed no `RolesGuard`); o menu é a camada de UX que decide se │
- * │ o card aparece. O padrão é o de `menu-areas`, `usuarios` e dos dois catálogos de A&S que já    │
- * │ nasceram assim, não o do `ifractal`, que é gerenciado pelo time do ADM.                         │
- * └─────────────────────────────────────────────────────────────────────────────────────────────────┘
+ * │ sistema com efeito de trava, não operação de vaga. O catálogo segue RESTRITO: o que mudou é    │
+ * │ que a restrição passou a ser CONCEDÍVEL, pessoa a pessoa, pela tela do diretor.                │
+ * └────────────────────────────────────────────────────────────────────────────────────────────────┘
  *
  * A LEITURA VIVE NA OUTRA CLASSE (`VagaStatusController`), aberta a qualquer autenticado: fechar a
  * leitura junto daria 403 na pill de status da Central de Vagas para o consultor que só precisa
@@ -32,7 +36,6 @@ import { VagaStatusService } from "./vaga-status.service";
  * contagens que aparecem nas frases de recusa são NÚMEROS, sem id e sem nome.
  */
 @Controller("admin/as/status-vaga")
-@Roles("SUPER_ADMIN")
 export class VagaStatusAdminController {
   constructor(private readonly status: VagaStatusService) {}
 

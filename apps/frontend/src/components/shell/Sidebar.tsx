@@ -214,6 +214,32 @@ export function Sidebar() {
         </>
       )}
 
+      {/* AJUDA, VISÍVEL PARA TODOS, SEM CONCESSÃO (decisão do diretor de 28/09/2026). É o único item
+          da barra desenhado INCONDICIONALMENTE, de propósito: ajuda é para todo mundo, então ela não
+          passa por `temMenu` nem espera liberação na tela de permissões.
+
+          ISTO NÃO CONCEDE OPERAÇÃO NENHUMA (§A.23): o menu `ajuda` é `operacoes: []`, e a rota
+          `/ajuda` já é aberta a qualquer autenticado, fora de `ROTA_MENU` (`lib/menu-rotas`) por
+          desenho. O que se acrescenta aqui é só o atalho de leitura.
+
+          O MENU `ajuda` CONTINUA GOVERNANDO O CARD do Menu Gerencial (`admin/page.tsx`), que é OUTRA
+          porta e segue sob a decisão do diretor, usuário por usuário. Não mexer numa porta ao mexer
+          na outra.
+
+          Fica FORA do grupo Administração e DEPOIS dele: dentro do grupo, o consultor COMUM sem menu
+          administrativo não veria nada, porque o grupo inteiro depende de `temAdministracao`. Bloco
+          próprio, sem cabeçalho, porque é um item só. O separador segue a régua dos outros grupos,
+          existe apenas quando veio algo acima. */}
+      {(temAlgoAcimaDeAdministracao || temAdministracao) && <div className="nav-sep" />}
+      <NavItem
+        href="/ajuda"
+        icon="bulb"
+        label="Ajuda"
+        active={isActive(pathname, "/ajuda")}
+        expanded={expanded}
+        badge={0}
+      />
+
       <div className={cn("side-user mt-auto", !expanded && "justify-center !px-1.5")}>
         <div className="av">{initial}</div>
         {expanded && (

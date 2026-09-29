@@ -1,0 +1,106 @@
+{
+  "_leia": [
+    "O QUE O ARNES DO MANUAL DECLARA TER CRIADO NA HOMOLOGACAO. E a UNICA fonte de 'pode aparecer em print'.",
+    "O gate e fail-closed: sem este arquivo, ele recusa TUDO e a conferencia da base acusa a tabela inteira.",
+    "NADA AQUI E DADO DE PESSOA. Cada valor abaixo e de uma conta SINTETICA, criada para o motor de captura.",
+    "USUARIO REAL DO TIME NUNCA ENTRA NESTE ARQUIVO. O lugar dele e a DENYLIST, montada da tabela `usuarios`",
+    "no arranque do lote (NegadosDeEquipe, apps/frontend/src/ajuda/pii.ts): o que o gate PROCURA em cada",
+    "imagem, e nao o que ele permite. Acrescentar um colega aqui desliga a protecao dele, e e por isso que",
+    "esta lista e curta de proposito.",
+    "As MASCARAS da interface (000.000.000-00, Maria Souza, email@soulan.com.br) NAO moram aqui: elas sao",
+    "propriedade da interface de producao, medidas no codigo, e vivem em MASCARAS_DA_INTERFACE",
+    "(tools/ajuda/src/allowlist.ts). Misturar as duas coisas faria parecer que alguem as cadastrou."
+  ],
+
+  "_nomes": [
+    "A CONTA DE CAPTURA APARECE NA TELA: saudacao, avatar e autoria de quem fez o que. Sem declara-la, o",
+    "gate recusaria justamente a conta que esta capturando. Ela tambem precisa estar aqui para ser",
+    "SUBTRAIDA da denylist de equipe (montarNegadosDeEquipe), que e montada de `usuarios` inteira.",
+    "'Manual Do Sistema' nao dispara o lexico de nome (nenhuma das duas palavras e prenome ou sobrenome",
+    "brasileiro), mas declarar e o que a torna permitida por ATO, e nao por sorte de lexico.",
+    "AS DUAS FORMAS ESTAO DECLARADAS, e a segunda foi MEDIDA no codigo: a barra lateral NAO mostra o",
+    "nome do cadastro, ela mostra displayName(user.email) (components/shell/Sidebar.tsx), que parte o",
+    "pedaco antes do @ e capitaliza. Para manual.captura@homolog.local isso da 'Manual Captura', e essa",
+    "e a forma que sai em TODO print, nao 'Manual Do Sistema'. O painel inicial usa so o primeiro pedaco",
+    "('Manual'), que o gate nunca flagra por ter uma palavra so."
+  ],
+  "_nomes_do_arnes_do_manual": [
+    "AS SEIS LINHAS SINTETICAS DO `arnes-seed-manual` (apps/backend/src/as/ingestao-pandape/).",
+    "Prefixo SIMULADO em caixa alta, e NENHUMA palavra do lexico de nome de pessoa: nao e estetica.",
+    "A assercao de populacao do lote audita o nome do arnes com a allowlist PROVISORIA (antes de os",
+    "candidatos do banco entrarem nela), entao nome com forma de pessoa reprovaria a base e",
+    "BLOQUEARIA O LOTE INTEIRO. Nenhum deles contem nome de usuario da homologacao, e o proprio seed",
+    "ABORTA se colidir."
+  ],
+  "nomes": [
+    "Manual Do Sistema",
+    "Manual Captura",
+    "SIMULADO ALFA",
+    "SIMULADO BRAVO",
+    "SIMULADO CHARLIE",
+    "SIMULADO DELTA",
+    "SIMULADO ECHO",
+    "SIMULADO FOXTROT"
+  ],
+
+  "_salarios": [
+    "O UNICO campo de rotulo sensivel que o arnes escreve. Sem salario nenhuma linha fica sem pendencia",
+    "obrigatoria, e sem uma linha sem pendencia o pill de 'completo' nunca aparece, que e metade do que",
+    "o artigo 'Ler A Linha Da Tabela' ensina. Valor redondo e declarado, nunca o de alguem.",
+    "Endereco, telefone, nascimento e matricula ficam NULOS no arnes, e por isso nao sao declarados."
+  ],
+  "salarios": ["R$ 2.000,00", "2000.00"],
+
+  "_emails": [
+    "O e-mail da conta de captura. A familia @homolog.local ja e dispensada pelo gate, mas a declaracao",
+    "e necessaria pela OUTRA ponta: a denylist de equipe ignora essa dispensa de proposito (27 dos 33",
+    "usuarios da homologacao tem @homolog.local, medido em 27/09/2026), e so o que esta declarado aqui sai",
+    "dela. Sem esta linha, o gate acharia a propria conta de captura e recusaria toda tela."
+  ],
+  "emails": ["manual.captura@homolog.local"],
+
+  "_gestores": [
+    "O GESTOR SINTETICO QUE O PROPRIO ARNES ESCREVE na linha completa: dados_vaga_folha.gestor_bp =",
+    "'GESTOR SIMULADO' (apps/backend/src/as/ingestao-pandape/arnes-seed-manual.ts:284). Ele aparece na",
+    "ficha, no modal de edicao e na apresentacao da integracao, que sao tres telas do manual.",
+    "NAO E DADO DE NINGUEM: e texto fixo do seed. Declarar e o que o torna permitido por ATO, e nao por",
+    "sorte de regra (hoje a regra do rotulo ja nao o flagraria, porque ele nao tem forma de nome de",
+    "pessoa, mas depender disso seria depender de uma regra que pode mudar).",
+    "O GESTOR DE VERDADE, o da coluna gestor_bp da base, NUNCA entra aqui: ele e dado de TERCEIRO e o",
+    "lugar dele e a DENYLIST (REGUA_DAS_COLUNAS_DE_PESSOA, apps/frontend/src/ajuda/lote.ts) mais a regra",
+    "de rotulo GESTOR do gate.",
+    "AO CRIAR UM GESTOR SINTETICO NOVO, evite a palavra 'gestor' e o final 'BP' no proprio valor: o",
+    "rotulo casa DENTRO do valor e so nao vira falso positivo por causa da janela dispensada."
+  ],
+  "gestores": ["GESTOR SIMULADO"],
+
+  "_cpfs": [
+    "A conta de captura e um usuario, nao um candidato: nao tem CPF. Os CPFs da CARGA da homologacao",
+    "NAO sao declarados um a um (seriam 2.689): eles passam pela regra de FAMILIA DECLARADA",
+    "(PREFIXOS_CPF_SINTETICO, apps/frontend/src/ajuda/lote.ts), e depois de a base ser aprovada os",
+    "candidatos entram na allowlist final pelo montarAllowlist.",
+    "OS CPFs QUE O ARNES DO MANUAL CRIA SAO DECLARADOS UM A UM, e isso e exigencia do `seguranca`:",
+    "inventario COMPLETO e REVOGAVEL de todo CPF que pode aparecer num print. Familia 999, digito",
+    "verificador VALIDO, sequencia comecando em 1 para o numero conter `999000`, que e o termo que",
+    "quatro dos cinco roteiros digitam na busca para deixar a lista so com as linhas do arnes.",
+    "  99900000188  SIMULADO ALFA     (linha completa, com pasta no Drive)",
+    "  99900000269  SIMULADO BRAVO    (linha COM pendencia obrigatoria)",
+    "  99900000340  SIMULADO CHARLIE  (ASO anexado, sem veredito)",
+    "  99900000420  SIMULADO DELTA    (ASO validado)",
+    "  99900000501  SIMULADO ECHO     (unica que chega a frente de INTEGRACAO)",
+    "  99900000692  SIMULADO FOXTROT  (pre-admissao RECUSADA pela conta de captura)",
+    "A SEXTA existe porque a aba Recusadas da Liberacao imprime o nome de QUEM recusou, e as recusas",
+    "reais da homologacao foram feitas pelo TIME: o print acusava `NOME_DE_USUARIO: usuario 04 homolog`",
+    "(6 variacoes), e o achado era VERDADEIRO. O diretor liberou o dado do CANDIDATO, nao o do colega,",
+    "entao a denylist fica de pe e o conserto e de DADO: uma recusa cuja autoria e da propria conta de",
+    "captura, que ja esta declarada em `nomes` e em `emails`."
+  ],
+  "cpfs": [
+    "99900000188",
+    "99900000269",
+    "99900000340",
+    "99900000420",
+    "99900000501",
+    "99900000692"
+  ]
+}

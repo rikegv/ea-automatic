@@ -4,6 +4,7 @@ import {
   MENUS,
   MENUS_BLOQUEADOS_COMUM,
   MENUS_SOMENTE_SUPER_ADMIN,
+  masterPrecisaDeMarcacao,
   menuDaOperacao,
 } from "../../domain/menus";
 import { VagaStatusAdminController } from "./vaga-status-admin.controller";
@@ -32,7 +33,7 @@ import { VagaStatusController } from "./vaga-status.controller";
  * alocação a vaga encerrada; desligar `movivelManualmente` no status de ABERTURA transforma em zumbi
  * toda vaga que estiver num status do diretor.
  */
-describe("status da vaga: a leitura é aberta, a escrita é do SUPER_ADMIN", () => {
+describe("status da vaga: a leitura é aberta, a escrita é de quem o diretor marcar", () => {
   const LEITURA = ["listar"] as const;
   const ESCRITA = ["criar", "atualizar", "inativar", "reativar", "remover"] as const;
 
@@ -60,14 +61,26 @@ describe("status da vaga: a leitura é aberta, a escrita é do SUPER_ADMIN", () 
   });
 
   /**
-   * A AUTORIDADE. O menu decide se o card aparece; quem tranca a porta é o papel, e ele está na
-   * CLASSE, então operação nova nasce fechada em vez de depender de alguém lembrar do decorator.
+   * ─ A AUTORIDADE MUDOU DE DONO (regra do diretor, 27/09/2026) ──────────────────────────────────
+   *
+   * O `@Roles("SUPER_ADMIN")` SAIU da classe: o Super Admin concede QUALQUER tela a QUALQUER
+   * usuário, e com o papel na classe a concessão do menu abria uma PORTA TRANCADA. Quem tranca a
+   * porta passou a ser a REIVINDICAÇÃO afirmada no caso acima, e ela não é decorativa: o
+   * `MenuGuard` é FAIL-OPEN para operação que ninguém reivindica, então tirar o papel sem ela teria
+   * ABERTO a rota a qualquer autenticado.
+   *
+   * O CORINGA `VagaStatusAdminController.*` continua cobrindo rota que ainda não existe, que é a
+   * propriedade que o `@Roles` em CLASSE dava e que não podia ser perdida na troca: handler novo
+   * nasce reivindicado em vez de nascer aberto.
+   *
+   * A PROPRIEDADE (o guard de verdade recusando quem não tem o menu, inclusive o MASTER sem
+   * marcação) é medida em `as/catalogos-concediveis.rbac.spec.ts`, handler por handler.
    */
-  it('a escrita é @Roles("SUPER_ADMIN") na CLASSE, cobrindo inclusive rota que ainda não existe', () => {
-    expect(Reflect.getMetadata(ROLES_KEY, VagaStatusAdminController)).toEqual(["SUPER_ADMIN"]);
+  it("a escrita NÃO tem mais @Roles em classe: quem tranca a porta é a reivindicação do menu", () => {
+    expect(Reflect.getMetadata(ROLES_KEY, VagaStatusAdminController)).toBeUndefined();
   });
 
-  it("o menu `as-status-vaga` existe, nasce só para o SUPER_ADMIN e não é concedível a COMUM (§A.23)", () => {
+  it("o menu `as-status-vaga` existe, nasce só para o SUPER_ADMIN e é CONCEDÍVEL pelo diretor (§A.23)", () => {
     const menu = MENUS.find((m) => m.codigo === "as-status-vaga");
     expect(
       menu,
@@ -76,8 +89,13 @@ describe("status da vaga: a leitura é aberta, a escrita é do SUPER_ADMIN", () 
     expect(menu?.areas, 'sem `areas: ["AS"]` o menu nasce em ADM e some para o time de A&S').toEqual([
       "AS",
     ]);
-    expect(MENUS_SOMENTE_SUPER_ADMIN.has("as-status-vaga")).toBe(true);
-    expect(MENUS_BLOQUEADOS_COMUM.has("as-status-vaga")).toBe(true);
+    // AS DUAS LISTAS DE BLOQUEIO SAÍRAM (regra do diretor, 27/09/2026): elas TRAVAVAM a concessão,
+    // uma na leitura (`filtrarMenusPorPapel`) e outra na gravação (`salvarSelecaoDaTela`), então a
+    // tela oferecia a caixa, o diretor marcava e o acesso nunca chegava. A restrição mudou de casa,
+    // para `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER`, que EXIGE a concessão em vez de a impedir.
+    expect(MENUS_SOMENTE_SUPER_ADMIN.has("as-status-vaga")).toBe(false);
+    expect(MENUS_BLOQUEADOS_COMUM.has("as-status-vaga")).toBe(false);
+    expect(masterPrecisaDeMarcacao("as-status-vaga")).toBe(true);
   });
 
   /**

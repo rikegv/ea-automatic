@@ -7,6 +7,8 @@ import {
   MENUS,
   MENUS_BLOQUEADOS_COMUM,
   MENUS_SOMENTE_SUPER_ADMIN,
+  codigosPadraoDoPapel,
+  masterPrecisaDeMarcacao,
   menuDaOperacao,
 } from "../domain/menus";
 import { AsModule } from "./as.module";
@@ -83,7 +85,14 @@ const CATALOGOS = [
 ] as const;
 
 // ═══════════════════════════════════════════════════════════════════════════════════════════════
-// 1. A ESCRITA: REIVINDICADA PELO MENU **E** FECHADA PELO PAPEL
+// 1. A ESCRITA: REIVINDICADA PELO MENU, QUE PASSOU A SER A AUTORIDADE
+//
+// ─ O PAPEL SAIU DA CLASSE (regra do diretor, 27/09/2026) ───────────────────────────────────────
+//
+// Era "reivindicada pelo menu **E** fechada pelo papel", com o `@Roles("SUPER_ADMIN")` como trava e o
+// menu como camada de UX. O diretor decidiu que o Super Admin concede QUALQUER tela a QUALQUER
+// usuário, e com o papel na classe isso era impossível de entregar: conceder o menu abria uma PORTA
+// TRANCADA. A trava passou a ser a REIVINDICAÇÃO, e ela carrega agora o peso que o `@Roles` carregava.
 // ═══════════════════════════════════════════════════════════════════════════════════════════════
 
 describe.each(CATALOGOS)("a administração do catálogo de $nome", ({ admin, menu }) => {
@@ -97,21 +106,35 @@ describe.each(CATALOGOS)("a administração do catálogo de $nome", ({ admin, me
   });
 
   /**
-   * A AUTORIDADE, e ela está na CLASSE de propósito: assim rota nova nasce fechada, em vez de
-   * depender de alguém lembrar do decorator no método. O menu é a camada de UX; o `@Roles` é a
-   * trava. O MASTER atravessa o `MenuGuard` por PERTENCER À ÁREA (e há MASTER na área AS em
-   * produção), então sem o `@Roles` ele renomearia o catálogo inteiro.
+   * A AUTORIDADE É A REIVINDICAÇÃO afirmada no caso acima, e o `@Roles` SAIU DA CLASSE. O coringa
+   * `Classe.*` do registro preserva a propriedade que o `@Roles` em classe dava, e que não podia ser
+   * perdida na troca: rota nova nasce FECHADA, em vez de nascer aberta (o `MenuGuard` é fail-open
+   * para operação que ninguém reivindica).
+   *
+   * O MASTER atravessa o `MenuGuard` por PERTENCER À ÁREA (e há MASTER na área AS em produção), então
+   * quem o segura é a entrada nominal do código em `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER`, afirmada
+   * no caso seguinte. Sem ela, todos eles renomeariam o catálogo inteiro sozinhos.
    */
-  it('é @Roles("SUPER_ADMIN") na CLASSE, cobrindo inclusive rota que ainda não existe', () => {
-    expect(Reflect.getMetadata(ROLES_KEY, classePorNome(admin))).toEqual(["SUPER_ADMIN"]);
+  it("NÃO tem mais @Roles em classe: quem tranca a porta é a reivindicação do menu", () => {
+    expect(Reflect.getMetadata(ROLES_KEY, classePorNome(admin))).toBeUndefined();
   });
 
-  it("o menu existe, nasce só para o SUPER_ADMIN e não é concedível a COMUM (§A.23)", () => {
+  it("o menu existe, nasce só para o SUPER_ADMIN e é CONCEDÍVEL pelo diretor (§A.23)", () => {
     const def = MENUS.find((m) => m.codigo === menu);
     expect(def, "o menu precisa existir no registro para ser selecionável na tela de liberação").toBeDefined();
     expect(def?.areas, 'sem `areas: ["AS"]` o menu nasce em ADM e some para o time de A&S').toEqual(["AS"]);
-    expect(MENUS_SOMENTE_SUPER_ADMIN.has(menu)).toBe(true);
-    expect(MENUS_BLOQUEADOS_COMUM.has(menu)).toBe(true);
+    /*
+     * AS DUAS LISTAS DE BLOQUEIO FICARAM FORA, e a troca é de CASA e não de intensidade: elas
+     * TRAVAVAM a concessão, uma na leitura (`filtrarMenusPorPapel`) e outra na gravação, então a tela
+     * oferecia a caixa, o diretor marcava e o acesso nunca chegava, em silêncio. A restrição mudou
+     * para `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER`, que EXIGE a concessão em vez de a impedir.
+     */
+    expect(MENUS_SOMENTE_SUPER_ADMIN.has(menu), "inconcedível").toBe(false);
+    expect(MENUS_BLOQUEADOS_COMUM.has(menu), "travado para o COMUM").toBe(false);
+    expect(masterPrecisaDeMarcacao(menu), "o MASTER passaria pelo atalho de área").toBe(true);
+    // E NASCE só para o SUPER_ADMIN: ninguém o recebe por padrão.
+    expect(codigosPadraoDoPapel("MASTER")).not.toContain(menu);
+    expect(codigosPadraoDoPapel("COMUM")).not.toContain(menu);
   });
 
   it("só este menu reivindica esta administração", () => {

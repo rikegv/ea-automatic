@@ -1,5 +1,4 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post } from "@nestjs/common";
-import { Roles } from "../../auth/decorators";
 import {
   AtualizarMotivoReenvioShortlistDto,
   CriarMotivoReenvioShortlistDto,
@@ -9,15 +8,19 @@ import { MotivosReenvioShortlistService } from "./motivos-reenvio-shortlist.serv
 /**
  * ─ A ADMINISTRAÇÃO DOS MOTIVOS DE REENVIO: A SUPERFÍCIE DE ESCRITA, E SÓ ELA ───────────────────
  *
- * ┌─ `@Roles("SUPER_ADMIN")` NA PRÓPRIA CONTROLLER, E ELE NÃO É REDUNDANTE ────────────────────┐
- * │ O MENU SOZINHO NÃO SEGURA O MASTER, e isto está conferido no código, não suposto: o         │
- * │ `MenuGuard` deixa o MASTER passar por PERTENCER À ÁREA do menu, e há MASTER na área AS em    │
- * │ produção. Um menu de área AS, sozinho, entregaria a edição deste catálogo a eles.            │
+ * ┌─ QUEM SEGURA A PORTA É O MENU, NÃO O PAPEL (regra do diretor, 27/09/2026) ──────────────────┐
+ * │ O `@Roles("SUPER_ADMIN")` QUE MORAVA AQUI FOI REMOVIDO: o Super Admin concede QUALQUER tela │
+ * │ a QUALQUER usuário, e com o papel na classe a concessão do menu abria uma PORTA TRANCADA    │
+ * │ (403 já no `@Get` que a tela de administração lê ao abrir).                                 │
  * │                                                                                             │
- * │ E A REIVINDICAÇÃO DO MENU CONTINUA OBRIGATÓRIA, pelo lado oposto: o `MenuGuard` é FAIL-OPEN  │
- * │ para operação NÃO reivindicada, então sem a entrada em `domain/menus` esta rota nasceria     │
- * │ alcançável por qualquer autenticado que soubesse a URL. As duas camadas recusam por motivos  │
- * │ independentes, e nenhuma depende de a outra estar certa.                                     │
+ * │ A REIVINDICAÇÃO DO MENU PASSOU A SER A AUTORIDADE, e ela nunca foi dispensável: o            │
+ * │ `MenuGuard` é FAIL-OPEN para operação NÃO reivindicada, então sem a entrada em               │
+ * │ `domain/menus` (`MotivosReenvioShortlistAdminController.*`, menu `as-motivos-reenvio`) esta  │
+ * │ rota ficaria alcançável por qualquer autenticado que soubesse a URL.                         │
+ * │                                                                                             │
+ * │ E O MASTER NÃO PASSA DE GRAÇA: o `MenuGuard` o deixa passar por PERTENCER À ÁREA, e há       │
+ * │ MASTER na área AS em produção. Quem fecha esse atalho é a entrada nominal do código em      │
+ * │ `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER`.                                                      │
  * └─────────────────────────────────────────────────────────────────────────────────────────────┘
  *
  * POR QUE ISSO IMPORTA NUMA LISTA DE NOMES: o id daqui fica GRAVADO na shortlist, e quem edita esta
@@ -30,7 +33,6 @@ import { MotivosReenvioShortlistService } from "./motivos-reenvio-shortlist.serv
  * §A.6: nomes de motivo e um flag. Nenhum dado pessoal em nenhuma destas rotas.
  */
 @Controller("admin/as/motivos-reenvio-shortlist")
-@Roles("SUPER_ADMIN")
 export class MotivosReenvioShortlistAdminController {
   constructor(private readonly motivos: MotivosReenvioShortlistService) {}
 

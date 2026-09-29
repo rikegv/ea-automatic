@@ -2246,8 +2246,19 @@ export default function EsteiraPage() {
                           </div>
                           {/* LOGIN e SENHA editáveis direto na linha: é o trabalho da aba, e obrigar
                               a abrir um modal para dois campos de texto só somaria cliques.
-                              §A.6: a senha aparece porque é DESCARTÁVEL (o iFractal força a troca no
-                              primeiro acesso), decisão registrada do diretor. Ela NUNCA é logada. */}
+
+                              §A.6, DECISÃO DO DIRETOR DE 28/09/2026: o campo de senha passa a ser
+                              `type="password"`, mascarado na linha. Antes ele era texto claro, com o
+                              fundamento de que a credencial é DESCARTÁVEL (o iFractal força a troca
+                              no primeiro acesso); esse fundamento ficou DEFASADO diante da medição
+                              de 124 credenciais desenhadas em claro na tabela de produção. A senha
+                              continua editável e continua nunca sendo logada.
+
+                              EFEITO DE LADO DESEJADO, e faz parte da decisão: `textoAuditavel`
+                              (`ajuda/pii.ts`) pula `input[type=password]`, então marcar o campo como
+                              senha é também o que permite a captura de tela desta aba existir sem
+                              levar credencial para o manual. Conserto do produto e destravamento da
+                              captura são o mesmo conserto. */}
                           <div className="min-w-0">
                             <input
                               className="ds-input h-8 w-full text-[13px]"
@@ -2260,6 +2271,7 @@ export default function EsteiraPage() {
                           </div>
                           <div className="flex min-w-0 items-center gap-1">
                             <input
+                              type="password"
                               className="ds-input h-8 w-full text-[13px]"
                               placeholder="senha"
                               aria-label={`Senha do iFractal de ${item.candidatoNome}`}

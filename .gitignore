@@ -69,3 +69,15 @@ relatorio-clinica-exemplo.csv
 # Exceção: bases de carga versionadas de propósito (dados de cliente/régua, sem dado pessoal),
 # consumidas pelos seeds do backend.
 !apps/backend/src/db/data/*.csv
+
+# ── MOTOR DE CAPTURA DA CENTRAL DE AJUDA (§A.6) ────────────────────────────────────────────────
+# Trace e vídeo do Playwright gravam SNAPSHOT DO DOM com valor de campo em texto claro, ou seja, o
+# CPF digitado e a própria senha do login. O motor roda com os dois DESLIGADOS (`SEM_TRACE_NEM_VIDEO`
+# em tools/ajuda/src/ambiente.ts); isto aqui é a segunda camada, para o arquivo que um comando
+# manual de depuração venha a produzir nunca entrar no git por descuido.
+tools/ajuda/.trabalho/
+**/trace.zip
+**/*.trace.zip
+**/test-results/
+**/playwright-report/
+*.webm

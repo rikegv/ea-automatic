@@ -1,5 +1,4 @@
 import { Body, Controller, Delete, Param, ParseIntPipe, Patch, Post } from "@nestjs/common";
-import { Roles } from "../../auth/decorators";
 import {
   CriarLinhaServicoDto,
   RenomearLinhaServicoDto,
@@ -10,19 +9,25 @@ import { LinhasServicoService } from "./linhas-servico.service";
 /**
  * ─ O GERENCIADOR DAS LINHAS DE SERVIÇO: A SUPERFÍCIE DE ESCRITA, E SÓ ELA ──────────────────────
  *
- * ┌─ `@Roles("SUPER_ADMIN")` NA PRÓPRIA CONTROLLER ───────────────────────────────────────────────┐
+ * ┌─ QUEM SEGURA A PORTA É O MENU, NÃO O PAPEL (regra do diretor, 27/09/2026) ────────────────────┐
+ * │ O `@Roles("SUPER_ADMIN")` QUE MORAVA AQUI FOI REMOVIDO: o Super Admin concede QUALQUER tela a │
+ * │ QUALQUER usuário. A autoridade é o `MenuGuard`, que já reivindicava esta classe inteira       │
+ * │ (`LinhasServicoAdminController.*`, menu `as-linhas-servico`), e sem essa reivindicação tirar  │
+ * │ o papel teria ABERTO a rota: o guard é fail-open para operação sem dono.                      │
+ * │                                                                                                │
  * │ O MENU SOZINHO NÃO SEGURA O MASTER, e isto está conferido no código, não suposto:             │
  * │ `menu.guard.ts` deixa o MASTER passar por PERTENCER À ÁREA do menu ("MASTER manda na área     │
  * │ inteira: dentro dela, segue sem depender de marcação"), e há MASTER na área AS em produção.   │
- * │ Um menu de área AS, sozinho, entregaria este catálogo a eles.                                 │
+ * │ Um menu de área AS, sozinho, entregaria este catálogo a eles: quem fecha o atalho é a entrada │
+ * │ nominal do código em `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER`.                                    │
  * │                                                                                                │
  * │ POR QUE ISSO IMPORTA AQUI: quem edita esta lista edita a CLASSIFICAÇÃO DA OPERAÇÃO INTEIRA.   │
  * │ Renomear uma linha reescreve o nome dela em toda vaga que já aponta para ela, e inativar tira │
  * │ a linha de circulação para o time todo, num campo que é OBRIGATÓRIO para publicar vaga. É     │
  * │ configuração de sistema, não operação de vaga.                                                 │
  * │                                                                                                │
- * │ O `@Roles` É A AUTORIDADE (fail-closed no `RolesGuard`); o menu é a camada de UX que decide se │
- * │ o card aparece. Mesmo padrão do `EtapasFunilAdminController`.                                  │
+ * │ O catálogo segue RESTRITO: o que mudou é que a restrição passou a ser CONCEDÍVEL, pessoa a    │
+ * │ pessoa, pela tela do diretor. Mesmo padrão do `EtapasFunilAdminController`.                    │
  * └────────────────────────────────────────────────────────────────────────────────────────────────┘
  *
  * A LEITURA VIVE NA OUTRA CLASSE (`LinhasServicoController`), aberta a qualquer autenticado: fechar
@@ -33,7 +38,6 @@ import { LinhasServicoService } from "./linhas-servico.service";
  * que aparecem nas frases de recusa são NÚMEROS, sem nome e sem identificador.
  */
 @Controller("admin/as/linhas-servico")
-@Roles("SUPER_ADMIN")
 export class LinhasServicoAdminController {
   constructor(private readonly linhas: LinhasServicoService) {}
 

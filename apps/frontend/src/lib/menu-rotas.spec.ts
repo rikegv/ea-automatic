@@ -46,4 +46,15 @@ describe("menuDaRota (guard de rota do front, OST permissão de menu)", () => {
     expect(menuDaRota("/admin")).toBeNull();
     expect(menuDaRota("/trocar-senha")).toBeNull();
   });
+
+  /**
+   * A CENTRAL DE AJUDA É LEITURA ABERTA a qualquer autenticado, e este caso existe para a linha não
+   * voltar por hábito: governada por menu, quem não recebeu o atalho tomaria redirecionamento ao
+   * digitar o endereço ou ao clicar num "artigo relacionado", e quem mais precisa do manual é quem
+   * tem menos menu. O menu `ajuda` continua governando o CARD na navegação (§A.23), não a rota.
+   */
+  it("a Central De Ajuda NÃO é governada por menu: o manual se lê autenticado", () => {
+    expect(menuDaRota("/ajuda")).toBeNull();
+    expect(menuDaRota("/ajuda/anexar-o-aso-no-exame")).toBeNull();
+  });
 });

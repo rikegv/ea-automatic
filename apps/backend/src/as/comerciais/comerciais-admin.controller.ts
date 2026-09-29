@@ -1,6 +1,5 @@
 import { Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post, Query } from "@nestjs/common";
 import type { AsComercialGravado } from "./comerciais.service";
-import { Roles } from "../../auth/decorators";
 import { CriarComercialDto, RenomearComercialDto, ReordenarComerciaisDto } from "./comerciais.dto";
 import { ComerciaisService } from "./comerciais.service";
 
@@ -8,7 +7,7 @@ import { ComerciaisService } from "./comerciais.service";
  * ─ O GERENCIADOR DE COMERCIAIS: A ÚNICA CONTROLLER DESTE CATÁLOGO, LEITURA INCLUÍDA ────────────
  *
  * ┌─ AQUI A LEITURA **NÃO** SE SEPARA EM UMA CLASSE ABERTA, E ESSA É A DECISÃO DA ONDA (§A.6) ────┐
- * │ Os quatro catálogos vizinhos (etapas, status, motivos, linhas de serviço) têm DUAS classes: a │
+ * │ Os catálogos vizinhos (etapas, status, motivos, linhas de serviço) têm DUAS classes: a         │
  * │ escrita fechada e a leitura ABERTA a qualquer sessão autenticada, porque a lista deles é      │
  * │ inócua ("SouFast", "Triagem"). **ESTE CATÁLOGO É A FOLHA DO TIME COMERCIAL.** Copiar o molde  │
  * │ entregaria a lista inteira de nomes a qualquer sessão válida, incluindo os COMUM da Admissão, │
@@ -27,11 +26,19 @@ import { ComerciaisService } from "./comerciais.service";
  * │ Nenhuma rota nova aberta, em lugar nenhum.                                                     │
  * └────────────────────────────────────────────────────────────────────────────────────────────────┘
  *
- * ┌─ `@Roles("SUPER_ADMIN")` NA PRÓPRIA CONTROLLER, e o menu NÃO substitui isso ──────────────────┐
+ * ┌─ QUEM SEGURA A PORTA É O MENU, NÃO O PAPEL (regra do diretor, 27/09/2026) ────────────────────┐
+ * │ O `@Roles("SUPER_ADMIN")` QUE MORAVA AQUI FOI REMOVIDO: o Super Admin concede QUALQUER tela a │
+ * │ QUALQUER usuário. A autoridade é o `MenuGuard`, e AQUI a reivindicação                        │
+ * │ (`ComerciaisAdminController.*`, menu `as-comerciais`) cobre TAMBÉM o `@Get` de leitura, que é  │
+ * │ a folha do time comercial: é o coringa que garante que remover o papel não abriu nome de       │
+ * │ pessoa a ninguém. Sem ele, o guard é fail-open e a lista teria ficado pública para qualquer   │
+ * │ sessão autenticada.                                                                            │
+ * │                                                                                                │
  * │ `menu.guard.ts` deixa o MASTER passar por PERTENCER À ÁREA do menu ("MASTER manda na área     │
  * │ inteira: dentro dela, segue sem depender de marcação"), e há MASTER na área AS em produção.   │
- * │ Um menu de área AS, sozinho, entregaria esta lista a eles. O `@Roles` é a autoridade           │
- * │ (fail-closed no `RolesGuard`); o menu é a camada de UX que decide se o card aparece.           │
+ * │ Um menu de área AS, sozinho, entregaria esta lista a eles: quem fecha esse atalho é a entrada │
+ * │ nominal do código em `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER`. A lista segue RESTRITA, e passou  │
+ * │ a ser CONCEDÍVEL pessoa a pessoa, que é a decisão que o diretor quis poder tomar.             │
  * └────────────────────────────────────────────────────────────────────────────────────────────────┘
  *
  * O `DELETE` EXISTE E SÓ ALCANÇA QUEM NUNCA FOI USADO: ele é para o nome digitado errado, não para
@@ -39,7 +46,6 @@ import { ComerciaisService } from "./comerciais.service";
  * CLIENTES **e** VAGAS, com NÚMERO e sem nome.
  */
 @Controller("admin/as/comerciais")
-@Roles("SUPER_ADMIN")
 export class ComerciaisAdminController {
   constructor(private readonly comerciais: ComerciaisService) {}
 

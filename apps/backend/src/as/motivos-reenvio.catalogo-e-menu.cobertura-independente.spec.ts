@@ -6,6 +6,8 @@ import {
   MENUS_BLOQUEADOS_COMUM,
   MENUS_QUE_NASCEM_FORA_DA_ADM,
   MENUS_SOMENTE_SUPER_ADMIN,
+  codigosPadraoDoPapel,
+  masterPrecisaDeMarcacao,
   menuDaOperacao,
 } from "../domain/menus";
 import { AsModule } from "./as.module";
@@ -93,24 +95,33 @@ describe("6/7. o catálogo de motivos de reenvio nasce no molde dos motivos de d
   });
 
   /**
-   * A AUTORIDADE NA CLASSE, e não no método: assim rota NOVA nasce fechada, em vez de depender de
-   * alguém lembrar do decorador. É a mesma escolha dos cinco catálogos vizinhos.
+   * ─ A AUTORIDADE SAIU DA CLASSE E VIROU O MENU (regra do diretor, 27/09/2026) ─────────────────
+   *
+   * ESTE CASO AFIRMAVA O CONTRÁRIO, e afirmava certo para o desenho de então: a administração era
+   * `@Roles("SUPER_ADMIN")` e o menu era a camada de UX. O diretor decidiu que o Super Admin concede
+   * QUALQUER tela a QUALQUER usuário, e com o papel na classe isso era impossível de entregar:
+   * conceder o menu abria uma PORTA TRANCADA, com 403 já no `@Get` que a tela lê ao abrir.
+   *
+   * A PROPRIEDADE QUE O `@Roles` EM CLASSE DAVA NÃO FOI PERDIDA, e é o que este caso guarda agora:
+   * rota NOVA nasce FECHADA, porque o registro reivindica a classe por coringa (`Classe.*`) e o
+   * `MenuGuard` só é fail-open para operação que NINGUÉM reivindica. É o caso seguinte que afirma a
+   * reivindicação handler por handler.
    */
-  it('a ADMINISTRAÇÃO é @Roles("SUPER_ADMIN") na CLASSE', () => {
+  it("a ADMINISTRAÇÃO não tem mais @Roles em CLASSE: quem tranca a porta é o menu", () => {
     const admin = SUSPEITAS.filter((c) => rotaDe(c).startsWith("admin/"));
     expect(admin.length, "sem controller de administração não há o que afirmar").toBeGreaterThan(0);
     for (const c of admin) {
-      expect(Reflect.getMetadata(ROLES_KEY, c), c.name).toEqual(["SUPER_ADMIN"]);
+      expect(Reflect.getMetadata(ROLES_KEY, c), c.name).toBeUndefined();
     }
   });
 
   /**
    * ─ A REIVINDICAÇÃO NO `domain/menus.ts`, E ELA É A METADE FAIL-OPEN ───────────────────────────
    *
-   * Sem ela, a rota de escrita do catálogo é alcançável pela URL da API por qualquer sessão
-   * autenticada que atravesse o `RolesGuard`. Aqui o `@Roles` já segura, então o efeito prático é
-   * menor, e a régua vale igual: as duas camadas existem porque cada uma cobre o furo da outra, e
-   * o dia em que alguém "simplificar" o `@Roles` é o dia em que o menu é tudo o que sobra.
+   * Sem ela, a rota de escrita do catálogo é alcançável pela URL da API por QUALQUER sessão
+   * autenticada. O efeito prático deixou de ser menor: o `@Roles` SAIU da classe (regra do diretor,
+   * 27/09/2026), então "o dia em que alguém simplificar o `@Roles`" chegou, e o menu passou a ser tudo
+   * o que sobra. Este caso é o que impede a simplificação de virar rota aberta.
    */
   it("TODA operação de escrita é reivindicada pelo menu do catálogo", () => {
     const admin = SUSPEITAS.filter((c) => rotaDe(c).startsWith("admin/"));
@@ -143,7 +154,7 @@ describe("6/7. o catálogo de motivos de reenvio nasce no molde dos motivos de d
 // 2. O MENU NOVO NASCE SÓ PARA O SUPER_ADMIN (§A.23)
 // ═══════════════════════════════════════════════════════════════════════════════════════════════
 
-describe("7. o menu do catálogo nasce registrado e SÓ para o SUPER_ADMIN (§A.23)", () => {
+describe("7. o menu do catálogo nasce registrado, só para o SUPER_ADMIN, e CONCEDÍVEL (§A.23)", () => {
   /**
    * REGISTRO, E NUNCA CONCESSÃO. Entrar em `MENUS` faz o menu EXISTIR e ser SELECIONÁVEL na tela de
    * liberação, e para por aí: quem enxerga é decisão do diretor. O registro em código é o que evita
@@ -163,15 +174,35 @@ describe("7. o menu do catálogo nasce registrado e SÓ para o SUPER_ADMIN (§A.
     ]);
   });
 
-  it("nasce SÓ para o SUPER_ADMIN e não é concedível a COMUM", () => {
+  /**
+   * ─ NASCE SÓ PARA O SUPER_ADMIN **E** É CONCEDÍVEL, as duas coisas ao mesmo tempo ─────────────
+   *
+   * ESTE CASO EXIGIA AS DUAS LISTAS DE BLOQUEIO, e exigia certo enquanto a escrita era
+   * `@Roles("SUPER_ADMIN")`: ali, deixar o menu visível ao Master era mostrar a porta e trancá-la.
+   * A regra do diretor (27/09/2026) pediu o oposto do que aquelas listas fazem: `MENUS_SOMENTE_SUPER_ADMIN`
+   * REMOVE o menu do `/auth/me` de quem não é SUPER_ADMIN (torna a concessão INÚTIL) e
+   * `MENUS_BLOQUEADOS_COMUM` é filtrada ao SALVAR (torna a concessão IMPOSSÍVEL de gravar para um COMUM).
+   *
+   * A CASA QUE ATENDE AS DUAS EXIGÊNCIAS É `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER`: o menu não vem de
+   * nascença para ninguém (§A.23), o `MenuGuard` exige a marcação nominal inclusive do MASTER, e a
+   * marcação, quando existe, sobrevive a todos os filtros.
+   */
+  it("nasce SÓ para o SUPER_ADMIN e é CONCEDÍVEL, pessoa a pessoa", () => {
+    expect(
+      masterPrecisaDeMarcacao(MENU_ESPERADO),
+      "fora desta lista, todo MASTER de A&S ganha o catálogo pelo bypass de ÁREA, sem o diretor decidir",
+    ).toBe(true);
     expect(
       MENUS_SOMENTE_SUPER_ADMIN.has(MENU_ESPERADO),
-      "fora desta lista, o menu APARECE para o Master e dá 403: mostrar a porta e trancá-la vira chamado",
-    ).toBe(true);
+      "dentro desta lista, a marcação do diretor é gravada e o `/auth/me` a descarta em silêncio",
+    ).toBe(false);
     expect(
       MENUS_BLOQUEADOS_COMUM.has(MENU_ESPERADO),
-      "fora desta lista, a tela de Usuários OFERECE marcar o menu para um COMUM, e a marcação não concede nada",
-    ).toBe(true);
+      "dentro desta lista, a concessão a um COMUM é filtrada na própria gravação",
+    ).toBe(false);
+    // A PORTA DO NASCIMENTO segue fechada: ninguém recebe o menu por padrão (§A.23).
+    expect(codigosPadraoDoPapel("MASTER")).not.toContain(MENU_ESPERADO);
+    expect(codigosPadraoDoPapel("COMUM")).not.toContain(MENU_ESPERADO);
     expect(
       MENUS_QUE_NASCEM_FORA_DA_ADM.has(MENU_ESPERADO),
       "é a prova NOMINAL de que o menu nasce na área AS, e não na ADM",
@@ -191,50 +222,35 @@ describe("7. o menu do catálogo nasce registrado e SÓ para o SUPER_ADMIN (§A.
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════════════════════
-// 3. A INVARIANTE DA FAMÍLIA: TODO CATÁLOGO DE A&S FECHADO POR `@Roles` SOME DA BARRA DOS OUTROS
+// 3. O BLOCO DA INVARIANTE DA FAMÍLIA FOI RETIRADO, E O PORQUÊ IMPORTA MAIS QUE O BLOCO
 // ═══════════════════════════════════════════════════════════════════════════════════════════════
-
-/**
- * ─ ESTE BLOCO NÃO É SOBRE O CATÁLOGO NOVO, E É DE PROPÓSITO ─────────────────────────────────────
- *
- * A §A.23 não é uma régua por menu, é uma régua da CASA: se a controller de escrita é
- * `@Roles("SUPER_ADMIN")`, o menu que a reivindica TEM de estar nas duas listas, senão o Master vê
- * um card que só lhe dá 403 e o COMUM pode ser marcado para um menu que não concede nada.
- *
- * ESCRITO COMO VARREDURA, e não caso a caso, porque é assim que a invariante sobrevive ao próximo
- * catálogo: o sexto, o sétimo e o oitavo entram nela sozinhos, sem ninguém lembrar de acrescentar
- * um `it` aqui. Foi exatamente esse "lembrar" que falhou uma vez (ver o retorno do `tester`).
- */
-describe("§A.23, a invariante da família de catálogos de A&S", () => {
-  const catalogosFechados = MENUS.filter((m) => {
-    if (!m.codigo.startsWith("as-")) return false;
-    return m.operacoes.some((op) => {
-      const classe = CONTROLLERS.find((c) => op.startsWith(`${c.name}.`));
-      return classe ? Reflect.getMetadata(ROLES_KEY, classe) !== undefined : false;
-    });
-  });
-
-  it("existe mais de um catálogo fechado a afirmar (a varredura não pode passar vazia)", () => {
-    expect(catalogosFechados.map((m) => m.codigo).length).toBeGreaterThan(1);
-  });
-
-  it("TODO menu de A&S cuja escrita é @Roles some da barra dos demais (MENUS_SOMENTE_SUPER_ADMIN)", () => {
-    const faltando = catalogosFechados
-      .map((m) => m.codigo)
-      .filter((c) => !MENUS_SOMENTE_SUPER_ADMIN.has(c));
-    expect(
-      faltando,
-      "estes menus APARECEM para o Master e dão 403 em tudo o que ele tentar (§A.23)",
-    ).toEqual([]);
-  });
-
-  it("TODO menu de A&S cuja escrita é @Roles não é oferecido ao COMUM (MENUS_BLOQUEADOS_COMUM)", () => {
-    const faltando = catalogosFechados
-      .map((m) => m.codigo)
-      .filter((c) => !MENUS_BLOQUEADOS_COMUM.has(c));
-    expect(
-      faltando,
-      "a tela de Usuários oferece marcar estes menus para um COMUM, e a marcação não concede nada",
-    ).toEqual([]);
-  });
-});
+//
+// AQUI HAVIA UMA VARREDURA que afirmava: "todo menu de A&S cuja controller de escrita é
+// `@Roles("SUPER_ADMIN")` TEM de estar em `MENUS_SOMENTE_SUPER_ADMIN` e em `MENUS_BLOQUEADOS_COMUM`".
+// Ela estava CERTA para o desenho de então, e ela vinha com uma SENTINELA própria, que era o cuidado
+// certo: "existe mais de um catálogo fechado a afirmar, a varredura não pode passar vazia".
+//
+// ─ A SENTINELA FICOU VERMELHA, E ELA ESTAVA PROVANDO QUE A FRENTE FEZ O QUE DEVIA ───────────────
+//
+// A regra do diretor (27/09/2026) tirou o `@Roles("SUPER_ADMIN")` dos OITO catálogos de A&S: o Super
+// Admin concede QUALQUER tela a QUALQUER usuário, e o papel na classe abria uma porta trancada. A
+// FAMÍLIA DE "CATÁLOGOS DE A&S FECHADOS POR `@Roles`" ESVAZIOU, ou seja, o conjunto que esta varredura
+// percorria deixou de ter elementos. A sentinela vermelha não é defeito do comportamento novo: é o
+// aviso, funcionando, de que a varredura perdeu o OBJETO.
+//
+// ─ POR QUE RETIRAR, E NÃO REMENDAR PARA CONTINUAR VERDE ─────────────────────────────────────────
+//
+// As duas asserções que ela guardava são hoje o CONTRÁRIO do requisito: exigir
+// `MENUS_SOMENTE_SUPER_ADMIN` é exigir que o menu seja INCONCEDÍVEL, que é exatamente o defeito que
+// a frente eliminou (a tela oferecia a caixa, o diretor marcava, e o backend descartava em silêncio).
+// Mantê-las passando vazio deixaria um teste verde afirmando um desenho REVOGADO, à espera do dia em
+// que alguém recolocasse um `@Roles` e ele voltasse a cobrar a lista errada. Teste que exige um
+// desenho revogado é pior que teste nenhum.
+//
+// ─ O QUE SUBSTITUI, E É MAIS FORTE ─────────────────────────────────────────────────────────────
+//
+// A invariante da FAMÍLIA continua varrida, com a pergunta invertida, em
+// `as/catalogos-concediveis.rbac.spec.ts` (os oito catálogos, handler por handler, pelo `MenuGuard` de
+// verdade) e em `domain/menus.spec.ts` (as listas pinadas por inteiro, nos dois sentidos). O caso
+// "só este menu reivindica a administração do catálogo", que era a metade útil deste bloco, segue
+// afirmado logo acima, no bloco 2.

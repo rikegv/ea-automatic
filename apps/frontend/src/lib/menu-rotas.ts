@@ -166,6 +166,25 @@ export const ROTA_MENU: { prefixo: string; codigo: string }[] = [
   // mostra o dado antes de recusar é pior do que tela que não abre: ela ensina o que existe. A
   // escrita já está fechada por `@Roles("SUPER_ADMIN")` no backend; isto fecha a porta da tela.
   { prefixo: "/admin/as/status-vaga", codigo: "as-status-vaga" },
+  /*
+   * ─ A CENTRAL DE AJUDA NÃO ENTRA AQUI, E A AUSÊNCIA É DELIBERADA ────────────────────────────────
+   *
+   * `/ajuda` e `/ajuda/<artigo>` são LEITURA ABERTA a qualquer pessoa autenticada. O menu `ajuda`
+   * continua existindo e continua governando o que ele governa, que é o CARD na navegação, pela régua
+   * normal da §A.23: quem enxerga o atalho é decisão do diretor, pessoa a pessoa. O que não pode é a
+   * ROTA ser barrada.
+   *
+   * ┌─ POR QUE BARRAR A ROTA SERIA O CONTRÁRIO DO PEDIDO ──────────────────────────────────────────┐
+   * │ O manual não dá acesso a nada e não tem dado de candidato: ele ensina onde clicar. Governado   │
+   * │ por menu, quem NÃO recebeu o atalho tomaria redirecionamento ao digitar o endereço e ao clicar │
+   * │ em "artigo relacionado" de dentro de um artigo, e a pessoa que mais precisa do manual (a que   │
+   * │ acabou de chegar) é exatamente a que menos menus tem. Esconder a AJUDA de quem opera é o       │
+   * │ oposto de o time ter o recurso no dia a dia.                                                  │
+   * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * NÃO ACRESCENTE UM PAR PARA `/ajuda` AQUI. Há um teste em `menu-rotas.spec.ts` afirmando que esta
+   * rota devolve nulo, justamente para a linha não voltar por hábito na próxima frente.
+   */
 ];
 
 /**

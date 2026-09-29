@@ -1,5 +1,4 @@
 import { Body, Controller, Delete, Param, ParseIntPipe, Patch, Post } from "@nestjs/common";
-import { Roles } from "../../auth/decorators";
 import {
   CriarEtapaFunilDto,
   DefinirTomEtapaFunilDto,
@@ -11,21 +10,27 @@ import { EtapasFunilService } from "./etapas-funil.service";
 /**
  * ─ O GERENCIADOR DAS ETAPAS DO FUNIL: A SUPERFÍCIE DE ESCRITA, E SÓ ELA ─────────────────────────
  *
- * ┌─ `@Roles("SUPER_ADMIN")` NA PRÓPRIA CONTROLLER (decisão do diretor) ──────────────────────────┐
- * │ O MENU SOZINHO NÃO SEGURA O MASTER, e isto foi conferido no código, não suposto:               │
- * │ `menu.guard.ts` deixa o MASTER passar por PERTENCER À ÁREA do menu ("MASTER manda na área      │
- * │ inteira: dentro dela, segue sem depender de marcação"), e há MASTER na área AS em produção.    │
- * │ Um menu de área AS, sozinho, entregaria a lista do funil inteiro a eles.                        │
- * │                                                                                                 │
- * │ POR QUE ISSO IMPORTA MAIS AQUI DO QUE PARECE: quem edita esta lista edita o VOCABULÁRIO em que │
- * │ todo o histórico de seleção está escrito. Renomear uma etapa reescreve o nome dela em toda a    │
- * │ linha do tempo de todo mundo que passou por lá, e inativar tira a etapa de circulação para o    │
- * │ time inteiro. É configuração de sistema, não operação de vaga.                                  │
- * │                                                                                                 │
- * │ O `@Roles` É A AUTORIDADE (fail-closed no `RolesGuard`); o menu é a camada de UX que decide se  │
- * │ o card aparece. O padrão é o de `menu-areas` e `usuarios`, não o do `ifractal`, que é gerenciado│
- * │ pelo time do ADM.                                                                               │
- * └─────────────────────────────────────────────────────────────────────────────────────────────────┘
+ * ┌─ QUEM SEGURA A PORTA É O MENU, NÃO O PAPEL (regra do diretor, 27/09/2026) ────────────────────┐
+ * │ O `@Roles("SUPER_ADMIN")` QUE MORAVA AQUI FOI REMOVIDO. A regra nova é que o Super Admin       │
+ * │ concede QUALQUER tela a QUALQUER usuário, e com o papel na classe isso era impossível de       │
+ * │ entregar: conceder o menu abria uma PORTA TRANCADA, e a marcação era descartada em silêncio    │
+ * │ pelas listas de papel do domínio.                                                              │
+ * │                                                                                                │
+ * │ A AUTORIDADE PASSOU A SER O `MenuGuard`, que já reivindicava esta classe inteira               │
+ * │ (`EtapasFunilAdminController.*`, menu `as-etapas`). Ele é FAIL-OPEN só para operação NÃO       │
+ * │ reivindicada: sem aquela linha, remover o `@Roles` teria aberto a rota a QUALQUER AUTENTICADO. │
+ * │ As duas mudanças só fazem sentido JUNTAS.                                                      │
+ * │                                                                                                │
+ * │ E O MASTER NÃO PASSA DE GRAÇA: `menu.guard.ts` o deixa passar por PERTENCER À ÁREA, e há       │
+ * │ MASTER na área AS em produção. Quem fecha esse atalho é a entrada nominal do código em         │
+ * │ `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER`, sem a qual todos eles ganhariam o catálogo sozinhos e   │
+ * │ não sobraria decisão individual nenhuma para o diretor tomar.                                  │
+ * └────────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * O QUE NÃO MUDOU: quem edita esta lista edita o VOCABULÁRIO em que todo o histórico de seleção está
+ * escrito. Renomear uma etapa reescreve o nome dela em toda a linha do tempo de todo mundo que passou
+ * por lá, e inativar tira a etapa de circulação para o time inteiro. É configuração de sistema, e o
+ * catálogo segue RESTRITO: o que mudou é que a restrição passou a ser CONCEDÍVEL, pessoa a pessoa.
  *
  * A LEITURA VIVE NA OUTRA CLASSE (`EtapasFunilController`), aberta a qualquer autenticado: fechar a
  * leitura junto daria 403 no funil para o consultor que só precisa saber quais etapas existem. A
@@ -35,7 +40,6 @@ import { EtapasFunilService } from "./etapas-funil.service";
  * que aparecem nas frases de recusa são NÚMEROS, sem nome e sem identificador.
  */
 @Controller("admin/as/etapas")
-@Roles("SUPER_ADMIN")
 export class EtapasFunilAdminController {
   constructor(private readonly etapas: EtapasFunilService) {}
 

@@ -5,7 +5,7 @@ import { MotivosCancelamentoVagaAdminController } from "./motivos-cancelamento-a
 import { MotivosCancelamentoVagaController } from "./motivos-cancelamento.controller";
 
 /**
- * ─ O CATÁLOGO DE MOTIVOS DE CANCELAMENTO: A LEITURA É ABERTA, A ESCRITA É DO SUPER_ADMIN ────────
+ * ─ O CATÁLOGO DE MOTIVOS DE CANCELAMENTO: A LEITURA É ABERTA, A ESCRITA É CONCEDIDA PELO MENU ───
  *
  * ┌─ O MOLDE MAIS PRÓXIMO ESTÁ ERRADO PARA ESTE CASO, E É ISSO QUE ESTE TESTE GUARDA ──────────┐
  * │ `admin/motivos-declinio`, o catálogo irmão da Admissão, NÃO tem `@Roles` nenhum, e o        │
@@ -14,32 +14,52 @@ import { MotivosCancelamentoVagaController } from "./motivos-cancelamento.contro
  * │ o certo é o de lá. Este teste é quem diz que não é.                                        │
  * │                                                                                            │
  * │ E O MENU SOZINHO NÃO SEGURARIA O MASTER: o `MenuGuard` deixa o MASTER passar por PERTENCER  │
- * │ À ÁREA do menu, e há MASTER na área AS em produção. Quem tranca a porta é o `@Roles`, que é │
- * │ fail-closed no `RolesGuard`.                                                               │
+ * │ À ÁREA do menu, e há MASTER na área AS em produção. Quem fecha esse atalho é a entrada      │
+ * │ nominal do código em `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER`.                                 │
+ * └────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ O `@Roles("SUPER_ADMIN")` SAIU DA CLASSE (regra do diretor, 27/09/2026) ───────────────────┐
+ * │ O Super Admin concede QUALQUER tela a QUALQUER usuário, e com o papel na classe isso era    │
+ * │ impossível de entregar: conceder o menu abria uma PORTA TRANCADA, com 403 já no `@Get` que a │
+ * │ tela de administração lê ao abrir, e a marcação era descartada em silêncio.                  │
+ * │                                                                                            │
+ * │ O QUE ESTE ARQUIVO PASSOU A GUARDAR, e é a mesma coisa pelo outro lado: a REIVINDICAÇÃO do  │
+ * │ menu é agora a autoridade, e sem ela remover o papel teria ABERTO a escrita, que é exatamente │
+ * │ o defeito do molde `admin/motivos-declinio` descrito acima.                                  │
  * └────────────────────────────────────────────────────────────────────────────────────────────┘
  *
  * O ERRO SIMÉTRICO, do outro lado, é tão caro quanto: fechar a LEITURA junto daria 403 no seletor de
  * motivo para o consultor COMUM, que é justamente quem cancela vaga. O modal abriria com a lista
  * vazia, e o cancelamento inteiro pararia para quem opera.
  */
-describe("motivos de cancelamento: a leitura é aberta, a escrita é do SUPER_ADMIN", () => {
+describe("motivos de cancelamento: a leitura é aberta, a escrita é concedida pelo menu", () => {
   const ESCRITA = ["listar", "criar", "atualizar", "reativar", "inativar"] as const;
 
-  it("a ESCRITA é @Roles(\"SUPER_ADMIN\") na CLASSE, cobrindo rota que ainda não existe", () => {
-    expect(Reflect.getMetadata(ROLES_KEY, MotivosCancelamentoVagaAdminController)).toEqual([
-      "SUPER_ADMIN",
-    ]);
+  it("a ESCRITA NÃO tem mais @Roles em CLASSE: o papel deixou de ser a autoridade", () => {
+    expect(Reflect.getMetadata(ROLES_KEY, MotivosCancelamentoVagaAdminController)).toBeUndefined();
   });
 
-  it("nenhuma operação de escrita escapa por um @Roles de MÉTODO que afrouxe a classe", () => {
+  it("nenhuma operação de escrita reintroduz @Roles por MÉTODO", () => {
     const proto = MotivosCancelamentoVagaAdminController.prototype as unknown as Record<
       string,
       object
     >;
     for (const op of ESCRITA) {
       expect(typeof proto[op], `o handler ${op} precisa existir`).toBe("function");
-      const noMetodo = Reflect.getMetadata(ROLES_KEY, proto[op]) as string[] | undefined;
-      expect(noMetodo ?? ["SUPER_ADMIN"], `${op}`).toEqual(["SUPER_ADMIN"]);
+      expect(Reflect.getMetadata(ROLES_KEY, proto[op]), `${op}`).toBeUndefined();
+    }
+  });
+
+  /**
+   * SEM ESTA ASSERÇÃO, TIRAR O `@Roles` SERIA ABRIR A ROTA, e este é o caso do molde errado descrito
+   * no cabeçalho: o `MenuGuard` só fecha o que é reivindicado, e operação sem dono passa. As duas
+   * mudanças (tirar o papel, manter a reivindicação) só fazem sentido JUNTAS.
+   */
+  it("a ESCRITA é reivindicada pelo menu, senão tirar o @Roles teria ABERTO a rota", () => {
+    for (const op of ESCRITA) {
+      expect(menuDaOperacao("MotivosCancelamentoVagaAdminController", op), op).toBe(
+        "as-motivos-cancelamento",
+      );
     }
   });
 

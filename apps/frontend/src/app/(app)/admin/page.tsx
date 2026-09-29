@@ -352,6 +352,22 @@ export const CARDS: {
     title: "Área Por Menu",
     desc: "Quais áreas enxergam cada menu do sistema.",
   },
+  {
+    /*
+     * CENTRAL DE AJUDA: registrar o menu faz ele EXISTIR para o diretor liberar; é este card que faz
+     * ele ser ENCONTRADO. Os dois passos são necessários e nenhum substitui o outro, que foi o buraco
+     * do menu Clínicas (tela no ar e invisível na tela de permissão).
+     *
+     * A ROTA FICA FORA DE `/admin` de propósito, como a do iFractal: o manual é lido por quem opera,
+     * no meio do trabalho, e mudar a URL para dentro da administração faria a ajuda parecer um
+     * cadastro. O card é a porta; a outra porta é o botão de ajuda de cada tela.
+     */
+    href: "/ajuda",
+    codigo: "ajuda",
+    icon: "bulb",
+    title: "Central De Ajuda",
+    desc: "O manual do sistema: passo a passo por tela, com busca.",
+  },
 ];
 
 /** Normaliza para busca: minúsculas, sem acento (mesmo comportamento das outras buscas). */

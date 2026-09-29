@@ -30,6 +30,45 @@ export const AREA_LABEL: Record<Area, string> = {
   AS: "Atração E Seleção",
 };
 
+/**
+ * ─ POR QUE UM MENU PODE NÃO SER CONCEDÍVEL A ALGUÉM ────────────────────────────────────────────
+ *
+ * ┌─ O DEFEITO QUE ESTE TIPO EXISTE PARA MATAR (medido em 26/09/2026) ─────────────────────────┐
+ * │ A tela de permissões guardava a regra à mão, numa lista de DOIS códigos escrita dentro do   │
+ * │ componente, enquanto o backend aplicava uma de ONZE. As duas divergiram, e o resultado era o │
+ * │ pior possível numa tela de concessão: a caixa aparecia MARCÁVEL, o diretor marcava, a tela   │
+ * │ salvava SEM RECLAMAR e o servidor descartava em silêncio. Ninguém via erro, e a pessoa       │
+ * │ simplesmente não recebia o acesso. É o "mostrar a porta e trancá-la" acontecendo dentro da   │
+ * │ própria tela que existe para abrir portas.                                                   │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * A REGRA PASSA A DESCER DO SERVIDOR, POR MENU, e a tela deixa de ter opinião: ela desabilita o que
+ * vier restrito e ESCREVE O MOTIVO. Uma fonte só, que é o que impede a divergência de voltar.
+ *
+ * `NENHUMA` = concedível a qualquer usuário, que é a regra do diretor a partir de 27/09/2026.
+ * `SO_SUPER_ADMIN` = a marcação não vale para outro papel (hoje: as telas que concedem permissão).
+ * `NAO_PARA_COMUM` = concedível a MASTER, não ao COMUM.
+ */
+export const MENU_RESTRICAO = ["NENHUMA", "SO_SUPER_ADMIN", "NAO_PARA_COMUM"] as const;
+export type MenuRestricaoConcessao = (typeof MENU_RESTRICAO)[number];
+
+/**
+ * UMA LINHA DO CATÁLOGO DE MENUS como a tela de permissões a recebe.
+ *
+ * A `restricao` é DERIVADA no servidor a partir das listas do domínio, nunca digitada: derivar é o
+ * que garante que um menu novo nasça com a resposta certa sem ninguém lembrar de atualizar a tela.
+ */
+export interface MenuCatalogoItem {
+  codigo: string;
+  rotulo: string;
+  href: string;
+  grupo: string;
+  ordem: number;
+  /** Áreas que enxergam este menu. O teto de área é aplicado por cima da concessão. */
+  areas?: Area[];
+  restricao: MenuRestricaoConcessao;
+}
+
 // ── Gestão de usuários (OST-EA-GESTAO-USUARIOS — restrito Master/Super Admin) ───────────────
 /** Item da listagem/administração de usuários. NUNCA carrega senhaHash (§A.6). */
 export interface UsuarioListItem {
