@@ -15,6 +15,8 @@ import { GoogleDriveLogo } from "@/components/ui/GoogleDriveLogo";
 import { cn } from "@/lib/cn";
 import { DependenciaDrawer } from "@/components/diagnostico/DependenciaDrawer";
 import { listarEntradasPandape } from "@/lib/pandape-entradas";
+// A régua da busca por nome mora no lib: a busca do modal da fila degradada usa a MESMA.
+import { normBusca } from "@/lib/busca-nome";
 
 interface SinalItem {
   // Sinais por admissão trazem admissaoId + candidato; sinais sem pessoa (coleta de VT) não.
@@ -112,18 +114,6 @@ const TOM_DEP: Record<Dependencia["estado"], "ok" | "dg" | "wn" | "nt"> = {
 };
 
 /** Ícone curto por sinal (linguagem visual dos cards do Menu Gerencial). */
-/**
- * Sem acento e sem caixa, para "jose" achar "JOSÉ". Mesmo recorte que o `Select` e o `Combobox` já
- * usam: 2 dos 31 nomes do sinal têm acento, então comparar cru deixaria a busca mentir.
- */
-function normBusca(s: string): string {
-  return s
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .trim();
-}
-
 const ICONE_SINAL: Record<string, IconName> = {
   "pendente-staging": "layers",
   "regua-sem-pasta": "folder",

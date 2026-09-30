@@ -632,7 +632,10 @@ export class DiagnosticoService {
     const agora = new Date().toISOString();
     const [banco, filaSt, vertex, drive, pandape] = await Promise.all([
       this.checarBanco(),
-      this.filas.estado(),
+      // O card usa SÓ a contagem e os indisponíveis, nunca a lista: pede ZERO job falhado. O teto da
+      // lista subiu para 500 por causa da busca por nome do drawer (30/09/2026), e ler 500 hashes do
+      // Redis a cada abertura do Diagnóstico para descartar todos seria desperdício puro.
+      this.filas.estado(FilasDiagnosticoService.LIMITE_SNAPSHOT),
       this.ai.readinessVertex(),
       this.ai.readinessDrive(),
       this.pandapeApi.readiness(),

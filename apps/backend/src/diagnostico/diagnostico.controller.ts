@@ -1,4 +1,5 @@
 import { Body, Controller, Get, Logger, Param, Post } from "@nestjs/common";
+import { Throttle } from "@nestjs/throttler";
 import type { AuthUser } from "../auth/auth.types";
 import { CurrentUser, Roles } from "../auth/decorators";
 import { AuditoriaService } from "../auditoria/auditoria.service";
@@ -15,6 +16,8 @@ import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
 import { DiagnosticoService } from "./diagnostico.service";
 import { FilasDiagnosticoService, type NomeFila } from "./filas.service";
+import { NomesFalhadosService } from "./nomes-falhados.service";
+import { nomeDoPrecollaborator } from "./nome-do-precolaborador";
 import {
   mensagemDoReprocesso,
   traduzirMotivo,
@@ -31,6 +34,7 @@ import {
   AcaoRepullDto,
   SchedulerToggleDto,
   AcaoJobDto,
+  NomesDosFalhadosDto,
   TestarDependenciaDto,
 } from "./diagnostico.dto";
 import { AiClientService } from "../ai/ai-client.service";
@@ -63,6 +67,7 @@ export class DiagnosticoController {
     private readonly ai: AiClientService,
     private readonly filas: FilasDiagnosticoService,
     private readonly pandapeApi: PandapeApiService,
+    private readonly nomesFalhados: NomesFalhadosService,
   ) {}
 
   /** Snapshot completo (sinais + dependências + última coleta + histórico + alerta). */
@@ -359,7 +364,48 @@ export class DiagnosticoController {
    */
   @Get("filas")
   filasDetalhe() {
-    return this.filas.estado();
+    // PEDE A LISTA GRANDE EXPLICITAMENTE (OST 30/09/2026). O padrão de `estado()` continua 50, para
+    // nenhum outro chamador mudar de comportamento por omissão (§A.26): quem precisa da fila inteira é
+    // só este endpoint, porque é sobre esta lista que a busca por nome roda.
+    return this.filas.estado(FilasDiagnosticoService.LIMITE_LISTA);
+  }
+
+  /**
+   * OS NOMES dos jobs falhados, EM LOTE, para a BUSCA POR NOME do drawer da fila (OST 30/09/2026).
+   *
+   * POR QUE EM LOTE: a rota `/filas/:fila/:jobId/alvo` resolve UM alvo por clique, e era por isso que
+   * achar um candidato na fila era olhar linha por linha. Buscar por nome exige que a lista TENHA o
+   * nome antes de a pessoa digitar, então a tela pede este lote depois de carregar `GET /filas`.
+   *
+   * POST, E NÃO GET, por causa do corpo: a tela manda os `jobIds` que está mostrando e o SERVIDOR
+   * deriva o `idPrecollaborator` do `job.data`. O cliente nunca manda id de pré-colaborador (seria um
+   * oráculo de enumeração), e a fila é fixa `pandape-sync` aqui dentro.
+   *
+   * §A.5, COTA: o resolvedor tem bucket próprio de 150 requisições/5min, global ao processo, porque
+   * este caminho é HTTP e nasce fora dos limiters das filas. O `@Throttle` acima é a segunda trava, no
+   * outro eixo: o balde global do throttler é 120/60s e permitiria 120 aberturas por minuto, cada uma
+   * varrendo a fila inteira. Três por minuto é o que uma pessoa abrindo um modal faz.
+   *
+   * §A.6: a resposta é `{ nomes: [{ jobId, nome }], restantes }` e NADA MAIS, montada campo por campo.
+   * Sem CPF (o `getMatch` não é chamado aqui), sem o pré-colaborador, sem id externo, sem vaga. A
+   * trilha registra só QUANTOS e QUEM pediu, nunca nome.
+   *
+   * RBAC: herda o `@Roles("MASTER", "SUPER_ADMIN")` da CLASSE. Não se anota por cima de propósito:
+   * decorador no handler SOBRESCREVE o da classe (`reflector.getAllAndOverride`), e um dia alguém o
+   * alargaria sem perceber que estava afrouxando a porta.
+   */
+  @Throttle({ default: { ttl: 60_000, limit: 3 } })
+  @Post("filas/nomes")
+  async nomesDosFalhados(@Body() dto: NomesDosFalhadosDto, @CurrentUser() user: AuthUser) {
+    const pedidos = new Set(dto.jobIds);
+    // A tradução job → pré-colaborador sai da LISTA DE FALHADOS, não de um `getJob` por id avulso:
+    // assim a rota não serve para consultar job que não está na fila de falhados da tela.
+    const alvos = (await this.filas.alvosPandapeFalhados()).filter((a) => pedidos.has(a.jobId));
+    const r = await this.nomesFalhados.resolver(alvos);
+    this.logger.log(
+      `[DIAGNOSTICO][trilha] acao=nomes-dos-falhados qtd=${r.nomes.length} restantes=${r.restantes} por=${user.id} (${user.papel})`,
+    );
+    return r;
   }
 
   /**
@@ -394,7 +440,9 @@ export class DiagnosticoController {
       return {
         tipo: "pandape",
         id: String(dados.idPrecollaborator),
-        nome: [pc.name, pc.surname].filter(Boolean).join(" ").trim() || "não informado",
+        // MESMO helper do lote de nomes: duas montagens do nome divergiriam no primeiro ajuste, e a
+        // divergência aqui é a tela mostrar um nome e a busca procurar outro.
+        nome: nomeDoPrecollaborator(pc) ?? "não informado",
         vaga: pc.vacancyJob ?? "não informada",
         etapa: pc.currentFolderName ?? "não informada",
         admissaoPrevista: pc.admissionDate ?? null,

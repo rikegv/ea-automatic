@@ -79,6 +79,35 @@ export interface EstadoFilas {
 export class FilasDiagnosticoService {
   private readonly logger = new Logger("FilasDiagnostico");
 
+  /**
+   * TETO DA LISTA DE FALHADOS, POR FILA, quando alguém abre o drawer.
+   *
+   * ERA 50, E ESCONDIA A MAIOR PARTE DA FILA. Medido na produção em 30/09/2026: a `pandape-sync`
+   * tinha 132 jobs falhados (`zcard ea:bull:pandape-sync:failed`), então 82 deles NUNCA chegavam à
+   * tela. O comentário antigo dizia que "a lista é para AGIR, não para paginar", e isso deixou de
+   * valer no momento em que a lista ganhou BUSCA POR NOME: busca que varre meia fila responde
+   * "não encontrado" para um candidato que está ali, o que é pior do que não ter busca.
+   *
+   * POR QUE 500, e não um número maior: é o mesmo teto do `PandapeNomeCacheService` (500 entradas).
+   * Listar mais linhas do que o cache de nomes consegue guardar não tornaria a busca mais completa,
+   * só gastaria cota do Pandapé resolvendo nome que seria evicto em seguida. Dá folga de ~3,8x sobre
+   * as 132 medidas, e a leitura é do Redis LOCAL (barata, sem rede externa).
+   */
+  static readonly LIMITE_LISTA = 500;
+  /**
+   * O PADRÃO DE `estado()` CONTINUA 50, e isso é deliberado (§A.26). Subir o teto no DEFAULT mudaria
+   * o comportamento de todo chamador por OMISSÃO, inclusive de quem só quer contagem. Quem quer a
+   * lista grande PEDE: o endpoint do drawer passa `LIMITE_LISTA` explicitamente.
+   */
+  static readonly LIMITE_PADRAO = 50;
+  /**
+   * O QUE O SNAPSHOT PEDE: ZERO linha. `estado()` tem DOIS consumidores, e só um usa a lista. O card
+   * "Fila (BullMQ)" de `/diagnostico` (`diagnostico.service.dependencias`) consome SÓ a contagem e os
+   * indisponíveis; subir o teto para ele faria toda abertura da tela ler centenas de hashes do Redis
+   * para descartar todos. Zero significa "nem chame o `getFailed`".
+   */
+  static readonly LIMITE_SNAPSHOT = 0;
+
   /** Teto do acompanhamento do reprocesso. Segura a conexão HTTP por no máximo isto. */
   private static readonly TETO_ESPERA_MS = 25_000;
   /** Cadência das checagens de estado. Barato: é um HGET no Redis local. */
@@ -114,8 +143,24 @@ export class FilasDiagnosticoService {
     return "Ciclo de varredura da coleta de VT";
   }
 
-  /** Estado somado das três filas + os jobs falhados de todas elas, do mais recente ao mais antigo. */
-  async estado(): Promise<EstadoFilas> {
+  /**
+   * Estado somado das três filas + os jobs falhados de todas elas, do mais recente ao mais antigo.
+   *
+   * O `limiteFalhados` é por FILA, e existe porque os dois consumidores querem coisas diferentes: o
+   * drawer quer a lista inteira (para a busca por nome varrer tudo), o snapshot do card quer só a
+   * contagem. Zero não lista nada e poupa o `getFailed`.
+   */
+  async estado(
+    limiteFalhados: number = FilasDiagnosticoService.LIMITE_PADRAO,
+  ): Promise<EstadoFilas> {
+    // SANEAMENTO AQUI DENTRO, e não no chamador, por causa de um off-by-one que lê a fila INTEIRA em
+    // silêncio: `getFailed(0, limite - 1)` com `limite` igual a 0 vira `getFailed(0, -1)`, e no BullMQ
+    // o -1 significa ATÉ O FIM, ou seja, os até 5.000 jobs que o `removeOnFail` retém. Zero ou menos
+    // não vira -1: vira "não chame o `getFailed`". E o 500 é absoluto, o chamador não pode passar dele.
+    const teto = Math.min(
+      Math.max(Math.trunc(limiteFalhados) || 0, 0),
+      FilasDiagnosticoService.LIMITE_LISTA,
+    );
     const contagem: ContagemFilas = { ativos: 0, aguardando: 0, falhados: 0, atrasados: 0 };
     const jobs: JobFalhado[] = [];
     const indisponiveis: NomeFila[] = [];
@@ -136,9 +181,8 @@ export class FilasDiagnosticoService {
         contagem.falhados += c.failed ?? 0;
         contagem.atrasados += c.delayed ?? 0;
 
-        // Teto de 50 por fila: a lista é para AGIR, não para paginar. Com mais que isso o problema
-        // não é um job, é a fila inteira, e a contagem já diz isso.
-        const falhados = await q.getFailed(0, 49);
+        // A lista é opcional: o snapshot pede 0 e nem chega a ler os hashes (ver LIMITE_SNAPSHOT).
+        const falhados = teto > 0 ? await q.getFailed(0, teto - 1) : [];
         for (const j of falhados) {
           const quando = j.finishedOn ?? j.processedOn ?? null;
           jobs.push({
@@ -162,6 +206,43 @@ export class FilasDiagnosticoService {
 
     jobs.sort((a, b) => (b.falhouEm ?? "").localeCompare(a.falhouEm ?? ""));
     return { disponivel: alguma, contagem, jobs, indisponiveis };
+  }
+
+  /**
+   * OS ALVOS DO PANDAPÉ entre os jobs falhados: o par (jobId, idPrecollaborator), e nada mais.
+   *
+   * Existe para a BUSCA POR NOME do drawer (OST 30/09/2026) poder resolver o nome de todas as linhas
+   * de uma vez. O `JobFalhado` NÃO ganhou o id externo de propósito: ele é o contrato que a tela já
+   * consome, e quem precisa do id é só o resolvedor de nomes, do lado do servidor. O id nunca vai
+   * para a resposta HTTP (§A.6, minimização): sai daqui para o `NomesFalhadosService` e para.
+   *
+   * Pega TODO job falhado da fila que carregue `idPrecollaborator`, inclusive o `pull-docs` (que
+   * carrega os dois ids): quem procura por nome quer achar a pessoa em qualquer linha dela.
+   */
+  async alvosPandapeFalhados(
+    limite: number = FilasDiagnosticoService.LIMITE_LISTA,
+  ): Promise<{ jobId: string; idPrecollaborator: string }[]> {
+    const q = this.fila("pandape-sync");
+    const teto = Math.min(
+      Math.max(Math.trunc(limite) || 0, 0),
+      FilasDiagnosticoService.LIMITE_LISTA,
+    );
+    if (!q || teto <= 0) return [];
+    try {
+      const falhados = await q.getFailed(0, teto - 1);
+      const alvos: { jobId: string; idPrecollaborator: string }[] = [];
+      for (const j of falhados) {
+        const id = (j.data as Record<string, unknown> | undefined)?.idPrecollaborator;
+        if (id) alvos.push({ jobId: String(j.id ?? ""), idPrecollaborator: String(id) });
+      }
+      return alvos;
+    } catch (err) {
+      // Mesma direção do `estado()`: fila ilegível não derruba a tela, só não traz nome.
+      this.logger.warn(
+        `Falha ao ler os alvos da fila pandape-sync: ${err instanceof Error ? err.message : "erro"}`,
+      );
+      return [];
+    }
   }
 
   private async buscarJob(fila: NomeFila, jobId: string): Promise<Job> {

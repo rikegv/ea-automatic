@@ -1,5 +1,14 @@
-import { IsBoolean, IsIn, IsNotEmpty, IsString, IsUUID } from "class-validator";
-import { FILAS, type NomeFila } from "./filas.service";
+import {
+  ArrayMaxSize,
+  ArrayNotEmpty,
+  IsArray,
+  IsBoolean,
+  IsIn,
+  IsNotEmpty,
+  IsString,
+  IsUUID,
+} from "class-validator";
+import { FILAS, FilasDiagnosticoService, type NomeFila } from "./filas.service";
 
 /** Ações do Bloco 5, sempre POR ALVO (uma admissão). */
 export class AcaoReauditarDto {
@@ -93,6 +102,31 @@ export class AcaoJobDto {
   @IsString()
   @IsNotEmpty({ message: "Informe o job." })
   jobId!: string;
+}
+
+/**
+ * OS NOMES DOS JOBS FALHADOS, EM LOTE (OST 30/09/2026), para a busca por nome do drawer da fila.
+ *
+ * O CORPO CARREGA `jobIds`, E NUNCA O ID EXTERNO DO PRÉ-COLABORADOR: quem traduz job → pré-colaborador
+ * é o SERVIDOR, lendo o `job.data`. Aceitar o id externo do cliente transformaria a rota em um oráculo
+ * de enumeração do ATS (dá para varrer ids e colher nomes), e o fato de a rota ser MASTER/SUPER_ADMIN
+ * não muda a natureza da coisa. Este arquivo NÃO declara aquele campo, e não passa a declarar.
+ *
+ * A FILA TAMBÉM NÃO VEM DO CLIENTE: é fixa `pandape-sync` no servidor, que é a única fila cujos jobs
+ * têm nome de candidato no Pandapé.
+ *
+ * O TETO DE 500 é o mesmo teto da lista (`FilasDiagnosticoService.LIMITE_LISTA`): a tela não consegue
+ * mostrar mais linhas do que isso, então pedir mais é corpo que ninguém usa.
+ */
+export class NomesDosFalhadosDto {
+  @IsArray()
+  @ArrayNotEmpty({ message: "Informe os jobs." })
+  @ArrayMaxSize(FilasDiagnosticoService.LIMITE_LISTA, {
+    message: "Pedido grande demais para a lista da fila.",
+  })
+  @IsString({ each: true })
+  @IsNotEmpty({ each: true, message: "Job vazio no pedido." })
+  jobIds!: string[];
 }
 
 /** "Testar agora" de UMA dependência: re-checa pelo caminho real, ignorando o cache de 5 minutos. */

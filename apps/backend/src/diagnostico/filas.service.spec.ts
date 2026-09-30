@@ -192,6 +192,82 @@ describe("FilasDiagnosticoService", () => {
   });
 });
 
+/**
+ * O TETO DA LISTA (OST 30/09/2026). Era 50, e com 132 falhados medidos na produção 82 deles nunca
+ * chegavam à tela: busca por nome que varre meia fila responde "não encontrado" para quem está ali.
+ * O que estes testes seguram é o ALCANCE da mudança: `estado()` tem DOIS consumidores, e o snapshot
+ * do card (que só usa a contagem) não pode passar a ler centenas de hashes do Redis para descartar.
+ */
+describe("FilasDiagnosticoService: o teto da lista de falhados", () => {
+  it("o DRAWER pede a fila inteira: 500 por fila, folga sobre as 132 medidas", async () => {
+    const pandape = filaFake({ failed: 132 });
+    await servico({ pandape }).estado(FilasDiagnosticoService.LIMITE_LISTA);
+    expect(pandape.getFailed).toHaveBeenCalledWith(0, 499);
+    expect(FilasDiagnosticoService.LIMITE_LISTA).toBe(500);
+  });
+
+  it("o PADRÃO continua 50: nenhum chamador existente muda de comportamento por omissão (§A.26)", async () => {
+    const pandape = filaFake({ failed: 132 });
+    await servico({ pandape }).estado();
+    expect(pandape.getFailed).toHaveBeenCalledWith(0, 49);
+  });
+
+  it("o SNAPSHOT pede ZERO e NEM CHAMA o getFailed, mas continua contando", async () => {
+    const pandape = filaFake({ active: 1, failed: 132 });
+    const r = await servico({ pandape }).estado(FilasDiagnosticoService.LIMITE_SNAPSHOT);
+
+    expect(pandape.getFailed).not.toHaveBeenCalled();
+    expect(r.contagem.falhados).toBe(132);
+    expect(r.contagem.ativos).toBe(1);
+    expect(r.jobs).toEqual([]);
+    expect(r.disponivel).toBe(true);
+  });
+
+  /**
+   * O OFF-BY-ONE QUE LERIA A FILA INTEIRA EM SILÊNCIO: no BullMQ, `getFailed(0, -1)` significa ATÉ O
+   * FIM, e o `removeOnFail: 5000` retém até 5.000 falhados. Zero (ou negativo) NÃO pode virar -1.
+   */
+  it("limite 0 ou negativo NÃO vira getFailed(0, -1): não lista NADA", async () => {
+    for (const limite of [0, -1, -999, Number.NaN]) {
+      const pandape = filaFake({ failed: 5_000 });
+      const r = await servico({ pandape }).estado(limite);
+      expect(pandape.getFailed, `limite ${limite}`).not.toHaveBeenCalled();
+      expect(r.jobs).toEqual([]);
+    }
+  });
+
+  it("o 500 é ABSOLUTO: chamador pedindo mais não arranca a fila inteira do Redis", async () => {
+    const pandape = filaFake({ failed: 5_000 });
+    await servico({ pandape }).estado(5_000);
+    expect(pandape.getFailed).toHaveBeenCalledWith(0, 499);
+  });
+});
+
+/**
+ * Os ALVOS do Pandapé (jobId + idPrecollaborator) que alimentam a busca por nome. O par sai daqui e
+ * para no resolvedor: o id externo NUNCA entra no `JobFalhado` nem na resposta HTTP (§A.6).
+ */
+describe("FilasDiagnosticoService.alvosPandapeFalhados", () => {
+  it("devolve o par (jobId, idPrecollaborator) só de quem tem id externo", async () => {
+    const alvos = await servico({
+      pandape: filaFake({}, [
+        { id: "1", name: "sync-candidate", data: { idPrecollaborator: "421114" }, failedReason: "CPF inválido", attemptsMade: 6 },
+        { id: "2", name: "pull-docs", data: { admissaoId: "640f7bc6-9f3f-49e8-bcaa-883fdcec331f", idPrecollaborator: "421115" }, failedReason: "x", attemptsMade: 1 },
+        { id: "3", name: "scheduler-tick", data: {}, failedReason: "y", attemptsMade: 1 },
+      ]),
+    }).alvosPandapeFalhados();
+
+    expect(alvos).toEqual([
+      { jobId: "1", idPrecollaborator: "421114" },
+      { jobId: "2", idPrecollaborator: "421115" },
+    ]);
+  });
+
+  it("fila fora do ar não derruba a busca: lista vazia", async () => {
+    expect(await servico({}).alvosPandapeFalhados()).toEqual([]);
+  });
+});
+
 describe("FilasDiagnosticoService.reprocessarJob", () => {
   /**
    * O DEFEITO QUE ESTES TESTES SEGURAM (caso Zelda, 05/09/2026). O método devolvia

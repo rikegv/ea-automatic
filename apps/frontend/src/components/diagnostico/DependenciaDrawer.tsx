@@ -7,6 +7,7 @@ import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { Icon } from "@/components/ui/Icon";
 import { StatusPill } from "@/components/ui/StatusPill";
+import { normBusca } from "@/lib/busca-nome";
 
 export interface Dependencia {
   nome: string;
@@ -26,6 +27,30 @@ interface JobFalhado {
   falhouEm: string | null;
   horas: number | null;
 }
+/**
+ * O NOME DE TODAS AS LINHAS DE UMA VEZ, resolvido ao abrir o modal.
+ *
+ * É POST com `jobIds` no corpo, e não GET com query, por exigência da auditoria: quem deriva o
+ * identificador de pré-colaborador é o servidor, a partir do `job.data`. Cliente que pudesse mandar
+ * esse identificador seria um oráculo de enumeração. O corpo também mantém NOME fora de query string,
+ * que atravessaria o proxy same-origin do Next e cairia em log de acesso (§A.6).
+ *
+ * A linha do job desenha o alvo cru ("Candidato do Pandápé <id>"), e o nome só aparecia depois de um
+ * clique em "Ver dados do alvo", um por um. Sem nome na linha não existe busca por nome: é por isso
+ * que o lote vem no abrir, e não por clique.
+ *
+ * Só `jobId` e `nome`, nunca CPF (§A.6). Job cujo nome não resolveu simplesmente não vem na lista.
+ */
+interface NomesDoLote {
+  nomes: Array<{ jobId: string; nome: string }>;
+  /**
+   * Quantos ficaram SEM resolver porque o freio de cota do backend recusou o excedente (§A.5: a cota
+   * do Pandápé é compartilhada com o webhook que alimenta a folha). Maior que zero, a tela diz e
+   * oferece pedir o restante A PEDIDO. Nunca em laço automático: laço transforma freio em tempestade.
+   */
+  restantes: number;
+}
+
 interface EstadoFilas {
   disponivel: boolean;
   contagem: { ativos: number; aguardando: number; falhados: number; atrasados: number };
@@ -113,6 +138,12 @@ const COPY: Record<string, { oQueE: string; oQueFazer: string }> = {
   },
 };
 
+/**
+ * A fila cujos jobs carregam PESSOA. As outras (assinatura, coleta de VT) não têm nome para resolver,
+ * e a linha delas segue exibindo o alvo cru, como sempre exibiu.
+ */
+const FILA_COM_NOME = "pandape-sync";
+
 /** Mesmos tons da faixa 2 da tela, para o pill do drawer não contar história diferente do card. */
 const TOM: Record<Dependencia["estado"], "ok" | "dg" | "wn" | "nt"> = {
   ok: "ok",
@@ -165,6 +196,26 @@ export function DependenciaDrawer({
   const [erro, setErro] = useState<string | null>(null);
   const [emVoo, setEmVoo] = useState<string | null>(null);
   const [alvos, setAlvos] = useState<Record<string, AlvoResolvido>>({});
+  /** jobId -> nome do candidato, do lote resolvido ao abrir. Vazio = ainda não chegou ou não resolveu. */
+  const [nomes, setNomes] = useState<Record<string, string>>({});
+  /**
+   * O lote de nomes falhou INTEIRO. Não é erro de tela: a lista de jobs continua lá, com o alvo cru, e
+   * o único efeito é a busca avisar que não tem nome para procurar. Perder a lista por causa do nome
+   * seria trocar um incómodo por um apagão.
+   */
+  const [nomesFalhou, setNomesFalhou] = useState(false);
+  /** Quantos nomes o freio de cota do backend recusou resolver. Ver `NomesDoLote.restantes`. */
+  const [restantes, setRestantes] = useState(0);
+  /** Lote de nomes em voo. Segura o clique repetido no pedido do restante, sem travar o resto. */
+  const [pedindoNomes, setPedindoNomes] = useState(false);
+  /**
+   * jobIds já PEDIDOS ao servidor, resolvidos ou não. É o que garante uma resolução por job, e não uma
+   * por ação: `carregarFilas()` roda de novo depois de CADA limpar, reprocessar e "Testar agora", e
+   * pendurar o lote nele refaria as 132 chamadas à API do Pandápé a cada clique, na cota da folha.
+   */
+  const pedidos = useRef<Set<string>>(new Set());
+  /** Filtro na tela, conforme digita. NUNCA vai ao servidor, e o nome não sai da memória da página. */
+  const [busca, setBusca] = useState("");
   /** Job aguardando confirmação da limpeza (§A.26: destrutiva não acontece em um clique). */
   const [confirmarLimpeza, setConfirmarLimpeza] = useState<JobFalhado | null>(null);
   /**
@@ -199,9 +250,54 @@ export function DependenciaDrawer({
     }
   }, [ehFila, token]);
 
+  /**
+   * Resolve o nome dos jobIds pedidos e ACUMULA no mapa. Nunca derruba a tela: falha do lote deixa a
+   * lista de jobs onde está, com o identificador do Pandápé na linha, e quem avisa é a área da busca.
+   */
+  const resolverNomes = useCallback(
+    async (jobIds: string[]) => {
+      if (!jobIds.length) return;
+      for (const id of jobIds) pedidos.current.add(id);
+      setPedindoNomes(true);
+      try {
+        const r = await apiFetch<NomesDoLote>("/diagnostico/filas/nomes", {
+          method: "POST",
+          token,
+          body: { jobIds },
+        });
+        setNomes((m) => {
+          const proximo = { ...m };
+          for (const n of r?.nomes ?? []) if (n?.jobId && n?.nome) proximo[n.jobId] = n.nome;
+          return proximo;
+        });
+        setRestantes(r?.restantes ?? 0);
+        setNomesFalhou(false);
+      } catch {
+        // Silêncio de propósito: o nome é conforto, a lista é o trabalho.
+        setNomesFalhou(true);
+      } finally {
+        setPedindoNomes(false);
+      }
+    },
+    [token],
+  );
+
   useEffect(() => {
     void carregarFilas();
   }, [carregarFilas]);
+
+  /**
+   * UMA RESOLUÇÃO POR JOB, ao aparecer. Pede só o jobId que ainda não foi pedido, então reabrir a
+   * lista depois de uma ação não repete nada: job que continua na lista já está no mapa, e job que
+   * saiu não é pedido de novo.
+   */
+  useEffect(() => {
+    if (!ehFila || !filas) return;
+    const novos = filas.jobs
+      .filter((j) => j.fila === FILA_COM_NOME && !pedidos.current.has(j.jobId))
+      .map((j) => j.jobId);
+    void resolverNomes(novos);
+  }, [ehFila, filas, resolverNomes]);
 
   /**
    * Re-checa a dependência e atualiza o CABEÇALHO do drawer.
@@ -283,6 +379,36 @@ export function DependenciaDrawer({
     null,
   );
 
+  /**
+   * O FILTRO, só por nome (o diretor dispensou o CPF), sem acento e sem caixa pela régua única do
+   * `normBusca`. Busca vazia devolve a lista INTEIRA, intacta: o filtro nunca é o estado padrão.
+   */
+  const termo = normBusca(busca);
+  const jobsVisiveis = termo
+    ? jobs.filter((j) => normBusca(nomes[j.jobId] ?? "").includes(termo))
+    : jobs;
+  /**
+   * Job SEM nome resolvido não pode casar com busca por nome, então sai da lista enquanto se procura.
+   * Dizer QUANTOS saíram evita a leitura de que eles desapareceram da fila.
+   */
+  const jobsSemNome = jobs
+    .filter((j) => j.fila === FILA_COM_NOME && !nomes[j.jobId])
+    .map((j) => j.jobId);
+  /**
+   * AS DUAS CONTAS SÃO DIFERENTES DE PROPÓSITO, E ISSO CUSTOU UMA IDA E VOLTA.
+   *
+   * `jobsSemNome` (acima) é quem PODE ter nome e não tem: só a fila do Pandapé, e é ela que alimenta
+   * o botão de resolver o que faltou. Pedir nome de um ciclo automático não faria sentido.
+   *
+   * Esta conta é outra pergunta: quem SAIU DA VISTA por causa da busca. Aqui entram TODOS os sem
+   * nome, inclusive os de Clicksign e de VT, porque o risco é o mesmo e é o que esta tela existe para
+   * não repetir: lista que encolhe calada. A primeira correção contou só os do Pandapé e silenciou o
+   * job de assinatura, trocando um defeito de TEXTO por um defeito de OMISSÃO. O texto é que não pode
+   * afirmar a causa: quem é ciclo automático nunca teve nome a resolver, então a frase diz "sem
+   * nome", o fato, e não "sem nome resolvido", que seria acusar uma falha que não houve.
+   */
+  const escondidosSemNome = termo ? jobs.filter((j) => !nomes[j.jobId]).length : 0;
+
   return (
     <Modal onClose={onClose} ariaLabel={`Detalhe: ${dep.nome}`} className="max-w-2xl">
       <div className="mb-4 flex items-center justify-between gap-3">
@@ -294,6 +420,59 @@ export function DependenciaDrawer({
       </div>
 
       {erro && <p className="mb-3 text-[13px] text-danger">{erro}</p>}
+
+      {/*
+        BUSCA POR NOME, visível assim que o modal abre e FORA do container que rola, de propósito:
+        dentro dele o campo sumiria da vista assim que a pessoa rolasse a lista, que é justamente
+        quando ela ainda está procurando. Mesmo desenho do outro modal desta tela.
+      */}
+      {ehFila && jobs.length > 0 && (
+        <div className="mb-3">
+          <input
+            className="ds-input"
+            placeholder="Buscar por nome"
+            value={busca}
+            onChange={(e) => setBusca(e.target.value)}
+            aria-label="Buscar candidato pelo nome"
+          />
+          {nomesFalhou && (
+            <p className="mt-1.5 text-[12px] text-warn">
+              Os nomes não carregaram agora, então não há nome para buscar. A lista de jobs abaixo
+              segue completa.
+            </p>
+          )}
+          {/*
+            O FREIO DE COTA RECUSOU parte dos nomes. A tela diz quantos faltaram e o restante é pedido
+            por CLIQUE. Sem retentativa automática: laço em cima de um freio de cota vira tempestade
+            de chamadas na cota que alimenta a folha (§A.5).
+          */}
+          {/*
+            O AVISO É PELO ESTADO DA TELA, NÃO PELA CAUSA DA FALTA, e isso conserta um silêncio real:
+            `restantes` conta só o que o FREIO recusou, então o Pandapé respondendo erro para três de
+            cento e trinta deixava três linhas "não informado" com `restantes` em zero, sem aviso e
+            sem o botão. Agora o gatilho é "há job desta fila sem nome", qualquer que seja o motivo, e
+            o texto separa os dois casos sem afirmar o que não se sabe.
+          */}
+          {jobsSemNome.length > 0 && (
+            <div className="mt-1.5 flex flex-wrap items-center gap-2">
+              <span className="text-[12px] text-warn">
+                {restantes > 0
+                  ? `Faltou resolver ${restantes} nome${restantes === 1 ? "" : "s"}, por limite de consultas ao Pandapé, e o limite libera em alguns minutos.`
+                  : `Ficou ${jobsSemNome.length === 1 ? "1 job sem nome" : `${jobsSemNome.length} jobs sem nome`}, porque a consulta ao Pandapé não respondeu para ${jobsSemNome.length === 1 ? "ele" : "eles"}.`}{" "}
+                Quem está sem nome aparece como não informado e não é encontrado pela busca.
+              </span>
+              <Button
+                variant="secondary"
+                className="!px-2.5 !py-1 text-[12px]"
+                disabled={pedindoNomes}
+                onClick={() => void resolverNomes(jobsSemNome)}
+              >
+                {pedindoNomes ? "Resolvendo…" : "Resolver os nomes que faltaram"}
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="max-h-[62vh] space-y-3.5 overflow-y-auto pr-1">
         <Bloco titulo="O que é">{copy.oQueE}</Bloco>
@@ -341,15 +520,57 @@ export function DependenciaDrawer({
                   </p>
                 </div>
               )}
-              {jobs.map((j) => {
+              {/*
+                LISTA VAZIA POR CAUSA DA BUSCA. Aqui o risco é pior que no outro modal: lista vazia
+                neste modal se leria como "a fila ficou saudável", e ela não ficou. Por isso a
+                mensagem repete o total real de falhados.
+              */}
+              {/*
+                O CORTE DA LISTA NÃO PODE SER SILENCIOSO. A lista tem teto (o servidor devolve até 500
+                por fila) e a contagem é a real, então quando os dois divergem a tela DIZ, em vez de
+                deixar a pessoa procurar alguém que existe e não está desenhado. É exatamente o
+                defeito que originou esta busca: eram 132 falhados e a lista mostrava 50, calada.
+              */}
+              {ehFila && filas && filas.contagem.falhados > jobs.length && (
+                <p className="text-[11.5px] text-warn">
+                  A fila tem {filas.contagem.falhados} jobs falhados e esta lista mostra os{" "}
+                  {jobs.length} mais recentes, então a busca não alcança o restante.
+                </p>
+              )}
+              {termo !== "" && jobsVisiveis.length === 0 && (
+                <p className="py-6 text-center text-[13px] text-faint">
+                  Nenhum nome encontrado para esta busca. A fila segue com {jobs.length} job
+                  {jobs.length === 1 ? "" : "s"} falhado{jobs.length === 1 ? "" : "s"}.
+                </p>
+              )}
+              {termo !== "" && jobsVisiveis.length > 0 && escondidosSemNome > 0 && (
+                <p className="text-[11.5px] text-faint">
+                  {escondidosSemNome === 1
+                    ? "1 job sem nome ficou fora desta busca."
+                    : `${escondidosSemNome} jobs sem nome ficaram fora desta busca.`}{" "}
+                  Limpe a busca para ver a fila inteira.
+                </p>
+              )}
+              {jobsVisiveis.map((j) => {
                 const alvo = alvos[j.jobId];
+                /**
+                 * Enquanto o nome não chegou (ou não resolveu), a linha mostra "não informado", que é o
+                 * marcador da casa (§A.11 proíbe o travessão, inclusive como marcador de vazio). Nada de
+                 * espaço em branco e nada de "carregando" piscando por linha. O identificador do
+                 * Pandápé fica visível nos DOIS estados, sempre no mesmo lugar: é por ele que se acha o
+                 * candidato no ATS.
+                 */
+                const nomeDoJob = nomes[j.jobId];
                 return (
                   <div
                     key={`${j.fila}:${j.jobId}`}
                     className="rounded-xl border border-[var(--border)] px-3 py-2.5"
                   >
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                      <span className="text-[13px] font-semibold text-text">{j.alvo}</span>
+                      <span className="text-[13px] font-semibold text-text">
+                        {nomeDoJob ?? "não informado"}
+                      </span>
+                      <span className="text-[12px] text-dim">{j.alvo}</span>
                       <span className="text-[11.5px] text-faint">
                         {j.fila} · {j.nome}
                       </span>

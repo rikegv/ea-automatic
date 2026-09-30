@@ -3,6 +3,7 @@ import { AuditoriaModule } from "../auditoria/auditoria.module";
 import { ClicksignModule } from "../clicksign/clicksign.module";
 import { ClicksignQueueModule } from "../clicksign/clicksign-queue.module";
 import { EsteiraModule } from "../esteira/esteira.module";
+import { PandapeEntradaModule } from "../pandape/pandape-entrada.module";
 import { PandapeModule } from "../pandape/pandape.module";
 import { PandapeQueueModule } from "../pandape/pandape-queue.module";
 import { ReauditoriaModule } from "../reauditoria/reauditoria.module";
@@ -11,6 +12,7 @@ import { VtColetaQueueModule } from "../vt-coleta/vt-coleta-queue.module";
 import { DiagnosticoController } from "./diagnostico.controller";
 import { DiagnosticoService } from "./diagnostico.service";
 import { FilasDiagnosticoService } from "./filas.service";
+import { NomesFalhadosService } from "./nomes-falhados.service";
 import { ReconciliacaoDriveSchedulerService } from "./reconciliacao-drive-scheduler.service";
 import { ReconciliacaoDriveService } from "./reconciliacao-drive.service";
 
@@ -30,6 +32,11 @@ import { ReconciliacaoDriveService } from "./reconciliacao-drive.service";
     // Traz o ExameSchedulerService (verificador de status do Exame), mesmo papel do VtColetaModule.
     EsteiraModule,
     PandapeModule,
+    // O CACHE DE NOMES EM MEMÓRIA, que a busca por nome do drawer da fila lê e preenche. Entra pelo
+    // módulo FOLHA (`PandapeEntradaModule`) e não pelo `PandapeModule`, que não o re-exporta: o cache
+    // precisa ser a MESMA instância que o worker preenche, senão o nome resolvido pelo sync não
+    // aparece aqui e cada abertura do modal pagaria cota do Pandapé de novo.
+    PandapeEntradaModule,
     PandapeQueueModule,
     ReauditoriaModule,
     VtColetaModule,
@@ -42,6 +49,7 @@ import { ReconciliacaoDriveService } from "./reconciliacao-drive.service";
     // Faz a reconciliação rodar sozinha, em vez de depender de alguém abrir esta tela.
     ReconciliacaoDriveSchedulerService,
     FilasDiagnosticoService,
+    NomesFalhadosService,
   ],
 })
 export class DiagnosticoModule {}
