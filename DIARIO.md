@@ -18394,3 +18394,69 @@ cliente, que nao existe e nao pode existir.**
 producao de conteudo em escala (roteiro, captura, gate de PII, revisao peca por peca). Nao colide com
 os arquivos da ingestao, entao **pode rodar em paralelo com agente dedicado**, mas compete pelo
 harness do Playwright e pela revisao visual do coordenador. Recomendacao: **nao junto destas duas.**
+
+---
+
+## 30/09/2026: A&S, precedência da ingestão, fila de divergências e os 7 ajustes da Central De Vagas
+
+**Publicado em produção (`770e6a2`), junto da Central De Ajuda, num build e num restart só.**
+Migrations 135 → 138. Contagens intactas: admissões 3011 → 3011, usuários 39, concessões de menu
+498 → 498 (nenhuma concedida, §A.23), menus 46 → 47 (registro no boot, que não é concessão). Rotas
+`/api/health`, `/login`, `/as/vagas`, `/admin/divergencias-ingestao` e `/ajuda` em 200.
+
+### O que mudou de comportamento
+
+O EA passa a **vencer o ATS** no que o time preencheu a mão, e a divergência vai para uma **fila**
+em vez de ser sobrescrita em silêncio. Foi a investigação pedida pelo diretor que achou o motivo:
+a varredura **sobrescrevia o avanço manual do time, cegamente e sem aviso**, e isso era bloqueante
+para ligar o Pandapé.
+
+Os sete ajustes da Central De Vagas e o item 4 (SLA regressiva com Previsão De Entrega nova,
+reabertura de ENTREGUE para ABERTA com os candidatos no começo do funil, e ENTREGUE congelando a
+contagem só na regra da SLA) estão descritos no commit e em `docs/GUIA-VALIDACAO-PRECEDENCIA-E-FILA.md`.
+
+### O que os agentes acharam, e é por isso que eles foram acionados
+
+| agente | veredito |
+|---|---|
+| `seguranca` | **VETOU** com 3 bloqueios, todos conferidos pelo coordenador e consertados: campo de divergência em prosa que o expurgo anula; menu que se auto-concedia a 3 MASTERs no primeiro boot; adoção do ATS por um caminho que INSERE em vez de atualizar. Depois: APROVADO COM RESSALVA |
+| `tester` | provou **por mutação** que uma regra do contrato passava por ACIDENTE: apagar os carimbos da entrega, que é o dano que a regra dizia impedir, deixava os 16 testes verdes. Matou 5 de 5 mutantes onde a suíte do autor matava 1 |
+| `arquiteto` | corrigiu uma premissa minha: eu havia dito que não existia SLA no sistema, porque grepei só o backend. Ela vive em `apps/frontend/src/lib/as-vaga-sla.ts` |
+
+### Três armadilhas da publicação, e duas teriam derrubado o boot
+
+1. **O journal do Drizzle no release omite o 0134 de propósito.** Copiá-lo do repo leva a entrada de
+   uma migration cujo `.sql` não está versionado, e o migrator lê todo arquivo listado antes de
+   filtrar por data: o backend não sobe. O journal foi montado por programa, com asserção.
+2. **Um import da frente de e-mail estava no meio dos imports dos tipos novos**, em `tables.ts`.
+   Copiar o arquivo inteiro levaria símbolo inexistente; descartar o hunk inteiro tiraria o que os
+   tipos novos precisam. Só a edição do hunk resolve.
+3. **Dez arquivos pareciam misturar duas frentes, e oito não misturavam nada:** são byte a byte
+   iguais entre o release e a 3120, o que prova que a mudança deles é inteira da outra frente.
+
+### Duas lições de MEDIÇÃO que valem além desta frente
+
+**Acento não fica literal no bundle do Next: vira `\xe9`.** A primeira prova no artefato deu ZERO
+para "Célula de atendimento" e eu quase reportei um rótulo faltando. O canário salvou: `Admissão`,
+que existe aos montes, também deu zero, o que provou que a medição estava errada, não o artefato.
+Com `C\xe9lula` o rótulo aparece em 8 lugares, em `rotulo:` e em `ariaLabel:`. **Todo zero em string
+acentuada é suspeito até um canário acentuado provar o contrário.**
+
+**O worktree de prova pegou um defeito que nenhum gate pegaria.** Materializar a árvore do commit e
+compilar ali sozinha revelou que o `portal-ritmo.spec.ts` de HEAD importava um controlador de uma
+frente não commitada: **a `main` não compilava em clone limpo**. O defeito era meu, de uma sessão
+anterior, e eu o havia consertado e depois **excluído o conserto do commit** por classificá-lo como
+de outra frente. Sem o worktree, o push levaria a `main` quebrada de novo.
+
+### Validação cruzada, que não é da própria sessão
+
+A sessão da Central De Ajuda rodou os cinco roteiros dela contra a 3120 e os cinco passaram. Os
+roteiros apontam os elementos por papel e nome acessível, então um renomeio que alcançasse mais que
+o rótulo teria acusado. É **prova de presença**, complementar à minha, que é de ausência. Um print
+dela (`abrir-uma-vaga-nova/02-passo-a-vaga.png`) fotografou os quatro rótulos novos juntos no
+formulário de edição, inclusive os dois que a minha prova visual não tinha alcançado.
+
+### O que NÃO foi ligado, por decisão do diretor
+
+Filtro de entrada de 90 dias: **configurado e DESLIGADO**. Digai: **inerte**, token fora do `.env`.
+G.I: **inerte**. Porta de e-mail do Portal: **não subiu** (31 caminhos fora do pacote).
