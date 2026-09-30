@@ -18460,3 +18460,216 @@ formulário de edição, inclusive os dois que a minha prova visual não tinha a
 
 Filtro de entrada de 90 dias: **configurado e DESLIGADO**. Digai: **inerte**, token fora do `.env`.
 G.I: **inerte**. Porta de e-mail do Portal: **não subiu** (31 caminhos fora do pacote).
+## 30/09/2026, CENTRAL DE AJUDA: 37 para 184 pecas, PUBLICADA EM PRODUCAO, e um DEFEITO anotado para depois
+
+### O DEFEITO, e ele e o item que o Rike pediu para ficar registrado
+
+**Ha DUAS portas que carimbam `farol_global = 'ADMISSAO_CONCLUIDA'`, e elas NAO tem a mesma guarda.**
+Achado por um agente ao ler o codigo para escrever o artigo de desconsiderar a integracao. Ele NAO
+afirmou nada sobre isso no texto do manual, o que foi a decisao certa.
+
+- A porta do **seletor de status** (`apps/backend/src/esteira/esteira.service.ts`, por volta da linha
+  1479) **segura** o carimbo quando o Exame esta no status de liberado sem ASO:
+  `if (farolIntegracao === "ADMISSAO_CONCLUIDA" && exameLiberadoDepois) farolIntegracao = null`.
+- A porta do **desconsiderar a integracao** (mesma classe, por volta da linha 2942) escreve
+  `farol_global = 'ADMISSAO_CONCLUIDA'` **sem condicao nenhuma**.
+
+Pela leitura, desconsiderar a integracao de uma admissao liberada sem ASO carimbaria "concluida" com o
+Exame ainda aberto, que e exatamente o que a guarda da outra porta existe para impedir.
+
+**Por que isso merece atencao:** e a MESMA familia do defeito de 11/08/2026, quando o carimbo do farol
+dependia de uma frente nascer e 56 admissoes passaram a ser contadas duas vezes, em tres telas (a §A.27
+nasceu disso). A pergunta "quem mais escreve este dado?" e a linha fixa de briefing que existe
+justamente para pegar isto.
+
+**NAO foi investigado e NAO foi corrigido, por ordem do diretor.** Quando for atacado, o caminho e
+despachar o `backend` para medir contra a base e o `tester` para travar a regra em teste, ANTES de
+qualquer correcao.
+
+### O que foi entregue no dia
+
+**131 artigos** (eram 37), **16 familias** de bloco compartilhado (eram 7), **490 testes verdes** em 23
+arquivos (o baseline era 455), typecheck limpo.
+
+| modulo | antes | agora | planejado |
+|---|---:|---:|---:|
+| SouTalent (A&S) | 1 | **29** | 29 |
+| Soul ADM | 21 | **87** | 87 |
+| Comecar Aqui | 14 | 14 | 14 |
+| Configuracao | 1 | 1 | 54 |
+
+**Duas regras permanentes novas no CLAUDE.md**, por decisao do diretor: a **§A.43** (a homologacao e
+teste: a fabrica semeia dado sintetico e apaga o que trava gate, sem perguntar) e a **§A.44** (a regua
+de dado pessoal do manual esta decidida e nao se reabre a cada frente, porque o manual e interno e quem
+o le ja enxerga aqueles dados na tela).
+
+**A auditoria pegou um erro meu antes de ele chegar ao leitor:** eu escrevi, na familia de Nao
+Conformidades, que so Master julga. O codigo diz o contrario, **resolver e registrar e de qualquer
+consultor**, e aquela frase e somada a 5 artigos, contradizendo na mesma pagina o pre-requisito de um
+deles. Corrigido e reauditado. E o melhor argumento a favor da auditoria adversarial da §A.38.
+
+### Os 13 achados menores de produto, registrados e NAO tocados
+
+Estao em `docs/CENTRAL-DE-AJUDA-SOUTALENT-DECISOES.md`, secao 6, com o lugar exato de cada um. Os que
+mais doem: duas etiquetas fora de title case na tela de Nao Conformidades; um travessao em celula vazia
+no modal da integracao; a "Previsao do ASO" obrigatoria sem asterisco no rotulo; o carimbo de quando a
+notificacao de assinatura saiu, que existe no banco e **nao aparece na tela**, deixando quem opera sem
+como responder "o funcionario foi chamado?".
+
+---
+
+## 30/09/2026, A SENHA DO IFRACTAL: as DUAS metades da regra, e por que elas nao se misturam
+
+O diretor fechou a questao do campo de senha da aba iFractal, e mandou gravar como regra permanente
+para nenhuma sessao futura reabrir nem interpretar errado. Sao **duas partes**, e elas ficam **lado a
+lado** no CLAUDE.md de proposito: **§A.45** (a tela) e **§A.46** (o print e o repositorio).
+
+### PARTE 1, §A.45: na TELA a senha fica VISIVEL
+
+Nao mascarar, nunca. O fundamento e do diretor: a senha e **provisoria** e existe para ser repassada
+ao candidato; **o time que opera aquela tela e justamente quem precisa le-la**; e esse time esta
+coberto, assinou o termo de confidencialidade e ja ve aquele dado todo dia no trabalho.
+
+**NAO e achado de seguranca.** Auditoria futura que levantar o campo tem a resposta ja dada.
+
+### PARTE 2, §A.46: no PRINT e no REPOSITORIO, senha NUNCA
+
+A decisao da Parte 1 vale **so para a tela**. Ela nao se estende a print, imagem, captura, log, commit
+nem a nenhum arquivo versionado.
+
+O fundamento e a diferenca de **publico** e de **prazo**, e foi levantado pela frente da Central De
+Ajuda e aceito pelo diretor:
+
+| | quem enxerga | por quanto tempo | coberto por |
+|---|---|---|---|
+| a TELA | o time com acesso | enquanto a sessao dura | o termo que a pessoa assinou |
+| o ARQUIVO no git | **qualquer um que clone** | **para sempre** | **nada** |
+
+Imagem que entra no git **nao sai**, e commit de correcao nao apaga historico.
+
+### POR QUE AS DUAS PRECISAM ESTAR JUNTAS, e o risco e simetrico
+
+- **Sem a Parte 2**, a proxima sessao le a Parte 1 como licenca para fotografar senha.
+- **Sem a Parte 1**, a proxima auditoria mascara o campo de novo e **trava a operacao**, que foi
+  exatamente o que aconteceu entre 28 e 30/09: o mascaramento subiu como conserto de seguranca e o
+  time passou a cadastrar a senha sem conseguir le-la para repassar.
+
+### O QUE FOI MEDIDO, e e por isso que a regra nasce sem incidente
+
+Conferido em 30/09, antes de qualquer conclusao:
+- as **3 imagens** daquela tela que ja estavam commitadas mostram **todos os campos de senha VAZIOS**;
+- a unica linha com senha gravada na homologacao e de populacao **anonimizada**, com **3 caracteres**,
+  string de teste.
+
+**Nenhuma credencial vazou.** A regra e preventiva e chegou antes do dano.
+
+### ESTADO DA REVERSAO, medido em 30/09 as 11h
+
+**Escrita, NAO publicada.** No repositorio de trabalho o campo ja esta em texto claro; o release que
+serve a producao (`ea-release-portal`) ainda tem `type="password"` na linha 2274, e o
+`ea-frontend.service` nao reinicia desde 29/09 as 23h34. **Ou seja, o time ainda NAO consegue ler a
+senha em producao.** A publicacao e da sessao que fez a reversao, e o restart precisa ser coordenado.
+
+### PENDENCIA DE TEXTO NO MANUAL, e ela NAO deve ser feita agora
+
+O artigo `gerenciar-as-credenciais-do-ifractal` e a etiqueta desenhada na imagem 02 dizem "a senha
+fica mascarada", e isso vira falso quando a reversao chegar. **Nao corrigir enquanto a homologacao,
+que e a fonte dos prints, continuar mascarada**: recapturar hoje reproduziria a mesma etiqueta errada.
+Quando pousar na 3120: trocar o passo, trocar a etiqueta do roteiro e recapturar as 3 imagens.
+Registrado em `docs/CENTRAL-DE-AJUDA-SOUTALENT-DECISOES.md`, secao 8.
+
+## 30/09/2026, EMERGENCIA: a senha do iFractal volta a ficar VISIVEL na tela
+
+**O que quebrou.** O mascaramento do campo de senha da aba IFRACTAL da Esteira
+(`type="password"`) subiu na publicacao de 28/09 e travou a operacao: o time cadastra a senha
+e precisa LER o valor na linha para repassar ao candidato. Com bolinhas, nao repassa.
+
+**O que era o achado, e por que ele estava errado no fundamento.** Nasceu na frente da Central
+De Ajuda ("124 credenciais em texto claro na tabela de producao") e foi tratado como conserto
+de seguranca. Nao era: a senha do iFractal e PROVISORIA e existe para ser repassada, e quem
+opera a tabela e o mesmo time que ja ve esses dados todos os dias, coberto pelo documento de
+confidencialidade. Decisao do diretor: fica visivel, e o assunto esta encerrado (§A.45 nova).
+
+**O que subiu, e como foi provado.** Release `ea-release-portal`, so o arquivo da Esteira,
+**sem fast-forward** (a `main` estava 6 commits a frente, com dois de backend nao validados
+para producao; puxar tudo publicaria fonte que o `dist` no ar nao tem). Rebuild do frontend,
+restart do `ea-frontend.service`, backup do bundle bom em `.next.bak-30set-senha`. Provado no
+BUNDLE SERVIDO, nao no fonte: o chunk novo da Esteira (`page-5c60035d93288e4f.js`) tem **zero**
+`type:"password"` e mantem o rotulo do campo; 3010 e 3020 respondem 200.
+
+**A regra virou teste, nao lembranca.** `ajuda/senha-do-ifractal.tester.spec.ts` trocou de lado:
+antes travava o mascaramento, agora trava o texto claro. Quem mascarar de novo quebra o gate.
+
+**Consequencia assumida, e ela e da captura.** `textoAuditavel` (`ajuda/pii.ts`) so pula
+`input[type=password]`, entao a aba IFRACTAL volta a nao ser capturavel para o manual sem
+tratamento proprio no arnes. O produto nao paga o preco da captura.
+
+**Coordenacao (§A.14).** As duas sessoes vivas liberaram o restart antes: a da Central De Ajuda
+(que conferiu as 3 imagens ja commitadas daquela tela, todas com os campos de senha VAZIOS, sem
+credencial no historico do git) e a de A&S (que segue com a publicacao do backend depois desta).
+Commit `50e46ea`, recorte nominal por blob: so a §A.45 do CLAUDE.md, o arquivo da Esteira e o
+teste. Nada de ingestao, Digai, Portal ou Central De Ajuda entrou.
+
+## 30/09/2026, noite — Central De Ajuda: o manual acompanha os renomeios de A&S, e uma afirmação falsa minha cai (commit `a9bf6ed`)
+
+**Frente:** Central De Ajuda. **Quem executou:** coordenador, direto (§A.38: tarefa de conteúdo e
+prova visual, sem toque em CPF, auth, RBAC ou credencial, então nem `seguranca` nem `tester` foram
+acionados; a auditoria do `seguranca` desta frente já tinha acontecido na rodada dos prints).
+
+**O que entrou.** A frente de A&S renomeou rótulos que o manual citava palavra por palavra: quatro
+campos do formulário de vaga ("Nome da vaga", "Tipo de vaga", "Tipo de processo", "Célula de
+atendimento"), a coluna "NOME DA VAGA" e o título "Mover Etapa Em Massa". Manual que cita rótulo
+morto manda a pessoa procurar o que não está lá, então texto e **16 prints** foram refeitos contra a
+homologação já com o código novo. O artigo `reabrir-a-vaga-cancelada` virou **`reabrir-uma-vaga`**:
+o caso real não é só cancelamento, a vaga ENTREGUE que o cliente reprova também reabre, por outro
+caminho e com previsão nova.
+
+**O achado da noite, e ele é meu erro.** Eu tinha escrito que a célula de SLA mostra "Vaga Entregue"
+na vaga entregue. **Ela não mostra:** a célula escreve `entregue`, minúsculo (`lib/as-vaga-sla.ts:214`),
+e "Vaga Entregue" é o rótulo do **filtro** (`SLA_ESTADO_LABEL`). Só apareceu porque alarguei a busca
+do roteiro de `SIM-AS-2026` para `SIM-`, para a única vaga ENTREGUE da base entrar no quadro, e **a
+imagem desmentiu o texto ao lado dela**. Nenhum gate pegou: typecheck, alvos e filtro de dado pessoal
+passaram todos. Quem pegou foi **§A.13, olhar o PNG**. O passo agora descreve os dois nomes.
+
+Alargar a busca **não afrouxa o recorte de §A.6**, e isso foi medido antes de mexer: as 5 vagas da
+homologação são sintéticas (`count(*)` 5, `codigo like 'SIM%'` 5) e a entregue não tem solicitante,
+consultor nem substituído, então nenhuma coluna de pessoa tem o que escrever.
+
+**Achado de produto registrado, NÃO corrigido (o 14 do doc de decisões):** a célula escreve `entregue`
+em minúscula enquanto o filtro e a pilha de status escrevem em Title Case. Mesmo estado, dois nomes na
+mesma tela, e a minúscula contraria §A.24. É código de outra frente: §A.14 não me deixa mexer, então
+fica proposto para o diretor.
+
+**Gate.** Typecheck do frontend limpo; 23 arquivos de teste da Central De Ajuda verdes (491 testes).
+A suíte inteira **não** foi rodada, pela instrução do diretor sobre CPU disputada entre sessões.
+
+**Validação do diretor:** os artigos novos e o ajuste de scroll da página foram validados na 3120, com
+a autorização de subir. `Sidebar.tsx` e `globals.css` (o scroll) **já estavam no release** do build
+anterior, byte a byte, então não entram de novo.
+
+**Publicação conjunta com a sessão vizinha.** Eu copiei o meu recorte para o release e **apaguei à mão
+o arquivo renomeado antigo**, que `cp`/`rsync` sem `--delete` não remove e que deixaria as duas peças
+vivas. Não usei `--delete` de propósito: ele apagaria arquivo de outra frente. Provado depois: o antigo
+não existe mais, o novo chegou, o `registro.gerado.ts` do release aponta só para o nome novo, e uma
+varredura por `reabrir-a-vaga-cancelada` no release devolve ZERO. **Não encostei no
+`_journal.json`** (segue com 135 entradas): a sessão vizinha o monta por programa, porque copiá-lo do
+repo de trabalho levaria a migration 0134, que não está autorizada a subir e quebraria o boot.
+
+**PUBLICADO E PROVADO (restart 18:34:52 UTC, build 18:34).** A prova saiu do **artefato servido**,
+não do fonte: o texto corrigido do SLA e o artigo renomeado estão no chunk do cliente
+(`static/chunks/3708-*.js`) e no do servidor (`server/chunks/5968.js`), e o nome antigo
+(`reabrir-a-vaga-cancelada`) devolve **ZERO no build inteiro**. Rotas: `/ajuda` e
+`/ajuda/reabrir-uma-vaga` em 200, backend em 200.
+
+**Uma armadilha nova da prova, que quase me fez concluir o oposto.** O primeiro grep foi no chunk da
+PÁGINA (`app/(app)/ajuda/page-*.js`) e deu **0 para o meu conteúdo com o canário PASSANDO**: o chunk
+era mesmo o da Central De Ajuda, e o conteúdo não estava nele. Os artigos vivem em chunk
+COMPARTILHADO, então canário verde com conteúdo ausente **não prova falta de publicação**, prova que
+se procurou no arquivo errado. A busca certa é `grep -rl` sobre `static/chunks/` e `server/`.
+
+**A rota antiga responde 200 e isso NÃO é duplicata:** `/ajuda/[slug]` é rota dinâmica, e o slug
+morto cai no ramo `!artigo`, que renderiza "Artigo Não Encontrado" com o texto "ou foi renomeado" e o
+link de volta. Comportamento correto.
+
+---
+

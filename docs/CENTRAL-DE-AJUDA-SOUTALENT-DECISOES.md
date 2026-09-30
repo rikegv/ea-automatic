@@ -343,3 +343,51 @@ publicação. Conferido três vezes seguidas, verde nas três.
 alguém melhora a redação, e melhorar a redação é trabalho normal. Ancore no papel, na função ou no
 comportamento, nunca no texto. Os três casos de hoje foram o tipo do campo de senha, a rota de exemplo
 de dois testes, e agora o título de um modal.
+
+---
+
+## 10. AUDITORIA DO `seguranca` (30/09/2026): o manual inteiro entra no bundle, e o vhost público o liberaria
+
+**Veredito do agente `seguranca`: APROVADO COM RESSALVA.** Não é violação de §A.6, e a varredura não
+achou nada pior junto. Mas a ressalva alcança uma decisão que ainda não foi tomada, e por isso está
+aqui em vez de num backlog.
+
+### O que foi medido (não deduzido)
+
+- O chunk `3708-*.js` (1,07 MB) carrega **256 caminhos de código-fonte**: 112 de `apps/backend`, 141
+  de `apps/frontend`, 3 de `apps/ai-service` e 1 de `packages/shared-types`. Vêm do campo `fontes`
+  dos artigos, que aparece **184 vezes** no chunk.
+- **Nenhuma tela lê `artigo.fontes`.** Só os testes (o detector de artigo defasado). No cliente o
+  campo é peso morto.
+- O chunk responde **HTTP 200 sem cookie** na LAN (`192.168.1.22:3010`) e na ZeroTier
+  (`10.18.117.235:3010`). Conferido por mim nos dois.
+- **A varredura por algo pior deu ZERO em tudo:** e-mail, CPF, sequência de 11 dígitos, URL, IP
+  interno, `localhost`, domínio da empresa, string de conexão, chave de API, JWT, `-----BEGIN`,
+  `/home/`, `.env`, nomes de variável de segredo, e os nomes das pessoas do projeto. As ocorrências
+  de "senha" e "token" são texto de instrução do manual ("Digite a senha no campo Senha").
+
+### A RESSALVA, que é o que importa e é PREVENTIVA
+
+**`docs/MAPA-PORTAL-ACESSO-PUBLICO.md`, seção 5, libera `/_next/static/*` na allowlist do vhost
+público do Portal.** Conferido por mim, está escrito lá. No dia em que o Fernando aplicar esse vhost,
+**o bundle inteiro passa a ser servido na internet**, e com ele o manual inteiro: incluindo
+`cadastrar-um-usuario`, `liberar-os-menus-de-um-usuario`, `resetar-a-senha-de-um-usuario` e
+`ler-o-diagnostico-do-sistema`, que são conteúdo de menu restrito.
+
+**Uma correção minha sobre o parecer do agente, e ela deixa a ressalva MAIS forte:** ele ressalvou que
+não conseguiu confirmar se a rota `/portal` carrega aquele chunk. **Essa dúvida não muda nada.** A
+allowlist é por CAMINHO, não por página: `/_next/static/*` permite a URL do chunk diretamente, então
+qualquer pessoa o baixa sem que página nenhuma o carregue. O filtro por menu da Ajuda é de TELA; o
+bundle não filtra.
+
+**Isto não é achado da Central De Ajuda: é do desenho do vhost**, e chega antes do dano porque o
+vhost ainda não foi aplicado (§A.17: acesso público "em andamento com o Fernando").
+
+### As duas perguntas para o diretor
+
+1. **O campo `fontes` deve continuar indo para o cliente?** Hoje só o teste o usa.
+2. **O conteúdo dos artigos administrativos pode ficar em bundle público** quando o vhost do Portal
+   abrir, ou a allowlist `/_next/static/*` precisa ser mais estreita antes de o Fernando aplicar?
+
+*(Nada foi corrigido: §A.31, a fábrica propõe. O `seguranca` não tem poder de escrita e não conserta
+o que auditou.)*
