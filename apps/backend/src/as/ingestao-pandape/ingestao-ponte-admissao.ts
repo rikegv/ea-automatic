@@ -110,6 +110,14 @@ export class IngestaoPonteParaAdmissao implements PortaPonteParaAdmissao {
       idVacancy: ponte.idVacancy,
       vagaFolha: ponte.vagaFolha,
       possivelDuplicata,
+      /*
+       * A ORIGEM, e é o item 7 do diretor (OST de 30/09/2026). Sem ela, TODA pré-admissão nascida da
+       * varredura jurava ter sido feita à mão (`MANUAL` é o default do parâmetro e da coluna), e a
+       * pergunta "quanto da esteira o motor trouxe?" tinha resposta errada para toda a entrada
+       * automática. UMA marca só para tudo que vem do Pandapé, webhook ou varredura: o diretor NÃO
+       * quer distinguir as duas portas, então não há valor de enum novo nem migration.
+       */
+      origem: "PANDAPE",
     });
 
     /*

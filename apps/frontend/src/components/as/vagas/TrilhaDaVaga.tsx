@@ -50,7 +50,6 @@ import {
   VAGA_ESCOLARIDADE,
   VAGA_ESCOLARIDADE_LABEL,
   VAGA_ETAPAS_PS,
-  VAGA_FAIXA_ETARIA,
   VAGA_GENERO,
   VAGA_GENERO_LABEL,
   VAGA_IDIOMAS,
@@ -255,6 +254,12 @@ interface FormVaga {
   solicitanteEmail: string;
   dataSolicitacao: string;
   dataAlinhamento: string;
+  /**
+   * O REALINHAMENTO: quando o cliente pediu um NOVO alinhamento do perfil. Campo que o time preenche
+   * a mão, igual ao `dataAlinhamento` acima, e nunca carimbado pelo sistema. Ele NÃO sobrescreve o
+   * alinhamento original: são as duas pontas, e é delas que sai a pergunta "quanto tempo depois".
+   */
+  dataRealinhamento: string;
   dataAbertura: string;
   dataLimite: string;
   envioShortlist: string;
@@ -294,8 +299,18 @@ interface FormVaga {
   divulgarEmpresa: boolean;
 
   escolaridade: string;
-  faixaEtariaOpcao: string;
-  faixaEtariaOutra: string;
+  /**
+   * A FAIXA ETÁRIA É TEXTO LIVRE (OST da Central de Vagas, item 6), e não mais uma lista com escape.
+   *
+   * O FUNDAMENTO É DO DIRETOR: o campo NÃO alimenta indicador nenhum, então uniformidade de grafia
+   * não compra nada aqui, e a lista fechada custava um segundo campo ("Outra") para o caso que ela
+   * não cobria. O teto de 80 caracteres é o da coluna (`varchar(80)`), e ele é dito na tela em vez
+   * de descoberto num 400.
+   *
+   * NÃO HÁ DADO ANTIGO A LER DE VOLTA: medido em produção e na homologação, zero vaga tem a faixa
+   * preenchida. O que vier do servidor entra direto no campo, seja qual for a grafia.
+   */
+  faixaEtaria: string;
   genero: string;
   idiomas: string[];
   /**
@@ -339,6 +354,7 @@ const FORM_VAZIO = (): FormVaga => ({
   solicitanteEmail: "",
   dataSolicitacao: "",
   dataAlinhamento: "",
+  dataRealinhamento: "",
   dataAbertura: HOJE(),
   dataLimite: "",
   envioShortlist: "",
@@ -367,8 +383,7 @@ const FORM_VAZIO = (): FormVaga => ({
   divulgarEmpresa: true,
 
   escolaridade: "",
-  faixaEtariaOpcao: "",
-  faixaEtariaOutra: "",
+  faixaEtaria: "",
   genero: "INDIFERENTE",
   idiomas: [],
   idiomaNiveis: {},
@@ -615,7 +630,6 @@ function estadoInicial(modo: ModoDaTrilha, opcoes: Opcoes): EstadoInicial {
      sobre uma vaga que já existe. */
   const manterCodigo = modo.tipo !== "clone";
   const escala = separarOpcaoEscape(v.horarioEscala, opcoes.escalas, ESCALA_OUTRA);
-  const faixa = separarOpcaoEscape(v.faixaEtaria, VAGA_FAIXA_ETARIA, OPCAO_OUTRA);
   const hibrido = separarOpcaoEscape(v.detalheHibrido, VAGA_DETALHE_HIBRIDO, OPCAO_OUTRO);
 
   return {
@@ -650,6 +664,7 @@ function estadoInicial(modo: ModoDaTrilha, opcoes: Opcoes): EstadoInicial {
       solicitanteEmail: v.solicitanteEmail ?? "",
       dataSolicitacao: v.dataSolicitacao ?? "",
       dataAlinhamento: v.dataAlinhamento ?? "",
+      dataRealinhamento: v.dataRealinhamento ?? "",
       // O rascunho volta com a data que ele tinha, inclusive VAZIA. O clone é abertura nova, e nasce
       // com hoje: copiar a data de abertura da vaga antiga dataria a vaga nova no passado.
       dataAbertura: manterCodigo ? (v.dataAbertura ?? "") : HOJE(),
@@ -679,8 +694,7 @@ function estadoInicial(modo: ModoDaTrilha, opcoes: Opcoes): EstadoInicial {
       divulgarEmpresa: v.divulgarEmpresa,
 
       escolaridade: v.escolaridade ?? "",
-      faixaEtariaOpcao: faixa.opcao,
-      faixaEtariaOutra: faixa.texto,
+      faixaEtaria: v.faixaEtaria ?? "",
       genero: v.genero,
       ...idiomasDaVaga(v),
       idiomasOutros: v.idiomasOutros ?? "",
@@ -1110,6 +1124,7 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
           solicitanteEmail: form.solicitanteEmail || undefined,
           dataSolicitacao: form.dataSolicitacao || undefined,
           dataAlinhamento: form.dataAlinhamento || undefined,
+          dataRealinhamento: form.dataRealinhamento || undefined,
           dataAbertura: form.dataAbertura || undefined,
           dataLimite: form.dataLimite || undefined,
           envioShortlist: form.envioShortlist || undefined,
@@ -1150,7 +1165,7 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
           divulgarEmpresa: form.divulgarEmpresa,
 
           escolaridade: form.escolaridade || undefined,
-          faixaEtaria: comEscape(form.faixaEtariaOpcao, form.faixaEtariaOutra, OPCAO_OUTRA),
+          faixaEtaria: form.faixaEtaria.trim() || undefined,
           genero: form.genero,
           /* ONDA C: O PAR IDIOMA + NÍVEL, montado aqui uma vez só. O "Outros" NÃO entra na lista
              de exigências, e nunca entrou: ele é o escape que leva o texto para `idiomasOutros`, e
@@ -1362,7 +1377,7 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
                     )}
                   </Campo>
 
-                  <Campo rotulo="Nome de divulgação" largo obrigatorio id="vaga-nome-divulgacao">
+                  <Campo rotulo="Nome da vaga" largo obrigatorio id="vaga-nome-divulgacao">
                     <input
                       value={form.nomeDivulgacao}
                       onChange={(e) => set("nomeDivulgacao", e.target.value)}
@@ -1410,7 +1425,7 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
                     />
                   </Campo>
 
-                  <CampoSelect rotulo="Natureza" obrigatorio id="vaga-natureza">
+                  <CampoSelect rotulo="Tipo de vaga" obrigatorio id="vaga-natureza">
                     <Select
                       value={form.natureza}
                       onChange={(v) => set("natureza", v)}
@@ -1418,11 +1433,11 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
                         value: n,
                         label: VAGA_NATUREZA_LABEL[n],
                       }))}
-                      ariaLabel="Natureza da vaga"
+                      ariaLabel="Tipo de vaga"
                     />
                   </CampoSelect>
 
-                  <CampoSelect rotulo="Sazonalidade" obrigatorio id="vaga-sazonalidade">
+                  <CampoSelect rotulo="Tipo de processo" obrigatorio id="vaga-sazonalidade">
                     <Select
                       value={form.sazonalidade}
                       onChange={(v) => set("sazonalidade", v)}
@@ -1430,7 +1445,7 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
                         value: s,
                         label: VAGA_SAZONALIDADE_LABEL[s],
                       }))}
-                      ariaLabel="Sazonalidade da vaga"
+                      ariaLabel="Tipo de processo da vaga"
                     />
                   </CampoSelect>
 
@@ -1448,7 +1463,7 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
                         liga a busca sozinho acima de 8 itens). Linha inativada some da escolha e
                         continua escrita nas vagas antigas, que é o que `incluirInativas=1` na
                         leitura garante. */}
-                  <CampoSelect rotulo="Linha de serviço" obrigatorio id="vaga-linha-servico">
+                  <CampoSelect rotulo="Célula de atendimento" obrigatorio id="vaga-linha-servico">
                     <Select
                       value={form.linhaServicoId}
                       onChange={(v) => set("linhaServicoId", v)}
@@ -1457,18 +1472,20 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
                         label: l.rotulo,
                       }))}
                       placeholder={
-                        carregandoLinhas ? "Carregando as linhas…" : "Escolha a linha de serviço"
+                        carregandoLinhas
+                          ? "Carregando as células…"
+                          : "Escolha a célula de atendimento"
                       }
                       disabled={carregandoLinhas}
-                      ariaLabel="Linha de serviço da vaga"
+                      ariaLabel="Célula de atendimento da vaga"
                     />
                     {/* O CATÁLOGO VAZIO É DITO, e não escondido atrás de um seletor que não abre
                           nada: sem linha cadastrada a vaga não publica, e quem lê precisa do
                           caminho. É a mesma frase do catálogo de motivos de cancelamento. */}
                     {!carregandoLinhas && linhasAtivasDoCatalogo.length === 0 && (
                       <span className="mt-1 block text-[12px] text-warn">
-                        Nenhuma linha de serviço está cadastrada. Cadastre em Menu Gerencial, Linhas
-                        De Serviço.
+                        Nenhuma célula de atendimento está cadastrada. Cadastre em Menu Gerencial,
+                        Linhas De Serviço.
                       </span>
                     )}
                   </CampoSelect>
@@ -1599,6 +1616,24 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
                       type="date"
                       value={form.dataAlinhamento}
                       onChange={(e) => set("dataAlinhamento", e.target.value)}
+                      className="ds-input"
+                    />
+                  </Campo>
+
+                  {/* ─ DATA DE REALINHAMENTO: AO LADO DO ALINHAMENTO, E NÃO NO LUGAR DELE ────
+                        O cliente define um perfil e depois pede um NOVO alinhamento dele. RECARIMBAR
+                        o campo de cima foi recusado, e o motivo é que o custo de errar é
+                        irreversível: sobrescrever apagaria para sempre a data do alinhamento
+                        ORIGINAL, que é o marco de quando o perfil foi combinado. Guardar as duas é
+                        aditivo.
+
+                        É CAMPO DE MÃO, como o vizinho: o sistema nunca o carimba. Rótulo de campo em
+                        frase normal (§A.24), e `input type="date"` é a exceção aceita da §A.35. */}
+                  <Campo rotulo="Data de realinhamento da vaga">
+                    <input
+                      type="date"
+                      value={form.dataRealinhamento}
+                      onChange={(e) => set("dataRealinhamento", e.target.value)}
                       className="ds-input"
                     />
                   </Campo>
@@ -2152,30 +2187,23 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
                     />
                   </CampoSelect>
 
-                  {/* ITEM 6: lista fechada, "Outra" abre o texto. "Indiferente" é RESPOSTA, e
-                        não ausência de resposta: quem não escolheu nada segue em "não informado". */}
-                  <CampoSelect rotulo="Faixa etária">
-                    <Select
-                      value={form.faixaEtariaOpcao}
-                      onChange={(v) => set("faixaEtariaOpcao", v)}
-                      options={[
-                        { value: "", label: "não informado" },
-                        ...VAGA_FAIXA_ETARIA.map((f) => ({ value: f, label: f })),
-                      ]}
-                      ariaLabel="Faixa etária"
-                    />
-                  </CampoSelect>
+                  {/* A FAIXA ETÁRIA, EM TEXTO LIVRE (OST da Central de Vagas, item 6). Era uma
+                        lista fechada com um campo "Outra" atrás dela, e o diretor abriu: o dado não
+                        alimenta indicador, então o time escreve o que a vaga pede.
 
-                  {form.faixaEtariaOpcao === OPCAO_OUTRA && (
-                    <Campo rotulo="Qual é a faixa etária">
-                      <input
-                        value={form.faixaEtariaOutra}
-                        onChange={(e) => set("faixaEtariaOutra", e.target.value)}
-                        placeholder="O que a lista acima não cobre"
-                        className="ds-input"
-                      />
-                    </Campo>
-                  )}
+                        O TETO DE 80 CARACTERES É O DA COLUNA, e ele é dito no `maxLength` em vez de
+                        aparecer como um 400 depois de a pessoa ter escrito. O campo "Outra" saiu
+                        junto: com o texto aberto, ele não tinha mais o que cobrir. */}
+                  <Campo rotulo="Faixa etária">
+                    <input
+                      value={form.faixaEtaria}
+                      onChange={(e) => set("faixaEtaria", e.target.value)}
+                      placeholder="Ex.: acima de 18 anos, ou indiferente"
+                      maxLength={80}
+                      className="ds-input"
+                      aria-label="Faixa etária"
+                    />
+                  </Campo>
 
                   <CampoSelect rotulo="Gênero">
                     <Select

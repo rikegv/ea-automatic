@@ -47,6 +47,7 @@ import {
   ReprovarPeloClienteDto,
   RegistrarSaidaEmLoteDto,
   TrocarVagaDto,
+  TrocarVagaEmLoteDto,
 } from "./candidatos.dto";
 
 /**
@@ -147,11 +148,16 @@ export class CandidatosController {
    * é de propósito: o Nest casa na ordem de declaração, e sem o prefixo próprio um POST em massa
    * bateria na rota de parâmetro com o id valendo "lote".
    *
-   * SEM `@Roles`: são as mesmas operações que o consultor já faz uma a uma. A troca de vaga NÃO tem
-   * versão em massa aqui, e o motivo deixou de ser o papel (o `@Roles` dela saiu na Frente D, por
-   * decisão do diretor) e passou a ser o que sempre esteve por baixo: a troca trava a linha da vaga
-   * de DESTINO e confere o teto dela dentro da transação, e um lote parcial deixaria metade da
-   * seleção movida e metade não, sem ninguém ter dito qual metade importava.
+   * SEM `@Roles`: são as mesmas operações que o consultor já faz uma a uma.
+   *
+   * ┌─ A TROCA DE VAGA PASSOU A TER LOTE, E ESTE PARÁGRAFO DIZIA QUE NÃO TERIA (OST de 30/09) ───┐
+   * │ ESTAVA ESCRITO AQUI que ela não teria versão em massa porque a troca trava a linha da vaga  │
+   * │ de DESTINO e confere o teto dela na transação, e um lote parcial deixaria metade da seleção │
+   * │ movida e metade não. O diretor decidiu que TODAS as ações do modal ganham versão em massa,  │
+   * │ e o fato técnico virou o RELATÓRIO: quem não entrou volta em `falhas`, com o motivo, linha  │
+   * │ por linha. A caixa velha foi reescrita para não ser lida como decisão viva pela próxima     │
+   * │ sessão, que a usaria para remover a rota.                                                  │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
    */
 
   /**
@@ -189,6 +195,21 @@ export class CandidatosController {
   @Patch("candidaturas/lote/etapa")
   moverEtapaEmLote(@Body() dto: MoverEtapaEmLoteDto, @CurrentUser() user: AuthUser) {
     return this.candidatos.moverEtapaEmLote(dto, user.id);
+  }
+
+  /**
+   * TROCAR A VAGA EM MASSA (item 1 da OST de 30/09/2026).
+   *
+   * PATCH, como a rota individual, e pelo mesmo motivo: a candidatura já existe e uma propriedade
+   * dela muda. O caminho `lote` vem ANTES de `candidaturas/:id/vaga`, senão o Nest casaria "lote"
+   * como id de candidatura, que é a mesma razão registrada na caixa deste grupo.
+   *
+   * VAGA DE DESTINO ENCERRADA RECUSA O PEDIDO INTEIRO (problema DA VAGA, não das linhas); o resto é
+   * lote PARCIAL, com o teto do destino conferido linha a linha, dentro da transação de cada uma.
+   */
+  @Patch("candidaturas/lote/vaga")
+  trocarVagaEmLote(@Body() dto: TrocarVagaEmLoteDto, @CurrentUser() user: AuthUser) {
+    return this.candidatos.trocarVagaEmLote(dto, user.id);
   }
 
   /** Mover de etapa no funil. Não muda a situação: quem chega na Aprovação segue Em Seleção. */

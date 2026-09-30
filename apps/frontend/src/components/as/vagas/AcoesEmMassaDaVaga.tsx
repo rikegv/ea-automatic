@@ -320,7 +320,7 @@ export function AcoesEmMassaDaVaga({
           bloqueado={acimaDoTeto}
           onCancelar={() => setAcao(null)}
           onConfirmar={(etapa) =>
-            void executar("Mover No Funil Em Massa", () => moverEtapaEmLote(ids, etapa, token))
+            void executar("Mover Etapa Em Massa", () => moverEtapaEmLote(ids, etapa, token))
           }
         />
       )}
@@ -561,7 +561,7 @@ function MoverEmLoteModal({
 
   return (
     <ModalDeLote
-      titulo="Mover No Funil Em Massa"
+      titulo="Mover Etapa Em Massa"
       apoio={`${frasePessoas(alvos)} da seleção passam para a etapa escolhida. A situação de cada uma não muda.`}
       acao="Mover no funil"
       processando={processando}

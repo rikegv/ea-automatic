@@ -67,6 +67,12 @@ const CENARIOS: { nome: string; sla: () => Sla }[] = [
     sla: () => slaDaVaga(encerrada("2026-09-20", null), true, HOJE),
   },
   { nome: "encerrada sem previsão", sla: () => slaDaVaga(encerrada(null, "2026-09-10"), true, HOJE) },
+  /* ─ A ENTREGA CONGELADA (30/09): DUAS ENTRADAS, e a segunda é a que importa ──────────────────
+     A vaga entregue com a previsão JÁ VENCIDA é o caso real: era ela que aparecia "Prazo Vencido"
+     sozinha, esperando o cliente responder. A de previsão futura entra para provar que o estado não
+     depende de o prazo ter passado: entregue é entregue nos dois. */
+  { nome: "entregue com a previsão vencida", sla: () => slaDaVaga(viva("2026-08-20"), false, HOJE, true) },
+  { nome: "entregue com a previsão futura", sla: () => slaDaVaga(viva("2026-10-21"), false, HOJE, true) },
 ];
 
 // ═══════════════════════════════════════════════════════════════════════════════════════════════
@@ -115,22 +121,29 @@ describe("todo estado que a régua PRODUZ é oferecido pelo filtro", () => {
    * que o produz deixaria os dois testes acima verdes, afirmando menos do que afirmavam. É a lição
    * medida na onda passada, aplicada ao catálogo desta.
    */
-  it("ESCRITO À MÃO: o vocabulário de hoje tem cinco estados, do mais urgente ao histórico", () => {
+  it("ESCRITO À MÃO: o vocabulário de hoje tem seis estados, do mais urgente ao histórico", () => {
+    /* O SEXTO ENTROU EM 30/09 (`ENTREGUE`), e ele tem de estar ESCRITO aqui, e não derivado: foi
+       assim que o quinto ficou protegido, e a entrada nova não afrouxa a régua, ela a estende. */
     expect([...SLA_ESTADOS]).toEqual([
       "VENCIDO",
       "ATENCAO",
       "NO_PRAZO",
       "SEM_PREVISAO",
+      "ENTREGUE",
       "ENCERRADA",
     ]);
   });
 
   /** §A.24: etiqueta é title case. §A.11: travessão é proibido em qualquer texto apresentável. */
-  it("ESCRITO À MÃO: as cinco etiquetas, em title case", () => {
+  it("ESCRITO À MÃO: as seis etiquetas, em title case", () => {
     expect(SLA_ESTADO_LABEL.VENCIDO).toBe("Prazo Vencido");
     expect(SLA_ESTADO_LABEL.ATENCAO).toBe("Prazo Curto");
     expect(SLA_ESTADO_LABEL.NO_PRAZO).toBe("No Prazo");
     expect(SLA_ESTADO_LABEL.SEM_PREVISAO).toBe("Sem Previsão");
+    /* A ETIQUETA DA ENTREGUE É PRÓPRIA, e reusar "Vaga Encerrada" aqui seria a tela afirmando um
+       encerramento que ninguém registrou: no catálogo, `ENTREGUE` tem `encerra = false`. */
+    expect(SLA_ESTADO_LABEL.ENTREGUE).toBe("Vaga Entregue");
+    expect(SLA_ESTADO_LABEL.ENTREGUE).not.toBe(SLA_ESTADO_LABEL.ENCERRADA);
     expect(SLA_ESTADO_LABEL.ENCERRADA).toBe("Vaga Encerrada");
   });
 });
@@ -256,7 +269,21 @@ describe("nenhum cenário escreve zero dias nem travessão", () => {
       expect(s.texto, c.nome).not.toContain("—");
       expect(s.detalhe, c.nome).not.toContain("—");
       expect(s.texto.trim(), c.nome).not.toBe("");
-      if (s.dias === null) expect(s.texto, c.nome).toBe("não informado");
+      /* ─ A REGRA DO "NÃO INFORMADO" VALE ONDE NÃO HÁ CONTA A FAZER, e essa é a redação de 30/09 ─
+         ELA CONTINUA INTEIRA PARA OS CASOS QUE A ORIGINARAM: previsão ausente, previsão ilegível e
+         vaga encerrada sem data são ausência de INFORMAÇÃO, e ali a célula diz a palavra.
+
+         A VAGA ENTREGUE É OUTRA COISA, e é por isso que ela é nomeada aqui em vez de a asserção ser
+         relaxada: ela não tem número porque NÃO EXISTE data de entrega para congelar contra, mas tem
+         o que dizer, e escrever "não informado" nela esconderia o estado que o congelamento acabou
+         de estabelecer. O que continua proibido é o que a regra protege: célula vazia e travessão. */
+      if (s.dias === null) {
+        if (s.estado === "ENTREGUE") {
+          expect(s.texto, c.nome).toBe("entregue");
+        } else {
+          expect(s.texto, c.nome).toBe("não informado");
+        }
+      }
     }
   });
 

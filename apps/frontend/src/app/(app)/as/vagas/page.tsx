@@ -88,6 +88,7 @@ import { fechamentoRecusadoPorPosicoes } from "@/lib/as-vaga-fechamento";
 import { avisoDeReducaoDeMeta } from "@/lib/as-vaga-meta";
 import {
   ordemDoSla,
+  slaCongelado,
   slaDaVaga,
   SLA_ESTADOS,
   SLA_ESTADO_LABEL,
@@ -471,9 +472,19 @@ function LinhaEmProcesso({ quantos }: { quantos: number }) {
  *
  * AQUI FICA SÓ A AMARRAÇÃO com o que é da TELA: quem responde se o status encerra é o catálogo
  * (`vagaEncerrada`, o flag `encerra` da onda B2), e o "hoje" é o da máquina de quem abriu a página.
+ *
+ * ─ A VAGA ENTREGUE TAMBÉM CONGELA (30/09), E A PERGUNTA É PELO PAPEL ───────────────────────────
+ *
+ * `ENTREGUE` TEM `encerra = false` NO CATÁLOGO (medido em produção), então até aqui a vaga entregue
+ * seguia na contagem regressiva e virava "Prazo Vencido" sozinha, só esperando o cliente responder.
+ * Entregue é entregue: o time não está mais trabalhando nela, e o prazo para.
+ *
+ * A PERGUNTA É `ehDoPapelDaVaga(..., "ENTREGA")`, E NÃO `status === "ENTREGUE"`, pela mesma razão
+ * que a onda B2 matou os literais: o papel é único no catálogo, então renomear a linha ou criar
+ * outra de entrega não quebra o congelamento em silêncio.
  */
 function slaDaLinha(v: VagaListItem) {
-  return slaDaVaga(v, vagaEncerrada(v.status), HOJE());
+  return slaDaVaga(v, vagaEncerrada(v.status), HOJE(), ehDoPapelDaVaga(v.status, "ENTREGA"));
 }
 
 /** Rótulo de uma lista múltipla numa linha só, com o escape no fim quando ele existe. */
@@ -1403,12 +1414,23 @@ export default function CentralDeVagasPage() {
        diretor: ele clica e LÊ que só Master reabre, em vez de a ação não existir na tela dele.
        Esconder ensina que o sistema está quebrado; dizer ensina quem procurar. Quem responde isso é
        o próprio modal, sem requisição nenhuma. */
-    if (ehDoPapelDaVaga(v.status, "CANCELAMENTO", catalogoStatus)) {
+    /* ─ E A REABERTURA PASSOU A VALER TAMBÉM PARA A VAGA ENTREGUE (30/09) ──────────────────────
+       O CASO É O CLIENTE QUE REPROVA A ENTREGA: a vaga foi entregue, o cliente não aprovou, e o
+       trabalho volta. Sem esta porta o Master só tinha o "mover status" para desfazer isso, que não
+       devolve ninguém ao funil, não pede prazo novo e não deixa trilha do que aconteceu.
+
+       SÃO DOIS PAPÉIS, E A DIFERENÇA CHEGA NO MODAL: ele é quem muda o que a tela afirma (a
+       entregue pede uma previsão de entrega nova, a cancelada não) e quem explica o que vai
+       acontecer com os candidatos. Aqui só muda a frase do gesto. */
+    const papelReabrivel =
+      ehDoPapelDaVaga(v.status, "CANCELAMENTO", catalogoStatus) ||
+      ehDoPapelDaVaga(v.status, "ENTREGA", catalogoStatus);
+    if (papelReabrivel) {
       lista.push({
         id: "reabrir",
         rotulo: "Reabrir vaga",
         icone: "refresh",
-        descricao: `Reabrir a vaga cancelada ${rotuloDaVaga(v)}`,
+        descricao: `Reabrir a vaga ${rotuloDaVaga(v)}`,
         onClick: () => setReabrirAlvo(v),
       });
     }
@@ -2858,13 +2880,18 @@ export default function CentralDeVagasPage() {
                         vermelho uma vaga que fechou atrasada há seis meses encheria a fila de
                         alarme sobre trabalho que ninguém pode mais mudar.
 
+                        A ENTREGUE ENTRA NO MESMO TOM DISCRETO (30/09), e pelo mesmo argumento: o
+                        prazo dela parou na entrega, então não há o que cobrar enquanto o cliente
+                        responde. O que ela NÃO é é "encerrada", e por isso a etiqueta dela é
+                        própria ("Vaga Entregue").
+
                         O ÍCONE SEGUE O ESTADO (§A.12: ícone dinâmico, nunca fixo) e só aparece onde
                         há o que sinalizar. A frase inteira fica no `title`. */}
                     <td className="text-center">
                       {(() => {
                         const sla = slaDaLinha(v);
                         const tom =
-                          sla.estado === "ENCERRADA" || sla.estado === "SEM_PREVISAO"
+                          slaCongelado(sla.estado) || sla.estado === "SEM_PREVISAO"
                             ? "text-dim"
                             : sla.estado === "VENCIDO"
                               ? "font-semibold text-danger"
@@ -3086,7 +3113,7 @@ export default function CentralDeVagasPage() {
                   O rótulo da linha vem do catálogo (com as inativas, senão a vaga antiga mostraria
                   vazio no lugar da classificação); a cidade vem com o nome já resolvido. */}
               <Linha
-                rotulo="Linha de serviço"
+                rotulo="Célula de atendimento"
                 /* O RÓTULO VIAJA JUNTO DO ID no contrato, então a ficha lê o que o servidor já
                    resolveu. A QUEDA PARA O CATÁLOGO LOCAL não é redundância: ela cobre a linha
                    INATIVADA depois da abertura, em que o servidor pode não mandar rótulo, e sem ela
@@ -3136,7 +3163,7 @@ export default function CentralDeVagasPage() {
                 apoio={origemDoValor(verAlvo.comercial.origem)}
               />
               <Linha
-                rotulo="Natureza"
+                rotulo="Tipo de vaga"
                 valor={verAlvo.natureza ? VAGA_NATUREZA_LABEL[verAlvo.natureza] : null}
               />
               <Linha
@@ -3149,7 +3176,10 @@ export default function CentralDeVagasPage() {
                 valor={verAlvo.posicoesOficiais === null ? null : String(verAlvo.posicoesOficiais)}
               />
               <Linha rotulo="Posições de banco" valor={String(verAlvo.posicoesBanco)} />
-              <Linha rotulo="Sazonalidade" valor={VAGA_SAZONALIDADE_LABEL[verAlvo.sazonalidade]} />
+              <Linha
+                rotulo="Tipo de processo"
+                valor={VAGA_SAZONALIDADE_LABEL[verAlvo.sazonalidade]}
+              />
               {/* Item 2: o tempo de contrato só se mostra onde ele existe, pela mesma régua que
                     esconde o campo na trilha. */}
               {exigeTempoContrato(verAlvo.vinculo) && (
@@ -3168,7 +3198,15 @@ export default function CentralDeVagasPage() {
               <Linha rotulo="Recruiter" valor={verAlvo.recruiterNome} />
               <Linha rotulo="Data de solicitação" valor={dataBr(verAlvo.dataSolicitacao)} />
               <Linha rotulo="Data de alinhamento" valor={dataBr(verAlvo.dataAlinhamento)} />
+              {/* AS DUAS PONTAS DO ALINHAMENTO (30/09): a original e a do realinhamento que o
+                    cliente pediu depois. A linha aparece SEMPRE, inclusive vazia ("não informado"),
+                    como as vizinhas: esconder o campo sem valor faria a ficha de uma vaga sem
+                    realinhamento parecer uma ficha de versão diferente. */}
+              <Linha rotulo="Data de realinhamento" valor={dataBr(verAlvo.dataRealinhamento)} />
               <Linha rotulo="Previsão de entrega" valor={dataBr(verAlvo.dataLimite)} />
+              {/* A REABERTURA É CARIMBO DO SISTEMA, não campo de mão: ela só existe na vaga que
+                    voltou de um cancelamento ou de uma entrega reprovada. */}
+              <Linha rotulo="Data da reabertura" valor={dataBr(verAlvo.dataReabertura)} />
               <Linha rotulo="Envio da shortlist" valor={dataBr(verAlvo.envioShortlist)} />
             </BlocoFicha>
 

@@ -946,6 +946,27 @@
       "when": 1790646001719,
       "tag": "0135_as_digai_screening_cursor",
       "breakpoints": true
+    },
+    {
+      "idx": 136,
+      "version": "7",
+      "when": 1790646002719,
+      "tag": "0136_as_ingestao_divergencias",
+      "breakpoints": true
+    },
+    {
+      "idx": 137,
+      "version": "7",
+      "when": 1790646003719,
+      "tag": "0137_vaga_consultor_transferencias",
+      "breakpoints": true
+    },
+    {
+      "idx": 138,
+      "version": "7",
+      "when": 1790646004719,
+      "tag": "0138_as_vaga_reabertura_realinhamento",
+      "breakpoints": true
     }
   ]
 }

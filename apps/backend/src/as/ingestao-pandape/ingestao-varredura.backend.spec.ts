@@ -237,8 +237,14 @@ function repositorioFalso(respostas: unknown[][] = []): {
           if (papel === "REVISAO") return "PENDENTE_REVISAO";
           return "ABERTA";
         },
+        /*
+         * O PAPEL `REVISAO` PASSOU A SER PERGUNTADO TAMBEM NA VOLTA (OST de precedência, 30/09/2026):
+         * é ele que autoriza o ATS a escrever os quatro campos da vaga. Sem esta segunda resposta, o
+         * dublê diria "não está em revisão" para TODA vaga, e a volta nunca escreveria campo nenhum.
+         */
         ehDoPapel: (codigo: string, papel: string) =>
-          codigo === "FECHADA" && papel === "FECHAMENTO",
+          (codigo === "FECHADA" && papel === "FECHAMENTO") ||
+          (codigo === "PENDENTE_REVISAO" && papel === "REVISAO"),
       };
     },
   };
@@ -456,8 +462,15 @@ describe("o repositório da ingestão", () => {
     // Da varredura, viva, com título novo chegando do ATS: o update mexe no que o ATS manda e NÃO
     // toca `cargo_id`. Escrever ali sobrescreveria, de 30 em 30 minutos, o cargo que uma PESSOA
     // escolheu na liberação, sem autor, sem data e sem trilha.
+    /*
+     * A VAGA ESTA EM REVISAO NESTE CASO, e o status mudou de `ABERTA` para `PENDENTE_REVISAO` na OST
+     * de precedência (30/09/2026). Desde ela, a vaga JA LIBERADA não recebe mais os quatro campos do
+     * ATS: naquele estado não haveria `update vagas` nenhum a inspecionar, e o que este teste afirma
+     * (`cargo_id` fora do `set` e o catálogo `cargos` fora da volta) só é observável onde a escrita
+     * acontece. A trava da vaga liberada é medida em `ingestao-precedencia.backend.spec.ts`.
+     */
     const { repo, sqls } = repositorioFalso([
-      [{ id: "v1", status: "ABERTA", da_varredura: true, encerrou: false }],
+      [{ id: "v1", status: "PENDENTE_REVISAO", da_varredura: true, encerrou: false }],
       [{ id: "v1" }],
     ]);
     await repo.escrever({
@@ -494,7 +507,13 @@ describe("o repositório da ingestão", () => {
    * `linhasAfetadas` NÃO SERVE de substituto: ele vale 1 no insert e no update que mudou algo.
    */
   it("a candidatura que NASCE devolve `criada`, e a que já existia devolve o contrário", async () => {
-    const nascimento = repositorioFalso([[], [{ id: "cand-1" }]]);
+    /*
+     * TRES RESPOSTAS, E A DO MEIO NASCEU NA OST DE PRECEDENCIA (30/09/2026): antes de INSERIR, o
+     * repositório pergunta à TRILHA se aquela pessoa foi TRANSFERIDA para fora desta vaga por gente
+     * (`vaga_de` em `as_candidatura_etapas`). Vazio é "não foi", e a candidatura nasce normalmente.
+     * Este dublê responde por POSIÇÃO, então a leitura nova exige a linha vazia no meio.
+     */
+    const nascimento = repositorioFalso([[], [], [{ id: "cand-1" }]]);
     const criada = await nascimento.repo.escrever({
       tabela: "as_candidaturas",
       acao: "upsert",
@@ -509,7 +528,22 @@ describe("o repositório da ingestão", () => {
     expect(criada.criada).toBe(true);
     expect(criada.id).toBe("cand-1");
 
-    const volta = repositorioFalso([[{ id: "cand-1" }], [{ id: "cand-1" }]]);
+    /*
+     * A VOLTA TRAZ OS VALORES ATUAIS DA LINHA, e não só o id: desde a OST de precedência o
+     * repositório COMPARA os dois lados em vez de sobrescrever. Os valores aqui são IGUAIS aos que o
+     * ATS manda, de propósito, para isolar o que este teste mede (`criada`) da fila de divergências.
+     */
+    const volta = repositorioFalso([
+      [
+        {
+          id: "cand-1",
+          etapa: "APROVACAO",
+          situacao: "ENVIADO_PARA_ADMISSAO",
+          motivo_descarte: null,
+          admissao_id: null,
+        },
+      ],
+    ]);
     const movida = await volta.repo.escrever({
       tabela: "as_candidaturas",
       acao: "upsert",
@@ -522,10 +556,17 @@ describe("o repositório da ingestão", () => {
         situacao: "ENVIADO_PARA_ADMISSAO",
       },
     });
-    // A LINHA FOI ESCRITA (a varredura sobrescreve etapa e situação de quem já existe, e isso não
-    // mudou nesta frente), e AINDA ASSIM ela não é nascimento: o ATS não promove à admissão quem já
-    // está sendo trabalhado dentro do EA.
-    expect(movida.linhasAfetadas).toBe(1);
+    /*
+     * A LINHA NAO FOI ESCRITA, e esta frase é o OPOSTO da que estava aqui até 30/09/2026 ("a varredura
+     * sobrescreve etapa e situação de quem já existe, e isso não mudou nesta frente"). Ela mudou: a
+     * OST de precedência REMOVEU o `update as_candidaturas` inteiro, porque o `is distinct from` dele
+     * não era proteção, era o gatilho, e a pessoa que o time avançava voltava em até 30 minutos.
+     *
+     * O QUE ESTE TESTE MEDE CONTINUA INTEIRO: candidatura que já existia NÃO é nascimento, e por isso
+     * o ATS não promove à admissão quem já está sendo trabalhado dentro do EA. O que mudou é que
+     * agora ela também não é ESCRITA.
+     */
+    expect(movida.linhasAfetadas).toBe(0);
     expect(movida.criada).toBe(false);
   });
 

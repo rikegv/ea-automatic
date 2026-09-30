@@ -12,6 +12,11 @@ export const ROTA_MENU: { prefixo: string; codigo: string }[] = [
   // ALTO VOLUME (onda 1): sem esta linha o guard deixaria QUALQUER autenticado abrir a URL direto,
   // mesmo sem o menu liberado pelo diretor (§A.23). A escrita já está fechada pelo backend; isto
   // fecha a porta da tela.
+  // A FILA DE DIVERGENCIAS DA INGESTAO. Sem esta linha o `AppLayout` deixa qualquer autenticado
+  // com algum menu administrativo abrir a rota pela URL, e a fila mostra NOME de candidato com
+  // cliente e vaga. O par desta linha e o `operacoes` do menu em `domain/menus.ts`, que fecha o
+  // lado do servidor: esta fecha o lado da tela, e as duas sao necessarias.
+  { prefixo: "/admin/divergencias-ingestao", codigo: "divergencias-ingestao" },
   { prefixo: "/admin/alto-volume", codigo: "alto-volume" },
   { prefixo: "/admin/clientes", codigo: "clientes" },
   { prefixo: "/admin/cargos", codigo: "cargos" },

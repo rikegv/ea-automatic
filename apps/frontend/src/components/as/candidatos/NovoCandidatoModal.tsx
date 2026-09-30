@@ -56,6 +56,7 @@ import {
   reentradaPrecisaCiencia,
   registrarContato,
 } from "@/lib/as-candidatos";
+import { useCidades } from "@/lib/as-cidades";
 import { etapaInicial, useEtapas } from "@/lib/as-etapas";
 import { ConfirmarReentradaModal } from "@/components/as/candidatos/ConfirmarReentradaModal";
 
@@ -133,6 +134,23 @@ export function NovoCandidatoModal({
    * chega em milissegundos (promessa memoizada, compartilhada com o resto da tela), e um valor
    * chutado que depois se corrige sozinho é pior do que um campo que ainda não decidiu.
    */
+  /**
+   * ─ AS CIDADES DA UF ESCOLHIDA (OST da Central de Vagas, item 7) ───────────────────────────────
+   *
+   * A CIDADE ERA TEXTO LIVRE AQUI, e a abertura de vaga já tinha a lista do IBGE: duas telas
+   * perguntando a mesma coisa de dois jeitos é como "Guarulhos", "guarulhos" e "Guarulhos/SP"
+   * passam a ser três cidades. O catálogo é o MESMO módulo da vaga (`lib/as-cidades`), memorizado
+   * por UF, e não uma segunda lista.
+   *
+   * SEM UF NÃO HÁ REQUISIÇÃO: são 5.570 municípios, e o `useCidades` só busca quando o estado foi
+   * escolhido. É por isso que a UF vem ANTES da cidade no formulário agora, e não depois.
+   */
+  const {
+    cidades: cidadesDaUf,
+    carregando: carregandoCidades,
+    erro: erroCidades,
+  } = useCidades(form.uf, token);
+
   const { ativas: etapasAtivas } = useEtapas();
   const inicial = etapaInicial(etapasAtivas);
   const [etapa, setEtapa] = useState<CandidaturaEtapa>("");
@@ -182,6 +200,13 @@ export function NovoCandidatoModal({
 
   const set = (campo: keyof Form, valor: string) => setForm((f) => ({ ...f, [campo]: valor }));
 
+  /**
+   * A UF COMANDA A CIDADE, como na abertura de vaga: trocar o estado LIMPA a cidade escolhida. Sem
+   * isso, escolher "Guarulhos" e depois corrigir a UF para MG deixaria a pessoa morando numa cidade
+   * que não existe no estado dela, e nada falharia.
+   */
+  const escolherUf = (uf: string) => setForm((f) => (f.uf === uf ? f : { ...f, uf, cidade: "" }));
+
   const cpfLimpo = normalizeCpf(form.cpf);
   const cpfCompleto = cpfLimpo.length === 11;
   const cpfInvalido = cpfCompleto && !isValidCpf(cpfLimpo);
@@ -227,7 +252,7 @@ export function NovoCandidatoModal({
 
   const optVagas = vagasAbertas.map((v) => ({
     value: v.id,
-    label: v.nomeDivulgacao ?? v.codigo ?? "Vaga sem nome de divulgação",
+    label: v.nomeDivulgacao ?? v.codigo ?? "Vaga sem nome",
     hint: v.clienteNome ?? v.codigo ?? undefined,
   }));
 
@@ -402,19 +427,14 @@ export function NovoCandidatoModal({
                 </div>
               </Campo>
 
-              <Campo rotulo="Cidade">
-                <input
-                  className="ds-input"
-                  value={form.cidade}
-                  onChange={(e) => set("cidade", e.target.value)}
-                  placeholder="Cidade onde a pessoa mora"
-                />
-              </Campo>
-
+              {/* ─ A UF VEM ANTES DA CIDADE (OST da Central de Vagas, item 7) ─────────────
+                  A ORDEM INVERTEU DE PROPÓSITO: a cidade deixou de ser texto livre e passou a ser a
+                  lista do IBGE, filtrada pelo estado, então perguntar a cidade primeiro seria abrir
+                  um campo que ainda não tem o que oferecer. É a mesma ordem da abertura de vaga. */}
               <Campo rotulo="UF">
                 <Combobox
                   value={form.uf}
-                  onChange={(v) => set("uf", v)}
+                  onChange={escolherUf}
                   /* SÓ A SIGLA na lista e no campo (decisão do diretor): o nome do estado ao
                      lado de "SP" é repetição num campo de duas letras. Ele não some da BUSCA, vai
                      em `busca`, que filtra sem aparecer: digitar "São Paulo" ou "SP" acha igual. */
@@ -423,6 +443,43 @@ export function NovoCandidatoModal({
                   ariaLabel="UF"
                   limpavel
                 />
+              </Campo>
+
+              {/* ─ A CIDADE, DA MESMA LISTA QUE A ABERTURA DE VAGA USA ────────────────────
+                  A BUSCA NÃO É OPCIONAL (§A.35): o maior estado tem 853 municípios, e sem ela
+                  escolher a cidade seria rolar centenas de linhas. O `Combobox` do design system
+                  com `searchable` é o mesmo controle da trilha da vaga.
+
+                  O QUE VIAJA É O NOME DA CIDADE, e não o id do IBGE: o cadastro de candidato grava
+                  `cidade` como texto desde sempre, e trocar a forma do valor aqui exigiria mexer no
+                  servidor. O ganho da OST é a GRAFIA única, e o nome do catálogo já entrega isso.
+
+                  O CAMPO NASCE FECHADO dizendo o que fazer, porque sem UF não há lista: baixar os
+                  5.570 municípios do país para preencher um campo seria tráfego para uma resposta
+                  que ninguém pediu. */}
+              <Campo rotulo="Cidade">
+                {form.uf ? (
+                  <>
+                    <Combobox
+                      value={form.cidade}
+                      onChange={(v) => set("cidade", v)}
+                      options={cidadesDaUf.map((c) => ({ value: c.nome, label: c.nome }))}
+                      placeholder={
+                        carregandoCidades ? "Carregando as cidades…" : "Busque pelo nome da cidade"
+                      }
+                      ariaLabel="Cidade"
+                      searchable
+                      limpavel
+                    />
+                    {erroCidades && (
+                      <span className="mt-1 block text-[12px] text-warn">{erroCidades}</span>
+                    )}
+                  </>
+                ) : (
+                  <p className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-3 text-[12.5px] text-faint">
+                    Escolha a UF ao lado para buscar a cidade.
+                  </p>
+                )}
               </Campo>
 
               <Campo rotulo="Origem" largo>

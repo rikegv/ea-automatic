@@ -518,6 +518,26 @@ export function bancoDoReabrir(cenario: {
       vagasFechadas: 2,
       vagasFechadasBanco: 1,
       dataFechamento: "2026-09-10",
+      /*
+       * AS COLUNAS DA REABERTURA (migration 0138), NO FIXTURE, E ISSO É O FAKE ACOMPANHANDO O SCHEMA.
+       *
+       * `dataLimite` passou a ser LIDA sob o lock (é dela que sai a cópia `data_limite_anterior`), e
+       * coluna pedida por uma consulta e ausente do fixture é lida como `undefined`: o alarme
+       * `colunasDesconhecidas` existe para acusar exatamente isto, em vez de o conjunto encolher em
+       * silêncio e alguém procurar o defeito no lugar errado.
+       *
+       * `statusManualEm` entra pelo mesmo motivo, e com uma consequência a mais: a reabertura da vaga
+       * ENTREGUE chama a DERIVAÇÃO do status, e ela desiste quando o carimbo manual não é nulo.
+       * Ausente, `undefined !== null` é verdadeiro, e a derivação voltaria em silêncio num cenário em
+       * que ela deveria agir.
+       */
+      dataLimite: "2026-09-20",
+      dataLimiteAnterior: null,
+      dataReabertura: null,
+      reaberturaPorId: null,
+      dataRealinhamento: null,
+      statusManualEm: null,
+      statusManualPorId: null,
       canceladaPorId: MASTER.id,
       canceladaEm: T0,
       cancelamentoMotivo: MOTIVO_DO_CANCELAMENTO,
@@ -1625,19 +1645,43 @@ export async function violacoesDoReabrir(
     }
   }
 
-  // ── J. A ORIGEM É SÓ O PAPEL DE CANCELAMENTO ────────────────────────────────
+  // ── J. FECHAMENTO E ABERTURA NÃO TÊM PORTA DE VOLTA (a ENTREGA passou a ter) ─
   {
+    /*
+     * ┌─ ESTA REGRA PASSAVA POR ACIDENTE, e a prova foi por MUTAÇÃO (30/09/2026) ──────────────────┐
+     * │ Ela dizia "a origem é SÓ o cancelamento" e incluía a ENTREGA na varredura. A decisão do     │
+     * │ diretor tornou isso FALSO: a vaga ENTREGUE reabre, desde que venha prazo novo.              │
+     * │                                                                                            │
+     * │ E ela continuava VERDE, o que é pior que ficar vermelha: a sonda mandava um corpo SEM       │
+     * │ `dataLimite`, então a produção recusava a ENTREGA por **falta de prazo**, e o contrato lia  │
+     * │ aquela recusa como se fosse a recusa do PAPEL. O `tester` provou o tamanho do buraco        │
+     * │ aplicando um mutante que APAGA `vagasFechadas`, `vagasFechadasBanco` e `dataFechamento` no  │
+     * │ caminho da entrega, que é literalmente o dano que o texto desta regra nomeava: os 16 testes │
+     * │ do contrato ficaram TODOS VERDES. A regra não detectava mais o dano que existia para pegar. │
+     * │                                                                                            │
+     * │ A SONDA AGORA MANDA PRAZO, de propósito: sem ele, a recusa do FECHAMENTO e da ABERTURA      │
+     * │ também deixaria de distinguir "recusou pelo papel" de "recusou por falta de prazo", e a     │
+     * │ regra passaria a medir a ORDEM das guardas em vez da régua do papel.                        │
+     * │                                                                                            │
+     * │ A OUTRA METADE, "a entrega reabre SEM apagar a entrega", NÃO veio para cá de propósito: ela │
+     * │ só seria executável se a implementação de referência ganhasse o caminho inteiro da 0138, e  │
+     * │ até lá ficaria verde por VACUIDADE, que é exatamente o defeito diagnosticado acima. Ela     │
+     * │ vive em `vagas.reabrir-de-entregue.cobertura-independente.tester.spec.ts`, que roda contra  │
+     * │ a PRODUÇÃO e está provada por mutação.                                                      │
+     * └────────────────────────────────────────────────────────────────────────────────────────────┘
+     */
     for (const [papel, codigo] of [
-      ["ENTREGA", CODIGO_ENTREGA],
       ["FECHAMENTO", CODIGO_FECHAMENTO],
       ["ABERTURA", codigoAbertura],
     ] as const) {
       const { banco, porta } = montar({ status: codigo });
-      const e = await erro(() => porta.reabrir(VAGA, { candidaturaIds: ["cand-Ana"] }, MASTER));
+      const e = await erro(() =>
+        porta.reabrir(VAGA, { candidaturaIds: ["cand-Ana"], dataLimite: "2026-12-01" }, MASTER),
+      );
       if (e === null || banco.escritas.length > 0) {
         anotar(
           "ORIGEM_ACEITA_OUTRO_PAPEL",
-          `a vaga no papel ${papel} foi reaberta por este caminho. Reabrir desfaz um CANCELAMENTO: aplicá-lo à vaga ENTREGUE apaga a entrega e zera os contadores de quem foi contratado de verdade; aplicá-lo à FECHADA desfaz um fechamento que tem régua própria.`,
+          `a vaga no papel ${papel} foi reaberta por este caminho. O FECHAMENTO tem régua própria (a meta fechada, a data prevista de início, o relógio da retenção) e é frente futura por decisão do diretor; a ABERTURA não tem encerramento a desfazer.`,
         );
       }
     }
@@ -1804,7 +1848,6 @@ export interface DesvioDaReferencia {
   semReconferenciaDePapel?: boolean;
   naoLimpaEncerradaEm?: boolean;
   encerradaEmComoData?: boolean;
-  aceitaPapelEntrega?: boolean;
   literalDeStatus?: boolean;
   reativaConjuntoInteiro?: boolean;
   vazioViraAntigo?: boolean;
@@ -2027,10 +2070,15 @@ export function referenciaDoReabrir(
           .for("update")) as unknown as { id: string; status: string }[];
         if (!vaga) throw new BadRequestException("Vaga não encontrada.");
 
-        const papeisAceitos = desvio.aceitaPapelEntrega
-          ? [CODIGO_CANCELAMENTO, CODIGO_ENTREGA]
-          : [CODIGO_CANCELAMENTO];
-        if (!papeisAceitos.includes(vaga.status)) {
+        /*
+         * A REFERÊNCIA MODELA SÓ O CANCELAMENTO, e isso é limite declarado, não esquecimento.
+         * A produção passou a aceitar a ENTREGA (0138), e modelar aquele caminho aqui significaria
+         * dobrar a referência inteira (prazo obrigatório, movimento das candidaturas, derivação).
+         * Enquanto ela não crescer, a regra da entrega ficaria VERDE POR VACUIDADE aqui, que é o
+         * defeito que a regra J deste arquivo acabou de pagar. Por isso ela vive no spec que roda
+         * contra a produção, e este contrato mede o que continua universal: quem NÃO tem porta.
+         */
+        if (vaga.status !== CODIGO_CANCELAMENTO) {
           throw new ConflictException(
             "Só uma vaga cancelada é reaberta por aqui. Recarregue a página.",
           );
@@ -2183,12 +2231,20 @@ export const MUTANTES: Mutante[] = [
     desvio: { naoLimpaEncerradaEm: true },
     regraEsperada: "NAO_LIMPA_ENCERRADAEM",
   },
-  {
-    nome: "7. a origem passa a aceitar o papel ENTREGA",
-    dano: "a vaga ENTREGUE é 'reaberta': a entrega é apagada, os contadores de quem foi contratado de verdade são zerados e o encerramento com régua própria some.",
-    desvio: { aceitaPapelEntrega: true },
-    regraEsperada: "ORIGEM_ACEITA_OUTRO_PAPEL",
-  },
+  /*
+   * ┌─ O MUTANTE 7 FOI RETIRADO, e a ausência é a decisão ────────────────────────────────────────┐
+   * │ Ele dizia "a origem passa a aceitar o papel ENTREGA" e chamava isso de DANO. Desde a 0138,   │
+   * │ aceitar a ENTREGA é o REQUISITO, por decisão do diretor: a vaga entregue reabre quando o     │
+   * │ cliente reprova o candidato. Mantê-lo congelaria em teste um requisito revogado, e ele já     │
+   * │ havia deixado de medir o que dizia medir: era pego porque a implementação de REFERÊNCIA não  │
+   * │ modela o caminho novo, não porque a produção estivesse certa. Um mutante que descreve um      │
+   * │ defeito que a produção não tem valida a referência contra si mesma.                          │
+   * │                                                                                             │
+   * │ O DANO QUE ELE PROTEGIA, esse continua real e NÃO ficou órfão: "a entrega reabre SEM apagar  │
+   * │ a entrega" é medida em `vagas.reabrir-de-entregue.cobertura-independente.tester.spec.ts`,    │
+   * │ contra a PRODUÇÃO, com mutação própria que a mata (5 de 5).                                  │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   */
   {
     nome: "8. o destino é o literal 'ABERTA' em vez do papel do catálogo",
     dano: "o status da vaga é catálogo do diretor desde a B2. Renomeado o código, a reabertura grava um status que não existe: a vaga some das filas e a FK recusa a gravação. É exatamente o defeito que a B2 matou.",

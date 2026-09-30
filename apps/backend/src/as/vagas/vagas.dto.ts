@@ -257,6 +257,17 @@ export class CreateVagaDto {
   @IsISO8601()
   dataAlinhamento?: string;
 
+  /**
+   * O REALINHAMENTO DE PERFIL (migration 0138). MESMO molde da irmã logo acima, e de propósito: o
+   * cliente definiu um perfil e depois pediu um NOVO alinhamento, e é o TIME que digita a data.
+   *
+   * COLUNA PRÓPRIA, e não um recarimbo de `dataAlinhamento`: as duas pontas precisam existir para a
+   * tela poder perguntar "quanto tempo depois". Ver `vagas.data_realinhamento`.
+   */
+  @IsOptional()
+  @IsISO8601()
+  dataRealinhamento?: string;
+
   @IsOptional()
   @IsISO8601()
   dataAbertura?: string;
@@ -774,6 +785,28 @@ export class ReabrirVagaDto {
   @IsString()
   @MaxLength(500)
   observacao?: string;
+
+  /**
+   * ─ A PREVISÃO DE ENTREGA NOVA, E POR QUE ELA É OPCIONAL AQUI E OBRIGATÓRIA LÁ DENTRO ──────────
+   *
+   * A SLA desta casa é uma contagem REGRESSIVA até a Previsão De Entrega, então "zerar a SLA" não
+   * existe: o que existe é um PRAZO NOVO (decisão do diretor). A reabertura da vaga ENTREGUE PEDE
+   * esse prazo, e o anterior é guardado em `vagas.data_limite_anterior`.
+   *
+   * ┌─ OPCIONAL NO DTO, EXIGIDO NO SERVICE, e isso NÃO é frouxidão ────────────────────────────┐
+   * │ Quem decide se o prazo é obrigatório é o ESTADO DA VAGA, e o estado só se conhece DENTRO da │
+   * │ transação, sob o `SELECT ... FOR UPDATE`: reabrir uma vaga CANCELADA continua funcionando   │
+   * │ exatamente como antes, SEM prazo novo e sem tocar o `data_limite` (não regredir é requisito  │
+   * │ desta frente), e reabrir uma vaga ENTREGUE RECUSA sem ele. Um `@IsNotEmpty` aqui cobraria o  │
+   * │ prazo das duas, quebrando a reabertura de cancelamento que já está em produção.              │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * QUANDO ELE VEM NA REABERTURA DE UMA VAGA CANCELADA, também é aplicado (com o anterior guardado
+   * do mesmo jeito): o gesto é o mesmo, renegociar o prazo ao trazer a vaga de volta.
+   */
+  @IsOptional()
+  @IsISO8601()
+  dataLimite?: string;
 }
 
 /**
@@ -840,4 +873,31 @@ export class CorrigirLiberacaoRevisaoDto {
   @IsOptional()
   @IsBoolean()
   devolverParaFila?: boolean;
+}
+
+/**
+ * ─ DTO DA TRANSFERÊNCIA DA VAGA DE UM CONSULTOR PARA OUTRO (item 5 da OST de 30/09/2026) ────────
+ *
+ * UM CAMPO SÓ, e a estreiteza é a régua: esta rota escreve `consultor_id` e mais nada. Aceitar aqui
+ * qualquer outro campo da vaga transformaria a transferência num segundo caminho de edição, paralelo
+ * ao `PATCH :id`, com as travas dele ausentes.
+ *
+ * NÃO EXISTE CAMPO DE AUTOR: quem transferiu vem da SESSÃO e vai para o rastro
+ * (`vaga_consultor_transferencias`). Autoria é trilha, nunca campo de formulário.
+ *
+ * NÃO EXISTE CAMPO DE MOTIVO, e a ausência é escolha, não esquecimento: a OST não o pediu (§A.31), e
+ * o precedente da casa separa os dois casos por consequência. O desfecho que ENCERRA o processo de
+ * alguém exige justificativa (`RegistrarSaidaEmLoteDto.motivo`); a correção de atribuição não, e
+ * exigir texto para ela só produziria "transferência" digitado toda vez, que é ruído e não trilha
+ * (é o mesmo argumento escrito no `TrocarVagaDto`). O par obrigatório aqui é quem, quando e de quem
+ * para quem, e esse o rastro guarda inteiro.
+ */
+export class TransferirConsultorDaVagaDto {
+  /**
+   * O CONSULTOR DE DESTINO. Que ele exista, esteja ATIVO e tenha papel de A&S de CONSULTOR é
+   * conferido no service, contra o banco: o DTO só garante que veio um uuid, e "este uuid é um
+   * consultor ativo" é pergunta de estado, que só quem lê a linha responde.
+   */
+  @IsUUID()
+  paraConsultorId!: string;
 }

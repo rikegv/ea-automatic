@@ -13,6 +13,8 @@ import {
   DigaiWebhookController,
   PORTA_DA_FILA_DIGAI,
 } from "./digai/digai-webhook.controller";
+import { IngestaoDivergenciasController } from "./ingestao-pandape/ingestao-divergencias.controller";
+import { IngestaoDivergenciasService } from "./ingestao-pandape/ingestao-divergencias.service";
 import { IngestaoHttp } from "./ingestao-pandape/ingestao-http";
 import { IngestaoPonteParaAdmissao } from "./ingestao-pandape/ingestao-ponte-admissao";
 import { IngestaoRepositorio } from "./ingestao-pandape/ingestao-repositorio";
@@ -221,6 +223,15 @@ import { VagasService } from "./vagas/vagas.service";
      * dentro do Nest, pela licao do cron da Clicksign que nunca foi instalado.
      */
     DigaiPollingController,
+    /*
+     * ─ A FILA DE DIVERGENCIAS DA INGESTAO (OST de precedência, 30/09/2026) ─────────────────────
+     *
+     * CLASSE PRÓPRIA, e a separação é de TAMANHO e de PERMISSAO: ela é reivindicada pelo menu
+     * `divergencias-ingestao`, que é SÓ dela, e não pelo menu de nenhuma outra tela de A&S. O
+     * `MenuGuard` resolve por NOME DE CLASSE, então pendurar estas três rotas numa controller já
+     * existente entregaria a fila a quem tem o menu daquela outra tela.
+     */
+    IngestaoDivergenciasController,
   ],
   // `RetencaoCandidatosService` é o expurgo por retenção (6 MESES para descartado, banco não expira).
   // O prazo era 2 anos e mudou por decisão do diretor em 29/09/2026: candidatura viva em vaga que
@@ -316,6 +327,14 @@ import { VagasService } from "./vagas/vagas.service";
      */
     IngestaoPonteParaAdmissao,
     IngestaoVarreduraService,
+    /*
+     * A FILA DE DIVERGENCIAS. Ela mora neste módulo porque consome as MESMAS instâncias de
+     * `CandidatosService` e `VagasService` que o funil usa: é por elas que `ADOTADO_ATS` aplica o
+     * valor pelo CAMINHO HUMANO (`moverEtapa`, `alocar`, `editarPosicoes`), com autor, trilha e
+     * derivação de status. Um módulo novo criaria um segundo escritor daqueles dados, que é
+     * exatamente o defeito que a fila existe para matar.
+     */
+    IngestaoDivergenciasService,
     /*
      * ─ A INGESTAO DO DIGAI: SEIS PECAS, E ELA NASCE INERTE ─────────────────────────────────────
      *

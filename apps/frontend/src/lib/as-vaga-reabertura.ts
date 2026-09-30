@@ -94,3 +94,48 @@ export function fraseDaReabertura(
     alerta: true,
   };
 }
+
+/**
+ * ─ A FRASE DA REABERTURA DA VAGA ENTREGUE (30/09) ──────────────────────────────────────────────
+ *
+ * ┌─ POR QUE ELA É OUTRA FUNÇÃO, E NÃO UM SEXTO CASO DA DE CIMA ───────────────────────────────┐
+ * │ PORQUE NÃO HOUVE CANCELAMENTO. As cinco frases acima descrevem, todas, o que um CANCELAMENTO │
+ * │ registrou ou deixou de registrar, e a vaga ENTREGUE nunca foi cancelada: reusá-las faria a   │
+ * │ tela dizer "este cancelamento não encerrou o processo de ninguém" sobre uma vaga que ninguém │
+ * │ cancelou. A frase estaria bem escrita e seria falsa, que é o modo de falha que este arquivo  │
+ * │ existe para impedir.                                                                        │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * O QUE ELA PRECISA DIZER, E É PEDIDO DO DIRETOR: o que vai acontecer ANTES de a pessoa confirmar.
+ * A vaga volta para Aberta e os candidatos que estão com o cliente voltam para o começo do funil,
+ * porque o cliente reprovou a entrega e o time vai triar de novo. Isso não é detalhe de
+ * implementação: é o efeito do clique.
+ *
+ * ┌─ POR QUE A TRIAGEM É DITA COMO "HOJE", E NÃO COMO PROMESSA ────────────────────────────────┐
+ * │ MEDIDO NO SERVIÇO: o destino não é a Triagem por lei, é a etapa do funil marcada como       │
+ * │ `destino_da_reabertura` no catálogo (a Triagem, na semente). O diretor pode marcar outra, e  │
+ * │ a tela NÃO tem esse flag: o item de etapa que ela recebe não o carrega. Afirmar "vai para a  │
+ * │ Triagem" seria, então, prometer sobre um dado que esta tela não lê, que é exatamente o modo  │
+ * │ de falha deste arquivo. Dizer "o começo do funil, que hoje é a Triagem" é verdade nos dois   │
+ * │ casos e continua informando quem lê. Registrado ao coordenador: nomear a etapa com           │
+ * │ autoridade pede um campo na prévia.                                                          │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ELA NÃO ACENDE AMARELO, e a regra do arquivo continua de pé: o amarelo é do caso em que alguém
+ * decide sobre uma PESSOA com informação admitidamente incompleta (o `SEM_ORIGEM` com gente a
+ * oferecer). Aqui a informação está completa, e o que a frase faz é avisar do efeito.
+ */
+export function fraseDaReaberturaDeEntrega(quantosOferecidos: number): FraseDaReabertura {
+  const base =
+    "Esta vaga está entregue ao cliente, e reabrir é o caminho de quando ele reprova a entrega. A vaga volta para Aberta e os candidatos que estão com o cliente voltam para o começo do funil, que hoje é a Triagem, para o time fazer uma nova triagem.";
+  /* SÓ SE FALA DA LISTA QUANDO ELA TEM GENTE, pela mesma régua do quarto caso lá em cima: a vaga
+     entregue normalmente não tem saída de cancelamento nenhuma a oferecer, e prometer escolha sobre
+     uma lista vazia é falar de pessoas que não estão na tela. */
+  return {
+    frase:
+      quantosOferecidos === 0
+        ? `${base} Não há ninguém para trazer de volta nesta vaga.`
+        : `${base} Além disso, quem você marcar abaixo volta para o processo.`,
+    alerta: false,
+  };
+}

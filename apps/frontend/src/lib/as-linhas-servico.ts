@@ -194,7 +194,7 @@ export function useLinhasServico(token?: string | null): CatalogoDeLinhas {
  */
 export const PENDENCIA_LINHA_SERVICO: VagaPendencia = {
   campo: "linhaServicoId",
-  rotulo: "Linha de serviço",
+  rotulo: "Célula de atendimento",
   artigo: "a",
   passo: 0,
   passoRotulo: "A Vaga",

@@ -24,6 +24,7 @@ export function catalogoDeEtapasFingido(codigos?: readonly string[]) {
   const linhas: (AsEtapaFunil & {
     entregaAoCliente: boolean;
     destinoDoCancelamento: boolean;
+    destinoDaReabertura: boolean;
     temEntrevista: boolean;
   })[] =
     ETAPAS_FUNIL_SEMENTE.filter((e) => !codigos || codigos.includes(e.codigo)).map((e, i) => ({
@@ -49,6 +50,13 @@ export function catalogoDeEtapasFingido(codigos?: readonly string[]) {
        */
       destinoDoCancelamento: false,
       /*
+       * O DESTINO DA REABERTURA, ESPELHANDO A SEMENTE DA MIGRATION 0138: `TRIAGEM`, que ESTÁ em
+       * `ETAPAS_FUNIL_SEMENTE` (ao contrário do `STAND_BY` logo acima). Um dublê que respondesse
+       * sempre `false` faria a reabertura da vaga ENTREGUE recusar por configuração em todo spec que
+       * passa por aqui sem ser sobre isso, e esconderia o comportamento que a frente construiu.
+       */
+      destinoDaReabertura: e.codigo === "TRIAGEM",
+      /*
        * O FLAG DA FRENTE E, ESPELHANDO A SEMENTE DA MIGRATION 0131, e são DUAS etapas, não uma:
        * `ENTREVISTA_SOULAN` e `ENTREVISTA_CLIENTE`. Um dublê que marcasse só a primeira esconderia
        * justamente o caso que a OST manda prever (a entrevista também acontece na etapa Cliente), e
@@ -65,6 +73,7 @@ export function catalogoDeEtapasFingido(codigos?: readonly string[]) {
     codigosDeEntregaAoCliente: async () =>
       new Set(linhas.filter((e) => e.entregaAoCliente).map((e) => e.codigo)),
     etapaDoCancelamento: async () => linhas.find((e) => e.destinoDoCancelamento && e.ativa) ?? null,
+    etapaDaReabertura: async () => linhas.find((e) => e.destinoDaReabertura && e.ativa) ?? null,
     codigosComEntrevista: async () =>
       new Set(linhas.filter((e) => e.temEntrevista && e.ativa).map((e) => e.codigo)),
     /** A MESMA recusa do serviço de verdade (etapa inexistente PRIMEIRO, depois "não tem entrevista"). */

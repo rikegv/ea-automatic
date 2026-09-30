@@ -235,6 +235,34 @@ export const SELECAO: NavDef[] = [
     codigo: "as-candidatos",
     descricao: "Funil da seleção: etapas, movimentação e trilha do candidato.",
   },
+  {
+    /**
+     * ─ DIVERGÊNCIAS DA INGESTÃO, logo abaixo da Central De Candidatos (decisão do diretor) ────────
+     *
+     * A FILA DE TRABALHO de quem resolve diferença entre o EA e o Pandapé. Ela mora aqui, e não como
+     * card do Menu Gerencial, porque NÃO é configuração: é fila operacional, do mesmo naipe das duas
+     * linhas acima, e quem a trabalha é o time de A&S no dia dele.
+     *
+     * ┌─ POR QUE ELA EXISTE, em uma frase ──────────────────────────────────────────────────────┐
+     * │ A varredura do Pandapé sobrescrevia o avanço que o time fazia aqui, em silêncio: a pessoa │
+     * │ voltava de etapa em até 30 minutos, em loop. Agora o EA vence sempre e a diferença cai    │
+     * │ nesta fila, para uma pessoa decidir. Fila vazia é o estado saudável.                      │
+     * └──────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * ÍCONE `alert`: a linha aqui é sempre uma discordância esperando decisão, e é o único naipe da
+     * barra que pede atenção em vez de navegação. `filter` já é da Central De Candidatos e `table` já
+     * é da Central De Vagas e do Gerenciador, então nenhum dos dois distinguiria a linha.
+     *
+     * §A.23: a linha aqui NÃO concede nada. Ela só aparece para quem TEM o menu
+     * `divergencias-ingestao`, e o menu nasce só para o SUPER_ADMIN, sem seed nenhum rodado. Quem
+     * libera quem enxerga é o DIRETOR.
+     */
+    href: "/admin/divergencias-ingestao",
+    icon: "alert",
+    label: "Divergências Da Ingestão",
+    codigo: "divergencias-ingestao",
+    descricao: "Onde o Pandapé discorda do EA: o EA venceu, e o time decide o que fazer.",
+  },
 ];
 
 /**

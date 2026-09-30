@@ -329,7 +329,7 @@ export function FichaCandidatoModal({
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div>
                           <div className="text-[13.5px] font-semibold text-text">
-                            {c.vagaNome ?? "Vaga sem nome de divulgação"}
+                            {c.vagaNome ?? "Vaga sem nome"}
                           </div>
                           <div className="text-[11.5px] text-faint">
                             Código {c.vagaCodigo ?? "não informado"}. Alocada em{" "}

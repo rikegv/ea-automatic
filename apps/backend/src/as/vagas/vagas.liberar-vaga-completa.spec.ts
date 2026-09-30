@@ -281,7 +281,14 @@ describe("a liberação recusa a vaga incompleta, com a lista inteira, antes de 
     const frase = String(erro?.message ?? "");
     expect(erro, "a vaga incompleta saiu da fila").not.toBeNull();
     expect(frase, "falta o Cargo e a mensagem não diz").toContain("Cargo");
-    expect(frase, "falta a Natureza e a mensagem não diz").toContain("Natureza");
+    /*
+     * O ROTULO MUDOU EM 30/09/2026, e este canario foi quem pegou: "Natureza" virou "Tipo de
+     * vaga", por decisao do diretor, e a asserção antiga exigia a palavra velha. Mantido o que o
+     * teste SEMPRE quis dizer, que e "o campo que falta aparece na frase", so que com o nome que
+     * a pessoa le na tela. O ARTIGO mudou junto ("falta O tipo de vaga", nao "a"), senao a
+     * mensagem sairia em portugues torto.
+     */
+    expect(frase, "falta o Tipo de vaga e a mensagem não diz").toContain("Tipo de vaga");
     expect(
       frase,
       "a PREVISÃO DE ENTREGA é o obrigatório que costuma ser esquecido, e é o campo do SLA: sem ele na lista, a pessoa corrige duas vezes e descobre a terceira na terceira volta",

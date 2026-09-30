@@ -269,6 +269,10 @@ export class IngestaoVarreduraService implements OnModuleInit, OnModuleDestroy {
       r.candidaturasCriadas === 0 &&
       r.pontesParaAdmissao === 0 &&
       r.pontesAdiadas === 0 &&
+      // A VOLTA QUE SO ENCONTROU DIVERGENCIA NAO E VOLTA MUDA: a trava de precedência pode ser a
+      // ÚNICA coisa que aconteceu numa passada (nada novo, nada escrito, e 40 campos que o ATS
+      // queria sobrescrever e não sobrescreveu), e calar isso tornaria a trava invisível no log.
+      r.divergencias === 0 &&
       r.erros === 0
     ) {
       return;
@@ -277,6 +281,7 @@ export class IngestaoVarreduraService implements OnModuleInit, OnModuleDestroy {
       `Varredura (${etapa}): ${r.vagasVarridas} vaga(s), ${r.paginasLidas} pagina(s), ` +
         `${r.pessoasCriadas} pessoa(s) nova(s), ${r.candidaturasCriadas} candidatura(s) escrita(s), ` +
         `${r.conflitosParaRevisao} conflito(s) para revisao, ` +
+        `${r.divergencias} divergencia(s) de precedencia, ` +
         `${r.pontesParaAdmissao} ponte(s) para admissao (${r.pontesAdiadas} adiada(s), ` +
         `${r.posicoesExcedidas} acima do teto da vaga), ${r.erros} erro(s).`,
     );

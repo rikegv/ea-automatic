@@ -189,6 +189,26 @@ describe("a barra da seleção", () => {
   });
 });
 
+/**
+ * O TÍTULO DO MODAL DE LOTE, PRESO EM TESTE (OST da Central de Vagas, item 2). Ele era "Mover No
+ * Funil Em Massa" e passou a ser "Mover Etapa Em Massa" por decisão do diretor. O teste existe
+ * porque rótulo trocado sem teste volta sozinho na primeira refatoração, e porque o rótulo ANTIGO
+ * ainda existe no sistema em OUTRA tela ("Mover No Funil", do modal individual), que a OST NÃO
+ * pediu para mudar: afirmar o novo aqui é o que impede o renomeio de vazar para lá.
+ *
+ * O BOTÃO DE AÇÃO NÃO É AFIRMADO COMO TÍTULO: "Mover no funil" é comando, e §A.24 mantém comando em
+ * frase normal. A OST pediu o TÍTULO.
+ */
+describe("o título do modal de lote", () => {
+  it('abre como "Mover Etapa Em Massa", e não mais como o rótulo antigo do funil', () => {
+    montar([candidatura()]);
+    fireEvent.click(screen.getByRole("button", { name: /mover no funil \(1\)/i }));
+
+    expect(screen.getByText("Mover Etapa Em Massa")).toBeTruthy();
+    expect(screen.queryByText("Mover No Funil Em Massa")).toBeNull();
+  });
+});
+
 describe("finalizar posição em massa", () => {
   it("manda SEMPRE o vagaId, que é o que liga as duas proteções do backend", async () => {
     montar([candidatura(), candidatura({ id: "cand-2", candidatoNome: "Beltrana" })]);

@@ -11,6 +11,7 @@ import {
   type ResumoDoCiclo,
 } from "./ingestao-portas";
 import { desfechoDaIngestaoExterna } from "../../domain/as-ponte-admissao";
+import { ponteDeveDisparar } from "../../domain/as-precedencia-ingestao";
 import {
   projetarInscricao,
   projetarPasta,
@@ -140,6 +141,7 @@ export function novoResumo(): ResumoDoCiclo {
     candidaturasCriadas: 0,
     etapasNaoMapeadas: [],
     conflitosParaRevisao: 0,
+    divergencias: 0,
     pontesParaAdmissao: 0,
     pontesAdiadas: 0,
     posicoesExcedidas: 0,
@@ -199,7 +201,7 @@ export async function descobrirVagasAtivas(
     resumo.vagasVarridas += 1;
     ativos.push(vaga.idVacancy);
     try {
-      const vagaId = await espelharVaga(deps, vaga);
+      const vagaId = await espelharVaga(deps, resumo, vaga);
       espelhadas.push({ idVacancy: vaga.idVacancy, vagaId });
     } catch (err) {
       // UMA VAGA RUIM NÃO DERRUBA A VOLTA: são 621, e a volta leva 26 minutos.
@@ -350,7 +352,11 @@ export async function varrerPaginaDaVaga(
  * devolveu HTTP 200 com ZERO itens em 5 de 5 vagas, e `idCompanyExternal` tem um único valor
  * distinto nas 587 vagas (é o id da Soulan, não o do cliente final).
  */
-async function espelharVaga(deps: DependenciasDaVarredura, vaga: VagaProjetada): Promise<string> {
+async function espelharVaga(
+  deps: DependenciasDaVarredura,
+  resumo: ResumoDoCiclo,
+  vaga: VagaProjetada,
+): Promise<string> {
   const codCliente = await deps.banco.clientePorVaga(vaga.idVacancy);
   const gravada = await deps.banco.escrever({
     tabela: T_VAGAS,
@@ -407,6 +413,12 @@ async function espelharVaga(deps: DependenciasDaVarredura, vaga: VagaProjetada):
       status: "PENDENTE_REVISAO",
     },
   });
+  /*
+   * AS DIVERGENCIAS DA VAGA JA LIBERADA (OST de precedência, 30/09/2026). A trava mora no
+   * repositório, porque é lá que os valores ATUAIS do EA e o PAPEL do status estão na mão; o que sobe
+   * para cá é a CONTAGEM, do mesmo jeito que `conflitosParaRevisao`. §A.6: número, nunca valor.
+   */
+  resumo.divergencias += gravada.divergencias ?? 0;
   return gravada.id;
 }
 
@@ -492,14 +504,32 @@ async function ingerirInscricao(
   });
 
   /*
-   * ─ A PONTE, E ELA EXIGE AS DUAS COISAS: A SITUAÇÃO PEDIR E A CANDIDATURA TER NASCIDO ────────
+   * ─ A PONTE, E A RÉGUA DO "QUANDO" É DOMÍNIO PURO ────────────────────────────────────────────
    *
-   * `gravada.criada` é o fato que só o repositório conhece (o ramo de insert). Candidatura que já
-   * existia NÃO chama a ponte, e a razão inteira está na porta (`PortaPonteParaAdmissao`): a
-   * varredura sobrescreve etapa e situação de quem já existe, então disparar no update faria uma
-   * admissão nascer de um sinal do ATS que pode estar desfazendo o trabalho do time.
+   * ELA ERA UM `if` AQUI (`pedePonteParaAdmissao && gravada.criada`) e virou `ponteDeveDisparar`
+   * (`domain/as-precedencia-ingestao.ts`) na OST de precedência, porque a condição deixou de ser
+   * "nasceu" e passou a ter um segundo ramo, que é a RETENTATIVA da ponte adiada.
+   *
+   * ┌─ POR QUE RETENTAR FICOU SEGURO AGORA, E NÃO ANTES ───────────────────────────────────────┐
+   * │ Com a trava de precedência, o ATS NUNCA MAIS escreve `situacao` em candidatura existente.  │
+   * │ Logo (`ENVIADO_PARA_ADMISSAO` **e** `admissao_id` nulo) só pode ter vindo do INSERT desta   │
+   * │ própria ingestão, numa volta em que a ponte não se completou (CPF ausente, falha de rede).  │
+   * │ Antes da trava, esta MESMA condição seria um furo: o ATS escrevia a situação, e a            │
+   * │ retentativa abriria admissão a partir do valor que ele acabou de empurrar por cima de uma    │
+   * │ decisão humana. Item 6 é consequência do item 2, e não um ajuste independente.              │
+   * │                                                                                            │
+   * │ A IDEMPOTENCIA DE VERDADE CONTINUA NO ADAPTADOR, que lê `admissao_id` antes de escrever:    │
+   * │ esta régua só evita a chamada inútil por candidatura já ligada, 48 vezes por dia.           │
+   * └───────────────────────────────────────────────────────────────────────────────────────────┘
    */
-  if (desfecho.pedePonteParaAdmissao && gravada.criada) {
+  if (
+    ponteDeveDisparar({
+      desfechoPedePonte: desfecho.pedePonteParaAdmissao,
+      criada: gravada.criada,
+      situacaoNoEa: gravada.situacaoNoEa,
+      jaTemAdmissao: gravada.jaTemAdmissao,
+    })
+  ) {
     await acionarPonte(deps, resumo, gravada.candidaturaId);
   }
 }
@@ -700,7 +730,12 @@ async function gravarCandidatura(
     situacao: string | null;
     motivo: string | null;
   },
-): Promise<{ candidaturaId: string; criada: boolean }> {
+): Promise<{
+  candidaturaId: string;
+  criada: boolean;
+  situacaoNoEa?: string | null;
+  jaTemAdmissao?: boolean;
+}> {
   const valores: Record<string, unknown> = {
     candidato_id: dados.candidatoId,
     vaga_id: dados.vagaId,
@@ -722,12 +757,27 @@ async function gravarCandidatura(
   });
   if (gravada.linhasAfetadas > 0) resumo.candidaturasCriadas += 1;
   /*
+   * AS DIVERGENCIAS DE PRECEDENCIA (OST de 30/09/2026). A trava mora no repositório, porque é lá que
+   * os valores ATUAIS do EA estão na mão; o que sobe para cá é a CONTAGEM, do mesmo jeito que
+   * `conflitosParaRevisao`. ELA NAO E ERRO: cada unidade é um campo que o ATS queria sobrescrever e
+   * NAO sobrescreveu, porque havia trabalho humano no caminho. §A.6: número, nunca valor.
+   */
+  resumo.divergencias += gravada.divergencias ?? 0;
+  /*
    * `criada` VEM DO ADAPTADOR, E O `?? false` É FAIL-CLOSED, não conveniência: adaptador que não
    * distingue insert de update devolve `undefined`, e "não sei" cai para o lado de NÃO ser
-   * nascimento. Deduzir daqui (por `linhasAfetadas`, por exemplo) seria errado: aquele número vale
-   * 1 no insert e no update que mudou algo.
+   * nascimento. Deduzir daqui (por `linhasAfetadas`, por exemplo) seria errado: aquele número valia
+   * 1 no insert e também no `update` que mudou algo, quando ainda havia `update`.
+   *
+   * `situacaoNoEa` e `jaTemAdmissao` SÃO O INSUMO DA RETENTATIVA DA PONTE, e sobem crus de propósito:
+   * quem decide o que fazer com eles é o domínio (`ponteDeveDisparar`), e não este arquivo.
    */
-  return { candidaturaId: gravada.id, criada: gravada.criada ?? false };
+  return {
+    candidaturaId: gravada.id,
+    criada: gravada.criada ?? false,
+    situacaoNoEa: gravada.situacaoNoEa,
+    jaTemAdmissao: gravada.jaTemAdmissao,
+  };
 }
 
 // ── LEITURA AUXILIAR ───────────────────────────────────────────────────────────────────────────

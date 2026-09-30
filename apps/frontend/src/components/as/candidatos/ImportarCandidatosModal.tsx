@@ -124,7 +124,7 @@ export function ImportarCandidatosModal({
     () =>
       vagasAbertas.map((v) => ({
         value: v.id,
-        label: v.nomeDivulgacao ?? v.codigo ?? "Vaga sem nome de divulgação",
+        label: v.nomeDivulgacao ?? v.codigo ?? "Vaga sem nome",
         // A busca acha também pelo código do processo e pelo cliente, sem poluir o rótulo (§A.35).
         busca: [v.codigo, v.clienteNome, v.cargoNome].filter(Boolean).join(" "),
       })),

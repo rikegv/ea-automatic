@@ -422,7 +422,7 @@ export default function CentralDeCandidatosPage() {
     () =>
       vagas.map((v) => ({
         value: v.id,
-        label: v.nomeDivulgacao ?? v.codigo ?? "Vaga sem nome de divulgação",
+        label: v.nomeDivulgacao ?? v.codigo ?? "Vaga sem nome",
         hint: v.codigo ?? undefined,
       })),
     [vagas],

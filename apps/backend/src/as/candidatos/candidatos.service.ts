@@ -134,6 +134,7 @@ import type {
   RegistrarSaidaEmLoteDto,
   ReprovarPeloClienteDto,
   TrocarVagaDto,
+  TrocarVagaEmLoteDto,
 } from "./candidatos.dto";
 
 /**
@@ -2552,29 +2553,68 @@ export class CandidatosService {
   }
 
   /**
-   * MOVER NO FUNIL EM MASSA, e SÓ isto: `moverEtapa`, N vezes.
+   * MOVER NO FUNIL EM MASSA, e SÓ isto: `moverEtapa`, N vezes. A troca de vaga tem lote PRÓPRIO
+   * (`trocarVagaEmLote`, logo abaixo), porque o destino dela é uma vaga e não uma etapa.
    *
-   * ┌─ TROCAR DE VAGA NÃO ENTRA AQUI, E O MOTIVO DEIXOU DE SER O PAPEL ──────────────────────────┐
-   * │ Estava escrito que a razão era RBAC, porque a troca seria `@Roles("MASTER","SUPER_ADMIN")`. │
-   * │ NÃO É MAIS: o `@Roles` dela saiu na Frente D, por decisão do diretor, e a troca é de        │
-   * │ QUALQUER consultor. O argumento apoiado na trava revogada seria lido pela próxima sessão    │
-   * │ como verdade, e ela concluiria, com toda a razão aparente, que agora a troca PODE entrar no │
-   * │ lote, porque o papel que a impedia não existe mais.                                         │
+   * ┌─ ESTA CAIXA DIZIA QUE A TROCA DE VAGA NUNCA TERIA LOTE. O DIRETOR DECIDIU O CONTRÁRIO ─────┐
+   * │ OST de 30/09/2026, em palavras dele: "todas as ações que existem no modal ganham versão em │
+   * │ massa, não deixem nenhuma só individual".                                                  │
    * │                                                                                            │
-   * │ O MOTIVO REAL É O QUE SEMPRE ESTEVE POR BAIXO, e ele não depende de papel nenhum: a troca   │
-   * │ TRAVA A LINHA DA VAGA DE DESTINO e confere o TETO DELA dentro da transação. Num lote, esse  │
-   * │ teto se esgota NO MEIO: a seleção de trinta entra até a vaga de destino encher, e as        │
-   * │ demais voltam em `falhas`. O resultado é metade da seleção movida e metade não, sem ninguém │
-   * │ ter dito QUAL metade importava, e sem caminho de volta em um gesto (desfazer exige trocar   │
-   * │ de novo, uma a uma, com o mesmo teto disputado do outro lado).                              │
+   * │ O FATO TÉCNICO QUE ESTAVA ESCRITO AQUI CONTINUA VERDADEIRO, e é por isso que ele não foi   │
+   * │ apagado e sim RESPONDIDO em `trocarVagaEmLote`: a troca trava a linha da vaga de DESTINO e  │
+   * │ confere o TETO dela dentro da transação, então o teto se esgota NO MEIO do lote e só metade │
+   * │ da seleção entra. O que mudou é que isso é RESULTADO RELATADO por linha, e não acidente.    │
    * │                                                                                            │
-   * │ É A MESMA FRASE QUE A CONTROLLER JÁ DIZ, e as duas precisam concordar: o lote PARCIAL é a   │
-   * │ régua da casa para o que é reversível linha a linha, e a troca não é.                       │
+   * │ DEIXAR A FRASE VELHA SERIA PIOR QUE APAGÁ-LA: a próxima sessão a leria como decisão viva e  │
+   * │ tiraria o lote da troca por coerência com um comentário.                                   │
    * └────────────────────────────────────────────────────────────────────────────────────────────┘
    */
   moverEtapaEmLote(dto: MoverEtapaEmLoteDto, porId: string): Promise<AsResultadoEmMassa> {
     return this.emLote(dto.candidaturaIds, (candidaturaId) =>
       this.moverEtapa(candidaturaId, { etapa: dto.etapa }, porId),
+    );
+  }
+
+  /**
+   * ─ TROCAR A VAGA EM MASSA (item 1 da OST de 30/09/2026): `trocarVaga`, N vezes ────────────────
+   *
+   * ┌─ ELA NASCE CONTRARIANDO UMA DECISÃO ESCRITA, E ISSO PRECISA FICAR DITO ────────────────────┐
+   * │ O `moverEtapaEmLote`, a controller e o DTO diziam, em caixa, que a troca de vaga NÃO teria  │
+   * │ versão em massa, e o argumento era técnico e correto: o teto da vaga de DESTINO se esgota   │
+   * │ NO MEIO do lote, então a seleção de trinta entra até a vaga encher e o resto não entra.     │
+   * │                                                                                            │
+   * │ O DIRETOR DECIDIU QUE TODAS AS AÇÕES DO MODAL GANHAM LOTE (OST de 30/09), e o argumento     │
+   * │ técnico virou o RELATÓRIO em vez de virar proibição: quem não entrou volta em `falhas`, com │
+   * │ a frase do teto, LINHA POR LINHA. "Metade movida" deixa de ser surpresa e passa a ser a     │
+   * │ resposta na tela, que é exatamente o que a exigência do lote parcial pede.                  │
+   * │                                                                                            │
+   * │ O QUE NÃO MUDOU, e é o que segura a operação: nenhuma régua foi reescrita aqui. Cada linha  │
+   * │ é uma `trocarVaga`, com a linha da vaga de destino TRAVADA e o teto contado DENTRO da       │
+   * │ transação daquela linha. Uma pré-contagem de "cabem todos?" antes do laço responderia sobre │
+   * │ um instante que já passou, e é o mesmo motivo pelo qual `finalizarPosicaoEmLote` não a tem. │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * A PRÉ-CONFERÊNCIA DA VAGA DE DESTINO É DE UX, e é a MESMA das outras duas em massa: vaga que não
+   * recebe candidato é problema DA VAGA, não das linhas, e devolver trinta falhas idênticas dizendo a
+   * mesma coisa não é relatório, é ruído. O pedido inteiro é recusado e NADA é gravado. Ela não
+   * substitui a trava de dentro da `trocarVaga`, que continua conferindo o status POR LINHA, sob a
+   * linha travada: uma vaga fechada no meio do lote para de receber na linha seguinte.
+   *
+   * §A.6: as falhas voltam por ID de candidatura, com motivo de PROCESSO, pelo `motivoDaFalha` que
+   * todos os lotes deste service compartilham. Nenhum nome, nenhum CPF, nenhum texto sobre a pessoa.
+   */
+  async trocarVagaEmLote(dto: TrocarVagaEmLoteDto, porId: string): Promise<AsResultadoEmMassa> {
+    const regua = await this.statusVaga.regua();
+    const destino = await this.db.query.vagas.findFirst({ where: eq(vagas.id, dto.vagaId) });
+    if (!destino) throw new NotFoundException("Vaga de destino não encontrada.");
+    if (!regua.recebeCandidato(destino.status)) {
+      throw new ConflictException(
+        "Esta vaga não recebe candidato: ela está encerrada. Escolha uma vaga aberta.",
+      );
+    }
+
+    return this.emLote(dto.candidaturaIds, (candidaturaId) =>
+      this.trocarVaga(candidaturaId, { vagaId: dto.vagaId, motivo: dto.motivo }, porId),
     );
   }
 

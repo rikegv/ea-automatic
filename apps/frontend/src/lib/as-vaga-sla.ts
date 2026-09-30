@@ -17,7 +17,8 @@
  * │ 2. PRAZO VENCIDO é ESTADO PRÓPRIO, e não "0 dias". Uma vaga cinco dias atrasada e uma que    │
  * │    vence hoje são situações diferentes, e achatar as duas em zero apagaria justamente a que  │
  * │    precisa de ação.                                                                          │
- * │ 3. VAGA ENCERRADA não tem prazo correndo. Ver o bloco do congelamento, logo abaixo.          │
+ * │ 3. VAGA ENCERRADA não tem prazo correndo, e a VAGA ENTREGUE também não: entregue é entregue, │
+ * │    o time não está mais trabalhando nela. Ver o bloco do congelamento, logo abaixo.          │
  * └─────────────────────────────────────────────────────────────────────────────────────────────┘
  *
  * ┌─ O CONGELAMENTO, HERDADO DA COLUNA QUE SAI, E É A PARTE QUE EXIGE DECISÃO ─────────────────┐
@@ -45,6 +46,7 @@ export type EstadoDoSla =
   | "VENCIDO"
   | "ATENCAO"
   | "NO_PRAZO"
+  | "ENTREGUE"
   | "ENCERRADA";
 
 /** O limite do selo de atenção, em dias. Decisão do diretor: 2 dias ou menos. */
@@ -90,6 +92,10 @@ export const SLA_ESTADO_LABEL: Record<EstadoDoSla, string> = {
   VENCIDO: "Prazo Vencido",
   ATENCAO: "Prazo Curto",
   NO_PRAZO: "No Prazo",
+  /* ENTREGUE NÃO É "ENCERRADA", E A ETIQUETA NÃO PODE DIZER QUE É: a vaga entregue continua VIVA no
+     catálogo (`encerra = false`), ela só não tem mais prazo correndo. Reusar "Vaga Encerrada" aqui
+     faria o filtro e a célula afirmarem um encerramento que ninguém registrou. */
+  ENTREGUE: "Vaga Entregue",
   ENCERRADA: "Vaga Encerrada",
 };
 
@@ -99,6 +105,7 @@ export const SLA_ESTADOS: readonly EstadoDoSla[] = [
   "ATENCAO",
   "NO_PRAZO",
   "SEM_PREVISAO",
+  "ENTREGUE",
   "ENCERRADA",
 ];
 
@@ -123,8 +130,33 @@ function plural(dias: number): string {
  * `encerrada` TAMBÉM ENTRA DE FORA, pelo mesmo motivo da coluna antiga: quem responde se o status
  * encerra é o CATÁLOGO (`vagaEncerrada`, flag `encerra`), e uma segunda lista de status aqui
  * divergiria dela no dia em que o diretor criasse um status novo.
+ *
+ * ┌─ `entregue` É O SEGUNDO CONGELAMENTO, E ELE CORRIGE UM DEFEITO MEDIDO (30/09) ─────────────┐
+ * │ NO CATÁLOGO DE PRODUÇÃO, `ENTREGUE` TEM `encerra = false`: a vaga entregue está VIVA, e por  │
+ * │ isso ela caía no ramo da contagem regressiva e continuava com o prazo correndo. Resultado:   │
+ * │ ela virava "Prazo Vencido" sozinha, só esperando o cliente responder, e cobrava um time que  │
+ * │ (palavras do diretor) "não está mais trabalhando nela".                                     │
+ * │                                                                                             │
+ * │ O CONSERTO É AQUI, NA RÉGUA, E NÃO NO CATÁLOGO: marcar `encerra = true` no `ENTREGUE`        │
+ * │ desfaria a decisão de manter a entrega viva (é de lá que se fecha e se cancela a vaga, é lá  │
+ * │ que ela ainda capta gente) e alcançaria cilindro, contagem, trilha e fila. O prazo é o ÚNICO │
+ * │ que para, e por isso a mudança mora no único lugar que fala de prazo.                       │
+ * │                                                                                             │
+ * │ QUEM RESPONDE CONTINUA SENDO O CATÁLOGO, e por isso é um BOOLEANO e não o código do status:  │
+ * │ a tela pergunta `ehDoPapelDaVaga(status, "ENTREGA")`, pelo PAPEL, então o dia em que o        │
+ * │ diretor renomear "Entregue" ou criar outra linha de entrega, esta régua acompanha sozinha.   │
+ * │                                                                                             │
+ * │ `encerrada` TEM PRECEDÊNCIA quando os dois chegam verdadeiros (um status de papel ENTREGA    │
+ * │ que também encerre): lá existe data de fechamento, e com data a régua diz a MARGEM, que é    │
+ * │ mais do que "o prazo parou".                                                                 │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────┘
  */
-export function slaDaVaga(v: VagaComPrazo, encerrada: boolean, hoje: string): Sla {
+export function slaDaVaga(
+  v: VagaComPrazo,
+  encerrada: boolean,
+  hoje: string,
+  entregue = false,
+): Sla {
   if (!v.dataLimite) {
     return {
       estado: "SEM_PREVISAO",
@@ -163,6 +195,25 @@ export function slaDaVaga(v: VagaComPrazo, encerrada: boolean, hoje: string): Sl
         margem < 0
           ? `A vaga foi encerrada ${plural(margem)} depois da previsão de entrega. O prazo parou de correr no encerramento.`
           : `A vaga foi encerrada com ${plural(margem)} de folga em relação à previsão de entrega. O prazo parou de correr no encerramento.`,
+    };
+  }
+
+  if (entregue) {
+    /* ─ CONGELADO NA ENTREGA, E SEM NÚMERO, PORQUE NÃO EXISTE DATA DE ENTREGA ─────────────────
+       A vaga entregue não tem carimbo de quando foi entregue (não há coluna para isso, e o
+       `envioShortlist` é outra coisa: é a data do último envio de shortlist, que acontece com a
+       vaga ainda aberta). Sem esse marco, QUALQUER número aqui seria inventado: contar até hoje
+       devolveria o prazo correndo, que é justamente o defeito; contar até a previsão devolveria a
+       margem de uma entrega que talvez tenha sido feita antes ou depois dela.
+
+       ENTÃO A CÉLULA DIZ O ESTADO, E NÃO UM NÚMERO. É menos informação do que a encerrada dá, e é a
+       informação que existe. */
+    return {
+      estado: "ENTREGUE",
+      dias: null,
+      texto: "entregue",
+      detalhe:
+        "A vaga foi entregue ao cliente, então o prazo parou de correr: o time não está mais trabalhando nela. Se o cliente reprovar a entrega, a reabertura pede uma previsão de entrega nova.",
     };
   }
 
@@ -214,6 +265,20 @@ export function slaDaVaga(v: VagaComPrazo, encerrada: boolean, hoje: string): Sl
 }
 
 /**
+ * ─ O PRAZO DESTA VAGA AINDA CORRE? ─────────────────────────────────────────────────────────────
+ *
+ * DOIS ESTADOS CONGELAM (encerrada e entregue), e quem pergunta é a CÉLULA, para decidir o tom: o
+ * congelado fica DISCRETO, porque ali o texto é histórico e não cobrança. Pintar de vermelho uma
+ * vaga que terminou encheria a fila de alarme sobre trabalho que ninguém pode mais mudar.
+ *
+ * ELA EXISTE PARA A TELA NÃO ESCREVER OS ESTADOS À MÃO: uma lista de estados dentro do JSX é a
+ * segunda régua que discorda da primeira no dia em que um terceiro congelamento aparecer.
+ */
+export function slaCongelado(estado: EstadoDoSla): boolean {
+  return estado === "ENCERRADA" || estado === "ENTREGUE";
+}
+
+/**
  * ─ O DESLOCAMENTO QUE TIRA A VAGA ENCERRADA DA DISPUTA POR URGÊNCIA ───────────────────────────
  *
  * Um número maior que qualquer prazo de vaga viva que exista na prática (são dias de calendário; um
@@ -243,6 +308,11 @@ const DESLOCAMENTO_ENCERRADA = 1_000_000;
  * QUEM NÃO TEM PRAZO VAI PARA O FIM, nas duas direções, exatamente como a coluna antiga fazia com o
  * rascunho sem data de abertura: ausência de prazo não é um prazo enorme, e misturá-la na escala
  * faria a vaga sem previsão disputar posição com a que vence amanhã.
+ *
+ * A VAGA ENTREGUE CAI NESSE MESMO FIM, e não por descuido: ela tem `dias` nulo porque não existe
+ * data de entrega para congelar contra (ver o ramo dela em `slaDaVaga`), e sem número não há
+ * posição a defender na escala. O que o congelamento precisava garantir já está garantido: ela sai
+ * da disputa por urgência com quem ainda tem prazo correndo.
  */
 export function ordemDoSla(sla: Sla): number | null {
   if (sla.dias === null) return null;

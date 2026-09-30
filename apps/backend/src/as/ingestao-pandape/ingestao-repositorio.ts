@@ -4,6 +4,12 @@ import { sql } from "drizzle-orm";
 import type { Database } from "../../db/client";
 import { DRIZZLE } from "../../db/drizzle.module";
 import type { LinhaDeParaEtapaExternaCrua } from "../../domain/as-etapa-externa";
+import {
+  decidirPrecedencia,
+  valorDeComparacao,
+  type CampoDeDivergenciaDaCandidatura,
+  type DivergenciaARegistrar,
+} from "../../domain/as-precedencia-ingestao";
 import { EtapasFunilService } from "../etapas/etapas-funil.service";
 import { VagaStatusService } from "../vaga-status/vaga-status.service";
 import type {
@@ -175,8 +181,17 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
 
   /**
    * O DESPACHO É FAIL-CLOSED: tabela fora desta lista não é escrita. Uma frente futura que precise de
-   * uma sétima tabela tem de vir aqui, que é o ponto em que alguém lê o que passa a ser escrito por
+   * uma OITAVA tabela tem de vir aqui, que é o ponto em que alguém lê o que passa a ser escrito por
    * um processo sem autor humano.
+   *
+   * ┌─ A SÉTIMA ENTROU EM 30/09/2026, E ELA É A FILA DE DIVERGENCIAS ─────────────────────────────┐
+   * │ `as_ingestao_divergencias` é onde a trava de precedência deposita o que ela NÃO sobrescreveu. │
+   * │ Ela é escrita por DENTRO (`escreverCandidatura` e `escreverVaga` chamam                       │
+   * │ `registrarDivergencia` direto, porque é lá que os valores atuais do EA estão na mão) e também │
+   * │ aparece aqui, no despacho, para o caso avulso continuar possível e, sobretudo, para que quem  │
+   * │ lê esta lista para saber "o que a ingestão escreve" enxergue a tabela. Lista fail-closed que  │
+   * │ omite um escritor real é pior que lista nenhuma: ela convence de que a busca terminou.        │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
    *
    * ┌─ CORREÇÃO DE 30/09/2026: ESTA JÁ NÃO É A ÚNICA PORTA DA INGESTÃO PARA O BANCO ─────────────┐
    * │ A frase antiga dizia "e a ingestão não tem outra porta para o banco", e ela deixou de ser    │
@@ -188,7 +203,7 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
    * │ Documentação de trava descrevendo um mundo que acabou é pior que documentação nenhuma, porque │
    * │ ela convence de que a busca terminou.                                                        │
    * │                                                                                             │
-   * │ AS DUAS PORTAS DA INGESTÃO, hoje: esta lista de seis tabelas, e a ponte, que escreve UMA     │
+   * │ AS DUAS PORTAS DA INGESTÃO, hoje: esta lista de SETE tabelas, e a ponte, que escreve UMA     │
    * │ coluna (`as_candidaturas.admissao_id`) e cria a pré-admissão pela porta pública do módulo de │
    * │ admissão (`criarPreAdmissaoDoFunil`), a MESMA que o caminho manual do funil usa.             │
    * └─────────────────────────────────────────────────────────────────────────────────────────────┘
@@ -207,6 +222,8 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
         return this.escreverMarca(e);
       case "as_ingestao_conflitos":
         return this.escreverConflito(e);
+      case "as_ingestao_divergencias":
+        return this.escreverDivergenciaAvulsa(e);
       default:
         throw new Error(`A ingestão não escreve na tabela solicitada: ${e.tabela}`);
     }
@@ -315,10 +332,39 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
    * │ concorrência 1.                                                                               │
    * └───────────────────────────────────────────────────────────────────────────────────────────────┘
    *
+   * ┌─ A TRAVA DE PRECEDENCIA: O ATS NAO ESCREVE MAIS EM CANDIDATURA QUE JA EXISTE (30/09/2026) ──┐
+   * │ ESTE MÉTODO TINHA UM `update` E ELE FOI REMOVIDO INTEIRO, não afrouxado. O que havia era      │
+   * │   `set etapa = ..., situacao = ..., motivo_descarte = ...`                                    │
+   * │   `where id = ... and (atuais) is distinct from (novos)`                                      │
+   * │ e aquele `is distinct from` NÃO ERA PROTEÇÃO, ERA O GATILHO: existia só para não empurrar     │
+   * │ `atualizado_em` numa reentrega idêntica, e comparava VALOR com VALOR, nunca AUTOR com AUTOR.  │
+   * │ Não há coluna de autor nem carimbo de procedência em `as_candidaturas`. O time avançava a     │
+   * │ pessoa três etapas, ninguém tocava no ATS, e em até 30 minutos ela VOLTAVA, em loop, em 24    │
+   * │ das 27 pastas do de/para. E SEM NADA FALHAR: a ingestão não escreve em                        │
+   * │ `as_candidatura_etapas`, então a trilha continuava dizendo "foi para Entrevista Cliente"      │
+   * │ enquanto a coluna dizia CAPTACAO, e nenhuma tela comparava as duas.                           │
+   * │                                                                                              │
+   * │ OS TRÊS CAMPOS SÃO PROTEGIDOS, E `motivo_descarte` ENTRA JUNTO DE PROPÓSITO: ele é a MESMA    │
+   * │ decisão de descarte que `situacao`, e o que o ATS traz é a frase GENÉRICA do de/para          │
+   * │ (`motivo_padrao`, uma linha de configuração igual para todo mundo daquela pasta). Escrevê-la  │
+   * │ apagaria o motivo de CATÁLOGO que o time escolheu para aquela pessoa (`motivos_descarte`,     │
+   * │ migration 0129), trocando informação específica por rótulo de lote. Proteger `situacao` e     │
+   * │ deixar o motivo passar produziria o pior dos dois: a pessoa descartada pelo motivo certo, com │
+   * │ a justificativa reescrita pela frase do ATS.                                                  │
+   * │                                                                                              │
+   * │ CONSEQUÊNCIA QUE IMPORTA E NÃO É ÓBVIA: a ingestão deixa de empurrar                          │
+   * │ `as_candidaturas.atualizado_em` em linha existente, que é o relógio do expurgo                │
+   * │ (`retencao-candidatos.service.ts`). A direção é a SEGURA e é a que o DIARIO já pedia: a trava │
+   * │ antiga existia para o relógio não ser empurrado 48 vezes por dia, e agora ele não é empurrado │
+   * │ NENHUMA. Ninguém deixa de expirar por causa da varredura.                                     │
+   * │                                                                                              │
+   * │ O NASCIMENTO CONTINUA ESCREVENDO NORMALMENTE: no insert não existe trabalho manual a          │
+   * │ proteger, e é o ATS quem está trazendo a pessoa.                                              │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
    * A ETAPA INICIAL ENTRA SÓ NO NASCIMENTO. Duas linhas semeadas do de/para resolvem apenas o
    * DESFECHO (`Descartados`, `RETORNO NEGATIVO`) e `as_candidaturas.etapa` é NOT NULL: a linha nova
-   * precisa nascer em algum caneco, e quem responde é o catálogo, nunca um literal. A candidatura
-   * que JÁ EXISTE não é movida.
+   * precisa nascer em algum caneco, e quem responde é o catálogo, nunca um literal.
    */
   private async escreverCandidatura(e: Escrita): Promise<ResultadoDaEscrita> {
     const candidatoId = String(e.valores.candidato_id);
@@ -330,15 +376,76 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
     const situacao = temSituacao ? String(e.valores.situacao) : null;
     const motivo = temMotivo ? textoOuNulo(e.valores.motivo_descarte) : null;
 
+    /*
+     * A LEITURA TRAZ OS VALORES ATUAIS, e não só o id, e é isso que permite comparar os dois lados
+     * AQUI. O ciclo só conhece o lado do ATS: pedir a ele que decidisse a precedência exigiria uma
+     * leitura a mais por inscrição, e a decisão ficaria longe do ponto que escreve.
+     *
+     * `admissao_id` VEM NA MESMA IDA porque é insumo da retentativa da ponte (`ponteDeveDisparar`),
+     * e uma segunda consulta para uma coluna da linha que já está na mão seria desperdício por
+     * inscrição, 137 mil vezes.
+     */
     const existentes = (await this.db.execute(sql`
-      select id from as_candidaturas
+      select id, etapa, situacao, motivo_descarte, admissao_id
+        from as_candidaturas
        where candidato_id = ${candidatoId}::uuid and vaga_id = ${vagaId}::uuid
        order by criado_em desc
        limit 1
-    `)) as unknown as { id: string }[];
+    `)) as unknown as {
+      id: string;
+      etapa: string | null;
+      situacao: string | null;
+      motivo_descarte: string | null;
+      admissao_id: string | null;
+    }[];
     const existente = existentes[0];
 
     if (!existente) {
+      /*
+       * ┌─ A DUPLICATA POR TRANSFERENCIA, E ELA É RESOLVIDA SEM RESSUSCITAR NENHUMA COLUNA ───────┐
+       * │ O time TROCA a pessoa de vaga (`trocarVaga`, na Central de Candidatos). O ATS continua   │
+       * │ com ela na vaga ANTIGA, então a volta seguinte não encontra candidatura em (candidato,   │
+       * │ vaga antiga) e INSERE uma nova: a pessoa passa a estar nas duas vagas, consumindo duas   │
+       * │ posições, e a transferência é desfeita por acréscimo em vez de por sobrescrita.          │
+       * │                                                                                          │
+       * │ `as_candidaturas.id_match_pandape` NAO É RESSUSCITADO. A migration 0112 o derrubou por    │
+       * │ motivo de LGPD registrado: identidade externa tem UM dono no módulo A&S,                  │
+       * │ `as_identidades_externas`, que já nasce dentro do alcance do expurgo, e uma segunda       │
+       * │ gaveta de identificador de terceiro ficava fora dele. Reviver a coluna reabre o furo.     │
+       * │                                                                                          │
+       * │ O JEITO QUE USA DADO QUE JA EXISTE: `trocarVaga` grava `vaga_de` e `vaga_para` na trilha  │
+       * │ `as_candidatura_etapas`. Havendo evento com `vaga_de = <esta vaga>` para uma candidatura  │
+       * │ DESTA pessoa, ela foi tirada dali DE PROPÓSITO, por gente, com autor e data. O EA vence:  │
+       * │ não insere, e registra divergência.                                                       │
+       * │                                                                                          │
+       * │ ISTO É LEITURA DA TRILHA, e não escrita: a lista fail-closed do despacho governa ESCRITA, │
+       * │ e `as_candidatura_etapas` continua fora dela.                                             │
+       * └─────────────────────────────────────────────────────────────────────────────────────────┘
+       */
+      const transferida = await this.transferenciaParaFora(candidatoId, vagaId);
+      if (transferida) {
+        await this.registrarDivergencia({
+          escopo: "CANDIDATURA",
+          campo: "vaga_do_candidato",
+          candidaturaId: transferida.candidaturaId,
+          vagaId,
+          valorEa: transferida.rotuloDaVagaAtual,
+          valorAts: transferida.rotuloDaVagaDoAts,
+        });
+        return {
+          linhasAfetadas: 0,
+          /*
+           * O ID DEVOLVIDO É O DA CANDIDATURA QUE EXISTE, na vaga para onde a pessoa foi. Ela é a
+           * candidatura DESTA pessoa, só não é a desta vaga. `criada: false` é o que importa: a
+           * ponte não dispara, e `situacaoNoEa` fica indefinido de propósito (não sabemos, e não
+           * queremos saber, nada sobre a situação de uma linha que não é a desta escrita).
+           */
+          id: transferida.candidaturaId,
+          criada: false,
+          divergencias: 1,
+        };
+      }
+
       const inicial = etapa ?? (await this.etapas.etapaInicial()).codigo;
       const linhas = (await this.db.execute(sql`
         insert into as_candidaturas (candidato_id, vaga_id, etapa, situacao, motivo_descarte)
@@ -356,52 +463,144 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
       /*
        * `criada: true` É O ÚNICO PONTO DO SISTEMA QUE AFIRMA O NASCIMENTO DESTA LINHA, e é dele que
        * a ponte para a admissão depende (`PortaPonteParaAdmissao`). Ele NÃO é dedutível de
-       * `linhasAfetadas`, que vale 1 aqui e também no `update` que mudou algo: o ramo de baixo
-       * devolve `criada: false` de propósito, porque candidatura que já existia não vira admissão
-       * por sinal do ATS.
+       * `linhasAfetadas`, que vale 1 aqui e também valia 1 no `update` que mudou algo.
        */
-      return { linhasAfetadas: 1, id: criada.id, criada: true };
+      return { linhasAfetadas: 1, id: criada.id, criada: true, divergencias: 0 };
     }
 
     /*
-     * A ESCRITA CONDICIONAL É O RAMO PRINCIPAL DO RELÓGIO DO EXPURGO. `as_candidaturas.atualizado_em`
-     * é insumo do `max(greatest(...))` da retenção, e ele É escrito de propósito quando a etapa ou a
-     * situação mudam. O que não pode acontecer é a reentrega IDÊNTICA escrever: 48 voltas por dia
-     * empurrariam o relógio de todo mundo que a ingestão tocar, e ninguém expiraria mais. A
-     * comparação vive no SQL, e não num `if` do TypeScript, porque o `if` resolve o caso comum e
-     * perde a corrida entre dois ciclos.
+     * ─ A LINHA JA EXISTE: NADA É ESCRITO, E A DIFERENÇA VIRA FILA ───────────────────────────────
+     *
+     * `protegido: true` nos três campos, sem exceção e sem condição. A comparação vem ANTES da
+     * proteção dentro de `decidirPrecedencia`, e é isso que impede a fila de virar log: o ATS
+     * concordando com o EA (a maioria das voltas) devolve `NADA` e não abre linha nenhuma.
+     *
+     * CAMPO QUE O DE/PARA NÃO TRAZ NÃO DIVERGE. Pasta mapeada só para desfecho não fala de etapa, e
+     * "o ATS não disse nada" não é discordância: seria uma linha de revisão por ausência, em toda
+     * volta, para toda pasta de desfecho.
      */
-    const pares: ReturnType<typeof sql>[] = [];
-    const atuais: ReturnType<typeof sql>[] = [];
-    const novos: ReturnType<typeof sql>[] = [];
+    let divergencias = 0;
     if (temEtapa) {
-      pares.push(sql`etapa = ${etapa}`);
-      atuais.push(sql`etapa`);
-      novos.push(sql`${etapa}`);
+      divergencias += await this.divergenciaDeCandidatura(existente, vagaId, "etapa", etapa);
     }
     if (temSituacao) {
-      pares.push(sql`situacao = ${situacao}::candidatura_situacao`);
-      atuais.push(sql`situacao`);
-      novos.push(sql`${situacao}::candidatura_situacao`);
+      divergencias += await this.divergenciaDeCandidatura(existente, vagaId, "situacao", situacao);
     }
-    if (temMotivo) {
-      pares.push(sql`motivo_descarte = ${motivo}`);
-      atuais.push(sql`motivo_descarte`);
-      novos.push(sql`${motivo}`);
-    }
-    // NADA A ESCREVER É UM DESFECHO LEGÍTIMO: o de/para que não resolve etapa, situação nem motivo
-    // não tem o que dizer sobre esta candidatura, e uma escrita vazia só empurraria o relógio.
-    if (pares.length === 0) return { linhasAfetadas: 0, id: existente.id, criada: false };
+    /*
+     * ┌─ `motivo_descarte` E PROTEGIDO E **NAO** VIRA LINHA DE FILA (veto do `seguranca`, 30/09) ──┐
+     * │ A TRAVA DELE ESTA ACIMA, e é a mais forte das três: ele simplesmente NÃO ENTRA em `update`   │
+     * │ nenhum, porque este método já não emite `update` de candidatura existente. `temMotivo` é     │
+     * │ lido e descartado de propósito: o valor do ATS chega, é comparado por ninguém e morre aqui.  │
+     * │                                                                                             │
+     * │ O QUE NAO ACONTECE É A LINHA DE FILA, e a razão é §A.6: a fila guarda `valor_ea`/`valor_ats` │
+     * │ EM CLARO, e aquele campo é PROSA no `ENVIADO_PARA_ADMISSAO` (`candidatos.dto.ts`, teto de 500│
+     * │ caracteres). O expurgo NULA a coluna na candidatura                                          │
+     * │ (`retencao-candidatos.service.ts`, na mesma CTE do resumo de contato), mas ele ANONIMIZA sem │
+     * │ DELETAR a candidatura, então o `on delete cascade` da tabela da fila NUNCA dispararia: a     │
+     * │ frase ficaria lá, em claro, para sempre. "Vem por JOIN" não cobriria: seria COPIA.           │
+     * │                                                                                             │
+     * │ CONSEQUENCIA ACEITA, e ela fica escrita para ninguém "consertar" isto depois: a divergência  │
+     * │ de motivo é SILENCIOSA. O EA vence e o time não é avisado. O preço de avisar seria publicar  │
+     * │ prosa numa superfície sem expurgo, e o veto foi por aí. Para o valor voltar à tela, a coluna │
+     * │ precisa primeiro entrar na rotina de expurgo, e isso é decisão do diretor (§A.31).           │
+     * └────────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    void temMotivo;
+    void motivo;
 
+    /*
+     * `linhasAfetadas: 0` É A VERDADE, e o ciclo a lê como "nada foi criado" (ele soma
+     * `candidaturasCriadas` por este número). `situacaoNoEa` e `jaTemAdmissao` são o insumo da
+     * RETENTATIVA da ponte, cuja régua é domínio puro (`ponteDeveDisparar`): agora que o ATS não
+     * escreve mais `situacao` aqui, `ENVIADO_PARA_ADMISSAO` com `admissao_id` nulo só pode ter
+     * vindo do INSERT desta própria ingestão, numa volta em que a ponte não se completou.
+     */
+    return {
+      linhasAfetadas: 0,
+      id: existente.id,
+      criada: false,
+      divergencias,
+      situacaoNoEa: existente.situacao,
+      jaTemAdmissao: existente.admissao_id !== null,
+    };
+  }
+
+  /**
+   * UM CAMPO DA CANDIDATURA EXISTENTE, COMPARADO PELA RÉGUA DO DOMÍNIO. Devolve 1 quando abriu (ou
+   * incrementou) linha de revisão, e 0 quando os dois lados concordam.
+   *
+   * A RÉGUA NÃO É UM `if` AQUI: `decidirPrecedencia` é a MESMA função que o lado da VAGA consulta, e
+   * é ela que normaliza os dois lados antes de comparar (número contra texto, nulo contra vazio).
+   * Duas comparações escritas à mão divergiriam na primeira correção de uma só delas.
+   */
+  private async divergenciaDeCandidatura(
+    existente: { id: string; etapa: string | null; situacao: string | null },
+    vagaId: string,
+    /*
+     * DOIS CAMPOS, E NAO TRES: `motivo_descarte` é PROTEGIDO mas NÃO é `CampoDeDivergencia` (veto do
+     * `seguranca`, ver `escreverCandidatura`). O tipo vem do domínio, e não de uma união escrita aqui,
+     * para que acrescentar o terceiro exija passar pela lista que carrega o motivo do veto.
+     */
+    campo: CampoDeDivergenciaDaCandidatura,
+    valorAts: string | null,
+  ): Promise<number> {
+    const valorEa = campo === "etapa" ? existente.etapa : existente.situacao;
+    if (decidirPrecedencia({ protegido: true, valorEa, valorAts }) !== "DIVERGIR") return 0;
+    await this.registrarDivergencia({
+      escopo: "CANDIDATURA",
+      campo,
+      candidaturaId: existente.id,
+      vagaId,
+      valorEa: valorDeComparacao(valorEa),
+      valorAts: valorDeComparacao(valorAts),
+    });
+    return 1;
+  }
+
+  /**
+   * A PESSOA FOI TRANSFERIDA PARA FORA DESTA VAGA, POR GENTE? A pergunta é feita à TRILHA.
+   *
+   * O evento de troca (`trocarVaga`) grava `vaga_de` e `vaga_para` em `as_candidatura_etapas`, e o
+   * `vaga_de` é o registro de que alguém tirou a pessoa DAQUELA vaga. A busca é por candidatura DESTA
+   * pessoa (o join), e não por candidatura desta vaga: a linha da vaga antiga já não existe, porque
+   * a troca MOVE a candidatura em vez de duplicá-la.
+   *
+   * §A.6: o rótulo devolvido é o CÓDIGO da vaga, com o id como último recurso. `nome_divulgacao`
+   * NÃO é usado: é texto livre digitado no ATS, e a casa já mediu que campo assim chega com nome de
+   * gente dentro (ver a narrativa da reabertura, neste mesmo arquivo).
+   */
+  private async transferenciaParaFora(
+    candidatoId: string,
+    vagaId: string,
+  ): Promise<{
+    candidaturaId: string;
+    rotuloDaVagaAtual: string | null;
+    rotuloDaVagaDoAts: string | null;
+  } | null> {
     const linhas = (await this.db.execute(sql`
-      update as_candidaturas
-         set ${sql.join(pares, sql`, `)},
-             atualizado_em = now()
-       where id = ${existente.id}::uuid
-         and (${sql.join(atuais, sql`, `)}) is distinct from (${sql.join(novos, sql`, `)})
-      returning id
-    `)) as unknown as { id: string }[];
-    return { linhasAfetadas: linhas.length > 0 ? 1 : 0, id: existente.id, criada: false };
+      select c.id as candidatura_id,
+             coalesce(atual.codigo, atual.id::text) as rotulo_atual,
+             coalesce(origem.codigo, origem.id::text) as rotulo_origem
+        from as_candidatura_etapas ev
+        join as_candidaturas c on c.id = ev.candidatura_id
+        left join vagas atual on atual.id = c.vaga_id
+        left join vagas origem on origem.id = ev.vaga_de
+       where c.candidato_id = ${candidatoId}::uuid
+         and ev.vaga_de = ${vagaId}::uuid
+       order by ev.criado_em desc
+       limit 1
+    `)) as unknown as {
+      candidatura_id: string;
+      rotulo_atual: string | null;
+      rotulo_origem: string | null;
+    }[];
+    const achada = linhas[0];
+    if (!achada) return null;
+    return {
+      candidaturaId: achada.candidatura_id,
+      rotuloDaVagaAtual: achada.rotulo_atual,
+      rotuloDaVagaDoAts: achada.rotulo_origem,
+    };
   }
 
   /**
@@ -447,7 +646,7 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
    * │ varredura já tinha fechado antes: o carimbo passa a ser o dele, e a varredura não mexe.       │
    * └───────────────────────────────────────────────────────────────────────────────────────────────┘
    */
-  private async escreverVaga(e: Escrita): Promise<{ linhasAfetadas: number; id: string }> {
+  private async escreverVaga(e: Escrita): Promise<ResultadoDaEscrita> {
     const idVacancy = String(e.valores.id_vacancy_pandape);
     const codigo = textoOuNulo(e.valores.codigo);
     const nomeDivulgacao = textoOuNulo(e.valores.nome_divulgacao);
@@ -482,6 +681,14 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
     const existentes = (await this.db.execute(sql`
       select v.id,
              v.status,
+             -- OS QUATRO CAMPOS ATUAIS, e eles entraram em 30/09/2026 com a TRAVA DE PRECEDENCIA:
+             -- vaga JA LIBERADA nao e mais sobrescrita pelo ATS, e comparar os dois lados exige
+             -- saber o que esta gravado. Vem na MESMA ida, porque uma segunda consulta por vaga
+             -- pagaria uma viagem a mais em toda volta da varredura.
+             v.codigo,
+             v.nome_divulgacao,
+             v.cidade_id,
+             v.posicoes_oficiais,
              -- O DESTINO DA REABERTURA É O ESTADO DE ANTES DO FECHAMENTO, e é esta coluna que o
              -- guarda, escrita pelo encerramento automatico na mesma instrucao que fecha a vaga. A
              -- pergunta que estava aqui antes era "tem cliente?", e ela ERRAVA no único caminho em
@@ -499,6 +706,10 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
     `)) as unknown as {
       id: string;
       status: string;
+      codigo: string | null;
+      nome_divulgacao: string | null;
+      cidade_id: number | null;
+      posicoes_oficiais: number | null;
       status_antes: string | null;
       da_varredura: boolean;
       encerrou: boolean;
@@ -610,15 +821,60 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
      * `is not distinct from` já devolve falso na volta seguinte, e o instante guardado continua
      * sendo o registro de que foi a varredura quem encerrou daquela vez.
      */
-    const houveMudanca = sql`(codigo, nome_divulgacao, cidade_id, posicoes_oficiais)
-              is distinct from (${codigo}, ${nomeDivulgacao}, ${cidadeId}::integer, ${posicoes}::integer)`;
-    const movimento = sql`
-      update vagas
-         set codigo = ${codigo},
+    /*
+     * ┌─ A TRAVA DE PRECEDENCIA DA VAGA: VAGA JA LIBERADA NAO E SOBRESCRITA (30/09/2026) ──────────┐
+     * │ Os quatro campos do ATS (`codigo`, `nome_divulgacao`, `cidade_id`, `posicoes_oficiais`) só  │
+     * │ são escritos ENQUANTO A VAGA AINDA ESTA EM REVISAO. Na fila, ninguém conferiu nada ali e o  │
+     * │ espelho do ATS é a melhor informação que existe; depois da LIBERAÇÃO, cada um daqueles       │
+     * │ campos foi olhado por gente, e reescrevê-los de 30 em 30 minutos desfaz a conferência sem   │
+     * │ autor, sem data e sem trilha. É a MESMA razão pela qual `cargo_id` já era escrito só no     │
+     * │ nascimento (ver o bloco do insert, acima): a trava nova estende ao resto o que ele provou.  │
+     * │                                                                                            │
+     * │ "JA LIBERADA" É PERGUNTADO PELO PAPEL, NUNCA POR LITERAL, e a régua é a mesma que este      │
+     * │ método já usa para tudo (`regua.ehDoPapel` / `codigoDoPapel`): o CÓDIGO é editável pelo     │
+     * │ diretor, o PAPEL é do sistema. Um `status !== 'PENDENTE_REVISAO'` escrito aqui pararia de   │
+     * │ valer no dia em que a linha do catálogo fosse recadastrada com outro código, e a trava      │
+     * │ falharia para o lado ERRADO: voltaria a sobrescrever vaga liberada, em silêncio.            │
+     * │                                                                                            │
+     * │ A REABERTURA CONTINUA INTEIRA, e ela é outra coisa: `status` e `encerrada_em` NÃO são campos │
+     * │ do ATS, são o ciclo de vida do espelho, e a vaga que voltou às ativas do ATS tem de deixar  │
+     * │ de estar encerrada mesmo estando liberada (senão o relógio do expurgo de quem está dentro   │
+     * │ dela fica carimbado numa vaga viva). O que a trava tira do `set` são os quatro campos, e    │
+     * │ nada além deles.                                                                            │
+     * └───────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    const emRevisao = regua.ehDoPapel(existente.status, "REVISAO");
+    const divergenciasDaVaga = emRevisao
+      ? 0
+      : await this.divergenciasDaVaga(existente, {
+          codigo,
+          nome_divulgacao: nomeDivulgacao,
+          cidade_id: cidadeId,
+          posicoes_oficiais: posicoes,
+        });
+    const camposDoAts = emRevisao
+      ? sql`codigo = ${codigo},
              nome_divulgacao = ${nomeDivulgacao},
              cidade_id = ${cidadeId},
              posicoes_oficiais = ${posicoes},
-             ${reabertura}atualizado_em = now()
+             `
+      : sql``;
+    const houveMudanca = sql`(codigo, nome_divulgacao, cidade_id, posicoes_oficiais)
+              is distinct from (${codigo}, ${nomeDivulgacao}, ${cidadeId}::integer, ${posicoes}::integer)`;
+    /*
+     * ┌─ A VOLTA QUE NAO TEM O QUE ESCREVER NAO MANDA `update` NENHUM ─────────────────────────────┐
+     * │ Vaga LIBERADA e sem reabertura: os quatro campos estão travados e o status não muda, então  │
+     * │ o único efeito de emitir a instrução seria empurrar `atualizado_em`, que é o relógio do     │
+     * │ expurgo de quem está dentro da vaga. Um `set atualizado_em = now()` sozinho, 48 vezes por   │
+     * │ dia, é exatamente o defeito que a trava do DIARIO existe para impedir, com outro nome.      │
+     * └───────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    if (!emRevisao && destino === null) {
+      return { linhasAfetadas: 0, id: existente.id, divergencias: divergenciasDaVaga };
+    }
+    const movimento = sql`
+      update vagas
+         set ${camposDoAts}${reabertura}atualizado_em = now()
        where id = ${existente.id}::uuid
          and ${reabrir ? sql`true` : houveMudanca}
       returning id`;
@@ -646,7 +902,73 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
             from movida
           returning vaga_id as id`;
     const linhas = (await this.db.execute(instrucao)) as unknown as { id: string }[];
-    return { linhasAfetadas: linhas.length > 0 ? 1 : 0, id: existente.id };
+    return {
+      linhasAfetadas: linhas.length > 0 ? 1 : 0,
+      id: existente.id,
+      divergencias: divergenciasDaVaga,
+    };
+  }
+
+  /**
+   * OS QUATRO CAMPOS DA VAGA JA LIBERADA, COMPARADOS PELA RÉGUA DO DOMÍNIO. Devolve quantas linhas de
+   * revisão foram abertas (ou incrementadas).
+   *
+   * O NOME DO CAMPO NA FILA NÃO É O NOME DA COLUNA, e a diferença é do contrato: a coluna é
+   * `cidade_id` e o campo da fila é `vaga_cidade`, porque a tela mostra "Cidade Da Vaga" e o
+   * vocabulário compartilhado (`CAMPOS_DE_DIVERGENCIA`) precisa distinguir campo de vaga de campo de
+   * candidatura sem prefixo ambíguo. O mapa vive AQUI, num lugar só.
+   *
+   * §A.6: os quatro valores são código, rótulo de vaga, id de cidade e número. `nome_divulgacao` é
+   * texto digitado no ATS, e a casa já mediu que ele chega com nome de gente dentro (a narrativa da
+   * reabertura, neste arquivo). ELE ENTRA AINDA ASSIM, e a decisão é declarada: é o campo que a vaga
+   * PUBLICA, o time já o lê na tela da vaga, e sem ele a divergência mais comum ("o ATS quer renomear
+   * a vaga") seria invisível. O que não entra em lugar nenhum é dado de CANDIDATO.
+   */
+  private async divergenciasDaVaga(
+    existente: {
+      id: string;
+      codigo: string | null;
+      nome_divulgacao: string | null;
+      cidade_id: number | null;
+      posicoes_oficiais: number | null;
+    },
+    doAts: {
+      codigo: string | null;
+      nome_divulgacao: string | null;
+      cidade_id: number | null;
+      posicoes_oficiais: number | null;
+    },
+  ): Promise<number> {
+    const pares = [
+      { campo: "vaga_codigo" as const, ea: existente.codigo, ats: doAts.codigo },
+      {
+        campo: "vaga_nome_divulgacao" as const,
+        ea: existente.nome_divulgacao,
+        ats: doAts.nome_divulgacao,
+      },
+      { campo: "vaga_cidade" as const, ea: existente.cidade_id, ats: doAts.cidade_id },
+      {
+        campo: "vaga_posicoes_oficiais" as const,
+        ea: existente.posicoes_oficiais,
+        ats: doAts.posicoes_oficiais,
+      },
+    ];
+    let quantas = 0;
+    for (const par of pares) {
+      if (decidirPrecedencia({ protegido: true, valorEa: par.ea, valorAts: par.ats }) !== "DIVERGIR") {
+        continue;
+      }
+      await this.registrarDivergencia({
+        escopo: "VAGA",
+        campo: par.campo,
+        candidaturaId: null,
+        vagaId: existente.id,
+        valorEa: valorDeComparacao(par.ea),
+        valorAts: valorDeComparacao(par.ats),
+      });
+      quantas += 1;
+    }
+    return quantas;
   }
 
   /**
@@ -684,6 +1006,92 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
       returning id
     `)) as unknown as { id: string }[];
     return { linhasAfetadas: linhas.length > 0 ? 1 : 0, id: linhas[0]?.id ?? "" };
+  }
+
+  /**
+   * ─ A LINHA DA FILA DE DIVERGENCIAS, E ELA É IDEMPOTENTE POR CONSTRUÇÃO ─────────────────────────
+   *
+   * ┌─ A REINCIDENCIA INCREMENTA, E NUNCA CRIA LINHA NOVA ────────────────────────────────────────┐
+   * │ A varredura roda de 30 em 30 minutos, ou seja até 48 VOLTAS POR DIA, e a mesma discordância   │
+   * │ volta em todas elas enquanto ninguém a resolver. Sem esta trava, UMA divergência viraria 48   │
+   * │ linhas por dia, e a fila de trabalho viraria log: ninguém resolve uma lista que cresce        │
+   * │ sozinha. `ocorrencias` é o número que substitui as 48 linhas, e ele é o que diz ao time quão  │
+   * │ persistente é o caso.                                                                         │
+   * │                                                                                              │
+   * │ A GARANTIA É DO BANCO, e não deste método: os dois índices únicos PARCIAIS da migration 0136  │
+   * │ (`uq_..._candidatura_aberta` e `uq_..._vaga_aberta`) é que tornam o `on conflict` possível.   │
+   * │ Um `select` seguido de `insert` perderia a corrida entre duas voltas; o `on conflict` não.    │
+   * │                                                                                              │
+   * │ SAO DOIS `on conflict` PORQUE SAO DOIS INDICES, e a razão é o NULO: em Postgres, nulo não     │
+   * │ colide com nulo num índice único, então um índice só sobre `candidatura_id` nunca conflitaria │
+   * │ nas linhas de escopo VAGA, e a reincidência abriria linha nova em toda volta. O `where` de    │
+   * │ cada `on conflict` REPETE o predicado do índice porque é assim que o Postgres infere qual      │
+   * │ índice parcial é o árbitro.                                                                   │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * ┌─ O QUE O `do update` NAO TOCA, E CADA AUSENCIA É DELIBERADA ────────────────────────────────┐
+   * │ `primeira_em` fica onde está: é o "desde quando isto acontece", que é a informação mais útil  │
+   * │ da fila e a única que o incremento poderia destruir. `valor_ea` e `valor_ats` SÃO atualizados: │
+   * │ a linha tem de mostrar o estado de AGORA, senão o time decidiria sobre um retrato velho e     │
+   * │ `ADOTADO_ATS` aplicaria um valor que o ATS já trocou.                                          │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * §A.6: os dois valores são código, rótulo de vaga ou número, garantido pela lista FECHADA
+   * `CAMPOS_DE_DIVERGENCIA` e pelo CHECK do banco. Nenhum dado de candidato entra aqui, e este método
+   * NÃO loga nada: quem loga é o ciclo, e só a contagem.
+   */
+  private async registrarDivergencia(d: DivergenciaARegistrar): Promise<{ id: string }> {
+    const conflito =
+      d.candidaturaId === null
+        ? sql`(escopo, vaga_id, campo) where resolvido_em is null and candidatura_id is null`
+        : sql`(escopo, candidatura_id, vaga_id, campo)
+              where resolvido_em is null and candidatura_id is not null`;
+    const linhas = (await this.db.execute(sql`
+      insert into as_ingestao_divergencias
+        (escopo, campo, candidatura_id, vaga_id, valor_ea, valor_ats)
+      values (
+        ${d.escopo},
+        ${d.campo},
+        ${d.candidaturaId}::uuid,
+        ${d.vagaId}::uuid,
+        ${d.valorEa},
+        ${d.valorAts}
+      )
+      on conflict ${conflito}
+      do update set ocorrencias = as_ingestao_divergencias.ocorrencias + 1,
+                    ultima_em = now(),
+                    valor_ea = excluded.valor_ea,
+                    valor_ats = excluded.valor_ats,
+                    atualizado_em = now()
+      returning id
+    `)) as unknown as { id: string }[];
+    return { id: linhas[0]?.id ?? "" };
+  }
+
+  /**
+   * A DIVERGENCIA PEDIDA PELO DESPACHO, para o caso avulso.
+   *
+   * ELA NÃO TEM CHAMADOR HOJE, e a ausência é a mesma de `candidatoPorNome`: o despacho é a lista que
+   * alguém lê para saber o que a ingestão escreve, e tabela escrita por dentro sem aparecer nele
+   * tornaria aquela lista mentirosa. Quem registra divergência hoje é `escreverCandidatura` e
+   * `escreverVaga`, que chamam `registrarDivergencia` direto porque é lá que os valores ATUAIS do EA
+   * estão na mão.
+   *
+   * O ESCOPO E O CAMPO SÃO VALIDADOS PELO BANCO (os CHECKs da 0136), e não por um `if` aqui: um
+   * segundo validador em TypeScript concordaria com o CHECK até a primeira vez que alguém corrigisse
+   * um só dos dois.
+   */
+  private async escreverDivergenciaAvulsa(e: Escrita): Promise<{ linhasAfetadas: number; id: string }> {
+    const candidaturaId = textoOuNulo(e.valores.candidatura_id);
+    const r = await this.registrarDivergencia({
+      escopo: String(e.valores.escopo) as DivergenciaARegistrar["escopo"],
+      campo: String(e.valores.campo) as DivergenciaARegistrar["campo"],
+      candidaturaId,
+      vagaId: textoOuNulo(e.valores.vaga_id),
+      valorEa: valorDeComparacao(e.valores.valor_ea),
+      valorAts: valorDeComparacao(e.valores.valor_ats),
+    });
+    return { linhasAfetadas: r.id === "" ? 0 : 1, id: r.id };
   }
 
   // ── O CICLO DE VIDA DA VAGA ESPELHADA ────────────────────────────────────────────────────────

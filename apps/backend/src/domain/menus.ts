@@ -1324,6 +1324,49 @@ export const MENUS: MenuDef[] = [
     areas: ["AS"],
     operacoes: ["ComerciaisAdminController.*"],
   },
+  {
+    /**
+     * FILA DE REVISAO DAS DIVERGENCIAS DA INGESTAO. O time olha onde o Pandape discorda do EA e
+     * decide, porque o EA venceu e nada foi sobrescrito.
+     *
+     * ┌─ ESTE REGISTRO É A TRAVA DA ROTA, NÃO DECORAÇÃO ────────────────────────────────────────┐
+     * │ O `MenuGuard` é FAIL-OPEN para operação que nenhum menu reivindica: `menuDaOperacao`     │
+     * │ devolve `null` e o handler fica alcançável por QUALQUER autenticado. A fila devolve NOME  │
+     * │ de candidato com cliente e vaga, então sem estas quatro linhas de `operacoes` um `curl`   │
+     * │ de qualquer sessão leria dado pessoal. Foi por isso que o `backend` entregou a frente com │
+     * │ três testes VERMELHOS apontando para cá, em vez de verde com a rota aberta.               │
+     * │                                                                                          │
+     * │ É o mesmo defeito que o `seguranca` mediu em 30/09 nos sete catálogos de A&S: se um nome  │
+     * │ de classe não bate, a escrita do catálogo fica aberta. Os quatro nomes abaixo foram       │
+     * │ conferidos contra os métodos reais da controller, um por um.                              │
+     * └──────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * NOMINAL, NUNCA CURINGA, e a diferença importa: `Controller.*` faria handler NOVO herdar a
+     * concessão sem decisão do diretor, que é a ressalva R3 da auditoria da concessão de menus.
+     * `opcoes` já está listado de propósito, para a rota do catálogo de filtros não nascer aberta no
+     * dia em que ela existir: operação listada que ainda não existe é inerte, operação que existe e
+     * não está listada é uma porta.
+     *
+     * §A.23: o registro aqui FAZ O MENU EXISTIR e nada mais. Nasce visível só para o SUPER_ADMIN,
+     * ninguém o tem concedido, nenhum seed foi rodado, e quem libera quem enxerga é o DIRETOR.
+     *
+     * CÓDIGO SEM O PREFIXO `as-` e grupo ADMIN, por medição do `backend`: o prefixo arrastaria a fila
+     * para a família dos catálogos concedíveis, que ela não é, e o grupo OPERACAO a faria entrar em
+     * `MENUS_PADRAO_COMUM` e se conceder sozinha num backfill.
+     */
+    codigo: "divergencias-ingestao",
+    rotulo: "Divergências Da Ingestão",
+    href: "/admin/divergencias-ingestao",
+    grupo: "ADMIN",
+    ordem: 55,
+    areas: ["AS"],
+    operacoes: [
+      "IngestaoDivergenciasController.listar",
+      "IngestaoDivergenciasController.opcoes",
+      "IngestaoDivergenciasController.manterEa",
+      "IngestaoDivergenciasController.adotarAts",
+    ],
+  },
 ];
 
 /** Menus sempre visíveis, independentemente de configuração (a home nunca some). */
@@ -1383,6 +1426,12 @@ export function areasDeNascimento(menu: MenuDef): Area[] {
 export const MENUS_QUE_NASCEM_FORA_DA_ADM = new Set<string>([
   "as-vagas",
   "as-candidatos",
+  // A FILA DE REVISAO DAS DIVERGENCIAS DA INGESTAO: menu de A&S, nasce so na area AS. Mora no grupo
+  // ADMIN por dois motivos medidos, e nenhum deles e estetico: o grupo OPERACAO a faria entrar em
+  // `MENUS_PADRAO_COMUM` e se conceder sozinha num backfill, e o prefixo `as-` a arrastaria para a
+  // familia dos catalogos concediveis, que ela nao e (ela nao configura lista nenhuma: e fila de
+  // trabalho). A prova desta lista e o que torna a excecao DELIBERADA em vez de descuido.
+  "divergencias-ingestao",
   // A fila de revisão das vagas espelhadas do Pandapé: menu de A&S, nasce só na área AS.
   "as-vagas-revisao",
   // Mora no grupo ADMIN por decisão do diretor e mesmo assim é menu de A&S: é exatamente o caso que
@@ -1507,6 +1556,22 @@ export const MENUS_PADRAO_COMUM = MENUS.filter(
  * marcação e recuperaria o menu por outra porta, com a trava do guard intacta e inútil.
  */
 export const MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER = new Set<string>([
+  /*
+   * A FILA DE DIVERGENCIAS DA INGESTAO. ESTA LINHA E A TRAVA, e a falta dela era um VETO.
+   *
+   * ┌─ O QUE ACONTECERIA SEM ELA, medido pelo `seguranca` em 30/09/2026 ─────────────────────────┐
+   * │ `menu.guard.ts` deixa o MASTER passar por PERTENCER A AREA, sem marcacao nenhuma, e        │
+   * │ `baseDeMenusDoMaster` inclui o codigo, entao MASTER novo nasce com ele. Producao tem 3      │
+   * │ MASTER na area AS. A brecha nao dependia de ninguem clicar: ela abriria SOZINHA no primeiro │
+   * │ boot depois do deploy, quando o convergedor do catalogo grava a tabela com `areas: ["AS"]`. │
+   * │ Naquele instante os 3 ganhariam a fila, que le NOME DE CANDIDATO e tem DUAS rotas de        │
+   * │ escrita (mover etapa e trocar vaga).                                                       │
+   * │                                                                                            │
+   * │ O comentario do registro do menu AFIRMAVA "nasce so para o SUPER_ADMIN", e a afirmacao era  │
+   * │ FALSA sem esta entrada. Ela e o que a torna verdadeira.                                     │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   */
+  "divergencias-ingestao",
   // DICAS DE DOCUMENTO: o texto escrito aqui é renderizado na tela PÚBLICA do candidato, e o menu
   // nasceu na área ADM, onde estão todos os MASTER de hoje. Decisão do diretor: escrever a dica é
   // concessão nominal, não consequência do papel.

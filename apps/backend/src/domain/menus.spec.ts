@@ -426,7 +426,7 @@ describe("menus que exigem marcação explícita do MASTER", () => {
    * PINADA porque entrar aqui é decisão do diretor, nunca efeito colateral: a prova quebrar ao
    * acrescentar um código é o comportamento desejado.
    */
-  it("a lista é EXATAMENTE as Dicas, os Motivos De Descarte, os sete catálogos de A&S e a Ajuda", () => {
+  it("a lista é EXATAMENTE as Dicas, os Motivos De Descarte, os sete catálogos de A&S, a Ajuda e a fila de Divergências", () => {
     expect([...MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER].sort()).toEqual(
       [
         "dicas-documento",
@@ -443,6 +443,12 @@ describe("menus que exigem marcação explícita do MASTER", () => {
         "as-segmentos",
         "as-comerciais",
         "as-motivos-reenvio",
+        // A FILA DE DIVERGÊNCIAS DA INGESTÃO, acrescentada em 30/09/2026 por VETO do `seguranca`.
+        // Ela é de A&S (`areas: ["AS"]`) e, sem a entrada nominal, o `MenuGuard` deixaria o MASTER
+        // passar por PERTENCER À ÁREA: os 3 MASTER de A&S em produção ganhariam a fila SOZINHOS no
+        // primeiro boot depois do deploy, com leitura de nome de candidato e as duas rotas de
+        // escrita. Não dependia de ninguém clicar, e é por isso que a entrada é obrigatória.
+        "divergencias-ingestao",
       ].sort(),
     );
   });

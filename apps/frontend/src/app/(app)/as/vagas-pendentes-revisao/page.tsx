@@ -328,7 +328,7 @@ export default function VagasPendentesDeRevisaoPage() {
         <div className="ea-scroll overflow-x-auto">
           {/* A LARGURA MÍNIMA É A SOMA DO QUE CADA COLUNA PRECISA para não esmagar ninguém (§A.20):
               abaixo dela a tabela ROLA na horizontal, em vez de espremer nome de vaga e de cliente.
-              Nome De Divulgação ganhou largura própria: sem ela, era a única coluna de conteúdo sem
+              Nome Da Vaga ganhou largura própria: sem ela, era a única coluna de conteúdo sem
               largura e engolia todo o espaço sobrando, abrindo um vão morto antes de Cargo, e ao
               mesmo tempo ficava espremida na largura mínima (a soma das fixas quase batia o `min-w`).
               Com largura própria, a folga se distribui entre todas as colunas. */}
@@ -339,7 +339,7 @@ export default function VagasPendentesDeRevisaoPage() {
                   Vaga
                 </ColunaOrdenavel>
                 <ColunaOrdenavel as="th" ord={ord} chave="vaga" className="w-[220px]">
-                  Nome De Divulgação
+                  Nome Da Vaga
                 </ColunaOrdenavel>
                 <ColunaOrdenavel as="th" ord={ord} chave="cargo" className="w-[180px]">
                   Cargo
@@ -572,7 +572,7 @@ function CorrigirLiberacaoModal({
 
         <dl className="mt-4 grid grid-cols-2 gap-3 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-3 text-sm">
           <Campo rotulo="Vaga" valor={vaga.codigo} />
-          <Campo rotulo="Nome de divulgação" valor={vaga.nomeDivulgacao} />
+          <Campo rotulo="Nome da vaga" valor={vaga.nomeDivulgacao} />
           <Campo rotulo="Cliente atual" valor={vaga.clienteNome} />
           <Campo rotulo="Candidatos em processo" valor={String(vaga.ocupacao?.emSelecao ?? 0)} />
         </dl>

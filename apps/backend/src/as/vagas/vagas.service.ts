@@ -65,11 +65,14 @@ import {
   asVagaStatusEventos,
   vagaBeneficio,
   vagaClienteCorrecoes,
+  vagaConsultorTransferencias,
   vagaMetaReducoes,
   vagas,
 } from "../../db/schema";
+import { derivarStatusDaVaga } from "./derivar-status-da-vaga";
 import {
   ACEITE_REABERTURA_SEM_ORIGEM,
+  SITUACOES_VIVAS,
   candidaturaViva,
   consomePosicao,
   kpisDoFunil,
@@ -98,6 +101,7 @@ import type {
   ReabrirVagaDto,
   CorrigirLiberacaoRevisaoDto,
   LiberarVagaRevisaoDto,
+  TransferirConsultorDaVagaDto,
 } from "./vagas.dto";
 import { idiomasGravados, type VagaIdiomaGravado } from "../../domain/vaga-idioma";
 import type { VagaItemOndaE } from "./vaga-item-onda-e";
@@ -455,6 +459,16 @@ export class VagasService {
       solicitanteEmail: v.solicitanteEmail,
       dataSolicitacao: v.dataSolicitacao,
       dataAlinhamento: v.dataAlinhamento,
+      // O REALINHAMENTO (0138) ao lado do alinhamento, e nunca no lugar dele: são as duas pontas da
+      // comparação que a ficha faz ("o perfil foi combinado em X e realinhado em Y").
+      dataRealinhamento: v.dataRealinhamento,
+      /*
+       * OS CARIMBOS DA REABERTURA (0138). `dataLimiteAnterior` viaja JUNTO do `dataLimite` porque é
+       * ele que transforma "esta vaga está com um prazo novo" em "este prazo foi RENEGOCIADO, de X
+       * para Y". Sem a cópia, a vaga reaberta e a vaga que sempre teve aquele prazo ficam iguais.
+       */
+      dataReabertura: v.dataReabertura,
+      dataLimiteAnterior: v.dataLimiteAnterior,
       envioShortlist: v.envioShortlist,
       /**
        * O ID VIAJA JUNTO DO NOME (item 16, 07/09) porque o FILTRO casa por ID. Por nome, dois
@@ -1356,6 +1370,13 @@ export class VagasService {
       solicitanteEmail: texto(dto.solicitanteEmail),
       dataSolicitacao: data(dto.dataSolicitacao),
       dataAlinhamento: data(dto.dataAlinhamento),
+      /*
+       * O REALINHAMENTO (0138) ENTRA AQUI, no MESMO montador da irmã acima, e é essa a razão de ele
+       * ser um campo de formulário e não um carimbo: `camposDaTrilha` serve `create` E `atualizar`,
+       * então a data que o time digita na abertura e a que ele digita na edição passam pelo mesmo
+       * lugar. Uma segunda escrita em outro método divergiria desta na primeira correção.
+       */
+      dataRealinhamento: data(dto.dataRealinhamento),
       envioShortlist: data(dto.envioShortlist),
 
       /**
@@ -2563,6 +2584,15 @@ export class VagasService {
     const codigoAbertura = regua.codigoDoPapel("ABERTURA");
     const codigoCancelamento = regua.codigoDoPapel("CANCELAMENTO");
     const etapas = await this.etapas.listar(true);
+    /*
+     * OS DOIS CATÁLOGOS DA REABERTURA DA VAGA ENTREGUE (0138), lidos AQUI pela MESMA régua das
+     * linhas acima: catálogo ANTES da transação, para não alongar o tempo com a trava segurada.
+     *
+     * `etapasDeEntrega` responde QUEM está com o cliente, e é a MESMA fonte que a derivação de
+     * status usa. `destinoDaReabertura` é para onde essa gente volta (a Triagem, na semente).
+     */
+    const etapasDeEntrega = await this.etapas.codigosDeEntregaAoCliente();
+    const destinoDaReabertura = await this.etapas.etapaDaReabertura();
 
     // A LISTA CHEGA SEM REPETIDO: o mesmo id duas vezes é erro de tela, e o segundo passaria por uma
     // candidatura já restaurada, caindo na guarda de "quem está vivo não volta" com frase errada.
@@ -2579,16 +2609,87 @@ export class VagasService {
             status: vagas.status,
             posicoesOficiais: vagas.posicoesOficiais,
             posicoesBanco: vagas.posicoesBanco,
+            /*
+             * O PRAZO VIGENTE É LIDO SOB O LOCK (0138), e não fora dele: é dele que sai a cópia
+             * `data_limite_anterior`. Lido antes da trava, a cópia poderia ser de um prazo que outra
+             * edição já substituiu, e o relatório diria que renegociou de um valor que nunca vigorou.
+             */
+            dataLimite: vagas.dataLimite,
           })
           .from(vagas)
           .where(eq(vagas.id, id))
           .for("update");
         if (!vaga) throw new NotFoundException("Vaga não encontrada.");
 
-        if (!regua.ehDoPapel(vaga.status, "CANCELAMENTO")) {
+        /*
+         * ─ DE ONDE A VAGA REABRE: DOIS PAPÉIS, E DOIS CAMINHOS QUE NÃO SE MISTURAM (0138) ────────
+         *
+         * ┌─ POR QUE A ENTREGA NÃO PODE PASSAR PELO CAMINHO DO CANCELAMENTO ────────────────────┐
+         * │ O caminho de baixo DESFAZ UM CANCELAMENTO: ele procura o conjunto de quem AQUELE      │
+         * │ cancelamento descartou, restaura essas pessoas e LIMPA `vagas_fechadas`,              │
+         * │ `vagas_fechadas_banco` e `data_fechamento`. Aplicado a uma vaga ENTREGUE, isso        │
+         * │ ressuscitaria gente que a seleção recusou por mérito e APAGARIA o carimbo de quem foi │
+         * │ entregue de verdade. A vaga entregue não tem cancelamento a desfazer: ela tem gente   │
+         * │ COM O CLIENTE, viva, que precisa voltar para a triagem.                               │
+         * └─────────────────────────────────────────────────────────────────────────────────────┘
+         *
+         * FECHADA CONTINUA SEM PORTA DE VOLTA, e a ausência é decisão do diretor (fica como frente
+         * futura): reabrir um FECHAMENTO tem régua própria (a meta fechada, a data prevista de
+         * início, o relógio da retenção) e não é um papel a mais nesta lista.
+         */
+        const ehReaberturaDeEntrega = regua.ehDoPapel(vaga.status, "ENTREGA");
+        if (!ehReaberturaDeEntrega && !regua.ehDoPapel(vaga.status, "CANCELAMENTO")) {
           throw new ConflictException(
-            "Só uma vaga CANCELADA é reaberta por aqui. Recarregue a página.",
+            "Só uma vaga CANCELADA ou ENTREGUE é reaberta por aqui. Recarregue a página.",
           );
+        }
+
+        /*
+         * ─ O PRAZO NOVO, E POR QUE ELE É EXIGIDO NA ENTREGA E OPCIONAL NO CANCELAMENTO ──────────
+         *
+         * A SLA é uma contagem REGRESSIVA até a Previsão De Entrega, então NÃO EXISTE "zerar": o que
+         * existe é um PRAZO NOVO (decisão do diretor). Reabrir a vaga entregue SEM prazo novo a
+         * devolveria correndo contra o prazo ANTIGO, que quase sempre já passou, e ela nasceria
+         * "Prazo Vencido" sem ninguém ter atrasado nada. É o defeito que esta frente corrige, e
+         * aceitar o corpo sem prazo seria construí-lo de novo.
+         *
+         * NO CANCELAMENTO ELE SEGUE OPCIONAL, e isso é REQUISITO: a reabertura de vaga cancelada
+         * está em produção e não pode passar a exigir campo que a tela dela não manda. Vindo, é
+         * aplicado do mesmo jeito.
+         */
+        const prazoNovo = data(dto.dataLimite);
+        if (ehReaberturaDeEntrega && !prazoNovo) {
+          throw new BadRequestException(
+            "Informe a previsão de entrega nova para reabrir esta vaga. O prazo não volta a contar sozinho: a contagem é até a data prometida, então reabrir pede uma data nova, e a anterior fica registrada.",
+          );
+        }
+
+        /*
+         * OS CARIMBOS DA REABERTURA, COMUNS AOS DOIS CAMINHOS. Eles saem no MESMO `.set` do resto,
+         * mais abaixo, e o prazo anterior só é copiado quando há prazo novo para substituí-lo:
+         * gravar a cópia sem a substituição afirmaria uma renegociação que não houve.
+         */
+        const carimbosDaReabertura = {
+          dataReabertura: hojeEmSaoPaulo(),
+          reaberturaPorId: user.id,
+          ...(prazoNovo ? { dataLimiteAnterior: vaga.dataLimite, dataLimite: prazoNovo } : {}),
+        };
+
+        if (ehReaberturaDeEntrega) {
+          await this.reabrirDaEntrega(tx, {
+            vagaId: id,
+            statusDeOrigem: vaga.status,
+            codigoAbertura,
+            destino: destinoDaReabertura,
+            etapasDeEntrega,
+            carimbos: carimbosDaReabertura,
+            prazoAnterior: vaga.dataLimite,
+            prazoNovo: prazoNovo as string,
+            regua,
+            dto,
+            user,
+          });
+          return;
         }
 
         const { origem, linhas, daVaga } = await this.conjuntoDoReabrir(
@@ -2696,6 +2797,11 @@ export class VagasService {
             dataFechamento: null,
             vagasFechadas: null,
             vagasFechadasBanco: null,
+            /*
+             * OS CARIMBOS DA REABERTURA (0138) SAEM NO MESMO `.set`, e é o argumento escrito no bloco
+             * acima: carimbo que viaja em outro `update` é carimbo que pode não acontecer.
+             */
+            ...carimbosDaReabertura,
             atualizadoEm: new Date(),
           })
           .where(eq(vagas.id, id));
@@ -2705,6 +2811,275 @@ export class VagasService {
     }
 
     return this.devolverVaga(id, "Vaga reaberta, mas não encontrada na listagem.");
+  }
+
+  /**
+   * ─ A REABERTURA DA VAGA ENTREGUE: O CLIENTE REPROVOU, E O PROCESSO VOLTA PARA A TRIAGEM (0138) ─
+   *
+   * ┌─ O PEDIDO DO DIRETOR, E O FUNDAMENTO DELE ─────────────────────────────────────────────────┐
+   * │ "A vaga estava ENTREGUE, o cliente voltou dizendo que reprovou. O processo REABRE, e a SLA  │
+   * │ volta a ser contabilizada a partir da reabertura." E: "a vaga volta para ABERTA com os       │
+   * │ candidatos em TRIAGEM, porque se o cliente reprovou o time precisa fazer NOVA TRIAGEM."      │
+   * └───────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * ┌─ QUEM DEVOLVE A VAGA PARA ABERTA É A DERIVAÇÃO, E NÃO ESTA ROTINA ─────────────────────────┐
+   * │ NENHUMA LINHA AQUI ESCREVE `status`, e isso é desenho, não esquecimento. O status da vaga    │
+   * │ DERIVA de onde os candidatos estão desde a 0130: a vaga é ENTREGUE enquanto existir alguém   │
+   * │ VIVO numa etapa marcada `entrega_ao_cliente`, e volta a ser ABERTA quando não existir mais.  │
+   * │ Tirar todo mundo da etapa de entrega JÁ é o gesto que devolve a vaga para Aberta.            │
+   * │                                                                                             │
+   * │ Escrever `status` à mão aqui seria uma SEGUNDA fonte da mesma resposta, e as duas divergiriam │
+   * │ no primeiro caso que a derivação tratasse diferente (alguém que sobrou numa etapa de entrega, │
+   * │ uma etapa de entrega nova que o diretor marcar amanhã). A derivação, ao contrário, grava o    │
+   * │ evento de trilha dizendo que a vaga andou sozinha, que é o registro honesto do que houve.     │
+   * │                                                                                             │
+   * │ A ORDEM É A REGRA INTEIRA: primeiro as candidaturas se movem, DEPOIS a linha da vaga é        │
+   * │ atualizada (é ela que LIMPA o `status_manual_em`, sem o qual a derivação não encosta na vaga),│
+   * │ e só então a derivação roda. Invertido, a derivação leria o carimbo manual e voltaria em       │
+   * │ silêncio, deixando a vaga ENTREGUE com prazo novo, afirmando uma reabertura que não houve.    │
+   * └───────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * ┌─ O QUE ESTA ROTINA NÃO FAZ, E CADA AUSÊNCIA É DELIBERADA ──────────────────────────────────┐
+   * │ . NÃO restaura ninguém: na vaga entregue nada foi descartado, as pessoas estão VIVAS com o   │
+   * │   cliente. Chamar o conjunto do cancelamento aqui ressuscitaria quem a seleção recusou por    │
+   * │   mérito, num processo que nunca foi cancelado.                                              │
+   * │ . NÃO limpa `vagas_fechadas`, `vagas_fechadas_banco` nem `data_fechamento`: são o carimbo de  │
+   * │   quem foi entregue de verdade, e apagá-los é o dano que o contrato do reabrir nomeia.        │
+   * │ . NÃO muda a SITUAÇÃO de ninguém, só a ETAPA. Quem estava ALOCADO continua ALOCADO e a        │
+   * │   ocupação da vaga não se mexe: o cliente reprovar é o LUGAR da pessoa mudando, não o estado  │
+   * │   do processo dela. É a mesma garantia central do cancelamento com Stand By.                  │
+   * └───────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * §A.6: a leitura do conjunto pede `id`, `etapa` e `situacao`, e nada mais. Nenhum nome, nenhum
+   * CPF, nenhum contato chega a esta rotina, e a trilha guarda uma CONTAGEM. §A.11: sem travessão.
+   */
+  /**
+   * ┌─ UM ACOPLAMENTO DE LGPD QUE ESTE MÉTODO NÃO TEM HOJE, E QUE NASCE NO DIA DE UMA DECISÃO ────┐
+   * │ Achado do `tester` em 30/09/2026, registrado aqui porque some de qualquer outro lugar.       │
+   * │                                                                                             │
+   * │ Este caminho **não limpa `encerrada_em`**, e hoje isso está CERTO: a ENTREGA nasce com       │
+   * │ `encerra: false`, então a vaga entregue nunca teve aquele carimbo preenchido, e limpar seria │
+   * │ mexer no que não existe.                                                                    │
+   * │                                                                                             │
+   * │ O QUE MUDA NO DIA EM QUE ALGUÉM PROMOVER A ENTREGA A `encerra: true`: o relógio do expurgo   │
+   * │ usa `encerrada_em` para DUAS coisas opostas, proteger (`... or v.encerrada_em is null`) e    │
+   * │ CONTAR o prazo de quem está vivo. A vaga reaberta voltaria para ABERTA **com o carimbo antigo │
+   * │ preenchido**: todo mundo vivo dentro dela perderia a proteção e passaria a ter o prazo        │
+   * │ contado desde a entrega ANTIGA, possivelmente já vencido na varredura seguinte. É irreversível│
+   * │ (anonimização não volta) e silencioso.                                                       │
+   * │                                                                                             │
+   * │ A correção é UMA LINHA, `encerradaEm: null` nos carimbos deste caminho, inócua hoje e rede   │
+   * │ amanhã. **NÃO foi aplicada de propósito** (§A.31: a OST não pediu, e escrever teste para ela │
+   * │ seria inventar requisito). Fica proposta ao diretor, e este bloco existe para que quem for   │
+   * │ mexer no `encerra` da ENTREGA encontre a consequência aqui, e não em produção.               │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   */
+  private async reabrirDaEntrega(
+    tx: DbTransaction,
+    ctx: {
+      vagaId: string;
+      statusDeOrigem: string;
+      codigoAbertura: string;
+      destino: AsEtapaFunil | null;
+      etapasDeEntrega: ReadonlySet<string>;
+      carimbos: Record<string, unknown>;
+      prazoAnterior: string | null;
+      prazoNovo: string;
+      regua: ReguaDeStatusDaVaga;
+      dto: ReabrirVagaDto;
+      user: AuthUser;
+    },
+  ): Promise<void> {
+    /*
+     * SEM ETAPA DE DESTINO, A REABERTURA RECUSA, e a assimetria com o cancelamento é deliberada (o
+     * `EtapasFunilService.etapaDaReabertura` explica): lá, mover é um agrupamento cortês e o gesto
+     * principal acontece de todo jeito; AQUI mover é a operação inteira, porque é sair da etapa de
+     * entrega que devolve a vaga para Aberta. Sem destino, o que sobraria é uma vaga ENTREGUE com
+     * carimbo de reabertura e prazo novo: o pior dos mundos, porque nada falha.
+     */
+    if (!ctx.destino) {
+      throw new BadRequestException(
+        "Nenhuma etapa do funil está marcada como destino da reabertura. Marque uma na tela de Etapas Do Funil antes de reabrir esta vaga.",
+      );
+    }
+
+    /*
+     * ─ QUEM ESTÁ COM O CLIENTE, LIDO SOB O LOCK DA VAGA ──────────────────────────────────────
+     *
+     * O CONJUNTO É DERIVADO DO ESTADO, e não escolhido no corpo: é PERGUNTA DE PRESENÇA, a mesma que
+     * a derivação faz. `SITUACOES_VIVAS` porque quem foi descartado ou desistiu saiu do processo, e
+     * contá-lo faria a rotina tentar mover uma linha morta.
+     *
+     * CONJUNTO VAZIO NÃO É ERRO, e não recusa: a vaga pode estar ENTREGUE por movimento manual, com
+     * ninguém em etapa de entrega. Aí ninguém se move, a limpeza do carimbo manual acontece, e a
+     * derivação devolve a vaga para Aberta pela mesma régua. É autocorreção, não exceção.
+     *
+     * `inArray` COM LISTA VAZIA NÃO É EXECUTADO: catálogo sem etapa de entrega marcada não produz
+     * SQL inválido, produz conjunto vazio, que é o lado fail-closed.
+     */
+    const codigosDeEntrega = [...ctx.etapasDeEntrega];
+    const comOCliente =
+      codigosDeEntrega.length === 0
+        ? []
+        : await tx
+            .select({
+              candidaturaId: asCandidaturas.id,
+              etapa: asCandidaturas.etapa,
+            })
+            .from(asCandidaturas)
+            .where(
+              and(
+                eq(asCandidaturas.vagaId, ctx.vagaId),
+                inArray(asCandidaturas.etapa, codigosDeEntrega),
+                inArray(asCandidaturas.situacao, SITUACOES_VIVAS),
+              ),
+            );
+
+    /*
+     * ─ A LISTA DO CORPO É CONFERIDA, E TEM DE SER O CONJUNTO INTEIRO ──────────────────────────
+     *
+     * ┌─ POR QUE NÃO SE ESCOLHE UM SUBCONJUNTO AQUI ─────────────────────────────────────────┐
+     * │ Deixar uma pessoa na etapa de entrega mantém a vaga ENTREGUE pela derivação: a         │
+     * │ reabertura gravaria carimbo, prazo novo e trilha, e a vaga continuaria entregue. O      │
+     * │ sistema afirmaria uma reabertura que não aconteceu, o que é pior do que recusar.        │
+     * └───────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * O CORPO SEM LISTA É O CAMINHO NORMAL (todos voltam). VINDO uma lista, ela é CONFERIDA e uma
+     * lista parcial é RECUSADA, nunca completada em silêncio: a tela que mandou três de cinco
+     * pensava estar escolhendo, e cumprir outra coisa sem dizer é o defeito que a régua do
+     * `travaDaSelecao` já recusa no outro caminho.
+     */
+    const escolhidos = [...new Set(ctx.dto.candidaturaIds ?? [])];
+    if (escolhidos.length > 0) {
+      const doConjunto = new Set(comOCliente.map((l) => l.candidaturaId));
+      const igual =
+        escolhidos.length === doConjunto.size && escolhidos.every((id) => doConjunto.has(id));
+      if (!igual) {
+        throw new ConflictException(
+          `A reabertura devolve para ${ctx.destino.rotulo} TODOS os candidatos que estão com o cliente, e não uma parte: são ${doConjunto.size}. Recarregue a página.`,
+        );
+      }
+    }
+
+    /*
+     * A TRILHA ENTRA PRIMEIRO, como no caminho do cancelamento, e é ELA que guarda a renegociação do
+     * prazo: a linha da vaga passa a ter só o prazo VIGENTE e o imediatamente anterior, então a
+     * segunda reabertura sobrescreve o `data_limite_anterior` da primeira. A sequência inteira das
+     * renegociações vive aqui, e é por isso que a narrativa carrega os dois valores.
+     *
+     * `para` É O CÓDIGO DO PAPEL ABERTURA, resolvido no servidor: é para onde a vaga vai, e é o que a
+     * derivação vai gravar em seguida. O evento registra a DECISÃO (quem reabriu, com que prazo); o
+     * evento da derivação, logo depois, registra o MOVIMENTO do status. São dois fatos, não um
+     * repetido, e é o segundo que prova que ninguém forçou o status à mão.
+     */
+    const [evento] = await tx
+      .insert(asVagaStatusEventos)
+      .values({
+        vagaId: ctx.vagaId,
+        de: ctx.statusDeOrigem,
+        para: ctx.codigoAbertura,
+        // QUEM vem da SESSÃO, nunca do corpo: autoria é trilha, não campo de formulário.
+        porId: ctx.user.id,
+        observacao: this.narrativaDaReaberturaDaEntrega(
+          ctx.dto,
+          comOCliente.length,
+          ctx.destino,
+          ctx.prazoAnterior,
+          ctx.prazoNovo,
+        ),
+      })
+      .returning({ id: asVagaStatusEventos.id });
+
+    for (const linha of comOCliente) {
+      /*
+       * A ETAPA MUDA, A SITUAÇÃO NÃO. Ver o bloco do cabeçalho: quem estava ALOCADO continua
+       * ALOCADO, e a ocupação da vaga não se mexe.
+       */
+      await tx
+        .update(asCandidaturas)
+        .set({ etapa: ctx.destino.codigo, atualizadoEm: new Date() })
+        .where(eq(asCandidaturas.id, linha.candidaturaId));
+
+      await tx.insert(asCandidaturaEtapas).values({
+        candidaturaId: linha.candidaturaId,
+        etapaDe: linha.etapa,
+        etapaPara: ctx.destino.codigo,
+        /*
+         * MOVIMENTO, E NÃO DESFECHO: `situacao` nula é o que diz, na linha do tempo, que a pessoa
+         * andou no funil e NÃO saiu do processo. Preenchê-la carimbaria um desfecho que não houve.
+         */
+        situacao: null,
+        motivo: `Vaga reaberta: o cliente reprovou a entrega, e o processo volta para ${ctx.destino.rotulo}.`,
+        // O MARCADOR ESTRUTURAL, como no cancelamento: é por ele que se sabe QUAIS voltas pertencem
+        // a ESTA reabertura, sem casar por texto de motivo, que é editável e frágil.
+        vagaStatusEventoId: evento.id,
+        porId: ctx.user.id,
+      });
+    }
+
+    await tx
+      .update(vagas)
+      .set({
+        /*
+         * `status` NÃO ESTÁ AQUI, DE PROPÓSITO: ver o bloco do cabeçalho. Quem o escreve é a
+         * derivação, logo abaixo, e é ela a única fonte da resposta "esta vaga está entregue?".
+         *
+         * O CARIMBO MANUAL É LIMPO, e sem ele nada do resto funciona: a derivação NÃO encosta em
+         * vaga com `status_manual_em` preenchido, então uma vaga que alguém tivesse movido à mão para
+         * ENTREGUE ficaria entregue para sempre, com prazo novo e carimbo de reabertura. Depois desta
+         * porta o status vigente já não é o que alguém pôs à mão: é o que o funil diz.
+         */
+        statusManualEm: null,
+        statusManualPorId: null,
+        ...ctx.carimbos,
+        atualizadoEm: new Date(),
+      })
+      .where(eq(vagas.id, ctx.vagaId));
+
+    /*
+     * E AGORA A DERIVAÇÃO DEVOLVE A VAGA PARA ABERTA, sozinha, porque não sobrou ninguém em etapa de
+     * entrega. Ela grava o status E o evento de trilha da mudança, com a frase de que a vaga andou
+     * por causa do movimento dos candidatos.
+     *
+     * ELA NÃO LANÇA POR "NÃO HÁ O QUE FAZER", e isso é a rede de segurança certa: se um caminho
+     * futuro deixar alguém numa etapa de entrega, a vaga permanece ENTREGUE e a trilha da reabertura
+     * continua gravada, em vez de o sistema mentir sobre o estado dela.
+     */
+    await derivarStatusDaVaga(tx, ctx.vagaId, ctx.regua, ctx.etapasDeEntrega, ctx.user.id);
+  }
+
+  /**
+   * A FRASE QUE FICA NA TRILHA DA VAGA quando a entrega é reaberta, irmã da `narrativaDaReabertura`.
+   *
+   * ELA CARREGA OS DOIS PRAZOS porque é a ÚNICA cópia da sequência: a linha da vaga guarda o prazo
+   * vigente e o imediatamente anterior, então a segunda reabertura sobrescreve o que a primeira
+   * anotou. Quem quiser saber "de quanto para quanto, e quantas vezes" lê a trilha.
+   *
+   * §A.6: uma contagem, duas datas de processo, o nome da etapa e a observação de quem reabriu.
+   * Nenhum nome, nenhum id de candidato, nenhum CPF. §A.11: sem travessão.
+   */
+  private narrativaDaReaberturaDaEntrega(
+    dto: ReabrirVagaDto,
+    quantos: number,
+    destino: AsEtapaFunil,
+    prazoAnterior: string | null,
+    prazoNovo: string,
+  ): string {
+    const partes = ["Reaberta a partir da entrega: o cliente reprovou."];
+    partes.push(
+      quantos === 0
+        ? `Nenhum candidato estava com o cliente, então ninguém foi movido para ${destino.rotulo}.`
+        : quantos === 1
+          ? `1 candidato voltou para ${destino.rotulo}.`
+          : `${quantos} candidatos voltaram para ${destino.rotulo}.`,
+    );
+    partes.push(
+      prazoAnterior
+        ? `Previsão de entrega renegociada de ${prazoAnterior} para ${prazoNovo}.`
+        : `Previsão de entrega definida em ${prazoNovo}. A vaga não tinha previsão registrada antes.`,
+    );
+    if (dto.observacao) partes.push(`Observação: ${dto.observacao}.`);
+    return partes.join(" ");
   }
 
   /**
@@ -3644,6 +4019,164 @@ export class VagasService {
   }
 
   /**
+   * ─ OS CONSULTORES QUE PODEM RECEBER UMA VAGA (item 5 da OST de 30/09/2026) ────────────────────
+   *
+   * ELA EXISTE PORQUE `contextoAs` NÃO RESPONDE ESTA PERGUNTA, e a diferença é do desenho dos dois
+   * lados: aquela devolve a CONTRAPARTE de quem chama (o RECRUITER vê consultores, o CONSULTOR vê
+   * recruiters), porque ali a pergunta é "quem é o meu par nesta vaga". Aqui a pergunta é "quem pode
+   * ficar responsável por esta vaga", e a resposta é a mesma lista para qualquer um que pergunte. Um
+   * CONSULTOR chamando `contextoAs` receberia RECRUITERS, e o seletor da transferência ofereceria
+   * justamente quem não pode receber.
+   *
+   * A MESMA RÉGUA DO DESTINO, EM UM LUGAR SÓ (`consultorDeDestino`): ATIVO e com papel de A&S de
+   * CONSULTOR. Se a lista e a trava divergissem, a tela ofereceria alguém que a rota recusa, o que é
+   * pior do que não oferecer.
+   *
+   * §A.6: id e nome de usuário INTERNO, e mais nada. É a mesma projeção que `contextoAs` já devolve.
+   */
+  async consultoresParaTransferencia(): Promise<{ id: string; nome: string }[]> {
+    return this.db
+      .select({ id: usuarios.id, nome: usuarios.nome })
+      .from(usuarios)
+      .where(and(eq(usuarios.ativo, true), eq(usuarios.papelAs, "CONSULTOR")))
+      .orderBy(asc(usuarios.nome));
+  }
+
+  /**
+   * ─ TRANSFERIR A VAGA DE UM CONSULTOR PARA OUTRO (item 5 da OST de 30/09/2026) ─────────────────
+   *
+   * ESCREVE UMA COLUNA, `consultor_id`, E MAIS NENHUMA. Não toca status, meta, contador, data nem o
+   * outro lado da vaga (`recruiter_id`): quem sai é o responsável, e o processo continua exatamente
+   * onde estava. É a contrapartida da `editarPosicoes`, que também é um caminho estreito de propósito.
+   *
+   * ┌─ NÍVEL CONSULTOR, SEM `@Roles`, E "SEM `@Roles`" NÃO É "SEM GUARDA" (decisão do diretor) ──┐
+   * │ A rota nasce sem `@Roles`, no mesmo padrão já declarado na `VagasController` para revisar,   │
+   * │ baixar meta, stand by, fechar e cancelar. Quem restringe é o MENU: a controller inteira é    │
+   * │ reivindicada por `VagasController.*` no menu `as-vagas`, e o `MenuGuard` é quem barra quem    │
+   * │ não tem o menu, inclusive por `curl`. Um `@Roles("MASTER")` aqui seria porta trancada para   │
+   * │ quem tem o menu, que é o defeito que a casa já pagou.                                       │
+   * │                                                                                            │
+   * │ O MÉTODO NOVO ENTRA NA REIVINDICAÇÃO SEM NENHUM PASSO A MAIS porque a reivindicação é        │
+   * │ CURINGA (`VagasController.*`), e não uma lista de métodos. Isso importa dizer: o `MenuGuard` │
+   * │ é FAIL-OPEN para operação que ninguém reivindicou, então um método novo numa controller      │
+   * │ reivindicada por método nomeado nasceria ABERTO a qualquer autenticado.                     │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * ┌─ VAGA EM ESTADO TERMINAL PODE SER TRANSFERIDA, e a decisão é minha, reportada ao coordenador ┐
+   * │ A OST não decidiu, e as duas saídas eram defensáveis. ELA PODE, por três razões:             │
+   * │  1. TRANSFERIR NÃO É MOVIMENTO DE PROCESSO, é ATRIBUIÇÃO. Nada do processo muda: nenhuma     │
+   * │     candidatura se move, nenhum contador se altera, nenhuma data se recarimba. É a resposta  │
+   * │     à pergunta "de quem é esta vaga", e essa pergunta continua sendo feita depois do         │
+   * │     fechamento (carteira, indicador por consultor, quem responde pelo histórico).            │
+   * │  2. RECUSAR CRIARIA CARTEIRA ÓRFÃ PERMANENTE. O caso que origina a operação é a pessoa que   │
+   * │     saiu da empresa, e as vagas dela que mais duram são justamente as ENCERRADAS. Travar     │
+   * │     aqui deixaria o histórico inteiro preso a um usuário que ninguém mais usa, sem caminho   │
+   * │     de conserto na tela.                                                                    │
+   * │  3. O ARGUMENTO QUE TRAVA A `editarPosicoes` NÃO SE APLICA. Lá a recusa protege um número    │
+   * │     que já foi CONFRONTADO no fechamento (mexer nele reescreveria a história do processo:    │
+   * │     "3 de 3" viraria "3 de 1"). Aqui não há número congelado nenhum: `consultor_id` não      │
+   * │     entra em contagem, em KPI nem em derivação de status (medido, §A.27: o único leitor no    │
+   * │     backend é o `leftJoin` da listagem, que projeta o id e o nome para a coluna e o filtro). │
+   * │                                                                                            │
+   * │ O QUE ISSO NÃO AUTORIZA: mudar qualquer outra coisa na vaga encerrada. Esta rota escreve uma │
+   * │ coluna, e a vizinha (`editarPosicoes`) continua recusando as encerradas, como sempre.        │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * ┌─ A TRAVA DO DESTINO É DE ESTADO, NUNCA DE PAPEL DE RBAC ───────────────────────────────────┐
+   * │ Três recusas, e as três são sobre a LINHA do usuário de destino, lidas do banco na hora:     │
+   * │ existe, está ATIVO, e tem papel de A&S de CONSULTOR. A última é o "faz sentido como          │
+   * │ consultor" da OST, e ela é a mesma régua que a abertura já aplica (`ladosDeQuemAbre` recusa  │
+   * │ quem não tem papel de A&S): sem ela, a vaga poderia acabar sob um usuário da Admissão, que   │
+   * │ nem enxerga o módulo, e ela sumiria da carteira de todo mundo sem sumir da tela de ninguém.  │
+   * │                                                                                            │
+   * │ A TRANSFERÊNCIA PARA QUEM JÁ É O CONSULTOR É RECUSADA, e não é preciosismo: o CHECK do banco │
+   * │ (`ck_vaga_consultor_transferencias_houve_troca`) recusaria a linha do rastro de qualquer      │
+   * │ jeito, e o resultado sem esta guarda seria um erro cru de restrição na tela em vez da frase. │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * A LINHA DA VAGA É TRAVADA (`for update`) e o rastro é gravado na MESMA transação. Sem a trava,
+   * duas transferências simultâneas gravariam dois rastros com o MESMO `de_consultor_id`, e a linha
+   * do tempo diria que a vaga saiu duas vezes da mesma pessoa, o que nunca aconteceu.
+   */
+  async transferirConsultor(
+    id: string,
+    dto: TransferirConsultorDaVagaDto,
+    autorId: string,
+  ): Promise<VagaListItem> {
+    /*
+     * O DESTINO É CONFERIDO ANTES DA TRANSAÇÃO, e isso é deliberado: ele é uma linha de `usuarios`,
+     * que esta operação não disputa com ninguém (ninguém fica inativo entre duas instruções por
+     * causa desta rota). O que precisa de trava é a linha da VAGA, e ela é travada lá dentro.
+     */
+    const destino = await this.consultorDeDestino(dto.paraConsultorId);
+
+    await this.db.transaction(async (tx) => {
+      const [vaga] = await tx
+        .select({ id: vagas.id, consultorId: vagas.consultorId })
+        .from(vagas)
+        .where(eq(vagas.id, id))
+        .for("update");
+      if (!vaga) throw new NotFoundException("Vaga não encontrada.");
+
+      if (vaga.consultorId === destino.id) {
+        throw new ConflictException(
+          "Esta vaga já é deste consultor. Escolha outra pessoa para transferir.",
+        );
+      }
+
+      await tx
+        .update(vagas)
+        .set({ consultorId: destino.id, atualizadoEm: new Date() })
+        .where(eq(vagas.id, id));
+
+      /*
+       * O RASTRO É OBRIGATÓRIO E VAI NA MESMA TRANSAÇÃO. `vagas.consultor_id` é UMA coluna, e a
+       * escrita acima apaga o valor anterior: sem esta linha, "quem tirou esta vaga de mim, e
+       * quando" não teria resposta em lugar nenhum. `atualizado_em` não responde (diz quando a
+       * linha foi tocada, nunca quem a tocou nem qual era o valor antes).
+       *
+       * TABELA PRÓPRIA, e não `as_vaga_status_eventos`: aquela é a linha do tempo do MOVIMENTO DE
+       * STATUS, e transferir não move status (ver o bloco da tabela, em `db/schema/tables.ts`).
+       */
+      await tx.insert(vagaConsultorTransferencias).values({
+        vagaId: id,
+        deConsultorId: vaga.consultorId,
+        paraConsultorId: destino.id,
+        // QUEM vem da SESSÃO, nunca do corpo: autoria é trilha, não campo de formulário.
+        porId: autorId,
+      });
+    });
+
+    return this.devolverVaga(id, "Vaga transferida, mas não encontrada na listagem.");
+  }
+
+  /**
+   * A RÉGUA DO CONSULTOR DE DESTINO, EM UM LUGAR SÓ: a mesma que a listagem do seletor usa.
+   *
+   * O PAPEL É LIDO DO BANCO na hora, e não de um token nem de uma lista carregada na tela, pelo
+   * mesmo motivo do `ladosDeQuemAbre`: quem deixou de ser consultor hoje de manhã não recebe vaga
+   * na transferência da tarde.
+   *
+   * §A.6: a frase de recusa fala de PAPEL e de ESTADO, e o nome que ela devolve é de usuário interno.
+   * Nenhum dado de candidato passa por aqui.
+   */
+  private async consultorDeDestino(paraId: string): Promise<{ id: string; nome: string }> {
+    const pessoa = await this.db.query.usuarios.findFirst({ where: eq(usuarios.id, paraId) });
+    if (!pessoa) throw new NotFoundException("Consultor de destino não encontrado.");
+    if (!pessoa.ativo) {
+      throw new ConflictException(
+        "Este usuário está inativo e não recebe vaga. Escolha um consultor ativo.",
+      );
+    }
+    if (pessoa.papelAs !== "CONSULTOR") {
+      throw new ConflictException(
+        "Este usuário não tem papel de Consultor em A&S, então não pode ficar responsável pela vaga. Defina o papel no cadastro de usuários ou escolha outra pessoa.",
+      );
+    }
+    return { id: pessoa.id, nome: pessoa.nome };
+  }
+
+  /**
    * A FRASE QUE FICA NA TRILHA DE STATUS DA CORREÇÃO, e ela guarda a TROCA, não só o estado final:
    * "o cliente era X e passou a ser Y" é a informação que explica a reversão seis meses depois.
    *
@@ -4418,4 +4951,24 @@ function texto(v: string | null | undefined): string | null {
 function data(v: string | null | undefined): string | null {
   const t = v?.trim();
   return t ? t : null;
+}
+
+/**
+ * O DIA DE HOJE, em `yyyy-mm-dd`, no fuso de São Paulo. É o que uma coluna `date` recebe.
+ *
+ * FUSO EXPLÍCITO, E NÃO O DO PROCESSO, e aqui isso tem consequência de dado e não de texto: o
+ * backend roda em UTC, então uma reabertura feita às 21h30 de 30/09 seria carimbada 01/10. A data da
+ * reabertura entra em relatório e é comparada com a previsão de entrega, então um dia de erro vira
+ * uma renegociação datada do dia errado.
+ *
+ * `en-CA` PORQUE ELE FORMATA EM `yyyy-mm-dd`, que é exatamente o que o `date` do Postgres espera;
+ * `toISOString()` daria a data em UTC, que é justamente o que esta função existe para evitar.
+ */
+function hojeEmSaoPaulo(): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
 }

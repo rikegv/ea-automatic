@@ -33,11 +33,11 @@ import {
  * lado de natureza e sazonalidade, que são as outras duas classificações da vaga. `ancora` é o id do
  * campo na tela, e é o que faz o item da lista de pendências ser CLICÁVEL.
  *
- * O ARTIGO É "a" para a frase sair em português: "falta a Linha de serviço".
+ * O ARTIGO É "a" para a frase sair em português: "falta a Célula de atendimento".
  */
 export const PENDENCIA_LINHA_SERVICO: VagaPendencia = {
   campo: "linhaServicoId",
-  rotulo: "Linha de serviço",
+  rotulo: "Célula de atendimento",
   artigo: "a",
   passo: 0,
   passoRotulo: "A Vaga",

@@ -157,7 +157,23 @@ describe("o aviso da lista curta AVISA e não impede", () => {
     await waitFor(() => expect(screen.getByText(/1 candidato/)).toBeTruthy());
     expect(onEnviada).not.toHaveBeenCalled();
 
-    // O MESMO BOTÃO, agora dizendo o que ele faz: envia com a ciência registrada.
+    /*
+     * ─ A ESPERA É PELO BOTÃO, E NÃO PELO AVISO, E ISSO ERA UMA CORRIDA MEDIDA ────────────────────
+     *
+     * O aviso e o rótulo do botão voltam em MOMENTOS DIFERENTES: o texto "1 candidato" aparece
+     * assim que a recusa é tratada, e o botão só deixa de dizer "Enviando…" quando o estado de
+     * envio baixa. Esperando só o texto, o clique caía no intervalo entre os dois e o teste
+     * quebrava com "não achei o botão", sem defeito nenhum no componente.
+     *
+     * MEDIDO ANTES DE CONSERTAR: 2 falhas em 5 execuções do arquivo, o que derrubava o gate inteiro
+     * de forma intermitente e mandava quem o visse procurar regressão onde não havia.
+     *
+     * A ASSERÇÃO NÃO MUDOU, e é isso que torna o conserto seguro: continua sendo "o MESMO botão
+     * passa a dizer o que ele faz, e enviar com ele registra a ciência". O que mudou é que a espera
+     * passou a ser pelo estado que a PESSOA veria antes de clicar, que é o que o teste sempre quis
+     * dizer.
+     */
+    await waitFor(() => expect(botao("Enviar assim mesmo")).toBeTruthy());
     fireEvent.click(botao("Enviar assim mesmo"));
     await waitFor(() => expect(enviarShortlist).toHaveBeenCalledTimes(2));
     expect(enviarShortlist.mock.calls[1][1].cienteShortlistCurta).toBe(true);

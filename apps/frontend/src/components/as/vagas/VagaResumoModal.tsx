@@ -64,7 +64,7 @@ export function VagaResumoModal({
   vaga: VagaListItem;
   onClose: () => void;
 }) {
-  const titulo = vaga.nomeDivulgacao ?? vaga.codigo ?? "Vaga sem nome de divulgação";
+  const titulo = vaga.nomeDivulgacao ?? vaga.codigo ?? "Vaga sem nome";
   /*
    * O CATÁLOGO DE STATUS (onda B2). ESTE MODAL CONTINUA NÃO BUSCANDO A VAGA (o cabeçalho explica por
    * quê), e isto não contradiz aquilo: o que ele lê aqui é o CATÁLOGO, dez linhas compartilhadas por

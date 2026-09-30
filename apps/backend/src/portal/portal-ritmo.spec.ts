@@ -25,7 +25,6 @@ import {
 import { PortalRitmoContadores } from "./portal-ritmo.contadores";
 import { PORTAL_IDENTIFICACAO_BLOQUEADA } from "./portal-identidade.service";
 import { PortalRitmoGuard, PortalRitmoSessaoGuard } from "./portal-ritmo.guard";
-import { PortalAcessoEmailController } from "./portal-acesso-email.controller";
 import { PortalController } from "./portal.controller";
 import { PortalDocumentosController } from "./portal-documentos.controller";
 import { PortalDadosGiController } from "./portal-dados-gi.controller";
@@ -546,13 +545,28 @@ describe("O RESTO DO SISTEMA NÃO MUDOU", () => {
     expect(fonte("app.module.ts")).not.toContain("trust proxy");
   });
 
-  it("as CINCO rotas anônimas saíram do balde global e ganharam o guard", () => {
+  /*
+   * ─ ERAM CINCO, E SAO DUAS AQUI: AS OUTRAS TRES SAO DE UMA FRENTE QUE NAO ESTA PUBLICADA ───────
+   *
+   * ┌─ O DEFEITO QUE ISTO CONSERTA, e ele era meu ────────────────────────────────────────────────┐
+   * │ Este arquivo importava `PortalAcessoEmailController`, que pertence a frente da PORTA DE      │
+   * │ E-MAIL do Portal, **nao commitada** (bloqueada pelo correio). Com o import, a `main` NAO      │
+   * │ passava no `tsc --noEmit` em checkout limpo, e ninguem viu porque o gate sempre rodou no      │
+   * │ repositorio de trabalho, onde o arquivo existe SOLTO. Apareceu ao trazer a homologacao para   │
+   * │ a `main`: `Cannot find module './portal-acesso-email.controller'`.                            │
+   * │                                                                                             │
+   * │ A PRODUCAO NUNCA FOI AFETADA, e vale dizer por que: `nest build` nao compila arquivo de       │
+   * │ teste, entao o `dist` sempre esteve certo. O que quebrava era o typecheck, ou seja o GATE.    │
+   * │                                                                                             │
+   * │ QUANDO A PORTA DE E-MAIL SUBIR, as tres linhas voltam: `solicitar`, `confirmar` e            │
+   * │ `identidade`, e o titulo volta a dizer CINCO. A regra do balde vale para elas do mesmo jeito; │
+   * │ o que nao pode e um teste da `main` depender de arquivo que a `main` nao tem.                 │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   */
+  it("as DUAS rotas anônimas publicadas saíram do balde global e ganharam o guard", () => {
     const anonimas: [object, string][] = [
       [PortalController.prototype, "identificar"],
       [PortalController.prototype, "recuperacao"],
-      [PortalAcessoEmailController.prototype, "solicitar"],
-      [PortalAcessoEmailController.prototype, "confirmar"],
-      [PortalAcessoEmailController.prototype, "identidade"],
     ];
     for (const [alvo, metodo] of anonimas) {
       const guards = Reflect.getMetadata("__guards__", (alvo as never)[metodo]) ?? [];
@@ -602,7 +616,7 @@ describe("O RESTO DO SISTEMA NÃO MUDOU", () => {
     const anonimas: [object, string][] = [
       [PortalController.prototype, "identificar"],
       [PortalController.prototype, "recuperacao"],
-      [PortalAcessoEmailController.prototype, "solicitar"],
+      // A linha da porta de e-mail sai pelo mesmo motivo do bloco acima: frente nao publicada.
     ];
     for (const [alvo, metodo] of anonimas) {
       const guards = (Reflect.getMetadata("__guards__", (alvo as never)[metodo]) ??

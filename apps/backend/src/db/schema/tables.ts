@@ -19,7 +19,12 @@ import {
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { ACEITES_REGISTRAVEIS, SITUACOES_ENCERRADAS_SEM_EXITO } from "../../domain/candidatura";
-import { CANDIDATURA_SITUACOES } from "@ea/shared-types";
+import {
+  CAMPOS_DE_DIVERGENCIA,
+  CANDIDATURA_SITUACOES,
+  DECISOES_DE_DIVERGENCIA,
+  ESCOPOS_DE_DIVERGENCIA,
+} from "@ea/shared-types";
 import type { CampoExtraidoPortal, VereditoDoDocumento } from "@ea/shared-types";
 import { FONTES_EXTERNAS } from "../../domain/as-etapa-externa";
 import { RETENCAO_EVENTO_ACAO, RETENCAO_EVENTO_RESULTADO } from "../../domain/retencao-evento";
@@ -2914,6 +2919,20 @@ export const vagas = pgTable(
     solicitanteEmail: varchar("solicitante_email", { length: 180 }),
     dataSolicitacao: date("data_solicitacao"),
     dataAlinhamento: date("data_alinhamento"),
+    /**
+     * ─ O REALINHAMENTO DE PERFIL (migration 0138), E POR QUE É COLUNA NOVA ───────────────────────
+     *
+     * O cliente define um perfil e depois pede um NOVO alinhamento dele. É campo que O TIME PREENCHE
+     * A MÃO, pelo MESMO caminho do `dataAlinhamento` logo acima (`camposDaTrilha`, que serve a
+     * criação e a edição): o sistema nunca o carimba.
+     *
+     * RECARIMBAR O `dataAlinhamento` FOI RECUSADO, e o motivo é que o custo de errar é irreversível:
+     * sobrescrever apagaria para sempre a data do alinhamento ORIGINAL, que é o marco de quando o
+     * perfil foi combinado. E o pedido do diretor é COMPARATIVO ("definiu um perfil E DEPOIS pediu
+     * outro"), então a pergunta que a tela faz é "quanto tempo depois", e ela precisa das duas
+     * pontas. Guardar as duas é aditivo; sobrescrever destrói.
+     */
+    dataRealinhamento: date("data_realinhamento"),
     envioShortlist: date("envio_shortlist"),
 
     /**
@@ -3207,6 +3226,36 @@ export const vagas = pgTable(
     }),
 
     /**
+     * ─ OS CARIMBOS DA REABERTURA (migration 0138) ─────────────────────────────────────────────────
+     *
+     * `dataReabertura` é o dia em que a porta `reabrir` rodou. CARIMBO DE SISTEMA, não campo de
+     * formulário.
+     *
+     * ┌─ POR QUE EXISTE UM PRAZO "ANTERIOR", E ELE NÃO É CURIOSIDADE ───────────────────────────┐
+     * │ A SLA desta casa é uma contagem REGRESSIVA até a Previsão De Entrega (`dataLimite` menos │
+     * │ hoje), e por isso "zerar a SLA" NÃO EXISTE: em contagem regressiva o que existe é um     │
+     * │ PRAZO NOVO. Foi a decisão do diretor, e é a única que cabe na régua que já está no ar.   │
+     * │                                                                                         │
+     * │ Guardar o prazo anterior é o que permite a frase que o relatório precisa dizer: "esta    │
+     * │ vaga reabriu e o prazo foi renegociado de X para Y". Sem ele, a vaga reaberta apareceria │
+     * │ com um prazo novo e ninguém saberia que houve um primeiro, o que é a diferença entre um  │
+     * │ ATRASO e uma RENEGOCIAÇÃO.                                                              │
+     * └─────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * `set null` NO AUTOR, sem check de "tudo ou nada" entre as duas colunas: mesmo desenho do
+     * `statusManualPorId` logo acima. Apagar um usuário não pode falhar por causa de uma vaga que
+     * ele reabriu meses antes, e QUEM reabriu continua respondido pela trilha
+     * (`as_vaga_status_eventos.por_id`), que a reabertura já grava sempre.
+     *
+     * §A.6: duas datas e um id de usuário INTERNO. Nenhum dado de candidato.
+     */
+    dataReabertura: date("data_reabertura"),
+    dataLimiteAnterior: date("data_limite_anterior"),
+    reaberturaPorId: uuid("reabertura_por_id").references(() => usuarios.id, {
+      onDelete: "set null",
+    }),
+
+    /**
      * ─ O INSTANTE EM QUE A VAGA ENCERROU, CARIMBADO PELO SERVIDOR (migration 0103) ──────────────
      *
      * PARA QUE ELA EXISTE: é o RELÓGIO DA RETENÇÃO (§A.6). O expurgo de candidatos passa a tratar
@@ -3299,6 +3348,11 @@ export const vagas = pgTable(
     idxStatusManualEm: index("idx_vagas_status_manual_em")
       .on(t.statusManualEm)
       .where(sql`${t.statusManualEm} is not null`),
+    // O MESMO DESENHO PARA A REABERTURA (0138): a pergunta é "quais vagas foram reabertas", nunca
+    // "todas as vagas", e a coluna é nula na esmagadora maioria das linhas.
+    idxDataReabertura: index("idx_vagas_data_reabertura")
+      .on(t.dataReabertura)
+      .where(sql`${t.dataReabertura} is not null`),
     // O CHECK `ck_vagas_limite_sazonal` (data limite obrigatória na vaga SAZONAL) foi REMOVIDO na
     // correção de 21/08: a amarração era engano, a data limite vale para qualquer natureza de vaga.
   }),
@@ -3543,6 +3597,80 @@ export const vagaClienteCorrecoes = pgTable(
     ckHouveTroca: check(
       "ck_vaga_cliente_correcoes_houve_troca",
       sql`${t.deCodCliente} is distinct from ${t.paraCodCliente}`,
+    ),
+  }),
+);
+
+/**
+ * ─ A TRANSFERÊNCIA DA VAGA DE UM CONSULTOR PARA OUTRO (item 5 da OST de 30/09/2026) ─────────────
+ *
+ * O QUE ELA GUARDA: quem transferiu, quando, e de qual consultor para qual. `vagas.consultor_id` é
+ * uma coluna só, e a próxima escrita apaga a anterior: sem este rastro, a pergunta "quem tirou esta
+ * vaga de mim?" não tem resposta consultável em lugar nenhum, e `atualizado_em` não serve (ele diz
+ * QUANDO a linha foi tocada, nunca QUEM tocou nem qual era o valor antes, e é sobrescrito pela
+ * escrita seguinte).
+ *
+ * ┌─ TABELA PRÓPRIA, E NÃO UMA LINHA EM `as_vaga_status_eventos` ──────────────────────────────────┐
+ * │ É O MESMO ARGUMENTO, MEDIDO, DE `vaga_cliente_correcoes` (0118), e ele não é de desenho: é de   │
+ * │ LEITOR. Aquela tabela é a linha do tempo do MOVIMENTO DE STATUS, e transferir de consultor não  │
+ * │ move status nenhum, então a linha teria de ser gravada como "ABERTA para ABERTA", inventando um │
+ * │ passo que não aconteceu. E `vaga-status.service.remover` CONTA eventos com `de = codigo or      │
+ * │ para = codigo` para escolher entre APAGAR e INATIVAR um status do catálogo: uma transferência   │
+ * │ gravada ali passaria a transformar "zero trilha, apaga" em "há vagas que já passaram por ele,   │
+ * │ inativa", por causa de uma troca de responsável que não é passagem de status.                   │
+ * └────────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * `de_consultor_id` É NULÁVEL porque a vaga pode não ter consultor: a espelhada do Pandapé nasce
+ * sem lado, e a vaga aberta por um RECRUITER sem contraparte também. Nulo aqui é "não havia
+ * responsável", que é diferente de um id.
+ *
+ * SET NULL NO AUTOR E NOS DOIS LADOS, como em `vaga_cliente_correcoes` e em `as_vaga_status_eventos`:
+ * apagar um usuário não pode FALHAR por causa de uma transferência de meses atrás, e o rastro não
+ * pode sumir junto com ele. Sem os ids, ele ainda diz QUANDO houve transferência naquela vaga.
+ *
+ * §A.6: um id de vaga e três ids de usuário INTERNO, mais uma data. Nenhum dado de candidato, nenhum
+ * CPF, nenhum texto livre vindo de fora.
+ */
+export const vagaConsultorTransferencias = pgTable(
+  "vaga_consultor_transferencias",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    /** CASCADE: o rastro é DA vaga e não sobrevive a ela, mesma regra de `vaga_cliente_correcoes`. */
+    vagaId: uuid("vaga_id")
+      .notNull()
+      .references(() => vagas.id, { onDelete: "cascade" }),
+    /** De quem a vaga saiu. NULO é "não havia consultor", e não um id desconhecido. */
+    deConsultorId: uuid("de_consultor_id").references(() => usuarios.id, { onDelete: "set null" }),
+    /**
+     * Para quem a vaga foi. NÃO É `notNull` apesar de a operação sempre ter destino: a FK é
+     * `set null`, e uma coluna `not null` com `on delete set null` é uma contradição que faz a
+     * exclusão do usuário FALHAR anos depois, que é exatamente o que este `set null` existe para
+     * impedir. Quem garante que a operação tem destino é o DTO, na entrada.
+     */
+    paraConsultorId: uuid("para_consultor_id").references(() => usuarios.id, {
+      onDelete: "set null",
+    }),
+    /** QUEM transferiu, da sessão. Autoria é trilha, nunca campo de formulário. */
+    porId: uuid("por_id").references(() => usuarios.id, { onDelete: "set null" }),
+    criadoEm,
+  },
+  (t) => ({
+    /** (vaga, quando): a linha do tempo da vaga, da mais antiga para a mais recente. */
+    idxVaga: index("idx_vaga_consultor_transferencias_vaga").on(t.vagaId, t.criadoEm),
+    /**
+     * (consultor de destino, quando): a carteira que uma pessoa RECEBEU. É a pergunta que a
+     * transferência cria ("o que passou a ser meu, e quando?"), e sem o índice ela varre a tabela.
+     */
+    idxPara: index("idx_vaga_consultor_transferencias_para").on(t.paraConsultorId, t.criadoEm),
+    /**
+     * LINHA QUE NÃO É TRANSFERÊNCIA NÃO EXISTE, e quem garante é o banco, como em
+     * `ck_vaga_cliente_correcoes_houve_troca`: sem o check, um caminho futuro que gravasse toda
+     * edição da vaga transformaria o rastro numa lista de "salvei o formulário", e a pergunta que
+     * ele responde ficaria enterrada no ruído.
+     */
+    ckHouveTransferencia: check(
+      "ck_vaga_consultor_transferencias_houve_troca",
+      sql`${t.deConsultorId} is distinct from ${t.paraConsultorId}`,
     ),
   }),
 );
@@ -3960,6 +4088,26 @@ export const asEtapasFunil = pgTable("as_etapas_funil", {
    * pergunta tem UMA resposta, e duas linhas marcadas fariam a rotina escolher.
    */
   destinoDoCancelamento: boolean("destino_do_cancelamento").notNull().default(false),
+  /**
+   * ─ PARA QUAL ETAPA VOLTA QUEM ESTAVA COM O CLIENTE, QUANDO A VAGA REABRE (migration 0138) ─────
+   *
+   * A vaga ENTREGUE em que o cliente reprovou REABRE, e o diretor decidiu que os candidatos voltam
+   * para a TRIAGEM: "se o cliente reprovou, o time precisa fazer nova triagem". Quem sai da etapa de
+   * entrega faz a vaga voltar a ser ABERTA pela DERIVAÇÃO, sozinha.
+   *
+   * O FLAG EM VEZ DO LITERAL, pelo mesmo argumento dos dois flags acima, e com uma razão medida a
+   * mais: o flag `inicial` NÃO serve, porque a etapa inicial do catálogo é a `CAPTACAO`, e devolver
+   * todo mundo para a Captação é um passo antes do que o diretor pediu.
+   *
+   * NO MÁXIMO UMA linha marcada, por índice parcial único no banco, no molde do `inicial` e do
+   * `destinoDoCancelamento`: a pergunta tem UMA resposta.
+   *
+   * FAIL-CLOSED DO OUTRO LADO DO `destinoDoCancelamento`, e a assimetria é deliberada: lá, sem
+   * destino ninguém se move e o cancelamento acontece de todo jeito. Aqui MOVER É A OPERAÇÃO
+   * INTEIRA, então sem destino a reabertura RECUSA, em vez de deixar a vaga ENTREGUE afirmando ter
+   * reaberto.
+   */
+  destinoDaReabertura: boolean("destino_da_reabertura").notNull().default(false),
   /**
    * ─ NESTA ETAPA SE MARCA ENTREVISTA? (Frente E, ponto 8, migration 0131) ───────────────────────
    *
@@ -4706,6 +4854,23 @@ const SITUACOES_CANDIDATURA_SQL = sql.raw(
 );
 
 /**
+ * AS TRES LISTAS DA FILA DE DIVERGENCIAS, DERIVADAS DO CONTRATO e nunca redigitadas.
+ *
+ * Mesmo argumento de `FONTES_EXTERNAS_SQL`, e aqui ele pesa mais em UMA delas: `CAMPOS_DE_DIVERGENCIA`
+ * e o que governa a §A.6 da tabela (só campo NAO-PESSOAL entra). Digitar a lista aqui criaria a
+ * segunda, e o dia em que as duas discordassem seria o dia em que um campo pessoal passaria pelo
+ * CHECK sem ninguém ler o parágrafo que o proíbe.
+ *
+ * `sql.raw` pelo mesmo motivo dos vizinhos: os valores vêm de constante de CÓDIGO, nunca de entrada
+ * de usuário, e aqui não se concatena dado externo.
+ */
+const ESCOPOS_DE_DIVERGENCIA_SQL = sql.raw(ESCOPOS_DE_DIVERGENCIA.map((e) => `'${e}'`).join(", "));
+const CAMPOS_DE_DIVERGENCIA_SQL = sql.raw(CAMPOS_DE_DIVERGENCIA.map((c) => `'${c}'`).join(", "));
+const DECISOES_DE_DIVERGENCIA_SQL = sql.raw(
+  DECISOES_DE_DIVERGENCIA.map((d) => `'${d}'`).join(", "),
+);
+
+/**
  * ─ IDENTIDADE EXTERNA: UMA PESSOA, N IDENTIDADES, SEM DUPLICAR A PESSOA ────────────────────────
  *
  * A MESMA PESSOA APARECE EM MAIS DE UM SISTEMA (hoje Pandapé e Digai), e cada um a chama por um id
@@ -4993,6 +5158,124 @@ export const asIngestaoConflitos = pgTable(
     ),
     ckFonte: check("ck_as_ingestao_conflitos_fonte", sql`${t.fonte} in (${FONTES_EXTERNAS_SQL})`),
     idxCandidato: index("idx_as_ingestao_conflitos_candidato").on(t.candidatoId),
+  }),
+);
+
+/**
+ * ─ AsIngestaoDivergencias: A FILA DE DIVERGENCIAS DA INGESTAO (migration 0136) ──────────────────
+ *
+ * IRMA DE `as_ingestao_conflitos`, e o molde e dela: o padrao da casa para "o ciclo NAO decide
+ * sozinho, vira linha de revisao". A diferenca esta no que se revisa: lá é a IDENTIDADE da pessoa
+ * (dois ids que apontam para gente diferente), aqui é a PRECEDENCIA do dado (o ATS discorda do EA
+ * num campo que uma pessoa preencheu).
+ *
+ * ┌─ O DEFEITO QUE ELA EXISTE PARA MATAR (medido em 30/09/2026) ─────────────────────────────────┐
+ * │ O `update` da candidatura era `set etapa, situacao, motivo_descarte where (atuais) is distinct │
+ * │ from (novos)`, e aquele `is distinct from` NAO ERA PROTECAO, ERA O GATILHO: existia só para    │
+ * │ não empurrar `atualizado_em` numa reentrega idêntica, e comparava VALOR com VALOR, nunca AUTOR │
+ * │ com AUTOR. O time avançava a pessoa três etapas e em até 30 minutos ela VOLTAVA, em 24 das 27  │
+ * │ pastas do de/para, SEM NADA FALHAR: a ingestão não escreve em `as_candidatura_etapas`, então a │
+ * │ trilha continuava dizendo "foi para Entrevista Cliente" enquanto a coluna dizia CAPTACAO.      │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ A IDEMPOTENCIA E DOIS INDICES PARCIAIS, E ISSO NAO E ARRUMACAO ────────────────────────────┐
+ * │ A varredura roda até 48 vezes por dia. Sem unique, a MESMA divergência viraria 48 linhas por  │
+ * │ dia e a fila de trabalho viraria log. A reincidência INCREMENTA `ocorrencias` e atualiza       │
+ * │ `ultimaEm`, e o `on conflict` do serviço se apoia nestes índices.                              │
+ * │                                                                                              │
+ * │ SAO DOIS PORQUE O NULO NAO COLIDE EM POSTGRES: escopo VAGA não tem candidatura, e um índice   │
+ * │ único sobre a coluna nulável nunca conflitaria, ou seja a reincidência abriria linha nova em   │
+ * │ toda volta. Cada índice cobre a população em que TODAS as suas colunas de chave são NOT NULL,  │
+ * │ e quem garante isso é o CHECK do alvo (`ck_as_ingestao_divergencias_alvo`, na migration).      │
+ * │                                                                                              │
+ * │ PARCIAIS EM `resolvidoEm is null` de propósito: resolvida, a linha SAI do índice, e a mesma    │
+ * │ divergência acontecendo DEPOIS da decisão abre linha nova, que é o certo (é fato novo, e o     │
+ * │ histórico da decisão antiga fica intacto).                                                     │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ §A.6: POR QUE OS DOIS VALORES FICAM EM CLARO, E O QUE NUNCA ENTRA AQUI ────────────────────┐
+ * │ `CAMPOS_DE_DIVERGENCIA` é lista FECHADA, e os SETE são código, rótulo de vaga ou número: não  │
+ * │ há nome, CPF, e-mail, telefone nem nascimento. É isso que torna a tela útil (o time compara   │
+ * │ os dois lados sem abrir a ficha). A varredura TAMBEM reescreve os campos PESSOAIS de           │
+ * │ `as_candidatos`, e eles NAO entram: não estão na ordem do diretor (§A.14/§A.31) e o valor      │
+ * │ deles aqui seria PII em superfície nova, fora do alcance de `aplicarRetencao`.                 │
+ * │                                                                                              │
+ * │ O NOME DA PESSOA NAO E COPIADO: a tela o lê por JOIN em `as_candidatos`, então o expurgo que  │
+ * │ anonimiza a ficha já apaga o nome que a fila mostra, sem precisar voltar a esta tabela.        │
+ * │                                                                                              │
+ * │ `motivo_descarte` ERA O OITAVO E SAIU POR VETO DO `seguranca` (30/09/2026). A justificativa    │
+ * │ antiga ("é nome do catálogo interno") estava ERRADA: o campo tem duas naturezas               │
+ * │ (`candidatos.dto.ts`) e continua PROSA no `ENVIADO_PARA_ADMISSAO`, e a rotina de expurgo NULA  │
+ * │ a coluna (`retencao-candidatos.service.ts`), ou seja a casa já o classificou como dado         │
+ * │ pessoal. E o `cascade` daqui NUNCA dispararia no expurgo, que ANONIMIZA sem deletar a          │
+ * │ candidatura: a frase ficaria em claro nesta tabela para sempre. A TRAVA do campo continua      │
+ * │ inteira (`CAMPOS_PROTEGIDOS_DA_CANDIDATURA`); só a linha de fila saiu.                         │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * FK `cascade` nos dois alvos: divergência é uma PERGUNTA SOBRE o alvo, e sem o alvo ela não tem
+ * resposta possível nem caminho humano de adoção. `restrict` travaria a exclusão da vaga, que é
+ * operação real, e deixaria linha de fila que ninguém consegue resolver nem fechar.
+ */
+export const asIngestaoDivergencias = pgTable(
+  "as_ingestao_divergencias",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    /** CANDIDATURA ou VAGA (`ESCOPOS_DE_DIVERGENCIA`). Diz onde a diferença mora. */
+    escopo: varchar("escopo", { length: 20 }).notNull(),
+    /** Um de `CAMPOS_DE_DIVERGENCIA`. Lista FECHADA, e é ela que governa a §A.6 desta tabela. */
+    campo: varchar("campo", { length: 40 }).notNull(),
+    candidaturaId: uuid("candidatura_id").references(() => asCandidaturas.id, {
+      onDelete: "cascade",
+    }),
+    vagaId: uuid("vaga_id").references(() => vagas.id, { onDelete: "cascade" }),
+    /** O que está no EA hoje. Código ou número, NUNCA dado pessoal. */
+    valorEa: text("valor_ea"),
+    /** O que o ATS trouxe. Código ou número, NUNCA dado pessoal. */
+    valorAts: text("valor_ats"),
+    ocorrencias: integer("ocorrencias").notNull().default(1),
+    primeiraEm: timestamp("primeira_em", { withTimezone: true }).notNull().defaultNow(),
+    ultimaEm: timestamp("ultima_em", { withTimezone: true }).notNull().defaultNow(),
+    /** Nulo é "ainda na fila". Anda SEMPRE em par com `decisao` (CHECK na migration). */
+    resolvidoEm: timestamp("resolvido_em", { withTimezone: true }),
+    resolvidoPorId: uuid("resolvido_por_id").references(() => usuarios.id, {
+      onDelete: "set null",
+    }),
+    /** `MANTIDO_EA` ou `ADOTADO_ATS` (`DECISOES_DE_DIVERGENCIA`). */
+    decisao: varchar("decisao", { length: 20 }),
+    criadoEm,
+    atualizadoEm,
+  },
+  (t) => ({
+    ckEscopo: check(
+      "ck_as_ingestao_divergencias_escopo",
+      sql`${t.escopo} in (${ESCOPOS_DE_DIVERGENCIA_SQL})`,
+    ),
+    ckCampo: check(
+      "ck_as_ingestao_divergencias_campo",
+      sql`${t.campo} in (${CAMPOS_DE_DIVERGENCIA_SQL})`,
+    ),
+    ckDecisao: check(
+      "ck_as_ingestao_divergencias_decisao",
+      sql`${t.decisao} is null or ${t.decisao} in (${DECISOES_DE_DIVERGENCIA_SQL})`,
+    ),
+    ckResolucao: check(
+      "ck_as_ingestao_divergencias_resolucao",
+      sql`(${t.resolvidoEm} is null) = (${t.decisao} is null)`,
+    ),
+    ckAlvo: check(
+      "ck_as_ingestao_divergencias_alvo",
+      sql`(${t.escopo} = 'CANDIDATURA' and ${t.candidaturaId} is not null and ${t.vagaId} is not null)
+          or (${t.escopo} = 'VAGA' and ${t.candidaturaId} is null and ${t.vagaId} is not null)`,
+    ),
+    ckOcorrencias: check("ck_as_ingestao_divergencias_ocorrencias", sql`${t.ocorrencias} > 0`),
+    uqCandidaturaAberta: uniqueIndex("uq_as_ingestao_divergencias_candidatura_aberta")
+      .on(t.escopo, t.candidaturaId, t.vagaId, t.campo)
+      .where(sql`${t.resolvidoEm} is null and ${t.candidaturaId} is not null`),
+    uqVagaAberta: uniqueIndex("uq_as_ingestao_divergencias_vaga_aberta")
+      .on(t.escopo, t.vagaId, t.campo)
+      .where(sql`${t.resolvidoEm} is null and ${t.candidaturaId} is null`),
+    idxFila: index("idx_as_ingestao_divergencias_fila").on(t.resolvidoEm, t.ultimaEm),
+    idxAlvo: index("idx_as_ingestao_divergencias_alvo").on(t.candidaturaId, t.vagaId),
   }),
 );
 

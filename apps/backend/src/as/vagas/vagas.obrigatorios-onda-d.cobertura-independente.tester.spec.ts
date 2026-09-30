@@ -188,11 +188,11 @@ describe("a mensagem da recusa", () => {
    */
   it.each([
     ["codigo", "Código da vaga"],
-    ["nomeDivulgacao", "Nome de divulgação"],
+    ["nomeDivulgacao", "Nome da vaga"],
     ["cargoId", "Cargo"],
-    ["natureza", "Natureza"],
-    ["sazonalidade", "Sazonalidade"],
-    ["linhaServicoId", "Linha de serviço"],
+    ["natureza", "Tipo de vaga"],
+    ["sazonalidade", "Tipo de processo"],
+    ["linhaServicoId", "Célula de atendimento"],
     ["dataAbertura", "Data de abertura"],
   ])("continua recusando a publicação sem %s", async (campo, rotulo) => {
     const { catalogo, vagas } = montar();

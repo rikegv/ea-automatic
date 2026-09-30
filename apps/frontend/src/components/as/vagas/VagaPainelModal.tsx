@@ -544,7 +544,7 @@ export function VagaPainelModal({
         : [...new Set([...atual, ...idsVisiveis])],
     );
   }
-  const titulo = vaga.nomeDivulgacao ?? "Vaga Sem Nome De Divulgação";
+  const titulo = vaga.nomeDivulgacao ?? "Vaga Sem Nome";
   /**
    * A VAGA QUE NÃO RECEBE CANDIDATO NOVO NEM OFERECE O BOTÃO (trava 2 do backend).
    *

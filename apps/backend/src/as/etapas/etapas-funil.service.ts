@@ -42,6 +42,14 @@ export interface AsEtapaFunilLinha extends AsEtapaFunil {
   entregaAoCliente: boolean;
   destinoDoCancelamento: boolean;
   /**
+   * PARA QUAL ETAPA VOLTA QUEM ESTAVA COM O CLIENTE, QUANDO A VAGA REABRE (migration 0138).
+   *
+   * FICA AQUI DENTRO, e NÃO em `AsEtapaFunil`, pela MESMA razão dos dois flags acima: é insumo
+   * INTERNO da reabertura, e `etapas-funil.leitura-sem-contagem.spec.ts` congela o payload de
+   * `GET /as/etapas` em SETE campos EXATOS.
+   */
+  destinoDaReabertura: boolean;
+  /**
    * ─ NESTA ETAPA SE MARCA ENTREVISTA? (Frente E, ponto 8, migration 0131) ───────────────────────
    *
    * FICA AQUI DENTRO, e NÃO em `AsEtapaFunil`, pela MESMA razão dos dois flags acima e por uma a
@@ -99,6 +107,7 @@ export class EtapasFunilService {
         ativa: asEtapasFunil.ativa,
         entregaAoCliente: asEtapasFunil.entregaAoCliente,
         destinoDoCancelamento: asEtapasFunil.destinoDoCancelamento,
+        destinoDaReabertura: asEtapasFunil.destinoDaReabertura,
         temEntrevista: asEtapasFunil.temEntrevista,
       })
       .from(asEtapasFunil)
@@ -190,6 +199,27 @@ export class EtapasFunilService {
    */
   async etapaDoCancelamento(): Promise<AsEtapaFunilLinha | null> {
     return (await this.todas()).find((e) => e.destinoDoCancelamento && e.ativa) ?? null;
+  }
+
+  /**
+   * PARA QUAL ETAPA VOLTA QUEM ESTAVA COM O CLIENTE, QUANDO A VAGA REABRE (0138). Nula quando não há.
+   *
+   * ┌─ ELA NÃO LANÇA AQUI, MAS QUEM CHAMA RECUSA, E A ASSIMETRIA COM O `etapaDoCancelamento` É A ─┐
+   * │ RAZÃO INTEIRA DE ELA EXISTIR SEPARADA. No cancelamento, sem destino ninguém se move e o      │
+   * │ cancelamento acontece de todo jeito: bloqueá-lo por causa de catálogo desfaria uma decisão do │
+   * │ diretor, e a trilha diz que o agrupamento não aconteceu.                                     │
+   * │                                                                                             │
+   * │ NA REABERTURA, MOVER É A OPERAÇÃO INTEIRA: é saindo da etapa de entrega que a vaga volta a    │
+   * │ ser ABERTA, pela derivação. Sem destino, a reabertura gravaria carimbo e prazo novo numa vaga │
+   * │ que continua ENTREGUE, ou seja, afirmaria uma reabertura que não houve. Então quem chama      │
+   * │ RECUSA, com a frase de configuração, no molde do `etapaInicial`.                              │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * SÓ A ATIVA: devolver gente para uma etapa que o diretor tirou de circulação a esconderia dos
+   * seletores e dos filtros, que é o contrário de reabrir.
+   */
+  async etapaDaReabertura(): Promise<AsEtapaFunilLinha | null> {
+    return (await this.todas()).find((e) => e.destinoDaReabertura && e.ativa) ?? null;
   }
 
   /**

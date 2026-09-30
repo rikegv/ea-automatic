@@ -34,12 +34,20 @@ import * as dtosDoModulo from "./candidatos.dto";
  * └─────────────────────────────────────────────────────────────────────────────────────────────┘
  */
 
-/** Os quatro corpos, com a propriedade de lista que cada um carrega. */
+/**
+ * Os CINCO corpos, com a propriedade de lista que cada um carrega.
+ *
+ * O QUINTO NASCEU NA OST DE 30/09/2026 (troca de vaga em massa), e entrar nesta tabela É A RÉGUA:
+ * corpo em massa que não está aqui não tem teto conferido, não tem a lista exigida e aceita id que
+ * não é UUID, em silêncio. A tabela é o que faz os cinco obedecerem à MESMA régua sem ninguém
+ * relembrá-la a cada rota nova.
+ */
 const CORPOS = {
   adicionar: { classe: "AdicionarEmLoteDto", lista: "candidatoIds" },
   finalizar: { classe: "FinalizarPosicaoEmLoteDto", lista: "candidaturaIds" },
   saida: { classe: "RegistrarSaidaEmLoteDto", lista: "candidaturaIds" },
   mover: { classe: "MoverEtapaEmLoteDto", lista: "candidaturaIds" },
+  trocarVaga: { classe: "TrocarVagaEmLoteDto", lista: "candidaturaIds" },
 } as const;
 
 /** O que cada corpo precisa ALÉM da lista para ser válido: é o mínimo de cada rota. */
@@ -48,6 +56,8 @@ const COMPLEMENTO: Record<string, Record<string, unknown>> = {
   FinalizarPosicaoEmLoteDto: {},
   RegistrarSaidaEmLoteDto: { situacao: "DESCARTADO", motivo: "perfil não aderente" },
   MoverEtapaEmLoteDto: { etapa: "TRIAGEM" },
+  // A VAGA DE DESTINO é o mínimo da troca: sem ela o corpo não diz para onde a seleção vai.
+  TrocarVagaEmLoteDto: { vagaId: randomUUID() },
 };
 
 function classe(nome: string): new () => object {
@@ -180,6 +190,39 @@ describe("O motivo do desvínculo em massa tem a MESMA régua do individual", ()
       expect(erros(nome, base({ situacao, motivo: "perfil não aderente" }))).toHaveLength(0);
     });
   }
+});
+
+describe("A troca de vaga em massa exige a vaga de DESTINO, e o motivo é opcional", () => {
+  const nome = CORPOS.trocarVaga.classe;
+  const base = (over: Record<string, unknown> = {}) => ({ candidaturaIds: ids(2), ...over });
+
+  /**
+   * SEM A VAGA DE DESTINO O CORPO NÃO DIZ NADA: é o único campo obrigatório além da lista, e um lote
+   * aceito sem ele cairia no service sem saber para onde mover a seleção.
+   */
+  it("recusa o corpo SEM a vaga de destino", () => {
+    expect(erros(nome, base(), "vagaId").length).toBeGreaterThan(0);
+  });
+
+  it("recusa a vaga de destino que não é UUID", () => {
+    expect(erros(nome, base({ vagaId: "vaga-1" }), "vagaId").length).toBeGreaterThan(0);
+  });
+
+  /**
+   * O MOTIVO É OPCIONAL, com a MESMA régua do corpo individual (`TrocarVagaDto`): a troca conserta
+   * uma atribuição, e exigir texto para isso só faria escrever "correção" toda vez. Quem exige
+   * motivo é o DESFECHO, que encerra o processo de alguém.
+   */
+  it("aceita o lote SEM motivo", () => {
+    expect(erros(nome, base({ vagaId: randomUUID() }))).toHaveLength(0);
+  });
+
+  it("aceita o motivo escrito, e o guarda aparado", () => {
+    const corpo = base({ vagaId: randomUUID(), motivo: "  vaga errada na abertura  " });
+    expect(erros(nome, corpo, "motivo")).toHaveLength(0);
+    const instancia = plainToInstance(classe(nome), corpo) as { motivo: string };
+    expect(instancia.motivo).toBe("vaga errada na abertura");
+  });
 });
 
 describe("Os demais corpos em massa recusam valor fora da lista fechada", () => {

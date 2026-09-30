@@ -10,6 +10,7 @@ import {
   ReabrirVagaDto,
   CorrigirLiberacaoRevisaoDto,
   LiberarVagaRevisaoDto,
+  TransferirConsultorDaVagaDto,
 } from "./vagas.dto";
 import { VagasService } from "./vagas.service";
 
@@ -76,6 +77,25 @@ export class VagasController {
   @Get("pendentes-revisao/contagem")
   contagemPendentesDeRevisao() {
     return this.vagas.contarPendentesDeRevisao();
+  }
+
+  /**
+   * OS CONSULTORES QUE PODEM RECEBER UMA VAGA: o catálogo do seletor da transferência (item 5).
+   *
+   * CAMINHO FIXO ANTES DO `@Get(":id")`, e não é detalhe: o Nest casa na ORDEM de declaração, e a
+   * rota de parâmetro declarada antes engoliria "consultores" como se fosse um id de vaga. É a mesma
+   * razão escrita no bloco de `pendentes-revisao`.
+   *
+   * ENDPOINT, E NÃO AS LINHAS JÁ CARREGADAS (§A.37): a tela da Central de Vagas lista vagas, e
+   * derivar os consultores dali só ofereceria quem já tem vaga, que é o oposto do que a
+   * transferência precisa (quem vai RECEBER pode não ter nenhuma).
+   *
+   * SEM `@Roles`, como o resto da controller: é LEITURA de id e nome de usuário interno, e quem
+   * restringe o módulo é o menu `as-vagas` no `MenuGuard`.
+   */
+  @Get("consultores")
+  consultoresParaTransferencia() {
+    return this.vagas.consultoresParaTransferencia();
   }
 
   /** Quem abriu vem da SESSÃO, nunca do corpo: é trilha, não campo de formulário. */
@@ -306,6 +326,35 @@ export class VagasController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.vagas.corrigirLiberacaoDaRevisao(id, dto, user);
+  }
+
+  /**
+   * TRANSFERIR A VAGA DE UM CONSULTOR PARA OUTRO (item 5 da OST de 30/09/2026).
+   *
+   * PATCH e não POST: a vaga já existe e UMA propriedade dela muda. POST diria que algo nasce, e
+   * nascer é o que esta operação não faz. É o mesmo argumento do `PATCH candidaturas/:id/vaga`.
+   *
+   * ┌─ SEM `@Roles`, POR DECISÃO DO DIRETOR, E ISSO NÃO É "SEM GUARDA" ──────────────────────────┐
+   * │ NÍVEL CONSULTOR, no mesmo padrão já declarado nesta controller para revisar, baixar meta,   │
+   * │ mover status, fechar e cancelar. Quem barra é o MENU: `VagasController.*` é reivindicada     │
+   * │ pelo menu `as-vagas` em `domain/menus`, e o `MenuGuard` recusa quem não o tem, inclusive por │
+   * │ `curl`. A reivindicação é CURINGA, então este método novo já nasce coberto: numa controller  │
+   * │ reivindicada método a método ele nasceria FAIL-OPEN.                                        │
+   * │                                                                                            │
+   * │ `@Roles("MASTER")` aqui seria porta trancada para quem tem o menu, que é o defeito que a    │
+   * │ casa já pagou. As travas que a operação tem são de ESTADO, no service, e não de papel: o    │
+   * │ destino existe, está ATIVO e tem papel de A&S de CONSULTOR.                                │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * QUEM TRANSFERIU VEM DA SESSÃO, nunca do corpo, e vai para `vaga_consultor_transferencias`.
+   */
+  @Patch(":id/consultor")
+  transferirConsultor(
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body() dto: TransferirConsultorDaVagaDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.vagas.transferirConsultor(id, dto, user.id);
   }
 
   /**

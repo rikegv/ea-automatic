@@ -74,6 +74,28 @@ export interface ResultadoDaEscrita {
   id: string;
   /** A linha NASCEU nesta escrita? `undefined` vale como "não sei", e não como sim. */
   criada?: boolean;
+  /**
+   * QUANTAS DIVERGENCIAS esta escrita registrou em vez de sobrescrever (§A.6: contagem, nunca valor).
+   *
+   * A TRAVA DE PRECEDENCIA mora no adaptador porque é lá que os valores ATUAIS do EA são conhecidos
+   * (o ciclo só tem o lado do ATS), então é ele quem abre a linha de revisão. O ciclo recebe o
+   * NUMERO para somar no resumo, do mesmo jeito que já faz com `conflitosParaRevisao`: sem essa
+   * contagem, a fila encheria sem nenhum log dizer que a volta encontrou discordância.
+   */
+  divergencias?: number;
+  /**
+   * A SITUACAO QUE A CANDIDATURA EXISTENTE TEM HOJE NO EA, e ela existe para a RETENTATIVA da ponte.
+   *
+   * Com a trava de precedência, o ATS nunca mais escreve `situacao` em linha existente, então
+   * (`ENVIADO_PARA_ADMISSAO` + `admissao_id` nulo) passou a ter uma origem só: o INSERT da própria
+   * ingestão, numa volta em que a ponte não se completou. A régua está em
+   * `domain/as-precedencia-ingestao.ts` (`ponteDeveDisparar`), e não num `if` do ciclo.
+   *
+   * `undefined` É "NAO SEI", e cai para o lado de NÃO criar admissão.
+   */
+  situacaoNoEa?: string | null;
+  /** A candidatura EXISTENTE já aponta para uma admissão? `undefined` vale como "não sei". */
+  jaTemAdmissao?: boolean;
 }
 
 export interface PortaBanco {
@@ -169,19 +191,26 @@ export type ResultadoDaPonte =
  * │ Chamar o service daqui arrastaria a Esteira para dentro do contrato do `tester`.               │
  * └──────────────────────────────────────────────────────────────────────────────────────────────┘
  *
- * ┌─ ELA SÓ É CHAMADA QUANDO A CANDIDATURA NASCEU NESTE CICLO, E ISSO É A REGRA, NÃO DETALHE ────┐
- * │ O cenário que a ponte atende é UM: quem chega pela varredura JÁ contratado no ATS, ou seja     │
- * │ quem nunca passou pelo funil dentro do EA. Candidatura que JÁ EXISTIA não chama a ponte.       │
+ * ┌─ QUANDO ELA É CHAMADA, e a régua MUDOU em 30/09/2026 (OST de precedência) ───────────────────┐
+ * │ ANTES: só no NASCIMENTO da candidatura. A restrição estava CERTA naquele mundo, e o motivo era │
+ * │ medido: a varredura SOBRESCREVIA etapa e situação de candidatura existente (o                  │
+ * │ `where ... is distinct from` do repositório existia para não empurrar `atualizado_em`, e não    │
+ * │ para proteger o trabalho de ninguém: valor diferente era justamente o caso que ele autorizava).│
+ * │ Disparar no update faria uma admissão nascer de um sinal do ATS que pode estar desfazendo o    │
+ * │ avanço que o time fez aqui, e admissão criada é muito mais caro de desfazer que etapa trocada. │
  * │                                                                                               │
- * │ O MOTIVO É MEDIDO: a varredura SOBRESCREVE etapa e situação de candidatura existente (o        │
- * │ `where ... is distinct from` do repositório existe para não empurrar `atualizado_em`, e não     │
- * │ para proteger o trabalho de ninguém: valor diferente é justamente o caso que ele autoriza).    │
- * │ Se a ponte disparasse no update, uma admissão nasceria a partir de um sinal do ATS que pode    │
- * │ estar desfazendo o avanço que o time fez aqui, e admissão criada é muito mais caro de desfazer │
- * │ do que etapa trocada. O ATS NÃO PROMOVE À ADMISSÃO quem já está sendo trabalhado no EA.        │
+ * │ AGORA: nascimento OU a condição de RETENTATIVA. A trava de precedência foi implementada (o     │
+ * │ diretor decidiu: o EA vence e a diferença vira fila de revisão), então o ATS NUNCA MAIS        │
+ * │ escreve `situacao` em linha existente. Logo o par (`situacao = ENVIADO_PARA_ADMISSAO` **e**     │
+ * │ `admissao_id` nulo) passou a ter UMA origem possível: o INSERT da própria ingestão, numa volta │
+ * │ em que a ponte não se completou (CPF ausente, falha de rede). Retentar ali é o CONSERTO da     │
+ * │ ponte adiada, e não um risco novo. A régua é domínio puro e tem UM dono:                       │
+ * │ `ponteDeveDisparar`, em `domain/as-precedencia-ingestao.ts`.                                   │
  * │                                                                                               │
- * │ A regra de precedência (a varredura deixar de sobrescrever quem já existe) é DECISÃO PENDENTE  │
- * │ do diretor e NÃO está implementada aqui, nem em parte.                                         │
+ * │ A ORDEM IMPORTA, e é por isso que este parágrafo é longo: a retentativa só ficou segura        │
+ * │ PORQUE a trava entrou. Antes dela, esta MESMA condição seria um furo, porque o ATS era quem    │
+ * │ escrevia a situação que a retentativa leria. O ATS continua NÃO PROMOVENDO À ADMISSÃO quem     │
+ * │ está sendo trabalhado no EA: ele não consegue mais escrever a situação que promove.            │
  * └──────────────────────────────────────────────────────────────────────────────────────────────┘
  */
 export interface PortaPonteParaAdmissao {
@@ -281,6 +310,15 @@ export interface ResumoDoCiclo {
   etapasNaoMapeadas: string[];
   /** Quantos casos foram para revisão humana em vez de o ciclo escolher sozinho. */
   conflitosParaRevisao: number;
+  /**
+   * Quantas DIVERGENCIAS de precedência foram registradas nesta passada (OST de 30/09/2026).
+   *
+   * ELA NAO E ERRO, E A TRAVA FUNCIONANDO. Cada unidade aqui é um campo que o ATS queria sobrescrever
+   * e NAO sobrescreveu, porque havia trabalho humano no caminho. Sem este número, a trava seria
+   * invisível: o log diria "0 candidatura criada" e ninguém saberia que a volta encontrou 40
+   * discordâncias. §A.6: contagem, nunca o valor divergente.
+   */
+  divergencias: number;
   /** Quantas pré-admissões a ponte criou nesta passada. */
   pontesParaAdmissao: number;
   /**

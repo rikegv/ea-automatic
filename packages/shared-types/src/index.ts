@@ -1244,19 +1244,19 @@ export const VAGA_OBRIGATORIOS: readonly VagaPendencia[] = [
   // é a régua do PUBLICAR, que é a única que lê esta lista.
   { campo: "codCliente", rotulo: "Cliente", artigo: "o", passo: 0, passoRotulo: "A Vaga", ancora: "vaga-cliente" },
   { campo: "codigo", rotulo: "Código da vaga", artigo: "o", passo: 0, passoRotulo: "A Vaga", ancora: "vaga-codigo" },
-  { campo: "nomeDivulgacao", rotulo: "Nome de divulgação", artigo: "o", passo: 0, passoRotulo: "A Vaga", ancora: "vaga-nome-divulgacao" },
+  { campo: "nomeDivulgacao", rotulo: "Nome da vaga", artigo: "o", passo: 0, passoRotulo: "A Vaga", ancora: "vaga-nome-divulgacao" },
   { campo: "cargoId", rotulo: "Cargo", artigo: "o", passo: 0, passoRotulo: "A Vaga", ancora: "vaga-cargo" },
   // OS DOIS CONTADORES DA VAGA (25/08): só o OFICIAL é obrigatório. O de banco nasce zero e zero é
   // resposta legítima (a maioria das vagas não reserva excedente), então cobrá-lo aqui transformaria
   // o estado normal da vaga em pendência de publicação.
   { campo: "posicoesOficiais", rotulo: "Nº de posições oficiais", artigo: "o", passo: 0, passoRotulo: "A Vaga", ancora: "vaga-posicoes-oficiais" },
-  { campo: "natureza", rotulo: "Natureza", artigo: "a", passo: 0, passoRotulo: "A Vaga", ancora: "vaga-natureza" },
-  { campo: "sazonalidade", rotulo: "Sazonalidade", artigo: "a", passo: 0, passoRotulo: "A Vaga", ancora: "vaga-sazonalidade" },
+  { campo: "natureza", rotulo: "Tipo de vaga", artigo: "o", passo: 0, passoRotulo: "A Vaga", ancora: "vaga-natureza" },
+  { campo: "sazonalidade", rotulo: "Tipo de processo", artigo: "o", passo: 0, passoRotulo: "A Vaga", ancora: "vaga-sazonalidade" },
   // A LINHA DE SERVIÇO (Onda C), ao lado das outras duas classificações da vaga e ANTES do status,
   // que é o que fecha o passo. Ela sobe para cá vinda de uma composição temporária do backend
   // (`domain/vaga-obrigatorios.ts`), que era idempotente justamente para esta migração não passar a
   // cobrar duas vezes. Com ela aqui, aquele arquivo pode ser apagado.
-  { campo: "linhaServicoId", rotulo: "Linha de serviço", artigo: "a", passo: 0, passoRotulo: "A Vaga", ancora: "vaga-linha-servico" },
+  { campo: "linhaServicoId", rotulo: "Célula de atendimento", artigo: "a", passo: 0, passoRotulo: "A Vaga", ancora: "vaga-linha-servico" },
   { campo: "status", rotulo: "Status", artigo: "o", passo: 0, passoRotulo: "A Vaga", ancora: "vaga-status" },
   { campo: "dataAbertura", rotulo: "Data de abertura", artigo: "a", passo: 1, passoRotulo: "Quem Pediu", ancora: "vaga-data-abertura" },
   // A PREVISÃO DE ENTREGA (Onda D). O RÓTULO É O DA TELA e o campo é `dataLimite`: a coluna do banco
@@ -2486,6 +2486,39 @@ export interface VagaListItem {
   solicitanteEmail: string | null;
   dataSolicitacao: string | null;
   dataAlinhamento: string | null;
+  /**
+   * ─ O REALINHAMENTO, E POR QUE ELE É UMA COLUNA NOVA E NÃO UM RECARIMBO ─────────────────────────
+   *
+   * O cliente define um perfil, e depois pede um NOVO alinhamento dele. É campo que **o time preenche
+   * a mão**: o sistema nunca o carimba, igual ao `dataAlinhamento` logo acima.
+   *
+   * RECARIMBAR O `dataAlinhamento` FOI RECUSADO, e o motivo é que o custo de errar é irreversível:
+   * sobrescrever apagaria para sempre a data do alinhamento ORIGINAL, que é o marco de quando o
+   * perfil foi combinado. E o pedido do diretor é comparativo ("definiu um perfil E DEPOIS pediu
+   * outro"), então a pergunta que a tela vai fazer é "quanto tempo depois", e ela precisa das duas
+   * pontas. Guardar as duas é aditivo; sobrescrever destrói.
+   */
+  dataRealinhamento: string | null;
+  /**
+   * ─ A REABERTURA: QUANDO, E CONTRA QUAL PRAZO A SLA PASSOU A CORRER ────────────────────────────
+   *
+   * ┌─ POR QUE EXISTE UM PRAZO "ANTERIOR", e ele não é curiosidade ───────────────────────────────┐
+   * │ A SLA desta casa é uma contagem REGRESSIVA até a Previsão De Entrega, e por isso **"zerar a  │
+   * │ SLA" não existe**: em contagem regressiva o que existe é um PRAZO NOVO. Foi essa a decisão do │
+   * │ diretor, e ela é a única que cabe na régua que já está no ar e testada.                       │
+   * │                                                                                             │
+   * │ Guardar o prazo anterior é o que permite a frase que o relatório precisa dizer: "esta vaga    │
+   * │ reabriu e o prazo foi renegociado de X para Y". Sem ele, a vaga reaberta apareceria com um    │
+   * │ prazo novo e ninguém saberia que houve um primeiro, o que é a diferença entre um atraso e uma │
+   * │ renegociação.                                                                                │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * O DEFEITO QUE A REABERTURA CORRIGE, e ele já existe hoje: reabrir DESCONGELA a SLA e ela volta a
+   * correr contra o `dataLimite` ANTIGO, que quase sempre já passou. A vaga reaberta nasce
+   * "Prazo Vencido", sem ninguém ter atrasado nada.
+   */
+  dataReabertura: string | null;
+  dataLimiteAnterior: string | null;
   envioShortlist: string | null;
   /** Os dois lados da vaga, já resolvidos em nome: um veio de quem abriu, o outro foi escolhido. */
   /**
@@ -5078,4 +5111,166 @@ export interface ResultadoImportCandidato {
     status: StatusLinhaImportCandidato;
     motivo?: string;
   }[];
+}
+
+/**
+ * ─ A FILA DE DIVERGENCIAS DA INGESTAO: o vocabulario compartilhado ──────────────────────────────
+ *
+ * ┌─ O DEFEITO QUE ESTA FILA EXISTE PARA MATAR (medido em 30/09/2026) ──────────────────────────┐
+ * │ A varredura do Pandape SOBRESCREVIA CEGO a etapa e a situacao da candidatura. O `where` do   │
+ * │ update era `and (atuais) is distinct from (novos)`, e aquilo NAO era protecao: era o GATILHO. │
+ * │ Existia so para nao empurrar `atualizado_em` numa reentrega identica, e comparava valor com  │
+ * │ valor, nunca autor com autor. O time avancava a pessoa tres etapas, ninguem mexia no ATS, e  │
+ * │ em ate 30 minutos ela VOLTAVA, em loop, em 24 das 27 pastas mapeadas.                        │
+ * │                                                                                             │
+ * │ E era SILENCIOSO: a ingestao nao escreve em `as_candidatura_etapas`, entao o evento humano   │
+ * │ continuava na trilha dizendo "foi para Entrevista Cliente" enquanto a coluna dizia CAPTACAO, │
+ * │ e NENHUMA TELA comparava as duas. Quem operou concluia que o proprio clique nao funcionou.   │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * A REGUA, decidida pelo diretor: **O EA VENCE, SEMPRE.** O valor do ATS nao e aplicado, e a
+ * diferenca vira uma linha aqui, para o time olhar e decidir. O motivo de o EA vencer no empate nao
+ * e hierarquia, e CUSTO ASSIMETRICO DO ERRO: se o EA vence errado, o time perde uma informacao e
+ * resolve num clique; se o ATS vence errado, o trabalho do time e apagado em silencio e ninguem
+ * descobre. Abster-se e o comportamento seguro, mesma logica da §A.33.
+ */
+export const ESCOPOS_DE_DIVERGENCIA = ["CANDIDATURA", "VAGA"] as const;
+export type EscopoDeDivergencia = (typeof ESCOPOS_DE_DIVERGENCIA)[number];
+
+/**
+ * OS CAMPOS COBERTOS, e a lista e FECHADA de proposito.
+ *
+ * ┌─ §A.6: POR QUE NENHUM CAMPO PESSOAL ESTA AQUI ──────────────────────────────────────────────┐
+ * │ Todos os sete sao codigo, rotulo de vaga ou numero: nao ha nome, CPF, e-mail, telefone nem   │
+ * │ nascimento. Isso e o que permite guardar `valor_ea` e `valor_ats` EM CLARO na fila, que e o   │
+ * │ que torna a tela util (o time compara os dois lados sem abrir a ficha).                      │
+ * │                                                                                             │
+ * │ A varredura TAMBEM reescreve os campos PESSOAIS de `as_candidatos` (correcao de telefone     │
+ * │ feita a mao e revertida na volta seguinte), e isso NAO entra nesta lista: nao esta na ordem   │
+ * │ do diretor, e guardar o valor deles aqui criaria PII numa superficie nova. Fica como          │
+ * │ proposta, nao como entrega silenciosa (§A.31).                                                │
+ * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+export const CAMPOS_DE_DIVERGENCIA = [
+  "etapa",
+  "situacao",
+  // `motivo_descarte` NAO ESTA AQUI, e a ausencia foi um VETO do `seguranca` em 30/09/2026.
+  //
+  // A TRAVA DELE CONTINUA INTEIRA: o ATS nunca escreve aquele campo em candidatura existente. O que
+  // saiu foi a LINHA DE FILA, porque ela guardaria o valor em claro, e aquele valor e PROSA.
+  //
+  // O que a frente afirmava, e estava errado: "e nome do CATALOGO interno, nao texto de pessoa". A
+  // casa ja mediu o contrario e escreveu nos dois lugares: o campo tem DUAS naturezas
+  // (`candidatos.dto.ts`), e so no DESCARTADO ele e nome de catalogo; no ENVIADO_PARA_ADMISSAO ele
+  // continua PROSA, com teto de 500 caracteres. E a rotina de expurgo NULA a coluna
+  // (`retencao-candidatos.service.ts`), na mesma CTE que substitui o resumo de contato, com a
+  // narrativa "texto livre pelo mesmo motivo e com a mesma exposicao": a casa JA classificou aquilo
+  // como dado pessoal.
+  //
+  // E a fila seria uma superficie FORA DO ALCANCE DO EXPURGO: ele anonimiza a pessoa sem DELETAR a
+  // candidatura, entao o `on delete cascade` da tabela nunca dispararia, e o EA nularia a frase na
+  // candidatura e a manteria para sempre na linha de fila. O argumento "o nome vem por JOIN, o
+  // expurgo alcanca" nao cobria este caso: aqui seria COPIA, nao JOIN.
+  //
+  // Para ter o valor na tela, a coluna precisa primeiro entrar na rotina de expurgo. Decisao do
+  // diretor, nao da fabrica.
+  "vaga_codigo",
+  "vaga_nome_divulgacao",
+  "vaga_cidade",
+  "vaga_posicoes_oficiais",
+  "vaga_do_candidato",
+] as const;
+export type CampoDeDivergencia = (typeof CAMPOS_DE_DIVERGENCIA)[number];
+
+/** §A.24: title case, porque sao RÓTULOS de tabela e de filtro, nao frase de apoio. */
+export const CAMPO_DE_DIVERGENCIA_LABEL: Record<CampoDeDivergencia, string> = {
+  etapa: "Etapa Do Funil",
+  situacao: "Situação",
+  vaga_codigo: "Código Da Vaga",
+  vaga_nome_divulgacao: "Nome Da Vaga",
+  vaga_cidade: "Cidade Da Vaga",
+  vaga_posicoes_oficiais: "Posições Da Vaga",
+  vaga_do_candidato: "Vaga Do Candidato",
+};
+
+/**
+ * AS DUAS SAIDAS, e a diferenca entre elas e de PROCEDENCIA, nao de valor.
+ *
+ * `MANTIDO_EA` fecha a linha e nao escreve nada no dado. `ADOTADO_ATS` aplica o valor do ATS **pelo
+ * caminho humano normal** (o mesmo `moverEtapa`, a mesma edicao de vaga), com autor, com trilha e com
+ * derivacao de status. Adotar e um CLIQUE DO TIME e tem de valer como tal: escrever a coluna direto
+ * daria o valor certo com a procedencia errada, que e o defeito que esta fila existe para matar.
+ */
+export const DECISOES_DE_DIVERGENCIA = ["MANTIDO_EA", "ADOTADO_ATS"] as const;
+export type DecisaoDeDivergencia = (typeof DECISOES_DE_DIVERGENCIA)[number];
+
+export const DECISAO_DE_DIVERGENCIA_LABEL: Record<DecisaoDeDivergencia, string> = {
+  MANTIDO_EA: "Mantido O EA",
+  ADOTADO_ATS: "Adotado O ATS",
+};
+
+/** UMA LINHA DA FILA como a tela a recebe. */
+export interface DivergenciaDaIngestaoItem {
+  id: string;
+  escopo: EscopoDeDivergencia;
+  campo: CampoDeDivergencia;
+  /** Rótulo pronto, para a célula não recalcular o `Record`. */
+  campoRotulo: string;
+  /** O que está no EA hoje. Código ou número, nunca dado pessoal. */
+  valorEa: string | null;
+  /** O que o ATS trouxe. Código ou número, nunca dado pessoal. */
+  valorAts: string | null;
+  candidaturaId: string | null;
+  /** Nome do candidato, para o time reconhecer a linha. Mesma régua da Esteira e do Gerenciador. */
+  candidatoNome: string | null;
+  vagaId: string | null;
+  vagaNome: string | null;
+  clienteNome: string | null;
+  /**
+   * QUANTAS VOLTAS JA TROUXERAM A MESMA DIVERGENCIA. Reincidencia INCREMENTA este numero em vez de
+   * criar linha nova: sem isso, 48 voltas por dia viravam 48 linhas da mesma coisa e a fila deixava
+   * de ser fila de trabalho para virar log.
+   */
+  ocorrencias: number;
+  primeiraEm: string;
+  ultimaEm: string;
+  resolvidoEm: string | null;
+  resolvidoPorNome: string | null;
+  decisao: DecisaoDeDivergencia | null;
+}
+
+/**
+ * OS TRES CARTOES DA FILA, e eles sao contados SEM os filtros.
+ *
+ * §A.12 diz que o card e clicavel COMO FILTRO, e um card que ja viesse filtrado mostraria sempre o
+ * total de si mesmo: clicar em "Reincidentes" faria o proprio numero de reincidentes virar o total da
+ * tela. Por isso a contagem e da fila inteira, e o recorte acontece depois.
+ *
+ * Sao TRES e nao mais: a OST nao pediu cartao nenhum alem destes, e acrescentar por conta propria e
+ * exatamente o que a §A.31 proibe.
+ */
+export interface KpisDeDivergencias {
+  abertas: number;
+  resolvidas: number;
+  /** Abertas com `ocorrencias` maior que 1: a mesma discordancia ja voltou em mais de uma passada. */
+  reincidentes: number;
+}
+
+/** O ENVELOPE DA FILA. Os itens ja recortados pelo filtro, os KPIs sempre do conjunto inteiro. */
+export interface DivergenciasDaIngestaoPagina {
+  itens: DivergenciaDaIngestaoItem[];
+  kpis: KpisDeDivergencias;
+}
+
+/**
+ * O CATALOGO DAS OPCOES DE FILTRO, e ele vem do SERVIDOR de proposito (§A.37).
+ *
+ * Derivar as opcoes das linhas carregadas e o defeito que aquela regra existe para matar: a lista
+ * encolhe assim que o primeiro valor e escolhido, e nao ha como somar o segundo sem limpar o filtro.
+ * O `value` do cliente e o NOME porque e o que a celula mostra e o que a linha carrega; o da vaga e o
+ * id, com o nome como rotulo.
+ */
+export interface OpcoesDeFiltroDeDivergencias {
+  clientes: { value: string; label: string }[];
+  vagas: { value: string; label: string }[];
 }

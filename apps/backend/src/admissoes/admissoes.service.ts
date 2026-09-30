@@ -355,6 +355,26 @@ export interface PreAdmissaoDoFunilInput {
   };
   pacoteBeneficios?: { beneficioId: string; valor?: number }[];
   possivelDuplicata?: boolean;
+  /**
+   * DE ONDE ESTA PRE-ADMISSAO VEIO (OST de precedência, 30/09/2026, item 7 do diretor).
+   *
+   * ┌─ OPCIONAL COM DEFAULT `MANUAL`, E ISSO É A TRAVA, NÃO CONVENIÊNCIA ─────────────────────────┐
+   * │ O caminho MANUAL do funil (`registrarSaida`, na Central de Candidatos) não passa este campo,  │
+   * │ então ele continua gravando `MANUAL` exatamente como antes: byte-idêntico, e nenhuma das      │
+   * │ dezenas de specs que exercitam aquele caminho muda de resultado. Quem passa `PANDAPE` é a     │
+   * │ PONTE DA INGESTÃO (`as/ingestao-pandape/ingestao-ponte-admissao.ts`), que é o único chamador   │
+   * │ automático.                                                                                    │
+   * │                                                                                              │
+   * │ UMA MARCA SO PARA TUDO QUE VEM DO PANDAPE, webhook ou varredura (decisão do diretor): ele NÃO │
+   * │ quer distinguir as duas portas, então NÃO existe valor de enum novo e NÃO há migration. O     │
+   * │ enum `origem` já tem `PANDAPE`, e o webhook (`criarPreAdmissao`) já o grava e não muda.       │
+   * │                                                                                              │
+   * │ POR QUE ISSO IMPORTA: sem o campo, toda pré-admissão nascida da varredura jurava ter sido     │
+   * │ feita à mão, e a pergunta "quanto da esteira o motor trouxe?" tinha resposta errada para      │
+   * │ TODA a entrada automática, que é justamente a frente que o diretor está ligando.              │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   */
+  origem?: "MANUAL" | "PANDAPE";
 }
 
 /**
@@ -892,9 +912,12 @@ export class AdmissoesService {
             cargoId: input.cargoId,
             farolGlobal: "AGUARDANDO_LIBERACAO",
             sinalizadorPreenchimento: "PENDENTE",
-            // origem MANUAL: não veio do Pandapé. A marca de "veio do funil" é carregada pela ponte
-            // `as_candidaturas.admissao_id` (derivada na tela), não por um valor de enum novo aqui.
-            origem: "MANUAL",
+            // ORIGEM: `MANUAL` por DEFAULT, e o default é o que mantém o caminho manual do funil
+            // byte-idêntico (ele não passa o campo). A marca de "veio do funil" continua sendo a
+            // ponte `as_candidaturas.admissao_id` (derivada na tela), e não um valor de enum novo.
+            // Quem passa `PANDAPE` é a ponte da INGESTÃO, por decisão do diretor: UMA marca só para
+            // tudo que vem do Pandapé, webhook ou varredura. Ver `PreAdmissaoDoFunilInput.origem`.
+            origem: input.origem ?? "MANUAL",
             idVacancy,
             possivelDuplicata: input.possivelDuplicata ?? false,
           })

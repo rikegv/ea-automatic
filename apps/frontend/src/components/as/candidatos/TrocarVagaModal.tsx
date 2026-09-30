@@ -58,7 +58,7 @@ export function TrocarVagaModal({
     .filter((v) => v.id !== candidatura.vagaId)
     .map((v) => ({
       value: v.id,
-      label: v.nomeDivulgacao ?? v.codigo ?? "Vaga sem nome de divulgação",
+      label: v.nomeDivulgacao ?? v.codigo ?? "Vaga sem nome",
       hint: v.clienteNome ?? v.codigo ?? undefined,
     }));
 

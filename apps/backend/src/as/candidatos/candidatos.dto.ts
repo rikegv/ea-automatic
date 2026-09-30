@@ -736,19 +736,22 @@ export class RegistrarSaidaEmLoteDto {
 }
 
 /**
- * MOVER NO FUNIL EM MASSA. É a `moverEtapa`, N vezes, e SÓ ela: trocar de vaga tem rota própria, com
- * travas próprias (vaga de destino travada, teto do destino conferido linha a linha), e não ganha
- * versão em massa de carona aqui.
+ * MOVER NO FUNIL EM MASSA. É a `moverEtapa`, N vezes, e SÓ ela: a troca de vaga tem corpo próprio
+ * (`TrocarVagaEmLoteDto`, logo abaixo), porque o destino dela é uma vaga e não uma etapa.
  *
- * ┌─ O ARGUMENTO MUDOU, A CONCLUSÃO NÃO (Frente D) ────────────────────────────────────────────┐
- * │ ATÉ AQUI ESTA CAIXA DIZIA "trocar de vaga é operação de MASTER, com `@Roles`", e o `@Roles` │
- * │ SAIU (decisão do diretor: qualquer consultor transfere). A frase ficaria DEFASADA e, pior,   │
- * │ convidaria o próximo a incluir a troca no lote "já que não é mais de Master".                │
+ * ┌─ A TROCA DE VAGA PASSOU A TER LOTE, E ESTA CAIXA DIZIA O CONTRÁRIO (OST de 30/09/2026) ────┐
+ * │ ESTAVA ESCRITO AQUI que ela NÃO ganharia versão em massa, porque a troca trava a linha da    │
+ * │ vaga de destino e um lote parcial deixaria metade da seleção movida e metade não. O DIRETOR  │
+ * │ DECIDIU O CONTRÁRIO, em palavras: "todas as ações que existem no modal ganham versão em      │
+ * │ massa, não deixem nenhuma só individual".                                                   │
  * │                                                                                             │
- * │ O MOTIVO DE ELA CONTINUAR FORA DO LOTE É OUTRO, e é técnico: a troca trava a linha da vaga   │
- * │ de DESTINO e conta a ocupação dela dentro da transação. Em massa, N linhas disputariam a     │
- * │ mesma vaga de destino, e um lote parcial deixaria metade da seleção movida e metade não, sem │
- * │ que ninguém tivesse dito qual metade importava.                                              │
+ * │ O FATO TÉCNICO DAQUELE PARÁGRAFO CONTINUA VERDADEIRO, e por isso ele não foi apagado e sim   │
+ * │ RESPONDIDO: o teto do destino se esgota no MEIO do lote. O que mudou é que isso agora é      │
+ * │ RESULTADO RELATADO, e não acidente: o lote devolve quem entrou e quem não entrou, com o      │
+ * │ motivo por linha, e "metade movida" deixa de ser surpresa para ser a resposta na tela.       │
+ * │                                                                                             │
+ * │ MANTER A FRASE VELHA SERIA PIOR QUE APAGÁ-LA: a próxima sessão a leria como decisão viva e   │
+ * │ removeria o lote da troca por coerência com um comentário.                                  │
  * └─────────────────────────────────────────────────────────────────────────────────────────────┘
  */
 export class MoverEtapaEmLoteDto {
@@ -768,4 +771,47 @@ export class MoverEtapaEmLoteDto {
   @MinLength(1)
   @MaxLength(40)
   etapa!: CandidaturaEtapa;
+}
+
+/**
+ * ─ TROCAR A VAGA EM MASSA (item 1 da OST de 30/09/2026) ──────────────────────────────────────────
+ *
+ * É a `trocarVaga`, N vezes, pelo MESMO caminho travado da ação individual. Nenhuma régua é reescrita
+ * aqui: candidatura viva, vaga de destino que recebe candidato, pessoa que já está no destino e teto
+ * de posições do destino continuam sendo conferidos dentro da transação DE CADA LINHA.
+ *
+ * ┌─ POR QUE ELE EXISTE, DEPOIS DE O MÓDULO TER DECIDIDO QUE NÃO EXISTIRIA ────────────────────┐
+ * │ A caixa do `MoverEtapaEmLoteDto` dizia que a troca de vaga NÃO ganharia lote: o teto do      │
+ * │ destino se esgota no meio da seleção, e o resultado seria metade movida e metade não. O      │
+ * │ diretor decidiu o contrário na OST de 30/09 ("todas as ações que existem no modal ganham     │
+ * │ versão em massa"), e o fato técnico virou o RELATÓRIO: quem não entrou volta em `falhas`,    │
+ * │ com o motivo do teto, por linha. A decisão anterior não foi revogada por engano, foi         │
+ * │ respondida, e a caixa velha foi reescrita para não ser lida como decisão viva.               │
+ * └────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * A VAGA DE DESTINO VEM NO CORPO, e não da rota, para ficar IGUAL ao corpo individual
+ * (`TrocarVagaDto.vagaId`): é a mesma pergunta ("para qual vaga?"), e dois lugares diferentes para
+ * dizê-la fariam a tela aprender dois dialetos para um gesto só.
+ */
+export class TrocarVagaEmLoteDto {
+  /** As CANDIDATURAS, e não os candidatos: aqui a linha já existe e é ela que muda de vaga. */
+  @ListaEmMassa()
+  candidaturaIds!: string[];
+
+  /** A vaga de DESTINO, uma para a seleção inteira. As travas dela são conferidas por linha. */
+  @IsUUID()
+  vagaId!: string;
+
+  /**
+   * POR QUE AS VAGAS ESTAVAM ERRADAS, OPCIONAL, com a MESMA régua do corpo individual: a troca
+   * conserta uma atribuição, e exigir texto para isso só faria escrever "correção" toda vez. O
+   * desfecho que ENCERRA processo é que exige motivo (`RegistrarSaidaEmLoteDto`), e é por isso que
+   * ali ele não é opcional. Um motivo para a seleção inteira, porque é a correção comum que originou
+   * o lote.
+   */
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === "string" ? value.trim() : value))
+  @IsString()
+  @MaxLength(500)
+  motivo?: string;
 }
