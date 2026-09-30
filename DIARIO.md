@@ -18216,3 +18216,181 @@ confiada. **Medir depois de escrever, sempre.**
 `dicas-documento` (Dicas De Documento, ADM, restrição NENHUMA, o diretor não mencionou),
 `entradas-pandape` (NAO_PARA_COMUM) e `menu-areas` (SO_SUPER_ADMIN), os dois últimos porque ele
 disse explicitamente que seguem como estão.
+
+---
+
+## 30/09/2026. AS DUAS FRENTES DE A&S: a ponte corrigida, e o defeito que faria a ingestao ler ZERO
+
+Duas OSTs fechadas no mesmo turno. **O achado que reordena tudo nao estava em nenhuma das duas.**
+
+### O DEFEITO QUE NINGUEM PROCURAVA: a v2 devolve `items`, e a varredura leria ZERO
+
+`listaDaResposta` (`pandape/pandape-api.service.ts`) entendia `{data:[...]}` e o array cru. **As TRES
+listagens da varredura chamam /v2** (`/v2/vacancies`, `/v2/vacancy-folders`, `/v2/matches`), e a v2
+devolve `{totalPages, totalItems, items, links}`, **sem chave `data`**. Medido contra a API real: 471
+vagas ativas viravam **0** e 50 inscricoes viravam **0**.
+
+**O modo da falha e o que torna isso grave:** vazio e a direcao **fail-closed** desta frente, entao
+nada estourava. Ligar `PANDAPE_VARREDURA_DATA_CORTE` faria a varredura rodar, gastar cota, escrever
+"0 vaga(s) varrida(s)" e parecer que o ATS simplesmente nao tinha nada novo. **A suite estava verde e
+continuaria:** os dubles devolviam `{data:[...]}`, o formato que ninguem tinha medido. Corrigido no
+commit `a484f0d`, com teste sobre o envelope REAL da v2.
+
+### A PONTE: o diretor estava certo, e o levantamento tambem. SAO CAMINHOS DIFERENTES
+
+- **O que ele testou e funciona:** o **webhook** do Pandape pelo lado da ADMISSAO,
+  `admissoes.service.ts:764` `criarPreAdmissao`, que nasce `AGUARDANDO_LIBERACAO`, `origem=PANDAPE` e
+  `id_vacancy` carimbado. **Provado nos dados:** as 18 linhas em `AGUARDANDO_LIBERACAO` /
+  `LIBERACAO_RECUSADA` sao TODAS `origem=PANDAPE` com linha em `integracao_pandape`, e as 3 em
+  `AGUARDANDO_LIBERACAO` foram criadas em **28 e 29/09**, a janela do teste dele.
+- **O caminho MANUAL do funil tambem nao tem buraco:** `registrarSaida` chama
+  `criarPreAdmissaoDoFunil` e grava `admissao_id`. O envio EM LOTE herda dele, nao e porta nova.
+- **O buraco era da VARREDURA do A&S**, outra porta: SQL cru gravando `situacao` sem criar nada.
+- **Nada ruim aconteceu: ZERO linhas.** A ingestao esta inerte e `as_candidaturas` tem 0 linhas nos
+  tres bancos. O defeito era **latente**, e a correcao e preventiva.
+
+Corrigido no `e4d3970`, **com a ponte disparando SO NO NASCIMENTO** da candidatura. O recorte e
+deliberado e veio do achado da outra OST (abaixo): disparar no update faria uma admissao nascer de um
+sinal que pode estar desfazendo trabalho do time.
+
+### A OUTRA OST: A VARREDURA SOBRESCREVE O AVANCO MANUAL, EM SILENCIO. SIM, SOBRESCREVE
+
+O diretor levantou o risco antes de ligar, e ele existe. **Nao ha precedencia nenhuma do manual na
+candidatura.** O `update` (`ingestao-repositorio.ts:369-376`) e:
+
+```
+set etapa = ..., situacao = ..., atualizado_em = now()
+where id = ... and (atuais) is distinct from (novos)
+```
+
+**O `is distinct from` NAO e protecao: ele e o gatilho.** Existe so para nao empurrar `atualizado_em`
+numa reentrega identica, e compara **valor com valor**, nunca autor com autor. Valor diferente e
+exatamente o caso do conflito, e ele **autoriza** a escrita. Nao ha coluna de autor, nao ha carimbo,
+nao ha leitura de trilha: `as_candidaturas` tem 14 colunas e **nenhuma** diz de onde veio a etapa.
+
+**O cenario, provado:** o time avanca 3 etapas aqui, ninguem mexe no Pandape, a pasta la segue
+`Inscritos`, e em ate **30 minutos** a pessoa **volta para CAPTACAO**. E volta de novo na volta
+seguinte, em loop. Acontece em **24 das 27** linhas do de/para (as que trazem `etapa_codigo`).
+
+**E silencioso.** A ingestao **nao escreve em `as_candidatura_etapas`** (a tabela esta fora da lista
+fail-closed de seis tabelas do adaptador). O evento humano fica na trilha dizendo "foi para Entrevista
+Cliente" enquanto a coluna diz `CAPTACAO`, **e nenhuma tela compara as duas**. Quem operou conclui que
+o clique nao funcionou. E o contador do resumo diz "candidatura(s) escrita(s)" sem distinguir criacao
+de sobrescrita: uma volta que desfez 40 avancos aparece como "40 escritas".
+
+**A assimetria estava escrita no proprio codigo:** a VAGA ganhou protecao ("a varredura nao reabre o
+que gente fechou", com `encerrada_pela_varredura_em`) porque o defeito foi medido nela. **A mesma
+pergunta nunca foi feita para a etapa da candidatura.**
+
+**Tres colisoes a mais, que ninguem tinha listado:**
+1. **`situacao`**: as linhas `Admissao` e `Contratados` escrevem `ENVIADO_PARA_ADMISSAO`, que **consome
+   posicao** e tem porta propria. A vaga passa a contar uma entrega que nao existe.
+2. **`as_candidatos`**: `nome`, `cpf`, `email`, `telefone`, `data_nascimento` sao reescritos do ATS.
+   **Correcao de telefone feita a mao e revertida** na volta seguinte.
+3. **Transferencia de vaga vira DUPLICATA VIVA.** A busca e por `(candidato_id, vaga_id)`; depois de um
+   `trocarVaga` ela nao acha nada e **INSERE** candidatura nova na vaga original. O unique parcial e do
+   par, entao **nada falha**: a pessoa existe duas vezes, viva, ocupando posicao nas duas. **Nenhuma
+   tela acusaria.**
+
+### O DE/PARA PANDAPE PARA CATALOGO: metade e impossivel, metade foi construida
+
+- **CLIENTE: NAO da, e nao e questao de regua.** Nao vem nome nenhum. Medido em v1, v2 e v3, tres
+  vezes, e agora tambem nos dois campos que a allowlist descartava e ninguem tinha olhado: `tags` casa
+  cliente em **0 das 471 vagas ativas** e `description` em **3,2%**, resolvendo **1 unico
+  `cod_cliente` em 1,1%** (5 de 471). O gargalo e **estrutural**: 24 razoes sociais repetem e
+  "RAIA DROGASIL S/A" cobre **97 `cod_cliente`**, entao mesmo escrito na descricao o nome nao resolve o
+  codigo. `reference` e numero interno (zero casamentos), CNPJ nao aparece, `CustomFields` nao existe.
+  **Descartar os dois campos era decisao correta.** `cod_cliente` continua nulo e o vinculo segue manual.
+- **CARGO: da, e foi feito.** Chega como texto livre em `job`. `cargoPorTexto`, irmao de
+  `cidadePorTexto`, resolve contra `cargos` sem acento e sem caixa (378 chaves distintas em 379 ativos).
+  **So na criacao**, nunca na volta.
+- **"Liberar em lote nao existe" NAO e lacuna, e VETO REGISTRADO** do `seguranca` em 18/09
+  (`vagas.service.ts:3166-3173`): "um cliente errado aplicado a centenas de vagas atribui centenas de
+  pessoas ao controlador errado, e desfazer nao desfaz o que ja foi visto".
+
+### O CPF: a nota da casa estava ERRADA
+
+Dizia que o CPF so vinha de `/v1/Match/Get`. **Medido: `/v2/matches` devolve `cpf` preenchido em 50 de
+50**, 11 digitos, sem mascara, na propria listagem. A ponte pode nascer com CPF, sem chamada extra por
+pessoa. (De quebra: `location2`/`location3` vem como **texto**, nao id, o que responde a duvida aberta
+sobre cidade e UF.)
+
+### DIGAI, a pergunta das vagas abertas: da, mas nao na origem
+
+**Existe `status` no screening**, e o codigo o **descarta na projecao** (`domain/digai.ts:1073`). **A
+API ignora o filtro:** sete parametros tentados, todos HTTP 200 devolvendo os mesmos **533** itens, sem
+erro. O filtro e nosso, depois de baixar a listagem (1 requisicao).
+
+| status | screenings | vagas que nasceriam |
+|---|---|---|
+| PUBLISHED | 219 | **161** |
+| PAUSED | 170 | **97** |
+| QUEUED | 110 | 0 (zero candidato) |
+| CLOSED | 32 | 19 |
+| DRAFT | 2 | 0 |
+
+**So `PUBLISHED` corta 277 para 161**, mas **97 das 116 cortadas sao PAUSED**, e pausado volta com um
+clique, com 1.260 pessoas de CPF valido atras. **Recomendacao: excluir CLOSED, QUEUED e DRAFT, manter
+PUBLISHED e PAUSED** (258 vagas, menos 19, e poupa 144 dos 533 screenings varridos por volta).
+`QUEUED` e `DRAFT` sao **112 screenings com ZERO candidato**: hoje o motor gasta 112 requisicoes por
+volta neles para nao achar nada. **A alavanca do trabalho manual nao e o status: e o de/para de
+cliente, que nao existe e nao pode existir.**
+
+### AS DECISOES DO DIRETOR, EXECUTADAS
+
+- **Prints da Ajuda:** ficam como estao, sem login. Nada feito, como ele mandou.
+- **Leitor de documento do Portal pela IA: LIGADO.** `PORTAL_LEITOR_URL=http://127.0.0.1:8020` e
+  `PORTAL_LEITOR_TOKEN` no `.env` (modo 600, backup antes). Aponta para o ai-service **ISOLADO** do
+  Portal, nao para o 8000: token proprio, staging proprio, TMPDIR proprio. **Fiacao provada por
+  medicao:** 401 sem token, 401 com token errado, **422 com o token certo** (validacao, ou seja auth
+  passou). Ha 97 regras de auditoria ativas em 32 tipos de documento para ele trabalhar.
+- **Retencao de 6 meses:** fica ligada sem interruptor, ciencia registrada.
+- **AS DUAS LINHAS INATIVAS DO DE/PARA: LIGADAS**, e a fabrica definiu a etapa, com **uma correcao
+  importante**:
+  - **`finalistas` estava mapeada para `DESCARTADO`, e isso estava ERRADO.** Finalista nao e
+    descartado: e quem esta COM O CLIENTE aguardando decisao. Ligar como estava marcaria **174 vagas**
+    de candidatos vivos como descartados. Trocada para **`ENTREVISTA_CLIENTE`** (a etapa marcada
+    `entrega_ao_cliente`, mesmo tratamento das pastas de shortlist). **NAO foi para `APROVACAO` de
+    proposito:** finalista nao e aprovado, e superestimar empurraria gente para a fila de admissao sem
+    decisao.
+  - **`retorno negativo etapa soulan`** (401 vagas): mantida `DESCARTADO` com **etapa NULA**, identica
+    ao irmao ja ativo `retorno negativo`. Etapa nula e deliberado: sem etapa, quem ja existe **nao e
+    movido**. Carimbar `ENTREVISTA_SOULAN` empurraria para TRAS quem estava mais adiante.
+  - **Efeito imediato: ZERO.** A varredura esta inerte. 27 linhas ativas, nenhuma inativa.
+
+### AGENTES ACIONADOS E VEREDITOS (§A.34/§A.38)
+
+| agente | veredito |
+|---|---|
+| `arquiteto` (ponte) | caminhos SEPARADOS, com a prova nos dados das 18 linhas; 3 decisoes devolvidas ao diretor; nenhuma migration necessaria |
+| `arquiteto` (de/para) | cliente **insoluvel pela API**, cargo soluvel; achou que o INSERT tinha `null` HARDCODED, ou seja **dois** pontos de edicao e nao um; achou o VETO do lote |
+| `arquiteto` (sobrescrita) | sobrescreve **cego**; sem manual pegajoso na candidatura; **silencioso**; achou a duplicata por transferencia |
+| `backend` (medicao Pandape) | cliente nao derivavel (1,1%); **CPF vem na listagem**; e achou o defeito do `items` que mudou a frente |
+| `backend` (medicao Digai) | 533 screenings, `status` existe e a API ignora o filtro; 277 confirmado pelo mesmo critério |
+| `backend` (construcao) | ponte + cargo, **1209 testes verdes** e 4 mutantes conferidos; devolveu 9 decisoes que eu nao tinha dado |
+| `seguranca` (ponte, antes do commit) | **APROVADO COM RESSALVA**, nada bloqueante. Provou digito de CPF conferido 2x, allowlist fechada em 10 campos (os 48 do curriculo, inclusive os 4 do art. 11, morrem na fronteira), zero PII em log, BullMQ so com `{idVacancy, page}` |
+| coordenador | os mapas, o recorte, a correcao do `items` com teste, o gate independente (**1440 testes**), as duas linhas do de/para, o leitor de IA, e a conferencia de cada retorno |
+
+### O QUE FICA PARA O DIRETOR DECIDIR, e nada disso pode ser ligado antes
+
+1. A regua da **precedencia**: o EA vence e a divergencia vai para revisao, ou a variante completa por
+   autor na trilha (que exige abrir a setima tabela a ingestao, com o `seguranca` no caminho).
+2. O ATS **nunca** escreve `situacao` em candidatura existente, inclusive `DESCARTADO`.
+3. Em vaga **ja liberada**, o ATS nao sobrescreve `codigo`, `nome_divulgacao`, `cidade_id` e
+   `posicoes_oficiais` (esta ultima tem rastro humano na reducao e a sobrescrita nao tem).
+4. A **duplicata por transferencia**: nesta frente ou em frente propria.
+5. **A DATA DE CORTE, e ela tem um problema que muda a escolha:** o corte filtra pelo `insertDate` da
+   **inscricao** (quando a pessoa se candidatou), nao por quando ela entrou na pasta de admissao. Como
+   no mundo real a pessoa e movida semanas depois, **um corte recente faz a ponte perder justamente o
+   caso que ela existe para atender**, e um corte antigo puxa o passivo inteiro.
+6. **A ponte adiada nao e retentada.** Com o disparo so no nascimento, ponte que falhe ou seja adiada
+   por falta de CPF nunca e tentada de novo. A saida estreita encosta na decisao 1.
+7. **A pre-admissao da ingestao grava `origem: "MANUAL"`**, indistinguivel da que um consultor criou.
+   O `seguranca` pede marca distinguivel **antes do go-live**.
+
+### A CENTRAL DE AJUDA (159 pecas restantes): FRENTE PROPRIA, depois
+
+37 de **196** pecas feitas. O motor de captura ja existe e esta commitado, entao o que resta e
+producao de conteudo em escala (roteiro, captura, gate de PII, revisao peca por peca). Nao colide com
+os arquivos da ingestao, entao **pode rodar em paralelo com agente dedicado**, mas compete pelo
+harness do Playwright e pela revisao visual do coordenador. Recomendacao: **nao junto destas duas.**
