@@ -324,6 +324,31 @@
     background: transparent;
   }
 
+  /* A IRMÃ OCULTA DE `.ea-scroll`, e ela mora colada por isso: as duas resolvem a mesma coisa em
+     sentidos opostos, e separá-las faria a próxima pessoa achar que só existe a de cima.
+
+     `.ea-scroll`        -> a área rola E MOSTRA a barra. É o certo na TABELA, onde a barra é a única
+                            pista de que há mais coluna ou mais linha fora do quadro.
+     `.ea-scroll-oculto` -> a área rola e NÃO mostra a barra. É o certo no MENU LATERAL, onde a barra
+                            vira um traço escuro colado na moldura de vidro, destoando do tema.
+
+     A ROLAGEM CONTINUA INTEIRA: roda do mouse, arraste, teclado e leitor de tela seguem funcionando.
+     O que some é o DESENHO da barra, nunca o comportamento. Esconder a barra de uma lista longa e
+     desconhecida seria ruim, porque ninguém adivinha que há mais conteúdo; no menu não é o caso, a
+     lista é curta, conhecida e o próprio item cortado na borda já anuncia que há mais abaixo.
+
+     As três linhas cobrem os três motores: `scrollbar-width` é o padrão (Firefox e os novos),
+     `-ms-overflow-style` é o Edge antigo, e o pseudoelemento é o que Chrome e Safari obedecem.
+     *(Decisão do diretor, 30/09/2026: a barra do menu não pode aparecer para o time.)* */
+  .ea-scroll-oculto {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .ea-scroll-oculto::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+  }
+
   /* Coluna de Ações DESCONGELADA (OST ajustes visuais, fase 2b). Antes (Bloco F) ela era sticky à
      direita, com fundo fosco e sombra, e ficava parada enquanto o resto da tabela rolava. Por
      decisão do diretor a coluna passa a ROLAR JUNTO com as demais: vira uma coluna comum.

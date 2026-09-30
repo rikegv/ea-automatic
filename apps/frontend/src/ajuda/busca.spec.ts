@@ -151,15 +151,50 @@ describe("quem ensina esta tela", () => {
     expect(artigosDaRota("/as/vagas").map((a) => a.slug)).toContain("abrir-uma-vaga-nova");
   });
 
+  /**
+   * ─ A ROTA ANCOROU, ENTÃO A AFIRMAÇÃO MUDOU DE FORMA, NÃO DE INTENÇÃO ──────────────────────────
+   *
+   * A redação original era `toEqual([])`, e ela dependia de `/as/vagas-pendentes-revisao` não ter
+   * artigo nenhum. Em 30/09/2026 dois artigos do módulo de A&S ancoraram ali, e o teste ficou
+   * vermelho **sem que nada tivesse quebrado**: `artigosDaRota` devolveu exatamente os dois artigos
+   * daquela tela, que é o comportamento certo.
+   *
+   * O PRÓPRIO ARQUIVO JÁ MANDAVA FAZER ASSIM, no comentário do teste vizinho: "quando um artigo
+   * ancorar aqui, troque a rota, não a afirmação". Trocar a rota resolveria hoje e voltaria a
+   * quebrar na próxima onda, porque toda rota do sistema vai ganhar artigo. A forma abaixo afirma a
+   * MESMA coisa e não envelhece: a vizinha de nome parecido devolve só quem declara a rota dela, e
+   * nunca um artigo de `/as/vagas`.
+   */
   it("não empresta o artigo de uma tela para a vizinha de nome parecido", () => {
-    expect(artigosDaRota("/as/vagas-pendentes-revisao")).toEqual([]);
+    const vizinha = "/as/vagas-pendentes-revisao";
+    const resolvidos = artigosDaRota(vizinha);
+    const emprestados = resolvidos.filter((a) => !a.rotas.includes(vizinha)).map((a) => a.slug);
+    expect(emprestados).toEqual([]);
+    // E a prova pelo outro lado: nenhum artigo da tela vizinha vaza para a tela de nome mais curto.
+    const vazando = artigosDaRota("/as/vagas")
+      .filter((a) => !a.rotas.includes("/as/vagas"))
+      .map((a) => a.slug);
+    expect(vazando).toEqual([]);
   });
 
   /**
    * A ROTA ESCOLHIDA É UMA QUE NEM O MOTOR ALCANÇA HOJE, para o exemplo não virar dívida na próxima
    * onda. Quando um artigo ancorar aqui, troque a rota, não a afirmação.
    */
+  /**
+   * A ROTA DE EXEMPLO TROCOU, E É O ARQUIVO SE OBEDECENDO ────────────────────────────────────────
+   *
+   * O comentário acima manda: "quando um artigo ancorar aqui, troque a rota, não a afirmação". Em
+   * 30/09/2026 `/admin/menu-areas` ganhou artigo, então a rota trocou. O que se afirma continua
+   * idêntico: tela sem artigo devolve lista VAZIA, e é isso que esconde o botão de ajuda em vez de
+   * abrir um painel sem nada dentro.
+   *
+   * A NOVA ROTA É INEXISTENTE DE PROPÓSITO, e isso é mais forte do que escolher uma tela real ainda
+   * não coberta: com o inventário caminhando para cobrir o sistema inteiro, toda tela real vai
+   * ganhar artigo um dia, e o teste voltaria a quebrar por SUCESSO. Uma rota que não existe nunca
+   * ganha artigo, e o detector de rota morta impede que alguém a declare por engano.
+   */
   it("tela sem artigo devolve lista vazia, e é isso que esconde o botão", () => {
-    expect(artigosDaRota("/admin/menu-areas")).toEqual([]);
+    expect(artigosDaRota("/rota-que-nao-existe-e-nunca-vai-existir")).toEqual([]);
   });
 });

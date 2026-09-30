@@ -40,7 +40,34 @@
     "SIMULADO CHARLIE",
     "SIMULADO DELTA",
     "SIMULADO ECHO",
-    "SIMULADO FOXTROT"
+    "SIMULADO FOXTROT",
+    "SIMULADO GOLF",
+    "SIMULADO HOTEL",
+    "SIMULADO INDIA",
+    "SIMULADO JULIET",
+    "SIMULADO KILO",
+    "SIMULADO YANKEE",
+    "SIMULADO MIKE",
+    "SIMULADO NOVEMBER",
+    "SIMULADO ZULU",
+    "SIMULADO PAPA",
+    "SIMULADO QUEBEC",
+    "SIMULADO SIERRA",
+    "SIMULADO TANGO",
+    "SIMULADO UNIFORM",
+    "SIMULADO XRAY"
+  ],
+
+  "_nomes_do_arnes_de_as": [
+    "AS QUINZE LINHAS SINTETICAS DO `arnes-seed-as-manual` (apps/backend/src/as/arnes-seed-as-manual.ts),",
+    "criadas em 30/09/2026 porque as telas de A&S estavam VAZIAS e nao havia o que fotografar (§A.43):",
+    "as_candidatos 0, as_candidaturas 0, as_shortlist_itens 0, as_ingestao_conflitos 0, vagas 1.",
+    "Mesma regua do arnes do manual: prefixo SIMULADO em caixa alta e NENHUMA palavra do lexico de nome",
+    "de pessoa (SOBRENOMES/PRENOMES, apps/frontend/src/ajuda/pii.ts). LIMA, OSCAR e VITOR foram trocadas",
+    "por YANKEE, ZULU e XRAY justamente por isso: `lima` esta em SOBRENOMES, e as outras duas tem forma",
+    "de prenome. Nome com forma de pessoa recusaria TODA tela de lista de candidato.",
+    "AS SEIS PALAVRAS ALFA..FOXTROT NAO SAO REUSADAS: elas sao do arnes da ADMISSAO (tabela `candidatos`),",
+    "e manter os dois inventarios disjuntos e o que permite revogar um sem mexer no outro."
   ],
 
   "_salarios": [
@@ -57,7 +84,24 @@
     "usuarios da homologacao tem @homolog.local, medido em 27/09/2026), e so o que esta declarado aqui sai",
     "dela. Sem esta linha, o gate acharia a propria conta de captura e recusaria toda tela."
   ],
-  "emails": ["manual.captura@homolog.local"],
+  "emails": [
+    "manual.captura@homolog.local",
+    "simulado.golf@homolog.local",
+    "simulado.hotel@homolog.local",
+    "simulado.india@homolog.local",
+    "simulado.juliet@homolog.local",
+    "simulado.kilo@homolog.local",
+    "simulado.yankee@homolog.local",
+    "simulado.mike@homolog.local",
+    "simulado.november@homolog.local",
+    "simulado.zulu@homolog.local",
+    "simulado.papa@homolog.local",
+    "simulado.quebec@homolog.local",
+    "simulado.sierra@homolog.local",
+    "simulado.tango@homolog.local",
+    "simulado.uniform@homolog.local",
+    "simulado.xray@homolog.local"
+  ],
 
   "_gestores": [
     "O GESTOR SINTETICO QUE O PROPRIO ARNES ESCREVE na linha completa: dados_vaga_folha.gestor_bp =",
@@ -73,6 +117,33 @@
     "rotulo casa DENTRO do valor e so nao vira falso positivo por causa da janela dispensada."
   ],
   "gestores": ["GESTOR SIMULADO"],
+
+  "_telefones": [
+    "OS TELEFONES DO `arnes-seed-as-manual`, UM A UM. Eles sao 11 digitos, exatamente como CPF, e por",
+    "isso a geracao os produz com o verificador de CPF INVALIDO de proposito: e a proposta escrita em",
+    "`fechaVerificadorDeCpf` (apps/frontend/src/ajuda/pii.ts) sendo SEGUIDA, e nao reinventada. Sem ela,",
+    "1 em ~100 telefones fecharia o verificador por acaso e viraria achado `CPF` falso que trava o",
+    "roteiro. A declaracao aqui e a segunda camada: mesmo que a regua do gate mude, estes numeros ficam",
+    "permitidos por ATO, e revogaveis um a um.",
+    "NENHUM E TELEFONE DE NINGUEM: todos sao `1199` + contador do arnes."
+  ],
+  "telefones": [
+    "11998000107",
+    "11998000207",
+    "11998000307",
+    "11998000407",
+    "11998000507",
+    "11998000607",
+    "11998000707",
+    "11998000807",
+    "11998000918",
+    "11998001007",
+    "11998001107",
+    "11998001207",
+    "11998001307",
+    "11998001407",
+    "11998001507"
+  ],
 
   "_cpfs": [
     "A conta de captura e um usuario, nao um candidato: nao tem CPF. Os CPFs da CARGA da homologacao",
@@ -95,12 +166,50 @@
     "entao a denylist fica de pe e o conserto e de DADO: uma recusa cuja autoria e da propria conta de",
     "captura, que ja esta declarada em `nomes` e em `emails`."
   ],
+  "_cpfs_do_arnes_de_as": [
+    "OS QUINZE CPFs DO `arnes-seed-as-manual`, DECLARADOS UM A UM pela mesma exigencia do `seguranca`:",
+    "inventario COMPLETO e REVOGAVEL de todo CPF que pode aparecer num print. Familia 999, digito",
+    "verificador VALIDO (calculado, nao inventado), sequencia 880001..880015 para o numero conter",
+    "`99988`, que e o termo que a busca das telas de A&S digita para deixar a lista so com o arnes.",
+    "O DIGITO E VALIDO DE PROPOSITO: o gate so acusa 11 digitos crus quando o verificador FECHA, entao",
+    "CPF sintetico invalido passaria despercebido e nao exercitaria esta declaracao.",
+    "  99988000138  SIMULADO GOLF      (funil: CANDIDATURA)",
+    "  99988000219  SIMULADO HOTEL     (funil: CAPTACAO)",
+    "  99988000308  SIMULADO INDIA     (funil: TRIAGEM, e o conflito de ingestao)",
+    "  99988000480  SIMULADO JULIET    (funil: ENTREVISTA_SOULAN)",
+    "  99988000561  SIMULADO KILO      (funil: ENTREVISTA_CLIENTE, shortlist e contato)",
+    "  99988000642  SIMULADO YANKEE    (funil: APROVACAO, shortlist)",
+    "  99988000723  SIMULADO MIKE      (funil: STAND_BY)",
+    "  99988000804  SIMULADO NOVEMBER  (desfecho APROVADO, shortlist)",
+    "  99988000995  SIMULADO ZULU      (desfecho ALOCADO)",
+    "  99988001029  SIMULADO PAPA      (desfecho ENVIADO_PARA_ADMISSAO)",
+    "  99988001100  SIMULADO QUEBEC    (desfecho DESCARTADO)",
+    "  99988001290  SIMULADO SIERRA    (desfecho DESISTIU)",
+    "  99988001371  SIMULADO TANGO     (solto, sem candidatura)",
+    "  99988001452  SIMULADO UNIFORM   (solto, banco de talentos)",
+    "  99988001533  SIMULADO XRAY      (solto, sem candidatura)"
+  ],
   "cpfs": [
     "99900000188",
     "99900000269",
     "99900000340",
     "99900000420",
     "99900000501",
-    "99900000692"
+    "99900000692",
+    "99988000138",
+    "99988000219",
+    "99988000308",
+    "99988000480",
+    "99988000561",
+    "99988000642",
+    "99988000723",
+    "99988000804",
+    "99988000995",
+    "99988001029",
+    "99988001100",
+    "99988001290",
+    "99988001371",
+    "99988001452",
+    "99988001533"
   ]
 }

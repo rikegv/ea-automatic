@@ -1239,6 +1239,49 @@ depois cortava no fim.
 *(Decisão do diretor, após a frente da plataforma unificadora voltar em quatro parcelas, e emendada no
 mesmo dia depois que a correção produziu o defeito oposto.)*
 
+## A.43: A HOMOLOGAÇÃO É TESTE, e a fábrica SEMEIA e APAGA nela sem perguntar (regra permanente)
+
+**Faltou dado para a homologação exercitar ou fotografar uma tela? A fábrica SEMEIA dado sintético, na
+hora, sem perguntar.** Sobrou dado que trava um gate? **A fábrica APAGA, sem perguntar.** A 3120 é
+ambiente de teste, e tudo que vive nela é teste.
+
+- **SEMEAR é o comportamento padrão**, não a exceção. Tela vazia não ensina nada e não vira print, e
+  esperar o diretor autorizar cada semeadura transforma uma tarefa de minutos em uma rodada serial
+  (§A.40). O dado nasce **sintético e declarado**: CPF de família reservada com verificador válido,
+  e-mail de domínio de homologação, telefone que não fecha verificador de documento, nome sem palavra
+  do léxico real, e tudo atribuído à conta de captura, nunca a um colega.
+- **APAGAR o que trava também é padrão.** A asserção de população recusa o lote quando encontra uma
+  linha fora do padrão sintético, e ela está certa em recusar: é a única camada que impede um CPF real
+  de virar conteúdo autorizado em imagem versionada. O conserto é tirar a linha, **nunca afrouxar o
+  gate**. Isso vale para linha criada por uso normal da tela, que é a origem mais comum.
+- **Movimentar registro de teste é livre.** Vaga de teste, admissão de teste, candidato de teste:
+  apagar, reatribuir, mover de status, o que for mais prático para a frente andar.
+- **O que NÃO muda, e é o limite:** a produção (3010) não é tocada por nada disto; a régua de que print
+  não pode conter pessoa real continua inteira; e concessão de MENU continua sendo decisão do diretor
+  (§A.23), porque menu não é dado de teste, é permissão.
+
+*(Decisão do diretor, 30/09/2026, ao destravar a captura da Central De Ajuda. Vale para esta frente e
+para todas as próximas, e existe para a fábrica parar de perguntar o que já está respondido.)*
+
+## A.44: A RÉGUA DE DADO PESSOAL DO MANUAL ESTÁ DECIDIDA, e não se reabre a cada frente (regra permanente)
+
+**A tabela de candidatos de A&S segue LIBERADA na régua de dado pessoal do motor de captura, como o
+diretor decidiu em 28/09/2026. NÃO reverter, e NÃO trazer o assunto de volta a cada frente.**
+
+**O fundamento, que é dele e vale como regra:** a Central De Ajuda é **interna**. Quem a lê é o time
+que **já enxerga aqueles mesmos dados na tela todos os dias**, no exercício do trabalho, e já está
+coberto pelo documento de proteção de dados que assinou. Um manual interno que mostra a tela que a
+pessoa já abre não acrescenta exposição.
+
+**O que esta seção NÃO dispensa, e a distinção é o que a mantém honesta:**
+- a **denylist de colega** continua de pé: nome de usuário do time não entra em print;
+- a **asserção de população** continua de pé para as fontes que não foram liberadas nominalmente;
+- **credencial nunca entra**: link do Portal, senha, token e identificador de acesso ficam fora, porque
+  não são "dado que o time já vê", são chave de acesso.
+
+*(Decisão do diretor, reafirmada em 30/09/2026. A auditoria pediu a reversão de boa-fé e com fundamento
+técnico; o diretor manteve a liberação e mandou registrar para o ponto não voltar à mesa.)*
+
 ## A.45: A SENHA DO IFRACTAL FICA VISÍVEL NA TELA, e o assunto está encerrado (regra permanente)
 
 **O campo de senha do iFractal, na aba IFRACTAL da Esteira, fica em TEXTO CLARO. NÃO mascarar, nunca,
@@ -1265,3 +1308,47 @@ como texto claro, então quem mascarar de novo quebra o gate antes de chegar na 
 **CONSEQUÊNCIA ASSUMIDA, e ela é da captura, não do produto:** `textoAuditavel` (`ajuda/pii.ts`) só
 pula `input[type=password]`, então esta aba não é capturável para o manual sem tratamento próprio no
 arnês. **O produto não paga o preço da captura.** *(Decisão do diretor.)*
+
+## A.46: SENHA NUNCA ENTRA EM PRINT, IMAGEM, LOG NEM ARQUIVO VERSIONADO (regra permanente)
+
+**Esta seção é a OUTRA METADE da §A.45, e as duas só funcionam juntas. Quem ler uma sem a outra vai
+errar, e vai errar de um dos dois jeitos previsíveis.** Por isso elas ficam lado a lado.
+
+**A §A.45 decidiu a TELA: a senha do iFractal fica visível, e o assunto está encerrado.**
+**Esta decide o RESTO: senha NUNCA aparece em print, imagem, captura, log, commit ou qualquer arquivo
+que entre no repositório.**
+
+**O FUNDAMENTO, e ele é o que separa as duas, não um detalhe de forma:**
+
+| | quem enxerga | por quanto tempo | coberto por |
+|---|---|---|---|
+| **a TELA** | o time que opera, com acesso concedido | enquanto a sessão dura | o documento de confidencialidade que essa pessoa assinou |
+| **o ARQUIVO no repositório** | **qualquer um que clone o projeto** | **para sempre** | **nada** |
+
+São públicos diferentes e prazos diferentes. A decisão da §A.45 é sobre pessoas identificadas que já
+veem aquele dado no exercício do trabalho. Um PNG no git não tem contexto, não tem prazo e não tem
+titular: **imagem que entra no git não sai**, e um commit de correção não apaga o histórico.
+
+**O QUE ISSO PROÍBE, sem exceção:** print do manual com senha legível; captura de tela com credencial
+no quadro; senha em mensagem de log; senha em mensagem de erro; senha em fixture, em comentário de
+código, em documento de `docs/` ou em qualquer arquivo versionado.
+
+**O GATE CONTINUA BARRANDO, e não se afrouxa.** O filtro de dado pessoal do motor de captura só
+ignorava o campo enquanto ele era do tipo senha; em texto claro, ele passa a LER o valor e a regra de
+rótulo recusa a imagem. **Isso é o comportamento certo.** As duas saídas legítimas, quando aquela
+tela precisar de imagem, são **recorte** que deixe a coluna de senha fora do quadro, ou **arnês** com
+credencial sintética declarada. Afrouxar o gate não é uma delas.
+
+**POR QUE AS DUAS PRECISAM ESTAR ESCRITAS, e o risco é simétrico:**
+- **sem esta seção**, a próxima sessão lê a §A.45 como licença para fotografar senha, e a credencial
+  entra no repositório para sempre;
+- **sem a §A.45**, a próxima auditoria mascara o campo de novo e trava a operação, que foi exatamente
+  o que aconteceu entre 28 e 30/09/2026.
+
+**O que foi MEDIDO em 30/09/2026, e é por isso que esta regra nasce sem incidente:** as três imagens
+daquela tela que já estavam no repositório mostram **todos os campos de senha vazios**, e a única
+linha com senha gravada na homologação é de população anonimizada, com **3 caracteres**, string de
+teste. **Nenhuma credencial vazou.** A regra é preventiva, e chegou antes do dano.
+
+*(Decisão do diretor, 30/09/2026, sobre alerta levantado pela frente da Central De Ajuda. Complementa
+a §A.6 e é inseparável da §A.45.)*

@@ -3,16 +3,33 @@ import type { Artigo } from "../../tipos";
 /**
  * N1 DA ABA IFRACTAL: preencher a credencial de ponto na própria linha.
  *
- * ┌─ A SENHA É MASCARADA, E O ARTIGO PRECISA DIZER QUE ISSO É DE PROPÓSITO ──────────────────────┐
- * │ Decisão do diretor de 28/09/2026: o campo de senha passou a ser um campo de senha de verdade      │
- * │ (`type="password"`), então o que se digita aparece em pontinhos. Antes ele era texto claro, e o    │
- * │ fundamento era a credencial ser descartável; a medição de 124 credenciais desenhadas em claro na   │
- * │ tabela derrubou esse fundamento.                                                                 │
- * │                                                                                                   │
- * │ SEM ESTA LINHA NO ARTIGO, A MUDANÇA PARECE DEFEITO. Quem usava a aba lia a senha na tabela para    │
- * │ conferir, e vai achar que o campo quebrou. O passo 5 e a segunda regra existem para isso, e o      │
- * │ artigo ensina o caminho que substitui a conferência visual: digitar de novo, que sobrescreve.      │
- * └─────────────────────────────────────────────────────────────────────────────────────────────────┘
+ * ┌─ A SENHA FICA VISÍVEL, E ESTE ARTIGO JÁ ENSINOU O CONTRÁRIO DURANTE DOIS DIAS ───────────────┐
+ * │ Decisão do diretor de 30/09/2026: o campo de senha da aba iFractal fica em TEXTO CLARO, e o      │
+ * │ assunto está encerrado. O fundamento é dele: a senha é PROVISÓRIA e existe para ser repassada ao │
+ * │ candidato, então o time que opera a aba é justamente quem precisa LÊ-LA, e esse time já enxerga  │
+ * │ aquele dado todos os dias, coberto pelo documento de confidencialidade que assinou.              │
+ * │                                                                                                  │
+ * │ O QUE ESTE BLOCO DIZIA ANTES, e é registro que vale mais do que o texto novo: entre 28 e 30/09   │
+ * │ o campo foi mascarado, como conserto de segurança, e o artigo ensinava os pontinhos como         │
+ * │ comportamento correto. O mascaramento QUEBROU A OPERAÇÃO, porque quem cadastra a senha precisa   │
+ * │ lê-la para repassar, e foi revertido. Enquanto durou, o manual estava certo sobre a tela e       │
+ * │ errado sobre o trabalho.                                                                          │
+ * │                                                                                                  │
+ * │ ISTO NÃO É ACHADO DE SEGURANÇA, e auditoria futura que levantar o campo tem a resposta dada.     │
+ * └────────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ A DECISÃO VALE PARA A TELA, NÃO PARA A IMAGEM, E A DISTINÇÃO É O QUE PROTEGE ESTE ARQUIVO ──┐
+ * │ Senha visível na TELA é decisão tomada. Senha em PRINT, em log ou em qualquer arquivo que entre │
+ * │ no repositório continua PROIBIDA, e o motivo não é formalismo: quem está na tela é o time com    │
+ * │ acesso e com termo assinado, enquanto a sessão dura; o arquivo versionado é qualquer um que       │
+ * │ clone o projeto, para sempre, e imagem que entra no histórico não sai.                            │
+ * │                                                                                                  │
+ * │ CONSEQUÊNCIA PRÁTICA PARA QUEM MEXER NAS IMAGENS DESTE ARTIGO: o filtro de dado pessoal só       │
+ * │ ignorava aquele campo enquanto ele era do tipo senha. Em texto claro, ele LÊ o valor, e a regra  │
+ * │ de rótulo recusa a imagem. Isso é o comportamento certo. As duas saídas legítimas são recorte    │
+ * │ que deixe a coluna de senha fora do quadro, ou arnês com credencial sintética declarada.         │
+ * │ Afrouxar o filtro não é uma delas.                                                                │
+ * └────────────────────────────────────────────────────────────────────────────────────────────────┘
  *
  * ┌─ POR QUE ESTA ABA NÃO SE PARECE COM AS OUTRAS ───────────────────────────────────────────────┐
  * │ Composição própria, decidida pelo diretor: Matrícula, Cliente, Nome, Data adm., Tipo De Marcação, │
@@ -38,7 +55,7 @@ export const artigo: Artigo = {
   nivel: "N1",
   familia: "esteira",
   resumo:
-    "Como preencher o login e a senha do sistema de ponto direto na linha da aba iFractal, por que a senha aparece mascarada e como mover o status até finalizar.",
+    "Como preencher o login e a senha do sistema de ponto direto na linha da aba iFractal, por que a senha fica visível na tabela e como mover o status até finalizar.",
   termos: [
     "ifractal",
     "ponto",
@@ -48,9 +65,9 @@ export const artigo: Artigo = {
     "login",
     "senha",
     "usuario do ponto",
-    "senha escondida",
-    "senha mascarada",
-    "nao vejo a senha",
+    "senha aparece na tela",
+    "ler a senha do candidato",
+    "repassar a senha",
     "biometria",
     "cartao",
     "reconhecimento facial",
@@ -110,9 +127,9 @@ export const artigo: Artigo = {
       },
     },
     {
-      gesto: "Clique no campo Senha e digite a senha. Ela aparece em pontinhos.",
+      gesto: "Clique no campo Senha e digite a senha.",
       detalhe:
-        "A senha é mascarada de propósito: credencial não fica desenhada na tabela, à vista de quem passa pela tela. Ela continua sendo gravada e editada normalmente. Para trocar, digite a nova por cima e saia do campo; para conferir uma senha que você não lembra, o caminho é redefini-la, não ler a antiga.",
+        "A senha fica visível na linha, e isso é decisão de quem dirige: ela é provisória e existe para ser repassada ao candidato, então quem cadastra precisa conseguir ler o que gravou. Para trocar, digite a nova por cima e saia do campo. Trate a tela como se trata credencial: não deixe a aba aberta em tela compartilhada nem fotografe a lista.",
       controles: ["Senha", "senha"],
     },
     {
@@ -140,8 +157,8 @@ export const artigo: Artigo = {
   ],
   seDerErrado: [
     {
-      sintoma: "A senha que eu digitei virou pontinhos e eu não consigo mais lê-la.",
-      acao: "É o comportamento correto e é decisão de segurança: o campo de senha não mostra o que está guardado. Se precisar garantir o valor, digite a senha de novo por cima e saia do campo, que o sistema grava o valor novo.",
+      sintoma: "A senha aparece em pontinhos e você não consegue lê-la.",
+      acao: "Se você está vendo pontinhos, a tela do seu navegador está desatualizada: recarregue a página. O campo voltou a mostrar o valor em 30/09/2026, justamente porque o time precisa ler a senha para repassar ao candidato.",
     },
     {
       sintoma: "Digitei o login e não achei o botão de salvar.",
@@ -166,7 +183,8 @@ export const artigo: Artigo = {
   ],
   regras: [
     "A frente do iFractal nasce para todos os clientes, junto do Cadastro, quando a Auditoria e o Exame fecham.",
-    "A senha é mascarada na tela, por decisão de segurança. Ela continua editável, e o caminho para trocar é digitar a nova por cima.",
+    "A senha fica visível na tela, por decisão de quem dirige: ela é provisória e existe para ser repassada ao candidato. Para trocar, digite a nova por cima.",
+    "Visível na tela não quer dizer livre: não fotografe a lista, não a projete em tela compartilhada e não a cole em mensagem.",
     "Login e senha são gravados ao sair do campo, sem botão de salvar.",
     "A credencial nunca é registrada em log do sistema.",
     "O Tipo De Marcação é herdado do cadastro do cliente e não se edita nesta aba.",

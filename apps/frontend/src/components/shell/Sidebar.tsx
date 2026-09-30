@@ -114,8 +114,45 @@ export function Sidebar() {
     <aside
       onMouseEnter={() => setHovering(true)}
       onMouseLeave={() => setHovering(false)}
+      /*
+       * ─ A BARRA ROLA POR DENTRO, E É ISSO QUE ELIMINA O SEGUNDO SCROLL DA PÁGINA ─────────────────
+       *
+       * ┌─ O DEFEITO, MEDIDO E NÃO DEDUZIDO (30/09/2026) ──────────────────────────────────────────┐
+       * │ Sem `max-h` e sem `overflow`, esta barra cresce com o número de menus da pessoa e EMPURRA  │
+       * │ a casca inteira: medido em 1321 pixels de altura, contra uma janela de 1000. A casca é      │
+       * │ `min-h-screen`, então ela acompanha, e o DOCUMENTO passa a rolar. Como o `<main>` já tem o  │
+       * │ scroll dele, a tela fica com DOIS, e o de fora é o que estraga: rolar o documento levanta o │
+       * │ `<main>` (que é `max-h-screen`, ancorado no topo) e deixa uma faixa morta embaixo, onde os  │
+       * │ cards somem.                                                                                │
+       * │                                                                                             │
+       * │ REPRODUZIDO em 1600x1000 e 1536x720; em 1366x640 NÃO aparece, porque aí a barra encolhe     │
+       * │ para 606 pixels e cabe. Era por isso que o defeito parecia intermitente: ele depende da      │
+       * │ ALTURA da janela e da QUANTIDADE DE MENUS da pessoa, não da tela que está aberta.           │
+       * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+       *
+       * A CORREÇÃO É DAR ROLAGEM PRÓPRIA À BARRA, e não mexer no `<main>`: assim a casca nunca passa
+       * da altura da janela, o documento para de rolar e sobra UM scroll só, o do conteúdo. De quebra
+       * conserta um incômodo antigo: com menu longo, alcançar os itens de baixo exigia rolar a PÁGINA,
+       * o que arrastava o conteúdo junto.
+       *
+       * POR QUE `overflow` AQUI NÃO CORTA NADA: esta barra não tem nenhum filho `absolute` nem
+       * `fixed` (conferido por varredura antes de mexer), então não há popover para ser recortado. O
+       * dia em que nascer um, ele precisa sair daqui ou virar camada própria.
+       *
+       * ┌─ A BARRA ROLA, MAS NÃO SE VÊ: `ea-scroll-oculto` ──────────────────────────────────────┐
+       * │ Decisão do diretor: a barra de rolagem NÃO pode aparecer no menu. A do navegador vinha    │
+       * │ cinza escura, colada na moldura de vidro, e destoava do tema em que a pessoa está.         │
+       * │                                                                                            │
+       * │ NÃO É O MESMO QUE TIRAR A ROLAGEM, e a diferença importa: roda do mouse, arraste, teclado  │
+       * │ e leitor de tela continuam inteiros. Some o desenho, nunca o comportamento.                 │
+       * │                                                                                            │
+       * │ E NÃO VALE PARA TODA ÁREA QUE ROLA. A tabela usa a irmã VISÍVEL (`ea-scroll`), porque lá a │
+       * │ barra é a única pista de que existe coluna fora do quadro. Aqui não é: a lista é curta,     │
+       * │ conhecida, e o item cortado na borda já anuncia que há mais abaixo.                         │
+       * └──────────────────────────────────────────────────────────────────────────────────────────┘
+       */
       className={cn(
-        "glass side z-[20] m-4 mr-0 flex shrink-0 flex-col gap-1.5 transition-[width] duration-200",
+        "glass side ea-scroll-oculto z-[20] m-4 mr-0 flex max-h-[calc(100vh-2rem)] shrink-0 flex-col gap-1.5 overflow-y-auto overflow-x-hidden transition-[width] duration-200",
         expanded ? "w-[248px] p-[22px_16px]" : "w-[76px] p-[22px_12px]",
       )}
     >

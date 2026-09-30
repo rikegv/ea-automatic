@@ -3,15 +3,28 @@ import type { Artigo } from "../../tipos";
 /**
  * PADRÃO DO SISTEMA 12 de 14: ENTRAR.
  *
- * ┌─ O ÚNICO DOS QUATORZE SEM IMAGEM, E A CAUSA ESTÁ MEDIDA NO MOTOR ────────────────────────────┐
- * │ O motor de captura entra no sistema ANTES de abrir qualquer roteiro, e a tela de entrada rebate   │
- * │ quem já tem sessão para o painel inicial. Um roteiro apontado para ela fotografaria o painel        │
- * │ inicial e falharia ao não achar o campo de e-mail, acusando artigo velho onde o artigo está certo.  │
- * │ A tela de troca de senha é pior ainda: ela só existe para quem está com senha temporária.          │
- * │                                                                                                    │
- * │ ENTÃO O ARTIGO NASCE SEM PRINT, DE PROPÓSITO, e a falta está reportada como pedido de um modo de    │
- * │ captura sem sessão. Reservar imagem que nenhum roteiro produz deixaria um buraco tracejado          │
- * │ permanente na primeira página que o operador novo abre, que é o pior lugar possível para um.        │
+ * ┌─ ELE FOI O ÚNICO DOS QUATORZE SEM IMAGEM, E DEIXOU DE SER EM 30/09/2026 ─────────────────────┐
+ * │ A redação anterior deste bloco explicava por que o artigo nascia sem print: o motor entra no    │
+ * │ sistema ANTES de abrir qualquer roteiro, e a tela de entrada rebate quem já tem sessão para o    │
+ * │ painel inicial, então um roteiro apontado para ela fotografaria o painel de DEPOIS de entrar.    │
+ * │ Ela terminava dizendo que a falta "está reportada como pedido de um modo de captura sem sessão". │
+ * │                                                                                                  │
+ * │ O PEDIDO FOI ATENDIDO, e o comentário é que tinha ficado velho: o modo sem sessão existe         │
+ * │ (`ROTAS_PUBLICAS` e `ehRotaPublica`, em `ajuda/rotas.ts`, mais `abrirPaginaSemSessao`, no motor), │
+ * │ e faltava alguém escrever o roteiro. Ele existe agora, em `capturas/entrar-no-sistema.roteiro.ts`,│
+ * │ e produz UMA imagem, recortada no cartão do formulário.                                          │
+ * │                                                                                                  │
+ * │ COMENTÁRIO QUE DESCREVE UMA LIMITAÇÃO JÁ RESOLVIDA É PIOR QUE COMENTÁRIO NENHUM, porque a        │
+ * │ próxima sessão confia nele e deixa de fazer o que já era possível. Foi o que aconteceu aqui.      │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ A TROCA DE SENHA CONTINUA SEM IMAGEM, E AGORA POR UM MOTIVO MEDIDO ─────────────────────────┐
+ * │ `/trocar-senha` NÃO RENDERIZA sem sessão: ela rebate para o login. Fotografá-la pelo modo sem   │
+ * │ sessão produziria a imagem da tela de LOGIN gravada com o nome de arquivo da troca de senha, e   │
+ * │ nenhum gate acusaria, porque a tela tem texto e não tem lista. Print que ensina a tela errada é  │
+ * │ a forma mais cara de erro deste projeto. A alternativa exigiria digitar credencial na única tela │
+ * │ em que isso não pode acontecer. Ela é ensinada em texto. *(Veto do `seguranca`, acatado pelo     │
+ * │ diretor em 30/09/2026.)*                                                                         │
  * └───────────────────────────────────────────────────────────────────────────────────────────────┘
  */
 export const artigo: Artigo = {
@@ -48,6 +61,10 @@ export const artigo: Artigo = {
     {
       gesto: "Abra o endereço do sistema no navegador.",
       detalhe: "A tela de entrada aparece sozinha quando você ainda não está conectado.",
+      print: {
+        arquivo: "01-tela-de-entrada.png",
+        legenda: "A tela de entrada, com o campo de e-mail, o de senha e o botão de entrar.",
+      },
     },
     {
       gesto: "Digite o seu e-mail corporativo no campo E-mail.",
