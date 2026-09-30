@@ -2247,18 +2247,22 @@ export default function EsteiraPage() {
                           {/* LOGIN e SENHA editáveis direto na linha: é o trabalho da aba, e obrigar
                               a abrir um modal para dois campos de texto só somaria cliques.
 
-                              §A.6, DECISÃO DO DIRETOR DE 28/09/2026: o campo de senha passa a ser
-                              `type="password"`, mascarado na linha. Antes ele era texto claro, com o
-                              fundamento de que a credencial é DESCARTÁVEL (o iFractal força a troca
-                              no primeiro acesso); esse fundamento ficou DEFASADO diante da medição
-                              de 124 credenciais desenhadas em claro na tabela de produção. A senha
-                              continua editável e continua nunca sendo logada.
+                              A SENHA FICA VISÍVEL, EM TEXTO CLARO, POR DECISÃO DO DIRETOR (§A.45,
+                              30/09/2026). O mascaramento com `type="password"` chegou a subir em
+                              28/09 e QUEBROU A OPERAÇÃO: o time cadastra a senha e precisa LÊ-LA para
+                              repassar ao candidato, então bolinhas na linha inviabilizam o trabalho.
+                              Foi revertido.
 
-                              EFEITO DE LADO DESEJADO, e faz parte da decisão: `textoAuditavel`
-                              (`ajuda/pii.ts`) pula `input[type=password]`, então marcar o campo como
-                              senha é também o que permite a captura de tela desta aba existir sem
-                              levar credencial para o manual. Conserto do produto e destravamento da
-                              captura são o mesmo conserto. */}
+                              NÃO É ACHADO DE SEGURANÇA, e a resposta já está dada: a senha do
+                              iFractal é PROVISÓRIA e existe justamente para ser repassada; quem
+                              manipula a tabela é o mesmo time que já acessa esses dados no dia a dia,
+                              coberto pelo documento de confidencialidade. Auditoria futura que
+                              levantar este campo lê a §A.45 e não reabre o assunto.
+
+                              CONSEQUÊNCIA ASSUMIDA: `textoAuditavel` (`ajuda/pii.ts`) só pula
+                              `input[type=password]`, então esta aba volta a NÃO ser capturável para o
+                              manual sem tratamento próprio no arnês. O produto não paga o preço da
+                              captura. */}
                           <div className="min-w-0">
                             <input
                               className="ds-input h-8 w-full text-[13px]"
@@ -2271,7 +2275,6 @@ export default function EsteiraPage() {
                           </div>
                           <div className="flex min-w-0 items-center gap-1">
                             <input
-                              type="password"
                               className="ds-input h-8 w-full text-[13px]"
                               placeholder="senha"
                               aria-label={`Senha do iFractal de ${item.candidatoNome}`}

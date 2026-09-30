@@ -1238,3 +1238,30 @@ depois cortava no fim.
 
 *(Decisão do diretor, após a frente da plataforma unificadora voltar em quatro parcelas, e emendada no
 mesmo dia depois que a correção produziu o defeito oposto.)*
+
+## A.45: A SENHA DO IFRACTAL FICA VISÍVEL NA TELA, e o assunto está encerrado (regra permanente)
+
+**O campo de senha do iFractal, na aba IFRACTAL da Esteira, fica em TEXTO CLARO. NÃO mascarar, nunca,
+e não reabrir o assunto a cada frente.**
+
+**O fundamento, que é do diretor:**
+- **A senha é PROVISÓRIA e existe justamente para ser repassada ao candidato.** O time cadastra e
+  precisa LER o valor na linha; sem leitura, a coluna não serve para nada.
+- **Quem manipula esses dados é o time que tem acesso a eles**, e já os vê na tela todos os dias no
+  exercício do trabalho.
+- **O time interno está coberto**, assinou o documento de confidencialidade (mesmo fundamento da §A.44).
+
+**NÃO É ACHADO DE SEGURANÇA.** Auditoria futura que levantar o campo de senha do iFractal tem a
+resposta já dada aqui: fica visível, por decisão do diretor. O `seguranca` registra e segue.
+
+**O caso que originou a regra (28 a 30/09/2026).** Um achado da frente da Central De Ajuda ("marcar o
+campo de senha do iFractal como senha no produto, 124 credenciais em produção") foi tratado como
+conserto de segurança e subiu para produção como `type="password"`. **Quebrou a operação:** o time
+cadastrava a senha e não conseguia mais visualizá-la para repassar. Revertido em 30/09.
+
+**A régua mora em TESTE**, não na lembrança: `ajuda/senha-do-ifractal.tester.spec.ts` trava o campo
+como texto claro, então quem mascarar de novo quebra o gate antes de chegar na operação.
+
+**CONSEQUÊNCIA ASSUMIDA, e ela é da captura, não do produto:** `textoAuditavel` (`ajuda/pii.ts`) só
+pula `input[type=password]`, então esta aba não é capturável para o manual sem tratamento próprio no
+arnês. **O produto não paga o preço da captura.** *(Decisão do diretor.)*

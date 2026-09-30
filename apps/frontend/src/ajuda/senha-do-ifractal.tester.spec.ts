@@ -1,18 +1,23 @@
 // @vitest-environment happy-dom
 /**
- * ─ A SENHA DO IFRACTAL MASCARADA NO PRODUTO (decisão do diretor, 28/09/2026) ─────────────────────
+ * ─ A SENHA DO IFRACTAL FICA VISÍVEL NO PRODUTO (decisão do diretor, §A.45, 30/09/2026) ───────────
  *
- * ESCRITO PELO `tester` (§A.38). São 124 credenciais desenhadas em TEXTO CLARO na tabela de produção,
- * e o conserto pedido é de UMA linha: o `<input>` da coluna de senha da aba IFRACTAL passa a ter
- * `type="password"`.
+ * ESTE ARQUIVO TROCOU DE LADO, e o registro fica aqui de propósito. Em 28/09 ele travava o
+ * MASCARAMENTO (`type="password"`) do campo de senha da aba IFRACTAL, tratado como conserto de
+ * segurança a partir da medição de 124 credenciais em texto claro. O mascaramento subiu, QUEBROU A
+ * OPERAÇÃO (o time cadastra a senha e precisa LÊ-LA para repassar ao candidato) e foi REVERTIDO.
+ *
+ * Agora ele trava o contrário: a senha CONTINUA EM TEXTO CLARO. O fundamento é o da §A.45, a senha é
+ * PROVISÓRIA e existe para ser repassada, e quem opera a tabela já acessa esses dados no dia a dia.
+ * Auditoria futura que mascarar o campo de novo quebra este teste ANTES de chegar na operação.
  *
  * ┌─ AS DUAS ASSERÇÕES SÃO DE NATUREZAS DIFERENTES, E ISSO ESTÁ DITO SEM MAQUIAGEM ──────────────┐
  * │ 1. A da TELA é ASSERÇÃO DE FONTE, não de render: `esteira/page.tsx` é uma página gigante, com    │
  * │    sessão, `fetch` e catálogos, e montá-la num harness custaria mais do que ela protegeria hoje.  │
  * │    Ler a fonte prova o atributo no lugar certo, e não prova o que o browser pinta. É o que é.     │
- * │ 2. A do GATE é COMPORTAMENTAL, de verdade: `textoAuditavel` pula `input[type=password]`, então o  │
- * │    mesmo conserto que mascara o campo é o que destrava o print daquela aba. Essa metade é medida   │
- * │    num DOM real (happy-dom), com valor injetado.                                                 │
+ * │ 2. A do GATE é COMPORTAMENTAL e segue válida, porque é sobre `pii.ts` e não sobre o produto:     │
+ * │    `textoAuditavel` pula `input[type=password]`. Com o campo visível, o valor ENTRA no texto     │
+ * │    auditado, e é por isso que a captura desta aba precisa de tratamento próprio no arnês.        │
  * └──────────────────────────────────────────────────────────────────────────────────────────────┘
  *
  * §A.6: a "senha" das fixtures é inventada e não é credencial de ninguém.
@@ -40,19 +45,23 @@ function elementoQueContem(fonte: string, marcador: string): string {
   return abre === -1 || fecha === -1 ? "" : fonte.slice(abre, fecha + 2);
 }
 
-describe("ASSERÇÃO DE FONTE: o campo de senha da aba IFRACTAL é `type=password`", () => {
+describe("ASSERÇÃO DE FONTE: o campo de senha da aba IFRACTAL fica VISÍVEL", () => {
   const fonte = readFileSync(ESTEIRA, "utf8");
 
-  it("o `<input>` da senha declara `type=\"password\"`", () => {
+  /**
+   * A REGRA DURA DA §A.45: o `<input>` da senha NÃO declara `type="password"`. Mascarar este campo
+   * quebra a operação, porque a senha do iFractal é provisória e o time precisa lê-la na linha para
+   * repassar ao candidato. Quem tentar mascarar de novo quebra aqui.
+   */
+  it("o `<input>` da senha NÃO declara `type=\"password\"`", () => {
     const elemento = elementoQueContem(fonte, "Senha do iFractal");
     expect(elemento, "o input da senha do iFractal foi encontrado na fonte").not.toBe("");
-    expect(elemento).toMatch(/type=\s*"password"/);
+    expect(elemento).not.toMatch(/type=\s*"password"/);
   });
 
   /**
-   * O CAMPO DE LOGIN **NÃO** VIRA SENHA, e a asserção existe para travar o excesso de zelo: mascarar o
-   * login tiraria da operação a única coluna pela qual ela reconhece a linha, e isso o diretor não
-   * pediu (§A.14). O que ele pediu foi credencial, e credencial é a senha.
+   * O CAMPO DE LOGIN TAMBÉM CONTINUA EM TEXTO CLARO, pelo mesmo fundamento e por um a mais: ele é a
+   * única coluna pela qual a operação reconhece a linha.
    */
   it("o campo de LOGIN continua em texto claro", () => {
     const elemento = elementoQueContem(fonte, "Login do iFractal");
@@ -60,7 +69,7 @@ describe("ASSERÇÃO DE FONTE: o campo de senha da aba IFRACTAL é `type=passwor
     expect(elemento).not.toMatch(/type=\s*"password"/);
   });
 
-  it("a senha continua EDITÁVEL: o conserto é de exibição, não de bloqueio", () => {
+  it("a senha continua EDITÁVEL e sem bloqueio de leitura", () => {
     const elemento = elementoQueContem(fonte, "Senha do iFractal");
     expect(elemento).toMatch(/onChange=/);
     expect(elemento).not.toMatch(/\bdisabled\b/);
