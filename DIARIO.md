@@ -18133,3 +18133,86 @@ IA nasce **inerte por configuração** (`PORTAL_LEITOR_URL` e `PORTAL_LEITOR_TOK
 de produção). O serviço isolado (`ea-portal-leitor`, 8020) existe, responde e serve `/portal/ler`,
 mas não está ligado ao backend. Ligar é decisão do diretor, não da fábrica: é IA lendo documento de
 candidato.
+
+---
+
+## 30/09/2026. A CONCESSÃO DOS MENUS NOVOS, POR ÁREA: a decisão de 27/09 foi revista pelo diretor
+
+**Determinação do diretor (§A.23: a decisão é dele, a fábrica só executa).** Depois da publicação da
+main, 14 menus estavam registrados com **zero concessão**. Ele liberou 11 deles **por área**.
+
+### A MUDANÇA DE DECISÃO, registrada porque ela desfaz outra de dois dias atrás
+
+Em 27/09 nasceu a lista `MENUS_QUE_EXIGEM_MARCACAO_DO_MASTER` (`domain/menus.ts:1509`)
+**exatamente para impedir** que os MASTER de A&S ganhassem os catálogos pelo caminho da área,
+forçando escolha nominal pessoa a pessoa. **O diretor revisou isso e liberou para todos da área.**
+A marcação nominal continua existindo como mecanismo; o que mudou é que ela foi feita para os 3
+MASTER de A&S de uma vez, por decisão dele, e não menu a menu. O `seguranca` levantou o ponto como
+ressalva e o diretor já o havia antecipado na própria ordem ("Registrem a mudança").
+
+### O QUE FOI CONCEDIDO, e as contagens (§A.27)
+
+`usuario_menus`: **348 para 498**, `INSERT 0 150`. **Nenhuma concessão antiga perdida**, provado por
+comparação par a par contra o dump de antes: 348 pares antes, 498 depois, **0 perdidos**, 150
+acrescentados. Nada mudou fora da tabela (`usuarios` 39, `usuario_areas` 39, `menus` 46,
+`admissoes` 3004).
+
+| menu | área | pessoas | COMUM | MASTER | SUPER |
+|---|---|---|---|---|---|
+| `ajuda` Central De Ajuda | ADM,AS | 39 | 26 | 7 | 6 |
+| `portal-links` Portal Do Candidato | ADM | 30 | 20 | 4 | 6 |
+| os 8 catálogos de A&S + `as-vagas-revisao` | AS | 9 cada | 6 | 3 | 0 |
+
+**O instrumento foi INSERT aditivo em transação, nunca a tela.** `definirMenusDoUsuario`
+(`auth/menus.service.ts:182`) salva por **SUBSTITUIÇÃO** e teria apagado concessão existente. O teto
+de área é a junção `m.areas && ARRAY[ua.area]`, e o `seguranca` provou que ele **também vale na
+leitura** (`menu.guard.ts:75` e `auth.controller.ts:115`): linha errada em `usuario_menus` continua
+barrada por área, nas duas superfícies. Sem cache de concessão (`menus.service.ts` lê do banco a cada
+requisição), então valeu na hora, sem restart.
+
+**ARMADILHA QUE CUSTOU UMA RODADA:** o primeiro `INSERT` **não rodou** e não deu erro nenhum.
+`docker exec ea-db psql <<EOF` sem a flag **`-i`** não anexa a entrada padrão: o psql recebe nada,
+sai zero, e a saída vem vazia. Só apareceu porque a contagem foi medida depois (seguia 348) em vez de
+confiada. **Medir depois de escrever, sempre.**
+
+### AGENTE ACIONADO E VEREDITO (§A.34/§A.38)
+
+| agente | veredito |
+|---|---|
+| `seguranca` (sobre o PLANO, antes de aplicar) | **APROVADO COM RESSALVA**. Provou que **nenhuma porta de auto-concessão abre**: as 4 tabelas de permissão (`usuario_menus`, `usuario_areas`, `usuarios`, `menus`) só são escritas por controllers com `@Roles("SUPER_ADMIN")` de classe, e o `RolesGuard` roda ANTES do `MenuGuard` (`app.module.ts:88` e `:91`). `usuarios` e `menu-areas` têm `operacoes: []`. Zero trigger e zero rule em `usuario_menus`, e os dois FKs cascateiam na direção de ENTRADA: INSERT não apaga nada |
+
+### AS TRÊS RESSALVAS, e o que se fez com cada uma
+
+- **R1, "Liberar Vaga" abre a tela e nenhuma rota.** `as-vagas-revisao` tem `operacoes: []`
+  (`domain/menus.ts:1014`); as rotas vivem na `VagasController`, reivindicada pelo menu **`as-vagas`**
+  (`:955`), que **não estava entre os 14** e o diretor não pediu. Só **3 dos 9** usuários de A&S têm
+  `as-vagas`. Para os outros 6, a tela abre e toda ação toma **403** do `MenuGuard`. É fail-closed,
+  não é falha de segurança: é entrega pela metade. **Concedido como o diretor pediu**, e a pergunta
+  sobe para ele: conceder `as-vagas` também? (§A.31: propõe, não constrói.)
+- **R3, `portal-links` reivindica por coringa** (`domain/menus.ts:753`), então handler novo naquelas
+  classes **herda a concessão sem nova decisão**. Medido: a rota `travas/:id/destravar`, que o
+  working tree acrescenta, **não existe no binário no ar** (404, zero ocorrências no `dist`
+  publicado). A ressalva é **futura**: no dia em que a frente de acesso por e-mail subir, os 20
+  COMUM de ADM ganham o destravar de graça. **Reauditar naquele momento.**
+- **R4, 16 das 150 linhas foram para os 4 usuários INATIVOS** (4 em `ajuda`, 3 em `portal-links`, 1 em
+  cada A&S). O login barra inativo (`auth.service.ts:18`), então não há acesso; o efeito é que
+  reativar devolve os menus sem decisão nova. Executado ao pé da letra da ordem ("TODOS os usuários
+  da área") e reportado para o diretor decidir o contrário se quiser.
+
+### O QUE O COMUM PASSA A ALCANÇAR (levantado pelo `seguranca`, para o diretor ter o mapa)
+
+- **20 COMUM de ADM, por `portal-links`:** emitir, revogar, bloquear e desbloquear o link do
+  prontuário do candidato, e **disparar o e-mail** com a credencial. Toda escrita grava autor de
+  `@CurrentUser()`, nunca do corpo, e a URL não é persistida nem devolvida no envio (§A.6 cumprida).
+  O envio hoje recusa com `CANAL_INDISPONIVEL`, porque o correio não está configurado.
+- **6 COMUM de A&S, pelos 8 catálogos:** criar, renomear, reordenar, inativar, reativar e **deletar**
+  item de Etapas Do Funil, Status Da Vaga, Motivos e Linhas/Segmentos/Comerciais. Nenhum toca CPF,
+  dado pessoal, credencial ou permissão. O risco é **operacional**, não de LGPD: um COMUM passa a
+  poder inativar etapa do funil que a área inteira consome.
+- **Por `ajuda`: nada.** `operacoes: []` e a rota `/ajuda` já era aberta a qualquer autenticado.
+
+### O QUE SOBROU SEM CONCESSÃO NENHUMA (3 menus)
+
+`dicas-documento` (Dicas De Documento, ADM, restrição NENHUMA, o diretor não mencionou),
+`entradas-pandape` (NAO_PARA_COMUM) e `menu-areas` (SO_SUPER_ADMIN), os dois últimos porque ele
+disse explicitamente que seguem como estão.
