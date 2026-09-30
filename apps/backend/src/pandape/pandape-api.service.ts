@@ -532,12 +532,36 @@ export class PandapeApiService {
 }
 
 /**
- * A LISTA DE DENTRO DA RESPOSTA, sem confiar no formato: `{ data: [...] }` e o array cru convivem na
- * API do Pandapé conforme a versão do endpoint. Qualquer outra coisa vira lista VAZIA, que é a
- * direção fail-closed da frente: o que não é reconhecido não é ingerido.
+ * A LISTA DE DENTRO DA RESPOSTA, sem confiar no formato. TRÊS envelopes convivem na API do Pandapé
+ * conforme a versão do endpoint, e o terceiro faltava aqui.
+ *
+ * ┌─ O DEFEITO QUE ESTA FUNÇÃO TINHA, MEDIDO CONTRA A API REAL EM 30/09/2026 ────────────────────┐
+ * │ Ela lia `data` e o array cru, e as TRÊS listagens da varredura chamam `/v2`:                  │
+ * │ `/v2/vacancies`, `/v2/vacancy-folders` e `/v2/matches`. A v2 devolve                          │
+ * │ `{ totalPages, totalItems, items, links }` e NÃO TEM chave `data`, então as três devolviam     │
+ * │ LISTA VAZIA contra a API de verdade: 471 vagas ativas viravam 0, e 50 inscrições viravam 0.    │
+ * │                                                                                               │
+ * │ E o pior é o modo da falha: vazio é a direção FAIL-CLOSED desta frente, então nada estourava.  │
+ * │ Ligar `PANDAPE_VARREDURA_DATA_CORTE` teria feito a varredura rodar, gastar cota, escrever      │
+ * │ "0 vagas varridas" no resumo e parecer que simplesmente não havia nada novo no ATS.            │
+ * │                                                                                               │
+ * │ OS TESTES NÃO PEGAVAM, e é a lição que sobrevive: os dublês devolviam `{ data: [...] }`, que   │
+ * │ é o formato que ninguém mediu. Teste escrito sobre o dublê prova o dublê, não o contrato.      │
+ * │ Por isso o teste novo asseriu o envelope REAL da v2, copiado da medição.                       │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * Qualquer outra coisa continua virando lista VAZIA, que é a direção fail-closed da frente: o que
+ * não é reconhecido não é ingerido.
  */
-function listaDaResposta(resposta: unknown): Record<string, unknown>[] {
-  const bruto = Array.isArray(resposta) ? resposta : (resposta as { data?: unknown } | undefined)?.data;
+export function listaDaResposta(resposta: unknown): Record<string, unknown>[] {
+  if (Array.isArray(resposta)) return apenasObjetos(resposta);
+  const envelope = resposta as { data?: unknown; items?: unknown } | undefined;
+  // `data` primeiro por compatibilidade com a v1; `items` é a v2. Nunca os dois ao mesmo tempo.
+  const bruto = Array.isArray(envelope?.data) ? envelope?.data : envelope?.items;
   if (!Array.isArray(bruto)) return [];
+  return apenasObjetos(bruto);
+}
+
+function apenasObjetos(bruto: unknown[]): Record<string, unknown>[] {
   return bruto.filter((x): x is Record<string, unknown> => typeof x === "object" && x !== null);
 }
