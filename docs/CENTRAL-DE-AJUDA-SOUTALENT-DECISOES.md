@@ -200,6 +200,7 @@ de escopo fechado proíbe. Ficam propostos, com o lugar exato, para o diretor de
 | 11 | `CandidatosDaVagaModal.tsx` não é importado por nada | A&S | código órfão, 161 linhas; remoção pede ordem de serviço própria |
 | 12 | A tela antiga de kit continua alcançável por URL | `/kit` | fora do menu de propósito, mas não removida, por dependência conhecida do reenvio por correção |
 | 13 | O catálogo de etapas do funil diverge entre produção e homologação | A&S | o mesmo código de etapa tem rótulo diferente nos dois bancos, e a medição de cobertura foi feita sobre a homologação |
+| 14 | A célula de SLA escreve `entregue` em minúscula, e o filtro escreve "Vaga Entregue" | `lib/as-vaga-sla.ts:214` (célula) contra `SLA_ESTADO_LABEL` (filtro) | o mesmo estado tem dois nomes na mesma tela, e a minúscula contraria a régua de title case em tag; achado ao fotografar a coluna para o manual, e o texto do artigo teve de ser corrigido para descrever os DOIS nomes |
 
 **Um achado de PROCESSO, e ele vale mais do que os treze:** a medição de cobertura que orienta o manual
 é de 28 de setembro e **não conhece os 21 artigos do Soul ADM** escritos depois. Os números de controle
@@ -280,6 +281,19 @@ as duas réguas separadas, senão a próxima sessão lê a regra nova como licen
 ---
 
 ## 9. PENDENTE: os renomeios da Central De Vagas alcançam o manual (aviso de 30/09/2026)
+
+> **ESTA SEÇÃO TEM UM PAR: `docs/PUBLICACAO-PENDENTE-DAS-DUAS-FRENTES.md`**, escrito pela frente
+> vizinha, com o protocolo de publicação conjunta. As duas descrevem a MESMA pendência por ângulos
+> diferentes: aqui está o que muda no manual, lá está como as duas frentes sobem juntas.
+>
+> **Quem mexer numa, lê a outra.** Registro duplicado que ninguém costura é registro que diverge, e
+> aí a próxima pessoa segue o que estiver mais à mão, que pode ser o desatualizado. É o mesmo modo de
+> falha que a família de artigos existe para impedir, aparecendo em documento em vez de em código.
+>
+> **O combinado, em uma linha:** a frente vizinha avisa quando estiver PRONTA para publicar (não no
+> momento de publicar), eu corrijo os cinco arquivos e recapturo contra o código dela, e sobe tudo
+> numa janela só. Se a janela dela for curta demais, aceito a defasagem, mas exijo o aviso no
+> momento da publicação, não depois.
 
 Uma frente vizinha renomeia rótulos de tela da Central De Vagas. **Os textos abaixo ainda NÃO foram
 corrigidos, e isso é deliberado:** o renomeio está no código e **não está publicado na homologação**,

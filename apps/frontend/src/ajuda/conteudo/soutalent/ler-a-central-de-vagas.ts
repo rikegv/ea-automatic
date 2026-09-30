@@ -175,8 +175,8 @@ export const artigo: Artigo = {
     {
       gesto: "Na coluna SLA De Entrega, use a cor antes do número.",
       detalhe:
-        "Vermelho é prazo vencido, amarelo é prazo curto (dois dias ou menos), texto normal é prazo em dia e tom apagado é vaga sem previsão de entrega combinada. A vaga encerrada fica discreta, porque ali o número é histórico.",
-      controles: ["Prazo Vencido", "Prazo Curto", "No Prazo", "Sem Previsão", "Vaga Encerrada"],
+        "Vermelho é prazo vencido, amarelo é prazo curto (dois dias ou menos), texto normal é prazo em dia e tom apagado é vaga sem previsão de entrega combinada. A vaga encerrada fica discreta, porque ali o número é histórico. E a vaga que já foi entregue escreve entregue no lugar da contagem: o prazo PARA quando ela sai das suas mãos, em vez de continuar correndo e vencer sozinha enquanto o cliente decide. No filtro, essa mesma situação se chama Vaga Entregue. Reabrindo a vaga, você informa uma previsão nova e o prazo volta a contar a partir dela.",
+      controles: ["Prazo Vencido", "Prazo Curto", "No Prazo", "Sem Previsão", "Vaga Entregue", "Vaga Encerrada"],
     },
     {
       /*

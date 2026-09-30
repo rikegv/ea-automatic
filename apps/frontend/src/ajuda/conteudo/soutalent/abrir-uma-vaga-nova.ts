@@ -74,7 +74,7 @@ export const artigo: Artigo = {
         "A Vaga",
         "Cliente",
         "Código da vaga",
-        "Nome de divulgação",
+        "Nome da vaga",
         "Cargo",
         "Nº de posições oficiais",
         "Nº de posições de banco",

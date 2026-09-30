@@ -142,6 +142,17 @@ export const roteiro: Roteiro = {
            */
           papel: "button",
           nome: /^Etapa de destino$/,
+          /*
+           * ┌─ "ABAIXO" ENCOSTA NO TEXTO DE APOIO, E AINDA É A MENOS RUIM ────────────────────┐
+           * │ Medido ao OLHAR o PNG (§A.13, 30/09): o balão cobre duas palavras do parágrafo   │
+           * │ que explica que o funil não é trilho. Esta janela é compacta e TODA direção tem  │
+           * │ texto: "acima" cairia sobre a contagem ("5 pessoas da seleção passam..."), que é │
+           * │ a confirmação do tamanho do lote e vale mais que a frase de apoio; para os lados │
+           * │ não há margem, porque a caixa ocupa a largura da janela. O que o balão tapa está  │
+           * │ escrito no corpo do artigo, então a perda é de texto REDUNDANTE.                  │
+           * │ NÃO troque para "acima" achando que melhora: já foi medido e piora.               │
+           * └──────────────────────────────────────────────────────────────────────────────────┘
+           */
           texto: "1. Uma etapa para o lote todo",
           forma: "elipse",
           lado: "abaixo",

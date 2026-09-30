@@ -134,7 +134,7 @@ export const artigo: Artigo = {
   relacionados: [
     "fechar-a-vaga",
     "cancelar-a-vaga",
-    "reabrir-a-vaga-cancelada",
+    "reabrir-uma-vaga",
     "continuar-um-rascunho-de-vaga",
     "abrir-o-painel-da-vaga",
     "ler-a-central-de-vagas",

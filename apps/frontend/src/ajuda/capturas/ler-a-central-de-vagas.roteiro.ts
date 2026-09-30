@@ -8,7 +8,7 @@
  * │ que este artigo existe para ensinar.                                                           │
  * │                                                                                                │
  * │ A SAÍDA É RECORTAR A **POPULAÇÃO**, E NÃO OS PIXELS: a busca da tela cobre qualquer coluna, e   │
- * │ `SIM-AS-2026` alcança só as vagas do arnês sintético, cujo consultor, cujo autor e cuja         │
+ * │ `SIM-` alcança só vaga sintética, cujo consultor, cujo autor e cuja                             │
  * │ carteira são a conta de captura, declarada na allowlist. A tabela continua inteira na imagem, e │
  * │ nenhuma pessoa real entra no quadro. O gate continua auditando o que ficou: o recorte da        │
  * │ população não dispensa nada, só troca o que a tela está mostrando.                              │
@@ -32,15 +32,27 @@
 import type { GestoDePreparo, Roteiro } from "../tipos";
 
 /**
- * O RECORTE DA POPULAÇÃO. `SIM-AS-2026` casa com os três códigos do arnês (`SIM-AS-2026-0601`,
- * `0602` e `0603`), e a lista padrão mostra a ABERTA e a RASCUNHO: duas linhas, nunca zero, que é o
- * que a recusa por lista vazia exige.
+ * O RECORTE DA POPULAÇÃO. `SIM-` casa com TODAS as vagas da homologação, e isso não afrouxa o
+ * recorte: as 5 vagas de lá são sintéticas (medido em 30/09/2026, `count(*)` 5 e `codigo like 'SIM%'`
+ * 5), e a entregue não tem solicitante, consultor nem substituído, então nenhuma coluna de pessoa
+ * tem o que escrever.
+ *
+ * ┌─ POR QUE ALARGUEI, E É A IMAGEM QUE PEDIU ──────────────────────────────────────────────────┐
+ * │ O termo anterior era `SIM-AS-2026`, que alcança só as vagas do arnês novo, TODAS elas em      │
+ * │ prazo corrente. O artigo passou a ensinar o estado "Vaga Entregue", em que o SLA PARA no lugar │
+ * │ de continuar contando, e a única vaga ENTREGUE da base é a `SIM-2026-0501`, do arnês antigo,   │
+ * │ que aquele termo deixava de fora. A imagem ensinava a coluna e escondia justamente o estado    │
+ * │ novo que o texto ao lado dela descreve. §A.13 pegou isso ao OLHAR o PNG, não ao rodar o gate.  │
+ * └────────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * A lista padrão esconde a CANCELADA, então sobram quatro linhas (ABERTA, RASCUNHO,
+ * PENDENTE_REVISAO e ENTREGUE): nunca zero, que é o que a recusa por lista vazia exige.
  */
 const SO_AS_VAGAS_DO_ARNES: GestoDePreparo[] = [
   {
     acao: "digitar",
     alvo: { seletor: 'input[aria-label="Buscar em qualquer coluna da tabela"]', texto: "a busca" },
-    valor: "SIM-AS-2026",
+    valor: "SIM-",
   },
 ];
 

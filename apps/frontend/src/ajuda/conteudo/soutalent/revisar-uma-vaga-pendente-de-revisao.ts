@@ -78,7 +78,7 @@ export const artigo: Artigo = {
     {
       gesto: "Leia a linha da vaga antes de decidir qualquer coisa.",
       detalhe:
-        "As colunas são Vaga (o código do processo), Nome De Divulgação, Cargo, Cliente, Cidade, Posições, Candidatos e Entrada. Candidatos é quanta gente a vaga já carrega, e é o número que diz o tamanho do estrago de liberar para o cliente errado.",
+        "As colunas são Vaga (o código do processo), Nome Da Vaga, Cargo, Cliente, Cidade, Posições, Candidatos e Entrada. Candidatos é quanta gente a vaga já carrega, e é o número que diz o tamanho do estrago de liberar para o cliente errado.",
       print: {
         arquivo: "01-fila-de-revisao.png",
         legenda:
@@ -86,7 +86,7 @@ export const artigo: Artigo = {
       },
       controles: [
         "Vaga",
-        "Nome De Divulgação",
+        "Nome Da Vaga",
         "Cargo",
         "Cliente",
         "Cidade",

@@ -75,7 +75,7 @@ export const artigo: Artigo = {
       },
       detalhe:
         "A origem não é perguntada: cada pessoa sai de onde está. Quem já estiver na etapa escolhida volta na lista de falhas.",
-      controles: ["Mover No Funil Em Massa", "Etapa De Destino", "Mover no funil"],
+      controles: ["Mover Etapa Em Massa", "Etapa De Destino", "Mover no funil"],
     },
     {
       gesto: "Para finalizar posição, escolha de qual lado da meta a entrega vai contar.",

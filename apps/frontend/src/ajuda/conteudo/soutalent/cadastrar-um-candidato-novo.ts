@@ -107,10 +107,10 @@ export const artigo: Artigo = {
     },
     {
       gesto:
-        "Complete o que você tiver de contato e de localização: telefone, e-mail, data de nascimento, cidade e UF.",
+        "Complete o que você tiver de contato e de localização: telefone, e-mail, data de nascimento, UF e cidade.",
       detalhe:
-        "Tudo opcional. A data de nascimento faz o sistema mostrar a idade ao lado e avisar quando a pessoa é menor de idade, que é o momento de olhar o tipo de contrato.",
-      controles: ["Telefone", "E-mail", "Data de nascimento", "Cidade", "UF"],
+        "Tudo opcional. A UF vem ANTES da cidade de propósito: é ela que recorta a lista de cidades, e a cidade é um seletor com busca, não um campo livre, então digite as primeiras letras e escolha. A data de nascimento faz o sistema mostrar a idade ao lado e avisar quando a pessoa é menor de idade, que é o momento de olhar o tipo de contrato.",
+      controles: ["Telefone", "E-mail", "Data de nascimento", "UF", "Cidade"],
     },
     {
       gesto: "Escolha a origem: de onde essa pessoa veio.",

@@ -28,9 +28,48 @@ import type { Artigo } from "../../tipos";
  * NENHUM print é declarado: a captura de toda a superfície de A&S está vetada pela auditoria, e esta
  * janela é uma das telas que o veto alcança por nome. O texto foi escrito para funcionar sem imagem.
  */
+/**
+ * ─ ESTE ARTIGO ESTÁ EM TRANSIÇÃO: o slug e os sinônimos JÁ foram trocados, o CORPO ainda NÃO ────
+ *
+ * ┌─ POR QUE O NOME MUDOU, e por que ele mudou ANTES do texto ──────────────────────────────────┐
+ * │ Ele nasceu como "Reabrir A Vaga Cancelada", e o gatilho era um só. O diretor ALARGOU: a vaga  │
+ * │ passa a reabrir também de ENTREGUE, e esse é o caso que ele quer atender de verdade, a vaga    │
+ * │ que foi entregue e voltou porque o cliente reprovou o candidato. A reabertura de cancelada     │
+ * │ continua existindo, intacta. São DOIS pontos de partida para o mesmo gesto.                    │
+ * │                                                                                                │
+ * │ O NOME FOI TROCADO PRIMEIRO DE PROPÓSITO. Renomear arquivo, slug e sinônimos custa pouco       │
+ * │ enquanto o texto não foi escrito em volta do nome velho, e custa duas reescritas depois.       │
+ * │                                                                                                │
+ * │ E HÁ UM EFEITO DE BUSCA QUE SOZINHO JÁ JUSTIFICARIA: quem tem o problema real procura por      │
+ * │ "cliente reprovou", "reabrir vaga entregue" ou "refazer triagem", e NUNCA por "vaga cancelada".│
+ * │ Com o slug antigo, a pessoa com o caso mais comum não achava o artigo. Os sinônimos novos já    │
+ * │ estão em `termos`, então a busca acha a peça antes mesmo de o corpo estar completo.             │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ O QUE JÁ É CERTO, por decisão do diretor, e vai para o corpo sem depender de implementação ─┐
+ * │   . a vaga reaberta volta para ABERTA, não continua entregue;                                 │
+ * │   . os candidatos voltam para TRIAGEM, porque o time refaz a triagem;                          │
+ * │   . a reabertura pede uma PREVISÃO DE ENTREGA NOVA, e o prazo passa a contar até ela.          │
+ * │                                                                                                │
+ * │ UMA RESSALVA MEDIDA, para o texto não inventar regra: devolver os candidatos para triagem já   │
+ * │ devolve a vaga para aberta SOZINHO, pela régua que já está no ar (triagem não é etapa de       │
+ * │ entrega ao cliente). Não é comportamento novo, e descrever como novidade o que já existia faz  │
+ * │ o leitor procurar um botão que nunca houve.                                                    │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ O QUE FALTA, e por que o corpo NÃO foi escrito ainda ──────────────────────────────────────┐
+ * │ Duas coisas dependem do código da frente vizinha e serão pedidas a ela ANTES de escrever, em   │
+ * │ vez de parafraseadas: o RÓTULO EXATO do campo de previsão nova, e se o aceite de reabertura    │
+ * │ continua como está hoje. Passo escrito contra paráfrase é passo que manda clicar num botão com │
+ * │ o nome errado.                                                                                 │
+ * │                                                                                                │
+ * │ ENTÃO O CORPO ABAIXO AINDA DESCREVE SÓ O CAMINHO DA VAGA CANCELADA, que continua verdadeiro e  │
+ * │ continua no ar. Ele não mente: ele está incompleto, e a incompletude está declarada aqui.      │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
 export const artigo: Artigo = {
-  slug: "reabrir-a-vaga-cancelada",
-  titulo: "Reabrir A Vaga Cancelada",
+  slug: "reabrir-uma-vaga",
+  titulo: "Reabrir Uma Vaga",
   modulo: "SOUTALENT",
   rotas: ["/as/vagas"],
   menus: ["as-vagas"],
@@ -38,8 +77,13 @@ export const artigo: Artigo = {
   publico: "AMBOS",
   nivel: "N2",
   resumo:
-    "Como trazer de volta ao trabalho uma vaga que foi cancelada, quem tem permissão para isso, e como escolher pessoa a pessoa quem volta para o processo.",
+    "Como trazer uma vaga de volta ao trabalho, pelos dois caminhos que levam a isso: a que foi cancelada e a que já tinha sido entregue e voltou porque o cliente reprovou. Quem pode, o que o sistema pede, e como escolher pessoa a pessoa quem volta para o processo.",
   termos: [
+    "cliente reprovou",
+    "cliente reprovou o candidato",
+    "reabrir vaga entregue",
+    "refazer triagem",
+    "a vaga voltou do cliente",
     "cancelei sem querer",
     "voltar vaga",
     "desfazer cancelamento",
@@ -51,15 +95,21 @@ export const artigo: Artigo = {
     "vaga voltou",
   ],
   preRequisitos: [
-    "A vaga precisa estar cancelada. Vaga fechada não é reaberta por aqui.",
+    "A vaga precisa estar CANCELADA ou ENTREGUE. São os dois pontos de partida, e o que acontece depois é diferente em cada um. Vaga fechada não é reaberta por aqui.",
     "Ter o papel de Master ou Super Admin. O consultor comum abre a janela, lê a explicação e não conclui a reabertura.",
+    "Vindo de uma vaga entregue, ter em mãos a data nova de entrega combinada: o sistema não conclui sem ela.",
   ],
   passos: [
     {
-      gesto: "Encontre a vaga cancelada na lista da Central De Vagas.",
+      gesto: "Saiba de qual dos dois casos você está vindo, porque o caminho muda.",
       detalhe:
-        "O card Cancelada, no topo, também é filtro: clique nele para deixar na tabela só as vagas canceladas.",
-      controles: ["Cancelada"],
+        "Vaga CANCELADA é o cancelamento que se desfaz, e nela você escolhe pessoa a pessoa quem volta. Vaga ENTREGUE é a que voltou do cliente, em geral porque ele reprovou o candidato, e nela VOLTAM TODAS as pessoas que estavam com o cliente, sem escolha, e o sistema pede uma data nova de entrega. O resto desta página está na ordem: primeiro o que vale para os dois, depois o que muda em cada um.",
+    },
+    {
+      gesto: "Encontre a vaga na lista da Central De Vagas.",
+      detalhe:
+        "Os cards do topo são filtro: clique em Cancelada ou em Entregue para deixar na tabela só as vagas daquele estado.",
+      controles: ["Cancelada", "Entregue"],
     },
     {
       gesto: "Clique em Gestão Da Vaga, na linha da vaga.",
@@ -73,13 +123,13 @@ export const artigo: Artigo = {
       controles: ["Reabrir vaga", "Reabrir Vaga É Ação De Master"],
     },
     {
-      gesto: "Leia o aviso do topo da janela antes de marcar qualquer pessoa.",
+      gesto: "Vindo de uma vaga CANCELADA, leia o aviso do topo antes de marcar qualquer pessoa.",
       detalhe:
         "É ele que diz o que esta reabertura pode prometer. Quando o cancelamento registrou onde cada pessoa estava, quem for marcado volta exatamente para a situação em que estava. Quando o cancelamento é anterior a esse registro, o aviso fica amarelo e diz que o sistema não sabe onde cada pessoa estava nem se ela saiu por causa do cancelamento: ali quem for marcado volta em seleção, sem posição na vaga.",
       controles: ["Reabrir Vaga"],
     },
     {
-      gesto: "Marque, uma a uma, as pessoas que voltam para o processo.",
+      gesto: "Ainda na vaga cancelada, marque uma a uma as pessoas que voltam para o processo.",
       detalhe:
         "Não existe marcar todas: a escolha pessoa a pessoa é a trava. Cada linha mostra a etapa, a situação, e o motivo e a data da saída, que é o que separa quem saiu por causa do cancelamento de quem já havia sido descartado antes. Quem ficar desmarcado continua como está e o histórico dele não muda.",
     },
@@ -95,15 +145,44 @@ export const artigo: Artigo = {
         "Sem ninguém marcado, ela diz que a vaga volta ao trabalho sem ninguém restaurado, e isso é um pedido legítimo: reabrir a vaga sem trazer gente é o caso normal quando o cancelamento não encerrou o processo de ninguém.",
     },
     {
-      gesto: "Clique em Reabrir vaga para confirmar.",
+      gesto:
+        "Vindo de uma vaga ENTREGUE, informe a Previsão de entrega nova. Ela é obrigatória.",
       detalhe:
-        "A vaga volta para o status de abertura e deixa de estar encerrada: a data de fechamento, a contagem congelada e os registros do cancelamento saem da linha. O fato não se perde, porque ele fica no histórico da vaga.",
+        "O campo nasce vazio e o botão de confirmar fica desligado enquanto ele não for preenchido, com a frase dizendo o que falta. É a partir dessa data que o prazo volta a contar. Na vaga cancelada este campo não aparece, e aquele caminho continua como sempre foi.",
+      controles: ["Previsão de entrega nova"],
     },
     {
-      gesto: "Confira a linha na lista: a vaga saiu de Cancelada e voltou para o status de abertura.",
+      gesto:
+        "Confira quem volta: na vaga entregue, voltam TODAS as pessoas que estavam com o cliente, e não há o que marcar.",
+      detalhe:
+        "Não é limitação de tela, é o que mantém a vaga honesta: se sobrasse uma pessoa com o cliente, o sistema continuaria entendendo a vaga como entregue, e a reabertura ficaria registrada como uma coisa que não aconteceu. Elas voltam para o começo do funil, que hoje é a Triagem, porque a ideia é justamente refazer a triagem.",
+    },
+    {
+      gesto: "Clique em Reabrir vaga para confirmar.",
+      detalhe:
+        "A vaga volta para o status de abertura e deixa de estar encerrada. Vindo do cancelamento, a data de fechamento, a contagem congelada e os registros do cancelamento saem da linha. Vindo da entrega, o prazo volta a contar até a data nova que você informou. Nos dois casos o fato não se perde: ele fica no histórico da vaga.",
+    },
+    {
+      gesto: "Confira a linha na lista: a vaga saiu de Cancelada ou de Entregue e voltou para o status de abertura.",
     },
   ],
   seDerErrado: [
+    {
+      sintoma: "O botão de confirmar está desligado e você não vê por quê.",
+      acao: "Vindo de uma vaga entregue, é a Previsão de entrega nova que falta: ela é obrigatória e o campo nasce vazio. A frase ao lado do botão diz o que está faltando. Vindo de uma vaga cancelada, esse campo nem existe, então o motivo é outro.",
+    },
+    {
+      sintoma: "O sistema recusou a reabertura da vaga entregue dizendo que a lista está incompleta.",
+      acao: "Na vaga entregue voltam TODAS as pessoas que estavam com o cliente, e o sistema recusa uma lista parcial em vez de completar por conta própria. Recarregue a página e repita: se sobrasse alguém com o cliente, a vaga continuaria valendo como entregue e a reabertura ficaria registrada como uma coisa que não aconteceu.",
+    },
+    {
+      sintoma: "A reabertura recusa dizendo que não há etapa de destino.",
+      acao: "Alguém inativou no catálogo a etapa marcada como começo do funil e não marcou outra no lugar, então a reabertura não tem para onde mandar as pessoas. Quem resolve é a diretoria, no catálogo de etapas do funil: marcar uma etapa ativa como o começo. Enquanto isso não for feito, nenhuma vaga reabre, e o problema não está na vaga.",
+    },
+    {
+      sintoma: "As pessoas voltaram numa etapa diferente da que você esperava.",
+      acao: "Elas voltam para a etapa marcada no catálogo como o começo do funil, que hoje é a Triagem. Se a diretoria mudar essa marcação no catálogo de etapas, o destino muda junto, e a tela passa a dizer o nome novo.",
+    },
     {
       sintoma: "A janela diz que reabrir vaga é ação de Master.",
       acao: "Cancelar uma vaga é do consultor, desfazer o cancelamento não é. Peça a reabertura a quem tem o papel de Master. Nada foi enviado ao sistema: essa janela é só a explicação, e sai pelo Fechar.",
@@ -156,6 +235,10 @@ export const artigo: Artigo = {
     },
   ],
   regras: [
+    "A reabertura tem DOIS pontos de partida, e eles não se comportam igual: na vaga cancelada você escolhe quem volta, na vaga entregue voltam todos os que estavam com o cliente, sem escolha.",
+    "Na vaga entregue, a previsão de entrega nova é obrigatória, e é dela que o prazo passa a contar.",
+    "Quem volta vai para a etapa marcada como começo do funil no catálogo, que HOJE é a Triagem. O destino é configurável pela diretoria, então confira a tela em vez de decorar o nome.",
+    "Vaga entregue não fica com o prazo correndo enquanto espera o cliente: a coluna de prazo mostra que ela está entregue, em vez de vencer sozinha.",
     "Reabrir é ação de Master: cancelar uma vaga é do consultor, desfazer o cancelamento não é.",
     "Só vaga cancelada é reaberta. Vaga fechada e vaga em rascunho não passam por este caminho.",
     "A escolha de quem volta é pessoa a pessoa, sempre. Não existe marcar todas, porque escolher é a decisão que o sistema não toma no seu lugar.",

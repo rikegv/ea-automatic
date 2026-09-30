@@ -167,7 +167,7 @@ export const artigo: Artigo = {
     "trocar-a-vaga-do-candidato",
     "registrar-a-saida-do-candidato",
     "adicionar-um-candidato-a-uma-vaga",
-    "reabrir-a-vaga-cancelada",
+    "reabrir-uma-vaga",
     "ler-a-central-de-candidatos",
     "ler-a-ficha-do-candidato",
     "cadastrar-um-candidato-novo",

@@ -72,7 +72,7 @@ export const artigo: Artigo = {
     "o-catalogo-de-motivos-de-descarte",
     "o-catalogo-de-motivos-de-reenvio",
     "cancelar-a-vaga",
-    "reabrir-a-vaga-cancelada",
+    "reabrir-uma-vaga",
   ],
   fontes: [
     "apps/frontend/src/app/(app)/admin/as/motivos-cancelamento/page.tsx",

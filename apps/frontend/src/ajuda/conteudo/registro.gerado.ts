@@ -182,7 +182,7 @@ import { artigo as artigo_ler_a_ficha_do_candidato } from "./soutalent/ler-a-fic
 import { artigo as artigo_marcar_a_entrevista_do_candidato } from "./soutalent/marcar-a-entrevista-do-candidato";
 import { artigo as artigo_mover_o_candidato_de_etapa } from "./soutalent/mover-o-candidato-de-etapa";
 import { artigo as artigo_mover_o_status_da_vaga } from "./soutalent/mover-o-status-da-vaga";
-import { artigo as artigo_reabrir_a_vaga_cancelada } from "./soutalent/reabrir-a-vaga-cancelada";
+import { artigo as artigo_reabrir_uma_vaga } from "./soutalent/reabrir-uma-vaga";
 import { artigo as artigo_registrar_a_saida_do_candidato } from "./soutalent/registrar-a-saida-do-candidato";
 import { artigo as artigo_registrar_contato_com_o_candidato } from "./soutalent/registrar-contato-com-o-candidato";
 import { artigo as artigo_reprovar_o_candidato_pelo_cliente } from "./soutalent/reprovar-o-candidato-pelo-cliente";
@@ -368,7 +368,7 @@ export const ARTIGOS: Artigo[] = [
   artigo_marcar_a_entrevista_do_candidato,
   artigo_mover_o_candidato_de_etapa,
   artigo_mover_o_status_da_vaga,
-  artigo_reabrir_a_vaga_cancelada,
+  artigo_reabrir_uma_vaga,
   artigo_registrar_a_saida_do_candidato,
   artigo_registrar_contato_com_o_candidato,
   artigo_reprovar_o_candidato_pelo_cliente,

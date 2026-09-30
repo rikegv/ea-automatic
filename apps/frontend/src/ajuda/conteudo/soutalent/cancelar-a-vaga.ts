@@ -106,7 +106,7 @@ export const artigo: Artigo = {
     "A vaga cancelada sai das filas de trabalho e continua consultável no histórico, com o motivo e a observação registrados.",
   ],
   relacionados: [
-    "reabrir-a-vaga-cancelada",
+    "reabrir-uma-vaga",
     "fechar-a-vaga",
     "mover-o-status-da-vaga",
     "trazer-o-candidato-de-volta",

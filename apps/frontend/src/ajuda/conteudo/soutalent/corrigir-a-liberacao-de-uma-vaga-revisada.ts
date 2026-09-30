@@ -70,9 +70,9 @@ export const artigo: Artigo = {
     {
       gesto: "Encontre a vaga pela busca ou pelo cabeçalho das colunas.",
       detalhe:
-        "As colunas são as mesmas da fila: Vaga, Nome De Divulgação, Cargo, Cliente, Cidade, Posições, Candidatos e Entrada. Candidatos é quanta gente já está naquele processo, e é o que dimensiona a correção.",
+        "As colunas são as mesmas da fila: Vaga, Nome Da Vaga, Cargo, Cliente, Cidade, Posições, Candidatos e Entrada. Candidatos é quanta gente já está naquele processo, e é o que dimensiona a correção.",
       controles: [
-        "Nome De Divulgação",
+        "Nome Da Vaga",
         "Cidade",
         "Posições",
         "Candidatos",
@@ -157,7 +157,7 @@ export const artigo: Artigo = {
     "revisar-uma-vaga-pendente-de-revisao",
     "ler-a-central-de-vagas",
     "abrir-o-painel-da-vaga",
-    "reabrir-a-vaga-cancelada",
+    "reabrir-uma-vaga",
     "mover-o-status-da-vaga",
     "por-que-eu-nao-vejo-um-menu",
   ],

@@ -94,7 +94,7 @@ export const SLUGS_ESPERADOS_POR_ROTA: Record<string, string[]> = {
     "cancelar-a-vaga",
     "marcar-a-entrevista-do-candidato",
     "reprovar-o-candidato-pelo-cliente",
-    "reabrir-a-vaga-cancelada",
+    "reabrir-uma-vaga",
     "mover-o-status-da-vaga",
     "continuar-um-rascunho-de-vaga",
     "clonar-uma-vaga",
@@ -179,7 +179,17 @@ export const CONTROLES_ORFAOS_POR_ROTA: Record<string, string[]> = {
     "CIDADE",
     "ENTRADA",
     "Liberadas Recentemente",
-    "NOME DE DIVULGAÇÃO",
+    /*
+     * ERA "NOME DE DIVULGAÇÃO", e a lista veio de uma MEDIÇÃO da tela, não de opinião: por isso ela
+     * envelhece quando a tela é renomeada. Em 30/09/2026 o diretor renomeou quatro rótulos da vaga
+     * numa frente vizinha, e este é um deles ("Nome De Divulgação" virou "Nome Da Vaga").
+     *
+     * A lista acompanha o RÓTULO porque é ele que a pessoa procura, e é ele que o artigo declara. O
+     * dado por baixo não mudou e não deve mudar: a coluna do banco, o campo do contrato e a âncora
+     * do formulário continuam com o nome antigo, de propósito, e quem "terminar o renomeio" mexendo
+     * neles quebra o envio ou a pendência clicável.
+     */
+    "Nome Da Vaga",
     "Pendentes De Revisão",
     "POSIÇÕES",
   ],
