@@ -86,12 +86,16 @@ function servicoDaVarredura(valorDaVariavel: string | undefined, apiAtiva = true
   };
   const http = { requisitar: explodir("http.requisitar") };
   const etapas = { etapaInicial: explodir("etapas.etapaInicial") };
+  // A PONTE PARA A ESTEIRA ENTRA NO MESMO MOLDE DAS OUTRAS PECAS: um duble que EXPLODE se for
+  // tocado. A varredura inerte nao pode abrir admissao nenhuma, e este duble e o que prova isso.
+  const ponte = { criar: explodir("ponte.criar") };
   const svc = new IngestaoVarreduraService(
     config as never,
     api as never,
     repo as never,
     http as never,
     etapas as never,
+    ponte as never,
   );
   return { svc, chavesLidas, toques };
 }

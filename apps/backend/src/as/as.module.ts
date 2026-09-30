@@ -14,6 +14,7 @@ import {
   PORTA_DA_FILA_DIGAI,
 } from "./digai/digai-webhook.controller";
 import { IngestaoHttp } from "./ingestao-pandape/ingestao-http";
+import { IngestaoPonteParaAdmissao } from "./ingestao-pandape/ingestao-ponte-admissao";
 import { IngestaoRepositorio } from "./ingestao-pandape/ingestao-repositorio";
 import { IngestaoVarreduraService } from "./ingestao-pandape/ingestao-varredura.service";
 import { CandidatosController } from "./candidatos/candidatos.controller";
@@ -305,6 +306,15 @@ import { VagasService } from "./vagas/vagas.service";
      */
     IngestaoRepositorio,
     IngestaoHttp,
+    /*
+     * A PONTE PARA A ESTEIRA, e ela mora aqui pela mesma razao das outras tres pecas: ela consome o
+     * `CandidatosService` (o snapshot vaga + candidato) e o `AdmissoesService` (a pre-admissao do
+     * funil), e reusar as instancias deste modulo e o que impede um segundo escritor de admissao.
+     *
+     * ELA E INERTE COM A VARREDURA: quem a chama e o ciclo, e o ciclo so roda com
+     * `PANDAPE_VARREDURA_DATA_CORTE` configurada.
+     */
+    IngestaoPonteParaAdmissao,
     IngestaoVarreduraService,
     /*
      * ─ A INGESTAO DO DIGAI: SEIS PECAS, E ELA NASCE INERTE ─────────────────────────────────────

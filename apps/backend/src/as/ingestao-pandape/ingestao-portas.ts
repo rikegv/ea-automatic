@@ -56,6 +56,26 @@ export interface Escrita {
   aoConflitoNadaFaz?: boolean;
 }
 
+/**
+ * O QUE UMA ESCRITA DEVOLVE, e o `criada` é o que separa NASCER de ANDAR.
+ *
+ * ┌─ POR QUE `linhasAfetadas` NÃO RESPONDE ISSO ─────────────────────────────────────────────────┐
+ * │ Ele vale 1 no insert E no update que mudou algo, que são coisas opostas para quem lê. A ponte │
+ * │ para a admissão dispara SÓ no nascimento da candidatura (ver `ponteParaAdmissao`), então ela  │
+ * │ precisa do fato, e o fato só existe onde a escrita acontece: o repositório.                    │
+ * │                                                                                              │
+ * │ OPCIONAL DE PROPÓSITO: adaptador que não distingue os dois casos devolve `undefined`, e       │
+ * │ `undefined` NÃO é nascimento. O caminho que não sabe cai para o lado de não criar admissão,    │
+ * │ que é a direção fail-closed desta frente inteira.                                             │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+export interface ResultadoDaEscrita {
+  linhasAfetadas: number;
+  id: string;
+  /** A linha NASCEU nesta escrita? `undefined` vale como "não sei", e não como sim. */
+  criada?: boolean;
+}
+
 export interface PortaBanco {
   identidadeExterna(fonte: string, identificador: string): Promise<{ candidatoId: string } | null>;
   candidatoPorCpf(cpf: string): Promise<{ id: string } | null>;
@@ -75,7 +95,7 @@ export interface PortaBanco {
   clientePorVaga(idVacancy: number): Promise<string | null>;
   /** A marca de água da vaga: o maior `insertDate` já visto. Registro, NUNCA parada de leitura. */
   marcaDaVaga(idVacancy: number): Promise<string | null>;
-  escrever(e: Escrita): Promise<{ linhasAfetadas: number; id: string }>;
+  escrever(e: Escrita): Promise<ResultadoDaEscrita>;
 }
 
 export interface PortaFila {
@@ -108,6 +128,72 @@ export interface PortaCicloDeVidaDaVaga {
    * FECHAMENTO, com `encerrada_em` carimbado pelo relógio do SERVIDOR. Devolve quantas encerrou.
    */
   encerrarAusentes(idsAtivos: number[]): Promise<number>;
+}
+
+/**
+ * POR QUE A PONTE NÃO ACONTECEU, em lista FECHADA.
+ *
+ * Cada valor é uma AUSÊNCIA de dado, e nenhum deles é falha: o ciclo segue, a candidatura fica
+ * gravada, e o caso vira CONTAGEM no resumo, para a lacuna ser visível em vez de invisível. Mesma
+ * disciplina do "adiar em vez de inventar `cod_cliente`" (§A.5).
+ *
+ * §A.6: são RÓTULOS, e é por isso que eles podem ir ao log. `SEM_CPF` diz que faltou o número; ele
+ * não carrega o número, nem parte dele, nem o nome de quem ficou sem.
+ */
+export type MotivoDaPonteNaoFeita = "SEM_CPF" | "JA_TEM_ADMISSAO" | "CANDIDATURA_AUSENTE";
+
+/** O que a porta da ponte devolve. `feita: false` é resposta, nunca erro. */
+export type ResultadoDaPonte =
+  | {
+      feita: true;
+      /**
+       * A vaga passou do teto de posições DAQUELE lado com esta entrada?
+       *
+       * ┌─ A INGESTÃO NÃO TRAVA POR META INTERNA, E CONTA O EXCESSO ────────────────────────────┐
+       * │ O ATS é a fonte do FATO (a pessoa foi contratada lá), e recusar o fato porque a meta    │
+       * │ interna da vaga está cheia faria a base do EA divergir da realidade em silêncio: a      │
+       * │ pessoa existe, vai trabalhar, e não estaria aqui. Travar é decisão do diretor, não da   │
+       * │ ingestão. O que a ingestão devolve é a OCORRÊNCIA, para o resumo contá-la.              │
+       * └────────────────────────────────────────────────────────────────────────────────────────┘
+       */
+      posicaoExcedida: boolean;
+    }
+  | { feita: false; motivo: MotivoDaPonteNaoFeita };
+
+/**
+ * ─ A PONTE DA CANDIDATURA PARA A ADMISSÃO, E ELA É DO NASCIMENTO ───────────────────────────────
+ *
+ * ┌─ POR QUE ELA É UMA PORTA, E NÃO UMA CHAMADA AO `AdmissoesService` ───────────────────────────┐
+ * │ O ciclo não conhece Nest, não conhece Drizzle e não conhece a Esteira: ele conhece portas, e é │
+ * │ essa fronteira que permite auditar a regra sem Postgres e sem o módulo de Admissões inteiro.   │
+ * │ Chamar o service daqui arrastaria a Esteira para dentro do contrato do `tester`.               │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ ELA SÓ É CHAMADA QUANDO A CANDIDATURA NASCEU NESTE CICLO, E ISSO É A REGRA, NÃO DETALHE ────┐
+ * │ O cenário que a ponte atende é UM: quem chega pela varredura JÁ contratado no ATS, ou seja     │
+ * │ quem nunca passou pelo funil dentro do EA. Candidatura que JÁ EXISTIA não chama a ponte.       │
+ * │                                                                                               │
+ * │ O MOTIVO É MEDIDO: a varredura SOBRESCREVE etapa e situação de candidatura existente (o        │
+ * │ `where ... is distinct from` do repositório existe para não empurrar `atualizado_em`, e não     │
+ * │ para proteger o trabalho de ninguém: valor diferente é justamente o caso que ele autoriza).    │
+ * │ Se a ponte disparasse no update, uma admissão nasceria a partir de um sinal do ATS que pode    │
+ * │ estar desfazendo o avanço que o time fez aqui, e admissão criada é muito mais caro de desfazer │
+ * │ do que etapa trocada. O ATS NÃO PROMOVE À ADMISSÃO quem já está sendo trabalhado no EA.        │
+ * │                                                                                               │
+ * │ A regra de precedência (a varredura deixar de sobrescrever quem já existe) é DECISÃO PENDENTE  │
+ * │ do diretor e NÃO está implementada aqui, nem em parte.                                         │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+export interface PortaPonteParaAdmissao {
+  /**
+   * Cria a pré-admissão da candidatura e aponta `as_candidaturas.admissao_id` para ela.
+   *
+   * IDEMPOTENTE POR `admissao_id`: a implementação LÊ a coluna antes e devolve `JA_TEM_ADMISSAO`
+   * quando ela já está preenchida. É o registro local do "já fiz", e ele é necessário porque o
+   * unique parcial da admissão (`uq_admissao_cpf_vaga_viva`) só protege enquanto o farol é VIVO:
+   * uma admissão que já foi concluída ou declinada sai do índice, e a segunda chamada nasceria.
+   */
+  criar(candidaturaId: string): Promise<ResultadoDaPonte>;
 }
 
 export interface DependenciasDaIngestao {
@@ -168,6 +254,15 @@ export interface DependenciasDaVarredura extends DependenciasDaIngestao {
    * escrita, e a pessoa fica onde estava.
    */
   etapaInicial?: () => Promise<string>;
+  /**
+   * A PONTE PARA A ADMISSÃO. OPCIONAL no tipo pela mesma razão do `cicloDeVida`: o contrato do
+   * `tester` não a declara, e o ciclo tem de continuar assinável como
+   * `(deps: DependenciasDaIngestao) => Promise<ResumoDoCiclo>`.
+   *
+   * AUSENTE NÃO CRIA ADMISSÃO, e isso é a direção certa: em produção ela é SEMPRE injetada
+   * (`ingestao-varredura.service.ts`), e a ausência só acontece em teste de outra propriedade.
+   */
+  ponteParaAdmissao?: PortaPonteParaAdmissao;
 }
 
 export interface ResumoDoCiclo {
@@ -186,5 +281,23 @@ export interface ResumoDoCiclo {
   etapasNaoMapeadas: string[];
   /** Quantos casos foram para revisão humana em vez de o ciclo escolher sozinho. */
   conflitosParaRevisao: number;
+  /** Quantas pré-admissões a ponte criou nesta passada. */
+  pontesParaAdmissao: number;
+  /**
+   * Quantas pontes foram ADIADAS por falta de dado (hoje: CPF ausente ou inválido).
+   *
+   * ELA NÃO É ERRO, É LACUNA VISÍVEL. Sem este número, a inscrição que chega contratada e sem CPF
+   * ficaria gravada como candidatura e simplesmente não viraria admissão, sem ninguém saber que há
+   * um caso a resolver. Reentrega não repete a contagem por engano: candidatura que já existe não
+   * chama a ponte de novo.
+   */
+  pontesAdiadas: number;
+  /**
+   * Quantas vezes a ponte passou do teto de posições da vaga.
+   *
+   * A INGESTÃO NÃO TRAVA POR META INTERNA (ver `ResultadoDaPonte`): ela escreve o fato do ATS e
+   * CONTA a sobre-ocupação, para ela ficar visível em vez de invisível.
+   */
+  posicoesExcedidas: number;
   erros: number;
 }

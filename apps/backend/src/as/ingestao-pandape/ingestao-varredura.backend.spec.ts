@@ -361,8 +361,10 @@ describe("o repositório da ingestão", () => {
    * não mais no RASCUNHO. No rascunho ela ficava indistinguível da vaga que um consultor começou a
    * digitar, e as centenas de vagas espelhadas ficavam paradas sem nenhuma tela acusar.
    */
-  it("a vaga espelhada NASCE na FILA DE REVISÃO, sem cliente e sem cargo", async () => {
-    const { repo, sqls, papeis } = repositorioFalso([[], [{ id: "v" }], []]);
+  it("a vaga espelhada NASCE na FILA DE REVISÃO, sem cliente e sem cargo que case", async () => {
+    // As respostas, em ordem: a busca da vaga (nada), o CARGO do catálogo (não casou), o insert da
+    // vaga e a matrícula. O cargo entrou na sequência quando o nascimento passou a resolvê-lo.
+    const { repo, sqls, papeis } = repositorioFalso([[], [], [{ id: "v" }], []]);
     await repo.escrever({
       tabela: "vagas",
       acao: "upsert",
@@ -380,7 +382,21 @@ describe("o repositório da ingestão", () => {
     });
     const insert = sqls.find((s) => s.includes("insert into vagas")) ?? "";
     expect(insert).toContain("cod_cliente");
-    expect(insert).toContain("null, null");
+    /*
+     * `cod_cliente` CONTINUA SENDO O LITERAL `null` DO SQL, e não um parâmetro: §A.5 é explícita,
+     * adiar em vez de inventar, e não existe caminho de API para o cliente da vaga.
+     *
+     * `cargo_id` PASSOU A SER PARÂMETRO (`::uuid`), porque agora ele é RESOLVIDO, e não mais um
+     * null escrito à mão que ignorava o valor. Aqui o catálogo não casou, então o parâmetro vale
+     * nulo, que é o fail-closed: vaga sem cargo entra marcada para preenchimento manual.
+     */
+    expect(insert).toContain("null, ::uuid");
+    // E o CARGO foi PERGUNTADO ao catálogo, filtrando `ativo`: inativar um cargo é o gesto que a
+    // administração tem para dizer "pare de usar este", e ignorá-lo transformaria o gesto em nada.
+    const cargo = sqls.find((x) => x.includes("from cargos")) ?? "";
+    expect(cargo).toContain("ativo = true");
+    // Sem acento e sem caixa, porque o título vem digitado por quem abriu a vaga no ATS.
+    expect(cargo).toContain("translate(lower(nome)");
     /*
      * O STATUS ENTRA PELO PAPEL, e não pelo literal: o código é editável pelo diretor, e um
      * `'PENDENTE_REVISAO'` gravado direto pararia de valer no dia da renomeação, com o FK RESTRICT
@@ -398,6 +414,119 @@ describe("o repositório da ingestão", () => {
     // A MATRÍCULA É POR LINHA (`vaga_id`), e não pelo número do ATS: aquela coluna de `vagas` é
     // digitada por gente, com índice NÃO unique, e casar por ela adota vaga de outro dono.
     expect(matricula).toContain("vaga_id");
+  });
+
+
+  /*
+   * ─ O CARGO DA VAGA ESPELHADA, e por que ele é do NASCIMENTO e só dele ────────────────────────
+   *
+   * O título da vaga (`job` do ATS, gravado em `nome_divulgacao`) é o único texto que chega, e o
+   * catálogo `cargos` é quem o traduz. O ganho é de PREENCHIMENTO: a vaga continua nascendo na fila
+   * de revisão, e ninguém sai da fila por ter cargo.
+   */
+  it("o cargo que CASA no catálogo entra no nascimento da vaga", async () => {
+    const CARGO = "00000000-0000-4000-8000-00000000c0c0";
+    const { repo, sqls } = repositorioFalso([[], [{ id: CARGO }], [{ id: "v" }], []]);
+    await repo.escrever({
+      tabela: "vagas",
+      acao: "upsert",
+      chaveDeConflito: ["id_vacancy_pandape"],
+      valores: {
+        id_vacancy_pandape: 9001,
+        codigo: "1234567",
+        nome_divulgacao: "Auxiliar De Limpeza",
+        cidade_id: null,
+        posicoes_oficiais: 3,
+        cod_cliente: null,
+        cargo_id: null,
+        status: "PENDENTE_REVISAO",
+      },
+    });
+    // O valor do parâmetro não aparece no texto da instrução (é isso que faz dele parâmetro), então
+    // o que se afirma é que a coluna deixou de ser o literal `null` e virou o valor resolvido.
+    const insert = sqls.find((s) => s.includes("insert into vagas")) ?? "";
+    expect(insert).toContain("cargo_id");
+    expect(insert).not.toContain("null, null");
+    // O TÍTULO NÃO VIAJA NO TEXTO DA CONSULTA: ele é texto livre do ATS, e a casa já mediu que campo
+    // assim chega com nome de gente dentro. Ele entra como parâmetro, e nunca interpolado.
+    expect(sqls.join(" ")).not.toContain("Auxiliar De Limpeza");
+  });
+
+  it("a VOLTA da vaga já existente NÃO escreve o cargo, e não o compara", async () => {
+    // Da varredura, viva, com título novo chegando do ATS: o update mexe no que o ATS manda e NÃO
+    // toca `cargo_id`. Escrever ali sobrescreveria, de 30 em 30 minutos, o cargo que uma PESSOA
+    // escolheu na liberação, sem autor, sem data e sem trilha.
+    const { repo, sqls } = repositorioFalso([
+      [{ id: "v1", status: "ABERTA", da_varredura: true, encerrou: false }],
+      [{ id: "v1" }],
+    ]);
+    await repo.escrever({
+      tabela: "vagas",
+      acao: "upsert",
+      chaveDeConflito: ["id_vacancy_pandape"],
+      comparaAntes: ["codigo", "nome_divulgacao", "cidade_id", "posicoes_oficiais"],
+      valores: {
+        id_vacancy_pandape: 9001,
+        codigo: "1234567",
+        nome_divulgacao: "Titulo Novo Do Ats",
+        cargo_id: null,
+      },
+    });
+    const update = sqls.find((s) => s.includes("update vagas")) ?? "";
+    expect(update).not.toBe("");
+    expect(update, "o cargo escolhido por gente não é sobrescrito pelo ATS").not.toContain(
+      "cargo_id",
+    );
+    // E o catálogo NEM É CONSULTADO na volta: a resolução é do nascimento, e uma consulta por vaga
+    // por volta seria 621 consultas a cada 30 minutos para escrever nada.
+    expect(sqls.some((x) => x.includes("from cargos"))).toBe(false);
+  });
+
+
+  /*
+   * ─ O NASCIMENTO DA CANDIDATURA É DECLARADO, E É DELE QUE A PONTE DEPENDE ─────────────────────
+   *
+   * `criada` é o ÚNICO ponto do sistema que afirma "esta linha nasceu agora", e a ponte para a
+   * admissão (`PortaPonteParaAdmissao`) só dispara com ele. Sem esta medição, apagar o campo aqui
+   * DESLIGARIA a admissão automática inteira em produção sem nada ficar vermelho: o ciclo trata
+   * `undefined` como "não é nascimento", que é o fail-closed certo e é também silencioso.
+   *
+   * `linhasAfetadas` NÃO SERVE de substituto: ele vale 1 no insert e no update que mudou algo.
+   */
+  it("a candidatura que NASCE devolve `criada`, e a que já existia devolve o contrário", async () => {
+    const nascimento = repositorioFalso([[], [{ id: "cand-1" }]]);
+    const criada = await nascimento.repo.escrever({
+      tabela: "as_candidaturas",
+      acao: "upsert",
+      chaveDeConflito: ["candidato_id", "vaga_id"],
+      valores: {
+        candidato_id: "00000000-0000-4000-8000-0000000000c1",
+        vaga_id: "00000000-0000-4000-8000-0000000000a1",
+        etapa: "APROVACAO",
+        situacao: "ENVIADO_PARA_ADMISSAO",
+      },
+    });
+    expect(criada.criada).toBe(true);
+    expect(criada.id).toBe("cand-1");
+
+    const volta = repositorioFalso([[{ id: "cand-1" }], [{ id: "cand-1" }]]);
+    const movida = await volta.repo.escrever({
+      tabela: "as_candidaturas",
+      acao: "upsert",
+      chaveDeConflito: ["candidato_id", "vaga_id"],
+      comparaAntes: ["etapa", "situacao"],
+      valores: {
+        candidato_id: "00000000-0000-4000-8000-0000000000c1",
+        vaga_id: "00000000-0000-4000-8000-0000000000a1",
+        etapa: "APROVACAO",
+        situacao: "ENVIADO_PARA_ADMISSAO",
+      },
+    });
+    // A LINHA FOI ESCRITA (a varredura sobrescreve etapa e situação de quem já existe, e isso não
+    // mudou nesta frente), e AINDA ASSIM ela não é nascimento: o ATS não promove à admissão quem já
+    // está sendo trabalhado dentro do EA.
+    expect(movida.linhasAfetadas).toBe(1);
+    expect(movida.criada).toBe(false);
   });
 
   /*

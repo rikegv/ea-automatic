@@ -10,6 +10,7 @@ import {
   type Escrita,
   type ResumoDoCiclo,
 } from "./ingestao-portas";
+import { desfechoDaIngestaoExterna } from "../../domain/as-ponte-admissao";
 import {
   projetarInscricao,
   projetarPasta,
@@ -139,6 +140,9 @@ export function novoResumo(): ResumoDoCiclo {
     candidaturasCriadas: 0,
     etapasNaoMapeadas: [],
     conflitosParaRevisao: 0,
+    pontesParaAdmissao: 0,
+    pontesAdiadas: 0,
+    posicoesExcedidas: 0,
     erros: 0,
   };
 }
@@ -370,6 +374,20 @@ async function espelharVaga(deps: DependenciasDaVarredura, vaga: VagaProjetada):
       cidade_id: vaga.city,
       posicoes_oficiais: vaga.numberVacancies,
       cod_cliente: codCliente,
+      /*
+       * ─ O CICLO NÃO DECIDE O CARGO, E QUEM O RESOLVE É O REPOSITÓRIO ──────────────────────────
+       *
+       * Mesma divisão da cidade: o texto que veio do ATS é o `nome_divulgacao` logo acima, e quem
+       * conhece o catálogo `cargos` é o repositório (`cargoPorTexto`), que resolve SÓ NO
+       * NASCIMENTO da vaga. Este nulo diz que o ciclo não tem palavra sobre a coluna, e não que a
+       * coluna nasce vazia.
+       *
+       * `cargo_id` NÃO ENTRA NO `comparaAntes` de propósito, e são duas razões independentes:
+       * escrever cargo na volta sobrescreveria o cargo que uma PESSOA escolheu na liberação, e
+       * incluir a coluna na comparação faria o ciclo de 30 minutos achar que "algo mudou" e
+       * reescrever a linha, empurrando `atualizado_em`, que é o relógio do expurgo de quem está
+       * dentro da vaga.
+       */
       cargo_id: null,
       /*
        * ─ NASCE NA FILA DE REVISÃO, E QUEM DECIDE O CÓDIGO É O REPOSITÓRIO ──────────────────────
@@ -458,13 +476,70 @@ async function ingerirInscricao(
   const candidatoId = await resolverPessoa(deps, resumo, inscricao, nome);
   if (candidatoId === null) return;
 
-  await gravarCandidatura(deps, resumo, {
+  /*
+   * A RÉGUA DA PONTE É DO DOMÍNIO, e não deste arquivo (`domain/as-ponte-admissao.ts`): a situação
+   * vem da LINHA do de/para, que é DADO editável, e a pergunta "isto pede admissão?" é regra. O
+   * precedente é o achado do `seguranca` na ingestão do Digai, em que um `??` sobre a situação da
+   * linha deixava o dado decidir o que só o código pode decidir.
+   */
+  const desfecho = desfechoDaIngestaoExterna(resolucao.situacao);
+  const gravada = await gravarCandidatura(deps, resumo, {
     candidatoId,
     vagaId,
     etapa: resolucao.etapaCodigo,
-    situacao: resolucao.situacao,
+    situacao: desfecho.situacao,
     motivo: resolucao.motivoPadrao,
   });
+
+  /*
+   * ─ A PONTE, E ELA EXIGE AS DUAS COISAS: A SITUAÇÃO PEDIR E A CANDIDATURA TER NASCIDO ────────
+   *
+   * `gravada.criada` é o fato que só o repositório conhece (o ramo de insert). Candidatura que já
+   * existia NÃO chama a ponte, e a razão inteira está na porta (`PortaPonteParaAdmissao`): a
+   * varredura sobrescreve etapa e situação de quem já existe, então disparar no update faria uma
+   * admissão nascer de um sinal do ATS que pode estar desfazendo o trabalho do time.
+   */
+  if (desfecho.pedePonteParaAdmissao && gravada.criada) {
+    await acionarPonte(deps, resumo, gravada.candidaturaId);
+  }
+}
+
+/**
+ * A CHAMADA DA PONTE, com a falha CONTIDA aqui dentro.
+ *
+ * ┌─ POR QUE O `catch` É LOCAL, E NÃO O DO LAÇO DA PÁGINA ───────────────────────────────────────┐
+ * │ A candidatura já foi gravada quando chegamos aqui: ela é o FATO, e a ponte é o EFEITO. Deixar  │
+ * │ a exceção subir faria a linha da inscrição ser registrada como "falha ao ingerir a inscricao", │
+ * │ que é mentira: a inscrição entrou. O erro é da ponte, e é com esse nome que ele tem de       │
+ * │ aparecer para quem for procurar.                                                              │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * §A.6: o log leva o RÓTULO do motivo e a mensagem peneirada, nunca o CPF, nunca o nome e nunca o
+ * id de pessoa. `SEM_CPF` diz que faltou o número; não diz qual nem de quem.
+ */
+async function acionarPonte(
+  deps: DependenciasDaVarredura,
+  resumo: ResumoDoCiclo,
+  candidaturaId: string,
+): Promise<void> {
+  // AUSENTE NÃO CRIA ADMISSÃO: em produção a porta é sempre injetada, e o teste de outra
+  // propriedade não pode ganhar uma admissão de brinde por esquecer de montá-la.
+  if (!deps.ponteParaAdmissao) return;
+  try {
+    const r = await deps.ponteParaAdmissao.criar(candidaturaId);
+    if (r.feita) {
+      resumo.pontesParaAdmissao += 1;
+      if (r.posicaoExcedida) resumo.posicoesExcedidas += 1;
+      return;
+    }
+    // `JA_TEM_ADMISSAO` É O NORMAL DA REENTRADA, e não conta como adiada: nada ficou pendente.
+    if (r.motivo === "JA_TEM_ADMISSAO") return;
+    resumo.pontesAdiadas += 1;
+    deps.log.info("ponte para a admissao adiada", { motivo: r.motivo });
+  } catch (err) {
+    resumo.erros += 1;
+    deps.log.erro("falha ao criar a ponte para a admissao", { motivo: mensagemDoErro(err) });
+  }
 }
 
 /**
@@ -625,7 +700,7 @@ async function gravarCandidatura(
     situacao: string | null;
     motivo: string | null;
   },
-): Promise<void> {
+): Promise<{ candidaturaId: string; criada: boolean }> {
   const valores: Record<string, unknown> = {
     candidato_id: dados.candidatoId,
     vaga_id: dados.vagaId,
@@ -646,6 +721,13 @@ async function gravarCandidatura(
     valores,
   });
   if (gravada.linhasAfetadas > 0) resumo.candidaturasCriadas += 1;
+  /*
+   * `criada` VEM DO ADAPTADOR, E O `?? false` É FAIL-CLOSED, não conveniência: adaptador que não
+   * distingue insert de update devolve `undefined`, e "não sei" cai para o lado de NÃO ser
+   * nascimento. Deduzir daqui (por `linhasAfetadas`, por exemplo) seria errado: aquele número vale
+   * 1 no insert e no update que mudou algo.
+   */
+  return { candidaturaId: gravada.id, criada: gravada.criada ?? false };
 }
 
 // ── LEITURA AUXILIAR ───────────────────────────────────────────────────────────────────────────

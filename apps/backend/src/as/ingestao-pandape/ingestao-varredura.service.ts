@@ -16,6 +16,7 @@ import {
   type DependenciasDaVarredura,
   type ResumoDoCiclo,
 } from "./ingestao-portas";
+import { IngestaoPonteParaAdmissao } from "./ingestao-ponte-admissao";
 import { IngestaoRepositorio } from "./ingestao-repositorio";
 import {
   criarConexaoDaVarredura,
@@ -87,6 +88,7 @@ export class IngestaoVarreduraService implements OnModuleInit, OnModuleDestroy {
     private readonly repo: IngestaoRepositorio,
     private readonly http: IngestaoHttp,
     private readonly etapas: EtapasFunilService,
+    private readonly ponte: IngestaoPonteParaAdmissao,
   ) {}
 
   onModuleInit(): void {
@@ -247,6 +249,14 @@ export class IngestaoVarreduraService implements OnModuleInit, OnModuleDestroy {
       salDaMarca: sal,
       cicloDeVida: this.repo,
       etapaInicial: async () => (await this.etapas.etapaInicial()).codigo,
+      /*
+       * A PONTE PARA A ESTEIRA. Ela e injetada SEMPRE, e quem decide se ela e acionada e o ciclo: so
+       * a candidatura que NASCE nesta volta com situacao de admissao chega ate aqui. Nao ha chave de
+       * ambiente propria de proposito: a chave da varredura inteira e a data de corte, e uma segunda
+       * chave criaria um estado em que a ingestao escreve situacao de contratado e nao abre admissao,
+       * que e exatamente o buraco que esta frente fechou.
+       */
+      ponteParaAdmissao: this.ponte,
     };
   }
 
@@ -257,6 +267,8 @@ export class IngestaoVarreduraService implements OnModuleInit, OnModuleDestroy {
       r.paginasLidas === 0 &&
       r.pessoasCriadas === 0 &&
       r.candidaturasCriadas === 0 &&
+      r.pontesParaAdmissao === 0 &&
+      r.pontesAdiadas === 0 &&
       r.erros === 0
     ) {
       return;
@@ -264,7 +276,9 @@ export class IngestaoVarreduraService implements OnModuleInit, OnModuleDestroy {
     this.logger.log(
       `Varredura (${etapa}): ${r.vagasVarridas} vaga(s), ${r.paginasLidas} pagina(s), ` +
         `${r.pessoasCriadas} pessoa(s) nova(s), ${r.candidaturasCriadas} candidatura(s) escrita(s), ` +
-        `${r.conflitosParaRevisao} conflito(s) para revisao, ${r.erros} erro(s).`,
+        `${r.conflitosParaRevisao} conflito(s) para revisao, ` +
+        `${r.pontesParaAdmissao} ponte(s) para admissao (${r.pontesAdiadas} adiada(s), ` +
+        `${r.posicoesExcedidas} acima do teto da vaga), ${r.erros} erro(s).`,
     );
     if (r.etapasNaoMapeadas.length > 0) {
       /*

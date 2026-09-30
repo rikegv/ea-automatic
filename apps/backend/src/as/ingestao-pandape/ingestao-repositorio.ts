@@ -6,7 +6,12 @@ import { DRIZZLE } from "../../db/drizzle.module";
 import type { LinhaDeParaEtapaExternaCrua } from "../../domain/as-etapa-externa";
 import { EtapasFunilService } from "../etapas/etapas-funil.service";
 import { VagaStatusService } from "../vaga-status/vaga-status.service";
-import type { Escrita, PortaBanco, PortaCicloDeVidaDaVaga } from "./ingestao-portas";
+import type {
+  Escrita,
+  PortaBanco,
+  PortaCicloDeVidaDaVaga,
+  ResultadoDaEscrita,
+} from "./ingestao-portas";
 
 /**
  * ─ O LADO DO BANCO DA INGESTÃO: O ÚNICO PONTO EM QUE A VARREDURA ESCREVE ───────────────────────
@@ -169,11 +174,26 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
   // ── ESCRITA ──────────────────────────────────────────────────────────────────────────────────
 
   /**
-   * O DESPACHO É FAIL-CLOSED: tabela fora desta lista não é escrita, e a ingestão não tem outra
-   * porta para o banco. Uma frente futura que precise de uma sétima tabela tem de vir aqui, que é o
-   * ponto em que alguém lê o que passa a ser escrito por um processo sem autor humano.
+   * O DESPACHO É FAIL-CLOSED: tabela fora desta lista não é escrita. Uma frente futura que precise de
+   * uma sétima tabela tem de vir aqui, que é o ponto em que alguém lê o que passa a ser escrito por
+   * um processo sem autor humano.
+   *
+   * ┌─ CORREÇÃO DE 30/09/2026: ESTA JÁ NÃO É A ÚNICA PORTA DA INGESTÃO PARA O BANCO ─────────────┐
+   * │ A frase antiga dizia "e a ingestão não tem outra porta para o banco", e ela deixou de ser    │
+   * │ verdade quando a PONTE PARA A ADMISSÃO nasceu: `ingestao-ponte-admissao.ts` fala com o banco │
+   * │ por conta própria, para ler a candidatura e gravar `admissao_id`.                            │
+   * │                                                                                             │
+   * │ Quem apontou foi o `seguranca`, e o motivo de corrigir em vez de deixar passar é o efeito    │
+   * │ prático: este é exatamente o comentário que um auditor futuro lê para decidir ONDE OLHAR.    │
+   * │ Documentação de trava descrevendo um mundo que acabou é pior que documentação nenhuma, porque │
+   * │ ela convence de que a busca terminou.                                                        │
+   * │                                                                                             │
+   * │ AS DUAS PORTAS DA INGESTÃO, hoje: esta lista de seis tabelas, e a ponte, que escreve UMA     │
+   * │ coluna (`as_candidaturas.admissao_id`) e cria a pré-admissão pela porta pública do módulo de │
+   * │ admissão (`criarPreAdmissaoDoFunil`), a MESMA que o caminho manual do funil usa.             │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
    */
-  async escrever(e: Escrita): Promise<{ linhasAfetadas: number; id: string }> {
+  async escrever(e: Escrita): Promise<ResultadoDaEscrita> {
     switch (e.tabela) {
       case "as_candidatos":
         return this.escreverCandidato(e);
@@ -300,7 +320,7 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
    * precisa nascer em algum caneco, e quem responde é o catálogo, nunca um literal. A candidatura
    * que JÁ EXISTE não é movida.
    */
-  private async escreverCandidatura(e: Escrita): Promise<{ linhasAfetadas: number; id: string }> {
+  private async escreverCandidatura(e: Escrita): Promise<ResultadoDaEscrita> {
     const candidatoId = String(e.valores.candidato_id);
     const vagaId = String(e.valores.vaga_id);
     const temEtapa = "etapa" in e.valores;
@@ -333,7 +353,14 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
       `)) as unknown as { id: string }[];
       const criada = linhas[0];
       if (!criada) throw new Error("A candidatura não devolveu linha.");
-      return { linhasAfetadas: 1, id: criada.id };
+      /*
+       * `criada: true` É O ÚNICO PONTO DO SISTEMA QUE AFIRMA O NASCIMENTO DESTA LINHA, e é dele que
+       * a ponte para a admissão depende (`PortaPonteParaAdmissao`). Ele NÃO é dedutível de
+       * `linhasAfetadas`, que vale 1 aqui e também no `update` que mudou algo: o ramo de baixo
+       * devolve `criada: false` de propósito, porque candidatura que já existia não vira admissão
+       * por sinal do ATS.
+       */
+      return { linhasAfetadas: 1, id: criada.id, criada: true };
     }
 
     /*
@@ -364,7 +391,7 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
     }
     // NADA A ESCREVER É UM DESFECHO LEGÍTIMO: o de/para que não resolve etapa, situação nem motivo
     // não tem o que dizer sobre esta candidatura, e uma escrita vazia só empurraria o relógio.
-    if (pares.length === 0) return { linhasAfetadas: 0, id: existente.id };
+    if (pares.length === 0) return { linhasAfetadas: 0, id: existente.id, criada: false };
 
     const linhas = (await this.db.execute(sql`
       update as_candidaturas
@@ -374,7 +401,7 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
          and (${sql.join(atuais, sql`, `)}) is distinct from (${sql.join(novos, sql`, `)})
       returning id
     `)) as unknown as { id: string }[];
-    return { linhasAfetadas: linhas.length > 0 ? 1 : 0, id: existente.id };
+    return { linhasAfetadas: linhas.length > 0 ? 1 : 0, id: existente.id, criada: false };
   }
 
   /**
@@ -479,6 +506,21 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
     const existente = existentes[0];
 
     if (!existente) {
+      /*
+       * ┌─ O CARGO É RESOLVIDO SÓ AQUI, NO NASCIMENTO, E NUNCA NA VOLTA SEGUINTE ─────────────────┐
+       * │ Escrever o cargo no `update` sobrescreveria, de 30 em 30 minutos, o cargo que uma PESSOA │
+       * │ escolheu na liberação da vaga: quem conferiu o cliente e ajustou o cargo veria o ATS      │
+       * │ desfazer a escolha sem autor, sem data e sem trilha. Pela mesma razão `cargo_id` NÃO      │
+       * │ entra no `comparaAntes` do ciclo: incluir a coluna faria a comparação "algo mudou?" dar   │
+       * │ verdadeiro em toda volta da vaga já liberada, e cada volta empurraria `atualizado_em`,    │
+       * │ que é o relógio do expurgo de quem está dentro dela.                                      │
+       * │                                                                                          │
+       * │ NÃO CASOU, FICA NULO, como a cidade e como o cliente: a vaga continua nascendo em         │
+       * │ `PENDENTE_REVISAO` e o ganho é de PREENCHIMENTO, não de fila. Ninguém sai da revisão por  │
+       * │ ter cargo.                                                                                │
+       * └──────────────────────────────────────────────────────────────────────────────────────────┘
+       */
+      const cargoId = await this.cargoPorTexto(e.valores.nome_divulgacao);
       const linhas = (await this.db.execute(sql`
         insert into vagas (
           id_vacancy_pandape, codigo, nome_divulgacao, cidade_id,
@@ -486,7 +528,7 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
         )
         values (
           ${idVacancy}, ${codigo}, ${nomeDivulgacao}, ${cidadeId},
-          ${posicoes}, null, null, ${codigoDaFila()}
+          ${posicoes}, null, ${cargoId}::uuid, ${codigoDaFila()}
         )
         returning id
       `)) as unknown as { id: string }[];
@@ -778,6 +820,44 @@ export class IngestaoRepositorio implements PortaBanco, PortaCicloDeVidaDaVaga {
              = ${semAcento(nome)}
        limit 1
     `)) as unknown as { id: number }[];
+    return linhas[0]?.id ?? null;
+  }
+
+  /**
+   * O CARGO DO EA a partir do TÍTULO que a vaga do Pandapé divulga (`job`, gravado em
+   * `vagas.nome_divulgacao`). Irmão de `cidadePorTexto`, com a mesma forma e o mesmo fail-closed.
+   *
+   * ┌─ A COMPARAÇÃO É SEM ACENTO E SEM CAIXA, E O CATÁLOGO ATIVO É O ÚNICO UNIVERSO ──────────────┐
+   * │ O título é texto livre digitado por quem abriu a vaga no ATS, então casar por igualdade crua │
+   * │ funcionaria numa vaga e falharia na vaga do lado. `ativo` é filtrado porque inativar um cargo│
+   * │ é o gesto que a administração tem para dizer "pare de usar este", e uma resolução que        │
+   * │ ignorasse o flag transformaria esse gesto em nada.                                           │
+   * │                                                                                             │
+   * │ NÃO CASANDO, DEVOLVE NULO. Não existe "o cargo parecido": cargo errado atravessa a régua     │
+   * │ documental por (cliente + cargo), a pré-admissão e a folha, e sai mais caro do que o campo   │
+   * │ vazio que alguém preenche na liberação.                                                     │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * O `order by nome` EXISTE PELO ÚNICO EMPATE MEDIDO: o catálogo tem 379 cargos ativos e 378
+   * chaves distintas normalizando caixa e acento, ou seja UM par colide. Sem ordem, o `limit 1`
+   * escolheria um dos dois conforme o plano de execução do dia, e a mesma vaga nasceria com cargo
+   * diferente em duas instalações. Com ordem, a escolha é estável e conferível.
+   *
+   * §A.6: o TÍTULO NÃO É LOGADO aqui nem em quem chama. É texto livre do ATS, e a casa já mediu que
+   * campo assim chega com nome de gente dentro (a narrativa da reabertura, neste mesmo arquivo).
+   * Não casou, o registro é a coluna NULA, visível na tela de revisão sem publicar o texto.
+   */
+  private async cargoPorTexto(valor: unknown): Promise<string | null> {
+    const texto = textoOuNulo(valor);
+    if (texto === null) return null;
+    const linhas = (await this.db.execute(sql`
+      select id from cargos
+       where ativo = true
+         and translate(lower(nome), 'áàâãäéèêëíìîïóòôõöúùûüçñ', 'aaaaaeeeeiiiiooooouuuucn')
+             = ${semAcento(texto)}
+       order by nome
+       limit 1
+    `)) as unknown as { id: string }[];
     return linhas[0]?.id ?? null;
   }
 }

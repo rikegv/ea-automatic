@@ -2693,7 +2693,7 @@ export class CandidatosService {
    * `cod_cliente` inventado. Setor, gestor BP e departamento a vaga não tem: chegam vazios e viram
    * pendência (regra 5). §A.6: nenhum CPF é logado; o CPF do substituído segue só como valor a gravar.
    */
-  private async dadosDaPonteParaAdmissao(candidaturaId: string): Promise<
+  async dadosDaPonteParaAdmissao(candidaturaId: string): Promise<
     | {
         candidato: {
           cpf: string | null;
