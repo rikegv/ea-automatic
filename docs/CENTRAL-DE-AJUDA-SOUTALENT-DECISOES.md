@@ -387,7 +387,30 @@ vhost ainda não foi aplicado (§A.17: acesso público "em andamento com o Ferna
 
 1. **O campo `fontes` deve continuar indo para o cliente?** Hoje só o teste o usa.
 2. **O conteúdo dos artigos administrativos pode ficar em bundle público** quando o vhost do Portal
-   abrir, ou a allowlist `/_next/static/*` precisa ser mais estreita antes de o Fernando aplicar?
+   abrir? *(A segunda metade desta pergunta, "ou estreitar a allowlist", foi RETIRADA: ver abaixo,
+   porque a medição mostrou que estreitar não é conserto.)*
+
+### CORREÇÃO DA MINHA PRÓPRIA RECOMENDAÇÃO (medida pela sessão vizinha, conferida por mim)
+
+Eu havia proposto **estreitar a allowlist**. **Isso não funciona**, e o motivo é estrutural:
+
+- A página `/portal` precisa de **nove chunks**, e o `3708` (o do manual) **não é um deles**. Conferi
+  no `app-build-manifest.json`: sob `/portal/page` estão `webpack-*`, `f90a07c8-*`, `6239-*`,
+  `main-app-*`, `5771-*`, `2580-*`, `3005-*`, `1879-*` e o `app/portal/page-*`. *(O `3708` aparece
+  perto do Portal, mas sob `/(app)/admin/portal-links/page`, que é rota interna de admin.)*
+- Isso é boa notícia pela metade: prova que o chunk do manual **não é necessário** ao Portal, e que
+  uma allowlist correta o excluiria. **Mas a allowlist correta não é escrevível.**
+- **Todo nome de chunk carrega hash de CONTEÚDO**, e cinco dos nove são chunks compartilhados de id
+  numérico. Qualquer mudança em código compartilhado renomeia o arquivo. Um vhost com a lista exata
+  **quebra o Portal na publicação seguinte, em silêncio, com 403 em asset**, e ninguém liga o 403 à
+  causa. Trocaríamos um vazamento por uma quebra periódica sem diagnóstico.
+- Foi exatamente essa dificuldade que levou alguém a alargar para `*`, e o alargamento é a origem do
+  problema. **A lista precisa e a lista larga estão as duas erradas**, por motivos opostos.
+
+**A saída estrutural é APP PRÓPRIO para o Portal**, um build Next separado contendo só as telas do
+candidato. Aí `/_next/static/*` fica seguro **por construção**, sem lista para manter. É o caminho
+que o VT já seguiu. *(Recomendação da sessão de A&S, medida por ela e conferida por mim; a decisão é
+do diretor.)*
 
 *(Nada foi corrigido: §A.31, a fábrica propõe. O `seguranca` não tem poder de escrita e não conserta
 o que auditou.)*
