@@ -1054,10 +1054,15 @@ export function pollingHabilitado(env: Record<string, string | undefined>): bool
  * ─ O SCREENING PROJETADO, E A ALLOWLIST VALE AQUI TAMBEM ───────────────────────────────────────
  *
  * A listagem devolve 17 campos por screening (`title`, `description`, `webAccessLink`,
- * `whatsappAccessLink`, `occupationType`, `seniorityLevel` e outros). A varredura precisa de DOIS:
- * o `id`, para montar o caminho dos resultados, e o `updatedAt`, que e o cursor da secao abaixo.
+ * `whatsappAccessLink`, `occupationType`, `seniorityLevel` e outros). A varredura precisa de TRES:
+ * o `id`, para montar o caminho dos resultados, o `updatedAt`, que e o cursor da secao abaixo, e o
+ * `status`, que e o RECORTE (so vaga publicada entra, ver o bloco do recorte mais abaixo).
  *
- * PROJETAR AQUI, E NAO ADIANTE, e o que impede os outros quinze de existirem no plano, no log e no
+ * O `status` ENTROU EM 01/10/2026, e ele nao e dado de pessoa: e o estado da VAGA no fornecedor,
+ * do mesmo tipo que o `VacancyStatus` que o Pandape ja usa para o recorte equivalente. A allowlist
+ * cresceu por UM campo tecnico, e a razao dos outros quinze continuarem fora e a mesma.
+ *
+ * PROJETAR AQUI, E NAO ADIANTE, e o que impede os outros quatorze de existirem no plano, no log e no
  * job do Redis. `webAccessLink` e `whatsappAccessLink` sao o caso concreto: sao URL de acesso, na
  * mesma regua da URL do Pandape (secao A.6), que nao se persiste nem se loga.
  *
@@ -1068,6 +1073,15 @@ export interface ScreeningDigai {
   id: string;
   /** O carimbo que a LISTAGEM devolve. So se ARMAZENA; nao se decide nada com ele (ver o cursor). */
   updatedAt: string | null;
+  /**
+   * O ESTADO DA VAGA NO FORNECEDOR, COMO ELE O ESCREVE. Nao se normaliza e nao se traduz: o
+   * recorte compara contra a lista BRANCA, e normalizar aqui faria um status novo passar por
+   * parecido com um conhecido.
+   *
+   * NULO QUANDO A LISTAGEM NAO MANDA, e nulo NAO ENTRA (ver `classificarStatusDeScreening`): sem
+   * status nao se sabe se a vaga esta publicada, e a direcao do erro e nao ingerir.
+   */
+  status: string | null;
 }
 
 export function projetarScreeningDigai(cru: unknown): ScreeningDigai | null {
@@ -1075,7 +1089,110 @@ export function projetarScreeningDigai(cru: unknown): ScreeningDigai | null {
   if (o === null) return null;
   const id = texto(o.id);
   if (id === null || !ehIdTecnicoDigai(id)) return null;
-  return { id, updatedAt: texto(o.updatedAt) };
+  return { id, updatedAt: texto(o.updatedAt), status: texto(o.status) };
+}
+
+/**
+ * ─ O RECORTE DA VARREDURA: SO VAGA **PUBLICADA** ENTRA (decisao do diretor, 01/10/2026) ────────
+ *
+ * ┌─ A DISTRIBUICAO REAL, MEDIDA AO VIVO CONTRA A API EM 01/10/2026 ─────────────────────────────┐
+ * │   PUBLISHED  187   <- as unicas que entram                                                    │
+ * │   PAUSED     204                                                                              │
+ * │   QUEUED     110                                                                              │
+ * │   CLOSED      34                                                                              │
+ * │   DRAFT        2                                                                              │
+ * │   total      537                                                                              │
+ * │                                                                                               │
+ * │ ATE AQUI A VARREDURA NAO FILTRAVA NADA: ela listava as 537, de todos os cinco status. Ligar a  │
+ * │ ingestao sem o recorte traria PAUSED, QUEUED, CLOSED e DRAFT junto com as publicadas. No       │
+ * │ Pandape o recorte equivalente ja existe (`VacancyStatus=2`); no Digai nao existia.             │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ AS 204 `PAUSED` FICAM DE FORA POR DECISAO EXPLICITA, E ISTO NAO E DESCUIDO ─────────────────┐
+ * │ NAO "CONSERTE" INCLUINDO AS PAUSADAS. A vaga pausada volta sozinha na varredura seguinte      │
+ * │ quando for republicada, porque a varredura RELISTA por status a cada ciclo: nao ha nada a      │
+ * │ recuperar depois e nao ha fila a esvaziar. Incluir as 204 mais que DOBRARIA a base varrida     │
+ * │ (de 187 para 391) para trazer candidato de vaga que ninguem esta trabalhando.                  │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ LISTA BRANCA, E NUNCA LISTA NEGRA, E E A MESMA RAZAO DA LISTA BRANCA DE COLUNAS DA PLANILHA ┐
+ * │ "Entra quem e PUBLISHED" e "nao entra quem e CLOSED, QUEUED ou DRAFT" parecem a mesma frase e  │
+ * │ sao opostas no dia em que o fornecedor criar o SEXTO status: com lista negra ele ENTRA CALADO,  │
+ * │ e a ingestao passa a trazer candidato de um estado de vaga que ninguem avaliou; com lista       │
+ * │ branca ele fica de fora ATE ALGUEM DECIDIR, e aparece contado no log.                           │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * O FILTRO E DO LADO DO EA, e nao do fornecedor: medido que a listagem devolve as 537 numa pagina
+ * so, com o campo `status` em cada item. Nao se inventa parametro de consulta sem medir que ele
+ * existe, que e a licao do `GET /v2/clients/requests` do Pandape (HTTP 200 com zero itens).
+ */
+export const STATUS_DE_SCREENING_QUE_ENTRA = ["PUBLISHED"] as const;
+
+/**
+ * OS CINCO STATUS QUE O FORNECEDOR TEM HOJE, e esta lista NAO autoriza ninguem: ela existe para
+ * separar "status conhecido que o recorte deixa de fora" de "status que ninguem nunca viu".
+ *
+ * A DIFERENCA E DE ACAO, e e por isso que sao dois contadores: fora do recorte e o ESPERADO (350 de
+ * 537), e um sexto status e uma MUDANCA DE CONTRATO do fornecedor, que alguem tem de olhar.
+ */
+export const STATUS_DE_SCREENING_CONHECIDOS = [
+  "PUBLISHED",
+  "PAUSED",
+  "QUEUED",
+  "CLOSED",
+  "DRAFT",
+] as const;
+
+export type ClassificacaoDeStatusDeScreening = "ENTRA" | "FORA_DO_RECORTE" | "DESCONHECIDO";
+
+/**
+ * O STATUS DE UM SCREENING, CLASSIFICADO. Comparacao EXATA, sem normalizar caixa e sem aparar:
+ * `published` minusculo nao e o valor que o fornecedor manda (medido), e aceitar variacao e o
+ * caminho para um status novo entrar por parecer com um conhecido.
+ *
+ * AUSENTE E `DESCONHECIDO`, e nao `FORA_DO_RECORTE`: sem o campo nao se sabe o estado da vaga, e
+ * isso e exatamente o que precisa aparecer contado em vez de somar com as 350 esperadas.
+ */
+export function classificarStatusDeScreening(
+  status: string | null | undefined,
+): ClassificacaoDeStatusDeScreening {
+  if (typeof status !== "string" || status === "") return "DESCONHECIDO";
+  if ((STATUS_DE_SCREENING_QUE_ENTRA as readonly string[]).includes(status)) return "ENTRA";
+  if ((STATUS_DE_SCREENING_CONHECIDOS as readonly string[]).includes(status)) {
+    return "FORA_DO_RECORTE";
+  }
+  return "DESCONHECIDO";
+}
+
+/** O que o recorte devolve: a lista que entra, e as duas contagens que nao podem ficar mudas. */
+export interface RecorteDeScreenings {
+  publicadas: ScreeningDigai[];
+  /** Status CONHECIDO que o recorte deixa de fora. 350 de 537, medido: e o esperado, nao um erro. */
+  foraDoRecorte: number;
+  /** Status que esta lista nunca viu, ou ausente. Mudanca de contrato do fornecedor: alguem olha. */
+  statusDesconhecidos: number;
+}
+
+/**
+ * O RECORTE, PURO. A soma das tres saidas e sempre o total que entrou, e e isso que faz as
+ * contagens do log fecharem: diferenca sem nome vira "sumiu no caminho", que e o modo de falha mais
+ * caro desta ingestao (o desembrulho errado zerava a entrada em silencio).
+ */
+export function recortarScreeningsPublicadas(
+  screenings: readonly ScreeningDigai[],
+): RecorteDeScreenings {
+  const recorte: RecorteDeScreenings = {
+    publicadas: [],
+    foraDoRecorte: 0,
+    statusDesconhecidos: 0,
+  };
+  for (const s of screenings) {
+    const classe = classificarStatusDeScreening(s.status);
+    if (classe === "ENTRA") recorte.publicadas.push(s);
+    else if (classe === "FORA_DO_RECORTE") recorte.foraDoRecorte += 1;
+    else recorte.statusDesconhecidos += 1;
+  }
+  return recorte;
 }
 
 /**

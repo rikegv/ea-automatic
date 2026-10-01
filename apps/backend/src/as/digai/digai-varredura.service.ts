@@ -2,8 +2,10 @@ import { Injectable, Logger } from "@nestjs/common";
 import {
   DIGAI_TETO_PAGINAS_POR_SCREENING,
   DIGAI_TETO_REQ_POR_CICLO,
+  STATUS_DE_SCREENING_QUE_ENTRA,
   planoDaVarredura,
   proximaPaginaDigai,
+  recortarScreeningsPublicadas,
   totalDeclaradoDigai,
 } from "../../domain/digai";
 import { DigaiImportacaoService } from "./digai-importacao.service";
@@ -72,6 +74,12 @@ export class DigaiVarreduraService {
     foraDoTeto: number;
     proximaPaginaDaListagem: number | null;
     orcamentoRestante: number;
+    /** Quantas da pagina ENTRARAM no recorte (so `PUBLISHED`). Medido: 187 de 537. */
+    publicadas: number;
+    /** Status CONHECIDO deixado de fora pelo recorte. 350 de 537: e o esperado, nao um erro. */
+    foraDoRecorte: number;
+    /** Status que a lista branca nunca viu, ou ausente. Mudanca de contrato: alguem tem de olhar. */
+    statusDesconhecidos: number;
   }> {
     const vazio = {
       inerte: true,
@@ -79,6 +87,9 @@ export class DigaiVarreduraService {
       foraDoTeto: 0,
       proximaPaginaDaListagem: null,
       orcamentoRestante: 0,
+      publicadas: 0,
+      foraDoRecorte: 0,
+      statusDesconhecidos: 0,
     };
     if (!this.importacao.podeLer) {
       this.logger.log("Varredura do Digai INERTE: DIGAI_API_TOKEN nao configurado.");
@@ -96,6 +107,24 @@ export class DigaiVarreduraService {
      */
     const declarado = totalDeclaradoDigai({ total });
     const haMaisListagem = declarado !== null && lidos > 0 && lidos < declarado;
+
+    /*
+     * ─ O RECORTE: SO VAGA `PUBLISHED` ENTRA (decisao do diretor, 01/10/2026) ─────────────────────
+     *
+     * A REGUA E PURA e mora no dominio (`recortarScreeningsPublicadas`), com a lista BRANCA e a
+     * distribuicao medida escritas lá: 187 PUBLISHED de 537, e as 204 PAUSED ficam de fora por
+     * decisao explicita (a vaga republicada volta sozinha no ciclo seguinte, porque a varredura
+     * RELISTA por status). Aqui ficam o CORTE e o LOG.
+     *
+     * ┌─ ELE VEM **DEPOIS** DE `lidos` E DE `haMaisListagem`, E A ORDEM E A ARMADILHA DESTE BLOCO ┐
+     * │ A paginacao compara o que a LISTAGEM devolveu (`lidos`) com o `total` que o FORNECEDOR     │
+     * │ declarou. Recortando antes, `lidos` passaria a ser 187 contra um `total` de 537, e         │
+     * │ `haMaisListagem` daria VERDADEIRO para sempre: a varredura pediria pagina 2, 3, 4... de    │
+     * │ uma listagem que acabou na 1, gastando o orcamento inteiro do ciclo em listagem vazia. O   │
+     * │ recorte e NOSSO, o `total` e DELES, e os dois lados da comparacao tem de vir da mesma fonte.│
+     * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    const recorte = recortarScreeningsPublicadas(screenings);
 
     /*
      * ─ A LISTAGEM TEM O MESMO BURACO, E POR ISSO O AVISO E NAS DUAS SUPERFICIES ──────────────────
@@ -127,7 +156,12 @@ export class DigaiVarreduraService {
     const totaisConhecidos = await this.repo.totaisConhecidos();
 
     const plano = planoDaVarredura({
-      screenings,
+      /*
+       * SO AS PUBLICADAS CHEGAM AO PLANO, e e aqui que o recorte vira efeito: quem ficou de fora nao
+       * recebe cota, nao entra na fila e nao gasta requisicao. O ORCAMENTO continua inteiro, entao o
+       * recorte AUMENTA a cota de quem entra, em vez de reparti-la com vaga que ninguem trabalha.
+       */
+      screenings: recorte.publicadas,
       orcamento,
       haProximaPaginaDaListagem: haMaisListagem,
       totaisConhecidos,
@@ -201,9 +235,37 @@ export class DigaiVarreduraService {
       );
     }
 
+    /*
+     * ─ O QUE FICOU DE FORA APARECE CONTADO, E OS DOIS CONTADORES SAO SEPARADOS ───────────────────
+     *
+     * `foraDoRecorte` e o ESPERADO (350 de 537 medidos), e existe para o recorte ser VISIVEL: sem
+     * ele, a diferenca entre "a listagem encolheu" e "o recorte trabalhou" seria invisivel, e as
+     * duas se parecem (nos dois casos a fila fica menor).
+     *
+     * `statusDesconhecidos` e OUTRA CONVERSA: e o sexto status do fornecedor, ou o campo ausente.
+     * Ele nao entra (lista branca) E nao se esconde dentro da contagem do esperado, que e o molde
+     * das etapas nao mapeadas do Pandape. `warn`, porque e mudanca de contrato que alguem tem de
+     * olhar, e nao rotina.
+     *
+     * §A.6: contagem e o NOME do status permitido, que e vocabulario do fornecedor. Nenhum id de
+     * screening recusado e, sobretudo, NENHUM valor de status desconhecido: ele vem de campo de
+     * terceiro e esta linha termina em log permanente. Conta-se, nao se nomeia.
+     */
+    if (recorte.statusDesconhecidos > 0) {
+      this.logger.warn(
+        `Varredura do Digai: ${recorte.statusDesconhecidos} screening(s) com status que a lista ` +
+          `branca NAO conhece (ou sem o campo) na pagina ${pagina}. Eles NAO entraram, de proposito: ` +
+          `o recorte autoriza so ${STATUS_DE_SCREENING_QUE_ENTRA.join(", ")}, e status novo fica de ` +
+          `fora ate alguem decidir. Conferir o contrato do fornecedor.`,
+      );
+    }
+
     const maiorCota = plano.varrer.reduce((m, i) => Math.max(m, i.paginasPermitidas), 0);
     this.logger.log(
       `Varredura do Digai, pagina ${pagina} da listagem: ${lidos} screening(s) lido(s), ` +
+        `${recorte.publicadas.length} publicada(s) no recorte ` +
+        `(${recorte.foraDoRecorte} fora do recorte, ${recorte.statusDesconhecidos} de status ` +
+        `desconhecido), ` +
         `${plano.varrer.length} na fila desta passada, ${plano.paginasAutorizadas} pagina(s) ` +
         `autorizada(s) por necessidade (maior cota ${maiorCota}), ${plano.foraDoTeto} fora do teto, ` +
         `${plano.orcamentoRestante} requisicao(oes) de orcamento restante.`,
@@ -218,6 +280,9 @@ export class DigaiVarreduraService {
       foraDoTeto: plano.foraDoTeto,
       proximaPaginaDaListagem: proxima,
       orcamentoRestante: plano.orcamentoRestante,
+      publicadas: recorte.publicadas.length,
+      foraDoRecorte: recorte.foraDoRecorte,
+      statusDesconhecidos: recorte.statusDesconhecidos,
     };
   }
 

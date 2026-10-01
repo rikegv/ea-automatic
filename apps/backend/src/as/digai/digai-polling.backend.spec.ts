@@ -53,13 +53,30 @@ import { IS_PUBLIC_KEY } from "../../auth/decorators";
  * RECUSADA pelo portao da admissao.
  */
 
-/** Um screening do fornecedor, na forma da LISTAGEM medida em 29/09. */
-function screeningFingido(id: string, updatedAt = "2026-09-29T12:00:00Z") {
+/**
+ * Um screening do fornecedor, na forma da LISTAGEM medida em 29/09.
+ *
+ * ┌─ O `status` PADRAO E `PUBLISHED`, E ELE DEIXOU DE SER ENFEITE EM 01/10/2026 ─────────────────┐
+ * │ Ate aqui o campo valia `"ACTIVE"`, que NAO e um dos cinco status reais do fornecedor (medidos │
+ * │ ao vivo: PUBLISHED 187, PAUSED 204, QUEUED 110, CLOSED 34, DRAFT 2). Era inofensivo enquanto a │
+ * │ varredura nao filtrava nada; com o recorte, um valor fora da lista branca faz TODO screening   │
+ * │ deste arquivo ser recusado, e os testes de paginacao e de orcamento passariam a medir zero.    │
+ * │                                                                                               │
+ * │ O PADRAO E O QUE ENTRA, de proposito: os casos deste arquivo sao sobre teto, cota e paginacao, │
+ * │ e nenhum deles e sobre o recorte. Quem mede o recorte e                                        │
+ * │ `digai.recorte-publicadas.backend.spec.ts`, e e lá que os outros quatro status aparecem.       │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+function screeningFingido(
+  id: string,
+  updatedAt = "2026-09-29T12:00:00Z",
+  status = "PUBLISHED",
+) {
   return {
     id,
     title: "Triagem sintetica",
     description: "nao deve atravessar a projecao",
-    status: "ACTIVE",
+    status,
     updatedAt,
     webAccessLink: "https://exemplo.invalido/acesso",
     whatsappAccessLink: "https://exemplo.invalido/zap",
@@ -145,7 +162,7 @@ function repositorioDeCursorFingido(
 // ── 1. O CICLO, COM O CLIENTE DUBLADO ──────────────────────────────────────
 
 describe("o ciclo do polling varre a listagem e as paginas de resultados, sem tocar a rede", () => {
-  it("o tick le a listagem e devolve os screenings projetados, e nada alem de `id` e `updatedAt`", async () => {
+  it("o tick le a listagem e devolve os screenings projetados, e nada alem de `id`, `updatedAt` e `status`", async () => {
     const { importacao, chamadas } = importacaoComClienteDublado(() =>
       paginaDeScreeningsFingida([screeningFingido("sc-1"), screeningFingido("sc-2")]),
     );
@@ -169,11 +186,21 @@ describe("o ciclo do polling varre a listagem e as paginas de resultados, sem to
 
   it("a projecao do screening deixa `webAccessLink` e `title` de fora (allowlist, secao A.6)", () => {
     const projetado = projetarScreeningDigai(screeningFingido("sc-1"));
-    expect(projetado).toEqual({ id: "sc-1", updatedAt: "2026-09-29T12:00:00Z" });
+    /*
+     * O `status` ENTROU NA ALLOWLIST EM 01/10/2026, e e o TERCEIRO e ultimo campo: ele e o RECORTE
+     * (so `PUBLISHED` entra na varredura), nao e dado de pessoa, e e do mesmo tipo do
+     * `VacancyStatus` que o Pandape ja usa. Os outros quatorze campos continuam fora pela MESMA
+     * razao de antes, e `webAccessLink`/`whatsappAccessLink` sao o caso concreto.
+     */
+    expect(projetado).toEqual({
+      id: "sc-1",
+      updatedAt: "2026-09-29T12:00:00Z",
+      status: "PUBLISHED",
+    });
     expect(
       Object.keys(projetado ?? {}),
       "URL de acesso e da mesma regua da URL do Pandape: nao se persiste nem se loga.",
-    ).toEqual(["id", "updatedAt"]);
+    ).toEqual(["id", "updatedAt", "status"]);
   });
 
   it("a folha do leque le UMA pagina de resultados e entrega ao `importar`", async () => {
@@ -532,7 +559,7 @@ describe("o teto por ciclo conta REQUISICOES, e o orcamento atravessa jobs e pag
   });
 
   it("A CONTA FECHA: o pior caso com a base de HOJE cabe no teto, e a PARTIDA A FRIO tambem", () => {
-    const screenings = Array.from({ length: 528 }, (_, i) => ({ id: `sc-${i}`, updatedAt: null }));
+    const screenings = Array.from({ length: 528 }, (_, i) => ({ id: `sc-${i}`, updatedAt: null, status: "PUBLISHED" }));
     // Sem cursor nenhum: a base inteira e DESCONHECIDA, que e o pior caso da cota de descoberta.
     const plano = planoDaVarredura({ screenings, orcamento: DIGAI_TETO_REQ_POR_CICLO });
     const piorCaso = 1 + plano.paginasAutorizadas;
@@ -561,7 +588,7 @@ describe("o teto por ciclo conta REQUISICOES, e o orcamento atravessa jobs e pag
    * medido. Para quem passa, nao e atraso: e perda recorrente, o modo de falha mais caro daqui.
    */
   it("A COBERTURA MANDA NO TETO: a cota de hoje cobre o MAIOR screening medido (1.225 candidatos)", () => {
-    const screenings = Array.from({ length: 528 }, (_, i) => ({ id: `sc-${i}`, updatedAt: null }));
+    const screenings = Array.from({ length: 528 }, (_, i) => ({ id: `sc-${i}`, updatedAt: null, status: "PUBLISHED" }));
     const plano = planoDaVarredura({ screenings, orcamento: DIGAI_TETO_REQ_POR_CICLO });
     const paginasDoMaior = Math.ceil(1_225 / 100);
     expect(paginasDoMaior, "1.225 candidatos em paginas de 100 sao 13 paginas.").toBe(13);
@@ -614,7 +641,7 @@ describe("o teto por ciclo conta REQUISICOES, e o orcamento atravessa jobs e pag
   }
 
   function screeningsDe(n: number) {
-    return Array.from({ length: n }, (_, i) => ({ id: `sc-${i}`, updatedAt: null }));
+    return Array.from({ length: n }, (_, i) => ({ id: `sc-${i}`, updatedAt: null, status: "PUBLISHED" }));
   }
 
   /**
@@ -807,7 +834,7 @@ describe("o teto por ciclo conta REQUISICOES, e o orcamento atravessa jobs e pag
 
   it("A SOMA DO QUE O PLANO AUTORIZA NUNCA PASSA DO QUE ELE RECEBEU, em varios tamanhos e formas", () => {
     for (const n of [1, 5, 60, 522, 1_500, 3_000, 9_000]) {
-      const screenings = Array.from({ length: n }, (_, i) => ({ id: `sc-${i}`, updatedAt: null }));
+      const screenings = Array.from({ length: n }, (_, i) => ({ id: `sc-${i}`, updatedAt: null, status: "PUBLISHED" }));
       // Duas formas: base DESCONHECIDA (cota de descoberta) e base TORTA com um gigante de 20.
       const tortos = new Map(screenings.map((s, i) => [s.id, i % 7 === 0 ? 9_000 : 58]));
       for (const totais of [undefined, tortos]) {
@@ -835,7 +862,7 @@ describe("o teto por ciclo conta REQUISICOES, e o orcamento atravessa jobs e pag
   });
 
   it("a requisicao da propria listagem conta no orcamento", () => {
-    const screenings = Array.from({ length: 10 }, (_, i) => ({ id: `sc-${i}`, updatedAt: null }));
+    const screenings = Array.from({ length: 10 }, (_, i) => ({ id: `sc-${i}`, updatedAt: null, status: "PUBLISHED" }));
     const plano = planoDaVarredura({ screenings, orcamento: 6 });
     expect(plano.varrer, "orcamento 6 menos a listagem = 5 screenings.").toHaveLength(5);
     expect(plano.foraDoTeto).toBe(5);
@@ -868,7 +895,7 @@ describe("o teto por ciclo conta REQUISICOES, e o orcamento atravessa jobs e pag
   });
 
   it("LISTAGEM PAGINADA e conservadora e PASSA O RESTO ADIANTE (furo B do veto)", () => {
-    const screenings = Array.from({ length: 10 }, (_, i) => ({ id: `sc-${i}`, updatedAt: null }));
+    const screenings = Array.from({ length: 10 }, (_, i) => ({ id: `sc-${i}`, updatedAt: null, status: "PUBLISHED" }));
     const plano = planoDaVarredura({
       screenings,
       orcamento: 100,
@@ -891,7 +918,7 @@ describe("o teto por ciclo conta REQUISICOES, e o orcamento atravessa jobs e pag
    * divisao igualitaria de antes (`floor(99/10)` = 9), com o troco indo para quem tem maior resto.
    */
   it("SEM NADA CONHECIDO, a reparticao degenera na IGUALITARIA de antes", () => {
-    const screenings = Array.from({ length: 10 }, (_, i) => ({ id: `sc-${i}`, updatedAt: null }));
+    const screenings = Array.from({ length: 10 }, (_, i) => ({ id: `sc-${i}`, updatedAt: null, status: "PUBLISHED" }));
     const plano = planoDaVarredura({ screenings, orcamento: 100, haProximaPaginaDaListagem: false });
     const cotas = plano.varrer.map((i) => i.paginasPermitidas);
     expect(
@@ -906,7 +933,7 @@ describe("o teto por ciclo conta REQUISICOES, e o orcamento atravessa jobs e pag
 
   it("o teto de paginas por screening limita a NECESSIDADE, e nao o contrario", () => {
     const plano = planoDaVarredura({
-      screenings: [{ id: "sc-1", updatedAt: null }],
+      screenings: [{ id: "sc-1", updatedAt: null, status: "PUBLISHED" }],
       orcamento: 10_000,
       // 5.000 candidatos pedem 55 paginas com folga: quem manda e o anti-laco.
       totaisConhecidos: new Map([["sc-1", 5_000]]),
@@ -920,9 +947,9 @@ describe("o teto por ciclo conta REQUISICOES, e o orcamento atravessa jobs e pag
   it("screening repetido na listagem nao gasta duas requisicoes", () => {
     const plano = planoDaVarredura({
       screenings: [
-        { id: "sc-1", updatedAt: null },
-        { id: "sc-1", updatedAt: "2026-09-29T00:00:00Z" },
-        { id: "sc-2", updatedAt: null },
+        { id: "sc-1", updatedAt: null, status: "PUBLISHED" },
+        { id: "sc-1", updatedAt: "2026-09-29T00:00:00Z", status: "PUBLISHED" },
+        { id: "sc-2", updatedAt: null, status: "PUBLISHED" },
       ],
       orcamento: DIGAI_TETO_REQ_POR_CICLO,
     });
@@ -1354,6 +1381,9 @@ describe("a fila abre o leque, e quem decide e a varredura", () => {
         foraDoTeto: 0,
         proximaPaginaDaListagem: null,
         orcamentoRestante: 0,
+        publicadas: 0,
+        foraDoRecorte: 0,
+        statusDesconhecidos: 0,
       })),
     });
 
@@ -1377,6 +1407,9 @@ describe("a fila abre o leque, e quem decide e a varredura", () => {
         foraDoTeto: 0,
         proximaPaginaDaListagem: 2,
         orcamentoRestante: 89,
+        publicadas: 0,
+        foraDoRecorte: 0,
+        statusDesconhecidos: 0,
       })),
     });
 
@@ -1396,6 +1429,9 @@ describe("a fila abre o leque, e quem decide e a varredura", () => {
         foraDoTeto: 0,
         proximaPaginaDaListagem: null,
         orcamentoRestante: 0,
+        publicadas: 0,
+        foraDoRecorte: 0,
+        statusDesconhecidos: 0,
       })),
     });
 
@@ -1443,6 +1479,9 @@ describe("a fila abre o leque, e quem decide e a varredura", () => {
         foraDoTeto: 0,
         proximaPaginaDaListagem: 2,
         orcamentoRestante: 100,
+        publicadas: 0,
+        foraDoRecorte: 0,
+        statusDesconhecidos: 0,
       })),
     });
 
@@ -1459,6 +1498,9 @@ describe("a fila abre o leque, e quem decide e a varredura", () => {
         foraDoTeto: 0,
         proximaPaginaDaListagem: null,
         orcamentoRestante: 0,
+        publicadas: 0,
+        foraDoRecorte: 0,
+        statusDesconhecidos: 0,
       })),
     });
 

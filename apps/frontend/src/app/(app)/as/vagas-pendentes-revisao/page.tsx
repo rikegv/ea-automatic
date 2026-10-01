@@ -10,7 +10,6 @@ import { Button } from "@/components/ui/Button";
 import { Icon } from "@/components/ui/Icon";
 import { Modal } from "@/components/ui/Modal";
 import { Combobox } from "@/components/ui/Combobox";
-import { StatusPill } from "@/components/ui/StatusPill";
 import { ColunaOrdenavel } from "@/components/ui/ColunaOrdenavel";
 import { useOrdenacao, type ColunaOrdenavel as ColOrd } from "@/lib/ordenacao";
 import { cn } from "@/lib/cn";
@@ -394,42 +393,33 @@ export default function VagasPendentesDeRevisaoPage() {
                       </td>
                       <td className="font-semibold">{v.nomeDivulgacao ?? "não informado"}</td>
                       <td className="text-center">{v.cargoNome ?? "não informado"}</td>
-                      {/* A COLUNA QUE A FILA EXISTE PARA RESOLVER. §A.12: o ícone acompanha o estado
-                          real, então a pill é o X vermelho enquanto falta o cliente e o check verde
-                          quando ele já está vinculado. Ela nunca é fixa. */}
-                      {/* ─ OS QUATRO ESTADOS DESTA CÉLULA, E TRÊS DELES SÃO NOVOS ────────────
-                          A fábrica lê a planilha viva do time e PROPÕE o cliente de parte da fila.
-                          A proposta NÃO é o cliente da vaga: ela não escreve `cod_cliente` e não
-                          decide nada, então a célula nunca a mostra como se fosse um vínculo.
+                      {/* ─ SÓ O NOME DO CLIENTE, OU "Sem Cliente". SEM TAG, SEM ÍCONE, SEM NADA ──
+                          DECISÃO DO DIRETOR (01/10/2026), e ela é FINAL: esta coluna não distingue
+                          cliente vinculado de nome proposto pela planilha, e não tem marca visual
+                          nenhuma. O fundamento dele: "informação demais atrapalha; a fila é para
+                          bater o olho e saber qual vaga tem cliente e qual não tem".
 
-                          Cliente VINCULADO segue sendo o check verde. Falta o cliente e existe
-                          proposta: a pill é de PENDÊNCIA (§A.12, o ícone acompanha o estado real),
-                          com o nome da planilha embaixo. E os dois casos de proposta são
-                          DISTINGUÍVEIS: "com código" a trilha propõe o código para confirmar, "sem
-                          código" o nome não está no catálogo da Admissão e a pessoa ainda escolhe
-                          qual cadastrado corresponde. Sem proposta, nada muda: X vermelho. */}
+                          O CHECK VERDE SAIU por este pedido, e vale registrar que ele dizia uma
+                          coisa que não era verdade: proposta não conferida aparecia com o mesmo
+                          ícone de aprovação de um cliente que uma pessoa escolheu. Tirar o ícone
+                          resolve isso de carona, porque nenhum ícone afirma menos que um errado.
+
+                          A GARANTIA DA AUDITORIA NUNCA MOROU AQUI, e é por isso que esta coluna
+                          pode ser só texto. Ela tem duas pernas, as duas intactas e as duas DENTRO
+                          DO MODAL: o seletor NASCE VAZIO (a proposta vive em campo próprio, inerte,
+                          e nunca escreve `cod_cliente`) e a vaga NÃO LIBERA sem o campo preenchido,
+                          porque `codCliente` é o PRIMEIRO dos onze obrigatórios de
+                          `VAGA_OBRIGATORIOS`. A validação acontece onde o time revisa, não na lista.
+
+                          §A.12 fala de ícone por status em coluna de STATUS. Esta não é: é coluna de
+                          identificação, e o diretor decidiu que ela é texto. */}
                       <td className="text-center">
-                        {marca.tipo === "VINCULADO" ? (
-                          <StatusPill tone="ok" label={marca.nome} />
-                        ) : marca.tipo === "SEM_CLIENTE" ? (
-                          <StatusPill tone="dg" label="Sem Cliente" title={regua.motivo} />
+                        {marca.tipo === "SEM_CLIENTE" ? (
+                          <span className="text-dim" title={regua.motivo}>
+                            Sem Cliente
+                          </span>
                         ) : (
-                          <div className="flex flex-col items-center gap-1">
-                            <StatusPill
-                              tone="wn"
-                              label={
-                                marca.tipo === "PROPOSTA_COM_CODIGO"
-                                  ? "Proposta Da Planilha"
-                                  : "Proposta Sem Código"
-                              }
-                              title={
-                                marca.tipo === "PROPOSTA_COM_CODIGO"
-                                  ? "A fábrica propôs este cliente pela planilha do time. Ninguém conferiu ainda: abra a vaga para confirmar."
-                                  : "A planilha do time diz quem é o cliente, e esse nome não está no catálogo da Admissão. Abra a vaga para escolher qual cadastrado corresponde."
-                              }
-                            />
-                            <span className="text-[12px] text-dim">{marca.nome}</span>
-                          </div>
+                          <span>{marca.nome}</span>
                         )}
                       </td>
                       <td className="text-center">

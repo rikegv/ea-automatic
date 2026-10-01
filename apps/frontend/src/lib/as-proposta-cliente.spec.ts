@@ -1,12 +1,10 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { PropostaDeClienteDaVaga } from "@ea/shared-types";
-import { ESTADO_DA_PROPOSTA_LABEL } from "@ea/shared-types";
 import {
-  casoDaProposta,
   conferenciaDaProposta,
   marcaDaPropostaNaFila,
   propostaDaVaga,
-  ROTULOS_DE_ESTADO_DE_RESERVA,
 } from "./as-proposta-cliente";
 
 /**
@@ -15,6 +13,15 @@ import {
  * O que estes testes travam é o que a auditoria chamou de condição C1 e o que o diretor chamou de
  * "o time só confere": a proposta é UMA PROPOSTA até alguém adotá-la, e os dois casos de cobertura
  * (com código e só com nome) são estados DIFERENTES, nunca o mesmo com um campo vazio.
+ *
+ * ┌─ AS TAGS SAÍRAM DA TELA (decisão do diretor, 01/10/2026) ───────────────────────────────────┐
+ * │ A fila mostra o NOME do cliente, ou "Sem Cliente", e nada mais; a caixa da trilha perdeu as │
+ * │ pills de estado e ficou só com o texto. Saiu com elas a comparação dos rótulos contra o      │
+ * │ `ESTADO_DA_PROPOSTA_LABEL`, que não tem mais o que proteger.                                 │
+ * │                                                                                              │
+ * │ A RÉGUA DOS CASOS CONTINUA INTEIRA, e é o que estes testes cobrem: ela é que decide se a      │
+ * │ caixa propõe um código para confirmar ou manda a pessoa escolher no seletor.                  │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
  */
 
 const COM_CODIGO: PropostaDeClienteDaVaga = {
@@ -141,25 +148,35 @@ describe("a marca da coluna Cliente na fila", () => {
   });
 });
 
-describe("o vocabulário é o do contrato, e não um segundo nome para a mesma coisa", () => {
-  it("o caso da proposta é o `CasoDaPropostaDeCliente`", () => {
-    expect(casoDaProposta(COM_CODIGO)).toBe("COM_CODIGO");
-    expect(casoDaProposta(SO_NOME)).toBe("SO_NOME");
+/*
+ * ─ A COLUNA CLIENTE DA FILA É TEXTO PURO, E ISSO É DECISÃO DO DIRETOR (01/10/2026) ─────────────
+ *
+ * "Sem tag, sem ícone, sem nada. Informação demais atrapalha; a fila é para bater o olho e saber
+ * qual vaga tem cliente e qual não tem."
+ *
+ * O CHECK VERDE SAIU, e ele dizia uma coisa falsa: proposta não conferida aparecia com o mesmo
+ * ícone de aprovação de um cliente que uma pessoa escolheu. Nenhum ícone afirma menos que um errado.
+ *
+ * ESTA TRAVA É DE FONTE porque o defeito que ela previne é de RENDERIZAÇÃO, e quem "melhora" a
+ * tela um dia vai achar natural devolver a pill para a coluna ficar igual às outras. A garantia da
+ * auditoria não mora aqui: ela mora no MODAL (seletor nasce vazio, e `codCliente` é o primeiro dos
+ * onze obrigatórios), e é lá que ela é asserida.
+ */
+describe("a coluna Cliente da fila de revisão não tem marca visual", () => {
+  const fonte = readFileSync(
+    new URL("../app/(app)/as/vagas-pendentes-revisao/page.tsx", import.meta.url),
+    "utf8",
+  );
+  /* Sem comentário: o arquivo FALA de pill e de ícone em prosa, para contar a decisão, e a varredura
+     ingênua casaria a própria explicação. Já custou rodada nesta casa, quatro vezes num dia só. */
+  const codigo = fonte.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
+  it("não renderiza `StatusPill` em lugar nenhum da tela", () => {
+    expect(codigo).not.toContain("StatusPill");
   });
 
-  /**
-   * O TEXTO DE RESERVA DAS TAGS existe porque valor novo do `shared-types` só chega ao navegador
-   * depois do `build` do pacote, e tag escrita "undefined" é o pior lugar para esse defeito
-   * aparecer. Esta afirmação é o que impede as duas listas de divergirem: construído o pacote, ela
-   * compara palavra por palavra. Enquanto o `dist` estiver atrasado, ela registra o fato em vez de
-   * mentir que conferiu.
-   */
-  it("os rótulos de reserva dizem exatamente o que o contrato diz", () => {
-    if (!ESTADO_DA_PROPOSTA_LABEL) {
-      expect(ROTULOS_DE_ESTADO_DE_RESERVA.PROPOSTO).toBe("Proposta Da Planilha");
-      expect(ROTULOS_DE_ESTADO_DE_RESERVA.CONFIRMADO).toBe("Cliente Confirmado");
-      return;
-    }
-    expect(ROTULOS_DE_ESTADO_DE_RESERVA).toEqual(ESTADO_DA_PROPOSTA_LABEL);
+  it("CANÁRIO: a célula ainda existe, senão o teste acima passa por tela vazia", () => {
+    expect(codigo).toContain("marcaDaPropostaNaFila");
+    expect(codigo).toContain("Sem Cliente");
   });
 });
