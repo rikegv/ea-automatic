@@ -19,7 +19,7 @@
  */
 
 /** O tipo do campo decide só a validação de formato na gravação, nunca a regra de negócio. */
-type TipoCampoGi = "texto" | "data" | "uf";
+type TipoCampoGi = "texto" | "data" | "uf" | "codigo3";
 
 interface CampoGiDef {
   /** Nome da COLUNA (propriedade JS de `admissaoDadosGi`) onde o valor é gravado. */
@@ -38,8 +38,17 @@ interface CampoGiDef {
  */
 export const CAMPOS_GI: Readonly<Record<string, CampoGiDef>> = {
   // Grupo 1 / filiação
-  nacionalidade: { coluna: "nacionalidade", rotulo: "Nacionalidade", tipo: "texto" },
-  naturalidade: { coluna: "naturalidade", rotulo: "Naturalidade", tipo: "texto" },
+  // `codigo3`: o G.I declara `nacionalidade` com `maxLength` 3 e documenta 254 códigos na
+  // `description` do contrato (`010` Brasileiro). A tela do candidato oferece a lista fechada, mas
+  // SELETOR DE TELA NÃO É ALLOWLIST: `POST /portal/dados-gi` é a porta do candidato, e sem validação
+  // aqui seguia gravável texto arbitrário até o teto numa coluna `varchar(120)` de tabela com PII
+  // retida. Exigência do `seguranca` (G7, 01/10/2026).
+  nacionalidade: { coluna: "nacionalidade", rotulo: "Nacionalidade", tipo: "codigo3" },
+  // `naturalidade` é a SIGLA DA UF de nascimento, não a cidade: o campo do GI tem `maxLength` 2 e a
+  // `description` dele lista as 27 siglas (`docs/GI-CATALOGOS-DA-DESCRIPTION.md`). Por isso `tipo: "uf"`,
+  // que já normaliza para 2 letras maiúsculas e descarta o que não vira sigla. Antes era "texto", e
+  // cidade digitada aqui chegava ao GI como NULO (`codigoCurto` anula o que não cabe em 2).
+  naturalidade: { coluna: "naturalidade", rotulo: "Naturalidade", tipo: "uf" },
   nomeMae: { coluna: "filiacaoNomeMae", rotulo: "Nome da mãe", tipo: "texto" },
   nomePai: { coluna: "filiacaoNomePai", rotulo: "Nome do pai", tipo: "texto" },
   // Grupo 2
@@ -107,6 +116,8 @@ export interface DadosGiFiltrados {
  *  - valor maior que o teto: DESCARTADO (não é dado de documento, é texto vazando);
  *  - `tipo === "data"` com formato diferente de AAAA-MM-DD: DESCARTADO (não persiste data quebrada);
  *  - `tipo === "uf"`: reduzido a 2 letras maiúsculas; vazio depois disso é descartado.
+ *  - `tipo === "codigo3"`: só dígitos, e DESCARTADO se não sobrarem exatamente 3. Não se "conserta"
+ *    um código por corte: "Brasileira" não é `010`, e inventar código é pior que não gravar.
  *
  * §A.6: nada aqui é logado, e a função nunca levanta com o valor dentro.
  */
@@ -122,6 +133,10 @@ export function filtrarCamposGi(cru: Record<string, unknown>): DadosGiFiltrados 
     if (def.tipo === "uf") {
       valor = valor.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 2);
       if (valor.length !== 2) continue;
+    }
+    if (def.tipo === "codigo3") {
+      valor = valor.replace(/\D/g, "");
+      if (valor.length !== 3) continue;
     }
     update[def.coluna] = valor;
     rotulos.push(def.rotulo);

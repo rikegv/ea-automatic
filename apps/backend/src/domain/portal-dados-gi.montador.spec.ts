@@ -58,31 +58,78 @@ describe("montarFuncionarioSelecao: formatos e telefone", () => {
 describe("montarFuncionarioSelecao: de/para de codigo (nunca inventa)", () => {
   const dePara: DeParaGi = {
     codigoCidade: (nome, uf) => (nome === "Sao Paulo" && uf === "SP" ? "7107" : null),
-    codigoBanco: (nome) => (nome === "NUBANK" ? "260" : null),
   };
 
   it("sem de/para: nome preenchido, codigo nulo", () => {
     const f = montarFuncionarioSelecao({ cidade: "Sao Paulo", uf: "SP", banco: "NUBANK" });
     expect(f.cidadeResid).toBe("Sao Paulo");
     expect(f.codigoCidadeResid).toBeNull();
-    expect(f.codigoBcoFolha).toBeNull();
-    expect(f.codigoBcoPagar).toBeNull();
   });
 
-  it("com de/para que resolve: preenche cidade e banco (folha=pagar)", () => {
-    const f = montarFuncionarioSelecao(
-      { cidade: "Sao Paulo", uf: "SP", banco: "NUBANK" },
-      dePara,
-    );
+  it("com de/para que resolve: preenche o codigo da cidade", () => {
+    const f = montarFuncionarioSelecao({ cidade: "Sao Paulo", uf: "SP" }, dePara);
     expect(f.codigoCidadeResid).toBe("7107");
-    expect(f.codigoBcoFolha).toBe("260");
-    expect(f.codigoBcoPagar).toBe("260");
   });
 
   it("de/para que NAO resolve: codigo fica nulo (nao inventa)", () => {
-    const f = montarFuncionarioSelecao({ cidade: "Santos", uf: "SP", banco: "OUTRO" }, dePara);
+    const f = montarFuncionarioSelecao({ cidade: "Santos", uf: "SP" }, dePara);
     expect(f.codigoCidadeResid).toBeNull();
-    expect(f.codigoBcoFolha).toBeNull();
+  });
+
+  /**
+   * O BANCO DA EMPRESA SAIU DO ENVIO (decisão do diretor, 01/10/2026): `codigoBcoFolha` e
+   * `codigoBcoPagar` referenciam a conta pagadora da empresa (`TB_Banco`), quem cadastra é a folha.
+   * Aqui se trava a AUSÊNCIA, para que ninguém os reintroduza sem decisão: o banco do funcionário
+   * continua indo só por `agencia`/`contaCorrente`.
+   */
+  it("NAO emite codigoBcoFolha nem codigoBcoPagar; agencia e conta continuam", () => {
+    const f = montarFuncionarioSelecao({ banco: "NUBANK", agencia: "0001", conta: "12345-6" });
+    expect(f).not.toHaveProperty("codigoBcoFolha");
+    expect(f).not.toHaveProperty("codigoBcoPagar");
+    expect(f.agencia).toBe("0001");
+    expect(f.contaCorrente).toBe("12345-6");
+  });
+});
+
+/**
+ * NORMALIZAÇÃO NUMÉRICA, as DUAS réguas opostas (01/10/2026). Campo de CONTAGEM perde o zero à
+ * esquerda (o padrão do GI o proíbe e `"0012" === "12"` como inteiro); DOCUMENTO preserva todos os
+ * dígitos, porque tirar o zero do CPF apagaria um dígito e produziria outro número.
+ */
+describe("montarFuncionarioSelecao: zero a esquerda, contagem x documento", () => {
+  it("CPF iniciado em zero PRESERVA os 11 digitos", () => {
+    expect(montarFuncionarioSelecao({ cpf: "09988877766" }).cpf).toBe("09988877766");
+    expect(montarFuncionarioSelecao({ cpf: "099.888.777-66" }).cpf).toBe("09988877766");
+  });
+
+  it("PIS iniciado em zero PRESERVA os digitos, e a mascara sai", () => {
+    expect(montarFuncionarioSelecao({ pis: "01234567890" }).pis).toBe("01234567890");
+    expect(montarFuncionarioSelecao({ pis: "012.34567.89-0" }).pis).toBe("01234567890");
+  });
+
+  it("zona e secao do titulo saem sem zero a esquerda", () => {
+    const f = montarFuncionarioSelecao({ tituloZona: "007", tituloSecao: "0012" });
+    expect(f.titEleZona).toBe("7");
+    expect(f.titEleSecao).toBe("12");
+  });
+
+  it("zona/secao sem digito nenhum: null (campo anulavel)", () => {
+    const f = montarFuncionarioSelecao({ tituloZona: "", tituloSecao: "abc" });
+    expect(f.titEleZona).toBeNull();
+    expect(f.titEleSecao).toBeNull();
+  });
+
+  it("codigo de cidade do de/para sai sem zero a esquerda", () => {
+    const f = montarFuncionarioSelecao({ cidade: "Santos", uf: "SP" }, {
+      codigoCidade: () => "0712",
+    });
+    expect(f.codigoCidadeResid).toBe("712");
+  });
+
+  it("telefone com o ZERO DE OPERADORA: DDD sai 11, nao 01", () => {
+    const f = montarFuncionarioSelecao({ telefone: "011999990000" });
+    expect(f.smsdddCel).toBe("11");
+    expect(f.smsNroCel).toBe("999990000");
   });
 });
 

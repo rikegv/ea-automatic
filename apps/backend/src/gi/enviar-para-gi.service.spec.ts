@@ -12,6 +12,13 @@ import { DE_PARA_GI_VAZIO, type PessoaParaGi } from "../domain/portal-dados-gi";
  * O ponto central provado aqui: o gatilho AUTOMÁTICO (`enviar`) é ESTRUTURALMENTE incapaz de criar no
  * GI (nunca chama `criarFuncionarioSelecao`), e o MANUAL (`enviarManual`) só cria com
  * `GI_DISPARO_ARMADO=true`. §A.6: nenhum valor de pessoa aparece nos motivos (códigos fechados).
+ *
+ * ⚠️ A IDEMPOTÊNCIA DE VERDADE NÃO SE PROVA AQUI, e é importante saber por quê: neste arquivo o leitor
+ * é um DUBLÊ, e `jaEnviado` devolve o que o fixture mandar. Isso cobre a ORQUESTRAÇÃO (o serviço
+ * consulta antes de criar), não a PERSISTÊNCIA da marca, que é onde o defeito real morava
+ * (`marcarEnviado` era um UPDATE que não criava a linha, então a marca nunca passava a existir e o
+ * segundo clique duplicava o registro na produção do fornecedor). O cenário das DUAS chamadas, com o
+ * leitor REAL sobre banco falsificado, mora em `gi-leitor-idempotencia.tester.spec.ts`.
  */
 
 const CPF_SINTETICO = "39053344705";

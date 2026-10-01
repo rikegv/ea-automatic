@@ -151,9 +151,9 @@ export interface PessoaParaGi {
  * O payload da pré-admissão do GI (`FuncionarioSelecao`), SÓ com campos de pessoa. Os nomes espelham
  * os campos do GI (`docs/GI-DADOS-DA-PESSOA-PARA-VALIDAR.md`).
  *
- * PEÇA 3: o de/para de código entrou. `cidadeResid` guarda o NOME (o que o EA tem como
- * texto), e `codigoCidadeResid`/`codigoBcoFolha`/`codigoBcoPagar` guardam o CÓDIGO do GI, resolvido
- * por um de/para injetado. Sem de/para, o código nasce NULO (fail-closed: nunca se INVENTA código).
+ * PEÇA 3: o de/para de código entrou. `cidadeResid` guarda o NOME (o que o EA tem como texto), e
+ * `codigoCidadeResid` guarda o CÓDIGO do GI, resolvido por um de/para injetado. Sem de/para, o código
+ * nasce NULO (fail-closed: nunca se INVENTA código).
  */
 export interface FuncionarioSelecao {
   nome: string | null;
@@ -220,28 +220,42 @@ export interface FuncionarioSelecao {
   ufResid: string | null;
   /** CÓDIGO da cidade no GI (de/para). NULO quando o de/para não resolve: não se inventa código. */
   codigoCidadeResid: string | null;
-  /** CÓDIGO do banco no GI (de/para catálogo `Banco`). NULO quando não resolve. */
-  codigoBcoFolha: string | null;
-  /** CÓDIGO do banco pagador no GI. Mesmo de/para do `codigoBcoFolha`. NULO quando não resolve. */
-  codigoBcoPagar: string | null;
+  /**
+   * NÃO EXISTE MAIS `codigoBcoFolha` NEM `codigoBcoPagar` AQUI, e a ausência é deliberada (decisão do
+   * diretor, 01/10/2026). Os dois campos do GI referenciam a CONTA PAGADORA DA EMPRESA: a chave
+   * estrangeira aponta para `TB_Banco`, que não é catálogo de bancos e sim o catálogo das CONTAS
+   * bancárias da empresa (tem `nrAgencia`, `nrConta`, `chequeInicial`, `contaContabil`, `valorSaldo`).
+   * Quem cadastra isso é o time de folha, na tela do GI, e o EA não tem a informação (empresa +
+   * finalidade da conta) para escolher qual conta é.
+   *
+   * O FATO QUE FECHOU A DECISÃO: o `341` que o EA mandava é o código FEBRABAN, que no GI vive em
+   * `TB_Banco.numeroBanco` (40 linhas, uma por empresa/finalidade), enquanto o campo espera a CHAVE
+   * INTERNA `TB_Banco.codigoBanco`. Não existe linha com `codigoBanco = 341` entre as 165, e o GI não
+   * valida a FK: aceitava em silêncio e gravava uma referência pendurada.
+   *
+   * O que sobra do banco DO FUNCIONÁRIO são `agencia` e `contaCorrente`, abaixo, e eles continuam
+   * sendo enviados. A INSTITUIÇÃO bancária do funcionário não tem campo neste DTO (nem na folha
+   * oficial `TB_Funcionario`): quem a informa é o time de folha, na tela.
+   */
   agencia: string | null;
   contaCorrente: string | null;
 }
 
 /**
- * O DE/PARA de código do GI, INJETADO. Traduz o que o EA guarda como TEXTO (nome da cidade, nome do
- * banco) no CÓDIGO que o GI espera. Materializado a partir dos catálogos do GI (`Banco`, municípios),
- * nunca inventado: quando não há correspondência, devolve `null` e o campo de código fica vazio.
+ * O DE/PARA de código do GI, INJETADO. Traduz o que o EA guarda como TEXTO (nome da cidade) no CÓDIGO
+ * que o GI espera. Materializado a partir do catálogo de municípios do GI, nunca inventado: quando não
+ * há correspondência, devolve `null` e o campo de código fica vazio.
+ *
+ * O `codigoBanco` SAIU junto com `codigoBcoFolha`/`codigoBcoPagar`: existia só para alimentá-los, e
+ * aqueles campos são a conta pagadora da EMPRESA (ver o comentário em `FuncionarioSelecao`).
  */
 export interface DeParaGi {
   codigoCidade(nome: string | null | undefined, uf: string | null | undefined): string | null;
-  codigoBanco(nome: string | null | undefined): string | null;
 }
 
 /** De/para VAZIO (fail-closed): todo código é nulo. É o default quando nenhum de/para foi provido. */
 export const DE_PARA_GI_VAZIO: DeParaGi = {
   codigoCidade: () => null,
-  codigoBanco: () => null,
 };
 
 function limpo(v: unknown): string | null {
@@ -303,11 +317,55 @@ function numeroDoEndereco(v: unknown): number {
   return Number.isSafeInteger(n) ? n : 0;
 }
 
-/** Separa DDD (2 primeiros dígitos) do número. O GI quer os dois separados (grupo 4). */
+/**
+ * CAMPO DE PADRÃO INTEIRO do GI (`^-?(?:0|[1-9]\d*)$`): fica só a parte numérica, SEM zero à esquerda.
+ * `"0012"` e `"12"` são o MESMO inteiro, então tirar o zero é ganho puro e o valor passa a casar com o
+ * padrão que o contrato exige. Sem dígito nenhum: NULO (o campo é anulável; só `nroEndereco` não é, e
+ * ele tem helper próprio). Todos zeros vira `"0"`, que o padrão aceita.
+ *
+ * ⚠️ ESTE HELPER NÃO SERVE PARA `cpf` NEM PARA `pis`: ver `documentoNumerico`, logo abaixo, onde a
+ * regra é a OPOSTA.
+ */
+function inteiroGi(v: string | null): string | null {
+  const digitos = (typeof v === "string" ? v : "").replace(/\D/g, "");
+  if (digitos.length === 0) return null;
+  const semZero = digitos.replace(/^0+/, "");
+  return semZero.length > 0 ? semZero : "0";
+}
+
+/**
+ * DOCUMENTO NUMÉRICO (`cpf`, `pis`): limpa a máscara e **PRESERVA TODOS OS DÍGITOS**, inclusive o zero
+ * à esquerda.
+ *
+ * POR QUE AQUI A REGRA É O OPOSTO DO `inteiroGi`: em campo de contagem, `"0012"` e `"12"` são o mesmo
+ * número; em DOCUMENTO, não são o mesmo documento. `"09988877766"` sem o zero é `"9988877766"`, que
+ * tem 10 dígitos e é OUTRO CPF (na prática, nenhum). Tirar o zero aqui não ajustaria o formato,
+ * APAGARIA um dígito do documento da pessoa.
+ *
+ * FATO MEDIDO (01/10/2026), para que ninguém "conserte" isto depois: o GI guarda o CPF como número de
+ * PONTO FLUTUANTE, e um registro criado naquele dia voltou `99999999999.0`. O zero à esquerda se perde
+ * no ARMAZENAMENTO DO FORNECEDOR, não no nosso envio, então não há nada a normalizar deste lado: o
+ * máximo que o EA pode fazer é mandar os 11 dígitos íntegros, e é o que este helper garante.
+ */
+function documentoNumerico(v: string | null): string | null {
+  const digitos = (typeof v === "string" ? v : "").replace(/\D/g, "");
+  return digitos.length > 0 ? digitos : null;
+}
+
+/**
+ * Separa DDD (2 primeiros dígitos) do número. O GI quer os dois separados (grupo 4).
+ *
+ * O ZERO DE OPERADORA É DESCARTADO ANTES DA SEPARAÇÃO. Telefone gravado como `011999990000` produzia
+ * DDD `01`, que está errado por dois motivos: `01` não é DDD nenhum (o DDD é `11`), e `smsdddCel` tem
+ * padrão de inteiro, que proíbe zero à esquerda. O zero inicial é prefixo de discagem, não dígito do
+ * número, então ele cai aqui.
+ */
 function separarTelefone(telefone: unknown): { ddd: string | null; numero: string | null } {
-  const digitos = (typeof telefone === "string" ? telefone : "").replace(/\D/g, "");
+  const digitos = (typeof telefone === "string" ? telefone : "")
+    .replace(/\D/g, "")
+    .replace(/^0+/, "");
   if (digitos.length < 10) return { ddd: null, numero: digitos.length > 0 ? digitos : null };
-  return { ddd: digitos.slice(0, 2), numero: digitos.slice(2) };
+  return { ddd: inteiroGi(digitos.slice(0, 2)), numero: digitos.slice(2) };
 }
 
 /**
@@ -323,6 +381,15 @@ function separarTelefone(telefone: unknown): { ddd: string | null; numero: strin
  * tamanho e **derruba o envio inteiro com 400**. Texto livre é CORTADO (`cortarTexto`); campo de
  * código curto vira NULO quando não cabe (`codigoCurto`). As duas regras são diferentes de propósito,
  * e o porquê está em cada helper.
+ *
+ * NÚMERO (01/10/2026): os campos de padrão numérico do GI têm DUAS réguas OPOSTAS, e confundi-las
+ * corromperia documento de pessoa:
+ *  - **contagem** (`smsdddCel`, `titEleZona`, `titEleSecao`, `codigoCidadeResid`): `inteiroGi`, SEM
+ *    zero à esquerda, porque `"0012"` e `"12"` são o mesmo inteiro;
+ *  - **documento** (`cpf`, `pis`): `documentoNumerico`, COM o zero à esquerda, porque tirá-lo apagaria
+ *    um dígito e produziria outro número.
+ *
+ * `nroEndereco` tem helper próprio (`numeroDoEndereco`) por ser o único numérico NÃO-anulável.
  */
 export function montarFuncionarioSelecao(
   pessoa: PessoaParaGi,
@@ -330,10 +397,10 @@ export function montarFuncionarioSelecao(
 ): FuncionarioSelecao {
   const p = pessoa ?? {};
   const { ddd, numero } = separarTelefone(p.telefone);
-  const cpf = limpo(p.cpf);
   return {
     nome: cortarTexto(limpo(p.nome), 60),
-    cpf: cpf ? cpf.replace(/\D/g, "") : null,
+    // DOCUMENTO: todos os dígitos, com o zero à esquerda. Ver `documentoNumerico`.
+    cpf: documentoNumerico(limpo(p.cpf)),
     dataNascimento: limpo(p.nascimento),
     sexo: mapearSexo(p.sexo),
     email: cortarTexto(limpo(p.email), 50),
@@ -354,10 +421,12 @@ export function montarFuncionarioSelecao(
     serie: cortarTexto(limpo(p.ctpsSerie), 7),
     ufExpedicao: codigoCurto(limpo(p.ctpsUf), 2),
     dtExpedicaoCTPS: limpo(p.ctpsData),
-    pis: limpo(p.pis),
+    // DOCUMENTO, igual ao CPF: preserva o zero à esquerda (não é campo de contagem).
+    pis: documentoNumerico(limpo(p.pis)),
     tituloEleitor: cortarTexto(limpo(p.tituloNumero), 40),
-    titEleZona: limpo(p.tituloZona),
-    titEleSecao: limpo(p.tituloSecao),
+    // INTEIROS (`int16`): sem zero à esquerda. `"007"` e `"7"` são a mesma zona.
+    titEleZona: inteiroGi(limpo(p.tituloZona)),
+    titEleSecao: inteiroGi(limpo(p.tituloSecao)),
     reservista: cortarTexto(limpo(p.reservista), 40),
     habilitacao: cortarTexto(limpo(p.cnh), 40),
     cnhDataEmissao: limpo(p.cnhDataEmissao),
@@ -369,9 +438,7 @@ export function montarFuncionarioSelecao(
     bairroResid: cortarTexto(limpo(p.bairro), 60),
     cidadeResid: cortarTexto(limpo(p.cidade), 60),
     ufResid: codigoCurto(limpo(p.uf), 2),
-    codigoCidadeResid: depara.codigoCidade(p.cidade, p.uf),
-    codigoBcoFolha: depara.codigoBanco(p.banco),
-    codigoBcoPagar: depara.codigoBanco(p.banco),
+    codigoCidadeResid: inteiroGi(depara.codigoCidade(p.cidade, p.uf)),
     agencia: cortarTexto(limpo(p.agencia), 10),
     contaCorrente: cortarTexto(limpo(p.conta), 20),
   };

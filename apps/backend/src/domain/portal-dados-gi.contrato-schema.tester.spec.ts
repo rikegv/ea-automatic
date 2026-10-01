@@ -163,26 +163,10 @@ const SCHEMA: Record<string, PropriedadeDoSchema> = {
         "string"
       ]
     },
-    "codigoBcoFolha": {
-      "default": 0,
-      "format": "int16",
-      "pattern": "^-?(?:0|[1-9]\\d*)$",
-      "type": [
-        "null",
-        "integer",
-        "string"
-      ]
-    },
-    "codigoBcoPagar": {
-      "default": 0,
-      "format": "int16",
-      "pattern": "^-?(?:0|[1-9]\\d*)$",
-      "type": [
-        "null",
-        "integer",
-        "string"
-      ]
-    },
+    // `codigoBcoFolha` e `codigoBcoPagar` EXISTEM no contrato (seguem nos 415 nomes acima) e NÃO
+    // entram neste recorte de propósito: por decisão do diretor (01/10/2026) eles saíram do envio,
+    // porque são a conta PAGADORA da empresa, cadastrada pelo time de folha, e não o banco do
+    // funcionário. Ver o teste do ponto 5.
     "codigoCidadeResid": {
       "default": 0,
       "format": "int32",
@@ -484,8 +468,9 @@ const DE_PARA_COM_ZERO_A_ESQUERDA: DeParaGi = {
   // 3550308 é São Paulo; um município de código curto do IBGE sai com zero à esquerda no cadastro
   // antigo do GI, e é esse o caso que interessa.
   codigoCidade: () => "0350",
-  // 001 é o Banco do Brasil, o código de banco mais comum do país.
-  codigoBanco: () => "001",
+  // NÃO há `codigoBanco` aqui, e a ausência é a régua: o de/para de banco saiu junto com os campos
+  // `codigoBcoFolha`/`codigoBcoPagar` (decisão do diretor). Se alguém devolver a chave ao tipo
+  // `DeParaGi`, este literal volta a aceitá-la e o teste do ponto 5 é quem denuncia.
 };
 
 /** Lê uma chave da saída sem `any`, para as varreduras genéricas. */
@@ -502,6 +487,25 @@ const CAMPOS_COM_MAXLENGTH = Object.entries(SCHEMA)
 const CAMPOS_COM_PATTERN = Object.entries(SCHEMA)
   .filter(([, p]) => typeof p.pattern === "string")
   .map(([nome, p]) => ({ nome, pattern: p.pattern as string }));
+
+/**
+ * OS DOIS GRUPOS DA NORMALIZAÇÃO NUMÉRICA, e a divisão é o ponto mais delicado desta régua.
+ *
+ * `cpf` e `pis` são NÚMERO DE DOCUMENTO: o zero à esquerda é um DÍGITO do documento, e tirá-lo não
+ * normaliza, CORRÓI (`"09988877766"` viraria `"9988877766"`, que é outro CPF). Todo o resto é
+ * CONTAGEM (DDD, zona, seção, código de município, número de porta), e ali `"0012"` e `"12"` são o
+ * mesmo inteiro.
+ *
+ * ESTE GRUPO DIVERGE DO `pattern` DO CONTRATO DE PROPÓSITO, e a divergência está medida: o GI guarda
+ * o CPF como `double` e devolveu `99999999999.0` no registro criado em 01/10/2026. O zero se perde no
+ * ARMAZENAMENTO do fornecedor, não no nosso envio, então obedecer ao `pattern` aqui pagaria o preço
+ * (um dígito a menos saindo do EA) sem comprar nada. Decisão do diretor, registrada no mapa
+ * `docs/MAPA-GI-CONSERTOS-E-4-ENVIOS.md`.
+ */
+const CAMPOS_PRESERVAM_ZERO: readonly string[] = ["cpf", "pis"];
+
+/** O grupo de padrão INTEIRO: todo campo com `pattern` que NÃO é número de documento. */
+const CAMPOS_INTEIROS = CAMPOS_COM_PATTERN.filter((c) => !CAMPOS_PRESERVAM_ZERO.includes(c.nome));
 
 /**
  * Os campos de CÓDIGO curto (`maxLength` de 1 a 3). Cortar um destes INVENTA um código: "Brasileira"
@@ -525,10 +529,14 @@ const CAMPOS_DE_CODIGO_CURTO = CAMPOS_COM_MAXLENGTH.filter((c) => c.maxLength <=
  *   - ponto 2, TAMANHO: todo campo de texto é cortado no `maxLength` (`cortarTexto`);
  *   - ponto 4, CÓDIGO CURTO: não cabendo, vira NULO, nunca cortado (`codigoCurto`).
  *
- * SEGUEM `it.fails` os QUATRO testes do ponto 3 (pattern numérico, zero à esquerda PROIBIDO):
- * `cpf`/`pis` iniciados em zero, DDD `01`, zona/seção `007` e código de banco `001`. A normalização
- * numérica NÃO foi autorizada nesta rodada, então a régua continua apontada e o marcador continua de
- * pé, esperando o aval do diretor (§A.31: propõe, não constrói).
+ * ESTADO EM 01/10/2026 (segunda rodada), e DOIS dos quatro `it.fails` que sobravam codificavam o
+ * requisito ERRADO, não um conserto pendente. Não sobrou nenhum `it.fails`:
+ *   - ponto 3, INTEIROS: a normalização foi autorizada, e os testes do zero à esquerda e do DDD `01`
+ *     viraram `it` normal. Eles FALHAM enquanto o montador não normalizar, e é esse o ponto.
+ *   - ponto 3B, DOCUMENTO: o teste que pedia `"09988877766"` sair `"9988877766"` foi REESCRITO ao
+ *     contrário. Ele pedia a corrupção do CPF; agora exige a preservação dos 11 dígitos.
+ *   - ponto 6, BANCO: o teste que pedia `001` virar `1` ficou SEM OBJETO (o campo saiu do envio) e
+ *     foi trocado pela régua nova: nenhuma chave de banco da empresa é emitida, agência e conta ficam.
  */
 
 describe("ponto 1: toda chave emitida existe em TB_FuncionarioSelecaoAPI", () => {
@@ -569,16 +577,57 @@ describe("ponto 5: nomeBanco e bancoNome NAO pertencem a TB_FuncionarioSelecaoAP
     expect(f).not.toHaveProperty("bancoNome");
   });
 
-  it("o banco atravessa SO por codigo (`Bco`), nunca por nome", () => {
+  it("NENHUMA chave de banco atravessa, nem por nome nem por codigo", () => {
     const f = montarFuncionarioSelecao({ ...PESSOA_MINIMA, banco: "Banco do Brasil" });
-    // Nenhuma chave com "banco" por extenso: no contrato o banco da pessoa entra por CÓDIGO, e as
-    // únicas propriedades com "Banco" no nome (`tipoMskBanco`, `tipoMskBancoReembolso`) são máscara
-    // de impressão, não o banco. O nome do banco vive só em `TB_Banco`, outro schema.
+    // Nenhuma chave com "banco" por extenso: no contrato as únicas propriedades com "Banco" no nome
+    // (`tipoMskBanco`, `tipoMskBancoReembolso`) são máscara de impressão, e o nome do banco vive só
+    // em `TB_Banco`, outro schema.
     expect(Object.keys(f).filter((k) => /banco/i.test(k))).toEqual([]);
-    expect(Object.keys(f).filter((k) => /bco/i.test(k)).sort()).toEqual([
-      "codigoBcoFolha",
-      "codigoBcoPagar",
-    ]);
+    // E nenhuma chave `Bco` tampouco: ver o teste abaixo para o PORQUÊ.
+    expect(Object.keys(f).filter((k) => /bco/i.test(k))).toEqual([]);
+  });
+});
+
+// ── PONTO 6: a INSTITUIÇÃO bancária saiu do envio; agência e conta ficaram ──────────────────────
+
+describe("ponto 6: o EA nao emite banco da EMPRESA, e segue emitindo agencia e conta", () => {
+  /**
+   * DECISÃO DO DIRETOR (01/10/2026), e ela substitui a régua anterior desta casa, que exigia
+   * normalizar o código de banco `001` para `1`. Aquele teste ficou SEM OBJETO: o campo não é mais
+   * emitido, então não há o que normalizar.
+   *
+   * O MOTIVO, medido no contrato: `codigoBcoFolha`/`codigoBcoPagar` são chave estrangeira para
+   * `TB_Banco`, que é o catálogo de CONTAS PAGADORAS DA EMPRESA (o `341` que apareceu na sonda é a
+   * conta do contas a pagar), cadastrado pelo time de folha. O EA não tem o que dizer ali, e mandar
+   * um código adivinhado escreveria conta de pagamento errada na folha.
+   *
+   * CONSEQUÊNCIA REGISTRADA, para ninguém ler isto como esquecimento: a instituição bancária DO
+   * FUNCIONÁRIO não tem campo nenhum em `TB_FuncionarioSelecaoAPI` (nem na folha oficial). Depois
+   * deste conserto o GI recebe AGÊNCIA e CONTA sem o banco, e quem informa o banco é a folha.
+   */
+  it("os dois campos de banco da empresa NAO sao emitidos, mesmo com banco preenchido", () => {
+    const f = montarFuncionarioSelecao(
+      { ...PESSOA_MINIMA, banco: "Banco do Brasil", agencia: "1234", conta: "56789-0" },
+      DE_PARA_COM_ZERO_A_ESQUERDA,
+    );
+    expect(f).not.toHaveProperty("codigoBcoFolha");
+    expect(f).not.toHaveProperty("codigoBcoPagar");
+  });
+
+  it("os dois nomes CONTINUAM existindo no contrato: a decisao e do EA, nao do GI", () => {
+    // Guarda contra o conserto errado: tirar o campo do RECORTE porque ele "não existe mais" seria
+    // falsear o contrato. Ele existe; o EA é que escolheu não preenchê-lo.
+    expect(NOMES_DO_SCHEMA).toContain("codigoBcoFolha");
+    expect(NOMES_DO_SCHEMA).toContain("codigoBcoPagar");
+  });
+
+  it("agencia e contaCorrente seguem sendo emitidas, com o corte do contrato", () => {
+    const f = montarFuncionarioSelecao({ ...PESSOA_MINIMA, agencia: "1234", conta: "56789-0" });
+    expect(f.agencia).toBe("1234");
+    expect(f.contaCorrente).toBe("56789-0");
+    const g = montarFuncionarioSelecao({ agencia: TEXTO_LONGO, conta: TEXTO_LONGO });
+    expect(g.agencia).toHaveLength(10);
+    expect(g.contaCorrente).toHaveLength(20);
   });
 });
 
@@ -635,27 +684,45 @@ describe("ponto 2: todo campo de texto respeita o maxLength do contrato", () => 
 
 // ── PONTO 3: pattern numérico, sem zero à esquerda ─────────────────────────────────────────────
 
-describe("ponto 3: todo campo numerico respeita o pattern (zero a esquerda PROIBIDO)", () => {
+describe("ponto 3: campo de padrao INTEIRO sai sem zero a esquerda", () => {
   /**
-   * CONSERTO EXIGIDO: normalizar os 9 campos numéricos antes de emitir, tirando o zero à esquerda
-   * (ou emitindo número em vez de string). Hoje o EA manda a string crua: CPF iniciado em zero,
-   * PIS iniciado em zero, zona/seção "007" e código de banco "001" violam o padrão do contrato.
-   * Valor sem dígito nenhum deve virar NULO, nunca string inválida.
+   * A NORMALIZAÇÃO TEM DOIS GRUPOS, e não um. Esta casa é só o PRIMEIRO.
+   *
+   * Aqui estão os campos de padrão INTEIRO (`^-?(?:0|[1-9]\d*)$`): `smsdddCel`, `titEleZona`,
+   * `titEleSecao`, `codigoCidadeResid`, `nroEndereco`. Tirar o zero à esquerda deles é GANHO PURO,
+   * porque `"0012"` e `"12"` são o MESMO inteiro: nada se perde, e o payload passa a casar com o
+   * padrão que o GI valida (e por cujo descumprimento ele recusa o ENVIO TODO com 400).
+   *
+   * O outro grupo (`cpf`, `pis`) tem a régua OPOSTA, e está no `describe` seguinte.
+   *
+   * Valor sem dígito nenhum deve virar NULO, nunca string inválida (último teste desta casa).
    */
-  it.fails("FALHA HOJE: nenhum campo numerico sai com zero a esquerda", () => {
+  it("os dois grupos cobrem TODOS os campos com pattern, e nao se sobrepoem", () => {
+    // Guarda do próprio teste: campo numérico novo cai em um dos dois grupos, nunca em nenhum.
+    expect([...CAMPOS_INTEIROS.map((c) => c.nome), ...CAMPOS_PRESERVAM_ZERO].sort()).toEqual(
+      CAMPOS_COM_PATTERN.map((c) => c.nome).sort(),
+    );
+    expect(CAMPOS_INTEIROS.map((c) => c.nome).filter((n) => CAMPOS_PRESERVAM_ZERO.includes(n))).toEqual(
+      [],
+    );
+  });
+
+  it("nenhum campo de padrao INTEIRO sai com zero a esquerda", () => {
     const f = montarFuncionarioSelecao(
       {
         ...PESSOA_MINIMA,
-        // CPF sintético da faixa reservada 099, iniciado em zero: é o caso que quebra.
+        // CPF/PIS sintéticos da faixa reservada 099, iniciados em zero: entram aqui só para provar
+        // que a varredura do grupo inteiro não os alcança (eles têm a régua oposta).
         cpf: "09988877766",
         pis: "01234567890",
         tituloZona: "007",
         tituloSecao: "0042",
         telefone: "011999887766",
+        numero: "0042",
       },
       DE_PARA_COM_ZERO_A_ESQUERDA,
     );
-    const violacoes = CAMPOS_COM_PATTERN.filter(({ nome, pattern }) => {
+    const violacoes = CAMPOS_INTEIROS.filter(({ nome, pattern }) => {
       const v = valorDe(f, nome);
       if (v == null) return false;
       return !new RegExp(pattern).test(String(v));
@@ -663,28 +730,29 @@ describe("ponto 3: todo campo numerico respeita o pattern (zero a esquerda PROIB
     expect(violacoes).toEqual([]);
   });
 
-  it.fails("FALHA HOJE: o CPF iniciado em zero sai sem o zero a esquerda", () => {
-    // CONSERTO EXIGIDO: `cpf` é `double` no GI; "09988877766" viola o pattern e recusa o envio.
-    const f = montarFuncionarioSelecao({ cpf: "099.888.777-66" });
-    expect(f.cpf).toBe("9988877766");
-  });
-
-  it.fails("FALHA HOJE: o DDD de telefone com zero inicial nao sai como `01`", () => {
-    // CONSERTO EXIGIDO: `smsdddCel` é `uint8` com pattern; "01" viola o padrão E está errado como
-    // DDD (o zero é prefixo de operadora, não parte do DDD). O esperado é "11".
+  it("o DDD de telefone com zero inicial NAO sai como `01`", () => {
+    // `smsdddCel` é `uint8` com pattern; "01" viola o padrão E está errado como DDD (o zero é
+    // prefixo de operadora, não parte do DDD). O esperado é "11", e o número fica sem o zero.
     const f = montarFuncionarioSelecao({ telefone: "011999887766" });
     expect(f.smsdddCel).toBe("11");
   });
 
-  it.fails("FALHA HOJE: codigo de banco 001 sai normalizado para 1", () => {
-    // CONSERTO EXIGIDO: `codigoBcoFolha`/`codigoBcoPagar` são `int16` com pattern. O de/para pode
-    // devolver o código do catálogo com zero à esquerda; normalizar é do montador.
-    const f = montarFuncionarioSelecao(
-      { ...PESSOA_MINIMA, banco: "Banco do Brasil" },
-      DE_PARA_COM_ZERO_A_ESQUERDA,
-    );
-    expect(f.codigoBcoFolha).toBe("1");
-    expect(f.codigoBcoPagar).toBe("1");
+  it("DDD de telefone SEM o zero de operadora continua intacto", () => {
+    // Guarda contra o conserto grosseiro (cortar o primeiro dígito sempre): 11 dígitos com 9 na
+    // frente do número é o caso normal, e o DDD segue sendo os dois primeiros.
+    const f = montarFuncionarioSelecao({ telefone: "11999887766" });
+    expect(f.smsdddCel).toBe("11");
+  });
+
+  it("zona e secao do titulo saem como inteiro", () => {
+    const f = montarFuncionarioSelecao({ tituloZona: "007", tituloSecao: "0042" });
+    expect(f.titEleZona).toBe("7");
+    expect(f.titEleSecao).toBe("42");
+  });
+
+  it("o codigo de cidade do de/para sai sem zero a esquerda", () => {
+    const f = montarFuncionarioSelecao(PESSOA_MINIMA, DE_PARA_COM_ZERO_A_ESQUERDA);
+    expect(f.codigoCidadeResid).toBe("350");
   });
 
   it("campo numerico ausente continua NULO (nunca string vazia)", () => {
@@ -698,6 +766,56 @@ describe("ponto 3: todo campo numerico respeita o pattern (zero a esquerda PROIB
       }
       expect(v == null || String(v).length > 0).toBe(true);
     }
+  });
+});
+
+// ── PONTO 3B: cpf e pis PRESERVAM o zero à esquerda (a régua OPOSTA) ───────────────────────────
+
+describe("ponto 3b: numero de documento preserva TODOS os digitos, zero a esquerda incluido", () => {
+  /**
+   * Esta casa existe para IMPEDIR um conserto, não para pedir um. A régua anterior, escrita quando a
+   * normalização numérica foi só proposta, exigia `"09988877766"` sair como `"9988877766"`. Isso
+   * pedia a CORRUPÇÃO do documento: o CPF perderia um dígito, e a pessoa chegaria à folha com outro
+   * número, sem nada falhar em lugar nenhum.
+   *
+   * Quem normalizar os numéricos "todos de uma vez", com uma varredura só, quebra estes dois testes.
+   * É exatamente para isso que eles estão aqui.
+   */
+  it("o CPF iniciado em zero PRESERVA os 11 digitos", () => {
+    const f = montarFuncionarioSelecao({ cpf: "099.888.777-66" });
+    expect(f.cpf).toBe("09988877766");
+    expect(String(f.cpf)).toHaveLength(11);
+  });
+
+  it("o PIS iniciado em zero PRESERVA os 11 digitos", () => {
+    const f = montarFuncionarioSelecao({ pis: "012.34567.89-0" });
+    // A máscara SAI (ponto e hífen não passam no `pattern` do contrato, que só admite o ponto
+    // DECIMAL), mas nenhum dígito sai com ela, e o zero da frente fica.
+    expect(f.pis).toBe("01234567890");
+  });
+
+  it("a divergencia do `pattern` e CONSCIENTE, nao um descuido", () => {
+    // O padrão do contrato REPROVA o valor que o EA emite de propósito. Deixar isto escrito num
+    // teste é o que impede a próxima sessão de "consertar" a reprovação cortando o dígito.
+    const padraoDoContrato = new RegExp(SCHEMA.cpf.pattern as string);
+    expect(padraoDoContrato.test("09988877766")).toBe(false);
+    expect(montarFuncionarioSelecao({ cpf: "09988877766" }).cpf).toBe("09988877766");
+  });
+
+  it("CPF e PIS sem zero a esquerda seguem casando com o contrato", () => {
+    const f = montarFuncionarioSelecao({ cpf: "999.888.777-66", pis: "123.45678.90-1" });
+    expect(f.cpf).toBe("99988877766");
+    expect(f.pis).toBe("12345678901");
+    for (const nome of CAMPOS_PRESERVAM_ZERO) {
+      const pattern = new RegExp(SCHEMA[nome].pattern as string);
+      expect(pattern.test(String(valorDe(f, nome))), nome).toBe(true);
+    }
+  });
+
+  it("documento sem digito nenhum vira NULO, nunca string vazia", () => {
+    const f = montarFuncionarioSelecao({ cpf: "   ", pis: "-" });
+    expect(f.cpf).toBeNull();
+    expect(f.pis).toBeNull();
   });
 });
 

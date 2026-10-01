@@ -3,7 +3,9 @@ import {
   CAMPOS_SEM_DOCUMENTO,
   ESTADO_CIVIL,
   GRAU_INSTRUCAO,
+  NACIONALIDADE,
   RACA,
+  UF_NASCIMENTO,
   camposVaziosDe,
   rotuloDaOpcao,
   separarCampos,
@@ -47,12 +49,35 @@ describe("dicionários do G.I", () => {
       "nacionalidade",
       "naturalidade",
     ]);
-    // raça/grau/estado civil vêm de dicionário (select); nacionalidade/naturalidade são texto.
-    expect(CAMPOS_SEM_DOCUMENTO.filter((c) => c.tipo === "select").map((c) => c.campo)).toEqual([
-      "raca",
-      "grauInstrucao",
-      "estadoCivil",
-    ]);
+    // OS CINCO são lista fechada: o G.I recusa texto livre em todos eles. Esta expectativa antes
+    // afirmava que nacionalidade e naturalidade eram TEXTO, e estava errada à luz do contrato: a
+    // `description` dos dois campos traz catálogo (254 códigos e 27 siglas de UF).
+    expect(CAMPOS_SEM_DOCUMENTO.every((c) => c.tipo === "select")).toBe(true);
+  });
+
+  it("naturalidade é a SIGLA DA UF, 27 opções, e o rótulo diz isso ao candidato", () => {
+    const campo = CAMPOS_SEM_DOCUMENTO.find((c) => c.campo === "naturalidade");
+    expect(campo?.rotulo).toBe("UF De Nascimento");
+    expect(UF_NASCIMENTO).toHaveLength(27);
+    // máx 2 caracteres no G.I: nenhuma opção pode estourar.
+    expect(UF_NASCIMENTO.every((o) => o.value.length === 2)).toBe(true);
+    expect(UF_NASCIMENTO[0]?.value).toBe("AC");
+    expect(UF_NASCIMENTO.map((o) => o.value)).toContain("SP");
+    expect(rotuloDaOpcao(UF_NASCIMENTO, "RJ")).toBe("RJ");
+  });
+
+  it("nacionalidade tem os 254 códigos, Brasileiro primeiro, e nenhum estoura os 3 caracteres", () => {
+    expect(NACIONALIDADE).toHaveLength(254);
+    // `010` é o default do G.I e o caso de quase todo candidato: primeira opção, não a 1a alfabética.
+    expect(NACIONALIDADE[0]).toEqual({ value: "010", label: "Brasileiro" });
+    expect(NACIONALIDADE.every((o) => o.value.length <= 3)).toBe(true);
+    expect(new Set(NACIONALIDADE.map((o) => o.value)).size).toBe(254);
+    expect(rotuloDaOpcao(NACIONALIDADE, "021")).toBe("Argentino");
+  });
+
+  it("nenhum rótulo de opção tem travessão (§A.11), em nenhum dos cinco dicionários", () => {
+    const todos = [...RACA, ...GRAU_INSTRUCAO, ...ESTADO_CIVIL, ...NACIONALIDADE, ...UF_NASCIMENTO];
+    expect(todos.filter((o) => o.label.includes("\u2014"))).toEqual([]);
   });
 });
 

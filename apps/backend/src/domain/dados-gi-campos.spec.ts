@@ -64,4 +64,15 @@ describe("filtrarCamposGi: allowlist fechada", () => {
       expect(colunas).not.toContain(proibida);
     }
   });
+
+  it("nacionalidade e codigo3: so 3 digitos passam, o resto e DESCARTADO", () => {
+    // A regra fecha a porta PÚBLICA do candidato (`POST /portal/dados-gi`): seletor de tela não é
+    // allowlist, e sem isto seguia gravável texto arbitrário numa coluna de PII retida. Exigência do
+    // `seguranca` (G7, 01/10/2026). Sem este teste a regra sumiria numa refatoração sem o gate falar.
+    expect(filtrarCamposGi({ nacionalidade: "010" }).update.nacionalidade).toBe("010");
+    expect(filtrarCamposGi({ nacionalidade: "0 1 0" }).update.nacionalidade).toBe("010");
+    for (const invalido of ["Brasileira", "01", "0100", "", "BRA", "abc"]) {
+      expect(filtrarCamposGi({ nacionalidade: invalido }).update.nacionalidade).toBeUndefined();
+    }
+  });
 });

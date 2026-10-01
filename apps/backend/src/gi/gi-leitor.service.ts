@@ -5,6 +5,7 @@ import { DRIZZLE } from "../db/drizzle.module";
 import { admissaoDadosGi, admissoes, candidatos } from "../db/schema";
 import {
   montarPessoaParaGi,
+  RETENCAO_DADOS_GI_MS,
   type CandidatoParaGi,
   type DadosGiParaPessoa,
   type PessoaParaGi,
@@ -99,15 +100,42 @@ export class GiLeitorService {
 
   /**
    * Carimba o envio na linha da admissão (a marca de idempotência). Chamado SÓ após a criação real no
-   * GI confirmar. Não cria a linha se ela não existir (a peça 2 sempre a cria antes do envio).
+   * GI confirmar.
+   *
+   * É UPSERT, E ISSO É O CONSERTO: antes era um `UPDATE ... WHERE admissao_id = ?`, que **não criava a
+   * linha**. Quando ela não existia (envio de uma admissão cujo candidato nunca passou pelo Portal, ou
+   * cuja linha foi expurgada pelo TTL), o `UPDATE` afetava ZERO linhas **sem erro**, o carimbo não
+   * existia, `jaEnviado` continuava devolvendo `false` e a retentativa criava um SEGUNDO
+   * `FuncionarioSelecao` na produção do fornecedor. Com o upsert no unique de `admissao_id`, a marca
+   * de idempotência passa a existir sempre.
+   *
+   * §A.6, E É A PARTE QUE EXIGIU DECISÃO: a linha de `admissao_dados_gi` tem `expurgar_em`, que é o
+   * TETO de retenção. Linha criada por aqui nasceria SEM teto (nulo), e `dadoGiExpirado` trata nulo
+   * como "não expurga" de propósito (sem relógio, não apaga por engano), então o dado ficaria no EA
+   * para sempre. Por isso o INSERT carimba `expurgar_em` com `RETENCAO_DADOS_GI_MS` a partir de agora,
+   * a MESMA constante que a peça 2 usa na confirmação do candidato. No conflito (linha já existe) o
+   * `expurgar_em` NÃO é tocado: o teto de quem confirmou é dele, e re-carimbar aqui ESTENDERIA a
+   * retenção de uma linha que já estava contando, o que vai na direção contrária da minimização.
    */
   async marcarEnviado(admissaoId: string, funcionarioSelecaoId: string | null): Promise<void> {
+    const agora = new Date();
+    const carimbo = {
+      giEnviadoEm: agora,
+      ...(funcionarioSelecaoId ? { giFuncionarioSelecaoId: funcionarioSelecaoId } : {}),
+    };
     await this.db
-      .update(admissaoDadosGi)
-      .set({
-        giEnviadoEm: new Date(),
-        ...(funcionarioSelecaoId ? { giFuncionarioSelecaoId: funcionarioSelecaoId } : {}),
+      .insert(admissaoDadosGi)
+      .values({
+        admissaoId,
+        ...carimbo,
+        // Teto de retenção obrigatório na linha NOVA (§A.6). Só vale no insert: no conflito, o
+        // `expurgar_em` existente é preservado (ver o comentário acima).
+        expurgarEm: new Date(agora.getTime() + RETENCAO_DADOS_GI_MS),
+        atualizadoEm: agora,
       })
-      .where(eq(admissaoDadosGi.admissaoId, admissaoId));
+      .onConflictDoUpdate({
+        target: admissaoDadosGi.admissaoId,
+        set: { ...carimbo, atualizadoEm: agora },
+      });
   }
 }
