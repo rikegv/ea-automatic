@@ -967,6 +967,13 @@
       "when": 1790646004719,
       "tag": "0138_as_vaga_reabertura_realinhamento",
       "breakpoints": true
+    },
+    {
+      "idx": 139,
+      "version": "7",
+      "when": 1790646005719,
+      "tag": "0139_as_depara_cliente_vaga",
+      "breakpoints": true
     }
   ]
 }

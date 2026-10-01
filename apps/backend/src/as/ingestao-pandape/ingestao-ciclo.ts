@@ -203,6 +203,28 @@ export async function descobrirVagasAtivas(
     try {
       const vagaId = await espelharVaga(deps, resumo, vaga);
       espelhadas.push({ idVacancy: vaga.idVacancy, vagaId });
+      /*
+       * ─ A PROPOSTA DE CLIENTE VEM DEPOIS DO ESPELHO, E DEPOIS DO `push` ───────────────────────
+       *
+       * DEPOIS DO ESPELHO porque ela precisa do `vagaId`, que só existe quando a linha existe.
+       * DEPOIS DO `push` porque a vaga já está espelhada e varrida neste ponto: se a proposta
+       * falhasse antes, a vaga sairia da lista de espelhadas e as candidaturas dela não seriam
+       * varridas nesta volta, por causa de um dado de planilha. Prioridade invertida.
+       *
+       * A PORTA NÃO LANÇA, POR CONTRATO (`PortaPropostaDeClienteDaVaga`), e é por isso que não há
+       * `try` próprio aqui. É o bloqueio 5 da auditoria: um `cod_cliente` que a planilha tem e o
+       * catálogo não tem mais derrubaria o insert da vaga de 30 em 30 minutos, com erro genérico,
+       * e a vaga PARARIA DE ENTRAR. A frente de preenchimento viraria perda de ingestão. Então o
+       * fail-closed é nulo mais contagem no resumo, nunca exceção.
+       *
+       * AUSENTE, NADA ACONTECE: a porta é opcional de propósito, e sem ela a vaga nasce sem
+       * cliente exatamente como nasce hoje.
+       */
+      await deps.propostaDeClienteDaVaga?.resolverERegistrar(
+        vagaId,
+        { idVacancy: vaga.idVacancy, reference: vaga.reference },
+        resumo,
+      );
     } catch (err) {
       // UMA VAGA RUIM NÃO DERRUBA A VOLTA: são 621, e a volta leva 26 minutos.
       resumo.erros += 1;
@@ -357,7 +379,6 @@ async function espelharVaga(
   resumo: ResumoDoCiclo,
   vaga: VagaProjetada,
 ): Promise<string> {
-  const codCliente = await deps.banco.clientePorVaga(vaga.idVacancy);
   const gravada = await deps.banco.escrever({
     tabela: T_VAGAS,
     acao: "upsert",
@@ -379,7 +400,31 @@ async function espelharVaga(
        */
       cidade_id: vaga.city,
       posicoes_oficiais: vaga.numberVacancies,
-      cod_cliente: codCliente,
+      /*
+       * ─ `cod_cliente` É NULO LITERAL, E O FIO QUE PARECIA LIGÁ-LO FOI CORTADO ─────────────────
+       *
+       * Até 01/10/2026 esta linha era `cod_cliente: codCliente`, alimentada por um
+       * `clientePorVaga(vaga.idVacancy)` logo acima. O VALOR NUNCA CHEGAVA AO BANCO: o insert do
+       * repositório grava `null` literal e o `camposDoAts` do update não nomeia a coluna. Era um
+       * fio morto, e isso o tornava pior do que inútil: **uma armadilha armada.**
+       *
+       * A auditoria do mapa (§A.40) a achou antes de a frente da planilha existir. O "conserto
+       * óbvio" para alguém que visse `clientePorVaga` responder e nada acontecer seria acrescentar
+       * `cod_cliente` ao `camposDoAts`, e aí a varredura passaria a REESCREVER, a cada volta, o
+       * cliente que uma pessoa conferiu na liberação, sem autor, sem data e sem trilha. Pior: o
+       * valor desceria para `admissoes.cod_cliente` pela ponte, que lê `vagas.cod_cliente` SEM
+       * filtro de status, e aquele campo decide a régua documental e o NOME DA PASTA do prontuário
+       * no Drive. Cliente errado é CONTROLADOR errado, e arquivamento no Drive não se desfaz.
+       *
+       * ENTÃO A PLANILHA DO TIME NÃO ESCREVE AQUI. Ela produz PROPOSTA, em coluna própria que
+       * ninguém lê para decidir, e o valor só vira cliente pela liberação, que é humana e tem
+       * trilha. A auditoria pediu uma guarda na ponte; o desenho REMOVEU O CAMINHO, porque guarda
+       * se perde numa refatoração (§A.33) e caminho que não existe não é percorrido por engano.
+       *
+       * Há teste de fonte que falha se `cod_cliente` voltar a ser atribuído aqui, no `camposDoAts`
+       * ou no `comparaAntes`.
+       */
+      cod_cliente: null,
       /*
        * ─ O CICLO NÃO DECIDE O CARGO, E QUEM O RESOLVE É O REPOSITÓRIO ──────────────────────────
        *

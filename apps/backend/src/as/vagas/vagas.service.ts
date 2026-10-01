@@ -31,6 +31,7 @@ import type {
 import {
   CANDIDATURA_SITUACOES,
   type AsVagaCancelamentoPrevia,
+  type PropostaDeClienteDaVaga,
   OPCAO_OUTRA,
   OPCAO_OUTROS,
   POSICAO_LADOS,
@@ -70,6 +71,19 @@ import {
   vagas,
 } from "../../db/schema";
 import { derivarStatusDaVaga } from "./derivar-status-da-vaga";
+/*
+ * A PROCEDÊNCIA DO CLIENTE NA LIBERAÇÃO (item 8 do de/para de cliente, 01/10/2026).
+ *
+ * MÓDULO SEPARADO DE PROPÓSITO, e não por tamanho: a proposta de cliente vinda da planilha tem LISTA
+ * BRANCA DE LEITORES, conferida por varredura de fonte, e este arquivo fica FORA dela porque é ele
+ * que escreve `cod_cliente`. O que atravessa esta fronteira é um CÓDIGO de procedência; o cliente
+ * proposto não chega aqui, e por isso não há como confundi-lo com o cliente escolhido.
+ */
+import {
+  fraseDaProcedenciaDoCliente,
+  procedenciaDoClienteNaLiberacao,
+  propostasDeClienteDasVagas,
+} from "./vagas-revisao-proposta";
 import {
   ACEITE_REABERTURA_SEM_ORIGEM,
   SITUACOES_VIVAS,
@@ -602,7 +616,13 @@ export class VagasService {
       .from(vagas)
       .where(eq(vagas.id, id));
 
-    return { ...item, substituidoCpf: linha?.substituidoCpf ?? null };
+    /*
+     * A PROPOSTA ENTRA PELO DETALHE porque a TRILHA DA VAGA abre por ele: sem isto, a tela que
+     * preenche a vaga incompleta do Pandapé não teria a resposta pronta, que é justamente o ganho
+     * que o diretor pediu ("o time confere e corrige, não monta do zero").
+     */
+    const [comProposta] = await this.comPropostaDeCliente([item]);
+    return { ...(comProposta ?? item), substituidoCpf: linha?.substituidoCpf ?? null };
   }
 
   /**
@@ -3518,7 +3538,35 @@ export class VagasService {
   async pendentesDeRevisao(): Promise<VagaItemOndaE[]> {
     const regua = await this.statusVaga.regua();
     const codigo = regua.codigoDoPapel("REVISAO");
-    return (await this.list()).filter((v) => v.status === codigo);
+    return this.comPropostaDeCliente((await this.list()).filter((v) => v.status === codigo));
+  }
+
+  /**
+   * ─ A PROPOSTA DE CLIENTE DA PLANILHA, ANEXADA AOS ITENS DA FILA DE REVISÃO ───────────────────
+   *
+   * ┌─ POR QUE ELA VEM DE OUTRO MÓDULO, E NÃO DA `list()` ──────────────────────────────────────┐
+   * │ A proposta tem LISTA BRANCA DE LEITORES, conferida por varredura de fonte, e ESTE arquivo  │
+   * │ fica FORA dela: é ele que escreve e devolve `cod_cliente`, e a regra inteira da frente é    │
+   * │ que o valor da planilha não tem caminho até lá. Lê-la dentro da `list()` faria a proposta   │
+   * │ nascer na MESMA consulta que o cliente de verdade, que é a um `??` de distância do furo.    │
+   * │                                                                                            │
+   * │ Quem lê é `as/vagas/vagas-revisao-proposta.ts`, por LOTE de id, e o que volta já vem com    │
+   * │ `conferida: false` no tipo: a tela TEM de marcar que ninguém conferiu aquilo (condição C1). │
+   * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * SÓ NAS DUAS LISTAS DA REVISÃO E NO DETALHE, e não na `list()` inteira: a Central de Vagas mostra
+   * vaga já liberada, onde a proposta não tem o que dizer, e uma consulta a mais por linha ali seria
+   * paga por toda tela que lista vaga.
+   */
+  private async comPropostaDeCliente<
+    T extends { id: string; propostaDeCliente?: PropostaDeClienteDaVaga | null },
+  >(itens: T[]): Promise<T[]> {
+    if (itens.length === 0) return itens;
+    const propostas = await propostasDeClienteDasVagas(
+      this.db,
+      itens.map((i) => i.id),
+    );
+    return itens.map((i) => ({ ...i, propostaDeCliente: propostas[i.id] ?? null }));
   }
 
   /**
@@ -3793,13 +3841,32 @@ export class VagasService {
         }
       }
 
+      /*
+       * ┌─ A TRILHA REGISTRA SE O CLIENTE FOI ESCOLHIDO OU ACEITO DA PLANILHA (item 8) ───────────┐
+       * │ A planilha viva do time PROPÕE o cliente de 312 das 470 vagas abertas (medido), e a      │
+       * │ proposta é inerte: quem grava `cod_cliente` continua sendo esta porta, com autor e data. │
+       * │ No dia em que uma linha da planilha estiver errada, a única pergunta que importa é       │
+       * │ "esse cliente foi ESCOLHIDO ou foi ACEITO?", porque é ela que diz QUANTAS vagas          │
+       * │ herdaram o mesmo erro. Sem o código aqui, a investigação começa do zero.                  │
+       * │                                                                                          │
+       * │ QUEM RESPONDE É `as/vagas/vagas-revisao-proposta.ts`, E NÃO ESTE ARQUIVO, de propósito:  │
+       * │ a proposta tem lista branca de leitores conferida por varredura de fonte, e a            │
+       * │ `VagasService` fica FORA dela porque é ela que escreve `cod_cliente`. O que volta para cá │
+       * │ é um CÓDIGO de procedência, nunca o cliente proposto: não há como usar o que não chega.   │
+       * │                                                                                          │
+       * │ DENTRO DA TRANSAÇÃO, sob a linha já travada, e NUNCA LANÇA: o rastro não pode falhar a   │
+       * │ liberação, e sem resposta a procedência é `ESCOLHIDO`, que é a verdade conservadora.      │
+       * │ §A.6: dois códigos e um id de usuário interno. Nenhum nome de empresa, nenhum candidato.  │
+       * └──────────────────────────────────────────────────────────────────────────────────────────┘
+       */
+      const procedencia = await procedenciaDoClienteNaLiberacao(tx, id, clienteFinal);
       await tx.insert(asVagaStatusEventos).values({
         vagaId: id,
         de: vaga.status,
         para: codigoAbertura,
         // QUEM vem da SESSÃO, nunca do corpo: autoria é trilha, não campo de formulário.
         porId: user.id,
-        observacao: `Liberada da revisão com o cliente ${clienteFinal}.`,
+        observacao: fraseDaProcedenciaDoCliente(clienteFinal, procedencia),
       });
     });
 
@@ -3869,7 +3936,7 @@ export class VagasService {
       );
     if (eventos.length === 0) return [];
     const liberadas = new Set(eventos.map((e) => e.vagaId));
-    return (await this.list()).filter((v) => liberadas.has(v.id));
+    return this.comPropostaDeCliente((await this.list()).filter((v) => liberadas.has(v.id)));
   }
 
   /**

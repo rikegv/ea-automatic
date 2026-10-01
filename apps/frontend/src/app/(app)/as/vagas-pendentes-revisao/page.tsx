@@ -19,6 +19,7 @@ import { TrilhaDaVaga, type Opcoes } from "@/components/as/vagas/TrilhaDaVaga";
 import { useLinhasServico } from "@/lib/as-linhas-servico";
 import { useSegmentos } from "@/lib/as-segmentos";
 import { useStatusVaga } from "@/lib/as-status-vaga";
+import { marcaDaPropostaNaFila } from "@/lib/as-proposta-cliente";
 import {
   carregarFilaDeRevisao,
   carregarLiberadasDaRevisao,
@@ -383,6 +384,9 @@ export default function VagasPendentesDeRevisaoPage() {
               ) : (
                 ord.itens.map((v) => {
                   const regua = reguaDeLiberacao(v);
+                  /* O ESTADO DO CLIENTE DESTA LINHA, numa função só, para a célula e a trilha não
+                     discordarem do nome do caso (`lib/as-proposta-cliente`). */
+                  const marca = marcaDaPropostaNaFila(v);
                   return (
                     <tr key={v.id}>
                       <td className="whitespace-nowrap font-mono text-[12.5px]">
@@ -393,11 +397,39 @@ export default function VagasPendentesDeRevisaoPage() {
                       {/* A COLUNA QUE A FILA EXISTE PARA RESOLVER. §A.12: o ícone acompanha o estado
                           real, então a pill é o X vermelho enquanto falta o cliente e o check verde
                           quando ele já está vinculado. Ela nunca é fixa. */}
+                      {/* ─ OS QUATRO ESTADOS DESTA CÉLULA, E TRÊS DELES SÃO NOVOS ────────────
+                          A fábrica lê a planilha viva do time e PROPÕE o cliente de parte da fila.
+                          A proposta NÃO é o cliente da vaga: ela não escreve `cod_cliente` e não
+                          decide nada, então a célula nunca a mostra como se fosse um vínculo.
+
+                          Cliente VINCULADO segue sendo o check verde. Falta o cliente e existe
+                          proposta: a pill é de PENDÊNCIA (§A.12, o ícone acompanha o estado real),
+                          com o nome da planilha embaixo. E os dois casos de proposta são
+                          DISTINGUÍVEIS: "com código" a trilha propõe o código para confirmar, "sem
+                          código" o nome não está no catálogo da Admissão e a pessoa ainda escolhe
+                          qual cadastrado corresponde. Sem proposta, nada muda: X vermelho. */}
                       <td className="text-center">
-                        {v.clienteNome ? (
-                          <StatusPill tone="ok" label={v.clienteNome} />
-                        ) : (
+                        {marca.tipo === "VINCULADO" ? (
+                          <StatusPill tone="ok" label={marca.nome} />
+                        ) : marca.tipo === "SEM_CLIENTE" ? (
                           <StatusPill tone="dg" label="Sem Cliente" title={regua.motivo} />
+                        ) : (
+                          <div className="flex flex-col items-center gap-1">
+                            <StatusPill
+                              tone="wn"
+                              label={
+                                marca.tipo === "PROPOSTA_COM_CODIGO"
+                                  ? "Proposta Da Planilha"
+                                  : "Proposta Sem Código"
+                              }
+                              title={
+                                marca.tipo === "PROPOSTA_COM_CODIGO"
+                                  ? "A fábrica propôs este cliente pela planilha do time. Ninguém conferiu ainda: abra a vaga para confirmar."
+                                  : "A planilha do time diz quem é o cliente, e esse nome não está no catálogo da Admissão. Abra a vaga para escolher qual cadastrado corresponde."
+                              }
+                            />
+                            <span className="text-[12px] text-dim">{marca.nome}</span>
+                          </div>
                         )}
                       </td>
                       <td className="text-center">

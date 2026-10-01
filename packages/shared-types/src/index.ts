@@ -2390,6 +2390,22 @@ export interface VagaMetaReducao {
 export interface VagaListItem {
   id: string;
   /**
+   * A PROPOSTA DE CLIENTE VINDA DA PLANILHA DO TIME, quando existe. Ver `PropostaDeClienteDaVaga`.
+   *
+   * ┌─ ELA NÃO É O `codCliente`, E A DISTÂNCIA ENTRE OS DOIS É O PONTO ────────────────────────────┐
+   * │ `codCliente` é o cliente DA VAGA: alguém escolheu, e ele decide régua documental e pasta do  │
+   * │ prontuário. Esta é a resposta que a PLANILHA dá, e ela não decide nada: a tela a mostra, uma │
+   * │ pessoa confere, e só a confirmação escreve o `codCliente` pelo caminho humano, com trilha.   │
+   * │                                                                                             │
+   * │ Por isso o seletor de cliente da tela NASCE VAZIO mesmo havendo proposta. Pré-preencher faria│
+   * │ quem libera assinar a escolha da planilha sem ter conferido, e a trilha afirmaria que uma    │
+   * │ PESSOA escolheu. É a condição C1 da auditoria, e ela se cumpre na MECÂNICA, não no texto.    │
+   * └─────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * Ausente ou nula nas 158 das 470 vagas abertas que a planilha não tem, e aí a tela fica como era.
+   */
+  propostaDeCliente?: PropostaDeClienteDaVaga | null;
+  /**
    * O NÚMERO DO PROCESSO SELETIVO. Nulo é estado REAL da vaga em RASCUNHO, que ainda não tem número:
    * a listagem mostra "não informado" (§A.11). Da publicação em diante ele existe, porque a régua
    * dos obrigatórios (`vagaPendencias`) não deixa publicar sem ele.
@@ -5274,3 +5290,157 @@ export interface OpcoesDeFiltroDeDivergencias {
   clientes: { value: string; label: string }[];
   vagas: { value: string; label: string }[];
 }
+
+/**
+ * ┌─ A PROPOSTA DE CLIENTE VINDA DA PLANILHA DO TIME, E POR QUE ELA NÃO É UM `cod_cliente` ──────┐
+ * │ O time mantém uma planilha onde registra toda vaga COM o cliente, e o "Código da vaga" dela é │
+ * │ o id da vaga do Pandapé. Medido em 01/10/2026: isso resolve 312 das 470 vagas abertas.        │
+ * │                                                                                              │
+ * │ MESMO ASSIM A PLANILHA NÃO ESCREVE `vagas.cod_cliente`, E A RAZÃO É IRREVERSÍVEL. A leitura  │
+ * │ que alimenta a pré-admissão (`candidatos.service`, o `select` da ponte) pega                 │
+ * │ `vagas.cod_cliente` SEM NENHUM FILTRO DE STATUS, e o valor desce para `admissoes.cod_cliente`,│
+ * │ que decide a régua documental `(cod_cliente + cargo)` e o NOME DA PASTA do prontuário no      │
+ * │ Drive. Cliente errado é CONTROLADOR errado para os dados daquela pessoa, e arquivamento no    │
+ * │ Drive não se desfaz.                                                                         │
+ * │                                                                                              │
+ * │ A auditoria do mapa pediu uma GUARDA na ponte; o desenho REMOVEU O CAMINHO. Guarda se perde  │
+ * │ numa refatoração (é o argumento da §A.33 sobre o fallback removido); caminho que não existe   │
+ * │ não é percorrido por engano. Então a planilha produz PROPOSTA, e proposta não decide nada.    │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+
+/**
+ * POR QUAL CHAVE a proposta casou. Gravar isto não é telemetria: é o que permite consertar.
+ *
+ * No dia em que uma proposta estiver errada, a primeira pergunta é "o erro está na linha do id da
+ * vaga ou na cadeia de reabertura?". Sem a procedência, a correção vira tentativa.
+ */
+export const ORIGENS_DA_PROPOSTA_DE_CLIENTE = [
+  /** O `Código da vaga` da planilha casou com o `idVacancy` da vaga. Chave primária, 263 casos. */
+  "PLANILHA_ID_VAGA",
+  /**
+   * Casou com a `reference` da vaga, que é o id de OUTRA vaga, a anterior da cadeia de reabertura.
+   *
+   * VÁLIDA PARA BUSCAR O CLIENTE, PROIBIDA COMO IDENTIDADE, e a distinção não é formal: casar a
+   * LINHA da vaga por `reference` juntaria vagas diferentes e mandaria candidatura para a vaga
+   * errada, que é dano a dado de pessoa. Buscar o cliente é outra pergunta. Medido nas 470 abertas:
+   * 442 valores distintos, 7 repetidos cobrindo 35 vagas, e ZERO divergência de cliente entre elas.
+   * Zero divergência é ESTADO de uma planilha viva, não invariante, então a discordância entre as
+   * duas chaves é CONTADA, nunca descartada em silêncio.
+   */
+  "PLANILHA_REQUISICAO",
+] as const;
+export type OrigemDaPropostaDeCliente = (typeof ORIGENS_DA_PROPOSTA_DE_CLIENTE)[number];
+
+export const ORIGEM_DA_PROPOSTA_LABEL: Record<OrigemDaPropostaDeCliente, string> = {
+  PLANILHA_ID_VAGA: "Pelo Código Da Vaga",
+  PLANILHA_REQUISICAO: "Pela Requisição Anterior",
+};
+
+/**
+ * POR QUE UMA LINHA DA PLANILHA NÃO VIROU PROPOSTA. Código fechado, e vira CONTAGEM no resumo do
+ * ciclo, no molde das etapas não mapeadas.
+ *
+ * Ignorar em silêncio foi recusado pela auditoria: diferença sem nome vira "sumiu no caminho". E o
+ * VALOR CRU NÃO ENTRA NO LOG: a coluna é texto livre digitado por gente, e nesta casa texto livre de
+ * ATS já chegou com nome de pessoa dentro. O resumo CONTA, não nomeia.
+ */
+export const MOTIVOS_DE_RECUSA_DA_CHAVE_DA_PLANILHA = [
+  /** Não é número: "Vaga interna", "-", célula de observação. */
+  "NAO_NUMERICO",
+  /**
+   * Família `SL...`, que é CÓDIGO INTERNO DO EA e não do Pandapé.
+   *
+   * Parece lixo de digitação e NÃO É: achado da auditoria do mapa. Casá-lo contra `vagas.codigo`
+   * seria uma terceira chave que ninguém desenhou, e `vagas.codigo` é repetível de propósito.
+   */
+  "FAMILIA_INTERNA_SL",
+  /** O mesmo código aponta para dois clientes diferentes na planilha. Abstém-se, nunca escolhe um. */
+  "AMBIGUO",
+  /** As duas chaves casaram com clientes diferentes. Vale o id da vaga, e a discordância é contada. */
+  "CHAVES_DISCORDAM",
+] as const;
+export type MotivoDeRecusaDaChaveDaPlanilha =
+  (typeof MOTIVOS_DE_RECUSA_DA_CHAVE_DA_PLANILHA)[number];
+
+/**
+ * A PROPOSTA, como a tela de revisão a recebe.
+ *
+ * ┌─ SÃO DOIS CASOS NA TELA, E NÃO UM ───────────────────────────────────────────────────────────┐
+ * │ O catálogo `clientes` é da ADMISSÃO, e A&S trabalha com outro universo: medido que 59 dos 95 │
+ * │ nomes da planilha NÃO EXISTEM no catálogo de 251, incluindo as ONZE variantes de Gerdau,     │
+ * │ nenhuma cadastrada. Então:                                                                   │
+ * │   . `codClienteProposto` PREENCHIDO  (158 das 470): a tela propõe o código, a pessoa confere;│
+ * │   . `codClienteProposto` NULO        (154 das 470): a tela diz QUEM é o cliente pelo nome, e │
+ * │     a pessoa ainda escolhe o código. Continua sendo o ganho que o diretor pediu, porque a    │
+ * │     parte caríssima era DESCOBRIR qual cliente é, não clicar.                                │
+ * │                                                                                              │
+ * │ Dizer "66% resolvido" misturaria os dois e a validação visual pareceria regressão.           │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * §A.6: `nomeClienteProposto` é razão social vinda de célula de texto livre, e razão social de MEI
+ * ou de empresário individual É nome de pessoa natural ("Loja Dona Cida"). Ele desce para a TELA,
+ * atrás do menu, e NUNCA entra em log, em nenhum nível, nem em mensagem de erro, nem no resumo.
+ */
+export interface PropostaDeClienteDaVaga {
+  /** O código do catálogo, quando o nome da planilha casou com um cliente cadastrado. */
+  codClienteProposto: string | null;
+  /** O nome como está escrito na planilha do time. É o que faz a pessoa reconhecer a linha. */
+  nomeClienteProposto: string;
+  origem: OrigemDaPropostaDeCliente;
+  /**
+   * NUNCA foi conferida por gente. A tela TEM de marcar isso.
+   *
+   * Sem a marca, a proposta chega pré-preenchida no seletor igual a um valor já gravado, quem libera
+   * assina a escolha da planilha sem ter conferido, e a trilha passa a afirmar que uma pessoa
+   * escolheu. Condição C1 da auditoria.
+   */
+  conferida: false;
+}
+
+/**
+ * O ESTADO DA PROPOSTA, e ele existe porque "proposto" e "confirmado" NÃO PODEM parecer iguais.
+ *
+ * ┌─ CONDIÇÃO C1 DA AUDITORIA, e ela não é de estética ──────────────────────────────────────────┐
+ * │ A liberação da vaga acontece pelo FORMULÁRIO COMPLETO, e a regra da casa é "corpo com campo  │
+ * │ de vaga = formulário completo, que sobrescreve". Se a proposta chegar pré-preenchida no       │
+ * │ seletor de cliente, indistinguível de um valor já gravado, quem libera **assina a escolha da │
+ * │ planilha sem ter conferido nada**, e a trilha passa a afirmar que uma PESSOA escolheu.        │
+ * │                                                                                              │
+ * │ O risco mudou de natureza quando o de/para saiu da coluna: deixou de ser caminho de código e │
+ * │ passou a ser GESTO HUMANO DESATENTO. Caminho se fecha com código; gesto se evita com rótulo  │
+ * │ que diz a verdade. Por isso o estado é dado, e não aparência.                                │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+export const ESTADOS_DA_PROPOSTA_DE_CLIENTE = [
+  /** Veio da planilha do time e NINGUÉM conferiu. Não decide nada, em nenhuma superfície. */
+  "PROPOSTO",
+  /** Uma pessoa conferiu e aceitou, pelo caminho humano que já tem autor e data. */
+  "CONFIRMADO",
+] as const;
+export type EstadoDaPropostaDeCliente = (typeof ESTADOS_DA_PROPOSTA_DE_CLIENTE)[number];
+
+/** §A.24: tag vai em title case. */
+export const ESTADO_DA_PROPOSTA_LABEL: Record<EstadoDaPropostaDeCliente, string> = {
+  PROPOSTO: "Proposta Da Planilha",
+  CONFIRMADO: "Cliente Confirmado",
+};
+
+/**
+ * QUAL DOS DOIS CASOS a proposta é, e a tela precisa distinguir os três estados do mundo.
+ *
+ * Medido em 01/10/2026, e é o número que evita a leitura errada de "66% resolvido": o catálogo
+ * `clientes` é da ADMISSÃO e A&S trabalha com outro universo, então 59 dos 95 nomes da planilha não
+ * existem no catálogo de 251, incluindo as ONZE variantes de Gerdau, nenhuma cadastrada.
+ *
+ * | caso | das 470 vagas abertas |
+ * |---|---|
+ * | `COM_CODIGO`, a tela propõe o código | 158 |
+ * | `SO_NOME`, a tela diz quem é e a pessoa escolhe o código | 154 |
+ * | sem proposta, a tela fica como está hoje | 158 |
+ *
+ * `SO_NOME` **não é defeito e não é meia entrega**: a parte caríssima era DESCOBRIR qual cliente é,
+ * porque a vaga do Pandapé não carrega cliente em nenhum campo. Clicar nunca foi o custo.
+ */
+export const CASOS_DA_PROPOSTA_DE_CLIENTE = ["COM_CODIGO", "SO_NOME"] as const;
+export type CasoDaPropostaDeCliente = (typeof CASOS_DA_PROPOSTA_DE_CLIENTE)[number];

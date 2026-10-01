@@ -37,7 +37,15 @@
  * é o Cancelar do rodapé, o Salvar, ou a tecla Escape).
  */
 
-import { createContext, useContext, useMemo, useRef, useState, type FormEvent } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 import {
   ESCALA_OUTRA,
   OPCAO_OUTRA,
@@ -104,6 +112,8 @@ import { envioDeShortlistEditavel } from "@/lib/as-shortlists";
 import { statusDePublicacao, statusDoPapel, type AsVagaStatus } from "@/lib/as-status-vaga";
 import { avisoDeReducaoNaTrilha } from "@/lib/as-vaga-meta";
 import { liberarVagaPendenteRevisao, salvarVagaEmRevisao } from "@/lib/as-vagas-revisao";
+import { propostaDaVaga } from "@/lib/as-proposta-cliente";
+import { PropostaDeClienteDaPlanilha } from "./PropostaDeClienteDaPlanilha";
 
 export interface OpcaoCliente {
   codCliente: string;
@@ -757,6 +767,28 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
   const ehLiberacao = modo.tipo === "liberacao";
 
   /**
+   * ─ A PROPOSTA DE CLIENTE VINDA DA PLANILHA DO TIME, E SÓ NO MODO LIBERAÇÃO ───────────────────
+   *
+   * SÓ AQUI DE PROPÓSITO. A proposta é da vaga que a varredura espelhou e que ESPERA conferência;
+   * ela não tem o que fazer numa abertura nova, e num CLONE seria pior do que inútil: o clone é
+   * outra vaga, e carregar para ela a proposta da original mostraria uma procedência que não é dela.
+   *
+   * O SELETOR NÃO É PRÉ-PREENCHIDO (condição C1): `estadoInicial` continua lendo `v.codCliente`,
+   * que a proposta NUNCA escreve, então o campo nasce vazio como nascia antes desta frente. O que a
+   * proposta faz é aparecer ao lado, marcada, com um clique próprio para ser adotada.
+   */
+  const propostaDeCliente = ehLiberacao ? propostaDaVaga(modo.vaga) : null;
+  /** Os códigos que o seletor realmente oferece: confirmar o que ele não tem seria gravar às cegas. */
+  const codigosDoCatalogo = useMemo(
+    () => new Set(optClientes.map((o) => o.value)),
+    [optClientes],
+  );
+  const nomeNoCatalogo = useCallback(
+    (cod: string) => optClientes.find((o) => o.value === cod)?.label,
+    [optClientes],
+  );
+
+  /**
    * O "ENVIO DA SHORTLIST" AINDA É DIGITÁVEL NESTA VAGA?
    *
    * A PERGUNTA É FEITA AO STATUS DA VAGA EM EDIÇÃO, e não ao MODO da trilha: modo é como a tela foi
@@ -1350,6 +1382,20 @@ export function TrilhaDaVaga({ modo, catalogos, token, onFechar, onGravada }: Tr
                       ariaLabel="Cliente da vaga"
                     />
                   </CampoSelect>
+
+                  {/* A PROPOSTA DA PLANILHA, LOGO ABAIXO DO SELETOR E NUNCA DENTRO DELE (condição
+                      C1). Ela ocupa as duas colunas, como o próprio seletor, para o texto da
+                      procedência caber em linha e não quebrar no meio de um nome de cliente. */}
+                  <PropostaDeClienteDaPlanilha
+                    proposta={propostaDeCliente}
+                    codClienteEscolhido={form.codCliente}
+                    codigosDoCatalogo={codigosDoCatalogo}
+                    nomeNoCatalogo={nomeNoCatalogo}
+                    /* ADOTAR A PROPOSTA É O MESMO CAMINHO DE ESCOLHER NO SELETOR, e não um atalho
+                       próprio: assim o cliente confirmado também traz o endereço, a escala e o
+                       solicitante padrão daquele cliente, que é o que a escolha a mão já traz. */
+                    onConfirmar={escolherCliente}
+                  />
 
                   <Campo rotulo="Código da vaga" obrigatorio id="vaga-codigo">
                     {/*

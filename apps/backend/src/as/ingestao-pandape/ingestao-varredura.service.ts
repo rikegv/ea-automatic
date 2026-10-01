@@ -17,6 +17,7 @@ import {
   type ResumoDoCiclo,
 } from "./ingestao-portas";
 import { IngestaoPonteParaAdmissao } from "./ingestao-ponte-admissao";
+import { IngestaoDeParaCliente } from "./ingestao-depara-cliente.service";
 import { IngestaoRepositorio } from "./ingestao-repositorio";
 import {
   criarConexaoDaVarredura,
@@ -89,6 +90,19 @@ export class IngestaoVarreduraService implements OnModuleInit, OnModuleDestroy {
     private readonly http: IngestaoHttp,
     private readonly etapas: EtapasFunilService,
     private readonly ponte: IngestaoPonteParaAdmissao,
+    /**
+     * O DE/PARA DE CLIENTE DA PLANILHA VIVA DO TIME (01/10/2026).
+     *
+     * ┌─ O `?` É CONTRATO DE TESTE, E NÃO FIAÇÃO OPCIONAL (§A.26) ───────────────────────────────┐
+     * │ Em produção o Nest SEMPRE injeta: o provider está declarado no `AsModule` e a resolução é  │
+     * │ por TIPO, que o `?` não apaga. O opcional existe porque um contrato JÁ VALIDADO            │
+     * │ (`ingestao-inercia-e-liberacao.cobertura-independente.tester.spec.ts`) constrói este       │
+     * │ serviço com SEIS argumentos para provar que a varredura nasce inerte, e um sétimo           │
+     * │ obrigatório quebraria aquela prova por um motivo que não tem nada a ver com o que ela       │
+     * │ afirma. Ausente, nada é proposto e a vaga segue nascendo sem cliente, como nasce hoje.      │
+     * └──────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    private readonly propostaDeCliente?: IngestaoDeParaCliente,
   ) {}
 
   onModuleInit(): void {
@@ -257,6 +271,13 @@ export class IngestaoVarreduraService implements OnModuleInit, OnModuleDestroy {
        * que e exatamente o buraco que esta frente fechou.
        */
       ponteParaAdmissao: this.ponte,
+      /*
+       * O DE/PARA DE CLIENTE. Ele NÃO devolve cliente nenhum ao ciclo: resolve as duas chaves da
+       * planilha e grava a PROPOSTA em colunas inertes, devolvendo contagem para o resumo. Não há
+       * chave de ambiente própria aqui porque a porta já nasce fechada por conta própria, sem
+       * `AS_PLANILHA_VIVA_FILE_ID` o catálogo fica vazio e a consulta não acha nada a propor.
+       */
+      propostaDeClienteDaVaga: this.propostaDeCliente,
     };
   }
 
@@ -285,6 +306,30 @@ export class IngestaoVarreduraService implements OnModuleInit, OnModuleDestroy {
         `${r.pontesParaAdmissao} ponte(s) para admissao (${r.pontesAdiadas} adiada(s), ` +
         `${r.posicoesExcedidas} acima do teto da vaga), ${r.erros} erro(s).`,
     );
+    /*
+     * ─ A PROPOSTA DE CLIENTE DA PLANILHA, EM LINHA PRÓPRIA E SÓ QUANDO HOUVE ALGO ──────────────
+     *
+     * LINHA SEPARADA porque a de cima já é longa e porque esta responde outra pergunta: "a planilha
+     * está resolvendo?". Sem ela a frente seria invisível no log, e "a planilha não cobre estas
+     * vagas" ficaria indistinguível de "a leitura parou de casar", que é exatamente o par que o
+     * bloqueio 3 da auditoria mandou separar.
+     *
+     * §A.6: CONTAGEM, e só. Nenhum código da planilha e nenhum nome de cliente (razão social de MEI
+     * é nome de pessoa natural), porque o log da aplicação é permanente e está fora do alcance do
+     * `aplicarRetencao`.
+     */
+    const comCodigo = r.propostasDeClienteComCodigo ?? 0;
+    const soNome = r.propostasDeClienteSoNome ?? 0;
+    const semLinha = r.propostasDeClienteSemLinhaNaPlanilha ?? 0;
+    const foraDoCatalogo = r.codigosDeClienteForaDoCatalogo ?? 0;
+    const discordantes = r.chavesDaPlanilhaDiscordantes ?? 0;
+    if (comCodigo + soNome + semLinha + foraDoCatalogo + discordantes > 0) {
+      this.logger.log(
+        `De/para de cliente (${etapa}): ${comCodigo} proposta(s) com codigo, ${soNome} so com nome, ` +
+          `${semLinha} sem linha na planilha, ${foraDoCatalogo} codigo(s) fora do catalogo, ` +
+          `${discordantes} chave(s) discordante(s).`,
+      );
+    }
     if (r.etapasNaoMapeadas.length > 0) {
       /*
        * SEM ESTA LINHA, A RECUSA FAIL-CLOSED VIRA PERDA SILENCIOSA DE 35% DA ENTRADA: ela diz que

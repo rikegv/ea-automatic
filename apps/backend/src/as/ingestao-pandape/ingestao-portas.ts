@@ -225,6 +225,46 @@ export interface PortaPonteParaAdmissao {
   criar(candidaturaId: string): Promise<ResultadoDaPonte>;
 }
 
+/**
+ * ─ A PORTA DA PROPOSTA DE CLIENTE DA VAGA (de/para da planilha viva do time, 01/10/2026) ───────
+ *
+ * ┌─ POR QUE ELA É UMA PORTA PRÓPRIA, E NÃO UM RETORNO DE `clientePorVaga` ──────────────────────┐
+ * │ `clientePorVaga` devolve o CLIENTE, e o valor que ela devolvesse chegaria ao objeto `valores`  │
+ * │ da escrita da vaga, que é a um caractere de distância de `cod_cliente`. A auditoria mediu esse │
+ * │ fio: o ciclo CALCULAVA o cliente e o jogava fora, e quem "consertasse" o fio morto pelo        │
+ * │ caminho natural faria 48 voltas por dia reescreverem o cliente que uma pessoa conferiu na      │
+ * │ liberação, sem autor, sem data e sem trilha.                                                   │
+ * │                                                                                               │
+ * │ ESTA PORTA NÃO TEM COMO COMETER AQUELE ERRO, e isso é estrutural e não disciplinar: ela não    │
+ * │ DEVOLVE cliente nenhum. Ela RESOLVE e GRAVA, em colunas próprias e inertes, e o que sobe para  │
+ * │ o ciclo é CONTAGEM. Não existe valor de cliente atravessando o ciclo para ser posto no lugar   │
+ * │ errado, e não existe caminho da planilha até `vagas.cod_cliente`.                              │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ POR QUE ELA RECEBE O `resumo`, EM VEZ DE DEVOLVER UM DESFECHO PARA O CICLO SOMAR ───────────┐
+ * │ Para a soma morar no MESMO arquivo que a §A.6 desta frente: quem conta é quem sabe o que NÃO    │
+ * │ pode ser contado (nome de cliente é razão social, e razão social de MEI é nome de pessoa        │
+ * │ natural). Um desfecho atravessando o ciclo seria o lugar natural para alguém pendurar "só o     │
+ * │ primeiro exemplo, para facilitar", e o resumo do ciclo termina em log permanente.               │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * OPCIONAL NO TIPO, como o `cicloDeVida` e a `ponteParaAdmissao`, e pela mesma razão: o contrato do
+ * `tester` não a declara, e o ciclo tem de continuar assinável como
+ * `(deps: DependenciasDaIngestao) => Promise<ResumoDoCiclo>`. AUSENTE NÃO PROPÕE NADA, que é a
+ * direção certa: a vaga continua nascendo sem cliente e caindo na revisão, exatamente como hoje.
+ */
+export interface PortaPropostaDeClienteDaVaga {
+  /**
+   * Resolve as DUAS chaves no de/para e grava a proposta na vaga. NUNCA devolve o cliente, e nunca
+   * lança: dado de planilha não derruba a ingestão da vaga (bloqueio 5 da auditoria).
+   */
+  resolverERegistrar(
+    vagaId: string,
+    chaves: { idVacancy: number; reference: string | null },
+    resumo: ResumoDoCiclo,
+  ): Promise<void>;
+}
+
 export interface DependenciasDaIngestao {
   http: PortaHttp;
   banco: PortaBanco;
@@ -292,6 +332,11 @@ export interface DependenciasDaVarredura extends DependenciasDaIngestao {
    * (`ingestao-varredura.service.ts`), e a ausência só acontece em teste de outra propriedade.
    */
   ponteParaAdmissao?: PortaPonteParaAdmissao;
+  /**
+   * O DE/PARA DE CLIENTE DA PLANILHA DO TIME. Em produção é sempre injetada; ausente, nada é
+   * proposto e a vaga segue nascendo sem cliente, como nasce hoje. Ela NÃO devolve cliente nenhum.
+   */
+  propostaDeClienteDaVaga?: PortaPropostaDeClienteDaVaga;
 }
 
 export interface ResumoDoCiclo {
@@ -337,5 +382,47 @@ export interface ResumoDoCiclo {
    * CONTA a sobre-ocupação, para ela ficar visível em vez de invisível.
    */
   posicoesExcedidas: number;
+  /**
+   * ─ OS CINCO CONTADORES DA PROPOSTA DE CLIENTE (de/para da planilha, 01/10/2026) ──────────────
+   *
+   * ELES NÃO SÃO ERRO, SÃO A FRENTE FUNCIONANDO, e sem eles ela seria invisível: o log diria "470
+   * vagas varridas" e ninguém saberia se a planilha resolveu 312 ou zero, nem distinguiria "a
+   * planilha não cobre estas vagas" de "a leitura parou de casar". É o molde do `etapasNaoMapeadas`
+   * e do `divergencias`, que já existem no resumo por essa mesma razão.
+   *
+   * ┌─ SÃO CONTAGENS, E É SÓ ISSO QUE PODEM SER (§A.6) ──────────────────────────────────────────┐
+   * │ Nenhum deles carrega o código da planilha nem o nome do cliente. O nome é RAZÃO SOCIAL vinda │
+   * │ de célula de texto livre, e razão social de MEI É nome de pessoa natural; o resumo do ciclo   │
+   * │ termina em log permanente, que está fora do alcance do `aplicarRetencao`. Precisando de       │
+   * │ identificador, o caminho é a marca com sal que já existe (`marcaDeChaveExterna`), nunca o cru.│
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   *
+   * OPCIONAIS NO TIPO porque o resumo é construído em `ingestao-ciclo.ts` (`novoResumo`) e pelo
+   * mundo falso do `tester`, e `undefined` aqui tem UM significado só: "esta volta não resolveu
+   * proposta nenhuma", que é o estado de qualquer passada sem a porta injetada. Quem soma usa
+   * `?? 0`, e quem lê não distingue zero de ausência porque não há nada a distinguir.
+   *
+   * ┌─ AS TRÊS CLASSES QUE **NÃO** ESTÃO AQUI, E A AUSÊNCIA É DELIBERADA ────────────────────────┐
+   * │ Malformado, família interna `SL...` e célula vazia são recusas da PLANILHA, e a planilha é    │
+   * │ lida na SINCRONIZAÇÃO do catálogo, não na volta da varredura (a volta consulta a tabela de    │
+   * │ de/para, que só guarda chave já validada). Contá-las aqui criaria três contadores            │
+   * │ permanentemente em ZERO, que é o "contador que ninguém lê" com outro nome. Elas são contadas  │
+   * │ onde acontecem: no resumo da sincronização (`as/depara-cliente`), que a rota devolve e loga.  │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   */
+  propostasDeClienteComCodigo?: number;
+  /** Tem NOME e não tem código: 154 das 470 (59 dos 95 nomes não existem no catálogo da Admissão). */
+  propostasDeClienteSoNome?: number;
+  /** A planilha não tem esta vaga: 158 das 470. Insumo para o TIME, não defeito de código. */
+  propostasDeClienteSemLinhaNaPlanilha?: number;
+  /** O código confirmado não existe (mais) no catálogo do EA. Degrada para só nome, nunca derruba. */
+  codigosDeClienteForaDoCatalogo?: number;
+  /**
+   * As duas chaves casaram com clientes DIFERENTES. Vale o `idVacancy`, e a discordância é CONTADA.
+   *
+   * Hoje é ZERO (263 de 263 medidas), e o zero é FOTOGRAFIA de uma planilha que o time edita durante
+   * o dia, não invariante: apareceu uma linha nova entre a cópia da manhã e a leitura da tarde.
+   */
+  chavesDaPlanilhaDiscordantes?: number;
   erros: number;
 }

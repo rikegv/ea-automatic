@@ -1011,7 +1011,21 @@ export const MENUS: MenuDef[] = [
     grupo: "SELECAO",
     ordem: 42,
     areas: ["AS"],
-    operacoes: [],
+    /**
+     * ─ A LISTA DEIXOU DE SER VAZIA, E A RESSALVA DE CIMA CONTINUA INTEIRA (de/para, 01/10/2026) ──
+     *
+     * O MOTIVO DO `operacoes: []` ERA OUTRO, e ele não se aplica aqui: ele existia porque as rotas
+     * desta tela vivem na `VagasController`, que o `as-vagas` já reivindica POR INTEIRO, e DOIS
+     * menus reivindicando a MESMA classe é defeito (`menuDaOperacao` responde UM, e qual depende da
+     * ordem do registro).
+     *
+     * A `VagasRevisaoPropostaController` É EXCLUSIVA DESTA TELA: ela devolve a PROPOSTA de cliente
+     * vinda da planilha do time, para a fila de revisão mostrar, e ninguém mais a reivindica. Sem
+     * esta linha o `MenuGuard` é FAIL-OPEN (operação não reivindicada fica alcançável por qualquer
+     * sessão autenticada, com `curl`), e a rota devolve RAZÃO SOCIAL de empresa, que em MEI é nome
+     * de pessoa natural (§A.6). NOMINAL, nunca `Controller.*`.
+     */
+    operacoes: ["VagasRevisaoPropostaController.listar"],
   },
   {
     /**
@@ -1367,6 +1381,39 @@ export const MENUS: MenuDef[] = [
       "IngestaoDivergenciasController.adotarAts",
     ],
   },
+  {
+    codigo: "depara-cliente-vaga",
+    rotulo: "De/Para De Cliente Da Vaga",
+    href: "/admin/depara-cliente-vaga",
+    grupo: "ADMIN",
+    ordem: 56,
+    areas: ["AS"],
+    /**
+     * ┌─ ESTE REGISTRO É A TRAVA DA ROTA, NÃO DECORAÇÃO ────────────────────────────────────────┐
+     * │ O `MenuGuard` é FAIL-OPEN para operação que nenhum menu reivindica: `menuDaOperacao`     │
+     * │ devolve `null` e o handler fica alcançável por QUALQUER autenticado, com `curl`. A lista  │
+     * │ devolve RAZÃO SOCIAL de empresa (que em MEI é nome de pessoa natural, §A.6) e a           │
+     * │ confirmação ESCREVE no catálogo que alimenta a proposta de 312 vagas.                     │
+     * │                                                                                          │
+     * │ NOMINAL, NUNCA CURINGA: `Controller.*` faria handler NOVO herdar a concessão sem decisão  │
+     * │ do diretor (ressalva R3 da auditoria da concessão de menus). Os quatro nomes abaixo foram │
+     * │ conferidos contra os métodos reais da controller, um por um.                               │
+     * └──────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * CÓDIGO SEM O PREFIXO `as-` e grupo ADMIN, pela mesma medição do `divergencias-ingestao`: o
+     * prefixo arrastaria a curadoria para a família dos catálogos concedíveis, que ela não é, e o
+     * grupo OPERACAO a faria entrar em `MENUS_PADRAO_COMUM` e se conceder sozinha num backfill.
+     *
+     * §A.23: o registro aqui FAZ O MENU EXISTIR e nada mais. Nasce visível só para o SUPER_ADMIN,
+     * ninguém o tem concedido, nenhum seed foi rodado, e quem libera quem enxerga é o DIRETOR.
+     */
+    operacoes: [
+      "DeParaClienteController.listar",
+      "DeParaClienteController.sincronizar",
+      "DeParaClienteController.confirmar",
+      "DeParaClienteController.alternarAtivo",
+    ],
+  },
 ];
 
 /** Menus sempre visíveis, independentemente de configuração (a home nunca some). */
@@ -1434,6 +1481,12 @@ export const MENUS_QUE_NASCEM_FORA_DA_ADM = new Set<string>([
   "divergencias-ingestao",
   // A fila de revisão das vagas espelhadas do Pandapé: menu de A&S, nasce só na área AS.
   "as-vagas-revisao",
+  // A CURADORIA DO DE/PARA DE CLIENTE DA VAGA: menu de A&S, nasce só na área AS. Mora no grupo ADMIN
+  // e SEM o prefixo `as-` pelos mesmos dois motivos medidos do `divergencias-ingestao`: o grupo
+  // OPERACAO a faria entrar em `MENUS_PADRAO_COMUM` e se conceder sozinha num backfill, e o prefixo
+  // `as-` a arrastaria para a família dos catálogos concedíveis (`catalogos-as.concessao-por-menu`),
+  // que ela não é. Ela não configura lista de operação: é fila de CONFIRMAÇÃO de tradução.
+  "depara-cliente-vaga",
   // Mora no grupo ADMIN por decisão do diretor e mesmo assim é menu de A&S: é exatamente o caso que
   // fez a prova deixar de olhar o grupo e passar a olhar esta lista.
   "as-etapas",

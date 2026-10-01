@@ -13,6 +13,12 @@ import {
   DigaiWebhookController,
   PORTA_DA_FILA_DIGAI,
 } from "./digai/digai-webhook.controller";
+import { DeParaClienteController } from "./depara-cliente/depara-cliente.controller";
+import { DeParaClienteSchedulerService } from "./depara-cliente/depara-cliente-scheduler.service";
+import { DeParaClienteService } from "./depara-cliente/depara-cliente.service";
+import { PlanilhaVivaService } from "./depara-cliente/planilha-viva.service";
+import { IngestaoDeParaCliente } from "./ingestao-pandape/ingestao-depara-cliente.service";
+import { VagasRevisaoPropostaController } from "./vagas/vagas-revisao-proposta.controller";
 import { IngestaoDivergenciasController } from "./ingestao-pandape/ingestao-divergencias.controller";
 import { IngestaoDivergenciasService } from "./ingestao-pandape/ingestao-divergencias.service";
 import { IngestaoHttp } from "./ingestao-pandape/ingestao-http";
@@ -232,6 +238,20 @@ import { VagasService } from "./vagas/vagas.service";
      * existente entregaria a fila a quem tem o menu daquela outra tela.
      */
     IngestaoDivergenciasController,
+    /*
+     * ─ O DE/PARA DE CLIENTE DA VAGA (planilha viva do time, 01/10/2026) ────────────────────────
+     *
+     * DUAS CLASSES, E A SEPARAÇÃO É DE PERMISSÃO, não de tamanho:
+     *  . `DeParaClienteController` é a CURADORIA, reivindicada pelo menu ADMIN `depara-cliente-vaga`,
+     *    que é só dela. Pendurar estas rotas numa controller já existente entregaria a escrita do
+     *    catálogo a quem tem o menu daquela outra tela (o `MenuGuard` resolve por NOME DE CLASSE);
+     *  . `VagasRevisaoPropostaController` é a LEITURA da proposta pela fila de revisão, reivindicada
+     *    pelo menu `as-vagas-revisao`. Ela existe separada da `VagasController` porque a proposta tem
+     *    lista branca de leitores: a Central de Vagas devolve `cod_cliente`, e o valor da planilha
+     *    não pode viajar no mesmo objeto que ele.
+     */
+    DeParaClienteController,
+    VagasRevisaoPropostaController,
   ],
   // `RetencaoCandidatosService` é o expurgo por retenção (6 MESES para descartado, banco não expira).
   // O prazo era 2 anos e mudou por decisão do diretor em 29/09/2026: candidatura viva em vaga que
@@ -335,6 +355,31 @@ import { VagasService } from "./vagas/vagas.service";
      * exatamente o defeito que a fila existe para matar.
      */
     IngestaoDivergenciasService,
+    /*
+     * ─ O DE/PARA DE CLIENTE: TRÊS PEÇAS, E ELE NASCE INERTE ────────────────────────────────────
+     *
+     * `PlanilhaVivaService` é a borda HTTP que pede a leitura ao `ai-service` (o backend não tem
+     * biblioteca de Drive nem de planilha, e trazer uma arrastaria para cá uma credencial com escopo
+     * de ESCRITA no Drive da empresa). `DeParaClienteService` é a curadoria: desdobra as linhas,
+     * PROPÕE o cliente do catálogo e nunca religa o que o diretor desligou. `IngestaoDeParaCliente` é
+     * o ÚNICO escritor da proposta na vaga, e ele não devolve cliente nenhum para o ciclo.
+     *
+     * SEM `AS_PLANILHA_VIVA_FILE_ID` NO AMBIENTE, NADA É LIDO E NADA É ESCRITO: a sincronização
+     * responde que está inerte, e nenhuma proposta nasce. Não há identificador de planilha no código
+     * (§A.5: sem insumo a porta nasce fechada, sem hardcode).
+     */
+    PlanilhaVivaService,
+    DeParaClienteService,
+    IngestaoDeParaCliente,
+    /*
+     * A CADÊNCIA DE UMA HORA (decisão do diretor, 01/10/2026). Ela mora NESTE módulo pela mesma razão
+     * das outras peças: consome a MESMA instância da sincronização que a tela de curadoria usa, e um
+     * módulo novo com o mesmo provider criaria um SEGUNDO escritor do catálogo, rodando de hora em
+     * hora sobre o estado que o primeiro está mudando.
+     *
+     * ELA NASCE INERTE com a porta fechada: sem `AS_PLANILHA_VIVA_FILE_ID`, o intervalo nem é armado.
+     */
+    DeParaClienteSchedulerService,
     /*
      * ─ A INGESTAO DO DIGAI: SEIS PECAS, E ELA NASCE INERTE ─────────────────────────────────────
      *

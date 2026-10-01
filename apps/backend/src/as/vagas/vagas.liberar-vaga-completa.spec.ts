@@ -654,7 +654,7 @@ describe("PROPRIEDADE: vaga sem cliente nunca alcança papel de processo, por po
    * POR QUE NÃO SE MEDE ISTO CONTRA O BANCO: a base pode estar limpa hoje e continuar limpa até o
    * primeiro caminho novo. O que prova a invariante é o conjunto de portas, e é ele que é pinado.
    */
-  it("SÓ QUATRO ARQUIVOS escrevem na tabela `vagas`, e cada um tem a sua resposta escrita aqui", () => {
+  it("SÓ SEIS ARQUIVOS escrevem na tabela `vagas`, e cada um tem a sua resposta escrita aqui", () => {
     const raiz = join(__dirname, "..", "..");
     const arquivos: string[] = [];
     const varrer = (dir: string) => {
@@ -673,6 +673,19 @@ describe("PROPRIEDADE: vaga sem cliente nunca alcança papel de processo, por po
     varrer(raiz);
 
     expect(arquivos.sort()).toEqual([
+      // ─ O DE/PARA DE CLIENTE DA PLANILHA (01/10/2026), E A RESPOSTA DELE É "NÃO ALCANÇA" ───────
+      // Ele grava QUATRO colunas e nenhuma outra: `cliente_proposto`, `cliente_proposto_nome`,
+      // `cliente_proposto_origem` e `cliente_proposto_estado`. NÃO escreve `status` (então não é
+      // porta de entrada em papel nenhum), NÃO escreve `cod_cliente` (então não inventa cliente) e
+      // NÃO escreve `atualizado_em` (que é o relógio do expurgo de quem está dentro da vaga).
+      //
+      // A COLUNA DELE É INERTE POR DESENHO, e isso foi exigência da auditoria desta frente: a
+      // proposta da planilha não pode virar `vagas.cod_cliente`, porque aquele valor desce para a
+      // pré-admissão SEM filtro de status e de lá decide a régua documental e a pasta do prontuário
+      // no Drive. Há teste de fonte provando a lista FECHADA de escritores da proposta e a ausência
+      // de leitores fora da tela de revisão (`as/depara-cliente/depara-cliente.escritores` e
+      // `as/ingestao-pandape/depara-cliente.fonte-e-inercia`).
+      "as/ingestao-pandape/ingestao-depara-cliente.service.ts",
       // A INGESTÃO. Reabre a vaga espelhada restaurando o status de antes do encerramento, SEM
       // olhar o cliente. Segura hoje porque o status guardado é o da própria vaga (que estava em
       // processo, logo com cliente) e o fallback é a FILA. Porta nova aqui exige releitura.
@@ -682,6 +695,14 @@ describe("PROPRIEDADE: vaga sem cliente nunca alcança papel de processo, por po
       // A DERIVAÇÃO. Só se move DENTRO do processo: ela retorna cedo quando o papel atual não é de
       // processo, então não é porta de ENTRADA e não alcança vaga sem cliente.
       "as/vagas/derivar-status-da-vaga.ts",
+      // ─ O CARIMBO DO ACEITE DA PROPOSTA (01/10/2026), E A RESPOSTA É A MESMA ──────────────────
+      // Ele grava UMA coluna: `cliente_proposto_estado = 'CONFIRMADO'`, quando uma pessoa aceita na
+      // liberação exatamente o cliente que a planilha propôs. NÃO escreve `status`, NÃO escreve
+      // `cod_cliente` e NÃO escreve `atualizado_em`. Quem move a vaga continua sendo a liberação, na
+      // MESMA transação, com a régua dos obrigatórios e a trava de cliente medidas caso a caso acima:
+      // este arquivo só registra a PROCEDÊNCIA do valor que ela gravou, para a pergunta "esse cliente
+      // foi escolhido ou foi aceito?" ter resposta no dia em que uma linha da planilha estiver errada.
+      "as/vagas/vagas-revisao-proposta.ts",
       // AS PORTAS COM RÉGUA. São as medidas caso a caso acima.
       "as/vagas/vagas.service.ts",
     ]);

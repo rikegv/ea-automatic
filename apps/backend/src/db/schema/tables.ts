@@ -2762,6 +2762,68 @@ export const vagas = pgTable(
      */
     codCliente: varchar("cod_cliente", { length: 40 }).references(() => clientes.codCliente),
     /**
+     * ─ A PROPOSTA DE CLIENTE VINDA DA PLANILHA VIVA DO TIME, E ELA É **INERTE** ──────────────────
+     *
+     * ┌─ ESTAS TRÊS COLUNAS NÃO SÃO UM SEGUNDO `cod_cliente`, E A DISTINÇÃO É A FRENTE INTEIRA ───┐
+     * │ O time mantém uma planilha onde registra toda vaga COM o cliente, e o "Código da vaga" dela │
+     * │ é o `idVacancy` do Pandapé. Medido em 01/10/2026: isso resolve 312 das 470 vagas abertas     │
+     * │ (263 pelo id, +49 pela `reference`), e mapear os 95 nomes uma vez destrava todas elas.      │
+     * │                                                                                             │
+     * │ MESMO ASSIM A PLANILHA NÃO ESCREVE `cod_cliente`, LOGO ACIMA, EM CAMINHO NENHUM. A auditoria │
+     * │ mediu por quê: `candidatos.service.ts` lê `vagas.cod_cliente` com `innerJoin` e SEM FILTRO  │
+     * │ DE STATUS, e o valor desce para `cod_cliente` da pré-admissão (`ingestao-ponte-admissao`).  │
+     * │ De lá ele decide a RÉGUA DOCUMENTAL `(cod_cliente + cargo)` e o NOME DA PASTA do prontuário │
+     * │ no Drive. Um valor digitado numa célula de planilha chegaria a `admissoes.cod_cliente` sem   │
+     * │ passar por pessoa nenhuma: cliente errado é CONTROLADOR errado (§A.6), e arquivamento no     │
+     * │ Drive não se desfaz (§A.33).                                                                 │
+     * │                                                                                             │
+     * │ A auditoria pediu uma GUARDA na ponte; o desenho REMOVEU O CAMINHO. Guarda se perde numa     │
+     * │ refatoração (é o argumento da §A.33 sobre o fallback removido); caminho que não existe não é │
+     * │ percorrido por engano. Quem escreve `cod_cliente` continua sendo a LIBERAÇÃO da vaga, com    │
+     * │ autor, data e trilha, e a trilha agora registra se o valor foi ESCOLHIDO ou ACEITO daqui.    │
+     * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * ┌─ QUEM ESCREVE: DOIS CAMINHOS DISJUNTOS, E NENHUM ALCANÇA `cod_cliente` ────────────────────┐
+     * │ `as/ingestao-pandape/ingestao-depara-cliente.service.ts` grava a PROPOSTA (as três primeiras │
+     * │ colunas e o estado `PROPOSTO`), com um `update` condicional destas quatro colunas e de       │
+     * │ NENHUMA outra; `as/vagas/vagas-revisao-proposta.ts` grava SÓ o estado `CONFIRMADO`, quando   │
+     * │ uma pessoa aceita na liberação exatamente o valor proposto. Os dois são declarados e há      │
+     * │ teste de fonte provando que não existe um terceiro. Em particular NÃO de `atualizado_em`: aquele carimbo │
+     * │ é o RELÓGIO DO EXPURGO de quem está dentro da vaga, e empurrá-lo 48 vezes por dia renovaria  │
+     * │ a retenção de todo mundo sem nada ficar vermelho.                                            │
+     * │                                                                                             │
+     * │ E ELAS FICAM FORA DE `camposDaTrilha`: a regra de lá é "o corpo é completo, campo ausente é  │
+     * │ campo LIMPO", então a coluna que entrasse naquele mapeamento seria APAGADA por qualquer      │
+     * │ salvamento da trilha, em silêncio. Há teste de fonte afirmando as duas coisas.               │
+     * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * SEM FK PARA `clientes`, de propósito (bloqueio 5 da auditoria): a vaga nasce de 30 em 30
+     * minutos, e um código que o catálogo perdeu derrubaria o insert volta após volta, transformando
+     * uma frente de PREENCHIMENTO em perda de INGESTÃO. O fail-closed aqui é NULO MAIS CONTAGEM.
+     *
+     * §A.6: `cliente_proposto_nome` é razão social vinda de célula de texto livre, e razão social de
+     * MEI É nome de pessoa natural. Ele desce para a TELA, atrás do menu, e NUNCA entra em log, em
+     * nenhum nível, nem em mensagem de erro, nem no resumo do ciclo, que conta sem nomear.
+     */
+    clienteProposto: varchar("cliente_proposto", { length: 40 }),
+    clientePropostoNome: varchar("cliente_proposto_nome", { length: 200 }),
+    /** `PLANILHA_ID_VAGA` ou `PLANILHA_REQUISICAO` (`ORIGENS_DA_PROPOSTA_DE_CLIENTE`), com CHECK. */
+    clientePropostoOrigem: varchar("cliente_proposto_origem", { length: 30 }),
+    /**
+     * `PROPOSTO` ou `CONFIRMADO` (`ESTADOS_DA_PROPOSTA_DE_CLIENTE`), com CHECK.
+     *
+     * ELE EXISTE PARA A PERGUNTA DO ITEM 8 SOBREVIVER À SAÍDA DA FILA: "este cliente foi ESCOLHIDO
+     * ou foi ACEITO da planilha?". A resposta também vai para o texto da trilha, com autor e data,
+     * mas no dia em que uma linha da planilha estiver errada a pergunta que importa é QUANTAS vagas
+     * herdaram o mesmo erro, e isso é uma CONTAGEM, não uma leitura de texto de observação.
+     *
+     * QUEM O ESCREVE SÃO DOIS CAMINHOS, E ELES SÃO DISJUNTOS DE PROPÓSITO: a ingestão grava
+     * `PROPOSTO` junto da proposta (e só quando a proposta MUDA, senão `CONFIRMADO` seria revertido
+     * de 30 em 30 minutos), e a liberação grava `CONFIRMADO` quando a pessoa aceita exatamente o
+     * valor proposto. Nenhum dos dois toca a coluna do outro.
+     */
+    clientePropostoEstado: varchar("cliente_proposto_estado", { length: 20 }),
+    /**
      * O `IdVacancy` DA VAGA NO PANDAPÉ (ponte puxada da onda 4, Central de Candidatos).
      *
      * ESTA COLUNA SÓ GUARDA. Não existe varredura, não existe chamada de API e nada a preenche
@@ -3306,6 +3368,26 @@ export const vagas = pgTable(
     // `ck_vagas_posicoes` é o MESMO, renomeado junto com a coluna, para o nome do check não continuar
     // apontando para uma coluna que não existe mais.
     ckPosicoesOficiais: check("ck_vagas_posicoes_oficiais", sql`${t.posicoesOficiais} > 0`),
+    /**
+     * A PROPOSTA DE CLIENTE É SEMPRE UM NOME, E PODE NÃO TER CÓDIGO (159 das 470 têm código, 154 só
+     * o nome, medido). O INVERSO é impossível, e é isso que o CHECK fecha: código sem nome seria um
+     * vínculo sugerido sem a informação que faz a pessoa reconhecer a linha, que é exatamente o
+     * estado em que alguém confirma em lote sem conferir. A ORIGEM acompanha a proposta porque, no
+     * dia em que ela estiver errada, a única pergunta que importa é por qual chave ela casou.
+     */
+    ckClientePropostoOrigem: check(
+      "ck_vagas_cliente_proposto_origem",
+      sql`${t.clientePropostoOrigem} is null or ${t.clientePropostoOrigem} in ('PLANILHA_ID_VAGA','PLANILHA_REQUISICAO')`,
+    ),
+    ckClientePropostoEstado: check(
+      "ck_vagas_cliente_proposto_estado",
+      sql`${t.clientePropostoEstado} is null or ${t.clientePropostoEstado} in ('PROPOSTO','CONFIRMADO')`,
+    ),
+    ckClientePropostoCoerente: check(
+      "ck_vagas_cliente_proposto_coerente",
+      sql`(${t.clientePropostoNome} is null and ${t.clienteProposto} is null and ${t.clientePropostoOrigem} is null and ${t.clientePropostoEstado} is null)
+          or (${t.clientePropostoNome} is not null and ${t.clientePropostoOrigem} is not null and ${t.clientePropostoEstado} is not null)`,
+    ),
     // O BANCO ACEITA ZERO, e é a diferença que importa entre os dois checks: zero banco é o estado
     // normal da maioria das vagas, não uma linha defeituosa.
     ckPosicoesBanco: check("ck_vagas_posicoes_banco", sql`${t.posicoesBanco} >= 0`),
@@ -5028,6 +5110,124 @@ export const asDeparaEtapaExterna = pgTable(
     ckDestino: check(
       "ck_as_depara_etapa_externa_destino",
       sql`${t.etapaCodigo} is not null or ${t.situacao} is not null`,
+    ),
+  }),
+);
+
+/**
+ * ─ O DE/PARA DE CLIENTE DA VAGA: A PLANILHA VIVA DO TIME TRADUZIDA EM CATÁLOGO ─────────────────
+ *
+ * UMA LINHA POR CÓDIGO DA PLANILHA, e a planilha tem 3.532 linhas úteis para cerca de 470 vagas
+ * (medido em 01/10/2026): a linha de lá é por CANDIDATO, então o código REPETE, e repetição é o
+ * NORMAL. Quem desdobra isso em uma linha por código, detectando contradição em vez de deixar a
+ * última vencer, é `montarMapaDePara` (`domain/as-depara-cliente-vaga.ts`), com teste puro. É por
+ * isso que o unique abaixo pode existir sem a sincronização brigar com a própria fonte.
+ *
+ * ┌─ O QUE ESTA TABELA PRODUZ É **PROPOSTA**, E PROPOSTA NÃO DECIDE NADA ────────────────────────┐
+ * │ Ela alimenta `vagas.cliente_proposto_*`, que é inerte, e NUNCA `vagas.cod_cliente`. A razão    │
+ * │ está escrita na vaga, em cima daquelas colunas, e é irreversível: `cod_cliente` desce para a   │
+ * │ pré-admissão e decide a régua documental e a pasta do prontuário no Drive.                     │
+ * └────────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ `cod_cliente` NÃO TEM FK, E A AUSÊNCIA É DELIBERADA (bloqueio 5 da auditoria) ──────────────┐
+ * │ `vagas.cod_cliente` TEM FK. Um código que a curadoria conheceu e o catálogo não tem MAIS       │
+ * │ (cliente inativado, código recadastrado) derrubaria a sincronização, e uma FK `restrict`       │
+ * │ transformaria "apagar um cliente" em erro de banco por causa de um catálogo de TRADUÇÃO. O     │
+ * │ fail-closed desta frente é NULO MAIS CONTAGEM, nunca exceção.                                  │
+ * │                                                                                               │
+ * │ O QUE PROTEGE NO LUGAR DA FK, e protege DUAS vezes: a sincronização confere o código contra    │
+ * │ `clientes` antes de gravar, e a resolução confere de novo na leitura (`left join clientes`), e │
+ * │ código órfão degrada para proposta SÓ COM NOME. Quem recusa a confirmação de um código que o   │
+ * │ catálogo não tem é a FK de `vagas.cod_cliente`, na cara de quem clicou, que é o lugar certo.   │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * NUNCA CRIA LINHA EM `clientes`, e isso é exigência da auditoria: aquele catálogo é da ADMISSÃO e
+ * resolve a régua documental e a pasta do Drive. O único escritor dele é
+ * `admin/clientes/clientes.service.ts`, atrás do menu ADMIN, e continua sendo. Dos 95 nomes medidos,
+ * 59 não existem lá, e quem os resolve é a administração, na tela de Clientes.
+ *
+ * §A.6: código de vaga de terceiro, razão social de empresa, código de cliente, id de usuário
+ * INTERNO e dois carimbos. As outras 61 colunas da planilha NÃO são copiadas para cá, e isso é
+ * requisito: cópia de dado pessoal fora do alcance do expurgo é o próprio defeito.
+ */
+export const asDeparaClienteVaga = pgTable(
+  "as_depara_cliente_vaga",
+  {
+    id: serial("id").primaryKey(),
+    /** Lista FECHADA com CHECK. Hoje há uma fonte só, e a segunda não deve virar outra tabela. */
+    fonte: varchar("fonte", { length: 20 }).notNull(),
+    /**
+     * O "Código da vaga" da planilha, JÁ NORMALIZADO: só dígitos, sem o espaço à frente que foi
+     * medido em `' 1587726'`. O que não é chave não chega aqui, e a recusa tem MOTIVO: `SL...` é
+     * código INTERNO do EA (ver `vagas.codigo`) e é recusado como família própria, nunca casado
+     * contra `vagas.codigo`, que é REPETÍVEL de propósito e digitado por gente.
+     */
+    codigoExterno: varchar("codigo_externo", { length: 40 }).notNull(),
+    /**
+     * O nome do cliente COMO A PLANILHA O ESCREVE. É ele que faz a pessoa reconhecer a linha, e é a
+     * parte caríssima do trabalho: descobrir QUAL cliente é. §A.6: razão social de MEI é nome de
+     * pessoa natural, então este valor desce para a tela e NUNCA para log.
+     */
+    nomeCliente: varchar("nome_cliente", { length: 200 }).notNull(),
+    /** O código do catálogo. NULO é o estado normal de 59 dos 95 nomes, e não é lacuna de ninguém. */
+    codCliente: varchar("cod_cliente", { length: 40 }),
+    /**
+     * O GRAU do palpite da curadoria, para quem confere 95 linhas saber onde olhar com cuidado:
+     * EXATO é conferência de um segundo, PREFIXO é onde o erro humano de confirmação vai acontecer.
+     */
+    casamento: varchar("casamento", { length: 20 }),
+    /**
+     * ┌─ PROPOSTA NÃO CONFIRMADA NÃO RESOLVE NADA, e por isso a confirmação tem AUTOR E DATA ─────┐
+     * │ Um booleano responderia "foi confirmado?" e não responderia "por quem", que é a única      │
+     * │ pergunta que importa no dia em que uma linha estiver errada. Molde do `adotarAts`: autor da │
+     * │ SESSÃO, nunca do corpo. Carimbo NULO é o nascimento de toda linha, porque a fábrica PROPÕE  │
+     * │ e o time CONFIRMA; sem carimbo, a resolução entrega o NOME e não entrega o código.          │
+     * └────────────────────────────────────────────────────────────────────────────────────────────┘
+     */
+    confirmadoEm: timestamp("confirmado_em", { withTimezone: true }),
+    confirmadoPorId: uuid("confirmado_por_id").references(() => usuarios.id, {
+      onDelete: "set null",
+    }),
+    /**
+     * DESLIGAR É O GESTO DO DIRETOR para dizer "pare de confiar nesta tradução", e ele precisa
+     * existir sem apagar a linha: apagada, a próxima sincronização a recria com o palpite da
+     * fábrica, e a decisão seria desfeita de 30 em 30 minutos. Lido com `ativo = true` em DUAS
+     * fechaduras, como o de/para de etapa, e as duas são de propósito.
+     */
+    ativo: boolean("ativo").notNull().default(true),
+    criadoEm,
+    atualizadoEm,
+  },
+  (t) => ({
+    uqFonteCodigo: unique("uq_as_depara_cliente_vaga_fonte_codigo").on(t.fonte, t.codigoExterno),
+    /**
+     * A PERGUNTA DO DIA A DIA É "O QUE FALTA CONFIRMAR", e ela varre por confirmação ausente.
+     *
+     * ÍNDICE PARCIAL (só `ativo`), no mesmo desenho dos parciais de `vagas`: a tradução desligada
+     * não é trabalho de ninguém, e incluí-la faria o índice carregar justamente as linhas que a fila
+     * de curadoria nunca mostra.
+     */
+    idxPendentes: index("idx_as_depara_cliente_vaga_pendentes")
+      .on(t.confirmadoEm)
+      .where(sql`${t.ativo}`),
+    ckFonte: check("ck_as_depara_cliente_vaga_fonte", sql`${t.fonte} in ('PLANILHA_A_S')`),
+    ckCasamento: check(
+      "ck_as_depara_cliente_vaga_casamento",
+      sql`${t.casamento} is null or ${t.casamento} in ('EXATO','PREFIXO','AMBIGUO','SEM_PALPITE')`,
+    ),
+    /**
+     * CONFIRMAR SEM CÓDIGO NÃO É CONFIRMAR NADA: a confirmação é sobre o VÍNCULO, e um carimbo sem
+     * vínculo faria a leitura entregar "confirmado" com código nulo, indistinguível de palpite
+     * nenhum, e a linha sairia da fila de curadoria como se tivesse sido resolvida.
+     *
+     * O AUTOR NÃO ENTRA NO "TUDO OU NADA" DA DATA, e isso é o mesmo cuidado de
+     * `vaga_meta_reducoes`: ele vira NULL sozinho quando o usuário é apagado (`set null`), e exigir
+     * os dois juntos faria o DELETE do usuário FALHAR por causa de uma confirmação de meses atrás.
+     */
+    ckConfirmacao: check(
+      "ck_as_depara_cliente_vaga_confirmacao",
+      sql`(${t.confirmadoEm} is null and ${t.confirmadoPorId} is null)
+          or (${t.confirmadoEm} is not null and ${t.codCliente} is not null)`,
     ),
   }),
 );
