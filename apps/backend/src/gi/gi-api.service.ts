@@ -24,10 +24,54 @@ import type { FuncionarioSelecao } from "../domain/portal-dados-gi";
  * flag `GI_DISPARO_ARMADO` DESLIGADA. Nenhum `POST FuncionarioSelecao/Add` é feito de verdade aqui.
  */
 
-/** Resultado fechado de uma tentativa de criação, sem PII e sem eco do corpo do GI. */
+/**
+ * Resultado fechado de uma tentativa de criação, sem PII e sem eco do corpo do GI.
+ *
+ * `ok: true` significa **CRIADO DE VERDADE**: HTTP 2xx **E** `sucess: true` no corpo `MsgReturn`. É
+ * esse desfecho que o chamador usa para carimbar idempotência, então ele não pode ser otimista: um
+ * `200 {sucess:false}` reportado como criado carimbaria um envio que não aconteceu (família da §A.33).
+ *
+ * Os motivos de recusa:
+ *  - `INERTE`/`SEM_TOKEN`: nem saiu daqui;
+ *  - `HTTP`: status fora do 2xx (no 400 o corpo é `MsgReturn400` e os CAMPOS reprovados vão ao log);
+ *  - `RECUSADO`: 2xx com `sucess: false`, ou seja, o GI recebeu e NÃO criou;
+ *  - `RESPOSTA_INESPERADA`: 2xx cujo corpo não traz `sucess` booleano, logo não confirma a criação
+ *    (fail-closed: sem confirmação não se carimba criação);
+ *  - `REDE`/`TIMEOUT`: não há desfecho conhecido.
+ */
 export type GiCriacaoResultado =
   | { ok: true; funcionarioSelecaoId: string | null }
-  | { ok: false; motivo: "INERTE" | "SEM_TOKEN" | "HTTP" | "REDE" | "TIMEOUT"; status?: number };
+  | {
+      ok: false;
+      motivo:
+        | "INERTE"
+        | "SEM_TOKEN"
+        | "HTTP"
+        | "RECUSADO"
+        | "RESPOSTA_INESPERADA"
+        | "REDE"
+        | "TIMEOUT";
+      status?: number;
+    };
+
+/**
+ * O corpo do `POST FuncionarioSelecao/Add` no sucesso, schema `MsgReturn` do contrato do GI. Os nomes
+ * estão grafados como o GI os escreve: **`sucess` com UM "c"** e **`mensage` sem o "s"**. Não são
+ * erros de digitação daqui, são as chaves do fornecedor, medidas contra a produção em 01/10/2026:
+ * `{"sucess": true, "idRetorno": "18", "mensage": "Cadastro Efetuado Com Sucesso!", "campoErro": null}`.
+ */
+interface GiMsgReturn {
+  sucess?: unknown;
+  idRetorno?: unknown;
+  mensage?: unknown;
+  campoErro?: unknown;
+  obs?: unknown;
+}
+
+/** O corpo do 400, schema `MsgReturn400`: `errors` é mapa de CAMPO para lista de mensagens. */
+interface GiMsgReturn400 {
+  errors?: unknown;
+}
 
 @Injectable()
 export class GiApiService {
@@ -151,8 +195,12 @@ export class GiApiService {
    * ⚠️ NÃO É CHAMADO NESTA ENTREGA. O `EnviarParaGiService` só o invoca com a flag `GI_DISPARO_ARMADO`
    * ligada, que nasce e permanece DESLIGADA. Existe pronto para o disparo manual futuro.
    *
+   * O DESFECHO SE LÊ NO CORPO, não só no status (contrato `MsgReturn`, medido contra a produção em
+   * 01/10/2026): 2xx com `sucess: false` é RECUSADO, e o id do registro vem em `idRetorno`.
+   *
    * §A.6: o payload é PII e trafega só em memória; o retorno some daqui devolvendo apenas o id (se o
-   * GI o der) e o desfecho. Erro loga só status + verbo, nunca o corpo.
+   * GI o der) e o desfecho. O log leva status, verbo e, no 400, só os NOMES dos campos reprovados,
+   * nunca o corpo, nunca a mensagem do GI (que ecoa valor), nunca credencial, token ou URL.
    */
   async criarFuncionarioSelecao(payload: FuncionarioSelecao): Promise<GiCriacaoResultado> {
     if (this.inerte()) return { ok: false, motivo: "INERTE" };
@@ -169,11 +217,57 @@ export class GiApiService {
         signal: controller.signal,
       });
       if (!res.ok) {
-        this.logger.error(`GI respondeu HTTP ${res.status} ao criar FuncionarioSelecao`);
+        // No 400 o corpo é `MsgReturn400` e as CHAVES de `errors` são os campos reprovados pela
+        // validação do GI. §A.6: só as CHAVES entram no log; o valor do campo é PII e nunca sai.
+        const campos =
+          res.status === 400
+            ? camposReprovados((await res.json().catch(() => ({}))) as GiMsgReturn400)
+            : [];
+        if (campos.length > 0) {
+          this.logger.error(
+            `GI reprovou a validacao (HTTP 400) ao criar FuncionarioSelecao. Campos reprovados: ${campos.join(", ")}`,
+          );
+        } else {
+          this.logger.error(
+            res.status === 400
+              ? "GI reprovou a validacao (HTTP 400) ao criar FuncionarioSelecao, sem campo identificado no corpo"
+              : `GI respondeu HTTP ${res.status} ao criar FuncionarioSelecao`,
+          );
+        }
         return { ok: false, motivo: "HTTP", status: res.status };
       }
-      const json = (await res.json().catch(() => ({}))) as { value?: unknown; id?: unknown };
+
+      // 2xx NÃO basta: o `Add` do GI responde `MsgReturn`, e um `sucess: false` é um envio RECEBIDO e
+      // NÃO CRIADO. Tratar isso como sucesso faria o chamador carimbar idempotência de algo que não
+      // existe no GI (família da §A.33: o irreversível silencioso).
+      const json = (await res.json().catch(() => ({}))) as GiMsgReturn;
+      if (json.sucess !== true) {
+        if (typeof json.sucess === "boolean") {
+          // §A.6: `mensage`/`campoErro` podem ecoar valor de campo, então só o campo (quando ele
+          // tem cara de nome de propriedade) entra no log; a mensagem do GI, nunca.
+          const campo = nomeDeCampo(json.campoErro);
+          this.logger.error(
+            campo
+              ? `GI recebeu e NAO criou o FuncionarioSelecao (sucess=false). Campo apontado: ${campo}`
+              : "GI recebeu e NAO criou o FuncionarioSelecao (sucess=false)",
+          );
+          return { ok: false, motivo: "RECUSADO", status: res.status };
+        }
+        this.logger.error(
+          `GI respondeu HTTP ${res.status} sem o campo 'sucess' do contrato MsgReturn: criacao NAO confirmada`,
+        );
+        return { ok: false, motivo: "RESPOSTA_INESPERADA", status: res.status };
+      }
+
       const id = extrairId(json);
+      if (id == null) {
+        // Criou e não devolveu a chave: `gi_funcionario_selecao_id` nasce nulo e não há como
+        // localizar o registro no GI (nem para conferir, nem para pedir a remoção). É ERRO porque é
+        // um estado que o diretor precisa ver, não um detalhe.
+        this.logger.error(
+          "GI criou o FuncionarioSelecao mas NAO devolveu 'idRetorno': sem chave de localizacao do registro",
+        );
+      }
       return { ok: true, funcionarioSelecaoId: id };
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
@@ -221,10 +315,40 @@ export class GiApiService {
   }
 }
 
-/** O GI pode devolver o id em `value` ou `id`. Normaliza para string; ausente vira null. */
-function extrairId(json: { value?: unknown; id?: unknown }): string | null {
-  const bruto = json.value ?? json.id;
-  if (typeof bruto === "string" && bruto.length > 0) return bruto;
-  if (typeof bruto === "number") return String(bruto);
+/**
+ * O id do registro criado vem em **`idRetorno`** (`MsgReturn`), e não em `value`/`id`: essas duas
+ * chaves NÃO EXISTEM no contrato do `Add` (eram leitura errada, copiada das etapas de login, e por
+ * isso `gi_funcionario_selecao_id` nascia sempre nulo). Normaliza para string; ausente vira null.
+ */
+function extrairId(json: GiMsgReturn): string | null {
+  const bruto = json.idRetorno;
+  if (typeof bruto === "string" && bruto.trim().length > 0) return bruto.trim();
+  if (typeof bruto === "number" && Number.isFinite(bruto)) return String(bruto);
   return null;
+}
+
+/**
+ * As CHAVES de `errors` do `MsgReturn400`, ou seja, os campos que a validação do GI reprovou. §A.6:
+ * devolve só os NOMES, nunca as mensagens (que ecoam o valor enviado, logo PII). Nome é filtrado por
+ * formato de identificador, para nenhum conteúdo de dado escapar por uma chave inesperada.
+ */
+function camposReprovados(json: GiMsgReturn400): string[] {
+  const errors = json?.errors;
+  if (errors == null || typeof errors !== "object" || Array.isArray(errors)) return [];
+  const nomes: string[] = [];
+  for (const chave of Object.keys(errors as Record<string, unknown>)) {
+    const nome = nomeDeCampo(chave);
+    if (nome) nomes.push(nome);
+  }
+  return nomes.slice(0, 60);
+}
+
+/**
+ * Aceita um texto só quando ele tem FORMATO DE NOME DE CAMPO (identificador curto, sem espaço nem
+ * acento). §A.6: é o filtro que impede um valor de pessoa de entrar no log por uma chave que o GI
+ * tenha preenchido com conteúdo em vez de nome de propriedade.
+ */
+function nomeDeCampo(bruto: unknown): string | null {
+  const t = typeof bruto === "string" ? bruto.trim() : "";
+  return /^[A-Za-z_$][A-Za-z0-9_$.[\]]{0,39}$/.test(t) ? t : null;
 }

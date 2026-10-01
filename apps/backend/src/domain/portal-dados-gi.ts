@@ -261,12 +261,34 @@ function mapearSexo(v: unknown): string | null {
 }
 
 /**
- * Corta um texto no limite do campo do GI. Devolve `null` intacto (o schema aceita null aqui), e o
- * corte é por caractere, sem reticências: o GI valida TAMANHO, e qualquer marca de corte ocuparia
- * espaço do próprio dado.
+ * TEXTO LIVRE: corta no `maxLength` do campo do GI. Devolve `null` intacto (o schema aceita null
+ * aqui), e o corte é por caractere, sem reticências: o GI valida TAMANHO, e qualquer marca de corte
+ * ocuparia espaço do próprio dado.
+ *
+ * POR QUE CORTAR AQUI, e por que ANULAR no helper de baixo: o GI valida tamanho e **recusa o ENVIO
+ * INTEIRO com HTTP 400** (medido na produção em 01/10/2026: uma sonda reprovou 18 campos de uma vez).
+ * Em texto livre (nome, endereço, filiação), o final cortado ainda é o MESMO dado, só mais curto:
+ * perder o final é melhor que perder a admissão (precedente do `cplEndereco`, decisão do diretor).
  */
-function cortar(v: string | null, max: number): string | null {
+function cortarTexto(v: string | null, max: number): string | null {
   return v != null && v.length > max ? v.slice(0, max) : v;
+}
+
+/**
+ * CÓDIGO CURTO (`maxLength` de 1 a 3): atravessa SÓ quando já cabe; não cabendo, vira **NULO**, nunca
+ * cortado.
+ *
+ * POR QUE AQUI A REGRA É OUTRA, e não o corte do helper de cima: estes campos são de TABELA FECHADA
+ * do GI. Cortar não encurta o dado, INVENTA outro: "Brasileira" cortada em 3 vira "Bra", que não é a
+ * nacionalidade `010`; "Casado" cortado em 1 vira "C", que o GI leria como outro código. Um código
+ * errado entra silenciosamente na folha, e campo vazio é visivelmente pendente: anular é o desfecho
+ * seguro. O precedente é o `mapearSexo` deste mesmo arquivo, que devolve nulo quando não reconhece.
+ *
+ * ⚠️ Isto TRAVA o dano, não entrega a funcionalidade: sem de/para de catálogo (não autorizado nesta
+ * rodada) os campos coletados como texto livre continuam chegando NULOS ao GI.
+ */
+function codigoCurto(v: string | null, max: number): string | null {
+  return v != null && v.length <= max ? v : null;
 }
 
 /**
@@ -296,6 +318,11 @@ function separarTelefone(telefone: unknown): { ddd: string | null; numero: strin
  * O de/para (`depara`) traduz cidade e banco em CÓDIGO do GI; ausente, cai no `DE_PARA_GI_VAZIO` e os
  * códigos ficam NULOS (fail-closed: nunca se inventa código). Cidade e banco por NOME seguem no
  * payload em paralelo ao código.
+ *
+ * TAMANHO (01/10/2026): todo campo com `maxLength` no contrato sai limitado, porque o GI valida
+ * tamanho e **derruba o envio inteiro com 400**. Texto livre é CORTADO (`cortarTexto`); campo de
+ * código curto vira NULO quando não cabe (`codigoCurto`). As duas regras são diferentes de propósito,
+ * e o porquê está em cada helper.
  */
 export function montarFuncionarioSelecao(
   pessoa: PessoaParaGi,
@@ -305,48 +332,48 @@ export function montarFuncionarioSelecao(
   const { ddd, numero } = separarTelefone(p.telefone);
   const cpf = limpo(p.cpf);
   return {
-    nome: limpo(p.nome),
+    nome: cortarTexto(limpo(p.nome), 60),
     cpf: cpf ? cpf.replace(/\D/g, "") : null,
     dataNascimento: limpo(p.nascimento),
     sexo: mapearSexo(p.sexo),
-    email: limpo(p.email),
+    email: cortarTexto(limpo(p.email), 50),
     smsdddCel: ddd,
     smsNroCel: numero,
-    nacionalidade: limpo(p.nacionalidade),
-    naturalidade: limpo(p.naturalidade),
-    filiacaoNomeMae: limpo(p.nomeMae),
-    filiacaoNomePai: limpo(p.nomePai),
-    estadoCivil: limpo(p.estadoCivil),
-    raca: limpo(p.raca),
-    grauInstrucao: limpo(p.grauInstrucao),
-    rg: limpo(p.rg),
-    orgaoRG: limpo(p.rgOrgao),
-    ufrg: limpo(p.rgUf),
+    nacionalidade: codigoCurto(limpo(p.nacionalidade), 3),
+    naturalidade: codigoCurto(limpo(p.naturalidade), 2),
+    filiacaoNomeMae: cortarTexto(limpo(p.nomeMae), 70),
+    filiacaoNomePai: cortarTexto(limpo(p.nomePai), 70),
+    estadoCivil: codigoCurto(limpo(p.estadoCivil), 1),
+    raca: codigoCurto(limpo(p.raca), 1),
+    grauInstrucao: codigoCurto(limpo(p.grauInstrucao), 1),
+    rg: cortarTexto(limpo(p.rg), 20),
+    orgaoRG: cortarTexto(limpo(p.rgOrgao), 15),
+    ufrg: codigoCurto(limpo(p.rgUf), 2),
     dtExpedicaoRG: limpo(p.rgDataEmissao),
-    carteiraTrabalho: limpo(p.ctpsNumero),
-    serie: limpo(p.ctpsSerie),
-    ufExpedicao: limpo(p.ctpsUf),
+    carteiraTrabalho: cortarTexto(limpo(p.ctpsNumero), 10),
+    serie: cortarTexto(limpo(p.ctpsSerie), 7),
+    ufExpedicao: codigoCurto(limpo(p.ctpsUf), 2),
     dtExpedicaoCTPS: limpo(p.ctpsData),
     pis: limpo(p.pis),
-    tituloEleitor: limpo(p.tituloNumero),
+    tituloEleitor: cortarTexto(limpo(p.tituloNumero), 40),
     titEleZona: limpo(p.tituloZona),
     titEleSecao: limpo(p.tituloSecao),
-    reservista: limpo(p.reservista),
-    habilitacao: limpo(p.cnh),
+    reservista: cortarTexto(limpo(p.reservista), 40),
+    habilitacao: cortarTexto(limpo(p.cnh), 40),
     cnhDataEmissao: limpo(p.cnhDataEmissao),
     dataVectoHabilitacao: limpo(p.cnhDataValidade),
-    cepResid: limpo(p.cep),
-    enderecoResid: limpo(p.logradouro),
+    cepResid: cortarTexto(limpo(p.cep), 9),
+    enderecoResid: cortarTexto(limpo(p.logradouro), 70),
     nroEndereco: numeroDoEndereco(p.numero),
-    cplEndereco: cortar(limpo(p.complemento), 30),
-    bairroResid: limpo(p.bairro),
-    cidadeResid: limpo(p.cidade),
-    ufResid: limpo(p.uf),
+    cplEndereco: cortarTexto(limpo(p.complemento), 30),
+    bairroResid: cortarTexto(limpo(p.bairro), 60),
+    cidadeResid: cortarTexto(limpo(p.cidade), 60),
+    ufResid: codigoCurto(limpo(p.uf), 2),
     codigoCidadeResid: depara.codigoCidade(p.cidade, p.uf),
     codigoBcoFolha: depara.codigoBanco(p.banco),
     codigoBcoPagar: depara.codigoBanco(p.banco),
-    agencia: limpo(p.agencia),
-    contaCorrente: limpo(p.conta),
+    agencia: cortarTexto(limpo(p.agencia), 10),
+    contaCorrente: cortarTexto(limpo(p.conta), 20),
   };
 }
 

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { GiApiService } from "./gi-api.service";
 import type { FuncionarioSelecao } from "../domain/portal-dados-gi";
@@ -19,6 +20,15 @@ const CRED = {
 function svc(env: Record<string, string>): GiApiService {
   const config = { get: (k: string) => env[k] } as unknown as ConfigService;
   return new GiApiService(config);
+}
+
+/** Mock de `fetch` que resolve as duas etapas de auth e devolve `res` na chamada de criação. */
+function autenticado(res: Response) {
+  return vi.fn(async (url: string) => {
+    if (url.endsWith("/Conexao/VerificaConexao")) return jsonRes({ value: "T1" });
+    if (url.endsWith("/Login/Login")) return jsonRes({ value: "T2" });
+    return res;
+  });
 }
 
 function jsonRes(body: unknown, status = 200): Response {
@@ -133,18 +143,91 @@ describe("GiApiService: auth de 2 etapas", () => {
 });
 
 describe("GiApiService: criacao (construida, so exercitada aqui, nao no fluxo da entrega)", () => {
-  it("POST no path de criacao com Bearer token2 e devolve o id", async () => {
+  /**
+   * O CORPO DO `Add` É `MsgReturn`, não `{value}`. A expectativa antiga deste teste (`{value:"FS-99"}`)
+   * estava ERRADA à luz do contrato: `value`/`id` não existem na resposta da criação (são das etapas
+   * de login), e por isso o id nunca era capturado. Medido contra a produção em 01/10/2026:
+   * `{"sucess":true,"idRetorno":"18","mensage":"Cadastro Efetuado Com Sucesso!","campoErro":null}`.
+   */
+  it("POST no path de criacao com Bearer token2 e devolve o idRetorno", async () => {
     const fetchSpy = vi.fn(async (url: string, init: RequestInit) => {
       if (url.endsWith("/Conexao/VerificaConexao")) return jsonRes({ value: "T1" });
       if (url.endsWith("/Login/Login")) return jsonRes({ value: "T2" });
       // criacao
       expect((init.headers as Record<string, string>).Authorization).toBe("Bearer T2");
       expect(init.method).toBe("POST");
-      return jsonRes({ value: "FS-99" }, 201);
+      return jsonRes(
+        { sucess: true, idRetorno: "18", mensage: "Cadastro Efetuado Com Sucesso!", campoErro: null },
+        200,
+      );
     });
     vi.stubGlobal("fetch", fetchSpy);
     const r = await svc(CRED).criarFuncionarioSelecao({ cpf: "39053344705" } as FuncionarioSelecao);
-    expect(r).toEqual({ ok: true, funcionarioSelecaoId: "FS-99" });
+    expect(r).toEqual({ ok: true, funcionarioSelecaoId: "18" });
+  });
+
+  it("idRetorno numerico tambem e capturado (normalizado para string)", async () => {
+    vi.stubGlobal("fetch", autenticado(jsonRes({ sucess: true, idRetorno: 18 }, 200)));
+    const r = await svc(CRED).criarFuncionarioSelecao({} as FuncionarioSelecao);
+    expect(r).toEqual({ ok: true, funcionarioSelecaoId: "18" });
+  });
+
+  /**
+   * A GUARDA QUE IMPORTA (familia da §A.33): 200 com `sucess:false` é RECEBIDO E NÃO CRIADO. Se virar
+   * `ok:true`, o chamador carimba idempotência de um envio que não aconteceu, e ninguém mais tenta.
+   */
+  it("200 com sucess:false e NAO CRIADO (RECUSADO), nunca ok:true", async () => {
+    vi.stubGlobal(
+      "fetch",
+      autenticado(
+        jsonRes({ sucess: false, idRetorno: null, mensage: "CPF ja cadastrado", campoErro: "cpf" }, 200),
+      ),
+    );
+    const r = await svc(CRED).criarFuncionarioSelecao({} as FuncionarioSelecao);
+    expect(r).toEqual({ ok: false, motivo: "RECUSADO", status: 200 });
+  });
+
+  it("200 sem o campo sucess: criacao NAO confirmada (fail-closed)", async () => {
+    vi.stubGlobal("fetch", autenticado(jsonRes({ qualquerCoisa: true }, 200)));
+    const r = await svc(CRED).criarFuncionarioSelecao({} as FuncionarioSelecao);
+    expect(r).toEqual({ ok: false, motivo: "RESPOSTA_INESPERADA", status: 200 });
+  });
+
+  it("200 sucess:true SEM idRetorno: sucesso, id nulo e ERRO no log (perdeu a chave)", async () => {
+    const erro = vi.spyOn(Logger.prototype, "error").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", autenticado(jsonRes({ sucess: true, idRetorno: null }, 200)));
+    const r = await svc(CRED).criarFuncionarioSelecao({} as FuncionarioSelecao);
+    expect(r).toEqual({ ok: true, funcionarioSelecaoId: null });
+    expect(erro.mock.calls.flat().join(" ")).toContain("idRetorno");
+  });
+
+  it("400: loga os CAMPOS reprovados (chaves de errors), nunca as mensagens (PII)", async () => {
+    const erro = vi.spyOn(Logger.prototype, "error").mockImplementation(() => undefined);
+    vi.stubGlobal(
+      "fetch",
+      autenticado(
+        jsonRes(
+          {
+            type: "https://tools.ietf.org/html/rfc9110#section-15.5.1",
+            title: "One or more validation errors occurred.",
+            status: 400,
+            traceId: "00-abc-def-00",
+            errors: {
+              Naturalidade: ["Maximo 2 caracteres"],
+              Nome: ["Maximo 60 caracteres"],
+            },
+          },
+          400,
+        ),
+      ),
+    );
+    const r = await svc(CRED).criarFuncionarioSelecao({} as FuncionarioSelecao);
+    expect(r).toEqual({ ok: false, motivo: "HTTP", status: 400 });
+    const logado = erro.mock.calls.flat().join(" ");
+    expect(logado).toContain("Naturalidade");
+    expect(logado).toContain("Nome");
+    // §A.6: a mensagem do GI pode ecoar o valor enviado; só o NOME do campo entra no log.
+    expect(logado).not.toContain("Maximo 2 caracteres");
   });
 
   it("criacao HTTP 500: ok:false com status", async () => {
