@@ -4,7 +4,11 @@ import { EnviarParaGiService } from "./enviar-para-gi.service";
 import type { GiApiService, GiCriacaoResultado } from "./gi-api.service";
 import type { GiLeitorService } from "./gi-leitor.service";
 import type { GiDeParaService } from "./gi-depara.service";
-import { DE_PARA_GI_VAZIO, type PessoaParaGi } from "../domain/portal-dados-gi";
+import {
+  DE_PARA_GI_VAZIO,
+  type ContratacaoGi,
+  type PessoaParaGi,
+} from "../domain/portal-dados-gi";
 
 /**
  * PORTAL→GI, PEÇA 3: a garantia do "1 ENVIO SÓ" e o fail-closed do disparo.
@@ -24,10 +28,28 @@ import { DE_PARA_GI_VAZIO, type PessoaParaGi } from "../domain/portal-dados-gi";
 const CPF_SINTETICO = "39053344705";
 const PESSOA: PessoaParaGi = { nome: "Fulano De Tal", cpf: CPF_SINTETICO };
 
+/**
+ * A contratação COMPLETA, que passa as duas guardas de `recusaDaContratacaoGi`. É o default dos fixtures
+ * para que os cenários de ORQUESTRAÇÃO (trava, idempotência, fail-closed de pessoa) continuem exercitando
+ * exatamente o que exercitavam antes dos campos de contratação existirem.
+ *
+ * Empresa 1 / filial 4 é o par REAL mais comum da base (165 clientes), e existe no fornecedor. O salário
+ * é sintético e redondo de propósito: nenhum valor de remuneração real entra em teste.
+ */
+const CONTRATACAO_OK: ContratacaoGi = {
+  salario: 2000,
+  dataAdmissao: "2026-11-03",
+  vinculo: "4",
+  tipoContrato: null,
+  codigoEmpresa: 1,
+  codigoFilial: 4,
+};
+
 function fakes(over: {
   configurado?: boolean;
   jaEnviado?: boolean;
   pessoa?: PessoaParaGi | null;
+  contratacao?: ContratacaoGi | null;
   criar?: GiCriacaoResultado;
 } = {}) {
   const criar = vi.fn(
@@ -42,9 +64,21 @@ function fakes(over: {
   const leitor = {
     jaEnviado: vi.fn(async () => over.jaEnviado ?? false),
     lerPessoa: vi.fn(async () => (over.pessoa === undefined ? PESSOA : over.pessoa)),
+    lerContratacao: vi.fn(async () =>
+      over.contratacao === undefined ? CONTRATACAO_OK : over.contratacao,
+    ),
     marcarEnviado,
   } as unknown as GiLeitorService;
-  const depara = DE_PARA_GI_VAZIO as unknown as GiDeParaService;
+  /**
+   * O de/para do fixture CONHECE os pares sintéticos usados aqui (empresa 1 / filial 4 é o par real mais
+   * comum da base). Sem isso, a validação do PAR recusaria tudo, que é o comportamento fail-closed
+   * correto em produção mas esconderia os cenários de orquestração que este arquivo existe para cobrir.
+   */
+  const depara = {
+    ...DE_PARA_GI_VAZIO,
+    parEmpresaFilialConhecido: (empresa: number, filial: number) =>
+      new Set(["1|4", "1|0"]).has(`${empresa}|${filial}`),
+  } as unknown as GiDeParaService;
   return { criar, marcarEnviado, giApi, leitor, depara };
 }
 
@@ -135,5 +169,146 @@ describe("EnviarParaGiService: a TRAVA do disparo (GI_DISPARO_ARMADO)", () => {
     const r = await svc.enviarManual("00000000-0000-0000-0000-000000000000", "autor-1");
     expect(r.motivo).toBe("GI_FALHA_ENVIO");
     expect(f.marcarEnviado).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * AS DUAS RECUSAS DURAS DA CONTRATAÇÃO (01/10/2026). Elas ficam ENCOSTADAS no `POST`, depois da trava
+ * `GI_DISPARO_ARMADO`, então todo cenário aqui roda com a flag LIGADA: é só com ela ligada que existe
+ * alguma chance de o payload chegar ao fornecedor, e é exatamente aí que a guarda tem de estar.
+ *
+ * §A.6: nenhum teste aqui imprime salário. O que se assere é o CÓDIGO do motivo.
+ */
+const ADMISSAO = "00000000-0000-0000-0000-000000000000";
+
+describe("EnviarParaGiService: empresa+filial nao resolvidas RECUSAM o envio", () => {
+  const SEM_CLIENTE: ContratacaoGi = { ...CONTRATACAO_OK, codigoEmpresa: null, codigoFilial: null };
+
+  it("nada resolvido: GI_SEM_EMPRESA_FILIAL, sem tocar o cliente do GI", async () => {
+    const f = fakes({ configurado: true, contratacao: SEM_CLIENTE });
+    const svc = build({ GI_DISPARO_ARMADO: "true" }, f);
+    const r = await svc.enviarManual(ADMISSAO, "autor-1");
+    expect(r).toEqual({ enviado: false, motivo: "GI_SEM_EMPRESA_FILIAL" });
+    expect(f.criar).not.toHaveBeenCalled();
+  });
+
+  it("SO a empresa resolvida (o caso mais comum) tambem recusa", async () => {
+    // Meia resolução é o cenário que um `if (!empresa)` deixaria passar: a filial cairia em 0 e o
+    // registro nasceria órfão de filial no fornecedor.
+    const f = fakes({
+      configurado: true,
+      contratacao: { ...CONTRATACAO_OK, codigoFilial: null },
+    });
+    const svc = build({ GI_DISPARO_ARMADO: "true" }, f);
+    const r = await svc.enviarManual(ADMISSAO, "autor-1");
+    expect(r.motivo).toBe("GI_SEM_EMPRESA_FILIAL");
+    expect(f.criar).not.toHaveBeenCalled();
+  });
+
+  it("empresa `0` recusa: empresa 0 nao existe em nenhum par do GI", async () => {
+    // Nao e "0 e invalido": e que empresa 0 nao existe la. A FILIAL 0, ao contrario, e legitima.
+    const f = fakes({
+      configurado: true,
+      contratacao: { ...CONTRATACAO_OK, codigoEmpresa: 0, codigoFilial: 0 },
+    });
+    const svc = build({ GI_DISPARO_ARMADO: "true" }, f);
+    const r = await svc.enviarManual(ADMISSAO, "autor-1");
+    expect(r.motivo).toBe("GI_SEM_EMPRESA_FILIAL");
+    expect(f.criar).not.toHaveBeenCalled();
+  });
+
+  it("filial `0` RESOLVIDA e par conhecido: ENVIA (estabelecimento real, nao ausencia)", async () => {
+    const f = fakes({ configurado: true, contratacao: { ...CONTRATACAO_OK, codigoFilial: 0 } });
+    const svc = build({ GI_DISPARO_ARMADO: "true" }, f);
+    const r = await svc.enviarManual(ADMISSAO, "autor-1");
+    expect(r).toEqual({ enviado: true, motivo: "GI_ENVIADO" });
+  });
+
+  it("par FORA da lista autoritativa: GI_PAR_EMPRESA_FILIAL_DESCONHECIDO", async () => {
+    // `1/37` e valido campo a campo e inexistente no fornecedor: campo a campo nao pega.
+    const f = fakes({ configurado: true, contratacao: { ...CONTRATACAO_OK, codigoFilial: 37 } });
+    const svc = build({ GI_DISPARO_ARMADO: "true" }, f);
+    const r = await svc.enviarManual(ADMISSAO, "autor-1");
+    expect(r.motivo).toBe("GI_PAR_EMPRESA_FILIAL_DESCONHECIDO");
+    expect(f.criar).not.toHaveBeenCalled();
+  });
+
+  it("recusado, a idempotencia NAO e carimbada: a admissao segue enviavel quando a filial chegar", async () => {
+    const f = fakes({ configurado: true, contratacao: SEM_CLIENTE });
+    const svc = build({ GI_DISPARO_ARMADO: "true" }, f);
+    await svc.enviarManual(ADMISSAO, "autor-1");
+    expect(f.marcarEnviado).not.toHaveBeenCalled();
+  });
+
+  it("sem contratacao nenhuma (leitor devolve null): recusa, nao envia vazio", async () => {
+    const f = fakes({ configurado: true, contratacao: null });
+    const svc = build({ GI_DISPARO_ARMADO: "true" }, f);
+    const r = await svc.enviarManual(ADMISSAO, "autor-1");
+    expect(r.motivo).toBe("GI_SEM_EMPRESA_FILIAL");
+    expect(f.criar).not.toHaveBeenCalled();
+  });
+});
+
+describe("EnviarParaGiService: salario ausente, zero ou negativo RECUSA o envio", () => {
+  it("ausente: GI_SALARIO_INVALIDO", async () => {
+    const f = fakes({ configurado: true, contratacao: { ...CONTRATACAO_OK, salario: null } });
+    const svc = build({ GI_DISPARO_ARMADO: "true" }, f);
+    const r = await svc.enviarManual(ADMISSAO, "autor-1");
+    expect(r).toEqual({ enviado: false, motivo: "GI_SALARIO_INVALIDO" });
+    expect(f.criar).not.toHaveBeenCalled();
+  });
+
+  it("ZERO recusa: o campo tem default 0 no GI, e zero em folha e salario ERRADO", async () => {
+    const f = fakes({ configurado: true, contratacao: { ...CONTRATACAO_OK, salario: 0 } });
+    const svc = build({ GI_DISPARO_ARMADO: "true" }, f);
+    const r = await svc.enviarManual(ADMISSAO, "autor-1");
+    expect(r.motivo).toBe("GI_SALARIO_INVALIDO");
+    expect(f.criar).not.toHaveBeenCalled();
+  });
+
+  it("NEGATIVO recusa: o pattern do GI aceita o sinal, entao a recusa e nossa", async () => {
+    const f = fakes({ configurado: true, contratacao: { ...CONTRATACAO_OK, salario: -10 } });
+    const svc = build({ GI_DISPARO_ARMADO: "true" }, f);
+    const r = await svc.enviarManual(ADMISSAO, "autor-1");
+    expect(r.motivo).toBe("GI_SALARIO_INVALIDO");
+    expect(f.criar).not.toHaveBeenCalled();
+  });
+
+  it("o motivo e codigo FECHADO e nao carrega o valor do salario (§A.6)", async () => {
+    const f = fakes({ configurado: true, contratacao: { ...CONTRATACAO_OK, salario: 1234.56 } });
+    // Salário válido: envia. O que se prova aqui é que NENHUM motivo carrega numero de salario.
+    const svc = build({ GI_DISPARO_ARMADO: "true" }, f);
+    const r = await svc.enviarManual(ADMISSAO, "autor-1");
+    expect(r.motivo).toMatch(/^GI_[A-Z0-9_]+$/);
+    expect(r.motivo).not.toContain("1234");
+  });
+
+  it("empresa/filial faltando VENCE o salario invalido: a recusa mais grave e reportada primeiro", async () => {
+    const f = fakes({
+      configurado: true,
+      contratacao: { ...CONTRATACAO_OK, salario: 0, codigoEmpresa: null, codigoFilial: null },
+    });
+    const svc = build({ GI_DISPARO_ARMADO: "true" }, f);
+    const r = await svc.enviarManual(ADMISSAO, "autor-1");
+    expect(r.motivo).toBe("GI_SEM_EMPRESA_FILIAL");
+  });
+});
+
+describe("EnviarParaGiService: a guarda da contratacao NAO desarma a trava do disparo", () => {
+  it("DESARMADO com contratacao COMPLETA: continua parando em GI_MONTADO_NAO_DISPARADO", async () => {
+    // A ordem importa: a trava é a garantia mais forte da frente, e ela responde primeiro.
+    const f = fakes({ configurado: true });
+    const svc = build({}, f);
+    const r = await svc.enviarManual(ADMISSAO, "autor-1");
+    expect(r.motivo).toBe("GI_MONTADO_NAO_DISPARADO");
+    expect(f.criar).not.toHaveBeenCalled();
+  });
+
+  it("DESARMADO com contratacao VAZIA: a trava responde primeiro, nao a guarda", async () => {
+    const f = fakes({ configurado: true, contratacao: null });
+    const svc = build({}, f);
+    const r = await svc.enviarManual(ADMISSAO, "autor-1");
+    expect(r.motivo).toBe("GI_MONTADO_NAO_DISPARADO");
+    expect(f.criar).not.toHaveBeenCalled();
   });
 });

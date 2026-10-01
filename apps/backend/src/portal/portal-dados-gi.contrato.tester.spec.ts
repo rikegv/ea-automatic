@@ -167,6 +167,26 @@ describe("R4: o predicado do expurgo apaga so a linha VENCIDA (peca 1 / B3)", ()
 // REQUISITO 5: O GATILHO DO GI E INERTE, MONTA SO DADO DE PESSOA E FALHA FECHADO SEM CREDENCIAL
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 
+/**
+ * ⚠️ O INVARIANTE DESTA CASA FOI REESCRITO EM 01/10/2026, por autorizacao do diretor. LEIA ANTES DE
+ * MEXER, porque o titulo do `describe` abaixo ficou mais estreito do que a regra de hoje.
+ *
+ * ANTES: "so dado de PESSOA atravessa; salario e situacao trabalhista NUNCA".
+ * AGORA: "dado de PESSOA, MAIS seis campos de CONTRATACAO nomeados, e NADA MAIS".
+ *
+ * OS SEIS: `salario`, `dataAdmissao`, `vinculo`, `tipoContrato` (o PRAZO `D`/`I` do GI, DERIVADO do
+ * vinculo), `codigoEmpresa` e `codigoFilial`.
+ *
+ * O QUE MUDOU NESTE ARQUIVO: **nenhuma expectativa foi enfraquecida, e nenhum teste abaixo foi tocado.**
+ * Isso NAO e sorte: a contratacao entra por um SEGUNDO PARAMETRO NOMEADO de `montarFuncionarioSelecao`,
+ * nunca por dentro do objeto de pessoa, entao a garantia que os testes do R5 provam continua VERDADEIRA
+ * e continua necessaria: uma chave `salario` DENTRO do objeto de PESSOA NAO atravessa. O salario tem uma
+ * porta, e ela tem nome. Uma interface so, alargada, teria obrigado a enfraquecer o R5, e e por isso que
+ * sao DUAS allowlists.
+ *
+ * O QUE FOI ACRESCENTADO: o `describe` R5b, logo depois, que afirma o lado NOVO do invariante (o que
+ * passa a atravessar, e o que continua barrado mesmo agora).
+ */
 describe("R5: `montarFuncionarioSelecao` monta SO dado de pessoa, nunca arquivo/folha/salario/situacao", () => {
   const pessoa = {
     nome: NOME_SINTETICO,
@@ -196,6 +216,58 @@ describe("R5: `montarFuncionarioSelecao` monta SO dado de pessoa, nunca arquivo/
     expect(texto).not.toContain("PRIMEIRO_EMPREGO");
     expect(texto).not.toContain("s3://kit/cru.pdf");
     expect(texto).not.toContain("CC-1");
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// REQUISITO 5b: A ALLOWLIST 2 (CONTRATACAO) ATRAVESSA, E CONTINUA SENDO FECHADA
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+
+describe("R5b: os SEIS campos de contratacao atravessam pela porta NOMEADA, e so eles", () => {
+  const SALARIO_SINTETICO = 2000;
+  const CONTRATACAO = {
+    salario: SALARIO_SINTETICO,
+    dataAdmissao: "2026-11-03",
+    vinculo: "4",
+    tipoContrato: null,
+    codigoEmpresa: 1,
+    codigoFilial: 4,
+  } as const;
+
+  it("os seis atravessam quando vem pela porta nomeada (o que o diretor autorizou)", () => {
+    const f = montarFuncionarioSelecao({ cpf: CPF_SINTETICO }, undefined, { ...CONTRATACAO });
+    expect(f.salario).toBe(SALARIO_SINTETICO);
+    expect(f.dataAdmissao).toBe("2026-11-03");
+    expect(f.vinculo).toBe("4");
+    expect(f.codigoEmpresa).toBe(1);
+    expect(f.codigoFilial).toBe(4);
+    expect(f).toHaveProperty("tipoContrato");
+  });
+
+  it("a porta da contratacao TAMBEM e fechada: chave de folha a mais nela NAO atravessa", () => {
+    // O invariante nao e "agora folha passa", e sim "passam SEIS campos nomeados". Centro de custo,
+    // beneficio, escala, gestor BP, motivo e os dados do SUBSTITUIDO continuam fora do envio.
+    const contaminada = {
+      ...CONTRATACAO,
+      centroCusto: "CC-1",
+      beneficios: "VT+VR",
+      escala: "12x36",
+      gestorBp: "Gestor Sintetico",
+      motivo: "Substituicao",
+      substituidoCpf: "09988877766",
+      situacaoTrabalhista: "PRIMEIRO_EMPREGO",
+    };
+    const texto = JSON.stringify(montarFuncionarioSelecao({ cpf: CPF_SINTETICO }, undefined, contaminada as never));
+    for (const proibido of ["CC-1", "VT+VR", "12x36", "Gestor Sintetico", "Substituicao", "09988877766", "PRIMEIRO_EMPREGO"]) {
+      expect(texto, `"${proibido}" atravessou para o GI`).not.toContain(proibido);
+    }
+  });
+
+  it("sem a porta nomeada, os seis saem NULOS: o comportamento de antes desta rodada", () => {
+    const f = montarFuncionarioSelecao({ cpf: CPF_SINTETICO });
+    for (const campo of ["salario", "dataAdmissao", "vinculo", "tipoContrato", "codigoEmpresa", "codigoFilial"] as const) {
+      expect(f[campo], campo).toBeNull();
+    }
   });
 });
 

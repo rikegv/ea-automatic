@@ -3,7 +3,9 @@ import { ConfigService } from "@nestjs/config";
 import {
   executarGatilhoGi,
   montarFuncionarioSelecao,
+  recusaDaContratacaoGi,
   type FuncionarioSelecao,
+  type GiRecusaContratacao,
 } from "../domain/portal-dados-gi";
 import { GiApiService } from "./gi-api.service";
 import { GiDeParaService } from "./gi-depara.service";
@@ -16,6 +18,27 @@ export type GiEnvioMotivo =
   | "GI_SEM_DADOS_PESSOA"
   | "GI_JA_ENVIADO"
   | "GI_MONTADO_NAO_DISPARADO"
+  /**
+   * RECUSA DURA: o vínculo do cliente não RESOLVEU `codigoEmpresa` e `codigoFilial`, que no GI são `int16`
+   * obrigatórios sem default. Nada é enviado: a omissão faria o fornecedor gravar `0`, calado, e o
+   * registro órfão que isso cria já foi medido na produção dele. Destrava-se cadastrando
+   * `cliente_vinculos` (empresa + filial) do tipo de contrato da admissão.
+   *
+   * ⚠️ A régua é a PRESENÇA da resolução, não o valor: **filial `0` resolvida é LEGÍTIMA e passa** (existe
+   * para todas as 47 empresas do GI). Empresa `0` recusa, porque empresa 0 não existe lá.
+   */
+  | "GI_SEM_EMPRESA_FILIAL"
+  /**
+   * RECUSA DURA: empresa e filial resolveram, mas o PAR não está na lista autoritativa do GI
+   * (`GI_PARES_EMPRESA_FILIAL`, materializada de `Empresa/GetAll`, 127 pares). `1/37` é válido campo a
+   * campo e inexistente no fornecedor. **Sem a lista configurada, nenhum par é conhecido e tudo recusa.**
+   */
+  | "GI_PAR_EMPRESA_FILIAL_DESCONHECIDO"
+  /**
+   * RECUSA DURA: salário ausente, ZERO ou NEGATIVO. O campo tem `default 0` no GI, e salário zero em
+   * folha é salário ERRADO, não campo vazio. §A.6: o motivo é código fechado e **não carrega o valor**.
+   */
+  | "GI_SALARIO_INVALIDO"
   | "GI_ENVIADO"
   | "GI_FALHA_ENVIO";
 
@@ -23,6 +46,18 @@ export interface GiEnvioResultado {
   enviado: boolean;
   motivo: GiEnvioMotivo;
 }
+
+/**
+ * A frase de log de cada recusa de contratação. §A.6: são RÓTULOS FIXOS. Nenhuma delas interpola valor,
+ * e em especial nenhuma menciona o salário, porque salário em log é remuneração em log.
+ */
+const MOTIVO_RECUSA_CONTRATACAO: Record<GiRecusaContratacao, string> = {
+  GI_SEM_EMPRESA_FILIAL:
+    "GI: empresa/filial do vinculo do cliente nao resolvidas (cliente_vinculos): envio RECUSADO.",
+  GI_PAR_EMPRESA_FILIAL_DESCONHECIDO:
+    "GI: o par empresa/filial nao consta da lista autoritativa do GI (GI_PARES_EMPRESA_FILIAL): envio RECUSADO.",
+  GI_SALARIO_INVALIDO: "GI: salario ausente ou fora de faixa para a folha: envio RECUSADO.",
+};
 
 /**
  * PORTAL→GI, PEÇA 3: o ponto por onde o EA "manda a pessoa para a folha" (G.I), por `FuncionarioSelecao`
@@ -99,9 +134,15 @@ export class EnviarParaGiService {
    *   1. não configurado  → não toca a rede, não lê pessoa. `GI_NAO_CONFIGURADO`.
    *   2. já enviado        → idempotência: não recria. `GI_JA_ENVIADO`.
    *   3. sem dados de pessoa → fail-closed: não envia vazio. `GI_SEM_DADOS_PESSOA`.
-   *   4. monta o payload só-de-pessoa (com de/para de cidade/banco).
+   *   4. monta o payload: pessoa (allowlist 1) + contratação (allowlist 2), com o de/para de cidade.
    *   5. disparo DESARMADO → PARA aqui. `GI_MONTADO_NAO_DISPARADO` (estado desta entrega).
-   *   6. disparo ARMADO    → cria no GI e carimba a idempotência. `GI_ENVIADO` / `GI_FALHA_ENVIO`.
+   *   6. contratação incompleta → RECUSA sem tocar a rede: `GI_SEM_EMPRESA_FILIAL`,
+   *      `GI_PAR_EMPRESA_FILIAL_DESCONHECIDO` ou `GI_SALARIO_INVALIDO`.
+   *   7. disparo ARMADO    → cria no GI e carimba a idempotência. `GI_ENVIADO` / `GI_FALHA_ENVIO`.
+   *
+   * POR QUE AS GUARDAS DA CONTRATAÇÃO VÊM NO PASSO 6, e não antes do 5: a trava `GI_DISPARO_ARMADO` é a
+   * garantia mais forte da frente, e o desfecho dela não muda por causa de dado faltando. As guardas
+   * ficam ENCOSTADAS no `POST`, que é onde o dano aconteceria e onde elas não podem ser contornadas.
    */
   async enviarManual(admissaoId: string, _autorId: string): Promise<GiEnvioResultado> {
     if (!this.configurado()) {
@@ -120,9 +161,13 @@ export class EnviarParaGiService {
       return { enviado: false, motivo: "GI_SEM_DADOS_PESSOA" };
     }
 
-    // Monta o payload SÓ-de-pessoa (allowlist) com o de/para de cidade/banco. O objeto é PII e não
-    // é logado nem retornado; morre no escopo deste método.
-    const payload = montarFuncionarioSelecao(pessoa, this.depara);
+    // Os SEIS campos de contratação (salário, data de admissão, vínculo, prazo, empresa+filial), por
+    // porta própria e recorte explícito de colunas. Ausentes, saem nulos e as guardas do passo 6 recusam.
+    const contratacao = await this.leitor.lerContratacao(admissaoId);
+
+    // Monta o payload das DUAS allowlists FECHADAS (pessoa + os seis campos nomeados) com o de/para de
+    // cidade. O objeto carrega PII E SALÁRIO: não é logado, não é retornado, morre no escopo do método.
+    const payload = montarFuncionarioSelecao(pessoa, this.depara, contratacao ?? undefined);
 
     if (!this.disparoArmado()) {
       // ESTADO DESTA ENTREGA: monta e para. NENHUM POST FuncionarioSelecao/Add é feito.
@@ -131,6 +176,25 @@ export class EnviarParaGiService {
     }
 
     // ── DAQUI PARA BAIXO só roda com GI_DISPARO_ARMADO=true (não nesta entrega). ──
+
+    // AS GUARDAS DURAS, encostadas no POST. Empresa e filial são `int16` obrigatórios sem default: a
+    // omissão faz o fornecedor gravar `0` e criar registro órfão, calado. A validação do PAR entra junto,
+    // porque campo a campo não pega `1/37` (válido nos dois campos, inexistente no GI). E salário
+    // zero/negativo é salário ERRADO indo para a folha, não campo vazio.
+    // §A.6: o log diz o MOTIVO e nada mais. Nenhum valor, nenhum id de pessoa, nenhuma remuneração.
+    // O predicado do PAR tem TIPO PROPRIO (`ParEmpresaFilialConhecido`) e e injetado AQUI, no servico que
+    // o usa, nao em `DeParaGi` (que e o contrato do MONTADOR, e o montador nao valida par). Chamada
+    // DIRETA, sem `?.`: o metodo e obrigatorio em quem o provê, e o fail-closed vem da LISTA vazia
+    // (nenhum par conhecido = recusa), nunca de o metodo poder faltar, que faria a guarda ser opcional.
+    const recusa = recusaDaContratacaoGi(
+      payload,
+      (empresa, filial) => this.depara.parEmpresaFilialConhecido(empresa, filial),
+    );
+    if (recusa) {
+      this.log.warn(MOTIVO_RECUSA_CONTRATACAO[recusa]);
+      return { enviado: false, motivo: recusa };
+    }
+
     const r = await this.giApi.criarFuncionarioSelecao(payload);
     if (!r.ok) {
       this.log.error("GI: falha ao criar FuncionarioSelecao (ver status no log do cliente).");

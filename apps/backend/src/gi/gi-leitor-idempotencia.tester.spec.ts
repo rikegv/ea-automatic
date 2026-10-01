@@ -57,22 +57,56 @@ function bancoFalso(linhaInicial?: Partial<LinhaGi>) {
   }
   const trilha = { inseridas: 0, conflitos: 0, updates: 0, updatesSemLinha: 0 };
 
+  /**
+   * As linhas que cada consulta do leitor devolve, escolhidas pela PROJEÇÃO (as chaves do `select`).
+   *
+   * ATUALIZADO em 01/10/2026, quando os quatro campos de contratação entraram no envio: `lerContratacao`
+   * acrescentou DUAS consultas, e sem resposta para elas o envio passava a ser recusado com
+   * `GI_SEM_EMPRESA_FILIAL` ANTES de chegar ao ponto que esta régua mede (a marca de idempotência).
+   *
+   * ⚠️ NENHUMA ASSERÇÃO FOI AFROUXADA PARA ISSO. O dublê passou a responder o que o banco real
+   * responderia para uma admissão COMPLETA: é o cenário em que o envio PODE acontecer, que é
+   * justamente o único em que a duplicidade era possível. Admissão incompleta tem régua própria, em
+   * `gi-empresa-filial-failclosed.tester.spec.ts`, e lá a exigência é a oposta (não enviar).
+   *
+   * Os valores são sintéticos e correspondem a um par REAL de empresa/filial medido na produção (1/4).
+   */
+  function linhasDaConsulta(chaves: string[]): unknown[] {
+    if (chaves.includes("enviadoEm")) {
+      const l = tabela.get(ADM);
+      return l ? [{ enviadoEm: l.giEnviadoEm }] : [];
+    }
+    if (chaves.includes("cand")) {
+      // A pessoa mínima que faz o envio seguir (nome + CPF). O resto do payload não importa aqui.
+      return [{ cand: { nome: "Fulano De Tal", cpf: CPF_SINTETICO }, dados: {} }];
+    }
+    // `lerContratacao`, consulta 1: a admissão mais o salário da folha (`left join`).
+    if (chaves.includes("codCliente")) {
+      return [
+        {
+          dataAdmissao: "2026-11-03",
+          tipoContrato: "Temporário",
+          codCliente: "00123",
+          salario: "1500.50",
+        },
+      ];
+    }
+    // `lerContratacao`, consulta 2: os vínculos do cliente, de onde saem empresa e filial.
+    if (chaves.includes("empresaCodigo")) {
+      return [{ tipoServico: "TEMPORARIO", empresaCodigo: "1", filial: "4", ativo: true }];
+    }
+    return [];
+  }
+
   function cadeiaSelect(chaves: string[]) {
     const c: Record<string, unknown> = {};
     for (const metodo of ["from", "innerJoin", "leftJoin", "where", "orderBy"]) {
       c[metodo] = () => c;
     }
-    c.limit = async () => {
-      if (chaves.includes("enviadoEm")) {
-        const l = tabela.get(ADM);
-        return l ? [{ enviadoEm: l.giEnviadoEm }] : [];
-      }
-      if (chaves.includes("cand")) {
-        // A pessoa mínima que faz o envio seguir (nome + CPF). O resto do payload não importa aqui.
-        return [{ cand: { nome: "Fulano De Tal", cpf: CPF_SINTETICO }, dados: {} }];
-      }
-      return [];
-    };
+    c.limit = async () => linhasDaConsulta(chaves);
+    // A consulta dos vínculos NÃO tem `.limit()`: é aguardada direto no fim do `where`, então a cadeia
+    // precisa ser "thenable". Sem isto o `await` devolveria o próprio objeto da cadeia.
+    c.then = (resolver: (v: unknown) => unknown) => Promise.resolve(linhasDaConsulta(chaves)).then(resolver);
     return c;
   }
 
@@ -127,6 +161,26 @@ function bancoFalso(linhaInicial?: Partial<LinhaGi>) {
   };
 
   return { tabela, trilha, db };
+}
+
+/**
+ * O de/para com a VALIDAÇÃO DO PAR respondida, que é o que permite o envio acontecer nesta régua.
+ *
+ * ATUALIZADO em 01/10/2026 (segunda vez): o `recusaDaContratacaoGi` passou a exigir que o par
+ * (empresa, filial) conste da lista autoritativa do GI (`Empresa/GetAll`, 127 pares), e o default é
+ * **fail-closed**. Com o `DE_PARA_GI_VAZIO` o envio passava a ser recusado com
+ * `GI_PAR_EMPRESA_FILIAL_DESCONHECIDO` ANTES de chegar ao ponto que esta régua mede.
+ *
+ * ⚠️ NENHUMA ASSERÇÃO FOI AFROUXADA. O par `1/4` que o dublê conhece é um par REAL medido no
+ * fornecedor, o mesmo que o banco falso devolve em `cliente_vinculos`. Este arquivo mede IDEMPOTÊNCIA,
+ * e para isso o envio precisa poder acontecer: a régua do par tem arquivo próprio
+ * (`gi-empresa-filial-failclosed.tester.spec.ts`), e lá a exigência é a oposta (recusar `1/37`).
+ */
+function deParaComParReal(): GiDeParaService {
+  return {
+    ...DE_PARA_GI_VAZIO,
+    parEmpresaFilialConhecido: (empresa: number, filial: number) => empresa === 1 && filial === 4,
+  } as unknown as GiDeParaService;
 }
 
 function leitor(b: ReturnType<typeof bancoFalso>): GiLeitorService {
@@ -213,7 +267,7 @@ describe("O CENARIO QUE MOTIVOU O CONSERTO: duas chamadas de enviarManual, um re
       config,
       giApi,
       leitor(b),
-      DE_PARA_GI_VAZIO as unknown as GiDeParaService,
+      deParaComParReal(),
     );
     return { svc, criar };
   }

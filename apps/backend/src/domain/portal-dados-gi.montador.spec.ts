@@ -1,9 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
+  CONTRATACAO_GI_VAZIA,
+  mapearVinculoGi,
+  montarContratacaoGi,
   montarFuncionarioSelecao,
   montarPessoaParaGi,
+  prazoContratoGi,
+  recusaDaContratacaoGi,
+  resolverEmpresaFilialGi,
+  type ContratacaoGi,
   type DeParaGi,
   type PessoaParaGi,
+  type VinculoEmpresaFilial,
 } from "./portal-dados-gi";
 
 /**
@@ -241,5 +249,318 @@ describe("montarFuncionarioSelecao: guarda de tamanho do cplEndereco", () => {
     expect(montarFuncionarioSelecao({ complemento: "CONJ 101" }).cplEndereco).toBe("CONJ 101");
     expect(montarFuncionarioSelecao({ complemento: "x".repeat(30) }).cplEndereco).toHaveLength(30);
     expect(montarFuncionarioSelecao({}).cplEndereco).toBeNull();
+  });
+});
+
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// OS SEIS CAMPOS DE CONTRATAÇÃO (allowlist 2, autorizada pelo diretor em 01/10/2026)
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Empresa 1 / filial 4 é o par REAL mais comum da base (165 clientes) e existe no fornecedor. Salário
+ * sintético e redondo de propósito: nenhuma remuneração real entra em teste, e nenhum teste imprime
+ * valor de salário (§A.6).
+ */
+const VINCULOS: VinculoEmpresaFilial[] = [
+  { tipoServico: "TEMPORARIO", empresaCodigo: "1", filial: "4", ativo: true },
+  { tipoServico: "FOPAG", empresaCodigo: "2", filial: "4", ativo: true },
+];
+
+describe("vinculo: o de/para REUSA tipoServicoDeContrato, nao tem tabela propria de grafias", () => {
+  it("os seis tipos de servico viram os codigos autorizados pelo diretor", () => {
+    expect(mapearVinculoGi("Temporário")).toBe("4");
+    expect(mapearVinculoGi("Terceirizado")).toBe("1");
+    expect(mapearVinculoGi("Interno")).toBe("1");
+    expect(mapearVinculoGi("Fopag")).toBe("1");
+    expect(mapearVinculoGi("Estágio")).toBe("J");
+    expect(mapearVinculoGi("Jovem Aprendiz")).toBe("H");
+  });
+
+  it("as grafias de CARGA casam porque a tabela reusada ja as conhece (nao foram recopiadas aqui)", () => {
+    expect(mapearVinculoGi("TEMP.")).toBe("4");
+    expect(mapearVinculoGi("TERC.")).toBe("1");
+    expect(mapearVinculoGi("APREN.")).toBe("H");
+    expect(mapearVinculoGi("FOPAG")).toBe("1");
+  });
+
+  it("`ESTA. FOPAG` sai NULO: ambiguo, e o que um casamento aproximado erraria calado", () => {
+    // 5 admissões na produção. `includes("FOPAG")` devolveria `1` (CLT) para quem talvez seja estagiário.
+    expect(mapearVinculoGi("ESTA. FOPAG")).toBeNull();
+  });
+
+  it("vazio, nulo e desconhecido saem NULOS, nunca adivinhados", () => {
+    for (const v of ["", "   ", null, undefined, "PJ", "Cooperado", "CLT"]) {
+      expect(mapearVinculoGi(v as string | null | undefined), `entrada ${JSON.stringify(v)}`).toBeNull();
+    }
+  });
+
+  it("espaco INTERNO em excesso e colapsado AQUI, sem alargar o norm() compartilhado", () => {
+    expect(mapearVinculoGi("Jovem   Aprendiz")).toBe("H");
+  });
+});
+
+describe("prazo do contrato no GI (`D`/`I`): DERIVADO do vinculo, nunca contraditorio", () => {
+  it("o invariante: `1` obriga `I` e `7` obriga `D`", () => {
+    expect(prazoContratoGi("1")).toBe("I");
+    expect(prazoContratoGi("7")).toBe("D");
+  });
+
+  it("nunca emite o PRAZO CONTRARIO ao vinculo, em nenhum dos 18 codigos do contrato", () => {
+    // É esta a contradição que o campo `tipoContrato` (default `I` no GI) criaria se fosse coletado em
+    // separado em vez de derivado: vinculo 7 com prazo indeterminado ao lado, e nada falhando.
+    const CODIGOS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "C", "D", "E", "F", "G", "H", "I", "J", "K"];
+    for (const v of CODIGOS) {
+      const prazo = prazoContratoGi(v);
+      if (v === "1") expect(prazo).not.toBe("D");
+      if (v === "7") expect(prazo).not.toBe("I");
+      expect(prazo === null || prazo === "D" || prazo === "I", `vinculo ${v}`).toBe(true);
+    }
+  });
+
+  it("4, J e H saem com prazo NULO: regra de folha pendente, e o GI aplica o default dele", () => {
+    // Nulo preserva EXATAMENTE o comportamento de hoje (o EA nunca emitiu este campo). A fábrica não
+    // inventa regra de folha: isso é pergunta ao diretor.
+    expect(prazoContratoGi("4")).toBeNull();
+    expect(prazoContratoGi("J")).toBeNull();
+    expect(prazoContratoGi("H")).toBeNull();
+  });
+
+  it("o acoplamento vale no payload montado, nao so na funcao", () => {
+    const c = montarContratacaoGi({ tipoContrato: "Terceirizado", vinculos: VINCULOS, salario: "1800.00" });
+    expect(c.vinculo).toBe("1");
+    expect(c.tipoContrato).toBe("I");
+  });
+});
+
+describe("empresa+filial: vem de cliente_vinculos por (cliente + tipo), e `0` nao e resolucao", () => {
+  it("resolve pelo tipo de servico do contrato da admissao", () => {
+    expect(resolverEmpresaFilialGi(VINCULOS, "Temporário")).toEqual({ empresa: 1, filial: 4 });
+    expect(resolverEmpresaFilialGi(VINCULOS, "Fopag")).toEqual({ empresa: 2, filial: 4 });
+  });
+
+  it("NAO aplica o atalho do `< 2` vinculos: UM vinculo so tambem resolve", () => {
+    // `vinculoDaAdmissao` devolveria null aqui de propósito (regra de ouro da tela). Reusar aquele
+    // caminho zeraria ~90% das resoluções, porque 233 de 234 clientes têm um vínculo só.
+    const umSo = [VINCULOS[0]];
+    expect(resolverEmpresaFilialGi(umSo, "Temporário")).toEqual({ empresa: 1, filial: 4 });
+  });
+
+  it("tipo que nao casa com vinculo nenhum: NULO, nunca o primeiro da lista", () => {
+    expect(resolverEmpresaFilialGi(VINCULOS, "Estágio")).toBeNull();
+  });
+
+  it("vinculo INATIVO nao resolve", () => {
+    const inativo = [{ ...VINCULOS[0], ativo: false }];
+    expect(resolverEmpresaFilialGi(inativo, "Temporário")).toBeNull();
+  });
+
+  it("tipo de contrato vazio ou irreconhecivel: NULO", () => {
+    expect(resolverEmpresaFilialGi(VINCULOS, "")).toBeNull();
+    expect(resolverEmpresaFilialGi(VINCULOS, "ESTA. FOPAG")).toBeNull();
+    expect(resolverEmpresaFilialGi([], "Temporário")).toBeNull();
+    expect(resolverEmpresaFilialGi(null, "Temporário")).toBeNull();
+  });
+
+  it("empresa/filial com valor INVALIDO para int16 NAO resolve (varchar livre indo para short)", () => {
+    const casos: Array<[string | null, string | null]> = [
+      ["MATRIZ", "4"], // texto
+      ["1", ""], // filial vazia
+      ["1", null], // filial ausente (1 vinculo da base nao tem)
+      ["04", "4"], // zero a esquerda viola o pattern do GI
+      ["1.5", "4"], // decimal
+      ["99999", "4"], // estoura o int16
+      ["-1", "4"], // sinal
+    ];
+    for (const [empresa, filial] of casos) {
+      const v = [{ tipoServico: "TEMPORARIO", empresaCodigo: empresa, filial, ativo: true }];
+      expect(resolverEmpresaFilialGi(v, "Temporário"), `${empresa}/${filial}`).toBeNull();
+    }
+  });
+
+  it("empresa `0` NAO resolve: empresa 0 nao existe em nenhum dos 127 pares do GI", () => {
+    const zerados = [{ tipoServico: "TEMPORARIO", empresaCodigo: "0", filial: "0", ativo: true }];
+    expect(resolverEmpresaFilialGi(zerados, "Temporário")).toBeNull();
+  });
+
+  it("filial `0` RESOLVE: e estabelecimento real, existe para todas as 47 empresas do GI", () => {
+    // Medido em 01/10/2026 contra `Empresa/GetAll`. O EA tem 2 vinculos assim (`43/0` e `44/0`), e os
+    // dois casam com pares reais: recusa-los seria falso negativo em admissao legitima.
+    const comZero = [{ tipoServico: "TEMPORARIO", empresaCodigo: "43", filial: "0", ativo: true }];
+    expect(resolverEmpresaFilialGi(comZero, "Temporário")).toEqual({ empresa: 43, filial: 0 });
+  });
+});
+
+describe("salario: ausente, zero e negativo nao passam (o default do campo no GI e 0)", () => {
+  function comSalario(salario: string | number | null | undefined): ContratacaoGi {
+    return montarContratacaoGi({ salario, tipoContrato: "Temporário", vinculos: VINCULOS });
+  }
+
+  it("numeric do Drizzle (string) vira NUMERO", () => {
+    expect(comSalario("1800.00").salario).toBe(1800);
+    expect(comSalario("2500.55").salario).toBe(2500.55);
+    expect(comSalario(1800).salario).toBe(1800);
+  });
+
+  it("ausente, vazio, zero, negativo e texto viram NULO, que o chamador trata como RECUSA", () => {
+    for (const v of [null, undefined, "", "   ", "0", "0.00", 0, "-100.00", -1, "mil reais"]) {
+      expect(comSalario(v as string | number | null).salario, `entrada ${JSON.stringify(v)}`).toBeNull();
+    }
+  });
+});
+
+describe("recusaDaContratacaoGi: as duas guardas duras, e a ordem delas", () => {
+  const OK: ContratacaoGi = {
+    salario: 2000,
+    dataAdmissao: "2026-11-03",
+    vinculo: "4",
+    tipoContrato: null,
+    codigoEmpresa: 1,
+    codigoFilial: 4,
+  };
+  const payload = (c: ContratacaoGi) => montarFuncionarioSelecao({ cpf: CPF }, undefined, c);
+
+  /**
+   * A lista autoritativa SINTÉTICA, com os pares que a produção tem de verdade, inclusive **`1|0`**:
+   * filial 0 é estabelecimento REAL no GI (existe para todas as 47 empresas) e dois vínculos do EA a usam.
+   */
+  const PARES_CONHECIDOS = new Set(["1|4", "2|4", "1|2", "1|5", "1|0", "44|0", "43|0"]);
+  const parConhecido = (e: number, f: number) => PARES_CONHECIDOS.has(`${e}|${f}`);
+  const recusa = (c: ContratacaoGi) => recusaDaContratacaoGi(payload(c), parConhecido);
+
+  it("contratacao completa: NAO recusa", () => {
+    expect(recusa(OK)).toBeNull();
+  });
+
+  it("filial 0 RESOLVIDA passa: e estabelecimento real, nao ausencia", () => {
+    expect(recusa({ ...OK, codigoEmpresa: 1, codigoFilial: 0 })).toBeNull();
+  });
+
+  it("o PAR tem de existir na lista do GI: `1/37` e valido campo a campo e inexistente la", () => {
+    expect(recusa({ ...OK, codigoEmpresa: 1, codigoFilial: 37 })).toBe(
+      "GI_PAR_EMPRESA_FILIAL_DESCONHECIDO",
+    );
+  });
+
+  it("SEM lista configurada, NENHUM par e conhecido e tudo recusa (fail-closed)", () => {
+    expect(recusaDaContratacaoGi(payload(OK))).toBe("GI_PAR_EMPRESA_FILIAL_DESCONHECIDO");
+  });
+
+  it("empresa, filial ou os dois faltando: GI_SEM_EMPRESA_FILIAL", () => {
+    expect(recusa({ ...OK, codigoEmpresa: null })).toBe("GI_SEM_EMPRESA_FILIAL");
+    expect(recusa({ ...OK, codigoFilial: null })).toBe("GI_SEM_EMPRESA_FILIAL");
+    // Empresa 0 recusa pelo VALOR (não existe no GI); a filial 0 ao lado é irrelevante aqui.
+    expect(recusa({ ...OK, codigoEmpresa: 0, codigoFilial: 0 })).toBe("GI_SEM_EMPRESA_FILIAL");
+  });
+
+  it("salario ausente, zero ou negativo: GI_SALARIO_INVALIDO", () => {
+    expect(recusa({ ...OK, salario: null })).toBe("GI_SALARIO_INVALIDO");
+    expect(recusa({ ...OK, salario: 0 })).toBe("GI_SALARIO_INVALIDO");
+    expect(recusa({ ...OK, salario: -1 })).toBe("GI_SALARIO_INVALIDO");
+  });
+
+  it("a contratacao VAZIA (o default) recusa: tudo nulo nao vai para a folha", () => {
+    expect(recusa(CONTRATACAO_GI_VAZIA)).toBe("GI_SEM_EMPRESA_FILIAL");
+    expect(recusaDaContratacaoGi(montarFuncionarioSelecao({ cpf: CPF }), parConhecido)).toBe(
+      "GI_SEM_EMPRESA_FILIAL",
+    );
+  });
+});
+
+describe("montarFuncionarioSelecao: a contratacao entra SO pelo terceiro parametro nomeado", () => {
+  const CONTRATACAO: ContratacaoGi = {
+    salario: 2000,
+    dataAdmissao: "2026-11-03",
+    vinculo: "4",
+    tipoContrato: null,
+    codigoEmpresa: 1,
+    codigoFilial: 4,
+  };
+
+  it("os seis campos saem no payload", () => {
+    const f = montarFuncionarioSelecao({ cpf: CPF }, undefined, CONTRATACAO);
+    expect(f.salario).toBe(2000);
+    expect(f.dataAdmissao).toBe("2026-11-03");
+    expect(f.vinculo).toBe("4");
+    expect(f.tipoContrato).toBeNull();
+    expect(f.codigoEmpresa).toBe(1);
+    expect(f.codigoFilial).toBe(4);
+  });
+
+  it("sem o terceiro parametro os seis saem NULOS (o comportamento de antes desta rodada)", () => {
+    const f = montarFuncionarioSelecao({ cpf: CPF });
+    expect(f.salario).toBeNull();
+    expect(f.dataAdmissao).toBeNull();
+    expect(f.vinculo).toBeNull();
+    expect(f.tipoContrato).toBeNull();
+    expect(f.codigoEmpresa).toBeNull();
+    expect(f.codigoFilial).toBeNull();
+  });
+
+  it("a porta da PESSOA continua hermetica: salario dentro dela NAO atravessa", () => {
+    // É este o invariante que as DUAS allowlists preservam, e que uma interface alargada perderia.
+    const pessoaContaminada = { cpf: CPF, salario: "9999.99", centroCusto: "CC-1" };
+    const f = montarFuncionarioSelecao(pessoaContaminada as never);
+    expect(JSON.stringify(f)).not.toContain("9999.99");
+    expect(JSON.stringify(f)).not.toContain("CC-1");
+    expect(f.salario).toBeNull();
+  });
+});
+
+/**
+ * A GUARDA DA PRÓPRIA TABELA: o de/para do vínculo nunca pode produzir um código fora dos 18 valores do
+ * contrato do GI. É este teste que permite ao `vinculoGiValido` DERIVAR o conjunto permitido da tabela,
+ * em vez de recopiá-lo: a tabela é a fonte única, e aqui se prova que ela não sai do contrato.
+ */
+describe("vinculo: a tabela de de/para nunca produz codigo fora dos 18 do contrato", () => {
+  const DO_CONTRATO = new Set([
+    "1", "2", "3", "4", "5", "6", "7", "8", "9",
+    "C", "D", "E", "F", "G", "H", "I", "J", "K",
+  ]);
+
+  it("todos os seis tipos de servico produzem codigo do contrato, com 1 caractere", () => {
+    for (const tipo of ["Temporário", "Terceirizado", "Interno", "Fopag", "Estágio", "Jovem Aprendiz"]) {
+      const v = mapearVinculoGi(tipo);
+      expect(v, tipo).not.toBeNull();
+      expect(v as string, tipo).toHaveLength(1);
+      expect(DO_CONTRATO.has(v as string), `${tipo} -> ${v}`).toBe(true);
+    }
+  });
+});
+
+/**
+ * AS DUAS REDES DE RUNTIME (achado do `tester`): o TIPO não protege estes dois campos, porque
+ * `ContratacaoGi.vinculo` é `string | null`, união ABERTA, e o `Add` do GI grava folha aceitando a letra
+ * em silêncio (família da §A.33).
+ */
+describe("redes de runtime: vinculo e prazo fora da lista fechada saem NULOS, nunca repassados", () => {
+  function comContratacao(over: Partial<ContratacaoGi>) {
+    return montarFuncionarioSelecao({ cpf: CPF }, undefined, { ...CONTRATACAO_GI_VAZIA, ...over });
+  }
+
+  it("o nosso tipo_contrato por extenso NAO atravessa como vinculo (campo de 1 caractere)", () => {
+    // Isto atravessava SEM CAST e sem o compilador reclamar, porque a uniao do tipo e aberta.
+    expect(comContratacao({ vinculo: "Temporário" }).vinculo).toBeNull();
+    expect(comContratacao({ vinculo: "TEMP." }).vinculo).toBeNull();
+  });
+
+  it("codigo do CONTRATO que a tabela nao produz tambem sai nulo (o conjunto e derivado da tabela)", () => {
+    // `7` e `K` existem no GI e NAO estao autorizados: ninguem os emite hoje, e o dia em que o diretor
+    // autorizar o `7` a mudanca e na TABELA, que e a fonte unica deste conjunto.
+    expect(comContratacao({ vinculo: "7" }).vinculo).toBeNull();
+    expect(comContratacao({ vinculo: "K" }).vinculo).toBeNull();
+  });
+
+  it("codigo autorizado atravessa intacto", () => {
+    for (const v of ["4", "1", "J", "H"]) {
+      expect(comContratacao({ vinculo: v }).vinculo, v).toBe(v);
+    }
+  });
+
+  it("o prazo fora de {D, I} sai NULO (o campo do GI tem lista de dois valores)", () => {
+    expect(comContratacao({ tipoContrato: "Temporário" as never }).tipoContrato).toBeNull();
+    expect(comContratacao({ tipoContrato: "d" as never }).tipoContrato).toBeNull();
+    expect(comContratacao({ tipoContrato: "D" }).tipoContrato).toBe("D");
+    expect(comContratacao({ tipoContrato: "I" }).tipoContrato).toBe("I");
   });
 });

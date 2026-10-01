@@ -2,13 +2,16 @@ import { Inject, Injectable } from "@nestjs/common";
 import { eq } from "drizzle-orm";
 import type { Database } from "../db/client";
 import { DRIZZLE } from "../db/drizzle.module";
-import { admissaoDadosGi, admissoes, candidatos } from "../db/schema";
+import { admissaoDadosGi, admissoes, candidatos, clienteVinculos, dadosVagaFolha } from "../db/schema";
 import {
+  montarContratacaoGi,
   montarPessoaParaGi,
   RETENCAO_DADOS_GI_MS,
   type CandidatoParaGi,
+  type ContratacaoGi,
   type DadosGiParaPessoa,
   type PessoaParaGi,
+  type VinculoEmpresaFilial,
 } from "../domain/portal-dados-gi";
 
 /**
@@ -16,9 +19,23 @@ import {
  * o EA já tinha) + `admissao_dados_gi` (o que o Portal coletou). É a camada de I/O; a JUNÇÃO em si é
  * a função pura `montarPessoaParaGi` (testável sem banco).
  *
- * §A.6: lê SÓ dado de PESSOA. Não toca salário, folha nem situação trabalhista (nem existem nestas
- * tabelas nesse recorte). Nada é logado aqui: o serviço não tem logger de propósito, o valor não
- * passa por log em hipótese nenhuma.
+ * DUAS PORTAS DE LEITURA, SEPARADAS DE PROPÓSITO (01/10/2026), e a separação é §A.6 aplicada:
+ *   - `lerPessoa`      lê `candidatos` + `admissao_dados_gi`. **Não enxerga salário**, porque a consulta
+ *                      não seleciona a coluna. Segue exatamente como era, sem uma linha de mudança.
+ *   - `lerContratacao` lê `admissoes` + `dados_vaga_folha` + `cliente_vinculos`, os seis campos de
+ *                      contratação autorizados pelo diretor, **coluna por coluna**.
+ *
+ * POR QUE DUAS PORTAS E NÃO UMA CONSULTA MAIS LARGA: a porta da pessoa fica PROVADAMENTE sem salário (a
+ * coluna nem é trazida do banco), e a leitura do salário mora num método único, de nome explícito, fácil
+ * de auditar. O custo é um round-trip a mais numa operação manual e um-a-um.
+ *
+ * ⚠️ NUNCA use `select()` largo aqui. Toda coluna é NOMEADA, inclusive em `lerContratacao`: um `select *`
+ * em `dados_vaga_folha` traria junto benefícios, escala, centro de custo, departamento, setor, gestor BP,
+ * motivo, uniforme, EPI e **o nome e o CPF da pessoa SUBSTITUÍDA**, nenhum deles autorizado a sair do EA
+ * (minimização, §A.6; o CPF do substituído tem TTL próprio pela regra 10 do §A.3).
+ *
+ * §A.6: nada é logado aqui, em nenhuma das duas portas. O serviço não tem logger de propósito, então o
+ * salário não tem por onde entrar num log nem numa mensagem de erro.
  */
 @Injectable()
 export class GiLeitorService {
@@ -83,6 +100,58 @@ export class GiLeitorService {
 
     if (!linha) return null;
     return montarPessoaParaGi(linha.cand as CandidatoParaGi, linha.dados as DadosGiParaPessoa);
+  }
+
+  /**
+   * Os SEIS campos de CONTRATAÇÃO da admissão, já traduzidos para o vocabulário do GI. `null` quando a
+   * admissão não existe.
+   *
+   * SÃO DUAS CONSULTAS, e a segunda depende da primeira: empresa e filial moram no VÍNCULO do cliente
+   * (`cliente_vinculos`), resolvido por (`cod_cliente` + `tipo_servico`), e o tipo de serviço só se sabe
+   * depois de ler o `tipo_contrato` da admissão. Os vínculos de um cliente são poucos (244 linhas no
+   * total da base), então a segunda consulta traz os do cliente e a ESCOLHA é da função pura
+   * `resolverEmpresaFilialGi`, onde ela fica testável.
+   *
+   * RECORTE EXPLÍCITO: de `dados_vaga_folha` sai **só o `salario`**. De `cliente_vinculos` saem só tipo,
+   * empresa, filial e o `ativo`. `left join` na folha porque admissão sem folha existe.
+   *
+   * §A.6: o salário sai daqui dentro do objeto e NUNCA passa por log, nem aqui nem no chamador.
+   */
+  async lerContratacao(admissaoId: string): Promise<ContratacaoGi | null> {
+    const [base] = await this.db
+      .select({
+        dataAdmissao: admissoes.dataAdmissao,
+        tipoContrato: admissoes.tipoContrato,
+        codCliente: admissoes.codCliente,
+        salario: dadosVagaFolha.salario,
+      })
+      .from(admissoes)
+      .leftJoin(dadosVagaFolha, eq(dadosVagaFolha.admissaoId, admissoes.id))
+      .where(eq(admissoes.id, admissaoId))
+      .limit(1);
+
+    if (!base) return null;
+
+    // Sem cliente (pré-admissão do Pandapé nasce assim) não há vínculo a procurar: empresa e filial
+    // ficam nulas e a guarda do envio recusa. Fail-closed, sem consulta inútil.
+    const vinculos: VinculoEmpresaFilial[] = base.codCliente
+      ? await this.db
+          .select({
+            tipoServico: clienteVinculos.tipoServico,
+            empresaCodigo: clienteVinculos.empresaCodigo,
+            filial: clienteVinculos.filial,
+            ativo: clienteVinculos.ativo,
+          })
+          .from(clienteVinculos)
+          .where(eq(clienteVinculos.codCliente, base.codCliente))
+      : [];
+
+    return montarContratacaoGi({
+      salario: base.salario,
+      dataAdmissao: base.dataAdmissao,
+      tipoContrato: base.tipoContrato,
+      vinculos,
+    });
   }
 
   /**

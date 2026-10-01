@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  DE_PARA_GI_VAZIO,
+  mapearVinculoGi,
+  montarContratacaoGi,
   montarFuncionarioSelecao,
+  prazoContratoGi,
+  type ContratacaoGi,
   type DeParaGi,
   type FuncionarioSelecao,
   type PessoaParaGi,
@@ -177,6 +182,27 @@ const SCHEMA: Record<string, PropriedadeDoSchema> = {
         "string"
       ]
     },
+    // ── OS QUATRO CAMPOS DE CONTRATAÇÃO (autorizados pelo diretor em 01/10/2026) ───────────────
+    // `codigoEmpresa` e `codigoFilial` são os DOIS ÚNICOS campos deste recorte que NÃO são
+    // anuláveis E NÃO têm default (`type: ["integer","string"]`, sem `"null"`, sem `default`).
+    // Omitir um `short` não-anulável em .NET cai no `default(short)` = 0, e foi isso que criou o
+    // registro órfão medido na produção do fornecedor. Daí o fail-closed do ponto 8.
+    "codigoEmpresa": {
+      "format": "int16",
+      "pattern": "^-?(?:0|[1-9]\\d*)$",
+      "type": [
+        "integer",
+        "string"
+      ]
+    },
+    "codigoFilial": {
+      "format": "int16",
+      "pattern": "^-?(?:0|[1-9]\\d*)$",
+      "type": [
+        "integer",
+        "string"
+      ]
+    },
     "contaCorrente": {
       "default": "",
       "maxLength": 20,
@@ -198,6 +224,13 @@ const SCHEMA: Record<string, PropriedadeDoSchema> = {
     "cplEndereco": {
       "default": "",
       "maxLength": 30,
+      "type": [
+        "null",
+        "string"
+      ]
+    },
+    "dataAdmissao": {
+      "format": "date-time",
       "type": [
         "null",
         "string"
@@ -362,6 +395,18 @@ const SCHEMA: Record<string, PropriedadeDoSchema> = {
         "string"
       ]
     },
+    // `salario` é `double` COM default 0 e ANULÁVEL. O `pattern` admite o ponto DECIMAL, o que o
+    // separa dos inteiros: "1500.5" casa aqui e NÃO casaria em `^-?(?:0|[1-9]\d*)$`.
+    "salario": {
+      "default": 0,
+      "format": "double",
+      "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?$",
+      "type": [
+        "null",
+        "number",
+        "string"
+      ]
+    },
     "serie": {
       "default": "00000",
       "maxLength": 7,
@@ -418,6 +463,17 @@ const SCHEMA: Record<string, PropriedadeDoSchema> = {
         "string"
       ]
     },
+    // `tipoContrato` É EMITIDO (decisão do coordenador, 01/10/2026, sobre parecer do `seguranca`), e o
+    // `default: "I"` é o motivo: o campo é gravado pelo fornecedor de qualquer jeito, então NÃO emitir
+    // não deixa o prazo vazio, grava "Indeterminado" por omissão. Ver o ponto 9.
+    "tipoContrato": {
+      "default": "I",
+      "maxLength": 1,
+      "type": [
+        "null",
+        "string"
+      ]
+    },
     "tituloEleitor": {
       "default": "",
       "maxLength": 40,
@@ -449,8 +505,28 @@ const SCHEMA: Record<string, PropriedadeDoSchema> = {
         "null",
         "string"
       ]
+    },
+    // `vinculo` é CÓDIGO DE UM CARACTERE, com lista fechada de 18 valores na `description`. Entra,
+    // por construção, no grupo de CÓDIGO CURTO do ponto 4: não cabendo, vira NULO, nunca cortado.
+    "vinculo": {
+      "default": "",
+      "maxLength": 1,
+      "type": [
+        "null",
+        "string"
+      ]
     }
   };
+
+/**
+ * Os 18 valores da `description` de `vinculo`, copiados do contrato (01/10/2026). É a LISTA FECHADA:
+ * nada fora daqui pode sair do EA, porque o GI aceita a letra em silêncio e grava vínculo errado na
+ * folha (não há validação de domínio no `Add`, medido em 01/10).
+ */
+const VINCULOS_DO_CONTRATO: readonly string[] = [
+  "1", "2", "3", "4", "5", "6", "7", "8", "9",
+  "C", "D", "E", "F", "G", "H", "I", "J", "K",
+];
 
 // ── Entradas sintéticas ─────────────────────────────────────────────────────────────────────────
 
@@ -471,7 +547,62 @@ const DE_PARA_COM_ZERO_A_ESQUERDA: DeParaGi = {
   // NÃO há `codigoBanco` aqui, e a ausência é a régua: o de/para de banco saiu junto com os campos
   // `codigoBcoFolha`/`codigoBcoPagar` (decisão do diretor). Se alguém devolver a chave ao tipo
   // `DeParaGi`, este literal volta a aceitá-la e o teste do ponto 5 é quem denuncia.
+  //
+  // `parEmpresaFilialConhecido` NÃO entra aqui, e a ausência é o conserto de 01/10/2026: ele chegou a
+  // ser membro opcional de `DeParaGi` e saiu. `DeParaGi` é o contrato que o MONTADOR consome, o
+  // montador não consulta o par, e quem o consulta é o `EnviarParaGiService`. Enquanto o membro ficou
+  // aqui, todo dublê de de/para de CIDADE tinha de declarar algo que não tem nada a ver com cidade, e
+  // o sintoma apareceu longe da causa: outra sessão rodou o gate, viu vermelho neste arquivo e no
+  // `montador.spec.ts` e gastou tempo descobrindo que não era dela. Quem mede a régua do par é
+  // `gi/gi-empresa-filial-failclosed.tester.spec.ts`, que injeta o tipo próprio
+  // (`ParEmpresaFilialConhecido`, default `NENHUM_PAR_EMPRESA_FILIAL`, fail-closed).
 };
+
+// ── Os SEIS campos de CONTRATAÇÃO (o invariante novo da allowlist) ──────────────────────────────
+
+/**
+ * O envio deixou de ser "só dado de pessoa" e passou a ser "dado de pessoa MAIS os campos de
+ * contratação NOMEADOS" (autorização do diretor, 01/10/2026, §A.6 revisto no mapa
+ * `docs/MAPA-GI-4-CAMPOS-E-EXPURGO.md`). São SEIS, e não quatro, porque o CLIENTE são dois códigos e o
+ * PRAZO é derivado do vínculo: `salario`, `dataAdmissao`, `vinculo`, `tipoContrato`, `codigoEmpresa`,
+ * `codigoFilial`.
+ *
+ * NOTA DE HISTÓRIA, curta e útil: até a arbitragem deste conflito, este arquivo tinha um ADAPTADOR que
+ * descobria em qual parâmetro o montador aceitava a contratação, porque o teste foi escrito ANTES do
+ * produto (§A.40 regra 2). O produto existe, a assinatura é a do terceiro parâmetro, e o adaptador
+ * saiu: chamada direta, sem detecção.
+ */
+const CONTRATACAO_CHEIA: ContratacaoGi = {
+  salario: 1500.5,
+  dataAdmissao: "2026-11-03",
+  // `4` Temporário, com o prazo que o acoplamento manda para ele (nulo: o GI aplica o default dele).
+  vinculo: "4",
+  tipoContrato: null,
+  codigoEmpresa: 1,
+  codigoFilial: 7,
+};
+
+/** A contratação de um CLT a prazo determinado, onde o acoplamento `7` ⇒ `D` tem efeito. */
+const CONTRATACAO_PRAZO_DETERMINADO: ContratacaoGi = {
+  ...CONTRATACAO_CHEIA,
+  vinculo: "7",
+  tipoContrato: "D",
+};
+
+/** Os seis nomes de campo de contratação no vocabulário do GI. */
+const CAMPOS_DE_CONTRATACAO: readonly string[] = [
+  "salario",
+  "dataAdmissao",
+  "vinculo",
+  "tipoContrato",
+  "codigoEmpresa",
+  "codigoFilial",
+];
+
+/** A saída com pessoa mínima e a contratação completa. Chamada DIRETA. */
+function montarCheio(contratacao: ContratacaoGi = CONTRATACAO_CHEIA): FuncionarioSelecao {
+  return montarFuncionarioSelecao(PESSOA_MINIMA, DE_PARA_GI_VAZIO, contratacao);
+}
 
 /** Lê uma chave da saída sem `any`, para as varreduras genéricas. */
 function valorDe(f: FuncionarioSelecao, chave: string): unknown {
@@ -504,8 +635,18 @@ const CAMPOS_COM_PATTERN = Object.entries(SCHEMA)
  */
 const CAMPOS_PRESERVAM_ZERO: readonly string[] = ["cpf", "pis"];
 
-/** O grupo de padrão INTEIRO: todo campo com `pattern` que NÃO é número de documento. */
-const CAMPOS_INTEIROS = CAMPOS_COM_PATTERN.filter((c) => !CAMPOS_PRESERVAM_ZERO.includes(c.nome));
+/**
+ * O TERCEIRO grupo, que nasceu com o salário: campo de VALOR, com casa decimal. O `pattern` dele
+ * admite o ponto (`(?:\.\d+)?`), então "1500.5" é válido ali e seria inválido no grupo inteiro.
+ * Está separado para que a varredura do grupo inteiro não passe a mentir quando alguém "arredondar"
+ * o salário para casar com um padrão que não é o dele.
+ */
+const CAMPOS_DECIMAIS: readonly string[] = ["salario"];
+
+/** O grupo de padrão INTEIRO: todo campo com `pattern` que não é documento nem valor decimal. */
+const CAMPOS_INTEIROS = CAMPOS_COM_PATTERN.filter(
+  (c) => !CAMPOS_PRESERVAM_ZERO.includes(c.nome) && !CAMPOS_DECIMAIS.includes(c.nome),
+);
 
 /**
  * Os campos de CÓDIGO curto (`maxLength` de 1 a 3). Cortar um destes INVENTA um código: "Brasileira"
@@ -555,8 +696,21 @@ describe("ponto 1: toda chave emitida existe em TB_FuncionarioSelecaoAPI", () =>
   it("o recorte detalhado cobre exatamente as chaves que o montador emite", () => {
     // Guarda do próprio teste: campo novo no montador sem entrada no recorte passaria batido nas
     // varreduras dos pontos 2, 3 e 4, e o teste viraria decorativo.
-    const f = montarFuncionarioSelecao(PESSOA_MINIMA);
-    expect(Object.keys(f).sort()).toEqual(Object.keys(SCHEMA).sort());
+    //
+    // ⚠️ ESTE TESTE FALHA ENQUANTO OS CINCO CAMPOS NOVOS NÃO FOREM EMITIDOS: o recorte já os tem
+    // (`salario`, `dataAdmissao`, `vinculo`, `codigoEmpresa`, `codigoFilial`), porque o recorte é o
+    // CONTRATO, e o contrato não espera o produto. A diferença impressa na falha é exatamente a
+    // lista do que falta emitir.
+    expect(Object.keys(montarCheio()).sort()).toEqual(Object.keys(SCHEMA).sort());
+  });
+
+  it("SEM contratacao o montador nao inventa chave nenhuma a mais", () => {
+    // O conjunto de chaves não pode DEPENDER da entrada: `codigoEmpresa` e `codigoFilial` são
+    // não-anuláveis no contrato, então a chave existe sempre, e é o VALOR que falta. Chave que
+    // aparece e desaparece conforme o dado é o que faz o GI receber payloads de formatos diferentes.
+    const chavesSemContratacao = Object.keys(montarFuncionarioSelecao(PESSOA_MINIMA)).sort();
+    const forasteiras = chavesSemContratacao.filter((k) => !(k in SCHEMA));
+    expect(forasteiras).toEqual([]);
   });
 });
 
@@ -697,14 +851,19 @@ describe("ponto 3: campo de padrao INTEIRO sai sem zero a esquerda", () => {
    *
    * Valor sem dígito nenhum deve virar NULO, nunca string inválida (último teste desta casa).
    */
-  it("os dois grupos cobrem TODOS os campos com pattern, e nao se sobrepoem", () => {
-    // Guarda do próprio teste: campo numérico novo cai em um dos dois grupos, nunca em nenhum.
-    expect([...CAMPOS_INTEIROS.map((c) => c.nome), ...CAMPOS_PRESERVAM_ZERO].sort()).toEqual(
-      CAMPOS_COM_PATTERN.map((c) => c.nome).sort(),
+  it("os TRES grupos cobrem TODOS os campos com pattern, e nao se sobrepoem", () => {
+    // Guarda do próprio teste: campo numérico novo cai em um dos três grupos, nunca em nenhum.
+    expect(
+      [
+        ...CAMPOS_INTEIROS.map((c) => c.nome),
+        ...CAMPOS_PRESERVAM_ZERO,
+        ...CAMPOS_DECIMAIS,
+      ].sort(),
+    ).toEqual(CAMPOS_COM_PATTERN.map((c) => c.nome).sort());
+    const fora = CAMPOS_INTEIROS.map((c) => c.nome).filter(
+      (n) => CAMPOS_PRESERVAM_ZERO.includes(n) || CAMPOS_DECIMAIS.includes(n),
     );
-    expect(CAMPOS_INTEIROS.map((c) => c.nome).filter((n) => CAMPOS_PRESERVAM_ZERO.includes(n))).toEqual(
-      [],
-    );
+    expect(fora).toEqual([]);
   });
 
   it("nenhum campo de padrao INTEIRO sai com zero a esquerda", () => {
@@ -832,9 +991,14 @@ describe("ponto 4: codigo curto (maxLength 1 a 3) vira NULO quando nao couber, n
    * ⚠️ Isto trava o DANO, não entrega a funcionalidade: sem de/para de catálogo (não autorizado nesta
    * rodada), os cinco campos coletados como texto livre seguem chegando NULOS ao GI.
    */
-  it("os 9 campos de codigo curto sao exatamente os esperados", () => {
+  it("os 11 campos de codigo curto sao exatamente os esperados", () => {
+    // `vinculo` e `tipoContrato` entraram no grupo em 01/10/2026, e entraram NO LUGAR CERTO: são
+    // códigos de 1 caractere com lista fechada, então "Temporário" não pode ser cortado em "T" (que no
+    // GI não é vínculo nenhum, e no campo de prazo não é nem `D` nem `I`).
     expect(CAMPOS_DE_CODIGO_CURTO.sort()).toEqual(
       [
+        "vinculo",
+        "tipoContrato",
         "estadoCivil",
         "grauInstrucao",
         "naturalidade",
@@ -860,7 +1024,11 @@ describe("ponto 4: codigo curto (maxLength 1 a 3) vira NULO quando nao couber, n
       ctpsUf: "Sao Paulo",
       uf: "Sao Paulo",
     });
-    const inventados = CAMPOS_DE_CODIGO_CURTO.filter((nome) => valorDe(f, nome) !== null).map(
+    // `undefined` é "não emitido", que é outra pergunta (a do ponto 1) e não um código inventado.
+    const inventados = CAMPOS_DE_CODIGO_CURTO.filter((nome) => {
+      const v = valorDe(f, nome);
+      return v !== null && v !== undefined;
+    }).map(
       (nome) => `${nome}=${String(valorDe(f, nome))}`,
     );
     expect(inventados).toEqual([]);
@@ -891,5 +1059,253 @@ describe("ponto 4: codigo curto (maxLength 1 a 3) vira NULO quando nao couber, n
     expect(f.ufrg).toBe("SP");
     expect(f.ufExpedicao).toBe("SP");
     expect(f.ufResid).toBe("SP");
+  });
+});
+
+// ── PONTO 7: os QUATRO campos de contratação novos existem no contrato e cabem nele ─────────────
+
+describe("ponto 7: salario, dataAdmissao, vinculo, codigoEmpresa e codigoFilial no contrato", () => {
+  /**
+   * Requisito autorizado pelo diretor (01/10/2026): o envio passa a levar SALÁRIO, DATA DE ADMISSÃO,
+   * VÍNCULO e o CLIENTE (empresa + filial). Esta casa prova a parte do CONTRATO (sempre verificável,
+   * sem depender do produto) e a parte do MONTADOR (que falha até os campos serem emitidos).
+   */
+  it("os cinco nomes pertencem as 415 propriedades de TB_FuncionarioSelecaoAPI", () => {
+    for (const nome of ["salario", "dataAdmissao", "vinculo", "codigoEmpresa", "codigoFilial"]) {
+      expect(NOMES_DO_SCHEMA, nome).toContain(nome);
+    }
+  });
+
+  it("os SEIS campos de contratacao sao emitidos, e a chave existe mesmo vazia", () => {
+    // A chave não pode depender do dado: `codigoEmpresa` e `codigoFilial` são não-anuláveis no
+    // contrato, e payload de formato variável é o que faz o fornecedor aplicar default sem ninguém ver.
+    const cheio = Object.keys(montarCheio());
+    const vazio = Object.keys(montarFuncionarioSelecao(PESSOA_MINIMA));
+    for (const campo of CAMPOS_DE_CONTRATACAO) {
+      expect(cheio, `${campo} nao emitido com contratacao`).toContain(campo);
+      expect(vazio, `${campo} desaparece sem contratacao`).toContain(campo);
+    }
+  });
+
+  it("vinculo respeita o maxLength 1 do contrato", () => {
+    expect(SCHEMA.vinculo.maxLength).toBe(1);
+    const v = montarCheio().vinculo as unknown;
+    if (v != null) expect(String(v).length).toBeLessThanOrEqual(1);
+  });
+
+  it("vinculo emitido pertence a LISTA FECHADA dos 18 valores do contrato", () => {
+    // O GI NÃO valida o domínio (aceita a letra em silêncio), então a lista fechada tem de ser
+    // garantida aqui: letra fora dela vira vínculo errado na folha, sem erro nenhum aparecer.
+    expect(VINCULOS_DO_CONTRATO).toHaveLength(18);
+    const v = montarCheio().vinculo as unknown;
+    expect(v, "vinculo fora da lista fechada do contrato").not.toBeNull();
+    expect(VINCULOS_DO_CONTRATO).toContain(String(v));
+  });
+
+  it("salario e dataAdmissao atravessam, e o salario casa com o pattern DECIMAL do contrato", () => {
+    const f = montarCheio();
+    const salario = valorDe(f, "salario");
+    expect(salario, "salario nao foi emitido").not.toBeNull();
+    expect(new RegExp(SCHEMA.salario.pattern as string).test(String(salario))).toBe(true);
+    expect(valorDe(f, "dataAdmissao"), "dataAdmissao nao foi emitida").not.toBeNull();
+  });
+
+  it("empresa e filial atravessam como INTEIRO, sem zero a esquerda", () => {
+    const f = montarCheio();
+    for (const nome of ["codigoEmpresa", "codigoFilial"]) {
+      const v = valorDe(f, nome);
+      expect(v, `${nome} nao foi emitido`).not.toBeNull();
+      expect(new RegExp(SCHEMA[nome].pattern as string).test(String(v)), nome).toBe(true);
+    }
+  });
+});
+
+// ── PONTO 8: empresa e filial NUNCA saem como 0 (o registro órfão) ──────────────────────────────
+
+describe("ponto 8: codigoEmpresa e codigoFilial nunca valem 0 no payload", () => {
+  /**
+   * MEDIDO NA PRODUÇÃO DO FORNECEDOR (01/10/2026): os dois campos são `int16` NÃO-ANULÁVEIS e SEM
+   * default; omitir um `short` em .NET cai no `default(short)` = 0, e o registro nasce ÓRFÃO (empresa
+   * 0, filial 0), aceito sem erro. Por isso o `0` é pior que a recusa: ele não falha em lugar nenhum.
+   *
+   * A RECUSA DO ENVIO é provada no spec do serviço (`gi-empresa-filial-failclosed.tester.spec.ts`).
+   * Aqui se prova a outra metade: se o montador emitir algo, não pode ser 0.
+   */
+  it("com empresa e filial resolvidas, nenhum dos dois sai 0", () => {
+    const f = montarCheio();
+    for (const nome of ["codigoEmpresa", "codigoFilial"]) {
+      const v = valorDe(f, nome);
+      expect(String(v), nome).not.toBe("0");
+      expect(v, nome).not.toBe(0);
+    }
+  });
+
+  it("SEM empresa e filial, o montador nao fabrica 0 (sai NULO ou ausente)", () => {
+    // Fail-closed no montador: na falta do de/para, o campo fica VAZIO e quem recusa o envio é o
+    // serviço. Preencher 0 aqui faria a recusa do serviço virar decorativa, porque o payload já
+    // estaria "válido" para o GI.
+    const f = montarFuncionarioSelecao(PESSOA_MINIMA);
+    for (const nome of ["codigoEmpresa", "codigoFilial"]) {
+      const v = valorDe(f, nome);
+      expect(v === null || v === undefined, `${nome} saiu como ${String(v)}`).toBe(true);
+    }
+  });
+});
+
+// ── PONTO 9: a ARMADILHA do `tipoContrato`, que É EMITIDO mas NÃO é o nosso tipo de contrato ────
+
+describe("ponto 9: tipoContrato (D/I) e o PRAZO, acoplado ao vinculo, e nao o nosso tipo_contrato", () => {
+  /**
+   * ARBITRAGEM DO COORDENADOR (01/10/2026), sobre parecer do `seguranca`, e ela SUBSTITUI a régua
+   * anterior deste arquivo, que exigia o oposto. **O EA EMITE `tipoContrato`.**
+   *
+   * O FUNDAMENTO, e ele é o que inverte a conclusão: o campo tem **`default: "I"` no contrato**, então
+   * NÃO emitir não deixa o prazo vazio, grava **"Indeterminado" por omissão**. Com `vinculo = 7` (CLT
+   * Prazo Determinado) isso gravaria "prazo determinado" com "indeterminado" ao lado, contraditório e
+   * silencioso, na folha. Emitir é o que torna a contradição impossível.
+   *
+   * ⚠️ A COLISÃO DE NOME CONTINUA SENDO O PERIGO, e emitir o campo AUMENTA o risco, não diminui: agora
+   * existe no payload uma chave chamada `tipoContrato` que NÃO é `admissoes.tipo_contrato`. O nosso
+   * (Temporário, Terceirizado, Estágio, Interno, Fopag, Jovem Aprendiz) é o REGIME, e vira `vinculo`.
+   * Ligar um no outro pelo nome gravaria "T" num campo de prazo da folha, e o `Add` aceita a letra em
+   * silêncio. Os testes abaixo são a rede contra isso.
+   */
+  it("o campo tipoContrato existe no contrato, vale 1 caractere, e tem default I", () => {
+    expect(NOMES_DO_SCHEMA).toContain("tipoContrato");
+    expect(SCHEMA.tipoContrato.maxLength).toBe(1);
+    // O default é o fundamento da decisão de emitir: sem ele, não emitir seria inofensivo.
+    expect(SCHEMA.tipoContrato.default).toBe("I");
+  });
+
+  it("o montador EMITE tipoContrato, e o valor atravessa como D ou I", () => {
+    expect(montarCheio(CONTRATACAO_PRAZO_DETERMINADO).tipoContrato).toBe("D");
+    expect(montarCheio({ ...CONTRATACAO_CHEIA, vinculo: "1", tipoContrato: "I" }).tipoContrato).toBe("I");
+  });
+
+  it("INVARIANTE ACOPLADO: vinculo 7 obriga prazo D, e vinculo 1 obriga prazo I", () => {
+    /**
+     * NÃO SÃO DOIS CAMPOS INDEPENDENTES, e é por isso que este teste existe separado do de cima: o
+     * prazo é DERIVADO do vínculo, numa função só (`prazoContratoGi`), e não coletado em lugar nenhum.
+     * Enquanto for assim, "vínculo a prazo determinado com prazo indeterminado ao lado" é
+     * estruturalmente impossível. No dia em que alguém passar a LER o prazo de uma coluna, este teste
+     * é quem cobra a coerência de volta.
+     */
+    expect(prazoContratoGi("7")).toBe("D");
+    expect(prazoContratoGi("1")).toBe("I");
+  });
+
+  it("INVARIANTE ACOPLADO, no sentido INVERSO: prazo D so sai com vinculo 7, e I so com vinculo 1", () => {
+    // O sentido inverso é o que pega a tabela editada pela metade: alguém acrescenta um vínculo novo e
+    // lhe dá prazo `D` sem que o vínculo seja o `7`, ou troca o prazo do `1`.
+    const TODOS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "C", "D", "E", "F", "G", "H", "I", "J", "K"];
+    const comD = TODOS.filter((v) => prazoContratoGi(v) === "D");
+    const comI = TODOS.filter((v) => prazoContratoGi(v) === "I");
+    expect(comD).toEqual(["7"]);
+    expect(comI).toEqual(["1"]);
+  });
+
+  it("os outros vinculos saem com prazo NULO, e o GI aplica o default dele", () => {
+    // `4` (Temporário), `J` (Estágio) e `H` (Aprendiz) não têm prazo decidido pelo diretor. Nulo aqui
+    // preserva EXATAMENTE o comportamento de hoje (o EA nunca emitiu o campo), em vez de inventar
+    // regra de folha. Não é lacuna: é a decisão de não decidir.
+    for (const v of ["4", "J", "H"]) {
+      expect(prazoContratoGi(v), `vinculo ${v}`).toBeNull();
+    }
+    expect(montarCheio().tipoContrato).toBeNull();
+  });
+
+  it("o acoplamento vale pelo caminho REAL (tipo_contrato do EA, nao o codigo)", () => {
+    // Prova o par completo pelo caminho que a produção usa: texto livre do EA -> vínculo -> prazo.
+    const c = montarContratacaoGi({
+      salario: "1500.50",
+      dataAdmissao: "2026-11-03",
+      tipoContrato: "Terceirizado",
+      vinculos: [{ tipoServico: "TERCEIRO", empresaCodigo: "1", filial: "4", ativo: true }],
+    });
+    expect(c.vinculo).toBe(mapearVinculoGi("Terceirizado"));
+    expect(c.vinculo).toBe("1");
+    expect(c.tipoContrato).toBe("I");
+  });
+
+  it("o TEXTO do EA nunca aparece no payload, em NENHUM campo", () => {
+    // Mais forte que olhar uma chave: "Terceirizado" não pode atravessar em casa nenhuma. Se aparecer,
+    // é porque o de/para foi contornado em algum lugar.
+    const c = montarContratacaoGi({
+      salario: "1500.50",
+      tipoContrato: "Terceirizado",
+      vinculos: [{ tipoServico: "TERCEIRO", empresaCodigo: "1", filial: "4", ativo: true }],
+    });
+    const f = montarFuncionarioSelecao(PESSOA_MINIMA, DE_PARA_GI_VAZIO, c);
+    const vazou = Object.entries(f as unknown as Record<string, unknown>)
+      .filter(([, v]) => typeof v === "string" && /terceiriz|tempor|fopag|estagi|aprendiz/i.test(v))
+      .map(([k]) => k);
+    expect(vazou).toEqual([]);
+  });
+
+  it("REDE DE RUNTIME: valor fora de {D, I} no campo de prazo sai NULO, nunca repassado", () => {
+    /**
+     * ⚠️ ESTE VERMELHO É O GAP QUE O COORDENADOR MANDOU FECHAR POR TESTE, E NÃO POR TIPO ⚠️
+     *
+     * Hoje o montador faz `tipoContrato: c.tipoContrato`, repasse CRU. A única coisa que impede
+     * "Temporário" de chegar ao campo de prazo da folha é o TIPO (`"D" | "I" | null`), checado em tempo
+     * de COMPILAÇÃO. O cast abaixo é o que um `as` descuidado, um `JSON.parse` de payload externo ou
+     * uma leitura nova de banco fariam sem o compilador reclamar.
+     *
+     * POR QUE ISSO NÃO É ZELO TEÓRICO: o `Add` do GI **aceita a letra em silêncio** e grava. É a mesma
+     * família da §A.33 (arquivar contrato sem assinatura): dano permanente num campo de folha, sem
+     * nenhum erro aparecer, e por isso a guarda tem de morar no CÓDIGO e ter TESTE, não depender de
+     * quem edita lembrar do tipo.
+     *
+     * O conserto é uma linha: filtrar o valor contra `{D, I}` antes de emitir, nulo caso contrário
+     * (exatamente o que `codigoCurto` já faz para os outros códigos deste payload).
+     */
+    const forcado = montarCheio({
+      ...CONTRATACAO_CHEIA,
+      tipoContrato: "Temporário" as unknown as "D" | "I" | null,
+    });
+    expect(forcado.tipoContrato).toBeNull();
+  });
+
+  it("REDE DE RUNTIME, o mesmo buraco no VINCULO, que nao tem nem a protecao do tipo", () => {
+    /**
+     * ⚠️ ACHADO ADICIONAL, e ele é MAIS GRAVE que o de cima: `ContratacaoGi.vinculo` é `string | null`,
+     * uma união ABERTA, então aqui **nem o compilador reclama**. Qualquer string atravessa para um
+     * campo de 1 caractere com lista fechada de 18 valores, sem cast nenhum e sem erro nenhum.
+     *
+     * O ponto 7 já exige que o valor emitido pertença à lista fechada, mas ele prova isso com a entrada
+     * BOA. Este prova com a entrada RUIM, que é a pergunta diferente.
+     */
+    const forcado = montarCheio({ ...CONTRATACAO_CHEIA, vinculo: "Temporário" });
+    expect(forcado.vinculo).toBeNull();
+  });
+
+  it("a allowlist segue FECHADA: pessoa MAIS os seis de contratacao, e nada mais", () => {
+    /**
+     * O INVARIANTE MUDOU e precisa estar escrito (§A.6 + autorização do diretor): de "só dado de
+     * pessoa" para "dado de pessoa MAIS os campos de contratação NOMEADOS". O que ele proíbe é a
+     * terceira classe: situação trabalhista, desconto, benefício, FGTS, centro de custo, sindicato,
+     * cargo, qualquer outro campo de folha. Entre as 415 propriedades do GI há centenas delas, e o
+     * custo de uma passar é escrever folha errada sem erro aparente.
+     */
+    const PESSOA_MAIS_CONTRATACAO = new Set([
+      ...Object.keys(montarFuncionarioSelecao(PESSOA_MINIMA, DE_PARA_COM_ZERO_A_ESQUERDA)),
+      ...CAMPOS_DE_CONTRATACAO,
+    ]);
+    const deCarona = Object.keys(montarCheio()).filter((k) => !PESSOA_MAIS_CONTRATACAO.has(k));
+    expect(deCarona).toEqual([]);
+    // E a contagem é fechada: campo novo obriga a revisar este número de propósito, em vez de crescer
+    // calado. 40 de pessoa mais os 6 de contratação.
+    expect(Object.keys(montarCheio())).toHaveLength(46);
+    expect(PESSOA_MAIS_CONTRATACAO.size).toBe(46);
+  });
+
+  it("nenhum campo de SITUACAO trabalhista ou DESCONTO e emitido", () => {
+    const chaves = Object.keys(montarCheio());
+    const proibidos = chaves.filter((k) =>
+      /^(situacao|desconto|fgts|sindicato|centroCusto|codigoCentroCusto|codigoDepto|codigoCargo|codigoSindicato|codigoContrato)/i.test(
+        k,
+      ),
+    );
+    expect(proibidos).toEqual([]);
   });
 });
